@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"time"
 
+	"frameworks/api_analytics_ingest/internal/database/periscopeingestdb"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"github.com/google/uuid"
 )
 
 // processOrchestratorDiscoveryObserved writes a per-vantage discovery
@@ -36,6 +39,10 @@ func (h *AnalyticsHandler) processOrchestratorDiscoveryObserved(ctx context.Cont
 	}
 
 	orchAddr := msg.GetOrchAddr()
+	tenantID, ok := parseTenantID(event.TenantID)
+	if !ok {
+		return fmt.Errorf("orchestrator_discovery_observed invalid tenant_id %q", event.TenantID)
+	}
 
 	vantage := msg.GetVantage()
 	if vantage == nil {
@@ -44,40 +51,21 @@ func (h *AnalyticsHandler) processOrchestratorDiscoveryObserved(ctx context.Cont
 		vantage = &ipcpb.OrchestratorVantageGeo{}
 	}
 
-	batch, err := h.clickhouse.PrepareBatch(ctx, `
-		INSERT INTO orchestrator_discovery_samples (
-			timestamp, tenant_id, gateway_id, gateway_region,
-			orch_addr, orch_url, resolved_ip, advertised_node_url,
-			discovery_latency_ms, reachable, compatible, score, dialed,
-			failure_reason, failure_kind,
-			latitude, longitude, country_code, geo_source
-		)`)
+	batch, err := periscopeingestdb.PrepareOrchestratorDiscoverySample(ctx, h.clickhouse)
 	if err != nil {
 		return fmt.Errorf("prepare orchestrator_discovery_samples batch: %w", err)
 	}
-	defer closeClickHouseBatch(batch)
+	defer func() { _ = batch.Close() }()
 
-	if err := batch.Append(
-		event.Timestamp,
-		event.TenantID,
-		ident.gatewayID,
-		ident.gatewayRegion,
-		orchAddr,
-		msg.GetOrchUrl(),
-		vantage.GetResolvedIp(),
-		nilIfEmptyString(msg.GetAdvertisedNodeUrl()),
-		msg.GetDiscoveryLatencyMs(),
-		boolToUInt8(msg.GetReachable()),
-		boolToUInt8(msg.GetCompatible()),
-		msg.GetScore(),
-		boolToUInt8(vantage.GetDialed()),
-		nilIfEmptyString(msg.GetFailureReason()),
-		msg.GetFailureKind(),
-		vantage.GetLatitude(),
-		vantage.GetLongitude(),
-		vantage.GetCountryCode(),
-		geoSourceOrUnknown(vantage.GetGeoSource()),
-	); err != nil {
+	if err := batch.Append(periscopeingestdb.OrchestratorDiscoverySampleRow{
+		Timestamp: event.Timestamp, TenantID: tenantID, GatewayID: ident.gatewayID, GatewayRegion: ident.gatewayRegion,
+		OrchAddr: orchAddr, OrchURL: msg.GetOrchUrl(), ResolvedIP: vantage.GetResolvedIp(), AdvertisedNodeURL: msg.GetAdvertisedNodeUrl(),
+		DiscoveryLatencyMS: msg.GetDiscoveryLatencyMs(), Reachable: boolToUInt8(msg.GetReachable()),
+		Compatible: boolToUInt8(msg.GetCompatible()), Score: msg.GetScore(), Dialed: boolToUInt8(vantage.GetDialed()),
+		FailureReason: msg.GetFailureReason(), FailureKind: msg.GetFailureKind(),
+		Latitude: vantage.GetLatitude(), Longitude: vantage.GetLongitude(), CountryCode: vantage.GetCountryCode(),
+		GeoSource: geoSourceOrUnknown(vantage.GetGeoSource()),
+	}); err != nil {
 		return fmt.Errorf("append orchestrator_discovery_samples: %w", err)
 	}
 
@@ -141,27 +129,24 @@ func (h *AnalyticsHandler) processOrchestratorStateUpdate(ctx context.Context, e
 	}
 
 	now := time.Now()
+	tenantID, ok := parseTenantID(event.TenantID)
+	if !ok {
+		return fmt.Errorf("orchestrator_state_update invalid tenant_id %q", event.TenantID)
+	}
 	source := msg.GetSource()
 	if source == "" {
 		source = "gateway_pool"
 	}
 
 	// Identity row for listing known orchestrators without scanning instances.
-	stateBatch, err := h.clickhouse.PrepareBatch(ctx, `
-		INSERT INTO orchestrator_state_current (
-			tenant_id, orch_addr, last_seen, metadata, updated_at
-		)`)
+	stateBatch, err := periscopeingestdb.PrepareOrchestratorStateCurrent(ctx, h.clickhouse)
 	if err != nil {
 		return fmt.Errorf("prepare orchestrator_state_current batch: %w", err)
 	}
-	defer closeClickHouseBatch(stateBatch)
-	if err := stateBatch.Append(
-		event.TenantID,
-		msg.GetOrchAddr(),
-		event.Timestamp,
-		"{}",
-		now,
-	); err != nil {
+	defer func() { _ = stateBatch.Close() }()
+	if err := stateBatch.Append(periscopeingestdb.OrchestratorStateCurrentRow{
+		TenantID: tenantID, OrchAddr: msg.GetOrchAddr(), LastSeen: event.Timestamp, Metadata: "{}", UpdatedAt: now,
+	}); err != nil {
 		return fmt.Errorf("append orchestrator_state_current: %w", err)
 	}
 	if err := stateBatch.Send(); err != nil {
@@ -175,40 +160,20 @@ func (h *AnalyticsHandler) processOrchestratorStateUpdate(ctx context.Context, e
 		resolvedIP = vantage.GetResolvedIp()
 	}
 	if resolvedIP != "" {
-		instanceBatch, err := h.clickhouse.PrepareBatch(ctx, `
-				INSERT INTO orchestrator_instance_state_current (
-					tenant_id, orch_addr, resolved_ip,
-					canonical_url, advertised_node_urls, capabilities,
-					price_per_unit, pixels_per_unit,
-					capability_price_capabilities, capability_price_positions,
-					capability_price_price_per_units, capability_price_pixels_per_units,
-					hardware, source,
-					last_seen, metadata, updated_at
-				)`)
+		instanceBatch, err := periscopeingestdb.PrepareOrchestratorInstanceStateCurrent(ctx, h.clickhouse)
 		if err != nil {
 			return fmt.Errorf("prepare orchestrator_instance_state_current batch: %w", err)
 		}
-		defer closeClickHouseBatch(instanceBatch)
+		defer func() { _ = instanceBatch.Close() }()
 		capabilities, positions, pricePerUnits, pixelsPerUnits := capabilityPriceArrays(msg.GetCapabilityPriceEntries())
-		if err := instanceBatch.Append(
-			event.TenantID,
-			msg.GetOrchAddr(),
-			resolvedIP,
-			msg.GetCanonicalUrl(),
-			msg.GetAdvertisedNodeUrls(),
-			msg.GetCapabilities(),
-			msg.GetPricePerUnit(),
-			msg.GetPixelsPerUnit(),
-			capabilities,
-			positions,
-			pricePerUnits,
-			pixelsPerUnits,
-			msg.GetHardware(),
-			source,
-			event.Timestamp,
-			"{}",
-			now,
-		); err != nil {
+		if err := instanceBatch.Append(periscopeingestdb.OrchestratorInstanceStateCurrentRow{
+			TenantID: tenantID, OrchAddr: msg.GetOrchAddr(), ResolvedIP: resolvedIP,
+			CanonicalURL: msg.GetCanonicalUrl(), AdvertisedNodeURLs: msg.GetAdvertisedNodeUrls(), Capabilities: msg.GetCapabilities(),
+			PricePerUnit: msg.GetPricePerUnit(), PixelsPerUnit: msg.GetPixelsPerUnit(),
+			CapabilityPriceCapabilities: capabilities, CapabilityPricePositions: positions,
+			CapabilityPricePricePerUnits: pricePerUnits, CapabilityPricePixelsPerUnits: pixelsPerUnits,
+			Hardware: msg.GetHardware(), Source: source, LastSeen: event.Timestamp, Metadata: "{}", UpdatedAt: now,
+		}); err != nil {
 			return fmt.Errorf("append orchestrator_instance_state_current: %w", err)
 		}
 		if err := instanceBatch.Send(); err != nil {
@@ -263,43 +228,30 @@ func (h *AnalyticsHandler) processOrchestratorTranscodeOutcome(ctx context.Conte
 	if clusterOwner == "" {
 		return fmt.Errorf("orchestrator_transcode_outcome missing cluster_owner_tenant_id")
 	}
+	tenantID, ok := parseTenantID(event.TenantID)
+	if !ok {
+		return fmt.Errorf("orchestrator_transcode_outcome invalid tenant_id %q", event.TenantID)
+	}
+	clusterOwnerID, err := uuid.Parse(clusterOwner)
+	if err != nil {
+		return fmt.Errorf("orchestrator_transcode_outcome invalid cluster_owner_tenant_id %q: %w", clusterOwner, err)
+	}
 
-	batch, err := h.clickhouse.PrepareBatch(ctx, `
-			INSERT INTO orchestrator_transcode_outcomes (
-				timestamp, tenant_id, cluster_owner_tenant_id, gateway_id, gateway_region, cluster_id,
-				orch_addr, orch_url, resolved_ip,
-				session_id, manifest_id_hash, seq_no,
-				success, latency_score, upload_ms, transcode_ms, overall_ms,
-				pixels, profiles, error_code, error_kind
-		)`)
+	batch, err := periscopeingestdb.PrepareOrchestratorTranscodeOutcome(ctx, h.clickhouse)
 	if err != nil {
 		return fmt.Errorf("prepare orchestrator_transcode_outcomes batch: %w", err)
 	}
-	defer closeClickHouseBatch(batch)
+	defer func() { _ = batch.Close() }()
 
-	if err := batch.Append(
-		event.Timestamp,
-		event.TenantID,
-		clusterOwner,
-		ident.gatewayID,
-		ident.gatewayRegion,
-		ident.clusterID,
-		msg.GetOrchAddr(),
-		msg.GetOrchUrl(),
-		msg.GetResolvedIp(),
-		msg.GetSessionId(),
-		msg.GetManifestIdHash(),
-		msg.GetSeqNo(),
-		boolToUInt8(msg.GetSuccess()),
-		msg.GetLatencyScore(),
-		msg.GetUploadMs(),
-		msg.GetTranscodeMs(),
-		msg.GetOverallMs(),
-		msg.GetPixels(),
-		msg.GetProfiles(),
-		msg.GetErrorCode(),
-		msg.GetErrorKind(),
-	); err != nil {
+	if err := batch.Append(periscopeingestdb.OrchestratorTranscodeOutcomeRow{
+		Timestamp: event.Timestamp, TenantID: tenantID, ClusterOwnerTenantID: clusterOwnerID,
+		GatewayID: ident.gatewayID, GatewayRegion: ident.gatewayRegion, ClusterID: ident.clusterID,
+		OrchAddr: msg.GetOrchAddr(), OrchURL: msg.GetOrchUrl(), ResolvedIP: msg.GetResolvedIp(),
+		SessionID: msg.GetSessionId(), ManifestIDHash: msg.GetManifestIdHash(), SeqNo: msg.GetSeqNo(),
+		Success: boolToUInt8(msg.GetSuccess()), LatencyScore: msg.GetLatencyScore(), UploadMS: msg.GetUploadMs(),
+		TranscodeMS: msg.GetTranscodeMs(), OverallMS: msg.GetOverallMs(), Pixels: msg.GetPixels(), Profiles: msg.GetProfiles(),
+		ErrorCode: msg.GetErrorCode(), ErrorKind: msg.GetErrorKind(),
+	}); err != nil {
 		return fmt.Errorf("append orchestrator_transcode_outcomes: %w", err)
 	}
 
@@ -328,40 +280,29 @@ func (h *AnalyticsHandler) processOrchestratorAIOutcome(ctx context.Context, eve
 	if clusterOwner == "" {
 		return fmt.Errorf("orchestrator_ai_outcome missing cluster_owner_tenant_id")
 	}
+	tenantID, ok := parseTenantID(event.TenantID)
+	if !ok {
+		return fmt.Errorf("orchestrator_ai_outcome invalid tenant_id %q", event.TenantID)
+	}
+	clusterOwnerID, err := uuid.Parse(clusterOwner)
+	if err != nil {
+		return fmt.Errorf("orchestrator_ai_outcome invalid cluster_owner_tenant_id %q: %w", clusterOwner, err)
+	}
 
-	batch, err := h.clickhouse.PrepareBatch(ctx, `
-			INSERT INTO orchestrator_ai_outcomes (
-				timestamp, tenant_id, cluster_owner_tenant_id, gateway_id, gateway_region, cluster_id,
-				orch_addr, orch_url, resolved_ip,
-				session_id, pipeline, model,
-				latency_score, price_per_unit, latency_ms,
-				success, error_code, error_kind
-		)`)
+	batch, err := periscopeingestdb.PrepareOrchestratorAIOutcome(ctx, h.clickhouse)
 	if err != nil {
 		return fmt.Errorf("prepare orchestrator_ai_outcomes batch: %w", err)
 	}
-	defer closeClickHouseBatch(batch)
+	defer func() { _ = batch.Close() }()
 
-	if err := batch.Append(
-		event.Timestamp,
-		event.TenantID,
-		clusterOwner,
-		ident.gatewayID,
-		ident.gatewayRegion,
-		ident.clusterID,
-		msg.GetOrchAddr(),
-		msg.GetOrchUrl(),
-		msg.GetResolvedIp(),
-		msg.GetSessionId(),
-		msg.GetPipeline(),
-		msg.GetModel(),
-		msg.GetLatencyScore(),
-		msg.GetPricePerUnit(),
-		msg.GetLatencyMs(),
-		boolToUInt8(msg.GetSuccess()),
-		msg.GetErrorCode(),
-		msg.GetErrorKind(),
-	); err != nil {
+	if err := batch.Append(periscopeingestdb.OrchestratorAIOutcomeRow{
+		Timestamp: event.Timestamp, TenantID: tenantID, ClusterOwnerTenantID: clusterOwnerID,
+		GatewayID: ident.gatewayID, GatewayRegion: ident.gatewayRegion, ClusterID: ident.clusterID,
+		OrchAddr: msg.GetOrchAddr(), OrchURL: msg.GetOrchUrl(), ResolvedIP: msg.GetResolvedIp(),
+		SessionID: msg.GetSessionId(), Pipeline: msg.GetPipeline(), Model: msg.GetModel(),
+		LatencyScore: msg.GetLatencyScore(), PricePerUnit: msg.GetPricePerUnit(), LatencyMS: msg.GetLatencyMs(),
+		Success: boolToUInt8(msg.GetSuccess()), ErrorCode: msg.GetErrorCode(), ErrorKind: msg.GetErrorKind(),
+	}); err != nil {
 		return fmt.Errorf("append orchestrator_ai_outcomes: %w", err)
 	}
 
@@ -380,16 +321,15 @@ func (h *AnalyticsHandler) processOrchestratorAIOutcome(ctx context.Context, eve
 // doesn't keep showing the last good measurement), with dialedRecently=false
 // signaling "last attempt failed".
 func (h *AnalyticsHandler) upsertOrchestratorVantage(ctx context.Context, event kafka.AnalyticsEvent, ident orchestratorIdent, orchAddr string, vantage *ipcpb.OrchestratorVantageGeo, latencyMs uint32, score float32, dialedRecently bool) error {
-	batch, err := h.clickhouse.PrepareBatch(ctx, `
-		INSERT INTO orchestrator_vantage_current (
-			tenant_id, gateway_id, gateway_region, orch_addr, resolved_ip,
-			latitude, longitude, city, country_code, geo_source, geo_resolved_at,
-			latest_latency_ms, score, dialed_recently, last_seen, updated_at
-		)`)
+	tenantID, ok := parseTenantID(event.TenantID)
+	if !ok {
+		return fmt.Errorf("orchestrator_vantage_current invalid tenant_id %q", event.TenantID)
+	}
+	batch, err := periscopeingestdb.PrepareOrchestratorVantageCurrent(ctx, h.clickhouse)
 	if err != nil {
 		return fmt.Errorf("prepare orchestrator_vantage_current batch: %w", err)
 	}
-	defer closeClickHouseBatch(batch)
+	defer func() { _ = batch.Close() }()
 
 	geoResolvedAt := time.Time{}
 	if t := vantage.GetGeoResolvedAt(); t != nil {
@@ -397,24 +337,13 @@ func (h *AnalyticsHandler) upsertOrchestratorVantage(ctx context.Context, event 
 	}
 
 	now := time.Now()
-	if err := batch.Append(
-		event.TenantID,
-		ident.gatewayID,
-		ident.gatewayRegion,
-		orchAddr,
-		vantage.GetResolvedIp(),
-		vantage.GetLatitude(),
-		vantage.GetLongitude(),
-		vantage.GetCity(),
-		vantage.GetCountryCode(),
-		geoSourceOrUnknown(vantage.GetGeoSource()),
-		geoResolvedAt,
-		latencyMs,
-		score,
-		boolToUInt8(dialedRecently),
-		event.Timestamp,
-		now,
-	); err != nil {
+	if err := batch.Append(periscopeingestdb.OrchestratorVantageCurrentRow{
+		TenantID: tenantID, GatewayID: ident.gatewayID, GatewayRegion: ident.gatewayRegion,
+		OrchAddr: orchAddr, ResolvedIP: vantage.GetResolvedIp(), Latitude: vantage.GetLatitude(), Longitude: vantage.GetLongitude(),
+		City: vantage.GetCity(), CountryCode: vantage.GetCountryCode(), GeoSource: geoSourceOrUnknown(vantage.GetGeoSource()),
+		GeoResolvedAt: geoResolvedAt, LatestLatencyMS: latencyMs, Score: score, DialedRecently: boolToUInt8(dialedRecently),
+		LastSeen: event.Timestamp, UpdatedAt: now,
+	}); err != nil {
 		return fmt.Errorf("append orchestrator_vantage_current: %w", err)
 	}
 

@@ -11,8 +11,14 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
+	"github.com/google/uuid"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+)
+
+const (
+	orchestratorTestTenantID = "11111111-1111-4111-8111-111111111111"
+	orchestratorTestOwnerID  = "22222222-2222-4222-8222-222222222222"
 )
 
 // captureBatch records the values appended to a ClickHouse batch so a test can
@@ -70,7 +76,7 @@ func fullIdentity() map[string]any {
 		"gateway_id":              "gw-1",
 		"gateway_region":          "eu-west",
 		"cluster_id":              "cluster-1",
-		"cluster_owner_tenant_id": "owner-1",
+		"cluster_owner_tenant_id": orchestratorTestOwnerID,
 	}
 }
 
@@ -87,7 +93,7 @@ func TestProcessOrchestratorTranscodeOutcome_MapsRow(t *testing.T) {
 		OverallMs: 150,
 		Pixels:    123456,
 	}
-	event := orchestratorEvent(t, "tenant-1", ts, msg, fullIdentity())
+	event := orchestratorEvent(t, orchestratorTestTenantID, ts, msg, fullIdentity())
 
 	if err := h.processOrchestratorTranscodeOutcome(context.Background(), event); err != nil {
 		t.Fatalf("processOrchestratorTranscodeOutcome: %v", err)
@@ -99,11 +105,11 @@ func TestProcessOrchestratorTranscodeOutcome_MapsRow(t *testing.T) {
 	// Column order from the INSERT: timestamp, tenant_id, cluster_owner_tenant_id,
 	// gateway_id, gateway_region, cluster_id, orch_addr, orch_url, resolved_ip,
 	// session_id, manifest_id_hash, seq_no, success, ...
-	if row[1] != "tenant-1" {
-		t.Errorf("tenant_id col = %v, want tenant-1", row[1])
+	if row[1] != uuid.MustParse(orchestratorTestTenantID) {
+		t.Errorf("tenant_id col = %v, want %s", row[1], orchestratorTestTenantID)
 	}
-	if row[2] != "owner-1" {
-		t.Errorf("cluster_owner_tenant_id col = %v, want owner-1", row[2])
+	if row[2] != uuid.MustParse(orchestratorTestOwnerID) {
+		t.Errorf("cluster_owner_tenant_id col = %v, want %s", row[2], orchestratorTestOwnerID)
 	}
 	if row[3] != "gw-1" || row[5] != "cluster-1" {
 		t.Errorf("identity cols wrong: gateway=%v cluster=%v", row[3], row[5])
@@ -122,7 +128,7 @@ func TestProcessOrchestratorTranscodeOutcome_RejectsMissingClusterOwner(t *testi
 
 	identity := fullIdentity()
 	delete(identity, "cluster_owner_tenant_id")
-	event := orchestratorEvent(t, "tenant-1", time.Now(), &ipcpb.OrchestratorTranscodeOutcome{OrchAddr: "0xorch"}, identity)
+	event := orchestratorEvent(t, orchestratorTestTenantID, time.Now(), &ipcpb.OrchestratorTranscodeOutcome{OrchAddr: "0xorch"}, identity)
 
 	if err := h.processOrchestratorTranscodeOutcome(context.Background(), event); err == nil {
 		t.Fatal("expected error when cluster_owner_tenant_id is missing")
@@ -138,7 +144,7 @@ func TestProcessOrchestratorTranscodeOutcome_RejectsMissingIdentity(t *testing.T
 
 	identity := fullIdentity()
 	delete(identity, "gateway_id") // requireOrchestratorIdentity needs gateway_id + cluster_id
-	event := orchestratorEvent(t, "tenant-1", time.Now(), &ipcpb.OrchestratorTranscodeOutcome{OrchAddr: "0xorch"}, identity)
+	event := orchestratorEvent(t, orchestratorTestTenantID, time.Now(), &ipcpb.OrchestratorTranscodeOutcome{OrchAddr: "0xorch"}, identity)
 
 	if err := h.processOrchestratorTranscodeOutcome(context.Background(), event); err == nil {
 		t.Fatal("expected error when gateway_id is missing")
@@ -158,7 +164,7 @@ func TestProcessOrchestratorAIOutcome_MapsRow(t *testing.T) {
 		LatencyMs: 900,
 		Success:   false,
 	}
-	event := orchestratorEvent(t, "tenant-1", ts, msg, fullIdentity())
+	event := orchestratorEvent(t, orchestratorTestTenantID, ts, msg, fullIdentity())
 
 	if err := h.processOrchestratorAIOutcome(context.Background(), event); err != nil {
 		t.Fatalf("processOrchestratorAIOutcome: %v", err)
@@ -170,7 +176,7 @@ func TestProcessOrchestratorAIOutcome_MapsRow(t *testing.T) {
 	// Columns: timestamp, tenant_id, cluster_owner_tenant_id, gateway_id,
 	// gateway_region, cluster_id, orch_addr, orch_url, resolved_ip, session_id,
 	// pipeline, model, latency_score, price_per_unit, latency_ms, success, ...
-	if row[1] != "tenant-1" || row[2] != "owner-1" {
+	if row[1] != uuid.MustParse(orchestratorTestTenantID) || row[2] != uuid.MustParse(orchestratorTestOwnerID) {
 		t.Errorf("tenant/owner cols wrong: %v / %v", row[1], row[2])
 	}
 	if row[10] != "text-to-image" || row[11] != "sdxl" {

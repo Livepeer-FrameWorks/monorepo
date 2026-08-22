@@ -1094,7 +1094,7 @@ func TestViewerConnectTenantAttribution(t *testing.T) {
 		t.Fatalf("expected viewer_connection_events row, got %#v", batch)
 	}
 	row := batch.rows[0]
-	if row[2] != tenantID {
+	if row[2] != uuid.MustParse(tenantID) {
 		t.Fatalf("expected tenant_id %q, got %#v", tenantID, row[2])
 	}
 	if row[4] != "demo" {
@@ -1689,10 +1689,10 @@ func TestPushRewritePreservesZeroPublisherCoordinateWhenPresent(t *testing.T) {
 	//   9 request_url, 10 protocol, 11 latitude, 12 longitude, ...
 	row := batch.rows[0]
 	const latIdx, lonIdx = 11, 12
-	if row[latIdx] != lat {
+	if got, ok := row[latIdx].(*float64); !ok || got == nil || *got != lat {
 		t.Fatalf("expected latitude %v, got %#v", lat, row[latIdx])
 	}
-	if row[lonIdx] != lon {
+	if got, ok := row[lonIdx].(*float64); !ok || got == nil || *got != lon {
 		t.Fatalf("expected longitude %v, got %#v", lon, row[lonIdx])
 	}
 	stateBatch := conn.batches["stream_state_current"]
@@ -1703,7 +1703,7 @@ func TestPushRewritePreservesZeroPublisherCoordinateWhenPresent(t *testing.T) {
 	if stateRow[4] != "live" || stateRow[5] != "UNKNOWN" {
 		t.Fatalf("expected live UNKNOWN state, got status=%#v buffer=%#v", stateRow[4], stateRow[5])
 	}
-	if stateRow[23] != event.Timestamp {
+	if got, ok := stateRow[23].(*time.Time); !ok || got == nil || !got.Equal(event.Timestamp) {
 		t.Fatalf("expected started_at %v, got %#v", event.Timestamp, stateRow[23])
 	}
 }
@@ -1803,7 +1803,7 @@ func TestStreamLifecycleStartedAtLookupRequiresLiveState(t *testing.T) {
 	if stateBatch == nil || len(stateBatch.rows) != 1 {
 		t.Fatalf("expected stream_state_current row, got %#v", stateBatch)
 	}
-	if stateBatch.rows[0][23] != event.Timestamp {
+	if startedAt, ok := stateBatch.rows[0][23].(*time.Time); !ok || startedAt == nil || !startedAt.Equal(event.Timestamp) {
 		t.Fatalf("expected started_at %v, got %#v", event.Timestamp, stateBatch.rows[0][23])
 	}
 }
@@ -1842,7 +1842,7 @@ func TestStreamLifecyclePreservesExistingLiveStartedAt(t *testing.T) {
 	if stateBatch == nil || len(stateBatch.rows) != 1 {
 		t.Fatalf("expected stream_state_current row, got %#v", stateBatch)
 	}
-	if got := stateBatch.rows[0][23]; got != startedAt {
+	if got, ok := stateBatch.rows[0][23].(*time.Time); !ok || got == nil || !got.Equal(startedAt) {
 		t.Fatalf("expected started_at %v, got %#v", startedAt, got)
 	}
 }
@@ -2147,7 +2147,7 @@ func TestDVRLifecycleUsesPayloadNodeWhenEnvelopeMissing(t *testing.T) {
 	if stateBatch == nil || len(stateBatch.rows) != 1 {
 		t.Fatalf("expected artifact_state_current row, got %#v", stateBatch)
 	}
-	if got := stateBatch.rows[0][16]; got != nodeID {
+	if got, ok := stateBatch.rows[0][16].(*string); !ok || got == nil || *got != nodeID {
 		t.Fatalf("processing_node_id = %#v, want %q", got, nodeID)
 	}
 
@@ -2155,7 +2155,7 @@ func TestDVRLifecycleUsesPayloadNodeWhenEnvelopeMissing(t *testing.T) {
 	if eventBatch == nil || len(eventBatch.rows) != 1 {
 		t.Fatalf("expected artifact_events row, got %#v", eventBatch)
 	}
-	if got := eventBatch.rows[0][12]; got != nodeID {
+	if got, ok := eventBatch.rows[0][12].(*string); !ok || got == nil || *got != nodeID {
 		t.Fatalf("ingest_node_id = %#v, want %q", got, nodeID)
 	}
 }
@@ -2432,25 +2432,25 @@ func TestHandleAnalyticsEventFederationEventPreservesOptionalZeroValues(t *testi
 	}
 	row := batch.rows[0]
 
-	if row[10] != float32(0) {
+	if got, ok := row[10].(*float32); !ok || got == nil || *got != 0 {
 		t.Fatalf("expected latency_ms 0.0, got %#v", row[10])
 	}
-	if row[11] != float32(0) {
+	if got, ok := row[11].(*float32); !ok || got == nil || *got != 0 {
 		t.Fatalf("expected time_to_live_ms 0.0, got %#v", row[11])
 	}
-	if row[13] != uint32(0) || row[14] != uint32(0) || row[15] != uint32(0) {
+	if *row[13].(*uint32) != 0 || *row[14].(*uint32) != 0 || *row[15].(*uint32) != 0 {
 		t.Fatalf("expected queried/responding/total candidates zeros, got %#v %#v %#v", row[13], row[14], row[15])
 	}
-	if row[16] != uint64(0) {
+	if got, ok := row[16].(*uint64); !ok || got == nil || *got != 0 {
 		t.Fatalf("expected best_remote_score 0, got %#v", row[16])
 	}
-	if row[20] != "apac-edge" {
+	if got, ok := row[20].(*string); !ok || got == nil || *got != "apac-edge" {
 		t.Fatalf("expected blocked_cluster apac-edge, got %#v", row[20])
 	}
-	if row[21] != "us-east-edge" {
+	if got, ok := row[21].(*string); !ok || got == nil || *got != "us-east-edge" {
 		t.Fatalf("expected existing_replication_cluster us-east-edge, got %#v", row[21])
 	}
-	if row[22] != float64(0) || row[23] != float64(0) {
+	if *row[22].(*float64) != 0 || *row[23].(*float64) != 0 {
 		t.Fatalf("expected local coordinates 0,0, got %#v %#v", row[22], row[23])
 	}
 }

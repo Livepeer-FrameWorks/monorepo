@@ -4,6 +4,10 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"frameworks/api_analytics_ingest/internal/database/periscopeingestdb"
+
+	"github.com/google/uuid"
 )
 
 // Stale-close worker. Lives here (not api_sidecar) because the live-state
@@ -125,19 +129,11 @@ func (h *AnalyticsHandler) staleCloseViewerSessions(ctx context.Context) error {
 	defer func() { _ = rows.Close() }()
 
 	projectionVersionMS := time.Now().UnixMilli()
-	batch, err := h.clickhouse.PrepareBatch(ctx, `
-		INSERT INTO periscope.viewer_sessions_anomalous (
-			tenant_id, node_id, session_id,
-			cluster_id, stream_id, stream_name,
-			estimated_duration_seconds,
-			observed_first_at_ms, observed_last_at_ms,
-			closed_at_ms, closed_reason, projection_version_ms,
-			notes
-		)`)
+	batch, err := periscopeingestdb.PrepareViewerSessionAnomalous(ctx, h.clickhouse)
 	if err != nil {
 		return fmt.Errorf("viewer_sessions_anomalous prepare: %w", err)
 	}
-	defer closeClickHouseBatch(batch)
+	defer func() { _ = batch.Close() }()
 
 	rowsEmitted := 0
 	for rows.Next() {
@@ -153,14 +149,22 @@ func (h *AnalyticsHandler) staleCloseViewerSessions(ctx context.Context) error {
 		}
 		closedAtMS := projectionVersionMS
 		notes := fmt.Sprintf("stale: no USER_END within %s", StaleCloseTimeout)
-		if err := batch.Append(
-			tenantID, nodeID, sessionID,
-			clusterID, streamID, "",
-			sessionDuration,
-			observedFirstMS, observedLastMS,
-			closedAtMS, "stale", projectionVersionMS,
-			notes,
-		); err != nil {
+		tenantUUID, parseErr := uuid.Parse(tenantID)
+		if parseErr != nil {
+			return fmt.Errorf("viewer_sessions_anomalous tenant_id %q: %w", tenantID, parseErr)
+		}
+		streamUUID, parseErr := uuid.Parse(streamID)
+		if parseErr != nil {
+			return fmt.Errorf("viewer_sessions_anomalous stream_id %q: %w", streamID, parseErr)
+		}
+		if err := batch.Append(periscopeingestdb.ViewerSessionAnomalousRow{
+			TenantID: tenantUUID, NodeID: nodeID, SessionID: sessionID,
+			ClusterID: clusterID, StreamID: streamUUID,
+			EstimatedDurationSeconds: sessionDuration,
+			ObservedFirstAtMS:        observedFirstMS, ObservedLastAtMS: observedLastMS,
+			ClosedAtMS: closedAtMS, ClosedReason: "stale", ProjectionVersionMS: projectionVersionMS,
+			Notes: notes,
+		}); err != nil {
 			return fmt.Errorf("viewer_sessions_anomalous append: %w", err)
 		}
 		rowsEmitted++
@@ -216,19 +220,11 @@ func (h *AnalyticsHandler) staleCloseStreamSessions(ctx context.Context) error {
 	defer func() { _ = rows.Close() }()
 
 	projectionVersionMS := time.Now().UnixMilli()
-	batch, err := h.clickhouse.PrepareBatch(ctx, `
-		INSERT INTO periscope.stream_sessions_anomalous (
-			tenant_id, node_id, stream_id,
-			cluster_id, stream_name,
-			estimated_duration_seconds,
-			observed_first_at_ms, observed_last_at_ms,
-			closed_at_ms, closed_reason, projection_version_ms,
-			notes
-		)`)
+	batch, err := periscopeingestdb.PrepareStreamSessionAnomalous(ctx, h.clickhouse)
 	if err != nil {
 		return fmt.Errorf("stream_sessions_anomalous prepare: %w", err)
 	}
-	defer closeClickHouseBatch(batch)
+	defer func() { _ = batch.Close() }()
 
 	rowsEmitted := 0
 	for rows.Next() {
@@ -246,14 +242,21 @@ func (h *AnalyticsHandler) staleCloseStreamSessions(ctx context.Context) error {
 		if viewerSecondsMx > 0 {
 			estDuration = uint32(viewerSecondsMx)
 		}
-		if err := batch.Append(
-			tenantID, nodeID, streamID,
-			"", "",
-			estDuration,
-			observedFirstMS, observedLastMS,
-			closedAtMS, "stale", projectionVersionMS,
-			notes,
-		); err != nil {
+		tenantUUID, parseErr := uuid.Parse(tenantID)
+		if parseErr != nil {
+			return fmt.Errorf("stream_sessions_anomalous tenant_id %q: %w", tenantID, parseErr)
+		}
+		streamUUID, parseErr := uuid.Parse(streamID)
+		if parseErr != nil {
+			return fmt.Errorf("stream_sessions_anomalous stream_id %q: %w", streamID, parseErr)
+		}
+		if err := batch.Append(periscopeingestdb.StreamSessionAnomalousRow{
+			TenantID: tenantUUID, NodeID: nodeID, StreamID: streamUUID,
+			EstimatedDurationSeconds: estDuration,
+			ObservedFirstAtMS:        observedFirstMS, ObservedLastAtMS: observedLastMS,
+			ClosedAtMS: closedAtMS, ClosedReason: "stale", ProjectionVersionMS: projectionVersionMS,
+			Notes: notes,
+		}); err != nil {
 			return fmt.Errorf("stream_sessions_anomalous append: %w", err)
 		}
 		rowsEmitted++

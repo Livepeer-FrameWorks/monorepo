@@ -7,6 +7,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"github.com/google/uuid"
 )
 
 // TestProcessOrchestratorDiscoveryObserved_MapsSample pins the discovery-sample
@@ -24,7 +25,7 @@ func TestProcessOrchestratorDiscoveryObserved_MapsSample(t *testing.T) {
 		Compatible: true,
 		// Vantage left nil → handler substitutes an empty geo (dialed=false).
 	}
-	event := orchestratorEvent(t, "tenant-1", time.Unix(1_700_000_000, 0).UTC(), msg, map[string]any{
+	event := orchestratorEvent(t, orchestratorTestTenantID, time.Unix(1_700_000_000, 0).UTC(), msg, map[string]any{
 		"gateway_id":     "gw-1",
 		"gateway_region": "eu-west",
 		"cluster_id":     "cluster-1",
@@ -40,7 +41,7 @@ func TestProcessOrchestratorDiscoveryObserved_MapsSample(t *testing.T) {
 	// cols: timestamp, tenant_id, gateway_id, gateway_region, orch_addr, orch_url,
 	// resolved_ip, advertised_node_url, discovery_latency_ms, reachable, compatible,
 	// score, dialed, failure_reason, failure_kind, lat, lon, country_code, geo_source
-	if r[1] != "tenant-1" || r[2] != "gw-1" || r[4] != "0xorch" {
+	if r[1] != uuid.MustParse(orchestratorTestTenantID) || r[2] != "gw-1" || r[4] != "0xorch" {
 		t.Errorf("identity cols wrong: tenant=%v gateway=%v orch=%v", r[1], r[2], r[4])
 	}
 	if r[9] != uint8(1) || r[10] != uint8(1) {
@@ -59,7 +60,7 @@ func TestProcessOrchestratorDiscoveryObserved_RejectsMissingIdentity(t *testing.
 	h := &AnalyticsHandler{clickhouse: &captureClickhouse{batch: batch}, logger: logging.NewLoggerWithService("test")}
 
 	// Missing cluster_id → requireOrchestratorIdentity fails, no sample written.
-	event := orchestratorEvent(t, "tenant-1", time.Now(), &ipcpb.OrchestratorDiscoveryObserved{OrchAddr: "0xorch"}, map[string]any{
+	event := orchestratorEvent(t, orchestratorTestTenantID, time.Now(), &ipcpb.OrchestratorDiscoveryObserved{OrchAddr: "0xorch"}, map[string]any{
 		"gateway_id": "gw-1",
 	})
 

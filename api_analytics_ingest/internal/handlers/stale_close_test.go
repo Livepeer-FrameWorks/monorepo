@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/google/uuid"
 )
 
 // TestStaleCloseViewerSessionsEmitsAnomalyRow proves the core invariant: a stale
@@ -17,10 +18,12 @@ import (
 func TestStaleCloseViewerSessionsEmitsAnomalyRow(t *testing.T) {
 	conn := newFakeClickhouseConn()
 	h := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	tenantID := uuid.MustParse("11111111-1111-4111-8111-111111111111")
+	streamID := uuid.MustParse("22222222-2222-4222-8222-222222222222")
 
 	// Scan columns: tenant, stream, session, node, cluster, observedFirstMs, observedLastMs, duration.
 	conn.addQueryRow("periscope.client_qoe_samples",
-		"tenant-1", "stream-1", "session-1", "node-1", "cluster-a",
+		tenantID.String(), streamID.String(), "session-1", "node-1", "cluster-a",
 		int64(1_700_000_000_000), int64(1_700_000_300_000), uint32(300))
 
 	if err := h.staleCloseViewerSessions(context.Background()); err != nil {
@@ -33,7 +36,7 @@ func TestStaleCloseViewerSessionsEmitsAnomalyRow(t *testing.T) {
 	}
 	row := batch.rows[0]
 	// Append order: tenant, node, session, cluster, stream, name, duration, first, last, closed, reason, version, notes
-	if row[0] != "tenant-1" || row[1] != "node-1" || row[2] != "session-1" || row[3] != "cluster-a" || row[4] != "stream-1" {
+	if row[0] != tenantID || row[1] != "node-1" || row[2] != "session-1" || row[3] != "cluster-a" || row[4] != streamID {
 		t.Errorf("natural key mismatch: %#v", row[:5])
 	}
 	if row[6] != uint32(300) {
@@ -78,12 +81,16 @@ func TestStaleCloseViewerSessionsNoRowsDoesNotSend(t *testing.T) {
 func TestStaleCloseStreamSessionsClampsViewerSeconds(t *testing.T) {
 	conn := newFakeClickhouseConn()
 	h := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	tenantOne := uuid.MustParse("11111111-1111-4111-8111-111111111111")
+	streamOne := uuid.MustParse("22222222-2222-4222-8222-222222222222")
+	tenantTwo := uuid.MustParse("33333333-3333-4333-8333-333333333333")
+	streamTwo := uuid.MustParse("44444444-4444-4444-8444-444444444444")
 
 	// Scan columns: tenant, stream, node, observedFirstMs, observedLastMs, viewerSecondsMax.
 	conn.addQueryRow("periscope.stream_state_current",
-		"tenant-1", "stream-1", "node-1", int64(1_700_000_000_000), int64(1_700_000_600_000), int64(600))
+		tenantOne.String(), streamOne.String(), "node-1", int64(1_700_000_000_000), int64(1_700_000_600_000), int64(600))
 	conn.addQueryRow("periscope.stream_state_current",
-		"tenant-2", "stream-2", "node-2", int64(1_700_000_000_000), int64(1_700_000_600_000), int64(0))
+		tenantTwo.String(), streamTwo.String(), "node-2", int64(1_700_000_000_000), int64(1_700_000_600_000), int64(0))
 
 	if err := h.staleCloseStreamSessions(context.Background()); err != nil {
 		t.Fatalf("unexpected error: %v", err)

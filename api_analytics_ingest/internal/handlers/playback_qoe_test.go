@@ -85,10 +85,10 @@ func TestProcessPlaybackSessionQoe_ServerDerivedAttributionAndDeltas(t *testing.
 	}
 	row := batch.rows[0]
 
-	if row[2] != realTenant {
+	if row[2] != uuid.MustParse(realTenant) {
 		t.Errorf("tenant_id = %v, want envelope tenant %q (spoof must be ignored)", row[2], realTenant)
 	}
-	if got, ok := row[3].(uuid.UUID); !ok || got.String() != streamID {
+	if got, ok := row[3].(*uuid.UUID); !ok || got == nil || got.String() != streamID {
 		t.Errorf("stream_id = %#v, want %q", row[3], streamID)
 	}
 	if row[5] != "demo" {
@@ -157,7 +157,7 @@ func TestProcessPlaybackSessionQoe_VodRetentionFanOut(t *testing.T) {
 	}
 
 	// VOD artifact → nil stream_id on the delta row.
-	if row := conn.batches["client_qoe_session_deltas"].rows[0]; row[3] != nil {
+	if row := conn.batches["client_qoe_session_deltas"].rows[0]; row[3].(*uuid.UUID) != nil {
 		t.Errorf("vod delta stream_id = %#v, want nil", row[3])
 	}
 
@@ -264,7 +264,7 @@ func TestProcessPlaybackBootTrace_ResourceHeadlineFirstWins(t *testing.T) {
 	}
 	row := batch.rows[0]
 
-	if row[2] != realTenant {
+	if row[2] != uuid.MustParse(realTenant) {
 		t.Errorf("tenant_id = %v, want envelope tenant %q", row[2], realTenant)
 	}
 	if row[5] != "clip" {

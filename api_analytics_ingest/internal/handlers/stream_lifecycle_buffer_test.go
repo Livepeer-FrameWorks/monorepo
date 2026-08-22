@@ -60,7 +60,7 @@ func TestStreamLifecycleDefaultsBufferStateForCurrentStateOnly(t *testing.T) {
 	if log == nil || len(log.rows) != 1 {
 		t.Fatalf("expected one stream_event_log row, got %#v", log)
 	}
-	if got := log.rows[0][9]; got != "" {
+	if got, ok := log.rows[0][9].(*string); !ok || got == nil || *got != "" {
 		t.Fatalf("event-log buffer_state = %#v, want raw empty (default is current-state only)", got)
 	}
 }

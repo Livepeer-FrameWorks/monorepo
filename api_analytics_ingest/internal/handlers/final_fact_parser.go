@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_analytics_ingest/internal/database/periscopeingestdb"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -172,27 +174,19 @@ func (h *AnalyticsHandler) projectViewerSessionFinal(ctx context.Context, trigge
 		return fmt.Errorf("viewer_sessions_final divergence guardrail: %w", divergenceErr)
 	}
 
-	batch, err := h.clickhouse.PrepareBatch(ctx, `
-		INSERT INTO periscope.viewer_sessions_final (
-			tenant_id, node_id, session_id, source_event_id,
-			cluster_id, stream_id, stream_name, connector, host,
-			country_code, city, latitude, longitude, tags,
-			duration_seconds, uploaded_bytes, downloaded_bytes, seconds_connected,
-			source_started_at_ms, source_ended_at_ms, edge_received_at_ms, projection_version_ms,
-			closed_reason, stream_times, connector_times, host_times, payload_raw
-		)`)
+	batch, err := periscopeingestdb.PrepareViewerSessionFinal(ctx, h.clickhouse)
 	if err != nil {
 		return fmt.Errorf("viewer_sessions_final prepare: %w", err)
 	}
-	defer closeClickHouseBatch(batch)
-	if err := batch.Append(
-		row.tenantID, row.nodeID, row.sessionID, row.sourceEventID,
-		row.clusterID, row.streamID, row.streamName, row.connector, row.host,
-		row.countryCode, row.city, row.latitude, row.longitude, row.tags,
-		row.durationSeconds, row.uploadedBytes, row.downloadedBytes, row.secondsConnected,
-		row.sourceStartedAtMS, row.sourceEndedAtMS, row.edgeReceivedAtMS, row.projectionVersionMS,
-		row.closedReason, row.streamTimes, row.connectorTimes, row.hostTimes, row.payloadRaw,
-	); err != nil {
+	defer func() { _ = batch.Close() }()
+	if err := batch.Append(periscopeingestdb.ViewerSessionFinalRow{
+		TenantID: row.tenantID, NodeID: row.nodeID, SessionID: row.sessionID, SourceEventID: row.sourceEventID,
+		ClusterID: row.clusterID, StreamID: row.streamID, StreamName: row.streamName, Connector: row.connector, Host: row.host,
+		CountryCode: row.countryCode, City: row.city, Latitude: row.latitude, Longitude: row.longitude, Tags: row.tags,
+		DurationSeconds: row.durationSeconds, UploadedBytes: row.uploadedBytes, DownloadedBytes: row.downloadedBytes, SecondsConnected: row.secondsConnected,
+		SourceStartedAtMS: row.sourceStartedAtMS, SourceEndedAtMS: row.sourceEndedAtMS, EdgeReceivedAtMS: row.edgeReceivedAtMS, ProjectionVersionMS: row.projectionVersionMS,
+		ClosedReason: row.closedReason, StreamTimes: row.streamTimes, ConnectorTimes: row.connectorTimes, HostTimes: row.hostTimes, PayloadRaw: row.payloadRaw,
+	}); err != nil {
 		return fmt.Errorf("viewer_sessions_final append: %w", err)
 	}
 	if err := batch.Send(); err != nil {
@@ -299,25 +293,20 @@ func (h *AnalyticsHandler) projectStreamSessionFinal(ctx context.Context, trigge
 		return fmt.Errorf("stream_sessions_final divergence guardrail: %w", divergenceErr)
 	}
 
-	batch, err := h.clickhouse.PrepareBatch(ctx, `
-		INSERT INTO periscope.stream_sessions_final (
-			tenant_id, node_id, stream_id, source_event_id,
-			cluster_id, stream_name,
-			downloaded_bytes, uploaded_bytes, total_viewers, total_inputs, total_outputs, viewer_seconds,
-			source_started_at_ms, source_ended_at_ms, edge_received_at_ms, projection_version_ms,
-			closed_reason, payload_raw
-		)`)
+	batch, err := periscopeingestdb.PrepareStreamSessionFinal(ctx, h.clickhouse)
 	if err != nil {
 		return fmt.Errorf("stream_sessions_final prepare: %w", err)
 	}
-	defer closeClickHouseBatch(batch)
-	if err := batch.Append(
-		row.tenantID, row.nodeID, row.streamID, row.sourceEventID,
-		row.clusterID, row.streamName,
-		row.downloadedBytes, row.uploadedBytes, row.totalViewers, row.totalInputs, row.totalOutputs, row.viewerSeconds,
-		row.sourceStartedAtMS, row.sourceEndedAtMS, row.edgeReceivedAtMS, row.projectionVersionMS,
-		row.closedReason, row.payloadRaw,
-	); err != nil {
+	defer func() { _ = batch.Close() }()
+	if err := batch.Append(periscopeingestdb.StreamSessionFinalRow{
+		TenantID: row.tenantID, NodeID: row.nodeID, StreamID: row.streamID, SourceEventID: row.sourceEventID,
+		ClusterID: row.clusterID, StreamName: row.streamName,
+		DownloadedBytes: row.downloadedBytes, UploadedBytes: row.uploadedBytes, TotalViewers: row.totalViewers,
+		TotalInputs: row.totalInputs, TotalOutputs: row.totalOutputs, ViewerSeconds: row.viewerSeconds,
+		SourceStartedAtMS: row.sourceStartedAtMS, SourceEndedAtMS: row.sourceEndedAtMS,
+		EdgeReceivedAtMS: row.edgeReceivedAtMS, ProjectionVersionMS: row.projectionVersionMS,
+		ClosedReason: row.closedReason, PayloadRaw: row.payloadRaw,
+	}); err != nil {
 		return fmt.Errorf("stream_sessions_final append: %w", err)
 	}
 	if err := batch.Send(); err != nil {
@@ -341,23 +330,16 @@ func (h *AnalyticsHandler) projectStreamSessionAnomalous(
 	closedReason string,
 	notes string,
 ) error {
-	batch, err := h.clickhouse.PrepareBatch(ctx, `
-		INSERT INTO periscope.stream_sessions_anomalous (
-			tenant_id, node_id, stream_id,
-			cluster_id, stream_name,
-			estimated_duration_seconds, observed_first_at_ms, observed_last_at_ms,
-			closed_at_ms, closed_reason, projection_version_ms, notes
-		)`)
+	batch, err := periscopeingestdb.PrepareStreamSessionAnomalous(ctx, h.clickhouse)
 	if err != nil {
 		return fmt.Errorf("stream_sessions_anomalous prepare: %w", err)
 	}
-	defer closeClickHouseBatch(batch)
-	if err := batch.Append(
-		tenantID, nodeID, streamID,
-		clusterID, streamName,
-		uint32(0), int64(0), int64(0),
-		closedAtMS, closedReason, projectionVersionMS, notes,
-	); err != nil {
+	defer func() { _ = batch.Close() }()
+	if err := batch.Append(periscopeingestdb.StreamSessionAnomalousRow{
+		TenantID: tenantID, NodeID: nodeID, StreamID: streamID,
+		ClusterID: clusterID, StreamName: streamName,
+		ClosedAtMS: closedAtMS, ClosedReason: closedReason, ProjectionVersionMS: projectionVersionMS, Notes: notes,
+	}); err != nil {
 		return fmt.Errorf("stream_sessions_anomalous append: %w", err)
 	}
 	if err := batch.Send(); err != nil {
@@ -482,31 +464,24 @@ func (h *AnalyticsHandler) projectProcessingSegmentFinal(ctx context.Context, tr
 		return fmt.Errorf("processing_segments_final divergence guardrail: %w", divergenceErr)
 	}
 
-	batch, err := h.clickhouse.PrepareBatch(ctx, `
-		INSERT INTO periscope.processing_segments_final (
-			tenant_id, node_id, stream_id, process_type, output_codec, track_type, segment_number,
-			source_event_id,
-			cluster_id, stream_name, input_codec, media_seconds,
-			width, height, rendition_count, input_bytes, output_bytes_total, turnaround_ms, speed_factor, livepeer_session_id, renditions_json,
-			input_frames, output_frames, input_frames_delta, output_frames_delta, input_bytes_delta, output_bytes_delta,
-			rtf_in, rtf_out, is_final,
-			source_started_at_ms, source_ended_at_ms, edge_received_at_ms, projection_version_ms,
-			payload_raw
-		)`)
+	batch, err := periscopeingestdb.PrepareProcessingSegmentFinal(ctx, h.clickhouse)
 	if err != nil {
 		return fmt.Errorf("processing_segments_final prepare: %w", err)
 	}
-	defer closeClickHouseBatch(batch)
-	if err := batch.Append(
-		tenantID, nodeID, streamID, processType, outputCodec, trackType, segmentNumber,
-		sourceEventID,
-		clusterID, pb_.GetStreamName(), pb_.GetInputCodec(), rawDurationSeconds,
-		pb_.GetWidth(), pb_.GetHeight(), pb_.GetRenditionCount(), pb_.GetInputBytes(), pb_.GetOutputBytesTotal(), pb_.GetTurnaroundMs(), pb_.GetSpeedFactor(), pb_.GetLivepeerSessionId(), pb_.GetRenditionsJson(),
-		pb_.GetInputFrames(), pb_.GetOutputFrames(), pb_.GetInputFramesDelta(), pb_.GetOutputFramesDelta(), pb_.GetInputBytesDelta(), pb_.GetOutputBytesDelta(),
-		pb_.GetRtfIn(), pb_.GetRtfOut(), isFinal,
-		sourceStartedAtMS, sourceEndedAtMS, edgeReceivedAtMS, projectionVersionMS,
-		payloadRaw,
-	); err != nil {
+	defer func() { _ = batch.Close() }()
+	if err := batch.Append(periscopeingestdb.ProcessingSegmentFinalRow{
+		TenantID: tenantID, NodeID: nodeID, StreamID: streamID, ProcessType: processType, OutputCodec: outputCodec, TrackType: trackType,
+		SegmentNumber: segmentNumber, SourceEventID: sourceEventID,
+		ClusterID: clusterID, StreamName: pb_.GetStreamName(), InputCodec: pb_.GetInputCodec(), MediaSeconds: rawDurationSeconds,
+		Width: pb_.GetWidth(), Height: pb_.GetHeight(), RenditionCount: pb_.GetRenditionCount(), InputBytes: pb_.GetInputBytes(),
+		OutputBytesTotal: pb_.GetOutputBytesTotal(), TurnaroundMS: pb_.GetTurnaroundMs(), SpeedFactor: pb_.GetSpeedFactor(),
+		LivepeerSessionID: pb_.GetLivepeerSessionId(), RenditionsJSON: pb_.GetRenditionsJson(),
+		InputFrames: pb_.GetInputFrames(), OutputFrames: pb_.GetOutputFrames(), InputFramesDelta: pb_.GetInputFramesDelta(),
+		OutputFramesDelta: pb_.GetOutputFramesDelta(), InputBytesDelta: pb_.GetInputBytesDelta(), OutputBytesDelta: pb_.GetOutputBytesDelta(),
+		RTFIn: pb_.GetRtfIn(), RTFOut: pb_.GetRtfOut(), IsFinal: isFinal,
+		SourceStartedAtMS: sourceStartedAtMS, SourceEndedAtMS: sourceEndedAtMS, EdgeReceivedAtMS: edgeReceivedAtMS,
+		ProjectionVersionMS: projectionVersionMS, PayloadRaw: payloadRaw,
+	}); err != nil {
 		return fmt.Errorf("processing_segments_final append: %w", err)
 	}
 	if err := batch.Send(); err != nil {
@@ -899,16 +874,15 @@ func (h *AnalyticsHandler) recordProcessingSegmentDivergences(ctx context.Contex
 }
 
 func (h *AnalyticsHandler) recordProjectionDivergence(ctx context.Context, observedAtMS int64, tableName, meter, field, naturalKeyJSON, priorJSON, newJSON, sourceEventID string) error {
-	batch, err := h.clickhouse.PrepareBatch(ctx, `
-		INSERT INTO periscope.projection_divergences (
-			observed_at_ms, table_name, meter, field,
-			natural_key_json, prior_value_json, new_value_json, source_event_id
-		)`)
+	batch, err := periscopeingestdb.PrepareProjectionDivergence(ctx, h.clickhouse)
 	if err != nil {
 		return err
 	}
-	defer closeClickHouseBatch(batch)
-	if err := batch.Append(observedAtMS, tableName, meter, field, naturalKeyJSON, priorJSON, newJSON, sourceEventID); err != nil {
+	defer func() { _ = batch.Close() }()
+	if err := batch.Append(periscopeingestdb.ProjectionDivergenceRow{
+		ObservedAtMS: observedAtMS, TableName: tableName, Meter: meter, Field: field,
+		NaturalKeyJSON: naturalKeyJSON, PriorValueJSON: priorJSON, NewValueJSON: newJSON, SourceEventID: sourceEventID,
+	}); err != nil {
 		return err
 	}
 	return batch.Send()

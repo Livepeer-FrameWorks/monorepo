@@ -20,9 +20,10 @@ func TestProcessVodLifecycle_MapsFactAndTenantOverride(t *testing.T) {
 	batch := &captureBatch{}
 	h := &AnalyticsHandler{clickhouse: &captureClickhouse{batch: batch}, logger: logging.NewLoggerWithService("test")}
 
+	payloadTenant := uuid.NewString()
 	vod := &ipcpb.VodLifecycleData{
 		VodHash:  "vodhash123",
-		TenantId: proto.String("vod-tenant"), // overrides the envelope tenant
+		TenantId: proto.String(payloadTenant), // overrides the envelope tenant
 		Filename: proto.String("movie.mp4"),
 	}
 	mt := &ipcpb.MistTrigger{
@@ -30,7 +31,7 @@ func TestProcessVodLifecycle_MapsFactAndTenantOverride(t *testing.T) {
 		TriggerPayload: &ipcpb.MistTrigger_VodLifecycleData{VodLifecycleData: vod},
 	}
 	// Envelope tenant differs from the payload tenant on purpose.
-	event := mistTriggerEvent(t, "envelope-tenant", time.Unix(1_700_000_000, 0).UTC(), mt)
+	event := mistTriggerEvent(t, uuid.NewString(), time.Unix(1_700_000_000, 0).UTC(), mt)
 
 	if err := h.processVodLifecycle(context.Background(), event); err != nil {
 		t.Fatalf("processVodLifecycle: %v", err)
@@ -45,8 +46,8 @@ func TestProcessVodLifecycle_MapsFactAndTenantOverride(t *testing.T) {
 	// artifact_state_current: tenant_id, stream_id, request_id, internal_name,
 	// filename, content_type, stage, ...
 	st := batch.rows[0]
-	if st[0] != "vod-tenant" {
-		t.Errorf("tenant_id = %v, want vod-tenant (payload overrides envelope)", st[0])
+	if st[0] != uuid.MustParse(payloadTenant) {
+		t.Errorf("tenant_id = %v, want %s (payload overrides envelope)", st[0], payloadTenant)
 	}
 	if st[2] != "vodhash123" || st[3] != "vodhash123" {
 		t.Errorf("request_id/internal_name = %v/%v, want vodhash123 (both = vod_hash)", st[2], st[3])
@@ -63,13 +64,14 @@ func TestProcessVodLifecycle_EnvelopeTenantWhenPayloadEmpty(t *testing.T) {
 	// No payload tenant_id → falls back to the envelope tenant.
 	vod := &ipcpb.VodLifecycleData{VodHash: "h2"}
 	mt := &ipcpb.MistTrigger{TriggerPayload: &ipcpb.MistTrigger_VodLifecycleData{VodLifecycleData: vod}}
-	event := mistTriggerEvent(t, "envelope-tenant", time.Now(), mt)
+	envelopeTenant := uuid.NewString()
+	event := mistTriggerEvent(t, envelopeTenant, time.Now(), mt)
 
 	if err := h.processVodLifecycle(context.Background(), event); err != nil {
 		t.Fatalf("processVodLifecycle: %v", err)
 	}
-	if batch.rows[0][0] != "envelope-tenant" {
-		t.Errorf("tenant_id = %v, want envelope-tenant fallback", batch.rows[0][0])
+	if batch.rows[0][0] != uuid.MustParse(envelopeTenant) {
+		t.Errorf("tenant_id = %v, want %s fallback", batch.rows[0][0], envelopeTenant)
 	}
 }
 

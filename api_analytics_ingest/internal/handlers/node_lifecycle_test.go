@@ -10,9 +10,12 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
+	"github.com/google/uuid"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
+
+const nodeLifecycleTestTenantID = "11111111-1111-4111-8111-111111111111"
 
 // nodeLifecycleEvent wraps a NodeLifecycleUpdate in a MistTrigger envelope and
 // renders it to the kafka.AnalyticsEvent shape the ingest handler parses.
@@ -42,8 +45,7 @@ func nodeLifecycleEvent(t *testing.T, tenantID, clusterID string, ts time.Time, 
 // TestProcessNodeLifecycle_MapsBothFacts pins the dual-write (node_state_current
 // + node_metrics_samples) and the field derivations: CPU tenths→percent,
 // operational-mode prefix strip (unspecified→normal), and the deliberate
-// is_healthy representation split (uint8 in current state, bool in the metrics
-// log).
+// is_healthy representation as the UInt8 required by both ClickHouse tables.
 func TestProcessNodeLifecycle_MapsBothFacts(t *testing.T) {
 	batch := &captureBatch{}
 	h := &AnalyticsHandler{clickhouse: &captureClickhouse{batch: batch}, logger: logging.NewLoggerWithService("test")}
@@ -56,7 +58,7 @@ func TestProcessNodeLifecycle_MapsBothFacts(t *testing.T) {
 		OperationalMode: ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_UNSPECIFIED, // → "normal"
 		ActiveStreams:   3,
 	}
-	event := nodeLifecycleEvent(t, "tenant-1", "cluster-1", ts, upd)
+	event := nodeLifecycleEvent(t, nodeLifecycleTestTenantID, "cluster-1", ts, upd)
 
 	if err := h.processNodeLifecycle(context.Background(), event); err != nil {
 		t.Fatalf("processNodeLifecycle: %v", err)
@@ -69,7 +71,7 @@ func TestProcessNodeLifecycle_MapsBothFacts(t *testing.T) {
 	}
 
 	state := batch.rows[0] // node_state_current
-	if state[0] != "tenant-1" || state[1] != "cluster-1" || state[2] != "node-1" {
+	if state[0] != uuid.MustParse(nodeLifecycleTestTenantID) || state[1] != "cluster-1" || state[2] != "node-1" {
 		t.Errorf("state identity cols wrong: %v / %v / %v", state[0], state[1], state[2])
 	}
 	if state[3] != float32(35.5) {
@@ -86,9 +88,8 @@ func TestProcessNodeLifecycle_MapsBothFacts(t *testing.T) {
 	if metrics[4] != float32(35.5) {
 		t.Errorf("metrics cpu_usage = %v, want 35.5", metrics[4])
 	}
-	// Deliberate representation split: the metrics log stores the raw bool.
-	if metrics[17] != true {
-		t.Errorf("metrics is_healthy = %v, want bool true (raw, not uint8)", metrics[17])
+	if metrics[17] != uint8(1) {
+		t.Errorf("metrics is_healthy = %v, want uint8(1)", metrics[17])
 	}
 }
 
@@ -96,7 +97,7 @@ func TestProcessNodeLifecycle_UnhealthyNode(t *testing.T) {
 	batch := &captureBatch{}
 	h := &AnalyticsHandler{clickhouse: &captureClickhouse{batch: batch}, logger: logging.NewLoggerWithService("test")}
 
-	event := nodeLifecycleEvent(t, "tenant-1", "cluster-1", time.Unix(1_700_000_000, 0).UTC(),
+	event := nodeLifecycleEvent(t, nodeLifecycleTestTenantID, "cluster-1", time.Unix(1_700_000_000, 0).UTC(),
 		&ipcpb.NodeLifecycleUpdate{NodeId: "node-2", IsHealthy: false})
 
 	if err := h.processNodeLifecycle(context.Background(), event); err != nil {
@@ -108,8 +109,8 @@ func TestProcessNodeLifecycle_UnhealthyNode(t *testing.T) {
 	if batch.rows[0][12] != uint8(0) {
 		t.Errorf("state is_healthy = %v, want uint8(0) for unhealthy node", batch.rows[0][12])
 	}
-	if batch.rows[1][17] != false {
-		t.Errorf("metrics is_healthy = %v, want bool false", batch.rows[1][17])
+	if batch.rows[1][17] != uint8(0) {
+		t.Errorf("metrics is_healthy = %v, want uint8(0)", batch.rows[1][17])
 	}
 }
 

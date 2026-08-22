@@ -28,7 +28,7 @@ func TestProcessClipLifecycle_PrefersClipHash(t *testing.T) {
 		StreamId:       proto.String(uuid.NewString()),
 		TriggerPayload: &ipcpb.MistTrigger_ClipLifecycleData{ClipLifecycleData: cl},
 	}
-	event := mistTriggerEvent(t, "tenant-1", time.Unix(1_700_000_000, 0).UTC(), mt)
+	event := mistTriggerEvent(t, typedWriterTestTenantID, time.Unix(1_700_000_000, 0).UTC(), mt)
 
 	if err := h.processClipLifecycle(context.Background(), event); err != nil {
 		t.Fatalf("processClipLifecycle: %v", err)
@@ -40,8 +40,8 @@ func TestProcessClipLifecycle_PrefersClipHash(t *testing.T) {
 	// artifact_state_current: tenant_id, stream_id, request_id, internal_name,
 	// filename, content_type, ...
 	st := batch.rows[0]
-	if st[0] != "tenant-1" {
-		t.Errorf("tenant_id = %v, want tenant-1", st[0])
+	if st[0] != uuid.MustParse(typedWriterTestTenantID) {
+		t.Errorf("tenant_id = %v, want %s", st[0], typedWriterTestTenantID)
 	}
 	if st[2] != "cliphash1" {
 		t.Errorf("request_id = %v, want cliphash1 (clip_hash preferred)", st[2])

@@ -15,6 +15,8 @@ import (
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
+const typedWriterTestTenantID = "22222222-2222-4222-8222-222222222222"
+
 // mistTriggerEvent renders a MistTrigger into the kafka.AnalyticsEvent shape the
 // ingest handlers parse (protojson round-trip into a Data map).
 func mistTriggerEvent(t *testing.T, tenantID string, ts time.Time, mt *ipcpb.MistTrigger) kafka.AnalyticsEvent {
@@ -61,7 +63,7 @@ func TestProcessStreamBuffer_MapsAndStripsPrefix(t *testing.T) {
 		ClusterId:      proto.String("cluster-1"),
 		TriggerPayload: &ipcpb.MistTrigger_StreamBuffer{StreamBuffer: sb},
 	}
-	event := mistTriggerEvent(t, "tenant-1", time.Unix(1_700_000_000, 0).UTC(), mt)
+	event := mistTriggerEvent(t, typedWriterTestTenantID, time.Unix(1_700_000_000, 0).UTC(), mt)
 
 	if err := h.processStreamBuffer(context.Background(), event); err != nil {
 		t.Fatalf("processStreamBuffer: %v", err)
@@ -76,13 +78,13 @@ func TestProcessStreamBuffer_MapsAndStripsPrefix(t *testing.T) {
 	// stream_event_log columns: timestamp, event_id, tenant_id, stream_id,
 	// internal_name, node_id, cluster_id, event_type, status, ...
 	ev := batch.rows[0]
-	if ev[2] != "tenant-1" {
-		t.Errorf("tenant_id = %v, want tenant-1", ev[2])
+	if ev[2] != uuid.MustParse(typedWriterTestTenantID) {
+		t.Errorf("tenant_id = %v, want %s", ev[2], typedWriterTestTenantID)
 	}
 	if ev[4] != "abc123" {
 		t.Errorf("internal_name = %v, want abc123 (live+ stripped)", ev[4])
 	}
-	if ev[7] != "stream_buffer" || ev[8] != "live" {
+	if status, ok := ev[8].(*string); ev[7] != "stream_buffer" || !ok || status == nil || *status != "live" {
 		t.Errorf("event_type/status = %v/%v, want stream_buffer/live", ev[7], ev[8])
 	}
 	// primary_width column (index 14) is a *uint16 from the primary video track.

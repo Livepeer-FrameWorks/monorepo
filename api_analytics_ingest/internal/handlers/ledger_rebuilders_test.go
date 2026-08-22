@@ -10,6 +10,11 @@ import (
 	"github.com/google/uuid"
 )
 
+const (
+	ledgerTestTenantID = "33333333-3333-4333-8333-333333333333"
+	ledgerTestStreamID = "44444444-4444-4444-8444-444444444444"
+)
+
 // windowsForSpan is the bucketing primitive every ledger rebuilder uses
 // to split a source-time span across 5-minute windows. These fixtures
 // cover the cases the contract calls out: boundary-crossing spans,
@@ -143,7 +148,7 @@ func TestRebuildViewerUsage5mSplitsSessionAcrossWindows(t *testing.T) {
 	// viewer_sessions_final scan order: tenant, node, session, source_event_id,
 	// cluster, stream, started_ms, ended_ms, duration_seconds, up, down.
 	conn.addQueryRow("periscope.viewer_sessions_final",
-		"t1", "n1", "s1", "evt-1", "c1", "stream-1",
+		ledgerTestTenantID, "n1", "s1", "evt-1", "c1", ledgerTestStreamID,
 		start, end, uint32(420), upBytes, downBytes)
 
 	if err := handler.rebuildViewerUsage5m(context.Background(), time.UnixMilli(start), time.UnixMilli(end)); err != nil {
@@ -168,7 +173,7 @@ func TestRebuildViewerUsage5mSplitsSessionAcrossWindows(t *testing.T) {
 		if !ok {
 			t.Fatalf("missing row for window %d", windowMS)
 		}
-		if row[1] != "t1" || row[2] != "c1" || row[3] != "stream-1" || row[9] != "evt-1" {
+		if row[1] != uuid.MustParse(ledgerTestTenantID) || row[2] != "c1" || row[3] != uuid.MustParse(ledgerTestStreamID) || row[9] != "evt-1" {
 			t.Fatalf("identity/source_event mismatch in window %d: %#v", windowMS, row)
 		}
 		if got := row[6].(uint32); got != uint32(overlapMS/1000) {
@@ -201,10 +206,10 @@ func TestRebuildStorageGBSeconds5mIntegratesClosedWindow(t *testing.T) {
 	// Snapshot at the window start holds 1 GiB; the next at the window end both
 	// integrates the held value across the full 5 minutes and closes the window.
 	conn.addQueryRow("periscope.storage_snapshots",
-		"t1", "c1", "origin", "t1", "c1", "s3",
+		ledgerTestTenantID, "c1", "origin", ledgerTestTenantID, "c1", "s3",
 		w.UnixMilli(), w.UnixMilli(), oneGiB, uint32(4))
 	conn.addQueryRow("periscope.storage_snapshots",
-		"t1", "c1", "origin", "t1", "c1", "s3",
+		ledgerTestTenantID, "c1", "origin", ledgerTestTenantID, "c1", "s3",
 		w.Add(5*time.Minute).UnixMilli(), w.Add(5*time.Minute).UnixMilli(), 2*oneGiB, uint32(5))
 
 	if err := handler.rebuildStorageGBSeconds5m(context.Background(), w, w.Add(5*time.Minute)); err != nil {
@@ -296,7 +301,7 @@ func TestRebuildProcessing5mPassesThroughAggregatedRow(t *testing.T) {
 	// cluster, stream, process_type, output_codec, track_type, source_event_id,
 	// media_seconds.
 	conn.addQueryRow("periscope.processing_segments_final",
-		w, "t1", "c1", "stream-1", "transcode", "h264", "video", "evt-1", float64(42.5))
+		w, ledgerTestTenantID, "c1", ledgerTestStreamID, "transcode", "h264", "video", "evt-1", float64(42.5))
 
 	if err := handler.rebuildProcessing5m(context.Background(), w, w.Add(5*time.Minute)); err != nil {
 		t.Fatalf("rebuildProcessing5m: %v", err)
@@ -307,7 +312,7 @@ func TestRebuildProcessing5mPassesThroughAggregatedRow(t *testing.T) {
 		t.Fatalf("expected one processing_5m row, got %#v", batch)
 	}
 	row := batch.rows[0]
-	if row[1] != "t1" || row[2] != "c1" || row[3] != "stream-1" {
+	if row[1] != uuid.MustParse(ledgerTestTenantID) || row[2] != "c1" || row[3] != uuid.MustParse(ledgerTestStreamID) {
 		t.Fatalf("identity columns mismatch: %#v", row)
 	}
 	if row[4] != "transcode" || row[5] != "h264" || row[6] != "video" || row[7] != "evt-1" {
@@ -441,7 +446,7 @@ func TestStreamRuntimeRebuilderResolvesZeroDurationFinalFromEventLog(t *testing.
 		t.Fatalf("expected one stream_runtime_5m row, got %#v", batch)
 	}
 	row := batch.rows[0]
-	if row[2] != "media-eu-1" || row[3] != streamID {
+	if row[2] != "media-eu-1" || row[3] != uuid.MustParse(streamID) {
 		t.Fatalf("unexpected stream runtime identity row: %#v", row)
 	}
 	if got := row[4]; got != uint32(120) {
@@ -489,7 +494,7 @@ func TestStreamRuntimeRebuilderSkipsMissingStartAndContinues(t *testing.T) {
 		t.Fatalf("expected one stream_runtime_5m row for valid stream, got %#v", batch)
 	}
 	row := batch.rows[0]
-	if row[3] != validStreamID {
+	if row[3] != uuid.MustParse(validStreamID) {
 		t.Fatalf("expected valid stream row, got %#v", row)
 	}
 }
@@ -538,7 +543,7 @@ func TestStreamRuntimeRebuilderEmitsLiveStateWindow(t *testing.T) {
 		t.Fatalf("expected one stream_runtime_5m row for live state, got %#v", batch)
 	}
 	row := batch.rows[0]
-	if row[2] != "media-eu-1" || row[3] != streamID {
+	if row[2] != "media-eu-1" || row[3] != uuid.MustParse(streamID) {
 		t.Fatalf("unexpected stream runtime identity row: %#v", row)
 	}
 	if got := row[4]; got != uint32(300) {

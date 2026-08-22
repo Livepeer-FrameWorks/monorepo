@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_analytics_ingest/internal/database/periscopeingestdb"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
@@ -143,15 +145,14 @@ func (h *AnalyticsHandler) getLedgerRebuildCursor(ctx context.Context, ledgerNam
 }
 
 func (h *AnalyticsHandler) recordLedgerRebuildCursor(ctx context.Context, ledgerName string, processedThrough time.Time) error {
-	batch, err := h.clickhouse.PrepareBatch(ctx, `
-		INSERT INTO periscope.ledger_rebuild_cursors (
-			ledger_name, last_processed_projection_ms, updated_at_ms
-		)`)
+	batch, err := periscopeingestdb.PrepareLedgerRebuildCursor(ctx, h.clickhouse)
 	if err != nil {
 		return fmt.Errorf("ledger_rebuild_cursors prepare: %w", err)
 	}
-	defer closeClickHouseBatch(batch)
-	if err := batch.Append(ledgerName, processedThrough.UnixMilli(), time.Now().UnixMilli()); err != nil {
+	defer func() { _ = batch.Close() }()
+	if err := batch.Append(periscopeingestdb.LedgerRebuildCursorRow{
+		LedgerName: ledgerName, LastProcessedProjectionMS: processedThrough.UnixMilli(), UpdatedAtMS: time.Now().UnixMilli(),
+	}); err != nil {
 		return fmt.Errorf("ledger_rebuild_cursors append: %w", err)
 	}
 	if err := batch.Send(); err != nil {
@@ -282,24 +283,27 @@ func (h *AnalyticsHandler) rebuildViewerUsage5m(ctx context.Context, windowStart
 		return nil
 	}
 
-	batch, err := h.clickhouse.PrepareBatch(ctx, `
-		INSERT INTO periscope.viewer_usage_5m (
-			window_start, tenant_id, cluster_id, stream_id, node_id, session_id,
-			seconds_observed, up_bytes_observed, down_bytes_observed,
-			source_event_id, projection_version_ms
-		)`)
+	batch, err := periscopeingestdb.PrepareViewerUsage5m(ctx, h.clickhouse)
 	if err != nil {
 		return fmt.Errorf("viewer_usage_5m prepare: %w", err)
 	}
-	defer closeClickHouseBatch(batch)
+	defer func() { _ = batch.Close() }()
 
 	for _, e := range emissions {
-		if err := batch.Append(
-			time.UnixMilli(e.windowStartMS).UTC(),
-			e.tenantID, e.clusterID, e.streamID, e.nodeID, e.sessionID,
-			e.secondsObserved, e.upObserved, e.downObserved,
-			e.sourceEventID, projectionVersionMS,
-		); err != nil {
+		tenantUUID, tenantErr := uuid.Parse(e.tenantID)
+		if tenantErr != nil {
+			return fmt.Errorf("viewer_usage_5m tenant_id %q: %w", e.tenantID, tenantErr)
+		}
+		streamUUID, streamErr := uuid.Parse(e.streamID)
+		if streamErr != nil {
+			return fmt.Errorf("viewer_usage_5m stream_id %q: %w", e.streamID, streamErr)
+		}
+		if err := batch.Append(periscopeingestdb.ViewerUsage5mRow{
+			WindowStart: time.UnixMilli(e.windowStartMS).UTC(),
+			TenantID:    tenantUUID, ClusterID: e.clusterID, StreamID: streamUUID, NodeID: e.nodeID, SessionID: e.sessionID,
+			SecondsObserved: e.secondsObserved, UpBytesObserved: e.upObserved, DownBytesObserved: e.downObserved,
+			SourceEventID: e.sourceEventID, ProjectionVersionMS: projectionVersionMS,
+		}); err != nil {
 			return fmt.Errorf("viewer_usage_5m append: %w", err)
 		}
 	}
@@ -376,16 +380,11 @@ func (h *AnalyticsHandler) viewerUsageTombstones(ctx context.Context, tenantID, 
 
 func (h *AnalyticsHandler) rebuildStreamRuntime5m(ctx context.Context, windowStart, windowEnd time.Time) error {
 	projectionVersionMS := time.Now().UnixMilli()
-	batch, err := h.clickhouse.PrepareBatch(ctx, `
-		INSERT INTO periscope.stream_runtime_5m (
-			window_start, tenant_id, cluster_id, stream_id,
-			active_seconds, peak_viewers,
-			source_event_id, projection_version_ms
-		)`)
+	batch, err := periscopeingestdb.PrepareStreamRuntime5m(ctx, h.clickhouse)
 	if err != nil {
 		return fmt.Errorf("stream_runtime_5m prepare: %w", err)
 	}
-	defer closeClickHouseBatch(batch)
+	defer func() { _ = batch.Close() }()
 
 	rowsEmitted := 0
 	rows, err := h.clickhouse.Query(ctx, `
@@ -543,9 +542,17 @@ func streamRuntimeSessionKey(tenantID, nodeID, streamID string, sourceStartedAtM
 	return fmt.Sprintf("stream-runtime:%s:%s:%s:%d", tenantID, nodeID, streamID, sourceStartedAtMS)
 }
 
-func appendStreamRuntimeSpan(batch clickhouseBatch, tenantID, clusterID, streamID, sourceEventID string, startMS, endMS, peakViewers, projectionVersionMS int64) (int, error) {
+func appendStreamRuntimeSpan(batch *periscopeingestdb.Writer[periscopeingestdb.StreamRuntime5mRow], tenantID, clusterID, streamID, sourceEventID string, startMS, endMS, peakViewers, projectionVersionMS int64) (int, error) {
 	if startMS <= 0 || endMS <= startMS || clusterID == "" || streamID == "" {
 		return 0, nil
+	}
+	tenantUUID, err := uuid.Parse(tenantID)
+	if err != nil {
+		return 0, fmt.Errorf("stream_runtime_5m tenant_id %q: %w", tenantID, err)
+	}
+	streamUUID, err := uuid.Parse(streamID)
+	if err != nil {
+		return 0, fmt.Errorf("stream_runtime_5m stream_id %q: %w", streamID, err)
 	}
 	pv := uint32(peakViewers)
 	if peakViewers < 0 {
@@ -557,12 +564,12 @@ func appendStreamRuntimeSpan(batch clickhouseBatch, tenantID, clusterID, streamI
 			continue
 		}
 		activeSeconds := uint32(overlapMS / 1000)
-		if err := batch.Append(
-			time.UnixMilli(windowMS).UTC(),
-			tenantID, clusterID, streamID,
-			activeSeconds, pv,
-			sourceEventID, projectionVersionMS,
-		); err != nil {
+		if err := batch.Append(periscopeingestdb.StreamRuntime5mRow{
+			WindowStart: time.UnixMilli(windowMS).UTC(),
+			TenantID:    tenantUUID, ClusterID: clusterID, StreamID: streamUUID,
+			ActiveSeconds: activeSeconds, PeakViewers: pv,
+			SourceEventID: sourceEventID, ProjectionVersionMS: projectionVersionMS,
+		}); err != nil {
 			return rowsEmitted, fmt.Errorf("stream_runtime_5m append: %w", err)
 		}
 		rowsEmitted++
@@ -794,19 +801,18 @@ func (h *AnalyticsHandler) rebuildStorageGBSeconds5m(ctx context.Context, window
 	}
 
 	projectionVersionMS := time.Now().UnixMilli()
-	batch, err := h.clickhouse.PrepareBatch(ctx, `
-		INSERT INTO periscope.storage_gb_seconds_5m (
-			window_start, tenant_id, cluster_id, storage_scope,
-			storage_provider_tenant_id, storage_provider_cluster_id, storage_backend,
-			gb_seconds, file_count, projection_version_ms
-		)`)
+	batch, err := periscopeingestdb.PrepareStorageGBSeconds5m(ctx, h.clickhouse)
 	if err != nil {
 		return fmt.Errorf("storage_gb_seconds_5m prepare: %w", err)
 	}
-	defer closeClickHouseBatch(batch)
+	defer func() { _ = batch.Close() }()
 
 	rowsEmitted := 0
 	for k, a := range state {
+		tenantUUID, tenantErr := uuid.Parse(k.tenant)
+		if tenantErr != nil {
+			return fmt.Errorf("storage_gb_seconds_5m tenant_id %q: %w", k.tenant, tenantErr)
+		}
 		for w, gbs := range a.gbSecondsByWindow {
 			if !a.closedByWindow[w] {
 				continue
@@ -816,12 +822,12 @@ func (h *AnalyticsHandler) rebuildStorageGBSeconds5m(ctx context.Context, window
 				gbs, a.fileCountByWindow[w]); err != nil {
 				return err
 			}
-			if err := batch.Append(
-				time.UnixMilli(w).UTC(),
-				k.tenant, k.cluster, k.scope,
-				k.providerTenant, k.providerCluster, k.backend,
-				gbs, a.fileCountByWindow[w], projectionVersionMS,
-			); err != nil {
+			if err := batch.Append(periscopeingestdb.StorageGBSeconds5mRow{
+				WindowStart: time.UnixMilli(w).UTC(),
+				TenantID:    tenantUUID, ClusterID: k.cluster, StorageScope: k.scope,
+				StorageProviderTenantID: k.providerTenant, StorageProviderClusterID: k.providerCluster, StorageBackend: k.backend,
+				GBSeconds: gbs, FileCount: a.fileCountByWindow[w], ProjectionVersionMS: projectionVersionMS,
+			}); err != nil {
 				return fmt.Errorf("storage_gb_seconds_5m append: %w", err)
 			}
 			rowsEmitted++
@@ -953,15 +959,11 @@ func (h *AnalyticsHandler) rebuildProcessing5m(ctx context.Context, windowStart,
 	defer func() { _ = rows.Close() }()
 
 	projectionVersionMS := time.Now().UnixMilli()
-	batch, err := h.clickhouse.PrepareBatch(ctx, `
-		INSERT INTO periscope.processing_5m (
-			window_start, tenant_id, cluster_id, stream_id, process_type, output_codec, track_type, source_event_id,
-			media_seconds, projection_version_ms
-		)`)
+	batch, err := periscopeingestdb.PrepareProcessing5m(ctx, h.clickhouse)
 	if err != nil {
 		return fmt.Errorf("processing_5m prepare: %w", err)
 	}
-	defer closeClickHouseBatch(batch)
+	defer func() { _ = batch.Close() }()
 
 	rowsEmitted := 0
 	for rows.Next() {
@@ -974,11 +976,20 @@ func (h *AnalyticsHandler) rebuildProcessing5m(ctx context.Context, windowStart,
 		if err := rows.Scan(&windowStartT, &tenantID, &clusterID, &streamID, &processType, &outputCodec, &trackType, &sourceEventID, &rawDurationSeconds); err != nil {
 			return fmt.Errorf("processing_5m scan: %w", err)
 		}
-		if err := batch.Append(
-			windowStartT,
-			tenantID, clusterID, streamID, processType, outputCodec, trackType, sourceEventID,
-			rawDurationSeconds, projectionVersionMS,
-		); err != nil {
+		tenantUUID, tenantErr := uuid.Parse(tenantID)
+		if tenantErr != nil {
+			return fmt.Errorf("processing_5m tenant_id %q: %w", tenantID, tenantErr)
+		}
+		streamUUID, streamErr := uuid.Parse(streamID)
+		if streamErr != nil {
+			return fmt.Errorf("processing_5m stream_id %q: %w", streamID, streamErr)
+		}
+		if err := batch.Append(periscopeingestdb.Processing5mRow{
+			WindowStart: windowStartT,
+			TenantID:    tenantUUID, ClusterID: clusterID, StreamID: streamUUID, ProcessType: processType,
+			OutputCodec: outputCodec, TrackType: trackType, SourceEventID: sourceEventID,
+			MediaSeconds: rawDurationSeconds, ProjectionVersionMS: projectionVersionMS,
+		}); err != nil {
 			return fmt.Errorf("processing_5m append: %w", err)
 		}
 		rowsEmitted++

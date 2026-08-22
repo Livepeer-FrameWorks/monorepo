@@ -36,7 +36,7 @@ func TestProcessTrackList_MapsCountsAndStreamEvent(t *testing.T) {
 		ClusterId:      proto.String("cluster-1"),
 		TriggerPayload: &ipcpb.MistTrigger_TrackList{TrackList: tl},
 	}
-	event := mistTriggerEvent(t, "tenant-1", time.Unix(1_700_000_000, 0).UTC(), mt)
+	event := mistTriggerEvent(t, typedWriterTestTenantID, time.Unix(1_700_000_000, 0).UTC(), mt)
 
 	if err := h.processTrackList(context.Background(), event); err != nil {
 		t.Fatalf("processTrackList: %v", err)
@@ -51,8 +51,8 @@ func TestProcessTrackList_MapsCountsAndStreamEvent(t *testing.T) {
 	// track_list_events: timestamp, event_id, tenant_id, stream_id, internal_name,
 	// node_id, track_list, track_count, video_track_count, audio_track_count, ...
 	tle := batch.rows[0]
-	if tle[2] != "tenant-1" {
-		t.Errorf("tenant_id = %v, want tenant-1", tle[2])
+	if tle[2] != uuid.MustParse(typedWriterTestTenantID) {
+		t.Errorf("tenant_id = %v, want %s", tle[2], typedWriterTestTenantID)
 	}
 	if tle[4] != "xyz789" {
 		t.Errorf("internal_name = %v, want xyz789 (live+ stripped)", tle[4])
@@ -63,7 +63,7 @@ func TestProcessTrackList_MapsCountsAndStreamEvent(t *testing.T) {
 
 	// Canonical stream event mirrors the lifecycle: event_type/status cols.
 	se := batch.rows[1]
-	if se[7] != "track_list_update" || se[8] != "live" {
+	if status, ok := se[8].(*string); se[7] != "track_list_update" || !ok || status == nil || *status != "live" {
 		t.Errorf("stream event type/status = %v/%v, want track_list_update/live", se[7], se[8])
 	}
 }

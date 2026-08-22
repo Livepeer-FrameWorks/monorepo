@@ -55,7 +55,7 @@ func TestProcessStorageSnapshotDefaultsAndSkipsInvalidTenant(t *testing.T) {
 	}
 	row := batch.rows[0]
 	// Columns: ts, node, tenant, cluster, scope, providerTenant, providerCluster, backend, totalBytes, ...
-	if row[2] != goodTenant {
+	if row[2] != uuid.MustParse(goodTenant) {
 		t.Errorf("tenant_id = %#v, want %s", row[2], goodTenant)
 	}
 	if row[3] != "cluster-1" {
@@ -169,10 +169,10 @@ func TestProcessTenantCreatedWritesAttribution(t *testing.T) {
 	if row[3] != "web" {
 		t.Errorf("signup_channel = %#v, want web", row[3])
 	}
-	if row[5] != "newsletter" {
+	if got, ok := row[5].(*string); !ok || got == nil || *got != "newsletter" {
 		t.Errorf("utm_source = %#v, want newsletter", row[5])
 	}
-	if row[6] != nil {
+	if got, ok := row[6].(*string); !ok || got != nil {
 		t.Errorf("absent utm_medium = %#v, want nil (NULL)", row[6])
 	}
 	if row[13] != uint8(1) {
