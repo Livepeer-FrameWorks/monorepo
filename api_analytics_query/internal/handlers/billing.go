@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_analytics_query/internal/database/meteringdb"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
@@ -64,7 +65,7 @@ func appendMeter(existing []models.MeterQuantity, meter, unit string, quantity f
 
 // BillingSummarizer handles usage summarization for billing
 type BillingSummarizer struct {
-	yugaDB              database.PostgresConn
+	postgresQueries     meteringdb.Querier
 	clickhouse          database.ClickHouseConn
 	logger              logging.Logger
 	kafkaProducer       *kafka.KafkaProducer
@@ -108,7 +109,7 @@ func NewBillingSummarizer(yugaDB database.PostgresConn, clickhouse database.Clic
 	}
 
 	return &BillingSummarizer{
-		yugaDB:              yugaDB,
+		postgresQueries:     meteringdb.New(yugaDB),
 		clickhouse:          clickhouse,
 		logger:              logger,
 		kafkaProducer:       kafkaProducer,
@@ -167,34 +168,15 @@ func (bs *BillingSummarizer) PublishUsageReservations(ctx context.Context) error
 		return fmt.Errorf("iterate active viewer reservations: %w", rowsErr)
 	}
 
-	previousRows, err := bs.yugaDB.QueryContext(ctx, `
-		SELECT tenant_id::text, cluster_id
-		FROM periscope.metering_reservation_keys
-		WHERE source_id = $1
-	`, bs.sourceID)
+	previousKeys, err := bs.postgresQueries.ListReservationKeys(ctx, bs.sourceID)
 	if err != nil {
 		return fmt.Errorf("query previous reservation keys: %w", err)
 	}
-	defer func() {
-		if closeErr := previousRows.Close(); closeErr != nil {
-			bs.logger.WithError(closeErr).Warn("Failed to close previous reservation key rows")
-		}
-	}()
-	for previousRows.Next() {
-		var tenantID, clusterID string
-		if scanErr := previousRows.Scan(&tenantID, &clusterID); scanErr != nil {
-			return fmt.Errorf("scan previous reservation key: %w", scanErr)
-		}
-		key := tenantID + "\x00" + clusterID
+	for _, previous := range previousKeys {
+		key := previous.TenantID + "\x00" + previous.ClusterID
 		if _, ok := current[key]; !ok {
-			current[key] = activeViewerReservation{TenantID: tenantID, ClusterID: clusterID}
+			current[key] = activeViewerReservation{TenantID: previous.TenantID, ClusterID: previous.ClusterID}
 		}
-	}
-	if rowsErr := previousRows.Err(); rowsErr != nil {
-		return fmt.Errorf("iterate previous reservation keys: %w", rowsErr)
-	}
-	if closeErr := previousRows.Close(); closeErr != nil {
-		return fmt.Errorf("close previous reservation keys: %w", closeErr)
 	}
 	if len(current) == 0 {
 		return nil
@@ -220,21 +202,16 @@ func (bs *BillingSummarizer) PublishUsageReservations(ctx context.Context) error
 	}
 	for _, reservation := range current {
 		if reservation.DeliveredMinute == 0 && reservation.EgressGB == 0 {
-			if _, err := bs.yugaDB.ExecContext(ctx, `
-				DELETE FROM periscope.metering_reservation_keys
-				WHERE source_id = $1 AND tenant_id = $2 AND cluster_id = $3
-			`, bs.sourceID, reservation.TenantID, reservation.ClusterID); err != nil {
+			if err := bs.postgresQueries.DeleteReservationKey(ctx, meteringdb.DeleteReservationKeyParams{
+				SourceID: bs.sourceID, TenantID: reservation.TenantID, ClusterID: reservation.ClusterID,
+			}); err != nil {
 				return fmt.Errorf("release reservation key: %w", err)
 			}
 			continue
 		}
-		if _, err := bs.yugaDB.ExecContext(ctx, `
-			INSERT INTO periscope.metering_reservation_keys
-				(source_id, tenant_id, cluster_id, last_sequence, updated_at)
-			VALUES ($1, $2, $3, $4, NOW())
-			ON CONFLICT (source_id, tenant_id, cluster_id) DO UPDATE SET
-				last_sequence = EXCLUDED.last_sequence, updated_at = NOW()
-		`, bs.sourceID, reservation.TenantID, reservation.ClusterID, sequence); err != nil {
+		if err := bs.postgresQueries.UpsertReservationKey(ctx, meteringdb.UpsertReservationKeyParams{
+			SourceID: bs.sourceID, TenantID: reservation.TenantID, ClusterID: reservation.ClusterID, LastSequence: int64(sequence),
+		}); err != nil {
 			return fmt.Errorf("persist reservation key: %w", err)
 		}
 	}
@@ -319,29 +296,9 @@ func (bs *BillingSummarizer) getActiveTenants() ([]string, error) {
 }
 
 func (bs *BillingSummarizer) getCursorTenants(ctx context.Context) ([]string, error) {
-	rows, err := bs.yugaDB.QueryContext(ctx, `
-		SELECT tenant_id::text
-		FROM periscope.billing_cursors
-		WHERE source_id = $1
-		  AND tenant_id IS NOT NULL
-		  AND tenant_id <> '00000000-0000-0000-0000-000000000000'::uuid
-		ORDER BY tenant_id
-	`, bs.sourceID)
+	tenants, err := bs.postgresQueries.ListBillingCursorTenants(ctx, bs.sourceID)
 	if err != nil {
 		return nil, fmt.Errorf("query billing cursor tenants: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	var tenants []string
-	for rows.Next() {
-		var tenantID string
-		if scanErr := rows.Scan(&tenantID); scanErr != nil {
-			return nil, fmt.Errorf("scan billing cursor tenant: %w", scanErr)
-		}
-		tenants = append(tenants, tenantID)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate billing cursor tenants: %w", err)
 	}
 	return tenants, nil
 }
@@ -1629,17 +1586,11 @@ func (bs *BillingSummarizer) ProcessPendingUsage(ctx context.Context) error {
 func (bs *BillingSummarizer) ensureSourceActivation(ctx context.Context) (time.Time, error) {
 	var activatedAt time.Time
 	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-		return bs.yugaDB.QueryRowContext(ctx, `
-			INSERT INTO periscope.metering_sources
-				(source_id, source_region, activated_at)
-			VALUES ($1, $2, $3)
-			ON CONFLICT (source_id) DO UPDATE SET
-				source_region = CASE
-					WHEN periscope.metering_sources.source_region = '' THEN EXCLUDED.source_region
-					ELSE periscope.metering_sources.source_region
-				END
-			RETURNING activated_at
-		`, bs.sourceID, bs.sourceRegion, time.Now().UTC().Truncate(5*time.Minute)).Scan(&activatedAt)
+		var queryErr error
+		activatedAt, queryErr = bs.postgresQueries.EnsureMeteringSource(ctx, meteringdb.EnsureMeteringSourceParams{
+			SourceID: bs.sourceID, SourceRegion: bs.sourceRegion, ActivatedAt: time.Now().UTC().Truncate(5 * time.Minute),
+		})
+		return queryErr
 	})
 	return activatedAt.UTC(), err
 }
@@ -1691,9 +1642,11 @@ func (bs *BillingSummarizer) processTenantPendingUsage(ctx context.Context, tena
 	// Get last processed timestamp from cursor
 	var lastProcessed time.Time
 	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-		return bs.yugaDB.QueryRowContext(ctx, `
-			SELECT last_processed_at FROM periscope.billing_cursors WHERE source_id = $1 AND tenant_id = $2
-		`, bs.sourceID, tenantID).Scan(&lastProcessed)
+		var queryErr error
+		lastProcessed, queryErr = bs.postgresQueries.GetBillingCursor(ctx, meteringdb.GetBillingCursorParams{
+			SourceID: bs.sourceID, TenantID: tenantID,
+		})
+		return queryErr
 	})
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1705,12 +1658,9 @@ func (bs *BillingSummarizer) processTenantPendingUsage(ctx context.Context, tena
 		}
 		// Insert initial cursor
 		err = database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-			_, execErr := bs.yugaDB.ExecContext(ctx, `
-				INSERT INTO periscope.billing_cursors (source_id, tenant_id, last_processed_at, updated_at)
-				VALUES ($1, $2, $3, NOW())
-				ON CONFLICT (source_id, tenant_id) DO NOTHING
-			`, bs.sourceID, tenantID, lastProcessed)
-			return execErr
+			return bs.postgresQueries.InitializeBillingCursor(ctx, meteringdb.InitializeBillingCursorParams{
+				SourceID: bs.sourceID, TenantID: tenantID, LastProcessedAt: lastProcessed,
+			})
 		})
 		if err != nil {
 			return fmt.Errorf("failed to initialize cursor: %w", err)
@@ -1759,12 +1709,8 @@ func (bs *BillingSummarizer) processTenantPendingUsage(ctx context.Context, tena
 }
 
 func (bs *BillingSummarizer) publishWindowCompletions(ctx context.Context, activation, targetEnd time.Time) error {
-	var completedThrough sql.NullTime
-	if err := bs.yugaDB.QueryRowContext(ctx, `
-		SELECT completed_through
-		FROM periscope.metering_sources
-		WHERE source_id = $1
-	`, bs.sourceID).Scan(&completedThrough); err != nil {
+	completedThrough, err := bs.postgresQueries.GetMeteringSourceCompletion(ctx, bs.sourceID)
+	if err != nil {
 		return fmt.Errorf("read source completion cursor: %w", err)
 	}
 	start := activation.UTC().Truncate(billingCursorAlignment)
@@ -1778,11 +1724,9 @@ func (bs *BillingSummarizer) publishWindowCompletions(ctx context.Context, activ
 	if err := bs.sendUsageToPurser(markers); err != nil {
 		return fmt.Errorf("publish source window completion: %w", err)
 	}
-	if _, err := bs.yugaDB.ExecContext(ctx, `
-		UPDATE periscope.metering_sources
-		SET completed_through = $2
-		WHERE source_id = $1
-	`, bs.sourceID, targetEnd); err != nil {
+	if err := bs.postgresQueries.UpdateMeteringSourceCompletion(ctx, meteringdb.UpdateMeteringSourceCompletionParams{
+		SourceID: bs.sourceID, CompletedThrough: targetEnd,
+	}); err != nil {
 		return fmt.Errorf("advance source completion cursor: %w", err)
 	}
 	return nil
@@ -1833,12 +1777,9 @@ func (bs *BillingSummarizer) processBillingSlice(ctx context.Context, tenantID s
 	// Cursor advances after every slice — even empty ones — so a steady
 	// stream of zero-usage 5-min windows still moves the cursor forward.
 	err = database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-		_, execErr := bs.yugaDB.ExecContext(ctx, `
-			UPDATE periscope.billing_cursors
-			SET last_processed_at = $1, updated_at = NOW()
-			WHERE source_id = $2 AND tenant_id = $3
-		`, sliceEnd, bs.sourceID, tenantID)
-		return execErr
+		return bs.postgresQueries.AdvanceBillingCursor(ctx, meteringdb.AdvanceBillingCursorParams{
+			LastProcessedAt: sliceEnd, SourceID: bs.sourceID, TenantID: tenantID,
+		})
 	})
 	if err != nil {
 		return fmt.Errorf("failed to update cursor: %w", err)

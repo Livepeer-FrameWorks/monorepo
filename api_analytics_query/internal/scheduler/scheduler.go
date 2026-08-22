@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"frameworks/api_analytics_query/internal/database/meteringdb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/google/uuid"
@@ -22,7 +23,7 @@ type Scheduler struct {
 	billingTicker     *time.Ticker
 	reservationTicker *time.Ticker
 	stopChan          chan struct{}
-	db                database.PostgresConn
+	queries           meteringdb.Querier
 	sourceID          string
 	ownerID           string
 }
@@ -43,27 +44,16 @@ func NewScheduler(yugaDB database.PostgresConn, clickhouse database.ClickHouseCo
 		logger:            logger,
 		billingSummarizer: billingSummarizer,
 		stopChan:          make(chan struct{}),
-		db:                yugaDB,
+		queries:           meteringdb.New(yugaDB),
 		sourceID:          config.GetEnv("METERING_SOURCE_ID", "periscope-default"),
 		ownerID:           ownerID,
 	}
 }
 
 func (s *Scheduler) runWithLease(ctx context.Context, partitionKey string, leaseDuration time.Duration, run func(context.Context) error) error {
-	var fencingToken int64
-	err := s.db.QueryRowContext(ctx, `
-		INSERT INTO periscope.metering_leases
-			(source_id, partition_key, owner_id, fencing_token, lease_until, updated_at)
-		VALUES ($1, $2, $3, 1, NOW() + ($4 * INTERVAL '1 second'), NOW())
-		ON CONFLICT (source_id, partition_key) DO UPDATE SET
-			owner_id = EXCLUDED.owner_id,
-			fencing_token = periscope.metering_leases.fencing_token + 1,
-			lease_until = EXCLUDED.lease_until,
-			updated_at = NOW()
-		WHERE periscope.metering_leases.lease_until <= NOW()
-		   OR periscope.metering_leases.owner_id = EXCLUDED.owner_id
-		RETURNING fencing_token
-	`, s.sourceID, partitionKey, s.ownerID, int64(leaseDuration/time.Second)).Scan(&fencingToken)
+	fencingToken, err := s.queries.AcquireMeteringLease(ctx, meteringdb.AcquireMeteringLeaseParams{
+		SourceID: s.sourceID, PartitionKey: partitionKey, OwnerID: s.ownerID, LeaseSeconds: int64(leaseDuration / time.Second),
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithField("source_id", s.sourceID).Debug("Metering lease held by another replica")
 		return nil
