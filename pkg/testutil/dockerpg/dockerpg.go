@@ -45,7 +45,42 @@ func PostgresImage() (string, error) {
 	return "", errors.New("config/infrastructure.yaml not found from test working directory")
 }
 
+// YugabyteImage resolves the release-pinned Yugabyte compatibility image.
+func YugabyteImage() (string, error) {
+	if override := strings.TrimSpace(os.Getenv("FRAMEWORKS_YUGABYTE_TEST_IMAGE")); override != "" {
+		return override, nil
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	for dir, depth := wd, 0; depth < 10; depth++ {
+		path := filepath.Join(dir, "config", "infrastructure.yaml")
+		if b, readErr := os.ReadFile(path); readErr == nil {
+			image, digest, parseErr := infrastructureContractImage(string(b), "yugabyte")
+			if parseErr != nil {
+				return "", fmt.Errorf("parse %s: %w", path, parseErr)
+			}
+			return image + "@" + digest, nil
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return "", errors.New("config/infrastructure.yaml not found from test working directory")
+}
+
 func infrastructureImage(yaml, name string) (string, string, error) {
+	return infrastructureImageFields(yaml, name, "image:", "digest:")
+}
+
+func infrastructureContractImage(yaml, name string) (string, string, error) {
+	return infrastructureImageFields(yaml, name, "contract_image:", "contract_digest:")
+}
+
+func infrastructureImageFields(yaml, name, imageKey, digestKey string) (string, string, error) {
 	active := false
 	image, digest := "", ""
 	for line := range strings.SplitSeq(yaml, "\n") {
@@ -61,14 +96,14 @@ func infrastructureImage(yaml, name string) (string, string, error) {
 			continue
 		}
 		switch {
-		case strings.HasPrefix(trimmed, "image:"):
-			image = strings.TrimSpace(strings.TrimPrefix(trimmed, "image:"))
-		case strings.HasPrefix(trimmed, "digest:"):
-			digest = strings.TrimSpace(strings.TrimPrefix(trimmed, "digest:"))
+		case strings.HasPrefix(trimmed, imageKey):
+			image = strings.TrimSpace(strings.TrimPrefix(trimmed, imageKey))
+		case strings.HasPrefix(trimmed, digestKey):
+			digest = strings.TrimSpace(strings.TrimPrefix(trimmed, digestKey))
 		}
 	}
 	if image == "" || digest == "" {
-		return "", "", fmt.Errorf("infrastructure/%s must declare image and digest", name)
+		return "", "", fmt.Errorf("infrastructure/%s must declare %s and %s", name, strings.TrimSuffix(imageKey, ":"), strings.TrimSuffix(digestKey, ":"))
 	}
 	return image, digest, nil
 }
@@ -163,7 +198,15 @@ const (
 // — the deadline is exact. On timeout it returns an error carrying the container's recent logs (name) so a real startup
 // failure is diagnosable.
 func WaitReady(db *sql.DB, name string) error {
-	deadline, cancel := context.WithTimeout(context.Background(), readinessBudget)
+	return WaitReadyFor(db, name, readinessBudget)
+}
+
+// WaitReadyFor is the engine-aware form of WaitReady. Yugabyte's single-node
+// compatibility image performs additional process and placement checks during
+// startup, so callers can grant it a larger whole-wait budget without weakening
+// the PostgreSQL harness timeout.
+func WaitReadyFor(db *sql.DB, name string, budget time.Duration) error {
+	deadline, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	var last error
 	for {
@@ -175,8 +218,8 @@ func WaitReady(db *sql.DB, name string) error {
 		}
 		select {
 		case <-deadline.Done():
-			return fmt.Errorf("postgres not ready within %s: %w\nlogs:\n%s",
-				readinessBudget, last, cliDiagnostic("logs", "--tail", "40", name))
+			return fmt.Errorf("database not ready within %s: %w\nlogs:\n%s",
+				budget, last, cliDiagnostic("logs", "--tail", "40", name))
 		case <-time.After(readinessInterval):
 		}
 	}

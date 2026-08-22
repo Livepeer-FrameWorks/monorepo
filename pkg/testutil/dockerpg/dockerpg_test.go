@@ -23,6 +23,21 @@ infrastructure:
 	}
 }
 
+func TestInfrastructureContractImageRequiresPinnedPair(t *testing.T) {
+	image, digest, err := infrastructureContractImage(`
+infrastructure:
+  - name: yugabyte
+    contract_image: yugabytedb/yugabyte:2025
+    contract_digest: sha256:abc123
+`, "yugabyte")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if image != "yugabytedb/yugabyte:2025" || digest != "sha256:abc123" {
+		t.Fatalf("resolved %q@%q", image, digest)
+	}
+}
+
 func TestParseInspectedHostPort(t *testing.T) {
 	ports := `{"5432/tcp":[{"HostIp":"0.0.0.0","HostPort":"49153"},{"HostIp":"::","HostPort":"49153"}],"8080/tcp":null}`
 	if got := parseInspectedHostPort(ports, "5432/tcp"); got != "49153" {
