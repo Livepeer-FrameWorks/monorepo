@@ -39,9 +39,10 @@ func (c *Cursor) GetSortKey() int64 {
 }
 
 // Encode serializes the cursor to an opaque string for clients.
-// Format: base64("ts:{timestamp_ms}:id:{id}")
+// Format: base64("tu:{timestamp_us}:id:{id}"). DecodeCursor also accepts the
+// legacy millisecond `ts:` format so cursors issued by older servers remain valid.
 func (c Cursor) Encode() string {
-	raw := fmt.Sprintf("ts:%d:id:%s", c.Timestamp.UnixMilli(), c.ID)
+	raw := fmt.Sprintf("tu:%d:id:%s", c.Timestamp.UnixMicro(), c.ID)
 	return base64.StdEncoding.EncodeToString([]byte(raw))
 }
 
@@ -59,10 +60,15 @@ func DecodeCursor(encoded string) (*Cursor, error) {
 
 	raw := string(data)
 
-	// Parse "ts:{timestamp_ms}:id:{id}" or "sk:{sort_key}:id:{id}"
+	// Parse current microsecond time cursors, legacy millisecond time cursors,
+	// or non-time sort-key cursors.
 	isSortKey := false
+	isMicrosecond := false
 	var prefix string
 	switch {
+	case strings.HasPrefix(raw, "tu:"):
+		prefix = "tu:"
+		isMicrosecond = true
 	case strings.HasPrefix(raw, "ts:"):
 		prefix = "ts:"
 	case strings.HasPrefix(raw, "sk:"):
@@ -90,8 +96,10 @@ func DecodeCursor(encoded string) (*Cursor, error) {
 	if isSortKey {
 		// Store raw int64 directly to avoid time.UnixMilli overflow for large values
 		cursor.SortKey = keyValue
+	} else if isMicrosecond {
+		cursor.Timestamp = time.UnixMicro(keyValue).UTC()
 	} else {
-		cursor.Timestamp = time.UnixMilli(keyValue)
+		cursor.Timestamp = time.UnixMilli(keyValue).UTC()
 	}
 
 	return cursor, nil

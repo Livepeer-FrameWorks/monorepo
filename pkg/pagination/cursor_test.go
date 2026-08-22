@@ -1,9 +1,11 @@
 package pagination
 
 import (
-	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	"encoding/base64"
 	"testing"
 	"time"
+
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 )
 
 func TestCursorEncodeDecode(t *testing.T) {
@@ -52,6 +54,9 @@ func TestCursorEncodeDecode(t *testing.T) {
 			if !cursor.Timestamp.Equal(tt.timestamp) {
 				t.Errorf("timestamp mismatch: got %v, want %v", cursor.Timestamp, tt.timestamp)
 			}
+			if cursor.Timestamp.Location() != time.UTC {
+				t.Errorf("decoded timestamp location = %v, want UTC", cursor.Timestamp.Location())
+			}
 			if cursor.ID != tt.id {
 				t.Errorf("id mismatch: got %q, want %q", cursor.ID, tt.id)
 			}
@@ -78,6 +83,17 @@ func TestCursorEncodeDecodeSortKey(t *testing.T) {
 	}
 	if cursor.ID != id {
 		t.Errorf("id mismatch: got %q, want %q", cursor.ID, id)
+	}
+}
+
+func TestDecodeCursorAcceptsLegacyMilliseconds(t *testing.T) {
+	legacy := base64.StdEncoding.EncodeToString([]byte("ts:1705314600123:id:legacy"))
+	cursor, err := DecodeCursor(legacy)
+	if err != nil {
+		t.Fatalf("decode legacy cursor: %v", err)
+	}
+	if cursor.ID != "legacy" || cursor.Timestamp.UnixMilli() != 1705314600123 || cursor.Timestamp.Location() != time.UTC {
+		t.Fatalf("decoded legacy cursor = %#v", cursor)
 	}
 }
 
