@@ -6,8 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
-	"github.com/lib/pq"
+	"frameworks/api_tenants/internal/database/quartermasterdb"
 )
 
 // ReconcileClusters reconciles every Cluster row into
@@ -44,10 +43,7 @@ func ReconcileClusters(ctx context.Context, exec DBTX, clusters []Cluster, alias
 	if defaultsRequested == 1 {
 		// Clear any other row's default flag inside the same tx so the post-commit
 		// state has exactly one default. The matching SET happens in upsertCluster.
-		if _, err := exec.ExecContext(ctx, `
-			UPDATE quartermaster.infrastructure_clusters
-			SET is_default_cluster = false, updated_at = NOW()
-			WHERE is_default_cluster = true`); err != nil {
+		if err := quartermasterdb.New(exec).ClearBootstrapDefaultCluster(ctx); err != nil {
 			return Result{}, fmt.Errorf("clear default cluster: %w", err)
 		}
 	}
@@ -101,76 +97,20 @@ func validateCluster(c Cluster) error {
 // upsertCluster inserts or reconciles a single cluster row. Returns "created",
 // "updated", or "noop".
 func upsertCluster(ctx context.Context, exec DBTX, c Cluster, ownerID string) (string, error) {
-	const probeSQL = `
-		SELECT
-			cluster_name, cluster_type,
-			COALESCE(owner_tenant_id::text, ''),
-			COALESCE(base_url, ''),
-			COALESCE(wg_mesh_cidr, ''),
-			COALESCE(wg_listen_port, 0),
-			is_default_cluster, is_platform_official, public_topology, allow_private_pull_sources,
-			COALESCE(region_id, ''),
-			COALESCE(cell_id, ''),
-			COALESCE(cluster_class, ''),
-			COALESCE(control_cell_id, ''),
-			COALESCE(eligible_serving_cell_ids, ARRAY[]::TEXT[]),
-			COALESCE(s3_bucket, ''),
-			COALESCE(s3_endpoint, ''),
-			COALESCE(s3_region, ''),
-			(s3_prefix IS NOT NULL),
-			COALESCE(s3_prefix, '')
-		FROM quartermaster.infrastructure_clusters
-		WHERE cluster_id = $1
-		FOR UPDATE`
-	var (
-		curName, curType, curOwner, curBaseURL, curCIDR                     string
-		curListenPort                                                       int
-		curIsDefault, curIsPlatform, curPublicTopology, curAllowPrivatePull bool
-		curRegion, curCell, curClass, curControlCell                        string
-		curEligibleCells                                                    []string
-		curS3Bucket, curS3Endpoint, curS3Region, curS3Prefix                string
-		// curS3PrefixSet distinguishes a NULL s3_prefix (a row that predates the prefix column — the descriptor was
-		// established without a known prefix, i.e. NOT YET ADOPTED) from an explicit empty string (a KNOWN-EMPTY prefix
-		// that is part of an established, frozen descriptor).
-		curS3PrefixSet bool
-	)
-	probeErr := exec.QueryRowContext(ctx, probeSQL, c.ID).Scan(
-		&curName, &curType, &curOwner, &curBaseURL, &curCIDR, &curListenPort,
-		&curIsDefault, &curIsPlatform, &curPublicTopology, &curAllowPrivatePull,
-		&curRegion, &curCell, &curClass, &curControlCell, database.ArrayScan(&curEligibleCells),
-		&curS3Bucket, &curS3Endpoint, &curS3Region, &curS3PrefixSet, &curS3Prefix,
-	)
+	queries := quartermasterdb.New(exec)
+	current, probeErr := queries.GetBootstrapCluster(ctx, c.ID)
 	switch {
 	case errors.Is(probeErr, sql.ErrNoRows):
-		const insertSQL = `
-			INSERT INTO quartermaster.infrastructure_clusters (
-				cluster_id, cluster_name, cluster_type,
-				owner_tenant_id, base_url,
-				wg_mesh_cidr, wg_listen_port,
-				is_default_cluster, is_platform_official, public_topology, allow_private_pull_sources,
-				region_id, cell_id, cluster_class,
-				control_cell_id, eligible_serving_cell_ids,
-				s3_bucket, s3_endpoint, s3_region, s3_prefix,
-				created_at, updated_at
-			) VALUES (
-				$1, $2, $3,
-				NULLIF($4, '')::uuid, NULLIF($5, ''),
-				NULLIF($6, ''), NULLIF($7, 0),
-				$8, $9, $10, $11,
-				NULLIF($12, ''), NULLIF($13, ''), NULLIF($14, ''),
-				NULLIF($15, ''), $16,
-				NULLIF($17, ''), NULLIF($18, ''), NULLIF($19, ''), $20,
-				NOW(), NOW()
-			)`
-		if _, insertErr := exec.ExecContext(ctx, insertSQL,
-			c.ID, c.Name, c.Type,
-			ownerID, c.BaseURL,
-			c.Mesh.CIDR, c.Mesh.ListenPort,
-			c.IsDefault, c.IsPlatformOfficial, c.PublicTopology, c.AllowPrivatePullSources,
-			c.Region, c.Cell, c.Class,
-			c.ControlCell, pq.Array(c.EligibleServingCells),
-			c.S3Bucket, c.S3Endpoint, c.S3Region, c.S3Prefix,
-		); insertErr != nil {
+		if insertErr := queries.InsertBootstrapCluster(ctx, quartermasterdb.InsertBootstrapClusterParams{
+			ClusterID: c.ID, ClusterName: c.Name, ClusterType: c.Type,
+			OwnerTenantID: ownerID, BaseUrl: c.BaseURL,
+			WgMeshCidr: c.Mesh.CIDR, WgListenPort: int32(c.Mesh.ListenPort),
+			IsDefaultCluster: c.IsDefault, IsPlatformOfficial: c.IsPlatformOfficial,
+			PublicTopology: c.PublicTopology, AllowPrivatePullSources: c.AllowPrivatePullSources,
+			RegionID: c.Region, CellID: c.Cell, ClusterClass: c.Class,
+			ControlCellID: c.ControlCell, EligibleServingCellIds: c.EligibleServingCells,
+			S3Bucket: c.S3Bucket, S3Endpoint: c.S3Endpoint, S3Region: c.S3Region, S3Prefix: c.S3Prefix,
+		}); insertErr != nil {
 			return "", fmt.Errorf("insert: %w", insertErr)
 		}
 		return "created", nil
@@ -182,20 +122,20 @@ func upsertCluster(ctx context.Context, exec DBTX, c Cluster, ownerID string) (s
 	// wg_mesh_cidr, region_id, and cell_id must not change once set. These
 	// are facts the rest of the platform indexes against; reassigning them
 	// silently corrupts mesh allocations, geo routing, and apply-state ACK.
-	if curType != c.Type {
-		return "", fmt.Errorf("type drift: db=%q desired=%q (cluster_type is stable; refusing rewrite)", curType, c.Type)
+	if current.ClusterType != c.Type {
+		return "", fmt.Errorf("type drift: db=%q desired=%q (cluster_type is stable; refusing rewrite)", current.ClusterType, c.Type)
 	}
-	if curOwner != ownerID {
-		return "", fmt.Errorf("owner drift: db=%q desired=%q (owner_tenant_id is stable; refusing rewrite)", curOwner, ownerID)
+	if current.OwnerTenantID != ownerID {
+		return "", fmt.Errorf("owner drift: db=%q desired=%q (owner_tenant_id is stable; refusing rewrite)", current.OwnerTenantID, ownerID)
 	}
-	if curCIDR != "" && curCIDR != c.Mesh.CIDR {
-		return "", fmt.Errorf("mesh.cidr drift: db=%q desired=%q (cidr is stable once set; refusing rewrite)", curCIDR, c.Mesh.CIDR)
+	if current.WgMeshCidr != "" && current.WgMeshCidr != c.Mesh.CIDR {
+		return "", fmt.Errorf("mesh.cidr drift: db=%q desired=%q (cidr is stable once set; refusing rewrite)", current.WgMeshCidr, c.Mesh.CIDR)
 	}
-	if curRegion != "" && curRegion != c.Region {
-		return "", fmt.Errorf("region drift: db=%q desired=%q (region_id is stable once set; refusing rewrite)", curRegion, c.Region)
+	if current.RegionID != "" && current.RegionID != c.Region {
+		return "", fmt.Errorf("region drift: db=%q desired=%q (region_id is stable once set; refusing rewrite)", current.RegionID, c.Region)
 	}
-	if curCell != "" && curCell != c.Cell {
-		return "", fmt.Errorf("cell drift: db=%q desired=%q (cell_id is stable once set; refusing rewrite)", curCell, c.Cell)
+	if current.CellID != "" && current.CellID != c.Cell {
+		return "", fmt.Errorf("cell drift: db=%q desired=%q (cell_id is stable once set; refusing rewrite)", current.CellID, c.Cell)
 	}
 	// S3 backend descriptor is IMMUTABLE once established: repointing a cluster's bucket/endpoint/region would misroute
 	// cleanup and serving of historical bytes. Chandler reads THIS row for its effective descriptor and Foghorn
@@ -203,7 +143,7 @@ func upsertCluster(ctx context.Context, exec DBTX, c Cluster, ownerID string) (s
 	// bucket/endpoint/region are frozen. Region compares on its EFFECTIVE value (empty→us-east-1) — the same
 	// normalization every reader applies — so an omitted region does not
 	// false-drift against a us-east-1 one; bucket/endpoint compare exactly.
-	effCurS3Region := curS3Region
+	effCurS3Region := current.S3Region
 	if effCurS3Region == "" {
 		effCurS3Region = "us-east-1"
 	}
@@ -211,9 +151,9 @@ func upsertCluster(ctx context.Context, exec DBTX, c Cluster, ownerID string) (s
 	if effReqS3Region == "" {
 		effReqS3Region = "us-east-1"
 	}
-	if curS3Bucket != "" && (c.S3Bucket != curS3Bucket || c.S3Endpoint != curS3Endpoint || effReqS3Region != effCurS3Region) {
+	if current.S3Bucket != "" && (c.S3Bucket != current.S3Bucket || c.S3Endpoint != current.S3Endpoint || effReqS3Region != effCurS3Region) {
 		return "", fmt.Errorf("s3 descriptor drift: db=(bucket=%q,endpoint=%q,region=%q) desired=(bucket=%q,endpoint=%q,region=%q) — the cluster S3 backend is immutable once set (repoint/clear/partial-fill all refused); decommissioning is a separate explicit operation",
-			curS3Bucket, curS3Endpoint, curS3Region, c.S3Bucket, c.S3Endpoint, c.S3Region)
+			current.S3Bucket, current.S3Endpoint, current.S3Region, c.S3Bucket, c.S3Endpoint, c.S3Region)
 	}
 	// Prefix has a ONE-TIME adoption state on top of the same immutability. A row whose descriptor was established
 	// before the s3_prefix column existed carries a NULL prefix (curS3PrefixSet==false) — its true prefix lived only in
@@ -221,66 +161,44 @@ func upsertCluster(ctx context.Context, exec DBTX, c Cluster, ownerID string) (s
 	// as a non-NULL value and marks the descriptor complete. After adoption (curS3PrefixSet==true), the prefix is frozen
 	// exactly like the rest of the tuple: a known-empty '' and a value are both immutable; changing or clearing either
 	// is a refused repoint. This is what lets an existing prefixed cell migrate onto the new column without a repoint.
-	if curS3Bucket != "" && curS3PrefixSet && c.S3Prefix != curS3Prefix {
+	if current.S3Bucket != "" && current.S3PrefixSet && c.S3Prefix != current.S3Prefix {
 		return "", fmt.Errorf("s3 prefix drift: db=%q desired=%q — the cluster S3 prefix is immutable once adopted (repoint/clear refused); to migrate a pre-existing cell's prefix, adopt it once while it is still unset",
-			curS3Prefix, c.S3Prefix)
+			current.S3Prefix, c.S3Prefix)
 	}
 
-	eligibleNoop := stringSlicesEqual(curEligibleCells, c.EligibleServingCells)
+	eligibleNoop := stringSlicesEqual(current.EligibleServingCellIds, c.EligibleServingCells)
 
-	if curName == c.Name &&
-		curBaseURL == c.BaseURL &&
-		curCIDR == c.Mesh.CIDR &&
-		curListenPort == c.Mesh.ListenPort &&
-		curIsDefault == c.IsDefault &&
-		curIsPlatform == c.IsPlatformOfficial &&
-		curPublicTopology == c.PublicTopology &&
-		curAllowPrivatePull == c.AllowPrivatePullSources &&
-		curRegion == c.Region &&
-		curCell == c.Cell &&
-		curClass == c.Class &&
-		curControlCell == c.ControlCell &&
+	if current.ClusterName == c.Name &&
+		current.BaseUrl == c.BaseURL &&
+		current.WgMeshCidr == c.Mesh.CIDR &&
+		current.WgListenPort == int32(c.Mesh.ListenPort) &&
+		current.IsDefaultCluster == c.IsDefault &&
+		current.IsPlatformOfficial == c.IsPlatformOfficial &&
+		current.PublicTopology == c.PublicTopology &&
+		current.AllowPrivatePullSources == c.AllowPrivatePullSources &&
+		current.RegionID == c.Region &&
+		current.CellID == c.Cell &&
+		current.ClusterClass == c.Class &&
+		current.ControlCellID == c.ControlCell &&
 		eligibleNoop &&
-		curS3Bucket == c.S3Bucket &&
-		curS3Endpoint == c.S3Endpoint &&
-		curS3Region == c.S3Region &&
+		current.S3Bucket == c.S3Bucket &&
+		current.S3Endpoint == c.S3Endpoint &&
+		current.S3Region == c.S3Region &&
 		// A NULL prefix is not a noop even when the desired value is empty: the write must persist an explicit known-empty
 		// value, so require the prefix to already be set and equal.
-		curS3PrefixSet && curS3Prefix == c.S3Prefix {
+		current.S3PrefixSet && current.S3Prefix == c.S3Prefix {
 		return "noop", nil
 	}
 
-	const updateSQL = `
-		UPDATE quartermaster.infrastructure_clusters
-		SET cluster_name = $2,
-		    base_url = NULLIF($3, ''),
-		    wg_mesh_cidr = NULLIF($4, ''),
-		    wg_listen_port = NULLIF($5, 0),
-		    is_default_cluster = $6,
-		    is_platform_official = $7,
-		    public_topology = $8,
-		    allow_private_pull_sources = $9,
-		    region_id = NULLIF($10, ''),
-		    cell_id = NULLIF($11, ''),
-		    cluster_class = NULLIF($12, ''),
-		    control_cell_id = NULLIF($13, ''),
-		    eligible_serving_cell_ids = $14,
-		    s3_bucket = NULLIF($15, ''),
-		    s3_endpoint = NULLIF($16, ''),
-		    s3_region = NULLIF($17, ''),
-		    -- prefix is written verbatim (not NULLIF): a known-empty prefix must persist as an explicit '', distinct
-		    -- from an incomplete NULL descriptor.
-		    s3_prefix = $18,
-		    updated_at = NOW()
-		WHERE cluster_id = $1`
-	if _, err := exec.ExecContext(ctx, updateSQL,
-		c.ID, c.Name, c.BaseURL,
-		c.Mesh.CIDR, c.Mesh.ListenPort,
-		c.IsDefault, c.IsPlatformOfficial, c.PublicTopology, c.AllowPrivatePullSources,
-		c.Region, c.Cell, c.Class,
-		c.ControlCell, pq.Array(c.EligibleServingCells),
-		c.S3Bucket, c.S3Endpoint, c.S3Region, c.S3Prefix,
-	); err != nil {
+	if err := queries.UpdateBootstrapCluster(ctx, quartermasterdb.UpdateBootstrapClusterParams{
+		ClusterID: c.ID, ClusterName: c.Name, BaseUrl: c.BaseURL,
+		WgMeshCidr: c.Mesh.CIDR, WgListenPort: int32(c.Mesh.ListenPort),
+		IsDefaultCluster: c.IsDefault, IsPlatformOfficial: c.IsPlatformOfficial,
+		PublicTopology: c.PublicTopology, AllowPrivatePullSources: c.AllowPrivatePullSources,
+		RegionID: c.Region, CellID: c.Cell, ClusterClass: c.Class,
+		ControlCellID: c.ControlCell, EligibleServingCellIds: c.EligibleServingCells,
+		S3Bucket: c.S3Bucket, S3Endpoint: c.S3Endpoint, S3Region: c.S3Region, S3Prefix: c.S3Prefix,
+	}); err != nil {
 		return "", fmt.Errorf("update: %w", err)
 	}
 	return "updated", nil

@@ -5,7 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
+
+	"frameworks/api_tenants/internal/database/quartermasterdb"
 )
 
 // ReconcileSystemTenantClusterAccess subscribes the system tenant to clusters
@@ -61,60 +62,42 @@ func ReconcileSystemTenantClusterAccess(ctx context.Context, exec DBTX, cfg *Sys
 }
 
 func selectMatchingClusters(ctx context.Context, exec DBTX, cfg *SystemTenantClusterAccess) ([]string, error) {
-	clauses := []string{}
-	if cfg.DefaultClusters {
-		clauses = append(clauses, "is_default_cluster = true")
+	queries := quartermasterdb.New(exec)
+	var (
+		rows []string
+		err  error
+	)
+	switch {
+	case cfg.DefaultClusters && cfg.PlatformOfficialClusters:
+		rows, err = queries.ListBootstrapDefaultOrOfficialAccessClusters(ctx)
+	case cfg.DefaultClusters:
+		rows, err = queries.ListBootstrapDefaultAccessClusters(ctx)
+	default:
+		rows, err = queries.ListBootstrapOfficialAccessClusters(ctx)
 	}
-	if cfg.PlatformOfficialClusters {
-		clauses = append(clauses, "is_platform_official = true")
-	}
-	where := strings.Join(clauses, " OR ")
-	q := "SELECT cluster_id FROM quartermaster.infrastructure_clusters WHERE is_active = true AND (" + where + ") ORDER BY cluster_id"
-	rows, err := exec.QueryContext(ctx, q)
 	if err != nil {
 		return nil, fmt.Errorf("select matching clusters: %w", err)
 	}
-	defer rows.Close() //nolint:errcheck
-	var out []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("scan cluster id: %w", err)
-		}
-		out = append(out, id)
-	}
-	return out, rows.Err()
+	return rows, nil
 }
 
 func upsertTenantClusterAccess(ctx context.Context, exec DBTX, tenantID, clusterID string) (string, error) {
-	const probeSQL = `
-		SELECT subscription_status, is_active
-		FROM quartermaster.tenant_cluster_access
-		WHERE tenant_id = $1::uuid AND cluster_id = $2`
-	var sub string
-	var active bool
-	err := exec.QueryRowContext(ctx, probeSQL, tenantID, clusterID).Scan(&sub, &active)
+	queries := quartermasterdb.New(exec)
+	params := quartermasterdb.GetBootstrapTenantClusterAccessParams{TenantID: tenantID, ClusterID: clusterID}
+	current, err := queries.GetBootstrapTenantClusterAccess(ctx, params)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		const insertSQL = `
-			INSERT INTO quartermaster.tenant_cluster_access
-				(tenant_id, cluster_id, access_level, subscription_status, is_active, granted_at, created_at, updated_at)
-			VALUES ($1::uuid, $2, 'shared', 'active', true, NOW(), NOW(), NOW())`
-		if _, insertErr := exec.ExecContext(ctx, insertSQL, tenantID, clusterID); insertErr != nil {
+		if insertErr := queries.InsertBootstrapTenantClusterAccess(ctx, quartermasterdb.InsertBootstrapTenantClusterAccessParams(params)); insertErr != nil {
 			return "", fmt.Errorf("insert tenant_cluster_access: %w", insertErr)
 		}
 		return "created", nil
 	case err != nil:
 		return "", fmt.Errorf("probe tenant_cluster_access: %w", err)
 	}
-	if active && sub == "active" {
+	if current.IsActive && current.SubscriptionStatus == "active" {
 		return "noop", nil
 	}
-	const updateSQL = `
-		UPDATE quartermaster.tenant_cluster_access
-		SET subscription_status = 'active', is_active = true, updated_at = NOW()
-		WHERE tenant_id = $1::uuid AND cluster_id = $2`
-	if _, err := exec.ExecContext(ctx, updateSQL, tenantID, clusterID); err != nil {
+	if err := queries.ActivateBootstrapTenantClusterAccess(ctx, quartermasterdb.ActivateBootstrapTenantClusterAccessParams(params)); err != nil {
 		return "", fmt.Errorf("update tenant_cluster_access: %w", err)
 	}
 	return "created", nil

@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"frameworks/api_tenants/internal/database/quartermasterdb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
@@ -172,64 +173,24 @@ func pollOnce(client *http.Client, sem chan struct{}, batchSize int, minAge time
 	cutoff := time.Now().Add(-minAge)
 	var list []serviceInstance
 	if err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-		rows, err := db.QueryContext(ctx, `
-	        SELECT si.instance_id, si.service_id, si.cluster_id, si.protocol, si.advertise_host, si.port,
-	               COALESCE(si.health_endpoint_override, s.health_check_path) AS path,
-	               si.last_health_check, s.protocol AS default_protocol,
-	               assigned.cluster_id, assigned.base_url
-	        FROM quartermaster.service_instances si
-	        JOIN quartermaster.services s ON si.service_id = s.service_id
-	        LEFT JOIN LATERAL (
-	            SELECT sca.cluster_id, c.base_url
-	            FROM quartermaster.service_cluster_assignments sca
-	            JOIN quartermaster.infrastructure_clusters c ON c.cluster_id = sca.cluster_id
-	            WHERE sca.service_instance_id = si.id AND sca.is_active = TRUE
-	            ORDER BY sca.cluster_id
-	            LIMIT 1
-	        ) assigned ON TRUE
-	        WHERE si.status IN ('running','starting')
-	          AND s.type <> 'edge'
-	          AND s.type NOT LIKE 'edge-%'
-	          AND (si.last_health_check IS NULL OR si.last_health_check < $1)
-	        ORDER BY COALESCE(si.last_health_check, si.created_at) ASC
-	        LIMIT $2
-	    `, cutoff, batchSize)
+		rows, err := quartermasterdb.New(db).ListHealthPollCandidates(ctx, quartermasterdb.ListHealthPollCandidatesParams{
+			Cutoff: cutoff, BatchSize: int32(batchSize),
+		})
 		if err != nil {
 			return err
 		}
-		defer func() { _ = rows.Close() }()
 
-		nextList := []serviceInstance{}
-		for rows.Next() {
-			var i serviceInstance
-			var proto, defaultProto sql.NullString
-			var host sql.NullString
-			var path sql.NullString
-			var assignedClusterID, assignedBaseURL sql.NullString
-			if err := rows.Scan(&i.id, &i.serviceID, new(string), &proto, &host, &i.port, &path, new(sql.NullTime), &defaultProto, &assignedClusterID, &assignedBaseURL); err == nil {
-				if proto.Valid {
-					i.proto = proto.String
-				}
-				if defaultProto.Valid {
-					i.defaultProto = defaultProto.String
-				}
-				if host.Valid {
-					i.host = host.String
-				}
-				if path.Valid {
-					i.path = path.String
-				}
-				if assignedClusterID.Valid {
-					i.assignedClusterID = assignedClusterID.String
-				}
-				if assignedBaseURL.Valid {
-					i.assignedBaseURL = assignedBaseURL.String
-				}
-				nextList = append(nextList, i)
+		nextList := make([]serviceInstance, 0, len(rows))
+		for _, row := range rows {
+			port := 0
+			if row.Port.Valid {
+				port = int(row.Port.Int32)
 			}
-		}
-		if err := rows.Err(); err != nil {
-			return err
+			nextList = append(nextList, serviceInstance{
+				id: row.InstanceID, serviceID: row.ServiceID, proto: row.Protocol,
+				host: row.AdvertiseHost, port: port, path: row.Path, defaultProto: row.DefaultProtocol,
+				assignedClusterID: row.AssignedClusterID, assignedBaseURL: row.AssignedBaseUrl,
+			})
 		}
 		list = nextList
 		return nil
@@ -463,17 +424,13 @@ func persistHealthStatus(ctx context.Context, instanceID, status string) error {
 		// One statement: always bump last_health_check (the freshness gate
 		// ListServiceInstancesByType depends on) AND return the prior status, so a
 		// health transition can wake DNS without an extra read.
-		scanErr = db.QueryRowContext(ctx, `
-			WITH prev AS (
-				SELECT instance_id, health_status AS old_status, service_id
-				FROM quartermaster.service_instances WHERE instance_id = $2
-			)
-			UPDATE quartermaster.service_instances si
-			SET health_status = $1, last_health_check = NOW(), updated_at = NOW()
-			FROM prev
-			WHERE si.instance_id = prev.instance_id
-			RETURNING prev.old_status, prev.service_id
-		`, status, instanceID).Scan(&oldStatus, &serviceType)
+		row, queryErr := quartermasterdb.New(db).PersistServiceHealthStatus(ctx, quartermasterdb.PersistServiceHealthStatusParams{
+			Status: status, InstanceID: instanceID,
+		})
+		scanErr = queryErr
+		if queryErr == nil {
+			oldStatus, serviceType = row.OldStatus, row.ServiceID
+		}
 		if errors.Is(scanErr, sql.ErrNoRows) {
 			// Instance vanished between poll and write; nothing to persist or wake.
 			return nil
@@ -558,50 +515,23 @@ func (m *grpcWatchManager) refreshGrpcWatches(dialTimeout, backoff time.Duration
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	rows, err := db.QueryContext(ctx, `
-		SELECT si.instance_id, si.service_id, si.advertise_host, si.port, si.protocol, s.protocol AS default_protocol,
-		       assigned.cluster_id, assigned.base_url
-		FROM quartermaster.service_instances si
-		JOIN quartermaster.services s ON si.service_id = s.service_id
-		LEFT JOIN LATERAL (
-		    SELECT sca.cluster_id, c.base_url
-		    FROM quartermaster.service_cluster_assignments sca
-		    JOIN quartermaster.infrastructure_clusters c ON c.cluster_id = sca.cluster_id
-		    WHERE sca.service_instance_id = si.id AND sca.is_active = TRUE
-		    ORDER BY sca.cluster_id
-		    LIMIT 1
-		) assigned ON TRUE
-		WHERE si.status IN ('running','starting')
-	`)
+	rows, err := quartermasterdb.New(db).ListGRPCHealthWatchCandidates(ctx)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = rows.Close() }()
 
 	desired := make(map[string]serviceInstance)
 	now := time.Now()
 
-	for rows.Next() {
-		var i serviceInstance
-		var host, proto, defaultProto sql.NullString
-		var assignedClusterID, assignedBaseURL sql.NullString
-		if err := rows.Scan(&i.id, &i.serviceID, &host, &i.port, &proto, &defaultProto, &assignedClusterID, &assignedBaseURL); err != nil {
-			continue
+	for _, row := range rows {
+		port := 0
+		if row.Port.Valid {
+			port = int(row.Port.Int32)
 		}
-		if host.Valid {
-			i.host = host.String
-		}
-		if proto.Valid {
-			i.proto = proto.String
-		}
-		if defaultProto.Valid {
-			i.defaultProto = defaultProto.String
-		}
-		if assignedClusterID.Valid {
-			i.assignedClusterID = assignedClusterID.String
-		}
-		if assignedBaseURL.Valid {
-			i.assignedBaseURL = assignedBaseURL.String
+		i := serviceInstance{
+			id: row.InstanceID, serviceID: row.ServiceID, host: row.AdvertiseHost,
+			port: port, proto: row.Protocol, defaultProto: row.DefaultProtocol,
+			assignedClusterID: row.AssignedClusterID, assignedBaseURL: row.AssignedBaseUrl,
 		}
 		finalProto := strings.ToLower(strings.TrimSpace(i.proto))
 		if finalProto == "" {

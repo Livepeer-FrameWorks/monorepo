@@ -135,7 +135,7 @@ func TestReconcileNodesMovesGitOpsOwnedCluster(t *testing.T) {
 			"node_name", "node_type", "cluster_id", "external_ip", "wireguard_ip",
 			"wireguard_public_key", "wireguard_listen_port", "enrollment_origin", "latitude", "longitude",
 		}).AddRow(node.ID, node.Type, "core-central-primary", node.ExternalIP, node.WireGuard.IP, node.WireGuard.PublicKey, node.WireGuard.Port, "gitops_seed", nil, nil))
-	mock.ExpectExec(regexp.QuoteMeta("SET CONSTRAINTS fk_qm_service_instances_node_cluster, fk_qm_ingress_sites_node_cluster DEFERRED")).
+	mock.ExpectExec(regexp.QuoteMeta("SET CONSTRAINTS quartermaster.fk_qm_service_instances_node_cluster, quartermaster.fk_qm_ingress_sites_node_cluster DEFERRED")).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE quartermaster.service_instances")).
 		WithArgs(node.ID, node.ClusterID, "core-central-primary").

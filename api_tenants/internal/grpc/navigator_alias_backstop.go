@@ -2,9 +2,11 @@ package grpc
 
 import (
 	"context"
-	dnspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/dns"
 	"slices"
 	"time"
+
+	"frameworks/api_tenants/internal/database/quartermasterdb"
+	dnspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/dns"
 )
 
 const tenantAliasBackstopInterval = 5 * time.Minute
@@ -61,26 +63,15 @@ func (s *QuartermasterServer) reconcileTenantAliasesOnce(ctx context.Context) {
 // AND holds at least one active cluster subscription — the same condition the
 // primary ensure/remove paths converge to, so the backstop never fights them.
 func (s *QuartermasterServer) listDesiredTenantAliases(ctx context.Context) ([]tenantAliasDesired, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT t.id::text, COALESCE(t.subdomain, ''),
-		       (t.is_active AND `+sqlAliasTierEligible+`
-		        AND EXISTS (SELECT 1 FROM quartermaster.tenant_cluster_access tca
-		                    WHERE tca.tenant_id = t.id AND tca.is_active = TRUE)) AS want
-		FROM quartermaster.tenants t
-	`)
+	rows, err := quartermasterdb.New(s.db).ListDesiredTenantAliases(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var desired []tenantAliasDesired
-	for rows.Next() {
-		var d tenantAliasDesired
-		if scanErr := rows.Scan(&d.tenantID, &d.subdomain, &d.want); scanErr != nil {
-			return nil, scanErr
-		}
-		desired = append(desired, d)
+	desired := make([]tenantAliasDesired, 0, len(rows))
+	for _, row := range rows {
+		desired = append(desired, tenantAliasDesired{tenantID: row.TenantID, subdomain: row.Subdomain, want: row.Want})
 	}
-	return desired, rows.Err()
+	return desired, nil
 }
 
 // reconcileOneTenantAlias compares one tenant's desired alias against
@@ -150,12 +141,5 @@ func (s *QuartermasterServer) reconcileOneTenantAlias(ctx context.Context, d ten
 }
 
 func (s *QuartermasterServer) tenantAliasOutboxHasPending(ctx context.Context, tenantID string) (bool, error) {
-	var has bool
-	err := s.db.QueryRowContext(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM quartermaster.navigator_tenant_alias_outbox
-			WHERE tenant_id = $1::uuid AND completed_at IS NULL
-		)
-	`, tenantID).Scan(&has)
-	return has, err
+	return quartermasterdb.New(s.db).TenantAliasOutboxHasPending(ctx, tenantID)
 }

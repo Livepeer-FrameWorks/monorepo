@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_tenants/internal/database/quartermasterdb"
 	qmgrpc "frameworks/api_tenants/internal/grpc"
 	"frameworks/api_tenants/internal/handlers"
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
@@ -39,31 +40,18 @@ import (
 // recurring resolution failure is visible — matching the server-side servedClusters
 // helper, not silently dropped.
 func servedClustersForInstanceName(ctx context.Context, db database.PostgresConn, log logging.Logger, instanceName, serviceType string) []string {
-	rows, err := db.QueryContext(ctx, `
-		SELECT DISTINCT sca.cluster_id
-		FROM quartermaster.service_cluster_assignments sca
-		JOIN quartermaster.service_instances si ON si.id = sca.service_instance_id
-		JOIN quartermaster.services svc ON svc.service_id = si.service_id
-		WHERE si.instance_id = $1 AND svc.type = $2 AND sca.is_active = true
-	`, instanceName, serviceType)
+	rows, err := quartermasterdb.New(db).ListServedClustersForInstance(ctx, quartermasterdb.ListServedClustersForInstanceParams{
+		InstanceID: instanceName, ServiceType: serviceType,
+	})
 	if err != nil {
 		log.WithError(err).Warn("Failed to resolve served clusters for health-poll DNS wake; reconcile loop will converge")
 		return nil
 	}
-	defer func() { _ = rows.Close() }()
-	var out []string
-	for rows.Next() {
-		var c string
-		if scanErr := rows.Scan(&c); scanErr != nil {
-			log.WithError(scanErr).Warn("Scan error resolving served clusters for health-poll DNS wake; reconcile loop will converge")
-			return out
-		}
+	out := make([]string, 0, len(rows))
+	for _, c := range rows {
 		if strings.TrimSpace(c) != "" {
 			out = append(out, c)
 		}
-	}
-	if rowsErr := rows.Err(); rowsErr != nil {
-		log.WithError(rowsErr).Warn("Iteration error resolving served clusters for health-poll DNS wake; reconcile loop will converge")
 	}
 	return out
 }
@@ -205,18 +193,11 @@ func main() {
 			return
 		}
 
-		rows, err := db.QueryContext(c.Request.Context(), `
-			SELECT site_id, cluster_id, node_id, domains, tls_bundle_id, kind, upstream, COALESCE(metadata, '{}'::jsonb)
-			FROM quartermaster.ingress_sites
-			WHERE node_id = $1
-			ORDER BY site_id
-		`, nodeID)
+		rows, err := quartermasterdb.New(db).ListIngressSitesForNode(c.Request.Context(), nodeID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
-		defer rows.Close()
-
 		type ingressSite struct {
 			SiteID      string                 `json:"site_id"`
 			ClusterID   string                 `json:"cluster_id"`
@@ -229,17 +210,14 @@ func main() {
 		}
 
 		var sites []ingressSite
-		for rows.Next() {
+		for _, row := range rows {
 			var site ingressSite
-			var domainsJSON, metadataJSON []byte
-			if err := rows.Scan(&site.SiteID, &site.ClusterID, &site.NodeID, &domainsJSON, &site.TLSBundleID, &site.Kind, &site.Upstream, &metadataJSON); err != nil {
-				c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
-				return
-			}
-			if unmarshalErr := json.Unmarshal(domainsJSON, &site.Domains); unmarshalErr != nil {
+			site.SiteID, site.ClusterID, site.NodeID = row.SiteID, row.ClusterID, row.NodeID
+			site.TLSBundleID, site.Kind, site.Upstream = row.TlsBundleID, row.Kind, row.Upstream
+			if unmarshalErr := json.Unmarshal(row.Domains, &site.Domains); unmarshalErr != nil {
 				site.Domains = nil
 			}
-			if unmarshalErr := json.Unmarshal(metadataJSON, &site.Metadata); unmarshalErr != nil {
+			if unmarshalErr := json.Unmarshal(row.Metadata, &site.Metadata); unmarshalErr != nil {
 				site.Metadata = nil
 			}
 			sites = append(sites, site)

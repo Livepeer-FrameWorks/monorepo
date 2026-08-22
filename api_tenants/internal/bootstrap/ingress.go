@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+
+	"frameworks/api_tenants/internal/database/quartermasterdb"
 )
 
 // ReconcileIngress reconciles TLS bundles first (sites reference them via FK),
@@ -81,18 +83,13 @@ func upsertTLSBundle(ctx context.Context, exec DBTX, b TLSBundle) (string, error
 		issuer = "navigator"
 	}
 
-	const probeSQL = `
-		SELECT cluster_id, COALESCE(domains::text, '[]'), issuer, email
-		FROM quartermaster.tls_bundles
-		WHERE bundle_id = $1`
-	var curCluster, curDomains, curIssuer, curEmail string
-	err = exec.QueryRowContext(ctx, probeSQL, b.ID).Scan(&curCluster, &curDomains, &curIssuer, &curEmail)
+	queries := quartermasterdb.New(exec)
+	current, err := queries.GetBootstrapTLSBundle(ctx, b.ID)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		const insertSQL = `
-			INSERT INTO quartermaster.tls_bundles (bundle_id, cluster_id, domains, issuer, email, updated_at)
-			VALUES ($1, $2, $3::jsonb, $4, $5, NOW())`
-		if _, insertErr := exec.ExecContext(ctx, insertSQL, b.ID, b.ClusterID, domainsJSON, issuer, b.Email); insertErr != nil {
+		if insertErr := queries.InsertBootstrapTLSBundle(ctx, quartermasterdb.InsertBootstrapTLSBundleParams{
+			BundleID: b.ID, ClusterID: b.ClusterID, Domains: domainsJSON, Issuer: issuer, Email: b.Email,
+		}); insertErr != nil {
 			return "", fmt.Errorf("insert: %w", insertErr)
 		}
 		return "created", nil
@@ -100,17 +97,15 @@ func upsertTLSBundle(ctx context.Context, exec DBTX, b TLSBundle) (string, error
 		return "", fmt.Errorf("probe: %w", err)
 	}
 
-	if curCluster != b.ClusterID {
-		return "", fmt.Errorf("cluster_id drift: db=%q desired=%q (stable; refusing rewrite)", curCluster, b.ClusterID)
+	if current.ClusterID != b.ClusterID {
+		return "", fmt.Errorf("cluster_id drift: db=%q desired=%q (stable; refusing rewrite)", current.ClusterID, b.ClusterID)
 	}
-	if jsonArrayEq(curDomains, domainsJSON) && curIssuer == issuer && curEmail == b.Email {
+	if jsonArrayEq(current.Domains, domainsJSON) && current.Issuer == issuer && current.Email == b.Email {
 		return "noop", nil
 	}
-	const updateSQL = `
-		UPDATE quartermaster.tls_bundles
-		SET domains = $2::jsonb, issuer = $3, email = $4, updated_at = NOW()
-		WHERE bundle_id = $1`
-	if _, err := exec.ExecContext(ctx, updateSQL, b.ID, domainsJSON, issuer, b.Email); err != nil {
+	if err := queries.UpdateBootstrapTLSBundle(ctx, quartermasterdb.UpdateBootstrapTLSBundleParams{
+		BundleID: b.ID, Domains: domainsJSON, Issuer: issuer, Email: b.Email,
+	}); err != nil {
 		return "", fmt.Errorf("update: %w", err)
 	}
 	return "updated", nil
@@ -148,18 +143,14 @@ func upsertIngressSite(ctx context.Context, exec DBTX, s IngressSite) (string, e
 	}
 	upstream := s.Upstream.Host + ":" + strconv.Itoa(s.Upstream.Port)
 
-	const probeSQL = `
-		SELECT cluster_id, node_id, COALESCE(domains::text, '[]'), tls_bundle_id, kind, upstream
-		FROM quartermaster.ingress_sites
-		WHERE site_id = $1`
-	var curCluster, curNode, curDomains, curBundle, curKind, curUpstream string
-	err = exec.QueryRowContext(ctx, probeSQL, s.ID).Scan(&curCluster, &curNode, &curDomains, &curBundle, &curKind, &curUpstream)
+	queries := quartermasterdb.New(exec)
+	current, err := queries.GetBootstrapIngressSite(ctx, s.ID)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		const insertSQL = `
-			INSERT INTO quartermaster.ingress_sites (site_id, cluster_id, node_id, domains, tls_bundle_id, kind, upstream, updated_at)
-			VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, NOW())`
-		if _, insertErr := exec.ExecContext(ctx, insertSQL, s.ID, s.ClusterID, s.NodeID, domainsJSON, s.TLSBundleID, s.Kind, upstream); insertErr != nil {
+		if insertErr := queries.InsertBootstrapIngressSite(ctx, quartermasterdb.InsertBootstrapIngressSiteParams{
+			SiteID: s.ID, ClusterID: s.ClusterID, NodeID: s.NodeID, Domains: domainsJSON,
+			TlsBundleID: s.TLSBundleID, Kind: s.Kind, Upstream: upstream,
+		}); insertErr != nil {
 			return "", fmt.Errorf("insert: %w", insertErr)
 		}
 		return "created", nil
@@ -167,20 +158,18 @@ func upsertIngressSite(ctx context.Context, exec DBTX, s IngressSite) (string, e
 		return "", fmt.Errorf("probe: %w", err)
 	}
 
-	if curCluster != s.ClusterID {
-		return "", fmt.Errorf("cluster_id drift: db=%q desired=%q (stable; refusing rewrite)", curCluster, s.ClusterID)
+	if current.ClusterID != s.ClusterID {
+		return "", fmt.Errorf("cluster_id drift: db=%q desired=%q (stable; refusing rewrite)", current.ClusterID, s.ClusterID)
 	}
-	if curNode != s.NodeID {
-		return "", fmt.Errorf("node_id drift: db=%q desired=%q (stable; refusing rewrite)", curNode, s.NodeID)
+	if current.NodeID != s.NodeID {
+		return "", fmt.Errorf("node_id drift: db=%q desired=%q (stable; refusing rewrite)", current.NodeID, s.NodeID)
 	}
-	if jsonArrayEq(curDomains, domainsJSON) && curBundle == s.TLSBundleID && curKind == s.Kind && curUpstream == upstream {
+	if jsonArrayEq(current.Domains, domainsJSON) && current.TlsBundleID == s.TLSBundleID && current.Kind == s.Kind && current.Upstream == upstream {
 		return "noop", nil
 	}
-	const updateSQL = `
-		UPDATE quartermaster.ingress_sites
-		SET domains = $2::jsonb, tls_bundle_id = $3, kind = $4, upstream = $5, updated_at = NOW()
-		WHERE site_id = $1`
-	if _, err := exec.ExecContext(ctx, updateSQL, s.ID, domainsJSON, s.TLSBundleID, s.Kind, upstream); err != nil {
+	if err := queries.UpdateBootstrapIngressSite(ctx, quartermasterdb.UpdateBootstrapIngressSiteParams{
+		SiteID: s.ID, Domains: domainsJSON, TlsBundleID: s.TLSBundleID, Kind: s.Kind, Upstream: upstream,
+	}); err != nil {
 		return "", fmt.Errorf("update: %w", err)
 	}
 	return "updated", nil

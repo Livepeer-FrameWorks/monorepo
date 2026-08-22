@@ -1,0 +1,54 @@
+version: "2"
+sql:
+  - engine: postgresql
+    schema: ../pkg/database/sql/schema/quartermaster.sql
+    queries: internal/database/queries
+    gen:
+      go:
+        package: quartermasterdb
+        out: internal/database/quartermasterdb
+        sql_package: database/sql
+        emit_db_tags: true
+        emit_json_tags: true
+        emit_interface: true
+        emit_empty_slices: true
+        omit_unused_structs: true
+        overrides:
+          - db_type: uuid
+            go_type: string
+          - db_type: uuid
+            nullable: true
+            go_type:
+              import: database/sql
+              type: NullString
+          - db_type: inet
+            go_type: string
+          - db_type: inet
+            nullable: true
+            go_type:
+              import: database/sql
+              type: NullString
+          - db_type: cidr
+            go_type: string
+          - db_type: cidr
+            nullable: true
+            go_type:
+              import: database/sql
+              type: NullString
+          - db_type: text[]
+            go_type:
+              import: github.com/lib/pq
+              type: StringArray
+          - db_type: uuid[]
+            go_type:
+              import: github.com/lib/pq
+              type: StringArray
+          - db_type: jsonb
+            go_type:
+              import: encoding/json
+              type: RawMessage
+          - db_type: jsonb
+            nullable: true
+            go_type:
+              import: encoding/json
+              type: RawMessage

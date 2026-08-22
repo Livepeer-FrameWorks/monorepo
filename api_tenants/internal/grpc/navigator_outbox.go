@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"frameworks/api_tenants/internal/database/quartermasterdb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
@@ -48,9 +49,7 @@ type navOutboxRow struct {
 // hand-off lands. action must be "ensure" or "remove".
 func (s *QuartermasterServer) EnqueueNavigatorCustomDomainTx(
 	ctx context.Context,
-	exec interface {
-		QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-	},
+	exec quartermasterdb.DBTX,
 	tenantID, domain, action string,
 ) (string, error) {
 	if tenantID == "" || domain == "" {
@@ -59,14 +58,10 @@ func (s *QuartermasterServer) EnqueueNavigatorCustomDomainTx(
 	if action != "ensure" && action != "remove" {
 		return "", fmt.Errorf("unsupported action %q", action)
 	}
-	var id string
-	row := exec.QueryRowContext(ctx, `
-		INSERT INTO quartermaster.navigator_custom_domain_outbox
-			(tenant_id, domain, action)
-		VALUES ($1::uuid, $2, $3)
-		RETURNING id
-	`, tenantID, domain, action)
-	if err := row.Scan(&id); err != nil {
+	id, err := quartermasterdb.New(exec).EnqueueNavigatorCustomDomain(ctx, quartermasterdb.EnqueueNavigatorCustomDomainParams{
+		TenantID: tenantID, Domain: domain, Action: action,
+	})
+	if err != nil {
 		return "", fmt.Errorf("insert navigator_custom_domain_outbox: %w", err)
 	}
 	return id, nil
@@ -133,41 +128,27 @@ func (s *QuartermasterServer) runNavigatorCustomDomainOutboxWorker(ctx context.C
 func (s *QuartermasterServer) claimNavOutboxBatch(ctx context.Context) ([]navOutboxRow, error) {
 	var out []navOutboxRow
 	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
-		rows, qerr := tx.QueryContext(ctx, `
-			SELECT id::text, tenant_id::text, domain, action, attempts, created_at
-			FROM quartermaster.navigator_custom_domain_outbox
-			WHERE completed_at IS NULL
-			  AND (claimed_at IS NULL OR claimed_at < NOW() - $1::interval)
-			ORDER BY created_at
-			FOR UPDATE SKIP LOCKED
-			LIMIT $2
-		`, fmt.Sprintf("%d seconds", int(navOutboxLease.Seconds())), navOutboxBatchSize)
+		queries := quartermasterdb.New(tx)
+		rows, qerr := queries.ClaimNavigatorCustomDomainOutboxBatch(ctx, quartermasterdb.ClaimNavigatorCustomDomainOutboxBatchParams{
+			LeaseInterval: fmt.Sprintf("%d seconds", int(navOutboxLease.Seconds())), BatchSize: navOutboxBatchSize,
+		})
 		if qerr != nil {
 			return qerr
 		}
-		defer rows.Close()
 
 		batch := make([]navOutboxRow, 0, navOutboxBatchSize)
-		for rows.Next() {
-			var r navOutboxRow
-			if scanErr := rows.Scan(&r.id, &r.tenantID, &r.domain, &r.action, &r.attempts, &r.createdAt); scanErr != nil {
-				return scanErr
-			}
-			batch = append(batch, r)
-		}
-		if rowsErr := rows.Err(); rowsErr != nil {
-			return rowsErr
+		for _, row := range rows {
+			batch = append(batch, navOutboxRow{
+				id: row.ID, tenantID: row.TenantID, domain: row.Domain, action: row.Action,
+				attempts: int(row.Attempts), createdAt: row.CreatedAt,
+			})
 		}
 		if len(batch) > 0 {
 			ids := make([]string, 0, len(batch))
 			for _, r := range batch {
 				ids = append(ids, r.id)
 			}
-			if _, uerr := tx.ExecContext(ctx, `
-				UPDATE quartermaster.navigator_custom_domain_outbox
-				SET claimed_at = NOW()
-				WHERE id = ANY($1::uuid[])
-			`, qmOutboxIDArray(ids)); uerr != nil {
+			if uerr := queries.MarkNavigatorCustomDomainOutboxClaimed(ctx, ids); uerr != nil {
 				return uerr
 			}
 		}
@@ -178,11 +159,7 @@ func (s *QuartermasterServer) claimNavOutboxBatch(ctx context.Context) ([]navOut
 }
 
 func (s *QuartermasterServer) markNavOutboxCompleted(ctx context.Context, id string) {
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE quartermaster.navigator_custom_domain_outbox
-		SET completed_at = NOW(), last_error = NULL
-		WHERE id = $1::uuid
-	`, id); err != nil {
+	if err := quartermasterdb.New(s.db).CompleteNavigatorCustomDomainOutbox(ctx, id); err != nil {
 		s.logger.WithError(err).WithField("outbox_id", id).
 			Warn("Failed to mark navigator custom-domain outbox row completed")
 	}
@@ -193,11 +170,9 @@ func (s *QuartermasterServer) recordNavOutboxFailure(ctx context.Context, id str
 	if cause != nil {
 		msg = cause.Error()
 	}
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE quartermaster.navigator_custom_domain_outbox
-		SET attempts = $2, last_error = $3, claimed_at = NULL
-		WHERE id = $1::uuid
-	`, id, attempts, msg); err != nil {
+	if err := quartermasterdb.New(s.db).FailNavigatorCustomDomainOutbox(ctx, quartermasterdb.FailNavigatorCustomDomainOutboxParams{
+		ID: id, Attempts: int32(attempts), LastError: msg,
+	}); err != nil {
 		s.logger.WithError(err).WithField("outbox_id", id).
 			Warn("Failed to record navigator custom-domain outbox failure")
 	}

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
+	"frameworks/api_tenants/internal/database/quartermasterdb"
 )
 
 // ReconcileTenants reconciles the system tenant and every customer tenant. It
@@ -58,20 +60,14 @@ func ReconcileTenants(ctx context.Context, exec DBTX, system *Tenant, customers 
 }
 
 func loadAliasMapInto(ctx context.Context, exec DBTX, m *AliasMap) error {
-	rows, err := exec.QueryContext(ctx, `SELECT alias, tenant_id::text FROM quartermaster.bootstrap_tenant_aliases`)
+	rows, err := quartermasterdb.New(exec).ListBootstrapTenantAliases(ctx)
 	if err != nil {
 		return fmt.Errorf("load alias map: %w", err)
 	}
-	defer rows.Close() //nolint:errcheck // read-only
-
-	for rows.Next() {
-		var alias, id string
-		if err := rows.Scan(&alias, &id); err != nil {
-			return fmt.Errorf("scan alias row: %w", err)
-		}
-		m.byAlias[alias] = id
+	for _, row := range rows {
+		m.byAlias[row.Alias] = row.TenantID
 	}
-	return rows.Err()
+	return nil
 }
 
 func upsertTenant(ctx context.Context, exec DBTX, t Tenant, aliases *AliasMap) (string, error) {
@@ -99,12 +95,10 @@ func upsertTenant(ctx context.Context, exec DBTX, t Tenant, aliases *AliasMap) (
 		secondary = "#f59e0b"
 	}
 
-	const insertSQL = `
-		INSERT INTO quartermaster.tenants (name, deployment_tier, primary_color, secondary_color, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, NOW(), NOW())
-		RETURNING id::text`
-	var id string
-	if err := exec.QueryRowContext(ctx, insertSQL, t.Name, tier, primary, secondary).Scan(&id); err != nil {
+	id, err := quartermasterdb.New(exec).InsertBootstrapTenant(ctx, quartermasterdb.InsertBootstrapTenantParams{
+		Name: t.Name, DeploymentTier: tier, PrimaryColor: primary, SecondaryColor: secondary,
+	})
+	if err != nil {
 		return "", fmt.Errorf("insert tenant: %w", err)
 	}
 	if err := recordAlias(ctx, exec, t.Alias, id); err != nil {
@@ -119,11 +113,9 @@ func upsertTenant(ctx context.Context, exec DBTX, t Tenant, aliases *AliasMap) (
 // tier_name), and bootstrap rewriting it from desired state would fight that
 // authority on every run.
 func updateTenantByID(ctx context.Context, exec DBTX, id string, t Tenant) (string, error) {
-	const probeSQL = `
-		SELECT name, COALESCE(primary_color,''), COALESCE(secondary_color,'')
-		FROM quartermaster.tenants WHERE id = $1::uuid`
-	var curName, curPrimary, curSecondary string
-	if err := exec.QueryRowContext(ctx, probeSQL, id).Scan(&curName, &curPrimary, &curSecondary); err != nil {
+	queries := quartermasterdb.New(exec)
+	current, err := queries.GetBootstrapTenant(ctx, id)
+	if err != nil {
 		return "", fmt.Errorf("probe tenant %s: %w", id, err)
 	}
 
@@ -136,15 +128,13 @@ func updateTenantByID(ctx context.Context, exec DBTX, id string, t Tenant) (stri
 		secondary = "#f59e0b"
 	}
 
-	if curName == t.Name && curPrimary == primary && curSecondary == secondary {
+	if current.Name == t.Name && current.PrimaryColor == primary && current.SecondaryColor == secondary {
 		return "noop", nil
 	}
 
-	const updateSQL = `
-		UPDATE quartermaster.tenants
-		SET name = $2, primary_color = $3, secondary_color = $4, updated_at = NOW()
-		WHERE id = $1::uuid`
-	if _, err := exec.ExecContext(ctx, updateSQL, id, t.Name, primary, secondary); err != nil {
+	if err := queries.UpdateBootstrapTenant(ctx, quartermasterdb.UpdateBootstrapTenantParams{
+		ID: id, Name: t.Name, PrimaryColor: primary, SecondaryColor: secondary,
+	}); err != nil {
 		return "", fmt.Errorf("update tenant %s: %w", id, err)
 	}
 	return "updated", nil

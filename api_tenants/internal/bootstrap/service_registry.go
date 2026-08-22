@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 
+	"frameworks/api_tenants/internal/database/quartermasterdb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
 )
 
@@ -80,30 +81,16 @@ func validateServiceEntry(e ServiceRegistryEntry) error {
 // the bootstrap transaction directly (no advisory lock needed — bootstrap is
 // already serialized by being a single-process invocation).
 func ensureServiceCatalogRow(ctx context.Context, exec DBTX, e ServiceRegistryEntry) (string, error) {
-	const probeSQL = `
-		SELECT service_id FROM quartermaster.services WHERE service_id = $1 OR name = $1`
-	var serviceID string
-	err := exec.QueryRowContext(ctx, probeSQL, e.ServiceName).Scan(&serviceID)
+	queries := quartermasterdb.New(exec)
+	serviceID, err := queries.GetBootstrapServiceCatalog(ctx, e.ServiceName)
 	protocol := e.Protocol
 	if protocol == "" {
 		protocol = "http"
 	}
 	if err == nil {
-		if _, updateErr := exec.ExecContext(ctx, `
-			UPDATE quartermaster.services
-			SET name = $2,
-			    plane = $3,
-			    type = $4,
-			    protocol = $5,
-			    updated_at = NOW()
-			WHERE service_id = $1
-			  AND (
-			      name <> $2
-			   OR COALESCE(plane, '') <> $3
-			   OR COALESCE(type, '') <> $4
-			   OR COALESCE(protocol, '') <> $5
-			  )
-		`, serviceID, e.ServiceName, serviceEntryPlane(e), e.Type, protocol); updateErr != nil {
+		if updateErr := queries.UpdateBootstrapServiceCatalog(ctx, quartermasterdb.UpdateBootstrapServiceCatalogParams{
+			ServiceID: serviceID, Name: e.ServiceName, Plane: serviceEntryPlane(e), Type: e.Type, Protocol: protocol,
+		}); updateErr != nil {
 			return "", fmt.Errorf("update service catalog: %w", updateErr)
 		}
 		return serviceID, nil
@@ -111,11 +98,9 @@ func ensureServiceCatalogRow(ctx context.Context, exec DBTX, e ServiceRegistryEn
 	if !errors.Is(err, sql.ErrNoRows) {
 		return "", fmt.Errorf("probe service catalog: %w", err)
 	}
-	const insertSQL = `
-	INSERT INTO quartermaster.services
-		(service_id, name, plane, type, protocol, is_active, created_at, updated_at)
-	VALUES ($1, $2, $3, $4, $5, true, NOW(), NOW())`
-	if _, err := exec.ExecContext(ctx, insertSQL, e.ServiceName, e.ServiceName, serviceEntryPlane(e), e.Type, protocol); err != nil {
+	if err := queries.InsertBootstrapServiceCatalog(ctx, quartermasterdb.InsertBootstrapServiceCatalogParams{
+		ServiceID: e.ServiceName, Name: e.ServiceName, Plane: serviceEntryPlane(e), Type: e.Type, Protocol: protocol,
+	}); err != nil {
 		return "", fmt.Errorf("insert service catalog: %w", err)
 	}
 	return e.ServiceName, nil
@@ -132,25 +117,20 @@ func serviceEntryPlane(e ServiceRegistryEntry) string {
 // advertise_host, the same convention BootstrapService uses when node_id is
 // supplied. Fails loud if the node lacks a registered mesh address.
 func resolveNodeAdvertiseHost(ctx context.Context, exec DBTX, clusterID, nodeID string) (string, error) {
-	const q = `
-		SELECT cluster_id, COALESCE(host(wireguard_ip), '')
-		FROM quartermaster.infrastructure_nodes
-		WHERE node_id = $1`
-	var nodeCluster, wgIP string
-	err := exec.QueryRowContext(ctx, q, nodeID).Scan(&nodeCluster, &wgIP)
+	row, err := quartermasterdb.New(exec).GetBootstrapNodeAdvertiseHost(ctx, nodeID)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return "", fmt.Errorf("node %q not found (run nodes reconcile first)", nodeID)
 	case err != nil:
 		return "", fmt.Errorf("probe node: %w", err)
 	}
-	if nodeCluster != clusterID {
-		return "", fmt.Errorf("node %q belongs to cluster %q, not %q", nodeID, nodeCluster, clusterID)
+	if row.ClusterID != clusterID {
+		return "", fmt.Errorf("node %q belongs to cluster %q, not %q", nodeID, row.ClusterID, clusterID)
 	}
-	if wgIP == "" {
+	if row.WireguardIp == "" {
 		return "", fmt.Errorf("node %q has no wireguard_ip", nodeID)
 	}
-	return wgIP, nil
+	return row.WireguardIp, nil
 }
 
 func upsertServiceInstance(ctx context.Context, exec DBTX, serviceID, advHost string, e ServiceRegistryEntry) (string, error) {
@@ -163,20 +143,11 @@ func upsertServiceInstance(ctx context.Context, exec DBTX, serviceID, advHost st
 		return "", fmt.Errorf("encode metadata: %w", err)
 	}
 
-	const probeSQL = `
-		SELECT id::text,
-		       COALESCE(advertise_host, ''),
-		       COALESCE(health_endpoint_override, ''),
-		       COALESCE(metadata::text, '{}')
-		FROM quartermaster.service_instances
-		WHERE service_id = $1 AND cluster_id = $2 AND node_id = $3
-		  AND protocol = $4 AND port = $5
-		ORDER BY updated_at DESC NULLS LAST
-		LIMIT 1`
-	var (
-		id, curAdvHost, curHealth, curMetadata string
-	)
-	err = exec.QueryRowContext(ctx, probeSQL, serviceID, e.ClusterID, e.NodeID, protocol, e.Port).Scan(&id, &curAdvHost, &curHealth, &curMetadata)
+	queries := quartermasterdb.New(exec)
+	current, err := queries.GetBootstrapServiceInstance(ctx, quartermasterdb.GetBootstrapServiceInstanceParams{
+		ServiceID: serviceID, ClusterID: e.ClusterID, NodeID: e.NodeID,
+		Protocol: protocol, Port: int32(e.Port),
+	})
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		// instance_id is UNIQUE in quartermaster.service_instances. Two rows
@@ -184,17 +155,12 @@ func upsertServiceInstance(ctx context.Context, exec DBTX, serviceID, advHost st
 		// legal under the row-level stable key, so the instance_id has to
 		// distinguish them too — otherwise the second insert collides.
 		instanceID := fmt.Sprintf("inst-%s-%s-%s-%d", e.ServiceName, e.NodeID, protocol, e.Port)
-		const insertSQL = `
-			INSERT INTO quartermaster.service_instances
-				(instance_id, cluster_id, node_id, service_id, protocol, advertise_host,
-				 health_endpoint_override, port, metadata, status, health_status,
-				 created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb,
-			        'running', 'unknown', NOW(), NOW())`
-		if _, insertErr := exec.ExecContext(ctx, insertSQL,
-			instanceID, e.ClusterID, e.NodeID, serviceID, protocol, advHost,
-			e.HealthEndpoint, e.Port, metadataJSON,
-		); insertErr != nil {
+		if insertErr := queries.InsertBootstrapServiceInstance(ctx, quartermasterdb.InsertBootstrapServiceInstanceParams{
+			InstanceID: instanceID, ClusterID: e.ClusterID,
+			NodeID: e.NodeID, ServiceID: serviceID,
+			Protocol: protocol, AdvertiseHost: advHost, HealthEndpoint: e.HealthEndpoint,
+			Port: int32(e.Port), Metadata: metadataJSON,
+		}); insertErr != nil {
 			return "", fmt.Errorf("insert service_instance: %w", insertErr)
 		}
 		return "created", nil
@@ -202,17 +168,12 @@ func upsertServiceInstance(ctx context.Context, exec DBTX, serviceID, advHost st
 		return "", fmt.Errorf("probe service_instance: %w", err)
 	}
 
-	if curAdvHost == advHost && curHealth == e.HealthEndpoint && jsonObjectEq(curMetadata, metadataJSON) {
+	if current.AdvertiseHost == advHost && current.HealthEndpoint == e.HealthEndpoint && jsonObjectEq(current.Metadata, metadataJSON) {
 		return "noop", nil
 	}
-	const updateSQL = `
-		UPDATE quartermaster.service_instances
-		SET advertise_host = $2,
-		    health_endpoint_override = $3,
-		    metadata = $4::jsonb,
-		    updated_at = NOW()
-		WHERE id = $1::uuid`
-	if _, err := exec.ExecContext(ctx, updateSQL, id, advHost, e.HealthEndpoint, metadataJSON); err != nil {
+	if err := queries.UpdateBootstrapServiceInstance(ctx, quartermasterdb.UpdateBootstrapServiceInstanceParams{
+		ID: current.ID, AdvertiseHost: advHost, HealthEndpoint: e.HealthEndpoint, Metadata: metadataJSON,
+	}); err != nil {
 		return "", fmt.Errorf("update service_instance: %w", err)
 	}
 	return "updated", nil

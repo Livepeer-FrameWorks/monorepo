@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"frameworks/api_tenants/internal/database/quartermasterdb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
@@ -55,9 +56,7 @@ type aliasOutboxRow struct {
 // seq, never created_at (same-tx rows share a timestamp).
 func (s *QuartermasterServer) EnqueueNavigatorTenantAliasTx(
 	ctx context.Context,
-	exec interface {
-		QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-	},
+	exec quartermasterdb.DBTX,
 	tenantID, subdomain, action, clusterID, reason string,
 ) (string, error) {
 	if tenantID == "" {
@@ -77,14 +76,10 @@ func (s *QuartermasterServer) EnqueueNavigatorTenantAliasTx(
 	default:
 		return "", fmt.Errorf("unsupported action %q", action)
 	}
-	var id string
-	row := exec.QueryRowContext(ctx, `
-		INSERT INTO quartermaster.navigator_tenant_alias_outbox
-			(tenant_id, subdomain, cluster_id, reason, action)
-		VALUES ($1::uuid, NULLIF($2, ''), NULLIF($3, ''), NULLIF($4, ''), $5)
-		RETURNING id
-	`, tenantID, subdomain, clusterID, reason, action)
-	if err := row.Scan(&id); err != nil {
+	id, err := quartermasterdb.New(exec).EnqueueNavigatorTenantAlias(ctx, quartermasterdb.EnqueueNavigatorTenantAliasParams{
+		TenantID: tenantID, Subdomain: subdomain, ClusterID: clusterID, Reason: reason, Action: action,
+	})
+	if err != nil {
 		return "", fmt.Errorf("insert navigator_tenant_alias_outbox: %w", err)
 	}
 	return id, nil
@@ -156,51 +151,27 @@ func (s *QuartermasterServer) runNavigatorTenantAliasOutboxWorker(ctx context.Co
 func (s *QuartermasterServer) claimAliasOutboxBatch(ctx context.Context) ([]aliasOutboxRow, error) {
 	var out []aliasOutboxRow
 	err := database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
-		rows, qerr := tx.QueryContext(ctx, `
-			SELECT o.id::text, o.tenant_id::text,
-			       COALESCE(o.subdomain, ''), COALESCE(o.cluster_id, ''),
-			       COALESCE(o.reason, ''), o.action, o.attempts
-			FROM quartermaster.navigator_tenant_alias_outbox o
-			WHERE o.completed_at IS NULL
-				  AND (o.claimed_at IS NULL OR o.claimed_at < NOW() - $1::interval)
-				  AND (o.next_retry_at IS NULL OR o.next_retry_at <= NOW())
-				  AND NOT EXISTS (
-			      SELECT 1
-			      FROM quartermaster.navigator_tenant_alias_outbox o2
-			      WHERE o2.tenant_id = o.tenant_id
-			        AND o2.completed_at IS NULL
-			        AND o2.seq < o.seq
-			  )
-			ORDER BY o.seq
-			FOR UPDATE SKIP LOCKED
-			LIMIT $2
-		`, fmt.Sprintf("%d seconds", int(aliasOutboxLease.Seconds())), aliasOutboxBatchSize)
+		queries := quartermasterdb.New(tx)
+		rows, qerr := queries.ClaimNavigatorTenantAliasOutboxBatch(ctx, quartermasterdb.ClaimNavigatorTenantAliasOutboxBatchParams{
+			LeaseInterval: fmt.Sprintf("%d seconds", int(aliasOutboxLease.Seconds())), BatchSize: aliasOutboxBatchSize,
+		})
 		if qerr != nil {
 			return qerr
 		}
-		defer rows.Close()
 
 		batch := make([]aliasOutboxRow, 0, aliasOutboxBatchSize)
-		for rows.Next() {
-			var r aliasOutboxRow
-			if scanErr := rows.Scan(&r.id, &r.tenantID, &r.subdomain, &r.clusterID, &r.reason, &r.action, &r.attempts); scanErr != nil {
-				return scanErr
-			}
-			batch = append(batch, r)
-		}
-		if rowsErr := rows.Err(); rowsErr != nil {
-			return rowsErr
+		for _, row := range rows {
+			batch = append(batch, aliasOutboxRow{
+				id: row.ID, tenantID: row.TenantID, subdomain: row.Subdomain,
+				clusterID: row.ClusterID, reason: row.Reason, action: row.Action, attempts: int(row.Attempts),
+			})
 		}
 		if len(batch) > 0 {
 			ids := make([]string, 0, len(batch))
 			for _, r := range batch {
 				ids = append(ids, r.id)
 			}
-			if _, uerr := tx.ExecContext(ctx, `
-				UPDATE quartermaster.navigator_tenant_alias_outbox
-				SET claimed_at = NOW()
-				WHERE id = ANY($1::uuid[])
-			`, qmOutboxIDArray(ids)); uerr != nil {
+			if uerr := queries.MarkNavigatorTenantAliasOutboxClaimed(ctx, ids); uerr != nil {
 				return uerr
 			}
 		}
@@ -211,11 +182,7 @@ func (s *QuartermasterServer) claimAliasOutboxBatch(ctx context.Context) ([]alia
 }
 
 func (s *QuartermasterServer) markAliasOutboxCompleted(ctx context.Context, id string) error {
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE quartermaster.navigator_tenant_alias_outbox
-		SET completed_at = NOW(), last_error = NULL, next_retry_at = NULL
-		WHERE id = $1::uuid
-	`, id); err != nil {
+	if err := quartermasterdb.New(s.db).CompleteNavigatorTenantAliasOutbox(ctx, id); err != nil {
 		return fmt.Errorf("mark navigator tenant-alias outbox row completed: %w", err)
 	}
 	return nil
@@ -235,14 +202,9 @@ func (s *QuartermasterServer) recordAliasOutboxFailure(ctx context.Context, id s
 	if backoff <= 0 {
 		backoff = aliasOutboxBaseBackoff
 	}
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE quartermaster.navigator_tenant_alias_outbox
-		SET attempts = attempts + 1,
-		    last_error = $2,
-		    claimed_at = NULL,
-			next_retry_at = NOW() + $3::interval
-		WHERE id = $1::uuid
-	`, id, msg, fmt.Sprintf("%d milliseconds", backoff.Milliseconds())); err != nil {
+	if err := quartermasterdb.New(s.db).FailNavigatorTenantAliasOutbox(ctx, quartermasterdb.FailNavigatorTenantAliasOutboxParams{
+		ID: id, LastError: msg, RetryInterval: fmt.Sprintf("%d milliseconds", backoff.Milliseconds()),
+	}); err != nil {
 		return fmt.Errorf("record navigator tenant-alias outbox failure: %w", err)
 	}
 	if newAttempts := attempts + 1; newAttempts >= aliasOutboxAlertAfterAttempts {

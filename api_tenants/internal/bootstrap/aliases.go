@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"frameworks/api_tenants/internal/database/quartermasterdb"
 )
 
 // AliasMap is the live alias→tenant_id resolver. Loaded once per reconcile run
@@ -18,21 +20,15 @@ type AliasMap struct {
 // Caller supplies the executor — typically the outer bootstrap transaction so
 // reads see uncommitted aliases written earlier in the same reconcile.
 func LoadAliasMap(ctx context.Context, exec DBTX) (*AliasMap, error) {
-	rows, err := exec.QueryContext(ctx, `SELECT alias, tenant_id::text FROM quartermaster.bootstrap_tenant_aliases`)
+	rows, err := quartermasterdb.New(exec).ListBootstrapTenantAliases(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("load alias map: %w", err)
 	}
-	defer rows.Close() //nolint:errcheck // read-only
-
 	m := &AliasMap{byAlias: map[string]string{}}
-	for rows.Next() {
-		var alias, id string
-		if err := rows.Scan(&alias, &id); err != nil {
-			return nil, fmt.Errorf("scan alias row: %w", err)
-		}
-		m.byAlias[alias] = id
+	for _, row := range rows {
+		m.byAlias[row.Alias] = row.TenantID
 	}
-	return m, rows.Err()
+	return m, nil
 }
 
 // LookupAlias returns the tenant UUID for an alias. ok=false when unknown.
@@ -66,20 +62,11 @@ func recordAlias(ctx context.Context, exec DBTX, alias, tenantID string) error {
 	if !ValidAlias(alias) {
 		return fmt.Errorf("alias %q invalid: must match ^[a-z][a-z0-9-]*$ (1-64 chars)", alias)
 	}
-	const upsert = `
-		INSERT INTO quartermaster.bootstrap_tenant_aliases (alias, tenant_id, created_at, updated_at)
-		VALUES ($1, $2::uuid, NOW(), NOW())
-		ON CONFLICT (alias) DO UPDATE SET
-			tenant_id = EXCLUDED.tenant_id,
-			updated_at = NOW()
-		WHERE quartermaster.bootstrap_tenant_aliases.tenant_id = EXCLUDED.tenant_id`
-	res, err := exec.ExecContext(ctx, upsert, alias, tenantID)
+	rows, err := quartermasterdb.New(exec).UpsertBootstrapTenantAlias(ctx, quartermasterdb.UpsertBootstrapTenantAliasParams{
+		Alias: alias, TenantID: tenantID,
+	})
 	if err != nil {
 		return fmt.Errorf("upsert alias %q: %w", alias, err)
-	}
-	rows, err := res.RowsAffected()
-	if err != nil {
-		return err
 	}
 	if rows == 0 {
 		// The WHERE clause guards against alias collision: an existing alias
