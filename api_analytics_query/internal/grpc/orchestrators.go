@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_analytics_query/internal/database/periscopequerydb"
 	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -56,7 +57,7 @@ func (s *PeriscopeServer) ListOrchestrators(ctx context.Context, req *periscopep
 	}
 	query += fmt.Sprintf(" LIMIT %d", limit)
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -92,7 +93,7 @@ func (s *PeriscopeServer) GetOrchestrator(ctx context.Context, req *periscopepb.
 		return nil, status.Error(codes.InvalidArgument, "orch_addr required")
 	}
 
-	stateRows, err := s.clickhouse.QueryContext(ctx, `
+	stateRows, err := periscopequerydb.Query(ctx, s.clickhouse, `
 		SELECT tenant_id, orch_addr, last_seen, updated_at
 		FROM periscope.orchestrator_state_current FINAL
 		WHERE tenant_id = ? AND orch_addr = ?
@@ -221,7 +222,7 @@ func (s *PeriscopeServer) GetOrchestratorPerformanceSeries(ctx context.Context, 
 
 	query += " GROUP BY ts, gateway_id, gateway_region, resolved_ip ORDER BY ts ASC, gateway_id ASC, resolved_ip ASC"
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -339,7 +340,7 @@ func (s *PeriscopeServer) mergeOrchestratorTranscodeOutcomes(ctx context.Context
 	}
 	query += " GROUP BY ts, gateway_id, gateway_region, resolved_ip"
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return wrapClickhouseError(err, "database error")
 	}
@@ -409,7 +410,7 @@ func (s *PeriscopeServer) mergeOrchestratorAIOutcomes(ctx context.Context, point
 	}
 	query += " GROUP BY ts, gateway_id, gateway_region, resolved_ip"
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return wrapClickhouseError(err, "database error")
 	}
@@ -466,7 +467,7 @@ func (s *PeriscopeServer) queryOrchestratorInstances(ctx context.Context, tenant
 	}
 	query += " ORDER BY orch_addr ASC, resolved_ip ASC"
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -529,7 +530,7 @@ func capabilityPricesFromArrays(capabilities []string, positions []uint32, price
 func (s *PeriscopeServer) queryOrchestratorVantages(ctx context.Context, tenantID, orchAddr string) ([]*periscopepb.OrchestratorVantage, error) {
 	query, args := buildOrchestratorVantagesQuery(tenantID, orchAddr)
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}

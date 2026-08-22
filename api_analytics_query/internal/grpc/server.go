@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_analytics_query/internal/database/periscopequerydb"
 	"frameworks/api_analytics_query/internal/metrics"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
@@ -162,7 +163,7 @@ func sanitizeFloat64(v float64) float64 {
 func (s *PeriscopeServer) queryStreamRuntimeSummary(ctx context.Context, tenantID string, startTime, endTime time.Time) (float64, int32, int32, error) {
 	var streamHours float64
 	var peakConcurrent, totalStreams int32
-	err := s.clickhouse.QueryRowContext(ctx, `
+	err := periscopequerydb.QueryRow(ctx, s.clickhouse, `
 		SELECT
 			COALESCE(sum(active_seconds) / 3600.0, 0) AS stream_hours,
 			toInt32(COALESCE(max(peak_viewers), 0)) AS peak_concurrent,
@@ -394,7 +395,7 @@ func (s *PeriscopeServer) countAsync(ctx context.Context, query string, args ...
 	ch := make(chan int32, 1)
 	go func() {
 		var count int32
-		if err := s.clickhouse.QueryRowContext(ctx, query, args...).Scan(&count); err != nil {
+		if err := periscopequerydb.QueryRow(ctx, s.clickhouse, query, args...).Scan(&count); err != nil {
 			s.logger.WithError(err).Info("Async count query failed")
 			count = 0
 		}
@@ -450,7 +451,7 @@ func (s *PeriscopeServer) GetStreamEvents(ctx context.Context, req *periscopepb.
 	query += buildOrderBy(params, "timestamp", "event_id")
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -575,7 +576,7 @@ func (s *PeriscopeServer) GetStreamEvents(ctx context.Context, req *periscopepb.
 	s.logCursorCollisions("stream_events", collisionKeys)
 
 	var total int32
-	if err := s.clickhouse.QueryRowContext(ctx, `
+	if err := periscopequerydb.QueryRow(ctx, s.clickhouse, `
 		SELECT count(*) FROM periscope.stream_event_log
 		WHERE tenant_id = ? AND stream_id = ? AND timestamp >= ? AND timestamp <= ?
 		  AND event_type IN ('stream_lifecycle','stream_buffer','stream_end','stream_start','track_list_update')
@@ -634,7 +635,7 @@ func (s *PeriscopeServer) GetBufferEvents(ctx context.Context, req *periscopepb.
 	query += buildOrderBy(params, "timestamp", "event_id")
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -688,7 +689,7 @@ func (s *PeriscopeServer) GetBufferEvents(ctx context.Context, req *periscopepb.
 	s.logCursorCollisions("buffer_events", collisionKeys)
 
 	var total int32
-	if err := s.clickhouse.QueryRowContext(ctx, `
+	if err := periscopequerydb.QueryRow(ctx, s.clickhouse, `
 		SELECT count(*) FROM stream_event_log
 		WHERE tenant_id = ? AND stream_id = ? AND event_type = 'stream_buffer'
 			AND timestamp >= ? AND timestamp <= ?
@@ -750,7 +751,7 @@ func (s *PeriscopeServer) GetStreamHealthMetrics(ctx context.Context, req *peris
 	query += buildOrderBy(params, "timestamp", "concat(stream_id, ':', node_id)")
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -851,14 +852,14 @@ func (s *PeriscopeServer) GetStreamHealthMetrics(ctx context.Context, req *peris
 
 	var total int32
 	if streamID := req.GetStreamId(); streamID != "" {
-		if err := s.clickhouse.QueryRowContext(ctx, `
+		if err := periscopequerydb.QueryRow(ctx, s.clickhouse, `
 			SELECT count(*) FROM stream_health_samples
 			WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ? AND stream_id = ?
 		`, tenantID, startTime, endTime, streamID).Scan(&total); err != nil {
 			s.logger.WithError(err).Warn("Failed to get health samples total count")
 		}
 	} else {
-		if err := s.clickhouse.QueryRowContext(ctx, `
+		if err := periscopequerydb.QueryRow(ctx, s.clickhouse, `
 			SELECT count(*) FROM stream_health_samples
 			WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?
 		`, tenantID, startTime, endTime).Scan(&total); err != nil {
@@ -908,7 +909,7 @@ func (s *PeriscopeServer) GetStreamStatus(ctx context.Context, req *periscopepb.
 	var uploadedBytes, downloadedBytes, viewerSeconds *uint64
 	var packetsSent, packetsLost, packetsRetransmitted *uint64
 
-	err = s.clickhouse.QueryRowContext(ctx, `
+	err = periscopequerydb.QueryRow(ctx, s.clickhouse, `
 		SELECT status, current_viewers, started_at, updated_at,
 			buffer_state, quality_tier, primary_width, primary_height,
 			primary_fps, primary_codec, primary_bitrate, has_issues, issues_description,
@@ -1011,7 +1012,7 @@ func (s *PeriscopeServer) GetStreamsStatus(ctx context.Context, req *periscopepb
 		WHERE tenant_id = ? AND stream_id IN (%s)
 	`, joinStrings(placeholders, ", "))
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to batch query stream status from ClickHouse")
 		return &periscopepb.StreamsStatusResponse{Statuses: statuses}, nil
@@ -1143,7 +1144,7 @@ func (s *PeriscopeServer) lookupLiveIntervalStarts(ctx context.Context, tenantID
 		GROUP BY s.stream_id, s.started_at, s.updated_at, last_end.ended_at
 	`, inClause, inClause)
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		s.logger.WithError(err).Warn("Failed to resolve live interval starts from stream_event_log")
 		return result
@@ -1227,7 +1228,7 @@ func (s *PeriscopeServer) GetViewerMetrics(ctx context.Context, req *periscopepb
 	query += buildOrderBy(params, sessionStartExpr, "session_id")
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -1320,7 +1321,7 @@ func (s *PeriscopeServer) GetViewerCountTimeSeries(ctx context.Context, req *per
 
 	query += " GROUP BY bucket, stream_id ORDER BY bucket ASC"
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -1384,7 +1385,7 @@ func (s *PeriscopeServer) GetGeographicDistribution(ctx context.Context, req *pe
 		LIMIT %d
 	`, whereClause, topN)
 
-	countryRows, err := s.clickhouse.QueryContext(ctx, countryQuery, args...)
+	countryRows, err := periscopequerydb.Query(ctx, s.clickhouse, countryQuery, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error (countries)")
 	}
@@ -1412,7 +1413,7 @@ func (s *PeriscopeServer) GetGeographicDistribution(ctx context.Context, req *pe
 		FROM periscope.viewer_sessions_current FINAL
 		%s AND country_code != ''
 	`, whereClause)
-	if queryErr := s.clickhouse.QueryRowContext(ctx, totalQuery, args...).Scan(&totalViewersForPercent); queryErr != nil {
+	if queryErr := periscopequerydb.QueryRow(ctx, s.clickhouse, totalQuery, args...).Scan(&totalViewersForPercent); queryErr != nil {
 		return nil, wrapClickhouseError(queryErr, "database error (countries)")
 	}
 
@@ -1433,7 +1434,7 @@ func (s *PeriscopeServer) GetGeographicDistribution(ctx context.Context, req *pe
 		LIMIT %d
 	`, whereClause, topN)
 
-	cityRows, err := s.clickhouse.QueryContext(ctx, cityQuery, args...)
+	cityRows, err := periscopequerydb.Query(ctx, s.clickhouse, cityQuery, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error (cities)")
 	}
@@ -1470,7 +1471,7 @@ func (s *PeriscopeServer) GetGeographicDistribution(ctx context.Context, req *pe
 		FROM periscope.viewer_sessions_current FINAL
 		%s AND city != ''
 	`, whereClause)
-	if err := s.clickhouse.QueryRowContext(ctx, uniqueCityQuery, args...).Scan(&uniqueCities); err != nil {
+	if err := periscopequerydb.QueryRow(ctx, s.clickhouse, uniqueCityQuery, args...).Scan(&uniqueCities); err != nil {
 		s.logger.WithError(err).Warn("Failed to get unique city counts")
 	}
 
@@ -1483,7 +1484,7 @@ func (s *PeriscopeServer) GetGeographicDistribution(ctx context.Context, req *pe
 	var uniqueCountries uint64
 	var totalViewersAll uint64
 	totalViewers := int32(0)
-	if err := s.clickhouse.QueryRowContext(ctx, uniqueQuery, args...).Scan(&uniqueCountries, &totalViewersAll); err != nil {
+	if err := periscopequerydb.QueryRow(ctx, s.clickhouse, uniqueQuery, args...).Scan(&uniqueCountries, &totalViewersAll); err != nil {
 		s.logger.WithError(err).Warn("Failed to get unique geographic counts")
 	}
 	totalViewers = int32(min(totalViewersAll, uint64(1<<31-1)))
@@ -1546,7 +1547,7 @@ func (s *PeriscopeServer) GetTrackListEvents(ctx context.Context, req *periscope
 	query += buildOrderBy(params, "timestamp", "event_id")
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -1666,7 +1667,7 @@ func (s *PeriscopeServer) GetConnectionEvents(ctx context.Context, req *periscop
 	query += buildOrderBy(params, "timestamp", "event_id")
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -1811,7 +1812,7 @@ func (s *PeriscopeServer) GetNodeMetrics(ctx context.Context, req *periscopepb.G
 	query += buildOrderBy(params, "timestamp", "concat(cluster_id, ':', node_id)")
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -1921,7 +1922,7 @@ func (s *PeriscopeServer) GetNodeMetrics1H(ctx context.Context, req *periscopepb
 	query += buildOrderBy(params, "timestamp_1h", "concat(cluster_id, ':', node_id)")
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -2013,7 +2014,7 @@ func (s *PeriscopeServer) GetNodeMetricsAggregated(ctx context.Context, req *per
 		) sub
 		GROUP BY cluster_id, node_id ORDER BY cluster_id, node_id`
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -2087,7 +2088,7 @@ func (s *PeriscopeServer) GetLiveNodes(ctx context.Context, req *periscopepb.Get
 
 	query += " ORDER BY node_id"
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to query node_state_current")
 		return nil, wrapClickhouseError(err, "database error")
@@ -2188,7 +2189,7 @@ func (s *PeriscopeServer) GetRoutingEvents(ctx context.Context, req *periscopepb
 	}
 
 	var total int32
-	if countErr := s.clickhouse.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); countErr != nil {
+	if countErr := periscopequerydb.QueryRow(ctx, s.clickhouse, countQuery, countArgs...).Scan(&total); countErr != nil {
 		s.logger.WithError(countErr).Warn("Failed to get routing events count")
 	}
 
@@ -2244,7 +2245,7 @@ func (s *PeriscopeServer) GetRoutingEvents(ctx context.Context, req *periscopepb
 	query += buildOrderByN(params, "timestamp", []string{"tenant_id", "stream_id", "selected_node"})
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -2422,7 +2423,7 @@ func (s *PeriscopeServer) GetRoutingEfficiency(ctx context.Context, req *perisco
 
 	var total, successes int64
 	var avgDist, avgLat float64
-	if scanErr := s.clickhouse.QueryRowContext(ctx, query, args...).Scan(&total, &successes, &avgDist, &avgLat); scanErr != nil {
+	if scanErr := periscopequerydb.QueryRow(ctx, s.clickhouse, query, args...).Scan(&total, &successes, &avgDist, &avgLat); scanErr != nil {
 		return nil, wrapClickhouseError(scanErr, "database error")
 	}
 
@@ -2444,7 +2445,7 @@ func (s *PeriscopeServer) GetRoutingEfficiency(ctx context.Context, req *perisco
 	}
 	countryQuery += " GROUP BY client_country ORDER BY cnt DESC LIMIT 10"
 
-	rows, err := s.clickhouse.QueryContext(ctx, countryQuery, countryArgs...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, countryQuery, countryArgs...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -2504,7 +2505,7 @@ func (s *PeriscopeServer) GetClusterTrafficMatrix(ctx context.Context, req *peri
 		ORDER BY total_events DESC
 	`
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, tenantID, startTime, endTime)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, tenantID, startTime, endTime)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -2566,7 +2567,7 @@ func (s *PeriscopeServer) GetFederationEvents(ctx context.Context, req *periscop
 		countArgs = append(countArgs, eventType)
 	}
 	var totalCount int32
-	if countErr := s.clickhouse.QueryRowContext(ctx, countQuery, countArgs...).Scan(&totalCount); countErr != nil {
+	if countErr := periscopequerydb.QueryRow(ctx, s.clickhouse, countQuery, countArgs...).Scan(&totalCount); countErr != nil {
 		s.logger.WithError(countErr).Warn("Failed to get federation events total count")
 	}
 
@@ -2591,7 +2592,7 @@ func (s *PeriscopeServer) GetFederationEvents(ctx context.Context, req *periscop
 	query += " ORDER BY timestamp DESC LIMIT ?"
 	args = append(args, limit)
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -2721,7 +2722,7 @@ func (s *PeriscopeServer) GetFederationSummary(ctx context.Context, req *perisco
 		ORDER BY total DESC
 	`
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, tenantID, startTime, endTime)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, tenantID, startTime, endTime)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -2800,7 +2801,7 @@ func (s *PeriscopeServer) GetPlatformOverview(ctx context.Context, req *periscop
 		WHERE tenant_id = ?
 	`
 
-	err = s.clickhouse.QueryRowContext(ctx, liveQuery, tenantID).Scan(
+	err = periscopequerydb.QueryRow(ctx, s.clickhouse, liveQuery, tenantID).Scan(
 		&resp.TotalStreams, &resp.ActiveStreams, &resp.TotalViewers, &resp.AverageViewers,
 		&resp.TotalUploadBytes, &resp.TotalDownloadBytes,
 	)
@@ -2816,7 +2817,7 @@ func (s *PeriscopeServer) GetPlatformOverview(ctx context.Context, req *periscop
 		AND timestamp_5m >= ?
 		AND timestamp_5m <  ?
 	`
-	err = s.clickhouse.QueryRowContext(ctx, peakBwQuery, tenantID, startTime, endTime).Scan(&resp.PeakBandwidth)
+	err = periscopequerydb.QueryRow(ctx, s.clickhouse, peakBwQuery, tenantID, startTime, endTime).Scan(&resp.PeakBandwidth)
 	if err != nil {
 		s.logger.WithError(err).Info("Failed to get peak bandwidth from client_qoe_5m")
 	}
@@ -2847,7 +2848,7 @@ func (s *PeriscopeServer) GetPlatformOverview(ctx context.Context, req *periscop
 
 	var egressGb, viewerHours float64
 	var uniqueViewers, totalViews, peakViewers int64
-	err = s.clickhouse.QueryRowContext(ctx, historicalQuery, tenantID, startTime, endTime).Scan(
+	err = periscopequerydb.QueryRow(ctx, s.clickhouse, historicalQuery, tenantID, startTime, endTime).Scan(
 		&egressGb, &viewerHours, &uniqueViewers, &totalViews, &peakViewers,
 	)
 	if err == nil {
@@ -2935,8 +2936,8 @@ func (s *PeriscopeServer) ListTenantActivity(ctx context.Context, req *periscope
 		activity[tenantID] = a
 		return a
 	}
-	scanRows := func(query string, scan func(rows *sql.Rows) error, args ...any) error {
-		rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	scanRows := func(query string, scan func(rows *periscopequerydb.Rows) error, args ...any) error {
+		rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 		if err != nil {
 			return wrapClickhouseError(err, "database error")
 		}
@@ -2962,7 +2963,7 @@ func (s *PeriscopeServer) ListTenantActivity(ctx context.Context, req *periscope
 		WHERE day >= toDate(?) AND day <= toDate(?)` + tenantFilter + `
 		GROUP BY tenant_id
 	`
-	if err := scanRows(runtimeQuery, func(rows *sql.Rows) error {
+	if err := scanRows(runtimeQuery, func(rows *periscopequerydb.Rows) error {
 		var tenantID string
 		var ingestHours float64
 		var lastDay time.Time
@@ -2987,7 +2988,7 @@ func (s *PeriscopeServer) ListTenantActivity(ctx context.Context, req *periscope
 		WHERE day >= toDate(?) AND day <= toDate(?)` + tenantFilter + `
 		GROUP BY tenant_id
 	`
-	if err := scanRows(viewerQuery, func(rows *sql.Rows) error {
+	if err := scanRows(viewerQuery, func(rows *periscopequerydb.Rows) error {
 		var tenantID string
 		var viewerHours, egressGb float64
 		var uniqueViewers, totalSessions int64
@@ -3012,7 +3013,7 @@ func (s *PeriscopeServer) ListTenantActivity(ctx context.Context, req *periscope
 		WHERE day >= toDate(?) AND day <= toDate(?)` + tenantFilter + `
 		GROUP BY tenant_id
 	`
-	if err := scanRows(apiQuery, func(rows *sql.Rows) error {
+	if err := scanRows(apiQuery, func(rows *periscopequerydb.Rows) error {
 		var tenantID string
 		var requests, errCount int64
 		if err := rows.Scan(&tenantID, &requests, &errCount); err != nil {
@@ -3035,7 +3036,7 @@ func (s *PeriscopeServer) ListTenantActivity(ctx context.Context, req *periscope
 		GROUP BY tenant_id
 		HAVING live_streams > 0
 	`
-	if err := scanRows(liveQuery, func(rows *sql.Rows) error {
+	if err := scanRows(liveQuery, func(rows *periscopequerydb.Rows) error {
 		var tenantID string
 		var liveStreams, currentViewers int32
 		if err := rows.Scan(&tenantID, &liveStreams, &currentViewers); err != nil {
@@ -3106,7 +3107,7 @@ func (s *PeriscopeServer) GetNetworkLiveStats(ctx context.Context, _ *periscopep
 		FROM periscope.node_state_current FINAL
 		GROUP BY cluster_id
 	`
-	rows, err := s.clickhouse.QueryContext(ctx, nodeQuery)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, nodeQuery)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to query node stats: %v", err)
 	}
@@ -3133,7 +3134,7 @@ func (s *PeriscopeServer) GetNetworkLiveStats(ctx context.Context, _ *periscopep
 		WHERE s.status = 'live'
 		GROUP BY n.cluster_id
 	`
-	sRows, err := s.clickhouse.QueryContext(ctx, streamQuery)
+	sRows, err := periscopequerydb.Query(ctx, s.clickhouse, streamQuery)
 	if err != nil {
 		s.logger.WithError(err).Warn("GetNetworkLiveStats: stream query failed")
 	} else {
@@ -3243,7 +3244,7 @@ func (s *PeriscopeServer) GetClipEvents(ctx context.Context, req *periscopepb.Ge
 	query += buildOrderBy(params, "timestamp", "request_id")
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -3337,7 +3338,7 @@ func (s *PeriscopeServer) ListTopAssets(ctx context.Context, req *periscopepb.Li
 		ORDER BY total_sessions DESC, watch_hours DESC, artifact_hash
 		LIMIT ?
 	`
-	rows, err := s.clickhouse.QueryContext(ctx, query, tenantID, startTime, endTime, limit)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, tenantID, startTime, endTime, limit)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -3380,7 +3381,7 @@ func (s *PeriscopeServer) GetArtifactNodeCopies(ctx context.Context, req *perisc
 		ORDER BY role, node_id
 		LIMIT ?
 	`
-	rows, err := s.clickhouse.QueryContext(ctx, query, tenantID, artifactHash, maxNodeCopies+1)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, tenantID, artifactHash, maxNodeCopies+1)
 	if err != nil {
 		s.logger.WithError(err).WithField("artifact_hash", artifactHash).Error("Failed to query artifact node copies")
 		return nil, status.Error(codes.Internal, "failed to query artifact node copies")
@@ -3457,7 +3458,7 @@ func (s *PeriscopeServer) GetArtifactState(ctx context.Context, req *periscopepb
 	var progressPercent uint8
 	var hasLocalCopy, isSynced, isFinalized *bool
 
-	err = s.clickhouse.QueryRowContext(ctx, query, tenantID, tenantID, requestID).Scan(
+	err = periscopequerydb.QueryRow(ctx, s.clickhouse, query, tenantID, tenantID, requestID).Scan(
 		&artifact.TenantId, &artifact.RequestId, &artifact.StreamId, &artifact.ContentType, &artifact.Stage,
 		&progressPercent, &errorMessage, &requestedAt, &startedAt, &completedAt,
 		&clipStartUnix, &clipStopUnix, &segmentCount, &manifestPath,
@@ -3594,7 +3595,7 @@ func (s *PeriscopeServer) GetArtifactStates(ctx context.Context, req *periscopep
 	query += buildOrderBy(params, "updated_at", "request_id")
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -3797,7 +3798,7 @@ func (s *PeriscopeServer) GetStreamConnectionHourly(ctx context.Context, req *pe
 	}
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -3923,7 +3924,7 @@ func (s *PeriscopeServer) GetClientMetrics5M(ctx context.Context, req *periscope
 	}
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -4051,7 +4052,7 @@ func (s *PeriscopeServer) GetQualityTierDaily(ctx context.Context, req *periscop
 	}
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -4147,7 +4148,7 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummary(ctx context.Context, req *pe
 	{
 		var avgViewers sql.NullFloat64
 		var peakViewers sql.NullInt64
-		err := s.clickhouse.QueryRowContext(ctx, `
+		err := periscopequerydb.QueryRow(ctx, s.clickhouse, `
 			SELECT avg(viewer_count), max(viewer_count)
 			FROM (
 				SELECT window_start, toInt64(uniqExact(node_id, session_id)) AS viewer_count
@@ -4171,7 +4172,7 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummary(ctx context.Context, req *pe
 		var avgBufferHealth, avgFps sql.NullFloat64
 		var avgBitrate sql.NullFloat64
 		var rebufferCount, issueCount, bufferDryCount sql.NullInt64
-		err := s.clickhouse.QueryRowContext(ctx, `
+		err := periscopequerydb.QueryRow(ctx, s.clickhouse, `
 			SELECT avg(avg_buffer_health), avg(avg_bitrate), avg(avg_fps),
 			       sum(rebuffer_count), sum(issue_count), sum(buffer_dry_count)
 			FROM periscope.stream_health_5m
@@ -4206,7 +4207,7 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummary(ctx context.Context, req *pe
 	// Client QoE aggregates from client_qoe_5m
 	{
 		var pktLossRate, avgConnTime sql.NullFloat64
-		err := s.clickhouse.QueryRowContext(ctx, `
+		err := periscopequerydb.QueryRow(ctx, s.clickhouse, `
 			SELECT avg(pkt_loss_rate), avg(avg_connection_time)
 			FROM periscope.client_qoe_5m
 			WHERE tenant_id = ? AND stream_id = ? AND timestamp_5m >= ? AND timestamp_5m <= ?
@@ -4225,7 +4226,7 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummary(ctx context.Context, req *pe
 	// current session facts that have not appeared in the usage ledger yet.
 	{
 		var totalSessionSeconds, totalBytes, egressBytes, uniqueViewers, totalSessions sql.NullInt64
-		err := s.clickhouse.QueryRowContext(ctx, `
+		err := periscopequerydb.QueryRow(ctx, s.clickhouse, `
 			SELECT
 				toInt64(COALESCE(sum(seconds_observed), 0)),
 				toInt64(COALESCE(sum(total_bytes_observed), 0)),
@@ -4281,7 +4282,7 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummary(ctx context.Context, req *pe
 	// Current session geography is available before finalized usage ledgers.
 	{
 		var uniqueCountries sql.NullInt64
-		err := s.clickhouse.QueryRowContext(ctx, `
+		err := periscopequerydb.QueryRow(ctx, s.clickhouse, `
 			SELECT uniqExact(country_code)
 			FROM periscope.viewer_sessions_current FINAL
 			WHERE tenant_id = ? AND stream_id = ?
@@ -4304,7 +4305,7 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummary(ctx context.Context, req *pe
 	{
 		var tier2160p, tier1440p, tier1080p, tier720p, tier480p, tierSD sql.NullInt64
 		var codecH264, codecH265, codecVp9, codecAv1 sql.NullInt64
-		err := s.clickhouse.QueryRowContext(ctx, `
+		err := periscopequerydb.QueryRow(ctx, s.clickhouse, `
 			SELECT sum(tier_2160p_minutes), sum(tier_1440p_minutes), sum(tier_1080p_minutes),
 			       sum(tier_720p_minutes), sum(tier_480p_minutes), sum(tier_sd_minutes),
 			       sum(codec_h264_minutes), sum(codec_h265_minutes),
@@ -4459,7 +4460,7 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummaries(ctx context.Context, req *
 	args = append(args, keysetArgs...)
 	args = append(args, params.Limit+1)
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -4525,7 +4526,7 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummaries(ctx context.Context, req *
 
 	// Get total count
 	var totalCount int64
-	countRow := s.clickhouse.QueryRowContext(ctx, `
+	countRow := periscopequerydb.QueryRow(ctx, s.clickhouse, `
 		SELECT count(DISTINCT stream_id)
 		FROM periscope.viewer_usage_5m_v
 		WHERE tenant_id = ? AND window_start >= ? AND window_start < ?
@@ -4644,7 +4645,7 @@ func (s *PeriscopeServer) GetStorageUsage(ctx context.Context, req *periscopepb.
 	query += buildOrderBy(params, "timestamp", "concat(storage_scope, ':', node_id)")
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -4770,7 +4771,7 @@ func (s *PeriscopeServer) GetStorageEvents(ctx context.Context, req *periscopepb
 	query += buildOrderBy(params, "timestamp", "asset_hash")
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -4891,7 +4892,7 @@ func (s *PeriscopeServer) GetStreamHealth5M(ctx context.Context, req *periscopep
 	query += buildOrderBy(params, "timestamp_5m", "node_id")
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -5000,7 +5001,7 @@ func (s *PeriscopeServer) GetStreamHealthSummary(ctx context.Context, req *peris
 	var avgBitrate, avgFps, avgBufferHealth float64
 	var totalRebuffers, totalIssues, samples, issueSamples int64
 	var latestTier string
-	if err := s.clickhouse.QueryRowContext(ctx, query, args...).Scan(
+	if err := periscopequerydb.QueryRow(ctx, s.clickhouse, query, args...).Scan(
 		&avgBitrate, &avgFps, &avgBufferHealth,
 		&totalRebuffers, &totalIssues, &samples, &issueSamples, &latestTier,
 	); err != nil {
@@ -5054,7 +5055,7 @@ func (s *PeriscopeServer) GetClientQoeSummary(ctx context.Context, req *periscop
 	var avgPktLoss, peakPktLoss sql.NullFloat64
 	var avgBwIn, avgBwOut, avgConnTime float64
 	var totalSessions int64
-	if err := s.clickhouse.QueryRowContext(ctx, query, args...).Scan(
+	if err := periscopequerydb.QueryRow(ctx, s.clickhouse, query, args...).Scan(
 		&avgPktLoss, &peakPktLoss, &avgBwIn, &avgBwOut, &avgConnTime, &totalSessions,
 	); err != nil {
 		return nil, wrapClickhouseError(err, "database error")
@@ -5127,7 +5128,7 @@ func (s *PeriscopeServer) GetPlayerBootSummary(ctx context.Context, req *perisco
 	var p50, p95, p99 sql.NullFloat64
 	var avgGw, avgMist, avgSel, avgConn, avgPre float64
 	var cacheHitRatio sql.NullFloat64
-	if err := s.clickhouse.QueryRowContext(ctx, query, args...).Scan(
+	if err := periscopequerydb.QueryRow(ctx, s.clickhouse, query, args...).Scan(
 		&bootCount, &errorCount, &p50, &p95, &p99,
 		&avgGw, &avgMist, &avgSel, &avgConn, &avgPre, &cacheHitRatio,
 	); err != nil {
@@ -5187,7 +5188,7 @@ func (s *PeriscopeServer) GetPlayerBootTimeSeries(ctx context.Context, req *peri
 	}
 	query += " GROUP BY bucket ORDER BY bucket ASC"
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -5262,7 +5263,7 @@ func (s *PeriscopeServer) GetClusterBootOps(ctx context.Context, req *periscopep
 		LIMIT 1000
 	`, strings.Join(placeholders, ","))
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -5354,7 +5355,7 @@ func (s *PeriscopeServer) GetSessionQoeSummary(ctx context.Context, req *perisco
 	var sessionCount int64
 	var playedHours, rebufRatio, rebufPerHour, avgRebufMs, frameDropRatio sql.NullFloat64
 	var failRate, ebvsRate, avgBitrate, abrPerHour, avgLiveEdge sql.NullFloat64
-	if err := s.clickhouse.QueryRowContext(ctx, query, args...).Scan(
+	if err := periscopequerydb.QueryRow(ctx, s.clickhouse, query, args...).Scan(
 		&sessionCount, &playedHours, &rebufRatio, &rebufPerHour, &avgRebufMs, &frameDropRatio,
 		&failRate, &ebvsRate, &avgBitrate, &abrPerHour, &avgLiveEdge,
 	); err != nil {
@@ -5429,7 +5430,7 @@ func (s *PeriscopeServer) GetSessionQoeTimeSeries(ctx context.Context, req *peri
 		GROUP BY bucket ORDER BY bucket ASC
 	`, clickhouseInterval(req.GetInterval()), filter)
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -5500,7 +5501,7 @@ func (s *PeriscopeServer) GetClusterQoeOps(ctx context.Context, req *periscopepb
 		LIMIT 1000
 	`, strings.Join(placeholders, ","))
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -5559,7 +5560,7 @@ func (s *PeriscopeServer) GetVodRetention(ctx context.Context, req *periscopepb.
 	const maxRetentionBucket = 5000
 	reachHist := map[int64]int64{}
 	var totalSessions, maxBucket, bucketWidth, assetDuration int64
-	rrows, err := s.clickhouse.QueryContext(ctx, `
+	rrows, err := periscopequerydb.Query(ctx, s.clickhouse, `
 		SELECT reach, bw, dur, toInt64(count()) AS sessions FROM (
 			SELECT session_id,
 				toInt64(max(max_bucket_reached)) AS reach,
@@ -5607,7 +5608,7 @@ func (s *PeriscopeServer) GetVodRetention(ctx context.Context, req *periscopepb.
 
 	// Watch density: seconds watched per bucket.
 	densityMap := map[int64]float64{}
-	drows, err := s.clickhouse.QueryContext(ctx, `
+	drows, err := periscopequerydb.Query(ctx, s.clickhouse, `
 		SELECT toInt64(bucket_index) AS bucket_index, toFloat64(sum(seconds_watched)) AS secs
 		FROM vod_retention_buckets FINAL
 		WHERE tenant_id = ? AND artifact_hash = ? AND timestamp >= ? AND timestamp <= ?
@@ -5714,7 +5715,7 @@ func (s *PeriscopeServer) ListVodRetentionAssets(ctx context.Context, req *peris
 	query += buildOrderBy(params, "last_seen", "artifact_hash")
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -5832,7 +5833,7 @@ func (s *PeriscopeServer) GetNodePerformance5M(ctx context.Context, req *perisco
 	query += buildOrderBy(params, "timestamp_5m", "concat(cluster_id, ':', node_id)")
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -5951,7 +5952,7 @@ func (s *PeriscopeServer) GetViewerHoursHourly(ctx context.Context, req *perisco
 	query += buildOrderBy(params, "hour", "concat(stream_id, ':', country_code)")
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -6050,7 +6051,7 @@ func (s *PeriscopeServer) GetViewerGeoHourly(ctx context.Context, req *periscope
 	query += buildOrderBy(params, "hour", "country_code")
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -6140,7 +6141,7 @@ func (s *PeriscopeServer) GetTenantDailyStats(ctx context.Context, req *periscop
 		LIMIT ?
 	`
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, tenantID, days, days)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, tenantID, days, days)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -6242,7 +6243,7 @@ func (s *PeriscopeServer) GetProcessingUsage(ctx context.Context, req *periscope
 		GROUP BY day, tenant_id
 		ORDER BY day DESC
 	`
-	summaryRows, err := s.clickhouse.QueryContext(ctx, summaryQuery, summaryArgs...)
+	summaryRows, err := periscopequerydb.Query(ctx, s.clickhouse, summaryQuery, summaryArgs...)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to query processing_5m_v")
 	} else {
@@ -6368,7 +6369,7 @@ func (s *PeriscopeServer) GetProcessingUsage(ctx context.Context, req *periscope
 	query += buildOrderByN(params, timestampExpr, []string{"stream_id", "node_id", "process_type"})
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -6568,7 +6569,7 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *periscop
 	var uniqueViewers uint32
 	queryCount++
 	queryCtx, cancel = withClickhouseTimeout(ctx)
-	err = s.clickhouse.QueryRowContext(queryCtx, `
+	err = periscopequerydb.QueryRow(queryCtx, s.clickhouse, `
 		SELECT
 			toUInt64(COALESCE(sum(seconds_observed), 0)) AS total_session_seconds,
 			toUInt64(COALESCE(sum(down_bytes_observed), 0)) AS egress_bytes,
@@ -6615,7 +6616,7 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *periscop
 	var peakBandwidthBytes float64
 	queryCount++
 	queryCtx, cancel = withClickhouseTimeout(ctx)
-	err = s.clickhouse.QueryRowContext(queryCtx, `
+	err = periscopequerydb.QueryRow(queryCtx, s.clickhouse, `
 		SELECT COALESCE(max(avg_bw_out), 0) AS peak_bandwidth
 		FROM client_qoe_5m
 		WHERE tenant_id = ?
@@ -6635,7 +6636,7 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *periscop
 	if rangeSeconds > 0 {
 		queryCount++
 		queryCtx, cancel = withClickhouseTimeout(ctx)
-		err = s.clickhouse.QueryRowContext(queryCtx, `
+		err = periscopequerydb.QueryRow(queryCtx, s.clickhouse, `
 			SELECT COALESCE(sum(gb_seconds), 0) AS gb_seconds
 			FROM storage_gb_seconds_5m_v
 			WHERE tenant_id = ?
@@ -6657,7 +6658,7 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *periscop
 	var livepeerUniqueStreams, nativeAvUniqueStreams uint32
 	queryCount++
 	queryCtx, cancel = withClickhouseTimeout(ctx)
-	err = s.clickhouse.QueryRowContext(queryCtx, `
+	err = periscopequerydb.QueryRow(queryCtx, s.clickhouse, `
 		SELECT
 			sumIf(media_seconds, process_type = 'Livepeer' AND output_codec = 'h264')                AS livepeer_h264,
 			sumIf(media_seconds, process_type = 'Livepeer' AND output_codec = 'vp9')                 AS livepeer_vp9,
@@ -6705,7 +6706,7 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *periscop
 	var uniqueCountries, uniqueCities int32
 	queryCount++
 	queryCtx, cancel = withClickhouseTimeout(ctx)
-	err = s.clickhouse.QueryRowContext(queryCtx, `
+	err = periscopequerydb.QueryRow(queryCtx, s.clickhouse, `
 		SELECT
 			toInt32(uniqExactIf(country_code, country_code != '')) AS unique_countries,
 			toInt32(uniqExactIf(city, city != '')) AS unique_cities
@@ -6738,7 +6739,7 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *periscop
 	// Geo breakdown by country (top 20)
 	queryCount++
 	queryCtx, cancel = withClickhouseTimeout(ctx)
-	rows, err := s.clickhouse.QueryContext(queryCtx, `
+	rows, err := periscopequerydb.Query(queryCtx, s.clickhouse, `
 		SELECT
 			country_code,
 			toInt32(sum(viewer_count)) AS viewer_count,
@@ -6811,7 +6812,7 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *periscop
 	queryCount++
 	queryCtx, cancel = withClickhouseTimeout(ctx)
 	// Count over the same deduped artifact-event surface used by history reads.
-	err = s.clickhouse.QueryRowContext(queryCtx, `
+	err = periscopequerydb.QueryRow(queryCtx, s.clickhouse, `
 		SELECT
 			countIf(content_type = 'clip' AND stage = 'completed') AS clips_created,
 			countIf(content_type = 'clip' AND stage = 'deleted') AS clips_deleted,
@@ -6837,7 +6838,7 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *periscop
 	var hotClipBytes, hotDvrBytes, hotVodBytes uint64
 	queryCount++
 	queryCtx, cancel = withClickhouseTimeout(ctx)
-	err = s.clickhouse.QueryRowContext(queryCtx, `
+	err = periscopequerydb.QueryRow(queryCtx, s.clickhouse, `
 		SELECT
 			COALESCE(argMax(clip_bytes, timestamp), 0),
 			COALESCE(argMax(dvr_bytes, timestamp), 0),
@@ -6853,7 +6854,7 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *periscop
 	var coldFrozenClipBytes, coldFrozenDvrBytes, coldFrozenVodBytes uint64
 	queryCount++
 	queryCtx, cancel = withClickhouseTimeout(ctx)
-	err = s.clickhouse.QueryRowContext(queryCtx, `
+	err = periscopequerydb.QueryRow(queryCtx, s.clickhouse, `
 		SELECT
 			COALESCE(argMax(frozen_clip_bytes, timestamp), 0),
 			COALESCE(argMax(frozen_dvr_bytes, timestamp), 0),
@@ -6879,7 +6880,7 @@ func (s *PeriscopeServer) GetLiveUsageSummary(ctx context.Context, req *periscop
 	var syncedArtifactBytes uint64
 	queryCount++
 	queryCtx, cancel = withClickhouseTimeout(ctx)
-	err = s.clickhouse.QueryRowContext(queryCtx, `
+	err = periscopequerydb.QueryRow(queryCtx, s.clickhouse, `
 			SELECT
 				countIf(is_synced = true) AS synced_artifact_count,
 				ifNull(sumIf(size_bytes, is_synced = true), toUInt64(0)) AS synced_artifact_bytes
@@ -6967,7 +6968,7 @@ func (s *PeriscopeServer) GetRebufferingEvents(ctx context.Context, req *perisco
 	query += buildOrderByN(params, "timestamp", []string{"stream_id", "node_id"})
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -6975,26 +6976,31 @@ func (s *PeriscopeServer) GetRebufferingEvents(ctx context.Context, req *perisco
 
 	var events []*periscopepb.RebufferingEvent
 	for rows.Next() {
-		var timestamp, rebufferStart, rebufferEnd time.Time
+		var timestamp time.Time
+		var rebufferStart, rebufferEnd uint8
 		var tenantIDStr, streamIDStr, nodeID, bufferState, prevState string
 
 		err := rows.Scan(&timestamp, &tenantIDStr, &streamIDStr, &nodeID, &bufferState, &prevState, &rebufferStart, &rebufferEnd)
 		if err != nil {
-			s.logger.WithError(err).Error("Failed to scan rebuffering_events row")
-			continue
+			return nil, wrapClickhouseError(err, "scan rebuffering event")
 		}
 
-		events = append(events, &periscopepb.RebufferingEvent{
-			Id:            fmt.Sprintf("%s_%s", timestamp.Format(time.RFC3339Nano), streamIDStr),
-			Timestamp:     timestamppb.New(timestamp),
-			TenantId:      tenantIDStr,
-			StreamId:      streamIDStr,
-			NodeId:        nodeID,
-			BufferState:   bufferState,
-			PrevState:     prevState,
-			RebufferStart: timestamppb.New(rebufferStart),
-			RebufferEnd:   timestamppb.New(rebufferEnd),
-		})
+		event := &periscopepb.RebufferingEvent{
+			Id:          fmt.Sprintf("%s_%s", timestamp.Format(time.RFC3339Nano), streamIDStr),
+			Timestamp:   timestamppb.New(timestamp),
+			TenantId:    tenantIDStr,
+			StreamId:    streamIDStr,
+			NodeId:      nodeID,
+			BufferState: bufferState,
+			PrevState:   prevState,
+		}
+		if rebufferStart != 0 {
+			event.RebufferStart = timestamppb.New(timestamp)
+		}
+		if rebufferEnd != 0 {
+			event.RebufferEnd = timestamppb.New(timestamp)
+		}
+		events = append(events, event)
 	}
 
 	resultsLen := len(events)
@@ -7075,7 +7081,7 @@ func (s *PeriscopeServer) GetTenantAnalyticsDaily(ctx context.Context, req *peri
 	query += buildOrderBySingle(params, "day")
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -7198,7 +7204,7 @@ func (s *PeriscopeServer) GetStreamAnalyticsDaily(ctx context.Context, req *peri
 	query += buildOrderBy(params, "day", "stream_id")
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -7302,7 +7308,7 @@ func (s *PeriscopeServer) GetAPIUsage(ctx context.Context, req *periscopepb.GetA
 		}
 		summaryQuery += " GROUP BY day, tenant_id, auth_type ORDER BY day DESC"
 
-		summaryRows, summaryErr := s.clickhouse.QueryContext(ctx, summaryQuery, summaryArgs...)
+		summaryRows, summaryErr := periscopequerydb.Query(ctx, s.clickhouse, summaryQuery, summaryArgs...)
 		if summaryErr != nil {
 			s.logger.WithError(summaryErr).Error("Failed to query api_usage_5m_v daily summary")
 		} else {
@@ -7365,7 +7371,7 @@ func (s *PeriscopeServer) GetAPIUsage(ctx context.Context, req *periscopepb.GetA
 	}
 	operationSummaryQuery += " GROUP BY operation_type ORDER BY total_requests DESC"
 
-	operationRows, err := s.clickhouse.QueryContext(ctx, operationSummaryQuery, operationSummaryArgs...)
+	operationRows, err := periscopequerydb.Query(ctx, s.clickhouse, operationSummaryQuery, operationSummaryArgs...)
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to query api_usage_5m_v operation summaries")
 	} else {
@@ -7470,7 +7476,7 @@ func (s *PeriscopeServer) GetAPIUsage(ctx context.Context, req *periscopepb.GetA
 	}
 	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, args...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -7696,7 +7702,7 @@ func (s *PeriscopeServer) GetNetworkUsage(ctx context.Context, req *periscopepb.
 		ORDER BY viewer.period_start
 	`, periodExpr, periodExpr, periodExpr)
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, startTime, endTime, startTime, endTime, startTime, endTime)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, startTime, endTime, startTime, endTime, startTime, endTime)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to query network usage: %v", err)
 	}
@@ -7753,7 +7759,7 @@ func (s *PeriscopeServer) GetAcquisitionFunnel(ctx context.Context, req *perisco
 		ORDER BY tenant_count DESC
 	`
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, startTime, endTime)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, startTime, endTime)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to query acquisition funnel: %v", err)
 	}
@@ -7850,7 +7856,7 @@ func (s *PeriscopeServer) GetAcquisitionCohortUsage(ctx context.Context, req *pe
 		ORDER BY day, cohort.signup_channel, cohort.cohort_month
 	`, filters)
 
-	rows, err := s.clickhouse.QueryContext(ctx, query, params...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, params...)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to query acquisition cohort usage: %v", err)
 	}

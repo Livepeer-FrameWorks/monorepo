@@ -3,6 +3,7 @@ module frameworks/api_analytics_query
 go 1.26.2
 
 require (
+	github.com/ClickHouse/clickhouse-go/v2 v2.45.0
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/Livepeer-FrameWorks/monorepo/pkg v0.0.0
 	github.com/gin-gonic/gin v1.12.0
@@ -19,7 +20,6 @@ replace github.com/Livepeer-FrameWorks/monorepo/pkg => ../pkg
 
 require (
 	github.com/ClickHouse/ch-go v0.71.0 // indirect
-	github.com/ClickHouse/clickhouse-go/v2 v2.45.0 // indirect
 	github.com/andybalholm/brotli v1.2.1 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bits-and-blooms/bitset v1.24.4 // indirect

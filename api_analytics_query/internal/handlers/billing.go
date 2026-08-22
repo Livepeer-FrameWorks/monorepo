@@ -15,10 +15,10 @@ import (
 	"time"
 
 	"frameworks/api_analytics_query/internal/database/meteringdb"
+	"frameworks/api_analytics_query/internal/database/periscopequerydb"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
-	dbqueries "github.com/Livepeer-FrameWorks/monorepo/pkg/database/queries"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
@@ -145,7 +145,7 @@ type activeViewerReservation struct {
 // sessions. USER_END remains the final rated fact; these values only make
 // prepaid admission responsive while a long connection is still in flight.
 func (bs *BillingSummarizer) PublishUsageReservations(ctx context.Context) error {
-	rows, err := bs.clickhouse.QueryContext(ctx, dbqueries.ActiveViewerReservations)
+	rows, err := periscopequerydb.ActiveViewerReservations.Query(ctx, bs.clickhouse)
 	if err != nil {
 		return fmt.Errorf("query active viewer reservations: %w", err)
 	}
@@ -224,56 +224,8 @@ func (bs *BillingSummarizer) PublishUsageReservations(ctx context.Context) error
 // artifact_events) guarantees that any tenant the rated meters can see
 // is also a tenant the cursor walks.
 func (bs *BillingSummarizer) getActiveTenants() ([]string, error) {
-	rows, err := bs.clickhouse.QueryContext(context.Background(), `
-		SELECT DISTINCT tenant_id FROM (
-			SELECT toString(tenant_id) AS tenant_id FROM periscope.viewer_sessions_final
-			WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
-
-			UNION ALL
-
-			SELECT toString(tenant_id) AS tenant_id FROM periscope.processing_segments_final
-			WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
-
-			UNION ALL
-
-			SELECT toString(tenant_id) AS tenant_id FROM periscope.stream_sessions_final
-			WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
-
-			UNION ALL
-
-			SELECT toString(tenant_id) AS tenant_id
-			FROM (
-				SELECT
-					tenant_id, cluster_id, storage_scope,
-					storage_provider_tenant_id, storage_provider_cluster_id, storage_backend,
-					argMax(total_bytes, tuple(timestamp, ingested_at_ms)) AS total_bytes
-				FROM periscope.storage_snapshots
-				GROUP BY tenant_id, cluster_id, storage_scope,
-				         storage_provider_tenant_id, storage_provider_cluster_id, storage_backend
-			)
-			WHERE total_bytes > 0
-
-			UNION ALL
-
-			SELECT toString(tenant_id) AS tenant_id FROM periscope.stream_runtime_5m
-			WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
-
-			UNION ALL
-
-			SELECT toString(tenant_id) AS tenant_id FROM periscope.api_usage_5m
-			WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
-
-			UNION ALL
-
-			SELECT JSONExtractString(natural_key_json, 'tenant_id') AS tenant_id
-			FROM periscope.projection_divergences
-			WHERE observed_at_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
-		)
-		WHERE tenant_id IS NOT NULL
-		AND tenant_id != ''
-		AND tenant_id NOT IN (?, ?, ?)
-		ORDER BY tenant_id
-	`, tenants.ServiceAccountUserID.String(), bs.systemTenantID, tenants.AnonymousTenantID.String())
+	rows, err := periscopequerydb.ActiveTenants.Query(context.Background(), bs.clickhouse,
+		tenants.ServiceAccountUserID.String(), bs.systemTenantID, tenants.AnonymousTenantID.String())
 
 	if err != nil {
 		return nil, err
@@ -355,13 +307,7 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 
 	// Derive peak bandwidth from client_qoe_5m (avg_bw_out is in bytes/sec)
 	var peakBandwidth float64
-	err = bs.clickhouse.QueryRowContext(ctx, `
-		SELECT COALESCE(max(avg_bw_out) / (1024*1024), 0) as peak_bandwidth_mbps
-		FROM periscope.client_qoe_5m
-		WHERE tenant_id = ?
-		AND timestamp_5m >= ?
-		AND timestamp_5m <  ?
-	`, tenantID, startTime, endTime).Scan(&peakBandwidth)
+	err = periscopequerydb.PeakBandwidth.QueryRow(ctx, bs.clickhouse, tenantID, startTime, endTime).Scan(&peakBandwidth)
 	if err != nil && !errors.Is(err, database.ErrNoRows) {
 		return nil, fmt.Errorf("failed to query peak bandwidth from ClickHouse: %w", err)
 	}
@@ -369,25 +315,8 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 	// Calculate Month-to-Date (MTD) Unique Users for correct MAX aggregation in Billing
 	firstOfMonth := time.Date(startTime.Year(), startTime.Month(), 1, 0, 0, 0, 0, startTime.Location())
 	var uniqueUsers int
-	err = bs.clickhouse.QueryRowContext(ctx, `
-		WITH sessions AS (
-			SELECT
-				tenant_id, node_id, session_id,
-				argMax(host, projection_version_ms) AS host,
-				argMax(source_ended_at_ms, projection_version_ms) AS source_ended_at_ms,
-				argMax(closed_reason, projection_version_ms) AS closed_reason
-			FROM periscope.viewer_sessions_final
-			WHERE tenant_id = ?
-			  AND projection_version_ms < ?
-			GROUP BY tenant_id, node_id, session_id
-		)
-		SELECT COALESCE(uniqCombined(if(host != '', host, concat(toString(node_id), '|', session_id))), 0) as unique_users
-		FROM sessions
-		WHERE tenant_id = ?
-		  AND closed_reason = 'final'
-		  AND source_ended_at_ms >= ?
-		  AND source_ended_at_ms <  ?
-	`, tenantID, endTime.UnixMilli(), tenantID, firstOfMonth.UnixMilli(), endTime.UnixMilli()).Scan(&uniqueUsers)
+	err = periscopequerydb.MonthlyUniqueUsers.QueryRow(ctx, bs.clickhouse,
+		tenantID, endTime.UnixMilli(), tenantID, firstOfMonth.UnixMilli(), endTime.UnixMilli()).Scan(&uniqueUsers)
 	if err != nil && !errors.Is(err, database.ErrNoRows) {
 		return nil, fmt.Errorf("failed to query finalized unique users from ClickHouse: %w", err)
 	}
@@ -411,28 +340,7 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 	// avoids hidden rollup dependencies in the billing summarizer.
 	var apiRequests, apiErrors, apiDurationMs, apiComplexity, llmInputTokens, llmOutputTokens float64
 	var apiBreakdown []models.APIUsageBreakdown
-	apiRows, err := bs.clickhouse.QueryContext(ctx, `
-		SELECT
-			auth_type,
-			operation_type,
-			operation_name,
-			service,
-			llm_model,
-			llm_provider,
-			COALESCE(sum(requests), 0)                              AS total_requests,
-			COALESCE(sum(errors), 0)                                AS total_errors,
-			COALESCE(sum(duration_ms), 0)                           AS total_duration_ms,
-			COALESCE(sum(complexity), 0)                            AS total_complexity,
-			COALESCE(sum(llm_input_tokens), 0)                       AS total_llm_input_tokens,
-			COALESCE(sum(llm_output_tokens), 0)                      AS total_llm_output_tokens,
-			COALESCE(uniqCombinedMerge(unique_users_state), 0)      AS unique_users,
-			COALESCE(uniqCombinedMerge(unique_tokens_state), 0)     AS unique_tokens
-		FROM periscope.api_usage_5m_v
-		WHERE tenant_id = ?
-		  AND window_start >= ?
-		  AND window_start <  ?
-		GROUP BY auth_type, operation_type, operation_name, service, llm_model, llm_provider
-	`, tenantID, startTime, endTime)
+	apiRows, err := periscopequerydb.APIUsageByDimension.Query(ctx, bs.clickhouse, tenantID, startTime, endTime)
 	if err != nil && !errors.Is(err, database.ErrNoRows) {
 		return nil, fmt.Errorf("failed to query API usage aggregates from ClickHouse: %w", err)
 	} else if err == nil {
@@ -648,19 +556,7 @@ type clusterStreamRuntimeMetrics struct {
 }
 
 func (bs *BillingSummarizer) queryClusterStreamRuntime(ctx context.Context, tenantID string, startTime, endTime time.Time) (map[string]clusterStreamRuntimeMetrics, error) {
-	rows, err := bs.clickhouse.QueryContext(ctx, `
-		SELECT
-			cluster_id,
-			COALESCE(toInt32(max(peak_viewers)), 0)             AS max_viewers,
-			COALESCE(toInt32(uniqCombined(stream_id)), 0)       AS total_streams,
-			COALESCE(sum(active_seconds) / 3600.0, 0)           AS stream_hours
-		FROM periscope.stream_runtime_5m_v
-		WHERE tenant_id = ?
-		  AND window_start >= ?
-		  AND window_start < ?
-		  AND cluster_id != ''
-		GROUP BY cluster_id
-	`, tenantID, startTime, endTime)
+	rows, err := periscopequerydb.ClusterStreamRuntime.Query(ctx, bs.clickhouse, tenantID, startTime, endTime)
 	if err != nil {
 		return nil, err
 	}
@@ -779,44 +675,8 @@ func (bs *BillingSummarizer) queryClusterProcessingSeconds(ctx context.Context, 
 	// source_event_id is the logical fact identity. process_type, codec,
 	// and track are materialized fields that may be corrected by replay;
 	// grouping by them here would double-bill a format correction.
-	rows, err := bs.clickhouse.QueryContext(ctx, `
-		WITH window_candidates AS (
-			SELECT
-				tenant_id, node_id, stream_id, source_event_id,
-				min(projection_version_ms) AS proj_first_in_window,
-				argMax(process_type,   projection_version_ms) AS process_type,
-				argMax(output_codec,   projection_version_ms) AS output_codec,
-				argMax(track_type,     projection_version_ms) AS track_type,
-				argMax(rendition_count,projection_version_ms) AS rendition_count,
-				argMax(renditions_json,projection_version_ms) AS renditions_json,
-				argMax(cluster_id,     projection_version_ms) AS cluster_id,
-				argMax(media_seconds,  projection_version_ms) AS media_seconds
-			FROM periscope.processing_segments_final
-			WHERE tenant_id = ?
-			  AND projection_version_ms >= ?
-			  AND projection_version_ms <  ?
-			GROUP BY tenant_id, node_id, stream_id, source_event_id
-		)
-		SELECT
-			c.cluster_id AS cluster_id,
-			c.process_type AS process_type,
-			c.output_codec AS output_codec,
-			c.track_type AS track_type,
-			c.rendition_count AS rendition_count,
-			c.renditions_json AS renditions_json,
-			sum(c.media_seconds) AS media_seconds
-		FROM window_candidates c
-		LEFT ANTI JOIN (
-			SELECT DISTINCT tenant_id, node_id, stream_id, source_event_id
-			FROM periscope.processing_segments_final
-			WHERE tenant_id = ?
-			  AND projection_version_ms < ?
-			  AND (tenant_id, node_id, stream_id, source_event_id) IN (
-			      SELECT tenant_id, node_id, stream_id, source_event_id FROM window_candidates
-			  )
-		) prior USING (tenant_id, node_id, stream_id, source_event_id)
-		GROUP BY c.cluster_id, c.process_type, c.output_codec, c.track_type, c.rendition_count, c.renditions_json
-	`, tenantID, startTime.UnixMilli(), endTime.UnixMilli(), tenantID, startTime.UnixMilli())
+	rows, err := periscopequerydb.ClusterProcessingSeconds.Query(ctx, bs.clickhouse,
+		tenantID, startTime.UnixMilli(), endTime.UnixMilli(), tenantID, startTime.UnixMilli())
 	if err != nil {
 		return nil, fmt.Errorf("processing_segments_final per cluster: %w", err)
 	}
@@ -855,36 +715,8 @@ func storageUsageType(scope string) string {
 
 func (bs *BillingSummarizer) queryClusterStorageProviderUsage(ctx context.Context, tenantID string, startTime, endTime time.Time) (map[string][]models.ProviderUsage, error) {
 	out := map[string][]models.ProviderUsage{}
-	rows, err := bs.clickhouse.QueryContext(ctx, `
-		WITH first_projections AS (
-			SELECT
-				cluster_id,
-				storage_provider_tenant_id,
-				storage_provider_cluster_id,
-				storage_backend,
-				storage_scope,
-				window_start,
-				min(projection_version_ms) AS billable_at_ms,
-				argMax(gb_seconds, projection_version_ms) AS gb_seconds
-			FROM periscope.storage_gb_seconds_5m
-			WHERE tenant_id = ?
-			  AND projection_version_ms < ?
-			GROUP BY cluster_id, storage_provider_tenant_id, storage_provider_cluster_id,
-			         storage_backend, storage_scope, window_start
-			HAVING billable_at_ms >= ? AND billable_at_ms < ?
-		)
-		SELECT
-			cluster_id,
-			storage_provider_tenant_id,
-			storage_provider_cluster_id,
-			storage_backend,
-			storage_scope,
-			sum(gb_seconds) AS total_gb_seconds
-		FROM first_projections
-		GROUP BY cluster_id, storage_provider_tenant_id, storage_provider_cluster_id,
-		         storage_backend, storage_scope
-		HAVING total_gb_seconds != 0
-	`, tenantID, endTime.UnixMilli(), startTime.UnixMilli(), endTime.UnixMilli())
+	rows, err := periscopequerydb.ClusterStorageProviderUsage.Query(ctx, bs.clickhouse,
+		tenantID, endTime.UnixMilli(), startTime.UnixMilli(), endTime.UnixMilli())
 	if err != nil {
 		return nil, fmt.Errorf("storage ledger provider usage: %w", err)
 	}
@@ -939,15 +771,8 @@ func storageMetricsFromProviderUsage(providerUsage map[string][]models.ProviderU
 
 func (bs *BillingSummarizer) queryUsageAdjustments(ctx context.Context, tenantID string, startTime, endTime time.Time) (map[string][]models.UsageAdjustment, error) {
 	out := map[string][]models.UsageAdjustment{}
-	rows, err := bs.clickhouse.QueryContext(ctx, `
-		SELECT observed_at_ms, table_name, meter, field,
-		       natural_key_json, prior_value_json, new_value_json, source_event_id
-		FROM periscope.projection_divergences
-		WHERE observed_at_ms >= ?
-		  AND observed_at_ms <  ?
-		  AND table_name IN ('storage_gb_seconds_5m', 'viewer_sessions_final', 'stream_sessions_final', 'processing_segments_final')
-		  AND JSONExtractString(natural_key_json, 'tenant_id') = ?
-	`, startTime.UnixMilli(), endTime.UnixMilli(), tenantID)
+	rows, err := periscopequerydb.UsageAdjustments.Query(ctx, bs.clickhouse,
+		startTime.UnixMilli(), endTime.UnixMilli(), tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("projection_divergences query: %w", err)
 	}
@@ -991,9 +816,9 @@ func (bs *BillingSummarizer) divergenceAlreadyCursored(ctx context.Context, tabl
 		return false, fmt.Errorf("parse projection divergence natural key: %w", err)
 	}
 
-	queryFirstProjection := func(query string, args ...any) (bool, error) {
+	queryFirstProjection := func(query periscopequerydb.Statement, args ...any) (bool, error) {
 		var firstProjectionMS int64
-		if err := bs.clickhouse.QueryRowContext(ctx, query, args...).Scan(&firstProjectionMS); err != nil {
+		if err := query.QueryRow(ctx, bs.clickhouse, args...).Scan(&firstProjectionMS); err != nil {
 			return false, err
 		}
 		if firstProjectionMS == 0 {
@@ -1004,43 +829,16 @@ func (bs *BillingSummarizer) divergenceAlreadyCursored(ctx context.Context, tabl
 
 	switch tableName {
 	case "viewer_sessions_final":
-		return queryFirstProjection(`
-			SELECT if(count() = 0, 0, min(projection_version_ms))
-			FROM periscope.viewer_sessions_final
-			WHERE tenant_id = toUUID(?)
-			  AND node_id = ?
-			  AND session_id = ?
-		`, stringFromJSONMap(naturalKey, "tenant_id"), stringFromJSONMap(naturalKey, "node_id"), stringFromJSONMap(naturalKey, "session_id"))
+		return queryFirstProjection(periscopequerydb.FirstViewerSessionProjection,
+			stringFromJSONMap(naturalKey, "tenant_id"), stringFromJSONMap(naturalKey, "node_id"), stringFromJSONMap(naturalKey, "session_id"))
 	case "processing_segments_final":
-		return queryFirstProjection(`
-			SELECT if(count() = 0, 0, min(projection_version_ms))
-			FROM periscope.processing_segments_final
-			WHERE tenant_id = toUUID(?)
-			  AND node_id = ?
-			  AND stream_id = toUUID(?)
-			  AND source_event_id = ?
-		`, stringFromJSONMap(naturalKey, "tenant_id"), stringFromJSONMap(naturalKey, "node_id"), stringFromJSONMap(naturalKey, "stream_id"), stringFromJSONMap(naturalKey, "source_event_id"))
+		return queryFirstProjection(periscopequerydb.FirstProcessingSegmentProjection,
+			stringFromJSONMap(naturalKey, "tenant_id"), stringFromJSONMap(naturalKey, "node_id"), stringFromJSONMap(naturalKey, "stream_id"), stringFromJSONMap(naturalKey, "source_event_id"))
 	case "stream_sessions_final":
-		return queryFirstProjection(`
-			SELECT if(count() = 0, 0, min(projection_version_ms))
-			FROM periscope.stream_sessions_final
-			WHERE tenant_id = toUUID(?)
-			  AND node_id = ?
-			  AND stream_id = toUUID(?)
-			  AND source_event_id = ?
-		`, stringFromJSONMap(naturalKey, "tenant_id"), stringFromJSONMap(naturalKey, "node_id"), stringFromJSONMap(naturalKey, "stream_id"), stringFromJSONMap(naturalKey, "source_event_id"))
+		return queryFirstProjection(periscopequerydb.FirstStreamSessionProjection,
+			stringFromJSONMap(naturalKey, "tenant_id"), stringFromJSONMap(naturalKey, "node_id"), stringFromJSONMap(naturalKey, "stream_id"), stringFromJSONMap(naturalKey, "source_event_id"))
 	case "storage_gb_seconds_5m":
-		return queryFirstProjection(`
-			SELECT if(count() = 0, 0, min(projection_version_ms))
-			FROM periscope.storage_gb_seconds_5m
-			WHERE tenant_id = toUUID(?)
-			  AND cluster_id = ?
-			  AND storage_scope = ?
-			  AND storage_provider_tenant_id = ?
-			  AND storage_provider_cluster_id = ?
-			  AND storage_backend = ?
-			  AND window_start = parseDateTimeBestEffort(?)
-		`,
+		return queryFirstProjection(periscopequerydb.FirstStorageProjection,
 			stringFromJSONMap(naturalKey, "tenant_id"),
 			stringFromJSONMap(naturalKey, "cluster_id"),
 			stringFromJSONMap(naturalKey, "storage_scope"),
@@ -1407,42 +1205,8 @@ func (bs *BillingSummarizer) queryTenantViewerMetrics(ctx context.Context, tenan
 	// first lands in the cursor window; later reprojections don't re-bill
 	// because the anti-join filters out natural keys with an earlier
 	// projection.
-	rows, err := bs.clickhouse.QueryContext(ctx, `
-		WITH window_candidates AS (
-			SELECT
-				tenant_id, node_id, session_id,
-				min(projection_version_ms) AS proj_first_in_window,
-				argMax(cluster_id,       projection_version_ms) AS cluster_id,
-				argMax(duration_seconds, projection_version_ms) AS duration_seconds,
-				argMax(uploaded_bytes,   projection_version_ms) AS uploaded_bytes,
-				argMax(downloaded_bytes, projection_version_ms) AS downloaded_bytes,
-				argMax(closed_reason,    projection_version_ms) AS closed_reason
-			FROM periscope.viewer_sessions_final
-			WHERE tenant_id = ?
-			  AND projection_version_ms >= ?
-			  AND projection_version_ms <  ?
-			GROUP BY tenant_id, node_id, session_id
-		)
-		SELECT
-			c.cluster_id AS cluster_id,
-			''           AS origin_cluster_id,
-			sum(c.uploaded_bytes) / pow(1024, 3)                      AS ingress_gb,
-			sum(c.downloaded_bytes) / pow(1024, 3)                    AS egress_gb,
-			sum(c.duration_seconds) / 3600.0                          AS viewer_hours,
-			toInt64(uniqCombined(c.session_id))                       AS unique_viewers
-		FROM window_candidates c
-		LEFT ANTI JOIN (
-			SELECT DISTINCT tenant_id, node_id, session_id
-			FROM periscope.viewer_sessions_final
-			WHERE tenant_id = ?
-			  AND projection_version_ms < ?
-			  AND (tenant_id, node_id, session_id) IN (
-			      SELECT tenant_id, node_id, session_id FROM window_candidates
-			  )
-		) prior USING (tenant_id, node_id, session_id)
-		WHERE c.closed_reason = 'final'
-		GROUP BY c.cluster_id
-	`, tenantID, startTime.UnixMilli(), endTime.UnixMilli(), tenantID, startTime.UnixMilli())
+	rows, err := periscopequerydb.TenantViewerMetrics.Query(ctx, bs.clickhouse,
+		tenantID, startTime.UnixMilli(), endTime.UnixMilli(), tenantID, startTime.UnixMilli())
 	if err != nil {
 		return nil, err
 	}
@@ -1597,38 +1361,8 @@ func (bs *BillingSummarizer) ensureSourceActivation(ctx context.Context) (time.T
 
 func (bs *BillingSummarizer) earliestCanonicalBillingFact(ctx context.Context, tenantID string) (time.Time, bool, error) {
 	var firstMS sql.NullInt64
-	err := bs.clickhouse.QueryRowContext(ctx, `
-		SELECT min(first_ms)
-		FROM (
-			SELECT toInt64(min(projection_version_ms)) AS first_ms
-			FROM periscope.viewer_sessions_final
-			WHERE tenant_id = ?
-
-			UNION ALL
-
-			SELECT toInt64(min(projection_version_ms)) AS first_ms
-			FROM periscope.stream_sessions_final
-			WHERE tenant_id = ?
-
-			UNION ALL
-
-			SELECT toInt64(min(projection_version_ms)) AS first_ms
-			FROM periscope.processing_segments_final
-			WHERE tenant_id = ?
-
-			UNION ALL
-
-			SELECT toInt64(min(projection_version_ms)) AS first_ms
-			FROM periscope.storage_gb_seconds_5m
-			WHERE tenant_id = ?
-
-			UNION ALL
-
-			SELECT toInt64(toUnixTimestamp(min(window_start)) * 1000) AS first_ms
-			FROM periscope.api_usage_5m_v
-			WHERE tenant_id = ?
-		)
-	`, tenantID, tenantID, tenantID, tenantID, tenantID).Scan(&firstMS)
+	err := periscopequerydb.EarliestCanonicalBillingFact.QueryRow(ctx, bs.clickhouse,
+		tenantID, tenantID, tenantID, tenantID, tenantID).Scan(&firstMS)
 	if err != nil {
 		return time.Time{}, false, err
 	}
