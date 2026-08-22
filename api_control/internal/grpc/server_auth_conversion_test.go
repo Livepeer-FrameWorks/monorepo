@@ -244,7 +244,7 @@ func TestRefreshToken_LostRotationResponseRecoversSession(t *testing.T) {
 			AddRow("rt-1", "user-2", "tenant-2", true, time.Now().Add(-time.Hour), "rt-2"))
 
 	// Successor was never used: the rotation response never reached the client.
-	mock.ExpectQuery("SELECT revoked FROM commodore.refresh_tokens WHERE id").
+	mock.ExpectQuery("FROM commodore.refresh_tokens\\s+WHERE id").
 		WithArgs("rt-2").
 		WillReturnRows(sqlmock.NewRows([]string{"revoked"}).AddRow(false))
 
@@ -296,7 +296,7 @@ func TestRefreshToken_ReuseWithUsedSuccessorRevokesSessionFamily(t *testing.T) {
 			AddRow("rt-1", "user-2", "tenant-2", true, time.Now().Add(-time.Hour), "rt-2"))
 
 	// Successor is itself rotated: two parties share this session line.
-	mock.ExpectQuery("SELECT revoked FROM commodore.refresh_tokens WHERE id").
+	mock.ExpectQuery("FROM commodore.refresh_tokens\\s+WHERE id").
 		WithArgs("rt-2").
 		WillReturnRows(sqlmock.NewRows([]string{"revoked"}).AddRow(true))
 

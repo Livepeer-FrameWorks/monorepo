@@ -7,11 +7,10 @@ import (
 	"fmt"
 	"strings"
 
+	"frameworks/api_control/internal/database/commodoredb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 
 	"github.com/google/uuid"
-	"github.com/lib/pq"
 )
 
 // ReconcileAccounts reconciles every Account's users into commodore.users.
@@ -117,21 +116,8 @@ func validateUser(u AccountUser) error {
 }
 
 func reconcileUser(ctx context.Context, exec DBTX, tenantID string, u AccountUser, allowReset bool) (string, string, error) {
-	const probeSQL = `
-		SELECT id::text,
-		       COALESCE(first_name, ''),
-		       COALESCE(last_name, ''),
-		       role,
-		       COALESCE(permissions, '{}'),
-		       platform_operator
-		FROM commodore.users
-		WHERE tenant_id = $1::uuid AND email = $2`
-	var (
-		id, curFirst, curLast, curRole string
-		curPerms                       []string
-		curPlatformOp                  bool
-	)
-	err := exec.QueryRowContext(ctx, probeSQL, tenantID, u.Email).Scan(&id, &curFirst, &curLast, &curRole, database.ArrayScan(&curPerms), &curPlatformOp)
+	queries := commodoredb.New(exec)
+	current, err := queries.GetBootstrapUser(ctx, commodoredb.GetBootstrapUserParams{TenantID: tenantID, Email: u.Email})
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		hash, hashErr := auth.HashPassword(u.Password)
@@ -139,16 +125,11 @@ func reconcileUser(ctx context.Context, exec DBTX, tenantID string, u AccountUse
 			return "", "", fmt.Errorf("hash password: %w", hashErr)
 		}
 		userID := uuid.New().String()
-		const insertSQL = `
-			INSERT INTO commodore.users
-				(id, tenant_id, email, password_hash, first_name, last_name, role, permissions,
-				 platform_operator, is_active, verified, created_at, updated_at)
-			VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6, $7, $8,
-			        $9, true, true, NOW(), NOW())`
-		if _, insertErr := exec.ExecContext(ctx, insertSQL,
-			userID, tenantID, u.Email, hash, u.FirstName, u.LastName, u.Role,
-			pq.Array(defaultPermissions(u.Role)), u.PlatformOperator,
-		); insertErr != nil {
+		if insertErr := queries.CreateBootstrapUser(ctx, commodoredb.CreateBootstrapUserParams{
+			ID: userID, TenantID: tenantID, Email: u.Email, PasswordHash: hash,
+			FirstName: u.FirstName, LastName: u.LastName, Role: u.Role,
+			Permissions: defaultPermissions(u.Role), PlatformOperator: u.PlatformOperator,
+		}); insertErr != nil {
 			return "", "", fmt.Errorf("insert user: %w", insertErr)
 		}
 		return "created", "", nil
@@ -157,8 +138,8 @@ func reconcileUser(ctx context.Context, exec DBTX, tenantID string, u AccountUse
 	}
 
 	desiredPerms := defaultPermissions(u.Role)
-	profileEq := curFirst == u.FirstName && curLast == u.LastName && curRole == u.Role &&
-		stringSliceEq(curPerms, desiredPerms) && curPlatformOp == u.PlatformOperator
+	profileEq := current.FirstName == u.FirstName && current.LastName == u.LastName && current.Role == u.Role &&
+		stringSliceEq(current.Permissions, desiredPerms) && current.PlatformOperator == u.PlatformOperator
 
 	if u.ResetCredentials {
 		if !allowReset {
@@ -170,7 +151,7 @@ func reconcileUser(ctx context.Context, exec DBTX, tenantID string, u AccountUse
 			if profileEq {
 				return "noop", warn, nil
 			}
-			if err := updateUserProfile(ctx, exec, id, tenantID, u, desiredPerms); err != nil {
+			if err := updateUserProfile(ctx, queries, current.ID, tenantID, u, desiredPerms); err != nil {
 				return "", warn, err
 			}
 			return "updated", warn, nil
@@ -179,13 +160,11 @@ func reconcileUser(ctx context.Context, exec DBTX, tenantID string, u AccountUse
 		if hashErr != nil {
 			return "", "", fmt.Errorf("hash password: %w", hashErr)
 		}
-		const updateSQL = `
-			UPDATE commodore.users
-			SET first_name = $2, last_name = $3, role = $4, permissions = $5,
-			    password_hash = $6, platform_operator = $7, updated_at = NOW()
-			WHERE id = $1::uuid AND tenant_id = $8::uuid`
-		if _, updateErr := exec.ExecContext(ctx, updateSQL, id, u.FirstName, u.LastName, u.Role,
-			pq.Array(desiredPerms), hash, u.PlatformOperator, tenantID); updateErr != nil {
+		if updateErr := queries.UpdateBootstrapUserWithCredentials(ctx, commodoredb.UpdateBootstrapUserWithCredentialsParams{
+			FirstName: u.FirstName, LastName: u.LastName, Role: u.Role,
+			Permissions: desiredPerms, PasswordHash: hash, PlatformOperator: u.PlatformOperator,
+			ID: current.ID, TenantID: tenantID,
+		}); updateErr != nil {
 			return "", "", fmt.Errorf("update user (with credentials): %w", updateErr)
 		}
 		return "updated", "", nil
@@ -194,18 +173,17 @@ func reconcileUser(ctx context.Context, exec DBTX, tenantID string, u AccountUse
 	if profileEq {
 		return "noop", "", nil
 	}
-	if err := updateUserProfile(ctx, exec, id, tenantID, u, desiredPerms); err != nil {
+	if err := updateUserProfile(ctx, queries, current.ID, tenantID, u, desiredPerms); err != nil {
 		return "", "", err
 	}
 	return "updated", "", nil
 }
 
-func updateUserProfile(ctx context.Context, exec DBTX, id, tenantID string, u AccountUser, perms []string) error {
-	const updateSQL = `
-		UPDATE commodore.users
-		SET first_name = $2, last_name = $3, role = $4, permissions = $5, platform_operator = $6, updated_at = NOW()
-		WHERE id = $1::uuid AND tenant_id = $7::uuid`
-	if _, err := exec.ExecContext(ctx, updateSQL, id, u.FirstName, u.LastName, u.Role, pq.Array(perms), u.PlatformOperator, tenantID); err != nil {
+func updateUserProfile(ctx context.Context, queries *commodoredb.Queries, id, tenantID string, u AccountUser, perms []string) error {
+	if err := queries.UpdateBootstrapUserProfile(ctx, commodoredb.UpdateBootstrapUserProfileParams{
+		FirstName: u.FirstName, LastName: u.LastName, Role: u.Role,
+		Permissions: perms, PlatformOperator: u.PlatformOperator, ID: id, TenantID: tenantID,
+	}); err != nil {
 		return fmt.Errorf("update user profile: %w", err)
 	}
 	return nil

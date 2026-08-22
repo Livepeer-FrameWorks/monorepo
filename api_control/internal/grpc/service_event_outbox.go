@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"frameworks/api_control/internal/database/commodoredb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
@@ -46,9 +47,7 @@ type commodoreServiceOutboxRow struct {
 // transaction. A failed INSERT rolls back with the caller's tx.
 func (s *CommodoreServer) EnqueueServiceEventTx(
 	ctx context.Context,
-	exec interface {
-		QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-	},
+	exec commodoredb.DBTX,
 	event *ipcpb.ServiceEvent,
 ) (string, error) {
 	if event == nil {
@@ -58,16 +57,12 @@ func (s *CommodoreServer) EnqueueServiceEventTx(
 	if err != nil {
 		return "", fmt.Errorf("marshal service event: %w", err)
 	}
-	var id string
-	row := exec.QueryRowContext(ctx, `
-		INSERT INTO commodore.service_event_outbox
-			(event_type, tenant_id, user_id, resource_type, resource_id, payload)
-		VALUES ($1, $2::uuid, $3, $4, $5, $6::jsonb)
-		RETURNING id
-	`, event.GetEventType(), event.GetTenantId(), event.GetUserId(),
-		event.GetResourceType(), event.GetResourceId(), database.JSONText(payload))
-	if scanErr := row.Scan(&id); scanErr != nil {
-		return "", fmt.Errorf("insert service event outbox row: %w", scanErr)
+	id, err := commodoredb.New(exec).EnqueueServiceEvent(ctx, commodoredb.EnqueueServiceEventParams{
+		EventType: event.GetEventType(), TenantID: event.GetTenantId(), UserID: event.GetUserId(),
+		ResourceType: event.GetResourceType(), ResourceID: event.GetResourceId(), Payload: string(payload),
+	})
+	if err != nil {
+		return "", fmt.Errorf("insert service event outbox row: %w", err)
 	}
 	return id, nil
 }
@@ -147,45 +142,27 @@ func (s *CommodoreServer) claimCommodoreServiceOutboxBatch(ctx context.Context) 
 	err := database.WithRetryablePostgresTxWithHook(ctx, s.db, nil, func(error, int) {
 		s.recycleIdlePostgresConns()
 	}, func(tx *sql.Tx) error {
-		rows, qerr := tx.QueryContext(ctx, `
-			SELECT id::text, payload::text, attempts, created_at
-			FROM commodore.service_event_outbox
-			WHERE completed_at IS NULL
-			  AND (claimed_at IS NULL OR claimed_at < NOW() - $1::interval)
-			ORDER BY created_at
-			FOR UPDATE SKIP LOCKED
-			LIMIT $2
-		`, fmt.Sprintf("%d seconds", int(commodoreServiceOutboxLease.Seconds())), commodoreServiceOutboxBatchSize)
+		queries := commodoredb.New(tx)
+		rows, qerr := queries.ClaimServiceEventOutboxBatch(ctx, commodoredb.ClaimServiceEventOutboxBatchParams{
+			LeaseInterval: fmt.Sprintf("%d seconds", int(commodoreServiceOutboxLease.Seconds())),
+			BatchSize:     commodoreServiceOutboxBatchSize,
+		})
 		if qerr != nil {
 			return qerr
 		}
-		defer rows.Close()
 
 		batch := make([]commodoreServiceOutboxRow, 0, commodoreServiceOutboxBatchSize)
-		for rows.Next() {
-			var (
-				r           commodoreServiceOutboxRow
-				payloadText string
-			)
-			if scanErr := rows.Scan(&r.id, &payloadText, &r.attempts, &r.createdAt); scanErr != nil {
-				return scanErr
-			}
-			r.payload = []byte(payloadText)
-			batch = append(batch, r)
-		}
-		if rowsErr := rows.Err(); rowsErr != nil {
-			return rowsErr
+		for _, row := range rows {
+			batch = append(batch, commodoreServiceOutboxRow{
+				id: row.ID, payload: []byte(row.Payload), attempts: int(row.Attempts), createdAt: row.CreatedAt,
+			})
 		}
 		if len(batch) > 0 {
 			ids := make([]string, 0, len(batch))
 			for _, r := range batch {
 				ids = append(ids, r.id)
 			}
-			if _, uerr := tx.ExecContext(ctx, `
-				UPDATE commodore.service_event_outbox
-				SET claimed_at = NOW()
-				WHERE id = ANY($1::uuid[])
-			`, commodoreServiceOutboxIDArray(ids)); uerr != nil {
+			if uerr := queries.MarkServiceEventOutboxClaimed(ctx, ids); uerr != nil {
 				return uerr
 			}
 		}
@@ -196,11 +173,7 @@ func (s *CommodoreServer) claimCommodoreServiceOutboxBatch(ctx context.Context) 
 }
 
 func (s *CommodoreServer) markCommodoreServiceOutboxCompleted(ctx context.Context, id string) {
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE commodore.service_event_outbox
-		SET completed_at = NOW(), last_error = NULL
-		WHERE id = $1::uuid
-	`, id); err != nil {
+	if err := commodoredb.New(s.db).CompleteServiceEventOutbox(ctx, id); err != nil {
 		s.logger.WithError(err).WithField("outbox_id", id).
 			Warn("Failed to mark commodore service event outbox row completed")
 	}
@@ -211,11 +184,9 @@ func (s *CommodoreServer) recordCommodoreServiceOutboxFailure(ctx context.Contex
 	if cause != nil {
 		msg = cause.Error()
 	}
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE commodore.service_event_outbox
-		SET attempts = $2, last_error = $3, claimed_at = NULL
-		WHERE id = $1::uuid
-	`, id, attempts, msg); err != nil {
+	if err := commodoredb.New(s.db).FailServiceEventOutbox(ctx, commodoredb.FailServiceEventOutboxParams{
+		Attempts: int32(attempts), LastError: sql.NullString{String: msg, Valid: true}, ID: id,
+	}); err != nil {
 		s.logger.WithError(err).WithField("outbox_id", id).
 			Warn("Failed to record commodore service event outbox failure")
 	}
@@ -240,19 +211,4 @@ func (s *CommodoreServer) dispatchCommodoreServiceOutboxRow(_ context.Context, r
 		return []string{"decklog"}, err
 	}
 	return nil, nil
-}
-
-func commodoreServiceOutboxIDArray(ids []string) string {
-	if len(ids) == 0 {
-		return "{}"
-	}
-	out := "{"
-	for i, id := range ids {
-		if i > 0 {
-			out += ","
-		}
-		out += id
-	}
-	out += "}"
-	return out
 }

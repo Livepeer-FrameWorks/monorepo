@@ -220,13 +220,13 @@ func TestUnlinkWalletPreservesSigninMethod(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
 		mock.ExpectBegin()
-		mock.ExpectQuery("SELECT COALESCE\\(password_hash").
+		mock.ExpectQuery("FROM commodore.users\\s+WHERE id").
 			WithArgs("user-1", "tenant-1").
 			WillReturnRows(sqlmock.NewRows([]string{"has_password"}).AddRow(false))
 		mock.ExpectQuery("SELECT EXISTS").
 			WithArgs("wallet-1", "user-1", "tenant-1").
 			WillReturnRows(sqlmock.NewRows([]string{"owned"}).AddRow(true))
-		mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM commodore.wallet_identities").
+		mock.ExpectQuery("FROM commodore.wallet_identities\\s+WHERE user_id").
 			WithArgs("user-1", "tenant-1").
 			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 		mock.ExpectRollback()
@@ -245,18 +245,18 @@ func TestUnlinkWalletPreservesSigninMethod(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
 		mock.ExpectBegin()
-		mock.ExpectQuery("SELECT COALESCE\\(password_hash").
+		mock.ExpectQuery("FROM commodore.users\\s+WHERE id").
 			WithArgs("user-1", "tenant-1").
 			WillReturnRows(sqlmock.NewRows([]string{"has_password"}).AddRow(false))
 		mock.ExpectQuery("SELECT EXISTS").
 			WithArgs("wallet-1", "user-1", "tenant-1").
 			WillReturnRows(sqlmock.NewRows([]string{"owned"}).AddRow(true))
-		mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM commodore.wallet_identities").
+		mock.ExpectQuery("FROM commodore.wallet_identities\\s+WHERE user_id").
 			WithArgs("user-1", "tenant-1").
 			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
-		mock.ExpectExec("DELETE FROM commodore.wallet_identities").
+		mock.ExpectQuery("DELETE FROM commodore.wallet_identities").
 			WithArgs("wallet-1", "user-1", "tenant-1").
-			WillReturnResult(sqlmock.NewResult(0, 1))
+			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("wallet-1"))
 		mock.ExpectCommit()
 		expectOutboxInsert(mock)
 
@@ -273,15 +273,15 @@ func TestUnlinkWalletPreservesSigninMethod(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
 		mock.ExpectBegin()
-		mock.ExpectQuery("SELECT COALESCE\\(password_hash").
+		mock.ExpectQuery("FROM commodore.users\\s+WHERE id").
 			WithArgs("user-1", "tenant-1").
 			WillReturnRows(sqlmock.NewRows([]string{"has_password"}).AddRow(true))
 		mock.ExpectQuery("SELECT EXISTS").
 			WithArgs("wallet-1", "user-1", "tenant-1").
 			WillReturnRows(sqlmock.NewRows([]string{"owned"}).AddRow(true))
-		mock.ExpectExec("DELETE FROM commodore.wallet_identities").
+		mock.ExpectQuery("DELETE FROM commodore.wallet_identities").
 			WithArgs("wallet-1", "user-1", "tenant-1").
-			WillReturnResult(sqlmock.NewResult(0, 1))
+			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("wallet-1"))
 		mock.ExpectCommit()
 		expectOutboxInsert(mock)
 

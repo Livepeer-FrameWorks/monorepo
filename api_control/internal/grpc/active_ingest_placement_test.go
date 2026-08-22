@@ -40,18 +40,23 @@ func ingestStream(tenantID, internalName string) *commodorepb.ActiveIngestStream
 	}
 }
 
-func expectPlacementSync(mock sqlmock.Sqlmock, updatePattern string, affected int64, refused ...*commodorepb.ActiveIngestStream) {
+func expectPlacementSync(mock sqlmock.Sqlmock, renew bool, updatePattern string, affected int64, refused ...*commodorepb.ActiveIngestStream) {
 	mock.ExpectBegin()
-	mock.ExpectExec(updatePattern).
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(0, affected))
+	exec := mock.ExpectExec(updatePattern)
+	query := mock.ExpectQuery(`FROM unnest`)
+	if renew {
+		exec.WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), int64(activeIngestLease.Seconds()))
+		query.WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), int64(activeIngestLease.Seconds()))
+	} else {
+		exec.WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg())
+		query.WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg())
+	}
+	exec.WillReturnResult(sqlmock.NewResult(0, affected))
 	rows := sqlmock.NewRows([]string{"tenant_id", "internal_name", "claim_token", "cluster_id"})
 	for _, stream := range refused {
 		rows.AddRow(stream.GetTenantId(), stream.GetInternalName(), stream.GetClaimToken(), stream.GetClusterId())
 	}
-	mock.ExpectQuery(`FROM unnest`).
-		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
-		WillReturnRows(rows)
+	query.WillReturnRows(rows)
 	mock.ExpectCommit()
 }
 
@@ -63,7 +68,7 @@ func TestSyncActiveIngestPlacement_RenewRespectsContentionGuard(t *testing.T) {
 	s, mock, done := placementServer(t)
 	defer done()
 
-	expectPlacementSync(mock, `SET active_ingest_cluster_id = t\.cluster_id[\s\S]*active_ingest_cluster_updated_at < NOW\(\)[\s\S]*s\.active_ingest_claim_id = t\.claim_token`, 2)
+	expectPlacementSync(mock, true, `SET active_ingest_cluster_id = t\.cluster_id[\s\S]*active_ingest_cluster_updated_at < NOW\(\)[\s\S]*s\.active_ingest_claim_id = t\.claim_token`, 2)
 
 	resp, err := s.SyncActiveIngestPlacement(serviceCtx(), &commodorepb.SyncActiveIngestPlacementRequest{
 		ClusterId: "media-eu",
@@ -86,7 +91,7 @@ func TestSyncActiveIngestPlacement_ReleaseClearsOwnClaim(t *testing.T) {
 	s, mock, done := placementServer(t)
 	defer done()
 
-	expectPlacementSync(mock, `SET active_ingest_cluster_id = NULL[\s\S]*s\.active_ingest_cluster_id = t\.cluster_id`, 1)
+	expectPlacementSync(mock, false, `SET active_ingest_cluster_id = NULL[\s\S]*s\.active_ingest_cluster_id = t\.cluster_id`, 1)
 
 	resp, err := s.SyncActiveIngestPlacement(serviceCtx(), &commodorepb.SyncActiveIngestPlacementRequest{
 		ClusterId: "media-eu",
@@ -244,8 +249,8 @@ func TestClearStreamActiveCluster_ScopesUpdateByTenant(t *testing.T) {
 	s, mock, done := placementServer(t)
 	defer done()
 
-	mock.ExpectExec(`UPDATE commodore\.streams[\s\S]*tenant_id = \$3`).
-		WithArgs("stream-1", "media-eu", "t1", managedClaimToken("stream-1")).
+	mock.ExpectExec(`ClearManagedStreamActiveCluster[\s\S]*tenant_id = \$2`).
+		WithArgs("stream-1", "t1", "media-eu", managedClaimToken("stream-1")).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	resp, err := s.ClearStreamActiveCluster(serviceCtx(), &commodorepb.ClearStreamActiveClusterRequest{
@@ -273,7 +278,7 @@ func TestSyncActiveIngestPlacement_RenewEstablishesLapsedClaim(t *testing.T) {
 	s, mock, done := placementServer(t)
 	defer done()
 
-	expectPlacementSync(mock, `SET active_ingest_cluster_id = t\.cluster_id[\s\S]*active_ingest_cluster_id IS NULL[\s\S]*active_ingest_cluster_updated_at <`, 1)
+	expectPlacementSync(mock, true, `SET active_ingest_cluster_id = t\.cluster_id[\s\S]*active_ingest_cluster_id IS NULL[\s\S]*active_ingest_cluster_updated_at <`, 1)
 
 	if _, err := s.SyncActiveIngestPlacement(serviceCtx(), &commodorepb.SyncActiveIngestPlacementRequest{
 		ClusterId: "media-eu",
@@ -298,7 +303,7 @@ func TestSyncActiveIngestPlacement_ReleaseIsOwnerFenced(t *testing.T) {
 	stream := ingestStream("t1", "s1")
 	stream.ClaimToken = "someone-elses-connection"
 	refused := &commodorepb.ActiveIngestStream{TenantId: stream.GetTenantId(), InternalName: stream.GetInternalName(), ClaimToken: stream.GetClaimToken(), ClusterId: "media-eu"}
-	expectPlacementSync(mock, `SET active_ingest_cluster_id = NULL[\s\S]*s\.active_ingest_claim_id = t\.claim_token`, 0, refused)
+	expectPlacementSync(mock, false, `SET active_ingest_cluster_id = NULL[\s\S]*s\.active_ingest_claim_id = t\.claim_token`, 0, refused)
 	resp, err := s.SyncActiveIngestPlacement(serviceCtx(), &commodorepb.SyncActiveIngestPlacementRequest{
 		ClusterId: "media-eu",
 		Release:   []*commodorepb.ActiveIngestStream{stream},
@@ -367,7 +372,7 @@ func TestValidateStreamKey_ReportsClaimAcquisition(t *testing.T) {
 		AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk", "push")
 	mock.ExpectQuery("FROM commodore.streams").WithArgs("good-key").WillReturnRows(rows)
 	mock.ExpectQuery("UPDATE commodore.streams").
-		WithArgs("cluster-us", "good-key", "trigger-uuid-1").
+		WithArgs("cluster-us", "trigger-uuid-1", int64(activeIngestLease.Seconds()), "good-key").
 		WillReturnRows(claimReserved())
 
 	server := &CommodoreServer{
@@ -455,7 +460,7 @@ func TestValidateStreamKey_ContendedClaimIsNotAcquired(t *testing.T) {
 	// The guard matched nothing: someone else owns the live claim.
 	mock.ExpectQuery("UPDATE commodore.streams").WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("SELECT active_ingest_cluster_id").
-		WillReturnRows(sqlmock.NewRows([]string{"active_ingest_cluster_id"}).AddRow("cluster-us"))
+		WillReturnRows(sqlmock.NewRows([]string{"active_ingest_cluster_id", "active_ingest_claim_id"}).AddRow("cluster-us", "other-owner"))
 
 	server := &CommodoreServer{
 		db:            db,

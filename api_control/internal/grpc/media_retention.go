@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"frameworks/api_control/internal/database/commodoredb"
 	foghornclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
@@ -110,28 +111,29 @@ func streamOverrideColumn(target commodorepb.MediaRetentionTarget) string {
 // readTenantPerClassDefault returns the tenant's default for a specific
 // asset class. (0, false, nil) when the column is NULL or no policy row.
 func (s *CommodoreServer) readTenantPerClassDefault(ctx context.Context, tenantID string, target commodorepb.MediaRetentionTarget) (days int32, set bool, err error) {
-	classCol := perClassColumn(target)
-	if classCol == "" {
+	if perClassColumn(target) == "" {
 		return 0, false, nil
 	}
-	// classCol is one of three trusted constants — safe to interpolate.
-	query := fmt.Sprintf(`
-		SELECT %s
-		  FROM commodore.tenant_media_retention_policies
-		 WHERE tenant_id = $1::uuid
-	`, classCol)
-	var v sql.NullInt32
-	scanErr := s.db.QueryRowContext(ctx, query, tenantID).Scan(&v)
-	if errors.Is(scanErr, sql.ErrNoRows) {
+	row, queryErr := commodoredb.New(s.db).GetTenantMediaRetentionPolicy(ctx, tenantID)
+	if errors.Is(queryErr, sql.ErrNoRows) {
 		return 0, false, nil
 	}
-	if scanErr != nil {
-		return 0, false, scanErr
+	if queryErr != nil {
+		return 0, false, queryErr
 	}
-	if !v.Valid {
+	var value sql.NullInt32
+	switch target {
+	case commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_VOD:
+		value = row.DefaultVodRetentionDays
+	case commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_DVR:
+		value = row.DefaultDvrRetentionDays
+	case commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_CLIP:
+		value = row.DefaultClipRetentionDays
+	}
+	if !value.Valid {
 		return 0, false, nil
 	}
-	return v.Int32, true, nil
+	return value.Int32, true, nil
 }
 
 // readStreamRetentionOverride returns the per-stream override for DVR or
@@ -144,24 +146,27 @@ func (s *CommodoreServer) readStreamRetentionOverride(ctx context.Context, tenan
 	if streamID == "" || tenantID == "" {
 		return 0, false, nil
 	}
-	col := streamOverrideColumn(target)
-	if col == "" {
+	if streamOverrideColumn(target) == "" {
 		return 0, false, nil
 	}
-	// col is one of two trusted constants — safe to interpolate.
-	query := fmt.Sprintf(`SELECT %s FROM commodore.streams WHERE id = $1::uuid AND tenant_id = $2::uuid`, col)
-	var v sql.NullInt32
-	scanErr := s.db.QueryRowContext(ctx, query, streamID, tenantID).Scan(&v)
-	if errors.Is(scanErr, sql.ErrNoRows) {
+	row, queryErr := commodoredb.New(s.db).GetStreamRetentionOverrides(ctx, commodoredb.GetStreamRetentionOverridesParams{
+		StreamID: streamID,
+		TenantID: tenantID,
+	})
+	if errors.Is(queryErr, sql.ErrNoRows) {
 		return 0, false, nil
 	}
-	if scanErr != nil {
-		return 0, false, scanErr
+	if queryErr != nil {
+		return 0, false, queryErr
 	}
-	if !v.Valid {
+	value := row.DvrRetentionDaysOverride
+	if target == commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_CLIP {
+		value = row.ClipRetentionDaysOverride
+	}
+	if !value.Valid {
 		return 0, false, nil
 	}
-	return v.Int32, true, nil
+	return value.Int32, true, nil
 }
 
 // resolveInitialRetention computes the retention days for a brand-new
@@ -281,25 +286,13 @@ func (s *CommodoreServer) GetMediaRetentionPolicy(ctx context.Context, req *comm
 		bound = safeFallbackRetentionDays
 	}
 
-	var (
-		vodDays   sql.NullInt32
-		dvrDays   sql.NullInt32
-		clipDays  sql.NullInt32
-		updatedBy string
-		updatedAt time.Time
-	)
-	scanErr := s.db.QueryRowContext(ctx, `
-		SELECT default_vod_retention_days,
-		       default_dvr_retention_days,
-		       default_clip_retention_days,
-		       COALESCE(updated_by::text, ''),
-		       updated_at
-		  FROM commodore.tenant_media_retention_policies
-		 WHERE tenant_id = $1::uuid
-	`, tenantID).Scan(&vodDays, &dvrDays, &clipDays, &updatedBy, &updatedAt)
-	if scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
-		return nil, status.Errorf(codes.Internal, "policy lookup failed: %v", scanErr)
+	row, queryErr := commodoredb.New(s.db).GetTenantMediaRetentionPolicy(ctx, tenantID)
+	if queryErr != nil && !errors.Is(queryErr, sql.ErrNoRows) {
+		return nil, status.Errorf(codes.Internal, "policy lookup failed: %v", queryErr)
 	}
+	vodDays := row.DefaultVodRetentionDays
+	dvrDays := row.DefaultDvrRetentionDays
+	clipDays := row.DefaultClipRetentionDays
 
 	resp := &commodorepb.GetMediaRetentionPolicyResponse{
 		Bounds: &commodorepb.MediaRetentionBounds{MaxRecordingRetentionDays: bound},
@@ -309,7 +302,7 @@ func (s *CommodoreServer) GetMediaRetentionPolicy(ctx context.Context, req *comm
 			commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_DVR, dvrDays.Int32, dvrDays.Valid, bound),
 		EffectiveClipRetentionDays: resolveTenantPerClassEffective(
 			commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_CLIP, clipDays.Int32, clipDays.Valid, bound),
-		UpdatedBy: updatedBy,
+		UpdatedBy: row.UpdatedBy,
 	}
 	if vodDays.Valid {
 		v := vodDays.Int32
@@ -323,8 +316,8 @@ func (s *CommodoreServer) GetMediaRetentionPolicy(ctx context.Context, req *comm
 		v := clipDays.Int32
 		resp.DefaultClipRetentionDays = &v
 	}
-	if !updatedAt.IsZero() {
-		resp.UpdatedAt = timestamppb.New(updatedAt)
+	if row.UpdatedAt.Valid {
+		resp.UpdatedAt = timestamppb.New(row.UpdatedAt.Time)
 	}
 	return resp, nil
 }
@@ -376,30 +369,20 @@ func (s *CommodoreServer) SetMediaRetentionPolicy(ctx context.Context, req *comm
 		}
 	}
 
-	// column is a trusted internal constant — safe to interpolate.
-	var execErr error
-	if clear {
-		_, execErr = s.db.ExecContext(ctx, fmt.Sprintf(`
-			INSERT INTO commodore.tenant_media_retention_policies
-			            (tenant_id, %s, updated_by, created_at, updated_at)
-			VALUES      ($1::uuid, NULL, NULLIF($2, '')::uuid, NOW(), NOW())
-			ON CONFLICT (tenant_id) DO UPDATE
-			   SET %s         = NULL,
-			       updated_by = EXCLUDED.updated_by,
-			       updated_at = NOW()
-		`, column, column), tenantID, updatedBy)
-	} else {
-		// Upsert touches only the chosen column so other classes' overrides survive.
-		_, execErr = s.db.ExecContext(ctx, fmt.Sprintf(`
-			INSERT INTO commodore.tenant_media_retention_policies
-			            (tenant_id, %s, updated_by, created_at, updated_at)
-			VALUES      ($1::uuid, $2, NULLIF($3, '')::uuid, NOW(), NOW())
-			ON CONFLICT (tenant_id) DO UPDATE
-			   SET %s = EXCLUDED.%s,
-			       updated_by = EXCLUDED.updated_by,
-			       updated_at = NOW()
-		`, column, column, column), tenantID, days, updatedBy)
+	value := sql.NullInt32{Int32: days, Valid: !clear}
+	params := commodoredb.UpsertTenantMediaRetentionPolicyParams{
+		TenantID:  tenantID,
+		UpdatedBy: updatedBy,
 	}
+	switch target {
+	case commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_VOD:
+		params.ApplyVod, params.VodDays = true, value
+	case commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_DVR:
+		params.ApplyDvr, params.DvrDays = true, value
+	case commodorepb.MediaRetentionTarget_MEDIA_RETENTION_TARGET_CLIP:
+		params.ApplyClip, params.ClipDays = true, value
+	}
+	execErr := commodoredb.New(s.db).UpsertTenantMediaRetentionPolicy(ctx, params)
 	if execErr != nil {
 		return nil, status.Errorf(codes.Internal, "policy write failed: %v", execErr)
 	}
@@ -438,16 +421,15 @@ func (s *CommodoreServer) SetStreamRetentionOverrides(ctx context.Context, req *
 		return nil, status.Error(codes.InvalidArgument, "stream_id required")
 	}
 
-	// Verify tenant ownership before any update lands.
-	var ownedStream string
-	if scanErr := s.db.QueryRowContext(ctx,
-		`SELECT id::text FROM commodore.streams WHERE id = $1::uuid AND tenant_id = $2::uuid`,
-		streamID, tenantID,
-	).Scan(&ownedStream); scanErr != nil {
-		if errors.Is(scanErr, sql.ErrNoRows) {
+	queries := commodoredb.New(s.db)
+	if _, queryErr := queries.GetStreamRetentionOverrides(ctx, commodoredb.GetStreamRetentionOverridesParams{
+		StreamID: streamID,
+		TenantID: tenantID,
+	}); queryErr != nil {
+		if errors.Is(queryErr, sql.ErrNoRows) {
 			return nil, status.Error(codes.NotFound, "stream not found")
 		}
-		return nil, status.Errorf(codes.Internal, "stream lookup failed: %v", scanErr)
+		return nil, status.Errorf(codes.Internal, "stream lookup failed: %v", queryErr)
 	}
 
 	bound, bErr := s.fetchEntitlementBound(ctx, tenantID)
@@ -455,14 +437,15 @@ func (s *CommodoreServer) SetStreamRetentionOverrides(ctx context.Context, req *
 		return nil, status.Errorf(codes.Internal, "entitlement lookup failed: %v", bErr)
 	}
 
-	type assignment struct {
-		column string
-		value  sql.NullInt32 // Valid=false → set NULL
+	params := commodoredb.UpdateStreamRetentionOverridesParams{
+		StreamID: streamID,
+		TenantID: tenantID,
 	}
-	var assignments []assignment
-	add := func(column string, override *int32, clear bool) error {
+	fieldsSet := 0
+	add := func(column string, override *int32, clear bool, apply *bool, value *sql.NullInt32) error {
 		if clear {
-			assignments = append(assignments, assignment{column: column})
+			*apply = true
+			fieldsSet++
 			return nil
 		}
 		if override == nil {
@@ -477,53 +460,33 @@ func (s *CommodoreServer) SetStreamRetentionOverrides(ctx context.Context, req *
 				v = bound
 			}
 		}
-		assignments = append(assignments, assignment{column: column, value: sql.NullInt32{Valid: true, Int32: v}})
+		*apply = true
+		*value = sql.NullInt32{Valid: true, Int32: v}
+		fieldsSet++
 		return nil
 	}
-	if addErr := add("dvr_retention_days_override", req.DvrRetentionDaysOverride, req.GetClearDvrRetentionOverride()); addErr != nil {
+	if addErr := add("dvr_retention_days_override", req.DvrRetentionDaysOverride, req.GetClearDvrRetentionOverride(), &params.ApplyDvr, &params.DvrDays); addErr != nil {
 		return nil, addErr
 	}
-	if addErr := add("clip_retention_days_override", req.ClipRetentionDaysOverride, req.GetClearClipRetentionOverride()); addErr != nil {
+	if addErr := add("clip_retention_days_override", req.ClipRetentionDaysOverride, req.GetClearClipRetentionOverride(), &params.ApplyClip, &params.ClipDays); addErr != nil {
 		return nil, addErr
 	}
-	if len(assignments) == 0 {
+	if fieldsSet == 0 {
 		return nil, status.Error(codes.InvalidArgument, "no override fields set")
 	}
 
-	args := []any{streamID, tenantID}
-	sets := "updated_at = NOW()"
-	for _, a := range assignments {
-		if !a.value.Valid {
-			sets += ", " + a.column + " = NULL"
-			continue
-		}
-		args = append(args, a.value.Int32)
-		sets += fmt.Sprintf(", %s = $%d", a.column, len(args))
-	}
-	if _, execErr := s.db.ExecContext(ctx,
-		"UPDATE commodore.streams SET "+sets+" WHERE id = $1::uuid AND tenant_id = $2::uuid",
-		args...,
-	); execErr != nil {
+	row, execErr := queries.UpdateStreamRetentionOverrides(ctx, params)
+	if execErr != nil {
 		return nil, status.Errorf(codes.Internal, "stream override write failed: %v", execErr)
 	}
 
-	// Read back the resolved state so the caller sees persisted post-clamp values.
-	var dvrCol, clipCol sql.NullInt32
-	if scanErr := s.db.QueryRowContext(ctx,
-		`SELECT dvr_retention_days_override, clip_retention_days_override
-		   FROM commodore.streams
-		  WHERE id = $1::uuid`,
-		streamID,
-	).Scan(&dvrCol, &clipCol); scanErr != nil {
-		return nil, status.Errorf(codes.Internal, "stream override readback failed: %v", scanErr)
-	}
 	resp := &commodorepb.SetStreamRetentionOverridesResponse{StreamId: streamID}
-	if dvrCol.Valid {
-		v := dvrCol.Int32
+	if row.DvrRetentionDaysOverride.Valid {
+		v := row.DvrRetentionDaysOverride.Int32
 		resp.DvrRetentionDaysOverride = &v
 	}
-	if clipCol.Valid {
-		v := clipCol.Int32
+	if row.ClipRetentionDaysOverride.Valid {
+		v := row.ClipRetentionDaysOverride.Int32
 		resp.ClipRetentionDaysOverride = &v
 	}
 	return resp, nil
@@ -534,7 +497,6 @@ func (s *CommodoreServer) SetStreamRetentionOverrides(ctx context.Context, req *
 // Foghorn should match against, the canonical hash to key on, and the
 // originating cluster (for routing the Foghorn override RPC).
 type assetRetentionTarget struct {
-	table           string
 	artifactType    string
 	hash            string
 	originClusterID string
@@ -551,7 +513,6 @@ func (s *CommodoreServer) resolveAssetTarget(ctx context.Context, targetType com
 			return nil, err
 		}
 		return &assetRetentionTarget{
-			table:           "commodore.dvr_recordings",
 			artifactType:    "dvr",
 			hash:            dvrHash,
 			originClusterID: originClusterID,
@@ -563,7 +524,6 @@ func (s *CommodoreServer) resolveAssetTarget(ctx context.Context, targetType com
 			return nil, err
 		}
 		return &assetRetentionTarget{
-			table:           "commodore.clips",
 			artifactType:    "clip",
 			hash:            clipHash,
 			originClusterID: originClusterID,
@@ -575,7 +535,6 @@ func (s *CommodoreServer) resolveAssetTarget(ctx context.Context, targetType com
 			return nil, err
 		}
 		return &assetRetentionTarget{
-			table:           "commodore.vod_assets",
 			artifactType:    "vod",
 			hash:            vodHash,
 			originClusterID: originClusterID,
@@ -590,45 +549,24 @@ func (s *CommodoreServer) resolveAssetTarget(ctx context.Context, targetType com
 // VOD (uploads aren't stream-bound) and orphan rows. Used by reset to feed
 // the per-stream override into the cascade.
 func (s *CommodoreServer) streamIDForAsset(ctx context.Context, target *assetRetentionTarget, tenantID string) (string, error) {
+	queries := commodoredb.New(s.db)
+	params := commodoredb.GetDVRRetentionStreamIDParams{ArtifactHash: target.hash, TenantID: tenantID}
+	var (
+		streamID string
+		err      error
+	)
 	switch target.artifactType {
 	case "dvr":
-		var streamID sql.NullString
-		err := s.db.QueryRowContext(ctx, `
-			SELECT stream_id::text
-			  FROM commodore.dvr_recordings
-			 WHERE dvr_hash = $1
-			   AND tenant_id = $2::uuid
-		`, target.hash, tenantID).Scan(&streamID)
-		if errors.Is(err, sql.ErrNoRows) || err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return "", nil
-			}
-			return "", err
-		}
-		if !streamID.Valid {
-			return "", nil
-		}
-		return streamID.String, nil
+		streamID, err = queries.GetDVRRetentionStreamID(ctx, params)
 	case "clip":
-		var streamID sql.NullString
-		err := s.db.QueryRowContext(ctx, `
-			SELECT stream_id::text
-			  FROM commodore.clips
-			 WHERE clip_hash = $1
-			   AND tenant_id = $2::uuid
-		`, target.hash, tenantID).Scan(&streamID)
-		if errors.Is(err, sql.ErrNoRows) || err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return "", nil
-			}
-			return "", err
-		}
-		if !streamID.Valid {
-			return "", nil
-		}
-		return streamID.String, nil
+		streamID, err = queries.GetClipRetentionStreamID(ctx, commodoredb.GetClipRetentionStreamIDParams(params))
+	default:
+		return "", nil
 	}
-	return "", nil
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return streamID, err
 }
 
 func (s *CommodoreServer) assertClipTenant(ctx context.Context, identifier, tenantID string) (originClusterID, clipHash string, err error) {
@@ -638,18 +576,16 @@ func (s *CommodoreServer) assertClipTenant(ctx context.Context, identifier, tena
 	if identifier == "" {
 		return "", "", status.Error(codes.InvalidArgument, "clip id is required")
 	}
-	if scanErr := s.db.QueryRowContext(ctx,
-		`SELECT COALESCE(origin_cluster_id, ''), clip_hash
-		   FROM commodore.clips
-		  WHERE tenant_id = $2::uuid
-		    AND (clip_hash = $1 OR id::text = $1)`,
-		identifier, tenantID,
-	).Scan(&originClusterID, &clipHash); scanErr != nil {
-		if errors.Is(scanErr, sql.ErrNoRows) {
+	row, queryErr := commodoredb.New(s.db).ResolveClipTenantArtifact(ctx, commodoredb.ResolveClipTenantArtifactParams{
+		TenantID: tenantID, Identifier: identifier,
+	})
+	if queryErr != nil {
+		if errors.Is(queryErr, sql.ErrNoRows) {
 			return "", "", status.Error(codes.NotFound, "clip not found")
 		}
-		return "", "", status.Errorf(codes.Internal, "tenant lookup failed: %v", scanErr)
+		return "", "", status.Errorf(codes.Internal, "tenant lookup failed: %v", queryErr)
 	}
+	originClusterID, clipHash = row.OriginClusterID, row.ClipHash
 	if originClusterID == "" {
 		return "", "", status.Error(codes.FailedPrecondition, "clip origin cluster is missing")
 	}
@@ -663,23 +599,20 @@ func (s *CommodoreServer) assertVodTenant(ctx context.Context, identifier, tenan
 	if identifier == "" {
 		return "", "", status.Error(codes.InvalidArgument, "vod asset id is required")
 	}
-	var originType string
-	if scanErr := s.db.QueryRowContext(ctx,
-		`SELECT COALESCE(origin_cluster_id, ''), vod_hash, COALESCE(origin_type, '')
-		   FROM commodore.vod_assets
-		  WHERE tenant_id = $2::uuid
-		    AND (vod_hash = $1 OR id::text = $1)`,
-		identifier, tenantID,
-	).Scan(&originClusterID, &vodHash, &originType); scanErr != nil {
-		if errors.Is(scanErr, sql.ErrNoRows) {
+	row, queryErr := commodoredb.New(s.db).ResolveVODTenantArtifact(ctx, commodoredb.ResolveVODTenantArtifactParams{
+		TenantID: tenantID, Identifier: identifier,
+	})
+	if queryErr != nil {
+		if errors.Is(queryErr, sql.ErrNoRows) {
 			return "", "", status.Error(codes.NotFound, "vod asset not found")
 		}
-		return "", "", status.Errorf(codes.Internal, "tenant lookup failed: %v", scanErr)
+		return "", "", status.Errorf(codes.Internal, "tenant lookup failed: %v", queryErr)
 	}
+	originClusterID, vodHash = row.OriginClusterID, row.VodHash
 	// A DVR chapter is stored as a vod_asset (origin_type='dvr_chapter') but its retention is
 	// governed by the parent DVR's policy/ledger, not per-asset VOD retention. Editing it here
 	// would desync the chapter from its recording, so reject — chapter retention is chapter-aware.
-	if originType == "dvr_chapter" {
+	if row.OriginType == "dvr_chapter" {
 		return "", "", status.Error(codes.FailedPrecondition, "asset is a DVR chapter; retention is managed by the parent recording")
 	}
 	if originClusterID == "" {
@@ -688,30 +621,41 @@ func (s *CommodoreServer) assertVodTenant(ctx context.Context, identifier, tenan
 	return originClusterID, vodHash, nil
 }
 
-// hashColumn returns the SQL column name in the asset table that holds the
-// canonical hash. Trusted internal switch.
-func (t *assetRetentionTarget) hashColumn() string {
+func (t *assetRetentionTarget) readRetentionUntil(ctx context.Context, db *sql.DB, tenantID string) (sql.NullTime, error) {
+	queries := commodoredb.New(db)
+	params := commodoredb.GetDVRRetentionUntilParams{ArtifactHash: t.hash, TenantID: tenantID}
 	switch t.artifactType {
 	case "dvr":
-		return "dvr_hash"
+		return queries.GetDVRRetentionUntil(ctx, params)
 	case "clip":
-		return "clip_hash"
+		return queries.GetClipRetentionUntil(ctx, commodoredb.GetClipRetentionUntilParams(params))
 	case "vod":
-		return "vod_hash"
+		return queries.GetVODRetentionUntil(ctx, commodoredb.GetVODRetentionUntilParams(params))
+	default:
+		return sql.NullTime{}, status.Error(codes.InvalidArgument, "unsupported retention artifact type")
 	}
-	return ""
 }
 
-func (t *assetRetentionTarget) readRetentionUntil(ctx context.Context, db *sql.DB, tenantID string) (sql.NullTime, error) {
-	var retentionUntil sql.NullTime
-	query := fmt.Sprintf(`
-		SELECT retention_until
-		  FROM %s
-		 WHERE %s = $1
-		   AND tenant_id = $2::uuid
-	`, t.table, t.hashColumn())
-	err := db.QueryRowContext(ctx, query, t.hash, tenantID).Scan(&retentionUntil)
-	return retentionUntil, err
+func (t *assetRetentionTarget) applyRetentionState(ctx context.Context, db *sql.DB, tenantID, source string, overrideDays sql.NullInt32, overrideUntil, retentionUntil sql.NullTime) error {
+	queries := commodoredb.New(db)
+	params := commodoredb.ApplyDVRRetentionStateParams{
+		OverrideDays:    overrideDays,
+		OverrideUntil:   overrideUntil,
+		RetentionSource: sql.NullString{String: source, Valid: true},
+		RetentionUntil:  retentionUntil,
+		ArtifactHash:    t.hash,
+		TenantID:        tenantID,
+	}
+	switch t.artifactType {
+	case "dvr":
+		return queries.ApplyDVRRetentionState(ctx, params)
+	case "clip":
+		return queries.ApplyClipRetentionState(ctx, commodoredb.ApplyClipRetentionStateParams(params))
+	case "vod":
+		return queries.ApplyVODRetentionState(ctx, commodoredb.ApplyVODRetentionStateParams(params))
+	default:
+		return status.Error(codes.InvalidArgument, "unsupported retention artifact type")
+	}
 }
 
 // UpdateAssetRetention writes a per-asset retention override and pushes
@@ -814,37 +758,9 @@ func (s *CommodoreServer) UpdateAssetRetention(ctx context.Context, req *commodo
 		retentionDays = daysUntil(retentionUntil)
 	}
 
-	// Table name + hash column come from the resolved target — both are
-	// internal trusted strings (not user input), so direct interpolation
-	// into the SQL is safe and keeps the parameter binding clean.
-	var execErr error
-	if keepForever {
-		updateSQL := fmt.Sprintf(`
-			UPDATE %s
-			   SET retention_override_days  = NULL,
-			       retention_override_until = NULL,
-			       retention_source         = $1,
-			       retention_until          = NULL,
-			       updated_at               = NOW()
-			 WHERE %s     = $2
-			   AND tenant_id = $3::uuid
-		`, target.table, target.hashColumn())
-		_, execErr = s.db.ExecContext(ctx, updateSQL, retentionSourceAsset, target.hash, tenantID)
-	} else {
-		updateSQL := fmt.Sprintf(`
-			UPDATE %s
-			   SET retention_override_days  = $1,
-			       retention_override_until = $2,
-			       retention_source         = $3,
-			       retention_until          = $2,
-			       updated_at               = NOW()
-			 WHERE %s     = $4
-			   AND tenant_id = $5::uuid
-		`, target.table, target.hashColumn())
-		_, execErr = s.db.ExecContext(ctx, updateSQL,
-			retentionDays, retentionUntil, retentionSourceAsset, target.hash, tenantID,
-		)
-	}
+	retentionState := sql.NullTime{Time: retentionUntil, Valid: !keepForever}
+	execErr := target.applyRetentionState(ctx, s.db, tenantID, retentionSourceAsset,
+		sql.NullInt32{Int32: retentionDays, Valid: !keepForever}, retentionState, retentionState)
 	if execErr != nil {
 		s.restoreFoghornRetention(ctx, foghornClient, tenantID, target, previousUntil)
 		return nil, status.Errorf(codes.Internal, "override write failed: %v", execErr)
@@ -957,32 +873,8 @@ func (s *CommodoreServer) ResetAssetRetention(ctx context.Context, req *commodor
 		retentionDays = daysUntil(newUntil)
 	}
 
-	var execErr error
-	if keepForever {
-		clearSQL := fmt.Sprintf(`
-			UPDATE %s
-			   SET retention_override_days  = NULL,
-			       retention_override_until = NULL,
-			       retention_source         = $1,
-			       retention_until          = NULL,
-			       updated_at               = NOW()
-			 WHERE %s     = $2
-			   AND tenant_id = $3::uuid
-		`, target.table, target.hashColumn())
-		_, execErr = s.db.ExecContext(ctx, clearSQL, source, target.hash, tenantID)
-	} else {
-		clearSQL := fmt.Sprintf(`
-			UPDATE %s
-			   SET retention_override_days  = NULL,
-			       retention_override_until = NULL,
-			       retention_source         = $1,
-			       retention_until          = $2,
-			       updated_at               = NOW()
-			 WHERE %s     = $3
-			   AND tenant_id = $4::uuid
-		`, target.table, target.hashColumn())
-		_, execErr = s.db.ExecContext(ctx, clearSQL, source, newUntil, target.hash, tenantID)
-	}
+	execErr := target.applyRetentionState(ctx, s.db, tenantID, source, sql.NullInt32{}, sql.NullTime{},
+		sql.NullTime{Time: newUntil, Valid: !keepForever})
 	if execErr != nil {
 		s.restoreFoghornRetention(ctx, foghornClient, tenantID, target, previousUntil)
 		return nil, status.Errorf(codes.Internal, "override clear failed: %v", execErr)

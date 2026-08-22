@@ -61,7 +61,7 @@ func TestRegisterDVR(t *testing.T) {
 		// The business row and its durable creation intent are inserted atomically.
 		mock.ExpectBegin()
 		// Parent-deletion fence: the DVR's parent stream is still live.
-		mock.ExpectQuery(`SELECT deleted_at IS NULL FROM commodore\.streams WHERE id = .* AND tenant_id = .* FOR UPDATE`).
+		mock.ExpectQuery(`SELECT CASE WHEN deleted_at IS NULL THEN TRUE ELSE FALSE END::boolean AS live FROM commodore\.streams WHERE id = .* AND tenant_id = .* FOR UPDATE`).
 			WithArgs("stream-uuid-1", "t1").
 			WillReturnRows(sqlmock.NewRows([]string{"live"}).AddRow(true))
 		mock.ExpectExec("INSERT INTO commodore.dvr_recordings").
@@ -104,7 +104,7 @@ func TestRegisterDVR(t *testing.T) {
 			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("stream-uuid-1"))
 		mock.ExpectBegin()
 		// The parent is soft-deleted (deletion saga in flight) → the fence returns not-live.
-		mock.ExpectQuery(`SELECT deleted_at IS NULL FROM commodore\.streams WHERE id = .* AND tenant_id = .* FOR UPDATE`).
+		mock.ExpectQuery(`SELECT CASE WHEN deleted_at IS NULL THEN TRUE ELSE FALSE END::boolean AS live FROM commodore\.streams WHERE id = .* AND tenant_id = .* FOR UPDATE`).
 			WithArgs("stream-uuid-1", "t1").
 			WillReturnRows(sqlmock.NewRows([]string{"live"}).AddRow(false))
 		mock.ExpectRollback()

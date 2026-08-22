@@ -40,9 +40,11 @@ func TestReadTenantPerClassDefault(t *testing.T) {
 	t.Run("value present", func(t *testing.T) {
 		s, mock, done := newRetentionServer(t)
 		defer done()
-		mock.ExpectQuery(`SELECT default_dvr_retention_days[\s\S]*FROM commodore\.tenant_media_retention_policies`).
+		mock.ExpectQuery(`SELECT default_vod_retention_days[\s\S]*FROM commodore\.tenant_media_retention_policies`).
 			WithArgs(tenant).
-			WillReturnRows(sqlmock.NewRows([]string{"default_dvr_retention_days"}).AddRow(int32(14)))
+			WillReturnRows(sqlmock.NewRows([]string{
+				"default_vod_retention_days", "default_dvr_retention_days", "default_clip_retention_days", "updated_by", "updated_at",
+			}).AddRow(nil, int32(14), nil, "", time.Now()))
 
 		days, set, err := s.readTenantPerClassDefault(context.Background(), tenant, tgtDVR)
 		if err != nil || !set || days != 14 {
@@ -58,7 +60,9 @@ func TestReadTenantPerClassDefault(t *testing.T) {
 		defer done()
 		mock.ExpectQuery(`FROM commodore\.tenant_media_retention_policies`).
 			WithArgs(tenant).
-			WillReturnRows(sqlmock.NewRows([]string{"default_clip_retention_days"}).AddRow(nil))
+			WillReturnRows(sqlmock.NewRows([]string{
+				"default_vod_retention_days", "default_dvr_retention_days", "default_clip_retention_days", "updated_by", "updated_at",
+			}).AddRow(nil, nil, nil, "", time.Now()))
 
 		_, set, err := s.readTenantPerClassDefault(context.Background(), tenant, tgtClip)
 		if err != nil || set {
@@ -100,7 +104,8 @@ func TestReadStreamRetentionOverride(t *testing.T) {
 		defer done()
 		mock.ExpectQuery(`FROM commodore\.streams WHERE id`).
 			WithArgs(stream, tenant).
-			WillReturnRows(sqlmock.NewRows([]string{"dvr_retention_days_override"}).AddRow(int32(7)))
+			WillReturnRows(sqlmock.NewRows([]string{"stream_id", "dvr_retention_days_override", "clip_retention_days_override"}).
+				AddRow(stream, int32(7), nil))
 
 		days, set, err := s.readStreamRetentionOverride(context.Background(), tenant, stream, tgtDVR)
 		if err != nil || !set || days != 7 {
@@ -144,7 +149,8 @@ func TestResolveInitialRetention_Cascade(t *testing.T) {
 		// Only the stream-override read should fire; tenant default must not.
 		mock.ExpectQuery(`FROM commodore\.streams WHERE id`).
 			WithArgs(stream, tenant).
-			WillReturnRows(sqlmock.NewRows([]string{"dvr_retention_days_override"}).AddRow(int32(7)))
+			WillReturnRows(sqlmock.NewRows([]string{"stream_id", "dvr_retention_days_override", "clip_retention_days_override"}).
+				AddRow(stream, int32(7), nil))
 
 		got, err := s.resolveInitialRetention(context.Background(), tgtDVR, tenant, stream)
 		if err != nil || got != 7 {
@@ -160,10 +166,13 @@ func TestResolveInitialRetention_Cascade(t *testing.T) {
 		defer done()
 		mock.ExpectQuery(`FROM commodore\.streams WHERE id`).
 			WithArgs(stream, tenant).
-			WillReturnRows(sqlmock.NewRows([]string{"dvr_retention_days_override"}).AddRow(nil))
+			WillReturnRows(sqlmock.NewRows([]string{"stream_id", "dvr_retention_days_override", "clip_retention_days_override"}).
+				AddRow(stream, nil, nil))
 		mock.ExpectQuery(`FROM commodore\.tenant_media_retention_policies`).
 			WithArgs(tenant).
-			WillReturnRows(sqlmock.NewRows([]string{"default_dvr_retention_days"}).AddRow(int32(20)))
+			WillReturnRows(sqlmock.NewRows([]string{
+				"default_vod_retention_days", "default_dvr_retention_days", "default_clip_retention_days", "updated_by", "updated_at",
+			}).AddRow(nil, int32(20), nil, "", time.Now()))
 
 		got, err := s.resolveInitialRetention(context.Background(), tgtDVR, tenant, stream)
 		if err != nil || got != 20 {
@@ -194,10 +203,13 @@ func TestResolveInitialRetention_Cascade(t *testing.T) {
 		defer done()
 		mock.ExpectQuery(`FROM commodore\.streams WHERE id`).
 			WithArgs(stream, tenant).
-			WillReturnRows(sqlmock.NewRows([]string{"dvr_retention_days_override"}).AddRow(nil))
+			WillReturnRows(sqlmock.NewRows([]string{"stream_id", "dvr_retention_days_override", "clip_retention_days_override"}).
+				AddRow(stream, nil, nil))
 		mock.ExpectQuery(`FROM commodore\.tenant_media_retention_policies`).
 			WithArgs(tenant).
-			WillReturnRows(sqlmock.NewRows([]string{"default_dvr_retention_days"}).AddRow(int32(365)))
+			WillReturnRows(sqlmock.NewRows([]string{
+				"default_vod_retention_days", "default_dvr_retention_days", "default_clip_retention_days", "updated_by", "updated_at",
+			}).AddRow(nil, int32(365), nil, "", time.Now()))
 
 		got, err := s.resolveInitialRetention(context.Background(), tgtDVR, tenant, stream)
 		if err != nil || got != 30 {

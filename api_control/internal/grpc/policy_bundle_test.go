@@ -199,7 +199,11 @@ func TestGetSignedPolicyBundle(t *testing.T) {
 			WithArgs(streamID).
 			WillReturnRows(sqlmock.NewRows([]string{"policy", "internal_name", "tenant_id"}).
 				AddRow(`{"require_auth":true}`, "live+abc", tenantID))
-		// 2. next monotonic version (entitlement now comes from the QM RPC stub)
+		// 2. serialize and allocate the next monotonic version.
+		mock.ExpectBegin()
+		mock.ExpectExec("pg_advisory_xact_lock").
+			WithArgs(tenantID, streamID).
+			WillReturnResult(sqlmock.NewResult(0, 0))
 		mock.ExpectQuery("MAX").
 			WithArgs(tenantID, streamID).
 			WillReturnRows(sqlmock.NewRows([]string{"next"}).AddRow(int64(5)))
@@ -207,6 +211,7 @@ func TestGetSignedPolicyBundle(t *testing.T) {
 		mock.ExpectExec("INSERT INTO commodore.policy_bundle_versions").
 			WithArgs(tenantID, streamID, int64(5), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectCommit()
 
 		resp, err := s.GetSignedPolicyBundle(svcCtx(), &commodorepb.GetSignedPolicyBundleRequest{
 			TenantId: tenantID, StreamId: streamID,
@@ -260,12 +265,17 @@ func TestGetSignedPolicyBundle(t *testing.T) {
 			WithArgs(streamID).
 			WillReturnRows(sqlmock.NewRows([]string{"policy", "internal_name", "tenant_id"}).
 				AddRow("", "live+abc", tenantID))
+		mock.ExpectBegin()
+		mock.ExpectExec("pg_advisory_xact_lock").
+			WithArgs(tenantID, streamID).
+			WillReturnResult(sqlmock.NewResult(0, 0))
 		mock.ExpectQuery("MAX").
 			WithArgs(tenantID, streamID).
 			WillReturnRows(sqlmock.NewRows([]string{"next"}).AddRow(int64(1)))
 		mock.ExpectExec("INSERT INTO commodore.policy_bundle_versions").
 			WithArgs(tenantID, streamID, int64(1), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
 			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectCommit()
 
 		resp, err := s.GetSignedPolicyBundle(svcCtx(), &commodorepb.GetSignedPolicyBundleRequest{
 			TenantId: tenantID, StreamId: streamID,

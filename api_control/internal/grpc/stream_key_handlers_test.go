@@ -76,7 +76,7 @@ func TestRefreshStreamKey(t *testing.T) {
 			WithArgs(sqlmock.AnyArg(), "s1", "u1", "t1").
 			WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectQuery("SELECT playback_id FROM commodore.streams").
-			WithArgs("s1").
+			WithArgs("s1", "u1", "t1").
 			WillReturnRows(sqlmock.NewRows([]string{"playback_id"}).AddRow("pb-1"))
 		expectOutboxInsert(mock)
 
@@ -198,10 +198,10 @@ func TestListStreamKeys(t *testing.T) {
 			WithArgs("s1", "u1", "t1").
 			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 		mock.ExpectQuery("SELECT COUNT").
-			WithArgs("s1").
+			WithArgs("s1", "u1", "t1").
 			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
 		mock.ExpectQuery("FROM commodore.stream_keys").
-			WithArgs("s1").
+			WithArgs("s1", "u1", "t1", int32(51)).
 			WillReturnRows(sqlmock.NewRows([]string{
 				"id", "tenant_id", "user_id", "stream_id", "key_value", "key_name",
 				"is_active", "last_used_at", "created_at", "updated_at",
@@ -256,8 +256,8 @@ func TestDeactivateStreamKey(t *testing.T) {
 		mock.ExpectQuery("SELECT EXISTS").
 			WithArgs("s1", "u1", "t1").
 			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
-		mock.ExpectExec("UPDATE commodore.stream_keys SET is_active = false").
-			WithArgs("k1", "s1").
+		mock.ExpectExec("UPDATE commodore.stream_keys").
+			WithArgs("k1", "s1", "u1", "t1").
 			WillReturnResult(sqlmock.NewResult(0, 0))
 		_, err := s.DeactivateStreamKey(ctxAs("u1", "t1", "owner"), &commodorepb.DeactivateStreamKeyRequest{StreamId: "s1", KeyId: "k1"})
 		wantCode(t, err, codes.NotFound)
@@ -272,8 +272,8 @@ func TestDeactivateStreamKey(t *testing.T) {
 		mock.ExpectQuery("SELECT EXISTS").
 			WithArgs("s1", "u1", "t1").
 			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
-		mock.ExpectExec("UPDATE commodore.stream_keys SET is_active = false").
-			WithArgs("k1", "s1").
+		mock.ExpectExec("UPDATE commodore.stream_keys").
+			WithArgs("k1", "s1", "u1", "t1").
 			WillReturnResult(sqlmock.NewResult(0, 1))
 		expectOutboxInsert(mock)
 

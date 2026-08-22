@@ -83,8 +83,8 @@ func TestRecordCommodoreServiceOutboxFailureReleasesLease(t *testing.T) {
 	}
 	defer db.Close() //nolint:errcheck
 
-	mock.ExpectExec(`SET attempts = \$2, last_error = \$3, claimed_at = NULL`).
-		WithArgs("outbox-1", 4, "decklog unreachable").
+	mock.ExpectExec(`SET attempts = \$1, last_error = \$2, claimed_at = NULL`).
+		WithArgs(4, "decklog unreachable", "outbox-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	server := &CommodoreServer{db: db, logger: logrus.New()}

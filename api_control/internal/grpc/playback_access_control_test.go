@@ -25,7 +25,7 @@ func TestSetPlaybackPolicy_DeletedAssetReturnsNotFoundNoMutation(t *testing.T) {
 	defer done()
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`(?s)UPDATE commodore.vod_assets AS c.*NOT EXISTS.*artifact_catalog_tombstones.*RETURNING c.vod_hash`).
+	mock.ExpectQuery(`(?s)UPDATE commodore.vod_assets AS v.*NOT EXISTS.*artifact_catalog_tombstones.*RETURNING v.vod_hash`).
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectRollback()
 

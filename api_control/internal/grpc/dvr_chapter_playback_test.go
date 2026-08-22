@@ -90,7 +90,7 @@ func TestResolveChapterPlaybackID_Roundtrip(t *testing.T) {
 	}
 	defer db.Close()
 
-	mock.ExpectQuery(`SELECT cp.chapter_id, cp.tenant_id::text, cp.artifact_hash`).
+	mock.ExpectQuery(`ResolveChapterByPlaybackID`).
 		WithArgs("pb_existing_chapter").
 		WillReturnRows(sqlmock.NewRows([]string{"chapter_id", "tenant_id", "artifact_hash"}).
 			AddRow("chap-1", "tenant-1", "artifact-aaa"))
@@ -120,7 +120,7 @@ func TestResolveChapterPlaybackID_NotFoundReturnsFoundFalse(t *testing.T) {
 	}
 	defer db.Close()
 
-	mock.ExpectQuery(`SELECT cp.chapter_id, cp.tenant_id::text, cp.artifact_hash`).
+	mock.ExpectQuery(`ResolveChapterByPlaybackID`).
 		WithArgs("pb_missing").
 		WillReturnRows(sqlmock.NewRows([]string{"chapter_id", "tenant_id", "artifact_hash"}))
 

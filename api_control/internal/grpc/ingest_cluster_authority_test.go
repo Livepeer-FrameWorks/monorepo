@@ -43,8 +43,8 @@ func serverWithRoute(t *testing.T, db *sql.DB, route *clusterRoute) *CommodoreSe
 }
 
 func expectStreamKeyRow(mock sqlmock.Sqlmock, leasedCluster any, leaseFresh any) {
-	mock.ExpectQuery(`WHERE s\.stream_key = \$1 AND s\.deleted_at IS NULL`).
-		WithArgs("sk_live").
+	mock.ExpectQuery(`ResolveStreamContextByIdentifier`).
+		WithArgs(int64(activeIngestLease.Seconds()), "stream_key", "sk_live").
 		WillReturnRows(sqlmock.NewRows(streamContextCols).
 			AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk", "push", false, leasedCluster, leaseFresh))
 }
@@ -71,7 +71,7 @@ func TestResolveStreamContext_PublishIntentRejectsEmptyEntitlement(t *testing.T)
 		t.Fatalf("sqlmock: %v", err)
 	}
 	defer db.Close()
-	expectStreamKeyRow(mock, nil, nil)
+	expectStreamKeyRow(mock, nil, false)
 
 	// No cluster the tenant's plan permits.
 	s := serverWithRoute(t, db, &clusterRoute{clusterID: "media-eu"})
@@ -95,7 +95,7 @@ func TestResolveStreamContext_PublishIntentAdmitsWhenAnyClusterIsHealthy(t *test
 		t.Fatalf("sqlmock: %v", err)
 	}
 	defer db.Close()
-	expectStreamKeyRow(mock, nil, nil)
+	expectStreamKeyRow(mock, nil, false)
 
 	degraded := healthyPeer("media-eu")
 	degraded.HealthStatus = "degraded"
@@ -124,7 +124,7 @@ func TestResolveStreamContext_PublishIntentRejectsWhenNoClusterIsHealthy(t *test
 		t.Fatalf("sqlmock: %v", err)
 	}
 	defer db.Close()
-	expectStreamKeyRow(mock, nil, nil)
+	expectStreamKeyRow(mock, nil, false)
 
 	degraded := healthyPeer("media-eu")
 	degraded.HealthStatus = "degraded"
@@ -217,10 +217,10 @@ func TestResolveStreamContext_NonPublishIntentStillSkipsClusterGate(t *testing.T
 		t.Fatalf("sqlmock: %v", err)
 	}
 	defer db.Close()
-	mock.ExpectQuery(`WHERE s\.internal_name = \$1`).
-		WithArgs("internal").
+	mock.ExpectQuery(`ResolveStreamContextByIdentifier`).
+		WithArgs(int64(activeIngestLease.Seconds()), "internal_name", "internal").
 		WillReturnRows(sqlmock.NewRows(streamContextCols).
-			AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk", "mist_native", false, nil, nil))
+			AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk", "mist_native", false, nil, false))
 
 	// No admission peer for the routed cluster: a gate would reject.
 	s := serverWithRoute(t, db, &clusterRoute{clusterID: "media-eu"})

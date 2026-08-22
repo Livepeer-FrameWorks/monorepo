@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_control/internal/database/commodoredb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -52,18 +52,14 @@ func (s *CommodoreServer) CreateSigningKey(ctx context.Context, req *commodorepb
 
 	// Serialize concurrent CreateSigningKey for this tenant so the cap check
 	// and INSERT are atomic. Released on commit/rollback.
-	if _, lockErr := tx.ExecContext(ctx, `
-		SELECT pg_advisory_xact_lock(hashtext('commodore_signing_keys'), hashtext($1::text))
-	`, tenantID); lockErr != nil {
+	queries := commodoredb.New(tx)
+	if lockErr := queries.LockSigningKeyTenant(ctx, tenantID); lockErr != nil {
 		s.logger.WithError(lockErr).Error("advisory lock for signing-key create failed")
 		return nil, status.Errorf(codes.Internal, "database error")
 	}
 
-	var activeCount int
-	if cntErr := tx.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM commodore.signing_keys
-		WHERE tenant_id = $1 AND status = 'active'
-	`, tenantID).Scan(&activeCount); cntErr != nil {
+	activeCount, cntErr := queries.CountActiveSigningKeys(ctx, tenantID)
+	if cntErr != nil {
 		s.logger.WithError(cntErr).Error("count active signing keys failed")
 		return nil, status.Errorf(codes.Internal, "database error")
 	}
@@ -71,16 +67,18 @@ func (s *CommodoreServer) CreateSigningKey(ctx context.Context, req *commodorepb
 		return nil, status.Errorf(codes.ResourceExhausted, "tenant has reached the active signing-key cap (%d); revoke an existing key first", activeSigningKeyCap)
 	}
 
-	var (
-		id        string
-		createdAt time.Time
-	)
-	if insErr := tx.QueryRowContext(ctx, `
-		INSERT INTO commodore.signing_keys (tenant_id, kid, name, public_key_pem, algorithm, status)
-		VALUES ($1, $2, $3, $4, 'ES256', 'active')
-		RETURNING id, created_at
-	`, tenantID, kid, name, publicPEM).Scan(&id, &createdAt); insErr != nil {
+	created, insErr := queries.CreateSigningKey(ctx, commodoredb.CreateSigningKeyParams{
+		TenantID:     tenantID,
+		Kid:          kid,
+		Name:         name,
+		PublicKeyPem: publicPEM,
+	})
+	if insErr != nil {
 		s.logger.WithError(insErr).Error("insert signing key failed")
+		return nil, status.Errorf(codes.Internal, "database error")
+	}
+	if !created.CreatedAt.Valid {
+		s.logger.Error("insert signing key returned NULL created_at")
 		return nil, status.Errorf(codes.Internal, "database error")
 	}
 
@@ -95,13 +93,13 @@ func (s *CommodoreServer) CreateSigningKey(ctx context.Context, req *commodorepb
 
 	return &commodorepb.CreateSigningKeyResponse{
 		SigningKey: &commodorepb.SigningKey{
-			Id:           id,
+			Id:           created.ID,
 			Kid:          kid,
 			Name:         name,
 			Algorithm:    "ES256",
 			PublicKeyPem: publicPEM,
 			Status:       "active",
-			CreatedAt:    createdAt.UTC().Format(time.RFC3339Nano),
+			CreatedAt:    created.CreatedAt.Time.UTC().Format(time.RFC3339Nano),
 		},
 		PrivateKeyPem: privatePEM,
 	}, nil
@@ -117,13 +115,7 @@ func (s *CommodoreServer) GetSigningKey(ctx context.Context, req *commodorepb.Ge
 	if id == "" {
 		return nil, status.Error(codes.InvalidArgument, "id is required")
 	}
-	row := s.db.QueryRowContext(ctx, `
-		SELECT id, kid, name, algorithm, public_key_pem, status,
-		       created_at, last_used_at, revoked_at
-		FROM commodore.signing_keys
-		WHERE id = $1 AND tenant_id = $2
-	`, id, tenantID)
-	sk, err := scanSigningKey(row)
+	row, err := commodoredb.New(s.db).GetSigningKey(ctx, commodoredb.GetSigningKeyParams{ID: id, TenantID: tenantID})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "signing key not found")
 	}
@@ -131,7 +123,7 @@ func (s *CommodoreServer) GetSigningKey(ctx context.Context, req *commodorepb.Ge
 		s.logger.WithError(err).Error("get signing key failed")
 		return nil, status.Errorf(codes.Internal, "database error")
 	}
-	return sk, nil
+	return signingKeyProto(row.ID, row.Kid, row.Name, row.Algorithm, row.PublicKeyPem, row.Status, row.CreatedAt, row.LastUsedAt, row.RevokedAt)
 }
 
 // ListSigningKeys returns the tenant's signing keys with optional status filter.
@@ -145,54 +137,32 @@ func (s *CommodoreServer) ListSigningKeys(ctx context.Context, req *commodorepb.
 		limit = 50
 	}
 
-	args := []any{tenantID}
-	where := []string{"tenant_id = $1"}
-	q := `
-		SELECT id, kid, name, algorithm, public_key_pem, status,
-		       created_at, last_used_at, revoked_at
-		FROM commodore.signing_keys
-	`
-	if sf := strings.ToLower(strings.TrimSpace(req.GetStatusFilter())); sf == "active" || sf == "revoked" {
-		where = append(where, fmt.Sprintf("status = $%d", len(args)+1))
-		args = append(args, sf)
+	queries := commodoredb.New(s.db)
+	statusFilter := strings.ToLower(strings.TrimSpace(req.GetStatusFilter()))
+	if statusFilter != "active" && statusFilter != "revoked" {
+		statusFilter = ""
 	}
+	var afterCreatedAt time.Time
 	if afterID := strings.TrimSpace(req.GetAfterId()); afterID != "" {
-		var afterCreatedAt time.Time
-		if cursorErr := s.db.QueryRowContext(ctx, `
-				SELECT created_at FROM commodore.signing_keys
-				WHERE id::text = $1 AND tenant_id = $2
-			`, afterID, tenantID).Scan(&afterCreatedAt); cursorErr != nil {
+		cursor, cursorErr := queries.GetSigningKeyCursor(ctx, commodoredb.GetSigningKeyCursorParams{ID: afterID, TenantID: tenantID})
+		if cursorErr != nil {
 			if errors.Is(cursorErr, sql.ErrNoRows) {
 				return nil, status.Error(codes.InvalidArgument, "after cursor not found")
 			}
 			s.logger.WithError(cursorErr).Error("lookup signing key cursor failed")
 			return nil, status.Errorf(codes.Internal, "database error")
 		}
-		where = append(where, fmt.Sprintf("(created_at, id) < ($%d, $%d::uuid)", len(args)+1, len(args)+2))
-		args = append(args, afterCreatedAt, afterID)
+		if !cursor.Valid {
+			s.logger.Error("signing key cursor returned NULL created_at")
+			return nil, status.Errorf(codes.Internal, "database error")
+		}
+		afterCreatedAt = cursor.Time
 	}
-	q += " WHERE " + strings.Join(where, " AND ")
-	q += " ORDER BY created_at DESC, id DESC LIMIT $" + fmt.Sprintf("%d", len(args)+1)
-	args = append(args, limit+1)
 
-	rows, err := s.db.QueryContext(ctx, q, args...)
+	out, err := listSigningKeysFromCatalog(ctx, queries, tenantID, statusFilter, strings.TrimSpace(req.GetAfterId()), afterCreatedAt, int32(limit+1))
 	if err != nil {
 		s.logger.WithError(err).Error("list signing keys failed")
 		return nil, status.Errorf(codes.Internal, "database error")
-	}
-	defer rows.Close()
-
-	var out []*commodorepb.SigningKey
-	for rows.Next() {
-		sk, err := scanSigningKey(rows)
-		if err != nil {
-			s.logger.WithError(err).Error("scan signing key failed")
-			return nil, status.Errorf(codes.Internal, "database error")
-		}
-		out = append(out, sk)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
 	resp := &commodorepb.ListSigningKeysResponse{}
@@ -225,19 +195,17 @@ func (s *CommodoreServer) RevokeSigningKey(ctx context.Context, req *commodorepb
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort after Commit
 
-	row := tx.QueryRowContext(ctx, `
-		UPDATE commodore.signing_keys
-		SET status = 'revoked', revoked_at = NOW()
-		WHERE id = $1 AND tenant_id = $2 AND status = 'active'
-		RETURNING id, kid, name, algorithm, public_key_pem, status,
-		          created_at, last_used_at, revoked_at
-	`, id, tenantID)
-	sk, err := scanSigningKey(row)
+	revoked, err := commodoredb.New(tx).RevokeSigningKey(ctx, commodoredb.RevokeSigningKeyParams{ID: id, TenantID: tenantID})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "signing key not found or already revoked")
 	}
 	if err != nil {
 		s.logger.WithError(err).Error("revoke signing key failed")
+		return nil, status.Errorf(codes.Internal, "database error")
+	}
+	sk, err := signingKeyProto(revoked.ID, revoked.Kid, revoked.Name, revoked.Algorithm, revoked.PublicKeyPem, revoked.Status, revoked.CreatedAt, revoked.LastUsedAt, revoked.RevokedAt)
+	if err != nil {
+		s.logger.WithError(err).Error("decode revoked signing key failed")
 		return nil, status.Errorf(codes.Internal, "database error")
 	}
 
@@ -270,11 +238,7 @@ func (s *CommodoreServer) RecordSigningKeyUse(ctx context.Context, req *commodor
 	if tenantID == "" || kid == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id and kid are required")
 	}
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE commodore.signing_keys
-		SET last_used_at = NOW()
-		WHERE tenant_id = $1 AND kid = $2 AND status = 'active'
-	`, tenantID, kid); err != nil {
+	if err := commodoredb.New(s.db).RecordSigningKeyUse(ctx, commodoredb.RecordSigningKeyUseParams{TenantID: tenantID, Kid: kid}); err != nil {
 		s.logger.WithError(err).WithFields(logging.Fields{
 			"tenant_id": tenantID,
 			"kid":       kid,
@@ -310,9 +274,6 @@ func (s *CommodoreServer) SetPlaybackPolicy(ctx context.Context, req *commodorep
 		return nil, err
 	}
 
-	tableCol := target.tableColumn()
-	whereCol := targetPolicyUpdateWhere(target)
-
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		s.logger.WithError(err).Error("begin set-policy tx failed")
@@ -332,7 +293,7 @@ func (s *CommodoreServer) SetPlaybackPolicy(ctx context.Context, req *commodorep
 		}
 		secret := strings.TrimSpace(wh.GetSecretPt())
 		if secret == "" {
-			existing, lookupErr := lookupExistingWebhookSecret(ctx, tx, tableCol, target, tenantID)
+			existing, lookupErr := lookupExistingWebhookSecret(ctx, tx, target, tenantID)
 			if lookupErr != nil {
 				return nil, lookupErr
 			}
@@ -349,25 +310,25 @@ func (s *CommodoreServer) SetPlaybackPolicy(ctx context.Context, req *commodorep
 
 	requiresAuth := policyType != "public"
 
-	// The UPDATE is guarded to the LIVE row and RETURNs the canonical identifier in ONE statement, so a
-	// deleted asset (business row present but tombstoned, or already removed) never gets its policy
-	// mutated and invalidation dispatched only to fail an after-the-fact existence check: zero rows →
-	// NotFound BEFORE any commit or invalidation. Live = business row present AND no tombstone marker
-	// (vod_asset/clip only; streams are not catalog artifacts).
-	returningExpr, tombstoneGuard := setPolicyTargetSQL(target)
-
-	q := fmt.Sprintf(`
-			UPDATE commodore.%s AS c
-			SET requires_auth = $1,
-			    playback_policy = $2,
-			    playback_webhook_secret_enc = $3,
-			    updated_at = NOW()
-			WHERE %s AND c.tenant_id = $5%s
-			RETURNING %s
-		`, tableCol, whereCol, tombstoneGuard, returningExpr)
-
+	queries := commodoredb.New(tx)
 	var responseID string
-	err = tx.QueryRowContext(ctx, q, requiresAuth, database.JSONText(policyJSON), webhookSecretEnc, target.id, tenantID).Scan(&responseID)
+	switch target.kind {
+	case "stream":
+		responseID, err = queries.SetStreamPlaybackPolicy(ctx, commodoredb.SetStreamPlaybackPolicyParams{
+			RequiresAuth: requiresAuth, PlaybackPolicy: string(policyJSON), WebhookSecret: webhookSecretEnc,
+			TargetID: target.id, TenantID: tenantID,
+		})
+	case "vod_asset":
+		responseID, err = queries.SetVODPlaybackPolicy(ctx, commodoredb.SetVODPlaybackPolicyParams{
+			RequiresAuth: requiresAuth, PlaybackPolicy: string(policyJSON), WebhookSecret: webhookSecretEnc,
+			TargetID: target.id, TenantID: tenantID,
+		})
+	case "clip":
+		responseID, err = queries.SetClipPlaybackPolicy(ctx, commodoredb.SetClipPlaybackPolicyParams{
+			RequiresAuth: requiresAuth, PlaybackPolicy: string(policyJSON), WebhookSecret: webhookSecretEnc,
+			TargetID: target.id, TenantID: tenantID,
+		})
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Errorf(codes.NotFound, "%s not found", target.kind)
 	}
@@ -508,48 +469,21 @@ type policyTarget struct {
 	id   string
 }
 
-func (t policyTarget) tableColumn() string {
-	switch t.kind {
-	case "stream":
-		return "streams"
-	case "vod_asset":
-		return "vod_assets"
-	case "clip":
-		return "clips"
-	}
-	return ""
-}
-
-func targetPolicyUpdateWhere(t policyTarget) string {
-	switch t.kind {
-	case "vod_asset":
-		return "(id::text = $4 OR vod_hash = $4)"
-	case "clip":
-		return "(id::text = $4 OR clip_hash = $4)"
-	default:
-		return "id::text = $4"
-	}
-}
-
-func targetPolicyLookupWhere(t policyTarget) string {
-	switch t.kind {
-	case "vod_asset":
-		return "(id::text = $1 OR vod_hash = $1)"
-	case "clip":
-		return "(id::text = $1 OR clip_hash = $1)"
-	default:
-		return "id::text = $1"
-	}
-}
-
-func lookupExistingWebhookSecret(ctx context.Context, tx *sql.Tx, tableName string, target policyTarget, tenantID string) (sql.NullString, error) {
+func lookupExistingWebhookSecret(ctx context.Context, tx *sql.Tx, target policyTarget, tenantID string) (sql.NullString, error) {
+	queries := commodoredb.New(tx)
 	var existing sql.NullString
-	q := fmt.Sprintf(`
-		SELECT playback_webhook_secret_enc
-		FROM commodore.%s
-		WHERE %s AND tenant_id = $2
-	`, tableName, targetPolicyLookupWhere(target))
-	if err := tx.QueryRowContext(ctx, q, target.id, tenantID).Scan(&existing); err != nil {
+	var err error
+	switch target.kind {
+	case "stream":
+		existing, err = queries.GetStreamWebhookSecret(ctx, commodoredb.GetStreamWebhookSecretParams{TargetID: target.id, TenantID: tenantID})
+	case "vod_asset":
+		existing, err = queries.GetVODWebhookSecret(ctx, commodoredb.GetVODWebhookSecretParams{TargetID: target.id, TenantID: tenantID})
+	case "clip":
+		existing, err = queries.GetClipWebhookSecret(ctx, commodoredb.GetClipWebhookSecretParams{TargetID: target.id, TenantID: tenantID})
+	default:
+		err = sql.ErrNoRows
+	}
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return existing, status.Errorf(codes.NotFound, "%s not found", target.kind)
 		}
@@ -559,21 +493,6 @@ func lookupExistingWebhookSecret(ctx context.Context, tx *sql.Tx, tableName stri
 		return existing, status.Error(codes.InvalidArgument, "webhook policy requires a non-empty secret")
 	}
 	return existing, nil
-}
-
-// setPolicyTargetSQL returns the canonical identifier the guarded SetPlaybackPolicy UPDATE RETURNs
-// (stream id / vod_hash / clip_hash) and, for catalog artifacts, the live-row tombstone guard that
-// keeps a deleted asset (a present tombstone marker) from being mutated. Streams are not catalog
-// artifacts, so they carry no guard.
-func setPolicyTargetSQL(target policyTarget) (returningExpr, tombstoneGuard string) {
-	switch target.kind {
-	case "vod_asset":
-		return "c.vod_hash", " AND NOT EXISTS (SELECT 1 FROM commodore.artifact_catalog_tombstones t WHERE t.tenant_id = c.tenant_id AND t.kind = 'vod' AND t.artifact_hash = c.vod_hash)"
-	case "clip":
-		return "c.clip_hash", " AND NOT EXISTS (SELECT 1 FROM commodore.artifact_catalog_tombstones t WHERE t.tenant_id = c.tenant_id AND t.kind = 'clip' AND t.artifact_hash = c.clip_hash)"
-	default:
-		return "c.id::text", ""
-	}
 }
 
 func pickPolicyTarget(req *commodorepb.SetPlaybackPolicyRequest) (policyTarget, error) {
@@ -730,19 +649,9 @@ func isBlockedIP(ip netip.Addr) bool {
 	return false
 }
 
-// scanSigningKey adapts a row-or-rows to a SigningKey proto.
-type rowScanner interface {
-	Scan(dest ...any) error
-}
-
-func scanSigningKey(r rowScanner) (*commodorepb.SigningKey, error) {
-	var (
-		id, kid, name, alg, pubPEM, st string
-		createdAt                      time.Time
-		lastUsedAt, revokedAt          sql.NullTime
-	)
-	if err := r.Scan(&id, &kid, &name, &alg, &pubPEM, &st, &createdAt, &lastUsedAt, &revokedAt); err != nil {
-		return nil, err
+func signingKeyProto(id, kid, name, alg, pubPEM, st string, createdAt, lastUsedAt, revokedAt sql.NullTime) (*commodorepb.SigningKey, error) {
+	if !createdAt.Valid {
+		return nil, errors.New("signing key has NULL created_at")
 	}
 	sk := &commodorepb.SigningKey{
 		Id:           id,
@@ -751,7 +660,7 @@ func scanSigningKey(r rowScanner) (*commodorepb.SigningKey, error) {
 		Algorithm:    alg,
 		PublicKeyPem: pubPEM,
 		Status:       st,
-		CreatedAt:    createdAt.UTC().Format(time.RFC3339Nano),
+		CreatedAt:    createdAt.Time.UTC().Format(time.RFC3339Nano),
 	}
 	if lastUsedAt.Valid {
 		sk.LastUsedAt = lastUsedAt.Time.UTC().Format(time.RFC3339Nano)
@@ -762,69 +671,108 @@ func scanSigningKey(r rowScanner) (*commodorepb.SigningKey, error) {
 	return sk, nil
 }
 
+func listSigningKeysFromCatalog(
+	ctx context.Context,
+	queries *commodoredb.Queries,
+	tenantID, statusFilter, afterID string,
+	afterCreatedAt time.Time,
+	rowLimit int32,
+) ([]*commodorepb.SigningKey, error) {
+	out := make([]*commodorepb.SigningKey, 0, rowLimit)
+	appendKey := func(id, kid, name, algorithm, publicKeyPEM, keyStatus string, createdAt, lastUsedAt, revokedAt sql.NullTime) error {
+		key, err := signingKeyProto(id, kid, name, algorithm, publicKeyPEM, keyStatus, createdAt, lastUsedAt, revokedAt)
+		if err == nil {
+			out = append(out, key)
+		}
+		return err
+	}
+
+	switch {
+	case statusFilter != "" && afterID != "":
+		rows, err := queries.ListSigningKeysByStatusAfter(ctx, commodoredb.ListSigningKeysByStatusAfterParams{
+			TenantID: tenantID, Status: statusFilter, AfterCreatedAt: afterCreatedAt, AfterID: afterID, RowLimit: rowLimit,
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			if err := appendKey(row.ID, row.Kid, row.Name, row.Algorithm, row.PublicKeyPem, row.Status, row.CreatedAt, row.LastUsedAt, row.RevokedAt); err != nil {
+				return nil, err
+			}
+		}
+	case statusFilter != "":
+		rows, err := queries.ListSigningKeysByStatus(ctx, commodoredb.ListSigningKeysByStatusParams{
+			TenantID: tenantID, Status: statusFilter, RowLimit: rowLimit,
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			if err := appendKey(row.ID, row.Kid, row.Name, row.Algorithm, row.PublicKeyPem, row.Status, row.CreatedAt, row.LastUsedAt, row.RevokedAt); err != nil {
+				return nil, err
+			}
+		}
+	case afterID != "":
+		rows, err := queries.ListSigningKeysAfter(ctx, commodoredb.ListSigningKeysAfterParams{
+			TenantID: tenantID, AfterCreatedAt: afterCreatedAt, AfterID: afterID, RowLimit: rowLimit,
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			if err := appendKey(row.ID, row.Kid, row.Name, row.Algorithm, row.PublicKeyPem, row.Status, row.CreatedAt, row.LastUsedAt, row.RevokedAt); err != nil {
+				return nil, err
+			}
+		}
+	default:
+		rows, err := queries.ListSigningKeys(ctx, commodoredb.ListSigningKeysParams{TenantID: tenantID, RowLimit: rowLimit})
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			if err := appendKey(row.ID, row.Kid, row.Name, row.Algorithm, row.PublicKeyPem, row.Status, row.CreatedAt, row.LastUsedAt, row.RevokedAt); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return out, nil
+}
+
 func (s *CommodoreServer) lookupPolicyByPlaybackID(ctx context.Context, playbackID string) ([]byte, sql.NullString, string, error) {
-	// Try streams first.
-	var (
-		policy   []byte
-		secret   sql.NullString
-		tenantID string
-		fetchErr error
-	)
-	fetchErr = s.db.QueryRowContext(ctx, `
-		SELECT playback_policy, playback_webhook_secret_enc, tenant_id
-		FROM commodore.streams WHERE lower(playback_id::text) = lower($1::text) AND deleted_at IS NULL
-	`, playbackID).Scan(&policy, &secret, &tenantID)
-	if fetchErr == nil {
-		out := append([]byte(nil), policy...)
-		return out, secret, tenantID, nil
+	queries := commodoredb.New(s.db)
+	type lookup func() (string, sql.NullString, string, error)
+	candidates := []struct {
+		label string
+		query lookup
+	}{
+		{"streams", func() (string, sql.NullString, string, error) {
+			row, err := queries.LookupStreamPolicyByPlaybackID(ctx, playbackID)
+			return row.PlaybackPolicy, row.PlaybackWebhookSecretEnc, row.TenantID, err
+		}},
+		{"vod_assets", func() (string, sql.NullString, string, error) {
+			row, err := queries.LookupVODPolicyByPlaybackID(ctx, playbackID)
+			return row.PlaybackPolicy, row.PlaybackWebhookSecretEnc, row.TenantID, err
+		}},
+		{"clips", func() (string, sql.NullString, string, error) {
+			row, err := queries.LookupClipPolicyByPlaybackID(ctx, playbackID)
+			return row.PlaybackPolicy, row.PlaybackWebhookSecretEnc, row.TenantID, err
+		}},
+		{"dvr", func() (string, sql.NullString, string, error) {
+			row, err := queries.LookupDVRPolicyByPlaybackID(ctx, playbackID)
+			return row.PlaybackPolicy, row.PlaybackWebhookSecretEnc, row.TenantID, err
+		}},
 	}
-	if !errors.Is(fetchErr, sql.ErrNoRows) {
-		s.logger.WithError(fetchErr).WithField("playback_id", playbackID).Error("policy lookup (streams) failed")
-		return nil, secret, "", status.Errorf(codes.Internal, "database error")
+	for _, candidate := range candidates {
+		policy, secret, tenantID, err := candidate.query()
+		if err == nil {
+			return []byte(policy), secret, tenantID, nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			s.logger.WithError(err).WithField("playback_id", playbackID).Error("policy lookup (" + candidate.label + ") failed")
+			return nil, sql.NullString{}, "", status.Errorf(codes.Internal, "database error")
+		}
 	}
-
-	// VOD assets.
-	fetchErr = s.db.QueryRowContext(ctx, `
-		SELECT playback_policy, playback_webhook_secret_enc, tenant_id
-		FROM commodore.vod_assets WHERE lower(playback_id::text) = lower($1::text)	`, playbackID).Scan(&policy, &secret, &tenantID)
-	if fetchErr == nil {
-		out := append([]byte(nil), policy...)
-		return out, secret, tenantID, nil
-	}
-	if !errors.Is(fetchErr, sql.ErrNoRows) {
-		s.logger.WithError(fetchErr).WithField("playback_id", playbackID).Error("policy lookup (vod_assets) failed")
-		return nil, secret, "", status.Errorf(codes.Internal, "database error")
-	}
-
-	// Clips.
-	fetchErr = s.db.QueryRowContext(ctx, `
-		SELECT playback_policy, playback_webhook_secret_enc, tenant_id
-		FROM commodore.clips WHERE lower(playback_id::text) = lower($1::text)	`, playbackID).Scan(&policy, &secret, &tenantID)
-	if fetchErr == nil {
-		out := append([]byte(nil), policy...)
-		return out, secret, tenantID, nil
-	}
-	if !errors.Is(fetchErr, sql.ErrNoRows) {
-		s.logger.WithError(fetchErr).WithField("playback_id", playbackID).Error("policy lookup (clips) failed")
-		return nil, secret, "", status.Errorf(codes.Internal, "database error")
-	}
-
-	// DVR inherits source-stream policy at lookup time.
-	fetchErr = s.db.QueryRowContext(ctx, `
-		SELECT s.playback_policy, s.playback_webhook_secret_enc, s.tenant_id
-		FROM commodore.dvr_recordings d
-		JOIN commodore.streams s ON s.id = d.stream_id
-		WHERE lower(d.playback_id::text) = lower($1::text)	`, playbackID).Scan(&policy, &secret, &tenantID)
-	if fetchErr == nil {
-		out := append([]byte(nil), policy...)
-		return out, secret, tenantID, nil
-	}
-	if !errors.Is(fetchErr, sql.ErrNoRows) {
-		s.logger.WithError(fetchErr).WithField("playback_id", playbackID).Error("policy lookup (dvr) failed")
-		return nil, secret, "", status.Errorf(codes.Internal, "database error")
-	}
-
-	return nil, secret, "", status.Errorf(codes.NotFound, "playback id not found")
+	return nil, sql.NullString{}, "", status.Errorf(codes.NotFound, "playback id not found")
 }
 
 // lookupPolicyByInternalName mirrors lookupPolicyByPlaybackID for the
@@ -832,89 +780,56 @@ func (s *CommodoreServer) lookupPolicyByPlaybackID(ctx context.Context, playback
 // instead of the public playback_id. Searches streams, vod_assets, clips,
 // dvr_recordings (the latter inheriting the source stream's policy).
 func (s *CommodoreServer) lookupPolicyByInternalName(ctx context.Context, internalName string) ([]byte, sql.NullString, string, error) {
-	var (
-		policy   []byte
-		secret   sql.NullString
-		tenantID string
-		fetchErr error
-	)
-	fetchErr = s.db.QueryRowContext(ctx, `
-		SELECT playback_policy, playback_webhook_secret_enc, tenant_id
-		FROM commodore.streams WHERE internal_name = $1 AND deleted_at IS NULL
-	`, internalName).Scan(&policy, &secret, &tenantID)
-	if fetchErr == nil {
-		out := append([]byte(nil), policy...)
-		return out, secret, tenantID, nil
+	queries := commodoredb.New(s.db)
+	type lookup func() (string, sql.NullString, string, error)
+	candidates := []struct {
+		label string
+		query lookup
+	}{
+		{"streams", func() (string, sql.NullString, string, error) {
+			row, err := queries.LookupStreamPolicyByInternalName(ctx, internalName)
+			return row.PlaybackPolicy, row.PlaybackWebhookSecretEnc, row.TenantID, err
+		}},
+		{"vod_assets", func() (string, sql.NullString, string, error) {
+			row, err := queries.LookupVODPolicyByInternalName(ctx, internalName)
+			return row.PlaybackPolicy, row.PlaybackWebhookSecretEnc, row.TenantID, err
+		}},
+		{"clips", func() (string, sql.NullString, string, error) {
+			row, err := queries.LookupClipPolicyByInternalName(ctx, internalName)
+			return row.PlaybackPolicy, row.PlaybackWebhookSecretEnc, row.TenantID, err
+		}},
+		{"dvr", func() (string, sql.NullString, string, error) {
+			row, err := queries.LookupDVRPolicyByInternalName(ctx, internalName)
+			return row.PlaybackPolicy, row.PlaybackWebhookSecretEnc, row.TenantID, err
+		}},
 	}
-	if !errors.Is(fetchErr, sql.ErrNoRows) {
-		s.logger.WithError(fetchErr).WithField("internal_name", internalName).Error("policy lookup by internal_name (streams) failed")
-		return nil, secret, "", status.Errorf(codes.Internal, "database error")
+	for _, candidate := range candidates {
+		policy, secret, tenantID, err := candidate.query()
+		if err == nil {
+			return []byte(policy), secret, tenantID, nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			s.logger.WithError(err).WithField("internal_name", internalName).Error("policy lookup by internal_name (" + candidate.label + ") failed")
+			return nil, sql.NullString{}, "", status.Errorf(codes.Internal, "database error")
+		}
 	}
-
-	fetchErr = s.db.QueryRowContext(ctx, `
-		SELECT playback_policy, playback_webhook_secret_enc, tenant_id
-		FROM commodore.vod_assets WHERE internal_name = $1	`, internalName).Scan(&policy, &secret, &tenantID)
-	if fetchErr == nil {
-		out := append([]byte(nil), policy...)
-		return out, secret, tenantID, nil
-	}
-	if !errors.Is(fetchErr, sql.ErrNoRows) {
-		s.logger.WithError(fetchErr).WithField("internal_name", internalName).Error("policy lookup by internal_name (vod_assets) failed")
-		return nil, secret, "", status.Errorf(codes.Internal, "database error")
-	}
-
-	fetchErr = s.db.QueryRowContext(ctx, `
-		SELECT playback_policy, playback_webhook_secret_enc, tenant_id
-		FROM commodore.clips WHERE internal_name = $1	`, internalName).Scan(&policy, &secret, &tenantID)
-	if fetchErr == nil {
-		out := append([]byte(nil), policy...)
-		return out, secret, tenantID, nil
-	}
-	if !errors.Is(fetchErr, sql.ErrNoRows) {
-		s.logger.WithError(fetchErr).WithField("internal_name", internalName).Error("policy lookup by internal_name (clips) failed")
-		return nil, secret, "", status.Errorf(codes.Internal, "database error")
-	}
-
-	fetchErr = s.db.QueryRowContext(ctx, `
-		SELECT s.playback_policy, s.playback_webhook_secret_enc, s.tenant_id
-		FROM commodore.dvr_recordings d
-		JOIN commodore.streams s ON s.id = d.stream_id
-		WHERE d.internal_name = $1	`, internalName).Scan(&policy, &secret, &tenantID)
-	if fetchErr == nil {
-		out := append([]byte(nil), policy...)
-		return out, secret, tenantID, nil
-	}
-	if !errors.Is(fetchErr, sql.ErrNoRows) {
-		s.logger.WithError(fetchErr).WithField("internal_name", internalName).Error("policy lookup by internal_name (dvr) failed")
-		return nil, secret, "", status.Errorf(codes.Internal, "database error")
-	}
-
-	return nil, secret, "", status.Errorf(codes.NotFound, "internal name not found")
+	return nil, sql.NullString{}, "", status.Errorf(codes.NotFound, "internal name not found")
 }
 
 func (s *CommodoreServer) fetchActiveSigningKeys(ctx context.Context, tenantID string) ([]*commodorepb.PlaybackSigningKey, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT kid, algorithm, public_key_pem
-		FROM commodore.signing_keys
-		WHERE tenant_id = $1 AND status = 'active'
-	`, tenantID)
+	rows, err := commodoredb.New(s.db).ListActivePlaybackSigningKeys(ctx, tenantID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []*commodorepb.PlaybackSigningKey
-	for rows.Next() {
-		var kid, alg, pem string
-		if err := rows.Scan(&kid, &alg, &pem); err != nil {
-			return nil, err
-		}
+	out := make([]*commodorepb.PlaybackSigningKey, 0, len(rows))
+	for _, row := range rows {
 		out = append(out, &commodorepb.PlaybackSigningKey{
-			Kid:          kid,
-			Algorithm:    alg,
-			PublicKeyPem: pem,
+			Kid:          row.Kid,
+			Algorithm:    row.Algorithm,
+			PublicKeyPem: row.PublicKeyPem,
 		})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // protectedScope is the input shape scopeInternalNames understands. The
@@ -939,23 +854,23 @@ func (s *CommodoreServer) scopeInternalNames(ctx context.Context, tenantID strin
 		return nil
 	}
 	t := scope.target
-	var query string
+	queries := commodoredb.New(s.db)
+	var name string
+	var err error
 	prefix := ""
 	switch t.kind {
 	case "stream":
-		query = `SELECT internal_name FROM commodore.streams WHERE id::text = $1 AND tenant_id = $2`
+		name, err = queries.GetStreamPolicyScopeName(ctx, commodoredb.GetStreamPolicyScopeNameParams{TargetID: t.id, TenantID: tenantID})
 	case "vod_asset":
-		// Same live-row predicate as the guarded policy UPDATE: a tombstoned asset resolves no name.
-		query = `SELECT internal_name FROM commodore.vod_assets v WHERE (v.id::text = $1 OR v.vod_hash = $1) AND v.tenant_id = $2 AND NOT EXISTS (SELECT 1 FROM commodore.artifact_catalog_tombstones t WHERE t.tenant_id = v.tenant_id AND t.kind = 'vod' AND t.artifact_hash = v.vod_hash)`
+		name, err = queries.GetVODPolicyScopeName(ctx, commodoredb.GetVODPolicyScopeNameParams{TargetID: t.id, TenantID: tenantID})
 		prefix = "vod+"
 	case "clip":
-		query = `SELECT internal_name FROM commodore.clips c WHERE (c.id::text = $1 OR c.clip_hash = $1) AND c.tenant_id = $2 AND NOT EXISTS (SELECT 1 FROM commodore.artifact_catalog_tombstones t WHERE t.tenant_id = c.tenant_id AND t.kind = 'clip' AND t.artifact_hash = c.clip_hash)`
+		name, err = queries.GetClipPolicyScopeName(ctx, commodoredb.GetClipPolicyScopeNameParams{TargetID: t.id, TenantID: tenantID})
 		prefix = "vod+"
 	default:
 		return nil
 	}
-	var name string
-	if err := s.db.QueryRowContext(ctx, query, t.id, tenantID).Scan(&name); err != nil {
+	if err != nil {
 		s.logger.WithError(err).WithFields(logging.Fields{
 			"tenant_id":   tenantID,
 			"target_kind": t.kind,

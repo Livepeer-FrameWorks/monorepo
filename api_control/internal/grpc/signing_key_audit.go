@@ -5,16 +5,9 @@ import (
 	"database/sql"
 	"net"
 
+	"frameworks/api_control/internal/database/commodoredb"
 	"google.golang.org/grpc/peer"
 )
-
-// auditExecutor is the subset of *sql.Tx / *sql.DB writeSigningKeyAudit needs.
-// Callers pass their own *sql.Tx so the audit row lands or rolls back with the
-// underlying mutation — make it transactional so the audit is authoritative
-// rather than best-effort telemetry.
-type auditExecutor interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-}
 
 // writeSigningKeyAudit records one row in commodore.signing_key_audit inside
 // the caller's transaction. If the INSERT fails the caller's mutation rolls
@@ -27,7 +20,7 @@ type auditExecutor interface {
 // authorization request.
 func (s *CommodoreServer) writeSigningKeyAudit(
 	ctx context.Context,
-	exec auditExecutor,
+	exec commodoredb.DBTX,
 	tenantID, kid, action, actorUserID, detail string,
 ) error {
 	if tenantID == "" || kid == "" || action == "" {
@@ -48,11 +41,9 @@ func (s *CommodoreServer) writeSigningKeyAudit(
 	if detail != "" {
 		detailArg = sql.NullString{String: detail, Valid: true}
 	}
-	if _, err := exec.ExecContext(ctx, `
-		INSERT INTO commodore.signing_key_audit
-			(tenant_id, kid, action, actor_user_id, actor_ip, detail)
-		VALUES ($1::uuid, $2, $3, $4, $5, $6)
-	`, tenantID, kid, action, userIDArg, ipArg, detailArg); err != nil {
+	if err := commodoredb.New(exec).InsertSigningKeyAudit(ctx, commodoredb.InsertSigningKeyAuditParams{
+		TenantID: tenantID, ActorUserID: userIDArg, Kid: kid, Action: action, ActorIp: ipArg, Detail: detailArg,
+	}); err != nil {
 		s.logger.WithError(err).Warn("signing-key audit write failed")
 		return err
 	}

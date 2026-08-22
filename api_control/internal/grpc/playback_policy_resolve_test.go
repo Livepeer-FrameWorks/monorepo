@@ -48,7 +48,7 @@ func TestResolvePlaybackPolicyPublicWhenNoPolicy(t *testing.T) {
 	mock.ExpectQuery("FROM commodore.streams").
 		WithArgs("p1").
 		WillReturnRows(sqlmock.NewRows([]string{"playback_policy", "playback_webhook_secret_enc", "tenant_id"}).
-			AddRow(nil, nil, "tenant-1"))
+			AddRow("", nil, "tenant-1"))
 
 	s := &CommodoreServer{db: db, logger: logrus.New()}
 	resp, err := s.ResolvePlaybackPolicy(context.Background(), &commodorepb.ResolvePlaybackPolicyRequest{PlaybackId: "p1"})

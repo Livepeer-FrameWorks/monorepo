@@ -53,7 +53,7 @@ func TestGetClip(t *testing.T) {
 			WithArgs("t1", "hash1").
 			WillReturnRows(clipRows().AddRow(
 				"id1", "hash1", "pb1", "s1", "Title", "desc",
-				int64(5000), int64(60000), "precise", nil,
+				int64(5000), int64(60000), "precise", "",
 				int64(2048), nil, "manual", now, now,
 				"cluster-a", false))
 		resp, err := s.GetClip(ctxAs("u1", "t1", "owner"), &sharedpb.GetClipRequest{ClipHash: "hash1"})

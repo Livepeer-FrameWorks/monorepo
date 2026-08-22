@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_control/internal/database/commodoredb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
@@ -101,7 +102,16 @@ func (s *CommodoreServer) GetSignedPolicyBundle(ctx context.Context, req *commod
 	softExpiresAt := now.Add(policyBundleSoftTTL)
 	expiresAt := now.Add(policyBundleHardTTL)
 
-	bundleVersion, err := s.nextPolicyBundleVersion(ctx, tenantID, streamID)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "begin bundle transaction: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // best-effort on non-commit paths
+	queries := commodoredb.New(tx)
+	if lockErr := queries.LockPolicyBundleStream(ctx, commodoredb.LockPolicyBundleStreamParams{TenantID: tenantID, StreamID: streamID}); lockErr != nil {
+		return nil, status.Errorf(codes.Internal, "lock bundle version: %v", lockErr)
+	}
+	bundleVersion, err := nextPolicyBundleVersionWith(ctx, tx, tenantID, streamID)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "next bundle version: %v", err)
 	}
@@ -129,13 +139,16 @@ func (s *CommodoreServer) GetSignedPolicyBundle(ctx context.Context, req *commod
 		return nil, status.Error(codes.Internal, "sign bundle")
 	}
 
-	if err := s.persistPolicyBundle(ctx, tenantID, streamID, bundleVersion, bundleJWT, issuedAt, expiresAt); err != nil {
+	if err := persistPolicyBundleWith(ctx, tx, tenantID, streamID, bundleVersion, bundleJWT, issuedAt, expiresAt); err != nil {
 		s.logger.WithError(err).WithFields(map[string]any{
 			"tenant_id":      tenantID,
 			"stream_id":      streamID,
 			"bundle_version": bundleVersion,
 		}).Error("persist policy bundle failed")
 		return nil, status.Errorf(codes.Internal, "persist bundle: %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, status.Errorf(codes.Internal, "commit bundle: %v", err)
 	}
 
 	return &commodorepb.GetSignedPolicyBundleResponse{
@@ -171,29 +184,20 @@ func policyBundleSigningSecret() ([]byte, error) {
 // stream's internal name, and an error. The policy may be empty when the
 // stream is public; consumers treat empty as "no auth required."
 func (s *CommodoreServer) lookupPolicyForStream(ctx context.Context, tenantID, streamID string) ([]byte, string, error) {
-	var (
-		policy       sql.NullString
-		internalName string
-		rowTenantID  string
-	)
-	err := s.db.QueryRowContext(ctx, `
-		SELECT COALESCE(playback_policy::text, ''), internal_name, tenant_id::text
-		FROM commodore.streams
-		WHERE id = $1::uuid AND deleted_at IS NULL
-	`, streamID).Scan(&policy, &internalName, &rowTenantID)
+	row, err := commodoredb.New(s.db).GetStreamPolicyForBundle(ctx, streamID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, "", status.Error(codes.NotFound, "stream not found")
 	}
 	if err != nil {
 		return nil, "", status.Errorf(codes.Internal, "stream lookup: %v", err)
 	}
-	if rowTenantID != tenantID {
+	if row.TenantID != tenantID {
 		return nil, "", status.Error(codes.PermissionDenied, "tenant_id mismatch for stream")
 	}
-	if !policy.Valid || policy.String == "" {
-		return nil, internalName, nil
+	if row.PlaybackPolicy == "" {
+		return nil, row.InternalName, nil
 	}
-	return []byte(policy.String), internalName, nil
+	return []byte(row.PlaybackPolicy), row.InternalName, nil
 }
 
 // lookupTenantClusterEntitlement returns the cluster IDs this tenant is
@@ -212,24 +216,29 @@ func (s *CommodoreServer) lookupTenantClusterEntitlement(ctx context.Context, te
 }
 
 func (s *CommodoreServer) nextPolicyBundleVersion(ctx context.Context, tenantID, streamID string) (int64, error) {
-	var next int64
-	err := s.db.QueryRowContext(ctx, `
-		SELECT COALESCE(MAX(bundle_version), 0) + 1
-		FROM commodore.policy_bundle_versions
-		WHERE tenant_id = $1::uuid AND stream_id = $2::uuid
-	`, tenantID, streamID).Scan(&next)
+	return nextPolicyBundleVersionWith(ctx, s.db, tenantID, streamID)
+}
+
+func nextPolicyBundleVersionWith(ctx context.Context, exec commodoredb.DBTX, tenantID, streamID string) (int64, error) {
+	next, err := commodoredb.New(exec).NextPolicyBundleVersion(ctx, commodoredb.NextPolicyBundleVersionParams{
+		TenantID: tenantID,
+		StreamID: streamID,
+	})
 	if err != nil {
 		return 0, fmt.Errorf("max(bundle_version): %w", err)
 	}
 	return next, nil
 }
 
-func (s *CommodoreServer) persistPolicyBundle(ctx context.Context, tenantID, streamID string, version int64, bundleJWT string, issuedAt, expiresAt time.Time) error {
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO commodore.policy_bundle_versions
-			(tenant_id, stream_id, bundle_version, bundle_jwt, issued_at, expires_at)
-		VALUES ($1::uuid, $2::uuid, $3, $4, $5, $6)
-	`, tenantID, streamID, version, bundleJWT, issuedAt, expiresAt)
+func persistPolicyBundleWith(ctx context.Context, exec commodoredb.DBTX, tenantID, streamID string, version int64, bundleJWT string, issuedAt, expiresAt time.Time) error {
+	err := commodoredb.New(exec).InsertPolicyBundle(ctx, commodoredb.InsertPolicyBundleParams{
+		TenantID:      tenantID,
+		StreamID:      streamID,
+		BundleVersion: version,
+		BundleJwt:     bundleJWT,
+		IssuedAt:      issuedAt,
+		ExpiresAt:     expiresAt,
+	})
 	if err != nil {
 		return fmt.Errorf("insert policy_bundle_versions: %w", err)
 	}

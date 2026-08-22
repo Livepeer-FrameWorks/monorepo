@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"frameworks/api_control/internal/database/commodoredb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
@@ -130,10 +131,6 @@ type clipCreationPayload struct {
 	WebhookSecretEnc *string `json:"webhook_secret_enc,omitempty"`
 }
 
-type dbQueryRower interface {
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}
-
 // upsertCreationIntent durably records a pending creation intent and returns the
 // request_id that is PERSISTED for this (tenant, kind, hash) identity. It is
 // idempotent on that identity: a re-drive of the same create does not fork a second
@@ -143,7 +140,7 @@ type dbQueryRower interface {
 // caller keys the Foghorn command ledger on the request_id the intent actually
 // carries, not a freshly minted one that would mismatch. payload may be nil for
 // kinds whose business row is written before the Foghorn call (vod, dvr).
-func upsertCreationIntent(ctx context.Context, q dbQueryRower, tenantID, kind, artifactHash, requestID, originClusterID string, payload any) (string, error) {
+func upsertCreationIntent(ctx context.Context, q commodoredb.DBTX, tenantID, kind, artifactHash, requestID, originClusterID string, payload any) (string, error) {
 	// origin_cluster_id keys Foghorn resolution for both convergence and the ack
 	// drain; an empty one can never converge (resolveFoghornForCluster rejects it), so
 	// reject it here rather than persist an unconvergeable pending intent.
@@ -158,26 +155,18 @@ func upsertCreationIntent(ctx context.Context, q dbQueryRower, tenantID, kind, a
 			return "", err
 		}
 	}
-	var persistedRequestID string
-	err := q.QueryRowContext(ctx, `
-		INSERT INTO commodore.artifact_creation_intents
-			(tenant_id, kind, artifact_hash, request_id, origin_cluster_id, status, payload, created_at, updated_at)
-		VALUES ($1::uuid, $2, $3, $4::uuid, $5, 'pending', $6::jsonb, NOW(), NOW())
-		ON CONFLICT (tenant_id, kind, artifact_hash) DO UPDATE
-			SET request_id = commodore.artifact_creation_intents.request_id
-		RETURNING request_id::text
-	`, tenantID, kind, artifactHash, requestID, originClusterID, nullableJSON(payloadJSON)).Scan(&persistedRequestID)
+	payloadArg := sql.NullString{}
+	if len(payloadJSON) > 0 {
+		payloadArg = sql.NullString{String: string(payloadJSON), Valid: true}
+	}
+	persistedRequestID, err := commodoredb.New(q).UpsertArtifactCreationIntent(ctx, commodoredb.UpsertArtifactCreationIntentParams{
+		TenantID: tenantID, Kind: kind, ArtifactHash: artifactHash, RequestID: requestID,
+		OriginClusterID: originClusterID, Payload: payloadArg,
+	})
 	if err != nil {
 		return "", err
 	}
 	return persistedRequestID, nil
-}
-
-func nullableJSON(b []byte) any {
-	if len(b) == 0 {
-		return nil
-	}
-	return string(b)
 }
 
 // terminalizeCreationIntent atomically transitions a pending intent to a terminal
@@ -209,32 +198,19 @@ func (s *CommodoreServer) terminalizeCreationIntent(ctx context.Context, r creat
 	}
 	defer tx.Rollback() //nolint:errcheck // best-effort rollback of an uncommitted tx
 
-	var res sql.Result
+	queries := commodoredb.New(tx)
+	var n int64
 	if leaseToken != "" {
-		res, err = tx.ExecContext(ctx, `
-			UPDATE commodore.artifact_creation_intents
-			   SET status = $4, last_error = NULLIF($5, ''), lease_token = NULL, leased_until = NULL,
-			       command_ack_pending = $7,
-			       command_ack_attempts = CASE WHEN $7 THEN 0 ELSE command_ack_attempts END,
-			       command_ack_next_at = CASE WHEN $7 THEN NOW() ELSE NULL END, updated_at = NOW()
-			 WHERE tenant_id = $1::uuid AND kind = $2 AND artifact_hash = $3
-			   AND status = 'pending' AND lease_token = $6::uuid
-		`, r.tenantID, r.kind, r.artifactHash, newStatus, reason, leaseToken, ackPending)
+		n, err = queries.TerminalizeClaimedArtifactCreationIntent(ctx, commodoredb.TerminalizeClaimedArtifactCreationIntentParams{
+			NewStatus: newStatus, Reason: reason, AckPending: ackPending, TenantID: r.tenantID,
+			Kind: r.kind, ArtifactHash: r.artifactHash, LeaseToken: leaseToken,
+		})
 	} else {
-		res, err = tx.ExecContext(ctx, `
-			UPDATE commodore.artifact_creation_intents
-			   SET status = $4, last_error = NULLIF($5, ''), lease_token = NULL, leased_until = NULL,
-			       command_ack_pending = $6,
-			       command_ack_attempts = CASE WHEN $6 THEN 0 ELSE command_ack_attempts END,
-			       command_ack_next_at = CASE WHEN $6 THEN NOW() ELSE NULL END, updated_at = NOW()
-			 WHERE tenant_id = $1::uuid AND kind = $2 AND artifact_hash = $3
-			   AND status = 'pending'
-		`, r.tenantID, r.kind, r.artifactHash, newStatus, reason, ackPending)
+		n, err = queries.TerminalizeArtifactCreationIntent(ctx, commodoredb.TerminalizeArtifactCreationIntentParams{
+			NewStatus: newStatus, Reason: reason, AckPending: ackPending, TenantID: r.tenantID,
+			Kind: r.kind, ArtifactHash: r.artifactHash,
+		})
 	}
-	if err != nil {
-		return err
-	}
-	n, err := res.RowsAffected()
 	if err != nil {
 		return err
 	}
@@ -273,14 +249,18 @@ func (s *CommodoreServer) abortCreationIntent(ctx context.Context, r creationInt
 // commit, so for a clip abort the delete is a harmless no-op.
 func deleteCatalogOnlyBusinessRow(r creationIntentRow) func(context.Context, *sql.Tx) error {
 	return func(ctx context.Context, tx *sql.Tx) error {
-		table, hashColumn, ok := businessTableForKind(r.kind)
-		if !ok {
+		queries := commodoredb.New(tx)
+		params := commodoredb.DeleteCatalogOnlyVODParams{TenantID: r.tenantID, ArtifactHash: r.artifactHash}
+		switch r.kind {
+		case creationIntentKindVOD:
+			return queries.DeleteCatalogOnlyVOD(ctx, params)
+		case creationIntentKindDVR:
+			return queries.DeleteCatalogOnlyDVR(ctx, commodoredb.DeleteCatalogOnlyDVRParams(params))
+		case creationIntentKindClip:
+			return queries.DeleteCatalogOnlyClip(ctx, commodoredb.DeleteCatalogOnlyClipParams(params))
+		default:
 			return fmt.Errorf("abort: unknown kind %q", r.kind)
 		}
-		_, err := tx.ExecContext(ctx,
-			"DELETE FROM "+table+" WHERE tenant_id = $1::uuid AND "+hashColumn+" = $2",
-			r.tenantID, r.artifactHash)
-		return err
 	}
 }
 
@@ -294,29 +274,10 @@ func (s *CommodoreServer) noteCreationIntentAttempt(ctx context.Context, r creat
 	// follows a timed-out status RPC (whose context is already cancelled).
 	ctx, cancel := settleDBContext(ctx)
 	defer cancel()
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE commodore.artifact_creation_intents
-		   SET attempts = attempts + 1, last_error = $4, updated_at = NOW()
-		 WHERE tenant_id = $1::uuid AND kind = $2 AND artifact_hash = $3 AND status = 'pending'
-		   AND lease_token = $5::uuid
-	`, r.tenantID, r.kind, r.artifactHash, reason, r.leaseToken); err != nil {
+	if err := commodoredb.New(s.db).NoteArtifactCreationIntentAttempt(ctx, commodoredb.NoteArtifactCreationIntentAttemptParams{
+		Reason: reason, TenantID: r.tenantID, Kind: r.kind, ArtifactHash: r.artifactHash, LeaseToken: r.leaseToken,
+	}); err != nil {
 		s.logger.WithError(err).Warn("Failed to record creation-intent sweep attempt")
-	}
-}
-
-// businessTableForKind maps a creation-intent kind to the business registry table
-// and hash column so an abort can remove a catalog-only row (vod/dvr rows are
-// written before the Foghorn call; clip rows only exist once committed).
-func businessTableForKind(kind string) (table, hashColumn string, ok bool) {
-	switch kind {
-	case creationIntentKindVOD:
-		return "commodore.vod_assets", "vod_hash", true
-	case creationIntentKindDVR:
-		return "commodore.dvr_recordings", "dvr_hash", true
-	case creationIntentKindClip:
-		return "commodore.clips", "clip_hash", true
-	default:
-		return "", "", false
 	}
 }
 
@@ -406,44 +367,22 @@ func (s *CommodoreServer) drainCreationCommandAcks(ctx context.Context) {
 	// settlement CAS-matches it, so a row reclaimed by another replica (new token) is
 	// off-limits to this pass's stale settlements.
 	leaseToken := uuid.New().String()
-	rows, err := s.db.QueryContext(scanCtx, `
-		WITH due AS (
-		    SELECT ctid
-		      FROM commodore.artifact_creation_intents
-		     WHERE command_ack_pending
-		       AND (command_ack_next_at IS NULL OR command_ack_next_at <= NOW())
-		       AND (command_ack_leased_until IS NULL OR command_ack_leased_until <= NOW())
-		     ORDER BY command_ack_next_at NULLS FIRST
-		     LIMIT $1
-		     FOR UPDATE SKIP LOCKED
-		)
-		UPDATE commodore.artifact_creation_intents i
-		   SET command_ack_leased_until = NOW() + $2::interval,
-		       command_ack_lease_token = $3::uuid,
-		       updated_at = NOW()
-		  FROM due
-		 WHERE i.ctid = due.ctid
-		 RETURNING i.tenant_id::text, i.kind, i.artifact_hash, i.request_id::text, COALESCE(i.origin_cluster_id, ''), i.command_ack_attempts
-	`, creationIntentSweepBatch, intervalSeconds(creationIntentAckLease), leaseToken)
+	rows, err := commodoredb.New(s.db).ClaimArtifactCreationCommandAcks(scanCtx, commodoredb.ClaimArtifactCreationCommandAcksParams{
+		LeaseInterval: intervalSeconds(creationIntentAckLease),
+		LeaseToken:    leaseToken,
+		BatchSize:     int32(creationIntentSweepBatch),
+	})
 	if err != nil {
 		s.logger.WithError(err).Warn("Failed to claim pending creation-command acks")
 		return
 	}
-	defer func() { _ = rows.Close() }()
-
-	var batch []ackPendingRow
-	for rows.Next() {
-		var r ackPendingRow
-		if scanErr := rows.Scan(&r.tenantID, &r.kind, &r.artifactHash, &r.requestID, &r.originClusterID, &r.commandAckAttempts); scanErr != nil {
-			s.logger.WithError(scanErr).Warn("Failed to scan ack-pending intent row")
-			continue
-		}
-		r.leaseToken = leaseToken
-		batch = append(batch, r)
-	}
-	if err := rows.Err(); err != nil {
-		s.logger.WithError(err).Warn("Ack-drain scan failed; skipping pass")
-		return
+	batch := make([]ackPendingRow, 0, len(rows))
+	for _, row := range rows {
+		batch = append(batch, ackPendingRow{
+			tenantID: row.TenantID, kind: row.Kind, artifactHash: row.ArtifactHash,
+			requestID: row.RequestID, originClusterID: row.OriginClusterID,
+			commandAckAttempts: int(row.CommandAckAttempts), leaseToken: leaseToken,
+		})
 	}
 
 	// Process the leased batch CONCURRENTLY (bounded) so it completes within the lease.
@@ -563,13 +502,9 @@ func (s *CommodoreServer) clearAckObligation(ctx context.Context, r ackPendingRo
 	// but the discharge must persist so the obligation is not redriven forever.
 	ctx, cancel := settleDBContext(ctx)
 	defer cancel()
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE commodore.artifact_creation_intents
-		   SET command_ack_pending = FALSE, command_acked_at = NOW(),
-		       command_ack_leased_until = NULL, command_ack_lease_token = NULL
-		 WHERE tenant_id = $1::uuid AND kind = $2 AND artifact_hash = $3
-		   AND command_ack_pending = TRUE AND command_ack_lease_token = $4::uuid
-	`, r.tenantID, r.kind, r.artifactHash, r.leaseToken); err != nil {
+	if err := commodoredb.New(s.db).ClearArtifactCreationCommandAck(ctx, commodoredb.ClearArtifactCreationCommandAckParams{
+		TenantID: r.tenantID, Kind: r.kind, ArtifactHash: r.artifactHash, LeaseToken: r.leaseToken,
+	}); err != nil {
 		s.logger.WithError(err).WithFields(logging.Fields{
 			"tenant_id":     r.tenantID,
 			"kind":          r.kind,
@@ -593,16 +528,9 @@ func (s *CommodoreServer) backoffAckObligation(ctx context.Context, r ackPending
 	// merely waits out its lease and reclaims its NULLS-FIRST slot, starving healthy rows.
 	ctx, cancel := settleDBContext(ctx)
 	defer cancel()
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE commodore.artifact_creation_intents
-		   SET command_ack_attempts = command_ack_attempts + 1,
-		       command_ack_next_at = NOW() + LEAST(INTERVAL '30 seconds' * power(2, LEAST(command_ack_attempts, 20)), INTERVAL '15 minutes'),
-		       command_ack_leased_until = NULL,
-		       command_ack_lease_token = NULL,
-		       updated_at = NOW()
-		 WHERE tenant_id = $1::uuid AND kind = $2 AND artifact_hash = $3
-		   AND command_ack_pending = TRUE AND command_ack_lease_token = $4::uuid
-	`, r.tenantID, r.kind, r.artifactHash, r.leaseToken); err != nil {
+	if err := commodoredb.New(s.db).BackoffArtifactCreationCommandAck(ctx, commodoredb.BackoffArtifactCreationCommandAckParams{
+		TenantID: r.tenantID, Kind: r.kind, ArtifactHash: r.artifactHash, LeaseToken: r.leaseToken,
+	}); err != nil {
 		s.logger.WithError(err).WithFields(logging.Fields{
 			"tenant_id":     r.tenantID,
 			"kind":          r.kind,
@@ -621,44 +549,22 @@ func (s *CommodoreServer) sweepCreationIntentsOnce(ctx context.Context) {
 	// stamped lease_token is CAS-checked on every terminal transition. updated_at is
 	// left unchanged so the grace window is not reset by claiming.
 	leaseToken := uuid.New().String()
-	rows, err := s.db.QueryContext(scanCtx, `
-		UPDATE commodore.artifact_creation_intents AS i
-		   SET lease_token = $1::uuid, leased_until = NOW() + $2::interval
-		 WHERE (i.tenant_id, i.kind, i.artifact_hash) IN (
-		     SELECT tenant_id, kind, artifact_hash
-		       FROM commodore.artifact_creation_intents
-		      WHERE status = 'pending'
-		        AND updated_at < NOW() - $3::interval
-		        AND (leased_until IS NULL OR leased_until < NOW())
-		      ORDER BY updated_at
-		      LIMIT $4
-		      FOR UPDATE SKIP LOCKED
-		 )
-		RETURNING i.tenant_id::text, i.kind, i.artifact_hash, i.request_id::text, COALESCE(i.origin_cluster_id, ''), i.payload, (i.created_at < NOW() - $5::interval)
-	`, leaseToken, intervalSeconds(creationIntentLeaseTTL), intervalSeconds(creationIntentSweepGrace), creationIntentSweepBatch, intervalSeconds(creationIntentMissingDeadline))
+	rows, err := commodoredb.New(s.db).ClaimArtifactCreationIntents(scanCtx, commodoredb.ClaimArtifactCreationIntentsParams{
+		LeaseToken: leaseToken, LeaseInterval: intervalSeconds(creationIntentLeaseTTL),
+		GraceInterval: intervalSeconds(creationIntentSweepGrace), BatchSize: int32(creationIntentSweepBatch),
+		MissingInterval: intervalSeconds(creationIntentMissingDeadline),
+	})
 	if err != nil {
 		s.logger.WithError(err).Warn("Failed to claim pending creation intents")
 		return
 	}
-	defer func() { _ = rows.Close() }()
-	var batch []creationIntentRow
-	for rows.Next() {
-		var r creationIntentRow
-		var payload []byte
-		if scanErr := rows.Scan(&r.tenantID, &r.kind, &r.artifactHash, &r.requestID, &r.originClusterID, &payload, &r.pastMissingDeadline); scanErr != nil {
-			s.logger.WithError(scanErr).Warn("Failed to scan creation intent row")
-			continue
-		}
-		r.payload = payload
-		r.leaseToken = leaseToken
-		batch = append(batch, r)
-	}
-	// A driver error mid-iteration yields a silently truncated batch; skip the whole pass
-	// rather than converge a partial claim. The claimed rows keep their lease and are
-	// reclaimed next sweep once it expires.
-	if err := rows.Err(); err != nil {
-		s.logger.WithError(err).Warn("Creation-intent claim scan failed; skipping pass")
-		return
+	batch := make([]creationIntentRow, 0, len(rows))
+	for _, row := range rows {
+		batch = append(batch, creationIntentRow{
+			tenantID: row.TenantID, kind: row.Kind, artifactHash: row.ArtifactHash,
+			requestID: row.RequestID, originClusterID: row.OriginClusterID,
+			payload: []byte(row.Payload), leaseToken: leaseToken, pastMissingDeadline: row.PastMissingDeadline,
+		})
 	}
 
 	// Process the claimed batch CONCURRENTLY (bounded) so it finishes within the claim lease:
@@ -890,13 +796,13 @@ func (s *CommodoreServer) compensateOrphanedClipIntent(ctx context.Context, r cr
 // the intent still terminalizes. Idempotent on clip_hash.
 func clipCatalogRowMutator(r creationIntentRow, p clipCreationPayload, startMs, durationMs int64) func(context.Context, *sql.Tx) error {
 	return func(ctx context.Context, tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, r.tenantID+":clip:"+r.artifactHash); err != nil {
+		queries := commodoredb.New(tx)
+		if err := queries.LockArtifactCreationIdentity(ctx, r.tenantID+":clip:"+r.artifactHash); err != nil {
 			return err
 		}
-		var markerRevision sql.NullInt64
-		tErr := tx.QueryRowContext(ctx,
-			`SELECT deletion_revision FROM commodore.artifact_catalog_tombstones WHERE tenant_id = $1::uuid AND kind = 'clip' AND artifact_hash = $2 FOR UPDATE`,
-			r.tenantID, r.artifactHash).Scan(&markerRevision)
+		_, tErr := queries.GetArtifactDeletionMarkerForUpdate(ctx, commodoredb.GetArtifactDeletionMarkerForUpdateParams{
+			TenantID: r.tenantID, Kind: creationIntentKindClip, ArtifactHash: r.artifactHash,
+		})
 		switch {
 		case tErr == nil:
 			// Deletion marker present: do not insert a live row behind it.
@@ -907,17 +813,17 @@ func clipCatalogRowMutator(r creationIntentRow, p clipCreationPayload, startMs, 
 			return tErr
 		}
 
-		var retentionArg any
+		retentionArg := sql.NullTime{}
 		if p.RetentionUnixSec != nil {
-			retentionArg = time.Unix(*p.RetentionUnixSec, 0).UTC()
+			retentionArg = sql.NullTime{Time: time.Unix(*p.RetentionUnixSec, 0).UTC(), Valid: true}
 		}
-		var policyArg any
+		policyArg := sql.NullString{}
 		if p.PlaybackPolicy != nil {
-			policyArg = *p.PlaybackPolicy
+			policyArg = sql.NullString{String: *p.PlaybackPolicy, Valid: true}
 		}
-		var secretArg any
+		secretArg := sql.NullString{}
 		if p.WebhookSecretEnc != nil {
-			secretArg = *p.WebhookSecretEnc
+			secretArg = sql.NullString{String: *p.WebhookSecretEnc, Valid: true}
 		}
 		// FENCE the parent against a concurrent deletion IN this tx — a clip must not be catalogued behind a stream
 		// that is being torn down (the clip's own artifact would then survive the parent's finalization). On a gone
@@ -927,18 +833,14 @@ func clipCatalogRowMutator(r creationIntentRow, p clipCreationPayload, startMs, 
 		if fErr := fenceParentStreamLive(ctx, tx, r.tenantID, p.StreamID); fErr != nil {
 			return fErr
 		}
-		_, err := tx.ExecContext(ctx, `
-			INSERT INTO commodore.clips (
-				id, tenant_id, user_id, stream_id, clip_hash, internal_name, playback_id,
-				title, description, start_time, duration, clip_mode, requested_params,
-				origin_cluster_id, retention_until, requires_auth, playback_policy,
-				playback_webhook_secret_enc, created_at, updated_at
-			) VALUES ($1, $2, $3, NULLIF($4, '')::uuid, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17::jsonb, $18, NOW(), NOW())
-			ON CONFLICT (clip_hash) DO NOTHING
-		`, p.ClipID, r.tenantID, p.UserID, p.StreamID, r.artifactHash, p.InternalName, p.PlaybackID,
-			p.Title, p.Description, startMs, durationMs, p.ClipMode, p.RequestedParams,
-			r.originClusterID, retentionArg, p.RequiresAuth, policyArg, secretArg)
-		return err
+		return queries.InsertConvergedClip(ctx, commodoredb.InsertConvergedClipParams{
+			ClipID: p.ClipID, TenantID: r.tenantID, UserID: p.UserID, StreamID: p.StreamID,
+			ClipHash: r.artifactHash, InternalName: p.InternalName, PlaybackID: p.PlaybackID,
+			Title: sql.NullString{String: p.Title, Valid: true}, Description: sql.NullString{String: p.Description, Valid: true},
+			StartTime: startMs, Duration: durationMs, ClipMode: sql.NullString{String: p.ClipMode, Valid: true},
+			RequestedParams: p.RequestedParams, OriginClusterID: sql.NullString{String: r.originClusterID, Valid: true},
+			RetentionUntil: retentionArg, RequiresAuth: p.RequiresAuth, PlaybackPolicy: policyArg, WebhookSecret: secretArg,
+		})
 	}
 }
 

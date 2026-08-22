@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"frameworks/api_control/internal/clusterurls"
+	"frameworks/api_control/internal/database/commodoredb"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
@@ -243,10 +244,6 @@ const activeIngestLease = streamident.ActiveIngestLease
 
 // activeIngestClusterFreshnessWindow is the discovery-side view of the lease.
 const activeIngestClusterFreshnessWindow = activeIngestLease
-
-// activeIngestLeaseInterval renders the lease as a SQL interval, so the claim
-// predicate and the discovery window come from the same constant.
-var activeIngestLeaseInterval = fmt.Sprintf("INTERVAL '%d seconds'", int(activeIngestLease.Seconds()))
 
 func dedupeAddrs(addrs ...string) []string {
 	seen := make(map[string]struct{}, len(addrs))
@@ -548,6 +545,66 @@ func scanCommodoreUserForRefresh(row *sql.Row, user *commodoreUserRecord) error 
 		&user.UpdatedAt,
 		&user.PlatformOperator,
 	)
+}
+
+func commodoreUserFromLoginRow(row commodoredb.GetLoginUserByEmailRow) (commodoreUserRecord, error) {
+	if !row.CreatedAt.Valid || !row.UpdatedAt.Valid {
+		return commodoreUserRecord{}, errors.New("user is missing required timestamps")
+	}
+	return commodoreUserRecord{
+		ID:               row.ID,
+		TenantID:         row.TenantID,
+		Email:            row.Email,
+		PasswordHash:     row.PasswordHash,
+		FirstName:        row.FirstName,
+		LastName:         row.LastName,
+		Role:             row.Role,
+		Permissions:      row.Permissions,
+		IsActive:         row.IsActive,
+		IsVerified:       row.Verified,
+		CreatedAt:        row.CreatedAt.Time,
+		UpdatedAt:        row.UpdatedAt.Time,
+		PlatformOperator: row.PlatformOperator,
+	}, nil
+}
+
+func commodoreUserFromProfileRow(row commodoredb.GetUserProfileRow) (commodoreUserRecord, error) {
+	if !row.CreatedAt.Valid || !row.UpdatedAt.Valid {
+		return commodoreUserRecord{}, errors.New("user is missing required timestamps")
+	}
+	return commodoreUserRecord{
+		ID:               row.ID,
+		TenantID:         row.TenantID,
+		Email:            row.Email,
+		FirstName:        row.FirstName,
+		LastName:         row.LastName,
+		Role:             row.Role,
+		Permissions:      row.Permissions,
+		IsActive:         row.IsActive,
+		IsVerified:       row.Verified,
+		LastLoginAt:      row.LastLoginAt,
+		CreatedAt:        row.CreatedAt.Time,
+		UpdatedAt:        row.UpdatedAt.Time,
+		PlatformOperator: row.PlatformOperator,
+	}, nil
+}
+
+func commodoreUserFromRefreshRow(row commodoredb.GetRefreshUserRow) (commodoreUserRecord, error) {
+	if !row.CreatedAt.Valid || !row.UpdatedAt.Valid {
+		return commodoreUserRecord{}, errors.New("user is missing required timestamps")
+	}
+	return commodoreUserRecord{
+		Email:            row.Email,
+		Role:             row.Role,
+		Permissions:      row.Permissions,
+		FirstName:        row.FirstName,
+		LastName:         row.LastName,
+		IsActive:         row.IsActive,
+		IsVerified:       row.Verified,
+		CreatedAt:        row.CreatedAt.Time,
+		UpdatedAt:        row.UpdatedAt.Time,
+		PlatformOperator: row.PlatformOperator,
+	}, nil
 }
 
 func (u commodoreUserRecord) toProtoUser(userID, tenantID string) *commodorepb.User {
@@ -1153,30 +1210,43 @@ func (s *CommodoreServer) resolveProcessesJSON(ctx context.Context, tenantID, st
 // getStreamProcessingOverride checks commodore.stream_processing_config for a
 // per-stream override. Returns "" when no row exists or the column is NULL.
 func (s *CommodoreServer) getStreamProcessingOverride(ctx context.Context, streamID, lifecycle string) string {
-	col := processConfigColumn(lifecycle)
-	var override sql.NullString
-	err := s.db.QueryRowContext(ctx,
-		`SELECT `+col+` FROM commodore.stream_processing_config WHERE stream_id = $1`,
-		streamID,
-	).Scan(&override)
-	if err != nil || !override.Valid {
+	row, err := commodoredb.New(s.db).GetStreamProcessingOverrides(ctx, streamID)
+	if err != nil {
 		return ""
 	}
-	return override.String
+	return processingOverrideForLifecycle(
+		lifecycle, row.ProcessesLive, row.ProcessesDvr, row.ProcessesClip,
+		row.ProcessesDvrFinalize, row.ProcessesVod,
+	)
 }
 
 // getTenantProcessingOverride checks commodore.tenant_processing_config for a tenant override.
 func (s *CommodoreServer) getTenantProcessingOverride(ctx context.Context, tenantID, lifecycle string) string {
-	col := processConfigColumn(lifecycle)
-	var override sql.NullString
-	err := s.db.QueryRowContext(ctx,
-		`SELECT `+col+` FROM commodore.tenant_processing_config WHERE tenant_id = $1`,
-		tenantID,
-	).Scan(&override)
-	if err != nil || !override.Valid {
+	row, err := commodoredb.New(s.db).GetTenantProcessingOverrides(ctx, tenantID)
+	if err != nil {
 		return ""
 	}
-	return override.String
+	return processingOverrideForLifecycle(
+		lifecycle, row.ProcessesLive, row.ProcessesDvr, row.ProcessesClip,
+		row.ProcessesDvrFinalize, row.ProcessesVod,
+	)
+}
+
+func processingOverrideForLifecycle(lifecycle string, live, dvr, clip, dvrFinalize, vod json.RawMessage) string {
+	var override json.RawMessage
+	switch normalizeProcessLifecycle(lifecycle) {
+	case processLifecycleDVR:
+		override = dvr
+	case processLifecycleClip:
+		override = clip
+	case processLifecycleDVRFinalize:
+		override = dvrFinalize
+	case processLifecycleVOD:
+		override = vod
+	default:
+		override = live
+	}
+	return string(override)
 }
 
 // resolveFoghornForTenant returns a Foghorn gRPC client for the tenant's cluster.
@@ -1285,20 +1355,19 @@ func (s *CommodoreServer) resolveFoghornForContent(ctx context.Context, contentI
 		return nil, nil, status.Error(codes.InvalidArgument, "content_id required")
 	}
 
-	var tenantID, activeClusterID sql.NullString
+	queries := commodoredb.New(s.db)
 	// deleted_at IS NULL: a soft-deleted (two-phase deletion-pending) stream must not resolve for serving.
-	err := s.db.QueryRowContext(ctx, `
-		SELECT tenant_id, active_ingest_cluster_id
-		FROM commodore.streams WHERE lower(playback_id::text) = lower($1::text) AND deleted_at IS NULL
-	`, contentID).Scan(&tenantID, &activeClusterID)
+	streamRoute, err := queries.GetStreamRouteByPlaybackID(ctx, contentID)
+	tenantID := sql.NullString{String: streamRoute.TenantID, Valid: streamRoute.TenantID != ""}
+	activeClusterID := streamRoute.ActiveIngestClusterID
 
 	if errors.Is(err, sql.ErrNoRows) {
 		// Try internal_name lookup (content_id may be "live+<name>")
 		name := strings.TrimPrefix(contentID, "live+")
-		err = s.db.QueryRowContext(ctx, `
-			SELECT tenant_id, active_ingest_cluster_id
-			FROM commodore.streams WHERE internal_name = $1 AND deleted_at IS NULL
-		`, name).Scan(&tenantID, &activeClusterID)
+		internalRoute, internalErr := queries.GetStreamRouteByInternalName(ctx, name)
+		err = internalErr
+		tenantID = sql.NullString{String: internalRoute.TenantID, Valid: internalRoute.TenantID != ""}
+		activeClusterID = internalRoute.ActiveIngestClusterID
 	}
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1347,17 +1416,11 @@ func (s *CommodoreServer) resolveFoghornForStreamKey(ctx context.Context, stream
 		return nil, nil, status.Error(codes.InvalidArgument, "stream_key required")
 	}
 
-	var tenantID, activeClusterID sql.NullString
 	// Freshness is computed by the database, in the same clock domain that
-	// writes and expires the claim. Comparing a database timestamp against this
-	// process's wall clock would let skew declare a just-taken lease stale, or
-	// hold an expired one open past its window.
-	var leaseFresh sql.NullBool
-	err := s.db.QueryRowContext(ctx, `
-		SELECT tenant_id, active_ingest_cluster_id,
-		       active_ingest_cluster_updated_at > NOW() - `+activeIngestLeaseInterval+` AS lease_fresh
-		FROM commodore.streams WHERE stream_key = $1 AND deleted_at IS NULL
-	`, streamKey).Scan(&tenantID, &activeClusterID, &leaseFresh)
+	// writes and expires the claim.
+	streamRoute, err := commodoredb.New(s.db).GetStreamRouteByKey(ctx, commodoredb.GetStreamRouteByKeyParams{
+		StreamKey: streamKey, Column2: int64(activeIngestLease.Seconds()),
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil, status.Error(codes.NotFound, "stream key not found")
 	}
@@ -1373,16 +1436,18 @@ func (s *CommodoreServer) resolveFoghornForStreamKey(ctx context.Context, stream
 	// any other cluster would reject the publish as a duplicate. So a failure to
 	// reach it is transient, not a reason to hand back a different cluster's
 	// endpoint that we already know the publisher cannot use.
-	if activeClusterID.Valid && activeClusterID.String != "" && leaseFresh.Valid && leaseFresh.Bool {
+	tenantID := streamRoute.TenantID
+	activeClusterID := streamRoute.ActiveIngestClusterID
+	if activeClusterID.Valid && activeClusterID.String != "" && streamRoute.LeaseFresh {
 		leasedClusterID := activeClusterID.String
 		if client, ok := s.foghornPool.Get(foghornPoolKey(leasedClusterID, "")); ok {
 			return client, &clusterRoute{clusterID: leasedClusterID}, nil
 		}
-		if !tenantID.Valid || tenantID.String == "" {
+		if tenantID == "" {
 			return nil, nil, status.Errorf(codes.Unavailable,
 				"stream holds an active ingest lease on cluster %s but its tenant is unknown", leasedClusterID)
 		}
-		client, clusterErr := s.resolveFoghornForCluster(ctx, leasedClusterID, tenantID.String)
+		client, clusterErr := s.resolveFoghornForCluster(ctx, leasedClusterID, tenantID)
 		if clusterErr != nil {
 			return nil, nil, status.Errorf(codes.Unavailable,
 				"ingest is leased to cluster %s, which could not be resolved: %v", leasedClusterID, clusterErr)
@@ -1391,10 +1456,10 @@ func (s *CommodoreServer) resolveFoghornForStreamKey(ctx context.Context, stream
 	}
 
 	// Fall back to tenant-based routing (populates pool for next time)
-	if !tenantID.Valid || tenantID.String == "" {
+	if tenantID == "" {
 		return nil, nil, status.Error(codes.NotFound, "stream key has no tenant association")
 	}
-	client, route, err := s.resolveFoghornForTenant(ctx, tenantID.String)
+	client, route, err := s.resolveFoghornForTenant(ctx, tenantID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1402,29 +1467,9 @@ func (s *CommodoreServer) resolveFoghornForStreamKey(ctx context.Context, stream
 }
 
 func (s *CommodoreServer) resolveArtifactRouteForContent(ctx context.Context, contentID string) (bool, sql.NullString, sql.NullString, error) {
-	var tenantID, clusterID sql.NullString
-	err := s.db.QueryRowContext(ctx, `
-		SELECT tenant_id, cluster_id
-		  FROM (
-			SELECT tenant_id,
-			       COALESCE(NULLIF(storage_cluster_id, ''), NULLIF(origin_cluster_id, '')) AS cluster_id
-			  FROM commodore.clips
-			 WHERE (lower(playback_id::text) = lower($1::text) OR clip_hash = $1)			UNION ALL
-			SELECT tenant_id,
-			       COALESCE(NULLIF(storage_cluster_id, ''), NULLIF(origin_cluster_id, '')) AS cluster_id
-			  FROM commodore.vod_assets
-			 WHERE (lower(playback_id::text) = lower($1::text) OR vod_hash = $1)			UNION ALL
-			SELECT tenant_id,
-			       COALESCE(NULLIF(storage_cluster_id, ''), NULLIF(origin_cluster_id, '')) AS cluster_id
-			  FROM commodore.dvr_recordings
-			 WHERE (lower(playback_id::text) = lower($1::text) OR dvr_hash = $1)			UNION ALL
-			SELECT cp.tenant_id,
-			       COALESCE(NULLIF(va.storage_cluster_id, ''), NULLIF(va.origin_cluster_id, '')) AS cluster_id
-			  FROM commodore.dvr_chapter_playback cp
-			  JOIN commodore.vod_assets va ON va.tenant_id = cp.tenant_id AND va.vod_hash = cp.artifact_hash
-			 WHERE lower(cp.playback_id::text) = lower($1::text)		  ) resolved
-		 LIMIT 1
-	`, contentID).Scan(&tenantID, &clusterID)
+	row, err := commodoredb.New(s.db).GetArtifactRouteByContent(ctx, contentID)
+	tenantID := sql.NullString{String: row.TenantID, Valid: row.TenantID != ""}
+	clusterID := sql.NullString{String: row.ClusterID, Valid: row.ClusterID != ""}
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, tenantID, clusterID, nil
 	}
@@ -1549,18 +1594,8 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *commodorep
 		return nil, status.Error(codes.InvalidArgument, "claim_token is required when cluster_id is set")
 	}
 
-	// Query stream info from commodore tables only (no cross-service DB access)
-	var streamID, userID, tenantID, internalName, playbackID, ingestMode string
-	var isActive, isRecordingEnabled bool
-
-	err := s.db.QueryRowContext(ctx, `
-		SELECT
-			s.id, s.user_id, s.tenant_id, s.internal_name,
-			u.is_active, s.is_recording_enabled, s.playback_id, s.ingest_mode
-		FROM commodore.streams s
-		JOIN commodore.users u ON s.user_id = u.id
-		WHERE s.stream_key = $1 AND s.deleted_at IS NULL
-	`, streamKey).Scan(&streamID, &userID, &tenantID, &internalName, &isActive, &isRecordingEnabled, &playbackID, &ingestMode)
+	queries := commodoredb.New(s.db)
+	admission, err := queries.GetStreamAdmissionByKey(ctx, streamKey)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return &commodorepb.ValidateStreamKeyResponse{
@@ -1578,14 +1613,14 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *commodorep
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	if !isActive {
+	if !admission.IsActive.Bool {
 		return &commodorepb.ValidateStreamKeyResponse{
 			Valid:           false,
 			Error:           "User account is inactive",
 			RejectionReason: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_USER_INACTIVE,
 		}, nil
 	}
-	if ingestMode == "pull" {
+	if admission.IngestMode == "pull" {
 		return &commodorepb.ValidateStreamKeyResponse{
 			Valid:           false,
 			Error:           "Pull streams do not accept push ingest",
@@ -1605,10 +1640,10 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *commodorep
 	// down. Unavailable instead, before any placement write.
 	requestedClusterID := strings.TrimSpace(req.GetClusterId())
 	if requestedClusterID != "" {
-		route, routeErr := s.resolveAdmissionRouteForTenant(ctx, tenantID)
+		route, routeErr := s.resolveAdmissionRouteForTenant(ctx, admission.TenantID)
 		if routeErr != nil {
 			s.logger.WithError(routeErr).WithFields(logging.Fields{
-				"tenant_id":  tenantID,
+				"tenant_id":  admission.TenantID,
 				"cluster_id": requestedClusterID,
 			}).Warn("ValidateStreamKey: cluster route lookup failed; failing closed as transient")
 			return nil, status.Errorf(codes.Unavailable, "cluster route lookup failed: %v", routeErr)
@@ -1617,7 +1652,7 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *commodorep
 			peer, rejectionReason := clusterAdmissionPeer(route, requestedClusterID)
 			if rejectionReason == commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_NOT_ENTITLED {
 				s.logger.WithFields(logging.Fields{
-					"tenant_id":  tenantID,
+					"tenant_id":  admission.TenantID,
 					"cluster_id": requestedClusterID,
 				}).Warn("ValidateStreamKey rejected: cluster not entitled or filtered by plan policy")
 				return &commodorepb.ValidateStreamKeyResponse{
@@ -1652,10 +1687,10 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *commodorep
 	var tenantResourceLimits *tenantlimitspb.TenantResourceLimits
 
 	if s.purserClient != nil {
-		billingStatus, err := s.purserClient.GetTenantBillingStatus(ctx, tenantID)
+		billingStatus, err := s.purserClient.GetTenantBillingStatus(ctx, admission.TenantID)
 		if err != nil {
 			s.logger.WithFields(logging.Fields{
-				"tenant_id": tenantID,
+				"tenant_id": admission.TenantID,
 				"error":     err,
 			}).Warn("Failed to get billing status from Purser; rated ingest remains blocked")
 		} else {
@@ -1670,21 +1705,21 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *commodorep
 
 	resp := &commodorepb.ValidateStreamKeyResponse{
 		Valid:                true,
-		UserId:               userID,
-		TenantId:             tenantID,
-		InternalName:         internalName,
-		IsRecordingEnabled:   isRecordingEnabled,
-		StreamId:             streamID,
+		UserId:               admission.UserID,
+		TenantId:             admission.TenantID,
+		InternalName:         admission.InternalName,
+		IsRecordingEnabled:   admission.IsRecordingEnabled.Bool,
+		StreamId:             admission.ID,
 		BillingModel:         billingModel,
 		IsSuspended:          isSuspended,
 		IsBalanceNegative:    isBalanceNegative,
-		PlaybackId:           playbackID,
+		PlaybackId:           admission.PlaybackID,
 		DvrPolicy:            dvrPolicy,
 		Allowances:           allowances,
 		TenantResourceLimits: tenantResourceLimits,
 	}
 
-	if route, err := s.resolveClusterRouteForTenant(ctx, tenantID); err == nil {
+	if route, err := s.resolveClusterRouteForTenant(ctx, admission.TenantID); err == nil {
 		resolvedOriginClusterID := resolveLiveIngestClusterID(route, req.GetClusterId())
 		resp.OriginClusterId = &resolvedOriginClusterID
 		if route.officialClusterID != "" {
@@ -1697,20 +1732,15 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *commodorep
 	}
 
 	// Load enabled push targets for multistreaming
-	pushRows, pushErr := s.db.QueryContext(ctx, `
-		SELECT id, platform, name, target_uri
-		FROM commodore.push_targets
-		WHERE stream_id = $1 AND tenant_id = $2 AND is_enabled = true
-	`, streamID, tenantID)
+	pushRows, pushErr := queries.ListEnabledPushTargets(ctx, commodoredb.ListEnabledPushTargetsParams{
+		StreamID: admission.ID, TenantID: admission.TenantID,
+	})
 	if pushErr != nil {
-		s.logger.WithError(pushErr).WithField("stream_id", streamID).Warn("Failed to load push targets")
+		s.logger.WithError(pushErr).WithField("stream_id", admission.ID).Warn("Failed to load push targets")
 	} else {
-		defer pushRows.Close()
-		for pushRows.Next() {
-			var t commodorepb.PushTargetInternal
-			if scanErr := pushRows.Scan(&t.Id, &t.Platform, &t.Name, &t.TargetUri); scanErr != nil {
-				s.logger.WithError(scanErr).Warn("Failed to scan push target")
-				continue
+		for _, row := range pushRows {
+			t := commodorepb.PushTargetInternal{
+				Id: row.ID, Platform: row.Platform.String, Name: row.Name, TargetUri: row.TargetUri,
 			}
 			if decrypted, decErr := s.fieldEncryptor.Decrypt(t.TargetUri); decErr == nil {
 				t.TargetUri = decrypted
@@ -1724,8 +1754,8 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *commodorep
 	if resp.OriginClusterId != nil {
 		processClusterID = *resp.OriginClusterId
 	}
-	resp.ProcessesJson = s.resolveProcessesJSON(ctx, tenantID, streamID, processClusterID, "live")
-	resp.DvrProcessesJson = s.resolveProcessesJSON(ctx, tenantID, streamID, processClusterID, "dvr")
+	resp.ProcessesJson = s.resolveProcessesJSON(ctx, admission.TenantID, admission.ID, processClusterID, "live")
+	resp.DvrProcessesJson = s.resolveProcessesJSON(ctx, admission.TenantID, admission.ID, processClusterID, "dvr")
 
 	// Track the media cluster this stream ingests on.
 	//
@@ -1767,43 +1797,20 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *commodorep
 		// rejection: giving back a refresh would unpin the live session that
 		// re-fired PUSH_REWRITE.
 		claimToken := strings.TrimSpace(req.GetClaimToken())
-		var prevCluster, prevToken sql.NullString
-		var prevFresh sql.NullBool
-		claimErr := s.db.QueryRowContext(ctx, `
-			WITH held AS (
-				SELECT id,
-				       active_ingest_cluster_id AS prev_cluster,
-				       active_ingest_claim_id AS prev_token,
-				       (active_ingest_cluster_id IS NOT NULL
-				        AND active_ingest_cluster_id <> ''
-				        AND active_ingest_cluster_updated_at IS NOT NULL
-				        AND active_ingest_cluster_updated_at >= NOW() - `+activeIngestLeaseInterval+`) AS prev_fresh
-				FROM commodore.streams
-				WHERE stream_key = $2 AND deleted_at IS NULL
-				FOR UPDATE
-			)
-			UPDATE commodore.streams s
-			SET active_ingest_cluster_id = $1,
-				active_ingest_cluster_updated_at = NOW(),
-				active_ingest_claim_id = $3,
-				updated_at = NOW()
-			FROM held
-			WHERE s.id = held.id
-				AND (
-					NOT held.prev_fresh
-					OR (held.prev_cluster = $1 AND held.prev_token = $3)
-				)
-			RETURNING held.prev_cluster, held.prev_token, held.prev_fresh
-		`, activeIngestClusterID, streamKey, claimToken).Scan(&prevCluster, &prevToken, &prevFresh)
+		claim, claimErr := queries.AcquireIngestClaim(ctx, commodoredb.AcquireIngestClaimParams{
+			ClusterID:    sql.NullString{String: activeIngestClusterID, Valid: true},
+			ClaimToken:   sql.NullString{String: claimToken, Valid: true},
+			LeaseSeconds: int64(activeIngestLease.Seconds()), LookupStreamKey: streamKey,
+		})
 		switch {
 		case claimErr != nil && !errors.Is(claimErr, sql.ErrNoRows):
 			s.logger.WithError(claimErr).WithField("stream_key", logging.RedactSecret(streamKey)).Warn("Failed to record ingest cluster")
 		case claimErr == nil:
 			// Reserved rather than refreshed when nothing live held it, or when
 			// the live claim was in another cluster's name or ownerless.
-			reserved := !prevFresh.Bool ||
-				prevCluster.String != activeIngestClusterID ||
-				prevToken.String != claimToken
+			reserved := !claim.PrevFresh ||
+				claim.PrevCluster.String != activeIngestClusterID ||
+				claim.PrevToken.String != claimToken
 			resp.ClaimAcquired = reserved
 		default:
 			// Concurrent-claim guard: a live claim exists and it is not this
@@ -1815,23 +1822,19 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *commodorep
 			// PeerChannel StreamAdvertisement broadcast (which surfaces the
 			// same fact at federation cadence ~10s; this gate fires
 			// synchronously at admission time).
-			var heldCluster, heldOwner sql.NullString
-			if scanErr := s.db.QueryRowContext(ctx, `
-				SELECT active_ingest_cluster_id, active_ingest_claim_id
-				FROM commodore.streams
-				WHERE stream_key = $1
-			`, streamKey).Scan(&heldCluster, &heldOwner); scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
+			held, scanErr := queries.GetActiveIngestClaim(ctx, streamKey)
+			if scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
 				s.logger.WithError(scanErr).WithField("stream_key", logging.RedactSecret(streamKey)).Warn("ValidateStreamKey: active-ingest lookup failed")
 			}
-			if heldCluster.Valid && heldCluster.String != "" && heldOwner.String != claimToken {
-				where := "cluster " + heldCluster.String
-				if heldCluster.String == activeIngestClusterID {
+			if held.ActiveIngestClusterID.Valid && held.ActiveIngestClusterID.String != "" && held.ActiveIngestClaimID.String != claimToken {
+				where := "cluster " + held.ActiveIngestClusterID.String
+				if held.ActiveIngestClusterID.String == activeIngestClusterID {
 					where = "this cluster by another publisher"
 				}
 				s.logger.WithFields(logging.Fields{
 					"stream_key":            logging.RedactSecret(streamKey),
 					"requesting_cluster_id": activeIngestClusterID,
-					"active_ingest_cluster": heldCluster.String,
+					"active_ingest_cluster": held.ActiveIngestClusterID.String,
 				}).Warn("ValidateStreamKey rejected: duplicate ingest claim against a live claim held by another publisher")
 				return &commodorepb.ValidateStreamKeyResponse{
 					Valid:           false,
@@ -1872,25 +1875,7 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *commodorep
 // mistNativeStreamToRendered, which rejects non-system tenants) before relaxing
 // the render-layer constraint.
 func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *commodorepb.ResolveStreamContextRequest) (*commodorepb.ResolveStreamContextResponse, error) {
-	var streamID, userID, tenantID, internalName, playbackID, ingestMode string
-	var isActive, isRecordingEnabled, requiresAuth bool
-	var leasedIngestClusterID sql.NullString
-	var leaseFresh sql.NullBool
-
-	// lease_fresh is computed in SQL, on the database's clock: comparing a
-	// returned timestamp against this process's clock would make placement
-	// depend on how far the two have drifted.
-	baseSelect := `
-		SELECT s.id, s.user_id, s.tenant_id, s.internal_name,
-		       u.is_active, s.is_recording_enabled, s.playback_id, s.ingest_mode,
-		       s.requires_auth, s.active_ingest_cluster_id,
-		       s.active_ingest_cluster_updated_at > NOW() - ` + activeIngestLeaseInterval + ` AS lease_fresh
-		FROM commodore.streams s
-		JOIN commodore.users u ON s.user_id = u.id
-		WHERE `
-
 	var (
-		query string
 		arg   string
 		field string
 		// A stream key is a publishing credential, not an identifier: it must
@@ -1903,19 +1888,15 @@ func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *commodo
 	switch id := req.GetIdentifier().(type) {
 	case *commodorepb.ResolveStreamContextRequest_StreamId:
 		field, arg = "stream_id", id.StreamId
-		query = baseSelect + "s.id = $1"
 	case *commodorepb.ResolveStreamContextRequest_PlaybackId:
 		field, arg = "playback_id", id.PlaybackId
-		query = baseSelect + "lower(s.playback_id::text) = lower($1::text)"
 	case *commodorepb.ResolveStreamContextRequest_InternalName:
 		field, arg = "internal_name", id.InternalName
-		query = baseSelect + "s.internal_name = $1"
 	case *commodorepb.ResolveStreamContextRequest_StreamKey:
 		// Soft-deleted streams are excluded here: a stream key is held by the
 		// publisher and outlives deletion in encoder configs, so a deleted
 		// stream must stop accepting it. Matches ValidateStreamKey's lookup.
 		field, arg = "stream_key", id.StreamKey
-		query = baseSelect + "s.stream_key = $1 AND s.deleted_at IS NULL"
 		identifierIsSecret = true
 		identifierIsPublishIntent = true
 	default:
@@ -1925,11 +1906,9 @@ func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *commodo
 		return nil, status.Errorf(codes.InvalidArgument, "%s must be non-empty", field)
 	}
 
-	err := s.db.QueryRowContext(ctx, query, arg).Scan(
-		&streamID, &userID, &tenantID, &internalName,
-		&isActive, &isRecordingEnabled, &playbackID, &ingestMode,
-		&requiresAuth, &leasedIngestClusterID, &leaseFresh,
-	)
+	resolved, err := commodoredb.New(s.db).ResolveStreamContextByIdentifier(ctx, commodoredb.ResolveStreamContextByIdentifierParams{
+		LeaseSeconds: int64(activeIngestLease.Seconds()), IdentifierKind: field, IdentifierValue: arg,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return &commodorepb.ResolveStreamContextResponse{
 			Admitted:        false,
@@ -1951,17 +1930,17 @@ func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *commodo
 	}
 
 	resp := &commodorepb.ResolveStreamContextResponse{
-		StreamId:           streamID,
-		PlaybackId:         playbackID,
-		InternalName:       internalName,
-		IngestMode:         ingestMode,
-		TenantId:           tenantID,
-		UserId:             userID,
-		IsRecordingEnabled: isRecordingEnabled,
-		RequiresAuth:       requiresAuth,
+		StreamId:           resolved.ID,
+		PlaybackId:         resolved.PlaybackID,
+		InternalName:       resolved.InternalName,
+		IngestMode:         resolved.IngestMode,
+		TenantId:           resolved.TenantID,
+		UserId:             resolved.UserID,
+		IsRecordingEnabled: resolved.IsRecordingEnabled.Bool,
+		RequiresAuth:       resolved.RequiresAuth,
 	}
 
-	if !isActive {
+	if !resolved.IsActive.Bool {
 		resp.Admitted = false
 		resp.AdmissionReason = "User account is inactive"
 		resp.RejectionReason = commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_USER_INACTIVE
@@ -1995,17 +1974,17 @@ func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *commodo
 	admissionClusterID := requestedClusterID
 	var admissionRoute *clusterRoute
 	if admissionClusterID != "" || identifierIsPublishIntent {
-		route, routeErr := s.resolveAdmissionRouteForTenant(ctx, tenantID)
+		route, routeErr := s.resolveAdmissionRouteForTenant(ctx, resolved.TenantID)
 		if routeErr != nil {
 			s.logger.WithError(routeErr).WithFields(logging.Fields{
-				"tenant_id":  tenantID,
+				"tenant_id":  resolved.TenantID,
 				"cluster_id": requestedClusterID,
 			}).Warn("ResolveStreamContext: cluster route lookup failed; failing closed as transient")
 			return nil, status.Errorf(codes.Unavailable, "cluster route lookup failed: %v", routeErr)
 		}
 		admissionRoute = route
-		if admissionClusterID == "" && leaseFresh.Valid && leaseFresh.Bool && leasedIngestClusterID.Valid {
-			admissionClusterID = strings.TrimSpace(leasedIngestClusterID.String)
+		if admissionClusterID == "" && resolved.LeaseFresh && resolved.ActiveIngestClusterID.Valid {
+			admissionClusterID = strings.TrimSpace(resolved.ActiveIngestClusterID.String)
 		}
 
 		if admissionClusterID != "" {
@@ -2053,14 +2032,14 @@ func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *commodo
 	// preserving any previously-applied state without committing fresh
 	// state on unverified billing.
 	if s.purserClient == nil {
-		s.logger.WithField("tenant_id", tenantID).
+		s.logger.WithField("tenant_id", resolved.TenantID).
 			Warn("ResolveStreamContext: purser client not configured; failing closed as transient")
 		return nil, status.Error(codes.Unavailable, "billing status: purser client not configured")
 	}
-	billingStatus, err := s.purserClient.GetTenantBillingStatus(ctx, tenantID)
+	billingStatus, err := s.purserClient.GetTenantBillingStatus(ctx, resolved.TenantID)
 	if err != nil {
 		s.logger.WithFields(logging.Fields{
-			"tenant_id": tenantID,
+			"tenant_id": resolved.TenantID,
 			"error":     err,
 		}).Warn("ResolveStreamContext: billing status lookup failed; failing closed as transient")
 		return nil, status.Errorf(codes.Unavailable, "billing status lookup failed: %v", err)
@@ -2074,8 +2053,8 @@ func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *commodo
 
 	// A live claim pins placement; see the field's contract. Populated
 	// regardless of identifier, since every caller routes on the same fact.
-	if leaseFresh.Valid && leaseFresh.Bool && leasedIngestClusterID.Valid {
-		if leased := strings.TrimSpace(leasedIngestClusterID.String); leased != "" {
+	if resolved.LeaseFresh && resolved.ActiveIngestClusterID.Valid {
+		if leased := strings.TrimSpace(resolved.ActiveIngestClusterID.String); leased != "" {
 			resp.ActiveIngestClusterId = &leased
 		}
 	}
@@ -2090,12 +2069,15 @@ func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *commodo
 	// admitted carrying no routing at all.
 	route := admissionRoute
 	if route == nil {
-		if cached, err := s.resolveClusterRouteForTenant(ctx, tenantID); err == nil {
+		if cached, err := s.resolveClusterRouteForTenant(ctx, resolved.TenantID); err == nil {
 			route = cached
 		}
 	}
 	if route != nil {
-		resolvedOriginClusterID := liveIngestClusterID(route, requestedClusterID, leasedIngestClusterID, leaseFresh)
+		resolvedOriginClusterID := liveIngestClusterID(
+			route, requestedClusterID, resolved.ActiveIngestClusterID,
+			sql.NullBool{Bool: resolved.LeaseFresh, Valid: true},
+		)
 		resp.OriginClusterId = &resolvedOriginClusterID
 		if route.officialClusterID != "" {
 			resp.OfficialClusterId = &route.officialClusterID
@@ -2119,8 +2101,8 @@ func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *commodo
 	if resp.OriginClusterId != nil {
 		processClusterID = *resp.OriginClusterId
 	}
-	resp.ProcessesJson = s.resolveProcessesJSON(ctx, tenantID, streamID, processClusterID, "live")
-	resp.DvrProcessesJson = s.resolveProcessesJSON(ctx, tenantID, streamID, processClusterID, "dvr")
+	resp.ProcessesJson = s.resolveProcessesJSON(ctx, resolved.TenantID, resolved.ID, processClusterID, "live")
+	resp.DvrProcessesJson = s.resolveProcessesJSON(ctx, resolved.TenantID, resolved.ID, processClusterID, "dvr")
 
 	// Final admission decision: facts above were collected; now collapse the
 	// billing gates that PUSH_REWRITE applies (lines 1092-1110 in
@@ -2154,28 +2136,7 @@ func (s *CommodoreServer) ListManagedStreams(ctx context.Context, req *commodore
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
 	}
 
-	// allowed_cluster_ids is stored as an array for pull-stream symmetry, but
-	// mist_native currently allows one source cluster. A row is eligible when
-	// the requested cluster_id is that source cluster.
-	const querySQL = `
-		SELECT s.id::text,
-		       s.playback_id,
-		       s.internal_name,
-		       s.tenant_id::text,
-		       s.ingest_mode,
-		       mn.source_spec,
-		       mn.source_kind,
-		       s.always_on,
-		       mn.placement_count,
-		       COALESCE(mn.allowed_cluster_ids, '{}')
-		FROM commodore.streams s
-		JOIN commodore.stream_mist_sources mn ON mn.stream_id = s.id
-		WHERE s.ingest_mode = 'mist_native'
-		  AND s.always_on   = TRUE
-		  AND $1 = ANY(mn.allowed_cluster_ids)
-		ORDER BY s.id::text`
-
-	rows, err := s.db.QueryContext(ctx, querySQL, clusterID)
+	rows, err := commodoredb.New(s.db).ListManagedStreams(ctx, clusterID)
 	if err != nil {
 		s.logger.WithFields(logging.Fields{
 			"cluster_id": clusterID,
@@ -2183,32 +2144,19 @@ func (s *CommodoreServer) ListManagedStreams(ctx context.Context, req *commodore
 		}).Error("Database error listing managed streams")
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
-
 	resp := &commodorepb.ListManagedStreamsResponse{}
-	for rows.Next() {
-		var (
-			row        commodorepb.ManagedStreamRow
-			placement  sql.NullInt32
-			allowedArr []string
-		)
-		if scanErr := rows.Scan(
-			&row.StreamId, &row.PlaybackId, &row.InternalName, &row.TenantId,
-			&row.IngestMode, &row.SourceSpec, &row.SourceKind, &row.AlwaysOn,
-			&placement, fwdb.ArrayScan(&allowedArr),
-		); scanErr != nil {
-			s.logger.WithError(scanErr).Warn("Failed to scan managed stream row")
-			continue
+	for _, dbRow := range rows {
+		row := &commodorepb.ManagedStreamRow{
+			StreamId: dbRow.StreamID, PlaybackId: dbRow.PlaybackID,
+			InternalName: dbRow.InternalName, TenantId: dbRow.TenantID,
+			IngestMode: dbRow.IngestMode, SourceSpec: dbRow.SourceSpec,
+			SourceKind: dbRow.SourceKind, AlwaysOn: dbRow.AlwaysOn,
+			PlacementCount: dbRow.PlacementCount, AllowedClusterIds: dbRow.AllowedClusterIds,
 		}
-		row.PlacementCount = 1
-		if placement.Valid && placement.Int32 > 0 {
-			row.PlacementCount = placement.Int32
+		if row.PlacementCount <= 0 {
+			row.PlacementCount = 1
 		}
-		row.AllowedClusterIds = allowedArr
-		resp.Streams = append(resp.Streams, &row)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, status.Errorf(codes.Internal, "iterate managed streams: %v", err)
+		resp.Streams = append(resp.Streams, row)
 	}
 	return resp, nil
 }
@@ -2224,13 +2172,7 @@ func (s *CommodoreServer) ListStreamMonitoring(ctx context.Context, req *commodo
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
 
-	const querySQL = `
-		SELECT id::text, internal_name, monitoring_enabled
-		FROM commodore.streams
-		WHERE tenant_id = $1::uuid
-		ORDER BY id::text`
-
-	rows, err := s.db.QueryContext(ctx, querySQL, tenantID)
+	rows, err := commodoredb.New(s.db).ListStreamMonitoring(ctx, tenantID)
 	if err != nil {
 		s.logger.WithFields(logging.Fields{
 			"tenant_id": tenantID,
@@ -2238,30 +2180,13 @@ func (s *CommodoreServer) ListStreamMonitoring(ctx context.Context, req *commodo
 		}).Error("Database error listing stream monitoring")
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
-
 	resp := &commodorepb.ListStreamMonitoringResponse{}
-	for rows.Next() {
-		var (
-			row     commodorepb.StreamMonitoringRow
-			enabled sql.NullBool
-		)
-		if scanErr := rows.Scan(&row.StreamId, &row.InternalName, &enabled); scanErr != nil {
-			s.logger.WithError(scanErr).Error("Failed to scan stream monitoring row")
-			return nil, status.Errorf(codes.Internal, "scan stream monitoring: %v", scanErr)
+	for _, dbRow := range rows {
+		row := &commodorepb.StreamMonitoringRow{
+			StreamId: dbRow.StreamID, InternalName: dbRow.InternalName,
+			MonitoringToggle: monitoringToggleFromNullBool(dbRow.MonitoringEnabled),
 		}
-		switch {
-		case !enabled.Valid:
-			row.MonitoringToggle = commodorepb.MonitoringToggle_MONITORING_TOGGLE_INHERIT
-		case enabled.Bool:
-			row.MonitoringToggle = commodorepb.MonitoringToggle_MONITORING_TOGGLE_ON
-		default:
-			row.MonitoringToggle = commodorepb.MonitoringToggle_MONITORING_TOGGLE_OFF
-		}
-		resp.Streams = append(resp.Streams, &row)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, status.Errorf(codes.Internal, "iterate stream monitoring: %v", err)
+		resp.Streams = append(resp.Streams, row)
 	}
 	return resp, nil
 }
@@ -2300,36 +2225,19 @@ func (s *CommodoreServer) RecordStreamActiveCluster(ctx context.Context, req *co
 	// took it, so a managed reconciler cannot take over a push publisher's placement (nor another managed writer's) by
 	// virtue of naming the same cluster. A managed placement is owned by its stream — the reconciler is that stream's
 	// single managed writer — so the token is derived from the stream id rather than a connection.
-	updateSQL := `
-		UPDATE commodore.streams
-		SET active_ingest_cluster_id = $1,
-		    active_ingest_cluster_updated_at = NOW(),
-		    active_ingest_claim_id = $4,
-		    updated_at = NOW()
-		WHERE id = $2::uuid
-		  AND tenant_id = $3::uuid
-		  AND deleted_at IS NULL
-		  AND (
-		    active_ingest_cluster_id IS NULL
-		    OR active_ingest_cluster_id = ''
-		    OR active_ingest_cluster_updated_at IS NULL
-		    OR active_ingest_cluster_updated_at < NOW() - ` + activeIngestLeaseInterval + `
-		    OR (
-		      active_ingest_cluster_id = $1
-		      AND active_ingest_claim_id = $4
-		    )
-		  )`
-	res, err := s.db.ExecContext(ctx, updateSQL, clusterID, streamID, tenantID, managedClaimToken(streamID))
+	rows, err := commodoredb.New(s.db).RecordManagedStreamActiveCluster(ctx, commodoredb.RecordManagedStreamActiveClusterParams{
+		ClusterID:    sql.NullString{String: clusterID, Valid: true},
+		ClaimToken:   sql.NullString{String: managedClaimToken(streamID), Valid: true},
+		StreamID:     streamID,
+		TenantID:     tenantID,
+		LeaseSeconds: int64(activeIngestLease.Seconds()),
+	})
 	if err != nil {
 		s.logger.WithError(err).WithFields(logging.Fields{
 			"stream_id":  streamID,
 			"cluster_id": clusterID,
 		}).Error("RecordStreamActiveCluster: update failed")
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-	rows, err := res.RowsAffected()
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "rows affected: %v", err)
 	}
 	return &commodorepb.RecordStreamActiveClusterResponse{Updated: rows > 0}, nil
 }
@@ -2359,24 +2267,17 @@ func (s *CommodoreServer) RegisterStreamThumbnailServingCell(ctx context.Context
 	// UPDATE's EvalPlanQual re-check and the SELECT's statement snapshot can disagree under a concurrent delete). The
 	// per-mint write frequency is bounded by Foghorn's registration cache, so re-writing updated_at on an
 	// already-recorded cell is negligible. Tenant-scoped.
-	res, err := s.db.ExecContext(ctx, `
-		UPDATE commodore.streams
-		SET thumbnail_serving_cluster_ids = CASE
-		        WHEN $3 = ANY(thumbnail_serving_cluster_ids) THEN thumbnail_serving_cluster_ids
-		        ELSE array_append(thumbnail_serving_cluster_ids, $3)
-		    END,
-		    updated_at = NOW()
-		WHERE id = $1::uuid AND tenant_id = $2::uuid AND deleted_at IS NULL`, streamID, tenantID, clusterID)
+	rows, err := commodoredb.New(s.db).RegisterStreamThumbnailServingCell(ctx, commodoredb.RegisterStreamThumbnailServingCellParams{
+		ClusterID: clusterID,
+		StreamID:  streamID,
+		TenantID:  tenantID,
+	})
 	if err != nil {
 		s.logger.WithError(err).WithFields(logging.Fields{
 			"stream_id":  streamID,
 			"cluster_id": clusterID,
 		}).Error("RegisterStreamThumbnailServingCell: update failed")
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-	rows, err := res.RowsAffected()
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "rows affected: %v", err)
 	}
 	return &commodorepb.RegisterStreamThumbnailServingCellResponse{Registered: rows > 0}, nil
 }
@@ -2404,27 +2305,18 @@ func (s *CommodoreServer) ClearStreamActiveCluster(ctx context.Context, req *com
 	// placement its own reconciler recorded. Without that, a delayed retract
 	// arriving after a push publisher took the same cluster would clear that
 	// publisher's claim.
-	const clearSQL = `
-		UPDATE commodore.streams
-		SET active_ingest_cluster_id = NULL,
-		    active_ingest_cluster_updated_at = NOW(),
-		    active_ingest_claim_id = NULL,
-		    updated_at = NOW()
-		WHERE id = $1::uuid
-		  AND tenant_id = $3::uuid
-		  AND active_ingest_cluster_id = $2
-		  AND active_ingest_claim_id = $4`
-	res, err := s.db.ExecContext(ctx, clearSQL, streamID, expected, tenantID, managedClaimToken(streamID))
+	rows, err := commodoredb.New(s.db).ClearManagedStreamActiveCluster(ctx, commodoredb.ClearManagedStreamActiveClusterParams{
+		StreamID:          streamID,
+		TenantID:          tenantID,
+		ExpectedClusterID: sql.NullString{String: expected, Valid: true},
+		ClaimToken:        sql.NullString{String: managedClaimToken(streamID), Valid: true},
+	})
 	if err != nil {
 		s.logger.WithError(err).WithFields(logging.Fields{
 			"stream_id":  streamID,
 			"cluster_id": expected,
 		}).Error("ClearStreamActiveCluster: update failed")
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-	rows, err := res.RowsAffected()
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "rows affected: %v", err)
 	}
 	return &commodorepb.ClearStreamActiveClusterResponse{Cleared: rows > 0}, nil
 }
@@ -2468,21 +2360,7 @@ func (s *CommodoreServer) SyncActiveIngestPlacement(ctx context.Context, req *co
 	// The cluster comes from each entry, so one call can carry every cluster a
 	// Foghorn serves — a call per cluster cannot re-assert a large fleet inside
 	// one lease window.
-	renewed, renewRefused, err := s.applyActiveIngestPlacement(ctx, clusterID, req.GetRenew(), true, `
-		UPDATE commodore.streams s
-		SET active_ingest_cluster_id = t.cluster_id,
-		    active_ingest_cluster_updated_at = NOW(),
-		    active_ingest_claim_id = t.claim_token
-		FROM unnest($1::uuid[], $2::text[], $3::text[], $4::text[]) AS t(tenant_id, internal_name, claim_token, cluster_id)
-		WHERE s.tenant_id = t.tenant_id
-		  AND s.internal_name = t.internal_name
-		  AND (
-		      s.active_ingest_cluster_id IS NULL
-		   OR s.active_ingest_cluster_id = ''
-		   OR s.active_ingest_cluster_updated_at IS NULL
-		   OR s.active_ingest_cluster_updated_at < NOW() - `+activeIngestLeaseInterval+`
-		   OR (s.active_ingest_cluster_id = t.cluster_id AND s.active_ingest_claim_id = t.claim_token)
-		  )`)
+	renewed, renewRefused, err := s.applyActiveIngestPlacement(ctx, clusterID, req.GetRenew(), true)
 	if err != nil {
 		return nil, err
 	}
@@ -2491,17 +2369,7 @@ func (s *CommodoreServer) SyncActiveIngestPlacement(ctx context.Context, req *co
 	// attempt that never took the claim — a different node in this cluster, or
 	// a Foghorn admitting from its validation cache while Commodore was down —
 	// would clear a live publisher's placement.
-	released, releaseRefused, err := s.applyActiveIngestPlacement(ctx, clusterID, req.GetRelease(), false, `
-		UPDATE commodore.streams s
-		SET active_ingest_cluster_id = NULL,
-		    active_ingest_cluster_updated_at = NOW(),
-		    active_ingest_claim_id = NULL,
-		    updated_at = NOW()
-		FROM unnest($1::uuid[], $2::text[], $3::text[], $4::text[]) AS t(tenant_id, internal_name, claim_token, cluster_id)
-		WHERE s.tenant_id = t.tenant_id
-		  AND s.internal_name = t.internal_name
-		  AND s.active_ingest_cluster_id = t.cluster_id
-		  AND s.active_ingest_claim_id = t.claim_token`)
+	released, releaseRefused, err := s.applyActiveIngestPlacement(ctx, clusterID, req.GetRelease(), false)
 	if err != nil {
 		return nil, err
 	}
@@ -2521,7 +2389,7 @@ func (s *CommodoreServer) SyncActiveIngestPlacement(ctx context.Context, req *co
 //
 // defaultClusterID fills in for entries that name no cluster, so a caller that
 // only ever speaks for one still works unchanged.
-func (s *CommodoreServer) applyActiveIngestPlacement(ctx context.Context, defaultClusterID string, streams []*commodorepb.ActiveIngestStream, verifyOwned bool, stmt string) (int64, []*commodorepb.ActiveIngestStream, error) {
+func (s *CommodoreServer) applyActiveIngestPlacement(ctx context.Context, defaultClusterID string, streams []*commodorepb.ActiveIngestStream, renew bool) (int64, []*commodorepb.ActiveIngestStream, error) {
 	tenantIDs := make([]string, 0, len(streams))
 	internalNames := make([]string, 0, len(streams))
 	claimTokens := make([]string, 0, len(streams))
@@ -2560,7 +2428,14 @@ func (s *CommodoreServer) applyActiveIngestPlacement(ctx context.Context, defaul
 		return 0, nil, status.Errorf(codes.Internal, "begin placement sync: %v", err)
 	}
 	defer s.rollbackTx(tx)
-	res, err := tx.ExecContext(ctx, stmt, pq.Array(tenantIDs), pq.Array(internalNames), pq.Array(claimTokens), pq.Array(clusterIDs))
+	rows, refusedRows, err := commodoredb.New(tx).ApplyActiveIngestPlacementBatch(ctx, commodoredb.ActiveIngestPlacementBatchParams{
+		TenantIDs:     tenantIDs,
+		InternalNames: internalNames,
+		ClaimTokens:   claimTokens,
+		ClusterIDs:    clusterIDs,
+		LeaseSeconds:  int64(activeIngestLease.Seconds()),
+		Renew:         renew,
+	})
 	if err != nil {
 		s.logger.WithError(err).WithFields(logging.Fields{
 			"default_cluster_id": defaultClusterID,
@@ -2568,50 +2443,14 @@ func (s *CommodoreServer) applyActiveIngestPlacement(ctx context.Context, defaul
 		}).Error("SyncActiveIngestPlacement: update failed")
 		return 0, nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	rows, err := res.RowsAffected()
-	if err != nil {
-		return 0, nil, status.Errorf(codes.Internal, "rows affected: %v", err)
-	}
-	verification := `
-		SELECT t.tenant_id::text, t.internal_name, t.claim_token, t.cluster_id
-		  FROM unnest($1::uuid[], $2::text[], $3::text[], $4::text[]) AS t(tenant_id, internal_name, claim_token, cluster_id)
-		 WHERE `
-	if verifyOwned {
-		verification += `NOT EXISTS (
-			SELECT 1 FROM commodore.streams s
-			 WHERE s.tenant_id=t.tenant_id AND s.internal_name=t.internal_name AND s.deleted_at IS NULL
-			   AND s.active_ingest_cluster_id=t.cluster_id AND s.active_ingest_claim_id=t.claim_token
-			   AND s.active_ingest_cluster_updated_at >= NOW() - ` + activeIngestLeaseInterval + `
-		)`
-	} else {
-		verification += `EXISTS (
-			SELECT 1 FROM commodore.streams s
-			 WHERE s.tenant_id=t.tenant_id AND s.internal_name=t.internal_name AND s.deleted_at IS NULL
-			   AND s.active_ingest_cluster_id=t.cluster_id AND s.active_ingest_claim_id=t.claim_token
-		)`
-	}
-	refusedRows, err := tx.QueryContext(ctx, verification, pq.Array(tenantIDs), pq.Array(internalNames), pq.Array(claimTokens), pq.Array(clusterIDs))
-	if err != nil {
-		return 0, nil, status.Errorf(codes.Internal, "verify placement sync: %v", err)
-	}
-	defer func() {
-		if closeErr := refusedRows.Close(); closeErr != nil {
-			s.logger.WithError(closeErr).Debug("placement verification rows close failed")
-		}
-	}()
-	var refused []*commodorepb.ActiveIngestStream
-	for refusedRows.Next() {
-		entry := &commodorepb.ActiveIngestStream{}
-		if scanErr := refusedRows.Scan(&entry.TenantId, &entry.InternalName, &entry.ClaimToken, &entry.ClusterId); scanErr != nil {
-			return 0, nil, status.Errorf(codes.Internal, "scan placement refusal: %v", scanErr)
-		}
-		refused = append(refused, entry)
-	}
-	if rowsErr := refusedRows.Err(); rowsErr != nil {
-		return 0, nil, status.Errorf(codes.Internal, "iterate placement refusals: %v", rowsErr)
-	}
-	if err := refusedRows.Close(); err != nil {
-		return 0, nil, status.Errorf(codes.Internal, "close placement verification: %v", err)
+	refused := make([]*commodorepb.ActiveIngestStream, 0, len(refusedRows))
+	for _, row := range refusedRows {
+		refused = append(refused, &commodorepb.ActiveIngestStream{
+			TenantId:     row.TenantID,
+			InternalName: row.InternalName,
+			ClaimToken:   row.ClaimToken,
+			ClusterId:    row.ClusterID,
+		})
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, nil, status.Errorf(codes.Internal, "commit placement sync: %v", err)
@@ -2627,14 +2466,11 @@ func (s *CommodoreServer) ResolvePlaybackID(ctx context.Context, req *commodorep
 	}
 
 	// playback_id is globally UNIQUE (commodore.sql), so no tenant_id filter needed
-	var streamID, internalName, tenantID, ingestMode string
-	var requiresAuth bool
-	var activeIngestClusterID sql.NullString
+	var stream commodoredb.ResolveStreamByPlaybackIDRow
 	err := s.retryPostgres(ctx, func() error {
-		return s.db.QueryRowContext(ctx, `
-			SELECT id, internal_name, tenant_id, requires_auth, ingest_mode, active_ingest_cluster_id
-			FROM commodore.streams WHERE lower(playback_id::text) = lower($1::text) AND deleted_at IS NULL
-		`, playbackID).Scan(&streamID, &internalName, &tenantID, &requiresAuth, &ingestMode, &activeIngestClusterID)
+		var queryErr error
+		stream, queryErr = commodoredb.New(s.db).ResolveStreamByPlaybackID(ctx, playbackID)
+		return queryErr
 	})
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -2650,15 +2486,15 @@ func (s *CommodoreServer) ResolvePlaybackID(ctx context.Context, req *commodorep
 	}
 
 	resp := &commodorepb.ResolvePlaybackIDResponse{
-		InternalName: internalName,
-		TenantId:     tenantID,
+		InternalName: stream.InternalName,
+		TenantId:     stream.TenantID,
 		PlaybackId:   playbackID,
-		StreamId:     streamID,
-		RequiresAuth: requiresAuth,
-		IngestMode:   ingestMode,
+		StreamId:     stream.ID,
+		RequiresAuth: stream.RequiresAuth,
+		IngestMode:   stream.IngestMode,
 	}
 
-	if route, err := s.resolveClusterRouteForTenant(ctx, tenantID); err == nil {
+	if route, err := s.resolveClusterRouteForTenant(ctx, stream.TenantID); err == nil {
 		resp.OriginClusterId = &route.clusterID
 		if route.officialClusterID != "" {
 			resp.OfficialClusterId = &route.officialClusterID
@@ -2670,8 +2506,8 @@ func (s *CommodoreServer) ResolvePlaybackID(ctx context.Context, req *commodorep
 	// source cluster recorded by Foghorn. When set, it overrides the tenant
 	// default as origin so PLAY_REWRITE / federation / artifact attribution
 	// follow the active source. Peers and official cluster stay tenant-routed.
-	if activeIngestClusterID.Valid && activeIngestClusterID.String != "" {
-		active := activeIngestClusterID.String
+	if stream.ActiveIngestClusterID.Valid && stream.ActiveIngestClusterID.String != "" {
+		active := stream.ActiveIngestClusterID.String
 		resp.OriginClusterId = &active
 	}
 
@@ -2686,14 +2522,7 @@ func (s *CommodoreServer) ResolveInternalName(ctx context.Context, req *commodor
 	}
 
 	// internal_name is globally UNIQUE (commodore.sql), so no tenant_id filter needed
-	var streamID, tenantID, userID string
-	var isRecordingEnabled bool
-	var requiresAuth bool
-	var activeIngestClusterID sql.NullString
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id, tenant_id, user_id, is_recording_enabled, requires_auth, active_ingest_cluster_id
-		FROM commodore.streams WHERE internal_name = $1 AND deleted_at IS NULL
-	`, internalName).Scan(&streamID, &tenantID, &userID, &isRecordingEnabled, &requiresAuth, &activeIngestClusterID)
+	stream, err := commodoredb.New(s.db).ResolveStreamByInternalName(ctx, internalName)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "Stream not found")
@@ -2709,13 +2538,13 @@ func (s *CommodoreServer) ResolveInternalName(ctx context.Context, req *commodor
 
 	resp := &commodorepb.ResolveInternalNameResponse{
 		InternalName:       internalName,
-		TenantId:           tenantID,
-		UserId:             userID,
-		IsRecordingEnabled: isRecordingEnabled,
-		StreamId:           streamID,
-		RequiresAuth:       requiresAuth,
+		TenantId:           stream.TenantID,
+		UserId:             stream.UserID,
+		IsRecordingEnabled: stream.IsRecordingEnabled.Bool,
+		StreamId:           stream.ID,
+		RequiresAuth:       stream.RequiresAuth,
 	}
-	if route, err := s.resolveClusterRouteForTenant(ctx, tenantID); err == nil {
+	if route, err := s.resolveClusterRouteForTenant(ctx, stream.TenantID); err == nil {
 		resp.ClusterPeers = route.clusterPeers
 		resp.OriginClusterId = route.clusterID
 	}
@@ -2724,8 +2553,8 @@ func (s *CommodoreServer) ResolveInternalName(ctx context.Context, req *commodor
 	// source cluster recorded by Foghorn. When set, it is the authoritative
 	// origin — federation/thumbnail/storage attribution must follow the
 	// active source, not the tenant default. Peers stay tenant-routed.
-	if activeIngestClusterID.Valid && activeIngestClusterID.String != "" {
-		resp.OriginClusterId = activeIngestClusterID.String
+	if stream.ActiveIngestClusterID.Valid && stream.ActiveIngestClusterID.String != "" {
+		resp.OriginClusterId = stream.ActiveIngestClusterID.String
 	}
 	return resp, nil
 }
@@ -2739,22 +2568,11 @@ func (s *CommodoreServer) ResolvePullSourceByInternalName(ctx context.Context, r
 		return nil, status.Error(codes.InvalidArgument, "internal_name required")
 	}
 
-	var (
-		streamID          string
-		tenantID          string
-		ingestMode        string
-		sourceURIEnc      string
-		enabled           bool
-		allowedClusterIDs []string
-	)
+	var source commodoredb.ResolvePullSourceByInternalNameRow
 	err := s.retryPostgres(ctx, func() error {
-		return s.db.QueryRowContext(ctx, `
-				SELECT s.id, s.tenant_id, s.ingest_mode,
-				       p.source_uri_enc, p.enabled, COALESCE(p.allowed_cluster_ids, '{}')
-				FROM commodore.streams s
-				JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
-				WHERE s.internal_name = $1
-			`, internalName).Scan(&streamID, &tenantID, &ingestMode, &sourceURIEnc, &enabled, fwdb.ArrayScan(&allowedClusterIDs))
+		var queryErr error
+		source, queryErr = commodoredb.New(s.db).ResolvePullSourceByInternalName(ctx, internalName)
+		return queryErr
 	})
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -2768,12 +2586,12 @@ func (s *CommodoreServer) ResolvePullSourceByInternalName(ctx context.Context, r
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	if ingestMode != "pull" {
+	if source.IngestMode != "pull" {
 		// Stream exists but isn't a pull stream — refuse to leak any URI.
 		return &commodorepb.ResolvePullSourceByInternalNameResponse{Found: false}, nil
 	}
 
-	sourceURI, err := s.pullSourceEncryptor.Decrypt(sourceURIEnc)
+	sourceURI, err := s.pullSourceEncryptor.Decrypt(source.SourceUriEnc)
 	if err != nil {
 		s.logger.WithError(err).WithField("internal_name", internalName).Warn("Failed to decrypt pull source_uri")
 		return nil, status.Error(codes.Internal, "failed to decrypt pull source")
@@ -2782,10 +2600,10 @@ func (s *CommodoreServer) ResolvePullSourceByInternalName(ctx context.Context, r
 	return &commodorepb.ResolvePullSourceByInternalNameResponse{
 		Found:             true,
 		SourceUri:         sourceURI,
-		Enabled:           enabled,
-		TenantId:          tenantID,
-		StreamId:          streamID,
-		AllowedClusterIds: allowedClusterIDs,
+		Enabled:           source.Enabled,
+		TenantId:          source.TenantID,
+		StreamId:          source.ID,
+		AllowedClusterIds: source.AllowedClusterIds,
 	}, nil
 }
 
@@ -2883,26 +2701,22 @@ func (s *CommodoreServer) listPullSourceClusterCapabilities(ctx context.Context)
 // UpdateStream needs all three so it can apply per-field preserve semantics
 // (a request can touch any subset without wiping the others).
 func (s *CommodoreServer) loadPullSourceState(ctx context.Context, streamID, userID, tenantID string) (string, bool, []string, error) {
-	var enc string
-	var enabled bool
-	var allowed []string
-	err := s.db.QueryRowContext(ctx, `
-		SELECT p.source_uri_enc, p.enabled, COALESCE(p.allowed_cluster_ids, '{}')
-		FROM commodore.streams s
-		JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
-		WHERE s.id = $1 AND s.user_id = $2 AND s.tenant_id = $3
-	`, streamID, userID, tenantID).Scan(&enc, &enabled, fwdb.ArrayScan(&allowed))
+	state, err := commodoredb.New(s.db).GetOwnedPullSourceState(ctx, commodoredb.GetOwnedPullSourceStateParams{
+		ID:       streamID,
+		UserID:   userID,
+		TenantID: tenantID,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil, status.Error(codes.NotFound, "pull source not found")
 	}
 	if err != nil {
 		return "", false, nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	plain, err := s.pullSourceEncryptor.Decrypt(enc)
+	plain, err := s.pullSourceEncryptor.Decrypt(state.SourceUriEnc)
 	if err != nil {
 		return "", false, nil, status.Errorf(codes.Internal, "failed to decrypt pull source: %v", err)
 	}
-	return plain, enabled, allowed, nil
+	return plain, state.Enabled, state.AllowedClusterIds, nil
 }
 
 // formatRuntimePlacementRejects renders FilterPlacementClusters rejects as a
@@ -2952,15 +2766,8 @@ func (s *CommodoreServer) ValidateAPIToken(ctx context.Context, req *commodorepb
 		return &commodorepb.ValidateAPITokenResponse{Valid: false}, nil
 	}
 
-	var tokenID, userID, tenantID string
-	var permissions []string
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id, user_id, tenant_id, permissions
-		FROM commodore.api_tokens
-		WHERE token_value = $1
-		  AND is_active = true
-		  AND (expires_at IS NULL OR expires_at > NOW())
-	`, hashToken(token)).Scan(&tokenID, &userID, &tenantID, fwdb.ArrayScan(&permissions))
+	queries := commodoredb.New(s.db)
+	tokenRow, err := queries.ValidateAPITokenHash(ctx, hashToken(token))
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return &commodorepb.ValidateAPITokenResponse{Valid: false}, nil
@@ -2974,32 +2781,32 @@ func (s *CommodoreServer) ValidateAPIToken(ctx context.Context, req *commodorepb
 	}
 
 	// Update last used timestamp (best effort)
-	if _, updateErr := s.db.ExecContext(ctx, `UPDATE commodore.api_tokens SET last_used_at = NOW() WHERE id = $1`, tokenID); updateErr != nil {
+	if updateErr := queries.TouchAPITokenLastUsed(ctx, tokenRow.ID); updateErr != nil {
 		s.logger.WithError(updateErr).Debug("Failed to update API token last_used_at")
 	}
 
 	// Look up user email, role, and platform-operator grant for context.
 	// Filter by the token's tenant too (defense in depth: the user must belong
 	// to the tenant the token is scoped to).
-	var email, role string
-	var platformOperator bool
-	err = s.db.QueryRowContext(ctx, `SELECT email, role, platform_operator FROM commodore.users WHERE id = $1 AND tenant_id = $2`, userID, tenantID).Scan(&email, &role, &platformOperator)
+	userRow, err := queries.GetAPITokenUserContext(ctx, commodoredb.GetAPITokenUserContextParams{
+		UserID: tokenRow.UserID, TenantID: tokenRow.TenantID,
+	})
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithFields(logging.Fields{
-			"user_id": userID,
+			"user_id": tokenRow.UserID,
 			"error":   err,
 		}).Warn("Failed to fetch user details for API token")
 	}
 
 	return &commodorepb.ValidateAPITokenResponse{
 		Valid:            true,
-		UserId:           userID,
-		TenantId:         tenantID,
-		Email:            email,
-		Role:             role,
-		Permissions:      permissions,
-		TokenId:          tokenID,
-		PlatformOperator: platformOperator,
+		UserId:           tokenRow.UserID,
+		TenantId:         tokenRow.TenantID,
+		Email:            userRow.Email,
+		Role:             userRow.Role,
+		Permissions:      tokenRow.Permissions,
+		TokenId:          tokenRow.ID,
+		PlatformOperator: userRow.PlatformOperator,
 	}, nil
 }
 
@@ -3200,9 +3007,11 @@ func (s *CommodoreServer) StartDVR(ctx context.Context, req *sharedpb.StartDVRRe
 		}
 		// Resolve internal_name from stream_id (public -> internal). A soft-deleted (deletion-pending) stream is not
 		// actionable — StartDVR must not record against a stream the deletion saga is tearing down.
-		if rowErr := s.db.QueryRowContext(ctx, `
-			SELECT internal_name FROM commodore.streams WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
-		`, streamID, tenantID).Scan(&internalName); rowErr != nil {
+		var rowErr error
+		internalName, rowErr = commodoredb.New(s.db).GetLiveStreamInternalName(ctx, commodoredb.GetLiveStreamInternalNameParams{
+			ID: streamID, TenantID: tenantID,
+		})
+		if rowErr != nil {
 			if errors.Is(rowErr, sql.ErrNoRows) {
 				return nil, status.Error(codes.NotFound, "stream not found")
 			}
@@ -3212,9 +3021,11 @@ func (s *CommodoreServer) StartDVR(ctx context.Context, req *sharedpb.StartDVRRe
 
 	// Verify stream exists in this tenant (tenant isolation) and resolve stream_id if needed.
 	if streamID == "" {
-		if rowErr := s.db.QueryRowContext(ctx, `
-			SELECT id::text FROM commodore.streams WHERE internal_name = $1 AND tenant_id = $2 AND deleted_at IS NULL
-		`, internalName, tenantID).Scan(&streamID); rowErr != nil {
+		var rowErr error
+		streamID, rowErr = commodoredb.New(s.db).GetLiveStreamIDByInternalName(ctx, commodoredb.GetLiveStreamIDByInternalNameParams{
+			InternalName: internalName, TenantID: tenantID,
+		})
+		if rowErr != nil {
 			if errors.Is(rowErr, sql.ErrNoRows) {
 				return nil, status.Error(codes.NotFound, "stream not found")
 			}
@@ -3275,19 +3086,16 @@ func (s *CommodoreServer) StartDVR(ctx context.Context, req *sharedpb.StartDVRRe
 	// happen on the same row we just resolved internal_name from; one
 	// extra query keeps the snapshot inside this critical section so
 	// concurrent Stream.dvrChapterMode mutations don't race the recording.
-	var chapterMode sql.NullString
-	var chapterIntervalSeconds sql.NullInt32
-	if scanErr := s.db.QueryRowContext(ctx, `
-		SELECT dvr_chapter_mode, dvr_chapter_interval_seconds
-		  FROM commodore.streams
-		 WHERE id = $1::uuid AND tenant_id = $2::uuid
-	`, streamID, tenantID).Scan(&chapterMode, &chapterIntervalSeconds); scanErr == nil {
-		if chapterMode.Valid && chapterMode.String != "" {
-			mode := chapterMode.String
+	chapterConfig, scanErr := commodoredb.New(s.db).GetStreamDVRChapterConfig(ctx, commodoredb.GetStreamDVRChapterConfigParams{
+		StreamID: streamID, TenantID: tenantID,
+	})
+	if scanErr == nil {
+		if chapterConfig.DvrChapterMode.Valid && chapterConfig.DvrChapterMode.String != "" {
+			mode := chapterConfig.DvrChapterMode.String
 			foghornReq.DvrChapterMode = &mode
 		}
-		if chapterIntervalSeconds.Valid && chapterIntervalSeconds.Int32 > 0 {
-			iv := chapterIntervalSeconds.Int32
+		if chapterConfig.DvrChapterIntervalSeconds.Valid && chapterConfig.DvrChapterIntervalSeconds.Int32 > 0 {
+			iv := chapterConfig.DvrChapterIntervalSeconds.Int32
 			foghornReq.DvrChapterIntervalSeconds = &iv
 		}
 	} else if !errors.Is(scanErr, sql.ErrNoRows) {
@@ -3360,10 +3168,9 @@ func (s *CommodoreServer) RegisterDVR(ctx context.Context, req *commodorepb.Regi
 	}
 
 	// Look up stream_id from internal_name
-	var streamID string
-	err = s.db.QueryRowContext(ctx, `
-		SELECT id::text FROM commodore.streams WHERE internal_name = $1 AND tenant_id = $2
-	`, internalName, tenantID).Scan(&streamID)
+	streamID, err := commodoredb.New(s.db).GetStreamIDForDVRRegistration(ctx, commodoredb.GetStreamIDForDVRRegistrationParams{
+		InternalName: internalName, TenantID: tenantID,
+	})
 	if err != nil {
 		s.logger.WithFields(logging.Fields{
 			"tenant_id":     tenantID,
@@ -3379,9 +3186,9 @@ func (s *CommodoreServer) RegisterDVR(ctx context.Context, req *commodorepb.Regi
 	// Insert into business registry. DVR callers normally leave
 	// retention_until NULL at start; Foghorn back-fills it at FinalizeDVR
 	// after the stream session ends.
-	var retentionUntilArg any
+	var retentionUntilArg sql.NullTime
 	if req.GetRetentionUntil() != nil {
-		retentionUntilArg = req.GetRetentionUntil().AsTime()
+		retentionUntilArg = sql.NullTime{Time: req.GetRetentionUntil().AsTime(), Valid: true}
 	}
 	storageClusterID := sql.NullString{String: req.GetStorageClusterId(), Valid: req.GetStorageClusterId() != ""}
 	// Register the business row and its durable creation intent ATOMICALLY. Foghorn
@@ -3397,12 +3204,19 @@ func (s *CommodoreServer) RegisterDVR(ctx context.Context, req *commodorepb.Regi
 		if fErr := fenceParentStreamLive(ctx, tx, tenantID, streamID); fErr != nil {
 			return fErr
 		}
-		if _, execErr := tx.ExecContext(ctx, `
-			INSERT INTO commodore.dvr_recordings (
-				id, tenant_id, user_id, stream_id, dvr_hash, internal_name, playback_id, stream_internal_name,
-				origin_cluster_id, storage_cluster_id, retention_until, created_at, updated_at
-			) VALUES ($1, $2, $3, $4::uuid, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
-		`, dvrID, tenantID, userID, streamID, dvrHash, artifactInternalName, playbackID, internalName, req.GetOriginClusterId(), storageClusterID, retentionUntilArg); execErr != nil {
+		if execErr := commodoredb.New(tx).InsertDVRRegistration(ctx, commodoredb.InsertDVRRegistrationParams{
+			ID:                 dvrID,
+			TenantID:           tenantID,
+			UserID:             userID,
+			StreamID:           streamID,
+			DvrHash:            dvrHash,
+			InternalName:       artifactInternalName,
+			PlaybackID:         playbackID,
+			StreamInternalName: internalName,
+			OriginClusterID:    sql.NullString{String: req.GetOriginClusterId(), Valid: req.GetOriginClusterId() != ""},
+			StorageClusterID:   storageClusterID,
+			RetentionUntil:     retentionUntilArg,
+		}); execErr != nil {
 			return execErr
 		}
 		// Use the PERSISTED request_id (a fresh dvr_hash makes this the freshly minted
@@ -3464,23 +3278,15 @@ func (s *CommodoreServer) UpdateDVRRetention(ctx context.Context, req *commodore
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
-	var retentionArg any
+	var retentionArg sql.NullTime
 	if req.GetRetentionUntil() != nil {
-		retentionArg = req.GetRetentionUntil().AsTime()
+		retentionArg = sql.NullTime{Time: req.GetRetentionUntil().AsTime(), Valid: true}
 	}
-	res, err := s.db.ExecContext(ctx, `
-		UPDATE commodore.dvr_recordings
-		   SET retention_until = $1,
-		       updated_at      = NOW()
-		 WHERE dvr_hash = $2
-		   AND tenant_id::text = $3
-	`, retentionArg, dvrHash, tenantID)
+	affected, err := commodoredb.New(s.db).UpdateDVRRetention(ctx, commodoredb.UpdateDVRRetentionParams{
+		RetentionUntil: retentionArg, DvrHash: dvrHash, TenantID: tenantID,
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "update retention failed: %v", err)
-	}
-	affected, rowsErr := res.RowsAffected()
-	if rowsErr != nil {
-		return nil, status.Errorf(codes.Internal, "update retention affected rows failed: %v", rowsErr)
 	}
 	return &commodorepb.UpdateDVRRetentionResponse{Updated: affected > 0}, nil
 }
@@ -3493,19 +3299,7 @@ func (s *CommodoreServer) ResolveClipHash(ctx context.Context, req *commodorepb.
 		return nil, status.Error(codes.InvalidArgument, "clip_hash is required")
 	}
 
-	var tenantID, userID, streamID, title, description, clipMode string
-	var playbackID, artifactInternalName string
-	var startTime, duration int64
-	var internalName, originClusterID sql.NullString
-
-	err := s.db.QueryRowContext(ctx, `
-		SELECT c.tenant_id, c.user_id, c.stream_id, c.title, c.description,
-			   c.start_time, c.duration, c.clip_mode, s.internal_name,
-			   c.playback_id, c.internal_name, c.origin_cluster_id
-		FROM commodore.clips c
-		LEFT JOIN commodore.streams s ON c.stream_id = s.id
-		WHERE c.clip_hash = $1	`, clipHash).Scan(&tenantID, &userID, &streamID, &title, &description,
-		&startTime, &duration, &clipMode, &internalName, &playbackID, &artifactInternalName, &originClusterID)
+	clip, err := commodoredb.New(s.db).ResolveClipByHash(ctx, clipHash)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return &commodorepb.ResolveClipHashResponse{
@@ -3523,18 +3317,18 @@ func (s *CommodoreServer) ResolveClipHash(ctx context.Context, req *commodorepb.
 
 	return &commodorepb.ResolveClipHashResponse{
 		Found:              true,
-		TenantId:           tenantID,
-		UserId:             userID,
-		StreamId:           streamID,
-		StreamInternalName: internalName.String,
-		Title:              title,
-		Description:        description,
-		StartTime:          startTime,
-		Duration:           duration,
-		ClipMode:           clipMode,
-		PlaybackId:         playbackID,
-		InternalName:       artifactInternalName,
-		OriginClusterId:    originClusterID.String,
+		TenantId:           clip.TenantID,
+		UserId:             clip.UserID,
+		StreamId:           clip.StreamID,
+		StreamInternalName: clip.StreamInternalName.String,
+		Title:              clip.Title.String,
+		Description:        clip.Description.String,
+		StartTime:          clip.StartTime,
+		Duration:           clip.Duration,
+		ClipMode:           clip.ClipMode.String,
+		PlaybackId:         clip.PlaybackID,
+		InternalName:       clip.InternalName,
+		OriginClusterId:    clip.OriginClusterID.String,
 	}, nil
 }
 
@@ -3546,15 +3340,11 @@ func (s *CommodoreServer) ResolveDVRHash(ctx context.Context, req *commodorepb.R
 		return nil, status.Error(codes.InvalidArgument, "dvr_hash is required")
 	}
 
-	var tenantID, userID, internalName string
-	var playbackID, artifactInternalName string
-	var streamID, originClusterID sql.NullString
-
+	var dvr commodoredb.ResolveDVRByHashRow
 	err := s.retryPostgres(ctx, func() error {
-		return s.db.QueryRowContext(ctx, `
-			SELECT tenant_id, user_id, stream_id, stream_internal_name, playback_id, internal_name, origin_cluster_id
-			FROM commodore.dvr_recordings
-			WHERE dvr_hash = $1		`, dvrHash).Scan(&tenantID, &userID, &streamID, &internalName, &playbackID, &artifactInternalName, &originClusterID)
+		var queryErr error
+		dvr, queryErr = commodoredb.New(s.db).ResolveDVRByHash(ctx, dvrHash)
+		return queryErr
 	})
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -3573,13 +3363,13 @@ func (s *CommodoreServer) ResolveDVRHash(ctx context.Context, req *commodorepb.R
 
 	return &commodorepb.ResolveDVRHashResponse{
 		Found:              true,
-		TenantId:           tenantID,
-		UserId:             userID,
-		StreamId:           streamID.String,
-		StreamInternalName: internalName,
-		PlaybackId:         playbackID,
-		InternalName:       artifactInternalName,
-		OriginClusterId:    originClusterID.String,
+		TenantId:           dvr.TenantID,
+		UserId:             dvr.UserID,
+		StreamId:           dvr.StreamID.String,
+		StreamInternalName: dvr.StreamInternalName,
+		PlaybackId:         dvr.PlaybackID,
+		InternalName:       dvr.InternalName,
+		OriginClusterId:    dvr.OriginClusterID.String,
 	}, nil
 }
 
@@ -3591,15 +3381,11 @@ func (s *CommodoreServer) ResolveVodHash(ctx context.Context, req *commodorepb.R
 		return nil, status.Error(codes.InvalidArgument, "vod_hash is required")
 	}
 
-	var tenantID, userID, filename string
-	var playbackID, artifactInternalName string
-	var title, description, originClusterID sql.NullString
-
+	var vod commodoredb.ResolveVODByHashRow
 	err := s.retryPostgres(ctx, func() error {
-		return s.db.QueryRowContext(ctx, `
-			SELECT tenant_id, user_id, filename, title, description, playback_id, internal_name, origin_cluster_id
-			FROM commodore.vod_assets
-			WHERE vod_hash = $1		`, vodHash).Scan(&tenantID, &userID, &filename, &title, &description, &playbackID, &artifactInternalName, &originClusterID)
+		var queryErr error
+		vod, queryErr = commodoredb.New(s.db).ResolveVODByHash(ctx, vodHash)
+		return queryErr
 	})
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -3618,18 +3404,18 @@ func (s *CommodoreServer) ResolveVodHash(ctx context.Context, req *commodorepb.R
 
 	resp := &commodorepb.ResolveVodHashResponse{
 		Found:           true,
-		TenantId:        tenantID,
-		UserId:          userID,
-		Filename:        filename,
-		Title:           title.String,
-		Description:     description.String,
-		PlaybackId:      playbackID,
-		InternalName:    artifactInternalName,
-		OriginClusterId: originClusterID.String,
+		TenantId:        vod.TenantID,
+		UserId:          vod.UserID,
+		Filename:        vod.Filename,
+		Title:           vod.Title.String,
+		Description:     vod.Description.String,
+		PlaybackId:      vod.PlaybackID,
+		InternalName:    vod.InternalName,
+		OriginClusterId: vod.OriginClusterID.String,
 	}
 	// Carry the tenant's cluster peers so a cross-cluster relay resolve can
 	// enforce the federation allowlist on the origin (and any storage redirect).
-	s.populateArtifactClusterContext(ctx, tenantID, &resp.ClusterPeers)
+	s.populateArtifactClusterContext(ctx, vod.TenantID, &resp.ClusterPeers)
 	return resp, nil
 }
 
@@ -3640,12 +3426,11 @@ func (s *CommodoreServer) ResolveVodID(ctx context.Context, req *commodorepb.Res
 		return nil, status.Error(codes.InvalidArgument, "vod_id is required")
 	}
 
-	var tenantID, userID, vodHash, playbackID, artifactInternalName string
+	var vod commodoredb.ResolveVODByIDRow
 	err := s.retryPostgres(ctx, func() error {
-		return s.db.QueryRowContext(ctx, `
-			SELECT tenant_id, user_id, vod_hash, playback_id, internal_name
-			FROM commodore.vod_assets
-			WHERE id = $1		`, vodID).Scan(&tenantID, &userID, &vodHash, &playbackID, &artifactInternalName)
+		var queryErr error
+		vod, queryErr = commodoredb.New(s.db).ResolveVODByID(ctx, vodID)
+		return queryErr
 	})
 
 	if errors.Is(err, sql.ErrNoRows) {
@@ -3663,11 +3448,11 @@ func (s *CommodoreServer) ResolveVodID(ctx context.Context, req *commodorepb.Res
 
 	return &commodorepb.ResolveVodIDResponse{
 		Found:        true,
-		TenantId:     tenantID,
-		UserId:       userID,
-		VodHash:      vodHash,
-		PlaybackId:   playbackID,
-		InternalName: artifactInternalName,
+		TenantId:     vod.TenantID,
+		UserId:       vod.UserID,
+		VodHash:      vod.VodHash,
+		PlaybackId:   vod.PlaybackID,
+		InternalName: vod.InternalName,
 	}, nil
 }
 
@@ -3722,13 +3507,13 @@ func (s *CommodoreServer) MintChapterPlaybackID(ctx context.Context, req *commod
 		}
 	}()
 
-	if _, lErr := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, tenantID+":vod:"+artifactHash); lErr != nil {
+	chapterQueries := commodoredb.New(tx)
+	if lErr := chapterQueries.LockArtifactCatalogKey(ctx, tenantID+":vod:"+artifactHash); lErr != nil {
 		return nil, status.Errorf(codes.Internal, "mint chapter lock: %v", lErr)
 	}
-	var markerRevision sql.NullInt64
-	tErr := tx.QueryRowContext(ctx,
-		`SELECT deletion_revision FROM commodore.artifact_catalog_tombstones WHERE tenant_id = $1::uuid AND kind = 'vod' AND artifact_hash = $2 FOR UPDATE`,
-		tenantID, artifactHash).Scan(&markerRevision)
+	_, tErr := chapterQueries.GetVODTombstoneForUpdate(ctx, commodoredb.GetVODTombstoneForUpdateParams{
+		TenantID: tenantID, ArtifactHash: artifactHash,
+	})
 	switch {
 	case tErr == nil:
 		return nil, status.Error(codes.FailedPrecondition, "chapter artifact was deleted; not resurrecting catalog row")
@@ -3738,17 +3523,10 @@ func (s *CommodoreServer) MintChapterPlaybackID(ctx context.Context, req *commod
 		return nil, status.Errorf(codes.Internal, "chapter tombstone check failed: %v", tErr)
 	}
 
-	var stored string
-	err = tx.QueryRowContext(ctx, `
-		INSERT INTO commodore.dvr_chapter_playback (
-			chapter_id, tenant_id, playback_id, artifact_hash, dvr_hash, created_at, updated_at
-		) VALUES ($1, $2::uuid, $3, $4, NULLIF($5, ''), NOW(), NOW())
-		ON CONFLICT (chapter_id) DO UPDATE
-			SET artifact_hash = EXCLUDED.artifact_hash,
-			    dvr_hash      = COALESCE(EXCLUDED.dvr_hash, commodore.dvr_chapter_playback.dvr_hash),
-			    updated_at    = NOW()
-		RETURNING playback_id
-	`, chapterID, tenantID, playbackID, artifactHash, req.GetDvrHash()).Scan(&stored)
+	stored, err := chapterQueries.UpsertChapterPlaybackID(ctx, commodoredb.UpsertChapterPlaybackIDParams{
+		ChapterID: chapterID, TenantID: tenantID, PlaybackID: playbackID,
+		ArtifactHash: artifactHash, DvrHash: req.GetDvrHash(),
+	})
 	if err != nil {
 		s.logger.WithFields(logging.Fields{
 			"chapter_id":    chapterID,
@@ -3759,38 +3537,22 @@ func (s *CommodoreServer) MintChapterPlaybackID(ctx context.Context, req *commod
 		return nil, status.Errorf(codes.Internal, "mint chapter playback id: %v", err)
 	}
 
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO commodore.vod_assets (
-			id, tenant_id, user_id, stream_id, vod_hash, internal_name, playback_id,
-			title, description, filename, content_type,
-			origin_cluster_id, storage_cluster_id,
-			library_visible, origin_type, origin_id,
-			created_at, updated_at
-		) VALUES (
-			$1, $2::uuid, $3::uuid, NULLIF($4, '')::uuid, $5, $6, $7,
-			$8, NULLIF($9, ''), $10, $11,
-			NULLIF($12, ''), NULLIF($13, ''),
-			false, 'dvr_chapter', $14,
-			NOW(), NOW()
-		)
-		ON CONFLICT (vod_hash) DO UPDATE SET
-			user_id            = EXCLUDED.user_id,
-			stream_id          = EXCLUDED.stream_id,
-			internal_name      = EXCLUDED.internal_name,
-			playback_id        = EXCLUDED.playback_id,
-			title              = EXCLUDED.title,
-			description        = EXCLUDED.description,
-			filename           = EXCLUDED.filename,
-			content_type       = EXCLUDED.content_type,
-			origin_cluster_id  = EXCLUDED.origin_cluster_id,
-			storage_cluster_id = EXCLUDED.storage_cluster_id,
-			library_visible    = false,
-			origin_type        = 'dvr_chapter',
-			origin_id          = EXCLUDED.origin_id,
-			updated_at         = NOW()
-	`, uuid.New().String(), tenantID, userID, req.GetStreamId(), artifactHash, artifactHash, stored,
-		title, description, filename, contentType,
-		req.GetOriginClusterId(), req.GetStorageClusterId(), chapterID)
+	err = chapterQueries.UpsertChapterVODAsset(ctx, commodoredb.UpsertChapterVODAssetParams{
+		ID:               uuid.New().String(),
+		TenantID:         tenantID,
+		UserID:           userID,
+		StreamID:         req.GetStreamId(),
+		VodHash:          artifactHash,
+		InternalName:     artifactHash,
+		PlaybackID:       stored,
+		Title:            sql.NullString{String: title, Valid: true},
+		Description:      description,
+		Filename:         filename,
+		ContentType:      sql.NullString{String: contentType, Valid: true},
+		OriginClusterID:  req.GetOriginClusterId(),
+		StorageClusterID: req.GetStorageClusterId(),
+		OriginID:         sql.NullString{String: chapterID, Valid: true},
+	})
 	if err != nil {
 		s.logger.WithFields(logging.Fields{
 			"chapter_id":    chapterID,
@@ -3839,20 +3601,13 @@ func (s *CommodoreServer) ResolveChapterPlaybackID(ctx context.Context, req *com
 		return nil, status.Error(codes.InvalidArgument, "playback_id is required")
 	}
 
-	var (
-		chapterID, artifactHash string
-		tenantID                string
-	)
+	var chapter commodoredb.ResolveChapterByPlaybackIDRow
 	// Join the parent VOD row and require it live: a chapter of a tombstoned asset must not resolve
 	// (its mapping is removed on deletion, but the join closes the window before that lands).
 	err := s.retryPostgres(ctx, func() error {
-		return s.db.QueryRowContext(ctx, `
-			SELECT cp.chapter_id, cp.tenant_id::text, cp.artifact_hash
-			  FROM commodore.dvr_chapter_playback cp
-			  JOIN commodore.vod_assets v
-			    ON v.tenant_id = cp.tenant_id AND v.vod_hash = cp.artifact_hash
-			 WHERE lower(cp.playback_id::text) = lower($1::text)
-		`, playbackID).Scan(&chapterID, &tenantID, &artifactHash)
+		var queryErr error
+		chapter, queryErr = commodoredb.New(s.db).ResolveChapterByPlaybackID(ctx, playbackID)
+		return queryErr
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return &commodorepb.ResolveChapterPlaybackIDResponse{Found: false}, nil
@@ -3863,9 +3618,9 @@ func (s *CommodoreServer) ResolveChapterPlaybackID(ctx context.Context, req *com
 	}
 	return &commodorepb.ResolveChapterPlaybackIDResponse{
 		Found:        true,
-		ChapterId:    chapterID,
-		TenantId:     tenantID,
-		ArtifactHash: artifactHash,
+		ChapterId:    chapter.ChapterID,
+		TenantId:     chapter.TenantID,
+		ArtifactHash: chapter.ArtifactHash,
 	}, nil
 }
 
@@ -3877,34 +3632,25 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *co
 	}
 
 	// 1. Clips
-	var (
-		artifactHash         string
-		artifactInternalName string
-		tenantID             string
-		userID               string
-		streamID             sql.NullString
-		originClusterID      sql.NullString
-		requiresAuth         bool
-	)
+	var clip commodoredb.ResolveClipByPlaybackIDRow
 	err := s.retryPostgres(ctx, func() error {
-		return s.db.QueryRowContext(ctx, `
-			SELECT clip_hash, internal_name, tenant_id, user_id, stream_id::text, origin_cluster_id, requires_auth
-			FROM commodore.clips
-			WHERE lower(playback_id::text) = lower($1::text)		`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID, &requiresAuth)
+		var queryErr error
+		clip, queryErr = commodoredb.New(s.db).ResolveClipByPlaybackID(ctx, playbackID)
+		return queryErr
 	})
 	if err == nil {
 		resp := &commodorepb.ResolveArtifactPlaybackIDResponse{
 			Found:           true,
-			ArtifactHash:    artifactHash,
-			InternalName:    artifactInternalName,
-			TenantId:        tenantID,
-			UserId:          userID,
-			StreamId:        streamID.String,
+			ArtifactHash:    clip.ClipHash,
+			InternalName:    clip.InternalName,
+			TenantId:        clip.TenantID,
+			UserId:          clip.UserID,
+			StreamId:        clip.StreamID,
 			ContentType:     "clip",
-			OriginClusterId: originClusterID.String,
-			RequiresAuth:    requiresAuth,
+			OriginClusterId: clip.OriginClusterID.String,
+			RequiresAuth:    clip.RequiresAuth,
 		}
-		s.populateArtifactClusterContext(ctx, tenantID, &resp.ClusterPeers)
+		s.populateArtifactClusterContext(ctx, clip.TenantID, &resp.ClusterPeers)
 		return resp, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -3919,33 +3665,27 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *co
 	// dvr_recordings has no requires_auth column; we LEFT JOIN streams to read
 	// the source stream's marker. No row in streams (rare cleanup race) means
 	// we treat as protected (fail closed) for safety.
-	originClusterID = sql.NullString{}
-	requiresAuth = false
-	var dvrSourceRequiresAuth sql.NullBool
+	var dvr commodoredb.ResolveDVRByPlaybackIDRow
 	err = s.retryPostgres(ctx, func() error {
-		return s.db.QueryRowContext(ctx, `
-			SELECT d.dvr_hash, d.internal_name, d.tenant_id, d.user_id, d.stream_id::text,
-			       d.origin_cluster_id, s.requires_auth
-			FROM commodore.dvr_recordings d
-			LEFT JOIN commodore.streams s ON s.id = d.stream_id
-			WHERE lower(d.playback_id::text) = lower($1::text)		`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID, &dvrSourceRequiresAuth)
+		var queryErr error
+		dvr, queryErr = commodoredb.New(s.db).ResolveDVRByPlaybackID(ctx, playbackID)
+		return queryErr
 	})
 	if err == nil {
 		// Missing source stream → treat as protected so a deleted-stream race
 		// does not silently expose what was once gated content.
-		requiresAuth = !dvrSourceRequiresAuth.Valid || dvrSourceRequiresAuth.Bool
 		resp := &commodorepb.ResolveArtifactPlaybackIDResponse{
 			Found:           true,
-			ArtifactHash:    artifactHash,
-			InternalName:    artifactInternalName,
-			TenantId:        tenantID,
-			UserId:          userID,
-			StreamId:        streamID.String,
+			ArtifactHash:    dvr.DvrHash,
+			InternalName:    dvr.InternalName,
+			TenantId:        dvr.TenantID,
+			UserId:          dvr.UserID,
+			StreamId:        dvr.DStreamID,
 			ContentType:     "dvr",
-			OriginClusterId: originClusterID.String,
-			RequiresAuth:    requiresAuth,
+			OriginClusterId: dvr.OriginClusterID.String,
+			RequiresAuth:    !dvr.RequiresAuth.Valid || dvr.RequiresAuth.Bool,
 		}
-		s.populateArtifactClusterContext(ctx, tenantID, &resp.ClusterPeers)
+		s.populateArtifactClusterContext(ctx, dvr.TenantID, &resp.ClusterPeers)
 		return resp, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -3957,27 +3697,24 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *co
 	}
 
 	// 3. VOD
-	streamID = sql.NullString{}
-	originClusterID = sql.NullString{}
-	requiresAuth = false
+	var vod commodoredb.ResolveVODByPlaybackIDRow
 	err = s.retryPostgres(ctx, func() error {
-		return s.db.QueryRowContext(ctx, `
-			SELECT vod_hash, internal_name, tenant_id, user_id, origin_cluster_id, requires_auth
-			FROM commodore.vod_assets
-			WHERE lower(playback_id::text) = lower($1::text)		`, playbackID).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &originClusterID, &requiresAuth)
+		var queryErr error
+		vod, queryErr = commodoredb.New(s.db).ResolveVODByPlaybackID(ctx, playbackID)
+		return queryErr
 	})
 	if err == nil {
 		resp := &commodorepb.ResolveArtifactPlaybackIDResponse{
 			Found:           true,
-			ArtifactHash:    artifactHash,
-			InternalName:    artifactInternalName,
-			TenantId:        tenantID,
-			UserId:          userID,
+			ArtifactHash:    vod.VodHash,
+			InternalName:    vod.InternalName,
+			TenantId:        vod.TenantID,
+			UserId:          vod.UserID,
 			ContentType:     "vod",
-			OriginClusterId: originClusterID.String,
-			RequiresAuth:    requiresAuth,
+			OriginClusterId: vod.OriginClusterID.String,
+			RequiresAuth:    vod.RequiresAuth,
 		}
-		s.populateArtifactClusterContext(ctx, tenantID, &resp.ClusterPeers)
+		s.populateArtifactClusterContext(ctx, vod.TenantID, &resp.ClusterPeers)
 		return resp, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -4008,34 +3745,25 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 	}
 
 	// 1. Clips
-	var (
-		artifactHash         string
-		artifactInternalName string
-		tenantID             string
-		userID               string
-		streamID             sql.NullString
-		originClusterID      sql.NullString
-		requiresAuth         bool
-	)
+	var clip commodoredb.ResolveClipByInternalNameRow
 	err := s.retryPostgres(ctx, func() error {
-		return s.db.QueryRowContext(ctx, `
-			SELECT clip_hash, internal_name, tenant_id, user_id, stream_id::text, origin_cluster_id, requires_auth
-			FROM commodore.clips
-			WHERE internal_name = $1		`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID, &requiresAuth)
+		var queryErr error
+		clip, queryErr = commodoredb.New(s.db).ResolveClipByInternalName(ctx, internalName)
+		return queryErr
 	})
 	if err == nil {
 		resp := &commodorepb.ResolveArtifactInternalNameResponse{
 			Found:           true,
-			ArtifactHash:    artifactHash,
-			InternalName:    artifactInternalName,
-			TenantId:        tenantID,
-			UserId:          userID,
-			StreamId:        streamID.String,
+			ArtifactHash:    clip.ClipHash,
+			InternalName:    clip.InternalName,
+			TenantId:        clip.TenantID,
+			UserId:          clip.UserID,
+			StreamId:        clip.StreamID,
 			ContentType:     "clip",
-			OriginClusterId: originClusterID.String,
-			RequiresAuth:    requiresAuth,
+			OriginClusterId: clip.OriginClusterID.String,
+			RequiresAuth:    clip.RequiresAuth,
 		}
-		s.populateArtifactClusterContext(ctx, tenantID, &resp.ClusterPeers)
+		s.populateArtifactClusterContext(ctx, clip.TenantID, &resp.ClusterPeers)
 		return resp, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -4047,29 +3775,25 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 	}
 
 	// 2. DVR
-	originClusterID = sql.NullString{}
-	var dvrSourceRequiresAuth sql.NullBool
+	var dvr commodoredb.ResolveDVRByInternalNameRow
 	err = s.retryPostgres(ctx, func() error {
-		return s.db.QueryRowContext(ctx, `
-			SELECT d.dvr_hash, d.internal_name, d.tenant_id, d.user_id, d.stream_id::text,
-			       d.origin_cluster_id, s.requires_auth
-			FROM commodore.dvr_recordings d
-			LEFT JOIN commodore.streams s ON s.id = d.stream_id
-			WHERE d.internal_name = $1		`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &streamID, &originClusterID, &dvrSourceRequiresAuth)
+		var queryErr error
+		dvr, queryErr = commodoredb.New(s.db).ResolveDVRByInternalName(ctx, internalName)
+		return queryErr
 	})
 	if err == nil {
 		resp := &commodorepb.ResolveArtifactInternalNameResponse{
 			Found:           true,
-			ArtifactHash:    artifactHash,
-			InternalName:    artifactInternalName,
-			TenantId:        tenantID,
-			UserId:          userID,
-			StreamId:        streamID.String,
+			ArtifactHash:    dvr.DvrHash,
+			InternalName:    dvr.InternalName,
+			TenantId:        dvr.TenantID,
+			UserId:          dvr.UserID,
+			StreamId:        dvr.DStreamID,
 			ContentType:     "dvr",
-			OriginClusterId: originClusterID.String,
-			RequiresAuth:    !dvrSourceRequiresAuth.Valid || dvrSourceRequiresAuth.Bool,
+			OriginClusterId: dvr.OriginClusterID.String,
+			RequiresAuth:    !dvr.RequiresAuth.Valid || dvr.RequiresAuth.Bool,
 		}
-		s.populateArtifactClusterContext(ctx, tenantID, &resp.ClusterPeers)
+		s.populateArtifactClusterContext(ctx, dvr.TenantID, &resp.ClusterPeers)
 		return resp, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -4081,26 +3805,24 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 	}
 
 	// 3. VOD
-	streamID = sql.NullString{}
-	originClusterID = sql.NullString{}
+	var vod commodoredb.ResolveVODByInternalNameRow
 	err = s.retryPostgres(ctx, func() error {
-		return s.db.QueryRowContext(ctx, `
-			SELECT vod_hash, internal_name, tenant_id, user_id, origin_cluster_id, requires_auth
-			FROM commodore.vod_assets
-			WHERE internal_name = $1		`, internalName).Scan(&artifactHash, &artifactInternalName, &tenantID, &userID, &originClusterID, &requiresAuth)
+		var queryErr error
+		vod, queryErr = commodoredb.New(s.db).ResolveVODByInternalName(ctx, internalName)
+		return queryErr
 	})
 	if err == nil {
 		resp := &commodorepb.ResolveArtifactInternalNameResponse{
 			Found:           true,
-			ArtifactHash:    artifactHash,
-			InternalName:    artifactInternalName,
-			TenantId:        tenantID,
-			UserId:          userID,
+			ArtifactHash:    vod.VodHash,
+			InternalName:    vod.InternalName,
+			TenantId:        vod.TenantID,
+			UserId:          vod.UserID,
 			ContentType:     "vod",
-			OriginClusterId: originClusterID.String,
-			RequiresAuth:    requiresAuth,
+			OriginClusterId: vod.OriginClusterID.String,
+			RequiresAuth:    vod.RequiresAuth,
 		}
-		s.populateArtifactClusterContext(ctx, tenantID, &resp.ClusterPeers)
+		s.populateArtifactClusterContext(ctx, vod.TenantID, &resp.ClusterPeers)
 		return resp, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -4138,271 +3860,32 @@ func (s *CommodoreServer) resolveIdentifierLookup(ctx context.Context, req *comm
 		return nil, status.Error(codes.InvalidArgument, "identifier is required")
 	}
 
-	// 0. Try streams by stream_id (UUID)
-	if _, err := uuid.Parse(identifier); err == nil {
-		var streamID, tenantID, userID, internalName string
-		var isRecordingEnabled bool
-		var requiresAuth bool
-		err := s.retryPostgres(ctx, func() error {
-			return s.db.QueryRowContext(ctx, `
-				SELECT id, tenant_id, user_id, internal_name, is_recording_enabled, requires_auth
-				FROM commodore.streams WHERE id = $1
-			`, identifier).Scan(&streamID, &tenantID, &userID, &internalName, &isRecordingEnabled, &requiresAuth)
+	_, uuidErr := uuid.Parse(identifier)
+	var resolved commodoredb.ResolveIdentifierCatalogRow
+	err := s.retryPostgres(ctx, func() error {
+		var queryErr error
+		resolved, queryErr = commodoredb.New(s.db).ResolveIdentifierCatalog(ctx, commodoredb.ResolveIdentifierCatalogParams{
+			IncludeIds: uuidErr == nil,
+			Identifier: identifier,
 		})
-		if err == nil {
-			return &commodorepb.ResolveIdentifierResponse{
-				Found:              true,
-				TenantId:           tenantID,
-				UserId:             userID,
-				InternalName:       internalName,
-				IdentifierType:     "stream_id",
-				IsRecordingEnabled: isRecordingEnabled,
-				StreamId:           streamID,
-				RequiresAuth:       requiresAuth,
-			}, nil
-		} else if !errors.Is(err, sql.ErrNoRows) {
-			s.logger.WithError(err).Error("Database error checking streams by stream_id")
-		}
-
-		var vodTenantID, vodUserID string
-		err = s.retryPostgres(ctx, func() error {
-			return s.db.QueryRowContext(ctx, `
-				SELECT tenant_id, user_id, requires_auth
-				FROM commodore.vod_assets WHERE id = $1			`, identifier).Scan(&vodTenantID, &vodUserID, &requiresAuth)
-		})
-		if err == nil {
-			return &commodorepb.ResolveIdentifierResponse{
-				Found:          true,
-				TenantId:       vodTenantID,
-				UserId:         vodUserID,
-				IdentifierType: "vod_id",
-				RequiresAuth:   requiresAuth,
-			}, nil
-		} else if !errors.Is(err, sql.ErrNoRows) {
-			s.logger.WithError(err).Error("Database error checking VOD by id")
-		}
+		return queryErr
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return &commodorepb.ResolveIdentifierResponse{Found: false}, nil
 	}
-
-	// 1. Try streams by internal_name (most common for live stream events)
-	var streamID, tenantID, userID string
-	var isRecordingEnabled bool
-	var requiresAuth bool
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id, tenant_id, user_id, is_recording_enabled, requires_auth FROM commodore.streams WHERE internal_name = $1 AND deleted_at IS NULL
-	`, identifier).Scan(&streamID, &tenantID, &userID, &isRecordingEnabled, &requiresAuth)
-	if err == nil {
-		return &commodorepb.ResolveIdentifierResponse{
-			Found:              true,
-			TenantId:           tenantID,
-			UserId:             userID,
-			InternalName:       identifier,
-			IdentifierType:     "stream",
-			IsRecordingEnabled: isRecordingEnabled,
-			StreamId:           streamID,
-			RequiresAuth:       requiresAuth,
-		}, nil
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		s.logger.WithError(err).Error("Database error checking streams by internal_name")
+	if err != nil {
+		s.logger.WithError(err).Error("Database error resolving identifier catalog")
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-
-	// 2. Try streams by playback_id
-	var internalName string
-	err = s.db.QueryRowContext(ctx, `
-		SELECT id, tenant_id, user_id, internal_name, is_recording_enabled, requires_auth
-		FROM commodore.streams WHERE lower(playback_id::text) = lower($1::text) AND deleted_at IS NULL
-	`, identifier).Scan(&streamID, &tenantID, &userID, &internalName, &isRecordingEnabled, &requiresAuth)
-	if err == nil {
-		return &commodorepb.ResolveIdentifierResponse{
-			Found:              true,
-			TenantId:           tenantID,
-			UserId:             userID,
-			InternalName:       internalName,
-			IdentifierType:     "playback_id",
-			IsRecordingEnabled: isRecordingEnabled,
-			StreamId:           streamID,
-			RequiresAuth:       requiresAuth,
-		}, nil
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		s.logger.WithError(err).Error("Database error checking streams by playback_id")
-	}
-
-	// 2b. Try artifact playback_id (clip)
-	var parentInternalName sql.NullString
-	var clipRequiresAuth bool
-	err = s.db.QueryRowContext(ctx, `
-		SELECT c.tenant_id, c.user_id, s.internal_name, c.stream_id, c.requires_auth
-		FROM commodore.clips c
-		LEFT JOIN commodore.streams s ON c.stream_id = s.id
-		WHERE lower(c.playback_id::text) = lower($1::text)	`, identifier).Scan(&tenantID, &userID, &parentInternalName, &streamID, &clipRequiresAuth)
-	if err == nil {
-		return &commodorepb.ResolveIdentifierResponse{
-			Found:          true,
-			TenantId:       tenantID,
-			UserId:         userID,
-			InternalName:   parentInternalName.String,
-			IdentifierType: "clip_playback_id",
-			StreamId:       streamID,
-			RequiresAuth:   clipRequiresAuth,
-		}, nil
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		s.logger.WithError(err).Error("Database error checking clips by playback_id")
-	}
-
-	// 2c. Try artifact playback_id (DVR)
-	var dvrRequiresAuth sql.NullBool
-	err = s.db.QueryRowContext(ctx, `
-		SELECT d.tenant_id, d.user_id, d.internal_name, d.stream_id, s.requires_auth
-		FROM commodore.dvr_recordings d
-		LEFT JOIN commodore.streams s ON s.id = d.stream_id
-		WHERE lower(d.playback_id::text) = lower($1::text)	`, identifier).Scan(&tenantID, &userID, &internalName, &streamID, &dvrRequiresAuth)
-	if err == nil {
-		return &commodorepb.ResolveIdentifierResponse{
-			Found:          true,
-			TenantId:       tenantID,
-			UserId:         userID,
-			InternalName:   internalName,
-			IdentifierType: "dvr_playback_id",
-			StreamId:       streamID,
-			RequiresAuth:   !dvrRequiresAuth.Valid || dvrRequiresAuth.Bool,
-		}, nil
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		s.logger.WithError(err).Error("Database error checking DVR by playback_id")
-	}
-
-	// 2d. Try artifact playback_id (VOD)
-	err = s.db.QueryRowContext(ctx, `
-		SELECT tenant_id, user_id, requires_auth
-		FROM commodore.vod_assets
-		WHERE lower(playback_id::text) = lower($1::text)	`, identifier).Scan(&tenantID, &userID, &requiresAuth)
-	if err == nil {
-		return &commodorepb.ResolveIdentifierResponse{
-			Found:          true,
-			TenantId:       tenantID,
-			UserId:         userID,
-			IdentifierType: "vod_playback_id",
-			RequiresAuth:   requiresAuth,
-		}, nil
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		s.logger.WithError(err).Error("Database error checking VOD by playback_id")
-	}
-
-	// 2e. Try artifact internal_name (clip)
-	err = s.db.QueryRowContext(ctx, `
-		SELECT c.tenant_id, c.user_id, s.internal_name, c.stream_id, c.requires_auth
-		FROM commodore.clips c
-		LEFT JOIN commodore.streams s ON c.stream_id = s.id
-		WHERE c.internal_name = $1	`, identifier).Scan(&tenantID, &userID, &parentInternalName, &streamID, &clipRequiresAuth)
-	if err == nil {
-		return &commodorepb.ResolveIdentifierResponse{
-			Found:          true,
-			TenantId:       tenantID,
-			UserId:         userID,
-			InternalName:   parentInternalName.String,
-			IdentifierType: "clip_internal_name",
-			StreamId:       streamID,
-			RequiresAuth:   clipRequiresAuth,
-		}, nil
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		s.logger.WithError(err).Error("Database error checking clips by internal_name")
-	}
-
-	// 2f. Try artifact internal_name (DVR)
-	dvrRequiresAuth = sql.NullBool{}
-	err = s.db.QueryRowContext(ctx, `
-		SELECT d.tenant_id, d.user_id, d.internal_name, d.stream_id, s.requires_auth
-		FROM commodore.dvr_recordings d
-		LEFT JOIN commodore.streams s ON s.id = d.stream_id
-		WHERE d.internal_name = $1	`, identifier).Scan(&tenantID, &userID, &internalName, &streamID, &dvrRequiresAuth)
-	if err == nil {
-		return &commodorepb.ResolveIdentifierResponse{
-			Found:          true,
-			TenantId:       tenantID,
-			UserId:         userID,
-			InternalName:   internalName,
-			IdentifierType: "dvr_internal_name",
-			StreamId:       streamID,
-			RequiresAuth:   !dvrRequiresAuth.Valid || dvrRequiresAuth.Bool,
-		}, nil
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		s.logger.WithError(err).Error("Database error checking DVR by internal_name")
-	}
-
-	// 2g. Try artifact internal_name (VOD)
-	err = s.db.QueryRowContext(ctx, `
-		SELECT tenant_id, user_id, requires_auth
-		FROM commodore.vod_assets
-		WHERE internal_name = $1	`, identifier).Scan(&tenantID, &userID, &requiresAuth)
-	if err == nil {
-		return &commodorepb.ResolveIdentifierResponse{
-			Found:          true,
-			TenantId:       tenantID,
-			UserId:         userID,
-			IdentifierType: "vod_internal_name",
-			RequiresAuth:   requiresAuth,
-		}, nil
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		s.logger.WithError(err).Error("Database error checking VOD by internal_name")
-	}
-
-	// 3. Try clips by clip_hash
-	err = s.db.QueryRowContext(ctx, `
-		SELECT c.tenant_id, c.user_id, s.internal_name, c.stream_id, c.requires_auth
-		FROM commodore.clips c
-		LEFT JOIN commodore.streams s ON c.stream_id = s.id
-		WHERE c.clip_hash = $1	`, identifier).Scan(&tenantID, &userID, &parentInternalName, &streamID, &clipRequiresAuth)
-	if err == nil {
-		return &commodorepb.ResolveIdentifierResponse{
-			Found:          true,
-			TenantId:       tenantID,
-			UserId:         userID,
-			InternalName:   parentInternalName.String,
-			IdentifierType: "clip",
-			StreamId:       streamID,
-			RequiresAuth:   clipRequiresAuth,
-		}, nil
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		s.logger.WithError(err).Error("Database error checking clips")
-	}
-
-	// 4. Try DVR by dvr_hash
-	dvrRequiresAuth = sql.NullBool{}
-	err = s.db.QueryRowContext(ctx, `
-		SELECT d.tenant_id, d.user_id, d.internal_name, d.stream_id, s.requires_auth
-		FROM commodore.dvr_recordings d
-		LEFT JOIN commodore.streams s ON s.id = d.stream_id
-		WHERE d.dvr_hash = $1	`, identifier).Scan(&tenantID, &userID, &internalName, &streamID, &dvrRequiresAuth)
-	if err == nil {
-		return &commodorepb.ResolveIdentifierResponse{
-			Found:          true,
-			TenantId:       tenantID,
-			UserId:         userID,
-			InternalName:   internalName,
-			IdentifierType: "dvr",
-			StreamId:       streamID,
-			RequiresAuth:   !dvrRequiresAuth.Valid || dvrRequiresAuth.Bool,
-		}, nil
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		s.logger.WithError(err).Error("Database error checking DVR")
-	}
-
-	// 5. Try VOD by vod_hash
-	err = s.db.QueryRowContext(ctx, `
-		SELECT tenant_id, user_id, requires_auth FROM commodore.vod_assets WHERE vod_hash = $1	`, identifier).Scan(&tenantID, &userID, &requiresAuth)
-	if err == nil {
-		return &commodorepb.ResolveIdentifierResponse{
-			Found:          true,
-			TenantId:       tenantID,
-			UserId:         userID,
-			IdentifierType: "vod",
-			RequiresAuth:   requiresAuth,
-		}, nil
-	} else if !errors.Is(err, sql.ErrNoRows) {
-		s.logger.WithError(err).Error("Database error checking VOD")
-	}
-
-	// Not found in any registry
 	return &commodorepb.ResolveIdentifierResponse{
-		Found: false,
+		Found:              true,
+		TenantId:           resolved.TenantID,
+		UserId:             resolved.UserID,
+		InternalName:       resolved.InternalName,
+		IdentifierType:     resolved.IdentifierType,
+		IsRecordingEnabled: resolved.IsRecordingEnabled,
+		StreamId:           resolved.StreamID,
+		RequiresAuth:       resolved.RequiresAuth,
 	}, nil
 }
 
@@ -4427,22 +3910,25 @@ func (s *CommodoreServer) GetOrCreateWalletUser(ctx context.Context, req *commod
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid wallet address: %v", err)
 	}
+	queries := commodoredb.New(s.db)
 
 	// Try to find existing wallet identity (query only commodore.* tables)
 	var tenantID, userID string
-	err = s.db.QueryRowContext(ctx, `
-		SELECT tenant_id, user_id
-		FROM commodore.wallet_identities
-		WHERE chain_type = $1 AND wallet_address = $2
-	`, chainType, normalizedAddress).Scan(&tenantID, &userID)
+	walletIdentity, err := queries.GetWalletIdentityByAddress(ctx, commodoredb.GetWalletIdentityByAddressParams{
+		ChainType:     chainType,
+		WalletAddress: normalizedAddress,
+	})
 
 	if err == nil {
+		tenantID = walletIdentity.TenantID
+		userID = walletIdentity.UserID
 		// Existing wallet found - update last_auth_at
-		_, _ = s.db.ExecContext(ctx, `
-			UPDATE commodore.wallet_identities
-			SET last_auth_at = NOW()
-			WHERE chain_type = $1 AND wallet_address = $2
-		`, chainType, normalizedAddress)
+		if touchErr := queries.TouchWalletIdentityAuth(ctx, commodoredb.TouchWalletIdentityAuthParams{
+			ChainType:     chainType,
+			WalletAddress: normalizedAddress,
+		}); touchErr != nil {
+			s.logger.WithError(touchErr).Debug("Failed to update wallet last_auth_at")
+		}
 
 		// Get billing info via Purser gRPC (not DB JOIN)
 		billingModel := "prepaid"
@@ -4515,30 +4001,29 @@ func (s *CommodoreServer) GetOrCreateWalletUser(ctx context.Context, req *commod
 		return nil, status.Error(codes.Internal, "failed to create wallet account")
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
+	txQueries := commodoredb.New(tx)
 
 	userID = uuid.NewString()
 	shortAddr := normalizedAddress
 	if len(shortAddr) >= 8 {
 		shortAddr = shortAddr[2:8]
 	}
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO commodore.users (
-			id, tenant_id, email, password_hash,
-			role, is_active, verified,
-			first_name, last_name,
-			created_at, updated_at
-		)
-		VALUES ($1, $2, NULL, '', 'owner', true, true, $3, '', NOW(), NOW())
-	`, userID, tenantID, "Wallet "+shortAddr)
+	err = txQueries.InsertWalletUser(ctx, commodoredb.InsertWalletUserParams{
+		ID:        userID,
+		TenantID:  tenantID,
+		FirstName: sql.NullString{String: "Wallet " + shortAddr, Valid: true},
+	})
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to create user")
 		return nil, status.Error(codes.Internal, "failed to create user")
 	}
 
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO commodore.wallet_identities (id, wallet_address, chain_type, tenant_id, user_id, created_at, last_auth_at)
-		VALUES (gen_random_uuid(), $1, $2, $3, $4, NOW(), NOW())
-	`, normalizedAddress, chainType, tenantID, userID)
+	err = txQueries.InsertWalletIdentity(ctx, commodoredb.InsertWalletIdentityParams{
+		WalletAddress: normalizedAddress,
+		ChainType:     chainType,
+		TenantID:      tenantID,
+		UserID:        userID,
+	})
 	if err != nil {
 		var pqErr *pq.Error
 		if errors.As(err, &pqErr) && pqErr.Code == "23505" {
@@ -4549,10 +4034,13 @@ func (s *CommodoreServer) GetOrCreateWalletUser(ctx context.Context, req *commod
 				return nil, status.Error(codes.Internal, "failed to resolve concurrent wallet signup")
 			}
 			var existingTenantID, existingUserID string
-			if lookupErr := s.db.QueryRowContext(ctx, `
-				SELECT tenant_id, user_id FROM commodore.wallet_identities
-				WHERE chain_type = $1 AND wallet_address = $2
-			`, chainType, normalizedAddress).Scan(&existingTenantID, &existingUserID); lookupErr == nil {
+			winner, lookupErr := queries.GetWalletIdentityByAddress(ctx, commodoredb.GetWalletIdentityByAddressParams{
+				ChainType:     chainType,
+				WalletAddress: normalizedAddress,
+			})
+			if lookupErr == nil {
+				existingTenantID = winner.TenantID
+				existingUserID = winner.UserID
 				return &commodorepb.GetOrCreateWalletUserResponse{
 					TenantId: existingTenantID, UserId: existingUserID, IsNew: false,
 					BillingModel: "prepaid", WalletAddress: normalizedAddress,
@@ -4635,17 +4123,19 @@ func (s *CommodoreServer) Login(ctx context.Context, req *commodorepb.LoginReque
 	}
 
 	// Find user by email
-	var user commodoreUserRecord
-	err := scanCommodoreUserForLogin(s.db.QueryRowContext(ctx, `
-		SELECT id, tenant_id, email, password_hash, first_name, last_name, role, permissions, is_active, verified, created_at, updated_at, platform_operator
-		FROM commodore.users WHERE email = $1
-	`, email), &user)
+	queries := commodoredb.New(s.db)
+	userRow, err := queries.GetLoginUserByEmail(ctx, sql.NullString{String: email, Valid: true})
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.Unauthenticated, "invalid credentials")
 	}
 	if err != nil {
 		s.logger.WithError(err).Error("Database error during login")
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	user, err := commodoreUserFromLoginRow(userRow)
+	if err != nil {
+		s.logger.WithError(err).Error("Invalid user record during login")
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
@@ -4667,7 +4157,7 @@ func (s *CommodoreServer) Login(ctx context.Context, req *commodorepb.LoginReque
 	}
 
 	// Update last login (best effort)
-	if _, updateErr := s.db.ExecContext(ctx, `UPDATE commodore.users SET last_login_at = NOW() WHERE id = $1 AND tenant_id = $2`, user.ID, user.TenantID); updateErr != nil {
+	if updateErr := queries.TouchUserLastLogin(ctx, commodoredb.TouchUserLastLoginParams{ID: user.ID, TenantID: user.TenantID}); updateErr != nil {
 		s.logger.WithError(updateErr).Debug("Failed to update last_login_at")
 	}
 
@@ -4687,10 +4177,12 @@ func (s *CommodoreServer) Login(ctx context.Context, req *commodorepb.LoginReque
 	refreshHash := hashToken(refreshToken)
 	refreshExpiry := time.Now().Add(30 * 24 * time.Hour) // 30 days
 
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO commodore.refresh_tokens (tenant_id, user_id, token_hash, expires_at)
-		VALUES ($1, $2, $3, $4)
-	`, user.TenantID, user.ID, refreshHash, refreshExpiry)
+	err = queries.InsertRefreshToken(ctx, commodoredb.InsertRefreshTokenParams{
+		TenantID:  user.TenantID,
+		UserID:    user.ID,
+		TokenHash: refreshHash,
+		ExpiresAt: refreshExpiry,
+	})
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to store refresh token")
 		return nil, status.Errorf(codes.Internal, "failed to create session: %v", err)
@@ -4751,8 +4243,8 @@ func (s *CommodoreServer) Register(ctx context.Context, req *commodorepb.Registe
 	}
 
 	// Check if user already exists
-	var existingID string
-	err := s.db.QueryRowContext(ctx, `SELECT id FROM commodore.users WHERE email = $1`, email).Scan(&existingID)
+	queries := commodoredb.New(s.db)
+	_, err := queries.FindUserIDByEmail(ctx, sql.NullString{String: email, Valid: true})
 	if err == nil {
 		return &commodorepb.RegisterResponse{
 			Success: false,
@@ -4811,8 +4303,7 @@ func (s *CommodoreServer) Register(ctx context.Context, req *commodorepb.Registe
 	tokenExpiry := time.Now().Add(24 * time.Hour)
 
 	// Check if this is the first user for the tenant (becomes owner)
-	var userCount int
-	err = s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM commodore.users WHERE tenant_id = $1`, tenantID).Scan(&userCount)
+	userCount, err := queries.CountUsersForTenant(ctx, tenantID)
 	role := "member"
 	if err == nil && userCount == 0 {
 		role = "owner"
@@ -4820,10 +4311,18 @@ func (s *CommodoreServer) Register(ctx context.Context, req *commodorepb.Registe
 
 	// Create user
 	userID := uuid.New().String()
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO commodore.users (id, tenant_id, email, password_hash, first_name, last_name, role, permissions, is_active, verified, verification_token, token_expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, false, $9, $10)
-	`, userID, tenantID, email, hashedPassword, req.GetFirstName(), req.GetLastName(), role, pq.Array(getDefaultPermissions(role)), tokenHash, tokenExpiry)
+	err = queries.InsertRegisteredUser(ctx, commodoredb.InsertRegisteredUserParams{
+		ID:                userID,
+		TenantID:          tenantID,
+		Email:             sql.NullString{String: email, Valid: true},
+		PasswordHash:      sql.NullString{String: hashedPassword, Valid: true},
+		FirstName:         sql.NullString{String: req.GetFirstName(), Valid: true},
+		LastName:          sql.NullString{String: req.GetLastName(), Valid: true},
+		Role:              role,
+		Permissions:       getDefaultPermissions(role),
+		VerificationToken: sql.NullString{String: tokenHash, Valid: true},
+		TokenExpiresAt:    sql.NullTime{Time: tokenExpiry, Valid: true},
+	})
 
 	if err != nil {
 		var pqErr *pq.Error
@@ -4884,12 +4383,8 @@ func (s *CommodoreServer) GetMe(ctx context.Context, req *commodorepb.GetMeReque
 		return nil, err
 	}
 
-	var user commodoreUserRecord
-
-	err = scanCommodoreUserForGetMe(s.db.QueryRowContext(ctx, `
-		SELECT id, tenant_id, email, first_name, last_name, role, permissions, is_active, verified, last_login_at, created_at, updated_at, platform_operator
-		FROM commodore.users WHERE id = $1 AND tenant_id = $2
-	`, userID, tenantID), &user)
+	queries := commodoredb.New(s.db)
+	userRow, err := queries.GetUserProfile(ctx, commodoredb.GetUserProfileParams{ID: userID, TenantID: tenantID})
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "user not found")
@@ -4897,35 +4392,30 @@ func (s *CommodoreServer) GetMe(ctx context.Context, req *commodorepb.GetMeReque
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
+	user, err := commodoreUserFromProfileRow(userRow)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
 
 	result := user.toProtoUser("", "")
 
 	// Fetch linked wallets
-	walletRows, err := s.db.QueryContext(ctx, `
-		SELECT id, wallet_address, created_at, last_auth_at
-		FROM commodore.wallet_identities
-		WHERE user_id = $1
-		ORDER BY created_at DESC
-	`, userID)
+	walletRows, err := queries.ListUserWallets(ctx, userID)
 	if err != nil {
 		s.logger.WithError(err).Warn("Failed to fetch user wallets")
 		// Don't fail the whole request - just return user without wallets
 	} else {
-		defer func() { _ = walletRows.Close() }()
-		for walletRows.Next() {
-			var walletID, walletAddr string
-			var walletCreatedAt time.Time
-			var walletLastAuthAt sql.NullTime
-			if err := walletRows.Scan(&walletID, &walletAddr, &walletCreatedAt, &walletLastAuthAt); err != nil {
+		for _, walletRow := range walletRows {
+			if !walletRow.CreatedAt.Valid {
 				continue
 			}
 			wallet := &commodorepb.WalletIdentity{
-				Id:            walletID,
-				WalletAddress: walletAddr,
-				CreatedAt:     timestamppb.New(walletCreatedAt),
+				Id:            walletRow.ID,
+				WalletAddress: walletRow.WalletAddress,
+				CreatedAt:     timestamppb.New(walletRow.CreatedAt.Time),
 			}
-			if walletLastAuthAt.Valid {
-				wallet.LastAuthAt = timestamppb.New(walletLastAuthAt.Time)
+			if walletRow.LastAuthAt.Valid {
+				wallet.LastAuthAt = timestamppb.New(walletRow.LastAuthAt.Time)
 			}
 			result.Wallets = append(result.Wallets, wallet)
 		}
@@ -4948,9 +4438,9 @@ func (s *CommodoreServer) Logout(ctx context.Context, req *commodorepb.LogoutReq
 	}
 
 	// Delete all refresh tokens for this user (logs them out of all devices)
-	_, err = s.db.ExecContext(ctx, `
-		DELETE FROM commodore.refresh_tokens WHERE user_id = $1 AND tenant_id = $2
-	`, userID, tenantID)
+	err = commodoredb.New(s.db).DeleteRefreshTokensForUser(ctx, commodoredb.DeleteRefreshTokensForUserParams{
+		UserID: userID, TenantID: tenantID,
+	})
 	if err != nil {
 		s.logger.WithError(err).Warn("Failed to delete refresh tokens during logout")
 	}
@@ -4981,17 +4471,9 @@ func (s *CommodoreServer) RefreshToken(ctx context.Context, req *commodorepb.Ref
 		return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
 	}
 	defer s.rollbackTx(tx)
+	txQueries := commodoredb.New(tx)
 
-	var tokenID, userID, tenantID string
-	var revoked bool
-	var rotatedAt sql.NullTime
-	var replacedBy sql.NullString
-	err = tx.QueryRowContext(ctx, `
-		SELECT id, user_id, tenant_id, revoked, rotated_at, replaced_by
-		FROM commodore.refresh_tokens
-		WHERE token_hash = $1 AND expires_at > NOW()
-		FOR UPDATE
-	`, tokenHash).Scan(&tokenID, &userID, &tenantID, &revoked, &rotatedAt, &replacedBy)
+	refreshRow, err := txQueries.LockRefreshTokenByHash(ctx, tokenHash)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.Unauthenticated, "invalid or expired refresh token")
@@ -5000,6 +4482,12 @@ func (s *CommodoreServer) RefreshToken(ctx context.Context, req *commodorepb.Ref
 		s.logger.WithError(err).Error("Database error validating refresh token")
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
+	tokenID := refreshRow.ID
+	userID := refreshRow.UserID
+	tenantID := refreshRow.TenantID
+	revoked := refreshRow.Revoked
+	rotatedAt := refreshRow.RotatedAt
+	replacedBy := refreshRow.ReplacedBy
 
 	rotateCurrent := !revoked
 	var staleSuccessorID string
@@ -5016,10 +4504,7 @@ func (s *CommodoreServer) RefreshToken(ctx context.Context, req *commodorepb.Ref
 		} else {
 			successorUsed := true
 			if replacedBy.Valid {
-				var successorRevoked bool
-				successorErr := tx.QueryRowContext(ctx, `
-					SELECT revoked FROM commodore.refresh_tokens WHERE id = $1
-				`, replacedBy.String).Scan(&successorRevoked)
+				successorRevoked, successorErr := txQueries.GetRefreshTokenSuccessorState(ctx, replacedBy.String)
 				switch {
 				case successorErr == nil:
 					successorUsed = successorRevoked
@@ -5037,10 +4522,9 @@ func (s *CommodoreServer) RefreshToken(ctx context.Context, req *commodorepb.Ref
 					"user_id":   userID,
 					"tenant_id": tenantID,
 				}).Warn("Refresh token reuse detected, revoking all user sessions")
-				if _, revokeErr := tx.ExecContext(ctx, `
-					UPDATE commodore.refresh_tokens SET revoked = true
-					WHERE user_id = $1 AND tenant_id = $2
-				`, userID, tenantID); revokeErr != nil {
+				if revokeErr := txQueries.RevokeRefreshTokensForUser(ctx, commodoredb.RevokeRefreshTokensForUserParams{
+					UserID: userID, TenantID: tenantID,
+				}); revokeErr != nil {
 					s.logger.WithError(revokeErr).WithFields(logging.Fields{
 						"user_id":   userID,
 						"tenant_id": tenantID,
@@ -5061,12 +4545,12 @@ func (s *CommodoreServer) RefreshToken(ctx context.Context, req *commodorepb.Ref
 		}
 	}
 
-	var user commodoreUserRecord
-	err = scanCommodoreUserForRefresh(tx.QueryRowContext(ctx, `
-		SELECT email, role, permissions, first_name, last_name, is_active, verified, created_at, updated_at, platform_operator
-		FROM commodore.users WHERE id = $1 AND tenant_id = $2
-	`, userID, tenantID), &user)
+	userRow, err := txQueries.GetRefreshUser(ctx, commodoredb.GetRefreshUserParams{ID: userID, TenantID: tenantID})
 
+	if err != nil {
+		return nil, status.Error(codes.Unauthenticated, "user not found")
+	}
+	user, err := commodoreUserFromRefreshRow(userRow)
 	if err != nil {
 		return nil, status.Error(codes.Unauthenticated, "user not found")
 	}
@@ -5090,23 +4574,19 @@ func (s *CommodoreServer) RefreshToken(ctx context.Context, req *commodorepb.Ref
 	newRefreshHash := hashToken(newRefreshToken)
 	refreshExpiry := time.Now().Add(30 * 24 * time.Hour)
 
-	var newTokenID string
-	if err := tx.QueryRowContext(ctx, `
-		INSERT INTO commodore.refresh_tokens (tenant_id, user_id, token_hash, expires_at)
-		VALUES ($1, $2, $3, $4)
-		RETURNING id
-	`, tenantID, userID, newRefreshHash, refreshExpiry).Scan(&newTokenID); err != nil {
+	newTokenID, err := txQueries.InsertRotatedRefreshToken(ctx, commodoredb.InsertRotatedRefreshTokenParams{
+		TenantID: tenantID, UserID: userID, TokenHash: newRefreshHash, ExpiresAt: refreshExpiry,
+	})
+	if err != nil {
 		s.logger.WithError(err).Error("Failed to store new refresh token")
 		return nil, status.Errorf(codes.Internal, "failed to store refresh token: %v", err)
 	}
 
 	if rotateCurrent {
 		// Revoke the old refresh token (don't delete - keep for reuse detection)
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE commodore.refresh_tokens
-			SET revoked = true, rotated_at = NOW(), replaced_by = $2
-			WHERE id = $1
-		`, tokenID, newTokenID); err != nil {
+		if err := txQueries.RotateRefreshToken(ctx, commodoredb.RotateRefreshTokenParams{
+			ID: tokenID, ReplacedBy: sql.NullString{String: newTokenID, Valid: true},
+		}); err != nil {
 			s.logger.WithError(err).Error("Failed to rotate refresh token")
 			return nil, status.Errorf(codes.Internal, "failed to rotate refresh token: %v", err)
 		}
@@ -5114,15 +4594,13 @@ func (s *CommodoreServer) RefreshToken(ctx context.Context, req *commodorepb.Ref
 		// Retire the undelivered successor and re-point the presented token
 		// at its actual replacement so a repeated lost response still
 		// resolves as recovery, not theft.
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE commodore.refresh_tokens SET revoked = true WHERE id = $1
-		`, staleSuccessorID); err != nil {
+		if err := txQueries.RevokeRefreshTokenByID(ctx, staleSuccessorID); err != nil {
 			s.logger.WithError(err).Error("Failed to retire undelivered refresh token successor")
 			return nil, status.Errorf(codes.Internal, "failed to rotate refresh token: %v", err)
 		}
-		if _, err := tx.ExecContext(ctx, `
-			UPDATE commodore.refresh_tokens SET replaced_by = $2 WHERE id = $1
-		`, tokenID, newTokenID); err != nil {
+		if err := txQueries.RelinkRefreshToken(ctx, commodoredb.RelinkRefreshTokenParams{
+			ID: tokenID, ReplacedBy: sql.NullString{String: newTokenID, Valid: true},
+		}); err != nil {
 			s.logger.WithError(err).Error("Failed to re-link recovered refresh token")
 			return nil, status.Errorf(codes.Internal, "failed to rotate refresh token: %v", err)
 		}
@@ -5220,14 +4698,18 @@ func (s *CommodoreServer) CompleteAuthorization(ctx context.Context, req *commod
 		state = sql.NullString{String: reqState, Valid: true}
 	}
 
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO commodore.auth_authorization_codes
-			(tenant_id, user_id, client_id, code_hash, code_challenge, code_challenge_method,
-			 redirect_uri, scope, state, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-	`, tenantID, userID, req.GetClientId(), codeHash,
-		req.GetCodeChallenge(), req.GetCodeChallengeMethod(),
-		req.GetRedirectUri(), scope, state, expiresAt)
+	err = commodoredb.New(s.db).InsertAuthorizationCode(ctx, commodoredb.InsertAuthorizationCodeParams{
+		TenantID:            tenantID,
+		UserID:              userID,
+		ClientID:            req.GetClientId(),
+		CodeHash:            codeHash,
+		CodeChallenge:       req.GetCodeChallenge(),
+		CodeChallengeMethod: req.GetCodeChallengeMethod(),
+		RedirectUri:         req.GetRedirectUri(),
+		Scope:               scope,
+		State:               state,
+		ExpiresAt:           expiresAt,
+	})
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to persist authorization code")
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
@@ -5256,18 +4738,9 @@ func (s *CommodoreServer) ExchangeAuthorizationCode(ctx context.Context, req *co
 		return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
 	}
 	defer s.rollbackTx(tx)
+	txQueries := commodoredb.New(tx)
 
-	var rowID, userID, tenantID string
-	var storedChallenge, challengeMethod, storedClientID, storedRedirectURI string
-	var consumedAt sql.NullTime
-	err = tx.QueryRowContext(ctx, `
-		SELECT id, user_id, tenant_id, code_challenge, code_challenge_method,
-		       client_id, redirect_uri, consumed_at
-		FROM commodore.auth_authorization_codes
-		WHERE code_hash = $1 AND expires_at > NOW()
-		FOR UPDATE
-	`, codeHash).Scan(&rowID, &userID, &tenantID, &storedChallenge, &challengeMethod,
-		&storedClientID, &storedRedirectURI, &consumedAt)
+	authorizationRow, err := txQueries.LockAuthorizationCode(ctx, codeHash)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.Unauthenticated, "invalid or expired authorization code")
@@ -5275,30 +4748,27 @@ func (s *CommodoreServer) ExchangeAuthorizationCode(ctx context.Context, req *co
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	if consumedAt.Valid {
+	if authorizationRow.ConsumedAt.Valid {
 		return nil, status.Error(codes.AlreadyExists, "authorization code already used")
 	}
-	if storedClientID != req.GetClientId() || storedRedirectURI != req.GetRedirectUri() {
+	if authorizationRow.ClientID != req.GetClientId() || authorizationRow.RedirectUri != req.GetRedirectUri() {
 		return nil, status.Error(codes.PermissionDenied, "client_id or redirect_uri mismatch")
 	}
-	if challengeMethod != "S256" {
+	if authorizationRow.CodeChallengeMethod != "S256" {
 		return nil, status.Error(codes.Internal, "unsupported code_challenge_method")
 	}
 
 	h := sha256.Sum256([]byte(req.GetCodeVerifier()))
 	computed := base64.RawURLEncoding.EncodeToString(h[:])
-	if subtle.ConstantTimeCompare([]byte(computed), []byte(storedChallenge)) != 1 {
+	if subtle.ConstantTimeCompare([]byte(computed), []byte(authorizationRow.CodeChallenge)) != 1 {
 		return nil, status.Error(codes.PermissionDenied, "code_verifier mismatch")
 	}
 
-	if _, execErr := tx.ExecContext(ctx, `
-		UPDATE commodore.auth_authorization_codes
-		SET consumed_at = NOW() WHERE id = $1
-	`, rowID); execErr != nil {
+	if execErr := txQueries.ConsumeAuthorizationCode(ctx, authorizationRow.ID); execErr != nil {
 		return nil, status.Errorf(codes.Internal, "failed to mark code consumed: %v", execErr)
 	}
 
-	resp, err := s.issueUserSessionTx(ctx, tx, userID, tenantID, "pkce")
+	resp, err := s.issueUserSessionTx(ctx, tx, authorizationRow.UserID, authorizationRow.TenantID, "pkce")
 	if err != nil {
 		return nil, err
 	}
@@ -5319,14 +4789,15 @@ func (s *CommodoreServer) rollbackTx(tx *sql.Tx) {
 // user inside an open transaction. The caller is responsible for committing.
 // Returns the same AuthResponse shape as Login.
 func (s *CommodoreServer) issueUserSessionTx(ctx context.Context, tx *sql.Tx, userID, tenantID, authType string) (*commodorepb.AuthResponse, error) {
-	var user commodoreUserRecord
-	err := scanCommodoreUserForRefresh(tx.QueryRowContext(ctx, `
-		SELECT email, role, permissions, first_name, last_name, is_active, verified, created_at, updated_at, platform_operator
-		FROM commodore.users WHERE id = $1 AND tenant_id = $2
-	`, userID, tenantID), &user)
+	queries := commodoredb.New(tx)
+	userRow, err := queries.GetRefreshUser(ctx, commodoredb.GetRefreshUserParams{ID: userID, TenantID: tenantID})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.Unauthenticated, "user not found")
 	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	user, err := commodoreUserFromRefreshRow(userRow)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
@@ -5347,10 +4818,9 @@ func (s *CommodoreServer) issueUserSessionTx(ctx context.Context, tx *sql.Tx, us
 	refreshHash := hashToken(refreshToken)
 	refreshExpiry := time.Now().Add(30 * 24 * time.Hour)
 
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO commodore.refresh_tokens (tenant_id, user_id, token_hash, expires_at)
-		VALUES ($1, $2, $3, $4)
-	`, tenantID, userID, refreshHash, refreshExpiry); err != nil {
+	if err := queries.InsertRefreshToken(ctx, commodoredb.InsertRefreshTokenParams{
+		TenantID: tenantID, UserID: userID, TokenHash: refreshHash, ExpiresAt: refreshExpiry,
+	}); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to store refresh token: %v", err)
 	}
 
@@ -5428,19 +4898,21 @@ func (s *CommodoreServer) StartDeviceAuthorization(ctx context.Context, req *com
 	// 32^8 are vanishingly small, but be defensive in case of clock skew /
 	// long-lived pending codes.
 	var userCode string
+	queries := commodoredb.New(s.db)
 	const maxAttempts = 5
 	for range maxAttempts {
 		userCode, err = generateUserCode()
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to generate user_code: %v", err)
 		}
-		_, err = s.db.ExecContext(ctx, `
-			INSERT INTO commodore.auth_device_codes
-				(client_id, device_code_hash, user_code, scope, status,
-				 poll_interval_seconds, expires_at)
-			VALUES ($1, $2, $3, $4, 'pending', $5, $6)
-		`, clientID, deviceCodeHash, userCode, scope,
-			int(deviceCodePollInterval.Seconds()), expiresAt)
+		err = queries.InsertDeviceAuthorization(ctx, commodoredb.InsertDeviceAuthorizationParams{
+			ClientID:            clientID,
+			DeviceCodeHash:      deviceCodeHash,
+			UserCode:            userCode,
+			Scope:               scope,
+			PollIntervalSeconds: int32(deviceCodePollInterval.Seconds()),
+			ExpiresAt:           expiresAt,
+		})
 		if err == nil {
 			break
 		}
@@ -5498,32 +4970,22 @@ func (s *CommodoreServer) PollDeviceAuthorization(ctx context.Context, req *comm
 		return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
 	}
 	defer s.rollbackTx(tx)
+	txQueries := commodoredb.New(tx)
 
-	var rowID, storedClientID, dbStatus string
-	var userID, tenantID sql.NullString
-	var expiresAt time.Time
-	var lastPolledAt sql.NullTime
-	var pollInterval int
-	err = tx.QueryRowContext(ctx, `
-		SELECT id, client_id, status, user_id, tenant_id, expires_at, last_polled_at, poll_interval_seconds
-		FROM commodore.auth_device_codes
-		WHERE device_code_hash = $1
-		FOR UPDATE
-	`, deviceCodeHash).Scan(&rowID, &storedClientID, &dbStatus, &userID, &tenantID,
-		&expiresAt, &lastPolledAt, &pollInterval)
+	deviceRow, err := txQueries.LockDeviceAuthorizationByHash(ctx, deviceCodeHash)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.PermissionDenied, "ACCESS_DENIED")
 	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	if storedClientID != req.GetClientId() {
+	if deviceRow.ClientID != req.GetClientId() {
 		return nil, status.Error(codes.PermissionDenied, "ACCESS_DENIED")
 	}
 
 	now := time.Now()
-	if now.After(expiresAt) || dbStatus == "expired" {
-		if _, execErr := tx.ExecContext(ctx, `UPDATE commodore.auth_device_codes SET status = 'expired' WHERE id = $1`, rowID); execErr != nil {
+	if now.After(deviceRow.ExpiresAt) || deviceRow.Status == "expired" {
+		if execErr := txQueries.ExpireDeviceAuthorization(ctx, deviceRow.ID); execErr != nil {
 			return nil, status.Errorf(codes.Internal, "failed to expire device_code: %v", execErr)
 		}
 		if commitErr := tx.Commit(); commitErr != nil {
@@ -5531,16 +4993,16 @@ func (s *CommodoreServer) PollDeviceAuthorization(ctx context.Context, req *comm
 		}
 		return nil, status.Error(codes.FailedPrecondition, "EXPIRED_TOKEN")
 	}
-	if dbStatus == "denied" {
+	if deviceRow.Status == "denied" {
 		if commitErr := tx.Commit(); commitErr != nil {
 			return nil, status.Errorf(codes.Internal, "failed to commit: %v", commitErr)
 		}
 		return nil, status.Error(codes.PermissionDenied, "ACCESS_DENIED")
 	}
-	if dbStatus == "pending" {
+	if deviceRow.Status == "pending" {
 		// SLOW_DOWN: client polled before its returned interval elapsed.
-		if lastPolledAt.Valid && now.Sub(lastPolledAt.Time) < time.Duration(pollInterval)*time.Second {
-			if _, execErr := tx.ExecContext(ctx, `UPDATE commodore.auth_device_codes SET last_polled_at = NOW() WHERE id = $1`, rowID); execErr != nil {
+		if deviceRow.LastPolledAt.Valid && now.Sub(deviceRow.LastPolledAt.Time) < time.Duration(deviceRow.PollIntervalSeconds)*time.Second {
+			if execErr := txQueries.TouchDeviceAuthorizationPoll(ctx, deviceRow.ID); execErr != nil {
 				return nil, status.Errorf(codes.Internal, "failed to record poll: %v", execErr)
 			}
 			if commitErr := tx.Commit(); commitErr != nil {
@@ -5548,7 +5010,7 @@ func (s *CommodoreServer) PollDeviceAuthorization(ctx context.Context, req *comm
 			}
 			return nil, status.Error(codes.FailedPrecondition, "SLOW_DOWN")
 		}
-		if _, execErr := tx.ExecContext(ctx, `UPDATE commodore.auth_device_codes SET last_polled_at = NOW() WHERE id = $1`, rowID); execErr != nil {
+		if execErr := txQueries.TouchDeviceAuthorizationPoll(ctx, deviceRow.ID); execErr != nil {
 			return nil, status.Errorf(codes.Internal, "failed to record poll: %v", execErr)
 		}
 		if commitErr := tx.Commit(); commitErr != nil {
@@ -5556,7 +5018,7 @@ func (s *CommodoreServer) PollDeviceAuthorization(ctx context.Context, req *comm
 		}
 		return nil, status.Error(codes.FailedPrecondition, "AUTHORIZATION_PENDING")
 	}
-	if dbStatus != "approved" || !userID.Valid || !tenantID.Valid {
+	if deviceRow.Status != "approved" || !deviceRow.UserID.Valid || !deviceRow.TenantID.Valid {
 		if commitErr := tx.Commit(); commitErr != nil {
 			return nil, status.Errorf(codes.Internal, "failed to commit: %v", commitErr)
 		}
@@ -5565,11 +5027,11 @@ func (s *CommodoreServer) PollDeviceAuthorization(ctx context.Context, req *comm
 
 	// Approved — issue session and consume the row (DELETE so a re-poll
 	// returns ACCESS_DENIED on missing row).
-	resp, err := s.issueUserSessionTx(ctx, tx, userID.String, tenantID.String, "device_code")
+	resp, err := s.issueUserSessionTx(ctx, tx, deviceRow.UserID.String, deviceRow.TenantID.String, "device_code")
 	if err != nil {
 		return nil, err
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM commodore.auth_device_codes WHERE id = $1`, rowID); err != nil {
+	if err := txQueries.DeleteDeviceAuthorization(ctx, deviceRow.ID); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to consume device_code: %v", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -5594,15 +5056,9 @@ func (s *CommodoreServer) LookupDeviceAuthorization(ctx context.Context, req *co
 		return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
 	}
 	defer s.rollbackTx(tx)
+	txQueries := commodoredb.New(tx)
 
-	var rowID, clientID, scope, dbStatus string
-	var expiresAt time.Time
-	err = tx.QueryRowContext(ctx, `
-		SELECT id, client_id, scope, status, expires_at
-		FROM commodore.auth_device_codes
-		WHERE user_code = $1
-		FOR UPDATE
-	`, normalized).Scan(&rowID, &clientID, &scope, &dbStatus, &expiresAt)
+	deviceRow, err := txQueries.LockDeviceAuthorizationByUserCode(ctx, normalized)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "user_code not found")
 	}
@@ -5610,8 +5066,8 @@ func (s *CommodoreServer) LookupDeviceAuthorization(ctx context.Context, req *co
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	if time.Now().After(expiresAt) {
-		if _, execErr := tx.ExecContext(ctx, `UPDATE commodore.auth_device_codes SET status = 'expired' WHERE id = $1`, rowID); execErr != nil {
+	if time.Now().After(deviceRow.ExpiresAt) {
+		if execErr := txQueries.ExpireDeviceAuthorization(ctx, deviceRow.ID); execErr != nil {
 			return nil, status.Errorf(codes.Internal, "failed to expire device_code: %v", execErr)
 		}
 		if commitErr := tx.Commit(); commitErr != nil {
@@ -5619,7 +5075,7 @@ func (s *CommodoreServer) LookupDeviceAuthorization(ctx context.Context, req *co
 		}
 		return nil, status.Error(codes.FailedPrecondition, "user_code expired")
 	}
-	if dbStatus != "pending" {
+	if deviceRow.Status != "pending" {
 		return nil, status.Error(codes.FailedPrecondition, "user_code already resolved")
 	}
 	if commitErr := tx.Commit(); commitErr != nil {
@@ -5627,9 +5083,9 @@ func (s *CommodoreServer) LookupDeviceAuthorization(ctx context.Context, req *co
 	}
 
 	return &commodorepb.LookupDeviceAuthorizationResponse{
-		ClientId:  clientID,
-		Scope:     scope,
-		ExpiresAt: timestamppb.New(expiresAt),
+		ClientId:  deviceRow.ClientID,
+		Scope:     deviceRow.Scope,
+		ExpiresAt: timestamppb.New(deviceRow.ExpiresAt),
 	}, nil
 }
 
@@ -5652,15 +5108,9 @@ func (s *CommodoreServer) ApproveDeviceAuthorization(ctx context.Context, req *c
 		return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
 	}
 	defer s.rollbackTx(tx)
+	txQueries := commodoredb.New(tx)
 
-	var rowID, clientID, dbStatus string
-	var expiresAt time.Time
-	err = tx.QueryRowContext(ctx, `
-		SELECT id, client_id, status, expires_at
-		FROM commodore.auth_device_codes
-		WHERE user_code = $1
-		FOR UPDATE
-	`, normalized).Scan(&rowID, &clientID, &dbStatus, &expiresAt)
+	deviceRow, err := txQueries.LockDeviceAuthorizationByUserCode(ctx, normalized)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "user_code not found")
 	}
@@ -5668,8 +5118,8 @@ func (s *CommodoreServer) ApproveDeviceAuthorization(ctx context.Context, req *c
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	if time.Now().After(expiresAt) {
-		if _, execErr := tx.ExecContext(ctx, `UPDATE commodore.auth_device_codes SET status = 'expired' WHERE id = $1`, rowID); execErr != nil {
+	if time.Now().After(deviceRow.ExpiresAt) {
+		if execErr := txQueries.ExpireDeviceAuthorization(ctx, deviceRow.ID); execErr != nil {
 			return nil, status.Errorf(codes.Internal, "failed to expire device_code: %v", execErr)
 		}
 		if commitErr := tx.Commit(); commitErr != nil {
@@ -5677,15 +5127,15 @@ func (s *CommodoreServer) ApproveDeviceAuthorization(ctx context.Context, req *c
 		}
 		return nil, status.Error(codes.FailedPrecondition, "user_code expired")
 	}
-	if dbStatus != "pending" {
+	if deviceRow.Status != "pending" {
 		return nil, status.Error(codes.FailedPrecondition, "user_code already resolved")
 	}
 
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE commodore.auth_device_codes
-		SET user_id = $1, tenant_id = $2, status = 'approved', approved_at = NOW()
-		WHERE id = $3
-	`, userID, tenantID, rowID); err != nil {
+	if err := txQueries.ApproveDeviceAuthorization(ctx, commodoredb.ApproveDeviceAuthorizationParams{
+		UserID:   sql.NullString{String: userID, Valid: true},
+		TenantID: sql.NullString{String: tenantID, Valid: true},
+		ID:       deviceRow.ID,
+	}); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to approve device_code: %v", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -5694,7 +5144,7 @@ func (s *CommodoreServer) ApproveDeviceAuthorization(ctx context.Context, req *c
 
 	return &commodorepb.ApproveDeviceAuthorizationResponse{
 		Success:  true,
-		ClientId: clientID,
+		ClientId: deviceRow.ClientID,
 	}, nil
 }
 
@@ -5709,11 +5159,8 @@ func (s *CommodoreServer) VerifyEmail(ctx context.Context, req *commodorepb.Veri
 	tokenHash := hashToken(token)
 
 	// Find user by verification token with expiry check
-	var userID, tenantID string
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id, tenant_id FROM commodore.users
-		WHERE verification_token = $1 AND verified = false AND token_expires_at > NOW()
-	`, tokenHash).Scan(&userID, &tenantID)
+	queries := commodoredb.New(s.db)
+	verificationUser, err := queries.GetVerificationUser(ctx, sql.NullString{String: tokenHash, Valid: true})
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return &commodorepb.VerifyEmailResponse{
@@ -5728,18 +5175,14 @@ func (s *CommodoreServer) VerifyEmail(ctx context.Context, req *commodorepb.Veri
 	if s.purserClient == nil {
 		return nil, status.Error(codes.Unavailable, "billing setup is temporarily unavailable; retry verification")
 	}
-	if _, err = s.purserClient.EnsureFreeAccount(ctx, tenantID); err != nil {
-		s.logger.WithError(err).WithField("tenant_id", tenantID).Warn("Free activation failed during email verification")
+	if _, err = s.purserClient.EnsureFreeAccount(ctx, verificationUser.TenantID); err != nil {
+		s.logger.WithError(err).WithField("tenant_id", verificationUser.TenantID).Warn("Free activation failed during email verification")
 		return nil, status.Error(codes.Unavailable, "Free account setup is temporarily unavailable; retry verification")
 	}
 
 	// Mark verified only after the idempotent Free account exists. If this
 	// update fails, the still-valid token can safely retry the same tenant.
-	_, err = s.db.ExecContext(ctx, `
-		UPDATE commodore.users
-		SET verified = true, verification_token = NULL, token_expires_at = NULL, updated_at = NOW()
-		WHERE id = $1
-	`, userID)
+	err = queries.VerifyUserEmail(ctx, commodoredb.VerifyUserEmailParams(verificationUser))
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to verify email: %v", err)
 	}
@@ -5780,12 +5223,8 @@ func (s *CommodoreServer) ResendVerification(ctx context.Context, req *commodore
 	}
 
 	// Find user by email
-	var userID string
-	var isVerified bool
-	var tokenExpiresAt sql.NullTime
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id, verified, token_expires_at FROM commodore.users WHERE email = $1
-	`, email).Scan(&userID, &isVerified, &tokenExpiresAt)
+	queries := commodoredb.New(s.db)
+	resendUser, err := queries.GetVerificationResendUser(ctx, sql.NullString{String: email, Valid: true})
 
 	if errors.Is(err, sql.ErrNoRows) {
 		// Don't reveal if email exists - return success anyway
@@ -5799,7 +5238,7 @@ func (s *CommodoreServer) ResendVerification(ctx context.Context, req *commodore
 	}
 
 	// Already verified
-	if isVerified {
+	if resendUser.Verified {
 		return &commodorepb.ResendVerificationResponse{
 			Success: false,
 			Message: "email is already verified",
@@ -5807,9 +5246,9 @@ func (s *CommodoreServer) ResendVerification(ctx context.Context, req *commodore
 	}
 
 	// Rate limiting: check if token was generated within last 5 minutes
-	if tokenExpiresAt.Valid {
+	if resendUser.TokenExpiresAt.Valid {
 		// Token expiry is 24h from creation, so creation time is expiry - 24h
-		tokenCreatedAt := tokenExpiresAt.Time.Add(-24 * time.Hour)
+		tokenCreatedAt := resendUser.TokenExpiresAt.Time.Add(-24 * time.Hour)
 		if time.Since(tokenCreatedAt) < 5*time.Minute {
 			return &commodorepb.ResendVerificationResponse{
 				Success: false,
@@ -5827,11 +5266,11 @@ func (s *CommodoreServer) ResendVerification(ctx context.Context, req *commodore
 	tokenExpiry := time.Now().Add(24 * time.Hour)
 
 	// Update user with new token
-	_, err = s.db.ExecContext(ctx, `
-		UPDATE commodore.users
-		SET verification_token = $1, token_expires_at = $2, updated_at = NOW()
-		WHERE id = $3
-	`, tokenHash, tokenExpiry, userID)
+	err = queries.UpdateVerificationToken(ctx, commodoredb.UpdateVerificationTokenParams{
+		VerificationToken: sql.NullString{String: tokenHash, Valid: true},
+		TokenExpiresAt:    sql.NullTime{Time: tokenExpiry, Valid: true},
+		ID:                resendUser.ID,
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to generate verification token: %v", err)
 	}
@@ -5839,7 +5278,7 @@ func (s *CommodoreServer) ResendVerification(ctx context.Context, req *commodore
 	// Send verification email
 	if err := s.sendVerificationEmail(email, verificationToken); err != nil {
 		s.logger.WithFields(logging.Fields{
-			"user_id": userID,
+			"user_id": resendUser.ID,
 			"email":   email,
 			"error":   err,
 		}).Error("Failed to send verification email")
@@ -5851,7 +5290,7 @@ func (s *CommodoreServer) ResendVerification(ctx context.Context, req *commodore
 	}
 
 	s.logger.WithFields(logging.Fields{
-		"user_id": userID,
+		"user_id": resendUser.ID,
 		"email":   email,
 	}).Info("Verification email resent")
 
@@ -5869,8 +5308,8 @@ func (s *CommodoreServer) ForgotPassword(ctx context.Context, req *commodorepb.F
 	}
 
 	// Check if user exists
-	var userID string
-	err := s.db.QueryRowContext(ctx, `SELECT id FROM commodore.users WHERE email = $1`, email).Scan(&userID)
+	queries := commodoredb.New(s.db)
+	userID, err := queries.FindUserIDByEmail(ctx, sql.NullString{String: email, Valid: true})
 	if errors.Is(err, sql.ErrNoRows) {
 		// Don't reveal whether email exists - always return success
 		return &commodorepb.ForgotPasswordResponse{
@@ -5891,11 +5330,11 @@ func (s *CommodoreServer) ForgotPassword(ctx context.Context, req *commodorepb.F
 	expiresAt := time.Now().Add(1 * time.Hour)
 
 	// Store hashed reset token
-	_, err = s.db.ExecContext(ctx, `
-		UPDATE commodore.users
-		SET reset_token = $1, reset_token_expires = $2, updated_at = NOW()
-		WHERE id = $3
-	`, resetTokenHash, expiresAt, userID)
+	err = queries.SetPasswordResetToken(ctx, commodoredb.SetPasswordResetTokenParams{
+		ResetToken:        sql.NullString{String: resetTokenHash, Valid: true},
+		ResetTokenExpires: sql.NullTime{Time: expiresAt, Valid: true},
+		ID:                userID,
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create reset token: %v", err)
 	}
@@ -5934,11 +5373,8 @@ func (s *CommodoreServer) ResetPassword(ctx context.Context, req *commodorepb.Re
 	tokenHash := s.hashTokenWithSecret(token)
 
 	// Find user by reset token
-	var userID string
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id FROM commodore.users
-		WHERE reset_token = $1 AND reset_token_expires > NOW()
-	`, tokenHash).Scan(&userID)
+	queries := commodoredb.New(s.db)
+	userID, err := queries.FindUserByResetToken(ctx, sql.NullString{String: tokenHash, Valid: true})
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return &commodorepb.ResetPasswordResponse{
@@ -5957,11 +5393,9 @@ func (s *CommodoreServer) ResetPassword(ctx context.Context, req *commodorepb.Re
 	}
 
 	// Update password and clear reset token
-	_, err = s.db.ExecContext(ctx, `
-		UPDATE commodore.users
-		SET password_hash = $1, reset_token = NULL, reset_token_expires = NULL, updated_at = NOW()
-		WHERE id = $2
-	`, hashedPassword, userID)
+	err = queries.ResetUserPassword(ctx, commodoredb.ResetUserPasswordParams{
+		PasswordHash: sql.NullString{String: hashedPassword, Valid: true}, ID: userID,
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to update password: %v", err)
 	}
@@ -5979,35 +5413,29 @@ func (s *CommodoreServer) UpdateMe(ctx context.Context, req *commodorepb.UpdateM
 		return nil, err
 	}
 
-	// Build dynamic update query
-	updates := []string{}
-	args := []any{}
-	argCount := 1
-
-	if req.FirstName != nil {
-		updates = append(updates, fmt.Sprintf("first_name = $%d", argCount))
-		args = append(args, *req.FirstName)
-		argCount++
-	}
-	if req.LastName != nil {
-		updates = append(updates, fmt.Sprintf("last_name = $%d", argCount))
-		args = append(args, *req.LastName)
-		argCount++
-	}
 	if req.PhoneNumber != nil && *req.PhoneNumber != "" {
 		return nil, status.Error(codes.InvalidArgument, "invalid request")
 	}
-
-	if len(updates) == 0 {
+	if req.FirstName == nil && req.LastName == nil {
 		return nil, status.Error(codes.InvalidArgument, "no fields to update")
 	}
-
-	updates = append(updates, "updated_at = NOW()")
-	query := fmt.Sprintf("UPDATE commodore.users SET %s WHERE id = $%d AND tenant_id = $%d",
-		strings.Join(updates, ", "), argCount, argCount+1)
-	args = append(args, userID, tenantID)
-
-	_, err = s.db.ExecContext(ctx, query, args...)
+	queries := commodoredb.New(s.db)
+	switch {
+	case req.FirstName != nil && req.LastName != nil:
+		err = queries.UpdateUserName(ctx, commodoredb.UpdateUserNameParams{
+			FirstName: sql.NullString{String: *req.FirstName, Valid: true},
+			LastName:  sql.NullString{String: *req.LastName, Valid: true},
+			ID:        userID, TenantID: tenantID,
+		})
+	case req.FirstName != nil:
+		err = queries.UpdateUserFirstName(ctx, commodoredb.UpdateUserFirstNameParams{
+			FirstName: sql.NullString{String: *req.FirstName, Valid: true}, ID: userID, TenantID: tenantID,
+		})
+	case req.LastName != nil:
+		err = queries.UpdateUserLastName(ctx, commodoredb.UpdateUserLastNameParams{
+			LastName: sql.NullString{String: *req.LastName, Valid: true}, ID: userID, TenantID: tenantID,
+		})
+	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to update profile: %v", err)
 	}
@@ -6024,22 +5452,20 @@ func (s *CommodoreServer) UpdateNewsletter(ctx context.Context, req *commodorepb
 	}
 
 	// Get user email and name from DB
-	var email sql.NullString
-	var firstName, lastName sql.NullString
-	err = s.db.QueryRowContext(ctx, `
-		SELECT email, first_name, last_name FROM commodore.users WHERE id = $1 AND tenant_id = $2
-	`, userID, tenantID).Scan(&email, &firstName, &lastName)
+	newsletterUser, err := commodoredb.New(s.db).GetNewsletterUser(ctx, commodoredb.GetNewsletterUserParams{
+		ID: userID, TenantID: tenantID,
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to fetch user: %v", err)
 	}
 
-	if !email.Valid || email.String == "" {
+	if !newsletterUser.Email.Valid || newsletterUser.Email.String == "" {
 		return nil, status.Error(codes.FailedPrecondition, "email required for newsletter subscription")
 	}
 
-	name := strings.TrimSpace(firstName.String + " " + lastName.String)
+	name := strings.TrimSpace(newsletterUser.FirstName.String + " " + newsletterUser.LastName.String)
 	if name == "" {
-		name = email.String
+		name = newsletterUser.Email.String
 	}
 
 	if s.listmonkClient == nil {
@@ -6048,13 +5474,13 @@ func (s *CommodoreServer) UpdateNewsletter(ctx context.Context, req *commodorepb
 
 	if req.GetSubscribed() {
 		// Subscribe to the newsletter list
-		err = s.listmonkClient.Subscribe(ctx, email.String, name, s.defaultMailingListID, true)
+		err = s.listmonkClient.Subscribe(ctx, newsletterUser.Email.String, name, s.defaultMailingListID, true)
 	} else {
 		// Unsubscribe from the newsletter list (not global blocklist)
 		// First get the subscriber ID
-		info, exists, lookupErr := s.listmonkClient.GetSubscriber(ctx, email.String)
+		info, exists, lookupErr := s.listmonkClient.GetSubscriber(ctx, newsletterUser.Email.String)
 		if lookupErr != nil {
-			s.logger.WithError(lookupErr).WithField("email", email.String).Error("Failed to lookup subscriber in Listmonk")
+			s.logger.WithError(lookupErr).WithField("email", newsletterUser.Email.String).Error("Failed to lookup subscriber in Listmonk")
 			return nil, status.Errorf(codes.Internal, "failed to lookup subscriber: %v", lookupErr)
 		}
 		if !exists {
@@ -6067,7 +5493,7 @@ func (s *CommodoreServer) UpdateNewsletter(ctx context.Context, req *commodorepb
 		err = s.listmonkClient.Unsubscribe(ctx, info.ID, s.defaultMailingListID)
 	}
 	if err != nil {
-		s.logger.WithError(err).WithField("email", email.String).Error("Failed to update newsletter in Listmonk")
+		s.logger.WithError(err).WithField("email", newsletterUser.Email.String).Error("Failed to update newsletter in Listmonk")
 		return nil, status.Errorf(codes.Internal, "failed to update newsletter preference: %v", err)
 	}
 
@@ -6085,10 +5511,7 @@ func (s *CommodoreServer) GetNewsletterStatus(ctx context.Context, req *commodor
 	}
 
 	// Get user email from DB
-	var email sql.NullString
-	err = s.db.QueryRowContext(ctx, `
-		SELECT email FROM commodore.users WHERE id = $1 AND tenant_id = $2
-	`, userID, tenantID).Scan(&email)
+	email, err := commodoredb.New(s.db).GetUserEmail(ctx, commodoredb.GetUserEmailParams{ID: userID, TenantID: tenantID})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to fetch user: %v", err)
 	}
@@ -6148,11 +5571,9 @@ func (s *CommodoreServer) IssueWalletChallenge(ctx context.Context, req *commodo
 	message := fmt.Sprintf("%s wants you to sign in with your Ethereum account:\n%s\n\nSign in to FrameWorks.\n\nURI: %s\nVersion: 1\nChain ID: %d\nNonce: %s\nIssued At: %s\nExpiration Time: %s",
 		parsedURL.Host, normalizedAddr, baseURL, chainID, nonce, issuedAt.Format(time.RFC3339), expiresAt.Format(time.RFC3339))
 	messageHash := sha256.Sum256([]byte(message))
-	if _, err := s.db.ExecContext(ctx, `
-		INSERT INTO commodore.wallet_auth_challenges
-			(wallet_address, chain_id, message_hash, expires_at)
-		VALUES ($1, $2, $3, $4)
-	`, normalizedAddr, chainID, messageHash[:], expiresAt); err != nil {
+	if err := commodoredb.New(s.db).InsertWalletChallenge(ctx, commodoredb.InsertWalletChallengeParams{
+		WalletAddress: normalizedAddr, ChainID: int64(chainID), MessageHash: messageHash[:], ExpiresAt: expiresAt,
+	}); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to store wallet challenge: %v", err)
 	}
 	return &commodorepb.IssueWalletChallengeResponse{
@@ -6177,16 +5598,9 @@ func walletChallengeOriginAllowed(origin *url.URL) bool {
 
 func (s *CommodoreServer) consumeWalletChallenge(ctx context.Context, walletAddress, message string) error {
 	messageHash := sha256.Sum256([]byte(message))
-	var challengeID string
-	err := s.db.QueryRowContext(ctx, `
-		UPDATE commodore.wallet_auth_challenges
-		SET consumed_at = NOW()
-		WHERE wallet_address = $1
-		  AND message_hash = $2
-		  AND consumed_at IS NULL
-		  AND expires_at > NOW()
-		RETURNING id
-	`, walletAddress, messageHash[:]).Scan(&challengeID)
+	_, err := commodoredb.New(s.db).ConsumeWalletChallenge(ctx, commodoredb.ConsumeWalletChallengeParams{
+		WalletAddress: walletAddress, MessageHash: messageHash[:],
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return status.Error(codes.Unauthenticated, "wallet challenge is invalid, expired, or already used")
 	}
@@ -6246,45 +5660,35 @@ func (s *CommodoreServer) WalletLogin(ctx context.Context, req *commodorepb.Wall
 	tenantID := walletResp.GetTenantId()
 	isNewUser := walletResp.GetIsNew()
 
-	var email sql.NullString
-	var firstName, lastName, role string
-	var isActive, isVerified, platformOperator bool
-	var lastLoginAt sql.NullTime
-	var createdAt, updatedAt time.Time
-
-	err = s.db.QueryRowContext(ctx, `
-		SELECT email, first_name, last_name, role, is_active, verified,
-		       last_login_at, created_at, updated_at, platform_operator
-		FROM commodore.users WHERE id = $1 AND tenant_id = $2
-	`, userID, tenantID).Scan(&email, &firstName, &lastName, &role,
-		&isActive, &isVerified, &lastLoginAt, &createdAt, &updatedAt, &platformOperator)
+	queries := commodoredb.New(s.db)
+	profileRow, err := queries.GetUserProfile(ctx, commodoredb.GetUserProfileParams{ID: userID, TenantID: tenantID})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to fetch user: %v", err)
+	}
+	profile, err := commodoreUserFromProfileRow(profileRow)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to fetch user: %v", err)
 	}
 
 	// Update last_auth_at on wallet identity
-	_, _ = s.db.ExecContext(ctx, `
-		UPDATE commodore.wallet_identities
-		SET last_auth_at = NOW()
-		WHERE chain_type = 'ethereum' AND wallet_address = $1
-	`, normalizedAddr)
+	if touchErr := queries.TouchWalletIdentityAuth(ctx, commodoredb.TouchWalletIdentityAuthParams{
+		ChainType: string(auth.ChainEthereum), WalletAddress: normalizedAddr,
+	}); touchErr != nil {
+		s.logger.WithError(touchErr).Debug("Failed to update wallet last_auth_at")
+	}
 
 	// Update last_login_at on user
-	_, _ = s.db.ExecContext(ctx, `
-		UPDATE commodore.users SET last_login_at = NOW() WHERE id = $1 AND tenant_id = $2
-	`, userID, tenantID)
+	if touchErr := queries.TouchUserLastLogin(ctx, commodoredb.TouchUserLastLoginParams{ID: userID, TenantID: tenantID}); touchErr != nil {
+		s.logger.WithError(touchErr).Debug("Failed to update wallet user last_login_at")
+	}
 
 	// Generate JWT
 	jwtSecret := []byte(config.RequireEnv("JWT_SECRET"))
-	var emailStr string
-	if email.Valid {
-		emailStr = email.String
-	}
-	token, err := auth.GenerateSessionJWT(userID, tenantID, emailStr, role, platformRoles(platformOperator), time.Now(), jwtSecret)
+	token, err := auth.GenerateSessionJWT(userID, tenantID, profile.Email, profile.Role, platformRoles(profile.PlatformOperator), time.Now(), jwtSecret)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to generate token: %v", err)
 	}
-	if !isActive {
+	if !profile.IsActive {
 		s.emitAuthEvent(ctx, eventAuthLoginFailed, userID, tenantID, "wallet", "", "", "account_inactive")
 		return nil, status.Error(codes.Unauthenticated, "account deactivated")
 	}
@@ -6295,33 +5699,15 @@ func (s *CommodoreServer) WalletLogin(ctx context.Context, req *commodorepb.Wall
 	}
 	refreshHash := hashToken(refreshToken)
 	refreshExpiry := time.Now().Add(30 * 24 * time.Hour)
-	if _, err := s.db.ExecContext(ctx, `
-		INSERT INTO commodore.refresh_tokens (tenant_id, user_id, token_hash, expires_at)
-		VALUES ($1, $2, $3, $4)
-	`, tenantID, userID, refreshHash, refreshExpiry); err != nil {
+	if err := queries.InsertRefreshToken(ctx, commodoredb.InsertRefreshTokenParams{
+		TenantID: tenantID, UserID: userID, TokenHash: refreshHash, ExpiresAt: refreshExpiry,
+	}); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create wallet session: %v", err)
 	}
 	expiresAt := time.Now().Add(15 * time.Minute)
 
 	// Build user response
-	user := &commodorepb.User{
-		Id:               userID,
-		TenantId:         tenantID,
-		FirstName:        firstName,
-		LastName:         lastName,
-		Role:             role,
-		IsActive:         isActive,
-		IsVerified:       isVerified,
-		PlatformOperator: platformOperator,
-		CreatedAt:        timestamppb.New(createdAt),
-		UpdatedAt:        timestamppb.New(updatedAt),
-	}
-	if email.Valid {
-		user.Email = &email.String
-	}
-	if lastLoginAt.Valid {
-		user.LastLoginAt = timestamppb.New(lastLoginAt.Time)
-	}
+	user := profile.toProtoUser(userID, tenantID)
 
 	s.emitAuthEvent(ctx, eventAuthLoginSucceeded, userID, tenantID, "wallet", "", "", "")
 
@@ -6365,13 +5751,12 @@ func (s *CommodoreServer) LinkWallet(ctx context.Context, req *commodorepb.LinkW
 	}
 
 	// Check if wallet is already linked to another user
-	var existingUserID string
-	err = s.db.QueryRowContext(ctx, `
-		SELECT user_id FROM commodore.wallet_identities
-		WHERE chain_type = 'ethereum' AND wallet_address = $1
-	`, normalizedAddr).Scan(&existingUserID)
+	queries := commodoredb.New(s.db)
+	existingWallet, err := queries.GetWalletIdentityByAddress(ctx, commodoredb.GetWalletIdentityByAddressParams{
+		ChainType: string(auth.ChainEthereum), WalletAddress: normalizedAddr,
+	})
 	if err == nil {
-		if existingUserID == userID {
+		if existingWallet.UserID == userID {
 			return nil, status.Error(codes.AlreadyExists, "wallet already linked to your account")
 		}
 		return nil, status.Error(codes.AlreadyExists, "wallet already linked to another account")
@@ -6380,23 +5765,22 @@ func (s *CommodoreServer) LinkWallet(ctx context.Context, req *commodorepb.LinkW
 	}
 
 	// Create wallet identity
-	var walletID string
-	var createdAt time.Time
-	err = s.db.QueryRowContext(ctx, `
-		INSERT INTO commodore.wallet_identities (tenant_id, user_id, chain_type, wallet_address)
-		VALUES ($1, $2, 'ethereum', $3)
-		RETURNING id, created_at
-	`, tenantID, userID, normalizedAddr).Scan(&walletID, &createdAt)
+	linkedWallet, err := queries.InsertLinkedWallet(ctx, commodoredb.InsertLinkedWalletParams{
+		TenantID: tenantID, UserID: userID, WalletAddress: normalizedAddr,
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to link wallet: %v", err)
 	}
+	if !linkedWallet.CreatedAt.Valid {
+		return nil, status.Error(codes.Internal, "linked wallet is missing created_at")
+	}
 
-	s.emitAuthEvent(ctx, eventWalletLinked, userID, tenantID, "wallet", walletID, "", "")
+	s.emitAuthEvent(ctx, eventWalletLinked, userID, tenantID, "wallet", linkedWallet.ID, "", "")
 
 	return &commodorepb.WalletIdentity{
-		Id:            walletID,
+		Id:            linkedWallet.ID,
 		WalletAddress: normalizedAddr,
-		CreatedAt:     timestamppb.New(createdAt),
+		CreatedAt:     timestamppb.New(linkedWallet.CreatedAt.Time),
 	}, nil
 }
 
@@ -6417,32 +5801,23 @@ func (s *CommodoreServer) UnlinkWallet(ctx context.Context, req *commodorepb.Unl
 		return nil, status.Error(codes.Internal, "failed to begin wallet unlink")
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort after commit or an early return
+	txQueries := commodoredb.New(tx)
 
 	// Locking the user serializes concurrent unlink attempts. Without this lock,
 	// two requests could each observe another wallet and remove both, locking a
 	// wallet-only user out of the account.
-	var hasPasswordSignin bool
-	lockErr := tx.QueryRowContext(ctx, `
-		SELECT COALESCE(password_hash, '') <> ''
-		   AND email IS NOT NULL
-		   AND verified = TRUE
-		FROM commodore.users
-		WHERE id = $1 AND tenant_id = $2
-		FOR UPDATE
-	`, userID, tenantID).Scan(&hasPasswordSignin)
+	hasPasswordSignin, lockErr := txQueries.LockUserAuthenticationMethods(ctx, commodoredb.LockUserAuthenticationMethodsParams{
+		ID: userID, TenantID: tenantID,
+	})
 	if errors.Is(lockErr, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "user not found")
 	} else if lockErr != nil {
 		return nil, status.Error(codes.Internal, "failed to verify account authentication methods")
 	}
 
-	var owned bool
-	ownedErr := tx.QueryRowContext(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM commodore.wallet_identities
-			WHERE id = $1 AND user_id = $2 AND tenant_id = $3
-		)
-	`, walletID, userID, tenantID).Scan(&owned)
+	owned, ownedErr := txQueries.UserOwnsWallet(ctx, commodoredb.UserOwnsWalletParams{
+		ID: walletID, UserID: userID, TenantID: tenantID,
+	})
 	if ownedErr != nil {
 		return nil, status.Error(codes.Internal, "failed to verify wallet ownership")
 	}
@@ -6450,12 +5825,10 @@ func (s *CommodoreServer) UnlinkWallet(ctx context.Context, req *commodorepb.Unl
 		return nil, status.Error(codes.NotFound, "wallet not found or not owned by you")
 	}
 
-	if !hasPasswordSignin {
-		var walletCount int
-		countErr := tx.QueryRowContext(ctx, `
-			SELECT COUNT(*) FROM commodore.wallet_identities
-			WHERE user_id = $1 AND tenant_id = $2
-		`, userID, tenantID).Scan(&walletCount)
+	if !hasPasswordSignin.Valid || !hasPasswordSignin.Bool {
+		walletCount, countErr := txQueries.CountUserWallets(ctx, commodoredb.CountUserWalletsParams{
+			UserID: userID, TenantID: tenantID,
+		})
 		if countErr != nil {
 			return nil, status.Error(codes.Internal, "failed to verify account authentication methods")
 		}
@@ -6464,20 +5837,14 @@ func (s *CommodoreServer) UnlinkWallet(ctx context.Context, req *commodorepb.Unl
 		}
 	}
 
-	result, err := tx.ExecContext(ctx, `
-		DELETE FROM commodore.wallet_identities
-		WHERE id = $1 AND user_id = $2 AND tenant_id = $3
-	`, walletID, userID, tenantID)
+	_, err = txQueries.DeleteUserWallet(ctx, commodoredb.DeleteUserWalletParams{
+		ID: walletID, UserID: userID, TenantID: tenantID,
+	})
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, status.Error(codes.NotFound, "wallet not found or not owned by you")
+		}
 		return nil, status.Error(codes.Internal, "failed to unlink wallet")
-	}
-
-	rowsAffected, rowsErr := result.RowsAffected()
-	if rowsErr != nil {
-		return nil, status.Error(codes.Internal, "failed to verify wallet unlink")
-	}
-	if rowsAffected == 0 {
-		return nil, status.Error(codes.NotFound, "wallet not found or not owned by you")
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, status.Error(codes.Internal, "failed to commit wallet unlink")
@@ -6498,32 +5865,23 @@ func (s *CommodoreServer) ListWallets(ctx context.Context, req *commodorepb.List
 		return nil, err
 	}
 
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, wallet_address, created_at, last_auth_at
-		FROM commodore.wallet_identities
-		WHERE user_id = $1
-		ORDER BY created_at DESC
-	`, userID)
+	rows, err := commodoredb.New(s.db).ListUserWallets(ctx, userID)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to list wallets: %v", err)
 	}
-	defer func() { _ = rows.Close() }()
 
 	var wallets []*commodorepb.WalletIdentity
-	for rows.Next() {
-		var id, addr string
-		var createdAt time.Time
-		var lastAuthAt sql.NullTime
-		if err := rows.Scan(&id, &addr, &createdAt, &lastAuthAt); err != nil {
+	for _, row := range rows {
+		if !row.CreatedAt.Valid {
 			continue
 		}
 		w := &commodorepb.WalletIdentity{
-			Id:            id,
-			WalletAddress: addr,
-			CreatedAt:     timestamppb.New(createdAt),
+			Id:            row.ID,
+			WalletAddress: row.WalletAddress,
+			CreatedAt:     timestamppb.New(row.CreatedAt.Time),
 		}
-		if lastAuthAt.Valid {
-			w.LastAuthAt = timestamppb.New(lastAuthAt.Time)
+		if row.LastAuthAt.Valid {
+			w.LastAuthAt = timestamppb.New(row.LastAuthAt.Time)
 		}
 		wallets = append(wallets, w)
 	}
@@ -6533,7 +5891,7 @@ func (s *CommodoreServer) ListWallets(ctx context.Context, req *commodorepb.List
 
 // LinkEmail adds an email to a wallet-only account (for postpaid upgrade path)
 func (s *CommodoreServer) LinkEmail(ctx context.Context, req *commodorepb.LinkEmailRequest) (*commodorepb.LinkEmailResponse, error) {
-	userID, _, err := extractUserContext(ctx)
+	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -6549,10 +5907,8 @@ func (s *CommodoreServer) LinkEmail(ctx context.Context, req *commodorepb.LinkEm
 	}
 
 	// Check if user already has an email
-	var existingEmail sql.NullString
-	err = s.db.QueryRowContext(ctx, `
-		SELECT email FROM commodore.users WHERE id = $1
-	`, userID).Scan(&existingEmail)
+	queries := commodoredb.New(s.db)
+	existingEmail, err := queries.GetUserEmail(ctx, commodoredb.GetUserEmailParams{ID: userID, TenantID: tenantID})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to check user: %v", err)
 	}
@@ -6561,10 +5917,9 @@ func (s *CommodoreServer) LinkEmail(ctx context.Context, req *commodorepb.LinkEm
 	}
 
 	// Check if email is already used by another account
-	var otherUserID string
-	err = s.db.QueryRowContext(ctx, `
-		SELECT id FROM commodore.users WHERE LOWER(email) = $1 AND id != $2
-	`, email, userID).Scan(&otherUserID)
+	_, err = queries.FindOtherUserIDByEmail(ctx, commodoredb.FindOtherUserIDByEmailParams{
+		Email: sql.NullString{String: email, Valid: true}, ID: userID,
+	})
 	if err == nil {
 		return nil, status.Error(codes.AlreadyExists, "email already in use by another account")
 	} else if !errors.Is(err, sql.ErrNoRows) {
@@ -6583,14 +5938,18 @@ func (s *CommodoreServer) LinkEmail(ctx context.Context, req *commodorepb.LinkEm
 		return nil, status.Errorf(codes.Internal, "failed to generate token: %v", randErr)
 	}
 	verificationToken := hex.EncodeToString(tokenBytes)
+	verificationTokenHash := hashToken(verificationToken)
 	tokenExpiry := time.Now().Add(24 * time.Hour)
 
 	// Update user with email, password, and verification token
-	_, err = s.db.ExecContext(ctx, `
-		UPDATE commodore.users
-		SET email = $1, password_hash = $2, verification_token = $3, token_expires_at = $4, updated_at = NOW()
-		WHERE id = $5
-	`, email, passwordHash, verificationToken, tokenExpiry, userID)
+	err = queries.LinkUserEmail(ctx, commodoredb.LinkUserEmailParams{
+		Email:             sql.NullString{String: email, Valid: true},
+		PasswordHash:      sql.NullString{String: passwordHash, Valid: true},
+		VerificationToken: sql.NullString{String: verificationTokenHash, Valid: true},
+		TokenExpiresAt:    sql.NullTime{Time: tokenExpiry, Valid: true},
+		ID:                userID,
+		TenantID:          tenantID,
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to link email: %v", err)
 	}
@@ -6664,15 +6023,13 @@ func (s *CommodoreServer) CreateStream(ctx context.Context, req *commodorepb.Cre
 		return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort after Commit
+	txQueries := commodoredb.New(tx)
 
 	// Keep stream creation and requested initial state atomic. Pull streams
 	// must not leak as push streams if source persistence fails.
-	var streamID, streamKey, playbackID, internalName string
-	err = tx.QueryRowContext(ctx, `
-			SELECT stream_id, stream_key, playback_id, internal_name
-			FROM commodore.create_user_stream($1, $2, $3)
-		`, tenantID, userID, title).Scan(&streamID, &streamKey, &playbackID, &internalName)
-
+	created, err := txQueries.CreateUserStreamProcedure(ctx, commodoredb.CreateUserStreamProcedureParams{
+		TenantID: tenantID, UserID: userID, Title: title,
+	})
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to create stream")
 		return nil, status.Errorf(codes.Internal, "failed to create stream: %v", err)
@@ -6683,25 +6040,28 @@ func (s *CommodoreServer) CreateStream(ctx context.Context, req *commodorepb.Cre
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to encrypt pull source: %v", err)
 		}
-		_, err = tx.ExecContext(ctx, `
-				UPDATE commodore.streams
-				SET ingest_mode = 'pull', updated_at = NOW()
-				WHERE id = $1::uuid AND tenant_id = $2::uuid;
-			INSERT INTO commodore.stream_pull_sources
-				(stream_id, source_uri_enc, enabled, allowed_cluster_ids, created_at, updated_at)
-			VALUES ($1::uuid, $3, $4, $5, NOW(), NOW())
-		`, streamID, tenantID, encURI, pullSourceEnabled(req.GetPullSource()), pq.Array(pullAllowedClusterIDs))
+		err = txQueries.MarkCreatedStreamPull(ctx, commodoredb.MarkCreatedStreamPullParams{
+			ID: created.StreamID, TenantID: tenantID,
+		})
+		if err == nil {
+			err = txQueries.InsertCreatedPullSource(ctx, commodoredb.InsertCreatedPullSourceParams{
+				StreamID:          created.StreamID,
+				SourceUriEnc:      encURI,
+				Enabled:           pullSourceEnabled(req.GetPullSource()),
+				AllowedClusterIds: pullAllowedClusterIDs,
+			})
+		}
 		if err != nil {
-			s.logger.WithError(err).WithField("stream_id", streamID).Error("Failed to persist pull source")
+			s.logger.WithError(err).WithField("stream_id", created.StreamID).Error("Failed to persist pull source")
 			return nil, status.Errorf(codes.Internal, "failed to persist pull source: %v", err)
 		}
 	}
 
 	// Update description if provided
 	if req.GetDescription() != "" {
-		_, err = tx.ExecContext(ctx, `
-				UPDATE commodore.streams SET description = $1 WHERE id = $2
-			`, req.GetDescription(), streamID)
+		err = txQueries.SetCreatedStreamDescription(ctx, commodoredb.SetCreatedStreamDescriptionParams{
+			Description: sql.NullString{String: req.GetDescription(), Valid: true}, ID: created.StreamID,
+		})
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to update stream description: %v", err)
 		}
@@ -6709,9 +6069,7 @@ func (s *CommodoreServer) CreateStream(ctx context.Context, req *commodorepb.Cre
 
 	// Update recording setting if requested
 	if req.GetIsRecording() {
-		_, err = tx.ExecContext(ctx, `
-				UPDATE commodore.streams SET is_recording_enabled = true WHERE id = $1
-			`, streamID)
+		err = txQueries.EnableCreatedStreamRecording(ctx, created.StreamID)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to enable recording: %v", err)
 		}
@@ -6731,12 +6089,12 @@ func (s *CommodoreServer) CreateStream(ctx context.Context, req *commodorepb.Cre
 	if ingestMode == "pull" {
 		changedFields = append(changedFields, "ingest_mode", "pull_source")
 	}
-	s.emitStreamChangeEvent(ctx, eventStreamCreated, tenantID, userID, streamID, changedFields)
+	s.emitStreamChangeEvent(ctx, eventStreamCreated, tenantID, userID, created.StreamID, changedFields)
 
 	resp := &commodorepb.CreateStreamResponse{
-		Id:          streamID,
-		StreamKey:   streamKey,
-		PlaybackId:  playbackID,
+		Id:          created.StreamID,
+		StreamKey:   created.StreamKey,
+		PlaybackId:  created.PlaybackID,
 		Title:       title,
 		Description: req.GetDescription(),
 		Status:      "offline",
@@ -6865,69 +6223,91 @@ func (s *CommodoreServer) ListStreams(ctx context.Context, req *commodorepb.List
 		searchLike = "%" + strings.ToLower(search) + "%"
 	}
 
-	// Get total count
+	queries := commodoredb.New(s.db)
 	var total int32
-	countQuery := `SELECT COUNT(*) FROM commodore.streams WHERE user_id = $1 AND tenant_id = $2 AND deleted_at IS NULL`
-	countArgs := []any{userID, tenantID}
 	if searchLike != "" {
-		countQuery += " AND (LOWER(title) LIKE $3 OR LOWER(internal_name) LIKE $3)"
-		countArgs = append(countArgs, searchLike)
+		total, err = queries.CountStreamsForUserSearch(ctx, commodoredb.CountStreamsForUserSearchParams{
+			UserID: userID, TenantID: tenantID, Title: searchLike,
+		})
+	} else {
+		total, err = queries.CountStreamsForUser(ctx, commodoredb.CountStreamsForUserParams{
+			UserID: userID, TenantID: tenantID,
+		})
 	}
-	if err = s.db.QueryRowContext(ctx, countQuery, countArgs...).Scan(&total); err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-
-	// Build keyset pagination query
-	builder := &pagination.KeysetBuilder{
-		TimestampColumn: "s.created_at",
-		IDColumn:        "s.id",
-	}
-
-	// Base query
-	query := `
-		SELECT s.id, s.internal_name, s.stream_key, s.playback_id, s.title, s.description,
-		       s.is_recording_enabled, s.created_at, s.updated_at, s.ingest_mode,
-		       p.source_uri_enc, p.enabled, COALESCE(p.allowed_cluster_ids, '{}'),
-		       s.active_ingest_cluster_id,
-		       s.dvr_retention_days_override, s.clip_retention_days_override,
-		       s.monitoring_enabled
-		FROM commodore.streams s
-		LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
-		WHERE s.user_id = $1 AND s.tenant_id = $2 AND s.deleted_at IS NULL`
-	args := []any{userID, tenantID}
-	argIdx := 3
-
-	if searchLike != "" {
-		query += fmt.Sprintf(" AND (LOWER(s.title) LIKE $%d OR LOWER(s.internal_name) LIKE $%d)", argIdx, argIdx)
-		args = append(args, searchLike)
-		argIdx++
-	}
-
-	// Add keyset condition if cursor provided
-	if condition, cursorArgs := builder.Condition(params, argIdx); condition != "" {
-		query += " AND " + condition
-		args = append(args, cursorArgs...)
-	}
-
-	// Add ORDER BY and LIMIT (fetch limit+1 to detect hasMore)
-	query += " " + builder.OrderBy(params)
-	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
-
-	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer func() { _ = rows.Close() }()
 
 	var streams []*commodorepb.Stream
+	applySearch := searchLike != ""
+	rowLimit := int32(params.Limit + 1)
+	appendConfig := func(config commodoredb.StreamConfigRow) error {
+		stream, mapErr := s.streamFromConfigRow(config)
+		if mapErr != nil {
+			return mapErr
+		}
+		streams = append(streams, stream)
+		return nil
+	}
+	if params.Direction == pagination.Forward {
+		if params.Cursor == nil {
+			rows, queryErr := queries.ListStreamsForward(ctx, commodoredb.ListStreamsForwardParams{
+				UserID: userID, TenantID: tenantID, ApplySearch: applySearch,
+				SearchLike: searchLike, RowLimit: rowLimit,
+			})
+			if queryErr != nil {
+				return nil, status.Errorf(codes.Internal, "database error: %v", queryErr)
+			}
+			for _, row := range rows {
+				if mapErr := appendConfig(row.Config()); mapErr != nil {
+					return nil, status.Errorf(codes.Internal, "scan stream: %v", mapErr)
+				}
+			}
+		} else {
+			rows, queryErr := queries.ListStreamsForwardAfter(ctx, commodoredb.ListStreamsForwardAfterParams{
+				UserID: userID, TenantID: tenantID, ApplySearch: applySearch, SearchLike: searchLike,
+				CursorTime: params.Cursor.Timestamp, CursorID: params.Cursor.ID, RowLimit: rowLimit,
+			})
+			if queryErr != nil {
+				return nil, status.Errorf(codes.Internal, "database error: %v", queryErr)
+			}
+			for _, row := range rows {
+				if mapErr := appendConfig(row.Config()); mapErr != nil {
+					return nil, status.Errorf(codes.Internal, "scan stream: %v", mapErr)
+				}
+			}
+		}
+	} else if params.Cursor == nil {
+		rows, queryErr := queries.ListStreamsBackward(ctx, commodoredb.ListStreamsBackwardParams{
+			UserID: userID, TenantID: tenantID, ApplySearch: applySearch,
+			SearchLike: searchLike, RowLimit: rowLimit,
+		})
+		if queryErr != nil {
+			return nil, status.Errorf(codes.Internal, "database error: %v", queryErr)
+		}
+		for _, row := range rows {
+			if mapErr := appendConfig(row.Config()); mapErr != nil {
+				return nil, status.Errorf(codes.Internal, "scan stream: %v", mapErr)
+			}
+		}
+	} else {
+		rows, queryErr := queries.ListStreamsBackwardBefore(ctx, commodoredb.ListStreamsBackwardBeforeParams{
+			UserID: userID, TenantID: tenantID, ApplySearch: applySearch, SearchLike: searchLike,
+			CursorTime: params.Cursor.Timestamp, CursorID: params.Cursor.ID, RowLimit: rowLimit,
+		})
+		if queryErr != nil {
+			return nil, status.Errorf(codes.Internal, "database error: %v", queryErr)
+		}
+		for _, row := range rows {
+			if mapErr := appendConfig(row.Config()); mapErr != nil {
+				return nil, status.Errorf(codes.Internal, "scan stream: %v", mapErr)
+			}
+		}
+	}
+
 	var route *clusterRoute
 	routeAttempted := false
-	for rows.Next() {
-		stream, err := s.scanStream(rows)
-		if err != nil {
-			s.logger.WithError(err).Error("Error scanning stream")
-			return nil, status.Errorf(codes.Internal, "scan stream: %v", err)
-		}
+	for _, stream := range streams {
 		if !routeAttempted {
 			routeAttempted = true
 			if resolved, routeErr := s.resolveClusterRouteForTenant(ctx, tenantID); routeErr == nil {
@@ -6937,10 +6317,6 @@ func (s *CommodoreServer) ListStreams(ctx context.Context, req *commodorepb.List
 		if route != nil {
 			s.populateStreamOriginRegion(ctx, tenantID, stream, route)
 		}
-		streams = append(streams, stream)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, status.Errorf(codes.Internal, "iterate streams: %v", err)
 	}
 
 	// Detect hasMore and trim results
@@ -7002,11 +6378,10 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *commodorepb.Upd
 	}
 
 	// Verify ownership and fetch immutable ingest mode for validation.
-	var internalName, currentIngestMode string
-	var currentRecordingEnabled bool
-	err = s.db.QueryRowContext(ctx, `
-		SELECT internal_name, ingest_mode, is_recording_enabled FROM commodore.streams WHERE id = $1 AND user_id = $2 AND tenant_id = $3
-	`, streamID, userID, tenantID).Scan(&internalName, &currentIngestMode, &currentRecordingEnabled)
+	queries := commodoredb.New(s.db)
+	currentState, err := queries.GetStreamUpdateState(ctx, commodoredb.GetStreamUpdateStateParams{
+		ID: streamID, UserID: userID, TenantID: tenantID,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "stream not found")
 	}
@@ -7018,7 +6393,7 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *commodorepb.Upd
 		if requestedMode == "" {
 			requestedMode = "push"
 		}
-		if requestedMode != currentIngestMode {
+		if requestedMode != currentState.IngestMode {
 			return nil, status.Error(codes.InvalidArgument, "ingest_mode cannot be changed after stream creation")
 		}
 	}
@@ -7038,7 +6413,7 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *commodorepb.Upd
 	}
 	var pullPlan pullSourceWritePlan
 	if pullSource != nil {
-		if currentIngestMode != "pull" {
+		if currentState.IngestMode != "pull" {
 			return nil, status.Error(codes.InvalidArgument, "pull_source can only be updated on pull streams")
 		}
 
@@ -7098,28 +6473,28 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *commodorepb.Upd
 		}
 	}
 
-	// Build update query dynamically
-	var updates []string
-	var args []any
-	argIdx := 1
+	updateParams := commodoredb.UpdateStreamFieldsParams{
+		StreamID: streamID, UserID: userID, TenantID: tenantID,
+	}
+	applyStreamUpdate := false
 	changedFields := []string{}
 
 	if req.Name != nil {
-		updates = append(updates, fmt.Sprintf("title = $%d", argIdx))
-		args = append(args, *req.Name)
-		argIdx++
+		updateParams.ApplyTitle = true
+		updateParams.Title = *req.Name
+		applyStreamUpdate = true
 		changedFields = append(changedFields, "title")
 	}
 	if req.Description != nil {
-		updates = append(updates, fmt.Sprintf("description = $%d", argIdx))
-		args = append(args, *req.Description)
-		argIdx++
+		updateParams.ApplyDescription = true
+		updateParams.Description = sql.NullString{String: *req.Description, Valid: true}
+		applyStreamUpdate = true
 		changedFields = append(changedFields, "description")
 	}
 	if req.Record != nil {
-		updates = append(updates, fmt.Sprintf("is_recording_enabled = $%d", argIdx))
-		args = append(args, *req.Record)
-		argIdx++
+		updateParams.ApplyRecording = true
+		updateParams.RecordingEnabled = *req.Record
+		applyStreamUpdate = true
 		changedFields = append(changedFields, "is_recording_enabled")
 	}
 	// Cross-field validation: fixed_interval requires interval >= 3600s.
@@ -7139,11 +6514,9 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *commodorepb.Upd
 			// already be on the row at >= the floor.
 			supplied := req.DvrChapterIntervalSeconds != nil && req.GetDvrChapterIntervalSeconds() >= minChapterIntervalSeconds
 			if !supplied {
-				var existing sql.NullInt32
-				lookupErr := s.db.QueryRowContext(ctx,
-					`SELECT dvr_chapter_interval_seconds FROM commodore.streams WHERE id = $1::uuid AND tenant_id = $2::uuid`,
-					streamID, tenantID,
-				).Scan(&existing)
+				existing, lookupErr := queries.GetStreamDVRChapterInterval(ctx, commodoredb.GetStreamDVRChapterIntervalParams{
+					ID: streamID, TenantID: tenantID,
+				})
 				if lookupErr != nil || !existing.Valid || existing.Int32 < minChapterIntervalSeconds {
 					return nil, status.Errorf(codes.InvalidArgument,
 						"dvr_chapter_mode='fixed_interval' requires dvr_chapter_interval_seconds >= %d", minChapterIntervalSeconds)
@@ -7155,43 +6528,35 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *commodorepb.Upd
 		// Empty/NONE → set NULL so the CHECK constraint accepts no-chapter
 		// streams. Validated values land verbatim; the CHECK enforces the
 		// allowed set on write.
-		var modeArg any
+		updateParams.ApplyChapterMode = true
 		if mode := strings.TrimSpace(req.GetDvrChapterMode()); mode != "" && strings.ToLower(mode) != "none" {
-			modeArg = mode
+			updateParams.ChapterMode = sql.NullString{String: mode, Valid: true}
 		}
-		updates = append(updates, fmt.Sprintf("dvr_chapter_mode = $%d", argIdx))
-		args = append(args, modeArg)
-		argIdx++
+		applyStreamUpdate = true
 		changedFields = append(changedFields, "dvr_chapter_mode")
 	}
 	if req.DvrChapterIntervalSeconds != nil {
-		var ivArg any
+		updateParams.ApplyChapterInterval = true
 		if iv := req.GetDvrChapterIntervalSeconds(); iv > 0 {
-			ivArg = iv
+			updateParams.ChapterInterval = sql.NullInt32{Int32: iv, Valid: true}
 		}
-		updates = append(updates, fmt.Sprintf("dvr_chapter_interval_seconds = $%d", argIdx))
-		args = append(args, ivArg)
-		argIdx++
+		applyStreamUpdate = true
 		changedFields = append(changedFields, "dvr_chapter_interval_seconds")
 	}
 	if req.Monitoring != nil {
 		// Tri-state nullable column: INHERIT -> NULL, ON -> true, OFF -> false.
-		var monArg any
+		updateParams.ApplyMonitoring = true
 		switch req.GetMonitoring() {
 		case commodorepb.MonitoringToggle_MONITORING_TOGGLE_ON:
-			monArg = true
+			updateParams.MonitoringEnabled = sql.NullBool{Bool: true, Valid: true}
 		case commodorepb.MonitoringToggle_MONITORING_TOGGLE_OFF:
-			monArg = false
-		default:
-			monArg = nil // INHERIT
+			updateParams.MonitoringEnabled = sql.NullBool{Bool: false, Valid: true}
 		}
-		updates = append(updates, fmt.Sprintf("monitoring_enabled = $%d", argIdx))
-		args = append(args, monArg)
-		argIdx++
+		applyStreamUpdate = true
 		changedFields = append(changedFields, "monitoring_enabled")
 	}
 
-	if len(updates) == 0 && pullSource == nil {
+	if !applyStreamUpdate && pullSource == nil {
 		return s.queryStream(ctx, streamID, userID, tenantID)
 	}
 
@@ -7200,58 +6565,35 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *commodorepb.Upd
 		return nil, status.Errorf(codes.Internal, "failed to begin transaction: %v", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort after Commit
+	txQueries := commodoredb.New(tx)
 
-	if len(updates) > 0 {
-		updates = append(updates, "updated_at = NOW()")
-		query := fmt.Sprintf("UPDATE commodore.streams SET %s WHERE id = $%d AND user_id = $%d AND tenant_id = $%d AND deleted_at IS NULL",
-			strings.Join(updates, ", "), argIdx, argIdx+1, argIdx+2)
-		args = append(args, streamID, userID, tenantID)
-
-		var res sql.Result
-		res, err = tx.ExecContext(ctx, query, args...)
+	if applyStreamUpdate {
+		var rows int64
+		rows, err = txQueries.UpdateStreamFields(ctx, updateParams)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to update stream: %v", err)
 		}
-		if rows, rErr := res.RowsAffected(); rErr == nil && rows == 0 {
+		if rows == 0 {
 			return nil, status.Error(codes.NotFound, "stream not found")
 		}
 	}
 
 	if pullSource != nil {
-		// Build a dynamic SET clause from pullPlan so we touch only columns
-		// whose new value actually differs from the stored one — this keeps
-		// the URI ciphertext stable when only enabled or placement changes
-		// (fieldcrypt re-encryption uses a fresh nonce, so blind rewrites
-		// would churn the column without semantic change).
-		setClauses := []string{}
-		setArgs := []any{streamID}
-		setIdx := 2
-		if pullPlan.writeURI {
-			setClauses = append(setClauses, fmt.Sprintf("source_uri_enc = $%d", setIdx))
-			setArgs = append(setArgs, pullPlan.encryptedURI)
-			setIdx++
-		}
-		if pullPlan.writeEnabled {
-			setClauses = append(setClauses, fmt.Sprintf("enabled = $%d", setIdx))
-			setArgs = append(setArgs, pullPlan.enabledValue)
-			setIdx++
-		}
-		if pullPlan.writeAllowed {
-			setClauses = append(setClauses, fmt.Sprintf("allowed_cluster_ids = $%d", setIdx))
-			setArgs = append(setArgs, pq.Array(pullPlan.allowedClusters))
-		}
-		if len(setClauses) > 0 {
-			setClauses = append(setClauses, "updated_at = NOW()")
-			query := fmt.Sprintf(
-				"UPDATE commodore.stream_pull_sources SET %s WHERE stream_id = $1::uuid",
-				strings.Join(setClauses, ", "),
-			)
-			var res sql.Result
-			res, err = tx.ExecContext(ctx, query, setArgs...)
+		if pullPlan.writeURI || pullPlan.writeEnabled || pullPlan.writeAllowed {
+			var rows int64
+			rows, err = txQueries.UpdatePullSourceFields(ctx, commodoredb.UpdatePullSourceFieldsParams{
+				ApplyUri:          pullPlan.writeURI,
+				SourceUriEnc:      pullPlan.encryptedURI,
+				ApplyEnabled:      pullPlan.writeEnabled,
+				Enabled:           pullPlan.enabledValue,
+				ApplyAllowed:      pullPlan.writeAllowed,
+				AllowedClusterIds: pullPlan.allowedClusters,
+				StreamID:          streamID,
+			})
 			if err != nil {
 				return nil, status.Errorf(codes.Internal, "failed to update pull source: %v", err)
 			}
-			if rows, rErr := res.RowsAffected(); rErr == nil && rows == 0 {
+			if rows == 0 {
 				return nil, status.Error(codes.NotFound, "pull source not found")
 			}
 			changedFields = append(changedFields, "pull_source")
@@ -7266,8 +6608,8 @@ func (s *CommodoreServer) UpdateStream(ctx context.Context, req *commodorepb.Upd
 		s.emitStreamChangeEvent(ctx, eventStreamUpdated, tenantID, userID, streamID, changedFields)
 	}
 
-	if req.Record != nil && req.GetRecord() && !currentRecordingEnabled {
-		go s.startDVRAfterStreamUpdate(userID, tenantID, streamID, internalName)
+	if req.Record != nil && req.GetRecord() && (!currentState.IsRecordingEnabled.Valid || !currentState.IsRecordingEnabled.Bool) {
+		go s.startDVRAfterStreamUpdate(userID, tenantID, streamID, currentState.InternalName)
 	}
 
 	return s.queryStream(ctx, streamID, userID, tenantID)
@@ -7304,12 +6646,10 @@ func (s *CommodoreServer) DeleteStream(ctx context.Context, req *commodorepb.Del
 		return nil, status.Error(codes.InvalidArgument, "stream_id required")
 	}
 
-	// Get stream details before deletion
-	var internalName, title string
-	err = s.db.QueryRowContext(ctx, `
-		SELECT internal_name, title FROM commodore.streams
-		WHERE id = $1 AND user_id = $2 AND tenant_id = $3
-	`, streamID, userID, tenantID).Scan(&internalName, &title)
+	queries := commodoredb.New(s.db)
+	stream, err := queries.GetStreamForDeletion(ctx, commodoredb.GetStreamForDeletionParams{
+		ID: streamID, UserID: userID, TenantID: tenantID,
+	})
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "stream not found")
@@ -7328,10 +6668,13 @@ func (s *CommodoreServer) DeleteStream(ctx context.Context, req *commodorepb.Del
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
-	if _, err = tx.ExecContext(ctx, `DELETE FROM commodore.stream_keys WHERE stream_id = $1 AND tenant_id = $2::uuid`, streamID, tenantID); err != nil {
+	txQueries := commodoredb.New(tx)
+	if err = txQueries.DeleteStreamKeysForDeletion(ctx, commodoredb.DeleteStreamKeysForDeletionParams{
+		StreamID: streamID, TenantID: tenantID,
+	}); err != nil {
 		s.logger.WithError(err).Warn("Failed to delete stream keys")
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE commodore.streams SET deleted_at = COALESCE(deleted_at, NOW()), updated_at = NOW() WHERE id = $1 AND tenant_id = $2::uuid`, streamID, tenantID); err != nil {
+	if err = txQueries.SoftDeleteStream(ctx, commodoredb.SoftDeleteStreamParams{ID: streamID, TenantID: tenantID}); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to soft-delete stream: %v", err)
 	}
 
@@ -7376,7 +6719,7 @@ func (s *CommodoreServer) DeleteStream(ctx context.Context, req *commodorepb.Del
 	return &commodorepb.DeleteStreamResponse{
 		Message:        message,
 		StreamId:       streamID,
-		StreamTitle:    title,
+		StreamTitle:    stream.Title,
 		DeletedAt:      timestamppb.Now(),
 		DeletionStatus: deletionStatus,
 	}, nil
@@ -7397,8 +6740,9 @@ func fenceParentStreamLive(ctx context.Context, tx *sql.Tx, tenantID, streamID s
 	if strings.TrimSpace(streamID) == "" {
 		return nil
 	}
-	var live bool
-	err := tx.QueryRowContext(ctx, `SELECT deleted_at IS NULL FROM commodore.streams WHERE id = $1::uuid AND tenant_id = $2::uuid FOR UPDATE`, streamID, tenantID).Scan(&live)
+	live, err := commodoredb.New(tx).FenceParentStreamLive(ctx, commodoredb.FenceParentStreamLiveParams{
+		ID: streamID, TenantID: tenantID,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return errParentStreamDeleted
 	}
@@ -7442,14 +6786,12 @@ func (s *CommodoreServer) finalizeStreamDeletion(ctx context.Context, streamID, 
 	// RETURNING the obligation's tenant_id makes it the authoritative attribution for the rest of this tx — the
 	// value captured at enqueue time — and lets every query below fence on the owning tenant, not just the (globally
 	// unique) stream_id. Zero rows → sql.ErrNoRows → not our obligation, commit nothing.
-	var tenantID string
-	err = tx.QueryRowContext(ctx, `
-		UPDATE commodore.stream_cleanup_outbox
-		SET status = 'completed', completed_at = NOW(), last_error = NULL
-		WHERE stream_id = $1::uuid AND status = 'pending' AND ($2 = '' OR lease_token = $2)
-		  AND tenant_id = $3::uuid
-		RETURNING tenant_id::text
-	`, streamID, leaseToken, claimTenantID).Scan(&tenantID)
+	queries := commodoredb.New(tx)
+	tenantID, err := queries.SettleStreamCleanupForFinalization(ctx, commodoredb.SettleStreamCleanupForFinalizationParams{
+		StreamID:   streamID,
+		LeaseToken: leaseToken,
+		TenantID:   claimTenantID,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		// Not our obligation (lease lost, or a peer/fast-path already finalized) — commit nothing.
 		return nil
@@ -7461,23 +6803,25 @@ func (s *CommodoreServer) finalizeStreamDeletion(ctx context.Context, streamID, 
 	// We own the finalization. Read attribution (user) from the still-soft-deleted row (present until the DELETE
 	// below), tenant-fenced, so the terminal event carries tenant/user, then hard-delete and emit — all atomic with
 	// the settlement above.
-	var userID sql.NullString
-	if sErr := tx.QueryRowContext(ctx, `SELECT COALESCE(user_id::text,'') FROM commodore.streams WHERE id = $1 AND tenant_id = $2::uuid`, streamID, tenantID).Scan(&userID); sErr != nil && sErr != sql.ErrNoRows {
+	userID, sErr := queries.GetStreamFinalizationUser(ctx, commodoredb.GetStreamFinalizationUserParams{
+		StreamID: streamID,
+		TenantID: tenantID,
+	})
+	if sErr != nil && !errors.Is(sErr, sql.ErrNoRows) {
 		return fmt.Errorf("read finalize attribution: %w", sErr)
 	}
-	res, err := tx.ExecContext(ctx, `DELETE FROM commodore.streams WHERE id = $1 AND tenant_id = $2::uuid AND deleted_at IS NOT NULL`, streamID, tenantID)
+	n, err := queries.HardDeleteFinalizedStream(ctx, commodoredb.HardDeleteFinalizedStreamParams{
+		StreamID: streamID,
+		TenantID: tenantID,
+	})
 	if err != nil {
 		return fmt.Errorf("hard-delete finalized stream: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("finalize rows affected: %w", err)
 	}
 	// Enqueue the terminal event ONLY when THIS call performed the hard-delete (RowsAffected > 0), atomically with
 	// it — so a converged re-run never double-emits and a crash never suppresses it. Emitting at soft-delete time
 	// would tell consumers "deleted" while the saga still reports pending.
 	if n > 0 && tenantID != "" {
-		if _, err := s.EnqueueServiceEventTx(ctx, tx, s.buildStreamChangeEvent(eventStreamDeleted, tenantID, userID.String, streamID, nil)); err != nil {
+		if _, err := s.EnqueueServiceEventTx(ctx, tx, s.buildStreamChangeEvent(eventStreamDeleted, tenantID, userID, streamID, nil)); err != nil {
 			return fmt.Errorf("enqueue terminal stream_deleted event: %w", err)
 		}
 	}
@@ -7503,26 +6847,22 @@ func (s *CommodoreServer) RefreshStreamKey(ctx context.Context, req *commodorepb
 	}
 
 	// Update the stream (a deletion-pending stream is not actionable — do not rotate its key).
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE commodore.streams
-		SET stream_key = $1, updated_at = NOW()
-		WHERE id = $2 AND user_id = $3 AND tenant_id = $4 AND deleted_at IS NULL
-	`, newStreamKey, streamID, userID, tenantID)
+	queries := commodoredb.New(s.db)
+	rows, err := queries.RefreshPrimaryStreamKey(ctx, commodoredb.RefreshPrimaryStreamKeyParams{
+		StreamKey: newStreamKey, ID: streamID, UserID: userID, TenantID: tenantID,
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to refresh stream key: %v", err)
-	}
-
-	rows, raErr := result.RowsAffected()
-	if raErr != nil {
-		return nil, status.Errorf(codes.Internal, "rows affected: %v", raErr)
 	}
 	if rows == 0 {
 		return nil, status.Error(codes.NotFound, "stream not found")
 	}
 
 	// Get playback ID
-	var playbackID string
-	if err := s.db.QueryRowContext(ctx, `SELECT playback_id FROM commodore.streams WHERE id = $1`, streamID).Scan(&playbackID); err != nil {
+	playbackID, err := queries.GetStreamPlaybackID(ctx, commodoredb.GetStreamPlaybackIDParams{
+		ID: streamID, UserID: userID, TenantID: tenantID,
+	})
+	if err != nil {
 		s.logger.WithError(err).Warn("Failed to get playback ID for refreshed stream key")
 	}
 
@@ -7553,14 +6893,10 @@ func (s *CommodoreServer) CreateStreamKey(ctx context.Context, req *commodorepb.
 		return nil, status.Error(codes.InvalidArgument, "stream_id required")
 	}
 
-	// Verify stream ownership
-	var exists bool
-	err = s.db.QueryRowContext(ctx, `
-		SELECT EXISTS(SELECT 1 FROM commodore.streams WHERE id = $1 AND user_id = $2 AND tenant_id = $3 AND deleted_at IS NULL)
-	`, streamID, userID, tenantID).Scan(&exists)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.NotFound, "stream not found")
-	}
+	queries := commodoredb.New(s.db)
+	exists, err := queries.StreamExistsForUser(ctx, commodoredb.StreamExistsForUserParams{
+		ID: streamID, UserID: userID, TenantID: tenantID,
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
@@ -7579,10 +6915,11 @@ func (s *CommodoreServer) CreateStreamKey(ctx context.Context, req *commodorepb.
 		keyName = "Key " + time.Now().Format("2006-01-02 15:04")
 	}
 
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO commodore.stream_keys (id, tenant_id, user_id, stream_id, key_value, key_name, is_active)
-		VALUES ($1, $2, $3, $4, $5, $6, true)
-	`, keyID, tenantID, userID, streamID, keyValue, keyName)
+	err = queries.InsertStreamKey(ctx, commodoredb.InsertStreamKeyParams{
+		ID: keyID, TenantID: tenantID,
+		UserID: sql.NullString{String: userID, Valid: true}, StreamID: streamID,
+		KeyValue: keyValue, KeyName: sql.NullString{String: keyName, Valid: true},
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create stream key: %v", err)
 	}
@@ -7617,11 +6954,10 @@ func (s *CommodoreServer) ListStreamKeys(ctx context.Context, req *commodorepb.L
 		return nil, status.Error(codes.InvalidArgument, "stream_id required")
 	}
 
-	// Verify stream ownership
-	var exists bool
-	err = s.db.QueryRowContext(ctx, `
-		SELECT EXISTS(SELECT 1 FROM commodore.streams WHERE id = $1 AND user_id = $2 AND tenant_id = $3 AND deleted_at IS NULL)
-	`, streamID, userID, tenantID).Scan(&exists)
+	queries := commodoredb.New(s.db)
+	exists, err := queries.StreamExistsForUser(ctx, commodoredb.StreamExistsForUserParams{
+		ID: streamID, UserID: userID, TenantID: tenantID,
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
@@ -7635,62 +6971,57 @@ func (s *CommodoreServer) ListStreamKeys(ctx context.Context, req *commodorepb.L
 		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
 	}
 
-	builder := &pagination.KeysetBuilder{
-		TimestampColumn: "created_at",
-		IDColumn:        "id",
-	}
-
 	// Get total count
-	var total int32
-	err = s.db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM commodore.stream_keys WHERE stream_id = $1
-	`, streamID).Scan(&total)
+	keyUserID := sql.NullString{String: userID, Valid: true}
+	total, err := queries.CountStreamKeys(ctx, commodoredb.CountStreamKeysParams{
+		StreamID: streamID, UserID: keyUserID, TenantID: tenantID,
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	// Build query with keyset pagination
-	query := `
-		SELECT id, tenant_id, user_id, stream_id, key_value, key_name, is_active, last_used_at, created_at, updated_at
-		FROM commodore.stream_keys
-		WHERE stream_id = $1`
-	args := []any{streamID}
-	argIdx := 2
-
-	// Add keyset condition if cursor provided
-	if condition, cursorArgs := builder.Condition(params, argIdx); condition != "" {
-		query += " AND " + condition
-		args = append(args, cursorArgs...)
+	limit := int32(params.Limit + 1)
+	var keyRows []commodoredb.CommodoreStreamKey
+	if params.Direction == pagination.Forward {
+		if params.Cursor == nil {
+			keyRows, err = queries.ListStreamKeysForward(ctx, commodoredb.ListStreamKeysForwardParams{
+				StreamID: streamID, UserID: keyUserID, TenantID: tenantID, Limit: limit,
+			})
+		} else {
+			keyRows, err = queries.ListStreamKeysForwardAfter(ctx, commodoredb.ListStreamKeysForwardAfterParams{
+				StreamID: streamID, UserID: keyUserID, TenantID: tenantID,
+				Column4: params.Cursor.Timestamp, Column5: params.Cursor.ID, Limit: limit,
+			})
+		}
+	} else if params.Cursor == nil {
+		keyRows, err = queries.ListStreamKeysBackward(ctx, commodoredb.ListStreamKeysBackwardParams{
+			StreamID: streamID, UserID: keyUserID, TenantID: tenantID, Limit: limit,
+		})
+	} else {
+		keyRows, err = queries.ListStreamKeysBackwardBefore(ctx, commodoredb.ListStreamKeysBackwardBeforeParams{
+			StreamID: streamID, UserID: keyUserID, TenantID: tenantID,
+			Column4: params.Cursor.Timestamp, Column5: params.Cursor.ID, Limit: limit,
+		})
 	}
-
-	// Add ORDER BY and LIMIT
-	query += " " + builder.OrderBy(params)
-	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
-
-	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer func() { _ = rows.Close() }()
 
-	var keys []*commodorepb.StreamKey
-	for rows.Next() {
-		var key commodorepb.StreamKey
-		var lastUsedAt sql.NullTime
-		var createdAt, updatedAt time.Time
-
-		err := rows.Scan(&key.Id, &key.TenantId, &key.UserId, &key.StreamId, &key.KeyValue, &key.KeyName,
-			&key.IsActive, &lastUsedAt, &createdAt, &updatedAt)
-		if err != nil {
-			continue
+	keys := make([]*commodorepb.StreamKey, 0, len(keyRows))
+	for _, row := range keyRows {
+		if !row.CreatedAt.Valid || !row.UpdatedAt.Valid {
+			return nil, status.Error(codes.Internal, "database returned stream key without timestamps")
 		}
-
-		key.CreatedAt = timestamppb.New(createdAt)
-		key.UpdatedAt = timestamppb.New(updatedAt)
-		if lastUsedAt.Valid {
-			key.LastUsedAt = timestamppb.New(lastUsedAt.Time)
+		key := &commodorepb.StreamKey{
+			Id: row.ID, TenantId: row.TenantID, UserId: row.UserID.String,
+			StreamId: row.StreamID, KeyValue: row.KeyValue, KeyName: row.KeyName.String,
+			IsActive: row.IsActive.Bool, CreatedAt: timestamppb.New(row.CreatedAt.Time),
+			UpdatedAt: timestamppb.New(row.UpdatedAt.Time),
 		}
-		keys = append(keys, &key)
+		if row.LastUsedAt.Valid {
+			key.LastUsedAt = timestamppb.New(row.LastUsedAt.Time)
+		}
+		keys = append(keys, key)
 	}
 
 	// Detect hasMore and trim results
@@ -7746,11 +7077,10 @@ func (s *CommodoreServer) DeactivateStreamKey(ctx context.Context, req *commodor
 		return nil, err
 	}
 
-	// Verify stream ownership
-	var exists bool
-	err = s.db.QueryRowContext(ctx, `
-		SELECT EXISTS(SELECT 1 FROM commodore.streams WHERE id = $1 AND user_id = $2 AND tenant_id = $3 AND deleted_at IS NULL)
-	`, req.GetStreamId(), userID, tenantID).Scan(&exists)
+	queries := commodoredb.New(s.db)
+	exists, err := queries.StreamExistsForUser(ctx, commodoredb.StreamExistsForUserParams{
+		ID: req.GetStreamId(), UserID: userID, TenantID: tenantID,
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
@@ -7758,18 +7088,14 @@ func (s *CommodoreServer) DeactivateStreamKey(ctx context.Context, req *commodor
 		return nil, status.Error(codes.NotFound, "stream not found")
 	}
 
-	result, err := s.db.ExecContext(ctx, `
-		UPDATE commodore.stream_keys SET is_active = false, updated_at = NOW()
-		WHERE id = $1 AND stream_id = $2
-	`, req.GetKeyId(), req.GetStreamId())
+	rows, err := queries.DeactivateStreamKey(ctx, commodoredb.DeactivateStreamKeyParams{
+		ID: req.GetKeyId(), StreamID: req.GetStreamId(),
+		UserID: sql.NullString{String: userID, Valid: true}, TenantID: tenantID,
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to deactivate key: %v", err)
 	}
 
-	rows, raErr := result.RowsAffected()
-	if raErr != nil {
-		return nil, status.Errorf(codes.Internal, "rows affected: %v", raErr)
-	}
 	if rows == 0 {
 		return nil, status.Error(codes.NotFound, "stream key not found")
 	}
@@ -7829,6 +7155,37 @@ func validatePushTargetURI(uri string) error {
 	return nil
 }
 
+func (s *CommodoreServer) pushTargetResponse(
+	id, streamID string,
+	platform sql.NullString,
+	name, targetURI string,
+	isEnabled sql.NullBool,
+	targetStatus, lastError sql.NullString,
+	lastPushedAt, createdAt, updatedAt sql.NullTime,
+) (*commodorepb.PushTarget, error) {
+	if !createdAt.Valid || !updatedAt.Valid {
+		return nil, fmt.Errorf("push target %s has NULL timestamps", id)
+	}
+	decryptedURI, err := s.fieldEncryptor.Decrypt(targetURI)
+	if err != nil {
+		s.logger.WithError(err).WithField("push_target_id", id).Warn("Failed to decrypt target_uri")
+		decryptedURI = targetURI
+	}
+	target := &commodorepb.PushTarget{
+		Id: id, StreamId: streamID, Platform: platform.String, Name: name,
+		TargetUri: maskTargetURI(decryptedURI), IsEnabled: isEnabled.Bool,
+		Status: targetStatus.String, CreatedAt: timestamppb.New(createdAt.Time),
+		UpdatedAt: timestamppb.New(updatedAt.Time),
+	}
+	if lastError.Valid {
+		target.LastError = lastError.String
+	}
+	if lastPushedAt.Valid {
+		target.LastPushedAt = timestamppb.New(lastPushedAt.Time)
+	}
+	return target, nil
+}
+
 func (s *CommodoreServer) CreatePushTarget(ctx context.Context, req *commodorepb.CreatePushTargetRequest) (*commodorepb.PushTarget, error) {
 	userID, tenantID, err := extractUserContext(ctx)
 	if err != nil {
@@ -7849,11 +7206,10 @@ func (s *CommodoreServer) CreatePushTarget(ctx context.Context, req *commodorepb
 		return nil, status.Errorf(codes.InvalidArgument, "invalid target_uri: %v", validationErr)
 	}
 
-	// Verify stream ownership
-	var exists bool
-	err = s.db.QueryRowContext(ctx, `
-		SELECT EXISTS(SELECT 1 FROM commodore.streams WHERE id = $1 AND user_id = $2 AND tenant_id = $3 AND deleted_at IS NULL)
-	`, streamID, userID, tenantID).Scan(&exists)
+	queries := commodoredb.New(s.db)
+	exists, err := queries.StreamExistsForUser(ctx, commodoredb.StreamExistsForUserParams{
+		ID: streamID, UserID: userID, TenantID: tenantID,
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
@@ -7873,10 +7229,11 @@ func (s *CommodoreServer) CreatePushTarget(ctx context.Context, req *commodorepb
 		return nil, status.Errorf(codes.Internal, "failed to encrypt target_uri: %v", err)
 	}
 
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO commodore.push_targets (id, tenant_id, stream_id, platform, name, target_uri, is_enabled, status, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, true, 'idle', $7, $7)
-	`, id, tenantID, streamID, platform, req.GetName(), encryptedURI, now)
+	err = queries.InsertPushTarget(ctx, commodoredb.InsertPushTargetParams{
+		ID: id, TenantID: tenantID, StreamID: streamID,
+		Platform: sql.NullString{String: platform, Valid: true}, Name: req.GetName(),
+		TargetUri: encryptedURI, CreatedAt: sql.NullTime{Time: now, Valid: true},
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create push target: %v", err)
 	}
@@ -7906,45 +7263,23 @@ func (s *CommodoreServer) ListPushTargets(ctx context.Context, req *commodorepb.
 		return nil, status.Error(codes.InvalidArgument, "stream_id required")
 	}
 
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, stream_id, platform, name, target_uri, is_enabled, status, last_error, last_pushed_at, created_at, updated_at
-		FROM commodore.push_targets
-		WHERE stream_id = $1 AND tenant_id = $2
-		ORDER BY created_at ASC
-	`, streamID, tenantID)
+	rows, err := commodoredb.New(s.db).ListPushTargets(ctx, commodoredb.ListPushTargetsParams{
+		StreamID: streamID, TenantID: tenantID,
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
 
-	var targets []*commodorepb.PushTarget
-	for rows.Next() {
-		var (
-			t            commodorepb.PushTarget
-			targetURI    string
-			lastError    sql.NullString
-			lastPushedAt sql.NullTime
-			createdAt    time.Time
-			updatedAt    time.Time
+	targets := make([]*commodorepb.PushTarget, 0, len(rows))
+	for _, row := range rows {
+		target, mapErr := s.pushTargetResponse(
+			row.ID, row.StreamID, row.Platform, row.Name, row.TargetUri, row.IsEnabled,
+			row.Status, row.LastError, row.LastPushedAt, row.CreatedAt, row.UpdatedAt,
 		)
-		if err := rows.Scan(&t.Id, &t.StreamId, &t.Platform, &t.Name, &targetURI, &t.IsEnabled, &t.Status, &lastError, &lastPushedAt, &createdAt, &updatedAt); err != nil {
-			return nil, status.Errorf(codes.Internal, "scan error: %v", err)
+		if mapErr != nil {
+			return nil, status.Errorf(codes.Internal, "database error: %v", mapErr)
 		}
-		decrypted, err := s.fieldEncryptor.Decrypt(targetURI)
-		if err != nil {
-			s.logger.WithError(err).WithField("push_target_id", t.Id).Warn("Failed to decrypt target_uri")
-			decrypted = targetURI
-		}
-		t.TargetUri = maskTargetURI(decrypted)
-		if lastError.Valid {
-			t.LastError = lastError.String
-		}
-		if lastPushedAt.Valid {
-			t.LastPushedAt = timestamppb.New(lastPushedAt.Time)
-		}
-		t.CreatedAt = timestamppb.New(createdAt)
-		t.UpdatedAt = timestamppb.New(updatedAt)
-		targets = append(targets, &t)
+		targets = append(targets, target)
 	}
 
 	return &commodorepb.ListPushTargetsResponse{PushTargets: targets}, nil
@@ -7961,15 +7296,10 @@ func (s *CommodoreServer) UpdatePushTarget(ctx context.Context, req *commodorepb
 		return nil, status.Error(codes.InvalidArgument, "id required")
 	}
 
-	// Build dynamic UPDATE
-	setClauses := []string{"updated_at = NOW()"}
-	args := []any{id, tenantID}
-	argIdx := 3
-
+	params := commodoredb.UpdatePushTargetFieldsParams{ID: id, TenantID: tenantID}
 	if req.Name != nil {
-		setClauses = append(setClauses, fmt.Sprintf("name = $%d", argIdx))
-		args = append(args, req.GetName())
-		argIdx++
+		params.ApplyName = true
+		params.Name = req.GetName()
 	}
 	if req.TargetUri != nil {
 		if validationErr := validatePushTargetURI(req.GetTargetUri()); validationErr != nil {
@@ -7979,33 +7309,15 @@ func (s *CommodoreServer) UpdatePushTarget(ctx context.Context, req *commodorepb
 		if encErr != nil {
 			return nil, status.Errorf(codes.Internal, "failed to encrypt target_uri: %v", encErr)
 		}
-		setClauses = append(setClauses, fmt.Sprintf("target_uri = $%d", argIdx))
-		args = append(args, encURI)
-		argIdx++
+		params.ApplyTargetUri = true
+		params.TargetUri = encURI
 	}
 	if req.IsEnabled != nil {
-		setClauses = append(setClauses, fmt.Sprintf("is_enabled = $%d", argIdx))
-		args = append(args, req.GetIsEnabled())
+		params.ApplyEnabled = true
+		params.IsEnabled = req.GetIsEnabled()
 	}
 
-	var (
-		t            commodorepb.PushTarget
-		targetURI    string
-		lastError    sql.NullString
-		lastPushedAt sql.NullTime
-		createdAt    time.Time
-		updatedAt    time.Time
-	)
-
-	query := fmt.Sprintf(`
-		UPDATE commodore.push_targets SET %s
-		WHERE id = $1 AND tenant_id = $2
-		RETURNING id, stream_id, platform, name, target_uri, is_enabled, status, last_error, last_pushed_at, created_at, updated_at
-	`, strings.Join(setClauses, ", "))
-
-	err = s.db.QueryRowContext(ctx, query, args...).Scan(
-		&t.Id, &t.StreamId, &t.Platform, &t.Name, &targetURI, &t.IsEnabled, &t.Status, &lastError, &lastPushedAt, &createdAt, &updatedAt,
-	)
+	row, err := commodoredb.New(s.db).UpdatePushTargetFields(ctx, params)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "push target not found")
 	}
@@ -8013,24 +7325,17 @@ func (s *CommodoreServer) UpdatePushTarget(ctx context.Context, req *commodorepb
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	decryptedURI, decErr := s.fieldEncryptor.Decrypt(targetURI)
-	if decErr != nil {
-		s.logger.WithError(decErr).WithField("push_target_id", t.Id).Warn("Failed to decrypt target_uri")
-		decryptedURI = targetURI
+	target, err := s.pushTargetResponse(
+		row.ID, row.StreamID, row.Platform, row.Name, row.TargetUri, row.IsEnabled,
+		row.Status, row.LastError, row.LastPushedAt, row.CreatedAt, row.UpdatedAt,
+	)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	t.TargetUri = maskTargetURI(decryptedURI)
-	if lastError.Valid {
-		t.LastError = lastError.String
-	}
-	if lastPushedAt.Valid {
-		t.LastPushedAt = timestamppb.New(lastPushedAt.Time)
-	}
-	t.CreatedAt = timestamppb.New(createdAt)
-	t.UpdatedAt = timestamppb.New(updatedAt)
 
-	s.emitStreamChangeEvent(ctx, eventStreamUpdated, tenantID, userID, t.GetStreamId(), []string{"push_targets"})
+	s.emitStreamChangeEvent(ctx, eventStreamUpdated, tenantID, userID, target.GetStreamId(), []string{"push_targets"})
 
-	return &t, nil
+	return target, nil
 }
 
 func (s *CommodoreServer) DeletePushTarget(ctx context.Context, req *commodorepb.DeletePushTargetRequest) (*commodorepb.DeletePushTargetResponse, error) {
@@ -8044,12 +7349,9 @@ func (s *CommodoreServer) DeletePushTarget(ctx context.Context, req *commodorepb
 		return nil, status.Error(codes.InvalidArgument, "id required")
 	}
 
-	var streamID string
-	err = s.db.QueryRowContext(ctx, `
-		DELETE FROM commodore.push_targets
-		WHERE id = $1 AND tenant_id = $2
-		RETURNING stream_id
-	`, id, tenantID).Scan(&streamID)
+	streamID, err := commodoredb.New(s.db).DeletePushTarget(ctx, commodoredb.DeletePushTargetParams{
+		ID: id, TenantID: tenantID,
+	})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, status.Error(codes.NotFound, "push target not found")
@@ -8074,21 +7376,17 @@ func (s *CommodoreServer) GetStreamPushTargets(ctx context.Context, req *commodo
 		return nil, status.Error(codes.InvalidArgument, "stream_id and tenant_id required")
 	}
 
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT id, platform, name, target_uri
-		FROM commodore.push_targets
-		WHERE stream_id = $1 AND tenant_id = $2 AND is_enabled = true
-	`, streamID, tenantID)
+	rows, err := commodoredb.New(s.db).ListEnabledPushTargets(ctx, commodoredb.ListEnabledPushTargetsParams{
+		StreamID: streamID, TenantID: tenantID,
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer rows.Close()
 
-	var targets []*commodorepb.PushTargetInternal
-	for rows.Next() {
-		var t commodorepb.PushTargetInternal
-		if err := rows.Scan(&t.Id, &t.Platform, &t.Name, &t.TargetUri); err != nil {
-			return nil, status.Errorf(codes.Internal, "scan error: %v", err)
+	targets := make([]*commodorepb.PushTargetInternal, 0, len(rows))
+	for _, row := range rows {
+		t := commodorepb.PushTargetInternal{
+			Id: row.ID, Platform: row.Platform.String, Name: row.Name, TargetUri: row.TargetUri,
 		}
 		decrypted, decErr := s.fieldEncryptor.Decrypt(t.TargetUri)
 		if decErr != nil {
@@ -8111,39 +7409,19 @@ func (s *CommodoreServer) UpdatePushTargetStatus(ctx context.Context, req *commo
 		return nil, status.Error(codes.InvalidArgument, "id and tenant_id required")
 	}
 
-	setClauses := []string{"status = $3", "updated_at = NOW()"}
-	args := []any{id, tenantID, req.GetStatus()}
-	argIdx := 4
-
+	params := commodoredb.UpdatePushTargetStatusParams{
+		ID: id, TenantID: tenantID,
+		Status:     sql.NullString{String: req.GetStatus(), Valid: true},
+		MarkPushed: req.GetStatus() == "pushing",
+	}
 	if req.LastError != nil {
-		setClauses = append(setClauses, fmt.Sprintf("last_error = $%d", argIdx))
-		args = append(args, req.GetLastError())
+		params.ApplyLastError = true
+		params.LastError = sql.NullString{String: req.GetLastError(), Valid: true}
 	} else if req.GetStatus() != "failed" {
-		setClauses = append(setClauses, "last_error = NULL")
+		params.ApplyLastError = true
 	}
 
-	if req.GetStatus() == "pushing" {
-		setClauses = append(setClauses, "last_pushed_at = NOW()")
-	}
-
-	var (
-		t            commodorepb.PushTarget
-		targetURI    string
-		lastError    sql.NullString
-		lastPushedAt sql.NullTime
-		createdAt    time.Time
-		updatedAt    time.Time
-	)
-
-	query := fmt.Sprintf(`
-		UPDATE commodore.push_targets SET %s
-		WHERE id = $1 AND tenant_id = $2
-		RETURNING id, stream_id, platform, name, target_uri, is_enabled, status, last_error, last_pushed_at, created_at, updated_at
-	`, strings.Join(setClauses, ", "))
-
-	err := s.db.QueryRowContext(ctx, query, args...).Scan(
-		&t.Id, &t.StreamId, &t.Platform, &t.Name, &targetURI, &t.IsEnabled, &t.Status, &lastError, &lastPushedAt, &createdAt, &updatedAt,
-	)
+	row, err := commodoredb.New(s.db).UpdatePushTargetStatus(ctx, params)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "push target not found")
 	}
@@ -8151,22 +7429,14 @@ func (s *CommodoreServer) UpdatePushTargetStatus(ctx context.Context, req *commo
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	decryptedURI, decErr := s.fieldEncryptor.Decrypt(targetURI)
-	if decErr != nil {
-		s.logger.WithError(decErr).WithField("push_target_id", t.Id).Warn("Failed to decrypt target_uri")
-		decryptedURI = targetURI
+	target, err := s.pushTargetResponse(
+		row.ID, row.StreamID, row.Platform, row.Name, row.TargetUri, row.IsEnabled,
+		row.Status, row.LastError, row.LastPushedAt, row.CreatedAt, row.UpdatedAt,
+	)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	t.TargetUri = maskTargetURI(decryptedURI)
-	if lastError.Valid {
-		t.LastError = lastError.String
-	}
-	if lastPushedAt.Valid {
-		t.LastPushedAt = timestamppb.New(lastPushedAt.Time)
-	}
-	t.CreatedAt = timestamppb.New(createdAt)
-	t.UpdatedAt = timestamppb.New(updatedAt)
-
-	return &t, nil
+	return target, nil
 }
 
 // ============================================================================
@@ -8202,10 +7472,10 @@ func (s *CommodoreServer) CreateAPIToken(ctx context.Context, req *commodorepb.C
 		expiresAt = sql.NullTime{Time: req.GetExpiresAt().AsTime(), Valid: true}
 	}
 
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO commodore.api_tokens (id, tenant_id, user_id, token_value, token_name, permissions, is_active, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6, true, $7)
-	`, tokenID, tenantID, userID, tokenHash, tokenName, pq.Array(permissions), expiresAt)
+	err = commodoredb.New(s.db).InsertAPIToken(ctx, commodoredb.InsertAPITokenParams{
+		TokenID: tokenID, TenantID: tenantID, UserID: userID, TokenHash: tokenHash,
+		TokenName: tokenName, Permissions: permissions, ExpiresAt: expiresAt,
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create API token: %v", err)
 	}
@@ -8240,68 +7510,77 @@ func (s *CommodoreServer) ListAPITokens(ctx context.Context, req *commodorepb.Li
 		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
 	}
 
-	builder := &pagination.KeysetBuilder{
-		TimestampColumn: "created_at",
-		IDColumn:        "id",
-	}
-
-	// Get total count
-	var total int32
-	err = s.db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM commodore.api_tokens WHERE user_id = $1 AND tenant_id = $2
-	`, userID, tenantID).Scan(&total)
+	queries := commodoredb.New(s.db)
+	total, err := queries.CountAPITokensForUser(ctx, commodoredb.CountAPITokensForUserParams{UserID: userID, TenantID: tenantID})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-
-	// Build query with keyset pagination
-	query := `
-		SELECT id, token_name, permissions,
-		       CASE WHEN is_active AND (expires_at IS NULL OR expires_at > NOW()) THEN 'active' ELSE 'inactive' END as status,
-		       last_used_at, expires_at, created_at
-		FROM commodore.api_tokens
-		WHERE user_id = $1 AND tenant_id = $2`
-	args := []any{userID, tenantID}
-	argIdx := 3
-
-	// Add keyset condition if cursor provided
-	if condition, cursorArgs := builder.Condition(params, argIdx); condition != "" {
-		query += " AND " + condition
-		args = append(args, cursorArgs...)
-	}
-
-	// Add ORDER BY and LIMIT
-	query += " " + builder.OrderBy(params)
-	query += fmt.Sprintf(" LIMIT %d", params.Limit+1)
-
-	rows, err := s.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-	defer func() { _ = rows.Close() }()
 
 	var tokens []*commodorepb.APITokenInfo
-	for rows.Next() {
-		var token commodorepb.APITokenInfo
-		var permissions []string
-		var lastUsedAt, expiresAt sql.NullTime
-		var createdAt time.Time
-
-		err := rows.Scan(&token.Id, &token.TokenName, fwdb.ArrayScan(&permissions), &token.Status,
-			&lastUsedAt, &expiresAt, &createdAt)
-		if err != nil {
-			continue
+	appendToken := func(id, name string, permissions []string, tokenStatus string, lastUsedAt, expiresAt, createdAt sql.NullTime) error {
+		if !createdAt.Valid {
+			return fmt.Errorf("API token %s has NULL created_at", id)
 		}
-
-		token.Permissions = permissions
-		token.CreatedAt = timestamppb.New(createdAt)
+		token := &commodorepb.APITokenInfo{
+			Id: id, TokenName: name, Permissions: permissions, Status: tokenStatus,
+			CreatedAt: timestamppb.New(createdAt.Time),
+		}
 		if lastUsedAt.Valid {
 			token.LastUsedAt = timestamppb.New(lastUsedAt.Time)
 		}
 		if expiresAt.Valid {
 			token.ExpiresAt = timestamppb.New(expiresAt.Time)
 		}
-		tokens = append(tokens, &token)
+		tokens = append(tokens, token)
+		return nil
+	}
+	rowLimit := int32(params.Limit + 1)
+	if params.Direction == pagination.Forward {
+		if params.Cursor == nil {
+			rows, queryErr := queries.ListAPITokensForward(ctx, commodoredb.ListAPITokensForwardParams{UserID: userID, TenantID: tenantID, RowLimit: rowLimit})
+			if queryErr != nil {
+				return nil, status.Errorf(codes.Internal, "database error: %v", queryErr)
+			}
+			for _, row := range rows {
+				if rowErr := appendToken(row.ID, row.TokenName, row.Permissions, row.Status, row.LastUsedAt, row.ExpiresAt, row.CreatedAt); rowErr != nil {
+					return nil, status.Errorf(codes.Internal, "database error: %v", rowErr)
+				}
+			}
+		} else {
+			rows, queryErr := queries.ListAPITokensForwardAfter(ctx, commodoredb.ListAPITokensForwardAfterParams{
+				UserID: userID, TenantID: tenantID, CursorTime: params.Cursor.Timestamp, CursorID: params.Cursor.ID, RowLimit: rowLimit,
+			})
+			if queryErr != nil {
+				return nil, status.Errorf(codes.Internal, "database error: %v", queryErr)
+			}
+			for _, row := range rows {
+				if rowErr := appendToken(row.ID, row.TokenName, row.Permissions, row.Status, row.LastUsedAt, row.ExpiresAt, row.CreatedAt); rowErr != nil {
+					return nil, status.Errorf(codes.Internal, "database error: %v", rowErr)
+				}
+			}
+		}
+	} else if params.Cursor == nil {
+		rows, queryErr := queries.ListAPITokensBackward(ctx, commodoredb.ListAPITokensBackwardParams{UserID: userID, TenantID: tenantID, RowLimit: rowLimit})
+		if queryErr != nil {
+			return nil, status.Errorf(codes.Internal, "database error: %v", queryErr)
+		}
+		for _, row := range rows {
+			if rowErr := appendToken(row.ID, row.TokenName, row.Permissions, row.Status, row.LastUsedAt, row.ExpiresAt, row.CreatedAt); rowErr != nil {
+				return nil, status.Errorf(codes.Internal, "database error: %v", rowErr)
+			}
+		}
+	} else {
+		rows, queryErr := queries.ListAPITokensBackwardBefore(ctx, commodoredb.ListAPITokensBackwardBeforeParams{
+			UserID: userID, TenantID: tenantID, CursorTime: params.Cursor.Timestamp, CursorID: params.Cursor.ID, RowLimit: rowLimit,
+		})
+		if queryErr != nil {
+			return nil, status.Errorf(codes.Internal, "database error: %v", queryErr)
+		}
+		for _, row := range rows {
+			if rowErr := appendToken(row.ID, row.TokenName, row.Permissions, row.Status, row.LastUsedAt, row.ExpiresAt, row.CreatedAt); rowErr != nil {
+				return nil, status.Errorf(codes.Internal, "database error: %v", rowErr)
+			}
+		}
 	}
 
 	// Detect hasMore and trim results
@@ -8357,24 +7636,14 @@ func (s *CommodoreServer) RevokeAPIToken(ctx context.Context, req *commodorepb.R
 		return nil, err
 	}
 
-	// Get token info before revoking
-	var tokenName string
-	err = s.db.QueryRowContext(ctx, `
-		SELECT token_name FROM commodore.api_tokens WHERE id = $1 AND user_id = $2 AND tenant_id = $3
-	`, req.GetTokenId(), userID, tenantID).Scan(&tokenName)
+	tokenName, err := commodoredb.New(s.db).RevokeAPIToken(ctx, commodoredb.RevokeAPITokenParams{
+		TokenID: req.GetTokenId(), UserID: userID, TenantID: tenantID,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "token not found")
 	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
-	}
-
-	// Revoke the token
-	_, err = s.db.ExecContext(ctx, `
-		UPDATE commodore.api_tokens SET is_active = false, updated_at = NOW() WHERE id = $1
-	`, req.GetTokenId())
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to revoke token: %v", err)
 	}
 
 	s.emitAuthEvent(ctx, eventTokenRevoked, userID, tenantID, "api_token", "", req.GetTokenId(), "")
@@ -8552,27 +7821,17 @@ func (s *CommodoreServer) GetStreamsBatch(ctx context.Context, req *commodorepb.
 		return &commodorepb.GetStreamsBatchResponse{}, nil
 	}
 
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT s.id, s.internal_name, s.stream_key, s.playback_id, s.title, s.description,
-		       s.is_recording_enabled, s.created_at, s.updated_at, s.ingest_mode,
-		       p.source_uri_enc, p.enabled, COALESCE(p.allowed_cluster_ids, '{}'),
-		       s.active_ingest_cluster_id,
-		       s.dvr_retention_days_override, s.clip_retention_days_override,
-		       s.monitoring_enabled
-		FROM commodore.streams s
-		LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
-		WHERE s.id = ANY($1) AND s.user_id = $2 AND s.tenant_id = $3
-	`, pq.Array(streamIDs), userID, tenantID)
+	rows, err := commodoredb.New(s.db).GetStreamsConfigBatch(ctx, commodoredb.GetStreamsConfigBatchParams{
+		Column1: streamIDs, UserID: userID, TenantID: tenantID,
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	defer func() { _ = rows.Close() }()
-
-	var streams []*commodorepb.Stream
+	streams := make([]*commodorepb.Stream, 0, len(rows))
 	var route *clusterRoute
 	routeAttempted := false
-	for rows.Next() {
-		stream, err := s.scanStream(rows)
+	for _, row := range rows {
+		stream, err := s.streamFromConfigRow(row.Config())
 		if err != nil {
 			s.logger.WithError(err).Error("Error scanning stream in batch")
 			return nil, status.Errorf(codes.Internal, "scan stream batch: %v", err)
@@ -8588,39 +7847,13 @@ func (s *CommodoreServer) GetStreamsBatch(ctx context.Context, req *commodorepb.
 		}
 		streams = append(streams, stream)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, status.Errorf(codes.Internal, "iterate stream batch: %v", err)
-	}
-
 	return &commodorepb.GetStreamsBatchResponse{Streams: streams}, nil
 }
 
 func (s *CommodoreServer) queryStream(ctx context.Context, streamID, userID, tenantID string) (*commodorepb.Stream, error) {
-	var stream commodorepb.Stream
-	var description, sourceURIEnc, activeIngest, chapterMode sql.NullString
-	var pullEnabled sql.NullBool
-	var pullAllowedClusters []string
-	var createdAt, updatedAt time.Time
-	var chapterInterval, dvrRetOverride, clipRetOverride sql.NullInt32
-	var monEnabled sql.NullBool
-
-	// Query config only - operational state (status, started_at, ended_at) comes from Periscope Data Plane.
-	err := s.db.QueryRowContext(ctx, `
-		SELECT s.id, s.internal_name, s.stream_key, s.playback_id, s.title, s.description,
-		       s.is_recording_enabled, s.created_at, s.updated_at, s.ingest_mode,
-		       p.source_uri_enc, p.enabled, COALESCE(p.allowed_cluster_ids, '{}'),
-		       s.active_ingest_cluster_id,
-		       s.dvr_chapter_mode, s.dvr_chapter_interval_seconds,
-		       s.dvr_retention_days_override, s.clip_retention_days_override,
-		       s.monitoring_enabled
-		FROM commodore.streams s
-		LEFT JOIN commodore.stream_pull_sources p ON p.stream_id = s.id
-		WHERE s.id = $1 AND s.user_id = $2 AND s.tenant_id = $3 AND s.deleted_at IS NULL
-	`, streamID, userID, tenantID).Scan(&stream.StreamId, &stream.InternalName, &stream.StreamKey, &stream.PlaybackId,
-		&stream.Title, &description, &stream.IsRecordingEnabled, &createdAt, &updatedAt,
-		&stream.IngestMode, &sourceURIEnc, &pullEnabled, fwdb.ArrayScan(&pullAllowedClusters),
-		&activeIngest, &chapterMode, &chapterInterval,
-		&dvrRetOverride, &clipRetOverride, &monEnabled)
+	row, err := commodoredb.New(s.db).GetStreamConfig(ctx, commodoredb.GetStreamConfigParams{
+		ID: streamID, UserID: userID, TenantID: tenantID,
+	})
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "stream not found")
@@ -8629,50 +7862,12 @@ func (s *CommodoreServer) queryStream(ctx context.Context, streamID, userID, ten
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	if description.Valid {
-		stream.Description = description.String
+	stream, err := s.streamFromConfigRow(row.Config())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "map stream: %v", err)
 	}
-	if activeIngest.Valid {
-		stream.ActiveIngestClusterId = activeIngest.String
-	}
-	stream.Monitoring = monitoringToggleFromNullBool(monEnabled)
-	stream.IsRecording = stream.IsRecordingEnabled
-	stream.CreatedAt = timestamppb.New(createdAt)
-	stream.UpdatedAt = timestamppb.New(updatedAt)
-	if stream.IngestMode == "" {
-		stream.IngestMode = "push"
-	}
-	if stream.IngestMode == "pull" && sourceURIEnc.Valid {
-		sourceURI, err := s.pullSourceEncryptor.Decrypt(sourceURIEnc.String)
-		if err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to decrypt pull source: %v", err)
-		}
-		class, classErr := pullsource.Classify(sourceURI)
-		if classErr != nil {
-			s.logger.WithError(classErr).WithField("stream_id", stream.StreamId).Debug("pull source classification failed")
-		}
-		stream.PullSource = buildPullSourceView(sourceURI, pullEnabled.Bool, class, pullAllowedClusters)
-	}
-
-	stream.ThumbnailAssets = s.buildStreamThumbnailAssets(activeIngest, stream.StreamId)
-	if chapterMode.Valid {
-		stream.DvrChapterMode = chapterMode.String
-	}
-	if chapterInterval.Valid && chapterInterval.Int32 > 0 {
-		iv := chapterInterval.Int32
-		stream.DvrChapterIntervalSeconds = &iv
-	}
-	if dvrRetOverride.Valid {
-		v := dvrRetOverride.Int32
-		stream.DvrRetentionDaysOverride = &v
-	}
-	if clipRetOverride.Valid {
-		v := clipRetOverride.Int32
-		stream.ClipRetentionDaysOverride = &v
-	}
-	s.populateStreamOriginRegion(ctx, tenantID, &stream, nil)
-
-	return &stream, nil
+	s.populateStreamOriginRegion(ctx, tenantID, stream, nil)
+	return stream, nil
 }
 
 func (s *CommodoreServer) populateStreamOriginRegion(ctx context.Context, tenantID string, stream *commodorepb.Stream, route *clusterRoute) {
@@ -8744,39 +7939,31 @@ func monitoringToggleFromNullBool(b sql.NullBool) commodorepb.MonitoringToggle {
 	}
 }
 
-// scanStream scans config-only stream data; operational state comes from Periscope Data Plane
-func (s *CommodoreServer) scanStream(rows *sql.Rows) (*commodorepb.Stream, error) {
-	var stream commodorepb.Stream
-	var description, sourceURIEnc, activeIngest sql.NullString
-	var pullEnabled sql.NullBool
-	var pullAllowedClusters []string
-	var createdAt, updatedAt time.Time
-	var dvrRetOverride, clipRetOverride sql.NullInt32
-	var monEnabled sql.NullBool
-
-	err := rows.Scan(&stream.StreamId, &stream.InternalName, &stream.StreamKey, &stream.PlaybackId,
-		&stream.Title, &description, &stream.IsRecordingEnabled, &createdAt, &updatedAt,
-		&stream.IngestMode, &sourceURIEnc, &pullEnabled, fwdb.ArrayScan(&pullAllowedClusters), &activeIngest,
-		&dvrRetOverride, &clipRetOverride, &monEnabled)
-	if err != nil {
-		return nil, err
+// streamFromConfigRow maps the shared generated stream projection. Operational
+// state still comes from the Periscope data plane.
+func (s *CommodoreServer) streamFromConfigRow(row commodoredb.StreamConfigRow) (*commodorepb.Stream, error) {
+	if !row.CreatedAt.Valid || !row.UpdatedAt.Valid {
+		return nil, fmt.Errorf("stream %s has NULL timestamps", row.ID)
 	}
-	stream.Monitoring = monitoringToggleFromNullBool(monEnabled)
-
-	if description.Valid {
-		stream.Description = description.String
+	stream := &commodorepb.Stream{
+		StreamId: row.ID, InternalName: row.InternalName, StreamKey: row.StreamKey,
+		PlaybackId: row.PlaybackID, Title: row.Title,
+		IsRecordingEnabled: row.IsRecordingEnabled.Bool,
+		IsRecording:        row.IsRecordingEnabled.Bool,
+		IngestMode:         row.IngestMode, Monitoring: monitoringToggleFromNullBool(row.MonitoringEnabled),
+		CreatedAt: timestamppb.New(row.CreatedAt.Time), UpdatedAt: timestamppb.New(row.UpdatedAt.Time),
 	}
-	if activeIngest.Valid {
-		stream.ActiveIngestClusterId = activeIngest.String
+	if row.Description.Valid {
+		stream.Description = row.Description.String
 	}
-	stream.IsRecording = stream.IsRecordingEnabled
-	stream.CreatedAt = timestamppb.New(createdAt)
-	stream.UpdatedAt = timestamppb.New(updatedAt)
+	if row.ActiveIngestClusterID.Valid {
+		stream.ActiveIngestClusterId = row.ActiveIngestClusterID.String
+	}
 	if stream.IngestMode == "" {
 		stream.IngestMode = "push"
 	}
-	if stream.IngestMode == "pull" && sourceURIEnc.Valid {
-		sourceURI, err := s.pullSourceEncryptor.Decrypt(sourceURIEnc.String)
+	if stream.IngestMode == "pull" && row.SourceURIEnc.Valid {
+		sourceURI, err := s.pullSourceEncryptor.Decrypt(row.SourceURIEnc.String)
 		if err != nil {
 			return nil, err
 		}
@@ -8784,20 +7971,27 @@ func (s *CommodoreServer) scanStream(rows *sql.Rows) (*commodorepb.Stream, error
 		if classErr != nil {
 			s.logger.WithError(classErr).WithField("stream_id", stream.StreamId).Debug("pull source classification failed")
 		}
-		stream.PullSource = buildPullSourceView(sourceURI, pullEnabled.Bool, class, pullAllowedClusters)
+		stream.PullSource = buildPullSourceView(sourceURI, row.PullEnabled.Bool, class, row.AllowedClusterIDs)
 	}
 
-	stream.ThumbnailAssets = s.buildStreamThumbnailAssets(activeIngest, stream.StreamId)
-	if dvrRetOverride.Valid {
-		v := dvrRetOverride.Int32
+	stream.ThumbnailAssets = s.buildStreamThumbnailAssets(row.ActiveIngestClusterID, stream.StreamId)
+	if row.DVRChapterMode.Valid {
+		stream.DvrChapterMode = row.DVRChapterMode.String
+	}
+	if row.DVRChapterIntervalSeconds.Valid && row.DVRChapterIntervalSeconds.Int32 > 0 {
+		v := row.DVRChapterIntervalSeconds.Int32
+		stream.DvrChapterIntervalSeconds = &v
+	}
+	if row.DVRRetentionDaysOverride.Valid {
+		v := row.DVRRetentionDaysOverride.Int32
 		stream.DvrRetentionDaysOverride = &v
 	}
-	if clipRetOverride.Valid {
-		v := clipRetOverride.Int32
+	if row.ClipRetentionDaysOverride.Valid {
+		v := row.ClipRetentionDaysOverride.Int32
 		stream.ClipRetentionDaysOverride = &v
 	}
 
-	return &stream, nil
+	return stream, nil
 }
 
 func extractUserContext(ctx context.Context) (userID, tenantID string, err error) {
@@ -8891,22 +8085,7 @@ func generateArtifactPlaybackID() (string, error) {
 }
 
 func (s *CommodoreServer) identifierExists(ctx context.Context, identifier string) (bool, error) {
-	var exists bool
-	err := s.db.QueryRowContext(ctx, `
-		SELECT EXISTS(
-			SELECT 1 FROM commodore.streams WHERE internal_name = $1 OR lower(playback_id::text) = lower($1::text)
-			UNION ALL
-			SELECT 1 FROM commodore.clips WHERE internal_name = $1 OR lower(playback_id::text) = lower($1::text) OR clip_hash = $1
-			UNION ALL
-			SELECT 1 FROM commodore.dvr_recordings WHERE internal_name = $1 OR lower(playback_id::text) = lower($1::text) OR dvr_hash = $1
-			UNION ALL
-			SELECT 1 FROM commodore.vod_assets WHERE internal_name = $1 OR lower(playback_id::text) = lower($1::text) OR vod_hash = $1
-		)
-	`, identifier).Scan(&exists)
-	if err != nil {
-		return false, err
-	}
-	return exists, nil
+	return commodoredb.New(s.db).ArtifactIdentifierExists(ctx, identifier)
 }
 
 func (s *CommodoreServer) generateUniqueArtifactIdentifiers(ctx context.Context) (string, string, error) {
@@ -8985,21 +8164,9 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *sharedpb.CreateCl
 	}
 
 	// Resolve internal_name and active ingest cluster for routing
-	var internalName string
-	var activeIngestClusterID sql.NullString
-	var activeIngestClusterUpdatedAt sql.NullTime
-	var sourceRequiresAuth bool
-	var sourcePolicyJSON sql.NullString
-	var sourceSecretEnc sql.NullString
-	err = s.db.QueryRowContext(ctx, `
-		SELECT internal_name, active_ingest_cluster_id, active_ingest_cluster_updated_at,
-		       requires_auth, playback_policy::text, playback_webhook_secret_enc
-		FROM commodore.streams
-		WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
-	`, streamID, tenantID).Scan(
-		&internalName, &activeIngestClusterID, &activeIngestClusterUpdatedAt,
-		&sourceRequiresAuth, &sourcePolicyJSON, &sourceSecretEnc,
-	)
+	source, err := commodoredb.New(s.db).GetClipSourceStream(ctx, commodoredb.GetClipSourceStreamParams{
+		ID: streamID, TenantID: tenantID,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "stream not found")
 	}
@@ -9010,7 +8177,7 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *sharedpb.CreateCl
 	// Route to the cluster where the stream is ingesting (if known), else primary
 	var foghornClient *foghornclient.GRPCClient
 	var clipClusterID string
-	if freshClusterID, ok := selectActiveIngestCluster(activeIngestClusterID, activeIngestClusterUpdatedAt, time.Now()); ok {
+	if freshClusterID, ok := selectActiveIngestCluster(source.ActiveIngestClusterID, source.ActiveIngestClusterUpdatedAt, time.Now()); ok {
 		foghornClient, err = s.resolveFoghornForCluster(ctx, freshClusterID, tenantID)
 		if err == nil {
 			clipClusterID = freshClusterID
@@ -9019,7 +8186,7 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *sharedpb.CreateCl
 				"tenant_id":                  tenantID,
 				"stream_id":                  streamID,
 				"active_ingest_cluster_id":   freshClusterID,
-				"active_ingest_cluster_time": activeIngestClusterUpdatedAt.Time,
+				"active_ingest_cluster_time": source.ActiveIngestClusterUpdatedAt.Time,
 				"error":                      err,
 			}).Warn("Failed to resolve active ingest cluster for clip, falling back to tenant route")
 		}
@@ -9045,7 +8212,7 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *sharedpb.CreateCl
 	if err != nil {
 		s.logger.WithFields(logging.Fields{
 			"tenant_id":     tenantID,
-			"internal_name": internalName,
+			"internal_name": source.InternalName,
 			"error":         err,
 		}).Error("Failed to generate artifact identifiers for clip")
 		return nil, status.Errorf(codes.Internal, "failed to generate clip identifiers: %v", err)
@@ -9109,7 +8276,7 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *sharedpb.CreateCl
 	// Build Foghorn request with pre-generated hash
 	foghornReq := &sharedpb.CreateClipRequest{
 		TenantId:           tenantID,
-		StreamInternalName: internalName,
+		StreamInternalName: source.InternalName,
 		ClipHash:           &clipHash, // Pass the hash we generated
 		PlaybackId:         &playbackID,
 		InternalName:       &artifactInternalName,
@@ -9151,13 +8318,13 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *sharedpb.CreateCl
 		retentionUnix = &u
 	}
 	var policyPtr *string
-	if sourcePolicyJSON.Valid {
-		v := sourcePolicyJSON.String
+	if source.PlaybackPolicy != "" {
+		v := source.PlaybackPolicy
 		policyPtr = &v
 	}
 	var secretPtr *string
-	if sourceSecretEnc.Valid {
-		v := sourceSecretEnc.String
+	if source.PlaybackWebhookSecretEnc.Valid {
+		v := source.PlaybackWebhookSecretEnc.String
 		secretPtr = &v
 	}
 	intentPayload := clipCreationPayload{
@@ -9172,7 +8339,7 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *sharedpb.CreateCl
 		RequestedParams:  string(paramsJSON),
 		OriginClusterID:  clipClusterID,
 		RetentionUnixSec: retentionUnix,
-		RequiresAuth:     sourceRequiresAuth,
+		RequiresAuth:     source.RequiresAuth,
 		PlaybackPolicy:   policyPtr,
 		WebhookSecretEnc: secretPtr,
 	}
@@ -9235,7 +8402,7 @@ func (s *CommodoreServer) CreateClip(ctx context.Context, req *sharedpb.CreateCl
 		"tenant_id":     tenantID,
 		"clip_hash":     clipHash,
 		"clip_id":       clipID,
-		"internal_name": internalName,
+		"internal_name": source.InternalName,
 		"start_time":    startTime,
 		"duration":      duration,
 		"partial":       resp.GetPartial(),
@@ -9266,76 +8433,56 @@ func (s *CommodoreServer) GetClip(ctx context.Context, req *sharedpb.GetClipRequ
 		return nil, status.Error(codes.InvalidArgument, "clip_hash is required")
 	}
 
-	query := `
-		SELECT c.id, c.clip_hash, c.playback_id, c.stream_id::text, c.title, c.description,
-		       c.start_time, c.duration, c.clip_mode, c.requested_params,
-		       c.size_bytes, c.retention_until, COALESCE(c.retention_source, ''), c.created_at, c.updated_at,
-		       COALESCE(c.thumbnail_serving_cluster_id, c.storage_cluster_id, c.origin_cluster_id), c.has_thumbnails
-		FROM commodore.clips c
-		WHERE c.tenant_id = $1 AND c.clip_hash = $2	`
-
-	var (
-		id, streamID, playbackID string
-		title, description       sql.NullString
-		startTime, duration      int64
-		clipMode                 sql.NullString
-		requestedParams          sql.NullString
-		sizeBytes                sql.NullInt64
-		retentionUntil           sql.NullTime
-		retentionSource          string
-		createdAt, updatedAt     time.Time
-		thumbnailCluster         sql.NullString
-		hasThumbnails            bool
-	)
-
-	err = s.db.QueryRowContext(ctx, query, tenantID, clipHash).Scan(
-		&id, &clipHash, &playbackID, &streamID, &title, &description,
-		&startTime, &duration, &clipMode, &requestedParams,
-		&sizeBytes, &retentionUntil, &retentionSource, &createdAt, &updatedAt,
-		&thumbnailCluster, &hasThumbnails,
-	)
+	row, err := commodoredb.New(s.db).GetClipRegistry(ctx, commodoredb.GetClipRegistryParams{
+		TenantID: tenantID, ClipHash: clipHash,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "clip not found")
 	} else if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
+	if !row.CreatedAt.Valid || !row.UpdatedAt.Valid {
+		return nil, status.Error(codes.Internal, "database returned clip without timestamps")
+	}
 	clip := &sharedpb.ClipInfo{
-		Id:         id,
-		ClipHash:   clipHash,
-		PlaybackId: playbackID,
-		StreamId:   streamID,
-		StartTime:  startTime / 1000, // Convert ms to seconds
-		Duration:   duration / 1000,  // Convert ms to seconds
+		Id:         row.ID,
+		ClipHash:   row.ClipHash,
+		PlaybackId: row.PlaybackID,
+		StreamId:   row.CStreamID,
+		StartTime:  row.StartTime / 1000, // Convert ms to seconds
+		Duration:   row.Duration / 1000,  // Convert ms to seconds
 		Status:     "registry",
-		CreatedAt:  timestamppb.New(createdAt),
-		UpdatedAt:  timestamppb.New(updatedAt),
+		CreatedAt:  timestamppb.New(row.CreatedAt.Time),
+		UpdatedAt:  timestamppb.New(row.UpdatedAt.Time),
 	}
-	if title.Valid {
-		clip.Title = title.String
+	if row.Title.Valid {
+		clip.Title = row.Title.String
 	}
-	if description.Valid {
-		clip.Description = description.String
+	if row.Description.Valid {
+		clip.Description = row.Description.String
 	}
-	if clipMode.Valid {
-		clip.ClipMode = &clipMode.String
+	if row.ClipMode.Valid {
+		clip.ClipMode = &row.ClipMode.String
 	}
-	if requestedParams.Valid {
-		clip.RequestedParams = &requestedParams.String
+	if row.RequestedParams != "" {
+		requestedParams := row.RequestedParams
+		clip.RequestedParams = &requestedParams
 	}
-	if retentionSource != "" {
-		src := retentionSource
+	if row.RetentionSource != "" {
+		src := row.RetentionSource
 		clip.RetentionSource = &src
 	}
-	if sizeBytes.Valid {
-		size := sizeBytes.Int64
+	if row.SizeBytes.Valid {
+		size := row.SizeBytes.Int64
 		clip.SizeBytes = &size
 	}
-	if retentionUntil.Valid {
-		expiresAt := timestamppb.New(retentionUntil.Time)
+	if row.RetentionUntil.Valid {
+		expiresAt := timestamppb.New(row.RetentionUntil.Time)
 		clip.ExpiresAt = expiresAt
 	}
-	clip.ThumbnailAssets = s.buildArtifactThumbnailAssets(hasThumbnails, thumbnailCluster, clipHash)
+	thumbnailCluster := sql.NullString{String: row.ThumbnailCluster, Valid: row.ThumbnailCluster != ""}
+	clip.ThumbnailAssets = s.buildArtifactThumbnailAssets(row.HasThumbnails, thumbnailCluster, clipHash)
 
 	return clip, nil
 }
@@ -9348,14 +8495,14 @@ func (s *CommodoreServer) DeleteClip(ctx context.Context, req *sharedpb.DeleteCl
 	}
 
 	// Look up clip info for deletion event and cluster-aware routing
-	var streamID string
-	var originClusterID sql.NullString
-	_ = s.db.QueryRowContext(ctx, `
-		SELECT stream_id::text, origin_cluster_id FROM commodore.clips
-		WHERE clip_hash = $1 AND tenant_id = $2
-	`, req.ClipHash, tenantID).Scan(&streamID, &originClusterID)
+	route, routeErr := commodoredb.New(s.db).GetClipDeletionRoute(ctx, commodoredb.GetClipDeletionRouteParams{
+		ClipHash: req.ClipHash, TenantID: tenantID,
+	})
+	if routeErr != nil && !errors.Is(routeErr, sql.ErrNoRows) {
+		s.logger.WithError(routeErr).WithField("clip_hash", req.ClipHash).Debug("Clip deletion route lookup failed; falling back to tenant route")
+	}
 
-	foghornClient, err := s.resolveFoghornForArtifact(ctx, tenantID, originClusterID.String)
+	foghornClient, err := s.resolveFoghornForArtifact(ctx, tenantID, route.OriginClusterID.String)
 	if err != nil {
 		return nil, err
 	}
@@ -9371,7 +8518,7 @@ func (s *CommodoreServer) DeleteClip(ctx context.Context, req *sharedpb.DeleteCl
 	// the durable tombstone marker at that authoritative revision. Commodore performs no local catalog
 	// mutation, so no non-authoritative revision can beat a stalled snapshot and resurrect the asset.
 	if resp.Success {
-		s.emitArtifactEvent(ctx, eventArtifactDeleted, tenantID, userID, ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP, req.ClipHash, streamID, "deleted", nil)
+		s.emitArtifactEvent(ctx, eventArtifactDeleted, tenantID, userID, ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP, req.ClipHash, route.StreamID, "deleted", nil)
 	}
 
 	return resp, nil
@@ -9388,18 +8535,15 @@ func (s *CommodoreServer) StopDVR(ctx context.Context, req *sharedpb.StopDVRRequ
 		return nil, err
 	}
 
+	route, routeErr := commodoredb.New(s.db).GetDVRDeletionRoute(ctx, commodoredb.GetDVRDeletionRouteParams{
+		DvrHash: req.DvrHash, TenantID: tenantID,
+	})
 	var streamID *string
-	var streamIDValue string
-	var originClusterID sql.NullString
-	if streamErr := s.db.QueryRowContext(ctx, `
-		SELECT stream_id::text, origin_cluster_id
-		FROM commodore.dvr_recordings
-		WHERE dvr_hash = $1 AND tenant_id = $2
-	`, req.DvrHash, tenantID).Scan(&streamIDValue, &originClusterID); streamErr == nil && streamIDValue != "" {
-		streamID = &streamIDValue
+	if routeErr == nil && route.StreamID != "" {
+		streamID = &route.StreamID
 	}
 
-	foghornClient, err := s.resolveFoghornForArtifact(ctx, tenantID, originClusterID.String)
+	foghornClient, err := s.resolveFoghornForArtifact(ctx, tenantID, route.OriginClusterID.String)
 	if err != nil {
 		return nil, err
 	}
@@ -9421,14 +8565,14 @@ func (s *CommodoreServer) DeleteDVR(ctx context.Context, req *sharedpb.DeleteDVR
 	}
 
 	// Look up DVR info for deletion event and cluster-aware routing
-	var streamID string
-	var originClusterID sql.NullString
-	_ = s.db.QueryRowContext(ctx, `
-		SELECT stream_id::text, origin_cluster_id FROM commodore.dvr_recordings
-		WHERE dvr_hash = $1 AND tenant_id = $2
-	`, req.DvrHash, tenantID).Scan(&streamID, &originClusterID)
+	route, routeErr := commodoredb.New(s.db).GetDVRDeletionRoute(ctx, commodoredb.GetDVRDeletionRouteParams{
+		DvrHash: req.DvrHash, TenantID: tenantID,
+	})
+	if routeErr != nil && !errors.Is(routeErr, sql.ErrNoRows) {
+		s.logger.WithError(routeErr).WithField("dvr_hash", req.DvrHash).Debug("DVR deletion route lookup failed; falling back to tenant route")
+	}
 
-	foghornClient, err := s.resolveFoghornForArtifact(ctx, tenantID, originClusterID.String)
+	foghornClient, err := s.resolveFoghornForArtifact(ctx, tenantID, route.OriginClusterID.String)
 	if err != nil {
 		return nil, err
 	}
@@ -9446,7 +8590,7 @@ func (s *CommodoreServer) DeleteDVR(ctx context.Context, req *sharedpb.DeleteDVR
 	// dvr_chapter_playback mapping in the same projection. Commodore performs no local catalog mutation,
 	// so no non-authoritative revision can resurrect a deleted asset.
 	if resp.Success {
-		s.emitArtifactEvent(ctx, eventArtifactDeleted, tenantID, userID, ipcpb.ArtifactEvent_ARTIFACT_TYPE_DVR, req.DvrHash, streamID, "deleted", nil)
+		s.emitArtifactEvent(ctx, eventArtifactDeleted, tenantID, userID, ipcpb.ArtifactEvent_ARTIFACT_TYPE_DVR, req.DvrHash, route.StreamID, "deleted", nil)
 	}
 
 	return resp, nil
@@ -9509,16 +8653,15 @@ func (s *CommodoreServer) ResolveViewerEndpoint(ctx context.Context, req *shared
 		// skip rather than run an unscoped stream lookup — no cross-tenant read path
 		// (mirrors finalizeIngestResponse).
 		if streamID != "" && tenantID != "" {
-			var title, description sql.NullString
-			err := s.db.QueryRowContext(ctx, `
-				SELECT title, description FROM commodore.streams WHERE id = $1 AND tenant_id = $2
-			`, streamID, tenantID).Scan(&title, &description)
+			metadataRow, err := commodoredb.New(s.db).GetStreamDisplayMetadata(ctx, commodoredb.GetStreamDisplayMetadataParams{
+				ID: streamID, TenantID: tenantID,
+			})
 			if err == nil {
-				if title.Valid && title.String != "" {
-					resp.Metadata.Title = &title.String
+				if metadataRow.Title != "" {
+					resp.Metadata.Title = &metadataRow.Title
 				}
-				if description.Valid && description.String != "" {
-					resp.Metadata.Description = &description.String
+				if metadataRow.Description.Valid && metadataRow.Description.String != "" {
+					resp.Metadata.Description = &metadataRow.Description.String
 				}
 			}
 			// Silently ignore errors - enrichment is best-effort, don't fail the request
@@ -9532,23 +8675,7 @@ func (s *CommodoreServer) normalizeArtifactPlaybackID(ctx context.Context, conte
 	if s == nil || s.db == nil || contentID == "" {
 		return "", false, nil
 	}
-	var playbackID string
-	err := s.db.QueryRowContext(ctx, `
-		SELECT playback_id
-		  FROM (
-			SELECT playback_id
-			  FROM commodore.clips
-			 WHERE clip_hash = $1			UNION ALL
-			SELECT playback_id
-			  FROM commodore.vod_assets
-			 WHERE vod_hash = $1			UNION ALL
-			SELECT playback_id
-			  FROM commodore.dvr_recordings
-			 WHERE dvr_hash = $1		  ) resolved
-		 WHERE playback_id IS NOT NULL
-		   AND playback_id != ''
-		 LIMIT 1
-	`, contentID).Scan(&playbackID)
+	playbackID, err := commodoredb.New(s.db).NormalizeArtifactPlaybackID(ctx, contentID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
 	}
@@ -9623,16 +8750,15 @@ func (s *CommodoreServer) finalizeIngestResponse(ctx context.Context, callerTena
 			scopeTenant = md.TenantId
 		}
 		if scopeTenant != "" {
-			var title, description sql.NullString
-			err := s.db.QueryRowContext(ctx, `
-				SELECT title, description FROM commodore.streams WHERE id = $1 AND tenant_id = $2
-			`, md.StreamId, scopeTenant).Scan(&title, &description)
+			metadataRow, err := commodoredb.New(s.db).GetStreamDisplayMetadata(ctx, commodoredb.GetStreamDisplayMetadataParams{
+				ID: md.StreamId, TenantID: scopeTenant,
+			})
 			if err == nil {
-				if title.Valid && title.String != "" {
-					md.Title = &title.String
+				if metadataRow.Title != "" {
+					md.Title = &metadataRow.Title
 				}
-				if description.Valid && description.String != "" {
-					md.Description = &description.String
+				if metadataRow.Description.Valid && metadataRow.Description.String != "" {
+					md.Description = &metadataRow.Description.String
 				}
 			}
 			// Silently ignore errors - enrichment is best-effort
@@ -10015,15 +9141,21 @@ func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *sharedpb.Cre
 	// (or a definitive rejection here) removes it.
 	intentRequestID := uuid.New().String()
 	regErr := fwdb.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
-		if _, execErr := tx.ExecContext(ctx, `
-			INSERT INTO commodore.vod_assets (
-				id, tenant_id, user_id, vod_hash, internal_name, playback_id,
-				title, description, filename, content_type, size_bytes,
-				origin_cluster_id, retention_until, created_at, updated_at
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())
-		`, vodID, tenantID, userID, vodHash, artifactInternalName, playbackID,
-			req.GetTitle(), req.GetDescription(), req.Filename, req.GetContentType(), req.SizeBytes,
-			vodRoute.clusterID, retentionUntil); execErr != nil {
+		if execErr := commodoredb.New(tx).InsertVODUploadRegistration(ctx, commodoredb.InsertVODUploadRegistrationParams{
+			ID:              vodID,
+			TenantID:        tenantID,
+			UserID:          userID,
+			VodHash:         vodHash,
+			InternalName:    artifactInternalName,
+			PlaybackID:      playbackID,
+			Title:           sql.NullString{String: req.GetTitle(), Valid: true},
+			Description:     sql.NullString{String: req.GetDescription(), Valid: true},
+			Filename:        req.Filename,
+			ContentType:     sql.NullString{String: req.GetContentType(), Valid: true},
+			SizeBytes:       sql.NullInt64{Int64: req.SizeBytes, Valid: true},
+			OriginClusterID: sql.NullString{String: vodRoute.clusterID, Valid: true},
+			RetentionUntil:  retentionUntil,
+		}); execErr != nil {
 			return execErr
 		}
 		// A retry of the same (tenant, vod) reuses the intent's ALREADY-PERSISTED
@@ -10171,11 +9303,9 @@ func (s *CommodoreServer) GetVodUploadStatus(ctx context.Context, req *sharedpb.
 		return nil, status.Error(codes.NotFound, "upload not found")
 	}
 
-	var playbackID string
-	err = s.db.QueryRowContext(ctx, `
-		SELECT playback_id
-		FROM commodore.vod_assets
-		WHERE tenant_id = $1 AND vod_hash = $2	`, tenantID, resp.ArtifactHash).Scan(&playbackID)
+	playbackID, err := commodoredb.New(s.db).GetVODPlaybackID(ctx, commodoredb.GetVODPlaybackIDParams{
+		TenantID: tenantID, VodHash: resp.ArtifactHash,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithFields(logging.Fields{
 			"tenant_id":      tenantID,
@@ -10291,66 +9421,23 @@ func (s *CommodoreServer) ListStorageArtifacts(ctx context.Context, req *commodo
 		return nil, status.Errorf(codes.InvalidArgument, "unknown status filter %q (want ready|failed|processing|expired)", req.GetStatus())
 	}
 
-	args := []any{tenantID}
-	filters := []string{"TRUE"}
-	argIdx := 2
-
-	if streamID := req.GetStreamId(); streamID != "" {
-		filters = append(filters, fmt.Sprintf("stream_id = $%d", argIdx))
-		args = append(args, streamID)
-		argIdx++
-	}
-
-	if len(req.GetKinds()) > 0 {
-		var placeholders []string
-		for _, kind := range req.GetKinds() {
-			normalized := strings.ToLower(strings.TrimSpace(kind))
-			switch normalized {
-			case "vod", "dvr", "chapter", "clip":
-				placeholders = append(placeholders, fmt.Sprintf("$%d", argIdx))
-				args = append(args, normalized)
-				argIdx++
-			default:
-				// Reject an unknown kind rather than dropping it — a request whose kinds ALL normalize
-				// away would otherwise fall through to an unfiltered scan and return every kind.
-				return nil, status.Errorf(codes.InvalidArgument, "unknown kind filter %q (want vod|dvr|chapter|clip)", kind)
-			}
+	normalizedKinds := make([]string, 0, len(req.GetKinds()))
+	for _, kind := range req.GetKinds() {
+		normalized := strings.ToLower(strings.TrimSpace(kind))
+		switch normalized {
+		case "vod", "dvr", "chapter", "clip":
+			normalizedKinds = append(normalizedKinds, normalized)
+		default:
+			return nil, status.Errorf(codes.InvalidArgument, "unknown kind filter %q (want vod|dvr|chapter|clip)", kind)
 		}
-		filters = append(filters, fmt.Sprintf("kind IN (%s)", strings.Join(placeholders, ", ")))
 	}
-
-	if status := strings.TrimSpace(req.GetStatus()); status != "" {
-		filters = append(filters, fmt.Sprintf("status = $%d", argIdx))
-		args = append(args, status)
-		argIdx++
-	}
-
+	var artifactHashes []string
 	if len(req.GetArtifactHashes()) > 0 {
-		// Batch exact lookup (Top Assets enrichment): one query for many hashes, replacing a
-		// fan-out of single-hash calls. Takes precedence over single artifact_hash and search. A
-		// batch that cleans to nothing (all blank/duplicate) must match NOTHING, never fall through
-		// to an unfiltered tenant scan.
-		batch := cleanArtifactHashes(req.GetArtifactHashes())
-		if len(batch) == 0 {
-			filters = append(filters, "FALSE")
-		} else {
-			filters = append(filters, fmt.Sprintf("artifact_hash = ANY($%d)", argIdx))
-			args = append(args, pq.Array(batch))
-			// An exact-hash batch returns EVERY accepted hash in a single page: override the generic
-			// page clamp (100) so a 101–500 batch — already bounded by maxBatchArtifactHashes above —
-			// isn't silently truncated. Enrichment callers depend on receiving all requested hashes.
-			limit = len(batch)
+		artifactHashes = cleanArtifactHashes(req.GetArtifactHashes())
+		if len(artifactHashes) > 0 {
+			limit = len(artifactHashes)
 		}
-	} else if artifactHash := strings.TrimSpace(req.GetArtifactHash()); artifactHash != "" {
-		// Exact detail lookup — takes precedence over fuzzy search. Last filter, so
-		// argIdx isn't advanced.
-		filters = append(filters, fmt.Sprintf("artifact_hash = $%d", argIdx))
-		args = append(args, artifactHash)
-	} else if search := strings.TrimSpace(req.GetSearch()); search != "" {
-		filters = append(filters, fmt.Sprintf("(LOWER(title) LIKE $%d OR LOWER(artifact_hash) LIKE $%d OR LOWER(stream_title) LIKE $%d OR LOWER(secondary_label) LIKE $%d)", argIdx, argIdx, argIdx, argIdx))
-		args = append(args, "%"+strings.ToLower(search)+"%")
 	}
-
 	sortField := "created_at"
 	switch req.GetSortField() {
 	case "title", "kind", "size_bytes", "expires_at":
@@ -10360,305 +9447,102 @@ func (s *CommodoreServer) ListStorageArtifacts(ctx context.Context, req *commodo
 	if strings.EqualFold(req.GetSortDirection(), "asc") {
 		sortDirection = "ASC"
 	}
-	nulls := "NULLS LAST"
-	if sortField == "created_at" && sortDirection == "DESC" {
-		nulls = ""
-	}
-
-	baseQuery := `
-		SELECT kind, id, artifact_hash, playback_id, stream_id, stream_title, title, secondary_label,
-		       size_bytes, status, storage_location, created_at, updated_at, expires_at,
-		       retention_source, origin_type, origin_id, storage_cluster_id, has_thumbnails, duration_ms,
-		       tracks, sync_status, is_synced, is_finalized, description, error_message, thumbnail_serving_cluster
-		FROM (
-			SELECT
-				CASE WHEN COALESCE(v.origin_type, '') = 'dvr_chapter' THEN 'chapter' ELSE 'vod' END AS kind,
-				v.id::text AS id,
-				v.vod_hash AS artifact_hash,
-				COALESCE(v.playback_id, '') AS playback_id,
-				COALESCE(v.stream_id::text, '') AS stream_id,
-				COALESCE(st.title, '') AS stream_title,
-				COALESCE(NULLIF(v.title, ''), NULLIF(v.filename, ''), v.vod_hash) AS title,
-				COALESCE(NULLIF(v.filename, ''), v.content_type, '') AS secondary_label,
-				v.size_bytes AS size_bytes,
-				CASE WHEN v.retention_until IS NOT NULL AND v.retention_until <= NOW() THEN 'expired'
-				     WHEN v.lifecycle_status IN ('failed', 'aborted') OR v.sync_status IN ('failed', 'lost_local') THEN 'failed'
-				     WHEN v.lifecycle_status IN ('ready', 'completed', 'completed_partial') OR COALESCE(v.is_synced, false) THEN 'ready'
-				     ELSE 'processing' END AS status,
-				v.storage_location AS storage_location,
-				v.created_at AS created_at,
-				v.updated_at AS updated_at,
-				v.retention_until AS expires_at,
-				COALESCE(v.retention_source, '') AS retention_source,
-				COALESCE(v.origin_type, '') AS origin_type,
-				COALESCE(v.origin_id, '') AS origin_id,
-				COALESCE(v.storage_cluster_id, v.origin_cluster_id, '') AS storage_cluster_id,
-				v.has_thumbnails AS has_thumbnails,
-				v.duration AS duration_ms,
-				v.tracks AS tracks,
-				v.sync_status AS sync_status,
-				v.is_synced AS is_synced,
-				v.is_finalized AS is_finalized,
-				COALESCE(v.description, '') AS description,
-				COALESCE(v.error_message, '') AS error_message,
-				COALESCE(v.thumbnail_serving_cluster_id, v.storage_cluster_id, v.origin_cluster_id, '') AS thumbnail_serving_cluster
-			FROM commodore.vod_assets v
-			LEFT JOIN commodore.streams st ON st.id = v.stream_id AND st.tenant_id = v.tenant_id
-			WHERE v.tenant_id = $1
-			  AND (v.library_visible = true OR COALESCE(v.origin_type, '') = 'dvr_chapter')
-
-			UNION ALL
-
-			SELECT
-				'dvr' AS kind,
-				d.id::text AS id,
-				d.dvr_hash AS artifact_hash,
-				COALESCE(d.playback_id, '') AS playback_id,
-				COALESCE(d.stream_id::text, '') AS stream_id,
-				COALESCE(st.title, '') AS stream_title,
-				COALESCE(st.title, d.internal_name, d.dvr_hash) AS title,
-				COALESCE(d.internal_name, '') AS secondary_label,
-				d.size_bytes AS size_bytes,
-				CASE WHEN d.retention_until IS NOT NULL AND d.retention_until <= NOW() THEN 'expired'
-				     WHEN d.lifecycle_status IN ('failed', 'aborted') OR d.sync_status IN ('failed', 'lost_local') THEN 'failed'
-				     WHEN d.lifecycle_status IN ('ready', 'completed', 'completed_partial') OR COALESCE(d.is_synced, false) THEN 'ready'
-				     ELSE 'processing' END AS status,
-				d.storage_location AS storage_location,
-				d.created_at AS created_at,
-				d.updated_at AS updated_at,
-				d.retention_until AS expires_at,
-				COALESCE(d.retention_source, '') AS retention_source,
-				'' AS origin_type,
-				'' AS origin_id,
-				COALESCE(d.storage_cluster_id, d.origin_cluster_id, '') AS storage_cluster_id,
-				d.has_thumbnails AS has_thumbnails,
-				d.duration AS duration_ms,
-				d.tracks AS tracks,
-				d.sync_status AS sync_status,
-				d.is_synced AS is_synced,
-				d.is_finalized AS is_finalized,
-				'' AS description,
-				COALESCE(d.error_message, '') AS error_message,
-				COALESCE(d.thumbnail_serving_cluster_id, d.storage_cluster_id, d.origin_cluster_id, '') AS thumbnail_serving_cluster
-			FROM commodore.dvr_recordings d
-			LEFT JOIN commodore.streams st ON st.id = d.stream_id AND st.tenant_id = d.tenant_id
-			WHERE d.tenant_id = $1
-
-			UNION ALL
-
-			SELECT
-				'clip' AS kind,
-				c.id::text AS id,
-				c.clip_hash AS artifact_hash,
-				COALESCE(c.playback_id, '') AS playback_id,
-				COALESCE(c.stream_id::text, '') AS stream_id,
-				COALESCE(st.title, '') AS stream_title,
-				COALESCE(NULLIF(c.title, ''), c.clip_hash) AS title,
-				COALESCE(c.clip_mode, '') AS secondary_label,
-				c.size_bytes AS size_bytes,
-				CASE WHEN c.retention_until IS NOT NULL AND c.retention_until <= NOW() THEN 'expired'
-				     WHEN c.lifecycle_status IN ('failed', 'aborted') OR c.sync_status IN ('failed', 'lost_local') THEN 'failed'
-				     WHEN c.lifecycle_status IN ('ready', 'completed', 'completed_partial') OR COALESCE(c.is_synced, false) THEN 'ready'
-				     ELSE 'processing' END AS status,
-				c.storage_location AS storage_location,
-				c.created_at AS created_at,
-				c.updated_at AS updated_at,
-				c.retention_until AS expires_at,
-				COALESCE(c.retention_source, '') AS retention_source,
-				'' AS origin_type,
-				'' AS origin_id,
-				COALESCE(c.storage_cluster_id, c.origin_cluster_id, '') AS storage_cluster_id,
-				c.has_thumbnails AS has_thumbnails,
-				c.duration AS duration_ms,
-				c.tracks AS tracks,
-				c.sync_status AS sync_status,
-				c.is_synced AS is_synced,
-				c.is_finalized AS is_finalized,
-				COALESCE(c.description, '') AS description,
-				COALESCE(c.error_message, '') AS error_message,
-				COALESCE(c.thumbnail_serving_cluster_id, c.storage_cluster_id, c.origin_cluster_id, '') AS thumbnail_serving_cluster
-			FROM commodore.clips c
-			LEFT JOIN commodore.streams st ON st.id = c.stream_id AND st.tenant_id = c.tenant_id
-			WHERE c.tenant_id = $1
-		) artifacts`
-
-	whereClause := strings.Join(filters, " AND ")
-	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM (%s WHERE %s) counted", baseQuery, whereClause)
-	var total int32
-	if countErr := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); countErr != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", countErr)
-	}
-
-	// Authoritative per-kind facet counts under the same search/stream scope but WITHOUT
-	// the kind filter, so the UI's per-kind tabs show true account totals rather than
-	// page-local counts. Built with an independent arg list to avoid placeholder shifts.
-	facetArgs := []any{tenantID}
-	facetFilters := []string{"TRUE"}
-	fIdx := 2
-	if streamID := req.GetStreamId(); streamID != "" {
-		facetFilters = append(facetFilters, fmt.Sprintf("stream_id = $%d", fIdx))
-		facetArgs = append(facetArgs, streamID)
-		fIdx++
-	}
-	if status := strings.TrimSpace(req.GetStatus()); status != "" {
-		facetFilters = append(facetFilters, fmt.Sprintf("status = $%d", fIdx))
-		facetArgs = append(facetArgs, status)
-		fIdx++
-	}
-	if len(req.GetArtifactHashes()) > 0 {
-		batch := cleanArtifactHashes(req.GetArtifactHashes())
-		if len(batch) == 0 {
-			facetFilters = append(facetFilters, "FALSE")
-		} else {
-			facetFilters = append(facetFilters, fmt.Sprintf("artifact_hash = ANY($%d)", fIdx))
-			facetArgs = append(facetArgs, pq.Array(batch))
-		}
-	} else if artifactHash := strings.TrimSpace(req.GetArtifactHash()); artifactHash != "" {
-		facetFilters = append(facetFilters, fmt.Sprintf("artifact_hash = $%d", fIdx))
-		facetArgs = append(facetArgs, artifactHash)
-	} else if search := strings.TrimSpace(req.GetSearch()); search != "" {
-		facetFilters = append(facetFilters, fmt.Sprintf("(LOWER(title) LIKE $%d OR LOWER(artifact_hash) LIKE $%d OR LOWER(stream_title) LIKE $%d OR LOWER(secondary_label) LIKE $%d)", fIdx, fIdx, fIdx, fIdx))
-		facetArgs = append(facetArgs, "%"+strings.ToLower(search)+"%")
-	}
-	kindCounts := map[string]int32{}
-	facetQuery := fmt.Sprintf("SELECT kind, COUNT(*) FROM (%s WHERE %s) f GROUP BY kind", baseQuery, strings.Join(facetFilters, " AND "))
-	facetErr := func() error {
-		frows, ferr := s.db.QueryContext(ctx, facetQuery, facetArgs...)
-		if ferr != nil {
-			return ferr
-		}
-		defer func() { _ = frows.Close() }()
-		for frows.Next() {
-			var k string
-			var c int32
-			if scanErr := frows.Scan(&k, &c); scanErr != nil {
-				return scanErr
-			}
-			kindCounts[k] = c
-		}
-		return frows.Err()
-	}()
-	if facetErr != nil {
-		return nil, status.Errorf(codes.Internal, "facet count error: %v", facetErr)
-	}
-
-	dataArgs := append([]any{}, args...)
-	limitArg := len(dataArgs) + 1
-	offsetArg := len(dataArgs) + 2
-	dataArgs = append(dataArgs, limit+1, offset)
-	dataQuery := fmt.Sprintf(`%s WHERE %s ORDER BY %s %s %s, created_at DESC, artifact_hash DESC LIMIT $%d OFFSET $%d`,
-		baseQuery, whereClause, sortField, sortDirection, nulls, limitArg, offsetArg)
-
-	rows, err := s.db.QueryContext(ctx, dataQuery, dataArgs...)
+	catalog, err := commodoredb.New(s.db).ListStorageArtifactCatalog(ctx, commodoredb.StorageArtifactFilter{
+		TenantID:       tenantID,
+		StreamID:       req.GetStreamId(),
+		Status:         strings.TrimSpace(req.GetStatus()),
+		ArtifactHash:   strings.TrimSpace(req.GetArtifactHash()),
+		ArtifactHashes: artifactHashes,
+		Search:         strings.TrimSpace(req.GetSearch()),
+		Kinds:          normalizedKinds,
+		SortField:      sortField,
+		SortDirection:  sortDirection,
+		Limit:          limit,
+		Offset:         offset,
+	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+		return nil, status.Errorf(codes.Internal, "storage artifact catalog query: %v", err)
 	}
-	defer func() { _ = rows.Close() }()
 
-	var artifacts []*commodorepb.StorageArtifactInfo
-	for rows.Next() {
-		var (
-			kind, id, hash, playbackID, streamID, streamTitle, title, secondary string
-			sizeBytes                                                           sql.NullInt64
-			statusText, storageLocation                                         sql.NullString
-			isSynced, isFinalized                                               sql.NullBool
-			syncStatus                                                          sql.NullString
-			createdAt, updatedAt                                                time.Time
-			expiresAt                                                           sql.NullTime
-			retentionSource, originType, originID, storageClusterID             string
-			thumbnailServingCluster                                             string
-			hasThumbnails                                                       bool
-			durationMs                                                          sql.NullInt64
-			tracksJSON                                                          sql.NullString
-			description, errorMessage                                           string
-		)
-		if err := rows.Scan(&kind, &id, &hash, &playbackID, &streamID, &streamTitle, &title, &secondary,
-			&sizeBytes, &statusText, &storageLocation, &createdAt, &updatedAt, &expiresAt,
-			&retentionSource, &originType, &originID, &storageClusterID, &hasThumbnails, &durationMs, &tracksJSON,
-			&syncStatus, &isSynced, &isFinalized, &description, &errorMessage, &thumbnailServingCluster); err != nil {
-			// Fail closed: a scan error means a corrupt/partial row; returning a
-			// truncated catalog silently would misrepresent the account inventory.
-			return nil, status.Errorf(codes.Internal, "scan storage artifact: %v", err)
-		}
-
+	artifacts := make([]*commodorepb.StorageArtifactInfo, 0, len(catalog.Rows))
+	for _, row := range catalog.Rows {
 		artifact := &commodorepb.StorageArtifactInfo{
-			Kind:             kind,
-			Id:               id,
-			ArtifactHash:     hash,
-			StreamTitle:      streamTitle,
-			Title:            title,
-			SecondaryLabel:   secondary,
-			Status:           statusText.String,
-			CreatedAt:        timestamppb.New(createdAt),
-			UpdatedAt:        timestamppb.New(updatedAt),
-			StorageClusterId: storageClusterID,
-			HasThumbnails:    hasThumbnails,
+			Kind:             row.Kind,
+			Id:               row.ID,
+			ArtifactHash:     row.ArtifactHash,
+			StreamTitle:      row.StreamTitle,
+			Title:            row.Title,
+			SecondaryLabel:   row.SecondaryLabel,
+			Status:           row.Status.String,
+			CreatedAt:        timestamppb.New(row.CreatedAt),
+			UpdatedAt:        timestamppb.New(row.UpdatedAt),
+			StorageClusterId: row.StorageClusterID,
+			HasThumbnails:    row.HasThumbnails,
 		}
-		if playbackID != "" {
-			artifact.PlaybackId = &playbackID
+		if row.PlaybackID != "" {
+			artifact.PlaybackId = &row.PlaybackID
 		}
-		if streamID != "" {
-			artifact.StreamId = &streamID
+		if row.StreamID != "" {
+			artifact.StreamId = &row.StreamID
 		}
-		if sizeBytes.Valid {
-			value := sizeBytes.Int64
+		if row.SizeBytes.Valid {
+			value := row.SizeBytes.Int64
 			artifact.SizeBytes = &value
 		}
-		if storageLocation.Valid && storageLocation.String != "" {
-			value := storageLocation.String
+		if row.StorageLocation.Valid && row.StorageLocation.String != "" {
+			value := row.StorageLocation.String
 			artifact.StorageLocation = &value
 		}
-		if expiresAt.Valid {
-			artifact.ExpiresAt = timestamppb.New(expiresAt.Time)
+		if row.ExpiresAt.Valid {
+			artifact.ExpiresAt = timestamppb.New(row.ExpiresAt.Time)
 		}
-		if retentionSource != "" {
-			artifact.RetentionSource = &retentionSource
+		if row.RetentionSource != "" {
+			artifact.RetentionSource = &row.RetentionSource
 		}
-		if originType != "" {
-			artifact.OriginType = &originType
+		if row.OriginType != "" {
+			artifact.OriginType = &row.OriginType
 		}
-		if originID != "" {
-			artifact.OriginId = &originID
+		if row.OriginID != "" {
+			artifact.OriginId = &row.OriginID
 		}
-		if description != "" {
-			artifact.Description = &description
+		if row.Description != "" {
+			artifact.Description = &row.Description
 		}
-		if errorMessage != "" {
-			artifact.ErrorMessage = &errorMessage
+		if row.ErrorMessage != "" {
+			artifact.ErrorMessage = &row.ErrorMessage
 		}
-		if durationMs.Valid {
-			value := durationMs.Int64
+		if row.DurationMs.Valid {
+			value := row.DurationMs.Int64
 			artifact.DurationMs = &value
 		}
-		if tracksJSON.Valid && tracksJSON.String != "" {
-			parsed, terr := commodoreclient.UnmarshalMediaTracks([]byte(tracksJSON.String))
-			if terr != nil {
-				// Fail closed on malformed track JSON rather than silently dropping it.
-				return nil, status.Errorf(codes.Internal, "decode tracks for %s: %v", hash, terr)
+		if row.Tracks.Valid && row.Tracks.String != "" {
+			parsed, trackErr := commodoreclient.UnmarshalMediaTracks([]byte(row.Tracks.String))
+			if trackErr != nil {
+				return nil, status.Errorf(codes.Internal, "decode tracks for %s: %v", row.ArtifactHash, trackErr)
 			}
 			artifact.Tracks = parsed
 		}
-		// Durable S3 lifecycle projected from foghorn.artifacts (reconciler-repaired).
-		if syncStatus.Valid && syncStatus.String != "" {
-			v := syncStatus.String
-			artifact.SyncStatus = &v
+		if row.SyncStatus.Valid && row.SyncStatus.String != "" {
+			value := row.SyncStatus.String
+			artifact.SyncStatus = &value
 		}
-		if isSynced.Valid {
-			v := isSynced.Bool
-			artifact.IsSynced = &v
+		if row.IsSynced.Valid {
+			value := row.IsSynced.Bool
+			artifact.IsSynced = &value
 		}
-		if isFinalized.Valid {
-			v := isFinalized.Bool
-			artifact.IsFinalized = &v
+		if row.IsFinalized.Valid {
+			value := row.IsFinalized.Bool
+			artifact.IsFinalized = &value
 		}
-		artifact.ThumbnailAssets = s.buildArtifactThumbnailAssets(hasThumbnails, sql.NullString{String: thumbnailServingCluster, Valid: thumbnailServingCluster != ""}, hash)
-
+		artifact.ThumbnailAssets = s.buildArtifactThumbnailAssets(
+			row.HasThumbnails,
+			sql.NullString{String: row.ThumbnailServingCluster, Valid: row.ThumbnailServingCluster != ""},
+			row.ArtifactHash,
+		)
 		artifacts = append(artifacts, artifact)
 	}
-	if rowsErr := rows.Err(); rowsErr != nil {
-		return nil, status.Errorf(codes.Internal, "iterate storage artifacts: %v", rowsErr)
-	}
-
+	total := catalog.Total
+	kindCounts := catalog.KindCounts
 	hasNext := len(artifacts) > limit
 	if hasNext {
 		artifacts = artifacts[:limit]
@@ -10681,11 +9565,12 @@ func (s *CommodoreServer) DeleteVodAsset(ctx context.Context, req *sharedpb.Dele
 	}
 
 	// Look up origin cluster for cluster-aware routing
-	var originClusterID sql.NullString
-	_ = s.db.QueryRowContext(ctx, `
-		SELECT origin_cluster_id FROM commodore.vod_assets
-		WHERE vod_hash = $1 AND tenant_id = $2
-	`, req.ArtifactHash, tenantID).Scan(&originClusterID)
+	originClusterID, routeErr := commodoredb.New(s.db).GetVODOriginCluster(ctx, commodoredb.GetVODOriginClusterParams{
+		VodHash: req.ArtifactHash, TenantID: tenantID,
+	})
+	if routeErr != nil && !errors.Is(routeErr, sql.ErrNoRows) {
+		s.logger.WithError(routeErr).WithField("artifact_hash", req.ArtifactHash).Debug("VOD deletion route lookup failed; falling back to tenant route")
+	}
 
 	foghornClient, err := s.resolveFoghornForArtifact(ctx, tenantID, originClusterID.String)
 	if err != nil {
@@ -10872,14 +9757,7 @@ func (s *CommodoreServer) GetTenantUserCount(ctx context.Context, req *commodore
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
 
-	var activeCount, totalCount int32
-	err := s.db.QueryRowContext(ctx, `
-		SELECT
-			COUNT(*) FILTER (WHERE is_active = true),
-			COUNT(*)
-		FROM commodore.users
-		WHERE tenant_id = $1
-	`, tenantID).Scan(&activeCount, &totalCount)
+	counts, err := commodoredb.New(s.db).GetTenantUserCounts(ctx, tenantID)
 
 	if err != nil {
 		s.logger.WithFields(logging.Fields{
@@ -10890,8 +9768,8 @@ func (s *CommodoreServer) GetTenantUserCount(ctx context.Context, req *commodore
 	}
 
 	return &commodorepb.GetTenantUserCountResponse{
-		ActiveCount: activeCount,
-		TotalCount:  totalCount,
+		ActiveCount: counts.ActiveCount,
+		TotalCount:  counts.TotalCount,
 	}, nil
 }
 
@@ -10904,19 +9782,7 @@ func (s *CommodoreServer) GetTenantPrimaryUser(ctx context.Context, req *commodo
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
 
-	var userID, email string
-	var firstName, lastName sql.NullString
-
-	// Try to find an admin first, then fall back to any user
-	err := s.db.QueryRowContext(ctx, `
-		SELECT id, email, first_name, last_name
-		FROM commodore.users
-		WHERE tenant_id = $1 AND is_active = true AND email IS NOT NULL AND email <> ''
-		ORDER BY
-			CASE role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END,
-			created_at ASC
-		LIMIT 1
-	`, tenantID).Scan(&userID, &email, &firstName, &lastName)
+	primary, err := commodoredb.New(s.db).GetTenantPrimaryUser(ctx, tenantID)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "no users found for tenant")
@@ -10932,19 +9798,19 @@ func (s *CommodoreServer) GetTenantPrimaryUser(ctx context.Context, req *commodo
 
 	// Build display name
 	name := ""
-	if firstName.Valid && firstName.String != "" {
-		name = firstName.String
+	if primary.FirstName.Valid && primary.FirstName.String != "" {
+		name = primary.FirstName.String
 	}
-	if lastName.Valid && lastName.String != "" {
+	if primary.LastName.Valid && primary.LastName.String != "" {
 		if name != "" {
 			name += " "
 		}
-		name += lastName.String
+		name += primary.LastName.String
 	}
 
 	return &commodorepb.GetTenantPrimaryUserResponse{
-		UserId: userID,
-		Email:  email,
+		UserId: primary.ID,
+		Email:  primary.Email,
 		Name:   name,
 	}, nil
 }
@@ -10981,9 +9847,8 @@ func (s *CommodoreServer) CreateUserInTenant(ctx context.Context, req *commodore
 		return nil, status.Errorf(codes.NotFound, "tenant %s not found in Quartermaster: %v", tenantID, tenantErr)
 	}
 
-	// Check email uniqueness
-	var existingID string
-	err := s.db.QueryRowContext(ctx, `SELECT id FROM commodore.users WHERE email = $1`, email).Scan(&existingID)
+	queries := commodoredb.New(s.db)
+	_, err := queries.FindUserIDByEmail(ctx, sql.NullString{String: email, Valid: true})
 	if err == nil {
 		return nil, status.Error(codes.AlreadyExists, "user with this email already exists")
 	}
@@ -11000,10 +9865,14 @@ func (s *CommodoreServer) CreateUserInTenant(ctx context.Context, req *commodore
 	now := time.Now()
 	permissions := getDefaultPermissions(role)
 
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO commodore.users (id, tenant_id, email, password_hash, first_name, last_name, role, permissions, is_active, verified, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, true, $9, $9)
-	`, userID, tenantID, email, hashedPassword, req.GetFirstName(), req.GetLastName(), role, pq.Array(permissions), now)
+	err = queries.InsertVerifiedTenantUser(ctx, commodoredb.InsertVerifiedTenantUserParams{
+		ID: userID, TenantID: tenantID,
+		Email:        sql.NullString{String: email, Valid: true},
+		PasswordHash: sql.NullString{String: hashedPassword, Valid: true},
+		FirstName:    sql.NullString{String: req.GetFirstName(), Valid: true},
+		LastName:     sql.NullString{String: req.GetLastName(), Valid: true},
+		Role:         role, Permissions: permissions, CreatedAt: sql.NullTime{Time: now, Valid: true},
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to create user: %v", err)
 	}

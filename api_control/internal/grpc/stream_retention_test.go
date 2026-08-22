@@ -12,15 +12,15 @@ import (
 func i32ptr(v int32) *int32 { return &v }
 
 const (
-	streamOwnerSQL    = `SELECT id::text FROM commodore\.streams WHERE id = \$1::uuid AND tenant_id = \$2::uuid`
-	streamUpdateSQL   = `UPDATE commodore\.streams SET`
-	streamReadbackSQL = `SELECT dvr_retention_days_override, clip_retention_days_override\s+FROM commodore\.streams\s+WHERE id = \$1::uuid`
+	streamOwnerSQL  = `SELECT id::text AS stream_id,[\s\S]*FROM commodore\.streams[\s\S]*WHERE id = \$1::uuid[\s\S]*AND tenant_id = \$2::uuid`
+	streamUpdateSQL = `UPDATE commodore\.streams[\s\S]*RETURNING dvr_retention_days_override, clip_retention_days_override`
 )
 
 func expectStreamOwned(mock sqlmock.Sqlmock, streamID, tenant string) {
 	mock.ExpectQuery(streamOwnerSQL).
 		WithArgs(streamID, tenant).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(streamID))
+		WillReturnRows(sqlmock.NewRows([]string{"stream_id", "dvr_retention_days_override", "clip_retention_days_override"}).
+			AddRow(streamID, nil, nil))
 }
 
 func TestSetStreamRetentionOverrides_SetDVRUnderCap(t *testing.T) {
@@ -30,12 +30,9 @@ func TestSetStreamRetentionOverrides_SetDVRUnderCap(t *testing.T) {
 	const stream = "22222222-2222-2222-2222-222222222222"
 
 	expectStreamOwned(mock, stream, tenant)
-	// nil purser → cap 30; 7 is under cap → written as-is. Third arg is the value.
-	mock.ExpectExec(streamUpdateSQL).
-		WithArgs(stream, tenant, int32(7)).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(streamReadbackSQL).
-		WithArgs(stream).
+	// nil purser → cap 30; 7 is under cap → written as-is in the DVR slot.
+	mock.ExpectQuery(streamUpdateSQL).
+		WithArgs(true, int32(7), false, nil, stream, tenant).
 		WillReturnRows(sqlmock.NewRows([]string{"dvr_retention_days_override", "clip_retention_days_override"}).
 			AddRow(int32(7), nil))
 
@@ -65,11 +62,8 @@ func TestSetStreamRetentionOverrides_ClampsOverCap(t *testing.T) {
 
 	expectStreamOwned(mock, stream, tenant)
 	// 90 > cap 30 → clamped to 30 in the UPDATE arg (the contract under test).
-	mock.ExpectExec(streamUpdateSQL).
-		WithArgs(stream, tenant, int32(30)).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(streamReadbackSQL).
-		WithArgs(stream).
+	mock.ExpectQuery(streamUpdateSQL).
+		WithArgs(true, int32(30), false, nil, stream, tenant).
 		WillReturnRows(sqlmock.NewRows([]string{"dvr_retention_days_override", "clip_retention_days_override"}).
 			AddRow(int32(30), nil))
 
@@ -95,12 +89,9 @@ func TestSetStreamRetentionOverrides_ClearClip(t *testing.T) {
 	const stream = "22222222-2222-2222-2222-222222222222"
 
 	expectStreamOwned(mock, stream, tenant)
-	// Clear sets the column to NULL — no value arg, only stream + tenant.
-	mock.ExpectExec(streamUpdateSQL).
-		WithArgs(stream, tenant).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(streamReadbackSQL).
-		WithArgs(stream).
+	// Clear selects the clip slot and passes SQL NULL as its value.
+	mock.ExpectQuery(streamUpdateSQL).
+		WithArgs(false, nil, true, nil, stream, tenant).
 		WillReturnRows(sqlmock.NewRows([]string{"dvr_retention_days_override", "clip_retention_days_override"}).
 			AddRow(nil, nil))
 

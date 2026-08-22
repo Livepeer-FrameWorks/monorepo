@@ -58,14 +58,14 @@ func TestResolveIdentifierRetriesStreamIDLookupOnRetryablePostgresErrors(t *test
 		Message: "schema version mismatch for table x: expected 2, got 1",
 	}
 	streamID := "11111111-1111-1111-1111-111111111111"
-	mock.ExpectQuery("FROM commodore.streams WHERE id").
-		WithArgs(streamID).
+	mock.ExpectQuery("ResolveIdentifierCatalog").
+		WithArgs(true, streamID).
 		WillReturnError(retryable)
-	mock.ExpectQuery("FROM commodore.streams WHERE id").
-		WithArgs(streamID).
+	mock.ExpectQuery("ResolveIdentifierCatalog").
+		WithArgs(true, streamID).
 		WillReturnRows(sqlmock.NewRows([]string{
-			"id", "tenant_id", "user_id", "internal_name", "is_recording_enabled", "requires_auth",
-		}).AddRow(streamID, "tenant-1", "user-1", "live+abc", true, false))
+			"tenant_id", "user_id", "internal_name", "identifier_type", "is_recording_enabled", "stream_id", "requires_auth",
+		}).AddRow("tenant-1", "user-1", "live+abc", "stream_id", true, streamID, false))
 
 	server := &CommodoreServer{db: db, dbMaxIdleConns: -1, logger: logrus.New()}
 	resp, err := server.ResolveIdentifier(context.Background(), &commodorepb.ResolveIdentifierRequest{

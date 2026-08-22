@@ -94,7 +94,7 @@ func TestListAPITokens(t *testing.T) {
 			WithArgs("u1", "t1").
 			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 		mock.ExpectQuery("FROM commodore.api_tokens").
-			WithArgs("u1", "t1").
+			WithArgs("u1", "t1", int32(51)).
 			WillReturnRows(sqlmock.NewRows([]string{
 				"id", "token_name", "permissions", "status", "last_used_at", "expires_at", "created_at",
 			}).AddRow("tok1", "ci", "{read,write}", "active", nil, nil, now))
@@ -133,7 +133,7 @@ func TestRevokeAPIToken(t *testing.T) {
 	t.Run("not_found", func(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
-		mock.ExpectQuery("SELECT token_name FROM commodore.api_tokens").
+		mock.ExpectQuery("UPDATE commodore.api_tokens").
 			WithArgs("tok1", "u1", "t1").
 			WillReturnError(sql.ErrNoRows)
 		_, err := s.RevokeAPIToken(ctxAs("u1", "t1", "owner"), &commodorepb.RevokeAPITokenRequest{TokenId: "tok1"})
@@ -146,12 +146,9 @@ func TestRevokeAPIToken(t *testing.T) {
 	t.Run("happy_path_deactivates_and_emits", func(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
-		mock.ExpectQuery("SELECT token_name FROM commodore.api_tokens").
+		mock.ExpectQuery("UPDATE commodore.api_tokens").
 			WithArgs("tok1", "u1", "t1").
 			WillReturnRows(sqlmock.NewRows([]string{"token_name"}).AddRow("ci"))
-		mock.ExpectExec("UPDATE commodore.api_tokens SET is_active = false").
-			WithArgs("tok1").
-			WillReturnResult(sqlmock.NewResult(0, 1))
 		expectOutboxInsert(mock)
 
 		resp, err := s.RevokeAPIToken(ctxAs("u1", "t1", "owner"), &commodorepb.RevokeAPITokenRequest{TokenId: "tok1"})

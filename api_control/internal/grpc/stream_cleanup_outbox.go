@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"frameworks/api_control/internal/database/commodoredb"
 	foghornclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -64,16 +65,13 @@ type streamCleanupOutboxRow struct {
 // delete the stream so a failed INSERT rolls back the deletion: no durable obligation, no deletion. Idempotent on
 // stream_id (a re-delete inserts nothing rather than erroring).
 func (s *CommodoreServer) enqueueStreamCleanupOutbox(ctx context.Context, exec outboxExecutor, streamID, tenantID string) error {
-	var dummy sql.NullString
-	row := exec.QueryRowContext(ctx, `
-		INSERT INTO commodore.stream_cleanup_outbox (stream_id, tenant_id)
-		VALUES ($1::uuid, $2::uuid)
-		ON CONFLICT (stream_id) DO NOTHING
-		RETURNING stream_id
-	`, streamID, tenantID)
+	_, err := commodoredb.New(exec).EnqueueStreamCleanup(ctx, commodoredb.EnqueueStreamCleanupParams{
+		StreamID: streamID,
+		TenantID: tenantID,
+	})
 	// ON CONFLICT DO NOTHING returns no row on conflict → sql.ErrNoRows, which is expected (idempotent no-op).
-	if scanErr := row.Scan(&dummy); scanErr != nil && scanErr != sql.ErrNoRows {
-		return fmt.Errorf("insert stream cleanup outbox row: %w", scanErr)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("insert stream cleanup outbox row: %w", err)
 	}
 	return nil
 }
@@ -100,14 +98,14 @@ func (s *CommodoreServer) recordStreamCleanupOutboxFailure(ctx context.Context, 
 	backoff := outbox.ComputeBackoff(streamCleanupOutboxConfig(), currentAttempts)
 	// Token-fenced ($5='' is the un-leased path): a stale worker whose lease was re-claimed cannot reschedule a row
 	// a peer owns. Tenant-fenced UNCONDITIONALLY ($6) per the repository-wide tenancy rule — no empty-tenant fallback.
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE commodore.stream_cleanup_outbox
-		SET attempts = $1,
-		    next_attempt_at = NOW() + ($2::bigint * INTERVAL '1 millisecond'),
-		    last_error = $3
-		WHERE stream_id = $4::uuid AND status = 'pending' AND ($5 = '' OR lease_token = $5)
-		  AND tenant_id = $6::uuid
-	`, nextAttempts, backoff.Milliseconds(), last, streamID, leaseToken, tenantID); err != nil {
+	if err := commodoredb.New(s.db).FailStreamCleanup(ctx, commodoredb.FailStreamCleanupParams{
+		Attempts:   int32(nextAttempts),
+		BackoffMs:  backoff.Milliseconds(),
+		LastError:  last,
+		StreamID:   streamID,
+		LeaseToken: leaseToken,
+		TenantID:   tenantID,
+	}); err != nil {
 		return fmt.Errorf("record stream cleanup outbox failure: %w", err)
 	}
 	if nextAttempts >= streamCleanupOutboxAlertAfterAttempts {
@@ -231,9 +229,10 @@ func (s *CommodoreServer) markStreamThumbnailCleanupAcked(ctx context.Context, s
 	if tenantID == "" {
 		return fmt.Errorf("mark thumbnail cleanup acked for %s: missing tenant in claim identity", streamID)
 	}
-	_, err := s.db.ExecContext(ctx,
-		`UPDATE commodore.stream_cleanup_outbox SET thumbnail_cleanup_acked_at = NOW() WHERE stream_id = $1::uuid AND thumbnail_cleanup_acked_at IS NULL AND tenant_id = $2::uuid`, streamID, tenantID)
-	return err
+	return commodoredb.New(s.db).MarkStreamThumbnailCleanupAcked(ctx, commodoredb.MarkStreamThumbnailCleanupAckedParams{
+		StreamID: streamID,
+		TenantID: tenantID,
+	})
 }
 
 // deleteStreamChildMedia idempotently deletes the stream's cascade-owned child media — clips and DVR recordings —
@@ -243,26 +242,17 @@ func (s *CommodoreServer) markStreamThumbnailCleanupAcked(ctx context.Context, s
 // no-op because each Foghorn delete is idempotent and already-projected children no longer enumerate.
 func (s *CommodoreServer) deleteStreamChildMedia(ctx context.Context, streamID, tenantID string) error {
 	type child struct{ hash, cluster string }
-	collect := func(query string) ([]child, error) {
-		rows, err := s.db.QueryContext(ctx, query, streamID, tenantID)
-		if err != nil {
-			return nil, err
-		}
-		defer rows.Close() //nolint:errcheck
-		var out []child
-		for rows.Next() {
-			var c child
-			if sErr := rows.Scan(&c.hash, &c.cluster); sErr != nil {
-				return nil, sErr
-			}
-			out = append(out, c)
-		}
-		return out, rows.Err()
-	}
-
-	clips, err := collect(`SELECT clip_hash, COALESCE(origin_cluster_id::text, '') FROM commodore.clips WHERE stream_id = $1::uuid AND tenant_id = $2::uuid`)
+	queries := commodoredb.New(s.db)
+	clipRows, err := queries.ListStreamCleanupClips(ctx, commodoredb.ListStreamCleanupClipsParams{
+		StreamID: streamID,
+		TenantID: tenantID,
+	})
 	if err != nil {
 		return fmt.Errorf("list stream clips: %w", err)
+	}
+	clips := make([]child, 0, len(clipRows))
+	for _, row := range clipRows {
+		clips = append(clips, child{hash: row.ClipHash, cluster: row.OriginClusterID})
 	}
 	for _, c := range clips {
 		if cErr := s.deleteOneChildArtifact(ctx, "clip", c.hash, c.cluster, tenantID); cErr != nil {
@@ -270,9 +260,16 @@ func (s *CommodoreServer) deleteStreamChildMedia(ctx context.Context, streamID, 
 		}
 	}
 
-	dvrs, err := collect(`SELECT dvr_hash, COALESCE(origin_cluster_id::text, '') FROM commodore.dvr_recordings WHERE stream_id = $1::uuid AND tenant_id = $2::uuid`)
+	dvrRows, err := queries.ListStreamCleanupDVRs(ctx, commodoredb.ListStreamCleanupDVRsParams{
+		StreamID: streamID,
+		TenantID: tenantID,
+	})
 	if err != nil {
 		return fmt.Errorf("list stream dvr recordings: %w", err)
+	}
+	dvrs := make([]child, 0, len(dvrRows))
+	for _, row := range dvrRows {
+		dvrs = append(dvrs, child{hash: row.DvrHash, cluster: row.OriginClusterID})
 	}
 	for _, d := range dvrs {
 		if cErr := s.deleteOneChildArtifact(ctx, "dvr", d.hash, d.cluster, tenantID); cErr != nil {
@@ -330,11 +327,11 @@ func (s *CommodoreServer) deleteStreamThumbnails(ctx context.Context, streamID, 
 // after cleanup), so this reads it directly. Filtered by tenant_id per the repo tenant-isolation rule. An unknown
 // stream returns an empty set, which the caller treats as "no registered owner" (nothing to clean).
 func (s *CommodoreServer) streamThumbnailServingCells(ctx context.Context, streamID, tenantID string) ([]string, error) {
-	var recorded []string
-	err := s.db.QueryRowContext(ctx, `
-		SELECT COALESCE(thumbnail_serving_cluster_ids, '{}')
-		  FROM commodore.streams WHERE id = $1::uuid AND tenant_id = $2::uuid`, streamID, tenantID).Scan(database.ArrayScan(&recorded))
-	if err == sql.ErrNoRows {
+	recorded, err := commodoredb.New(s.db).GetStreamThumbnailServingCells(ctx, commodoredb.GetStreamThumbnailServingCellsParams{
+		StreamID: streamID,
+		TenantID: tenantID,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -464,44 +461,37 @@ func (s *CommodoreServer) claimStreamCleanupOutboxBatch(ctx context.Context) ([]
 	err := database.WithRetryablePostgresTxWithHook(ctx, s.db, nil, func(error, int) {
 		s.recycleIdlePostgresConns()
 	}, func(tx *sql.Tx) error {
-		rows, qerr := tx.QueryContext(ctx, `
-			SELECT stream_id::text, tenant_id::text, attempts, thumbnail_cleanup_acked_at IS NOT NULL
-			FROM commodore.stream_cleanup_outbox
-			WHERE status = 'pending' AND next_attempt_at <= NOW()
-			ORDER BY next_attempt_at
-			FOR UPDATE SKIP LOCKED
-			LIMIT $1
-		`, streamCleanupOutboxBatchSize)
+		queries := commodoredb.New(tx)
+		claimed, qerr := queries.ClaimStreamCleanupBatch(ctx, int32(streamCleanupOutboxBatchSize))
 		if qerr != nil {
 			return qerr
 		}
-		defer rows.Close()
-
-		batch := make([]streamCleanupOutboxRow, 0, streamCleanupOutboxBatchSize)
-		for rows.Next() {
-			var r streamCleanupOutboxRow
-			if scanErr := rows.Scan(&r.streamID, &r.tenantID, &r.attempts, &r.thumbnailCleanupAcked); scanErr != nil {
-				return scanErr
-			}
-			batch = append(batch, r)
-		}
-		if rowsErr := rows.Err(); rowsErr != nil {
-			return rowsErr
+		batch := make([]streamCleanupOutboxRow, 0, len(claimed))
+		for _, row := range claimed {
+			batch = append(batch, streamCleanupOutboxRow{
+				streamID:              row.StreamID,
+				tenantID:              row.TenantID,
+				attempts:              int(row.Attempts),
+				thumbnailCleanupAcked: row.ThumbnailCleanupAcked,
+			})
 		}
 		for i := range batch {
 			// Stamp a FRESH lease token alongside the schedule push; every settlement CAS-checks it so a stale
 			// worker (its lease lapsed, row re-claimed by a peer with a new token) cannot settle a row it lost.
 			// Tenant-fenced ($3) like every other outbox mutation — ownership acquisition follows the same
 			// mandatory tenant boundary as failure/ack/finalize (tenant is the row's own, just SELECTed above).
-			if tErr := tx.QueryRowContext(ctx, `
-				UPDATE commodore.stream_cleanup_outbox
-				SET next_attempt_at = NOW() + ($1::bigint * INTERVAL '1 millisecond'),
-				    lease_token = gen_random_uuid()::text
-				WHERE stream_id = $2::uuid AND status = 'pending' AND tenant_id = $3::uuid
-				RETURNING lease_token
-			`, streamCleanupOutboxLease.Milliseconds(), batch[i].streamID, batch[i].tenantID).Scan(&batch[i].leaseToken); tErr != nil {
+			leaseToken, tErr := queries.LeaseStreamCleanup(ctx, commodoredb.LeaseStreamCleanupParams{
+				LeaseMs:  streamCleanupOutboxLease.Milliseconds(),
+				StreamID: batch[i].streamID,
+				TenantID: batch[i].tenantID,
+			})
+			if tErr != nil {
 				return fmt.Errorf("lease outbox row %s: %w", batch[i].streamID, tErr)
 			}
+			if !leaseToken.Valid {
+				return fmt.Errorf("lease outbox row %s: database returned NULL lease token", batch[i].streamID)
+			}
+			batch[i].leaseToken = leaseToken.String
 		}
 		out = batch
 		return nil

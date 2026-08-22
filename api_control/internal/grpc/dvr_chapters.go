@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 
+	"frameworks/api_control/internal/database/commodoredb"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -87,18 +88,16 @@ func (s *CommodoreServer) assertDVRTenant(ctx context.Context, dvrIdentifier, te
 	// all three without forcing the caller to pre-disambiguate so the
 	// webapp's viewer-endpoint URL (which carries the public playback_id)
 	// works for chapter listing too.
-	if scanErr := s.db.QueryRowContext(ctx,
-		`SELECT COALESCE(origin_cluster_id, ''), dvr_hash
-		   FROM commodore.dvr_recordings
-		  WHERE tenant_id = $2::uuid
-		    AND (dvr_hash = $1 OR id::text = $1 OR lower(playback_id::text) = lower($1::text))`,
-		dvrIdentifier, tenantID,
-	).Scan(&originClusterID, &dvrHash); scanErr != nil {
-		if errors.Is(scanErr, sql.ErrNoRows) {
+	row, queryErr := commodoredb.New(s.db).ResolveDVRTenantArtifact(ctx, commodoredb.ResolveDVRTenantArtifactParams{
+		TenantID: tenantID, Identifier: dvrIdentifier,
+	})
+	if queryErr != nil {
+		if errors.Is(queryErr, sql.ErrNoRows) {
 			return "", "", status.Error(codes.NotFound, "DVR not found")
 		}
-		return "", "", status.Errorf(codes.Internal, "tenant lookup failed: %v", scanErr)
+		return "", "", status.Errorf(codes.Internal, "tenant lookup failed: %v", queryErr)
 	}
+	originClusterID, dvrHash = row.OriginClusterID, row.DvrHash
 	if originClusterID == "" {
 		return "", "", status.Error(codes.FailedPrecondition, "DVR origin cluster is missing")
 	}

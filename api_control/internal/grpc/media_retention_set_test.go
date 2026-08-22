@@ -33,7 +33,7 @@ func TestSetMediaRetentionPolicy_SetUnderCap(t *testing.T) {
 
 	// nil purser → cap 30; days=7 is under cap, so the write proceeds.
 	mock.ExpectExec(`INSERT INTO commodore\.tenant_media_retention_policies`).
-		WithArgs(tenant, sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs(tenant, false, nil, true, int32(7), false, nil, "user-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	// Best-effort outbox enqueue (RETURNING id → QueryRow).
 	mock.ExpectQuery(`INSERT INTO commodore\.service_event_outbox`).
@@ -63,7 +63,7 @@ func TestSetMediaRetentionPolicy_Clear(t *testing.T) {
 
 	// clear=true → no entitlement lookup, NULL upsert.
 	mock.ExpectExec(`INSERT INTO commodore\.tenant_media_retention_policies`).
-		WithArgs(tenant, sqlmock.AnyArg()).
+		WithArgs(tenant, false, nil, true, nil, false, nil, "user-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`INSERT INTO commodore\.service_event_outbox`).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("evt-2"))

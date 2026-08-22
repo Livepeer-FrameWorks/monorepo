@@ -3,9 +3,9 @@ package grpc
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"strings"
 
+	"frameworks/api_control/internal/database/commodoredb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	"google.golang.org/grpc/codes"
@@ -43,11 +43,14 @@ func (s *CommodoreServer) RecordPullSourceEvent(ctx context.Context, req *commod
 	if req.GetEventKind() == "" {
 		return nil, status.Error(codes.InvalidArgument, "event_kind is required")
 	}
-	if _, execErr := s.db.ExecContext(ctx, `
-		INSERT INTO commodore.pull_source_events
-		            (tenant_id, stream_id, internal_name, event_kind, detail)
-		VALUES      ($1::uuid, NULLIF($2, '')::uuid, $3, $4, NULLIF($5, ''))
-	`, req.GetTenantId(), req.GetStreamId(), req.GetInternalName(), req.GetEventKind(), req.GetDetail()); execErr != nil {
+	queries := commodoredb.New(s.db)
+	if execErr := queries.InsertPullSourceEvent(ctx, commodoredb.InsertPullSourceEventParams{
+		TenantID:     req.GetTenantId(),
+		StreamID:     req.GetStreamId(),
+		InternalName: req.GetInternalName(),
+		EventKind:    req.GetEventKind(),
+		Detail:       req.GetDetail(),
+	}); execErr != nil {
 		return nil, status.Errorf(codes.Internal, "pull_source_events insert failed: %v", execErr)
 	}
 	if req.GetEventKind() == "resolved" && req.GetStreamId() != "" {
@@ -59,25 +62,13 @@ func (s *CommodoreServer) RecordPullSourceEvent(ctx context.Context, req *commod
 			// stale resolve cannot take over a live placement, and a push
 			// publisher's token-owned claim is never overwritten. Restricted to
 			// ingest_mode='pull' as before, which already excludes push rows.
-			if _, execErr := s.db.ExecContext(ctx, `
-				UPDATE commodore.streams
-				   SET active_ingest_cluster_id = $1,
-				       active_ingest_cluster_updated_at = NOW(),
-				       active_ingest_claim_id = $4
-				 WHERE id = $2::uuid
-				   AND tenant_id = $3::uuid
-				   AND ingest_mode = 'pull'
-				   AND (
-				     active_ingest_cluster_id IS NULL
-				     OR active_ingest_cluster_id = ''
-				     OR active_ingest_cluster_updated_at IS NULL
-				     OR active_ingest_cluster_updated_at < NOW() - `+activeIngestLeaseInterval+`
-				     OR (
-				       active_ingest_cluster_id = $1
-				       AND (active_ingest_claim_id IS NULL OR active_ingest_claim_id = '' OR active_ingest_claim_id = $4)
-				     )
-				   )
-			`, clusterID, req.GetStreamId(), req.GetTenantId(), pullClaimToken(req.GetStreamId())); execErr != nil {
+			if execErr := queries.StampResolvedPullStreamPlacement(ctx, commodoredb.StampResolvedPullStreamPlacementParams{
+				ClusterID:    sql.NullString{String: clusterID, Valid: true},
+				ClaimID:      sql.NullString{String: pullClaimToken(req.GetStreamId()), Valid: true},
+				StreamID:     req.GetStreamId(),
+				TenantID:     req.GetTenantId(),
+				LeaseSeconds: int64(activeIngestLease.Seconds()),
+			}); execErr != nil {
 				s.logger.WithError(execErr).WithField("stream_id", req.GetStreamId()).Warn("Failed to stamp pull stream active ingest cluster")
 			}
 		}
@@ -105,57 +96,37 @@ func (s *CommodoreServer) ListPullSourceEvents(ctx context.Context, req *commodo
 		limit = maxPullSourceEventLimit
 	}
 
-	var (
-		rows *sql.Rows
-		qErr error
-	)
-	if req.GetStreamId() != "" {
-		rows, qErr = s.db.QueryContext(ctx, `
-			SELECT id::text, COALESCE(stream_id::text, ''), internal_name, event_kind, COALESCE(detail, ''), created_at
-			  FROM commodore.pull_source_events
-			 WHERE tenant_id = $1::uuid AND stream_id = $2::uuid
-			 ORDER BY created_at DESC
-			 LIMIT $3
-		`, tenantID, req.GetStreamId(), limit)
-	} else {
-		rows, qErr = s.db.QueryContext(ctx, `
-			SELECT id::text, COALESCE(stream_id::text, ''), internal_name, event_kind, COALESCE(detail, ''), created_at
-			  FROM commodore.pull_source_events
-			 WHERE tenant_id = $1::uuid AND internal_name = $2
-			 ORDER BY created_at DESC
-			 LIMIT $3
-		`, tenantID, req.GetInternalName(), limit)
-	}
-	if qErr != nil {
-		if errors.Is(qErr, sql.ErrNoRows) {
-			return &commodorepb.ListPullSourceEventsResponse{}, nil
-		}
-		return nil, status.Errorf(codes.Internal, "pull_source_events query failed: %v", qErr)
-	}
-	defer func() { _ = rows.Close() }()
-
+	queries := commodoredb.New(s.db)
 	out := &commodorepb.ListPullSourceEventsResponse{}
-	for rows.Next() {
-		var (
-			ev                                  commodorepb.PullSourceEvent
-			id, sid, internalName, kind, detail string
-			createdAt                           = sql.NullTime{}
-		)
-		if scanErr := rows.Scan(&id, &sid, &internalName, &kind, &detail, &createdAt); scanErr != nil {
-			return nil, status.Errorf(codes.Internal, "pull_source_events scan failed: %v", scanErr)
+	appendEvent := func(id, streamID, internalName, kind, detail string, createdAt sql.NullTime) {
+		event := &commodorepb.PullSourceEvent{
+			Id: id, StreamId: streamID, InternalName: internalName, EventKind: kind, Detail: detail,
 		}
-		ev.Id = id
-		ev.StreamId = sid
-		ev.InternalName = internalName
-		ev.EventKind = kind
-		ev.Detail = detail
 		if createdAt.Valid {
-			ev.CreatedAt = timestamppb.New(createdAt.Time)
+			event.CreatedAt = timestamppb.New(createdAt.Time)
 		}
-		out.Events = append(out.Events, &ev)
+		out.Events = append(out.Events, event)
 	}
-	if rerr := rows.Err(); rerr != nil {
-		return nil, status.Errorf(codes.Internal, "pull_source_events iter failed: %v", rerr)
+	if req.GetStreamId() != "" {
+		rows, queryErr := queries.ListPullSourceEventsByStream(ctx, commodoredb.ListPullSourceEventsByStreamParams{
+			TenantID: tenantID, StreamID: req.GetStreamId(), RowLimit: int32(limit),
+		})
+		if queryErr != nil {
+			return nil, status.Errorf(codes.Internal, "pull_source_events query failed: %v", queryErr)
+		}
+		for _, row := range rows {
+			appendEvent(row.ID, row.StreamID, row.InternalName, row.EventKind, row.Detail, row.CreatedAt)
+		}
+	} else {
+		rows, queryErr := queries.ListPullSourceEventsByInternalName(ctx, commodoredb.ListPullSourceEventsByInternalNameParams{
+			TenantID: tenantID, InternalName: req.GetInternalName(), RowLimit: int32(limit),
+		})
+		if queryErr != nil {
+			return nil, status.Errorf(codes.Internal, "pull_source_events query failed: %v", queryErr)
+		}
+		for _, row := range rows {
+			appendEvent(row.ID, row.StreamID, row.InternalName, row.EventKind, row.Detail, row.CreatedAt)
+		}
 	}
 	return out, nil
 }

@@ -304,9 +304,9 @@ func TestResolveArtifactRouteForContent_DVRChapterWithoutVodRegistryRow(t *testi
 	defer db.Close()
 
 	server := &CommodoreServer{db: db, logger: logrus.New()}
-	mock.ExpectQuery("SELECT tenant_id, cluster_id\\s+FROM").
+	mock.ExpectQuery("SELECT tenant_id, COALESCE\\(cluster_id::text, ''\\)::text AS cluster_id\\s+FROM").
 		WithArgs("chp_demo_recording_001").
-		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "cluster_id"}).AddRow("tenant-1", nil))
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "cluster_id"}).AddRow("tenant-1", ""))
 
 	found, tenantID, clusterID, err := server.resolveArtifactRouteForContent(context.Background(), "chp_demo_recording_001")
 	if err != nil {
@@ -584,9 +584,9 @@ func TestResolveIngestEndpoint_FailsClosedWhenQuartermasterUnavailable(t *testin
 	// the key lookup runs first; with no lease it falls through to the owner's
 	// placement, which is what fails closed here.
 	mock.ExpectQuery("SELECT tenant_id, active_ingest_cluster_id").
-		WithArgs("sk_test").
+		WithArgs("sk_test", int64(activeIngestLease.Seconds())).
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "active_ingest_cluster_id", "lease_fresh"}).
-			AddRow("tenant-owner", nil, nil))
+			AddRow("tenant-owner", nil, false))
 
 	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-1")
 	_, err = server.ResolveIngestEndpoint(ctx, &sharedpb.IngestEndpointRequest{StreamKey: "sk_test"})
@@ -641,8 +641,8 @@ func TestResolveFoghornForStreamKeyQueriesByStreamKey(t *testing.T) {
 	}
 
 	mock.ExpectQuery("SELECT tenant_id, active_ingest_cluster_id").
-		WithArgs("sk_test").
-		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "active_ingest_cluster_id", "lease_fresh"}).AddRow("tenant-1", nil, nil))
+		WithArgs("sk_test", int64(activeIngestLease.Seconds())).
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "active_ingest_cluster_id", "lease_fresh"}).AddRow("tenant-1", nil, false))
 
 	_, _, err = server.resolveFoghornForStreamKey(context.Background(), "sk_test")
 	if err == nil {
@@ -681,7 +681,7 @@ func TestResolveFoghornForStreamKeyIgnoresExpiredIngestLease(t *testing.T) {
 
 	// Freshness is computed in SQL, so the row reports it directly.
 	mock.ExpectQuery("SELECT tenant_id, active_ingest_cluster_id").
-		WithArgs("sk_stale").
+		WithArgs("sk_stale", int64(activeIngestLease.Seconds())).
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "active_ingest_cluster_id", "lease_fresh"}).
 			AddRow("tenant-1", "stale-cluster", false))
 
@@ -715,7 +715,7 @@ func TestResolveFoghornForStreamKeyFreshLeaseUnresolvableIsTransient(t *testing.
 	}
 
 	mock.ExpectQuery("SELECT tenant_id, active_ingest_cluster_id").
-		WithArgs("sk_leased").
+		WithArgs("sk_leased", int64(activeIngestLease.Seconds())).
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "active_ingest_cluster_id", "lease_fresh"}).
 			AddRow("tenant-1", "leased-cluster", true))
 
@@ -764,7 +764,7 @@ func TestResolveIngestEndpoint_AuthenticatedStillHonoursLease(t *testing.T) {
 	}
 
 	mock.ExpectQuery("SELECT tenant_id, active_ingest_cluster_id").
-		WithArgs("sk_owned_elsewhere").
+		WithArgs("sk_owned_elsewhere", int64(activeIngestLease.Seconds())).
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "active_ingest_cluster_id", "lease_fresh"}).
 			AddRow("tenant-owner", "leased-cluster", true))
 

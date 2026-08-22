@@ -18,7 +18,7 @@ func TestGetTenantPrimaryUserPrioritizesOwner(t *testing.T) {
 	defer db.Close()
 
 	mock.ExpectQuery(regexp.QuoteMeta(`
-		SELECT id, email, first_name, last_name
+		SELECT id, COALESCE(email::text, '')::text AS email, first_name, last_name
 		FROM commodore.users
 		WHERE tenant_id = $1 AND is_active = true AND email IS NOT NULL AND email <> ''
 		ORDER BY

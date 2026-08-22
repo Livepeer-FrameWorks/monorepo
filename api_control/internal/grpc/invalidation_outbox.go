@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"frameworks/api_control/internal/database/commodoredb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
@@ -40,12 +41,7 @@ func invalidationOutboxConfig() outbox.Config {
 	}
 }
 
-// outboxExecutor is the subset of *sql.Tx / *sql.DB this package needs for
-// enqueue. Lets RevokeSigningKey / SetPlaybackPolicy enqueue inside their own
-// transaction so the mutation rolls back if the outbox INSERT fails.
-type outboxExecutor interface {
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}
+type outboxExecutor = commodoredb.DBTX
 
 type invalidationOutboxRow struct {
 	id               string
@@ -62,7 +58,7 @@ type invalidationOutboxRow struct {
 // rolls back the mutation: no durability, no mutation.
 func (s *CommodoreServer) enqueueInvalidationOutbox(
 	ctx context.Context,
-	exec outboxExecutor,
+	exec commodoredb.DBTX,
 	tenantID, reason string,
 	internalNames []string,
 ) (string, error) {
@@ -73,15 +69,11 @@ func (s *CommodoreServer) enqueueInvalidationOutbox(
 	if err != nil {
 		return "", fmt.Errorf("marshal internal_names: %w", err)
 	}
-	var id string
-	row := exec.QueryRowContext(ctx, `
-		INSERT INTO commodore.playback_policy_invalidation_outbox
-			(tenant_id, reason, internal_names)
-		VALUES ($1::uuid, $2, $3::jsonb)
-		RETURNING id
-	`, tenantID, reason, database.JSONText(namesJSON))
-	if scanErr := row.Scan(&id); scanErr != nil {
-		return "", fmt.Errorf("insert outbox row: %w", scanErr)
+	id, err := commodoredb.New(exec).EnqueueInvalidation(ctx, commodoredb.EnqueueInvalidationParams{
+		TenantID: tenantID, Reason: reason, InternalNames: string(namesJSON),
+	})
+	if err != nil {
+		return "", fmt.Errorf("insert outbox row: %w", err)
 	}
 	return id, nil
 }
@@ -92,12 +84,7 @@ func (s *CommodoreServer) markInvalidationOutboxCompleted(ctx context.Context, i
 	if id == "" {
 		return
 	}
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE commodore.playback_policy_invalidation_outbox
-		SET status = 'completed', completed_at = NOW(), last_error = NULL,
-		    last_failed_clusters = NULL
-		WHERE id = $1 AND status = 'pending'
-	`, id); err != nil {
+	if err := commodoredb.New(s.db).CompleteInvalidation(ctx, id); err != nil {
 		s.logger.WithError(err).WithField("outbox_id", id).Warn("mark invalidation outbox completed failed")
 	}
 }
@@ -133,14 +120,10 @@ func (s *CommodoreServer) recordInvalidationOutboxFailure(
 	}
 
 	backoff := outbox.ComputeBackoff(invalidationOutboxConfig(), currentAttempts)
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE commodore.playback_policy_invalidation_outbox
-		SET attempts = $1,
-		    next_attempt_at = NOW() + ($2::bigint * INTERVAL '1 millisecond'),
-		    last_error = $3,
-		    last_failed_clusters = $4::jsonb
-		WHERE id = $5 AND status = 'pending'
-	`, nextAttempts, backoff.Milliseconds(), last, string(failedJSON), id); err != nil {
+	if err := commodoredb.New(s.db).FailInvalidation(ctx, commodoredb.FailInvalidationParams{
+		Attempts: int32(nextAttempts), BackoffMs: backoff.Milliseconds(), LastError: last,
+		LastFailedClusters: string(failedJSON), ID: id,
+	}); err != nil {
 		s.logger.WithError(err).WithField("outbox_id", id).Warn("record invalidation outbox failure failed")
 		return
 	}
@@ -240,49 +223,32 @@ func (s *CommodoreServer) claimInvalidationOutboxBatch(ctx context.Context) ([]i
 	err := database.WithRetryablePostgresTxWithHook(ctx, s.db, nil, func(error, int) {
 		s.recycleIdlePostgresConns()
 	}, func(tx *sql.Tx) error {
-		rows, qerr := tx.QueryContext(ctx, `
-			SELECT id, tenant_id, reason, internal_names, attempts,
-			       COALESCE(stream_id::text, ''), COALESCE(bundle_min_version, 0)
-			FROM commodore.playback_policy_invalidation_outbox
-			WHERE status = 'pending' AND next_attempt_at <= NOW()
-			ORDER BY next_attempt_at
-			FOR UPDATE SKIP LOCKED
-			LIMIT $1
-		`, invalidationOutboxBatchSize)
+		queries := commodoredb.New(tx)
+		rows, qerr := queries.ClaimInvalidationBatch(ctx, invalidationOutboxBatchSize)
 		if qerr != nil {
 			return qerr
 		}
-		defer rows.Close()
 
 		batch := make([]invalidationOutboxRow, 0, invalidationOutboxBatchSize)
-		for rows.Next() {
-			var (
-				r        invalidationOutboxRow
-				rawNames []byte
-			)
-			if scanErr := rows.Scan(&r.id, &r.tenantID, &r.reason, &rawNames, &r.attempts, &r.streamID, &r.bundleMinVersion); scanErr != nil {
-				return scanErr
+		for _, row := range rows {
+			r := invalidationOutboxRow{
+				id: row.ID, tenantID: row.TenantID, reason: row.Reason, attempts: int(row.Attempts),
+				streamID: row.StreamID, bundleMinVersion: row.BundleMinVersion,
 			}
-			if len(rawNames) > 0 {
-				if uErr := json.Unmarshal(rawNames, &r.internalNames); uErr != nil {
+			if len(row.InternalNames) > 0 {
+				if uErr := json.Unmarshal([]byte(row.InternalNames), &r.internalNames); uErr != nil {
 					return uErr
 				}
 			}
 			batch = append(batch, r)
 		}
-		if rowsErr := rows.Err(); rowsErr != nil {
-			return rowsErr
-		}
-
 		// Lease the claimed rows by pushing next_attempt_at into the future. If
 		// dispatch crashes or the worker dies, the lease expires and another
 		// replica picks up the row.
 		for _, r := range batch {
-			if _, lErr := tx.ExecContext(ctx, `
-			UPDATE commodore.playback_policy_invalidation_outbox
-			SET next_attempt_at = NOW() + ($1::bigint * INTERVAL '1 millisecond')
-			WHERE id = $2 AND status = 'pending'
-		`, invalidationOutboxLease.Milliseconds(), r.id); lErr != nil {
+			if lErr := queries.LeaseInvalidation(ctx, commodoredb.LeaseInvalidationParams{
+				LeaseMs: invalidationOutboxLease.Milliseconds(), ID: r.id,
+			}); lErr != nil {
 				return fmt.Errorf("lease outbox row %s: %w", r.id, lErr)
 			}
 		}

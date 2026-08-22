@@ -21,6 +21,7 @@ func pushListRow() *sqlmock.Rows {
 		"id", "internal_name", "stream_key", "playback_id", "title", "description",
 		"is_recording_enabled", "created_at", "updated_at", "ingest_mode",
 		"source_uri_enc", "enabled", "allowed_cluster_ids", "active_ingest_cluster_id",
+		"dvr_chapter_mode", "dvr_chapter_interval_seconds",
 		"dvr_retention_days_override", "clip_retention_days_override", "monitoring_enabled",
 	})
 }
@@ -164,7 +165,11 @@ func TestUpdateStream(t *testing.T) {
 				AddRow("live+abc", "push", false))
 		mock.ExpectBegin()
 		mock.ExpectExec("UPDATE commodore.streams SET").
-			WithArgs("New Title", "s1", "u1", "t1").
+			WithArgs(
+				true, "New Title", false, nil, false, false,
+				false, nil, false, nil, false, nil,
+				"s1", "u1", "t1",
+			).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectCommit()
 		expectOutboxInsert(mock)
@@ -225,7 +230,11 @@ func TestUpdateStream(t *testing.T) {
 				AddRow("live+abc", "push", false))
 		mock.ExpectBegin()
 		mock.ExpectExec("UPDATE commodore.streams SET").
-			WithArgs(false, "s1", "u1", "t1").
+			WithArgs(
+				false, "", false, nil, false, false,
+				false, nil, false, nil, true, false,
+				"s1", "u1", "t1",
+			).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectCommit()
 		expectOutboxInsert(mock)
@@ -326,10 +335,10 @@ func TestListStreams(t *testing.T) {
 			WithArgs("u1", "t1").
 			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int32(2)))
 		mock.ExpectQuery("LEFT JOIN commodore.stream_pull_sources").
-			WithArgs("u1", "t1").
+			WithArgs("u1", "t1", false, "", int32(51)).
 			WillReturnRows(pushListRow().
-				AddRow("s1", "live+a", "k1", "pb1", "First", nil, false, fixedTS, fixedTS, "push", nil, nil, "{}", nil, nil, nil, nil).
-				AddRow("s2", "live+b", "k2", "pb2", "Second", "desc", true, fixedTS, fixedTS, "push", nil, nil, "{}", nil, nil, nil, nil))
+				AddRow("s1", "live+a", "k1", "pb1", "First", nil, false, fixedTS, fixedTS, "push", nil, nil, "{}", nil, nil, nil, nil, nil, nil).
+				AddRow("s2", "live+b", "k2", "pb2", "Second", "desc", true, fixedTS, fixedTS, "push", nil, nil, "{}", nil, nil, nil, nil, nil, nil))
 
 		resp, err := s.ListStreams(ctxAs("u1", "t1", "owner"), &commodorepb.ListStreamsRequest{})
 		if err != nil {
@@ -356,7 +365,7 @@ func TestListStreams(t *testing.T) {
 			WithArgs("u1", "t1").
 			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int32(0)))
 		mock.ExpectQuery("LEFT JOIN commodore.stream_pull_sources").
-			WithArgs("u1", "t1").
+			WithArgs("u1", "t1", false, "", int32(51)).
 			WillReturnRows(pushListRow())
 
 		resp, err := s.ListStreams(ctxAs("u1", "t1", "owner"), &commodorepb.ListStreamsRequest{})
@@ -372,7 +381,7 @@ func TestListStreams(t *testing.T) {
 func TestListStreamMonitoringMapsNullableToggle(t *testing.T) {
 	s, mock, done := newMockServer(t)
 	defer done()
-	mock.ExpectQuery("SELECT id::text, internal_name, monitoring_enabled").
+	mock.ExpectQuery("SELECT id::text AS stream_id, internal_name, monitoring_enabled").
 		WithArgs("t1").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "internal_name", "monitoring_enabled"}).
 			AddRow("s1", "live+a", nil).

@@ -9,9 +9,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	"frameworks/api_control/internal/database/commodoredb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
-	"github.com/lib/pq"
 )
 
 // ReconcileMistNativeStreams provisions operator-owned mist_native streams
@@ -134,45 +133,28 @@ func PruneAllMistNativeStreams(ctx context.Context, exec DBTX, resolver TenantRe
 // tenant whose lowercased playback_id is NOT in `desired`. A nil/empty
 // `desired` deletes every mist_native stream for the tenant.
 func pruneAbsentMistNativeStreams(ctx context.Context, exec DBTX, tenantID string, desired map[string]struct{}) ([]string, error) {
-	const listSQL = `
-		SELECT s.id::text, s.playback_id
-		FROM commodore.streams s
-		WHERE s.tenant_id = $1::uuid AND s.ingest_mode = 'mist_native'`
-	rows, err := exec.QueryContext(ctx, listSQL, tenantID)
+	queries := commodoredb.New(exec)
+	streams, err := queries.ListBootstrapMistNativeStreams(ctx, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("list mist_native streams: %w", err)
 	}
-	defer rows.Close() //nolint:errcheck // best-effort cleanup; iteration errors handled below
-
-	type victim struct {
-		id         string
-		playbackID string
-	}
-	var victims []victim
-	for rows.Next() {
-		var v victim
-		if scanErr := rows.Scan(&v.id, &v.playbackID); scanErr != nil {
-			return nil, fmt.Errorf("scan mist_native row: %w", scanErr)
-		}
-		if _, kept := desired[strings.ToLower(v.playbackID)]; kept {
+	var victims []commodoredb.ListBootstrapMistNativeStreamsRow
+	for _, stream := range streams {
+		if _, kept := desired[strings.ToLower(stream.PlaybackID)]; kept {
 			continue
 		}
-		victims = append(victims, v)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+		victims = append(victims, stream)
 	}
 
 	if len(victims) == 0 {
 		return nil, nil
 	}
-	const deleteSQL = `DELETE FROM commodore.streams WHERE id = $1::uuid`
 	out := make([]string, 0, len(victims))
 	for _, v := range victims {
-		if _, err := exec.ExecContext(ctx, deleteSQL, v.id); err != nil {
-			return nil, fmt.Errorf("delete stream %s: %w", v.id, err)
+		if err := queries.DeleteBootstrapStream(ctx, v.StreamID); err != nil {
+			return nil, fmt.Errorf("delete stream %s: %w", v.StreamID, err)
 		}
-		out = append(out, v.playbackID)
+		out = append(out, v.PlaybackID)
 	}
 	return out, nil
 }
@@ -266,49 +248,19 @@ func monitoringNullBool(monitoring string) (sql.NullBool, error) {
 }
 
 func reconcileMistNativeStream(ctx context.Context, exec DBTX, tenantID, alias string, m MistNativeStream) (string, error) {
-	const probeSQL = `
-		SELECT s.id::text,
-		       s.title,
-		       COALESCE(s.description, ''),
-		       s.ingest_mode,
-		       s.always_on,
-		       s.is_recording_enabled,
-		       s.monitoring_enabled,
-		       mn.source_spec,
-		       mn.source_kind,
-		       mn.placement_count,
-		       COALESCE(mn.allowed_cluster_ids, '{}'),
-		       COALESCE(mn.local_asset_paths::text, '[]'),
-		       COALESCE(spc.processes_live::text, '')
-		FROM commodore.streams s
-		LEFT JOIN commodore.stream_mist_sources mn ON mn.stream_id = s.id
-		LEFT JOIN commodore.stream_processing_config spc ON spc.stream_id = s.id
-		WHERE s.tenant_id = $1::uuid AND lower(s.playback_id::text) = lower($2)`
-
-	var (
-		streamID                                 string
-		curTitle, curDesc, curMode               string
-		curAlwaysOn, curRecording                bool
-		curMonitoring                            sql.NullBool
-		curSourceSpec, curSourceKind             sql.NullString
-		curPlacementCount                        sql.NullInt32
-		curAllowedClusters                       []string
-		curLocalAssetsJSON, curProcessesLiveJSON string
-	)
-	err := exec.QueryRowContext(ctx, probeSQL, tenantID, m.PlaybackID).Scan(
-		&streamID, &curTitle, &curDesc, &curMode, &curAlwaysOn, &curRecording, &curMonitoring,
-		&curSourceSpec, &curSourceKind, &curPlacementCount,
-		database.ArrayScan(&curAllowedClusters), &curLocalAssetsJSON, &curProcessesLiveJSON,
-	)
+	queries := commodoredb.New(exec)
+	current, err := queries.GetBootstrapMistNativeStream(ctx, commodoredb.GetBootstrapMistNativeStreamParams{
+		TenantID: tenantID, PlaybackID: m.PlaybackID,
+	})
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return createMistNativeStream(ctx, exec, tenantID, alias, m)
+		return createMistNativeStream(ctx, queries, tenantID, alias, m)
 	case err != nil:
 		return "", fmt.Errorf("probe stream: %w", err)
 	}
 
-	if curMode != "mist_native" {
-		return "", fmt.Errorf("stream %q already exists with ingest_mode=%q; refusing to convert", m.PlaybackID, curMode)
+	if current.IngestMode != "mist_native" {
+		return "", fmt.Errorf("stream %q already exists with ingest_mode=%q; refusing to convert", m.PlaybackID, current.IngestMode)
 	}
 
 	placement := m.PlacementCount
@@ -329,79 +281,56 @@ func reconcileMistNativeStream(ctx context.Context, exec DBTX, tenantID, alias s
 	if err != nil {
 		return "", err
 	}
-	streamFieldsEq := curTitle == m.Title &&
-		curDesc == m.Description &&
-		curAlwaysOn == m.AlwaysOn &&
-		curRecording == m.IsRecordingEnabled &&
-		curMonitoring == wantMonitoring
-	curAllowed := curAllowedClusters
-	mistFieldsEq := curSourceSpec.Valid && curSourceSpec.String == m.Source &&
-		curSourceKind.Valid && curSourceKind.String == m.SourceKind &&
-		curPlacementCount.Valid && int(curPlacementCount.Int32) == placement &&
-		slices.Equal(curAllowed, m.AllowedClusterIDs) &&
-		jsonStringsEqual(curLocalAssetsJSON, wantLocalAssetsJSON)
-	processFieldsEq := jsonStringsEqual(curProcessesLiveJSON, wantProcessesLiveJSON)
+	streamFieldsEq := current.Title == m.Title &&
+		current.Description == m.Description &&
+		current.AlwaysOn == m.AlwaysOn &&
+		current.IsRecordingEnabled.Valid && current.IsRecordingEnabled.Bool == m.IsRecordingEnabled &&
+		current.MonitoringEnabled == wantMonitoring
+	mistFieldsEq := current.SourceSpec.Valid && current.SourceSpec.String == m.Source &&
+		current.SourceKind.Valid && current.SourceKind.String == m.SourceKind &&
+		current.PlacementCount.Valid && int(current.PlacementCount.Int32) == placement &&
+		slices.Equal(current.AllowedClusterIds, m.AllowedClusterIDs) &&
+		jsonStringsEqual(current.LocalAssetPathsJson, wantLocalAssetsJSON)
+	processFieldsEq := jsonStringsEqual(current.ProcessesLiveJson, wantProcessesLiveJSON)
 
 	if streamFieldsEq && mistFieldsEq && processFieldsEq {
 		return "noop", nil
 	}
 
 	if !streamFieldsEq {
-		const updateStreamSQL = `
-			UPDATE commodore.streams
-			SET title = $2,
-			    description = $3,
-			    always_on = $4,
-			    is_recording_enabled = $5,
-			    monitoring_enabled = $6,
-			    updated_at = NOW()
-			WHERE id = $1::uuid`
-		if _, err := exec.ExecContext(ctx, updateStreamSQL,
-			streamID, m.Title, m.Description, m.AlwaysOn, m.IsRecordingEnabled, wantMonitoring,
-		); err != nil {
+		if err := queries.UpdateBootstrapMistNativeStream(ctx, commodoredb.UpdateBootstrapMistNativeStreamParams{
+			Title: m.Title, Description: m.Description, AlwaysOn: m.AlwaysOn,
+			IsRecordingEnabled: sql.NullBool{Bool: m.IsRecordingEnabled, Valid: true},
+			MonitoringEnabled:  wantMonitoring, StreamID: current.StreamID,
+		}); err != nil {
 			return "", fmt.Errorf("update stream: %w", err)
 		}
 	}
 	if !mistFieldsEq {
-		const upsertMistSQL = `
-			INSERT INTO commodore.stream_mist_sources
-				(stream_id, source_spec, source_kind, placement_count,
-				 allowed_cluster_ids, local_asset_paths, created_at, updated_at)
-			VALUES ($1::uuid, $2, $3, $4, $5, $6::jsonb, NOW(), NOW())
-			ON CONFLICT (stream_id) DO UPDATE
-				SET source_spec         = EXCLUDED.source_spec,
-				    source_kind         = EXCLUDED.source_kind,
-				    placement_count     = EXCLUDED.placement_count,
-				    allowed_cluster_ids = EXCLUDED.allowed_cluster_ids,
-				    local_asset_paths   = EXCLUDED.local_asset_paths,
-				    updated_at          = NOW()`
-		if _, err := exec.ExecContext(ctx, upsertMistSQL,
-			streamID, m.Source, m.SourceKind, placement,
-			pq.Array(m.AllowedClusterIDs), wantLocalAssetsJSON,
-		); err != nil {
+		if err := queries.UpsertBootstrapMistSource(ctx, commodoredb.UpsertBootstrapMistSourceParams{
+			StreamID: current.StreamID, SourceSpec: m.Source, SourceKind: m.SourceKind,
+			PlacementCount: int32(placement), AllowedClusterIds: m.AllowedClusterIDs,
+			LocalAssetPaths: json.RawMessage(wantLocalAssetsJSON),
+		}); err != nil {
 			return "", fmt.Errorf("upsert stream_mist_sources: %w", err)
 		}
 	}
 	if !processFieldsEq {
-		if err := upsertStreamProcessingConfig(ctx, exec, streamID, wantProcessesLiveJSON); err != nil {
+		if err := upsertStreamProcessingConfig(ctx, queries, current.StreamID, wantProcessesLiveJSON); err != nil {
 			return "", err
 		}
 	}
 	return "updated", nil
 }
 
-func createMistNativeStream(ctx context.Context, exec DBTX, tenantID, alias string, m MistNativeStream) (string, error) {
+func createMistNativeStream(ctx context.Context, queries *commodoredb.Queries, tenantID, alias string, m MistNativeStream) (string, error) {
 	monitoringEnabled, monErr := monitoringNullBool(m.Monitoring)
 	if monErr != nil {
 		return "", monErr
 	}
 
-	const ownerSQL = `
-		SELECT id::text FROM commodore.users
-		WHERE tenant_id = $1::uuid AND role = 'owner'
-		ORDER BY created_at LIMIT 1`
-	var ownerID string
-	switch err := exec.QueryRowContext(ctx, ownerSQL, tenantID).Scan(&ownerID); {
+	ownerID, err := queries.GetBootstrapOwnerUser(ctx, tenantID)
+	switch {
 	case errors.Is(err, sql.ErrNoRows):
 		return "", fmt.Errorf("tenant %s has no owner user — provision owners before mist_native streams", alias)
 	case err != nil:
@@ -411,21 +340,13 @@ func createMistNativeStream(ctx context.Context, exec DBTX, tenantID, alias stri
 	// stream_key + internal_name follow the same convention as pull streams:
 	// stream_key is unused (Mist-native streams have no push ingest), but the
 	// column is NOT NULL so we derive a stable placeholder from the playback_id.
-	const insertStreamSQL = `
-		INSERT INTO commodore.streams
-			(id, tenant_id, user_id, stream_key, playback_id, internal_name,
-			 title, description, ingest_mode, always_on, is_recording_enabled,
-			 monitoring_enabled, created_at, updated_at)
-		VALUES (gen_random_uuid(), $1::uuid, $5::uuid,
-		        'mistnative-' || $2, $2,
-		        replace(gen_random_uuid()::text, '-', ''),
-		        $3, $4, 'mist_native', $6, $7, $8, NOW(), NOW())
-		RETURNING id::text`
-	var streamID string
-	if err := exec.QueryRowContext(ctx, insertStreamSQL,
-		tenantID, m.PlaybackID, m.Title, m.Description, ownerID, m.AlwaysOn, m.IsRecordingEnabled,
-		monitoringEnabled,
-	).Scan(&streamID); err != nil {
+	streamID, err := queries.CreateBootstrapMistNativeStream(ctx, commodoredb.CreateBootstrapMistNativeStreamParams{
+		TenantID: tenantID, OwnerID: ownerID, PlaybackID: m.PlaybackID,
+		Title: m.Title, Description: m.Description, AlwaysOn: m.AlwaysOn,
+		IsRecordingEnabled: sql.NullBool{Bool: m.IsRecordingEnabled, Valid: true},
+		MonitoringEnabled:  monitoringEnabled,
+	})
+	if err != nil {
 		return "", fmt.Errorf("insert stream: %w", err)
 	}
 
@@ -437,15 +358,11 @@ func createMistNativeStream(ctx context.Context, exec DBTX, tenantID, alias stri
 	if err != nil {
 		return "", fmt.Errorf("encode local_assets: %w", err)
 	}
-	const insertMistSQL = `
-		INSERT INTO commodore.stream_mist_sources
-			(stream_id, source_spec, source_kind, placement_count,
-			 allowed_cluster_ids, local_asset_paths, created_at, updated_at)
-		VALUES ($1::uuid, $2, $3, $4, $5, $6::jsonb, NOW(), NOW())`
-	if _, err := exec.ExecContext(ctx, insertMistSQL,
-		streamID, m.Source, m.SourceKind, placement,
-		pq.Array(m.AllowedClusterIDs), localAssetsJSON,
-	); err != nil {
+	if err := queries.CreateBootstrapMistSource(ctx, commodoredb.CreateBootstrapMistSourceParams{
+		StreamID: streamID, SourceSpec: m.Source, SourceKind: m.SourceKind,
+		PlacementCount: int32(placement), AllowedClusterIds: m.AllowedClusterIDs,
+		LocalAssetPaths: json.RawMessage(localAssetsJSON),
+	}); err != nil {
 		return "", fmt.Errorf("insert stream_mist_sources: %w", err)
 	}
 
@@ -454,30 +371,25 @@ func createMistNativeStream(ctx context.Context, exec DBTX, tenantID, alias stri
 		if err != nil {
 			return "", fmt.Errorf("encode process_policy: %w", err)
 		}
-		if err := upsertStreamProcessingConfig(ctx, exec, streamID, processPolicyJSON); err != nil {
+		if err := upsertStreamProcessingConfig(ctx, queries, streamID, processPolicyJSON); err != nil {
 			return "", err
 		}
 	}
 	return "created", nil
 }
 
-func upsertStreamProcessingConfig(ctx context.Context, exec DBTX, streamID, processesLiveJSON string) error {
+func upsertStreamProcessingConfig(ctx context.Context, queries *commodoredb.Queries, streamID, processesLiveJSON string) error {
 	if processesLiveJSON == "" {
 		// Clearing the per-stream override: delete the row so resolveProcessesJSON
 		// falls through to the tenant / tier layers.
-		const deleteSQL = `DELETE FROM commodore.stream_processing_config WHERE stream_id = $1::uuid`
-		if _, err := exec.ExecContext(ctx, deleteSQL, streamID); err != nil {
+		if err := queries.DeleteBootstrapStreamProcessingConfig(ctx, streamID); err != nil {
 			return fmt.Errorf("delete stream_processing_config: %w", err)
 		}
 		return nil
 	}
-	const upsertSQL = `
-		INSERT INTO commodore.stream_processing_config (stream_id, processes_live, updated_at)
-		VALUES ($1::uuid, $2::jsonb, NOW())
-		ON CONFLICT (stream_id) DO UPDATE
-			SET processes_live = EXCLUDED.processes_live,
-			    updated_at     = NOW()`
-	if _, err := exec.ExecContext(ctx, upsertSQL, streamID, processesLiveJSON); err != nil {
+	if err := queries.UpsertBootstrapStreamProcessingConfig(ctx, commodoredb.UpsertBootstrapStreamProcessingConfigParams{
+		StreamID: streamID, ProcessesLive: json.RawMessage(processesLiveJSON),
+	}); err != nil {
 		return fmt.Errorf("upsert stream_processing_config: %w", err)
 	}
 	return nil

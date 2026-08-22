@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 
+	"frameworks/api_control/internal/database/commodoredb"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	"google.golang.org/grpc/codes"
@@ -106,21 +107,15 @@ func (s *CommodoreServer) TestPlaybackAccess(ctx context.Context, req *foghornco
 // internal_name. The live USER_NEW path keys on the artifact's name, so we
 // return d.internal_name, not s.internal_name.
 func (s *CommodoreServer) lookupInternalNameByPlaybackID(ctx context.Context, playbackID, tenantID string) (string, error) {
-	var internalName string
-	for _, q := range []string{
-		`SELECT internal_name FROM commodore.streams       WHERE lower(playback_id::text) = lower($1::text) AND tenant_id::text = $2`,
-		`SELECT internal_name FROM commodore.vod_assets    WHERE lower(playback_id::text) = lower($1::text) AND tenant_id::text = $2`,
-		`SELECT internal_name FROM commodore.clips         WHERE lower(playback_id::text) = lower($1::text) AND tenant_id::text = $2`,
-		`SELECT internal_name FROM commodore.dvr_recordings WHERE lower(playback_id::text) = lower($1::text) AND tenant_id::text = $2`,
-	} {
-		err := s.db.QueryRowContext(ctx, q, playbackID, tenantID).Scan(&internalName)
-		if err == nil {
-			return internalName, nil
-		}
-		if !errors.Is(err, sql.ErrNoRows) {
-			s.logger.WithError(err).Error("lookup internal_name by playback_id failed")
-			return "", status.Errorf(codes.Internal, "internal name lookup failed: %v", err)
-		}
+	internalName, err := commodoredb.New(s.db).ResolveOwnedInternalNameByPlaybackID(ctx, commodoredb.ResolveOwnedInternalNameByPlaybackIDParams{
+		PlaybackID: playbackID, TenantID: tenantID,
+	})
+	if err == nil {
+		return internalName, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		s.logger.WithError(err).Error("lookup internal_name by playback_id failed")
+		return "", status.Errorf(codes.Internal, "internal name lookup failed: %v", err)
 	}
 	return "", status.Error(codes.NotFound, "playback target not found")
 }

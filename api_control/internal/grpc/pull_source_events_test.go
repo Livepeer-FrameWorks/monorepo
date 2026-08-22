@@ -2,7 +2,6 @@ package grpc
 
 import (
 	"context"
-	"regexp"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -20,15 +19,11 @@ func TestRecordPullSourceEventResolvedStampsActiveIngestCluster(t *testing.T) {
 	}
 	defer db.Close()
 
-	mock.ExpectExec(regexp.QuoteMeta(`
-		INSERT INTO commodore.pull_source_events
-		            (tenant_id, stream_id, internal_name, event_kind, detail)
-		VALUES      ($1::uuid, NULLIF($2, '')::uuid, $3, $4, NULLIF($5, ''))
-	`)).
+	mock.ExpectExec("INSERT INTO commodore.pull_source_events").
 		WithArgs("tenant-1", "stream-1", "internal-1", "resolved", "media-eu-1").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec("UPDATE commodore.streams").
-		WithArgs("media-eu-1", "stream-1", "tenant-1", pullClaimToken("stream-1")).
+		WithArgs("media-eu-1", pullClaimToken("stream-1"), "stream-1", "tenant-1", int64(activeIngestLease.Seconds())).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	server := &CommodoreServer{db: db, logger: logrus.New()}

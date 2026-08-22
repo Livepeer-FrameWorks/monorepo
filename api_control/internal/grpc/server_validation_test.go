@@ -104,7 +104,7 @@ func TestValidateStreamKey(t *testing.T) {
 				rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
 					AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123", "push")
 				mock.ExpectQuery("FROM commodore.streams").WithArgs("good-key").WillReturnRows(rows)
-				mock.ExpectQuery("UPDATE commodore.streams").WithArgs("cluster-us", "good-key", "conn-1").
+				mock.ExpectQuery("UPDATE commodore.streams").WithArgs("cluster-us", "conn-1", int64(activeIngestLease.Seconds()), "good-key").
 					WillReturnRows(claimReserved())
 			},
 			assert: func(t *testing.T, resp *commodorepb.ValidateStreamKeyResponse, err error) {
@@ -129,7 +129,7 @@ func TestValidateStreamKey(t *testing.T) {
 				rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
 					AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123", "push")
 				mock.ExpectQuery("FROM commodore.streams").WithArgs("contended-key").WillReturnRows(rows)
-				mock.ExpectQuery("UPDATE commodore.streams").WithArgs("cluster-eu", "contended-key", "conn-2").
+				mock.ExpectQuery("UPDATE commodore.streams").WithArgs("cluster-eu", "conn-2", int64(activeIngestLease.Seconds()), "contended-key").
 					WillReturnError(sql.ErrNoRows)
 			},
 			assert: func(t *testing.T, resp *commodorepb.ValidateStreamKeyResponse, err error) {
@@ -202,7 +202,7 @@ func TestResolveStreamContext(t *testing.T) {
 			name: "stream_not_found",
 			req:  &commodorepb.ResolveStreamContextRequest{Identifier: &commodorepb.ResolveStreamContextRequest_StreamId{StreamId: "missing"}},
 			setupMock: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(`WHERE s\.id = \$1`).WithArgs("missing").WillReturnError(sql.ErrNoRows)
+				mock.ExpectQuery(`ResolveStreamContextByIdentifier`).WithArgs(int64(activeIngestLease.Seconds()), "stream_id", "missing").WillReturnError(sql.ErrNoRows)
 			},
 			assert: func(t *testing.T, resp *commodorepb.ResolveStreamContextResponse) {
 				if resp.Admitted {
@@ -218,8 +218,8 @@ func TestResolveStreamContext(t *testing.T) {
 			req:  &commodorepb.ResolveStreamContextRequest{Identifier: &commodorepb.ResolveStreamContextRequest_PlaybackId{PlaybackId: "pk_inactive"}},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				rows := sqlmock.NewRows(cols).
-					AddRow("stream-id", "user-id", "tenant-id", "internal", false, true, "pk_inactive", "mist_native", false, nil, nil)
-				mock.ExpectQuery(`WHERE lower\(s\.playback_id::text\) = lower\(\$1::text\)`).WithArgs("pk_inactive").WillReturnRows(rows)
+					AddRow("stream-id", "user-id", "tenant-id", "internal", false, true, "pk_inactive", "mist_native", false, nil, false)
+				mock.ExpectQuery(`ResolveStreamContextByIdentifier`).WithArgs(int64(activeIngestLease.Seconds()), "playback_id", "pk_inactive").WillReturnRows(rows)
 			},
 			assert: func(t *testing.T, resp *commodorepb.ResolveStreamContextResponse) {
 				if resp.Admitted {
@@ -244,8 +244,8 @@ func TestResolveStreamContext(t *testing.T) {
 			wantErr: true,
 			setupMock: func(mock sqlmock.Sqlmock) {
 				rows := sqlmock.NewRows(cols).
-					AddRow("stream-id", "user-id", "tenant-id", "internal-name-1", true, false, "pk_demo", "mist_native", false, nil, nil)
-				mock.ExpectQuery(`WHERE s\.internal_name = \$1`).WithArgs("internal-name-1").WillReturnRows(rows)
+					AddRow("stream-id", "user-id", "tenant-id", "internal-name-1", true, false, "pk_demo", "mist_native", false, nil, false)
+				mock.ExpectQuery(`ResolveStreamContextByIdentifier`).WithArgs(int64(activeIngestLease.Seconds()), "internal_name", "internal-name-1").WillReturnRows(rows)
 			},
 		},
 		{
@@ -261,8 +261,8 @@ func TestResolveStreamContext(t *testing.T) {
 			wantErr: true,
 			setupMock: func(mock sqlmock.Sqlmock) {
 				rows := sqlmock.NewRows(cols).
-					AddRow("stream-id", "user-id", "tenant-id", "internal-name-2", true, false, "pk_demo", "mist_native", true, nil, nil)
-				mock.ExpectQuery(`WHERE s\.internal_name = \$1`).WithArgs("internal-name-2").WillReturnRows(rows)
+					AddRow("stream-id", "user-id", "tenant-id", "internal-name-2", true, false, "pk_demo", "mist_native", true, nil, false)
+				mock.ExpectQuery(`ResolveStreamContextByIdentifier`).WithArgs(int64(activeIngestLease.Seconds()), "internal_name", "internal-name-2").WillReturnRows(rows)
 			},
 		},
 		{
@@ -278,9 +278,9 @@ func TestResolveStreamContext(t *testing.T) {
 			req:  &commodorepb.ResolveStreamContextRequest{Identifier: &commodorepb.ResolveStreamContextRequest_StreamKey{StreamKey: "sk_live_1"}},
 			setupMock: func(mock sqlmock.Sqlmock) {
 				rows := sqlmock.NewRows(cols).
-					AddRow("stream-id", "user-id", "tenant-id", "internal", false, true, "pk_demo", "push", false, nil, nil)
-				mock.ExpectQuery(`WHERE s\.stream_key = \$1 AND s\.deleted_at IS NULL`).
-					WithArgs("sk_live_1").WillReturnRows(rows)
+					AddRow("stream-id", "user-id", "tenant-id", "internal", false, true, "pk_demo", "push", false, nil, false)
+				mock.ExpectQuery(`ResolveStreamContextByIdentifier`).
+					WithArgs(int64(activeIngestLease.Seconds()), "stream_key", "sk_live_1").WillReturnRows(rows)
 			},
 			assert: func(t *testing.T, resp *commodorepb.ResolveStreamContextResponse) {
 				if resp.StreamId != "stream-id" || resp.TenantId != "tenant-id" || resp.IngestMode != "push" {
@@ -292,8 +292,8 @@ func TestResolveStreamContext(t *testing.T) {
 			name: "stream_key_not_found",
 			req:  &commodorepb.ResolveStreamContextRequest{Identifier: &commodorepb.ResolveStreamContextRequest_StreamKey{StreamKey: "sk_bogus"}},
 			setupMock: func(mock sqlmock.Sqlmock) {
-				mock.ExpectQuery(`WHERE s\.stream_key = \$1 AND s\.deleted_at IS NULL`).
-					WithArgs("sk_bogus").WillReturnError(sql.ErrNoRows)
+				mock.ExpectQuery(`ResolveStreamContextByIdentifier`).
+					WithArgs(int64(activeIngestLease.Seconds()), "stream_key", "sk_bogus").WillReturnError(sql.ErrNoRows)
 			},
 			assert: func(t *testing.T, resp *commodorepb.ResolveStreamContextResponse) {
 				if resp.Admitted {
@@ -473,7 +473,7 @@ func TestValidateAPIToken(t *testing.T) {
 				mock.ExpectQuery("FROM commodore.api_tokens").WithArgs(hashToken("good-token")).WillReturnRows(rows)
 				mock.ExpectExec("UPDATE commodore.api_tokens SET last_used_at").WithArgs("token-id").WillReturnResult(sqlmock.NewResult(1, 1))
 				userRows := sqlmock.NewRows([]string{"email", "role", "platform_operator"}).AddRow("user@example.com", "admin", false)
-				mock.ExpectQuery("SELECT email, role, platform_operator FROM commodore.users").WithArgs("user-id", "tenant-id").WillReturnRows(userRows)
+				mock.ExpectQuery("FROM commodore.users").WithArgs("user-id", "tenant-id").WillReturnRows(userRows)
 			},
 			assert: func(t *testing.T, resp *commodorepb.ValidateAPITokenResponse, err error) {
 				if err != nil {
@@ -571,7 +571,7 @@ func TestValidateStreamKey_OriginClusterUsesIngestClusterWhenProvided(t *testing
 	rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
 		AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123", "push")
 	mock.ExpectQuery("FROM commodore.streams").WithArgs("good-key").WillReturnRows(rows)
-	mock.ExpectQuery("SET active_ingest_cluster_id").WithArgs("cluster-ingest", "good-key", "conn-ingest").
+	mock.ExpectQuery("SET active_ingest_cluster_id").WithArgs("cluster-ingest", "conn-ingest", int64(activeIngestLease.Seconds()), "good-key").
 		WillReturnRows(claimReserved())
 
 	server := &CommodoreServer{
@@ -679,7 +679,7 @@ func TestValidateStreamKey_UsesMediaClusterWhenFoghornRunsOnPlatformCluster(t *t
 	rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
 		AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123", "push")
 	mock.ExpectQuery("FROM commodore.streams").WithArgs("good-key").WillReturnRows(rows)
-	mock.ExpectQuery("SET active_ingest_cluster_id").WithArgs("demo-media", "good-key", "conn-media").
+	mock.ExpectQuery("SET active_ingest_cluster_id").WithArgs("demo-media", "conn-media", int64(activeIngestLease.Seconds()), "good-key").
 		WillReturnRows(claimReserved())
 
 	server := &CommodoreServer{

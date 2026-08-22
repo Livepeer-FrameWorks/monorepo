@@ -220,8 +220,8 @@ func TestDrainCreationCommandAcks_AtomicClaimStampsLease(t *testing.T) {
 	s, mock, done := newMockServer(t)
 	defer done()
 
-	mock.ExpectQuery(`WITH due AS[\s\S]+command_ack_pending[\s\S]+command_ack_next_at IS NULL OR command_ack_next_at <= NOW\(\)[\s\S]+command_ack_leased_until IS NULL OR command_ack_leased_until <= NOW\(\)[\s\S]+ORDER BY command_ack_next_at[\s\S]+FOR UPDATE SKIP LOCKED[\s\S]+UPDATE commodore\.artifact_creation_intents i[\s\S]+command_ack_leased_until = NOW\(\) \+[\s\S]+command_ack_lease_token = \$3::uuid[\s\S]+RETURNING`).
-		WithArgs(creationIntentSweepBatch, intervalSeconds(creationIntentAckLease), sqlmock.AnyArg()).
+	mock.ExpectQuery(`WITH due AS[\s\S]+command_ack_pending[\s\S]+command_ack_next_at IS NULL OR command_ack_next_at <= NOW\(\)[\s\S]+command_ack_leased_until IS NULL OR command_ack_leased_until <= NOW\(\)[\s\S]+ORDER BY command_ack_next_at[\s\S]+FOR UPDATE SKIP LOCKED[\s\S]+UPDATE commodore\.artifact_creation_intents i[\s\S]+command_ack_leased_until = NOW\(\) \+[\s\S]+command_ack_lease_token = \$2::uuid[\s\S]+RETURNING`).
+		WithArgs(intervalSeconds(creationIntentAckLease), sqlmock.AnyArg(), creationIntentSweepBatch).
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "kind", "artifact_hash", "request_id", "origin_cluster_id", "command_ack_attempts"}))
 
 	s.drainCreationCommandAcks(context.Background())
@@ -268,8 +268,8 @@ func TestSweepCreationIntents_RowsErrFailsPass(t *testing.T) {
 	defer done()
 
 	rows := sqlmock.NewRows([]string{"tenant_id", "kind", "artifact_hash", "request_id", "origin_cluster_id", "payload", "past_deadline"}).
-		AddRow("t1", "vod", "vh1", "req-1", "c1", nil, false).
-		AddRow("t2", "vod", "vh2", "req-2", "c1", nil, false).
+		AddRow("t1", "vod", "vh1", "req-1", "c1", "", false).
+		AddRow("t2", "vod", "vh2", "req-2", "c1", "", false).
 		RowError(1, errors.New("driver boom"))
 	mock.ExpectQuery(`UPDATE commodore\.artifact_creation_intents AS i`).
 		WillReturnRows(rows)
@@ -336,7 +336,7 @@ func TestConvergeCommittedIntent_ClipWritesCatalogRow(t *testing.T) {
 	mock.ExpectQuery(`SELECT deletion_revision FROM commodore\.artifact_catalog_tombstones`).
 		WillReturnError(sql.ErrNoRows)
 	// Parent-deletion fence: the clip's parent stream is still live.
-	mock.ExpectQuery(`SELECT deleted_at IS NULL FROM commodore\.streams WHERE id = .* AND tenant_id = .* FOR UPDATE`).
+	mock.ExpectQuery(`SELECT CASE WHEN deleted_at IS NULL THEN TRUE ELSE FALSE END::boolean AS live FROM commodore\.streams WHERE id = .* AND tenant_id = .* FOR UPDATE`).
 		WithArgs("stream-1", "t1").
 		WillReturnRows(sqlmock.NewRows([]string{"live"}).AddRow(true))
 	mock.ExpectExec(`INSERT INTO commodore\.clips`).
@@ -378,7 +378,7 @@ func TestConvergeCommittedIntent_ClipDeletedParentStaysRecoverable(t *testing.T)
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`SELECT deletion_revision FROM commodore\.artifact_catalog_tombstones`).
 		WillReturnError(sql.ErrNoRows)
-	mock.ExpectQuery(`SELECT deleted_at IS NULL FROM commodore\.streams WHERE id = .* AND tenant_id = .* FOR UPDATE`).
+	mock.ExpectQuery(`SELECT CASE WHEN deleted_at IS NULL THEN TRUE ELSE FALSE END::boolean AS live FROM commodore\.streams WHERE id = .* AND tenant_id = .* FOR UPDATE`).
 		WithArgs("stream-1", "t1").
 		WillReturnRows(sqlmock.NewRows([]string{"live"}).AddRow(false))
 	mock.ExpectRollback()

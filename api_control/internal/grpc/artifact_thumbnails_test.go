@@ -350,7 +350,7 @@ func TestUpdateArtifactCatalogSnapshot(t *testing.T) {
 		mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 		mock.ExpectQuery(`SELECT deletion_revision, origin_cluster_id FROM commodore.artifact_catalog_tombstones[\s\S]*FOR UPDATE`).
 			WillReturnError(sql.ErrNoRows)
-		mock.ExpectQuery(`UPDATE commodore.vod_assets[\s\S]*origin_cluster_id IS NULL OR origin_cluster_id = \$15`).
+		mock.ExpectQuery(`UPDATE commodore.vod_assets[\s\S]*origin_cluster_id IS NULL OR origin_cluster_id = \$12`).
 			WillReturnError(sql.ErrNoRows)
 		mock.ExpectQuery(`SELECT origin_cluster_id, catalog_revision, thumbnail_serving_cluster_id FROM commodore.vod_assets`).
 			WithArgs("t1", "vod-1").
