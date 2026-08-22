@@ -159,6 +159,38 @@ func ybPrepareSkipperCatalog(t *testing.T, name string) {
 	ybApply(t, name, "skipper", statements.String())
 }
 
+func ybPrepareMeteringCatalog(t *testing.T, name string) {
+	t.Helper()
+	queries := generatedServiceQueries(t, "../../../api_analytics_query/internal/database/meteringdb")
+	if len(queries) != 11 {
+		t.Fatalf("found %d generated Periscope Metering queries, want 11", len(queries))
+	}
+	var statements strings.Builder
+	for index, query := range queries {
+		preparedName := fmt.Sprintf("metering_contract_%d", index)
+		fmt.Fprintf(&statements, "\\echo preparing %s from %s\n", query.name, query.file)
+		fmt.Fprintf(&statements, "PREPARE %s AS %s;\n", preparedName, query.sql)
+		fmt.Fprintf(&statements, "DEALLOCATE %s;\n", preparedName)
+	}
+	ybApply(t, name, "periscope", statements.String())
+}
+
+func ybPrepareCommodoreCatalog(t *testing.T, name string) {
+	t.Helper()
+	queries := generatedServiceQueries(t, "../../../api_control/internal/database/commodoredb")
+	if len(queries) != 274 {
+		t.Fatalf("found %d generated Commodore queries, want 274", len(queries))
+	}
+	var statements strings.Builder
+	for index, query := range queries {
+		preparedName := fmt.Sprintf("commodore_contract_%d", index)
+		fmt.Fprintf(&statements, "\\echo preparing %s from %s\n", query.name, query.file)
+		fmt.Fprintf(&statements, "PREPARE %s AS %s;\n", preparedName, query.sql)
+		fmt.Fprintf(&statements, "DEALLOCATE %s;\n", preparedName)
+	}
+	ybApply(t, name, "commodore", statements.String())
+}
+
 func TestYugabyteCurrentBaselinesAndCapabilities(t *testing.T) {
 	requireDocker(t)
 	const name = "fw-sv-yb"
@@ -185,6 +217,8 @@ func TestYugabyteCurrentBaselinesAndCapabilities(t *testing.T) {
 	ybPreparePurserCatalog(t, name)
 	ybPrepareNavigatorCatalog(t, name)
 	ybPrepareSkipperCatalog(t, name)
+	ybPrepareMeteringCatalog(t, name)
+	ybPrepareCommodoreCatalog(t, name)
 
 	// These statements represent concrete runtime assumptions not proven by
 	// merely accepting DDL: JSONB null normalization, conflict inference,
@@ -195,6 +229,11 @@ SELECT pg_advisory_xact_lock(8675309);
 SELECT COALESCE(NULL::jsonb, '{}'::jsonb);
 SELECT id FROM purser.stripe_meter_events_outbox
 FOR UPDATE SKIP LOCKED;
+ROLLBACK;
+`)
+	ybApply(t, name, "commodore", `
+BEGIN;
+SELECT pg_advisory_xact_lock(hashtext('tenant-contract'), hashtext('stream-contract'));
 ROLLBACK;
 `)
 }

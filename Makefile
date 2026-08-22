@@ -2,7 +2,7 @@
 		build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-periscope-metering build-image-signalman build-image-bridge build-image-logbook build-image-navigator build-image-deckhand build-image-steward build-image-skipper build-image-chandler \
 		proto proto-check sqlc sqlc-check graphql graphql-frontend graphql-tray graphql-all clean version install-tools verify test test-cli test-pkg test-topology test-crypto-evm test-dashboards test-commodore test-quartermaster test-purser test-decklog test-foghorn test-helmsman test-periscope-ingest test-periscope-query test-signalman test-bridge test-navigator test-privateer test-deckhand test-steward test-skipper test-chandler coverage env frontend-env tidy update outdated fmt format \
 		lint lint-go lint-frontend lint-all lint-fix lint-report lint-analyze ci-local ci-local-go ci-local-frontend \
-		validate-migrations verify-release-state test-release-state verify-schema verify-schema-migrations verify-schema-migrations-core verify-schema-postgres verify-navigator-db verify-skipper-db verify-schema-yugabyte verify-yugabyte-ha verify-schema-clickhouse verify-feature-registry seed-demo seed-demo-postgres seed-demo-clickhouse reset-demo-databases-plan reset-demo-databases release-plan test-release-plan \
+		validate-migrations verify-release-state test-release-state verify-schema verify-schema-migrations verify-schema-migrations-core verify-schema-postgres verify-navigator-db verify-skipper-db verify-periscope-metering-db verify-commodore-db verify-schema-yugabyte verify-yugabyte-ha verify-schema-clickhouse verify-feature-registry seed-demo seed-demo-postgres seed-demo-clickhouse reset-demo-databases-plan reset-demo-databases release-plan test-release-plan \
 		dead-code-install dead-code-go dead-code-ts dead-code-report dead-code \
 		ansible-galaxy-install ansible-lint ansible-yamllint ansible-test ansible-check ansible-molecule ansible-molecule-run ansible-molecule-all provision-hello
 
@@ -81,14 +81,18 @@ sqlc:
 	cd api_billing && go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION) generate
 	cd api_dns && go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION) generate
 	cd api_consultant && go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION) generate
+	cd api_analytics_query && go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION) generate
+	cd api_control && go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION) generate
 
 sqlc-check: sqlc
 	@git diff --exit-code -- api_billing/internal/database/purserdb
 	@git diff --exit-code -- api_dns/internal/database/navigatordb
 	@git diff --exit-code -- api_consultant/internal/database/skipperdb
-	@test -z "$$(git status --porcelain --untracked-files=all -- api_billing/internal/database/purserdb api_dns/internal/database/navigatordb api_consultant/internal/database/skipperdb)" || { \
+	@git diff --exit-code -- api_analytics_query/internal/database/meteringdb
+	@git diff --exit-code -- api_control/internal/database/commodoredb
+	@test -z "$$(git status --porcelain --untracked-files=all -- api_billing/internal/database/purserdb api_dns/internal/database/navigatordb api_consultant/internal/database/skipperdb api_analytics_query/internal/database/meteringdb api_control/internal/database/commodoredb)" || { \
 		echo "ERROR: sqlc generated files are untracked or stale; run make sqlc"; \
-		git status --short --untracked-files=all -- api_billing/internal/database/purserdb api_dns/internal/database/navigatordb api_consultant/internal/database/skipperdb; \
+		git status --short --untracked-files=all -- api_billing/internal/database/purserdb api_dns/internal/database/navigatordb api_consultant/internal/database/skipperdb api_analytics_query/internal/database/meteringdb api_control/internal/database/commodoredb; \
 		exit 1; \
 	}
 
@@ -685,6 +689,19 @@ verify-schema-migrations-core:
 	@$(CONTRACT_GO_TEST) api_consultant postgres/skipper-baselines -tags schema_verify -run 'TestBaselineRepository_RealPG' -count=1 -timeout 600s ./internal/diagnostics/
 	@$(CONTRACT_GO_TEST) api_consultant postgres/skipper-pagecache -tags schema_verify -run 'TestPageCacheRepository_RealPG' -count=1 -timeout 600s ./internal/knowledge/
 	@$(CONTRACT_GO_TEST) api_consultant postgres/skipper-knowledge -tags schema_verify -run 'TestKnowledgeRepository_RealPG' -count=1 -timeout 600s ./internal/knowledge/
+	@$(CONTRACT_GO_TEST) api_analytics_query postgres/periscope-metering -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG|TestMeteringStateTransitions_RealPG' -count=1 -timeout 600s ./internal/database/meteringdb/
+	@$(CONTRACT_GO_TEST) api_control postgres/commodore-bootstrap -tags schema_verify -run 'TestBootstrapAccountsRepository_RealPG|TestBootstrapPullStreamsRepository_RealPG|TestBootstrapMistNativeRepository_RealPG' -count=1 -timeout 600s ./internal/bootstrap/
+	@$(CONTRACT_GO_TEST) api_control postgres/commodore-query-catalog -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG|TestManualQueryAdapters_RealPG|TestAccountSessionRepository_RealPG|TestAccountRecoveryWalletRepository_RealPG' -count=1 -timeout 600s ./internal/database/commodoredb/
+	@$(CONTRACT_GO_TEST) api_control postgres/commodore-outboxes -tags schema_verify -run 'TestDurableOutboxRepositories_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_control postgres/commodore-stream-cleanup -tags schema_verify -run 'TestStreamCleanupOutboxLoop_DeliveryOutageConverges_RealPG|TestStreamThumbnailCleanup_DispatchesEveryOwningCell_RealPG|TestStreamThumbnailCleanup_HangingCellDoesNotStarveSiblings_RealPG|TestRecordStreamActiveCluster_ServiceOnly_DoesNotTouchServingSet_RealPG|TestRegisterStreamThumbnailServingCell_FencesOnDeletion_RealPG|TestRegisterVsDeleteStream_Linearizes_RealPG|TestStreamCleanupOutbox_ThumbnailPhaseMarkedThenSkipped_RealPG|TestDeleteStream_RoutesToEveryServingCell_RealPG|TestClaimStreamCleanupOutboxBatch_TenantFencedLease_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_control postgres/commodore-signing-keys -tags schema_verify -run 'TestSigningKeyRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_control postgres/commodore-playback-policy -tags schema_verify -run 'TestPlaybackPolicyRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_control postgres/commodore-artifact-intents -tags schema_verify -run 'TestArtifactCreationIntentRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_control postgres/commodore-artifact-catalog -tags schema_verify -run 'TestUpdateArtifactCatalogSnapshot_ServingClusterEqualRevisionRepair_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_control postgres/commodore-media-retention -tags schema_verify -run 'TestMediaRetentionRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_control postgres/commodore-pull-source-events -tags schema_verify -run 'TestPullSourceEventRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_control postgres/commodore-api-tokens -tags schema_verify -run 'TestAPITokenRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_control postgres/commodore-native-auth -tags schema_verify -run 'TestNativeAuthorizationRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_billing postgres/purser-stripe -tags schema_verify -run 'TestStripeMeterEventRepository_RealPG' -count=1 -timeout 600s ./internal/stripe/
 	@$(CONTRACT_GO_TEST) api_billing postgres/purser-billing -tags schema_verify -run 'TestLoadEffectiveTierPartialOverrides_RealPG' -count=1 -timeout 600s ./internal/billing/
 	@$(CONTRACT_GO_TEST) api_billing postgres/purser-tieraccess -tags schema_verify -run 'TestTierAccessEligibilityQuery_RealPG' -count=1 -timeout 600s ./internal/tieraccess/
@@ -709,6 +726,27 @@ verify-skipper-db:
 	@$(CONTRACT_GO_TEST) api_consultant postgres/skipper-pagecache -tags schema_verify -run 'TestPageCacheRepository_RealPG' -count=1 -timeout 600s ./internal/knowledge/
 	@$(CONTRACT_GO_TEST) api_consultant postgres/skipper-knowledge -tags schema_verify -run 'TestKnowledgeRepository_RealPG' -count=1 -timeout 600s ./internal/knowledge/
 
+verify-periscope-metering-db:
+	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-periscope-metering-db requires a running Docker daemon"; exit 1; }
+	@echo "Verifying Periscope Metering's generated PostgreSQL catalog and state transitions (Docker)..."
+	@$(CONTRACT_GO_TEST) api_analytics_query postgres/periscope-metering -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG|TestMeteringStateTransitions_RealPG' -count=1 -timeout 600s ./internal/database/meteringdb/
+
+verify-commodore-db:
+	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-commodore-db requires a running Docker daemon"; exit 1; }
+	@echo "Verifying Commodore's converted repositories on PostgreSQL (Docker)..."
+	@$(CONTRACT_GO_TEST) api_control postgres/commodore-bootstrap -tags schema_verify -run 'TestBootstrapAccountsRepository_RealPG|TestBootstrapPullStreamsRepository_RealPG|TestBootstrapMistNativeRepository_RealPG' -count=1 -timeout 600s ./internal/bootstrap/
+	@$(CONTRACT_GO_TEST) api_control postgres/commodore-query-catalog -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG|TestManualQueryAdapters_RealPG|TestAccountSessionRepository_RealPG|TestAccountRecoveryWalletRepository_RealPG' -count=1 -timeout 600s ./internal/database/commodoredb/
+	@$(CONTRACT_GO_TEST) api_control postgres/commodore-outboxes -tags schema_verify -run 'TestDurableOutboxRepositories_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_control postgres/commodore-stream-cleanup -tags schema_verify -run 'TestStreamCleanupOutboxLoop_DeliveryOutageConverges_RealPG|TestStreamThumbnailCleanup_DispatchesEveryOwningCell_RealPG|TestStreamThumbnailCleanup_HangingCellDoesNotStarveSiblings_RealPG|TestRecordStreamActiveCluster_ServiceOnly_DoesNotTouchServingSet_RealPG|TestRegisterStreamThumbnailServingCell_FencesOnDeletion_RealPG|TestRegisterVsDeleteStream_Linearizes_RealPG|TestStreamCleanupOutbox_ThumbnailPhaseMarkedThenSkipped_RealPG|TestDeleteStream_RoutesToEveryServingCell_RealPG|TestClaimStreamCleanupOutboxBatch_TenantFencedLease_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_control postgres/commodore-signing-keys -tags schema_verify -run 'TestSigningKeyRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_control postgres/commodore-playback-policy -tags schema_verify -run 'TestPlaybackPolicyRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_control postgres/commodore-artifact-intents -tags schema_verify -run 'TestArtifactCreationIntentRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_control postgres/commodore-artifact-catalog -tags schema_verify -run 'TestUpdateArtifactCatalogSnapshot_ServingClusterEqualRevisionRepair_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_control postgres/commodore-media-retention -tags schema_verify -run 'TestMediaRetentionRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_control postgres/commodore-pull-source-events -tags schema_verify -run 'TestPullSourceEventRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_control postgres/commodore-api-tokens -tags schema_verify -run 'TestAPITokenRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_control postgres/commodore-native-auth -tags schema_verify -run 'TestNativeAuthorizationRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
+
 verify-schema-postgres:
 	@echo "Verifying Postgres current baseline and tagged-release upgrade convergence (Docker)..."
 	@cd cli && FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' go test -tags schema_verify -run 'TestComposeUsesSchemaHarnessImages|TestPostgresServiceDatabaseInitialization|TestPostgresIntrospectionCoversDeployRelevantObjects|TestPostgresBaselineEqualsReplay|TestPostgresTaggedBaselineUpgradeEqualsCurrent|TestPostgresDemoSeedAppliesToCurrentBaseline' -count=1 -timeout 600s ./pkg/provisioner/
@@ -725,6 +763,19 @@ verify-schema-postgres:
 	@cd api_consultant && go test -tags schema_verify -run 'TestBaselineRepository_RealPG' -count=1 -timeout 600s ./internal/diagnostics/
 	@cd api_consultant && go test -tags schema_verify -run 'TestPageCacheRepository_RealPG' -count=1 -timeout 600s ./internal/knowledge/
 	@cd api_consultant && go test -tags schema_verify -run 'TestKnowledgeRepository_RealPG' -count=1 -timeout 600s ./internal/knowledge/
+	@cd api_analytics_query && go test -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG|TestMeteringStateTransitions_RealPG' -count=1 -timeout 600s ./internal/database/meteringdb/
+	@cd api_control && go test -tags schema_verify -run 'TestBootstrapAccountsRepository_RealPG|TestBootstrapPullStreamsRepository_RealPG|TestBootstrapMistNativeRepository_RealPG' -count=1 -timeout 600s ./internal/bootstrap/
+	@cd api_control && go test -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG|TestManualQueryAdapters_RealPG|TestAccountSessionRepository_RealPG|TestAccountRecoveryWalletRepository_RealPG' -count=1 -timeout 600s ./internal/database/commodoredb/
+	@cd api_control && go test -tags schema_verify -run 'TestDurableOutboxRepositories_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@cd api_control && go test -tags schema_verify -run 'TestStreamCleanupOutboxLoop_DeliveryOutageConverges_RealPG|TestStreamThumbnailCleanup_DispatchesEveryOwningCell_RealPG|TestStreamThumbnailCleanup_HangingCellDoesNotStarveSiblings_RealPG|TestRecordStreamActiveCluster_ServiceOnly_DoesNotTouchServingSet_RealPG|TestRegisterStreamThumbnailServingCell_FencesOnDeletion_RealPG|TestRegisterVsDeleteStream_Linearizes_RealPG|TestStreamCleanupOutbox_ThumbnailPhaseMarkedThenSkipped_RealPG|TestDeleteStream_RoutesToEveryServingCell_RealPG|TestClaimStreamCleanupOutboxBatch_TenantFencedLease_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@cd api_control && go test -tags schema_verify -run 'TestSigningKeyRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@cd api_control && go test -tags schema_verify -run 'TestPlaybackPolicyRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@cd api_control && go test -tags schema_verify -run 'TestArtifactCreationIntentRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@cd api_control && go test -tags schema_verify -run 'TestUpdateArtifactCatalogSnapshot_ServingClusterEqualRevisionRepair_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@cd api_control && go test -tags schema_verify -run 'TestMediaRetentionRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@cd api_control && go test -tags schema_verify -run 'TestPullSourceEventRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@cd api_control && go test -tags schema_verify -run 'TestAPITokenRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@cd api_control && go test -tags schema_verify -run 'TestNativeAuthorizationRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@cd api_billing && go test -tags schema_verify -run 'TestStripeMeterEventRepository_RealPG' -count=1 -timeout 600s ./internal/stripe/
 	@cd api_billing && go test -tags schema_verify -run 'TestLoadEffectiveTierPartialOverrides_RealPG' -count=1 -timeout 600s ./internal/billing/
 	@cd api_billing && go test -tags schema_verify -run 'TestTierAccessEligibilityQuery_RealPG' -count=1 -timeout 600s ./internal/tieraccess/
