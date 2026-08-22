@@ -359,7 +359,7 @@ jobs:
         uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage/contracts/clickhouse/cli.out,coverage/contracts/clickhouse/periscope-ingest-writers.out
+          files: coverage/contracts/clickhouse/cli.out,coverage/contracts/clickhouse/periscope-ingest-writers.out,coverage/contracts/clickhouse/periscope-query.out,coverage/contracts/clickhouse/periscope-query-rpc.out
           flags: clickhouse-contract
           name: clickhouse-contract-coverage
           fail_ci_if_error: false
