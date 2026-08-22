@@ -79,7 +79,7 @@ jobs:
               - 'api_consultant/**'
               - 'api_control/**'
               - 'api_dns/**'
-              - 'api_tenants/**/*.go'
+              - 'api_tenants/**'
               - 'cli/internal/releases/catalog.yaml'
               - 'cli/pkg/provisioner/**'
               - 'config/infrastructure.yaml'
@@ -348,7 +348,7 @@ jobs:
         uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage/contracts/postgres/cli.out,coverage/contracts/postgres/purser-handlers.out,coverage/contracts/postgres/purser-grpc.out,coverage/contracts/postgres/purser-query-catalog.out,coverage/contracts/postgres/navigator-query-catalog.out,coverage/contracts/postgres/navigator-store.out,coverage/contracts/postgres/skipper-query-catalog.out,coverage/contracts/postgres/skipper-conversations.out,coverage/contracts/postgres/skipper-metering.out,coverage/contracts/postgres/skipper-reports.out,coverage/contracts/postgres/skipper-social.out,coverage/contracts/postgres/skipper-baselines.out,coverage/contracts/postgres/skipper-pagecache.out,coverage/contracts/postgres/skipper-knowledge.out,coverage/contracts/postgres/periscope-metering.out,coverage/contracts/postgres/commodore-bootstrap.out,coverage/contracts/postgres/commodore-query-catalog.out,coverage/contracts/postgres/commodore-outboxes.out,coverage/contracts/postgres/commodore-stream-cleanup.out,coverage/contracts/postgres/commodore-signing-keys.out,coverage/contracts/postgres/commodore-playback-policy.out,coverage/contracts/postgres/commodore-artifact-intents.out,coverage/contracts/postgres/commodore-artifact-catalog.out,coverage/contracts/postgres/commodore-media-retention.out,coverage/contracts/postgres/commodore-pull-source-events.out,coverage/contracts/postgres/commodore-api-tokens.out,coverage/contracts/postgres/commodore-native-auth.out,coverage/contracts/postgres/purser-stripe.out,coverage/contracts/postgres/purser-billing.out,coverage/contracts/postgres/purser-tieraccess.out,coverage/contracts/postgres/purser-bootstrap.out
+          files: coverage/contracts/postgres/cli.out,coverage/contracts/postgres/purser-handlers.out,coverage/contracts/postgres/purser-grpc.out,coverage/contracts/postgres/purser-query-catalog.out,coverage/contracts/postgres/navigator-query-catalog.out,coverage/contracts/postgres/navigator-store.out,coverage/contracts/postgres/skipper-query-catalog.out,coverage/contracts/postgres/skipper-conversations.out,coverage/contracts/postgres/skipper-metering.out,coverage/contracts/postgres/skipper-reports.out,coverage/contracts/postgres/skipper-social.out,coverage/contracts/postgres/skipper-baselines.out,coverage/contracts/postgres/skipper-pagecache.out,coverage/contracts/postgres/skipper-knowledge.out,coverage/contracts/postgres/periscope-metering.out,coverage/contracts/postgres/commodore-bootstrap.out,coverage/contracts/postgres/commodore-query-catalog.out,coverage/contracts/postgres/commodore-outboxes.out,coverage/contracts/postgres/commodore-stream-cleanup.out,coverage/contracts/postgres/commodore-signing-keys.out,coverage/contracts/postgres/commodore-playback-policy.out,coverage/contracts/postgres/commodore-artifact-intents.out,coverage/contracts/postgres/commodore-artifact-catalog.out,coverage/contracts/postgres/commodore-media-retention.out,coverage/contracts/postgres/commodore-pull-source-events.out,coverage/contracts/postgres/commodore-api-tokens.out,coverage/contracts/postgres/commodore-native-auth.out,coverage/contracts/postgres/quartermaster-bootstrap.out,coverage/contracts/postgres/quartermaster-query-catalog.out,coverage/contracts/postgres/purser-stripe.out,coverage/contracts/postgres/purser-billing.out,coverage/contracts/postgres/purser-tieraccess.out,coverage/contracts/postgres/purser-bootstrap.out
           flags: postgres-contract
           name: postgres-contract-coverage
           fail_ci_if_error: false
@@ -397,7 +397,7 @@ jobs:
         uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage/contracts/yugabyte/schema.out,coverage/contracts/yugabyte/ha.out
+          files: coverage/contracts/yugabyte/schema.out,coverage/contracts/yugabyte/quartermaster-query-catalog.out,coverage/contracts/yugabyte/ha.out
           flags: yugabyte-contract
           name: yugabyte-contract-coverage
           fail_ci_if_error: false

@@ -191,6 +191,22 @@ func ybPrepareCommodoreCatalog(t *testing.T, name string) {
 	ybApply(t, name, "commodore", statements.String())
 }
 
+func ybPrepareQuartermasterCatalog(t *testing.T, name string) {
+	t.Helper()
+	queries := generatedServiceQueries(t, "../../../api_tenants/internal/database/quartermasterdb")
+	if len(queries) != 153 {
+		t.Fatalf("found %d generated Quartermaster queries, want 153", len(queries))
+	}
+	var statements strings.Builder
+	for index, query := range queries {
+		preparedName := fmt.Sprintf("quartermaster_contract_%d", index)
+		fmt.Fprintf(&statements, "\\echo preparing %s from %s\n", query.name, query.file)
+		fmt.Fprintf(&statements, "PREPARE %s AS %s;\n", preparedName, query.sql)
+		fmt.Fprintf(&statements, "DEALLOCATE %s;\n", preparedName)
+	}
+	ybApply(t, name, "quartermaster", statements.String())
+}
+
 func TestYugabyteCurrentBaselinesAndCapabilities(t *testing.T) {
 	requireDocker(t)
 	const name = "fw-sv-yb"
@@ -219,6 +235,7 @@ func TestYugabyteCurrentBaselinesAndCapabilities(t *testing.T) {
 	ybPrepareSkipperCatalog(t, name)
 	ybPrepareMeteringCatalog(t, name)
 	ybPrepareCommodoreCatalog(t, name)
+	ybPrepareQuartermasterCatalog(t, name)
 
 	// These statements represent concrete runtime assumptions not proven by
 	// merely accepting DDL: JSONB null normalization, conflict inference,

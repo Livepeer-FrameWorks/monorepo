@@ -2,7 +2,7 @@
 		build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-periscope-metering build-image-signalman build-image-bridge build-image-logbook build-image-navigator build-image-deckhand build-image-steward build-image-skipper build-image-chandler \
 		proto proto-check sqlc sqlc-check graphql graphql-frontend graphql-tray graphql-all clean version install-tools verify test test-cli test-pkg test-topology test-crypto-evm test-dashboards test-commodore test-quartermaster test-purser test-decklog test-foghorn test-helmsman test-periscope-ingest test-periscope-query test-signalman test-bridge test-navigator test-privateer test-deckhand test-steward test-skipper test-chandler coverage env frontend-env tidy update outdated fmt format \
 		lint lint-go lint-frontend lint-all lint-fix lint-report lint-analyze ci-local ci-local-go ci-local-frontend \
-		validate-migrations verify-release-state test-release-state verify-schema verify-schema-migrations verify-schema-migrations-core verify-schema-postgres verify-navigator-db verify-skipper-db verify-periscope-metering-db verify-commodore-db verify-schema-yugabyte verify-yugabyte-ha verify-schema-clickhouse verify-feature-registry seed-demo seed-demo-postgres seed-demo-clickhouse reset-demo-databases-plan reset-demo-databases release-plan test-release-plan \
+		validate-migrations verify-release-state test-release-state verify-schema verify-schema-migrations verify-schema-migrations-core verify-schema-postgres verify-navigator-db verify-skipper-db verify-periscope-metering-db verify-commodore-db verify-quartermaster-db verify-quartermaster-yugabyte-db verify-schema-yugabyte verify-yugabyte-ha verify-schema-clickhouse verify-feature-registry seed-demo seed-demo-postgres seed-demo-clickhouse reset-demo-databases-plan reset-demo-databases release-plan test-release-plan \
 		dead-code-install dead-code-go dead-code-ts dead-code-report dead-code \
 		ansible-galaxy-install ansible-lint ansible-yamllint ansible-test ansible-check ansible-molecule ansible-molecule-run ansible-molecule-all provision-hello
 
@@ -83,6 +83,7 @@ sqlc:
 	cd api_consultant && go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION) generate
 	cd api_analytics_query && go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION) generate
 	cd api_control && go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION) generate
+	cd api_tenants && go run github.com/sqlc-dev/sqlc/cmd/sqlc@$(SQLC_VERSION) generate
 
 sqlc-check: sqlc
 	@git diff --exit-code -- api_billing/internal/database/purserdb
@@ -90,9 +91,10 @@ sqlc-check: sqlc
 	@git diff --exit-code -- api_consultant/internal/database/skipperdb
 	@git diff --exit-code -- api_analytics_query/internal/database/meteringdb
 	@git diff --exit-code -- api_control/internal/database/commodoredb
-	@test -z "$$(git status --porcelain --untracked-files=all -- api_billing/internal/database/purserdb api_dns/internal/database/navigatordb api_consultant/internal/database/skipperdb api_analytics_query/internal/database/meteringdb api_control/internal/database/commodoredb)" || { \
+	@git diff --exit-code -- api_tenants/internal/database/quartermasterdb
+	@test -z "$$(git status --porcelain --untracked-files=all -- api_billing/internal/database/purserdb api_dns/internal/database/navigatordb api_consultant/internal/database/skipperdb api_analytics_query/internal/database/meteringdb api_control/internal/database/commodoredb api_tenants/internal/database/quartermasterdb)" || { \
 		echo "ERROR: sqlc generated files are untracked or stale; run make sqlc"; \
-		git status --short --untracked-files=all -- api_billing/internal/database/purserdb api_dns/internal/database/navigatordb api_consultant/internal/database/skipperdb api_analytics_query/internal/database/meteringdb api_control/internal/database/commodoredb; \
+		git status --short --untracked-files=all -- api_billing/internal/database/purserdb api_dns/internal/database/navigatordb api_consultant/internal/database/skipperdb api_analytics_query/internal/database/meteringdb api_control/internal/database/commodoredb api_tenants/internal/database/quartermasterdb; \
 		exit 1; \
 	}
 
@@ -702,6 +704,8 @@ verify-schema-migrations-core:
 	@$(CONTRACT_GO_TEST) api_control postgres/commodore-pull-source-events -tags schema_verify -run 'TestPullSourceEventRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_control postgres/commodore-api-tokens -tags schema_verify -run 'TestAPITokenRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_control postgres/commodore-native-auth -tags schema_verify -run 'TestNativeAuthorizationRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-bootstrap -tags schema_verify -run 'TestBootstrapRepositoryReplay_RealPG' -count=1 -timeout 600s ./internal/bootstrap/
+	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-query-catalog -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG|TestManualQueryAdapters_RealPG|TestConvertedRuntimeAdapters_RealPG' -count=1 -timeout 600s ./internal/database/quartermasterdb/
 	@$(CONTRACT_GO_TEST) api_billing postgres/purser-stripe -tags schema_verify -run 'TestStripeMeterEventRepository_RealPG' -count=1 -timeout 600s ./internal/stripe/
 	@$(CONTRACT_GO_TEST) api_billing postgres/purser-billing -tags schema_verify -run 'TestLoadEffectiveTierPartialOverrides_RealPG' -count=1 -timeout 600s ./internal/billing/
 	@$(CONTRACT_GO_TEST) api_billing postgres/purser-tieraccess -tags schema_verify -run 'TestTierAccessEligibilityQuery_RealPG' -count=1 -timeout 600s ./internal/tieraccess/
@@ -747,6 +751,17 @@ verify-commodore-db:
 	@$(CONTRACT_GO_TEST) api_control postgres/commodore-api-tokens -tags schema_verify -run 'TestAPITokenRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_control postgres/commodore-native-auth -tags schema_verify -run 'TestNativeAuthorizationRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
 
+verify-quartermaster-db:
+	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-quartermaster-db requires a running Docker daemon"; exit 1; }
+	@echo "Verifying Quartermaster's converted repositories on PostgreSQL (Docker)..."
+	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-bootstrap -tags schema_verify -run 'TestBootstrapRepositoryReplay_RealPG' -count=1 -timeout 600s ./internal/bootstrap/
+	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-query-catalog -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG|TestManualQueryAdapters_RealPG|TestConvertedRuntimeAdapters_RealPG' -count=1 -timeout 600s ./internal/database/quartermasterdb/
+
+verify-quartermaster-yugabyte-db:
+	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-quartermaster-yugabyte-db requires a running Docker daemon"; exit 1; }
+	@echo "Verifying Quartermaster's converted repositories on Yugabyte (Docker)..."
+	@$(CONTRACT_GO_TEST) api_tenants yugabyte/quartermaster-query-catalog -tags schema_verify -run 'TestConvertedRuntimeAdapters_RealYugabyte' -count=1 -timeout 1200s ./internal/database/quartermasterdb/
+
 verify-schema-postgres:
 	@echo "Verifying Postgres current baseline and tagged-release upgrade convergence (Docker)..."
 	@cd cli && FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' go test -tags schema_verify -run 'TestComposeUsesSchemaHarnessImages|TestPostgresServiceDatabaseInitialization|TestPostgresIntrospectionCoversDeployRelevantObjects|TestPostgresBaselineEqualsReplay|TestPostgresTaggedBaselineUpgradeEqualsCurrent|TestPostgresDemoSeedAppliesToCurrentBaseline' -count=1 -timeout 600s ./pkg/provisioner/
@@ -776,6 +791,8 @@ verify-schema-postgres:
 	@cd api_control && go test -tags schema_verify -run 'TestPullSourceEventRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@cd api_control && go test -tags schema_verify -run 'TestAPITokenRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@cd api_control && go test -tags schema_verify -run 'TestNativeAuthorizationRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@cd api_tenants && go test -tags schema_verify -run 'TestBootstrapRepositoryReplay_RealPG' -count=1 -timeout 600s ./internal/bootstrap/
+	@cd api_tenants && go test -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG|TestManualQueryAdapters_RealPG|TestConvertedRuntimeAdapters_RealPG' -count=1 -timeout 600s ./internal/database/quartermasterdb/
 	@cd api_billing && go test -tags schema_verify -run 'TestStripeMeterEventRepository_RealPG' -count=1 -timeout 600s ./internal/stripe/
 	@cd api_billing && go test -tags schema_verify -run 'TestLoadEffectiveTierPartialOverrides_RealPG' -count=1 -timeout 600s ./internal/billing/
 	@cd api_billing && go test -tags schema_verify -run 'TestTierAccessEligibilityQuery_RealPG' -count=1 -timeout 600s ./internal/tieraccess/
@@ -786,6 +803,7 @@ verify-schema-postgres:
 verify-schema-yugabyte:
 	@echo "Verifying supported Yugabyte baselines and runtime SQL capabilities (Docker)..."
 	@$(CONTRACT_GO_TEST) cli yugabyte/schema -tags schema_verify -run 'TestYugabyteCurrentBaselinesAndCapabilities' -count=1 -timeout 1200s ./pkg/provisioner/
+	@$(CONTRACT_GO_TEST) api_tenants yugabyte/quartermaster-query-catalog -tags schema_verify -run 'TestConvertedRuntimeAdapters_RealYugabyte' -count=1 -timeout 1200s ./internal/database/quartermasterdb/
 
 verify-yugabyte-ha:
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-yugabyte-ha requires a running Docker daemon"; exit 1; }
