@@ -85,6 +85,7 @@ jobs:
               - 'config/infrastructure.yaml'
               - 'docker-compose.yml'
               - 'pkg/database/**'
+              - 'pkg/testutil/dockerch/**'
               - 'pkg/topology/**'
               - 'scripts/check-migration-version.sh'
               - 'scripts/check-migration-version.test.sh'
@@ -359,7 +360,7 @@ jobs:
         uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage/contracts/clickhouse/cli.out,coverage/contracts/clickhouse/periscope-ingest-writers.out,coverage/contracts/clickhouse/periscope-query.out,coverage/contracts/clickhouse/periscope-query-rpc.out
+          files: coverage/contracts/clickhouse/cli.out,coverage/contracts/clickhouse/periscope-ingest-writers.out,coverage/contracts/clickhouse/periscope-metering-chain-ingest.out,coverage/contracts/clickhouse/periscope-query.out,coverage/contracts/clickhouse/periscope-query-rpc.out,coverage/contracts/clickhouse/periscope-metering-chain.out
           flags: clickhouse-contract
           name: clickhouse-contract-coverage
           fail_ci_if_error: false
@@ -397,7 +398,7 @@ jobs:
         uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage/contracts/yugabyte/schema.out,coverage/contracts/yugabyte/quartermaster-query-catalog.out,coverage/contracts/yugabyte/ha.out
+          files: coverage/contracts/yugabyte/schema.out,coverage/contracts/yugabyte/quartermaster-query-catalog.out,coverage/contracts/yugabyte/periscope-metering.out,coverage/contracts/yugabyte/ha.out
           flags: yugabyte-contract
           name: yugabyte-contract-coverage
           fail_ci_if_error: false
