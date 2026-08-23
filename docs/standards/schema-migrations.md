@@ -189,7 +189,11 @@ against real engines:
 - execute billing-critical statements from `pkg/database/queries` using the same
   SQL text imported by the runtime; and
 - exercise service-owned write paths where Go driver conversion, nullable values,
-  defaults, JSON encoding, or constraints are part of the contract.
+  defaults, JSON encoding, or constraints are part of the contract;
+- run `verify-periscope-metering-chain` so raw/final/ledger projection replay,
+  delayed and duplicate delivery, correction adjustments, Kafka-before-cursor
+  fencing, and reservation persistence/release execute on real ClickHouse plus
+  PostgreSQL. The relational transition pack also runs on supported Yugabyte.
 
 This is the permanent guard: a release that adds a migration but forgets to update the
 baseline (or vice versa) breaks the equality. A schema change that leaves a seed or
