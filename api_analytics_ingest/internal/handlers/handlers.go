@@ -3347,6 +3347,9 @@ func (h *AnalyticsHandler) processProcessBilling(ctx context.Context, event kafk
 // These track GraphQL API usage for analytics (RFC: x402 Agent Access)
 func (h *AnalyticsHandler) processAPIRequestBatch(ctx context.Context, event kafka.AnalyticsEvent) error {
 	h.logger.Debugf("Processing API request batch event: %s", event.EventID)
+	if strings.TrimSpace(event.EventID) == "" {
+		return fmt.Errorf("api_request_batch missing stable event_id")
+	}
 
 	// Parse MistTrigger envelope -> APIRequestBatch
 	var mt ipcpb.MistTrigger
@@ -3378,10 +3381,11 @@ func (h *AnalyticsHandler) processAPIRequestBatch(ctx context.Context, event kaf
 
 	batchTimestamp := time.Unix(batch.GetTimestamp(), 0)
 	sourceNode := batch.GetSourceNode()
+	ingestedAtMS := time.Now().UnixMilli()
 	appendErrors := 0
 	rowCount := 0
 
-	for _, agg := range batch.GetAggregates() {
+	for aggregateIndex, agg := range batch.GetAggregates() {
 		timestamp := batchTimestamp
 		if aggTimestamp := agg.GetTimestamp(); aggTimestamp > 0 {
 			timestamp = time.Unix(aggTimestamp, 0)
@@ -3405,7 +3409,8 @@ func (h *AnalyticsHandler) processAPIRequestBatch(ctx context.Context, event kaf
 		}
 
 		if err := chBatch.Append(periscopeingestdb.APIRequestRow{
-			Timestamp: timestamp, TenantID: tenantID, SourceNode: &sourceNode, AuthType: agg.GetAuthType(),
+			Timestamp: timestamp, TenantID: tenantID, SourceNode: &sourceNode,
+			SourceEventID: fmt.Sprintf("%s:%d", event.EventID, aggregateIndex), IngestedAtMS: ingestedAtMS, AuthType: agg.GetAuthType(),
 			OperationName: operationName, OperationType: agg.GetOperationType(), RequestCount: agg.GetRequestCount(),
 			ErrorCount: agg.GetErrorCount(), TotalDurationMS: agg.GetTotalDurationMs(), TotalComplexity: agg.GetTotalComplexity(),
 			LLMInputTokens: agg.GetLlmInputTokens(), LLMOutputTokens: agg.GetLlmOutputTokens(), LLMModel: agg.GetModel(),
@@ -3585,6 +3590,9 @@ func (h *AnalyticsHandler) processArtifactNodeCopy(ctx context.Context, event ka
 // processServiceAPIRequestBatch handles API usage aggregates from ServiceEvent payloads.
 func (h *AnalyticsHandler) processServiceAPIRequestBatch(ctx context.Context, event kafka.ServiceEvent) error {
 	h.logger.Debugf("Processing service API request batch event: %s", event.EventID)
+	if strings.TrimSpace(event.EventID) == "" {
+		return fmt.Errorf("api_request_batch service event missing stable event_id")
+	}
 
 	if h.metrics != nil {
 		h.metrics.ClickHouseInserts.WithLabelValues("api_request_batch", "attempt").Inc()
@@ -3619,7 +3627,8 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatch(ctx context.Context, ev
 
 	appendErrors := 0
 	rowCount := 0
-	for _, rawAgg := range aggregatesSlice {
+	ingestedAtMS := time.Now().UnixMilli()
+	for aggregateIndex, rawAgg := range aggregatesSlice {
 		aggMap, ok := rawAgg.(map[string]interface{})
 		if !ok {
 			continue
@@ -3648,6 +3657,7 @@ func (h *AnalyticsHandler) processServiceAPIRequestBatch(ctx context.Context, ev
 
 		if err := chBatch.Append(periscopeingestdb.APIRequestRow{
 			Timestamp: aggTimestamp, TenantID: tenantID, SourceNode: &sourceNode,
+			SourceEventID: fmt.Sprintf("%s:%d", event.EventID, aggregateIndex), IngestedAtMS: ingestedAtMS,
 			AuthType: getStringFromMap(aggMap, "auth_type"), OperationName: operationNameValue,
 			OperationType: getStringFromMap(aggMap, "operation_type"), RequestCount: uint32(getUint64FromMap(aggMap, "request_count")),
 			ErrorCount: uint32(getUint64FromMap(aggMap, "error_count")), TotalDurationMS: getUint64FromMap(aggMap, "total_duration_ms"),

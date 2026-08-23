@@ -25,14 +25,13 @@ import (
 
 const (
 	// LedgerRebuildInterval is how often each ledger worker wakes up to
-	// recompute the trailing window. Five minutes matches the ledger
+	// consume the next projection/ingestion window. Five minutes matches the ledger
 	// granularity so steady-state work is bounded.
 	LedgerRebuildInterval = 5 * time.Minute
 
-	// LedgerSettlementLag is the trailing extra window the rebuilder
-	// replays each pass to absorb late-arriving facts (raw_mist_triggers
-	// produced minutes after the wall-clock time the event represents,
-	// storage_snapshots delayed by collector batching, etc.). Two
+	// LedgerSettlementLag keeps the newest projection/ingestion interval open
+	// while writers settle. Delayed facts cursor on projection/ingestion time,
+	// not their older source timestamp, so they are still discovered. Two
 	// minutes mirrors the billing-cursor settlement lag for symmetry.
 	LedgerSettlementLag = 2 * time.Minute
 
@@ -1021,8 +1020,33 @@ func (h *AnalyticsHandler) rebuildApiUsage5m(ctx context.Context, windowStart, w
 	projectionVersionMS := time.Now().UnixMilli()
 	if err := h.clickhouse.Exec(ctx, `
 		INSERT INTO periscope.api_usage_5m
+		WITH affected_windows AS (
+			SELECT DISTINCT tenant_id, toStartOfFiveMinute(timestamp) AS window_start
+			FROM periscope.api_requests
+			WHERE ingested_at_ms >= ? AND ingested_at_ms < ?
+		), dedup AS (
+			SELECT tenant_id, source_event_id,
+				argMax(timestamp, ingested_at_ms) AS source_timestamp,
+				argMax(auth_type, ingested_at_ms) AS auth_type,
+				argMax(operation_type, ingested_at_ms) AS operation_type,
+				argMax(operation_name, ingested_at_ms) AS operation_name,
+				argMax(source_node, ingested_at_ms) AS source_node,
+				argMax(llm_model, ingested_at_ms) AS llm_model,
+				argMax(llm_provider, ingested_at_ms) AS llm_provider,
+				argMax(request_count, ingested_at_ms) AS request_count,
+				argMax(error_count, ingested_at_ms) AS error_count,
+				argMax(total_duration_ms, ingested_at_ms) AS total_duration_ms,
+				argMax(total_complexity, ingested_at_ms) AS total_complexity,
+				argMax(llm_input_tokens, ingested_at_ms) AS llm_input_tokens,
+				argMax(llm_output_tokens, ingested_at_ms) AS llm_output_tokens,
+				argMax(user_hashes, ingested_at_ms) AS user_hashes,
+				argMax(token_hashes, ingested_at_ms) AS token_hashes
+			FROM periscope.api_requests
+			WHERE (tenant_id, toStartOfFiveMinute(timestamp)) IN affected_windows
+			GROUP BY tenant_id, source_event_id
+		)
 		SELECT
-			toStartOfFiveMinute(timestamp)              AS window_start,
+			toStartOfFiveMinute(source_timestamp)       AS window_start,
 			tenant_id,
 			auth_type,
 			operation_type,
@@ -1039,11 +1063,10 @@ func (h *AnalyticsHandler) rebuildApiUsage5m(ctx context.Context, windowStart, w
 			uniqCombinedArrayState(user_hashes)          AS unique_users_state,
 			uniqCombinedArrayState(token_hashes)         AS unique_tokens_state,
 			?                                            AS projection_version_ms
-		FROM periscope.api_requests
-		WHERE timestamp >= ? AND timestamp < ?
+		FROM dedup
 		GROUP BY window_start, tenant_id, auth_type, operation_type, operation_name,
 		         service, llm_model, llm_provider`,
-		projectionVersionMS, windowStart, windowEnd); err != nil {
+		windowStart.UnixMilli(), windowEnd.UnixMilli(), projectionVersionMS); err != nil {
 		return fmt.Errorf("api_usage_5m insert: %w", err)
 	}
 	if h.metrics != nil && h.metrics.ClickHouseInserts != nil {

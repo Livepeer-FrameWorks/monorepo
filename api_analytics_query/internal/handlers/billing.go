@@ -65,15 +65,19 @@ func appendMeter(existing []models.MeterQuantity, meter, unit string, quantity f
 
 // BillingSummarizer handles usage summarization for billing
 type BillingSummarizer struct {
-	postgresQueries     meteringdb.Querier
-	clickhouse          database.ClickHouseConn
-	logger              logging.Logger
-	kafkaProducer       *kafka.KafkaProducer
-	quartermasterClient *qmclient.GRPCClient
-	billingTopic        string
-	sourceID            string
-	sourceRegion        string
-	systemTenantID      string
+	postgresQueries       meteringdb.Querier
+	clickhouse            database.ClickHouseConn
+	logger                logging.Logger
+	usageProducer         usageProducer
+	resolvePrimaryCluster func(string) (string, error)
+	billingTopic          string
+	sourceID              string
+	sourceRegion          string
+	systemTenantID        string
+}
+
+type usageProducer interface {
+	ProduceMessage(topic string, key, value []byte, headers map[string]string) error
 }
 
 // NewBillingSummarizer creates a new billing summarizer instance
@@ -108,17 +112,34 @@ func NewBillingSummarizer(yugaDB database.PostgresConn, clickhouse database.Clic
 		logger.WithError(err).Fatal("Invalid system tenant identity")
 	}
 
-	return &BillingSummarizer{
-		postgresQueries:     meteringdb.New(yugaDB),
-		clickhouse:          clickhouse,
-		logger:              logger,
-		kafkaProducer:       kafkaProducer,
-		quartermasterClient: quartermasterClient,
-		billingTopic:        billingTopic,
-		sourceID:            config.GetEnv("METERING_SOURCE_ID", "periscope-default"),
-		sourceRegion:        config.GetEnv("METERING_SOURCE_REGION", ""),
-		systemTenantID:      systemTenantID.String(),
+	bs := &BillingSummarizer{
+		postgresQueries: meteringdb.New(yugaDB),
+		clickhouse:      clickhouse,
+		logger:          logger,
+		usageProducer:   kafkaProducer,
+		billingTopic:    billingTopic,
+		sourceID:        config.GetEnv("METERING_SOURCE_ID", "periscope-default"),
+		sourceRegion:    config.GetEnv("METERING_SOURCE_REGION", ""),
+		systemTenantID:  systemTenantID.String(),
 	}
+	bs.resolvePrimaryCluster = func(tenantID string) (string, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		tenantResp, callErr := quartermasterClient.GetTenant(ctx, tenantID)
+		if callErr != nil {
+			return "", fmt.Errorf("failed to call Quartermaster: %w", callErr)
+		}
+		if tenantResp.GetError() != "" {
+			return "", fmt.Errorf("quartermaster returned error: %s", tenantResp.GetError())
+		}
+		pbTenant := tenantResp.GetTenant()
+		if pbTenant != nil && pbTenant.GetPrimaryClusterId() != "" {
+			return pbTenant.GetPrimaryClusterId(), nil
+		}
+		return "", fmt.Errorf("tenant %s has no primary_cluster_id", tenantID)
+	}
+	return bs
 }
 
 func (bs *BillingSummarizer) reportID(tenantID, clusterID string, startTime, endTime time.Time, kind string) string {
@@ -335,12 +356,13 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		return nil, fmt.Errorf("failed to query processing seconds from ClickHouse: %w", err)
 	}
 
-	// API usage aggregates from the canonical 5-minute ledger. These are
-	// operational rows in Purser, but keeping them on the canonical path
-	// avoids hidden rollup dependencies in the billing summarizer.
+	// API usage is cursored by ingestion time from the deduplicated source
+	// facts. The source-time 5-minute ledger remains a dashboard projection;
+	// using it here would lose a durable event delivered after its old window.
 	var apiRequests, apiErrors, apiDurationMs, apiComplexity, llmInputTokens, llmOutputTokens float64
 	var apiBreakdown []models.APIUsageBreakdown
-	apiRows, err := periscopequerydb.APIUsageByDimension.Query(ctx, bs.clickhouse, tenantID, startTime, endTime)
+	apiRows, err := periscopequerydb.APIUsageByDimension.Query(ctx, bs.clickhouse,
+		tenantID, startTime.UnixMilli(), endTime.UnixMilli(), tenantID, startTime.UnixMilli())
 	if err != nil && !errors.Is(err, database.ErrNoRows) {
 		return nil, fmt.Errorf("failed to query API usage aggregates from ClickHouse: %w", err)
 	} else if err == nil {
@@ -556,7 +578,8 @@ type clusterStreamRuntimeMetrics struct {
 }
 
 func (bs *BillingSummarizer) queryClusterStreamRuntime(ctx context.Context, tenantID string, startTime, endTime time.Time) (map[string]clusterStreamRuntimeMetrics, error) {
-	rows, err := periscopequerydb.ClusterStreamRuntime.Query(ctx, bs.clickhouse, tenantID, startTime, endTime)
+	rows, err := periscopequerydb.ClusterStreamRuntime.Query(ctx, bs.clickhouse,
+		tenantID, startTime.UnixMilli(), endTime.UnixMilli(), tenantID, startTime.UnixMilli())
 	if err != nil {
 		return nil, err
 	}
@@ -1228,29 +1251,15 @@ func (bs *BillingSummarizer) queryTenantViewerMetrics(ctx context.Context, tenan
 
 // getTenantPrimaryCluster gets tenant's primary cluster by calling Quartermaster gRPC API
 func (bs *BillingSummarizer) getTenantPrimaryCluster(tenantID string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	tenantResp, err := bs.quartermasterClient.GetTenant(ctx, tenantID)
-	if err != nil {
-		return "", fmt.Errorf("failed to call Quartermaster: %w", err)
+	if bs.resolvePrimaryCluster == nil {
+		return "", fmt.Errorf("primary cluster resolver not initialized")
 	}
-
-	if tenantResp.GetError() != "" {
-		return "", fmt.Errorf("quartermaster returned error: %s", tenantResp.GetError())
-	}
-
-	pbTenant := tenantResp.GetTenant()
-	if pbTenant != nil && pbTenant.GetPrimaryClusterId() != "" {
-		return pbTenant.GetPrimaryClusterId(), nil
-	}
-
-	return "", fmt.Errorf("tenant %s has no primary_cluster_id", tenantID)
+	return bs.resolvePrimaryCluster(tenantID)
 }
 
 // sendUsageToPurser sends usage summaries to the Purser billing service via Kafka
 func (bs *BillingSummarizer) sendUsageToPurser(summaries []models.UsageSummary) error {
-	if bs.kafkaProducer == nil {
+	if bs.usageProducer == nil {
 		return fmt.Errorf("kafka producer not initialized")
 	}
 
@@ -1267,7 +1276,7 @@ func (bs *BillingSummarizer) sendUsageToPurser(summaries []models.UsageSummary) 
 		// source/window key. Kafka therefore cannot expose the marker to
 		// Purser before every report that it certifies.
 		messageKey := bs.usageMessageKey(summary)
-		err = bs.kafkaProducer.ProduceMessage(
+		err = bs.usageProducer.ProduceMessage(
 			bs.billingTopic,
 			[]byte(messageKey),
 			payload,

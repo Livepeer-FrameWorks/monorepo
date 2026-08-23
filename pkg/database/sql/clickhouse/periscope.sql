@@ -1453,6 +1453,17 @@ CREATE TABLE IF NOT EXISTS api_requests (
     timestamp DateTime,
     tenant_id UUID,
     source_node Nullable(String),                     -- Gateway instance ID for aggregate batches
+    -- Writers provide the Kafka envelope id plus aggregate index. The
+    -- deterministic default keeps rows written between schema expansion and
+    -- binary rollout addressable by the same deduplication contract.
+    source_event_id String DEFAULT hex(sipHash128(concat(
+        toString(timestamp), '|', toString(tenant_id), '|', ifNull(source_node, ''), '|',
+        auth_type, '|', ifNull(operation_name, ''), '|', operation_type, '|',
+        toString(request_count), '|', toString(error_count), '|', toString(total_duration_ms), '|',
+        toString(total_complexity), '|', toString(llm_input_tokens), '|', toString(llm_output_tokens), '|',
+        llm_model, '|', llm_provider
+    ))),
+    ingested_at_ms Int64 DEFAULT toInt64(toUnixTimestamp(timestamp)) * 1000,
 
     -- ===== AUTH TRACKING =====
     auth_type LowCardinality(String) DEFAULT 'jwt',  -- 'jwt', 'api_token', 'wallet', 'anonymous'

@@ -118,7 +118,7 @@ func TestQueryTenantViewerMetricsCanonical(t *testing.T) {
 	}
 }
 
-func TestQueryClusterStreamRuntimeReadsFinalizedLedger(t *testing.T) {
+func TestQueryClusterStreamRuntimeReadsFinalizedFactsByProjectionTime(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
 		t.Fatalf("sqlmock.New: %v", err)
@@ -130,8 +130,8 @@ func TestQueryClusterStreamRuntimeReadsFinalizedLedger(t *testing.T) {
 	end := start.Add(5 * time.Minute)
 	rows := sqlmock.NewRows([]string{"cluster_id", "max_viewers", "total_streams", "stream_hours"}).
 		AddRow("cluster-a", 7, 2, 0.25)
-	mock.ExpectQuery(`FROM periscope\.stream_runtime_5m_v`).
-		WithArgs("tenant-1", start, end).
+	mock.ExpectQuery(`FROM periscope\.stream_sessions_final`).
+		WithArgs("tenant-1", start.UnixMilli(), end.UnixMilli(), "tenant-1", start.UnixMilli()).
 		WillReturnRows(rows)
 
 	got, err := bs.queryClusterStreamRuntime(context.Background(), "tenant-1", start, end)

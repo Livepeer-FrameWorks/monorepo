@@ -65,6 +65,26 @@ var MonthlyUniqueUsers = statement("billing.monthly_unique_users", `
 `)
 
 var APIUsageByDimension = statement("billing.api_usage_by_dimension", `
+	WITH window_candidates AS (
+		SELECT source_event_id,
+			argMax(auth_type, ingested_at_ms) AS auth_type,
+			argMax(operation_type, ingested_at_ms) AS operation_type,
+			argMax(ifNull(operation_name, ''), ingested_at_ms) AS operation_name,
+			argMax(ifNull(nullIf(source_node, ''), 'bridge'), ingested_at_ms) AS service,
+			argMax(llm_model, ingested_at_ms) AS llm_model,
+			argMax(llm_provider, ingested_at_ms) AS llm_provider,
+			argMax(request_count, ingested_at_ms) AS requests,
+			argMax(error_count, ingested_at_ms) AS errors,
+			argMax(total_duration_ms, ingested_at_ms) AS duration_ms,
+			argMax(total_complexity, ingested_at_ms) AS complexity,
+			argMax(llm_input_tokens, ingested_at_ms) AS llm_input_tokens,
+			argMax(llm_output_tokens, ingested_at_ms) AS llm_output_tokens,
+			argMax(user_hashes, ingested_at_ms) AS user_hashes,
+			argMax(token_hashes, ingested_at_ms) AS token_hashes
+		FROM periscope.api_requests
+		WHERE tenant_id = ? AND ingested_at_ms >= ? AND ingested_at_ms < ?
+		GROUP BY source_event_id
+	)
 	SELECT auth_type, operation_type, operation_name, service, llm_model, llm_provider,
 		COALESCE(sum(requests), 0) AS total_requests,
 		COALESCE(sum(errors), 0) AS total_errors,
@@ -72,21 +92,45 @@ var APIUsageByDimension = statement("billing.api_usage_by_dimension", `
 		COALESCE(sum(complexity), 0) AS total_complexity,
 		COALESCE(sum(llm_input_tokens), 0) AS total_llm_input_tokens,
 		COALESCE(sum(llm_output_tokens), 0) AS total_llm_output_tokens,
-		COALESCE(uniqCombinedMerge(unique_users_state), 0) AS unique_users,
-		COALESCE(uniqCombinedMerge(unique_tokens_state), 0) AS unique_tokens
-	FROM periscope.api_usage_5m_v
-	WHERE tenant_id = ? AND window_start >= ? AND window_start < ?
+		COALESCE(uniqCombinedArray(user_hashes), 0) AS unique_users,
+		COALESCE(uniqCombinedArray(token_hashes), 0) AS unique_tokens
+	FROM window_candidates c
+	LEFT ANTI JOIN (
+		SELECT DISTINCT source_event_id
+		FROM periscope.api_requests
+		WHERE tenant_id = ? AND ingested_at_ms < ?
+		  AND source_event_id IN (SELECT source_event_id FROM window_candidates)
+	) prior USING (source_event_id)
 	GROUP BY auth_type, operation_type, operation_name, service, llm_model, llm_provider
 `)
 
 var ClusterStreamRuntime = statement("billing.cluster_stream_runtime", `
-	SELECT cluster_id,
-		COALESCE(toInt32(max(peak_viewers)), 0) AS max_viewers,
-		COALESCE(toInt32(uniqCombined(stream_id)), 0) AS total_streams,
-		COALESCE(sum(active_seconds) / 3600.0, 0) AS stream_hours
-	FROM periscope.stream_runtime_5m_v
-	WHERE tenant_id = ? AND window_start >= ? AND window_start < ? AND cluster_id != ''
-	GROUP BY cluster_id
+	WITH window_candidates AS (
+		SELECT tenant_id, node_id, stream_id, source_event_id,
+			argMax(cluster_id, projection_version_ms) AS cluster_id,
+			argMax(total_viewers, projection_version_ms) AS total_viewers,
+			argMax(source_started_at_ms, projection_version_ms) AS source_started_at_ms,
+			argMax(source_ended_at_ms, projection_version_ms) AS source_ended_at_ms,
+			argMax(closed_reason, projection_version_ms) AS closed_reason
+		FROM periscope.stream_sessions_final
+		WHERE tenant_id = ? AND projection_version_ms >= ? AND projection_version_ms < ?
+		GROUP BY tenant_id, node_id, stream_id, source_event_id
+	)
+	SELECT c.cluster_id,
+		COALESCE(toInt32(max(c.total_viewers)), 0) AS max_viewers,
+		COALESCE(toInt32(uniqCombined(tuple(c.node_id, c.stream_id, c.source_event_id))), 0) AS total_streams,
+		COALESCE(sum(greatest(c.source_ended_at_ms - c.source_started_at_ms, 0)) / 3600000.0, 0) AS stream_hours
+	FROM window_candidates c
+	LEFT ANTI JOIN (
+		SELECT DISTINCT tenant_id, node_id, stream_id, source_event_id
+		FROM periscope.stream_sessions_final
+		WHERE tenant_id = ? AND projection_version_ms < ?
+		  AND (tenant_id, node_id, stream_id, source_event_id) IN (
+			SELECT tenant_id, node_id, stream_id, source_event_id FROM window_candidates
+		  )
+	) prior USING (tenant_id, node_id, stream_id, source_event_id)
+	WHERE c.closed_reason = 'final' AND c.cluster_id != ''
+	GROUP BY c.cluster_id
 `)
 
 var ClusterProcessingSeconds = statement("billing.cluster_processing_seconds", `
