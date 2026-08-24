@@ -16,12 +16,16 @@
   ],
   "headers": [
     {
-      "source": "@(__spa-fallback.html|health|SKILL.md|heartbeat.md|skill.json|llms.txt)",
+      "source": "@(__spa-fallback.html|sitemap.xml.data|health|SKILL.md|heartbeat.md|skill.json|llms.txt)",
       "headers": [{ "key": "X-Robots-Tag", "value": "noindex, nofollow" }]
     },
     {
       "source": ".well-known/**",
       "headers": [{ "key": "X-Robots-Tag", "value": "noindex, nofollow" }]
+    },
+    {
+      "source": "assets/**",
+      "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }]
     }
   ]
 }

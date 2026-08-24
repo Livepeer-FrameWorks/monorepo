@@ -142,6 +142,22 @@
     width: 100%;
     height: 320px;
   }
+  .hero-player-card__standby {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    background: hsl(var(--brand-surface-strong));
+  }
+  .hero-player-card__standby img {
+    width: min(66%, 300px);
+    height: auto;
+  }
+  .network-viz-deferred {
+    min-height: 500px;
+  }
   @media (min-width: 640px) {
     .hero-player-card__stage {
       height: 380px;

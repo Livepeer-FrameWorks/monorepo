@@ -1,8 +1,6 @@
 import { motion } from "framer-motion";
 
 import SdkCodePreview from "./SdkCodePreview";
-// Demo player wrapper with status/health integration
-import { Player as FrameworksPlayer } from "@livepeer-frameworks/player-react";
 import {
   MarketingFinalCTA,
   MarketingScrollProgress,
@@ -21,7 +19,6 @@ import {
   SectionDivider,
   SkipperConversationPreview,
   AgentPipelineStrip,
-  NetworkMap,
 } from "@/components/marketing";
 import { Section, SectionContainer } from "@/components/ui/section";
 import SovereigntyNote from "../shared/SovereigntyNote";
@@ -31,7 +28,7 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import config from "../../config";
 import {
   ServerStackIcon,
@@ -67,6 +64,39 @@ const generateGlitchStrips = () => {
   }
   return strips;
 };
+
+function DeferredNetworkMap() {
+  const containerRef = useRef(null);
+  const [NetworkMapComponent, setNetworkMapComponent] = useState(null);
+
+  useEffect(() => {
+    if (!containerRef.current || NetworkMapComponent) return undefined;
+
+    let active = true;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (!entry.isIntersecting) return;
+        observer.disconnect();
+        import("@/components/marketing/network/NetworkMap").then((module) => {
+          if (active) setNetworkMapComponent(() => module.NetworkMap);
+        });
+      },
+      { rootMargin: "800px 0px" }
+    );
+    observer.observe(containerRef.current);
+
+    return () => {
+      active = false;
+      observer.disconnect();
+    };
+  }, [NetworkMapComponent]);
+
+  return (
+    <div ref={containerRef} className="network-viz-deferred">
+      {NetworkMapComponent ? <NetworkMapComponent /> : null}
+    </div>
+  );
+}
 
 export const HOME_FAQS = [
   {
@@ -104,6 +134,7 @@ export const HOME_FAQS = [
 const LandingPage = () => {
   const [showPlayer, setShowPlayer] = useState(false);
   const [logoAnimationComplete, setLogoAnimationComplete] = useState(false);
+  const [PlayerComponent, setPlayerComponent] = useState(null);
   const [demoState, setDemoState] = useState("booting");
   const demoFixtures =
     config.demoFixtures && config.demoFixtures.length > 0
@@ -151,6 +182,46 @@ const LandingPage = () => {
     return () => {
       clearTimeout(playerTimer);
       clearTimeout(cleanupTimer);
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    let idleId;
+    let fallbackTimer;
+
+    const loadPlayer = () => {
+      Promise.all([
+        import("@livepeer-frameworks/player-react"),
+        import("@livepeer-frameworks/player-react/player.css"),
+      ])
+        .then(([module]) => {
+          if (active) setPlayerComponent(() => module.Player);
+        })
+        .catch(() => {
+          if (active) setDemoState("error");
+        });
+    };
+
+    const schedulePlayer = () => {
+      if ("requestIdleCallback" in window) {
+        idleId = window.requestIdleCallback(loadPlayer, { timeout: 1500 });
+      } else {
+        fallbackTimer = window.setTimeout(loadPlayer, 250);
+      }
+    };
+
+    if (document.readyState === "complete") {
+      schedulePlayer();
+    } else {
+      window.addEventListener("load", schedulePlayer, { once: true });
+    }
+
+    return () => {
+      active = false;
+      window.removeEventListener("load", schedulePlayer);
+      if (idleId !== undefined) window.cancelIdleCallback(idleId);
+      if (fallbackTimer !== undefined) window.clearTimeout(fallbackTimer);
     };
   }, []);
 
@@ -359,22 +430,33 @@ const LandingPage = () => {
                 <div className="hero-player-card__viewport">
                   <div className="hero-player-card__screen">
                     <div className="hero-player-card__stage">
-                      <FrameworksPlayer
-                        key={activeFixtureId}
-                        contentId={activeFixtureId}
-                        contentType="live"
-                        options={{
-                          autoplay: true,
-                          muted: true,
-                          controls: false,
-                          playbackMode: "quality",
-                          gatewayUrl: config.gatewayUrl,
-                          // Opt in to diagnostic playback telemetry (default-off in the
-                          // player); the hero demo feeds boot + viewer-QoE beacons too.
-                          telemetry: { boot: true, session: true },
-                        }}
-                        onStateChange={(st) => setDemoState(st)}
-                      />
+                      {PlayerComponent ? (
+                        <PlayerComponent
+                          key={activeFixtureId}
+                          contentId={activeFixtureId}
+                          contentType="live"
+                          options={{
+                            autoplay: true,
+                            muted: true,
+                            controls: false,
+                            playbackMode: "quality",
+                            gatewayUrl: config.gatewayUrl,
+                            // Opt in to diagnostic playback telemetry (default-off in the
+                            // player); the hero demo feeds boot + viewer-QoE beacons too.
+                            telemetry: { boot: true, session: true },
+                          }}
+                          onStateChange={(st) => setDemoState(st)}
+                        />
+                      ) : (
+                        <div className="hero-player-card__standby" aria-hidden="true">
+                          <img
+                            src="/frameworks-dark-vertical-lockup.svg"
+                            alt=""
+                            width="300"
+                            height="300"
+                          />
+                        </div>
+                      )}
                     </div>
                   </div>
                   {demoFixtures.length > 1 && (
@@ -507,6 +589,7 @@ const LandingPage = () => {
                               animationDirection: "alternate",
                               animationTimingFunction: "linear",
                               imageRendering: "pixelated",
+                              willChange: "transform, filter",
                             }}
                           />
                         );
@@ -553,7 +636,7 @@ const LandingPage = () => {
                 }
               />
               <MarketingFeatureWall items={pillarCards} columns={3} />
-              <NetworkMap />
+              <DeferredNetworkMap />
             </MarketingBand>
           </SectionContainer>
         </Section>

@@ -6,12 +6,12 @@ import {
   ScrollRestoration,
   isRouteErrorResponse,
 } from "react-router";
+import { useEffect } from "react";
 import Navigation from "../src/components/Navigation";
 import Footer from "../src/components/Footer";
 import ScrollToTop from "../src/components/shared/ScrollToTop";
 import { baseMeta } from "./seo";
 import "../src/index.css";
-import "@livepeer-frameworks/player-react/player.css";
 
 export const links = () => [
   { rel: "icon", type: "image/svg+xml", href: "/frameworks-dark-logomark.svg" },
@@ -20,13 +20,23 @@ export const links = () => [
   { rel: "icon", type: "image/png", sizes: "192x192", href: "/favicon-192.png" },
   { rel: "apple-touch-icon", sizes: "180x180", href: "/apple-touch-icon.png" },
   { rel: "manifest", href: "/site.webmanifest" },
-  { rel: "preconnect", href: "https://fonts.googleapis.com" },
   { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
-  {
-    rel: "stylesheet",
-    href: "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap",
-  },
 ];
+
+const fontStylesheet =
+  "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap";
+
+function DeferredFonts() {
+  useEffect(() => {
+    const stylesheet = document.createElement("link");
+    stylesheet.rel = "stylesheet";
+    stylesheet.href = fontStylesheet;
+    document.head.appendChild(stylesheet);
+    return () => stylesheet.remove();
+  }, []);
+
+  return null;
+}
 
 export function meta() {
   return baseMeta("home");
@@ -40,8 +50,12 @@ export function Layout({ children }) {
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <Meta />
         <Links />
+        <noscript>
+          <link rel="stylesheet" href={fontStylesheet} />
+        </noscript>
       </head>
       <body className="bg-background text-foreground">
+        <DeferredFonts />
         {children}
         <ScrollRestoration />
         <Scripts />
@@ -56,7 +70,9 @@ export default function Root() {
       <ScrollToTop />
       <div className="App">
         <Navigation />
-        <Outlet />
+        <main id="main-content">
+          <Outlet />
+        </main>
       </div>
       <Footer />
     </>

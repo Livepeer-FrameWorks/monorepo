@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { geo } from "./fixtures";
-import "leaflet/dist/leaflet.css";
 
 const TILE_URL = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
 const HEAT_GRADIENT = {
@@ -61,7 +60,7 @@ export function GeoPanel({ height = 440 }) {
     let cancelled = false;
 
     (async () => {
-      const Lmod = await import("leaflet");
+      const [Lmod] = await Promise.all([import("leaflet"), import("leaflet/dist/leaflet.css")]);
       await import("leaflet.heat");
       const { latLngToCell, cellToBoundary } = await import("h3-js");
       const L = Lmod.default ?? Lmod;
@@ -224,6 +223,7 @@ export function GeoPanel({ height = 440 }) {
           type="button"
           className="geo-panel__btn"
           onClick={resetView}
+          aria-label="Reset map view"
           title="Reset view"
           dangerouslySetInnerHTML={{ __html: ICON_HOME }}
         />
@@ -231,6 +231,7 @@ export function GeoPanel({ height = 440 }) {
           type="button"
           className="geo-panel__btn"
           onClick={toggleFullscreen}
+          aria-label={isFullscreen ? "Exit fullscreen map" : "Open fullscreen map"}
           title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
           dangerouslySetInnerHTML={{ __html: isFullscreen ? ICON_MIN : ICON_MAX }}
         />

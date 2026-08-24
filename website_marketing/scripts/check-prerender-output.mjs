@@ -62,6 +62,49 @@ for (const [relativePath, ...snippets] of routes) {
   if (emptyHeadings.length > 0) {
     failures.push(`build/client/${relativePath} has ${emptyHeadings.length} empty heading tag(s)`);
   }
+
+  if (!html.includes('<main id="main-content">')) {
+    failures.push(`build/client/${relativePath} is missing the primary main landmark`);
+  }
+}
+
+const homeHtml = readFileSync(join(clientDir, "index.html"), "utf8");
+if (!homeHtml.includes("hero-player-card__overlay-glitch")) {
+  failures.push("build/client/index.html is missing the animated hero glitch overlay");
+}
+if (!homeHtml.includes("hero-player-card__standby")) {
+  failures.push("build/client/index.html is missing the automatic-player standby surface");
+}
+if (homeHtml.includes("Start live demo")) {
+  failures.push("build/client/index.html unexpectedly requires a click to start the live demo");
+}
+
+const executableHomeHead = homeHtml
+  .split("</head>", 1)[0]
+  .replaceAll(/<noscript>[\s\S]*?<\/noscript>/g, "");
+for (const deferredRuntime of [
+  "fonts.googleapis.com",
+  "NetworkMap-",
+  "player-",
+  "hls-",
+  "video.es-",
+  "dash.all",
+  "leaflet-",
+]) {
+  if (executableHomeHead.includes(deferredRuntime)) {
+    failures.push(`build/client/index.html eagerly loads deferred runtime ${deferredRuntime}`);
+  }
+}
+
+const landingSource = readFileSync(
+  join(process.cwd(), "src/components/pages/LandingPage.jsx"),
+  "utf8"
+);
+if (
+  !landingSource.includes("requestIdleCallback(loadPlayer") ||
+  !landingSource.includes("autoplay: true")
+) {
+  failures.push("LandingPage must automatically load and autoplay the deferred live player");
 }
 
 for (const relativePath of staticFiles) {
@@ -84,6 +127,12 @@ if (!existsSync(serveConfigPath)) {
   if (!serveConfig.includes("X-Robots-Tag")) {
     failures.push("build/client/serve.json missing X-Robots-Tag noindex headers");
   }
+  if (!serveConfig.includes("sitemap.xml.data")) {
+    failures.push("build/client/serve.json missing the sitemap sidecar noindex rule");
+  }
+  if (!serveConfig.includes("max-age=31536000, immutable")) {
+    failures.push("build/client/serve.json missing immutable caching for hashed assets");
+  }
 }
 
 const sitemapPath = join(clientDir, "sitemap.xml");
@@ -94,6 +143,9 @@ if (existsSync(sitemapPath)) {
   }
   if (!sitemap.includes("<loc>https://frameworks.network/pricing</loc>")) {
     failures.push("build/client/sitemap.xml is missing the pricing route");
+  }
+  if (sitemap.includes("<lastmod>")) {
+    failures.push("build/client/sitemap.xml contains synthetic build-time lastmod values");
   }
 }
 

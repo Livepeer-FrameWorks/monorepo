@@ -23,8 +23,6 @@ export interface MarketingRouteSeo {
   path: string;
   title: string;
   description: string;
-  changefreq: string;
-  priority: string;
 }
 
 export const MARKETING_ROUTES: MarketingRouteSeo[] = [
@@ -34,8 +32,6 @@ export const MARKETING_ROUTES: MarketingRouteSeo[] = [
     title: "FrameWorks - Sovereign Live Streaming Platform, Hosted or Self-Hosted",
     description:
       "FrameWorks is a live streaming platform and API for sovereign video operations: MistServer delivery, Livepeer-backed transcoding, and real-time analytics. Start hosted, go hybrid, or run the whole stack self-hosted on your own infrastructure.",
-    changefreq: "weekly",
-    priority: "1.0",
   },
   {
     id: "analytics",
@@ -43,8 +39,6 @@ export const MARKETING_ROUTES: MarketingRouteSeo[] = [
     title: "FrameWorks Analytics - Real-Time Streaming Telemetry, QoE & Geo Insights",
     description:
       "See why viewer X connected to edge Y. FrameWorks gives every plan real-time viewer geo, routing decisions, player QoE, VOD retention, and transparent usage analytics - your data, on your infrastructure.",
-    changefreq: "weekly",
-    priority: "0.9",
   },
   {
     id: "pricing",
@@ -52,8 +46,6 @@ export const MARKETING_ROUTES: MarketingRouteSeo[] = [
     title: "FrameWorks Pricing - Hosted, Hybrid, and Self-Hosted Streaming",
     description:
       "Compare FrameWorks beta pricing for free, supporter, production, and enterprise streaming deployments with transparent allowances, hosted load balancing, and pay-as-you-go usage.",
-    changefreq: "weekly",
-    priority: "0.9",
   },
   {
     id: "about",
@@ -61,8 +53,6 @@ export const MARKETING_ROUTES: MarketingRouteSeo[] = [
     title: "About FrameWorks - The Team Behind Sovereign Live Streaming",
     description:
       "Learn how FrameWorks builds sovereign live video infrastructure around MistServer, Livepeer, open operations, and self-hosted edge clusters.",
-    changefreq: "monthly",
-    priority: "0.8",
   },
   {
     id: "contact",
@@ -70,8 +60,6 @@ export const MARKETING_ROUTES: MarketingRouteSeo[] = [
     title: "Contact FrameWorks - Streaming Infrastructure Support",
     description:
       "Contact the FrameWorks team for self-hosted streaming deployments, hosted load balancing, enterprise live video infrastructure, and community support.",
-    changefreq: "monthly",
-    priority: "0.7",
   },
   {
     id: "status",
@@ -79,8 +67,6 @@ export const MARKETING_ROUTES: MarketingRouteSeo[] = [
     title: "FrameWorks Status - Live Streaming Network Health",
     description:
       "View FrameWorks platform and edge cluster status for live streaming routing, ingest, playback, and infrastructure health.",
-    changefreq: "daily",
-    priority: "0.6",
   },
   {
     id: "privacy",
@@ -88,8 +74,6 @@ export const MARKETING_ROUTES: MarketingRouteSeo[] = [
     title: "FrameWorks Privacy Policy",
     description:
       "Read the FrameWorks privacy policy for account, billing, streaming, analytics, and operational data.",
-    changefreq: "yearly",
-    priority: "0.3",
   },
   {
     id: "terms",
@@ -97,8 +81,6 @@ export const MARKETING_ROUTES: MarketingRouteSeo[] = [
     title: "FrameWorks Terms of Service",
     description:
       "Read the FrameWorks terms for using hosted, hybrid, and self-hosted live streaming services.",
-    changefreq: "yearly",
-    priority: "0.3",
   },
   {
     id: "aup",
@@ -106,8 +88,6 @@ export const MARKETING_ROUTES: MarketingRouteSeo[] = [
     title: "FrameWorks Acceptable Use Policy",
     description:
       "Read the FrameWorks acceptable use policy for live streaming, hosted infrastructure, self-hosted clusters, and platform accounts.",
-    changefreq: "yearly",
-    priority: "0.3",
   },
   {
     id: "security",
@@ -115,8 +95,6 @@ export const MARKETING_ROUTES: MarketingRouteSeo[] = [
     title: "FrameWorks Security & Responsible Disclosure",
     description:
       "Report a vulnerability to FrameWorks. Our disclosure policy covers reporting channels, scope, rules of engagement, and safe harbor for good-faith security research.",
-    changefreq: "yearly",
-    priority: "0.3",
   },
 ];
 

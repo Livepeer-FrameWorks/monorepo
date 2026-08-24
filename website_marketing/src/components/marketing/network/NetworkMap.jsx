@@ -893,6 +893,7 @@ function NetworkMapInner({ data }) {
           type="button"
           className="network-viz__control-btn"
           onClick={resetView}
+          aria-label="Reset map view"
           title="Reset view"
           dangerouslySetInnerHTML={{ __html: ICON_HOME }}
         />
@@ -905,6 +906,7 @@ function NetworkMapInner({ data }) {
               return !value;
             });
           }}
+          aria-label={showOrchestrators ? "Hide Livepeer compute" : "Show Livepeer compute"}
           title={showOrchestrators ? "Hide Livepeer compute" : "Show Livepeer compute"}
           dangerouslySetInnerHTML={{ __html: ICON_CPU }}
         />
@@ -912,6 +914,7 @@ function NetworkMapInner({ data }) {
           type="button"
           className="network-viz__control-btn"
           onClick={toggleFullscreen}
+          aria-label={isFullscreen ? "Exit fullscreen map" : "Open fullscreen map"}
           title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
           dangerouslySetInnerHTML={{ __html: isFullscreen ? ICON_MINIMIZE : ICON_MAXIMIZE }}
         />
@@ -921,6 +924,7 @@ function NetworkMapInner({ data }) {
           type="button"
           className="network-viz__scroll-hint"
           onClick={(e) => e.currentTarget.remove()}
+          aria-label="Dismiss map zoom instructions"
         >
           Hold <kbd>⌥</kbd> or <kbd>Ctrl</kbd> + scroll to zoom
         </button>

@@ -42,6 +42,8 @@ const Navigation = () => {
               <img
                 src="/frameworks-dark-horizontal-lockup-transparent.svg"
                 alt={config.companyName}
+                width="186"
+                height="40"
                 className="h-10"
               />
             </a>
