@@ -1,0 +1,98 @@
+{
+  "trailingSlash": true,
+  "directoryListing": false,
+  "redirects": [
+    { "source": "/streamers/quick-start", "destination": "/builders/quick-start/", "type": 301 },
+    {
+      "source": "/streamers/encoder-setup",
+      "destination": "/builders/encoder-setup/",
+      "type": 301
+    },
+    {
+      "source": "/streamers/integration-guide",
+      "destination": "/builders/integration-guide/",
+      "type": 301
+    },
+    { "source": "/streamers/ingest", "destination": "/builders/ingest/", "type": 301 },
+    { "source": "/streamers/ingest-react", "destination": "/builders/ingest-react/", "type": 301 },
+    {
+      "source": "/streamers/ingest-svelte",
+      "destination": "/builders/ingest-svelte/",
+      "type": 301
+    },
+    { "source": "/streamers/ingest-wc", "destination": "/builders/ingest-wc/", "type": 301 },
+    {
+      "source": "/streamers/ingest-vanilla",
+      "destination": "/builders/ingest-vanilla/",
+      "type": 301
+    },
+    {
+      "source": "/streamers/ingest-compositor",
+      "destination": "/builders/ingest-compositor/",
+      "type": 301
+    },
+    {
+      "source": "/streamers/ingest-advanced",
+      "destination": "/builders/ingest-advanced/",
+      "type": 301
+    },
+    { "source": "/streamers/playback", "destination": "/builders/playback/", "type": 301 },
+    {
+      "source": "/streamers/playback-react",
+      "destination": "/builders/playback-react/",
+      "type": 301
+    },
+    {
+      "source": "/streamers/playback-svelte",
+      "destination": "/builders/playback-svelte/",
+      "type": 301
+    },
+    { "source": "/streamers/playback-wc", "destination": "/builders/playback-wc/", "type": 301 },
+    {
+      "source": "/streamers/playback-vanilla",
+      "destination": "/builders/playback-vanilla/",
+      "type": 301
+    },
+    {
+      "source": "/streamers/playback-theming",
+      "destination": "/builders/playback-theming/",
+      "type": 301
+    },
+    {
+      "source": "/streamers/playback-advanced",
+      "destination": "/builders/playback-advanced/",
+      "type": 301
+    },
+    {
+      "source": "/streamers/multistreaming",
+      "destination": "/builders/multistreaming/",
+      "type": 301
+    },
+    { "source": "/streamers/recordings", "destination": "/builders/recordings/", "type": 301 },
+    {
+      "source": "/streamers/api-reference",
+      "destination": "/builders/api-reference/",
+      "type": 301
+    },
+    { "source": "/streamers/billing", "destination": "/builders/billing/", "type": 301 },
+    {
+      "source": "/streamers/troubleshooting",
+      "destination": "/builders/troubleshooting/",
+      "type": 301
+    }
+  ],
+  "headers": [
+    {
+      "source": "@(404|404.html)",
+      "headers": [{ "key": "X-Robots-Tag", "value": "noindex, nofollow" }]
+    },
+    {
+      "source": "_astro/**",
+      "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }]
+    },
+    {
+      "source": "pagefind/**",
+      "headers": [{ "key": "Cache-Control", "value": "public, max-age=86400" }]
+    }
+  ]
+}

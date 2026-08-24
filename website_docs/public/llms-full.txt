@@ -4199,7 +4199,7 @@ export class AppModule {}
 
 
 ---
-# Overview
+# StreamCrafter ingest overview
 https://logbook.frameworks.network/builders/ingest
 
 Browser-based broadcasting — camera, screen share, or both with audio mixing. No encoder software needed.
@@ -6994,7 +6994,7 @@ export class AppModule {}
 
 
 ---
-# Overview
+# Player playback overview
 https://logbook.frameworks.network/builders/playback
 
 Playback options: drop-in components across React, Svelte, and Web Components, or raw protocol URLs for HLS, LL-HLS, DASH, WebRTC/WHEP, Mist WebRTC, MP4, WebM/MKV, AAC, TS, H264, WebSocket outputs, and direct RTMP/RTSP/SRT/DTSC when exposed.

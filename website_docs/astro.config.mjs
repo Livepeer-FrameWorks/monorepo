@@ -253,6 +253,7 @@ export default defineConfig({
         }),
       ],
       components: {
+        Head: "./src/components/Head.astro",
         Hero: "./src/components/Hero.astro",
         Header: "./src/components/Header.astro",
         MobileMenuFooter: "./src/components/MobileMenuFooter.astro",

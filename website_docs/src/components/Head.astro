@@ -1,0 +1,121 @@
+---
+import DefaultHead from "@astrojs/starlight/components/Head.astro";
+
+const route = Astro.locals.starlightRoute;
+const { data } = route.entry;
+const isBlogPost = data.date instanceof Date;
+const blogPageMatch = route.id.match(/^blog(?:\/(\d+))?$/);
+const blogTagMatch = route.id.match(/^blog\/tags\/(.+)$/);
+const blogAuthorMatch = route.id.match(/^blog\/authors\/(.+)$/);
+const humanize = (value) =>
+  value
+    .split("-")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+const virtualDescription = blogPageMatch
+  ? "Engineering notes on sovereign live streaming, video infrastructure, distributed systems, AI agents, and operating FrameWorks in production."
+  : blogTagMatch
+    ? `FrameWorks engineering articles about ${humanize(blogTagMatch[1])}.`
+    : blogAuthorMatch
+      ? "Engineering articles from the FrameWorks team about sovereign live video infrastructure."
+      : undefined;
+const description = data.description || virtualDescription;
+const canonicalUrl = Astro.site ? new URL(Astro.url.pathname, Astro.site).href : Astro.url.href;
+const imageUrl = Astro.site ? new URL("/og-card.png", Astro.site).href : undefined;
+const logoUrl = Astro.site ? new URL("/favicon-192.png", Astro.site).href : undefined;
+
+const upsertMeta = (attribute, key, content) => {
+  const existing = route.head.find(
+    ({ tag, attrs }) => tag === "meta" && attrs?.[attribute] === key
+  );
+  if (existing?.attrs) existing.attrs.content = content;
+  else route.head.push({ tag: "meta", attrs: { [attribute]: key, content } });
+};
+
+if (description) {
+  upsertMeta("name", "description", description);
+  upsertMeta("property", "og:description", description);
+  upsertMeta("name", "twitter:description", description);
+  upsertMeta("name", "twitter:title", data.title);
+}
+
+if (blogPageMatch?.[1]) {
+  const title = `FrameWorks Blog – Page ${blogPageMatch[1]} | FrameWorks Docs`;
+  const titleEntry = route.head.find(({ tag }) => tag === "title");
+  if (titleEntry) titleEntry.content = title;
+  upsertMeta("property", "og:title", title);
+}
+
+if (isBlogPost) {
+  const existingOgType = route.head.find(
+    ({ tag, attrs }) => tag === "meta" && attrs?.property === "og:type"
+  );
+  if (existingOgType?.attrs) {
+    existingOgType.attrs.content = "article";
+  } else {
+    route.head.push({ tag: "meta", attrs: { property: "og:type", content: "article" } });
+  }
+  route.head.push({
+    tag: "meta",
+    attrs: { property: "article:published_time", content: data.date.toISOString() },
+  });
+}
+
+const lastUpdated =
+  data.lastUpdated instanceof Date && data.lastUpdated.getTime() !== data.date?.getTime()
+    ? data.lastUpdated.toISOString()
+    : undefined;
+const articleJsonLd = isBlogPost
+  ? {
+      "@context": "https://schema.org",
+      "@type": "BlogPosting",
+      headline: data.title,
+      description,
+      datePublished: data.date.toISOString(),
+      ...(lastUpdated ? { dateModified: lastUpdated } : {}),
+      ...(imageUrl ? { image: [imageUrl] } : {}),
+      mainEntityOfPage: canonicalUrl,
+      author: { "@type": "Organization", name: "FrameWorks", url: "https://frameworks.network/" },
+      publisher: {
+        "@type": "Organization",
+        name: "FrameWorks",
+        url: "https://frameworks.network/",
+        ...(logoUrl ? { logo: { "@type": "ImageObject", url: logoUrl } } : {}),
+      },
+      ...(Array.isArray(data.tags) ? { keywords: data.tags.join(", ") } : {}),
+    }
+  : undefined;
+const pathSegments = Astro.url.pathname.split("/").filter(Boolean);
+const breadcrumbJsonLd =
+  Astro.site && pathSegments.length > 0
+    ? {
+        "@context": "https://schema.org",
+        "@type": "BreadcrumbList",
+        itemListElement: [
+          {
+            "@type": "ListItem",
+            position: 1,
+            name: "FrameWorks Docs",
+            item: new URL("/", Astro.site).href,
+          },
+          ...pathSegments.map((segment, index) => ({
+            "@type": "ListItem",
+            position: index + 2,
+            name:
+              index === pathSegments.length - 1
+                ? data.title
+                : humanize(decodeURIComponent(segment)),
+            item: new URL(`/${pathSegments.slice(0, index + 1).join("/")}/`, Astro.site).href,
+          })),
+        ],
+      }
+    : undefined;
+---
+
+<DefaultHead />
+{articleJsonLd && <script type="application/ld+json" set:html={JSON.stringify(articleJsonLd)} />}
+{
+  breadcrumbJsonLd && (
+    <script type="application/ld+json" set:html={JSON.stringify(breadcrumbJsonLd)} />
+  )
+}
