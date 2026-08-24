@@ -2,7 +2,9 @@ package redis
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
@@ -34,13 +36,18 @@ type Config struct {
 	WriteTimeout     time.Duration
 }
 
-// NewUniversalClient creates a Redis client that works with single-node,
-// Sentinel, or Cluster topologies based on Config.Mode. go-redis routes
-// internally: MasterName set → Sentinel, multiple Addrs → Cluster,
-// single Addr → standalone.
+// NewUniversalClient creates a Redis client for the explicitly selected
+// single-node, Sentinel, or Cluster topology.
 func NewUniversalClient(ctx context.Context, cfg Config) (goredis.UniversalClient, error) {
+	return newUniversalClient(ctx, cfg, nil)
+}
+
+func newUniversalClient(ctx context.Context, cfg Config, dialer func(context.Context, string, string) (net.Conn, error)) (goredis.UniversalClient, error) {
 	if len(cfg.Addrs) == 0 {
 		return nil, fmt.Errorf("at least one redis address is required")
+	}
+	if cfg.Mode == "" {
+		return nil, errors.New("redis mode is required")
 	}
 
 	dialTimeout := cfg.DialTimeout
@@ -56,20 +63,42 @@ func NewUniversalClient(ctx context.Context, cfg Config) (goredis.UniversalClien
 		writeTimeout = defaultDialTimeout
 	}
 
-	opts := &goredis.UniversalOptions{
-		Addrs:            cfg.Addrs,
-		MasterName:       cfg.MasterName,
-		Username:         cfg.Username,
-		Password:         cfg.Password,
-		SentinelUsername: cfg.SentinelUsername,
-		SentinelPassword: cfg.SentinelPassword,
-		DB:               cfg.DB,
-		DialTimeout:      dialTimeout,
-		ReadTimeout:      readTimeout,
-		WriteTimeout:     writeTimeout,
+	var client goredis.UniversalClient
+	switch cfg.Mode {
+	case ModeSingle:
+		if len(cfg.Addrs) != 1 {
+			return nil, fmt.Errorf("single redis mode requires exactly one address, got %d", len(cfg.Addrs))
+		}
+		client = goredis.NewClient(&goredis.Options{
+			Addr: cfg.Addrs[0], Username: cfg.Username, Password: cfg.Password, DB: cfg.DB,
+			Dialer: dialer, DialTimeout: dialTimeout, ReadTimeout: readTimeout, WriteTimeout: writeTimeout,
+		})
+	case ModeSentinel:
+		if cfg.MasterName == "" {
+			return nil, errors.New("sentinel redis mode requires master name")
+		}
+		client = goredis.NewFailoverClient(&goredis.FailoverOptions{
+			MasterName: cfg.MasterName, SentinelAddrs: cfg.Addrs,
+			Username: cfg.Username, Password: cfg.Password,
+			SentinelUsername: cfg.SentinelUsername, SentinelPassword: cfg.SentinelPassword,
+			DB: cfg.DB, Dialer: dialer, DialTimeout: dialTimeout, ReadTimeout: readTimeout, WriteTimeout: writeTimeout,
+		})
+	case ModeCluster:
+		if cfg.DB != 0 {
+			return nil, errors.New("cluster redis mode supports only database 0")
+		}
+		clusterClient := goredis.NewClusterClient(&goredis.ClusterOptions{
+			Addrs: cfg.Addrs, Username: cfg.Username, Password: cfg.Password,
+			Dialer: dialer, DialTimeout: dialTimeout, ReadTimeout: readTimeout, WriteTimeout: writeTimeout,
+		})
+		if _, err := clusterClient.ClusterShards(ctx).Result(); err != nil {
+			_ = clusterClient.Close()
+			return nil, fmt.Errorf("load redis cluster topology: %w", err)
+		}
+		client = clusterClient
+	default:
+		return nil, fmt.Errorf("unsupported redis mode %q", cfg.Mode)
 	}
-
-	client := goredis.NewUniversalClient(opts)
 	if err := client.Ping(ctx).Err(); err != nil {
 		_ = client.Close()
 		return nil, fmt.Errorf("ping redis: %w", err)
@@ -78,8 +107,8 @@ func NewUniversalClient(ctx context.Context, cfg Config) (goredis.UniversalClien
 	return client, nil
 }
 
-// NewClientFromURL creates a single-node Redis client from a URL.
-// Retained for backwards compatibility; prefer NewUniversalClient for new code.
+// NewClientFromURL creates a single-node Redis client from the canonical URL
+// configuration used by local and single-node deployments.
 func NewClientFromURL(ctx context.Context, redisURL string) (*goredis.Client, error) {
 	if redisURL == "" {
 		return nil, fmt.Errorf("redis url is required")

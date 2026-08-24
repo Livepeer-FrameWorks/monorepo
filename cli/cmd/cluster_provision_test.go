@@ -2003,6 +2003,15 @@ func TestBuildServiceEnvVarsIncludesFoghornSentinelPassword(t *testing.T) {
 	if env["REDIS_MODE"] != "sentinel" {
 		t.Fatalf("REDIS_MODE = %q, want sentinel", env["REDIS_MODE"])
 	}
+	if env["REDIS_ADDRS"] != "regional-eu-1.internal:26379,regional-eu-2.internal:26379,regional-eu-3.internal:26379" {
+		t.Fatalf("REDIS_ADDRS = %q, want the manifest Sentinel quorum", env["REDIS_ADDRS"])
+	}
+	if env["REDIS_MASTER_NAME"] != "foghorn" {
+		t.Fatalf("REDIS_MASTER_NAME = %q, want foghorn", env["REDIS_MASTER_NAME"])
+	}
+	if _, ok := env["REDIS_URL"]; ok {
+		t.Fatalf("REDIS_URL must not be emitted for Sentinel topology, got %q", env["REDIS_URL"])
+	}
 	if env["REDIS_PASSWORD"] != "redis secret" {
 		t.Fatalf("REDIS_PASSWORD = %q, want redis secret", env["REDIS_PASSWORD"])
 	}
