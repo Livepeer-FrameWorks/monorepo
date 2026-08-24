@@ -217,6 +217,51 @@ Use the generated `DBTX` boundary so transaction ownership stays with the caller
 never split a lock/fencing transaction merely to fit generated methods. ClickHouse
 uses explicit typed batch writers and live append contracts rather than sqlc.
 
+## Executable runtime capabilities
+
+Migration ledgers prove recorded transitions; they do not prove that a live role can
+execute the reads and writes required by the binary being deployed. Every service
+with a PostgreSQL/YugabyteDB or ClickHouse dependency therefore declares a small
+read-only capability pack in `pkg/database/capabilities.go`. The shared connection
+layer executes the relevant pack after ping and before returning the handle. A
+missing table, column, view, type, or grant prevents the binary from becoming ready
+and identifies the failed capability.
+
+Capability probes are not a third full schema manifest. They select a few
+deploy-critical columns and views that represent the binary contract; current
+baseline SQL remains desired state and release-catalogued migrations remain
+transition history. Completeness tests require every topology-declared database
+dependency to have an engine-specific pack, and real PostgreSQL and ClickHouse tests
+execute all packs against the current baselines with broken-column negative controls.
+
+`frameworks cluster doctor --deep` runs these same probes in addition to checking
+the migration ledger. PostgreSQL/YugabyteDB probes switch to the prepared runtime
+role, so deep doctor detects both live shape drift and missing grants before a
+manifest opts service DSNs into that role.
+
+## PostgreSQL runtime roles
+
+Each declared database has an owner/migration login and a separately provisioned
+least-privilege runtime login. The conventional runtime name is `<owner>_runtime`;
+`runtime_role` may declare an explicit name. Runtime roles receive database connect,
+schema usage, table `SELECT`/`INSERT`/`UPDATE`/`DELETE`, sequence usage, and function
+execution, including owner default privileges for objects created later. They do not
+receive schema creation, object ownership, superuser, database creation, role
+creation, or replication privileges.
+
+The infrastructure administrator retains the migration advisory lock and writes
+the `_migrations` ledger, but each migration body executes under `SET ROLE` for the
+declared owner. Objects created by a migration are therefore owner-owned and inherit
+the same runtime default privileges; administrator-owned application tables are a
+contract failure.
+
+The manifest field is an explicit rolling cutover. When `runtime_role` is absent,
+service DSNs continue to use the owner while provisioning still creates and
+reconciles the conventional runtime role. Operators provision first, verify with
+`cluster doctor --deep`, then add `runtime_role` and reprovision services. Owner
+logins remain enabled during the beta transition; disabling them requires proof that
+no deployed revision still uses them.
+
 ## Operator pre-flight before a consolidation release
 
 Before deploying a release that raises the floor, confirm every live cluster has applied

@@ -152,9 +152,15 @@ frameworks cluster doctor [flags]
 - **Database migrations:** Embedded PostgreSQL/YugabyteDB migrations compared
   against each configured database's `_migrations` ledger
 
-Note: This command checks migration ledger drift, not full physical schema
-introspection. For YugabyteDB clusters where the password is only in SOPS
-env_files, pass `--deep` so doctor can decrypt `DATABASE_PASSWORD`.
+With `--deep`, doctor additionally executes every enabled database-backed binary's
+read-only schema capability pack against the live PostgreSQL/YugabyteDB and
+ClickHouse engines. PostgreSQL/YugabyteDB probes assume the prepared runtime role,
+so the check proves required objects and least-privilege grants together.
+
+This is targeted binary-contract introspection, not a full physical-schema diff.
+Deep mode decrypts the shared env for authenticated service checks and ClickHouse
+credentials; Yugabyte administrative probes still use the role's localhost-only
+trust path and then `SET ROLE` to validate application access.
 
 The report groups infrastructure, application, interface, observability, and
 migration-ledger checks. Use `--output json` when a pipeline needs the current
@@ -173,6 +179,9 @@ frameworks cluster doctor --github-repo org/gitops --cluster production
 
 # With verbose output
 frameworks cluster doctor --verbose
+
+# Verify live schema capabilities and prepared runtime-role grants
+frameworks cluster doctor --deep
 ```
 
 ---

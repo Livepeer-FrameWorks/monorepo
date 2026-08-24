@@ -32,6 +32,21 @@
     label: "{{ item.name }}"
   when: postgres_databases | length > 0
 
+- name: Create least-privilege application runtime roles
+  become: true
+  become_user: postgres
+  community.postgresql.postgresql_user:
+    login_unix_socket: /var/run/postgresql
+    name: "{{ item.runtime_role | default((item.owner | default(item.name)) ~ '_runtime') }}"
+    password: "{{ item.password | default(postgres_admin_password) }}"
+    role_attr_flags: LOGIN,NOSUPERUSER,NOCREATEDB,NOCREATEROLE,NOREPLICATION
+    state: present
+  loop: "{{ postgres_databases }}"
+  loop_control:
+    label: "{{ item.runtime_role | default((item.owner | default(item.name)) ~ '_runtime') }}"
+  no_log: true
+  when: postgres_databases | length > 0
+
 - name: Create database extensions
   become: true
   become_user: postgres

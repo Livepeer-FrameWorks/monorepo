@@ -2086,6 +2086,25 @@ func TestBuildServiceEnvVarsBindsDeclaredPostgresInstanceDatabase(t *testing.T) 
 	if !strings.Contains(env["DATABASE_URL"], "foghorn_eu:instance-secret@regional-eu-1.internal:5432/foghorn_eu") {
 		t.Fatalf("DATABASE_URL did not use declared instance credentials: %q", env["DATABASE_URL"])
 	}
+
+	manifest.Infrastructure.Postgres.Instances[0].Databases[0].RuntimeRole = "foghorn_eu_runtime"
+	env, err = buildServiceEnvVars(&orchestrator.Task{
+		Name:      "foghorn-eu@regional-eu-2",
+		Type:      "foghorn",
+		ServiceID: "foghorn-eu",
+		Host:      "regional-eu-2",
+		ClusterID: "media-eu-1",
+		Phase:     orchestrator.PhaseApplications,
+	}, manifest, map[string]any{}, "", "", map[string]string{}, nil, "native")
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars with runtime role returned error: %v", err)
+	}
+	if got := env["DATABASE_USER"]; got != "foghorn_eu_runtime" {
+		t.Fatalf("DATABASE_USER with explicit runtime role = %q, want foghorn_eu_runtime", got)
+	}
+	if !strings.Contains(env["DATABASE_URL"], "foghorn_eu_runtime:instance-secret@regional-eu-1.internal:5432/foghorn_eu") {
+		t.Fatalf("DATABASE_URL did not opt into the declared runtime role: %q", env["DATABASE_URL"])
+	}
 }
 
 func TestBuildServiceEnvVarsPrefersDeclaredDatabasePassword(t *testing.T) {

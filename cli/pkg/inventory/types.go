@@ -308,6 +308,10 @@ func (pg *PostgresConfig) EffectiveReplicationFactor() int {
 type DatabaseConfig struct {
 	Name  string `yaml:"name"`
 	Owner string `yaml:"owner"`
+	// RuntimeRole opts service DSNs into the separately provisioned
+	// least-privilege role. Empty preserves the owner DSN during rolling
+	// upgrades while provisioning still prepares owner_runtime for cutover.
+	RuntimeRole string `yaml:"runtime_role,omitempty"`
 }
 
 // KafkaConfig declares a KRaft-mode Kafka cluster. The top-level fields

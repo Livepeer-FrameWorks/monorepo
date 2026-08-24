@@ -42,6 +42,7 @@ import (
 	"frameworks/cli/pkg/provisioner"
 	"frameworks/cli/pkg/remoteaccess"
 	"frameworks/cli/pkg/ssh"
+	pkgdatabase "github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ingress"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
@@ -4977,8 +4978,9 @@ func databaseConfigsToMetadata(databases []inventory.DatabaseConfig, defaultPass
 	items := make([]map[string]string, 0, len(databases))
 	for _, db := range databases {
 		item := map[string]string{
-			"name":  db.Name,
-			"owner": db.Owner,
+			"name":         db.Name,
+			"owner":        db.Owner,
+			"runtime_role": databaseRuntimeRole(db),
 		}
 		password := databaseConfigPassword(db, defaultPassword, sharedEnv...)
 		if password != "" {
@@ -5056,11 +5058,11 @@ func yugabyteSchemaDatabases(databases []inventory.DatabaseConfig, manifest *inv
 		logicalName := strings.TrimSpace(db.Name)
 		expanded := clusterScopedDatabaseAliases(db, manifest)
 		if len(expanded) == 0 {
-			addSchemaDatabase(&items, seen, db.Name, db.Owner, "", "")
+			addSchemaDatabase(&items, seen, db.Name, db.Owner, databaseRuntimeRole(db), "", "")
 			continue
 		}
 		for _, item := range expanded {
-			addSchemaDatabase(&items, seen, item.Name, item.Owner, logicalName, logicalName)
+			addSchemaDatabase(&items, seen, item.Name, item.Owner, databaseRuntimeRole(item), logicalName, logicalName)
 		}
 	}
 	return items
@@ -5070,12 +5072,12 @@ func schemaDatabasesFromConfigs(databases []inventory.DatabaseConfig) []provisio
 	items := make([]provisioner.SchemaDatabase, 0, len(databases))
 	seen := map[string]struct{}{}
 	for _, db := range databases {
-		addSchemaDatabase(&items, seen, db.Name, db.Owner, "", "")
+		addSchemaDatabase(&items, seen, db.Name, db.Owner, databaseRuntimeRole(db), "", "")
 	}
 	return items
 }
 
-func addSchemaDatabase(items *[]provisioner.SchemaDatabase, seen map[string]struct{}, name, owner, sourceName, schema string) {
+func addSchemaDatabase(items *[]provisioner.SchemaDatabase, seen map[string]struct{}, name, owner, runtimeRole, sourceName, schema string) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return
@@ -5084,15 +5086,20 @@ func addSchemaDatabase(items *[]provisioner.SchemaDatabase, seen map[string]stru
 	if owner == "" {
 		owner = name
 	}
-	key := name + "\x00" + owner + "\x00" + strings.TrimSpace(sourceName) + "\x00" + strings.TrimSpace(schema)
+	runtimeRole = strings.TrimSpace(runtimeRole)
+	if runtimeRole == "" {
+		runtimeRole = owner + "_runtime"
+	}
+	key := name + "\x00" + owner + "\x00" + runtimeRole + "\x00" + strings.TrimSpace(sourceName) + "\x00" + strings.TrimSpace(schema)
 	if _, ok := seen[key]; ok {
 		return
 	}
 	*items = append(*items, provisioner.SchemaDatabase{
-		Name:       name,
-		Owner:      owner,
-		SourceName: strings.TrimSpace(sourceName),
-		Schema:     strings.TrimSpace(schema),
+		Name:        name,
+		Owner:       owner,
+		RuntimeRole: runtimeRole,
+		SourceName:  strings.TrimSpace(sourceName),
+		Schema:      strings.TrimSpace(schema),
 	})
 	seen[key] = struct{}{}
 }
@@ -5170,21 +5177,25 @@ func clusterScopedDatabaseAliases(db inventory.DatabaseConfig, manifest *invento
 		item := db
 		item.Name = alias
 		item.Owner = alias
+		if strings.TrimSpace(db.RuntimeRole) != "" {
+			item.RuntimeRole = alias + "_runtime"
+		}
 		items = append(items, item)
 	}
 	return items
 }
 
 func databaseConfigKey(db inventory.DatabaseConfig) string {
-	return strings.TrimSpace(db.Name) + "\x00" + strings.TrimSpace(db.Owner)
+	return strings.TrimSpace(db.Name) + "\x00" + strings.TrimSpace(db.Owner) + "\x00" + strings.TrimSpace(db.RuntimeRole)
 }
 
 func yugabyteDatabaseConfigsToMetadata(databases []inventory.DatabaseConfig, manifest *inventory.Manifest, sharedEnv map[string]string, clusterEnvs map[string]map[string]string, fallbackPassword string) []map[string]string {
 	items := make([]map[string]string, 0, len(databases))
 	for _, db := range databases {
 		item := map[string]string{
-			"name":  db.Name,
-			"owner": db.Owner,
+			"name":         db.Name,
+			"owner":        db.Owner,
+			"runtime_role": databaseRuntimeRole(db),
 		}
 		if password := yugabyteDatabasePassword(db, manifest, sharedEnv, clusterEnvs, fallbackPassword); password != "" {
 			item["password"] = password
@@ -5223,6 +5234,20 @@ func yugabyteDatabasePassword(db inventory.DatabaseConfig, manifest *inventory.M
 		return fallbackPassword
 	}
 	return strings.TrimSpace(sharedEnv["DATABASE_PASSWORD"])
+}
+
+func databaseRuntimeRole(db inventory.DatabaseConfig) string {
+	if role := strings.TrimSpace(db.RuntimeRole); role != "" {
+		return role
+	}
+	owner := strings.TrimSpace(db.Owner)
+	if owner == "" {
+		owner = strings.TrimSpace(db.Name)
+	}
+	if owner == "" {
+		return ""
+	}
+	return owner + "_runtime"
 }
 
 func stringMapToAnyMap(values map[string]string) map[string]any {
@@ -7079,6 +7104,10 @@ func applyDeclaredPostgresDatabaseDefaults(task *orchestrator.Task, manifest *in
 	if owner == "" {
 		owner = db.Name
 	}
+	runtimeRole := owner
+	if len(pkgdatabase.CapabilitiesFor(task.Type, pkgdatabase.EnginePostgres)) > 0 && strings.TrimSpace(db.RuntimeRole) != "" {
+		runtimeRole = strings.TrimSpace(db.RuntimeRole)
+	}
 
 	if inst == nil {
 		// Top-level Yugabyte database: DATABASE_HOST/DATABASE_PORT were already derived from the
@@ -7089,8 +7118,8 @@ func applyDeclaredPostgresDatabaseDefaults(task *orchestrator.Task, manifest *in
 		if db.Name != "" {
 			env["DATABASE_NAME"] = db.Name
 		}
-		if owner != "" {
-			env["DATABASE_USER"] = owner
+		if runtimeRole != "" {
+			env["DATABASE_USER"] = runtimeRole
 		}
 		for _, key := range declaredPostgresPasswordEnvKeys("", db.Name, owner) {
 			if password := strings.TrimSpace(env[key]); password != "" {
@@ -7118,8 +7147,8 @@ func applyDeclaredPostgresDatabaseDefaults(task *orchestrator.Task, manifest *in
 	if db.Name != "" {
 		env["DATABASE_NAME"] = db.Name
 	}
-	if owner != "" {
-		env["DATABASE_USER"] = owner
+	if runtimeRole != "" {
+		env["DATABASE_USER"] = runtimeRole
 	}
 	for _, key := range declaredPostgresPasswordEnvKeys(prefix, db.Name, owner) {
 		if password := strings.TrimSpace(env[key]); password != "" {

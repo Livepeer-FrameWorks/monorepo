@@ -132,7 +132,7 @@ func TestBuildMigrationItemsCanUseLogicalSourceForPhysicalDatabase(t *testing.T)
 		content:  "ALTER TABLE foghorn.streams ADD COLUMN IF NOT EXISTS x INT;",
 	}}
 	items := buildMigrationItemsFromList(all, []SchemaDatabase{
-		{Name: "foghorn_eu", SourceName: "foghorn", Schema: "foghorn"},
+		{Name: "foghorn_eu", Owner: "foghorn_eu_owner", SourceName: "foghorn", Schema: "foghorn"},
 	}, "expand", "v99.0.0")
 	if len(items) == 0 {
 		t.Fatal("expected foghorn migrations remapped onto physical foghorn_eu database")
@@ -140,6 +140,9 @@ func TestBuildMigrationItemsCanUseLogicalSourceForPhysicalDatabase(t *testing.T)
 	for _, item := range items {
 		if got := item["db"]; got != "foghorn_eu" {
 			t.Fatalf("migration target db = %v, want foghorn_eu", got)
+		}
+		if got := item["owner"]; got != "foghorn_eu_owner" {
+			t.Fatalf("migration owner = %v, want foghorn_eu_owner", got)
 		}
 		if sql, _ := item["sql"].(string); !strings.Contains(sql, "foghorn.") {
 			t.Fatalf("expected logical foghorn migration SQL, got %q", sql)

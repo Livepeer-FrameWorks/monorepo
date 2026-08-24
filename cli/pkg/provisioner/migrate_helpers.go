@@ -75,8 +75,8 @@ func buildMigrationItemsFromList(all []Migration, databases []SchemaDatabase, ph
 
 // targetsBySource maps each embedded source database name to the physical target
 // database name(s) it provisions (logical→physical, e.g. foghorn→foghorn_eu).
-func targetsBySource(databases []SchemaDatabase) map[string][]string {
-	bySource := make(map[string][]string, len(databases))
+func targetsBySource(databases []SchemaDatabase) map[string][]SchemaDatabase {
+	bySource := make(map[string][]SchemaDatabase, len(databases))
 	for _, database := range databases {
 		target := database.Name
 		if target == "" {
@@ -86,14 +86,20 @@ func targetsBySource(databases []SchemaDatabase) map[string][]string {
 		if source == "" {
 			source = target
 		}
-		bySource[source] = append(bySource[source], target)
+		database.Name = target
+		bySource[source] = append(bySource[source], database)
 	}
 	return bySource
 }
 
-func migrationItem(target string, m Migration) map[string]any {
+func migrationItem(target SchemaDatabase, m Migration) map[string]any {
+	owner := target.Owner
+	if owner == "" {
+		owner = target.Name
+	}
 	return map[string]any{
-		"db":            target,
+		"db":            target.Name,
+		"owner":         owner,
 		"version":       m.Version,
 		"phase":         m.Phase,
 		"sequence":      m.Sequence,

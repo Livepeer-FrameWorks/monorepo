@@ -13,12 +13,17 @@ for service in $service_databases; do
 SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'service', :'runtime_password')
 WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'service')
 \gexec
+SELECT format('CREATE ROLE %I LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION', :'service' || '_runtime', :'runtime_password')
+WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'service' || '_runtime')
+\gexec
 SELECT format('CREATE DATABASE %I OWNER %I', :'service', :'service')
 WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'service')
 \gexec
 SELECT format('REVOKE CONNECT ON DATABASE %I FROM PUBLIC', :'service')
 \gexec
 SELECT format('GRANT CONNECT ON DATABASE %I TO %I', :'service', :'service')
+\gexec
+SELECT format('GRANT CONNECT ON DATABASE %I TO %I', :'service', :'service' || '_runtime')
 \gexec
 SQL
 
@@ -43,6 +48,26 @@ SQL
 
   psql --username "$service" --dbname "$service" --set=ON_ERROR_STOP=1 \
     --file="/frameworks-schema/$service.sql"
+
+  psql --username "$POSTGRES_USER" --dbname "$service" \
+    --set=service="$service" --set=ON_ERROR_STOP=1 <<'SQL'
+SELECT format('GRANT USAGE ON SCHEMA %I TO %I', :'service', :'service' || '_runtime')
+\gexec
+SELECT format('REVOKE CREATE ON SCHEMA %I FROM %I', :'service', :'service' || '_runtime')
+\gexec
+SELECT format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %I TO %I', :'service', :'service' || '_runtime')
+\gexec
+SELECT format('GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA %I TO %I', :'service', :'service' || '_runtime')
+\gexec
+SELECT format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA %I TO %I', :'service', :'service' || '_runtime')
+\gexec
+SELECT format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %I', :'service', :'service', :'service' || '_runtime')
+\gexec
+SELECT format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO %I', :'service', :'service', :'service' || '_runtime')
+\gexec
+SELECT format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT EXECUTE ON FUNCTIONS TO %I', :'service', :'service', :'service' || '_runtime')
+\gexec
+SQL
 done
 
 # The operator analytics role is intentionally cross-service. Install its

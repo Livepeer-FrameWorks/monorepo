@@ -314,6 +314,7 @@ infrastructure:
     databases:
       - name: quartermaster
         owner: quartermaster_user
+        runtime_role: quartermaster_runtime
 ```
 
 **Fields:**
@@ -326,7 +327,10 @@ infrastructure:
 - `nodes` (required for multi-node YugabyteDB) - List of `{host, id, rpc_port}` entries
 - `port` (required)
 - `replication_factor` (optional) - Defaults to the number of `nodes`
-- `databases` (optional)
+- `databases` (optional) - Each entry declares `name` and its schema/migration
+  `owner`. Optional `runtime_role` opts service DSNs into the separately
+  provisioned least-privilege login. Omit it during the first rolling provision,
+  verify with `cluster doctor --deep`, then add it for the application cutover.
 - `tuning` (optional) - key/value overrides for server tuning
 - `sql_access` (optional) - `direct` by default, or `ssh`
 - `password` (optional) - Database password override

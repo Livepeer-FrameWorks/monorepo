@@ -1,7 +1,17 @@
 ---
-# Migration items delivered by the CLI: list of {db, version, phase, sequence,
+# Migration items delivered by the CLI: list of {db, owner, version, phase, sequence,
 # filename, checksum, transactional, sql}. The role validates already-applied
 # checksums, filters to pending, and records successful applies in _migrations.
+
+- name: Validate migration owner identifiers
+  ansible.builtin.assert:
+    that:
+      - item.owner is match('^[A-Za-z_][A-Za-z0-9_]*$')
+    fail_msg: "Migration owner identifiers must be simple SQL identifiers"
+  loop: "{{ postgres_migrate_items | default([]) }}"
+  loop_control:
+    label: "{{ item.db }}:{{ item.owner }}"
+  when: postgres_migrate_items | default([]) | length > 0
 
 - name: Read applied migrations per database
   become: true
@@ -125,7 +135,9 @@
     db: "{{ item.db }}"
     query:
       - "SELECT pg_advisory_lock(hashtext('frameworks_migrations'), hashtext('{{ item.db }}'))"
+      - 'SET ROLE "{{ item.owner }}"'
       - "{{ item.sql }}"
+      - "RESET ROLE"
       - >-
         INSERT INTO _migrations (version, phase, seq, filename, checksum, transactional)
         VALUES ('{{ item.version }}', '{{ item.phase }}', {{ item.sequence }},

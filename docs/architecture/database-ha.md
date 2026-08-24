@@ -29,6 +29,11 @@ a node that fails to connect (`failed_host_reconnect_delay_secs`, default 5s).
 Single-node / vanilla Postgres keeps the original single-host URL (no
 `load_balance`).
 
+The same connection boundary executes the binary's read-only schema capability
+pack before returning the handle. This preserves smart-driver discovery and
+load-balancing—capability checking does not create a second connection stack—and a
+binary whose live Yugabyte schema or grants are incompatible never becomes ready.
+
 `make verify-yugabyte-ha` exercises this path against the release-pinned image. It
 forms an RF=3 three-zone cluster, proves connections are distributed across all
 three tservers, injects a real retryable Yugabyte SQLSTATE, isolates the tserver
@@ -100,6 +105,30 @@ time by `database.Connect`, not stored in the env.)
 one (`checkYugabyteCluster` in `cli/cmd/cluster.go`), and the migration check does
 the same — so doctor reflects cluster health instead of the status of one pinned
 node. The CLI itself still uses `lib/pq` (its own module).
+
+With `--deep`, doctor also executes every enabled binary's shared capability pack.
+PostgreSQL/Yugabyte probes run under the manifest database's prepared runtime role,
+proving actual least-privilege access rather than merely observing objects as the
+administrator.
+
+## Owner and runtime authority
+
+Provisioning keeps schema ownership/migrations and application traffic on separate
+roles. For owner `purser`, for example, it prepares `purser_runtime` with database
+connect, schema usage, table DML, sequence usage, and function execution, but without
+schema creation, object ownership, superuser, database creation, role creation, or
+replication privileges. Grants and owner default privileges reconcile on every
+provision run so later migration-created objects are usable by the runtime role.
+Migration orchestration keeps its advisory lock and ledger writes under the
+administrator, but runs the migration SQL itself under `SET ROLE` for the declared
+owner so newly created application objects inherit those grants.
+
+The manifest's `runtime_role` field controls the DSN cutover. It is deliberately
+opt-in: existing manifests continue using the owner while provisioning prepares the
+restricted role. The safe rolling sequence is provision, run `cluster doctor --deep`,
+declare `runtime_role`, then reprovision applications. This works the same for
+PostgreSQL and YugabyteDB; the Yugabyte contract lane independently proves supported
+YSQL behavior.
 
 # ClickHouse HA — Replicated cluster + ClickHouse Keeper
 

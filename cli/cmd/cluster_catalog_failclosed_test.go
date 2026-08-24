@@ -11,6 +11,7 @@ import (
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/provisioner"
 	"frameworks/cli/pkg/ssh"
+	pkgdatabase "github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/topology"
 	fwv "github.com/Livepeer-FrameWorks/monorepo/pkg/version"
@@ -38,6 +39,25 @@ func TestCatalogDatabaseOwnershipCoversEveryDatabaseBackedService(t *testing.T) 
 		}
 		if dep := topology.InfraDependencies(must); len(dep) == 0 {
 			t.Fatalf("topology has no infra dependencies for %q", must)
+		}
+	}
+}
+
+func TestExecutableCapabilitiesCoverEveryDatabaseDependency(t *testing.T) {
+	for id := range servicedefs.Services {
+		needsPostgres := serviceIsDatabaseBacked(id)
+		needsClickHouse := serviceDependsOnClickHouse(id)
+		if !needsPostgres && !needsClickHouse {
+			continue
+		}
+		if needsPostgres && len(pkgdatabase.CapabilitiesFor(id, pkgdatabase.EnginePostgres)) == 0 {
+			t.Errorf("database-backed service %q has no executable PostgreSQL capability", id)
+		}
+		if needsClickHouse && len(pkgdatabase.CapabilitiesFor(id, pkgdatabase.EngineClickHouse)) == 0 {
+			t.Errorf("ClickHouse-backed service %q has no executable ClickHouse capability", id)
+		}
+		if _, ok := releases.ServiceDatabaseLookup(id); !ok {
+			t.Errorf("service %q has executable database dependencies but no release-catalog ownership", id)
 		}
 	}
 }

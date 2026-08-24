@@ -3,6 +3,7 @@
 package provisioner
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -133,6 +134,34 @@ func TestPostgresServiceDatabaseInitialization(t *testing.T) {
 		if got := strings.TrimSpace(out); got != service+"|1" {
 			t.Errorf("%s ownership probe = %q, want %q", service, got, service+"|1")
 		}
+
+		runtimeRole := service + "_runtime"
+		privilegeProbe := fmt.Sprintf(
+			"SELECT current_user || '|' || has_schema_privilege(current_user, '%s', 'CREATE') || '|' || bool_and(has_table_privilege(current_user, quote_ident(schemaname) || '.' || quote_ident(tablename), 'SELECT,INSERT,UPDATE,DELETE')) FROM pg_tables WHERE schemaname = '%s' GROUP BY current_user",
+			service, service,
+		)
+		out, err = docker(t, "", "exec", name, "psql", "-U", runtimeRole, "-d", service, "-tAc", privilegeProbe)
+		if err != nil {
+			t.Errorf("connect to %s and inspect runtime privileges: %v", runtimeRole, err)
+			continue
+		}
+		if got := strings.TrimSpace(out); got != runtimeRole+"|false|true" {
+			t.Errorf("%s privilege probe = %q, want %q", runtimeRole, got, runtimeRole+"|false|true")
+		}
+		if out, err := docker(t, "", "exec", name, "psql", "-U", runtimeRole, "-d", service, "-v", "ON_ERROR_STOP=1", "-c",
+			fmt.Sprintf("CREATE TABLE %s.runtime_role_must_not_create (id integer)", service)); err == nil {
+			t.Errorf("%s unexpectedly created a table: %s", runtimeRole, out)
+		}
+	}
+	if out, err := docker(t, "", "exec", name, "psql", "-U", "purser", "-d", "purser", "-v", "ON_ERROR_STOP=1", "-c",
+		"CREATE TABLE purser.runtime_default_privilege_probe (id integer PRIMARY KEY)"); err != nil {
+		t.Fatalf("create migration-owned default-privilege probe: %v\n%s", err, out)
+	}
+	if out, err := docker(t, "", "exec", name, "psql", "-U", "purser_runtime", "-d", "purser", "-v", "ON_ERROR_STOP=1", "-tAc",
+		"INSERT INTO purser.runtime_default_privilege_probe (id) VALUES (1); SELECT id FROM purser.runtime_default_privilege_probe"); err != nil {
+		t.Fatalf("runtime role cannot write/read an object created after grants: %v\n%s", err, out)
+	} else if got := strings.TrimSpace(out); got != "INSERT 0 1\n1" {
+		t.Fatalf("runtime default-privilege probe = %q, want INSERT 0 1 then 1", got)
 	}
 
 	out, err := docker(t, "", "exec", name, "psql", "-U", "purser", "-d", "purser", "-tAc",

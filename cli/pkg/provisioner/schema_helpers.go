@@ -14,10 +14,11 @@ import (
 )
 
 type SchemaDatabase struct {
-	Name       string
-	Owner      string
-	SourceName string
-	Schema     string
+	Name        string
+	Owner       string
+	RuntimeRole string
+	SourceName  string
+	Schema      string
 }
 
 // BuildSchemaItems materializes embedded baseline schemas matching configured
@@ -46,7 +47,11 @@ func BuildSchemaItems(databases []SchemaDatabase) ([]map[string]any, func(), err
 			if schema == "" {
 				schema = source
 			}
-			unique[db] = SchemaDatabase{Name: db, Owner: owner, SourceName: source, Schema: schema}
+			runtimeRole := strings.TrimSpace(database.RuntimeRole)
+			if runtimeRole == "" {
+				runtimeRole = owner + "_runtime"
+			}
+			unique[db] = SchemaDatabase{Name: db, Owner: owner, RuntimeRole: runtimeRole, SourceName: source, Schema: schema}
 		}
 	}
 	names := make([]string, 0, len(unique))
@@ -107,10 +112,11 @@ func BuildSchemaItems(databases []SchemaDatabase) ([]map[string]any, func(), err
 		}
 		cleanupPaths = append(cleanupPaths, localPath)
 		items = append(items, map[string]any{
-			"db":     db,
-			"schema": schema,
-			"owner":  database.Owner,
-			"src":    filepath.ToSlash(localPath),
+			"db":           db,
+			"schema":       schema,
+			"owner":        database.Owner,
+			"runtime_role": database.RuntimeRole,
+			"src":          filepath.ToSlash(localPath),
 		})
 	}
 	return items, cleanup, nil

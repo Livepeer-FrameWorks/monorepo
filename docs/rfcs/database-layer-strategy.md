@@ -80,7 +80,15 @@ PostgreSQL demo fixtures live under `pkg/database/sql/seeds/demo/postgres/<datab
 
 Local Compose mirrors production's logical service databases and users. Database first boot creates schemas only. `make seed-demo` is the canonical explicit workflow for PostgreSQL and ClickHouse demo rows. Derived state should be built by real projection/rebuild paths instead of seeding contradictory raw and derived facts independently.
 
-Local runtime users are not granted superuser merely to install extensions. Bootstrap/migration authority installs extensions, then service owners apply their schemas. Production evolves further toward separate NOLOGIN owners, migrators, and least-privilege runtime roles.
+Local runtime users are not granted superuser merely to install extensions. Bootstrap/migration authority installs extensions, then service owners apply their schemas.
+
+Provisioning creates a least-privilege `<owner>_runtime` login alongside each
+owner/migration role. The runtime role receives connect, schema usage, table DML,
+sequence usage, and function execution, but not schema creation or object ownership.
+`runtime_role` is an explicit manifest cutover: omitting it preserves the owner DSN
+for rolling upgrades while reconciliation prepares the restricted role and grants.
+The owner remains a login during the beta transition so old replicas can coexist;
+making owners `NOLOGIN` is only safe after every deployed manifest has cut over.
 
 ## CI routing
 
@@ -90,9 +98,24 @@ Required failures include deliberately broken columns, conflict targets, JSONB n
 
 ## Deployment protection
 
-The migration ledger remains necessary but is not sufficient. Binaries will declare the schema capabilities they require and fail readiness with an actionable diagnostic when those capabilities are absent. `cluster doctor --deep` will inspect capabilities plus the migration ledger; it will not introduce a third committed full-schema fingerprint.
+The migration ledger remains necessary but is not sufficient. Every database-backed
+binary declares a small set of read-only executable schema capabilities in
+`pkg/database/capabilities.go`. Its ordinary PostgreSQL or ClickHouse connection
+executes those probes before the process becomes ready and fails startup with the
+service, engine, and missing capability when one is absent. The catalog is not a
+third desired-schema manifest: it names only binary requirements, while baselines
+and release migrations retain their existing authorities.
 
-Database failure metrics distinguish undefined objects, type/scan failures, constraint violations, and capability mismatches.
+`cluster doctor --deep` executes the same capability statements against the live
+engines. PostgreSQL/Yugabyte probes use `SET ROLE` to also prove that the prepared
+runtime role exists and can access the required objects; doctor continues to inspect
+the migration ledger independently.
+
+`frameworks_database_failures_total{service,engine,failure}` distinguishes undefined
+objects, type mismatches, scan failures, constraint violations, and capability
+mismatches with a bounded label set. PostgreSQL query errors are observed at the
+shared pgx connection boundary; ClickHouse's typed ingestion and query repositories
+record their acquisition, append/send, and scan failures explicitly.
 
 RLS is not a blanket first step. Service-specific roles and repository conversion land first. Any tenant RLS policy must be proven on supported YugabyteDB and must account for background/global workers through a deliberately separate privileged role.
 

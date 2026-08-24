@@ -48,6 +48,23 @@
   no_log: true
   when: yugabyte_databases | length > 0
 
+- name: Create least-privilege application runtime roles
+  community.postgresql.postgresql_user:
+    name: "{{ item.runtime_role | default((item.owner | default(item.name)) ~ '_runtime') }}"
+    password: "{{ item.password | default(yugabyte_application_password) }}"
+    role_attr_flags: LOGIN,NOSUPERUSER,NOCREATEDB,NOCREATEROLE,NOREPLICATION
+    login_host: 127.0.0.1
+    login_port: "{{ yugabyte_ysql_port }}"
+    login_user: "{{ yugabyte_superuser_role }}"
+    login_password: "{{ yugabyte_superuser_password }}"
+    db: yugabyte
+    state: present
+  loop: "{{ yugabyte_databases }}"
+  loop_control:
+    label: "{{ item.runtime_role | default((item.owner | default(item.name)) ~ '_runtime') }}"
+  no_log: true
+  when: yugabyte_databases | length > 0
+
 - name: Grant database ownership to owner role
   community.postgresql.postgresql_owner:
     db: "{{ item.name }}"
