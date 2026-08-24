@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	pkgdatabase "github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 )
 
@@ -111,6 +112,28 @@ func chIntrospect(t *testing.T, name string) map[string]string {
 		t.Fatalf("%s: no periscope objects found (apply failed silently?)", name)
 	}
 	return schema
+}
+
+func TestClickHouseServiceCapabilitiesExecute(t *testing.T) {
+	requireDocker(t)
+	const name = "fw-sv-ch-capabilities"
+	chStart(t, name)
+	baseline, err := dbsql.Content.ReadFile("clickhouse/periscope.sql")
+	if err != nil {
+		t.Fatalf("read ClickHouse baseline: %v", err)
+	}
+	chApply(t, name, string(baseline))
+
+	for _, service := range pkgdatabase.CapabilityServices() {
+		for _, capability := range pkgdatabase.CapabilitiesFor(service, pkgdatabase.EngineClickHouse) {
+			if output, queryErr := docker(t, "", "exec", name, "clickhouse-client", "--database", "periscope", "-q", capability.Probe); queryErr != nil {
+				t.Fatalf("%s capability %q failed: %v\n%s", service, capability.Name, queryErr, output)
+			}
+		}
+	}
+	if _, err := docker(t, "", "exec", name, "clickhouse-client", "--database", "periscope", "-q", "SELECT hallucinated_column FROM periscope.api_requests LIMIT 0"); err == nil {
+		t.Fatal("a deliberately broken ClickHouse capability probe must fail")
+	}
 }
 
 // TestClickHouseBaselineEqualsReplay proves periscope.sql (baseline) is logically

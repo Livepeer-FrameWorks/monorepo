@@ -23,7 +23,15 @@ import (
 )
 
 func TestGeneratedQueryCatalogPrepares_RealPG(t *testing.T) {
-	db := startMeteringQueryCatalogRealPG(t)
+	prepareMeteringQueryCatalog(t, startMeteringQueryCatalogRealPG(t))
+}
+
+func TestGeneratedQueryCatalogPrepares_RealYugabyte(t *testing.T) {
+	prepareMeteringQueryCatalog(t, startMeteringQueryCatalogRealYugabyte(t))
+}
+
+func prepareMeteringQueryCatalog(t *testing.T, db *sql.DB) {
+	t.Helper()
 	queries := meteringGeneratedQueries(t)
 	if len(queries) != 11 {
 		t.Fatalf("found %d generated Periscope Metering queries, want 11", len(queries))

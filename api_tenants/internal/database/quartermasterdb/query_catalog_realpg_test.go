@@ -22,7 +22,15 @@ import (
 )
 
 func TestGeneratedQueryCatalogPrepares_RealPG(t *testing.T) {
-	db := startQuartermasterQueryCatalogRealPG(t)
+	prepareQuartermasterQueryCatalog(t, startQuartermasterQueryCatalogRealPG(t))
+}
+
+func TestGeneratedQueryCatalogPrepares_RealYugabyte(t *testing.T) {
+	prepareQuartermasterQueryCatalog(t, startQuartermasterQueryCatalogRealYugabyte(t))
+}
+
+func prepareQuartermasterQueryCatalog(t *testing.T, db *sql.DB) {
+	t.Helper()
 	queries := quartermasterGeneratedQueries(t)
 	if len(queries) != 153 {
 		t.Fatalf("found %d generated Quartermaster queries, want 153", len(queries))

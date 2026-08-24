@@ -22,7 +22,15 @@ import (
 )
 
 func TestGeneratedQueryCatalogPrepares_RealPG(t *testing.T) {
-	db := startCommodoreQueryCatalogRealPG(t)
+	prepareCommodoreQueryCatalog(t, startCommodoreQueryCatalogRealPG(t))
+}
+
+func TestGeneratedQueryCatalogPrepares_RealYugabyte(t *testing.T) {
+	prepareCommodoreQueryCatalog(t, startCommodoreQueryCatalogRealYugabyte(t))
+}
+
+func prepareCommodoreQueryCatalog(t *testing.T, db *sql.DB) {
+	t.Helper()
 	queries := commodoreGeneratedQueries(t)
 	if len(queries) != 274 {
 		t.Fatalf("found %d generated Commodore queries, want 274", len(queries))
@@ -41,6 +49,109 @@ func TestGeneratedQueryCatalogPrepares_RealPG(t *testing.T) {
 		if _, err := conn.ExecContext(ctx, "DEALLOCATE "+name); err != nil {
 			t.Fatalf("deallocate %s: %v", query.name, err)
 		}
+	}
+}
+
+func TestArtifactCreationCommandAckLease_RealPG(t *testing.T) {
+	verifyArtifactCreationCommandAckLease(t, startCommodoreQueryCatalogRealPG(t))
+}
+
+func TestArtifactCreationCommandAckLease_RealYugabyte(t *testing.T) {
+	verifyArtifactCreationCommandAckLease(t, startCommodoreQueryCatalogRealYugabyte(t))
+}
+
+func verifyArtifactCreationCommandAckLease(t *testing.T, db *sql.DB) {
+	t.Helper()
+	ctx := context.Background()
+	const tenantID = "11111111-1111-1111-1111-111111111111"
+	for i := 0; i < 6; i++ {
+		requestID := fmt.Sprintf("00000000-0000-0000-0000-%012d", i+1)
+		if _, err := db.ExecContext(ctx, `INSERT INTO commodore.artifact_creation_intents
+			(tenant_id, kind, artifact_hash, request_id, origin_cluster_id, status, command_ack_pending)
+			VALUES ($1::uuid, 'clip', $2, $3::uuid, 'cluster-a', 'committed', TRUE)`, tenantID, fmt.Sprintf("lease-hash-%d", i), requestID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	queries := New(db)
+	claim := func(token string, limit int32) []ClaimArtifactCreationCommandAcksRow {
+		rows, err := queries.ClaimArtifactCreationCommandAcks(ctx, ClaimArtifactCreationCommandAcksParams{
+			LeaseInterval: "2 minutes", LeaseToken: token, BatchSize: limit,
+		})
+		if err != nil {
+			t.Fatalf("claim %s: %v", token, err)
+		}
+		return rows
+	}
+	tokenA := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	tokenB := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	first := claim(tokenA, 3)
+	second := claim(tokenB, 3)
+	if len(first) != 3 || len(second) != 3 {
+		t.Fatalf("claim sizes = %d, %d, want 3, 3", len(first), len(second))
+	}
+	claimed := make(map[string]bool, len(first))
+	for _, row := range first {
+		claimed[row.ArtifactHash] = true
+	}
+	for _, row := range second {
+		if claimed[row.ArtifactHash] {
+			t.Fatalf("second replica reclaimed live lease for %s", row.ArtifactHash)
+		}
+	}
+	if rows := claim("cccccccc-cccc-cccc-cccc-cccccccccccc", 6); len(rows) != 0 {
+		t.Fatalf("fully leased catalog returned %d rows", len(rows))
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE commodore.artifact_creation_intents
+		SET command_ack_leased_until = NOW() - INTERVAL '1 second'
+		WHERE command_ack_lease_token = $1::uuid`, tokenA); err != nil {
+		t.Fatal(err)
+	}
+	tokenC := "cccccccc-cccc-cccc-cccc-cccccccccccc"
+	reclaimed := claim(tokenC, 6)
+	if len(reclaimed) != 3 {
+		t.Fatalf("reclaimed rows = %d, want 3", len(reclaimed))
+	}
+	target := reclaimed[0]
+	stale := BackoffArtifactCreationCommandAckParams{
+		TenantID: target.TenantID, Kind: target.Kind, ArtifactHash: target.ArtifactHash, LeaseToken: tokenA,
+	}
+	if err := queries.BackoffArtifactCreationCommandAck(ctx, stale); err != nil {
+		t.Fatal(err)
+	}
+	var currentToken sql.NullString
+	if err := db.QueryRowContext(ctx, `SELECT command_ack_lease_token::text FROM commodore.artifact_creation_intents
+		WHERE tenant_id=$1::uuid AND kind=$2 AND artifact_hash=$3`, target.TenantID, target.Kind, target.ArtifactHash).Scan(&currentToken); err != nil {
+		t.Fatal(err)
+	}
+	if currentToken.String != tokenC {
+		t.Fatalf("stale worker changed current lease token to %q", currentToken.String)
+	}
+	stale.LeaseToken = tokenC
+	if err := queries.BackoffArtifactCreationCommandAck(ctx, stale); err != nil {
+		t.Fatal(err)
+	}
+	var attempts int
+	var leaseCleared bool
+	if err := db.QueryRowContext(ctx, `SELECT command_ack_attempts, command_ack_lease_token IS NULL
+		FROM commodore.artifact_creation_intents WHERE tenant_id=$1::uuid AND kind=$2 AND artifact_hash=$3`, target.TenantID, target.Kind, target.ArtifactHash).Scan(&attempts, &leaseCleared); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 1 || !leaseCleared {
+		t.Fatalf("backoff attempts=%d leaseCleared=%t", attempts, leaseCleared)
+	}
+	clear := reclaimed[1]
+	if err := queries.ClearArtifactCreationCommandAck(ctx, ClearArtifactCreationCommandAckParams{
+		TenantID: clear.TenantID, Kind: clear.Kind, ArtifactHash: clear.ArtifactHash, LeaseToken: tokenC,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var pending bool
+	if err := db.QueryRowContext(ctx, `SELECT command_ack_pending FROM commodore.artifact_creation_intents
+		WHERE tenant_id=$1::uuid AND kind=$2 AND artifact_hash=$3`, clear.TenantID, clear.Kind, clear.ArtifactHash).Scan(&pending); err != nil {
+		t.Fatal(err)
+	}
+	if pending {
+		t.Fatal("current lease owner did not clear acknowledgement obligation")
 	}
 }
 
@@ -201,6 +312,42 @@ func startCommodoreQueryCatalogRealPG(t *testing.T) *sql.DB {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	if err := dockerpg.WaitReady(db, name); err != nil {
+		t.Fatal(err)
+	}
+	schema, err := dbsql.Content.ReadFile("schema/commodore.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(string(schema)); err != nil {
+		t.Fatal(err)
+	}
+	return db
+}
+
+func startCommodoreQueryCatalogRealYugabyte(t *testing.T) *sql.DB {
+	t.Helper()
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skip("docker not available")
+	}
+	name := fmt.Sprintf("fw-commodore-query-catalog-yb-%d", time.Now().UnixNano())
+	t.Cleanup(func() { _, _ = dockerpg.CLI("rm", "-fv", name) })
+	image, err := dockerpg.YugabyteImage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output, err := dockerpg.Run("run", "-d", "--name", name, "-P", "--hostname", name, image, "bash", "-c", `exec bin/yugabyted start --background=false --advertise_address="$(hostname -i)"`); err != nil {
+		t.Fatalf("docker run: %v\n%s", err, output)
+	}
+	port, err := dockerpg.DiscoverPublishedHostPort(name, "5433/tcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("postgres", fmt.Sprintf("postgres://yugabyte@127.0.0.1:%s/yugabyte?sslmode=disable", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := dockerpg.WaitReadyFor(db, name, 3*time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	schema, err := dbsql.Content.ReadFile("schema/commodore.sql")

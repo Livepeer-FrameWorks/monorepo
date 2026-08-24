@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	pkgdatabase "github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 )
 
@@ -191,6 +192,50 @@ func ybPrepareCommodoreCatalog(t *testing.T, name string) {
 	ybApply(t, name, "commodore", statements.String())
 }
 
+func ybVerifyTaggedPurserMigrationPath(t *testing.T, name string) {
+	t.Helper()
+	fromTag := schemaVerifyFromTag(t)
+	const databaseName = "purser_upgrade"
+	if out, err := docker(t, "", "exec", name, "ysqlsh", "-h", "127.0.0.1", "-U", "yugabyte", "-d", "yugabyte", "-v", "ON_ERROR_STOP=1", "-c", "CREATE DATABASE "+databaseName); err != nil {
+		t.Fatalf("create Yugabyte tagged-upgrade database: %v\n%s", err, out)
+	}
+	ybApply(t, name, databaseName, repositoryFileAtTag(t, fromTag, "pkg/database/sql/schema/purser.sql"))
+
+	known, err := knownMigrationDatabases()
+	if err != nil {
+		t.Fatalf("known migration databases: %v", err)
+	}
+	allMigrations, err := discoverMigrationsInFS(dbsql.Content, "migrations", known)
+	if err != nil {
+		t.Fatalf("discover PostgreSQL migrations: %v", err)
+	}
+	applied := 0
+	for _, migration := range migrationsAfterVersion(allMigrations, fromTag) {
+		if migration.Database != "purser" {
+			continue
+		}
+		ybApply(t, name, databaseName, migration.content)
+		applied++
+	}
+	if applied == 0 {
+		t.Fatalf("no Purser migrations found after %s", fromTag)
+	}
+
+	output, err := docker(t, "", "exec", name, "ysqlsh", "-h", "127.0.0.1", "-U", "yugabyte", "-d", databaseName, "-tAc", `
+		SELECT count(*)
+		FROM pg_indexes
+		WHERE schemaname = 'purser'
+		  AND indexname IN ('idx_purser_usage_records_allowance', 'idx_usage_adjustments_allowance')
+	`)
+	if err != nil {
+		t.Fatalf("inspect Yugabyte allowance indexes after tagged migration replay: %v\n%s", err, output)
+	}
+	if strings.TrimSpace(output) != "2" {
+		t.Fatalf("allowance index count after tagged Yugabyte migration replay = %q, want 2", strings.TrimSpace(output))
+	}
+	t.Logf("yugabyte: upgraded Purser %s baseline with %d migration(s)", fromTag, applied)
+}
+
 func ybPrepareQuartermasterCatalog(t *testing.T, name string) {
 	t.Helper()
 	queries := generatedServiceQueries(t, "../../../api_tenants/internal/database/quartermasterdb")
@@ -211,6 +256,7 @@ func TestYugabyteCurrentBaselinesAndCapabilities(t *testing.T) {
 	requireDocker(t)
 	const name = "fw-sv-yb"
 	ybStart(t, name)
+	ybVerifyTaggedPurserMigrationPath(t, name)
 
 	services := []string{"quartermaster", "purser", "foghorn", "commodore", "periscope", "navigator", "skipper"}
 	for _, service := range services {
@@ -223,6 +269,37 @@ func TestYugabyteCurrentBaselinesAndCapabilities(t *testing.T) {
 			t.Fatalf("read %s: %v", path, err)
 		}
 		ybApply(t, name, service, string(schemaSQL))
+		runtimeRole := service + "_runtime"
+		if out, createErr := docker(t, "", "exec", name, "ysqlsh", "-h", "127.0.0.1", "-U", "yugabyte", "-d", "yugabyte", "-v", "ON_ERROR_STOP=1", "-c", "CREATE ROLE "+runtimeRole+" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION"); createErr != nil {
+			t.Fatalf("create Yugabyte runtime role %s: %v\n%s", runtimeRole, createErr, out)
+		}
+		ybApply(t, name, service, fmt.Sprintf(`
+GRANT CONNECT ON DATABASE %[1]s TO %[2]s;
+GRANT USAGE ON SCHEMA %[1]s TO %[2]s;
+REVOKE CREATE ON SCHEMA %[1]s FROM %[2]s;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %[1]s TO %[2]s;
+GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA %[1]s TO %[2]s;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA %[1]s TO %[2]s;
+ALTER DEFAULT PRIVILEGES FOR ROLE yugabyte IN SCHEMA %[1]s GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %[2]s;
+ALTER DEFAULT PRIVILEGES FOR ROLE yugabyte IN SCHEMA %[1]s GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO %[2]s;
+ALTER DEFAULT PRIVILEGES FOR ROLE yugabyte IN SCHEMA %[1]s GRANT EXECUTE ON FUNCTIONS TO %[2]s;
+`, service, runtimeRole))
+	}
+	databaseByService := map[string]string{
+		"commodore": "commodore", "foghorn": "foghorn", "navigator": "navigator",
+		"periscope-metering": "periscope", "purser": "purser", "quartermaster": "quartermaster", "skipper": "skipper",
+	}
+	for _, binary := range pkgdatabase.CapabilityServices() {
+		databaseName := databaseByService[binary]
+		for _, capability := range pkgdatabase.CapabilitiesFor(binary, pkgdatabase.EnginePostgres) {
+			if databaseName == "" {
+				t.Fatalf("PostgreSQL capability service %q has no Yugabyte database", binary)
+			}
+			ybApply(t, name, databaseName, fmt.Sprintf("SET ROLE %s_runtime; %s; RESET ROLE;", databaseName, capability.Probe))
+		}
+	}
+	if out, ddlErr := docker(t, "", "exec", name, "ysqlsh", "-h", "127.0.0.1", "-U", "yugabyte", "-d", "purser", "-v", "ON_ERROR_STOP=1", "-c", "SET ROLE purser_runtime; CREATE TABLE purser.runtime_role_must_not_create (id integer)"); ddlErr == nil {
+		t.Fatalf("Yugabyte runtime role unexpectedly created a table: %s", out)
 	}
 	purserSeed, err := dbsql.Content.ReadFile(demoSeeds["purser"])
 	if err != nil {

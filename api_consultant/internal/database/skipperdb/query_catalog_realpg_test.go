@@ -23,7 +23,15 @@ import (
 )
 
 func TestGeneratedQueryCatalogPrepares_RealPG(t *testing.T) {
-	db := startSkipperQueryCatalogRealPG(t)
+	prepareSkipperQueryCatalog(t, startSkipperQueryCatalogRealPG(t))
+}
+
+func TestGeneratedQueryCatalogPrepares_RealYugabyte(t *testing.T) {
+	prepareSkipperQueryCatalog(t, startSkipperQueryCatalogRealYugabyte(t))
+}
+
+func prepareSkipperQueryCatalog(t *testing.T, db *sql.DB) {
+	t.Helper()
 	queries := skipperGeneratedQueries(t)
 	if len(queries) != 62 {
 		t.Fatalf("found %d generated Skipper queries, want 62", len(queries))
@@ -181,6 +189,42 @@ func startSkipperQueryCatalogRealPG(t *testing.T) *sql.DB {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	if err := dockerpg.WaitReady(db, name); err != nil {
+		t.Fatal(err)
+	}
+	schema, err := dbsql.Content.ReadFile("schema/skipper.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(string(schema)); err != nil {
+		t.Fatal(err)
+	}
+	return db
+}
+
+func startSkipperQueryCatalogRealYugabyte(t *testing.T) *sql.DB {
+	t.Helper()
+	if _, err := exec.LookPath("docker"); err != nil {
+		t.Skip("docker not available")
+	}
+	name := fmt.Sprintf("fw-skipper-query-catalog-yb-%d", time.Now().UnixNano())
+	t.Cleanup(func() { _, _ = dockerpg.CLI("rm", "-fv", name) })
+	image, err := dockerpg.YugabyteImage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output, err := dockerpg.Run("run", "-d", "--name", name, "-P", "--hostname", name, image, "bash", "-c", `exec bin/yugabyted start --background=false --advertise_address="$(hostname -i)"`); err != nil {
+		t.Fatalf("docker run: %v\n%s", err, output)
+	}
+	port, err := dockerpg.DiscoverPublishedHostPort(name, "5433/tcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("postgres", fmt.Sprintf("postgres://yugabyte@127.0.0.1:%s/yugabyte?sslmode=disable", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if err := dockerpg.WaitReadyFor(db, name, 3*time.Minute); err != nil {
 		t.Fatal(err)
 	}
 	schema, err := dbsql.Content.ReadFile("schema/skipper.sql")

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	pkgdatabase "github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 )
 
@@ -216,6 +217,46 @@ func requirePGSchemasEqual(t *testing.T, label, expected, actual string) {
 		}
 	}
 	t.Fatalf("%s schemas differ:\n%s", label, strings.Join(diffs, "\n"))
+}
+
+func TestPostgresServiceCapabilitiesExecute(t *testing.T) {
+	requireDocker(t)
+	const name = "fw-sv-pg-capabilities"
+	pgStart(t, name)
+
+	databaseByService := map[string]string{
+		"commodore": "commodore", "foghorn": "foghorn", "navigator": "navigator",
+		"periscope-metering": "periscope", "purser": "purser", "quartermaster": "quartermaster", "skipper": "skipper",
+	}
+	applied := map[string]bool{}
+	for _, service := range pkgdatabase.CapabilityServices() {
+		databaseName := databaseByService[service]
+		capabilities := pkgdatabase.CapabilitiesFor(service, pkgdatabase.EnginePostgres)
+		if len(capabilities) == 0 {
+			continue
+		}
+		if databaseName == "" {
+			t.Fatalf("PostgreSQL capability service %q has no owning baseline", service)
+		}
+		if !applied[databaseName] {
+			pgCreateDB(t, name, databaseName)
+			baseline, err := dbsql.Content.ReadFile("schema/" + databaseName + ".sql")
+			if err != nil {
+				t.Fatalf("read %s baseline: %v", databaseName, err)
+			}
+			pgApply(t, name, databaseName, string(baseline))
+			applied[databaseName] = true
+		}
+		for _, capability := range capabilities {
+			if output, err := docker(t, "", "exec", name, "psql", "-U", "postgres", "-d", databaseName, "-v", "ON_ERROR_STOP=1", "-c", capability.Probe); err != nil {
+				t.Fatalf("%s capability %q failed: %v\n%s", service, capability.Name, err, output)
+			}
+		}
+	}
+
+	if _, err := docker(t, "", "exec", name, "psql", "-U", "postgres", "-d", "purser", "-v", "ON_ERROR_STOP=1", "-c", "SELECT hallucinated_column FROM purser.usage_records LIMIT 0"); err == nil {
+		t.Fatal("a deliberately broken capability probe must fail")
+	}
 }
 
 func TestPostgresIntrospectionCoversDeployRelevantObjects(t *testing.T) {
