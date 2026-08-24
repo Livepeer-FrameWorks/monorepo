@@ -86,6 +86,9 @@ jobs:
               - 'docker-compose.yml'
               - 'pkg/database/**'
               - 'pkg/testutil/dockerch/**'
+              - 'pkg/testutil/dockerpg/**'
+              - 'pkg/testutil/dockervalkey/**'
+              - 'pkg/redis/**'
               - 'pkg/topology/**'
               - 'scripts/check-migration-version.sh'
               - 'scripts/check-migration-version.test.sh'
@@ -335,6 +338,10 @@ jobs:
         run: make verify-schema-migrations-core
         env:
           CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
+      - name: Prove Foghorn Valkey contracts
+        run: make verify-foghorn-valkey
+        env:
+          CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
       - name: Upload database contract coverage artifact
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
@@ -363,6 +370,17 @@ jobs:
           files: coverage/contracts/clickhouse/cli.out,coverage/contracts/clickhouse/periscope-ingest-writers.out,coverage/contracts/clickhouse/periscope-metering-chain-ingest.out,coverage/contracts/clickhouse/periscope-query.out,coverage/contracts/clickhouse/periscope-query-rpc.out,coverage/contracts/clickhouse/periscope-metering-chain.out
           flags: clickhouse-contract
           name: clickhouse-contract-coverage
+          fail_ci_if_error: false
+      - name: Upload Valkey contract coverage to Codecov
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        continue-on-error: true
+        uses: codecov/codecov-action@v6
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: coverage/contracts/valkey/redis-client.out,coverage/contracts/valkey/foghorn-state.out,coverage/contracts/valkey/foghorn-control.out,coverage/contracts/valkey/foghorn-federation.out
+          flags: valkey-contract
+          name: valkey-contract-coverage
           fail_ci_if_error: false
 
   database-yugabyte:

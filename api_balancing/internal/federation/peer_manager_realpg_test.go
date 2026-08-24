@@ -13,7 +13,9 @@ import (
 	"frameworks/api_balancing/internal/control"
 
 	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/testutil/dockerpg"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/testutil/dockervalkey"
 	_ "github.com/lib/pq"
 )
 
@@ -84,7 +86,8 @@ func TestMembershipTombstoneCleanup_PostgresProofToRedisPurge_RealPG(t *testing.
 		}
 	}
 
-	cache, _ := setupTestCache(t)
+	valkey := dockervalkey.Start(t)
+	cache := NewRemoteEdgeCache(valkey.Client, "membership-cleanup-contract", logging.NewLogger())
 	ctx := context.Background()
 	endedAt := time.Now().Add(-2 * streamPeerTombstoneRetention).UnixMilli()
 	for index, stream := range []string{"live+lower", "live+equal", "live+higher"} {
@@ -100,6 +103,19 @@ func TestMembershipTombstoneCleanup_PostgresProofToRedisPurge_RealPG(t *testing.
 
 	pm := newTestPeerManager(t, "local-cluster", cache, true)
 	pm.canPurgeMemberships = control.PurgeableAdmissionEffectFences
+	valkey.Stop(t)
+	if err := pm.cleanupStreamMembershipTombstones(ctx); err == nil {
+		t.Fatal("cleanup succeeded while Valkey was unavailable")
+	}
+	for _, effect := range pending {
+		var count int
+		if err := conn.QueryRow(`SELECT count(*) FROM foghorn.ingest_admission_effects WHERE tenant_id=$1::uuid AND stream_internal_name=$2`, effect.tenant, effect.stream).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("Valkey outage mutated PostgreSQL fence %s/%s: count=%d err=%v", effect.tenant, effect.stream, count, err)
+		}
+	}
+	valkey.ReplaceStopped(t)
+	cache = NewRemoteEdgeCache(valkey.Client, "membership-cleanup-contract", logging.NewLogger())
+	pm.cache = cache
 	if err := pm.cleanupStreamMembershipTombstones(ctx); err != nil {
 		t.Fatalf("cleanupStreamMembershipTombstones: %v", err)
 	}
