@@ -94,6 +94,7 @@ func main() {
 
 	// === Database Connection ===
 	dbConfig := database.DefaultConfig()
+	dbConfig.ServiceName = "navigator"
 	dbConfig.URL = dbURL
 	db := database.MustConnect(dbConfig, logger)
 	defer db.Close()

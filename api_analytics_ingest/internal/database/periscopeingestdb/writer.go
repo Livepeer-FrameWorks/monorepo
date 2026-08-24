@@ -1,6 +1,10 @@
 package periscopeingestdb
 
-import "context"
+import (
+	"context"
+
+	pkgdatabase "github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+)
 
 // Batch is the subset of the ClickHouse batch contract needed by table writers.
 type Batch interface {
@@ -22,6 +26,7 @@ type Writer[Row any] struct {
 func prepare[Row any](ctx context.Context, db BatchPreparer, query string, values func(Row) []interface{}) (*Writer[Row], error) {
 	batch, err := db.PrepareBatch(ctx, query)
 	if err != nil {
+		pkgdatabase.ObserveDatabaseError("periscope-ingest", pkgdatabase.EngineClickHouse, err, false)
 		return nil, err
 	}
 	return &Writer[Row]{batch: batch, values: values}, nil
@@ -29,12 +34,16 @@ func prepare[Row any](ctx context.Context, db BatchPreparer, query string, value
 
 // Append converts a typed table row into the driver's positional batch values.
 func (w *Writer[Row]) Append(row Row) error {
-	return w.batch.Append(w.values(row)...)
+	err := w.batch.Append(w.values(row)...)
+	pkgdatabase.ObserveDatabaseError("periscope-ingest", pkgdatabase.EngineClickHouse, err, false)
+	return err
 }
 
 // Send flushes the native batch using the caller's existing commit boundary.
 func (w *Writer[Row]) Send() error {
-	return w.batch.Send()
+	err := w.batch.Send()
+	pkgdatabase.ObserveDatabaseError("periscope-ingest", pkgdatabase.EngineClickHouse, err, false)
+	return err
 }
 
 // Close releases a native batch when the driver supports explicit cleanup.

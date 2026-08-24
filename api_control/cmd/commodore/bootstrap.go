@@ -82,6 +82,7 @@ func runBootstrapCommand(args []string) int {
 	config.LoadEnv(logger)
 	dbURL := config.RequireEnv("DATABASE_URL")
 	dbConfig := database.DefaultConfig()
+	dbConfig.ServiceName = "commodore"
 	dbConfig.URL = dbURL
 	db := database.MustConnect(dbConfig, logger)
 	defer func() { _ = db.Close() }()

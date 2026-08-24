@@ -84,6 +84,7 @@ func main() {
 
 	// Connect to database
 	dbConfig := database.DefaultConfig()
+	dbConfig.ServiceName = "quartermaster"
 	dbConfig.URL = dbURL
 	db := database.MustConnect(dbConfig, logger)
 	defer func() { _ = db.Close() }()

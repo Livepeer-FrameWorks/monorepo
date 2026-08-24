@@ -288,6 +288,7 @@ func main() {
 
 	// Connect to database
 	dbConfig := database.DefaultConfig()
+	dbConfig.ServiceName = "foghorn"
 	dbURL := config.RequireEnv("DATABASE_URL")
 	dbConfig.URL = dbURL
 	db := database.MustConnect(dbConfig, logger)
@@ -944,6 +945,11 @@ func main() {
 	)
 	triggerProcessor := triggers.NewProcessor(logger, commodoreClient, decklogClient, lb, geoipReader)
 	triggerProcessor.SetMetrics(&triggers.ProcessorMetrics{
+		BillingCacheEvents: metricsCollector.NewCounter(
+			"billing_cache_events_total",
+			"Tenant billing authority cache outcomes",
+			[]string{"outcome"},
+		),
 		DecklogTriggerSends: metricsCollector.NewCounter(
 			"decklog_trigger_sends_total",
 			"Attempts and results when forwarding MistTriggers to Decklog",

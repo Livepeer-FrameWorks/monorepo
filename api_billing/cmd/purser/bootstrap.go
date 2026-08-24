@@ -81,6 +81,7 @@ func runBootstrapApply(args []string) int {
 	config.LoadEnv(logger)
 	dbURL := config.RequireEnv("DATABASE_URL")
 	dbConfig := database.DefaultConfig()
+	dbConfig.ServiceName = "purser"
 	dbConfig.URL = dbURL
 	db := database.MustConnect(dbConfig, logger)
 	defer func() { _ = db.Close() }()
@@ -210,6 +211,7 @@ func runBootstrapValidate(args []string) int {
 	serviceToken := config.RequireEnv("SERVICE_TOKEN")
 
 	dbConfig := database.DefaultConfig()
+	dbConfig.ServiceName = "purser"
 	dbConfig.URL = dbURL
 	db := database.MustConnect(dbConfig, logger)
 	defer func() { _ = db.Close() }()

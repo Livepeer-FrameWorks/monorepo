@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_analytics_query/internal/database/periscopequerydb"
 	periscopegrpc "frameworks/api_analytics_query/internal/grpc"
 	"frameworks/api_analytics_query/internal/metrics"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
@@ -28,6 +29,7 @@ func main() {
 
 	// Setup logger
 	logger := logging.NewLoggerWithService("periscope-query")
+	periscopequerydb.SetObserverService("periscope-query")
 
 	// Load environment variables
 	config.LoadEnv(logger)
@@ -44,6 +46,7 @@ func main() {
 
 	// Connect to ClickHouse (primary analytics database)
 	chConfig := database.DefaultClickHouseConfig()
+	chConfig.ServiceName = "periscope-query"
 	chConfig.Addr = strings.Split(clickhouseAddr, ",")
 	chConfig.Database = clickhouseDB
 	chConfig.Username = clickhouseUser

@@ -3,6 +3,7 @@ package main
 import (
 	"strings"
 
+	"frameworks/api_analytics_query/internal/database/periscopequerydb"
 	"frameworks/api_analytics_query/internal/scheduler"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
@@ -18,6 +19,7 @@ func main() {
 	}
 	logger := logging.NewLoggerWithService("periscope-metering")
 	config.LoadEnv(logger)
+	periscopequerydb.SetObserverService("periscope-metering")
 
 	dbURL := config.RequireEnv("DATABASE_URL")
 	clickhouseAddr := config.RequireEnv("CLICKHOUSE_ADDR")
@@ -29,11 +31,13 @@ func main() {
 	_ = config.RequireEnv("METERING_SOURCE_ID")
 
 	dbConfig := database.DefaultConfig()
+	dbConfig.ServiceName = "periscope-metering"
 	dbConfig.URL = dbURL
 	postgres := database.MustConnect(dbConfig, logger)
 	defer func() { _ = postgres.Close() }()
 
 	chConfig := database.DefaultClickHouseConfig()
+	chConfig.ServiceName = "periscope-metering"
 	chConfig.Addr = strings.Split(clickhouseAddr, ",")
 	chConfig.Database = clickhouseDB
 	chConfig.Username = clickhouseUser

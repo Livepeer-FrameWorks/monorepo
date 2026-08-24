@@ -10,7 +10,35 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
+
+	pkgdatabase "github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 )
+
+var observerService atomic.Pointer[string]
+
+func init() {
+	service := "periscope-query"
+	observerService.Store(&service)
+}
+
+// SetObserverService selects the process identity attached to shared query
+// contract metrics. Periscope Query and Metering are separate binaries that
+// intentionally execute this same catalog; call once during process startup.
+func SetObserverService(service string) {
+	if service == "" {
+		panic("periscopequerydb: observer service is required")
+	}
+	observerService.Store(&service)
+}
+
+func observedService() string {
+	service := observerService.Load()
+	if service == nil {
+		return "periscope-query"
+	}
+	return *service
+}
 
 // DBTX is the database/sql read surface used by Periscope Query. Keeping the
 // interface here lets production, transactions, and contract doubles execute
@@ -77,6 +105,7 @@ func recordError(ctx context.Context, err error) {
 	if errors.Is(err, sql.ErrNoRows) {
 		return
 	}
+	pkgdatabase.ObserveDatabaseError(observedService(), pkgdatabase.EngineClickHouse, err, true)
 	trace, ok := ctx.Value(traceContextKey{}).(*Trace)
 	if !ok || trace == nil || err == nil {
 		return
@@ -148,6 +177,7 @@ func Query(ctx context.Context, db DBTX, query string, args ...any) (*Rows, erro
 	record(ctx, query)
 	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
+		pkgdatabase.ObserveDatabaseError(observedService(), pkgdatabase.EngineClickHouse, err, false)
 		return nil, err
 	}
 	return &Rows{Rows: rows, ctx: ctx}, nil

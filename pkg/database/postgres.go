@@ -8,11 +8,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yugabyte/pgx/v5"
 	// YugabyteDB smart driver registered under the database/sql name "pgx".
 	// It provides cluster-aware connection load balancing + failover across
 	// tservers (load_balance=true + multi-host DSN); see pkg/database/errors.go
 	// and arrays.go for the driver-portability helpers the swap requires.
-	_ "github.com/yugabyte/pgx/v5/stdlib"
+	"github.com/yugabyte/pgx/v5/stdlib"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
@@ -25,7 +26,10 @@ var ErrNoRows = sql.ErrNoRows
 
 // Config holds database configuration
 type Config struct {
-	URL             string
+	URL string
+	// ServiceName selects the binary's executable schema capability contract.
+	// Empty is supported for generic tooling and tests that do not own a schema.
+	ServiceName     string
 	MaxOpenConns    int
 	MaxIdleConns    int
 	ConnMaxLifetime time.Duration
@@ -46,6 +50,18 @@ const (
 
 	defaultPingTimeout = 5 * time.Second
 )
+
+type postgresContractTracer struct {
+	service string
+}
+
+func (t postgresContractTracer) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryStartData) context.Context {
+	return ctx
+}
+
+func (t postgresContractTracer) TraceQueryEnd(_ context.Context, _ *pgx.Conn, data pgx.TraceQueryEndData) {
+	ObserveDatabaseError(t.service, EnginePostgres, data.Err, false)
+}
 
 // DefaultConfig returns default database configuration
 func DefaultConfig() Config {
@@ -109,10 +125,14 @@ func Connect(cfg Config, logger logging.Logger) (PostgresConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("pgx", dsn)
+	pgxConfig, err := pgx.ParseConfig(dsn)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open database: %w", err)
+		return nil, fmt.Errorf("failed to parse database configuration: %w", err)
 	}
+	if cfg.ServiceName != "" {
+		pgxConfig.Tracer = postgresContractTracer{service: cfg.ServiceName}
+	}
+	db := stdlib.OpenDB(*pgxConfig)
 
 	// Apply pool settings before probing so the probe borrows a connection
 	// under the same limits the service will use.
@@ -130,6 +150,19 @@ func Connect(cfg Config, logger logging.Logger) (PostgresConn, error) {
 	if err := db.PingContext(ctx); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("failed to ping database: %w", err)
+	}
+	if cfg.ServiceName != "" {
+		if err := VerifyCapabilities(ctx, cfg.ServiceName, EnginePostgres, func(ctx context.Context, probe string) error {
+			rows, queryErr := db.QueryContext(ctx, probe)
+			if queryErr != nil {
+				return queryErr
+			}
+			defer func() { _ = rows.Close() }()
+			return rows.Err()
+		}); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
 	}
 
 	logger.WithFields(logging.Fields{

@@ -51,6 +51,7 @@ func main() {
 
 	// Connect to ClickHouse
 	chConfig := database.DefaultClickHouseConfig()
+	chConfig.ServiceName = "periscope-ingest"
 	chConfig.Addr = strings.Split(clickhouseAddr, ",")
 	chConfig.Database = clickhouseDB
 	chConfig.Username = clickhouseUser

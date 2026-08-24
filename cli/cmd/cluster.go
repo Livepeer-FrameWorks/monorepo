@@ -506,8 +506,11 @@ Default mode (read-only, no SOPS decryption):
     the active context. Authenticated checks are skipped (reported as
     "not verified") — pass --deep for the full check.
 
---deep mode (opts into SOPS decryption to obtain SERVICE_TOKEN):
-  - All of the above, plus authenticated Quartermaster/Commodore/Purser checks:
+--deep mode (opts into SOPS decryption to obtain SERVICE_TOKEN and database credentials):
+  - All of the above, plus executable PostgreSQL/Yugabyte and ClickHouse
+    capability probes for every enabled database-backed binary. PostgreSQL
+    probes run as the least-privilege runtime role, not the owner/migrator.
+  - Authenticated Quartermaster/Commodore/Purser checks:
     default cluster + platform-official cluster flags, operator-account presence
     in the system tenant, pricing config for clusters that declared it.
   - YugabyteDB migration checks can use DATABASE_PASSWORD from decrypted
@@ -894,6 +897,7 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 		if len(hosts) == 0 {
 			recordMiss("Postgres migrations", "no postgres/yugabyte hosts resolvable in manifest")
 		} else {
+			databasePassword := strings.TrimSpace(sharedEnv["DATABASE_PASSWORD"])
 			doctorTarget, targetErr := resolveMigrationTarget(rc, "")
 			if targetErr != nil {
 				doctorTarget = ""
@@ -903,7 +907,7 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 			// each node and use the first that responds rather than pinning Nodes[0].
 			var result *health.CheckResult
 			for _, h := range hosts {
-				result = doctorPostgresMigrations(cmd.Context(), doctorSSHPool, manifest, h, "", doctorTarget)
+				result = doctorPostgresMigrations(cmd.Context(), doctorSSHPool, manifest, h, databasePassword, doctorTarget)
 				if result.OK {
 					break
 				}
@@ -934,6 +938,41 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 					Why: "List required data migrations and their current state.",
 				})
 			}
+
+			if deep {
+				totalChecks++
+				var capabilityResult *health.CheckResult
+				for _, h := range hosts {
+					capabilityResult = doctorPostgresCapabilities(cmd.Context(), doctorSSHPool, manifest, h, databasePassword)
+					if capabilityResult.OK {
+						break
+					}
+				}
+				printHealthResult(cmd, "Postgres runtime capabilities", capabilityResult)
+				if capabilityResult.OK {
+					passedChecks++
+				} else {
+					remediationSteps = append(remediationSteps, ux.NextStep{
+						Cmd: "frameworks cluster provision --only infrastructure",
+						Why: "Reconcile owner/runtime database roles and grants, then apply pending migrations.",
+					})
+				}
+			}
+		}
+		fmt.Fprintln(out, "")
+	}
+
+	if deep && manifest.Infrastructure.ClickHouse != nil && manifest.Infrastructure.ClickHouse.Enabled {
+		totalChecks++
+		capabilityResult := doctorClickHouseCapabilities(cmd.Context(), doctorSSHPool, manifest, sharedEnv)
+		printHealthResult(cmd, "ClickHouse runtime capabilities", capabilityResult)
+		if capabilityResult.OK {
+			passedChecks++
+		} else {
+			remediationSteps = append(remediationSteps, ux.NextStep{
+				Cmd: "frameworks cluster migrate --phase expand --dry-run",
+				Why: "Preview ClickHouse migrations required by the deployed service capabilities.",
+			})
 		}
 		fmt.Fprintln(out, "")
 	}

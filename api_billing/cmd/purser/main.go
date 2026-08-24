@@ -66,6 +66,7 @@ func main() {
 
 	// Connect to database
 	dbConfig := database.DefaultConfig()
+	dbConfig.ServiceName = "purser"
 	dbConfig.URL = dbURL
 	db := database.MustConnect(dbConfig, logger)
 	defer func() { _ = db.Close() }()

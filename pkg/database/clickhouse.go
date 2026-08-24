@@ -39,6 +39,8 @@ type ClickHouseConfig struct {
 	Username string
 	Password string
 	Debug    bool
+	// ServiceName selects the binary's executable ClickHouse capability contract.
+	ServiceName string
 }
 
 // DefaultClickHouseConfig returns default ClickHouse configuration
@@ -69,6 +71,19 @@ func ConnectClickHouse(cfg ClickHouseConfig, logger logging.Logger) (ClickHouseC
 	if err := conn.PingContext(context.Background()); err != nil {
 		logger.WithError(err).Error("Failed to ping ClickHouse")
 		return nil, err
+	}
+	if cfg.ServiceName != "" {
+		if err := VerifyCapabilities(context.Background(), cfg.ServiceName, EngineClickHouse, func(ctx context.Context, probe string) error {
+			rows, queryErr := conn.QueryContext(ctx, probe)
+			if queryErr != nil {
+				return queryErr
+			}
+			defer func() { _ = rows.Close() }()
+			return rows.Err()
+		}); err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
 	}
 
 	logger.WithFields(logging.Fields{
@@ -101,6 +116,19 @@ func ConnectClickHouseNative(cfg ClickHouseConfig, logger logging.Logger) (Click
 	if err := conn.Ping(context.Background()); err != nil {
 		logger.WithError(err).Error("Failed to ping ClickHouse native")
 		return nil, err
+	}
+	if cfg.ServiceName != "" {
+		if err := VerifyCapabilities(context.Background(), cfg.ServiceName, EngineClickHouse, func(ctx context.Context, probe string) error {
+			rows, queryErr := conn.Query(ctx, probe)
+			if queryErr != nil {
+				return queryErr
+			}
+			defer func() { _ = rows.Close() }()
+			return rows.Err()
+		}); err != nil {
+			_ = conn.Close()
+			return nil, err
+		}
 	}
 
 	logger.WithFields(logging.Fields{
