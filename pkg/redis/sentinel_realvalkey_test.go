@@ -6,8 +6,6 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -49,19 +47,13 @@ func TestSentinelFailover_RealValkey(t *testing.T) {
 	startData(dataNames[1], true)
 	startData(dataNames[2], true)
 
-	configDir := t.TempDir()
+	// Sentinel rewrites its configuration during failover. Create it inside a writable
+	// container tmpfs so the runtime UID owns the file on both Docker Desktop and Linux CI.
 	for index, name := range sentinelNames {
-		sentinelDir := filepath.Join(configDir, fmt.Sprintf("sentinel-%d", index))
-		if err := os.Mkdir(sentinelDir, 0o777); err != nil {
-			t.Fatal(err)
-		}
-		configPath := filepath.Join(sentinelDir, "sentinel.conf")
 		config := fmt.Sprintf("port 26379\ndir /sentinel\nsentinel resolve-hostnames yes\nsentinel monitor frameworks-master %s 6379 2\nsentinel down-after-milliseconds frameworks-master 1000\nsentinel failover-timeout frameworks-master 8000\nsentinel parallel-syncs frameworks-master 1\n", dataNames[0])
-		if err := os.WriteFile(configPath, []byte(config), 0o666); err != nil {
-			t.Fatal(err)
-		}
+		configWriter := `printf '%s' "$1" > /sentinel/sentinel.conf && exec valkey-server /sentinel/sentinel.conf --sentinel`
 		if out, runErr := dockerpg.Run("run", "-d", "--name", name, "--network", networkName, "--expose", "26379", "-P",
-			"-v", sentinelDir+":/sentinel", image, "valkey-server", "/sentinel/sentinel.conf", "--sentinel"); runErr != nil {
+			"--tmpfs", "/sentinel:rw,mode=1777", image, "sh", "-c", configWriter, fmt.Sprintf("sentinel-%d", index), config); runErr != nil {
 			t.Fatalf("start %s: %v\n%s", name, runErr, out)
 		}
 	}
