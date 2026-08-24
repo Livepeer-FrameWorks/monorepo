@@ -13092,9 +13092,15 @@ frameworks cluster doctor [flags]
 - **Database migrations:** Embedded PostgreSQL/YugabyteDB migrations compared
   against each configured database's `_migrations` ledger
 
-Note: This command checks migration ledger drift, not full physical schema
-introspection. For YugabyteDB clusters where the password is only in SOPS
-env_files, pass `--deep` so doctor can decrypt `DATABASE_PASSWORD`.
+With `--deep`, doctor additionally executes every enabled database-backed binary's
+read-only schema capability pack against the live PostgreSQL/YugabyteDB and
+ClickHouse engines. PostgreSQL/YugabyteDB probes assume the prepared runtime role,
+so the check proves required objects and least-privilege grants together.
+
+This is targeted binary-contract introspection, not a full physical-schema diff.
+Deep mode decrypts the shared env for authenticated service checks and ClickHouse
+credentials; Yugabyte administrative probes still use the role's localhost-only
+trust path and then `SET ROLE` to validate application access.
 
 The report groups infrastructure, application, interface, observability, and
 migration-ledger checks. Use `--output json` when a pipeline needs the current
@@ -13113,6 +13119,9 @@ frameworks cluster doctor --github-repo org/gitops --cluster production
 
 # With verbose output
 frameworks cluster doctor --verbose
+
+# Verify live schema capabilities and prepared runtime-role grants
+frameworks cluster doctor --deep
 ```
 
 ---
@@ -16433,6 +16442,7 @@ infrastructure:
     databases:
       - name: quartermaster
         owner: quartermaster_user
+        runtime_role: quartermaster_runtime
 ```
 
 **Fields:**
@@ -16445,7 +16455,10 @@ infrastructure:
 - `nodes` (required for multi-node YugabyteDB) - List of `{host, id, rpc_port}` entries
 - `port` (required)
 - `replication_factor` (optional) - Defaults to the number of `nodes`
-- `databases` (optional)
+- `databases` (optional) - Each entry declares `name` and its schema/migration
+  `owner`. Optional `runtime_role` opts service DSNs into the separately
+  provisioned least-privilege login. Omit it during the first rolling provision,
+  verify with `cluster doctor --deep`, then add it for the application cutover.
 - `tuning` (optional) - key/value overrides for server tuning
 - `sql_access` (optional) - `direct` by default, or `ssh`
 - `password` (optional) - Database password override
@@ -17922,11 +17935,11 @@ The merged result is written to `/etc/frameworks/{service}.env` on each host.
 
 ### Credential Categories
 
-| Category                    | Examples                                                      | Who Sets It                                       |
-| --------------------------- | ------------------------------------------------------------- | ------------------------------------------------- |
-| **Operator-provided**       | `DATABASE_PASSWORD`, `CLICKHOUSE_PASSWORD`, Stripe keys, SMTP | You — in shared env files                         |
-| **Shared platform secrets** | `JWT_SECRET`, `SERVICE_TOKEN`, `FIELD_ENCRYPTION_KEY`         | You — in shared env files for non-dev deployments |
-| **CLI-derived**             | `DATABASE_URL`, `KAFKA_BROKERS`, `COOKIE_DOMAIN`              | CLI — from manifest                               |
+| Category                    | Examples                                                                        | Who Sets It                                       |
+| --------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------- |
+| **Operator-provided**       | `DATABASE_PASSWORD`, `CLICKHOUSE_PASSWORD`, Stripe keys, SMTP                   | You — in shared env files                         |
+| **Shared platform secrets** | `JWT_SECRET`, `SERVICE_TOKEN`, `FIELD_ENCRYPTION_KEY`, `TELEMETRY_TOKEN_SECRET` | You — in shared env files for non-dev deployments |
+| **CLI-derived**             | `DATABASE_URL`, `KAFKA_BROKERS`, `COOKIE_DOMAIN`                                | CLI — from manifest                               |
 
 For dev-profile manifests, the CLI can replace missing or placeholder shared platform secrets with `crypto/rand` values for that provision run. Non-dev provisioning validates that shared platform secrets are present in your manifest `env_files`; keep them in an encrypted env file so re-provisioning uses stable values.
 
@@ -17934,7 +17947,7 @@ For dev-profile manifests, the CLI can replace missing or placeholder shared pla
 
 During `frameworks cluster provision`, the CLI also provisions database users:
 
-- **Postgres/YugabyteDB**: Creates a per-database owner role for each database listed in the manifest (role name = database owner from the manifest), using `DATABASE_PASSWORD`. Each role has access only to its own database.
+- **Postgres/YugabyteDB**: Creates a per-database owner/migration role plus a least-privilege runtime role (by default `<owner>_runtime`) using `DATABASE_PASSWORD`. The runtime role can connect and perform application DML in its service schema, but cannot create schema objects or own them. Add `runtime_role` to the database manifest entry only after provisioning and `frameworks cluster doctor --deep` succeed; omitting it keeps existing services on the owner role during a rolling upgrade.
 - **ClickHouse**: Deploys `users.xml` with a `frameworks` user (password from `CLICKHOUSE_PASSWORD`) and a `readonly_user` (rate-limited, password from `CLICKHOUSE_READONLY_PASSWORD`)
 - **Operator analytics (optional)**: When `ANALYTICS_RO_PASSWORD` and `CLICKHOUSE_ANALYTICS_PASSWORD` are both set, provisioning additionally creates the read-only `frameworks_analytics_ro` Postgres role (quartermaster/commodore/purser grants, applied by `cluster seed`), the ClickHouse named collections that reach it, and a dedicated `frameworks_analytics` ClickHouse user. Use `frameworks_analytics` as the Metabase datasource credential for the tenant-activity cards (synced by `frameworks cluster metabase sync`) — the runtime `frameworks` user is deliberately denied the Postgres reach-through.
 
@@ -17944,7 +17957,7 @@ This ensures runtime services can connect with the same credentials the CLI prov
 
 1. Create `gitops/config/production.env` for non-secret operator config
 2. Copy the secret template: `cp config/env/secrets.env.example gitops/secrets/production.env`
-3. Set at minimum in `gitops/secrets/production.env`: `DATABASE_PASSWORD`, `CLICKHOUSE_PASSWORD`, `SERVICE_TOKEN`, `JWT_SECRET`, `PASSWORD_RESET_SECRET`, `FIELD_ENCRYPTION_KEY`, and `USAGE_HASH_SECRET`
+3. Set at minimum in `gitops/secrets/production.env`: `DATABASE_PASSWORD`, `CLICKHOUSE_PASSWORD`, `SERVICE_TOKEN`, `JWT_SECRET`, `PASSWORD_RESET_SECRET`, `FIELD_ENCRYPTION_KEY`, `USAGE_HASH_SECRET`, and a shared 64-hex-character `TELEMETRY_TOKEN_SECRET`
 4. Set your public URLs and other non-secret operator inputs in `gitops/config/production.env`
 5. Reference both files in your cluster manifest:
    ```yaml
