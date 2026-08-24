@@ -2312,7 +2312,7 @@ type InfrastructureCluster struct {
 	// no separate Chandler round-trip is needed to learn the prefix at first boot.
 	S3Prefix string `protobuf:"bytes,35,opt,name=s3_prefix,json=s3Prefix,proto3" json:"s3_prefix,omitempty"`
 	// s3_prefix_present reports whether s3_prefix is NON-NULL on the row. The column deliberately uses NULL for "not yet
-	// adopted" (a pre-migration row whose prefix lived only in env) versus ” for "known-empty adopted", a distinction a
+	// adopted" (a pre-migration row whose prefix lived only in env) versus '' for "known-empty adopted", a distinction a
 	// bare string field cannot carry. Readers that must classify adoption state (the release reconciler) use this.
 	S3PrefixPresent bool `protobuf:"varint,36,opt,name=s3_prefix_present,json=s3PrefixPresent,proto3" json:"s3_prefix_present,omitempty"`
 	// Geographic region this cluster lives in.

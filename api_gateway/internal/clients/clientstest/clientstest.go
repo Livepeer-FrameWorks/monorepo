@@ -902,6 +902,7 @@ type FakePurser struct {
 	GetBillingDetailsFn          func(ctx context.Context, tenantID string) (*purserpb.BillingDetails, error)
 	GetPrepaidBalanceFn          func(ctx context.Context, tenantID, currency string) (*purserpb.PrepaidBalance, error)
 	GetTenantBillingStatusFn     func(ctx context.Context, tenantID string) (*purserpb.GetTenantBillingStatusResponse, error)
+	GetTenantAdmissionStatusFn   func(ctx context.Context, tenantID string) (*purserpb.GetTenantAdmissionStatusResponse, error)
 	ClaimX402MutationResultFn    func(ctx context.Context, req *purserpb.ClaimX402MutationResultRequest) (*purserpb.ClaimX402MutationResultResponse, error)
 	CompleteX402MutationResultFn func(ctx context.Context, req *purserpb.CompleteX402MutationResultRequest) (*purserpb.CompleteX402MutationResultResponse, error)
 	ListTenantBillingSnapshotsFn func(ctx context.Context, tenantIDs []string, limit int32) (*purserpb.ListTenantBillingSnapshotsResponse, error)
@@ -966,6 +967,25 @@ func (f *FakePurser) GetTenantBillingStatus(ctx context.Context, tenantID string
 		panic("FakePurser.GetTenantBillingStatus not stubbed")
 	}
 	return f.GetTenantBillingStatusFn(ctx, tenantID)
+}
+
+func (f *FakePurser) GetTenantAdmissionStatus(ctx context.Context, tenantID string) (*purserpb.GetTenantAdmissionStatusResponse, error) {
+	if f.GetTenantAdmissionStatusFn != nil {
+		return f.GetTenantAdmissionStatusFn(ctx, tenantID)
+	}
+	if f.GetTenantBillingStatusFn == nil {
+		panic("FakePurser.GetTenantAdmissionStatus not stubbed")
+	}
+	status, err := f.GetTenantBillingStatusFn(ctx, tenantID)
+	if err != nil || status == nil {
+		return nil, err
+	}
+	return &purserpb.GetTenantAdmissionStatusResponse{
+		BillingModel: status.BillingModel, IsSuspended: status.IsSuspended,
+		IsBalanceNegative: status.IsBalanceNegative, BalanceCents: status.BalanceCents,
+		ReservedBalanceCents: status.ReservedBalanceCents, AvailableBalanceCents: status.AvailableBalanceCents,
+		CollectionReady: status.CollectionReady, CollectionProvider: status.CollectionProvider, TierName: status.TierName,
+	}, nil
 }
 
 func (f *FakePurser) ClaimX402MutationResult(ctx context.Context, req *purserpb.ClaimX402MutationResultRequest) (*purserpb.ClaimX402MutationResultResponse, error) {

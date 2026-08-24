@@ -478,9 +478,92 @@ func (s *PurserServer) GetBillingTier(ctx context.Context, req *purserpb.GetBill
 // CROSS-SERVICE BILLING STATUS
 // ============================================================================
 
-// GetTenantBillingStatus returns lightweight billing status for cross-service checks.
-// Called by Commodore (ValidateStreamKey, isTenantSuspended) and Quartermaster (ValidateTenant).
-// This avoids cross-service database access by providing billing info via gRPC.
+type tenantAdmissionData struct {
+	BillingModel         string
+	SubscriptionStatus   string
+	BalanceCents         sql.NullInt64
+	ReservedBalanceCents int64
+	PaymentMethod        sql.NullString
+	StripeSubscriptionID sql.NullString
+	MollieSubscriptionID sql.NullString
+	TierName             string
+}
+
+func defaultTenantAdmissionStatus() *purserpb.GetTenantAdmissionStatusResponse {
+	return &purserpb.GetTenantAdmissionStatusResponse{
+		BillingModel:          "prepaid",
+		IsBalanceNegative:     true,
+		BalanceCents:          0,
+		AvailableBalanceCents: 0,
+	}
+}
+
+func mapTenantAdmissionStatus(row tenantAdmissionData) *purserpb.GetTenantAdmissionStatusResponse {
+	model := row.BillingModel
+	if model == "" {
+		model = "postpaid"
+	}
+	balance := int64(0)
+	if row.BalanceCents.Valid {
+		balance = row.BalanceCents.Int64
+	}
+	availableBalance := balance - row.ReservedBalanceCents
+	collectionProvider := ""
+	collectionReady := false
+	if row.PaymentMethod.String == "stripe" && row.StripeSubscriptionID.Valid && row.StripeSubscriptionID.String != "" {
+		collectionProvider = "stripe"
+		collectionReady = true
+	} else if row.PaymentMethod.String == "mollie" && row.MollieSubscriptionID.Valid && row.MollieSubscriptionID.String != "" {
+		collectionProvider = "mollie"
+		collectionReady = true
+	}
+	return &purserpb.GetTenantAdmissionStatusResponse{
+		BillingModel:          model,
+		IsSuspended:           row.SubscriptionStatus == "suspended",
+		IsBalanceNegative:     model == "prepaid" && availableBalance <= 0,
+		BalanceCents:          balance,
+		ReservedBalanceCents:  row.ReservedBalanceCents,
+		AvailableBalanceCents: availableBalance,
+		CollectionReady:       collectionReady,
+		CollectionProvider:    collectionProvider,
+		TierName:              row.TierName,
+	}
+}
+
+// GetTenantAdmissionStatus returns the bounded billing authority decision used
+// by latency-sensitive admission paths. It deliberately excludes entitlements,
+// allowance usage, retention, and storage pricing.
+func (s *PurserServer) GetTenantAdmissionStatus(ctx context.Context, req *purserpb.GetTenantAdmissionStatusRequest) (*purserpb.GetTenantAdmissionStatusResponse, error) {
+	tenantID := req.GetTenantId()
+	if tenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
+
+	var row purserdb.GetTenantAdmissionStatusRow
+	err := fwdb.RetryPostgres(ctx, fwdb.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		var queryErr error
+		row, queryErr = purserdb.New(s.db).GetTenantAdmissionStatus(ctx, purserdb.GetTenantAdmissionStatusParams{
+			TenantID: tenantID,
+			Currency: billing.DefaultCurrency(),
+		})
+		return queryErr
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return defaultTenantAdmissionStatus(), nil
+	}
+	if err != nil {
+		s.logger.WithFields(logging.Fields{"tenant_id": tenantID, "error": err}).Error("Database error getting tenant admission status")
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	return mapTenantAdmissionStatus(tenantAdmissionData{
+		BillingModel: row.BillingModel, SubscriptionStatus: row.SubscriptionStatus,
+		BalanceCents: row.BalanceCents, ReservedBalanceCents: row.ReservedBalanceCents,
+		PaymentMethod: row.PaymentMethod, StripeSubscriptionID: row.StripeSubscriptionID,
+		MollieSubscriptionID: row.MollieSubscriptionID, TierName: row.TierName,
+	}), nil
+}
+
+// GetTenantBillingStatus returns the full entitlement and pricing snapshot.
 func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *purserpb.GetTenantBillingStatusRequest) (*purserpb.GetTenantBillingStatusResponse, error) {
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
@@ -509,12 +592,10 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *purserpb
 		// Missing billing provisioning must never become implicit postpaid credit.
 		// Report a zero-balance prepaid state so rated admission fails closed while
 		// the Gateway's non-rated onboarding and payment surfaces remain reachable.
+		admission := defaultTenantAdmissionStatus()
 		return &purserpb.GetTenantBillingStatusResponse{
-			BillingModel:          "prepaid",
-			IsSuspended:           false,
-			IsBalanceNegative:     true,
-			BalanceCents:          0,
-			AvailableBalanceCents: 0,
+			BillingModel: admission.BillingModel, IsBalanceNegative: admission.IsBalanceNegative,
+			BalanceCents: admission.BalanceCents, AvailableBalanceCents: admission.AvailableBalanceCents,
 		}, nil
 	}
 
@@ -526,37 +607,12 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *purserpb
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	// Determine billing model (default to postpaid)
-	model := "postpaid"
-	if billingStatus.BillingModel != "" {
-		model = billingStatus.BillingModel
-	}
-
-	// Check if suspended (subscription status = 'suspended')
-	isSuspended := billingStatus.SubscriptionStatus == "suspended"
-
-	// Gate prepaid admission on available balance. The settled balance remains
-	// unchanged until finalized usage reaches the financial ledger.
-	isBalanceNegative := false
-	balance := int64(0)
-	reservedBalance := int64(0)
-	if billingStatus.BalanceCents.Valid {
-		balance = billingStatus.BalanceCents.Int64
-	}
-	reservedBalance = billingStatus.ReservedBalanceCents
-	availableBalance := balance - reservedBalance
-	if model == "prepaid" && availableBalance <= 0 {
-		isBalanceNegative = true
-	}
-	collectionProvider := ""
-	collectionReady := false
-	if billingStatus.PaymentMethod.String == "stripe" && billingStatus.StripeSubscriptionID.Valid && billingStatus.StripeSubscriptionID.String != "" {
-		collectionProvider = "stripe"
-		collectionReady = true
-	} else if billingStatus.PaymentMethod.String == "mollie" && billingStatus.MollieSubscriptionID.Valid && billingStatus.MollieSubscriptionID.String != "" {
-		collectionProvider = "mollie"
-		collectionReady = true
-	}
+	admission := mapTenantAdmissionStatus(tenantAdmissionData{
+		BillingModel: billingStatus.BillingModel, SubscriptionStatus: billingStatus.SubscriptionStatus,
+		BalanceCents: billingStatus.BalanceCents, ReservedBalanceCents: billingStatus.ReservedBalanceCents,
+		PaymentMethod: billingStatus.PaymentMethod, StripeSubscriptionID: billingStatus.StripeSubscriptionID,
+		MollieSubscriptionID: billingStatus.MollieSubscriptionID, TierName: billingStatus.TierName,
+	})
 
 	retentionRaw := sql.NullString{String: billingStatus.RetentionValue, Valid: billingStatus.RetentionValue != ""}
 	dvrEntitlements := sql.NullString{String: billingStatus.DvrEntitlements, Valid: billingStatus.DvrEntitlements != ""}
@@ -586,21 +642,21 @@ func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *purserpb
 	}
 
 	return &purserpb.GetTenantBillingStatusResponse{
-		BillingModel:           model,
-		IsSuspended:            isSuspended,
-		IsBalanceNegative:      isBalanceNegative,
-		BalanceCents:           balance,
-		ReservedBalanceCents:   reservedBalance,
-		AvailableBalanceCents:  availableBalance,
+		BillingModel:           admission.BillingModel,
+		IsSuspended:            admission.IsSuspended,
+		IsBalanceNegative:      admission.IsBalanceNegative,
+		BalanceCents:           admission.BalanceCents,
+		ReservedBalanceCents:   admission.ReservedBalanceCents,
+		AvailableBalanceCents:  admission.AvailableBalanceCents,
 		RecordingRetentionDays: retentionDays,
 		DvrPolicy:              dvrPolicy,
 		Allowances:             allowances,
 		StorageLimitBytes:      parseStorageLimitBytes(storageLimitRaw),
 		TenantResourceLimits:   parseTenantResourceLimits(resourceLimitsRaw),
 		StoragePricing:         storagePricing,
-		CollectionReady:        collectionReady,
-		CollectionProvider:     collectionProvider,
-		TierName:               billingStatus.TierName,
+		CollectionReady:        admission.CollectionReady,
+		CollectionProvider:     admission.CollectionProvider,
+		TierName:               admission.TierName,
 	}, nil
 }
 

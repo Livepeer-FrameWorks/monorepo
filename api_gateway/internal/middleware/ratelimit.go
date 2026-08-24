@@ -205,7 +205,7 @@ type X402Provider interface {
 type X402Settler interface {
 	VerifyX402Payment(ctx context.Context, tenantID string, payment *x402pb.X402PaymentPayload, clientIP string) (*purserpb.VerifyX402PaymentResponse, error)
 	SettleX402Payment(ctx context.Context, tenantID string, payment *x402pb.X402PaymentPayload, clientIP string) (*purserpb.SettleX402PaymentResponse, error)
-	GetTenantBillingStatus(ctx context.Context, tenantID string) (*purserpb.GetTenantBillingStatusResponse, error)
+	GetTenantAdmissionStatus(ctx context.Context, tenantID string) (*purserpb.GetTenantAdmissionStatusResponse, error)
 	ClaimX402MutationResult(ctx context.Context, req *purserpb.ClaimX402MutationResultRequest) (*purserpb.ClaimX402MutationResultResponse, error)
 	CompleteX402MutationResult(ctx context.Context, req *purserpb.CompleteX402MutationResultRequest) (*purserpb.CompleteX402MutationResultResponse, error)
 }
@@ -541,7 +541,7 @@ func EvaluateAccess(ctx context.Context, req AccessRequest, rl *RateLimiter, get
 				return billingStatusUnavailableDecision(headers)
 			}
 			statusCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-			freshStatus, err := x402Settler.GetTenantBillingStatus(statusCtx, tenantIDStr)
+			freshStatus, err := x402Settler.GetTenantAdmissionStatus(statusCtx, tenantIDStr)
 			cancel()
 			if err != nil || freshStatus == nil {
 				if logger != nil {

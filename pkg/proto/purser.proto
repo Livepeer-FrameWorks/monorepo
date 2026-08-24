@@ -35,9 +35,10 @@ service BillingService {
   rpc UpdateBillingTier(UpdateBillingTierRequest) returns (BillingTier);
 
   // ===== CROSS-SERVICE BILLING STATUS =====
-  // Lightweight billing status check for service-to-service calls.
-  // Called by Commodore/Quartermaster to check suspension/balance status.
-  // Returns minimal info needed for gating decisions.
+  // Bounded admission-only status for latency-sensitive service calls.
+  rpc GetTenantAdmissionStatus(GetTenantAdmissionStatusRequest) returns (GetTenantAdmissionStatusResponse);
+
+  // Full entitlement, allowance, retention, and pricing snapshot.
   rpc GetTenantBillingStatus(GetTenantBillingStatusRequest) returns (GetTenantBillingStatusResponse);
 
   // Cross-tenant billing snapshot for the platform-operator god view.
@@ -147,8 +148,24 @@ service ClusterPricingService {
 // CROSS-SERVICE BILLING STATUS MESSAGES
 // ============================================================================
 
-// Lightweight billing status check for cross-service calls.
-// Used by Commodore (ValidateStreamKey, isTenantSuspended) and Quartermaster (ValidateTenant).
+// Bounded billing authority check for viewer and tenant admission.
+message GetTenantAdmissionStatusRequest {
+  string tenant_id = 1;
+}
+
+message GetTenantAdmissionStatusResponse {
+  string billing_model = 1;
+  bool is_suspended = 2;
+  bool is_balance_negative = 3;
+  int64 balance_cents = 4;
+  int64 reserved_balance_cents = 5;
+  int64 available_balance_cents = 6;
+  bool collection_ready = 7;
+  string collection_provider = 8;
+  string tier_name = 9;
+}
+
+// Full billing status check for entitlement- and pricing-aware calls.
 message GetTenantBillingStatusRequest {
   string tenant_id = 1;
 }

@@ -124,7 +124,7 @@ func (c *Checker) CheckBalance(ctx context.Context) (*Blocker, error) {
 		return nil, fmt.Errorf("no tenant ID in context")
 	}
 
-	billingStatus, err := c.clients.Purser.GetTenantBillingStatus(ctx, tenantID)
+	billingStatus, err := c.clients.Purser.GetTenantAdmissionStatus(ctx, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get billing status: %w", err)
 	}

@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
@@ -11,6 +12,56 @@ import (
 
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 )
+
+func TestGetTenantAdmissionStatusNoSubscriptionDefault(t *testing.T) {
+	s, mock := newReadServer(t, true)
+	mock.ExpectQuery(`FROM purser\.tenant_subscriptions ts`).
+		WithArgs("EUR", "tenant-1").
+		WillReturnError(sqlmockNoRows())
+
+	resp, err := s.GetTenantAdmissionStatus(context.Background(), &purserpb.GetTenantAdmissionStatusRequest{TenantId: "tenant-1"})
+	if err != nil {
+		t.Fatalf("GetTenantAdmissionStatus: %v", err)
+	}
+	if resp.BillingModel != "prepaid" || !resp.IsBalanceNegative || resp.AvailableBalanceCents != 0 {
+		t.Fatalf("unexpected default: %+v", resp)
+	}
+}
+
+func TestGetTenantAdmissionStatusMapsBoundedDecision(t *testing.T) {
+	s, mock := newReadServer(t, true)
+	cols := []string{
+		"billing_model", "subscription_status", "balance_cents", "reserved_balance_cents",
+		"payment_method", "stripe_subscription_id", "mollie_subscription_id", "tier_name",
+	}
+	mock.ExpectQuery(`FROM purser\.tenant_subscriptions ts`).
+		WithArgs("EUR", "tenant-1").
+		WillReturnRows(sqlmock.NewRows(cols).AddRow("prepaid", "active", int64(100), int64(125), nil, nil, nil, "prepaid"))
+
+	resp, err := s.GetTenantAdmissionStatus(context.Background(), &purserpb.GetTenantAdmissionStatusRequest{TenantId: "tenant-1"})
+	if err != nil {
+		t.Fatalf("GetTenantAdmissionStatus: %v", err)
+	}
+	if !resp.IsBalanceNegative || resp.BalanceCents != 100 || resp.ReservedBalanceCents != 125 || resp.AvailableBalanceCents != -25 {
+		t.Fatalf("unexpected admission decision: %+v", resp)
+	}
+
+	postpaid := mapTenantAdmissionStatus(tenantAdmissionData{
+		BillingModel: "postpaid", SubscriptionStatus: "suspended", BalanceCents: sql.NullInt64{Int64: -50, Valid: true},
+		PaymentMethod: sql.NullString{String: "stripe", Valid: true}, StripeSubscriptionID: sql.NullString{String: "sub_1", Valid: true}, TierName: "pro",
+	})
+	if postpaid.IsBalanceNegative || !postpaid.IsSuspended || !postpaid.CollectionReady || postpaid.CollectionProvider != "stripe" || postpaid.TierName != "pro" {
+		t.Fatalf("unexpected postpaid decision: %+v", postpaid)
+	}
+}
+
+func TestGetTenantAdmissionStatusEmptyTenantGuard(t *testing.T) {
+	s := newGuardServer(t)
+	_, err := s.GetTenantAdmissionStatus(context.Background(), &purserpb.GetTenantAdmissionStatusRequest{})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("err = %v, want InvalidArgument", err)
+	}
+}
 
 // No subscription row must fail closed for rated admission without blocking the
 // Gateway's explicit non-rated onboarding/payment surfaces.

@@ -6351,7 +6351,6 @@ type StorageSnapshot struct {
 	//     tenant operating the S3 bucket (typically frameworks).
 	//   - hot edge snapshots: provider = the cluster/node owner; on the
 	//     marketplace this may be a third-party operator, not frameworks.
-	//
 	// Customer billing rates the usage tenant; marketplace settlement uses
 	// these provider dimensions to route payouts/credits to the capacity owner.
 	StorageProviderTenantId  *string `protobuf:"bytes,8,opt,name=storage_provider_tenant_id,json=storageProviderTenantId,proto3,oneof" json:"storage_provider_tenant_id,omitempty"`
@@ -16476,19 +16475,17 @@ type TLSCertBundle struct {
 	ExpiresAt int64                  `protobuf:"varint,4,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
 	// Stable identity used by Helmsman to key cert/key files on disk and
 	// by Foghorn to track per-edge apply state. Examples:
-	//
-	//	"cluster:media-us-1"
-	//	"tenant:acme"
-	//	"platform:edge-multi"
-	//	"platform:pool-multi"
+	//   "cluster:media-us-1"
+	//   "tenant:acme"
+	//   "platform:edge-multi"
+	//   "platform:pool-multi"
 	BundleId string `protobuf:"bytes,5,opt,name=bundle_id,json=bundleId,proto3" json:"bundle_id,omitempty"`
 	// Hostnames this bundle's cert should serve via Caddy SNI. Helmsman
 	// renders one Caddy site block per bundle covering these addresses.
 	// Examples:
-	//
-	//	["*.media-us-1.frameworks.network"]
-	//	["media-us-1.frameworks.network", "*.media-us-1.frameworks.network"]
-	//	["acme.cdn.frameworks.network", "*.acme.cdn.frameworks.network"]
+	//   ["*.media-us-1.frameworks.network"]
+	//   ["media-us-1.frameworks.network", "*.media-us-1.frameworks.network"]
+	//   ["acme.cdn.frameworks.network", "*.acme.cdn.frameworks.network"]
 	SiteAddresses []string `protobuf:"bytes,6,rep,name=site_addresses,json=siteAddresses,proto3" json:"site_addresses,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

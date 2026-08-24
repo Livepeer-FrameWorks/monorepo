@@ -1247,7 +1247,7 @@ type StartDVRRequest struct {
 	// pkg/dvrpolicy.Resolve uses zero-value defaults and a safe 1h fallback.
 	DvrPolicy *DVRPolicy `protobuf:"bytes,8,opt,name=dvr_policy,json=dvrPolicy,proto3" json:"dvr_policy,omitempty"`
 	// Chapter mode for the chapter sweeper to materialize.
-	// Values: 'window_sized_chapters' | 'fixed_interval' | ” (chapters off)
+	// Values: 'window_sized_chapters' | 'fixed_interval' | '' (chapters off)
 	// Empty/unset disables chapter rotation entirely — Stream config is the
 	// authority. For 'fixed_interval', dvr_chapter_interval_seconds is required.
 	DvrChapterMode            *string `protobuf:"bytes,9,opt,name=dvr_chapter_mode,json=dvrChapterMode,proto3,oneof" json:"dvr_chapter_mode,omitempty"`

@@ -331,7 +331,7 @@ type fakeX402Provider struct {
 }
 
 type fakeX402Settler struct {
-	status     *purserpb.GetTenantBillingStatusResponse
+	status     *purserpb.GetTenantAdmissionStatusResponse
 	statusErr  error
 	settle     *purserpb.SettleX402PaymentResponse
 	settleFn   func() (*purserpb.SettleX402PaymentResponse, error)
@@ -386,7 +386,7 @@ func TestRateLimitMiddlewareRejectsUnsupportedDirectX402MutationBeforeSettlement
 	}
 }
 
-func (f fakeX402Settler) GetTenantBillingStatus(context.Context, string) (*purserpb.GetTenantBillingStatusResponse, error) {
+func (f fakeX402Settler) GetTenantAdmissionStatus(context.Context, string) (*purserpb.GetTenantAdmissionStatusResponse, error) {
 	return f.status, f.statusErr
 }
 
@@ -529,7 +529,7 @@ func TestEvaluateAccessRechecksCanonicalBalanceAfterX402(t *testing.T) {
 	t.Run("insufficient topup remains blocked", func(t *testing.T) {
 		decision := EvaluateAccess(context.Background(), request, rl, func(string) (int, int) { return 10, 2 },
 			fakeBillingChecker{billingModel: "prepaid", isBalanceNegative: false}, nil,
-			fakeX402Settler{status: &purserpb.GetTenantBillingStatusResponse{
+			fakeX402Settler{status: &purserpb.GetTenantAdmissionStatusResponse{
 				BillingModel:      "prepaid",
 				IsBalanceNegative: true,
 				BalanceCents:      -1,
@@ -542,7 +542,7 @@ func TestEvaluateAccessRechecksCanonicalBalanceAfterX402(t *testing.T) {
 	t.Run("confirmed sufficient topup overrides stale negative cache", func(t *testing.T) {
 		decision := EvaluateAccess(context.Background(), request, rl, func(string) (int, int) { return 10, 2 },
 			fakeBillingChecker{billingModel: "prepaid", isBalanceNegative: true}, nil,
-			fakeX402Settler{status: &purserpb.GetTenantBillingStatusResponse{
+			fakeX402Settler{status: &purserpb.GetTenantAdmissionStatusResponse{
 				BillingModel: "prepaid",
 				BalanceCents: 500,
 			}}, nil, nil)

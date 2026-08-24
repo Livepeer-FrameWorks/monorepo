@@ -3069,11 +3069,9 @@ type DeleteStorageObjectsRequest struct {
 	// artifact_type is one of "clip", "dvr", "vod".
 	ArtifactType string `protobuf:"bytes,5,opt,name=artifact_type,json=artifactType,proto3" json:"artifact_type,omitempty"`
 	// Caller-resolved deletion target. Exactly one must be set.
-	//
-	//	s3_key:    exact object key (clip, vod). Callee calls Delete(key).
-	//	s3_prefix: prefix to recursively delete (dvr). Callee calls
-	//	           DeletePrefix(prefix).
-	//
+	//   s3_key:    exact object key (clip, vod). Callee calls Delete(key).
+	//   s3_prefix: prefix to recursively delete (dvr). Callee calls
+	//              DeletePrefix(prefix).
 	// Callee validates that the supplied target starts with the expected
 	// per-tenant prefix for the artifact_type
 	// (clips/<tenant>/..., dvr/<tenant>/..., vod/<tenant>/...) before
@@ -3198,19 +3196,18 @@ type DeleteStorageObjectsResponse struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	Accepted bool                   `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
 	// Populated when accepted = false. One of:
-	//
-	//	tenant_mismatch          — caller tenant != row tenant on callee
-	//	                           (when callee row exists).
-	//	storage_not_owned_here   — target_cluster_id mismatch or
-	//	                           bucket-tuple mismatch.
-	//	invalid_target_shape     — supplied key/prefix doesn't match the
-	//	                           expected per-tenant prefix for the
-	//	                           artifact_type.
-	//	unsupported_artifact_type
-	//	missing_target           — neither s3_key nor s3_prefix set, or
-	//	                           wrong oneof case for the artifact_type
-	//	                           (e.g. dvr with s3_key).
-	//	s3_error                 — non-NotFound S3 failure.
+	//   tenant_mismatch          — caller tenant != row tenant on callee
+	//                              (when callee row exists).
+	//   storage_not_owned_here   — target_cluster_id mismatch or
+	//                              bucket-tuple mismatch.
+	//   invalid_target_shape     — supplied key/prefix doesn't match the
+	//                              expected per-tenant prefix for the
+	//                              artifact_type.
+	//   unsupported_artifact_type
+	//   missing_target           — neither s3_key nor s3_prefix set, or
+	//                              wrong oneof case for the artifact_type
+	//                              (e.g. dvr with s3_key).
+	//   s3_error                 — non-NotFound S3 failure.
 	//
 	// S3 NotFound on the supplied key/prefix is reported as accepted=true
 	// (idempotent). Auth, ownership, and shape failures are NEVER

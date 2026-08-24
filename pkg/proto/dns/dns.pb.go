@@ -782,10 +782,8 @@ type EnsureCustomDomainResponse struct {
 	Accepted bool                   `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
 	Status   string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
 	// Customer must set two CNAMEs (one-time setup):
-	//
-	//	{domain}                       CNAME  {required_traffic_cname}
-	//	_acme-challenge.{domain}       CNAME  {required_acme_challenge_cname}
-	//
+	//   {domain}                       CNAME  {required_traffic_cname}
+	//   _acme-challenge.{domain}       CNAME  {required_acme_challenge_cname}
 	// Stable across re-issuance / renewal; no rotation required.
 	RequiredTrafficCname       string `protobuf:"bytes,3,opt,name=required_traffic_cname,json=requiredTrafficCname,proto3" json:"required_traffic_cname,omitempty"`
 	RequiredAcmeChallengeCname string `protobuf:"bytes,4,opt,name=required_acme_challenge_cname,json=requiredAcmeChallengeCname,proto3" json:"required_acme_challenge_cname,omitempty"`

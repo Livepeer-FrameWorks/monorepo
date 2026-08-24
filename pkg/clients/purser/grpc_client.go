@@ -153,9 +153,13 @@ func (c *GRPCClient) Close() error {
 // CROSS-SERVICE BILLING STATUS
 // ============================================================================
 
-// GetTenantBillingStatus returns lightweight billing status for cross-service checks.
-// Used by Commodore (ValidateStreamKey, isTenantSuspended) and Quartermaster (ValidateTenant).
-// Returns: billing_model, is_suspended, is_balance_negative, balance_cents
+// GetTenantAdmissionStatus returns the bounded status used by latency-sensitive
+// admission paths.
+func (c *GRPCClient) GetTenantAdmissionStatus(ctx context.Context, tenantID string) (*purserpb.GetTenantAdmissionStatusResponse, error) {
+	return c.billing.GetTenantAdmissionStatus(ctx, &purserpb.GetTenantAdmissionStatusRequest{TenantId: tenantID})
+}
+
+// GetTenantBillingStatus returns the full entitlement and pricing snapshot.
 func (c *GRPCClient) GetTenantBillingStatus(ctx context.Context, tenantID string) (*purserpb.GetTenantBillingStatusResponse, error) {
 	return c.billing.GetTenantBillingStatus(ctx, &purserpb.GetTenantBillingStatusRequest{
 		TenantId: tenantID,

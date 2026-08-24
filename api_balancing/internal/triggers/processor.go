@@ -225,10 +225,15 @@ func NewProcessor(logger logging.Logger, commodoreClient *commodore.GRPCClient, 
 	})
 	p.billingCache = cache.New(cache.Options{
 		TTL:                  10 * time.Minute,
-		StaleWhileRevalidate: streamCacheSWR(),
+		StaleWhileRevalidate: billingCacheSWR(),
 		NegativeTTL:          0,
 		MaxEntries:           10000,
-	}, cache.MetricsHooks{})
+	}, cache.MetricsHooks{
+		OnHit:   func(_ map[string]string) { p.observeBillingCache("hit") },
+		OnMiss:  func(_ map[string]string) { p.observeBillingCache("miss") },
+		OnStale: func(_ map[string]string) { p.observeBillingCache("stale_served") },
+		OnError: func(_ map[string]string) { p.observeBillingCache("refresh_error") },
+	})
 
 	p.nodeUUIDCache = cache.New(cache.Options{
 		TTL:                  1 * time.Hour,
@@ -468,6 +473,22 @@ func streamCacheSWR() time.Duration {
 		}
 	}
 	return swr
+}
+
+func billingCacheSWR() time.Duration {
+	swr := 5 * time.Minute
+	if raw := os.Getenv("BILLING_CACHE_SWR"); raw != "" {
+		if parsed, err := time.ParseDuration(raw); err == nil {
+			return parsed
+		}
+	}
+	return swr
+}
+
+func (p *Processor) observeBillingCache(outcome string) {
+	if p != nil && p.metrics != nil && p.metrics.BillingCacheEvents != nil {
+		p.metrics.BillingCacheEvents.WithLabelValues(outcome).Inc()
+	}
 }
 
 // StreamContextCacheEntry is a single cached mapping used for tenant/user enrichment.
@@ -723,6 +744,7 @@ func (p *Processor) InvalidateTenantCache(tenantID string) int {
 	p.holdStreamCacheTenant(tenantID)
 	if p.billingCache != nil {
 		p.billingCache.Delete(tenantID)
+		p.observeBillingCache("invalidated")
 	}
 
 	if p.commodoreClient != nil {

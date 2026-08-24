@@ -141,6 +141,65 @@ func (q *Queries) GetStoragePricing(ctx context.Context, arg GetStoragePricingPa
 	return i, err
 }
 
+const getTenantAdmissionStatus = `-- name: GetTenantAdmissionStatus :one
+SELECT
+    ts.billing_model,
+    ts.status AS subscription_status,
+    pb.balance_cents,
+    reservations.reserved_balance_cents,
+    ts.payment_method,
+    ts.stripe_subscription_id,
+    ts.mollie_subscription_id,
+    bt.tier_name
+FROM purser.tenant_subscriptions ts
+JOIN purser.billing_tiers bt ON bt.id = ts.tier_id
+LEFT JOIN purser.prepaid_balances pb
+    ON pb.tenant_id = ts.tenant_id AND pb.currency = $1
+LEFT JOIN LATERAL (
+    SELECT CEIL(COALESCE(SUM(reserved_amount_micro), 0)::numeric / 10000)::bigint
+        AS reserved_balance_cents
+    FROM purser.usage_reservations
+    WHERE tenant_id = ts.tenant_id
+      AND currency = $1
+      AND updated_at >= NOW() - INTERVAL '3 minutes'
+) reservations ON TRUE
+WHERE ts.tenant_id = $2::text::uuid AND ts.status != 'cancelled'
+ORDER BY ts.created_at DESC
+LIMIT 1
+`
+
+type GetTenantAdmissionStatusParams struct {
+	Currency string `db:"currency" json:"currency"`
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+}
+
+type GetTenantAdmissionStatusRow struct {
+	BillingModel         string         `db:"billing_model" json:"billing_model"`
+	SubscriptionStatus   string         `db:"subscription_status" json:"subscription_status"`
+	BalanceCents         sql.NullInt64  `db:"balance_cents" json:"balance_cents"`
+	ReservedBalanceCents int64          `db:"reserved_balance_cents" json:"reserved_balance_cents"`
+	PaymentMethod        sql.NullString `db:"payment_method" json:"payment_method"`
+	StripeSubscriptionID sql.NullString `db:"stripe_subscription_id" json:"stripe_subscription_id"`
+	MollieSubscriptionID sql.NullString `db:"mollie_subscription_id" json:"mollie_subscription_id"`
+	TierName             string         `db:"tier_name" json:"tier_name"`
+}
+
+func (q *Queries) GetTenantAdmissionStatus(ctx context.Context, arg GetTenantAdmissionStatusParams) (GetTenantAdmissionStatusRow, error) {
+	row := q.db.QueryRowContext(ctx, getTenantAdmissionStatus, arg.Currency, arg.TenantID)
+	var i GetTenantAdmissionStatusRow
+	err := row.Scan(
+		&i.BillingModel,
+		&i.SubscriptionStatus,
+		&i.BalanceCents,
+		&i.ReservedBalanceCents,
+		&i.PaymentMethod,
+		&i.StripeSubscriptionID,
+		&i.MollieSubscriptionID,
+		&i.TierName,
+	)
+	return i, err
+}
+
 const getTenantBillingStatus = `-- name: GetTenantBillingStatus :one
 SELECT
     ts.billing_model,

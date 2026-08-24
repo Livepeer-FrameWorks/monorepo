@@ -8490,10 +8490,9 @@ type CreateStreamResponse struct {
 	Status      string                 `protobuf:"bytes,6,opt,name=status,proto3" json:"status,omitempty"`                           // json:"status"
 	// Cluster-level base domains (populated when tenant has a cluster assignment).
 	// Protocol-specific URLs are derived client-side from these + protocol conventions.
-	//
-	//	ingest_domain: non-redirectable ingest (RTMP push, SRT push)
-	//	play_domain:   Foghorn-mediated HTTP routing (WHIP, HLS, DASH, WHEP)
-	//	edge_domain:   non-redirectable playback (SRT pull) and direct edge access
+	//   ingest_domain: non-redirectable ingest (RTMP push, SRT push)
+	//   play_domain:   Foghorn-mediated HTTP routing (WHIP, HLS, DASH, WHEP)
+	//   edge_domain:   non-redirectable playback (SRT pull) and direct edge access
 	IngestDomain *string `protobuf:"bytes,7,opt,name=ingest_domain,json=ingestDomain,proto3,oneof" json:"ingest_domain,omitempty"`
 	EdgeDomain   *string `protobuf:"bytes,8,opt,name=edge_domain,json=edgeDomain,proto3,oneof" json:"edge_domain,omitempty"`
 	PlayDomain   *string `protobuf:"bytes,9,opt,name=play_domain,json=playDomain,proto3,oneof" json:"play_domain,omitempty"`

@@ -123,7 +123,7 @@ func ViewerX402Middleware(serviceClients *clients.ServiceClients, logger logging
 		}
 
 		if x402Processed {
-			freshStatus, freshErr := serviceClients.Purser.GetTenantBillingStatus(c.Request.Context(), tenantID)
+			freshStatus, freshErr := serviceClients.Purser.GetTenantAdmissionStatus(c.Request.Context(), tenantID)
 			if freshErr != nil || freshStatus == nil {
 				c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{
 					"error":   "billing_status_unavailable",

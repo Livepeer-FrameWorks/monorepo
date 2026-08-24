@@ -26,6 +26,7 @@ const (
 	BillingService_ListMeterDefinitions_FullMethodName       = "/purser.BillingService/ListMeterDefinitions"
 	BillingService_CreateBillingTier_FullMethodName          = "/purser.BillingService/CreateBillingTier"
 	BillingService_UpdateBillingTier_FullMethodName          = "/purser.BillingService/UpdateBillingTier"
+	BillingService_GetTenantAdmissionStatus_FullMethodName   = "/purser.BillingService/GetTenantAdmissionStatus"
 	BillingService_GetTenantBillingStatus_FullMethodName     = "/purser.BillingService/GetTenantBillingStatus"
 	BillingService_ListTenantBillingSnapshots_FullMethodName = "/purser.BillingService/ListTenantBillingSnapshots"
 )
@@ -44,9 +45,9 @@ type BillingServiceClient interface {
 	CreateBillingTier(ctx context.Context, in *CreateBillingTierRequest, opts ...grpc.CallOption) (*BillingTier, error)
 	UpdateBillingTier(ctx context.Context, in *UpdateBillingTierRequest, opts ...grpc.CallOption) (*BillingTier, error)
 	// ===== CROSS-SERVICE BILLING STATUS =====
-	// Lightweight billing status check for service-to-service calls.
-	// Called by Commodore/Quartermaster to check suspension/balance status.
-	// Returns minimal info needed for gating decisions.
+	// Bounded admission-only status for latency-sensitive service calls.
+	GetTenantAdmissionStatus(ctx context.Context, in *GetTenantAdmissionStatusRequest, opts ...grpc.CallOption) (*GetTenantAdmissionStatusResponse, error)
+	// Full entitlement, allowance, retention, and pricing snapshot.
 	GetTenantBillingStatus(ctx context.Context, in *GetTenantBillingStatusRequest, opts ...grpc.CallOption) (*GetTenantBillingStatusResponse, error)
 	// Cross-tenant billing snapshot for the platform-operator god view.
 	// Deliberately has no tenant scope; the server only answers
@@ -112,6 +113,16 @@ func (c *billingServiceClient) UpdateBillingTier(ctx context.Context, in *Update
 	return out, nil
 }
 
+func (c *billingServiceClient) GetTenantAdmissionStatus(ctx context.Context, in *GetTenantAdmissionStatusRequest, opts ...grpc.CallOption) (*GetTenantAdmissionStatusResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetTenantAdmissionStatusResponse)
+	err := c.cc.Invoke(ctx, BillingService_GetTenantAdmissionStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *billingServiceClient) GetTenantBillingStatus(ctx context.Context, in *GetTenantBillingStatusRequest, opts ...grpc.CallOption) (*GetTenantBillingStatusResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetTenantBillingStatusResponse)
@@ -146,9 +157,9 @@ type BillingServiceServer interface {
 	CreateBillingTier(context.Context, *CreateBillingTierRequest) (*BillingTier, error)
 	UpdateBillingTier(context.Context, *UpdateBillingTierRequest) (*BillingTier, error)
 	// ===== CROSS-SERVICE BILLING STATUS =====
-	// Lightweight billing status check for service-to-service calls.
-	// Called by Commodore/Quartermaster to check suspension/balance status.
-	// Returns minimal info needed for gating decisions.
+	// Bounded admission-only status for latency-sensitive service calls.
+	GetTenantAdmissionStatus(context.Context, *GetTenantAdmissionStatusRequest) (*GetTenantAdmissionStatusResponse, error)
+	// Full entitlement, allowance, retention, and pricing snapshot.
 	GetTenantBillingStatus(context.Context, *GetTenantBillingStatusRequest) (*GetTenantBillingStatusResponse, error)
 	// Cross-tenant billing snapshot for the platform-operator god view.
 	// Deliberately has no tenant scope; the server only answers
@@ -178,6 +189,9 @@ func (UnimplementedBillingServiceServer) CreateBillingTier(context.Context, *Cre
 }
 func (UnimplementedBillingServiceServer) UpdateBillingTier(context.Context, *UpdateBillingTierRequest) (*BillingTier, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpdateBillingTier not implemented")
+}
+func (UnimplementedBillingServiceServer) GetTenantAdmissionStatus(context.Context, *GetTenantAdmissionStatusRequest) (*GetTenantAdmissionStatusResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetTenantAdmissionStatus not implemented")
 }
 func (UnimplementedBillingServiceServer) GetTenantBillingStatus(context.Context, *GetTenantBillingStatusRequest) (*GetTenantBillingStatusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetTenantBillingStatus not implemented")
@@ -296,6 +310,24 @@ func _BillingService_UpdateBillingTier_Handler(srv interface{}, ctx context.Cont
 	return interceptor(ctx, in, info, handler)
 }
 
+func _BillingService_GetTenantAdmissionStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetTenantAdmissionStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(BillingServiceServer).GetTenantAdmissionStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: BillingService_GetTenantAdmissionStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(BillingServiceServer).GetTenantAdmissionStatus(ctx, req.(*GetTenantAdmissionStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _BillingService_GetTenantBillingStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetTenantBillingStatusRequest)
 	if err := dec(in); err != nil {
@@ -358,6 +390,10 @@ var BillingService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpdateBillingTier",
 			Handler:    _BillingService_UpdateBillingTier_Handler,
+		},
+		{
+			MethodName: "GetTenantAdmissionStatus",
+			Handler:    _BillingService_GetTenantAdmissionStatus_Handler,
 		},
 		{
 			MethodName: "GetTenantBillingStatus",

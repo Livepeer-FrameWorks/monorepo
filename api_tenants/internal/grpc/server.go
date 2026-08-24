@@ -341,7 +341,7 @@ func (s *QuartermasterServer) ValidateTenant(ctx context.Context, req *quarterma
 	var collectionReady bool
 
 	if s.purserClient != nil {
-		billingStatus, err := s.purserClient.GetTenantBillingStatus(ctx, tenantID)
+		billingStatus, err := s.purserClient.GetTenantAdmissionStatus(ctx, tenantID)
 		if err != nil {
 			s.logger.WithFields(logging.Fields{
 				"tenant_id": tenantID,

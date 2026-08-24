@@ -1226,6 +1226,8 @@ CREATE INDEX IF NOT EXISTS idx_purser_usage_records_lookup ON purser.usage_recor
 CREATE INDEX IF NOT EXISTS idx_purser_usage_records_created_at ON purser.usage_records(created_at);
 CREATE INDEX IF NOT EXISTS idx_purser_usage_records_period ON purser.usage_records(tenant_id, period_start, period_end);
 CREATE INDEX IF NOT EXISTS idx_purser_usage_records_granularity_period ON purser.usage_records(tenant_id, granularity, period_start, period_end);
+CREATE INDEX IF NOT EXISTS idx_purser_usage_records_allowance
+    ON purser.usage_records(tenant_id, usage_type, value_kind, granularity, period_start, period_end);
 CREATE INDEX IF NOT EXISTS idx_provider_usage_provider_period
     ON purser.provider_usage_records(provider_tenant_id, period_start, period_end);
 CREATE INDEX IF NOT EXISTS idx_provider_usage_tenant_period
@@ -1241,6 +1243,8 @@ CREATE INDEX IF NOT EXISTS idx_metering_anomalies_open
     WHERE status = 'open';
 CREATE INDEX IF NOT EXISTS idx_usage_adjustments_invoice_lookup
     ON purser.usage_adjustments(tenant_id, period_start, period_end, status);
+CREATE INDEX IF NOT EXISTS idx_usage_adjustments_allowance
+    ON purser.usage_adjustments(tenant_id, usage_type, value_kind, status, period_start, period_end);
 CREATE INDEX IF NOT EXISTS idx_usage_adjustments_source
     ON purser.usage_adjustments(source_system, source_id);
 CREATE INDEX IF NOT EXISTS idx_purser_billing_invoices_period ON purser.billing_invoices(tenant_id, status, period_start);

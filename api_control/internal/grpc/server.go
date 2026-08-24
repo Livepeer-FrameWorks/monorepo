@@ -3933,7 +3933,7 @@ func (s *CommodoreServer) GetOrCreateWalletUser(ctx context.Context, req *commod
 		// Get billing info via Purser gRPC (not DB JOIN)
 		billingModel := "prepaid"
 		if s.purserClient != nil {
-			billingStatus, billingErr := s.purserClient.GetTenantBillingStatus(ctx, tenantID)
+			billingStatus, billingErr := s.purserClient.GetTenantAdmissionStatus(ctx, tenantID)
 			if billingErr != nil {
 				s.logger.WithFields(logging.Fields{
 					"tenant_id": tenantID,
@@ -8012,7 +8012,7 @@ func (s *CommodoreServer) isTenantSuspended(ctx context.Context, tenantID string
 		return false, nil
 	}
 
-	billingStatus, err := s.purserClient.GetTenantBillingStatus(ctx, tenantID)
+	billingStatus, err := s.purserClient.GetTenantAdmissionStatus(ctx, tenantID)
 	if err != nil {
 		s.logger.WithFields(logging.Fields{
 			"tenant_id": tenantID,

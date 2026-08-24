@@ -2534,7 +2534,7 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *shar
 		// reaches Foghorn. When cached state would deny admission, refresh from
 		// Purser instead of trusting a cross-service "paid" flag or stale cache.
 		if !x402Processed && s.purserClient != nil && (billing == nil || billing.State == triggers.BillingStatusUnavailable || billing.IsSuspended || (billing.BillingModel == "prepaid" && billing.IsBalanceNegative)) {
-			fresh, freshErr := s.purserClient.GetTenantBillingStatus(ctx, resolution.TenantId)
+			fresh, freshErr := s.purserClient.GetTenantAdmissionStatus(ctx, resolution.TenantId)
 			if freshErr == nil && fresh != nil {
 				billing = &triggers.BillingStatus{
 					TenantID:          resolution.TenantId,
@@ -2545,7 +2545,7 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *shar
 			}
 		}
 		if x402Processed && s.purserClient != nil {
-			fresh, freshErr := s.purserClient.GetTenantBillingStatus(ctx, resolution.TenantId)
+			fresh, freshErr := s.purserClient.GetTenantAdmissionStatus(ctx, resolution.TenantId)
 			if freshErr != nil || fresh == nil {
 				s.logger.WithError(freshErr).WithField("tenant_id", resolution.TenantId).Warn("Failed to recheck billing status after x402 settlement")
 				return nil, status.Error(codes.Unavailable, "payment processed but updated billing status is unavailable; retry safely")

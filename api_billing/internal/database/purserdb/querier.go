@@ -218,6 +218,7 @@ type Querier interface {
 	GetStripePaymentMappingByIntent(ctx context.Context, paymentIntentID sql.NullString) (GetStripePaymentMappingByIntentRow, error)
 	GetStripeTierCheckoutConfig(ctx context.Context, arg GetStripeTierCheckoutConfigParams) (GetStripeTierCheckoutConfigRow, error)
 	GetSubscriptionProviderIDs(ctx context.Context, tenantID string) (GetSubscriptionProviderIDsRow, error)
+	GetTenantAdmissionStatus(ctx context.Context, arg GetTenantAdmissionStatusParams) (GetTenantAdmissionStatusRow, error)
 	GetTenantBillingDetails(ctx context.Context, tenantID string) (GetTenantBillingDetailsRow, error)
 	GetTenantBillingEmail(ctx context.Context, tenantID string) (sql.NullString, error)
 	GetTenantBillingStatus(ctx context.Context, arg GetTenantBillingStatusParams) (GetTenantBillingStatusRow, error)
