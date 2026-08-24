@@ -12,6 +12,7 @@ import {
   GITHUB_URL,
   DISCORD_URL,
   TWITTER_URL,
+  DOCS_SITE_URL,
   STREAMING_RTMP_PORT,
   STREAMING_SRT_PORT,
   STREAMING_RTMP_PATH,
@@ -114,10 +115,13 @@ function remarkEnvReplace() {
   };
 }
 
-const docsUrl = env.VITE_DOCS_SITE_URL;
-const parsedUrl = docsUrl ? new URL(docsUrl) : null;
-const siteOrigin = parsedUrl ? parsedUrl.origin : undefined;
-const basePath = parsedUrl ? parsedUrl.pathname : "";
+const isProductionBuild = process.argv.includes("build");
+const docsUrl =
+  process.env.VITE_DOCS_SITE_URL ||
+  (isProductionBuild ? DOCS_SITE_URL : env.VITE_DOCS_SITE_URL || DOCS_SITE_URL);
+const parsedUrl = new URL(docsUrl);
+const siteOrigin = parsedUrl.origin;
+const basePath = parsedUrl.pathname === "/" ? "" : parsedUrl.pathname.replace(/\/$/, "");
 
 // Rehype plugin to prefix root-relative links with base path
 function rehypeBaseLinks() {

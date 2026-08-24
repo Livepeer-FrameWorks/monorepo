@@ -1,9 +1,13 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
+import { DOCS_SITE_URL } from "@frameworks/site-config";
 
 const outputDir = join(process.cwd(), "dist");
 const blogSourceDir = join(process.cwd(), "src", "content", "docs", "blog");
 const failures = [];
+const configuredDocsUrl = new URL(process.env.VITE_DOCS_SITE_URL || DOCS_SITE_URL);
+const docsBasePath =
+  configuredDocsUrl.pathname === "/" ? "" : configuredDocsUrl.pathname.replace(/\/$/, "");
 
 for (const sourceName of readdirSync(blogSourceDir).filter((name) => name.endsWith(".mdx"))) {
   const slug = basename(sourceName, ".mdx");
@@ -26,7 +30,8 @@ for (const sourceName of readdirSync(blogSourceDir).filter((name) => name.endsWi
   if (!html.includes('"@type":"BreadcrumbList"')) {
     failures.push(`dist/blog/${slug}/index.html has no BreadcrumbList JSON-LD`);
   }
-  if (!html.includes(`rel="canonical" href="https://logbook.frameworks.network/blog/${slug}/"`)) {
+  const expectedCanonical = `${configuredDocsUrl.origin}${docsBasePath}/blog/${slug}/`;
+  if (!html.includes(`rel="canonical" href="${expectedCanonical}"`)) {
     failures.push(`dist/blog/${slug}/index.html has an unexpected canonical URL`);
   }
 }

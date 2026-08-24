@@ -32,6 +32,13 @@ const upsertMeta = (attribute, key, content) => {
   else route.head.push({ tag: "meta", attrs: { [attribute]: key, content } });
 };
 
+const canonicalLink = route.head.find(
+  ({ tag, attrs }) => tag === "link" && attrs?.rel === "canonical"
+);
+if (canonicalLink?.attrs) canonicalLink.attrs.href = canonicalUrl;
+else route.head.push({ tag: "link", attrs: { rel: "canonical", href: canonicalUrl } });
+upsertMeta("property", "og:url", canonicalUrl);
+
 if (description) {
   upsertMeta("name", "description", description);
   upsertMeta("property", "og:description", description);
