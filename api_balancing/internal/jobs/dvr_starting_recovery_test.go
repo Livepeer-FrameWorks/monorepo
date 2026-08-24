@@ -254,7 +254,7 @@ func TestDVRStartingRecovery_EndedIngestGenerationSupersedesRedispatch(t *testin
 	recentDispatch := time.Now().Unix()
 	mock.ExpectQuery(`FROM foghorn\.artifacts a`).WillReturnRows(dvrRecoveryScanRowWithGen("starting", DVRDispatchStatePending, recentDispatch, "gen-x"))
 	// The generation is looked up and found ENDED.
-	mock.ExpectQuery(`SELECT ended_at IS NOT NULL FROM foghorn\.ingest_sessions`).
+	mock.ExpectQuery(`SELECT \(ended_at IS NOT NULL\)::boolean AS ended FROM foghorn\.ingest_sessions`).
 		WithArgs("gen-x", "t1").
 		WillReturnRows(sqlmock.NewRows([]string{"ended"}).AddRow(true))
 	// The stop obligation is persisted durable-before-send.
@@ -286,7 +286,7 @@ func TestDVRStartingRecovery_ActiveIngestGenerationStillRedispatches(t *testing.
 
 	recentDispatch := time.Now().Unix()
 	mock.ExpectQuery(`FROM foghorn\.artifacts a`).WillReturnRows(dvrRecoveryScanRowWithGen("starting", DVRDispatchStatePending, recentDispatch, "gen-live"))
-	mock.ExpectQuery(`SELECT ended_at IS NOT NULL FROM foghorn\.ingest_sessions`).
+	mock.ExpectQuery(`SELECT \(ended_at IS NOT NULL\)::boolean AS ended FROM foghorn\.ingest_sessions`).
 		WithArgs("gen-live", "t1").
 		WillReturnRows(sqlmock.NewRows([]string{"ended"}).AddRow(false))
 

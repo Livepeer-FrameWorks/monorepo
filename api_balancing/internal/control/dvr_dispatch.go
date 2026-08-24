@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	"path/filepath"
+
+	"frameworks/api_balancing/internal/database/foghorndb"
+	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 )
 
 // DVRArtifactDispatch is the bundled state STREAM_SOURCE needs to route a
@@ -69,14 +71,7 @@ func ResolveDVRArtifactDispatch(ctx context.Context, dvrInternalName string) (*D
 	if db == nil {
 		return out, nil
 	}
-	var status sql.NullString
-	scanErr := db.QueryRowContext(ctx, `
-		SELECT status
-		  FROM foghorn.artifacts
-		 WHERE artifact_hash = $1
-		   AND artifact_type = 'dvr'
-		 LIMIT 1
-	`, out.DVRHash).Scan(&status)
+	status, scanErr := foghorndb.New(db).GetDVRDispatchStatus(ctx, out.DVRHash)
 	if scanErr != nil {
 		if errors.Is(scanErr, sql.ErrNoRows) {
 			return out, nil
@@ -98,23 +93,14 @@ func ResolveDVRArtifactDispatch(ctx context.Context, dvrInternalName string) (*D
 	// branch is skipped. Enforce that invariant explicitly here: if more
 	// than one row exists while status is active, bail rather than guess
 	// which row is the recording origin.
-	rows, err := db.QueryContext(ctx, `
-		SELECT node_id, COALESCE(is_orphaned, false)
-		  FROM foghorn.artifact_nodes
-		 WHERE artifact_hash = $1
-	`, out.DVRHash)
+	rows, err := foghorndb.New(db).ListDVRDispatchNodes(ctx, out.DVRHash)
 	if err != nil {
 		return out, err
 	}
-	defer rows.Close()
 	var candidates []string
 	var orphanedCandidates []string
-	for rows.Next() {
-		var nodeID string
-		var isOrphaned bool
-		if err := rows.Scan(&nodeID, &isOrphaned); err != nil {
-			return out, err
-		}
+	for _, row := range rows {
+		nodeID, isOrphaned := row.NodeID, row.IsOrphaned
 		switch {
 		case nodeID == "":
 		case isOrphaned:
@@ -122,9 +108,6 @@ func ResolveDVRArtifactDispatch(ctx context.Context, dvrInternalName string) (*D
 		default:
 			candidates = append(candidates, nodeID)
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return out, err
 	}
 	switch len(candidates) {
 	case 0:

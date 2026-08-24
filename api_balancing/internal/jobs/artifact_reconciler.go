@@ -9,9 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/lib/pq"
-
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"frameworks/api_balancing/internal/state"
 	commodoreclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
@@ -226,12 +225,12 @@ func (r *ArtifactReconciler) reconcile() {
 	}
 	defer conn.Close()
 
-	var acquired bool
-	err = conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock(hashtext('artifact_reconciler'))").Scan(&acquired)
+	queries := foghorndb.New(conn)
+	acquired, err := queries.TryArtifactReconcilerLock(ctx)
 	if err != nil || !acquired {
 		return
 	}
-	defer conn.ExecContext(ctx, "SELECT pg_advisory_unlock(hashtext('artifact_reconciler'))") //nolint:errcheck
+	defer func() { _ = queries.UnlockArtifactReconciler(ctx) }() //nolint:errcheck // best-effort session advisory unlock
 
 	// Attribution must precede projection: a row with no origin_cluster_id is claimed by the cluster
 	// that physically owns it (holds an origin node copy in this cluster-local foghorn DB). The
@@ -299,11 +298,12 @@ func (r *ArtifactReconciler) reconcileBillingAttribution() {
 	}
 	defer conn.Close()
 
-	var acquired bool
-	if lErr := conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock(hashtext('artifact_billing_attribution'))").Scan(&acquired); lErr != nil || !acquired {
+	queries := foghorndb.New(conn)
+	acquired, lErr := queries.TryArtifactBillingAttributionLock(ctx)
+	if lErr != nil || !acquired {
 		return
 	}
-	defer conn.ExecContext(ctx, "SELECT pg_advisory_unlock(hashtext('artifact_billing_attribution'))") //nolint:errcheck
+	defer func() { _ = queries.UnlockArtifactBillingAttribution(ctx) }() //nolint:errcheck // best-effort session advisory unlock
 
 	if marked, bErr := control.ReconcileBillingAttribution(ctx); bErr != nil {
 		r.logger.WithError(bErr).Warn("Billing attribution reconciliation failed")
@@ -327,11 +327,12 @@ func (r *ArtifactReconciler) reconcileFreezePublicationLedgerPass() {
 	}
 	defer conn.Close()
 
-	var acquired bool
-	if lErr := conn.QueryRowContext(ctx, "SELECT pg_try_advisory_lock(hashtext('freeze_publication_ledger'))").Scan(&acquired); lErr != nil || !acquired {
+	queries := foghorndb.New(conn)
+	acquired, lErr := queries.TryFreezePublicationLedgerLock(ctx)
+	if lErr != nil || !acquired {
 		return
 	}
-	defer conn.ExecContext(ctx, "SELECT pg_advisory_unlock(hashtext('freeze_publication_ledger'))") //nolint:errcheck
+	defer func() { _ = queries.UnlockFreezePublicationLedger(ctx) }() //nolint:errcheck // best-effort session advisory unlock
 
 	if r.reconcileFreezePublicationLedger(ctx) {
 		r.triggerLedgerSweep() // a full batch means more remains — drain promptly rather than waiting a full interval
@@ -356,9 +357,9 @@ func (r *ArtifactReconciler) backfillActiveObjectKey(ctx context.Context) {
 	}
 	const backfillBatch = 500
 
-	var lastHash string
-	if cErr := r.db.QueryRowContext(ctx,
-		`SELECT last_hash FROM foghorn.active_object_key_backfill_cursor WHERE id = true`).Scan(&lastHash); cErr != nil {
+	queries := foghorndb.New(r.db)
+	lastHash, cErr := queries.GetActiveObjectKeyBackfillCursor(ctx)
+	if cErr != nil {
 		r.logger.WithError(cErr).Warn("active_object_key backfill cursor read failed")
 		return
 	}
@@ -366,58 +367,27 @@ func (r *ArtifactReconciler) backfillActiveObjectKey(ctx context.Context) {
 	// STORAGE-OWNERSHIP SAFE: only LOCALLY-BACKED rows (durable_backend_local=true) — a federation-adopted
 	// remote pointer is never touched. Keyset PAST the durable cursor so an anomalous skipped row can't starve
 	// later rows.
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT artifact_hash, tenant_id::text, s3_url
-		FROM foghorn.artifacts
-		WHERE sync_status = 'synced'
-		  AND artifact_type IN ('clip', 'vod')
-		  AND COALESCE(active_object_key, '') = ''
-		  AND COALESCE(s3_url, '') <> ''
-		  AND durable_backend_local = true
-		  AND tenant_id IS NOT NULL
-		  AND artifact_hash > $1
-		ORDER BY artifact_hash
-		LIMIT $2`, lastHash, backfillBatch)
+	rows, err := queries.ListActiveObjectKeyBackfillRows(ctx, foghorndb.ListActiveObjectKeyBackfillRowsParams{ArtifactHash: lastHash, Limit: backfillBatch})
 	if err != nil {
 		r.logger.WithError(err).Warn("active_object_key backfill scan failed")
 		return
 	}
-	type row struct{ hash, tenant, s3URL string }
-	var pending []row
-	for rows.Next() {
-		var rr row
-		if scanErr := rows.Scan(&rr.hash, &rr.tenant, &rr.s3URL); scanErr != nil {
-			rows.Close() //nolint:errcheck,sqlclosecheck
-			r.logger.WithError(scanErr).Warn("active_object_key backfill scan row failed")
-			return
-		}
-		pending = append(pending, rr)
-	}
-	if rowErr := rows.Err(); rowErr != nil {
-		rows.Close() //nolint:errcheck,sqlclosecheck
-		r.logger.WithError(rowErr).Warn("active_object_key backfill row iteration failed")
-		return
-	}
-	rows.Close() //nolint:errcheck,sqlclosecheck
-
 	backfilled := 0
-	for _, rr := range pending {
+	for _, rr := range rows {
 		// ParseLocalS3URL errors on a foreign bucket, so a locally-backed row whose s3_url is somehow NOT under
 		// the local bucket is a data anomaly — skip it (the cursor still advances past it) rather than persist a
 		// bad local pointer that would misroute playback/deletion.
-		key, perr := r.s3Client.ParseLocalS3URL(rr.s3URL)
+		key, perr := r.s3Client.ParseLocalS3URL(rr.S3Url.String)
 		if perr != nil || strings.TrimSpace(key) == "" {
-			r.logger.WithError(perr).WithField("artifact_hash", rr.hash).Debug("active_object_key backfill: skipping row with non-local s3_url")
+			r.logger.WithError(perr).WithField("artifact_hash", rr.ArtifactHash).Debug("active_object_key backfill: skipping row with non-local s3_url")
 			continue
 		}
-		res, uErr := r.db.ExecContext(ctx, `
-			UPDATE foghorn.artifacts SET active_object_key = $3
-			WHERE artifact_hash = $1 AND tenant_id::text = $2 AND COALESCE(active_object_key, '') = ''`, rr.hash, rr.tenant, key)
+		n, uErr := queries.SetLegacyActiveObjectKey(ctx, foghorndb.SetLegacyActiveObjectKeyParams{ArtifactHash: rr.ArtifactHash, TenantID: rr.TenantID, ActiveObjectKey: sql.NullString{String: key, Valid: true}})
 		if uErr != nil {
-			r.logger.WithError(uErr).WithField("artifact_hash", rr.hash).Debug("active_object_key backfill update failed")
+			r.logger.WithError(uErr).WithField("artifact_hash", rr.ArtifactHash).Debug("active_object_key backfill update failed")
 			continue
 		}
-		if n, _ := res.RowsAffected(); n > 0 { //nolint:errcheck
+		if n > 0 {
 			backfilled++
 		}
 	}
@@ -425,11 +395,10 @@ func (r *ArtifactReconciler) backfillActiveObjectKey(ctx context.Context) {
 	// Advance the durable cursor: a FULL page means more rows remain → continue past the last hash; a short page
 	// means the end → wrap to the start so the next cycle re-scans (picking up newly-eligible legacy rows).
 	nextHash := ""
-	if len(pending) == backfillBatch {
-		nextHash = pending[len(pending)-1].hash
+	if len(rows) == backfillBatch {
+		nextHash = rows[len(rows)-1].ArtifactHash
 	}
-	if _, uErr := r.db.ExecContext(ctx,
-		`UPDATE foghorn.active_object_key_backfill_cursor SET last_hash = $1 WHERE id = true`, nextHash); uErr != nil {
+	if uErr := queries.SetActiveObjectKeyBackfillCursor(ctx, nextHash); uErr != nil {
 		r.logger.WithError(uErr).Warn("active_object_key backfill cursor advance failed")
 	}
 	if backfilled > 0 {
@@ -450,67 +419,35 @@ func (r *ArtifactReconciler) backfillActiveObjectKey(ctx context.Context) {
 func (r *ArtifactReconciler) reconcileFreezePublicationLedger(ctx context.Context) bool {
 	const batch = 500
 
-	var lastKey string
-	if cErr := r.db.QueryRowContext(ctx,
-		`SELECT last_key FROM foghorn.freeze_publication_ledger_cursor WHERE id = true`).Scan(&lastKey); cErr != nil {
+	queries := foghorndb.New(r.db)
+	lastKey, cErr := queries.GetFreezePublicationLedgerCursor(ctx)
+	if cErr != nil {
 		r.logger.WithError(cErr).Warn("freeze publication ledger cursor read failed")
 		return false
 	}
 	// Keyset PAST the cursor by object_key (the PK), so rows skipped-because-retrying advance the cursor and
 	// cannot starve later rows; the grace period keeps an in-flight completion from being raced.
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT object_key, artifact_hash, tenant_id, request_id, guarded, COALESCE(backend_id, '')
-		FROM foghorn.freeze_publication_ledger
-		WHERE created_at < NOW() - INTERVAL '15 minutes'
-		  AND object_key > $1
-		ORDER BY object_key
-		LIMIT $2`, lastKey, batch)
+	rows, err := queries.ListStaleFreezePublicationLedgerRows(ctx, foghorndb.ListStaleFreezePublicationLedgerRowsParams{ObjectKey: lastKey, Limit: batch})
 	if err != nil {
 		r.logger.WithError(err).Warn("freeze publication ledger scan failed")
 		return false
 	}
-	type ledgerRow struct {
-		objectKey, hash, tenant, req, backendID string
-		guarded                                 bool
-	}
-	var pending []ledgerRow
-	for rows.Next() {
-		var lr ledgerRow
-		if scanErr := rows.Scan(&lr.objectKey, &lr.hash, &lr.tenant, &lr.req, &lr.guarded, &lr.backendID); scanErr != nil {
-			rows.Close() //nolint:errcheck,sqlclosecheck
-			r.logger.WithError(scanErr).Warn("freeze publication ledger scan row failed")
-			return false
-		}
-		pending = append(pending, lr)
-	}
-	if rowErr := rows.Err(); rowErr != nil {
-		rows.Close() //nolint:errcheck,sqlclosecheck
-		r.logger.WithError(rowErr).Warn("freeze publication ledger row iteration failed")
-		return false
-	}
-	rows.Close() //nolint:errcheck,sqlclosecheck
-
 	collected := 0
-	for _, lr := range pending {
-		var syncReq, dtshReq, activeKey, activeDtsh string
-		aErr := r.db.QueryRowContext(ctx, `
-			SELECT COALESCE(sync_request_id,''), COALESCE(dtsh_sync_request_id,''),
-			       COALESCE(active_object_key,''), COALESCE(active_dtsh_key,'')
-			FROM foghorn.artifacts WHERE artifact_hash = $1 AND tenant_id::text = $2`, lr.hash, lr.tenant).
-			Scan(&syncReq, &dtshReq, &activeKey, &activeDtsh)
+	for _, lr := range rows {
+		pointers, aErr := queries.GetArtifactPublicationPointers(ctx, foghorndb.GetArtifactPublicationPointersParams{ArtifactHash: lr.ArtifactHash, TenantID: lr.TenantID})
 		artifactGone := errors.Is(aErr, sql.ErrNoRows)
 		if aErr != nil && !artifactGone {
-			r.logger.WithError(aErr).WithField("object_key", lr.objectKey).Debug("freeze publication ledger: artifact re-read failed; retrying next pass")
+			r.logger.WithError(aErr).WithField("object_key", lr.ObjectKey).Debug("freeze publication ledger: artifact re-read failed; retrying next pass")
 			continue
 		}
 		// The attempt that produced this object is STILL outstanding → it is retrying; never touch its objects.
-		if !artifactGone && (lr.req == syncReq || lr.req == dtshReq) {
+		if !artifactGone && (lr.RequestID == pointers.SyncRequestID || lr.RequestID == pointers.DtshSyncRequestID) {
 			continue
 		}
 		// A guarded candidate that is the LIVE pointer must be KEPT — only drop its ledger row.
-		if lr.guarded && !artifactGone && (lr.objectKey == activeKey || lr.objectKey == activeDtsh) {
-			if _, dErr := r.db.ExecContext(ctx, `DELETE FROM foghorn.freeze_publication_ledger WHERE object_key = $1`, lr.objectKey); dErr != nil {
-				r.logger.WithError(dErr).WithField("object_key", lr.objectKey).Debug("freeze publication ledger: failed to drop live-candidate row")
+		if lr.Guarded && !artifactGone && (lr.ObjectKey == pointers.ActiveObjectKey || lr.ObjectKey == pointers.ActiveDtshKey) {
+			if dErr := queries.DeleteFreezePublicationLedgerRow(ctx, lr.ObjectKey); dErr != nil {
+				r.logger.WithError(dErr).WithField("object_key", lr.ObjectKey).Debug("freeze publication ledger: failed to drop live-candidate row")
 			}
 			continue
 		}
@@ -521,18 +458,19 @@ func (r *ArtifactReconciler) reconcileFreezePublicationLedger(ctx context.Contex
 			r.logger.WithError(txErr).Debug("freeze publication ledger: begin tx failed")
 			continue
 		}
-		if _, eErr := tx.ExecContext(ctx, `INSERT INTO foghorn.staging_cleanup_queue (object_key, backend_id) VALUES ($1, NULLIF($2, '')) ON CONFLICT (object_key) DO NOTHING`, lr.objectKey, lr.backendID); eErr != nil {
+		txQueries := queries.WithTx(tx)
+		if eErr := txQueries.EnqueueStagingCleanup(ctx, foghorndb.EnqueueStagingCleanupParams{ObjectKey: lr.ObjectKey, BackendID: lr.BackendID}); eErr != nil {
 			tx.Rollback() //nolint:errcheck
-			r.logger.WithError(eErr).WithField("object_key", lr.objectKey).Debug("freeze publication ledger: enqueue failed")
+			r.logger.WithError(eErr).WithField("object_key", lr.ObjectKey).Debug("freeze publication ledger: enqueue failed")
 			continue
 		}
-		if _, dErr := tx.ExecContext(ctx, `DELETE FROM foghorn.freeze_publication_ledger WHERE object_key = $1`, lr.objectKey); dErr != nil {
+		if dErr := txQueries.DeleteFreezePublicationLedgerRow(ctx, lr.ObjectKey); dErr != nil {
 			tx.Rollback() //nolint:errcheck
-			r.logger.WithError(dErr).WithField("object_key", lr.objectKey).Debug("freeze publication ledger: ledger delete failed")
+			r.logger.WithError(dErr).WithField("object_key", lr.ObjectKey).Debug("freeze publication ledger: ledger delete failed")
 			continue
 		}
 		if cErr := tx.Commit(); cErr != nil {
-			r.logger.WithError(cErr).WithField("object_key", lr.objectKey).Debug("freeze publication ledger: commit failed")
+			r.logger.WithError(cErr).WithField("object_key", lr.ObjectKey).Debug("freeze publication ledger: commit failed")
 			continue
 		}
 		collected++
@@ -542,17 +480,16 @@ func (r *ArtifactReconciler) reconcileFreezePublicationLedger(ctx context.Contex
 	// object_key; a short page means the end → wrap to the start so the next cycle re-checks from the top
 	// (including rows skipped this cycle because their attempt was still retrying).
 	nextKey := ""
-	if len(pending) == batch {
-		nextKey = pending[len(pending)-1].objectKey
+	if len(rows) == batch {
+		nextKey = rows[len(rows)-1].ObjectKey
 	}
-	if _, uErr := r.db.ExecContext(ctx,
-		`UPDATE foghorn.freeze_publication_ledger_cursor SET last_key = $1 WHERE id = true`, nextKey); uErr != nil {
+	if uErr := queries.SetFreezePublicationLedgerCursor(ctx, nextKey); uErr != nil {
 		r.logger.WithError(uErr).Warn("freeze publication ledger cursor advance failed")
 	}
 	if collected > 0 {
 		r.logger.WithField("collected", collected).Info("Reconciled orphaned freeze publication objects")
 	}
-	return len(pending) == batch
+	return len(rows) == batch
 }
 
 // backfillOriginCluster deterministically claims origin ownership for rows that have no
@@ -569,28 +506,12 @@ func (r *ArtifactReconciler) backfillOriginCluster(ctx context.Context) {
 		return
 	}
 	const backfillBatch = 500
-	res, err := r.db.ExecContext(ctx, `
-		UPDATE foghorn.artifacts
-		   SET origin_cluster_id = $2
-		 WHERE ctid IN (
-		     SELECT a.ctid FROM foghorn.artifacts a
-		      WHERE COALESCE(a.origin_cluster_id, '') = ''
-		        -- Empty origin_cluster_id means locally-created (adopted cross-cluster pointers carry
-		        -- the remote origin), so this cluster owns it. A live row must still physically hold
-		        -- an origin copy; a DELETED row (whose copies were cleaned) is claimed on the empty-
-		        -- origin signal alone so its stale Commodore catalog row can be projected away.
-		        AND (a.status = 'deleted'
-		             OR EXISTS (
-		                 SELECT 1 FROM foghorn.artifact_nodes n
-		                  WHERE n.artifact_hash = a.artifact_hash
-		                    AND n.role = 'origin'))
-		      LIMIT $1
-		 )`, backfillBatch, r.clusterID)
+	n, err := foghorndb.New(r.db).BackfillOriginCluster(ctx, foghorndb.BackfillOriginClusterParams{Limit: backfillBatch, OriginClusterID: sql.NullString{String: r.clusterID, Valid: true}})
 	if err != nil {
 		r.logger.WithError(err).Warn("Origin-cluster attribution backfill failed")
 		return
 	}
-	if n, _ := res.RowsAffected(); n > 0 { //nolint:errcheck // pq populates RowsAffected on UPDATE
+	if n > 0 {
 		r.logger.WithField("attributed", n).Info("Attributed origin cluster for legacy artifacts")
 	}
 }
@@ -616,23 +537,11 @@ func (r *ArtifactReconciler) repairDeletedDVRChildren(ctx context.Context) int {
 // entering them into the projection queue (catalog_revision > catalog_synced_rev). Runs under the
 // reconciler advisory lock so replicas don't double-assign; converges to a no-op.
 func (r *ArtifactReconciler) backfillCatalogRevisions(ctx context.Context) int64 {
-	res, err := r.db.ExecContext(ctx, `
-		UPDATE foghorn.artifacts
-		   SET catalog_revision = nextval('foghorn.artifact_catalog_revision_seq')
-		 WHERE ctid IN (
-		     SELECT ctid FROM foghorn.artifacts
-		      WHERE catalog_revision = 0
-		        -- Deleted rows ARE seeded too, so a revision-0 deletion gets a revision and projects
-		        -- as a catalog deletion (removing its stale Commodore row). Only rows this cluster
-		        -- owns; unattributed rows wait for backfillOriginCluster (no cross-cluster race).
-		        AND origin_cluster_id = $2
-		      LIMIT $1
-		 )`, catalogBackfillBatch, r.clusterID)
+	n, err := foghorndb.New(r.db).BackfillCatalogRevisions(ctx, foghorndb.BackfillCatalogRevisionsParams{Limit: catalogBackfillBatch, OriginClusterID: sql.NullString{String: r.clusterID, Valid: true}})
 	if err != nil {
 		r.logger.WithError(err).Warn("Catalog-revision rollout backfill failed")
 		return 0
 	}
-	n, _ := res.RowsAffected() //nolint:errcheck // pq populates RowsAffected on UPDATE
 	if n > 0 {
 		r.logger.WithField("seeded", n).Info("Seeded catalog revisions for revision-0 artifacts")
 	}
@@ -663,55 +572,30 @@ func (r *ArtifactReconciler) projectCommodoreArtifactState(ctx context.Context) 
 		r.logger.Warn("Artifact reconciler has no cluster id; skipping catalog projection (source authority required)")
 		return 0, 0
 	}
-	var rows *sql.Rows
+	var rows []foghorndb.ListArtifactsForCatalogProjectionRow
+	queries := foghorndb.New(r.db)
 	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
 		var err error
-		//nolint:sqlclosecheck // rows is closed by caller after retry succeeds.
-		rows, err = r.db.QueryContext(ctx, `
-			SELECT artifact_hash, artifact_type, tenant_id::text,
-			       storage_cluster_id, has_thumbnails, size_bytes,
-			       COALESCE(duration_ms, duration_seconds * 1000), tracks::text,
-			       sync_status, dtsh_synced, storage_location,
-			       catalog_revision, status,
-			       EXTRACT(EPOCH FROM retention_until)::bigint,
-			       error_message, thumbnail_serving_cluster_id
-			FROM foghorn.artifacts
-			WHERE tenant_id IS NOT NULL
-			  -- Deleted rows are INCLUDED so the reconciler can project the DELETION onto the catalog
-			  -- (foghorn-side retention expiry / delete otherwise never reaches /library, leaving it
-			  -- showing Ready forever). The projection loop branches on status='deleted'.
-			  -- Project ONLY rows this cluster deterministically owns. An unattributed row is NOT
-			  -- projected until backfillOriginCluster claims it locally, so it can never be raced
-			  -- and claimed by a non-owning cluster.
-			  AND origin_cluster_id = $2
-			  AND catalog_revision > catalog_synced_rev
-			  AND catalog_revision > catalog_quarantined_rev
-			  AND (catalog_next_attempt_at IS NULL OR catalog_next_attempt_at <= NOW())
-			ORDER BY catalog_synced_rev ASC, catalog_revision ASC
-			LIMIT $1
-		`, r.batchSize, r.clusterID)
+		rows, err = queries.ListArtifactsForCatalogProjection(ctx, foghorndb.ListArtifactsForCatalogProjectionParams{Limit: int32(r.batchSize), OriginClusterID: sql.NullString{String: r.clusterID, Valid: true}})
 		return err
 	})
 	if err != nil {
 		r.logger.WithError(err).Warn("Failed to query artifacts for Commodore projection")
 		return 0, 0
 	}
-	defer rows.Close()
-
 	count := 0
 	scanned := 0
-	for rows.Next() {
+	for _, row := range rows {
 		scanned++
-		var hash, artifactType, tenantID string
-		var storageCluster, syncStatus, storageLocation, tracksJSON sql.NullString
-		var hasThumbnails, dtshSynced sql.NullBool
-		var lifecycleStatus, errorMessage, thumbServingCluster sql.NullString
-		var sizeBytes, durationMs, retentionUnix sql.NullInt64
-		var revision int64
-		if err := rows.Scan(&hash, &artifactType, &tenantID, &storageCluster, &hasThumbnails, &sizeBytes,
-			&durationMs, &tracksJSON, &syncStatus, &dtshSynced, &storageLocation, &revision, &lifecycleStatus, &retentionUnix, &errorMessage, &thumbServingCluster); err != nil {
-			r.logger.WithError(err).Warn("Failed to scan artifact projection row")
-			continue
+		hash, artifactType, tenantID := row.ArtifactHash, row.ArtifactType, row.TenantID
+		storageCluster, syncStatus, storageLocation := row.StorageClusterID, row.SyncStatus, row.StorageLocation
+		hasThumbnails, dtshSynced := row.HasThumbnails, row.DtshSynced
+		lifecycleStatus, errorMessage, thumbServingCluster := row.Status, row.ErrorMessage, row.ThumbnailServingClusterID
+		sizeBytes, durationMs, revision := row.SizeBytes, row.DurationMs, row.CatalogRevision
+		tracksJSON := row.Tracks
+		retentionUnix := sql.NullInt64{}
+		if row.RetentionUntil.Valid {
+			retentionUnix = sql.NullInt64{Int64: row.RetentionUntil.Time.Unix(), Valid: true}
 		}
 		assetType, ok := artifactAssetTypeFromString(artifactType)
 		if !ok {
@@ -822,9 +706,6 @@ func (r *ArtifactReconciler) projectCommodoreArtifactState(ctx context.Context) 
 		r.advanceCatalogWatermark(ctx, hash, revision)
 		count++
 	}
-	if rowsErr := rows.Err(); rowsErr != nil {
-		r.logger.WithError(rowsErr).Warn("Error iterating artifacts for Commodore projection")
-	}
 	return count, scanned
 }
 
@@ -833,12 +714,7 @@ func (r *ArtifactReconciler) projectCommodoreArtifactState(ctx context.Context) 
 // keeps the watermark monotonic and the trigger's watermark-only exemption means this write
 // does not re-dirty the row (catalog_quarantine_error is not a snapshot-projected field).
 func (r *ArtifactReconciler) advanceCatalogWatermark(ctx context.Context, hash string, revision int64) {
-	if _, err := r.db.ExecContext(ctx,
-		`UPDATE foghorn.artifacts
-		    SET catalog_synced_rev = $1, catalog_quarantine_error = NULL,
-		        catalog_next_attempt_at = NULL, catalog_projection_attempts = 0
-		  WHERE artifact_hash = $2 AND catalog_synced_rev < $1`,
-		revision, hash); err != nil {
+	if err := foghorndb.New(r.db).AdvanceCatalogWatermark(ctx, foghorndb.AdvanceCatalogWatermarkParams{CatalogSyncedRev: revision, ArtifactHash: hash}); err != nil {
 		r.logger.WithError(err).WithField("artifact_hash", hash).Warn("Failed to advance catalog projection watermark")
 	}
 }
@@ -855,13 +731,7 @@ func (r *ArtifactReconciler) backoffCatalogRow(ctx context.Context, hash string)
 	if baseSecs < 1 {
 		baseSecs = 1
 	}
-	if _, err := r.db.ExecContext(ctx,
-		`UPDATE foghorn.artifacts
-		    SET catalog_projection_attempts = catalog_projection_attempts + 1,
-		        catalog_next_attempt_at = NOW() + make_interval(secs =>
-		            LEAST($2::float8 * power(2, LEAST(catalog_projection_attempts + 1, 6)), 3600))
-		  WHERE artifact_hash = $1`,
-		hash, baseSecs); err != nil {
+	if err := foghorndb.New(r.db).BackoffCatalogProjection(ctx, foghorndb.BackoffCatalogProjectionParams{ArtifactHash: hash, BaseSeconds: float64(baseSecs)}); err != nil {
 		r.logger.WithError(err).WithField("artifact_hash", hash).Warn("Failed to set catalog projection backoff")
 	}
 }
@@ -878,11 +748,7 @@ func (r *ArtifactReconciler) backoffCatalogRow(ctx context.Context, hash string)
 func (r *ArtifactReconciler) quarantineCatalogRow(ctx context.Context, hash string, revision int64, reason string) {
 	r.logger.WithFields(logging.Fields{"artifact_hash": hash, "reason": reason}).
 		Warn("Quarantining catalog snapshot projection")
-	if _, err := r.db.ExecContext(ctx,
-		`UPDATE foghorn.artifacts
-		    SET catalog_quarantined_rev = $1, catalog_quarantine_error = $3
-		  WHERE artifact_hash = $2 AND catalog_quarantined_rev < $1`,
-		revision, hash, reason); err != nil {
+	if err := foghorndb.New(r.db).QuarantineCatalogProjection(ctx, foghorndb.QuarantineCatalogProjectionParams{CatalogQuarantinedRev: revision, ArtifactHash: hash, CatalogQuarantineError: sql.NullString{String: reason, Valid: true}}); err != nil {
 		r.logger.WithError(err).WithField("artifact_hash", hash).Warn("Failed to record catalog quarantine")
 	}
 }
@@ -921,55 +787,22 @@ func (r *ArtifactReconciler) retryFailed(ctx context.Context) int {
 	// PERMANENT failure is terminal: lost_local (source gone before any sync) is a separate
 	// sync_status excluded here. The ±20% jitter (0.8 + 0.4*random() per row) spreads a burst of
 	// same-age failures so retries don't thunder. DVR rows use the segment ledger and are excluded.
-	var rows *sql.Rows
+	var rows []foghorndb.ListFailedArtifactsForFreezeRetryRow
+	queries := foghorndb.New(r.db)
 	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
 		var err error
-		//nolint:sqlclosecheck // rows is closed by caller after retry succeeds.
-		rows, err = r.db.QueryContext(ctx, `
-			SELECT a.artifact_hash, a.artifact_type, COALESCE(a.stream_internal_name,''), a.tenant_id, a.format,
-			       an.node_id, an.file_path
-			FROM foghorn.artifacts a
-			JOIN LATERAL (
-			    -- Exactly ONE deterministic, COMPLETE source per artifact: never dispatch an upload from
-			    -- an incomplete (partial) copy, and pick the same node each pass (lowest node_id) so two
-			    -- ticks can't race two uploaders for the same artifact.
-			    SELECT node_id, file_path FROM foghorn.artifact_nodes
-			    WHERE artifact_hash = a.artifact_hash AND is_orphaned = false AND is_complete = true
-			    ORDER BY node_id
-			    LIMIT 1
-			) an ON true
-			WHERE a.sync_status = 'failed'
-			  AND a.artifact_type != 'dvr'
-			  AND a.updated_at < NOW() - LEAST(
-			      INTERVAL '5 minutes' * (1 << LEAST(a.failure_count, 4)),
-			      INTERVAL '1 hour'
-			    ) * (0.8 + 0.4 * random())
-			  -- Lifecycle-ready only: never dispatch a freeze for an artifact still uploading/processing
-			  -- (the processing completion would reset the claim and strand the object).
-			  AND a.status = 'ready'
-			ORDER BY a.updated_at ASC
-			LIMIT $1
-		`, r.batchSize)
+		rows, err = queries.ListFailedArtifactsForFreezeRetry(ctx, int32(r.batchSize))
 		return err
 	})
 	if err != nil {
 		r.logger.WithError(err).Warn("Failed to query failed artifacts for retry")
 		return 0
 	}
-	defer rows.Close()
-
 	count := 0
-	for rows.Next() {
-		var hash, assetType, streamName, tenantID, nodeID, filePath string
-		var format sql.NullString
-		if err := rows.Scan(&hash, &assetType, &streamName, &tenantID, &format, &nodeID, &filePath); err != nil {
-			r.logger.WithError(err).Warn("Failed to scan failed artifact row")
-			continue
-		}
-
-		dispatched, err := r.sendFreezeForArtifact(ctx, hash, assetType, streamName, tenantID, format.String, nodeID, filePath)
+	for _, row := range rows {
+		dispatched, err := r.sendFreezeForArtifact(ctx, row.ArtifactHash, row.ArtifactType, row.StreamInternalName, row.TenantID, row.Format.String, row.NodeID, row.FilePath.String)
 		if err != nil {
-			r.logger.WithError(err).WithField("artifact_hash", hash).Warn("Failed to send freeze retry")
+			r.logger.WithError(err).WithField("artifact_hash", row.ArtifactHash).Warn("Failed to send freeze retry")
 			continue
 		}
 		if dispatched {
@@ -981,44 +814,16 @@ func (r *ArtifactReconciler) retryFailed(ctx context.Context) int {
 
 // advancePending sends FreezeRequests for pending artifacts that have never been synced.
 func (r *ArtifactReconciler) advancePending(ctx context.Context) int {
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT a.artifact_hash, a.artifact_type, COALESCE(a.stream_internal_name,''), a.tenant_id, a.format,
-		       an.node_id, an.file_path
-		FROM foghorn.artifacts a
-		JOIN LATERAL (
-		    -- One deterministic COMPLETE source per artifact (see retryFailed): never dispatch from a
-		    -- partial copy, and pick the same node each pass so ticks don't race two uploaders.
-		    SELECT node_id, file_path FROM foghorn.artifact_nodes
-		    WHERE artifact_hash = a.artifact_hash AND is_orphaned = false AND is_complete = true
-		    ORDER BY node_id
-		    LIMIT 1
-		) an ON true
-		WHERE a.sync_status = 'pending'
-		  AND a.artifact_type != 'dvr'
-		  AND a.storage_location = 'local'
-		  -- Lifecycle-ready only (see retryFailed): an uploading/processing artifact is not freezable.
-		  AND a.status = 'ready'
-		ORDER BY a.created_at ASC
-		LIMIT $1
-	`, r.batchSize)
+	rows, err := foghorndb.New(r.db).ListPendingArtifactsForFreeze(ctx, int32(r.batchSize))
 	if err != nil {
 		r.logger.WithError(err).Warn("Failed to query pending artifacts")
 		return 0
 	}
-	defer rows.Close()
-
 	count := 0
-	for rows.Next() {
-		var hash, assetType, streamName, tenantID, nodeID, filePath string
-		var format sql.NullString
-		if err := rows.Scan(&hash, &assetType, &streamName, &tenantID, &format, &nodeID, &filePath); err != nil {
-			r.logger.WithError(err).Warn("Failed to scan pending artifact row")
-			continue
-		}
-
-		dispatched, err := r.sendFreezeForArtifact(ctx, hash, assetType, streamName, tenantID, format.String, nodeID, filePath)
+	for _, row := range rows {
+		dispatched, err := r.sendFreezeForArtifact(ctx, row.ArtifactHash, row.ArtifactType, row.StreamInternalName, row.TenantID, row.Format.String, row.NodeID, row.FilePath.String)
 		if err != nil {
-			r.logger.WithError(err).WithField("artifact_hash", hash).Warn("Failed to send freeze for pending artifact")
+			r.logger.WithError(err).WithField("artifact_hash", row.ArtifactHash).Warn("Failed to send freeze for pending artifact")
 			continue
 		}
 		if dispatched {
@@ -1080,20 +885,14 @@ func (r *ArtifactReconciler) reconcileOrphaned(ctx context.Context) int {
 		hashes = append(hashes, c.hash)
 	}
 	existing := make(map[string]bool, len(hashes))
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT artifact_hash FROM foghorn.artifacts
-		WHERE artifact_hash = ANY($1::text[])
-	`, pq.Array(hashes))
+	queries := foghorndb.New(r.db)
+	rows, err := queries.ExistingArtifactHashes(ctx, hashes)
 	if err != nil {
 		r.logger.WithError(err).Warn("Failed to batch-check artifact lifecycle rows")
 		return 0
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var h string
-		if rows.Scan(&h) == nil {
-			existing[h] = true
-		}
+	for _, h := range rows {
+		existing[h] = true
 	}
 
 	count := 0
@@ -1124,28 +923,15 @@ func (r *ArtifactReconciler) reconcileOrphaned(ctx context.Context) int {
 		}
 
 		err = database.WithRetryablePostgresTx(ctx, r.db, nil, func(tx *sql.Tx) error {
-			_, insertErr := tx.ExecContext(ctx, `
-				INSERT INTO foghorn.artifacts
-					(artifact_hash, artifact_type, stream_internal_name, tenant_id,
-					 format, storage_location, sync_status, created_at, updated_at)
-				VALUES ($1, $2, $3, $4, NULLIF($5,''), 'local', 'pending', NOW(), NOW())
-				ON CONFLICT (artifact_hash) DO NOTHING
-			`, c.hash, c.assetType, internalName, tenantID, c.format)
+			txQueries := queries.WithTx(tx)
+			insertErr := txQueries.InsertDiscoveredArtifact(ctx, foghorndb.InsertDiscoveredArtifactParams{
+				ArtifactHash: c.hash, ArtifactType: c.assetType, StreamInternalName: sql.NullString{String: internalName, Valid: internalName != ""}, TenantID: tenantID, Format: c.format,
+			})
 			if insertErr != nil {
 				return insertErr
 			}
 
-			_, insertErr = tx.ExecContext(ctx, `
-				INSERT INTO foghorn.artifact_nodes
-					(artifact_hash, node_id, file_path, size_bytes, last_seen_at, is_orphaned, cached_at)
-				VALUES ($1, $2, $3, $4, NOW(), false, NOW())
-			ON CONFLICT (artifact_hash, node_id) DO UPDATE SET
-				file_path = EXCLUDED.file_path,
-				size_bytes = EXCLUDED.size_bytes,
-					last_seen_at = NOW(),
-					is_orphaned = false
-			`, c.hash, c.nodeID, c.filePath, c.sizeBytes)
-			return insertErr
+			return txQueries.UpsertDiscoveredArtifactNode(ctx, foghorndb.UpsertDiscoveredArtifactNodeParams{ArtifactHash: c.hash, NodeID: c.nodeID, FilePath: sql.NullString{String: c.filePath, Valid: c.filePath != ""}, SizeBytes: sql.NullInt64{Int64: int64(c.sizeBytes), Valid: true}})
 		})
 		if err != nil {
 			continue
@@ -1235,20 +1021,9 @@ func (r *ArtifactReconciler) sendFreezeForArtifact(ctx context.Context, hash, as
 		// attempt is never clobbered. When the revert affects 0 rows (already completed/superseded), the
 		// staging object is the winner's canonical source and must NOT be enqueued.
 		if txErr := database.WithRetryablePostgresTx(ctx, r.db, nil, func(tx *sql.Tx) error {
-			res, uErr := tx.ExecContext(ctx, `
-				UPDATE foghorn.artifacts
-				SET sync_status = 'failed', storage_location = 'local',
-				    sync_request_id = NULL, sync_node_id = NULL, updated_at = NOW()
-				WHERE artifact_hash = $1 AND sync_status = 'in_progress'
-				  AND status = 'ready'
-				  AND sync_request_id = $2 AND sync_node_id = $3
-				  AND tenant_id::text = $4`, hash, assignment.AttemptID, nodeID, tenantID)
+			n, uErr := foghorndb.New(tx).RevertFailedFreezeDispatch(ctx, foghorndb.RevertFailedFreezeDispatchParams{ArtifactHash: hash, SyncRequestID: sql.NullString{String: assignment.AttemptID, Valid: true}, SyncNodeID: sql.NullString{String: nodeID, Valid: true}, TenantID: tenantID})
 			if uErr != nil {
 				return uErr
-			}
-			n, raErr := res.RowsAffected()
-			if raErr != nil {
-				return raErr
 			}
 			if n == 0 {
 				return nil // did not revert THIS attempt → do not touch staging

@@ -101,13 +101,13 @@ func TestAbortVodUpload_AbortsS3AndSoftDeletes_RpcHandlers(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "s3_key", "user_id", "backend_id"}).
 			AddRow("hash-1", "vod/t1/hash/video.mp4", sql.NullString{}, testStubBackendID))
 	// Durable claim FIRST (tenant-scoped, 'uploading'->'aborting'), BEFORE any S3 call.
-	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'aborting'.*WHERE artifact_hash = \$1 AND tenant_id = \$2 AND status = 'uploading'`).
+	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'aborting'.*WHERE artifact_hash = \$1 AND tenant_id = \$2::uuid AND status = 'uploading'`).
 		WithArgs("hash-1", "t1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	// After winning the claim, the finalize tx transitions 'aborting'->'deleted', deletes metadata, and
 	// emits the DELETED lifecycle event.
 	mock.ExpectBegin()
-	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'deleted'.*WHERE artifact_hash = \$1 AND tenant_id = \$2 AND status = 'aborting'`).
+	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'deleted'.*WHERE artifact_hash = \$1 AND tenant_id = \$2::uuid AND status = 'aborting'`).
 		WithArgs("hash-1", "t1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`DELETE FROM foghorn\.vod_metadata`).

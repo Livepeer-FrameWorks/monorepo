@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/lib/pq"
+	"frameworks/api_balancing/internal/database/foghorndb"
 )
 
 // EnqueueStagingCleanupTx durably enqueues a freeze garbage object for deletion, ON the same transaction that
@@ -29,12 +29,9 @@ func EnqueueStagingCleanupTx(ctx context.Context, tx *sql.Tx, objectKey string) 
 	if bid == "" {
 		return fmt.Errorf("enqueue staging cleanup: no local backend fingerprint to attribute %s", objectKey)
 	}
-	_, err := tx.ExecContext(ctx, `
-		INSERT INTO foghorn.staging_cleanup_queue (object_key, backend_id)
-		VALUES ($1, $2)
-		ON CONFLICT (object_key) DO UPDATE
-		  SET backend_id = COALESCE(foghorn.staging_cleanup_queue.backend_id, EXCLUDED.backend_id)`, objectKey, bid)
-	return err
+	return foghorndb.New(tx).EnqueueOwnedStagingCleanup(ctx, foghorndb.EnqueueOwnedStagingCleanupParams{
+		ObjectKey: objectKey, BackendID: sql.NullString{String: bid, Valid: true},
+	})
 }
 
 // EnqueueDtshAttemptGarbageTx enqueues BOTH deletable objects a .dtsh attempt can leave behind — its staging
@@ -72,12 +69,10 @@ func RecordPublicationPairDB(ctx context.Context, dbh *sql.DB, artifactHash, ten
 	if bid == "" {
 		return fmt.Errorf("record publication pair: no local backend fingerprint to attribute %s", stagingKey)
 	}
-	_, err := dbh.ExecContext(ctx, `
-		INSERT INTO foghorn.freeze_publication_ledger (object_key, artifact_hash, tenant_id, request_id, guarded, backend_id)
-		VALUES ($1, $3, $4, $5, false, $6), ($2, $3, $4, $5, true, $6)
-		ON CONFLICT (object_key) DO UPDATE
-		  SET backend_id = COALESCE(foghorn.freeze_publication_ledger.backend_id, EXCLUDED.backend_id)`, stagingKey, candidateKey, artifactHash, tenant, requestID, bid)
-	return err
+	return foghorndb.New(dbh).RecordPublicationPair(ctx, foghorndb.RecordPublicationPairParams{
+		StagingKey: stagingKey, CandidateKey: candidateKey, ArtifactHash: artifactHash,
+		TenantID: tenant, RequestID: requestID, BackendID: sql.NullString{String: bid, Valid: true},
+	})
 }
 
 // RecordFreezePublicationLedgerTx records — ATOMICALLY WITH THE CLAIM, before the node holds any PUT URL — all
@@ -95,16 +90,11 @@ func RecordFreezePublicationLedgerTx(ctx context.Context, tx *sql.Tx, artifactHa
 	if bid == "" {
 		return fmt.Errorf("record freeze publication ledger: no local backend fingerprint to attribute %s", objectKey)
 	}
-	_, err := tx.ExecContext(ctx, `
-		INSERT INTO foghorn.freeze_publication_ledger (object_key, artifact_hash, tenant_id, request_id, guarded, backend_id)
-		VALUES ($1, $5, $6, $7, false, $8), ($2, $5, $6, $7, true, $8),
-		       ($3, $5, $6, $7, false, $8), ($4, $5, $6, $7, true, $8)
-		ON CONFLICT (object_key) DO UPDATE
-		  SET backend_id = COALESCE(foghorn.freeze_publication_ledger.backend_id, EXCLUDED.backend_id)`,
-		FreezeStagingKey(objectKey, requestID), FreezePublishKey(objectKey, requestID),
-		FreezeStagingKey(objectKey+".dtsh", requestID), FreezePublishDtshKey(objectKey, requestID),
-		artifactHash, tenant, requestID, bid)
-	return err
+	return foghorndb.New(tx).RecordFreezePublicationLedger(ctx, foghorndb.RecordFreezePublicationLedgerParams{
+		StagingKey: FreezeStagingKey(objectKey, requestID), CandidateKey: FreezePublishKey(objectKey, requestID),
+		DtshStagingKey: FreezeStagingKey(objectKey+".dtsh", requestID), DtshCandidateKey: FreezePublishDtshKey(objectKey, requestID),
+		ArtifactHash: artifactHash, TenantID: tenant, RequestID: requestID, BackendID: sql.NullString{String: bid, Valid: true},
+	})
 }
 
 // ClearPublicationLedgerTx removes this completion's OWN ledger rows ON the committing transaction: the
@@ -122,7 +112,5 @@ func ClearPublicationLedgerTx(ctx context.Context, tx *sql.Tx, keys ...string) e
 	if len(filtered) == 0 {
 		return nil
 	}
-	_, err := tx.ExecContext(ctx,
-		`DELETE FROM foghorn.freeze_publication_ledger WHERE object_key = ANY($1)`, pq.Array(filtered))
-	return err
+	return foghorndb.New(tx).DeleteFreezePublicationLedgerKeys(ctx, filtered)
 }

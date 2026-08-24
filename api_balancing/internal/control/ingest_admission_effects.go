@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
@@ -99,27 +100,22 @@ func enqueueAdmissionEffectTx(ctx context.Context, tx *sql.Tx, tenantID, interna
 		return fmt.Errorf("enqueue admission effect requires positive source revision")
 	}
 	// Legs that do not apply to this obligation are born complete.
-	var peerClusters any
+	var peerClusters sql.NullString
 	if len(intent.PeerHints) > 0 {
 		raw, marshalErr := json.Marshal(intent.PeerHints)
 		if marshalErr != nil {
 			return fmt.Errorf("serialize admission peer clusters: %w", marshalErr)
 		}
-		peerClusters = string(raw)
+		peerClusters = sql.NullString{String: string(raw), Valid: true}
 	}
-	_, err := tx.ExecContext(ctx, `
-		INSERT INTO foghorn.ingest_admission_effects
-			(tenant_id, stream_internal_name, node_id, source_generation, source_revision,
-			 prior_owner_node_id, prior_owner_source_generation, push_targets, broadcast_live, decklog_trigger, peer_clusters,
-			 drain_done, activation_done, broadcast_done, decklog_done)
-		VALUES ($1::uuid, $2, $3, $4::uuid, $5, $6, NULLIF($7, '')::uuid, $8, $9, $10, $11, $12, $13, $14, $15)
-		ON CONFLICT (source_generation) DO NOTHING
-	`, tenantID, internalName, nodeID, generation, revision, priorOwnerNodeID, priorOwnerSourceGeneration,
-		intent.PushTargets, intent.BroadcastLive, intent.DecklogTrigger, peerClusters,
-		strings.TrimSpace(priorOwnerNodeID) == "" || strings.TrimSpace(priorOwnerNodeID) == nodeID || strings.TrimSpace(priorOwnerSourceGeneration) == "",
-		len(intent.PushTargets) == 0,
-		!intent.BroadcastLive,
-		len(intent.DecklogTrigger) == 0)
+	err := foghorndb.New(tx).EnqueueAdmissionEffect(ctx, foghorndb.EnqueueAdmissionEffectParams{
+		TenantID: tenantID, StreamInternalName: internalName, NodeID: nodeID, SourceGeneration: generation,
+		SourceRevision: revision, PriorOwnerNodeID: priorOwnerNodeID, PriorOwnerSourceGeneration: priorOwnerSourceGeneration,
+		PushTargets: intent.PushTargets, BroadcastLive: intent.BroadcastLive, DecklogTrigger: intent.DecklogTrigger,
+		PeerClusters:   peerClusters,
+		DrainDone:      strings.TrimSpace(priorOwnerNodeID) == "" || strings.TrimSpace(priorOwnerNodeID) == nodeID || strings.TrimSpace(priorOwnerSourceGeneration) == "",
+		ActivationDone: len(intent.PushTargets) == 0, BroadcastDone: !intent.BroadcastLive, DecklogDone: len(intent.DecklogTrigger) == 0,
+	})
 	if err != nil {
 		return fmt.Errorf("enqueue admission effect: %w", err)
 	}
@@ -138,50 +134,23 @@ func ClaimAdmissionEffects(ctx context.Context, limit int, lease time.Duration, 
 	if lease <= 0 {
 		lease = 30 * time.Second
 	}
-	rows, err := db.QueryContext(ctx, `
-		WITH candidates AS (
-			SELECT id
-			  FROM foghorn.ingest_admission_effects
-			 WHERE state = 'pending'
-			   AND next_attempt_at <= NOW()
-			   AND (leased_until IS NULL OR leased_until < NOW())
-			   AND (claim_affinity IS NULL OR claim_affinity = $3
-			        OR updated_at <= NOW() - INTERVAL '10 seconds')
-			 ORDER BY next_attempt_at, id
-			 FOR UPDATE SKIP LOCKED
-			 LIMIT $1
-		), leased AS (
-			UPDATE foghorn.ingest_admission_effects a
-			   SET lease_token = gen_random_uuid(),
-			       leased_until = NOW() + ($2 * INTERVAL '1 millisecond'),
-			       attempts = attempts + 1,
-			       claim_affinity = NULL,
-			       updated_at = NOW()
-			  FROM candidates c
-			 WHERE a.id = c.id
-			 RETURNING a.id, a.tenant_id::text, a.stream_internal_name, a.node_id,
-			           a.source_generation::text, a.source_revision, a.prior_owner_node_id,
-			           COALESCE(a.prior_owner_source_generation::text, ''),
-			           a.push_targets, a.broadcast_live, a.decklog_trigger, COALESCE(a.peer_clusters, ''),
-			           a.drain_done, a.activation_done, a.broadcast_done, a.decklog_done,
-			           a.lease_token::text
-		)
-		SELECT * FROM leased ORDER BY id
-	`, limit, lease.Milliseconds(), instanceID)
+	rows, err := foghorndb.New(db).ClaimAdmissionEffects(ctx, foghorndb.ClaimAdmissionEffectsParams{
+		InstanceID: sql.NullString{String: instanceID, Valid: instanceID != ""}, LeaseMs: lease.Milliseconds(), RowLimit: int32(limit),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("claim admission effects: %w", err)
 	}
-	defer rows.Close()
-	var out []AdmissionEffect
-	for rows.Next() {
-		var e AdmissionEffect
-		var peerClusters string
-		if err := rows.Scan(&e.ID, &e.TenantID, &e.InternalName, &e.NodeID, &e.SourceGeneration,
-			&e.SourceRevision, &e.PriorOwnerNodeID, &e.PriorOwnerSourceGeneration, &e.PushTargets, &e.BroadcastLive,
-			&e.DecklogTrigger, &peerClusters, &e.DrainDone, &e.ActivationDone, &e.BroadcastDone, &e.DecklogDone,
-			&e.LeaseToken); err != nil {
-			return nil, fmt.Errorf("scan admission effect: %w", err)
+	out := make([]AdmissionEffect, 0, len(rows))
+	for _, row := range rows {
+		e := AdmissionEffect{
+			ID: row.ID, TenantID: row.TenantID, InternalName: row.StreamInternalName, NodeID: row.NodeID,
+			SourceGeneration: row.SourceGeneration, SourceRevision: row.SourceRevision,
+			PriorOwnerNodeID: row.PriorOwnerNodeID, PriorOwnerSourceGeneration: row.PriorOwnerSourceGeneration,
+			PushTargets: row.PushTargets, BroadcastLive: row.BroadcastLive, DecklogTrigger: row.DecklogTrigger,
+			DrainDone: row.DrainDone, ActivationDone: row.ActivationDone, BroadcastDone: row.BroadcastDone,
+			DecklogDone: row.DecklogDone, LeaseToken: row.LeaseToken,
 		}
+		peerClusters := row.PeerClusters.String
 		if peerClusters != "" {
 			if err := json.Unmarshal([]byte(peerClusters), &e.PeerHints); err != nil {
 				// Per-leg poison, decided at apply: broadcasting without the durable filter input
@@ -213,7 +182,7 @@ func ClaimAdmissionEffects(ctx context.Context, limit int, lease time.Duration, 
 		}
 		out = append(out, e)
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // admissionLegFlags is one obligation's per-leg completion snapshot.
@@ -228,14 +197,8 @@ func (f admissionLegFlags) allDone() bool {
 // readAdmissionLegsLocked reads the row's flags under the caller's transaction, guarded by the
 // worker's lease. sql.ErrNoRows means the lease was lost or the row settled elsewhere.
 func readAdmissionLegsLocked(ctx context.Context, tx *sql.Tx, id int64, leaseToken string) (admissionLegFlags, error) {
-	var f admissionLegFlags
-	err := tx.QueryRowContext(ctx, `
-		SELECT drain_done, activation_done, broadcast_done, decklog_done
-		  FROM foghorn.ingest_admission_effects
-		 WHERE id=$1 AND state='pending' AND lease_token=$2::uuid
-		 FOR UPDATE
-	`, id, leaseToken).Scan(&f.drain, &f.activation, &f.broadcast, &f.decklog)
-	return f, err
+	row, err := foghorndb.New(tx).ReadAdmissionLegsLocked(ctx, foghorndb.ReadAdmissionLegsLockedParams{EffectID: id, LeaseToken: leaseToken})
+	return admissionLegFlags{drain: row.DrainDone, activation: row.ActivationDone, broadcast: row.BroadcastDone, decklog: row.DecklogDone}, err
 }
 
 // settleAdmissionLegsLocked persists merged leg flags and, when every leg is done, the terminal
@@ -250,35 +213,21 @@ func settleAdmissionLegsLocked(ctx context.Context, tx *sql.Tx, effect Admission
 			newState = "applied"
 		}
 	}
-	res, err := tx.ExecContext(ctx, `
-		UPDATE foghorn.ingest_admission_effects
-		   SET drain_done=$3, activation_done=$4, broadcast_done=$5, decklog_done=$6,
-		       state=$7::varchar, updated_at=NOW(),
-		       last_error = COALESCE(NULLIF($8, ''), last_error),
-		       applied_at = CASE WHEN $7::varchar <> 'pending' THEN NOW() ELSE applied_at END,
-		       leased_until = CASE WHEN $7::varchar <> 'pending' THEN NULL ELSE leased_until END,
-		       lease_token  = CASE WHEN $7::varchar <> 'pending' THEN NULL ELSE lease_token END,
-		       push_targets   = CASE WHEN $7::varchar <> 'pending' THEN NULL ELSE push_targets END,
-		       decklog_trigger = CASE WHEN $7::varchar <> 'pending' THEN NULL ELSE decklog_trigger END
-		 WHERE id=$1 AND state='pending' AND lease_token=$2::uuid
-	`, effect.ID, effect.LeaseToken, f.drain, f.activation, f.broadcast, f.decklog, newState, poisonNote)
+	n, err := foghorndb.New(tx).SettleAdmissionLegs(ctx, foghorndb.SettleAdmissionLegsParams{
+		DrainDone: f.drain, ActivationDone: f.activation, BroadcastDone: f.broadcast, DecklogDone: f.decklog,
+		NewState: newState, PoisonNote: poisonNote, EffectID: effect.ID, LeaseToken: effect.LeaseToken,
+	})
 	if err != nil {
 		return false, fmt.Errorf("settle admission effect legs: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("settle admission effect rows: %w", err)
 	}
 	return newState != "pending" && n == 1, nil
 }
 
 func probeAdmissionGeneration(ctx context.Context, tx *sql.Tx, effect AdmissionEffect) (ended bool, err error) {
-	var active bool
-	if probeErr := tx.QueryRowContext(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM foghorn.ingest_sessions
-			 WHERE tenant_id = $1::uuid AND stream_internal_name = $2 AND id = $3::uuid AND ended_at IS NULL
-		)`, effect.TenantID, effect.InternalName, effect.SourceGeneration).Scan(&active); probeErr != nil {
+	active, probeErr := foghorndb.New(tx).AdmissionGenerationActive(ctx, foghorndb.AdmissionGenerationActiveParams{
+		TenantID: effect.TenantID, StreamInternalName: effect.InternalName, SourceGeneration: effect.SourceGeneration,
+	})
+	if probeErr != nil {
 		return false, fmt.Errorf("recheck admission effect generation: %w", probeErr)
 	}
 	return !active, nil
@@ -323,7 +272,7 @@ func ApplyClaimedAdmissionEffect(ctx context.Context, effect AdmissionEffect, ap
 		return false, fmt.Errorf("begin admission effect tx: %w", err)
 	}
 	defer rollbackQuiet(tx)
-	if _, lockErr := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, ingestStreamAdvisoryLockKey(effect.TenantID, effect.InternalName)); lockErr != nil {
+	if lockErr := foghorndb.New(tx).AcquireDVRStartLock(ctx, ingestStreamAdvisoryLockKey(effect.TenantID, effect.InternalName)); lockErr != nil {
 		return false, fmt.Errorf("lock admission effect stream: %w", lockErr)
 	}
 	flags, err := readAdmissionLegsLocked(ctx, tx, effect.ID, effect.LeaseToken)
@@ -365,7 +314,7 @@ func ApplyClaimedAdmissionEffect(ctx context.Context, effect AdmissionEffect, ap
 		return false, errors.Join(applyErr, fmt.Errorf("begin admission effect settle tx: %w", err))
 	}
 	defer rollbackQuiet(tx3)
-	if _, lockErr := tx3.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, ingestStreamAdvisoryLockKey(effect.TenantID, effect.InternalName)); lockErr != nil {
+	if lockErr := foghorndb.New(tx3).AcquireDVRStartLock(ctx, ingestStreamAdvisoryLockKey(effect.TenantID, effect.InternalName)); lockErr != nil {
 		return false, errors.Join(applyErr, fmt.Errorf("lock admission effect stream for settle: %w", lockErr))
 	}
 	current, err := readAdmissionLegsLocked(ctx, tx3, effect.ID, effect.LeaseToken)
@@ -420,13 +369,17 @@ func markAdmissionLeg(ctx context.Context, legColumn, nodeColumn, nodeID, source
 		}).Warn("Dropping uncorrelatable admission-effect acknowledgement (missing source generation)")
 		return nil
 	}
-	//nolint:gosec // legColumn/nodeColumn are compile-time constants from the two callers below.
-	query := fmt.Sprintf(`
-		UPDATE foghorn.ingest_admission_effects
-		   SET %s = TRUE, updated_at = NOW()
-		 WHERE state='pending' AND source_generation = $1::uuid AND %s = $2
-	`, legColumn, nodeColumn)
-	if _, err := db.ExecContext(ctx, query, sourceGeneration, nodeID); err != nil {
+	q := foghorndb.New(db)
+	var err error
+	switch legColumn {
+	case "drain_done":
+		err = q.MarkAdmissionDrainDone(ctx, foghorndb.MarkAdmissionDrainDoneParams{SourceGeneration: sourceGeneration, NodeID: nodeID})
+	case "activation_done":
+		err = q.MarkAdmissionActivationDone(ctx, foghorndb.MarkAdmissionActivationDoneParams{SourceGeneration: sourceGeneration, NodeID: nodeID})
+	default:
+		return fmt.Errorf("mark admission: unsupported leg %q/%q", legColumn, nodeColumn)
+	}
+	if err != nil {
 		return fmt.Errorf("mark admission %s: %w", legColumn, err)
 	}
 	return nil
@@ -478,12 +431,9 @@ func ReleaseAdmissionEffectNotOwner(ctx context.Context, effect AdmissionEffect,
 	if db == nil || effect.ID <= 0 || effect.LeaseToken == "" {
 		return nil
 	}
-	_, err := db.ExecContext(ctx, `
-		UPDATE foghorn.ingest_admission_effects
-		   SET leased_until=NULL, lease_token=NULL, attempts=GREATEST(attempts-1, 0),
-		       claim_affinity=NULLIF($3, ''), next_attempt_at=NOW(), updated_at=NOW()
-		 WHERE id=$1 AND state='pending' AND lease_token=$2::uuid
-	`, effect.ID, effect.LeaseToken, authorityInstance)
+	err := foghorndb.New(db).ReleaseAdmissionEffectNotOwner(ctx, foghorndb.ReleaseAdmissionEffectNotOwnerParams{
+		EffectID: effect.ID, LeaseToken: effect.LeaseToken, AuthorityInstance: authorityInstance,
+	})
 	if err != nil {
 		return fmt.Errorf("release admission effect to owner: %w", err)
 	}
@@ -502,13 +452,9 @@ func FailAdmissionEffect(ctx context.Context, effect AdmissionEffect, cause erro
 	}
 	// Preserve any per-leg poison diagnostic already recorded on the row: a transient failure of a
 	// DIFFERENT leg in the same pass must not overwrite the permanent poison note.
-	_, err := db.ExecContext(ctx, `
-		UPDATE foghorn.ingest_admission_effects
-		   SET leased_until=NULL, lease_token=NULL, updated_at=NOW(),
-		       last_error = CASE WHEN last_error LIKE 'poison:%' THEN last_error || ' | ' || $3 ELSE $3 END,
-		       next_attempt_at=NOW() + LEAST(INTERVAL '5 minutes', INTERVAL '1 second' * power(2, LEAST(attempts, 8)))
-		 WHERE id=$1 AND state='pending' AND lease_token=$2::uuid
-	`, effect.ID, effect.LeaseToken, message)
+	err := foghorndb.New(db).FailAdmissionEffect(ctx, foghorndb.FailAdmissionEffectParams{
+		EffectID: effect.ID, LeaseToken: effect.LeaseToken, ErrorMessage: message,
+	})
 	if err != nil {
 		return fmt.Errorf("release failed admission effect: %w", err)
 	}
@@ -524,20 +470,11 @@ func PurgeTerminalAdmissionEffects(ctx context.Context, olderThan time.Duration)
 	if olderThan <= 0 {
 		olderThan = 24 * time.Hour
 	}
-	res, err := db.ExecContext(ctx, `
-		DELETE FROM foghorn.ingest_admission_effects
-		 WHERE id IN (
-			SELECT id FROM foghorn.ingest_admission_effects
-			 WHERE state IN ('applied', 'superseded')
-			   AND updated_at < NOW() - ($1 * INTERVAL '1 millisecond')
-			 ORDER BY updated_at
-			 LIMIT 1000
-		 )
-	`, olderThan.Milliseconds())
+	n, err := foghorndb.New(db).PurgeTerminalAdmissionEffects(ctx, olderThan.Milliseconds())
 	if err != nil {
 		return 0, fmt.Errorf("purge terminal admission effects: %w", err)
 	}
-	return res.RowsAffected()
+	return n, nil
 }
 
 // PurgeableAdmissionEffectFences checks a bounded cross-tenant maintenance batch against the
@@ -559,37 +496,12 @@ func PurgeableAdmissionEffectFences(ctx context.Context, fences []AdmissionEffec
 	}
 	// Cell-scoped maintenance exception to ordinary tenant-filtered queries: each candidate carries
 	// its tenant id, and the anti-join compares only that tenant's stream and revision range.
-	rows, err := db.QueryContext(ctx, `
-		WITH candidates AS (
-			SELECT tenant_id, internal_name, source_revision
-			  FROM jsonb_to_recordset($1::jsonb)
-			       AS c(tenant_id text, internal_name text, source_revision bigint)
-		)
-		SELECT c.internal_name,
-		       NOT EXISTS (
-				SELECT 1
-				  FROM foghorn.ingest_admission_effects e
-				 WHERE e.tenant_id = c.tenant_id::uuid
-				   AND e.stream_internal_name = c.internal_name
-				   AND e.source_revision <= c.source_revision
-				   AND e.state = 'pending'
-		       ) AS purgeable
-		  FROM candidates c
-	`, string(raw))
+	rows, err := foghorndb.New(db).ListPurgeableAdmissionEffectFences(ctx, json.RawMessage(raw))
 	if err != nil {
 		return nil, fmt.Errorf("check admission-effect purge fences: %w", err)
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var internalName string
-		var purgeable bool
-		if err := rows.Scan(&internalName, &purgeable); err != nil {
-			return nil, fmt.Errorf("scan admission-effect purge fence: %w", err)
-		}
-		result[internalName] = purgeable
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read admission-effect purge fences: %w", err)
+	for _, row := range rows {
+		result[row.InternalName] = row.Purgeable
 	}
 	return result, nil
 }

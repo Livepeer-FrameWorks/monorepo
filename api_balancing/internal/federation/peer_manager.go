@@ -14,6 +14,7 @@ import (
 
 	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"frameworks/api_balancing/internal/geo"
 	"frameworks/api_balancing/internal/state"
 
@@ -25,7 +26,6 @@ import (
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
-	"github.com/lib/pq"
 )
 
 // PeerManager manages PeerChannel lifecycles and periodic peer discovery.
@@ -1916,24 +1916,15 @@ func NewDBArtifactTenantResolver(db *sql.DB) func(ctx context.Context, hashes []
 		if db == nil || len(hashes) == 0 {
 			return nil, nil
 		}
-		rows, err := db.QueryContext(ctx, `
-			SELECT artifact_hash, tenant_id::text
-			  FROM foghorn.artifacts
-			 WHERE artifact_hash = ANY($1)
-			   AND tenant_id IS NOT NULL`, pq.Array(hashes))
+		rows, err := foghorndb.New(db).ResolveArtifactTenants(ctx, hashes)
 		if err != nil {
 			return nil, err
 		}
-		defer func() { _ = rows.Close() }()
 		tenants := make(map[string]string, len(hashes))
-		for rows.Next() {
-			var hash, tenantID string
-			if scanErr := rows.Scan(&hash, &tenantID); scanErr != nil {
-				return nil, scanErr
-			}
-			tenants[hash] = tenantID
+		for _, row := range rows {
+			tenants[row.ArtifactHash] = row.TenantID
 		}
-		return tenants, rows.Err()
+		return tenants, nil
 	}
 }
 
@@ -2121,27 +2112,14 @@ func (pm *PeerManager) lookupDVRRecordingNodes(names []string) map[string]string
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	rows, err := db.QueryContext(ctx, `
-        SELECT a.stream_internal_name, an.node_id
-          FROM foghorn.artifacts a
-          JOIN foghorn.artifact_nodes an ON an.artifact_hash = a.artifact_hash
-         WHERE a.stream_internal_name = ANY($1)
-           AND a.artifact_type = 'dvr'
-           AND a.status IN ('requested','starting','recording')
-           AND COALESCE(an.is_orphaned, false) = false
-    `, pq.Array(names))
+	rows, err := foghorndb.New(db).ResolveActiveDVRNodes(ctx, names)
 	if err != nil {
 		pm.logger.WithError(err).Debug("DVR recording-node lookup for ad batch failed")
 		return nil
 	}
-	defer rows.Close()
 	out := make(map[string]string, len(names))
-	for rows.Next() {
-		var streamName, nodeID string
-		if err := rows.Scan(&streamName, &nodeID); err != nil {
-			pm.logger.WithError(err).Debug("DVR recording-node row scan failed")
-			continue
-		}
+	for _, row := range rows {
+		streamName, nodeID := row.StreamInternalName.String, row.NodeID
 		if existing, ok := out[streamName]; ok && existing != nodeID {
 			// Should be impossible per ResolveDVRArtifactDispatch's
 			// single-recording-node invariant; skip extras to stay
@@ -2149,9 +2127,6 @@ func (pm *PeerManager) lookupDVRRecordingNodes(names []string) map[string]string
 			continue
 		}
 		out[streamName] = nodeID
-	}
-	if err := rows.Err(); err != nil {
-		pm.logger.WithError(err).Debug("DVR recording-node row iteration ended with error")
 	}
 	return out
 }

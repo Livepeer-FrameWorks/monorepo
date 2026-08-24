@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"time"
 
+	"frameworks/api_balancing/internal/database/foghorndb"
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -239,7 +240,7 @@ func EnqueueVodLifecycleLogged(data *ipcpb.VodLifecycleData) {
 // execContext is the subset of *sql.Tx / *sql.DB enqueue needs so callers
 // can share their transaction with the outbox INSERT.
 type execContext interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	foghorndb.DBTX
 }
 
 func enqueue(ctx context.Context, tx execContext, kind, tenantID, streamID, artifactID string, payload any) error {
@@ -261,12 +262,13 @@ func enqueue(ctx context.Context, tx execContext, kind, tenantID, streamID, arti
 	}
 	// outbox has a nullable tenant_id; empty-string callers (federation events
 	// from the system tenant) coerce to NULL via the NULLIF below.
-	tid := tenantID
-	_, err = target.ExecContext(ctx, `
-		INSERT INTO foghorn.artifact_event_outbox
-			(event_kind, tenant_id, stream_id, artifact_id, payload)
-		VALUES ($1, NULLIF($2, '')::uuid, $3, $4, $5::jsonb)
-	`, kind, tid, streamID, artifactID, database.JSONText(body))
+	err = foghorndb.New(target).EnqueueArtifactEvent(ctx, foghorndb.EnqueueArtifactEventParams{
+		EventKind:  kind,
+		TenantID:   tenantID,
+		StreamID:   streamID,
+		ArtifactID: artifactID,
+		Payload:    body,
+	})
 	if err != nil {
 		return fmt.Errorf("insert artifact event outbox row: %w", err)
 	}
@@ -359,48 +361,28 @@ func claimBatchOnce(ctx context.Context) ([]outboxRow, error) {
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort after Commit
 
 	out, err := func() ([]outboxRow, error) {
-		rows, qerr := tx.QueryContext(ctx, `
-			SELECT id::text, event_kind, COALESCE(tenant_id::text, ''), stream_id, artifact_id,
-			       payload::text, attempts, created_at
-			FROM foghorn.artifact_event_outbox
-			WHERE completed_at IS NULL
-			  AND (claimed_at IS NULL OR claimed_at < NOW() - $1::interval)
-			  AND (next_retry_at IS NULL OR next_retry_at <= NOW())
-			ORDER BY created_at
-			FOR UPDATE SKIP LOCKED
-			LIMIT $2
-		`, fmt.Sprintf("%d seconds", int(lease.Seconds())), batchSize)
+		rows, qerr := foghorndb.New(tx).ClaimArtifactEvents(ctx, foghorndb.ClaimArtifactEventsParams{
+			LeaseSeconds: lease.Seconds(),
+			BatchLimit:   batchSize,
+		})
 		if qerr != nil {
 			return nil, qerr
 		}
-		defer rows.Close()
 
-		batch := make([]outboxRow, 0, batchSize)
-		for rows.Next() {
-			var (
-				r        outboxRow
-				payloadT string
-			)
-			if scanErr := rows.Scan(&r.id, &r.eventKind, &r.tenantID, &r.streamID,
-				&r.artifactID, &payloadT, &r.attempts, &r.createdAt); scanErr != nil {
-				return nil, scanErr
-			}
-			r.payload = []byte(payloadT)
-			batch = append(batch, r)
-		}
-		if rowsErr := rows.Err(); rowsErr != nil {
-			return nil, rowsErr
+		batch := make([]outboxRow, 0, len(rows))
+		for _, row := range rows {
+			batch = append(batch, outboxRow{
+				id: row.ID, eventKind: row.EventKind, tenantID: row.TenantID,
+				streamID: row.StreamID, artifactID: row.ArtifactID,
+				payload: []byte(row.Payload), attempts: int(row.Attempts), createdAt: row.CreatedAt,
+			})
 		}
 		if len(batch) > 0 {
 			ids := make([]string, 0, len(batch))
 			for _, r := range batch {
 				ids = append(ids, r.id)
 			}
-			if _, uerr := tx.ExecContext(ctx, `
-				UPDATE foghorn.artifact_event_outbox
-				SET claimed_at = NOW()
-				WHERE id = ANY($1::uuid[])
-			`, idArray(ids)); uerr != nil {
+			if uerr := foghorndb.New(tx).MarkArtifactEventsClaimed(ctx, ids); uerr != nil {
 				return nil, uerr
 			}
 		}
@@ -416,11 +398,7 @@ func claimBatchOnce(ctx context.Context) ([]outboxRow, error) {
 }
 
 func markCompleted(ctx context.Context, id string) error {
-	if _, err := db.ExecContext(ctx, `
-		UPDATE foghorn.artifact_event_outbox
-		SET completed_at = NOW(), last_error = NULL
-		WHERE id = $1::uuid
-	`, id); err != nil {
+	if err := foghorndb.New(db).MarkArtifactEventCompleted(ctx, id); err != nil {
 		if logger != nil {
 			logger.WithError(err).WithField("outbox_id", id).
 				Warn("Failed to mark foghorn artifact event outbox row completed")
@@ -442,11 +420,12 @@ func recordFailure(ctx context.Context, id string, attempts int, cause error, ba
 		msg = cause.Error()
 	}
 	newAttempts := attempts + 1
-	if _, err := db.ExecContext(ctx, `
-		UPDATE foghorn.artifact_event_outbox
-		SET attempts = $2, last_error = $3, claimed_at = NULL, next_retry_at = NOW() + $4::interval
-		WHERE id = $1::uuid
-	`, id, newAttempts, msg, fmt.Sprintf("%d milliseconds", backoff.Milliseconds())); err != nil {
+	if err := foghorndb.New(db).RecordArtifactEventFailure(ctx, foghorndb.RecordArtifactEventFailureParams{
+		Attempts:          int32(newAttempts),
+		LastError:         sql.NullString{String: msg, Valid: true},
+		RetryMilliseconds: float64(backoff.Milliseconds()),
+		ID:                id,
+	}); err != nil {
 		if logger != nil {
 			logger.WithError(err).WithField("outbox_id", id).
 				Warn("Failed to record foghorn artifact event outbox failure")
@@ -556,18 +535,3 @@ func dispatchRow(_ context.Context, row outboxRow) ([]string, error) {
 }
 
 func stringPointer(value string) *string { return &value }
-
-func idArray(ids []string) string {
-	if len(ids) == 0 {
-		return "{}"
-	}
-	out := "{"
-	for i, id := range ids {
-		if i > 0 {
-			out += ","
-		}
-		out += id
-	}
-	out += "}"
-	return out
-}

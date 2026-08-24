@@ -47,7 +47,7 @@ func TestDispatchJobRoutesThenDispatchFails(t *testing.T) {
 		WithArgs("job-route-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("UPDATE foghorn.artifacts").
-		WithArgs("hash-route-1", "tenant-route", "queued").
+		WithArgs("queued", "hash-route-1", "tenant-route").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	d := NewProcessingDispatcher(ProcessingDispatcherConfig{DB: db, Logger: logging.NewLogger()})
@@ -92,7 +92,7 @@ func TestDispatchJobInvalidSourceParamsReverts(t *testing.T) {
 		WithArgs("job-bad-params").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("UPDATE foghorn.artifacts").
-		WithArgs("hash-bad-params", "tenant-bp", "queued").
+		WithArgs("queued", "hash-bad-params", "tenant-bp").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	d := NewProcessingDispatcher(ProcessingDispatcherConfig{DB: db, Logger: logging.NewLogger()})
@@ -133,7 +133,7 @@ func TestDispatchJobPresignFailureReverts(t *testing.T) {
 		WithArgs("job-presign").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("UPDATE foghorn.artifacts").
-		WithArgs("hash-presign", "tenant-ps", "queued").
+		WithArgs("queued", "hash-presign", "tenant-ps").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	d := NewProcessingDispatcher(ProcessingDispatcherConfig{DB: db, Logger: logging.NewLogger()})
@@ -219,7 +219,7 @@ func TestMarkArtifactStatusFiltersByTenant(t *testing.T) {
 	defer db.Close()
 
 	mock.ExpectExec("UPDATE foghorn.artifacts").
-		WithArgs("hash-vod", "tenant-iso", "processing").
+		WithArgs("processing", "hash-vod", "tenant-iso").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	d := NewProcessingDispatcher(ProcessingDispatcherConfig{DB: db, Logger: logging.NewLogger()})

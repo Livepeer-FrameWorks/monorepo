@@ -40,8 +40,8 @@ func TestRecordCreationCommandAccepted_Idempotent(t *testing.T) {
 	mock.ExpectExec(`INSERT INTO foghorn\.artifact_creation_commands`).
 		WithArgs("req-1", "t1", "clip", "h1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(`SELECT \(tenant_id`).
-		WithArgs("req-1", "t1", "clip", "h1").
+	mock.ExpectQuery(`SELECT COALESCE\(tenant_id`).
+		WithArgs("t1", "clip", "h1", "req-1").
 		WillReturnRows(sqlmock.NewRows([]string{"identity_ok", "status"}).AddRow(true, "accepted"))
 
 	state, err := recordCreationCommandAccepted(context.Background(), srv.db, "req-1", "t1", "clip", "h1")
@@ -65,8 +65,8 @@ func TestRecordCreationCommandAccepted_CommittedRetryShortCircuits(t *testing.T)
 	mock.ExpectExec(`INSERT INTO foghorn\.artifact_creation_commands`).
 		WithArgs("req-1", "t1", "vod", "h1").
 		WillReturnResult(sqlmock.NewResult(0, 0)) // conflict: row already exists
-	mock.ExpectQuery(`SELECT \(tenant_id`).
-		WithArgs("req-1", "t1", "vod", "h1").
+	mock.ExpectQuery(`SELECT COALESCE\(tenant_id`).
+		WithArgs("t1", "vod", "h1", "req-1").
 		WillReturnRows(sqlmock.NewRows([]string{"identity_ok", "status"}).AddRow(true, "committed"))
 
 	state, err := recordCreationCommandAccepted(context.Background(), srv.db, "req-1", "t1", "vod", "h1")
@@ -90,8 +90,8 @@ func TestRecordCreationCommandAccepted_RejectedRetryDoesNotProceed(t *testing.T)
 	mock.ExpectExec(`INSERT INTO foghorn\.artifact_creation_commands`).
 		WithArgs("req-1", "t1", "clip", "h1").
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectQuery(`SELECT \(tenant_id`).
-		WithArgs("req-1", "t1", "clip", "h1").
+	mock.ExpectQuery(`SELECT COALESCE\(tenant_id`).
+		WithArgs("t1", "clip", "h1", "req-1").
 		WillReturnRows(sqlmock.NewRows([]string{"identity_ok", "status"}).AddRow(true, "rejected"))
 
 	state, err := recordCreationCommandAccepted(context.Background(), srv.db, "req-1", "t1", "clip", "h1")
@@ -116,8 +116,8 @@ func TestRecordCreationCommandAccepted_IdentityMismatchFails(t *testing.T) {
 	mock.ExpectExec(`INSERT INTO foghorn\.artifact_creation_commands`).
 		WithArgs("req-1", "t1", "clip", "h2").
 		WillReturnResult(sqlmock.NewResult(0, 0)) // conflict: row already exists
-	mock.ExpectQuery(`SELECT \(tenant_id`).
-		WithArgs("req-1", "t1", "clip", "h2").
+	mock.ExpectQuery(`SELECT COALESCE\(tenant_id`).
+		WithArgs("t1", "clip", "h2", "req-1").
 		WillReturnRows(sqlmock.NewRows([]string{"identity_ok", "status"}).AddRow(false, "accepted"))
 
 	_, err := recordCreationCommandAccepted(context.Background(), srv.db, "req-1", "t1", "clip", "h2")
@@ -136,7 +136,7 @@ func TestRecordCreationCommandCommitted(t *testing.T) {
 	defer cleanup()
 
 	mock.ExpectExec(`UPDATE foghorn\.artifact_creation_commands`).
-		WithArgs("req-1", "t1", "vod", "vh1").
+		WithArgs("vh1", "t1", "vod", "req-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	if err := recordCreationCommandCommitted(context.Background(), srv.db, "req-1", "t1", "vod", "vh1"); err != nil {
@@ -155,7 +155,7 @@ func TestRecordCreationCommandCommitted_LostToExpiryReturnsError(t *testing.T) {
 	defer cleanup()
 
 	mock.ExpectExec(`UPDATE foghorn\.artifact_creation_commands`).
-		WithArgs("req-1", "t1", "vod", "vh1").
+		WithArgs("vh1", "t1", "vod", "req-1").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
 	err := recordCreationCommandCommitted(context.Background(), srv.db, "req-1", "t1", "vod", "vh1")
@@ -297,7 +297,7 @@ func TestDVRArtifactInsertAndCommittedShareTx(t *testing.T) {
 	mock.ExpectExec(`INSERT INTO foghorn\.artifacts`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE foghorn\.artifact_creation_commands`).
-		WithArgs("req-dvr", "t1", "dvr", "dh1").
+		WithArgs("dh1", "t1", "dvr", "req-dvr").
 		WillReturnResult(sqlmock.NewResult(0, 0)) // expiry already rejected: zero rows
 	mock.ExpectRollback()
 

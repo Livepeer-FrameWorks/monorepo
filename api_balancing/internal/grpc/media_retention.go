@@ -2,9 +2,11 @@ package grpc
 
 import (
 	"context"
+	"database/sql"
 	"time"
 
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/database/foghorndb"
 	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -68,20 +70,16 @@ func (s *FoghornGRPCServer) OverrideArtifactRetention(ctx context.Context, req *
 		}
 	}()
 
-	res, err := tx.ExecContext(ctx, `
-		UPDATE foghorn.artifacts
-		   SET retention_until = $1
-		 WHERE artifact_hash = $2
-		   AND tenant_id::text = $3
-		   AND artifact_type = $4
-		   AND status IN ('completed', 'completed_partial', 'ready', 'failed')
-	`, untilArg, artifactHash, tenantID, artifactType)
+	retentionUntil := sql.NullTime{}
+	if untilArg != nil {
+		retentionUntil = sql.NullTime{Time: untilTime, Valid: true}
+	}
+	affected, err := foghorndb.New(tx).OverrideFinalizedArtifactRetention(ctx, foghorndb.OverrideFinalizedArtifactRetentionParams{
+		RetentionUntil: retentionUntil, ArtifactHash: artifactHash,
+		TenantID: tenantID, ArtifactType: artifactType,
+	})
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "retention override failed: %v", err)
-	}
-	affected, raErr := res.RowsAffected()
-	if raErr != nil {
-		return nil, status.Errorf(codes.Internal, "retention override row count failed: %v", raErr)
 	}
 	if affected == 0 {
 		return nil, status.Errorf(codes.FailedPrecondition,
@@ -145,18 +143,12 @@ func (s *FoghornGRPCServer) resolveRetentionUntil(ctx context.Context, tenantID,
 }
 
 func (s *FoghornGRPCServer) artifactEndedAt(ctx context.Context, tenantID, artifactHash, artifactType string) (time.Time, error) {
-	var endedAt time.Time
-	if err := s.db.QueryRowContext(ctx, `
-		SELECT ended_at
-		  FROM foghorn.artifacts
-		 WHERE artifact_hash = $1
-		   AND tenant_id::text = $2
-		   AND artifact_type = $3
-		   AND status IN ('completed', 'completed_partial', 'ready', 'failed')
-		   AND ended_at IS NOT NULL
-	`, artifactHash, tenantID, artifactType).Scan(&endedAt); err != nil {
+	endedAt, err := foghorndb.New(s.db).GetFinalizedArtifactEndedAt(ctx, foghorndb.GetFinalizedArtifactEndedAtParams{
+		ArtifactHash: artifactHash, TenantID: tenantID, ArtifactType: artifactType,
+	})
+	if err != nil {
 		return time.Time{}, status.Errorf(codes.FailedPrecondition,
 			"%s artifact is active, missing ended_at, or not found; retention resets require a finalized asset", artifactType)
 	}
-	return endedAt, nil
+	return endedAt.Time, nil
 }

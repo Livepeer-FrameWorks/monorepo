@@ -3,10 +3,12 @@ package control
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
@@ -18,15 +20,6 @@ import (
 // DETERMINISTIC served key (thumbnails/{asset}/{file}) that Chandler serves — the projection is fenced under the
 // per-asset lock (see projectAndMarkThumbnail). active_version keeps the attempt id as the monotonic-CAS + GC anchor.
 // tenant_id is carried as ownership/authorization attribution on every mutation, never as resource identity.
-
-// affectedOne reports whether exactly one row changed, surfacing any RowsAffected error.
-func affectedOne(res sql.Result) (bool, error) {
-	n, err := res.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-	return n == 1, nil
-}
 
 // ThumbnailStagingKey is the per-attempt upload target: never served, always garbage once the attempt ends.
 func ThumbnailStagingKey(assetKey, attemptID, file string) string {
@@ -105,8 +98,8 @@ func ClaimThumbnailAttempt(ctx context.Context, dbh *sql.DB, attemptID, tenantID
 	// uploaded garbage to staging. Locked FOR UPDATE so a concurrent purge/soft-delete serializes. A live
 	// stream_id has no artifact row (not found → proceed).
 	var parentTerminal bool
-	tErr := tx.QueryRowContext(ctx, `SELECT status IN `+artifactTerminalStatusSQL+` FROM foghorn.artifacts WHERE artifact_hash = $1 FOR UPDATE`, assetKey).Scan(&parentTerminal)
-	if tErr != nil && tErr != sql.ErrNoRows {
+	parentTerminal, tErr := foghorndb.New(tx).LockThumbnailParentTerminal(ctx, assetKey)
+	if tErr != nil && !errors.Is(tErr, sql.ErrNoRows) {
 		return false, tErr
 	}
 	if tErr == nil && parentTerminal {
@@ -131,18 +124,17 @@ func ClaimThumbnailAttempt(ctx context.Context, dbh *sql.DB, attemptID, tenantID
 	if backendID == "" {
 		return false, fmt.Errorf("claim thumbnail attempt %s: no local backend fingerprint to attribute the assignment (no local S3 store) — refusing to mint upload authority", attemptID)
 	}
-	if _, execErr := tx.ExecContext(ctx, `
-		INSERT INTO foghorn.thumbnail_task_assignment
-			(attempt_id, tenant_id, asset_key, node_id, destination_cluster, status, version, expiry, durable_backend_local, backend_id)
-		VALUES ($1, $2, $3, $4, $5, 'assigned', $1, $6, true, $7)
-	`, attemptID, tenantID, assetKey, nodeID, destinationCluster, expiry, backendID); execErr != nil {
+	q := foghorndb.New(tx)
+	if execErr := q.InsertThumbnailAssignment(ctx, foghorndb.InsertThumbnailAssignmentParams{
+		AttemptID: attemptID, TenantID: tenantID, AssetKey: assetKey, NodeID: nodeID,
+		DestinationCluster: destinationCluster, Expiry: expiry, BackendID: sql.NullString{String: backendID, Valid: true},
+	}); execErr != nil {
 		return false, execErr
 	}
 	for _, f := range files {
-		if _, execErr := tx.ExecContext(ctx, `
-			INSERT INTO foghorn.thumbnail_task_object (attempt_id, file_name, staging_key)
-			VALUES ($1, $2, $3)
-		`, attemptID, f, ThumbnailStagingKey(assetKey, attemptID, f)); execErr != nil {
+		if execErr := q.InsertThumbnailTaskObject(ctx, foghorndb.InsertThumbnailTaskObjectParams{
+			AttemptID: attemptID, FileName: f, StagingKey: ThumbnailStagingKey(assetKey, attemptID, f),
+		}); execErr != nil {
 			return false, execErr
 		}
 	}
@@ -159,36 +151,26 @@ func LoadThumbnailAttempt(ctx context.Context, dbh *sql.DB, attemptID string) (T
 	if dbh == nil || attemptID == "" {
 		return a, nil, false, nil
 	}
-	err := dbh.QueryRowContext(ctx, `
-		SELECT attempt_id, tenant_id, asset_key, node_id, destination_cluster, status, version, expiry
-		  FROM foghorn.thumbnail_task_assignment
-		 WHERE attempt_id = $1
-	`, attemptID).Scan(&a.AttemptID, &a.TenantID, &a.AssetKey, &a.NodeID, &a.DestinationCluster, &a.Status, &a.Version, &a.Expiry)
-	if err == sql.ErrNoRows {
+	q := foghorndb.New(dbh)
+	row, err := q.GetThumbnailAssignment(ctx, attemptID)
+	if errors.Is(err, sql.ErrNoRows) {
 		return a, nil, false, nil
 	}
 	if err != nil {
 		return a, nil, false, err
 	}
-	rows, qErr := dbh.QueryContext(ctx, `
-		SELECT file_name, staging_key, version_key, etag, size_bytes, verified
-		  FROM foghorn.thumbnail_task_object
-		 WHERE attempt_id = $1
-		 ORDER BY file_name
-	`, attemptID)
+	a = ThumbnailAssignment{AttemptID: row.AttemptID, TenantID: row.TenantID, AssetKey: row.AssetKey, NodeID: row.NodeID,
+		DestinationCluster: row.DestinationCluster, Status: row.Status, Version: row.Version, Expiry: row.Expiry}
+	rows, qErr := q.ListThumbnailObjects(ctx, attemptID)
 	if qErr != nil {
 		return a, nil, false, qErr
 	}
-	defer rows.Close()
-	var objs []ThumbnailObject
-	for rows.Next() {
-		var o ThumbnailObject
-		if scanErr := rows.Scan(&o.FileName, &o.StagingKey, &o.VersionKey, &o.ETag, &o.SizeBytes, &o.Verified); scanErr != nil {
-			return a, nil, false, scanErr
-		}
-		objs = append(objs, o)
+	objs := make([]ThumbnailObject, len(rows))
+	for i, o := range rows {
+		objs[i] = ThumbnailObject{FileName: o.FileName, StagingKey: o.StagingKey, VersionKey: o.VersionKey,
+			ETag: o.Etag, SizeBytes: o.SizeBytes, Verified: o.Verified}
 	}
-	return a, objs, true, rows.Err()
+	return a, objs, true, nil
 }
 
 // MarkThumbnailObjectVerified records the provider-observed identity of a promoted object (version_key + etag +
@@ -206,21 +188,14 @@ func MarkThumbnailObjectVerifiedToken(ctx context.Context, dbh *sql.DB, attemptI
 	if dbh == nil || token == "" {
 		return false, nil
 	}
-	res, err := dbh.ExecContext(ctx, `
-		UPDATE foghorn.thumbnail_task_object o
-		   SET version_key = $3, etag = $4, size_bytes = $5, verified = true
-		 WHERE o.attempt_id = $1 AND o.file_name = $2
-		   AND EXISTS (
-		         SELECT 1 FROM foghorn.thumbnail_task_assignment a
-		          WHERE a.attempt_id = o.attempt_id
-		            AND a.status IN ('assigned', 'uploading', 'verifying', 'publishing')
-		            AND a.expiry > NOW()
-		            AND a.publish_lease_token = $6)
-	`, attemptID, file, versionKey, etag, size, token)
+	n, err := foghorndb.New(dbh).VerifyThumbnailObject(ctx, foghorndb.VerifyThumbnailObjectParams{
+		AttemptID: attemptID, FileName: file, VersionKey: versionKey,
+		Etag: etag, SizeBytes: size, PublishLeaseToken: sql.NullString{String: token, Valid: true},
+	})
 	if err != nil {
 		return false, err
 	}
-	return affectedOne(res)
+	return n == 1, nil
 }
 
 // NOTE: the pre-publication status transitions (assigned → uploading → verifying, or → failed) are driven ONLY by
@@ -228,14 +203,8 @@ func MarkThumbnailObjectVerifiedToken(ctx context.Context, dbh *sql.DB, attemptI
 // 'published' exclusively through the token-fenced EnterThumbnailPublishingToken / PublishThumbnailAttemptToken, so
 // there is no exported generic-transition seam that could create publication state outside the token contract.
 
-// artifactTerminalStatusSQL is the CANONICAL set of artifact statuses that permanently stop thumbnail publication
-// AND resolution: the parent is gone or will never serve media. It mirrors the artifact state machine's terminal
-// set used elsewhere (e.g. dvr_chapters_repo.go, the catalog trigger) — 'deleted'/'expired'/'aborted' are the
-// gone states, 'failed' the no-media state. Keep this the single source used by claim/publish/resolve/cleanup.
-const artifactTerminalStatusSQL = "('deleted', 'failed', 'expired', 'aborted')"
-
 // parentArtifactTombstoned reports whether the asset an asset_key names must STOP thumbnail publication: either
-// its parent artifact is in a TERMINAL state (see artifactTerminalStatusSQL), OR — for a live stream_id with no
+// its parent artifact is in a terminal state, OR — for a live stream_id with no
 // artifact row — a durable cleanup tombstone (stream_cleanup_obligation) exists. Used to fence promotion so a
 // completion never publishes for a gone/dead parent (and never writes version objects into a prefix a purge or a
 // stream-cleanup sweep is about to reclaim).
@@ -243,15 +212,11 @@ func parentArtifactTombstoned(ctx context.Context, dbh *sql.DB, assetKey string)
 	if dbh == nil || strings.TrimSpace(assetKey) == "" {
 		return false, nil
 	}
-	var tombstoned bool
-	err := dbh.QueryRowContext(ctx, `
-		SELECT COALESCE((SELECT status IN `+artifactTerminalStatusSQL+` FROM foghorn.artifacts WHERE artifact_hash = $1), false)
-		    OR EXISTS(SELECT 1 FROM foghorn.stream_cleanup_obligation WHERE asset_key = $1)
-	`, assetKey).Scan(&tombstoned)
+	tombstoned, err := foghorndb.New(dbh).ThumbnailParentTombstoned(ctx, assetKey)
 	if err != nil {
 		return false, err
 	}
-	return tombstoned, nil
+	return tombstoned.Bool, nil
 }
 
 // FailThumbnailAttempt terminally fails a non-terminal attempt (e.g. a mint that could not prepare every
@@ -260,11 +225,7 @@ func FailThumbnailAttempt(ctx context.Context, dbh *sql.DB, attemptID string) er
 	if dbh == nil {
 		return nil
 	}
-	_, err := dbh.ExecContext(ctx, `
-		UPDATE foghorn.thumbnail_task_assignment SET status = 'failed', updated_at = NOW()
-		 WHERE attempt_id = $1 AND status NOT IN ('published', 'failed')
-	`, attemptID)
-	return err
+	return foghorndb.New(dbh).FailThumbnailAttempt(ctx, attemptID)
 }
 
 // AcquireThumbnailPublishLease claims a token-fenced publication lease for an attempt and returns the holder
@@ -278,18 +239,10 @@ func AcquireThumbnailPublishLease(ctx context.Context, dbh *sql.DB, attemptID st
 	if dbh == nil || attemptID == "" {
 		return "", nil
 	}
-	var t sql.NullString
-	scanErr := dbh.QueryRowContext(ctx, `
-		UPDATE foghorn.thumbnail_task_assignment
-		   SET publish_leased_until = NOW() + ($2 * INTERVAL '1 second'),
-		       publish_lease_token = gen_random_uuid()::text
-		 WHERE attempt_id = $1
-		   AND status IN ('assigned', 'uploading', 'verifying', 'publishing')
-		   AND expiry > NOW()
-		   AND (publish_leased_until IS NULL OR publish_leased_until <= NOW())
-		 RETURNING publish_lease_token
-	`, attemptID, int64(leaseTTL.Seconds())).Scan(&t)
-	if scanErr == sql.ErrNoRows {
+	t, scanErr := foghorndb.New(dbh).AcquireThumbnailPublishLease(ctx, foghorndb.AcquireThumbnailPublishLeaseParams{
+		AttemptID: attemptID, LeaseSeconds: int64(leaseTTL.Seconds()),
+	})
+	if errors.Is(scanErr, sql.ErrNoRows) {
 		return "", nil // already leased by a live holder, or terminal/expired
 	}
 	if scanErr != nil {
@@ -310,16 +263,13 @@ func EnterThumbnailPublishingToken(ctx context.Context, dbh *sql.DB, attemptID, 
 	if dbh == nil || token == "" {
 		return false, nil
 	}
-	res, execErr := dbh.ExecContext(ctx, `
-		UPDATE foghorn.thumbnail_task_assignment
-		   SET status = 'publishing', updated_at = NOW()
-		 WHERE attempt_id = $1 AND status IN ('assigned', 'uploading', 'verifying') AND expiry > NOW()
-		   AND publish_lease_token = $2
-	`, attemptID, token)
+	n, execErr := foghorndb.New(dbh).EnterThumbnailPublishing(ctx, foghorndb.EnterThumbnailPublishingParams{
+		AttemptID: attemptID, PublishLeaseToken: sql.NullString{String: token, Valid: true},
+	})
 	if execErr != nil {
 		return false, execErr
 	}
-	return affectedOne(res)
+	return n == 1, nil
 }
 
 // settleFailedWithVersionCleanup marks a still-'publishing' attempt 'failed' and enqueues its promoted version
@@ -334,11 +284,7 @@ func settleFailedWithVersionCleanup(ctx context.Context, tx *sql.Tx, attemptID s
 	if eErr := EnqueueThumbnailCleanup(ctx, tx, versionKeys); eErr != nil {
 		return eErr
 	}
-	_, mErr := tx.ExecContext(ctx, `
-		UPDATE foghorn.thumbnail_task_assignment SET status = 'failed', updated_at = NOW()
-		 WHERE attempt_id = $1 AND status = 'publishing'
-	`, attemptID)
-	return mErr
+	return foghorndb.New(tx).SettlePublishingThumbnailFailed(ctx, attemptID)
 }
 
 // PublishThumbnailAttempt is the atomic pointer switch. In ONE transaction it: (1) LOCKS the attempt row and
@@ -373,20 +319,17 @@ func PublishThumbnailAttemptToken(ctx context.Context, dbh *sql.DB, attemptID, t
 	// expiry-recovery sweep can then neither fail+enqueue this attempt between the read and the pointer flip nor
 	// be raced by it. Expired attempts are NOT published here (recovery owns them) — entering 'publishing' before
 	// expiry does not license publishing after it.
-	var assetKey, tenantID string
-	selErr := tx.QueryRowContext(ctx, `
-		SELECT asset_key, tenant_id
-		  FROM foghorn.thumbnail_task_assignment
-		 WHERE attempt_id = $1 AND status = 'publishing' AND expiry > NOW()
-		   AND publish_lease_token = $2
-		 FOR UPDATE
-	`, attemptID, token).Scan(&assetKey, &tenantID)
-	if selErr == sql.ErrNoRows {
+	q := foghorndb.New(tx)
+	assignment, selErr := q.LockPublishableThumbnailAttempt(ctx, foghorndb.LockPublishableThumbnailAttemptParams{
+		AttemptID: attemptID, PublishLeaseToken: sql.NullString{String: token, Valid: true},
+	})
+	if errors.Is(selErr, sql.ErrNoRows) {
 		return false, nil // not eligible: not publishing, expired, or already terminal
 	}
 	if selErr != nil {
 		return false, selErr
 	}
+	assetKey, tenantID := assignment.AssetKey, assignment.TenantID
 
 	// Per-asset fence: now that asset_key is known, take the shared advisory lock so this pointer flip serializes
 	// with a concurrent stream-deletion for the same asset — the tombstone fence below then cannot race an
@@ -395,10 +338,8 @@ func PublishThumbnailAttemptToken(ctx context.Context, dbh *sql.DB, attemptID, t
 		return false, lErr
 	}
 
-	var unverified int
-	if cErr := tx.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM foghorn.thumbnail_task_object WHERE attempt_id = $1 AND verified = false
-	`, attemptID).Scan(&unverified); cErr != nil {
+	unverified, cErr := q.CountUnverifiedThumbnailObjects(ctx, attemptID)
+	if cErr != nil {
 		return false, cErr
 	}
 	if unverified > 0 {
@@ -411,9 +352,8 @@ func PublishThumbnailAttemptToken(ctx context.Context, dbh *sql.DB, attemptID, t
 	// commits its pointer BEFORE the artifact can be marked deleted, and one that races the deletion sees
 	// 'deleted' and settles failed. Read by artifact_hash alone (globally unique + single-owner) so the fence
 	// catches the tombstone regardless of tenant; a live stream_id has no artifact row (not found → proceed).
-	var artifactTerminal bool
-	tErr := tx.QueryRowContext(ctx, `SELECT status IN `+artifactTerminalStatusSQL+` FROM foghorn.artifacts WHERE artifact_hash = $1 FOR UPDATE`, assetKey).Scan(&artifactTerminal)
-	if tErr != nil && tErr != sql.ErrNoRows {
+	artifactTerminal, tErr := q.LockThumbnailParentTerminal(ctx, assetKey)
+	if tErr != nil && !errors.Is(tErr, sql.ErrNoRows) {
 		return false, tErr
 	}
 	if tErr == nil && artifactTerminal {
@@ -445,10 +385,11 @@ func PublishThumbnailAttemptToken(ctx context.Context, dbh *sql.DB, attemptID, t
 	// Capture the currently-active version (if any) BEFORE the CAS so we can stamp its supersession time when
 	// this attempt displaces it — the reader-safety horizon the GC honors is measured from that stamp. asset_key
 	// is globally unique, so this is a single-row read.
-	var priorVersion sql.NullString
-	if sErr := tx.QueryRowContext(ctx, `SELECT active_version FROM foghorn.thumbnail_active_pointer WHERE asset_key = $1`, assetKey).Scan(&priorVersion); sErr != nil && sErr != sql.ErrNoRows {
+	prior, sErr := q.GetThumbnailActiveVersion(ctx, assetKey)
+	if sErr != nil && !errors.Is(sErr, sql.ErrNoRows) {
 		return false, sErr
 	}
+	priorVersion := sql.NullString{String: prior, Valid: sErr == nil}
 
 	// Monotonic pointer CAS keyed by the globally-unique asset_key: advance only when this attempt is at least as
 	// new as the pointer's current attempt by the server-owned STRICTLY-MONOTONIC claim_seq (never created_at,
@@ -457,45 +398,29 @@ func PublishThumbnailAttemptToken(ctx context.Context, dbh *sql.DB, attemptID, t
 	// (distinct sequence values), so a stale attempt can never win and two attempts can never each replace the
 	// other. The tenant_id guard is defence-in-depth ownership attribution: asset_key is single-owner so it
 	// always matches, but a mismatched write can never hijack another owner's pointer.
-	res, upErr := tx.ExecContext(ctx, `
-		INSERT INTO foghorn.thumbnail_active_pointer (asset_key, tenant_id, active_version, active_token, updated_at)
-		VALUES ($2, $3, $1, $4, NOW())
-		ON CONFLICT (asset_key) DO UPDATE
-		   SET active_version = EXCLUDED.active_version, active_token = EXCLUDED.active_token,
-		       tenant_id = EXCLUDED.tenant_id, updated_at = NOW()
-		 WHERE foghorn.thumbnail_active_pointer.tenant_id = EXCLUDED.tenant_id
-		   AND (SELECT claim_seq FROM foghorn.thumbnail_task_assignment WHERE attempt_id = EXCLUDED.active_version)
-			 >= (SELECT claim_seq FROM foghorn.thumbnail_task_assignment WHERE attempt_id = foghorn.thumbnail_active_pointer.active_version)
-	`, attemptID, assetKey, tenantID, token)
+	n, upErr := q.ActivateThumbnailPointer(ctx, foghorndb.ActivateThumbnailPointerParams{
+		ActiveVersion: attemptID, AssetKey: assetKey, TenantID: tenantID,
+		ActiveToken: sql.NullString{String: token, Valid: true},
+	})
 	if upErr != nil {
 		return false, upErr
 	}
-	activated, aErr := affectedOne(res)
-	if aErr != nil {
-		return false, aErr
-	}
+	activated = n == 1
 
 	if activated {
 		// Winner: stamp the displaced version's supersession time (the GC horizon anchor) and mark published.
 		if priorVersion.Valid && priorVersion.String != "" && priorVersion.String != attemptID {
-			if _, sErr := tx.ExecContext(ctx, `
-				UPDATE foghorn.thumbnail_task_assignment SET superseded_at = NOW() WHERE attempt_id = $1
-			`, priorVersion.String); sErr != nil {
+			if sErr := q.MarkThumbnailSuperseded(ctx, priorVersion.String); sErr != nil {
 				return false, sErr
 			}
 		}
 		// Under the row lock this must affect exactly one row; a 0-row result means the guarded state changed
 		// despite the lock — roll back rather than commit a pointer flip whose attempt is not 'published'.
-		pubRes, mErr := tx.ExecContext(ctx, `
-			UPDATE foghorn.thumbnail_task_assignment SET status = 'published', updated_at = NOW()
-			 WHERE attempt_id = $1 AND status = 'publishing'
-		`, attemptID)
+		published, mErr := q.MarkThumbnailPublished(ctx, attemptID)
 		if mErr != nil {
 			return false, mErr
 		}
-		if ok, oErr := affectedOne(pubRes); oErr != nil {
-			return false, oErr
-		} else if !ok {
+		if published != 1 {
 			return false, fmt.Errorf("thumbnail publish: attempt %s left 'publishing' under lock; rolling back", attemptID)
 		}
 		// Enqueue the now-superseded staging objects (garbage once promoted) atomically with the pointer flip.
@@ -629,11 +554,9 @@ func gateThumbnailProjection(ctx context.Context, dbh *sql.DB, attemptID, assetK
 	} else if tombstoned {
 		return false, nil
 	}
-	var artifactTerminal bool
-	tErr := tx.QueryRowContext(ctx,
-		`SELECT status IN `+artifactTerminalStatusSQL+` FROM foghorn.artifacts WHERE artifact_hash = $1 FOR UPDATE`,
-		assetKey).Scan(&artifactTerminal)
-	if tErr != nil && tErr != sql.ErrNoRows {
+	q := foghorndb.New(tx)
+	artifactTerminal, tErr := q.LockThumbnailParentTerminal(ctx, assetKey)
+	if tErr != nil && !errors.Is(tErr, sql.ErrNoRows) {
 		return false, tErr
 	}
 	if tErr == nil && artifactTerminal {
@@ -641,17 +564,14 @@ func gateThumbnailProjection(ctx context.Context, dbh *sql.DB, attemptID, assetK
 	}
 	// Active-pointer check: only the CURRENT winner may write the shared deterministic key. When claiming for the
 	// initial projection we additionally require it to be unprojected; the reassert re-copies an already-projected winner.
-	unprojectedClause := ""
-	if !allowProjected {
-		unprojectedClause = " AND a.deterministic_projected_at IS NULL"
-	}
 	var ok bool
-	if aErr := tx.QueryRowContext(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM foghorn.thumbnail_task_assignment a
-			  JOIN foghorn.thumbnail_active_pointer p ON p.asset_key = a.asset_key AND p.active_version = a.attempt_id
-			 WHERE a.attempt_id = $1 AND a.status = 'published'`+unprojectedClause+`
-		)`, attemptID).Scan(&ok); aErr != nil {
+	var aErr error
+	if allowProjected {
+		ok, aErr = q.ThumbnailProjectionEligible(ctx, attemptID)
+	} else {
+		ok, aErr = q.UnprojectedThumbnailEligible(ctx, attemptID)
+	}
+	if aErr != nil {
 		return false, aErr
 	}
 	return ok, tx.Commit()
@@ -680,43 +600,29 @@ func settleThumbnailProjection(ctx context.Context, dbh *sql.DB, attemptID, asse
 	} else if tombstoned {
 		return false, nil
 	}
-	var artifactTerminal bool
-	tErr := tx.QueryRowContext(ctx,
-		`SELECT status IN `+artifactTerminalStatusSQL+` FROM foghorn.artifacts WHERE artifact_hash = $1 FOR UPDATE`,
-		assetKey).Scan(&artifactTerminal)
-	if tErr != nil && tErr != sql.ErrNoRows {
+	q := foghorndb.New(tx)
+	artifactTerminal, tErr := q.LockThumbnailParentTerminal(ctx, assetKey)
+	if tErr != nil && !errors.Is(tErr, sql.ErrNoRows) {
 		return false, tErr
 	}
 	if tErr == nil && artifactTerminal {
 		return false, nil
 	}
-	res, uErr := tx.ExecContext(ctx, `
-		UPDATE foghorn.thumbnail_task_assignment a
-		   SET deterministic_projected_at = NOW(), deterministic_reassert_at = NOW() + ($3 * INTERVAL '1 second')
-		 WHERE a.attempt_id = $1 AND a.status = 'published' AND a.deterministic_projected_at IS NULL
-		   AND EXISTS (SELECT 1 FROM foghorn.thumbnail_active_pointer p WHERE p.asset_key = $2 AND p.active_version = $1)
-	`, attemptID, assetKey, int64(DeterministicCopyWindow.Seconds()))
+	n, uErr := q.MarkThumbnailProjected(ctx, foghorndb.MarkThumbnailProjectedParams{
+		AttemptID: attemptID, AssetKey: assetKey, ReassertSeconds: int64(DeterministicCopyWindow.Seconds()),
+	})
 	if uErr != nil {
 		return false, uErr
 	}
-	marked, mErr := affectedOne(res)
-	if mErr != nil {
-		return false, mErr
-	}
+	marked := n == 1
 	if marked {
 		// Flip has_thumbnails AND stamp the authoritative serving cluster in ONE write (a no-op for a live stream_id
 		// with no artifact row). NULLIF('' ) keeps an empty destination from clobbering a set value; the WHERE fires on
 		// the has_thumbnails flip (which bumps catalog_revision → re-projects, carrying the serving cluster) or when a
 		// non-empty serving cluster first differs.
-		if _, hErr := tx.ExecContext(ctx, `
-			UPDATE foghorn.artifacts
-			   SET has_thumbnails = true,
-			       thumbnail_serving_cluster_id = COALESCE(NULLIF($3, ''), thumbnail_serving_cluster_id),
-			       updated_at = NOW()
-			 WHERE artifact_hash = $1 AND tenant_id::text = $2
-			   AND (has_thumbnails IS DISTINCT FROM true
-			        OR ($3 <> '' AND thumbnail_serving_cluster_id IS DISTINCT FROM $3))
-		`, assetKey, tenantID, servingCluster); hErr != nil {
+		if hErr := q.MarkArtifactHasThumbnails(ctx, foghorndb.MarkArtifactHasThumbnailsParams{
+			ArtifactHash: assetKey, TenantID: tenantID, ServingCluster: servingCluster,
+		}); hErr != nil {
 			return false, hErr
 		}
 	}
@@ -729,17 +635,12 @@ func clearThumbnailReassert(ctx context.Context, dbh *sql.DB, attemptID string) 
 	if dbh == nil {
 		return nil
 	}
-	_, err := dbh.ExecContext(ctx, `
-		UPDATE foghorn.thumbnail_task_assignment SET deterministic_reassert_at = NULL WHERE attempt_id = $1
-	`, attemptID)
-	return err
+	return foghorndb.New(dbh).ClearThumbnailReassert(ctx, attemptID)
 }
 
 // sqlExecer is satisfied by both *sql.DB and *sql.Tx, so cleanup enqueue can run inside a transaction that
 // ALSO performs the guarded terminal transition — the two must be atomic (see RecoverStuckThumbnailAttempts).
-type sqlExecer interface {
-	ExecContext(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
-}
+type sqlExecer = foghorndb.DBTX
 
 // EnqueueThumbnailCleanup durably enqueues object keys for S3 deletion by the shared staging-cleanup worker.
 // Idempotent, and RE-ARMS on conflict (ON CONFLICT DO UPDATE, see below); empty keys are skipped. Used for staged
@@ -766,12 +667,9 @@ func EnqueueThumbnailCleanup(ctx context.Context, ex sqlExecer, objectKeys []str
 		// token-fenced settlement removes the row — orphaning the just-promoted object. Clearing leased_until +
 		// lease_token makes the in-flight worker's settlement (WHERE lease_token = its token) a no-op, and
 		// next_attempt_at = NOW() re-schedules the row so a fresh claim re-deletes the now-present object.
-		if _, err := ex.ExecContext(ctx, `
-			INSERT INTO foghorn.staging_cleanup_queue (object_key, backend_id) VALUES ($1, $2)
-			ON CONFLICT (object_key) DO UPDATE
-			  SET next_attempt_at = NOW(), leased_until = NULL, lease_token = NULL,
-			      backend_id = COALESCE(foghorn.staging_cleanup_queue.backend_id, EXCLUDED.backend_id)
-		`, k, backendID); err != nil {
+		if err := foghorndb.New(ex).EnqueueThumbnailCleanup(ctx, foghorndb.EnqueueThumbnailCleanupParams{
+			ObjectKey: k, BackendID: sql.NullString{String: backendID, Valid: backendID != ""},
+		}); err != nil {
 			return err
 		}
 	}
@@ -810,14 +708,9 @@ func EnqueueThumbnailCleanupDeferred(ctx context.Context, ex sqlExecer, objectKe
 		if strings.TrimSpace(k) == "" {
 			continue
 		}
-		if _, err := ex.ExecContext(ctx, `
-			INSERT INTO foghorn.staging_cleanup_queue (object_key, next_attempt_at, backend_id)
-			VALUES ($1, NOW() + ($2 * INTERVAL '1 second'), $3)
-			ON CONFLICT (object_key) DO UPDATE
-			  SET next_attempt_at = GREATEST(foghorn.staging_cleanup_queue.next_attempt_at, EXCLUDED.next_attempt_at),
-			      leased_until = NULL, lease_token = NULL,
-			      backend_id = COALESCE(foghorn.staging_cleanup_queue.backend_id, EXCLUDED.backend_id)
-		`, k, secs, backendID); err != nil {
+		if err := foghorndb.New(ex).EnqueueThumbnailCleanupDeferred(ctx, foghorndb.EnqueueThumbnailCleanupDeferredParams{
+			ObjectKey: k, DelaySeconds: secs, BackendID: sql.NullString{String: backendID, Valid: backendID != ""},
+		}); err != nil {
 			return err
 		}
 	}
@@ -836,7 +729,7 @@ func DequeueThumbnailCleanup(ctx context.Context, ex sqlExecer, objectKeys []str
 		if strings.TrimSpace(k) == "" {
 			continue
 		}
-		if _, err := ex.ExecContext(ctx, `DELETE FROM foghorn.staging_cleanup_queue WHERE object_key = $1`, k); err != nil {
+		if err := foghorndb.New(ex).DequeueThumbnailCleanup(ctx, k); err != nil {
 			return err
 		}
 	}
@@ -866,9 +759,8 @@ func EnqueueThumbnailVersionOrphansIfDead(ctx context.Context, dbh *sql.DB, atte
 	}
 	if !gone {
 		// Asset still live — enqueue only if THIS attempt is terminally failed (can never publish its version).
-		var failed bool
-		if sErr := dbh.QueryRowContext(ctx,
-			`SELECT status = 'failed' FROM foghorn.thumbnail_task_assignment WHERE attempt_id = $1`, attemptID).Scan(&failed); sErr == sql.ErrNoRows {
+		failed, sErr := foghorndb.New(dbh).ThumbnailAttemptFailed(ctx, attemptID)
+		if errors.Is(sErr, sql.ErrNoRows) {
 			// Assignment already deleted (racing stream cleanup) → the version can never publish → treat as dead.
 			failed = true
 		} else if sErr != nil {
@@ -893,27 +785,17 @@ func EnqueueThumbnailVersionOrphansIfDead(ctx context.Context, dbh *sql.DB, atte
 // within the given tx so it shares the guarded transition's snapshot. Enqueueing a key for an object that was never
 // actually promoted is harmless: the S3 delete is a NotFound no-op.
 func reconstructAttemptObjectKeys(ctx context.Context, tx *sql.Tx, attemptID string) (staging, version []string, err error) {
-	rows, qErr := tx.QueryContext(ctx, `
-		SELECT a.asset_key, COALESCE(NULLIF(a.publish_lease_token,''), a.version), o.file_name
-		  FROM foghorn.thumbnail_task_object o
-		  JOIN foghorn.thumbnail_task_assignment a ON a.attempt_id = o.attempt_id
-		 WHERE o.attempt_id = $1
-	`, attemptID)
+	rows, qErr := foghorndb.New(tx).ReconstructThumbnailAttemptObjectKeys(ctx, attemptID)
 	if qErr != nil {
 		return nil, nil, qErr
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var asset, ver, file string
-		if sErr := rows.Scan(&asset, &ver, &file); sErr != nil {
-			return nil, nil, sErr
-		}
-		staging = append(staging, ThumbnailStagingKey(asset, attemptID, file))
-		if strings.TrimSpace(ver) != "" {
-			version = append(version, ThumbnailVersionKey(asset, ver, file))
+	for _, row := range rows {
+		staging = append(staging, ThumbnailStagingKey(row.AssetKey, attemptID, row.FileName))
+		if strings.TrimSpace(row.Version) != "" {
+			version = append(version, ThumbnailVersionKey(row.AssetKey, row.Version, row.FileName))
 		}
 	}
-	return staging, version, rows.Err()
+	return staging, version, nil
 }
 
 // ThumbnailDestination is one distinct (destination cluster, backend_id) an asset's thumbnails were published to,
@@ -938,24 +820,17 @@ func ThumbnailDestinationClusters(ctx context.Context, dbh *sql.DB, tenantID, as
 	if dbh == nil || strings.TrimSpace(tenantID) == "" || strings.TrimSpace(assetKey) == "" {
 		return nil, nil
 	}
-	rows, err := dbh.QueryContext(ctx, `
-		SELECT destination_cluster, COALESCE(backend_id, ''), bool_or(durable_backend_local) FROM foghorn.thumbnail_task_assignment
-		 WHERE tenant_id = $1 AND asset_key = $2
-		 GROUP BY destination_cluster, backend_id
-	`, tenantID, assetKey)
+	rows, err := foghorndb.New(dbh).ListThumbnailDestinations(ctx, foghorndb.ListThumbnailDestinationsParams{
+		TenantID: tenantID, AssetKey: assetKey,
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []ThumbnailDestination
-	for rows.Next() {
-		var d ThumbnailDestination
-		if sErr := rows.Scan(&d.Cluster, &d.BackendID, &d.BackendLocal); sErr != nil {
-			return nil, sErr
-		}
-		out = append(out, d)
+	out := make([]ThumbnailDestination, len(rows))
+	for i, row := range rows {
+		out[i] = ThumbnailDestination{Cluster: row.DestinationCluster, BackendID: row.BackendID, BackendLocal: row.BackendLocal}
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // DeleteThumbnailControlRows removes an asset's thumbnail control rows for one tenant — the active pointer and
@@ -1000,11 +875,12 @@ func DeleteThumbnailControlRowsTx(ctx context.Context, tx *sql.Tx, tenantID, ass
 	}
 	// Delete the pointer explicitly (keeps the tenant-ownership proof on it) then every attempt; the pointer FK
 	// would also cascade it, but doing both atomically here removes any half-deleted window.
-	if _, err := tx.ExecContext(ctx, `DELETE FROM foghorn.thumbnail_active_pointer WHERE tenant_id = $1 AND asset_key = $2`, tenantID, assetKey); err != nil {
+	q := foghorndb.New(tx)
+	if err := q.DeleteThumbnailActivePointer(ctx, foghorndb.DeleteThumbnailActivePointerParams{TenantID: tenantID, AssetKey: assetKey}); err != nil {
 		return err
 	}
 	// Cascades to foghorn.thumbnail_task_object.
-	if _, err := tx.ExecContext(ctx, `DELETE FROM foghorn.thumbnail_task_assignment WHERE tenant_id = $1 AND asset_key = $2`, tenantID, assetKey); err != nil {
+	if err := q.DeleteThumbnailAssignments(ctx, foghorndb.DeleteThumbnailAssignmentsParams{TenantID: tenantID, AssetKey: assetKey}); err != nil {
 		return err
 	}
 	return nil
@@ -1019,78 +895,43 @@ func DeleteThumbnailControlRowsTx(ctx context.Context, tx *sql.Tx, tenantID, ass
 // promoted is a NotFound no-op. This is a backstop; the authoritative removal is the caller's `thumbnails/{hash}/`
 // prefix delete.
 func enqueueAssetThumbnailObjectKeys(ctx context.Context, tx *sql.Tx, tenantID, assetKey string) error {
-	rows, err := tx.QueryContext(ctx, `
-		SELECT a.attempt_id, COALESCE(NULLIF(a.publish_lease_token,''), a.version), COALESCE(o.version_key,''), o.file_name
-		  FROM foghorn.thumbnail_task_assignment a
-		  JOIN foghorn.thumbnail_task_object o ON o.attempt_id = a.attempt_id
-		 WHERE a.tenant_id = $1 AND a.asset_key = $2
-	`, tenantID, assetKey)
+	rows, err := foghorndb.New(tx).ListAssetThumbnailObjectKeys(ctx, foghorndb.ListAssetThumbnailObjectKeysParams{
+		TenantID: tenantID, AssetKey: assetKey,
+	})
 	if err != nil {
 		return err
 	}
 	var keys []string
-	for rows.Next() {
-		var attempt, version, recordedVersionKey, file string
-		if sErr := rows.Scan(&attempt, &version, &recordedVersionKey, &file); sErr != nil {
-			rows.Close() //nolint:errcheck,sqlclosecheck
-			return sErr
+	for _, row := range rows {
+		keys = append(keys, ThumbnailStagingKey(assetKey, row.AttemptID, row.FileName))
+		if strings.TrimSpace(row.Version) != "" {
+			keys = append(keys, ThumbnailVersionKey(assetKey, row.Version, row.FileName))
 		}
-		keys = append(keys, ThumbnailStagingKey(assetKey, attempt, file))
-		if strings.TrimSpace(version) != "" {
-			keys = append(keys, ThumbnailVersionKey(assetKey, version, file))
-		}
-		if k := strings.TrimSpace(recordedVersionKey); k != "" {
+		if k := strings.TrimSpace(row.VersionKey); k != "" {
 			keys = append(keys, k)
 		}
 	}
-	if rErr := rows.Err(); rErr != nil {
-		rows.Close() //nolint:errcheck,sqlclosecheck
-		return rErr
-	}
-	rows.Close() //nolint:errcheck,sqlclosecheck
 	return EnqueueThumbnailCleanup(ctx, tx, keys)
 }
 
 // txObjectKeys returns the requested object-key columns for an attempt, read WITHIN the given transaction so the
 // keys and the guarded transition share one consistent snapshot.
 func txObjectKeys(ctx context.Context, tx *sql.Tx, attemptID, columns string) ([]string, error) {
-	rows, err := tx.QueryContext(ctx, `SELECT `+columns+` FROM foghorn.thumbnail_task_object WHERE attempt_id = $1`, attemptID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
+	q := foghorndb.New(tx)
 	var keys []string
-	cols := strings.Count(columns, ",") + 1
-	for rows.Next() {
-		vals := make([]string, cols)
-		ptrs := make([]interface{}, cols)
-		for i := range vals {
-			ptrs[i] = &vals[i]
-		}
-		if err := rows.Scan(ptrs...); err != nil {
-			return nil, err
-		}
-		keys = append(keys, vals...)
+	var err error
+	switch columns {
+	case "staging_key":
+		keys, err = q.ListThumbnailStagingKeys(ctx, attemptID)
+	case "version_key":
+		keys, err = q.ListThumbnailVersionKeys(ctx, attemptID)
+	default:
+		return nil, fmt.Errorf("unsupported thumbnail object column %q", columns)
 	}
-	return keys, rows.Err()
-}
-
-// queryAttemptIDs runs a single-column attempt_id query and returns the ids, closing rows via defer.
-func queryAttemptIDs(ctx context.Context, dbh *sql.DB, query string, args ...interface{}) ([]string, error) {
-	rows, err := dbh.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var ids []string
-	for rows.Next() {
-		var id string
-		if sErr := rows.Scan(&id); sErr != nil {
-			return nil, sErr
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
+	return keys, nil
 }
 
 // RecoverStuckThumbnailAttempts is the crash-recovery reconciler pass (DB-only). It (1) RE-DRIVES every attempt
@@ -1120,28 +961,16 @@ func RecoverStuckThumbnailAttempts(ctx context.Context, dbh *sql.DB, now time.Ti
 	// token, so the re-drive MUST carry that same token (the no-token wrapper would match zero rows and silently
 	// leave the attempt to expire+fail — a lost thumbnail). The objects were promoted to v/{token}/…, so re-driving
 	// under the persisted token also serves the objects that actually exist.
-	pubRows, qErr := dbh.QueryContext(ctx, `
-		SELECT attempt_id, COALESCE(publish_lease_token, '') FROM foghorn.thumbnail_task_assignment
-		 WHERE status = 'publishing' AND expiry > NOW() LIMIT $1
-	`, limit)
+	q := foghorndb.New(dbh)
+	pubRows, qErr := q.ListPublishingThumbnailAttempts(ctx, int32(limit))
 	if qErr != nil {
 		return 0, 0, 0, qErr
 	}
 	type publishingAttempt struct{ id, token string }
 	var publishing []publishingAttempt
-	for pubRows.Next() {
-		var pa publishingAttempt
-		if sErr := pubRows.Scan(&pa.id, &pa.token); sErr != nil {
-			pubRows.Close() //nolint:errcheck,sqlclosecheck
-			return 0, 0, 0, sErr
-		}
-		publishing = append(publishing, pa)
+	for _, row := range pubRows {
+		publishing = append(publishing, publishingAttempt{id: row.AttemptID, token: row.Token})
 	}
-	if rErr := pubRows.Err(); rErr != nil {
-		pubRows.Close() //nolint:errcheck,sqlclosecheck
-		return 0, 0, 0, rErr
-	}
-	pubRows.Close() //nolint:errcheck,sqlclosecheck
 	for _, pa := range publishing {
 		if _, pErr := PublishThumbnailAttemptToken(ctx, dbh, pa.id, pa.token); pErr != nil {
 			return redriven, failed, gced, pErr
@@ -1151,11 +980,7 @@ func RecoverStuckThumbnailAttempts(ctx context.Context, dbh *sql.DB, now time.Ti
 
 	// Phase 2: fail + sweep every non-terminal attempt past its lease — including 'publishing' (a completion
 	// that crashed after entering publishing but before committing the CAS). expiry < NOW() (DB-owned boundary).
-	stuck, qErr2 := queryAttemptIDs(ctx, dbh, `
-		SELECT attempt_id FROM foghorn.thumbnail_task_assignment
-		 WHERE status IN ('assigned', 'uploading', 'verifying', 'publishing') AND expiry < NOW()
-		 LIMIT $1
-	`, limit)
+	stuck, qErr2 := q.ListExpiredThumbnailAttemptIDs(ctx, int32(limit))
 	if qErr2 != nil {
 		return redriven, failed, gced, qErr2
 	}
@@ -1179,15 +1004,9 @@ func RecoverStuckThumbnailAttempts(ctx context.Context, dbh *sql.DB, now time.Ti
 	// Oldest-superseded-first so a backlog drains fairly rather than re-scanning the same arbitrary head; the
 	// caller re-runs while gced == limit (a full batch) so accumulation from high-frequency live publication is
 	// bounded rather than falling behind a single fixed batch per tick.
-	superseded, qErr3 := queryAttemptIDs(ctx, dbh, `
-		SELECT a.attempt_id
-		  FROM foghorn.thumbnail_task_assignment a
-		  JOIN foghorn.thumbnail_active_pointer p ON p.asset_key = a.asset_key
-		 WHERE a.status = 'published' AND a.version <> p.active_version
-		   AND a.superseded_at IS NOT NULL AND a.superseded_at < $1
-		 ORDER BY a.superseded_at ASC
-		 LIMIT $2
-	`, supersededHorizon, limit)
+	superseded, qErr3 := q.ListSupersededThumbnailAttemptIDs(ctx, foghorndb.ListSupersededThumbnailAttemptIDsParams{
+		SupersededAt: sql.NullTime{Time: supersededHorizon, Valid: true}, Limit: int32(limit),
+	})
 	if qErr3 != nil {
 		return redriven, failed, gced, qErr3
 	}
@@ -1222,12 +1041,9 @@ func StuckIncompleteThumbnailAttemptIDs(ctx context.Context, dbh *sql.DB, now, s
 	if dbh == nil {
 		return nil, nil
 	}
-	return queryAttemptIDs(ctx, dbh, `
-		SELECT attempt_id FROM foghorn.thumbnail_task_assignment
-		 WHERE status IN ('assigned', 'uploading', 'verifying')
-		   AND expiry > $1 AND updated_at < $2
-		 LIMIT $3
-	`, now, staleBefore, limit)
+	return foghorndb.New(dbh).ListStuckIncompleteThumbnailAttemptIDs(ctx, foghorndb.ListStuckIncompleteThumbnailAttemptIDsParams{
+		Expiry: now, UpdatedAt: staleBefore, Limit: int32(limit),
+	})
 }
 
 // failAndSweepThumbnailAttempt atomically fails an EXPIRED abandoned attempt and enqueues its objects for cleanup.
@@ -1242,18 +1058,11 @@ func failAndSweepThumbnailAttempt(ctx context.Context, dbh *sql.DB, attemptID st
 		return false, txErr
 	}
 	defer tx.Rollback() //nolint:errcheck // best-effort on non-commit paths
-	res, uErr := tx.ExecContext(ctx, `
-		UPDATE foghorn.thumbnail_task_assignment SET status = 'failed', updated_at = NOW()
-		 WHERE attempt_id = $1 AND status IN ('assigned', 'uploading', 'verifying', 'publishing')
-		   AND expiry <= NOW()
-		   AND (publish_leased_until IS NULL OR publish_leased_until <= NOW())
-	`, attemptID)
+	n, uErr := foghorndb.New(tx).FailExpiredThumbnailAttempt(ctx, attemptID)
 	if uErr != nil {
 		return false, uErr
 	}
-	if won, aErr := affectedOne(res); aErr != nil {
-		return false, aErr
-	} else if !won {
+	if n != 1 {
 		return false, nil // a concurrent completion moved it on; leave its objects untouched
 	}
 	// Reconstruct staging + candidate keys from the attempt's own segments (staging = attempt_id, candidate =
@@ -1286,19 +1095,13 @@ func gcSupersededThumbnailAttempt(ctx context.Context, dbh *sql.DB, attemptID st
 	if kErr != nil {
 		return kErr
 	}
-	res, dErr := tx.ExecContext(ctx, `
-		DELETE FROM foghorn.thumbnail_task_assignment a
-		 USING foghorn.thumbnail_active_pointer p
-		 WHERE a.attempt_id = $1 AND p.asset_key = a.asset_key
-		   AND a.version <> p.active_version
-		   AND a.superseded_at IS NOT NULL AND a.superseded_at < $2
-	`, attemptID, supersededHorizon)
+	n, dErr := foghorndb.New(tx).DeleteSupersededThumbnailAttempt(ctx, foghorndb.DeleteSupersededThumbnailAttemptParams{
+		AttemptID: attemptID, SupersededAt: sql.NullTime{Time: supersededHorizon, Valid: true},
+	})
 	if dErr != nil {
 		return dErr
 	}
-	if won, aErr := affectedOne(res); aErr != nil {
-		return aErr
-	} else if !won {
+	if n != 1 {
 		return nil // no longer eligible (re-activated / already gone); enqueue nothing
 	}
 	if eErr := EnqueueThumbnailCleanup(ctx, tx, keys); eErr != nil {

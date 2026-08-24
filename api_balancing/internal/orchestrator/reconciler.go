@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"frameworks/api_balancing/internal/state"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -482,26 +483,12 @@ func currentNodeComponents(ctx context.Context, nodeID string) (map[string]strin
 	if db == nil {
 		return out, fmt.Errorf("component version database unavailable")
 	}
-	rows, err := db.QueryContext(ctx, `
-		SELECT component, COALESCE(current_version, '')
-		FROM foghorn.node_components
-		WHERE node_id = $1
-	`, nodeID)
+	rows, err := foghorndb.New(db).ListNodeComponents(ctx, nodeID)
 	if err != nil {
 		return out, fmt.Errorf("load node component versions for %s: %w", nodeID, err)
 	}
-	defer func() { _ = rows.Close() }()
-	for rows.Next() {
-		var component string
-		var version string
-		if err := rows.Scan(&component, &version); err == nil {
-			out[component] = version
-		} else {
-			return out, fmt.Errorf("scan node component version for %s: %w", nodeID, err)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return out, fmt.Errorf("read node component versions for %s: %w", nodeID, err)
+	for _, row := range rows {
+		out[row.Component] = row.CurrentVersion
 	}
 	return out, nil
 }
@@ -511,13 +498,8 @@ func updatingNode(ctx context.Context, nodeID string) bool {
 	if db == nil {
 		return false
 	}
-	var phase string
-	err := db.QueryRowContext(ctx, `
-		SELECT phase
-		FROM foghorn.node_update_state
-		WHERE node_id = $1
-	`, nodeID).Scan(&phase)
-	if err == sql.ErrNoRows {
+	phase, err := foghorndb.New(db).GetNodeUpdatePhase(ctx, nodeID)
+	if errors.Is(err, sql.ErrNoRows) {
 		return false
 	}
 	return err == nil && phase != "" && phase != "idle" && phase != "failed"
@@ -541,11 +523,9 @@ func failedTargetCount(ctx context.Context, nodes []*state.NodeState, targetRele
 	count := 0
 	for _, node := range nodes {
 		var phase string
-		err := db.QueryRowContext(ctx, `
-			SELECT phase
-			FROM foghorn.node_update_state
-			WHERE node_id = $1 AND target_release = $2
-		`, node.NodeID, targetRelease).Scan(&phase)
+		phase, err := foghorndb.New(db).GetNodeUpdatePhaseForRelease(ctx, foghorndb.GetNodeUpdatePhaseForReleaseParams{
+			NodeID: node.NodeID, TargetRelease: targetRelease,
+		})
 		if err == nil && phase == "failed" {
 			count++
 		}
@@ -561,11 +541,9 @@ func completedTargetCount(ctx context.Context, nodes []*state.NodeState, targetR
 	count := 0
 	for _, node := range nodes {
 		var phase string
-		err := db.QueryRowContext(ctx, `
-			SELECT phase
-			FROM foghorn.node_update_state
-			WHERE node_id = $1 AND target_release = $2
-		`, node.NodeID, targetRelease).Scan(&phase)
+		phase, err := foghorndb.New(db).GetNodeUpdatePhaseForRelease(ctx, foghorndb.GetNodeUpdatePhaseForReleaseParams{
+			NodeID: node.NodeID, TargetRelease: targetRelease,
+		})
 		if err == nil && phase == "idle" {
 			count++
 		}

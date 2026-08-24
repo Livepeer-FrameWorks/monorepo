@@ -36,11 +36,11 @@ func TestResolveChapterArtifactContent(t *testing.T) {
 		startFakeCommodoreServer(t, &fakeCommodoreInternal{
 			chapterPlaybackID: chapterFound(chapterHash32),
 		})
-		mock.ExpectQuery(`SELECT origin_type, origin_id, tenant_id::text,`).
+		mock.ExpectQuery(`SELECT origin_type, origin_id, tenant_id::text AS tenant_id,`).
 			WithArgs(chapterHash32).
 			WillReturnRows(chapterArtifactContentRow("dvr_chapter", "chap-pending", "t1"))
 		// Chapter is still 'finalizing' — the .mkv doesn't exist yet.
-		mock.ExpectQuery(`FROM foghorn.dvr_chapters\s+WHERE chapter_id = \$1`).
+		mock.ExpectQuery(`FROM foghorn.dvr_chapters c\s+WHERE c.chapter_id = \$1`).
 			WithArgs("chap-pending").
 			WillReturnRows(playableChapterRow("chap-pending", "parent-dvr", ChapterStateFinalizing))
 
@@ -66,10 +66,10 @@ func TestResolveChapterArtifactContent(t *testing.T) {
 				return &commodorepb.ResolveArtifactPlaybackIDResponse{Found: true, RequiresAuth: false}, nil
 			},
 		})
-		mock.ExpectQuery(`SELECT origin_type, origin_id, tenant_id::text,`).
+		mock.ExpectQuery(`SELECT origin_type, origin_id, tenant_id::text AS tenant_id,`).
 			WithArgs(chapterHash32).
 			WillReturnRows(chapterArtifactContentRow("dvr_chapter", "chap-ok", "t1"))
-		mock.ExpectQuery(`FROM foghorn.dvr_chapters\s+WHERE chapter_id = \$1`).
+		mock.ExpectQuery(`FROM foghorn.dvr_chapters c\s+WHERE c.chapter_id = \$1`).
 			WithArgs("chap-ok").
 			WillReturnRows(playableChapterRow("chap-ok", "parent-dvr", ChapterStateFinalized))
 
@@ -105,10 +105,10 @@ func TestResolveChapterArtifactContent(t *testing.T) {
 				return &commodorepb.ResolveDVRHashResponse{Found: true, TenantId: "pt", StreamId: "ps"}, nil
 			},
 		})
-		mock.ExpectQuery(`SELECT origin_type, origin_id, tenant_id::text,`).
+		mock.ExpectQuery(`SELECT origin_type, origin_id, tenant_id::text AS tenant_id,`).
 			WithArgs(chapterHash32).
 			WillReturnRows(chapterArtifactContentRow("dvr_chapter", "chap-fc", "t1"))
-		mock.ExpectQuery(`FROM foghorn.dvr_chapters\s+WHERE chapter_id = \$1`).
+		mock.ExpectQuery(`FROM foghorn.dvr_chapters c\s+WHERE c.chapter_id = \$1`).
 			WithArgs("chap-fc").
 			WillReturnRows(playableChapterRow("chap-fc", "parent-dvr", ChapterStateFinalized))
 
@@ -157,11 +157,11 @@ func TestResolveArtifactPlayback_ChapterPath(t *testing.T) {
 	})
 
 	// resolveChapterArtifactPlaybackResp: artifacts row lookup (4 cols).
-	mock.ExpectQuery(`SELECT origin_type, origin_id, tenant_id::text,\s+COALESCE\(internal_name`).
+	mock.ExpectQuery(`SELECT origin_type, origin_id, tenant_id::text AS tenant_id,\s+COALESCE\(internal_name`).
 		WithArgs(chapterHash32).
 		WillReturnRows(chapterArtifactPlaybackRow("dvr_chapter", "chap-play", "t-chap"))
 	// GetChapter for chap-play.
-	mock.ExpectQuery(`FROM foghorn.dvr_chapters\s+WHERE chapter_id = \$1`).
+	mock.ExpectQuery(`FROM foghorn.dvr_chapters c\s+WHERE c.chapter_id = \$1`).
 		WithArgs("chap-play").
 		WillReturnRows(playableChapterRow("chap-play", "parent-dvr", ChapterStateFinalized))
 	// resolveArtifactPlaybackWithResp: foghorn.artifacts placement lookup. Tenant

@@ -53,7 +53,7 @@ func installIngestSessionMintMock(t *testing.T) {
 	// The confirmation transaction: pending→active plus the durable admission-effect obligation,
 	// atomically (one obligation per generation; the worker owns the once-only effects).
 	mock.ExpectBegin()
-	mock.ExpectExec(`UPDATE foghorn\.ingest_sessions[\s\S]*SET projection_state='active'`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE foghorn\.ingest_sessions[\s\S]*SET projection_state = 'active'`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO foghorn\.ingest_admission_effects`).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 }
@@ -180,7 +180,7 @@ func installIngestSessionMintMockCaptureDecklog(t *testing.T) *byteArgRecorder {
 
 	recorder := &byteArgRecorder{}
 	mock.ExpectBegin()
-	mock.ExpectExec(`UPDATE foghorn\.ingest_sessions[\s\S]*SET projection_state='active'`).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE foghorn\.ingest_sessions[\s\S]*SET projection_state = 'active'`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO foghorn\.ingest_admission_effects`).
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(),
 			sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), recorder,

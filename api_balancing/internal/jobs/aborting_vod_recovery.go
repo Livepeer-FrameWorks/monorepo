@@ -12,6 +12,7 @@ import (
 
 	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/artifacts"
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -134,39 +135,20 @@ func (j *AbortingVodRecoveryJob) reconcile() {
 		staleSeconds = 1
 	}
 
-	rows, err := j.db.QueryContext(ctx, `
-		SELECT a.artifact_hash,
-		       a.tenant_id::text,
-		       COALESCE(a.user_id::text, ''),
-		       COALESCE(v.s3_key, ''),
-		       COALESCE(v.s3_upload_id, ''),
-		       COALESCE(a.backend_id, '')
-		FROM foghorn.artifacts a
-		JOIN foghorn.vod_metadata v ON v.artifact_hash = a.artifact_hash
-		WHERE a.artifact_type = 'vod'
-		  AND a.status = 'aborting'
-		  AND COALESCE(a.last_sync_attempt, a.updated_at) < NOW() - ($1 * INTERVAL '1 second')
-		ORDER BY COALESCE(a.last_sync_attempt, a.updated_at)
-		LIMIT $2
-	`, staleSeconds, j.batchSize)
+	rows, err := foghorndb.New(j.db).ListStaleAbortingVODs(ctx, foghorndb.ListStaleAbortingVODsParams{
+		StaleSeconds: staleSeconds, BatchLimit: int32(j.batchSize),
+	})
 	if err != nil {
 		j.logger.WithError(err).Warn("Aborting-VOD recovery: failed to scan stranded aborts")
 		return
 	}
 	var batch []abortingVodRow
-	for rows.Next() {
-		var r abortingVodRow
-		if scanErr := rows.Scan(&r.artifactHash, &r.tenantID, &r.userID, &r.s3Key, &r.uploadID, &r.backendID); scanErr != nil {
-			j.logger.WithError(scanErr).Warn("Aborting-VOD recovery: row scan failed")
-			continue
-		}
-		batch = append(batch, r)
+	for _, row := range rows {
+		batch = append(batch, abortingVodRow{
+			artifactHash: row.ArtifactHash, tenantID: row.TenantID, userID: row.UserID,
+			s3Key: row.S3Key, uploadID: row.UploadID, backendID: row.BackendID,
+		})
 	}
-	if rowsErr := rows.Err(); rowsErr != nil {
-		j.logger.WithError(rowsErr).Warn("Aborting-VOD recovery: row iteration failed")
-	}
-	// Close the cursor before opening the per-row txns below (single-connection safety).
-	rows.Close() //nolint:sqlclosecheck // fully drained into `batch` above; closed here before per-row txns
 
 	for _, r := range batch {
 		select {
@@ -210,22 +192,16 @@ func (j *AbortingVodRecoveryJob) reconcileOne(ctx context.Context, r abortingVod
 func (j *AbortingVodRecoveryJob) convergeToDeleted(ctx context.Context, r abortingVodRow) {
 	moved := false
 	err := database.WithRetryablePostgresTx(ctx, j.db, nil, func(tx *sql.Tx) error {
-		res, execErr := tx.ExecContext(ctx, `
-			UPDATE foghorn.artifacts
-			SET status = 'deleted', updated_at = NOW()
-			WHERE artifact_hash = $1 AND tenant_id::text = $2 AND status = 'aborting'
-		`, r.artifactHash, r.tenantID)
+		affected, execErr := foghorndb.New(tx).MarkAbortingVODDeleted(ctx, foghorndb.MarkAbortingVODDeletedParams{
+			ArtifactHash: r.artifactHash, TenantID: r.tenantID,
+		})
 		if execErr != nil {
 			return execErr
-		}
-		affected, raErr := res.RowsAffected()
-		if raErr != nil {
-			return raErr
 		}
 		if affected == 0 {
 			return nil // row left 'aborting' under us (concurrent client abort finished it) — emit no event
 		}
-		if _, execErr := tx.ExecContext(ctx, `DELETE FROM foghorn.vod_metadata WHERE artifact_hash = $1`, r.artifactHash); execErr != nil {
+		if execErr := foghorndb.New(tx).DeleteVODMetadata(ctx, r.artifactHash); execErr != nil {
 			return execErr
 		}
 		data := &ipcpb.VodLifecycleData{

@@ -27,7 +27,7 @@ func TestDispatchJobNoNodeRevertsAndMarksArtifactQueued(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	// 2. project the artifact back to queued (clip/vod only).
 	mock.ExpectExec("UPDATE foghorn.artifacts").
-		WithArgs("hash-1", "tenant-1", "queued").
+		WithArgs("queued", "hash-1", "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	d := NewProcessingDispatcher(ProcessingDispatcherConfig{DB: db, Logger: logging.NewLogger()})

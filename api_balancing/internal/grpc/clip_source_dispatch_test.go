@@ -287,8 +287,8 @@ func expectActiveDVR(mock sqlmock.Sqlmock, startedAtMs, windowSec, lowerBound, e
 	for _, sgmt := range segs {
 		segRows.AddRow(sgmt[0], sgmt[1])
 	}
-	mock.ExpectQuery(`SELECT GREATEST\(media_start_ms, \$2\)`).
-		WithArgs("dvr-h", lowerBound, endMs).
+	mock.ExpectQuery(`SELECT GREATEST\(media_start_ms, \$1::bigint\)`).
+		WithArgs(lowerBound, endMs, "dvr-h").
 		WillReturnRows(segRows)
 }
 
@@ -299,7 +299,7 @@ func expectChapter(mock sqlmock.Sqlmock, reqStart, reqEnd int64, hash string, ov
 		rows.AddRow(hash, ovStart, ovEnd)
 	}
 	mock.ExpectQuery(`SELECT COALESCE\(c.playback_artifact_hash, ''\)`).
-		WithArgs("stream-1", reqStart, reqEnd, testTenantID).
+		WithArgs(reqStart, reqEnd, "stream-1", testTenantID).
 		WillReturnRows(rows)
 }
 
@@ -522,8 +522,8 @@ func TestRollingDVRCoverageRange_LongestContiguousRunWithHole(t *testing.T) {
 	mock.ExpectQuery(`SELECT dvr_window_seconds FROM foghorn.artifacts`).
 		WithArgs("dvr-h").
 		WillReturnRows(sqlmock.NewRows([]string{"dvr_window_seconds"}).AddRow(nil))
-	mock.ExpectQuery(`SELECT GREATEST\(media_start_ms, \$2\)`).
-		WithArgs("dvr-h", start, end).
+	mock.ExpectQuery(`SELECT GREATEST\(media_start_ms, \$1::bigint\)`).
+		WithArgs(start, end, "dvr-h").
 		WillReturnRows(sqlmock.NewRows([]string{"seg_start", "seg_end"}).
 			AddRow(1000, 1500).
 			AddRow(1500, 2000). // contiguous with previous -> run [1000,2000)

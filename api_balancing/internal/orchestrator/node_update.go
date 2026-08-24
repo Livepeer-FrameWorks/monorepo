@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"frameworks/api_balancing/internal/state"
 
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -220,28 +221,21 @@ func loadProgress(ctx context.Context, nodeID string) (updateProgress, error) {
 		return updateProgress{}, nil
 	}
 	var progress updateProgress
-	var deadline sql.NullTime
-	var updatedAt sql.NullTime
-	var expectedRaw string
-	err := db.QueryRowContext(ctx, `
-		SELECT COALESCE(target_release, ''), phase, deadline, updated_at, COALESCE(expected_components::text, '{}')
-		FROM foghorn.node_update_state
-		WHERE node_id = $1
-	`, nodeID).Scan(&progress.TargetRelease, &progress.Phase, &deadline, &updatedAt, &expectedRaw)
-	if err == sql.ErrNoRows {
+	row, err := foghorndb.New(db).GetNodeUpdateProgress(ctx, nodeID)
+	if errors.Is(err, sql.ErrNoRows) {
 		return updateProgress{}, nil
 	}
 	if err != nil {
 		return updateProgress{}, err
 	}
-	if deadline.Valid {
-		progress.Deadline = deadline.Time
+	progress.TargetRelease = row.TargetRelease
+	progress.Phase = row.Phase
+	if row.Deadline.Valid {
+		progress.Deadline = row.Deadline.Time
 	}
-	if updatedAt.Valid {
-		progress.UpdatedAt = updatedAt.Time
-	}
-	if strings.TrimSpace(expectedRaw) != "" {
-		if err := json.Unmarshal([]byte(expectedRaw), &progress.ExpectedComponents); err != nil {
+	progress.UpdatedAt = row.UpdatedAt
+	if row.ExpectedComponents != "" {
+		if err := json.Unmarshal([]byte(row.ExpectedComponents), &progress.ExpectedComponents); err != nil {
 			return updateProgress{}, fmt.Errorf("parse expected components for %s: %w", nodeID, err)
 		}
 	}
@@ -257,34 +251,22 @@ func persistPhaseWithExpected(ctx context.Context, nodeID, targetRelease, phase,
 	if db == nil {
 		return nil
 	}
-	deadlineArg := any(nil)
+	deadlineArg := sql.NullTime{}
 	if !deadline.IsZero() {
-		deadlineArg = deadline
+		deadlineArg = sql.NullTime{Time: deadline, Valid: true}
 	}
-	expectedArg := any(nil)
+	var expectedArg sql.NullString
 	if len(expected) > 0 {
 		encoded, err := json.Marshal(expected)
 		if err != nil {
 			return err
 		}
-		expectedArg = string(encoded)
+		expectedArg = sql.NullString{String: string(encoded), Valid: true}
 	}
-	_, err := db.ExecContext(ctx, `
-		INSERT INTO foghorn.node_update_state (node_id, target_release, phase, started_at, deadline, expected_components, last_error, updated_at)
-		VALUES ($1, NULLIF($2, ''), $3, NOW(), $5, COALESCE($6::jsonb, '{}'::jsonb), NULLIF($4, ''), NOW())
-		ON CONFLICT (node_id) DO UPDATE SET
-			target_release = EXCLUDED.target_release,
-			phase = EXCLUDED.phase,
-			started_at = COALESCE(foghorn.node_update_state.started_at, EXCLUDED.started_at),
-			deadline = COALESCE(EXCLUDED.deadline, foghorn.node_update_state.deadline),
-			expected_components = CASE
-				WHEN $6::jsonb IS NULL THEN foghorn.node_update_state.expected_components
-				ELSE EXCLUDED.expected_components
-			END,
-			last_error = EXCLUDED.last_error,
-			updated_at = NOW()
-	`, nodeID, targetRelease, phase, lastError, deadlineArg, expectedArg)
-	return err
+	return foghorndb.New(db).UpsertNodeUpdateProgress(ctx, foghorndb.UpsertNodeUpdateProgressParams{
+		NodeID: nodeID, TargetRelease: targetRelease, Phase: phase,
+		Deadline: deadlineArg, ExpectedComponents: expectedArg, LastError: lastError,
+	})
 }
 
 func newCordonToken() (string, error) {

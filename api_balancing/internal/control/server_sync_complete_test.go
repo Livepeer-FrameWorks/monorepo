@@ -28,7 +28,7 @@ func TestProcessSyncComplete_NilRepo_EarlyReturn(t *testing.T) {
 	}
 }
 
-const metadataSelectRe = "SELECT COALESCE\\(artifact_type,''\\), COALESCE\\(stream_internal_name,''\\), COALESCE\\(format,''\\), COALESCE\\(tenant_id::text,''\\), COALESCE\\(stream_id::text,''\\), COALESCE\\(sync_object_key,''\\), COALESCE\\(sync_status,''\\), COALESCE\\(active_object_key,''\\)"
+const metadataSelectRe = "SELECT COALESCE\\(artifact_type, ''\\)::text AS artifact_type, COALESCE\\(stream_internal_name, ''\\)::text AS stream_internal_name, COALESCE\\(format, ''\\)::text AS format, COALESCE\\(tenant_id::text, ''\\)::text AS tenant_id, COALESCE\\(stream_id::text, ''\\)::text AS stream_id, COALESCE\\(sync_object_key, ''\\)::text AS sync_object_key, COALESCE\\(sync_status, ''\\)::text AS sync_status, COALESCE\\(active_object_key, ''\\)::text AS active_object_key"
 
 // expectMetadata queues the attempt-SCOPED pre-transaction identity read. The read matches the row only
 // when the echoed request id ($2) + authenticated node ($3) equal the persisted main/dtsh attempt, so the
@@ -86,12 +86,13 @@ func expectNodeCopyGained(mock sqlmock.Sqlmock, hash, node string, size ...int64
 	if len(size) > 0 {
 		sz = size[0]
 	}
+	expectPlacementParentLock(mock)
 	mock.ExpectQuery("SELECT role, is_orphaned, is_complete FROM foghorn.artifact_nodes").
 		WithArgs(hash, node).
 		WillReturnRows(sqlmock.NewRows([]string{"role", "is_orphaned", "is_complete"}))
 	mock.ExpectQuery("INSERT INTO foghorn.artifact_nodes").
 		WithArgs(hash, node, "", sz).
-		WillReturnRows(sqlmock.NewRows([]string{"?column?", "size_bytes"}).AddRow(true, int64(0)))
+		WillReturnRows(sqlmock.NewRows([]string{"size_bytes"}).AddRow(int64(0)))
 	mock.ExpectQuery("SELECT tenant_id::text FROM foghorn.artifacts").
 		WithArgs(hash).
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow("tenant-1"))
@@ -121,7 +122,7 @@ func TestProcessSyncComplete_Success_AppliesGuardedTransaction(t *testing.T) {
 	// Publication flips active_object_key ($9) and s3_url to the fresh version key (candidate + ".att-" + req),
 	// and active_dtsh_key ($10) to the version-addressed .dtsh candidate when the upload bundled it.
 	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status = 'synced'.*active_object_key = COALESCE.*sync_status = 'in_progress'").
-		WithArgs("s3://bucket/tenant-1/vods/hash-1/hash-1.mp4.att-req-1", true, "hash-1", int64(1024), "req-1", "node-1", "tenant-1", "tenant-1/vods/hash-1/hash-1.mp4", "tenant-1/vods/hash-1/hash-1.mp4.att-req-1", FreezePublishDtshKey("tenant-1/vods/hash-1/hash-1.mp4", "req-1")).
+		WithArgs("s3://bucket/tenant-1/vods/hash-1/hash-1.mp4.att-req-1", "tenant-1/vods/hash-1/hash-1.mp4.att-req-1", true, FreezePublishDtshKey("tenant-1/vods/hash-1/hash-1.mp4", "req-1"), int64(1024), "hash-1", "tenant-1", "req-1", "node-1", "tenant-1/vods/hash-1/hash-1.mp4").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	expectNodeCopyGained(mock, "hash-1", "node-1", 1024)
 	mock.ExpectExec("INSERT INTO foghorn.vod_metadata").
@@ -169,7 +170,7 @@ func TestProcessSyncComplete_BundledDtshEnqueuesOverlappingIncrementalAttempt(t 
 	expectLedgerRecord(mock, FreezeStagingKey(obj+".dtsh", "req-1"))
 	mock.ExpectBegin()
 	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status = 'synced'.*active_object_key = COALESCE.*sync_status = 'in_progress'").
-		WithArgs("s3://bucket/"+obj+".att-req-1", true, "hash-1", int64(1024), "req-1", "node-1", "tenant-1", obj, obj+".att-req-1", FreezePublishDtshKey(obj, "req-1")).
+		WithArgs("s3://bucket/"+obj+".att-req-1", obj+".att-req-1", true, FreezePublishDtshKey(obj, "req-1"), int64(1024), "hash-1", "tenant-1", "req-1", "node-1", obj).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	// The overlapping incremental .dtsh attempt's staging + candidate are enqueued (before the node copy).
 	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").
@@ -233,7 +234,7 @@ func TestProcessSyncComplete_DtshAbsentNotFinalized(t *testing.T) {
 	expectLedgerRecord(mock, FreezeStagingKey("tenant-1/vods/hash-1/hash-1.mp4", "req-1"))
 	mock.ExpectBegin()
 	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status = 'synced'.*sync_status = 'in_progress'").
-		WithArgs("s3://bucket/tenant-1/vods/hash-1/hash-1.mp4.att-req-1", false, "hash-1", int64(2048), "req-1", "node-1", "tenant-1", "tenant-1/vods/hash-1/hash-1.mp4", "tenant-1/vods/hash-1/hash-1.mp4.att-req-1", "").
+		WithArgs("s3://bucket/tenant-1/vods/hash-1/hash-1.mp4.att-req-1", "tenant-1/vods/hash-1/hash-1.mp4.att-req-1", false, "", int64(2048), "hash-1", "tenant-1", "req-1", "node-1", "tenant-1/vods/hash-1/hash-1.mp4").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	expectNodeCopyGained(mock, "hash-1", "node-1", 2048)
 	mock.ExpectExec("INSERT INTO foghorn.vod_metadata").
@@ -279,7 +280,7 @@ func TestProcessSyncComplete_DtshPromoteFailsStillCleansDtshStaging(t *testing.T
 	mock.ExpectBegin()
 	// dtsh_synced ($2) is FALSE (downgraded); $10 (publishDtshKey) empty.
 	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status = 'synced'.*sync_status = 'in_progress'").
-		WithArgs("s3://bucket/"+obj+".att-req-1", false, "hash-1", int64(1024), "req-1", "node-1", "tenant-1", obj, obj+".att-req-1", "").
+		WithArgs("s3://bucket/"+obj+".att-req-1", obj+".att-req-1", false, "", int64(1024), "hash-1", "tenant-1", "req-1", "node-1", obj).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	expectNodeCopyGained(mock, "hash-1", "node-1", 1024)
 	mock.ExpectExec("INSERT INTO foghorn.vod_metadata").
@@ -381,7 +382,7 @@ func TestProcessSyncComplete_LostCAS_OrphanCandidateCleanedUp(t *testing.T) {
 	// cleaned inline — the orphaned candidate stays in the ledger for reconcileFreezePublicationLedger to collect
 	// durably (req-aware). The transaction simply rolls back.
 	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status = 'synced'.*sync_status = 'in_progress'").
-		WithArgs("s3://bucket/tenant-1/s-int/clips/hash-1.mp4.att-req-1", false, "hash-1", int64(1024), "req-1", "node-1", "tenant-1", "tenant-1/s-int/clips/hash-1.mp4", "tenant-1/s-int/clips/hash-1.mp4.att-req-1", "").
+		WithArgs("s3://bucket/tenant-1/s-int/clips/hash-1.mp4.att-req-1", "tenant-1/s-int/clips/hash-1.mp4.att-req-1", false, "", int64(1024), "hash-1", "tenant-1", "req-1", "node-1", "tenant-1/s-int/clips/hash-1.mp4").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectRollback()
 
@@ -406,7 +407,7 @@ func TestProcessSyncComplete_LostCAS_DuplicateSuccess_DoesNotDeleteLiveObject(t 
 	expectLedgerRecord(mock, FreezeStagingKey("tenant-1/s-int/clips/hash-1.mp4", "req-1"))
 	mock.ExpectBegin()
 	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status = 'synced'.*sync_status = 'in_progress'").
-		WithArgs("s3://bucket/tenant-1/s-int/clips/hash-1.mp4.att-req-1", false, "hash-1", int64(1024), "req-1", "node-1", "tenant-1", "tenant-1/s-int/clips/hash-1.mp4", "tenant-1/s-int/clips/hash-1.mp4.att-req-1", "").
+		WithArgs("s3://bucket/tenant-1/s-int/clips/hash-1.mp4.att-req-1", "tenant-1/s-int/clips/hash-1.mp4.att-req-1", false, "", int64(1024), "hash-1", "tenant-1", "req-1", "node-1", "tenant-1/s-int/clips/hash-1.mp4").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	// A concurrent duplicate of THIS attempt already committed the SAME candidate as active. The lost-CAS path
 	// does nothing inline; the ledger sweep re-reads active pointers and, finding the candidate LIVE, drops the
@@ -438,14 +439,14 @@ func TestProcessSyncComplete_LostCAS_MixedDuplicateEnqueuesOrphanedDtshOnly(t *t
 	mock.ExpectBegin()
 	// This attempt LOSES the main CAS (0 rows) after publishing BOTH candidates.
 	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status = 'synced'.*sync_status = 'in_progress'").
-		WithArgs("s3://bucket/"+obj+".att-req-1", true, "hash-1", int64(1024), "req-1", "node-1", "tenant-1", obj, obj+".att-req-1", FreezePublishDtshKey(obj, "req-1")).
+		WithArgs("s3://bucket/"+obj+".att-req-1", obj+".att-req-1", true, FreezePublishDtshKey(obj, "req-1"), int64(1024), "hash-1", "tenant-1", "req-1", "node-1", obj).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	// dtsh_included=true → the dtsh-only branch runs its CAS, which also matches 0 rows. Nothing is cleaned
 	// inline; the orphaned .dtsh candidate stays in the ledger, and the req-aware sweep — finding the main
 	// candidate LIVE but active_dtsh_key EMPTY (the dtsh_included=false winner cleared it) — collects ONLY the
 	// orphaned .dtsh candidate. Roll back.
-	mock.ExpectExec("UPDATE foghorn.artifacts.*dtsh_synced = true.*dtsh_sync_request_id = \\$2 AND dtsh_sync_node_id = \\$3.*tenant_id::text = \\$4").
-		WithArgs("hash-1", "req-1", "node-1", "tenant-1", FreezePublishDtshKey(obj, "req-1")).
+	mock.ExpectExec("UPDATE foghorn.artifacts.*dtsh_synced = true.*dtsh_sync_request_id = \\$3 AND dtsh_sync_node_id = \\$4.*tenant_id::text = \\$5").
+		WithArgs(FreezePublishDtshKey(obj, "req-1"), "hash-1", "req-1", "node-1", "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectRollback()
 
@@ -471,7 +472,7 @@ func TestProcessSyncComplete_UsesProviderObservedSize(t *testing.T) {
 	expectLedgerRecord(mock, FreezeStagingKey("tenant-1/vods/hash-1/hash-1.mp4.dtsh", "req-1"))
 	mock.ExpectBegin()
 	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status = 'synced'.*sync_status = 'in_progress'").
-		WithArgs("s3://bucket/tenant-1/vods/hash-1/hash-1.mp4.att-req-1", true, "hash-1", int64(4242), "req-1", "node-1", "tenant-1", "tenant-1/vods/hash-1/hash-1.mp4", "tenant-1/vods/hash-1/hash-1.mp4.att-req-1", FreezePublishDtshKey("tenant-1/vods/hash-1/hash-1.mp4", "req-1")).
+		WithArgs("s3://bucket/tenant-1/vods/hash-1/hash-1.mp4.att-req-1", "tenant-1/vods/hash-1/hash-1.mp4.att-req-1", true, FreezePublishDtshKey("tenant-1/vods/hash-1/hash-1.mp4", "req-1"), int64(4242), "hash-1", "tenant-1", "req-1", "node-1", "tenant-1/vods/hash-1/hash-1.mp4").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	expectNodeCopyGained(mock, "hash-1", "node-1", 4242)
 	mock.ExpectExec("INSERT INTO foghorn.vod_metadata").
@@ -508,7 +509,7 @@ func TestProcessSyncComplete_ConsumesPersistedObjectKey(t *testing.T) {
 	expectLedgerRecord(mock, FreezeStagingKey("tenant-1/frozen/hash-k.custom.dtsh", "req-k"))
 	mock.ExpectBegin()
 	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status = 'synced'.*sync_status = 'in_progress'").
-		WithArgs("s3://bucket/tenant-1/frozen/hash-k.custom.att-req-k", true, "hash-k", int64(1024), "req-k", "node-1", "tenant-1", "tenant-1/frozen/hash-k.custom", "tenant-1/frozen/hash-k.custom.att-req-k", FreezePublishDtshKey("tenant-1/frozen/hash-k.custom", "req-k")).
+		WithArgs("s3://bucket/tenant-1/frozen/hash-k.custom.att-req-k", "tenant-1/frozen/hash-k.custom.att-req-k", true, FreezePublishDtshKey("tenant-1/frozen/hash-k.custom", "req-k"), int64(1024), "hash-k", "tenant-1", "req-k", "node-1", "tenant-1/frozen/hash-k.custom").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	expectNodeCopyGained(mock, "hash-k", "node-1", 1024)
 	mock.ExpectExec("INSERT INTO foghorn.vod_metadata").
@@ -549,11 +550,11 @@ func TestProcessSyncComplete_DtshOnlyOnSyncedArtifact(t *testing.T) {
 	// Main-upload guard matches nothing; $4 (size)=0 (no main publish on a synced row); $9 (publishMainKey)="";
 	// $10 (publishDtshKey) = the version-addressed .dtsh candidate this incremental attempt published.
 	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status = 'in_progress'").
-		WithArgs("s3://bucket/tenant-1/clip-int/clips/hash-d.mp4.att-orig", true, "hash-d", int64(0), "req-d", "node-1", "tenant-1", "tenant-1/clip-int/clips/hash-d.mp4", "", FreezePublishDtshKey("tenant-1/clip-int/clips/hash-d.mp4", "req-d")).
+		WithArgs("s3://bucket/tenant-1/clip-int/clips/hash-d.mp4.att-orig", "", true, FreezePublishDtshKey("tenant-1/clip-int/clips/hash-d.mp4", "req-d"), int64(0), "hash-d", "tenant-1", "req-d", "node-1", "tenant-1/clip-int/clips/hash-d.mp4").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	// The dtsh-only UPDATE flips active_dtsh_key ($5) to the freshly-published versioned index.
-	mock.ExpectExec("UPDATE foghorn.artifacts.*dtsh_synced = true.*dtsh_sync_request_id = \\$2 AND dtsh_sync_node_id = \\$3.*tenant_id::text = \\$4").
-		WithArgs("hash-d", "req-d", "node-1", "tenant-1", FreezePublishDtshKey("tenant-1/clip-int/clips/hash-d.mp4", "req-d")).
+	mock.ExpectExec("UPDATE foghorn.artifacts.*dtsh_synced = true.*dtsh_sync_request_id = \\$3 AND dtsh_sync_node_id = \\$4.*tenant_id::text = \\$5").
+		WithArgs(FreezePublishDtshKey("tenant-1/clip-int/clips/hash-d.mp4", "req-d"), "hash-d", "req-d", "node-1", "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO foghorn.artifact_event_outbox").WillReturnResult(sqlmock.NewResult(0, 1))
 	// The promoted .dtsh staging object is durably enqueued for deletion IN the dtsh-only transaction.
@@ -634,11 +635,11 @@ func TestProcessSyncComplete_Failed_GuardDBError_FailsClosed(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("UPDATE foghorn.artifacts.*dtsh_status = 'failed'.*RETURNING").
-		WithArgs("hash-fail", "req-x", "node-1", "connection reset", "tenant-1").
+		WithArgs("connection reset", "hash-fail", "req-x", "node-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"sync_object_key"}))
 	mock.ExpectRollback()
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT COALESCE\(tenant_id::text,''\), COALESCE\(sync_object_key,''\) FROM foghorn.artifacts.*sync_status = 'in_progress'`).
+	mock.ExpectQuery(`SELECT COALESCE\(tenant_id::text, ''\)::text AS tenant_id, COALESCE\(sync_object_key, ''\)::text AS sync_object_key FROM foghorn.artifacts.*sync_status = 'in_progress'`).
 		WithArgs("hash-fail", "req-x", "node-1", "tenant-1").
 		WillReturnError(errors.New("db down"))
 	mock.ExpectRollback()
@@ -663,7 +664,7 @@ func TestProcessSyncComplete_PayloadNodeIDIgnored_UsesConnectionIdentity(t *test
 	expectLedgerRecord(mock, FreezeStagingKey("tenant-1/clip-int/clips/hash-1.mp4", ""))
 	mock.ExpectBegin()
 	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status = 'in_progress'").
-		WithArgs(sqlmock.AnyArg(), false, "hash-1", int64(1024), "", "fallback-node", "tenant-1", "tenant-1/clip-int/clips/hash-1.mp4", "tenant-1/clip-int/clips/hash-1.mp4.att-", "").
+		WithArgs(sqlmock.AnyArg(), "tenant-1/clip-int/clips/hash-1.mp4.att-", false, "", int64(1024), "hash-1", "tenant-1", "", "fallback-node", "tenant-1/clip-int/clips/hash-1.mp4").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	expectNodeCopyGained(mock, "hash-1", "fallback-node", 1024)
 	mock.ExpectExec("INSERT INTO foghorn.artifact_event_outbox").WillReturnResult(sqlmock.NewResult(0, 1))
@@ -697,7 +698,7 @@ func TestProcessSyncComplete_RepublishEnqueuesSupersededObject(t *testing.T) {
 	expectLedgerRecord(mock, FreezeStagingKey("tenant-1/vods/vod-hash/vod-hash.mp4", ""))
 	mock.ExpectBegin()
 	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status = 'in_progress'").
-		WithArgs("s3://bucket/tenant-1/vods/vod-hash/vod-hash.mp4.att-", false, "vod-hash", int64(1024), "", "node-1", "tenant-1", "tenant-1/vods/vod-hash/vod-hash.mp4", "tenant-1/vods/vod-hash/vod-hash.mp4.att-", "").
+		WithArgs("s3://bucket/tenant-1/vods/vod-hash/vod-hash.mp4.att-", "tenant-1/vods/vod-hash/vod-hash.mp4.att-", false, "", int64(1024), "vod-hash", "tenant-1", "", "node-1", "tenant-1/vods/vod-hash/vod-hash.mp4").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	// Superseded MEDIA object + its version-addressed .dtsh index enqueued (before node-copy).
 	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").WithArgs(prev, sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
@@ -739,7 +740,7 @@ func TestProcessSyncComplete_LegacyRepublishRecoversSupersededObjectFromS3URL(t 
 	expectLedgerRecord(mock, FreezeStagingKey(legacyKey, ""))
 	mock.ExpectBegin()
 	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status = 'in_progress'").
-		WithArgs("s3://bucket/"+legacyKey+".att-", false, "legacy-hash", int64(1024), "", "node-1", "tenant-1", legacyKey, legacyKey+".att-", "").
+		WithArgs("s3://bucket/"+legacyKey+".att-", legacyKey+".att-", false, "", int64(1024), "legacy-hash", "tenant-1", "", "node-1", legacyKey).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	// The prior object recovered from s3_url (== legacyKey) and its co-located .dtsh are enqueued as superseded.
 	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").WithArgs(legacyKey, sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
@@ -771,17 +772,17 @@ func TestProcessSyncComplete_Failed(t *testing.T) {
 	// applyDtshCompletionFailure runs first (tx); no dtsh attempt matches → rollback.
 	mock.ExpectBegin()
 	mock.ExpectQuery("UPDATE foghorn.artifacts.*dtsh_status = 'failed'.*RETURNING").
-		WithArgs("hash-fail", "req-9", "node-1", "connection reset", "tenant-1").
+		WithArgs("connection reset", "hash-fail", "req-9", "node-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"sync_object_key"}))
 	mock.ExpectRollback()
 	// applySyncCompletionFailure: the guard now RETURNS the descriptor so the ambiguous staging object is
 	// durably enqueued for cleanup alongside the failure transition.
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT COALESCE\(tenant_id::text,''\), COALESCE\(sync_object_key,''\) FROM foghorn.artifacts.*sync_status = 'in_progress'`).
+	mock.ExpectQuery(`SELECT COALESCE\(tenant_id::text, ''\)::text AS tenant_id, COALESCE\(sync_object_key, ''\)::text AS sync_object_key FROM foghorn.artifacts.*sync_status = 'in_progress'`).
 		WithArgs("hash-fail", "req-9", "node-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "sync_object_key"}).AddRow("tenant-1", "obj/hash-fail"))
-	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status = \\$2::text.*tenant_id::text = \\$4").
-		WithArgs("hash-fail", "failed", "connection reset", "tenant-1").
+	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status = \\$1::text.*tenant_id::text = \\$4").
+		WithArgs("failed", "connection reset", "hash-fail", "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	// The abandoned attempt's staging + published-candidate objects (main + .dtsh) are ALL durably enqueued —
 	// any of them may have landed before the failure, and once the identity is cleared purge cannot derive them.
@@ -812,11 +813,11 @@ func TestProcessSyncComplete_Failed_MismatchIsNoOp(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("UPDATE foghorn.artifacts.*dtsh_status = 'failed'.*RETURNING").
-		WithArgs("hash-fail", "stale-req", "node-1", "connection reset", "tenant-1").
+		WithArgs("connection reset", "hash-fail", "stale-req", "node-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"sync_object_key"}))
 	mock.ExpectRollback()
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT COALESCE\(tenant_id::text,''\), COALESCE\(sync_object_key,''\) FROM foghorn.artifacts.*status NOT IN \('deleted', 'expired', 'aborted'\).*sync_status = 'in_progress'`).
+	mock.ExpectQuery(`SELECT COALESCE\(tenant_id::text, ''\)::text AS tenant_id, COALESCE\(sync_object_key, ''\)::text AS sync_object_key FROM foghorn.artifacts.*status NOT IN \('deleted', 'expired', 'aborted'\).*sync_status = 'in_progress'`).
 		WithArgs("hash-fail", "stale-req", "node-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "sync_object_key"}))
 	mock.ExpectRollback()
@@ -836,11 +837,11 @@ func TestProcessSyncComplete_LocalMissing_OtherCopySurvives(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("UPDATE foghorn.artifacts.*dtsh_status = 'failed'.*RETURNING").
-		WithArgs("hash-lm", "req-lm", "node-1", "gone here", "tenant-1").
+		WithArgs("gone here", "hash-lm", "req-lm", "node-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"sync_object_key"}))
 	mock.ExpectRollback()
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT COALESCE\(tenant_id::text,''\), COALESCE\(sync_object_key,''\) FROM foghorn.artifacts.*sync_status = 'in_progress'`).
+	mock.ExpectQuery(`SELECT COALESCE\(tenant_id::text, ''\)::text AS tenant_id, COALESCE\(sync_object_key, ''\)::text AS sync_object_key FROM foghorn.artifacts.*sync_status = 'in_progress'`).
 		WithArgs("hash-lm", "req-lm", "node-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "sync_object_key"}).AddRow("tenant-1", "obj/hash-lm"))
 	mock.ExpectQuery("SELECT role FROM foghorn.artifact_nodes").
@@ -862,8 +863,8 @@ func TestProcessSyncComplete_LocalMissing_OtherCopySurvives(t *testing.T) {
 	mock.ExpectQuery("SELECT count\\(\\*\\) FROM foghorn.artifact_nodes").
 		WithArgs("hash-lm", "node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
-	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status = \\$2::text.*tenant_id::text = \\$4").
-		WithArgs("hash-lm", "failed", "gone here", "tenant-1").
+	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status = \\$1::text.*tenant_id::text = \\$4").
+		WithArgs("failed", "gone here", "hash-lm", "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	for _, k := range []string{
 		FreezeStagingKey("obj/hash-lm", "req-lm"),

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/artifactoutbox"
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
@@ -242,18 +243,13 @@ func finalizeChapterArtifactTx(
 	// AND the parent DVR isn't deleted. A late completion arriving after a parent-DVR delete
 	// cascade (which soft-deletes the child artifact) must NOT resurrect it to 'ready' — those
 	// guards make it an ignored no-op instead. A missing row (chapter/artifact gone) is transient.
-	var chapterState, storedHash, tenantID, artifactStatus, parentStatus, assignedNode string
-	lockErr := tx.QueryRowContext(ctx, `
-		SELECT c.state, COALESCE(c.playback_artifact_hash, ''), a.tenant_id::text, a.status,
-		       COALESCE(p.status, ''), COALESCE(c.finalize_node_id, '')
-		  FROM foghorn.dvr_chapters c
-		  JOIN foghorn.artifacts a ON a.artifact_hash = c.playback_artifact_hash
-		  LEFT JOIN foghorn.artifacts p ON p.artifact_hash = c.artifact_hash AND p.artifact_type = 'dvr'
-		 WHERE c.chapter_id = $1
-		 FOR UPDATE OF c, a`, chapterID).Scan(&chapterState, &storedHash, &tenantID, &artifactStatus, &parentStatus, &assignedNode)
+	qtx := foghorndb.New(tx)
+	locked, lockErr := qtx.LockChapterFinalizeArtifact(ctx, chapterID)
 	if lockErr != nil {
 		return "", lockErr
 	}
+	chapterState, storedHash, tenantID := locked.State, locked.PlaybackArtifactHash, locked.TenantID
+	artifactStatus, parentStatus, assignedNode := locked.ArtifactStatus.String, locked.ParentStatus, locked.FinalizeNodeID
 	if chapterState != ChapterStateFinalizing {
 		return "", errChapterNotInFinalizing
 	}
@@ -287,23 +283,14 @@ func finalizeChapterArtifactTx(
 	// Artifact row → reflect the produced MKV (size, format, duration, tracks) and move to
 	// local/pending. Guard on status='finalizing' + require exactly one row so a concurrent
 	// delete that slipped between the lock read and this write cannot be clobbered.
-	artRes, dbErr := tx.ExecContext(ctx, `
-		UPDATE foghorn.artifacts
-		   SET status = 'ready',
-		       format = 'mkv',
-		       size_bytes = NULLIF($2, 0)::bigint,
-		       tracks = CASE WHEN $5::boolean THEN $3::jsonb ELSE tracks END,
-		       duration_ms = CASE WHEN $4::bigint > 0 THEN $4::bigint ELSE duration_ms END,
-		       duration_seconds = CASE WHEN $4::bigint > 0 THEN ($4::bigint / 1000)::int ELSE duration_seconds END,
-		       sync_status = 'pending',
-		       storage_location = 'local',
-		       updated_at = NOW()
-		 WHERE artifact_hash = $1 AND status = 'finalizing'
-	`, resolvedHash, sizeBytes, tracksJSON, chapterDurationMs, tracksPresent)
+	affected, dbErr := qtx.FinalizeChapterPlaybackArtifact(ctx, foghorndb.FinalizeChapterPlaybackArtifactParams{
+		ArtifactHash: resolvedHash, SizeBytes: sizeBytes, TracksJson: tracksJSON,
+		DurationMs: chapterDurationMs, TracksPresent: tracksPresent,
+	})
 	if dbErr != nil {
 		return "", dbErr
 	}
-	if affected, _ := artRes.RowsAffected(); affected != 1 { //nolint:errcheck // pq populates RowsAffected on UPDATE
+	if affected != 1 {
 		return "", errChapterNotInFinalizing
 	}
 
@@ -361,14 +348,8 @@ func chapterArtifactLifecycleIdentity(ctx context.Context, chapterID string) (ar
 	if db == nil {
 		return "", "", sql.ErrConnDone
 	}
-	err = db.QueryRowContext(ctx, `
-		SELECT c.playback_artifact_hash, a.tenant_id::text
-		  FROM foghorn.dvr_chapters c
-		  JOIN foghorn.artifacts a
-		    ON a.artifact_hash = c.playback_artifact_hash
-		 WHERE c.chapter_id = $1
-	`, chapterID).Scan(&artifactHash, &tenantID)
-	return artifactHash, tenantID, err
+	row, err := foghorndb.New(db).GetChapterArtifactLifecycleIdentity(ctx, chapterID)
+	return row.PlaybackArtifactHash.String, row.TenantID, err
 }
 
 // updateChapterVodMetadataTx mirrors VodPipeline.updateVodMetadata's schema fill on the
@@ -384,54 +365,22 @@ func updateChapterVodMetadataTx(
 	if len(outputs) == 0 {
 		return nil
 	}
-	_, err := tx.ExecContext(ctx, `
-		INSERT INTO foghorn.vod_metadata (
-			artifact_hash,
-			duration_ms, resolution, video_codec, audio_codec,
-			bitrate_kbps, width, height, fps,
-			audio_channels, audio_sample_rate, updated_at
-		) VALUES (
-			$1,
-			$2::integer, $3, $4, $5,
-			$6::integer, $7::integer, $8::integer, $9::real,
-			$10::integer, $11::integer, NOW()
-		)
-		ON CONFLICT (artifact_hash) DO UPDATE SET
-			duration_ms       = COALESCE(EXCLUDED.duration_ms, foghorn.vod_metadata.duration_ms),
-			resolution        = COALESCE(EXCLUDED.resolution, foghorn.vod_metadata.resolution),
-			video_codec       = COALESCE(EXCLUDED.video_codec, foghorn.vod_metadata.video_codec),
-			audio_codec       = COALESCE(EXCLUDED.audio_codec, foghorn.vod_metadata.audio_codec),
-			bitrate_kbps      = COALESCE(EXCLUDED.bitrate_kbps, foghorn.vod_metadata.bitrate_kbps),
-			width             = COALESCE(EXCLUDED.width, foghorn.vod_metadata.width),
-			height            = COALESCE(EXCLUDED.height, foghorn.vod_metadata.height),
-			fps               = COALESCE(EXCLUDED.fps, foghorn.vod_metadata.fps),
-			audio_channels    = COALESCE(EXCLUDED.audio_channels, foghorn.vod_metadata.audio_channels),
-			audio_sample_rate = COALESCE(EXCLUDED.audio_sample_rate, foghorn.vod_metadata.audio_sample_rate),
-			updated_at        = NOW()
-	`,
-		artifactHash,
-		nullIfEmptyChapterMeta(outputs["duration_ms"]),
-		nullIfEmptyChapterMeta(outputs["resolution"]),
-		nullIfEmptyChapterMeta(outputs["video_codec"]),
-		nullIfEmptyChapterMeta(outputs["audio_codec"]),
-		nullIfEmptyChapterMeta(outputs["bitrate_kbps"]),
-		nullIfEmptyChapterMeta(outputs["width"]),
-		nullIfEmptyChapterMeta(outputs["height"]),
-		nullIfEmptyChapterMeta(outputs["fps"]),
-		nullIfEmptyChapterMeta(outputs["audio_channels"]),
-		nullIfEmptyChapterMeta(outputs["audio_sample_rate"]),
-	)
+	err := foghorndb.New(tx).UpsertChapterVodMetadata(ctx, foghorndb.UpsertChapterVodMetadataParams{
+		ArtifactHash: artifactHash,
+		DurationMs:   nullStringChapterMeta(outputs["duration_ms"]), Resolution: nullStringChapterMeta(outputs["resolution"]),
+		VideoCodec: nullStringChapterMeta(outputs["video_codec"]), AudioCodec: nullStringChapterMeta(outputs["audio_codec"]),
+		BitrateKbps: nullStringChapterMeta(outputs["bitrate_kbps"]), Width: nullStringChapterMeta(outputs["width"]),
+		Height: nullStringChapterMeta(outputs["height"]), Fps: nullStringChapterMeta(outputs["fps"]),
+		AudioChannels: nullStringChapterMeta(outputs["audio_channels"]), AudioSampleRate: nullStringChapterMeta(outputs["audio_sample_rate"]),
+	})
 	if err != nil {
 		return fmt.Errorf("chapter vod_metadata upsert: %w", err)
 	}
 	return nil
 }
 
-func nullIfEmptyChapterMeta(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
+func nullStringChapterMeta(s string) sql.NullString {
+	return sql.NullString{String: strings.TrimSpace(s), Valid: strings.TrimSpace(s) != ""}
 }
 
 // chapterPlaybackArtifactHashFromOutputs prefers the outputs map's
@@ -477,21 +426,11 @@ func resolveChapterArtifactContent(ctx context.Context, input string) *ContentRe
 	if len(input) != 32 {
 		return nil
 	}
-	var (
-		originType, originID sql.NullString
-		tenantID             sql.NullString
-		internalName         sql.NullString
-		requiresAuth         sql.NullBool
-	)
-	if scanErr := db.QueryRowContext(ctx, `
-		SELECT origin_type, origin_id, tenant_id::text,
-		       COALESCE(internal_name, ''),
-		       (status NOT IN ('deleted', 'failed'))::boolean
-		  FROM foghorn.artifacts
-		 WHERE artifact_hash = $1
-	`, input).Scan(&originType, &originID, &tenantID, &internalName, &requiresAuth); scanErr != nil {
+	row, scanErr := foghorndb.New(db).GetChapterArtifactResolution(ctx, input)
+	if scanErr != nil {
 		return nil
 	}
+	originType, originID := row.OriginType, row.OriginID
 	if !originType.Valid || originType.String != "dvr_chapter" || !originID.Valid {
 		return nil
 	}
@@ -555,18 +494,11 @@ func resolveChapterArtifactPlaybackResp(ctx context.Context, input string) (*com
 	if len(input) != 32 {
 		return nil, false
 	}
-	var (
-		originType, originID, tenantID, internalName sql.NullString
-	)
-	if scanErr := db.QueryRowContext(ctx, `
-		SELECT origin_type, origin_id, tenant_id::text,
-		       COALESCE(internal_name, '')
-		  FROM foghorn.artifacts
-		 WHERE artifact_hash = $1
-		   AND status NOT IN ('deleted', 'failed')
-	`, input).Scan(&originType, &originID, &tenantID, &internalName); scanErr != nil {
+	row, scanErr := foghorndb.New(db).GetPlayableChapterArtifactResolution(ctx, input)
+	if scanErr != nil {
 		return nil, false
 	}
+	originType, originID := row.OriginType, row.OriginID
 	if !originType.Valid || originType.String != "dvr_chapter" || !originID.Valid {
 		return nil, false
 	}
@@ -632,18 +564,11 @@ func ResolveChapterArtifactByHash(ctx context.Context, artifactHash string) *Cha
 	if len(artifactHash) != 32 {
 		return nil
 	}
-	var (
-		originType, originID, tenantID, originCluster sql.NullString
-	)
-	if err := db.QueryRowContext(ctx, `
-		SELECT origin_type, origin_id, tenant_id::text,
-		       COALESCE(origin_cluster_id, '')
-		  FROM foghorn.artifacts
-		 WHERE artifact_hash = $1
-		   AND status NOT IN ('deleted', 'failed')
-	`, artifactHash).Scan(&originType, &originID, &tenantID, &originCluster); err != nil {
+	row, err := foghorndb.New(db).GetChapterArtifactRouting(ctx, artifactHash)
+	if err != nil {
 		return nil
 	}
+	originType, originID := row.OriginType, row.OriginID
 	if !originType.Valid || originType.String != "dvr_chapter" || !originID.Valid {
 		return nil
 	}
@@ -656,8 +581,8 @@ func ResolveChapterArtifactByHash(ctx context.Context, artifactHash string) *Cha
 		// Still return useful context from the foghorn row.
 		return &ChapterArtifactInfo{
 			ArtifactHash:    artifactHash,
-			TenantID:        tenantID.String,
-			OriginClusterID: originCluster.String,
+			TenantID:        row.TenantID,
+			OriginClusterID: row.OriginClusterID,
 		}
 	}
 	return &ChapterArtifactInfo{

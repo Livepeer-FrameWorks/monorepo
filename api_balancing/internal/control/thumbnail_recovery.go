@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"time"
+
+	"frameworks/api_balancing/internal/database/foghorndb"
 )
 
 // ClaimedRecoveryAttempt is one leased stuck-incomplete attempt the recovery worker will re-drive. Token fences
@@ -31,36 +33,17 @@ func ClaimStuckIncompleteThumbnailAttempts(ctx context.Context, dbh *sql.DB, sta
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := dbh.QueryContext(ctx, `
-		UPDATE foghorn.thumbnail_task_assignment q
-		SET recovery_leased_until = NOW() + ($3 * INTERVAL '1 second'),
-		    recovery_lease_token = gen_random_uuid()::text
-		WHERE q.attempt_id IN (
-			SELECT attempt_id FROM foghorn.thumbnail_task_assignment
-			WHERE status IN ('assigned', 'uploading', 'verifying')
-			  AND expiry > NOW()
-			  AND updated_at < $1
-			  AND (recovery_leased_until IS NULL OR recovery_leased_until <= NOW())
-			  AND (recovery_next_attempt_at IS NULL OR recovery_next_attempt_at <= NOW())
-			ORDER BY COALESCE(recovery_next_attempt_at, updated_at) ASC
-			LIMIT $2
-			FOR UPDATE SKIP LOCKED
-		)
-		RETURNING q.attempt_id, q.recovery_attempts, q.recovery_lease_token
-	`, staleBefore, limit, int64(leaseTTL.Seconds()))
+	rows, err := foghorndb.New(dbh).ClaimStuckIncompleteThumbnailAttempts(ctx, foghorndb.ClaimStuckIncompleteThumbnailAttemptsParams{
+		LeaseSeconds: int64(leaseTTL.Seconds()), StaleBefore: staleBefore, RowLimit: int32(limit),
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []ClaimedRecoveryAttempt
-	for rows.Next() {
-		var c ClaimedRecoveryAttempt
-		if sErr := rows.Scan(&c.AttemptID, &c.Attempts, &c.Token); sErr != nil {
-			return nil, sErr
-		}
-		out = append(out, c)
+	out := make([]ClaimedRecoveryAttempt, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, ClaimedRecoveryAttempt{AttemptID: row.AttemptID, Attempts: int(row.RecoveryAttempts), Token: row.RecoveryLeaseToken.String})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // ClaimUnprojectedPublishedThumbnailAttempts LEASES a batch of published-but-unprojected attempts (the deterministic
@@ -77,37 +60,17 @@ func ClaimUnprojectedPublishedThumbnailAttempts(ctx context.Context, dbh *sql.DB
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := dbh.QueryContext(ctx, `
-		UPDATE foghorn.thumbnail_task_assignment q
-		SET recovery_leased_until = NOW() + ($3 * INTERVAL '1 second'),
-		    recovery_lease_token = gen_random_uuid()::text
-		WHERE q.attempt_id IN (
-			SELECT a.attempt_id FROM foghorn.thumbnail_task_assignment a
-			JOIN foghorn.thumbnail_active_pointer p ON p.asset_key = a.asset_key AND p.active_version = a.attempt_id
-			WHERE a.status = 'published'
-			  AND a.deterministic_projected_at IS NULL
-			  AND a.updated_at < $1
-			  AND (a.recovery_leased_until IS NULL OR a.recovery_leased_until <= NOW())
-			  AND (a.recovery_next_attempt_at IS NULL OR a.recovery_next_attempt_at <= NOW())
-			ORDER BY COALESCE(a.recovery_next_attempt_at, a.updated_at) ASC
-			LIMIT $2
-			FOR UPDATE SKIP LOCKED
-		)
-		RETURNING q.attempt_id, q.recovery_attempts, q.recovery_lease_token
-	`, staleBefore, limit, int64(leaseTTL.Seconds()))
+	rows, err := foghorndb.New(dbh).ClaimUnprojectedPublishedThumbnailAttempts(ctx, foghorndb.ClaimUnprojectedPublishedThumbnailAttemptsParams{
+		LeaseSeconds: int64(leaseTTL.Seconds()), StaleBefore: staleBefore, RowLimit: int32(limit),
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []ClaimedRecoveryAttempt
-	for rows.Next() {
-		var c ClaimedRecoveryAttempt
-		if sErr := rows.Scan(&c.AttemptID, &c.Attempts, &c.Token); sErr != nil {
-			return nil, sErr
-		}
-		out = append(out, c)
+	out := make([]ClaimedRecoveryAttempt, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, ClaimedRecoveryAttempt{AttemptID: row.AttemptID, Attempts: int(row.RecoveryAttempts), Token: row.RecoveryLeaseToken.String})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // ClaimDueReassertThumbnailAttempts LEASES a batch of attempts whose one-shot reassert clock is DUE
@@ -124,35 +87,17 @@ func ClaimDueReassertThumbnailAttempts(ctx context.Context, dbh *sql.DB, _ time.
 	if limit <= 0 {
 		limit = 100
 	}
-	rows, err := dbh.QueryContext(ctx, `
-		UPDATE foghorn.thumbnail_task_assignment q
-		SET recovery_leased_until = NOW() + ($2 * INTERVAL '1 second'),
-		    recovery_lease_token = gen_random_uuid()::text
-		WHERE q.attempt_id IN (
-			SELECT attempt_id FROM foghorn.thumbnail_task_assignment
-			WHERE deterministic_reassert_at IS NOT NULL
-			  AND deterministic_reassert_at <= NOW()
-			  AND (recovery_leased_until IS NULL OR recovery_leased_until <= NOW())
-			  AND (recovery_next_attempt_at IS NULL OR recovery_next_attempt_at <= NOW())
-			ORDER BY COALESCE(recovery_next_attempt_at, deterministic_reassert_at) ASC
-			LIMIT $1
-			FOR UPDATE SKIP LOCKED
-		)
-		RETURNING q.attempt_id, q.recovery_attempts, q.recovery_lease_token
-	`, limit, int64(leaseTTL.Seconds()))
+	rows, err := foghorndb.New(dbh).ClaimDueReassertThumbnailAttempts(ctx, foghorndb.ClaimDueReassertThumbnailAttemptsParams{
+		LeaseSeconds: int64(leaseTTL.Seconds()), RowLimit: int32(limit),
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []ClaimedRecoveryAttempt
-	for rows.Next() {
-		var c ClaimedRecoveryAttempt
-		if sErr := rows.Scan(&c.AttemptID, &c.Attempts, &c.Token); sErr != nil {
-			return nil, sErr
-		}
-		out = append(out, c)
+	out := make([]ClaimedRecoveryAttempt, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, ClaimedRecoveryAttempt{AttemptID: row.AttemptID, Attempts: int(row.RecoveryAttempts), Token: row.RecoveryLeaseToken.String})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // UnprojectedThumbnailRecoveryBacklog counts published-but-unprojected active attempts currently DUE for a projection
@@ -161,17 +106,8 @@ func UnprojectedThumbnailRecoveryBacklog(ctx context.Context, dbh *sql.DB, stale
 	if dbh == nil {
 		return 0, nil
 	}
-	var n int
-	err := dbh.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM foghorn.thumbnail_task_assignment a
-		JOIN foghorn.thumbnail_active_pointer p ON p.asset_key = a.asset_key AND p.active_version = a.attempt_id
-		WHERE a.status = 'published'
-		  AND a.deterministic_projected_at IS NULL
-		  AND a.updated_at < $1
-		  AND (a.recovery_leased_until IS NULL OR a.recovery_leased_until <= NOW())
-		  AND (a.recovery_next_attempt_at IS NULL OR a.recovery_next_attempt_at <= NOW())
-	`, staleBefore).Scan(&n)
-	return n, err
+	n, err := foghorndb.New(dbh).UnprojectedThumbnailRecoveryBacklog(ctx, staleBefore)
+	return int(n), err
 }
 
 // SettleThumbnailRecoveryDone clears the recovery lease + backoff for an attempt the worker made progress on
@@ -181,13 +117,7 @@ func SettleThumbnailRecoveryDone(ctx context.Context, dbh *sql.DB, attemptID, to
 	if dbh == nil {
 		return nil
 	}
-	_, err := dbh.ExecContext(ctx, `
-		UPDATE foghorn.thumbnail_task_assignment
-		SET recovery_leased_until = NULL, recovery_lease_token = NULL,
-		    recovery_attempts = 0, recovery_next_attempt_at = NULL, recovery_last_error = NULL
-		WHERE attempt_id = $1 AND recovery_lease_token = $2
-	`, attemptID, token)
-	return err
+	return foghorndb.New(dbh).SettleThumbnailRecoveryDone(ctx, foghorndb.SettleThumbnailRecoveryDoneParams{AttemptID: attemptID, RecoveryLeaseToken: sql.NullString{String: token, Valid: true}})
 }
 
 // BackoffThumbnailRecovery records a non-progressing re-drive: it bumps recovery_attempts, schedules the next
@@ -198,16 +128,10 @@ func BackoffThumbnailRecovery(ctx context.Context, dbh *sql.DB, attemptID, token
 	if dbh == nil {
 		return nil
 	}
-	_, err := dbh.ExecContext(ctx, `
-		UPDATE foghorn.thumbnail_task_assignment
-		SET recovery_attempts = recovery_attempts + 1,
-		    recovery_next_attempt_at = NOW() + ($2 * INTERVAL '1 second'),
-		    recovery_leased_until = NULL,
-		    recovery_lease_token = NULL,
-		    recovery_last_error = $3
-		WHERE attempt_id = $1 AND recovery_lease_token = $4
-	`, attemptID, int64(backoff.Seconds()), errMsg, token)
-	return err
+	return foghorndb.New(dbh).BackoffThumbnailRecovery(ctx, foghorndb.BackoffThumbnailRecoveryParams{
+		BackoffSeconds: int64(backoff.Seconds()), ErrorMessage: errMsg, AttemptID: attemptID,
+		LeaseToken: sql.NullString{String: token, Valid: true},
+	})
 }
 
 // ThumbnailRecoveryBacklog counts stuck-incomplete attempts that are currently DUE for a re-drive (past staleness,
@@ -217,14 +141,6 @@ func ThumbnailRecoveryBacklog(ctx context.Context, dbh *sql.DB, staleBefore time
 	if dbh == nil {
 		return 0, nil
 	}
-	var n int
-	err := dbh.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM foghorn.thumbnail_task_assignment
-		WHERE status IN ('assigned', 'uploading', 'verifying')
-		  AND expiry > NOW()
-		  AND updated_at < $1
-		  AND (recovery_leased_until IS NULL OR recovery_leased_until <= NOW())
-		  AND (recovery_next_attempt_at IS NULL OR recovery_next_attempt_at <= NOW())
-	`, staleBefore).Scan(&n)
-	return n, err
+	n, err := foghorndb.New(dbh).ThumbnailRecoveryBacklog(ctx, staleBefore)
+	return int(n), err
 }

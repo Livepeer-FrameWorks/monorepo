@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"database/sql"
+	"os"
 	"strings"
 	"testing"
 
@@ -11,8 +12,12 @@ import (
 )
 
 func TestProcessingDispatcherClaimQueryRotatesRetriedQueuedJobs(t *testing.T) {
+	querySource, err := os.ReadFile("../database/queries/processing_jobs.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := "ORDER BY CASE WHEN a.artifact_type = 'clip' THEN 0 ELSE 1 END, pj.updated_at, pj.created_at"
-	if !strings.Contains(processingJobClaimSQL, want) {
+	if !strings.Contains(string(querySource), want) {
 		t.Fatalf("processing job claim query must rotate retried queued jobs with %q", want)
 	}
 }
@@ -58,8 +63,8 @@ func TestProcessingDispatcherProjectsArtifactProcessingStatus(t *testing.T) {
 	}
 	defer db.Close()
 
-	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = \$3::text,\s+error_message = CASE WHEN \$3::text = 'processing'`).
-		WithArgs("art-1", "tenant-1", "processing").
+	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = \$1::text,\s+error_message = CASE WHEN \$1::text = 'processing'`).
+		WithArgs("processing", "art-1", "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	d := NewProcessingDispatcher(ProcessingDispatcherConfig{
@@ -142,7 +147,7 @@ func TestProcessingDispatcherDispatchScansNullOutputProfiles(t *testing.T) {
 		"durable_backend_local",
 	}).AddRow(
 		"job-1", "tenant-1", "artifact-1", "vod", "process", nil,
-		nil, "dispatched", 0, nil, nil, nil, nil, "", "vod_internal", nil, nil,
+		nil, "dispatched", 0, nil, nil, nil, nil, "", "vod_internal", "", nil,
 		false,
 	)
 	mock.ExpectQuery("WITH claimed AS").

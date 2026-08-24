@@ -16,6 +16,7 @@ import (
 	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"frameworks/api_balancing/internal/federation"
 	"frameworks/api_balancing/internal/geo"
 	"frameworks/api_balancing/internal/identity"
@@ -2898,16 +2899,8 @@ func (p *Processor) resolveProcessSource(artifactHash, nodeID string) (string, b
 		return control.OfflineUnavailable, false, nil
 	}
 
-	var jobSourceURL sql.NullString
-	err := db.QueryRowContext(context.Background(), `
-		SELECT source_url
-		FROM foghorn.processing_jobs
-		WHERE artifact_hash = $1
-		  AND status IN ('dispatched', 'processing')
-		  AND source_url IS NOT NULL
-		ORDER BY updated_at DESC
-		LIMIT 1
-	`, artifactHash).Scan(&jobSourceURL)
+	queries := foghorndb.New(db)
+	jobSourceURL, err := queries.LatestActiveProcessingSourceURL(context.Background(), sql.NullString{String: artifactHash, Valid: true})
 	if err == nil && jobSourceURL.Valid && strings.TrimSpace(jobSourceURL.String) != "" {
 		sourceURL := strings.TrimSpace(jobSourceURL.String)
 		p.logger.WithFields(logging.Fields{
@@ -2917,17 +2910,12 @@ func (p *Processor) resolveProcessSource(artifactHash, nodeID string) (string, b
 		}).Info("Resolved process+ source from processing job")
 		return sourceURL, false, nil
 	}
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		p.logger.WithError(err).WithField("artifact_hash", artifactHash).Warn("Failed to look up processing job source")
 		return control.OfflineUnavailable, false, nil
 	}
 
-	var format string
-	err = db.QueryRowContext(context.Background(), `
-		SELECT COALESCE(format,'')
-		FROM foghorn.artifacts
-		WHERE artifact_hash = $1 AND s3_url IS NOT NULL
-	`, artifactHash).Scan(&format)
+	format, err := queries.UploadedArtifactFormat(context.Background(), artifactHash)
 	if err != nil {
 		p.logger.WithError(err).WithField("artifact_hash", artifactHash).Warn("Failed to look up format for process+ source")
 		return control.OfflineNotUploaded, false, nil
@@ -3033,16 +3021,8 @@ func (p *Processor) resolveProcessingProcessConfig(artifactHash string) string {
 	if db == nil || artifactHash == "" {
 		return ""
 	}
-	var processesJSON sql.NullString
-	if err := db.QueryRowContext(context.Background(),
-		`SELECT processes_json::text
-		   FROM foghorn.processing_jobs
-		  WHERE artifact_hash = $1
-		    AND status IN ('queued', 'dispatched', 'processing')
-		  ORDER BY created_at DESC
-		  LIMIT 1`,
-		artifactHash,
-	).Scan(&processesJSON); err != nil {
+	processesJSON, err := foghorndb.New(db).LatestActiveProcessingConfig(context.Background(), sql.NullString{String: artifactHash, Valid: true})
+	if err != nil {
 		return ""
 	}
 	if !processesJSON.Valid {
@@ -3070,14 +3050,8 @@ func (p *Processor) resolveRollingDVRProcessConfig(dvrInternalName string) strin
 	if db == nil || dvrInternalName == "" {
 		return ""
 	}
-	var processesJSON sql.NullString
-	if err := db.QueryRowContext(context.Background(),
-		`SELECT dvr_processes_json
-		   FROM foghorn.artifacts
-		  WHERE internal_name = $1
-		    AND artifact_type = 'dvr'`,
-		dvrInternalName,
-	).Scan(&processesJSON); err != nil {
+	processesJSON, err := foghorndb.New(db).RollingDVRProcessConfig(context.Background(), sql.NullString{String: dvrInternalName, Valid: true})
+	if err != nil {
 		return ""
 	}
 	if !processesJSON.Valid {

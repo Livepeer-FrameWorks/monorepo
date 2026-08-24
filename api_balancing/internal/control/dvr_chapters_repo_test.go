@@ -18,7 +18,7 @@ func chapterRowCols() []string {
 		"chapter_id", "artifact_hash", "mode", "interval_seconds",
 		"start_ms", "end_ms", "is_current",
 		"state", "playback_artifact_hash", "playback_id", "finalize_attempts",
-		"finalize_started_at", "frozen_at",
+		"frozen_at", "finalize_started_at", "finalize_node_id",
 		"last_failure_reason", "reclaim_started_at",
 		"segment_count", "has_gaps",
 		"actual_media_start_ms", "actual_media_end_ms",
@@ -31,7 +31,7 @@ func sampleChapterRow() *sqlmock.Rows {
 		"chap-1", "art-1", "window_sized_chapters", nil,
 		int64(1000), int64(2000), false,
 		"finalized", "pb-hash", "pb-id", int64(2),
-		nil, nil,
+		nil, nil, nil,
 		nil, nil,
 		int64(5), false,
 		nil, nil,
@@ -150,11 +150,11 @@ func TestMarkChapterReclaimed(t *testing.T) {
 	}
 }
 
-// GetChapter scans the full 20-column row, or returns sql.ErrNoRows when absent.
+// GetChapter scans the full generated chapter row, or returns sql.ErrNoRows when absent.
 func TestGetChapter(t *testing.T) {
 	t.Run("found", func(t *testing.T) {
 		mock := setupChapterTest(t)
-		mock.ExpectQuery(`SELECT chapter_id, artifact_hash, mode.*FROM foghorn.dvr_chapters\s+WHERE chapter_id = \$1`).
+		mock.ExpectQuery(`SELECT c.chapter_id, c.artifact_hash, c.mode.*FROM foghorn.dvr_chapters c\s+WHERE c.chapter_id = \$1`).
 			WithArgs("chap-1").
 			WillReturnRows(sampleChapterRow())
 		got, err := GetChapter(context.Background(), "chap-1")
@@ -173,7 +173,7 @@ func TestGetChapter(t *testing.T) {
 	})
 	t.Run("not found", func(t *testing.T) {
 		mock := setupChapterTest(t)
-		mock.ExpectQuery(`SELECT chapter_id.*FROM foghorn.dvr_chapters\s+WHERE chapter_id = \$1`).
+		mock.ExpectQuery(`SELECT c.chapter_id.*FROM foghorn.dvr_chapters c\s+WHERE c.chapter_id = \$1`).
 			WithArgs("missing").
 			WillReturnError(sql.ErrNoRows)
 		if _, err := GetChapter(context.Background(), "missing"); !errors.Is(err, sql.ErrNoRows) {
@@ -187,7 +187,7 @@ func TestGetChapter(t *testing.T) {
 func TestCurrentChapter(t *testing.T) {
 	t.Run("found", func(t *testing.T) {
 		mock := setupChapterTest(t)
-		mock.ExpectQuery(`FROM foghorn.dvr_chapters\s+WHERE artifact_hash = \$1 AND is_current = true`).
+		mock.ExpectQuery(`FROM foghorn.dvr_chapters c\s+WHERE c.artifact_hash = \$1 AND c.is_current = true`).
 			WithArgs("art-1").
 			WillReturnRows(sampleChapterRow())
 		got, err := CurrentChapter(context.Background(), "art-1")
@@ -197,7 +197,7 @@ func TestCurrentChapter(t *testing.T) {
 	})
 	t.Run("none maps to nil,nil", func(t *testing.T) {
 		mock := setupChapterTest(t)
-		mock.ExpectQuery(`WHERE artifact_hash = \$1 AND is_current = true`).
+		mock.ExpectQuery(`WHERE c.artifact_hash = \$1 AND c.is_current = true`).
 			WithArgs("art-1").
 			WillReturnError(sql.ErrNoRows)
 		got, err := CurrentChapter(context.Background(), "art-1")
@@ -211,7 +211,7 @@ func TestCurrentChapter(t *testing.T) {
 // offset, scoped by (mode, interval).
 func TestLatestChapterBefore(t *testing.T) {
 	mock := setupChapterTest(t)
-	mock.ExpectQuery(`FROM foghorn.dvr_chapters\s+WHERE artifact_hash = \$1\s+AND mode = \$2\s+AND COALESCE\(interval_seconds, 0\) = \$3\s+AND start_ms < \$4`).
+	mock.ExpectQuery(`FROM foghorn.dvr_chapters c\s+WHERE c.artifact_hash = \$1\s+AND c.mode = \$2\s+AND COALESCE\(c.interval_seconds, 0\) = \$3\s+AND c.start_ms < \$4`).
 		WithArgs("art-1", "window_sized_chapters", int32(6), int64(5000)).
 		WillReturnRows(sampleChapterRow())
 	got, err := LatestChapterBefore(context.Background(), "art-1", "window_sized_chapters", 6, 5000)
@@ -240,7 +240,7 @@ func TestListChaptersNeedingFinalization(t *testing.T) {
 // the retry wrapper).
 func TestListChaptersNeedingReclaim(t *testing.T) {
 	mock := setupChapterTest(t)
-	mock.ExpectQuery(`FROM foghorn.dvr_chapters\s+WHERE state = 'frozen'`).
+	mock.ExpectQuery(`FROM foghorn.dvr_chapters c\s+WHERE c.state = 'frozen'`).
 		WithArgs(float64((5 * time.Minute).Seconds()), 50).
 		WillReturnRows(sampleChapterRow())
 	out, err := ListChaptersNeedingReclaim(context.Background(), 50, 5*time.Minute)

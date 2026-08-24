@@ -60,25 +60,6 @@ func TestMarshalPayload(t *testing.T) {
 	})
 }
 
-func TestIDArray(t *testing.T) {
-	tests := []struct {
-		name string
-		ids  []string
-		want string
-	}{
-		{"empty", nil, "{}"},
-		{"single", []string{"a"}, "{a}"},
-		{"multi", []string{"a", "b", "c"}, "{a,b,c}"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := idArray(tt.ids); got != tt.want {
-				t.Errorf("idArray(%v) = %q, want %q", tt.ids, got, tt.want)
-			}
-		})
-	}
-}
-
 // Nil payloads are no-ops even before Init wires the DB — background producers
 // can call the Enqueue helpers unconditionally.
 // A nil LIFECYCLE payload is a programmer error (an unresolved event builder) that must NOT silently
@@ -165,10 +146,10 @@ func TestClaimBatch(t *testing.T) {
 
 		mock.ExpectBegin()
 		mock.ExpectQuery(`FROM foghorn\.artifact_event_outbox`).
-			WithArgs("60 seconds", batchSize).
+			WithArgs(lease.Seconds(), batchSize).
 			WillReturnRows(rows)
 		mock.ExpectExec(`SET claimed_at = NOW`).
-			WithArgs(idArray([]string{"id-1"})).
+			WithArgs(`{"id-1"}`).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectCommit()
 
@@ -198,7 +179,7 @@ func TestClaimBatch(t *testing.T) {
 		})
 		mock.ExpectBegin()
 		mock.ExpectQuery(`FROM foghorn\.artifact_event_outbox`).
-			WithArgs("60 seconds", batchSize).
+			WithArgs(lease.Seconds(), batchSize).
 			WillReturnRows(empty)
 		mock.ExpectCommit()
 
@@ -521,10 +502,10 @@ func TestRecordFailurePersistsAttemptsAndReleasesClaim(t *testing.T) {
 	defer mockDB.Close()
 	Init(mockDB, logging.NewLogger(), nil)
 
-	// attempts passed in is 3 (pre-increment); the UPDATE must bind $2 = 4 and set
-	// next_retry_at from the backoff interval ($4).
-	mock.ExpectExec(`SET attempts = \$2, last_error = \$3, claimed_at = NULL, next_retry_at = NOW\(\) \+ \$4::interval`).
-		WithArgs("id-7", 4, "decklog down", "5000 milliseconds").
+	// attempts passed in is 3 (pre-increment); the UPDATE must bind 4 and set
+	// next_retry_at from the typed millisecond duration.
+	mock.ExpectExec(`SET attempts = \$1`).
+		WithArgs(int32(4), "decklog down", float64(5000), "id-7").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	if err := recordFailure(context.Background(), "id-7", 3, errors.New("decklog down"), 5*time.Second); err != nil {
@@ -547,8 +528,8 @@ func TestRecordFailureNilCause(t *testing.T) {
 	defer mockDB.Close()
 	Init(mockDB, logging.NewLogger(), nil)
 
-	mock.ExpectExec(`SET attempts = \$2, last_error = \$3, claimed_at = NULL, next_retry_at = NOW\(\) \+ \$4::interval`).
-		WithArgs("id-8", 2, "", "2000 milliseconds").
+	mock.ExpectExec(`SET attempts = \$1`).
+		WithArgs(int32(2), "", float64(2000), "id-8").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	if err := recordFailure(context.Background(), "id-8", 1, nil, 2*time.Second); err != nil {
@@ -581,10 +562,10 @@ func TestStoreClaimBatchMapsRows(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`FROM foghorn\.artifact_event_outbox`).
-		WithArgs("60 seconds", batchSize).
+		WithArgs(lease.Seconds(), batchSize).
 		WillReturnRows(rows)
 	mock.ExpectExec(`SET claimed_at = NOW`).
-		WithArgs(idArray([]string{"id-a", "id-b"})).
+		WithArgs(`{"id-a","id-b"}`).
 		WillReturnResult(sqlmock.NewResult(0, 2))
 	mock.ExpectCommit()
 
@@ -621,8 +602,8 @@ func TestStoreMarkCompletedAndRecordFailureDelegate(t *testing.T) {
 	mock.ExpectExec(`SET completed_at = NOW`).
 		WithArgs("done-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec(`SET attempts = \$2`).
-		WithArgs("fail-1", 5, "boom", "0 milliseconds").
+	mock.ExpectExec(`SET attempts = \$1`).
+		WithArgs(int32(5), "boom", float64(0), "fail-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	if err := (store{}).MarkCompleted(context.Background(), "done-1"); err != nil {

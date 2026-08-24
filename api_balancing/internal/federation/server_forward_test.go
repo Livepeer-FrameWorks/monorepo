@@ -323,7 +323,7 @@ func TestForwardArtifactCommand_StopDVR_StreamIDMismatchRejected(t *testing.T) {
 	defer db.Close()
 
 	rows := sqlmock.NewRows([]string{"stream_id"}).AddRow("stream-db")
-	mock.ExpectQuery("SELECT stream_id::text FROM foghorn.artifacts").
+	mock.ExpectQuery("SELECT COALESCE\\(stream_id::text, ''\\)::text AS stream_id FROM foghorn.artifacts").
 		WithArgs("dvr-hash-1", "dvr", "tenant-a").
 		WillReturnRows(rows)
 

@@ -18,6 +18,7 @@ import (
 	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"frameworks/api_balancing/internal/federation"
 	"frameworks/api_balancing/internal/state"
 	"frameworks/api_balancing/internal/triggers"
@@ -228,23 +229,13 @@ func Init(
 			}
 
 			// If the artifact has no remaining cached nodes and is synced, reflect that it is now S3-only.
-			var hasAnyNodes bool
-			_ = db.QueryRowContext(ctx, `
-				SELECT EXISTS(
-					SELECT 1 FROM foghorn.artifact_nodes
-					WHERE artifact_hash = $1 AND NOT is_orphaned
-				)
-				`, artifactHash).Scan(&hasAnyNodes)
-			if !hasAnyNodes {
-				_, _ = db.ExecContext(ctx, `
-					UPDATE foghorn.artifacts
-					SET storage_location = CASE
-						WHEN sync_status = 'synced' THEN 's3'
-						ELSE storage_location
-					END,
-					updated_at = NOW()
-					WHERE artifact_hash = $1
-					`, artifactHash)
+			hasAnyNodes, nodeErr := foghorndb.New(db).ArtifactHasActiveNodes(ctx, artifactHash)
+			if nodeErr != nil {
+				logger.WithError(nodeErr).WithField("artifact_hash", artifactHash).Warn("Failed to check remaining artifact nodes")
+			} else if !hasAnyNodes {
+				if markErr := foghorndb.New(db).MarkArtifactS3OnlyWhenUnhosted(ctx, artifactHash); markErr != nil {
+					logger.WithError(markErr).WithField("artifact_hash", artifactHash).Warn("Failed to mark artifact as S3-only")
+				}
 			}
 
 			// Evictions must never be treated as global deletes.
@@ -258,12 +249,12 @@ func Init(
 
 			// Only emit DELETED when the artifact is already soft-deleted in foghorn.artifacts.
 			// This avoids conflating node-local cleanup with user-initiated deletion.
-			var artifactStatus string
-			if err := db.QueryRowContext(ctx, `SELECT status FROM foghorn.artifacts WHERE artifact_hash = $1`, artifactHash).Scan(&artifactStatus); err != nil {
+			artifactStatus, err := foghorndb.New(db).ArtifactLifecycleStatus(ctx, artifactHash)
+			if err != nil {
 				logger.WithError(err).WithField("artifact_hash", artifactHash).Warn("Failed to read artifact status for deletion lifecycle")
 				return
 			}
-			if artifactStatus != "deleted" {
+			if !artifactStatus.Valid || artifactStatus.String != "deleted" {
 				logger.WithFields(logging.Fields{
 					"artifact_hash": artifactHash,
 					"node_id":       nodeID,
@@ -511,121 +502,76 @@ func HandleNodesOverview(c *gin.Context) {
 
 	// Query DB artifacts with vod_metadata
 	if db != nil {
-		artifactRows, err := db.QueryContext(c.Request.Context(), `
-			SELECT
-				a.artifact_hash, a.artifact_type, a.status, a.internal_name, a.tenant_id,
-				a.storage_location, a.sync_status, a.s3_url, a.format, a.size_bytes,
-				a.manifest_path, a.duration_seconds, a.dtsh_synced, a.retention_until,
-				a.created_at, a.updated_at,
-				v.video_codec, v.audio_codec, v.resolution, v.duration_ms, v.bitrate_kbps,
-				v.filename, v.title
-			FROM foghorn.artifacts a
-			LEFT JOIN foghorn.vod_metadata v ON a.artifact_hash = v.artifact_hash
-			WHERE a.status != 'deleted'
-			ORDER BY a.created_at DESC
-			LIMIT 500
-		`)
+		queries := foghorndb.New(db)
+		artifactRows, err := queries.ListAdminArtifacts(c.Request.Context(), 500)
 		if err == nil {
-			defer artifactRows.Close()
 			artifacts := []map[string]interface{}{}
-			for artifactRows.Next() {
-				var hash, artType, status, storageLocation, syncStatus string
-				var internalName, tenantID, s3URL, format, manifestPath, retentionUntil sql.NullString
-				var sizeBytes sql.NullInt64
-				var durationSeconds sql.NullInt32
-				var dtshSynced sql.NullBool
-				var createdAt, updatedAt time.Time
-				var videoCodec, audioCodec, resolution, filename, title sql.NullString
-				var durationMs, bitrateKbps sql.NullInt32
-
-				errScan := artifactRows.Scan(
-					&hash, &artType, &status, &internalName, &tenantID,
-					&storageLocation, &syncStatus, &s3URL, &format, &sizeBytes,
-					&manifestPath, &durationSeconds, &dtshSynced, &retentionUntil,
-					&createdAt, &updatedAt,
-					&videoCodec, &audioCodec, &resolution, &durationMs, &bitrateKbps,
-					&filename, &title,
-				)
-				if errScan != nil {
-					continue
-				}
-
+			for _, row := range artifactRows {
+				hash := row.ArtifactHash
 				art := map[string]interface{}{
 					"artifact_hash":    hash,
-					"artifact_type":    artType,
-					"status":           status,
-					"storage_location": storageLocation,
-					"sync_status":      syncStatus,
-					"dtsh_synced":      dtshSynced.Bool,
-					"created_at":       createdAt.Format(time.RFC3339),
-					"updated_at":       updatedAt.Format(time.RFC3339),
+					"artifact_type":    row.ArtifactType,
+					"status":           row.Status.String,
+					"storage_location": row.StorageLocation.String,
+					"sync_status":      row.SyncStatus.String,
+					"dtsh_synced":      row.DtshSynced.Bool,
+					"created_at":       row.CreatedAt.Time.Format(time.RFC3339),
+					"updated_at":       row.UpdatedAt.Time.Format(time.RFC3339),
 				}
-				if internalName.Valid {
-					art["internal_name"] = internalName.String
+				if row.InternalName.Valid {
+					art["internal_name"] = row.InternalName.String
 				}
-				if tenantID.Valid {
-					art["tenant_id"] = tenantID.String
+				if row.TenantID != "" {
+					art["tenant_id"] = row.TenantID
 				}
-				if s3URL.Valid {
-					art["s3_url"] = s3URL.String
+				if row.S3Url.Valid {
+					art["s3_url"] = row.S3Url.String
 				}
-				if format.Valid {
-					art["format"] = format.String
+				if row.Format.Valid {
+					art["format"] = row.Format.String
 				}
-				if sizeBytes.Valid {
-					art["size_bytes"] = sizeBytes.Int64
+				if row.SizeBytes.Valid {
+					art["size_bytes"] = row.SizeBytes.Int64
 				}
-				if manifestPath.Valid {
-					art["manifest_path"] = manifestPath.String
+				if row.ManifestPath.Valid {
+					art["manifest_path"] = row.ManifestPath.String
 				}
-				if durationSeconds.Valid {
-					art["duration_seconds"] = durationSeconds.Int32
+				if row.DurationSeconds.Valid {
+					art["duration_seconds"] = row.DurationSeconds.Int32
 				}
-				if retentionUntil.Valid {
-					art["retention_until"] = retentionUntil.String
+				if row.RetentionUntil != "" {
+					art["retention_until"] = row.RetentionUntil
 				}
 				// VOD metadata
-				if videoCodec.Valid {
-					art["video_codec"] = videoCodec.String
+				if row.VideoCodec.Valid {
+					art["video_codec"] = row.VideoCodec.String
 				}
-				if audioCodec.Valid {
-					art["audio_codec"] = audioCodec.String
+				if row.AudioCodec.Valid {
+					art["audio_codec"] = row.AudioCodec.String
 				}
-				if resolution.Valid {
-					art["resolution"] = resolution.String
+				if row.Resolution.Valid {
+					art["resolution"] = row.Resolution.String
 				}
-				if durationMs.Valid {
-					art["duration_ms"] = durationMs.Int32
+				if row.DurationMs.Valid {
+					art["duration_ms"] = row.DurationMs.Int32
 				}
-				if bitrateKbps.Valid {
-					art["bitrate_kbps"] = bitrateKbps.Int32
+				if row.BitrateKbps.Valid {
+					art["bitrate_kbps"] = row.BitrateKbps.Int32
 				}
-				if filename.Valid {
-					art["filename"] = filename.String
+				if row.Filename.Valid {
+					art["filename"] = row.Filename.String
 				}
-				if title.Valid {
-					art["title"] = title.String
+				if row.Title.Valid {
+					art["title"] = row.Title.String
 				}
 
 				// Query nodes hosting this artifact
-				art["nodes"] = func() []string {
-					nodeRows, errQuery := db.QueryContext(context.Background(), `
-						SELECT node_id FROM foghorn.artifact_nodes
-						WHERE artifact_hash = $1 AND NOT is_orphaned
-					`, hash)
-					if errQuery != nil {
-						return nil
-					}
-					defer func() { _ = nodeRows.Close() }()
-					var nodeIDs []string
-					for nodeRows.Next() {
-						var nodeID string
-						if errScan := nodeRows.Scan(&nodeID); errScan == nil {
-							nodeIDs = append(nodeIDs, nodeID)
-						}
-					}
-					return nodeIDs
-				}()
+				nodes, nodeErr := queries.ListActiveArtifactNodes(context.Background(), hash)
+				if nodeErr == nil {
+					art["nodes"] = nodes
+				} else {
+					art["nodes_error"] = nodeErr.Error()
+				}
 
 				artifacts = append(artifacts, art)
 			}
@@ -636,63 +582,37 @@ func HandleNodesOverview(c *gin.Context) {
 		}
 
 		// Query processing jobs
-		jobRows, err := db.QueryContext(c.Request.Context(), `
-			SELECT
-				job_id, tenant_id, artifact_hash, job_type, status, progress,
-				use_gateway, processing_node_id, routing_reason, error_message, retry_count,
-				created_at, started_at, completed_at
-			FROM foghorn.processing_jobs
-			WHERE status NOT IN ('completed', 'failed') OR created_at > NOW() - INTERVAL '1 hour'
-			ORDER BY created_at DESC
-			LIMIT 100
-		`)
+		jobRows, err := queries.ListRecentProcessingJobs(c.Request.Context(), 100)
 		if err == nil {
-			defer jobRows.Close()
 			jobs := []map[string]interface{}{}
-			for jobRows.Next() {
-				var jobID, tenantID, jobType, status string
-				var artifactHash, processingNode, routingReason, errorMessage sql.NullString
-				var progress, retryCount int
-				var useGateway bool
-				var createdAt time.Time
-				var startedAt, completedAt sql.NullTime
-
-				errScan := jobRows.Scan(
-					&jobID, &tenantID, &artifactHash, &jobType, &status, &progress,
-					&useGateway, &processingNode, &routingReason, &errorMessage, &retryCount,
-					&createdAt, &startedAt, &completedAt,
-				)
-				if errScan != nil {
-					continue
-				}
-
+			for _, row := range jobRows {
 				job := map[string]interface{}{
-					"job_id":      jobID,
-					"tenant_id":   tenantID,
-					"job_type":    jobType,
-					"status":      status,
-					"progress":    progress,
-					"use_gateway": useGateway,
-					"retry_count": retryCount,
-					"created_at":  createdAt.Format(time.RFC3339),
+					"job_id":      row.JobID,
+					"tenant_id":   row.TenantID,
+					"job_type":    row.JobType,
+					"status":      row.Status.String,
+					"progress":    int(row.Progress.Int32),
+					"use_gateway": row.UseGateway.Bool,
+					"retry_count": int(row.RetryCount.Int32),
+					"created_at":  row.CreatedAt.Time.Format(time.RFC3339),
 				}
-				if artifactHash.Valid {
-					job["artifact_hash"] = artifactHash.String
+				if row.ArtifactHash.Valid {
+					job["artifact_hash"] = row.ArtifactHash.String
 				}
-				if processingNode.Valid {
-					job["processing_node"] = processingNode.String
+				if row.ProcessingNodeID.Valid {
+					job["processing_node"] = row.ProcessingNodeID.String
 				}
-				if routingReason.Valid {
-					job["routing_reason"] = routingReason.String
+				if row.RoutingReason.Valid {
+					job["routing_reason"] = row.RoutingReason.String
 				}
-				if errorMessage.Valid {
-					job["error_message"] = errorMessage.String
+				if row.ErrorMessage.Valid {
+					job["error_message"] = row.ErrorMessage.String
 				}
-				if startedAt.Valid {
-					job["started_at"] = startedAt.Time.Format(time.RFC3339)
+				if row.StartedAt.Valid {
+					job["started_at"] = row.StartedAt.Time.Format(time.RFC3339)
 				}
-				if completedAt.Valid {
-					job["completed_at"] = completedAt.Time.Format(time.RFC3339)
+				if row.CompletedAt.Valid {
+					job["completed_at"] = row.CompletedAt.Time.Format(time.RFC3339)
 				}
 
 				jobs = append(jobs, job)

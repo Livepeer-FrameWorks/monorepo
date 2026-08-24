@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"frameworks/api_balancing/internal/state"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -91,15 +92,9 @@ func processRecordDVRSegment(
 	}
 
 	if db != nil && nodeID != "" {
-		if _, err := db.ExecContext(ctx, `
-			INSERT INTO foghorn.artifact_nodes
-				(artifact_hash, node_id, last_seen_at, is_orphaned, cached_at)
-			VALUES ($1, $2, NOW(), false, NOW())
-			ON CONFLICT (artifact_hash, node_id) DO UPDATE SET
-				last_seen_at = NOW(),
-				is_orphaned = false,
-				cached_at = COALESCE(foghorn.artifact_nodes.cached_at, NOW())
-		`, dvrHash, nodeID); err != nil {
+		if err := foghorndb.New(db).TouchDVRRecordingNode(ctx, foghorndb.TouchDVRRecordingNodeParams{
+			ArtifactHash: dvrHash, NodeID: nodeID,
+		}); err != nil {
 			logger.WithError(err).WithFields(logging.Fields{
 				"dvr_hash": dvrHash,
 				"node_id":  nodeID,
@@ -384,15 +379,10 @@ func processEvictableSegmentsRequest(
 // Both are needed to construct the S3 prefix for the segment.
 func resolveDVRTenantAndStream(ctx context.Context, dvrHash string, logger logging.Logger) (tenantID, streamName string, ok bool) {
 	if db != nil {
-		var t, s sql.NullString
-		err := db.QueryRowContext(ctx, `
-			SELECT tenant_id::text, stream_internal_name
-			  FROM foghorn.artifacts
-			 WHERE artifact_hash = $1 AND artifact_type = 'dvr'
-		`, dvrHash).Scan(&t, &s)
+		row, err := foghorndb.New(db).GetDVRTenantAndStream(ctx, dvrHash)
 		if err == nil {
-			tenantID = strings.TrimSpace(t.String)
-			streamName = strings.TrimSpace(s.String)
+			tenantID = strings.TrimSpace(row.TenantID)
+			streamName = strings.TrimSpace(row.StreamInternalName.String)
 			if tenantID != "" && streamName != "" {
 				return tenantID, streamName, true
 			}
@@ -430,12 +420,8 @@ func dvrEffectiveWindowSeconds(ctx context.Context, dvrHash string) int {
 	if db == nil {
 		return 0
 	}
-	var window sql.NullInt32
-	if err := db.QueryRowContext(ctx, `
-		SELECT dvr_window_seconds
-		  FROM foghorn.artifacts
-		 WHERE artifact_hash = $1 AND artifact_type = 'dvr'
-	`, dvrHash).Scan(&window); err != nil {
+	window, err := foghorndb.New(db).GetDVREffectiveWindowSeconds(ctx, dvrHash)
+	if err != nil {
 		return 0
 	}
 	if !window.Valid || window.Int32 <= 0 {

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -89,29 +90,7 @@ func fillFileArtifactResolve(ctx context.Context, req *ipcpb.RelayResolveRequest
 	// minting in the synced branch, cross-cluster fallback). The
 	// peer-relay branch is DB + grant only (no S3) — gating that on
 	// s3Client would defeat the no-S3-wait intent.
-	var (
-		s3URL            string
-		sizeBytes        sql.NullInt64
-		format           sql.NullString
-		dtshSynced       sql.NullBool
-		streamName       sql.NullString
-		syncStatus       sql.NullString
-		originClusterID  sql.NullString
-		storageClusterID sql.NullString
-		tenantID         sql.NullString
-		artifactType     sql.NullString
-		activeDtshKey    sql.NullString
-		durableLocal     sql.NullBool
-	)
-	err := db.QueryRowContext(ctx, `
-		SELECT COALESCE(s3_url,''), size_bytes, format, dtsh_synced, stream_internal_name, sync_status,
-		       origin_cluster_id, storage_cluster_id, tenant_id, artifact_type, COALESCE(active_dtsh_key,''),
-		       COALESCE(durable_backend_local, false)
-		FROM foghorn.artifacts
-		WHERE artifact_hash = $1 AND status != 'deleted'
-		LIMIT 1
-	`, req.GetAssetHash()).Scan(&s3URL, &sizeBytes, &format, &dtshSynced, &streamName, &syncStatus,
-		&originClusterID, &storageClusterID, &tenantID, &artifactType, &activeDtshKey, &durableLocal)
+	row, err := foghorndb.New(db).GetRelayArtifact(ctx, req.GetAssetHash())
 	if errors.Is(err, sql.ErrNoRows) {
 		// No local row. For vod/clip the front door (STREAM_SOURCE and /play
 		// both via the shared resolve→authorize→adopt path) writes the
@@ -128,11 +107,18 @@ func fillFileArtifactResolve(ctx context.Context, req *ipcpb.RelayResolveRequest
 		logger.WithError(err).WithField("asset_hash", req.GetAssetHash()).Warn("RelayResolve DB lookup failed")
 		return
 	}
+	s3URL, sizeBytes, format, dtshSynced := row.S3Url, row.SizeBytes, row.Format, row.DtshSynced
+	streamName, syncStatus := row.StreamInternalName, row.SyncStatus
+	originClusterID, storageClusterID := row.OriginClusterID, row.StorageClusterID
+	tenantID := row.TenantID
+	artifactType := row.ArtifactType
+	activeDtshKey := row.ActiveDtshKey
+	durableLocal := row.DurableBackendLocal
 	// TENANT BINDING: a presigned durable-storage URL is bound to the AUTHENTICATED requesting node's identity.
 	// A node dedicated to another tenant must not obtain this tenant's URL merely by knowing the artifact hash.
 	// Fail as SOURCE_MISSING (not a distinct error) so the caller learns nothing about the artifact's existence.
-	if !nodeMayServeTenant(nodeID, tenantID.String) {
-		logger.WithFields(logging.Fields{"asset_hash": req.GetAssetHash(), "node_id": nodeID, "artifact_tenant": tenantID.String}).
+	if !nodeMayServeTenant(nodeID, tenantID) {
+		logger.WithFields(logging.Fields{"asset_hash": req.GetAssetHash(), "node_id": nodeID, "artifact_tenant": tenantID}).
 			Warn("RelayResolve denied: requesting node is not entitled to this artifact's tenant")
 		return
 	}
@@ -157,7 +143,7 @@ func fillFileArtifactResolve(ctx context.Context, req *ipcpb.RelayResolveRequest
 		if peerCluster != "" {
 			// nil authorizeRedirect: already-adopted row, allowlist-checked at
 			// adopt time; RelayResolve has no requesting-tenant peer set here.
-			fillCrossClusterArtifact(ctx, req, resp, logger, peerCluster, tenantID.String, artifactType.String, nil)
+			fillCrossClusterArtifact(ctx, req, resp, logger, peerCluster, tenantID, artifactType, nil)
 		}
 		return
 	}
@@ -199,7 +185,7 @@ func fillFileArtifactResolve(ctx context.Context, req *ipcpb.RelayResolveRequest
 	origin := strings.TrimSpace(originClusterID.String)
 	originIsLocal := origin == "" || (localCluster != "" && origin == localCluster)
 	_, localParseErr := s3Client.ParseLocalS3URL(s3URL)
-	locallyBacked := durableLocal.Bool || (localParseErr == nil && originIsLocal)
+	locallyBacked := durableLocal || (localParseErr == nil && originIsLocal)
 	if !locallyBacked {
 		if fillPeerRelayFromLocalOrigin(ctx, req, resp, sizeBytes, format, streamName, logger) {
 			return
@@ -209,7 +195,7 @@ func fillFileArtifactResolve(ctx context.Context, req *ipcpb.RelayResolveRequest
 			peerCluster = strings.TrimSpace(originClusterID.String)
 		}
 		if peerCluster != "" {
-			fillCrossClusterArtifact(ctx, req, resp, logger, peerCluster, tenantID.String, artifactType.String, nil)
+			fillCrossClusterArtifact(ctx, req, resp, logger, peerCluster, tenantID, artifactType, nil)
 		} else {
 			logger.WithField("asset_hash", req.GetAssetHash()).Debug("RelayResolve: synced row has a non-local s3_url and no peer cluster; not presigning locally")
 		}
@@ -237,7 +223,7 @@ func fillFileArtifactResolve(ctx context.Context, req *ipcpb.RelayResolveRequest
 	// conditional promotion → active_dtsh_key flip). The relay only ever mints a READ URL: when the index is
 	// synced, a GET for the version-addressed key (legacy rows fall back to the co-located <media>.dtsh).
 	if dtshSynced.Valid && dtshSynced.Bool {
-		if k := strings.TrimSpace(activeDtshKey.String); k != "" {
+		if k := strings.TrimSpace(activeDtshKey); k != "" {
 			if u, mintErr := generateDtshPresignedGETForKey(k, relayURLTTL); mintErr == nil {
 				resp.DtshPresignedGet = u
 			}
@@ -262,18 +248,8 @@ func fillUploadResolve(ctx context.Context, req *ipcpb.RelayResolveRequest, resp
 	}
 	// Uploaded VOD ingest metadata lives in foghorn.vod_metadata, keyed by
 	// the same artifact_hash assigned at multipart-upload finalization.
-	var (
-		s3Key     sql.NullString
-		sizeBytes sql.NullInt64
-		tenantID  sql.NullString
-	)
-	err := db.QueryRowContext(ctx, `
-		SELECT vm.s3_key, a.size_bytes, a.tenant_id
-		FROM foghorn.vod_metadata vm
-		LEFT JOIN foghorn.artifacts a ON a.artifact_hash = vm.artifact_hash
-		WHERE vm.artifact_hash = $1
-		LIMIT 1
-	`, req.GetAssetHash()).Scan(&s3Key, &sizeBytes, &tenantID)
+	row, err := foghorndb.New(db).GetRelayVodMetadata(ctx, req.GetAssetHash())
+	s3Key, sizeBytes, tenantID := row.S3Key, row.SizeBytes, row.TenantID
 	if errors.Is(err, sql.ErrNoRows) || !s3Key.Valid || s3Key.String == "" {
 		// Direct-dial: no local upload metadata. Source artifact for
 		// the processing input might be on a peer cluster — federate
@@ -354,18 +330,8 @@ func fillPeerRelayFromLocalOrigin(
 	// produces a brief false negative; viewer falls back to S3 (synced)
 	// or 503 (unsynced), and the next attempt recovers as soon as the
 	// heartbeat resumes.
-	err := db.QueryRowContext(ctx, `
-		SELECT an.node_id, COALESCE(NULLIF(an.base_url, ''), no.base_url, '')
-		FROM foghorn.artifact_nodes an
-		LEFT JOIN foghorn.node_outputs no ON no.node_id = an.node_id
-		WHERE an.artifact_hash = $1
-		  AND an.role = 'origin'
-		  AND an.is_complete = true
-		  AND an.is_orphaned = false
-		  AND an.last_seen_at > NOW() - INTERVAL '90 seconds'
-		ORDER BY an.last_seen_at DESC
-		LIMIT 1
-	`, req.GetAssetHash()).Scan(&originNodeID, &baseURL)
+	row, err := foghorndb.New(db).GetFreshRelayOriginNode(ctx, req.GetAssetHash())
+	originNodeID, baseURL = row.NodeID, row.BaseUrl
 	if errors.Is(err, sql.ErrNoRows) {
 		return false
 	}

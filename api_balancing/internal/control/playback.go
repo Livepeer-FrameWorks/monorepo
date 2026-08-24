@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/balancer"
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"frameworks/api_balancing/internal/geo"
 	"frameworks/api_balancing/internal/state"
 
@@ -116,14 +117,11 @@ func chapterOriginIDForArtifact(ctx context.Context, artifactHash string) string
 	if db == nil || artifactHash == "" {
 		return ""
 	}
-	var originType, originID sql.NullString
-	if err := db.QueryRowContext(ctx, `
-		SELECT origin_type, origin_id
-		  FROM foghorn.artifacts
-		 WHERE artifact_hash = $1
-	`, artifactHash).Scan(&originType, &originID); err != nil {
+	row, err := foghorndb.New(db).GetArtifactOrigin(ctx, artifactHash)
+	if err != nil {
 		return ""
 	}
+	originType, originID := row.OriginType, row.OriginID
 	if originType.Valid && originType.String == "dvr_chapter" && originID.Valid {
 		return originID.String
 	}
@@ -554,31 +552,19 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 	var sizeBytes sql.NullInt64
 	var createdAt sql.NullTime
 	var format sql.NullString
-	var storageLocation sql.NullString
-	var syncStatus sql.NullString
+	var storageLocation string
+	var syncStatus string
 	var hasThumbnails bool
-	var authoritativeCluster sql.NullString
+	var authoritativeCluster string
 	// The thumbnail SERVING cluster is DISTINCT from the artifact's byte-storage cluster: a thumbnail is projected to
 	// the tenant's official-durable cluster, which may differ from where the bytes live (BYOC/cross-cell). Read it
 	// separately so the thumbnail URL points at the Chandler that actually holds it, while authoritativeCluster stays
 	// the byte-placement / authorization cluster. NULL falls back to storage/origin (legacy rows).
 	var thumbnailServingCluster sql.NullString
 
-	err := deps.DB.QueryRowContext(ctx, `
-		SELECT COALESCE(internal_name, ''),
-		       status,
-		       duration_seconds,
-		       size_bytes,
-		       created_at,
-		       format,
-		       COALESCE(storage_location, ''),
-		       COALESCE(sync_status, ''),
-		       COALESCE(has_thumbnails, false),
-		       COALESCE(storage_cluster_id, origin_cluster_id),
-		       COALESCE(thumbnail_serving_cluster_id, storage_cluster_id, origin_cluster_id)
-		FROM foghorn.artifacts
-		WHERE artifact_hash = $1 AND artifact_type = $2 AND status != 'deleted' AND tenant_id = $3
-	`, artifactResp.ArtifactHash, artifactType, tenantID).Scan(&internalName, &status, &durationSeconds, &sizeBytes, &createdAt, &format, &storageLocation, &syncStatus, &hasThumbnails, &authoritativeCluster, &thumbnailServingCluster)
+	row, err := foghorndb.New(deps.DB).GetPlaybackArtifact(ctx, foghorndb.GetPlaybackArtifactParams{
+		ArtifactHash: artifactResp.ArtifactHash, ArtifactType: artifactType, TenantID: tenantID,
+	})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			if originClusterID != "" && originClusterID != deps.LocalClusterID && deps.FedClient != nil {
@@ -588,6 +574,17 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 		}
 		return nil, fmt.Errorf("failed to query artifact: %w", err)
 	}
+	internalName = row.InternalName
+	status = row.Status.String
+	durationSeconds = sql.NullInt64{Int64: int64(row.DurationSeconds.Int32), Valid: row.DurationSeconds.Valid}
+	sizeBytes = row.SizeBytes
+	createdAt = row.CreatedAt
+	format = row.Format
+	storageLocation = row.StorageLocation
+	syncStatus = row.SyncStatus
+	hasThumbnails = row.HasThumbnails
+	authoritativeCluster = row.AuthoritativeCluster
+	thumbnailServingCluster = sql.NullString{String: row.ThumbnailServingCluster, Valid: row.ThumbnailServingCluster != ""}
 
 	// Front-door reauthorization: an adopted cross-cluster pointer row persists
 	// in foghorn.artifacts after the tenant's peer set changes, and the serve
@@ -596,8 +593,8 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 	// origin_cluster_id) against the cluster_peers Commodore enriches per
 	// request, so a revoked peer stops serving on the next resolve. Local bytes
 	// always pass; the federation branch re-checks the origin/redirect downstream.
-	if !AuthoritativeClusterServable(authoritativeCluster.String, allowedClusters) {
-		return nil, fmt.Errorf("%s authoritative cluster %q not authorized for tenant", contentType, strings.TrimSpace(authoritativeCluster.String))
+	if !AuthoritativeClusterServable(authoritativeCluster, allowedClusters) {
+		return nil, fmt.Errorf("%s authoritative cluster %q not authorized for tenant", contentType, strings.TrimSpace(authoritativeCluster))
 	}
 
 	// Warm-node routing authority is the in-memory inventory ONLY: FindNodesByArtifactHash excludes
@@ -624,8 +621,8 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 		// storage-capable edge and let Mist STREAM_SOURCE → Helmsman
 		// relay → block cache materialize the bytes on first viewer
 		// request.
-		location := strings.ToLower(strings.TrimSpace(storageLocation.String))
-		sync := strings.ToLower(strings.TrimSpace(syncStatus.String))
+		location := strings.ToLower(strings.TrimSpace(storageLocation))
+		sync := strings.ToLower(strings.TrimSpace(syncStatus))
 		if sync == "synced" || location == "s3" {
 			lbctx := context.WithValue(ctx, ctxkeys.KeyCapability, "edge,storage")
 			if tenantID != "" {
@@ -1123,36 +1120,32 @@ type dvrThumbnailTarget struct {
 	hasThumbnails        bool
 }
 
-type queryRower interface {
-	QueryRowContext(context.Context, string, ...any) *sql.Row
-}
-
-func resolveDVRThumbnailTarget(ctx context.Context, conn queryRower, token string) (dvrThumbnailTarget, error) {
+func resolveDVRThumbnailTarget(ctx context.Context, conn foghorndb.DBTX, token string) (dvrThumbnailTarget, error) {
 	var target dvrThumbnailTarget
 	if conn == nil || token == "" {
 		return target, sql.ErrNoRows
 	}
 
-	err := conn.QueryRowContext(ctx, `
-		SELECT artifact_hash, tenant_id::text, COALESCE(storage_cluster_id, origin_cluster_id), COALESCE(has_thumbnails, false)
-		  FROM foghorn.artifacts
-		 WHERE internal_name = $1
-		   AND artifact_type = 'dvr'
-	`, token).Scan(&target.artifactHash, &target.tenantID, &target.authoritativeCluster, &target.hasThumbnails)
+	q := foghorndb.New(conn)
+	row, err := q.GetDVRThumbnailTargetByInternalName(ctx, sql.NullString{String: token, Valid: true})
 	if err == nil {
+		target = dvrThumbnailTarget{
+			artifactHash: row.ArtifactHash, tenantID: sql.NullString{String: row.TenantID, Valid: true},
+			authoritativeCluster: sql.NullString{String: row.AuthoritativeCluster, Valid: row.AuthoritativeCluster != ""}, hasThumbnails: row.HasThumbnails,
+		}
 		return target, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return target, err
 	}
 
-	err = conn.QueryRowContext(ctx, `
-		SELECT a.artifact_hash, a.tenant_id::text, COALESCE(a.storage_cluster_id, a.origin_cluster_id), COALESCE(a.has_thumbnails, false)
-		  FROM foghorn.dvr_chapters c
-		  JOIN foghorn.artifacts a ON a.artifact_hash = c.artifact_hash
-		 WHERE c.chapter_id = $1
-		   AND a.artifact_type = 'dvr'
-	`, token).Scan(&target.artifactHash, &target.tenantID, &target.authoritativeCluster, &target.hasThumbnails)
+	chapter, err := q.GetDVRThumbnailTargetByChapterID(ctx, token)
+	if err == nil {
+		target = dvrThumbnailTarget{
+			artifactHash: chapter.ArtifactHash, tenantID: sql.NullString{String: chapter.TenantID, Valid: true},
+			authoritativeCluster: sql.NullString{String: chapter.AuthoritativeCluster, Valid: chapter.AuthoritativeCluster != ""}, hasThumbnails: chapter.HasThumbnails,
+		}
+	}
 	return target, err
 }
 

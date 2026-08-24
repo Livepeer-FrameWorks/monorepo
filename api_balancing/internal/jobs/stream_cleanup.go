@@ -8,6 +8,7 @@ import (
 
 	"frameworks/api_balancing/internal/artifacts"
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/database/foghorndb"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
@@ -149,37 +150,18 @@ type streamCleanupItem struct {
 // database belongs to ONE cell, so every obligation here is this cell's to sweep — no cross-cell ownership predicate.
 // SKIP LOCKED + the lease keep HA replicas from double-sweeping ONE obligation; the token fences its settlement.
 func (j *StreamCleanupJob) claimBatch(ctx context.Context) ([]streamCleanupItem, error) {
-	rows, err := j.db.QueryContext(ctx, `
-		UPDATE foghorn.stream_cleanup_obligation o
-		SET leased_until = NOW() + ($2 * INTERVAL '1 second'),
-		    lease_token = gen_random_uuid()::text
-		FROM (
-			SELECT oo.asset_key
-			  FROM foghorn.stream_cleanup_obligation oo
-			 WHERE oo.status = 'pending'
-			   AND oo.next_attempt_at <= NOW()
-			   AND (oo.leased_until IS NULL OR oo.leased_until <= NOW())
-			 ORDER BY oo.next_attempt_at
-			 LIMIT $1
-			 FOR UPDATE SKIP LOCKED
-		) sel
-		WHERE o.asset_key = sel.asset_key
-		RETURNING o.asset_key, o.tenant_id, COALESCE(o.backend_id, ''), o.lease_token`,
-		j.batchSize, int64(j.leaseTTL.Seconds()))
+	rows, err := foghorndb.New(j.db).ClaimStreamCleanupObligations(ctx, foghorndb.ClaimStreamCleanupObligationsParams{
+		LeaseSeconds: int64(j.leaseTTL.Seconds()), BatchLimit: int32(j.batchSize),
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
 	var items []streamCleanupItem
-	for rows.Next() {
-		var it streamCleanupItem
-		if scanErr := rows.Scan(&it.assetKey, &it.tenantID, &it.backendID, &it.token); scanErr != nil {
-			return nil, scanErr
-		}
-		items = append(items, it)
+	for _, row := range rows {
+		items = append(items, streamCleanupItem{assetKey: row.AssetKey, tenantID: row.TenantID,
+			backendID: row.BackendID, token: row.LeaseToken.String})
 	}
-	return items, rows.Err()
+	return items, nil
 }
 
 // settleObligation sweeps the deleted asset's thumbnails from THIS cell's local store, then either FINALIZES the
@@ -225,18 +207,11 @@ func (j *StreamCleanupJob) settleObligation(it streamCleanupItem) (progressed bo
 
 	// Finalize ONLY at/after the max-copy window (the resurrection-reclaiming SECOND sweep), token-fenced + DB-clock
 	// gated. A lost lease or a pre-window row matches 0 rows here.
-	finRes, fErr := tx.ExecContext(txCtx, `
-		UPDATE foghorn.stream_cleanup_obligation
-		SET status = 'cleaned', cleaned_at = NOW()
-		WHERE asset_key = $1 AND lease_token = $2 AND status = 'pending'
-		  AND enqueued_at + ($3 * INTERVAL '1 second') <= NOW()`,
-		it.assetKey, it.token, windowSecs)
+	n, fErr := foghorndb.New(tx).FinalizeStreamCleanupObligation(txCtx, foghorndb.FinalizeStreamCleanupObligationParams{
+		AssetKey: it.assetKey, LeaseToken: sql.NullString{String: it.token, Valid: true}, WindowSeconds: windowSecs,
+	})
 	if fErr != nil {
 		return fail("finalize obligation: " + fErr.Error())
-	}
-	n, raErr := finRes.RowsAffected()
-	if raErr != nil {
-		return fail("finalize rows-affected: " + raErr.Error())
 	}
 
 	if n > 0 {
@@ -248,13 +223,10 @@ func (j *StreamCleanupJob) settleObligation(it streamCleanupItem) (progressed bo
 	} else {
 		// Pre-window (or lease lost): the first sweep is done. Arm the delayed second sweep at enqueued_at + window and
 		// release the lease. Token-fenced: a lost lease matches 0 rows here — harmless.
-		if _, rErr := tx.ExecContext(txCtx, `
-			UPDATE foghorn.stream_cleanup_obligation
-			SET first_swept_at = COALESCE(first_swept_at, NOW()),
-			    next_attempt_at = enqueued_at + ($3 * INTERVAL '1 second'),
-			    leased_until = NULL, lease_token = NULL, attempts = 0, last_error = NULL
-			WHERE asset_key = $1 AND lease_token = $2 AND status = 'pending'`,
-			it.assetKey, it.token, windowSecs); rErr != nil {
+		if rErr := foghorndb.New(tx).ArmStreamCleanupSecondSweep(txCtx, foghorndb.ArmStreamCleanupSecondSweepParams{
+			WindowSeconds: windowSecs, AssetKey: it.assetKey,
+			LeaseToken: sql.NullString{String: it.token, Valid: true},
+		}); rErr != nil {
 			return fail("arm second sweep: " + rErr.Error())
 		}
 	}
@@ -272,13 +244,10 @@ func (j *StreamCleanupJob) settleObligation(it streamCleanupItem) (progressed bo
 func (j *StreamCleanupJob) recordFailure(it streamCleanupItem, msg string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if _, upErr := j.db.ExecContext(ctx, `
-		UPDATE foghorn.stream_cleanup_obligation
-		SET attempts = attempts + 1,
-		    next_attempt_at = NOW() + (LEAST(attempts + 1, 30) * $3 * INTERVAL '1 second'),
-		    leased_until = NULL, lease_token = NULL, last_error = $4
-		WHERE asset_key = $1 AND lease_token = $2`,
-		it.assetKey, it.token, int64(j.backoffBase.Seconds()), msg); upErr != nil {
+	if upErr := foghorndb.New(j.db).FailStreamCleanupObligation(ctx, foghorndb.FailStreamCleanupObligationParams{
+		BackoffSeconds: int64(j.backoffBase.Seconds()), LastError: sql.NullString{String: msg, Valid: true},
+		AssetKey: it.assetKey, LeaseToken: sql.NullString{String: it.token, Valid: true},
+	}); upErr != nil {
 		j.logger.WithError(upErr).WithField("asset_key", it.assetKey).Debug("Failed to record stream cleanup retry")
 	}
 }

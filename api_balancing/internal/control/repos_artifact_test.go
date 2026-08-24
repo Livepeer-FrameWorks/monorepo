@@ -57,13 +57,14 @@ func TestUpsertArtifacts_InsertsWithFKGuard(t *testing.T) {
 		WithArgs("hash-1", "", int64(0), int64(0)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	// Prior read locks the row and drives transition detection (not present yet).
+	expectPlacementParentLock(mock)
 	mock.ExpectQuery("SELECT role, is_orphaned, is_complete FROM foghorn.artifact_nodes.*FOR UPDATE").
 		WithArgs("hash-1", "node-1").
 		WillReturnError(sql.ErrNoRows)
 	// INSERT with WHERE EXISTS FK guard, RETURNING the inserted flag + row role/completeness.
 	mock.ExpectQuery("INSERT INTO foghorn.artifact_nodes.*WHERE EXISTS.*SELECT 1 FROM foghorn.artifacts.*RETURNING").
 		WithArgs("hash-1", "node-1", "/data/clip.mp4", int64(1024), int64(0), int64(0), int64(0), int64(0), "cache", false).
-		WillReturnRows(sqlmock.NewRows([]string{"inserted", "role", "is_complete"}).AddRow(true, "cache", false))
+		WillReturnRows(sqlmock.NewRows([]string{"role", "is_complete"}).AddRow("cache", false))
 	// Newly present → durable GAINED in the same transaction.
 	expectNodeCopyOutbox(mock, "hash-1")
 	// Mark stale (no rows orphaned → no LOST).
@@ -96,12 +97,13 @@ func TestUpsertArtifacts_RetriesDeadlock(t *testing.T) {
 	mock.ExpectExec("UPDATE foghorn.artifacts SET").
 		WithArgs("hash-1", "", int64(0), int64(0)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	expectPlacementParentLock(mock)
 	mock.ExpectQuery("SELECT role, is_orphaned, is_complete FROM foghorn.artifact_nodes.*FOR UPDATE").
 		WithArgs("hash-1", "node-1").
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("INSERT INTO foghorn.artifact_nodes.*WHERE EXISTS.*SELECT 1 FROM foghorn.artifacts.*RETURNING").
 		WithArgs("hash-1", "node-1", "", int64(0), int64(0), int64(0), int64(0), int64(0), "cache", false).
-		WillReturnRows(sqlmock.NewRows([]string{"inserted", "role", "is_complete"}).AddRow(true, "cache", false))
+		WillReturnRows(sqlmock.NewRows([]string{"role", "is_complete"}).AddRow("cache", false))
 	expectNodeCopyOutbox(mock, "hash-1")
 	mock.ExpectQuery("UPDATE foghorn.artifact_nodes.*SET is_orphaned = true.*RETURNING artifact_hash, role").
 		WithArgs("node-1").
@@ -126,6 +128,7 @@ func TestUpsertArtifacts_RollbackOnError(t *testing.T) {
 	mock.ExpectExec("UPDATE foghorn.artifacts SET").
 		WithArgs("hash-1", "", int64(0), int64(0)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	expectPlacementParentLock(mock)
 	mock.ExpectQuery("SELECT role, is_orphaned, is_complete FROM foghorn.artifact_nodes.*FOR UPDATE").
 		WithArgs("hash-1", "node-1").
 		WillReturnError(sql.ErrNoRows)
@@ -162,7 +165,7 @@ func TestSetSyncStatus_Updates(t *testing.T) {
 func TestSetSyncStatus_EmptyURLPreservesExisting(t *testing.T) {
 	repo, mock := setupRepoTest(t)
 
-	mock.ExpectExec(`UPDATE foghorn.artifacts.*SET sync_status = 'synced',\s+s3_url = COALESCE\(NULLIF\(\$2, ''\), s3_url\)`).
+	mock.ExpectExec(`UPDATE foghorn.artifacts.*SET sync_status = 'synced',\s+s3_url = COALESCE\(NULLIF\(\$2::text, ''\), s3_url\)`).
 		WithArgs("hash-1", "").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
@@ -190,12 +193,13 @@ func TestAddCachedNode(t *testing.T) {
 	repo, mock := setupRepoTest(t)
 
 	mock.ExpectBegin()
+	expectPlacementParentLock(mock)
 	mock.ExpectQuery("SELECT role, is_orphaned, is_complete FROM foghorn.artifact_nodes.*FOR UPDATE").
 		WithArgs("hash-1", "node-1").
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("INSERT INTO foghorn.artifact_nodes.*ON CONFLICT.*DO UPDATE.*RETURNING").
 		WithArgs("hash-1", "node-1", "", int64(0)).
-		WillReturnRows(sqlmock.NewRows([]string{"inserted", "size_bytes"}).AddRow(true, nil))
+		WillReturnRows(sqlmock.NewRows([]string{"size_bytes"}).AddRow(nil))
 	expectNodeCopyOutbox(mock, "hash-1")
 	mock.ExpectCommit()
 
@@ -212,12 +216,13 @@ func TestAddCachedNodeWithPath(t *testing.T) {
 	repo, mock := setupRepoTest(t)
 
 	mock.ExpectBegin()
+	expectPlacementParentLock(mock)
 	mock.ExpectQuery("SELECT role, is_orphaned, is_complete FROM foghorn.artifact_nodes.*FOR UPDATE").
 		WithArgs("hash-1", "node-1").
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("INSERT INTO foghorn.artifact_nodes.*file_path.*size_bytes.*RETURNING").
 		WithArgs("hash-1", "node-1", "/data/clip.mp4", int64(2048)).
-		WillReturnRows(sqlmock.NewRows([]string{"inserted", "size_bytes"}).AddRow(true, int64(2048)))
+		WillReturnRows(sqlmock.NewRows([]string{"size_bytes"}).AddRow(int64(2048)))
 	expectNodeCopyOutbox(mock, "hash-1")
 	mock.ExpectCommit()
 

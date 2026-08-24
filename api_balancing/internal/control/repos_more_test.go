@@ -30,7 +30,7 @@ func TestResolveInternalNameByRequestID(t *testing.T) {
 	t.Run("found", func(t *testing.T) {
 		_, mock := setupRepoTest(t)
 		repo := &clipRepositoryDB{}
-		mock.ExpectQuery(`SELECT COALESCE\(stream_internal_name,''\) FROM foghorn.artifacts\s+WHERE request_id = \$1 AND artifact_type = 'clip'`).
+		mock.ExpectQuery(`SELECT COALESCE\(stream_internal_name, ''\)::text FROM foghorn.artifacts\s+WHERE request_id = \$1 AND artifact_type = 'clip'`).
 			WithArgs("req-1").
 			WillReturnRows(sqlmock.NewRows([]string{"name"}).AddRow("live+x"))
 		got, err := repo.ResolveInternalNameByRequestID(context.Background(), "req-1")
@@ -57,7 +57,7 @@ func TestNeedsDtshSyncProbes(t *testing.T) {
 	t.Run("clip needs sync", func(t *testing.T) {
 		_, mock := setupRepoTest(t)
 		repo := &clipRepositoryDB{}
-		mock.ExpectQuery(`SELECT EXISTS\(.*artifact_type = 'clip'.*sync_status = 'synced'.*dtsh_synced`).
+		mock.ExpectQuery(`artifact_type = 'clip'`).
 			WithArgs("clip-1").
 			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
 		if !repo.NeedsDtshSync(context.Background(), "clip-1") {
@@ -105,7 +105,7 @@ func TestResolveInternalNameByHash(t *testing.T) {
 // progressSelectRe matches the locked pre-read that reads prior status, identity, and the durable
 // dispatch owner node. The reporting node is verified against dvr_start_dispatch.node_id before any
 // mutation; the node-supplied status is never written.
-const progressSelectRe = `SELECT status,\s+tenant_id::text,.*dvr_start_dispatch->>'node_id'.*FROM foghorn.artifacts\s+WHERE artifact_hash = \$1 AND artifact_type = 'dvr'\s+FOR UPDATE`
+const progressSelectRe = `SELECT status,\s+tenant_id::text AS tenant_id,.*dvr_start_dispatch->>'node_id'.*FROM foghorn.artifacts\s+WHERE artifact_hash = \$1 AND artifact_type = 'dvr'\s+FOR UPDATE`
 
 // progressUpdateRe matches the metrics + first-edge promotion write. status only ever moves
 // requested/starting -> recording (CASE), never to a node-supplied value.
@@ -247,7 +247,7 @@ func TestUpdateDVRProgressByHash_NonOwningNodeRejected(t *testing.T) {
 func TestUpdateDVRCompletionByHash(t *testing.T) {
 	_, mock := setupRepoTest(t)
 	repo := &dvrRepositoryDB{}
-	mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET status = \$1,\s+ended_at = NOW\(\).*WHERE artifact_hash = \$6\s+AND artifact_type = 'dvr'\s+AND status IN \('requested', 'starting', 'recording', 'finalizing'\)`).
+	mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET status = \$1::text,\s+ended_at = NOW\(\).*WHERE artifact_hash = \$6\s+AND artifact_type = 'dvr'\s+AND status IN \('requested', 'starting', 'recording', 'finalizing'\)`).
 		WithArgs("completed", int64(120), int64(9000), "/m.m3u8", "", "dvr-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	if err := repo.UpdateDVRCompletionByHash(context.Background(), "dvr-1", "completed", 120, 9000, "/m.m3u8", ""); err != nil {
@@ -259,9 +259,9 @@ func TestUpdateDVRCompletionByHash(t *testing.T) {
 func TestListAllNodes(t *testing.T) {
 	_, mock := setupRepoTest(t)
 	repo := &nodeRepositoryDB{}
-	mock.ExpectQuery(`SELECT node_id, COALESCE\(base_url,''\), COALESCE\(outputs,'\{\}'\) FROM foghorn.node_outputs`).
+	mock.ExpectQuery(`SELECT node_id, COALESCE\(base_url, ''\)::text AS base_url, COALESCE\(outputs, '\{\}'::jsonb\) AS outputs FROM foghorn.node_outputs`).
 		WillReturnRows(sqlmock.NewRows([]string{"node_id", "base_url", "outputs"}).
-			AddRow("node-1", "https://n1", `{"k":"v"}`))
+			AddRow("node-1", "https://n1", []byte(`{"k":"v"}`)))
 	out, err := repo.ListAllNodes(context.Background())
 	if err != nil || len(out) != 1 || out[0].NodeID != "node-1" || out[0].OutputsJSON != `{"k":"v"}` {
 		t.Fatalf("got (%+v,%v)", out, err)
@@ -274,7 +274,7 @@ func TestGetArtifactSyncInfo(t *testing.T) {
 	t.Run("found with cached node", func(t *testing.T) {
 		_, mock := setupRepoTest(t)
 		repo := &artifactRepositoryDB{}
-		mock.ExpectQuery(`SELECT artifact_hash, artifact_type, COALESCE\(status,'requested'\), COALESCE\(sync_status,'pending'\).*FROM foghorn.artifacts\s+WHERE artifact_hash = \$1`).
+		mock.ExpectQuery(`SELECT artifact_hash, artifact_type, COALESCE\(status, 'requested'\)::text AS status, COALESCE\(sync_status, 'pending'\)::text AS sync_status.*FROM foghorn.artifacts\s+WHERE artifact_hash = \$1`).
 			WithArgs("art-1").
 			WillReturnRows(sqlmock.NewRows([]string{"hash", "type", "status", "sync_status", "s3_url", "last_attempt", "sync_error"}).
 				AddRow("art-1", "clip", "ready", "synced", "s3://b/art-1", time.Unix(1700000000, 0), nil))
@@ -308,12 +308,13 @@ func TestGetArtifactSyncInfo(t *testing.T) {
 func TestRegisterOriginArtifact(t *testing.T) {
 	repo, mock := setupRepoTest(t)
 	mock.ExpectBegin()
+	expectPlacementParentLock(mock)
 	mock.ExpectQuery(`SELECT role, is_complete, is_orphaned FROM foghorn.artifact_nodes.*FOR UPDATE`).
 		WithArgs("art-1", "node-1").
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery(`INSERT INTO foghorn.artifact_nodes.*'origin'.*ON CONFLICT \(artifact_hash, node_id\) DO UPDATE.*RETURNING`).
 		WithArgs("art-1", "node-1", "/d/art-1.mp4", int64(4096), true).
-		WillReturnRows(sqlmock.NewRows([]string{"inserted", "is_complete"}).AddRow(true, true))
+		WillReturnRows(sqlmock.NewRows([]string{"is_complete"}).AddRow(true))
 	expectNodeCopyOutbox(mock, "art-1")
 	mock.ExpectCommit()
 	if err := repo.RegisterOriginArtifact(context.Background(), "art-1", "node-1", "/d/art-1.mp4", 4096, true); err != nil {
@@ -343,7 +344,7 @@ func TestGetCachedAt(t *testing.T) {
 	t.Run("valid timestamp", func(t *testing.T) {
 		_, mock := setupRepoTest(t)
 		repo := &artifactRepositoryDB{}
-		mock.ExpectQuery(`SELECT MIN\(cached_at\) FROM foghorn.artifact_nodes\s+WHERE artifact_hash = \$1 AND is_orphaned = false`).
+		mock.ExpectQuery(`SELECT COALESCE\(MIN\(cached_at\), to_timestamp\(0\)\)::timestamptz AS cached_at FROM foghorn.artifact_nodes\s+WHERE artifact_hash = \$1 AND is_orphaned = false`).
 			WithArgs("art-1").
 			WillReturnRows(sqlmock.NewRows([]string{"min"}).AddRow(time.Unix(1700000000, 0)))
 		got, err := repo.GetCachedAt(context.Background(), "art-1")
@@ -354,9 +355,9 @@ func TestGetCachedAt(t *testing.T) {
 	t.Run("null maps to zero", func(t *testing.T) {
 		_, mock := setupRepoTest(t)
 		repo := &artifactRepositoryDB{}
-		mock.ExpectQuery(`SELECT MIN\(cached_at\)`).
+		mock.ExpectQuery(`SELECT COALESCE\(MIN\(cached_at\), to_timestamp\(0\)\)::timestamptz AS cached_at`).
 			WithArgs("art-1").
-			WillReturnRows(sqlmock.NewRows([]string{"min"}).AddRow(nil))
+			WillReturnRows(sqlmock.NewRows([]string{"cached_at"}).AddRow(time.Unix(0, 0)))
 		got, err := repo.GetCachedAt(context.Background(), "art-1")
 		if err != nil || got != 0 {
 			t.Fatalf("got (%d,%v), want (0,nil)", got, err)

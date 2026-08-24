@@ -220,7 +220,7 @@ func TestProcessRecordDVRSegment_HappyPathInsertsAndReplies(t *testing.T) {
 	mock.ExpectQuery("SELECT sequence, status, media_start_ms, media_end_ms, duration_ms").
 		WithArgs("dvr-hot", "seg-3.ts").
 		WillReturnError(sql.ErrNoRows)
-	mock.ExpectQuery("SELECT COALESCE\\(MAX\\(sequence\\), -1\\) \\+ 1").
+	mock.ExpectQuery("SELECT \\(COALESCE\\(MAX\\(sequence\\), -1\\) \\+ 1\\)::bigint").
 		WithArgs("dvr-hot").
 		WillReturnRows(sqlmock.NewRows([]string{"seq"}).AddRow(3))
 	mock.ExpectExec("INSERT INTO foghorn.dvr_segments").
@@ -398,7 +398,7 @@ func TestProcessMarkDVRSegmentUploaded_MutatesRow(t *testing.T) {
 	mock.ExpectExec("UPDATE foghorn.dvr_segments").
 		WithArgs("dvr-u", "seg-1.ts", int64(4096), "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery("SELECT COUNT\\(\\*\\), COALESCE\\(SUM\\(size_bytes\\), 0\\)").
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\)::bigint AS segment_count, COALESCE\\(SUM\\(size_bytes\\), 0\\)::bigint AS size_bytes").
 		WithArgs("dvr-u", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"count", "sum"}).AddRow(2, 8192))
 
@@ -465,7 +465,7 @@ func TestProcessDVRSegmentDropped_UploadedDeletesLocal(t *testing.T) {
 		WithArgs("dvr-d", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"status", "dispatch_node"}).AddRow("recording", "node-1"))
 	mock.ExpectExec("UPDATE foghorn.dvr_segments").
-		WithArgs("dvr-d", "seg-2.ts", "deleted_local", "storage_pressure", true, "tenant-1").
+		WithArgs("deleted_local", "storage_pressure", true, "dvr-d", "seg-2.ts", "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	processDVRSegmentDropped(&ipcpb.DVRSegmentDropped{
@@ -493,7 +493,7 @@ func TestProcessDVRSegmentDropped_LostLocalUpdatesExisting(t *testing.T) {
 		WithArgs("dvr-d2", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"status", "dispatch_node"}).AddRow("recording", "node-1"))
 	mock.ExpectExec("UPDATE foghorn.dvr_segments").
-		WithArgs("dvr-d2", "seg-5.ts", "lost_local", "evicted_before_upload", false, "tenant-1").
+		WithArgs("lost_local", "evicted_before_upload", false, "dvr-d2", "seg-5.ts", "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	processDVRSegmentDropped(&ipcpb.DVRSegmentDropped{
@@ -877,7 +877,7 @@ func TestProcessDVRSegmentDropped_TerminalRetainedOwner(t *testing.T) {
 			WithArgs("dvr-reclaim", "tenant-1").
 			WillReturnRows(sqlmock.NewRows([]string{"status", "dispatch_node"}).AddRow("completed", "owner-node"))
 		mock.ExpectExec("UPDATE foghorn.dvr_segments").
-			WithArgs("dvr-reclaim", "seg-9.ts", "deleted_local", "post_stop_reclaim", true, "tenant-1").
+			WithArgs("deleted_local", "post_stop_reclaim", true, "dvr-reclaim", "seg-9.ts", "tenant-1").
 			WillReturnResult(sqlmock.NewResult(0, 1))
 
 		processDVRSegmentDropped(&ipcpb.DVRSegmentDropped{

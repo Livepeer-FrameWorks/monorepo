@@ -255,7 +255,7 @@ func TestLookupCompletedUploadAssetReturnsFailedAssetWhenPipelineFailed(t *testi
 
 	server := NewFoghornGRPCServer(db, logging.NewLogger(), nil, nil, nil, nil, nil, nil)
 
-	mock.ExpectQuery("SELECT a.artifact_hash, a.artifact_hash, a.status").
+	mock.ExpectQuery("SELECT a.artifact_hash AS id, a.artifact_hash, a.status").
 		WithArgs("art-1").
 		WillReturnError(context.DeadlineExceeded)
 

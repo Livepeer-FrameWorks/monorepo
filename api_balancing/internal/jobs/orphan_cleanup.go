@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -138,110 +139,56 @@ type orphanedVOD struct {
 
 // findOrphanedClips finds soft-deleted clips that still have storage artifacts
 func (j *OrphanCleanupJob) findOrphanedClips(ctx context.Context) ([]orphanedClip, error) {
-	// Find clips marked 'deleted' that still have non-orphaned node copies
-	var rows *sql.Rows
+	var rows []foghorndb.ListDeletedClipNodesRow
 	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
 		var err error
-		//nolint:sqlclosecheck // rows is closed by caller after retry succeeds.
-		rows, err = j.db.QueryContext(ctx, `
-			SELECT a.artifact_hash, an.node_id
-			FROM foghorn.artifacts a
-			INNER JOIN foghorn.artifact_nodes an
-				ON an.artifact_hash = a.artifact_hash
-				AND an.is_orphaned = false
-			WHERE a.artifact_type = 'clip'
-			  AND a.status = 'deleted'
-			  AND a.updated_at < NOW() - $1::interval
-			LIMIT 100
-		`, j.maxAge.String())
+		rows, err = foghorndb.New(j.db).ListDeletedClipNodes(ctx, j.maxAge.String())
 		return err
 	})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var orphans []orphanedClip
-	for rows.Next() {
-		var o orphanedClip
-		if err := rows.Scan(&o.ClipHash, &o.NodeID); err != nil {
-			return nil, err
-		}
-		orphans = append(orphans, o)
+	orphans := make([]orphanedClip, 0, len(rows))
+	for _, row := range rows {
+		orphans = append(orphans, orphanedClip{ClipHash: row.ArtifactHash, NodeID: row.NodeID})
 	}
-	return orphans, rows.Err()
+	return orphans, nil
 }
 
 // findOrphanedDVRs finds soft-deleted DVRs that still have storage artifacts
 func (j *OrphanCleanupJob) findOrphanedDVRs(ctx context.Context) ([]orphanedDVR, error) {
-	// Find DVRs marked 'deleted' that still have non-orphaned node copies
-	var rows *sql.Rows
+	var rows []foghorndb.ListDeletedDVRNodesRow
 	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
 		var err error
-		//nolint:sqlclosecheck // rows is closed by caller after retry succeeds.
-		rows, err = j.db.QueryContext(ctx, `
-			SELECT a.artifact_hash, an.node_id
-			FROM foghorn.artifacts a
-			INNER JOIN foghorn.artifact_nodes an
-				ON an.artifact_hash = a.artifact_hash
-				AND an.is_orphaned = false
-			WHERE a.artifact_type = 'dvr'
-			  AND a.status = 'deleted'
-			  AND a.updated_at < NOW() - $1::interval
-			LIMIT 100
-		`, j.maxAge.String())
+		rows, err = foghorndb.New(j.db).ListDeletedDVRNodes(ctx, j.maxAge.String())
 		return err
 	})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var orphans []orphanedDVR
-	for rows.Next() {
-		var o orphanedDVR
-		if err := rows.Scan(&o.DVRHash, &o.NodeID); err != nil {
-			return nil, err
-		}
-		orphans = append(orphans, o)
+	orphans := make([]orphanedDVR, 0, len(rows))
+	for _, row := range rows {
+		orphans = append(orphans, orphanedDVR{DVRHash: row.ArtifactHash, NodeID: row.NodeID})
 	}
-	return orphans, rows.Err()
+	return orphans, nil
 }
 
 // findOrphanedVODs finds soft-deleted VODs (uploads) that still have storage artifacts
 func (j *OrphanCleanupJob) findOrphanedVODs(ctx context.Context) ([]orphanedVOD, error) {
-	// Find VODs marked 'deleted' that still have non-orphaned node copies
-	var rows *sql.Rows
+	var rows []foghorndb.ListDeletedVODNodesRow
 	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
 		var err error
-		//nolint:sqlclosecheck // rows is closed by caller after retry succeeds.
-		rows, err = j.db.QueryContext(ctx, `
-			SELECT a.artifact_hash, an.node_id
-			FROM foghorn.artifacts a
-			INNER JOIN foghorn.artifact_nodes an
-				ON an.artifact_hash = a.artifact_hash
-				AND an.is_orphaned = false
-			WHERE a.artifact_type = 'vod'
-			  AND a.status = 'deleted'
-			  AND a.updated_at < NOW() - $1::interval
-			LIMIT 100
-		`, j.maxAge.String())
+		rows, err = foghorndb.New(j.db).ListDeletedVODNodes(ctx, j.maxAge.String())
 		return err
 	})
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	var orphans []orphanedVOD
-	for rows.Next() {
-		var o orphanedVOD
-		if err := rows.Scan(&o.VODHash, &o.NodeID); err != nil {
-			return nil, err
-		}
-		orphans = append(orphans, o)
+	orphans := make([]orphanedVOD, 0, len(rows))
+	for _, row := range rows {
+		orphans = append(orphans, orphanedVOD{VODHash: row.ArtifactHash, NodeID: row.NodeID})
 	}
-	return orphans, rows.Err()
+	return orphans, nil
 }
 
 func (j *OrphanCleanupJob) retryClipDeletion(_ctx context.Context, orphan orphanedClip) {
@@ -320,17 +267,13 @@ func (j *OrphanCleanupJob) retryVODDeletion(_ctx context.Context, orphan orphane
 // This handles cases where storage was manually deleted or node went away
 func (j *OrphanCleanupJob) cleanupStaleRegistryEntries(ctx context.Context) {
 	// Remove artifact_nodes entries marked orphaned for more than 24 hours
-	result, err := j.db.ExecContext(ctx, `
-		DELETE FROM foghorn.artifact_nodes
-		WHERE is_orphaned = true
-		  AND last_seen_at < NOW() - INTERVAL '24 hours'
-	`)
+	affected, err := foghorndb.New(j.db).DeleteStaleOrphanedArtifactNodes(ctx)
 	if err != nil {
 		j.logger.WithError(err).Error("Failed to clean up stale artifact_nodes entries")
 		return
 	}
 
-	if affected, _ := result.RowsAffected(); affected > 0 {
+	if affected > 0 {
 		j.logger.WithField("count", affected).Info("Cleaned up stale artifact_nodes entries")
 	}
 }

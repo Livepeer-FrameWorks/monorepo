@@ -3,15 +3,16 @@ package jobs
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
-	"github.com/lib/pq"
 )
 
 // CHAPTER RECLAIM SWEEP
@@ -145,39 +146,18 @@ func (s *ChapterReclaimSweep) tick() {
 }
 
 func (s *ChapterReclaimSweep) retryFinalizedChapterDTSH(ctx context.Context) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT c.playback_artifact_hash, COALESCE(an.node_id, '')
-		  FROM foghorn.dvr_chapters c
-		  JOIN foghorn.artifacts a ON a.artifact_hash = c.playback_artifact_hash
-		  LEFT JOIN foghorn.artifact_nodes an
-		         ON an.artifact_hash = c.playback_artifact_hash
-		        AND an.is_orphaned = false
-		 WHERE c.state = 'finalized'
-		   AND c.finalize_started_at IS NOT NULL
-		   AND c.finalize_started_at < NOW() - INTERVAL '5 minutes'
-		   AND a.origin_type = 'dvr_chapter'
-		   AND COALESCE(a.dtsh_synced, false) = false
-		 LIMIT 50
-	`)
+	rows, err := foghorndb.New(s.db).ListFinalizedChaptersMissingDTSH(ctx)
 	if err != nil {
 		s.logger.WithError(err).Warn("Chapter DTSH retry: list failed")
 		return
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var artifactHash, nodeID string
-		if err := rows.Scan(&artifactHash, &nodeID); err != nil {
-			s.logger.WithError(err).Warn("Chapter DTSH retry: scan failed")
-			continue
-		}
+	for _, row := range rows {
+		artifactHash, nodeID := row.PlaybackArtifactHash.String, row.NodeID
 		if nodeID == "" {
 			continue
 		}
 		filePath := fmt.Sprintf("vod/%s.mkv", artifactHash)
 		control.TriggerDtshSync(nodeID, artifactHash, "vod", filePath)
-	}
-	if err := rows.Err(); err != nil {
-		s.logger.WithError(err).Warn("Chapter DTSH retry: iteration failed")
 	}
 }
 
@@ -343,50 +323,24 @@ func (s *ChapterReclaimSweep) listSegmentsAwaitingS3Delete(ctx context.Context, 
 }
 
 func (s *ChapterReclaimSweep) querySegmentsByStatus(ctx context.Context, dvrHash string, startMs, endMs int64, statuses []string) ([]evictableSegment, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		WITH overlapping AS (
-			SELECT s.segment_name,
-			       s.s3_key,
-			       s.status,
-			       BOOL_AND(c.state IN ('frozen', 'reclaimed')) AS all_done
-			  FROM foghorn.dvr_segments s
-			  JOIN foghorn.dvr_chapters c
-			    ON c.artifact_hash = s.artifact_hash
-			   AND c.start_ms < s.media_end_ms
-			   AND c.end_ms   > s.media_start_ms
-			 WHERE s.artifact_hash = $1
-			   AND s.media_start_ms < $3
-			   AND s.media_end_ms   > $2
-			   AND s.status = ANY($4)
-			 GROUP BY s.segment_name, s.s3_key, s.status
-		)
-		SELECT segment_name, COALESCE(s3_key, '')
-		  FROM overlapping
-		 WHERE all_done = true
-	`, dvrHash, startMs, endMs, pq.Array(statuses))
+	rows, err := foghorndb.New(s.db).ListReclaimableDVRSegments(ctx, foghorndb.ListReclaimableDVRSegmentsParams{
+		ArtifactHash: dvrHash,
+		RangeStartMs: startMs,
+		RangeEndMs:   endMs,
+		Statuses:     statuses,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("list segments by status %v: %w", statuses, err)
 	}
-	defer rows.Close()
 	var out []evictableSegment
-	for rows.Next() {
-		var seg evictableSegment
-		if err := rows.Scan(&seg.name, &seg.s3Key); err != nil {
-			return nil, err
-		}
-		out = append(out, seg)
+	for _, row := range rows {
+		out = append(out, evictableSegment{name: row.SegmentName, s3Key: row.S3Key})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (s *ChapterReclaimSweep) markSegmentReclaimed(ctx context.Context, dvrHash, segmentName string) error {
-	_, err := s.db.ExecContext(ctx, `
-		UPDATE foghorn.dvr_segments
-		   SET status = 'reclaimed',
-		       deleted_local_at = COALESCE(deleted_local_at, NOW())
-		 WHERE artifact_hash = $1 AND segment_name = $2
-	`, dvrHash, segmentName)
-	return err
+	return foghorndb.New(s.db).MarkDVRSegmentReclaimed(ctx, foghorndb.MarkDVRSegmentReclaimedParams{ArtifactHash: dvrHash, SegmentName: segmentName})
 }
 
 // markSegmentOrphanUnreachable is the recording-node-abandoned escape
@@ -402,27 +356,11 @@ func (s *ChapterReclaimSweep) markSegmentReclaimed(ctx context.Context, dvrHash,
 // Restricted to non-terminal source-side statuses so we never re-touch
 // already-resolved rows.
 func (s *ChapterReclaimSweep) markSegmentOrphanUnreachable(ctx context.Context, dvrHash, segmentName string) error {
-	_, err := s.db.ExecContext(ctx, `
-		UPDATE foghorn.dvr_segments
-		   SET status = 'orphan_unreachable',
-		       deleted_local_at = NOW()
-		 WHERE artifact_hash = $1
-		   AND segment_name = $2
-		   AND status IN ('pending', 'uploaded', 'failed_upload')
-	`, dvrHash, segmentName)
-	return err
+	return foghorndb.New(s.db).MarkDVRSegmentOrphanUnreachable(ctx, foghorndb.MarkDVRSegmentOrphanUnreachableParams{ArtifactHash: dvrHash, SegmentName: segmentName})
 }
 
 func (s *ChapterReclaimSweep) markReclaimedIfRangeComplete(ctx context.Context, c control.DVRChapterRow) error {
-	var pending int
-	err := s.db.QueryRowContext(ctx, `
-		SELECT COUNT(*)
-		  FROM foghorn.dvr_segments
-		 WHERE artifact_hash = $1
-		   AND media_start_ms < $3
-		   AND media_end_ms   > $2
-		   AND status != 'reclaimed'
-	`, c.ArtifactHash, c.StartMs, c.EndMs).Scan(&pending)
+	pending, err := foghorndb.New(s.db).CountUnreclaimedDVRSegments(ctx, foghorndb.CountUnreclaimedDVRSegmentsParams{ArtifactHash: c.ArtifactHash, RangeEndMs: c.EndMs, RangeStartMs: c.StartMs})
 	if err != nil {
 		return err
 	}
@@ -438,15 +376,8 @@ func (s *ChapterReclaimSweep) markReclaimedIfRangeComplete(ctx context.Context, 
 // a node that is no longer alive — the caller's abandon-grace branch
 // then takes over so a stale artifact_nodes row can never wedge reclaim.
 func (s *ChapterReclaimSweep) readRecordingNode(ctx context.Context, dvrHash string) (string, error) {
-	var nodeID string
-	if err := s.db.QueryRowContext(ctx, `
-		SELECT COALESCE(node_id, '')
-		  FROM foghorn.artifact_nodes
-		 WHERE artifact_hash = $1
-		   AND is_orphaned = false
-		 ORDER BY last_seen_at DESC NULLS LAST
-		 LIMIT 1
-	`, dvrHash).Scan(&nodeID); err != nil && err != sql.ErrNoRows {
+	nodeID, err := foghorndb.New(s.db).LatestRecordingNode(ctx, dvrHash)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return "", err
 	}
 	if nodeID == "" {

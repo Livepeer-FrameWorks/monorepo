@@ -10,6 +10,7 @@ import (
 
 	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/artifacts"
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"frameworks/api_balancing/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -184,38 +185,19 @@ func (j *CompletingVodRecoveryJob) reconcile() {
 		failSeconds = staleSeconds
 	}
 
-	rows, err := j.db.QueryContext(ctx, `
-		SELECT a.artifact_hash,
-		       a.tenant_id::text,
-		       COALESCE(a.user_id::text, ''),
-		       COALESCE(a.size_bytes, 0),
-		       COALESCE(v.s3_key, ''),
-		       COALESCE(v.s3_upload_id, ''),
-		       COALESCE(v.processes_json, ''),
-		       COALESCE(a.backend_id, ''),
-		       COALESCE(v.vod_completion_descriptor::text, ''),
-		       (COALESCE(a.last_sync_attempt, a.updated_at) < NOW() - ($2 * INTERVAL '1 second')) AS past_fail_grace
-		FROM foghorn.artifacts a
-		JOIN foghorn.vod_metadata v ON v.artifact_hash = a.artifact_hash
-		WHERE a.artifact_type = 'vod'
-		  AND a.status = 'completing'
-		  AND COALESCE(v.s3_key, '') <> ''
-		  AND COALESCE(a.last_sync_attempt, a.updated_at) < NOW() - ($1 * INTERVAL '1 second')
-		ORDER BY COALESCE(a.last_sync_attempt, a.updated_at)
-		LIMIT $3
-	`, staleSeconds, failSeconds, j.batchSize)
+	rows, err := foghorndb.New(j.db).ListStaleCompletingVODs(ctx, foghorndb.ListStaleCompletingVODsParams{
+		FailSeconds: failSeconds, StaleSeconds: staleSeconds, BatchLimit: int32(j.batchSize),
+	})
 	if err != nil {
 		j.logger.WithError(err).Warn("Completing-VOD recovery: failed to scan stranded uploads")
 		return
 	}
 	var batch []completingVodRow
-	for rows.Next() {
-		var r completingVodRow
-		var descriptorJSON string
-		if scanErr := rows.Scan(&r.artifactHash, &r.tenantID, &r.userID, &r.sizeBytes, &r.s3Key, &r.uploadID, &r.processesJSON, &r.backendID, &descriptorJSON, &r.pastFailGrace); scanErr != nil {
-			j.logger.WithError(scanErr).Warn("Completing-VOD recovery: row scan failed")
-			continue
-		}
+	for _, row := range rows {
+		r := completingVodRow{artifactHash: row.ArtifactHash, tenantID: row.TenantID,
+			userID: row.UserID, sizeBytes: row.SizeBytes, s3Key: row.S3Key, uploadID: row.UploadID,
+			processesJSON: row.ProcessesJson, backendID: row.BackendID, pastFailGrace: row.PastFailGrace}
+		descriptorJSON := row.CompletionDescriptor
 		if descriptorJSON != "" {
 			if unmErr := json.Unmarshal([]byte(descriptorJSON), &r.descriptor); unmErr != nil {
 				j.logger.WithError(unmErr).WithField("artifact_hash", r.artifactHash).Warn("Completing-VOD recovery: undecodable completion descriptor; falling back to existence probe")
@@ -225,11 +207,6 @@ func (j *CompletingVodRecoveryJob) reconcile() {
 		}
 		batch = append(batch, r)
 	}
-	if rowsErr := rows.Err(); rowsErr != nil {
-		j.logger.WithError(rowsErr).Warn("Completing-VOD recovery: row iteration failed")
-	}
-	// Close the cursor before opening the per-row txns below (single-connection safety).
-	rows.Close() //nolint:sqlclosecheck // fully drained into `batch` above; closed here before per-row txns
 
 	for _, r := range batch {
 		select {
@@ -314,30 +291,11 @@ func (j *CompletingVodRecoveryJob) convergeToProcessing(ctx context.Context, r c
 	s3URL := j.s3.BuildS3URL(r.s3Key)
 	moved := false
 	err := database.WithRetryablePostgresTx(ctx, j.db, nil, func(tx *sql.Tx) error {
-		res, execErr := tx.ExecContext(ctx, `
-			UPDATE foghorn.artifacts
-			SET status = 'processing',
-			    storage_location = 's3',
-			    sync_status = 'synced',
-			    sync_error = NULL,
-			    last_sync_attempt = NOW(),
-			    frozen_at = COALESCE(frozen_at, NOW()),
-			    s3_url = COALESCE(s3_url, $2),
-			    -- The recovered multipart upload is durable on THIS cell's local S3 backend; persist attribution.
-			    -- backend_id is NOT written here: it was recorded when the upload was CREATED (invariant I2) and
-			    -- verified above, so recovery must not reconstruct or overwrite the recorded owner.
-			    durable_backend_local = true,
-			    -- Populate the authoritative object pointer from the recorded multipart key (see CompleteVodUpload).
-			    active_object_key = COALESCE(active_object_key, (SELECT s3_key FROM foghorn.vod_metadata WHERE artifact_hash = foghorn.artifacts.artifact_hash)),
-			    updated_at = NOW()
-			WHERE artifact_hash = $1 AND tenant_id::text = $3 AND status = 'completing'
-		`, r.artifactHash, s3URL, r.tenantID)
+		affected, execErr := foghorndb.New(tx).MarkCompletingVODProcessing(ctx, foghorndb.MarkCompletingVODProcessingParams{
+			ArtifactHash: r.artifactHash, S3Url: sql.NullString{String: s3URL, Valid: s3URL != ""}, TenantID: r.tenantID,
+		})
 		if execErr != nil {
 			return execErr
-		}
-		affected, raErr := res.RowsAffected()
-		if raErr != nil {
-			return raErr
 		}
 		if affected == 0 {
 			return nil // row left 'completing' under us (concurrent completion/abort) — emit no event, no job
@@ -383,22 +341,11 @@ func (j *CompletingVodRecoveryJob) convergeToProcessing(ctx context.Context, r c
 func (j *CompletingVodRecoveryJob) convergeToFailed(ctx context.Context, r completingVodRow) {
 	errMsg := fmt.Sprintf("VOD upload stranded in 'completing'; object absent past grace (%s)", j.failAfter)
 	err := database.WithRetryablePostgresTx(ctx, j.db, nil, func(tx *sql.Tx) error {
-		res, execErr := tx.ExecContext(ctx, `
-			UPDATE foghorn.artifacts
-			SET status = 'failed',
-			    sync_status = 'failed',
-			    sync_error = $1,
-			    error_message = $1,
-			    last_sync_attempt = NOW(),
-			    updated_at = NOW()
-			WHERE artifact_hash = $2 AND tenant_id::text = $3 AND status = 'completing'
-		`, errMsg, r.artifactHash, r.tenantID)
+		affected, execErr := foghorndb.New(tx).MarkCompletingVODFailed(ctx, foghorndb.MarkCompletingVODFailedParams{
+			ErrorMessage: sql.NullString{String: errMsg, Valid: true}, ArtifactHash: r.artifactHash, TenantID: r.tenantID,
+		})
 		if execErr != nil {
 			return execErr
-		}
-		affected, raErr := res.RowsAffected()
-		if raErr != nil {
-			return raErr
 		}
 		if affected == 0 {
 			return nil // row left 'completing' under us — emit no FAILED event

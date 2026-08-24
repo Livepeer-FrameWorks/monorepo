@@ -40,7 +40,7 @@ func playableChapterRow(chapterID, parentDVRHash, chapterState string) *sqlmock.
 		chapterID, parentDVRHash, "window_sized_chapters", nil,
 		int64(1000), int64(2000), false,
 		chapterState, chapterHash32, "pb-id", int64(0),
-		nil, nil,
+		nil, nil, nil,
 		nil, nil,
 		int64(5), false,
 		nil, nil,
@@ -90,18 +90,19 @@ func TestHandleChapterFinalizeResult_CompletedAdvancesToFinalized(t *testing.T) 
 			AddRow(ChapterStateFinalizing, chapterHash32, tenant, "finalizing", "ready", "node-1"))
 	// Artifacts row → ready/mkv/pending/local, guarded on status='finalizing' (exactly one row).
 	mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET status = 'ready'`).
-		WithArgs(chapterHash32, int64(4096), "[]", int64(0), false).
+		WithArgs(int64(4096), false, "[]", int64(0), chapterHash32).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	// vod_metadata upsert (outputs non-empty).
 	mock.ExpectExec(`INSERT INTO foghorn.vod_metadata`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	// RegisterOriginArtifactTx: prior-read (none) → origin upsert (inserted, complete) → GAINED
 	// node-copy (tenant → version → stamp → outbox).
+	expectPlacementParentLock(mock)
 	mock.ExpectQuery(`SELECT role, is_complete, is_orphaned FROM foghorn.artifact_nodes`).
 		WithArgs(chapterHash32, "node-1").
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery(`INSERT INTO foghorn.artifact_nodes`).
-		WillReturnRows(sqlmock.NewRows([]string{"inserted", "is_complete"}).AddRow(true, true))
+		WillReturnRows(sqlmock.NewRows([]string{"is_complete"}).AddRow(true))
 	mock.ExpectQuery(`SELECT tenant_id::text FROM foghorn.artifacts WHERE artifact_hash`).
 		WithArgs(chapterHash32).
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow(tenant))
@@ -168,7 +169,7 @@ func TestHandleChapterFinalizeResult_MalformedCompletionBouncesToClosed(t *testi
 		mock, _, _ := setupArtifactTestDeps(t)
 		startFakeCommodoreServer(t, &fakeCommodoreInternal{})
 		mock.ExpectExec(`UPDATE foghorn.dvr_chapters\s+SET state\s+= 'closed'`).
-			WithArgs("chap-nohash", sqlmock.AnyArg(), "node-1").
+			WithArgs(sqlmock.AnyArg(), "chap-nohash", "node-1").
 			WillReturnResult(sqlmock.NewResult(0, 1))
 		handleChapterFinalizeResult(context.Background(), "chap-nohash", "completed",
 			&ipcpb.ProcessingJobResult{JobId: chapterFinalizeJobIDPrefix + "chap-nohash", Outputs: map[string]string{}}, "node-1", logging.NewLogger())
@@ -180,7 +181,7 @@ func TestHandleChapterFinalizeResult_MalformedCompletionBouncesToClosed(t *testi
 		mock, _, _ := setupArtifactTestDeps(t)
 		startFakeCommodoreServer(t, &fakeCommodoreInternal{})
 		mock.ExpectExec(`UPDATE foghorn.dvr_chapters\s+SET state\s+= 'closed'`).
-			WithArgs("chap-noout", sqlmock.AnyArg(), "node-1").
+			WithArgs(sqlmock.AnyArg(), "chap-noout", "node-1").
 			WillReturnResult(sqlmock.NewResult(0, 1))
 		handleChapterFinalizeResult(context.Background(), "chap-noout", "completed",
 			&ipcpb.ProcessingJobResult{JobId: chapterFinalizeJobIDPrefix + "chap-noout", Outputs: map[string]string{"artifact_hash": chapterHash32}}, "node-1", logging.NewLogger())
@@ -267,7 +268,7 @@ func TestHandleChapterFinalizeResult_TransientPersistFailureBouncesToClosed(t *t
 	mock.ExpectRollback()
 	// Bounce finalizing → closed for retry.
 	mock.ExpectExec(`UPDATE foghorn.dvr_chapters\s+SET state\s+= 'closed'`).
-		WithArgs(chapterID, sqlmock.AnyArg(), "node-1").
+		WithArgs(sqlmock.AnyArg(), chapterID, "node-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	handleChapterFinalizeResult(context.Background(), chapterID, "completed", result, "node-1", logging.NewLogger())
@@ -297,8 +298,8 @@ func TestHandleChapterFinalizeResult_TerminalFailureMarksFailed(t *testing.T) {
 	// the allocated child artifact (RETURNING tenant), and enqueue the failed lifecycle to the
 	// outbox — all committed together (no separate loss-prone emit).
 	mock.ExpectBegin()
-	mock.ExpectQuery(`UPDATE foghorn.dvr_chapters\s+SET state\s+= \$2.*RETURNING playback_artifact_hash`).
-		WithArgs(chapterID, ChapterStateFailedSourceMissing, "segments gone", "node-1").
+	mock.ExpectQuery(`UPDATE foghorn.dvr_chapters\s+SET state\s+= \$1.*RETURNING playback_artifact_hash`).
+		WithArgs(ChapterStateFailedSourceMissing, "segments gone", chapterID, "node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"playback_artifact_hash"}).AddRow(chapterHash32))
 	mock.ExpectQuery(`UPDATE foghorn.artifacts\s+SET status = 'failed'.*RETURNING tenant_id`).
 		WithArgs(chapterHash32, "segments gone").
@@ -329,7 +330,7 @@ func TestHandleChapterFinalizeResult_TransientFailureRetries(t *testing.T) {
 
 	// RetryChapterFinalize rolls finalizing → closed (the only DB write), bound to the reporting node.
 	mock.ExpectExec(`UPDATE foghorn.dvr_chapters`).
-		WithArgs(chapterID, "network blip", "node-1").
+		WithArgs("network blip", chapterID, "node-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	handleChapterFinalizeResult(context.Background(), chapterID, "failed", result, "node-1", logging.NewLogger())
@@ -417,7 +418,7 @@ func TestChapterArtifactLifecycleIdentity(t *testing.T) {
 
 	t.Run("resolves hash and tenant from join", func(t *testing.T) {
 		mock := setupChapterTest(t)
-		mock.ExpectQuery(`SELECT c.playback_artifact_hash, a.tenant_id::text\s+FROM foghorn.dvr_chapters c\s+JOIN foghorn.artifacts a`).
+		mock.ExpectQuery(`SELECT c.playback_artifact_hash, a.tenant_id::text AS tenant_id\s+FROM foghorn.dvr_chapters c\s+JOIN foghorn.artifacts a`).
 			WithArgs("c1").
 			WillReturnRows(sqlmock.NewRows([]string{"playback_artifact_hash", "tenant_id"}).
 				AddRow(chapterHash32, "tenant-9"))
@@ -450,7 +451,7 @@ func TestResolveChapterArtifactByHash(t *testing.T) {
 	t.Run("non-chapter origin returns nil", func(t *testing.T) {
 		mock := setupChapterTest(t)
 		startFakeCommodoreServer(t, &fakeCommodoreInternal{})
-		mock.ExpectQuery(`SELECT origin_type, origin_id, tenant_id::text,\s+COALESCE\(origin_cluster_id`).
+		mock.ExpectQuery(`SELECT origin_type, origin_id, tenant_id::text AS tenant_id,\s+COALESCE\(origin_cluster_id`).
 			WithArgs(chapterHash32).
 			WillReturnRows(sqlmock.NewRows([]string{"origin_type", "origin_id", "tenant_id", "origin_cluster_id"}).
 				AddRow("clip", "x", "t1", "c1"))
@@ -468,12 +469,12 @@ func TestResolveChapterArtifactByHash(t *testing.T) {
 				}, nil
 			},
 		})
-		mock.ExpectQuery(`SELECT origin_type, origin_id, tenant_id::text,\s+COALESCE\(origin_cluster_id`).
+		mock.ExpectQuery(`SELECT origin_type, origin_id, tenant_id::text AS tenant_id,\s+COALESCE\(origin_cluster_id`).
 			WithArgs(chapterHash32).
 			WillReturnRows(sqlmock.NewRows([]string{"origin_type", "origin_id", "tenant_id", "origin_cluster_id"}).
 				AddRow("dvr_chapter", "chap-7", "row-tenant", "row-cluster"))
 		// GetChapter for origin_id chap-7.
-		mock.ExpectQuery(`FROM foghorn.dvr_chapters\s+WHERE chapter_id = \$1`).
+		mock.ExpectQuery(`FROM foghorn.dvr_chapters c\s+WHERE c.chapter_id = \$1`).
 			WithArgs("chap-7").
 			WillReturnRows(playableChapterRow("chap-7", "parent-dvr-hash", ChapterStateFinalized))
 
@@ -497,11 +498,11 @@ func TestResolveChapterArtifactByHash(t *testing.T) {
 				return &commodorepb.ResolveDVRHashResponse{Found: false}, nil
 			},
 		})
-		mock.ExpectQuery(`SELECT origin_type, origin_id, tenant_id::text,\s+COALESCE\(origin_cluster_id`).
+		mock.ExpectQuery(`SELECT origin_type, origin_id, tenant_id::text AS tenant_id,\s+COALESCE\(origin_cluster_id`).
 			WithArgs(chapterHash32).
 			WillReturnRows(sqlmock.NewRows([]string{"origin_type", "origin_id", "tenant_id", "origin_cluster_id"}).
 				AddRow("dvr_chapter", "chap-8", "row-tenant", "row-cluster"))
-		mock.ExpectQuery(`FROM foghorn.dvr_chapters\s+WHERE chapter_id = \$1`).
+		mock.ExpectQuery(`FROM foghorn.dvr_chapters c\s+WHERE c.chapter_id = \$1`).
 			WithArgs("chap-8").
 			WillReturnRows(playableChapterRow("chap-8", "parent-dvr-hash", ChapterStateFinalized))
 

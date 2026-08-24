@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/google/uuid"
 )
@@ -53,24 +54,15 @@ func ListOpenIngestSessions(ctx context.Context) ([]OpenIngestSession, error) {
 	if db == nil {
 		return nil, nil
 	}
-	rows, err := db.QueryContext(ctx, `
-		SELECT id::text, tenant_id::text, node_id, stream_internal_name
-		  FROM foghorn.ingest_sessions
-		 WHERE ended_at IS NULL
-	`)
+	rows, err := foghorndb.New(db).ListOpenIngestSessions(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list open ingest sessions: %w", err)
 	}
-	defer rows.Close()
-	var out []OpenIngestSession
-	for rows.Next() {
-		var s OpenIngestSession
-		if scanErr := rows.Scan(&s.SessionID, &s.TenantID, &s.NodeID, &s.InternalName); scanErr != nil {
-			return nil, fmt.Errorf("scan open ingest session: %w", scanErr)
-		}
-		out = append(out, s)
+	out := make([]OpenIngestSession, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, OpenIngestSession{SessionID: row.SessionID, TenantID: row.TenantID, NodeID: row.NodeID, InternalName: row.StreamInternalName})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // RetireIngestSession ends one active session with the given reason and, in the SAME transaction,
@@ -93,16 +85,13 @@ func RetireIngestSession(ctx context.Context, sessionID, tenantID, internalName,
 			logger.WithError(rbErr).Warn("Failed to roll back retire ingest-session tx")
 		}
 	}()
-	if _, lockErr := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
+	qtx := foghorndb.New(tx)
+	if lockErr := qtx.AcquireDVRStartLock(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
 		return false, fmt.Errorf("lock ingest session retirement: %w", lockErr)
 	}
-	var nodeID string
-	err = tx.QueryRowContext(ctx, `
-		UPDATE foghorn.ingest_sessions
-		   SET ended_at = NOW(), ended_at_unix_millis = (EXTRACT(EPOCH FROM NOW()) * 1000)::bigint, ended_reason = $3
-		 WHERE id = $1::uuid AND tenant_id = $2::uuid AND stream_internal_name = $4 AND ended_at IS NULL
-		 RETURNING node_id
-	`, sessionID, tenantID, reason, internalName).Scan(&nodeID)
+	nodeID, err := qtx.RetireIngestSession(ctx, foghorndb.RetireIngestSessionParams{
+		EndedReason: reason, SessionID: sessionID, TenantID: tenantID, StreamInternalName: internalName,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, tx.Commit()
 	}
@@ -141,23 +130,20 @@ func RetireIngestSessionByClaim(ctx context.Context, tenantID, internalName, cla
 		return "", false, err
 	}
 	defer rollbackQuiet(tx)
-	if _, lockErr := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
+	qtx := foghorndb.New(tx)
+	if lockErr := qtx.AcquireDVRStartLock(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
 		return "", false, lockErr
 	}
-	var sessionID, nodeID string
-	err = tx.QueryRowContext(ctx, `
-		UPDATE foghorn.ingest_sessions
-		   SET ended_at=NOW(), ended_at_unix_millis=(EXTRACT(EPOCH FROM NOW())*1000)::bigint,
-		       ended_reason='placement_claim_lost'
-		 WHERE tenant_id=$1::uuid AND stream_internal_name=$2 AND start_trigger_uuid=$3 AND ended_at IS NULL
-		 RETURNING id::text, node_id
-	`, tenantID, internalName, claimToken).Scan(&sessionID, &nodeID)
+	retiredRow, err := qtx.RetireIngestSessionByClaim(ctx, foghorndb.RetireIngestSessionByClaimParams{
+		TenantID: tenantID, StreamInternalName: internalName, ClaimToken: claimToken,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, tx.Commit()
 	}
 	if err != nil {
 		return "", false, fmt.Errorf("retire lost placement claim: %w", err)
 	}
+	sessionID, nodeID := retiredRow.SessionID, retiredRow.NodeID
 	claims, err := ClaimDVRStops(ctx, tx, `ingest_generation=$1::uuid AND tenant_id::text=$2`, sessionID, tenantID)
 	if err != nil {
 		return "", false, err
@@ -295,29 +281,14 @@ func ReapNeverProjectedIngestSessions(ctx context.Context, olderThan time.Durati
 	if olderThan <= 0 {
 		olderThan = 2 * time.Minute
 	}
-	rows, err := db.QueryContext(ctx, `
-		SELECT id::text, tenant_id::text, stream_internal_name
-		  FROM foghorn.ingest_sessions
-		 WHERE ended_at IS NULL AND projection_state='pending'
-		   AND started_at < NOW() - ($1 * INTERVAL '1 millisecond')
-		 ORDER BY started_at
-		 LIMIT 500
-	`, olderThan.Milliseconds())
+	rows, err := foghorndb.New(db).ListNeverProjectedIngestSessions(ctx, olderThan.Milliseconds())
 	if err != nil {
 		return 0, fmt.Errorf("list never-projected ingest sessions: %w", err)
 	}
-	defer rows.Close()
 	type pending struct{ id, tenant, stream string }
-	var candidates []pending
-	for rows.Next() {
-		var p pending
-		if scanErr := rows.Scan(&p.id, &p.tenant, &p.stream); scanErr != nil {
-			return 0, fmt.Errorf("scan never-projected ingest session: %w", scanErr)
-		}
-		candidates = append(candidates, p)
-	}
-	if err := rows.Close(); err != nil {
-		return 0, err
+	candidates := make([]pending, 0, len(rows))
+	for _, row := range rows {
+		candidates = append(candidates, pending{id: row.SessionID, tenant: row.TenantID, stream: row.StreamInternalName})
 	}
 	retired := 0
 	for _, candidate := range candidates {
@@ -326,16 +297,12 @@ func ReapNeverProjectedIngestSessions(ctx context.Context, olderThan time.Durati
 		if err != nil {
 			return retired, err
 		}
-		if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, ingestStreamAdvisoryLockKey(candidate.tenant, candidate.stream)); err == nil {
+		qtx := foghorndb.New(tx)
+		if err = qtx.AcquireDVRStartLock(ctx, ingestStreamAdvisoryLockKey(candidate.tenant, candidate.stream)); err == nil {
 			var nodeID string
-			err = tx.QueryRowContext(ctx, `
-				UPDATE foghorn.ingest_sessions
-				   SET ended_at=NOW(), ended_at_unix_millis=(EXTRACT(EPOCH FROM NOW())*1000)::bigint,
-				       ended_reason='projection_timeout'
-				 WHERE id=$1::uuid AND tenant_id=$2::uuid AND ended_at IS NULL
-				   AND projection_state='pending' AND started_at < NOW() - ($3 * INTERVAL '1 millisecond')
-				 RETURNING node_id
-			`, candidate.id, candidate.tenant, olderThan.Milliseconds()).Scan(&nodeID)
+			nodeID, err = qtx.RetireNeverProjectedIngestSession(ctx, foghorndb.RetireNeverProjectedIngestSessionParams{
+				SessionID: candidate.id, TenantID: candidate.tenant, OlderThanMs: olderThan.Milliseconds(),
+			})
 			if errors.Is(err, sql.ErrNoRows) {
 				err = nil
 			} else if err == nil {
@@ -372,16 +339,9 @@ func PurgeExpiredCloseTombstones(ctx context.Context, olderThan time.Duration) (
 	if db == nil {
 		return 0, nil
 	}
-	res, err := db.ExecContext(ctx, `
-		DELETE FROM foghorn.ingest_close_tombstones
-		 WHERE created_at < NOW() - make_interval(secs => $1)
-	`, olderThan.Seconds())
+	n, err := foghorndb.New(db).PurgeExpiredCloseTombstones(ctx, olderThan.Seconds())
 	if err != nil {
 		return 0, fmt.Errorf("purge ingest close tombstones: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("purge ingest close tombstones rows affected: %w", err)
 	}
 	return n, nil
 }

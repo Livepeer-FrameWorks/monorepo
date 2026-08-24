@@ -9,6 +9,7 @@ import (
 
 	"frameworks/api_balancing/internal/artifacts"
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
@@ -127,23 +128,12 @@ func (j *PurgeDeletedJob) purge() {
 // and the next byte/row sweep can reap it once the deletion is acked.
 // Convergent: the row is now 'deleted', so it is never re-selected here.
 func (j *PurgeDeletedJob) markFailedArtifactsDeleted(ctx context.Context) {
-	res, err := j.db.ExecContext(ctx, `
-		UPDATE foghorn.artifacts a
-		   SET status = 'deleted'
-		 WHERE a.artifact_type IN ('clip', 'dvr', 'vod')
-		   AND a.status = 'failed'
-		   AND a.updated_at < NOW() - $1::interval
-		   AND NOT EXISTS (
-		       SELECT 1 FROM foghorn.artifact_nodes an
-		       WHERE an.artifact_hash = a.artifact_hash
-		         AND an.is_orphaned = false
-		   )
-	`, j.retentionAge.String())
+	n, err := foghorndb.New(j.db).MarkFailedArtifactsDeleted(ctx, j.retentionAge.String())
 	if err != nil {
 		j.logger.WithError(err).Error("Purge: failed to transition failed artifacts to deleted")
 		return
 	}
-	if n, _ := res.RowsAffected(); n > 0 { //nolint:errcheck // pq populates RowsAffected on UPDATE
+	if n > 0 {
 		j.logger.WithField("count", n).Info("Purge: marked failed artifacts deleted for catalog projection")
 	}
 }
@@ -178,59 +168,6 @@ func (j *PurgeDeletedJob) purgeArtifactBytesAndRows(ctx context.Context) {
 	if j.cleaner != nil {
 		localBackendID = j.cleaner.LocalBackendID
 	}
-	remoteClause := ""
-	args := []any{j.retentionAge.String()}
-	switch {
-	case j.crossClusterDeleteEnabled:
-		// No affinity filter: cross-cluster delegation frees remote bytes through their owner.
-	case localBackendID != "":
-		remoteClause = ` AND a.backend_id = $2`
-		args = append(args, localBackendID)
-	default:
-		// No fingerprint → cannot prove ownership of any row; claim nothing (fail closed).
-		remoteClause = ` AND false`
-	}
-
-	rows, err := j.db.QueryContext(ctx, `
-		SELECT a.artifact_hash, a.artifact_type, a.tenant_id::text,
-		       COALESCE(a.stream_internal_name, ''),
-		       COALESCE(a.format, ''),
-		       COALESCE(a.storage_cluster_id, ''),
-		       COALESCE(a.origin_cluster_id, ''),
-		       COALESCE(v.s3_key, ''),
-		       COALESCE(a.s3_url, ''),
-		       COALESCE(a.sync_object_key, ''),
-		       COALESCE(a.active_object_key, ''),
-		       COALESCE(a.active_dtsh_key, ''),
-		       COALESCE(a.durable_backend_local, false),
-		       COALESCE(a.backend_id, ''),
-		       a.status
-		FROM foghorn.artifacts a
-		LEFT JOIN foghorn.vod_metadata v ON v.artifact_hash = a.artifact_hash
-		WHERE a.artifact_type IN ('clip', 'dvr', 'vod')
-		  AND a.status = 'deleted'
-		  AND a.updated_at < NOW() - $1::interval
-		  -- Coverage gate: reap only once the catalog deletion is projected AND acked. A revision-0
-		  -- row (never seeded/projected) is NOT covered; it waits for the reconciler to seed+project
-		  -- it, so a purge can never drop a row whose deletion the catalog hasn't yet recorded.
-		  AND a.catalog_revision > 0
-		  AND a.catalog_synced_rev >= a.catalog_revision
-		  AND NOT EXISTS (
-		      SELECT 1 FROM foghorn.artifact_nodes an
-		      WHERE an.artifact_hash = a.artifact_hash
-		        AND an.is_orphaned = false
-		  )`+remoteClause+`
-		-- Deterministic, oldest-first ordering so progress is fair across passes rather than
-		-- re-scanning the same arbitrary head each cycle.
-		ORDER BY a.updated_at
-		LIMIT 1000
-	`, args...)
-	if err != nil {
-		j.logger.WithError(err).Error("Failed to query artifacts for purge")
-		return
-	}
-	defer func() { _ = rows.Close() }()
-
 	type purgeRow struct {
 		hash, artifactType, tenantID, streamInternal, format string
 		storageClusterID, originClusterID                    string
@@ -241,16 +178,25 @@ func (j *PurgeDeletedJob) purgeArtifactBytesAndRows(ctx context.Context) {
 		status                                               string
 	}
 	var batch []purgeRow
-	for rows.Next() {
-		var r purgeRow
-		if errScan := rows.Scan(&r.hash, &r.artifactType, &r.tenantID, &r.streamInternal, &r.format, &r.storageClusterID, &r.originClusterID, &r.vodS3Key, &r.s3URL, &r.pendingObjectKey, &r.activeObjectKey, &r.activeDtshKey, &r.durableBackendLocal, &r.backendID, &r.status); errScan != nil {
-			j.logger.WithError(errScan).Warn("Failed to scan artifact purge row")
-			continue
+	queries := foghorndb.New(j.db)
+	if j.crossClusterDeleteEnabled {
+		rows, err := queries.ListPurgeableArtifacts(ctx, j.retentionAge.String())
+		if err != nil {
+			j.logger.WithError(err).Error("Failed to query artifacts for purge")
+			return
 		}
-		batch = append(batch, r)
-	}
-	if errIter := rows.Err(); errIter != nil {
-		j.logger.WithError(errIter).Warn("Purge: row iteration error; processing partial batch")
+		for _, r := range rows {
+			batch = append(batch, purgeRow{r.ArtifactHash, r.ArtifactType, r.ATenantID, r.StreamInternalName, r.Format, r.StorageClusterID, r.OriginClusterID, r.VodS3Key, r.S3Url, r.SyncObjectKey, r.ActiveObjectKey, r.ActiveDtshKey, r.DurableBackendLocal, r.BackendID, r.Status.String})
+		}
+	} else if localBackendID != "" {
+		rows, err := queries.ListPurgeableLocalArtifacts(ctx, foghorndb.ListPurgeableLocalArtifactsParams{RetentionInterval: j.retentionAge.String(), BackendID: localBackendID})
+		if err != nil {
+			j.logger.WithError(err).Error("Failed to query artifacts for purge")
+			return
+		}
+		for _, r := range rows {
+			batch = append(batch, purgeRow{r.ArtifactHash, r.ArtifactType, r.ATenantID, r.StreamInternalName, r.Format, r.StorageClusterID, r.OriginClusterID, r.VodS3Key, r.S3Url, r.SyncObjectKey, r.ActiveObjectKey, r.ActiveDtshKey, r.DurableBackendLocal, r.BackendID, r.Status.String})
+		}
 	}
 
 	var clipCount, dvrCount, vodCount int
@@ -334,7 +280,7 @@ func (j *PurgeDeletedJob) purgeArtifactBytesAndRows(ctx context.Context) {
 			continue
 		}
 
-		if _, errDelete := j.db.ExecContext(ctx, "DELETE FROM foghorn.artifacts WHERE artifact_hash = $1 AND tenant_id::text = $2", r.hash, r.tenantID); errDelete != nil {
+		if errDelete := queries.DeletePurgedArtifact(ctx, foghorndb.DeletePurgedArtifactParams{ArtifactHash: r.hash, TenantID: r.tenantID}); errDelete != nil {
 			j.logger.WithError(errDelete).WithField("artifact_hash", r.hash).Warn("Purge: failed to hard-delete row")
 			continue
 		}
@@ -366,35 +312,18 @@ func (j *PurgeDeletedJob) purgeArtifactBytesAndRows(ctx context.Context) {
 // affected zero rows. The guarded CAS claim makes the race safe — a row already moved off 'uploading' matches
 // 0 rows and is left alone. Rows whose storage_cluster_id points to a peer cluster are skipped+logged.
 func (j *PurgeDeletedJob) purgeStaleUploadingVODs(ctx context.Context) {
-	rows, err := j.db.QueryContext(ctx, `
-		SELECT a.artifact_hash,
-		       a.tenant_id::text,
-		       COALESCE(a.storage_cluster_id, ''),
-		       COALESCE(a.origin_cluster_id, ''),
-		       COALESCE(a.backend_id, '')
-		FROM foghorn.artifacts a
-		JOIN foghorn.vod_metadata v ON v.artifact_hash = a.artifact_hash
-		WHERE a.status = 'uploading'
-		  AND v.upload_expires_at IS NOT NULL
-		  AND v.upload_expires_at < NOW() - INTERVAL '1 hour'
-		LIMIT 1000
-	`)
+	queries := foghorndb.New(j.db)
+	rows, err := queries.ListStaleUploadingVODs(ctx)
 	if err != nil {
 		j.logger.WithError(err).Error("Failed to query stale uploading VODs")
 		return
 	}
-	defer func() { _ = rows.Close() }()
-
 	type uploadRow struct {
 		hash, tenantID, storageClusterID, originClusterID, backendID string
 	}
 	var batch []uploadRow
-	for rows.Next() {
-		var r uploadRow
-		if errScan := rows.Scan(&r.hash, &r.tenantID, &r.storageClusterID, &r.originClusterID, &r.backendID); errScan != nil {
-			continue
-		}
-		batch = append(batch, r)
+	for _, r := range rows {
+		batch = append(batch, uploadRow{r.ArtifactHash, r.ATenantID, r.StorageClusterID, r.OriginClusterID, r.BackendID})
 	}
 	localBackendID := ""
 	if j.cleaner != nil {
@@ -425,17 +354,9 @@ func (j *PurgeDeletedJob) purgeStaleUploadingVODs(ctx context.Context) {
 		}
 		// Guarded CAS claim 'uploading' -> 'aborting', tenant-scoped. Do NOT touch S3 here — the AbortingVodRecoveryJob
 		// aborts the multipart idempotently and converges to 'deleted'. A row concurrently completed matches 0 rows.
-		res, errClaim := j.db.ExecContext(ctx, `
-			UPDATE foghorn.artifacts SET status = 'aborting', updated_at = NOW()
-			WHERE artifact_hash = $1 AND tenant_id = $2 AND status = 'uploading'
-		`, r.hash, r.tenantID)
+		n, errClaim := queries.ClaimStaleUploadingVOD(ctx, foghorndb.ClaimStaleUploadingVODParams{ArtifactHash: r.hash, TenantID: r.tenantID})
 		if errClaim != nil {
 			j.logger.WithError(errClaim).WithField("artifact_hash", r.hash).Warn("Stale upload abort-claim failed; will retry next cycle")
-			continue
-		}
-		n, raErr := res.RowsAffected()
-		if raErr != nil {
-			j.logger.WithError(raErr).WithField("artifact_hash", r.hash).Warn("Stale upload abort-claim RowsAffected failed")
 			continue
 		}
 		if n == 0 {
@@ -449,18 +370,9 @@ func (j *PurgeDeletedJob) purgeStaleUploadingVODs(ctx context.Context) {
 }
 
 func (j *PurgeDeletedJob) purgeStaleNodeRows(ctx context.Context) {
-	res, err := j.db.ExecContext(ctx, `
-		DELETE FROM foghorn.artifact_nodes
-		WHERE is_orphaned = true
-		  AND last_seen_at < NOW() - INTERVAL '7 days'
-	`)
+	affected, err := foghorndb.New(j.db).PurgeStaleArtifactNodes(ctx)
 	if err != nil {
 		j.logger.WithError(err).Error("Failed to purge stale artifact_nodes entries")
-		return
-	}
-	affected, errAffected := res.RowsAffected()
-	if errAffected != nil {
-		j.logger.WithError(errAffected).Warn("Failed to read RowsAffected for stale artifact_nodes purge")
 		return
 	}
 	if affected > 0 {

@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -10,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"frameworks/api_balancing/internal/federation"
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
@@ -346,48 +348,30 @@ func lookupProcessingJobAuthContext(ctx context.Context, manifestID string, req 
 		return nil
 	}
 
-	var tenantID, streamID string
-	var processesJSON sql.NullString
-	var width, height sql.NullInt64
-	var fps sql.NullFloat64
-	err := db.QueryRowContext(ctx, `
-		SELECT pj.tenant_id::text,
-		       COALESCE(a.stream_id::text, ''),
-		       pj.processes_json,
-		       vm.width,
-		       vm.height,
-		       vm.fps
-		  FROM foghorn.processing_jobs pj
-		  LEFT JOIN foghorn.artifacts a ON a.artifact_hash = pj.artifact_hash
-		  LEFT JOIN foghorn.vod_metadata vm ON vm.artifact_hash = pj.artifact_hash
-		 WHERE pj.artifact_hash = $1
-		   AND pj.status IN ('queued', 'dispatched', 'processing')
-		 ORDER BY pj.updated_at DESC
-		 LIMIT 1
-	`, artifactHash).Scan(&tenantID, &streamID, &processesJSON, &width, &height, &fps)
+	row, err := foghorndb.New(db).GetProcessingJobAuthContext(ctx, artifactHash)
 	if err != nil {
-		if err != sql.ErrNoRows && logger != nil {
+		if !errors.Is(err, sql.ErrNoRows) && logger != nil {
 			logger.WithError(err).WithField("manifest_id", manifestID).Warn("livepeer auth: processing job lookup failed")
 		}
 		return nil
 	}
-	if strings.TrimSpace(tenantID) == "" {
+	if strings.TrimSpace(row.TenantID) == "" {
 		return nil
 	}
 	source := mist.SourceMediaInfo{}
-	if width.Valid {
-		source.Width = int(width.Int64)
+	if row.Width.Valid {
+		source.Width = int(row.Width.Int32)
 	}
-	if height.Valid {
-		source.Height = int(height.Int64)
+	if row.Height.Valid {
+		source.Height = int(row.Height.Int32)
 	}
-	if fps.Valid {
-		source.FPS = fps.Float64
+	if row.Fps.Valid {
+		source.FPS = row.Fps.Float64
 	}
 	var profiles []livepeerJSONProfile
-	if processesJSON.Valid {
-		profiles = livepeerValidatedProfiles(processesJSON.String, req, source)
-		if mist.HasLivepeerProcesses(processesJSON.String) && len(profiles) == 0 && len(req.Profiles) == 0 {
+	if row.ProcessesJson.Valid {
+		profiles = livepeerValidatedProfiles(row.ProcessesJson.String, req, source)
+		if mist.HasLivepeerProcesses(row.ProcessesJson.String) && len(profiles) == 0 && len(req.Profiles) == 0 {
 			logger.WithFields(logging.Fields{
 				"manifest_id": manifestID,
 				"resolution":  req.ContentResolution,
@@ -396,8 +380,8 @@ func lookupProcessingJobAuthContext(ctx context.Context, manifestID string, req 
 		}
 	}
 	return &LivepeerAuthContext{
-		TenantID:     tenantID,
-		StreamID:     streamID,
+		TenantID:     row.TenantID,
+		StreamID:     row.StreamID,
 		InternalName: manifestID,
 		Profiles:     profiles,
 	}

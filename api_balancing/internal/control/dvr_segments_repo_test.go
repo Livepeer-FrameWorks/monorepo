@@ -247,7 +247,7 @@ func TestInsertDVRSegment_RecoveryInsertAllowedAfterParentCompleted(t *testing.T
 	mock.ExpectQuery(`SELECT sequence, status, media_start_ms, media_end_ms, duration_ms`).
 		WithArgs(dvrHash, segmentName).
 		WillReturnError(sql.ErrNoRows)
-	mock.ExpectQuery(`SELECT COALESCE\(MAX\(sequence\), -1\) \+ 1 FROM foghorn\.dvr_segments`).
+	mock.ExpectQuery(`SELECT \(COALESCE\(MAX\(sequence\), -1\) \+ 1\)::bigint FROM foghorn\.dvr_segments`).
 		WithArgs(dvrHash).
 		WillReturnRows(sqlmock.NewRows([]string{"next"}).AddRow(int64(0)))
 	mock.ExpectExec(`INSERT INTO foghorn\.dvr_segments`).

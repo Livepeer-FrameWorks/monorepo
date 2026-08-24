@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"frameworks/api_balancing/internal/database/foghorndb"
 )
 
 // billingAttributionBatch bounds the DISTINCT (tenant, authoritative-cluster) pairs a single
@@ -32,38 +34,27 @@ func ReconcileBillingAttribution(ctx context.Context) (int, error) {
 		return 0, nil
 	}
 	// Read the durable cursor (single-row table seeded by the migration; treat a missing row as the start).
-	var lastTenant, lastCluster string
-	if cErr := db.QueryRowContext(ctx,
-		`SELECT last_tenant, last_cluster FROM foghorn.billing_attribution_cursor WHERE id = true`,
-	).Scan(&lastTenant, &lastCluster); cErr != nil && !errors.Is(cErr, sql.ErrNoRows) {
+	queries := foghorndb.New(db)
+	cursor, cErr := queries.GetBillingAttributionCursor(ctx)
+	if cErr != nil && !errors.Is(cErr, sql.ErrNoRows) {
 		return 0, cErr
 	}
+	lastTenant, lastCluster := cursor.LastTenant, cursor.LastCluster
 
 	// A BOUNDED page of DISTINCT (tenant, authoritative-cluster) pairs among still-unmarked synced rows,
 	// strictly AFTER the cursor in (tenant, cluster) order. Owned pairs are marked and leave the unmarked set;
 	// the cursor advances past every reviewed pair so genuinely-remote pairs never block later owned ones.
-	rows, err := db.QueryContext(ctx, `
-		SELECT p.tenant, p.cluster FROM (
-			SELECT DISTINCT tenant_id::text AS tenant,
-			       COALESCE(NULLIF(storage_cluster_id,''), NULLIF(origin_cluster_id,''), '') AS cluster
-			FROM foghorn.artifacts
-			WHERE sync_status = 'synced' AND durable_backend_local = false AND tenant_id IS NOT NULL
-		) p
-		WHERE (p.tenant, p.cluster) > ($1, $2)
-		ORDER BY p.tenant, p.cluster
-		LIMIT $3`, lastTenant, lastCluster, billingAttributionBatch)
+	rows, err := queries.ListUnattributedStoragePairs(ctx, foghorndb.ListUnattributedStoragePairsParams{
+		LastTenant: lastTenant, LastCluster: lastCluster, PageLimit: int32(billingAttributionBatch),
+	})
 	if err != nil {
 		return 0, err
 	}
 	type pair struct{ tenant, cluster string }
 	var page, owned []pair
 	local := strings.TrimSpace(localClusterID)
-	for rows.Next() {
-		var p pair
-		if scanErr := rows.Scan(&p.tenant, &p.cluster); scanErr != nil {
-			rows.Close() //nolint:errcheck,sqlclosecheck
-			return 0, scanErr
-		}
+	for _, row := range rows {
+		p := pair{tenant: row.Tenant, cluster: row.Cluster}
 		page = append(page, p)
 		// Owned by RECORDED EVIDENCE ONLY (I2): the row's persisted authoritative cluster is empty (NULL = local
 		// by schema convention) or equals this cell's cluster id. The current advertised backing is NOT consulted —
@@ -72,25 +63,15 @@ func ReconcileBillingAttribution(ctx context.Context) (int, error) {
 			owned = append(owned, p)
 		}
 	}
-	if rowErr := rows.Err(); rowErr != nil {
-		rows.Close() //nolint:errcheck,sqlclosecheck
-		return 0, rowErr
-	}
-	rows.Close() //nolint:errcheck,sqlclosecheck
-
 	marked := 0
 	for _, p := range owned {
-		res, uErr := db.ExecContext(ctx, `
-			UPDATE foghorn.artifacts
-			SET durable_backend_local = true
-			WHERE sync_status = 'synced' AND durable_backend_local = false
-			  AND tenant_id::text = $1
-			  AND COALESCE(NULLIF(storage_cluster_id,''), NULLIF(origin_cluster_id,''), '') = $2`,
-			p.tenant, p.cluster)
+		n, uErr := queries.MarkStoragePairLocallyAttributed(ctx, foghorndb.MarkStoragePairLocallyAttributedParams{
+			TenantID: p.tenant, ClusterID: sql.NullString{String: p.cluster, Valid: true},
+		})
 		if uErr != nil {
 			return marked, uErr
 		}
-		if n, raErr := res.RowsAffected(); raErr == nil && n > 0 {
+		if n > 0 {
 			marked += int(n)
 		}
 	}
@@ -102,9 +83,9 @@ func ReconcileBillingAttribution(ctx context.Context) (int, error) {
 		last := page[len(page)-1]
 		nextTenant, nextCluster = last.tenant, last.cluster
 	}
-	if _, uErr := db.ExecContext(ctx, `
-		UPDATE foghorn.billing_attribution_cursor SET last_tenant = $1, last_cluster = $2 WHERE id = true`,
-		nextTenant, nextCluster); uErr != nil {
+	if uErr := queries.SetBillingAttributionCursor(ctx, foghorndb.SetBillingAttributionCursorParams{
+		LastTenant: nextTenant, LastCluster: nextCluster,
+	}); uErr != nil {
 		return marked, uErr
 	}
 	return marked, nil
@@ -137,27 +118,13 @@ func GetColdStorageUsage(ctx context.Context) (map[string]*ColdStorageUsage, err
 		return results, nil
 	}
 
-	rows, err := db.QueryContext(ctx, `
-			SELECT tenant_id::text, artifact_type, COALESCE(SUM(size_bytes), 0) AS total_bytes, COUNT(*) AS file_count
-			FROM foghorn.artifacts
-			WHERE tenant_id IS NOT NULL
-			  AND status != 'deleted'
-			  AND sync_status = 'synced'
-			  AND durable_backend_local = true
-			GROUP BY tenant_id, artifact_type
-		`)
+	rows, err := foghorndb.New(db).ListColdStorageUsage(ctx)
 	if err != nil {
 		return results, err
 	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var tenantID, artifactType string
-		var totalBytes uint64
-		var fileCount uint32
-		if err := rows.Scan(&tenantID, &artifactType, &totalBytes, &fileCount); err != nil {
-			return results, err
-		}
+	for _, row := range rows {
+		tenantID, artifactType := row.TenantID, row.ArtifactType
+		totalBytes, fileCount := uint64(row.TotalBytes), uint32(row.FileCount)
 
 		usage := results[tenantID]
 		if usage == nil {
@@ -182,11 +149,5 @@ func GetColdStorageUsage(ctx context.Context) (map[string]*ColdStorageUsage, err
 			return results, fmt.Errorf("cold storage usage: owned synced artifact type %q has no billing bucket (tenant %s, %d bytes)", artifactType, tenantID, totalBytes)
 		}
 	}
-	// A row iteration error (e.g. a truncated result set) must NOT be reported as a complete usage snapshot
-	// — that would silently UNDER-bill. Fail the call so the caller does not emit a partial snapshot.
-	if err := rows.Err(); err != nil {
-		return results, err
-	}
-
 	return results, nil
 }

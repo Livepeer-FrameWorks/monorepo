@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"frameworks/api_balancing/internal/database/foghorndb"
 )
 
 // ArtifactKind classifies an artifact's lifecycle phase / playback surface.
@@ -75,9 +77,7 @@ var ErrUnknownArtifact = errors.New("stream_registry: unknown artifact")
 
 // artifactDB is the minimal SQL surface the registry needs. Kept as an
 // interface so tests can substitute an in-memory fake.
-type artifactDB interface {
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}
+type artifactDB = foghorndb.DBTX
 
 // artifactStore holds cached artifact entries alongside the source-stream
 // cache on StreamRegistry. Kept as a sibling map so source/artifact lookups
@@ -557,62 +557,39 @@ func (r *StreamRegistry) storeArtifact(e ArtifactEntry) {
 }
 
 func (r *StreamRegistry) hydrateArtifactFromSQL(ctx context.Context, db artifactDB, lookupBy, key string) (ArtifactEntry, error) {
-	var (
-		artifactHash   string
-		artifactType   string
-		internalName   sql.NullString
-		streamInternal sql.NullString
-		streamID       sql.NullString
-		tenantID       sql.NullString
-		status         sql.NullString
-		format         sql.NullString
-		originCluster  sql.NullString
-		storageCluster sql.NullString
-		hasThumbnails  bool
-	)
-	query := `
-		SELECT artifact_hash, artifact_type,
-		       COALESCE(internal_name, ''), COALESCE(stream_internal_name, ''),
-		       COALESCE(stream_id::text, ''), COALESCE(tenant_id::text, ''),
-		       COALESCE(status, ''), COALESCE(format, ''),
-		       COALESCE(origin_cluster_id, ''), COALESCE(storage_cluster_id, ''),
-		       COALESCE(has_thumbnails, false)
-		FROM foghorn.artifacts
-		WHERE %s`
-	var where string
+	q := foghorndb.New(db)
+	var row foghorndb.GetRegistryArtifactByHashRow
+	var err error
 	switch lookupBy {
 	case "hash":
-		where = "artifact_hash = $1"
+		row, err = q.GetRegistryArtifactByHash(ctx, key)
 	case "internal":
-		where = "internal_name = $1"
+		internal, qerr := q.GetRegistryArtifactByInternalName(ctx, sql.NullString{String: key, Valid: true})
+		err = qerr
+		row = foghorndb.GetRegistryArtifactByHashRow(internal)
 	default:
 		return ArtifactEntry{}, fmt.Errorf("stream_registry: unsupported artifact lookup %q", lookupBy)
 	}
-	err := db.QueryRowContext(ctx, fmt.Sprintf(query, where), key).Scan(
-		&artifactHash, &artifactType, &internalName, &streamInternal,
-		&streamID, &tenantID, &status, &format,
-		&originCluster, &storageCluster, &hasThumbnails,
-	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ArtifactEntry{}, ErrUnknownArtifact
 		}
 		return ArtifactEntry{}, fmt.Errorf("stream_registry: artifact sql: %w", err)
 	}
-	kind := artifactKindFromType(artifactType)
+	kind := artifactKindFromType(row.ArtifactType)
 	entry := ArtifactEntry{
 		Kind:            kind,
-		ArtifactHash:    artifactHash,
-		InternalName:    internalName.String,
-		StreamID:        streamID.String,
-		StreamInternal:  streamInternal.String,
-		TenantID:        tenantID.String,
-		Status:          status.String,
-		Format:          format.String,
-		OriginClusterID: originCluster.String,
-		StorageCluster:  storageCluster.String,
-		HasThumbnails:   hasThumbnails,
-		RuntimeName:     artifactRuntimeName(kind, internalName.String, artifactHash),
+		ArtifactHash:    row.ArtifactHash,
+		InternalName:    row.InternalName,
+		StreamID:        row.StreamID,
+		StreamInternal:  row.StreamInternalName,
+		TenantID:        row.TenantID,
+		Status:          row.Status,
+		Format:          row.Format,
+		OriginClusterID: row.OriginClusterID,
+		StorageCluster:  row.StorageClusterID,
+		HasThumbnails:   row.HasThumbnails,
+		RuntimeName:     artifactRuntimeName(kind, row.InternalName, row.ArtifactHash),
 		HydratedAt:      time.Now(),
 		HydrationSrc:    "sql_artifact",
 	}
@@ -621,18 +598,7 @@ func (r *StreamRegistry) hydrateArtifactFromSQL(ctx context.Context, db artifact
 }
 
 func (r *StreamRegistry) hydrateProcessingFromSQL(ctx context.Context, db artifactDB, artifactHash string) (ArtifactEntry, error) {
-	var (
-		jobID    string
-		tenantID sql.NullString
-		status   sql.NullString
-	)
-	err := db.QueryRowContext(ctx, `
-		SELECT job_id::text, COALESCE(tenant_id::text, ''), COALESCE(status, '')
-		FROM foghorn.processing_jobs
-		WHERE artifact_hash = $1
-		ORDER BY created_at DESC
-		LIMIT 1
-	`, artifactHash).Scan(&jobID, &tenantID, &status)
+	row, err := foghorndb.New(db).GetRegistryProcessingJob(ctx, sql.NullString{String: artifactHash, Valid: true})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return ArtifactEntry{}, ErrUnknownArtifact
@@ -642,8 +608,8 @@ func (r *StreamRegistry) hydrateProcessingFromSQL(ctx context.Context, db artifa
 	entry := ArtifactEntry{
 		Kind:         ArtifactKindProcessing,
 		ArtifactHash: artifactHash,
-		TenantID:     tenantID.String,
-		Status:       status.String,
+		TenantID:     row.TenantID,
+		Status:       row.Status,
 		RuntimeName:  "processing+" + artifactHash,
 		HydratedAt:   time.Now(),
 		HydrationSrc: "sql_processing_job",

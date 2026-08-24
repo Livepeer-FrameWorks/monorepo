@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
@@ -89,11 +90,8 @@ func CloseTerminalChapter(ctx context.Context, artifactHash string, terminalAtMs
 	// which won't match the truncated terminal chapter_id we're about to
 	// materialize. 'open' implies no finalization has started, so the
 	// row is purely metadata and safe to delete.
-	if _, err := db.ExecContext(ctx, `
-		DELETE FROM foghorn.dvr_chapters
-		 WHERE artifact_hash = $1
-		   AND state         = 'open'
-	`, artifactHash); err != nil {
+	q := foghorndb.New(db)
+	if err := q.DeleteOpenDVRChapters(ctx, artifactHash); err != nil {
 		return fmt.Errorf("drop open chapter at terminal close: %w", err)
 	}
 	var intervalArg interface{}
@@ -109,18 +107,10 @@ func CloseTerminalChapter(ctx context.Context, artifactHash string, terminalAtMs
 			continue
 		}
 		chapterID := BuildChapterID(artifactHash, policy.Mode, intervalSeconds, s, e)
-		if _, err := db.ExecContext(ctx, `
-			INSERT INTO foghorn.dvr_chapters (
-				chapter_id, artifact_hash, mode, interval_seconds,
-				start_ms, end_ms, is_current,
-				state, segment_count, has_gaps, created_at
-			) VALUES (
-				$1, $2, $3, $4,
-				$5, $6, false,
-				'closed', 0, false, NOW()
-			)
-			ON CONFLICT (chapter_id) DO NOTHING
-		`, chapterID, artifactHash, policy.Mode, intervalArg, s, e); err != nil {
+		if err := q.InsertClosedDVRChapter(ctx, foghorndb.InsertClosedDVRChapterParams{
+			ChapterID: chapterID, ArtifactHash: artifactHash, Mode: policy.Mode,
+			IntervalSeconds: sql.NullInt32{Int32: intervalSeconds, Valid: intervalArg != nil}, StartMs: s, EndMs: e,
+		}); err != nil {
 			return fmt.Errorf("materialize terminal chapter [%d,%d): %w", s, e, err)
 		}
 	}
@@ -176,21 +166,14 @@ func BackfillChaptersThrough(
 	if intervalSeconds > 0 {
 		intervalArg = intervalSeconds
 	}
+	q := foghorndb.New(db)
 	for s := firstStart; s < targetStart; s += intervalMs {
 		e := s + intervalMs
 		chapterID := BuildChapterID(artifactHash, mode, intervalSeconds, s, e)
-		if _, err := db.ExecContext(ctx, `
-			INSERT INTO foghorn.dvr_chapters (
-				chapter_id, artifact_hash, mode, interval_seconds,
-				start_ms, end_ms, is_current,
-				state, segment_count, has_gaps, created_at
-			) VALUES (
-				$1, $2, $3, $4,
-				$5, $6, false,
-				'closed', 0, false, NOW()
-			)
-			ON CONFLICT (chapter_id) DO NOTHING
-		`, chapterID, artifactHash, mode, intervalArg, s, e); err != nil {
+		if err := q.InsertClosedDVRChapter(ctx, foghorndb.InsertClosedDVRChapterParams{
+			ChapterID: chapterID, ArtifactHash: artifactHash, Mode: mode,
+			IntervalSeconds: sql.NullInt32{Int32: intervalSeconds, Valid: intervalArg != nil}, StartMs: s, EndMs: e,
+		}); err != nil {
 			return fmt.Errorf("backfill closed chapter [%d,%d): %w", s, e, err)
 		}
 	}
@@ -214,21 +197,16 @@ func ReadDVRChapterPolicy(ctx context.Context, artifactHash string) (DVRChapterP
 	if db == nil {
 		return DVRChapterPolicy{}, false, sql.ErrConnDone
 	}
-	var p DVRChapterPolicy
-	err := db.QueryRowContext(ctx, `
-		SELECT COALESCE(dvr_chapter_mode, ''),
-		       COALESCE(dvr_chapter_interval, 0),
-		       COALESCE(EXTRACT(EPOCH FROM started_at)*1000, 0)::bigint,
-		       COALESCE(EXTRACT(EPOCH FROM ended_at)*1000, 0)::bigint,
-		       COALESCE(dvr_window_seconds, 0)
-		  FROM foghorn.artifacts
-		 WHERE artifact_hash = $1 AND artifact_type = 'dvr'
-	`, artifactHash).Scan(&p.Mode, &p.IntervalSeconds, &p.StartedAtMs, &p.EndedAtMs, &p.WindowSeconds)
+	row, err := foghorndb.New(db).GetDVRChapterPolicy(ctx, artifactHash)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return DVRChapterPolicy{}, false, nil
 		}
 		return DVRChapterPolicy{}, false, err
+	}
+	p := DVRChapterPolicy{
+		Mode: row.Mode, IntervalSeconds: row.IntervalSeconds, StartedAtMs: row.StartedAtMs,
+		EndedAtMs: row.EndedAtMs, WindowSeconds: row.WindowSeconds,
 	}
 	if p.Mode == "" || p.StartedAtMs <= 0 || p.EffectiveIntervalSeconds() <= 0 {
 		return p, false, nil
@@ -236,31 +214,23 @@ func ReadDVRChapterPolicy(ctx context.Context, artifactHash string) (DVRChapterP
 	return p, true, nil
 }
 
-type queryRowContexter interface {
-	QueryRowContext(context.Context, string, ...interface{}) *sql.Row
-}
-
-func DVRChapterMaxRangeMs(ctx context.Context, q queryRowContexter, artifactHash, tenantID string) (int64, error) {
-	if q == nil {
+func DVRChapterMaxRangeMs(ctx context.Context, conn foghorndb.DBTX, artifactHash, tenantID string) (int64, error) {
+	if conn == nil {
 		return 0, sql.ErrConnDone
 	}
-	query := `
-		SELECT dvr_window_seconds
-		  FROM foghorn.artifacts
-		 WHERE artifact_hash = $1
-		   AND artifact_type = 'dvr'
-	`
-	args := []interface{}{artifactHash}
+	q := foghorndb.New(conn)
+	var windowSeconds sql.NullInt32
+	var err error
 	if tenantID != "" {
-		query += ` AND tenant_id = $2`
-		args = append(args, tenantID)
+		windowSeconds, err = q.GetTenantDVRChapterMaxRange(ctx, foghorndb.GetTenantDVRChapterMaxRangeParams{ArtifactHash: artifactHash, TenantID: tenantID})
+	} else {
+		windowSeconds, err = q.GetDVRChapterMaxRange(ctx, artifactHash)
 	}
-	var windowSeconds sql.NullInt64
-	if err := q.QueryRowContext(ctx, query, args...).Scan(&windowSeconds); err != nil {
+	if err != nil {
 		return 0, err
 	}
-	if windowSeconds.Valid && windowSeconds.Int64 > 0 {
-		return windowSeconds.Int64 * 1000, nil
+	if windowSeconds.Valid && windowSeconds.Int32 > 0 {
+		return int64(windowSeconds.Int32) * 1000, nil
 	}
 	return int64(time.Hour / time.Millisecond), nil
 }

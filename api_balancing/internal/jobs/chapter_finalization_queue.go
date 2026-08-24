@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -422,31 +423,18 @@ type parentDVR struct {
 }
 
 func (q *ChapterFinalizationQueue) readParentDVR(ctx context.Context, dvrHash string) (parentDVR, error) {
-	var p parentDVR
-	if err := q.db.QueryRowContext(ctx, `
-		SELECT a.tenant_id::text,
-		       COALESCE(a.user_id::text, ''),
-		       COALESCE(a.stream_id::text, ''),
-		       COALESCE(a.stream_internal_name, ''),
-		       COALESCE(a.origin_cluster_id, ''),
-		       COALESCE(a.storage_cluster_id, ''),
-		       a.retention_until,
-		       COALESCE(
-		           (SELECT node_id
-		              FROM foghorn.artifact_nodes
-		             WHERE artifact_hash = a.artifact_hash
-		               AND is_orphaned = false
-		             ORDER BY last_seen_at DESC NULLS LAST
-		             LIMIT 1), '')
-		  FROM foghorn.artifacts a
-		 WHERE a.artifact_hash = $1
-		   AND a.artifact_type = 'dvr'
-	`, dvrHash).Scan(&p.tenantID, &p.userID, &p.streamID, &p.streamInternalName, &p.originClusterID, &p.storageClusterID, &p.retentionUntil, &p.recordingNode); err != nil {
+	row, err := foghorndb.New(q.db).GetChapterParentDVR(ctx, dvrHash)
+	p := parentDVR{}
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return p, fmt.Errorf("parent DVR row missing")
 		}
 		return p, err
 	}
+	p = parentDVR{tenantID: row.TenantID, userID: row.UserID, streamID: row.StreamID,
+		streamInternalName: row.StreamInternalName, originClusterID: row.OriginClusterID,
+		storageClusterID: row.StorageClusterID, retentionUntil: row.RetentionUntil,
+		recordingNode: row.RecordingNode}
 	return p, nil
 }
 
@@ -542,27 +530,17 @@ func (q *ChapterFinalizationQueue) ensurePlaybackArtifactRow(ctx context.Context
 	// A chapter inherits the parent DVR's retention horizon at allocation (keep-forever ⇒ NULL),
 	// so its lifetime tracks the parent. Later parent-retention changes are propagated by
 	// control.PropagateChapterRetention.
-	var retentionUntil interface{}
+	retentionUntil := sql.NullTime{}
 	if parent.retentionUntil.Valid {
-		retentionUntil = parent.retentionUntil.Time
+		retentionUntil = parent.retentionUntil
 	}
-	_, err := q.db.ExecContext(ctx, `
-		INSERT INTO foghorn.artifacts (
-			artifact_hash, artifact_type, tenant_id, user_id,
-			internal_name, stream_internal_name,
-			origin_type, origin_id, library_visible,
-			status, storage_location, sync_status, format,
-			origin_cluster_id, retention_until, created_at, updated_at
-		) VALUES (
-			$1, 'vod', $2::uuid, NULLIF($3, '')::uuid,
-			$4, $5,
-			'dvr_chapter', $6, false,
-			'finalizing', 'pending', 'pending', 'mkv',
-			NULLIF($7, ''), $8, NOW(), NOW()
-		)
-		ON CONFLICT (artifact_hash) DO NOTHING
-	`, hash, parent.tenantID, parent.userID, internalName, parent.streamInternalName, c.ChapterID, parent.originClusterID, retentionUntil)
-	return err
+	return foghorndb.New(q.db).EnsureChapterPlaybackArtifact(ctx, foghorndb.EnsureChapterPlaybackArtifactParams{
+		ArtifactHash: hash, TenantID: parent.tenantID, UserID: parent.userID,
+		InternalName:       sql.NullString{String: internalName, Valid: true},
+		StreamInternalName: sql.NullString{String: parent.streamInternalName, Valid: true},
+		ChapterID:          sql.NullString{String: c.ChapterID, Valid: true}, OriginClusterID: parent.originClusterID,
+		RetentionUntil: retentionUntil,
+	})
 }
 
 func chapterFinalizationDeadline(c control.DVRChapterRow) time.Duration {

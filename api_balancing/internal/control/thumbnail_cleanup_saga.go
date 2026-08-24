@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"frameworks/api_balancing/internal/database/foghorndb"
 )
 
 // RecordStreamCleanupObligation durably records the tombstone + thumbnail-cleanup obligation for a deleted asset
@@ -48,19 +50,19 @@ func RecordStreamCleanupObligation(ctx context.Context, dbh *sql.DB, tenantID, a
 	// other. An asset with no recorded id (never published / legacy) falls back to this cell's current local fingerprint
 	// (the store its live-stream thumbnails were minted on). The drainer later fails closed if the recorded id no longer
 	// matches the cell's current store (a forbidden repoint).
-	var distinctBackends int
-	var recorded sql.NullString
-	if sErr := tx.QueryRowContext(ctx, `
-		SELECT COUNT(DISTINCT backend_id), MIN(backend_id)
-		  FROM foghorn.thumbnail_task_assignment
-		 WHERE tenant_id = $1 AND asset_key = $2 AND backend_id IS NOT NULL AND backend_id <> ''
-	`, tenantID, assetKey).Scan(&distinctBackends, &recorded); sErr != nil {
+	qtx := foghorndb.New(tx)
+	snapshot, sErr := qtx.GetThumbnailAssetBackendSnapshot(ctx, foghorndb.GetThumbnailAssetBackendSnapshotParams{
+		TenantID: tenantID, AssetKey: assetKey,
+	})
+	if sErr != nil {
 		return sErr
 	}
+	distinctBackends := int(snapshot.DistinctBackends)
+	recorded := snapshot.BackendID
 	if distinctBackends > 1 {
 		return fmt.Errorf("record stream cleanup obligation: asset %s has %d distinct thumbnail backend_ids — the one-immutable-backend-per-cell invariant is violated; refusing to snapshot an arbitrary backend", assetKey, distinctBackends)
 	}
-	backendID := recorded.String
+	backendID := recorded
 	if backendID == "" {
 		backendID = localBackendFingerprint()
 	}
@@ -72,11 +74,9 @@ func RecordStreamCleanupObligation(ctx context.Context, dbh *sql.DB, tenantID, a
 	}
 
 	// Parent tombstone: existence fences claims/publishes; the lease/status/backoff machinery lives here.
-	insRes, iErr := tx.ExecContext(ctx, `
-		INSERT INTO foghorn.stream_cleanup_obligation (asset_key, tenant_id, backend_id)
-		VALUES ($1, $2, $3)
-		ON CONFLICT (asset_key) DO NOTHING
-	`, assetKey, tenantID, backendID)
+	_, iErr := qtx.InsertStreamCleanupObligation(ctx, foghorndb.InsertStreamCleanupObligationParams{
+		AssetKey: assetKey, TenantID: tenantID, BackendID: sql.NullString{String: backendID, Valid: true},
+	})
 	if iErr != nil {
 		return iErr
 	}
@@ -84,9 +84,6 @@ func RecordStreamCleanupObligation(ctx context.Context, dbh *sql.DB, tenantID, a
 	// the tombstone already exists) commits nothing new but releases the advisory lock as the durable ack, preserving
 	// the original snapshot. FAIL CLOSED if RowsAffected itself errors rather than assuming a state — Postgres normally
 	// supports it, but a foundational durability record must not proceed on an unknown insert result.
-	if _, raErr := insRes.RowsAffected(); raErr != nil {
-		return raErr
-	}
 	return tx.Commit()
 }
 
@@ -98,13 +95,7 @@ func AssetTombstoned(ctx context.Context, dbh *sql.DB, assetKey string) (bool, e
 	if dbh == nil || assetKey == "" {
 		return false, nil
 	}
-	var exists bool
-	err := dbh.QueryRowContext(ctx,
-		`SELECT EXISTS(SELECT 1 FROM foghorn.stream_cleanup_obligation WHERE asset_key = $1)`, assetKey).Scan(&exists)
-	if err != nil {
-		return false, err
-	}
-	return exists, nil
+	return foghorndb.New(dbh).AssetTombstoned(ctx, assetKey)
 }
 
 // assetTombstonedTx reports whether a tombstone exists for the asset, read inside a guarded claim/publish
@@ -112,10 +103,8 @@ func AssetTombstoned(ctx context.Context, dbh *sql.DB, assetKey string) (bool, e
 // shared per-asset advisory lock the caller MUST take first), not from a row lock — a row lock cannot fence an
 // as-yet-uninserted row. Under the advisory lock this plain read observes the committed tombstone-or-not.
 func assetTombstonedTx(ctx context.Context, tx *sql.Tx, assetKey string) (bool, error) {
-	var one int
-	err := tx.QueryRowContext(ctx,
-		`SELECT 1 FROM foghorn.stream_cleanup_obligation WHERE asset_key = $1`, assetKey).Scan(&one)
-	if err == sql.ErrNoRows {
+	_, err := foghorndb.New(tx).GetAssetTombstone(ctx, assetKey)
+	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
@@ -135,6 +124,7 @@ const thumbnailAssetLockNamespace = 0x746d626c
 // asset_key to an int4 bucket; the lock releases automatically at transaction end. Hash collisions only cause two
 // unrelated assets to briefly serialize — never a correctness loss.
 func lockThumbnailAsset(ctx context.Context, tx *sql.Tx, assetKey string) error {
-	_, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, hashtext($2))`, thumbnailAssetLockNamespace, assetKey)
-	return err
+	return foghorndb.New(tx).LockThumbnailAsset(ctx, foghorndb.LockThumbnailAssetParams{
+		LockNamespace: thumbnailAssetLockNamespace, AssetKey: assetKey,
+	})
 }

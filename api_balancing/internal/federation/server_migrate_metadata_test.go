@@ -46,7 +46,7 @@ func TestUpsertMigratedArtifactMetadata_BackfillsExistingOrigin(t *testing.T) {
 		WithArgs("hash-2", "dvr", "tenant-2", "stream-b", "m3u8", "s3", "synced", "s3://bucket/dvr", uint64(2048), "cluster-origin", "source-stream-b").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("UPDATE foghorn.artifacts").
-		WithArgs("hash-2", "dvr", "tenant-2", "stream-b", "m3u8", "s3", "synced", "s3://bucket/dvr", uint64(2048), "cluster-origin", "source-stream-b").
+		WithArgs("stream-b", "source-stream-b", "m3u8", "s3", "synced", "s3://bucket/dvr", uint64(2048), "cluster-origin", "hash-2", "dvr", "tenant-2").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	inserted, err := upsertMigratedArtifactMetadata(context.Background(), db, "tenant-2", "cluster-origin", artifact)

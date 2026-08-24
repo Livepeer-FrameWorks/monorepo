@@ -28,5 +28,9 @@ func TransitionThumbnailStatus(ctx context.Context, dbh *sql.DB, attemptID, from
 	if execErr != nil {
 		return false, execErr
 	}
-	return affectedOne(res)
+	rows, rowsErr := res.RowsAffected()
+	if rowsErr != nil {
+		return false, rowsErr
+	}
+	return rows == 1, nil
 }

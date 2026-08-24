@@ -12,6 +12,7 @@ import (
 
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"frameworks/api_balancing/internal/identity"
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
@@ -516,15 +517,7 @@ func (s *FederationServer) dvrRecordingTenant(ctx context.Context, token string)
 	if s.db == nil || token == "" {
 		return "", false
 	}
-	var tenantID string
-	err := s.db.QueryRowContext(ctx, `
-		SELECT COALESCE(tenant_id::text, '')
-		FROM foghorn.artifacts
-		WHERE internal_name = $1
-		  AND artifact_type = 'dvr'
-		  AND status = 'recording'
-		LIMIT 1
-	`, token).Scan(&tenantID)
+	tenantID, err := foghorndb.New(s.db).DVRRecordingTenant(ctx, sql.NullString{String: token, Valid: true})
 	if err != nil {
 		return "", false
 	}
@@ -573,28 +566,7 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *foghornfede
 		"artifact_type":      req.GetArtifactType(),
 	})
 
-	var internalName, streamInternalName, artifactType, format, storageLocation, syncStatus string
-	var recordedObjectKey string
-	var sizeBytes sql.NullInt64
-	var authoritativeCluster sql.NullString
-	err := s.db.QueryRowContext(ctx, `
-		SELECT COALESCE(a.internal_name, ''),
-		       COALESCE(a.stream_internal_name, ''),
-		       a.artifact_type,
-		       COALESCE(a.format, ''),
-		       COALESCE(a.storage_location, ''),
-		       COALESCE(a.sync_status, ''),
-		       a.size_bytes,
-		       COALESCE(a.storage_cluster_id, a.origin_cluster_id),
-		       -- The authoritative PUBLISHED object key: active_object_key (the version-addressed pointer
-		       -- completion flips) first, then vod_metadata.s3_key (kept in sync for VOD), then the legacy
-		       -- sync_object_key descriptor for pre-version rows. The read path consumes it rather than
-		       -- reconstructing a possibly-divergent key.
-		       COALESCE(NULLIF(a.active_object_key, ''), NULLIF(v.s3_key, ''), NULLIF(a.sync_object_key, ''), '')
-		FROM foghorn.artifacts a
-		LEFT JOIN foghorn.vod_metadata v ON v.artifact_hash = a.artifact_hash
-		WHERE a.artifact_hash = $1 AND a.tenant_id = $2 AND a.status != 'deleted'
-	`, hash, tenantID).Scan(&internalName, &streamInternalName, &artifactType, &format, &storageLocation, &syncStatus, &sizeBytes, &authoritativeCluster, &recordedObjectKey)
+	descriptor, err := foghorndb.New(s.db).GetFederatedArtifactDescriptor(ctx, foghorndb.GetFederatedArtifactDescriptorParams{ArtifactHash: hash, TenantID: tenantID})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return &foghornfederationpb.PrepareArtifactResponse{Error: "artifact not found"}, nil
@@ -602,6 +574,9 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *foghornfede
 		log.WithError(err).Error("PrepareArtifact DB query failed")
 		return nil, status.Error(codes.Internal, "failed to query artifact")
 	}
+	internalName, streamInternalName, artifactType := descriptor.InternalName, descriptor.StreamInternalName, descriptor.ArtifactType
+	format, storageLocation, syncStatus := descriptor.Format, descriptor.StorageLocation, descriptor.SyncStatus
+	sizeBytes, authoritativeCluster, recordedObjectKey := descriptor.SizeBytes, descriptor.AuthoritativeCluster, descriptor.ObjectKey
 
 	// Authoritative cluster = where the bytes actually live. NULL preserves
 	// the prior origin-as-storage semantic for rows written before delegation
@@ -743,31 +718,17 @@ func (s *FederationServer) maybePeerRelay(ctx context.Context, artifactHash, for
 	if s.db == nil {
 		return peerRelayResult{}, false
 	}
-	var (
-		originNodeID string
-		baseURL      string
-	)
 	// COALESCE base_url from node_outputs — RegisterOriginArtifact
 	// doesn't populate per-row base_url (the StoredArtifact heartbeat
 	// proto is per-artifact, not per-node). node_outputs is the
 	// canonical per-node URL store updated by NodeLifecycle. Without
 	// the JOIN, processed VOD output + DVR chapter VOD rows would
 	// have empty base_url here and silently fall through to S3.
-	err := s.db.QueryRowContext(ctx, `
-		SELECT an.node_id, COALESCE(NULLIF(an.base_url, ''), no.base_url, '')
-		FROM foghorn.artifact_nodes an
-		LEFT JOIN foghorn.node_outputs no ON no.node_id = an.node_id
-		WHERE an.artifact_hash = $1
-		  AND an.role = 'origin'
-		  AND an.is_complete = true
-		  AND an.is_orphaned = false
-		  AND an.last_seen_at > NOW() - INTERVAL '90 seconds'
-		ORDER BY an.last_seen_at DESC
-		LIMIT 1
-	`, artifactHash).Scan(&originNodeID, &baseURL)
+	originRow, err := foghorndb.New(s.db).LatestLiveOriginNode(ctx, artifactHash)
 	if errors.Is(err, sql.ErrNoRows) {
 		return peerRelayResult{}, false
 	}
+	originNodeID, baseURL := originRow.NodeID, originRow.BaseUrl
 	if err != nil {
 		log.WithError(err).Warn("PrepareArtifact peer-relay lookup failed")
 		return peerRelayResult{}, false
@@ -1122,18 +1083,14 @@ func (s *FederationServer) tenantMatchesLocalRow(ctx context.Context, artifactHa
 	if s.db == nil {
 		return false
 	}
-	var rowTenant sql.NullString
-	err := s.db.QueryRowContext(ctx, `SELECT tenant_id FROM foghorn.artifacts WHERE artifact_hash = $1`, artifactHash).Scan(&rowTenant)
+	rowTenant, err := foghorndb.New(s.db).LocalArtifactTenant(ctx, artifactHash)
 	if err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			s.logger.WithError(err).WithField("artifact_hash", artifactHash).Warn("DeleteStorageObjects: failed to read local tenant for cross-check")
 		}
 		return false
 	}
-	if !rowTenant.Valid {
-		return false
-	}
-	return rowTenant.String == claimedTenant
+	return rowTenant == claimedTenant
 }
 
 // mintArtifactContext is what resolveMintArtifactContext returns to the
@@ -1254,14 +1211,10 @@ func (s *FederationServer) healMintArtifactRow(ctx context.Context, artifactHash
 	internalName := sql.NullString{String: mctx.internalName, Valid: mctx.internalName != ""}
 	streamName := sql.NullString{String: mctx.streamName, Valid: mctx.streamName != ""}
 	originCluster := sql.NullString{String: mctx.originClusterID, Valid: mctx.originClusterID != ""}
-	if _, err := s.db.ExecContext(ctx, `
-		INSERT INTO foghorn.artifacts
-			(artifact_hash, artifact_type, tenant_id,
-			 stream_internal_name, internal_name, origin_cluster_id,
-			 storage_location, sync_status, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, 'pending', 'pending', NOW(), NOW())
-		ON CONFLICT (artifact_hash) DO NOTHING
-	`, artifactHash, artifactType, mctx.tenantID, streamName, internalName, originCluster); err != nil {
+	if err := foghorndb.New(s.db).InsertMintArtifactShell(ctx, foghorndb.InsertMintArtifactShellParams{
+		ArtifactHash: artifactHash, ArtifactType: artifactType, TenantID: mctx.tenantID,
+		StreamInternalName: streamName, InternalName: internalName, OriginClusterID: originCluster,
+	}); err != nil {
 		s.logger.WithError(err).WithFields(logging.Fields{
 			"artifact_hash": artifactHash,
 			"artifact_type": artifactType,
@@ -1701,35 +1654,18 @@ func (s *FederationServer) ListTenantArtifacts(ctx context.Context, req *foghorn
 		return nil, status.Error(codes.Internal, "database not available")
 	}
 
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT artifact_hash, artifact_type, COALESCE(internal_name, ''),
-		       COALESCE(format, ''), COALESCE(storage_location, ''),
-		       COALESCE(sync_status, ''), COALESCE(s3_url, ''),
-		       COALESCE(size_bytes, 0),
-		       COALESCE(EXTRACT(EPOCH FROM created_at)::bigint, 0),
-		       COALESCE(EXTRACT(EPOCH FROM frozen_at)::bigint, 0),
-		       COALESCE(stream_internal_name, '')
-		FROM foghorn.artifacts
-		WHERE tenant_id = $1 AND status != 'deleted'
-		ORDER BY created_at DESC
-	`, tenantID)
+	rows, err := foghorndb.New(s.db).ListFederatedTenantArtifacts(ctx, tenantID)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to query artifacts: %v", err)
 	}
-	defer rows.Close()
-
 	var artifacts []*foghornfederationpb.ArtifactMetadata
-	for rows.Next() {
-		var a foghornfederationpb.ArtifactMetadata
-		if err := rows.Scan(&a.ArtifactHash, &a.ArtifactType, &a.InternalName,
-			&a.Format, &a.StorageLocation, &a.SyncStatus, &a.S3Url,
-			&a.SizeBytes, &a.CreatedAt, &a.FrozenAt, &a.StreamInternalName); err != nil {
-			return nil, status.Errorf(codes.Internal, "failed to scan artifact: %v", err)
-		}
-		artifacts = append(artifacts, &a)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, status.Errorf(codes.Internal, "row iteration error: %v", err)
+	for _, row := range rows {
+		artifacts = append(artifacts, &foghornfederationpb.ArtifactMetadata{
+			ArtifactHash: row.ArtifactHash, ArtifactType: row.ArtifactType,
+			InternalName: row.InternalName, Format: row.Format, StorageLocation: row.StorageLocation,
+			SyncStatus: row.SyncStatus, S3Url: row.S3Url, SizeBytes: uint64(row.SizeBytes),
+			CreatedAt: row.CreatedAt, FrozenAt: row.FrozenAt, StreamInternalName: row.StreamInternalName,
+		})
 	}
 
 	s.logger.WithFields(logging.Fields{
@@ -1811,57 +1747,28 @@ func (s *FederationServer) MigrateArtifactMetadata(ctx context.Context, req *fog
 }
 
 func upsertMigratedArtifactMetadata(ctx context.Context, db *sql.DB, tenantID, sourceClusterID string, a *foghornfederationpb.ArtifactMetadata) (bool, error) {
-	result, err := db.ExecContext(ctx, `
-		INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, tenant_id, internal_name, stream_internal_name, format, status, storage_location, sync_status, s3_url, size_bytes, origin_cluster_id)
-		VALUES ($1, $2, $3, $4, $11, $5, 'active', $6, $7, $8, $9, $10)
-		ON CONFLICT (artifact_hash) DO NOTHING
-	`, a.ArtifactHash, a.ArtifactType, tenantID, a.InternalName, a.Format,
-		a.StorageLocation, a.SyncStatus, a.S3Url, a.SizeBytes, sourceClusterID, a.StreamInternalName)
+	queries := foghorndb.New(db)
+	textValue := func(value string) sql.NullString { return sql.NullString{String: value, Valid: value != ""} }
+	inserted, err := queries.InsertMigratedArtifactMetadata(ctx, foghorndb.InsertMigratedArtifactMetadataParams{
+		ArtifactHash: a.ArtifactHash, ArtifactType: a.ArtifactType, TenantID: tenantID,
+		InternalName: textValue(a.InternalName), Format: textValue(a.Format),
+		StorageLocation: textValue(a.StorageLocation), SyncStatus: textValue(a.SyncStatus),
+		S3Url: textValue(a.S3Url), SizeBytes: sql.NullInt64{Int64: int64(a.SizeBytes), Valid: true},
+		OriginClusterID: textValue(sourceClusterID), StreamInternalName: textValue(a.StreamInternalName),
+	})
 	if err != nil {
 		return false, err
 	}
-	rowsAffected, _ := result.RowsAffected()
-	if rowsAffected > 0 {
+	if inserted > 0 {
 		return true, nil
 	}
 
-	_, err = db.ExecContext(ctx, `
-		UPDATE foghorn.artifacts
-		SET internal_name = CASE
-				WHEN COALESCE(internal_name, '') = '' AND $4 <> '' THEN $4
-				ELSE internal_name
-			END,
-			stream_internal_name = CASE
-				WHEN COALESCE(stream_internal_name, '') = '' AND $11 <> '' THEN $11
-				ELSE stream_internal_name
-			END,
-			format = CASE
-				WHEN COALESCE(format, '') = '' AND $5 <> '' THEN $5
-				ELSE format
-			END,
-			storage_location = CASE
-				WHEN COALESCE(storage_location, '') = '' AND $6 <> '' THEN $6
-				ELSE storage_location
-			END,
-			sync_status = CASE
-				WHEN COALESCE(sync_status, '') = '' AND $7 <> '' THEN $7
-				ELSE sync_status
-			END,
-			s3_url = CASE
-				WHEN COALESCE(s3_url, '') = '' AND $8 <> '' THEN $8
-				ELSE s3_url
-			END,
-			size_bytes = CASE
-				WHEN COALESCE(size_bytes, 0) = 0 AND $9 > 0 THEN $9
-				ELSE size_bytes
-			END,
-			origin_cluster_id = CASE
-				WHEN COALESCE(origin_cluster_id, '') = '' THEN $10
-				ELSE origin_cluster_id
-			END
-		WHERE artifact_hash = $1 AND artifact_type = $2 AND tenant_id = $3
-	`, a.ArtifactHash, a.ArtifactType, tenantID, a.InternalName, a.Format,
-		a.StorageLocation, a.SyncStatus, a.S3Url, a.SizeBytes, sourceClusterID, a.StreamInternalName)
+	err = queries.FillMigratedArtifactMetadata(ctx, foghorndb.FillMigratedArtifactMetadataParams{
+		ArtifactHash: a.ArtifactHash, ArtifactType: a.ArtifactType, TenantID: tenantID,
+		InternalName: a.InternalName, Format: a.Format, StorageLocation: a.StorageLocation,
+		SyncStatus: a.SyncStatus, S3Url: a.S3Url, SizeBytes: int64(a.SizeBytes),
+		OriginClusterID: sourceClusterID, StreamInternalName: a.StreamInternalName,
+	})
 	if err != nil {
 		return false, err
 	}
@@ -1999,16 +1906,9 @@ func (s *FederationServer) revalidateForwardedArtifact(ctx context.Context, req 
 		return err
 	}
 
-	var dbStreamID sql.NullString
-	err = s.db.QueryRowContext(ctx, `
-		SELECT stream_id::text
-		FROM foghorn.artifacts
-		WHERE artifact_hash = $1
-		  AND artifact_type = $2
-		  AND tenant_id = $3
-		  AND status != 'deleted'
-		LIMIT 1
-	`, req.GetArtifactHash(), artifactType, req.GetTenantId()).Scan(&dbStreamID)
+	dbStreamID, err := foghorndb.New(s.db).FederatedArtifactStreamID(ctx, foghorndb.FederatedArtifactStreamIDParams{
+		ArtifactHash: req.GetArtifactHash(), ArtifactType: artifactType, TenantID: req.GetTenantId(),
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return status.Error(codes.NotFound, "artifact not found")
 	}
@@ -2016,7 +1916,7 @@ func (s *FederationServer) revalidateForwardedArtifact(ctx context.Context, req 
 		return status.Error(codes.Internal, "failed to verify artifact ownership")
 	}
 
-	if req.GetCommand() == "stop_dvr" && req.GetStreamId() != "" && dbStreamID.Valid && dbStreamID.String != "" && dbStreamID.String != req.GetStreamId() {
+	if req.GetCommand() == "stop_dvr" && req.GetStreamId() != "" && dbStreamID != "" && dbStreamID != req.GetStreamId() {
 		return status.Error(codes.FailedPrecondition, "stream_id mismatch")
 	}
 

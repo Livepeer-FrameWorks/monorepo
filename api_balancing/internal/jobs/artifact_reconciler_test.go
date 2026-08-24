@@ -685,7 +685,7 @@ func TestProjectCommodoreArtifactStateRepairsStorageAndThumbnailProjection(t *te
 	// Nullable columns: nil clears; a null tracks column → tracks_present false.
 	rows := sqlmock.NewRows(projectionRowCols).
 		AddRow("vod-hash", "vod", "tenant-1", "media-us-1", true, int64(1024),
-			int64(120500), `[{"type":"video","codec":"h264"}]`, "synced", true, "local", int64(7), "ready", int64(1800000000), nil, "media-official").
+			int64(120500), `[{"type":"video","codec":"h264"}]`, "synced", true, "local", int64(7), "ready", time.Unix(1800000000, 0), nil, "media-official").
 		AddRow("clip-hash", "clip", "tenant-1", nil, nil, nil,
 			nil, nil, "processing", nil, nil, int64(9), "processing", nil, nil, nil)
 
@@ -870,7 +870,7 @@ func TestProjectCommodoreArtifactState_DeletionAbsentDoesNotAdvance(t *testing.T
 			int64(1000), nil, "synced", true, "local", int64(8), "deleted", nil, nil, nil))
 	// No catalog_synced_rev advance — the absent (uncovered) deletion is backed off.
 	mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET catalog_projection_attempts = catalog_projection_attempts \+ 1`).
-		WithArgs("gone-hash", sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), "gone-hash").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	count, _ := r.projectCommodoreArtifactState(context.Background())
@@ -889,7 +889,7 @@ func TestProjectCommodoreArtifactState_DeletionAbsentDoesNotAdvance(t *testing.T
 var projectionRowCols = []string{
 	"artifact_hash", "artifact_type", "tenant_id", "storage_cluster_id", "has_thumbnails", "size_bytes",
 	"duration_ms", "tracks", "sync_status", "dtsh_synced", "storage_location", "catalog_revision",
-	"lifecycle_status", "retention_unix", "error_message", "thumbnail_serving_cluster_id",
+	"lifecycle_status", "retention_until", "error_message", "thumbnail_serving_cluster_id",
 }
 
 // Fairness: the scan must order by catalog_synced_rev (projection age), not catalog_revision
@@ -978,7 +978,7 @@ func TestProjectCommodoreArtifactState_FailingRowDoesNotBlockValidRow(t *testing
 	mock.ExpectQuery("FROM foghorn.artifacts").WithArgs(10, "c1").WillReturnRows(rows)
 	// stuck-hash backs off (not-found), good-hash advances — the failing row doesn't block it.
 	mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET catalog_projection_attempts = catalog_projection_attempts \+ 1`).
-		WithArgs("stuck-hash", sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), "stuck-hash").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET catalog_synced_rev`).
 		WithArgs(int64(6), "good-hash").
@@ -1018,7 +1018,7 @@ func TestProjectCommodoreArtifactState_NotCoveredDoesNotAdvance(t *testing.T) {
 	// No watermark advance — but the uncovered row is backed off (exponential) so it can't
 	// head-of-line block.
 	mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET catalog_projection_attempts = catalog_projection_attempts \+ 1`).
-		WithArgs("vod-hash", sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), "vod-hash").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	count, _ := r.projectCommodoreArtifactState(context.Background())
@@ -1265,7 +1265,7 @@ func TestReconcileFreezePublicationLedger(t *testing.T) {
 	// Per-row artifact re-read: attempt reqOLD is NO LONGER on the row (a newer/blank attempt), active pointers
 	// name only the media candidate → the .dtsh candidate is orphaned.
 	reread := func() {
-		mock.ExpectQuery(`SELECT COALESCE\(sync_request_id,''\), COALESCE\(dtsh_sync_request_id,''\),\s+COALESCE\(active_object_key,''\), COALESCE\(active_dtsh_key,''\)\s+FROM foghorn.artifacts`).
+		mock.ExpectQuery(`SELECT COALESCE\(sync_request_id, ''\)::text AS sync_request_id, COALESCE\(dtsh_sync_request_id, ''\)::text AS dtsh_sync_request_id,\s+COALESCE\(active_object_key, ''\)::text AS active_object_key, COALESCE\(active_dtsh_key, ''\)::text AS active_dtsh_key\s+FROM foghorn.artifacts`).
 			WithArgs("hash-1", "t1").
 			WillReturnRows(sqlmock.NewRows([]string{"sync_request_id", "dtsh_sync_request_id", "active_object_key", "active_dtsh_key"}).
 				AddRow("", "", "obj.att-reqOLD", ""))
@@ -1356,7 +1356,7 @@ func TestProjectCommodoreArtifactState_ThumbnailServingClusterAck(t *testing.T) 
 	mock.ExpectQuery("FROM foghorn.artifacts").WithArgs(10, "c1").WillReturnRows(rows)
 	// with-serving: NOT acked → backed off (no watermark advance).
 	mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET catalog_projection_attempts = catalog_projection_attempts \+ 1`).
-		WithArgs("with-serving", sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), "with-serving").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	// no-serving: needs no ack → watermark advances.
 	mock.ExpectExec("UPDATE foghorn.artifacts SET catalog_synced_rev").

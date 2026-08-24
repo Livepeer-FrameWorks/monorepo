@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/artifactoutbox"
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"frameworks/api_balancing/internal/identity"
 	"frameworks/api_balancing/internal/ingesterrors"
 	"frameworks/api_balancing/internal/state"
@@ -777,31 +778,20 @@ func getStreamSourceFromLifecycleDB(internalName string) (nodeID string, baseURL
 	if db == nil || internalName == "" {
 		return "", "", false
 	}
-	rows, err := db.QueryContext(context.Background(), `
-		SELECT node_id, lifecycle::text
-		  FROM foghorn.node_lifecycle
-		 WHERE last_updated > NOW() - INTERVAL '2 minutes'
-		 ORDER BY last_updated DESC
-		 LIMIT 20
-	`)
+	rows, err := foghorndb.New(db).ListRecentNodeLifecycles(context.Background())
 	if err != nil {
 		return "", "", false
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var id, raw string
-		if err := rows.Scan(&id, &raw); err != nil {
-			continue
-		}
+	for _, row := range rows {
 		var update ipcpb.NodeLifecycleUpdate
-		if err := json.Unmarshal([]byte(raw), &update); err != nil {
+		if err := json.Unmarshal([]byte(row.Lifecycle), &update); err != nil {
 			continue
 		}
 		stream := update.GetStreams()[internalName]
 		if stream == nil || stream.GetInputs() <= 0 || stream.GetReplicated() {
 			continue
 		}
-		return id, update.GetBaseUrl(), true
+		return row.NodeID, update.GetBaseUrl(), true
 	}
 	return "", "", false
 }
@@ -2449,24 +2439,20 @@ func CreateIngestSession(ctx context.Context, tenantID, nodeID, internalName str
 	// subsumes same-PID serialization. FinalizeIngestSessionClose takes the SAME lock, so a close-before-insert fully
 	// serializes against this mint (the close's tombstone is committed before the mint reads it, or
 	// this mint commits before the close runs and the close ends the row). Released on commit/rollback.
-	if _, lockErr := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
+	q := foghorndb.New(tx)
+	if lockErr := q.LockIngestStream(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
 		return "", 0, fmt.Errorf("acquire ingest-session stream lock: %w", lockErr)
 	}
 
 	// 1. Has THIS exact trigger EXECUTION (keyed (tenant, node, UUID); the UUID identifies one trigger
 	// firing and is stable across its blocking-trigger retries) already minted a session? Resolves
 	// idempotent re-fires and the already-ended race without consulting the stream incumbent.
-	var uuidID, uuidStream string
-	var uuidEnded bool
-	var uuidPID int64
-	uuidErr := tx.QueryRowContext(ctx, `
-		SELECT id::text, stream_internal_name, (ended_at IS NOT NULL), connector_pid
-		  FROM foghorn.ingest_sessions
-		 WHERE tenant_id = $1::uuid AND node_id = $2 AND start_trigger_uuid = $3
-		 FOR UPDATE
-	`, tenantID, nodeID, triggerUUID).Scan(&uuidID, &uuidStream, &uuidEnded, &uuidPID)
+	uuidRow, uuidErr := q.LockIngestSessionByTrigger(ctx, foghorndb.LockIngestSessionByTriggerParams{
+		TenantID: tenantID, NodeID: nodeID, StartTriggerUuid: triggerUUID,
+	})
 	switch {
 	case uuidErr == nil:
+		uuidID, uuidStream, uuidEnded, uuidPID := uuidRow.ID, uuidRow.StreamInternalName, uuidRow.Ended, uuidRow.ConnectorPid
 		if uuidStream != internalName || uuidPID != connectorPID {
 			// Same trigger UUID bound to a DIFFERENT stream or connector PID — an anomaly (a UUID
 			// identifies one trigger execution, which belongs to one connector admitting one
@@ -2490,17 +2476,11 @@ func CreateIngestSession(ctx context.Context, tenantID, nodeID, internalName str
 	// 2. Is a DIFFERENT publisher already the ACTIVE source for this STREAM? At most one row here
 	// (uq_foghorn_ingest_sessions_active_per_stream). Under the stream lock this is the authoritative
 	// single-publisher decision.
-	var incID, incNode string
-	var incPID, incMillis int64
 	var staleStopClaims []DVRStopClaim // dispatched AFTER commit (PID-reuse orphan stop)
-	incErr := tx.QueryRowContext(ctx, `
-		SELECT id::text, node_id, connector_pid, started_at_unix_millis
-		  FROM foghorn.ingest_sessions
-		 WHERE tenant_id = $1::uuid AND stream_internal_name = $2 AND ended_at IS NULL
-		 FOR UPDATE
-	`, tenantID, internalName).Scan(&incID, &incNode, &incPID, &incMillis)
+	inc, incErr := q.LockActiveStreamIngestSession(ctx, foghorndb.LockActiveStreamIngestSessionParams{TenantID: tenantID, StreamInternalName: internalName})
 	switch {
 	case incErr == nil:
+		incID, incNode, incPID, incMillis := inc.ID, inc.NodeID, inc.ConnectorPid, inc.StartedAtUnixMillis
 		// An incumbent holds the stream. The ONLY case that supersedes it is the OS reusing this
 		// exact (node, PID) for a NEWER connector while the incumbent's row still lingers active
 		// (its close was lost) — a genuine same-connection-slot replacement. Anything else (a
@@ -2508,11 +2488,7 @@ func CreateIngestSession(ctx context.Context, tenantID, nodeID, internalName str
 		// duplicate publisher and is REJECTED to protect the incumbent; a real reconnect is admitted
 		// once the incumbent is ended by its close or the STREAM_END reaper.
 		if incNode == nodeID && incPID == connectorPID && startedAtMillis > incMillis {
-			if _, endErr := tx.ExecContext(ctx, `
-				UPDATE foghorn.ingest_sessions
-				   SET ended_at = NOW(), ended_at_unix_millis = $2, ended_reason = 'superseded_pid_reuse'
-				 WHERE id = $1::uuid AND ended_at IS NULL
-			`, incID, startedAtMillis); endErr != nil {
+			if endErr := q.EndSupersededPIDIngestSession(ctx, foghorndb.EndSupersededPIDIngestSessionParams{SessionID: incID, EndedAtUnixMillis: sql.NullInt64{Int64: startedAtMillis, Valid: true}}); endErr != nil {
 				return "", 0, fmt.Errorf("end stale ingest session on PID reuse: %w", endErr)
 			}
 			claims, claimErr := ClaimDVRStops(ctx, tx, `ingest_generation = $1::uuid AND tenant_id::text = $2`, incID, tenantID)
@@ -2535,14 +2511,11 @@ func CreateIngestSession(ctx context.Context, tenantID, nodeID, internalName str
 	// session's start means the publisher is already gone — deny rather than mint an active session
 	// for a dead connector. The event-time bound (close >= start) keeps a genuine LATER reconnect on
 	// a reused (node, PID) — which starts after the old close — from being blocked.
-	var tombstoned bool
-	if tsErr := tx.QueryRowContext(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM foghorn.ingest_close_tombstones
-			 WHERE tenant_id = $1::uuid AND node_id = $2 AND connector_pid = $3
-			       AND stream_internal_name = $4 AND close_unix_millis >= $5
-		)
-	`, tenantID, nodeID, connectorPID, internalName, startedAtMillis).Scan(&tombstoned); tsErr != nil {
+	tombstoned, tsErr := q.IngestCloseTombstoneExists(ctx, foghorndb.IngestCloseTombstoneExistsParams{
+		TenantID: tenantID, NodeID: nodeID, ConnectorPid: connectorPID,
+		StreamInternalName: internalName, CloseUnixMillis: startedAtMillis,
+	})
+	if tsErr != nil {
 		return "", 0, fmt.Errorf("check ingest close tombstone: %w", tsErr)
 	}
 	if tombstoned {
@@ -2553,17 +2526,12 @@ func CreateIngestSession(ctx context.Context, tenantID, nodeID, internalName str
 	// partial unique (tenant, stream) / (tenant, node, PID) / (tenant, node, UUID) indexes are the
 	// durable backstop — a violation here means a bug or lock-hash collision, so surface it (fail
 	// closed) rather than silently absorb it.
-	var intentArg interface{}
-	if len(dvrIntent) > 0 {
-		intentArg = string(dvrIntent)
-	}
-	var newID string
-	if insErr := tx.QueryRowContext(ctx, `
-		INSERT INTO foghorn.ingest_sessions
-			(tenant_id, node_id, stream_internal_name, connector_pid, start_trigger_uuid, started_at_unix_millis, dvr_intent, ingest_cluster_id, projection_state)
-		VALUES ($1::uuid, $2, $3, $4, $5, $6, $7::jsonb, NULLIF($8, ''), 'pending')
-		RETURNING id::text
-	`, tenantID, nodeID, internalName, connectorPID, triggerUUID, startedAtMillis, intentArg, ingestClusterID).Scan(&newID); insErr != nil {
+	newID, insErr := q.InsertIngestSession(ctx, foghorndb.InsertIngestSessionParams{
+		TenantID: tenantID, NodeID: nodeID, StreamInternalName: internalName, ConnectorPid: connectorPID,
+		StartTriggerUuid: triggerUUID, StartedAtUnixMillis: startedAtMillis,
+		DvrIntent: sql.NullString{String: string(dvrIntent), Valid: len(dvrIntent) > 0}, IngestClusterID: ingestClusterID,
+	})
+	if insErr != nil {
 		return "", 0, fmt.Errorf("insert ingest session: %w", insErr)
 	}
 	if commitErr := tx.Commit(); commitErr != nil {
@@ -2600,9 +2568,7 @@ func DVRStartLockKey(internalName, sourceNodeID string) string {
 
 // dvrStopQueryer is satisfied by both *sql.DB and *sql.Tx, so a stop can be claimed
 // standalone or inside a larger transaction (e.g. atomically with a session end).
-type dvrStopQueryer interface {
-	QueryContext(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
-}
+type dvrStopQueryer = foghorndb.DBTX
 
 // DVRStopClaim is one durably-claimed stop obligation ready to dispatch.
 type DVRStopClaim struct {
@@ -2626,29 +2592,69 @@ type DVRStopClaim struct {
 // from the fixed guard, so its first placeholder is $1. Pass a *sql.Tx as q to claim
 // inside a larger transaction; the caller dispatches with DispatchDVRStops AFTER commit.
 func ClaimDVRStops(ctx context.Context, q dvrStopQueryer, whereSQL string, args ...interface{}) ([]DVRStopClaim, error) {
-	rows, err := q.QueryContext(ctx, `
-		UPDATE foghorn.artifacts
-		   SET dvr_start_dispatch = jsonb_set(COALESCE(dvr_start_dispatch, '{}'::jsonb), '{state}', '"stop_pending"'::jsonb),
-		       status = 'stopping',
-		       updated_at = NOW()
-		 WHERE artifact_type = 'dvr'
-		       AND status IN ('requested','starting','recording')
-		       AND (`+whereSQL+`)
-		RETURNING artifact_hash, COALESCE(dvr_start_dispatch->>'node_id','')
-	`, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
+	dbq := foghorndb.New(q)
 	var claims []DVRStopClaim
-	for rows.Next() {
-		var c DVRStopClaim
-		if scanErr := rows.Scan(&c.DVRHash, &c.StorageNodeID); scanErr != nil {
-			return nil, scanErr
+	switch whereSQL {
+	case `artifact_hash = $1 AND tenant_id = $2`, `artifact_hash = $1 AND tenant_id::text = $2`:
+		values, err := dvrStopStringArgs(args, 2)
+		if err != nil {
+			return nil, err
 		}
-		claims = append(claims, c)
+		rows, err := dbq.ClaimDVRStopByArtifact(ctx, foghorndb.ClaimDVRStopByArtifactParams{ArtifactHash: values[0], TenantID: values[1]})
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			claims = append(claims, DVRStopClaim{DVRHash: row.ArtifactHash, StorageNodeID: row.StorageNodeID})
+		}
+		return claims, nil
+	case `ingest_generation = $1::uuid AND tenant_id::text = $2`:
+		values, err := dvrStopStringArgs(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		rows, err := dbq.ClaimDVRStopsForGeneration(ctx, foghorndb.ClaimDVRStopsForGenerationParams{IngestGeneration: values[0], TenantID: values[1]})
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			claims = append(claims, DVRStopClaim{DVRHash: row.ArtifactHash, StorageNodeID: row.StorageNodeID})
+		}
+		return claims, nil
+	case `stream_internal_name = $1 AND dvr_start_dispatch->>'source_node_id' = $2 AND tenant_id::text = $3
+		 AND (ingest_generation IS NULL OR NOT EXISTS (
+		     SELECT 1 FROM foghorn.ingest_sessions s
+		      WHERE s.id = foghorn.artifacts.ingest_generation AND s.ended_at IS NULL))`:
+		values, err := dvrStopStringArgs(args, 3)
+		if err != nil {
+			return nil, err
+		}
+		rows, err := dbq.ClaimDVRStopsForEndedSource(ctx, foghorndb.ClaimDVRStopsForEndedSourceParams{StreamInternalName: sql.NullString{String: values[0], Valid: true}, DvrStartDispatch: sql.NullString{String: values[1], Valid: true}, TenantID: values[2]})
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range rows {
+			claims = append(claims, DVRStopClaim{DVRHash: row.ArtifactHash, StorageNodeID: row.StorageNodeID})
+		}
+		return claims, nil
+	default:
+		return nil, fmt.Errorf("unsupported DVR stop predicate %q", whereSQL)
 	}
-	return claims, rows.Err()
+}
+
+func dvrStopStringArgs(args []interface{}, want int) ([]string, error) {
+	if len(args) != want {
+		return nil, fmt.Errorf("DVR stop predicate requires %d arguments, got %d", want, len(args))
+	}
+	values := make([]string, want)
+	for i, arg := range args {
+		value, ok := arg.(string)
+		if !ok {
+			return nil, fmt.Errorf("DVR stop argument %d has type %T, want string", i+1, arg)
+		}
+		values[i] = value
+	}
+	return values, nil
 }
 
 // DispatchDVRStops is the SEND half of the primitive: a best-effort immediate DVRStop per
@@ -2747,12 +2753,7 @@ func OpenIngestSessionCluster(ctx context.Context, tenantID, nodeID, triggerUUID
 	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	var clusterID string
-	err := db.QueryRowContext(ctx, `
-		SELECT COALESCE(ingest_cluster_id, '')
-		  FROM foghorn.ingest_sessions
-		 WHERE tenant_id = $1::uuid AND node_id = $2 AND start_trigger_uuid = $3 AND ended_at IS NULL
-	`, tenantID, nodeID, triggerUUID).Scan(&clusterID)
+	clusterID, err := foghorndb.New(db).GetOpenIngestSessionCluster(ctx, foghorndb.GetOpenIngestSessionClusterParams{TenantID: tenantID, NodeID: nodeID, StartTriggerUuid: triggerUUID})
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
@@ -2792,29 +2793,11 @@ func EndIngestSessionsForStreamEnd(ctx context.Context, tenantID, nodeID, intern
 	}()
 	// Scope the rows in a closure so defer rows.Close() runs BEFORE the ClaimDVRStops queries below
 	// reuse the transaction (a tx cannot have open rows while issuing the next query).
-	var endedIDs []string
-	if scanErr := func() error {
-		rows, err := tx.QueryContext(ctx, `
-			UPDATE foghorn.ingest_sessions
-			   SET ended_at = NOW(), ended_at_unix_millis = $4, ended_reason = 'stream_end_reaped'
-			 WHERE tenant_id = $1::uuid AND node_id = $2 AND stream_internal_name = $3
-			       AND ended_at IS NULL AND started_at_unix_millis <= $4
-			RETURNING id::text
-		`, tenantID, nodeID, internalName, eventMillis)
-		if err != nil {
-			return fmt.Errorf("reap ingest sessions on stream end: %w", err)
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
-				return fmt.Errorf("scan reaped session id: %w", err)
-			}
-			endedIDs = append(endedIDs, id)
-		}
-		return rows.Err()
-	}(); scanErr != nil {
-		return 0, scanErr
+	endedIDs, scanErr := foghorndb.New(tx).ReapStreamEndIngestSessions(ctx, foghorndb.ReapStreamEndIngestSessionsParams{
+		TenantID: tenantID, NodeID: nodeID, StreamInternalName: internalName, EndedAtUnixMillis: sql.NullInt64{Int64: eventMillis, Valid: true},
+	})
+	if scanErr != nil {
+		return 0, fmt.Errorf("reap ingest sessions on stream end: %w", scanErr)
 	}
 	// Claim each reaped session's bound DVR stop in the SAME transaction, so a lost close can never
 	// leave a live writer behind a reaped session.
@@ -2863,15 +2846,12 @@ func FenceOfflineBackstop(ctx context.Context, registry *StreamRegistry, tenantI
 			logging.NewLogger().WithError(rbErr).Warn("Failed to roll back offline-fence tx")
 		}
 	}()
-	if _, lockErr := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
+	q := foghorndb.New(tx)
+	if lockErr := q.LockIngestStream(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
 		return false, 0, fmt.Errorf("acquire offline-fence stream lock: %w", lockErr)
 	}
-	var hasActive bool
-	if probeErr := tx.QueryRowContext(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM foghorn.ingest_sessions
-			 WHERE tenant_id = $1::uuid AND stream_internal_name = $2 AND ended_at IS NULL
-		)`, tenantID, internalName).Scan(&hasActive); probeErr != nil {
+	hasActive, probeErr := q.HasActiveStreamIngestSession(ctx, foghorndb.HasActiveStreamIngestSessionParams{TenantID: tenantID, StreamInternalName: internalName})
+	if probeErr != nil {
 		return false, 0, fmt.Errorf("offline-fence active probe: %w", probeErr)
 	}
 	if hasActive {
@@ -2925,27 +2905,21 @@ func ProjectSourceIfCurrent(ctx context.Context, registry *StreamRegistry, tenan
 			logging.NewLogger().WithError(rbErr).Warn("Failed to roll back project-if-current tx")
 		}
 	}()
-	if _, lockErr := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
+	q := foghorndb.New(tx)
+	if lockErr := q.LockIngestStream(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
 		return false, false, fmt.Errorf("acquire project-if-current stream lock: %w", lockErr)
 	}
-	var isCurrent bool
-	var revision sql.NullInt64
-	var projectionState sql.NullString
-	if probeErr := tx.QueryRowContext(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM foghorn.ingest_sessions
-			 WHERE tenant_id = $1::uuid AND stream_internal_name = $2 AND id = $3::uuid AND ended_at IS NULL
-		), (SELECT source_revision FROM foghorn.ingest_sessions WHERE id = $3::uuid AND tenant_id = $1::uuid),
-		   (SELECT projection_state FROM foghorn.ingest_sessions WHERE id = $3::uuid AND tenant_id = $1::uuid)
-	`, tenantID, internalName, generation).Scan(&isCurrent, &revision, &projectionState); probeErr != nil {
+	probe, probeErr := q.ProbeCurrentSourceProjection(ctx, foghorndb.ProbeCurrentSourceProjectionParams{TenantID: tenantID, StreamInternalName: internalName, Generation: generation})
+	if probeErr != nil {
 		return false, false, fmt.Errorf("project-if-current active-session probe: %w", probeErr)
 	}
+	isCurrent, revision, projectionState := probe.IsCurrent, probe.SourceRevision, probe.ProjectionState
 	if !isCurrent {
 		// This session ended (its own close won) or was superseded by a newer admission while this
 		// projection was delayed — drop it, and signal the caller to DENY (no side effects).
 		return false, false, tx.Commit()
 	}
-	if projectionState.String == "active" {
+	if projectionState == "active" {
 		// A RESUMED projection: this exact generation already crossed the shared CAS and was durably
 		// confirmed — this call is a blocking-trigger retry whose first response was lost (or a
 		// replica re-handling the trigger). The once-only admission effects are owed by the durable
@@ -2982,11 +2956,7 @@ func ProjectSourceIfCurrent(ctx context.Context, registry *StreamRegistry, tenan
 		if revErr != nil {
 			return false, false, revErr
 		}
-		if _, updateErr := tx.ExecContext(ctx, `
-			UPDATE foghorn.ingest_sessions
-			   SET source_revision=$2
-			 WHERE id=$1::uuid AND ended_at IS NULL AND projection_state='pending'
-		`, generation, rev); updateErr != nil {
+		if updateErr := q.PersistSourceProjectionRevision(ctx, foghorndb.PersistSourceProjectionRevisionParams{Generation: generation, SourceRevision: sql.NullInt64{Int64: rev, Valid: true}}); updateErr != nil {
 			return false, false, fmt.Errorf("persist source projection revision: %w", updateErr)
 		}
 	}
@@ -3013,20 +2983,11 @@ func ProjectSourceIfCurrent(ctx context.Context, registry *StreamRegistry, tenan
 		return false, false, errors.Join(cause, abortPendingSourceProjection(ctx, tenantID, internalName, generation))
 	}
 	defer rollbackQuiet(confirmTx)
-	res, markErr := confirmTx.ExecContext(ctx, `
-		UPDATE foghorn.ingest_sessions
-		   SET projection_state='active', projected_at=COALESCE(projected_at, NOW())
-		 WHERE id=$1::uuid AND tenant_id=$2::uuid AND stream_internal_name=$3
-			   AND ended_at IS NULL AND source_revision=$4
-			   AND projection_state='pending'
-	`, generation, tenantID, internalName, rev)
+	marked, markErr := foghorndb.New(confirmTx).ConfirmSourceProjection(ctx, foghorndb.ConfirmSourceProjectionParams{
+		Generation: generation, TenantID: tenantID, StreamInternalName: internalName, SourceRevision: sql.NullInt64{Int64: rev, Valid: true},
+	})
 	if markErr != nil {
 		cause := fmt.Errorf("confirm source projection: %w", markErr)
-		return false, false, errors.Join(cause, abortPendingSourceProjection(ctx, tenantID, internalName, generation))
-	}
-	marked, markRowsErr := res.RowsAffected()
-	if markRowsErr != nil {
-		cause := fmt.Errorf("confirm source projection rows: %w", markRowsErr)
 		return false, false, errors.Join(cause, abortPendingSourceProjection(ctx, tenantID, internalName, generation))
 	}
 	if marked != 1 {
@@ -3056,18 +3017,11 @@ func abortPendingSourceProjection(ctx context.Context, tenantID, internalName, g
 		return fmt.Errorf("begin abort pending source projection: %w", err)
 	}
 	defer rollbackQuiet(tx)
-	if _, lockErr := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
+	q := foghorndb.New(tx)
+	if lockErr := q.LockIngestStream(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
 		return fmt.Errorf("lock abort pending source projection: %w", lockErr)
 	}
-	var nodeID string
-	err = tx.QueryRowContext(ctx, `
-		UPDATE foghorn.ingest_sessions
-		   SET ended_at=NOW(), ended_at_unix_millis=(EXTRACT(EPOCH FROM NOW())*1000)::bigint,
-		       ended_reason='projection_failed'
-		 WHERE id=$1::uuid AND tenant_id=$2::uuid AND stream_internal_name=$3
-		   AND ended_at IS NULL AND projection_state='pending'
-		 RETURNING node_id
-	`, generation, tenantID, internalName).Scan(&nodeID)
+	nodeID, err := q.AbortPendingSourceProjection(ctx, foghorndb.AbortPendingSourceProjectionParams{Generation: generation, TenantID: tenantID, StreamInternalName: internalName})
 	if errors.Is(err, sql.ErrNoRows) {
 		return tx.Commit()
 	}
@@ -3090,8 +3044,8 @@ func abortPendingSourceProjection(ctx context.Context, tenantID, internalName, g
 // nextSourceRevision draws the next monotonic source-ordering epoch from foghorn.source_projection_revision
 // within the caller's advisory-locked tx.
 func nextSourceRevision(ctx context.Context, tx *sql.Tx) (int64, error) {
-	var rev int64
-	if err := tx.QueryRowContext(ctx, `SELECT nextval('foghorn.source_projection_revision')`).Scan(&rev); err != nil {
+	rev, err := foghorndb.New(tx).NextSourceProjectionRevision(ctx)
+	if err != nil {
 		return 0, fmt.Errorf("draw source projection revision: %w", err)
 	}
 	return rev, nil
@@ -3153,19 +3107,15 @@ func FinalizeIngestSessionClose(ctx context.Context, tenantID, nodeID string, co
 	// Serialize against CreateIngestSession on the SAME (tenant, stream) lock so a close-before-insert
 	// is ordered: either this close's tombstone commits before the mint reads it (the mint then denies
 	// the dead connector), or the mint commits first and the UPDATE below ends the row it created.
-	if _, lockErr := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
+	q := foghorndb.New(tx)
+	if lockErr := q.LockIngestStream(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
 		return res, fmt.Errorf("acquire ingest-close stream lock: %w", lockErr)
 	}
 
-	var endedID, endedClaimToken, endedClusterID string
-	endErr := tx.QueryRowContext(ctx, `
-		UPDATE foghorn.ingest_sessions
-		   SET ended_at = NOW(), ended_at_unix_millis = $4, ended_reason = 'push_input_close'
-		 WHERE tenant_id = $1::uuid AND node_id = $2 AND connector_pid = $3 AND ended_at IS NULL
-		       AND stream_internal_name = $5
-		       AND started_at_unix_millis <= $4
-		RETURNING id::text, start_trigger_uuid, COALESCE(ingest_cluster_id, '')
-	`, tenantID, nodeID, connectorPID, closeMillis, internalName).Scan(&endedID, &endedClaimToken, &endedClusterID)
+	ended, endErr := q.CloseIngestSession(ctx, foghorndb.CloseIngestSessionParams{
+		TenantID: tenantID, NodeID: nodeID, ConnectorPid: connectorPID,
+		CloseUnixMillis: sql.NullInt64{Int64: closeMillis, Valid: true}, StreamInternalName: internalName,
+	})
 	if errors.Is(endErr, sql.ErrNoRows) {
 		// No active session to end — either a duplicate / already-ended / event-time-fenced close, OR
 		// this close arrived BEFORE its own PUSH_REWRITE could mint the session (concurrent trigger
@@ -3173,11 +3123,9 @@ func FinalizeIngestSessionClose(ctx context.Context, tenantID, nodeID string, co
 		// rewrite instead of resurrecting a dead publisher as an active session. Harmless when the close
 		// was merely a duplicate: a genuine reconnect starts AFTER this close's event time and so is not
 		// blocked, and the reaper sweeps the tombstone on a TTL.
-		if _, insErr := tx.ExecContext(ctx, `
-			INSERT INTO foghorn.ingest_close_tombstones
-				(tenant_id, node_id, connector_pid, stream_internal_name, close_unix_millis)
-			VALUES ($1::uuid, $2, $3, $4, $5)
-		`, tenantID, nodeID, connectorPID, internalName, closeMillis); insErr != nil {
+		if insErr := q.InsertIngestCloseTombstone(ctx, foghorndb.InsertIngestCloseTombstoneParams{
+			TenantID: tenantID, NodeID: nodeID, ConnectorPid: connectorPID, StreamInternalName: internalName, CloseUnixMillis: closeMillis,
+		}); insErr != nil {
 			return res, fmt.Errorf("record ingest close tombstone: %w", insErr)
 		}
 		return res, tx.Commit()
@@ -3185,15 +3133,15 @@ func FinalizeIngestSessionClose(ctx context.Context, tenantID, nodeID string, co
 	if endErr != nil {
 		return res, fmt.Errorf("end ingest session on close: %w", endErr)
 	}
-	res.EndedSessionID = endedID
-	res.ClaimToken = endedClaimToken
-	res.ClusterID = endedClusterID
+	res.EndedSessionID = ended.ID
+	res.ClaimToken = ended.StartTriggerUuid
+	res.ClusterID = ended.ClusterID
 
 	// Claim the stop obligation for the DVR bound to THIS generation, in the SAME tx as the
 	// session end (atomic: either both commit and the durable stop_pending is drained by
 	// recovery even if the send below fails, or neither commits and the close is retried).
 	claims, claimErr := ClaimDVRStops(ctx, tx,
-		`ingest_generation = $1::uuid AND tenant_id::text = $2`, endedID, tenantID)
+		`ingest_generation = $1::uuid AND tenant_id::text = $2`, ended.ID, tenantID)
 	if claimErr != nil {
 		return CloseFinalization{}, fmt.Errorf("claim DVR stop obligation for ingest generation: %w", claimErr)
 	}
@@ -3201,7 +3149,7 @@ func FinalizeIngestSessionClose(ctx context.Context, tenantID, nodeID string, co
 	if revisionErr != nil {
 		return CloseFinalization{}, revisionErr
 	}
-	if enqueueErr := enqueueOfflineEffectTx(ctx, tx, tenantID, internalName, nodeID, endedID, revision, OfflineEffectIntent{
+	if enqueueErr := enqueueOfflineEffectTx(ctx, tx, tenantID, internalName, nodeID, ended.ID, revision, OfflineEffectIntent{
 		SetNodeOffline: true, TeardownStream: true, BroadcastOffline: true,
 	}); enqueueErr != nil {
 		return CloseFinalization{}, enqueueErr
@@ -3258,46 +3206,16 @@ func ClaimUnstartedDVRIntents(ctx context.Context, olderThan time.Duration, limi
 	// for as long as the session is active (a recoverable outage must not permanently abandon a
 	// recording); once the stream ends, ended_at drops the row from the scan. dvr_intent_attempts is
 	// informational (it grows in a persistent-failure loop, bounded in RATE by the lease).
-	rows, err := db.QueryContext(ctx, `
-		WITH claimed AS (
-			SELECT s.id
-			  FROM foghorn.ingest_sessions s
-			 WHERE s.dvr_intent IS NOT NULL
-			   AND s.ended_at IS NULL
-			   AND s.dvr_intent_error IS NULL
-			   AND (s.dvr_intent_lease_until IS NULL OR s.dvr_intent_lease_until < NOW())
-			   AND s.started_at < NOW() - ($1 * INTERVAL '1 second')
-			   AND NOT EXISTS (
-			       SELECT 1 FROM foghorn.artifacts a
-			        WHERE a.ingest_generation = s.id AND a.artifact_type = 'dvr'
-			   )
-			 ORDER BY s.started_at
-			 FOR UPDATE SKIP LOCKED
-			 LIMIT $2
-		)
-		UPDATE foghorn.ingest_sessions u
-		   SET dvr_intent_attempts = u.dvr_intent_attempts + 1,
-		       dvr_intent_lease_until = NOW() + ($3 * INTERVAL '1 second')
-		  FROM claimed
-		 WHERE u.id = claimed.id
-		RETURNING u.id::text, u.tenant_id::text, u.stream_internal_name, u.node_id, u.dvr_intent::text, u.dvr_intent_attempts
-	`, graceSeconds, limit, leaseSeconds)
+	rows, err := foghorndb.New(db).ClaimUnstartedDVRIntents(ctx, foghorndb.ClaimUnstartedDVRIntentsParams{
+		GraceSeconds: graceSeconds, BatchLimit: int32(limit), LeaseSeconds: leaseSeconds,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("claim unstarted DVR intents: %w", err)
 	}
-	defer rows.Close()
-	var out []UnstartedDVRIntent
-	for rows.Next() {
-		var it UnstartedDVRIntent
-		var intent string
-		if scanErr := rows.Scan(&it.SessionID, &it.TenantID, &it.InternalName, &it.NodeID, &intent, &it.Attempts); scanErr != nil {
-			return nil, fmt.Errorf("scan claimed DVR intent: %w", scanErr)
-		}
-		it.Intent = []byte(intent)
-		out = append(out, it)
-	}
-	if rowsErr := rows.Err(); rowsErr != nil {
-		return nil, fmt.Errorf("iterate claimed DVR intents: %w", rowsErr)
+	out := make([]UnstartedDVRIntent, len(rows))
+	for i, row := range rows {
+		out[i] = UnstartedDVRIntent{SessionID: row.ID, TenantID: row.TenantID, InternalName: row.StreamInternalName,
+			NodeID: row.NodeID, Intent: []byte(row.DvrIntent), Attempts: int(row.DvrIntentAttempts)}
 	}
 	return out, nil
 }
@@ -3310,11 +3228,9 @@ func FailDVRIntent(ctx context.Context, tenantID, sessionID, reason string) erro
 	if db == nil {
 		return nil
 	}
-	if _, err := db.ExecContext(ctx, `
-		UPDATE foghorn.ingest_sessions
-		   SET dvr_intent_error = $3, dvr_intent_lease_until = NULL
-		 WHERE id = $1::uuid AND tenant_id = $2::uuid AND dvr_intent_error IS NULL
-	`, sessionID, tenantID, reason); err != nil {
+	if err := foghorndb.New(db).FailDVRIntent(ctx, foghorndb.FailDVRIntentParams{
+		SessionID: sessionID, TenantID: tenantID, DvrIntentError: sql.NullString{String: reason, Valid: true},
+	}); err != nil {
 		return fmt.Errorf("record DVR intent terminal error: %w", err)
 	}
 	return nil
@@ -3782,15 +3698,10 @@ func processDVRProgress(progress *ipcpb.DVRProgress, session NodeSession, logger
 	// Refresh artifact_nodes / emit node-copy GAINED ONLY for an accepted active transition. A terminal
 	// no-op must not revive node presence or re-emit GAINED for a settled recording.
 	if applied && db != nil && dvrHash != "" && storageNodeID != "" {
-		if _, err := db.ExecContext(streamCtx(), `
-			UPDATE foghorn.artifact_nodes
-			   SET last_seen_at = NOW(),
-			       is_orphaned = false,
-			       segment_count = GREATEST(COALESCE(segment_count, 0), $3),
-			       size_bytes = GREATEST(COALESCE(size_bytes, 0), $4)
-			 WHERE artifact_hash = $1
-			   AND node_id = $2
-		`, dvrHash, storageNodeID, int(segmentCount), int64(sizeBytes)); err != nil {
+		if err := foghorndb.New(db).RefreshDVRArtifactNodeProgress(streamCtx(), foghorndb.RefreshDVRArtifactNodeProgressParams{
+			ArtifactHash: dvrHash, NodeID: storageNodeID,
+			SegmentCount: sql.NullInt32{Int32: int32(segmentCount), Valid: true}, SizeBytes: sql.NullInt64{Int64: int64(sizeBytes), Valid: true},
+		}); err != nil {
 			logger.WithError(err).WithFields(logging.Fields{
 				"dvr_hash": dvrHash,
 				"node_id":  storageNodeID,
@@ -4028,12 +3939,9 @@ func GetNodeOutputs(nodeID string) (*NodeOutputs, bool) {
 		}, true
 	}
 	if db != nil && nodeID != "" {
-		var baseURL, outputsRaw string
-		if err := db.QueryRowContext(context.Background(), `
-			SELECT COALESCE(base_url,''), COALESCE(outputs,'{}'::jsonb)::text
-			  FROM foghorn.node_outputs
-			 WHERE node_id = $1
-		`, nodeID).Scan(&baseURL, &outputsRaw); err == nil {
+		row, err := foghorndb.New(db).GetPersistedNodeOutputs(context.Background(), nodeID)
+		if err == nil {
+			baseURL, outputsRaw := row.BaseUrl, row.OutputsJson
 			var outputs map[string]any
 			if outputsRaw != "" {
 				if err := json.Unmarshal([]byte(outputsRaw), &outputs); err != nil {
@@ -5203,12 +5111,7 @@ func expectedComponentVersionsReported(nodeID string, expected map[string]string
 		if strings.TrimSpace(version) == "" {
 			return false, fmt.Sprintf("%s result version missing", component)
 		}
-		var current string
-		err := db.QueryRowContext(ctx, `
-			SELECT COALESCE(current_version, '')
-			FROM foghorn.node_components
-			WHERE node_id = $1 AND component = $2
-		`, nodeID, component).Scan(&current)
+		current, err := foghorndb.New(db).GetNodeComponentVersion(ctx, foghorndb.GetNodeComponentVersionParams{NodeID: nodeID, Component: component})
 		if errors.Is(err, sql.ErrNoRows) {
 			return false, fmt.Sprintf("%s version not reported", component)
 		}
@@ -5263,33 +5166,19 @@ func persistNodeUpdateStateWithDeadlineAndExpected(nodeID, targetRelease, phase,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	deadlineArg := any(nil)
-	if !deadline.IsZero() {
-		deadlineArg = deadline
-	}
-	expectedArg := any(nil)
+	deadlineArg := sql.NullTime{Time: deadline, Valid: !deadline.IsZero()}
+	expectedArg := sql.NullString{}
 	if len(expected) > 0 {
 		encoded, err := json.Marshal(expected)
 		if err != nil {
 			return err
 		}
-		expectedArg = string(encoded)
+		expectedArg = sql.NullString{String: string(encoded), Valid: true}
 	}
-	_, err := db.ExecContext(ctx, `
-		INSERT INTO foghorn.node_update_state (node_id, target_release, phase, deadline, expected_components, last_error, updated_at)
-		VALUES ($1, NULLIF($2, ''), $3, $5, COALESCE($6::jsonb, '{}'::jsonb), NULLIF($4, ''), NOW())
-		ON CONFLICT (node_id) DO UPDATE SET
-			target_release = EXCLUDED.target_release,
-			phase = EXCLUDED.phase,
-			deadline = EXCLUDED.deadline,
-			expected_components = CASE
-				WHEN $6::jsonb IS NULL THEN foghorn.node_update_state.expected_components
-				ELSE EXCLUDED.expected_components
-			END,
-			last_error = EXCLUDED.last_error,
-			updated_at = NOW()
-	`, nodeID, targetRelease, phase, lastError, deadlineArg, expectedArg)
-	return err
+	return foghorndb.New(db).UpsertNodeUpdateProgress(ctx, foghorndb.UpsertNodeUpdateProgressParams{
+		NodeID: nodeID, TargetRelease: targetRelease, Phase: phase, LastError: lastError,
+		Deadline: deadlineArg, ExpectedComponents: expectedArg,
+	})
 }
 
 type nodeUpdateProgress struct {
@@ -5303,19 +5192,14 @@ func currentNodeUpdateState(nodeID string) (nodeUpdateProgress, bool, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	var progress nodeUpdateProgress
-	err := db.QueryRowContext(ctx, `
-		SELECT COALESCE(target_release, ''), phase
-		FROM foghorn.node_update_state
-		WHERE node_id = $1
-	`, nodeID).Scan(&progress.TargetRelease, &progress.Phase)
+	row, err := foghorndb.New(db).GetNodeUpdateProgress(ctx, nodeID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nodeUpdateProgress{}, false, nil
 	}
 	if err != nil {
 		return nodeUpdateProgress{}, false, err
 	}
-	return progress, true, nil
+	return nodeUpdateProgress{TargetRelease: row.TargetRelease, Phase: row.Phase}, true, nil
 }
 
 func updatePhaseRestoresRouting(phase string) bool {
@@ -5681,13 +5565,15 @@ func processFreezePermissionRequest(req *ipcpb.FreezePermissionRequest, nodeID s
 	var originCluster sql.NullString
 	var storageClusterCol sql.NullString
 	var syncStatus sql.NullString
-	var catalogFormat sql.NullString
+	var catalogFormat string
 	if tenantID != "" {
-		if metaErr := db.QueryRowContext(ctx, `
-			SELECT stream_internal_name, origin_cluster_id, storage_cluster_id, sync_status, COALESCE(format, '')
-			FROM foghorn.artifacts
-			WHERE artifact_hash = $1 AND artifact_type = $2 AND tenant_id::text = $3`,
-			lookupHash, lookupType, tenantID).Scan(&streamName, &originCluster, &storageClusterCol, &syncStatus, &catalogFormat); metaErr != nil && !errors.Is(metaErr, sql.ErrNoRows) {
+		meta, metaErr := foghorndb.New(db).GetFreezeArtifactMetadata(ctx, foghorndb.GetFreezeArtifactMetadataParams{
+			ArtifactHash: lookupHash, ArtifactType: lookupType, TenantID: tenantID,
+		})
+		if metaErr == nil {
+			streamName, originCluster, storageClusterCol, syncStatus = meta.StreamInternalName.String, meta.OriginClusterID, meta.StorageClusterID, meta.SyncStatus
+			catalogFormat = meta.Format
+		} else if !errors.Is(metaErr, sql.ErrNoRows) {
 			logger.WithError(metaErr).WithField("asset_hash", lookupHash).Warn("Freeze metadata lookup failed; rejecting (cannot derive canonical object key without the catalog format)")
 			sendFreezePermissionResponse(stream, &ipcpb.FreezePermissionResponse{
 				RequestId: requestID, AssetHash: assetHash, Approved: false, Reason: "metadata_unavailable",
@@ -5698,7 +5584,7 @@ func processFreezePermissionRequest(req *ipcpb.FreezePermissionRequest, nodeID s
 	// The canonical key's format is server-owned (catalog), defaulting to mp4 when the catalog has none
 	// yet — the SAME default completion applies, so the two stages always agree on the object.
 	serverFormat := "mp4"
-	if f := strings.TrimSpace(catalogFormat.String); f != "" {
+	if f := strings.TrimSpace(catalogFormat); f != "" {
 		serverFormat = f
 	}
 	if streamName == "" {
@@ -5743,17 +5629,10 @@ func processFreezePermissionRequest(req *ipcpb.FreezePermissionRequest, nodeID s
 		}, logger)
 		return
 	}
-	var nodeHoldsCopy bool
-	if aErr := db.QueryRowContext(ctx, `
-		SELECT EXISTS (
-			SELECT 1
-			  FROM foghorn.artifact_nodes an
-			  JOIN foghorn.artifacts a ON a.artifact_hash = an.artifact_hash
-			 WHERE an.artifact_hash = $1 AND an.node_id = $2 AND a.tenant_id::text = $3
-			   AND an.is_complete = true
-			   AND an.is_orphaned = false
-			   AND a.status <> 'deleted'
-		)`, lookupHash, nodeID, tenantID).Scan(&nodeHoldsCopy); aErr != nil {
+	nodeHoldsCopy, aErr := foghorndb.New(db).NodeHoldsLiveArtifactCopy(ctx, foghorndb.NodeHoldsLiveArtifactCopyParams{
+		ArtifactHash: lookupHash, NodeID: nodeID, TenantID: tenantID,
+	})
+	if aErr != nil {
 		logger.WithError(aErr).WithFields(logging.Fields{"asset_hash": lookupHash, "node_id": nodeID}).
 			Error("Failed to verify node artifact ownership for freeze permission")
 		sendFreezePermissionResponse(stream, &ipcpb.FreezePermissionResponse{
@@ -5931,43 +5810,12 @@ func ClaimFreezeAttempt(ctx context.Context, dbh *sql.DB, assetHash, requestID, 
 		return false, txErr
 	}
 	defer tx.Rollback() //nolint:errcheck // best-effort on the non-commit paths
-	res, execErr := tx.ExecContext(ctx, `
-		UPDATE foghorn.artifacts
-		SET storage_location = 'freezing', sync_status = 'in_progress',
-		    sync_request_id = $2, sync_node_id = $3,
-		    storage_cluster_id = NULLIF($5, ''),
-		    sync_object_key = $6,
-		    -- The assignment was verified locally-mintable for this tenant before the claim, so the promoted
-		    -- bytes will be durable on THIS cell's backend. Persist that billing attribution now (stable; the
-		    -- read side never recomputes it from mutable tenant routing).
-		    durable_backend_local = true,
-		    -- Record the backend the WINNING (re)publication's bytes land on: this UPDATE can re-claim an
-		    -- already-'synced' row (a republish), which writes a NEW object to the CURRENT store — so the active row
-		    -- ALWAYS adopts the proven current fingerprint ($7, required non-empty above), never preserving a superseded
-		    -- object's id.
-		    backend_id = $7,
-		    last_sync_attempt = NOW(), updated_at = NOW()
-		WHERE artifact_hash = $1
-		  AND tenant_id::text = $4
-		  AND status = 'ready'
-		  AND EXISTS (
-		        SELECT 1 FROM foghorn.artifact_nodes an
-		         WHERE an.artifact_hash = $1 AND an.node_id = $3
-		           AND an.is_complete = true AND an.is_orphaned = false
-		  )
-		  AND (
-		        sync_status IN ('pending', 'failed', 'synced')
-		     OR (sync_status = 'in_progress' AND sync_request_id = $2 AND sync_node_id = $3
-		         AND sync_object_key = $6
-		         AND storage_cluster_id IS NOT DISTINCT FROM NULLIF($5, ''))
-		  )`,
-		assetHash, requestID, nodeID, tenantID, storageCluster, objectKey, localBID)
+	n, execErr := foghorndb.New(tx).ClaimFreezeAttempt(ctx, foghorndb.ClaimFreezeAttemptParams{
+		ArtifactHash: assetHash, SyncRequestID: sql.NullString{String: requestID, Valid: true}, SyncNodeID: sql.NullString{String: nodeID, Valid: true},
+		TenantID: tenantID, StorageClusterID: storageCluster, SyncObjectKey: sql.NullString{String: objectKey, Valid: true}, BackendID: sql.NullString{String: localBID, Valid: true},
+	})
 	if execErr != nil {
 		return false, execErr
-	}
-	n, raErr := res.RowsAffected()
-	if raErr != nil {
-		return false, raErr
 	}
 	if n == 0 {
 		return false, nil // nothing claimed → rollback, no ledger rows
@@ -6013,43 +5861,17 @@ func claimDtshAttempt(ctx context.Context, assetHash, requestID, nodeID, tenantI
 		return false, err
 	}
 	defer tx.Rollback() //nolint:errcheck // best-effort on non-commit paths
-	var objectKey, prevReq string
-	qErr := tx.QueryRowContext(ctx, `
-		WITH prev AS (
-			SELECT COALESCE(sync_object_key, '') AS ok, COALESCE(dtsh_sync_request_id, '') AS old_req
-			FROM foghorn.artifacts WHERE artifact_hash = $1 AND tenant_id::text = $4
-			FOR UPDATE
-		)
-		UPDATE foghorn.artifacts a
-		SET dtsh_status = 'in_progress', dtsh_sync_request_id = $2, dtsh_sync_node_id = $3,
-		    dtsh_last_attempt = NOW(), updated_at = NOW()
-		FROM prev
-		WHERE a.artifact_hash = $1
-		  AND a.tenant_id::text = $4
-		  AND a.artifact_type IN ('clip', 'vod')
-		  AND a.status = 'ready'
-		  AND a.sync_status = 'synced'
-		  AND a.dtsh_synced = false
-		  AND EXISTS (
-		        SELECT 1 FROM foghorn.artifact_nodes an
-		         WHERE an.artifact_hash = $1 AND an.node_id = $3
-		           AND an.is_complete = true AND an.is_orphaned = false
-		  )
-		  AND (
-		        a.dtsh_status IS NULL
-		     OR (a.dtsh_sync_request_id = $2 AND a.dtsh_sync_node_id = $3)
-		     OR (a.dtsh_status = 'failed'
-		         AND a.dtsh_last_attempt < NOW() - (LEAST(a.dtsh_failure_count, 20) * INTERVAL '30 seconds'))
-		     OR (a.dtsh_status = 'in_progress' AND a.dtsh_last_attempt < NOW() - INTERVAL '10 minutes')
-		  )
-		RETURNING prev.ok, prev.old_req`,
-		assetHash, requestID, nodeID, tenantID).Scan(&objectKey, &prevReq)
+	row, qErr := foghorndb.New(tx).ClaimDtshAttempt(ctx, foghorndb.ClaimDtshAttemptParams{
+		ArtifactHash: assetHash, DtshSyncRequestID: sql.NullString{String: requestID, Valid: true},
+		DtshSyncNodeID: sql.NullString{String: nodeID, Valid: true}, TenantID: tenantID,
+	})
 	if errors.Is(qErr, sql.ErrNoRows) {
 		return false, nil // not claimable
 	}
 	if qErr != nil {
 		return false, qErr
 	}
+	objectKey, prevReq := row.ObjectKey, row.OldRequest
 	if prevReq != "" && prevReq != requestID && objectKey != "" {
 		// The superseded prior attempt may have uploaded its .dtsh staging AND had its versioned candidate
 		// promoted before it lost the race — enqueue both so neither leaks.
@@ -6083,15 +5905,10 @@ func clearDtshAttempt(ctx context.Context, assetHash, requestID, nodeID, tenantI
 		return
 	}
 	defer tx.Rollback() //nolint:errcheck // best-effort on non-commit paths
-	var objectKey string
-	qErr := tx.QueryRowContext(ctx, `
-		UPDATE foghorn.artifacts
-		SET dtsh_status = 'failed', dtsh_failure_count = dtsh_failure_count + 1,
-		    dtsh_sync_request_id = NULL, dtsh_sync_node_id = NULL, updated_at = NOW()
-		WHERE artifact_hash = $1 AND dtsh_sync_request_id = $2 AND dtsh_sync_node_id = $3
-		  AND tenant_id::text = $4
-		RETURNING COALESCE(sync_object_key, '')`,
-		assetHash, requestID, nodeID, tenantID).Scan(&objectKey)
+	objectKey, qErr := foghorndb.New(tx).ClearDtshAttempt(ctx, foghorndb.ClearDtshAttemptParams{
+		ArtifactHash: assetHash, DtshSyncRequestID: sql.NullString{String: requestID, Valid: true},
+		DtshSyncNodeID: sql.NullString{String: nodeID, Valid: true}, TenantID: tenantID,
+	})
 	if errors.Is(qErr, sql.ErrNoRows) {
 		return // nothing to release (already cleared / re-claimed); the >10min stale recovery still covers it
 	}
@@ -6133,17 +5950,10 @@ func applyDtshCompletionFailure(ctx context.Context, assetHash, reportingNodeID,
 	// Clear the attempt and RETURN the descriptor so the .dtsh staging object (which the node may have
 	// uploaded despite reporting failure) AND its versioned candidate (a completion may have promoted it before
 	// the row lost the CAS) are durably enqueued for deletion on the SAME transaction.
-	var objectKey string
-	qErr := tx.QueryRowContext(ctx, `
-		UPDATE foghorn.artifacts
-		SET dtsh_status = 'failed', dtsh_failure_count = dtsh_failure_count + 1,
-		    sync_error = NULLIF($4, ''), dtsh_sync_request_id = NULL, dtsh_sync_node_id = NULL,
-		    dtsh_last_attempt = NOW(), updated_at = NOW()
-		WHERE artifact_hash = $1 AND dtsh_sync_request_id = $2 AND dtsh_sync_node_id = $3
-		  AND status NOT IN ('deleted', 'expired', 'aborted')
-		  AND tenant_id::text = $5
-		RETURNING COALESCE(sync_object_key, '')`,
-		assetHash, requestID, reportingNodeID, errorMsg, tenantID).Scan(&objectKey)
+	objectKey, qErr := foghorndb.New(tx).FailDtshAttempt(ctx, foghorndb.FailDtshAttemptParams{
+		ArtifactHash: assetHash, DtshSyncRequestID: sql.NullString{String: requestID, Valid: true},
+		DtshSyncNodeID: sql.NullString{String: reportingNodeID, Valid: true}, ErrorMessage: errorMsg, TenantID: tenantID,
+	})
 	if errors.Is(qErr, sql.ErrNoRows) {
 		return false // not a recognized dtsh attempt → let the main-upload failure guard handle it
 	}
@@ -6484,20 +6294,15 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 			// identity. Keying on (artifact_hash, node) alone would rewrite every sibling active job for the
 			// same artifact on that node (active jobs are not unique by artifact); a foreign node, or a job not
 			// dispatched to the reporting node, matches nothing.
-			res, err := db.ExecContext(ctx, `
-				UPDATE foghorn.processing_jobs
-				   SET processes_json = $3,
-				       updated_at = NOW()
-				 WHERE job_id = $1
-				   AND artifact_hash = $2
-				   AND processing_node_id = $4
-				   AND status IN ('dispatched', 'processing')
-			`, result.GetJobId(), artifactHash, processesJSON, nodeID)
+			n, err := foghorndb.New(db).UpdateProcessingJobCache(ctx, foghorndb.UpdateProcessingJobCacheParams{
+				JobID: result.GetJobId(), ArtifactHash: sql.NullString{String: artifactHash, Valid: true},
+				ProcessesJson: sql.NullString{String: processesJSON, Valid: true}, ProcessingNodeID: sql.NullString{String: nodeID, Valid: true},
+			})
 			if err != nil {
 				logger.WithError(err).WithField("artifact_hash", artifactHash).Warn("Failed to persist processing process config update")
 				return
 			}
-			if n, _ := res.RowsAffected(); n == 0 { //nolint:errcheck // pq populates RowsAffected on UPDATE
+			if n == 0 {
 				logger.WithFields(fields).WithField("artifact_hash", artifactHash).Warn("Ignoring cache_update for a job not assigned to the reporting node")
 				return
 			}
@@ -6546,10 +6351,9 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 
 		// Lock the job and confirm it is still active. A cancelled/deleted job or a duplicate
 		// (already-completed) result is a no-op — no resurrection.
-		var jobStatusNow, assignedNode string
-		if lockErr := completionTx.QueryRowContext(ctx,
-			`SELECT status, COALESCE(processing_node_id, '') FROM foghorn.processing_jobs WHERE job_id = $1 FOR UPDATE`,
-			result.GetJobId()).Scan(&jobStatusNow, &assignedNode); lockErr != nil {
+		q := foghorndb.New(completionTx)
+		job, lockErr := q.LockProcessingJobForCompletion(ctx, result.GetJobId())
+		if lockErr != nil {
 			if errors.Is(lockErr, sql.ErrNoRows) {
 				logger.WithFields(fields).Warn("Completion for unknown processing job; ignoring")
 				return
@@ -6557,6 +6361,7 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 			logger.WithError(lockErr).WithFields(fields).Error("Failed to lock processing job for completion")
 			return
 		}
+		jobStatusNow, assignedNode := job.Status.String, job.ProcessingNodeID
 		if jobStatusNow != "dispatched" && jobStatusNow != "processing" {
 			logger.WithFields(fields).Warn("Ignoring completion for a non-active processing job (cancelled, deleted, or duplicate)")
 			return
@@ -6588,20 +6393,7 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 			var requestedStartUnix, requestedStopUnix int64
 			// Lock the artifact row too. A lookup failure must NOT acknowledge the job — return
 			// (rollback) so it retries.
-			lookupErr := completionTx.QueryRowContext(ctx, `
-				SELECT a.artifact_hash,
-				       COALESCE(a.artifact_type,''),
-				       COALESCE(a.tenant_id::text,''),
-				       COALESCE(a.stream_id::text,''),
-				       COALESCE(a.stream_internal_name,''),
-				       COALESCE(a.s3_url,''),
-				       COALESCE(a.format,''),
-				       COALESCE((pj.source_params->>'source_start_unix')::bigint, 0),
-				       COALESCE((pj.source_params->>'source_stop_unix')::bigint, 0)
-				FROM foghorn.processing_jobs pj
-				JOIN foghorn.artifacts a ON pj.artifact_hash = a.artifact_hash
-				WHERE pj.job_id = $1
-				FOR UPDATE OF a`, result.GetJobId()).Scan(&artifactHash, &artifactType, &tenantID, &streamID, &streamInternalName, &oldS3URL, &oldFormat, &requestedStartUnix, &requestedStopUnix)
+			artifact, lookupErr := q.LockProcessingArtifactForCompletion(ctx, result.GetJobId())
 			if lookupErr != nil {
 				// A GENUINELY missing artifact row (ErrNoRows: the row was hard-deleted, or the
 				// job points at a hash with no artifact) must NOT be acknowledged as completed —
@@ -6617,6 +6409,8 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 				logger.WithError(lookupErr).WithFields(fields).Error("Failed to look up artifact for completion; will retry")
 				return
 			}
+			artifactHash, artifactType, tenantID, streamID, streamInternalName = artifact.ArtifactHash, artifact.ArtifactType, artifact.TenantID, artifact.StreamID, artifact.StreamInternalName
+			oldS3URL, oldFormat, requestedStartUnix, requestedStopUnix = artifact.S3Url, artifact.Format, artifact.RequestedStartUnix, artifact.RequestedStopUnix
 			if artifactHash != "" {
 				_ = oldS3URL
 				sizeBytes = result.GetOutputSizeBytes()
@@ -6639,23 +6433,15 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 
 				// Claim readiness on the transaction. A row deleted/failed mid-processing matches
 				// 0 (guard) — the job still completes, but nothing is published.
-				artRes, dbErr := completionTx.ExecContext(ctx, `
-						UPDATE foghorn.artifacts
-						SET format = $1,
-						    size_bytes = $3,
-						    duration_seconds = CASE WHEN $4::bigint > 0 THEN ($4::bigint / 1000)::int ELSE duration_seconds END,
-						    duration_ms = CASE WHEN $4::bigint > 0 THEN $4::bigint ELSE duration_ms END,
-						    tracks = CASE WHEN $6::boolean THEN $5::jsonb ELSE tracks END,
-						    status = CASE WHEN artifact_type IN ('clip', 'vod') THEN 'ready' ELSE status END,
-						    sync_status = 'pending',
-						    storage_location = 'local',
-						    updated_at = NOW()
-						WHERE artifact_hash = $2 AND status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted')`, newFormat, artifactHash, sizeBytes, actualDurationMs, tracksJSON, tracksPresent)
+				affected, dbErr := q.MarkProcessingArtifactReady(ctx, foghorndb.MarkProcessingArtifactReadyParams{
+					Format: sql.NullString{String: newFormat, Valid: newFormat != ""}, ArtifactHash: artifactHash,
+					SizeBytes: sql.NullInt64{Int64: sizeBytes, Valid: true}, DurationMs: actualDurationMs,
+					Tracks: json.RawMessage(tracksJSON), TracksPresent: tracksPresent,
+				})
 				if dbErr != nil {
 					logger.WithError(dbErr).WithField("artifact_hash", artifactHash).Error("Failed to update artifact readiness; will retry")
 					return
 				}
-				affected, _ := artRes.RowsAffected() //nolint:errcheck // pq always populates RowsAffected on UPDATE
 				if affected == 0 {
 					logger.WithFields(fields).WithField("artifact_hash", artifactHash).Warn("Processed artifact no longer active (deleted/failed); completing job without publication")
 				} else {
@@ -6664,17 +6450,13 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 					// VOD metadata (codec/resolution/…) from Helmsman stream info — same tx.
 					if artifactType == "vod" {
 						o := result.GetOutputs()
-						if _, mErr := completionTx.ExecContext(ctx, `
-						UPDATE foghorn.vod_metadata
-						SET duration_ms = $2::integer, resolution = $3, video_codec = $4, audio_codec = $5,
-						    bitrate_kbps = $6::integer, width = $7::integer, height = $8::integer,
-						    fps = $9::real, audio_channels = $10::integer, audio_sample_rate = $11::integer,
-						    updated_at = NOW()
-						WHERE artifact_hash = $1`,
-							artifactHash, nullIfEmptyChapterMeta(o["duration_ms"]), nullIfEmptyChapterMeta(o["resolution"]),
-							nullIfEmptyChapterMeta(o["video_codec"]), nullIfEmptyChapterMeta(o["audio_codec"]), nullIfEmptyChapterMeta(o["bitrate_kbps"]),
-							nullIfEmptyChapterMeta(o["width"]), nullIfEmptyChapterMeta(o["height"]), nullIfEmptyChapterMeta(o["fps"]),
-							nullIfEmptyChapterMeta(o["audio_channels"]), nullIfEmptyChapterMeta(o["audio_sample_rate"])); mErr != nil {
+						textArg := func(v string) sql.NullString { return sql.NullString{String: v, Valid: v != ""} }
+						if mErr := q.UpdateCompletedVODMetadata(ctx, foghorndb.UpdateCompletedVODMetadataParams{
+							ArtifactHash: artifactHash, DurationMs: textArg(o["duration_ms"]), Resolution: textArg(o["resolution"]),
+							VideoCodec: textArg(o["video_codec"]), AudioCodec: textArg(o["audio_codec"]), BitrateKbps: textArg(o["bitrate_kbps"]),
+							Width: textArg(o["width"]), Height: textArg(o["height"]), Fps: textArg(o["fps"]),
+							AudioChannels: textArg(o["audio_channels"]), AudioSampleRate: textArg(o["audio_sample_rate"]),
+						}); mErr != nil {
 							logger.WithError(mErr).WithField("artifact_hash", artifactHash).Error("Failed to update vod_metadata; will retry")
 							return
 						}
@@ -6762,10 +6544,11 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 		} // end if outputPath != ""
 
 		// Mark the job completed LAST, then commit the whole terminal transition atomically.
-		if _, err := completionTx.ExecContext(ctx, `
-			UPDATE foghorn.processing_jobs
-			SET status = 'completed', progress = 100, output_metadata = $2, completed_at = NOW(), updated_at = NOW()
-			WHERE job_id = $1`, result.GetJobId(), outputMeta); err != nil {
+		var outputMetadata sql.NullString
+		if outputMeta != nil {
+			outputMetadata = sql.NullString{String: *outputMeta, Valid: true}
+		}
+		if err := q.CompleteProcessingJob(ctx, foghorndb.CompleteProcessingJobParams{JobID: result.GetJobId(), OutputMetadata: outputMetadata}); err != nil {
 			logger.WithError(err).WithFields(fields).Error("Failed to mark job completed; will retry")
 			return
 		}
@@ -6824,16 +6607,8 @@ func failProcessingJobAtomic(ctx context.Context, jobID, errMsg, reportingNode s
 
 	// Lock the job and resolve its artifact in one shot. LEFT JOIN so a job with no artifact
 	// row still returns its status; FOR UPDATE OF pj serializes against the completion path.
-	var jobStatusNow, assignedNode, artHash, artType, tenantID, streamID, streamInternalName string
-	lookupErr := tx.QueryRowContext(ctx, `
-		SELECT pj.status, COALESCE(pj.processing_node_id,''),
-		       COALESCE(a.artifact_hash,''), COALESCE(a.artifact_type,''),
-		       COALESCE(a.tenant_id::text,''), COALESCE(a.stream_id::text,''),
-		       COALESCE(a.stream_internal_name,'')
-		  FROM foghorn.processing_jobs pj
-		  LEFT JOIN foghorn.artifacts a ON pj.artifact_hash = a.artifact_hash
-		 WHERE pj.job_id = $1
-		 FOR UPDATE OF pj`, jobID).Scan(&jobStatusNow, &assignedNode, &artHash, &artType, &tenantID, &streamID, &streamInternalName)
+	q := foghorndb.New(tx)
+	job, lookupErr := q.LockProcessingJobForFailure(ctx, jobID)
 	if lookupErr != nil {
 		if errors.Is(lookupErr, sql.ErrNoRows) {
 			logger.WithFields(fields).Warn("Failure for unknown processing job; ignoring")
@@ -6842,6 +6617,8 @@ func failProcessingJobAtomic(ctx context.Context, jobID, errMsg, reportingNode s
 		logger.WithError(lookupErr).WithFields(fields).Error("Failed to lock processing job for failure; will retry")
 		return
 	}
+	jobStatusNow, assignedNode, artHash, artType := job.Status.String, job.ProcessingNodeID, job.ArtifactHash, job.ArtifactType
+	tenantID, streamID, streamInternalName := job.TenantID, job.StreamID, job.StreamInternalName
 	if jobStatusNow != "dispatched" && jobStatusNow != "processing" {
 		logger.WithFields(fields).Warn("Ignoring failure for a non-active processing job (cancelled, deleted, or duplicate)")
 		return
@@ -6856,10 +6633,7 @@ func failProcessingJobAtomic(ctx context.Context, jobID, errMsg, reportingNode s
 		return
 	}
 
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE foghorn.processing_jobs
-		SET status = 'failed', error_message = $2, updated_at = NOW()
-		WHERE job_id = $1`, jobID, errMsg); err != nil {
+	if err := q.MarkProcessingJobFailed(ctx, foghorndb.MarkProcessingJobFailedParams{JobID: jobID, ErrorMessage: sql.NullString{String: errMsg, Valid: true}}); err != nil {
 		logger.WithError(err).WithFields(fields).Error("Failed to mark job failed; will retry")
 		return
 	}
@@ -6869,12 +6643,9 @@ func failProcessingJobAtomic(ctx context.Context, jobID, errMsg, reportingNode s
 	// tenant-scoped: a concurrently deleted/expired/aborted/already-ready artifact (or a
 	// hash-collision across tenants) must never be resurrected to 'failed'.
 	if artHash != "" && (artType == "clip" || artType == "vod") {
-		artRes, err := tx.ExecContext(ctx, `
-			UPDATE foghorn.artifacts
-			   SET status = 'failed', error_message = $2, updated_at = NOW()
-			 WHERE artifact_hash = $1
-			   AND tenant_id::text = $3
-			   AND status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted')`, artHash, errMsg, tenantID)
+		artFailed, err := q.MarkProcessingArtifactFailed(ctx, foghorndb.MarkProcessingArtifactFailedParams{
+			ArtifactHash: artHash, ErrorMessage: sql.NullString{String: errMsg, Valid: true}, TenantID: tenantID,
+		})
 		if err != nil {
 			logger.WithError(err).WithField("artifact_hash", artHash).Error("Failed to mark artifact failed; will retry")
 			return
@@ -6882,7 +6653,6 @@ func failProcessingJobAtomic(ctx context.Context, jobID, errMsg, reportingNode s
 		// Only emit FAILED if THIS tx actually transitioned the artifact; a 0-row result means it
 		// was already terminal (concurrently ready/deleted/expired/aborted) and a false FAILED
 		// analytics event must not be emitted. The job-failed transition still commits.
-		artFailed, _ := artRes.RowsAffected() //nolint:errcheck // pq populates RowsAffected on UPDATE
 		if artFailed == 0 {
 			// nothing to publish
 		} else if artType == "clip" {
@@ -6950,18 +6720,13 @@ func processProcessingJobProgress(progress *ipcpb.ProcessingJobProgress, nodeID 
 	// assigned node so a foreign node cannot refresh another node's job (which would defeat stale recovery on a
 	// genuinely stuck node). processing_node_id is persisted before the node can report, so an active
 	// node-dispatched job always carries it; require an exact match (a NULL assignment is an unbound wildcard).
-	var artifactHash sql.NullString
+	q := foghorndb.New(db)
 	var artifactType, streamID, streamInternalName string
-	var tenantID string
-	err := db.QueryRowContext(ctx, `
-		UPDATE foghorn.processing_jobs
-		SET progress = $2, updated_at = NOW()
-		WHERE job_id = $1 AND status IN ('dispatched', 'processing')
-		  AND processing_node_id = $3
-		RETURNING artifact_hash, tenant_id::text
-	`, progress.GetJobId(), progressPct, nodeID).Scan(&artifactHash, &tenantID)
+	updated, err := q.UpdateProcessingJobProgress(ctx, foghorndb.UpdateProcessingJobProgressParams{
+		JobID: progress.GetJobId(), Progress: sql.NullInt32{Int32: progressPct, Valid: true}, ProcessingNodeID: sql.NullString{String: nodeID, Valid: true},
+	})
 	if err != nil {
-		if err != sql.ErrNoRows {
+		if !errors.Is(err, sql.ErrNoRows) {
 			logger.WithError(err).WithField("job_id", progress.GetJobId()).Warn("Failed to update processing job progress")
 			return
 		}
@@ -6970,16 +6735,14 @@ func processProcessingJobProgress(progress *ipcpb.ProcessingJobProgress, nodeID 
 		}
 		return
 	}
+	artifactHash, tenantID := updated.ArtifactHash, updated.TenantID
 
 	if artifactHash.Valid {
-		typeErr := db.QueryRowContext(ctx, `
-			SELECT COALESCE(artifact_type, ''),
-			       COALESCE(stream_id::text, ''),
-			       COALESCE(stream_internal_name, '')
-			  FROM foghorn.artifacts
-			 WHERE artifact_hash = $1
-		`, artifactHash.String).Scan(&artifactType, &streamID, &streamInternalName)
-		if typeErr != nil && typeErr != sql.ErrNoRows {
+		lifecycle, typeErr := q.GetProcessingArtifactLifecycle(ctx, artifactHash.String)
+		if typeErr == nil {
+			artifactType, streamID, streamInternalName = lifecycle.ArtifactType, lifecycle.StreamID, lifecycle.StreamInternalName
+		}
+		if typeErr != nil && !errors.Is(typeErr, sql.ErrNoRows) {
 			logger.WithError(typeErr).WithField("artifact_hash", artifactHash.String).Warn("Failed to look up processing artifact type")
 		}
 	}
@@ -7026,25 +6789,16 @@ func processProcessingJobProgress(progress *ipcpb.ProcessingJobProgress, nodeID 
 }
 
 func processChapterFinalizeProgress(ctx context.Context, chapterID, nodeID string, progressPct int32, logger logging.Logger) {
-	var artifactHash, tenantID string
 	// Bind to the assigned node: only the connection this finalize was dispatched to may refresh its progress
 	// (which resets the stale-finalize deadline). A foreign node matches 0 rows and is ignored.
-	err := db.QueryRowContext(ctx, `
-		UPDATE foghorn.dvr_chapters c
-		   SET finalize_started_at = NOW()
-		  FROM foghorn.artifacts a
-		 WHERE c.chapter_id = $1
-		   AND c.playback_artifact_hash = a.artifact_hash
-		   AND c.state = 'finalizing'
-		   AND c.finalize_node_id = $2
-		 RETURNING c.playback_artifact_hash, a.tenant_id::text
-	`, chapterID, nodeID).Scan(&artifactHash, &tenantID)
+	row, err := foghorndb.New(db).UpdateChapterFinalizeProgress(ctx, foghorndb.UpdateChapterFinalizeProgressParams{ChapterID: chapterID, FinalizeNodeID: sql.NullString{String: nodeID, Valid: true}})
 	if err != nil {
-		if err != sql.ErrNoRows {
+		if !errors.Is(err, sql.ErrNoRows) {
 			logger.WithError(err).WithField("chapter_id", chapterID).Warn("Failed to update chapter finalize progress")
 		}
 		return
 	}
+	artifactHash, tenantID := row.PlaybackArtifactHash.String, row.ATenantID
 	vodData := &ipcpb.VodLifecycleData{
 		Status:      ipcpb.VodLifecycleData_STATUS_PROCESSING,
 		VodHash:     artifactHash,
@@ -7145,12 +6899,7 @@ func TriggerDtshSync(nodeID, assetHash, assetType, filePath string) {
 		return
 	}
 
-	var syncObjectKey sql.NullString
-	err := db.QueryRowContext(ctx, `
-		SELECT sync_object_key
-		FROM foghorn.artifacts
-		WHERE artifact_hash = $1 AND tenant_id::text = $2`,
-		assetHash, tenantID).Scan(&syncObjectKey)
+	syncObjectKey, err := foghorndb.New(db).GetArtifactSyncObjectKey(ctx, foghorndb.GetArtifactSyncObjectKeyParams{ArtifactHash: assetHash, TenantID: tenantID})
 	if err != nil {
 		logger.WithError(err).Error("Failed to lookup asset for dtsh sync")
 		return
@@ -7525,14 +7274,13 @@ func processSyncComplete(complete *ipcpb.SyncComplete, nodeID string, logger log
 		// yields tenantID="" (→ downstream no-op) for a stale / duplicate / wrong-node / wrong-tenant
 		// completion. A genuine read error refuses (fail closed).
 		if db != nil {
-			if idErr := db.QueryRowContext(ctx, `
-				SELECT COALESCE(artifact_type,''), COALESCE(stream_internal_name,''), COALESCE(format,''), COALESCE(tenant_id::text,''), COALESCE(stream_id::text,''), COALESCE(sync_object_key,''), COALESCE(sync_status,''), COALESCE(active_object_key,''), COALESCE(active_dtsh_key,''), COALESCE(s3_url,''), COALESCE(dtsh_sync_request_id,'')
-				FROM foghorn.artifacts
-				WHERE artifact_hash = $1
-				  AND tenant_id::text = $2
-				  AND ( (sync_request_id = $3 AND sync_node_id = $4)
-				     OR (dtsh_sync_request_id = $3 AND dtsh_sync_node_id = $4) )
-			`, assetHash, ownerTenant, requestID, reportingNodeID).Scan(&artifactType, &internalName, &format, &tenantID, &streamID, &syncObjectKey, &syncStatusRow, &previousActiveKey, &previousActiveDtshKey, &previousS3URL, &previousDtshReq); idErr != nil && !errors.Is(idErr, sql.ErrNoRows) {
+			attempt, idErr := foghorndb.New(db).GetSyncCompletionAttempt(ctx, foghorndb.GetSyncCompletionAttemptParams{
+				ArtifactHash: assetHash, TenantID: ownerTenant, SyncRequestID: sql.NullString{String: requestID, Valid: true}, SyncNodeID: sql.NullString{String: reportingNodeID, Valid: true},
+			})
+			if idErr == nil {
+				artifactType, internalName, format, tenantID, streamID = attempt.ArtifactType, attempt.StreamInternalName, attempt.Format, attempt.TenantID, attempt.StreamID
+				syncObjectKey, syncStatusRow, previousActiveKey, previousActiveDtshKey, previousS3URL, previousDtshReq = attempt.SyncObjectKey, attempt.SyncStatus, attempt.ActiveObjectKey, attempt.ActiveDtshKey, attempt.S3Url, attempt.DtshSyncRequestID
+			} else if !errors.Is(idErr, sql.ErrNoRows) {
 				logger.WithError(idErr).WithField("asset_hash", assetHash).Error("sync completion: attempt-scoped identity pre-read failed; refusing to apply")
 				return
 			}
@@ -7756,52 +7504,14 @@ func processSyncComplete(complete *ipcpb.SyncComplete, nodeID string, logger log
 			return
 		}
 		defer tx.Rollback() //nolint:errcheck // rollback is best-effort on the non-commit paths
-		res, err := tx.ExecContext(ctx, `
-			UPDATE foghorn.artifacts
-			SET storage_location = 'local',
-			    sync_status = 'synced',
-			    s3_url = COALESCE(NULLIF($1,''), s3_url),
-			    -- Atomically FLIP the authoritative object pointer to the freshly-published candidate (kept in
-			    -- sync with s3_url). This is the publication: the object was copied to $9 outside this tx, and
-			    -- only committing here makes it the served address. Empty $9 (dtsh-only / DVR) preserves it.
-			    active_object_key = COALESCE(NULLIF($9,''), active_object_key),
-			    dtsh_synced = $2,
-			    -- Flip the .dtsh pointer to the freshly-published versioned index when this upload bundled it;
-			    -- otherwise CLEAR it. This UPDATE is a MAIN-object (re)publication to a fresh candidate, so any
-			    -- prior .dtsh no longer co-locates with the served media and is being enqueued for deletion below
-			    -- — leaving the pointer set would reference garbage. dtsh_synced=$2 already resets to false here.
-			    active_dtsh_key = CASE WHEN $2 THEN NULLIF($10,'') ELSE NULL END,
-			    -- When the main upload bundled the .dtsh, atomically clear any overlapping incremental
-			    -- dtsh attempt (identity + failed backoff state) so a stale dtsh completion can't later
-			    -- re-open it against a row that is already dtsh_synced.
-			    dtsh_status = CASE WHEN $2 THEN NULL ELSE dtsh_status END,
-			    dtsh_sync_request_id = CASE WHEN $2 THEN NULL ELSE dtsh_sync_request_id END,
-			    dtsh_sync_node_id = CASE WHEN $2 THEN NULL ELSE dtsh_sync_node_id END,
-			    dtsh_failure_count = CASE WHEN $2 THEN 0 ELSE dtsh_failure_count END,
-			    size_bytes = COALESCE(NULLIF($4::BIGINT, 0), size_bytes),
-			    last_sync_attempt = NOW(),
-			    sync_error = NULL,
-			    sync_request_id = NULL,
-			    sync_node_id = NULL,
-			    updated_at = NOW()
-			WHERE artifact_hash = $3
-			  AND tenant_id::text = $7
-			  AND status NOT IN ('deleted', 'expired', 'aborted')
-			  AND sync_status = 'in_progress'
-			  AND sync_request_id = $5
-			  AND sync_node_id = $6
-			  -- Consume the descriptor INSIDE the CAS: $1 (the published s3_url) was derived from the
-			  -- sync_object_key read before this tx, so the row's descriptor must still equal it. Empty $8
-			  -- (DVR, no single-object descriptor) skips the check.
-			  AND ($8 = '' OR sync_object_key = $8)`,
-			s3URL, dtshIncluded, assetHash, int64(sizeBytes), requestID, reportingNodeID, guardTenant, syncObjectKey, publishMainKey, publishDtshKey)
+		q := foghorndb.New(tx)
+		applied, err := q.CompleteMainArtifactSync(ctx, foghorndb.CompleteMainArtifactSyncParams{
+			S3Url: s3URL, DtshSynced: sql.NullBool{Bool: dtshIncluded, Valid: true}, ArtifactHash: assetHash, SizeBytes: int64(sizeBytes),
+			SyncRequestID: sql.NullString{String: requestID, Valid: true}, SyncNodeID: sql.NullString{String: reportingNodeID, Valid: true}, TenantID: guardTenant,
+			SyncObjectKey: syncObjectKey, ActiveObjectKey: publishMainKey, ActiveDtshKey: publishDtshKey,
+		})
 		if err != nil {
 			logger.WithError(err).WithField("asset_hash", assetHash).Error("failed to mark artifact as synced")
-			return
-		}
-		applied, raErr := res.RowsAffected()
-		if raErr != nil {
-			logger.WithError(raErr).WithField("asset_hash", assetHash).Error("failed to read sync completion rows affected")
 			return
 		}
 		if applied == 0 {
@@ -7819,25 +7529,12 @@ func processSyncComplete(complete *ipcpb.SyncComplete, nodeID string, logger log
 					logger.WithField("asset_hash", assetHash).Warn("Ignoring dtsh completion: unresolved tenant")
 					return
 				}
-				dRes, dErr := tx.ExecContext(ctx, `
-					UPDATE foghorn.artifacts
-					SET dtsh_synced = true, dtsh_status = NULL, dtsh_failure_count = 0,
-					    -- Flip the .dtsh pointer to the freshly-published versioned index (the CAS here fences it,
-					    -- so a late/duplicate attempt that published a different key can never win this pointer).
-					    active_dtsh_key = COALESCE(NULLIF($5,''), active_dtsh_key),
-					    dtsh_sync_request_id = NULL, dtsh_sync_node_id = NULL, updated_at = NOW()
-					WHERE artifact_hash = $1 AND sync_status = 'synced' AND dtsh_synced = false
-					  AND status NOT IN ('deleted', 'expired', 'aborted')
-					  AND dtsh_sync_request_id = $2 AND dtsh_sync_node_id = $3
-					  AND tenant_id::text = $4`,
-					assetHash, requestID, reportingNodeID, tenantID, publishDtshKey)
+				dApplied, dErr := q.CompleteIncrementalDtshSync(ctx, foghorndb.CompleteIncrementalDtshSyncParams{
+					ArtifactHash: assetHash, DtshSyncRequestID: sql.NullString{String: requestID, Valid: true},
+					DtshSyncNodeID: sql.NullString{String: reportingNodeID, Valid: true}, TenantID: tenantID, ActiveDtshKey: publishDtshKey,
+				})
 				if dErr != nil {
 					logger.WithError(dErr).WithField("asset_hash", assetHash).Error("failed to apply dtsh sync")
-					return
-				}
-				dApplied, dRaErr := dRes.RowsAffected()
-				if dRaErr != nil {
-					logger.WithError(dRaErr).WithField("asset_hash", assetHash).Error("failed to read dtsh sync rows affected")
 					return
 				}
 				if dApplied == 0 {
@@ -7947,11 +7644,9 @@ func processSyncComplete(complete *ipcpb.SyncComplete, nodeID string, logger log
 		// uploads the derived key differs from the original upload key; persist the new value so relay
 		// reads the synced location, not the original-upload row.
 		if derivedVodKey != "" {
-			if _, dbErr := tx.ExecContext(ctx, `
-				INSERT INTO foghorn.vod_metadata (artifact_hash, s3_key, filename)
-				VALUES ($1, $2, $3)
-				ON CONFLICT (artifact_hash) DO UPDATE SET s3_key = EXCLUDED.s3_key`,
-				assetHash, derivedVodKey, assetHash+"."+format); dbErr != nil {
+			if dbErr := q.UpsertSyncedVODObjectKey(ctx, foghorndb.UpsertSyncedVODObjectKeyParams{
+				ArtifactHash: assetHash, S3Key: sql.NullString{String: derivedVodKey, Valid: true}, Filename: sql.NullString{String: assetHash + "." + format, Valid: true},
+			}); dbErr != nil {
 				logger.WithError(dbErr).WithField("asset_hash", assetHash).Error("failed to update vod_metadata.s3_key in sync completion")
 				return
 			}
@@ -8069,21 +7764,17 @@ func applySyncCompletionFailure(ctx context.Context, assetHash, reportingNodeID,
 	// stale/unauthenticated/wrong-node completion never drops a copy or mutates state. The lock reads the
 	// artifact owner (tenant_id), which scopes the terminal UPDATE below as partition scoping. A query
 	// error rejects the completion (fail closed).
-	var lockedTenant, lockedObjectKey string
-	guardErr := tx.QueryRowContext(ctx, `
-		SELECT COALESCE(tenant_id::text,''), COALESCE(sync_object_key,'') FROM foghorn.artifacts
-		WHERE artifact_hash = $1
-		  AND tenant_id::text = $4
-		  AND status NOT IN ('deleted', 'expired', 'aborted')
-		  AND sync_status = 'in_progress'
-		  AND sync_request_id = $2
-		  AND sync_node_id = $3
-		FOR UPDATE`, assetHash, requestID, reportingNodeID, ownerTenant).Scan(&lockedTenant, &lockedObjectKey)
+	q := foghorndb.New(tx)
+	locked, guardErr := q.LockSyncFailureAttempt(ctx, foghorndb.LockSyncFailureAttemptParams{
+		ArtifactHash: assetHash, SyncRequestID: sql.NullString{String: requestID, Valid: true},
+		SyncNodeID: sql.NullString{String: reportingNodeID, Valid: true}, TenantID: ownerTenant,
+	})
 	if errors.Is(guardErr, sql.ErrNoRows) {
 		logger.WithFields(logging.Fields{"asset_hash": assetHash, "request_id": requestID, "node_id": reportingNodeID}).
 			Debug("Ignoring failure completion that does not match the outstanding attempt (duplicate/stale/wrong-node)")
 		return false
 	}
+	lockedTenant, lockedObjectKey := locked.TenantID, locked.SyncObjectKey
 	if guardErr != nil {
 		logger.WithError(guardErr).WithField("asset_hash", assetHash).Error("failed to lock artifact for sync failure")
 		return false
@@ -8097,11 +7788,8 @@ func applySyncCompletionFailure(ctx context.Context, assetHash, reportingNodeID,
 			logger.WithError(delErr).WithField("asset_hash", assetHash).Error("failed to orphan local_missing node copy")
 			return false
 		}
-		var otherComplete int
-		if cErr := tx.QueryRowContext(ctx, `
-			SELECT count(*) FROM foghorn.artifact_nodes
-			WHERE artifact_hash = $1 AND node_id <> $2 AND is_orphaned = false AND is_complete = true`,
-			assetHash, reportingNodeID).Scan(&otherComplete); cErr != nil {
+		otherComplete, cErr := q.CountOtherCompleteArtifactCopies(ctx, foghorndb.CountOtherCompleteArtifactCopiesParams{ArtifactHash: assetHash, NodeID: reportingNodeID})
+		if cErr != nil {
 			logger.WithError(cErr).WithField("asset_hash", assetHash).Error("failed to count surviving copies")
 			return false
 		}
@@ -8113,18 +7801,7 @@ func applySyncCompletionFailure(ctx context.Context, assetHash, reportingNodeID,
 
 	// The row is already locked+guarded above; this UPDATE keys on the hash under the artifact-owner
 	// tenant (tenant_id = $4, partition scoping from the locked row). The attempt identity is cleared.
-	if _, uErr := tx.ExecContext(ctx, `
-		UPDATE foghorn.artifacts
-		SET storage_location = 'local',
-		    sync_status = $2::text,
-		    status = CASE WHEN $2::text = 'lost_local' THEN 'failed' ELSE status END,
-		    sync_error = NULLIF($3,''),
-		    last_sync_attempt = NOW(),
-		    failure_count = CASE WHEN $2::text = 'failed' THEN failure_count + 1 ELSE failure_count END,
-		    sync_request_id = NULL,
-		    sync_node_id = NULL,
-		    updated_at = NOW()
-		WHERE artifact_hash = $1 AND tenant_id::text = $4`, assetHash, newSyncStatus, errorMsg, lockedTenant); uErr != nil {
+	if uErr := q.FailMainArtifactSync(ctx, foghorndb.FailMainArtifactSyncParams{ArtifactHash: assetHash, SyncStatus: newSyncStatus, ErrorMessage: errorMsg, TenantID: lockedTenant}); uErr != nil {
 		logger.WithError(uErr).WithField("asset_hash", assetHash).Error("failed to record sync failure")
 		return false
 	}
@@ -8315,12 +7992,8 @@ func dtshSyncedForArtifact(ctx context.Context, artifactHash string) bool {
 	if db == nil || artifactHash == "" {
 		return false
 	}
-	var synced bool
-	if err := db.QueryRowContext(ctx, `
-		SELECT COALESCE(dtsh_synced, false)
-		FROM foghorn.artifacts
-		WHERE artifact_hash = $1
-	`, artifactHash).Scan(&synced); err != nil {
+	synced, err := foghorndb.New(db).DtshSyncedForArtifact(ctx, artifactHash)
+	if err != nil {
 		return false
 	}
 	return synced
@@ -9016,20 +8689,11 @@ func nodeProducesThumbnailResource(ctx context.Context, nodeID string, kind stre
 		// TENANT-SCOPED so a hash collision across tenants can't cross-authorize. A serving node must hold a
 		// COMPLETE, non-orphaned copy; a processing node must be the artifact's assigned processor. Both are
 		// scoped to the resolved tenant.
-		var ok bool
-		if err := conn.QueryRowContext(ctx, `
-			SELECT EXISTS (SELECT 1 FROM foghorn.artifact_nodes an
-			                JOIN foghorn.artifacts a ON a.artifact_hash = an.artifact_hash
-			                WHERE an.artifact_hash = $1 AND an.node_id = $2
-			                  AND an.is_complete = true AND an.is_orphaned = false
-			                  AND a.tenant_id::text = $3)
-			    OR EXISTS (SELECT 1 FROM foghorn.processing_jobs
-			                WHERE artifact_hash = $1 AND processing_node_id = $2
-			                  AND tenant_id::text = $3
-			                  AND status IN ('dispatched', 'processing'))`, resourceKey, nodeID, tenantID).Scan(&ok); err != nil {
+		ok, err := foghorndb.New(conn).ThumbnailResourceProducedByNode(ctx, foghorndb.ThumbnailResourceProducedByNodeParams{ArtifactHash: resourceKey, NodeID: nodeID, TenantID: tenantID})
+		if err != nil {
 			return false
 		}
-		return ok
+		return ok.Valid && ok.Bool
 	default:
 		return false
 	}
@@ -9158,21 +8822,15 @@ func processThumbnailUploadRequest(requestID string, req *ipcpb.ThumbnailUploadR
 		// (storage_cluster_id with origin_cluster_id fallback) so the
 		// resolver can pick the right pool. Caller's stream state has no
 		// VOD context so the artifact row is the only source.
-		var artifactHash string
-		var tenantID sql.NullString
-		var authoritativeCluster sql.NullString
-		if err := conn.QueryRowContext(context.Background(),
-			`SELECT artifact_hash, tenant_id::text, COALESCE(storage_cluster_id, origin_cluster_id)
-			   FROM foghorn.artifacts
-			  WHERE internal_name = $1`,
-			bareName,
-		).Scan(&artifactHash, &tenantID, &authoritativeCluster); err != nil {
+		row, err := foghorndb.New(conn).ResolveThumbnailVODArtifact(context.Background(), sql.NullString{String: bareName, Valid: true})
+		if err != nil {
 			logger.WithFields(logging.Fields{
 				"stream_name":   internalName,
 				"internal_name": bareName,
 			}).Warn("Could not resolve internal_name to artifact_hash for thumbnail upload")
 			return
 		}
+		artifactHash, tenantID, authoritativeCluster := row.ArtifactHash, sql.NullString{String: row.TenantID, Valid: row.TenantID != ""}, row.ClusterID
 		thumbnailKey = artifactHash
 		if tenantID.Valid {
 			thumbTenantID = tenantID.String
@@ -9192,16 +8850,8 @@ func processThumbnailUploadRequest(requestID string, req *ipcpb.ThumbnailUploadR
 			return
 		}
 		token := parsed.Concrete
-		var tenantID sql.NullString
-		var authoritativeCluster sql.NullString
-		var artifactType string
-		if err := conn.QueryRowContext(context.Background(),
-			`SELECT tenant_id::text, COALESCE(NULLIF(storage_cluster_id, ''), NULLIF(origin_cluster_id, '')), artifact_type
-			   FROM foghorn.artifacts
-			  WHERE artifact_hash = $1
-			    AND artifact_type IN ('clip','vod','dvr')`,
-			token,
-		).Scan(&tenantID, &authoritativeCluster, &artifactType); err != nil {
+		row, err := foghorndb.New(conn).ResolveThumbnailProcessingArtifact(context.Background(), token)
+		if err != nil {
 			logger.WithFields(logging.Fields{
 				"stream_name":   internalName,
 				"artifact_hash": token,
@@ -9209,6 +8859,9 @@ func processThumbnailUploadRequest(requestID string, req *ipcpb.ThumbnailUploadR
 			}).Warn("Could not resolve processing+ stream to artifact_hash for thumbnail upload")
 			return
 		}
+		tenantID := sql.NullString{String: row.TenantID, Valid: row.TenantID != ""}
+		authoritativeCluster := sql.NullString{String: row.ClusterID, Valid: row.ClusterID != ""}
+		artifactType := row.ArtifactType
 		thumbnailKey = token
 		if tenantID.Valid {
 			thumbTenantID = tenantID.String
@@ -10003,21 +9656,10 @@ func markArtifactHasThumbnails(artifactHash, nodeID string, logger logging.Logge
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	var (
-		tenantID         sql.NullString
-		artifactType     string
-		storageClusterID sql.NullString
-		originClusterID  sql.NullString
-		alreadyMarked    bool
-	)
 	// Resolve the artifact's tenant + cluster context BEFORE any write so the reporting node can be
 	// authorized. A key with no artifact row (e.g. a live stream_id thumbnail) has nothing to mark and no
 	// tenant to bind — return quietly.
-	selErr := conn.QueryRowContext(ctx, `
-		SELECT tenant_id::text, artifact_type, storage_cluster_id, origin_cluster_id, COALESCE(has_thumbnails, false)
-		  FROM foghorn.artifacts
-		 WHERE artifact_hash = $1
-	`, artifactHash).Scan(&tenantID, &artifactType, &storageClusterID, &originClusterID, &alreadyMarked)
+	row, selErr := foghorndb.New(conn).GetArtifactThumbnailMarkContext(ctx, artifactHash)
 	if errors.Is(selErr, sql.ErrNoRows) {
 		// No artifact row for this key: there is nothing to bind authorization against, so FAIL CLOSED —
 		// an unverifiable key must not flip state or trigger a cache side effect. (Live stream thumbnails
@@ -10025,6 +9667,7 @@ func markArtifactHasThumbnails(artifactHash, nodeID string, logger logging.Logge
 		// capability is the workload-identity RFC.)
 		return false
 	}
+	tenantID, storageClusterID, originClusterID, alreadyMarked := row.TenantID, row.StorageClusterID, row.OriginClusterID, row.HasThumbnails
 	if selErr != nil {
 		logger.WithFields(logging.Fields{
 			"artifact_hash": artifactHash,
@@ -10036,22 +9679,17 @@ func markArtifactHasThumbnails(artifactHash, nodeID string, logger logging.Logge
 	// minting path). A node not entitled to this tenant must not flip has_thumbnails or trigger the cache
 	// side effects. FAIL CLOSED: a missing/empty artifact tenant is denied (an unbound tenant is not a pass),
 	// as is any node the tenant check rejects.
-	if !tenantID.Valid || tenantID.String == "" || !nodeMayServeTenant(nodeID, tenantID.String) {
+	if tenantID == "" || !nodeMayServeTenant(nodeID, tenantID) {
 		logger.WithFields(logging.Fields{
 			"artifact_hash": artifactHash,
-			"tenant_id":     tenantID.String,
+			"tenant_id":     tenantID,
 			"node_id":       nodeID,
 		}).Warn("Thumbnail confirmation denied: reporting node is not authorized for the artifact tenant")
 		return false
 	}
 
 	if !alreadyMarked {
-		if _, err := conn.ExecContext(ctx, `
-			UPDATE foghorn.artifacts
-			   SET has_thumbnails = true, updated_at = NOW()
-			 WHERE artifact_hash = $1
-			   AND has_thumbnails IS DISTINCT FROM true
-		`, artifactHash); err != nil {
+		if err := foghorndb.New(conn).MarkArtifactThumbnailPresent(ctx, artifactHash); err != nil {
 			logger.WithFields(logging.Fields{
 				"artifact_hash": artifactHash,
 				"error":         err,
@@ -10077,11 +9715,7 @@ func markArtifactHasThumbnails(artifactHash, nodeID string, logger logging.Logge
 			cluster = localClusterID
 		}
 		if cluster != "" {
-			if _, dbErr := conn.ExecContext(ctx, `
-				UPDATE foghorn.artifacts
-				   SET origin_cluster_id = $2, updated_at = NOW()
-				 WHERE artifact_hash = $1 AND origin_cluster_id IS NULL
-			`, artifactHash, cluster); dbErr != nil {
+			if dbErr := foghorndb.New(conn).BackfillArtifactOriginCluster(ctx, foghorndb.BackfillArtifactOriginClusterParams{ArtifactHash: artifactHash, OriginClusterID: sql.NullString{String: cluster, Valid: true}}); dbErr != nil {
 				logger.WithError(dbErr).WithField("artifact_hash", artifactHash).Warn("Failed to backfill artifact origin cluster")
 			} else {
 				logger.WithFields(logging.Fields{

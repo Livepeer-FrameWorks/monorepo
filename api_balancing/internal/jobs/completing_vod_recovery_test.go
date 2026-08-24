@@ -77,7 +77,7 @@ func TestCompletingVodRecovery_ConvergesPresentObjectToProcessing(t *testing.T) 
 	// row (guarded artifact_type='clip') but still executes.
 	mock.ExpectBegin()
 	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'processing'`).
-		WithArgs("hash-1", "s3://bucket/vod/t1/hash-1/video.mp4", "t1").
+		WithArgs("s3://bucket/vod/t1/hash-1/video.mp4", "hash-1", "t1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).
 		WithArgs("hash-1", "process").WillReturnResult(sqlmock.NewResult(0, 0))
@@ -171,7 +171,7 @@ func TestCompletingVodRecovery_DescriptorRetryCompletesConverges(t *testing.T) {
 		WillReturnRows(recoveryScanRowsWithDescriptor(false))
 	mock.ExpectBegin()
 	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'processing'`).
-		WithArgs("hash-1", "s3://bucket/vod/t1/hash-1/video.mp4", "t1").
+		WithArgs("s3://bucket/vod/t1/hash-1/video.mp4", "hash-1", "t1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).
 		WithArgs("hash-1", "process").WillReturnResult(sqlmock.NewResult(0, 0))
@@ -210,7 +210,7 @@ func TestCompletingVodRecovery_DescriptorRetryErrorButObjectPresentConverges(t *
 		WillReturnRows(recoveryScanRowsWithDescriptor(true))
 	mock.ExpectBegin()
 	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'processing'`).
-		WithArgs("hash-1", "s3://bucket/vod/t1/hash-1/video.mp4", "t1").
+		WithArgs("s3://bucket/vod/t1/hash-1/video.mp4", "hash-1", "t1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).
 		WithArgs("hash-1", "process").WillReturnResult(sqlmock.NewResult(0, 0))

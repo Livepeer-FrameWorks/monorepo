@@ -49,15 +49,15 @@ func TestClassifyFinalCounts(t *testing.T) {
 	})
 }
 
-const dvrNodeAuthSelectRe = `SELECT status, COALESCE\(dvr_start_dispatch->>'node_id', ''\)\s+FROM foghorn.artifacts\s+WHERE artifact_hash = \$1 AND artifact_type = 'dvr' AND tenant_id = \$2`
+const dvrNodeAuthSelectRe = `SELECT status, COALESCE\(dvr_start_dispatch->>'node_id', ''\)::text AS dispatch_node\s+FROM foghorn.artifacts\s+WHERE artifact_hash = \$1 AND artifact_type = 'dvr' AND tenant_id = \$2::uuid`
 
 const dvrOwnerTenantRe = `SELECT tenant_id::text\s+FROM foghorn.artifacts\s+WHERE artifact_hash = \$1 AND artifact_type = 'dvr'`
 
-const dvrBackfillLockRe = `SELECT COALESCE\(dvr_start_dispatch->>'node_id', ''\)\s+FROM foghorn.artifacts\s+WHERE artifact_hash = \$1 AND artifact_type = 'dvr' AND tenant_id = \$2\s+FOR UPDATE`
+const dvrBackfillLockRe = `SELECT COALESCE\(dvr_start_dispatch->>'node_id', ''\)::text AS dispatch_node\s+FROM foghorn.artifacts\s+WHERE artifact_hash = \$1 AND artifact_type = 'dvr' AND tenant_id = \$2::uuid\s+FOR UPDATE`
 
-const dvrBackfillReadRe = `SELECT COALESCE\(dvr_start_dispatch->>'node_id', ''\)\s+FROM foghorn.artifacts\s+WHERE artifact_hash = \$1 AND artifact_type = 'dvr' AND tenant_id = \$2`
+const dvrBackfillReadRe = `SELECT COALESCE\(dvr_start_dispatch->>'node_id', ''\)::text\s+FROM foghorn.artifacts\s+WHERE artifact_hash = \$1 AND artifact_type = 'dvr' AND tenant_id::text = \$2`
 
-const dvrOriginSelectRe = `SELECT CASE WHEN COUNT\(\*\) = 1 THEN MAX\(node_id\) ELSE '' END\s+FROM foghorn.artifact_nodes\s+WHERE artifact_hash = \$1 AND role = 'origin' AND is_orphaned = false AND node_id <> ''`
+const dvrOriginSelectRe = `SELECT CASE WHEN COUNT\(\*\) = 1 THEN MAX\(an.node_id\) ELSE '' END::text\s+FROM foghorn.artifact_nodes an\s+WHERE an.artifact_hash = \$1 AND an.role = 'origin' AND an.is_orphaned = false AND an.node_id <> ''`
 
 const dvrOwnerBackfillRe = `UPDATE foghorn.artifacts\s+SET dvr_start_dispatch = jsonb_set`
 
@@ -170,7 +170,7 @@ func TestDVRReportNodeAuthorized(t *testing.T) {
 			WithArgs("dvr-1", "tenant-1").
 			WillReturnRows(sqlmock.NewRows([]string{"node_id"}).AddRow("origin-node"))
 		mock.ExpectExec(dvrOwnerBackfillRe).
-			WithArgs("dvr-1", "tenant-1", "origin-node").
+			WithArgs("origin-node", "dvr-1", "tenant-1").
 			WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectCommit()
 		ok, err := dvrReportNodeAuthorized(context.Background(), "dvr-1", "tenant-1", "origin-node", dvrAuthStrict)
@@ -197,7 +197,7 @@ func TestDVRReportNodeAuthorized(t *testing.T) {
 			WithArgs("dvr-1", "tenant-1").
 			WillReturnRows(sqlmock.NewRows([]string{"node_id"}).AddRow("origin-node"))
 		mock.ExpectExec(dvrOwnerBackfillRe).
-			WithArgs("dvr-1", "tenant-1", "origin-node").
+			WithArgs("origin-node", "dvr-1", "tenant-1").
 			WillReturnResult(sqlmock.NewResult(0, 0))
 		mock.ExpectQuery(dvrBackfillReadRe).
 			WithArgs("dvr-1", "tenant-1").

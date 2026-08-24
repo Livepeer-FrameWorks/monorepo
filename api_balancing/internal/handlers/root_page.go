@@ -2,13 +2,13 @@ package handlers
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"html/template"
 	"net/http"
 	"sort"
 	"time"
 
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"frameworks/api_balancing/internal/state"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
@@ -1172,194 +1172,115 @@ func HandleRootPage(c *gin.Context) {
 
 	if db != nil {
 		// Query all artifacts with vod_metadata
-		artifactRows, err := db.QueryContext(c.Request.Context(), `
-			SELECT
-				a.artifact_hash, a.artifact_type, a.status, a.internal_name, a.tenant_id,
-				a.storage_location, a.sync_status, a.s3_url, a.format, a.size_bytes,
-				a.access_count, a.last_accessed_at,
-				a.manifest_path, a.duration_seconds, a.dtsh_synced, a.retention_until,
-				a.created_at,
-				v.video_codec, v.audio_codec, v.resolution, v.duration_ms, v.bitrate_kbps,
-				v.filename, v.title
-			FROM foghorn.artifacts a
-			LEFT JOIN foghorn.vod_metadata v ON a.artifact_hash = v.artifact_hash
-			WHERE a.status != 'deleted'
-			ORDER BY a.created_at DESC
-			LIMIT 200
-		`)
+		queries := foghorndb.New(db)
+		artifactRows, err := queries.ListAdminArtifacts(c.Request.Context(), 200)
 		if err == nil {
-			defer artifactRows.Close()
-			for artifactRows.Next() {
-				var hash, artType, status, storageLocation, syncStatus string
-				var internalName, tenantID, s3URL, format, manifestPath, retentionUntil sql.NullString
-				var sizeBytes sql.NullInt64
-				var accessCount sql.NullInt64
-				var lastAccessed sql.NullTime
-				var durationSeconds sql.NullInt32
-				var dtshSynced sql.NullBool
-				var createdAt time.Time
-				var videoCodec, audioCodec, resolution, filename, title sql.NullString
-				var durationMs, bitrateKbps sql.NullInt32
-
-				errScan := artifactRows.Scan(
-					&hash, &artType, &status, &internalName, &tenantID,
-					&storageLocation, &syncStatus, &s3URL, &format, &sizeBytes,
-					&accessCount, &lastAccessed,
-					&manifestPath, &durationSeconds, &dtshSynced, &retentionUntil,
-					&createdAt,
-					&videoCodec, &audioCodec, &resolution, &durationMs, &bitrateKbps,
-					&filename, &title,
-				)
-				if errScan != nil {
-					continue
-				}
-
+			for _, row := range artifactRows {
 				art := DBArtifactData{
-					ArtifactHash:    hash,
-					ArtifactType:    artType,
-					Status:          status,
-					StorageLocation: storageLocation,
-					SyncStatus:      syncStatus,
-					CreatedAt:       createdAt.Format("2006-01-02 15:04:05"),
+					ArtifactHash:    row.ArtifactHash,
+					ArtifactType:    row.ArtifactType,
+					Status:          row.Status.String,
+					StorageLocation: row.StorageLocation.String,
+					SyncStatus:      row.SyncStatus.String,
+					CreatedAt:       row.CreatedAt.Time.Format("2006-01-02 15:04:05"),
 				}
-				if internalName.Valid {
-					art.InternalName = internalName.String
+				if row.InternalName.Valid {
+					art.InternalName = row.InternalName.String
 				}
-				if tenantID.Valid {
-					art.TenantID = tenantID.String
+				if row.TenantID != "" {
+					art.TenantID = row.TenantID
 				}
-				if s3URL.Valid {
-					art.S3URL = s3URL.String
+				if row.S3Url.Valid {
+					art.S3URL = row.S3Url.String
 				}
-				if format.Valid {
-					art.Format = format.String
+				if row.Format.Valid {
+					art.Format = row.Format.String
 				}
-				if sizeBytes.Valid {
-					art.SizeBytes = sizeBytes.Int64
-					art.SizeStr = formatBytes(uint64(sizeBytes.Int64))
+				if row.SizeBytes.Valid {
+					art.SizeBytes = row.SizeBytes.Int64
+					art.SizeStr = formatBytes(uint64(row.SizeBytes.Int64))
 				}
-				if accessCount.Valid && accessCount.Int64 >= 0 {
-					art.AccessCount = uint64(accessCount.Int64)
+				if row.AccessCount.Valid && row.AccessCount.Int32 >= 0 {
+					art.AccessCount = uint64(row.AccessCount.Int32)
 				}
-				if lastAccessed.Valid {
-					art.LastAccessed = lastAccessed.Time.Format("2006-01-02 15:04:05")
+				if row.LastAccessedAt.Valid {
+					art.LastAccessed = row.LastAccessedAt.Time.Format("2006-01-02 15:04:05")
 				}
-				if manifestPath.Valid {
-					art.ManifestPath = manifestPath.String
+				if row.ManifestPath.Valid {
+					art.ManifestPath = row.ManifestPath.String
 				}
-				if durationSeconds.Valid {
-					art.DurationSeconds = int(durationSeconds.Int32)
+				if row.DurationSeconds.Valid {
+					art.DurationSeconds = int(row.DurationSeconds.Int32)
 				}
-				if dtshSynced.Valid {
-					art.DtshSynced = dtshSynced.Bool
+				if row.DtshSynced.Valid {
+					art.DtshSynced = row.DtshSynced.Bool
 				}
-				if retentionUntil.Valid {
-					art.RetentionUntil = retentionUntil.String
+				if row.RetentionUntil != "" {
+					art.RetentionUntil = row.RetentionUntil
 				}
 				// VOD metadata
-				if videoCodec.Valid {
-					art.VideoCodec = videoCodec.String
+				if row.VideoCodec.Valid {
+					art.VideoCodec = row.VideoCodec.String
 				}
-				if audioCodec.Valid {
-					art.AudioCodec = audioCodec.String
+				if row.AudioCodec.Valid {
+					art.AudioCodec = row.AudioCodec.String
 				}
-				if resolution.Valid {
-					art.Resolution = resolution.String
+				if row.Resolution.Valid {
+					art.Resolution = row.Resolution.String
 				}
-				if durationMs.Valid {
-					art.DurationMs = int(durationMs.Int32)
+				if row.DurationMs.Valid {
+					art.DurationMs = int(row.DurationMs.Int32)
 				}
-				if bitrateKbps.Valid {
-					art.BitrateKbps = int(bitrateKbps.Int32)
+				if row.BitrateKbps.Valid {
+					art.BitrateKbps = int(row.BitrateKbps.Int32)
 				}
-				if filename.Valid {
-					art.Filename = filename.String
+				if row.Filename.Valid {
+					art.Filename = row.Filename.String
 				}
-				if title.Valid {
-					art.Title = title.String
+				if row.Title.Valid {
+					art.Title = row.Title.String
 				}
 
 				// Query nodes hosting this artifact
-				art.NodeIDs = func() []string {
-					nodeRows, errQuery := db.QueryContext(context.Background(), `
-						SELECT node_id FROM foghorn.artifact_nodes
-						WHERE artifact_hash = $1 AND NOT is_orphaned
-					`, hash)
-					if errQuery != nil {
-						return nil
-					}
-					defer func() { _ = nodeRows.Close() }()
-					var ids []string
-					for nodeRows.Next() {
-						var nodeID string
-						if errScan := nodeRows.Scan(&nodeID); errScan == nil {
-							ids = append(ids, nodeID)
-						}
-					}
-					return ids
-				}()
+				if nodes, nodeErr := queries.ListActiveArtifactNodes(context.Background(), row.ArtifactHash); nodeErr == nil {
+					art.NodeIDs = nodes
+				}
 
 				dbArtifacts = append(dbArtifacts, art)
 			}
 		}
 
 		// Query processing jobs
-		jobRows, err := db.QueryContext(c.Request.Context(), `
-			SELECT
-				job_id, tenant_id, artifact_hash, job_type, status, progress,
-				use_gateway, processing_node_id, routing_reason, error_message, retry_count,
-				created_at, started_at, completed_at
-			FROM foghorn.processing_jobs
-			WHERE status NOT IN ('completed', 'failed') OR created_at > NOW() - INTERVAL '1 hour'
-			ORDER BY created_at DESC
-			LIMIT 50
-		`)
+		jobRows, err := queries.ListRecentProcessingJobs(c.Request.Context(), 50)
 		if err == nil {
-			defer jobRows.Close()
-			for jobRows.Next() {
-				var jobID, tenantID, jobType, status string
-				var artifactHash, processingNode, routingReason, errorMessage sql.NullString
-				var progress, retryCount int
-				var useGateway bool
-				var createdAt time.Time
-				var startedAt, completedAt sql.NullTime
-
-				err := jobRows.Scan(
-					&jobID, &tenantID, &artifactHash, &jobType, &status, &progress,
-					&useGateway, &processingNode, &routingReason, &errorMessage, &retryCount,
-					&createdAt, &startedAt, &completedAt,
-				)
-				if err != nil {
-					continue
-				}
-
+			for _, row := range jobRows {
 				job := ProcessingJobData{
-					JobID:      jobID,
-					TenantID:   tenantID,
-					JobType:    jobType,
-					Status:     status,
-					Progress:   progress,
-					UseGateway: useGateway,
-					RetryCount: retryCount,
-					CreatedAt:  createdAt.Format("2006-01-02 15:04:05"),
+					JobID:      row.JobID,
+					TenantID:   row.TenantID,
+					JobType:    row.JobType,
+					Status:     row.Status.String,
+					Progress:   int(row.Progress.Int32),
+					UseGateway: row.UseGateway.Bool,
+					RetryCount: int(row.RetryCount.Int32),
+					CreatedAt:  row.CreatedAt.Time.Format("2006-01-02 15:04:05"),
 				}
-				if artifactHash.Valid {
-					job.ArtifactHash = artifactHash.String
+				if row.ArtifactHash.Valid {
+					job.ArtifactHash = row.ArtifactHash.String
 				}
-				if processingNode.Valid {
-					job.ProcessingNode = processingNode.String
+				if row.ProcessingNodeID.Valid {
+					job.ProcessingNode = row.ProcessingNodeID.String
 				}
-				if routingReason.Valid {
-					job.RoutingReason = routingReason.String
+				if row.RoutingReason.Valid {
+					job.RoutingReason = row.RoutingReason.String
 				}
-				if errorMessage.Valid {
-					job.ErrorMessage = errorMessage.String
+				if row.ErrorMessage.Valid {
+					job.ErrorMessage = row.ErrorMessage.String
 				}
-				if startedAt.Valid {
-					job.StartedAt = startedAt.Time.Format("2006-01-02 15:04:05")
+				if row.StartedAt.Valid {
+					job.StartedAt = row.StartedAt.Time.Format("2006-01-02 15:04:05")
 				}
-				if completedAt.Valid {
-					job.CompletedAt = completedAt.Time.Format("2006-01-02 15:04:05")
+				if row.CompletedAt.Valid {
+					job.CompletedAt = row.CompletedAt.Time.Format("2006-01-02 15:04:05")
 				}
 
 				processingJobs = append(processingJobs, job)

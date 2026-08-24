@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"frameworks/api_balancing/internal/state"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
@@ -427,47 +428,33 @@ func (s *FoghornGRPCServer) rollingDVRCoverageRange(ctx context.Context, dvrHash
 		return 0, 0, fmt.Errorf("invalid range: end <= start")
 	}
 
-	var dvrWindowSec sql.NullInt64
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT dvr_window_seconds FROM foghorn.artifacts WHERE artifact_hash = $1`,
-		dvrHash,
-	).Scan(&dvrWindowSec); err != nil {
+	dvrWindowSec, err := foghorndb.New(s.db).GetDVRWindowSeconds(ctx, dvrHash)
+	if err != nil {
 		return 0, 0, err
 	}
 	nowMs := time.Now().UnixMilli()
 	lowerBound := max(startMs, dvrStartedAtMs)
-	if dvrWindowSec.Valid && dvrWindowSec.Int64 > 0 {
-		lowerBound = max(lowerBound, nowMs-dvrWindowSec.Int64*1000)
+	if dvrWindowSec.Valid && dvrWindowSec.Int32 > 0 {
+		lowerBound = max(lowerBound, nowMs-int64(dvrWindowSec.Int32)*1000)
 	}
 	if endMs <= lowerBound {
 		return 0, 0, nil
 	}
 
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT GREATEST(media_start_ms, $2) AS seg_start,
-		       LEAST(media_end_ms, $3)      AS seg_end
-		  FROM foghorn.dvr_segments
-		 WHERE artifact_hash = $1
-		   AND status NOT IN ('reclaimed', 'deleted_local', 'lost_local')
-		   AND media_end_ms > $2
-		   AND media_start_ms < $3
-		 ORDER BY media_start_ms, media_end_ms
-	`, dvrHash, lowerBound, endMs)
+	segments, err := foghorndb.New(s.db).ListDVRCoverageSegments(ctx, foghorndb.ListDVRCoverageSegmentsParams{
+		LowerBound: lowerBound, EndMs: endMs, ArtifactHash: dvrHash,
+	})
 	if err != nil {
 		return 0, 0, err
 	}
-	defer rows.Close()
 
 	// Coalesce adjacent/overlapping segments into contiguous runs and keep
 	// the longest. Ordered by media_start_ms so a gap (next seg_start past
 	// the running edge) closes the current run.
 	var bestStart, bestEnd, runStart, runEnd int64
 	runActive := false
-	for rows.Next() {
-		var segStart, segEnd int64
-		if scanErr := rows.Scan(&segStart, &segEnd); scanErr != nil {
-			return 0, 0, scanErr
-		}
+	for _, segment := range segments {
+		segStart, segEnd := segment.SegStart, segment.SegEnd
 		switch {
 		case !runActive:
 			runStart, runEnd = segStart, segEnd
@@ -485,9 +472,6 @@ func (s *FoghornGRPCServer) rollingDVRCoverageRange(ctx context.Context, dvrHash
 		if runEnd >= endMs {
 			break // a run reaching endMs is maximal; later runs start later, so shorter
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return 0, 0, err
 	}
 	if runActive && runEnd-runStart > bestEnd-bestStart {
 		bestStart, bestEnd = runStart, runEnd
@@ -521,65 +505,28 @@ func (s *FoghornGRPCServer) findRecordingDVR(ctx context.Context, tenantID, stre
 	if tenantID == "" {
 		return "", "", 0, "", "", fmt.Errorf("tenant_id is required")
 	}
-	var hash, internalName, st sql.NullString
-	var started sql.NullInt64
-	row := s.db.QueryRowContext(ctx, `
-		SELECT artifact_hash,
-		       COALESCE(internal_name, ''),
-		       COALESCE(EXTRACT(EPOCH FROM started_at)*1000, 0)::bigint,
-		       status
-		  FROM foghorn.artifacts
-		 WHERE artifact_type = 'dvr'
-		   AND stream_internal_name = $1
-		   AND tenant_id = $2::uuid
-		 ORDER BY started_at DESC NULLS LAST
-		 LIMIT 1
-	`, streamInternalName, tenantID)
-	if scanErr := row.Scan(&hash, &internalName, &started, &st); scanErr != nil {
+	row, scanErr := foghorndb.New(s.db).FindLatestDVRForStream(ctx, foghorndb.FindLatestDVRForStreamParams{
+		StreamInternalName: sql.NullString{String: streamInternalName, Valid: true}, TenantID: tenantID,
+	})
+	if scanErr != nil {
 		if errors.Is(scanErr, sql.ErrNoRows) {
 			return "", "", 0, "", "", nil
 		}
 		return "", "", 0, "", "", scanErr
 	}
-	if hash.Valid {
-		dvrHash = hash.String
-	}
-	if internalName.Valid {
-		dvrInternalName = internalName.String
-	}
-	if started.Valid {
-		startedAtMs = started.Int64
-	}
-	if st.Valid {
-		status = st.String
-	}
+	dvrHash = row.ArtifactHash
+	dvrInternalName = row.InternalName
+	startedAtMs = row.StartedAtMs
+	status = row.Status.String
 	if !isActiveDVRStatusString(status) || dvrHash == "" {
 		return dvrHash, dvrInternalName, startedAtMs, status, "", nil
 	}
 
-	rows, rowsErr := s.db.QueryContext(ctx, `
-		SELECT node_id
-		  FROM foghorn.artifact_nodes
-		 WHERE artifact_hash = $1
-		   AND is_orphaned = false
-	`, dvrHash)
+	candidates, rowsErr := foghorndb.New(s.db).ListActiveDVRRecordingNodes(ctx, dvrHash)
 	if rowsErr != nil {
 		return "", "", 0, "", "", rowsErr
 	}
-	defer rows.Close()
-	var candidates []string
-	for rows.Next() {
-		var nodeID string
-		if scanErr := rows.Scan(&nodeID); scanErr != nil {
-			return "", "", 0, "", "", scanErr
-		}
-		if nodeID != "" {
-			candidates = append(candidates, nodeID)
-		}
-	}
-	if rowsErr := rows.Err(); rowsErr != nil {
-		return "", "", 0, "", "", rowsErr
-	}
+	candidates = nonEmptyStrings(candidates)
 	switch len(candidates) {
 	case 0:
 		return dvrHash, dvrInternalName, startedAtMs, status, "", nil
@@ -609,36 +556,28 @@ func (s *FoghornGRPCServer) chapterArtifactBestOverlap(ctx context.Context, tena
 	if tenantID == "" {
 		return "", 0, 0, fmt.Errorf("tenant_id is required")
 	}
-	var (
-		h       sql.NullString
-		ovStart sql.NullInt64
-		ovEnd   sql.NullInt64
-	)
-	err = s.db.QueryRowContext(ctx, `
-		SELECT COALESCE(c.playback_artifact_hash, ''),
-		       GREATEST(COALESCE(c.actual_media_start_ms, c.start_ms), $2) AS ov_start,
-		       LEAST(COALESCE(c.actual_media_end_ms, c.end_ms), $3)        AS ov_end
-		  FROM foghorn.dvr_chapters c
-		  JOIN foghorn.artifacts a ON a.artifact_hash = c.artifact_hash
-		 WHERE a.artifact_type = 'dvr'
-		   AND a.stream_internal_name = $1
-		   AND a.tenant_id = $4::uuid
-		   AND c.state IN ('finalized', 'frozen', 'reclaimed')
-		   AND c.playback_artifact_hash IS NOT NULL
-		   AND COALESCE(c.actual_media_end_ms, c.end_ms)   > $2
-		   AND COALESCE(c.actual_media_start_ms, c.start_ms) < $3
-		 ORDER BY (LEAST(COALESCE(c.actual_media_end_ms, c.end_ms), $3)
-		         - GREATEST(COALESCE(c.actual_media_start_ms, c.start_ms), $2)) DESC
-		 LIMIT 1
-	`, streamInternalName, clipStartMs, clipEndMs, tenantID).Scan(&h, &ovStart, &ovEnd)
+	row, err := foghorndb.New(s.db).FindBestDVRChapterOverlap(ctx, foghorndb.FindBestDVRChapterOverlapParams{
+		ClipStartMs: clipStartMs, ClipEndMs: clipEndMs,
+		StreamInternalName: sql.NullString{String: streamInternalName, Valid: true}, TenantID: tenantID,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", 0, 0, nil
 	}
 	if err != nil {
 		return "", 0, 0, err
 	}
-	if !h.Valid || h.String == "" || !ovStart.Valid || !ovEnd.Valid || ovEnd.Int64 <= ovStart.Int64 {
+	if row.PlaybackArtifactHash == "" || row.OverlapEnd <= row.OverlapStart {
 		return "", 0, 0, nil
 	}
-	return h.String, ovStart.Int64, ovEnd.Int64, nil
+	return row.PlaybackArtifactHash, row.OverlapStart, row.OverlapEnd, nil
+}
+
+func nonEmptyStrings(values []string) []string {
+	result := values[:0]
+	for _, value := range values {
+		if value != "" {
+			result = append(result, value)
+		}
+	}
+	return result
 }

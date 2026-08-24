@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strings"
+
+	"frameworks/api_balancing/internal/database/foghorndb"
 )
 
 // Storage-backend identity (RFC I2). A "backend" is where bytes physically live — (kind, bucket, endpoint, region,
@@ -159,20 +161,19 @@ func enforceImmutableLocalBackendDesc(ctx context.Context, dbh *sql.DB, bucket, 
 
 	// Commit the current descriptor iff none is committed yet (idempotent, PK-serialized). A loser of a concurrent
 	// first-boot race no-ops here and observes the winner's descriptor in the read-back below.
-	if _, iErr := dbh.ExecContext(ctx, `
-		INSERT INTO foghorn.cell_storage_identity (id, backend_id, bucket, endpoint, region, prefix)
-		VALUES (true, $1, $2, $3, $4, $5)
-		ON CONFLICT (id) DO NOTHING`, currentID, bucket, endpoint, region, prefix); iErr != nil {
+	queries := foghorndb.New(dbh)
+	if iErr := queries.EstablishCellStorageIdentity(ctx, foghorndb.EstablishCellStorageIdentityParams{
+		BackendID: currentID, Bucket: bucket, Endpoint: endpoint, Region: region, Prefix: prefix,
+	}); iErr != nil {
 		return iErr
 	}
 
 	// ALWAYS read back the committed row and compare the exact effective values.
-	var sb, se, sr, sp string
-	if err := dbh.QueryRowContext(ctx,
-		`SELECT bucket, endpoint, region, prefix FROM foghorn.cell_storage_identity WHERE id = true`).
-		Scan(&sb, &se, &sr, &sp); err != nil {
+	row, err := queries.GetCellStorageIdentity(ctx)
+	if err != nil {
 		return err // a missing row here is a real error (the INSERT above should have committed one)
 	}
+	sb, se, sr, sp := row.Bucket, row.Endpoint, row.Region, row.Prefix
 	if sb != bucket || se != endpoint || sr != region || sp != prefix {
 		return fmt.Errorf("local S3 backend descriptor changed since this cell's first boot "+
 			"(committed bucket=%q endpoint=%q region=%q prefix=%q; current bucket=%q endpoint=%q region=%q prefix=%q): "+
@@ -191,7 +192,6 @@ func LocalBackendCommitted(ctx context.Context, dbh *sql.DB) (bool, error) {
 	if dbh == nil {
 		return false, nil
 	}
-	var exists bool
-	err := dbh.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM foghorn.cell_storage_identity WHERE id = true)`).Scan(&exists)
+	exists, err := foghorndb.New(dbh).CellStorageIdentityCommitted(ctx)
 	return exists, err
 }

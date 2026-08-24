@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
@@ -192,47 +193,22 @@ func (j *DVRStartingRecoveryJob) reconcile() {
 		staleSeconds = 1
 	}
 
-	rows, err := j.db.QueryContext(ctx, `
-		SELECT a.artifact_hash,
-		       a.tenant_id::text,
-		       a.status,
-		       a.dvr_start_dispatch::text
-		FROM foghorn.artifacts a
-		WHERE a.artifact_type = 'dvr'
-		  AND a.dvr_start_dispatch IS NOT NULL
-		  AND a.updated_at < NOW() - ($1 * INTERVAL '1 second')
-		  AND (
-		        (a.status IN ('requested', 'starting') AND a.dvr_start_dispatch->>'state' = 'pending')
-		        -- A stop obligation is drained regardless of user-visible status (including a terminal
-		        -- 'failed' surfaced to the user): the control plane keeps re-sending stop until the node's
-		        -- DVRStopped acks and clears the obligation (dvr_start_dispatch retains only {node_id}).
-		        OR (a.dvr_start_dispatch->>'state' = 'stop_pending')
-		      )
-		ORDER BY a.updated_at
-		LIMIT $2
-	`, staleSeconds, j.batchSize)
+	rows, err := foghorndb.New(j.db).ListStaleDVRStartObligations(ctx, foghorndb.ListStaleDVRStartObligationsParams{
+		StaleSeconds: staleSeconds, BatchLimit: int32(j.batchSize),
+	})
 	if err != nil {
 		j.logger.WithError(err).Warn("DVR starting-recovery: failed to scan stranded starts")
 		return
 	}
 	var batch []startingDVRRow
-	for rows.Next() {
-		var r startingDVRRow
-		var descriptorJSON string
-		if scanErr := rows.Scan(&r.artifactHash, &r.tenantID, &r.status, &descriptorJSON); scanErr != nil {
-			j.logger.WithError(scanErr).Warn("DVR starting-recovery: row scan failed")
-			continue
-		}
-		if unmErr := json.Unmarshal([]byte(descriptorJSON), &r.dispatch); unmErr != nil {
+	for _, row := range rows {
+		r := startingDVRRow{artifactHash: row.ArtifactHash, tenantID: row.TenantID, status: row.Status.String}
+		if unmErr := json.Unmarshal([]byte(row.DvrStartDispatch), &r.dispatch); unmErr != nil {
 			j.logger.WithError(unmErr).WithField("dvr_hash", r.artifactHash).Warn("DVR starting-recovery: undecodable dispatch descriptor; skipping")
 			continue
 		}
 		batch = append(batch, r)
 	}
-	if rowsErr := rows.Err(); rowsErr != nil {
-		j.logger.WithError(rowsErr).Warn("DVR starting-recovery: row iteration failed")
-	}
-	rows.Close() //nolint:sqlclosecheck // fully drained into `batch` above before any per-row work
 
 	for _, r := range batch {
 		select {
@@ -366,11 +342,9 @@ func (j *DVRStartingRecoveryJob) ingestGenerationEnded(ctx context.Context, tena
 	if j.db == nil {
 		return false, sql.ErrConnDone
 	}
-	var ended bool
-	err := j.db.QueryRowContext(ctx, `
-		SELECT ended_at IS NOT NULL FROM foghorn.ingest_sessions
-		 WHERE id = $1::uuid AND tenant_id = $2::uuid
-	`, ingestGeneration, tenantID).Scan(&ended)
+	ended, err := foghorndb.New(j.db).IngestGenerationEnded(ctx, foghorndb.IngestGenerationEndedParams{
+		IngestGeneration: ingestGeneration, TenantID: tenantID,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
@@ -387,14 +361,9 @@ func (j *DVRStartingRecoveryJob) persistStopObligation(ctx context.Context, arti
 	if j.db == nil {
 		return sql.ErrConnDone
 	}
-	_, err := j.db.ExecContext(ctx, `
-		UPDATE foghorn.artifacts
-		   SET dvr_start_dispatch = jsonb_set(COALESCE(dvr_start_dispatch, '{}'::jsonb), '{state}', '"stop_pending"'::jsonb),
-		       updated_at = NOW()
-		 WHERE artifact_hash = $1 AND artifact_type = 'dvr' AND tenant_id::text = $2
-		   AND status IN ('requested', 'starting', 'recording')
-	`, artifactHash, tenantID)
-	return err
+	return foghorndb.New(j.db).MarkDVRStopPending(ctx, foghorndb.MarkDVRStopPendingParams{
+		ArtifactHash: artifactHash, TenantID: tenantID,
+	})
 }
 
 // failUnrecoverable terminalizes a stranded start via FinalizeDVR, which commits the terminal FAILED

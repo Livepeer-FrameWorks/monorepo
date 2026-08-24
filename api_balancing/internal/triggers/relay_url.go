@@ -2,12 +2,12 @@ package triggers
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"net/url"
 	"strings"
 
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/database/foghorndb"
 )
 
 // buildVODRelayURL constructs the Mist source URL for a VOD/clip artifact
@@ -147,35 +147,19 @@ func lookupArtifactDescriptor(ctx context.Context, artifactHash string) artifact
 	if db == nil || artifactHash == "" {
 		return artifactDescriptor{}
 	}
-	var (
-		format               sql.NullString
-		artifactType         sql.NullString
-		streamInternal       sql.NullString
-		authoritativeCluster sql.NullString
-	)
-	err := db.QueryRowContext(ctx, `
-		SELECT format, artifact_type, stream_internal_name,
-		       COALESCE(storage_cluster_id, origin_cluster_id)
-		FROM foghorn.artifacts
-		WHERE artifact_hash = $1 AND status != 'deleted'
-		LIMIT 1
-	`, artifactHash).Scan(&format, &artifactType, &streamInternal, &authoritativeCluster)
+	row, err := foghorndb.New(db).GetArtifactRelayDescriptor(ctx, artifactHash)
 	if err != nil {
 		return artifactDescriptor{}
 	}
 	d := artifactDescriptor{Found: true}
-	if format.Valid {
-		d.Format = format.String
+	if row.Format.Valid {
+		d.Format = row.Format.String
 	}
-	if artifactType.Valid {
-		d.ArtifactType = artifactType.String
+	d.ArtifactType = row.ArtifactType
+	if row.StreamInternalName.Valid {
+		d.StreamInternal = row.StreamInternalName.String
 	}
-	if streamInternal.Valid {
-		d.StreamInternal = streamInternal.String
-	}
-	if authoritativeCluster.Valid {
-		d.AuthoritativeCluster = authoritativeCluster.String
-	}
+	d.AuthoritativeCluster = row.AuthoritativeCluster
 	return d
 }
 

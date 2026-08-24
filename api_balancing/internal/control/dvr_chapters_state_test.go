@@ -34,8 +34,8 @@ func TestMarkChapterFinalizing_AcceptsClosedOrStaleFinalizing(t *testing.T) {
 	// The WHERE clause now allows reclaiming a stale 'finalizing' row past the deadline so a lost
 	// Helmsman result doesn't wedge the chapter. Now one tx: UPDATE + PROCESSING lifecycle enqueue.
 	mock.ExpectBegin()
-	mock.ExpectExec(`UPDATE foghorn.dvr_chapters.*WHERE chapter_id = \$1\s+AND \(state = 'closed'\s+OR \(state = 'finalizing'.*finalize_started_at.*make_interval.*\)\)`).
-		WithArgs("chap-1", "art-hash", float64((30 * time.Minute).Seconds()), "node-x").
+	mock.ExpectExec(`UPDATE foghorn.dvr_chapters.*WHERE chapter_id = \$3\s+AND \(state = 'closed'\s+OR \(state = 'finalizing'.*finalize_started_at.*make_interval.*\)\)`).
+		WithArgs("art-hash", "node-x", "chap-1", float64((30 * time.Minute).Seconds())).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO foghorn.artifact_event_outbox`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -57,7 +57,7 @@ func TestMarkChapterFinalizing_SkipWhenAlreadyAdvanced(t *testing.T) {
 	// 0 rows updated → no lifecycle, tx rolls back.
 	mock.ExpectBegin()
 	mock.ExpectExec(`UPDATE foghorn.dvr_chapters`).
-		WithArgs("chap-1", "art-hash", float64((30 * time.Minute).Seconds()), "node-x").
+		WithArgs("art-hash", "node-x", "chap-1", float64((30 * time.Minute).Seconds())).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectRollback()
 	ok, err := MarkChapterFinalizing(context.Background(), "chap-1", "art-hash", "tenant-1", "node-x", 30*time.Minute)
@@ -319,8 +319,8 @@ func TestMarkChapterFailed_AcceptsSourceMissing(t *testing.T) {
 	// Now one transaction: transition the chapter (RETURNING its playback hash) then fail the
 	// allocated child artifact so it isn't stranded 'finalizing'.
 	mock.ExpectBegin()
-	mock.ExpectQuery(`UPDATE foghorn.dvr_chapters\s+SET state\s+= \$2,\s+last_failure_reason = \$3`).
-		WithArgs("chap-1", ChapterStateFailedSourceMissing, "segments unavailable", "").
+	mock.ExpectQuery(`UPDATE foghorn.dvr_chapters\s+SET state\s+= \$1,\s+last_failure_reason = \$2`).
+		WithArgs(ChapterStateFailedSourceMissing, "segments unavailable", "chap-1", "").
 		WillReturnRows(sqlmock.NewRows([]string{"playback_artifact_hash"}).AddRow("chap-art-1"))
 	mock.ExpectQuery(`UPDATE foghorn.artifacts\s+SET status = 'failed'.*RETURNING tenant_id`).
 		WithArgs("chap-art-1", "segments unavailable").
@@ -342,8 +342,8 @@ func TestMarkChapterFailed_AcceptsSourceMissing(t *testing.T) {
 func TestMarkChapterFailed_NoOpWhenNotFailable(t *testing.T) {
 	mock := setupChapterTest(t)
 	mock.ExpectBegin()
-	mock.ExpectQuery(`UPDATE foghorn.dvr_chapters\s+SET state\s+= \$2`).
-		WithArgs("chap-1", ChapterStateFailedPermanent, "boom", "").
+	mock.ExpectQuery(`UPDATE foghorn.dvr_chapters\s+SET state\s+= \$1`).
+		WithArgs(ChapterStateFailedPermanent, "boom", "chap-1", "").
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectRollback()
 	if err := MarkChapterFailed(context.Background(), "chap-1", ChapterStateFailedPermanent, "boom", ""); err != nil {
@@ -356,8 +356,8 @@ func TestMarkChapterFailed_NoOpWhenNotFailable(t *testing.T) {
 
 func TestRetryChapterFinalize_OnlyFromFinalizing(t *testing.T) {
 	mock := setupChapterTest(t)
-	mock.ExpectExec(`UPDATE foghorn.dvr_chapters\s+SET state\s+= 'closed',\s+last_failure_reason.*WHERE chapter_id = \$1\s+AND state\s+= 'finalizing'`).
-		WithArgs("chap-1", "transient: disk pressure", "").
+	mock.ExpectExec(`UPDATE foghorn.dvr_chapters\s+SET state\s+= 'closed',\s+last_failure_reason.*WHERE chapter_id = \$2\s+AND state\s+= 'finalizing'`).
+		WithArgs("transient: disk pressure", "chap-1", "").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	if err := RetryChapterFinalize(context.Background(), "chap-1", "transient: disk pressure", ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)

@@ -160,7 +160,7 @@ func TestDispatchJobNoNodeRevertsRecon(t *testing.T) {
 		WithArgs("job-nonode-recon").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("UPDATE foghorn.artifacts").
-		WithArgs("hash-nonode-recon", "tenant-nonode", "queued").
+		WithArgs("queued", "hash-nonode-recon", "tenant-nonode").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	d := NewProcessingDispatcher(ProcessingDispatcherConfig{DB: db, Logger: logging.NewLogger()})

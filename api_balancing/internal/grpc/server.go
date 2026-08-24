@@ -26,6 +26,7 @@ import (
 	"frameworks/api_balancing/internal/artifacts"
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"frameworks/api_balancing/internal/federation"
 	"frameworks/api_balancing/internal/handlers"
 	"frameworks/api_balancing/internal/identity"
@@ -784,11 +785,9 @@ func (s *FoghornGRPCServer) existingClipResult(ctx context.Context, tenantID, cl
 	if tenantID == "" || clipHash == "" {
 		return nil, false, nil
 	}
-	var existingStatus string
-	idErr := s.db.QueryRowContext(ctx, `
-		SELECT status FROM foghorn.artifacts
-		 WHERE artifact_hash = $1 AND artifact_type = 'clip' AND tenant_id = $2
-	`, clipHash, tenantID).Scan(&existingStatus)
+	existingStatus, idErr := foghorndb.New(s.db).GetExistingClipStatus(ctx, foghorndb.GetExistingClipStatusParams{
+		ArtifactHash: clipHash, TenantID: tenantID,
+	})
 	if errors.Is(idErr, sql.ErrNoRows) {
 		return nil, false, nil
 	}
@@ -797,7 +796,7 @@ func (s *FoghornGRPCServer) existingClipResult(ctx context.Context, tenantID, cl
 	}
 	startMsEff, durationMsEff := s.clipFulfilledTimingMs(ctx, tenantID, clipHash)
 	return &sharedpb.CreateClipResponse{
-		Status:              existingStatus,
+		Status:              existingStatus.String,
 		ClipHash:            clipHash,
 		PlaybackId:          playbackID,
 		EffectiveStartMs:    startMsEff,
@@ -1207,10 +1206,13 @@ resolve:
 	}
 	var jobID string
 	if txErr := s.withArtifactLifecycleTx(ctx, func(tx *sql.Tx) error {
-		if _, execErr := tx.ExecContext(ctx, `
-			INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, stream_internal_name, internal_name, stream_id, tenant_id, user_id, status, request_id, manifest_path, format, origin_cluster_id, retention_until, created_at, updated_at)
-			VALUES ($1, 'clip', $2, $3, NULLIF($4, '')::uuid, NULLIF($5, '')::uuid, NULLIF($6, '')::uuid, 'queued', $7, $8, $9, $10, $11, NOW(), NOW())
-		`, clipHash, req.StreamInternalName, req.GetInternalName(), req.GetStreamId(), req.TenantId, req.GetUserId(), reqID, storagePath, format, clipCluster, clipRetentionUntil); execErr != nil {
+		if execErr := foghorndb.New(tx).InsertQueuedClipArtifact(ctx, foghorndb.InsertQueuedClipArtifactParams{
+			ArtifactHash: clipHash, StreamInternalName: sql.NullString{String: req.StreamInternalName, Valid: true},
+			InternalName: sql.NullString{String: req.GetInternalName(), Valid: true}, StreamID: req.GetStreamId(),
+			TenantID: req.TenantId, UserID: req.GetUserId(), RequestID: sql.NullString{String: reqID, Valid: true},
+			ManifestPath: sql.NullString{String: storagePath, Valid: true}, Format: sql.NullString{String: format, Valid: true},
+			OriginClusterID: sql.NullString{String: clipCluster, Valid: true}, RetentionUntil: clipRetentionUntil,
+		}); execErr != nil {
 			return execErr
 		}
 		insertedJobID, jobErr := jobs.InsertProcessingJobWithSourceParamsTx(ctx, tx, req.TenantId, clipHash, "process", nil, req.GetProcessesJson(), "", sourceParams, preferredNodeID)
@@ -1310,32 +1312,16 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *sharedpb.Delete
 	// NOTE: tenant_id validation now happens at Commodore level
 
 	// Check current status from foghorn.artifacts
-	var (
-		currentStatus    string
-		sizeBytes        sql.NullInt64
-		retentionUntil   sql.NullTime
-		internalName     sql.NullString
-		denormTenantID   sql.NullString
-		denormUserID     sql.NullString
-		format           sql.NullString
-		storageClusterID sql.NullString
-		originClusterID  sql.NullString
-		activeObjectKey  sql.NullString
-		activeDtshKey    sql.NullString
-		syncObjectKey    sql.NullString
-		durableLocal     sql.NullBool
-		backendID        sql.NullString
-	)
-	err := s.db.QueryRowContext(ctx, `
-		SELECT status, size_bytes, retention_until, stream_internal_name, tenant_id, user_id,
-		       format, storage_cluster_id, origin_cluster_id, active_object_key,
-		       active_dtsh_key, sync_object_key, durable_backend_local, backend_id
-		FROM foghorn.artifacts
-		WHERE artifact_hash = $1 AND artifact_type = 'clip' AND tenant_id = $2
-	`, req.ClipHash, req.GetTenantId()).Scan(&currentStatus, &sizeBytes, &retentionUntil, &internalName, &denormTenantID, &denormUserID, &format, &storageClusterID, &originClusterID, &activeObjectKey, &activeDtshKey, &syncObjectKey, &durableLocal, &backendID)
+	clipRow, err := foghorndb.New(s.db).GetClipForDeletion(ctx, foghorndb.GetClipForDeletionParams{
+		ArtifactHash: req.ClipHash, TenantID: req.GetTenantId(),
+	})
 
 	if errors.Is(err, sql.ErrNoRows) {
-		if handled, _ := s.forwardArtifactToFederation(ctx, "delete_clip", req.ClipHash, req.GetTenantId(), ""); handled {
+		handled, forwardErr := s.forwardArtifactToFederation(ctx, "delete_clip", req.ClipHash, req.GetTenantId(), "")
+		if forwardErr != nil {
+			return nil, status.Error(codes.Internal, "failed to forward clip deletion")
+		}
+		if handled {
 			return &sharedpb.DeleteClipResponse{Success: true, Message: "clip deleted via federation"}, nil
 		}
 		return nil, status.Error(codes.NotFound, "clip not found")
@@ -1343,7 +1329,7 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *sharedpb.Delete
 		return nil, status.Error(codes.Internal, "failed to check clip existence")
 	}
 
-	if currentStatus == "deleted" {
+	if clipRow.Status.String == "deleted" {
 		return &sharedpb.DeleteClipResponse{
 			Success: false,
 			Message: "clip is already deleted",
@@ -1351,12 +1337,10 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *sharedpb.Delete
 	}
 
 	// Get node_id from artifact_nodes
-	var nodeID string
-	_ = s.db.QueryRowContext(ctx, `
-		SELECT node_id FROM foghorn.artifact_nodes
-		WHERE artifact_hash = $1 AND NOT is_orphaned
-		ORDER BY last_seen_at DESC LIMIT 1
-	`, req.ClipHash).Scan(&nodeID)
+	nodeID, nodeErr := foghorndb.New(s.db).LatestArtifactNodeID(ctx, req.ClipHash)
+	if nodeErr != nil && !errors.Is(nodeErr, sql.ErrNoRows) {
+		return nil, status.Error(codes.Internal, "failed to resolve clip node")
+	}
 
 	// DURABLE STATE FIRST: soft-delete the clip and record the DELETED lifecycle event in ONE
 	// transaction (durable outbox, tenant-scoped) BEFORE removing any bytes. A byte-first delete
@@ -1364,20 +1348,14 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *sharedpb.Delete
 	// tx then fails. Commodore enrichment is a network call, so build the event OUTSIDE the
 	// transaction; the cleanup error is unknown here (cleanup runs after commit) and is reported
 	// only in the RPC message. The outbox worker — not decklogClient — owns Decklog delivery.
-	clipData := s.buildClipDeletedLifecycleData(ctx, req.ClipHash, nodeID, sizeBytes, retentionUntil, internalName, denormTenantID, denormUserID, "")
+	clipData := s.buildClipDeletedLifecycleData(ctx, req.ClipHash, nodeID, clipRow.SizeBytes, clipRow.RetentionUntil, clipRow.StreamInternalName, sql.NullString{String: clipRow.TenantID, Valid: true}, clipRow.UserID, "")
 	transitioned := false
 	if err = s.withArtifactLifecycleTx(ctx, func(tx *sql.Tx) error {
-		res, execErr := tx.ExecContext(ctx, `
-			UPDATE foghorn.artifacts SET status = 'deleted', updated_at = NOW()
-			WHERE artifact_hash = $1 AND artifact_type = 'clip' AND tenant_id = $2
-			  AND status != 'deleted'
-		`, req.ClipHash, req.GetTenantId())
+		affected, execErr := foghorndb.New(tx).DeleteClipCatalog(ctx, foghorndb.DeleteClipCatalogParams{
+			ArtifactHash: req.ClipHash, TenantID: req.GetTenantId(),
+		})
 		if execErr != nil {
 			return execErr
-		}
-		affected, raErr := res.RowsAffected()
-		if raErr != nil {
-			return raErr
 		}
 		if affected == 0 {
 			// Already deleted (or gone) at UPDATE time — do not enqueue a second DELETED event.
@@ -1404,11 +1382,7 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *sharedpb.Delete
 	// races a freshly-queued job, or registry-write compensation). Best-effort and OUTSIDE the
 	// delete transaction: the dispatcher also skips deleted artifacts, so a failure here only risks
 	// a queued row lingering, not the clip re-processing.
-	if _, jobErr := s.db.ExecContext(ctx, `
-		UPDATE foghorn.processing_jobs
-		SET status = 'failed', error_message = 'clip deleted', updated_at = NOW()
-		WHERE artifact_hash = $1 AND status IN ('queued', 'dispatched', 'processing')
-	`, req.ClipHash); jobErr != nil {
+	if jobErr := foghorndb.New(s.db).CancelClipProcessingJobs(ctx, sql.NullString{String: req.ClipHash, Valid: true}); jobErr != nil {
 		s.logger.WithError(jobErr).WithField("clip_hash", req.ClipHash).Warn("Failed to cancel processing jobs for deleted clip")
 	}
 
@@ -1453,15 +1427,15 @@ func (s *FoghornGRPCServer) DeleteClip(ctx context.Context, req *sharedpb.Delete
 		Hash:                req.ClipHash,
 		Type:                "clip",
 		TenantID:            req.GetTenantId(),
-		StreamInternal:      internalName.String,
-		Format:              format.String,
-		StorageClusterID:    storageClusterID.String,
-		OriginClusterID:     originClusterID.String,
-		ActiveObjectKey:     activeObjectKey.String,
-		ActiveDtshKey:       activeDtshKey.String,
-		PendingObjectKey:    syncObjectKey.String,
-		DurableBackendLocal: durableLocal.Bool,
-		BackendID:           backendID.String,
+		StreamInternal:      clipRow.StreamInternalName.String,
+		Format:              clipRow.Format.String,
+		StorageClusterID:    clipRow.StorageClusterID.String,
+		OriginClusterID:     clipRow.OriginClusterID.String,
+		ActiveObjectKey:     clipRow.ActiveObjectKey.String,
+		ActiveDtshKey:       clipRow.ActiveDtshKey.String,
+		PendingObjectKey:    clipRow.SyncObjectKey.String,
+		DurableBackendLocal: clipRow.DurableBackendLocal,
+		BackendID:           clipRow.BackendID.String,
 	}); errCleanup != nil {
 		if cleanupError != "" {
 			cleanupError += "; "
@@ -1538,24 +1512,22 @@ func buildDVRStartedLifecycleData(req *sharedpb.StartDVRRequest, dvrHash, dvrClu
 // The returned string is the wire Status the caller reports; the bool is whether that maps to an
 // active recording (true) so the caller can choose already_started vs starting.
 func (s *FoghornGRPCServer) reconcileStartingDVR(ctx context.Context, req *sharedpb.StartDVRRequest, dvrHash string) (string, error) {
-	var current string
-	err := s.db.QueryRowContext(ctx, `
-		SELECT status FROM foghorn.artifacts
-		 WHERE artifact_hash = $1 AND artifact_type = 'dvr' AND tenant_id = $2
-	`, dvrHash, req.TenantId).Scan(&current)
+	current, err := foghorndb.New(s.db).GetDVRStatus(ctx, foghorndb.GetDVRStatusParams{
+		ArtifactHash: dvrHash, TenantID: req.TenantId,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", status.Error(codes.FailedPrecondition, "DVR start could not be reconciled; artifact no longer exists")
 	} else if err != nil {
 		s.logger.WithError(err).WithField("dvr_hash", dvrHash).Error("Failed to re-read DVR status during start reconciliation")
 		return "", status.Error(codes.Internal, "failed to reconcile DVR start")
 	}
-	switch current {
+	switch current.String {
 	case "recording":
 		return "already_started", nil
 	case "requested", "starting":
 		return "starting", nil
 	default:
-		return "", status.Errorf(codes.FailedPrecondition, "DVR start could not be reconciled; recording state is terminal (%s)", current)
+		return "", status.Errorf(codes.FailedPrecondition, "DVR start could not be reconciled; recording state is terminal (%s)", current.String)
 	}
 }
 
@@ -1621,17 +1593,17 @@ func (s *FoghornGRPCServer) respondExistingActiveDVR(ctx context.Context, req *s
 	// apparently-valid response with empty storage. Tenant-scoped per the multi-tenant
 	// query contract.
 	storageHost, storageNodeID := "", ""
-	var dispatch sql.NullString
-	if err := s.db.QueryRowContext(ctx, `
-		SELECT dvr_start_dispatch FROM foghorn.artifacts WHERE artifact_hash = $1 AND artifact_type = 'dvr' AND tenant_id::text = $2
-	`, existingHash, req.GetTenantId()).Scan(&dispatch); err != nil {
+	dispatch, err := foghorndb.New(s.db).GetDVRStartDispatch(ctx, foghorndb.GetDVRStartDispatchParams{
+		ArtifactHash: existingHash, TenantID: req.GetTenantId(),
+	})
+	if err != nil {
 		return nil, status.Errorf(codes.Internal, "resolve existing DVR placement: %v", err)
 	}
-	if !dispatch.Valid || dispatch.String == "" {
+	if dispatch == "" {
 		return nil, status.Error(codes.Internal, "existing DVR has no start descriptor")
 	}
 	var d jobs.DVRStartDispatch
-	if err := json.Unmarshal([]byte(dispatch.String), &d); err != nil {
+	if err := json.Unmarshal([]byte(dispatch), &d); err != nil {
 		return nil, status.Errorf(codes.Internal, "decode existing DVR descriptor: %v", err)
 	}
 	// node_id is a required descriptor field: an empty one (e.g. a valid but empty
@@ -1735,19 +1707,17 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *sharedpb.StartDVR
 	// Check for existing active DVR in foghorn.artifacts. A retry can land here on a row a prior
 	// attempt left in 'starting' (the storage node was told to record but the durable transition was
 	// never confirmed). Do NOT blindly report already_started for that: reconcile it below.
-	var existingHash, existingStatus string
-	var existingDispatch sql.NullString
-	if scanErr := s.db.QueryRowContext(ctx, `
-		SELECT artifact_hash, status, dvr_start_dispatch FROM foghorn.artifacts
-		WHERE stream_internal_name=$1 AND artifact_type='dvr' AND status IN ('requested','starting','recording') AND tenant_id = $2
-		ORDER BY created_at DESC LIMIT 1
-	`, req.InternalName, req.TenantId).Scan(&existingHash, &existingStatus, &existingDispatch); scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
+	existingRow, scanErr := foghorndb.New(s.db).FindActiveDVRForStream(ctx, foghorndb.FindActiveDVRForStreamParams{
+		StreamInternalName: sql.NullString{String: req.InternalName, Valid: true}, TenantID: req.TenantId,
+	})
+	existingHash, existingStatus, existingDispatch := existingRow.ArtifactHash, existingRow.Status.String, existingRow.DvrStartDispatch
+	if scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
 		// Unexpected DB error (not "no active DVR"): log and proceed as if none exists;
 		// a genuine duplicate is still caught by the advisory-lock re-check below.
 		s.logger.WithError(scanErr).WithField("internal_name", req.InternalName).Warn("Failed to check for existing active DVR")
 	}
 
-	if existingHash != "" && dvrRecordingSupersededSession(existingDispatch, sourceNodeID, req.GetIngestGeneration()) {
+	if existingHash != "" && dvrRecordingSupersededSession(sql.NullString{String: existingDispatch, Valid: existingDispatch != ""}, sourceNodeID, req.GetIngestGeneration()) {
 		// An ingest session is node-bound. This active DVR (any active status) was
 		// started for a DIFFERENT source node than the one now live for the stream,
 		// so it belongs to a superseded prior session (a reconnect is a new session,
@@ -1916,10 +1886,11 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *sharedpb.StartDVR
 	var raceWinnerHash, raceWinnerStatus string
 	errDVRRaceLost := errors.New("dvr start lost concurrent race")
 	if txErr := s.withArtifactLifecycleTx(ctx, func(tx *sql.Tx) error {
+		queries := foghorndb.New(tx)
 		// Serialize concurrent starts for the same session (auto-record + manual, or
 		// retries): the duplicate-start re-check and the insert run under one advisory
 		// lock, so two starts cannot both pass the check and register duplicate DVRs.
-		if _, lockErr := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1)::bigint)`, control.DVRStartLockKey(req.InternalName, sourceNodeID)); lockErr != nil {
+		if lockErr := queries.AcquireDVRStartLock(ctx, control.DVRStartLockKey(req.InternalName, sourceNodeID)); lockErr != nil {
 			return lockErr
 		}
 		// Re-check under the lock: a concurrent winner may have inserted its row after
@@ -1929,42 +1900,24 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *sharedpb.StartDVR
 		// row and get adopted. When no generation is present (manual/legacy start) fall
 		// back to source-node scoping. The uq_foghorn_artifacts_active_dvr_per_generation
 		// index is the durable backstop if two starts for one generation still race here.
-		var wHash, wStatus string
-		reErr := tx.QueryRowContext(ctx, `
-			SELECT artifact_hash, status FROM foghorn.artifacts
-			WHERE stream_internal_name=$1 AND artifact_type='dvr'
-			      AND status IN ('requested','starting','recording')
-			      AND tenant_id=$2
-			      AND (
-			          ($4 <> '' AND ingest_generation = $4::uuid)
-			          OR ($4 = '' AND dvr_start_dispatch->>'source_node_id'=$3)
-			      )
-			ORDER BY created_at DESC LIMIT 1
-		`, req.InternalName, req.TenantId, sourceNodeID, req.GetIngestGeneration()).Scan(&wHash, &wStatus)
+		winner, reErr := queries.FindDVRStartRaceWinner(ctx, foghorndb.FindDVRStartRaceWinnerParams{
+			StreamInternalName: sql.NullString{String: req.InternalName, Valid: true}, TenantID: req.TenantId,
+			IngestGeneration: req.GetIngestGeneration(), SourceNodeID: sourceNodeID,
+		})
 		if reErr == nil {
-			raceWinnerHash, raceWinnerStatus = wHash, wStatus
+			raceWinnerHash, raceWinnerStatus = winner.ArtifactHash, winner.Status.String
 			return errDVRRaceLost
 		} else if !errors.Is(reErr, sql.ErrNoRows) {
 			return reErr
 		}
-		if _, execErr := tx.ExecContext(ctx, `
-			INSERT INTO foghorn.artifacts (
-				artifact_hash, artifact_type, stream_internal_name, internal_name,
-				stream_id, tenant_id, user_id,
-				status, request_id, format, origin_cluster_id,
-				dvr_window_seconds, dvr_chapter_mode, dvr_chapter_interval, dvr_retention_days, dvr_processes_json,
-				dvr_start_dispatch, ingest_generation,
-				created_at, updated_at
-			)
-			VALUES ($1, 'dvr', $2, $3, NULLIF($4, '')::uuid, NULLIF($5, '')::uuid, NULLIF($6, '')::uuid,
-			        'requested', $7, 'm3u8', $8, $9, NULLIF($10, '')::text, NULLIF($11, 0)::int, NULLIF($12, 0)::int, NULLIF($13, '')::text,
-			        $14::jsonb, NULLIF($15, '')::uuid,
-			        NOW(), NOW())
-		`,
-			dvrHash, req.InternalName, artifactInternalName, streamID, req.TenantId, req.GetUserId(), requestID, dvrCluster,
-			effective.DVRWindowSeconds, chapterMode, chapterInterval, retentionDays, dvrProcessesJSON,
-			string(dispatchJSON), req.GetIngestGeneration(),
-		); execErr != nil {
+		if execErr := queries.InsertRequestedDVRArtifact(ctx, foghorndb.InsertRequestedDVRArtifactParams{
+			ArtifactHash: dvrHash, StreamInternalName: sql.NullString{String: req.InternalName, Valid: true},
+			InternalName: sql.NullString{String: artifactInternalName, Valid: artifactInternalName != ""}, StreamID: streamID,
+			TenantID: req.TenantId, UserID: req.GetUserId(), RequestID: sql.NullString{String: requestID, Valid: true},
+			OriginClusterID: sql.NullString{String: dvrCluster, Valid: true}, DvrWindowSeconds: int32(effective.DVRWindowSeconds),
+			DvrChapterMode: chapterMode, DvrChapterInterval: int32(chapterInterval), DvrRetentionDays: int32(retentionDays),
+			DvrProcessesJson: dvrProcessesJSON, DispatchJson: string(dispatchJSON), IngestGeneration: req.GetIngestGeneration(),
+		}); execErr != nil {
 			return execErr
 		}
 		// Composed into the SAME tx so the 'committed' ledger row (with the artifact's
@@ -2045,25 +1998,14 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *sharedpb.StartDVR
 	// is already committed, so a concurrent close's StopDVRForIngestSession can see
 	// this row; this fence only covers the narrow window where the close's stop ran
 	// before our insert committed and thus found nothing to claim.
-	startingRes, startingErr := s.db.ExecContext(ctx, `
-		UPDATE foghorn.artifacts
-		   SET status = 'starting', dvr_start_dispatch = $3::jsonb, updated_at = NOW()
-		 WHERE artifact_hash = $1 AND artifact_type = 'dvr' AND tenant_id = $2 AND status = 'requested'
-		   AND NOT EXISTS (
-		       SELECT 1 FROM foghorn.ingest_sessions s
-		        WHERE s.id = foghorn.artifacts.ingest_generation AND s.ended_at IS NOT NULL
-		   )
-	`, dvrHash, req.TenantId, string(dispatchJSON))
+	startingRows, startingErr := foghorndb.New(s.db).MarkDVRStarting(ctx, foghorndb.MarkDVRStartingParams{
+		DispatchJson: string(dispatchJSON), ArtifactHash: dvrHash, TenantID: req.TenantId,
+	})
 	if startingErr != nil {
 		s.logger.WithError(startingErr).WithFields(logging.Fields{
 			"dvr_hash":  dvrHash,
 			"tenant_id": req.TenantId,
 		}).Error("Failed to persist DVR 'starting' command attempt; not sending start command")
-		return nil, status.Error(codes.Internal, "failed to persist DVR start command attempt")
-	}
-	startingRows, startingRAErr := startingRes.RowsAffected()
-	if startingRAErr != nil {
-		s.logger.WithError(startingRAErr).WithField("dvr_hash", dvrHash).Error("Failed to read DVR 'starting' RowsAffected; not sending start command")
 		return nil, status.Error(codes.Internal, "failed to persist DVR start command attempt")
 	}
 	if startingRows == 0 {
@@ -2074,11 +2016,10 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *sharedpb.StartDVR
 		// insert committed), so we own its finalization — leaving it 'requested' would
 		// orphan a recording that was never commanded. A row already advanced is owned by
 		// the concurrent stop path, which finalizes it.
-		var curStatus string
-		reReadErr := s.db.QueryRowContext(ctx, `
-			SELECT status FROM foghorn.artifacts WHERE artifact_hash = $1 AND tenant_id = $2
-		`, dvrHash, req.TenantId).Scan(&curStatus)
-		if reReadErr == nil && curStatus == "requested" {
+		curStatus, reReadErr := foghorndb.New(s.db).GetArtifactStatusForTenant(ctx, foghorndb.GetArtifactStatusForTenantParams{
+			ArtifactHash: dvrHash, TenantID: req.TenantId,
+		})
+		if reReadErr == nil && curStatus.String == "requested" {
 			s.logger.WithFields(logging.Fields{
 				"dvr_hash":          dvrHash,
 				"tenant_id":         req.TenantId,
@@ -2172,18 +2113,11 @@ func (s *FoghornGRPCServer) startDVR(ctx context.Context, req *sharedpb.StartDVR
 		// Guard only — the row stays 'starting' (or 'recording' if the node already confirmed between
 		// our persist above and here). A terminal status means a concurrent stop/finalize won; abort so
 		// we emit no STARTED event for an artifact that is no longer starting.
-		res, execErr := tx.ExecContext(ctx, `
-			UPDATE foghorn.artifacts
-			   SET updated_at = NOW()
-			 WHERE artifact_hash = $1 AND artifact_type = 'dvr' AND tenant_id = $2
-			   AND status IN ('starting', 'recording')
-		`, dvrHash, req.TenantId)
+		affected, execErr := foghorndb.New(tx).TouchStartedDVR(ctx, foghorndb.TouchStartedDVRParams{
+			ArtifactHash: dvrHash, TenantID: req.TenantId,
+		})
 		if execErr != nil {
 			return execErr
-		}
-		affected, raErr := res.RowsAffected()
-		if raErr != nil {
-			return raErr
 		}
 		if affected == 0 {
 			return errDVRStartRaced
@@ -2306,21 +2240,9 @@ func (s *FoghornGRPCServer) StopDVR(ctx context.Context, req *sharedpb.StopDVRRe
 	// NOTE: tenant_id validation now happens at Commodore level
 
 	// Get DVR artifact info
-	var (
-		dvrStatus      string
-		internalName   string
-		sizeBytes      sql.NullInt64
-		retentionUntil sql.NullTime
-		startedAt      sql.NullTime
-		endedAt        sql.NullTime
-		denormTenantID sql.NullString
-		denormUserID   sql.NullString
-	)
-	err := s.db.QueryRowContext(ctx, `
-		SELECT status, COALESCE(stream_internal_name, ''), size_bytes, retention_until, started_at, ended_at, tenant_id, user_id
-		FROM foghorn.artifacts
-		WHERE artifact_hash = $1 AND artifact_type = 'dvr' AND tenant_id = $2
-	`, req.DvrHash, req.GetTenantId()).Scan(&dvrStatus, &internalName, &sizeBytes, &retentionUntil, &startedAt, &endedAt, &denormTenantID, &denormUserID)
+	dvrRow, err := foghorndb.New(s.db).GetDVRForStop(ctx, foghorndb.GetDVRForStopParams{
+		ArtifactHash: req.DvrHash, TenantID: req.GetTenantId(),
+	})
 
 	if errors.Is(err, sql.ErrNoRows) {
 		streamID := ""
@@ -2335,20 +2257,16 @@ func (s *FoghornGRPCServer) StopDVR(ctx context.Context, req *sharedpb.StopDVRRe
 		s.logger.WithError(err).Error("Failed to fetch DVR artifact")
 		return nil, status.Error(codes.Internal, "failed to fetch DVR artifact")
 	}
+	dvrStatus := dvrRow.Status.String
+	sizeBytes, startedAt, endedAt := dvrRow.SizeBytes, dvrRow.StartedAt, dvrRow.EndedAt
 
 	// Get node_id from artifact_nodes. Finalization retry can still run without
 	// one, but an active stop needs a storage node to receive the Mist stop.
-	var (
-		nodeID        string
-		nodeSizeBytes sql.NullInt64
-	)
-	if nodeErr := s.db.QueryRowContext(ctx, `
-		SELECT node_id, size_bytes FROM foghorn.artifact_nodes
-		WHERE artifact_hash = $1 AND NOT is_orphaned
-		ORDER BY last_seen_at DESC LIMIT 1
-	`, req.DvrHash).Scan(&nodeID, &nodeSizeBytes); nodeErr != nil && !errors.Is(nodeErr, sql.ErrNoRows) {
+	nodeRow, nodeErr := foghorndb.New(s.db).LatestArtifactNodeWithSize(ctx, req.DvrHash)
+	if nodeErr != nil && !errors.Is(nodeErr, sql.ErrNoRows) {
 		s.logger.WithError(nodeErr).WithField("dvr_hash", req.DvrHash).Warn("Failed to look up storage node for DVR stop")
 	}
+	nodeID, nodeSizeBytes := nodeRow.NodeID, nodeRow.SizeBytes
 
 	switch dvrStatus {
 	case "finalizing":
@@ -2443,33 +2361,16 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *sharedpb.DeleteD
 	// NOTE: tenant_id validation now happens at Commodore level
 
 	// Get DVR artifact info
-	var (
-		dvrStatus        string
-		internalName     string
-		sizeBytes        sql.NullInt64
-		retentionUntil   sql.NullTime
-		startedAt        sql.NullTime
-		endedAt          sql.NullTime
-		denormTenantID   sql.NullString
-		denormUserID     sql.NullString
-		storageClusterID sql.NullString
-		originClusterID  sql.NullString
-		activeObjectKey  sql.NullString
-		activeDtshKey    sql.NullString
-		syncObjectKey    sql.NullString
-		durableLocal     sql.NullBool
-		backendID        sql.NullString
-	)
-
-	err := s.db.QueryRowContext(ctx, `
-		SELECT status, COALESCE(stream_internal_name, ''), size_bytes, retention_until, started_at, ended_at, tenant_id, user_id,
-		       storage_cluster_id, origin_cluster_id, active_object_key, active_dtsh_key, sync_object_key, durable_backend_local, backend_id
-		FROM foghorn.artifacts
-		WHERE artifact_hash = $1 AND artifact_type = 'dvr' AND tenant_id = $2
-	`, req.DvrHash, req.GetTenantId()).Scan(&dvrStatus, &internalName, &sizeBytes, &retentionUntil, &startedAt, &endedAt, &denormTenantID, &denormUserID, &storageClusterID, &originClusterID, &activeObjectKey, &activeDtshKey, &syncObjectKey, &durableLocal, &backendID)
+	dvrRow, err := foghorndb.New(s.db).GetDVRForDeletion(ctx, foghorndb.GetDVRForDeletionParams{
+		ArtifactHash: req.DvrHash, TenantID: req.GetTenantId(),
+	})
 
 	if errors.Is(err, sql.ErrNoRows) {
-		if handled, _ := s.forwardArtifactToFederation(ctx, "delete_dvr", req.DvrHash, req.GetTenantId(), ""); handled {
+		handled, forwardErr := s.forwardArtifactToFederation(ctx, "delete_dvr", req.DvrHash, req.GetTenantId(), "")
+		if forwardErr != nil {
+			return nil, status.Error(codes.Internal, "failed to forward DVR deletion")
+		}
+		if handled {
 			return &sharedpb.DeleteDVRResponse{Success: true, Message: "DVR deleted via federation"}, nil
 		}
 		return nil, status.Error(codes.NotFound, "DVR recording not found")
@@ -2477,14 +2378,13 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *sharedpb.DeleteD
 		s.logger.WithError(err).Error("Failed to fetch DVR artifact")
 		return nil, status.Error(codes.Internal, "failed to fetch DVR artifact")
 	}
+	dvrStatus := dvrRow.Status.String
 
 	// Get node_id from artifact_nodes
-	var nodeID string
-	_ = s.db.QueryRowContext(ctx, `
-		SELECT node_id FROM foghorn.artifact_nodes
-		WHERE artifact_hash = $1 AND NOT is_orphaned
-		ORDER BY last_seen_at DESC LIMIT 1
-	`, req.DvrHash).Scan(&nodeID)
+	nodeID, nodeErr := foghorndb.New(s.db).LatestArtifactNodeID(ctx, req.DvrHash)
+	if nodeErr != nil && !errors.Is(nodeErr, sql.ErrNoRows) {
+		return nil, status.Error(codes.Internal, "failed to resolve DVR node")
+	}
 
 	// If still recording, DURABLY claim the stop obligation before the terminal delete —
 	// routed through the same claim-before-send primitive as every other stop path, not a
@@ -2563,14 +2463,14 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *sharedpb.DeleteD
 		Hash:                req.DvrHash,
 		Type:                "dvr",
 		TenantID:            req.GetTenantId(),
-		StreamInternal:      internalName,
-		StorageClusterID:    storageClusterID.String,
-		OriginClusterID:     originClusterID.String,
-		ActiveObjectKey:     activeObjectKey.String,
-		ActiveDtshKey:       activeDtshKey.String,
-		PendingObjectKey:    syncObjectKey.String,
-		DurableBackendLocal: durableLocal.Bool,
-		BackendID:           backendID.String,
+		StreamInternal:      dvrRow.StreamInternalName,
+		StorageClusterID:    dvrRow.StorageClusterID.String,
+		OriginClusterID:     dvrRow.OriginClusterID.String,
+		ActiveObjectKey:     dvrRow.ActiveObjectKey.String,
+		ActiveDtshKey:       dvrRow.ActiveDtshKey.String,
+		PendingObjectKey:    dvrRow.SyncObjectKey.String,
+		DurableBackendLocal: dvrRow.DurableBackendLocal,
+		BackendID:           dvrRow.BackendID.String,
 	}); errCleanup != nil {
 		if cleanupError != "" {
 			cleanupError += "; "
@@ -3297,16 +3197,7 @@ func (s *FoghornGRPCServer) latestPlayableChapterForDVR(ctx context.Context, dis
 	if dispatch == nil || dispatch.DVRHash == "" {
 		return "", nil
 	}
-	var pid sql.NullString
-	err := s.db.QueryRowContext(ctx, `
-		SELECT playback_id
-		  FROM foghorn.dvr_chapters
-		 WHERE artifact_hash = $1
-		   AND state IN ('finalized', 'frozen', 'reclaimed')
-		   AND playback_id IS NOT NULL
-		 ORDER BY end_ms DESC
-		 LIMIT 1
-	`, dispatch.DVRHash).Scan(&pid)
+	pid, err := foghorndb.New(s.db).LatestPlayableDVRChapterID(ctx, dispatch.DVRHash)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
@@ -3519,19 +3410,9 @@ func (s *FoghornGRPCServer) existingVodUploadResult(ctx context.Context, tenantI
 	if tenantID == "" || artifactHash == "" {
 		return nil, false, nil
 	}
-	var (
-		existingUploadID  string
-		existingS3Key     string
-		existingParts     int
-		existingExpiresAt time.Time
-		existingBackendID string
-	)
-	idErr := s.db.QueryRowContext(ctx, `
-		SELECT m.s3_upload_id, m.s3_key, m.total_parts, m.upload_expires_at, COALESCE(a.backend_id, '')
-		  FROM foghorn.artifacts a
-		  JOIN foghorn.vod_metadata m ON m.artifact_hash = a.artifact_hash
-		 WHERE a.artifact_hash = $1 AND a.artifact_type = 'vod' AND a.tenant_id = $2
-	`, artifactHash, tenantID).Scan(&existingUploadID, &existingS3Key, &existingParts, &existingExpiresAt, &existingBackendID)
+	existing, idErr := foghorndb.New(s.db).GetExistingVodUpload(ctx, foghorndb.GetExistingVodUploadParams{
+		ArtifactHash: artifactHash, TenantID: tenantID,
+	})
 	if errors.Is(idErr, sql.ErrNoRows) {
 		return nil, false, nil
 	}
@@ -3543,10 +3424,10 @@ func (s *FoghornGRPCServer) existingVodUploadResult(ctx context.Context, tenantI
 	}
 	// FENCE before re-signing: only re-issue presigned part URLs for a multipart this cell owns (recorded backend ==
 	// local). Re-signing a foreign/unattributed upload would hand a client URLs against a store this cell must not write.
-	if ownErr := artifacts.VerifyLocalMultipartOwnership(existingBackendID, s.localBackendID()); ownErr != nil {
+	if ownErr := artifacts.VerifyLocalMultipartOwnership(existing.BackendID, s.localBackendID()); ownErr != nil {
 		return nil, false, status.Errorf(codes.Internal, "refusing to re-sign existing VOD upload: %v", ownErr)
 	}
-	reParts, reErr := s.s3Client.GeneratePresignedUploadParts(existingS3Key, existingUploadID, existingParts, 2*time.Hour)
+	reParts, reErr := s.s3Client.GeneratePresignedUploadParts(existing.S3Key.String, existing.S3UploadID.String, int(existing.TotalParts.Int32), 2*time.Hour)
 	if reErr != nil {
 		return nil, false, status.Errorf(codes.Internal, "failed to re-sign existing upload URLs: %v", reErr)
 	}
@@ -3555,12 +3436,12 @@ func (s *FoghornGRPCServer) existingVodUploadResult(ctx context.Context, tenantI
 		protoParts[i] = &sharedpb.VodUploadPart{PartNumber: int32(p.PartNumber), PresignedUrl: p.PresignedURL}
 	}
 	return &sharedpb.CreateVodUploadResponse{
-		UploadId:     existingUploadID,
+		UploadId:     existing.S3UploadID.String,
 		ArtifactId:   artifactHash,
 		ArtifactHash: artifactHash,
 		PartSize:     partSize,
 		Parts:        protoParts,
-		ExpiresAt:    timestamppb.New(existingExpiresAt),
+		ExpiresAt:    timestamppb.New(existing.UploadExpiresAt.Time),
 		PlaybackId:   playbackID,
 	}, true, nil
 }
@@ -3758,24 +3639,23 @@ func (s *FoghornGRPCServer) createVodUploadImpl(ctx context.Context, req *shared
 	}
 
 	if txErr := s.withArtifactLifecycleTx(ctx, func(tx *sql.Tx) error {
-		if _, execErr := tx.ExecContext(ctx, `
-			INSERT INTO foghorn.artifacts (
-				artifact_hash, artifact_type, internal_name,
-				tenant_id, user_id, status,
-				sync_status, size_bytes, s3_url, format, origin_cluster_id, storage_cluster_id, retention_until, backend_id, created_at, updated_at
-			)
-			VALUES ($1, 'vod', $2, NULLIF($3, '')::uuid, NULLIF($4, '')::uuid, 'uploading',
-			        'in_progress', $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
-		`, artifactHash, req.GetInternalName(), req.TenantId, req.UserId, req.SizeBytes, s.s3Client.BuildS3URL(s3Key), vodFormat, req.GetClusterId(), storageClusterArg, vodRetentionUntil, backendID); execErr != nil {
+		queries := foghorndb.New(tx)
+		if execErr := queries.InsertUploadingVodArtifact(ctx, foghorndb.InsertUploadingVodArtifactParams{
+			ArtifactHash: artifactHash, InternalName: sql.NullString{String: req.GetInternalName(), Valid: true},
+			TenantID: req.TenantId, UserID: req.UserId, SizeBytes: sql.NullInt64{Int64: req.SizeBytes, Valid: true},
+			S3Url: sql.NullString{String: s.s3Client.BuildS3URL(s3Key), Valid: true}, Format: sql.NullString{String: vodFormat, Valid: true},
+			OriginClusterID: sql.NullString{String: req.GetClusterId(), Valid: true}, StorageClusterID: storageClusterArg,
+			RetentionUntil: vodRetentionUntil, BackendID: sql.NullString{String: backendID, Valid: true},
+		}); execErr != nil {
 			return execErr
 		}
-		if _, execErr := tx.ExecContext(ctx, `
-			INSERT INTO foghorn.vod_metadata (
-				artifact_hash, filename, title, description, content_type,
-				s3_upload_id, s3_key, upload_expires_at, total_parts, created_at, updated_at
-			)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
-		`, artifactHash, req.Filename, req.GetTitle(), req.GetDescription(), contentType, uploadID, s3Key, uploadExpiresAt, partCount); execErr != nil {
+		if execErr := queries.InsertVodMultipartMetadata(ctx, foghorndb.InsertVodMultipartMetadataParams{
+			ArtifactHash: artifactHash, Filename: sql.NullString{String: req.Filename, Valid: true},
+			Title: sql.NullString{String: req.GetTitle(), Valid: true}, Description: sql.NullString{String: req.GetDescription(), Valid: true},
+			ContentType: sql.NullString{String: contentType, Valid: true}, S3UploadID: sql.NullString{String: uploadID, Valid: true},
+			S3Key: sql.NullString{String: s3Key, Valid: true}, UploadExpiresAt: sql.NullTime{Time: uploadExpiresAt, Valid: true},
+			TotalParts: sql.NullInt32{Int32: int32(partCount), Valid: true},
+		}); execErr != nil {
 			return execErr
 		}
 		// Commit the command ledger in the SAME tx as the artifact row so the
@@ -3840,26 +3720,9 @@ func (s *FoghornGRPCServer) GetVodUploadStatus(ctx context.Context, req *sharedp
 		return nil, status.Error(codes.InvalidArgument, "upload_id is required")
 	}
 
-	var (
-		artifactHash    string
-		s3Key           string
-		artStatus       string
-		errorMessage    sql.NullString
-		retentionUntil  sql.NullTime
-		uploadExpiresAt sql.NullTime
-		totalParts      sql.NullInt64
-	)
-	var recordedBackendID string
-	err := s.db.QueryRowContext(ctx, `
-			SELECT v.artifact_hash, COALESCE(v.s3_key, ''), a.status,
-			       a.error_message, a.retention_until, v.upload_expires_at, v.total_parts, COALESCE(a.backend_id, '')
-			FROM foghorn.vod_metadata v
-			JOIN foghorn.artifacts a ON v.artifact_hash = a.artifact_hash
-			WHERE v.s3_upload_id = $1 AND a.tenant_id = $2
-		`, req.UploadId, req.TenantId).Scan(
-		&artifactHash, &s3Key, &artStatus,
-		&errorMessage, &retentionUntil, &uploadExpiresAt, &totalParts, &recordedBackendID,
-	)
+	uploadRow, err := foghorndb.New(s.db).GetVodUploadStatusRow(ctx, foghorndb.GetVodUploadStatusRowParams{
+		S3UploadID: sql.NullString{String: req.UploadId, Valid: true}, TenantID: req.TenantId,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		// Wrong-tenant or missing upload — collapse both into NotFound to avoid existence leak.
 		return nil, status.Error(codes.NotFound, "upload not found")
@@ -3870,17 +3733,17 @@ func (s *FoghornGRPCServer) GetVodUploadStatus(ctx context.Context, req *sharedp
 
 	resp := &sharedpb.GetVodUploadStatusResponse{
 		UploadId:     req.UploadId,
-		State:        mapArtifactStatusToVodStatus(artStatus),
-		ArtifactHash: artifactHash,
+		State:        mapArtifactStatusToVodStatus(uploadRow.Status.String),
+		ArtifactHash: uploadRow.ArtifactHash,
 	}
-	if errorMessage.Valid && errorMessage.String != "" {
-		resp.LastErrorCode = vodUploadLastErrorCode(resp.State, errorMessage.String)
+	if uploadRow.ErrorMessage.Valid && uploadRow.ErrorMessage.String != "" {
+		resp.LastErrorCode = vodUploadLastErrorCode(resp.State, uploadRow.ErrorMessage.String)
 	}
-	if retentionUntil.Valid {
-		resp.RetentionUntil = timestamppb.New(retentionUntil.Time)
+	if uploadRow.RetentionUntil.Valid {
+		resp.RetentionUntil = timestamppb.New(uploadRow.RetentionUntil.Time)
 	}
-	if uploadExpiresAt.Valid {
-		resp.ExpiresAt = timestamppb.New(uploadExpiresAt.Time)
+	if uploadRow.UploadExpiresAt.Valid {
+		resp.ExpiresAt = timestamppb.New(uploadRow.UploadExpiresAt.Time)
 	}
 
 	// Multipart-complete uploads report stored object metadata, not S3 part state.
@@ -3893,7 +3756,7 @@ func (s *FoghornGRPCServer) GetVodUploadStatus(ctx context.Context, req *sharedp
 	}
 
 	// Expired session: report EXPIRED without paying for a ListParts call.
-	if uploadExpiresAt.Valid && time.Now().After(uploadExpiresAt.Time) {
+	if uploadRow.UploadExpiresAt.Valid && time.Now().After(uploadRow.UploadExpiresAt.Time) {
 		resp.State = sharedpb.VodStatus_VOD_STATUS_EXPIRED
 		resp.LastErrorCode = "upload_expired"
 		return resp, nil
@@ -3905,13 +3768,13 @@ func (s *FoghornGRPCServer) GetVodUploadStatus(ctx context.Context, req *sharedp
 	if s.s3Client == nil {
 		return resp, nil
 	}
-	if ownErr := artifacts.VerifyLocalMultipartOwnership(recordedBackendID, s.localBackendID()); ownErr != nil {
+	if ownErr := artifacts.VerifyLocalMultipartOwnership(uploadRow.BackendID, s.localBackendID()); ownErr != nil {
 		// Not an RPC error: a foreign/unattributed upload is reported with its recorded DB state and no S3 probe, the
 		// same graceful-degradation shape as a failed ListUploadedParts below.
 		resp.LastErrorCode = "storage_not_owned"
 		return resp, nil //nolint:nilerr // intentional: fence skips reconciliation, returns DB state without erroring
 	}
-	uploaded, err := s.s3Client.ListUploadedParts(ctx, s3Key, req.UploadId)
+	uploaded, err := s.s3Client.ListUploadedParts(ctx, uploadRow.S3Key, req.UploadId)
 	if err != nil {
 		s.logger.WithError(err).Warn("ListUploadedParts failed; returning state without reconciliation")
 		resp.LastErrorCode = "storage_reconciliation_failed"
@@ -3925,8 +3788,8 @@ func (s *FoghornGRPCServer) GetVodUploadStatus(ctx context.Context, req *sharedp
 			SizeBytes:  p.SizeBytes,
 		})
 	}
-	if totalParts.Valid {
-		missing := storage.MissingPartNumbers(uploaded, int(totalParts.Int64))
+	if uploadRow.TotalParts.Valid {
+		missing := storage.MissingPartNumbers(uploaded, int(uploadRow.TotalParts.Int32))
 		resp.MissingParts = make([]int32, 0, len(missing))
 		for _, m := range missing {
 			resp.MissingParts = append(resp.MissingParts, int32(m))
@@ -4145,16 +4008,9 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *sharedpb
 	// Look up the upload, accepting the in-flight 'uploading' state, the transient 'completing' claim,
 	// and the already-advanced 'processing' state so a retry converges idempotently instead of
 	// 404-ing or re-running multipart completion. tenant_id validation happens at Commodore level.
-	var artifactHash, s3Key, artifactStatus string
-	var sizeBytes sql.NullInt64
-	var userID sql.NullString
-	err := s.db.QueryRowContext(ctx, `
-		SELECT v.artifact_hash, v.s3_key, a.size_bytes, a.user_id, a.status
-		FROM foghorn.vod_metadata v
-		JOIN foghorn.artifacts a ON v.artifact_hash = a.artifact_hash
-		WHERE v.s3_upload_id = $1 AND a.tenant_id = $2
-		  AND a.status IN ('uploading', 'completing', 'processing')
-	`, req.UploadId, req.TenantId).Scan(&artifactHash, &s3Key, &sizeBytes, &userID, &artifactStatus)
+	uploadRow, err := foghorndb.New(s.db).GetCompletableVodUpload(ctx, foghorndb.GetCompletableVodUploadParams{
+		S3UploadID: sql.NullString{String: req.UploadId, Valid: true}, TenantID: req.TenantId,
+	})
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "upload not found or already completed")
@@ -4162,6 +4018,8 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *sharedpb
 		s.logger.WithError(err).Error("Failed to fetch upload info")
 		return nil, status.Error(codes.Internal, "failed to fetch upload info")
 	}
+	artifactHash, s3Key, artifactStatus := uploadRow.ArtifactHash, uploadRow.S3Key.String, uploadRow.Status.String
+	sizeBytes, userID := uploadRow.SizeBytes, uploadRow.UserID
 
 	// A retry that already advanced to 'processing' on a prior attempt converges here: the multipart
 	// completion AND the durable transition both already happened, so return the asset without
@@ -4207,22 +4065,13 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *sharedpb
 	if artifactStatus == "uploading" {
 		claimed := false
 		claimErr := s.withArtifactLifecycleTx(ctx, func(tx *sql.Tx) error {
-			claimRes, execErr := tx.ExecContext(ctx, `
-				UPDATE foghorn.artifacts
-				SET status = 'completing',
-				    last_sync_attempt = NOW(),
-				    updated_at = NOW()
-				WHERE artifact_hash = $1 AND tenant_id = $2 AND status = 'uploading'
-				  AND artifact_hash IN (
-				      SELECT artifact_hash FROM foghorn.vod_metadata WHERE s3_upload_id = $3
-				  )
-			`, artifactHash, req.TenantId, req.UploadId)
+			queries := foghorndb.New(tx)
+			affected, execErr := queries.ClaimVodCompletion(ctx, foghorndb.ClaimVodCompletionParams{
+				ArtifactHash: artifactHash, TenantID: req.TenantId,
+				S3UploadID: sql.NullString{String: req.UploadId, Valid: true},
+			})
 			if execErr != nil {
 				return execErr
-			}
-			affected, raErr := claimRes.RowsAffected()
-			if raErr != nil {
-				return raErr
 			}
 			if affected == 0 {
 				// A concurrent caller claimed/advanced/aborted this upload; commit an empty tx and skip persist.
@@ -4230,13 +4079,10 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *sharedpb
 				return nil
 			}
 			// COALESCE preserves a spec captured by a prior attempt when a retry arrives without one.
-			if _, persistErr := tx.ExecContext(ctx, `
-				UPDATE foghorn.vod_metadata
-				   SET processes_json = COALESCE(NULLIF($2, ''), processes_json),
-				       vod_completion_descriptor = $4::jsonb,
-				       updated_at = NOW()
-				 WHERE artifact_hash = $1 AND s3_upload_id = $3
-			`, artifactHash, req.GetProcessesJson(), req.UploadId, string(descriptorJSON)); persistErr != nil {
+			if persistErr := queries.PersistVodCompletionContract(ctx, foghorndb.PersistVodCompletionContractParams{
+				ProcessesJson: req.GetProcessesJson(), CompletionDescriptor: string(descriptorJSON), ArtifactHash: artifactHash,
+				S3UploadID: sql.NullString{String: req.UploadId, Valid: true},
+			}); persistErr != nil {
 				return persistErr
 			}
 			claimed = true
@@ -4260,17 +4106,12 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *sharedpb
 	// converge the SAME multipart part set and dispatch the SAME requested outputs the first claim
 	// persisted — never the retry request's parts/spec, which a concurrent or stale caller could have
 	// diverged into a DIFFERENT object or output set.
-	var persistedDescriptorJSON, authoritativeProcessesJSON, recordedBackendID string
-	if scanErr := s.db.QueryRowContext(ctx, `
-		SELECT COALESCE(v.vod_completion_descriptor::text, ''), COALESCE(v.processes_json, ''),
-		       COALESCE(a.backend_id, '')
-		  FROM foghorn.vod_metadata v
-		  JOIN foghorn.artifacts a ON a.artifact_hash = v.artifact_hash
-		 WHERE v.artifact_hash = $1
-	`, artifactHash).Scan(&persistedDescriptorJSON, &authoritativeProcessesJSON, &recordedBackendID); scanErr != nil {
+	contractRow, scanErr := foghorndb.New(s.db).GetVodCompletionContract(ctx, artifactHash)
+	if scanErr != nil {
 		s.logger.WithError(scanErr).WithField("artifact_hash", artifactHash).Error("Failed to load persisted VOD completion contract")
 		return nil, status.Error(codes.Internal, "failed to load upload completion contract")
 	}
+	persistedDescriptorJSON, authoritativeProcessesJSON, recordedBackendID := contractRow.CompletionDescriptor, contractRow.ProcessesJson, contractRow.BackendID
 	var contract jobs.VodCompletionDescriptor
 	if persistedDescriptorJSON == "" || json.Unmarshal([]byte(persistedDescriptorJSON), &contract) != nil || contract.UploadID == "" || len(contract.Parts) == 0 {
 		// A claimed row must carry a decodable descriptor; without it we cannot safely complete a
@@ -4387,23 +4228,11 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *sharedpb
 				// transitions to failed. A concurrent abort/delete (status='deleted'), a completion
 				// that already won (ready), or an already-advanced 'processing' row must NOT be flipped
 				// back to failed, and no FAILED event is emitted if no row moved.
-				res, execErr := tx.ExecContext(ctx, `
-					UPDATE foghorn.artifacts
-					SET status = 'failed',
-					    sync_status = 'failed',
-					    sync_error = $1,
-					    error_message = $1,
-					    last_sync_attempt = NOW(),
-					    updated_at = NOW()
-					WHERE artifact_hash = $2 AND tenant_id = $3
-					  AND status NOT IN ('deleted', 'ready', 'failed', 'processing')
-				`, errMsg, artifactHash, req.TenantId)
+				affected, execErr := foghorndb.New(tx).FailVodCompletion(ctx, foghorndb.FailVodCompletionParams{
+					ErrorMessage: sql.NullString{String: errMsg, Valid: true}, ArtifactHash: artifactHash, TenantID: req.TenantId,
+				})
 				if execErr != nil {
 					return execErr
-				}
-				affected, raErr := res.RowsAffected()
-				if raErr != nil {
-					return raErr
 				}
 				if affected == 0 {
 					return nil // no valid transition — don't emit a false FAILED
@@ -4439,36 +4268,12 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *sharedpb
 	// leaves 0 rows affected, so we must NOT dispatch processing or overwrite a terminal state.
 	noTransition := false
 	if txErr := s.withArtifactLifecycleTx(ctx, func(tx *sql.Tx) error {
-		res, execErr := tx.ExecContext(ctx, `
-			UPDATE foghorn.artifacts
-			SET status = 'processing',
-			    storage_location = 's3',
-			    sync_status = 'synced',
-			    sync_error = NULL,
-			    last_sync_attempt = NOW(),
-			    frozen_at = COALESCE(frozen_at, NOW()),
-			    s3_url = COALESCE(s3_url, $2),
-			    -- The multipart upload landed on THIS cell's local S3 backend; persist stable billing attribution.
-			    -- backend_id itself is NOT written here: it was recorded when the upload was CREATED (invariant I2)
-			    -- and verified above, so completion must not reconstruct or overwrite the recorded owner.
-			    durable_backend_local = true,
-			    -- Populate the authoritative object pointer from the recorded multipart key so reads/deletion
-			    -- resolve active_object_key uniformly (a direct upload has no freeze candidate; the key is the
-			    -- multipart object).
-			    active_object_key = COALESCE(active_object_key, (SELECT s3_key FROM foghorn.vod_metadata WHERE artifact_hash = foghorn.artifacts.artifact_hash)),
-			    updated_at = NOW()
-			WHERE artifact_hash = $1 AND tenant_id = $3
-			  AND status = 'completing'
-			  AND artifact_hash IN (
-			      SELECT artifact_hash FROM foghorn.vod_metadata WHERE s3_upload_id = $4
-			  )
-		`, artifactHash, s3URL, req.TenantId, contract.UploadID)
+		affected, execErr := foghorndb.New(tx).AdvanceVodToProcessing(ctx, foghorndb.AdvanceVodToProcessingParams{
+			S3Url: sql.NullString{String: s3URL, Valid: true}, ArtifactHash: artifactHash, TenantID: req.TenantId,
+			S3UploadID: sql.NullString{String: contract.UploadID, Valid: true},
+		})
 		if execErr != nil {
 			return execErr
-		}
-		affected, raErr := res.RowsAffected()
-		if raErr != nil {
-			return raErr
 		}
 		if affected == 0 {
 			noTransition = true
@@ -4501,10 +4306,10 @@ func (s *FoghornGRPCServer) CompleteVodUpload(ctx context.Context, req *sharedpb
 		// The claimed row left 'completing' under us. If a concurrent caller already advanced it to
 		// 'processing', converge idempotently and return the asset; otherwise a concurrent
 		// abort/delete moved it terminal — do not resurrect it back to 'processing'.
-		var curStatus string
-		if scanErr := s.db.QueryRowContext(ctx, `
-			SELECT status FROM foghorn.artifacts WHERE artifact_hash = $1 AND tenant_id = $2
-		`, artifactHash, req.TenantId).Scan(&curStatus); scanErr == nil && curStatus == "processing" {
+		curStatus, statusErr := foghorndb.New(s.db).GetArtifactStatusForTenant(ctx, foghorndb.GetArtifactStatusForTenantParams{
+			ArtifactHash: artifactHash, TenantID: req.TenantId,
+		})
+		if statusErr == nil && curStatus.String == "processing" {
 			s.logger.WithFields(logging.Fields{
 				"artifact_hash": artifactHash,
 				"upload_id":     req.UploadId,
@@ -4568,15 +4373,9 @@ func (s *FoghornGRPCServer) AbortVodUpload(ctx context.Context, req *sharedpb.Ab
 
 	// Get artifact info by upload_id
 	// NOTE: tenant_id validation happens at Commodore level (matches clips pattern)
-	var artifactHash, s3Key string
-	var userID sql.NullString
-	var recordedBackendID string
-	err := s.db.QueryRowContext(ctx, `
-		SELECT v.artifact_hash, v.s3_key, a.user_id, COALESCE(a.backend_id, '')
-		FROM foghorn.vod_metadata v
-		JOIN foghorn.artifacts a ON v.artifact_hash = a.artifact_hash
-		WHERE v.s3_upload_id = $1 AND a.status = 'uploading' AND a.tenant_id = $2
-	`, req.UploadId, req.TenantId).Scan(&artifactHash, &s3Key, &userID, &recordedBackendID)
+	abortRow, err := foghorndb.New(s.db).GetAbortableVodUpload(ctx, foghorndb.GetAbortableVodUploadParams{
+		S3UploadID: sql.NullString{String: req.UploadId, Valid: true}, TenantID: req.TenantId,
+	})
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "upload not found or already completed")
@@ -4584,6 +4383,7 @@ func (s *FoghornGRPCServer) AbortVodUpload(ctx context.Context, req *sharedpb.Ab
 		s.logger.WithError(err).Error("Failed to fetch upload info")
 		return nil, status.Error(codes.Internal, "failed to fetch upload info")
 	}
+	artifactHash, s3Key, userID, recordedBackendID := abortRow.ArtifactHash, abortRow.S3Key.String, abortRow.UserID, abortRow.BackendID
 
 	// FENCE before claiming/aborting: only tear down a multipart this cell owns (recorded backend == local). A
 	// foreign/unattributed row is refused with zero S3 calls, so this cell never aborts an upload on another backend.
@@ -4598,18 +4398,11 @@ func (s *FoghornGRPCServer) AbortVodUpload(ctx context.Context, req *sharedpb.Ab
 	// honestly and leave S3 untouched. Only the winner of this claim may abort the S3 upload. vod_metadata
 	// (with s3_key + s3_upload_id) is left intact until the abort finishes so jobs.AbortingVodRecoveryJob
 	// can converge an interrupted abort from the durable 'aborting' row.
-	claimRes, claimErr := s.db.ExecContext(ctx, `
-		UPDATE foghorn.artifacts
-		SET status = 'aborting', updated_at = NOW()
-		WHERE artifact_hash = $1 AND tenant_id = $2 AND status = 'uploading'
-	`, artifactHash, req.TenantId)
+	claimed, claimErr := foghorndb.New(s.db).ClaimVodAbort(ctx, foghorndb.ClaimVodAbortParams{
+		ArtifactHash: artifactHash, TenantID: req.TenantId,
+	})
 	if claimErr != nil {
 		s.logger.WithError(claimErr).WithField("artifact_hash", artifactHash).Error("Failed to claim VOD upload abort; not touching S3")
-		return nil, status.Error(codes.Internal, "failed to claim upload abort")
-	}
-	claimed, claimRAErr := claimRes.RowsAffected()
-	if claimRAErr != nil {
-		s.logger.WithError(claimRAErr).WithField("artifact_hash", artifactHash).Error("Failed to read abort-claim RowsAffected; not touching S3")
 		return nil, status.Error(codes.Internal, "failed to claim upload abort")
 	}
 	if claimed == 0 {
@@ -4650,22 +4443,17 @@ func (s *FoghornGRPCServer) AbortVodUpload(ctx context.Context, req *sharedpb.Ab
 		vodData.UserId = &userID.String
 	}
 	if err = s.withArtifactLifecycleTx(ctx, func(tx *sql.Tx) error {
-		res, execErr := tx.ExecContext(ctx, `
-			UPDATE foghorn.artifacts
-			SET status = 'deleted', updated_at = NOW()
-			WHERE artifact_hash = $1 AND tenant_id = $2 AND status = 'aborting'
-		`, artifactHash, req.TenantId)
+		queries := foghorndb.New(tx)
+		affected, execErr := queries.FinalizeVodAbort(ctx, foghorndb.FinalizeVodAbortParams{
+			ArtifactHash: artifactHash, TenantID: req.TenantId,
+		})
 		if execErr != nil {
 			return execErr
-		}
-		affected, raErr := res.RowsAffected()
-		if raErr != nil {
-			return raErr
 		}
 		if affected == 0 {
 			return nil // the recovery worker already converged this 'aborting' row
 		}
-		if _, execErr := tx.ExecContext(ctx, `DELETE FROM foghorn.vod_metadata WHERE artifact_hash = $1`, artifactHash); execErr != nil {
+		if execErr := queries.DeleteVodMetadata(ctx, artifactHash); execErr != nil {
 			return execErr
 		}
 		return artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, vodData)
@@ -4695,35 +4483,16 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *sharedpb.De
 
 	// Check current status
 	// NOTE: tenant_id validation happens at Commodore level (matches clips pattern)
-	var (
-		currentStatus    string
-		s3Key            string
-		s3URL            sql.NullString
-		formatStr        sql.NullString
-		sizeBytes        sql.NullInt64
-		retentionUntil   sql.NullTime
-		userID           sql.NullString
-		storageClusterID sql.NullString
-		originClusterID  sql.NullString
-		originType       sql.NullString
-		activeObjectKey  sql.NullString
-		activeDtshKey    sql.NullString
-		syncObjectKey    sql.NullString
-		durableLocal     sql.NullBool
-		backendID        sql.NullString
-	)
-	err := s.db.QueryRowContext(ctx, `
-		SELECT a.status, COALESCE(v.s3_key, ''), a.s3_url, a.format,
-		       a.size_bytes, a.retention_until, a.user_id,
-		       a.storage_cluster_id, a.origin_cluster_id, COALESCE(a.origin_type, ''),
-		       a.active_object_key, a.active_dtsh_key, a.sync_object_key, a.durable_backend_local, a.backend_id
-		FROM foghorn.artifacts a
-		LEFT JOIN foghorn.vod_metadata v ON a.artifact_hash = v.artifact_hash
-		WHERE a.artifact_hash = $1 AND a.artifact_type = 'vod' AND a.tenant_id = $2
-	`, req.ArtifactHash, req.GetTenantId()).Scan(&currentStatus, &s3Key, &s3URL, &formatStr, &sizeBytes, &retentionUntil, &userID, &storageClusterID, &originClusterID, &originType, &activeObjectKey, &activeDtshKey, &syncObjectKey, &durableLocal, &backendID)
+	vodRow, err := foghorndb.New(s.db).GetVodForDeletion(ctx, foghorndb.GetVodForDeletionParams{
+		ArtifactHash: req.ArtifactHash, TenantID: req.GetTenantId(),
+	})
 
 	if errors.Is(err, sql.ErrNoRows) {
-		if handled, _ := s.forwardArtifactToFederation(ctx, "delete_vod", req.ArtifactHash, req.GetTenantId(), ""); handled {
+		handled, forwardErr := s.forwardArtifactToFederation(ctx, "delete_vod", req.ArtifactHash, req.GetTenantId(), "")
+		if forwardErr != nil {
+			return nil, status.Error(codes.Internal, "failed to forward VOD deletion")
+		}
+		if handled {
 			return &sharedpb.DeleteVodAssetResponse{Success: true, Message: "VOD deleted via federation"}, nil
 		}
 		return nil, status.Error(codes.NotFound, "VOD asset not found")
@@ -4731,13 +4500,14 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *sharedpb.De
 		s.logger.WithError(err).Error("Failed to check VOD asset")
 		return nil, status.Error(codes.Internal, "failed to check VOD asset")
 	}
+	currentStatus, s3Key := vodRow.Status.String, vodRow.S3Key
 
 	// A finalized DVR chapter is stored as artifact_type='vod' with origin_type='dvr_chapter',
 	// but it is owned by the parent DVR's chapter ledger (foghorn.dvr_chapters). Deleting it
 	// through the generic VOD path would erase its bytes while leaving the chapter row pointing
 	// at a dead artifact — orphaning the ledger. Chapter deletion must go through the
 	// chapter/recording-aware path, so reject it here rather than corrupt the ledger.
-	if originType.String == "dvr_chapter" {
+	if vodRow.OriginType == "dvr_chapter" {
 		return nil, status.Error(codes.FailedPrecondition, "artifact is a DVR chapter; delete via the recording, not as a VOD asset")
 	}
 
@@ -4755,15 +4525,14 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *sharedpb.De
 	// obligation the AbortingVodRecoveryJob drains — it aborts the multipart idempotently, then converges to 'deleted'
 	// (deleting vod_metadata + emitting DELETED). AbortVodUpload uses the same claim.
 	if currentStatus == "uploading" {
-		claimRes, claimErr := s.db.ExecContext(ctx, `
-			UPDATE foghorn.artifacts SET status = 'aborting', updated_at = NOW()
-			WHERE artifact_hash = $1 AND tenant_id = $2 AND status = 'uploading'
-		`, req.ArtifactHash, req.GetTenantId())
+		n, claimErr := foghorndb.New(s.db).ClaimVodAbort(ctx, foghorndb.ClaimVodAbortParams{
+			ArtifactHash: req.ArtifactHash, TenantID: req.GetTenantId(),
+		})
 		if claimErr != nil {
 			s.logger.WithError(claimErr).WithField("artifact_hash", req.ArtifactHash).Error("Failed to claim uploading VOD for abort-on-delete")
 			return nil, status.Error(codes.Internal, "failed to delete uploading VOD")
 		}
-		if n, raErr := claimRes.RowsAffected(); raErr != nil || n == 0 {
+		if n == 0 {
 			// A concurrent complete/abort moved the row off 'uploading'; do not claim success against a row we did not
 			// transition. The client can retry; the row is converging on its own path.
 			return &sharedpb.DeleteVodAssetResponse{Success: false, Message: "VOD upload state changed concurrently; retry delete"}, nil
@@ -4782,15 +4551,15 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *sharedpb.De
 		TenantId:    &req.TenantId,
 		CompletedAt: proto.Int64(time.Now().Unix()),
 	}
-	if userID.Valid && userID.String != "" {
-		vodData.UserId = &userID.String
+	if vodRow.UserID.Valid && vodRow.UserID.String != "" {
+		vodData.UserId = &vodRow.UserID.String
 	}
-	if sizeBytes.Valid && sizeBytes.Int64 > 0 {
-		sb := uint64(sizeBytes.Int64)
+	if vodRow.SizeBytes.Valid && vodRow.SizeBytes.Int64 > 0 {
+		sb := uint64(vodRow.SizeBytes.Int64)
 		vodData.SizeBytes = &sb
 	}
-	if retentionUntil.Valid {
-		exp := retentionUntil.Time.Unix()
+	if vodRow.RetentionUntil.Valid {
+		exp := vodRow.RetentionUntil.Time.Unix()
 		vodData.ExpiresAt = &exp
 	}
 	transitioned := false
@@ -4799,20 +4568,11 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *sharedpb.De
 		// abandoned attempt then matches nothing (its request/node is gone). sync_object_key is
 		// DELIBERATELY retained so the purge sweep can free an object whose PUT lands after deletion —
 		// the delete has authorized-but-not-yet-landed bytes to clean up.
-		res, execErr := tx.ExecContext(ctx, `
-			UPDATE foghorn.artifacts
-			SET status = 'deleted',
-			    sync_request_id = NULL, sync_node_id = NULL,
-			    updated_at = NOW()
-			WHERE artifact_hash = $1 AND artifact_type = 'vod' AND tenant_id = $2
-			  AND status != 'deleted'
-		`, req.ArtifactHash, req.TenantId)
+		affected, execErr := foghorndb.New(tx).SoftDeleteVodArtifact(ctx, foghorndb.SoftDeleteVodArtifactParams{
+			ArtifactHash: req.ArtifactHash, TenantID: req.TenantId,
+		})
 		if execErr != nil {
 			return execErr
-		}
-		affected, raErr := res.RowsAffected()
-		if raErr != nil {
-			return raErr
 		}
 		if affected == 0 {
 			// Already deleted (or gone) at UPDATE time — do not enqueue a second DELETED event.
@@ -4847,18 +4607,10 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *sharedpb.De
 	// routed through the durable aborting saga above so its multipart teardown is a tracked obligation.)
 
 	// Send delete request to nodes that have this VOD cached
-	rows, queryErr := s.db.QueryContext(ctx, `
-		SELECT node_id FROM foghorn.artifact_nodes
-		WHERE artifact_hash = $1 AND NOT is_orphaned
-	`, req.ArtifactHash)
+	nodeIDs, queryErr := foghorndb.New(s.db).ListArtifactNodeIDs(ctx, req.ArtifactHash)
 	if queryErr == nil {
-		defer func() { _ = rows.Close() }()
 		requestID := uuid.NewString()
-		for rows.Next() {
-			var nodeID string
-			if scanErr := rows.Scan(&nodeID); scanErr != nil {
-				continue
-			}
+		for _, nodeID := range nodeIDs {
 			deleteReq := &ipcpb.VodDeleteRequest{
 				VodHash:   req.ArtifactHash,
 				RequestId: requestID,
@@ -4891,16 +4643,16 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *sharedpb.De
 			Hash:                req.ArtifactHash,
 			Type:                "vod",
 			TenantID:            req.GetTenantId(),
-			Format:              formatStr.String,
+			Format:              vodRow.Format.String,
 			VODS3Key:            s3Key,
-			S3URL:               s3URL.String,
-			StorageClusterID:    storageClusterID.String,
-			OriginClusterID:     originClusterID.String,
-			ActiveObjectKey:     activeObjectKey.String,
-			ActiveDtshKey:       activeDtshKey.String,
-			PendingObjectKey:    syncObjectKey.String,
-			DurableBackendLocal: durableLocal.Bool,
-			BackendID:           backendID.String,
+			S3URL:               vodRow.S3Url.String,
+			StorageClusterID:    vodRow.StorageClusterID.String,
+			OriginClusterID:     vodRow.OriginClusterID.String,
+			ActiveObjectKey:     vodRow.ActiveObjectKey.String,
+			ActiveDtshKey:       vodRow.ActiveDtshKey.String,
+			PendingObjectKey:    vodRow.SyncObjectKey.String,
+			DurableBackendLocal: vodRow.DurableBackendLocal,
+			BackendID:           vodRow.BackendID.String,
 		}); errDelete != nil {
 			s.logger.WithFields(logging.Fields{
 				"artifact_hash": req.ArtifactHash,
@@ -4919,19 +4671,17 @@ func (s *FoghornGRPCServer) DeleteVodAsset(ctx context.Context, req *sharedpb.De
 // Helper functions for VOD service
 
 func (s *FoghornGRPCServer) getVodAssetInfo(ctx context.Context, artifactHash string) (*sharedpb.VodAssetInfo, error) {
-	query := `
-		SELECT a.artifact_hash, a.artifact_hash, a.status, a.size_bytes,
-		       COALESCE(a.storage_location, 'pending'), COALESCE(a.s3_url, ''),
-		       a.error_message, a.created_at, a.updated_at, a.retention_until,
-		       COALESCE(v.filename, ''), COALESCE(v.title, ''), COALESCE(v.description, ''),
-		       v.duration_ms, v.resolution, v.video_codec, v.audio_codec, v.bitrate_kbps,
-		       COALESCE(v.s3_upload_id, ''), COALESCE(v.s3_key, '')
-		FROM foghorn.artifacts a
-		LEFT JOIN foghorn.vod_metadata v ON a.artifact_hash = v.artifact_hash
-		WHERE a.artifact_hash = $1 AND a.artifact_type = 'vod' AND a.status != 'deleted'
-	`
-	row := s.db.QueryRowContext(ctx, query, artifactHash)
-	return s.scanVodAssetRow(row)
+	row, err := foghorndb.New(s.db).GetVodAsset(ctx, artifactHash)
+	if err != nil {
+		return nil, err
+	}
+	return buildVodAssetInfo(
+		row.ID, row.ArtifactHash, row.Status.String, row.StorageLocation, row.Filename, row.Title, row.Description,
+		row.SizeBytes, row.DurationMs, row.Resolution, row.VideoCodec, row.AudioCodec, row.BitrateKbps,
+		sql.NullString{String: row.S3UploadID, Valid: row.S3UploadID != ""},
+		sql.NullString{String: row.S3Key, Valid: row.S3Key != ""}, row.ErrorMessage,
+		row.CreatedAt.Time, row.UpdatedAt.Time, row.RetentionUntil,
+	), nil
 }
 
 func (s *FoghornGRPCServer) lookupCompletedUploadAsset(artifactHash string, pipelineFailed bool) (*sharedpb.VodAssetInfo, error) {
@@ -5343,29 +5093,16 @@ func (s *FoghornGRPCServer) tenantArtifactSessionNames(ctx context.Context, tena
 	if s.db == nil || tenantID == "" {
 		return nil
 	}
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT internal_name
-		FROM foghorn.artifacts
-		WHERE tenant_id = $1
-		  AND status != 'deleted'
-		  AND COALESCE(internal_name, '') != ''
-	`, tenantID)
+	names, err := foghorndb.New(s.db).ListTenantArtifactSessionNames(ctx, tenantID)
 	if err != nil {
 		s.logger.WithError(err).WithField("tenant_id", tenantID).Warn("playback-auth invalidation: artifact lookup failed")
 		return nil
 	}
-	defer rows.Close()
-
-	var names []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			s.logger.WithError(err).Warn("playback-auth invalidation: artifact row scan failed")
-			return names
-		}
-		names = append(names, artifactSessionName(name))
+	result := make([]string, 0, len(names))
+	for _, name := range names {
+		result = append(result, artifactSessionName(name.String))
 	}
-	return names
+	return result
 }
 
 func (s *FoghornGRPCServer) artifactSessionNodes(ctx context.Context, tenantID, internalName string) map[string]struct{} {
@@ -5382,26 +5119,14 @@ func (s *FoghornGRPCServer) artifactSessionNodes(ctx context.Context, tenantID, 
 	if len(nodes) > 0 || s.db == nil {
 		return nodes
 	}
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT DISTINCT an.node_id
-		FROM foghorn.artifacts a
-		JOIN foghorn.artifact_nodes an ON an.artifact_hash = a.artifact_hash
-		WHERE a.artifact_hash = $1
-		  AND a.tenant_id = $2
-		  AND a.status != 'deleted'
-		  AND COALESCE(an.is_orphaned, false) = false
-	`, hash, tenantID)
+	nodeIDs, err := foghorndb.New(s.db).ListTenantArtifactNodes(ctx, foghorndb.ListTenantArtifactNodesParams{
+		ArtifactHash: hash, TenantID: tenantID,
+	})
 	if err != nil {
 		s.logger.WithError(err).WithField("artifact_hash", hash).Warn("playback-auth invalidation: artifact node lookup failed")
 		return nodes
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var nodeID string
-		if err := rows.Scan(&nodeID); err != nil {
-			s.logger.WithError(err).Warn("playback-auth invalidation: artifact node row scan failed")
-			return nodes
-		}
+	for _, nodeID := range nodeIDs {
 		if nodeID != "" {
 			nodes[nodeID] = struct{}{}
 		}
@@ -5414,15 +5139,10 @@ func (s *FoghornGRPCServer) artifactHashForSessionName(ctx context.Context, tena
 		return ""
 	}
 	bare := mist.ExtractInternalName(internalName)
-	var hash string
-	if err := s.db.QueryRowContext(ctx, `
-		SELECT artifact_hash
-		FROM foghorn.artifacts
-		WHERE internal_name = $1
-		  AND tenant_id = $2
-		  AND status != 'deleted'
-		LIMIT 1
-	`, bare, tenantID).Scan(&hash); err != nil {
+	hash, err := foghorndb.New(s.db).FindArtifactHashForSession(ctx, foghorndb.FindArtifactHashForSessionParams{
+		InternalName: sql.NullString{String: bare, Valid: true}, TenantID: tenantID,
+	})
+	if err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			s.logger.WithError(err).WithField("internal_name", bare).Warn("playback-auth invalidation: artifact hash lookup failed")
 		}
@@ -5555,23 +5275,13 @@ func (s *FoghornGRPCServer) loadNodeComponentVersions(ctx context.Context, nodeI
 	if s == nil || s.db == nil {
 		return nil
 	}
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT component, COALESCE(current_version, '')
-		FROM foghorn.node_components
-		WHERE node_id = $1
-		ORDER BY component
-	`, nodeID)
+	rows, err := foghorndb.New(s.db).ListNodeComponentVersions(ctx, nodeID)
 	if err != nil {
 		return nil
 	}
-	defer rows.Close()
-	var out []*foghorncontrolpb.NodeComponentVersion
-	for rows.Next() {
-		v := &foghorncontrolpb.NodeComponentVersion{}
-		if err := rows.Scan(&v.Component, &v.Version); err != nil {
-			return nil
-		}
-		out = append(out, v)
+	out := make([]*foghorncontrolpb.NodeComponentVersion, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, &foghorncontrolpb.NodeComponentVersion{Component: row.Component, Version: row.CurrentVersion})
 	}
 	return out
 }
@@ -5619,13 +5329,8 @@ func (s *FoghornGRPCServer) checkStorageEntitlement(ctx context.Context, tenantI
 		return nil
 	}
 
-	var current int64
-	if err := s.db.QueryRowContext(ctx, `
-		SELECT COALESCE(SUM(size_bytes), 0)
-		FROM foghorn.artifacts
-		WHERE tenant_id = $1::uuid
-		  AND status NOT IN ('failed', 'expired', 'deleted', 'aborted')
-	`, tenantID).Scan(&current); err != nil {
+	current, err := foghorndb.New(s.db).SumTenantActiveArtifactBytes(ctx, tenantID)
+	if err != nil {
 		s.logger.WithFields(logging.Fields{
 			"tenant_id": tenantID,
 			"error":     err,

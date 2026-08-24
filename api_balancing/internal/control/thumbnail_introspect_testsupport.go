@@ -7,6 +7,8 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+
+	"frameworks/api_balancing/internal/database/foghorndb"
 )
 
 // Pointer-state INTROSPECTION for the thumbnail publication real-Postgres tests. Chandler serves a DETERMINISTIC key
@@ -42,28 +44,19 @@ func IntrospectThumbnailPointerState(ctx context.Context, dbh *sql.DB, assetKey 
 	if strings.TrimSpace(assetKey) == "" {
 		return "", ThumbnailLegacyAllowed, errors.New("thumbnail resolve: empty asset_key")
 	}
-	var active sql.NullString
-	var gone bool
 	// Single read keyed by asset_key: the active token (if any) + whether the asset is GONE — either the parent artifact
 	// is terminal, OR (for a live stream with no artifact row) a durable cleanup tombstone exists. The tombstone LEFT
 	// JOIN is what makes a deleted live stream report GONE instead of its stale pointer. active_token is the per-token
 	// candidate segment (`v/{token}/…`), ALWAYS set on a published pointer; active_version is the attempt-id anchor only.
-	qErr := dbh.QueryRowContext(ctx, `
-		SELECT p.active_token,
-		       COALESCE(a.status IN `+artifactTerminalStatusSQL+`, false) OR t.asset_key IS NOT NULL AS gone
-		  FROM (SELECT $1::text AS k) k
-		  LEFT JOIN foghorn.thumbnail_active_pointer p ON p.asset_key = k.k
-		  LEFT JOIN foghorn.artifacts a ON a.artifact_hash = k.k
-		  LEFT JOIN foghorn.stream_cleanup_obligation t ON t.asset_key = k.k
-	`, assetKey).Scan(&active, &gone)
+	row, qErr := foghorndb.New(dbh).GetThumbnailPointerState(ctx, assetKey)
 	if qErr != nil {
 		return "", ThumbnailLegacyAllowed, qErr
 	}
-	if gone {
+	if row.Gone {
 		return "", ThumbnailGone, nil
 	}
-	if active.Valid && active.String != "" {
-		return active.String, ThumbnailActive, nil
+	if row.ActiveToken.Valid && row.ActiveToken.String != "" {
+		return row.ActiveToken.String, ThumbnailActive, nil
 	}
 	return "", ThumbnailLegacyAllowed, nil
 }

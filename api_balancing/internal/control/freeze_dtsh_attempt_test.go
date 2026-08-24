@@ -102,8 +102,8 @@ func TestClaimFreezeAttempt_TenantScopedClaimableStates(t *testing.T) {
 
 	// The claim + its publication-ledger rows commit in one transaction.
 	mock.ExpectBegin()
-	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_object_key = \\$6.*tenant_id::text = \\$4.*status = 'ready'.*is_complete = true AND an.is_orphaned = false.*sync_status IN \\('pending', 'failed', 'synced'\\).*sync_status = 'in_progress' AND sync_request_id = \\$2 AND sync_node_id = \\$3.*sync_object_key = \\$6.*storage_cluster_id IS NOT DISTINCT FROM NULLIF\\(\\$5, ''\\)").
-		WithArgs("hash-1", "req-1", "node-1", "tenant-1", "", "key-1", sqlmock.AnyArg()).
+	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_object_key = \\$4.*tenant_id::text = \\$7.*status = 'ready'.*is_complete = true AND an.is_orphaned = false.*sync_status IN \\('pending', 'failed', 'synced'\\).*sync_status = 'in_progress'.*sync_request_id = \\$1.*sync_node_id = \\$2.*sync_object_key = \\$4.*storage_cluster_id IS NOT DISTINCT FROM NULLIF\\(\\$3::text, ''\\)").
+		WithArgs("req-1", "node-1", "", "key-1", sqlmock.AnyArg(), "hash-1", "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO foghorn.freeze_publication_ledger").WillReturnResult(sqlmock.NewResult(0, 4))
 	mock.ExpectCommit()
@@ -125,7 +125,7 @@ func TestClaimFreezeAttempt_UnclaimableDenies(t *testing.T) {
 	// Zero rows claimed → the transaction rolls back with no ledger rows.
 	mock.ExpectBegin()
 	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status IN \\('pending', 'failed', 'synced'\\)").
-		WithArgs("hash-1", "req-1", "node-1", "tenant-1", "", "key-1", sqlmock.AnyArg()).
+		WithArgs("req-1", "node-1", "", "key-1", sqlmock.AnyArg(), "hash-1", "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectRollback()
 
@@ -182,8 +182,8 @@ func TestApplyDtshCompletionFailure_MatchesAttempt(t *testing.T) {
 	// AND its versioned candidate (a completion may have promoted it before losing the CAS). The terminal-status
 	// exclusion still applies so a late failure never writes onto a deleted/expired/aborted row.
 	mock.ExpectBegin()
-	mock.ExpectQuery("UPDATE foghorn.artifacts.*dtsh_status = 'failed'.*dtsh_sync_request_id = \\$2 AND dtsh_sync_node_id = \\$3.*status NOT IN \\('deleted', 'expired', 'aborted'\\).*tenant_id::text = \\$5.*RETURNING").
-		WithArgs("hash-d", "dtsh-req", "node-1", "boom", "tenant-1").
+	mock.ExpectQuery("UPDATE foghorn.artifacts.*dtsh_status = 'failed'.*dtsh_sync_request_id = \\$3 AND dtsh_sync_node_id = \\$4.*status NOT IN \\('deleted', 'expired', 'aborted'\\).*tenant_id::text = \\$5.*RETURNING").
+		WithArgs("boom", "hash-d", "dtsh-req", "node-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"sync_object_key"}).AddRow("obj/hash-d"))
 	mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").
 		WithArgs(FreezeStagingKey("obj/hash-d.dtsh", "dtsh-req"), sqlmock.AnyArg()).
@@ -209,7 +209,7 @@ func TestApplyDtshCompletionFailure_NotADtshAttempt(t *testing.T) {
 	// No matching dtsh attempt → the guarded UPDATE affects zero rows → RETURNING yields no row → rollback.
 	mock.ExpectBegin()
 	mock.ExpectQuery("UPDATE foghorn.artifacts.*dtsh_status = 'failed'.*RETURNING").
-		WithArgs("hash-x", "main-req", "node-1", "boom", "tenant-1").
+		WithArgs("boom", "hash-x", "main-req", "node-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"sync_object_key"}))
 	mock.ExpectRollback()
 

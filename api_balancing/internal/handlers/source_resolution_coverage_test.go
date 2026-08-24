@@ -338,14 +338,14 @@ func TestHandleNodesOverviewFullStateComposesDBPayload(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{
 			"artifact_hash", "artifact_type", "status", "internal_name", "tenant_id",
 			"storage_location", "sync_status", "s3_url", "format", "size_bytes",
-			"manifest_path", "duration_seconds", "dtsh_synced", "retention_until",
+			"access_count", "last_accessed_at", "manifest_path", "duration_seconds", "dtsh_synced", "retention_until",
 			"created_at", "updated_at",
 			"video_codec", "audio_codec", "resolution", "duration_ms", "bitrate_kbps",
 			"filename", "title",
 		}).AddRow(
 			"hash-aaa", "vod", "ready", "vod+clip", "tenant-vod",
 			"local", "synced", "s3://bucket/x.mp4", "mp4", int64(1234),
-			"/m/x.m3u8", int32(60), true, nil,
+			int32(7), now, "/m/x.m3u8", int32(60), true, "",
 			now, now,
 			"h264", "aac", "1920x1080", int32(60000), int32(4500),
 			"clip.mp4", "My Clip",

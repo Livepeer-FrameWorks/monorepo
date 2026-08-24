@@ -7,6 +7,7 @@ import (
 	"errors"
 	"strconv"
 
+	"frameworks/api_balancing/internal/database/foghorndb"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
 	"google.golang.org/grpc/codes"
@@ -55,17 +56,9 @@ func (s *FoghornGRPCServer) GetArtifactCreationStatus(ctx context.Context, req *
 		return nil, status.Errorf(codes.InvalidArgument, "unknown artifact kind: %q", req.GetKind())
 	}
 
-	var (
-		ledgerStatus    string
-		catalogRevision int64
-		storedKind      string
-		storedHash      string
-	)
-	err := s.db.QueryRowContext(ctx, `
-		SELECT status, catalog_revision, kind, artifact_hash
-		  FROM foghorn.artifact_creation_commands
-		 WHERE request_id = $1::uuid AND tenant_id = $2::uuid
-	`, req.GetRequestId(), req.GetTenantId()).Scan(&ledgerStatus, &catalogRevision, &storedKind, &storedHash)
+	row, err := foghorndb.New(s.db).GetArtifactCreationCommandStatus(ctx, foghorndb.GetArtifactCreationCommandStatusParams{
+		RequestID: req.GetRequestId(), TenantID: req.GetTenantId(),
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		// No ledger row for this (tenant, request_id): the create handler has not (yet)
 		// recorded an outcome, or the RPC was lost in transit. This is the MISSING
@@ -78,7 +71,7 @@ func (s *FoghornGRPCServer) GetArtifactCreationStatus(ctx context.Context, req *
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to read artifact creation command: %v", err)
 	}
-	if storedKind != req.GetKind() || storedHash != req.GetArtifactHash() {
+	if row.Kind != req.GetKind() || row.ArtifactHash != req.GetArtifactHash() {
 		// A row exists for this request_id but under a different artifact identity: the
 		// request_id was reused for another create. This is an invariant violation, NOT a
 		// missing command — reported distinctly so the caller fails closed (never aborts).
@@ -87,11 +80,11 @@ func (s *FoghornGRPCServer) GetArtifactCreationStatus(ctx context.Context, req *
 		}, nil
 	}
 
-	switch ledgerStatus {
+	switch row.Status {
 	case "committed":
 		resp := &sharedpb.GetArtifactCreationStatusResponse{
 			Outcome:         sharedpb.ArtifactCreationOutcome_ARTIFACT_CREATION_OUTCOME_COMMITTED,
-			CatalogRevision: catalogRevision,
+			CatalogRevision: row.CatalogRevision,
 		}
 		if req.GetKind() == "clip" {
 			startMs, durationMs := s.clipFulfilledTimingMs(ctx, req.GetTenantId(), req.GetArtifactHash())
@@ -140,16 +133,9 @@ func (s *FoghornGRPCServer) AckArtifactCreationCommand(ctx context.Context, req 
 		return nil, status.Errorf(codes.InvalidArgument, "unknown artifact kind: %q", req.GetKind())
 	}
 
-	var (
-		ledgerStatus string
-		storedKind   string
-		storedHash   string
-	)
-	err := s.db.QueryRowContext(ctx, `
-		SELECT status, kind, artifact_hash
-		  FROM foghorn.artifact_creation_commands
-		 WHERE request_id = $1::uuid AND tenant_id = $2::uuid
-	`, req.GetRequestId(), req.GetTenantId()).Scan(&ledgerStatus, &storedKind, &storedHash)
+	row, err := foghorndb.New(s.db).GetArtifactCreationCommandAckState(ctx, foghorndb.GetArtifactCreationCommandAckStateParams{
+		RequestID: req.GetRequestId(), TenantID: req.GetTenantId(),
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return &sharedpb.AckArtifactCreationCommandResponse{
 			Outcome: sharedpb.ArtifactCreationOutcome_ARTIFACT_CREATION_OUTCOME_MISSING,
@@ -158,14 +144,14 @@ func (s *FoghornGRPCServer) AckArtifactCreationCommand(ctx context.Context, req 
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to read artifact creation command: %v", err)
 	}
-	if storedKind != req.GetKind() || storedHash != req.GetArtifactHash() {
+	if row.Kind != req.GetKind() || row.ArtifactHash != req.GetArtifactHash() {
 		return &sharedpb.AckArtifactCreationCommandResponse{
 			Outcome: sharedpb.ArtifactCreationOutcome_ARTIFACT_CREATION_OUTCOME_IDENTITY_MISMATCH,
 		}, nil
 	}
 
 	var outcome sharedpb.ArtifactCreationOutcome
-	switch ledgerStatus {
+	switch row.Status {
 	case "committed":
 		outcome = sharedpb.ArtifactCreationOutcome_ARTIFACT_CREATION_OUTCOME_COMMITTED
 	case "rejected":
@@ -181,13 +167,10 @@ func (s *FoghornGRPCServer) AckArtifactCreationCommand(ctx context.Context, req 
 	// Terminal row of the matching identity: stamp consumed_at so the retention GC may later
 	// delete it. UNGUARDED on consumed_at, so a repeat ack REFRESHES consumed_at=NOW() and
 	// advances the retention window rather than leaving the row aged from its first ack.
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE foghorn.artifact_creation_commands
-		   SET consumed_at = NOW()
-		 WHERE request_id = $1::uuid AND tenant_id = $2::uuid
-		   AND kind = $3 AND artifact_hash = $4
-		   AND status IN ('committed', 'rejected')
-	`, req.GetRequestId(), req.GetTenantId(), req.GetKind(), req.GetArtifactHash()); err != nil {
+	if err := foghorndb.New(s.db).ConsumeTerminalArtifactCreationCommand(ctx, foghorndb.ConsumeTerminalArtifactCreationCommandParams{
+		RequestID: req.GetRequestId(), TenantID: req.GetTenantId(),
+		Kind: req.GetKind(), ArtifactHash: req.GetArtifactHash(),
+	}); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to ack artifact creation command: %v", err)
 	}
 	return &sharedpb.AckArtifactCreationCommandResponse{Outcome: outcome}, nil
@@ -203,23 +186,14 @@ func (s *FoghornGRPCServer) AckArtifactCreationCommand(ctx context.Context, req 
 // absent/unparseable; the sweep leaves the intent pending rather than writing a row
 // with fabricated timing.
 func (s *FoghornGRPCServer) clipFulfilledTimingMs(ctx context.Context, tenantID, clipHash string) (startMs, durationMs int64) {
-	var paramsJSON []byte
-	err := s.db.QueryRowContext(ctx, `
-		SELECT j.source_params FROM foghorn.processing_jobs j
-		 WHERE j.artifact_hash = $1 AND j.source_params IS NOT NULL
-		   AND EXISTS (
-		       SELECT 1 FROM foghorn.artifacts a
-		        WHERE a.artifact_hash = j.artifact_hash
-		          AND a.tenant_id = $2::uuid
-		          AND a.artifact_type = 'clip'
-		   )
-		 ORDER BY j.created_at DESC LIMIT 1
-	`, clipHash, tenantID).Scan(&paramsJSON)
-	if err != nil || len(paramsJSON) == 0 {
+	paramsJSON, err := foghorndb.New(s.db).GetClipFulfilledSourceParams(ctx, foghorndb.GetClipFulfilledSourceParamsParams{
+		ArtifactHash: clipHash, TenantID: tenantID,
+	})
+	if err != nil || !paramsJSON.Valid || paramsJSON.String == "" {
 		return 0, 0
 	}
 	var params map[string]string
-	if err := json.Unmarshal(paramsJSON, &params); err != nil {
+	if err := json.Unmarshal([]byte(paramsJSON.String), &params); err != nil {
 		return 0, 0
 	}
 	startUnix, err1 := strconv.ParseInt(params["source_start_unix"], 10, 64)

@@ -89,7 +89,7 @@ func TestComputeClipCoverages_OfflineFallsToRecordedLookups_ClipDvrVod(t *testin
 		WithArgs(streamName, testTenantID).
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery(`SELECT COALESCE\(c.playback_artifact_hash, ''\)`).
-		WithArgs(streamName, startMs, endMs, testTenantID).
+		WithArgs(startMs, endMs, streamName, testTenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"playback_artifact_hash", "ov_start", "ov_end"}))
 
 	live, dvr, chap, err := srv.computeClipCoverages(context.Background(), testTenantID, streamName, startMs, endMs)

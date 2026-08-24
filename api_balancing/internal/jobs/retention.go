@@ -9,6 +9,7 @@ import (
 
 	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -114,28 +115,7 @@ func (j *RetentionJob) scan() {
 	// transaction below, so the soft-delete and its deletion-lifecycle outbox event commit
 	// atomically. A bulk UPDATE followed by a fire-and-forget emit loses the analytics event on a
 	// crash/nil-client/enqueue error. Bounded per pass so the per-row work can't run unbounded.
-	rows, err := j.db.QueryContext(ctx, `
-		SELECT artifact_hash, artifact_type, stream_internal_name, tenant_id, user_id, size_bytes,
-		       retention_until, started_at, ended_at, manifest_path
-		  FROM foghorn.artifacts
-		WHERE status IN ('completed', 'completed_partial', 'ready', 'failed')
-		  AND (
-				-- Explicit deadline: applies to every artifact type INCLUDING dvr chapters. A
-				-- chapter inherits its parent DVR's retention_until at allocation (keep-forever ⇒
-				-- NULL), so once that horizon elapses the chapter expires with the parent here.
-				(retention_until IS NOT NULL AND retention_until < NOW())
-				OR
-				-- Global VOD-age fallback for legacy clip/vod rows without an explicit deadline.
-				-- DVR rows always have retention_until set by FinalizeDVR. DVR CHAPTERS are excluded
-				-- from THIS branch only: a keep-forever parent leaves the chapter's retention_until
-				-- NULL, and the chapter must not then be reaped by the global age fallback.
-				(artifact_type <> 'dvr'
-				 AND COALESCE(origin_type, '') <> 'dvr_chapter'
-				 AND retention_until IS NULL
-				 AND created_at < NOW() - make_interval(days => $1))
-			  )
-		LIMIT 500
-	`, j.retentionDays)
+	rows, err := foghorndb.New(j.db).ListExpiredArtifacts(ctx, int32(j.retentionDays))
 
 	if err != nil {
 		j.logger.WithError(err).Error("Failed to query expired artifacts")
@@ -151,18 +131,15 @@ func (j *RetentionJob) scan() {
 		manifestPath                   sql.NullString
 	}
 	var candidates []expiredRow
-	for rows.Next() {
-		var r expiredRow
-		if scanErr := rows.Scan(&r.hash, &r.artifactType, &r.internalName, &r.tenantID, &r.userID,
-			&r.sizeBytes, &r.retentionUntil, &r.startedAt, &r.endedAt, &r.manifestPath); scanErr != nil {
-			j.logger.WithError(scanErr).Warn("Failed to scan expired artifact")
-			continue
-		}
-		candidates = append(candidates, r)
-	}
-	rows.Close() //nolint:sqlclosecheck // close the cursor before opening per-artifact txns
-	if rowsErr := rows.Err(); rowsErr != nil {
-		j.logger.WithError(rowsErr).Warn("Failed to iterate expired artifacts")
+	for _, row := range rows {
+		candidates = append(candidates, expiredRow{
+			hash: row.ArtifactHash, artifactType: row.ArtifactType,
+			internalName: row.StreamInternalName,
+			tenantID:     sql.NullString{String: row.TenantID, Valid: row.TenantID != ""},
+			userID:       sql.NullString{String: row.UserID, Valid: row.UserID != ""},
+			sizeBytes:    row.SizeBytes, retentionUntil: row.RetentionUntil,
+			startedAt: row.StartedAt, endedAt: row.EndedAt, manifestPath: row.ManifestPath,
+		})
 	}
 
 	affected := 0
@@ -221,20 +198,9 @@ func (j *RetentionJob) expireArtifactTx(
 
 	// Guarded soft-delete that RE-EVALUATES the full expiry predicate (not just terminal status),
 	// so a concurrent retention change since candidate selection actually prevents deletion.
-	var deletedTenant sql.NullString
-	scanErr := tx.QueryRowContext(ctx, `
-		UPDATE foghorn.artifacts SET status = 'deleted', updated_at = NOW()
-		 WHERE artifact_hash = $1
-		   AND status IN ('completed', 'completed_partial', 'ready', 'failed')
-		   AND (
-				(retention_until IS NOT NULL AND retention_until < NOW())
-				OR (artifact_type <> 'dvr'
-				    AND COALESCE(origin_type, '') <> 'dvr_chapter'
-				    AND retention_until IS NULL
-				    AND created_at < NOW() - make_interval(days => $2))
-		   )
-		RETURNING tenant_id::text
-	`, hash, j.retentionDays).Scan(&deletedTenant)
+	deletedTenantID, scanErr := foghorndb.New(tx).ExpireArtifactIfStillEligible(ctx, foghorndb.ExpireArtifactIfStillEligibleParams{
+		ArtifactHash: hash, RetentionDays: int32(j.retentionDays),
+	})
 	if errors.Is(scanErr, sql.ErrNoRows) {
 		return false // no longer eligible (retention extended/cleared, or already deleted)
 	}
@@ -248,9 +214,7 @@ func (j *RetentionJob) expireArtifactTx(
 	// now-deleted parent isn't re-dispatched forever.
 	if artifactType == "dvr" {
 		tenant := ""
-		if deletedTenant.Valid {
-			tenant = deletedTenant.String
-		}
+		tenant = deletedTenantID
 		if _, cErr := control.CascadeDVRChildrenTx(ctx, tx, hash, tenant); cErr != nil {
 			j.logger.WithError(cErr).WithField("dvr_hash", hash).Warn("Retention: cascade child chapters failed; rolling back")
 			return false

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/artifactoutbox"
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -121,21 +122,9 @@ func FinalizeDVR(ctx context.Context, dvrHash string, opts FinalizeOptions) (Fin
 	// Atomic claim of the active/stopping->finalizing transition. A stale
 	// finalizing row is also reclaimable: a previous finalizer may have crashed
 	// or failed after the claim but before writing the terminal status.
-	var prevStatus string
-	var claimTenant string
-	err := db.QueryRowContext(ctx, `
-		UPDATE foghorn.artifacts
-		   SET status = 'finalizing',
-		       updated_at = NOW(),
-		       ended_at = COALESCE(ended_at, NOW())
-		 WHERE artifact_hash = $1
-		   AND artifact_type = 'dvr'
-		   AND (
-		        status IN ('requested', 'starting', 'recording', 'stopping')
-		        OR (status = 'finalizing' AND updated_at < NOW() - ($2::double precision * INTERVAL '1 second'))
-		   )
-	 RETURNING status, tenant_id::text
-	`, dvrHash, staleDVRFinalizingAfter.Seconds()).Scan(&prevStatus, &claimTenant)
+	claimed, err := foghorndb.New(db).ClaimDVRFinalization(ctx, foghorndb.ClaimDVRFinalizationParams{
+		ArtifactHash: dvrHash, StaleSeconds: staleDVRFinalizingAfter.Seconds(),
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		// Already terminal or in flight. Read current status and return NoOp.
 		current, readErr := readArtifactStatus(ctx, dvrHash)
@@ -163,6 +152,7 @@ func FinalizeDVR(ctx context.Context, dvrHash string, opts FinalizeOptions) (Fin
 	if err != nil {
 		return FinalizeResult{}, fmt.Errorf("claim finalizing: %w", err)
 	}
+	claimTenant := claimed.TenantID
 
 	// Bounded retry of in-flight uploads via the sidecar control stream.
 	// requestRetryDVRSegmentUploads is best-effort; segments that don't
@@ -276,32 +266,17 @@ func FinalizeDVR(ctx context.Context, dvrHash string, opts FinalizeOptions) (Fin
 	// retry/classify work above ran outside a lock, so a concurrent DELETE could have moved it to
 	// 'deleted'. Only transition a row STILL 'finalizing' (RowsAffected==0 => we lost the race, e.g. the
 	// artifact was deleted) — never resurrect a terminal row with a stale 'completed'.
-	finRes, finErr := finTx.ExecContext(ctx, `
-		UPDATE foghorn.artifacts
-		   SET status            = $2,
-		       size_bytes        = COALESCE(NULLIF($3, 0)::bigint, size_bytes),
-		       duration_seconds  = COALESCE(NULLIF($4, 0)::int, duration_seconds),
-		       retention_until   = $5,
-		       updated_at        = NOW(),
-		       ended_at          = COALESCE(ended_at, $6),
-		       dvr_start_dispatch = CASE
-		           WHEN $8 THEN dvr_start_dispatch
-		           WHEN COALESCE(dvr_start_dispatch->>'node_id', '') <> ''
-		               THEN jsonb_build_object('node_id', dvr_start_dispatch->>'node_id')
-		           ELSE NULL
-		       END
-		 WHERE artifact_hash = $1
-		   AND artifact_type = 'dvr'
-		   AND status = 'finalizing'
-		   AND tenant_id::text = $7
-	`, dvrHash, finalStatus, int64(opts.SizeBytes), opts.DurationSeconds, retentionUntilArg, endedAt, claimTenant, opts.RetainStopObligation)
+	qfin := foghorndb.New(finTx)
+	n, finErr := qfin.CompleteDVRFinalization(ctx, foghorndb.CompleteDVRFinalizationParams{
+		FinalStatus: finalStatus, SizeBytes: int64(opts.SizeBytes), DurationSeconds: opts.DurationSeconds,
+		RetentionUntil: retentionNullTime(retentionUntilArg), EndedAt: sql.NullTime{Time: endedAt, Valid: true},
+		RetainStopObligation: opts.RetainStopObligation, ArtifactHash: dvrHash, TenantID: claimTenant,
+	})
 	if finErr != nil {
 		logger.WithError(finErr).Error("Failed to write final artifact status")
 		return FinalizeResult{ArtifactStatus: finalStatus, UploadedCount: uploadedCount, LostCount: lostCount}, fmt.Errorf("write final artifact status: %w", finErr)
 	}
-	if n, raErr := finRes.RowsAffected(); raErr != nil {
-		return FinalizeResult{ArtifactStatus: finalStatus, UploadedCount: uploadedCount, LostCount: lostCount}, fmt.Errorf("final artifact status rows affected: %w", raErr)
-	} else if n == 0 {
+	if n == 0 {
 		// The row is no longer 'finalizing' (concurrently deleted or re-claimed). Do NOT commit a terminal
 		// state or enqueue a STOPPED event over it — leave the tx to roll back.
 		current, curErr := readArtifactStatus(ctx, dvrHash)
@@ -320,12 +295,8 @@ func FinalizeDVR(ctx context.Context, dvrHash string, opts FinalizeOptions) (Fin
 	// state and its analytics event commit atomically (no crash-lossy, Decklog-gated goroutine). Context
 	// (tenant/stream/user/retention/started) is read from the just-updated row under the same tx.
 	{
-		var rowTenant, rowUser, rowStreamID, rowInternal sql.NullString
-		var rowRetention, rowStarted sql.NullTime
-		if scanErr := finTx.QueryRowContext(ctx, `
-			SELECT tenant_id::text, user_id::text, stream_id::text, stream_internal_name, retention_until, started_at
-			FROM foghorn.artifacts WHERE artifact_hash = $1 AND artifact_type = 'dvr'
-		`, dvrHash).Scan(&rowTenant, &rowUser, &rowStreamID, &rowInternal, &rowRetention, &rowStarted); scanErr != nil {
+		row, scanErr := qfin.GetDVRLifecycleContext(ctx, dvrHash)
+		if scanErr != nil {
 			logger.WithError(scanErr).WithField("dvr_hash", dvrHash).Error("Failed to read DVR context for terminal lifecycle event")
 			return FinalizeResult{ArtifactStatus: finalStatus, UploadedCount: uploadedCount, LostCount: lostCount}, fmt.Errorf("read dvr lifecycle context: %w", scanErr)
 		}
@@ -333,17 +304,19 @@ func FinalizeDVR(ctx context.Context, dvrHash string, opts FinalizeOptions) (Fin
 		if opts.StorageNodeID != "" {
 			dvrData.NodeId = &opts.StorageNodeID
 		}
-		if rowTenant.String != "" {
-			dvrData.TenantId = &rowTenant.String
+		rowTenant, rowUser, rowStreamID, rowInternal := row.TenantID, row.UserID, row.StreamID, row.StreamInternalName
+		rowRetention, rowStarted := row.RetentionUntil, row.StartedAt
+		if rowTenant != "" {
+			dvrData.TenantId = &rowTenant
 		}
-		if rowStreamID.String != "" {
-			dvrData.StreamId = &rowStreamID.String
+		if rowStreamID != "" {
+			dvrData.StreamId = &rowStreamID
 		}
 		if rowInternal.String != "" {
 			dvrData.StreamInternalName = &rowInternal.String
 		}
-		if rowUser.String != "" {
-			dvrData.UserId = &rowUser.String
+		if rowUser != "" {
+			dvrData.UserId = &rowUser
 		}
 		if opts.SizeBytes > 0 {
 			sb := opts.SizeBytes
@@ -400,18 +373,11 @@ func classifyFinalCounts(ctx context.Context, dvrHash string) (int, int, error) 
 	if db == nil {
 		return 0, 0, sql.ErrConnDone
 	}
-	var uploaded, lost int
-	err := db.QueryRowContext(ctx, `
-		SELECT
-			COUNT(*) FILTER (WHERE status IN ('uploaded', 'deleted_local')),
-			COUNT(*) FILTER (WHERE status = 'lost_local')
-		  FROM foghorn.dvr_segments
-		 WHERE artifact_hash = $1
-	`, dvrHash).Scan(&uploaded, &lost)
+	row, err := foghorndb.New(db).CountDVRFinalSegments(ctx, dvrHash)
 	if err != nil {
 		return 0, 0, err
 	}
-	return uploaded, lost, nil
+	return int(row.UploadedCount), int(row.LostCount), nil
 }
 
 // readPersistedRetentionDays reads the snapshot taken at DVR start.
@@ -420,12 +386,8 @@ func readPersistedRetentionDays(ctx context.Context, dvrHash string) int {
 	if db == nil {
 		return 0
 	}
-	var days sql.NullInt32
-	if err := db.QueryRowContext(ctx, `
-		SELECT dvr_retention_days
-		  FROM foghorn.artifacts
-		 WHERE artifact_hash = $1 AND artifact_type = 'dvr'
-	`, dvrHash).Scan(&days); err != nil {
+	days, err := foghorndb.New(db).GetDVRRetentionDays(ctx, dvrHash)
+	if err != nil {
 		return 0
 	}
 	if !days.Valid {
@@ -504,59 +466,42 @@ func setArtifactFailed(ctx context.Context, dvrHash, reason string, retentionUnt
 	// Guard on status='finalizing' + tenant so a concurrent DELETE during finalization is not resurrected
 	// as 'failed'. RowsAffected==0 => the row is no longer finalizing (deleted/re-claimed): skip the
 	// terminal write AND the FAILED event.
-	failRes, execErr := tx.ExecContext(ctx, `
-		UPDATE foghorn.artifacts
-		   SET status = 'failed',
-		       error_message = $2,
-		       retention_until = $3,
-		       updated_at = NOW(),
-		       ended_at = COALESCE(ended_at, $4),
-		       dvr_start_dispatch = CASE
-		           WHEN $6 THEN dvr_start_dispatch
-		           WHEN COALESCE(dvr_start_dispatch->>'node_id', '') <> ''
-		               THEN jsonb_build_object('node_id', dvr_start_dispatch->>'node_id')
-		           ELSE NULL
-		       END
-		 WHERE artifact_hash = $1
-		   AND artifact_type = 'dvr'
-		   AND status = 'finalizing'
-		   AND tenant_id::text = $5
-	`, dvrHash, reason, retentionUntilArg, endedAt, tenantID, retainStopObligation)
+	qtx := foghorndb.New(tx)
+	n, execErr := qtx.FailDVRFinalization(ctx, foghorndb.FailDVRFinalizationParams{
+		ErrorMessage: reason, RetentionUntil: retentionNullTime(retentionUntilArg), EndedAt: sql.NullTime{Time: endedAt, Valid: true},
+		RetainStopObligation: retainStopObligation, ArtifactHash: dvrHash, TenantID: tenantID,
+	})
 	if execErr != nil {
 		return false, fmt.Errorf("write failed artifact status: %w", execErr)
 	}
-	if n, raErr := failRes.RowsAffected(); raErr != nil {
-		return false, fmt.Errorf("failed artifact status rows affected: %w", raErr)
-	} else if n == 0 {
+	if n == 0 {
 		return false, nil // lost the race (deleted/re-claimed) — nothing to fail, no event
 	}
 
 	// Read tenant/stream context from the just-updated row under the same tx (mirrors the
 	// STOPPED path). Missing context degrades to unset optional fields rather than failing.
-	var rowTenant, rowUser, rowStreamID, rowInternal sql.NullString
-	var rowRetention, rowStarted sql.NullTime
-	if scanErr := tx.QueryRowContext(ctx, `
-		SELECT tenant_id::text, user_id::text, stream_id::text, stream_internal_name, retention_until, started_at
-		FROM foghorn.artifacts WHERE artifact_hash = $1 AND artifact_type = 'dvr'
-	`, dvrHash).Scan(&rowTenant, &rowUser, &rowStreamID, &rowInternal, &rowRetention, &rowStarted); scanErr != nil {
+	row, scanErr := qtx.GetDVRLifecycleContext(ctx, dvrHash)
+	if scanErr != nil {
 		return false, fmt.Errorf("read dvr failed lifecycle context: %w", scanErr)
 	}
+	rowTenant, rowUser, rowStreamID, rowInternal := row.TenantID, row.UserID, row.StreamID, row.StreamInternalName
+	rowRetention, rowStarted := row.RetentionUntil, row.StartedAt
 	dvrData := &ipcpb.DVRLifecycleData{
 		Status:  ipcpb.DVRLifecycleData_STATUS_FAILED,
 		DvrHash: dvrHash,
 		Error:   &reason,
 	}
-	if rowTenant.String != "" {
-		dvrData.TenantId = &rowTenant.String
+	if rowTenant != "" {
+		dvrData.TenantId = &rowTenant
 	}
-	if rowStreamID.String != "" {
-		dvrData.StreamId = &rowStreamID.String
+	if rowStreamID != "" {
+		dvrData.StreamId = &rowStreamID
 	}
 	if rowInternal.String != "" {
 		dvrData.StreamInternalName = &rowInternal.String
 	}
-	if rowUser.String != "" {
-		dvrData.UserId = &rowUser.String
+	if rowUser != "" {
+		dvrData.UserId = &rowUser
 	}
 	if rowRetention.Valid {
 		exp := rowRetention.Time.Unix()
@@ -611,12 +556,8 @@ func backfillExistingDVRRetention(ctx context.Context, dvrHash string, logger lo
 	if db == nil {
 		return sql.ErrConnDone
 	}
-	var retentionUntil sql.NullTime
-	if err := db.QueryRowContext(ctx, `
-		SELECT retention_until
-		  FROM foghorn.artifacts
-		 WHERE artifact_hash = $1 AND artifact_type = 'dvr'
-	`, dvrHash).Scan(&retentionUntil); err != nil {
+	retentionUntil, err := foghorndb.New(db).GetDVRRetentionUntil(ctx, dvrHash)
+	if err != nil {
 		return err
 	}
 	if !retentionUntil.Valid {
@@ -639,21 +580,7 @@ func clearDVRStopObligation(ctx context.Context, dvrHash, tenantID string) error
 	if db == nil {
 		return sql.ErrConnDone
 	}
-	_, err := db.ExecContext(ctx, `
-		UPDATE foghorn.artifacts
-		   SET dvr_start_dispatch = CASE
-		           WHEN COALESCE(dvr_start_dispatch->>'node_id', '') <> ''
-		               THEN jsonb_build_object('node_id', dvr_start_dispatch->>'node_id')
-		           ELSE NULL
-		       END,
-		       updated_at = NOW()
-		 WHERE artifact_hash = $1
-		   AND tenant_id::text = $2
-		   AND artifact_type = 'dvr'
-		   AND dvr_start_dispatch ? 'state'
-		   AND status NOT IN ('requested', 'starting', 'recording', 'stopping', 'finalizing')
-	`, dvrHash, tenantID)
-	return err
+	return foghorndb.New(db).ClearDVRStopObligation(ctx, foghorndb.ClearDVRStopObligationParams{ArtifactHash: dvrHash, TenantID: tenantID})
 }
 
 // dvrAuthMode selects how a node-reported DVR op is authorized against the persisted dispatch owner.
@@ -691,12 +618,7 @@ func dvrOwnerTenant(ctx context.Context, dvrHash string) (string, bool, error) {
 	if db == nil {
 		return "", false, sql.ErrConnDone
 	}
-	var tenantID string
-	err := db.QueryRowContext(ctx, `
-		SELECT tenant_id::text
-		FROM foghorn.artifacts
-		WHERE artifact_hash = $1 AND artifact_type = 'dvr'
-	`, dvrHash).Scan(&tenantID)
+	tenantID, err := foghorndb.New(db).GetDVROwnerTenant(ctx, dvrHash)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
 	}
@@ -729,12 +651,7 @@ func dvrReportNodeAuthorized(ctx context.Context, dvrHash, tenantID, reportingNo
 	if db == nil {
 		return false, sql.ErrConnDone
 	}
-	var status, dispatchNode string
-	err := db.QueryRowContext(ctx, `
-		SELECT status, COALESCE(dvr_start_dispatch->>'node_id', '')
-		FROM foghorn.artifacts
-		WHERE artifact_hash = $1 AND artifact_type = 'dvr' AND tenant_id = $2
-	`, dvrHash, tenantID).Scan(&status, &dispatchNode)
+	row, err := foghorndb.New(db).GetDVRReportAuthorization(ctx, foghorndb.GetDVRReportAuthorizationParams{ArtifactHash: dvrHash, TenantID: tenantID})
 	if errors.Is(err, sql.ErrNoRows) {
 		// GENUINELY ABSENT row (no DVR at all): the ONLY place strict and idempotent-stop differ — a
 		// duplicate stop against nothing is a safe no-op, a strict op has nothing to authorize and fails
@@ -744,6 +661,7 @@ func dvrReportNodeAuthorized(ctx context.Context, dvrHash, tenantID, reportingNo
 	if err != nil {
 		return false, err
 	}
+	status, dispatchNode := row.Status.String, row.DispatchNode
 	active := status == "requested" || status == "starting" || status == "recording" ||
 		status == "stopping" || status == "finalizing"
 	if dispatchNode == "" {
@@ -788,14 +706,9 @@ func backfillDVRDispatchOwner(ctx context.Context, dvrHash, tenantID string) (st
 		return "", err
 	}
 	defer tx.Rollback() //nolint:errcheck // best-effort on the non-commit paths
+	qtx := foghorndb.New(tx)
 
-	var currentOwner string
-	err = tx.QueryRowContext(ctx, `
-		SELECT COALESCE(dvr_start_dispatch->>'node_id', '')
-		  FROM foghorn.artifacts
-		 WHERE artifact_hash = $1 AND artifact_type = 'dvr' AND tenant_id = $2
-		 FOR UPDATE
-	`, dvrHash, tenantID).Scan(&currentOwner)
+	currentOwner, err := qtx.LockDVRDispatchOwner(ctx, foghorndb.LockDVRDispatchOwnerParams{ArtifactHash: dvrHash, TenantID: tenantID})
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
@@ -811,16 +724,7 @@ func backfillDVRDispatchOwner(ctx context.Context, dvrHash, tenantID string) (st
 	// the candidate is bound to the owning tenant through an EXISTS on the parent foghorn.artifacts row;
 	// a hash belonging to another tenant matches no candidate. COUNT(*)=1 collapses zero-or-many to the
 	// empty string so an ambiguous origin fails closed rather than binding an arbitrary node.
-	var origin string
-	err = tx.QueryRowContext(ctx, `
-		SELECT CASE WHEN COUNT(*) = 1 THEN MAX(node_id) ELSE '' END
-		  FROM foghorn.artifact_nodes
-		 WHERE artifact_hash = $1 AND role = 'origin' AND is_orphaned = false AND node_id <> ''
-		   AND EXISTS (
-		        SELECT 1 FROM foghorn.artifacts a
-		         WHERE a.artifact_hash = artifact_nodes.artifact_hash AND a.tenant_id = $2
-		   )
-	`, dvrHash, tenantID).Scan(&origin)
+	origin, err := qtx.GetUniqueDVRRecordingOrigin(ctx, foghorndb.GetUniqueDVRRecordingOriginParams{ArtifactHash: dvrHash, TenantID: tenantID})
 	if err != nil {
 		return "", err
 	}
@@ -829,19 +733,7 @@ func backfillDVRDispatchOwner(ctx context.Context, dvrHash, tenantID string) (st
 	}
 
 	// Compare-and-set the still-empty owner (tenant-scoped).
-	res, err := tx.ExecContext(ctx, `
-		UPDATE foghorn.artifacts
-		   SET dvr_start_dispatch = jsonb_set(COALESCE(dvr_start_dispatch, '{}'::jsonb), '{node_id}', to_jsonb($3::text), true),
-		       updated_at = NOW()
-		 WHERE artifact_hash = $1
-		   AND artifact_type = 'dvr'
-		   AND tenant_id = $2
-		   AND COALESCE(dvr_start_dispatch->>'node_id', '') = ''
-	`, dvrHash, tenantID, origin)
-	if err != nil {
-		return "", err
-	}
-	affected, err := res.RowsAffected()
+	affected, err := qtx.BindDVRDispatchOwner(ctx, foghorndb.BindDVRDispatchOwnerParams{ArtifactHash: dvrHash, TenantID: tenantID, DispatchNode: origin})
 	if err != nil {
 		return "", err
 	}
@@ -851,12 +743,7 @@ func backfillDVRDispatchOwner(ctx context.Context, dvrHash, tenantID string) (st
 	}
 	// The CAS matched no row: another caller bound the owner between our read and write. Authorize
 	// against the persisted winner, not our candidate.
-	var persisted string
-	err = tx.QueryRowContext(ctx, `
-		SELECT COALESCE(dvr_start_dispatch->>'node_id', '')
-		  FROM foghorn.artifacts
-		 WHERE artifact_hash = $1 AND artifact_type = 'dvr' AND tenant_id = $2
-	`, dvrHash, tenantID).Scan(&persisted)
+	persisted, err := qtx.GetDVRDispatchOwner(ctx, foghorndb.GetDVRDispatchOwnerParams{ArtifactHash: dvrHash, TenantID: tenantID})
 	if err != nil {
 		return "", err
 	}
@@ -870,14 +757,11 @@ func readArtifactStatus(ctx context.Context, dvrHash string) (string, error) {
 	if db == nil {
 		return "", sql.ErrConnDone
 	}
-	var s string
-	err := db.QueryRowContext(ctx, `
-		SELECT status FROM foghorn.artifacts WHERE artifact_hash = $1 AND artifact_type = 'dvr'
-	`, dvrHash).Scan(&s)
+	s, err := foghorndb.New(db).GetDVRArtifactStatus(ctx, dvrHash)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", fmt.Errorf("dvr %s not found", dvrHash)
 	}
-	return s, err
+	return s.String, err
 }
 
 // readArtifactTenant fetches the tenant_id for a finalized DVR artifact.
@@ -888,12 +772,14 @@ func readArtifactTenant(ctx context.Context, dvrHash string) string {
 	if db == nil {
 		return ""
 	}
-	var t string
-	if err := db.QueryRowContext(ctx,
-		`SELECT COALESCE(tenant_id::text, '') FROM foghorn.artifacts WHERE artifact_hash = $1`,
-		dvrHash,
-	).Scan(&t); err != nil {
+	t, err := foghorndb.New(db).GetArtifactTenantText(ctx, dvrHash)
+	if err != nil {
 		return ""
 	}
 	return t
+}
+
+func retentionNullTime(value interface{}) sql.NullTime {
+	retention, ok := value.(time.Time)
+	return sql.NullTime{Time: retention, Valid: ok}
 }

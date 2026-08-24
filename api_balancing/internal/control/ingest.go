@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"frameworks/api_balancing/internal/balancer"
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"frameworks/api_balancing/internal/state"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
@@ -494,26 +495,17 @@ func activeIngestSessionClaims(ctx context.Context) (map[string]LocallyPublished
 	if db == nil {
 		return nil, fmt.Errorf("active ingest session claims require the durable session store")
 	}
-	rows, err := db.QueryContext(ctx, `
-		SELECT tenant_id::text, stream_internal_name, node_id, COALESCE(ingest_cluster_id, ''), start_trigger_uuid, id::text
-		FROM foghorn.ingest_sessions
-		WHERE ended_at IS NULL
-	`)
+	rows, err := foghorndb.New(db).ListActiveIngestSessionClaims(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
 	claims := make(map[string]LocallyPublishedStream)
-	for rows.Next() {
-		var claim LocallyPublishedStream
-		var generation string
-		if err := rows.Scan(&claim.TenantID, &claim.InternalName, &claim.OwnerNodeID, &claim.ClusterID, &claim.ClaimToken, &generation); err != nil {
-			return nil, err
-		}
-		claims[sessionClaimKey(claim.TenantID, claim.InternalName, claim.OwnerNodeID, claim.ClaimToken, generation)] = claim
+	for _, row := range rows {
+		claim := LocallyPublishedStream{TenantID: row.TenantID, InternalName: row.StreamInternalName,
+			OwnerNodeID: row.NodeID, ClusterID: row.IngestClusterID, ClaimToken: row.StartTriggerUuid}
+		claims[sessionClaimKey(claim.TenantID, claim.InternalName, claim.OwnerNodeID, claim.ClaimToken, row.Generation)] = claim
 	}
-	return claims, rows.Err()
+	return claims, nil
 }
 
 // LocallyPublishedStreams lists the streams currently being published to nodes

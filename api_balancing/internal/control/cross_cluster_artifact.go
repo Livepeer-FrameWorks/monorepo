@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"frameworks/api_balancing/internal/database/foghorndb"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 )
@@ -39,19 +40,13 @@ func adoptRemoteArtifactRow(ctx context.Context, db *sql.DB, hash, contentType, 
 	if synced {
 		syncStatus = "synced"
 	}
-	storageCluster := sql.NullString{String: storageClusterID, Valid: storageClusterID != ""}
-	if _, err := db.ExecContext(ctx, `
-		INSERT INTO foghorn.artifacts (artifact_hash, artifact_type, tenant_id, internal_name, stream_internal_name, format, status, storage_location, sync_status, origin_cluster_id, storage_cluster_id)
-		VALUES ($1, $2, $3, $4, $5, $6, 'active', 's3', $7, $8, $9)
-		ON CONFLICT (artifact_hash) DO UPDATE
-		SET storage_location = 's3',
-		    sync_status = CASE WHEN EXCLUDED.sync_status = 'synced' THEN 'synced' ELSE foghorn.artifacts.sync_status END,
-		    internal_name = CASE WHEN COALESCE(foghorn.artifacts.internal_name, '') = '' AND EXCLUDED.internal_name <> '' THEN EXCLUDED.internal_name ELSE foghorn.artifacts.internal_name END,
-		    stream_internal_name = CASE WHEN COALESCE(foghorn.artifacts.stream_internal_name, '') = '' AND EXCLUDED.stream_internal_name <> '' THEN EXCLUDED.stream_internal_name ELSE foghorn.artifacts.stream_internal_name END,
-		    format = CASE WHEN COALESCE(foghorn.artifacts.format, '') = '' AND EXCLUDED.format <> '' THEN EXCLUDED.format ELSE foghorn.artifacts.format END,
-		    origin_cluster_id = CASE WHEN COALESCE(foghorn.artifacts.origin_cluster_id, '') = '' THEN EXCLUDED.origin_cluster_id ELSE foghorn.artifacts.origin_cluster_id END,
-		    storage_cluster_id = CASE WHEN COALESCE(foghorn.artifacts.storage_cluster_id, '') = '' AND EXCLUDED.storage_cluster_id IS NOT NULL THEN EXCLUDED.storage_cluster_id ELSE foghorn.artifacts.storage_cluster_id END
-	`, hash, contentType, tenantID, internalName, streamInternalName, format, syncStatus, originClusterID, storageCluster); err != nil {
+	if err := foghorndb.New(db).AdoptRemoteArtifact(ctx, foghorndb.AdoptRemoteArtifactParams{
+		ArtifactHash: hash, ArtifactType: contentType, TenantID: tenantID,
+		InternalName: internalName, StreamInternalName: streamInternalName,
+		Format: format, SyncStatus: syncStatus,
+		OriginClusterID:  originClusterID,
+		StorageClusterID: sql.NullString{String: storageClusterID, Valid: storageClusterID != ""},
+	}); err != nil {
 		controlLogger().WithError(err).WithField("artifact_hash", hash).WithField("origin_cluster_id", originClusterID).Warn("adoptRemoteArtifactRow: upsert failed; failing resolution closed (no row → byte GET would 404)")
 		return fmt.Errorf("adoptRemoteArtifactRow upsert: %w", err)
 	}

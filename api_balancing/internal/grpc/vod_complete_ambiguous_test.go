@@ -51,8 +51,8 @@ func TestCompleteVodUpload_AmbiguousErrorWithObjectConvergesToProcessing(t *test
 	expectVodCompletionContractLoad(mock, "hash-1", `{"s3_key":"vod/t1/hash-1/video.mp4","upload_id":"up-1","parts":[{"part_number":1,"etag":"et-1"}]}`)
 	// Ambiguous S3 error + Exists=true -> skip re-completion, run 'completing' -> 'processing' + job + event.
 	mock.ExpectBegin()
-	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'processing'`).
-		WithArgs("hash-1", "s3://bucket/vod/t1/hash-1/video.mp4", "t1", "up-1").
+	mock.ExpectExec(`UPDATE foghorn\.artifacts AS a\s+SET status = 'processing'`).
+		WithArgs("s3://bucket/vod/t1/hash-1/video.mp4", "hash-1", "t1", "up-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).
 		WithArgs("hash-1", "process").WillReturnResult(sqlmock.NewResult(0, 0))

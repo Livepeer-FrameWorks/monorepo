@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/database/foghorndb"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -192,11 +193,8 @@ func (s *FoghornGRPCServer) assertChapterTenant(ctx context.Context, artifactHas
 	if claimedTenantID == "" {
 		return nil
 	}
-	var tenantID string
-	if err := s.db.QueryRowContext(ctx,
-		`SELECT tenant_id::text FROM foghorn.artifacts WHERE artifact_hash = $1 AND artifact_type = 'dvr'`,
-		artifactHash,
-	).Scan(&tenantID); err != nil {
+	tenantID, err := foghorndb.New(s.db).GetDVRArtifactTenantID(ctx, artifactHash)
+	if err != nil {
 		return status.Error(codes.NotFound, "DVR artifact not found")
 	}
 	if tenantID != claimedTenantID {

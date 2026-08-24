@@ -315,7 +315,7 @@ func TestReconcileTarget_FreshNodeDrivesDirectUpdateOrch(t *testing.T) {
 	mock.ExpectQuery(loadProgressQ).
 		WithArgs("edge-1").
 		WillReturnRows(sqlmock.NewRows(loadProgressColumns()).
-			AddRow("", "idle", nil, nil, "{}"))
+			AddRow("", "idle", nil, time.Now(), "{}"))
 	// rolloutBudget: activeUpdateCount queries node_update_state.phase -> idle.
 	mock.ExpectQuery(phaseQ).
 		WithArgs("edge-1").
@@ -324,7 +324,7 @@ func TestReconcileTarget_FreshNodeDrivesDirectUpdateOrch(t *testing.T) {
 	mock.ExpectQuery(loadProgressQ).
 		WithArgs("edge-1").
 		WillReturnRows(sqlmock.NewRows(loadProgressColumns()).
-			AddRow("", "idle", nil, nil, "{}"))
+			AddRow("", "idle", nil, time.Now(), "{}"))
 	// currentNodeComponents: node has no helmsman version yet.
 	mock.ExpectQuery(`FROM foghorn\.node_components`).
 		WithArgs("edge-1").
@@ -333,7 +333,7 @@ func TestReconcileTarget_FreshNodeDrivesDirectUpdateOrch(t *testing.T) {
 	mock.ExpectQuery(loadProgressQ).
 		WithArgs("edge-1").
 		WillReturnRows(sqlmock.NewRows(loadProgressColumns()).
-			AddRow("", "idle", nil, nil, "{}"))
+			AddRow("", "idle", nil, time.Now(), "{}"))
 	// persistPhase("updating", ...) then persistFailure("failed", ...) once the
 	// control push fails. Both write node_update_state.
 	mock.ExpectExec(`INSERT INTO foghorn\.node_update_state`).

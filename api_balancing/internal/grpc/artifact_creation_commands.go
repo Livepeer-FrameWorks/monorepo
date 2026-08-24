@@ -2,10 +2,10 @@ package grpc
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"time"
 
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
@@ -75,21 +75,6 @@ func retryLedgerWrite(ctx context.Context, write func() error) error {
 	return err
 }
 
-// commandExecer is the subset of *sql.DB / *sql.Tx the terminal ledger writers need,
-// so 'committed' composes into the artifact-insert transaction and 'rejected' can run
-// on either handle.
-type commandExecer interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
-}
-
-// commandQueryExecer adds row-returning reads to commandExecer. The 'accepted' write
-// runs on the pooled *sql.DB (never a tx) because it validates the stored row's
-// identity in a follow-up read after the idempotent insert.
-type commandQueryExecer interface {
-	commandExecer
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}
-
 // recordCreationCommandAccepted marks a create attempt in-flight in the durable
 // command ledger and returns the STORED state of the row that now exists. The insert
 // is idempotent on request_id (a retry of the same attempt is a no-op via ON CONFLICT
@@ -103,35 +88,28 @@ type commandQueryExecer interface {
 // 'rejected' → creationCommandRejected (a terminal retry — do NOT proceed). An empty
 // request_id (direct-Foghorn callers carry no Commodore intent) records nothing and
 // resolves to creationCommandAccepted so the create proceeds.
-func recordCreationCommandAccepted(ctx context.Context, q commandQueryExecer, requestID, tenantID, kind, artifactHash string) (creationCommandState, error) {
+func recordCreationCommandAccepted(ctx context.Context, db foghorndb.DBTX, requestID, tenantID, kind, artifactHash string) (creationCommandState, error) {
 	if requestID == "" {
 		return creationCommandAccepted, nil
 	}
-	if _, err := q.ExecContext(ctx, `
-		INSERT INTO foghorn.artifact_creation_commands
-			(request_id, tenant_id, kind, artifact_hash, status, updated_at)
-		VALUES ($1::uuid, $2::uuid, $3, $4, 'accepted', NOW())
-		ON CONFLICT (request_id) DO NOTHING
-	`, requestID, tenantID, kind, artifactHash); err != nil {
+	queries := foghorndb.New(db)
+	if err := queries.InsertAcceptedArtifactCreationCommand(ctx, foghorndb.InsertAcceptedArtifactCreationCommandParams{
+		RequestID: requestID, TenantID: tenantID, Kind: kind, ArtifactHash: artifactHash,
+	}); err != nil {
 		return creationCommandUnknown, err
 	}
 	// The row is committed by the insert above (autocommit on the pooled handle), so
 	// this read always finds it and reports whether it is ours plus its stored status.
-	var (
-		identityOK   bool
-		storedStatus string
-	)
-	if err := q.QueryRowContext(ctx, `
-		SELECT (tenant_id = $2::uuid AND kind = $3 AND artifact_hash = $4), status
-		  FROM foghorn.artifact_creation_commands
-		 WHERE request_id = $1::uuid
-	`, requestID, tenantID, kind, artifactHash).Scan(&identityOK, &storedStatus); err != nil {
+	row, err := queries.ReadArtifactCreationCommandIdentity(ctx, foghorndb.ReadArtifactCreationCommandIdentityParams{
+		TenantID: tenantID, Kind: kind, ArtifactHash: artifactHash, RequestID: requestID,
+	})
+	if err != nil {
 		return creationCommandUnknown, err
 	}
-	if !identityOK {
+	if !row.IdentityOk {
 		return creationCommandUnknown, errCreationCommandIdentityMismatch
 	}
-	switch storedStatus {
+	switch row.Status {
 	case "committed":
 		return creationCommandCommitted, nil
 	case "rejected":
@@ -152,26 +130,13 @@ func recordCreationCommandAccepted(ctx context.Context, q commandQueryExecer, re
 // already rejected this attempt (or no accept was recorded), so it returns
 // errCreationCommandNotAccepted to roll the tx back — an artifact is never persisted
 // behind a rejected ledger row. A no-op when request_id is empty.
-func recordCreationCommandCommitted(ctx context.Context, exec commandExecer, requestID, tenantID, kind, artifactHash string) error {
+func recordCreationCommandCommitted(ctx context.Context, db foghorndb.DBTX, requestID, tenantID, kind, artifactHash string) error {
 	if requestID == "" {
 		return nil
 	}
-	res, err := exec.ExecContext(ctx, `
-		UPDATE foghorn.artifact_creation_commands
-		   SET status = 'committed',
-		       catalog_revision = COALESCE((
-		           SELECT a.catalog_revision FROM foghorn.artifacts a
-		            WHERE a.artifact_hash = $4 AND a.tenant_id = $2::uuid AND a.artifact_type = $3
-		       ), 0),
-		       updated_at = NOW()
-		 WHERE request_id = $1::uuid AND tenant_id = $2::uuid
-		   AND kind = $3 AND artifact_hash = $4
-		   AND status = 'accepted'
-	`, requestID, tenantID, kind, artifactHash)
-	if err != nil {
-		return err
-	}
-	affected, err := res.RowsAffected()
+	affected, err := foghorndb.New(db).CommitArtifactCreationCommand(ctx, foghorndb.CommitArtifactCreationCommandParams{
+		ArtifactHash: artifactHash, TenantID: tenantID, Kind: kind, RequestID: requestID,
+	})
 	if err != nil {
 		return err
 	}
@@ -191,21 +156,13 @@ func recordCreationCommandCommitted(ctx context.Context, exec commandExecer, req
 // racing commit or a prior rejection — or is not ours), which the caller treats as an
 // already-converged no-op rather than a failure. A no-op (applied false, nil error)
 // when request_id is empty.
-func recordCreationCommandRejected(ctx context.Context, exec commandExecer, requestID, tenantID, kind, artifactHash string) (applied bool, err error) {
+func recordCreationCommandRejected(ctx context.Context, db foghorndb.DBTX, requestID, tenantID, kind, artifactHash string) (applied bool, err error) {
 	if requestID == "" {
 		return false, nil
 	}
-	res, err := exec.ExecContext(ctx, `
-		UPDATE foghorn.artifact_creation_commands
-		   SET status = 'rejected', updated_at = NOW()
-		 WHERE request_id = $1::uuid AND tenant_id = $2::uuid
-		   AND kind = $3 AND artifact_hash = $4
-		   AND status = 'accepted'
-	`, requestID, tenantID, kind, artifactHash)
-	if err != nil {
-		return false, err
-	}
-	affected, err := res.RowsAffected()
+	affected, err := foghorndb.New(db).RejectArtifactCreationCommand(ctx, foghorndb.RejectArtifactCreationCommandParams{
+		RequestID: requestID, TenantID: tenantID, Kind: kind, ArtifactHash: artifactHash,
+	})
 	if err != nil {
 		return false, err
 	}

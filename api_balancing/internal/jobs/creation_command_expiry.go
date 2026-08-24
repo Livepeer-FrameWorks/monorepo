@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
@@ -170,38 +171,11 @@ func (j *CreationCommandExpiryJob) expire(ctx context.Context) {
 	secs := deadlineSeconds(j.deadline)
 	total := int64(0)
 	for pass := 0; pass < creationCommandMaxPassesPerSweep; pass++ {
-		result, err := j.db.ExecContext(ctx, `
-			WITH stranded AS (
-			    SELECT c.request_id
-			      FROM foghorn.artifact_creation_commands c
-			     WHERE c.status = 'accepted'
-			       AND c.updated_at < NOW() - ($1 * INTERVAL '1 second')
-			       AND NOT EXISTS (
-			           SELECT 1 FROM foghorn.artifacts a
-			            WHERE a.artifact_hash = c.artifact_hash
-			              AND a.tenant_id = c.tenant_id
-			              AND a.artifact_type = c.kind
-			       )
-			     ORDER BY c.updated_at
-			     LIMIT $2
-			     FOR UPDATE SKIP LOCKED
-			)
-			UPDATE foghorn.artifact_creation_commands c
-			   SET status = 'rejected', updated_at = NOW()
-			  FROM stranded s
-			 WHERE c.request_id = s.request_id
-			   AND c.status = 'accepted'
-		`, secs, j.expiryBatch)
+		rows, err := foghorndb.New(j.db).ExpireStrandedCreationCommands(ctx, foghorndb.ExpireStrandedCreationCommandsParams{
+			DeadlineSeconds: secs, BatchLimit: int32(j.expiryBatch),
+		})
 		if err != nil {
 			j.logger.WithError(err).Warn("Failed to expire stranded accepted creation commands")
-			return
-		}
-		if result == nil {
-			return
-		}
-		rows, err := result.RowsAffected()
-		if err != nil {
-			j.logger.WithError(err).Warn("Failed to read creation command expiry count")
 			return
 		}
 		total += rows
@@ -229,31 +203,11 @@ func (j *CreationCommandExpiryJob) enforceRetention(ctx context.Context) {
 	secs := deadlineSeconds(j.retentionHorizon)
 	total := int64(0)
 	for pass := 0; pass < creationCommandMaxPassesPerSweep; pass++ {
-		result, err := j.db.ExecContext(ctx, `
-			WITH old_terminal AS (
-			    SELECT c.request_id
-			      FROM foghorn.artifact_creation_commands c
-			     WHERE c.status IN ('committed', 'rejected')
-			       AND c.consumed_at IS NOT NULL
-			       AND c.consumed_at < NOW() - ($1 * INTERVAL '1 second')
-			     ORDER BY c.consumed_at
-			     LIMIT $2
-			     FOR UPDATE SKIP LOCKED
-			)
-			DELETE FROM foghorn.artifact_creation_commands c
-			 USING old_terminal o
-			 WHERE c.request_id = o.request_id
-		`, secs, j.retentionBatch)
+		rows, err := foghorndb.New(j.db).DeleteConsumedCreationCommands(ctx, foghorndb.DeleteConsumedCreationCommandsParams{
+			RetentionSeconds: secs, BatchLimit: int32(j.retentionBatch),
+		})
 		if err != nil {
 			j.logger.WithError(err).Warn("Failed to delete retained terminal creation commands")
-			return
-		}
-		if result == nil {
-			return
-		}
-		rows, err := result.RowsAffected()
-		if err != nil {
-			j.logger.WithError(err).Warn("Failed to read creation command retention count")
 			return
 		}
 		total += rows
@@ -273,14 +227,8 @@ func (j *CreationCommandExpiryJob) enforceRetention(ctx context.Context) {
 // is not converging.
 func (j *CreationCommandExpiryJob) warnUnconsumedBacklog(ctx context.Context) {
 	secs := deadlineSeconds(j.retentionHorizon)
-	var count int64
-	if err := j.db.QueryRowContext(ctx, `
-		SELECT COUNT(*)
-		  FROM foghorn.artifact_creation_commands
-		 WHERE status IN ('committed', 'rejected')
-		   AND consumed_at IS NULL
-		   AND updated_at < NOW() - ($1 * INTERVAL '1 second')
-	`, secs).Scan(&count); err != nil {
+	count, err := foghorndb.New(j.db).CountStaleUnconsumedCreationCommands(ctx, secs)
+	if err != nil {
 		j.logger.WithError(err).Warn("Failed to count unconsumed terminal creation commands")
 		return
 	}

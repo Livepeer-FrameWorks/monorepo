@@ -68,7 +68,7 @@ func TestListSegmentsAwaitingLocalDelete(t *testing.T) {
 	mockDB, mock, _ := sqlmock.New()
 	defer mockDB.Close()
 	mock.ExpectQuery(`WITH overlapping`).
-		WithArgs("dvr-hash", int64(1000), int64(2000), statusSetArg{want: []string{"uploaded", "pending", "failed_upload"}}).
+		WithArgs("dvr-hash", int64(2000), int64(1000), statusSetArg{want: []string{"uploaded", "pending", "failed_upload"}}).
 		WillReturnRows(sqlmock.NewRows([]string{"segment_name", "s3_key"}).AddRow("seg-1.ts", "s3/key"))
 	s := &ChapterReclaimSweep{db: mockDB, logger: logging.NewLogger()}
 	got, err := s.listSegmentsAwaitingLocalDelete(context.Background(), "dvr-hash", 1000, 2000)

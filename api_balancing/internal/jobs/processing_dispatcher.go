@@ -15,6 +15,7 @@ import (
 
 	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
@@ -84,35 +85,6 @@ type processingJob struct {
 	StreamInternal sql.NullString
 	DurableLocal   bool
 }
-
-// updated_at rotates jobs that were claimed but could not be sent, so one
-// unavailable source-pinned clip cannot monopolize the dispatcher batch.
-const processingJobClaimSQL = `
-	WITH claimed AS (
-		UPDATE foghorn.processing_jobs
-		SET status = 'dispatched', updated_at = NOW()
-		WHERE job_id IN (
-			SELECT pj.job_id
-			FROM foghorn.processing_jobs pj
-			LEFT JOIN foghorn.artifacts a ON pj.artifact_hash = a.artifact_hash
-			WHERE pj.status = 'queued'
-			  AND (a.status IS NULL OR a.status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted'))
-			ORDER BY CASE WHEN a.artifact_type = 'clip' THEN 0 ELSE 1 END, pj.updated_at, pj.created_at
-			LIMIT 20
-			FOR UPDATE OF pj SKIP LOCKED
-		)
-		RETURNING job_id, tenant_id, artifact_hash, job_type, input_codec,
-		          output_profiles, retry_count, processes_json, source_url,
-		          source_params::text, preferred_node_id
-	)
-	SELECT c.job_id, c.tenant_id, c.artifact_hash, COALESCE(a.artifact_type,''), c.job_type, c.input_codec,
-	       c.output_profiles, 'dispatched'::text, c.retry_count,
-	       a.s3_url, c.source_url, c.source_params, c.preferred_node_id,
-	       c.processes_json, a.internal_name, a.stream_id::text, a.stream_internal_name,
-	       COALESCE(a.durable_backend_local, false)
-	FROM claimed c
-	LEFT JOIN foghorn.artifacts a ON c.artifact_hash = a.artifact_hash
-`
 
 func NewProcessingDispatcher(cfg ProcessingDispatcherConfig) *ProcessingDispatcher {
 	interval := cfg.Interval
@@ -215,24 +187,21 @@ func (d *ProcessingDispatcher) dispatch() {
 	// Atomically claim queued jobs via CTE — prevents double-dispatch when
 	// multiple Foghorn instances poll concurrently. FOR UPDATE SKIP LOCKED
 	// ensures each instance claims a non-overlapping set.
-	rows, err := d.db.QueryContext(ctx, processingJobClaimSQL)
+	rows, err := foghorndb.New(d.db).ClaimQueuedProcessingJobs(ctx)
 	if err != nil {
 		d.logger.WithError(err).Error("Failed to claim queued processing jobs")
 		return
 	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var job processingJob
-		if err := rows.Scan(
-			&job.JobID, &job.TenantID, &job.ArtifactHash, &job.ArtifactType,
-			&job.JobType, &job.InputCodec, &job.OutputProfiles, &job.Status, &job.RetryCount,
-			&job.S3URL, &job.SourceURL, &job.SourceParams, &job.PreferredNode,
-			&job.ProcessesJSON, &job.InternalName, &job.StreamID, &job.StreamInternal,
-			&job.DurableLocal,
-		); err != nil {
-			d.logger.WithError(err).Warn("Failed to scan processing job")
-			continue
+	for _, row := range rows {
+		job := processingJob{
+			JobID: row.JobID, TenantID: row.TenantID, ArtifactHash: row.ArtifactHash,
+			ArtifactType: sql.NullString{String: row.ArtifactType, Valid: row.ArtifactType != ""}, JobType: row.JobType,
+			InputCodec: row.InputCodec, OutputProfiles: row.OutputProfiles,
+			Status: row.Status, RetryCount: int(row.RetryCount.Int32), S3URL: row.S3Url,
+			SourceURL: row.SourceUrl, SourceParams: row.SourceParams,
+			PreferredNode: row.PreferredNodeID, ProcessesJSON: row.ProcessesJson, InternalName: row.InternalName,
+			StreamID: sql.NullString{String: row.StreamID, Valid: row.StreamID != ""}, StreamInternal: row.StreamInternalName,
+			DurableLocal: row.DurableBackendLocal,
 		}
 		d.dispatchJob(ctx, &job)
 	}
@@ -240,11 +209,7 @@ func (d *ProcessingDispatcher) dispatch() {
 
 // revertToQueued puts a claimed job back for the next dispatch cycle.
 func (d *ProcessingDispatcher) revertToQueued(ctx context.Context, jobID string) {
-	if _, err := d.db.ExecContext(ctx, `
-		UPDATE foghorn.processing_jobs
-		SET status = 'queued', processing_node_id = NULL, updated_at = NOW()
-		WHERE job_id = $1
-	`, jobID); err != nil {
+	if err := foghorndb.New(d.db).RevertProcessingJobToQueued(ctx, jobID); err != nil {
 		d.logger.WithError(err).WithField("job_id", jobID).Warn("Failed to revert job to queued")
 	}
 }
@@ -374,11 +339,8 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 	// The guarded UPDATE MUST have transitioned exactly this row: if a concurrent transition (cancel, delete,
 	// or a competing dispatcher) already moved the job out of 'dispatched', RowsAffected==0 and we must NOT send
 	// — sending a job that is no longer ours risks duplicate execution.
-	assignRes, assignErr := d.db.ExecContext(ctx, `
-		UPDATE foghorn.processing_jobs
-		SET processing_node_id = $2, updated_at = NOW()
-		WHERE job_id = $1 AND status = 'dispatched'
-	`, job.JobID, nodeID)
+	queries := foghorndb.New(d.db)
+	n, assignErr := queries.AssignProcessingJobNode(ctx, foghorndb.AssignProcessingJobNodeParams{JobID: job.JobID, ProcessingNodeID: sql.NullString{String: nodeID, Valid: nodeID != ""}})
 	if assignErr != nil {
 		d.logger.WithError(assignErr).WithFields(logging.Fields{
 			"job_id":  job.JobID,
@@ -388,7 +350,7 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 		d.markArtifactQueued(ctx, job, "assignment persist failed")
 		return
 	}
-	if n, _ := assignRes.RowsAffected(); n == 0 { //nolint:errcheck // pq populates RowsAffected on UPDATE
+	if n == 0 {
 		d.logger.WithField("job_id", job.JobID).Info("Dispatch: job left 'dispatched' before assignment persisted (cancelled/raced); not sending")
 		return
 	}
@@ -432,16 +394,7 @@ func (d *ProcessingDispatcher) markArtifactStatus(ctx context.Context, job *proc
 	if artifactType != "clip" && artifactType != "vod" {
 		return
 	}
-	if _, err := d.db.ExecContext(ctx, `
-		UPDATE foghorn.artifacts
-		   SET status = $3::text,
-		       error_message = CASE WHEN $3::text = 'processing' THEN NULL ELSE error_message END,
-		       updated_at = NOW()
-		 WHERE artifact_hash = $1
-		   AND tenant_id::text = $2
-		   AND artifact_type IN ('clip', 'vod')
-		   AND status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted')
-	`, job.ArtifactHash.String, job.TenantID, nextStatus); err != nil {
+	if err := foghorndb.New(d.db).ProjectProcessingArtifactStatus(ctx, foghorndb.ProjectProcessingArtifactStatusParams{ArtifactHash: job.ArtifactHash.String, TenantID: job.TenantID, TargetStatus: nextStatus}); err != nil {
 		fields := logging.Fields{
 			"artifact_hash": job.ArtifactHash.String,
 			"status":        nextStatus,
@@ -478,22 +431,12 @@ func (d *ProcessingDispatcher) commitDispatched(ctx context.Context, job *proces
 	// completion before this commit. Guard on status='dispatched' so a fast 'completed'/'failed' is NOT
 	// rewritten back to 'processing'. RowsAffected==0 => the terminal report won the race: treat it as an
 	// idempotent no-op (skip the artifact transition and the STARTED event) and roll back.
-	jobRes, execErr := tx.ExecContext(ctx, `
-		UPDATE foghorn.processing_jobs
-		SET status = 'processing',
-		    processing_node_id = $2,
-		    routing_reason = $3,
-		    started_at = NOW(),
-		    updated_at = NOW()
-		WHERE job_id = $1
-		  AND status = 'dispatched'
-	`, job.JobID, nodeID, reason)
+	queries := foghorndb.New(tx)
+	n, execErr := queries.CommitDispatchedProcessingJob(ctx, foghorndb.CommitDispatchedProcessingJobParams{JobID: job.JobID, ProcessingNodeID: sql.NullString{String: nodeID, Valid: nodeID != ""}, RoutingReason: sql.NullString{String: reason, Valid: reason != ""}})
 	if execErr != nil {
 		return fmt.Errorf("update job routing metadata: %w", execErr)
 	}
-	if n, raErr := jobRes.RowsAffected(); raErr != nil {
-		return fmt.Errorf("job routing rows affected: %w", raErr)
-	} else if n == 0 {
+	if n == 0 {
 		d.logger.WithField("job_id", job.JobID).Info("commitDispatched: job already left 'dispatched' (fast completion won); no-op")
 		return nil
 	}
@@ -504,20 +447,10 @@ func (d *ProcessingDispatcher) commitDispatched(ctx context.Context, job *proces
 	transitioned := false
 	if job != nil && job.ArtifactHash.Valid && job.ArtifactHash.String != "" && job.TenantID != "" &&
 		(job.ArtifactType.String == "clip" || job.ArtifactType.String == "vod") {
-		res, artErr := tx.ExecContext(ctx, `
-			UPDATE foghorn.artifacts
-			   SET status = 'processing',
-			       error_message = NULL,
-			       updated_at = NOW()
-			 WHERE artifact_hash = $1
-			   AND tenant_id::text = $2
-			   AND artifact_type IN ('clip', 'vod')
-			   AND status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted')
-		`, job.ArtifactHash.String, job.TenantID)
+		n, artErr := queries.MarkProcessingArtifactStarted(ctx, foghorndb.MarkProcessingArtifactStartedParams{ArtifactHash: job.ArtifactHash.String, TenantID: job.TenantID})
 		if artErr != nil {
 			return fmt.Errorf("project processing status onto artifact: %w", artErr)
 		}
-		n, _ := res.RowsAffected() //nolint:errcheck // pq populates RowsAffected on UPDATE
 		transitioned = n > 0
 	}
 
@@ -667,32 +600,13 @@ func (d *ProcessingDispatcher) recoverStale() {
 	ttlCutoff := time.Now().Add(-d.jobTTL)
 
 	// Requeue jobs that haven't exceeded max retries
-	result, err := d.db.ExecContext(ctx, `
-		WITH requeued AS (
-			UPDATE foghorn.processing_jobs
-			SET status = 'queued',
-			    processing_node_id = NULL,
-			    retry_count = retry_count + 1,
-			    updated_at = NOW()
-			WHERE status IN ('dispatched', 'processing')
-			  AND updated_at < $1
-			  AND retry_count < $2
-			RETURNING artifact_hash, tenant_id
-		)
-		UPDATE foghorn.artifacts a
-		   SET status = 'queued',
-		       updated_at = NOW()
-		  FROM requeued r
-		 WHERE a.artifact_hash = r.artifact_hash
-		   AND a.tenant_id = r.tenant_id
-		   AND a.artifact_type IN ('clip', 'vod')
-		   AND a.status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted')
-	`, ttlCutoff, d.maxRetries)
+	queries := foghorndb.New(d.db)
+	n, err := queries.RequeueStaleProcessingJobs(ctx, foghorndb.RequeueStaleProcessingJobsParams{UpdatedAt: sql.NullTime{Time: ttlCutoff, Valid: true}, RetryCount: sql.NullInt32{Int32: int32(d.maxRetries), Valid: true}})
 	if err != nil {
 		d.logger.WithError(err).Warn("Failed to recover stale processing jobs")
 		return
 	}
-	if n, _ := result.RowsAffected(); n > 0 {
+	if n > 0 {
 		d.logger.WithField("artifacts", n).Info("Recovered stale processing jobs (requeued)")
 	}
 
@@ -715,27 +629,11 @@ func (d *ProcessingDispatcher) recoverStale() {
 	// own transaction so the job-failed, artifact-failed, and lifecycle-outbox writes commit
 	// together (or not at all). The old batch CTE terminalized the job first and updated the
 	// artifact + telemetry separately, which could leave a failed job with a live artifact.
-	rows, err := d.db.QueryContext(ctx, `
-		SELECT job_id
-		  FROM foghorn.processing_jobs
-		 WHERE (status IN ('dispatched', 'processing') AND updated_at < $1 AND retry_count >= $2)
-		    OR (status = 'queued' AND created_at < $3
-		        AND preferred_node_id IS NOT NULL
-		        AND source_params->>'source_kind' IN ('live', 'dvr_rolling'))
-	`, ttlCutoff, d.maxRetries, queuedCutoff)
+	jobIDs, err := queries.ListExhaustedProcessingJobIDs(ctx, foghorndb.ListExhaustedProcessingJobIDsParams{UpdatedAt: sql.NullTime{Time: ttlCutoff, Valid: true}, RetryCount: sql.NullInt32{Int32: int32(d.maxRetries), Valid: true}, CreatedAt: sql.NullTime{Time: queuedCutoff, Valid: true}})
 	if err != nil {
 		d.logger.WithError(err).Warn("Failed to list exhausted processing jobs")
 		return
 	}
-	var jobIDs []string
-	for rows.Next() {
-		var jobID string
-		if scanErr := rows.Scan(&jobID); scanErr != nil {
-			continue
-		}
-		jobIDs = append(jobIDs, jobID)
-	}
-	rows.Close() //nolint:sqlclosecheck // close the candidate cursor before opening per-job txns
 	for _, jobID := range jobIDs {
 		d.failExhaustedJobAtomic(ctx, jobID, ttlCutoff, queuedCutoff)
 	}
@@ -761,32 +659,8 @@ func (d *ProcessingDispatcher) failExhaustedJobAtomic(ctx context.Context, jobID
 
 	// Terminalize the job ONLY if it still matches the exhausted/stuck predicate, and resolve its
 	// artifact in the same tx. ErrNoRows ⇒ the job recovered/completed since enumeration ⇒ no-op.
-	var artifactHash sql.NullString
-	var artifactType, tenantID, streamID, streamInternalName, errorMsg string
-	scanErr := tx.QueryRowContext(ctx, `
-		WITH failed AS (
-			UPDATE foghorn.processing_jobs
-			SET status = 'failed',
-			    error_message = CASE WHEN status = 'queued'
-			        THEN 'stuck queued: node-pinned source unavailable'
-			        ELSE 'max retries exceeded' END,
-			    updated_at = NOW()
-			WHERE job_id = $1
-			  AND ((status IN ('dispatched', 'processing') AND updated_at < $2 AND retry_count >= $3)
-			       OR (status = 'queued' AND created_at < $4
-			           AND preferred_node_id IS NOT NULL
-			           AND source_params->>'source_kind' IN ('live', 'dvr_rolling')))
-			RETURNING artifact_hash, tenant_id, error_message
-		)
-		SELECT f.artifact_hash,
-		       COALESCE(a.artifact_type, ''),
-		       COALESCE(a.tenant_id::text, f.tenant_id::text, ''),
-		       COALESCE(a.stream_id::text, ''),
-		       COALESCE(a.stream_internal_name, ''),
-		       f.error_message
-		  FROM failed f
-		  LEFT JOIN foghorn.artifacts a ON f.artifact_hash = a.artifact_hash
-	`, jobID, ttlCutoff, d.maxRetries, queuedCutoff).Scan(&artifactHash, &artifactType, &tenantID, &streamID, &streamInternalName, &errorMsg)
+	queries := foghorndb.New(tx)
+	failed, scanErr := queries.FailExhaustedProcessingJob(ctx, foghorndb.FailExhaustedProcessingJobParams{JobID: jobID, UpdatedAt: sql.NullTime{Time: ttlCutoff, Valid: true}, RetryCount: sql.NullInt32{Int32: int32(d.maxRetries), Valid: true}, CreatedAt: sql.NullTime{Time: queuedCutoff, Valid: true}})
 	if errors.Is(scanErr, sql.ErrNoRows) {
 		return // recovered/completed since enumeration
 	}
@@ -794,18 +668,14 @@ func (d *ProcessingDispatcher) failExhaustedJobAtomic(ctx context.Context, jobID
 		d.logger.WithError(scanErr).WithField("job_id", jobID).Warn("Failed to terminalize exhausted job")
 		return
 	}
+	artifactHash, artifactType, tenantID := failed.ArtifactHash, failed.ArtifactType, failed.TenantID
+	streamID, streamInternalName, errorMsg := failed.StreamID, failed.StreamInternalName, failed.ErrorMessage.String
 	d.logger.WithFields(logging.Fields{"job_id": jobID, "artifact_hash": artifactHash.String}).Warn("Processing job exhausted; failing atomically")
 
 	if artifactHash.Valid && (artifactType == "clip" || artifactType == "vod") {
 		// Only fail a PRE-TERMINAL, tenant-matching artifact — never resurrect one that was
 		// concurrently deleted/expired/aborted/completed, and never cross tenants on a hash collision.
-		artRes, artErr := tx.ExecContext(ctx, `
-			UPDATE foghorn.artifacts
-			   SET status = 'failed', error_message = $2, updated_at = NOW()
-			 WHERE artifact_hash = $1
-			   AND tenant_id::text = $3
-			   AND status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted')
-		`, artifactHash.String, errorMsg, tenantID)
+		artFailed, artErr := queries.MarkExhaustedArtifactFailed(ctx, foghorndb.MarkExhaustedArtifactFailedParams{ArtifactHash: artifactHash.String, ErrorMessage: sql.NullString{String: errorMsg, Valid: errorMsg != ""}, TenantID: tenantID})
 		if artErr != nil {
 			d.logger.WithError(artErr).WithField("artifact_hash", artifactHash.String).Warn("Failed to mark exhausted artifact failed; rolling back")
 			return
@@ -813,7 +683,6 @@ func (d *ProcessingDispatcher) failExhaustedJobAtomic(ctx context.Context, jobID
 		// Only emit the FAILED lifecycle if THIS tx actually transitioned the artifact. A 0-row
 		// result means it was already terminal (concurrently ready/deleted/expired/aborted) — the
 		// job still fails, but a false FAILED analytics event must not be emitted.
-		artFailed, _ := artRes.RowsAffected() //nolint:errcheck // pq populates RowsAffected on UPDATE
 		if artFailed == 0 {
 			// nothing to publish; commit the job-failed transition only
 		} else if artifactType == "clip" {
@@ -868,12 +737,9 @@ func InsertProcessingJobWithSourceParams(ctx context.Context, db *sql.DB, tenant
 		if err != nil {
 			return "", err
 		}
+		queries := foghorndb.New(db)
 		err = database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-			_, execErr := db.ExecContext(ctx, `
-			INSERT INTO foghorn.processing_jobs (job_id, tenant_id, artifact_hash, job_type, status, parent_job_id, processes_json, source_url, source_params, preferred_node_id)
-			VALUES ($1, $2, $3, $4, 'queued', $5, $6, $7, $8::jsonb, $9)
-		`, jobID, tenantID, artifactHash, jobType, parentID, pJSON, srcURL, srcParams, preferredNode)
-			return execErr
+			return queries.InsertProcessingJob(ctx, processingJobParams(jobID, tenantID, artifactHash, jobType, parentID, pJSON, srcURL, srcParams, preferredNode))
 		})
 		if err == nil {
 			NotifyProcessingJobQueued()
@@ -923,20 +789,12 @@ func InsertProcessingJobWithSourceParamsTx(ctx context.Context, tx *sql.Tx, tena
 		return "", err
 	}
 
-	if _, lockErr := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))`, artifactHash, jobType); lockErr != nil {
+	queries := foghorndb.New(tx)
+	if lockErr := queries.LockProcessingJobIdentity(ctx, foghorndb.LockProcessingJobIdentityParams{Hashtext: artifactHash, Hashtext_2: jobType}); lockErr != nil {
 		return "", lockErr
 	}
 
-	var existingJobID string
-	scanErr := tx.QueryRowContext(ctx, `
-		SELECT job_id
-		FROM foghorn.processing_jobs
-		WHERE artifact_hash = $1
-		  AND job_type = $2
-		  AND status IN ('queued', 'dispatched', 'processing')
-		ORDER BY created_at
-		LIMIT 1
-	`, artifactHash, jobType).Scan(&existingJobID)
+	existingJobID, scanErr := queries.FindActiveProcessingJob(ctx, foghorndb.FindActiveProcessingJobParams{ArtifactHash: sql.NullString{String: artifactHash, Valid: true}, JobType: jobType})
 	switch {
 	case scanErr == nil:
 		return existingJobID, nil
@@ -944,25 +802,36 @@ func InsertProcessingJobWithSourceParamsTx(ctx context.Context, tx *sql.Tx, tena
 		return "", scanErr
 	}
 
-	if _, insErr := tx.ExecContext(ctx, `
-		INSERT INTO foghorn.processing_jobs (job_id, tenant_id, artifact_hash, job_type, status, parent_job_id, processes_json, source_url, source_params, preferred_node_id)
-		VALUES ($1, $2, $3, $4, 'queued', $5, $6, $7, $8::jsonb, $9)
-	`, jobID, tenantID, artifactHash, jobType, parentID, pJSON, srcURL, srcParams, preferredNode); insErr != nil {
+	if insErr := queries.InsertProcessingJob(ctx, processingJobParams(jobID, tenantID, artifactHash, jobType, parentID, pJSON, srcURL, srcParams, preferredNode)); insErr != nil {
 		return "", insErr
 	}
 
-	if _, updErr := tx.ExecContext(ctx, `
-		UPDATE foghorn.artifacts
-		   SET status = 'queued',
-		       updated_at = NOW()
-		 WHERE artifact_hash = $1
-		   AND tenant_id::text = $2
-		   AND artifact_type = 'clip'
-		   AND status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted')
-	`, artifactHash, tenantID); updErr != nil {
+	if updErr := queries.MarkQueuedClipArtifact(ctx, foghorndb.MarkQueuedClipArtifactParams{ArtifactHash: artifactHash, TenantID: tenantID}); updErr != nil {
 		return "", updErr
 	}
 	return jobID, nil
+}
+
+func processingJobParams(jobID, tenantID, artifactHash, jobType string, parentID, processesJSON, sourceURL, sourceParams, preferredNodeID *string) foghorndb.InsertProcessingJobParams {
+	params := foghorndb.InsertProcessingJobParams{
+		JobID: jobID, TenantID: tenantID, ArtifactHash: sql.NullString{String: artifactHash, Valid: artifactHash != ""}, JobType: jobType,
+	}
+	if parentID != nil {
+		params.ParentJobID = sql.NullString{String: *parentID, Valid: true}
+	}
+	if processesJSON != nil {
+		params.ProcessesJson = sql.NullString{String: *processesJSON, Valid: true}
+	}
+	if sourceURL != nil {
+		params.SourceUrl = sql.NullString{String: *sourceURL, Valid: true}
+	}
+	if sourceParams != nil {
+		params.SourceParams = sql.NullString{String: *sourceParams, Valid: true}
+	}
+	if preferredNodeID != nil {
+		params.PreferredNodeID = sql.NullString{String: *preferredNodeID, Valid: true}
+	}
+	return params
 }
 
 // processingJobInsertArgs normalizes the optional processing-job columns into the nullable pointers

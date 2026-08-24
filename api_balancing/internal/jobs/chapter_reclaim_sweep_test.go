@@ -36,7 +36,7 @@ func TestChapterReclaimSweep_S3DeleteIncludesLostLocal(t *testing.T) {
 
 	s := &ChapterReclaimSweep{db: mockDB, logger: logging.NewLogger()}
 	mock.ExpectQuery(`WITH overlapping`).
-		WithArgs("dvr-hash", int64(1000), int64(2000), statusSetArg{want: []string{"deleted_local", "orphan_unreachable", "lost_local"}}).
+		WithArgs("dvr-hash", int64(2000), int64(1000), statusSetArg{want: []string{"deleted_local", "orphan_unreachable", "lost_local"}}).
 		WillReturnRows(sqlmock.NewRows([]string{"segment_name", "s3_key"}).AddRow("seg-1.ts", "s3/key"))
 
 	rows, err := s.listSegmentsAwaitingS3Delete(context.Background(), "dvr-hash", 1000, 2000)
@@ -60,7 +60,7 @@ func TestChapterReclaimSweep_RangeCompleteWaitsForLostLocalS3Delete(t *testing.T
 
 	s := &ChapterReclaimSweep{db: mockDB, logger: logging.NewLogger()}
 	mock.ExpectQuery(`SELECT COUNT\(\*\).*status != 'reclaimed'`).
-		WithArgs("dvr-hash", int64(1000), int64(2000)).
+		WithArgs("dvr-hash", int64(2000), int64(1000)).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 
 	err = s.markReclaimedIfRangeComplete(context.Background(), control.DVRChapterRow{

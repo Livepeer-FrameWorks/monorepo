@@ -10,6 +10,12 @@ import (
 	"frameworks/api_balancing/internal/state"
 )
 
+func expectPlacementParentLock(mock sqlmock.Sqlmock) {
+	mock.ExpectExec("SELECT artifact_hash FROM foghorn.artifacts WHERE artifact_hash = \\$1 FOR UPDATE").
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+}
+
 // expectNodeCopyOutbox sets up the tenant lookup + present-transition emit (GAINED /
 // UPDATED, which records the row's live version).
 func expectNodeCopyOutbox(mock sqlmock.Sqlmock, hash string) {
@@ -47,12 +53,13 @@ func TestRegisterOriginArtifact_EmitsGainedOnComplete(t *testing.T) {
 	repo, mock := setupRepoTest(t)
 
 	mock.ExpectBegin()
+	expectPlacementParentLock(mock)
 	mock.ExpectQuery("SELECT role, is_complete, is_orphaned FROM foghorn.artifact_nodes.*FOR UPDATE").
 		WithArgs("hash-1", "node-1").
 		WillReturnError(sql.ErrNoRows) // not present yet
 	mock.ExpectQuery("INSERT INTO foghorn.artifact_nodes.*'origin'.*RETURNING").
 		WithArgs("hash-1", "node-1", "/f.mp4", int64(10), true).
-		WillReturnRows(sqlmock.NewRows([]string{"inserted", "is_complete"}).AddRow(true, true))
+		WillReturnRows(sqlmock.NewRows([]string{"is_complete"}).AddRow(true))
 	expectNodeCopyOutbox(mock, "hash-1")
 	mock.ExpectCommit()
 
@@ -69,12 +76,13 @@ func TestRegisterOriginArtifact_NoEmitWhenAlreadyComplete(t *testing.T) {
 	repo, mock := setupRepoTest(t)
 
 	mock.ExpectBegin()
+	expectPlacementParentLock(mock)
 	mock.ExpectQuery("SELECT role, is_complete, is_orphaned FROM foghorn.artifact_nodes.*FOR UPDATE").
 		WithArgs("hash-1", "node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"role", "is_complete", "is_orphaned"}).AddRow("origin", true, false))
 	mock.ExpectQuery("INSERT INTO foghorn.artifact_nodes.*'origin'.*RETURNING").
 		WithArgs("hash-1", "node-1", "", int64(0), true).
-		WillReturnRows(sqlmock.NewRows([]string{"inserted", "is_complete"}).AddRow(false, true))
+		WillReturnRows(sqlmock.NewRows([]string{"is_complete"}).AddRow(true))
 	// No tenant lookup, no version, no outbox row.
 	mock.ExpectCommit()
 
@@ -91,12 +99,13 @@ func TestRegisterOriginArtifact_EmitsUpdatedOnPromotion(t *testing.T) {
 	repo, mock := setupRepoTest(t)
 
 	mock.ExpectBegin()
+	expectPlacementParentLock(mock)
 	mock.ExpectQuery("SELECT role, is_complete, is_orphaned FROM foghorn.artifact_nodes.*FOR UPDATE").
 		WithArgs("hash-1", "node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"role", "is_complete", "is_orphaned"}).AddRow("cache", true, false))
 	mock.ExpectQuery("INSERT INTO foghorn.artifact_nodes.*'origin'.*RETURNING").
 		WithArgs("hash-1", "node-1", "", int64(0), true).
-		WillReturnRows(sqlmock.NewRows([]string{"inserted", "is_complete"}).AddRow(false, true))
+		WillReturnRows(sqlmock.NewRows([]string{"is_complete"}).AddRow(true))
 	expectNodeCopyOutbox(mock, "hash-1")
 	mock.ExpectCommit()
 
@@ -114,12 +123,13 @@ func TestAddCachedNode_EmitsGainedCache(t *testing.T) {
 	repo, mock := setupRepoTest(t)
 
 	mock.ExpectBegin()
+	expectPlacementParentLock(mock)
 	mock.ExpectQuery("SELECT role, is_orphaned, is_complete FROM foghorn.artifact_nodes.*FOR UPDATE").
 		WithArgs("hash-1", "node-1").
 		WillReturnError(sql.ErrNoRows) // newly present
 	mock.ExpectQuery("INSERT INTO foghorn.artifact_nodes.*'cache'.*RETURNING").
 		WithArgs("hash-1", "node-1", "", int64(0)).
-		WillReturnRows(sqlmock.NewRows([]string{"inserted", "size_bytes"}).AddRow(true, nil))
+		WillReturnRows(sqlmock.NewRows([]string{"size_bytes"}).AddRow(nil))
 	expectNodeCopyOutbox(mock, "hash-1")
 	mock.ExpectCommit()
 
@@ -137,12 +147,13 @@ func TestAddCachedNode_EmitsOnCompletenessFlip(t *testing.T) {
 	repo, mock := setupRepoTest(t)
 
 	mock.ExpectBegin()
+	expectPlacementParentLock(mock)
 	mock.ExpectQuery("SELECT role, is_orphaned, is_complete FROM foghorn.artifact_nodes.*FOR UPDATE").
 		WithArgs("hash-1", "node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"role", "is_orphaned", "is_complete"}).AddRow("cache", false, false)) // present but incomplete
 	mock.ExpectQuery("INSERT INTO foghorn.artifact_nodes.*'cache'.*RETURNING").
 		WithArgs("hash-1", "node-1", "", int64(0)).
-		WillReturnRows(sqlmock.NewRows([]string{"inserted", "size_bytes"}).AddRow(false, int64(2048))) // already present
+		WillReturnRows(sqlmock.NewRows([]string{"size_bytes"}).AddRow(int64(2048))) // already present
 	expectNodeCopyOutbox(mock, "hash-1")
 	mock.ExpectCommit()
 
@@ -185,12 +196,13 @@ func TestUpsertArtifacts_ReconnectEmitsGained(t *testing.T) {
 	mock.ExpectExec("UPDATE foghorn.artifacts SET").
 		WithArgs("hash-1", "", int64(0), int64(0)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	expectPlacementParentLock(mock)
 	mock.ExpectQuery("SELECT role, is_orphaned, is_complete FROM foghorn.artifact_nodes.*FOR UPDATE").
 		WithArgs("hash-1", "node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"role", "is_orphaned", "is_complete"}).AddRow("cache", true, false)) // was orphaned
 	mock.ExpectQuery("INSERT INTO foghorn.artifact_nodes.*WHERE EXISTS.*RETURNING").
 		WithArgs("hash-1", "node-1", "", int64(0), int64(0), int64(0), int64(0), int64(0), "cache", false).
-		WillReturnRows(sqlmock.NewRows([]string{"inserted", "role", "is_complete"}).AddRow(false, "cache", false))
+		WillReturnRows(sqlmock.NewRows([]string{"role", "is_complete"}).AddRow("cache", false))
 	expectNodeCopyOutbox(mock, "hash-1")
 	// stale sweep finds nothing this pass
 	mock.ExpectQuery("UPDATE foghorn.artifact_nodes.*is_orphaned = true.*RETURNING artifact_hash, role").
@@ -222,12 +234,13 @@ func TestUpsertArtifacts_VersionedReportDefersNegativeDiffToStaleSweep(t *testin
 	mock.ExpectExec("UPDATE foghorn.artifacts SET").
 		WithArgs("hash-a", "", int64(0), int64(0)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	expectPlacementParentLock(mock)
 	mock.ExpectQuery("SELECT role, is_orphaned, is_complete FROM foghorn.artifact_nodes.*FOR UPDATE").
 		WithArgs("hash-a", "node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"role", "is_orphaned", "is_complete"}).AddRow("cache", false, false))
 	mock.ExpectQuery("INSERT INTO foghorn.artifact_nodes.*WHERE EXISTS.*RETURNING").
 		WithArgs("hash-a", "node-1", "", int64(0), int64(0), int64(0), int64(0), int64(0), "cache", false).
-		WillReturnRows(sqlmock.NewRows([]string{"inserted", "role", "is_complete"}).AddRow(false, "cache", false))
+		WillReturnRows(sqlmock.NewRows([]string{"role", "is_complete"}).AddRow("cache", false))
 	// Whole-node reports do NOT perform scan-driven negative diffing: the versioned report upserts A but
 	// does NOT immediately orphan the absent B. B is reconciled by the stale sweep / cordon /
 	// fenced-takeover, never by a same-tx authoritative removal — so there is NO diff-orphan query and NO

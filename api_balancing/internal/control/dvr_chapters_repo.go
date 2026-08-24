@@ -11,9 +11,9 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/artifactoutbox"
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
-	"github.com/lib/pq"
 )
 
 var chapterClosedNotifier func()
@@ -87,6 +87,20 @@ type DVRChapterRow struct {
 	CreatedAt          time.Time
 }
 
+func mapDVRChapter(row foghorndb.FoghornDvrChapter) DVRChapterRow {
+	return DVRChapterRow{
+		ChapterID: row.ChapterID, ArtifactHash: row.ArtifactHash, Mode: row.Mode,
+		IntervalSeconds: row.IntervalSeconds, StartMs: row.StartMs, EndMs: row.EndMs,
+		IsCurrent: row.IsCurrent, State: row.State, PlaybackArtifactHash: row.PlaybackArtifactHash,
+		PlaybackID: row.PlaybackID, FinalizeAttempts: row.FinalizeAttempts,
+		FinalizeStartedAt: row.FinalizeStartedAt, FrozenAt: row.FrozenAt,
+		LastFailureReason: row.LastFailureReason, ReclaimStartedAt: row.ReclaimStartedAt,
+		SegmentCount: row.SegmentCount, HasGaps: row.HasGaps,
+		ActualMediaStartMs: row.ActualMediaStartMs, ActualMediaEndMs: row.ActualMediaEndMs,
+		CreatedAt: row.CreatedAt,
+	}
+}
+
 // SetChapterPlaybackID caches the Commodore-minted public playback_id
 // on the chapter row. Idempotent. The cache is non-authoritative — the
 // chapter playback resolver always falls back to
@@ -98,12 +112,9 @@ func SetChapterPlaybackID(ctx context.Context, chapterID, playbackID string) err
 	if chapterID == "" || playbackID == "" {
 		return nil
 	}
-	_, err := db.ExecContext(ctx, `
-		UPDATE foghorn.dvr_chapters
-		   SET playback_id = $2
-		 WHERE chapter_id  = $1
-	`, chapterID, playbackID)
-	return err
+	return foghorndb.New(db).SetDVRChapterPlaybackID(ctx, foghorndb.SetDVRChapterPlaybackIDParams{
+		ChapterID: chapterID, PlaybackID: sql.NullString{String: playbackID, Valid: true},
+	})
 }
 
 // BuildChapterID is the canonical chapter identity. Stable: same inputs
@@ -128,27 +139,14 @@ func OpenChapter(ctx context.Context, c DVRChapterRow) error {
 	if db == nil {
 		return sql.ErrConnDone
 	}
-	var intervalArg interface{}
-	if c.IntervalSeconds.Valid {
-		intervalArg = c.IntervalSeconds.Int32
-	}
-
 	var notify bool
 	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
-		res, txErr := tx.ExecContext(ctx, `
-		UPDATE foghorn.dvr_chapters
-		   SET is_current = false,
-		       state      = CASE WHEN state = 'open' THEN 'closed' ELSE state END
-		 WHERE artifact_hash = $1
-		   AND is_current = true
-		   AND chapter_id <> $2
-	`, c.ArtifactHash, c.ChapterID)
+		q := foghorndb.New(tx)
+		closedPrevious, txErr := q.ClosePreviousCurrentDVRChapters(ctx, foghorndb.ClosePreviousCurrentDVRChaptersParams{
+			ArtifactHash: c.ArtifactHash, ChapterID: c.ChapterID,
+		})
 		if txErr != nil {
 			return fmt.Errorf("close previous current chapter: %w", txErr)
-		}
-		closedPrevious, err := res.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("close previous current chapter rows affected: %w", err)
 		}
 
 		state := c.State
@@ -156,22 +154,10 @@ func OpenChapter(ctx context.Context, c DVRChapterRow) error {
 			state = ChapterStateOpen
 		}
 
-		_, err = tx.ExecContext(ctx, `
-		INSERT INTO foghorn.dvr_chapters (
-			chapter_id, artifact_hash, mode, interval_seconds,
-			start_ms, end_ms, is_current,
-			state, segment_count, has_gaps, created_at
-		) VALUES (
-			$1, $2, $3, $4,
-			$5, $6, true,
-			$7, 0, false, NOW()
-		)
-		ON CONFLICT (chapter_id) DO UPDATE SET
-			is_current = EXCLUDED.is_current
-	`,
-			c.ChapterID, c.ArtifactHash, c.Mode, intervalArg,
-			c.StartMs, c.EndMs, state,
-		)
+		err := q.UpsertOpenDVRChapter(ctx, foghorndb.UpsertOpenDVRChapterParams{
+			ChapterID: c.ChapterID, ArtifactHash: c.ArtifactHash, Mode: c.Mode,
+			IntervalSeconds: c.IntervalSeconds, StartMs: c.StartMs, EndMs: c.EndMs, State: state,
+		})
 		if err != nil {
 			return fmt.Errorf("open chapter: %w", err)
 		}
@@ -195,19 +181,9 @@ func CloseChapter(ctx context.Context, chapterID string) error {
 	if db == nil {
 		return sql.ErrConnDone
 	}
-	res, err := db.ExecContext(ctx, `
-		UPDATE foghorn.dvr_chapters
-		   SET is_current = false,
-		       state      = 'closed'
-		 WHERE chapter_id = $1
-		   AND state      = 'open'
-	`, chapterID)
+	rows, err := foghorndb.New(db).CloseDVRChapter(ctx, chapterID)
 	if err != nil {
 		return fmt.Errorf("close chapter: %w", err)
-	}
-	rows, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("close chapter rows affected: %w", err)
 	}
 	if rows > 0 {
 		notifyChapterClosed()
@@ -222,19 +198,9 @@ func CloseCurrentChapterForArtifact(ctx context.Context, artifactHash string) er
 	if db == nil {
 		return sql.ErrConnDone
 	}
-	res, err := db.ExecContext(ctx, `
-		UPDATE foghorn.dvr_chapters
-		   SET is_current = false,
-		       state      = CASE WHEN state = 'open' THEN 'closed' ELSE state END
-		 WHERE artifact_hash = $1
-		   AND is_current = true
-	`, artifactHash)
+	rows, err := foghorndb.New(db).CloseCurrentDVRChapterForArtifact(ctx, artifactHash)
 	if err != nil {
 		return fmt.Errorf("close current chapter for artifact: %w", err)
-	}
-	rows, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("close current chapter rows affected: %w", err)
 	}
 	if rows > 0 {
 		notifyChapterClosed()
@@ -270,24 +236,13 @@ func MarkChapterFinalizing(ctx context.Context, chapterID, playbackHash, tenantI
 	}()
 	// finalize_node_id is persisted here — before the job is sent to the node — so the result/progress handlers
 	// can bind the reporting connection to the assignment (chapter-finalize jobs have no processing_jobs row).
-	res, err := tx.ExecContext(ctx, `
-		UPDATE foghorn.dvr_chapters
-		   SET state                  = 'finalizing',
-		       playback_artifact_hash = $2,
-		       finalize_attempts      = finalize_attempts + 1,
-		       finalize_started_at    = NOW(),
-		       finalize_node_id       = NULLIF($4, '')
-		 WHERE chapter_id = $1
-		   AND (state = 'closed'
-		     OR (state = 'finalizing'
-		         AND COALESCE(finalize_started_at, created_at) < NOW() - make_interval(secs => $3)))
-	`, chapterID, playbackHash, staleTimeout.Seconds(), finalizeNodeID)
+	n, err := foghorndb.New(tx).ClaimDVRChapterFinalization(ctx, foghorndb.ClaimDVRChapterFinalizationParams{
+		ChapterID:            chapterID,
+		PlaybackArtifactHash: sql.NullString{String: playbackHash, Valid: playbackHash != ""},
+		StaleSeconds:         staleTimeout.Seconds(), FinalizeNodeID: finalizeNodeID,
+	})
 	if err != nil {
 		return false, fmt.Errorf("mark chapter finalizing: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return false, err
 	}
 	if n == 0 {
 		return false, nil // not claimable (already advanced / another worker); no lifecycle emitted
@@ -321,41 +276,31 @@ func MarkChapterFinalizing(ctx context.Context, chapterID, playbackHash, tenantI
 // timeline to wall-clock without drift even when chapter boundaries
 // don't align to segment boundaries. Pass 0 for media bounds when
 // unknown (column stays NULL).
-const markChapterFinalizedSQL = `
-	UPDATE foghorn.dvr_chapters
-	   SET state                 = 'finalized',
-	       segment_count         = $2,
-	       has_gaps              = $3,
-	       actual_media_start_ms = $4,
-	       actual_media_end_ms   = $5,
-	       finalize_node_id      = NULL
-	 WHERE chapter_id = $1
-	   AND state      = 'finalizing'`
-
 // MarkChapterFinalizedTx runs the finalizing → finalized transition on the caller's
 // transaction and returns the number of rows transitioned. The chapter-finalize handler
 // requires this to be exactly 1 — a 0 means the row was NOT in 'finalizing' (a duplicate
 // completion, a concurrent worker, or a rolled-back retry), so the whole atomic finalize
 // must roll back rather than persist readiness/origin against an unowned transition.
 func MarkChapterFinalizedTx(ctx context.Context, tx *sql.Tx, chapterID string, segmentCount int32, hasGaps bool, mediaStartMs, mediaEndMs int64) (int64, error) {
-	mediaStartArg, mediaEndArg := chapterMediaBoundArgs(mediaStartMs, mediaEndMs)
-	res, err := tx.ExecContext(ctx, markChapterFinalizedSQL, chapterID, segmentCount, hasGaps, mediaStartArg, mediaEndArg)
+	mediaStartArg, mediaEndArg := chapterMediaBoundNulls(mediaStartMs, mediaEndMs)
+	rows, err := foghorndb.New(tx).MarkDVRChapterFinalized(ctx, foghorndb.MarkDVRChapterFinalizedParams{
+		ChapterID: chapterID, SegmentCount: segmentCount, HasGaps: hasGaps,
+		MediaStartMs: mediaStartArg, MediaEndMs: mediaEndArg,
+	})
 	if err != nil {
 		return 0, fmt.Errorf("mark chapter finalized: %w", err)
 	}
-	return res.RowsAffected()
+	return rows, nil
 }
 
-// chapterMediaBoundArgs coerces the optional MKV media span into NULL-able args: a
-// non-positive start or a non-increasing end leaves the column NULL (unknown span).
-func chapterMediaBoundArgs(mediaStartMs, mediaEndMs int64) (startArg, endArg interface{}) {
+func chapterMediaBoundNulls(mediaStartMs, mediaEndMs int64) (start, end sql.NullInt64) {
 	if mediaStartMs > 0 {
-		startArg = mediaStartMs
+		start = sql.NullInt64{Int64: mediaStartMs, Valid: true}
 	}
 	if mediaEndMs > mediaStartMs {
-		endArg = mediaEndMs
+		end = sql.NullInt64{Int64: mediaEndMs, Valid: true}
 	}
-	return startArg, endArg
+	return start, end
 }
 
 // MarkChapterFrozen transitions finalized → frozen once the playback
@@ -379,13 +324,7 @@ func MarkChapterFrozen(ctx context.Context, chapterID string) error {
 // MarkChapterFrozenTx is the transactional form so a chapter can be frozen atomically with the
 // sync-completion that promoted its playback artifact to synced+dtsh.
 func MarkChapterFrozenTx(ctx context.Context, tx *sql.Tx, chapterID string) error {
-	_, err := tx.ExecContext(ctx, `
-		UPDATE foghorn.dvr_chapters
-		   SET state     = 'frozen',
-		       frozen_at = NOW()
-		 WHERE chapter_id = $1
-		   AND state      = 'finalized'
-	`, chapterID)
+	err := foghorndb.New(tx).MarkDVRChapterFrozen(ctx, chapterID)
 	if err != nil {
 		return fmt.Errorf("mark chapter frozen: %w", err)
 	}
@@ -400,19 +339,11 @@ func MarkChapterReclaimStarted(ctx context.Context, chapterID string, freshness 
 	if db == nil {
 		return false, sql.ErrConnDone
 	}
-	res, err := db.ExecContext(ctx, `
-		UPDATE foghorn.dvr_chapters
-		   SET reclaim_started_at = NOW()
-		 WHERE chapter_id = $1
-		   AND state      = 'frozen'
-		   AND (reclaim_started_at IS NULL OR reclaim_started_at < NOW() - make_interval(secs => $2))
-	`, chapterID, freshness.Seconds())
+	n, err := foghorndb.New(db).MarkDVRChapterReclaimStarted(ctx, foghorndb.MarkDVRChapterReclaimStartedParams{
+		ChapterID: chapterID, Secs: freshness.Seconds(),
+	})
 	if err != nil {
 		return false, fmt.Errorf("mark chapter reclaim started: %w", err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return false, err
 	}
 	return n > 0, nil
 }
@@ -425,12 +356,7 @@ func MarkChapterReclaimed(ctx context.Context, chapterID string) error {
 	if db == nil {
 		return sql.ErrConnDone
 	}
-	_, err := db.ExecContext(ctx, `
-		UPDATE foghorn.dvr_chapters
-		   SET state = 'reclaimed'
-		 WHERE chapter_id = $1
-		   AND state      = 'frozen'
-	`, chapterID)
+	err := foghorndb.New(db).MarkDVRChapterReclaimed(ctx, chapterID)
 	if err != nil {
 		return fmt.Errorf("mark chapter reclaimed: %w", err)
 	}
@@ -465,22 +391,16 @@ func MarkChapterFailed(ctx context.Context, chapterID, terminalState, reason, ex
 		}
 	}()
 	// Transition the chapter and recover its allocated playback artifact hash in one shot.
-	var playbackHash sql.NullString
+	q := foghorndb.New(tx)
 	// A NODE-reported terminal failure (expectedNode != '') may ONLY act on the attempt currently dispatched to
 	// that node — state MUST still be 'finalizing' with a matching finalize_node_id. A retry that already
 	// bounced the chapter to 'closed' cleared finalize_node_id, so a delayed report from the retired node
 	// matches nothing. Only INTERNAL recovery (expectedNode == '') may terminalize a 'closed' row (e.g. max
 	// attempts exceeded before redispatch).
-	scanErr := tx.QueryRowContext(ctx, `
-		UPDATE foghorn.dvr_chapters
-		   SET state               = $2,
-		       last_failure_reason = $3,
-		       finalize_node_id    = NULL
-		 WHERE chapter_id = $1
-		   AND ( ($4 = '' AND state IN ('closed', 'finalizing'))
-		      OR ($4 <> '' AND state = 'finalizing' AND finalize_node_id = $4) )
-		RETURNING playback_artifact_hash
-	`, chapterID, terminalState, reason, expectedNode).Scan(&playbackHash)
+	playbackHash, scanErr := q.FailDVRChapter(ctx, foghorndb.FailDVRChapterParams{
+		ChapterID: chapterID, State: terminalState,
+		LastFailureReason: sql.NullString{String: reason, Valid: true}, ExpectedNode: expectedNode,
+	})
 	if errors.Is(scanErr, sql.ErrNoRows) {
 		// Chapter wasn't in a failable state (already terminal/frozen) — nothing to do.
 		return nil
@@ -492,15 +412,9 @@ func MarkChapterFailed(ctx context.Context, chapterID, terminalState, reason, ex
 	// 'finalizing' (it would show "processing" forever and never be reclaimed). Fail it in the
 	// same transaction; the guard leaves an already-terminal/deleted/ready artifact untouched.
 	if playbackHash.Valid && playbackHash.String != "" {
-		var artTenant sql.NullString
-		artErr := tx.QueryRowContext(ctx, `
-			UPDATE foghorn.artifacts
-			   SET status = 'failed', error_message = $2, updated_at = NOW()
-			 WHERE artifact_hash = $1
-			   AND origin_type = 'dvr_chapter'
-			   AND status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted')
-			RETURNING tenant_id::text
-		`, playbackHash.String, reason).Scan(&artTenant)
+		artTenant, artErr := q.FailDVRChapterArtifact(ctx, foghorndb.FailDVRChapterArtifactParams{
+			ArtifactHash: playbackHash.String, ErrorMessage: sql.NullString{String: reason, Valid: true},
+		})
 		if artErr != nil && !errors.Is(artErr, sql.ErrNoRows) {
 			return fmt.Errorf("mark chapter artifact failed: %w", artErr)
 		}
@@ -514,8 +428,8 @@ func MarkChapterFailed(ctx context.Context, chapterID, terminalState, reason, ex
 				VodHash: playbackHash.String,
 				Error:   &errMsg,
 			}
-			if artTenant.Valid && artTenant.String != "" {
-				t := artTenant.String
+			if artTenant != "" {
+				t := artTenant
 				vodData.TenantId = &t
 			}
 			if enqErr := artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, vodData); enqErr != nil {
@@ -546,15 +460,9 @@ func RetryChapterFinalize(ctx context.Context, chapterID, reason, expectedNode s
 	// Clear finalize_node_id when leaving 'finalizing': the attempt is retired, so the old node's assignment
 	// must not authorize any later transition (a delayed report from it must not terminalize the re-queued
 	// chapter before redispatch reassigns the node).
-	_, err := db.ExecContext(ctx, `
-		UPDATE foghorn.dvr_chapters
-		   SET state               = 'closed',
-		       last_failure_reason = $2,
-		       finalize_node_id    = NULL
-		 WHERE chapter_id = $1
-		   AND state      = 'finalizing'
-		   AND ($3 = '' OR finalize_node_id = $3)
-	`, chapterID, reason, expectedNode)
+	err := foghorndb.New(db).RetryDVRChapterFinalize(ctx, foghorndb.RetryDVRChapterFinalizeParams{
+		ChapterID: chapterID, LastFailureReason: sql.NullString{String: reason, Valid: true}, ExpectedNode: expectedNode,
+	})
 	if err != nil {
 		return fmt.Errorf("retry chapter finalize: %w", err)
 	}
@@ -574,47 +482,17 @@ func ListChaptersNeedingFinalization(ctx context.Context, limit int, minTimeout,
 	if limit <= 0 || limit > 1000 {
 		limit = 50
 	}
-	rows, err := db.QueryContext(ctx, `
-		SELECT chapter_id, artifact_hash, mode, interval_seconds,
-		       start_ms, end_ms, is_current,
-		       state, playback_artifact_hash, playback_id, finalize_attempts,
-		       finalize_started_at, frozen_at,
-		       last_failure_reason, reclaim_started_at,
-		       segment_count, has_gaps,
-		       actual_media_start_ms, actual_media_end_ms,
-		       created_at
-		  FROM foghorn.dvr_chapters c
-		 WHERE (c.state = 'closed'
-		    OR (c.state = 'finalizing'
-		        AND COALESCE(c.finalize_started_at, c.created_at) < NOW() - LEAST(
-		              GREATEST(
-		                  make_interval(secs => 2 * GREATEST(c.end_ms - c.start_ms, 0) / 1000.0),
-		                  make_interval(secs => $1)),
-		              make_interval(secs => $2))))
-		   -- Never dispatch a chapter whose parent DVR is gone/deleted: an expiry or explicit
-		   -- delete cascades the parent to 'deleted' (and removes chapter rows), but this guard
-		   -- also stops an in-flight lister from re-dispatching a chapter mid-cascade.
-		   AND EXISTS (
-		       SELECT 1 FROM foghorn.artifacts p
-		        WHERE p.artifact_hash = c.artifact_hash
-		          AND p.artifact_type = 'dvr'
-		          AND p.status <> 'deleted')
-		 ORDER BY c.created_at ASC, c.chapter_id ASC
-		 LIMIT $3
-	`, minTimeout.Seconds(), maxTimeout.Seconds(), limit)
+	rows, err := foghorndb.New(db).ListDVRChaptersNeedingFinalization(ctx, foghorndb.ListDVRChaptersNeedingFinalizationParams{
+		Secs: minTimeout.Seconds(), Secs_2: maxTimeout.Seconds(), Limit: int32(limit),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("list chapters needing finalization: %w", err)
 	}
-	defer rows.Close()
-	var out []DVRChapterRow
-	for rows.Next() {
-		c, err := scanChapterRowFromRows(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, *c)
+	out := make([]DVRChapterRow, len(rows))
+	for i := range rows {
+		out[i] = mapDVRChapter(rows[i].FoghornDvrChapter)
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // ListChaptersNeedingReclaim returns frozen chapters whose source
@@ -642,34 +520,17 @@ func listChaptersNeedingReclaimOnce(ctx context.Context, limit int, freshness ti
 	if limit <= 0 || limit > 1000 {
 		limit = 50
 	}
-	rows, err := db.QueryContext(ctx, `
-		SELECT chapter_id, artifact_hash, mode, interval_seconds,
-		       start_ms, end_ms, is_current,
-		       state, playback_artifact_hash, playback_id, finalize_attempts,
-		       finalize_started_at, frozen_at,
-		       last_failure_reason, reclaim_started_at,
-		       segment_count, has_gaps,
-		       actual_media_start_ms, actual_media_end_ms,
-		       created_at
-		  FROM foghorn.dvr_chapters
-		 WHERE state = 'frozen'
-		   AND (reclaim_started_at IS NULL OR reclaim_started_at < NOW() - make_interval(secs => $1))
-		 ORDER BY created_at ASC, chapter_id ASC
-		 LIMIT $2
-	`, freshness.Seconds(), limit)
+	rows, err := foghorndb.New(db).ListDVRChaptersNeedingReclaim(ctx, foghorndb.ListDVRChaptersNeedingReclaimParams{
+		Secs: freshness.Seconds(), Limit: int32(limit),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("list chapters needing reclaim: %w", err)
 	}
-	defer rows.Close()
-	var out []DVRChapterRow
-	for rows.Next() {
-		c, err := scanChapterRowFromRows(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, *c)
+	out := make([]DVRChapterRow, len(rows))
+	for i := range rows {
+		out[i] = mapDVRChapter(rows[i].FoghornDvrChapter)
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // GetChapter returns the chapter row by ID, or sql.ErrNoRows.
@@ -677,19 +538,12 @@ func GetChapter(ctx context.Context, chapterID string) (*DVRChapterRow, error) {
 	if db == nil {
 		return nil, sql.ErrConnDone
 	}
-	row := db.QueryRowContext(ctx, `
-		SELECT chapter_id, artifact_hash, mode, interval_seconds,
-		       start_ms, end_ms, is_current,
-		       state, playback_artifact_hash, playback_id, finalize_attempts,
-		       finalize_started_at, frozen_at,
-		       last_failure_reason, reclaim_started_at,
-		       segment_count, has_gaps,
-		       actual_media_start_ms, actual_media_end_ms,
-		       created_at
-		  FROM foghorn.dvr_chapters
-		 WHERE chapter_id = $1
-	`, chapterID)
-	return scanChapterRow(row)
+	row, err := foghorndb.New(db).GetDVRChapter(ctx, chapterID)
+	if err != nil {
+		return nil, err
+	}
+	mapped := mapDVRChapter(row.FoghornDvrChapter)
+	return &mapped, nil
 }
 
 func getChaptersByID(ctx context.Context, chapterIDs []string) (map[string]DVRChapterRow, error) {
@@ -700,30 +554,15 @@ func getChaptersByID(ctx context.Context, chapterIDs []string) (map[string]DVRCh
 	if db == nil {
 		return nil, sql.ErrConnDone
 	}
-	rows, err := db.QueryContext(ctx, `
-		SELECT chapter_id, artifact_hash, mode, interval_seconds,
-		       start_ms, end_ms, is_current,
-		       state, playback_artifact_hash, playback_id, finalize_attempts,
-		       finalize_started_at, frozen_at,
-		       last_failure_reason, reclaim_started_at,
-		       segment_count, has_gaps,
-		       actual_media_start_ms, actual_media_end_ms,
-		       created_at
-		  FROM foghorn.dvr_chapters
-		 WHERE chapter_id = ANY($1)
-	`, pq.Array(chapterIDs))
+	rows, err := foghorndb.New(db).GetDVRChaptersByID(ctx, chapterIDs)
 	if err != nil {
 		return nil, fmt.Errorf("get chapters by id: %w", err)
 	}
-	defer rows.Close()
-	for rows.Next() {
-		c, scanErr := scanChapterRowFromRows(rows)
-		if scanErr != nil {
-			return nil, scanErr
-		}
-		out[c.ChapterID] = *c
+	for _, row := range rows {
+		c := mapDVRChapter(row.FoghornDvrChapter)
+		out[c.ChapterID] = c
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 // CurrentChapter returns the in-flight chapter for an artifact, if any.
@@ -731,66 +570,40 @@ func CurrentChapter(ctx context.Context, artifactHash string) (*DVRChapterRow, e
 	if db == nil {
 		return nil, sql.ErrConnDone
 	}
-	row := db.QueryRowContext(ctx, `
-		SELECT chapter_id, artifact_hash, mode, interval_seconds,
-		       start_ms, end_ms, is_current,
-		       state, playback_artifact_hash, playback_id, finalize_attempts,
-		       finalize_started_at, frozen_at,
-		       last_failure_reason, reclaim_started_at,
-		       segment_count, has_gaps,
-		       actual_media_start_ms, actual_media_end_ms,
-		       created_at
-		  FROM foghorn.dvr_chapters
-		 WHERE artifact_hash = $1 AND is_current = true
-		 ORDER BY start_ms DESC, chapter_id DESC
-		 LIMIT 1
-	`, artifactHash)
-	c, err := scanChapterRow(row)
+	row, err := foghorndb.New(db).GetCurrentDVRChapter(ctx, artifactHash)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, err
 	}
-	return c, nil
+	c := mapDVRChapter(row.FoghornDvrChapter)
+	return &c, nil
 }
 
 func LatestChapterBefore(ctx context.Context, artifactHash, mode string, intervalSeconds int32, beforeStartMs int64) (*DVRChapterRow, error) {
 	if db == nil {
 		return nil, sql.ErrConnDone
 	}
-	row := db.QueryRowContext(ctx, `
-		SELECT chapter_id, artifact_hash, mode, interval_seconds,
-		       start_ms, end_ms, is_current,
-		       state, playback_artifact_hash, playback_id, finalize_attempts,
-		       finalize_started_at, frozen_at,
-		       last_failure_reason, reclaim_started_at,
-		       segment_count, has_gaps,
-		       actual_media_start_ms, actual_media_end_ms,
-		       created_at
-		  FROM foghorn.dvr_chapters
-		 WHERE artifact_hash = $1
-		   AND mode = $2
-		   AND COALESCE(interval_seconds, 0) = $3
-		   AND start_ms < $4
-		 ORDER BY start_ms DESC, chapter_id DESC
-		 LIMIT 1
-	`, artifactHash, mode, intervalSeconds, beforeStartMs)
-	c, err := scanChapterRow(row)
+	row, err := foghorndb.New(db).GetLatestDVRChapterBefore(ctx, foghorndb.GetLatestDVRChapterBeforeParams{
+		ArtifactHash: artifactHash, Mode: mode,
+		IntervalSeconds: sql.NullInt32{Int32: intervalSeconds, Valid: true}, StartMs: beforeStartMs,
+	})
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, err
 	}
-	return c, nil
+	c := mapDVRChapter(row.FoghornDvrChapter)
+	return &c, nil
 }
 
 func DeleteChapter(ctx context.Context, chapterID string) error {
 	if db == nil {
 		return sql.ErrConnDone
 	}
-	_, err := db.ExecContext(ctx, `DELETE FROM foghorn.dvr_chapters WHERE chapter_id = $1`, chapterID)
+	err := foghorndb.New(db).DeleteDVRChapter(ctx, chapterID)
 	if err != nil {
 		return fmt.Errorf("delete chapter: %w", err)
 	}
@@ -815,26 +628,14 @@ func PropagateChapterRetentionTx(ctx context.Context, tx *sql.Tx, dvrHash string
 	return propagateChapterRetention(ctx, tx, dvrHash, until)
 }
 
-func propagateChapterRetention(ctx context.Context, q execQuerier, dvrHash string, until interface{}) (int64, error) {
-	res, err := q.ExecContext(ctx, `
-		UPDATE foghorn.artifacts a
-		   SET retention_until = $2,
-		       updated_at = NOW()
-		  FROM foghorn.dvr_chapters c
-		 WHERE c.artifact_hash = $1
-		   AND a.artifact_hash = c.playback_artifact_hash
-		   AND a.origin_type = 'dvr_chapter'
-		   AND a.status <> 'deleted'
-	`, dvrHash, until)
+func propagateChapterRetention(ctx context.Context, dbtx foghorndb.DBTX, dvrHash string, until interface{}) (int64, error) {
+	rows, err := foghorndb.New(dbtx).PropagateDVRChapterRetention(ctx, foghorndb.PropagateDVRChapterRetentionParams{
+		ArtifactHash: dvrHash, RetentionUntil: retentionNullTime(until),
+	})
 	if err != nil {
 		return 0, fmt.Errorf("propagate chapter retention: %w", err)
 	}
-	return res.RowsAffected()
-}
-
-// execQuerier is satisfied by both *sql.DB and *sql.Tx for statements that only need ExecContext.
-type execQuerier interface {
-	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	return rows, nil
 }
 
 // SoftDeleteDVRAndChapters commits the DURABLE deletion of a DVR and its chapters as ONE
@@ -871,14 +672,13 @@ func SoftDeleteDVRAndChapters(ctx context.Context, dvrHash, tenantID string) ([]
 	// transition-idempotent and tenant-scoped: a concurrent/retry delete of an already-deleted DVR
 	// (or a same-hash artifact owned by another tenant) affects 0 rows and does NOT re-enqueue the
 	// DVR-deleted lifecycle event. RowsAffected confirms whether this call performed the transition.
-	res, execErr := tx.ExecContext(ctx, `
-		UPDATE foghorn.artifacts SET status = 'deleted', updated_at = NOW()
-		 WHERE artifact_hash = $1 AND tenant_id = $2::uuid AND artifact_type = 'dvr' AND status <> 'deleted'
-	`, dvrHash, tenantID)
+	q := foghorndb.New(tx)
+	affected, execErr := q.SoftDeleteDVRParent(ctx, foghorndb.SoftDeleteDVRParentParams{
+		ArtifactHash: dvrHash, TenantID: tenantID,
+	})
 	if execErr != nil {
 		return nil, false, fmt.Errorf("delete dvr: soft-delete parent: %w", execErr)
 	}
-	affected, _ := res.RowsAffected() //nolint:errcheck // pq populates RowsAffected on UPDATE
 	parentTransitioned := affected > 0
 
 	// Cascade children + chapter rows + per-child VOD-deleted events ALWAYS (idempotent —
@@ -915,29 +715,14 @@ func RepairDeletedDVRChildrenBatch(ctx context.Context, limit int) (int, error) 
 	if db == nil {
 		return 0, sql.ErrConnDone
 	}
-	rows, err := db.QueryContext(ctx, `
-		SELECT p.artifact_hash, p.tenant_id::text
-		  FROM foghorn.artifacts p
-		 WHERE p.artifact_type = 'dvr' AND p.status = 'deleted'
-		   AND EXISTS (SELECT 1 FROM foghorn.dvr_chapters c WHERE c.artifact_hash = p.artifact_hash)
-		 LIMIT $1
-	`, limit)
+	rows, err := foghorndb.New(db).ListDeletedDVRParentsWithChapters(ctx, int32(limit))
 	if err != nil {
 		return 0, fmt.Errorf("repair deleted dvr children: scan candidates: %w", err)
 	}
 	type candidate struct{ hash, tenant string }
 	var candidates []candidate
-	for rows.Next() {
-		var cnd candidate
-		if scanErr := rows.Scan(&cnd.hash, &cnd.tenant); scanErr != nil {
-			rows.Close() //nolint:sqlclosecheck // close before opening per-parent transactions
-			return 0, scanErr
-		}
-		candidates = append(candidates, cnd)
-	}
-	rows.Close() //nolint:sqlclosecheck // done reading; per-parent txs run next
-	if rowsErr := rows.Err(); rowsErr != nil {
-		return 0, rowsErr
+	for _, row := range rows {
+		candidates = append(candidates, candidate{hash: row.ArtifactHash, tenant: row.TenantID})
 	}
 
 	repaired := 0
@@ -974,43 +759,18 @@ func CascadeDVRChildrenTx(ctx context.Context, tx *sql.Tx, dvrHash, tenant strin
 	// Child chapter artifacts → deleted (RETURNING their hashes) BEFORE removing the chapter rows
 	// the join relies on. Tenant-scoped so the delete never reaches another tenant's chapter (partition/
 	// authorization scoping; artifact_hash is a randomly-minted, globally-unique id).
-	rows, err := tx.QueryContext(ctx, `
-		UPDATE foghorn.artifacts a
-		   SET status = 'deleted', updated_at = NOW()
-		  FROM foghorn.dvr_chapters c
-		 WHERE c.artifact_hash = $1
-		   AND a.artifact_hash = c.playback_artifact_hash
-		   AND a.origin_type = 'dvr_chapter'
-		   AND a.tenant_id = $2::uuid
-		   AND a.status <> 'deleted'
-		RETURNING a.artifact_hash
-	`, dvrHash, tenant)
+	q := foghorndb.New(tx)
+	childHashes, err := q.SoftDeleteDVRChapterArtifacts(ctx, foghorndb.SoftDeleteDVRChapterArtifactsParams{
+		ArtifactHash: dvrHash, TenantID: tenant,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("delete dvr: cascade child chapters: %w", err)
 	}
-	var childHashes []string
-	for rows.Next() {
-		var h string
-		if scanErr := rows.Scan(&h); scanErr != nil {
-			rows.Close() //nolint:sqlclosecheck // must close before running more statements on tx
-			return nil, scanErr
-		}
-		childHashes = append(childHashes, h)
-	}
-	rows.Close() //nolint:sqlclosecheck // deferred close would hold the row set past the next tx statement
-	if rowsErr := rows.Err(); rowsErr != nil {
-		return nil, rowsErr
-	}
-
 	// Tenant-scoped via the parent artifact (dvr_chapters has no tenant column): join foghorn.artifacts
 	// so the ledger delete can't reach a same-hash parent owned by another tenant.
-	if _, err := tx.ExecContext(ctx, `
-		DELETE FROM foghorn.dvr_chapters c
-		 USING foghorn.artifacts parent
-		 WHERE c.artifact_hash = $1
-		   AND parent.artifact_hash = $1
-		   AND parent.tenant_id = $2::uuid
-	`, dvrHash, tenant); err != nil {
+	if err := q.DeleteDVRChapterRowsForTenant(ctx, foghorndb.DeleteDVRChapterRowsForTenantParams{
+		ArtifactHash: dvrHash, TenantID: tenant,
+	}); err != nil {
 		return nil, fmt.Errorf("delete dvr: remove chapter rows: %w", err)
 	}
 
@@ -1030,14 +790,11 @@ func DVRArtifactStillRecording(ctx context.Context, artifactHash string) bool {
 	if db == nil {
 		return false
 	}
-	var st string
-	if err := db.QueryRowContext(ctx,
-		`SELECT status FROM foghorn.artifacts WHERE artifact_hash = $1 AND artifact_type = 'dvr'`,
-		artifactHash,
-	).Scan(&st); err != nil {
+	st, err := foghorndb.New(db).GetDVRParentArtifactStatus(ctx, artifactHash)
+	if err != nil || !st.Valid {
 		return false
 	}
-	return st == "starting" || st == "recording"
+	return st.String == "starting" || st.String == "recording"
 }
 
 // ClearCurrentChaptersForInactiveDVRs closes any chapter still marked
@@ -1048,20 +805,11 @@ func ClearCurrentChaptersForInactiveDVRs(ctx context.Context) (int64, error) {
 	if db == nil {
 		return 0, sql.ErrConnDone
 	}
-	res, err := db.ExecContext(ctx, `
-		UPDATE foghorn.dvr_chapters c
-		   SET is_current = false,
-		       state      = CASE WHEN c.state = 'open' THEN 'closed' ELSE c.state END
-		  FROM foghorn.artifacts a
-		 WHERE c.artifact_hash = a.artifact_hash
-		   AND c.is_current = true
-		   AND a.artifact_type = 'dvr'
-		   AND a.status IN ('completed', 'completed_partial', 'failed', 'ready', 'deleted')
-	`)
+	rows, err := foghorndb.New(db).ClearCurrentChaptersForInactiveDVRs(ctx)
 	if err != nil {
 		return 0, err
 	}
-	return res.RowsAffected()
+	return rows, nil
 }
 
 func WithDVRChapterMutationLock(ctx context.Context, artifactHash string, fn func() error) error {
@@ -1073,13 +821,14 @@ func WithDVRChapterMutationLock(ctx context.Context, artifactHash string, fn fun
 		return err
 	}
 	defer conn.Close()
-	if _, err := conn.ExecContext(ctx, `SELECT pg_advisory_lock(hashtext($1))`, artifactHash); err != nil {
+	q := foghorndb.New(conn)
+	if err := q.LockDVRChapterMutation(ctx, artifactHash); err != nil {
 		return err
 	}
 	defer func() {
 		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if _, unlockErr := conn.ExecContext(unlockCtx, `SELECT pg_advisory_unlock(hashtext($1))`, artifactHash); unlockErr != nil {
+		if unlockErr := q.UnlockDVRChapterMutation(unlockCtx, artifactHash); unlockErr != nil {
 			return
 		}
 	}()
@@ -1119,43 +868,17 @@ func ListChaptersForArtifact(
 			}
 		}
 	}
-	var intervalArg interface{}
-	if intervalSeconds > 0 {
-		intervalArg = intervalSeconds
-	}
-	rows, err := db.QueryContext(ctx, `
-		SELECT chapter_id, artifact_hash, mode, interval_seconds,
-		       start_ms, end_ms, is_current,
-		       state, playback_artifact_hash, playback_id, finalize_attempts,
-		       finalize_started_at, frozen_at,
-		       last_failure_reason, reclaim_started_at,
-		       segment_count, has_gaps,
-		       actual_media_start_ms, actual_media_end_ms,
-		       created_at
-		  FROM foghorn.dvr_chapters
-		 WHERE artifact_hash = $1
-		   AND start_ms >= $2
-		   AND ($3 = 0 OR start_ms < $3)
-		   AND ($4 = '' OR mode = $4)
-		   AND ($5::int IS NULL OR COALESCE(interval_seconds, 0) = $5::int)
-		   AND ($6 = 0 OR start_ms > $6 OR (start_ms = $6 AND chapter_id > $7))
-		 ORDER BY start_ms ASC, chapter_id ASC
-		 LIMIT $8
-	`, artifactHash, startMs, endMs, mode, intervalArg, cursor, cursorID, limit+1)
+	rows, err := foghorndb.New(db).ListDVRChaptersForArtifact(ctx, foghorndb.ListDVRChaptersForArtifactParams{
+		ArtifactHash: artifactHash, StartMs: startMs, EndMs: endMs, Mode: mode,
+		CursorStartMs: cursor, CursorChapterID: cursorID, PageLimit: int32(limit + 1),
+		IntervalSeconds: sql.NullInt32{Int32: intervalSeconds, Valid: intervalSeconds > 0},
+	})
 	if err != nil {
 		return nil, "", fmt.Errorf("list chapters: %w", err)
 	}
-	defer rows.Close()
-	var out []DVRChapterRow
-	for rows.Next() {
-		c, err := scanChapterRowFromRows(rows)
-		if err != nil {
-			return nil, "", err
-		}
-		out = append(out, *c)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, "", err
+	out := make([]DVRChapterRow, len(rows))
+	for i := range rows {
+		out[i] = mapDVRChapter(rows[i].FoghornDvrChapter)
 	}
 	var nextToken string
 	if len(out) > limit {
@@ -1338,31 +1061,4 @@ func overlayMaterializedChapters(ctx context.Context, rows []DVRChapterRow) ([]D
 		}
 	}
 	return rows, nil
-}
-
-// helpers
-
-type chapterRowScanner interface {
-	Scan(...interface{}) error
-}
-
-func scanChapterRow(row chapterRowScanner) (*DVRChapterRow, error) {
-	var c DVRChapterRow
-	if err := row.Scan(
-		&c.ChapterID, &c.ArtifactHash, &c.Mode, &c.IntervalSeconds,
-		&c.StartMs, &c.EndMs, &c.IsCurrent,
-		&c.State, &c.PlaybackArtifactHash, &c.PlaybackID, &c.FinalizeAttempts,
-		&c.FinalizeStartedAt, &c.FrozenAt,
-		&c.LastFailureReason, &c.ReclaimStartedAt,
-		&c.SegmentCount, &c.HasGaps,
-		&c.ActualMediaStartMs, &c.ActualMediaEndMs,
-		&c.CreatedAt,
-	); err != nil {
-		return nil, err
-	}
-	return &c, nil
-}
-
-func scanChapterRowFromRows(rows *sql.Rows) (*DVRChapterRow, error) {
-	return scanChapterRow(rows)
 }

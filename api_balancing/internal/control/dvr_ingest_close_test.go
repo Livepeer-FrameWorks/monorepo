@@ -21,8 +21,8 @@ func TestFinalizeIngestSessionClose_EndsAndClaimsStop(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectQuery(`UPDATE foghorn.ingest_sessions\s+SET ended_at = NOW.*'push_input_close'.*started_at_unix_millis <= \$4.*RETURNING id`).
-		WithArgs("tenant-a", "node-1", int64(1234), int64(9000), "live+s1").
+	mock.ExpectQuery(`UPDATE foghorn.ingest_sessions\s+SET ended_at = NOW.*'push_input_close'.*started_at_unix_millis <= \$1.*RETURNING id`).
+		WithArgs(int64(9000), "tenant-a", "node-1", int64(1234), "live+s1").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "start_trigger_uuid", "ingest_cluster_id"}).AddRow("gen-1", "trigger-uuid-x", "demo-media"))
 	mock.ExpectQuery(`UPDATE foghorn.artifacts.*'"stop_pending"'.*ingest_generation = \$1::uuid.*RETURNING`).
 		WithArgs("gen-1", "tenant-a").
@@ -59,7 +59,7 @@ func TestFinalizeIngestSessionClose_FencedReturnsEmpty(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`UPDATE foghorn.ingest_sessions.*RETURNING id`).
-		WithArgs("tenant-a", "node-1", int64(1234), int64(500), "live+s1").
+		WithArgs(int64(500), "tenant-a", "node-1", int64(1234), "live+s1").
 		WillReturnError(sql.ErrNoRows)
 	// No active session ended → record a close-before-insert tombstone so a late rewrite is denied.
 	mock.ExpectExec(`INSERT INTO foghorn.ingest_close_tombstones`).
@@ -86,7 +86,7 @@ func TestFinalizeIngestSessionClose_EndedNoDVR(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`UPDATE foghorn.ingest_sessions.*RETURNING id`).
-		WithArgs("tenant-a", "node-1", int64(1234), int64(9000), "live+s1").
+		WithArgs(int64(9000), "tenant-a", "node-1", int64(1234), "live+s1").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "start_trigger_uuid", "ingest_cluster_id"}).AddRow("gen-1", "trigger-uuid-x", "demo-media"))
 	// No active bound DVR: the multi-row claim returns an empty set (not ErrNoRows).
 	mock.ExpectQuery(`UPDATE foghorn.artifacts.*RETURNING`).

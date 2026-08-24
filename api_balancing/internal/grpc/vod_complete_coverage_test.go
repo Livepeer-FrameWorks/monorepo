@@ -182,11 +182,11 @@ func TestCompleteVodUpload_S3FailureMarksArtifactFailed(t *testing.T) {
 	// The 'uploading' row is claimed to 'completing' AND the processing spec + multipart completion
 	// descriptor are persisted ATOMICALLY in ONE tx before the external S3 call (fail-closed claim).
 	mock.ExpectBegin()
-	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'completing'`).
+	mock.ExpectExec(`UPDATE foghorn\.artifacts AS a\s+SET status = 'completing'`).
 		WithArgs("hash-1", "t1", "up-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE foghorn\.vod_metadata\s+SET processes_json`).
-		WithArgs("hash-1", "", "up-1", sqlmock.AnyArg()).
+		WithArgs("", sqlmock.AnyArg(), "hash-1", "up-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	// The claimed row's authoritative completion contract is loaded and used for the S3 completion.
@@ -194,7 +194,7 @@ func TestCompleteVodUpload_S3FailureMarksArtifactFailed(t *testing.T) {
 	// A non-NoSuchUpload S3 error is a genuine failure: the guarded FAILED transition (tenant-scoped)
 	// and its lifecycle event commit in ONE tx.
 	mock.ExpectBegin()
-	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'failed'.*WHERE artifact_hash = \$2 AND tenant_id = \$3\s+AND status NOT IN`).
+	mock.ExpectExec(`UPDATE foghorn\.artifacts AS a\s+SET status = 'failed'.*WHERE artifact_hash = \$2\s+AND tenant_id = \$3::uuid\s+AND status NOT IN`).
 		WithArgs("S3 upload failed: boom", "hash-1", "t1").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(`INSERT INTO foghorn\.artifact_event_outbox`).
@@ -233,11 +233,11 @@ func TestCompleteVodUpload_HappyPathTransitionsToProcessing(t *testing.T) {
 	// Claim 'uploading'->'completing' AND persist the processing spec + multipart completion descriptor
 	// ATOMICALLY in ONE tx before the external S3 CompleteMultipartUpload call.
 	mock.ExpectBegin()
-	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'completing'`).
+	mock.ExpectExec(`UPDATE foghorn\.artifacts AS a\s+SET status = 'completing'`).
 		WithArgs("hash-1", "t1", "up-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE foghorn\.vod_metadata\s+SET processes_json`).
-		WithArgs("hash-1", "", "up-1", sqlmock.AnyArg()).
+		WithArgs("", sqlmock.AnyArg(), "hash-1", "up-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	// Load the authoritative contract: its ordered parts (1,2) are what reach S3, not the request's.
@@ -245,8 +245,8 @@ func TestCompleteVodUpload_HappyPathTransitionsToProcessing(t *testing.T) {
 	// Advance: status 'completing' -> 'processing' (tenant-scoped), storage_location -> s3, committed
 	// atomically with the processing job AND the PROCESSING lifecycle outbox row.
 	mock.ExpectBegin()
-	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'processing'`).
-		WithArgs("hash-1", "s3://bucket/vod/t1/hash-1/video.mp4", "t1", "up-1").
+	mock.ExpectExec(`UPDATE foghorn\.artifacts AS a\s+SET status = 'processing'`).
+		WithArgs("s3://bucket/vod/t1/hash-1/video.mp4", "hash-1", "t1", "up-1").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).
 		WithArgs("hash-1", "process").WillReturnResult(sqlmock.NewResult(0, 0))
@@ -334,8 +334,8 @@ func TestCompleteVodUpload_NoSuchUploadWithObjectConvergesToProcessing(t *testin
 	// S3 CompleteMultipartUpload returns NoSuchUpload; Exists=true, so we skip re-completion and run
 	// the durable 'completing' -> 'processing' transition + processing job + PROCESSING event atomically.
 	mock.ExpectBegin()
-	mock.ExpectExec(`UPDATE foghorn\.artifacts\s+SET status = 'processing'`).
-		WithArgs("hash-1", "s3://bucket/vod/t1/hash-1/video.mp4", "t1", "up-1").
+	mock.ExpectExec(`UPDATE foghorn\.artifacts AS a\s+SET status = 'processing'`).
+		WithArgs("s3://bucket/vod/t1/hash-1/video.mp4", "hash-1", "t1", "up-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).
 		WithArgs("hash-1", "process").WillReturnResult(sqlmock.NewResult(0, 0))

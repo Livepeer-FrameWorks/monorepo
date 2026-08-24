@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
@@ -102,21 +103,11 @@ func (s *ChapterSweeper) sweep() {
 		s.logger.WithField("cleared", cleared).Info("Chapter sweep: cleared inactive current chapters")
 	}
 
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT artifact_hash, dvr_chapter_mode, COALESCE(dvr_chapter_interval, 0),
-		       COALESCE(EXTRACT(EPOCH FROM started_at)*1000, 0)::bigint,
-		       COALESCE(dvr_window_seconds, 0)
-		  FROM foghorn.artifacts
-		 WHERE artifact_type = 'dvr'
-		   AND status IN ('starting', 'recording')
-		   AND dvr_chapter_mode IS NOT NULL
-		   AND dvr_chapter_mode != ''
-	`)
+	rows, err := foghorndb.New(s.db).ListActiveDVRChapterPolicies(ctx)
 	if err != nil {
 		s.logger.WithError(err).Warn("Chapter sweep: failed to enumerate active DVRs")
 		return
 	}
-	defer rows.Close()
 
 	type artifactRow struct {
 		hash            string
@@ -126,17 +117,12 @@ func (s *ChapterSweeper) sweep() {
 		windowSeconds   int32
 	}
 	var artifacts []artifactRow
-	for rows.Next() {
-		var r artifactRow
-		if err := rows.Scan(&r.hash, &r.mode, &r.intervalSeconds, &r.startedAtMs, &r.windowSeconds); err != nil {
-			s.logger.WithError(err).Warn("Chapter sweep: failed to scan artifact row")
-			continue
-		}
-		artifacts = append(artifacts, r)
-	}
-	if err := rows.Err(); err != nil {
-		s.logger.WithError(err).Warn("Chapter sweep: row iteration error")
-		return
+	for _, row := range rows {
+		artifacts = append(artifacts, artifactRow{
+			hash: row.ArtifactHash, mode: row.DvrChapterMode.String,
+			intervalSeconds: row.ChapterIntervalSeconds,
+			startedAtMs:     row.StartedAtMs, windowSeconds: row.WindowSeconds,
+		})
 	}
 	nowMs := time.Now().UnixMilli()
 

@@ -92,7 +92,7 @@ func newStatusServer(t *testing.T, s3 *fakeVodS3Client) (*FoghornGRPCServer, sql
 	return srv, mock, func() { _ = db.Close() }
 }
 
-const statusSelect = `SELECT v.artifact_hash, COALESCE\(v.s3_key, ''\), a.status,
+const statusSelect = `SELECT v.artifact_hash, COALESCE\(v.s3_key, ''\)::text AS s3_key, a.status,
 	       a.error_message, a.retention_until, v.upload_expires_at, v.total_parts`
 
 func statusRows() *sqlmock.Rows {
@@ -173,8 +173,8 @@ func TestCreateVodUpload_AcceptedBeforePrecheckFailureRecordsRejected(t *testing
 	mock.ExpectExec(`INSERT INTO foghorn\.artifact_creation_commands`).
 		WithArgs("req-vod", "t1", "vod", "vh1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(`SELECT \(tenant_id`).
-		WithArgs("req-vod", "t1", "vod", "vh1").
+	mock.ExpectQuery(`SELECT COALESCE\(tenant_id`).
+		WithArgs("t1", "vod", "vh1", "req-vod").
 		WillReturnRows(sqlmock.NewRows([]string{"identity_ok", "status"}).AddRow(true, "accepted"))
 	// 2) A later precheck (the idempotency probe) fails.
 	mock.ExpectQuery(`FROM foghorn\.artifacts a`).

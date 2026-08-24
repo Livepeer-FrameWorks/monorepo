@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
@@ -115,31 +116,7 @@ func (j *StaleFreezeCleanupJob) cleanup() {
 	// the staging enqueue below would enqueue nothing. The CTE's SELECT ... FOR UPDATE snapshots the old
 	// identity; the UPDATE joins it and RETURNS the OLD attempt id so we can enqueue that attempt's staging
 	// object for durable deletion.
-	rowsRes, err := tx.QueryContext(ctx, `
-		WITH stale AS (
-			SELECT artifact_hash,
-			       COALESCE(sync_object_key, '') AS canonical_key,
-			       COALESCE(sync_request_id, '') AS attempt_id
-			FROM foghorn.artifacts
-			WHERE sync_status = 'in_progress'
-			  AND storage_location = 'freezing'
-			  AND status NOT IN ('deleted', 'expired', 'aborted')
-			  AND sync_request_id IS NOT NULL
-			  AND sync_node_id IS NOT NULL
-			  AND COALESCE(last_sync_attempt, updated_at) < NOW() - ($1 * INTERVAL '1 second')
-			FOR UPDATE
-		)
-		UPDATE foghorn.artifacts a
-		SET storage_location = 'local',
-		    sync_status = 'failed',
-		    sync_error = 'sync attempt timed out; recovered for retry',
-		    sync_request_id = NULL,
-		    sync_node_id = NULL,
-		    updated_at = NOW()
-		FROM stale
-		WHERE a.artifact_hash = stale.artifact_hash
-		RETURNING stale.canonical_key, stale.attempt_id
-	`, staleAfterSeconds)
+	rowsRes, err := foghorndb.New(tx).ResetStaleFreezeAttempts(ctx, staleAfterSeconds)
 	if err != nil {
 		j.logger.WithError(err).Warn("Failed to reset stale in-progress sync attempts")
 		return
@@ -147,23 +124,9 @@ func (j *StaleFreezeCleanupJob) cleanup() {
 
 	type staleAttempt struct{ canonicalKey, attemptID string }
 	var stale []staleAttempt
-	for rowsRes.Next() {
-		var canonicalKey, attemptID string
-		if scanErr := rowsRes.Scan(&canonicalKey, &attemptID); scanErr != nil {
-			j.logger.WithError(scanErr).Warn("Failed to scan stale freeze row")
-			_ = rowsRes.Close() //nolint:errcheck,sqlclosecheck
-			return
-		}
-		stale = append(stale, staleAttempt{canonicalKey, attemptID})
+	for _, row := range rowsRes {
+		stale = append(stale, staleAttempt{row.CanonicalKey, row.AttemptID})
 	}
-	if rowErr := rowsRes.Err(); rowErr != nil {
-		_ = rowsRes.Close() //nolint:errcheck,sqlclosecheck
-		j.logger.WithError(rowErr).Warn("Failed iterating stale freeze rows")
-		return
-	}
-	// Close the rows before issuing further statements on the SAME transaction (only one active result set
-	// per connection).
-	_ = rowsRes.Close() //nolint:errcheck,sqlclosecheck
 
 	// Durably enqueue each abandoned attempt's STAGING object AND its published CANDIDATE (+ the candidate's
 	// co-located .dtsh) for deletion, on THIS transaction. The candidate is what a completion promotes to

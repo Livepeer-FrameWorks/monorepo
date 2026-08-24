@@ -265,11 +265,12 @@ func TestProcessProcessingJobResult_Completed_ClipFullSuccess(t *testing.T) {
 	mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET format`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	// RegisterOriginArtifactTx: prior-read (none) → origin upsert (freshly inserted, complete).
+	expectPlacementParentLock(mock)
 	mock.ExpectQuery(`SELECT role, is_complete, is_orphaned FROM foghorn.artifact_nodes`).
 		WithArgs("art-clip", "node-1").
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery(`INSERT INTO foghorn.artifact_nodes`).
-		WillReturnRows(sqlmock.NewRows([]string{"inserted", "is_complete"}).AddRow(true, true))
+		WillReturnRows(sqlmock.NewRows([]string{"is_complete"}).AddRow(true))
 	// emitPresentTx → GAINED: resolve tenant → mint version → stamp last_emitted_version →
 	// enqueue the node-copy outbox event.
 	mock.ExpectQuery(`SELECT tenant_id::text FROM foghorn.artifacts WHERE artifact_hash`).

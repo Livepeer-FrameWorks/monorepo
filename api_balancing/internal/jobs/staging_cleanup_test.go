@@ -46,7 +46,7 @@ func TestStagingCleanup_DeletesAndRemovesRow(t *testing.T) {
 
 	// Atomic lease-claim mints a fresh token per row (UPDATE ... FOR UPDATE SKIP LOCKED ... RETURNING).
 	mock.ExpectQuery("UPDATE foghorn.staging_cleanup_queue.*SET leased_until.*lease_token = gen_random_uuid.*FOR UPDATE SKIP LOCKED.*RETURNING").
-		WithArgs(100, int64((2 * time.Minute).Seconds())).
+		WithArgs(int64((2 * time.Minute).Seconds()), 100).
 		WillReturnRows(sqlmock.NewRows([]string{"object_key", "attempts", "lease_token", "backend_id"}).AddRow("tenant-1/clips/hash.mp4.staging.att-1", 0, "tok-1", "local-backend"))
 	// Successful delete removes the durable row, FENCED on the lease token.
 	mock.ExpectExec("DELETE FROM foghorn.staging_cleanup_queue WHERE object_key = \\$1 AND lease_token = \\$2").
@@ -87,11 +87,11 @@ func TestStagingCleanup_RepointFailsClosed(t *testing.T) {
 
 	// The claimed row was written to OLD-backend; the cell now points at NEW-backend.
 	mock.ExpectQuery("UPDATE foghorn.staging_cleanup_queue.*SET leased_until.*lease_token = gen_random_uuid.*FOR UPDATE SKIP LOCKED.*RETURNING").
-		WithArgs(100, int64((2 * time.Minute).Seconds())).
+		WithArgs(int64((2 * time.Minute).Seconds()), 100).
 		WillReturnRows(sqlmock.NewRows([]string{"object_key", "attempts", "lease_token", "backend_id"}).AddRow("k-old", 0, "tok-1", "OLD-backend"))
 	// No DELETE — a backoff/lease-release UPDATE is issued instead (fail closed).
-	mock.ExpectExec("UPDATE foghorn.staging_cleanup_queue\\s+SET attempts = attempts \\+ 1.*leased_until = NULL.*lease_token = NULL.*WHERE object_key = \\$1 AND lease_token = \\$4").
-		WithArgs("k-old", sqlmock.AnyArg(), sqlmock.AnyArg(), "tok-1").
+	mock.ExpectExec("UPDATE foghorn.staging_cleanup_queue\\s+SET attempts = attempts \\+ 1.*leased_until = NULL.*lease_token = NULL.*WHERE object_key = \\$3 AND lease_token = \\$4").
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "k-old", "tok-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	j.drain()
@@ -127,11 +127,11 @@ func TestStagingCleanup_RecordedBackendWithoutLocalIdentityFailsClosed(t *testin
 	}
 
 	mock.ExpectQuery("UPDATE foghorn.staging_cleanup_queue.*SET leased_until.*lease_token = gen_random_uuid.*FOR UPDATE SKIP LOCKED.*RETURNING").
-		WithArgs(100, int64((2 * time.Minute).Seconds())).
+		WithArgs(int64((2 * time.Minute).Seconds()), 100).
 		WillReturnRows(sqlmock.NewRows([]string{"object_key", "attempts", "lease_token", "backend_id"}).AddRow("k-x", 0, "tok-1", "SOME-backend"))
 	// No DELETE — a backoff/lease-release UPDATE is issued instead (fail closed).
-	mock.ExpectExec("UPDATE foghorn.staging_cleanup_queue\\s+SET attempts = attempts \\+ 1.*leased_until = NULL.*lease_token = NULL.*WHERE object_key = \\$1 AND lease_token = \\$4").
-		WithArgs("k-x", sqlmock.AnyArg(), sqlmock.AnyArg(), "tok-1").
+	mock.ExpectExec("UPDATE foghorn.staging_cleanup_queue\\s+SET attempts = attempts \\+ 1.*leased_until = NULL.*lease_token = NULL.*WHERE object_key = \\$3 AND lease_token = \\$4").
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "k-x", "tok-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	j.drain()
@@ -164,11 +164,11 @@ func TestStagingCleanup_FailureBacksOffAndReleasesLease(t *testing.T) {
 	}
 
 	mock.ExpectQuery("UPDATE foghorn.staging_cleanup_queue.*SET leased_until.*lease_token = gen_random_uuid.*FOR UPDATE SKIP LOCKED.*RETURNING").
-		WithArgs(100, int64((2 * time.Minute).Seconds())).
+		WithArgs(int64((2 * time.Minute).Seconds()), 100).
 		WillReturnRows(sqlmock.NewRows([]string{"object_key", "attempts", "lease_token", "backend_id"}).AddRow("k1", 2, "tok-2", "local-backend"))
 	// A failed delete bumps attempts, reschedules, and RELEASES the lease (token-fenced); row not removed.
-	mock.ExpectExec("UPDATE foghorn.staging_cleanup_queue\\s+SET attempts = attempts \\+ 1.*leased_until = NULL.*lease_token = NULL.*WHERE object_key = \\$1 AND lease_token = \\$4").
-		WithArgs("k1", int64((time.Minute * 3).Seconds()), "s3 delete failed", "tok-2").
+	mock.ExpectExec("UPDATE foghorn.staging_cleanup_queue\\s+SET attempts = attempts \\+ 1.*leased_until = NULL.*lease_token = NULL.*WHERE object_key = \\$3 AND lease_token = \\$4").
+		WithArgs(int64((time.Minute * 3).Seconds()), "s3 delete failed", "k1", "tok-2").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	j.drain()

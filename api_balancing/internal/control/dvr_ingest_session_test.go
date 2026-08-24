@@ -109,7 +109,7 @@ func TestCreateIngestSession_PidReuseEndsStaleAndMintsFresh(t *testing.T) {
 		WithArgs("tenant-a", "live+s1").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "node_id", "connector_pid", "started_at_unix_millis"}).AddRow("sess-old", "node-1", int64(1234), int64(1000)))
 	mock.ExpectExec(`UPDATE foghorn.ingest_sessions\s+SET ended_at = NOW.*'superseded_pid_reuse'`).
-		WithArgs("sess-old", int64(5000)).
+		WithArgs(int64(5000), "sess-old").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`UPDATE foghorn.artifacts.*ingest_generation = \$1::uuid.*RETURNING`).
 		WithArgs("sess-old", "tenant-a").

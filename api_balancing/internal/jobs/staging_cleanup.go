@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"frameworks/api_balancing/internal/database/foghorndb"
+
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
@@ -159,33 +161,18 @@ type stagingCleanupItem struct {
 // another worker cannot settle the row (its stale token no longer matches). The batch is sized so it fits
 // within the lease (batchSize * itemTimeout <= leaseTTL, enforced in the constructor).
 func (j *StagingCleanupJob) claimBatch(ctx context.Context) ([]stagingCleanupItem, error) {
-	rows, err := j.db.QueryContext(ctx, `
-		UPDATE foghorn.staging_cleanup_queue q
-		SET leased_until = NOW() + ($2 * INTERVAL '1 second'),
-		    lease_token = gen_random_uuid()::text
-		WHERE q.object_key IN (
-			SELECT object_key FROM foghorn.staging_cleanup_queue
-			WHERE next_attempt_at <= NOW()
-			  AND (leased_until IS NULL OR leased_until <= NOW())
-			ORDER BY next_attempt_at
-			LIMIT $1
-			FOR UPDATE SKIP LOCKED
-		)
-		RETURNING q.object_key, q.attempts, q.lease_token, COALESCE(q.backend_id, '')`, j.batchSize, int64(j.leaseTTL.Seconds()))
+	rows, err := foghorndb.New(j.db).ClaimStagingCleanupItems(ctx, foghorndb.ClaimStagingCleanupItemsParams{
+		BatchLimit: int32(j.batchSize), LeaseSeconds: int64(j.leaseTTL.Seconds()),
+	})
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
 	var items []stagingCleanupItem
-	for rows.Next() {
-		var it stagingCleanupItem
-		if scanErr := rows.Scan(&it.key, &it.attempts, &it.token, &it.backendID); scanErr != nil {
-			return nil, scanErr
-		}
-		items = append(items, it)
+	for _, row := range rows {
+		items = append(items, stagingCleanupItem{key: row.ObjectKey, attempts: int(row.Attempts),
+			token: row.LeaseToken.String, backendID: row.BackendID})
 	}
-	return items, rows.Err()
+	return items, nil
 }
 
 // settleOne deletes one leased staging object and reconciles the queue row, each on its OWN bounded context.
@@ -210,14 +197,9 @@ func (j *StagingCleanupJob) settleOne(it stagingCleanupItem) (deleted bool) {
 		backoff := j.backoffBase * time.Duration(min(it.attempts+1, 30))
 		upCtx, upCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer upCancel()
-		if _, upErr := j.db.ExecContext(upCtx, `
-			UPDATE foghorn.staging_cleanup_queue
-			SET attempts = attempts + 1,
-			    next_attempt_at = NOW() + ($2 * INTERVAL '1 second'),
-			    leased_until = NULL,
-			    lease_token = NULL,
-			    last_error = $3
-			WHERE object_key = $1 AND lease_token = $4`, it.key, int64(backoff.Seconds()), delErr.Error(), it.token); upErr != nil {
+		if upErr := foghorndb.New(j.db).FailStagingCleanupItem(upCtx, foghorndb.FailStagingCleanupItemParams{
+			ObjectKey: it.key, BackoffSeconds: int64(backoff.Seconds()), LastError: delErr.Error(), LeaseToken: it.token,
+		}); upErr != nil {
 			j.logger.WithError(upErr).WithField("object_key", it.key).Debug("Failed to record staging cleanup retry")
 		}
 		return false
@@ -226,12 +208,14 @@ func (j *StagingCleanupJob) settleOne(it stagingCleanupItem) (deleted bool) {
 	// gone, so a later pass Deletes an already-absent key (idempotent) and removes the row then.
 	rowCtx, rowCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer rowCancel()
-	res, delRowErr := j.db.ExecContext(rowCtx, `DELETE FROM foghorn.staging_cleanup_queue WHERE object_key = $1 AND lease_token = $2`, it.key, it.token)
+	n, delRowErr := foghorndb.New(j.db).DeleteStagingCleanupItem(rowCtx, foghorndb.DeleteStagingCleanupItemParams{
+		ObjectKey: it.key, LeaseToken: sql.NullString{String: it.token, Valid: true},
+	})
 	if delRowErr != nil {
 		j.logger.WithError(delRowErr).WithField("object_key", it.key).Debug("Deleted staging object but failed to drop queue row")
 		return false
 	}
-	if n, raErr := res.RowsAffected(); raErr == nil && n == 0 {
+	if n == 0 {
 		return false // lease was stolen (token mismatch) — the current owner will settle it
 	}
 	return true
@@ -245,14 +229,9 @@ func (j *StagingCleanupJob) recordRepointDeferral(it stagingCleanupItem) {
 	upCtx, upCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer upCancel()
 	msg := "storage backend repointed (recorded " + it.backendID + " != current " + j.localBackendID + "); refusing to delete from the wrong store"
-	if _, upErr := j.db.ExecContext(upCtx, `
-		UPDATE foghorn.staging_cleanup_queue
-		SET attempts = attempts + 1,
-		    next_attempt_at = NOW() + ($2 * INTERVAL '1 second'),
-		    leased_until = NULL,
-		    lease_token = NULL,
-		    last_error = $3
-		WHERE object_key = $1 AND lease_token = $4`, it.key, int64(backoff.Seconds()), msg, it.token); upErr != nil {
+	if upErr := foghorndb.New(j.db).FailStagingCleanupItem(upCtx, foghorndb.FailStagingCleanupItemParams{
+		ObjectKey: it.key, BackoffSeconds: int64(backoff.Seconds()), LastError: msg, LeaseToken: it.token,
+	}); upErr != nil {
 		j.logger.WithError(upErr).WithField("object_key", it.key).Debug("Failed to record staging cleanup repoint deferral")
 	}
 }

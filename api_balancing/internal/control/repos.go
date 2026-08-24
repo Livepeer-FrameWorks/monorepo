@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/artifactoutbox"
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -35,39 +36,26 @@ func (r *clipRepositoryDB) ListActiveClips(ctx context.Context) ([]state.ClipRec
 	if db == nil {
 		return nil, sql.ErrConnDone
 	}
-	// Query artifacts table with type='clip', join with artifact_nodes to get node info
-	rows, err := db.QueryContext(ctx, `
-		SELECT a.artifact_hash, '' as tenant_id, COALESCE(a.stream_internal_name,''),
-		       COALESCE(n.node_id,''), a.status, COALESCE(n.file_path,''),
-		       COALESCE(a.size_bytes,0), COALESCE(a.storage_location,'pending')
-		FROM foghorn.artifacts a
-		LEFT JOIN foghorn.artifact_nodes n ON a.artifact_hash = n.artifact_hash AND n.is_orphaned = false
-		WHERE a.artifact_type = 'clip' AND a.status != 'deleted'`)
+	rows, err := foghorndb.New(db).ListActiveClips(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var out []state.ClipRecord
-	for rows.Next() {
-		var rec state.ClipRecord
-		if err := rows.Scan(&rec.ClipHash, &rec.TenantID, &rec.InternalName, &rec.NodeID, &rec.Status, &rec.StoragePath, &rec.SizeBytes, &rec.StorageLocation); err != nil {
-			return nil, err
-		}
-		out = append(out, rec)
+	out := make([]state.ClipRecord, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, state.ClipRecord{
+			ClipHash: row.ArtifactHash, TenantID: row.TenantID, InternalName: row.StreamInternalName,
+			NodeID: row.NodeID, Status: row.Status.String, StoragePath: row.FilePath,
+			SizeBytes: row.SizeBytes, StorageLocation: row.StorageLocation,
+		})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (r *clipRepositoryDB) ResolveInternalNameByRequestID(ctx context.Context, requestID string) (string, error) {
 	if db == nil {
 		return "", sql.ErrConnDone
 	}
-	var internalName string
-	err := db.QueryRowContext(ctx, `
-		SELECT COALESCE(stream_internal_name,'') FROM foghorn.artifacts
-		WHERE request_id = $1 AND artifact_type = 'clip'
-	`, requestID).Scan(&internalName)
+	internalName, err := foghorndb.New(db).ResolveClipInternalNameByRequestID(ctx, sql.NullString{String: requestID, Valid: true})
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
@@ -79,16 +67,7 @@ func (r *clipRepositoryDB) NeedsDtshSync(ctx context.Context, clipHash string) b
 	if db == nil {
 		return false
 	}
-	var needsSync bool
-	err := db.QueryRowContext(ctx, `
-		SELECT EXISTS(
-			SELECT 1 FROM foghorn.artifacts
-			WHERE artifact_hash = $1
-			  AND artifact_type = 'clip'
-			  AND sync_status = 'synced'
-			  AND COALESCE(dtsh_synced, false) = false
-		)
-	`, clipHash).Scan(&needsSync)
+	needsSync, err := foghorndb.New(db).ClipNeedsDtshSync(ctx, clipHash)
 	if err != nil {
 		return false
 	}
@@ -104,39 +83,26 @@ func (r *dvrRepositoryDB) ListAllDVR(ctx context.Context) ([]state.DVRRecord, er
 	if db == nil {
 		return nil, sql.ErrConnDone
 	}
-	// Query artifacts table with type='dvr', join with artifact_nodes for node info
-	rows, err := db.QueryContext(ctx, `
-		SELECT a.artifact_hash, '' as tenant_id, COALESCE(a.stream_internal_name,''),
-		       COALESCE(n.node_id,''), COALESCE(n.base_url,''), a.status,
-		       COALESCE(a.duration_seconds,0), COALESCE(a.size_bytes,0), COALESCE(a.manifest_path,'')
-		FROM foghorn.artifacts a
-		LEFT JOIN foghorn.artifact_nodes n ON a.artifact_hash = n.artifact_hash AND n.is_orphaned = false
-		WHERE a.artifact_type = 'dvr'`)
+	rows, err := foghorndb.New(db).ListAllDVR(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var out []state.DVRRecord
-	for rows.Next() {
-		var rec state.DVRRecord
-		if err := rows.Scan(&rec.Hash, &rec.TenantID, &rec.InternalName, &rec.StorageNodeID, &rec.SourceURL, &rec.Status, &rec.DurationSec, &rec.SizeBytes, &rec.ManifestPath); err != nil {
-			return nil, err
-		}
-		out = append(out, rec)
+	out := make([]state.DVRRecord, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, state.DVRRecord{
+			Hash: row.ArtifactHash, TenantID: row.TenantID, InternalName: row.StreamInternalName,
+			StorageNodeID: row.NodeID, SourceURL: row.BaseUrl, Status: row.Status.String,
+			DurationSec: row.DurationSeconds, SizeBytes: row.SizeBytes, ManifestPath: row.ManifestPath,
+		})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (r *dvrRepositoryDB) ResolveInternalNameByHash(ctx context.Context, dvrHash string) (string, error) {
 	if db == nil {
 		return "", sql.ErrConnDone
 	}
-	var internalName string
-	err := db.QueryRowContext(ctx, `
-		SELECT COALESCE(stream_internal_name,'') FROM foghorn.artifacts
-		WHERE artifact_hash = $1 AND artifact_type = 'dvr'
-	`, dvrHash).Scan(&internalName)
+	internalName, err := foghorndb.New(db).ResolveDVRInternalNameByHash(ctx, dvrHash)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
@@ -172,20 +138,11 @@ func (r *dvrRepositoryDB) UpdateDVRProgressByHash(ctx context.Context, dvrHash s
 	}
 	defer tx.Rollback() //nolint:errcheck // best-effort on the non-commit paths
 
-	var prevStatus, tenantID, streamID, internalName, dispatchNode string
+	qtx := foghorndb.New(tx)
 	// Lock the row and read its prior status, identity, and the durable dispatch owner node
 	// (dvr_start_dispatch.node_id, persisted at StartDVR and retained through finalize) transactionally
 	// with the mutation below.
-	err = tx.QueryRowContext(ctx, `
-		SELECT status,
-		       tenant_id::text,
-		       COALESCE(stream_id::text, ''),
-		       COALESCE(stream_internal_name, ''),
-		       COALESCE(dvr_start_dispatch->>'node_id', '')
-		FROM foghorn.artifacts
-		WHERE artifact_hash = $1 AND artifact_type = 'dvr'
-		FOR UPDATE
-	`, dvrHash).Scan(&prevStatus, &tenantID, &streamID, &internalName, &dispatchNode)
+	row, err := qtx.LockDVRProgressArtifact(ctx, dvrHash)
 	if errors.Is(err, sql.ErrNoRows) {
 		// Row missing: nothing to promote, nothing to emit, nothing applied.
 		return false, "", tx.Commit()
@@ -193,6 +150,11 @@ func (r *dvrRepositoryDB) UpdateDVRProgressByHash(ctx context.Context, dvrHash s
 	if err != nil {
 		return false, "", err
 	}
+	prevStatus := row.Status.String
+	tenantID := row.TenantID
+	streamID := row.StreamID
+	internalName := row.StreamInternalName
+	dispatchNode := row.DispatchNode
 
 	// A report for a terminal/finalizing row is a no-op: progress must never overwrite a terminal or
 	// 'finalizing' status. applied=false so callers leave downstream sinks untouched; the current
@@ -210,13 +172,7 @@ func (r *dvrRepositoryDB) UpdateDVRProgressByHash(ctx context.Context, dvrHash s
 	firstEdge := prevStatus == "requested" || prevStatus == "starting"
 	// Metrics update + canonical first-edge promotion. size_bytes grows monotonically (GREATEST); status
 	// only ever advances requested/starting -> recording, never to a node-supplied value.
-	if _, err = tx.ExecContext(ctx, `
-		UPDATE foghorn.artifacts
-		SET status = CASE WHEN status IN ('requested', 'starting') THEN 'recording' ELSE status END,
-		    size_bytes = GREATEST(COALESCE(size_bytes, 0), $2),
-		    updated_at = NOW()
-		WHERE artifact_hash = $1 AND artifact_type = 'dvr'
-	`, dvrHash, sizeBytes); err != nil {
+	if err = qtx.RecordDVRProgress(ctx, foghorndb.RecordDVRProgressParams{ArtifactHash: dvrHash, SizeBytes: sizeBytes}); err != nil {
 		return false, "", err
 	}
 
@@ -260,20 +216,11 @@ func (r *dvrRepositoryDB) UpdateDVRCompletionByHash(ctx context.Context, dvrHash
 	// Completion may legitimately race FinalizeDVR. Only overwrite when the
 	// row is still pre-terminal; FinalizeDVR's transition to a terminal
 	// status wins if it lands first.
-	_, err := db.ExecContext(ctx, `
-		UPDATE foghorn.artifacts
-		SET status = $1,
-		    ended_at = NOW(),
-		    duration_seconds = $2,
-		    size_bytes = $3,
-		    manifest_path = $4,
-		    error_message = NULLIF($5, ''),
-		    updated_at = NOW()
-		WHERE artifact_hash = $6
-		  AND artifact_type = 'dvr'
-		  AND status IN ('requested', 'starting', 'recording', 'finalizing')
-	`, finalStatus, durationSeconds, sizeBytes, manifestPath, errorMsg, dvrHash)
-	return err
+	return foghorndb.New(db).RecordDVRCompletion(ctx, foghorndb.RecordDVRCompletionParams{
+		Status: finalStatus, DurationSeconds: durationSeconds,
+		SizeBytes: sizeBytes, ManifestPath: manifestPath,
+		ErrorMessage: errorMsg, ArtifactHash: dvrHash,
+	})
 }
 
 // NeedsDtshSync returns true if the DVR is synced to S3 but .dtsh files weren't included
@@ -281,16 +228,7 @@ func (r *dvrRepositoryDB) NeedsDtshSync(ctx context.Context, dvrHash string) boo
 	if db == nil {
 		return false
 	}
-	var needsSync bool
-	err := db.QueryRowContext(ctx, `
-		SELECT EXISTS(
-			SELECT 1 FROM foghorn.artifacts
-			WHERE artifact_hash = $1
-			  AND artifact_type = 'dvr'
-			  AND sync_status = 'synced'
-			  AND COALESCE(dtsh_synced, false) = false
-		)
-	`, dvrHash).Scan(&needsSync)
+	needsSync, err := foghorndb.New(db).DVRNeedsDtshSync(ctx, dvrHash)
 	if err != nil {
 		return false
 	}
@@ -309,64 +247,41 @@ func (r *nodeRepositoryDB) ListAllNodes(ctx context.Context) ([]state.NodeRecord
 	if db == nil {
 		return nil, sql.ErrConnDone
 	}
-	rows, err := db.QueryContext(ctx, `SELECT node_id, COALESCE(base_url,''), COALESCE(outputs,'{}') FROM foghorn.node_outputs`)
+	rows, err := foghorndb.New(db).ListAllNodes(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var out []state.NodeRecord
-	for rows.Next() {
-		var rec state.NodeRecord
-		var outputsJSON string
-		if err := rows.Scan(&rec.NodeID, &rec.BaseURL, &outputsJSON); err != nil {
-			return nil, err
-		}
-		rec.OutputsJSON = outputsJSON
-		out = append(out, rec)
+	out := make([]state.NodeRecord, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, state.NodeRecord{NodeID: row.NodeID, BaseURL: row.BaseUrl, OutputsJSON: string(row.Outputs)})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (r *nodeRepositoryDB) ListNodeMaintenance(ctx context.Context) ([]state.NodeMaintenanceRecord, error) {
 	if db == nil {
 		return nil, sql.ErrConnDone
 	}
-	rows, err := db.QueryContext(ctx, `
-		SELECT node_id, mode, set_at, COALESCE(set_by, '')
-		FROM foghorn.node_maintenance
-	`)
+	rows, err := foghorndb.New(db).ListNodeMaintenance(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-
-	var out []state.NodeMaintenanceRecord
-	for rows.Next() {
-		var rec state.NodeMaintenanceRecord
-		var mode string
-		if err := rows.Scan(&rec.NodeID, &mode, &rec.SetAt, &rec.SetBy); err != nil {
-			return nil, err
-		}
-		rec.Mode = state.NodeOperationalMode(mode)
-		out = append(out, rec)
+	out := make([]state.NodeMaintenanceRecord, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, state.NodeMaintenanceRecord{
+			NodeID: row.NodeID, Mode: state.NodeOperationalMode(row.Mode), SetAt: row.SetAt.Time, SetBy: row.SetBy,
+		})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (r *nodeRepositoryDB) UpsertNodeOutputs(ctx context.Context, nodeID string, baseURL string, outputsJSON string) error {
 	if db == nil {
 		return sql.ErrConnDone
 	}
-	_, err := db.ExecContext(ctx, `
-		INSERT INTO foghorn.node_outputs (node_id, base_url, outputs, last_updated)
-		VALUES ($1, NULLIF($2,''), COALESCE($3::jsonb,'{}'::jsonb), NOW())
-		ON CONFLICT (node_id) DO UPDATE SET
-			base_url = NULLIF(EXCLUDED.base_url,''),
-			outputs = COALESCE(EXCLUDED.outputs,'{}'::jsonb),
-			last_updated = NOW()
-	`, nodeID, baseURL, outputsJSON)
-	return err
+	return foghorndb.New(db).UpsertNodeOutputs(ctx, foghorndb.UpsertNodeOutputsParams{
+		NodeID: nodeID, BaseUrl: baseURL, Outputs: json.RawMessage(outputsJSON),
+	})
 }
 
 func (r *nodeRepositoryDB) UpsertNodeLifecycles(ctx context.Context, updates []*ipcpb.NodeLifecycleUpdate) error {
@@ -392,15 +307,9 @@ func (r *nodeRepositoryDB) UpsertNodeLifecycles(ctx context.Context, updates []*
 		return nil
 	}
 
-	_, err := db.ExecContext(ctx, `
-		INSERT INTO foghorn.node_lifecycle (node_id, lifecycle, last_updated)
-		SELECT node_id, lifecycle::jsonb, NOW()
-		FROM unnest($1::text[], $2::text[]) AS t(node_id, lifecycle)
-		ON CONFLICT (node_id) DO UPDATE SET
-			lifecycle = EXCLUDED.lifecycle,
-			last_updated = NOW()
-	`, nodeIDs, lifecycles)
-	return err
+	return foghorndb.New(db).UpsertNodeLifecycles(ctx, foghorndb.UpsertNodeLifecyclesParams{
+		NodeIds: nodeIDs, Lifecycles: lifecycles,
+	})
 }
 
 func (r *nodeRepositoryDB) UpsertNodeComponents(ctx context.Context, updates []*ipcpb.NodeLifecycleUpdate) error {
@@ -419,15 +328,9 @@ func (r *nodeRepositoryDB) UpsertNodeComponents(ctx context.Context, updates []*
 	if len(nodeIDs) == 0 {
 		return nil
 	}
-	_, err := db.ExecContext(ctx, `
-		INSERT INTO foghorn.node_components (node_id, component, current_version, last_reported_at)
-		SELECT node_id, component, NULLIF(version, ''), NOW()
-		FROM unnest($1::text[], $2::text[], $3::text[]) AS t(node_id, component, version)
-		ON CONFLICT (node_id, component) DO UPDATE SET
-			current_version = EXCLUDED.current_version,
-			last_reported_at = NOW()
-	`, nodeIDs, components, versions)
-	return err
+	return foghorndb.New(db).UpsertNodeComponents(ctx, foghorndb.UpsertNodeComponentsParams{
+		NodeIds: nodeIDs, Components: components, Versions: versions,
+	})
 }
 
 func dedupeNodeLifecycleUpdates(updates []*ipcpb.NodeLifecycleUpdate) []*ipcpb.NodeLifecycleUpdate {
@@ -490,15 +393,9 @@ func (r *nodeRepositoryDB) UpsertNodeMaintenance(ctx context.Context, nodeID str
 	if db == nil {
 		return sql.ErrConnDone
 	}
-	_, err := db.ExecContext(ctx, `
-		INSERT INTO foghorn.node_maintenance (node_id, mode, set_at, set_by)
-		VALUES ($1, $2, NOW(), NULLIF($3, ''))
-		ON CONFLICT (node_id) DO UPDATE SET
-			mode = EXCLUDED.mode,
-			set_at = NOW(),
-			set_by = EXCLUDED.set_by
-	`, nodeID, string(mode), setBy)
-	return err
+	return foghorndb.New(db).UpsertNodeMaintenance(ctx, foghorndb.UpsertNodeMaintenanceParams{
+		NodeID: nodeID, Mode: string(mode), SetBy: setBy,
+	})
 }
 
 // ============================================================================
@@ -556,14 +453,9 @@ func applyReportRevisionGuard(ctx context.Context, tx *sql.Tx, nodeID string, co
 	if connectionFence == 0 || seq == 0 {
 		return false, nil
 	}
-	var applied sql.NullInt64
-	qerr := tx.QueryRowContext(ctx,
-		`INSERT INTO foghorn.node_artifact_report_watermark AS w (node_id, connection_fence, seq)
-		 VALUES ($1, $2, $3)
-		 ON CONFLICT (node_id) DO UPDATE SET connection_fence = EXCLUDED.connection_fence, seq = EXCLUDED.seq
-		   WHERE (w.connection_fence, w.seq) < (EXCLUDED.connection_fence, EXCLUDED.seq)
-		 RETURNING connection_fence`,
-		nodeID, connectionFence, seq).Scan(&applied)
+	_, qerr := foghorndb.New(tx).AdvanceNodeArtifactReportWatermark(ctx, foghorndb.AdvanceNodeArtifactReportWatermarkParams{
+		NodeID: nodeID, ConnectionFence: connectionFence, Seq: seq,
+	})
 	if errors.Is(qerr, sql.ErrNoRows) {
 		return true, nil // a newer (fence, seq) is already stored — drop this stale report
 	}
@@ -580,11 +472,7 @@ func AllocateNodeControlFence(ctx context.Context) (int64, error) {
 	if db == nil {
 		return 0, sql.ErrConnDone
 	}
-	var fence int64
-	if err := db.QueryRowContext(ctx, `SELECT nextval('foghorn.node_control_fence_seq')`).Scan(&fence); err != nil {
-		return 0, err
-	}
-	return fence, nil
+	return foghorndb.New(db).AllocateNodeControlFence(ctx)
 }
 
 func (r *artifactRepositoryDB) upsertArtifactsOnce(ctx context.Context, nodeID string, artifacts []state.ArtifactRecord) error {
@@ -593,6 +481,7 @@ func (r *artifactRepositoryDB) upsertArtifactsOnce(ctx context.Context, nodeID s
 		return err
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
+	qtx := foghorndb.New(tx)
 
 	var reportFence, reportSeq int64
 	if len(artifacts) > 0 {
@@ -621,8 +510,10 @@ func (r *artifactRepositoryDB) upsertArtifactsOnce(ctx context.Context, nodeID s
 		reportedAtMs = artifacts[0].ReportedAtMs
 	}
 	for _, a := range artifacts {
-		if _, errExec := tx.ExecContext(ctx, artifactsMetaUpdateSQL,
-			a.ArtifactHash, a.StreamName, a.AccessCount, a.LastAccessed); errExec != nil {
+		if errExec := qtx.UpdateArtifactReportMetadata(ctx, foghorndb.UpdateArtifactReportMetadataParams{
+			ArtifactHash: a.ArtifactHash, StreamInternalName: a.StreamName,
+			AccessCount: a.AccessCount, LastAccessed: a.LastAccessed,
+		}); errExec != nil {
 			return errExec
 		}
 		role := a.Role
@@ -633,28 +524,32 @@ func (r *artifactRepositoryDB) upsertArtifactsOnce(ctx context.Context, nodeID s
 		var priorRole string
 		var priorOrphaned, priorComplete bool
 		priorExisted := true
-		if perr := tx.QueryRowContext(ctx,
-			`SELECT role, is_orphaned, is_complete FROM foghorn.artifact_nodes WHERE artifact_hash = $1 AND node_id = $2 FOR UPDATE`,
-			a.ArtifactHash, nodeID).Scan(&priorRole, &priorOrphaned, &priorComplete); perr != nil {
+		if lockErr := qtx.LockArtifactPlacementParent(ctx, a.ArtifactHash); lockErr != nil {
+			return lockErr
+		}
+		prior, perr := qtx.LockArtifactNodeState(ctx, foghorndb.LockArtifactNodeStateParams{ArtifactHash: a.ArtifactHash, NodeID: nodeID})
+		if perr != nil {
 			if errors.Is(perr, sql.ErrNoRows) {
 				priorExisted = false
 			} else {
 				return perr
 			}
+		} else {
+			priorRole, priorOrphaned, priorComplete = prior.Role, prior.IsOrphaned.Bool, prior.IsComplete
 		}
-		var inserted, rowComplete bool
-		var rowRole string
-		uerr := tx.QueryRowContext(ctx, pollerNodeUpsertSQL+` RETURNING (xmax = 0), role, is_complete`,
-			a.ArtifactHash, nodeID, a.FilePath, a.SizeBytes, a.SegmentCount, a.SegmentBytes,
-			a.AccessCount, a.LastAccessed, role, a.IsComplete).Scan(&inserted, &rowRole, &rowComplete)
+		upserted, uerr := qtx.UpsertReportedArtifactNode(ctx, foghorndb.UpsertReportedArtifactNodeParams{
+			ArtifactHash: a.ArtifactHash, NodeID: nodeID, FilePath: a.FilePath,
+			SizeBytes: a.SizeBytes, SegmentCount: int64(a.SegmentCount), SegmentBytes: a.SegmentBytes,
+			AccessCount: a.AccessCount, LastAccessed: a.LastAccessed, Role: role, IsComplete: a.IsComplete,
+		})
 		if errors.Is(uerr, sql.ErrNoRows) {
 			continue // FK guard: artifact unknown, nothing upserted
 		}
 		if uerr != nil {
 			return uerr
 		}
-		if err = emitPresentTx(ctx, tx, a.ArtifactHash, nodeID, rowRole, rowComplete,
-			a.SizeBytes, inserted, priorExisted, priorOrphaned, priorComplete, priorRole, reportedAtMs); err != nil {
+		if err = emitPresentTx(ctx, tx, a.ArtifactHash, nodeID, upserted.Role, upserted.IsComplete,
+			a.SizeBytes, !priorExisted, priorExisted, priorOrphaned, priorComplete, priorRole, reportedAtMs); err != nil {
 			return err
 		}
 	}
@@ -666,15 +561,13 @@ func (r *artifactRepositoryDB) upsertArtifactsOnce(ctx context.Context, nodeID s
 	//
 	// Orphan rows unseen for >10 min, emitting a durable LOST for each in this transaction. Also covers
 	// disconnects and any unversioned/eviction path.
-	const staleSweepSQL = `
-		UPDATE foghorn.artifact_nodes
-		SET is_orphaned = true
-		WHERE node_id = $1
-		  AND last_seen_at < NOW() - INTERVAL '10 minutes'
-		  AND is_orphaned = false`
-	orphaned, sweepErr := scanLostRows(tx.QueryContext(ctx, staleSweepSQL+" RETURNING artifact_hash, role", nodeID))
+	swept, sweepErr := qtx.OrphanStaleReportedArtifactNodes(ctx, nodeID)
 	if sweepErr != nil {
 		return sweepErr
+	}
+	orphaned := make([]lostRow, 0, len(swept))
+	for _, row := range swept {
+		orphaned = append(orphaned, lostRow{hash: row.ArtifactHash, role: row.Role})
 	}
 	if err = emitLost(ctx, tx, nodeID, orphaned, reportedAtMs); err != nil {
 		return err
@@ -689,90 +582,14 @@ func (r *artifactRepositoryDB) upsertArtifactsOnce(ctx context.Context, nodeID s
 // orphan-onboarding are the exception — they emit out-of-band and rely on node-copy reconciliation
 // to seed any last_emitted_version=0 row. See docs/architecture/analytics-pipeline.md.
 
-const originUpsertSQL = `
-	INSERT INTO foghorn.artifact_nodes (artifact_hash, node_id, file_path, size_bytes, last_seen_at, is_orphaned, cached_at, role, is_complete)
-	VALUES ($1, $2, NULLIF($3, ''), NULLIF($4, 0), NOW(), false, NOW(), 'origin', $5)
-	ON CONFLICT (artifact_hash, node_id) DO UPDATE SET
-		file_path = COALESCE(NULLIF(EXCLUDED.file_path, ''), foghorn.artifact_nodes.file_path),
-		size_bytes = COALESCE(EXCLUDED.size_bytes, foghorn.artifact_nodes.size_bytes),
-		last_seen_at = NOW(),
-		is_orphaned = false,
-		role = 'origin',
-		is_complete = CASE WHEN EXCLUDED.is_complete THEN true ELSE foghorn.artifact_nodes.is_complete END`
-
-// cacheUpsertSQL records a synced cache copy. AddCachedNode is called after a
-// successful sync, so a cache copy is complete — set is_complete=true on insert, and on
-// conflict ONLY for cache rows. An existing origin row keeps its role AND its own
-// completeness (a parent DVR origin is deliberately incomplete; a cache sync must not
-// flip it complete and thus peer-relay-eligible).
-const cacheUpsertSQL = `
-	INSERT INTO foghorn.artifact_nodes (artifact_hash, node_id, file_path, size_bytes, last_seen_at, is_orphaned, cached_at, role, is_complete)
-	VALUES ($1, $2, NULLIF($3, ''), NULLIF($4, 0), NOW(), false, NOW(), 'cache', true)
-	ON CONFLICT (artifact_hash, node_id) DO UPDATE SET
-		file_path = COALESCE(NULLIF(EXCLUDED.file_path, ''), foghorn.artifact_nodes.file_path),
-		size_bytes = COALESCE(EXCLUDED.size_bytes, foghorn.artifact_nodes.size_bytes),
-		last_seen_at = NOW(),
-		is_orphaned = false,
-		is_complete = CASE WHEN foghorn.artifact_nodes.role = 'origin' THEN foghorn.artifact_nodes.is_complete ELSE true END,
-		cached_at = COALESCE(foghorn.artifact_nodes.cached_at, NOW())`
-
-const artifactsMetaUpdateSQL = `
-	UPDATE foghorn.artifacts SET
-		stream_internal_name = COALESCE(stream_internal_name, $2),
-		access_count = GREATEST(COALESCE(access_count, 0), $3),
-		last_accessed_at = CASE
-			WHEN $4 = 0 THEN last_accessed_at
-			WHEN last_accessed_at IS NULL THEN to_timestamp($4)
-			ELSE GREATEST(last_accessed_at, to_timestamp($4))
-		END,
-		updated_at = NOW()
-	WHERE artifact_hash = $1`
-
-// pollerNodeUpsertSQL records a node's reported artifact. Origin-wins: once a
-// finalizer stamps role='origin'/is_complete, poller reports cannot downgrade it.
-// Completeness is sticky for cache rows too: the poller reports is_complete=false
-// (it doesn't compute completeness), so it must not clear a copy a sync already
-// confirmed complete — only orphaning/eviction removes a complete copy.
-// The WHERE EXISTS FK guard means a report for an unknown artifact upserts nothing
-// (RETURNING then yields no row).
-const pollerNodeUpsertSQL = `
-	INSERT INTO foghorn.artifact_nodes
-		(artifact_hash, node_id, file_path, size_bytes, segment_count, segment_bytes, access_count, last_accessed, last_seen_at, is_orphaned, cached_at, role, is_complete)
-	SELECT $1, $2, $3, $4, $5, $6, $7, CASE WHEN $8 > 0 THEN to_timestamp($8) ELSE NULL END, NOW(), false, COALESCE((SELECT cached_at FROM foghorn.artifact_nodes WHERE artifact_hash = $1::varchar AND node_id = $2::varchar), NOW()), $9, $10
-	WHERE EXISTS (SELECT 1 FROM foghorn.artifacts WHERE artifact_hash = $1)
-	ON CONFLICT (artifact_hash, node_id) DO UPDATE SET
-		file_path = EXCLUDED.file_path,
-		size_bytes = EXCLUDED.size_bytes,
-		segment_count = EXCLUDED.segment_count,
-		segment_bytes = EXCLUDED.segment_bytes,
-		access_count = GREATEST(COALESCE(foghorn.artifact_nodes.access_count, 0), EXCLUDED.access_count),
-		last_accessed = CASE
-			WHEN EXCLUDED.last_accessed IS NULL THEN foghorn.artifact_nodes.last_accessed
-			WHEN foghorn.artifact_nodes.last_accessed IS NULL THEN EXCLUDED.last_accessed
-			ELSE GREATEST(foghorn.artifact_nodes.last_accessed, EXCLUDED.last_accessed)
-		END,
-		last_seen_at = NOW(),
-		is_orphaned = false,
-		role = CASE WHEN foghorn.artifact_nodes.role = 'origin' THEN 'origin' ELSE EXCLUDED.role END,
-		is_complete = CASE WHEN foghorn.artifact_nodes.role = 'origin' THEN foghorn.artifact_nodes.is_complete
-			ELSE (foghorn.artifact_nodes.is_complete OR EXCLUDED.is_complete) END`
-
-// txQuerier is the read subset the node-copy helpers need (satisfied by *sql.Tx).
-type txQuerier interface {
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}
-
 // placementTenant resolves an artifact's owning tenant (artifact_nodes has none).
 // A genuine query error propagates so the shared transaction rolls back rather than
 // committing a state change without its telemetry. A missing artifact row (no FK
 // parent) yields "": the live-mutation caller (enqueueNodeCopy) then FAILS the tx
 // fail-closed — no placement change commits without its analytics event — while the
 // reconcile re-affirm path (enqueueNodeCopyAtVersion) skips.
-func placementTenant(ctx context.Context, q txQuerier, artifactHash string) (string, error) {
-	var tenantID string
-	err := q.QueryRowContext(ctx,
-		`SELECT tenant_id::text FROM foghorn.artifacts WHERE artifact_hash = $1`,
-		artifactHash).Scan(&tenantID)
+func placementTenant(ctx context.Context, q foghorndb.DBTX, artifactHash string) (string, error) {
+	tenantID, err := foghorndb.New(q).GetArtifactPlacementTenant(ctx, artifactHash)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
@@ -798,8 +615,9 @@ func enqueueNodeCopy(ctx context.Context, tx *sql.Tx, tenantID, artifactHash, no
 		// artifact uses enqueueNodeCopyAtVersion, which still skips.)
 		return fmt.Errorf("node-copy emit for artifact %s has no tenant attribution (artifact row missing?) — refusing to commit placement change without its analytics event", artifactHash)
 	}
-	var version int64
-	if verr := tx.QueryRowContext(ctx, `SELECT nextval('foghorn.artifact_node_copy_version_seq')`).Scan(&version); verr != nil {
+	qtx := foghorndb.New(tx)
+	version, verr := qtx.AllocateArtifactNodeCopyVersion(ctx)
+	if verr != nil {
 		return verr
 	}
 	// last_emitted_version records the version of the last event EMITTED for this row: a
@@ -811,9 +629,9 @@ func enqueueNodeCopy(ctx context.Context, tx *sql.Tx, tenantID, artifactHash, no
 	if transition == ipcpb.ArtifactNodeCopyEvent_LOST {
 		rowVersion = 0
 	}
-	if _, uerr := tx.ExecContext(ctx,
-		`UPDATE foghorn.artifact_nodes SET last_emitted_version = $1 WHERE artifact_hash = $2 AND node_id = $3`,
-		rowVersion, artifactHash, nodeID); uerr != nil {
+	if uerr := qtx.SetArtifactNodeLastEmittedVersion(ctx, foghorndb.SetArtifactNodeLastEmittedVersionParams{
+		LastEmittedVersion: rowVersion, ArtifactHash: artifactHash, NodeID: nodeID,
+	}); uerr != nil {
 		return uerr
 	}
 	return enqueueNodeCopyAtVersion(ctx, tx, tenantID, artifactHash, nodeID, role, transition, isComplete, sizeBytes, atMs, version)
@@ -853,9 +671,9 @@ func roleAfterUpsert(priorRole string, existed bool) string {
 // emitPresentTx enqueues a node-copy event for a row that is present after an upsert:
 // GAINED when it first became present (freshly inserted, or previously orphaned and
 // now restored), or UPDATED when an already-present row changed its role or flipped
-// incomplete→complete. All inputs are derived atomically by the caller (row locked
-// FOR UPDATE + `xmax = 0` inserted flag), so concurrent duplicate writes don't
-// double-emit. A pure size change does not emit (size travels in every event's
+// incomplete→complete. All inputs are derived atomically after locking the parent
+// artifact and then the node row, so even an absent-row insert is serialized and
+// concurrent duplicate writes don't double-emit. A pure size change does not emit (size travels in every event's
 // absolute state; emitting on size alone would flood on growing DVR copies).
 func emitPresentTx(ctx context.Context, tx *sql.Tx, hash, nodeID, role string, isComplete bool, size int64, inserted, priorExisted, priorOrphaned, priorComplete bool, priorRole string, atMs int64) error {
 	becamePresent := inserted || (priorExisted && priorOrphaned)
@@ -881,23 +699,6 @@ func emitPresentTx(ctx context.Context, tx *sql.Tx, hash, nodeID, role string, i
 type lostRow struct {
 	hash string
 	role string
-}
-
-// scanLostRows collects (hash, role) from an orphan-marking UPDATE ... RETURNING.
-func scanLostRows(rows *sql.Rows, err error) ([]lostRow, error) {
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []lostRow
-	for rows.Next() {
-		var lr lostRow
-		if scanErr := rows.Scan(&lr.hash, &lr.role); scanErr != nil {
-			return nil, scanErr
-		}
-		out = append(out, lr)
-	}
-	return out, rows.Err()
 }
 
 // emitLost enqueues a LOST node-copy event per orphaned/removed row, within tx. atMs
@@ -929,19 +730,8 @@ func (r *artifactRepositoryDB) GetArtifactSyncInfo(ctx context.Context, artifact
 	if db == nil {
 		return nil, sql.ErrConnDone
 	}
-	var info state.ArtifactSyncInfo
-	var lastSyncAttempt sql.NullTime
-	var syncError sql.NullString
-	var s3URL sql.NullString
-
-	// Query from artifacts table for sync info
-	err := db.QueryRowContext(ctx, `
-		SELECT artifact_hash, artifact_type, COALESCE(status,'requested'), COALESCE(sync_status,'pending'),
-		       s3_url, last_sync_attempt, sync_error
-		FROM foghorn.artifacts
-		WHERE artifact_hash = $1
-	`, artifactHash).Scan(&info.ArtifactHash, &info.ArtifactType, &info.LifecycleStatus, &info.SyncStatus,
-		&s3URL, &lastSyncAttempt, &syncError)
+	q := foghorndb.New(db)
+	row, err := q.GetArtifactSyncInfo(ctx, artifactHash)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
@@ -949,36 +739,28 @@ func (r *artifactRepositoryDB) GetArtifactSyncInfo(ctx context.Context, artifact
 	if err != nil {
 		return nil, err
 	}
+	info := state.ArtifactSyncInfo{
+		ArtifactHash: row.ArtifactHash, ArtifactType: row.ArtifactType,
+		LifecycleStatus: row.Status, SyncStatus: row.SyncStatus,
+	}
+	if row.S3Url.Valid {
+		info.S3URL = row.S3Url.String
+	}
+	if row.LastSyncAttempt.Valid {
+		info.LastSyncAttempt = row.LastSyncAttempt.Time.Unix()
+	}
+	if row.SyncError.Valid {
+		info.SyncError = row.SyncError.String
+	}
 
-	if s3URL.Valid {
-		info.S3URL = s3URL.String
-	}
-	if lastSyncAttempt.Valid {
-		info.LastSyncAttempt = lastSyncAttempt.Time.Unix()
-	}
-	if syncError.Valid {
-		info.SyncError = syncError.String
-	}
-
-	// Get cached nodes from artifact_nodes
-	rows, err := db.QueryContext(ctx, `
-		SELECT node_id, cached_at FROM foghorn.artifact_nodes
-		WHERE artifact_hash = $1 AND is_orphaned = false
-	`, artifactHash)
+	rows, err := q.ListArtifactCachedNodes(ctx, artifactHash)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var nodeID string
-		var cachedAt sql.NullTime
-		if err := rows.Scan(&nodeID, &cachedAt); err != nil {
-			return nil, err
-		}
-		info.CachedNodes = append(info.CachedNodes, nodeID)
-		if cachedAt.Valid && info.CachedAt == 0 {
-			info.CachedAt = cachedAt.Time.UnixMilli()
+	for _, cached := range rows {
+		info.CachedNodes = append(info.CachedNodes, cached.NodeID)
+		if cached.CachedAt.Valid && info.CachedAt == 0 {
+			info.CachedAt = cached.CachedAt.Time.UnixMilli()
 		}
 	}
 
@@ -993,25 +775,11 @@ func (r *artifactRepositoryDB) SetSyncStatus(ctx context.Context, artifactHash, 
 	// An empty s3URL means "unchanged" (COALESCE keeps the stored value), never "clear" — a sync
 	// update must not erase an artifact's durable S3 attribution.
 	if status == "synced" {
-		_, err := db.ExecContext(ctx, `
-			UPDATE foghorn.artifacts
-			SET sync_status = 'synced',
-			    s3_url = COALESCE(NULLIF($2, ''), s3_url),
-			    last_sync_attempt = NOW(),
-			    sync_error = NULL
-			WHERE artifact_hash = $1
-		`, artifactHash, s3URL)
-		return err
+		return foghorndb.New(db).MarkArtifactSynced(ctx, foghorndb.MarkArtifactSyncedParams{ArtifactHash: artifactHash, S3Url: s3URL})
 	}
-	_, err := db.ExecContext(ctx, `
-		UPDATE foghorn.artifacts
-		SET sync_status = $2,
-		    s3_url = COALESCE(NULLIF($3, ''), s3_url),
-		    last_sync_attempt = NOW(),
-		    sync_error = NULL
-		WHERE artifact_hash = $1
-	`, artifactHash, status, s3URL)
-	return err
+	return foghorndb.New(db).SetArtifactSyncStatus(ctx, foghorndb.SetArtifactSyncStatusParams{
+		ArtifactHash: artifactHash, SyncStatus: status, S3Url: s3URL,
+	})
 }
 
 // AddCachedNode records that a node has a local copy of an artifact.
@@ -1057,48 +825,39 @@ func AddCachedNodeCopyTx(ctx context.Context, tx *sql.Tx, artifactHash, nodeID, 
 	var priorOrphaned, priorComplete bool
 	existed := true
 	// FOR UPDATE serializes concurrent writers on this (artifact, node).
-	if priorErr := tx.QueryRowContext(ctx,
-		`SELECT role, is_orphaned, is_complete FROM foghorn.artifact_nodes WHERE artifact_hash = $1 AND node_id = $2 FOR UPDATE`,
-		artifactHash, nodeID).Scan(&priorRole, &priorOrphaned, &priorComplete); priorErr != nil {
+	qtx := foghorndb.New(tx)
+	if err := qtx.LockArtifactPlacementParent(ctx, artifactHash); err != nil {
+		return err
+	}
+	prior, priorErr := qtx.LockArtifactNodeState(ctx, foghorndb.LockArtifactNodeStateParams{ArtifactHash: artifactHash, NodeID: nodeID})
+	if priorErr != nil {
 		if errors.Is(priorErr, sql.ErrNoRows) {
 			existed = false
 		} else {
 			return priorErr
 		}
+	} else {
+		priorRole, priorOrphaned, priorComplete = prior.Role, prior.IsOrphaned.Bool, prior.IsComplete
 	}
-	var inserted bool
-	var rowSize sql.NullInt64
-	if uerr := tx.QueryRowContext(ctx, cacheUpsertSQL+` RETURNING (xmax = 0), size_bytes`,
-		artifactHash, nodeID, filePath, sizeBytes).Scan(&inserted, &rowSize); uerr != nil {
+	upserted, uerr := qtx.UpsertCachedArtifactNode(ctx, foghorndb.UpsertCachedArtifactNodeParams{
+		ArtifactHash: artifactHash, NodeID: nodeID, FilePath: filePath, SizeBytes: sizeBytes,
+	})
+	if uerr != nil {
 		return uerr
 	}
 	// Emit the persisted row size, not the caller's argument: AddCachedNode passes 0,
 	// but the row (via COALESCE in the upsert) keeps the real size from a prior write —
 	// so the transition doesn't erase a known size to NULL.
 	emitSize := sizeBytes
-	if rowSize.Valid {
-		emitSize = rowSize.Int64
+	if upserted.Valid {
+		emitSize = upserted.Int64
 	}
 	// AddCachedNode fires after a successful sync, so the cache copy is complete. This
 	// emits even when the row already existed present-but-incomplete (a poller row a
 	// sync just completed), because emitPresentTx also fires on incomplete→complete.
 	return emitPresentTx(ctx, tx, artifactHash, nodeID, roleAfterUpsert(priorRole, existed),
-		true, emitSize, inserted, existed, priorOrphaned, priorComplete, priorRole, 0)
+		true, emitSize, !existed, existed, priorOrphaned, priorComplete, priorRole, 0)
 }
-
-// dvrOriginUpsertSQL registers the recording node as the (incomplete) origin of a parent
-// DVR row, carrying base_url. is_complete stays whatever it was (a new parent DVR is
-// incomplete; completeness is registered per chapter under its own hash), so this never
-// makes the parent relayable. role is forced to 'origin'.
-const dvrOriginUpsertSQL = `
-	INSERT INTO foghorn.artifact_nodes (artifact_hash, node_id, base_url, cached_at, last_seen_at, is_orphaned, role, is_complete)
-	VALUES ($1, $2, $3, NOW(), NOW(), false, 'origin', false)
-	ON CONFLICT (artifact_hash, node_id) DO UPDATE SET
-		base_url = EXCLUDED.base_url,
-		last_seen_at = NOW(),
-		is_orphaned = false,
-		cached_at = COALESCE(foghorn.artifact_nodes.cached_at, NOW()),
-		role = 'origin'`
 
 // RegisterDVRRecordingOrigin registers the DVR recording node as origin (with base_url)
 // through the transactional transition path, so a cache→origin promotion emits UPDATED
@@ -1114,26 +873,32 @@ func (r *artifactRepositoryDB) RegisterDVRRecordingOrigin(ctx context.Context, a
 		return err
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
+	qtx := foghorndb.New(tx)
 
 	var priorRole string
 	var priorComplete, priorOrphaned bool
 	priorExisted := true
-	if priorErr := tx.QueryRowContext(ctx,
-		`SELECT role, is_complete, is_orphaned FROM foghorn.artifact_nodes WHERE artifact_hash = $1 AND node_id = $2 FOR UPDATE`,
-		artifactHash, nodeID).Scan(&priorRole, &priorComplete, &priorOrphaned); priorErr != nil {
+	if lockErr := qtx.LockArtifactPlacementParent(ctx, artifactHash); lockErr != nil {
+		return lockErr
+	}
+	prior, priorErr := qtx.LockDVRRecordingOrigin(ctx, foghorndb.LockDVRRecordingOriginParams{ArtifactHash: artifactHash, NodeID: nodeID})
+	if priorErr != nil {
 		if errors.Is(priorErr, sql.ErrNoRows) {
 			priorExisted = false
 		} else {
 			return priorErr
 		}
+	} else {
+		priorRole, priorComplete, priorOrphaned = prior.Role, prior.IsComplete, prior.IsOrphaned.Bool
 	}
-	var inserted, nowComplete bool
-	if uerr := tx.QueryRowContext(ctx, dvrOriginUpsertSQL+` RETURNING (xmax = 0), is_complete`,
-		artifactHash, nodeID, baseURL).Scan(&inserted, &nowComplete); uerr != nil {
+	upserted, uerr := qtx.UpsertDVRRecordingOrigin(ctx, foghorndb.UpsertDVRRecordingOriginParams{
+		ArtifactHash: artifactHash, NodeID: nodeID, BaseUrl: baseURL,
+	})
+	if uerr != nil {
 		return uerr
 	}
-	if err = emitPresentTx(ctx, tx, artifactHash, nodeID, "origin", nowComplete, 0,
-		inserted, priorExisted, priorOrphaned, priorComplete, priorRole, 0); err != nil {
+	if err = emitPresentTx(ctx, tx, artifactHash, nodeID, "origin", upserted, 0,
+		!priorExisted, priorExisted, priorOrphaned, priorComplete, priorRole, 0); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -1156,29 +921,35 @@ func (r *artifactRepositoryDB) RegisterDVRRecordingOrigin(ctx context.Context, a
 // CALLER's transaction, so a caller (e.g. processing completion) can make origin placement part
 // of one atomic terminal transition. RegisterOriginArtifact wraps this in its own tx.
 func RegisterOriginArtifactTx(ctx context.Context, tx *sql.Tx, artifactHash, nodeID, filePath string, sizeBytes int64, complete bool) error {
+	qtx := foghorndb.New(tx)
 	// FOR UPDATE-locked prior read drives atomic transition detection. priorRole lets
 	// emitPresentTx emit UPDATED when a present cache copy is promoted to origin.
 	var priorRole string
 	var priorComplete, priorOrphaned bool
 	priorExisted := true
-	if priorErr := tx.QueryRowContext(ctx,
-		`SELECT role, is_complete, is_orphaned FROM foghorn.artifact_nodes WHERE artifact_hash = $1 AND node_id = $2 FOR UPDATE`,
-		artifactHash, nodeID).Scan(&priorRole, &priorComplete, &priorOrphaned); priorErr != nil {
+	if lockErr := qtx.LockArtifactPlacementParent(ctx, artifactHash); lockErr != nil {
+		return lockErr
+	}
+	prior, priorErr := qtx.LockDVRRecordingOrigin(ctx, foghorndb.LockDVRRecordingOriginParams{ArtifactHash: artifactHash, NodeID: nodeID})
+	if priorErr != nil {
 		if errors.Is(priorErr, sql.ErrNoRows) {
 			priorExisted = false
 		} else {
 			return priorErr
 		}
+	} else {
+		priorRole, priorComplete, priorOrphaned = prior.Role, prior.IsComplete, prior.IsOrphaned.Bool
 	}
-	var inserted, nowComplete bool
-	if uerr := tx.QueryRowContext(ctx, originUpsertSQL+` RETURNING (xmax = 0), is_complete`,
-		artifactHash, nodeID, filePath, sizeBytes, complete).Scan(&inserted, &nowComplete); uerr != nil {
+	upserted, uerr := qtx.UpsertOriginArtifactNode(ctx, foghorndb.UpsertOriginArtifactNodeParams{
+		ArtifactHash: artifactHash, NodeID: nodeID, FilePath: filePath, SizeBytes: sizeBytes, IsComplete: complete,
+	})
+	if uerr != nil {
 		return uerr
 	}
 	// GAINED when the origin copy first becomes present; UPDATED when an already-present
 	// copy is promoted to origin or flips incomplete→complete.
-	return emitPresentTx(ctx, tx, artifactHash, nodeID, "origin", nowComplete, sizeBytes,
-		inserted, priorExisted, priorOrphaned, priorComplete, priorRole, 0)
+	return emitPresentTx(ctx, tx, artifactHash, nodeID, "origin", upserted, sizeBytes,
+		!priorExisted, priorExisted, priorOrphaned, priorComplete, priorRole, 0)
 }
 
 func (r *artifactRepositoryDB) RegisterOriginArtifact(ctx context.Context, artifactHash, nodeID, filePath string, sizeBytes int64, complete bool) error {
@@ -1205,27 +976,7 @@ func (r *artifactRepositoryDB) ListOriginNodes(ctx context.Context, artifactHash
 	if db == nil {
 		return nil, sql.ErrConnDone
 	}
-	rows, err := db.QueryContext(ctx, `
-		SELECT node_id FROM foghorn.artifact_nodes
-		WHERE artifact_hash = $1
-		  AND role = 'origin'
-		  AND is_complete = true
-		  AND is_orphaned = false
-		ORDER BY last_seen_at DESC
-	`, artifactHash)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var nodes []string
-	for rows.Next() {
-		var nodeID string
-		if err := rows.Scan(&nodeID); err != nil {
-			return nil, err
-		}
-		nodes = append(nodes, nodeID)
-	}
-	return nodes, rows.Err()
+	return foghorndb.New(db).ListOriginNodes(ctx, artifactHash)
 }
 
 // GetCachedAt retrieves the cached_at timestamp for calculating warm duration
@@ -1233,18 +984,14 @@ func (r *artifactRepositoryDB) GetCachedAt(ctx context.Context, artifactHash str
 	if db == nil {
 		return 0, sql.ErrConnDone
 	}
-	var cachedAt sql.NullTime
-	err := db.QueryRowContext(ctx, `
-		SELECT MIN(cached_at) FROM foghorn.artifact_nodes
-		WHERE artifact_hash = $1 AND is_orphaned = false
-	`, artifactHash).Scan(&cachedAt)
+	cachedAt, err := foghorndb.New(db).GetArtifactCachedAt(ctx, artifactHash)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
 	if err != nil {
 		return 0, err
 	}
-	if !cachedAt.Valid {
-		return 0, nil
-	}
-	return cachedAt.Time.UnixMilli(), nil
+	return cachedAt.UnixMilli(), nil
 }
 
 // IsSynced returns true if the artifact is synced to S3
@@ -1252,17 +999,7 @@ func (r *artifactRepositoryDB) IsSynced(ctx context.Context, artifactHash string
 	if db == nil {
 		return false, sql.ErrConnDone
 	}
-	var synced bool
-	err := db.QueryRowContext(ctx, `
-		SELECT EXISTS(
-			SELECT 1 FROM foghorn.artifacts
-			WHERE artifact_hash = $1 AND sync_status = 'synced'
-		)
-	`, artifactHash).Scan(&synced)
-	if err != nil {
-		return false, err
-	}
-	return synced, nil
+	return foghorndb.New(db).IsArtifactSynced(ctx, artifactHash)
 }
 
 // ListAllNodeArtifacts returns all non-orphaned artifacts grouped by node ID (for rehydration)
@@ -1271,48 +1008,19 @@ func (r *artifactRepositoryDB) ListAllNodeArtifacts(ctx context.Context) (map[st
 		return nil, sql.ErrConnDone
 	}
 
-	rows, err := db.QueryContext(ctx, `
-		SELECT
-			an.node_id,
-			an.artifact_hash,
-			COALESCE(a.artifact_type, 'clip'),
-			COALESCE(a.stream_internal_name, ''),
-			COALESCE(an.file_path, ''),
-			COALESCE(an.size_bytes, 0),
-			COALESCE(EXTRACT(EPOCH FROM a.created_at)::bigint, 0),
-			COALESCE(an.access_count, 0),
-			COALESCE(EXTRACT(EPOCH FROM an.last_accessed), 0)::bigint
-		FROM foghorn.artifact_nodes an
-		JOIN foghorn.artifacts a ON a.artifact_hash = an.artifact_hash
-		WHERE an.is_orphaned = false
-		  AND a.status != 'deleted'
-		ORDER BY an.node_id
-	`)
+	rows, err := foghorndb.New(db).ListAllNodeArtifacts(ctx)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
 	result := make(map[string][]state.ArtifactRecord)
-	for rows.Next() {
-		var nodeID string
-		var rec state.ArtifactRecord
-		if err := rows.Scan(
-			&nodeID,
-			&rec.ArtifactHash,
-			&rec.ArtifactType,
-			&rec.StreamName,
-			&rec.FilePath,
-			&rec.SizeBytes,
-			&rec.CreatedAt,
-			&rec.AccessCount,
-			&rec.LastAccessed,
-		); err != nil {
-			return nil, err
-		}
-		result[nodeID] = append(result[nodeID], rec)
+	for _, row := range rows {
+		result[row.NodeID] = append(result[row.NodeID], state.ArtifactRecord{
+			ArtifactHash: row.ArtifactHash, ArtifactType: row.ArtifactType, StreamName: row.StreamInternalName,
+			FilePath: row.FilePath, SizeBytes: row.SizeBytes, CreatedAt: row.CreatedAt,
+			AccessCount: row.AccessCount, LastAccessed: row.LastAccessed,
+		})
 	}
-	return result, rows.Err()
+	return result, nil
 }
 
 // ReconcileNodeCopies emits GAINED for present local copies that have never been emitted
@@ -1343,32 +1051,13 @@ func (r *artifactRepositoryDB) ReconcileNodeCopies(ctx context.Context) (int, er
 	// pass so a large un-emitted set is not loaded at once — the next pass picks up the
 	// remainder.
 	const seedBatch = 1000
-	keys, err := func() ([][2]string, error) {
-		rows, qerr := db.QueryContext(ctx, `
-			SELECT artifact_hash, node_id FROM foghorn.artifact_nodes
-			WHERE is_orphaned = false AND last_emitted_version = 0
-			ORDER BY artifact_hash, node_id
-			LIMIT $1`, seedBatch)
-		if qerr != nil {
-			return nil, qerr
-		}
-		defer rows.Close()
-		var out [][2]string
-		for rows.Next() {
-			var hash, node string
-			if scanErr := rows.Scan(&hash, &node); scanErr != nil {
-				return nil, scanErr
-			}
-			out = append(out, [2]string{hash, node})
-		}
-		return out, rows.Err()
-	}()
+	keys, err := foghorndb.New(db).ListUnemittedArtifactNodeKeys(ctx, seedBatch)
 	if err != nil {
 		return emitted, err
 	}
 
 	for _, k := range keys {
-		did, rerr := r.reconcileOne(ctx, k[0], k[1])
+		did, rerr := r.reconcileOne(ctx, k.ArtifactHash, k.NodeID)
 		if rerr != nil {
 			return emitted, rerr
 		}
@@ -1389,27 +1078,19 @@ func (r *artifactRepositoryDB) sweepStalePresent(ctx context.Context) (int, erro
 		return 0, err
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
+	qtx := foghorndb.New(tx)
 
 	// FOR UPDATE SKIP LOCKED locks each candidate so two replicas can't both orphan it;
 	// the final UPDATE re-checks is_orphaned + last_seen_at so a heartbeat landing between
 	// selection and update (refreshing last_seen_at, or a concurrent restore) is not
 	// clobbered — that row simply isn't updated and emits no LOST.
-	orphaned, err := scanLostNodeRows(tx.QueryContext(ctx, `
-		WITH stale AS (
-			SELECT artifact_hash, node_id FROM foghorn.artifact_nodes
-			WHERE is_orphaned = false AND last_seen_at < NOW() - INTERVAL '15 minutes'
-			ORDER BY last_seen_at
-			LIMIT 500
-			FOR UPDATE SKIP LOCKED
-		)
-		UPDATE foghorn.artifact_nodes an SET is_orphaned = true
-		FROM stale
-		WHERE an.artifact_hash = stale.artifact_hash AND an.node_id = stale.node_id
-		  AND an.is_orphaned = false
-		  AND an.last_seen_at < NOW() - INTERVAL '15 minutes'
-		RETURNING an.artifact_hash, an.node_id, an.role`))
+	rows, err := qtx.OrphanGloballyStaleArtifactNodes(ctx)
 	if err != nil {
 		return 0, err
+	}
+	orphaned := make([]lostNodeRow, 0, len(rows))
+	for _, row := range rows {
+		orphaned = append(orphaned, lostNodeRow{hash: row.ArtifactHash, nodeID: row.NodeID, role: row.Role})
 	}
 	for _, lr := range orphaned {
 		tenant, terr := placementTenant(ctx, tx, lr.hash)
@@ -1430,22 +1111,6 @@ func (r *artifactRepositoryDB) sweepStalePresent(ctx context.Context) (int, erro
 // lostNodeRow is a stale (artifact, node) row being orphaned by the global sweep.
 type lostNodeRow struct {
 	hash, nodeID, role string
-}
-
-func scanLostNodeRows(rows *sql.Rows, err error) ([]lostNodeRow, error) {
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []lostNodeRow
-	for rows.Next() {
-		var lr lostNodeRow
-		if scanErr := rows.Scan(&lr.hash, &lr.nodeID, &lr.role); scanErr != nil {
-			return nil, scanErr
-		}
-		out = append(out, lr)
-	}
-	return out, rows.Err()
 }
 
 // RefreshNodeCopy synchronously re-emits GAINED for one present copy whose analytics
@@ -1471,31 +1136,26 @@ func (r *artifactRepositoryDB) reconcileOne(ctx context.Context, artifactHash, n
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
-	var role, tenant string
-	var complete bool
-	var size, lastEmittedVersion int64
-	err = tx.QueryRowContext(ctx, `
-		SELECT an.role, an.is_complete, COALESCE(an.size_bytes, 0), an.last_emitted_version, a.tenant_id::text
-		FROM foghorn.artifact_nodes an
-		JOIN foghorn.artifacts a ON a.artifact_hash = an.artifact_hash
-		WHERE an.artifact_hash = $1 AND an.node_id = $2 AND an.is_orphaned = false
-		FOR UPDATE OF an SKIP LOCKED`, artifactHash, nodeID).Scan(&role, &complete, &size, &lastEmittedVersion, &tenant)
+	row, err := foghorndb.New(tx).LockUnemittedArtifactNode(ctx, foghorndb.LockUnemittedArtifactNodeParams{
+		ArtifactHash: artifactHash, NodeID: nodeID,
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil // orphaned/deleted/gone, or locked by another replica
 	}
 	if err != nil {
 		return false, err
 	}
-	if lastEmittedVersion != 0 {
+	if row.LastEmittedVersion != 0 {
 		return false, nil // already emitted by a concurrent path
 	}
+	role := row.Role
 	if role == "" {
 		role = "cache"
 	}
 	// enqueueNodeCopy mints a fresh version and records it on the row, so subsequent
 	// reconciles skip it and any later LOST supersedes it.
-	if err := enqueueNodeCopy(ctx, tx, tenant, artifactHash, nodeID, role,
-		ipcpb.ArtifactNodeCopyEvent_GAINED, complete, size, 0); err != nil {
+	if err := enqueueNodeCopy(ctx, tx, row.TenantID, artifactHash, nodeID, role,
+		ipcpb.ArtifactNodeCopyEvent_GAINED, row.IsComplete, row.SizeBytes, 0); err != nil {
 		return false, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -1503,8 +1163,6 @@ func (r *artifactRepositoryDB) reconcileOne(ctx context.Context, artifactHash, n
 	}
 	return true, nil
 }
-
-const deleteNodeArtifactSQL = `DELETE FROM foghorn.artifact_nodes WHERE artifact_hash = $1 AND node_id = $2`
 
 // DeleteNodeArtifact removes one node's local-copy row (explicit deletion/eviction)
 // and emits a LOST placement in the same transaction, so the analytics projection
@@ -1533,16 +1191,18 @@ func (r *artifactRepositoryDB) DeleteNodeArtifact(ctx context.Context, artifactH
 func DeleteNodeArtifactTx(ctx context.Context, tx *sql.Tx, artifactHash, nodeID string, reportedAtMs int64) error {
 	var role string
 	existed := true
-	if perr := tx.QueryRowContext(ctx,
-		`SELECT role FROM foghorn.artifact_nodes WHERE artifact_hash = $1 AND node_id = $2 FOR UPDATE`,
-		artifactHash, nodeID).Scan(&role); perr != nil {
+	qtx := foghorndb.New(tx)
+	lockedRole, perr := qtx.LockArtifactNodeRole(ctx, foghorndb.LockArtifactNodeRoleParams{ArtifactHash: artifactHash, NodeID: nodeID})
+	if perr != nil {
 		if errors.Is(perr, sql.ErrNoRows) {
 			existed = false
 		} else {
 			return perr
 		}
+	} else {
+		role = lockedRole
 	}
-	if _, err := tx.ExecContext(ctx, deleteNodeArtifactSQL, artifactHash, nodeID); err != nil {
+	if err := qtx.DeleteArtifactNode(ctx, foghorndb.DeleteArtifactNodeParams{ArtifactHash: artifactHash, NodeID: nodeID}); err != nil {
 		return err
 	}
 	if existed {
@@ -1574,15 +1234,13 @@ func (r *artifactRepositoryDB) MarkNodeArtifactsOrphaned(ctx context.Context, no
 
 	// Orphan every present copy on the node except an incomplete origin row (an active DVR still being
 	// written). Runs only on the eviction/disconnect path; reports never drive a negative diff here.
-	const orphanNodeSQL = `
-		UPDATE foghorn.artifact_nodes
-		SET is_orphaned = true, last_seen_at = NOW()
-		WHERE node_id = $1 AND is_orphaned = false
-		  AND NOT (role = 'origin' AND is_complete = false)
-		RETURNING artifact_hash, role`
-	orphaned, err := scanLostRows(tx.QueryContext(ctx, orphanNodeSQL, nodeID))
+	rows, err := foghorndb.New(tx).OrphanNodeArtifacts(ctx, nodeID)
 	if err != nil {
 		return err
+	}
+	orphaned := make([]lostRow, 0, len(rows))
+	for _, row := range rows {
+		orphaned = append(orphaned, lostRow{hash: row.ArtifactHash, role: row.Role})
 	}
 	if err = emitLost(ctx, tx, nodeID, orphaned, reportedAtMs); err != nil {
 		return err
@@ -1594,16 +1252,7 @@ func (r *artifactRepositoryDB) NeedsVODDtshSync(ctx context.Context, artifactHas
 	if db == nil {
 		return false
 	}
-	var needsSync bool
-	err := db.QueryRowContext(ctx, `
-		SELECT EXISTS(
-			SELECT 1 FROM foghorn.artifacts
-			WHERE artifact_hash = $1
-			  AND artifact_type = 'vod'
-			  AND sync_status = 'synced'
-			  AND COALESCE(dtsh_synced, false) = false
-		)
-	`, artifactHash).Scan(&needsSync)
+	needsSync, err := foghorndb.New(db).VODNeedsDtshSync(ctx, artifactHash)
 	if err != nil {
 		return false
 	}

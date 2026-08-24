@@ -33,7 +33,7 @@ func sampleSegmentRow() *sqlmock.Rows {
 // size, gated on the source states so a duplicate ack can't regress a later state.
 func TestMarkDVRSegmentUploaded(t *testing.T) {
 	mock, _, _ := setupArtifactTestDeps(t)
-	mock.ExpectExec(`UPDATE foghorn.dvr_segments\s+SET status = 'uploaded',\s+size_bytes = \$3,\s+uploaded_at = NOW\(\).*WHERE artifact_hash = \$1\s+AND segment_name = \$2\s+AND status IN \('pending', 'failed_upload'\)\s+AND EXISTS`).
+	mock.ExpectExec(`UPDATE foghorn.dvr_segments\s+SET status = 'uploaded',\s+size_bytes = \$3,\s+uploaded_at = NOW\(\).*WHERE foghorn.dvr_segments.artifact_hash = \$1\s+AND segment_name = \$2\s+AND status IN \('pending', 'failed_upload'\)\s+AND EXISTS`).
 		WithArgs("art-1", "seg-1", int64(2048), "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	if err := MarkDVRSegmentUploaded(context.Background(), "tenant-1", "art-1", "seg-1", 2048); err != nil {
@@ -48,7 +48,7 @@ func TestMarkDVRSegmentUploaded(t *testing.T) {
 // and total bytes for the finalization queue's progress view.
 func TestDVRSegmentProgress(t *testing.T) {
 	mock, _, _ := setupArtifactTestDeps(t)
-	mock.ExpectQuery(`SELECT COUNT\(\*\), COALESCE\(SUM\(size_bytes\), 0\)\s+FROM foghorn.dvr_segments\s+WHERE artifact_hash = \$1\s+AND status NOT IN \('lost_local', 'reclaimed'\)\s+AND EXISTS`).
+	mock.ExpectQuery(`SELECT COUNT\(\*\)::bigint AS segment_count, COALESCE\(SUM\(size_bytes\), 0\)::bigint AS size_bytes\s+FROM foghorn.dvr_segments\s+WHERE foghorn.dvr_segments.artifact_hash = \$1\s+AND status NOT IN \('lost_local', 'reclaimed'\)\s+AND EXISTS`).
 		WithArgs("art-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"count", "sum"}).AddRow(int64(3), int64(9000)))
 	count, size, err := DVRSegmentProgress(context.Background(), "tenant-1", "art-1")
@@ -62,8 +62,8 @@ func TestDVRSegmentProgress(t *testing.T) {
 // UPDATE affects a row, without inserting a placeholder.
 func TestMarkDVRSegmentDropped_ExistingUploadedRow(t *testing.T) {
 	mock, _, _ := setupArtifactTestDeps(t)
-	mock.ExpectExec(`UPDATE foghorn.dvr_segments\s+SET status = \$3,\s+drop_reason = \$4.*WHERE artifact_hash = \$1\s+AND segment_name = \$2\s+AND status NOT IN \('deleted_local', 'lost_local', 'reclaimed'\)\s+AND EXISTS`).
-		WithArgs("art-1", "seg-1", "deleted_local", "evicted", true, "tenant-1").
+	mock.ExpectExec(`UPDATE foghorn.dvr_segments\s+SET status = \$1::text,\s+drop_reason = \$2::text.*WHERE foghorn.dvr_segments.artifact_hash = \$4\s+AND segment_name = \$5\s+AND status NOT IN \('deleted_local', 'lost_local', 'reclaimed'\)\s+AND EXISTS`).
+		WithArgs("deleted_local", "evicted", true, "art-1", "seg-1", "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	if err := MarkDVRSegmentDropped(context.Background(), "tenant-1", "art-1", "seg-1", "evicted", true, 0, 0, 0, 0); err != nil {
 		t.Fatal(err)
@@ -165,7 +165,7 @@ func TestLookupDVRSegmentsByName(t *testing.T) {
 	})
 	t.Run("returns matching rows", func(t *testing.T) {
 		mock, _, _ := setupArtifactTestDeps(t)
-		mock.ExpectQuery(`FROM foghorn.dvr_segments\s+WHERE artifact_hash = \$1\s+AND segment_name = ANY\(\$2::text\[\]\)\s+AND EXISTS`).
+		mock.ExpectQuery(`FROM foghorn.dvr_segments\s+WHERE foghorn.dvr_segments.artifact_hash = \$1\s+AND segment_name = ANY\(\$2::text\[\]\)\s+AND EXISTS`).
 			WithArgs("art-1", pq.StringArray([]string{"seg-1"}), "tenant-1").
 			WillReturnRows(sampleSegmentRow())
 		out, err := LookupDVRSegmentsByName(context.Background(), "tenant-1", "art-1", []string{"seg-1"})
