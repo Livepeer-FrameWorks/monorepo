@@ -265,6 +265,15 @@ Trust boundary — the browser is untrusted:
   Without a valid token those fields stay empty and `cluster_attributed = 0`, which
   excludes the row from the cluster-ops read surface. `origin_cluster_id` is
   authoritative from Commodore.
+- `TELEMETRY_TOKEN_SECRET` is one shared 32-byte platform secret, encoded as 64
+  hexadecimal characters and distributed to every Bridge replica. Non-development
+  CLI provision and upgrade validation reject a missing or malformed value. Bridge
+  exposes `bridge_player_telemetry_token_configured` and low-cardinality
+  `bridge_player_telemetry_events_total{type,outcome}` metrics; neither metric nor
+  telemetry intake logs contain tenant identifiers or tokens.
+- After Bridge stamps the authoritative fields, Decklog only maps and publishes the
+  event to Kafka and Periscope Ingest only persists it in ClickHouse. Neither service
+  performs content-owner or serving-cluster enrichment.
 
 Two read surfaces (both diagnostic, never billing/viewer-count truth):
 

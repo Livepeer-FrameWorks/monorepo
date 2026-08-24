@@ -20,6 +20,7 @@ var generatable = []secretSpec{
 	{"PASSWORD_RESET_SECRET", 32},
 	{"FIELD_ENCRYPTION_KEY", 32},
 	{"USAGE_HASH_SECRET", 32},
+	{"TELEMETRY_TOKEN_SECRET", 32},
 }
 
 // isMissing returns true if the value is empty or a known placeholder.
@@ -77,6 +78,22 @@ func ValidateShared(env map[string]string) error {
 	if len(missing) > 0 {
 		return fmt.Errorf("missing shared platform secrets: %s — set them in your manifest env_files",
 			strings.Join(missing, ", "))
+	}
+	return ValidateTelemetryTokenSecret(env["TELEMETRY_TOKEN_SECRET"])
+}
+
+// ValidateTelemetryTokenSecret enforces the shared Bridge signing-key wire
+// format used across replicas: exactly 32 random bytes encoded as lowercase or
+// uppercase hexadecimal.
+func ValidateTelemetryTokenSecret(value string) error {
+	if isMissing(value) {
+		return fmt.Errorf("TELEMETRY_TOKEN_SECRET is required")
+	}
+	if len(value) != 64 {
+		return fmt.Errorf("TELEMETRY_TOKEN_SECRET must be 64 hex characters (32 bytes)")
+	}
+	if _, err := hex.DecodeString(value); err != nil {
+		return fmt.Errorf("TELEMETRY_TOKEN_SECRET must be valid hex: %w", err)
 	}
 	return nil
 }

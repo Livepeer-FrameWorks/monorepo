@@ -14,6 +14,7 @@ import (
 	fwcfg "frameworks/cli/internal/config"
 	"frameworks/cli/internal/readiness"
 	"frameworks/cli/internal/ux"
+	"frameworks/cli/pkg/credentials"
 	"frameworks/cli/pkg/detect"
 	fwgitops "frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/health"
@@ -734,6 +735,19 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 		if step := doctorServiceRemediation(name); step.Cmd != "" || step.Why != "" {
 			remediationSteps = append(remediationSteps, step)
 		}
+	}
+
+	if deep {
+		result := &health.CheckResult{Name: "shared_platform_secrets", CheckedAt: time.Now(), Metadata: map[string]string{"check_kind": "config"}}
+		if err := credentials.ValidateShared(sharedEnv); err != nil {
+			result.Status = "unhealthy"
+			result.Error = err.Error()
+		} else {
+			result.OK = true
+			result.Status = "healthy"
+			result.Message = "shared platform secrets are present and telemetry signing key is valid"
+		}
+		runInfraCheck("Shared platform secrets", result)
 	}
 
 	if manifest.Infrastructure.Postgres != nil && manifest.Infrastructure.Postgres.Enabled {

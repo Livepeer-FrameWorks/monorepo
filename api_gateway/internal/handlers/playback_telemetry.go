@@ -103,12 +103,14 @@ func (h *PlaybackTelemetryHandler) Handle(c *gin.Context) {
 	attr, ok := h.intake.resolveAttribution(c.Request.Context(), contentID)
 	if !ok || attr.tenantID == "" {
 		// Unresolvable playback id — drop quietly.
+		h.intake.observe("boot", "unresolved")
 		c.Status(http.StatusNoContent)
 		return
 	}
 
 	trigger := h.buildTrigger(contentID, &body, attr)
 	if err := h.decklog.SendTriggerContext(c.Request.Context(), trigger); err != nil {
+		h.intake.observe("boot", "decklog_error")
 		h.intake.logger.WithError(err).Warn("playback boot telemetry: Decklog send failed")
 		// Still 204 — the client neither retries nor learns the backend state.
 	}
@@ -164,7 +166,7 @@ func (h *PlaybackTelemetryHandler) buildTrigger(contentID string, body *playback
 	// Cluster attribution is trusted ONLY from a valid telemetry token whose
 	// content id matches this beacon. Without it, node/cluster stay empty and
 	// cluster_attributed=false, excluding the row from cluster-ops aggregates.
-	if claims, ok := h.intake.clusterClaims(contentID, body.TelemetryToken); ok {
+	if claims, ok := h.intake.clusterClaims("boot", contentID, body.TelemetryToken); ok {
 		boot.NodeId = claims.NodeID
 		boot.ServingClusterId = claims.ServingClusterID
 		if claims.OriginClusterID != "" {

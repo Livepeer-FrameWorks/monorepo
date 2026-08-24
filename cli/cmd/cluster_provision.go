@@ -7271,6 +7271,11 @@ func validateProductionServiceEnv(manifest *inventory.Manifest, serviceID string
 	}
 
 	switch serviceID {
+	case "bridge":
+		if err := credentials.ValidateTelemetryTokenSecret(env["TELEMETRY_TOKEN_SECRET"]); err != nil {
+			return fmt.Errorf("service bridge: non-dev deploy: %w", err)
+		}
+		return nil
 	case "navigator":
 		return validateNavigatorProductionEnv(env)
 	case "quartermaster", "commodore", "purser":

@@ -25,11 +25,11 @@ The merged result is written to `/etc/frameworks/{service}.env` on each host.
 
 ### Credential Categories
 
-| Category                    | Examples                                                      | Who Sets It                                       |
-| --------------------------- | ------------------------------------------------------------- | ------------------------------------------------- |
-| **Operator-provided**       | `DATABASE_PASSWORD`, `CLICKHOUSE_PASSWORD`, Stripe keys, SMTP | You — in shared env files                         |
-| **Shared platform secrets** | `JWT_SECRET`, `SERVICE_TOKEN`, `FIELD_ENCRYPTION_KEY`         | You — in shared env files for non-dev deployments |
-| **CLI-derived**             | `DATABASE_URL`, `KAFKA_BROKERS`, `COOKIE_DOMAIN`              | CLI — from manifest                               |
+| Category                    | Examples                                                                        | Who Sets It                                       |
+| --------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------- |
+| **Operator-provided**       | `DATABASE_PASSWORD`, `CLICKHOUSE_PASSWORD`, Stripe keys, SMTP                   | You — in shared env files                         |
+| **Shared platform secrets** | `JWT_SECRET`, `SERVICE_TOKEN`, `FIELD_ENCRYPTION_KEY`, `TELEMETRY_TOKEN_SECRET` | You — in shared env files for non-dev deployments |
+| **CLI-derived**             | `DATABASE_URL`, `KAFKA_BROKERS`, `COOKIE_DOMAIN`                                | CLI — from manifest                               |
 
 For dev-profile manifests, the CLI can replace missing or placeholder shared platform secrets with `crypto/rand` values for that provision run. Non-dev provisioning validates that shared platform secrets are present in your manifest `env_files`; keep them in an encrypted env file so re-provisioning uses stable values.
 
@@ -47,7 +47,7 @@ This ensures runtime services can connect with the same credentials the CLI prov
 
 1. Create `gitops/config/production.env` for non-secret operator config
 2. Copy the secret template: `cp config/env/secrets.env.example gitops/secrets/production.env`
-3. Set at minimum in `gitops/secrets/production.env`: `DATABASE_PASSWORD`, `CLICKHOUSE_PASSWORD`, `SERVICE_TOKEN`, `JWT_SECRET`, `PASSWORD_RESET_SECRET`, `FIELD_ENCRYPTION_KEY`, and `USAGE_HASH_SECRET`
+3. Set at minimum in `gitops/secrets/production.env`: `DATABASE_PASSWORD`, `CLICKHOUSE_PASSWORD`, `SERVICE_TOKEN`, `JWT_SECRET`, `PASSWORD_RESET_SECRET`, `FIELD_ENCRYPTION_KEY`, `USAGE_HASH_SECRET`, and a shared 64-hex-character `TELEMETRY_TOKEN_SECRET`
 4. Set your public URLs and other non-secret operator inputs in `gitops/config/production.env`
 5. Reference both files in your cluster manifest:
    ```yaml

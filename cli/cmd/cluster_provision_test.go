@@ -39,6 +39,7 @@ const testSharedSecrets = "SERVICE_TOKEN=test-token\n" +
 	"PASSWORD_RESET_SECRET=test-reset\n" +
 	"FIELD_ENCRYPTION_KEY=test-enc\n" +
 	"USAGE_HASH_SECRET=test-hash\n" +
+	"TELEMETRY_TOKEN_SECRET=abababababababababababababababababababababababababababababababab\n" +
 	"LISTMONK_API_USERNAME=frameworks-api\n" +
 	"LISTMONK_API_TOKEN=listmonk-api-token\n"
 
@@ -62,6 +63,21 @@ type fakeFoghornClusterAssigner struct {
 	services  []*quartermasterpb.Service
 	instances map[string][]*quartermasterpb.ServiceInstance
 	errFor    map[string]error
+}
+
+func TestValidateProductionServiceEnvRequiresSharedTelemetrySecretForBridge(t *testing.T) {
+	manifest := &inventory.Manifest{Profile: "production"}
+	if err := validateProductionServiceEnv(manifest, "bridge", map[string]string{}); err == nil || !strings.Contains(err.Error(), "TELEMETRY_TOKEN_SECRET") {
+		t.Fatalf("missing secret error = %v", err)
+	}
+	if err := validateProductionServiceEnv(manifest, "bridge", map[string]string{
+		"TELEMETRY_TOKEN_SECRET": strings.Repeat("ab", 32),
+	}); err != nil {
+		t.Fatalf("valid secret rejected: %v", err)
+	}
+	if err := validateProductionServiceEnv(&inventory.Manifest{Profile: "dev"}, "bridge", map[string]string{}); err != nil {
+		t.Fatalf("dev bridge must allow missing secret: %v", err)
+	}
 }
 
 func TestServiceExistsTracksPreexistingStoppedServices(t *testing.T) {
@@ -194,7 +210,9 @@ func TestBuildTaskConfigUsesFrozenReleaseVersion(t *testing.T) {
 		Type:      "bridge",
 		ServiceID: "bridge",
 		Host:      "node-a",
-	}, manifest, map[string]any{}, false, "", map[string]string{}, nil, nil)
+	}, manifest, map[string]any{}, false, "", map[string]string{
+		"TELEMETRY_TOKEN_SECRET": strings.Repeat("ab", 32),
+	}, nil, nil)
 	if err != nil {
 		t.Fatalf("buildTaskConfig: %v", err)
 	}

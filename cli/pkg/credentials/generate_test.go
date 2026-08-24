@@ -2,6 +2,9 @@ package credentials
 
 import (
 	"encoding/hex"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -28,11 +31,42 @@ func TestKeys(t *testing.T) {
 	}
 	want := map[string]bool{
 		"SERVICE_TOKEN": true, "JWT_SECRET": true, "PASSWORD_RESET_SECRET": true,
-		"FIELD_ENCRYPTION_KEY": true, "USAGE_HASH_SECRET": true,
+		"FIELD_ENCRYPTION_KEY": true, "USAGE_HASH_SECRET": true, "TELEMETRY_TOKEN_SECRET": true,
 	}
 	for _, k := range keys {
 		if !want[k] {
 			t.Errorf("unexpected key %q", k)
+		}
+	}
+}
+
+func TestSecretsTemplateCoversGeneratableSharedSecrets(t *testing.T) {
+	t.Parallel()
+
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("resolve credentials test path")
+	}
+	templatePath := filepath.Join(filepath.Dir(currentFile), "..", "..", "..", "config", "env", "secrets.env.example")
+	contents, err := os.ReadFile(templatePath)
+	if err != nil {
+		t.Fatalf("read shared secret template: %v", err)
+	}
+
+	declared := make(map[string]bool)
+	for _, line := range strings.Split(string(contents), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, _, found := strings.Cut(line, "=")
+		if found {
+			declared[strings.TrimSpace(key)] = true
+		}
+	}
+	for _, key := range Keys() {
+		if !declared[key] {
+			t.Errorf("%s is generated and required but missing from config/env/secrets.env.example", key)
 		}
 	}
 }
@@ -98,6 +132,7 @@ func TestValidateShared(t *testing.T) {
 	for _, spec := range generatable {
 		full[spec.Key] = "real-value"
 	}
+	full["TELEMETRY_TOKEN_SECRET"] = strings.Repeat("ab", 32)
 	if err := ValidateShared(full); err != nil {
 		t.Fatalf("ValidateShared(full) = %v, want nil", err)
 	}
@@ -117,6 +152,17 @@ func TestValidateShared(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "SERVICE_TOKEN") {
 		t.Errorf("error should not name the present key SERVICE_TOKEN, got: %v", err)
+	}
+}
+
+func TestValidateTelemetryTokenSecret(t *testing.T) {
+	if err := ValidateTelemetryTokenSecret(strings.Repeat("ab", 32)); err != nil {
+		t.Fatalf("valid secret rejected: %v", err)
+	}
+	for _, value := range []string{"", "short", strings.Repeat("z", 64)} {
+		if err := ValidateTelemetryTokenSecret(value); err == nil {
+			t.Fatalf("invalid secret %q accepted", value)
+		}
 	}
 }
 

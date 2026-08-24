@@ -128,7 +128,7 @@ These should remain the human-edited source of truth:
 - Billing routing: `PAYMENT_CARD_PROVIDER` (`stripe` or `mollie`) when both providers are fully configured; omit it when only one is ready
 - Service placement: `*_HOST`, `*_PORT`, `*_GRPC_PORT`
 - Shared runtime: `BUILD_ENV`, `GIN_MODE`, `LOG_LEVEL`, `ALLOWED_ORIGINS`, `TRUSTED_PROXY_CIDRS`
-- Shared secrets: `JWT_SECRET`, `PASSWORD_RESET_SECRET`, `SERVICE_TOKEN`, `FIELD_ENCRYPTION_KEY`
+- Shared secrets: `JWT_SECRET`, `PASSWORD_RESET_SECRET`, `SERVICE_TOKEN`, `FIELD_ENCRYPTION_KEY`, `USAGE_HASH_SECRET`, `TELEMETRY_TOKEN_SECRET`
 - Shared TLS: `GRPC_ALLOW_INSECURE`, `GRPC_TLS_CA_PATH`, `GRPC_TLS_CERT_PATH`, `GRPC_TLS_KEY_PATH`
 - Per-client TLS authority overrides: `<SERVICE>_GRPC_TLS_SERVER_NAME`
 

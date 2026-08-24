@@ -587,7 +587,21 @@ func main() {
 	// (viewer-experienced QoE deltas) beacons share one intake/cache.
 	{
 		telemetrySecret := []byte(config.GetEnv("TELEMETRY_TOKEN_SECRET", ""))
+		if len(telemetrySecret) == 0 {
+			logger.Warn("TELEMETRY_TOKEN_SECRET not set; player telemetry will not include serving-cluster attribution")
+		}
+		telemetryConfigured := metricsCollector.NewGauge("player_telemetry_token_configured", "Whether the shared player telemetry attribution key is configured", nil)
+		if len(telemetrySecret) > 0 {
+			telemetryConfigured.WithLabelValues().Set(1)
+		} else {
+			telemetryConfigured.WithLabelValues().Set(0)
+		}
 		beaconIntake := handlers.NewBeaconIntake(serviceClients.Commodore, rateLimiter, telemetrySecret, logger)
+		beaconIntake.SetMetrics(&handlers.BeaconMetrics{Events: metricsCollector.NewCounter(
+			"player_telemetry_events_total",
+			"Player telemetry intake outcomes",
+			[]string{"type", "outcome"},
+		)})
 
 		bootTelemetry := handlers.NewPlaybackTelemetryHandler(beaconIntake, serviceClients.Decklog)
 		server.HandleOptionalTrailingSlash(app, http.MethodPost, "/playback/telemetry/boot", bootTelemetry.Handle)

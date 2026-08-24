@@ -14,6 +14,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 // Per-IP rate limit for the public, unauthenticated beacons. Telemetry is lossy
@@ -71,6 +72,11 @@ type BeaconIntake struct {
 	attrCache       *cache.Cache
 	telemetrySecret []byte
 	logger          logging.Logger
+	metrics         *BeaconMetrics
+}
+
+type BeaconMetrics struct {
+	Events *prometheus.CounterVec
 }
 
 func NewBeaconIntake(
@@ -93,6 +99,16 @@ func NewBeaconIntake(
 		attrCache:       attrCache,
 		telemetrySecret: telemetrySecret,
 		logger:          logger,
+	}
+}
+
+func (b *BeaconIntake) SetMetrics(metrics *BeaconMetrics) {
+	b.metrics = metrics
+}
+
+func (b *BeaconIntake) observe(beaconType, outcome string) {
+	if b != nil && b.metrics != nil && b.metrics.Events != nil {
+		b.metrics.Events.WithLabelValues(beaconType, outcome).Inc()
 	}
 }
 
@@ -154,14 +170,17 @@ func (b *BeaconIntake) resolveAttribution(ctx context.Context, contentID string)
 // only when the token is valid and its content id matches this beacon. A beacon
 // alone cannot prove which endpoint served it, so serving node/cluster are
 // trusted only through this signed path.
-func (b *BeaconIntake) clusterClaims(contentID, token string) (telemetrytoken.Claims, bool) {
+func (b *BeaconIntake) clusterClaims(beaconType, contentID, token string) (telemetrytoken.Claims, bool) {
 	if len(b.telemetrySecret) == 0 || token == "" {
+		b.observe(beaconType, "accepted_unattributed")
 		return telemetrytoken.Claims{}, false
 	}
 	claims, err := telemetrytoken.Verify(b.telemetrySecret, token, time.Now())
 	if err != nil || claims.ContentID != contentID {
+		b.observe(beaconType, "invalid_token")
 		return telemetrytoken.Claims{}, false
 	}
+	b.observe(beaconType, "accepted_attributed")
 	return claims, true
 }
 

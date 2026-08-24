@@ -128,12 +128,14 @@ func (h *PlaybackSessionHandler) Handle(c *gin.Context) {
 
 	attr, ok := h.intake.resolveAttribution(c.Request.Context(), contentID)
 	if !ok || attr.tenantID == "" {
+		h.intake.observe("session", "unresolved")
 		c.Status(http.StatusNoContent)
 		return
 	}
 
 	trigger := h.buildTrigger(contentID, &body, attr)
 	if err := h.decklog.SendTriggerContext(c.Request.Context(), trigger); err != nil {
+		h.intake.observe("session", "decklog_error")
 		h.intake.logger.WithError(err).Warn("playback session telemetry: Decklog send failed")
 		// Still 204 — the client neither retries nor learns the backend state.
 	}
@@ -216,7 +218,7 @@ func (h *PlaybackSessionHandler) buildTrigger(contentID string, body *playbackSe
 
 	// Cluster attribution is trusted ONLY from a valid telemetry token whose
 	// content id matches this beacon (same rule as the boot beacon).
-	if claims, ok := h.intake.clusterClaims(contentID, body.TelemetryToken); ok {
+	if claims, ok := h.intake.clusterClaims("session", contentID, body.TelemetryToken); ok {
 		qoe.NodeId = claims.NodeID
 		qoe.ServingClusterId = claims.ServingClusterID
 		if claims.OriginClusterID != "" {
