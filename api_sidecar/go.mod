@@ -1,6 +1,6 @@
 module frameworks/api_sidecar
 
-go 1.26.2
+go 1.27.0
 
 require (
 	github.com/Livepeer-FrameWorks/monorepo/pkg v0.0.0

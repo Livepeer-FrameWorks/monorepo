@@ -13,6 +13,7 @@ BUILD_DATE ?= $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
 GO_BUILD_TAGS ?= nomsgpack
 GO_TAG_FLAGS = $(if $(strip $(GO_BUILD_TAGS)),-tags=$(GO_BUILD_TAGS),)
 SQLC_VERSION ?= v1.31.1
+GOLANGCI_LINT_VERSION ?= v2.13.1
 
 # component_ldflags(binary_name, source_dir) returns the -ldflags block that
 # injects platform + per-component version fields into a go build. Components
@@ -349,7 +350,7 @@ version:
 install-tools:
 	cd pkg/proto && make install-tools
 	cd api_gateway && make install-tools
-	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
 test:
 	@echo "Running unit tests for all Go modules..."
@@ -907,7 +908,7 @@ dead-code-install:
 	@echo "Installing Go dead code analysis tools..."
 	go install golang.org/x/tools/cmd/deadcode@latest
 	go install honnef.co/go/tools/cmd/staticcheck@latest
-	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 	@echo ""
 	@echo "✓ Go dead code analysis tools installed"
 	@echo "Note: knip must be installed separately (workspace dev dependency)."

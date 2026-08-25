@@ -1,6 +1,6 @@
 module frameworks/api_ticketing
 
-go 1.26.2
+go 1.27.0
 
 replace github.com/Livepeer-FrameWorks/monorepo/pkg => ../pkg
 

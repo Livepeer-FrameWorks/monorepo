@@ -414,10 +414,10 @@ func claimReqsToProto(in []*model.PlaybackJwtClaimRequirementInput) (map[string]
 
 func playbackWebhookSecretInput(webhook any) (string, *model.ValidationError) {
 	v := reflect.ValueOf(webhook)
-	if !v.IsValid() || (v.Kind() == reflect.Ptr && v.IsNil()) {
+	if !v.IsValid() || (v.Kind() == reflect.Pointer && v.IsNil()) {
 		return "", &model.ValidationError{Message: "webhook block required when type is WEBHOOK"}
 	}
-	if v.Kind() == reflect.Ptr {
+	if v.Kind() == reflect.Pointer {
 		v = v.Elem()
 	}
 	secretField := v.FieldByName("Secret")
@@ -426,7 +426,7 @@ func playbackWebhookSecretInput(webhook any) (string, *model.ValidationError) {
 	}
 
 	switch secretField.Kind() {
-	case reflect.Ptr:
+	case reflect.Pointer:
 		if secretField.IsNil() {
 			return "", nil
 		}
