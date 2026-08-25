@@ -10,11 +10,21 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	tenantlimitspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/tenant_limits"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+type countingStreamAdmissionBilling struct {
+	calls int
+}
+
+func (c *countingStreamAdmissionBilling) GetTenantBillingStatus(context.Context, string) (*purserpb.GetTenantBillingStatusResponse, error) {
+	c.calls++
+	return &purserpb.GetTenantBillingStatusResponse{BillingModel: "postpaid"}, nil
+}
 
 func TestValidateStreamKey(t *testing.T) {
 	ctx := context.Background()
@@ -175,6 +185,41 @@ func TestValidateStreamKey(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestValidateStreamKeyIdentityOnlySkipsFullAdmissionDependencies(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
+		AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123", "push")
+	mock.ExpectQuery("FROM commodore.streams").WithArgs("identity-key").WillReturnRows(rows)
+	billing := &countingStreamAdmissionBilling{}
+	server := &CommodoreServer{
+		db:                     db,
+		logger:                 logrus.New(),
+		streamAdmissionBilling: billing,
+	}
+
+	resp, err := server.ValidateStreamKey(context.Background(), &commodorepb.ValidateStreamKeyRequest{StreamKey: "identity-key"})
+	if err != nil {
+		t.Fatalf("ValidateStreamKey: %v", err)
+	}
+	if !resp.GetValid() || resp.GetTenantId() != "tenant-id" || resp.GetStreamId() != "stream-id" {
+		t.Fatalf("identity response = %+v", resp)
+	}
+	if resp.GetBillingModel() != "" || len(resp.GetPushTargets()) != 0 || resp.GetProcessesJson() != "" {
+		t.Fatalf("identity response contains full admission material: %+v", resp)
+	}
+	if billing.calls != 0 {
+		t.Fatalf("identity-only validation made %d Purser calls, want 0", billing.calls)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
 	}
 }
 
@@ -612,11 +657,10 @@ func TestValidateStreamKey_OriginClusterUsesIngestClusterWhenProvided(t *testing
 	}
 }
 
-// Plain key validation must not claim ingest placement. The GraphQL and MCP
-// validate tools and x402 resource resolution all call this RPC with no cluster
-// id; deriving one from the tenant's route would take the 30-second lease and
-// make a later real ingest on another cluster fail with DUPLICATE_INGEST.
-// PUSH_REWRITE names its cluster and stays the only claimant.
+// Plain key validation is identity-only. The GraphQL and MCP validate tools and
+// Foghorn's tenant-scoped session lookup call this RPC with no cluster id; it
+// must neither resolve routing/config nor take the 30-second placement lease.
+// PUSH_REWRITE's full admission names its cluster and stays the only claimant.
 func TestValidateStreamKey_WithoutClusterDoesNotClaimPlacement(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -659,9 +703,8 @@ func TestValidateStreamKey_WithoutClusterDoesNotClaimPlacement(t *testing.T) {
 	if !resp.GetValid() {
 		t.Fatalf("expected the key to validate: %+v", resp)
 	}
-	// The routing hint is still returned; only the claiming write is withheld.
-	if resp.GetOriginClusterId() == "" {
-		t.Error("origin cluster hint should still be resolved for routing")
+	if resp.GetOriginClusterId() != "" || len(resp.GetClusterPeers()) != 0 {
+		t.Fatalf("identity-only validation returned routing material: %+v", resp)
 	}
 
 	if err := mock.ExpectationsWereMet(); err == nil {

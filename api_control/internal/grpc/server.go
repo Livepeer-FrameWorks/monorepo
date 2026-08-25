@@ -115,6 +115,10 @@ type ServerMetrics struct {
 	GRPCDuration *prometheus.HistogramVec
 }
 
+type streamAdmissionBilling interface {
+	GetTenantBillingStatus(ctx context.Context, tenantID string) (*purserpb.GetTenantBillingStatusResponse, error)
+}
+
 // CommodoreServer implements the Commodore gRPC services
 type CommodoreServer struct {
 	commodorepb.UnimplementedInternalServiceServer
@@ -137,17 +141,18 @@ type CommodoreServer struct {
 	// qmEntitlements is the narrow Quartermaster surface used by the signed-
 	// policy-bundle path (tenant entitlement lookups). Nil when no
 	// Quartermaster client is configured.
-	qmEntitlements       tenantEntitlementAPI
-	navigatorClient      *navigator.Client
-	purserClient         *purserclient.GRPCClient
-	listmonkClient       *listmonk.Client
-	decklogClient        *decklogclient.BatchedClient
-	defaultMailingListID int
-	metrics              *ServerMetrics
-	turnstileValidator   *turnstile.Validator
-	turnstileFailOpen    bool
-	passwordResetSecret  []byte
-	fieldEncryptor       *fieldcrypt.FieldEncryptor
+	qmEntitlements         tenantEntitlementAPI
+	navigatorClient        *navigator.Client
+	purserClient           *purserclient.GRPCClient
+	streamAdmissionBilling streamAdmissionBilling
+	listmonkClient         *listmonk.Client
+	decklogClient          *decklogclient.BatchedClient
+	defaultMailingListID   int
+	metrics                *ServerMetrics
+	turnstileValidator     *turnstile.Validator
+	turnstileFailOpen      bool
+	passwordResetSecret    []byte
+	fieldEncryptor         *fieldcrypt.FieldEncryptor
 	// Separate FieldEncryptor for playback webhook secrets so HKDF purpose
 	// isolation prevents cross-feature key reuse.
 	playbackWebhookEncryptor *fieldcrypt.FieldEncryptor
@@ -699,6 +704,7 @@ func NewCommodoreServer(cfg CommodoreServerConfig) *CommodoreServer {
 		quartermasterClient:      cfg.QuartermasterClient,
 		navigatorClient:          cfg.NavigatorClient,
 		purserClient:             cfg.PurserClient,
+		streamAdmissionBilling:   cfg.PurserClient,
 		listmonkClient:           cfg.ListmonkClient,
 		decklogClient:            cfg.DecklogClient,
 		clusterURLs:              cfg.ClusterURLs,
@@ -1628,6 +1634,25 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *commodorep
 		}, nil
 	}
 
+	resp := &commodorepb.ValidateStreamKeyResponse{
+		Valid:              true,
+		UserId:             admission.UserID,
+		TenantId:           admission.TenantID,
+		InternalName:       admission.InternalName,
+		IsRecordingEnabled: admission.IsRecordingEnabled.Bool,
+		StreamId:           admission.ID,
+		PlaybackId:         admission.PlaybackID,
+	}
+
+	// A request without a cluster is an identity-only key check. It is used to
+	// scope Foghorn's open-session lookup and by the public validation tools;
+	// neither caller needs tenant routing, billing/config snapshots, decrypted
+	// push targets, process JSON, or a placement write.
+	requestedClusterID := strings.TrimSpace(req.GetClusterId())
+	if requestedClusterID == "" {
+		return resp, nil
+	}
+
 	// Plan-aware cluster admission. The admission envelope is filtered by
 	// allowedClusterClassesForTenant against the peer's cluster_class metadata,
 	// but retains health state so an entitled unhealthy cluster can be
@@ -1638,40 +1663,37 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *commodorep
 	// entitlement gate the resolver applies — and then claim the placement
 	// lease on an unverified cluster — for as long as the control plane is
 	// down. Unavailable instead, before any placement write.
-	requestedClusterID := strings.TrimSpace(req.GetClusterId())
-	if requestedClusterID != "" {
-		route, routeErr := s.resolveAdmissionRouteForTenant(ctx, admission.TenantID)
-		if routeErr != nil {
-			s.logger.WithError(routeErr).WithFields(logging.Fields{
+	route, routeErr := s.resolveAdmissionRouteForTenant(ctx, admission.TenantID)
+	if routeErr != nil {
+		s.logger.WithError(routeErr).WithFields(logging.Fields{
+			"tenant_id":  admission.TenantID,
+			"cluster_id": requestedClusterID,
+		}).Warn("ValidateStreamKey: cluster route lookup failed; failing closed as transient")
+		return nil, status.Errorf(codes.Unavailable, "cluster route lookup failed: %v", routeErr)
+	}
+	{
+		peer, rejectionReason := clusterAdmissionPeer(route, requestedClusterID)
+		if rejectionReason == commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_NOT_ENTITLED {
+			s.logger.WithFields(logging.Fields{
 				"tenant_id":  admission.TenantID,
 				"cluster_id": requestedClusterID,
-			}).Warn("ValidateStreamKey: cluster route lookup failed; failing closed as transient")
-			return nil, status.Errorf(codes.Unavailable, "cluster route lookup failed: %v", routeErr)
+			}).Warn("ValidateStreamKey rejected: cluster not entitled or filtered by plan policy")
+			return &commodorepb.ValidateStreamKeyResponse{
+				Valid:           false,
+				Error:           "Tenant not entitled to ingest cluster " + requestedClusterID,
+				RejectionReason: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_NOT_ENTITLED,
+			}, nil
 		}
-		{
-			peer, rejectionReason := clusterAdmissionPeer(route, requestedClusterID)
-			if rejectionReason == commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_NOT_ENTITLED {
-				s.logger.WithFields(logging.Fields{
-					"tenant_id":  admission.TenantID,
-					"cluster_id": requestedClusterID,
-				}).Warn("ValidateStreamKey rejected: cluster not entitled or filtered by plan policy")
-				return &commodorepb.ValidateStreamKeyResponse{
-					Valid:           false,
-					Error:           "Tenant not entitled to ingest cluster " + requestedClusterID,
-					RejectionReason: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_NOT_ENTITLED,
-				}, nil
+		if rejectionReason == commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_UNHEALTHY {
+			peerStatus := strings.TrimSpace(peer.GetHealthStatus())
+			if peerStatus == "" {
+				peerStatus = "unknown"
 			}
-			if rejectionReason == commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_UNHEALTHY {
-				peerStatus := strings.TrimSpace(peer.GetHealthStatus())
-				if peerStatus == "" {
-					peerStatus = "unknown"
-				}
-				return &commodorepb.ValidateStreamKeyResponse{
-					Valid:           false,
-					Error:           "Ingest cluster " + requestedClusterID + " is " + peerStatus,
-					RejectionReason: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_UNHEALTHY,
-				}, nil
-			}
+			return &commodorepb.ValidateStreamKeyResponse{
+				Valid:           false,
+				Error:           "Ingest cluster " + requestedClusterID + " is " + peerStatus,
+				RejectionReason: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_UNHEALTHY,
+			}, nil
 		}
 	}
 
@@ -1686,8 +1708,8 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *commodorep
 	var allowances []*meteringpb.MeterAllowance
 	var tenantResourceLimits *tenantlimitspb.TenantResourceLimits
 
-	if s.purserClient != nil {
-		billingStatus, err := s.purserClient.GetTenantBillingStatus(ctx, admission.TenantID)
+	if s.streamAdmissionBilling != nil {
+		billingStatus, err := s.streamAdmissionBilling.GetTenantBillingStatus(ctx, admission.TenantID)
 		if err != nil {
 			s.logger.WithFields(logging.Fields{
 				"tenant_id": admission.TenantID,
@@ -1703,21 +1725,12 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *commodorep
 		}
 	}
 
-	resp := &commodorepb.ValidateStreamKeyResponse{
-		Valid:                true,
-		UserId:               admission.UserID,
-		TenantId:             admission.TenantID,
-		InternalName:         admission.InternalName,
-		IsRecordingEnabled:   admission.IsRecordingEnabled.Bool,
-		StreamId:             admission.ID,
-		BillingModel:         billingModel,
-		IsSuspended:          isSuspended,
-		IsBalanceNegative:    isBalanceNegative,
-		PlaybackId:           admission.PlaybackID,
-		DvrPolicy:            dvrPolicy,
-		Allowances:           allowances,
-		TenantResourceLimits: tenantResourceLimits,
-	}
+	resp.BillingModel = billingModel
+	resp.IsSuspended = isSuspended
+	resp.IsBalanceNegative = isBalanceNegative
+	resp.DvrPolicy = dvrPolicy
+	resp.Allowances = allowances
+	resp.TenantResourceLimits = tenantResourceLimits
 
 	if route, err := s.resolveClusterRouteForTenant(ctx, admission.TenantID); err == nil {
 		resolvedOriginClusterID := resolveLiveIngestClusterID(route, req.GetClusterId())
