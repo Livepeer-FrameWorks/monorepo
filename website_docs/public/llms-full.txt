@@ -16457,8 +16457,14 @@ infrastructure:
 - `replication_factor` (optional) - Defaults to the number of `nodes`
 - `databases` (optional) - Each entry declares `name` and its schema/migration
   `owner`. Optional `runtime_role` opts service DSNs into the separately
-  provisioned least-privilege login. Omit it during the first rolling provision,
-  verify with `cluster doctor --deep`, then add it for the application cutover.
+  provisioned least-privilege login. It authenticates with
+  `DATABASE_RUNTIME_PASSWORD`, never the owner credential. Provision the role,
+  verify it with `cluster doctor --deep`, then enable the application cutover.
+  Runtime secrets resolve in this order: `POSTGRES_<DATABASE>_RUNTIME_PASSWORD`,
+  the equivalent owner-name alias, a named Postgres instance override, the
+  matching cluster's `DATABASE_RUNTIME_PASSWORD`, then the shared
+  `DATABASE_RUNTIME_PASSWORD`. The same resolution feeds provisioning and service
+  DSNs, and provisioning rejects owner/runtime credential collisions.
 - `tuning` (optional) - key/value overrides for server tuning
 - `sql_access` (optional) - `direct` by default, or `ssh`
 - `password` (optional) - Database password override
@@ -17935,11 +17941,11 @@ The merged result is written to `/etc/frameworks/{service}.env` on each host.
 
 ### Credential Categories
 
-| Category                    | Examples                                                                        | Who Sets It                                       |
-| --------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------- |
-| **Operator-provided**       | `DATABASE_PASSWORD`, `CLICKHOUSE_PASSWORD`, Stripe keys, SMTP                   | You — in shared env files                         |
-| **Shared platform secrets** | `JWT_SECRET`, `SERVICE_TOKEN`, `FIELD_ENCRYPTION_KEY`, `TELEMETRY_TOKEN_SECRET` | You — in shared env files for non-dev deployments |
-| **CLI-derived**             | `DATABASE_URL`, `KAFKA_BROKERS`, `COOKIE_DOMAIN`                                | CLI — from manifest                               |
+| Category                    | Examples                                                                                   | Who Sets It                                       |
+| --------------------------- | ------------------------------------------------------------------------------------------ | ------------------------------------------------- |
+| **Operator-provided**       | `DATABASE_PASSWORD`, `DATABASE_RUNTIME_PASSWORD`, `CLICKHOUSE_PASSWORD`, Stripe keys, SMTP | You — in shared env files                         |
+| **Shared platform secrets** | `JWT_SECRET`, `SERVICE_TOKEN`, `FIELD_ENCRYPTION_KEY`, `TELEMETRY_TOKEN_SECRET`            | You — in shared env files for non-dev deployments |
+| **CLI-derived**             | `DATABASE_URL`, `KAFKA_BROKERS`, `COOKIE_DOMAIN`                                           | CLI — from manifest                               |
 
 For dev-profile manifests, the CLI can replace missing or placeholder shared platform secrets with `crypto/rand` values for that provision run. Non-dev provisioning validates that shared platform secrets are present in your manifest `env_files`; keep them in an encrypted env file so re-provisioning uses stable values.
 
@@ -17947,7 +17953,7 @@ For dev-profile manifests, the CLI can replace missing or placeholder shared pla
 
 During `frameworks cluster provision`, the CLI also provisions database users:
 
-- **Postgres/YugabyteDB**: Creates a per-database owner/migration role plus a least-privilege runtime role (by default `<owner>_runtime`) using `DATABASE_PASSWORD`. The runtime role can connect and perform application DML in its service schema, but cannot create schema objects or own them. Add `runtime_role` to the database manifest entry only after provisioning and `frameworks cluster doctor --deep` succeed; omitting it keeps existing services on the owner role during a rolling upgrade.
+- **Postgres/YugabyteDB**: Creates a per-database owner/migration role using `DATABASE_PASSWORD` plus a least-privilege runtime role (by default `<owner>_runtime`) using the independent `DATABASE_RUNTIME_PASSWORD`. Runtime password precedence is the per-database override, owner alias, named Postgres instance override, matching cluster default, then shared default; provisioning and service DSNs use the same resolver. Provisioning rejects equal owner/runtime credentials. The runtime role can connect and perform application DML in its service schema, but cannot create schema objects or own them. Add `runtime_role` to the database manifest entry only after provisioning and `frameworks cluster doctor --deep` succeed; omitting it keeps services on the owner role.
 - **ClickHouse**: Deploys `users.xml` with a `frameworks` user (password from `CLICKHOUSE_PASSWORD`) and a `readonly_user` (rate-limited, password from `CLICKHOUSE_READONLY_PASSWORD`)
 - **Operator analytics (optional)**: When `ANALYTICS_RO_PASSWORD` and `CLICKHOUSE_ANALYTICS_PASSWORD` are both set, provisioning additionally creates the read-only `frameworks_analytics_ro` Postgres role (quartermaster/commodore/purser grants, applied by `cluster seed`), the ClickHouse named collections that reach it, and a dedicated `frameworks_analytics` ClickHouse user. Use `frameworks_analytics` as the Metabase datasource credential for the tenant-activity cards (synced by `frameworks cluster metabase sync`) — the runtime `frameworks` user is deliberately denied the Postgres reach-through.
 
@@ -17957,7 +17963,7 @@ This ensures runtime services can connect with the same credentials the CLI prov
 
 1. Create `gitops/config/production.env` for non-secret operator config
 2. Copy the secret template: `cp config/env/secrets.env.example gitops/secrets/production.env`
-3. Set at minimum in `gitops/secrets/production.env`: `DATABASE_PASSWORD`, `CLICKHOUSE_PASSWORD`, `SERVICE_TOKEN`, `JWT_SECRET`, `PASSWORD_RESET_SECRET`, `FIELD_ENCRYPTION_KEY`, `USAGE_HASH_SECRET`, and a shared 64-hex-character `TELEMETRY_TOKEN_SECRET`
+3. Set at minimum in `gitops/secrets/production.env`: distinct `DATABASE_PASSWORD` and `DATABASE_RUNTIME_PASSWORD` values, `CLICKHOUSE_PASSWORD`, `SERVICE_TOKEN`, `JWT_SECRET`, `PASSWORD_RESET_SECRET`, `FIELD_ENCRYPTION_KEY`, `USAGE_HASH_SECRET`, and a shared 64-hex-character `TELEMETRY_TOKEN_SECRET`
 4. Set your public URLs and other non-secret operator inputs in `gitops/config/production.env`
 5. Reference both files in your cluster manifest:
    ```yaml
