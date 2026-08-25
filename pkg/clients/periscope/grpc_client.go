@@ -54,6 +54,22 @@ type GRPCConfig struct {
 	ServerName    string
 }
 
+// periscopeTimeoutInterceptor bounds WaitForReady calls even when a shared
+// cache load is intentionally detached from the request that initiated it.
+func periscopeTimeoutInterceptor(timeout time.Duration) grpc.UnaryClientInterceptor {
+	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		if timeout <= 0 {
+			return invoker(ctx, method, req, reply, cc, opts...)
+		}
+		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= timeout {
+			return invoker(ctx, method, req, reply, cc, opts...)
+		}
+		boundedCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		return invoker(boundedCtx, method, req, reply, cc, opts...)
+	}
+}
+
 // CursorPaginationOpts represents cursor-based pagination options
 type CursorPaginationOpts struct {
 	First  int32
@@ -125,6 +141,7 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		transport,
 		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
 		grpc.WithChainUnaryInterceptor(
+			periscopeTimeoutInterceptor(config.Timeout),
 			authInterceptor(config.ServiceToken),
 			clients.FailsafeUnaryInterceptor("periscope", config.Logger),
 		),
