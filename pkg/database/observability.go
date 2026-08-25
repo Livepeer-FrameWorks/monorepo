@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"errors"
 	"strings"
 
@@ -30,6 +31,13 @@ func ClassifyDatabaseError(err error, scan bool) string {
 	if err == nil {
 		return ""
 	}
+	message := strings.ToLower(err.Error())
+	// Capability probes wrap their cause. Inspect operational causes before the
+	// wrapper category so a bounded probe timeout does not masquerade as a
+	// migration/schema incompatibility.
+	if isOperationalDatabaseError(err, message) {
+		return ""
+	}
 	var capabilityErr *CapabilityError
 	if errors.As(err, &capabilityErr) {
 		return FailureCapabilityMismatch
@@ -44,7 +52,6 @@ func ClassifyDatabaseError(err error, scan bool) string {
 	if state == "42804" || strings.HasPrefix(state, "22") {
 		return FailureTypeMismatch
 	}
-	message := strings.ToLower(err.Error())
 	switch {
 	case strings.Contains(message, "unknown table") || strings.Contains(message, "unknown identifier") || strings.Contains(message, "does not exist"):
 		return FailureUndefinedObject
@@ -57,6 +64,31 @@ func ClassifyDatabaseError(err error, scan bool) string {
 	default:
 		return ""
 	}
+}
+
+func isOperationalDatabaseError(err error, message string) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var timeoutErr interface{ Timeout() bool }
+	if errors.As(err, &timeoutErr) && timeoutErr.Timeout() {
+		return true
+	}
+	for _, fragment := range []string{
+		"bad connection",
+		"broken pipe",
+		"connection reset",
+		"connection timeout",
+		"context canceled",
+		"context deadline exceeded",
+		"i/o timeout",
+		"unexpected eof",
+	} {
+		if strings.Contains(message, fragment) {
+			return true
+		}
+	}
+	return false
 }
 
 // ObserveDatabaseError records only actionable schema/result contract

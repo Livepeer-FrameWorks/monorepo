@@ -17,8 +17,9 @@ import (
 // refuses connections. Retrying with backoff rides out that window instead of
 // exiting and relying on the container restart policy.
 const (
-	clickHouseConnectRetries = 12
-	clickHouseConnectBackoff = 3 * time.Second
+	clickHouseConnectRetries      = 12
+	clickHouseConnectBackoff      = 3 * time.Second
+	defaultClickHouseProbeTimeout = 5 * time.Second
 )
 
 // ClickHouseConn represents a ClickHouse database connection using database/sql interface
@@ -39,6 +40,9 @@ type ClickHouseConfig struct {
 	Username string
 	Password string
 	Debug    bool
+	// ProbeTimeout bounds ping plus executable capability checks for one
+	// connection attempt. Zero uses defaultClickHouseProbeTimeout.
+	ProbeTimeout time.Duration
 	// ServiceName selects the binary's executable ClickHouse capability contract.
 	ServiceName string
 }
@@ -46,12 +50,21 @@ type ClickHouseConfig struct {
 // DefaultClickHouseConfig returns default ClickHouse configuration
 func DefaultClickHouseConfig() ClickHouseConfig {
 	return ClickHouseConfig{
-		Addr:     []string{"127.0.0.1:9000"},
-		Database: "default",
-		Username: "default",
-		Password: "",
-		Debug:    false,
+		Addr:         []string{"127.0.0.1:9000"},
+		Database:     "default",
+		Username:     "default",
+		Password:     "",
+		Debug:        false,
+		ProbeTimeout: defaultClickHouseProbeTimeout,
 	}
+}
+
+func clickHouseProbeContext(cfg ClickHouseConfig) (context.Context, context.CancelFunc) {
+	timeout := cfg.ProbeTimeout
+	if timeout <= 0 {
+		timeout = defaultClickHouseProbeTimeout
+	}
+	return context.WithTimeout(context.Background(), timeout)
 }
 
 // ConnectClickHouse establishes a connection to ClickHouse using database/sql interface
@@ -67,13 +80,15 @@ func ConnectClickHouse(cfg ClickHouseConfig, logger logging.Logger) (ClickHouseC
 		Debug: cfg.Debug,
 	})
 
+	probeCtx, cancel := clickHouseProbeContext(cfg)
+	defer cancel()
 	// Test the connection
-	if err := conn.PingContext(context.Background()); err != nil {
+	if err := conn.PingContext(probeCtx); err != nil {
 		logger.WithError(err).Error("Failed to ping ClickHouse")
 		return nil, err
 	}
 	if cfg.ServiceName != "" {
-		if err := VerifyCapabilities(context.Background(), cfg.ServiceName, EngineClickHouse, func(ctx context.Context, probe string) error {
+		if err := VerifyCapabilities(probeCtx, cfg.ServiceName, EngineClickHouse, func(ctx context.Context, probe string) error {
 			rows, queryErr := conn.QueryContext(ctx, probe)
 			if queryErr != nil {
 				return queryErr
@@ -112,13 +127,15 @@ func ConnectClickHouseNative(cfg ClickHouseConfig, logger logging.Logger) (Click
 		return nil, err
 	}
 
+	probeCtx, cancel := clickHouseProbeContext(cfg)
+	defer cancel()
 	// Test the connection
-	if err := conn.Ping(context.Background()); err != nil {
+	if err := conn.Ping(probeCtx); err != nil {
 		logger.WithError(err).Error("Failed to ping ClickHouse native")
 		return nil, err
 	}
 	if cfg.ServiceName != "" {
-		if err := VerifyCapabilities(context.Background(), cfg.ServiceName, EngineClickHouse, func(ctx context.Context, probe string) error {
+		if err := VerifyCapabilities(probeCtx, cfg.ServiceName, EngineClickHouse, func(ctx context.Context, probe string) error {
 			rows, queryErr := conn.Query(ctx, probe)
 			if queryErr != nil {
 				return queryErr
