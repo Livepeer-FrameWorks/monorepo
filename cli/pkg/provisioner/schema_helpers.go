@@ -21,6 +21,38 @@ type SchemaDatabase struct {
 	Schema      string
 }
 
+// ValidateRuntimeRoleMetadata rejects unusable runtime-role credentials before
+// provisioning starts. Callers should invoke it before remote detection and the
+// role builders invoke it again as a defense-in-depth boundary.
+func ValidateRuntimeRoleMetadata(databases []map[string]string, defaultOwnerPassword, defaultRuntimePassword string) error {
+	for _, database := range databases {
+		name := strings.TrimSpace(database["name"])
+		owner := strings.TrimSpace(database["owner"])
+		if owner == "" {
+			owner = name
+		}
+		runtimeRole := strings.TrimSpace(database["runtime_role"])
+		if runtimeRole != "" && runtimeRole == owner {
+			return fmt.Errorf("database %q: runtime role %q must differ from owner", name, runtimeRole)
+		}
+		ownerPassword := strings.TrimSpace(database["password"])
+		if ownerPassword == "" {
+			ownerPassword = strings.TrimSpace(defaultOwnerPassword)
+		}
+		runtimePassword := strings.TrimSpace(database["runtime_password"])
+		if runtimePassword == "" {
+			runtimePassword = strings.TrimSpace(defaultRuntimePassword)
+		}
+		if runtimeRole != "" && runtimePassword == "" {
+			return fmt.Errorf("database %q: runtime role %q has no runtime password", name, runtimeRole)
+		}
+		if ownerPassword != "" && runtimePassword != "" && ownerPassword == runtimePassword {
+			return fmt.Errorf("database %q: runtime password must differ from owner password", name)
+		}
+	}
+	return nil
+}
+
 // BuildSchemaItems materializes embedded baseline schemas matching configured
 // database names to local temp files. Returns {db, schema, owner, src} entries
 // suitable for postgres_schema_items / yugabyte_schema_items role vars; Ansible

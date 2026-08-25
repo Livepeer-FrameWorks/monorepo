@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"strings"
 	"time"
 
 	"frameworks/cli/internal/ux"
@@ -124,28 +125,33 @@ func initPostgres(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, 
 		}
 	}
 
-	// Only decrypt manifest env_files when Yugabyte actually needs a password
-	// (i.e. IsYugabyte and no yaml pg.Password). Vanilla Postgres uses peer
-	// auth and doesn't need any secret.
-	var sharedEnv map[string]string
-	if pg.IsYugabyte() && pg.Password == "" {
-		env, err := rc.SharedEnv()
-		if err != nil {
-			return fmt.Errorf("load manifest env_files: %w", err)
-		}
-		sharedEnv = env
+	// Local administration may use peer/trust authentication, but the roles
+	// created here always need their distinct owner and runtime credentials.
+	sharedEnv, err := rc.SharedEnv()
+	if err != nil {
+		return fmt.Errorf("load manifest env_files: %w", err)
 	}
 	var clusterEnvs map[string]map[string]string
 	if pg.IsYugabyte() {
-		envs, err := rc.ClusterEnvs()
-		if err != nil {
-			return fmt.Errorf("load cluster env_files: %w", err)
+		envs, clusterEnvErr := rc.ClusterEnvs()
+		if clusterEnvErr != nil {
+			return fmt.Errorf("load cluster env_files: %w", clusterEnvErr)
 		}
 		clusterEnvs = envs
 	}
 	password, err := resolveYugabytePassword(pg, sharedEnv)
 	if err != nil {
 		return err
+	}
+	if !pg.IsYugabyte() {
+		password = strings.TrimSpace(sharedEnv["DATABASE_PASSWORD"])
+		if password == "" {
+			return fmt.Errorf("DATABASE_PASSWORD missing from manifest env_files — add it to your gitops secrets")
+		}
+	}
+	runtimePassword := strings.TrimSpace(sharedEnv["DATABASE_RUNTIME_PASSWORD"])
+	if runtimePassword == "" {
+		return fmt.Errorf("DATABASE_RUNTIME_PASSWORD missing from manifest env_files — add it to your gitops secrets")
 	}
 
 	dbConfigs := pg.Databases
@@ -154,7 +160,7 @@ func initPostgres(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, 
 		dbConfigs = expandedYugabyteDatabaseConfigs(pg.Databases, manifest)
 		databases = yugabyteDatabaseConfigsToMetadata(dbConfigs, manifest, sharedEnv, clusterEnvs, password)
 	} else {
-		databases = databaseConfigsToMetadata(dbConfigs, "")
+		databases = databaseConfigsToMetadata(dbConfigs, password, sharedEnv)
 	}
 
 	config := provisioner.ServiceConfig{
@@ -170,10 +176,14 @@ func initPostgres(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, 
 	// password is propagated as a role var via the registry-provided
 	// provisioner, which reads postgres_password from metadata.
 	config.Metadata["postgres_password"] = password
+	config.Metadata["postgres_runtime_password"] = runtimePassword
 
 	service := "postgres"
 	if pg.IsYugabyte() {
 		service = "yugabyte"
+	}
+	if err := validateInfrastructureRuntimeRoleConfig(service, config); err != nil {
+		return err
 	}
 	prov, provErr := provisioner.GetProvisioner(service, pool)
 	if provErr != nil {

@@ -45,6 +45,7 @@ yugabyte_tserver_service: yb-tserver
 # Owner defaults to the database name when omitted.
 yugabyte_databases: []
 yugabyte_application_password: ""
+yugabyte_runtime_password: ""
 
 # Superuser role used by local init/migrate/seed tasks. The generated YSQL HBA
 # trusts this role only from 127.0.0.1 so bootstrap does not need to know or set

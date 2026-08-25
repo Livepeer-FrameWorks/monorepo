@@ -119,6 +119,9 @@ connect, schema usage, table DML, sequence usage, and function execution, but wi
 schema creation, object ownership, superuser, database creation, role creation, or
 replication privileges. Grants and owner default privileges reconcile on every
 provision run so later migration-created objects are usable by the runtime role.
+The runtime login uses `DATABASE_RUNTIME_PASSWORD`, never the owner role's
+`DATABASE_PASSWORD`; provisioning rejects missing or equal credentials before
+creating roles.
 Migration orchestration keeps its advisory lock and ledger writes under the
 administrator, but runs the migration SQL itself under `SET ROLE` for the declared
 owner so newly created application objects inherit those grants.

@@ -284,6 +284,21 @@ func validateUniqueNodeHosts(kind string, hosts []string) error {
 	return nil
 }
 
+func validateDatabaseRuntimeRoles(scope string, databases []DatabaseConfig) error {
+	for _, database := range databases {
+		name := strings.TrimSpace(database.Name)
+		owner := strings.TrimSpace(database.Owner)
+		if owner == "" {
+			owner = name
+		}
+		runtimeRole := strings.TrimSpace(database.RuntimeRole)
+		if runtimeRole != "" && runtimeRole == owner {
+			return fmt.Errorf("%s database %q: runtime_role %q must differ from owner", scope, name, runtimeRole)
+		}
+	}
+	return nil
+}
+
 func (m *Manifest) Validate() error {
 	if m.Version == "" {
 		return fmt.Errorf("version is required")
@@ -341,6 +356,9 @@ func (m *Manifest) Validate() error {
 
 	// Validate host references in infrastructure
 	if m.Infrastructure.Postgres != nil && m.Infrastructure.Postgres.Enabled {
+		if err := validateDatabaseRuntimeRoles("postgres", m.Infrastructure.Postgres.Databases); err != nil {
+			return err
+		}
 		for _, pgHost := range m.Infrastructure.Postgres.AllHosts() {
 			if _, ok := m.Hosts[pgHost]; !ok {
 				return fmt.Errorf("postgres host '%s' not found in hosts", pgHost)
@@ -374,6 +392,9 @@ func (m *Manifest) Validate() error {
 			}
 			if _, ok := m.Hosts[inst.Host]; !ok {
 				return fmt.Errorf("postgres instance '%s' host '%s' not found in hosts", inst.Name, inst.Host)
+			}
+			if err := validateDatabaseRuntimeRoles("postgres instance "+inst.Name, inst.Databases); err != nil {
+				return err
 			}
 		}
 	}

@@ -19,6 +19,7 @@ postgres_arch_pgroot: "/var/lib/postgres/{{ postgres_instance_name }}"
 # Secrets — the CLI injects postgres_admin_password via extra-vars from the
 # SOPS-decrypted shared env. Never commit a real value here.
 postgres_admin_password: ""
+postgres_runtime_password: ""
 
 # Databases to create at init-tag time. Each entry: {name, owner}. Owner
 # defaults to the database name; role resolution handles that downstream.

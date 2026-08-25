@@ -2,6 +2,7 @@ package provisioner
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -117,9 +118,15 @@ func TestPostgresRoleInstallsPGVectorFromAUROnArch(t *testing.T) {
 
 func TestPostgresRoleCreatesOwnerRolesWithPerDatabasePassword(t *testing.T) {
 	content := readRepoFile(t, "ansible/collections/ansible_collections/frameworks/infra/roles/postgres/tasks/init.yml")
-	want := `password: "{{ item.password | default(postgres_admin_password) }}"`
-	if !strings.Contains(content, want) {
-		t.Fatalf("postgres init should use per-database owner passwords when provided; missing %q:\n%s", want, content)
+	for _, want := range []string{
+		`password: "{{ item.password | default(postgres_admin_password) }}"`,
+		`password: "{{ item.runtime_password | default(postgres_runtime_password) }}"`,
+		`!= (item.password | default(postgres_admin_password))`,
+		`!= (item.owner | default(item.name, true))`,
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("postgres init should keep owner/runtime credentials independent; missing %q:\n%s", want, content)
+		}
 	}
 }
 
@@ -211,9 +218,10 @@ func TestPostgresRoleVarsPassesDatabaseOwnerPassword(t *testing.T) {
 	vars, err := postgresRoleVars(context.Background(), nilHost(), ServiceConfig{
 		Version: "18.4",
 		Metadata: map[string]any{
-			"postgres_password": "admin-secret",
+			"postgres_password":         "admin-secret",
+			"postgres_runtime_password": "runtime-default",
 			"databases": []map[string]string{
-				{"name": "foghorn_eu", "owner": "foghorn_eu", "password": "owner-secret"},
+				{"name": "foghorn_eu", "owner": "foghorn_eu", "password": "owner-secret", "runtime_role": "foghorn_app", "runtime_password": "runtime-secret"},
 			},
 		},
 	}, RoleBuildHelpers{})
@@ -225,7 +233,62 @@ func TestPostgresRoleVarsPassesDatabaseOwnerPassword(t *testing.T) {
 		t.Fatalf("postgres_databases = %#v, want one database", vars["postgres_databases"])
 	}
 	if got := dbs[0]["password"]; got != "owner-secret" {
-		t.Fatalf("database password = %v, want owner-secret", got)
+		t.Fatal("database owner password did not match metadata")
+	}
+	if got := dbs[0]["runtime_role"]; got != "foghorn_app" {
+		t.Fatalf("runtime role = %v, want foghorn_app", got)
+	}
+	if got := dbs[0]["runtime_password"]; got != "runtime-secret" {
+		t.Fatal("database runtime password did not match metadata")
+	}
+}
+
+func TestPostgresRoleVarsRejectsRuntimeOwnerCollision(t *testing.T) {
+	_, err := postgresRoleVars(context.Background(), nilHost(), ServiceConfig{
+		Version: "18.4",
+		Metadata: map[string]any{
+			"postgres_password": "owner-secret",
+			"databases": []map[string]string{{
+				"name": "quartermaster", "owner": "quartermaster", "runtime_role": "quartermaster",
+			}},
+		},
+	}, RoleBuildHelpers{})
+	if err == nil || !strings.Contains(err.Error(), "runtime role \"quartermaster\" must differ from owner") {
+		t.Fatalf("postgresRoleVars() error = %v, want owner/runtime collision", err)
+	}
+}
+
+func TestPostgresRoleVarsRejectsRuntimeOwnerPasswordCollision(t *testing.T) {
+	_, err := postgresRoleVars(context.Background(), nilHost(), ServiceConfig{
+		Version: "18.4",
+		Metadata: map[string]any{
+			"postgres_password":         "same-secret",
+			"postgres_runtime_password": "same-secret",
+			"databases": []map[string]string{{
+				"name": "quartermaster", "owner": "quartermaster", "runtime_role": "quartermaster_runtime",
+			}},
+		},
+	}, RoleBuildHelpers{})
+	if err == nil || !strings.Contains(err.Error(), "runtime password must differ from owner password") {
+		t.Fatalf("postgresRoleVars() error = %v, want password collision", err)
+	}
+	if strings.Contains(fmt.Sprint(err), "same-secret") {
+		t.Fatalf("postgresRoleVars() leaked credential in error: %v", err)
+	}
+}
+
+func TestPostgresRoleVarsRejectsMissingRuntimePassword(t *testing.T) {
+	_, err := postgresRoleVars(context.Background(), nilHost(), ServiceConfig{
+		Version: "18.4",
+		Metadata: map[string]any{
+			"postgres_password": "owner-secret",
+			"databases": []map[string]string{{
+				"name": "quartermaster", "owner": "quartermaster", "runtime_role": "quartermaster_runtime",
+			}},
+		},
+	}, RoleBuildHelpers{})
+	if err == nil || !strings.Contains(err.Error(), "runtime role \"quartermaster_runtime\" has no runtime password") {
+		t.Fatalf("postgresRoleVars() error = %v, want missing runtime password", err)
 	}
 }
 

@@ -23,6 +23,7 @@ import (
 	"frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/orchestrator"
+	"frameworks/cli/pkg/provisioner"
 	"frameworks/cli/pkg/remoteaccess"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ingress"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
@@ -35,6 +36,7 @@ import (
 
 // testSharedSecrets provides the required shared platform secrets for test env files.
 const testSharedSecrets = "SERVICE_TOKEN=test-token\n" +
+	"DATABASE_RUNTIME_PASSWORD=test-runtime-db-password\n" +
 	"JWT_SECRET=test-jwt\n" +
 	"PASSWORD_RESET_SECRET=test-reset\n" +
 	"FIELD_ENCRYPTION_KEY=test-enc\n" +
@@ -2054,7 +2056,7 @@ func TestBuildServiceEnvVarsBindsDeclaredPostgresInstanceDatabase(t *testing.T) 
 				Enabled: true,
 				Instances: []inventory.PostgresInstance{
 					{
-						Name:     "foghorn-eu",
+						Name:     "regional-db",
 						Host:     "regional-eu-1",
 						Port:     5432,
 						Password: "instance-secret",
@@ -2082,8 +2084,11 @@ func TestBuildServiceEnvVarsBindsDeclaredPostgresInstanceDatabase(t *testing.T) 
 		Host:      "regional-eu-2",
 		ClusterID: "media-eu-1",
 		Phase:     orchestrator.PhaseApplications,
-	}, manifest, map[string]any{}, "", "", map[string]string{}, map[string]map[string]string{
-		"media-eu-1": {"DATABASE_PASSWORD": "wrong-cluster-default"},
+	}, manifest, map[string]any{}, "", "", map[string]string{
+		"DATABASE_RUNTIME_PASSWORD":             "runtime-secret",
+		"POSTGRES_REGIONAL_DB_RUNTIME_PASSWORD": "instance-runtime-secret",
+	}, map[string]map[string]string{
+		"media-eu-1": {"DATABASE_PASSWORD": "wrong-cluster-default", "DATABASE_RUNTIME_PASSWORD": "runtime-secret"},
 	}, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
@@ -2113,15 +2118,37 @@ func TestBuildServiceEnvVarsBindsDeclaredPostgresInstanceDatabase(t *testing.T) 
 		Host:      "regional-eu-2",
 		ClusterID: "media-eu-1",
 		Phase:     orchestrator.PhaseApplications,
-	}, manifest, map[string]any{}, "", "", map[string]string{}, nil, "native")
+	}, manifest, map[string]any{}, "", "", map[string]string{
+		"DATABASE_RUNTIME_PASSWORD":             "runtime-secret",
+		"POSTGRES_REGIONAL_DB_RUNTIME_PASSWORD": "instance-runtime-secret",
+	}, nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars with runtime role returned error: %v", err)
 	}
 	if got := env["DATABASE_USER"]; got != "foghorn_eu_runtime" {
 		t.Fatalf("DATABASE_USER with explicit runtime role = %q, want foghorn_eu_runtime", got)
 	}
-	if !strings.Contains(env["DATABASE_URL"], "foghorn_eu_runtime:instance-secret@regional-eu-1.internal:5432/foghorn_eu") {
-		t.Fatalf("DATABASE_URL did not opt into the declared runtime role: %q", env["DATABASE_URL"])
+	if !strings.Contains(env["DATABASE_URL"], "foghorn_eu_runtime:instance-runtime-secret@regional-eu-1.internal:5432/foghorn_eu") {
+		t.Fatal("DATABASE_URL did not opt into the declared runtime role and instance-scoped password")
+	}
+
+	config, err := buildTaskConfig(&orchestrator.Task{
+		Name:       "postgres@regional-db",
+		Type:       "postgres",
+		ServiceID:  "postgres",
+		InstanceID: "regional-db",
+		Host:       "regional-eu-1",
+		Phase:      orchestrator.PhaseInfrastructure,
+	}, manifest, map[string]any{}, false, "", map[string]string{
+		"DATABASE_RUNTIME_PASSWORD":             "runtime-secret",
+		"POSTGRES_REGIONAL_DB_RUNTIME_PASSWORD": "instance-runtime-secret",
+	}, nil, nil)
+	if err != nil {
+		t.Fatalf("buildTaskConfig for named postgres: %v", err)
+	}
+	databases := config.Metadata["databases"].([]map[string]string)
+	if got := databases[0]["runtime_password"]; got != env["DATABASE_PASSWORD"] {
+		t.Fatal("provisioned runtime password differs from service password")
 	}
 }
 
@@ -2186,7 +2213,9 @@ func TestDatabaseConfigsToMetadataUsesPerDatabasePassword(t *testing.T) {
 		{Name: "chatwoot", Owner: "chatwoot"},
 		{Name: "metabase", Owner: "metabase"},
 	}, "support-secret", map[string]string{
-		"POSTGRES_METABASE_PASSWORD": "metabase-secret",
+		"POSTGRES_METABASE_PASSWORD":         "metabase-secret",
+		"POSTGRES_METABASE_RUNTIME_PASSWORD": "metabase-runtime-secret",
+		"DATABASE_RUNTIME_PASSWORD":          "support-runtime-secret",
 	})
 
 	got := map[string]string{}
@@ -2198,6 +2227,37 @@ func TestDatabaseConfigsToMetadataUsesPerDatabasePassword(t *testing.T) {
 	}
 	if got["metabase"] != "metabase-secret" {
 		t.Fatalf("metabase password = %q, want metabase-secret", got["metabase"])
+	}
+	if items[0]["runtime_password"] != "support-runtime-secret" || items[1]["runtime_password"] != "metabase-runtime-secret" {
+		t.Fatal("runtime passwords do not follow independent database overrides")
+	}
+}
+
+func TestDatabaseConfigsToMetadataUsesNamedInstanceRuntimePassword(t *testing.T) {
+	items := databaseConfigsToMetadataWithRuntimePrefix([]inventory.DatabaseConfig{
+		{Name: "foghorn_eu", Owner: "foghorn_eu", RuntimeRole: "foghorn_eu_runtime"},
+	}, "owner-secret", "POSTGRES_FOGHORN_EU_INSTANCE", map[string]string{
+		"DATABASE_RUNTIME_PASSWORD":                     "shared-runtime-secret",
+		"POSTGRES_FOGHORN_EU_INSTANCE_RUNTIME_PASSWORD": "instance-runtime-secret",
+	})
+	if got := items[0]["runtime_password"]; got != "instance-runtime-secret" {
+		t.Fatal("runtime password did not use the named-instance override")
+	}
+}
+
+func TestInfrastructureRuntimeRolePreflightRunsBeforeRemoteProvisioning(t *testing.T) {
+	config := provisioner.ServiceConfig{Metadata: map[string]any{
+		"postgres_password": "owner-secret",
+		"databases": []map[string]string{{
+			"name": "quartermaster", "owner": "quartermaster", "runtime_role": "quartermaster_runtime",
+		}},
+	}}
+	err := validateInfrastructureRuntimeRoleConfig("postgres", config)
+	if err == nil || !strings.Contains(err.Error(), "has no runtime password") {
+		t.Fatalf("runtime-role preflight error = %v, want missing-password rejection", err)
+	}
+	if strings.Contains(err.Error(), "owner-secret") {
+		t.Fatalf("runtime-role preflight leaked a credential: %v", err)
 	}
 }
 
@@ -2411,15 +2471,22 @@ func TestYugabyteDatabaseMetadataUsesClusterPasswordForServiceDatabase(t *testin
 		{Name: "quartermaster", Owner: "quartermaster"},
 	}
 	items := yugabyteDatabaseConfigsToMetadata(databases, manifest, map[string]string{
-		"DATABASE_PASSWORD": "shared-secret",
+		"DATABASE_PASSWORD":         "shared-secret",
+		"DATABASE_RUNTIME_PASSWORD": "shared-runtime-secret",
 	}, map[string]map[string]string{
-		"media-eu-1": {"DATABASE_PASSWORD": "eu-secret"},
-		"media-us-1": {"DATABASE_PASSWORD": "us-secret"},
+		"media-eu-1": {
+			"DATABASE_PASSWORD":                    "eu-secret",
+			"DATABASE_RUNTIME_PASSWORD":            "eu-runtime-secret",
+			"POSTGRES_FOGHORN_EU_RUNTIME_PASSWORD": "eu-database-runtime-secret",
+		},
+		"media-us-1": {"DATABASE_PASSWORD": "us-secret", "DATABASE_RUNTIME_PASSWORD": "us-runtime-secret"},
 	}, "shared-secret")
 
 	got := map[string]string{}
+	runtimeGot := map[string]string{}
 	for _, item := range items {
 		got[item["name"]] = item["password"]
+		runtimeGot[item["name"]] = item["runtime_password"]
 	}
 	if got["foghorn_eu"] != "eu-secret" {
 		t.Fatalf("foghorn_eu password = %q, want eu-secret", got["foghorn_eu"])
@@ -2429,6 +2496,74 @@ func TestYugabyteDatabaseMetadataUsesClusterPasswordForServiceDatabase(t *testin
 	}
 	if got["quartermaster"] != "shared-secret" {
 		t.Fatalf("quartermaster password = %q, want shared-secret", got["quartermaster"])
+	}
+	if runtimeGot["foghorn_eu"] != "eu-database-runtime-secret" {
+		t.Fatal("foghorn_eu runtime password did not use the cluster-scoped database override")
+	}
+	if runtimeGot["foghorn_us"] != "us-runtime-secret" {
+		t.Fatal("foghorn_us runtime password did not use the cluster default")
+	}
+	for _, item := range items {
+		if item["password"] == item["runtime_password"] {
+			t.Fatalf("%s owner and runtime passwords are equal", item["name"])
+		}
+	}
+}
+
+func TestYugabyteRuntimePasswordMatchesServiceDSN(t *testing.T) {
+	databases := []inventory.DatabaseConfig{{
+		Name: "foghorn_eu", Owner: "foghorn_eu", RuntimeRole: "foghorn_eu_runtime",
+	}}
+	manifest := &inventory.Manifest{
+		Profile: "production",
+		Hosts: map[string]inventory.Host{
+			"yuga-1": {ExternalIP: "10.0.0.10"},
+			"edge-1": {ExternalIP: "10.0.0.11", Cluster: "media-eu-1"},
+		},
+		Clusters: map[string]inventory.ClusterConfig{
+			"media-eu-1": {Name: "Media EU"},
+		},
+		Infrastructure: inventory.InfrastructureConfig{
+			Postgres: &inventory.PostgresConfig{
+				Enabled:   true,
+				Engine:    "yugabyte",
+				Port:      5433,
+				Nodes:     []inventory.PostgresNode{{Host: "yuga-1", ID: 1}},
+				Databases: databases,
+			},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"foghorn-eu": {Enabled: true, Deploy: "foghorn", Host: "edge-1", Cluster: "media-eu-1"},
+		},
+	}
+	sharedEnv := map[string]string{
+		"DATABASE_PASSWORD":         "shared-owner-secret",
+		"DATABASE_RUNTIME_PASSWORD": "shared-runtime-secret",
+	}
+	clusterEnvs := map[string]map[string]string{
+		"media-eu-1": {
+			"DATABASE_PASSWORD":                    "cluster-owner-secret",
+			"DATABASE_RUNTIME_PASSWORD":            "cluster-runtime-secret",
+			"POSTGRES_FOGHORN_EU_RUNTIME_PASSWORD": "cluster-database-runtime-secret",
+		},
+	}
+	items := yugabyteDatabaseConfigsToMetadata(databases, manifest, sharedEnv, clusterEnvs, "shared-owner-secret")
+	serviceEnv, err := buildServiceEnvVars(&orchestrator.Task{
+		Name: "foghorn-eu@edge-1", Type: "foghorn", ServiceID: "foghorn-eu", Host: "edge-1", ClusterID: "media-eu-1", Phase: orchestrator.PhaseApplications,
+	}, manifest, map[string]any{}, "", "", sharedEnv, clusterEnvs, "native")
+	if err != nil {
+		t.Fatalf("buildServiceEnvVars: %v", err)
+	}
+	if got, want := items[0]["runtime_password"], serviceEnv["DATABASE_PASSWORD"]; got != want {
+		t.Fatalf("provisioned runtime password differs from service password")
+	}
+	dsn, err := url.Parse(serviceEnv["DATABASE_URL"])
+	if err != nil || dsn.User == nil {
+		t.Fatal("service DSN is not parseable")
+	}
+	dsnPassword, hasPassword := dsn.User.Password()
+	if dsn.User.Username() != "foghorn_eu_runtime" || !hasPassword || dsnPassword != items[0]["runtime_password"] {
+		t.Fatalf("service DSN did not use the cluster-scoped per-database runtime credential")
 	}
 }
 
@@ -2452,10 +2587,11 @@ func TestYugabyteDatabaseMetadataExpandsClusterScopedServiceDatabase(t *testing.
 		{Name: "quartermaster"},
 	}, manifest)
 	items := yugabyteDatabaseConfigsToMetadata(databases, manifest, map[string]string{
-		"DATABASE_PASSWORD": "shared-secret",
+		"DATABASE_PASSWORD":         "shared-secret",
+		"DATABASE_RUNTIME_PASSWORD": "shared-runtime-secret",
 	}, map[string]map[string]string{
-		"media-eu-1": {"DATABASE_PASSWORD": "eu-secret"},
-		"media-us-1": {"DATABASE_PASSWORD": "us-secret"},
+		"media-eu-1": {"DATABASE_PASSWORD": "eu-secret", "DATABASE_RUNTIME_PASSWORD": "eu-runtime-secret"},
+		"media-us-1": {"DATABASE_PASSWORD": "us-secret", "DATABASE_RUNTIME_PASSWORD": "us-runtime-secret"},
 	}, "shared-secret")
 
 	got := map[string]string{}
@@ -2488,13 +2624,13 @@ func TestBuildTaskConfigPostgresInstanceDoesNotInheritYugabyteSettings(t *testin
 				Nodes:   []inventory.PostgresNode{{Host: "yuga-eu-1", ID: 1}},
 				Instances: []inventory.PostgresInstance{
 					{
-						Name:     "chatwoot",
+						Name:     "support",
 						Host:     "central-eu-1",
 						Port:     5432,
 						Version:  "16",
 						Password: "chatwoot-secret",
 						Databases: []inventory.DatabaseConfig{
-							{Name: "chatwoot", Owner: "chatwoot"},
+							{Name: "chatwoot", Owner: "chatwoot", RuntimeRole: "chatwoot_runtime"},
 						},
 					},
 				},
@@ -2505,12 +2641,15 @@ func TestBuildTaskConfigPostgresInstanceDoesNotInheritYugabyteSettings(t *testin
 		Name:       "postgres@chatwoot",
 		Type:       "postgres",
 		ServiceID:  "postgres",
-		InstanceID: "chatwoot",
+		InstanceID: "support",
 		Host:       "central-eu-1",
 		Phase:      orchestrator.PhaseInfrastructure,
 	}
 
-	config, err := buildTaskConfig(task, manifest, map[string]any{}, false, "", map[string]string{}, nil, nil)
+	config, err := buildTaskConfig(task, manifest, map[string]any{}, false, "", map[string]string{
+		"DATABASE_RUNTIME_PASSWORD":         "shared-runtime-secret",
+		"POSTGRES_SUPPORT_RUNTIME_PASSWORD": "support-runtime-secret",
+	}, nil, nil)
 	if err != nil {
 		t.Fatalf("buildTaskConfig returned error: %v", err)
 	}
@@ -2533,6 +2672,9 @@ func TestBuildTaskConfigPostgresInstanceDoesNotInheritYugabyteSettings(t *testin
 	}
 	if databases[0]["name"] != "chatwoot" || databases[0]["owner"] != "chatwoot" {
 		t.Fatalf("databases[0] = %#v, want chatwoot/chatwoot", databases[0])
+	}
+	if got := databases[0]["runtime_password"]; got != "support-runtime-secret" {
+		t.Fatalf("databases[0] runtime_password = %q, want named-instance override", got)
 	}
 }
 

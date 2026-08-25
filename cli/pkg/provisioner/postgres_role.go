@@ -38,6 +38,7 @@ func postgresRoleVars(ctx context.Context, host inventory.Host, config ServiceCo
 		"postgres_version":          version,
 		"postgres_port":             port,
 		"postgres_admin_password":   pwd,
+		"postgres_runtime_password": metaString(config.Metadata, "postgres_runtime_password"),
 		"postgres_listen_addresses": "*",
 		"postgres_instance_name":    sanitizePostgresInstanceName(firstNonEmpty(config.DeployName, "postgres")),
 	}
@@ -52,6 +53,9 @@ func postgresRoleVars(ctx context.Context, host inventory.Host, config ServiceCo
 	}
 
 	if dbs, ok := config.Metadata["databases"].([]map[string]string); ok && len(dbs) > 0 {
+		if err := ValidateRuntimeRoleMetadata(dbs, metaString(config.Metadata, "postgres_password"), metaString(config.Metadata, "postgres_runtime_password")); err != nil {
+			return nil, fmt.Errorf("postgres: %w", err)
+		}
 		list := make([]map[string]any, 0, len(dbs))
 		needsPGVector := false
 		for _, db := range dbs {
@@ -62,6 +66,12 @@ func postgresRoleVars(ctx context.Context, host inventory.Host, config ServiceCo
 			}
 			if password := db["password"]; password != "" {
 				entry["password"] = password
+			}
+			if runtimeRole := db["runtime_role"]; runtimeRole != "" {
+				entry["runtime_role"] = runtimeRole
+			}
+			if runtimePassword := db["runtime_password"]; runtimePassword != "" {
+				entry["runtime_password"] = runtimePassword
 			}
 			if name == "chatwoot" {
 				entry["extensions"] = []string{"pg_stat_statements", "vector"}

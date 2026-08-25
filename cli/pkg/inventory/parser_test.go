@@ -7,6 +7,51 @@ import (
 	"testing"
 )
 
+func TestManifestValidateRejectsDatabaseRuntimeRoleOwnerCollision(t *testing.T) {
+	base := func() *Manifest {
+		return &Manifest{
+			Version: "1",
+			Type:    "cluster",
+			Hosts: map[string]Host{
+				"db-1": {ExternalIP: "10.0.0.10"},
+			},
+			Infrastructure: InfrastructureConfig{Postgres: &PostgresConfig{
+				Enabled: true,
+				Host:    "db-1",
+			}},
+		}
+	}
+
+	t.Run("top-level", func(t *testing.T) {
+		manifest := base()
+		manifest.Infrastructure.Postgres.Databases = []DatabaseConfig{{Name: "quartermaster", Owner: "quartermaster", RuntimeRole: "quartermaster"}}
+		err := manifest.Validate()
+		if err == nil || !strings.Contains(err.Error(), `runtime_role "quartermaster" must differ from owner`) {
+			t.Fatalf("Validate() error = %v, want owner/runtime collision", err)
+		}
+	})
+
+	t.Run("named-instance", func(t *testing.T) {
+		manifest := base()
+		manifest.Infrastructure.Postgres.Instances = []PostgresInstance{{
+			Name: "support", Host: "db-1",
+			Databases: []DatabaseConfig{{Name: "chatwoot", RuntimeRole: "chatwoot"}},
+		}}
+		err := manifest.Validate()
+		if err == nil || !strings.Contains(err.Error(), `runtime_role "chatwoot" must differ from owner`) {
+			t.Fatalf("Validate() error = %v, want owner/runtime collision", err)
+		}
+	})
+
+	t.Run("valid-explicit-role", func(t *testing.T) {
+		manifest := base()
+		manifest.Infrastructure.Postgres.Databases = []DatabaseConfig{{Name: "quartermaster", Owner: "quartermaster", RuntimeRole: "quartermaster_runtime"}}
+		if err := manifest.Validate(); err != nil {
+			t.Fatalf("Validate() = %v, want valid explicit runtime role", err)
+		}
+	})
+}
+
 func TestManifestValidateClickHouseTopology(t *testing.T) {
 	base := func(ch *ClickHouseConfig) *Manifest {
 		return &Manifest{

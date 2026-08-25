@@ -53,6 +53,9 @@ func yugabyteRoleVars(ctx context.Context, host inventory.Host, config ServiceCo
 	}
 
 	if dbs, ok := config.Metadata["databases"].([]map[string]string); ok && len(dbs) > 0 {
+		if err := ValidateRuntimeRoleMetadata(dbs, metaString(config.Metadata, "postgres_password"), metaString(config.Metadata, "postgres_runtime_password")); err != nil {
+			return nil, fmt.Errorf("yugabyte: %w", err)
+		}
 		list := make([]map[string]any, 0, len(dbs))
 		for _, db := range dbs {
 			entry := map[string]any{"name": db["name"]}
@@ -61,6 +64,12 @@ func yugabyteRoleVars(ctx context.Context, host inventory.Host, config ServiceCo
 			}
 			if password := db["password"]; password != "" {
 				entry["password"] = password
+			}
+			if runtimeRole := db["runtime_role"]; runtimeRole != "" {
+				entry["runtime_role"] = runtimeRole
+			}
+			if runtimePassword := db["runtime_password"]; runtimePassword != "" {
+				entry["runtime_password"] = runtimePassword
 			}
 			list = append(list, entry)
 		}
@@ -71,6 +80,9 @@ func yugabyteRoleVars(ctx context.Context, host inventory.Host, config ServiceCo
 	// Yugabyte admin access uses HBA trust for the built-in yugabyte role.
 	if pwd := metaString(config.Metadata, "postgres_password"); pwd != "" {
 		vars["yugabyte_application_password"] = pwd
+	}
+	if pwd := metaString(config.Metadata, "postgres_runtime_password"); pwd != "" {
+		vars["yugabyte_runtime_password"] = pwd
 	}
 	if items, ok := config.Metadata["yugabyte_seed_items"].([]map[string]any); ok && len(items) > 0 {
 		vars["yugabyte_seed_items"] = items

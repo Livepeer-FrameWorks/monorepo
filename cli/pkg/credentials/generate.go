@@ -15,6 +15,7 @@ type secretSpec struct {
 
 // generatable lists secrets the CLI can auto-generate when not provided.
 var generatable = []secretSpec{
+	{"DATABASE_RUNTIME_PASSWORD", 32},
 	{"SERVICE_TOKEN", 32},
 	{"JWT_SECRET", 32},
 	{"PASSWORD_RESET_SECRET", 32},

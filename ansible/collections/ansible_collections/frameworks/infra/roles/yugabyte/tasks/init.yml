@@ -16,9 +16,22 @@
   no_log: true
   when: yugabyte_databases | length > 0
 
+- name: Assert runtime passwords are present and independent
+  ansible.builtin.assert:
+    that:
+      - (item.runtime_password | default(yugabyte_runtime_password)) | length > 0
+      - (item.runtime_password | default(yugabyte_runtime_password)) != (item.password | default(yugabyte_application_password))
+      - (item.runtime_role | default((item.owner | default(item.name, true)) ~ '_runtime', true)) != (item.owner | default(item.name, true))
+    fail_msg: "Yugabyte database {{ item.name }} requires distinct owner/runtime roles and passwords"
+  loop: "{{ yugabyte_databases }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+  when: yugabyte_databases | length > 0
+
 - name: Create application owner roles
   community.postgresql.postgresql_user:
-    name: "{{ item.owner | default(item.name) }}"
+    name: "{{ item.owner | default(item.name, true) }}"
     password: "{{ item.password | default(yugabyte_application_password) }}"
     role_attr_flags: LOGIN
     login_host: 127.0.0.1
@@ -29,14 +42,14 @@
     state: present
   loop: "{{ yugabyte_databases }}"
   loop_control:
-    label: "{{ item.owner | default(item.name) }}"
+    label: "{{ item.owner | default(item.name, true) }}"
   no_log: true
   when: yugabyte_databases | length > 0
 
 - name: Create databases
   community.postgresql.postgresql_db:
     name: "{{ item.name }}"
-    owner: "{{ item.owner | default(item.name) }}"
+    owner: "{{ item.owner | default(item.name, true) }}"
     login_host: 127.0.0.1
     login_port: "{{ yugabyte_ysql_port }}"
     login_user: "{{ yugabyte_superuser_role }}"
@@ -50,8 +63,8 @@
 
 - name: Create least-privilege application runtime roles
   community.postgresql.postgresql_user:
-    name: "{{ item.runtime_role | default((item.owner | default(item.name)) ~ '_runtime') }}"
-    password: "{{ item.password | default(yugabyte_application_password) }}"
+    name: "{{ item.runtime_role | default((item.owner | default(item.name, true)) ~ '_runtime', true) }}"
+    password: "{{ item.runtime_password | default(yugabyte_runtime_password) }}"
     role_attr_flags: LOGIN,NOSUPERUSER,NOCREATEDB,NOCREATEROLE,NOREPLICATION
     login_host: 127.0.0.1
     login_port: "{{ yugabyte_ysql_port }}"
@@ -61,14 +74,14 @@
     state: present
   loop: "{{ yugabyte_databases }}"
   loop_control:
-    label: "{{ item.runtime_role | default((item.owner | default(item.name)) ~ '_runtime') }}"
+    label: "{{ item.runtime_role | default((item.owner | default(item.name, true)) ~ '_runtime', true) }}"
   no_log: true
   when: yugabyte_databases | length > 0
 
 - name: Grant database ownership to owner role
   community.postgresql.postgresql_owner:
     db: "{{ item.name }}"
-    new_owner: "{{ item.owner | default(item.name) }}"
+    new_owner: "{{ item.owner | default(item.name, true) }}"
     obj_type: database
     login_host: 127.0.0.1
     login_port: "{{ yugabyte_ysql_port }}"

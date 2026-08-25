@@ -1437,10 +1437,14 @@ func initializeDeferredYugabyte(ctx context.Context, cmd *cobra.Command, manifes
 		Version: pg.Version,
 		Port:    pg.EffectivePort(),
 		Metadata: map[string]any{
-			"platform_channel":  manifest.ResolvedChannel(),
-			"databases":         databases,
-			"postgres_password": password,
+			"platform_channel":          manifest.ResolvedChannel(),
+			"databases":                 databases,
+			"postgres_password":         password,
+			"postgres_runtime_password": strings.TrimSpace(sharedEnv["DATABASE_RUNTIME_PASSWORD"]),
 		},
+	}
+	if validationErr := validateInfrastructureRuntimeRoleConfig("yugabyte", config); validationErr != nil {
+		return validationErr
 	}
 
 	prov, err := provisioner.GetProvisioner("yugabyte", pool)
@@ -2908,7 +2912,8 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 					config.Metadata["instance_name"] = inst.Name
 					instancePassword := postgresInstancePassword(inst, sharedEnv)
 					if len(inst.Databases) > 0 {
-						config.Metadata["databases"] = databaseConfigsToMetadata(inst.Databases, instancePassword, sharedEnv)
+						runtimePrefix := "POSTGRES_" + envNameToken(inst.Name)
+						config.Metadata["databases"] = databaseConfigsToMetadataWithRuntimePrefix(inst.Databases, instancePassword, runtimePrefix, sharedEnv)
 					}
 					if len(inst.Tuning) > 0 {
 						config.Metadata["tuning"] = stringMapToAnyMap(inst.Tuning)
@@ -2931,7 +2936,7 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 						config.Port = manifest.Infrastructure.Postgres.Port
 					}
 					if len(manifest.Infrastructure.Postgres.Databases) > 0 {
-						config.Metadata["databases"] = databaseConfigsToMetadata(manifest.Infrastructure.Postgres.Databases, "")
+						config.Metadata["databases"] = databaseConfigsToMetadata(manifest.Infrastructure.Postgres.Databases, "", sharedEnv)
 					}
 				}
 			}
@@ -4975,6 +4980,10 @@ func postgresInstancePort(inst *inventory.PostgresInstance) int {
 }
 
 func databaseConfigsToMetadata(databases []inventory.DatabaseConfig, defaultPassword string, sharedEnv ...map[string]string) []map[string]string {
+	return databaseConfigsToMetadataWithRuntimePrefix(databases, defaultPassword, "", sharedEnv...)
+}
+
+func databaseConfigsToMetadataWithRuntimePrefix(databases []inventory.DatabaseConfig, defaultPassword, runtimePrefix string, sharedEnv ...map[string]string) []map[string]string {
 	items := make([]map[string]string, 0, len(databases))
 	for _, db := range databases {
 		item := map[string]string{
@@ -4986,9 +4995,27 @@ func databaseConfigsToMetadata(databases []inventory.DatabaseConfig, defaultPass
 		if password != "" {
 			item["password"] = password
 		}
+		if runtimePassword := databaseConfigRuntimePasswordForScope(db, runtimePrefix, sharedEnv...); runtimePassword != "" {
+			item["runtime_password"] = runtimePassword
+		}
 		items = append(items, item)
 	}
 	return items
+}
+
+func databaseConfigRuntimePassword(db inventory.DatabaseConfig, sharedEnv ...map[string]string) string {
+	return databaseConfigRuntimePasswordForScope(db, "", sharedEnv...)
+}
+
+func databaseConfigRuntimePasswordForScope(db inventory.DatabaseConfig, instancePrefix string, sharedEnv ...map[string]string) string {
+	if len(sharedEnv) == 0 {
+		return ""
+	}
+	owner := strings.TrimSpace(db.Owner)
+	if owner == "" {
+		owner = strings.TrimSpace(db.Name)
+	}
+	return declaredPostgresRuntimePassword(sharedEnv[0], instancePrefix, db.Name, owner)
 }
 
 func databaseConfigPassword(db inventory.DatabaseConfig, defaultPassword string, sharedEnv ...map[string]string) string {
@@ -5200,9 +5227,35 @@ func yugabyteDatabaseConfigsToMetadata(databases []inventory.DatabaseConfig, man
 		if password := yugabyteDatabasePassword(db, manifest, sharedEnv, clusterEnvs, fallbackPassword); password != "" {
 			item["password"] = password
 		}
+		if runtimePassword := yugabyteDatabaseRuntimePassword(db, manifest, sharedEnv, clusterEnvs); runtimePassword != "" {
+			item["runtime_password"] = runtimePassword
+		}
 		items = append(items, item)
 	}
 	return items
+}
+
+func yugabyteDatabaseRuntimePassword(db inventory.DatabaseConfig, manifest *inventory.Manifest, sharedEnv map[string]string, clusterEnvs map[string]map[string]string) string {
+	names := map[string]struct{}{}
+	for _, value := range []string{db.Name, db.Owner} {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			names[value] = struct{}{}
+		}
+	}
+	if manifest != nil {
+		for serviceID, svc := range manifest.Services {
+			if _, ok := names[strings.ReplaceAll(serviceID, "-", "_")]; !ok {
+				continue
+			}
+			if clusterEnv := clusterEnvs[strings.TrimSpace(svc.Cluster)]; clusterEnv != nil {
+				effectiveEnv := maps.Clone(sharedEnv)
+				maps.Copy(effectiveEnv, clusterEnv)
+				return databaseConfigRuntimePassword(db, effectiveEnv)
+			}
+		}
+	}
+	return databaseConfigRuntimePassword(db, sharedEnv)
 }
 
 func yugabyteDatabasePassword(db inventory.DatabaseConfig, manifest *inventory.Manifest, sharedEnv map[string]string, clusterEnvs map[string]map[string]string, fallbackPassword string) string {
@@ -5694,6 +5747,9 @@ func extractInfraCredentials(env map[string]string) map[string]any {
 	if v := env["DATABASE_PASSWORD"]; v != "" {
 		result["postgres_password"] = v
 	}
+	if v := env["DATABASE_RUNTIME_PASSWORD"]; v != "" {
+		result["postgres_runtime_password"] = v
+	}
 	if v := env["CLICKHOUSE_PASSWORD"]; v != "" {
 		result["clickhouse_password"] = v
 	}
@@ -5963,6 +6019,9 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 			config.Metadata[k] = v
 		}
 	}
+	if err := validateInfrastructureRuntimeRoleConfig(task.Type, config); err != nil {
+		return nil, err
+	}
 
 	var beforeState *detect.ServiceState
 	if phaseErr := runProvisionPhase(ctx, provisionDetectTimeout, "detect", func(phaseCtx context.Context) error {
@@ -6076,6 +6135,28 @@ func provisionTask(ctx context.Context, task *orchestrator.Task, host inventory.
 		preexisting: serviceExists(beforeState),
 		running:     serviceRunning(afterState),
 	}, nil
+}
+
+func validateInfrastructureRuntimeRoleConfig(taskType string, config provisioner.ServiceConfig) error {
+	if taskType != "postgres" && taskType != "yugabyte" {
+		return nil
+	}
+	databases, ok := config.Metadata["databases"].([]map[string]string)
+	if !ok || len(databases) == 0 {
+		return nil
+	}
+	ownerPassword := ""
+	if value, ok := config.Metadata["postgres_password"].(string); ok {
+		ownerPassword = value
+	}
+	runtimePassword := ""
+	if value, ok := config.Metadata["postgres_runtime_password"].(string); ok {
+		runtimePassword = value
+	}
+	if err := provisioner.ValidateRuntimeRoleMetadata(databases, ownerPassword, runtimePassword); err != nil {
+		return fmt.Errorf("%s preflight: %w", taskType, err)
+	}
+	return nil
 }
 
 func deferInfrastructureInitialize(taskType string) bool {
@@ -7105,7 +7186,8 @@ func applyDeclaredPostgresDatabaseDefaults(task *orchestrator.Task, manifest *in
 		owner = db.Name
 	}
 	runtimeRole := owner
-	if len(pkgdatabase.CapabilitiesFor(task.Type, pkgdatabase.EnginePostgres)) > 0 && strings.TrimSpace(db.RuntimeRole) != "" {
+	usesRuntimeRole := len(pkgdatabase.CapabilitiesFor(task.Type, pkgdatabase.EnginePostgres)) > 0 && strings.TrimSpace(db.RuntimeRole) != ""
+	if usesRuntimeRole {
 		runtimeRole = strings.TrimSpace(db.RuntimeRole)
 	}
 
@@ -7120,6 +7202,13 @@ func applyDeclaredPostgresDatabaseDefaults(task *orchestrator.Task, manifest *in
 		}
 		if runtimeRole != "" {
 			env["DATABASE_USER"] = runtimeRole
+		}
+		if usesRuntimeRole {
+			delete(env, "DATABASE_PASSWORD")
+			if password := declaredPostgresRuntimePassword(env, "", db.Name, owner); password != "" {
+				env["DATABASE_PASSWORD"] = password
+			}
+			return
 		}
 		for _, key := range declaredPostgresPasswordEnvKeys("", db.Name, owner) {
 			if password := strings.TrimSpace(env[key]); password != "" {
@@ -7150,6 +7239,13 @@ func applyDeclaredPostgresDatabaseDefaults(task *orchestrator.Task, manifest *in
 	if runtimeRole != "" {
 		env["DATABASE_USER"] = runtimeRole
 	}
+	if usesRuntimeRole {
+		delete(env, "DATABASE_PASSWORD")
+		if password := declaredPostgresRuntimePassword(env, prefix, db.Name, owner); password != "" {
+			env["DATABASE_PASSWORD"] = password
+		}
+		return
+	}
 	for _, key := range declaredPostgresPasswordEnvKeys(prefix, db.Name, owner) {
 		if password := strings.TrimSpace(env[key]); password != "" {
 			env["DATABASE_PASSWORD"] = password
@@ -7159,6 +7255,36 @@ func applyDeclaredPostgresDatabaseDefaults(task *orchestrator.Task, manifest *in
 	if password := strings.TrimSpace(inst.Password); password != "" {
 		env["DATABASE_PASSWORD"] = password
 	}
+}
+
+func declaredPostgresRuntimePassword(env map[string]string, instancePrefix, dbName, owner string) string {
+	for _, key := range declaredPostgresRuntimePasswordEnvKeys(instancePrefix, dbName, owner) {
+		if password := strings.TrimSpace(env[key]); password != "" {
+			return password
+		}
+	}
+	return strings.TrimSpace(env["DATABASE_RUNTIME_PASSWORD"])
+}
+
+func declaredPostgresRuntimePasswordEnvKeys(instancePrefix, dbName, owner string) []string {
+	keys := []string{}
+	seen := map[string]struct{}{}
+	for _, prefix := range []string{
+		"POSTGRES_" + envNameToken(dbName),
+		"POSTGRES_" + envNameToken(owner),
+		instancePrefix,
+	} {
+		if prefix == "" || prefix == "POSTGRES_" {
+			continue
+		}
+		key := prefix + "_RUNTIME_PASSWORD"
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		keys = append(keys, key)
+	}
+	return keys
 }
 
 func declaredPostgresPasswordEnvKeys(instancePrefix, dbName, owner string) []string {

@@ -243,7 +243,15 @@ manifest opts service DSNs into that role.
 
 Each declared database has an owner/migration login and a separately provisioned
 least-privilege runtime login. The conventional runtime name is `<owner>_runtime`;
-`runtime_role` may declare an explicit name. Runtime roles receive database connect,
+`runtime_role` may declare an explicit name. Owner and runtime roles must use
+different credentials: `DATABASE_PASSWORD` is the owner/migration secret and
+`DATABASE_RUNTIME_PASSWORD` is the restricted application secret. Per-database
+`POSTGRES_<DATABASE>_RUNTIME_PASSWORD` values may override the shared runtime
+secret. Runtime password resolution is identical for role provisioning and service
+DSN generation: database override, owner-name alias, named Postgres instance
+override, matching cluster `DATABASE_RUNTIME_PASSWORD`, then the shared
+`DATABASE_RUNTIME_PASSWORD`. Provisioning rejects an owner/runtime credential
+collision before invoking Ansible. Runtime roles receive database connect,
 schema usage, table `SELECT`/`INSERT`/`UPDATE`/`DELETE`, sequence usage, and function
 execution, including owner default privileges for objects created later. They do not
 receive schema creation, object ownership, superuser, database creation, role

@@ -30,7 +30,8 @@ func TestKeys(t *testing.T) {
 		t.Fatalf("Keys() len = %d, want %d", len(keys), len(generatable))
 	}
 	want := map[string]bool{
-		"SERVICE_TOKEN": true, "JWT_SECRET": true, "PASSWORD_RESET_SECRET": true,
+		"DATABASE_RUNTIME_PASSWORD": true,
+		"SERVICE_TOKEN":             true, "JWT_SECRET": true, "PASSWORD_RESET_SECRET": true,
 		"FIELD_ENCRYPTION_KEY": true, "USAGE_HASH_SECRET": true, "TELEMETRY_TOKEN_SECRET": true,
 	}
 	for _, k := range keys {
@@ -132,6 +133,8 @@ func TestValidateShared(t *testing.T) {
 	for _, spec := range generatable {
 		full[spec.Key] = "real-value"
 	}
+	full["DATABASE_PASSWORD"] = "owner-value"
+	full["DATABASE_RUNTIME_PASSWORD"] = "runtime-value"
 	full["TELEMETRY_TOKEN_SECRET"] = strings.Repeat("ab", 32)
 	if err := ValidateShared(full); err != nil {
 		t.Fatalf("ValidateShared(full) = %v, want nil", err)

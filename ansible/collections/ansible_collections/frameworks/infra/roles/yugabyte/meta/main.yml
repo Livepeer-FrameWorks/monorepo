@@ -68,11 +68,23 @@ argument_specs:
             type: str
             required: false
             no_log: true
+          runtime_role:
+            type: str
+            required: false
+          runtime_password:
+            type: str
+            required: false
+            no_log: true
       yugabyte_application_password:
         type: str
         required: false
         no_log: true
         description: Password for the per-database owner role.
+      yugabyte_runtime_password:
+        type: str
+        required: true
+        no_log: true
+        description: Independent password for restricted application runtime roles.
       yugabyte_superuser_password:
         type: str
         required: false

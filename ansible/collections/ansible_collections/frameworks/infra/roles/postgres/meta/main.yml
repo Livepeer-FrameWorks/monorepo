@@ -33,6 +33,11 @@ argument_specs:
         required: true
         no_log: true
         description: Password for the postgres superuser.
+      postgres_runtime_password:
+        type: str
+        required: true
+        no_log: true
+        description: Independent password for restricted application runtime roles.
       postgres_port:
         type: int
         required: false
@@ -54,6 +59,13 @@ argument_specs:
             type: str
             required: false
           password:
+            type: str
+            required: false
+            no_log: true
+          runtime_role:
+            type: str
+            required: false
+          runtime_password:
             type: str
             required: false
             no_log: true

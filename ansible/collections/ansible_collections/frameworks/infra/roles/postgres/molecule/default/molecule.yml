@@ -33,6 +33,7 @@ provisioner:
       all:
         postgres_version: "16"
         postgres_admin_password: "molecule-test-password"
+        postgres_runtime_password: "molecule-runtime-password"
         postgres_databases:
           - { name: periscope }
           - { name: tenants, owner: tenants }

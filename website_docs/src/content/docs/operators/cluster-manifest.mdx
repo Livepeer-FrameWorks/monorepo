@@ -329,8 +329,14 @@ infrastructure:
 - `replication_factor` (optional) - Defaults to the number of `nodes`
 - `databases` (optional) - Each entry declares `name` and its schema/migration
   `owner`. Optional `runtime_role` opts service DSNs into the separately
-  provisioned least-privilege login. Omit it during the first rolling provision,
-  verify with `cluster doctor --deep`, then add it for the application cutover.
+  provisioned least-privilege login. It authenticates with
+  `DATABASE_RUNTIME_PASSWORD`, never the owner credential. Provision the role,
+  verify it with `cluster doctor --deep`, then enable the application cutover.
+  Runtime secrets resolve in this order: `POSTGRES_<DATABASE>_RUNTIME_PASSWORD`,
+  the equivalent owner-name alias, a named Postgres instance override, the
+  matching cluster's `DATABASE_RUNTIME_PASSWORD`, then the shared
+  `DATABASE_RUNTIME_PASSWORD`. The same resolution feeds provisioning and service
+  DSNs, and provisioning rejects owner/runtime credential collisions.
 - `tuning` (optional) - key/value overrides for server tuning
 - `sql_access` (optional) - `direct` by default, or `ssh`
 - `password` (optional) - Database password override

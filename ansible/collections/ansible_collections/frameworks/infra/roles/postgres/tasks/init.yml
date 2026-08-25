@@ -1,17 +1,31 @@
 ---
 # Create per-owner roles and databases. Owner defaults to the database name.
+- name: Assert owner and runtime passwords are present and independent
+  ansible.builtin.assert:
+    that:
+      - (item.password | default(postgres_admin_password)) | length > 0
+      - (item.runtime_password | default(postgres_runtime_password)) | length > 0
+      - (item.runtime_password | default(postgres_runtime_password)) != (item.password | default(postgres_admin_password))
+      - (item.runtime_role | default((item.owner | default(item.name, true)) ~ '_runtime', true)) != (item.owner | default(item.name, true))
+    fail_msg: "PostgreSQL database {{ item.name }} requires distinct owner/runtime roles and passwords"
+  loop: "{{ postgres_databases }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+  when: postgres_databases | length > 0
+
 - name: Create application owner roles
   become: true
   become_user: postgres
   community.postgresql.postgresql_user:
     login_unix_socket: /var/run/postgresql
-    name: "{{ item.owner | default(item.name) }}"
+    name: "{{ item.owner | default(item.name, true) }}"
     password: "{{ item.password | default(postgres_admin_password) }}"
     role_attr_flags: LOGIN
     state: present
   loop: "{{ postgres_databases }}"
   loop_control:
-    label: "{{ item.owner | default(item.name) }}"
+    label: "{{ item.owner | default(item.name, true) }}"
   no_log: true
   when: postgres_databases | length > 0
 
@@ -21,7 +35,7 @@
   community.postgresql.postgresql_db:
     login_unix_socket: /var/run/postgresql
     name: "{{ item.name }}"
-    owner: "{{ item.owner | default(item.name) }}"
+    owner: "{{ item.owner | default(item.name, true) }}"
     encoding: UTF-8
     lc_collate: en_US.UTF-8
     lc_ctype: en_US.UTF-8
@@ -37,13 +51,13 @@
   become_user: postgres
   community.postgresql.postgresql_user:
     login_unix_socket: /var/run/postgresql
-    name: "{{ item.runtime_role | default((item.owner | default(item.name)) ~ '_runtime') }}"
-    password: "{{ item.password | default(postgres_admin_password) }}"
+    name: "{{ item.runtime_role | default((item.owner | default(item.name, true)) ~ '_runtime', true) }}"
+    password: "{{ item.runtime_password | default(postgres_runtime_password) }}"
     role_attr_flags: LOGIN,NOSUPERUSER,NOCREATEDB,NOCREATEROLE,NOREPLICATION
     state: present
   loop: "{{ postgres_databases }}"
   loop_control:
-    label: "{{ item.runtime_role | default((item.owner | default(item.name)) ~ '_runtime') }}"
+    label: "{{ item.runtime_role | default((item.owner | default(item.name, true)) ~ '_runtime', true) }}"
   no_log: true
   when: postgres_databases | length > 0
 
