@@ -159,6 +159,8 @@ func main() {
 		SignalmanClients:    metricsCollector.NewGauge("signalman_clients_active", "Active bridge→Signalman gRPC fan-out clients", []string{"tenant_id"}),
 		WebSocketMessages:   metricsCollector.NewCounter("websocket_messages_total", "WebSocket messages", []string{"direction", "type"}),
 		SubscriptionsActive: metricsCollector.NewGauge("subscription_active_count", "Active GraphQL subscriptions", []string{"operation"}),
+		CacheLoadsActive:    metricsCollector.NewGauge("cache_loads_active", "Active shared authority cache loads", []string{"service", "operation"}),
+		CacheLoadTimeouts:   metricsCollector.NewCounter("cache_load_timeouts_total", "Shared authority cache loads terminated by their operation deadline", []string{"service", "operation"}),
 	}
 
 	// Initialize GraphQL resolver and server
@@ -597,11 +599,15 @@ func main() {
 			telemetryConfigured.WithLabelValues().Set(0)
 		}
 		beaconIntake := handlers.NewBeaconIntake(serviceClients.Commodore, rateLimiter, telemetrySecret, logger)
-		beaconIntake.SetMetrics(&handlers.BeaconMetrics{Events: metricsCollector.NewCounter(
-			"player_telemetry_events_total",
-			"Player telemetry intake outcomes",
-			[]string{"type", "outcome"},
-		)})
+		beaconIntake.SetMetrics(&handlers.BeaconMetrics{
+			Events: metricsCollector.NewCounter(
+				"player_telemetry_events_total",
+				"Player telemetry intake outcomes",
+				[]string{"type", "outcome"},
+			),
+			CacheLoadsActive: metricsCollector.NewGauge("player_telemetry_attribution_loads_active", "Active shared player-attribution authority loads", nil).WithLabelValues(),
+			CacheTimeouts:    metricsCollector.NewCounter("player_telemetry_attribution_load_timeouts_total", "Player-attribution authority loads terminated by their operation deadline", nil).WithLabelValues(),
+		})
 
 		bootTelemetry := handlers.NewPlaybackTelemetryHandler(beaconIntake, serviceClients.Decklog)
 		server.HandleOptionalTrailingSlash(app, http.MethodPost, "/playback/telemetry/boot", bootTelemetry.Handle)

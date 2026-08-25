@@ -33,6 +33,8 @@ type GraphQLMetrics struct {
 	SignalmanClients    *prometheus.GaugeVec
 	WebSocketMessages   *prometheus.CounterVec
 	SubscriptionsActive *prometheus.GaugeVec
+	CacheLoadsActive    *prometheus.GaugeVec
+	CacheLoadTimeouts   *prometheus.CounterVec
 }
 
 // Resolver represents the GraphQL resolver
@@ -93,12 +95,27 @@ func NewResolver(serviceClients *clients.ServiceClients, logger logging.Logger, 
 	periscopeSWR := time.Duration(config.GetEnvInt("PERISCOPE_CACHE_SWR_SECONDS", 15)) * time.Second
 	periscopeNeg := time.Duration(config.GetEnvInt("PERISCOPE_CACHE_NEG_TTL_SECONDS", 5)) * time.Second
 	periscopeMax := config.GetEnvInt("PERISCOPE_CACHE_MAX", 5000)
+	periscopeLoadTimeout := time.Duration(config.GetEnvInt("PERISCOPE_CACHE_LOAD_TIMEOUT_SECONDS", 30)) * time.Second
 	periscopeCache := cache.New(cache.Options{TTL: periscopeTTL, StaleWhileRevalidate: periscopeSWR, NegativeTTL: periscopeNeg, MaxEntries: periscopeMax}, cache.MetricsHooks{})
 
 	fetcher := datafetcher.New(datafetcher.Config{
-		Logger: logger,
+		Logger:      logger,
+		LoadTimeout: periscopeLoadTimeout,
 		Caches: map[datafetcher.Service]*cache.Cache{
 			datafetcher.ServicePeriscope: periscopeCache,
+		},
+		OnLoadStarted: func(service datafetcher.Service, operation string) {
+			if metrics != nil && metrics.CacheLoadsActive != nil {
+				metrics.CacheLoadsActive.WithLabelValues(string(service), operation).Inc()
+			}
+		},
+		OnLoadFinished: func(service datafetcher.Service, operation string, timedOut bool) {
+			if metrics != nil && metrics.CacheLoadsActive != nil {
+				metrics.CacheLoadsActive.WithLabelValues(string(service), operation).Dec()
+			}
+			if timedOut && metrics != nil && metrics.CacheLoadTimeouts != nil {
+				metrics.CacheLoadTimeouts.WithLabelValues(string(service), operation).Inc()
+			}
 		},
 	})
 

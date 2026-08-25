@@ -96,16 +96,19 @@ func (h *PlaybackSessionHandler) Handle(c *gin.Context) {
 	// Generous per-IP backstop before we read a body — bounds a client flooding by
 	// rotating session ids, without starving a large NAT.
 	if h.intake.rateLimitedKey(c, "sessionqoe-ip:"+c.ClientIP(), beaconSessionIPLimit, beaconSessionIPBurst) {
+		h.intake.observe("session", "rate_limited")
 		return
 	}
 
 	var body playbackSessionBody
 	if !bindBeaconBody(c, playbackSessionMaxBody, &body) {
+		h.intake.observe("session", "invalid_body")
 		return
 	}
 
 	contentID, ok := validContentID(body.ContentID)
 	if !ok {
+		h.intake.observe("session", "invalid_content_id")
 		c.Status(http.StatusNoContent)
 		return
 	}
@@ -115,6 +118,7 @@ func (h *PlaybackSessionHandler) Handle(c *gin.Context) {
 	// bypass the per-session limiter — drop the beacon rather than corrupt the data.
 	sessionID := strings.TrimSpace(body.SessionID)
 	if sessionID == "" || len(sessionID) > 256 {
+		h.intake.observe("session", "invalid_session_id")
 		c.Status(http.StatusNoContent)
 		return
 	}
@@ -123,6 +127,7 @@ func (h *PlaybackSessionHandler) Handle(c *gin.Context) {
 	// Per-(IP, session) budget: each viewer session gets its own allowance so many
 	// viewers behind one NAT don't starve each other's heartbeats.
 	if h.intake.rateLimitedKey(c, "sessionqoe:"+c.ClientIP()+":"+sessionID, beaconSessionLimit, beaconSessionBurst) {
+		h.intake.observe("session", "rate_limited")
 		return
 	}
 
@@ -133,12 +138,13 @@ func (h *PlaybackSessionHandler) Handle(c *gin.Context) {
 		return
 	}
 
-	trigger := h.buildTrigger(contentID, &body, attr)
+	trigger, outcome := h.buildTrigger(contentID, &body, attr)
 	if err := h.decklog.SendTriggerContext(c.Request.Context(), trigger); err != nil {
-		h.intake.observe("session", "decklog_error")
+		outcome = "decklog_error"
 		h.intake.logger.WithError(err).Warn("playback session telemetry: Decklog send failed")
 		// Still 204 — the client neither retries nor learns the backend state.
 	}
+	h.intake.observe("session", outcome)
 	c.Status(http.StatusNoContent)
 }
 
@@ -148,7 +154,7 @@ func (h *PlaybackSessionHandler) HandleOptions(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-func (h *PlaybackSessionHandler) buildTrigger(contentID string, body *playbackSessionBody, attr beaconAttribution) *ipcpb.MistTrigger {
+func (h *PlaybackSessionHandler) buildTrigger(contentID string, body *playbackSessionBody, attr beaconAttribution) (*ipcpb.MistTrigger, string) {
 	contentType := body.ContentType
 	if contentType == "" {
 		contentType = attr.contentType
@@ -218,7 +224,8 @@ func (h *PlaybackSessionHandler) buildTrigger(contentID string, body *playbackSe
 
 	// Cluster attribution is trusted ONLY from a valid telemetry token whose
 	// content id matches this beacon (same rule as the boot beacon).
-	if claims, ok := h.intake.clusterClaims("session", contentID, body.TelemetryToken); ok {
+	claims, attributed, outcome := h.intake.clusterClaims(contentID, body.TelemetryToken)
+	if attributed {
 		qoe.NodeId = claims.NodeID
 		qoe.ServingClusterId = claims.ServingClusterID
 		if claims.OriginClusterID != "" {
@@ -244,5 +251,5 @@ func (h *PlaybackSessionHandler) buildTrigger(contentID string, body *playbackSe
 	if attr.originClusterID != "" {
 		trigger.OriginClusterId = &attr.originClusterID
 	}
-	return trigger
+	return trigger, outcome
 }

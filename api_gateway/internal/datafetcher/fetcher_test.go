@@ -3,6 +3,7 @@ package datafetcher
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -147,6 +148,111 @@ func TestFetch_LoaderErrorPropagates(t *testing.T) {
 	_, err := df.Fetch(context.Background(), req)
 	if !errors.Is(err, sentinel) {
 		t.Fatalf("want sentinel error, got %v", err)
+	}
+}
+
+func TestFetch_CacheLoadUsesOperationDeadline(t *testing.T) {
+	started := make(chan string, 1)
+	finished := make(chan bool, 1)
+	df := New(Config{
+		Caches:      map[Service]*cache.Cache{ServicePeriscope: newTestCache()},
+		LoadTimeout: 20 * time.Millisecond,
+		OnLoadStarted: func(service Service, operation string) {
+			started <- string(service) + "/" + operation
+		},
+		OnLoadFinished: func(_ Service, _ string, timedOut bool) {
+			finished <- timedOut
+		},
+	})
+	deadlineSeen := make(chan time.Time, 1)
+	req := FetchRequest{
+		Service:   ServicePeriscope,
+		Operation: "hanging-query",
+		KeyParts:  []string{"tenant-1"},
+		Loader: func(ctx context.Context) (any, error) {
+			deadline, ok := ctx.Deadline()
+			if !ok {
+				return nil, errors.New("loader context has no deadline")
+			}
+			deadlineSeen <- deadline
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+
+	_, err := df.Fetch(context.Background(), req)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Fetch error = %v, want operation deadline", err)
+	}
+	select {
+	case deadline := <-deadlineSeen:
+		if time.Until(deadline) > 20*time.Millisecond {
+			t.Fatalf("loader deadline %v exceeds configured operation budget", deadline)
+		}
+	default:
+		t.Fatal("loader did not observe an operation deadline")
+	}
+	if got := <-started; got != "periscope/hanging-query" {
+		t.Fatalf("load metric identity = %q, want bounded service/operation labels", got)
+	}
+	if timedOut := <-finished; !timedOut {
+		t.Fatal("completed-load metric did not classify the operation deadline")
+	}
+}
+
+func TestFetch_DistinctCanceledKeysReleaseBoundedLoads(t *testing.T) {
+	df := New(Config{
+		Caches:      map[Service]*cache.Cache{ServicePeriscope: newTestCache()},
+		LoadTimeout: 25 * time.Millisecond,
+	})
+	const keys = 40
+	done := make(chan struct{}, keys)
+	for i := range keys {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Millisecond)
+		go func(key int) {
+			defer cancel()
+			_, _ = df.Fetch(ctx, FetchRequest{
+				Service:   ServicePeriscope,
+				Operation: "outage",
+				KeyParts:  []string{fmt.Sprintf("key-%d", key)},
+				Loader: func(loadCtx context.Context) (any, error) {
+					<-loadCtx.Done()
+					return nil, loadCtx.Err()
+				},
+			})
+			done <- struct{}{}
+		}(i)
+	}
+	for range keys {
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("request waiter did not honor its own deadline")
+		}
+	}
+	// The waiters have returned, but shared work is deliberately detached. A
+	// second round after its operation deadline must start new loads rather than
+	// joining permanently stuck singleflight calls.
+	time.Sleep(30 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	started := make(chan struct{}, 1)
+	_, err := df.Fetch(ctx, FetchRequest{
+		Service:   ServicePeriscope,
+		Operation: "outage",
+		KeyParts:  []string{"key-0"},
+		Loader: func(context.Context) (any, error) {
+			started <- struct{}{}
+			return "recovered", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("recovery fetch: %v", err)
+	}
+	select {
+	case <-started:
+	default:
+		t.Fatal("recovery fetch joined a stale active load")
 	}
 }
 

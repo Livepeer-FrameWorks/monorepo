@@ -2,8 +2,10 @@ package datafetcher
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"frameworks/api_gateway/internal/loaders"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/cache"
@@ -24,8 +26,11 @@ const (
 
 // Config controls DataFetcher construction.
 type Config struct {
-	Logger logging.Logger
-	Caches map[Service]*cache.Cache
+	Logger         logging.Logger
+	Caches         map[Service]*cache.Cache
+	LoadTimeout    time.Duration
+	OnLoadStarted  func(Service, string)
+	OnLoadFinished func(Service, string, bool)
 }
 
 // FetchRequest describes a downstream fetch.
@@ -40,9 +45,14 @@ type FetchRequest struct {
 
 // DataFetcher coordinates memoization and shared caches.
 type DataFetcher struct {
-	logger logging.Logger
-	caches map[Service]*cache.Cache
+	logger      logging.Logger
+	caches      map[Service]*cache.Cache
+	loadTimeout time.Duration
+	onLoadStart func(Service, string)
+	onLoadDone  func(Service, string, bool)
 }
+
+const defaultLoadTimeout = 30 * time.Second
 
 // New creates a new DataFetcher with the provided configuration.
 func New(cfg Config) *DataFetcher {
@@ -52,7 +62,17 @@ func New(cfg Config) *DataFetcher {
 			caches[svc] = c
 		}
 	}
-	return &DataFetcher{logger: cfg.Logger, caches: caches}
+	loadTimeout := cfg.LoadTimeout
+	if loadTimeout <= 0 {
+		loadTimeout = defaultLoadTimeout
+	}
+	return &DataFetcher{
+		logger:      cfg.Logger,
+		caches:      caches,
+		loadTimeout: loadTimeout,
+		onLoadStart: cfg.OnLoadStarted,
+		onLoadDone:  cfg.OnLoadFinished,
+	}
 }
 
 // Fetch executes the request while enforcing memoization and cache reuse.
@@ -83,8 +103,18 @@ func (df *DataFetcher) fetchWithCache(ctx context.Context, key string, req Fetch
 		return req.Loader(ctx)
 	}
 	if cache := df.caches[req.Service]; cache != nil {
-		val, ok, err := cache.Get(ctx, key, func(context.Context, string) (interface{}, bool, error) {
-			resp, err := req.Loader(ctx)
+		val, ok, err := cache.Get(ctx, key, func(loadCtx context.Context, _ string) (interface{}, bool, error) {
+			operationCtx, cancel := context.WithTimeout(loadCtx, df.loadTimeout)
+			defer cancel()
+			if df.onLoadStart != nil {
+				df.onLoadStart(req.Service, req.Operation)
+			}
+			if df.onLoadDone != nil {
+				defer func() {
+					df.onLoadDone(req.Service, req.Operation, errors.Is(operationCtx.Err(), context.DeadlineExceeded))
+				}()
+			}
+			resp, err := req.Loader(operationCtx)
 			if err != nil {
 				return nil, false, err
 			}

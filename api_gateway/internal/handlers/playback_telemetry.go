@@ -86,16 +86,19 @@ func (h *PlaybackTelemetryHandler) Handle(c *gin.Context) {
 	setBeaconCORS(c)
 
 	if h.intake.rateLimited(c, "bootbeacon:") {
+		h.intake.observe("boot", "rate_limited")
 		return
 	}
 
 	var body playbackBootBody
 	if !bindBeaconBody(c, playbackTelemetryMaxBody, &body) {
+		h.intake.observe("boot", "invalid_body")
 		return
 	}
 
 	contentID, ok := validContentID(body.ContentID)
 	if !ok {
+		h.intake.observe("boot", "invalid_content_id")
 		c.Status(http.StatusNoContent)
 		return
 	}
@@ -108,12 +111,13 @@ func (h *PlaybackTelemetryHandler) Handle(c *gin.Context) {
 		return
 	}
 
-	trigger := h.buildTrigger(contentID, &body, attr)
+	trigger, outcome := h.buildTrigger(contentID, &body, attr)
 	if err := h.decklog.SendTriggerContext(c.Request.Context(), trigger); err != nil {
-		h.intake.observe("boot", "decklog_error")
+		outcome = "decklog_error"
 		h.intake.logger.WithError(err).Warn("playback boot telemetry: Decklog send failed")
 		// Still 204 — the client neither retries nor learns the backend state.
 	}
+	h.intake.observe("boot", outcome)
 	c.Status(http.StatusNoContent)
 }
 
@@ -123,7 +127,7 @@ func (h *PlaybackTelemetryHandler) HandleOptions(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
-func (h *PlaybackTelemetryHandler) buildTrigger(contentID string, body *playbackBootBody, attr beaconAttribution) *ipcpb.MistTrigger {
+func (h *PlaybackTelemetryHandler) buildTrigger(contentID string, body *playbackBootBody, attr beaconAttribution) (*ipcpb.MistTrigger, string) {
 	contentType := body.ContentType
 	if contentType == "" {
 		contentType = attr.contentType
@@ -166,7 +170,8 @@ func (h *PlaybackTelemetryHandler) buildTrigger(contentID string, body *playback
 	// Cluster attribution is trusted ONLY from a valid telemetry token whose
 	// content id matches this beacon. Without it, node/cluster stay empty and
 	// cluster_attributed=false, excluding the row from cluster-ops aggregates.
-	if claims, ok := h.intake.clusterClaims("boot", contentID, body.TelemetryToken); ok {
+	claims, attributed, outcome := h.intake.clusterClaims(contentID, body.TelemetryToken)
+	if attributed {
 		boot.NodeId = claims.NodeID
 		boot.ServingClusterId = claims.ServingClusterID
 		if claims.OriginClusterID != "" {
@@ -211,5 +216,5 @@ func (h *PlaybackTelemetryHandler) buildTrigger(contentID string, body *playback
 	if attr.originClusterID != "" {
 		trigger.OriginClusterId = &attr.originClusterID
 	}
-	return trigger
+	return trigger, outcome
 }

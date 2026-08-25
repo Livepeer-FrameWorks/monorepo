@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -27,10 +28,11 @@ const (
 	// per-IP limit starves co-tenant viewers behind one NAT. Instead each viewer
 	// session gets its own budget, with a generous per-IP backstop that still
 	// bounds a client flooding by rotating session ids.
-	beaconSessionLimit   = 20 // requests/min per (IP, session)
-	beaconSessionBurst   = 10
-	beaconSessionIPLimit = 3000 // requests/min per IP backstop (large-NAT headroom)
-	beaconSessionIPBurst = 600
+	beaconSessionLimit           = 20 // requests/min per (IP, session)
+	beaconSessionBurst           = 10
+	beaconSessionIPLimit         = 3000 // requests/min per IP backstop (large-NAT headroom)
+	beaconSessionIPBurst         = 600
+	beaconAttributionLoadTimeout = 5 * time.Second
 )
 
 // rateLimiter is the minimal slice of middleware.RateLimiter the beacons need,
@@ -76,7 +78,9 @@ type BeaconIntake struct {
 }
 
 type BeaconMetrics struct {
-	Events *prometheus.CounterVec
+	Events           *prometheus.CounterVec
+	CacheLoadsActive prometheus.Gauge
+	CacheTimeouts    prometheus.Counter
 }
 
 func NewBeaconIntake(
@@ -135,9 +139,22 @@ func (b *BeaconIntake) rateLimitedKey(c *gin.Context, key string, limit, burst i
 // via Commodore (artifact first, then live stream), cached by content_id. The
 // cache key is beacon-type-agnostic so boot and session beacons share resolutions.
 func (b *BeaconIntake) resolveAttribution(ctx context.Context, contentID string) (beaconAttribution, bool) {
-	val, found, err := b.attrCache.Get(ctx, "attr:"+contentID, func(ctx context.Context, _ string) (any, bool, error) {
+	val, found, err := b.attrCache.Get(ctx, "attr:"+contentID, func(loadCtx context.Context, _ string) (any, bool, error) {
+		operationCtx, cancel := context.WithTimeout(loadCtx, beaconAttributionLoadTimeout)
+		defer cancel()
+		if b.metrics != nil && b.metrics.CacheLoadsActive != nil {
+			b.metrics.CacheLoadsActive.Inc()
+			defer b.metrics.CacheLoadsActive.Dec()
+		}
+		if b.metrics != nil && b.metrics.CacheTimeouts != nil {
+			defer func() {
+				if errors.Is(operationCtx.Err(), context.DeadlineExceeded) {
+					b.metrics.CacheTimeouts.Inc()
+				}
+			}()
+		}
 		// Artifact (clip/dvr/vod) first.
-		if resp, aerr := b.commodore.ResolveArtifactPlaybackID(ctx, contentID); aerr == nil && resp.GetFound() && resp.GetTenantId() != "" {
+		if resp, aerr := b.commodore.ResolveArtifactPlaybackID(operationCtx, contentID); aerr == nil && resp.GetFound() && resp.GetTenantId() != "" {
 			return beaconAttribution{
 				tenantID:        resp.GetTenantId(),
 				streamID:        resp.GetStreamId(),
@@ -148,7 +165,7 @@ func (b *BeaconIntake) resolveAttribution(ctx context.Context, contentID string)
 			}, true, nil
 		}
 		// Live stream.
-		if resp, serr := b.commodore.ResolvePlaybackID(ctx, contentID); serr == nil && resp.GetTenantId() != "" {
+		if resp, serr := b.commodore.ResolvePlaybackID(operationCtx, contentID); serr == nil && resp.GetTenantId() != "" {
 			return beaconAttribution{
 				tenantID:        resp.GetTenantId(),
 				streamID:        resp.GetStreamId(),
@@ -170,18 +187,15 @@ func (b *BeaconIntake) resolveAttribution(ctx context.Context, contentID string)
 // only when the token is valid and its content id matches this beacon. A beacon
 // alone cannot prove which endpoint served it, so serving node/cluster are
 // trusted only through this signed path.
-func (b *BeaconIntake) clusterClaims(beaconType, contentID, token string) (telemetrytoken.Claims, bool) {
+func (b *BeaconIntake) clusterClaims(contentID, token string) (telemetrytoken.Claims, bool, string) {
 	if len(b.telemetrySecret) == 0 || token == "" {
-		b.observe(beaconType, "accepted_unattributed")
-		return telemetrytoken.Claims{}, false
+		return telemetrytoken.Claims{}, false, "accepted_unattributed"
 	}
 	claims, err := telemetrytoken.Verify(b.telemetrySecret, token, time.Now())
 	if err != nil || claims.ContentID != contentID {
-		b.observe(beaconType, "invalid_token")
-		return telemetrytoken.Claims{}, false
+		return telemetrytoken.Claims{}, false, "invalid_token"
 	}
-	b.observe(beaconType, "accepted_attributed")
-	return claims, true
+	return claims, true, "accepted_attributed"
 }
 
 // bindBeaconBody caps the body and decodes JSON into dst, writing 400 on a
