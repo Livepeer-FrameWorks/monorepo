@@ -20,18 +20,36 @@ func getBillingStatus(ctx context.Context, internalName, tenantID string) *trigg
 		return triggerProcessor.GetBillingStatus(ctx, internalName, tenantID)
 	}
 	if quartermasterClient != nil && tenantID != "" {
-		resp, err := quartermasterClient.ValidateTenant(ctx, tenantID, "")
-		if err == nil && resp != nil && resp.Valid {
-			return &triggers.BillingStatus{
-				TenantID:          tenantID,
-				BillingModel:      resp.BillingModel,
-				IsSuspended:       resp.IsSuspended,
-				IsBalanceNegative: resp.IsBalanceNegative,
-				FromCache:         false,
-			}
+		admissionCtx, cancel := context.WithTimeout(ctx, triggers.MediaAdmissionTimeout)
+		defer cancel()
+		resp, err := quartermasterClient.ValidateTenant(admissionCtx, tenantID, "")
+		if err != nil || resp == nil || resp.GetBillingStatusUnavailable() {
+			return &triggers.BillingStatus{TenantID: tenantID, State: triggers.BillingStatusUnavailable}
 		}
+		billing := &triggers.BillingStatus{
+			TenantID:          tenantID,
+			BillingModel:      resp.BillingModel,
+			IsSuspended:       resp.IsSuspended,
+			IsBalanceNegative: resp.IsBalanceNegative,
+			FromCache:         false,
+			State:             triggers.BillingStatusHealthy,
+		}
+		if !resp.Valid || !resp.IsActive {
+			billing.State = triggers.BillingStatusDenied
+			billing.DeniedReason = "tenant_inactive"
+		}
+		return billing
 	}
-	return nil
+	return &triggers.BillingStatus{TenantID: tenantID, State: triggers.BillingStatusUnavailable}
+}
+
+func refreshBillingStatusAfterPayment(ctx context.Context, internalName, tenantID string) *triggers.BillingStatus {
+	if triggerProcessor != nil {
+		triggerProcessor.InvalidateTenantCache(tenantID)
+	}
+	refreshCtx, cancel := context.WithTimeout(ctx, triggers.MediaAdmissionTimeout)
+	defer cancel()
+	return getBillingStatus(refreshCtx, internalName, tenantID)
 }
 
 func settleX402PaymentForPlayback(ctx context.Context, tenantID, resourceID, paymentHeader, clientIP string, logger logging.Logger) (bool, *x402Decision) {

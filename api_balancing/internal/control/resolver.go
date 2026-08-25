@@ -59,14 +59,19 @@ func ResolveStream(ctx context.Context, input string) (*StreamTarget, error) {
 		if CommodoreClient != nil {
 			internal := mist.ExtractInternalName(input)
 			if internal != "" {
-				if resp, err := CommodoreClient.ResolveInternalName(ctx, internal); err == nil {
-					target.TenantID = resp.TenantId
-					target.StreamID = resp.StreamId
-					target.ContentType = "live"
-					target.ClusterPeers = resp.ClusterPeers
-					target.RequiresAuth = resp.GetRequiresAuth()
-					target.RequiresAuthKnown = true
+				resp, err := CommodoreClient.ResolveInternalName(ctx, internal)
+				if err != nil {
+					return &StreamTarget{}, fmt.Errorf("resolve live stream authority: %w", err)
 				}
+				if resp.GetTenantId() == "" {
+					return &StreamTarget{}, fmt.Errorf("resolve live stream authority: missing tenant identity")
+				}
+				target.TenantID = resp.TenantId
+				target.StreamID = resp.StreamId
+				target.ContentType = "live"
+				target.ClusterPeers = resp.ClusterPeers
+				target.RequiresAuth = resp.GetRequiresAuth()
+				target.RequiresAuthKnown = true
 			}
 		}
 		return target, nil
@@ -76,15 +81,20 @@ func ResolveStream(ctx context.Context, input string) (*StreamTarget, error) {
 		artifactInternal := mist.ExtractInternalName(input)
 		target := &StreamTarget{InternalName: input, IsVod: true}
 		if CommodoreClient != nil && artifactInternal != "" {
-			if resp, err := CommodoreClient.ResolveArtifactInternalName(ctx, artifactInternal); err == nil && resp.Found {
-				target.TenantID = resp.TenantId
-				target.StreamID = resp.StreamId
-				target.ContentType = resp.ContentType
-				target.ClusterPeers = resp.ClusterPeers
-				target.RequiresAuth = resp.GetRequiresAuth()
-				target.RequiresAuthKnown = true
-				applyArtifactPlacement(ctx, resp.ArtifactHash, target)
+			resp, err := CommodoreClient.ResolveArtifactInternalName(ctx, artifactInternal)
+			if err != nil {
+				return &StreamTarget{}, fmt.Errorf("resolve VOD stream authority: %w", err)
 			}
+			if !resp.Found || resp.GetTenantId() == "" {
+				return &StreamTarget{}, fmt.Errorf("resolve VOD stream authority: artifact or tenant identity not found")
+			}
+			target.TenantID = resp.TenantId
+			target.StreamID = resp.StreamId
+			target.ContentType = resp.ContentType
+			target.ClusterPeers = resp.ClusterPeers
+			target.RequiresAuth = resp.GetRequiresAuth()
+			target.RequiresAuthKnown = true
+			applyArtifactPlacement(ctx, resp.ArtifactHash, target)
 		}
 		return target, nil
 	}

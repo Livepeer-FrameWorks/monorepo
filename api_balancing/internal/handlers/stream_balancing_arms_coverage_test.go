@@ -17,6 +17,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/gin-gonic/gin"
 	"google.golang.org/grpc"
 )
@@ -246,6 +247,45 @@ func TestGenericViewerPlayback_UnresolvableViewKeyReturns404(t *testing.T) {
 	}
 }
 
+func TestGenericViewerPlayback_BillingAuthorityUnavailableReturns503(t *testing.T) {
+	balancingTestEnv(t)
+	t.Cleanup(control.SetupTestRegistry("", nil))
+	startCommodoreFakeArms(t, &commodoreArmsFake{
+		artifactPlaybackID: func(_ context.Context, _ *commodorepb.ResolveArtifactPlaybackIDRequest) (*commodorepb.ResolveArtifactPlaybackIDResponse, error) {
+			return &commodorepb.ResolveArtifactPlaybackIDResponse{
+				Found:        true,
+				ArtifactHash: "vodhashcccccccccccccccccccccccc3",
+				InternalName: "art3",
+				TenantId:     "tenant-vod",
+				ContentType:  "vod",
+			}, nil
+		},
+	})
+
+	previousProcessor := triggerProcessor
+	previousQuartermaster := quartermasterClient
+	triggerProcessor = nil
+	quartermasterClient = nil
+	t.Cleanup(func() {
+		triggerProcessor = previousProcessor
+		quartermasterClient = previousQuartermaster
+	})
+
+	c, w := playbackCtxArms(t, "vodkey-unavailable")
+	HandleGenericViewerPlayback(c)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body=%s", w.Code, w.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if body["code"] != "BILLING_AUTHORITY_UNAVAILABLE" {
+		t.Fatalf("code = %v, want BILLING_AUTHORITY_UNAVAILABLE", body["code"])
+	}
+}
+
 // expectArtifactRowArms registers the foghorn.artifacts SELECT
 // resolveArtifactPlaybackWithResp runs, returning a synced VOD row whose
 // authoritative cluster is empty (so AuthoritativeClusterServable passes for the
@@ -276,6 +316,9 @@ func TestGenericViewerPlayback_VodJSONSuccessReturnsEndpoint(t *testing.T) {
 	sm := balancingTestEnv(t)
 	t.Cleanup(control.SetupTestRegistry("", nil))
 	mock := withMockDBArms(t)
+	startQuartermasterFake(t, &fakeTenantService{validate: func(_ context.Context, req *quartermasterpb.ValidateTenantRequest) (*quartermasterpb.ValidateTenantResponse, error) {
+		return &quartermasterpb.ValidateTenantResponse{Valid: true, IsActive: true, TenantId: req.GetTenantId(), BillingModel: "postpaid"}, nil
+	}})
 
 	const hash = "vodhashaaaaaaaaaaaaaaaaaaaaaaaa1"
 	seedArtifactEdgeArms(t, sm, "store-json", "store-json.example", "https://store-json.example/", hash,
@@ -335,6 +378,9 @@ func TestGenericViewerPlayback_VodProtocolRedirectsToEdge(t *testing.T) {
 	sm := balancingTestEnv(t)
 	t.Cleanup(control.SetupTestRegistry("", nil))
 	mock := withMockDBArms(t)
+	startQuartermasterFake(t, &fakeTenantService{validate: func(_ context.Context, req *quartermasterpb.ValidateTenantRequest) (*quartermasterpb.ValidateTenantResponse, error) {
+		return &quartermasterpb.ValidateTenantResponse{Valid: true, IsActive: true, TenantId: req.GetTenantId(), BillingModel: "postpaid"}, nil
+	}})
 
 	const hash = "vodhashbbbbbbbbbbbbbbbbbbbbbbbb2"
 	seedArtifactEdgeArms(t, sm, "store-hls", "store-hls.example", "https://store-hls.example/", hash,

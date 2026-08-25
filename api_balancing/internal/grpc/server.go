@@ -2529,34 +2529,7 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *shar
 	if s.cacheInvalidator != nil && resolution.TenantId != "" {
 		billingTarget := control.ResolvePlaybackPolicyTarget(ctx, resolution.ContentId, resolution.InternalName)
 		billingInternalName := billingTarget.InternalName
-		billing := s.cacheInvalidator.GetBillingStatus(ctx, billingInternalName, resolution.TenantId)
-		// A payment may have been settled at the Gateway before this request
-		// reaches Foghorn. When cached state would deny admission, refresh from
-		// Purser instead of trusting a cross-service "paid" flag or stale cache.
-		if !x402Processed && s.purserClient != nil && (billing == nil || billing.State == triggers.BillingStatusUnavailable || billing.IsSuspended || (billing.BillingModel == "prepaid" && billing.IsBalanceNegative)) {
-			fresh, freshErr := s.purserClient.GetTenantAdmissionStatus(ctx, resolution.TenantId)
-			if freshErr == nil && fresh != nil {
-				billing = &triggers.BillingStatus{
-					TenantID:          resolution.TenantId,
-					BillingModel:      fresh.GetBillingModel(),
-					IsSuspended:       fresh.GetIsSuspended(),
-					IsBalanceNegative: fresh.GetIsBalanceNegative(),
-				}
-			}
-		}
-		if x402Processed && s.purserClient != nil {
-			fresh, freshErr := s.purserClient.GetTenantAdmissionStatus(ctx, resolution.TenantId)
-			if freshErr != nil || fresh == nil {
-				s.logger.WithError(freshErr).WithField("tenant_id", resolution.TenantId).Warn("Failed to recheck billing status after x402 settlement")
-				return nil, status.Error(codes.Unavailable, "payment processed but updated billing status is unavailable; retry safely")
-			}
-			billing = &triggers.BillingStatus{
-				TenantID:          resolution.TenantId,
-				BillingModel:      fresh.GetBillingModel(),
-				IsSuspended:       fresh.GetIsSuspended(),
-				IsBalanceNegative: fresh.GetIsBalanceNegative(),
-			}
-		}
+		billing := s.viewerBillingStatus(ctx, billingInternalName, resolution.TenantId, x402Processed)
 		if billing == nil || billing.State == triggers.BillingStatusUnavailable {
 			s.logger.WithFields(logging.Fields{
 				"content_id": req.ContentId,
@@ -2564,8 +2537,14 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *shar
 			}).Warn("Viewer billing authority unavailable")
 			return nil, status.Error(codes.Unavailable, "billing authority unavailable")
 		}
+		if billing.DeniedReason != "" {
+			return nil, status.Error(codes.PermissionDenied, "content owner is not active")
+		}
 		// Hard block: tenant suspended (balance < -$10)
 		if billing.IsSuspended {
+			if x402Processed {
+				return nil, status.Error(codes.Unavailable, "payment processed but updated billing status is still pending; retry safely")
+			}
 			s.logger.WithFields(logging.Fields{
 				"content_id": req.ContentId,
 				"tenant_id":  resolution.TenantId,
@@ -2574,13 +2553,16 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *shar
 		}
 		// Soft block: balance negative for prepaid (return 402-equivalent)
 		if billing.BillingModel == "prepaid" && billing.IsBalanceNegative {
+			if x402Processed {
+				return nil, status.Error(codes.Unavailable, "payment processed but updated billing status is still pending; retry safely")
+			}
 			s.logger.WithFields(logging.Fields{
 				"content_id": req.ContentId,
 				"tenant_id":  resolution.TenantId,
 			}).Warn("Rejecting viewer: content owner balance exhausted (402)")
 			return nil, s.paymentRequiredError(ctx, resolution.TenantId, resourcePath, "payment required - content owner needs to top up balance")
 		}
-		if billing.DeniedReason != "" {
+		if billing.State == triggers.BillingStatusDenied {
 			return nil, status.Error(codes.PermissionDenied, "content owner is not active")
 		}
 	}
@@ -2650,6 +2632,23 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *shar
 	}
 
 	return response, nil
+}
+
+// viewerBillingStatus reads the same complete tenant-admission projection for
+// normal and post-payment admission. Settlement may change billing state, so it
+// invalidates that projection before the one allowed fresh read; it must never
+// replace tenant-active authority with a billing-only Purser response.
+func (s *FoghornGRPCServer) viewerBillingStatus(ctx context.Context, internalName, tenantID string, paymentProcessed bool) *triggers.BillingStatus {
+	if s.cacheInvalidator == nil || tenantID == "" {
+		return nil
+	}
+	if !paymentProcessed {
+		return s.cacheInvalidator.GetBillingStatus(ctx, internalName, tenantID)
+	}
+	s.cacheInvalidator.InvalidateTenantCache(tenantID)
+	freshCtx, cancel := context.WithTimeout(ctx, triggers.MediaAdmissionTimeout)
+	defer cancel()
+	return s.cacheInvalidator.GetBillingStatus(freshCtx, internalName, tenantID)
 }
 
 func (s *FoghornGRPCServer) enforceResolvePlaybackPolicy(ctx context.Context, req *sharedpb.ViewerEndpointRequest, resolution *control.ContentResolution) error {

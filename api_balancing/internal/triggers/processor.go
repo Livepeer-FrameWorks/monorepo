@@ -105,11 +105,24 @@ type DVRStarterWithSourceHint interface {
 	StartDVRWithSourceHint(ctx context.Context, req *sharedpb.StartDVRRequest, sourceNodeID string) (*sharedpb.StartDVRResponse, error)
 }
 
+type tenantAdmissionClient interface {
+	ValidateTenant(ctx context.Context, tenantID, userID string) (*quartermasterpb.ValidateTenantResponse, error)
+}
+
+// MediaAdmissionTimeout bounds synchronous authority work on media hot paths.
+const MediaAdmissionTimeout = 500 * time.Millisecond
+
+const (
+	billingCacheTTL       = 10 * time.Minute
+	billingDeniedCacheTTL = 30 * time.Second
+)
+
 // Processor implements the MistTriggerProcessor interface for handling MistServer triggers
 type Processor struct {
 	logger              logging.Logger
 	commodoreClient     *commodore.GRPCClient
 	quartermasterClient *qmclient.GRPCClient
+	tenantAdmission     tenantAdmissionClient
 	decklogClient       *decklog.BatchedClient
 	loadBalancer        *balancer.LoadBalancer
 	geoipClient         *geoip.Reader
@@ -224,10 +237,17 @@ func NewProcessor(logger logging.Logger, commodoreClient *commodore.GRPCClient, 
 		OnMiss: func(_ map[string]string) { atomic.AddUint64(&p.streamCacheMisses, 1) },
 	})
 	p.billingCache = cache.New(cache.Options{
-		TTL:                  10 * time.Minute,
+		TTL:                  billingCacheTTL,
 		StaleWhileRevalidate: billingCacheSWR(),
 		NegativeTTL:          0,
 		MaxEntries:           10000,
+		ValueLifetime: func(_ string, value interface{}) (time.Duration, time.Duration) {
+			status, ok := value.(*BillingStatus)
+			if ok && status != nil && status.State == BillingStatusDenied {
+				return billingDeniedTTL(), 0
+			}
+			return billingCacheTTL, billingCacheSWR()
+		},
 	}, cache.MetricsHooks{
 		OnHit:   func(_ map[string]string) { p.observeBillingCache("hit") },
 		OnMiss:  func(_ map[string]string) { p.observeBillingCache("miss") },
@@ -485,6 +505,15 @@ func billingCacheSWR() time.Duration {
 	return swr
 }
 
+func billingDeniedTTL() time.Duration {
+	if raw := os.Getenv("BILLING_DENIED_CACHE_TTL"); raw != "" {
+		if parsed, err := time.ParseDuration(raw); err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return billingDeniedCacheTTL
+}
+
 func (p *Processor) observeBillingCache(outcome string) {
 	if p != nil && p.metrics != nil && p.metrics.BillingCacheEvents != nil {
 		p.metrics.BillingCacheEvents.WithLabelValues(outcome).Inc()
@@ -626,6 +655,13 @@ func (p *Processor) GetBillingStatus(ctx context.Context, internalName, tenantID
 	}
 
 	_, cachedBefore, staleBefore := p.billingCache.PeekWithFreshness(tenantID)
+	deniedExpired := false
+	if !cachedBefore {
+		if expired, exists := p.billingCache.PeekHardExpired(tenantID); exists {
+			status, valid := expired.(*BillingStatus)
+			deniedExpired = valid && status != nil && status.State == BillingStatusDenied
+		}
+	}
 	value, ok, err := p.billingCache.Get(ctx, tenantID, func(loadCtx context.Context, _ string) (interface{}, bool, error) {
 		status, err := p.loadBillingStatus(loadCtx, tenantID)
 		return status, err == nil, err
@@ -642,6 +678,16 @@ func (p *Processor) GetBillingStatus(ctx context.Context, internalName, tenantID
 	}
 	copy := *status
 	copy.FromCache = cachedBefore
+	if deniedExpired {
+		p.observeBillingCache("deny_expired")
+	}
+	if copy.State == BillingStatusDenied {
+		if cachedBefore {
+			p.observeBillingCache("cached_deny")
+		} else {
+			p.observeBillingCache("fresh_deny")
+		}
+	}
 	if staleBefore {
 		copy.State = BillingStatusStaleValid
 	}
@@ -649,12 +695,12 @@ func (p *Processor) GetBillingStatus(ctx context.Context, internalName, tenantID
 }
 
 func (p *Processor) loadBillingStatus(ctx context.Context, tenantID string) (*BillingStatus, error) {
-	if p.quartermasterClient == nil {
+	if p.tenantAdmission == nil {
 		return nil, fmt.Errorf("quartermaster client unavailable")
 	}
-	qmCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	qmCtx, cancel := context.WithTimeout(ctx, MediaAdmissionTimeout)
 	defer cancel()
-	resp, err := p.quartermasterClient.ValidateTenant(qmCtx, tenantID, "")
+	resp, err := p.tenantAdmission.ValidateTenant(qmCtx, tenantID, "")
 	if err != nil {
 		return nil, err
 	}
@@ -720,20 +766,22 @@ func (p *Processor) GetStreamOrigin(internalName string) (tenantID, originCluste
 // Called when tenant suspension status changes (e.g., after payment).
 // Returns the number of entries invalidated.
 func (p *Processor) InvalidateTenantCache(tenantID string) int {
-	if p.streamCache == nil || tenantID == "" {
+	if p == nil || tenantID == "" {
 		return 0
 	}
 
 	// Get all cache entries and find those belonging to this tenant
 	var keysToEvict []string
-	for _, e := range p.streamCache.Snapshot() {
-		if strings.HasPrefix(e.Key, tenantID+":") {
-			keysToEvict = append(keysToEvict, e.Key)
-			continue
-		}
-		info, ok := e.Value.(streamContext)
-		if ok && info.TenantID == tenantID {
-			keysToEvict = append(keysToEvict, e.Key)
+	if p.streamCache != nil {
+		for _, e := range p.streamCache.Snapshot() {
+			if strings.HasPrefix(e.Key, tenantID+":") {
+				keysToEvict = append(keysToEvict, e.Key)
+				continue
+			}
+			info, ok := e.Value.(streamContext)
+			if ok && info.TenantID == tenantID {
+				keysToEvict = append(keysToEvict, e.Key)
+			}
 		}
 	}
 
@@ -741,7 +789,9 @@ func (p *Processor) InvalidateTenantCache(tenantID string) int {
 	for _, key := range keysToEvict {
 		p.streamCache.Delete(key)
 	}
-	p.holdStreamCacheTenant(tenantID)
+	if p.streamCache != nil {
+		p.holdStreamCacheTenant(tenantID)
+	}
 	if p.billingCache != nil {
 		p.billingCache.Delete(tenantID)
 		p.observeBillingCache("invalidated")
@@ -859,6 +909,7 @@ func (p *Processor) InvalidatePlaybackAuthCache(tenantID string, internalNames [
 // SetQuartermasterClient configures the Quartermaster client for node UUID lookups
 func (p *Processor) SetQuartermasterClient(c *qmclient.GRPCClient) {
 	p.quartermasterClient = c
+	p.tenantAdmission = c
 }
 
 // SetCommodoreClient configures the Commodore client for stream resolution.
@@ -1413,6 +1464,8 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 			Error("PUSH_REWRITE has no Mist trigger UUID; denying before placement is claimed")
 		return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "push rewrite missing trigger identity")
 	}
+	admissionCtx, cancelAdmission := context.WithTimeout(context.Background(), MediaAdmissionTimeout)
+	defer cancelAdmission()
 
 	// Admission runs in three steps, in this order for two reasons that pull
 	// against each other: the cluster to claim depends on the connection's
@@ -1426,7 +1479,7 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 	// Reading the session before resolving the tenant would mean reading across
 	// tenants, and claiming before that read could be checked — placement taken
 	// under a foreign session's cluster before the mismatch is even visible.
-	identity, err := p.commodoreClient.ValidateStreamKey(context.Background(), pushRewrite.GetStreamName())
+	identity, err := p.commodoreClient.ValidateStreamKey(admissionCtx, pushRewrite.GetStreamName())
 	if err != nil {
 		p.logger.WithFields(logging.Fields{
 			"stream_key": logging.RedactSecret(pushRewrite.GetStreamName()),
@@ -1452,7 +1505,7 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 	// current cluster for a connection bound to another. Retryable; the next
 	// PUSH_REWRITE re-asks.
 	sessionClusterID, sessionErr := control.OpenIngestSessionCluster(
-		context.Background(), identity.GetTenantId(), trigger.GetNodeId(), claimToken)
+		admissionCtx, identity.GetTenantId(), trigger.GetNodeId(), claimToken)
 	if sessionErr != nil {
 		p.logger.WithError(sessionErr).WithField("node_id", trigger.GetNodeId()).
 			Error("PUSH_REWRITE: open-session cluster lookup failed; denying (retryable) rather than claiming a possibly-wrong cluster")
@@ -1483,7 +1536,7 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 		defer releaseAdmissionSlot()
 	}
 
-	streamValidation, err := p.commodoreClient.ValidateStreamKeyForClaim(context.Background(), pushRewrite.GetStreamName(), ingestClusterID, claimToken)
+	streamValidation, err := p.commodoreClient.ValidateStreamKeyForClaim(admissionCtx, pushRewrite.GetStreamName(), ingestClusterID, claimToken)
 	if err != nil {
 		p.logger.WithFields(logging.Fields{
 			"stream_key": logging.RedactSecret(pushRewrite.GetStreamName()),

@@ -116,12 +116,22 @@ func startViewerHappyCommodoreFake(t *testing.T, fake *commodoreViewerHappyFake)
 // settable status. nil status means "no billing info" — the gate is not tripped.
 // This is the seam the payment gate inside ResolveViewerEndpoint reads.
 type billingCacheViewerHappy struct {
-	status *triggers.BillingStatus
+	status                  *triggers.BillingStatus
+	statusAfterInvalidation *triggers.BillingStatus
+	calls                   int
+	invalidations           int
 }
 
-func (b *billingCacheViewerHappy) InvalidateTenantCache(string) int                 { return 0 }
+func (b *billingCacheViewerHappy) InvalidateTenantCache(string) int {
+	b.invalidations++
+	if b.statusAfterInvalidation != nil {
+		b.status = b.statusAfterInvalidation
+	}
+	return 1
+}
 func (b *billingCacheViewerHappy) InvalidatePlaybackAuthCache(string, []string) int { return 0 }
 func (b *billingCacheViewerHappy) GetBillingStatus(context.Context, string, string) *triggers.BillingStatus {
+	b.calls++
 	return b.status
 }
 func (b *billingCacheViewerHappy) GetClusterPeers(string, string) []*clusterpeerpb.TenantClusterPeer {
@@ -429,15 +439,44 @@ func TestResolveViewerEndpoint_SuspendedTenantBlocked(t *testing.T) {
 		},
 	})
 
+	billing := &billingCacheViewerHappy{status: &triggers.BillingStatus{TenantID: "tenant-susp", BillingModel: "prepaid", IsSuspended: true}}
 	s := &FoghornGRPCServer{
 		logger:           logrus.New(),
 		lb:               lb,
 		originPulling:    map[string]struct{}{},
-		cacheInvalidator: &billingCacheViewerHappy{status: &triggers.BillingStatus{TenantID: "tenant-susp", BillingModel: "prepaid", IsSuspended: true}},
+		cacheInvalidator: billing,
 	}
 	_, err := s.ResolveViewerEndpoint(context.Background(), &sharedpb.ViewerEndpointRequest{ContentId: "live-pid"})
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("suspended owner: want FailedPrecondition (payment gate), got %v", err)
+	}
+	if billing.calls != 1 || billing.invalidations != 0 {
+		t.Fatalf("normal denied viewer cache activity = calls %d invalidations %d, want 1/0", billing.calls, billing.invalidations)
+	}
+}
+
+func TestViewerBillingStatus_PostPaymentPreservesInactiveTenantDenial(t *testing.T) {
+	billing := &billingCacheViewerHappy{
+		status: &triggers.BillingStatus{
+			TenantID:          "tenant-inactive",
+			BillingModel:      "prepaid",
+			IsBalanceNegative: true,
+		},
+		statusAfterInvalidation: &triggers.BillingStatus{
+			TenantID:     "tenant-inactive",
+			BillingModel: "postpaid",
+			State:        triggers.BillingStatusDenied,
+			DeniedReason: "tenant_inactive",
+		},
+	}
+	s := &FoghornGRPCServer{cacheInvalidator: billing}
+
+	status := s.viewerBillingStatus(context.Background(), "stream-1", "tenant-inactive", true)
+	if status == nil || status.State != triggers.BillingStatusDenied || status.DeniedReason != "tenant_inactive" {
+		t.Fatalf("post-payment status = %+v, want fresh inactive-tenant denial", status)
+	}
+	if billing.calls != 1 || billing.invalidations != 1 {
+		t.Fatalf("post-payment cache activity = calls %d invalidations %d, want 1/1", billing.calls, billing.invalidations)
 	}
 }
 

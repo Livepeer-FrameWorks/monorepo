@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1096,6 +1097,12 @@ func (s *stubCommodoreInternalService) LastValidateClusterID() string {
 		return ""
 	}
 	return s.validateClusterIDs[len(s.validateClusterIDs)-1]
+}
+
+func (s *stubCommodoreInternalService) ValidateClusterIDs() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.validateClusterIDs...)
 }
 
 func (s *stubCommodoreInternalService) ResolveIdentifier(ctx context.Context, req *commodorepb.ResolveIdentifierRequest) (*commodorepb.ResolveIdentifierResponse, error) {
@@ -2252,6 +2259,9 @@ func TestHandlePushRewrite_ValidatesUsingPublishingNodeMediaCluster(t *testing.T
 	}
 	if got := stub.LastValidateClusterID(); got != "demo-media" {
 		t.Fatalf("expected ValidateStreamKey cluster_id demo-media, got %q", got)
+	}
+	if got := stub.ValidateClusterIDs(); !slices.Equal(got, []string{"", "demo-media"}) {
+		t.Fatalf("expected one identity lookup then one full admission, got cluster IDs %v", got)
 	}
 	if trigger.GetClusterId() != "demo-media" {
 		t.Fatalf("expected trigger cluster_id to remain demo-media, got %q", trigger.GetClusterId())

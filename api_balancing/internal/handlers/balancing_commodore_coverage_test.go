@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/state"
+	"frameworks/api_balancing/internal/triggers"
 
 	commodorecli "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	qmcli "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
@@ -19,6 +21,103 @@ import (
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"google.golang.org/grpc"
 )
+
+func TestStreamBalancing_ResolutionFailureReturns503(t *testing.T) {
+	balancingTestEnv(t)
+	startBalancingCommodoreFake(t, &commodoreBalancingFake{
+		internalName: func(context.Context, *commodorepb.ResolveInternalNameRequest) (*commodorepb.ResolveInternalNameResponse, error) {
+			return nil, errors.New("commodore unavailable")
+		},
+	})
+
+	c, w := ginCtxFor(t, "")
+	handleStreamBalancing(c, "live+demo")
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 on resolution failure", w.Code)
+	}
+}
+
+func TestStreamBalancing_InactiveTenantReturns403(t *testing.T) {
+	balancingTestEnv(t)
+	startBalancingCommodoreFake(t, &commodoreBalancingFake{
+		internalName: func(context.Context, *commodorepb.ResolveInternalNameRequest) (*commodorepb.ResolveInternalNameResponse, error) {
+			return &commodorepb.ResolveInternalNameResponse{InternalName: "demo", TenantId: "tenant-inactive"}, nil
+		},
+	})
+	startQuartermasterFake(t, &fakeTenantService{
+		validate: func(context.Context, *quartermasterpb.ValidateTenantRequest) (*quartermasterpb.ValidateTenantResponse, error) {
+			return &quartermasterpb.ValidateTenantResponse{Valid: false, IsActive: false, TenantId: "tenant-inactive"}, nil
+		},
+	})
+
+	c, w := ginCtxFor(t, "")
+	handleStreamBalancing(c, "live+demo")
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403 for inactive tenant", w.Code)
+	}
+}
+
+func TestStreamBalancing_BillingAuthorityFailureReturns503(t *testing.T) {
+	balancingTestEnv(t)
+	startBalancingCommodoreFake(t, &commodoreBalancingFake{
+		internalName: func(context.Context, *commodorepb.ResolveInternalNameRequest) (*commodorepb.ResolveInternalNameResponse, error) {
+			return &commodorepb.ResolveInternalNameResponse{InternalName: "demo", TenantId: "tenant-1"}, nil
+		},
+	})
+	startQuartermasterFake(t, &fakeTenantService{
+		validate: func(context.Context, *quartermasterpb.ValidateTenantRequest) (*quartermasterpb.ValidateTenantResponse, error) {
+			return nil, errors.New("quartermaster unavailable")
+		},
+	})
+
+	c, w := ginCtxFor(t, "")
+	handleStreamBalancing(c, "live+demo")
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 when billing authority is unavailable", w.Code)
+	}
+}
+
+func TestStreamBalancing_UpstreamBillingUnavailableReturns503(t *testing.T) {
+	balancingTestEnv(t)
+	startBalancingCommodoreFake(t, &commodoreBalancingFake{
+		internalName: func(context.Context, *commodorepb.ResolveInternalNameRequest) (*commodorepb.ResolveInternalNameResponse, error) {
+			return &commodorepb.ResolveInternalNameResponse{InternalName: "demo", TenantId: "tenant-1"}, nil
+		},
+	})
+	startQuartermasterFake(t, &fakeTenantService{
+		validate: func(context.Context, *quartermasterpb.ValidateTenantRequest) (*quartermasterpb.ValidateTenantResponse, error) {
+			return &quartermasterpb.ValidateTenantResponse{
+				Valid: true, IsActive: true, TenantId: "tenant-1", BillingStatusUnavailable: true,
+			}, nil
+		},
+	})
+
+	c, w := ginCtxFor(t, "")
+	handleStreamBalancing(c, "live+demo")
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 when Purser is unavailable behind Quartermaster", w.Code)
+	}
+}
+
+func TestRefreshBillingStatusAfterPaymentPreservesInactiveTenant(t *testing.T) {
+	balancingTestEnv(t)
+	startQuartermasterFake(t, &fakeTenantService{
+		validate: func(context.Context, *quartermasterpb.ValidateTenantRequest) (*quartermasterpb.ValidateTenantResponse, error) {
+			return &quartermasterpb.ValidateTenantResponse{
+				Valid: false, IsActive: false, TenantId: "tenant-inactive", BillingModel: "postpaid",
+			}, nil
+		},
+	})
+
+	billing := refreshBillingStatusAfterPayment(context.Background(), "demo", "tenant-inactive")
+	if billing == nil || billing.State != triggers.BillingStatusDenied || billing.DeniedReason != "tenant_inactive" {
+		t.Fatalf("post-payment refresh = %+v, want inactive-tenant denial", billing)
+	}
+}
 
 // These tests unlock the two handleStreamBalancing branches that wave 2 could
 // not reach because they are gated on a SUCCESSFUL Commodore resolution: the
@@ -142,6 +241,20 @@ func startQuartermasterFake(t *testing.T, fake *fakeTenantService) {
 	})
 }
 
+func startHealthyQuartermasterFake(t *testing.T) {
+	t.Helper()
+	startQuartermasterFake(t, &fakeTenantService{
+		validate: func(_ context.Context, req *quartermasterpb.ValidateTenantRequest) (*quartermasterpb.ValidateTenantResponse, error) {
+			return &quartermasterpb.ValidateTenantResponse{
+				Valid:        true,
+				IsActive:     true,
+				TenantId:     req.GetTenantId(),
+				BillingModel: "postpaid",
+			}, nil
+		},
+	})
+}
+
 // Invariant: a prepaid owner whose account is SUSPENDED, with no x402 payment
 // header presented, is blocked at /<stream> with HTTP 402 and the
 // insufficient-balance body — viewer playback is gated on the owner's billing
@@ -170,6 +283,7 @@ func TestStreamBalancing_PrepaidSuspendedReturns402(t *testing.T) {
 			}
 			return &quartermasterpb.ValidateTenantResponse{
 				Valid:        true,
+				IsActive:     true,
 				TenantId:     "tenant-suspended",
 				BillingModel: "prepaid",
 				IsSuspended:  true,
@@ -210,6 +324,7 @@ func TestStreamBalancing_PrepaidNegativeBalanceReturns402(t *testing.T) {
 		validate: func(_ context.Context, _ *quartermasterpb.ValidateTenantRequest) (*quartermasterpb.ValidateTenantResponse, error) {
 			return &quartermasterpb.ValidateTenantResponse{
 				Valid:             true,
+				IsActive:          true,
 				TenantId:          "tenant-neg",
 				BillingModel:      "prepaid",
 				IsBalanceNegative: true,
@@ -246,6 +361,7 @@ func TestStreamBalancing_PrepaidHealthyProceedsToSelection(t *testing.T) {
 		validate: func(_ context.Context, _ *quartermasterpb.ValidateTenantRequest) (*quartermasterpb.ValidateTenantResponse, error) {
 			return &quartermasterpb.ValidateTenantResponse{
 				Valid:        true,
+				IsActive:     true,
 				TenantId:     "tenant-ok",
 				BillingModel: "prepaid",
 			}, nil
@@ -283,6 +399,7 @@ func TestStreamBalancing_PostpaidIgnoresSuspensionFlags(t *testing.T) {
 		validate: func(_ context.Context, _ *quartermasterpb.ValidateTenantRequest) (*quartermasterpb.ValidateTenantResponse, error) {
 			return &quartermasterpb.ValidateTenantResponse{
 				Valid:        true,
+				IsActive:     true,
 				TenantId:     "tenant-pp",
 				BillingModel: "postpaid",
 				IsSuspended:  true, // would gate a prepaid owner; postpaid must ignore it
@@ -347,6 +464,7 @@ func TestStreamBalancing_FixedNodeVodReturnsStorageHost(t *testing.T) {
 			}, nil
 		},
 	})
+	startHealthyQuartermasterFake(t)
 
 	c, w := ginCtxFor(t, "")
 	handleStreamBalancing(c, "vod+art")
@@ -377,6 +495,7 @@ func TestStreamBalancing_FixedNodeVodRedirectsWithProto(t *testing.T) {
 			}, nil
 		},
 	})
+	startHealthyQuartermasterFake(t)
 
 	c, w := ginCtxFor(t, "proto=https")
 	handleStreamBalancing(c, "vod+art2")

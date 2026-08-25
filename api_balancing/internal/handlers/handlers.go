@@ -1474,12 +1474,24 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 	logger.WithField("stream", streamName).Info("Balancing stream")
 
 	// Unified resolution: Determine if this is Live (Key) or VOD (Artifact)
-	target, _ := control.ResolveStream(c.Request.Context(), streamName)
+	target, resolveErr := control.ResolveStream(c.Request.Context(), streamName)
+	if resolveErr != nil || target == nil || target.InternalName == "" {
+		c.String(http.StatusServiceUnavailable, "stream authority unavailable")
+		return
+	}
 	internalName := mist.ExtractInternalName(target.InternalName)
 
 	// Prepaid billing check (402)
 	if target.TenantID != "" {
 		billing := getBillingStatus(c.Request.Context(), internalName, target.TenantID)
+		if billing == nil || billing.State == triggers.BillingStatusUnavailable {
+			c.String(http.StatusServiceUnavailable, "billing authority unavailable")
+			return
+		}
+		if billing.DeniedReason != "" {
+			c.String(http.StatusForbidden, "content owner is not active")
+			return
+		}
 		if billing != nil && billing.BillingModel == "prepaid" && (billing.IsSuspended || billing.IsBalanceNegative) {
 			paymentHeader := x402.GetPaymentHeaderFromRequest(c.Request)
 			resourcePath := c.Request.URL.Path
@@ -1496,6 +1508,23 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 				respondX402Billing(c, c.Request.Context(), target.TenantID, resourcePath, message)
 				return
 			}
+			billing = refreshBillingStatusAfterPayment(c.Request.Context(), internalName, target.TenantID)
+			if billing == nil || billing.State == triggers.BillingStatusUnavailable {
+				c.String(http.StatusServiceUnavailable, "payment processed but updated billing status is unavailable; retry safely")
+				return
+			}
+			if billing.DeniedReason != "" {
+				c.String(http.StatusForbidden, "content owner is not active")
+				return
+			}
+			if billing.IsSuspended || (billing.BillingModel == "prepaid" && billing.IsBalanceNegative) {
+				c.String(http.StatusServiceUnavailable, "payment processed but updated billing status is still pending; retry safely")
+				return
+			}
+		}
+		if billing.State == triggers.BillingStatusDenied {
+			c.String(http.StatusForbidden, "content owner is not active")
+			return
 		}
 	}
 
@@ -2570,7 +2599,7 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 
 	// UNIFIED RESOLUTION: derive the content type from the public ID.
 	// Never trust or require a caller-provided content type.
-	ctx := context.Background()
+	ctx := c.Request.Context()
 	resolution, err := control.ResolveContent(ctx, viewKey)
 	if err != nil {
 		logger.WithError(err).WithField("view_key", viewKey).Warn("Failed to resolve content")
@@ -2600,7 +2629,15 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 			billingInternalName = internalName
 		}
 		billing := getBillingStatus(c.Request.Context(), billingInternalName, resolution.TenantId)
-		if billing != nil && billing.BillingModel == "prepaid" && (billing.IsSuspended || billing.IsBalanceNegative) {
+		if billing == nil || billing.State == triggers.BillingStatusUnavailable {
+			respondPlaybackError(c, http.StatusServiceUnavailable, "BILLING_AUTHORITY_UNAVAILABLE", "Billing authority unavailable; retry safely", nil)
+			return
+		}
+		if billing.DeniedReason != "" {
+			respondPlaybackError(c, http.StatusForbidden, "TENANT_INACTIVE", "Content owner is not active", nil)
+			return
+		}
+		if billing.BillingModel == "prepaid" && (billing.IsSuspended || billing.IsBalanceNegative) {
 			paymentHeader := x402.GetPaymentHeaderFromRequest(c.Request)
 			resourcePath := c.Request.URL.Path
 			paid, decision := settleX402PaymentForPlayback(c.Request.Context(), resolution.TenantId, resourcePath, paymentHeader, c.ClientIP(), logger)
@@ -2616,6 +2653,23 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 				respondX402Billing(c, c.Request.Context(), resolution.TenantId, resourcePath, message)
 				return
 			}
+			billing = refreshBillingStatusAfterPayment(c.Request.Context(), billingInternalName, resolution.TenantId)
+			if billing == nil || billing.State == triggers.BillingStatusUnavailable {
+				respondPlaybackError(c, http.StatusServiceUnavailable, "PAYMENT_STATUS_PENDING", "Payment processed but updated billing status is unavailable; retry safely", nil)
+				return
+			}
+			if billing.DeniedReason != "" {
+				respondPlaybackError(c, http.StatusForbidden, "TENANT_INACTIVE", "Content owner is not active", nil)
+				return
+			}
+			if billing.IsSuspended || (billing.BillingModel == "prepaid" && billing.IsBalanceNegative) {
+				respondPlaybackError(c, http.StatusServiceUnavailable, "PAYMENT_STATUS_PENDING", "Payment processed but updated billing status is still pending; retry safely", nil)
+				return
+			}
+		}
+		if billing.State == triggers.BillingStatusDenied {
+			respondPlaybackError(c, http.StatusForbidden, "TENANT_INACTIVE", "Content owner is not active", nil)
+			return
 		}
 	}
 
