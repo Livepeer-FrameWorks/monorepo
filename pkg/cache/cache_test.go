@@ -3,6 +3,7 @@ package cache
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -129,5 +130,190 @@ func TestCacheEviction(t *testing.T) {
 	}
 	if _, ok := c.Peek("third"); !ok {
 		t.Fatalf("expected third entry to remain")
+	}
+}
+
+func TestCacheDeleteFencesInFlightLoad(t *testing.T) {
+	c := New(Options{TTL: time.Minute, MaxEntries: 2}, MetricsHooks{})
+	started := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		_, _, _ = c.Get(context.Background(), "tenant-1", func(_ context.Context, _ string) (interface{}, bool, error) {
+			close(started)
+			<-release
+			return "pre-invalidation", true, nil
+		})
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("loader did not start")
+	}
+	c.Delete("tenant-1")
+	close(release)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("loader did not finish")
+	}
+	if value, ok := c.Peek("tenant-1"); ok {
+		t.Fatalf("in-flight load repopulated invalidated key with %v", value)
+	}
+}
+
+func TestCacheSharedLoadOutlivesShortLeader(t *testing.T) {
+	c := New(Options{TTL: time.Minute, MaxEntries: 2}, MetricsHooks{})
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var calls int
+	var mu sync.Mutex
+	loader := func(ctx context.Context, _ string) (interface{}, bool, error) {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		close(started)
+		select {
+		case <-release:
+			return "healthy", true, nil
+		case <-ctx.Done():
+			return nil, false, ctx.Err()
+		}
+	}
+
+	shortCtx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	shortResult := make(chan error, 1)
+	go func() {
+		_, _, err := c.Get(shortCtx, "tenant-1", loader)
+		shortResult <- err
+	}()
+	<-started
+
+	longResult := make(chan error, 1)
+	go func() {
+		value, ok, err := c.Get(context.Background(), "tenant-1", loader)
+		if err == nil && (!ok || value != "healthy") {
+			err = errors.New("long waiter did not receive shared healthy result")
+		}
+		longResult <- err
+	}()
+
+	if err := <-shortResult; !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("short waiter error = %v, want deadline exceeded", err)
+	}
+	close(release)
+	if err := <-longResult; err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("loader calls = %d, want one shared load", calls)
+	}
+}
+
+func TestCacheSWRRefreshOutlivesTriggeringCaller(t *testing.T) {
+	c := New(Options{TTL: time.Millisecond, StaleWhileRevalidate: time.Second, MaxEntries: 2}, MetricsHooks{})
+	c.Set("tenant-1", "stale", time.Millisecond)
+	time.Sleep(5 * time.Millisecond)
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	callerCtx, cancel := context.WithCancel(context.Background())
+	value, ok, err := c.Get(callerCtx, "tenant-1", func(ctx context.Context, _ string) (interface{}, bool, error) {
+		close(started)
+		select {
+		case <-release:
+			return "fresh", true, nil
+		case <-ctx.Done():
+			return nil, false, ctx.Err()
+		}
+	})
+	if err != nil || !ok || value != "stale" {
+		t.Fatalf("stale get = (%v, %t, %v), want stale hit", value, ok, err)
+	}
+	<-started
+	cancel()
+	close(release)
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if value, found := c.Peek("tenant-1"); found && value == "fresh" {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("SWR refresh was canceled with the triggering caller")
+}
+
+func TestCacheValueLifetimeAppliesToLoadsAndSetDefault(t *testing.T) {
+	c := New(Options{
+		TTL:                  time.Hour,
+		StaleWhileRevalidate: time.Hour,
+		MaxEntries:           2,
+		ValueLifetime: func(_ string, value interface{}) (time.Duration, time.Duration) {
+			if value == "denied" {
+				return time.Millisecond, 0
+			}
+			return time.Hour, time.Hour
+		},
+	}, MetricsHooks{})
+
+	if _, ok, err := c.Get(context.Background(), "loaded", func(context.Context, string) (interface{}, bool, error) {
+		return "denied", true, nil
+	}); err != nil || !ok {
+		t.Fatalf("load denied value: ok=%t err=%v", ok, err)
+	}
+	c.SetDefault("seeded", "denied")
+	time.Sleep(5 * time.Millisecond)
+	if value, ok := c.PeekHardExpired("loaded"); !ok || value != "denied" {
+		t.Fatalf("PeekHardExpired(loaded) = (%v, %t), want expired denied value", value, ok)
+	}
+	if _, ok := c.Peek("loaded"); ok {
+		t.Fatal("loaded denied value outlived its value-specific TTL")
+	}
+	if _, ok := c.Peek("seeded"); ok {
+		t.Fatal("seeded denied value outlived its value-specific TTL")
+	}
+}
+
+func TestCacheInvalidationFencesDoNotRetainHistoricalKeys(t *testing.T) {
+	c := New(Options{TTL: time.Minute, MaxEntries: 10}, MetricsHooks{})
+	for i := range 10000 {
+		c.Delete(fmt.Sprintf("tenant-%d", i))
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if got := len(c.activeLoads); got != 0 {
+		t.Fatalf("active load fences = %d after idle invalidation churn, want 0", got)
+	}
+}
+
+func TestCacheInvalidationFenceIsReclaimedAfterCanceledLoad(t *testing.T) {
+	c := New(Options{TTL: time.Minute, MaxEntries: 2}, MetricsHooks{})
+	started := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _, _ = c.Get(context.Background(), "tenant-1", func(context.Context, string) (interface{}, bool, error) {
+			close(started)
+			<-release
+			return "old", true, nil
+		})
+	}()
+	<-started
+	c.Delete("tenant-1")
+	close(release)
+	<-done
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if got := len(c.activeLoads); got != 0 {
+		t.Fatalf("active load fences = %d after invalidated load completed, want 0", got)
 	}
 }
