@@ -1,10 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import {
-    GetMarketplaceClustersStore,
-    SubscribeToClusterStore,
-    RequestClusterSubscriptionStore,
-  } from "$houdini";
+  import { GetMarketplaceClustersStore, SubscribeToClusterStore } from "$houdini";
   import { getIconComponent } from "$lib/iconUtils";
   import { Button } from "$lib/components/ui/button";
   import { GridSeam } from "$lib/components/layout";
@@ -12,13 +8,13 @@
   import { toast } from "$lib/stores/toast";
   import DashboardMetricCard from "$lib/components/shared/DashboardMetricCard.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
+  import { clusterSubscriptionOutcome } from "$lib/utils/clusterSubscription";
 
   const marketplaceStore = new GetMarketplaceClustersStore();
   const subscribeMutation = new SubscribeToClusterStore();
-  const requestMutation = new RequestClusterSubscriptionStore();
 
   let clusters = $derived($marketplaceStore.data?.marketplaceClusters ?? []);
-  let mutating = $derived($subscribeMutation.fetching || $requestMutation.fetching);
+  let mutating = $derived($subscribeMutation.fetching);
 
   let publicCount = $derived(clusters.length);
   let freeCount = $derived(clusters.filter((c) => c.pricingModel === "FREE_UNMETERED").length);
@@ -49,20 +45,18 @@
 
   async function connectToCluster(cluster: ClusterType) {
     try {
-      if (cluster.requiresApproval) {
-        const result = await requestMutation.mutate({ clusterId: cluster.clusterId });
-        const data = result.data?.requestClusterSubscription;
-        if (data?.__typename === "ClusterSubscription") {
-          toast.success(`Access requested for ${cluster.clusterName}`);
-        } else if (data?.__typename === "ValidationError") {
-          toast.error(data.message);
-        } else if (data?.__typename === "AuthError") {
-          toast.error(data.message);
-        } else {
-          toast.error("Failed to request access");
-        }
+      const result = await subscribeMutation.mutate({ clusterId: cluster.clusterId });
+      const outcome = clusterSubscriptionOutcome(result);
+      if (outcome.status === "pending_payment") {
+        window.location.assign(outcome.checkoutUrl);
+        return;
+      }
+      if (outcome.status === "pending_approval") {
+        toast.success("Subscription request submitted for approval.");
+      } else if (outcome.status === "error") {
+        toast.error(outcome.message);
+        return;
       } else {
-        await subscribeMutation.mutate({ clusterId: cluster.clusterId });
         toast.success(`Connected to ${cluster.clusterName}`);
       }
       await marketplaceStore.fetch();

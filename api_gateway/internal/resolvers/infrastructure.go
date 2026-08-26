@@ -1132,55 +1132,61 @@ func (r *Resolver) buildServiceInstancesConnectionFromSlice(instances []*quarter
 	}
 }
 
-// DoSubscribeToCluster subscribes a tenant to a cluster.
-//
-// Routes through Purser's CreateClusterSubscription so the cluster's
-// pricing model is honored: free_unmetered / tier_inherit / metered
-// grant access immediately through the correct Quartermaster entitlement path;
-// monthly returns a Stripe checkout URL; custom returns pending_approval.
-//
-// Caller surfaces non-active outcomes as structured errors with stable
-// "status:..." prefixes so the UI can switch on them. A typed payload
-// would be cleaner but requires a coordinated GraphQL/Houdini change.
-func (r *Resolver) DoSubscribeToCluster(ctx context.Context, clusterID string) (bool, error) {
+// DoCreateClusterSubscription routes a commercial access decision through
+// Purser and preserves pending checkout/approval state for non-GraphQL callers.
+func (r *Resolver) DoCreateClusterSubscription(ctx context.Context, clusterID string) (*purserpb.ClusterSubscriptionResponse, error) {
 	if middleware.IsDemoMode(ctx) {
-		return false, errDemoUnavailable("Cluster subscriptions")
+		return nil, errDemoUnavailable("Cluster subscriptions")
 	}
 	tenantID := ""
 	if user := middleware.GetUserFromContext(ctx); user != nil {
 		tenantID = user.TenantID
 	}
 	if tenantID == "" {
-		return false, fmt.Errorf("tenant context required")
+		tenantID = ctxkeys.GetTenantID(ctx)
+	}
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
 	}
 
 	resp, err := r.Clients.Purser.CreateClusterSubscription(ctx, tenantID, clusterID, "")
 	if err != nil {
-		return false, fmt.Errorf("failed to subscribe: %w", err)
+		return nil, fmt.Errorf("failed to subscribe: %w", err)
 	}
+	if resp.GetStatus() == "active" {
+		r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
+			EventType:    apiEventTenantClusterAssigned,
+			ResourceType: "cluster",
+			ResourceId:   clusterID,
+			Payload: &ipcpb.ServiceEvent_ClusterEvent{
+				ClusterEvent: &ipcpb.ClusterEvent{
+					ClusterId: clusterID,
+					TenantId:  tenantID,
+				},
+			},
+		})
+	}
+	return resp, nil
+}
 
+// DoSubscribeToCluster adapts the typed Purser outcome to the legacy Boolean
+// GraphQL field. Stable status prefixes let existing generated clients handle
+// checkout without changing the schema in this release.
+func (r *Resolver) DoSubscribeToCluster(ctx context.Context, clusterID string) (bool, error) {
+	resp, err := r.DoCreateClusterSubscription(ctx, clusterID)
+	if err != nil {
+		return false, err
+	}
 	switch resp.GetStatus() {
+	case "active":
+		return true, nil
 	case "pending_payment":
-		// Monthly cluster: caller must redirect the user to checkout
-		// before access is granted (the Stripe webhook then provisions).
 		return false, fmt.Errorf("status:pending_payment checkout_url:%s", resp.GetCheckoutUrl())
 	case "pending_approval":
-		// Custom cluster: cluster owner must approve.
 		return false, fmt.Errorf("status:pending_approval")
+	default:
+		return false, fmt.Errorf("status:%s", resp.GetStatus())
 	}
-
-	r.sendServiceEvent(ctx, &ipcpb.ServiceEvent{
-		EventType:    apiEventTenantClusterAssigned,
-		ResourceType: "cluster",
-		ResourceId:   clusterID,
-		Payload: &ipcpb.ServiceEvent_ClusterEvent{
-			ClusterEvent: &ipcpb.ClusterEvent{
-				ClusterId: clusterID,
-				TenantId:  tenantID,
-			},
-		},
-	})
-	return true, nil
 }
 
 // DoUnsubscribeFromCluster unsubscribes a tenant from a cluster

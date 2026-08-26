@@ -72,7 +72,7 @@ func TestDoSubscribeToCluster_ActiveAndPendingAndGuard(t *testing.T) {
 
 	// No user-derived tenant: guard short-circuits before the Purser call.
 	guardP := &clientstest.FakePurser{}
-	if _, gerr := qmPurserR(&clientstest.FakeQuartermaster{}, guardP).DoSubscribeToCluster(clientstest.AuthedCtx("t1"), "c1"); gerr == nil {
+	if _, gerr := qmPurserR(&clientstest.FakeQuartermaster{}, guardP).DoSubscribeToCluster(context.Background(), "c1"); gerr == nil {
 		t.Fatal("expected tenant-required error")
 	}
 	if guardP.Calls != 0 {

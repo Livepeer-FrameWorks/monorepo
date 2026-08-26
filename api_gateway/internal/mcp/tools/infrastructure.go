@@ -269,9 +269,10 @@ type MarketplaceClusterResult struct {
 }
 
 type SubscriptionResult struct {
-	Status    string `json:"status"`
-	Message   string `json:"message"`
-	ClusterID string `json:"cluster_id,omitempty"`
+	Status      string `json:"status"`
+	Message     string `json:"message"`
+	ClusterID   string `json:"cluster_id,omitempty"`
+	CheckoutURL string `json:"checkout_url,omitempty"`
 }
 
 type PreferredClusterResult struct {
@@ -397,6 +398,22 @@ func handleSubscribeToCluster(ctx context.Context, args SubscribeToClusterInput,
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return toolError("Authentication required")
+	}
+
+	if args.InviteToken == nil || strings.TrimSpace(*args.InviteToken) == "" {
+		result, err := resolver.DoCreateClusterSubscription(ctx, args.ClusterID)
+		if err != nil {
+			return toolError(fmt.Sprintf("Failed to subscribe: %v", err))
+		}
+		message := "Subscription active"
+		if result.GetStatus() == "pending_payment" {
+			message = "Payment checkout required before access is activated."
+		} else if result.GetStatus() == "pending_approval" {
+			message = "Subscription request submitted. Waiting for cluster operator approval."
+		}
+		return infraToolSuccessJSON(SubscriptionResult{
+			Status: result.GetStatus(), Message: message, ClusterID: result.GetClusterId(), CheckoutURL: result.GetCheckoutUrl(),
+		})
 	}
 
 	result, err := resolver.DoRequestClusterSubscription(ctx, args.ClusterID, args.InviteToken)
