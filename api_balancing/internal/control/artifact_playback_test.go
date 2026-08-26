@@ -97,29 +97,34 @@ func TestResolveArtifactPlayback(t *testing.T) {
 
 // Warm-node happy path: an artifact present on an active local node resolves to
 // a viewer endpoint pointing at that node, exercising the full build (warm-node
-// selection → ranking → output assembly). Authoritative cluster is empty (always
-// serveable), so no cross-cluster gate and no load balancer are involved.
+// selection → ranking → output assembly). The authoritative cluster is an
+// explicitly platform-shared local cluster, so the front-door gate is exercised
+// without requiring a tenant-specific peer grant.
 func TestResolveArtifactPlayback_WarmNodeHappyPath(t *testing.T) {
 	ctx := context.Background()
+	previousLocalCluster := GetLocalClusterID()
+	t.Cleanup(func() { SetLocalClusterID(previousLocalCluster) })
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 	lat, lon := 52.0, 5.0
 	sm.SetNodeInfo("n1", "https://n1.example.com", true, &lat, &lon, "ams", "", map[string]any{"HLS": "x"})
 	sm.TouchNode("n1", true)
 	sm.SetNodeArtifacts("n1", []*ipcpb.StoredArtifact{{ClipHash: "h1"}}, state.ArtifactReportOrder{Fence: 1, Seq: 1})
+	SetLocalClusterID("c1")
+	AddPlatformSharedCluster("c1")
 
 	startFakeCommodoreServer(t, &fakeCommodoreInternal{
-		artifactPlaybackID: foundArtifact("h1", "vod", "t1", ""),
+		artifactPlaybackID: foundArtifact("h1", "vod", "t1", "c1"),
 	})
 	mockDB, mock, _ := sqlmock.New()
 	t.Cleanup(func() { _ = mockDB.Close() })
-	// Local row, empty authoritative cluster (always serveable), synced to S3.
+	// Local row on an authorized platform-shared cluster, synced to S3.
 	mock.ExpectQuery(`FROM foghorn.artifacts\s+WHERE artifact_hash = \$1`).
 		WithArgs("h1", "vod", "t1").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"internal_name", "status", "duration_seconds", "size_bytes", "created_at",
 			"format", "storage_location", "sync_status", "has_thumbnails", "authoritative_cluster", "thumbnail_serving_cluster",
-		}).AddRow("s1", "ready", int64(60), int64(9000), nil, "mp4", "s3", "synced", false, "", ""))
+		}).AddRow("s1", "ready", int64(60), int64(9000), nil, "mp4", "s3", "synced", false, "c1", ""))
 
 	resp, err := ResolveArtifactPlayback(ctx, &PlaybackDependencies{DB: mockDB, LocalClusterID: "c1", GeoLat: 52, GeoLon: 5}, "pb")
 	if err != nil {

@@ -66,9 +66,9 @@ func processRelayResolveRequest(req *ipcpb.RelayResolveRequest, nodeID string, s
 //
 // Authority model: the boundary is the authenticated node → its (server-resolved) virtual cluster, plus the
 // Quartermaster cluster↔tenant entitlement — NOT the NodeState.TenantID string. A node may serve a tenant iff
-// its cluster is entitled to that tenant per ClusterAccessibleForTenant (a platform-shared edge serves any
-// tenant; a dedicated cluster serves its owner + granted peers). This makes serve/process/store share one
-// predicate. NOTE: this adds a (cached) Quartermaster dependency to the serve check where the old node.TenantID
+// its cluster is entitled to that tenant per the operation-scoped serve predicate (a platform-shared edge may
+// serve any resolved tenant; a dedicated cluster serves its owner + granted peers). It intentionally does not
+// confer processing or storage-write authority. NOTE: this adds a (cached) Quartermaster dependency to the serve check where the old node.TenantID
 // compare was purely in-memory; a node connected during a QM outage before its cluster resolves fails closed.
 func nodeMayServeTenant(nodeID, artifactTenant string) bool {
 	if strings.TrimSpace(artifactTenant) == "" {
@@ -78,7 +78,7 @@ func nodeMayServeTenant(nodeID, artifactTenant string) bool {
 	if ns == nil {
 		return false
 	}
-	return ClusterAccessibleForTenant(ns.ClusterID, artifactTenant)
+	return ClusterServeAccessibleForTenant(ns.ClusterID, artifactTenant)
 }
 
 func fillFileArtifactResolve(ctx context.Context, req *ipcpb.RelayResolveRequest, resp *ipcpb.RelayResolveResponse, nodeID string, logger logging.Logger) {

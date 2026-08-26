@@ -65,6 +65,7 @@ func TestParseMetadataPolicy(t *testing.T) {
 	}{
 		{"audit", MetadataPolicyAudit},
 		{"  Audit ", MetadataPolicyAudit},
+		{"deny", MetadataPolicyDeny},
 		{"allow", MetadataPolicyAllow},
 		{"", MetadataPolicyAllow},
 		{"garbage", MetadataPolicyAllow},
@@ -73,6 +74,17 @@ func TestParseMetadataPolicy(t *testing.T) {
 		if got := parseMetadataPolicy(tc.in); got != tc.want {
 			t.Fatalf("parseMetadataPolicy(%q) = %v, want %v", tc.in, got, tc.want)
 		}
+	}
+}
+
+func TestExtractMetadataToContextDenyDropsDelegatedIdentity(t *testing.T) {
+	md := metadata.Pairs("x-user-id", "user-forged", "x-tenant-id", "tenant-forged")
+	ctx := extractMetadataToContext(context.Background(), md, MetadataPolicyDeny, nil, "/m")
+	if got := ctxkeys.GetUserID(ctx); got != "" {
+		t.Fatalf("user metadata survived deny policy: %q", got)
+	}
+	if got := ctxkeys.GetTenantID(ctx); got != "" {
+		t.Fatalf("tenant metadata survived deny policy: %q", got)
 	}
 }
 

@@ -3,7 +3,6 @@ package control
 import (
 	"context"
 	"strings"
-	"time"
 
 	"frameworks/api_balancing/internal/storage"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
@@ -27,7 +26,7 @@ func resolveTenantStorageRouting(ctx context.Context, tenantID string) (tenantSt
 	if tenantID == "" || quartermasterClient == nil {
 		return tenantStorageRouting{}, false
 	}
-	rctx, cancel := context.WithTimeout(ctx, 1*time.Second)
+	rctx, cancel := context.WithTimeout(ctx, clusterAccessLookupBudget)
 	defer cancel()
 	routing, err := quartermasterClient.GetClusterRouting(rctx, &quartermasterpb.GetClusterRoutingRequest{TenantId: tenantID})
 	if err != nil || routing == nil {

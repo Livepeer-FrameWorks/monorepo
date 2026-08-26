@@ -39,6 +39,7 @@ const (
 	MetadataPolicyUnset ServiceTokenMetadataPolicy = iota
 	MetadataPolicyAllow
 	MetadataPolicyAudit
+	MetadataPolicyDeny
 )
 
 // GRPCAuthInterceptor returns a unary server interceptor that validates authentication.
@@ -231,6 +232,16 @@ func GRPCStreamAuthInterceptor(cfg GRPCAuthConfig) grpc.StreamServerInterceptor 
 func extractMetadataToContext(ctx context.Context, md metadata.MD, policy ServiceTokenMetadataPolicy, logger logging.Logger, method string) context.Context {
 	userID := firstMetadataValue(md.Get("x-user-id"))
 	tenantID := firstMetadataValue(md.Get("x-tenant-id"))
+	if policy == MetadataPolicyDeny {
+		if (userID != "" || tenantID != "") && logger != nil {
+			logger.WithFields(logging.Fields{
+				"method":          method,
+				"injected_user":   userID,
+				"injected_tenant": tenantID,
+			}).Warn("Service token metadata injection denied")
+		}
+		return ctx
+	}
 
 	if policy == MetadataPolicyAudit && (userID != "" || tenantID != "") && logger != nil {
 		logger.WithFields(logging.Fields{
@@ -260,6 +271,8 @@ func parseMetadataPolicy(value string) ServiceTokenMetadataPolicy {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "audit":
 		return MetadataPolicyAudit
+	case "deny":
+		return MetadataPolicyDeny
 	case "allow", "":
 		return MetadataPolicyAllow
 	default:

@@ -18,6 +18,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/cache"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -705,6 +706,7 @@ func TestPayloadTypeAssertions_ValidTypes(t *testing.T) {
 
 func TestHandleStreamSource_MistNativePlaybackIDResolvesThroughContext(t *testing.T) {
 	t.Setenv("BRAND_DOMAIN", "frameworks.network")
+	t.Setenv("FOGHORN_BALANCER_CAPABILITY_SECRET", "test-capability-secret")
 	commodoreClient, cleanup, stub := setupCommodoreClientWithStub(t, nil, nil)
 	t.Cleanup(cleanup)
 	stub.resolveStreamContextByKey = map[string]*commodorepb.ResolveStreamContextResponse{
@@ -736,7 +738,8 @@ func TestHandleStreamSource_MistNativePlaybackIDResolvesThroughContext(t *testin
 	if abort {
 		t.Fatal("expected non-abort STREAM_SOURCE response")
 	}
-	if resp != "balance:https://foghorn.media-eu-1.frameworks.network" {
+	if !strings.HasPrefix(resp, "balance:https://foghorn.media-eu-1.frameworks.network/_frameworks/balancer/v1/edge-eu-1/") ||
+		strings.Contains(resp, "fh_sig=") {
 		t.Fatalf("unexpected STREAM_SOURCE response: %q", resp)
 	}
 	keys := stub.ResolveStreamContextKeys()
@@ -788,6 +791,7 @@ func TestHandleStreamSource_LiveOriginPullReturnsDTSC(t *testing.T) {
 // remote origin (US-ingest / EU-playback).
 func TestHandleStreamSource_LiveWithoutOriginPullDelegatesToSource(t *testing.T) {
 	t.Setenv("BRAND_DOMAIN", "frameworks.network")
+	t.Setenv("FOGHORN_BALANCER_CAPABILITY_SECRET", "test-capability-secret")
 	prevRegistry := control.StreamRegistryInstance
 	control.SetStreamRegistry(control.NewStreamRegistry(nil, "cluster-local", time.Minute))
 	t.Cleanup(func() { control.SetStreamRegistry(prevRegistry) })
@@ -1148,7 +1152,8 @@ func (s *stubCommodoreInternalService) ResolveStreamContextKeys() []string {
 func newTestProcessor(t *testing.T) *Processor {
 	t.Helper()
 	p := &Processor{
-		logger: logging.Logger(logrus.New()),
+		logger:              logging.Logger(logrus.New()),
+		viewerClusterAccess: func(_, _, _ string, _ []*clusterpeerpb.TenantClusterPeer) bool { return true },
 	}
 	p.streamCache = cache.New(cache.Options{
 		TTL:                  10 * time.Minute,
@@ -1286,8 +1291,9 @@ func TestHandlePlayRewriteStartsCorrelatedPlaybackViewer(t *testing.T) {
 	}
 
 	_, _, err = processor.handleUserNew(&ipcpb.MistTrigger{
-		NodeId:   nodeID,
-		TenantId: &tenantID,
+		NodeId:    nodeID,
+		ClusterId: ptrTrigHandlers("test-cluster"),
+		TenantId:  &tenantID,
 		TriggerPayload: &ipcpb.MistTrigger_ViewerConnect{
 			ViewerConnect: &ipcpb.ViewerConnectTrigger{
 				StreamName: "live+" + internalName,
@@ -1386,8 +1392,9 @@ func TestViewerCapUsesCorrelationIDInsteadOfMistSession(t *testing.T) {
 
 	for _, sessionID := range []string{"mist-session-a", "mist-session-b"} {
 		resp, abort, err = processor.handleUserNew(&ipcpb.MistTrigger{
-			NodeId:   nodeID,
-			TenantId: &tenantID,
+			NodeId:    nodeID,
+			ClusterId: ptrTrigHandlers("test-cluster"),
+			TenantId:  &tenantID,
 			TriggerPayload: &ipcpb.MistTrigger_ViewerConnect{
 				ViewerConnect: &ipcpb.ViewerConnectTrigger{
 					StreamName: "live+" + internalName,
@@ -1466,8 +1473,9 @@ func TestHandleUserNewDoesNotStartPlaybackViewer(t *testing.T) {
 	}, time.Minute)
 
 	resp, abort, err := processor.handleUserNew(&ipcpb.MistTrigger{
-		NodeId:   nodeID,
-		TenantId: &tenantID,
+		NodeId:    nodeID,
+		ClusterId: ptrTrigHandlers("test-cluster"),
+		TenantId:  &tenantID,
 		TriggerPayload: &ipcpb.MistTrigger_ViewerConnect{
 			ViewerConnect: &ipcpb.ViewerConnectTrigger{
 				StreamName: "live+" + internalName,

@@ -2694,6 +2694,7 @@ func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *
 		GeoLat:         lat,
 		GeoLon:         lon,
 		LocalClusterID: s.clusterID,
+		ClusterPeers:   clusterPeers,
 	}
 
 	if internalName == "" {
@@ -2739,6 +2740,7 @@ func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *
 			return s.queryStreamFanOut(fanCtx, internalName, tenantID, lat, lon, allPeers)
 		})
 	}
+	deps.ClusterPeers = allPeers
 
 	response, err := control.ResolveLivePlayback(ctx, deps, req.ContentId, internalName, streamID, tenantID, activeIngestClusterID)
 	if err != nil {

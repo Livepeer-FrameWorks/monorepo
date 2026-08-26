@@ -145,7 +145,10 @@ func newViewerHappyManager(t *testing.T) (*state.StreamStateManager, *balancer.L
 	t.Helper()
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
-	return sm, balancer.NewLoadBalancer(logging.NewLogger())
+	control.AddPlatformSharedCluster("viewer-happy-platform")
+	lb := balancer.NewLoadBalancer(logging.NewLogger())
+	lb.SetClusterServeAuthorizer(control.ClusterServeAccessibleForScope)
+	return sm, lb
 }
 
 // seedLiveEdgeViewerHappy registers a healthy, probe-verified edge node carrying
@@ -181,6 +184,7 @@ func seedLiveEdgeViewerHappy(t *testing.T, sm *state.StreamStateManager, nodeID,
 	})
 	sm.TouchNode(nodeID, true)
 	sm.SetProbeVerified(nodeID, true)
+	sm.SetNodeConnectionInfo(context.Background(), nodeID, baseURL, "", "viewer-happy-platform", nil)
 	sm.SetStreamInstanceInputs(bareInternalName, nodeID, 1)
 	if err := sm.UpdateStreamFromBuffer("live+"+bareInternalName, bareInternalName, nodeID, tenantID, "FULL", ""); err != nil {
 		t.Fatalf("UpdateStreamFromBuffer: %v", err)
@@ -276,6 +280,8 @@ func TestResolveViewerEndpoint_LiveDispatchesToLiveWinner(t *testing.T) {
 // lifecycle row is served from sqlmock filtered by (hash, type, tenant).
 func TestResolveViewerEndpoint_VodDispatchesToStorageNode(t *testing.T) {
 	t.Cleanup(control.SetupTestRegistry("", nil))
+	control.SetLocalClusterID("viewer-happy-platform")
+	control.AddPlatformSharedCluster("viewer-happy-platform")
 	sm, lb := newViewerHappyManager(t)
 	seedStorageArtifactViewerHappy(t, sm, "store-1", "https://store1.example.com", "vodhash1")
 
@@ -286,13 +292,13 @@ func TestResolveViewerEndpoint_VodDispatchesToStorageNode(t *testing.T) {
 	t.Cleanup(func() { db.Close() })
 	// Tenant isolation: the artifacts lifecycle read MUST be scoped by tenant_id;
 	// assert the resolved tenant is the third bound arg. storage_cluster_id is
-	// returned empty so AuthoritativeClusterServable treats it as local-serveable.
+	// returned as the authorized platform-shared local cluster.
 	mock.ExpectQuery(`SELECT COALESCE\(internal_name`).
 		WithArgs("vodhash1", "vod", "tenant-vod").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"internal_name", "status", "duration_seconds", "size_bytes", "created_at",
 			"format", "storage_location", "sync_status", "has_thumbnails", "authoritative_cluster", "thumbnail_serving_cluster",
-		}).AddRow("art", "ready", int64(120), int64(1000), time.Now(), "mp4", "node", "synced", false, "", ""))
+		}).AddRow("art", "ready", int64(120), int64(1000), time.Now(), "mp4", "node", "synced", false, "viewer-happy-platform", ""))
 
 	startViewerHappyCommodoreFake(t, &commodoreViewerHappyFake{
 		artifactPlayback: func(_ context.Context, req *commodorepb.ResolveArtifactPlaybackIDRequest) (*commodorepb.ResolveArtifactPlaybackIDResponse, error) {
@@ -300,11 +306,12 @@ func TestResolveViewerEndpoint_VodDispatchesToStorageNode(t *testing.T) {
 				t.Errorf("ResolveArtifactPlaybackID got %q, want vod-pid", req.GetPlaybackId())
 			}
 			return &commodorepb.ResolveArtifactPlaybackIDResponse{
-				Found:        true,
-				ArtifactHash: "vodhash1",
-				InternalName: "art",
-				TenantId:     "tenant-vod",
-				ContentType:  "vod",
+				Found:           true,
+				ArtifactHash:    "vodhash1",
+				InternalName:    "art",
+				TenantId:        "tenant-vod",
+				ContentType:     "vod",
+				OriginClusterId: "viewer-happy-platform",
 			}, nil
 		},
 	})

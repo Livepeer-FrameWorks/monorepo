@@ -16,7 +16,9 @@ import (
 
 // LoadBalancer is the main load balancer instance
 type LoadBalancer struct {
-	logger logging.Logger
+	logger                  logging.Logger
+	clusterAccessAuthorizer func(clusterID, tenantID string) bool
+	clusterServeAuthorizer  func(clusterID string, scope ctxkeys.ClusterServeScope) bool
 
 	// Configurable weights (exactly like C++ version)
 	WeightCPU   uint64
@@ -24,6 +26,17 @@ type LoadBalancer struct {
 	WeightBW    uint64
 	WeightGeo   uint64
 	WeightBonus uint64
+}
+
+// SetClusterAccessAuthorizer installs the authoritative tenant-to-cluster
+// predicate used whenever a caller supplies KeyClusterScope.
+func (lb *LoadBalancer) SetClusterAccessAuthorizer(authorize func(clusterID, tenantID string) bool) {
+	lb.clusterAccessAuthorizer = authorize
+}
+
+// SetClusterServeAuthorizer installs the pure, pre-resolved playback predicate.
+func (lb *LoadBalancer) SetClusterServeAuthorizer(authorize func(clusterID string, scope ctxkeys.ClusterServeScope) bool) {
+	lb.clusterServeAuthorizer = authorize
 }
 
 // NewLoadBalancer creates a new load balancer with C++ defaults
@@ -205,6 +218,9 @@ func (lb *LoadBalancer) GetTopNodesWithScores(ctx context.Context, streamName st
 	// Cluster isolation: on shared Foghrons, only score nodes belonging to
 	// the stream's tenant. Co-located clusters pool together (same Redis).
 	clusterScope := ctxkeys.GetClusterScope(ctx)
+	serveScope, hasServeScope := ctxkeys.GetClusterServeScope(ctx)
+	workAccess := make(map[string]bool)
+	serveAccess := make(map[string]bool)
 
 	// Parse capability requirements
 	requireCap := ctxkeys.GetCapability(ctx)
@@ -272,8 +288,24 @@ func (lb *LoadBalancer) GetTopNodesWithScores(ctx context.Context, streamName st
 			}
 			continue
 		}
-		if clusterScope != "" && snap.TenantID != "" && snap.TenantID != clusterScope {
-			continue
+		if hasServeScope {
+			allowed, seen := serveAccess[snap.ClusterID]
+			if !seen {
+				allowed = lb.clusterServeAuthorizer != nil && lb.clusterServeAuthorizer(snap.ClusterID, serveScope)
+				serveAccess[snap.ClusterID] = allowed
+			}
+			if !allowed {
+				continue
+			}
+		} else if clusterScope != "" {
+			allowed, seen := workAccess[snap.ClusterID]
+			if !seen {
+				allowed = lb.clusterAccessAuthorizer != nil && lb.clusterAccessAuthorizer(snap.ClusterID, clusterScope)
+				workAccess[snap.ClusterID] = allowed
+			}
+			if !allowed {
+				continue
+			}
 		}
 		if snap.OperationalMode == state.NodeModeDraining {
 			rejections[rejectNodeDraining]++

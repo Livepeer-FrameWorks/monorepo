@@ -1106,7 +1106,7 @@ func controlLogger() logging.Logger {
 
 // SetLocalClusterID sets the primary cluster ID and marks it as served. It does NOT mark it platform-shared:
 // a local CLUSTER_ID can be a tenant-dedicated/BYOC cluster, and inferring platform-shared authority from it
-// would let a tenantless node there reach every tenant. Platform-shared status comes ONLY from the canonical
+// would let a tenantless node there serve every resolved tenant's media. Platform-shared status comes ONLY from the canonical
 // is_platform_official fact (LoadPlatformSharedClusters) or explicit validated config — see nodeMayServeTenant.
 func SetLocalClusterID(id string) {
 	localClusterID = id
@@ -4436,7 +4436,7 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 		CaBundle:            caBundle,
 		TenantId:            ownerTenantID,
 		Telemetry:           telemetry,
-		FoghornBalancerBase: foghornBalancerBase(resolvedClusterID),
+		FoghornBalancerBase: FoghornBalancerBaseForNode(resolvedClusterID, nodeID),
 		SeedVersion:         nextSeedVersion(nodeID),
 	}
 	if tlsBundle != nil {
@@ -4730,6 +4730,22 @@ func SendLocalConfigSeed(nodeID string, seed *ipcpb.ConfigSeed) error {
 		SentAt:  timestamppb.Now(),
 	}
 	return c.stream.Send(msg)
+}
+
+func SendLocalBalancerCapabilityUpdate(nodeID string, update *ipcpb.BalancerCapabilityUpdate) error {
+	if update == nil {
+		return fmt.Errorf("nil BalancerCapabilityUpdate")
+	}
+	registry.mu.RLock()
+	c := registry.conns[nodeID]
+	registry.mu.RUnlock()
+	if c == nil {
+		return ErrNotConnected
+	}
+	return c.stream.Send(&ipcpb.ControlMessage{
+		Payload: &ipcpb.ControlMessage_BalancerCapabilityUpdate{BalancerCapabilityUpdate: update},
+		SentAt:  timestamppb.Now(),
+	})
 }
 
 // SendConfigSeed sends a ConfigSeed to the given node, relaying via HA if needed.

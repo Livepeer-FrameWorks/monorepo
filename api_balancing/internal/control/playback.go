@@ -454,15 +454,17 @@ func ClusterAllowsPrivatePulls(ctx context.Context, clusterID string) bool {
 }
 
 type PlaybackDependencies struct {
-	DB              *sql.DB
-	LB              *balancer.LoadBalancer
-	GeoLat          float64
-	GeoLon          float64
-	RemoteEdges     []balancer.RemoteEdgeCandidate // optional: pre-collected remote edge candidates from federation
-	FedClient       ArtifactFederationClient       // optional: for cross-cluster artifact resolution
-	PeerResolver    PeerAddressResolver            // optional: resolves peer cluster addresses
-	LocalClusterID  string                         // this cluster's ID
-	RemoteArtifacts RemoteArtifactLookup           // optional: hot artifact locations from peering
+	DB                *sql.DB
+	LB                *balancer.LoadBalancer
+	GeoLat            float64
+	GeoLon            float64
+	RemoteEdges       []balancer.RemoteEdgeCandidate // optional: pre-collected remote edge candidates from federation
+	FedClient         ArtifactFederationClient       // optional: for cross-cluster artifact resolution
+	PeerResolver      PeerAddressResolver            // optional: resolves peer cluster addresses
+	LocalClusterID    string                         // this cluster's ID
+	RemoteArtifacts   RemoteArtifactLookup           // optional: hot artifact locations from peering
+	OfficialClusterID string
+	ClusterPeers      []*clusterpeerpb.TenantClusterPeer
 }
 
 // MistSourceNameForIngestMode returns the concrete Mist stream surface used
@@ -592,8 +594,9 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 	// Re-check the authoritative byte cluster (storage_cluster_id, else
 	// origin_cluster_id) against the cluster_peers Commodore enriches per
 	// request, so a revoked peer stops serving on the next resolve. Local bytes
-	// always pass; the federation branch re-checks the origin/redirect downstream.
-	if !AuthoritativeClusterServable(authoritativeCluster, allowedClusters) {
+	// still require the operation-scoped platform-shared or tenant grant policy;
+	// the federation branch re-checks the origin/redirect downstream.
+	if !AuthoritativeClusterServable(authoritativeCluster, tenantID, allowedClusters) {
 		return nil, fmt.Errorf("%s authoritative cluster %q not authorized for tenant", contentType, strings.TrimSpace(authoritativeCluster))
 	}
 
@@ -626,7 +629,7 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 		if sync == "synced" || location == "s3" {
 			lbctx := context.WithValue(ctx, ctxkeys.KeyCapability, "edge,storage")
 			if tenantID != "" {
-				lbctx = context.WithValue(lbctx, ctxkeys.KeyClusterScope, tenantID)
+				lbctx = context.WithValue(lbctx, ctxkeys.KeyClusterServeScope, NewClusterServeScope(tenantID, "", allowedClusters))
 			}
 			nodes, lbErr := deps.LB.GetTopNodesWithScores(lbctx, "", deps.GeoLat, deps.GeoLon, make(map[string]int), "", 5, false)
 			if lbErr != nil || len(nodes) == 0 {
@@ -936,7 +939,7 @@ func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKe
 	// Use load balancer with internal name to find nodes that have the stream
 	lbctx := context.WithValue(ctx, ctxkeys.KeyCapability, "edge")
 	if tenantID != "" {
-		lbctx = context.WithValue(lbctx, ctxkeys.KeyClusterScope, tenantID)
+		lbctx = context.WithValue(lbctx, ctxkeys.KeyClusterServeScope, NewClusterServeScope(tenantID, deps.OfficialClusterID, deps.ClusterPeers))
 	}
 	nodes, err := deps.LB.GetTopNodesWithScores(lbctx, internalName, deps.GeoLat, deps.GeoLon, make(map[string]int), "", 5, false)
 	if (isPull || isDVR) && (err != nil || len(nodes) == 0) {
@@ -1644,19 +1647,29 @@ func isAuthorizedPeerCluster(clusterID string, peers []*clusterpeerpb.TenantClus
 // AuthoritativeClusterServable reports whether this Foghorn may serve an
 // artifact whose authoritative bytes live on authoritativeCluster, given the
 // tenant's freshly-resolved cluster-peer envelope. True when the bytes are
-// served locally by this Foghorn — its primary cluster, any cluster it also
-// serves (multi-cluster Foghorn, IsServedCluster), or an empty field
-// (intra-cluster rows carry no cross-cluster id) — else the cluster must be
-// present in the current peer set. Front doors (/play, ResolveViewerEndpoint,
+// served locally by this Foghorn and its cluster is allowed by the playback
+// policy, or when the cluster is present in the current peer set. An empty
+// legacy field resolves to this Foghorn's local cluster and is evaluated by the
+// same policy; it is not an authorization bypass. Front doors (/play, ResolveViewerEndpoint,
 // STREAM_SOURCE) gate on this before returning any viewer/relay URL, so a
 // peer-allowlist change takes effect on the next resolve — no reconciliation
 // and no per-block policy lookups.
-func AuthoritativeClusterServable(authoritativeCluster string, peers []*clusterpeerpb.TenantClusterPeer) bool {
+func AuthoritativeClusterServable(authoritativeCluster, tenantID string, peers []*clusterpeerpb.TenantClusterPeer) bool {
 	auth := strings.TrimSpace(authoritativeCluster)
-	if auth == "" || auth == GetLocalClusterID() || isServedCluster(auth) {
+	tenantID = strings.TrimSpace(tenantID)
+	if tenantID == "" {
+		return false
+	}
+	if auth == "" {
+		auth = strings.TrimSpace(GetLocalClusterID())
+	}
+	if isAuthorizedPeerCluster(auth, peers) {
 		return true
 	}
-	return isAuthorizedPeerCluster(auth, peers)
+	if auth == GetLocalClusterID() || isServedCluster(auth) {
+		return ClusterServeAccessibleForTenantEnvelope(auth, tenantID, "", peers)
+	}
+	return false
 }
 
 // PlaybackEdgeRedirectURL builds a viewer /play redirect to an edge from the

@@ -48,7 +48,9 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
 	pkgredis "github.com/Livepeer-FrameWorks/monorepo/pkg/redis"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
+	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
 	goredis "github.com/redis/go-redis/v9"
 )
@@ -298,6 +300,8 @@ func main() {
 
 	// Create load balancer instance
 	lb := balancer.NewLoadBalancer(logger)
+	lb.SetClusterAccessAuthorizer(control.ClusterAccessibleForTenant)
+	lb.SetClusterServeAuthorizer(control.ClusterServeAccessibleForScope)
 	relayReady := false
 	haRequired := config.GetEnvBool("FOGHORN_HA_REQUIRED", false)
 
@@ -819,6 +823,28 @@ func main() {
 
 	// --- Federation (cross-cluster stream routing) ---
 	federationEnabled := config.GetEnv("FEDERATION_ENABLED", "false") == "true"
+	if federationEnabled {
+		if qmClient == nil {
+			logger.Fatal("FEDERATION_ENABLED requires Quartermaster authority")
+		}
+		federationCtx, federationCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		clusterResp, clusterErr := qmClient.GetCluster(federationCtx, foghornCfg.ClusterID)
+		federationCancel()
+		if clusterErr != nil || clusterResp.GetCluster() == nil {
+			logger.WithError(clusterErr).Fatal("FEDERATION_ENABLED requires a current Quartermaster cluster descriptor")
+		}
+		cluster := clusterResp.GetCluster()
+		if !cluster.GetIsActive() || !cluster.GetIsPlatformOfficial() {
+			logger.WithFields(logging.Fields{
+				"cluster_id":           foghornCfg.ClusterID,
+				"is_active":            cluster.GetIsActive(),
+				"is_platform_official": cluster.GetIsPlatformOfficial(),
+			}).Fatal("FEDERATION_ENABLED is restricted to active platform-operated Foghorn clusters")
+		}
+		if config.GetEnvBool("GRPC_ALLOW_INSECURE", false) && !config.GetEnvBool("FEDERATION_ALLOW_INSECURE_DEV", false) {
+			logger.Fatal("FEDERATION_ENABLED requires authenticated TLS; FEDERATION_ALLOW_INSECURE_DEV is permitted only for isolated development")
+		}
+	}
 	var federationServer *federation.FederationServer
 	var peerManager *federation.PeerManager
 	var remoteEdgeCache *federation.RemoteEdgeCache
@@ -1859,47 +1885,37 @@ func main() {
 	processingDispatcher.Start()
 	defer processingDispatcher.Stop()
 
-	// Setup router with unified monitoring (health/metrics only - all API routes now gRPC)
-	router := server.SetupServiceRouter(logger, "foghorn", healthChecker, metricsCollector)
+	publicRouter, internalRouter := configureFoghornHTTPRouters(logger, healthChecker, metricsCollector)
 
-	// Nodes overview for debugging (kept as HTTP for quick inspection)
-	router.GET("/nodes/overview", handlers.HandleNodesOverview)
-	router.PUT("/nodes/:node_id/mode", handlers.HandleSetNodeMaintenanceMode)
-	router.GET("/nodes/:node_id/drain-status", handlers.HandleGetNodeDrainStatus)
+	publicConfig := server.DefaultConfig("foghorn", "18008")
+	publicConfig.BindAddr = strings.TrimSpace(os.Getenv("FOGHORN_PUBLIC_HTTP_BIND_ADDR"))
+	internalHTTPPort := strconv.Itoa(servicedefs.FoghornInternalHTTPPort)
+	internalConfig := server.DefaultConfig("foghorn-internal", internalHTTPPort)
+	internalConfig.Port = config.GetEnv("FOGHORN_INTERNAL_HTTP_PORT", internalHTTPPort)
+	internalConfig.BindAddr = config.GetEnv("FOGHORN_INTERNAL_HTTP_BIND_ADDR", "127.0.0.1")
 
-	// Root page debug interface
-	router.GET("/dashboard", handlers.HandleRootPage)
-	router.GET("/debug/cache/stream-context", handlers.HandleStreamContextCache)
-	router.GET("/debug/stream-registry", handlers.HandleStreamRegistry)
-	router.GET("/debug/served-clusters", handlers.HandleServedClusters)
+	refreshDone := make(chan struct{})
+	defer close(refreshDone)
+	go func() {
+		ticker := time.NewTicker(control.BalancerCapabilityRefreshInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if refreshed := control.RefreshLocalBalancerCapabilities(); refreshed > 0 {
+					logger.WithField("nodes", refreshed).Debug("Refreshed Mist balancer capabilities")
+				}
+			case <-refreshDone:
+				return
+			}
+		}
+	}()
 
-	// Viewer playback routes - generic player redirects via foghorn.* domain
-	router.GET("/play/*path", handlers.HandleGenericViewerPlayback)
-	router.GET("/resolve/*path", handlers.HandleGenericViewerPlayback)
-
-	// Ingest front door — the publish-side counterpart to /play. GET returns
-	// the ranked candidates as JSON; POST 307s to the chosen node's WHIP URL.
-	router.GET("/ingest/:streamKey", handlers.HandleIngestFrontDoor)
-	router.POST("/ingest/:streamKey", handlers.HandleIngestFrontDoor)
-	// Gin's param route does not match an empty segment, so "/ingest/" would
-	// otherwise fall through to NoRoute and answer 404 — a missing credential
-	// is a malformed request, not an unknown stream.
-	router.GET("/ingest/", handlers.HandleIngestFrontDoor)
-	router.POST("/ingest/", handlers.HandleIngestFrontDoor)
-
-	// Livepeer gateway auth webhook — validates incoming segments against active streams
-	router.POST("/webhooks/livepeer/auth", handlers.HandleLivepeerAuth)
-
-	// No in-cell thumbnail resolver / capability endpoint: Chandler serves thumbnails from a DETERMINISTIC static key
-	// with no cold-miss Foghorn call, so Foghorn no longer runs a per-request resolver (docs/architecture/thumbnails.md).
-
-	// MistServer Compatibility - stream key routing for Helmsman/MistServer
-	router.NoRoute(handlers.MistServerCompatibilityHandler)
-
-	// Start server with graceful shutdown
-	serverConfig := server.DefaultConfig("foghorn", "18008")
 	server.RegisterEnvFileReload("foghorn", logger)
-	if err := server.Start(serverConfig, router, logger); err != nil {
+	if err := server.StartAll([]server.Listener{
+		{Config: publicConfig, Router: publicRouter},
+		{Config: internalConfig, Router: internalRouter},
+	}, logger); err != nil {
 		logger.WithError(err).Fatal("Server startup failed")
 	}
 
@@ -2222,6 +2238,32 @@ func startStorageSnapshotScheduler(p *triggers.Processor, logger logging.Logger)
 			logger.WithError(err).Error("Failed to generate and enqueue storage snapshots")
 		}
 	}
+}
+
+func configureFoghornHTTPRouters(logger logging.Logger, healthChecker *monitoring.HealthChecker, metricsCollector *monitoring.MetricsCollector) (*gin.Engine, *gin.Engine) {
+	publicRouter := server.SetupServiceRouter(logger, "foghorn", healthChecker, metricsCollector)
+	internalRouter := server.SetupServiceRouter(logger, "foghorn-internal", healthChecker, metricsCollector)
+
+	internalRead := internalRouter.Group("", handlers.RequireInternalRead())
+	internalRead.GET("/nodes/overview", handlers.HandleNodesOverview)
+	internalRead.GET("/nodes/:node_id/drain-status", handlers.HandleGetNodeDrainStatus)
+	internalRead.GET("/dashboard", handlers.HandleRootPage)
+	internalRead.GET("/debug/cache/stream-context", handlers.HandleStreamContextCache)
+	internalRead.GET("/debug/stream-registry", handlers.HandleStreamRegistry)
+	internalRead.GET("/debug/served-clusters", handlers.HandleServedClusters)
+	internalRouter.PUT("/nodes/:node_id/mode", handlers.RequireInternalMutation(), handlers.HandleSetNodeMaintenanceMode)
+
+	publicRouter.GET("/play/*path", handlers.HandleGenericViewerPlayback)
+	publicRouter.GET("/resolve/*path", handlers.HandleGenericViewerPlayback)
+	publicRouter.GET("/ingest/:streamKey", handlers.HandleIngestFrontDoor)
+	publicRouter.POST("/ingest/:streamKey", handlers.HandleIngestFrontDoor)
+	publicRouter.GET("/ingest/", handlers.HandleIngestFrontDoor)
+	publicRouter.POST("/ingest/", handlers.HandleIngestFrontDoor)
+	publicRouter.POST("/webhooks/livepeer/auth", handlers.HandleLivepeerAuth)
+
+	publicRouter.NoRoute(handlers.AuthorizedMistServerCompatibilityHandler)
+	internalRouter.NoRoute(handlers.RequireInternalCompatibility(), handlers.MistServerCompatibilityHandler)
+	return publicRouter, internalRouter
 }
 
 // relayPoolAdapter wraps FoghornPool to satisfy control.CommandRelayPool.

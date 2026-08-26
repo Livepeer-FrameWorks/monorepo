@@ -129,6 +129,7 @@ func TestResolveChapterArtifactContent(t *testing.T) {
 // node holding the chapter MKV.
 func TestResolveArtifactPlayback_ChapterPath(t *testing.T) {
 	ctx := context.Background()
+	authorizeDeepPlaybackCluster(t)
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 	lat, lon := 52.0, 5.0
@@ -165,15 +166,15 @@ func TestResolveArtifactPlayback_ChapterPath(t *testing.T) {
 		WithArgs("chap-play").
 		WillReturnRows(playableChapterRow("chap-play", "parent-dvr", ChapterStateFinalized))
 	// resolveArtifactPlaybackWithResp: foghorn.artifacts placement lookup. Tenant
-	// = parent DVR tenant (t-chap). Empty authoritative cluster = always serveable.
+	// = parent DVR tenant (t-chap), on an authorized platform-shared cluster.
 	mock.ExpectQuery(`FROM foghorn.artifacts\s+WHERE artifact_hash = \$1 AND artifact_type = \$2`).
 		WithArgs(chapterHash32, "vod", "t-chap").
 		WillReturnRows(sqlmock.NewRows([]string{
 			"internal_name", "status", "duration_seconds", "size_bytes", "created_at",
 			"format", "storage_location", "sync_status", "has_thumbnails", "authoritative_cluster", "thumbnail_serving_cluster",
-		}).AddRow("vod+"+chapterHash32, "ready", int64(30), int64(1234), nil, "mkv", "local", "pending", false, "", ""))
+		}).AddRow("vod+"+chapterHash32, "ready", int64(30), int64(1234), nil, "mkv", "local", "pending", false, "deep-platform", ""))
 
-	resp, err := ResolveArtifactPlayback(ctx, &PlaybackDependencies{DB: mockDB, LocalClusterID: "c1", GeoLat: 52, GeoLon: 5}, "pb-chap")
+	resp, err := ResolveArtifactPlayback(ctx, &PlaybackDependencies{DB: mockDB, LocalClusterID: "deep-platform", GeoLat: 52, GeoLon: 5}, "pb-chap")
 	if err != nil {
 		t.Fatalf("chapter playback resolution failed: %v", err)
 	}
@@ -192,6 +193,7 @@ func TestResolveArtifactPlayback_ChapterPath(t *testing.T) {
 // name) — and surfaces the clip's own playback id. Pins the clip routing arm.
 func TestResolveArtifactPlayback_ClipArm(t *testing.T) {
 	ctx := context.Background()
+	authorizeDeepPlaybackCluster(t)
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 	lat, lon := 52.0, 5.0
@@ -206,7 +208,7 @@ func TestResolveArtifactPlayback_ClipArm(t *testing.T) {
 	t.Cleanup(func() { _ = mockDB.Close() })
 
 	startFakeCommodoreServer(t, &fakeCommodoreInternal{
-		artifactPlaybackID: foundArtifact("cliphash1", "clip", "tclip", ""),
+		artifactPlaybackID: foundArtifact("cliphash1", "clip", "tclip", "deep-platform"),
 		clipHash: func(_ context.Context, _ *commodorepb.ResolveClipHashRequest) (*commodorepb.ResolveClipHashResponse, error) {
 			return &commodorepb.ResolveClipHashResponse{
 				Found: true, TenantId: "tclip", StreamId: "src-stream",
@@ -221,9 +223,9 @@ func TestResolveArtifactPlayback_ClipArm(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{
 			"internal_name", "status", "duration_seconds", "size_bytes", "created_at",
 			"format", "storage_location", "sync_status", "has_thumbnails", "authoritative_cluster", "thumbnail_serving_cluster",
-		}).AddRow("live+source", "ready", int64(8), int64(2048), nil, "mp4", "local", "synced", false, "", ""))
+		}).AddRow("live+source", "ready", int64(8), int64(2048), nil, "mp4", "local", "synced", false, "deep-platform", ""))
 
-	resp, err := ResolveArtifactPlayback(ctx, &PlaybackDependencies{DB: mockDB, LocalClusterID: "c1", GeoLat: 52, GeoLon: 5}, "clip-pb")
+	resp, err := ResolveArtifactPlayback(ctx, &PlaybackDependencies{DB: mockDB, LocalClusterID: "deep-platform", GeoLat: 52, GeoLon: 5}, "clip-pb")
 	if err != nil {
 		t.Fatalf("clip resolution failed: %v", err)
 	}
@@ -248,6 +250,7 @@ func TestResolveArtifactPlayback_ClipArm(t *testing.T) {
 // and carries DvrStatus. Pins the live-vs-finished DVR distinction.
 func TestResolveArtifactPlayback_DvrArmIsLive(t *testing.T) {
 	ctx := context.Background()
+	authorizeDeepPlaybackCluster(t)
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 	lat, lon := 52.0, 5.0
@@ -262,7 +265,7 @@ func TestResolveArtifactPlayback_DvrArmIsLive(t *testing.T) {
 	t.Cleanup(func() { _ = mockDB.Close() })
 
 	startFakeCommodoreServer(t, &fakeCommodoreInternal{
-		artifactPlaybackID: foundArtifact("dvrhash1", "dvr", "tdvr", ""),
+		artifactPlaybackID: foundArtifact("dvrhash1", "dvr", "tdvr", "deep-platform"),
 		dvrHash: func(_ context.Context, _ *commodorepb.ResolveDVRHashRequest) (*commodorepb.ResolveDVRHashResponse, error) {
 			return &commodorepb.ResolveDVRHashResponse{
 				Found: true, TenantId: "tdvr", StreamId: "dvr-stream", PlaybackId: "dvr-pb",
@@ -275,9 +278,9 @@ func TestResolveArtifactPlayback_DvrArmIsLive(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{
 			"internal_name", "status", "duration_seconds", "size_bytes", "created_at",
 			"format", "storage_location", "sync_status", "has_thumbnails", "authoritative_cluster", "thumbnail_serving_cluster",
-		}).AddRow("dvr+x", "recording", int64(0), int64(0), nil, "mp4", "local", "synced", false, "", ""))
+		}).AddRow("dvr+x", "recording", int64(0), int64(0), nil, "mp4", "local", "synced", false, "deep-platform", ""))
 
-	resp, err := ResolveArtifactPlayback(ctx, &PlaybackDependencies{DB: mockDB, LocalClusterID: "c1", GeoLat: 52, GeoLon: 5}, "dvr-pb")
+	resp, err := ResolveArtifactPlayback(ctx, &PlaybackDependencies{DB: mockDB, LocalClusterID: "deep-platform", GeoLat: 52, GeoLon: 5}, "dvr-pb")
 	if err != nil {
 		t.Fatalf("dvr resolution failed: %v", err)
 	}
@@ -292,6 +295,14 @@ func TestResolveArtifactPlayback_DvrArmIsLive(t *testing.T) {
 	if md.GetDvrStatus() != "recording" {
 		t.Fatalf("dvr status must be surfaced, got %q", md.GetDvrStatus())
 	}
+}
+
+func authorizeDeepPlaybackCluster(t *testing.T) {
+	t.Helper()
+	previous := GetLocalClusterID()
+	SetLocalClusterID("deep-platform")
+	AddPlatformSharedCluster("deep-platform")
+	t.Cleanup(func() { SetLocalClusterID(previous) })
 }
 
 // chapterFound returns a ResolveChapterPlaybackID fake that resolves any input to

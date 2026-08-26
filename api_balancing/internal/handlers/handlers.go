@@ -344,6 +344,47 @@ func MistServerCompatibilityHandler(c *gin.Context) {
 	handleStreamBalancing(c, streamName)
 }
 
+// AuthorizedMistServerCompatibilityHandler is the public Mist compatibility
+// surface. It accepts only node-bound source/balancing capabilities and never
+// exposes the legacy weights mutation, even to a valid edge capability.
+func AuthorizedMistServerCompatibilityHandler(c *gin.Context) {
+	if c.Query("weights") != "" {
+		c.String(http.StatusForbidden, "weights mutation is internal")
+		return
+	}
+	nodeID, compatibilityPath, ok := control.VerifyBalancerCapabilityPath(c.Request.URL.EscapedPath(), time.Now())
+	if !ok {
+		c.String(http.StatusUnauthorized, "invalid or expired balancer capability")
+		return
+	}
+	// The capability authenticates the node/cluster, while this public route
+	// grants exactly one operation: source lookup for that same node. Root
+	// diagnostics and arbitrary stream balancing stay on the internal listener.
+	if !strings.HasPrefix(compatibilityPath, sourceByNodePathPrefix) {
+		c.String(http.StatusForbidden, "balancer capability permits source lookup only")
+		return
+	}
+	rest := strings.TrimPrefix(compatibilityPath, sourceByNodePathPrefix)
+	if strings.Contains(rest, "/") {
+		c.String(http.StatusForbidden, "balancer capability permits source lookup only")
+		return
+	}
+	pathNodeID, err := url.PathUnescape(rest)
+	if err != nil || strings.TrimSpace(pathNodeID) != nodeID {
+		c.String(http.StatusUnauthorized, "balancer capability node mismatch")
+		return
+	}
+	decodedPath, err := url.PathUnescape(compatibilityPath)
+	if err != nil {
+		c.String(http.StatusUnauthorized, "invalid balancer capability path")
+		return
+	}
+	c.Request.URL.Path = decodedPath
+	c.Request.URL.RawPath = compatibilityPath
+	c.Set("foghorn_authenticated_node_id", nodeID)
+	MistServerCompatibilityHandler(c)
+}
+
 // HandleNodesOverview receives a request for an overview of all nodes with capabilities, limits, and artifacts.
 // When ?full=true is passed, includes full Foghorn state: DB artifacts, processing jobs, and stream instances.
 func HandleNodesOverview(c *gin.Context) {
@@ -666,8 +707,7 @@ func HandleNodesOverview(c *gin.Context) {
 }
 
 type nodeOperationalModeRequest struct {
-	Mode  string `json:"mode"`
-	SetBy string `json:"set_by"`
+	Mode string `json:"mode"`
 }
 
 // StateToProtoMode converts internal state mode to protobuf enum
@@ -696,7 +736,11 @@ func HandleSetNodeMaintenanceMode(c *gin.Context) {
 	}
 
 	mode := state.NodeOperationalMode(strings.ToLower(strings.TrimSpace(req.Mode)))
-	if err := state.DefaultManager().SetNodeOperationalMode(c.Request.Context(), nodeID, mode, strings.TrimSpace(req.SetBy)); err != nil {
+	setBy := strings.TrimSpace(ctxkeys.GetUserID(c.Request.Context()))
+	if setBy == "" {
+		setBy = "platform_operator"
+	}
+	if err := state.DefaultManager().SetNodeOperationalMode(c.Request.Context(), nodeID, mode, setBy); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -956,7 +1000,7 @@ func resolveRemoteSourceCandidate(ctx context.Context, streamName string, lat, l
 			clusterPeers = resp.GetClusterPeers()
 		}
 	}
-	if !control.AuthoritativeClusterServable(originClusterID, clusterPeers) {
+	if !control.AuthoritativeClusterServable(originClusterID, tenantID, clusterPeers) {
 		logger.WithFields(logging.Fields{
 			"stream":         streamName,
 			"origin_cluster": originClusterID,
@@ -1161,6 +1205,11 @@ func handleGetPullSource(c *gin.Context, streamName string, lat, lon float64, ta
 const sourceByNodePathPrefix = "/source/by-node/"
 
 func sourceCallerNodeID(c *gin.Context, query url.Values, clientIP string) string {
+	if value, ok := c.Get("foghorn_authenticated_node_id"); ok {
+		if nodeID, ok := value.(string); ok && strings.TrimSpace(nodeID) != "" {
+			return strings.TrimSpace(nodeID)
+		}
+	}
 	path := strings.TrimSpace(c.Request.URL.Path)
 	if strings.HasPrefix(path, sourceByNodePathPrefix) {
 		rest := strings.TrimPrefix(path, sourceByNodePathPrefix)
@@ -1575,7 +1624,7 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 		ctx = context.WithValue(ctx, ctxkeys.KeyCapability, requireCap)
 	}
 	if target.TenantID != "" {
-		ctx = context.WithValue(ctx, ctxkeys.KeyClusterScope, target.TenantID)
+		ctx = context.WithValue(ctx, ctxkeys.KeyClusterServeScope, control.NewClusterServeScope(target.TenantID, "", target.ClusterPeers))
 	}
 	// Viewer selection -> isSourceSelection=false (allow replicated)
 	bestNode, score, nodeLat, nodeLon, nodeName, err = lb.GetBestNodeWithScore(ctx, internalName, lat, lon, tagAdjust, "", false)
@@ -2030,6 +2079,7 @@ func resolveLiveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpoint
 		GeoLat:         lat,
 		GeoLon:         lon,
 		LocalClusterID: clusterID,
+		ClusterPeers:   clusterPeers,
 	}
 
 	if internalName == "" {
@@ -2073,6 +2123,7 @@ func resolveLiveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpoint
 	if !skipRemote && len(deps.RemoteEdges) == 0 && len(allPeers) > 0 {
 		deps.RemoteEdges = queryStreamFanOutShared(ctx, internalName, streamTenantID, lat, lon, allPeers)
 	}
+	deps.ClusterPeers = allPeers
 
 	response, err := control.ResolveLivePlayback(ctx, deps, req.ContentId, internalName, streamID, streamTenantID, activeIngestClusterID)
 	if err != nil {

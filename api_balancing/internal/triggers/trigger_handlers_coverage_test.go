@@ -9,6 +9,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
@@ -20,7 +21,9 @@ import (
 // and every reference is guarded.
 func minimalProcessorTrigHandlers(t *testing.T) *Processor {
 	t.Helper()
-	return NewProcessor(logging.NewLogger(), nil, nil, nil, nil)
+	p := NewProcessor(logging.NewLogger(), nil, nil, nil, nil)
+	p.viewerClusterAccess = func(_, _, _ string, _ []*clusterpeerpb.TenantClusterPeer) bool { return true }
+	return p
 }
 
 // installRegistryTrigHandlers swaps a fresh StreamRegistry into the package
@@ -429,8 +432,9 @@ func TestHandleUserNew_TenantViewerCapRejects(t *testing.T) {
 	state.DefaultTenantCapacity().RegisterViewer(tenantID, "existing-viewer")
 
 	resp, abort, err := p.handleUserNew(&ipcpb.MistTrigger{
-		NodeId:   "node-cap",
-		TenantId: ptrTrigHandlers(tenantID),
+		NodeId:    "node-cap",
+		ClusterId: ptrTrigHandlers("test-cluster"),
+		TenantId:  ptrTrigHandlers(tenantID),
 		TriggerPayload: &ipcpb.MistTrigger_ViewerConnect{
 			ViewerConnect: &ipcpb.ViewerConnectTrigger{
 				StreamName: "live+" + internal,
@@ -468,8 +472,9 @@ func TestHandleUserNew_AdmittedViewerRegistersUnderCap(t *testing.T) {
 
 	before := state.DefaultTenantCapacity().CountViewers(tenantID)
 	resp, abort, err := p.handleUserNew(&ipcpb.MistTrigger{
-		NodeId:   "node-admit",
-		TenantId: ptrTrigHandlers(tenantID),
+		NodeId:    "node-admit",
+		ClusterId: ptrTrigHandlers("test-cluster"),
+		TenantId:  ptrTrigHandlers(tenantID),
 		TriggerPayload: &ipcpb.MistTrigger_ViewerConnect{
 			ViewerConnect: &ipcpb.ViewerConnectTrigger{
 				StreamName: "live+" + internal,
@@ -487,5 +492,72 @@ func TestHandleUserNew_AdmittedViewerRegistersUnderCap(t *testing.T) {
 	}
 	if after := state.DefaultTenantCapacity().CountViewers(tenantID); after != before+1 {
 		t.Errorf("admitted viewer must be registered against the cap: count %d -> %d", before, after)
+	}
+}
+
+func TestHandleUserNew_UnentitledServingClusterHasNoViewerSideEffect(t *testing.T) {
+	resetStateTrigHandlers(t)
+	p := minimalProcessorTrigHandlers(t)
+	p.viewerClusterAccess = func(clusterID, tenantID, _ string, _ []*clusterpeerpb.TenantClusterPeer) bool {
+		return clusterID == "cluster-entitled" && tenantID == "tenant-viewer"
+	}
+
+	const internal = "cluster-gated-stream"
+	const tenantID = "tenant-viewer"
+	p.streamCache.Set(tenantID+":"+internal, streamContext{
+		TenantID:          tenantID,
+		MaxViewers:        5,
+		RequiresAuthKnown: true,
+	}, time.Minute)
+
+	resp, abort, err := p.handleUserNew(&ipcpb.MistTrigger{
+		NodeId:    "node-wrong-cluster",
+		ClusterId: ptrTrigHandlers("cluster-unentitled"),
+		TenantId:  ptrTrigHandlers(tenantID),
+		TriggerPayload: &ipcpb.MistTrigger_ViewerConnect{ViewerConnect: &ipcpb.ViewerConnectTrigger{
+			StreamName: "live+" + internal,
+			Connector:  "HLS",
+			RequestUrl: "https://edge.example/hls/" + internal + "/index.m3u8",
+			SessionId:  "denied-session",
+		}},
+	})
+	if err != nil || abort || resp != "false" {
+		t.Fatalf("unentitled viewer got response=%q abort=%v err=%v", resp, abort, err)
+	}
+	if got := state.DefaultTenantCapacity().CountViewers(tenantID); got != 0 {
+		t.Fatalf("denied viewer mutated tenant capacity: %d", got)
+	}
+}
+
+func TestHandleUserNew_UsesResolvedEnvelopeWithoutCrossInstancePrewarm(t *testing.T) {
+	resetStateTrigHandlers(t)
+	p := minimalProcessorTrigHandlers(t)
+	p.viewerClusterAccess = control.ClusterServeAccessibleForTenantEnvelope
+
+	const (
+		internal = "ha-envelope-stream"
+		tenantID = "tenant-ha"
+	)
+	p.streamCache.Set(tenantID+":"+internal, streamContext{
+		TenantID:          tenantID,
+		RequiresAuthKnown: true,
+		ClusterPeers: []*clusterpeerpb.TenantClusterPeer{{
+			ClusterId: "private-edge",
+		}},
+	}, time.Minute)
+
+	resp, abort, err := p.handleUserNew(&ipcpb.MistTrigger{
+		NodeId:    "node-on-second-foghorn",
+		ClusterId: ptrTrigHandlers("private-edge"),
+		TenantId:  ptrTrigHandlers(tenantID),
+		TriggerPayload: &ipcpb.MistTrigger_ViewerConnect{ViewerConnect: &ipcpb.ViewerConnectTrigger{
+			StreamName: "live+" + internal,
+			Connector:  "HLS",
+			RequestUrl: "https://edge.example/hls/" + internal + "/index.m3u8",
+			SessionId:  "ha-session",
+		}},
+	})
+	if err != nil || abort || resp != "true" {
+		t.Fatalf("authoritative peer envelope got response=%q abort=%v err=%v", resp, abort, err)
 	}
 }

@@ -181,3 +181,64 @@ func TestMigrateArtifactMetadata_RequiresServiceAuth(t *testing.T) {
 		t.Fatalf("expected permission denied for non-service auth, got %v", err)
 	}
 }
+
+func TestFederationUnaryMethodPolicyComplete(t *testing.T) {
+	srv := NewFederationServer(FederationServerConfig{Logger: newFederationTestLogger(), ClusterID: "cluster-a", AllowFederationMutations: true})
+	tests := map[string]func(context.Context) error{
+		"QueryStream": func(ctx context.Context) error {
+			_, err := srv.QueryStream(ctx, &foghornfederationpb.QueryStreamRequest{})
+			return err
+		},
+		"NotifyOriginPull": func(ctx context.Context) error {
+			_, err := srv.NotifyOriginPull(ctx, &foghornfederationpb.OriginPullNotification{})
+			return err
+		},
+		"PrepareArtifact": func(ctx context.Context) error {
+			_, err := srv.PrepareArtifact(ctx, &foghornfederationpb.PrepareArtifactRequest{})
+			return err
+		},
+		"CreateRemoteClip": func(ctx context.Context) error {
+			_, err := srv.CreateRemoteClip(ctx, &foghornfederationpb.RemoteClipRequest{})
+			return err
+		},
+		"CreateRemoteDVR": func(ctx context.Context) error {
+			_, err := srv.CreateRemoteDVR(ctx, &foghornfederationpb.RemoteDVRRequest{})
+			return err
+		},
+		"ListTenantArtifacts": func(ctx context.Context) error {
+			_, err := srv.ListTenantArtifacts(ctx, &foghornfederationpb.ListTenantArtifactsRequest{})
+			return err
+		},
+		"MigrateArtifactMetadata": func(ctx context.Context) error {
+			_, err := srv.MigrateArtifactMetadata(ctx, &foghornfederationpb.MigrateArtifactMetadataRequest{})
+			return err
+		},
+		"ForwardArtifactCommand": func(ctx context.Context) error {
+			_, err := srv.ForwardArtifactCommand(ctx, &foghornfederationpb.ForwardArtifactCommandRequest{})
+			return err
+		},
+		"MintStorageURLs": func(ctx context.Context) error {
+			_, err := srv.MintStorageURLs(ctx, &foghornfederationpb.MintStorageURLsRequest{})
+			return err
+		},
+		"DeleteStorageObjects": func(ctx context.Context) error {
+			_, err := srv.DeleteStorageObjects(ctx, &foghornfederationpb.DeleteStorageObjectsRequest{})
+			return err
+		},
+	}
+	for _, method := range foghornfederationpb.FoghornFederation_ServiceDesc.Methods {
+		if _, ok := tests[method.MethodName]; !ok {
+			t.Fatalf("unary method %q is missing from the authentication policy test", method.MethodName)
+		}
+	}
+	if len(tests) != len(foghornfederationpb.FoghornFederation_ServiceDesc.Methods) {
+		t.Fatalf("authentication policy table has %d entries for %d unary methods", len(tests), len(foghornfederationpb.FoghornFederation_ServiceDesc.Methods))
+	}
+	for name, invoke := range tests {
+		t.Run(name, func(t *testing.T) {
+			if code := status.Code(invoke(context.Background())); code != codes.PermissionDenied {
+				t.Fatalf("unauthenticated method returned %s, want PermissionDenied", code)
+			}
+		})
+	}
+}

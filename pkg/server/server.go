@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -102,6 +103,14 @@ type Config struct {
 	TLSKeyFile   string
 }
 
+// Listener pairs one HTTP listener configuration with its router. StartAll
+// gives services with distinct public and internal surfaces one shutdown and
+// signal lifecycle without merging their route tables.
+type Listener struct {
+	Config Config
+	Router http.Handler
+}
+
 type trailingSlashFallbackKey struct{}
 
 // HandleOptionalTrailingSlash registers a route for both slash spellings.
@@ -125,59 +134,84 @@ func DefaultConfig(serviceName, defaultPort string) Config {
 
 // Start starts the HTTP server with graceful shutdown
 func Start(cfg Config, router *gin.Engine, logger logging.Logger) error {
-	srv := &http.Server{
-		Addr:         cfg.BindAddr + ":" + cfg.Port,
-		Handler:      router,
-		ReadTimeout:  cfg.ReadTimeout,
-		WriteTimeout: cfg.WriteTimeout,
-		IdleTimeout:  cfg.IdleTimeout,
+	return StartAll([]Listener{{Config: cfg, Router: router}}, logger)
+}
+
+// StartAll starts multiple independently routed HTTP listeners and shuts them
+// down together. A bind/TLS failure on any listener stops the whole service.
+func StartAll(listeners []Listener, logger logging.Logger) error {
+	if len(listeners) == 0 {
+		return fmt.Errorf("at least one HTTP listener is required")
 	}
-
-	// Start server in a goroutine
-	go func() {
-		logger.WithFields(logging.Fields{
-			"port":    cfg.Port,
-			"service": cfg.ServiceName,
-		}).Info("Starting HTTP server")
-
-		var err error
+	servers := make([]*http.Server, 0, len(listeners))
+	for _, listener := range listeners {
+		cfg := listener.Config
+		if listener.Router == nil {
+			return fmt.Errorf("HTTP listener %q has no router", cfg.ServiceName)
+		}
 		if cfg.TLSCertFile != "" || cfg.TLSKeyFile != "" {
 			if cfg.TLSCertFile == "" || cfg.TLSKeyFile == "" {
-				logger.Fatal("HTTP TLS requires both certificate and key files")
+				return fmt.Errorf("HTTP listener %q requires both certificate and key files", cfg.ServiceName)
 			}
-			err = srv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
-		} else {
-			err = srv.ListenAndServe()
 		}
-		if err != nil && err != http.ErrServerClosed {
-			logger.WithError(err).Fatal("Failed to start server")
-		}
-	}()
+		servers = append(servers, &http.Server{
+			Addr: cfg.BindAddr + ":" + cfg.Port, Handler: listener.Router,
+			ReadTimeout: cfg.ReadTimeout, WriteTimeout: cfg.WriteTimeout, IdleTimeout: cfg.IdleTimeout,
+		})
+	}
+
+	errCh := make(chan error, len(servers))
+	for i, srv := range servers {
+		cfg := listeners[i].Config
+		go func() {
+			logger.WithFields(logging.Fields{"address": srv.Addr, "service": cfg.ServiceName}).Info("Starting HTTP server")
+			var err error
+			if cfg.TLSCertFile != "" {
+				err = srv.ListenAndServeTLS(cfg.TLSCertFile, cfg.TLSKeyFile)
+			} else {
+				err = srv.ListenAndServe()
+			}
+			if err != nil && !errors.Is(err, http.ErrServerClosed) {
+				errCh <- fmt.Errorf("HTTP listener %s (%s): %w", cfg.ServiceName, srv.Addr, err)
+			}
+		}()
+	}
 
 	// Reload listener — SIGHUP fires every registered ReloadCallback.
 	// Installing the listener also neuters Go's default-terminate
 	// disposition for SIGHUP: with no callbacks registered, the signal
 	// is silently consumed and the process keeps running.
-	stopReload := startReloadListener(logger, cfg.ServiceName)
+	stopReload := startReloadListener(logger, listeners[0].Config.ServiceName)
 	defer stopReload()
 
-	// Wait for interrupt signal
+	// Wait for interrupt signal or a listener failure.
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+	var serveErr error
+	select {
+	case <-quit:
+	case serveErr = <-errCh:
+	}
+	signal.Stop(quit)
 
-	logger.WithField("service", cfg.ServiceName).Info("Shutting down server...")
+	logger.Info("Shutting down HTTP listeners...")
 
 	// Graceful shutdown with timeout
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
 
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		return fmt.Errorf("server forced to shutdown: %w", err)
+	shutdownErrs := make([]error, 0, len(servers)+1)
+	if serveErr != nil {
+		shutdownErrs = append(shutdownErrs, serveErr)
+	}
+	for _, srv := range servers {
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			shutdownErrs = append(shutdownErrs, fmt.Errorf("shutdown %s: %w", srv.Addr, err))
+		}
 	}
 
-	logger.WithField("service", cfg.ServiceName).Info("Server stopped")
-	return nil
+	logger.Info("HTTP listeners stopped")
+	return errors.Join(shutdownErrs...)
 }
 
 // SetupServiceRouter creates a fully configured router with monitoring

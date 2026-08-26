@@ -27,22 +27,24 @@ func TestPlaybackEdgeRedirectURL(t *testing.T) {
 }
 
 // AuthoritativeClusterServable decides whether THIS foghorn may serve an
-// artifact whose authoritative cluster is X: yes if empty/local/served, or if X
-// is an authorized tenant peer; otherwise no (cross-cluster reauth at the front
-// door).
+// artifact whose authoritative cluster is X. Unresolved tenant/cluster context
+// fails closed; a current peer entry authorizes a foreign cluster.
 func TestAuthoritativeClusterServable(t *testing.T) {
-	// Empty authoritative cluster is always serveable.
-	if !AuthoritativeClusterServable("", nil) {
-		t.Fatal("empty authoritative cluster should be serveable")
+	freshClusterAccessCache(t)
+	if AuthoritativeClusterServable("", "", nil) {
+		t.Fatal("unresolved tenant/cluster context must fail closed")
 	}
 	// A foreign cluster with no peer authorization is NOT serveable.
-	if AuthoritativeClusterServable("remote-x", nil) {
+	if AuthoritativeClusterServable("remote-x", "tenant-a", nil) {
 		t.Fatal("unauthorized foreign cluster must not be serveable")
 	}
 	// Same foreign cluster, now listed as an authorized peer → serveable.
 	peers := []*clusterpeerpb.TenantClusterPeer{{ClusterId: "remote-x"}}
-	if !AuthoritativeClusterServable("remote-x", peers) {
+	if !AuthoritativeClusterServable("remote-x", "tenant-a", peers) {
 		t.Fatal("authorized peer cluster should be serveable")
+	}
+	if _, ok := clusterAccessCache.Peek("access:tenant-a"); ok {
+		t.Fatal("front-door authorization must not mutate process-local USER_NEW state")
 	}
 }
 

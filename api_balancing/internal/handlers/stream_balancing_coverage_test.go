@@ -38,7 +38,10 @@ import (
 // triggerProcessor/remoteEdgeCache stay nil and are nil-guarded in the code.
 func balancingTestEnv(t *testing.T) *state.StreamStateManager {
 	t.Helper()
+	control.SetLocalClusterID("test-platform-cluster")
+	control.AddPlatformSharedCluster("test-platform-cluster")
 	sm := withSeededBalancer(t)
+	lb.SetClusterServeAuthorizer(control.ClusterServeAccessibleForScope)
 	// The async postBalancingEvent goroutine dereferences the package-global
 	// `logger` and can outlive the test, so set it process-wide (do NOT restore
 	// to nil on cleanup — a late goroutine would then panic).
@@ -59,6 +62,7 @@ func seedOriginEdge(t *testing.T, sm *state.StreamStateManager, nodeID, host, in
 		nodeID: nodeID, host: host, active: true,
 		ramMax: 100, ramCur: 10,
 	}, internalName, 1, 0, 0)
+	sm.SetNodeConnectionInfo(context.Background(), nodeID, host, "", "test-platform-cluster", nil)
 }
 
 // ginCtxFor builds a gin context whose request carries the given raw query so

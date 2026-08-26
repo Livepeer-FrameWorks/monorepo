@@ -389,7 +389,8 @@ func applyArtifactPlacement(ctx context.Context, artifactHash string, target *St
 	// KeyClusterScope gate. So every candidate MUST be entitlement-filtered here against target.TenantID, or a node in a
 	// cluster not entitled to this tenant (e.g. a third-party edge advertising storage, or holding an artifact copy)
 	// could capture and blackhole/redirect the tenant's playback routing. Capability/holdership stay scheduler input;
-	// ClusterAccessibleForTenant is the authorization gate. An empty/unresolved tenant fails the predicate closed, so no
+	// ClusterServeAccessibleForTenant is the serve-scoped authorization gate because this path selects only playback
+	// readers, never processing or durable writers. An empty/unresolved tenant fails the predicate closed, so no
 	// FixedNode is set and the request falls through to the normal balancer.
 	tenantID := target.TenantID
 
@@ -398,7 +399,7 @@ func applyArtifactPlacement(ctx context.Context, artifactHash string, target *St
 		var best state.ArtifactNodeInfo
 		found := false
 		for _, n := range nodes {
-			if !ClusterAccessibleForTenant(n.ClusterID, tenantID) {
+			if !ClusterServeAccessibleForTenant(n.ClusterID, tenantID) {
 				continue // holder's cluster is not entitled to this tenant's media
 			}
 			if !found || n.Score > best.Score {
@@ -422,7 +423,7 @@ func applyArtifactPlacement(ctx context.Context, artifactHash string, target *St
 			}
 			if loadBalancerInstance != nil {
 				for _, node := range loadBalancerInstance.GetNodes() {
-					if node.CapStorage && node.IsHealthy && ClusterAccessibleForTenant(node.ClusterID, tenantID) {
+					if node.CapStorage && node.IsHealthy && ClusterServeAccessibleForTenant(node.ClusterID, tenantID) {
 						target.FixedNodeID = node.NodeID
 						if baseURL, err := loadBalancerInstance.GetNodeByID(node.NodeID); err == nil {
 							target.FixedNode = baseURL

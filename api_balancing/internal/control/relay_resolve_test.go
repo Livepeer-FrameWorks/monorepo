@@ -14,7 +14,7 @@ import (
 )
 
 // nodeMayServeTenant authorizes serving by the AUTHENTICATED node's cluster ↔ tenant entitlement
-// (ClusterAccessibleForTenant): a platform-shared edge serves any tenant; a dedicated cluster serves only the
+// (ClusterServeAccessibleForTenant): a platform-shared edge serves any resolved tenant; a dedicated cluster serves only the
 // tenants Quartermaster entitles it to (its owner + granted peers). node.TenantID is no longer the authority;
 // an empty/unentitled/unresolved cluster fails closed.
 func TestNodeMayServeTenant_AuthorityModel(t *testing.T) {

@@ -46,6 +46,8 @@ func seedLiveEdgeNode(t *testing.T, sm *state.StreamStateManager, nodeID, baseUR
 	})
 	sm.TouchNode(nodeID, true)
 	sm.SetProbeVerified(nodeID, true)
+	AddPlatformSharedCluster("test-platform-live")
+	sm.SetNodeConnectionInfo(context.Background(), nodeID, baseURL, "", "test-platform-live", nil)
 }
 
 // markLiveStreamPresent registers the stream as active with inputs on the node,
@@ -66,8 +68,10 @@ func liveHLSOutputs() map[string]any {
 }
 
 func newLiveDeps(sm *state.StreamStateManager, lat, lon float64) *PlaybackDependencies {
+	lb := balancer.NewLoadBalancer(logging.NewLogger())
+	lb.SetClusterServeAuthorizer(ClusterServeAccessibleForScope)
 	return &PlaybackDependencies{
-		LB:     balancer.NewLoadBalancer(logging.NewLogger()),
+		LB:     lb,
 		GeoLat: lat,
 		GeoLon: lon,
 	}
@@ -129,12 +133,13 @@ func TestResolveLivePlayback_TenantIsolation(t *testing.T) {
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
 	seedLiveEdgeNode(t, sm, "edge-tenantX-1", "https://edgex.example.com", 52.0, 5.0, liveHLSOutputs())
-	// Pin the node's ownership to tenant-X so the cluster-scope filter excludes
-	// it for any other tenant.
-	sm.SetNodeConnectionInfo(context.Background(), "edge-tenantX-1", "edgex.example.com", "tenant-X", "", nil)
+	// Bind the node to a tenant-private cluster. Playback authority comes from
+	// the resolved peer envelope, not the node's mutable tenant label.
+	sm.SetNodeConnectionInfo(context.Background(), "edge-tenantX-1", "edgex.example.com", "tenant-X", "private-x", nil)
 	markLiveStreamPresent(sm, "s", "edge-tenantX-1", "tenant-X")
 
 	deps := newLiveDeps(sm, 52.0, 5.0)
+	deps.ClusterPeers = []*clusterpeerpb.TenantClusterPeer{{ClusterId: "private-x"}}
 
 	// Same tenant resolves fine (sanity: the node IS otherwise eligible).
 	if _, err := ResolveLivePlayback(context.Background(), deps, "vk", "live+s", "stream-1", "tenant-X", ""); err != nil {
@@ -142,6 +147,7 @@ func TestResolveLivePlayback_TenantIsolation(t *testing.T) {
 	}
 
 	// Foreign tenant must not be routed to tenant-X's node.
+	deps.ClusterPeers = nil
 	if _, err := ResolveLivePlayback(context.Background(), deps, "vk", "live+s", "stream-1", "tenant-Y", ""); err == nil {
 		t.Fatal("a foreign tenant must not be offered another tenant's edge node")
 	}
@@ -298,34 +304,38 @@ func TestResolveLivePlayback_EnrichesFromStreamState(t *testing.T) {
 // the front-door authority decision that the pure-helper test only covers for
 // the empty/peer cases. The artifact's authoritative byte-cluster is serveable
 // when it is THIS foghorn's local cluster or any additional cluster this
-// foghorn serves (multi-cluster foghorn), with no tenant peer entry required.
+// foghorn serves (multi-cluster foghorn), when the resolved envelope identifies
+// the former as platform-shared and the latter as an authorized tenant peer.
 func TestAuthoritativeClusterServable_LocalAndServedBranches(t *testing.T) {
 	prevLocal := localClusterID
 	prevServed := servedClusters.Load()
+	prevShared := platformSharedConfig.Load()
 	t.Cleanup(func() {
 		localClusterID = prevLocal
 		servedClusters.Store(prevServed)
+		platformSharedConfig.Store(prevShared)
 	})
 	servedClusters.Store(&sync.Map{})
+	platformSharedConfig.Store(&sync.Map{})
 	SetLocalClusterID("media-central-primary")
+	AddPlatformSharedCluster("media-central-primary")
 	AddServedCluster("media-edge-secondary")
 
-	// Local cluster id is always serveable, even with an empty peer set.
-	if !AuthoritativeClusterServable("media-central-primary", nil) {
-		t.Fatal("local cluster must be serveable without any peer entry")
+	if !AuthoritativeClusterServable("media-central-primary", "tenant-a", nil) {
+		t.Fatal("platform-shared local cluster must be serveable")
 	}
-	// An additionally-served cluster is serveable without a peer entry.
-	if !AuthoritativeClusterServable("media-edge-secondary", nil) {
-		t.Fatal("served cluster must be serveable without any peer entry")
+	servedPeers := []*clusterpeerpb.TenantClusterPeer{{ClusterId: "media-edge-secondary"}}
+	if !AuthoritativeClusterServable("media-edge-secondary", "tenant-a", servedPeers) {
+		t.Fatal("authorized served cluster must be serveable")
 	}
 	// A cluster that is neither local, served, nor a peer must be refused.
-	if AuthoritativeClusterServable("foreign-cluster", nil) {
+	if AuthoritativeClusterServable("foreign-cluster", "tenant-a", nil) {
 		t.Fatal("unserved foreign cluster must be refused")
 	}
 	// ...but the same foreign cluster becomes serveable once it is an
 	// authorized tenant peer.
 	peers := []*clusterpeerpb.TenantClusterPeer{{ClusterId: "foreign-cluster"}}
-	if !AuthoritativeClusterServable("foreign-cluster", peers) {
+	if !AuthoritativeClusterServable("foreign-cluster", "tenant-a", peers) {
 		t.Fatal("foreign cluster authorized as a tenant peer must be serveable")
 	}
 }

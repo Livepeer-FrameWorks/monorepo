@@ -178,6 +178,10 @@ func TestGetTopNodesWithScores_ClusterScope(t *testing.T) {
 	sm.SetNodeConnectionInfo(context.Background(), "node-a2", "", "tenantA", "cluster-ap", nil)
 
 	lb := NewLoadBalancer(logging.NewLoggerWithService("test"))
+	lb.SetClusterAccessAuthorizer(func(clusterID, tenantID string) bool {
+		return (tenantID == "tenantA" && (clusterID == "cluster-eu" || clusterID == "cluster-ap")) ||
+			(tenantID == "tenantB" && clusterID == "cluster-us")
+	})
 
 	t.Run("no scope returns all nodes", func(t *testing.T) {
 		nodes, err := lb.GetTopNodesWithScores(context.Background(), "", 0, 0, nil, "", 10, false)
@@ -195,9 +199,8 @@ func TestGetTopNodesWithScores_ClusterScope(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		// node-a (tenantA), node-a2 (tenantA), node-shared (no tenant)
-		if len(nodes) != 3 {
-			t.Fatalf("expected 3 nodes for tenantA scope, got %d", len(nodes))
+		if len(nodes) != 2 {
+			t.Fatalf("expected 2 nodes for tenantA scope, got %d", len(nodes))
 		}
 		ids := map[string]bool{}
 		for _, n := range nodes {
@@ -214,9 +217,8 @@ func TestGetTopNodesWithScores_ClusterScope(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		// node-b (tenantB), node-shared (no tenant)
-		if len(nodes) != 2 {
-			t.Fatalf("expected 2 nodes for tenantB scope, got %d", len(nodes))
+		if len(nodes) != 1 {
+			t.Fatalf("expected 1 node for tenantB scope, got %d", len(nodes))
 		}
 		ids := map[string]bool{}
 		for _, n := range nodes {
@@ -257,6 +259,80 @@ func TestGetTopNodesWithScores_ClusterScope(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestGetTopNodesWithScores_ScopedSelectionFailsClosedWithoutAuthorizer(t *testing.T) {
+	sm := setupTestManager(t)
+	sm.SetWeights(0, 0, 1000, 0, 0)
+	addTestNode(t, sm, "node", "node", 0, 0, true)
+	sm.SetNodeConnectionInfo(context.Background(), "node", "", "tenant-a", "cluster-a", nil)
+	lb := NewLoadBalancer(logging.NewLoggerWithService("test"))
+
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyClusterScope, "tenant-a")
+	if nodes, err := lb.GetTopNodesWithScores(ctx, "", 0, 0, nil, "", 10, false); err == nil || len(nodes) != 0 {
+		t.Fatalf("work scope without authorizer returned nodes=%+v err=%v", nodes, err)
+	}
+	serveCtx := context.WithValue(context.Background(), ctxkeys.KeyClusterServeScope, ctxkeys.ClusterServeScope{TenantID: "tenant-a", PeerClusterIDs: []string{"cluster-a"}})
+	if nodes, err := lb.GetTopNodesWithScores(serveCtx, "", 0, 0, nil, "", 10, false); err == nil || len(nodes) != 0 {
+		t.Fatalf("serve scope without authorizer returned nodes=%+v err=%v", nodes, err)
+	}
+}
+
+func TestGetTopNodesWithScores_ServeScopeUsesPurePredicateAndMemoizesByCluster(t *testing.T) {
+	sm := setupTestManager(t)
+	sm.SetWeights(0, 0, 1000, 0, 0)
+	for _, nodeID := range []string{"official-a", "official-b"} {
+		addTestNode(t, sm, nodeID, nodeID, 0, 0, true)
+		sm.SetNodeConnectionInfo(context.Background(), nodeID, "", "", "platform-shared", nil)
+	}
+	addTestNode(t, sm, "private", "private", 0, 0, true)
+	sm.SetNodeConnectionInfo(context.Background(), "private", "", "owner", "private-peer", nil)
+
+	lb := NewLoadBalancer(logging.NewLoggerWithService("test"))
+	workCalls := 0
+	serveCalls := 0
+	lb.SetClusterAccessAuthorizer(func(_, _ string) bool { workCalls++; return false })
+	lb.SetClusterServeAuthorizer(func(clusterID string, scope ctxkeys.ClusterServeScope) bool {
+		serveCalls++
+		return scope.TenantID == "tenant-a" && (clusterID == scope.OfficialClusterID || clusterID == scope.PeerClusterIDs[0])
+	})
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyClusterServeScope, ctxkeys.ClusterServeScope{
+		TenantID: "tenant-a", OfficialClusterID: "platform-shared", PeerClusterIDs: []string{"private-peer"},
+	})
+	nodes, err := lb.GetTopNodesWithScores(ctx, "", 0, 0, nil, "", 10, false)
+	if err != nil || len(nodes) != 3 {
+		t.Fatalf("serve selection nodes=%+v err=%v", nodes, err)
+	}
+	if workCalls != 0 || serveCalls != 2 {
+		t.Fatalf("work calls=%d serve calls=%d, want 0/2", workCalls, serveCalls)
+	}
+}
+
+func TestGetTopNodesWithScores_ClusterScopeUsesAuthoritativeClusterAccess(t *testing.T) {
+	sm := setupTestManager(t)
+	sm.SetWeights(0, 0, 1000, 0, 0)
+	addTestNode(t, sm, "shared-looking", "shared-looking", 0, 0, true)
+	sm.SetNodeConnectionInfo(context.Background(), "shared-looking", "", "", "cluster-unentitled", nil)
+	addTestNode(t, sm, "authorized", "authorized", 0, 0, true)
+	sm.SetNodeConnectionInfo(context.Background(), "authorized", "", "another-owner", "cluster-entitled", nil)
+
+	lb := NewLoadBalancer(logging.NewLoggerWithService("test"))
+	calls := 0
+	lb.SetClusterAccessAuthorizer(func(clusterID, tenantID string) bool {
+		calls++
+		return tenantID == "tenant-a" && clusterID == "cluster-entitled"
+	})
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyClusterScope, "tenant-a")
+	nodes, err := lb.GetTopNodesWithScores(ctx, "", 0, 0, nil, "", 10, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("authorizer calls=%d, want 2", calls)
+	}
+	if len(nodes) != 1 || nodes[0].NodeID != "authorized" {
+		t.Fatalf("authoritative filter returned %+v", nodes)
+	}
 }
 
 func TestHostToBinaryIPv4Mapped(t *testing.T) {
