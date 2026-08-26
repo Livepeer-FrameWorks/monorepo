@@ -297,6 +297,9 @@ FROM quartermaster.tenants t
 JOIN quartermaster.tenant_cluster_access tca ON tca.tenant_id = t.id
 WHERE tca.cluster_id = $1
   AND tca.is_active = true
+  AND tca.subscription_status = 'active'
+  AND tca.access_source <> 'unknown'
+  AND (tca.expires_at IS NULL OR tca.expires_at > NOW())
   AND t.is_active = true
   AND t.deployment_tier IN ('supporter', 'developer', 'production', 'enterprise')
   AND t.subdomain IS NOT NULL

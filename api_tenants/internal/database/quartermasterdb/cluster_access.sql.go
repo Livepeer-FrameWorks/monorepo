@@ -12,13 +12,14 @@ import (
 
 const bootstrapTenantClusterAccess = `-- name: BootstrapTenantClusterAccess :exec
 INSERT INTO quartermaster.tenant_cluster_access
-    (tenant_id, cluster_id, access_level, subscription_status, resource_limits,
+    (tenant_id, cluster_id, access_level, access_source, subscription_status, resource_limits,
      is_active, granted_at, created_at, updated_at)
-VALUES ($1::uuid, $2, 'shared', 'active',
+VALUES ($1::uuid, $2, 'shared', 'platform_tier', 'active',
         COALESCE($3::text::jsonb, '{}'::jsonb), true, NOW(), NOW(), NOW())
 ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
     subscription_status = 'active',
     is_active = true,
+    access_source = 'platform_tier',
     resource_limits = COALESCE(NULLIF(quartermaster.tenant_cluster_access.resource_limits, '{}'::jsonb), EXCLUDED.resource_limits),
     updated_at = NOW()
 `
@@ -52,6 +53,34 @@ func (q *Queries) DeactivateTenantClusterAccess(ctx context.Context, arg Deactiv
 	return err
 }
 
+const getClusterAccessMaterializationPolicy = `-- name: GetClusterAccessMaterializationPolicy :one
+SELECT COALESCE(owner_tenant_id::text, '')::text AS owner_tenant_id,
+       COALESCE(cluster_class, '')::text AS cluster_class,
+       is_platform_official,
+       is_active
+FROM quartermaster.infrastructure_clusters
+WHERE cluster_id = $1::text
+`
+
+type GetClusterAccessMaterializationPolicyRow struct {
+	OwnerTenantID      string       `db:"owner_tenant_id" json:"owner_tenant_id"`
+	ClusterClass       string       `db:"cluster_class" json:"cluster_class"`
+	IsPlatformOfficial sql.NullBool `db:"is_platform_official" json:"is_platform_official"`
+	IsActive           sql.NullBool `db:"is_active" json:"is_active"`
+}
+
+func (q *Queries) GetClusterAccessMaterializationPolicy(ctx context.Context, clusterID string) (GetClusterAccessMaterializationPolicyRow, error) {
+	row := q.db.QueryRowContext(ctx, getClusterAccessMaterializationPolicy, clusterID)
+	var i GetClusterAccessMaterializationPolicyRow
+	err := row.Scan(
+		&i.OwnerTenantID,
+		&i.ClusterClass,
+		&i.IsPlatformOfficial,
+		&i.IsActive,
+	)
+	return i, err
+}
+
 const getClusterDeploymentModel = `-- name: GetClusterDeploymentModel :one
 SELECT deployment_model
 FROM quartermaster.infrastructure_clusters
@@ -83,6 +112,32 @@ func (q *Queries) GetClusterOfficialState(ctx context.Context, clusterID string)
 	return i, err
 }
 
+const getTenantClusterAccessState = `-- name: GetTenantClusterAccessState :one
+SELECT jsonb_build_object(
+    'access_level', access_level,
+    'access_source', access_source,
+    'subscription_status', subscription_status,
+    'is_active', is_active,
+    'expires_at', expires_at,
+    'resource_limits', resource_limits
+)::text AS state
+FROM quartermaster.tenant_cluster_access
+WHERE tenant_id = $1::uuid
+  AND cluster_id = $2::text
+`
+
+type GetTenantClusterAccessStateParams struct {
+	TenantID  string `db:"tenant_id" json:"tenant_id"`
+	ClusterID string `db:"cluster_id" json:"cluster_id"`
+}
+
+func (q *Queries) GetTenantClusterAccessState(ctx context.Context, arg GetTenantClusterAccessStateParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, getTenantClusterAccessState, arg.TenantID, arg.ClusterID)
+	var state string
+	err := row.Scan(&state)
+	return state, err
+}
+
 const getTenantPrimaryClusterClass = `-- name: GetTenantPrimaryClusterClass :one
 SELECT c.cluster_class
 FROM quartermaster.tenants t
@@ -99,20 +154,27 @@ func (q *Queries) GetTenantPrimaryClusterClass(ctx context.Context, tenantID str
 
 const grantTenantClusterAccess = `-- name: GrantTenantClusterAccess :exec
 INSERT INTO quartermaster.tenant_cluster_access
-    (tenant_id, cluster_id, access_level, expires_at, created_at, updated_at)
+    (tenant_id, cluster_id, access_level, access_source, resource_limits,
+     subscription_status, is_active, expires_at, created_at, updated_at)
 VALUES ($1::uuid, $2, $3,
-        $4::timestamptz, NOW(), NOW())
+        'operator_override', COALESCE($4::text::jsonb, '{}'::jsonb),
+        'active', true, $5::timestamptz, NOW(), NOW())
 ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
     access_level = EXCLUDED.access_level,
+    access_source = 'operator_override',
+    resource_limits = EXCLUDED.resource_limits,
+    subscription_status = 'active',
+    is_active = true,
     expires_at = EXCLUDED.expires_at,
     updated_at = NOW()
 `
 
 type GrantTenantClusterAccessParams struct {
-	TenantID    string         `db:"tenant_id" json:"tenant_id"`
-	ClusterID   string         `db:"cluster_id" json:"cluster_id"`
-	AccessLevel sql.NullString `db:"access_level" json:"access_level"`
-	ExpiresAt   sql.NullTime   `db:"expires_at" json:"expires_at"`
+	TenantID       string         `db:"tenant_id" json:"tenant_id"`
+	ClusterID      string         `db:"cluster_id" json:"cluster_id"`
+	AccessLevel    sql.NullString `db:"access_level" json:"access_level"`
+	ResourceLimits sql.NullString `db:"resource_limits" json:"resource_limits"`
+	ExpiresAt      sql.NullTime   `db:"expires_at" json:"expires_at"`
 }
 
 func (q *Queries) GrantTenantClusterAccess(ctx context.Context, arg GrantTenantClusterAccessParams) error {
@@ -120,6 +182,7 @@ func (q *Queries) GrantTenantClusterAccess(ctx context.Context, arg GrantTenantC
 		arg.TenantID,
 		arg.ClusterID,
 		arg.AccessLevel,
+		arg.ResourceLimits,
 		arg.ExpiresAt,
 	)
 	return err
@@ -207,12 +270,92 @@ func (q *Queries) ListTenantClusterAccessRows(ctx context.Context, tenantID stri
 	return items, nil
 }
 
+const listTenantEffectiveAccess = `-- name: ListTenantEffectiveAccess :many
+SELECT ic.cluster_id,
+       ic.cluster_name,
+       ic.cluster_type,
+       ic.base_url,
+       COALESCE(ic.deployment_model, '')::text AS deployment_model,
+       COALESCE(ic.owner_tenant_id::text, '')::text AS owner_tenant_id,
+       COALESCE(ic.cluster_class, '')::text AS cluster_class,
+       COALESCE(ic.health_status, '')::text AS health_status,
+       COALESCE(tca.access_level, '')::text AS access_level,
+       COALESCE(tca.access_source, 'unknown')::text AS access_source,
+       tca.is_active AS access_active,
+       tca.subscription_status,
+       tca.expires_at AS access_expires_at
+FROM quartermaster.tenant_cluster_access tca
+JOIN quartermaster.infrastructure_clusters ic ON ic.cluster_id = tca.cluster_id
+WHERE tca.tenant_id = $1::uuid
+  AND tca.is_active = true
+  AND tca.subscription_status = 'active'
+  AND tca.access_source <> 'unknown'
+  AND (tca.expires_at IS NULL OR tca.expires_at > NOW())
+  AND ic.is_active = true
+ORDER BY ic.cluster_id
+`
+
+type ListTenantEffectiveAccessRow struct {
+	ClusterID          string         `db:"cluster_id" json:"cluster_id"`
+	ClusterName        string         `db:"cluster_name" json:"cluster_name"`
+	ClusterType        string         `db:"cluster_type" json:"cluster_type"`
+	BaseUrl            string         `db:"base_url" json:"base_url"`
+	DeploymentModel    string         `db:"deployment_model" json:"deployment_model"`
+	OwnerTenantID      string         `db:"owner_tenant_id" json:"owner_tenant_id"`
+	ClusterClass       string         `db:"cluster_class" json:"cluster_class"`
+	HealthStatus       string         `db:"health_status" json:"health_status"`
+	AccessLevel        string         `db:"access_level" json:"access_level"`
+	AccessSource       string         `db:"access_source" json:"access_source"`
+	AccessActive       sql.NullBool   `db:"access_active" json:"access_active"`
+	SubscriptionStatus sql.NullString `db:"subscription_status" json:"subscription_status"`
+	AccessExpiresAt    sql.NullTime   `db:"access_expires_at" json:"access_expires_at"`
+}
+
+func (q *Queries) ListTenantEffectiveAccess(ctx context.Context, tenantID string) ([]ListTenantEffectiveAccessRow, error) {
+	rows, err := q.db.QueryContext(ctx, listTenantEffectiveAccess, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListTenantEffectiveAccessRow{}
+	for rows.Next() {
+		var i ListTenantEffectiveAccessRow
+		if err := rows.Scan(
+			&i.ClusterID,
+			&i.ClusterName,
+			&i.ClusterType,
+			&i.BaseUrl,
+			&i.DeploymentModel,
+			&i.OwnerTenantID,
+			&i.ClusterClass,
+			&i.HealthStatus,
+			&i.AccessLevel,
+			&i.AccessSource,
+			&i.AccessActive,
+			&i.SubscriptionStatus,
+			&i.AccessExpiresAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTenantEntitledClusterIDs = `-- name: ListTenantEntitledClusterIDs :many
 SELECT cluster_id
 FROM quartermaster.tenant_cluster_access
 WHERE tenant_id = $1::uuid
   AND is_active = TRUE
   AND subscription_status = 'active'
+  AND access_source <> 'unknown'
+  AND (expires_at IS NULL OR expires_at > NOW())
 ORDER BY cluster_id
 `
 
@@ -237,6 +380,98 @@ func (q *Queries) ListTenantEntitledClusterIDs(ctx context.Context, tenantID str
 		return nil, err
 	}
 	return items, nil
+}
+
+const materializeTenantClusterAccess = `-- name: MaterializeTenantClusterAccess :execrows
+INSERT INTO quartermaster.tenant_cluster_access (
+    tenant_id, cluster_id, access_level, access_source, subscription_status,
+    is_active, granted_at, requested_at, created_at, updated_at
+) VALUES (
+    $1::uuid, $2::text, 'subscriber',
+    $3::text, $4::text,
+    $4::text = 'active',
+    CASE WHEN $4::text = 'active' THEN NOW() ELSE NULL END,
+    CASE WHEN $4::text = 'pending_approval' THEN NOW() ELSE NULL END,
+    NOW(), NOW()
+)
+ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
+    access_level = 'subscriber',
+    access_source = EXCLUDED.access_source,
+    subscription_status = EXCLUDED.subscription_status,
+    is_active = EXCLUDED.is_active,
+    granted_at = CASE WHEN EXCLUDED.is_active THEN NOW() ELSE quartermaster.tenant_cluster_access.granted_at END,
+    requested_at = CASE
+        WHEN EXCLUDED.subscription_status = 'pending_approval'
+             AND quartermaster.tenant_cluster_access.subscription_status = 'pending_approval'
+            THEN COALESCE(quartermaster.tenant_cluster_access.requested_at, NOW())
+        WHEN EXCLUDED.subscription_status = 'pending_approval' THEN NOW()
+        ELSE quartermaster.tenant_cluster_access.requested_at
+    END,
+    approved_at = NULL,
+    approved_by = NULL,
+    rejection_reason = NULL,
+    expires_at = CASE WHEN EXCLUDED.is_active THEN NULL ELSE quartermaster.tenant_cluster_access.expires_at END,
+    updated_at = NOW()
+WHERE EXCLUDED.access_source = 'owner'
+   OR (
+       NOT (EXCLUDED.subscription_status = 'pending_approval'
+            AND quartermaster.tenant_cluster_access.is_active = true
+            AND quartermaster.tenant_cluster_access.subscription_status = 'active'
+            AND (quartermaster.tenant_cluster_access.expires_at IS NULL
+                 OR quartermaster.tenant_cluster_access.expires_at > NOW()))
+       AND (
+           quartermaster.tenant_cluster_access.access_source NOT IN ('operator_override', 'private_invite', 'owner')
+           OR quartermaster.tenant_cluster_access.is_active = false
+           OR quartermaster.tenant_cluster_access.subscription_status <> 'active'
+           OR (quartermaster.tenant_cluster_access.expires_at IS NOT NULL
+               AND quartermaster.tenant_cluster_access.expires_at <= NOW())
+       )
+   )
+`
+
+type MaterializeTenantClusterAccessParams struct {
+	TenantID           string `db:"tenant_id" json:"tenant_id"`
+	ClusterID          string `db:"cluster_id" json:"cluster_id"`
+	AccessSource       string `db:"access_source" json:"access_source"`
+	SubscriptionStatus string `db:"subscription_status" json:"subscription_status"`
+}
+
+func (q *Queries) MaterializeTenantClusterAccess(ctx context.Context, arg MaterializeTenantClusterAccessParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, materializeTenantClusterAccess,
+		arg.TenantID,
+		arg.ClusterID,
+		arg.AccessSource,
+		arg.SubscriptionStatus,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const revokeMaterializedTenantClusterAccess = `-- name: RevokeMaterializedTenantClusterAccess :execrows
+UPDATE quartermaster.tenant_cluster_access
+SET is_active = false,
+    subscription_status = 'suspended',
+    updated_at = NOW()
+WHERE tenant_id = $1::uuid
+  AND cluster_id = $2::text
+  AND access_source = $3::text
+  AND (is_active = true OR subscription_status = 'active')
+`
+
+type RevokeMaterializedTenantClusterAccessParams struct {
+	TenantID     string `db:"tenant_id" json:"tenant_id"`
+	ClusterID    string `db:"cluster_id" json:"cluster_id"`
+	AccessSource string `db:"access_source" json:"access_source"`
+}
+
+func (q *Queries) RevokeMaterializedTenantClusterAccess(ctx context.Context, arg RevokeMaterializedTenantClusterAccessParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, revokeMaterializedTenantClusterAccess, arg.TenantID, arg.ClusterID, arg.AccessSource)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const subscribeTenantToCluster = `-- name: SubscribeTenantToCluster :exec

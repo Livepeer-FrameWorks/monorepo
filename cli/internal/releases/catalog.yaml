@@ -71,3 +71,8 @@ schema_migration_sentinels:
 releases:
   - version: v0.3.0
     min_cli_version: v0.3.0-rc1
+    required_data_migrations:
+      - id: quartermaster_cluster_access_provenance_v0_3_0
+        service: quartermaster
+        introduced_in: v0.3.0
+        required_before_phase: postdeploy

@@ -1,5 +1,7 @@
 -- name: GetClusterOwnerAndName :one
-SELECT owner_tenant_id, cluster_name
+SELECT owner_tenant_id, cluster_name,
+       COALESCE(cluster_class, '')::text AS cluster_class,
+       is_platform_official, visibility
 FROM quartermaster.infrastructure_clusters
 WHERE cluster_id = sqlc.arg(cluster_id);
 
@@ -38,7 +40,9 @@ UPDATE quartermaster.cluster_invites SET status = 'revoked'
 WHERE id = sqlc.arg(invite_id)::uuid;
 
 -- name: GetActiveClusterSubscriptionPolicy :one
-SELECT visibility, pricing_model, requires_approval, owner_tenant_id, is_platform_official
+SELECT visibility, pricing_model, requires_approval, owner_tenant_id,
+       COALESCE(cluster_class, '')::text AS cluster_class,
+       is_platform_official
 FROM quartermaster.infrastructure_clusters
 WHERE cluster_id = sqlc.arg(cluster_id) AND is_active = true;
 
@@ -50,7 +54,9 @@ WHERE invite_token = sqlc.arg(invite_token) AND status = 'pending'
 
 -- name: GetPendingInviteWithClusterPolicy :one
 SELECT i.id, i.cluster_id, i.invited_tenant_id, i.access_level, i.resource_limits,
-       c.pricing_model, c.owner_tenant_id, c.is_platform_official
+       c.pricing_model, c.owner_tenant_id,
+       COALESCE(c.cluster_class, '')::text AS cluster_class,
+       c.is_platform_official, c.visibility
 FROM quartermaster.cluster_invites i
 JOIN quartermaster.infrastructure_clusters c ON c.cluster_id = i.cluster_id
 WHERE i.invite_token = sqlc.arg(invite_token) AND i.status = 'pending'
@@ -63,15 +69,17 @@ WHERE id = sqlc.arg(invite_id)::uuid;
 
 -- name: UpsertRequestedClusterSubscription :one
 INSERT INTO quartermaster.tenant_cluster_access (
-    id, tenant_id, cluster_id, access_level, subscription_status,
+    id, tenant_id, cluster_id, access_level, access_source, subscription_status,
     resource_limits, requested_at, is_active, created_at, updated_at
 ) VALUES (
     sqlc.arg(id)::uuid, sqlc.arg(tenant_id)::uuid, sqlc.arg(cluster_id), sqlc.arg(access_level),
+    sqlc.arg(access_source),
     sqlc.arg(subscription_status), sqlc.narg(resource_limits)::text::jsonb,
     sqlc.arg(requested_at), true, sqlc.arg(requested_at), sqlc.arg(requested_at)
 )
 ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
     access_level = EXCLUDED.access_level,
+    access_source = EXCLUDED.access_source,
     subscription_status = EXCLUDED.subscription_status,
     resource_limits = COALESCE(EXCLUDED.resource_limits, quartermaster.tenant_cluster_access.resource_limits),
     requested_at = COALESCE(quartermaster.tenant_cluster_access.requested_at, EXCLUDED.requested_at),
@@ -81,25 +89,29 @@ RETURNING id;
 
 -- name: UpsertAcceptedClusterSubscription :one
 INSERT INTO quartermaster.tenant_cluster_access (
-    id, tenant_id, cluster_id, access_level, subscription_status,
+    id, tenant_id, cluster_id, access_level, access_source, subscription_status,
     resource_limits, approved_at, is_active, created_at, updated_at
 ) VALUES (
     sqlc.arg(id)::uuid, sqlc.arg(tenant_id)::uuid, sqlc.arg(cluster_id), sqlc.arg(access_level),
+    'private_invite',
     'active', sqlc.narg(resource_limits)::text::jsonb, sqlc.arg(approved_at), true,
     sqlc.arg(approved_at), sqlc.arg(approved_at)
 )
 ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
     access_level = EXCLUDED.access_level,
+    access_source = 'private_invite',
     subscription_status = 'active',
     resource_limits = COALESCE(EXCLUDED.resource_limits, quartermaster.tenant_cluster_access.resource_limits),
     approved_at = NOW(), is_active = true, updated_at = NOW()
 RETURNING id;
 
 -- name: GetSubscriptionOwnerPolicy :one
-SELECT a.tenant_id, a.cluster_id, c.owner_tenant_id, c.pricing_model, c.is_platform_official
+SELECT a.tenant_id, a.cluster_id, a.access_source, a.subscription_status,
+       c.owner_tenant_id, c.pricing_model, c.is_platform_official
 FROM quartermaster.tenant_cluster_access a
 JOIN quartermaster.infrastructure_clusters c ON a.cluster_id = c.cluster_id
-WHERE a.id = sqlc.arg(subscription_id)::uuid;
+WHERE a.id = sqlc.arg(subscription_id)::uuid
+FOR UPDATE OF a;
 
 -- name: GetSubscriptionOwner :one
 SELECT a.tenant_id, a.cluster_id, c.owner_tenant_id
@@ -110,8 +122,10 @@ WHERE a.id = sqlc.arg(subscription_id)::uuid;
 -- name: ApproveClusterSubscriptionRecord :exec
 UPDATE quartermaster.tenant_cluster_access
 SET subscription_status = 'active', approved_at = NOW(),
-    approved_by = sqlc.arg(approved_by)::uuid, updated_at = NOW()
-WHERE id = sqlc.arg(subscription_id)::uuid;
+    approved_by = sqlc.arg(approved_by)::uuid, is_active = true, granted_at = NOW(),
+    updated_at = NOW()
+WHERE id = sqlc.arg(subscription_id)::uuid
+  AND subscription_status = 'pending_approval';
 
 -- name: RejectClusterSubscriptionRecord :exec
 UPDATE quartermaster.tenant_cluster_access
@@ -135,12 +149,16 @@ WITH my_tenants AS (
     FROM quartermaster.tenant_cluster_access mine
     WHERE mine.cluster_id = sqlc.arg(requesting_cluster_id)
       AND mine.is_active = TRUE AND mine.subscription_status = 'active'
+      AND mine.access_source <> 'unknown'
+      AND (mine.expires_at IS NULL OR mine.expires_at > NOW())
 ), peer_clusters AS (
     SELECT tca.cluster_id, array_agg(DISTINCT tca.tenant_id::text)::text[] AS shared_tenant_ids
     FROM quartermaster.tenant_cluster_access tca
     JOIN my_tenants mt ON tca.tenant_id = mt.tenant_id
     WHERE tca.cluster_id != sqlc.arg(requesting_cluster_id)
       AND tca.is_active = TRUE AND tca.subscription_status = 'active'
+      AND tca.access_source <> 'unknown'
+      AND (tca.expires_at IS NULL OR tca.expires_at > NOW())
     GROUP BY tca.cluster_id
 )
 SELECT pc.cluster_id, pc.shared_tenant_ids, ic.cluster_name, ic.cluster_type,

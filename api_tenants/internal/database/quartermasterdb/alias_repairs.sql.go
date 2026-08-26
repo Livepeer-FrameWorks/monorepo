@@ -20,6 +20,9 @@ SELECT t.id::text AS tenant_id,
                FROM quartermaster.tenant_cluster_access tca
                WHERE tca.tenant_id = t.id
                  AND tca.is_active = true
+                 AND tca.subscription_status = 'active'
+                 AND tca.access_source <> 'unknown'
+                 AND (tca.expires_at IS NULL OR tca.expires_at > NOW())
            )
        )::boolean AS want
 FROM quartermaster.tenants t

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"math"
 	"net"
+	"os"
 	"regexp"
 	"slices"
 	"sort"
@@ -23,6 +24,7 @@ import (
 	quartermasterdb "frameworks/api_tenants/internal/database/quartermasterdb"
 	geobucket "frameworks/api_tenants/internal/geo"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/navigator"
 	purserclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/purser"
@@ -93,7 +95,8 @@ type QuartermasterServer struct {
 	// uses to gate public_instance_host, sourced from the SAME config Navigator uses
 	// for physical DNS publication (NAVIGATOR_DNS_HEALTH_STALE_SECONDS) so the two
 	// can't drift and hand Foghorn a hostname Navigator has already pruned.
-	physicalEndpointStaleSeconds int
+	physicalEndpointStaleSeconds       int
+	clusterAccessMaterializationSecret string
 }
 
 const (
@@ -137,14 +140,15 @@ func (s *QuartermasterServer) SetPhysicalEndpointStaleSeconds(seconds int) {
 // NewQuartermasterServer creates a new Quartermaster gRPC server
 func NewQuartermasterServer(db *sql.DB, logger logging.Logger, navigatorClient *navigator.Client, decklogClient *decklogclient.BatchedClient, purserClient *purserclient.GRPCClient, geoipReader *geoip.Reader, metrics *ServerMetrics) *QuartermasterServer {
 	return &QuartermasterServer{
-		db:                           db,
-		logger:                       logger,
-		navigatorClient:              navigatorClient,
-		decklogClient:                decklogClient,
-		purserClient:                 purserClient,
-		geoipReader:                  geoipReader,
-		metrics:                      metrics,
-		physicalEndpointStaleSeconds: defaultPhysicalEndpointStaleSeconds,
+		db:                                 db,
+		logger:                             logger,
+		navigatorClient:                    navigatorClient,
+		decklogClient:                      decklogClient,
+		purserClient:                       purserClient,
+		geoipReader:                        geoipReader,
+		metrics:                            metrics,
+		physicalEndpointStaleSeconds:       defaultPhysicalEndpointStaleSeconds,
+		clusterAccessMaterializationSecret: strings.TrimSpace(os.Getenv("CLUSTER_ACCESS_MATERIALIZATION_SECRET")),
 	}
 }
 
@@ -478,17 +482,36 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *quarte
 	primaryClusterID := routingSelection.PrimaryClusterID.String
 	officialClusterID := routingSelection.OfficialClusterID
 
-	// Get cluster info with capacity validation
+	// Get cluster info with capacity validation. If a tenant's preferred grant
+	// expired or was revoked between reconciliation passes, route new work to
+	// the still-entitled platform-official cluster instead of turning a stale
+	// preference into a tenant-wide outage.
 	// max_streams = 0 means unlimited
 	// max_bandwidth_mbps = 0 means unlimited
 	var cluster quartermasterdb.GetTenantPrimaryClusterRoutingRow
-	err = database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-		var queryErr error
-		cluster, queryErr = queries.GetTenantPrimaryClusterRouting(ctx, quartermasterdb.GetTenantPrimaryClusterRoutingParams{
-			TenantID: tenantID, ClusterID: primaryClusterID,
+	loadRoutingCluster := func(clusterID string) error {
+		return database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+			var queryErr error
+			cluster, queryErr = queries.GetTenantPrimaryClusterRouting(ctx, quartermasterdb.GetTenantPrimaryClusterRoutingParams{
+				TenantID: tenantID, ClusterID: clusterID,
+			})
+			return queryErr
 		})
-		return queryErr
-	})
+	}
+	err = loadRoutingCluster(primaryClusterID)
+	if errors.Is(err, sql.ErrNoRows) && officialClusterID != "" && officialClusterID != primaryClusterID {
+		s.logger.WithFields(logging.Fields{
+			"tenant_id":            tenantID,
+			"preferred_cluster_id": primaryClusterID,
+			"official_cluster_id":  officialClusterID,
+		}).Warn("Preferred cluster is no longer routable; falling back to the platform-official cluster")
+		if officialErr := loadRoutingCluster(officialClusterID); officialErr == nil {
+			primaryClusterID = officialClusterID
+			err = nil
+		} else {
+			err = officialErr
+		}
+	}
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "No suitable cluster found (capacity exceeded or inactive)")
@@ -602,23 +625,32 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *quarte
 				role = "subscribed"
 			}
 			resp.ClusterPeers = append(resp.ClusterPeers, &clusterpeerpb.TenantClusterPeer{
-				ClusterId:       peerRow.ClusterID,
-				ClusterSlug:     dns.SanitizeLabel(peerRow.ClusterID),
-				BaseUrl:         peerRow.BaseUrl,
-				ClusterName:     peerRow.ClusterName,
-				Role:            role,
-				ClusterType:     peerRow.ClusterType,
-				FoghornGrpcAddr: foghornGrpcAddr,
-				S3Bucket:        peerRow.S3Bucket,
-				S3Endpoint:      peerRow.S3Endpoint,
-				S3Region:        peerRow.S3Region,
-				S3Prefix:        peerRow.S3Prefix,
-				S3PrefixPresent: peerRow.S3PrefixPresent,
-				RegionId:        peerRow.RegionID,
-				CellId:          peerRow.CellID,
-				ClusterClass:    peerRow.ClusterClass,
-				HealthStatus:    peerRow.HealthStatus,
+				ClusterId:          peerRow.ClusterID,
+				ClusterSlug:        dns.SanitizeLabel(peerRow.ClusterID),
+				BaseUrl:            peerRow.BaseUrl,
+				ClusterName:        peerRow.ClusterName,
+				Role:               role,
+				ClusterType:        peerRow.ClusterType,
+				FoghornGrpcAddr:    foghornGrpcAddr,
+				S3Bucket:           peerRow.S3Bucket,
+				S3Endpoint:         peerRow.S3Endpoint,
+				S3Region:           peerRow.S3Region,
+				S3Prefix:           peerRow.S3Prefix,
+				S3PrefixPresent:    peerRow.S3PrefixPresent,
+				RegionId:           peerRow.RegionID,
+				CellId:             peerRow.CellID,
+				ClusterClass:       peerRow.ClusterClass,
+				HealthStatus:       peerRow.HealthStatus,
+				DeploymentModel:    peerRow.DeploymentModel,
+				OwnerTenantId:      peerRow.OwnerTenantID,
+				AccessLevel:        peerRow.AccessLevel,
+				AccessActive:       true,
+				SubscriptionStatus: "active",
+				AccessSource:       clusterAccessSourceProto(peerRow.AccessSource),
 			})
+			if peerRow.AccessExpiresAt.Valid {
+				resp.ClusterPeers[len(resp.ClusterPeers)-1].AccessExpiresAt = timestamppb.New(peerRow.AccessExpiresAt.Time)
+			}
 		}
 	}
 
@@ -3378,6 +3410,9 @@ func (s *QuartermasterServer) ListClustersAvailable(ctx context.Context, req *qu
 
 // GrantClusterAccess grants a tenant access to a cluster
 func (s *QuartermasterServer) GrantClusterAccess(ctx context.Context, req *quartermasterpb.GrantClusterAccessRequest) (*emptypb.Empty, error) {
+	if ctxkeys.GetAuthType(ctx) != "jwt" || !ctxkeys.IsPlatformOperator(ctx) {
+		return nil, status.Error(codes.PermissionDenied, "GrantClusterAccess requires platform operator authorization")
+	}
 	tenantID := req.GetTenantId()
 	clusterID := req.GetClusterId()
 
@@ -3389,6 +3424,43 @@ func (s *QuartermasterServer) GrantClusterAccess(ctx context.Context, req *quart
 	if accessLevel == "" {
 		accessLevel = "read"
 	}
+	if !slices.Contains([]string{"read", "shared", "subscriber", "owner", "dedicated", "priority"}, accessLevel) {
+		return nil, status.Errorf(codes.InvalidArgument, "unsupported access_level %q", accessLevel)
+	}
+
+	expiresAt := sql.NullTime{}
+	if req.ExpiresAt != nil {
+		if err := req.ExpiresAt.CheckValid(); err != nil {
+			return nil, status.Error(codes.InvalidArgument, "expires_at is invalid")
+		}
+		expiresAt = sql.NullTime{Time: req.ExpiresAt.AsTime(), Valid: true}
+		if !expiresAt.Time.After(time.Now()) {
+			return nil, status.Error(codes.InvalidArgument, "expires_at must be in the future")
+		}
+	}
+	resourceLimits, err := normalizeGrantedResourceLimits(req.GetResourceLimits())
+	if err != nil {
+		return nil, err
+	}
+
+	queries := quartermasterdb.New(s.db)
+	tenantExists, err := queries.TenantExists(ctx, tenantID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "probe tenant: %v", err)
+	}
+	if !tenantExists {
+		return nil, status.Error(codes.NotFound, "tenant not found")
+	}
+	clusterState, err := queries.GetClusterOfficialState(ctx, clusterID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, status.Error(codes.NotFound, "cluster not found")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "probe cluster: %v", err)
+	}
+	if !clusterState.IsActive.Valid || !clusterState.IsActive.Bool {
+		return nil, status.Error(codes.FailedPrecondition, "cluster is not active")
+	}
 
 	// Grant + durable alias ensure in one tx (ensure is gated, so it no-ops
 	// unless the tenant now warrants an alias).
@@ -3398,12 +3470,19 @@ func (s *QuartermasterServer) GrantClusterAccess(ctx context.Context, req *quart
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	expiresAt := sql.NullTime{}
-	if req.ExpiresAt != nil {
-		expiresAt = sql.NullTime{Time: req.ExpiresAt.AsTime(), Valid: true}
+	txQueries := quartermasterdb.New(tx)
+	var oldState *structpb.Struct
+	if state, stateErr := txQueries.GetTenantClusterAccessState(ctx, quartermasterdb.GetTenantClusterAccessStateParams{TenantID: tenantID, ClusterID: clusterID}); stateErr == nil {
+		oldState, err = clusterAccessAuditState(state)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "decode prior access state: %v", err)
+		}
+	} else if !errors.Is(stateErr, sql.ErrNoRows) {
+		return nil, status.Errorf(codes.Internal, "load prior access state: %v", stateErr)
 	}
-	if err := quartermasterdb.New(tx).GrantTenantClusterAccess(ctx, quartermasterdb.GrantTenantClusterAccessParams{
-		TenantID: tenantID, ClusterID: clusterID, AccessLevel: validString(accessLevel), ExpiresAt: expiresAt,
+	if err := txQueries.GrantTenantClusterAccess(ctx, quartermasterdb.GrantTenantClusterAccessParams{
+		TenantID: tenantID, ClusterID: clusterID, AccessLevel: validString(accessLevel),
+		ResourceLimits: resourceLimits, ExpiresAt: expiresAt,
 	}); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to grant access: %v", err)
 	}
@@ -3411,12 +3490,55 @@ func (s *QuartermasterServer) GrantClusterAccess(ctx context.Context, req *quart
 	if enqErr := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true); enqErr != nil {
 		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias ensure: %v", enqErr)
 	}
+	state, stateErr := txQueries.GetTenantClusterAccessState(ctx, quartermasterdb.GetTenantClusterAccessStateParams{TenantID: tenantID, ClusterID: clusterID})
+	if stateErr != nil {
+		return nil, status.Errorf(codes.Internal, "load granted access state: %v", stateErr)
+	}
+	newState, stateErr := clusterAccessAuditState(state)
+	if stateErr != nil {
+		return nil, status.Errorf(codes.Internal, "decode granted access state: %v", stateErr)
+	}
+	auditEvent := s.buildClusterEvent(eventClusterAccessGranted, tenantID, middleware.GetUserID(ctx), clusterID, "cluster_access", tenantID+":"+clusterID, "", "", "")
+	auditEvent.GetClusterEvent().BeforeState = oldState
+	auditEvent.GetClusterEvent().AfterState = newState
+	if _, enqErr := s.EnqueueServiceEventTx(ctx, tx, auditEvent); enqErr != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue access audit: %v", enqErr)
+	}
 
 	if commitErr := tx.Commit(); commitErr != nil {
 		return nil, status.Errorf(codes.Internal, "commit grant access: %v", commitErr)
 	}
 
 	return &emptypb.Empty{}, nil
+}
+
+func clusterAccessAuditState(raw string) (*structpb.Struct, error) {
+	state := map[string]any{}
+	if err := json.Unmarshal([]byte(raw), &state); err != nil {
+		return nil, err
+	}
+	return structpb.NewStruct(state)
+}
+
+func normalizeGrantedResourceLimits(limits *structpb.Struct) (sql.NullString, error) {
+	if limits == nil || len(limits.GetFields()) == 0 {
+		return validString("{}"), nil
+	}
+	allowed := map[string]struct{}{"max_streams": {}, "max_viewers": {}, "max_bandwidth_mbps": {}}
+	for key, value := range limits.GetFields() {
+		if _, ok := allowed[key]; !ok {
+			return sql.NullString{}, status.Errorf(codes.InvalidArgument, "unsupported resource_limits key %q", key)
+		}
+		number, ok := value.GetKind().(*structpb.Value_NumberValue)
+		if !ok || math.IsNaN(number.NumberValue) || math.IsInf(number.NumberValue, 0) || number.NumberValue < 0 || math.Trunc(number.NumberValue) != number.NumberValue || number.NumberValue > math.MaxInt32 {
+			return sql.NullString{}, status.Errorf(codes.InvalidArgument, "resource_limits.%s must be a non-negative integer", key)
+		}
+	}
+	encoded, err := json.Marshal(limits.AsMap())
+	if err != nil {
+		return sql.NullString{}, status.Errorf(codes.InvalidArgument, "resource_limits must be a JSON object: %v", err)
+	}
+	return validString(string(encoded)), nil
 }
 
 // BootstrapClusterAccess is the service-token bootstrap entitlement entry
@@ -3517,6 +3639,179 @@ func (s *QuartermasterServer) BootstrapClusterAccess(ctx context.Context, req *q
 	return &emptypb.Empty{}, nil
 }
 
+// MaterializeClusterAccess is the narrow service-authenticated writer used
+// after Purser or the owner workflow has made an access decision. It cannot
+// create operator overrides, private invitations, or platform-tier grants, and
+// marketplace materialization cannot replace an active owner/invite/override.
+func (s *QuartermasterServer) MaterializeClusterAccess(ctx context.Context, req *quartermasterpb.MaterializeClusterAccessRequest) (*emptypb.Empty, error) {
+	if ctxkeys.GetAuthType(ctx) != "service" {
+		return nil, status.Error(codes.PermissionDenied, "MaterializeClusterAccess requires service token auth")
+	}
+	tenantID := strings.TrimSpace(req.GetTenantId())
+	clusterID := strings.TrimSpace(req.GetClusterId())
+	reference := strings.TrimSpace(req.GetAuthorizationReference())
+	subscriptionStatus := strings.TrimSpace(req.GetSubscriptionStatus())
+	if subscriptionStatus == "" {
+		subscriptionStatus = "active"
+	}
+	if tenantID == "" || clusterID == "" || reference == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id, cluster_id, and authorization_reference required")
+	}
+	if subscriptionStatus != "active" && subscriptionStatus != "pending_approval" {
+		return nil, status.Error(codes.InvalidArgument, "subscription_status must be active or pending_approval")
+	}
+
+	accessSource := ""
+	switch req.GetAccessSource() {
+	case clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_OWNER:
+		accessSource = "owner"
+	case clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_MARKETPLACE_SUBSCRIPTION:
+		accessSource = "marketplace_subscription"
+	default:
+		return nil, status.Error(codes.InvalidArgument, "unsupported materialized access source")
+	}
+	if req.GetAuthorizedAt() == nil {
+		return nil, status.Error(codes.PermissionDenied, "materialization authorization proof required")
+	}
+	if err := req.GetAuthorizedAt().CheckValid(); err != nil {
+		return nil, status.Error(codes.PermissionDenied, "materialization authorization proof invalid")
+	}
+	if err := auth.VerifyClusterAccessMaterializationProof(
+		s.clusterAccessMaterializationSecret, req.GetAuthorizationProof(), tenantID, clusterID,
+		int32(req.GetAccessSource()), reference, subscriptionStatus, req.GetAuthorizedAt().AsTime(), time.Now(),
+	); err != nil {
+		return nil, status.Error(codes.PermissionDenied, "materialization authorization proof invalid")
+	}
+
+	queries := quartermasterdb.New(s.db)
+	tenantExists, err := queries.TenantExists(ctx, tenantID)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "probe tenant: %v", err)
+	}
+	if !tenantExists {
+		return nil, status.Error(codes.NotFound, "tenant not found")
+	}
+	policy, err := queries.GetClusterAccessMaterializationPolicy(ctx, clusterID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, status.Error(codes.NotFound, "cluster not found")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "probe cluster materialization policy: %v", err)
+	}
+	if !policy.IsActive.Valid || !policy.IsActive.Bool {
+		return nil, status.Error(codes.FailedPrecondition, "cluster is not active")
+	}
+	switch accessSource {
+	case "owner":
+		if subscriptionStatus != "active" {
+			return nil, status.Error(codes.InvalidArgument, "owner access cannot be pending approval")
+		}
+		if policy.OwnerTenantID != tenantID {
+			return nil, status.Error(codes.PermissionDenied, "tenant does not own cluster")
+		}
+	case "marketplace_subscription":
+		if policy.IsPlatformOfficial.Valid && policy.IsPlatformOfficial.Bool {
+			return nil, status.Error(codes.FailedPrecondition, "platform-official access must use BootstrapClusterAccess")
+		}
+		if policy.ClusterClass != "third_party_marketplace" || policy.OwnerTenantID == "" || policy.OwnerTenantID == tenantID {
+			return nil, status.Error(codes.FailedPrecondition, "cluster is not third-party marketplace capacity")
+		}
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+	changed, err := quartermasterdb.New(tx).MaterializeTenantClusterAccess(ctx, quartermasterdb.MaterializeTenantClusterAccessParams{
+		TenantID: tenantID, ClusterID: clusterID, AccessSource: accessSource, SubscriptionStatus: subscriptionStatus,
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "materialize tenant cluster access: %v", err)
+	}
+	if changed > 0 && subscriptionStatus == "active" {
+		if enqErr := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true); enqErr != nil {
+			return nil, status.Errorf(codes.Internal, "enqueue tenant-alias ensure: %v", enqErr)
+		}
+		if enqErr := s.emitClusterEventTx(ctx, tx, eventClusterAccessMaterialized, tenantID, middleware.GetUserID(ctx), clusterID, "cluster_access", tenantID+":"+clusterID, "", reference, accessSource); enqErr != nil {
+			return nil, status.Errorf(codes.Internal, "enqueue access materialization audit: %v", enqErr)
+		}
+	}
+	if changed > 0 && subscriptionStatus == "pending_approval" {
+		if enqErr := s.emitClusterEventTx(ctx, tx, eventClusterSubscriptionRequested, tenantID, middleware.GetUserID(ctx), clusterID, "cluster_subscription", tenantID+":"+clusterID, "", reference, accessSource); enqErr != nil {
+			return nil, status.Errorf(codes.Internal, "enqueue marketplace access request audit: %v", enqErr)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, status.Errorf(codes.Internal, "commit materialized cluster access: %v", err)
+	}
+	return &emptypb.Empty{}, nil
+}
+
+// RevokeMaterializedClusterAccess is the source-bound inverse of commercial
+// materialization. It cannot revoke an owner, invite, tier, or operator grant
+// that happens to share the same tenant/cluster key.
+func (s *QuartermasterServer) RevokeMaterializedClusterAccess(ctx context.Context, req *quartermasterpb.RevokeMaterializedClusterAccessRequest) (*emptypb.Empty, error) {
+	if ctxkeys.GetAuthType(ctx) != "service" {
+		return nil, status.Error(codes.PermissionDenied, "RevokeMaterializedClusterAccess requires service token auth")
+	}
+	tenantID := strings.TrimSpace(req.GetTenantId())
+	clusterID := strings.TrimSpace(req.GetClusterId())
+	reference := strings.TrimSpace(req.GetAuthorizationReference())
+	if tenantID == "" || clusterID == "" || reference == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id, cluster_id, and authorization_reference required")
+	}
+	if req.GetAccessSource() != clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_MARKETPLACE_SUBSCRIPTION {
+		return nil, status.Error(codes.InvalidArgument, "only marketplace subscription access can be commercially revoked")
+	}
+	if req.GetAuthorizedAt() == nil || req.GetAuthorizedAt().CheckValid() != nil {
+		return nil, status.Error(codes.PermissionDenied, "revocation authorization proof required")
+	}
+	if err := auth.VerifyClusterAccessRevocationProof(
+		s.clusterAccessMaterializationSecret, req.GetAuthorizationProof(), tenantID, clusterID,
+		int32(req.GetAccessSource()), reference, req.GetAuthorizedAt().AsTime(), time.Now(),
+	); err != nil {
+		return nil, status.Error(codes.PermissionDenied, "revocation authorization proof invalid")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "begin revocation transaction: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+	txQueries := quartermasterdb.New(tx)
+	changed, err := txQueries.RevokeMaterializedTenantClusterAccess(ctx, quartermasterdb.RevokeMaterializedTenantClusterAccessParams{
+		TenantID: tenantID, ClusterID: clusterID, AccessSource: "marketplace_subscription",
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "revoke materialized cluster access: %v", err)
+	}
+	if changed > 0 {
+		if err := s.repointTenantPrimaryAfterAccessLoss(ctx, txQueries, tenantID, clusterID); err != nil {
+			return nil, status.Errorf(codes.Internal, "repoint tenant primary cluster: %v", err)
+		}
+		if _, err := s.EnqueueNavigatorTenantAliasTx(ctx, tx, tenantID, "", "remove_cluster", clusterID, "marketplace_subscription_revoked"); err != nil {
+			return nil, status.Errorf(codes.Internal, "enqueue tenant-alias remove_cluster: %v", err)
+		}
+		hasPaid, accessErr := s.tenantHasPaidClusterAccessTx(ctx, tx, tenantID)
+		if accessErr != nil {
+			return nil, status.Errorf(codes.Internal, "check paid cluster access: %v", accessErr)
+		}
+		if !hasPaid {
+			if err := s.enqueueTenantAliasRemoveTx(ctx, tx, tenantID, ""); err != nil {
+				return nil, status.Errorf(codes.Internal, "enqueue tenant-alias remove: %v", err)
+			}
+		}
+		if err := s.emitClusterEventTx(ctx, tx, eventClusterAccessRevoked, tenantID, middleware.GetUserID(ctx), clusterID, "cluster_access", tenantID+":"+clusterID, "", reference, "marketplace_subscription"); err != nil {
+			return nil, status.Errorf(codes.Internal, "enqueue access revocation audit: %v", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, status.Errorf(codes.Internal, "commit materialized access revocation: %v", err)
+	}
+	return &emptypb.Empty{}, nil
+}
+
 // DeactivateClusterAccess soft-suspends a tenant_cluster_access row.
 // Service-token only. Idempotent: a no-op if the row is already inactive or
 // absent. Purser calls this from tier downgrade reconciliation; the row is
@@ -3547,10 +3842,14 @@ func (s *QuartermasterServer) DeactivateClusterAccess(ctx context.Context, req *
 		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias remove_cluster: %v", err)
 	}
 
-	if err := quartermasterdb.New(tx).DeactivateTenantClusterAccess(ctx, quartermasterdb.DeactivateTenantClusterAccessParams{
+	txQueries := quartermasterdb.New(tx)
+	if err := txQueries.DeactivateTenantClusterAccess(ctx, quartermasterdb.DeactivateTenantClusterAccessParams{
 		TenantID: tenantID, ClusterID: clusterID,
 	}); err != nil {
 		return nil, status.Errorf(codes.Internal, "deactivate tenant_cluster_access: %v", err)
+	}
+	if err := s.repointTenantPrimaryAfterAccessLoss(ctx, txQueries, tenantID, clusterID); err != nil {
+		return nil, status.Errorf(codes.Internal, "repoint tenant primary cluster: %v", err)
 	}
 
 	// If the tenant now has zero active paid cluster access rows, tear the
@@ -3601,12 +3900,9 @@ func (s *QuartermasterServer) ListTenantClusterAccess(ctx context.Context, req *
 	return out, nil
 }
 
-// GetTenantEntitlement returns the cluster IDs a tenant is entitled to serve on
-// (active + subscribed) and the coarse plan class (the primary cluster's
-// cluster_class). Service-token only. This owns the entitlement predicates on
-// Quartermaster's side so Commodore can mint signed policy bundles without
-// reading quartermaster.* directly. Cluster lookup is fail-closed; the plan
-// class is fail-open (a lookup error yields an empty class, bundle still issued).
+// GetTenantEntitlement returns active, subscribed, unexpired cluster access and
+// its authority provenance. Service-token only. Quartermaster owns the effective
+// access predicates so consumers do not reconstruct security policy locally.
 func (s *QuartermasterServer) GetTenantEntitlement(ctx context.Context, req *quartermasterpb.GetTenantEntitlementRequest) (*quartermasterpb.GetTenantEntitlementResponse, error) {
 	if ctxkeys.GetAuthType(ctx) != "service" {
 		return nil, status.Error(codes.PermissionDenied, "GetTenantEntitlement requires service token auth")
@@ -3617,20 +3913,45 @@ func (s *QuartermasterServer) GetTenantEntitlement(ctx context.Context, req *qua
 	}
 
 	queries := quartermasterdb.New(s.db)
-	clusterIDs, err := queries.ListTenantEntitledClusterIDs(ctx, tenantID)
+	accessRows, err := queries.ListTenantEffectiveAccess(ctx, tenantID)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "tenant cluster access lookup: %v", err)
 	}
-	out := &quartermasterpb.GetTenantEntitlementResponse{AllowedClusterIds: clusterIDs}
-
-	var planClass sql.NullString
-	planClass, scanErr := queries.GetTenantPrimaryClusterClass(ctx, tenantID)
-	if scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
-		s.logger.WithError(scanErr).WithField("tenant_id", tenantID).
-			Warn("plan class lookup failed; entitlement returned without plan_class")
+	out := &quartermasterpb.GetTenantEntitlementResponse{}
+	for _, row := range accessRows {
+		peer := &clusterpeerpb.TenantClusterPeer{
+			ClusterId: row.ClusterID, ClusterSlug: dns.SanitizeLabel(row.ClusterID),
+			BaseUrl: row.BaseUrl, ClusterName: row.ClusterName, ClusterType: row.ClusterType,
+			ClusterClass: row.ClusterClass, HealthStatus: row.HealthStatus,
+			DeploymentModel: row.DeploymentModel, OwnerTenantId: row.OwnerTenantID,
+			AccessLevel: row.AccessLevel, AccessActive: row.AccessActive.Valid && row.AccessActive.Bool,
+			SubscriptionStatus: row.SubscriptionStatus.String,
+			AccessSource:       clusterAccessSourceProto(row.AccessSource),
+		}
+		if row.AccessExpiresAt.Valid {
+			peer.AccessExpiresAt = timestamppb.New(row.AccessExpiresAt.Time)
+		}
+		out.AllowedClusterIds = append(out.AllowedClusterIds, row.ClusterID)
+		out.EffectiveAccess = append(out.EffectiveAccess, peer)
 	}
-	out.PlanClass = planClass.String
 	return out, nil
+}
+
+func clusterAccessSourceProto(source string) clusterpeerpb.TenantClusterAccessSource {
+	switch source {
+	case "platform_tier":
+		return clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_PLATFORM_TIER
+	case "owner":
+		return clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_OWNER
+	case "private_invite":
+		return clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_PRIVATE_INVITE
+	case "marketplace_subscription":
+		return clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_MARKETPLACE_SUBSCRIPTION
+	case "operator_override":
+		return clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_OPERATOR_OVERRIDE
+	default:
+		return clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_UNSPECIFIED
+	}
 }
 
 // ListServiceClusterAssignments returns the distinct cluster IDs a specific
@@ -3662,83 +3983,36 @@ func (s *QuartermasterServer) ListServiceClusterAssignments(ctx context.Context,
 
 // SubscribeToCluster subscribes a tenant to a public/shared cluster
 func (s *QuartermasterServer) SubscribeToCluster(ctx context.Context, req *quartermasterpb.SubscribeToClusterRequest) (*emptypb.Empty, error) {
-	tenantID := middleware.GetTenantID(ctx)
-	if tenantID == "" {
-		return nil, status.Error(codes.Unauthenticated, "tenant_id required")
-	}
+	return nil, status.Error(codes.FailedPrecondition, "direct cluster subscription is disabled; use Purser CreateClusterSubscription")
+}
 
-	// Allow admin override (if tenant_id is provided in request and differs)
-	if req.GetTenantId() != "" && req.GetTenantId() != tenantID {
-		role := ctxkeys.GetRole(ctx)
-		if role == "admin" || role == "provider" {
-			tenantID = req.GetTenantId()
-		} else {
-			return nil, status.Error(codes.PermissionDenied, "cannot subscribe other tenants")
-		}
-	}
-
-	clusterID := req.GetClusterId()
-	if clusterID == "" {
-		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
-	}
-
-	// Verify cluster exists and is 'shared'
-	queries := quartermasterdb.New(s.db)
-	deploymentModel, err := queries.GetClusterDeploymentModel(ctx, clusterID)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.NotFound, "cluster not found")
-	}
+func (s *QuartermasterServer) repointTenantPrimaryAfterAccessLoss(ctx context.Context, queries *quartermasterdb.Queries, tenantID, lostClusterID string) error {
+	changed, err := queries.RepointTenantPrimaryToOfficialIfCluster(ctx, quartermasterdb.RepointTenantPrimaryToOfficialIfClusterParams{
+		TenantID: tenantID, LostClusterID: lostClusterID,
+	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+		return err
 	}
-
-	if !deploymentModel.Valid {
-		return nil, status.Error(codes.Internal, "database error: cluster deployment_model is NULL")
+	if changed > 0 {
+		s.logger.WithFields(logging.Fields{
+			"tenant_id":       tenantID,
+			"lost_cluster_id": lostClusterID,
+		}).Info("Repointed tenant primary cluster to its platform-official cluster")
 	}
-	if deploymentModel.String != "shared" {
-		return nil, status.Error(codes.PermissionDenied, "cannot subscribe to non-shared cluster")
-	}
-
-	// Create subscription + durable alias ensure in one tx so a Navigator
-	// outage can't leave the tenant subscribed without an alias hand-off.
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
-	}
-	defer tx.Rollback() //nolint:errcheck
-
-	if err := quartermasterdb.New(tx).SubscribeTenantToCluster(ctx, quartermasterdb.SubscribeTenantToClusterParams{
-		TenantID: tenantID, ClusterID: clusterID,
-	}); err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to subscribe: %v", err)
-	}
-
-	if enqErr := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true); enqErr != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias ensure: %v", enqErr)
-	}
-
-	if commitErr := tx.Commit(); commitErr != nil {
-		return nil, status.Errorf(codes.Internal, "commit subscribe: %v", commitErr)
-	}
-
-	return &emptypb.Empty{}, nil
+	return nil
 }
 
 // UnsubscribeFromCluster unsubscribes a tenant from a cluster
 func (s *QuartermasterServer) UnsubscribeFromCluster(ctx context.Context, req *quartermasterpb.UnsubscribeFromClusterRequest) (*emptypb.Empty, error) {
-	tenantID := middleware.GetTenantID(ctx)
+	tenantID := strings.TrimSpace(req.GetTenantId())
+	if tenantID == "" {
+		tenantID = middleware.GetTenantID(ctx)
+	}
 	if tenantID == "" {
 		return nil, status.Error(codes.Unauthenticated, "tenant_id required")
 	}
-
-	// Allow admin override
-	if req.GetTenantId() != "" && req.GetTenantId() != tenantID {
-		role := ctxkeys.GetRole(ctx)
-		if role == "admin" || role == "provider" {
-			tenantID = req.GetTenantId()
-		} else {
-			return nil, status.Error(codes.PermissionDenied, "cannot unsubscribe other tenants")
-		}
+	if err := requireTenantSubscriptionActor(ctx, tenantID); err != nil {
+		return nil, err
 	}
 
 	clusterID := req.GetClusterId()
@@ -3759,10 +4033,14 @@ func (s *QuartermasterServer) UnsubscribeFromCluster(ctx context.Context, req *q
 		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias remove_cluster: %v", err)
 	}
 
-	if err := quartermasterdb.New(tx).UnsubscribeTenantFromCluster(ctx, quartermasterdb.UnsubscribeTenantFromClusterParams{
+	txQueries := quartermasterdb.New(tx)
+	if err := txQueries.UnsubscribeTenantFromCluster(ctx, quartermasterdb.UnsubscribeTenantFromClusterParams{
 		TenantID: tenantID, ClusterID: clusterID,
 	}); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to unsubscribe: %v", err)
+	}
+	if err := s.repointTenantPrimaryAfterAccessLoss(ctx, txQueries, tenantID, clusterID); err != nil {
+		return nil, status.Errorf(codes.Internal, "repoint tenant primary cluster: %v", err)
 	}
 
 	hasPaid, accErr := s.tenantHasPaidClusterAccessTx(ctx, tx, tenantID)
@@ -7855,6 +8133,9 @@ const (
 	eventClusterSubscriptionRequested = "cluster_subscription_requested"
 	eventClusterSubscriptionApproved  = "cluster_subscription_approved"
 	eventClusterSubscriptionRejected  = "cluster_subscription_rejected"
+	eventClusterAccessGranted         = "cluster_access_granted"
+	eventClusterAccessMaterialized    = "cluster_access_materialized"
+	eventClusterAccessRevoked         = "cluster_access_revoked"
 )
 
 // emitServiceEvent enqueues a service event into
@@ -8469,6 +8750,9 @@ func (s *QuartermasterServer) CreateClusterInvite(ctx context.Context, req *quar
 	if clusterID == "" || ownerTenantID == "" || invitedTenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id, owner_tenant_id, and invited_tenant_id required")
 	}
+	if err := requireTenantSubscriptionActor(ctx, ownerTenantID); err != nil {
+		return nil, err
+	}
 
 	userID := middleware.GetUserID(ctx)
 	// Verify ownership and get cluster name
@@ -8482,6 +8766,15 @@ func (s *QuartermasterServer) CreateClusterInvite(ctx context.Context, req *quar
 	}
 	if !clusterRow.OwnerTenantID.Valid || clusterRow.OwnerTenantID.String != ownerTenantID {
 		return nil, status.Error(codes.PermissionDenied, "only cluster owner can create invites")
+	}
+	if !clusterRow.IsPlatformOfficial.Valid {
+		return nil, status.Error(codes.Internal, "database error: cluster official state is NULL")
+	}
+	if !clusterRow.Visibility.Valid {
+		return nil, status.Error(codes.Internal, "database error: cluster visibility is NULL")
+	}
+	if inviteErr := validatePrivateInviteCluster(clusterRow.IsPlatformOfficial.Bool, clusterRow.OwnerTenantID, clusterRow.ClusterClass, clusterRow.Visibility.String, "created"); inviteErr != nil {
+		return nil, inviteErr
 	}
 
 	// Verify invited tenant exists
@@ -8567,6 +8860,9 @@ func (s *QuartermasterServer) RevokeClusterInvite(ctx context.Context, req *quar
 	if inviteID == "" || ownerTenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "invite_id and owner_tenant_id required")
 	}
+	if err := requireTenantSubscriptionActor(ctx, ownerTenantID); err != nil {
+		return nil, err
+	}
 
 	userID := middleware.GetUserID(ctx)
 	// Verify invite exists and owner is correct
@@ -8599,6 +8895,9 @@ func (s *QuartermasterServer) ListClusterInvites(ctx context.Context, req *quart
 
 	if clusterID == "" || ownerTenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id and owner_tenant_id required")
+	}
+	if err := requireTenantSubscriptionActor(ctx, ownerTenantID); err != nil {
+		return nil, err
 	}
 
 	// Verify ownership
@@ -8667,6 +8966,9 @@ func (s *QuartermasterServer) ListMyClusterInvites(ctx context.Context, req *qua
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
+	if err := requireTenantSubscriptionActor(ctx, tenantID); err != nil {
+		return nil, err
+	}
 
 	// Parse bidirectional pagination
 	params, err := pagination.Parse(req.GetPagination())
@@ -8718,7 +9020,7 @@ func rejectDirectCommercialClusterAccess(tenantID string, isPlatformOfficial boo
 		return status.Errorf(codes.FailedPrecondition, "monthly clusters require paid checkout before access can be %s", action)
 	}
 	if isPlatformOfficial {
-		return nil
+		return status.Errorf(codes.FailedPrecondition, "platform-official access must be materialized from the tenant billing tier before it can be %s", action)
 	}
 	if !ownerTenantID.Valid || ownerTenantID.String == "" {
 		return status.Error(codes.FailedPrecondition, "cluster ownership is ambiguous")
@@ -8729,6 +9031,41 @@ func rejectDirectCommercialClusterAccess(tenantID string, isPlatformOfficial boo
 	return status.Error(codes.FailedPrecondition, "third-party cluster access must be started through billing")
 }
 
+func validatePrivateInviteCluster(isPlatformOfficial bool, ownerTenantID sql.NullString, clusterClass, visibility, action string) error {
+	if isPlatformOfficial {
+		return status.Errorf(codes.FailedPrecondition, "platform-official access cannot be %s by invite", action)
+	}
+	if !ownerTenantID.Valid || strings.TrimSpace(ownerTenantID.String) == "" {
+		return status.Error(codes.FailedPrecondition, "cluster ownership is ambiguous")
+	}
+	class := strings.TrimSpace(clusterClass)
+	visibility = strings.TrimSpace(visibility)
+	if class == "" && visibility != "private" {
+		return status.Error(codes.FailedPrecondition, "cluster classification is unresolved; marketplace access cannot be authorized by invite")
+	}
+	if class != "tenant_private" && (class != "" || visibility != "private") {
+		return status.Errorf(codes.FailedPrecondition, "marketplace cluster access must be started through billing before it can be %s", action)
+	}
+	return nil
+}
+
+func requireTenantSubscriptionActor(ctx context.Context, tenantID string) error {
+	if ctxkeys.GetAuthType(ctx) != "jwt" {
+		return status.Error(codes.PermissionDenied, "tenant JWT or platform operator authorization required")
+	}
+	if ctxkeys.IsPlatformOperator(ctx) {
+		return nil
+	}
+	authenticatedTenant := strings.TrimSpace(middleware.GetTenantID(ctx))
+	if authenticatedTenant == "" {
+		return status.Error(codes.Unauthenticated, "tenant identity required")
+	}
+	if authenticatedTenant != strings.TrimSpace(tenantID) {
+		return status.Error(codes.PermissionDenied, "cannot mutate another tenant's cluster subscription")
+	}
+	return nil
+}
+
 // RequestClusterSubscription requests access to a cluster
 func (s *QuartermasterServer) RequestClusterSubscription(ctx context.Context, req *quartermasterpb.RequestClusterSubscriptionRequest) (*quartermasterpb.ClusterSubscription, error) {
 	tenantID := req.GetTenantId()
@@ -8737,6 +9074,9 @@ func (s *QuartermasterServer) RequestClusterSubscription(ctx context.Context, re
 	}
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
+	if err := requireTenantSubscriptionActor(ctx, tenantID); err != nil {
+		return nil, err
 	}
 
 	userID := middleware.GetUserID(ctx)
@@ -8757,10 +9097,6 @@ func (s *QuartermasterServer) RequestClusterSubscription(ctx context.Context, re
 	if !policy.Visibility.Valid || !policy.PricingModel.Valid || !policy.RequiresApproval.Valid || !policy.IsPlatformOfficial.Valid {
 		return nil, status.Error(codes.Internal, "database error: required cluster policy field is NULL")
 	}
-	if commercialErr := rejectDirectCommercialClusterAccess(tenantID, policy.IsPlatformOfficial.Bool, policy.OwnerTenantID, policy.PricingModel.String, "requested"); commercialErr != nil {
-		return nil, commercialErr
-	}
-
 	// Check visibility rules
 	inviteToken := req.InviteToken
 
@@ -8770,13 +9106,10 @@ func (s *QuartermasterServer) RequestClusterSubscription(ctx context.Context, re
 		if inviteToken == nil || *inviteToken == "" {
 			return nil, status.Error(codes.PermissionDenied, "private cluster requires invite token")
 		}
-	case "unlisted":
-		// Unlisted clusters require an invite
-		if inviteToken == nil || *inviteToken == "" {
-			return nil, status.Error(codes.PermissionDenied, "unlisted cluster requires invite token")
-		}
-	case "public":
-		// Public clusters are open (invite optional for resource limits)
+	case "public", "unlisted":
+		// Marketplace visibility is a discovery property, not an authority
+		// source. Commercial access is always materialized by Purser.
+		return nil, status.Error(codes.FailedPrecondition, "marketplace access must be started through billing")
 	}
 
 	// Validate invite token if provided
@@ -8801,6 +9134,18 @@ func (s *QuartermasterServer) RequestClusterSubscription(ctx context.Context, re
 		}
 		if inviteRow.InvitedTenantID != tenantID {
 			return nil, status.Error(codes.PermissionDenied, "invite token is for a different tenant")
+		}
+	}
+	// A private invite is an authority source only for tenant-private capacity.
+	// Marketplace capacity still requires Purser-owned eligibility and payment;
+	// an owner-issued token cannot reclassify it as private capacity.
+	if inviteID != "" {
+		if inviteErr := validatePrivateInviteCluster(policy.IsPlatformOfficial.Bool, policy.OwnerTenantID, policy.ClusterClass, policy.Visibility.String, "requested"); inviteErr != nil {
+			return nil, inviteErr
+		}
+	} else {
+		if commercialErr := rejectDirectCommercialClusterAccess(tenantID, policy.IsPlatformOfficial.Bool, policy.OwnerTenantID, policy.PricingModel.String, "requested"); commercialErr != nil {
+			return nil, commercialErr
 		}
 	}
 
@@ -8834,9 +9179,14 @@ func (s *QuartermasterServer) RequestClusterSubscription(ctx context.Context, re
 			return nil, status.Errorf(codes.Internal, "failed to accept invite: %v", err)
 		}
 	}
+	accessSource, sourceErr := clusterSubscriptionAccessSource(tenantID, inviteID, policy.IsPlatformOfficial.Bool, policy.OwnerTenantID)
+	if sourceErr != nil {
+		return nil, sourceErr
+	}
 
 	subscriptionID, err := txQueries.UpsertRequestedClusterSubscription(ctx, quartermasterdb.UpsertRequestedClusterSubscriptionParams{
 		ID: id, TenantID: tenantID, ClusterID: clusterID, AccessLevel: validString(accessLevel),
+		AccessSource:       accessSource,
 		SubscriptionStatus: validString(subscriptionStatus), ResourceLimits: inviteResourceLimits,
 		RequestedAt: sql.NullTime{Time: now, Valid: true},
 	})
@@ -8865,6 +9215,19 @@ func (s *QuartermasterServer) RequestClusterSubscription(ctx context.Context, re
 	return sub, nil
 }
 
+func clusterSubscriptionAccessSource(tenantID, inviteID string, isPlatformOfficial bool, ownerTenantID sql.NullString) (string, error) {
+	switch {
+	case inviteID != "":
+		return "private_invite", nil
+	case ownerTenantID.Valid && ownerTenantID.String == tenantID:
+		return "owner", nil
+	case isPlatformOfficial:
+		return "platform_tier", nil
+	default:
+		return "", status.Error(codes.FailedPrecondition, "cluster access source is not authoritative")
+	}
+}
+
 // AcceptClusterInvite accepts a cluster invite using the token
 func (s *QuartermasterServer) AcceptClusterInvite(ctx context.Context, req *quartermasterpb.AcceptClusterInviteRequest) (*quartermasterpb.ClusterSubscription, error) {
 	tenantID := req.GetTenantId()
@@ -8873,6 +9236,9 @@ func (s *QuartermasterServer) AcceptClusterInvite(ctx context.Context, req *quar
 	}
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
+	if err := requireTenantSubscriptionActor(ctx, tenantID); err != nil {
+		return nil, err
 	}
 
 	userID := middleware.GetUserID(ctx)
@@ -8889,14 +9255,14 @@ func (s *QuartermasterServer) AcceptClusterInvite(ctx context.Context, req *quar
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
-	if !inviteRow.AccessLevel.Valid || !inviteRow.PricingModel.Valid || !inviteRow.IsPlatformOfficial.Valid {
+	if !inviteRow.AccessLevel.Valid || !inviteRow.PricingModel.Valid || !inviteRow.IsPlatformOfficial.Valid || !inviteRow.Visibility.Valid {
 		return nil, status.Error(codes.Internal, "database error: required invite field is NULL")
 	}
 	if inviteRow.InvitedTenantID != tenantID {
 		return nil, status.Error(codes.PermissionDenied, "invite is for a different tenant")
 	}
-	if commercialErr := rejectDirectCommercialClusterAccess(tenantID, inviteRow.IsPlatformOfficial.Bool, inviteRow.OwnerTenantID, inviteRow.PricingModel.String, "accepted"); commercialErr != nil {
-		return nil, commercialErr
+	if inviteErr := validatePrivateInviteCluster(inviteRow.IsPlatformOfficial.Bool, inviteRow.OwnerTenantID, inviteRow.ClusterClass, inviteRow.Visibility.String, "accepted"); inviteErr != nil {
+		return nil, inviteErr
 	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -8955,6 +9321,9 @@ func (s *QuartermasterServer) ListPendingSubscriptions(ctx context.Context, req 
 
 	if clusterID == "" || ownerTenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id and owner_tenant_id required")
+	}
+	if err := requireTenantSubscriptionActor(ctx, ownerTenantID); err != nil {
+		return nil, err
 	}
 
 	// Verify ownership
@@ -9022,6 +9391,9 @@ func (s *QuartermasterServer) ApproveClusterSubscription(ctx context.Context, re
 	if subscriptionID == "" || ownerTenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "subscription_id and owner_tenant_id required")
 	}
+	if err := requireTenantSubscriptionActor(ctx, ownerTenantID); err != nil {
+		return nil, err
+	}
 
 	userID := middleware.GetUserID(ctx)
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -9046,10 +9418,17 @@ func (s *QuartermasterServer) ApproveClusterSubscription(ctx context.Context, re
 	if !subscriptionRow.OwnerTenantID.Valid || subscriptionRow.OwnerTenantID.String != ownerTenantID {
 		return nil, status.Error(codes.PermissionDenied, "only cluster owner can approve subscriptions")
 	}
-	if !subscriptionRow.PricingModel.Valid || !subscriptionRow.IsPlatformOfficial.Valid {
+	if !subscriptionRow.SubscriptionStatus.Valid || !subscriptionRow.PricingModel.Valid || !subscriptionRow.IsPlatformOfficial.Valid {
 		return nil, status.Error(codes.Internal, "database error: required subscription policy field is NULL")
 	}
-	if commercialErr := rejectDirectCommercialClusterAccess(subscriptionRow.TenantID, subscriptionRow.IsPlatformOfficial.Bool, subscriptionRow.OwnerTenantID, subscriptionRow.PricingModel.String, "approved"); commercialErr != nil {
+	if subscriptionRow.SubscriptionStatus.String != "pending_approval" {
+		return nil, status.Error(codes.FailedPrecondition, "subscription is not pending approval")
+	}
+	if subscriptionRow.AccessSource == "marketplace_subscription" {
+		if subscriptionRow.IsPlatformOfficial.Bool || subscriptionRow.OwnerTenantID.String == subscriptionRow.TenantID || !marketplacePricingSupportsApproval(subscriptionRow.PricingModel.String) {
+			return nil, status.Error(codes.FailedPrecondition, "invalid marketplace approval request")
+		}
+	} else if commercialErr := rejectDirectCommercialClusterAccess(subscriptionRow.TenantID, subscriptionRow.IsPlatformOfficial.Bool, subscriptionRow.OwnerTenantID, subscriptionRow.PricingModel.String, "approved"); commercialErr != nil {
 		return nil, commercialErr
 	}
 
@@ -9079,6 +9458,15 @@ func (s *QuartermasterServer) ApproveClusterSubscription(ctx context.Context, re
 	return sub, nil
 }
 
+func marketplacePricingSupportsApproval(pricingModel string) bool {
+	switch strings.TrimSpace(pricingModel) {
+	case "custom", "free_unmetered", "tier_inherit", "metered":
+		return true
+	default:
+		return false
+	}
+}
+
 // RejectClusterSubscription rejects a pending subscription
 func (s *QuartermasterServer) RejectClusterSubscription(ctx context.Context, req *quartermasterpb.RejectClusterSubscriptionRequest) (*quartermasterpb.ClusterSubscription, error) {
 	subscriptionID := req.GetSubscriptionId()
@@ -9086,6 +9474,9 @@ func (s *QuartermasterServer) RejectClusterSubscription(ctx context.Context, req
 
 	if subscriptionID == "" || ownerTenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "subscription_id and owner_tenant_id required")
+	}
+	if err := requireTenantSubscriptionActor(ctx, ownerTenantID); err != nil {
+		return nil, err
 	}
 
 	userID := middleware.GetUserID(ctx)
@@ -9101,7 +9492,7 @@ func (s *QuartermasterServer) RejectClusterSubscription(ctx context.Context, req
 
 	// Get subscription and verify ownership
 	txQueries := quartermasterdb.New(tx)
-	subscriptionRow, err := txQueries.GetSubscriptionOwner(ctx, subscriptionID)
+	subscriptionRow, err := txQueries.GetSubscriptionOwnerPolicy(ctx, subscriptionID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Error(codes.NotFound, "subscription not found")
 	}
@@ -9110,6 +9501,9 @@ func (s *QuartermasterServer) RejectClusterSubscription(ctx context.Context, req
 	}
 	if !subscriptionRow.OwnerTenantID.Valid || subscriptionRow.OwnerTenantID.String != ownerTenantID {
 		return nil, status.Error(codes.PermissionDenied, "only cluster owner can reject subscriptions")
+	}
+	if !subscriptionRow.SubscriptionStatus.Valid || subscriptionRow.SubscriptionStatus.String != "pending_approval" {
+		return nil, status.Error(codes.FailedPrecondition, "subscription is not pending approval")
 	}
 
 	reason := ""

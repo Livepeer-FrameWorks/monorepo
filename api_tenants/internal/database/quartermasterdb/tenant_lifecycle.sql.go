@@ -226,8 +226,8 @@ func (q *Queries) GetTenantPrimaryClusterID(ctx context.Context, tenantID string
 
 const grantDefaultClusterAccess = `-- name: GrantDefaultClusterAccess :exec
 INSERT INTO quartermaster.tenant_cluster_access
-    (tenant_id, cluster_id, access_level, is_active, created_at, updated_at)
-VALUES ($1::uuid, $2, 'subscriber', true,
+    (tenant_id, cluster_id, access_level, access_source, subscription_status, is_active, created_at, updated_at)
+VALUES ($1::uuid, $2, 'subscriber', 'platform_tier', 'active', true,
         $3::timestamp, $3::timestamp)
 ON CONFLICT (tenant_id, cluster_id) DO NOTHING
 `
@@ -276,7 +276,11 @@ func (q *Queries) LockActiveTenantDomains(ctx context.Context, tenantID string) 
 const lockTenantAliasEligibility = `-- name: LockTenantAliasEligibility :one
 SELECT t.name, t.subdomain, t.deployment_tier, t.is_active,
        EXISTS (SELECT 1 FROM quartermaster.tenant_cluster_access tca
-               WHERE tca.tenant_id = t.id AND tca.is_active = true) AS has_cluster
+               WHERE tca.tenant_id = t.id
+                 AND tca.is_active = true
+                 AND tca.subscription_status = 'active'
+                 AND tca.access_source <> 'unknown'
+                 AND (tca.expires_at IS NULL OR tca.expires_at > NOW())) AS has_cluster
 FROM quartermaster.tenants t
 WHERE t.id = $1::uuid
 FOR UPDATE
@@ -332,6 +336,43 @@ func (q *Queries) LockTenantProvisioningKey(ctx context.Context, provisioningKey
 	return err
 }
 
+const repointTenantPrimaryToOfficialIfCluster = `-- name: RepointTenantPrimaryToOfficialIfCluster :execrows
+UPDATE quartermaster.tenants AS tenant
+SET primary_cluster_id = tenant.official_cluster_id,
+    updated_at = NOW()
+WHERE tenant.id = $1::uuid
+  AND tenant.is_active = true
+  AND tenant.primary_cluster_id = $2::text
+  AND tenant.official_cluster_id IS NOT NULL
+  AND tenant.official_cluster_id <> $2::text
+  AND EXISTS (
+      SELECT 1
+      FROM quartermaster.tenant_cluster_access access
+      JOIN quartermaster.infrastructure_clusters cluster
+        ON cluster.cluster_id = access.cluster_id
+       AND cluster.is_active = true
+      WHERE access.tenant_id = tenant.id
+        AND access.cluster_id = tenant.official_cluster_id
+        AND access.is_active = true
+        AND access.subscription_status = 'active'
+        AND access.access_source <> 'unknown'
+        AND (access.expires_at IS NULL OR access.expires_at > NOW())
+  )
+`
+
+type RepointTenantPrimaryToOfficialIfClusterParams struct {
+	TenantID      string `db:"tenant_id" json:"tenant_id"`
+	LostClusterID string `db:"lost_cluster_id" json:"lost_cluster_id"`
+}
+
+func (q *Queries) RepointTenantPrimaryToOfficialIfCluster(ctx context.Context, arg RepointTenantPrimaryToOfficialIfClusterParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, repointTenantPrimaryToOfficialIfCluster, arg.TenantID, arg.LostClusterID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const setGeneratedTenantSubdomain = `-- name: SetGeneratedTenantSubdomain :exec
 UPDATE quartermaster.tenants
 SET subdomain = $1, updated_at = NOW()
@@ -370,7 +411,9 @@ SELECT EXISTS (
     WHERE tenant_id = $1::uuid
       AND cluster_id = $2
       AND is_active = true
-      AND (subscription_status = 'active' OR access_level = 'owner')
+      AND subscription_status = 'active'
+      AND access_source <> 'unknown'
+      AND (expires_at IS NULL OR expires_at > NOW())
 )
 `
 
@@ -393,6 +436,9 @@ SELECT EXISTS (
     JOIN quartermaster.tenants t ON t.id = tca.tenant_id
     WHERE tca.tenant_id = $1::uuid
       AND tca.is_active = true
+      AND tca.subscription_status = 'active'
+      AND tca.access_source <> 'unknown'
+      AND (tca.expires_at IS NULL OR tca.expires_at > NOW())
       AND t.is_active = true
       AND t.deployment_tier IN ('supporter', 'developer', 'production', 'enterprise')
 )

@@ -27,8 +27,10 @@ func (q *Queries) AcceptClusterInviteRecord(ctx context.Context, inviteID string
 const approveClusterSubscriptionRecord = `-- name: ApproveClusterSubscriptionRecord :exec
 UPDATE quartermaster.tenant_cluster_access
 SET subscription_status = 'active', approved_at = NOW(),
-    approved_by = $1::uuid, updated_at = NOW()
+    approved_by = $1::uuid, is_active = true, granted_at = NOW(),
+    updated_at = NOW()
 WHERE id = $2::uuid
+  AND subscription_status = 'pending_approval'
 `
 
 type ApproveClusterSubscriptionRecordParams struct {
@@ -99,7 +101,9 @@ func (q *Queries) FindPendingClusterInviteID(ctx context.Context, arg FindPendin
 }
 
 const getActiveClusterSubscriptionPolicy = `-- name: GetActiveClusterSubscriptionPolicy :one
-SELECT visibility, pricing_model, requires_approval, owner_tenant_id, is_platform_official
+SELECT visibility, pricing_model, requires_approval, owner_tenant_id,
+       COALESCE(cluster_class, '')::text AS cluster_class,
+       is_platform_official
 FROM quartermaster.infrastructure_clusters
 WHERE cluster_id = $1 AND is_active = true
 `
@@ -109,6 +113,7 @@ type GetActiveClusterSubscriptionPolicyRow struct {
 	PricingModel       sql.NullString `db:"pricing_model" json:"pricing_model"`
 	RequiresApproval   sql.NullBool   `db:"requires_approval" json:"requires_approval"`
 	OwnerTenantID      sql.NullString `db:"owner_tenant_id" json:"owner_tenant_id"`
+	ClusterClass       string         `db:"cluster_class" json:"cluster_class"`
 	IsPlatformOfficial sql.NullBool   `db:"is_platform_official" json:"is_platform_official"`
 }
 
@@ -120,6 +125,7 @@ func (q *Queries) GetActiveClusterSubscriptionPolicy(ctx context.Context, cluste
 		&i.PricingModel,
 		&i.RequiresApproval,
 		&i.OwnerTenantID,
+		&i.ClusterClass,
 		&i.IsPlatformOfficial,
 	)
 	return i, err
@@ -158,20 +164,31 @@ func (q *Queries) GetClusterOwner(ctx context.Context, clusterID string) (sql.Nu
 }
 
 const getClusterOwnerAndName = `-- name: GetClusterOwnerAndName :one
-SELECT owner_tenant_id, cluster_name
+SELECT owner_tenant_id, cluster_name,
+       COALESCE(cluster_class, '')::text AS cluster_class,
+       is_platform_official, visibility
 FROM quartermaster.infrastructure_clusters
 WHERE cluster_id = $1
 `
 
 type GetClusterOwnerAndNameRow struct {
-	OwnerTenantID sql.NullString `db:"owner_tenant_id" json:"owner_tenant_id"`
-	ClusterName   string         `db:"cluster_name" json:"cluster_name"`
+	OwnerTenantID      sql.NullString `db:"owner_tenant_id" json:"owner_tenant_id"`
+	ClusterName        string         `db:"cluster_name" json:"cluster_name"`
+	ClusterClass       string         `db:"cluster_class" json:"cluster_class"`
+	IsPlatformOfficial sql.NullBool   `db:"is_platform_official" json:"is_platform_official"`
+	Visibility         sql.NullString `db:"visibility" json:"visibility"`
 }
 
 func (q *Queries) GetClusterOwnerAndName(ctx context.Context, clusterID string) (GetClusterOwnerAndNameRow, error) {
 	row := q.db.QueryRowContext(ctx, getClusterOwnerAndName, clusterID)
 	var i GetClusterOwnerAndNameRow
-	err := row.Scan(&i.OwnerTenantID, &i.ClusterName)
+	err := row.Scan(
+		&i.OwnerTenantID,
+		&i.ClusterName,
+		&i.ClusterClass,
+		&i.IsPlatformOfficial,
+		&i.Visibility,
+	)
 	return i, err
 }
 
@@ -262,7 +279,9 @@ func (q *Queries) GetPendingInviteByToken(ctx context.Context, inviteToken strin
 
 const getPendingInviteWithClusterPolicy = `-- name: GetPendingInviteWithClusterPolicy :one
 SELECT i.id, i.cluster_id, i.invited_tenant_id, i.access_level, i.resource_limits,
-       c.pricing_model, c.owner_tenant_id, c.is_platform_official
+       c.pricing_model, c.owner_tenant_id,
+       COALESCE(c.cluster_class, '')::text AS cluster_class,
+       c.is_platform_official, c.visibility
 FROM quartermaster.cluster_invites i
 JOIN quartermaster.infrastructure_clusters c ON c.cluster_id = i.cluster_id
 WHERE i.invite_token = $1 AND i.status = 'pending'
@@ -277,7 +296,9 @@ type GetPendingInviteWithClusterPolicyRow struct {
 	ResourceLimits     json.RawMessage `db:"resource_limits" json:"resource_limits"`
 	PricingModel       sql.NullString  `db:"pricing_model" json:"pricing_model"`
 	OwnerTenantID      sql.NullString  `db:"owner_tenant_id" json:"owner_tenant_id"`
+	ClusterClass       string          `db:"cluster_class" json:"cluster_class"`
 	IsPlatformOfficial sql.NullBool    `db:"is_platform_official" json:"is_platform_official"`
+	Visibility         sql.NullString  `db:"visibility" json:"visibility"`
 }
 
 func (q *Queries) GetPendingInviteWithClusterPolicy(ctx context.Context, inviteToken string) (GetPendingInviteWithClusterPolicyRow, error) {
@@ -291,7 +312,9 @@ func (q *Queries) GetPendingInviteWithClusterPolicy(ctx context.Context, inviteT
 		&i.ResourceLimits,
 		&i.PricingModel,
 		&i.OwnerTenantID,
+		&i.ClusterClass,
 		&i.IsPlatformOfficial,
+		&i.Visibility,
 	)
 	return i, err
 }
@@ -317,15 +340,19 @@ func (q *Queries) GetSubscriptionOwner(ctx context.Context, subscriptionID strin
 }
 
 const getSubscriptionOwnerPolicy = `-- name: GetSubscriptionOwnerPolicy :one
-SELECT a.tenant_id, a.cluster_id, c.owner_tenant_id, c.pricing_model, c.is_platform_official
+SELECT a.tenant_id, a.cluster_id, a.access_source, a.subscription_status,
+       c.owner_tenant_id, c.pricing_model, c.is_platform_official
 FROM quartermaster.tenant_cluster_access a
 JOIN quartermaster.infrastructure_clusters c ON a.cluster_id = c.cluster_id
 WHERE a.id = $1::uuid
+FOR UPDATE OF a
 `
 
 type GetSubscriptionOwnerPolicyRow struct {
 	TenantID           string         `db:"tenant_id" json:"tenant_id"`
 	ClusterID          string         `db:"cluster_id" json:"cluster_id"`
+	AccessSource       string         `db:"access_source" json:"access_source"`
+	SubscriptionStatus sql.NullString `db:"subscription_status" json:"subscription_status"`
 	OwnerTenantID      sql.NullString `db:"owner_tenant_id" json:"owner_tenant_id"`
 	PricingModel       sql.NullString `db:"pricing_model" json:"pricing_model"`
 	IsPlatformOfficial sql.NullBool   `db:"is_platform_official" json:"is_platform_official"`
@@ -337,6 +364,8 @@ func (q *Queries) GetSubscriptionOwnerPolicy(ctx context.Context, subscriptionID
 	err := row.Scan(
 		&i.TenantID,
 		&i.ClusterID,
+		&i.AccessSource,
+		&i.SubscriptionStatus,
 		&i.OwnerTenantID,
 		&i.PricingModel,
 		&i.IsPlatformOfficial,
@@ -361,12 +390,16 @@ WITH my_tenants AS (
     FROM quartermaster.tenant_cluster_access mine
     WHERE mine.cluster_id = $1
       AND mine.is_active = TRUE AND mine.subscription_status = 'active'
+      AND mine.access_source <> 'unknown'
+      AND (mine.expires_at IS NULL OR mine.expires_at > NOW())
 ), peer_clusters AS (
     SELECT tca.cluster_id, array_agg(DISTINCT tca.tenant_id::text)::text[] AS shared_tenant_ids
     FROM quartermaster.tenant_cluster_access tca
     JOIN my_tenants mt ON tca.tenant_id = mt.tenant_id
     WHERE tca.cluster_id != $1
       AND tca.is_active = TRUE AND tca.subscription_status = 'active'
+      AND tca.access_source <> 'unknown'
+      AND (tca.expires_at IS NULL OR tca.expires_at > NOW())
     GROUP BY tca.cluster_id
 )
 SELECT pc.cluster_id, pc.shared_tenant_ids, ic.cluster_name, ic.cluster_type,
@@ -451,15 +484,17 @@ func (q *Queries) RevokeClusterInviteRecord(ctx context.Context, inviteID string
 
 const upsertAcceptedClusterSubscription = `-- name: UpsertAcceptedClusterSubscription :one
 INSERT INTO quartermaster.tenant_cluster_access (
-    id, tenant_id, cluster_id, access_level, subscription_status,
+    id, tenant_id, cluster_id, access_level, access_source, subscription_status,
     resource_limits, approved_at, is_active, created_at, updated_at
 ) VALUES (
     $1::uuid, $2::uuid, $3, $4,
+    'private_invite',
     'active', $5::text::jsonb, $6, true,
     $6, $6
 )
 ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
     access_level = EXCLUDED.access_level,
+    access_source = 'private_invite',
     subscription_status = 'active',
     resource_limits = COALESCE(EXCLUDED.resource_limits, quartermaster.tenant_cluster_access.resource_limits),
     approved_at = NOW(), is_active = true, updated_at = NOW()
@@ -491,15 +526,17 @@ func (q *Queries) UpsertAcceptedClusterSubscription(ctx context.Context, arg Ups
 
 const upsertRequestedClusterSubscription = `-- name: UpsertRequestedClusterSubscription :one
 INSERT INTO quartermaster.tenant_cluster_access (
-    id, tenant_id, cluster_id, access_level, subscription_status,
+    id, tenant_id, cluster_id, access_level, access_source, subscription_status,
     resource_limits, requested_at, is_active, created_at, updated_at
 ) VALUES (
     $1::uuid, $2::uuid, $3, $4,
-    $5, $6::text::jsonb,
-    $7, true, $7, $7
+    $5,
+    $6, $7::text::jsonb,
+    $8, true, $8, $8
 )
 ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
     access_level = EXCLUDED.access_level,
+    access_source = EXCLUDED.access_source,
     subscription_status = EXCLUDED.subscription_status,
     resource_limits = COALESCE(EXCLUDED.resource_limits, quartermaster.tenant_cluster_access.resource_limits),
     requested_at = COALESCE(quartermaster.tenant_cluster_access.requested_at, EXCLUDED.requested_at),
@@ -513,6 +550,7 @@ type UpsertRequestedClusterSubscriptionParams struct {
 	TenantID           string         `db:"tenant_id" json:"tenant_id"`
 	ClusterID          string         `db:"cluster_id" json:"cluster_id"`
 	AccessLevel        sql.NullString `db:"access_level" json:"access_level"`
+	AccessSource       string         `db:"access_source" json:"access_source"`
 	SubscriptionStatus sql.NullString `db:"subscription_status" json:"subscription_status"`
 	ResourceLimits     sql.NullString `db:"resource_limits" json:"resource_limits"`
 	RequestedAt        sql.NullTime   `db:"requested_at" json:"requested_at"`
@@ -524,6 +562,7 @@ func (q *Queries) UpsertRequestedClusterSubscription(ctx context.Context, arg Up
 		arg.TenantID,
 		arg.ClusterID,
 		arg.AccessLevel,
+		arg.AccessSource,
 		arg.SubscriptionStatus,
 		arg.ResourceLimits,
 		arg.RequestedAt,

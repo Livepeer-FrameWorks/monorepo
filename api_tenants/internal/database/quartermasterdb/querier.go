@@ -58,6 +58,7 @@ type Querier interface {
 	GetBootstrapTLSBundle(ctx context.Context, bundleID string) (GetBootstrapTLSBundleRow, error)
 	GetBootstrapTenant(ctx context.Context, id string) (GetBootstrapTenantRow, error)
 	GetBootstrapTenantClusterAccess(ctx context.Context, arg GetBootstrapTenantClusterAccessParams) (GetBootstrapTenantClusterAccessRow, error)
+	GetClusterAccessMaterializationPolicy(ctx context.Context, clusterID string) (GetClusterAccessMaterializationPolicyRow, error)
 	GetClusterActiveState(ctx context.Context, clusterID string) (sql.NullBool, error)
 	GetClusterDeploymentModel(ctx context.Context, clusterID string) (sql.NullString, error)
 	GetClusterInviteOwner(ctx context.Context, inviteID string) (GetClusterInviteOwnerRow, error)
@@ -76,6 +77,7 @@ type Querier interface {
 	GetPendingInviteWithClusterPolicy(ctx context.Context, inviteToken string) (GetPendingInviteWithClusterPolicyRow, error)
 	GetSubscriptionOwner(ctx context.Context, subscriptionID string) (GetSubscriptionOwnerRow, error)
 	GetSubscriptionOwnerPolicy(ctx context.Context, subscriptionID string) (GetSubscriptionOwnerPolicyRow, error)
+	GetTenantClusterAccessState(ctx context.Context, arg GetTenantClusterAccessStateParams) (string, error)
 	GetTenantClusterOwnershipLimit(ctx context.Context, tenantID string) (GetTenantClusterOwnershipLimitRow, error)
 	GetTenantClusterResourceLimits(ctx context.Context, arg GetTenantClusterResourceLimitsParams) (json.RawMessage, error)
 	GetTenantCustomDomainEligibility(ctx context.Context, tenantID string) (GetTenantCustomDomainEligibilityRow, error)
@@ -117,6 +119,7 @@ type Querier interface {
 	ListTakenMeshIPs(ctx context.Context, clusterID string) ([]string, error)
 	ListTenantClusterAccessRows(ctx context.Context, tenantID string) ([]ListTenantClusterAccessRowsRow, error)
 	ListTenantClusterRoutingPeers(ctx context.Context, tenantID string) ([]ListTenantClusterRoutingPeersRow, error)
+	ListTenantEffectiveAccess(ctx context.Context, tenantID string) ([]ListTenantEffectiveAccessRow, error)
 	ListTenantEntitledClusterIDs(ctx context.Context, tenantID string) ([]string, error)
 	LockActiveTenantDomains(ctx context.Context, tenantID string) (LockActiveTenantDomainsRow, error)
 	LockServiceBootstrapToken(ctx context.Context, tokenHash string) (LockServiceBootstrapTokenRow, error)
@@ -129,6 +132,7 @@ type Querier interface {
 	MarkNavigatorTenantAliasOutboxClaimed(ctx context.Context, ids []string) error
 	MarkNodeEdgeInstancesOffline(ctx context.Context, nodeID sql.NullString) error
 	MarkServiceEventOutboxClaimed(ctx context.Context, ids []string) error
+	MaterializeTenantClusterAccess(ctx context.Context, arg MaterializeTenantClusterAccessParams) (int64, error)
 	MoveBootstrapNode(ctx context.Context, arg MoveBootstrapNodeParams) error
 	MoveBootstrapNodeIngressSites(ctx context.Context, arg MoveBootstrapNodeIngressSitesParams) error
 	MoveBootstrapNodeServiceInstances(ctx context.Context, arg MoveBootstrapNodeServiceInstancesParams) error
@@ -136,10 +140,12 @@ type Querier interface {
 	PersistServiceHealthStatus(ctx context.Context, arg PersistServiceHealthStatusParams) (PersistServiceHealthStatusRow, error)
 	RejectClusterSubscriptionRecord(ctx context.Context, arg RejectClusterSubscriptionRecordParams) error
 	RepairTenantPrivateBaseURLBatch(ctx context.Context, batchSize int32) (int64, error)
+	RepointTenantPrimaryToOfficialIfCluster(ctx context.Context, arg RepointTenantPrimaryToOfficialIfClusterParams) (int64, error)
 	ResolveBootstrapTenantAliases(ctx context.Context, aliases []string) ([]ResolveBootstrapTenantAliasesRow, error)
 	ResolveTenantByCustomDomain(ctx context.Context, customDomain string) (ResolveTenantByCustomDomainRow, error)
 	ResolveTenantBySubdomain(ctx context.Context, subdomain string) (ResolveTenantBySubdomainRow, error)
 	RevokeClusterInviteRecord(ctx context.Context, inviteID string) error
+	RevokeMaterializedTenantClusterAccess(ctx context.Context, arg RevokeMaterializedTenantClusterAccessParams) (int64, error)
 	SetGeneratedTenantSubdomain(ctx context.Context, arg SetGeneratedTenantSubdomainParams) error
 	SetTenantOfficialCluster(ctx context.Context, arg SetTenantOfficialClusterParams) error
 	SubscribeTenantToCluster(ctx context.Context, arg SubscribeTenantToClusterParams) error

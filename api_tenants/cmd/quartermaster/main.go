@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"frameworks/api_tenants/internal/database/quartermasterdb"
+	quartermastermigrations "frameworks/api_tenants/internal/datamigrations"
 	qmgrpc "frameworks/api_tenants/internal/grpc"
 	"frameworks/api_tenants/internal/handlers"
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
@@ -21,6 +24,7 @@ import (
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/datamigrate"
 	dns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -60,6 +64,21 @@ func main() {
 	if version.HandleCLI() {
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "data-migrations" {
+		logger := logging.NewLoggerWithService("quartermaster")
+		config.LoadEnv(logger)
+		quartermastermigrations.Register()
+		dbConfig := database.DefaultConfig()
+		dbConfig.ServiceName = "quartermaster"
+		dbConfig.URL = config.RequireEnv("DATABASE_URL")
+		err := datamigrate.HandleArgv(context.Background(), func() (*sql.DB, error) {
+			return database.Connect(dbConfig, logger)
+		}, os.Stdout, os.Args[1:])
+		if err != nil && !errors.Is(err, datamigrate.ErrNotDataMigrationsCommand) {
+			logger.WithError(err).Fatal("Data migration command failed")
+		}
+		return
+	}
 
 	// Bootstrap subcommand dispatcher. The Ansible go_service role invokes the
 	// binary with no args to start the gRPC+HTTP server; "bootstrap" is the
@@ -79,6 +98,7 @@ func main() {
 	dbURL := config.RequireEnv("DATABASE_URL")
 	serviceToken := config.RequireEnv("SERVICE_TOKEN")
 	jwtSecret := config.RequireEnv("JWT_SECRET")
+	clusterAccessMaterializationSecret := config.RequireEnv("CLUSTER_ACCESS_MATERIALIZATION_SECRET")
 	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
 	navigatorGRPCAddr := config.GetEnv("NAVIGATOR_GRPC_ADDR", "") // Optional: enables DNS features.
 
@@ -96,8 +116,9 @@ func main() {
 	// Add health checks
 	healthChecker.AddCheck("database", monitoring.DatabaseHealthCheck(db))
 	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
-		"DATABASE_URL":  dbURL,
-		"SERVICE_TOKEN": serviceToken,
+		"DATABASE_URL":                          dbURL,
+		"SERVICE_TOKEN":                         serviceToken,
+		"CLUSTER_ACCESS_MATERIALIZATION_SECRET": clusterAccessMaterializationSecret,
 	}))
 
 	// Per-method counts + duration are captured by GRPCMetricsInterceptor

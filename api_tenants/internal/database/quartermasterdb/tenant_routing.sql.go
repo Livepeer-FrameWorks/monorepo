@@ -75,6 +75,9 @@ FROM quartermaster.tenant_cluster_access
 WHERE tenant_id = $1::uuid
   AND cluster_id = $2::text
   AND is_active = true
+  AND subscription_status = 'active'
+  AND access_source <> 'unknown'
+  AND (expires_at IS NULL OR expires_at > NOW())
 `
 
 type GetTenantClusterResourceLimitsParams struct {
@@ -107,6 +110,13 @@ SELECT c.cluster_id,
 FROM quartermaster.infrastructure_clusters c
 JOIN input ON true
 JOIN quartermaster.tenants t ON t.id = input.tenant_id
+JOIN quartermaster.tenant_cluster_access access
+  ON access.tenant_id = input.tenant_id
+ AND access.cluster_id = c.cluster_id
+ AND access.is_active = true
+ AND access.subscription_status = 'active'
+ AND access.access_source <> 'unknown'
+ AND (access.expires_at IS NULL OR access.expires_at > NOW())
 LEFT JOIN quartermaster.tenant_cluster_assignments tca
   ON tca.tenant_id = t.id
  AND tca.cluster_id = c.cluster_id
@@ -262,6 +272,11 @@ SELECT ic.cluster_id,
        COALESCE(ic.cell_id, '')::text AS cell_id,
        COALESCE(ic.cluster_class, '')::text AS cluster_class,
        COALESCE(ic.health_status, '')::text AS health_status,
+       COALESCE(ic.deployment_model, '')::text AS deployment_model,
+       COALESCE(ic.owner_tenant_id::text, '')::text AS owner_tenant_id,
+       COALESCE(tca.access_level, '')::text AS access_level,
+       COALESCE(tca.access_source, 'unknown')::text AS access_source,
+       tca.expires_at AS access_expires_at,
        foghorn.advertise_host AS foghorn_advertise_host,
        foghorn.port AS foghorn_port
 FROM quartermaster.tenant_cluster_access tca
@@ -293,6 +308,7 @@ LEFT JOIN LATERAL (
 WHERE tca.tenant_id = $1::uuid
   AND tca.is_active = true
   AND tca.subscription_status = 'active'
+  AND tca.access_source <> 'unknown'
   AND (tca.expires_at IS NULL OR tca.expires_at > NOW())
   AND ic.is_active = true
 ORDER BY ic.cluster_id ASC
@@ -312,6 +328,11 @@ type ListTenantClusterRoutingPeersRow struct {
 	CellID               string         `db:"cell_id" json:"cell_id"`
 	ClusterClass         string         `db:"cluster_class" json:"cluster_class"`
 	HealthStatus         string         `db:"health_status" json:"health_status"`
+	DeploymentModel      string         `db:"deployment_model" json:"deployment_model"`
+	OwnerTenantID        string         `db:"owner_tenant_id" json:"owner_tenant_id"`
+	AccessLevel          string         `db:"access_level" json:"access_level"`
+	AccessSource         string         `db:"access_source" json:"access_source"`
+	AccessExpiresAt      sql.NullTime   `db:"access_expires_at" json:"access_expires_at"`
 	FoghornAdvertiseHost sql.NullString `db:"foghorn_advertise_host" json:"foghorn_advertise_host"`
 	FoghornPort          sql.NullInt32  `db:"foghorn_port" json:"foghorn_port"`
 }
@@ -339,6 +360,11 @@ func (q *Queries) ListTenantClusterRoutingPeers(ctx context.Context, tenantID st
 			&i.CellID,
 			&i.ClusterClass,
 			&i.HealthStatus,
+			&i.DeploymentModel,
+			&i.OwnerTenantID,
+			&i.AccessLevel,
+			&i.AccessSource,
+			&i.AccessExpiresAt,
 			&i.FoghornAdvertiseHost,
 			&i.FoghornPort,
 		); err != nil {

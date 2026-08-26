@@ -89,7 +89,7 @@ func (q *Queries) GetMarketplaceCluster(ctx context.Context, clusterID, tenantID
 		       '' as subscription_status, false as is_subscribed, c.created_at
 		FROM quartermaster.infrastructure_clusters c
 		LEFT JOIN quartermaster.tenants t ON c.owner_tenant_id = t.id
-		WHERE c.cluster_id = $1 AND c.is_active = true AND c.visibility = 'public'
+		WHERE c.cluster_id = $1 AND c.is_active = true AND c.visibility IN ('public', 'unlisted')
 	`
 	args := []any{clusterID}
 	if tenantID != "" {
@@ -102,7 +102,7 @@ func (q *Queries) GetMarketplaceCluster(ctx context.Context, clusterID, tenantID
 			LEFT JOIN quartermaster.tenants t ON c.owner_tenant_id = t.id
 			LEFT JOIN quartermaster.tenant_cluster_access a ON c.cluster_id = a.cluster_id AND a.tenant_id = $2
 			WHERE c.cluster_id = $1 AND c.is_active = true
-			  AND (c.visibility = 'public' OR c.owner_tenant_id = $2 OR ((c.visibility = 'unlisted' OR c.visibility = 'private') AND a.id IS NOT NULL AND a.is_active = true))
+			  AND (c.visibility IN ('public', 'unlisted') OR c.owner_tenant_id = $2 OR (c.visibility = 'private' AND a.id IS NOT NULL AND a.is_active = true))
 		`
 		args = append(args, tenantID)
 	}

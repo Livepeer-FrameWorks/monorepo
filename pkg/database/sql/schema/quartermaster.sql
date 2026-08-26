@@ -124,7 +124,7 @@ CREATE TABLE IF NOT EXISTS quartermaster.referral_codes (
     is_active BOOLEAN DEFAULT TRUE,
     max_uses INTEGER,
     current_uses INTEGER DEFAULT 0,
-    expires_at TIMESTAMP,
+    expires_at TIMESTAMPTZ,
     created_at TIMESTAMP DEFAULT NOW()
 );
 
@@ -665,6 +665,7 @@ CREATE TABLE IF NOT EXISTS quartermaster.tenant_cluster_access (
 
     -- ===== ACCESS CONTROL =====
     access_level VARCHAR(50) DEFAULT 'shared', -- shared, dedicated, priority
+    access_source VARCHAR(50) NOT NULL DEFAULT 'unknown',
 
     -- ===== RESOURCE LIMITS (Quartermaster-owned capacity enforcement) =====
     resource_limits JSONB DEFAULT '{}',  -- Tenant-specific limits: {max_streams, max_viewers, max_bandwidth_mbps}
@@ -680,13 +681,14 @@ CREATE TABLE IF NOT EXISTS quartermaster.tenant_cluster_access (
     -- ===== STATUS =====
     is_active BOOLEAN DEFAULT true,
     granted_at TIMESTAMP DEFAULT NOW(),
-    expires_at TIMESTAMP,
+    expires_at TIMESTAMPTZ,
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW(),
     UNIQUE(tenant_id, cluster_id),
 
     -- ===== CONSTRAINTS =====
-    CONSTRAINT chk_subscription_status CHECK (subscription_status IN ('pending_approval', 'active', 'suspended', 'rejected'))
+    CONSTRAINT chk_subscription_status CHECK (subscription_status IN ('pending_approval', 'active', 'suspended', 'rejected')),
+    CONSTRAINT chk_cluster_access_source CHECK (access_source IN ('unknown', 'platform_tier', 'owner', 'private_invite', 'marketplace_subscription', 'operator_override'))
 );
 
 -- ============================================================================

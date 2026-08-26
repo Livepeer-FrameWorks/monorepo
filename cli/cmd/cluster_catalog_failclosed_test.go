@@ -232,8 +232,9 @@ func TestUpgradeGate_ClickHouseCheckedWhenPostgresDisabled(t *testing.T) {
 // TestUpgradeGate_DataMigrationCheckedForDBLessService pins the fix that decouples the catalog-wide data-migration
 // check from database schema ownership: a DB-less service (signalman: Kafka-only) must STILL reach the data-migration
 // check, so it cannot deploy ahead of an incomplete required_before_version data migration. Under the previous
-// early-return for non-DB services, the check was skipped entirely. The shipped catalog declares zero data migrations,
-// so the check passes with its "no required data migrations" line — which only prints if the block was actually reached.
+// early-return for non-DB services, the check was skipped entirely. The catalog
+// now declares a Quartermaster migration, so a fresh v0.3 baseline reports it
+// completed; that line only prints if the catalog-wide check was reached.
 func TestUpgradeGate_DataMigrationCheckedForDBLessService(t *testing.T) {
 	// A concrete version at/above the catalog floor so the shared CLI-version-floor check passes and the test isolates
 	// the data-migration routing.
@@ -260,7 +261,7 @@ func TestUpgradeGate_DataMigrationCheckedForDBLessService(t *testing.T) {
 	if !strings.Contains(got, "no engine schema checks") {
 		t.Errorf("a DB-less service should report no engine schema checks, output:\n%s", got)
 	}
-	if !strings.Contains(got, "no required data migrations declared") {
+	if !strings.Contains(got, "required data migration") {
 		t.Errorf("a DB-less service must still reach the data-migration check (not be skipped), output:\n%s", got)
 	}
 }

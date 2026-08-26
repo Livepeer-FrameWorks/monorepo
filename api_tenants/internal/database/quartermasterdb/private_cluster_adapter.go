@@ -100,9 +100,9 @@ type GrantPrivateClusterOwnerAccessParams struct {
 
 func (q *Queries) GrantPrivateClusterOwnerAccess(ctx context.Context, arg GrantPrivateClusterOwnerAccessParams) error {
 	_, err := q.db.ExecContext(ctx, `
-		INSERT INTO quartermaster.tenant_cluster_access (
-			tenant_id, cluster_id, access_level, subscription_status, is_active, created_at, updated_at
-		) VALUES ($1, $2, 'owner', 'active', true, NOW(), NOW())
+			INSERT INTO quartermaster.tenant_cluster_access (
+				tenant_id, cluster_id, access_level, access_source, subscription_status, is_active, created_at, updated_at
+			) VALUES ($1, $2, 'owner', 'owner', 'active', true, NOW(), NOW())
 	`, arg.TenantID, arg.ClusterID)
 	return err
 }

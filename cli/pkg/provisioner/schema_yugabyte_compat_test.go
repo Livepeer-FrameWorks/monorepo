@@ -239,8 +239,8 @@ func ybVerifyTaggedPurserMigrationPath(t *testing.T, name string) {
 func ybPrepareQuartermasterCatalog(t *testing.T, name string) {
 	t.Helper()
 	queries := generatedServiceQueries(t, "../../../api_tenants/internal/database/quartermasterdb")
-	if len(queries) != 153 {
-		t.Fatalf("found %d generated Quartermaster queries, want 153", len(queries))
+	if len(queries) != 159 {
+		t.Fatalf("found %d generated Quartermaster queries, want 159", len(queries))
 	}
 	var statements strings.Builder
 	for index, query := range queries {

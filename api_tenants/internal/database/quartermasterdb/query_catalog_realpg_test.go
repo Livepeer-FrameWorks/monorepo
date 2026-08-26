@@ -32,8 +32,8 @@ func TestGeneratedQueryCatalogPrepares_RealYugabyte(t *testing.T) {
 func prepareQuartermasterQueryCatalog(t *testing.T, db *sql.DB) {
 	t.Helper()
 	queries := quartermasterGeneratedQueries(t)
-	if len(queries) != 153 {
-		t.Fatalf("found %d generated Quartermaster queries, want 153", len(queries))
+	if len(queries) != 159 {
+		t.Fatalf("found %d generated Quartermaster queries, want 159", len(queries))
 	}
 	ctx := context.Background()
 	conn, err := db.Conn(ctx)

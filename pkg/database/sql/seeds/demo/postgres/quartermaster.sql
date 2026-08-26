@@ -151,13 +151,15 @@ ON CONFLICT (node_id) DO NOTHING;
 
 -- Grant access to demo clusters for the demo tenant
 INSERT INTO quartermaster.tenant_cluster_access (
-    tenant_id, cluster_id, access_level, is_active
+    tenant_id, cluster_id, access_level, access_source, subscription_status, is_active
 ) VALUES
-    ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-primary', 'owner', TRUE),
-    ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'demo-media', 'owner', TRUE),
-    ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'demo-selfhosted', 'owner', TRUE)
+    ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'central-primary', 'owner', 'platform_tier', 'active', TRUE),
+    ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'demo-media', 'owner', 'platform_tier', 'active', TRUE),
+    ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'demo-selfhosted', 'owner', 'owner', 'active', TRUE)
 ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
     access_level = EXCLUDED.access_level,
+    access_source = EXCLUDED.access_source,
+    subscription_status = EXCLUDED.subscription_status,
     is_active = TRUE;
 
 -- Bind Helmsman demo node fingerprint (machine-id SHA-256) to demo tenant for immediate matching

@@ -49,8 +49,8 @@ LIMIT 1;
 
 -- name: GrantDefaultClusterAccess :exec
 INSERT INTO quartermaster.tenant_cluster_access
-    (tenant_id, cluster_id, access_level, is_active, created_at, updated_at)
-VALUES (sqlc.arg(tenant_id)::uuid, sqlc.arg(cluster_id), 'subscriber', true,
+    (tenant_id, cluster_id, access_level, access_source, subscription_status, is_active, created_at, updated_at)
+VALUES (sqlc.arg(tenant_id)::uuid, sqlc.arg(cluster_id), 'subscriber', 'platform_tier', 'active', true,
         sqlc.arg(created_at)::timestamp, sqlc.arg(created_at)::timestamp)
 ON CONFLICT (tenant_id, cluster_id) DO NOTHING;
 
@@ -73,7 +73,11 @@ WHERE id = sqlc.arg(tenant_id)::uuid;
 -- name: LockTenantAliasEligibility :one
 SELECT t.name, t.subdomain, t.deployment_tier, t.is_active,
        EXISTS (SELECT 1 FROM quartermaster.tenant_cluster_access tca
-               WHERE tca.tenant_id = t.id AND tca.is_active = true) AS has_cluster
+               WHERE tca.tenant_id = t.id
+                 AND tca.is_active = true
+                 AND tca.subscription_status = 'active'
+                 AND tca.access_source <> 'unknown'
+                 AND (tca.expires_at IS NULL OR tca.expires_at > NOW())) AS has_cluster
 FROM quartermaster.tenants t
 WHERE t.id = sqlc.arg(tenant_id)::uuid
 FOR UPDATE;
@@ -90,6 +94,9 @@ SELECT EXISTS (
     JOIN quartermaster.tenants t ON t.id = tca.tenant_id
     WHERE tca.tenant_id = sqlc.arg(tenant_id)::uuid
       AND tca.is_active = true
+      AND tca.subscription_status = 'active'
+      AND tca.access_source <> 'unknown'
+      AND (tca.expires_at IS NULL OR tca.expires_at > NOW())
       AND t.is_active = true
       AND t.deployment_tier IN ('supporter', 'developer', 'production', 'enterprise')
 );
@@ -116,7 +123,9 @@ SELECT EXISTS (
     WHERE tenant_id = sqlc.arg(tenant_id)::uuid
       AND cluster_id = sqlc.arg(cluster_id)
       AND is_active = true
-      AND (subscription_status = 'active' OR access_level = 'owner')
+      AND subscription_status = 'active'
+      AND access_source <> 'unknown'
+      AND (expires_at IS NULL OR expires_at > NOW())
 );
 
 -- name: GetInfrastructureClusterType :one
@@ -140,3 +149,26 @@ SET primary_cluster_id = sqlc.arg(primary_cluster_id),
     deployment_model = sqlc.arg(deployment_model),
     updated_at = NOW()
 WHERE id = sqlc.arg(tenant_id)::uuid AND is_active = true;
+
+-- name: RepointTenantPrimaryToOfficialIfCluster :execrows
+UPDATE quartermaster.tenants AS tenant
+SET primary_cluster_id = tenant.official_cluster_id,
+    updated_at = NOW()
+WHERE tenant.id = sqlc.arg(tenant_id)::uuid
+  AND tenant.is_active = true
+  AND tenant.primary_cluster_id = sqlc.arg(lost_cluster_id)::text
+  AND tenant.official_cluster_id IS NOT NULL
+  AND tenant.official_cluster_id <> sqlc.arg(lost_cluster_id)::text
+  AND EXISTS (
+      SELECT 1
+      FROM quartermaster.tenant_cluster_access access
+      JOIN quartermaster.infrastructure_clusters cluster
+        ON cluster.cluster_id = access.cluster_id
+       AND cluster.is_active = true
+      WHERE access.tenant_id = tenant.id
+        AND access.cluster_id = tenant.official_cluster_id
+        AND access.is_active = true
+        AND access.subscription_status = 'active'
+        AND access.access_source <> 'unknown'
+        AND (access.expires_at IS NULL OR access.expires_at > NOW())
+  );

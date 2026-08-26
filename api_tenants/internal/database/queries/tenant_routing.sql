@@ -56,6 +56,13 @@ SELECT c.cluster_id,
 FROM quartermaster.infrastructure_clusters c
 JOIN input ON true
 JOIN quartermaster.tenants t ON t.id = input.tenant_id
+JOIN quartermaster.tenant_cluster_access access
+  ON access.tenant_id = input.tenant_id
+ AND access.cluster_id = c.cluster_id
+ AND access.is_active = true
+ AND access.subscription_status = 'active'
+ AND access.access_source <> 'unknown'
+ AND (access.expires_at IS NULL OR access.expires_at > NOW())
 LEFT JOIN quartermaster.tenant_cluster_assignments tca
   ON tca.tenant_id = t.id
  AND tca.cluster_id = c.cluster_id
@@ -67,7 +74,10 @@ SELECT resource_limits
 FROM quartermaster.tenant_cluster_access
 WHERE tenant_id = sqlc.arg(tenant_id)::uuid
   AND cluster_id = sqlc.arg(cluster_id)::text
-  AND is_active = true;
+  AND is_active = true
+  AND subscription_status = 'active'
+  AND access_source <> 'unknown'
+  AND (expires_at IS NULL OR expires_at > NOW());
 
 -- name: GetHealthyFoghornAddressForCluster :one
 SELECT si.advertise_host, si.port
@@ -113,6 +123,11 @@ SELECT ic.cluster_id,
        COALESCE(ic.cell_id, '')::text AS cell_id,
        COALESCE(ic.cluster_class, '')::text AS cluster_class,
        COALESCE(ic.health_status, '')::text AS health_status,
+       COALESCE(ic.deployment_model, '')::text AS deployment_model,
+       COALESCE(ic.owner_tenant_id::text, '')::text AS owner_tenant_id,
+       COALESCE(tca.access_level, '')::text AS access_level,
+       COALESCE(tca.access_source, 'unknown')::text AS access_source,
+       tca.expires_at AS access_expires_at,
        foghorn.advertise_host AS foghorn_advertise_host,
        foghorn.port AS foghorn_port
 FROM quartermaster.tenant_cluster_access tca
@@ -144,6 +159,7 @@ LEFT JOIN LATERAL (
 WHERE tca.tenant_id = sqlc.arg(tenant_id)::uuid
   AND tca.is_active = true
   AND tca.subscription_status = 'active'
+  AND tca.access_source <> 'unknown'
   AND (tca.expires_at IS NULL OR tca.expires_at > NOW())
   AND ic.is_active = true
 ORDER BY ic.cluster_id ASC;

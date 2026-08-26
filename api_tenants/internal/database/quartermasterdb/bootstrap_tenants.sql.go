@@ -13,6 +13,7 @@ const activateBootstrapTenantClusterAccess = `-- name: ActivateBootstrapTenantCl
 UPDATE quartermaster.tenant_cluster_access
 SET subscription_status = 'active',
     is_active = true,
+    access_source = 'platform_tier',
     updated_at = NOW()
 WHERE tenant_id = $1::uuid
   AND cluster_id = $2::text
@@ -108,11 +109,11 @@ func (q *Queries) InsertBootstrapTenant(ctx context.Context, arg InsertBootstrap
 
 const insertBootstrapTenantClusterAccess = `-- name: InsertBootstrapTenantClusterAccess :exec
 INSERT INTO quartermaster.tenant_cluster_access (
-    tenant_id, cluster_id, access_level, subscription_status,
+    tenant_id, cluster_id, access_level, access_source, subscription_status,
     is_active, granted_at, created_at, updated_at
 ) VALUES (
     $1::uuid, $2::text,
-    'shared', 'active', true, NOW(), NOW(), NOW()
+    'shared', 'platform_tier', 'active', true, NOW(), NOW(), NOW()
 )
 `
 
