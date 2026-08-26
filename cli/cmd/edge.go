@@ -2793,7 +2793,7 @@ Without arguments, prints the current mode. With an argument, requests a mode ch
 
 The mode change is sent upstream to Foghorn for validation. Foghorn applies
 the change and pushes an updated ConfigSeed back to the node.`, Args: cobra.RangeArgs(0, 1), RunE: func(cmd *cobra.Command, args []string) error {
-		helmsmanBase := "http://localhost:18007"
+		helmsmanBase := "http://localhost:18017"
 
 		// Container mode reaches the loopback-bound /node/mode endpoint by
 		// exec'ing curl inside the edge container (works on the darwin

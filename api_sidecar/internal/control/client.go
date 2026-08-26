@@ -1227,6 +1227,8 @@ func runClient(addr string, logger logging.Logger) error {
 						storeConn(getStream(), nid)
 					}
 				}
+			case *ipcpb.ControlMessage_BalancerCapabilityUpdate:
+				sidecarcfg.ApplyBalancerCapability(x.BalancerCapabilityUpdate)
 			case *ipcpb.ControlMessage_DesiredStateUpdate:
 				go handleDesiredStateUpdate(stream.Context(), logger, msg.GetRequestId(), x.DesiredStateUpdate, stream.Send)
 			case *ipcpb.ControlMessage_FreezePermissionResponse:

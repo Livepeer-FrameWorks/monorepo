@@ -10,6 +10,8 @@ type recordingMistAPI struct {
 	addedProtocols  []map[string]interface{}
 	protocolUpdates []protocolUpdate
 	updatedConfigs  []map[string]interface{}
+	addedStreams    []map[string]map[string]interface{}
+	saveCalls       int
 	backupResult    map[string]interface{} // returned by ConfigBackup (nil ⇒ nil)
 }
 
@@ -23,6 +25,7 @@ func (m *recordingMistAPI) UpdateConfig(partial map[string]interface{}) (map[str
 }
 
 func (m *recordingMistAPI) Save() error {
+	m.saveCalls++
 	return nil
 }
 
@@ -40,7 +43,8 @@ func (m *recordingMistAPI) DeleteProtocols([]map[string]interface{}) error {
 	return nil
 }
 
-func (m *recordingMistAPI) AddStreams(map[string]map[string]interface{}) error {
+func (m *recordingMistAPI) AddStreams(streams map[string]map[string]interface{}) error {
+	m.addedStreams = append(m.addedStreams, streams)
 	return nil
 }
 

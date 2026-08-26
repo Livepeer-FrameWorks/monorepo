@@ -20,8 +20,8 @@ helmsman_mist_http_upstream: "localhost:8080"
 helmsman_webhook_upstream: "localhost:18007"
 helmsman_caddy_admin_url: "http://localhost:2019"
 helmsman_caddy_config_path: /etc/caddy/Caddyfile
-# :18007 carries the unauthenticated local /node/mode endpoint; every native
-# consumer (Caddy, Mist triggers, vmagent) is loopback, so bind local-only.
+# :18007 carries webhooks and relay traffic. Node-mode management is isolated
+# on the hard-loopback :18017 listener inside the Helmsman process.
 helmsman_bind_addr: "127.0.0.1"
 helmsman_mist_api_user: frameworks
 helmsman_mist_api_password: ""

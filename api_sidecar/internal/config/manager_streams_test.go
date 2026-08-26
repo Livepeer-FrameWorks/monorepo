@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net/url"
 	"reflect"
 	"testing"
 
@@ -80,6 +81,52 @@ func TestSourceBalancerBasePreservesExistingPathAndQuery(t *testing.T) {
 	want := "https://foghorn.internal/base/source/by-node/edge%2Fnode%201?x=1"
 	if got != want {
 		t.Fatalf("sourceBalancerBase = %q, want %q", got, want)
+	}
+}
+
+func TestSourceBalancerCapabilitySurvivesMistQueryReplacement(t *testing.T) {
+	base := "https://foghorn.internal/_frameworks/balancer/v1/edge-node-1/123/signature?discarded=yes"
+	raw := sourceBalancerBase(base, "edge-node-1")
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatalf("parse configured balance URL: %v", err)
+	}
+
+	// MistInputBalancer replaces the complete configured query with these
+	// request arguments. Authentication therefore has to survive in the path.
+	u.RawQuery = url.Values{"source": {"live+stream"}}.Encode()
+	if got, want := u.EscapedPath(), "/_frameworks/balancer/v1/edge-node-1/123/signature/source/by-node/edge-node-1"; got != want {
+		t.Fatalf("Mist-shaped request path = %q, want %q", got, want)
+	}
+	if u.Query().Get("discarded") != "" || u.Query().Get("source") != "live+stream" {
+		t.Fatalf("Mist-shaped request query = %q", u.RawQuery)
+	}
+}
+
+func TestApplyBalancerCapabilitySkipsFullReconcile(t *testing.T) {
+	t.Setenv("NODE_ID", "edge-node-1")
+	mist := &recordingMistAPI{}
+	manager := &Manager{
+		mistClient: mist,
+		logger:     logging.NewLogger(),
+		lastSeed: &ipcpb.ConfigSeed{
+			NodeId: "edge-node-1", FoghornBalancerBase: "https://old.example/cap",
+			Templates: []*ipcpb.StreamTemplate{{Def: &ipcpb.StreamDef{Name: "live"}}},
+		},
+	}
+
+	manager.applyBalancerCapability(&ipcpb.BalancerCapabilityUpdate{
+		NodeId: "edge-node-1", FoghornBalancerBase: "https://new.example/cap",
+	})
+
+	if len(mist.updatedConfigs) != 0 || len(mist.addedProtocols) != 0 {
+		t.Fatalf("capability rotation ran full reconcile: configs=%d protocols=%d", len(mist.updatedConfigs), len(mist.addedProtocols))
+	}
+	if len(mist.addedStreams) != 1 || mist.saveCalls != 1 {
+		t.Fatalf("capability rotation streams=%d saves=%d, want 1/1", len(mist.addedStreams), mist.saveCalls)
+	}
+	if got := mist.addedStreams[0]["live"]["source"]; got != "balance:https://new.example/cap/source/by-node/edge-node-1" {
+		t.Fatalf("refreshed live source = %v", got)
 	}
 }
 

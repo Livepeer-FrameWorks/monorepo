@@ -27,6 +27,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -119,6 +120,45 @@ func ApplySeed(seed *ipcpb.ConfigSeed, sender ApplySeedSender) {
 	manager.mu.Unlock()
 	manager.startDriftRepairLoop()
 	go manager.reconcile()
+}
+
+// ApplyBalancerCapability rotates the source-lookup capability embedded in
+// managed Mist stream templates. It intentionally avoids the full ConfigSeed
+// reconcile, which includes TLS files, Caddy, protocols, baseline config, and
+// a complete Mist backup/save cycle unrelated to capability rotation.
+func ApplyBalancerCapability(update *ipcpb.BalancerCapabilityUpdate) {
+	if manager == nil || update == nil || strings.TrimSpace(update.GetFoghornBalancerBase()) == "" {
+		return
+	}
+	go manager.applyBalancerCapability(update)
+}
+
+func (m *Manager) applyBalancerCapability(update *ipcpb.BalancerCapabilityUpdate) {
+	m.reconcileMu.Lock()
+	defer m.reconcileMu.Unlock()
+
+	m.mu.Lock()
+	if m.lastSeed == nil || (update.GetNodeId() != "" && m.lastSeed.GetNodeId() != "" && update.GetNodeId() != m.lastSeed.GetNodeId()) {
+		m.mu.Unlock()
+		return
+	}
+	seed := &ipcpb.ConfigSeed{}
+	proto.Merge(seed, m.lastSeed)
+	seed.FoghornBalancerBase = strings.TrimSpace(update.GetFoghornBalancerBase())
+	m.lastSeed = seed
+	m.mu.Unlock()
+
+	streams := streamConfigsFromSeed(seed, seed.GetFoghornBalancerBase(), os.Getenv("NODE_ID"))
+	if len(streams) == 0 {
+		return
+	}
+	if err := m.mistClient.AddStreams(streams); err != nil {
+		m.logger.WithError(err).Warn("Mist balancer capability refresh failed")
+		return
+	}
+	if err := m.mistClient.Save(); err != nil {
+		m.logger.WithError(err).Warn("Mist balancer capability refresh save failed")
+	}
 }
 
 // GetTenantID returns the tenant_id from the last applied ConfigSeed

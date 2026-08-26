@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -19,6 +21,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 	"github.com/gin-gonic/gin"
 )
@@ -131,24 +134,25 @@ func main() {
 
 	// Setup router with unified monitoring
 	r := server.SetupServiceRouter(logger, "helmsman", healthChecker, metricsCollector)
+	managementRouter := server.SetupServiceRouter(logger, "helmsman-management", healthChecker, metricsCollector)
 
-	// API routes (root level - nginx adds /api/sidecar/ prefix)
+	// Operator and diagnostic routes stay on the loopback-only management
+	// listener. The public/Mist listener contains only data-plane callbacks and
+	// authenticated edge reads.
 	{
-		r.GET("/prometheus/nodes", handlers.GetPrometheusNodes)
-		r.POST("/prometheus/nodes", handlers.AddPrometheusNode)
-		r.DELETE("/prometheus/nodes/:node_id", handlers.RemovePrometheusNode)
-
-		// Node management (local agent/CLI)
-		r.GET("/node/mode", handlers.HandleGetNodeMode)
-		r.POST("/node/mode", handlers.HandleSetNodeMode)
+		managementRouter.GET("/prometheus/nodes", handlers.GetPrometheusNodes)
+		managementRouter.POST("/prometheus/nodes", handlers.AddPrometheusNode)
+		managementRouter.DELETE("/prometheus/nodes/:node_id", handlers.RemovePrometheusNode)
 
 		// Durable trigger WAL inspection + replay. Operators hit these
 		// during incident response to see what's awaiting Foghorn's ack
 		// and to kick the forwarder without waiting for the periodic
 		// tick. See docs/architecture/trigger-durability.md.
-		r.GET("/triggers/wal", handlers.HandleTriggerWALStatus)
-		r.POST("/triggers/wal/replay", handlers.HandleTriggerWALReplay)
+		managementRouter.GET("/triggers/wal", handlers.HandleTriggerWALStatus)
+		managementRouter.POST("/triggers/wal/replay", handlers.HandleTriggerWALReplay)
 	}
+	managementRouter.GET("/node/mode", handlers.HandleGetNodeMode)
+	managementRouter.POST("/node/mode", handlers.HandleSetNodeMode)
 
 	// Edge API — read-only endpoints for tray app / CLI, authenticated via Foghorn
 	edge := r.Group("/api/edge", handlers.EdgeAPIAuthMiddleware())
@@ -260,16 +264,30 @@ func main() {
 
 	// Start server with graceful shutdown
 	serverConfig := server.DefaultConfig("helmsman", "18007")
-	// :18007 serves webhooks, the relay, and the UNAUTHENTICATED local
-	// /node/mode endpoint. Native and Linux host-network container deploys
-	// set 127.0.0.1 (everything that needs it — Caddy, Mist triggers,
-	// vmagent — is loopback there); the darwin bridge flavor leaves it
-	// empty so vmagent can scrape by service DNS (18007 is not published).
 	serverConfig.BindAddr = os.Getenv("HELMSMAN_BIND_ADDR")
+	managementPort := fmt.Sprintf("%d", servicedefs.HelmsmanManagementPort)
+	managementConfig := server.DefaultConfig("helmsman-management", managementPort)
+	managementConfig.Port = config.GetEnv("HELMSMAN_MANAGEMENT_PORT", managementPort)
+	managementConfig.BindAddr = config.GetEnv("HELMSMAN_MANAGEMENT_BIND_ADDR", "127.0.0.1")
+	if !isLoopbackBind(managementConfig.BindAddr) {
+		logger.WithField("bind_addr", managementConfig.BindAddr).Fatal("Helmsman management listener must bind loopback")
+	}
 	server.RegisterEnvFileReload("helmsman", logger)
-	if err := server.Start(serverConfig, r, logger); err != nil {
+	if err := server.StartAll([]server.Listener{
+		{Config: serverConfig, Router: r},
+		{Config: managementConfig, Router: managementRouter},
+	}, logger); err != nil {
 		logger.WithError(err).Fatal("Server startup failed")
 	}
+}
+
+func isLoopbackBind(bindAddr string) bool {
+	bindAddr = strings.TrimSpace(strings.Trim(bindAddr, "[]"))
+	if strings.EqualFold(bindAddr, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(bindAddr)
+	return ip != nil && ip.IsLoopback()
 }
 
 func registerMistAdminRoutes(r *gin.Engine, mistServerURL string, logger logging.Logger) {
