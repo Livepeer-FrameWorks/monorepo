@@ -14,6 +14,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
@@ -622,10 +623,10 @@ func (s *Service) activateClusterSubscriptionFromStripe(ctx context.Context, ten
 	if !alreadyActive && s.qmClient != nil {
 		grantCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if err := s.qmClient.GrantClusterAccess(grantCtx, &quartermasterpb.GrantClusterAccessRequest{
-			TenantId:    tenantID,
-			ClusterId:   clusterID,
-			AccessLevel: "shared",
+		if err := s.qmClient.MaterializeClusterAccess(grantCtx, &quartermasterpb.MaterializeClusterAccessRequest{
+			TenantId: tenantID, ClusterId: clusterID,
+			AccessSource:           clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_MARKETPLACE_SUBSCRIPTION,
+			AuthorizationReference: "stripe:" + subscriptionID,
 		}); err != nil {
 			return fmt.Errorf("failed to grant cluster access: %w", err)
 		}

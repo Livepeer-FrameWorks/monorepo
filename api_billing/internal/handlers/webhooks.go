@@ -23,6 +23,7 @@ import (
 	"frameworks/api_billing/internal/operator"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
+	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
@@ -1092,9 +1093,10 @@ func (s *Service) updateClusterSubscriptionFromStripe(obj StripeSubscriptionObje
 		if err == nil && tenantID != "" && clusterID != "" {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			if _, err := s.qmClient.UnsubscribeFromCluster(ctx, &quartermasterpb.UnsubscribeFromClusterRequest{
-				TenantId:  tenantID,
-				ClusterId: clusterID,
+			if err := s.qmClient.RevokeMaterializedClusterAccess(ctx, &quartermasterpb.RevokeMaterializedClusterAccessRequest{
+				TenantId: tenantID, ClusterId: clusterID,
+				AccessSource:           clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_MARKETPLACE_SUBSCRIPTION,
+				AuthorizationReference: "stripe:" + obj.ID,
 			}); err != nil {
 				return fmt.Errorf("failed to revoke cluster access: %w", err)
 			}

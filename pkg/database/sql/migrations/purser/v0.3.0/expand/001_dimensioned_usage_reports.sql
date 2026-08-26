@@ -179,6 +179,10 @@ CREATE TABLE IF NOT EXISTS purser.usage_reservations (
     PRIMARY KEY (tenant_id, source_id, cluster_id)
 );
 
+CREATE INDEX IF NOT EXISTS idx_usage_reservations_tenant_currency_recent
+    ON purser.usage_reservations (tenant_id, currency, updated_at DESC)
+    INCLUDE (reserved_amount_micro);
+
 CREATE TABLE IF NOT EXISTS purser.prepaid_usage_settlements (
     report_id VARCHAR(64) PRIMARY KEY,
     tenant_id UUID NOT NULL,

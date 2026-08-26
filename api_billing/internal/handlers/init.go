@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -10,6 +11,7 @@ import (
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 )
 
 // PurserMetrics holds all Prometheus metrics for Purser. DB connection-pool
@@ -45,10 +47,17 @@ type Service struct {
 	logger        logging.Logger
 	metrics       *PurserMetrics
 	emailService  *EmailService
-	qmClient      *qmclient.GRPCClient
+	qmClient      quartermasterCommercialClient
 	mollieClient  *mollie.Client
 	stripeClient  *billingstripe.Client
 	decklogClient *decklogclient.BatchedClient
+}
+
+type quartermasterCommercialClient interface {
+	GetCluster(ctx context.Context, clusterID string) (*quartermasterpb.ClusterResponse, error)
+	GetTenant(ctx context.Context, tenantID string) (*quartermasterpb.GetTenantResponse, error)
+	MaterializeClusterAccess(ctx context.Context, req *quartermasterpb.MaterializeClusterAccessRequest) error
+	RevokeMaterializedClusterAccess(ctx context.Context, req *quartermasterpb.RevokeMaterializedClusterAccessRequest) error
 }
 
 // NewService builds the webhook/checkout handler service from its

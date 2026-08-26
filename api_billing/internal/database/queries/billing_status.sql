@@ -7,7 +7,8 @@ SELECT
     ts.payment_method,
     ts.stripe_subscription_id,
     ts.mollie_subscription_id,
-    bt.tier_name
+    bt.tier_name,
+    COALESCE(bt.tier_level, 0)::integer AS tier_level
 FROM purser.tenant_subscriptions ts
 JOIN purser.billing_tiers bt ON bt.id = ts.tier_id
 LEFT JOIN purser.prepaid_balances pb

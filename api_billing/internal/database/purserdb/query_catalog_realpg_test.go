@@ -33,6 +33,7 @@ func TestGeneratedQueryCatalogPrepares_RealPG(t *testing.T) {
 	db := startQueryCatalogRealPG(t)
 	preparePurserQueryCatalog(t, db)
 	assertTenantAdmissionQueryExecution(t, db)
+	assertTenantAdmissionQueryPlan(t, db)
 
 	ctx := context.Background()
 	t.Run("x402 intent replay is explicit", func(t *testing.T) {
@@ -84,8 +85,8 @@ func assertTenantAdmissionQueryExecution(t *testing.T, db *sql.DB) {
 		args  []any
 	}{
 		{
-			query: `INSERT INTO purser.billing_tiers (id, tier_name, display_name)
-			        VALUES ($1, 'admission-real-engine', 'Admission real-engine')`,
+			query: `INSERT INTO purser.billing_tiers (id, tier_name, display_name, tier_level)
+			        VALUES ($1, 'admission-real-engine', 'Admission real-engine', 4)`,
 			args: []any{tierID},
 		},
 		{
@@ -140,6 +141,9 @@ func assertTenantAdmissionQueryExecution(t *testing.T, db *sql.DB) {
 	if prepaid.BillingModel != "prepaid" || prepaid.SubscriptionStatus != "active" || prepaid.PaymentMethod.Valid {
 		t.Fatalf("unexpected prepaid admission row: %#v", prepaid)
 	}
+	if prepaid.TierLevel != 4 {
+		t.Fatalf("prepaid tier level = %d, want 4", prepaid.TierLevel)
+	}
 
 	postpaid, err := queries.GetTenantAdmissionStatus(ctx, GetTenantAdmissionStatusParams{
 		TenantID: postpaidTenantID,
@@ -153,6 +157,57 @@ func assertTenantAdmissionQueryExecution(t *testing.T, db *sql.DB) {
 	}
 	if postpaid.SubscriptionStatus != "suspended" || postpaid.PaymentMethod.String != "stripe" || postpaid.StripeSubscriptionID.String != "sub_real_engine" {
 		t.Fatalf("unexpected postpaid admission row: %#v", postpaid)
+	}
+}
+
+func assertTenantAdmissionQueryPlan(t *testing.T, db *sql.DB) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	const tenantID = "91000000-0000-0000-0000-000000000002"
+
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO purser.usage_reservations (
+			tenant_id, source_id, cluster_id, sequence, report_id, period_start,
+			period_end, meters, reserved_amount_micro, currency, updated_at
+		)
+		SELECT $1::uuid, 'stale-source-' || n, 'stale-cluster-' || n, 1,
+		       'stale-report-' || n, NOW() - INTERVAL '11 minutes',
+		       NOW() - INTERVAL '10 minutes', '{}'::jsonb, 10000, 'EUR',
+		       NOW() - INTERVAL '10 minutes'
+		FROM generate_series(1, 5000) AS n`, tenantID)
+	if err != nil {
+		t.Fatalf("seed realistic reservation volume: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `ANALYZE purser.usage_reservations`); err != nil {
+		t.Fatalf("analyze reservations: %v", err)
+	}
+
+	rows, err := db.QueryContext(ctx, `
+		EXPLAIN (ANALYZE, BUFFERS, FORMAT TEXT)
+		SELECT COALESCE(SUM(reserved_amount_micro), 0)
+		FROM purser.usage_reservations
+		WHERE tenant_id = $1::uuid
+		  AND currency = 'EUR'
+		  AND updated_at >= NOW() - INTERVAL '3 minutes'`, tenantID)
+	if err != nil {
+		t.Fatalf("explain admission reservation lookup: %v", err)
+	}
+	defer rows.Close()
+	var plan strings.Builder
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			t.Fatalf("scan explain plan: %v", err)
+		}
+		plan.WriteString(line)
+		plan.WriteByte('\n')
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read explain plan: %v", err)
+	}
+	if !strings.Contains(plan.String(), "idx_usage_reservations_tenant_currency_recent") {
+		t.Fatalf("admission reservation lookup did not use bounded recent index:\n%s", plan.String())
 	}
 }
 

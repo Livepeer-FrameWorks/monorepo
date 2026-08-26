@@ -29,6 +29,7 @@ import (
 	fwdb "github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	meteringpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/metering_contract"
@@ -267,7 +268,7 @@ type PurserServer struct {
 	metrics             *ServerMetrics
 	stripeClient        stripeBillingClient
 	mollieClient        mollieBillingClient
-	quartermasterClient *qmclient.GRPCClient
+	quartermasterClient commercialQuartermasterClient
 	commodoreClient     handlers.CommodoreClient
 	hdwallet            *handlers.HDWallet
 	rpcClient           *handlers.RPCClient
@@ -277,6 +278,14 @@ type PurserServer struct {
 	thresholdEnforcer   *handlers.ThresholdEnforcer
 	tierReconciler      tierAccessReconciler
 	billing             *handlers.Service
+}
+
+type commercialQuartermasterClient interface {
+	GetCluster(ctx context.Context, clusterID string) (*quartermasterpb.ClusterResponse, error)
+	ListClustersByOwner(ctx context.Context, ownerTenantID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListClustersResponse, error)
+	BootstrapClusterAccess(ctx context.Context, tenantID, clusterID string, resourceLimits *tenantlimitspb.TenantResourceLimits) error
+	MaterializeClusterAccess(ctx context.Context, req *quartermasterpb.MaterializeClusterAccessRequest) error
+	RevokeMaterializedClusterAccess(ctx context.Context, req *quartermasterpb.RevokeMaterializedClusterAccessRequest) error
 }
 
 type tierAccessReconciler interface {
@@ -487,6 +496,7 @@ type tenantAdmissionData struct {
 	StripeSubscriptionID sql.NullString
 	MollieSubscriptionID sql.NullString
 	TierName             string
+	TierLevel            int32
 }
 
 func defaultTenantAdmissionStatus() *purserpb.GetTenantAdmissionStatusResponse {
@@ -527,6 +537,7 @@ func mapTenantAdmissionStatus(row tenantAdmissionData) *purserpb.GetTenantAdmiss
 		CollectionReady:       collectionReady,
 		CollectionProvider:    collectionProvider,
 		TierName:              row.TierName,
+		TierLevel:             row.TierLevel,
 	}
 }
 
@@ -539,10 +550,13 @@ func (s *PurserServer) GetTenantAdmissionStatus(ctx context.Context, req *purser
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
 
+	queryCtx, cancel := context.WithTimeout(ctx, tenantAdmissionQueryTimeout)
+	defer cancel()
+
 	var row purserdb.GetTenantAdmissionStatusRow
-	err := fwdb.RetryPostgres(ctx, fwdb.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+	err := fwdb.RetryPostgres(queryCtx, fwdb.DefaultRetryAttempts, 25*time.Millisecond, func() error {
 		var queryErr error
-		row, queryErr = purserdb.New(s.db).GetTenantAdmissionStatus(ctx, purserdb.GetTenantAdmissionStatusParams{
+		row, queryErr = purserdb.New(s.db).GetTenantAdmissionStatus(queryCtx, purserdb.GetTenantAdmissionStatusParams{
 			TenantID: tenantID,
 			Currency: billing.DefaultCurrency(),
 		})
@@ -560,8 +574,14 @@ func (s *PurserServer) GetTenantAdmissionStatus(ctx context.Context, req *purser
 		BalanceCents: row.BalanceCents, ReservedBalanceCents: row.ReservedBalanceCents,
 		PaymentMethod: row.PaymentMethod, StripeSubscriptionID: row.StripeSubscriptionID,
 		MollieSubscriptionID: row.MollieSubscriptionID, TierName: row.TierName,
+		TierLevel: row.TierLevel,
 	}), nil
 }
+
+// Leave transport and orchestration headroom inside Commodore's 500 ms
+// operation-owned admission budget. A database retry that cannot finish in
+// this window fails closed; it must not consume the caller's entire budget.
+const tenantAdmissionQueryTimeout = 350 * time.Millisecond
 
 // GetTenantBillingStatus returns the full entitlement and pricing snapshot.
 func (s *PurserServer) GetTenantBillingStatus(ctx context.Context, req *purserpb.GetTenantBillingStatusRequest) (*purserpb.GetTenantBillingStatusResponse, error) {
@@ -3338,33 +3358,33 @@ const (
 	commercialKindThirdParty       commercialClusterKind = "third_party_marketplace"
 )
 
-func (s *PurserServer) classifyCommercialCluster(ctx context.Context, consumingTenantID, clusterID string) (commercialClusterKind, *uuid.UUID, error) {
+func (s *PurserServer) classifyCommercialCluster(ctx context.Context, consumingTenantID, clusterID string) (commercialClusterKind, *uuid.UUID, bool, error) {
 	if s.quartermasterClient == nil {
-		return "", nil, status.Error(codes.Unavailable, "quartermaster client not configured")
+		return "", nil, false, status.Error(codes.Unavailable, "quartermaster client not configured")
 	}
 	resp, err := s.quartermasterClient.GetCluster(ctx, clusterID)
 	if err != nil {
-		return "", nil, status.Errorf(codes.Internal, "get cluster: %v", err)
+		return "", nil, false, status.Errorf(codes.Internal, "get cluster: %v", err)
 	}
 	c := resp.GetCluster()
 	if c == nil {
-		return "", nil, status.Error(codes.NotFound, "cluster not found")
+		return "", nil, false, status.Error(codes.NotFound, "cluster not found")
 	}
 	if c.GetIsPlatformOfficial() {
-		return commercialKindPlatformOfficial, nil, nil
+		return commercialKindPlatformOfficial, nil, c.GetRequiresApproval(), nil
 	}
 	owner := c.GetOwnerTenantId()
 	if owner == "" {
-		return "", nil, status.Error(codes.FailedPrecondition, "cluster ownership is ambiguous")
+		return "", nil, false, status.Error(codes.FailedPrecondition, "cluster ownership is ambiguous")
 	}
 	ownerID, err := uuid.Parse(owner)
 	if err != nil {
-		return "", nil, status.Errorf(codes.FailedPrecondition, "invalid cluster owner_tenant_id: %v", err)
+		return "", nil, false, status.Errorf(codes.FailedPrecondition, "invalid cluster owner_tenant_id: %v", err)
 	}
 	if ownerID.String() == consumingTenantID {
-		return commercialKindTenantPrivate, &ownerID, nil
+		return commercialKindTenantPrivate, &ownerID, c.GetRequiresApproval(), nil
 	}
-	return commercialKindThirdParty, &ownerID, nil
+	return commercialKindThirdParty, &ownerID, c.GetRequiresApproval(), nil
 }
 
 func (s *PurserServer) requireMarketplaceOwnerApproved(ctx context.Context, ownerID uuid.UUID) error {
@@ -3381,6 +3401,13 @@ func (s *PurserServer) requireMarketplaceOwnerApproved(ctx context.Context, owne
 	return nil
 }
 
+func marketplaceApprovalRequired(requiresApproval bool, pricingModel string) (bool, error) {
+	if requiresApproval && pricingModel == "monthly" {
+		return false, status.Error(codes.FailedPrecondition, "monthly marketplace access cannot combine checkout and owner approval in v0.3")
+	}
+	return requiresApproval || pricingModel == "custom", nil
+}
+
 func (s *PurserServer) applyCommercialEligibility(ctx context.Context, tenantID string, tenantTierLevel int32, pricing *purserpb.ClusterPricing) {
 	if pricing != nil && !pricing.IsEligible && pricing.DenialReason != nil {
 		return
@@ -3389,7 +3416,7 @@ func (s *PurserServer) applyCommercialEligibility(ctx context.Context, tenantID 
 	if pricing == nil || !pricing.IsEligible || tenantID == "" {
 		return
 	}
-	kind, ownerID, err := s.classifyCommercialCluster(ctx, tenantID, pricing.ClusterId)
+	kind, ownerID, requiresApproval, err := s.classifyCommercialCluster(ctx, tenantID, pricing.ClusterId)
 	if err != nil {
 		pricing.IsEligible = false
 		reason := status.Convert(err).Message()
@@ -3397,6 +3424,12 @@ func (s *PurserServer) applyCommercialEligibility(ctx context.Context, tenantID 
 		return
 	}
 	if kind != commercialKindThirdParty {
+		return
+	}
+	if _, approvalErr := marketplaceApprovalRequired(requiresApproval, pricing.PricingModel); approvalErr != nil {
+		pricing.IsEligible = false
+		reason := status.Convert(approvalErr).Message()
+		pricing.DenialReason = &reason
 		return
 	}
 	if pricing.Id == "" {
@@ -3428,12 +3461,30 @@ func (s *PurserServer) grantClusterAccessForKind(ctx context.Context, tenantID, 
 		}
 		return nil
 	}
-	if err := s.quartermasterClient.GrantClusterAccess(ctx, &quartermasterpb.GrantClusterAccessRequest{
-		TenantId:    tenantID,
-		ClusterId:   clusterID,
-		AccessLevel: "shared",
+	accessSource := clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_MARKETPLACE_SUBSCRIPTION
+	if kind == commercialKindTenantPrivate {
+		accessSource = clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_OWNER
+	}
+	if err := s.quartermasterClient.MaterializeClusterAccess(ctx, &quartermasterpb.MaterializeClusterAccessRequest{
+		TenantId: tenantID, ClusterId: clusterID, AccessSource: accessSource,
+		AuthorizationReference: "purser:" + string(kind),
 	}); err != nil {
-		return status.Errorf(codes.Internal, "grant cluster access: %v", err)
+		return status.Errorf(codes.Internal, "materialize cluster access: %v", err)
+	}
+	return nil
+}
+
+func (s *PurserServer) requestMarketplaceApproval(ctx context.Context, tenantID, clusterID string) error {
+	if s.quartermasterClient == nil {
+		return status.Error(codes.FailedPrecondition, "quartermaster client not configured")
+	}
+	if err := s.quartermasterClient.MaterializeClusterAccess(ctx, &quartermasterpb.MaterializeClusterAccessRequest{
+		TenantId: tenantID, ClusterId: clusterID,
+		AccessSource:           clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_MARKETPLACE_SUBSCRIPTION,
+		AuthorizationReference: "purser:marketplace-approval",
+		SubscriptionStatus:     "pending_approval",
+	}); err != nil {
+		return status.Errorf(codes.Internal, "record marketplace approval request: %v", err)
 	}
 	return nil
 }
@@ -3680,7 +3731,7 @@ func (s *PurserServer) CheckClusterAccess(ctx context.Context, req *purserpb.Che
 		resp.DenialReason = "this platform cluster requires a paid subscription"
 		return resp, nil
 	}
-	kind, ownerID, err := s.classifyCommercialCluster(ctx, tenantID, clusterID)
+	kind, ownerID, _, err := s.classifyCommercialCluster(ctx, tenantID, clusterID)
 	if err != nil {
 		resp.Allowed = false
 		resp.DenialReason = status.Convert(err).Message()
@@ -3732,6 +3783,25 @@ func (s *PurserServer) CreateClusterSubscription(ctx context.Context, req *purse
 	if tenantID == "" || clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id and cluster_id required")
 	}
+	kind, ownerID, requiresApproval, err := s.classifyCommercialCluster(ctx, tenantID, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	resp := &purserpb.ClusterSubscriptionResponse{
+		ClusterId: clusterID,
+		TenantId:  tenantID,
+	}
+
+	// A tenant's own private cluster is inherent ownership, not a commercial
+	// subscription. Materialize the owner provenance without consulting pricing
+	// or creating provider-side billing work.
+	if kind == commercialKindTenantPrivate {
+		if grantErr := s.grantClusterAccessForKind(ctx, tenantID, clusterID, kind); grantErr != nil {
+			return nil, grantErr
+		}
+		resp.Status = "active"
+		return resp, nil
+	}
 
 	// Check if tenant can access this cluster
 	accessResp, err := s.CheckClusterAccess(ctx, &purserpb.CheckClusterAccessRequest{
@@ -3745,32 +3815,42 @@ func (s *PurserServer) CreateClusterSubscription(ctx context.Context, req *purse
 		return nil, status.Errorf(codes.PermissionDenied, "access denied: %s", accessResp.DenialReason)
 	}
 
+	// Platform-official access is provisioned by the tenant's billing tier.
+	// Cluster pricing must never turn it into a second Stripe subscription.
+	if kind == commercialKindPlatformOfficial {
+		if grantErr := s.grantClusterAccessForKind(ctx, tenantID, clusterID, kind); grantErr != nil {
+			return nil, grantErr
+		}
+		resp.Status = "active"
+		return resp, nil
+	}
+
 	// Get cluster pricing to determine subscription type
 	pricing, err := s.GetClusterPricing(ctx, &purserpb.GetClusterPricingRequest{ClusterId: clusterID})
 	if err != nil {
 		return nil, err
 	}
-	kind, ownerID, err := s.classifyCommercialCluster(ctx, tenantID, clusterID)
-	if err != nil {
+	if ownerID == nil {
+		return nil, status.Error(codes.FailedPrecondition, "cluster operator is not approved for marketplace")
+	}
+	if err := s.requireMarketplaceOwnerApproved(ctx, *ownerID); err != nil {
 		return nil, err
 	}
-	if kind == commercialKindThirdParty {
-		if ownerID == nil {
-			return nil, status.Error(codes.FailedPrecondition, "cluster operator is not approved for marketplace")
-		}
-		if err := s.requireMarketplaceOwnerApproved(ctx, *ownerID); err != nil {
+	approvalRequired, approvalErr := marketplaceApprovalRequired(requiresApproval, pricing.PricingModel)
+	if approvalErr != nil {
+		return nil, approvalErr
+	}
+	if approvalRequired {
+		if err := s.requestMarketplaceApproval(ctx, tenantID, clusterID); err != nil {
 			return nil, err
 		}
+		resp.Status = "pending_approval"
+		return resp, nil
 	}
 
 	// Resolve based on pricing model: free/tier_inherit/metered grant
 	// Quartermaster access immediately; monthly redirects to Stripe
 	// checkout (access on webhook); custom requires owner approval.
-	resp := &purserpb.ClusterSubscriptionResponse{
-		ClusterId: clusterID,
-		TenantId:  tenantID,
-	}
-
 	switch pricing.PricingModel {
 	case "free_unmetered", "tier_inherit":
 		// No payment gate. Purser still grants access because this is where
@@ -3911,8 +3991,7 @@ func (s *PurserServer) CreateClusterSubscription(ctx context.Context, req *purse
 		resp.Status = "active"
 
 	case "custom":
-		// Custom requires approval
-		resp.Status = "pending_approval"
+		return nil, status.Error(codes.Internal, "custom marketplace approval was not resolved")
 	}
 
 	return resp, nil
@@ -3925,6 +4004,16 @@ func (s *PurserServer) CancelClusterSubscription(ctx context.Context, req *purse
 
 	if tenantID == "" || clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id and cluster_id required")
+	}
+	kind, _, _, err := s.classifyCommercialCluster(ctx, tenantID, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	switch kind {
+	case commercialKindPlatformOfficial:
+		return nil, status.Error(codes.FailedPrecondition, "platform-official access is managed by the tenant billing tier")
+	case commercialKindTenantPrivate:
+		return nil, status.Error(codes.FailedPrecondition, "cluster owners cannot cancel inherent owner access")
 	}
 
 	// Get cluster pricing to check if there's a Stripe subscription to cancel
@@ -3973,9 +4062,10 @@ func (s *PurserServer) CancelClusterSubscription(ctx context.Context, req *purse
 			s.logger.WithError(err).Warn("Failed to update cluster subscription after cancellation")
 		}
 	} else if s.quartermasterClient != nil {
-		_, err = s.quartermasterClient.UnsubscribeFromCluster(ctx, &quartermasterpb.UnsubscribeFromClusterRequest{
-			TenantId:  tenantID,
-			ClusterId: clusterID,
+		err = s.quartermasterClient.RevokeMaterializedClusterAccess(ctx, &quartermasterpb.RevokeMaterializedClusterAccessRequest{
+			TenantId: tenantID, ClusterId: clusterID,
+			AccessSource:           clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_MARKETPLACE_SUBSCRIPTION,
+			AuthorizationReference: "purser:cancel",
 		})
 		if err != nil {
 			s.logger.WithError(err).Warn("Failed to revoke cluster access for non-monthly cluster")

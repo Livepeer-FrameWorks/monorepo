@@ -32,11 +32,11 @@ func TestGetTenantAdmissionStatusMapsBoundedDecision(t *testing.T) {
 	s, mock := newReadServer(t, true)
 	cols := []string{
 		"billing_model", "subscription_status", "balance_cents", "reserved_balance_cents",
-		"payment_method", "stripe_subscription_id", "mollie_subscription_id", "tier_name",
+		"payment_method", "stripe_subscription_id", "mollie_subscription_id", "tier_name", "tier_level",
 	}
 	mock.ExpectQuery(`FROM purser\.tenant_subscriptions ts`).
 		WithArgs("EUR", "tenant-1").
-		WillReturnRows(sqlmock.NewRows(cols).AddRow("prepaid", "active", int64(100), int64(125), nil, nil, nil, "prepaid"))
+		WillReturnRows(sqlmock.NewRows(cols).AddRow("prepaid", "active", int64(100), int64(125), nil, nil, nil, "prepaid", int32(2)))
 
 	resp, err := s.GetTenantAdmissionStatus(context.Background(), &purserpb.GetTenantAdmissionStatusRequest{TenantId: "tenant-1"})
 	if err != nil {
@@ -44,6 +44,9 @@ func TestGetTenantAdmissionStatusMapsBoundedDecision(t *testing.T) {
 	}
 	if !resp.IsBalanceNegative || resp.BalanceCents != 100 || resp.ReservedBalanceCents != 125 || resp.AvailableBalanceCents != -25 {
 		t.Fatalf("unexpected admission decision: %+v", resp)
+	}
+	if resp.TierLevel != 2 {
+		t.Fatalf("tier level = %d, want 2", resp.TierLevel)
 	}
 
 	postpaid := mapTenantAdmissionStatus(tenantAdmissionData{

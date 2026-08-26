@@ -55,6 +55,7 @@ func main() {
 	dbURL := config.RequireEnv("DATABASE_URL")
 	jwtSecret := config.RequireEnv("JWT_SECRET")
 	serviceToken := config.RequireEnv("SERVICE_TOKEN")
+	clusterAccessMaterializationSecret := config.RequireEnv("CLUSTER_ACCESS_MATERIALIZATION_SECRET")
 	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
 	commodoreGRPCAddr := config.GetEnv("COMMODORE_GRPC_ADDR", "commodore:19001")
 	periscopeGRPCAddr := config.GetEnv("PERISCOPE_GRPC_ADDR", "periscope-query:19004")
@@ -78,8 +79,9 @@ func main() {
 	// Add health checks
 	healthChecker.AddCheck("database", monitoring.DatabaseHealthCheck(db))
 	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
-		"DATABASE_URL": dbURL,
-		"JWT_SECRET":   jwtSecret,
+		"DATABASE_URL":                          dbURL,
+		"JWT_SECRET":                            jwtSecret,
+		"CLUSTER_ACCESS_MATERIALIZATION_SECRET": clusterAccessMaterializationSecret,
 	}))
 
 	// Create custom billing metrics for HTTP handlers. invoice_operations_total

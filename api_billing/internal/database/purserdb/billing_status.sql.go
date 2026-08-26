@@ -150,7 +150,8 @@ SELECT
     ts.payment_method,
     ts.stripe_subscription_id,
     ts.mollie_subscription_id,
-    bt.tier_name
+    bt.tier_name,
+    COALESCE(bt.tier_level, 0)::integer AS tier_level
 FROM purser.tenant_subscriptions ts
 JOIN purser.billing_tiers bt ON bt.id = ts.tier_id
 LEFT JOIN purser.prepaid_balances pb
@@ -182,6 +183,7 @@ type GetTenantAdmissionStatusRow struct {
 	StripeSubscriptionID sql.NullString `db:"stripe_subscription_id" json:"stripe_subscription_id"`
 	MollieSubscriptionID sql.NullString `db:"mollie_subscription_id" json:"mollie_subscription_id"`
 	TierName             string         `db:"tier_name" json:"tier_name"`
+	TierLevel            int32          `db:"tier_level" json:"tier_level"`
 }
 
 func (q *Queries) GetTenantAdmissionStatus(ctx context.Context, arg GetTenantAdmissionStatusParams) (GetTenantAdmissionStatusRow, error) {
@@ -196,6 +198,7 @@ func (q *Queries) GetTenantAdmissionStatus(ctx context.Context, arg GetTenantAdm
 		&i.StripeSubscriptionID,
 		&i.MollieSubscriptionID,
 		&i.TierName,
+		&i.TierLevel,
 	)
 	return i, err
 }

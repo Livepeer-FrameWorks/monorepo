@@ -1140,6 +1140,10 @@ CREATE TABLE IF NOT EXISTS purser.usage_reservations (
     PRIMARY KEY (tenant_id, source_id, cluster_id)
 );
 
+CREATE INDEX IF NOT EXISTS idx_usage_reservations_tenant_currency_recent
+    ON purser.usage_reservations (tenant_id, currency, updated_at DESC)
+    INCLUDE (reserved_amount_micro);
+
 -- Marginal prepaid settlements against a billing-period cumulative rating.
 -- The report key makes retries idempotent; amount_micro preserves sub-cent
 -- precision and may be negative when an explicit correction creates credit.
