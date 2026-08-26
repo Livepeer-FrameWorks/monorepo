@@ -4,6 +4,17 @@ package cluster_peer;
 
 option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer;clusterpeerpb";
 
+import "google/protobuf/timestamp.proto";
+
+enum TenantClusterAccessSource {
+  TENANT_CLUSTER_ACCESS_SOURCE_UNSPECIFIED = 0;
+  TENANT_CLUSTER_ACCESS_SOURCE_PLATFORM_TIER = 1;
+  TENANT_CLUSTER_ACCESS_SOURCE_OWNER = 2;
+  TENANT_CLUSTER_ACCESS_SOURCE_PRIVATE_INVITE = 3;
+  TENANT_CLUSTER_ACCESS_SOURCE_MARKETPLACE_SUBSCRIPTION = 4;
+  TENANT_CLUSTER_ACCESS_SOURCE_OPERATOR_OVERRIDE = 5;
+}
+
 // Lightweight cluster metadata for tenant-scoped cluster context. Foghorn
 // derives federation address from base_url + cluster_slug convention.
 message TenantClusterPeer {
@@ -30,7 +41,14 @@ message TenantClusterPeer {
   // by the tenant's plan tier (free -> official only; premium -> +marketplace;
   // enterprise -> +private).
   string cluster_class = 32;
+  string deployment_model = 33;
+  string owner_tenant_id = 34;
+  string access_level = 35;
   // health_status: healthy | degraded | offline. Resolver excludes
   // non-healthy peers from the candidate set.
   string health_status = 36;
+  bool access_active = 37;
+  string subscription_status = 38;
+  TenantClusterAccessSource access_source = 39;
+  optional google.protobuf.Timestamp access_expires_at = 40;
 }

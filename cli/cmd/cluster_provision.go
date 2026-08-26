@@ -6442,6 +6442,10 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	// Chandler no longer calls Foghorn: it serves thumbnails from a DETERMINISTIC static key, so it needs no
 	// FOGHORN_INTERNAL_URL (docs/architecture/thumbnails.md).
 	if baseName == "foghorn" {
+		env["FOGHORN_PUBLIC_HTTP_BIND_ADDR"] = "0.0.0.0"
+		env["FOGHORN_INTERNAL_HTTP_BIND_ADDR"] = "127.0.0.1"
+		env["GRPC_METADATA_POLICY"] = "deny"
+		env["FOGHORN_INTERNAL_HTTP_PORT"] = strconv.Itoa(servicedefs.FoghornInternalHTTPPort)
 		internalPort := 18019
 		externalPort := 18029
 		env["FOGHORN_INTERNAL_GRPC_BIND_ADDR"] = fmt.Sprintf(":%d", internalPort)
@@ -6893,6 +6897,7 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	if baseName != "navigator" {
 		removeNavigatorInternalCAEnv(env)
 	}
+	restrictClusterAccessSecrets(baseName, env)
 
 	applyProductionRuntimeDefaults(manifest, env)
 	if err := validateProductionServiceEnv(manifest, baseName, env); err != nil {
@@ -6953,6 +6958,19 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	}
 
 	return env, nil
+}
+
+// restrictClusterAccessSecrets keeps narrow signing authority out of unrelated
+// workloads even when operators source all platform secrets from one env file.
+// The shared SERVICE_TOKEN migration is tracked separately; these newer keys do
+// not need to inherit that ambient distribution model.
+func restrictClusterAccessSecrets(serviceID string, env map[string]string) {
+	if serviceID != "quartermaster" && serviceID != "purser" {
+		delete(env, "CLUSTER_ACCESS_MATERIALIZATION_SECRET")
+	}
+	if serviceID != "foghorn" {
+		delete(env, "FOGHORN_BALANCER_CAPABILITY_SECRET")
+	}
 }
 
 // validateClusteredFoghornEffectiveDB fails when a CLUSTERED, ALIASED Foghorn's rendered env would connect to anything

@@ -9,6 +9,7 @@ package clusterpeerpb
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -20,6 +21,64 @@ const (
 	// Verify that runtime/protoimpl is sufficiently up-to-date.
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
+
+type TenantClusterAccessSource int32
+
+const (
+	TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_UNSPECIFIED              TenantClusterAccessSource = 0
+	TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_PLATFORM_TIER            TenantClusterAccessSource = 1
+	TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_OWNER                    TenantClusterAccessSource = 2
+	TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_PRIVATE_INVITE           TenantClusterAccessSource = 3
+	TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_MARKETPLACE_SUBSCRIPTION TenantClusterAccessSource = 4
+	TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_OPERATOR_OVERRIDE        TenantClusterAccessSource = 5
+)
+
+// Enum value maps for TenantClusterAccessSource.
+var (
+	TenantClusterAccessSource_name = map[int32]string{
+		0: "TENANT_CLUSTER_ACCESS_SOURCE_UNSPECIFIED",
+		1: "TENANT_CLUSTER_ACCESS_SOURCE_PLATFORM_TIER",
+		2: "TENANT_CLUSTER_ACCESS_SOURCE_OWNER",
+		3: "TENANT_CLUSTER_ACCESS_SOURCE_PRIVATE_INVITE",
+		4: "TENANT_CLUSTER_ACCESS_SOURCE_MARKETPLACE_SUBSCRIPTION",
+		5: "TENANT_CLUSTER_ACCESS_SOURCE_OPERATOR_OVERRIDE",
+	}
+	TenantClusterAccessSource_value = map[string]int32{
+		"TENANT_CLUSTER_ACCESS_SOURCE_UNSPECIFIED":              0,
+		"TENANT_CLUSTER_ACCESS_SOURCE_PLATFORM_TIER":            1,
+		"TENANT_CLUSTER_ACCESS_SOURCE_OWNER":                    2,
+		"TENANT_CLUSTER_ACCESS_SOURCE_PRIVATE_INVITE":           3,
+		"TENANT_CLUSTER_ACCESS_SOURCE_MARKETPLACE_SUBSCRIPTION": 4,
+		"TENANT_CLUSTER_ACCESS_SOURCE_OPERATOR_OVERRIDE":        5,
+	}
+)
+
+func (x TenantClusterAccessSource) Enum() *TenantClusterAccessSource {
+	p := new(TenantClusterAccessSource)
+	*p = x
+	return p
+}
+
+func (x TenantClusterAccessSource) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (TenantClusterAccessSource) Descriptor() protoreflect.EnumDescriptor {
+	return file_cluster_peer_proto_enumTypes[0].Descriptor()
+}
+
+func (TenantClusterAccessSource) Type() protoreflect.EnumType {
+	return &file_cluster_peer_proto_enumTypes[0]
+}
+
+func (x TenantClusterAccessSource) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use TenantClusterAccessSource.Descriptor instead.
+func (TenantClusterAccessSource) EnumDescriptor() ([]byte, []int) {
+	return file_cluster_peer_proto_rawDescGZIP(), []int{0}
+}
 
 // Lightweight cluster metadata for tenant-scoped cluster context. Foghorn
 // derives federation address from base_url + cluster_slug convention.
@@ -46,12 +105,19 @@ type TenantClusterPeer struct {
 	// Commodore's plan-aware filter rejects clusters whose class is not allowed
 	// by the tenant's plan tier (free -> official only; premium -> +marketplace;
 	// enterprise -> +private).
-	ClusterClass string `protobuf:"bytes,32,opt,name=cluster_class,json=clusterClass,proto3" json:"cluster_class,omitempty"`
+	ClusterClass    string `protobuf:"bytes,32,opt,name=cluster_class,json=clusterClass,proto3" json:"cluster_class,omitempty"`
+	DeploymentModel string `protobuf:"bytes,33,opt,name=deployment_model,json=deploymentModel,proto3" json:"deployment_model,omitempty"`
+	OwnerTenantId   string `protobuf:"bytes,34,opt,name=owner_tenant_id,json=ownerTenantId,proto3" json:"owner_tenant_id,omitempty"`
+	AccessLevel     string `protobuf:"bytes,35,opt,name=access_level,json=accessLevel,proto3" json:"access_level,omitempty"`
 	// health_status: healthy | degraded | offline. Resolver excludes
 	// non-healthy peers from the candidate set.
-	HealthStatus  string `protobuf:"bytes,36,opt,name=health_status,json=healthStatus,proto3" json:"health_status,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	HealthStatus       string                    `protobuf:"bytes,36,opt,name=health_status,json=healthStatus,proto3" json:"health_status,omitempty"`
+	AccessActive       bool                      `protobuf:"varint,37,opt,name=access_active,json=accessActive,proto3" json:"access_active,omitempty"`
+	SubscriptionStatus string                    `protobuf:"bytes,38,opt,name=subscription_status,json=subscriptionStatus,proto3" json:"subscription_status,omitempty"`
+	AccessSource       TenantClusterAccessSource `protobuf:"varint,39,opt,name=access_source,json=accessSource,proto3,enum=cluster_peer.TenantClusterAccessSource" json:"access_source,omitempty"`
+	AccessExpiresAt    *timestamppb.Timestamp    `protobuf:"bytes,40,opt,name=access_expires_at,json=accessExpiresAt,proto3,oneof" json:"access_expires_at,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *TenantClusterPeer) Reset() {
@@ -189,6 +255,27 @@ func (x *TenantClusterPeer) GetClusterClass() string {
 	return ""
 }
 
+func (x *TenantClusterPeer) GetDeploymentModel() string {
+	if x != nil {
+		return x.DeploymentModel
+	}
+	return ""
+}
+
+func (x *TenantClusterPeer) GetOwnerTenantId() string {
+	if x != nil {
+		return x.OwnerTenantId
+	}
+	return ""
+}
+
+func (x *TenantClusterPeer) GetAccessLevel() string {
+	if x != nil {
+		return x.AccessLevel
+	}
+	return ""
+}
+
 func (x *TenantClusterPeer) GetHealthStatus() string {
 	if x != nil {
 		return x.HealthStatus
@@ -196,11 +283,39 @@ func (x *TenantClusterPeer) GetHealthStatus() string {
 	return ""
 }
 
+func (x *TenantClusterPeer) GetAccessActive() bool {
+	if x != nil {
+		return x.AccessActive
+	}
+	return false
+}
+
+func (x *TenantClusterPeer) GetSubscriptionStatus() string {
+	if x != nil {
+		return x.SubscriptionStatus
+	}
+	return ""
+}
+
+func (x *TenantClusterPeer) GetAccessSource() TenantClusterAccessSource {
+	if x != nil {
+		return x.AccessSource
+	}
+	return TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_UNSPECIFIED
+}
+
+func (x *TenantClusterPeer) GetAccessExpiresAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.AccessExpiresAt
+	}
+	return nil
+}
+
 var File_cluster_peer_proto protoreflect.FileDescriptor
 
 const file_cluster_peer_proto_rawDesc = "" +
 	"\n" +
-	"\x12cluster_peer.proto\x12\fcluster_peer\"\x9a\x04\n" +
+	"\x12cluster_peer.proto\x12\fcluster_peer\x1a\x1fgoogle/protobuf/timestamp.proto\"\x97\a\n" +
 	"\x11TenantClusterPeer\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12!\n" +
@@ -218,8 +333,23 @@ const file_cluster_peer_proto_rawDesc = "" +
 	"\x11s3_prefix_present\x18\x18 \x01(\bR\x0fs3PrefixPresent\x12\x1b\n" +
 	"\tregion_id\x18\x1e \x01(\tR\bregionId\x12\x17\n" +
 	"\acell_id\x18\x1f \x01(\tR\x06cellId\x12#\n" +
-	"\rcluster_class\x18  \x01(\tR\fclusterClass\x12#\n" +
-	"\rhealth_status\x18$ \x01(\tR\fhealthStatusBNZLgithub.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer;clusterpeerpbb\x06proto3"
+	"\rcluster_class\x18  \x01(\tR\fclusterClass\x12)\n" +
+	"\x10deployment_model\x18! \x01(\tR\x0fdeploymentModel\x12&\n" +
+	"\x0fowner_tenant_id\x18\" \x01(\tR\rownerTenantId\x12!\n" +
+	"\faccess_level\x18# \x01(\tR\vaccessLevel\x12#\n" +
+	"\rhealth_status\x18$ \x01(\tR\fhealthStatus\x12#\n" +
+	"\raccess_active\x18% \x01(\bR\faccessActive\x12/\n" +
+	"\x13subscription_status\x18& \x01(\tR\x12subscriptionStatus\x12L\n" +
+	"\raccess_source\x18' \x01(\x0e2'.cluster_peer.TenantClusterAccessSourceR\faccessSource\x12K\n" +
+	"\x11access_expires_at\x18( \x01(\v2\x1a.google.protobuf.TimestampH\x00R\x0faccessExpiresAt\x88\x01\x01B\x14\n" +
+	"\x12_access_expires_at*\xc1\x02\n" +
+	"\x19TenantClusterAccessSource\x12,\n" +
+	"(TENANT_CLUSTER_ACCESS_SOURCE_UNSPECIFIED\x10\x00\x12.\n" +
+	"*TENANT_CLUSTER_ACCESS_SOURCE_PLATFORM_TIER\x10\x01\x12&\n" +
+	"\"TENANT_CLUSTER_ACCESS_SOURCE_OWNER\x10\x02\x12/\n" +
+	"+TENANT_CLUSTER_ACCESS_SOURCE_PRIVATE_INVITE\x10\x03\x129\n" +
+	"5TENANT_CLUSTER_ACCESS_SOURCE_MARKETPLACE_SUBSCRIPTION\x10\x04\x122\n" +
+	".TENANT_CLUSTER_ACCESS_SOURCE_OPERATOR_OVERRIDE\x10\x05BNZLgithub.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer;clusterpeerpbb\x06proto3"
 
 var (
 	file_cluster_peer_proto_rawDescOnce sync.Once
@@ -233,16 +363,21 @@ func file_cluster_peer_proto_rawDescGZIP() []byte {
 	return file_cluster_peer_proto_rawDescData
 }
 
+var file_cluster_peer_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_cluster_peer_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
 var file_cluster_peer_proto_goTypes = []any{
-	(*TenantClusterPeer)(nil), // 0: cluster_peer.TenantClusterPeer
+	(TenantClusterAccessSource)(0), // 0: cluster_peer.TenantClusterAccessSource
+	(*TenantClusterPeer)(nil),      // 1: cluster_peer.TenantClusterPeer
+	(*timestamppb.Timestamp)(nil),  // 2: google.protobuf.Timestamp
 }
 var file_cluster_peer_proto_depIdxs = []int32{
-	0, // [0:0] is the sub-list for method output_type
-	0, // [0:0] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	0, // 0: cluster_peer.TenantClusterPeer.access_source:type_name -> cluster_peer.TenantClusterAccessSource
+	2, // 1: cluster_peer.TenantClusterPeer.access_expires_at:type_name -> google.protobuf.Timestamp
+	2, // [2:2] is the sub-list for method output_type
+	2, // [2:2] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_cluster_peer_proto_init() }
@@ -250,18 +385,20 @@ func file_cluster_peer_proto_init() {
 	if File_cluster_peer_proto != nil {
 		return
 	}
+	file_cluster_peer_proto_msgTypes[0].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_cluster_peer_proto_rawDesc), len(file_cluster_peer_proto_rawDesc)),
-			NumEnums:      0,
+			NumEnums:      1,
 			NumMessages:   1,
 			NumExtensions: 0,
 			NumServices:   0,
 		},
 		GoTypes:           file_cluster_peer_proto_goTypes,
 		DependencyIndexes: file_cluster_peer_proto_depIdxs,
+		EnumInfos:         file_cluster_peer_proto_enumTypes,
 		MessageInfos:      file_cluster_peer_proto_msgTypes,
 	}.Build()
 	File_cluster_peer_proto = out.File

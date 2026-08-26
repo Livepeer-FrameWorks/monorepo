@@ -44,6 +44,8 @@ type Interface interface {
 	ListClustersForTenant(ctx context.Context, tenantID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ClustersAccessResponse, error)
 	ListClustersAvailable(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ClustersAvailableResponse, error)
 	GrantClusterAccess(ctx context.Context, req *quartermasterpb.GrantClusterAccessRequest) error
+	MaterializeClusterAccess(ctx context.Context, req *quartermasterpb.MaterializeClusterAccessRequest) error
+	RevokeMaterializedClusterAccess(ctx context.Context, req *quartermasterpb.RevokeMaterializedClusterAccessRequest) error
 	SubscribeToCluster(ctx context.Context, req *quartermasterpb.SubscribeToClusterRequest) (*emptypb.Empty, error)
 	UnsubscribeFromCluster(ctx context.Context, req *quartermasterpb.UnsubscribeFromClusterRequest) (*emptypb.Empty, error)
 	ListMySubscriptions(ctx context.Context, req *quartermasterpb.ListMySubscriptionsRequest) (*quartermasterpb.ListClustersResponse, error)

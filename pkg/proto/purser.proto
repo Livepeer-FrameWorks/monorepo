@@ -163,6 +163,7 @@ message GetTenantAdmissionStatusResponse {
   bool collection_ready = 7;
   string collection_provider = 8;
   string tier_name = 9;
+  int32 tier_level = 10;
 }
 
 // Full billing status check for entitlement- and pricing-aware calls.
@@ -1016,7 +1017,7 @@ message CheckClusterAccessResponse {
 message CreateClusterSubscriptionRequest {
   string tenant_id = 1;                 // Subscribing tenant
   string cluster_id = 2;                // Target cluster
-  optional string invite_token = 3;     // For unlisted/private clusters
+  optional string invite_token = 3;     // Reserved for legacy private-invite callers; unlisted access uses direct-link billing
   optional string success_url = 4;      // Redirect after successful payment (for paid clusters)
   optional string cancel_url = 5;       // Redirect if user cancels checkout
   optional string billing_email = 6;    // Email for Stripe customer (if creating new)

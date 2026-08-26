@@ -185,6 +185,11 @@ func (m *Manifest) registerServicePorts(addPort func(string, int, string) error,
 					return err
 				}
 			}
+			for _, auxiliary := range servicedefs.AuxiliaryPorts(id) {
+				if err := addPort(host, auxiliary.Port, auxiliary.Name); err != nil {
+					return err
+				}
+			}
 		}
 	}
 

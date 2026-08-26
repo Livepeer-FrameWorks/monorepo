@@ -174,6 +174,26 @@ type PortSpec struct {
 	Port int
 }
 
+const (
+	FoghornInternalHTTPPort = 18027
+	HelmsmanManagementPort  = 18017
+)
+
+var auxiliaryPorts = map[string][]PortSpec{
+	"foghorn":  {{Name: "foghorn-internal-http", Port: FoghornInternalHTTPPort}},
+	"helmsman": {{Name: "helmsman-management", Port: HelmsmanManagementPort}},
+}
+
+// AuxiliaryPorts returns non-primary, non-gRPC listeners that a service binds.
+// Inventory validation uses this catalog so colocated deployments cannot hide
+// a collision outside Service.DefaultPort.
+func AuxiliaryPorts(serviceID string) []PortSpec {
+	ports := auxiliaryPorts[serviceID]
+	out := make([]PortSpec, len(ports))
+	copy(out, ports)
+	return out
+}
+
 // ClickHousePorts returns every port a ClickHouse node binds. nativePort overrides
 // the default when non-zero. clustered adds the colocated standalone Keeper's
 // client + raft ports (a Replicated cluster always runs Keeper).

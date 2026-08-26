@@ -170,3 +170,22 @@ func TestManifestValidateDetectsClickHouseAuxiliaryPortCollisions(t *testing.T) 
 		t.Fatalf("expected ClickHouse HTTP port collision error, got: %v", err)
 	}
 }
+
+func TestManifestValidateDetectsServiceAuxiliaryPortCollisions(t *testing.T) {
+	manifest := &Manifest{
+		Version: "1",
+		Type:    "cluster",
+		Hosts: map[string]Host{
+			"host-a": {ExternalIP: "10.0.0.1", User: "root", WireguardIP: "10.88.0.1"},
+		},
+		Services: map[string]ServiceConfig{
+			"foghorn": {Enabled: true, Host: "host-a"},
+			"bridge":  {Enabled: true, Host: "host-a", Port: 18027},
+		},
+	}
+
+	err := manifest.Validate()
+	if err == nil || !strings.Contains(err.Error(), "18027") || !strings.Contains(err.Error(), "foghorn-internal-http") {
+		t.Fatalf("expected Foghorn auxiliary port collision, got: %v", err)
+	}
+}

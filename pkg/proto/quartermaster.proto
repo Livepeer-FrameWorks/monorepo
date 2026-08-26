@@ -110,6 +110,15 @@ service ClusterService {
   // bootstrap reconcile only. The server enforces is_platform_official.
   rpc BootstrapClusterAccess(BootstrapClusterAccessRequest) returns (google.protobuf.Empty);
 
+  // MaterializeClusterAccess is the constrained service path used after the
+  // billing/owner authority has made a commercial access decision.
+  rpc MaterializeClusterAccess(MaterializeClusterAccessRequest) returns (google.protobuf.Empty);
+
+  // RevokeMaterializedClusterAccess is the proof-bound inverse used when the
+  // billing authority observes a terminal commercial subscription state. It
+  // can revoke only a row whose current provenance matches access_source.
+  rpc RevokeMaterializedClusterAccess(RevokeMaterializedClusterAccessRequest) returns (google.protobuf.Empty);
+
   // DeactivateClusterAccess soft-suspends a tenant_cluster_access row
   // (is_active=false, subscription_status='suspended'). Service-token only;
   // Purser calls this from reconcileTierClusterAccess on downgrade. Idempotent.
@@ -141,7 +150,7 @@ service ClusterService {
   // List clusters in marketplace (respects visibility + billing tier)
   rpc ListMarketplaceClusters(ListMarketplaceClustersRequest) returns (ListMarketplaceClustersResponse);
 
-  // Get a marketplace cluster (with optional invite token for unlisted)
+  // Get a public or direct-link unlisted marketplace cluster
   rpc GetMarketplaceCluster(GetMarketplaceClusterRequest) returns (MarketplaceClusterEntry);
 
   // Update cluster marketplace settings (owner only)
@@ -791,6 +800,27 @@ message BootstrapClusterAccessRequest {
   optional tenant_limits.TenantResourceLimits resource_limits = 3;
 }
 
+message MaterializeClusterAccessRequest {
+  string tenant_id = 1;
+  string cluster_id = 2;
+  cluster_peer.TenantClusterAccessSource access_source = 3;
+  string authorization_reference = 4;
+  google.protobuf.Timestamp authorized_at = 5;
+  string authorization_proof = 6;
+  // "active" for completed authority or "pending_approval" for a Purser-
+  // vetted custom marketplace request. Empty is treated as "active".
+  string subscription_status = 7;
+}
+
+message RevokeMaterializedClusterAccessRequest {
+  string tenant_id = 1;
+  string cluster_id = 2;
+  cluster_peer.TenantClusterAccessSource access_source = 3;
+  string authorization_reference = 4;
+  google.protobuf.Timestamp authorized_at = 5;
+  string authorization_proof = 6;
+}
+
 message DeactivateClusterAccessRequest {
   string tenant_id = 1;
   string cluster_id = 2;
@@ -818,7 +848,8 @@ message GetTenantEntitlementRequest {
 
 message GetTenantEntitlementResponse {
   repeated string allowed_cluster_ids = 1;  // active + subscribed cluster IDs
-  string plan_class = 2;                     // primary cluster's cluster_class; empty = unknown/none
+  string plan_class = 2 [deprecated = true]; // legacy field; never billing-tier authority
+  repeated cluster_peer.TenantClusterPeer effective_access = 3;
 }
 
 message UnsubscribeFromClusterRequest {
@@ -872,7 +903,7 @@ message ListMarketplaceClustersResponse {
 message GetMarketplaceClusterRequest {
   string cluster_id = 1;
   string tenant_id = 2;  // Requesting tenant
-  optional string invite_token = 3;  // For unlisted clusters
+  optional string invite_token = 3;  // Legacy field; unlisted discovery is by cluster ID and commercial access goes through Purser
 }
 
 // Update cluster marketplace settings (operational only)

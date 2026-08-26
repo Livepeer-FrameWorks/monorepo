@@ -33,6 +33,8 @@ func TestKeys(t *testing.T) {
 		"DATABASE_RUNTIME_PASSWORD": true,
 		"SERVICE_TOKEN":             true, "JWT_SECRET": true, "PASSWORD_RESET_SECRET": true,
 		"FIELD_ENCRYPTION_KEY": true, "USAGE_HASH_SECRET": true, "TELEMETRY_TOKEN_SECRET": true,
+		"CLUSTER_ACCESS_MATERIALIZATION_SECRET": true,
+		"FOGHORN_BALANCER_CAPABILITY_SECRET":    true,
 	}
 	for _, k := range keys {
 		if !want[k] {

@@ -714,45 +714,47 @@ var TenantService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	ClusterService_GetCluster_FullMethodName                 = "/quartermaster.ClusterService/GetCluster"
-	ClusterService_ListClusters_FullMethodName               = "/quartermaster.ClusterService/ListClusters"
-	ClusterService_CreateCluster_FullMethodName              = "/quartermaster.ClusterService/CreateCluster"
-	ClusterService_UpdateCluster_FullMethodName              = "/quartermaster.ClusterService/UpdateCluster"
-	ClusterService_UpdateClusterMeshConfig_FullMethodName    = "/quartermaster.ClusterService/UpdateClusterMeshConfig"
-	ClusterService_ListClustersForTenant_FullMethodName      = "/quartermaster.ClusterService/ListClustersForTenant"
-	ClusterService_ListClustersAvailable_FullMethodName      = "/quartermaster.ClusterService/ListClustersAvailable"
-	ClusterService_GrantClusterAccess_FullMethodName         = "/quartermaster.ClusterService/GrantClusterAccess"
-	ClusterService_SubscribeToCluster_FullMethodName         = "/quartermaster.ClusterService/SubscribeToCluster"
-	ClusterService_BootstrapClusterAccess_FullMethodName     = "/quartermaster.ClusterService/BootstrapClusterAccess"
-	ClusterService_DeactivateClusterAccess_FullMethodName    = "/quartermaster.ClusterService/DeactivateClusterAccess"
-	ClusterService_ListTenantClusterAccess_FullMethodName    = "/quartermaster.ClusterService/ListTenantClusterAccess"
-	ClusterService_GetTenantEntitlement_FullMethodName       = "/quartermaster.ClusterService/GetTenantEntitlement"
-	ClusterService_UnsubscribeFromCluster_FullMethodName     = "/quartermaster.ClusterService/UnsubscribeFromCluster"
-	ClusterService_ListMySubscriptions_FullMethodName        = "/quartermaster.ClusterService/ListMySubscriptions"
-	ClusterService_ListMarketplaceClusters_FullMethodName    = "/quartermaster.ClusterService/ListMarketplaceClusters"
-	ClusterService_GetMarketplaceCluster_FullMethodName      = "/quartermaster.ClusterService/GetMarketplaceCluster"
-	ClusterService_UpdateClusterMarketplace_FullMethodName   = "/quartermaster.ClusterService/UpdateClusterMarketplace"
-	ClusterService_CreatePrivateCluster_FullMethodName       = "/quartermaster.ClusterService/CreatePrivateCluster"
-	ClusterService_CreateClusterInvite_FullMethodName        = "/quartermaster.ClusterService/CreateClusterInvite"
-	ClusterService_RevokeClusterInvite_FullMethodName        = "/quartermaster.ClusterService/RevokeClusterInvite"
-	ClusterService_ListClusterInvites_FullMethodName         = "/quartermaster.ClusterService/ListClusterInvites"
-	ClusterService_ListMyClusterInvites_FullMethodName       = "/quartermaster.ClusterService/ListMyClusterInvites"
-	ClusterService_RequestClusterSubscription_FullMethodName = "/quartermaster.ClusterService/RequestClusterSubscription"
-	ClusterService_AcceptClusterInvite_FullMethodName        = "/quartermaster.ClusterService/AcceptClusterInvite"
-	ClusterService_ListPendingSubscriptions_FullMethodName   = "/quartermaster.ClusterService/ListPendingSubscriptions"
-	ClusterService_ApproveClusterSubscription_FullMethodName = "/quartermaster.ClusterService/ApproveClusterSubscription"
-	ClusterService_RejectClusterSubscription_FullMethodName  = "/quartermaster.ClusterService/RejectClusterSubscription"
-	ClusterService_GetClusterMetadataBatch_FullMethodName    = "/quartermaster.ClusterService/GetClusterMetadataBatch"
-	ClusterService_ListPeers_FullMethodName                  = "/quartermaster.ClusterService/ListPeers"
-	ClusterService_AssignServiceToCluster_FullMethodName     = "/quartermaster.ClusterService/AssignServiceToCluster"
-	ClusterService_UnassignServiceFromCluster_FullMethodName = "/quartermaster.ClusterService/UnassignServiceFromCluster"
-	ClusterService_EnableSelfHosting_FullMethodName          = "/quartermaster.ClusterService/EnableSelfHosting"
-	ClusterService_CreateEnrollmentToken_FullMethodName      = "/quartermaster.ClusterService/CreateEnrollmentToken"
-	ClusterService_ListEdgeReleases_FullMethodName           = "/quartermaster.ClusterService/ListEdgeReleases"
-	ClusterService_UpsertEdgeRelease_FullMethodName          = "/quartermaster.ClusterService/UpsertEdgeRelease"
-	ClusterService_GetClusterReleaseTarget_FullMethodName    = "/quartermaster.ClusterService/GetClusterReleaseTarget"
-	ClusterService_ListClusterReleaseTargets_FullMethodName  = "/quartermaster.ClusterService/ListClusterReleaseTargets"
-	ClusterService_SetClusterReleaseTarget_FullMethodName    = "/quartermaster.ClusterService/SetClusterReleaseTarget"
+	ClusterService_GetCluster_FullMethodName                      = "/quartermaster.ClusterService/GetCluster"
+	ClusterService_ListClusters_FullMethodName                    = "/quartermaster.ClusterService/ListClusters"
+	ClusterService_CreateCluster_FullMethodName                   = "/quartermaster.ClusterService/CreateCluster"
+	ClusterService_UpdateCluster_FullMethodName                   = "/quartermaster.ClusterService/UpdateCluster"
+	ClusterService_UpdateClusterMeshConfig_FullMethodName         = "/quartermaster.ClusterService/UpdateClusterMeshConfig"
+	ClusterService_ListClustersForTenant_FullMethodName           = "/quartermaster.ClusterService/ListClustersForTenant"
+	ClusterService_ListClustersAvailable_FullMethodName           = "/quartermaster.ClusterService/ListClustersAvailable"
+	ClusterService_GrantClusterAccess_FullMethodName              = "/quartermaster.ClusterService/GrantClusterAccess"
+	ClusterService_SubscribeToCluster_FullMethodName              = "/quartermaster.ClusterService/SubscribeToCluster"
+	ClusterService_BootstrapClusterAccess_FullMethodName          = "/quartermaster.ClusterService/BootstrapClusterAccess"
+	ClusterService_MaterializeClusterAccess_FullMethodName        = "/quartermaster.ClusterService/MaterializeClusterAccess"
+	ClusterService_RevokeMaterializedClusterAccess_FullMethodName = "/quartermaster.ClusterService/RevokeMaterializedClusterAccess"
+	ClusterService_DeactivateClusterAccess_FullMethodName         = "/quartermaster.ClusterService/DeactivateClusterAccess"
+	ClusterService_ListTenantClusterAccess_FullMethodName         = "/quartermaster.ClusterService/ListTenantClusterAccess"
+	ClusterService_GetTenantEntitlement_FullMethodName            = "/quartermaster.ClusterService/GetTenantEntitlement"
+	ClusterService_UnsubscribeFromCluster_FullMethodName          = "/quartermaster.ClusterService/UnsubscribeFromCluster"
+	ClusterService_ListMySubscriptions_FullMethodName             = "/quartermaster.ClusterService/ListMySubscriptions"
+	ClusterService_ListMarketplaceClusters_FullMethodName         = "/quartermaster.ClusterService/ListMarketplaceClusters"
+	ClusterService_GetMarketplaceCluster_FullMethodName           = "/quartermaster.ClusterService/GetMarketplaceCluster"
+	ClusterService_UpdateClusterMarketplace_FullMethodName        = "/quartermaster.ClusterService/UpdateClusterMarketplace"
+	ClusterService_CreatePrivateCluster_FullMethodName            = "/quartermaster.ClusterService/CreatePrivateCluster"
+	ClusterService_CreateClusterInvite_FullMethodName             = "/quartermaster.ClusterService/CreateClusterInvite"
+	ClusterService_RevokeClusterInvite_FullMethodName             = "/quartermaster.ClusterService/RevokeClusterInvite"
+	ClusterService_ListClusterInvites_FullMethodName              = "/quartermaster.ClusterService/ListClusterInvites"
+	ClusterService_ListMyClusterInvites_FullMethodName            = "/quartermaster.ClusterService/ListMyClusterInvites"
+	ClusterService_RequestClusterSubscription_FullMethodName      = "/quartermaster.ClusterService/RequestClusterSubscription"
+	ClusterService_AcceptClusterInvite_FullMethodName             = "/quartermaster.ClusterService/AcceptClusterInvite"
+	ClusterService_ListPendingSubscriptions_FullMethodName        = "/quartermaster.ClusterService/ListPendingSubscriptions"
+	ClusterService_ApproveClusterSubscription_FullMethodName      = "/quartermaster.ClusterService/ApproveClusterSubscription"
+	ClusterService_RejectClusterSubscription_FullMethodName       = "/quartermaster.ClusterService/RejectClusterSubscription"
+	ClusterService_GetClusterMetadataBatch_FullMethodName         = "/quartermaster.ClusterService/GetClusterMetadataBatch"
+	ClusterService_ListPeers_FullMethodName                       = "/quartermaster.ClusterService/ListPeers"
+	ClusterService_AssignServiceToCluster_FullMethodName          = "/quartermaster.ClusterService/AssignServiceToCluster"
+	ClusterService_UnassignServiceFromCluster_FullMethodName      = "/quartermaster.ClusterService/UnassignServiceFromCluster"
+	ClusterService_EnableSelfHosting_FullMethodName               = "/quartermaster.ClusterService/EnableSelfHosting"
+	ClusterService_CreateEnrollmentToken_FullMethodName           = "/quartermaster.ClusterService/CreateEnrollmentToken"
+	ClusterService_ListEdgeReleases_FullMethodName                = "/quartermaster.ClusterService/ListEdgeReleases"
+	ClusterService_UpsertEdgeRelease_FullMethodName               = "/quartermaster.ClusterService/UpsertEdgeRelease"
+	ClusterService_GetClusterReleaseTarget_FullMethodName         = "/quartermaster.ClusterService/GetClusterReleaseTarget"
+	ClusterService_ListClusterReleaseTargets_FullMethodName       = "/quartermaster.ClusterService/ListClusterReleaseTargets"
+	ClusterService_SetClusterReleaseTarget_FullMethodName         = "/quartermaster.ClusterService/SetClusterReleaseTarget"
 )
 
 // ClusterServiceClient is the client API for ClusterService service.
@@ -781,6 +783,13 @@ type ClusterServiceClient interface {
 	// this RPC takes the tenant_id directly and is intended for declarative
 	// bootstrap reconcile only. The server enforces is_platform_official.
 	BootstrapClusterAccess(ctx context.Context, in *BootstrapClusterAccessRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// MaterializeClusterAccess is the constrained service path used after the
+	// billing/owner authority has made a commercial access decision.
+	MaterializeClusterAccess(ctx context.Context, in *MaterializeClusterAccessRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// RevokeMaterializedClusterAccess is the proof-bound inverse used when the
+	// billing authority observes a terminal commercial subscription state. It
+	// can revoke only a row whose current provenance matches access_source.
+	RevokeMaterializedClusterAccess(ctx context.Context, in *RevokeMaterializedClusterAccessRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// DeactivateClusterAccess soft-suspends a tenant_cluster_access row
 	// (is_active=false, subscription_status='suspended'). Service-token only;
 	// Purser calls this from reconcileTierClusterAccess on downgrade. Idempotent.
@@ -802,7 +811,7 @@ type ClusterServiceClient interface {
 	ListMySubscriptions(ctx context.Context, in *ListMySubscriptionsRequest, opts ...grpc.CallOption) (*ListClustersResponse, error)
 	// List clusters in marketplace (respects visibility + billing tier)
 	ListMarketplaceClusters(ctx context.Context, in *ListMarketplaceClustersRequest, opts ...grpc.CallOption) (*ListMarketplaceClustersResponse, error)
-	// Get a marketplace cluster (with optional invite token for unlisted)
+	// Get a public or direct-link unlisted marketplace cluster
 	GetMarketplaceCluster(ctx context.Context, in *GetMarketplaceClusterRequest, opts ...grpc.CallOption) (*MarketplaceClusterEntry, error)
 	// Update cluster marketplace settings (owner only)
 	UpdateClusterMarketplace(ctx context.Context, in *UpdateClusterMarketplaceRequest, opts ...grpc.CallOption) (*ClusterResponse, error)
@@ -946,6 +955,26 @@ func (c *clusterServiceClient) BootstrapClusterAccess(ctx context.Context, in *B
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(emptypb.Empty)
 	err := c.cc.Invoke(ctx, ClusterService_BootstrapClusterAccess_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clusterServiceClient) MaterializeClusterAccess(ctx context.Context, in *MaterializeClusterAccessRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, ClusterService_MaterializeClusterAccess_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clusterServiceClient) RevokeMaterializedClusterAccess(ctx context.Context, in *RevokeMaterializedClusterAccessRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, ClusterService_RevokeMaterializedClusterAccess_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1268,6 +1297,13 @@ type ClusterServiceServer interface {
 	// this RPC takes the tenant_id directly and is intended for declarative
 	// bootstrap reconcile only. The server enforces is_platform_official.
 	BootstrapClusterAccess(context.Context, *BootstrapClusterAccessRequest) (*emptypb.Empty, error)
+	// MaterializeClusterAccess is the constrained service path used after the
+	// billing/owner authority has made a commercial access decision.
+	MaterializeClusterAccess(context.Context, *MaterializeClusterAccessRequest) (*emptypb.Empty, error)
+	// RevokeMaterializedClusterAccess is the proof-bound inverse used when the
+	// billing authority observes a terminal commercial subscription state. It
+	// can revoke only a row whose current provenance matches access_source.
+	RevokeMaterializedClusterAccess(context.Context, *RevokeMaterializedClusterAccessRequest) (*emptypb.Empty, error)
 	// DeactivateClusterAccess soft-suspends a tenant_cluster_access row
 	// (is_active=false, subscription_status='suspended'). Service-token only;
 	// Purser calls this from reconcileTierClusterAccess on downgrade. Idempotent.
@@ -1289,7 +1325,7 @@ type ClusterServiceServer interface {
 	ListMySubscriptions(context.Context, *ListMySubscriptionsRequest) (*ListClustersResponse, error)
 	// List clusters in marketplace (respects visibility + billing tier)
 	ListMarketplaceClusters(context.Context, *ListMarketplaceClustersRequest) (*ListMarketplaceClustersResponse, error)
-	// Get a marketplace cluster (with optional invite token for unlisted)
+	// Get a public or direct-link unlisted marketplace cluster
 	GetMarketplaceCluster(context.Context, *GetMarketplaceClusterRequest) (*MarketplaceClusterEntry, error)
 	// Update cluster marketplace settings (owner only)
 	UpdateClusterMarketplace(context.Context, *UpdateClusterMarketplaceRequest) (*ClusterResponse, error)
@@ -1368,6 +1404,12 @@ func (UnimplementedClusterServiceServer) SubscribeToCluster(context.Context, *Su
 }
 func (UnimplementedClusterServiceServer) BootstrapClusterAccess(context.Context, *BootstrapClusterAccessRequest) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method BootstrapClusterAccess not implemented")
+}
+func (UnimplementedClusterServiceServer) MaterializeClusterAccess(context.Context, *MaterializeClusterAccessRequest) (*emptypb.Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method MaterializeClusterAccess not implemented")
+}
+func (UnimplementedClusterServiceServer) RevokeMaterializedClusterAccess(context.Context, *RevokeMaterializedClusterAccessRequest) (*emptypb.Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method RevokeMaterializedClusterAccess not implemented")
 }
 func (UnimplementedClusterServiceServer) DeactivateClusterAccess(context.Context, *DeactivateClusterAccessRequest) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeactivateClusterAccess not implemented")
@@ -1653,6 +1695,42 @@ func _ClusterService_BootstrapClusterAccess_Handler(srv interface{}, ctx context
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ClusterServiceServer).BootstrapClusterAccess(ctx, req.(*BootstrapClusterAccessRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClusterService_MaterializeClusterAccess_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MaterializeClusterAccessRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClusterServiceServer).MaterializeClusterAccess(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClusterService_MaterializeClusterAccess_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClusterServiceServer).MaterializeClusterAccess(ctx, req.(*MaterializeClusterAccessRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClusterService_RevokeMaterializedClusterAccess_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RevokeMaterializedClusterAccessRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClusterServiceServer).RevokeMaterializedClusterAccess(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClusterService_RevokeMaterializedClusterAccess_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClusterServiceServer).RevokeMaterializedClusterAccess(ctx, req.(*RevokeMaterializedClusterAccessRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2225,6 +2303,14 @@ var ClusterService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "BootstrapClusterAccess",
 			Handler:    _ClusterService_BootstrapClusterAccess_Handler,
+		},
+		{
+			MethodName: "MaterializeClusterAccess",
+			Handler:    _ClusterService_MaterializeClusterAccess_Handler,
+		},
+		{
+			MethodName: "RevokeMaterializedClusterAccess",
+			Handler:    _ClusterService_RevokeMaterializedClusterAccess_Handler,
 		},
 		{
 			MethodName: "DeactivateClusterAccess",

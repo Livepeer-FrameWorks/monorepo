@@ -2908,6 +2908,9 @@ func TestBuildServiceEnvVarsCoversRuntimeEnvDependencies(t *testing.T) {
 		{
 			serviceID: "foghorn",
 			want: map[string]string{
+				"FOGHORN_PUBLIC_HTTP_BIND_ADDR":   "0.0.0.0",
+				"FOGHORN_INTERNAL_HTTP_BIND_ADDR": "127.0.0.1",
+				"FOGHORN_INTERNAL_HTTP_PORT":      "18027",
 				"FOGHORN_INTERNAL_GRPC_BIND_ADDR": ":18019",
 				"FOGHORN_INTERNAL_GRPC_PORT":      "18019",
 				"FOGHORN_EXTERNAL_GRPC_BIND_ADDR": ":18029",
@@ -4968,5 +4971,33 @@ func TestBuildServiceEnvVarsInjectsResolvedSystemTenant(t *testing.T) {
 	}
 	if got := env["SYSTEM_TENANT_ID"]; got != "11111111-2222-3333-4444-555555555555" {
 		t.Fatalf("SYSTEM_TENANT_ID = %q, want Quartermaster-resolved identity", got)
+	}
+}
+
+func TestRestrictClusterAccessSecrets(t *testing.T) {
+	tests := []struct {
+		service             string
+		wantMaterialization bool
+		wantBalancer        bool
+	}{
+		{service: "quartermaster", wantMaterialization: true},
+		{service: "purser", wantMaterialization: true},
+		{service: "foghorn", wantBalancer: true},
+		{service: "commodore"},
+		{service: "helmsman"},
+	}
+	for _, test := range tests {
+		t.Run(test.service, func(t *testing.T) {
+			env := map[string]string{
+				"CLUSTER_ACCESS_MATERIALIZATION_SECRET": "materialize",
+				"FOGHORN_BALANCER_CAPABILITY_SECRET":    "balance",
+			}
+			restrictClusterAccessSecrets(test.service, env)
+			_, hasMaterialization := env["CLUSTER_ACCESS_MATERIALIZATION_SECRET"]
+			_, hasBalancer := env["FOGHORN_BALANCER_CAPABILITY_SECRET"]
+			if hasMaterialization != test.wantMaterialization || hasBalancer != test.wantBalancer {
+				t.Fatalf("rendered secrets materialization=%v balancer=%v, want %v/%v", hasMaterialization, hasBalancer, test.wantMaterialization, test.wantBalancer)
+			}
+		})
 	}
 }

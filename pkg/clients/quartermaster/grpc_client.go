@@ -3,8 +3,11 @@ package quartermaster
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
@@ -17,6 +20,7 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const DefaultServerName = "quartermaster.internal"
@@ -427,6 +431,49 @@ func (c *GRPCClient) ListClustersAvailable(ctx context.Context, pagination *comm
 // GrantClusterAccess grants cluster access to a tenant
 func (c *GRPCClient) GrantClusterAccess(ctx context.Context, req *quartermasterpb.GrantClusterAccessRequest) error {
 	_, err := c.cluster.GrantClusterAccess(ctx, req)
+	return err
+}
+
+func (c *GRPCClient) MaterializeClusterAccess(ctx context.Context, req *quartermasterpb.MaterializeClusterAccessRequest) error {
+	if req == nil {
+		return fmt.Errorf("materialize cluster access request required")
+	}
+	subscriptionStatus := strings.TrimSpace(req.GetSubscriptionStatus())
+	if subscriptionStatus == "" {
+		subscriptionStatus = "active"
+		req.SubscriptionStatus = subscriptionStatus
+	}
+	authorizedAt := time.Now().UTC().Truncate(time.Second)
+	proof, err := auth.MintClusterAccessMaterializationProof(
+		os.Getenv("CLUSTER_ACCESS_MATERIALIZATION_SECRET"),
+		req.GetTenantId(), req.GetClusterId(), int32(req.GetAccessSource()),
+		req.GetAuthorizationReference(), subscriptionStatus, authorizedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("authorize cluster access materialization: %w", err)
+	}
+	req.AuthorizedAt = timestamppb.New(authorizedAt)
+	req.AuthorizationProof = proof
+	_, err = c.cluster.MaterializeClusterAccess(ctx, req)
+	return err
+}
+
+func (c *GRPCClient) RevokeMaterializedClusterAccess(ctx context.Context, req *quartermasterpb.RevokeMaterializedClusterAccessRequest) error {
+	if req == nil {
+		return fmt.Errorf("revoke materialized cluster access request required")
+	}
+	authorizedAt := time.Now().UTC().Truncate(time.Second)
+	proof, err := auth.MintClusterAccessRevocationProof(
+		os.Getenv("CLUSTER_ACCESS_MATERIALIZATION_SECRET"),
+		req.GetTenantId(), req.GetClusterId(), int32(req.GetAccessSource()),
+		req.GetAuthorizationReference(), authorizedAt,
+	)
+	if err != nil {
+		return fmt.Errorf("authorize cluster access revocation: %w", err)
+	}
+	req.AuthorizedAt = timestamppb.New(authorizedAt)
+	req.AuthorizationProof = proof
+	_, err = c.cluster.RevokeMaterializedClusterAccess(ctx, req)
 	return err
 }
 

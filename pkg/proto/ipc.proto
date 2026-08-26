@@ -6,6 +6,7 @@ option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc;ipcpb
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";
+import "google/protobuf/struct.proto";
 import "common.proto";
 
 // Coarse geospatial bucket (H3 index + resolution)
@@ -128,6 +129,10 @@ message ClusterEvent {
   string subscription_id = 4;
   string reason = 5;
   ClusterRejectReason reject_reason_code = 6;
+  // Transactional operator-access audits use typed before/after state instead
+  // of overloading the human-readable reason field with JSON text.
+  google.protobuf.Struct before_state = 7;
+  google.protobuf.Struct after_state = 8;
 }
 
 // StreamChangeEvent signals that a stream's metadata was updated.
@@ -239,6 +244,9 @@ message ControlMessage {
     // retryable ack, backoff+resend with the same stable RequestId.
     MistTriggerAck mist_trigger_ack = 150;
     ConfigSeed config_seed = 29;
+    // Foghorn -> Helmsman: rotate only the node-bound Mist source lookup
+    // capability without replaying TLS, Caddy, protocols, or baseline config.
+    BalancerCapabilityUpdate balancer_capability_update = 169;
     // Helmsman to Foghorn: per-seed apply result for TLS/Caddy activation.
     // Gates Navigator's DNS membership decisions.
     ConfigSeedApplyResult config_seed_apply_result = 34;
@@ -2666,6 +2674,11 @@ message ConfigSeed {
   // key cert files on disk and track per-edge apply state. Helmsman
   // renders one Caddy site block per bundle.
   repeated TLSCertBundle tls_bundles = 26;
+}
+
+message BalancerCapabilityUpdate {
+  string node_id = 1;
+  string foghorn_balancer_base = 2;
 }
 
 // ConfigSeedApplyResult is sent by Helmsman after attempting to apply a

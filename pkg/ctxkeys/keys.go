@@ -64,6 +64,7 @@ const (
 	KeyHTTPRequest          Key = "http_request"
 	KeyCapability           Key = "cap"
 	KeyClusterScope         Key = "cluster_scope"
+	KeyClusterServeScope    Key = "cluster_serve_scope"
 	KeyGraphQLOperationType Key = "graphql_operation_type"
 	KeyGraphQLOperationName Key = "graphql_operation_name"
 	KeyGraphQLComplexity    Key = "graphql_complexity"
@@ -80,6 +81,15 @@ func GetTenantID(ctx context.Context) string {
 		return v
 	}
 	return ""
+}
+
+// ClusterServeScope is the already-resolved playback authority envelope. It
+// deliberately contains only value types so balancer selection never performs
+// a synchronous control-plane lookup on the viewer hot path.
+type ClusterServeScope struct {
+	TenantID          string
+	OfficialClusterID string
+	PeerClusterIDs    []string
 }
 
 // GetPlaybackContentID extracts the pre-resolved canonical playback_id from context.
@@ -216,6 +226,12 @@ func GetClusterScope(ctx context.Context) string {
 		return v
 	}
 	return ""
+}
+
+// GetClusterServeScope extracts the pre-resolved playback authority envelope.
+func GetClusterServeScope(ctx context.Context) (ClusterServeScope, bool) {
+	v, ok := ctx.Value(KeyClusterServeScope).(ClusterServeScope)
+	return v, ok
 }
 
 // GetPermissions extracts permissions from context.

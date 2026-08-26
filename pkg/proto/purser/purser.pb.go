@@ -140,6 +140,7 @@ type GetTenantAdmissionStatusResponse struct {
 	CollectionReady       bool                   `protobuf:"varint,7,opt,name=collection_ready,json=collectionReady,proto3" json:"collection_ready,omitempty"`
 	CollectionProvider    string                 `protobuf:"bytes,8,opt,name=collection_provider,json=collectionProvider,proto3" json:"collection_provider,omitempty"`
 	TierName              string                 `protobuf:"bytes,9,opt,name=tier_name,json=tierName,proto3" json:"tier_name,omitempty"`
+	TierLevel             int32                  `protobuf:"varint,10,opt,name=tier_level,json=tierLevel,proto3" json:"tier_level,omitempty"`
 	unknownFields         protoimpl.UnknownFields
 	sizeCache             protoimpl.SizeCache
 }
@@ -235,6 +236,13 @@ func (x *GetTenantAdmissionStatusResponse) GetTierName() string {
 		return x.TierName
 	}
 	return ""
+}
+
+func (x *GetTenantAdmissionStatusResponse) GetTierLevel() int32 {
+	if x != nil {
+		return x.TierLevel
+	}
+	return 0
 }
 
 // Full billing status check for entitlement- and pricing-aware calls.
@@ -6552,7 +6560,7 @@ type CreateClusterSubscriptionRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                   // Subscribing tenant
 	ClusterId     string                 `protobuf:"bytes,2,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`                // Target cluster
-	InviteToken   *string                `protobuf:"bytes,3,opt,name=invite_token,json=inviteToken,proto3,oneof" json:"invite_token,omitempty"`    // For unlisted/private clusters
+	InviteToken   *string                `protobuf:"bytes,3,opt,name=invite_token,json=inviteToken,proto3,oneof" json:"invite_token,omitempty"`    // Reserved for legacy private-invite callers; unlisted access uses direct-link billing
 	SuccessUrl    *string                `protobuf:"bytes,4,opt,name=success_url,json=successUrl,proto3,oneof" json:"success_url,omitempty"`       // Redirect after successful payment (for paid clusters)
 	CancelUrl     *string                `protobuf:"bytes,5,opt,name=cancel_url,json=cancelUrl,proto3,oneof" json:"cancel_url,omitempty"`          // Redirect if user cancels checkout
 	BillingEmail  *string                `protobuf:"bytes,6,opt,name=billing_email,json=billingEmail,proto3,oneof" json:"billing_email,omitempty"` // Email for Stripe customer (if creating new)
@@ -12109,7 +12117,7 @@ const file_purser_proto_rawDesc = "" +
 	"\fpurser.proto\x12\x06purser\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x1bgoogle/protobuf/empty.proto\x1a\x1cgoogle/protobuf/struct.proto\x1a\fcommon.proto\x1a\fshared.proto\x1a\x13tenant_limits.proto\x1a\x17metering_contract.proto\x1a\n" +
 	"x402.proto\">\n" +
 	"\x1fGetTenantAdmissionStatusRequest\x12\x1b\n" +
-	"\ttenant_id\x18\x01 \x01(\tR\btenantId\"\xa6\x03\n" +
+	"\ttenant_id\x18\x01 \x01(\tR\btenantId\"\xc5\x03\n" +
 	" GetTenantAdmissionStatusResponse\x12#\n" +
 	"\rbilling_model\x18\x01 \x01(\tR\fbillingModel\x12!\n" +
 	"\fis_suspended\x18\x02 \x01(\bR\visSuspended\x12.\n" +
@@ -12119,7 +12127,10 @@ const file_purser_proto_rawDesc = "" +
 	"\x17available_balance_cents\x18\x06 \x01(\x03R\x15availableBalanceCents\x12)\n" +
 	"\x10collection_ready\x18\a \x01(\bR\x0fcollectionReady\x12/\n" +
 	"\x13collection_provider\x18\b \x01(\tR\x12collectionProvider\x12\x1b\n" +
-	"\ttier_name\x18\t \x01(\tR\btierName\"<\n" +
+	"\ttier_name\x18\t \x01(\tR\btierName\x12\x1d\n" +
+	"\n" +
+	"tier_level\x18\n" +
+	" \x01(\x05R\ttierLevel\"<\n" +
 	"\x1dGetTenantBillingStatusRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\"X\n" +
 	"!ListTenantBillingSnapshotsRequest\x12\x1d\n" +
