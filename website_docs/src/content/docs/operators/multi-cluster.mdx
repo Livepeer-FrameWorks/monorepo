@@ -143,22 +143,29 @@ The marketplace allows third-party operators to publish clusters that other tena
 
 Clusters can be configured with different visibility levels:
 
-| Visibility | Who Can See               | Access                                           |
-| ---------- | ------------------------- | ------------------------------------------------ |
-| `private`  | Only the owner tenant     | Direct access or invite token for another tenant |
-| `unlisted` | Direct-link/invited users | Via cluster invite token                         |
-| `public`   | All tenants               | Via subscription request                         |
+| Visibility | Who Can See                 | Access                                           |
+| ---------- | --------------------------- | ------------------------------------------------ |
+| `private`  | Only the owner tenant       | Direct access or invite token for another tenant |
+| `unlisted` | Anyone with the direct link | Via the billing checkout flow                    |
+| `public`   | All tenants                 | Via subscription request                         |
 
 ### Subscription Lifecycle
 
 ```
 Tenant discovers cluster (marketplace UI or invite link)
-  → RequestClusterSubscription (GraphQL mutation)
+  → Public marketplace: SubscribeToCluster routes the decision through Purser
+  → Monthly: verified checkout webhook materializes active marketplace access
+  → Custom/approval listing: Purser materializes an inactive PENDING_APPROVAL row
   → Cluster owner approves/rejects (ApproveClusterSubscription / RejectClusterSubscription)
-  → On approval: Quartermaster activates the tenant_cluster_access record
-  → Paid cluster checkout/subscription records are created by Purser's cluster-subscription flow
+  → Private invite: RequestClusterSubscription validates the invite in Quartermaster
+  → Unlisted direct link: Purser validates pricing and materializes marketplace access
   → Tenant can now route streams through the cluster
 ```
+
+Platform-official capacity is provisioned from the tenant billing tier, and a
+tenant's own private edge cluster uses owner authority. Neither enters
+marketplace checkout. v0.3 fails closed if a listing combines monthly checkout
+with owner approval; that combination needs a future two-proof lifecycle.
 
 ### Invitation Flow
 

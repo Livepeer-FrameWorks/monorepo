@@ -65,6 +65,7 @@ Recommendation:
 There is a strong shared set already:
 
 - `GRPC_ALLOW_INSECURE`
+- `GRPC_METADATA_POLICY` (`allow`, `audit`, or `deny`; Foghorn deploys with `deny`)
 - `GRPC_TLS_CA_PATH`
 - `GRPC_TLS_CERT_PATH`
 - `GRPC_TLS_KEY_PATH`
@@ -76,6 +77,25 @@ Recommendation:
   `QUARTERMASTER_GRPC_TLS_SERVER_NAME`, when a process dials more than one gRPC
   service. A single process-wide ServerName is not valid for multi-client
   services.
+
+### Cluster-access signing secrets
+
+- `CLUSTER_ACCESS_MATERIALIZATION_SECRET` is rendered only to Quartermaster and
+  Purser. It authenticates the narrow commercial/owner grant materialization
+  and revocation envelopes; it is not a general service credential. Both
+  services refuse to start without it. Local Compose supplies an explicit
+  development-only fallback; non-development manifests must inject a shared,
+  generated value.
+- `FOGHORN_BALANCER_CAPABILITY_SECRET` is rendered to every Foghorn replica. It signs
+  short-lived, node/cluster-bound public source-lookup URLs used by Mist. The
+  capability is carried in the URL path because Mist replaces configured query
+  parameters; rotation updates only managed stream sources, not the full edge
+  configuration seed. Every HA replica must share the same secret or requests
+  minted by one replica will fail when load-balanced to another.
+- Local Compose supplies explicit development-only fallbacks for both secrets.
+  Provisioning generates them when absent in development, while
+  non-development manifests require shared secret inputs. Do not copy either
+  key into tenant-hosted edge environments.
 
 ### Frontend/public URL mirrors
 
@@ -141,7 +161,8 @@ These are outputs and should not be treated as first-class editable config:
 - `COMMODORE_URL`, `QUARTERMASTER_URL`, `PURSER_URL`, `PERISCOPE_QUERY_URL`, `PERISCOPE_INGEST_URL`, `MISTSERVER_URL`, `MISTSERVER_HTTP_URL`, `HELMSMAN_WEBHOOK_URL`
 - `COMMODORE_GRPC_ADDR`, `QUARTERMASTER_GRPC_ADDR`, `PURSER_GRPC_ADDR`, `PERISCOPE_GRPC_ADDR`, `SIGNALMAN_GRPC_ADDR`, `DECKHAND_GRPC_ADDR`, `SKIPPER_GRPC_ADDR`
 - `GATEWAY_MCP_URLS`, `GATEWAY_MCP_URL` (derived from Bridge mesh hosts for Skipper)
-- `FOGHORN_CONTROL_ADDR`, `FOGHORN_INTERNAL_GRPC_BIND_ADDR`, `FOGHORN_EXTERNAL_GRPC_BIND_ADDR`, `FOGHORN_EXTERNAL_GRPC_PORT`, `FOGHORN_RELAY_ADVERTISE_ADDR`
+- `FOGHORN_CONTROL_ADDR`, `FOGHORN_PUBLIC_HTTP_BIND_ADDR`, `FOGHORN_INTERNAL_HTTP_PORT` (default `18027`), `FOGHORN_INTERNAL_HTTP_BIND_ADDR`, `FOGHORN_INTERNAL_GRPC_BIND_ADDR`, `FOGHORN_EXTERNAL_GRPC_BIND_ADDR`, `FOGHORN_EXTERNAL_GRPC_PORT`, `FOGHORN_RELAY_ADVERTISE_ADDR`
+- `HELMSMAN_BIND_ADDR`, `HELMSMAN_MANAGEMENT_BIND_ADDR`, `HELMSMAN_MANAGEMENT_PORT` (default `18017`)
 - All `VITE_*` (derived by configgen from canonical public URLs)
 - `AUTH_PUBLIC_URL` (derived from `GATEWAY_PUBLIC_URL + /auth`)
 
@@ -171,6 +192,7 @@ These are real operator-owned inputs that should stay covered by env examples an
 - `NAVIGATOR_GOOGLE_TRUST_EAB_KID`
 - `NAVIGATOR_GOOGLE_TRUST_EAB_HMAC_KEY`
 - `FEDERATION_ENABLED`
+- `FEDERATION_ALLOW_INSECURE_DEV` (isolated development only)
 - `RERANKER_API_URL`
 - `TURNSTILE_FAIL_OPEN`
 - `QUARTERMASTER_GRPC_TLS_SERVER_NAME`

@@ -80,6 +80,13 @@ marketplace of independent operators this is a payable-revenue channel fed by
 self-reported usage — the emitting cluster asserts its own `cluster_id`, its own session
 counts, and its own byte counts, and nothing corroborates them.
 
+Storage evidence has the same limitation. Current `durable_backend_local` and
+provider-observed byte facts are emitted by the storage-owning Foghorn alone;
+they are not destination attestations. Verified remote-provider storage
+evidence is owned by
+[`cross-cluster-durable-replication-v1.md`](cross-cluster-durable-replication-v1.md),
+which is a hard dependency before remote storage can become settlement-grade.
+
 ## Problem / Motivation
 
 The cluster marketplace pays operators for served usage. The moment operators are

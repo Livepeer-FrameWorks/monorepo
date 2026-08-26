@@ -52,6 +52,14 @@ meter family on that surface, alongside processing and future provider-backed
 work. Paid invoices allocate line revenue across those provider rows and write
 `operator_credit_ledger` accruals with `source_type='provider_usage'`.
 
+Current storage-provider attribution is not destination attestation. The
+storage-owning Foghorn stamps the single-emitter `durable_backend_local` fact at
+claim/completion time and later reports provider-observed bytes. That is sound
+for the current platform-operated, official-only storage boundary, but it is not
+settlement-grade proof from an independent destination. Remote provider storage
+must use the verified assignment and destination attestation defined by
+[`cross-cluster-durable-replication-v1.md`](../rfcs/cross-cluster-durable-replication-v1.md).
+
 ## Operator Credit Accrual
 
 `api_billing/internal/operator/credit.go` turns paid customer invoices into

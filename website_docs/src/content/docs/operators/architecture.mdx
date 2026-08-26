@@ -52,9 +52,11 @@ The FrameWorks platform is composed of specialized services, each responsible fo
 | Decklog (metrics)       | 18026                      | Regional         | Observability & Operations    | Decklog Prometheus metrics                                        |
 | Signalman               | 18009 (WS), 19005 (gRPC)   | Regional         | Event & Analytics             | Real-time event fan-out and WebSocket hub                         |
 | Foghorn                 | 18008                      | Regional         | Media                         | Load balancer and media pipeline orchestrator                     |
+| Foghorn (internal HTTP) | 18027                      | Regional         | Media                         | Internal management and authenticated mutation API                |
 | Foghorn (internal gRPC) | 18019 (gRPC)               | Regional         | Media                         | Internal control API and HA relay over the internal CA            |
 | Foghorn (external gRPC) | 18029 (gRPC)               | Regional         | Media                         | Edge bootstrap, Helmsman control, and FoghornFederation over ACME |
 | Helmsman                | 18007 (HTTP)               | Edge             | Media                         | MistServer sidecar                                                |
+| Helmsman (management)   | 18017                      | Edge             | Media                         | Loopback management mutations                                     |
 | Chandler                | 18020 (HTTP)               | Regional         | Media                         | Cluster-scoped static media asset server                          |
 | Navigator               | 18010 (HTTP), 18011 (gRPC) | Central          | Network & Trust               | Public DNS, ACME certificates, and internal CA material           |
 | Privateer               | 18012 (HTTP)               | Central/Regional | Network & Trust               | WireGuard mesh agent and local `.internal` DNS                    |

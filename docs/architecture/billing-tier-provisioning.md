@@ -14,7 +14,7 @@ Billing tiers drive cluster access. When an account is created or promoted, the 
                     ┌─────────────┐       ┌────────────────┐
                     │   Purser    │──────▶│  Quartermaster  │
                     │             │       │                 │
-                    │ 1. Resolve  │       │ SubscribeToCluster
+                    │ 1. Resolve  │       │ BootstrapClusterAccess
                     │    tier     │       │ UpdateTenant     │
                     │ 2. Create   │       │  (primary_cluster)│
                     │    sub      │       └────────────────┘
@@ -29,7 +29,7 @@ Billing tiers drive cluster access. When an account is created or promoted, the 
 | ------------- | -------------------------------------------------------- | ---------------------------------------------------------- |
 | Commodore     | Triggers billing init during Register                    | Calls Purser after user creation                           |
 | Purser        | Resolves tier, creates subscription, provisions clusters | `billing_tiers`, `tenant_subscriptions`, `cluster_pricing` |
-| Quartermaster | Manages cluster subscriptions and primary cluster        | `tenant_cluster_access`, `tenants.primary_cluster_id`      |
+| Quartermaster | Materializes tier-derived grants and primary routing     | `tenant_cluster_access`, `tenants.primary_cluster_id`      |
 
 ## Data Flows
 
@@ -42,7 +42,7 @@ Billing tiers drive cluster access. When an account is created or promoted, the 
 4. Purser creates subscription (billing_model=postpaid)
 5. Purser.ensureTierClusterAccess:
    a. Queries cluster_pricing for eligible platform clusters
-   b. Subscribes tenant to each via Quartermaster.SubscribeToCluster
+   b. Materializes `platform_tier` access via Quartermaster.BootstrapClusterAccess
    c. Sets highest-tier-level cluster as primary via Quartermaster.UpdateTenant
 ```
 
