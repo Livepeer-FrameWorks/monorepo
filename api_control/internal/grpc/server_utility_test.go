@@ -396,19 +396,26 @@ func TestBuildClusterFanoutTargets_DistinctOfficial(t *testing.T) {
 	}
 }
 
-func TestFilterPeersByPolicy_AllowsSelfHostedGrantRegardlessOfPlanClass(t *testing.T) {
+func TestFilterPeersByPolicy_UsesGrantProvenance(t *testing.T) {
 	peers := []*clusterpeerpb.TenantClusterPeer{
-		{ClusterId: "official", ClusterClass: "platform_official", ClusterType: "shared-lb", HealthStatus: "healthy"},
-		{ClusterId: "self-hosted", ClusterClass: "tenant_private", ClusterType: "self-hosted", HealthStatus: "healthy"},
-		{ClusterId: "private", ClusterClass: "tenant_private", ClusterType: "dedicated", HealthStatus: "healthy"},
-		{ClusterId: "unclassified", ClusterType: "shared-lb", HealthStatus: "healthy"},
+		{ClusterId: "official", ClusterClass: "platform_official", AccessActive: true, SubscriptionStatus: "active", AccessSource: clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_PLATFORM_TIER},
+		{ClusterId: "byo-owner", ClusterClass: "tenant_private", AccessActive: true, SubscriptionStatus: "active", AccessSource: clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_OWNER},
+		{ClusterId: "invited-private", ClusterClass: "tenant_private", AccessActive: true, SubscriptionStatus: "active", AccessSource: clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_PRIVATE_INVITE},
+		{ClusterId: "forged-marketplace-invite", ClusterClass: "third_party_marketplace", AccessActive: true, SubscriptionStatus: "active", AccessSource: clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_PRIVATE_INVITE},
+		{ClusterId: "marketplace", ClusterClass: "third_party_marketplace", AccessActive: true, SubscriptionStatus: "active", AccessSource: clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_MARKETPLACE_SUBSCRIPTION},
+		{ClusterId: "unknown", ClusterClass: "platform_official", AccessActive: true, SubscriptionStatus: "active"},
+		{ClusterId: "inactive", ClusterClass: "platform_official", SubscriptionStatus: "active", AccessSource: clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_PLATFORM_TIER},
 	}
 	filtered := filterPeersByPolicy(peers, map[string]struct{}{"platform_official": {}})
-	if len(filtered) != 2 {
-		t.Fatalf("expected official and self-hosted peers, got %d", len(filtered))
+	if len(filtered) != 3 {
+		t.Fatalf("expected official, owner, and invited peers, got %d", len(filtered))
 	}
-	if filtered[0].GetClusterId() != "official" || filtered[1].GetClusterId() != "self-hosted" {
-		t.Fatalf("unexpected peers: %q, %q", filtered[0].GetClusterId(), filtered[1].GetClusterId())
+	got := []string{filtered[0].GetClusterId(), filtered[1].GetClusterId(), filtered[2].GetClusterId()}
+	want := []string{"official", "byo-owner", "invited-private"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("unexpected peers: %v", got)
+		}
 	}
 }
 

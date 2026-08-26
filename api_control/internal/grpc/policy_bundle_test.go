@@ -191,7 +191,6 @@ func TestGetSignedPolicyBundle(t *testing.T) {
 		defer done()
 		s.qmEntitlements = stubEntitlements{resp: &quartermasterpb.GetTenantEntitlementResponse{
 			AllowedClusterIds: []string{"cluster-a", "cluster-b"},
-			PlanClass:         "premium",
 		}}
 
 		// 1. per-stream policy + ownership
@@ -240,8 +239,17 @@ func TestGetSignedPolicyBundle(t *testing.T) {
 		if len(claims.AllowedClusterIDs) != 2 || claims.AllowedClusterIDs[0] != "cluster-a" {
 			t.Errorf("AllowedClusterIDs = %v, want [cluster-a cluster-b]", claims.AllowedClusterIDs)
 		}
-		if claims.TenantPlanClass != "premium" {
-			t.Errorf("TenantPlanClass = %q, want premium", claims.TenantPlanClass)
+		var rawClaims map[string]any
+		parts := strings.Split(bundle.GetBundleJwt(), ".")
+		payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+		if err != nil {
+			t.Fatalf("decode JWT claims: %v", err)
+		}
+		if err := json.Unmarshal(payload, &rawClaims); err != nil {
+			t.Fatalf("unmarshal JWT claims: %v", err)
+		}
+		if _, present := rawClaims["tenant_plan_class"]; present {
+			t.Error("tenant_plan_class must not be signed into the policy bundle")
 		}
 		var pol map[string]any
 		if err := json.Unmarshal(claims.PlaybackPolicy, &pol); err != nil || pol["require_auth"] != true {
@@ -252,14 +260,13 @@ func TestGetSignedPolicyBundle(t *testing.T) {
 		}
 	})
 
-	t.Run("empty_plan_class_omits_claim_but_issues_bundle", func(t *testing.T) {
+	t.Run("deprecated_plan_class_claim_is_omitted", func(t *testing.T) {
 		const secret = "k"
 		t.Setenv("POLICY_BUNDLE_SIGNING_SECRET", secret)
 		s, mock, done := newMockServer(t)
 		defer done()
 		s.qmEntitlements = stubEntitlements{resp: &quartermasterpb.GetTenantEntitlementResponse{
 			AllowedClusterIds: []string{"cluster-a"},
-			PlanClass:         "",
 		}}
 		mock.ExpectQuery("FROM commodore.streams").
 			WithArgs(streamID).
@@ -284,7 +291,7 @@ func TestGetSignedPolicyBundle(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if resp.GetBundle() == nil {
-			t.Fatalf("expected a bundle to be issued despite empty plan_class")
+			t.Fatalf("expected a bundle to be issued")
 		}
 		// Prove the tenant_plan_class claim is actually omitted (omitempty) from
 		// the signed JWT payload, not merely decoded as an empty string.

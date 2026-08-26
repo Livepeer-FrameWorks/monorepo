@@ -63,6 +63,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/lib/pq"
 	"github.com/prometheus/client_golang/prometheus"
+	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -789,14 +790,7 @@ func (s *CommodoreServer) freshCachedClusterRoute(tenantID string) (*clusterRout
 }
 
 func (s *CommodoreServer) buildClusterRoute(ctx context.Context, tenantID string) (*clusterRoute, error) {
-	resp, err := s.quartermasterClient.GetClusterRouting(ctx, &quartermasterpb.GetClusterRoutingRequest{TenantId: tenantID})
-	if err != nil {
-		return nil, status.Errorf(codes.Unavailable, "cluster routing failed: %v", err)
-	}
-
-	// Never cache a route built from an unresolved entitlement: a demoted peer
-	// set would be served for the whole TTL.
-	allowedClasses, err := s.allowedClusterClassesForTenant(ctx, tenantID)
+	resp, allowedClasses, err := s.loadAdmissionRouteInputs(ctx, tenantID, "cluster routing")
 	if err != nil {
 		return nil, err
 	}
@@ -890,18 +884,14 @@ func (s *CommodoreServer) resolveAdmissionRouteForTenant(ctx context.Context, te
 
 // admissionRefreshTimeout bounds the shared admission lookup. It is detached
 // from any one caller's deadline, so it needs its own.
-const admissionRefreshTimeout = 10 * time.Second
+const admissionRefreshTimeout = 500 * time.Millisecond
 
 func (s *CommodoreServer) refreshAdmissionRoute(ctx context.Context, tenantID string, route *clusterRoute) (*clusterRoute, error) {
 	if s.quartermasterClient == nil {
 		return nil, status.Error(codes.Unavailable, "quartermaster not available for cluster routing")
 	}
 
-	resp, err := s.quartermasterClient.GetClusterRouting(ctx, &quartermasterpb.GetClusterRoutingRequest{TenantId: tenantID})
-	if err != nil {
-		return nil, status.Errorf(codes.Unavailable, "cluster routing refresh failed: %v", err)
-	}
-	allowedClasses, err := s.allowedClusterClassesForTenant(ctx, tenantID)
+	resp, allowedClasses, err := s.loadAdmissionRouteInputs(ctx, tenantID, "cluster routing refresh")
 	if err != nil {
 		return nil, err
 	}
@@ -915,6 +905,38 @@ func (s *CommodoreServer) refreshAdmissionRoute(ctx context.Context, tenantID st
 	refreshed.admissionResolvedAt = time.Now()
 
 	return s.installRefreshedAdmissionRoute(tenantID, route, &refreshed), nil
+}
+
+// loadAdmissionRouteInputs resolves independent routing and billing-tier facts
+// concurrently under the caller's single operation budget. Neither authority
+// is a fallback for the other: admission needs both, and any failure denies the
+// refresh without caching a partial decision.
+func (s *CommodoreServer) loadAdmissionRouteInputs(ctx context.Context, tenantID, routingStage string) (*quartermasterpb.ClusterRoutingResponse, map[string]struct{}, error) {
+	var (
+		routing        *quartermasterpb.ClusterRoutingResponse
+		allowedClasses map[string]struct{}
+	)
+	group, groupCtx := errgroup.WithContext(ctx)
+	group.Go(func() error {
+		resp, err := s.quartermasterClient.GetClusterRouting(groupCtx, &quartermasterpb.GetClusterRoutingRequest{TenantId: tenantID})
+		if err != nil {
+			return status.Errorf(codes.Unavailable, "%s failed: %v", routingStage, err)
+		}
+		routing = resp
+		return nil
+	})
+	group.Go(func() error {
+		classes, err := s.allowedClusterClassesForTenant(groupCtx, tenantID)
+		if err != nil {
+			return err
+		}
+		allowedClasses = classes
+		return nil
+	})
+	if err := group.Wait(); err != nil {
+		return nil, nil, err
+	}
+	return routing, allowedClasses, nil
 }
 
 // installRefreshedAdmissionRoute publishes a refreshed route only over the
@@ -956,8 +978,8 @@ func (s *CommodoreServer) installRefreshedAdmissionRoute(tenantID string, from, 
 // as CLUSTER_NOT_ENTITLED — a permanent-looking denial produced by a transient
 // blip. Errors propagate instead, so the caller can fail closed as transient.
 //
-// A tenant with no subscription is a real answer, not a failure: that is the
-// free tier.
+// A tenant with no subscription is a real answer, not a failure: Purser's
+// bounded admission response returns tier level zero for that case.
 func (s *CommodoreServer) allowedClusterClassesForTenant(ctx context.Context, tenantID string) (map[string]struct{}, error) {
 	free := map[string]struct{}{"platform_official": {}}
 	// Purser not wired up at all is a deployment shape (dev stacks), not a
@@ -965,22 +987,15 @@ func (s *CommodoreServer) allowedClusterClassesForTenant(ctx context.Context, te
 	if s.purserClient == nil {
 		return free, nil
 	}
-	subResp, err := s.purserClient.GetSubscription(ctx, tenantID)
+	admission, err := s.purserClient.GetTenantAdmissionStatus(ctx, tenantID)
 	if err != nil {
-		return nil, status.Errorf(codes.Unavailable, "subscription lookup failed: %v", err)
+		return nil, status.Errorf(codes.Unavailable, "tenant admission lookup failed: %v", err)
 	}
-	if subResp == nil || subResp.GetSubscription() == nil {
-		return free, nil
-	}
-	tier, err := s.purserClient.GetBillingTier(ctx, subResp.GetSubscription().GetTierId())
-	if err != nil {
-		return nil, status.Errorf(codes.Unavailable, "billing tier lookup failed: %v", err)
-	}
-	if tier == nil {
+	if admission == nil {
 		return free, nil
 	}
 	out := map[string]struct{}{"platform_official": {}}
-	switch level := tier.GetTierLevel(); {
+	switch level := admission.GetTierLevel(); {
 	case level >= 4:
 		out["third_party_marketplace"] = struct{}{}
 		out["tenant_private"] = struct{}{}
@@ -1022,14 +1037,30 @@ func filterPeersByPolicy(peers []*clusterpeerpb.TenantClusterPeer, allowedClasse
 	}
 	out := make([]*clusterpeerpb.TenantClusterPeer, 0, len(peers))
 	for _, peer := range peers {
-		if peer == nil {
+		if peer == nil || !peer.GetAccessActive() || peer.GetSubscriptionStatus() != "active" {
 			continue
 		}
-		if !isSelfHostedPeer(peer) {
-			class := strings.ToLower(strings.TrimSpace(peer.GetClusterClass()))
+		if expiry := peer.GetAccessExpiresAt(); expiry != nil && !expiry.AsTime().After(time.Now()) {
+			continue
+		}
+		class := strings.ToLower(strings.TrimSpace(peer.GetClusterClass()))
+		switch peer.GetAccessSource() {
+		case clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_OWNER,
+			clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_OPERATOR_OVERRIDE:
+		case clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_PRIVATE_INVITE:
+			// Invites are valid provenance only for private capacity. This is a
+			// consumer-side backstop against legacy or forged rows attempting to
+			// relabel marketplace access and skip its billing-tier policy.
+			if class != "tenant_private" {
+				continue
+			}
+		case clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_PLATFORM_TIER,
+			clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_MARKETPLACE_SUBSCRIPTION:
 			if _, ok := allowedClasses[class]; !ok {
 				continue
 			}
+		default:
+			continue
 		}
 		out = append(out, peer)
 	}
@@ -1065,13 +1096,6 @@ func clusterAdmissionPeer(route *clusterRoute, clusterID string) (*clusterpeerpb
 		return peer, commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_UNHEALTHY
 	}
 	return peer, commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_UNSPECIFIED
-}
-
-func isSelfHostedPeer(peer *clusterpeerpb.TenantClusterPeer) bool {
-	if peer == nil {
-		return false
-	}
-	return strings.EqualFold(peer.GetClusterType(), "self-hosted")
 }
 
 const (

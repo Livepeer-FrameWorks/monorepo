@@ -49,7 +49,6 @@ type signedBundleClaims struct {
 	StreamID          string          `json:"stream_id"`
 	BundleVersion     int64           `json:"bundle_version"`
 	AllowedClusterIDs []string        `json:"allowed_cluster_ids,omitempty"`
-	TenantPlanClass   string          `json:"tenant_plan_class,omitempty"`
 	PlaybackPolicy    json.RawMessage `json:"playback_policy,omitempty"`
 }
 
@@ -92,7 +91,7 @@ func (s *CommodoreServer) GetSignedPolicyBundle(ctx context.Context, req *commod
 	}
 	_ = internalName // reserved for future correlation logging
 
-	allowed, planClass, err := s.lookupTenantClusterEntitlement(ctx, tenantID)
+	allowed, err := s.lookupTenantClusterEntitlement(ctx, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -129,7 +128,6 @@ func (s *CommodoreServer) GetSignedPolicyBundle(ctx context.Context, req *commod
 		StreamID:          streamID,
 		BundleVersion:     bundleVersion,
 		AllowedClusterIDs: allowed,
-		TenantPlanClass:   planClass,
 		PlaybackPolicy:    policyJSON,
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
@@ -200,19 +198,18 @@ func (s *CommodoreServer) lookupPolicyForStream(ctx context.Context, tenantID, s
 	return []byte(row.PlaybackPolicy), row.InternalName, nil
 }
 
-// lookupTenantClusterEntitlement returns the cluster IDs this tenant is
-// entitled to use and the coarse plan class, sourced from Quartermaster (the
-// schema owner) via GetTenantEntitlement. Fails closed: a missing client or an
-// RPC error prevents the bundle from being issued.
-func (s *CommodoreServer) lookupTenantClusterEntitlement(ctx context.Context, tenantID string) ([]string, string, error) {
+// lookupTenantClusterEntitlement returns the usable cluster IDs sourced from
+// Quartermaster. Cluster class is deliberately not signed as billing-plan
+// authority; Quartermaster's effective-access projection owns provenance.
+func (s *CommodoreServer) lookupTenantClusterEntitlement(ctx context.Context, tenantID string) ([]string, error) {
 	if s.qmEntitlements == nil {
-		return nil, "", status.Error(codes.Unavailable, "quartermaster not available for tenant entitlement")
+		return nil, status.Error(codes.Unavailable, "quartermaster not available for tenant entitlement")
 	}
 	resp, err := s.qmEntitlements.GetTenantEntitlement(ctx, tenantID)
 	if err != nil {
-		return nil, "", status.Errorf(codes.Internal, "tenant entitlement lookup: %v", err)
+		return nil, status.Errorf(codes.Internal, "tenant entitlement lookup: %v", err)
 	}
-	return resp.GetAllowedClusterIds(), resp.GetPlanClass(), nil
+	return resp.GetAllowedClusterIds(), nil
 }
 
 func (s *CommodoreServer) nextPolicyBundleVersion(ctx context.Context, tenantID, streamID string) (int64, error) {

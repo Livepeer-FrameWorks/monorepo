@@ -10,6 +10,7 @@ import (
 
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"github.com/sirupsen/logrus"
@@ -28,10 +29,14 @@ type quartermasterRoutingFake struct {
 	gate chan struct{}
 }
 
-func (f *quartermasterRoutingFake) GetClusterRouting(context.Context, *quartermasterpb.GetClusterRoutingRequest) (*quartermasterpb.ClusterRoutingResponse, error) {
+func (f *quartermasterRoutingFake) GetClusterRouting(ctx context.Context, _ *quartermasterpb.GetClusterRoutingRequest) (*quartermasterpb.ClusterRoutingResponse, error) {
 	f.routingCalls.Add(1)
 	if f.gate != nil {
-		<-f.gate
+		select {
+		case <-f.gate:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 	addr, slug := "foghorn-1:50051", "cluster-1"
 	return &quartermasterpb.ClusterRoutingResponse{
@@ -39,6 +44,79 @@ func (f *quartermasterRoutingFake) GetClusterRouting(context.Context, *quarterma
 		FoghornGrpcAddr: &addr,
 		ClusterSlug:     &slug,
 	}, nil
+}
+
+func TestClusterRouteBuildStartsIndependentAuthoritiesConcurrently(t *testing.T) {
+	qmGate := make(chan struct{})
+	purserGate := make(chan struct{})
+	qmFake := &quartermasterRoutingFake{gate: qmGate}
+	purserFake := &purserEntitlementFake{
+		admission: func(ctx context.Context, _ *purserpb.GetTenantAdmissionStatusRequest) (*purserpb.GetTenantAdmissionStatusResponse, error) {
+			select {
+			case <-purserGate:
+				return &purserpb.GetTenantAdmissionStatusResponse{TierLevel: 2}, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		},
+	}
+	s := &CommodoreServer{
+		logger:              logrus.New(),
+		routeCache:          make(map[string]*clusterRoute),
+		routeCacheTTL:       5 * time.Minute,
+		quartermasterClient: startQuartermasterRoutingFake(t, qmFake),
+		purserClient:        startPurserEntitlementFake(t, purserFake),
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.resolveClusterRouteForTenant(context.Background(), "tenant-1")
+		done <- err
+	}()
+	waitFor(t, func() bool {
+		return qmFake.routingCalls.Load() == 1 && purserFake.admissionCalls.Load() == 1
+	})
+	if purserFake.subscriptionCalls.Load() != 0 || purserFake.tierCalls.Load() != 0 {
+		t.Fatal("route classification used the retired subscription/tier chain")
+	}
+	close(qmGate)
+	close(purserGate)
+	if err := <-done; err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+}
+
+func TestAdmissionRefreshStopsBothAuthoritiesAtMediaBudget(t *testing.T) {
+	qmFake := &quartermasterRoutingFake{gate: make(chan struct{})}
+	purserFake := &purserEntitlementFake{
+		admission: func(ctx context.Context, _ *purserpb.GetTenantAdmissionStatusRequest) (*purserpb.GetTenantAdmissionStatusResponse, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		},
+	}
+	s := &CommodoreServer{
+		logger:              logrus.New(),
+		routeCache:          make(map[string]*clusterRoute),
+		routeCacheTTL:       5 * time.Minute,
+		quartermasterClient: startQuartermasterRoutingFake(t, qmFake),
+		purserClient:        startPurserEntitlementFake(t, purserFake),
+	}
+	s.routeCache["tenant-1"] = &clusterRoute{
+		clusterID:           "cluster-1",
+		resolvedAt:          time.Now(),
+		admissionResolvedAt: time.Now().Add(-time.Minute),
+	}
+
+	started := time.Now()
+	if _, err := s.resolveAdmissionRouteForTenant(context.Background(), "tenant-1"); err == nil {
+		t.Fatal("hanging authorities unexpectedly produced an admission route")
+	}
+	if elapsed := time.Since(started); elapsed > admissionRefreshTimeout+750*time.Millisecond {
+		t.Fatalf("admission refresh outlived media budget: %v", elapsed)
+	}
+	if qmFake.routingCalls.Load() != 1 || purserFake.admissionCalls.Load() != 1 {
+		t.Fatalf("authority calls quartermaster/purser = %d/%d, want 1/1", qmFake.routingCalls.Load(), purserFake.admissionCalls.Load())
+	}
 }
 
 func (f *quartermasterRoutingFake) DiscoverServices(context.Context, *quartermasterpb.ServiceDiscoveryRequest) (*quartermasterpb.ServiceDiscoveryResponse, error) {

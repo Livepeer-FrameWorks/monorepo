@@ -3,6 +3,7 @@ package grpc
 import (
 	"context"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,6 +25,11 @@ type purserEntitlementFake struct {
 
 	subscription func(context.Context, *purserpb.GetSubscriptionRequest) (*purserpb.GetSubscriptionResponse, error)
 	tier         func(context.Context, *purserpb.GetBillingTierRequest) (*purserpb.BillingTier, error)
+	admission    func(context.Context, *purserpb.GetTenantAdmissionStatusRequest) (*purserpb.GetTenantAdmissionStatusResponse, error)
+
+	subscriptionCalls atomic.Int64
+	tierCalls         atomic.Int64
+	admissionCalls    atomic.Int64
 	// billingStatus answers the separate lookup ResolveStreamContext makes for
 	// suspension and balance. Default is an active postpaid tenant.
 	billingStatus func(context.Context, *purserpb.GetTenantBillingStatusRequest) (*purserpb.GetTenantBillingStatusResponse, error)
@@ -37,6 +43,7 @@ func (f *purserEntitlementFake) GetTenantBillingStatus(ctx context.Context, req 
 }
 
 func (f *purserEntitlementFake) GetSubscription(ctx context.Context, req *purserpb.GetSubscriptionRequest) (*purserpb.GetSubscriptionResponse, error) {
+	f.subscriptionCalls.Add(1)
 	if f.subscription != nil {
 		return f.subscription(ctx, req)
 	}
@@ -44,10 +51,19 @@ func (f *purserEntitlementFake) GetSubscription(ctx context.Context, req *purser
 }
 
 func (f *purserEntitlementFake) GetBillingTier(ctx context.Context, req *purserpb.GetBillingTierRequest) (*purserpb.BillingTier, error) {
+	f.tierCalls.Add(1)
 	if f.tier != nil {
 		return f.tier(ctx, req)
 	}
 	return &purserpb.BillingTier{}, nil
+}
+
+func (f *purserEntitlementFake) GetTenantAdmissionStatus(ctx context.Context, req *purserpb.GetTenantAdmissionStatusRequest) (*purserpb.GetTenantAdmissionStatusResponse, error) {
+	f.admissionCalls.Add(1)
+	if f.admission != nil {
+		return f.admission(ctx, req)
+	}
+	return &purserpb.GetTenantAdmissionStatusResponse{}, nil
 }
 
 func startPurserEntitlementFake(t *testing.T, fake *purserEntitlementFake) *purserclient.GRPCClient {
@@ -87,46 +103,25 @@ func startPurserEntitlementFake(t *testing.T, fake *purserEntitlementFake) *purs
 // TTL and surface as CLUSTER_NOT_ENTITLED — a permanent-looking denial produced
 // by a transient failure.
 func TestAllowedClusterClassesPropagatesPurserFailure(t *testing.T) {
-	for _, tc := range []struct {
-		name string
-		fake *purserEntitlementFake
-	}{
-		{
-			name: "subscription lookup fails",
-			fake: &purserEntitlementFake{
-				subscription: func(context.Context, *purserpb.GetSubscriptionRequest) (*purserpb.GetSubscriptionResponse, error) {
-					return nil, status.Error(codes.Unavailable, "purser down")
-				},
-			},
+	fake := &purserEntitlementFake{
+		admission: func(context.Context, *purserpb.GetTenantAdmissionStatusRequest) (*purserpb.GetTenantAdmissionStatusResponse, error) {
+			return nil, status.Error(codes.Unavailable, "purser down")
 		},
-		{
-			name: "tier lookup fails",
-			fake: &purserEntitlementFake{
-				subscription: func(context.Context, *purserpb.GetSubscriptionRequest) (*purserpb.GetSubscriptionResponse, error) {
-					return &purserpb.GetSubscriptionResponse{
-						Subscription: &purserpb.TenantSubscription{TierId: "tier-enterprise"},
-					}, nil
-				},
-				tier: func(context.Context, *purserpb.GetBillingTierRequest) (*purserpb.BillingTier, error) {
-					return nil, status.Error(codes.Unavailable, "purser down")
-				},
-			},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			s := &CommodoreServer{logger: logrus.New(), purserClient: startPurserEntitlementFake(t, tc.fake)}
+	}
+	s := &CommodoreServer{logger: logrus.New(), purserClient: startPurserEntitlementFake(t, fake)}
 
-			classes, err := s.allowedClusterClassesForTenant(context.Background(), "tenant-1")
-			if err == nil {
-				t.Fatalf("a Purser failure resolved to classes %v instead of an error", classes)
-			}
-			if status.Code(err) != codes.Unavailable {
-				t.Fatalf("want Unavailable so the caller fails closed as transient, got %v", err)
-			}
-			if classes != nil {
-				t.Errorf("classes returned alongside the error: %v", classes)
-			}
-		})
+	classes, err := s.allowedClusterClassesForTenant(context.Background(), "tenant-1")
+	if err == nil {
+		t.Fatalf("a Purser failure resolved to classes %v instead of an error", classes)
+	}
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("want Unavailable so the caller fails closed as transient, got %v", err)
+	}
+	if classes != nil {
+		t.Errorf("classes returned alongside the error: %v", classes)
+	}
+	if fake.admissionCalls.Load() != 1 || fake.subscriptionCalls.Load() != 0 || fake.tierCalls.Load() != 0 {
+		t.Fatalf("classification calls admission/subscription/tier = %d/%d/%d, want 1/0/0", fake.admissionCalls.Load(), fake.subscriptionCalls.Load(), fake.tierCalls.Load())
 	}
 }
 
@@ -134,12 +129,8 @@ func TestAllowedClusterClassesPropagatesPurserFailure(t *testing.T) {
 // answer, not a failure, and must not be turned into an error.
 func TestAllowedClusterClassesTreatsNoSubscriptionAsFreeTier(t *testing.T) {
 	s := &CommodoreServer{
-		logger: logrus.New(),
-		purserClient: startPurserEntitlementFake(t, &purserEntitlementFake{
-			subscription: func(context.Context, *purserpb.GetSubscriptionRequest) (*purserpb.GetSubscriptionResponse, error) {
-				return &purserpb.GetSubscriptionResponse{}, nil
-			},
-		}),
+		logger:       logrus.New(),
+		purserClient: startPurserEntitlementFake(t, &purserEntitlementFake{}),
 	}
 
 	classes, err := s.allowedClusterClassesForTenant(context.Background(), "tenant-1")
@@ -159,13 +150,8 @@ func TestAllowedClusterClassesGrantsPaidTierClasses(t *testing.T) {
 	s := &CommodoreServer{
 		logger: logrus.New(),
 		purserClient: startPurserEntitlementFake(t, &purserEntitlementFake{
-			subscription: func(context.Context, *purserpb.GetSubscriptionRequest) (*purserpb.GetSubscriptionResponse, error) {
-				return &purserpb.GetSubscriptionResponse{
-					Subscription: &purserpb.TenantSubscription{TierId: "tier-enterprise"},
-				}, nil
-			},
-			tier: func(context.Context, *purserpb.GetBillingTierRequest) (*purserpb.BillingTier, error) {
-				return &purserpb.BillingTier{TierLevel: 4}, nil
+			admission: func(context.Context, *purserpb.GetTenantAdmissionStatusRequest) (*purserpb.GetTenantAdmissionStatusResponse, error) {
+				return &purserpb.GetTenantAdmissionStatusResponse{TierLevel: 4}, nil
 			},
 		}),
 	}
