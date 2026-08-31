@@ -278,7 +278,10 @@ type PurserServer struct {
 	thresholdEnforcer   *handlers.ThresholdEnforcer
 	tierReconciler      tierAccessReconciler
 	billing             *handlers.Service
+	invoiceCardCheckout invoiceCardCheckoutFunc
 }
+
+type invoiceCardCheckoutFunc func(ctx context.Context, paymentID, invoiceID, tenantID string, amount decimal.Decimal, currency, requestedReturnURL string) (paymentURL, providerID string, err error)
 
 type commercialQuartermasterClient interface {
 	GetCluster(ctx context.Context, clusterID string) (*quartermasterpb.ClusterResponse, error)
@@ -2172,7 +2175,7 @@ func (s *PurserServer) CreatePayment(ctx context.Context, req *purserpb.PaymentR
 	}
 
 	if method == "card" {
-		paymentURL, providerID, checkoutErr := s.createCardInvoiceCheckout(ctx, paymentID, invoiceID, ctxTenantID, balance.AmountDue, balance.Currency, req.GetReturnUrl())
+		paymentURL, providerID, checkoutErr := s.startCardInvoiceCheckout(ctx, paymentID, invoiceID, ctxTenantID, balance.AmountDue, balance.Currency, req.GetReturnUrl())
 		if checkoutErr != nil {
 			if markErr := s.markPaymentFailed(ctx, paymentID); markErr != nil {
 				s.logger.WithError(markErr).WithField("payment_id", paymentID).Warn("Failed to release card payment reservation")
@@ -2338,6 +2341,13 @@ func (s *PurserServer) createCardInvoiceCheckout(ctx context.Context, paymentID,
 		return "", "", fmt.Errorf("provider checkout response missing URL or ID")
 	}
 	return result.CheckoutURL, result.SessionID, nil
+}
+
+func (s *PurserServer) startCardInvoiceCheckout(ctx context.Context, paymentID, invoiceID, tenantID string, amount decimal.Decimal, currency, requestedReturnURL string) (string, string, error) {
+	if s.invoiceCardCheckout != nil {
+		return s.invoiceCardCheckout(ctx, paymentID, invoiceID, tenantID, amount, currency, requestedReturnURL)
+	}
+	return s.createCardInvoiceCheckout(ctx, paymentID, invoiceID, tenantID, amount, currency, requestedReturnURL)
 }
 
 func invoiceAmountMinorUnits(amount decimal.Decimal, currency string) (int64, error) {
@@ -2520,7 +2530,7 @@ func (s *PurserServer) resumeInvoicePayment(ctx context.Context, req *purserpb.P
 		resp.ExpiresAt = timestamppb.New(payment.CreatedAt.Add(24 * time.Hour))
 		return resp, nil
 	}
-	paymentURL, providerID, err := s.createCardInvoiceCheckout(ctx, payment.ID, balance.InvoiceID, balance.TenantID, payment.Amount, payment.Currency, req.GetReturnUrl())
+	paymentURL, providerID, err := s.startCardInvoiceCheckout(ctx, payment.ID, balance.InvoiceID, balance.TenantID, payment.Amount, payment.Currency, req.GetReturnUrl())
 	if err != nil {
 		if markErr := s.markPaymentFailed(ctx, payment.ID); markErr != nil {
 			s.logger.WithError(markErr).WithField("payment_id", payment.ID).Warn("Failed to release card payment reservation")
