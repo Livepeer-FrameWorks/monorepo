@@ -4,6 +4,7 @@ package provisioner
 
 import (
 	"io/fs"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -13,16 +14,33 @@ import (
 	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 )
 
+func TestPurserViewsUseExplicitProjectionLists(t *testing.T) {
+	schema, err := dbsql.Content.ReadFile("schema/purser.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if match := regexp.MustCompile(`(?i)\bselect\s+(?:[a-z_][a-z0-9_]*\.)?\*`).Find(schema); match != nil {
+		t.Fatalf("Purser baseline view/query reintroduced order-sensitive wildcard projection %q", match)
+	}
+}
+
 // pgIntrospectQuery dumps every deploy-relevant logical object as sorted text.
 // Definitions that can contain newlines are hashed so one object remains one
 // comparison row. Migration bookkeeping and baseline provenance are excluded
 // because they intentionally differ by install path.
 const pgIntrospectQuery = `
-SELECT 'col|' || table_schema || '|' || table_name || '|' || column_name || '|' ||
-       data_type || '|' || is_nullable || '|' || coalesce(column_default, '')
-  FROM information_schema.columns
- WHERE table_schema NOT IN ('pg_catalog','information_schema')
-   AND table_name NOT IN ('_migrations', '_schema_baseline')
+SELECT 'col|' || n.nspname || '|' || c.relname || '|' || a.attname || '|' ||
+       format_type(a.atttypid, a.atttypmod) || '|' || CASE WHEN a.attnotnull THEN 'NO' ELSE 'YES' END || '|' ||
+       coalesce(pg_get_expr(d.adbin, d.adrelid), '')
+  FROM pg_attribute a
+  JOIN pg_class c ON c.oid = a.attrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+ WHERE n.nspname NOT IN ('pg_catalog','information_schema')
+   AND c.relkind IN ('r','p','v','m','f')
+   AND c.relname NOT IN ('_migrations', '_schema_baseline')
+   AND a.attnum > 0
+   AND NOT a.attisdropped
 UNION ALL
 SELECT 'idx|' || schemaname || '|' || indexname || '|' || indexdef
   FROM pg_indexes
@@ -131,7 +149,8 @@ SELECT 'rls-table|' || n.nspname || '|' || c.relname || '|' || c.relrowsecurity:
    AND c.relname NOT IN ('_migrations', '_schema_baseline')
 UNION ALL
 SELECT 'rls-policy|' || schemaname || '|' || tablename || '|' || policyname || '|' || permissive || '|' ||
-       array_to_string(roles, ',') || '|' || cmd || '|' || coalesce(qual, '') || '|' || coalesce(with_check, '')
+       array_to_string(ARRAY(SELECT role_name FROM unnest(roles) AS role_name ORDER BY role_name), ',') ||
+       '|' || cmd || '|' || coalesce(qual, '') || '|' || coalesce(with_check, '')
   FROM pg_policies
  ORDER BY 1`
 
@@ -274,7 +293,8 @@ CREATE TABLE contract.items (
     id bigint PRIMARY KEY,
     tenant_id uuid NOT NULL,
     state contract.state NOT NULL,
-    weight contract.positive_int NOT NULL
+    weight contract.positive_int NOT NULL,
+    label varchar(32)
 );
 CREATE SEQUENCE contract.external_ids START 10 INCREMENT 5;
 CREATE MATERIALIZED VIEW contract.item_counts AS SELECT state, count(*) AS total FROM contract.items GROUP BY state;
@@ -292,6 +312,8 @@ CREATE POLICY tenant_items ON contract.items USING (tenant_id = current_setting(
 `)
 	a := pgIntrospect(t, name, "objects_a")
 	for _, prefix := range []string{
+		"col|contract|items|id|bigint|NO|",
+		"col|contract|items|label|character varying(32)|YES|",
 		"view|contract|visible_items|v|",
 		"view|contract|item_counts|m|",
 		"seq|contract|external_ids|",
@@ -321,6 +343,37 @@ CREATE POLICY tenant_items ON contract.items USING (tenant_id IS NOT NULL);
 	b := pgIntrospect(t, name, "objects_b")
 	if a == b {
 		t.Fatal("schema introspection did not detect changed view and RLS policy definitions")
+	}
+
+	pgCreateDB(t, name, "objects_typmod")
+	pgApply(t, name, "objects_typmod", strings.Replace(common, "label varchar(32)", "label varchar(64)", 1)+`
+CREATE VIEW contract.visible_items AS SELECT id, tenant_id FROM contract.items WHERE state = 'open';
+CREATE POLICY tenant_items ON contract.items USING (tenant_id = current_setting('app.tenant_id')::uuid);
+`)
+	if typmod := pgIntrospect(t, name, "objects_typmod"); a == typmod {
+		t.Fatal("schema introspection did not detect changed column typmod")
+	}
+
+	pgCreateDB(t, name, "objects_reordered")
+	reordered := strings.Replace(common, `CREATE TABLE contract.items (
+    id bigint PRIMARY KEY,
+    tenant_id uuid NOT NULL,
+    state contract.state NOT NULL,
+    weight contract.positive_int NOT NULL,
+    label varchar(32)
+);`, `CREATE TABLE contract.items (
+    label varchar(32),
+    weight contract.positive_int NOT NULL,
+    state contract.state NOT NULL,
+    tenant_id uuid NOT NULL,
+    id bigint PRIMARY KEY
+);`, 1)
+	pgApply(t, name, "objects_reordered", reordered+`
+CREATE VIEW contract.visible_items AS SELECT id, tenant_id FROM contract.items WHERE state = 'open';
+CREATE POLICY tenant_items ON contract.items USING (tenant_id = current_setting('app.tenant_id')::uuid);
+`)
+	if got := pgIntrospect(t, name, "objects_reordered"); a != got {
+		requirePGSchemasEqual(t, "physical column order", a, got)
 	}
 }
 

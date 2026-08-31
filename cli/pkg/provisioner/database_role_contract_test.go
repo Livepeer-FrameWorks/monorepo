@@ -49,8 +49,8 @@ func TestDatabaseMigrationsRunAsDeclaredOwner(t *testing.T) {
 	for _, engine := range []string{"postgres", "yugabyte"} {
 		t.Run(engine, func(t *testing.T) {
 			migration := databaseRoleTaskFile(t, engine, "migrate.yml")
-			setRole := strings.Index(migration, `SET ROLE "{{ item.owner }}"`)
-			body := strings.Index(migration, `"{{ item.sql }}"`)
+			setRole := strings.Index(migration, `SET ROLE "' ~ item.owner ~ '"`)
+			body := strings.Index(migration, `+ item.statements`)
 			resetRole := strings.Index(migration, `"RESET ROLE"`)
 			ledger := strings.LastIndex(migration, "INSERT INTO _migrations")
 			if setRole < 0 || body < 0 || resetRole < 0 || ledger < 0 || setRole >= body || body >= resetRole || resetRole >= ledger {

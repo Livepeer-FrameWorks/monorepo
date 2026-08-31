@@ -214,6 +214,15 @@ func HandleRun(ctx context.Context, openDB func() (*sql.DB, error), out io.Write
 	if schemaErr := EnsureSchema(ctx, db); schemaErr != nil {
 		return schemaErr
 	}
+	for _, dependencyID := range m.DependsOn {
+		dependency, dependencyErr := LoadJob(ctx, db, dependencyID)
+		if dependencyErr != nil {
+			return fmt.Errorf("data migration %q dependency %q: %w", id, dependencyID, dependencyErr)
+		}
+		if dependency.Status != StatusCompleted {
+			return fmt.Errorf("data migration %q requires %q to be completed (status=%s)", id, dependencyID, dependency.Status)
+		}
+	}
 	job, err := LoadJob(ctx, db, id)
 	if err != nil && !IsNotRegistered(err) {
 		return err
@@ -231,9 +240,16 @@ func HandleRun(ctx context.Context, openDB func() (*sql.DB, error), out io.Write
 		}
 	}
 
+	verifyPerScope := len(scopes) == 1
 	for _, s := range scopes {
-		if runErr := runScope(ctx, db, out, m, id, s, *batchSize, *dryRun); runErr != nil {
+		if runErr := runScope(ctx, db, out, m, id, s, *batchSize, *dryRun, verifyPerScope); runErr != nil {
 			return runErr
+		}
+	}
+	if !verifyPerScope && m.Verify != nil {
+		if verifyErr := verifyMigration(ctx, db, m, id); verifyErr != nil {
+			_ = MarkJobFailed(context.Background(), db, id, verifyErr) //nolint:errcheck // best-effort failure record
+			return verifyErr
 		}
 	}
 	completed, err := MarkJobCompletedIfAllRunsCompleted(ctx, db, id)
@@ -248,7 +264,7 @@ func HandleRun(ctx context.Context, openDB func() (*sql.DB, error), out io.Write
 	return nil
 }
 
-func runScope(ctx context.Context, db *sql.DB, out io.Writer, m *Migration, id string, scope ScopeKey, batchSize int, dryRun bool) error {
+func runScope(ctx context.Context, db *sql.DB, out io.Writer, m *Migration, id string, scope ScopeKey, batchSize int, dryRun, verifyBeforeCompletion bool) error {
 	if dryRun {
 		return runDryScope(ctx, db, out, m, id, scope, batchSize)
 	}
@@ -288,6 +304,17 @@ func runScope(ctx context.Context, db *sql.DB, out io.Writer, m *Migration, id s
 		}
 		checkpoint = prog.Checkpoint
 		if prog.Done {
+			// A short SKIP LOCKED batch is only a hint that this worker saw no
+			// more rows. A concurrent transaction may have hidden work from the
+			// batch, so the migration's invariant must hold before completion is
+			// persisted or an upgrade gate is allowed to turn green.
+			if m.Verify != nil && verifyBeforeCompletion {
+				if recordedErr := verifyMigration(ctx, db, m, id); recordedErr != nil {
+					_ = MarkRunFailed(context.Background(), db, id, scope, recordedErr) //nolint:errcheck // best-effort failure record
+					_ = MarkJobFailed(context.Background(), db, id, recordedErr)        //nolint:errcheck // best-effort failure record
+					return recordedErr
+				}
+			}
 			if err := MarkRunCompleted(ctx, db, id, scope); err != nil {
 				return err
 			}
@@ -299,6 +326,18 @@ func runScope(ctx context.Context, db *sql.DB, out io.Writer, m *Migration, id s
 			return hbErr
 		}
 	}
+}
+
+func verifyMigration(ctx context.Context, db *sql.DB, m *Migration, id string) error {
+	if m == nil || m.Verify == nil {
+		return nil
+	}
+	if err := fwdb.WithRetryablePostgresRollbackTx(ctx, db, &sql.TxOptions{ReadOnly: true}, func(tx *sql.Tx) error {
+		return m.Verify(ctx, tx)
+	}); err != nil {
+		return fmt.Errorf("verify %q before completion: %w", id, err)
+	}
+	return nil
 }
 
 func runDryScope(ctx context.Context, db *sql.DB, out io.Writer, m *Migration, id string, scope ScopeKey, batchSize int) error {

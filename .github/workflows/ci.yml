@@ -50,6 +50,7 @@ jobs:
               - '**/*.js'
               - '**/*.json'
               - 'pnpm-lock.yaml'
+              - 'website_docs/**'
             registry:
               - 'docs/platform-features.yaml'
               - 'scripts/registry/**'
@@ -247,6 +248,7 @@ jobs:
       - uses: ./.github/actions/setup-node-pnpm
       - run: pnpm lint
       - run: pnpm format:check
+      - run: pnpm --dir website_docs check:links
 
   frontend-test:
     name: Frontend test + coverage
@@ -396,6 +398,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v6
         with:
           go-version-file: .go-version
@@ -422,7 +426,7 @@ jobs:
         uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage/contracts/yugabyte/schema.out,coverage/contracts/yugabyte/quartermaster-query-catalog.out,coverage/contracts/yugabyte/periscope-metering.out,coverage/contracts/yugabyte/foghorn-query-catalog.out,coverage/contracts/yugabyte/ha.out
+          files: coverage/contracts/yugabyte/schema.out,coverage/contracts/yugabyte/quartermaster-query-catalog.out,coverage/contracts/yugabyte/periscope-metering.out,coverage/contracts/yugabyte/foghorn-query-catalog.out,coverage/contracts/yugabyte/navigator-query-catalog.out,coverage/contracts/yugabyte/navigator-store.out,coverage/contracts/yugabyte/ha.out
           flags: yugabyte-contract
           name: yugabyte-contract-coverage
           fail_ci_if_error: false

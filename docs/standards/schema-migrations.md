@@ -64,7 +64,26 @@ validator independently rejects migrations newer than its highest catalog entry.
 wrong-bucket, multiple-pending, and immutable-migration cases in a temporary Git
 repository.
 
-`make verify-schema-migrations` supplies the schema proof that version checks cannot.
+PostgreSQL/YugabyteDB files ending in `.notx.sql` are applied in autocommit
+mode. The validator permits one or more statements only when every statement is
+an idempotent `CREATE [UNIQUE] INDEX CONCURRENTLY IF NOT EXISTS`; the role sends
+those statements separately and records one checksum/ledger row for the
+unchanged migration file. This preserves an applied migration's identity while
+meeting PostgreSQL's requirement that concurrent index creation not run inside
+a transaction block. Every concurrent index must also have a same-release
+postdeploy check through `pg_index` that rejects a missing, not-ready, or invalid
+index. The validator requires the exact index name and validity predicates in
+the same postdeploy statement because an interrupted concurrent
+build can leave an invalid relation that a later `IF NOT EXISTS` silently skips.
+
+Expand constraints must use `ADD CONSTRAINT … NOT VALID` and pair by exact name
+with a same-release postdeploy `VALIDATE CONSTRAINT`; the validator enforces the
+pair in both directions and ignores comments and SQL string literals. The only
+exception is a compatibility constraint explicitly dropped by a contract migration
+in that same release: validating a constraint solely to drop it would add a full
+table scan without strengthening the post-release schema.
+
+`make verify-schema-migrations` supplies the complete local schema proof that version checks cannot.
 For PostgreSQL it compares both current-baseline replay and the latest tagged
 baseline plus pending migrations against the current fresh-install baseline. For
 ClickHouse it verifies the current Replicated baseline plus post-floor migrations
@@ -75,8 +94,9 @@ Purser usage writer against its current `JSONB` constraints. The
 generic `PeriscopeMigrationCatalog` and `cluster clickhouse migrate verify` remain
 available for operator-directed cross-host moves; historical plain-engine cutover
 code is not part of the v0.3 lifecycle. CI checks out full tag
-history and runs these gates whenever release metadata, migrations, or
-baseline/provisioner schema code changes.
+history and runs the same proof as two independently gated jobs whenever release metadata,
+migrations, or baseline/provisioner schema code changes: `make verify-schema-migrations-core`
+for PostgreSQL and ClickHouse, and `make verify-schema-yugabyte` for YugabyteDB.
 
 ## The baseline floor
 
@@ -199,10 +219,19 @@ This is the permanent guard: a release that adds a migration but forgets to upda
 baseline (or vice versa) breaks the equality. A schema change that leaves a seed or
 covered runtime statement incompatible also breaks the gate. It smoke-tests the
 release-pinned PostgreSQL and ClickHouse Replicated engines with Keeper. A separate
-supported-Yugabyte lane applies every service baseline and exercises runtime
-capabilities; PostgreSQL success never substitutes for Yugabyte proof. The tests remain behind
-`schema_verify` so a plain `make test` needs no Docker; CI runs them through
-`make verify-schema-migrations`.
+supported-Yugabyte lane applies every service baseline, exercises runtime
+capabilities, and compares every service's tagged upgrade with its current
+baseline whether or not that service has a post-tag migration. PostgreSQL
+success never substitutes for Yugabyte proof. The tests remain behind
+`schema_verify` so a plain `make test` needs no Docker; CI splits them between
+`make verify-schema-migrations-core` and `make verify-schema-yugabyte`.
+
+PostgreSQL/Yugabyte relation comparison uses `format_type(atttypid, atttypmod)`,
+so length, precision, and other typmod drift is significant. Physical relation
+column position is deliberately not compared: PostgreSQL appends `ADD COLUMN`
+and has no `AFTER` clause, so a tagged upgrade cannot preserve a current
+baseline that groups a later-added column mid-table. Composite-type attribute
+order remains significant because it is part of that type's value contract.
 
 Moving SQL into a separate file is not itself a test strategy. Keep small queries near
 their repository/service when that is clearer. Put a statement in

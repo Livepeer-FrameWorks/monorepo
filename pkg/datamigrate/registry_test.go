@@ -50,6 +50,20 @@ func TestRegistry_RegisterAndLookup(t *testing.T) {
 	}
 }
 
+func TestRegistry_OrdersDependenciesBeforeDependents(t *testing.T) {
+	resetForTest()
+	noop := func(_ context.Context, _ DB, _ RunOptions) (Progress, error) {
+		return Progress{Done: true}, nil
+	}
+	Register(Migration{ID: "a-dependent", Service: "commodore", IntroducedIn: "v0.3.0", DependsOn: []string{"z-foundation"}, Run: noop})
+	Register(Migration{ID: "z-foundation", Service: "commodore", IntroducedIn: "v0.3.0", Run: noop})
+
+	got := ByService("commodore")
+	if len(got) != 2 || got[0].ID != "z-foundation" || got[1].ID != "a-dependent" {
+		t.Fatalf("dependency order = %v", ids(got))
+	}
+}
+
 func TestRegistry_DuplicatePanics(t *testing.T) {
 	resetForTest()
 	noop := func(_ context.Context, _ DB, _ RunOptions) (Progress, error) {

@@ -27,7 +27,7 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 CREATE TABLE IF NOT EXISTS foghorn.artifacts (
     -- ===== IDENTITY =====
     artifact_hash VARCHAR(32) PRIMARY KEY,
-    artifact_type VARCHAR(10) NOT NULL,     -- 'clip', 'dvr', 'vod'
+    artifact_type VARCHAR(10) NOT NULL,     -- 'clip', 'dvr', 'vod', 'chapter'
 
     -- ===== DENORMALIZED FIELDS (authoritative source: Commodore) =====
     -- Cached here for operational efficiency (stream routing, rehydration, Decklog events)
@@ -38,6 +38,15 @@ CREATE TABLE IF NOT EXISTS foghorn.artifacts (
     user_id UUID,                           -- User who created the artifact (for Decklog events)
     origin_cluster_id VARCHAR(100),         -- Which cluster originally created the artifact (NULL = local)
     storage_cluster_id VARCHAR(100),        -- Which cluster's S3 actually holds the bytes; NULL = same as origin_cluster_id
+    federated_pointer BOOLEAN NOT NULL DEFAULT false, -- Metadata-only row adopted from another cluster; no local catalog ownership
+    -- A federated-pointer purge crosses an object-store call and therefore cannot
+    -- hold a database lock for its whole lifetime. The token/lease pair is the
+    -- durable ownership fence between the short DB claim and later settlement.
+    federated_purge_token UUID,
+    federated_purge_lease_until TIMESTAMPTZ,
+    -- Stable age anchor for federated-pointer retirement. Ordinary metadata,
+    -- inventory, and access writers intentionally never touch this value.
+    federated_purge_eligible_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     -- STABLE billing attribution captured at WRITE time (never recomputed from mutable tenant routing at read):
     -- TRUE means the bytes are durable on THIS cell's local S3 backend and are billable by this provider. Set
     -- when a local mint is claimed/completed or a VOD is uploaded to local S3; left FALSE for playback-federation
@@ -52,7 +61,7 @@ CREATE TABLE IF NOT EXISTS foghorn.artifacts (
 
     -- ===== LIFECYCLE STATE =====
     status VARCHAR(50) DEFAULT 'requested',
-        -- VOD/clip:  requested, processing, ready, failed, deleted
+        -- VOD/clip:  requested, queued, uploading, completing, processing, ready, failed, deleted
         -- DVR:       requested, starting, recording, finalizing,
         --            completed, completed_partial, failed, deleted
     error_message TEXT,
@@ -132,8 +141,8 @@ CREATE TABLE IF NOT EXISTS foghorn.artifacts (
     duration_ms BIGINT,                     -- Precise measured duration (ms) for clip/VOD from the processing output; NULL for DVR (second-granularity only, from duration_seconds)
     tracks JSONB,                           -- Finalized A/V track summary captured from the completion-validated ProcessingJobResult (the processing+<hash> job's accepted RECORDING_END); durable source for the Commodore catalog projection
     -- Commodore catalog projection revisions. catalog_revision is a source-owned monotonic
-    -- revision bumped from a sequence by a trigger on every catalog-relevant row change
-    -- (distinct values even for same-millisecond updates). catalog_synced_rev is the last
+    -- revision advanced from the row's prior value by a trigger on every catalog-relevant
+    -- change (distinct values even for same-millisecond updates). catalog_synced_rev is the last
     -- revision the reconciler confirmed Commodore has covered. The reconciler projects any
     -- row with catalog_revision > catalog_synced_rev (oldest revision first) and advances the
     -- watermark ONLY on confirmed coverage, so every authoritative row is eventually covered
@@ -199,7 +208,12 @@ CREATE TABLE IF NOT EXISTS foghorn.artifacts (
 
     -- ===== TIMESTAMPS =====
     created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
+    updated_at TIMESTAMP DEFAULT NOW(),
+
+    CONSTRAINT chk_foghorn_artifacts_federated_purge_pair
+        CHECK ((federated_purge_token IS NULL) = (federated_purge_lease_until IS NULL)),
+    CONSTRAINT chk_foghorn_artifacts_federated_purge_scope
+        CHECK (federated_purge_token IS NULL OR (federated_pointer = true AND status = 'deleted'))
 );
 
 -- ============================================================================
@@ -223,11 +237,20 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_dvr_backfill_pending
       AND dvr_chapter_backfill_complete = false;
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_stream_internal ON foghorn.artifacts(stream_internal_name);
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_ingest_generation ON foghorn.artifacts(ingest_generation) WHERE ingest_generation IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_federated_purge_recovery
+    ON foghorn.artifacts(federated_purge_lease_until)
+    WHERE federated_pointer = true
+      AND status = 'deleted'
+      AND federated_purge_token IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_federated_purge_eligibility
+    ON foghorn.artifacts(federated_purge_eligible_at, artifact_hash)
+    WHERE federated_pointer = true
+      AND status IN ('ready', 'deleted');
 -- Drives the catalog-projection scan. Ordered by catalog_synced_rev (projection age) so the
 -- reconciler serves the LEAST-RECENTLY-PROJECTED rows first, not the least-recently-mutated:
 -- a continuously-mutating cohort (e.g. active DVRs minting revisions on every segment) can't
--- stay at the head of the queue and starve rows behind it. catalog_revision is the stable
--- tie-breaker.
+-- stay at the head of the queue and starve rows behind it. catalog_revision provides secondary
+-- ordering within a watermark cohort; correctness does not require it to be globally unique.
 CREATE INDEX IF NOT EXISTS idx_foghorn_artifacts_catalog_projection
     ON foghorn.artifacts(catalog_synced_rev, catalog_revision)
     WHERE catalog_revision > catalog_synced_rev;
@@ -247,16 +270,18 @@ ALTER TABLE foghorn.artifacts ADD COLUMN IF NOT EXISTS catalog_next_attempt_at T
 -- successful projection.
 ALTER TABLE foghorn.artifacts ADD COLUMN IF NOT EXISTS catalog_projection_attempts INTEGER NOT NULL DEFAULT 0;
 
--- Source-owned monotonic catalog revision. A sequence gives distinct values even for
--- same-millisecond updates, so the Commodore projection's revision guard never conflates
--- two distinct authoritative states. The BEFORE UPDATE trigger skips watermark-only writes
+-- Source-owned per-artifact catalog revision. Updates to one artifact serialize on its row,
+-- so OLD+1 is the ordering domain Commodore actually compares and cannot regress across
+-- Yugabyte sessions. The BEFORE UPDATE trigger skips watermark-only writes
 -- (catalog_synced_rev changed) so the reconciler advancing the watermark doesn't re-dirty
 -- the row (which would loop forever).
-CREATE SEQUENCE IF NOT EXISTS foghorn.artifact_catalog_revision_seq AS BIGINT;
-
 CREATE OR REPLACE FUNCTION foghorn.bump_artifact_catalog_revision() RETURNS trigger AS $$
 BEGIN
-    NEW.catalog_revision := nextval('foghorn.artifact_catalog_revision_seq');
+    IF TG_OP = 'INSERT' THEN
+        NEW.catalog_revision := GREATEST(COALESCE(NEW.catalog_revision, 0), 4503599627370496);
+    ELSE
+        NEW.catalog_revision := GREATEST(OLD.catalog_revision + 1, 4503599627370496);
+    END IF;
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
@@ -439,6 +464,12 @@ CREATE TABLE IF NOT EXISTS foghorn.artifact_nodes (
     access_count BIGINT DEFAULT 0,          -- Best-effort local access count
     last_accessed TIMESTAMP,                -- Last access time on this node
     last_seen_at TIMESTAMP DEFAULT NOW(),
+    -- Node-clock time captured with the node observation that established this
+    -- copy (inventory or SyncComplete). Server-constructed origin/discovery
+    -- placements use 0 because they are not ordered against a node deletion.
+    -- Kept as an integer so ArtifactDeleted never compares clocks or SQL zones.
+    inventory_reported_at_ms BIGINT NOT NULL DEFAULT 0
+        CONSTRAINT chk_artifact_nodes_inventory_reported_at_ms CHECK (inventory_reported_at_ms >= 0),
     is_orphaned BOOLEAN DEFAULT false,      -- Not seen in recent node reports
     cached_at TIMESTAMP,                    -- When cached locally (for warm duration tracking)
 
@@ -455,7 +486,7 @@ CREATE TABLE IF NOT EXISTS foghorn.artifact_nodes (
     -- sets this.
     is_complete BOOLEAN NOT NULL DEFAULT false,
 
-    -- CAPTURE marker (from artifact_node_copy_version_seq): the version of the last node-copy
+    -- CAPTURE marker (from the per-copy version counter): the version of the last node-copy
     -- event EMITTED for this row — a present event (GAINED/UPDATED) records the live version, a
     -- LOST records 0. So 0 = "no present event emitted" (never emitted, or last event was LOST).
     -- The reconcile pass re-emits =0 present rows so every present copy gets its GAINED once —
@@ -475,15 +506,18 @@ CREATE TABLE IF NOT EXISTS foghorn.artifact_nodes (
 );
 
 -- Whole-node artifact report ordering. Foghorn issues each node control connection a monotonic
--- ownership fence from node_control_fence_seq when it registers; a report is ordered by
+-- per-node ownership fence when it registers; a report is ordered by
 -- (connection_fence, report_seq), where report_seq is the sidecar's per-connection counter. Each
 -- poller report persists on its own goroutine, so DB commit order is not report order; the
 -- upsert/orphan paths advance the watermark via an atomic compare-and-set (DO UPDATE only when the
 -- incoming pair beats the stored one) and drop any report that loses. A reconnect gets a strictly
 -- higher fence and supersedes; a delayed report from a superseded connection loses. This is an
--- ownership fence, restart-safe without wall-clock ordering, and a nextval() per connection (not a
--- report hot path) that stays monotonic across a Redis restart.
-CREATE SEQUENCE IF NOT EXISTS foghorn.node_control_fence_seq AS BIGINT;
+-- ownership fence, restart-safe without wall-clock ordering. The counter row is the same key at
+-- which the fence is compared, avoiding Yugabyte's session-cached sequence ranges.
+CREATE TABLE IF NOT EXISTS foghorn.node_control_fence_counter (
+    node_id VARCHAR(100) PRIMARY KEY,
+    value BIGINT NOT NULL CHECK (value >= 4503599627370496 AND value < 9007199254740992)
+);
 
 -- Per-node high-water mark of the last APPLIED (connection_fence, seq). The durable backstop for
 -- the in-memory acceptance gate; an internal/eviction mutation persists unversioned and bypasses it.
@@ -491,6 +525,21 @@ CREATE TABLE IF NOT EXISTS foghorn.node_artifact_report_watermark (
     node_id VARCHAR(100) PRIMARY KEY,
     connection_fence BIGINT NOT NULL,
     seq BIGINT NOT NULL
+);
+
+-- Per-copy node-clock tombstone. Whole-inventory reports lock this row before
+-- writing placement, while point deletions advance it in the same statement as
+-- removing placement. This prevents an older asynchronously committed report
+-- from resurrecting a copy the node has already deleted. A watermark persists
+-- across legitimate reacquisition so still-older messages remain fenced; the
+-- artifact foreign key is its lifecycle/retention boundary.
+CREATE TABLE IF NOT EXISTS foghorn.artifact_node_deletion_watermark (
+    artifact_hash VARCHAR(32) NOT NULL REFERENCES foghorn.artifacts(artifact_hash) ON DELETE CASCADE,
+    node_id VARCHAR(100) NOT NULL,
+    deleted_at_ms BIGINT NOT NULL DEFAULT 0
+        CONSTRAINT chk_artifact_node_deletion_watermark_time CHECK (deleted_at_ms >= 0),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (artifact_hash, node_id)
 );
 
 -- ============================================================================
@@ -583,6 +632,9 @@ CREATE TABLE IF NOT EXISTS foghorn.dvr_chapters (
         -- mapping lives in commodore.dvr_chapter_playback; this column
         -- avoids a per-row Commodore fan-out from the chapter list resolver.
     finalize_attempts      INTEGER NOT NULL DEFAULT 0,
+        -- Monotonic dispatch identity. Every progress/failure/retry/completion
+        -- predicates on this value; finalize_node_id alone cannot distinguish
+        -- two attempts sent to the same recording-origin node.
     frozen_at              TIMESTAMPTZ,
         -- Set when state transitions to 'frozen' (artifact + .dtsh durably
         -- on S3). Anchors the reclaim sweep's abandoned-node grace so a
@@ -656,6 +708,17 @@ CREATE TABLE IF NOT EXISTS foghorn.ingest_sessions (
     -- renewal, and release all replay this value rather than re-resolving the node's current
     -- cluster, so a node reassigned mid-session cannot strand the claim it was admitted under.
     ingest_cluster_id      VARCHAR(100),
+    -- Signed authority generation and immutable live-process policy accepted for this publisher.
+    -- The object/tenant versions fence audit and replay; the process snapshot is the durable
+    -- STREAM_PROCESS answer across Foghorn restart and must never be replaced by a later bundle
+    -- while this generation remains active.
+    media_authority_id      VARCHAR(255),
+    media_authority_version BIGINT,
+    tenant_authority_version BIGINT,
+    processes_json          TEXT NOT NULL DEFAULT '',
+    -- Admission-time tenant cap snapshot. Zero means uncapped. Retained for audit and
+    -- diagnostics; current admissions do not replay this value after the generation is created.
+    capacity_max_streams     INTEGER NOT NULL DEFAULT 0,
     -- Durable DVR start intent (StartDVR inputs) for a record:true session, set at admission
     -- before the push is approved; DVRIntentRecovery replays the start if the async StartDVR
     -- was lost to a crash. NULL for a non-recording session.
@@ -676,8 +739,22 @@ CREATE TABLE IF NOT EXISTS foghorn.ingest_sessions (
     CONSTRAINT ck_foghorn_ingest_sessions_projection_state
         CHECK (projection_state IN ('pending', 'active')),
     CONSTRAINT ck_foghorn_ingest_sessions_source_revision
-        CHECK (source_revision IS NULL OR source_revision > 0)
+        CHECK (source_revision IS NULL OR source_revision > 0),
+    CONSTRAINT ck_foghorn_ingest_sessions_media_authority_version
+        CHECK (media_authority_version IS NULL OR media_authority_version > 0),
+    CONSTRAINT ck_foghorn_ingest_sessions_tenant_authority_version
+        CHECK (tenant_authority_version IS NULL OR tenant_authority_version > 0),
+    CONSTRAINT ck_foghorn_ingest_sessions_capacity_max_streams
+        CHECK (capacity_max_streams >= 0),
+    CONSTRAINT ck_foghorn_ingest_sessions_media_authority_identity
+        CHECK ((media_authority_version IS NULL) = (media_authority_id IS NULL))
 );
+ALTER TABLE foghorn.ingest_sessions
+    ADD COLUMN IF NOT EXISTS media_authority_id VARCHAR(255),
+    ADD COLUMN IF NOT EXISTS media_authority_version BIGINT,
+    ADD COLUMN IF NOT EXISTS tenant_authority_version BIGINT,
+    ADD COLUMN IF NOT EXISTS processes_json TEXT NOT NULL DEFAULT '',
+    ADD COLUMN IF NOT EXISTS capacity_max_streams INTEGER NOT NULL DEFAULT 0;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_foghorn_ingest_sessions_active_pid
     ON foghorn.ingest_sessions(tenant_id, node_id, connector_pid)
     WHERE ended_at IS NULL;
@@ -730,13 +807,14 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_close_tombstones_lookup
 CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_close_tombstones_created
     ON foghorn.ingest_close_tombstones(created_at);
 
--- Monotonic revision ordering source-ownership projections for the cluster-wide registry. Each source
--- transition (ProjectSourceIfCurrent, the offline flip) draws nextval under the (tenant, stream)
--- advisory lock, so a later transition carries a strictly higher revision; the registry merges
--- source-ownership fields by it (highest wins) so a stale replica cannot clobber the real publisher via
--- a last-writer-wins location write. See migration
--- Projection revisions prevent stale source observations from replacing newer state.
-CREATE SEQUENCE IF NOT EXISTS foghorn.source_projection_revision;
+-- Per-stream source fence. The row key matches the Redis/DB comparison domain and
+-- serializes allocations across pooled Yugabyte sessions.
+CREATE TABLE IF NOT EXISTS foghorn.source_projection_revision_counter (
+    tenant_id UUID NOT NULL,
+    stream_internal_name VARCHAR(255) NOT NULL,
+    value BIGINT NOT NULL CHECK (value >= 4503599627370496 AND value < 9007199254740992),
+    PRIMARY KEY (tenant_id, stream_internal_name)
+);
 
 -- Durable, revision-fenced stream-offline work. The transition is enqueued under the same
 -- (tenant, stream) advisory lock as admission; workers apply it only while no newer active session
@@ -794,7 +872,9 @@ CREATE TABLE IF NOT EXISTS foghorn.ingest_admission_effects (
     -- Receiver fence for delayed name-scoped drain commands.
     prior_owner_source_generation UUID,
     -- Serialized ipcpb.ActivatePushTargets (stream name + target specs); NULL when the stream has
-    -- no configured push targets.
+    -- no configured push targets. A successfully applied row retains this exact admitted payload
+    -- only while its publisher generation remains active, so a Helmsman/Mist restart can recreate
+    -- the outputs without substituting a newer stream policy.
     push_targets        BYTEA,
     -- JSON array of complete federation peer hints (cluster ID, internal Foghorn address, and
     -- lifecycle). The leader establishes stream tracking from this durable payload before the
@@ -813,10 +893,16 @@ CREATE TABLE IF NOT EXISTS foghorn.ingest_admission_effects (
     -- to an obligation are inserted TRUE.
     drain_done          BOOLEAN NOT NULL DEFAULT FALSE,
     activation_done     BOOLEAN NOT NULL DEFAULT FALSE,
+    -- Minimum authenticated Helmsman connection fence allowed to acknowledge activation. A node
+    -- reconnect advances this fence and re-arms active output obligations; a delayed ACK from the
+    -- retired connection therefore cannot falsely settle work that the restarted Mist lost.
+    activation_connection_fence BIGINT NOT NULL DEFAULT 0,
     broadcast_done      BOOLEAN NOT NULL DEFAULT FALSE,
     decklog_done        BOOLEAN NOT NULL DEFAULT FALSE,
     state               VARCHAR(16) NOT NULL DEFAULT 'pending'
-                            CHECK (state IN ('pending', 'applied', 'superseded')),
+                            CONSTRAINT ck_foghorn_ingest_admission_state
+                            CHECK (state IN ('pending', 'applied', 'superseded',
+                                             'pending_v2', 'applied_v2', 'superseded_v2')),
     attempts            INTEGER NOT NULL DEFAULT 0,
     next_attempt_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     leased_until        TIMESTAMPTZ,
@@ -827,24 +913,26 @@ CREATE TABLE IF NOT EXISTS foghorn.ingest_admission_effects (
     last_error          TEXT,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    applied_at          TIMESTAMPTZ
+    applied_at          TIMESTAMPTZ,
+    CONSTRAINT ck_foghorn_ingest_admission_activation_fence
+        CHECK (activation_connection_fence >= 0)
 );
 
 CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_admission_effects_pending
     ON foghorn.ingest_admission_effects(next_attempt_at, id)
-    WHERE state = 'pending';
+    WHERE state IN ('pending', 'pending_v2');
 
 -- Tombstone cleanup proves that no pending admission callback at or below a membership revision can
 -- still restore it. Keep that bounded proof on the pending working set.
 CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_admission_effects_pending_fence
     ON foghorn.ingest_admission_effects(tenant_id, stream_internal_name, source_revision)
-    WHERE state = 'pending';
+    WHERE state IN ('pending', 'pending_v2');
 
 -- Terminal rows are retained briefly as diagnostics; this index keeps batched retention cleanup
 -- from scanning the pending working set.
 CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_admission_effects_terminal
     ON foghorn.ingest_admission_effects(updated_at)
-    WHERE state IN ('applied', 'superseded');
+    WHERE state IN ('applied', 'superseded', 'applied_v2', 'superseded_v2');
 
 -- ============================================================================
 -- NODE OUTPUT CACHING & LOAD BALANCING
@@ -862,6 +950,144 @@ CREATE TABLE IF NOT EXISTS foghorn.node_outputs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_foghorn_node_outputs_updated ON foghorn.node_outputs(last_updated);
+
+-- Last complete node configuration sent to Helmsman. Allocation and payload
+-- persistence share one row-locked transaction, so every committed version is
+-- paired with the exact seed that carries it.
+CREATE TABLE IF NOT EXISTS foghorn.node_config_seeds (
+    node_id          VARCHAR(100) PRIMARY KEY,
+    version_counter  BIGINT NOT NULL DEFAULT 0 CHECK (version_counter >= 0),
+    seed_version     BIGINT CHECK (seed_version IS NULL OR seed_version > 0),
+    seed_payload     BYTEA,
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT ck_foghorn_node_config_seed_pair
+        CHECK ((seed_version IS NULL) = (seed_payload IS NULL))
+);
+
+-- A node that Quartermaster has already authenticated may re-establish its
+-- local Helmsman/Foghorn session during a control-plane outage. The stable
+-- fingerprint selects the cached binding; the persisted node key proves
+-- possession and the validity bound limits disconnected authority.
+CREATE TABLE IF NOT EXISTS foghorn.node_admissions (
+    canonical_node_id  VARCHAR(100) PRIMARY KEY,
+    fingerprint_sha256 BYTEA NOT NULL UNIQUE CHECK (octet_length(fingerprint_sha256) = 32),
+    public_key_ed25519  BYTEA NOT NULL,
+    tenant_id          UUID NOT NULL,
+    cluster_id         VARCHAR(255) NOT NULL CHECK (btrim(cluster_id) <> ''),
+    validated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    valid_until        TIMESTAMPTZ NOT NULL,
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT ck_foghorn_node_admissions_public_key_present
+        CHECK (public_key_ed25519 IS NOT NULL),
+    CONSTRAINT ck_foghorn_node_admissions_public_key_shape
+        CHECK (public_key_ed25519 IS NULL OR octet_length(public_key_ed25519) = 32),
+    CONSTRAINT ck_foghorn_node_admissions_valid_until_present
+        CHECK (valid_until IS NOT NULL)
+);
+
+CREATE TABLE IF NOT EXISTS foghorn.node_admission_proof_nonces (
+    public_key_sha256 BYTEA NOT NULL CHECK (octet_length(public_key_sha256) = 32),
+    nonce             BYTEA NOT NULL CHECK (octet_length(nonce) = 32),
+    proof_issued_at   TIMESTAMPTZ NOT NULL,
+    expires_at        TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (public_key_sha256, nonce)
+);
+
+CREATE INDEX IF NOT EXISTS idx_foghorn_node_admission_proof_nonces_expiry
+    ON foghorn.node_admission_proof_nonces(expires_at);
+
+CREATE TABLE IF NOT EXISTS foghorn.push_target_status_outbox (
+    id BIGSERIAL PRIMARY KEY,
+    target_id UUID NOT NULL UNIQUE,
+    tenant_id UUID NOT NULL,
+    status VARCHAR(20) NOT NULL,
+    last_error TEXT,
+    event_unix_millis BIGINT NOT NULL DEFAULT 0 CHECK (event_unix_millis >= 0),
+    revision BIGINT NOT NULL DEFAULT 1 CHECK (revision > 0),
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_attempt_at TIMESTAMPTZ,
+    lease_owner VARCHAR(100),
+    lease_until TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT ck_foghorn_push_target_status_outbox_status
+        CHECK (status IN ('idle', 'pushing', 'failed'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_foghorn_push_target_status_outbox_due
+    ON foghorn.push_target_status_outbox(next_attempt_at, id);
+
+-- Latest desired central placement projection for a managed/native stream.
+-- The media decision is local; this outbox makes Commodore's routing column a
+-- recoverable projection rather than a request-path dependency.
+CREATE TABLE IF NOT EXISTS foghorn.managed_stream_placement_outbox (
+    id BIGSERIAL PRIMARY KEY,
+    stream_id UUID NOT NULL UNIQUE,
+    tenant_id UUID NOT NULL,
+    cluster_id UUID NOT NULL,
+    desired_active BOOLEAN NOT NULL,
+    revision BIGINT NOT NULL DEFAULT 1 CHECK (revision > 0),
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_attempt_at TIMESTAMPTZ,
+    lease_owner VARCHAR(100),
+    lease_until TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_foghorn_managed_stream_placement_outbox_due
+    ON foghorn.managed_stream_placement_outbox(next_attempt_at, id);
+
+-- Latest ConfigSeed apply result accepted from each Helmsman node. Foghorn is
+-- the media-local durability boundary; Navigator delivery may lag control-plane
+-- outages without forcing the node's control stream to reconnect.
+CREATE TABLE IF NOT EXISTS foghorn.config_seed_apply_ack_outbox (
+    id BIGSERIAL PRIMARY KEY,
+    node_id VARCHAR(100) NOT NULL UNIQUE,
+    cluster_id VARCHAR(100) NOT NULL,
+    seed_version BIGINT NOT NULL CHECK (seed_version > 0),
+    request_payload BYTEA NOT NULL,
+    result_signature BYTEA NOT NULL CHECK (octet_length(result_signature) = 32),
+    revision BIGINT NOT NULL DEFAULT 1 CHECK (revision > 0),
+    pending BOOLEAN NOT NULL DEFAULT true,
+    pending_since TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_attempt_at TIMESTAMPTZ,
+    lease_owner VARCHAR(100),
+    lease_until TIMESTAMPTZ,
+    last_error TEXT,
+    delivered_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_foghorn_config_seed_apply_ack_outbox_due
+    ON foghorn.config_seed_apply_ack_outbox(next_attempt_at, id) WHERE pending;
+
+-- Successful local JWT verifications are media-plane facts. This outbox keeps
+-- signing-key usage durable while Commodore is unavailable, then advances its
+-- operator-facing last_used_at projection when connectivity returns.
+CREATE TABLE IF NOT EXISTS foghorn.signing_key_use_outbox (
+    id BIGSERIAL PRIMARY KEY,
+    tenant_id UUID NOT NULL,
+    kid VARCHAR(255) NOT NULL,
+    revision BIGINT NOT NULL DEFAULT 1 CHECK (revision > 0),
+    attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_attempt_at TIMESTAMPTZ,
+    lease_owner VARCHAR(100),
+    lease_until TIMESTAMPTZ,
+    observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (tenant_id, kid)
+);
+
+CREATE INDEX IF NOT EXISTS idx_foghorn_signing_key_use_outbox_due
+    ON foghorn.signing_key_use_outbox(next_attempt_at, id);
 
 -- ============================================================================
 -- NODE MAINTENANCE MODES
@@ -1021,7 +1247,10 @@ CREATE TABLE IF NOT EXISTS foghorn.cell_storage_identity (
 -- re-driven by the recovery reconciler. The pointer CAS advances on the server-owned strictly-monotonic
 -- claim_seq (below), not created_at, so equal timestamps / cross-instance clock skew can never yield a non-total
 -- order in which two attempts each replace the other.
-CREATE SEQUENCE IF NOT EXISTS foghorn.thumbnail_attempt_seq;
+CREATE TABLE IF NOT EXISTS foghorn.thumbnail_claim_counter (
+    asset_key TEXT PRIMARY KEY,
+    value BIGINT NOT NULL CHECK (value >= 4503599627370496 AND value < 9007199254740992)
+);
 CREATE TABLE IF NOT EXISTS foghorn.thumbnail_task_assignment (
     attempt_id          TEXT PRIMARY KEY,
     tenant_id           TEXT NOT NULL,
@@ -1034,7 +1263,7 @@ CREATE TABLE IF NOT EXISTS foghorn.thumbnail_task_assignment (
     -- destination cluster. Cleanup routes local when true — even for a locally-backed official ALIAS whose
     -- cluster id differs from this cell's — instead of misrouting to (disabled) federation and leaking the bytes.
     durable_backend_local BOOLEAN NOT NULL DEFAULT false,
-    claim_seq           BIGINT NOT NULL DEFAULT nextval('foghorn.thumbnail_attempt_seq'), -- monotonic pointer-CAS rank
+    claim_seq           BIGINT NOT NULL,              -- per-asset monotonic pointer-CAS rank
     superseded_at       TIMESTAMPTZ,               -- set when a newer version displaces this one; GC horizon anchor
     expiry              TIMESTAMPTZ NOT NULL,
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1122,6 +1351,8 @@ CREATE TABLE IF NOT EXISTS foghorn.thumbnail_active_pointer (
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT chk_foghorn_active_token_present CHECK (active_token IS NOT NULL)
 );
+CREATE INDEX IF NOT EXISTS idx_foghorn_thumbnail_active_pointer_version
+    ON foghorn.thumbnail_active_pointer(active_version);
 
 -- Durable stream tombstone + thumbnail-cleanup obligation. A LIVE stream's thumbnails are keyed by
 -- asset_key = stream_id, which has NO foghorn.artifacts row — so the purge job never reaches it, version GC
@@ -1268,11 +1499,18 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_processing_jobs_artifact_status ON foghor
 -- ============================================================================
 -- ARTIFACT EVENT OUTBOX
 -- ============================================================================
--- Monotonic revision for artifact node-copy events. nextval() is assigned inside the
--- emitting transaction and used as the ClickHouse ReplacingMergeTree version so
+-- Per-copy monotonic revision for artifact node-copy events. The key matches the
+-- ReplacingMergeTree identity so pooled Yugabyte sessions cannot regress a copy's
+-- version. Allocation is inside the emitting transaction, so
 -- concurrent updates converge deterministically (wall-clock ms would tie). Gaps from
--- rolled-back transactions are harmless — only strict increase matters.
-CREATE SEQUENCE IF NOT EXISTS foghorn.artifact_node_copy_version_seq AS BIGINT;
+-- rolled-back transactions are harmless — only strict increase matters. Counters are
+-- intentionally retained beyond placement deletion because an old analytics event may remain.
+CREATE TABLE IF NOT EXISTS foghorn.artifact_node_copy_version_counter (
+    artifact_hash VARCHAR(32) NOT NULL,
+    node_id VARCHAR(100) NOT NULL,
+    value BIGINT NOT NULL CHECK (value >= 4503599627370496 AND value < 9007199254740992),
+    PRIMARY KEY (artifact_hash, node_id)
+);
 
 -- Durable outbox for Foghorn artifact-lifecycle (DVR / VOD / Clip),
 -- federation peer-registry, and artifact node-copy events. A drain worker
@@ -1370,6 +1608,179 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_creation_commands_accepted
 CREATE INDEX IF NOT EXISTS idx_foghorn_creation_commands_terminal_gc
     ON foghorn.artifact_creation_commands(consumed_at)
     WHERE status IN ('committed', 'rejected') AND consumed_at IS NOT NULL;
+
+-- ============================================================================
+-- DURABLE VERIFIED MEDIA AUTHORITY
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS foghorn.media_authorities (
+    authority_kind VARCHAR(32) NOT NULL,
+    authority_id VARCHAR(255) NOT NULL,
+    authority_version BIGINT NOT NULL CHECK (authority_version > 0),
+    signer_key_id VARCHAR(255) NOT NULL,
+    audience_cell_id VARCHAR(255) NOT NULL,
+    issued_at TIMESTAMPTZ NOT NULL,
+    refresh_after TIMESTAMPTZ NOT NULL,
+    valid_until TIMESTAMPTZ NOT NULL,
+    payload_sha256 BYTEA NOT NULL CHECK (octet_length(payload_sha256) = 32),
+    signed_envelope BYTEA NOT NULL,
+    payload BYTEA NOT NULL,
+    source_revisions JSONB NOT NULL DEFAULT '[]'::jsonb,
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (authority_kind, authority_id),
+    CONSTRAINT chk_foghorn_media_authority_kind
+        CHECK (authority_kind IN ('tenant', 'media_object')),
+    CONSTRAINT chk_foghorn_media_authority_times
+        CHECK (issued_at <= refresh_after AND refresh_after < valid_until),
+    CONSTRAINT chk_foghorn_media_authority_audience
+        CHECK (btrim(audience_cell_id) <> ''),
+    CONSTRAINT chk_foghorn_media_authority_source_revisions
+        CHECK (jsonb_typeof(source_revisions) = 'array')
+);
+
+CREATE INDEX IF NOT EXISTS idx_foghorn_media_authorities_refresh
+    ON foghorn.media_authorities(refresh_after);
+
+CREATE INDEX IF NOT EXISTS idx_foghorn_media_authorities_expiry
+    ON foghorn.media_authorities(valid_until);
+
+CREATE TABLE IF NOT EXISTS foghorn.tenant_authority_projection (
+    tenant_id UUID PRIMARY KEY,
+    authority_version BIGINT NOT NULL CHECK (authority_version > 0),
+    lifecycle VARCHAR(20) NOT NULL,
+    billing_decision VARCHAR(32) NOT NULL,
+    billing_model VARCHAR(20) NOT NULL,
+    official_cluster_id VARCHAR(255),
+    allow_platform_shared_playback BOOLEAN NOT NULL DEFAULT FALSE,
+    max_streams INTEGER NOT NULL DEFAULT 0 CHECK (max_streams >= 0),
+    max_viewers INTEGER NOT NULL DEFAULT 0 CHECK (max_viewers >= 0),
+    allowances JSONB NOT NULL DEFAULT '[]'::jsonb,
+    decision_reason TEXT NOT NULL DEFAULT '',
+    local_read_ready BOOLEAN NOT NULL DEFAULT FALSE,
+    local_ingest_ready BOOLEAN NOT NULL DEFAULT FALSE,
+    local_source_ready BOOLEAN NOT NULL DEFAULT FALSE,
+    valid_until TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_tenant_authority_projection_lifecycle
+        CHECK (lifecycle IN ('active', 'inactive', 'tombstone')),
+    CONSTRAINT chk_tenant_authority_projection_billing
+        CHECK (billing_decision IN ('allow', 'payment_required', 'suspended', 'inactive')),
+    CONSTRAINT chk_tenant_authority_projection_model
+        CHECK (billing_model IN ('unspecified', 'postpaid', 'prepaid')),
+    CONSTRAINT chk_tenant_authority_allowances
+        CHECK (jsonb_typeof(allowances) = 'array')
+);
+
+CREATE TABLE IF NOT EXISTS foghorn.tenant_authority_grants (
+    tenant_id UUID NOT NULL REFERENCES foghorn.tenant_authority_projection(tenant_id) ON DELETE CASCADE,
+    cluster_id VARCHAR(255) NOT NULL,
+    authority_version BIGINT NOT NULL CHECK (authority_version > 0),
+    access_source VARCHAR(50) NOT NULL,
+    access_level VARCHAR(50) NOT NULL DEFAULT '',
+    subscription_status VARCHAR(50) NOT NULL,
+    cluster_class VARCHAR(50) NOT NULL DEFAULT '',
+    cluster_type VARCHAR(50) NOT NULL DEFAULT '',
+    deployment_model VARCHAR(50) NOT NULL DEFAULT '',
+    owner_tenant_id UUID,
+    expires_at TIMESTAMPTZ,
+    PRIMARY KEY (tenant_id, cluster_id),
+    CONSTRAINT chk_tenant_authority_grant_source
+        CHECK (access_source IN ('platform_tier', 'owner', 'private_invite', 'marketplace_subscription', 'operator_override')),
+    CONSTRAINT chk_tenant_authority_grant_status
+        CHECK (subscription_status = 'active')
+);
+
+CREATE INDEX IF NOT EXISTS idx_tenant_authority_grants_cluster
+    ON foghorn.tenant_authority_grants(cluster_id, tenant_id);
+
+CREATE TABLE IF NOT EXISTS foghorn.media_object_authority_projection (
+    authority_id VARCHAR(255) PRIMARY KEY,
+    authority_version BIGINT NOT NULL CHECK (authority_version > 0),
+    object_kind VARCHAR(20) NOT NULL,
+    tenant_id UUID NOT NULL,
+    user_id UUID,
+    internal_name VARCHAR(255) NOT NULL,
+    playback_id VARCHAR(255) NOT NULL,
+    lifecycle VARCHAR(20) NOT NULL,
+    origin_cluster_id VARCHAR(255),
+    playback_policy_kind VARCHAR(20) NOT NULL,
+    playback_policy BYTEA NOT NULL,
+    stream_id UUID,
+    ingest_mode VARCHAR(32),
+    artifact_id VARCHAR(255),
+    artifact_hash VARCHAR(255),
+    artifact_kind VARCHAR(20),
+    local_read_ready BOOLEAN NOT NULL DEFAULT FALSE,
+    local_ingest_ready BOOLEAN NOT NULL DEFAULT FALSE,
+    local_source_ready BOOLEAN NOT NULL DEFAULT FALSE,
+    publishing_credential_sha256 BYTEA,
+    valid_until TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_media_object_authority_kind
+        CHECK (object_kind IN ('live_stream', 'artifact')),
+    CONSTRAINT chk_media_object_authority_lifecycle
+        CHECK (lifecycle IN ('active', 'inactive', 'tombstone')),
+    CONSTRAINT chk_media_object_authority_policy
+        CHECK (playback_policy_kind IN ('public', 'jwt', 'webhook', 'deny')),
+    CONSTRAINT chk_media_object_authority_publishing_credential
+        CHECK (publishing_credential_sha256 IS NULL OR octet_length(publishing_credential_sha256) = 32),
+    CONSTRAINT chk_media_object_authority_shape
+        CHECK (
+            (object_kind = 'live_stream' AND stream_id IS NOT NULL AND ingest_mode IS NOT NULL AND artifact_id IS NULL AND artifact_hash IS NULL AND artifact_kind IS NULL)
+            OR
+            (object_kind = 'artifact' AND stream_id IS NULL AND ingest_mode IS NULL AND artifact_id IS NOT NULL AND artifact_hash IS NOT NULL AND artifact_kind IN ('vod', 'dvr', 'clip', 'chapter'))
+        )
+);
+
+ALTER TABLE foghorn.tenant_authority_projection
+    ADD COLUMN IF NOT EXISTS local_read_ready BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE foghorn.media_object_authority_projection
+    ADD COLUMN IF NOT EXISTS local_read_ready BOOLEAN NOT NULL DEFAULT FALSE;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_media_object_authority_active_internal_name
+    ON foghorn.media_object_authority_projection(internal_name)
+    WHERE lifecycle = 'active';
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_media_object_authority_active_playback_id
+    ON foghorn.media_object_authority_projection((lower(playback_id)))
+    WHERE lifecycle = 'active';
+
+CREATE INDEX IF NOT EXISTS idx_media_object_authority_internal_name
+    ON foghorn.media_object_authority_projection(internal_name);
+
+CREATE INDEX IF NOT EXISTS idx_media_object_authority_playback_id
+    ON foghorn.media_object_authority_projection((lower(playback_id)));
+
+CREATE INDEX IF NOT EXISTS idx_media_object_authority_tenant
+    ON foghorn.media_object_authority_projection(tenant_id, object_kind);
+
+CREATE INDEX IF NOT EXISTS idx_media_object_authority_artifact_hash
+    ON foghorn.media_object_authority_projection(artifact_hash)
+    WHERE artifact_hash IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_media_object_authority_publishing_credential
+    ON foghorn.media_object_authority_projection(publishing_credential_sha256)
+    WHERE publishing_credential_sha256 IS NOT NULL AND lifecycle = 'active';
+
+CREATE TABLE IF NOT EXISTS foghorn.media_authority_apply_audit (
+    id BIGSERIAL PRIMARY KEY,
+    authority_kind VARCHAR(32),
+    authority_id VARCHAR(255),
+    authority_version BIGINT,
+    signer_key_id VARCHAR(255),
+    payload_sha256 BYTEA,
+    outcome VARCHAR(32) NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT chk_media_authority_apply_outcome
+        CHECK (outcome IN ('applied', 'duplicate', 'rollback_rejected', 'conflict_rejected', 'verification_rejected'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_media_authority_apply_audit_authority
+    ON foghorn.media_authority_apply_audit(authority_kind, authority_id, observed_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_media_authority_apply_audit_retention
+    ON foghorn.media_authority_apply_audit(observed_at);
 
 -- Schema baseline identity marker. Records that this database was created from the
 -- consolidated baseline at this floor, so the migration min-version guard treats

@@ -150,6 +150,22 @@ func TestBuildMigrationItemsCanUseLogicalSourceForPhysicalDatabase(t *testing.T)
 	}
 }
 
+func TestMigrationItemSplitsNonTransactionalStatementsForAutocommit(t *testing.T) {
+	migration := Migration{
+		Version: "v0.3.0", Phase: "expand", Sequence: 19,
+		Filename: "019_indexes.notx.sql", Transactional: false,
+		content: "CREATE INDEX CONCURRENTLY IF NOT EXISTS one ON purser.t (a);\nCREATE INDEX CONCURRENTLY IF NOT EXISTS two ON purser.t (b);",
+	}
+	item := migrationItem(SchemaDatabase{Name: "purser"}, migration)
+	statements, ok := item["statements"].([]string)
+	if !ok || len(statements) != 2 {
+		t.Fatalf("migration statements = %#v, want two autocommit queries", item["statements"])
+	}
+	if item["sql"] != migration.content {
+		t.Fatalf("migration checksum body changed while splitting statements")
+	}
+}
+
 func TestMigrationLedgerDatabaseNamesUsesPhysicalTargets(t *testing.T) {
 	got := migrationLedgerDatabaseNames([]SchemaDatabase{
 		{Name: "foghorn_eu", SourceName: "foghorn"},

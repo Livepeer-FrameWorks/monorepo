@@ -132,7 +132,7 @@ func TestValidateMigrationSetAcceptsSafeExpandSQL(t *testing.T) {
 			Sequence:      1,
 			Path:          "migrations/purser/v0.3.0/postdeploy/001_require.sql",
 			Transactional: true,
-			content:       "ALTER TABLE purser.billing_invoices ALTER COLUMN rating_version SET NOT NULL;",
+			content:       "ALTER TABLE purser.billing_invoices ALTER COLUMN rating_version SET NOT NULL; SELECT pg_index.indisvalid, pg_index.indisready FROM pg_index WHERE indexrelid=to_regclass('idx_invoice_tenant');",
 		},
 	}
 
@@ -199,9 +199,100 @@ func TestValidateMigrationSet_NotxWithIfNotExistsPasses(t *testing.T) {
 			Transactional: false,
 			content:       "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_x ON purser.t (col);",
 		},
+		concurrentIndexGuardMigration("purser", "v0.3.0", "idx_x"),
 	}
 	if err := validatePostgresMigrationSet(migrations); err != nil {
 		t.Fatalf("validatePostgresMigrationSet returned error: %v", err)
+	}
+}
+
+func TestValidateMigrationSet_NotxAcceptsMultipleSafeStatements(t *testing.T) {
+	migrations := []Migration{
+		{
+			Database:      "purser",
+			Version:       "v0.3.0",
+			Phase:         "expand",
+			Sequence:      1,
+			Path:          "migrations/purser/v0.3.0/expand/001_indexes.notx.sql",
+			Transactional: false,
+			content: `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_x ON purser.t (col);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_y ON purser.t (other_col);`,
+		},
+		concurrentIndexGuardMigration("purser", "v0.3.0", "idx_x", "idx_y"),
+	}
+	if err := validatePostgresMigrationSet(migrations); err != nil {
+		t.Fatalf("validatePostgresMigrationSet returned error: %v", err)
+	}
+}
+
+func TestValidateMigrationSet_NotxRequiresPostdeployValidityGuard(t *testing.T) {
+	migrations := []Migration{{
+		Database: "purser", Version: "v0.3.0", Phase: "expand", Sequence: 1,
+		Path: "migrations/purser/v0.3.0/expand/001_idx.notx.sql", Transactional: false,
+		content: "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_x ON purser.t (col);",
+	}}
+	err := validatePostgresMigrationSet(migrations)
+	if err == nil || !strings.Contains(err.Error(), "postdeploy pg_index guard") {
+		t.Fatalf("validation error = %v, want missing postdeploy validity guard", err)
+	}
+}
+
+func TestValidateMigrationSet_NotxGuardRequiresExactIndexInSameRelease(t *testing.T) {
+	expand := Migration{
+		Database: "purser", Version: "v0.3.0", Phase: "expand", Sequence: 1,
+		Path: "migrations/purser/v0.3.0/expand/001_idx.notx.sql", Transactional: false,
+		content: "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_x ON purser.t (col);",
+	}
+	for _, test := range []struct {
+		name  string
+		guard Migration
+	}{
+		{name: "partial name", guard: concurrentIndexGuardMigration("purser", "v0.3.0", "idx_x_shadow")},
+		{name: "wrong release", guard: concurrentIndexGuardMigration("purser", "v0.3.1", "idx_x")},
+		{name: "comment only", guard: Migration{
+			Database: "purser", Version: "v0.3.0", Phase: "postdeploy", Sequence: 99,
+			Path: "migrations/purser/v0.3.0/postdeploy/099_validate_indexes.sql", Transactional: true,
+			content: `DO $$ BEGIN
+-- idx_x
+PERFORM pg_index.indisvalid, pg_index.indisready FROM pg_index;
+END $$;`,
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := validatePostgresMigrationSet([]Migration{expand, test.guard})
+			if err == nil || !strings.Contains(err.Error(), "postdeploy pg_index guard") {
+				t.Fatalf("validation error = %v, want exact same-release guard rejection", err)
+			}
+		})
+	}
+}
+
+func concurrentIndexGuardMigration(database, version string, indexNames ...string) Migration {
+	return Migration{
+		Database: database, Version: version, Phase: "postdeploy", Sequence: 99,
+		Path:          "migrations/" + database + "/" + version + "/postdeploy/099_validate_indexes.sql",
+		Transactional: true,
+		content: "SELECT pg_index.indisvalid, pg_index.indisready FROM pg_index WHERE indexrelid IN (to_regclass('" +
+			strings.Join(indexNames, "'), to_regclass('") + "'));",
+	}
+}
+
+func TestValidateMigrationSet_NotxRejectsUnsupportedStatement(t *testing.T) {
+	migrations := []Migration{
+		{
+			Database:      "purser",
+			Version:       "v0.3.0",
+			Phase:         "expand",
+			Sequence:      1,
+			Path:          "migrations/purser/v0.3.0/expand/001_indexes.notx.sql",
+			Transactional: false,
+			content: `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_x ON purser.t (col);
+ANALYZE purser.t;`,
+		},
+	}
+	err := validatePostgresMigrationSet(migrations)
+	if err == nil || !strings.Contains(err.Error(), "only CREATE INDEX CONCURRENTLY is supported") {
+		t.Fatalf("validation error = %v, want unsupported-statement MigrationValidationError", err)
 	}
 }
 
@@ -247,6 +338,129 @@ ALTER TABLE purser.b ADD CONSTRAINT b_fk FOREIGN KEY (tenant_id) REFERENCES purs
 	if !IsMigrationValidationError(err) {
 		t.Fatalf("got %T, want MigrationValidationError", err)
 	}
+	if !strings.Contains(err.Error(), `new constraint "b_fk"`) {
+		t.Fatalf("validation error = %v, want the unsafe constraint name", err)
+	}
+}
+
+func TestValidateMigrationSet_NotValidConstraintRequiresPostdeployValidation(t *testing.T) {
+	migrations := []Migration{
+		{
+			Database: "purser", Version: "v0.3.0", Phase: "expand", Sequence: 1,
+			Path: "migrations/purser/v0.3.0/expand/001_constraints.sql", Transactional: true,
+			content: `ALTER TABLE purser.a ADD CONSTRAINT a_fk FOREIGN KEY (tenant_id) REFERENCES purser.tenants(id) NOT VALID;`,
+		},
+	}
+	err := validatePostgresMigrationSet(migrations)
+	if err == nil || !strings.Contains(err.Error(), `NOT VALID constraint "a_fk" requires a same-release postdeploy`) {
+		t.Fatalf("validation error = %v, want missing postdeploy validation", err)
+	}
+}
+
+func TestValidateMigrationSet_NotValidConstraintWithPostdeployValidation(t *testing.T) {
+	migrations := []Migration{
+		{
+			Database: "purser", Version: "v0.3.0", Phase: "expand", Sequence: 1,
+			Path: "migrations/purser/v0.3.0/expand/001_constraints.sql", Transactional: true,
+			content: `DO $$ BEGIN ALTER TABLE purser.a ADD CONSTRAINT a_fk CHECK (tenant_id IS NOT NULL) NOT VALID; END $$;`,
+		},
+		{
+			Database: "purser", Version: "v0.3.0", Phase: "postdeploy", Sequence: 1,
+			Path: "migrations/purser/v0.3.0/postdeploy/001_validate.sql", Transactional: true,
+			content: `ALTER TABLE purser.a VALIDATE CONSTRAINT a_fk;`,
+		},
+	}
+	if err := validatePostgresMigrationSet(migrations); err != nil {
+		t.Fatalf("validatePostgresMigrationSet rejected paired constraint validation: %v", err)
+	}
+}
+
+func TestValidateMigrationSet_ConstraintMarkersInCommentsAndStringsDoNotCount(t *testing.T) {
+	tests := []struct {
+		name       string
+		expandSQL  string
+		postdeploy string
+		want       string
+	}{
+		{
+			name:      "comment cannot mark add as not valid",
+			expandSQL: `ALTER TABLE purser.a ADD CONSTRAINT a_fk CHECK (tenant_id IS NOT NULL); -- NOT VALID`,
+			want:      `new constraint "a_fk" in expand must be NOT VALID`,
+		},
+		{
+			name:       "string cannot validate constraint",
+			expandSQL:  `ALTER TABLE purser.a ADD CONSTRAINT a_fk CHECK (tenant_id IS NOT NULL) NOT VALID;`,
+			postdeploy: `DO $$ BEGIN RAISE NOTICE 'VALIDATE CONSTRAINT a_fk'; END $$;`,
+			want:       `NOT VALID constraint "a_fk" requires a same-release postdeploy`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			migrations := []Migration{{
+				Database: "purser", Version: "v0.3.0", Phase: "expand", Sequence: 1,
+				Path: "migrations/purser/v0.3.0/expand/001.sql", Transactional: true, content: tt.expandSQL,
+			}}
+			if tt.postdeploy != "" {
+				migrations = append(migrations, Migration{
+					Database: "purser", Version: "v0.3.0", Phase: "postdeploy", Sequence: 1,
+					Path: "migrations/purser/v0.3.0/postdeploy/001.sql", Transactional: true, content: tt.postdeploy,
+				})
+			}
+			err := validatePostgresMigrationSet(migrations)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("validation error = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateMigrationSet_PostdeployValidationRequiresMatchingExpandConstraint(t *testing.T) {
+	migrations := []Migration{{
+		Database: "purser", Version: "v0.3.0", Phase: "postdeploy", Sequence: 1,
+		Path: "migrations/purser/v0.3.0/postdeploy/001.sql", Transactional: true,
+		content: `ALTER TABLE purser.a VALIDATE CONSTRAINT typo_fk;`,
+	}}
+	err := validatePostgresMigrationSet(migrations)
+	if err == nil || !strings.Contains(err.Error(), `VALIDATE CONSTRAINT "typo_fk" has no same-release expand`) {
+		t.Fatalf("validation error = %v, want orphan validation rejection", err)
+	}
+}
+
+func TestValidateMigrationSet_ContractValidationDoesNotSatisfyExpand(t *testing.T) {
+	migrations := []Migration{
+		{
+			Database: "purser", Version: "v0.3.0", Phase: "expand", Sequence: 1,
+			Path: "migrations/purser/v0.3.0/expand/001.sql", Transactional: true,
+			content: `ALTER TABLE purser.a ADD CONSTRAINT a_fk CHECK (tenant_id IS NOT NULL) NOT VALID;`,
+		},
+		{
+			Database: "purser", Version: "v0.3.0", Phase: "contract", Sequence: 1,
+			Path: "migrations/purser/v0.3.0/contract/001.sql", Transactional: true,
+			content: `ALTER TABLE purser.a VALIDATE CONSTRAINT a_fk;`,
+		},
+	}
+	err := validatePostgresMigrationSet(migrations)
+	if err == nil || !strings.Contains(err.Error(), `requires a same-release postdeploy`) {
+		t.Fatalf("validation error = %v, want contract validation rejection", err)
+	}
+}
+
+func TestValidateMigrationSet_SameReleaseDropDoesNotRequireValidation(t *testing.T) {
+	migrations := []Migration{
+		{
+			Database: "purser", Version: "v0.3.0", Phase: "expand", Sequence: 1,
+			Path: "migrations/purser/v0.3.0/expand/001.sql", Transactional: true,
+			content: `ALTER TABLE purser.a ADD CONSTRAINT compatibility_check CHECK (tenant_id IS NOT NULL) NOT VALID;`,
+		},
+		{
+			Database: "purser", Version: "v0.3.0", Phase: "contract", Sequence: 1,
+			Path: "migrations/purser/v0.3.0/contract/001.sql", Transactional: true,
+			content: `ALTER TABLE purser.a DROP CONSTRAINT IF EXISTS compatibility_check;`,
+		},
+	}
+	if err := validatePostgresMigrationSet(migrations); err != nil {
+		t.Fatalf("same-release compatibility constraint drop rejected: %v", err)
+	}
 }
 
 func TestValidateMigrationSet_DollarQuoteBlockNotMisparsed(t *testing.T) {
@@ -268,5 +482,86 @@ END $$;`,
 	}
 	if err := validatePostgresMigrationSet(migrations); err != nil {
 		t.Fatalf("validatePostgresMigrationSet rejected a valid DO $$ block: %v", err)
+	}
+}
+
+func TestValidateMigrationSet_NotxGuardCannotComeFromStringLiteral(t *testing.T) {
+	migrations := []Migration{
+		{
+			Database: "purser", Version: "v0.3.0", Phase: "expand", Sequence: 1,
+			Path: "migrations/purser/v0.3.0/expand/001_idx.notx.sql", Transactional: false,
+			content: `CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_x ON purser.t (id);`,
+		},
+		{
+			Database: "purser", Version: "v0.3.0", Phase: "postdeploy", Sequence: 1,
+			Path: "migrations/purser/v0.3.0/postdeploy/001.sql", Transactional: true,
+			content: `SELECT 'idx_x pg_index indisvalid indisready';`,
+		},
+	}
+	if err := validatePostgresMigrationSet(migrations); err == nil || !strings.Contains(err.Error(), "postdeploy pg_index guard") {
+		t.Fatalf("validation error = %v, want literal-only guard rejection", err)
+	}
+}
+
+func TestValidateMigrationSet_RejectsAnonymousExpandConstraint(t *testing.T) {
+	for _, sql := range []string{
+		`ALTER TABLE purser.t ADD CHECK (amount >= 0) NOT VALID;`,
+		`ALTER TABLE purser.t ADD FOREIGN KEY (tenant_id) REFERENCES purser.tenants(id) NOT VALID;`,
+	} {
+		migration := Migration{
+			Database: "purser", Version: "v0.3.0", Phase: "expand", Sequence: 1,
+			Path: "migrations/purser/v0.3.0/expand/001.sql", Transactional: true, content: sql,
+		}
+		if err := validatePostgresMigrationSet([]Migration{migration}); err == nil || !strings.Contains(err.Error(), "explicit CONSTRAINT name") {
+			t.Fatalf("validation error = %v, want anonymous-constraint rejection", err)
+		}
+	}
+}
+
+func TestValidateMigrationSet_DollarBodyQuoteCannotHideFollowingDDL(t *testing.T) {
+	migrations := []Migration{
+		{
+			Database: "purser", Version: "v0.3.0", Phase: "expand", Sequence: 1,
+			Path: "migrations/purser/v0.3.0/expand/001.sql", Transactional: true,
+			content: `ALTER TABLE purser.t ADD CONSTRAINT amount_check CHECK (amount >= 0) NOT VALID;`,
+		},
+		{
+			Database: "purser", Version: "v0.3.0", Phase: "postdeploy", Sequence: 1,
+			Path: "migrations/purser/v0.3.0/postdeploy/001.sql", Transactional: true,
+			content: `DO $body$ BEGIN RAISE NOTICE 'language-body quote; END $body$;
+ALTER TABLE purser.t VALIDATE CONSTRAINT amount_check;`,
+		},
+	}
+	if err := validatePostgresMigrationSet(migrations); err != nil {
+		t.Fatalf("DDL following dollar body was hidden by a body-local quote: %v", err)
+	}
+}
+
+func TestValidateMigrationSet_CommentMarkerInsideDollarBodyStringCannotHideDDL(t *testing.T) {
+	migrations := []Migration{
+		{
+			Database: "purser", Version: "v0.3.0", Phase: "expand", Sequence: 1,
+			Path: "migrations/purser/v0.3.0/expand/001.sql", Transactional: true,
+			content: `ALTER TABLE purser.t ADD CONSTRAINT amount_check CHECK (amount >= 0) NOT VALID;`,
+		},
+		{
+			Database: "purser", Version: "v0.3.0", Phase: "postdeploy", Sequence: 1,
+			Path: "migrations/purser/v0.3.0/postdeploy/001.sql", Transactional: true,
+			content: `DO $body$ BEGIN RAISE NOTICE '-- diagnostic'; ALTER TABLE purser.t VALIDATE CONSTRAINT amount_check; END $body$;`,
+		},
+	}
+	if err := validatePostgresMigrationSet(migrations); err != nil {
+		t.Fatalf("comment marker inside body string hid following DDL: %v", err)
+	}
+}
+
+func TestValidateMigrationSet_RejectsContractValidationEvenWhenExpandIsValidated(t *testing.T) {
+	migration := Migration{
+		Database: "purser", Version: "v0.3.0", Phase: "contract", Sequence: 1,
+		Path: "migrations/purser/v0.3.0/contract/001.sql", Transactional: true,
+		content: `ALTER TABLE purser.t VALIDATE CONSTRAINT amount_check;`,
+	}
+	if err := validatePostgresMigrationSet([]Migration{migration}); err == nil || !strings.Contains(err.Error(), "belongs in postdeploy") {
+		t.Fatalf("validation error = %v, want contract-phase validation rejection", err)
 	}
 }

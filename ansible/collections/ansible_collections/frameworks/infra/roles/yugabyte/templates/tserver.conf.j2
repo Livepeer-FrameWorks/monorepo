@@ -9,6 +9,7 @@
 --fs_data_dirs={{ yugabyte_data_dir }}
 --ysql_enable_auth=true
 --ysql_pg_conf_csv=password_encryption=scram-sha-256
+--yb_enable_read_committed_isolation=false
 --ysql_hba_conf_csv=host all {{ yugabyte_superuser_role }} 127.0.0.1/32 trust,host all all 0.0.0.0/0 scram-sha-256
 --placement_cloud={{ yugabyte_placement_cloud }}
 --placement_region={{ yugabyte_placement_region }}

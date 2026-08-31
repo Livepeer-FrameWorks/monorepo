@@ -122,7 +122,7 @@ ON CONFLICT (clip_hash) DO UPDATE SET
 INSERT INTO commodore.dvr_recordings (
     id, tenant_id, user_id, stream_id, dvr_hash, internal_name, playback_id,
     stream_internal_name,
-    origin_cluster_id, retention_until, created_at, updated_at
+    origin_cluster_id, retention_until, requires_auth, created_at, updated_at
 ) VALUES
 -- Demo DVR recording (completed) - matches foghorn.artifacts entry
 (
@@ -136,6 +136,7 @@ INSERT INTO commodore.dvr_recordings (
     'demo_live_stream_001',
     'demo-media',
     NOW() + INTERVAL '7 days',   -- 7-day rolling retention for demo fixtures
+    FALSE,
     NOW() - INTERVAL '4 hours',
     NOW() - INTERVAL '4 hours'
 ),
@@ -151,27 +152,31 @@ INSERT INTO commodore.dvr_recordings (
     'demo_live_stream_001',
     'demo-media',
     NOW() - INTERVAL '1 day',   -- Already expired (retention passed)
+    FALSE,
     NOW() - INTERVAL '2 days',
     NOW() - INTERVAL '1 day'
 )
 ON CONFLICT (dvr_hash) DO UPDATE SET
     internal_name = EXCLUDED.internal_name,
     origin_cluster_id = EXCLUDED.origin_cluster_id,
+    requires_auth = EXCLUDED.requires_auth,
     updated_at = NOW();
 
 INSERT INTO commodore.dvr_chapter_playback (
-    chapter_id, tenant_id, playback_id, artifact_hash, created_at, updated_at
+    chapter_id, tenant_id, playback_id, artifact_hash, dvr_hash, created_at, updated_at
 ) VALUES (
     '34d74b7acd7ec8cf78f6cc8c9f031a8a',
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
     'chp_demo_recording_001',
     '34d74b7acd7ec8cf78f6cc8c9f031a8a',
+    'fedcba98765432109876543210fedcba',
     NOW() - INTERVAL '4 hours',
     NOW() - INTERVAL '4 hours'
 )
 ON CONFLICT (chapter_id) DO UPDATE SET
     playback_id = EXCLUDED.playback_id,
     artifact_hash = EXCLUDED.artifact_hash,
+    dvr_hash = EXCLUDED.dvr_hash,
     updated_at = NOW();
 
 -- ============================================================================
@@ -183,7 +188,8 @@ ON CONFLICT (chapter_id) DO UPDATE SET
 INSERT INTO commodore.vod_assets (
     id, tenant_id, user_id, vod_hash, internal_name, playback_id,
     title, description, filename, content_type,
-    size_bytes, origin_cluster_id, retention_until, library_visible, created_at, updated_at
+    size_bytes, origin_cluster_id, retention_until, library_visible, origin_type, origin_id,
+    requires_auth, created_at, updated_at
 ) VALUES
 -- Demo VOD (ready) - HLS-compatible MP4 sample
 (
@@ -201,6 +207,9 @@ INSERT INTO commodore.vod_assets (
     'demo-media',
     NOW() + INTERVAL '30 days',
     TRUE,
+    NULL,
+    NULL,
+    FALSE,
     NOW() - INTERVAL '1 day',
     NOW() - INTERVAL '1 day'
 ),
@@ -219,6 +228,9 @@ INSERT INTO commodore.vod_assets (
     336471,
     'demo-media',
     NOW() + INTERVAL '7 days',
+    FALSE,
+    'dvr_chapter',
+    '34d74b7acd7ec8cf78f6cc8c9f031a8a',
     FALSE,
     NOW() - INTERVAL '4 hours',
     NOW() - INTERVAL '4 hours'
@@ -239,6 +251,9 @@ INSERT INTO commodore.vod_assets (
     'demo-media',
     NOW() + INTERVAL '30 days',
     FALSE,
+    NULL,
+    NULL,
+    FALSE,
     NOW() - INTERVAL '30 minutes',
     NOW() - INTERVAL '30 minutes'
 ),
@@ -258,6 +273,9 @@ INSERT INTO commodore.vod_assets (
     'demo-media',
     NOW() - INTERVAL '1 day',
     FALSE,
+    NULL,
+    NULL,
+    FALSE,
     NOW() - INTERVAL '2 days',
     NOW() - INTERVAL '2 days'
 )
@@ -266,4 +284,7 @@ ON CONFLICT (vod_hash) DO UPDATE SET
     origin_cluster_id = EXCLUDED.origin_cluster_id,
     size_bytes = EXCLUDED.size_bytes,
     library_visible = EXCLUDED.library_visible,
+    origin_type = EXCLUDED.origin_type,
+    origin_id = EXCLUDED.origin_id,
+    requires_auth = EXCLUDED.requires_auth,
     updated_at = NOW();

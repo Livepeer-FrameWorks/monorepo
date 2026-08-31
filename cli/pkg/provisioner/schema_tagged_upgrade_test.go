@@ -3,6 +3,7 @@
 package provisioner
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -13,10 +14,24 @@ import (
 
 const schemaVerifyFromTagEnv = "FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG"
 
+func schemaVerifyTagSetting() (tag string, skip bool, err error) {
+	tag = strings.TrimSpace(os.Getenv(schemaVerifyFromTagEnv))
+	if tag != "" {
+		return tag, false, nil
+	}
+	if strings.TrimSpace(os.Getenv("CI")) != "" {
+		return "", false, fmt.Errorf("%s is unset in CI; tagged-baseline upgrade proof must not skip", schemaVerifyFromTagEnv)
+	}
+	return "", true, nil
+}
+
 func schemaVerifyFromTag(t *testing.T) string {
 	t.Helper()
-	tag := strings.TrimSpace(os.Getenv(schemaVerifyFromTagEnv))
-	if tag == "" {
+	tag, skip, settingErr := schemaVerifyTagSetting()
+	if settingErr != nil {
+		t.Fatal(settingErr)
+	}
+	if skip {
 		t.Skipf("%s is unset; tagged-baseline upgrade proof is opt-in", schemaVerifyFromTagEnv)
 	}
 	if err := releases.ValidateVersion(tag); err != nil || releases.BaseVersion(tag) != tag {
@@ -27,6 +42,14 @@ func schemaVerifyFromTag(t *testing.T) string {
 		t.Fatalf("%s=%s is not a reachable shipped tag: %v\n%s", schemaVerifyFromTagEnv, tag, err, out)
 	}
 	return tag
+}
+
+func TestSchemaVerifyFromTagIsRequiredInCI(t *testing.T) {
+	t.Setenv(schemaVerifyFromTagEnv, "")
+	t.Setenv("CI", "true")
+	if _, skip, err := schemaVerifyTagSetting(); err == nil || skip {
+		t.Fatalf("CI tag setting = skip:%v err:%v, want hard failure", skip, err)
+	}
 }
 
 func repositoryFileAtTag(t *testing.T, tag, file string) string {

@@ -103,10 +103,17 @@ var expandUnsafeSQLPatterns = []struct {
 }
 
 var (
-	expandAddConstraintPattern         = regexp.MustCompile(`(?is)\bALTER\s+TABLE\b.*\bADD\s+CONSTRAINT\b`)
 	notValidPattern                    = regexp.MustCompile(`(?is)\bNOT\s+VALID\b`)
 	createIndexConcurrently            = regexp.MustCompile(`(?is)\bCREATE\s+(UNIQUE\s+)?INDEX\s+CONCURRENTLY\b`)
 	createIndexConcurrentlyIfNotExists = regexp.MustCompile(`(?is)\bCREATE\s+(UNIQUE\s+)?INDEX\s+CONCURRENTLY\s+IF\s+NOT\s+EXISTS\b`)
+	createConcurrentIndexName          = regexp.MustCompile(`(?is)\bCREATE\s+(?:UNIQUE\s+)?INDEX\s+CONCURRENTLY\s+IF\s+NOT\s+EXISTS\s+(?:[A-Za-z_][A-Za-z0-9_]*\.)?"?([A-Za-z_][A-Za-z0-9_]*)"?`)
+	toRegclassReference                = regexp.MustCompile(`(?is)\bto_regclass\s*\(\s*'([^']+)'\s*\)`)
+	castRegclassReference              = regexp.MustCompile(`(?is)'([^']+)'\s*::\s*regclass\b`)
+	castNameReference                  = regexp.MustCompile(`(?is)'([^']+)'\s*::\s*name\b`)
+	addConstraintName                  = regexp.MustCompile(`(?is)\bADD\s+CONSTRAINT\s+"?([A-Za-z_][A-Za-z0-9_]*)"?`)
+	addAnonymousConstraint             = regexp.MustCompile(`(?is)\bADD\s+(?:CHECK\s*\(|FOREIGN\s+KEY\s*\()`)
+	validateConstraintName             = regexp.MustCompile(`(?is)\bVALIDATE\s+CONSTRAINT\s+"?([A-Za-z_][A-Za-z0-9_]*)"?`)
+	dropConstraintName                 = regexp.MustCompile(`(?is)\bDROP\s+CONSTRAINT(?:\s+IF\s+EXISTS)?\s+"?([A-Za-z_][A-Za-z0-9_]*)"?`)
 )
 
 // discoverMigrations walks the embedded FS under root looking for migrations
@@ -272,28 +279,97 @@ func discoverMigrationsInFS(fsys fs.FS, root string, knownDBs map[string]bool) (
 
 func validatePostgresMigrationSet(migrations []Migration) error {
 	issues := validateSequenceCollisions(migrations)
+	postdeployGuards := make(map[string][]string)
+	expandConstraints := make(map[string]map[string]string)
+	postdeployValidations := make(map[string]map[string]string)
+	contractDrops := make(map[string]map[string]struct{})
 	for _, migration := range migrations {
-		content := migration.content
+		key := migration.Database + "\x00" + migration.Version
+		code := stripSQLSingleQuotedLiterals(stripSQLComments(migration.content))
+		if !enforcesMigrationPhaseSafety(migration) {
+			continue
+		}
+		if migration.Phase == "postdeploy" {
+			for _, statement := range splitSQLStatements(stripSQLComments(migration.content)) {
+				postdeployGuards[key] = append(postdeployGuards[key], strings.ToLower(statement))
+			}
+			for _, name := range constraintNames(validateConstraintName, code) {
+				if postdeployValidations[key] == nil {
+					postdeployValidations[key] = make(map[string]string)
+				}
+				postdeployValidations[key][name] = migration.Path
+			}
+		}
+		if migration.Phase == "expand" && enforcesMigrationPhaseSafety(migration) {
+			for _, statement := range splitSQLStatements(code) {
+				for _, constraint := range addedConstraints(statement) {
+					if !constraint.notValid {
+						continue
+					}
+					if expandConstraints[key] == nil {
+						expandConstraints[key] = make(map[string]string)
+					}
+					expandConstraints[key][constraint.name] = migration.Path
+				}
+			}
+		}
+		if migration.Phase == "contract" {
+			for _, name := range constraintNames(validateConstraintName, code) {
+				issues = append(issues, MigrationValidationIssue{
+					Path:    migration.Path,
+					Message: fmt.Sprintf("VALIDATE CONSTRAINT %q belongs in postdeploy, not contract", name),
+				})
+			}
+			for _, name := range constraintNames(dropConstraintName, code) {
+				if contractDrops[key] == nil {
+					contractDrops[key] = make(map[string]struct{})
+				}
+				contractDrops[key][name] = struct{}{}
+			}
+		}
+	}
+	for _, migration := range migrations {
+		content := stripSQLComments(migration.content)
+		structuralContent := stripSQLSingleQuotedLiterals(content)
 		if migration.Phase == "expand" && enforcesMigrationPhaseSafety(migration) {
 			for _, pattern := range expandUnsafeSQLPatterns {
-				if pattern.re.MatchString(content) {
+				if pattern.re.MatchString(structuralContent) {
 					issues = append(issues, MigrationValidationIssue{
 						Path:    migration.Path,
 						Message: pattern.message,
 					})
 				}
 			}
-			for _, stmt := range splitSQLStatements(content) {
-				if expandAddConstraintPattern.MatchString(stmt) && !notValidPattern.MatchString(stmt) {
+			for _, stmt := range splitSQLStatements(structuralContent) {
+				if addAnonymousConstraint.MatchString(stmt) {
 					issues = append(issues, MigrationValidationIssue{
 						Path:    migration.Path,
-						Message: "new constraints in expand must be NOT VALID or moved to a later phase",
+						Message: "new CHECK and FOREIGN KEY constraints in expand must use an explicit CONSTRAINT name and NOT VALID",
 					})
+				}
+				for _, constraint := range addedConstraints(stmt) {
+					if !constraint.notValid {
+						issues = append(issues, MigrationValidationIssue{
+							Path:    migration.Path,
+							Message: fmt.Sprintf("new constraint %q in expand must be NOT VALID or moved to a later phase", constraint.name),
+						})
+						continue
+					}
+					key := migration.Database + "\x00" + migration.Version
+					if _, dropped := contractDrops[key][constraint.name]; dropped {
+						continue
+					}
+					if _, validated := postdeployValidations[key][constraint.name]; !validated {
+						issues = append(issues, MigrationValidationIssue{
+							Path:    migration.Path,
+							Message: fmt.Sprintf("NOT VALID constraint %q requires a same-release postdeploy VALIDATE CONSTRAINT", constraint.name),
+						})
+					}
 				}
 			}
 		}
 
-		hasConcurrentIndex := createIndexConcurrently.MatchString(content)
+		hasConcurrentIndex := createIndexConcurrently.MatchString(structuralContent)
 		if hasConcurrentIndex && migration.Transactional {
 			issues = append(issues, MigrationValidationIssue{
 				Path:    migration.Path,
@@ -307,20 +383,163 @@ func validatePostgresMigrationSet(migrations []Migration) error {
 			})
 		}
 		if !migration.Transactional && hasConcurrentIndex {
-			for _, stmt := range splitSQLStatements(content) {
-				if createIndexConcurrently.MatchString(stmt) && !createIndexConcurrentlyIfNotExists.MatchString(stmt) {
+			statements := splitSQLStatements(structuralContent)
+			for _, stmt := range statements {
+				if !createIndexConcurrently.MatchString(stmt) {
 					issues = append(issues, MigrationValidationIssue{
 						Path:    migration.Path,
-						Message: ".notx.sql with CREATE INDEX CONCURRENTLY must use IF NOT EXISTS so partial-failure reruns are safe",
+						Message: ".notx.sql statements must each require autocommit; only CREATE INDEX CONCURRENTLY is supported",
+					})
+					continue
+				}
+				if !createIndexConcurrentlyIfNotExists.MatchString(stmt) {
+					issues = append(issues, MigrationValidationIssue{
+						Path:    migration.Path,
+						Message: ".notx.sql with CREATE INDEX CONCURRENTLY must use IF NOT EXISTS for idempotent reruns; postdeploy must still reject an invalid leftover index",
+					})
+				}
+				match := createConcurrentIndexName.FindStringSubmatch(stmt)
+				if len(match) != 2 {
+					continue
+				}
+				indexName := strings.ToLower(match[1])
+				if !hasConcurrentIndexGuard(postdeployGuards[migration.Database+"\x00"+migration.Version], indexName) {
+					issues = append(issues, MigrationValidationIssue{
+						Path:    migration.Path,
+						Message: fmt.Sprintf("concurrent index %q requires a same-release postdeploy pg_index guard for indisvalid and indisready", match[1]),
 					})
 				}
 			}
+		}
+	}
+	for key, validations := range postdeployValidations {
+		for name, validationPath := range validations {
+			if _, ok := expandConstraints[key][name]; ok {
+				continue
+			}
+			issues = append(issues, MigrationValidationIssue{
+				Path:    validationPath,
+				Message: fmt.Sprintf("postdeploy VALIDATE CONSTRAINT %q has no same-release expand ADD CONSTRAINT ... NOT VALID", name),
+			})
 		}
 	}
 	if len(issues) > 0 {
 		return &MigrationValidationError{Issues: issues}
 	}
 	return nil
+}
+
+func constraintNames(pattern *regexp.Regexp, content string) []string {
+	matches := pattern.FindAllStringSubmatch(content, -1)
+	names := make([]string, 0, len(matches))
+	for _, match := range matches {
+		if len(match) == 2 {
+			names = append(names, strings.ToLower(match[1]))
+		}
+	}
+	return names
+}
+
+// stripSQLSingleQuotedLiterals prevents comments, diagnostics, or dynamic SQL
+// strings from satisfying structural migration rules. Dollar-quoted DO bodies
+// remain visible because they contain the statements the migration executes.
+func stripSQLSingleQuotedLiterals(content string) string {
+	var out strings.Builder
+	out.Grow(len(content))
+	var dollarTag string
+	inSingle := false
+	for i := 0; i < len(content); {
+		if dollarTag != "" && strings.HasPrefix(content[i:], dollarTag) {
+			out.WriteString(dollarTag)
+			i += len(dollarTag)
+			dollarTag = ""
+			inSingle = false
+			continue
+		}
+		if !inSingle && dollarTag == "" && content[i] == '$' {
+			if tag, ok := readDollarTag(content[i:]); ok {
+				out.WriteString(tag)
+				i += len(tag)
+				dollarTag = tag
+				continue
+			}
+		}
+		if !inSingle && content[i] != '\'' {
+			out.WriteByte(content[i])
+			i++
+			continue
+		}
+		if !inSingle {
+			inSingle = true
+			out.WriteByte(' ')
+			i++
+			continue
+		}
+		if content[i] == '\\' && i+1 < len(content) {
+			out.WriteString("  ")
+			i += 2
+			continue
+		}
+		if content[i] == '\'' {
+			if i+1 < len(content) && content[i+1] == '\'' {
+				out.WriteString("  ")
+				i += 2
+				continue
+			}
+			inSingle = false
+		}
+		out.WriteByte(' ')
+		i++
+	}
+	return out.String()
+}
+
+type addedConstraint struct {
+	name     string
+	notValid bool
+}
+
+func addedConstraints(statement string) []addedConstraint {
+	matches := addConstraintName.FindAllStringSubmatchIndex(statement, -1)
+	constraints := make([]addedConstraint, 0, len(matches))
+	for i, match := range matches {
+		end := len(statement)
+		if i+1 < len(matches) {
+			end = matches[i+1][0]
+		}
+		constraints = append(constraints, addedConstraint{
+			name:     strings.ToLower(statement[match[2]:match[3]]),
+			notValid: notValidPattern.MatchString(statement[match[0]:end]),
+		})
+	}
+	return constraints
+}
+
+func hasConcurrentIndexGuard(statements []string, indexName string) bool {
+	for _, statement := range statements {
+		structural := strings.ToLower(stripSQLSingleQuotedLiterals(statement))
+		if strings.Contains(structural, "pg_index") && strings.Contains(structural, "indisvalid") &&
+			strings.Contains(structural, "indisready") && statementReferencesRegclass(statement, indexName) {
+			return true
+		}
+	}
+	return false
+}
+
+func statementReferencesRegclass(statement, indexName string) bool {
+	for _, pattern := range []*regexp.Regexp{toRegclassReference, castRegclassReference, castNameReference} {
+		for _, match := range pattern.FindAllStringSubmatch(statement, -1) {
+			if len(match) != 2 {
+				continue
+			}
+			qualified := strings.Trim(strings.ToLower(strings.TrimSpace(match[1])), `"`)
+			parts := strings.Split(qualified, ".")
+			if strings.Trim(parts[len(parts)-1], `"`) == indexName {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // validateSequenceCollisions reports duplicate (database, version, phase,
@@ -591,6 +810,125 @@ func splitSQLStatements(content string) []string {
 		out = append(out, stmt)
 	}
 	return out
+}
+
+func stripSQLComments(content string) string {
+	var b strings.Builder
+	var dollarTag string
+	inSingle := false
+	inDouble := false
+	inDollarSingle := false
+	inDollarDouble := false
+	inLineComment := false
+	inBlockComment := false
+
+	for i := 0; i < len(content); i++ {
+		c := content[i]
+		next := byte(0)
+		if i+1 < len(content) {
+			next = content[i+1]
+		}
+
+		switch {
+		case inLineComment:
+			if c == '\n' {
+				b.WriteByte(c)
+				inLineComment = false
+			}
+			continue
+		case inBlockComment:
+			if c == '*' && next == '/' {
+				b.WriteByte(' ')
+				i++
+				inBlockComment = false
+			}
+			continue
+		case dollarTag != "":
+			if strings.HasPrefix(content[i:], dollarTag) {
+				b.WriteByte(c)
+				for j := 1; j < len(dollarTag); j++ {
+					b.WriteByte(content[i+j])
+				}
+				i += len(dollarTag) - 1
+				dollarTag = ""
+				inDollarSingle = false
+				inDollarDouble = false
+			} else if inDollarSingle {
+				b.WriteByte(c)
+				if c == '\'' && next == '\'' {
+					b.WriteByte(next)
+					i++
+				} else if c == '\'' {
+					inDollarSingle = false
+				}
+			} else if inDollarDouble {
+				b.WriteByte(c)
+				if c == '"' && next == '"' {
+					b.WriteByte(next)
+					i++
+				} else if c == '"' {
+					inDollarDouble = false
+				}
+			} else if c == '-' && next == '-' {
+				i++
+				inLineComment = true
+			} else if c == '/' && next == '*' {
+				i++
+				inBlockComment = true
+			} else {
+				b.WriteByte(c)
+				switch c {
+				case '\'':
+					inDollarSingle = true
+				case '"':
+					inDollarDouble = true
+				}
+			}
+			continue
+		case inSingle:
+			b.WriteByte(c)
+			if c == '\'' && next == '\'' {
+				b.WriteByte(next)
+				i++
+			} else if c == '\'' {
+				inSingle = false
+			}
+			continue
+		case inDouble:
+			b.WriteByte(c)
+			if c == '"' {
+				inDouble = false
+			}
+			continue
+		}
+
+		if c == '-' && next == '-' {
+			i++
+			inLineComment = true
+			continue
+		}
+		if c == '/' && next == '*' {
+			i++
+			inBlockComment = true
+			continue
+		}
+		b.WriteByte(c)
+		switch c {
+		case '\'':
+			inSingle = true
+		case '"':
+			inDouble = true
+		case '$':
+			if tag, ok := readDollarTag(content[i:]); ok {
+				dollarTag = tag
+				for j := 1; j < len(tag); j++ {
+					b.WriteByte(content[i+j])
+				}
+				i += len(tag) - 1
+			}
+		}
+	}
+	return b.String()
 }
 
 func readDollarTag(s string) (string, bool) {

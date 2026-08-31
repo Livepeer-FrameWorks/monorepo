@@ -107,7 +107,15 @@ func migrationItem(target SchemaDatabase, m Migration) map[string]any {
 		"checksum":      m.Checksum,
 		"transactional": m.Transactional,
 		"sql":           m.content,
+		"statements":    migrationStatements(m),
 	}
+}
+
+func migrationStatements(m Migration) []string {
+	if m.Transactional {
+		return []string{m.content}
+	}
+	return splitSQLStatements(m.content)
 }
 
 // belowFloorItemsFromList returns the migrations strictly BELOW the baseline floor

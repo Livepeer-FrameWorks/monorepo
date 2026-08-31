@@ -1,0 +1,11 @@
+DROP INDEX IF EXISTS foghorn.idx_foghorn_ingest_admission_effects_pending;
+ALTER INDEX foghorn.idx_foghorn_ingest_admission_effects_pending_v03
+    RENAME TO idx_foghorn_ingest_admission_effects_pending;
+
+DROP INDEX IF EXISTS foghorn.idx_foghorn_ingest_admission_effects_pending_fence;
+ALTER INDEX foghorn.idx_foghorn_ingest_admission_effects_pending_fence_v03
+    RENAME TO idx_foghorn_ingest_admission_effects_pending_fence;
+
+DROP INDEX IF EXISTS foghorn.idx_foghorn_ingest_admission_effects_terminal;
+ALTER INDEX foghorn.idx_foghorn_ingest_admission_effects_terminal_v03
+    RENAME TO idx_foghorn_ingest_admission_effects_terminal;

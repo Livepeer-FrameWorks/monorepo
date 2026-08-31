@@ -139,17 +139,19 @@
     login_user: "{{ yugabyte_superuser_role }}"
     login_password: "{{ yugabyte_superuser_password }}"
     db: "{{ item.db }}"
-    query:
-      - "SELECT pg_advisory_lock(hashtext('frameworks_migrations'), hashtext('{{ item.db }}'))"
-      - 'SET ROLE "{{ item.owner }}"'
-      - "{{ item.sql }}"
-      - "RESET ROLE"
-      - >-
-        INSERT INTO _migrations (version, phase, seq, filename, checksum, transactional)
-        VALUES ('{{ item.version }}', '{{ item.phase }}', {{ item.sequence }},
-                '{{ item.filename }}', '{{ item.checksum }}',
-                {{ item.transactional | default(true) | ternary('true', 'false') }})
-      - "SELECT pg_advisory_unlock(hashtext('frameworks_migrations'), hashtext('{{ item.db }}'))"
+    query: >-
+      {{
+        [
+          "SELECT pg_advisory_lock(hashtext('frameworks_migrations'), hashtext('" ~ item.db ~ "'))",
+          'SET ROLE "' ~ item.owner ~ '"'
+        ]
+        + item.statements
+        + [
+          "RESET ROLE",
+          migration_ledger_sql,
+          "SELECT pg_advisory_unlock(hashtext('frameworks_migrations'), hashtext('" ~ item.db ~ "'))"
+        ]
+      }}
     autocommit: "{{ not (item.transactional | default(true)) }}"
   loop: "{{ yugabyte_pending_migrate_items | default([]) }}"
   loop_control:
@@ -157,3 +159,9 @@
   no_log: true
   when:
     - yugabyte_pending_migrate_items | default([]) | length > 0
+  vars:
+    migration_ledger_sql: >-
+      INSERT INTO _migrations (version, phase, seq, filename, checksum, transactional)
+      VALUES ('{{ item.version }}', '{{ item.phase }}', {{ item.sequence }},
+              '{{ item.filename }}', '{{ item.checksum }}',
+              {{ item.transactional | default(true) | ternary('true', 'false') }})

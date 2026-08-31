@@ -52,7 +52,8 @@ var capabilityCatalog = map[string][]Capability{
 		{Name: "artifact reconciliation cursors", Engine: EnginePostgres, Probe: "SELECT id, last_hash FROM foghorn.active_object_key_backfill_cursor LIMIT 0"},
 	},
 	"navigator": {
-		{Name: "tenant edge apply state", Engine: EnginePostgres, Probe: "SELECT tenant_id, cluster_id, node_id, bundle_id, state, last_seed_version FROM navigator.tenant_edge_apply_state LIMIT 0"},
+		{Name: "tenant edge apply state", Engine: EnginePostgres, Probe: "SELECT tenant_id, cluster_id, node_id, bundle_id, state, last_seed_version, last_delivery_sequence FROM navigator.tenant_edge_apply_state LIMIT 0"},
+		{Name: "tenant alias retirement queue", Engine: EnginePostgres, Probe: "SELECT tenant_id, subdomain, requested_at, attempts, last_error FROM navigator.tenant_alias_retirements LIMIT 0"},
 	},
 	"periscope-ingest": {
 		{Name: "API delivery identity", Engine: EngineClickHouse, Probe: "SELECT tenant_id, source_event_id, ingested_at_ms FROM periscope.api_requests LIMIT 0"},

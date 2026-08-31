@@ -63,7 +63,10 @@ CREATE TABLE IF NOT EXISTS navigator.tls_bundles (
     expires_at TIMESTAMPTZ NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
-    issuer_ca TEXT NOT NULL DEFAULT 'letsencrypt'
+    issuer_ca TEXT NOT NULL DEFAULT 'letsencrypt',
+    -- Opaque content identity echoed through ConfigSeed apply ACKs. DNS
+    -- eligibility is fenced to the exact certificate revision an edge loaded.
+    version TEXT NOT NULL DEFAULT ''
 );
 
 -- Idempotent column add for environments that pre-date per-CA renewal pinning.
@@ -71,6 +74,16 @@ ALTER TABLE navigator.tls_bundles
     ADD COLUMN IF NOT EXISTS issuer_ca TEXT NOT NULL DEFAULT 'letsencrypt';
 
 CREATE INDEX IF NOT EXISTS idx_tls_bundles_expires_at ON navigator.tls_bundles(expires_at);
+
+-- Cross-replica ACME issuance lease. The lease is deliberately time-bounded:
+-- a crashed Navigator cannot strand renewal, and no database connection or
+-- transaction is held across the external ACME operation.
+CREATE TABLE IF NOT EXISTS navigator.certificate_issuance_leases (
+    lease_key TEXT PRIMARY KEY,
+    lease_owner TEXT NOT NULL,
+    lease_until TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
 CREATE TABLE IF NOT EXISTS navigator.internal_ca (
     role TEXT PRIMARY KEY,
@@ -106,6 +119,10 @@ CREATE TABLE IF NOT EXISTS navigator.tenant_aliases (
     subdomain TEXT NOT NULL,
     -- Lifecycle: cert_issuing | cert_issued | cert_failed | tearing_down
     status TEXT NOT NULL DEFAULT 'cert_issuing',
+    -- Monotonic intent generation. Rename, teardown, and reactivation advance
+    -- it so delayed ACME completions cannot cross an a→b→a ABA transition.
+    authority_version BIGINT NOT NULL DEFAULT 1
+        CONSTRAINT ck_navigator_tenant_alias_authority_version CHECK (authority_version > 0),
     cert_issued_at TIMESTAMPTZ,
     last_error TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -114,6 +131,24 @@ CREATE TABLE IF NOT EXISTS navigator.tenant_aliases (
 );
 
 CREATE INDEX IF NOT EXISTS idx_tenant_aliases_status ON navigator.tenant_aliases(status);
+
+-- Quartermaster-owned tenant/cluster alias authority. Edge ConfigSeed ACKs are
+-- observations beneath this projection and can never create authority. The
+-- per-tenant alias-outbox sequence orders grants and revocations across retries
+-- and replicas; revoked rows are durable tombstones until a newer grant lands.
+CREATE TABLE IF NOT EXISTS navigator.tenant_alias_cluster_authority (
+    tenant_id UUID NOT NULL
+        REFERENCES navigator.tenant_aliases(tenant_id) ON DELETE CASCADE,
+    cluster_id TEXT NOT NULL,
+    state TEXT NOT NULL
+        CONSTRAINT ck_navigator_tenant_alias_cluster_authority_state
+        CHECK (state IN ('active', 'revoked')),
+    authority_sequence BIGINT NOT NULL DEFAULT 0
+        CONSTRAINT ck_navigator_tenant_alias_cluster_authority_sequence
+        CHECK (authority_sequence >= 0),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (tenant_id, cluster_id)
+);
 
 -- Retired alias labels awaiting Bunny record cleanup. tenant_aliases is
 -- keyed by tenant_id and overwrites subdomain in place on a rename, so it
@@ -136,14 +171,23 @@ CREATE TABLE IF NOT EXISTS navigator.tenant_alias_retirements (
 -- Bunny smart record set in cdn.{root}. Populated from Foghorn's
 -- ConfigSeedApplyResult reports.
 CREATE TABLE IF NOT EXISTS navigator.tenant_edge_apply_state (
-    tenant_id UUID NOT NULL,
+    tenant_id UUID NOT NULL
+        CONSTRAINT fk_navigator_tenant_edge_apply_alias
+        REFERENCES navigator.tenant_aliases(tenant_id) ON DELETE CASCADE,
     cluster_id TEXT NOT NULL,
     node_id TEXT NOT NULL,
     -- e.g. "tenant:{tenant_id}"; matches the bundle_id Foghorn pushed.
     bundle_id TEXT NOT NULL,
+    -- Exact tls_bundles.version applied by this edge. A stable bundle_id alone
+    -- cannot distinguish the old and replacement certificate during a rename.
+    bundle_version TEXT NOT NULL DEFAULT '',
     -- Lifecycle: pending_distribute | pending_apply | applied | in_dns
-    state TEXT NOT NULL DEFAULT 'pending_distribute',
+    state TEXT NOT NULL DEFAULT 'pending_distribute'
+        CONSTRAINT ck_navigator_tenant_edge_apply_state_state
+        CHECK (state IN ('pending_distribute', 'pending_apply', 'applied', 'in_dns')),
     last_seed_version BIGINT,
+    last_delivery_sequence BIGINT NOT NULL DEFAULT 0
+        CONSTRAINT ck_navigator_tenant_edge_apply_delivery_sequence CHECK (last_delivery_sequence >= 0),
     last_ack_at TIMESTAMPTZ,
     in_dns_at TIMESTAMPTZ,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),

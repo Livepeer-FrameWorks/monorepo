@@ -1,0 +1,2 @@
+ALTER TABLE foghorn.artifact_node_deletion_watermark
+    VALIDATE CONSTRAINT chk_artifact_node_deletion_watermark_time;

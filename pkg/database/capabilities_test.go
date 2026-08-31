@@ -41,6 +41,16 @@ func TestCapabilitiesForReturnsCopyForEngine(t *testing.T) {
 	}
 }
 
+func TestNavigatorCapabilitiesCoverAliasWorkQueues(t *testing.T) {
+	capabilities := CapabilitiesFor("navigator", EnginePostgres)
+	if len(capabilities) != 2 {
+		t.Fatalf("Navigator capabilities = %d, want edge state and retirement queue", len(capabilities))
+	}
+	if capabilities[0].Name != "tenant edge apply state" || capabilities[1].Name != "tenant alias retirement queue" {
+		t.Fatalf("Navigator capability names = %q, %q", capabilities[0].Name, capabilities[1].Name)
+	}
+}
+
 func TestVerifyCapabilitiesIdentifiesFailedRequirement(t *testing.T) {
 	sentinel := errors.New("undefined column")
 	queries := 0

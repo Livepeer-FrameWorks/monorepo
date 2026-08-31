@@ -1,0 +1,19 @@
+ALTER TABLE foghorn.ingest_sessions
+    VALIDATE CONSTRAINT ck_foghorn_ingest_sessions_media_authority_version;
+ALTER TABLE foghorn.ingest_sessions
+    VALIDATE CONSTRAINT ck_foghorn_ingest_sessions_tenant_authority_version;
+ALTER TABLE foghorn.ingest_sessions
+    VALIDATE CONSTRAINT ck_foghorn_ingest_sessions_media_authority_identity;
+ALTER TABLE foghorn.ingest_sessions
+    VALIDATE CONSTRAINT ck_foghorn_ingest_sessions_capacity_max_streams;
+ALTER TABLE foghorn.ingest_admission_effects
+    VALIDATE CONSTRAINT ck_foghorn_ingest_admission_activation_fence;
+ALTER TABLE foghorn.ingest_admission_effects
+    VALIDATE CONSTRAINT ck_foghorn_ingest_admission_state;
+
+ALTER TABLE foghorn.node_admissions
+    VALIDATE CONSTRAINT ck_foghorn_node_admissions_public_key_present;
+ALTER TABLE foghorn.node_admissions
+    VALIDATE CONSTRAINT ck_foghorn_node_admissions_public_key_shape;
+ALTER TABLE foghorn.node_admissions
+    VALIDATE CONSTRAINT ck_foghorn_node_admissions_valid_until_present;

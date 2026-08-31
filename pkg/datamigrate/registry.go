@@ -35,6 +35,7 @@ type Migration struct {
 	IntroducedIn        string
 	RequiredBeforePhase string // postdeploy | contract
 	Description         string
+	DependsOn           []string
 
 	Run    func(ctx context.Context, db DB, opts RunOptions) (Progress, error)
 	Verify func(ctx context.Context, db DB) error
@@ -102,6 +103,11 @@ func Register(m Migration) {
 	if m.Run == nil {
 		panic("datamigrate.Register: nil Run for " + m.ID)
 	}
+	for _, dependency := range m.DependsOn {
+		if strings.TrimSpace(dependency) == "" || dependency == m.ID {
+			panic("datamigrate.Register: invalid dependency for " + m.ID)
+		}
+	}
 	registryMu.Lock()
 	defer registryMu.Unlock()
 	if _, exists := registry[m.ID]; exists {
@@ -114,19 +120,49 @@ func Register(m Migration) {
 func Registry() []Migration {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
-	out := make([]Migration, 0, len(registry))
+	return orderedRegistryLocked()
+}
+
+func orderedRegistryLocked() []Migration {
+	base := make([]Migration, 0, len(registry))
 	for _, m := range registry {
-		out = append(out, m)
+		base = append(base, m)
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Service != out[j].Service {
-			return out[i].Service < out[j].Service
+	sort.Slice(base, func(i, j int) bool {
+		if base[i].Service != base[j].Service {
+			return base[i].Service < base[j].Service
 		}
-		if out[i].IntroducedIn != out[j].IntroducedIn {
-			return out[i].IntroducedIn < out[j].IntroducedIn
+		if base[i].IntroducedIn != base[j].IntroducedIn {
+			return base[i].IntroducedIn < base[j].IntroducedIn
 		}
-		return out[i].ID < out[j].ID
+		return base[i].ID < base[j].ID
 	})
+	byID := make(map[string]Migration, len(base))
+	for _, migration := range base {
+		byID[migration.ID] = migration
+	}
+	state := make(map[string]uint8, len(base))
+	out := make([]Migration, 0, len(base))
+	var visit func(Migration)
+	visit = func(migration Migration) {
+		switch state[migration.ID] {
+		case 1:
+			panic("datamigrate.Registry: dependency cycle at " + migration.ID)
+		case 2:
+			return
+		}
+		state[migration.ID] = 1
+		for _, dependencyID := range migration.DependsOn {
+			if dependency, ok := byID[dependencyID]; ok {
+				visit(dependency)
+			}
+		}
+		state[migration.ID] = 2
+		out = append(out, migration)
+	}
+	for _, migration := range base {
+		visit(migration)
+	}
 	return out
 }
 
@@ -145,17 +181,11 @@ func ByService(service string) []Migration {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
 	var out []Migration
-	for _, m := range registry {
+	for _, m := range orderedRegistryLocked() {
 		if m.Service == service {
 			out = append(out, m)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].IntroducedIn != out[j].IntroducedIn {
-			return out[i].IntroducedIn < out[j].IntroducedIn
-		}
-		return out[i].ID < out[j].ID
-	})
 	return out
 }
 

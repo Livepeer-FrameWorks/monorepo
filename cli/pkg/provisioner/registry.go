@@ -128,7 +128,7 @@ func GetProvisioner(serviceName string, pool *ssh.Pool) (Provisioner, error) {
 			DefaultPort: port,
 		}
 		switch serviceName {
-		case "quartermaster":
+		case "quartermaster", "commodore", "foghorn":
 			cfg.DataMigrations = true
 		case "metabase":
 			cfg.ContainerPort = 3000

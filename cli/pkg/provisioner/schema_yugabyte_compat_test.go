@@ -9,6 +9,7 @@ import (
 	"go/token"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -18,12 +19,23 @@ import (
 	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 )
 
+func yugabyteServiceDatabases(t *testing.T) []string {
+	t.Helper()
+	baselines := pgBaselineFiles(t)
+	services := make([]string, 0, len(baselines))
+	for _, baseline := range baselines {
+		services = append(services, strings.TrimSuffix(filepath.Base(baseline), ".sql"))
+	}
+	return services
+}
+
 func ybStart(t *testing.T, name string) {
 	t.Helper()
 	rmContainer(t, name)
 	image := infrastructureContractImage(t, "yugabyte")
 	if _, err := docker(t, "", "run", "-d", "--name", name, image,
-		"bin/yugabyted", "start", "--background=false", "--advertise_address=127.0.0.1"); err != nil {
+		"bin/yugabyted", "start", "--background=false", "--advertise_address=127.0.0.1",
+		"--tserver_flags=yb_enable_read_committed_isolation=false"); err != nil {
 		t.Fatalf("start %s: %v", name, err)
 	}
 	t.Cleanup(func() { rmContainer(t, name) })
@@ -44,6 +56,41 @@ func ybApply(t *testing.T, name, db, sql string) {
 	t.Helper()
 	if out, err := docker(t, sql, "exec", "-i", name, "ysqlsh", "-h", "127.0.0.1", "-U", "yugabyte", "-d", db, "-v", "ON_ERROR_STOP=1", "-q"); err != nil {
 		t.Fatalf("apply SQL to %s/%s: %v\n%s", name, db, err, out)
+	}
+}
+
+func ybIntrospect(t *testing.T, name, db string) string {
+	t.Helper()
+	out, err := docker(t, "", "exec", name, "ysqlsh", "-h", "127.0.0.1", "-U", "yugabyte", "-d", db, "-tAc", pgIntrospectQuery)
+	if err != nil {
+		t.Fatalf("introspect Yugabyte schema %s: %v\n%s", db, err, out)
+	}
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	sort.Strings(lines)
+	return strings.Join(lines, "\n")
+}
+
+func ybCreateDatabase(t *testing.T, name, databaseName string) {
+	t.Helper()
+	if out, err := docker(t, "", "exec", name, "ysqlsh", "-h", "127.0.0.1", "-U", "yugabyte", "-d", "yugabyte", "-v", "ON_ERROR_STOP=1", "-c", "CREATE DATABASE "+databaseName); err != nil {
+		t.Fatalf("create Yugabyte database %s: %v\n%s", databaseName, err, out)
+	}
+}
+
+func ybRequireAllIndexesValid(t *testing.T, name, databaseName string) {
+	t.Helper()
+	output, err := docker(t, "", "exec", name, "ysqlsh", "-h", "127.0.0.1", "-U", "yugabyte", "-d", databaseName, "-tAc", `
+SELECT count(*)
+FROM pg_class c
+JOIN pg_namespace n ON n.oid = c.relnamespace
+JOIN pg_index i ON i.indexrelid = c.oid
+WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
+  AND (NOT i.indisvalid OR NOT i.indisready)`)
+	if err != nil {
+		t.Fatalf("inspect Yugabyte indexes in %s: %v\n%s", databaseName, err, output)
+	}
+	if strings.TrimSpace(output) != "0" {
+		t.Fatalf("Yugabyte schema %s has %s invalid or unready indexes", databaseName, strings.TrimSpace(output))
 	}
 }
 
@@ -131,8 +178,8 @@ func ybPreparePurserCatalog(t *testing.T, name string) {
 func ybPrepareNavigatorCatalog(t *testing.T, name string) {
 	t.Helper()
 	queries := generatedServiceQueries(t, "../../../api_dns/internal/database/navigatordb")
-	if len(queries) != 44 {
-		t.Fatalf("found %d generated Navigator queries, want 44", len(queries))
+	if len(queries) != 55 {
+		t.Fatalf("found %d generated Navigator queries, want 55", len(queries))
 	}
 	var statements strings.Builder
 	for index, query := range queries {
@@ -179,8 +226,8 @@ func ybPrepareMeteringCatalog(t *testing.T, name string) {
 func ybPrepareCommodoreCatalog(t *testing.T, name string) {
 	t.Helper()
 	queries := generatedServiceQueries(t, "../../../api_control/internal/database/commodoredb")
-	if len(queries) != 274 {
-		t.Fatalf("found %d generated Commodore queries, want 274", len(queries))
+	if len(queries) != 305 {
+		t.Fatalf("found %d generated Commodore queries, want 305", len(queries))
 	}
 	var statements strings.Builder
 	for index, query := range queries {
@@ -192,15 +239,9 @@ func ybPrepareCommodoreCatalog(t *testing.T, name string) {
 	ybApply(t, name, "commodore", statements.String())
 }
 
-func ybVerifyTaggedPurserMigrationPath(t *testing.T, name string) {
+func ybVerifyTaggedMigrationPaths(t *testing.T) {
 	t.Helper()
 	fromTag := schemaVerifyFromTag(t)
-	const databaseName = "purser_upgrade"
-	if out, err := docker(t, "", "exec", name, "ysqlsh", "-h", "127.0.0.1", "-U", "yugabyte", "-d", "yugabyte", "-v", "ON_ERROR_STOP=1", "-c", "CREATE DATABASE "+databaseName); err != nil {
-		t.Fatalf("create Yugabyte tagged-upgrade database: %v\n%s", err, out)
-	}
-	ybApply(t, name, databaseName, repositoryFileAtTag(t, fromTag, "pkg/database/sql/schema/purser.sql"))
-
 	known, err := knownMigrationDatabases()
 	if err != nil {
 		t.Fatalf("known migration databases: %v", err)
@@ -209,38 +250,55 @@ func ybVerifyTaggedPurserMigrationPath(t *testing.T, name string) {
 	if err != nil {
 		t.Fatalf("discover PostgreSQL migrations: %v", err)
 	}
-	applied := 0
-	for _, migration := range migrationsAfterVersion(allMigrations, fromTag) {
-		if migration.Database != "purser" {
-			continue
-		}
-		ybApply(t, name, databaseName, migration.content)
-		applied++
+	postTag := migrationsAfterVersion(allMigrations, fromTag)
+	serviceSet := make(map[string]struct{})
+	for _, service := range yugabyteServiceDatabases(t) {
+		serviceSet[service] = struct{}{}
 	}
-	if applied == 0 {
-		t.Fatalf("no Purser migrations found after %s", fromTag)
+	for _, migration := range postTag {
+		serviceSet[migration.Database] = struct{}{}
 	}
+	services := make([]string, 0, len(serviceSet))
+	for service := range serviceSet {
+		services = append(services, service)
+	}
+	sort.Strings(services)
+	for _, service := range services {
+		t.Run(service, func(t *testing.T) {
+			name := fmt.Sprintf("fw-sv-yb-upgrade-%s-%d", service, time.Now().UnixNano())
+			ybStart(t, name)
+			upgradeDatabase := service + "_upgrade"
+			currentDatabase := service + "_current"
+			ybCreateDatabase(t, name, upgradeDatabase)
+			ybCreateDatabase(t, name, currentDatabase)
+			ybApply(t, name, upgradeDatabase, repositoryFileAtTag(t, fromTag, "pkg/database/sql/schema/"+service+".sql"))
 
-	output, err := docker(t, "", "exec", name, "ysqlsh", "-h", "127.0.0.1", "-U", "yugabyte", "-d", databaseName, "-tAc", `
-		SELECT count(*)
-		FROM pg_indexes
-		WHERE schemaname = 'purser'
-		  AND indexname IN ('idx_purser_usage_records_allowance', 'idx_usage_adjustments_allowance')
-	`)
-	if err != nil {
-		t.Fatalf("inspect Yugabyte allowance indexes after tagged migration replay: %v\n%s", err, output)
+			applied := 0
+			for _, migration := range postTag {
+				if migration.Database == service {
+					ybApply(t, name, upgradeDatabase, migration.content)
+					applied++
+				}
+			}
+			currentBaseline, readErr := dbsql.Content.ReadFile("schema/" + service + ".sql")
+			if readErr != nil {
+				t.Fatalf("read current %s baseline: %v", service, readErr)
+			}
+			ybApply(t, name, currentDatabase, string(currentBaseline))
+			ybRequireAllIndexesValid(t, name, upgradeDatabase)
+			ybRequireAllIndexesValid(t, name, currentDatabase)
+			requirePGSchemasEqual(t, "yugabyte "+service+" tagged upgrade vs current baseline",
+				ybIntrospect(t, name, currentDatabase), ybIntrospect(t, name, upgradeDatabase))
+			t.Logf("yugabyte: upgraded %s %s baseline with %d migration(s)", service, fromTag, applied)
+		})
 	}
-	if strings.TrimSpace(output) != "2" {
-		t.Fatalf("allowance index count after tagged Yugabyte migration replay = %q, want 2", strings.TrimSpace(output))
-	}
-	t.Logf("yugabyte: upgraded Purser %s baseline with %d migration(s)", fromTag, applied)
 }
 
 func ybPrepareQuartermasterCatalog(t *testing.T, name string) {
 	t.Helper()
 	queries := generatedServiceQueries(t, "../../../api_tenants/internal/database/quartermasterdb")
-	if len(queries) != 159 {
-		t.Fatalf("found %d generated Quartermaster queries, want 159", len(queries))
+	if len(queries) != 163 {
+		t.Fatalf("found %d generated Quartermaster queries, want 163", len(queries))
 	}
 	var statements strings.Builder
 	for index, query := range queries {
@@ -252,14 +310,17 @@ func ybPrepareQuartermasterCatalog(t *testing.T, name string) {
 	ybApply(t, name, "quartermaster", statements.String())
 }
 
+func TestYugabyteTaggedMigrationPaths(t *testing.T) {
+	requireDocker(t)
+	ybVerifyTaggedMigrationPaths(t)
+}
+
 func TestYugabyteCurrentBaselinesAndCapabilities(t *testing.T) {
 	requireDocker(t)
-	const name = "fw-sv-yb"
+	name := fmt.Sprintf("fw-sv-yb-%d", time.Now().UnixNano())
 	ybStart(t, name)
-	ybVerifyTaggedPurserMigrationPath(t, name)
 
-	services := []string{"quartermaster", "purser", "foghorn", "commodore", "periscope", "navigator", "skipper"}
-	for _, service := range services {
+	for _, service := range yugabyteServiceDatabases(t) {
 		if out, err := docker(t, "", "exec", name, "ysqlsh", "-h", "127.0.0.1", "-U", "yugabyte", "-d", "yugabyte", "-v", "ON_ERROR_STOP=1", "-c", "CREATE DATABASE "+service); err != nil {
 			t.Fatalf("create Yugabyte database %s: %v\n%s", service, err, out)
 		}
@@ -269,6 +330,7 @@ func TestYugabyteCurrentBaselinesAndCapabilities(t *testing.T) {
 			t.Fatalf("read %s: %v", path, err)
 		}
 		ybApply(t, name, service, string(schemaSQL))
+		ybRequireAllIndexesValid(t, name, service)
 		runtimeRole := service + "_runtime"
 		if out, createErr := docker(t, "", "exec", name, "ysqlsh", "-h", "127.0.0.1", "-U", "yugabyte", "-d", "yugabyte", "-v", "ON_ERROR_STOP=1", "-c", "CREATE ROLE "+runtimeRole+" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION"); createErr != nil {
 			t.Fatalf("create Yugabyte runtime role %s: %v\n%s", runtimeRole, createErr, out)
