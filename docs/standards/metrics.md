@@ -4,16 +4,16 @@ This document defines the authoritative units and semantics for all metrics in t
 
 ## Naming Conventions
 
-| Suffix            | Meaning                                         | Example                              |
-| ----------------- | ----------------------------------------------- | ------------------------------------ |
-| `_bytes`          | Cumulative byte count                           | `uploaded_bytes`, `downloaded_bytes` |
-| `_bps`            | Bits per second (rate)                          | `bandwidthInBps`, `bandwidthOutBps`  |
-| `_bytes_per_sec`  | Bytes per second (rate)                         | `up_speed`, `down_speed`             |
-| `_gb`             | **GiB** (bytes / 1024³)                         | `egress_gb`, `display_storage_gb`    |
-| `_gb_seconds`     | GiB-seconds for time-weighted storage meters    | `storage_gb_seconds_cold`            |
-| `_mbps`           | **Mibps** (bps / 1024²) for billing rate fields | `peak_bandwidth_mbps`                |
-| `_ms`             | Milliseconds                                    | `stream_buffer_ms`, `latency_ms`     |
-| `_pct` or `_rate` | Ratio 0.0-1.0                                   | `packet_loss_rate`, `buffer_health`  |
+| Suffix            | Meaning                                                                   | Example                                  |
+| ----------------- | ------------------------------------------------------------------------- | ---------------------------------------- |
+| `_bytes`          | Byte quantity; metric type determines cumulative counter vs current gauge | `uploaded_bytes`, `control_outbox_bytes` |
+| `_bps`            | Bits per second (rate)                                                    | `bandwidthInBps`, `bandwidthOutBps`      |
+| `_bytes_per_sec`  | Bytes per second (rate)                                                   | `up_speed`, `down_speed`                 |
+| `_gb`             | **GiB** (bytes / 1024³)                                                   | `egress_gb`, `display_storage_gb`        |
+| `_gb_seconds`     | GiB-seconds for time-weighted storage meters                              | `storage_gb_seconds_cold`                |
+| `_mbps`           | **Mibps** (bps / 1024²) for billing rate fields                           | `peak_bandwidth_mbps`                    |
+| `_ms`             | Milliseconds                                                              | `stream_buffer_ms`, `latency_ms`         |
+| `_pct` or `_rate` | Ratio 0.0-1.0                                                             | `packet_loss_rate`, `buffer_health`      |
 
 ## Data Categories
 
@@ -226,7 +226,67 @@ MistServer's per-stream counters (`streams[x].bw`, `streams[x].tot`) reset when 
 ### Rate vs Cumulative Display
 
 - **Rate fields** (`_bps`, `_bytes_per_sec`): Display with `/s` suffix
-- **Cumulative fields** (`_bytes`, `_total`): Display as totals, never with `/s`
+- **Counters** (normally `_total`, including byte-total counters): Display as totals, never with `/s`
+- **Gauges** (including current-size metrics such as `control_outbox_bytes`): Display the current value
+
+### Helmsman durability metrics
+
+| Metric                                      | Type    | Meaning                                                                    |
+| ------------------------------------------- | ------- | -------------------------------------------------------------------------- |
+| `helmsman_control_outbox_pending`           | Gauge   | Durable media-control rows pending or awaiting same-epoch confirmation     |
+| `helmsman_control_outbox_bytes`             | Gauge   | Current bytes occupied by pending and unconfirmed control rows             |
+| `helmsman_control_outbox_quarantined`       | Gauge   | Rows quarantined after decode or repeated read failure                     |
+| `helmsman_control_outbox_quarantined_bytes` | Gauge   | Current bytes occupied by quarantined rows                                 |
+| `helmsman_control_delivery_outcomes_total`  | Counter | Delivery outcomes by durability class, including persisted/sent/confirmed  |
+| `helmsman_control_response_drops_total`     | Counter | Late or duplicate inbound replies discarded without blocking receive       |
+| `helmsman_control_outbox_scan_errors_total` | Counter | Read, decode, metric, and quarantine errors by phase                       |
+| `helmsman_trigger_wal_pending`              | Gauge   | Final/accounting Mist triggers awaiting a positive Foghorn acknowledgement |
+| `helmsman_trigger_wal_appends_total`        | Counter | Trigger-WAL append, duplicate, and error outcomes                          |
+| `helmsman_trigger_ack_outcomes_total`       | Counter | Foghorn trigger acknowledgement outcomes                                   |
+
+`helmsman_control_delivery_outcomes_total` uses these bounded pairs:
+`durable/{persisted,sent,confirmed,persist_failed}`, `bounded/evicted`, and
+`ephemeral/dropped`. Alert on `persist_failed`, `evicted`, and `dropped`.
+`helmsman_control_outbox_scan_errors_total.phase` is one of `drain_read`,
+`drain_decode`, `quarantine_rename`, `metrics_readdir`, `metrics_stat`,
+`quarantine_stat`, or `quarantine_remove`.
+
+Foghorn exposes `foghorn_artifact_deletion_outcomes_total{outcome}` for point
+deletion decisions (`applied`, `fenced`, `absent`, `parent_missing`, or
+`error`). `fenced` means a newer node-clock placement defeated the deletion;
+`absent` is an idempotent replay, while `parent_missing` identifies a signal
+for an artifact no longer in the local catalog. Navigator exposes
+`navigator_config_seed_apply_ack_outcomes_total{state,outcome}`; `state` is
+`applied` or `pending_apply`, and `outcome` is `accepted`, `stale`, `revoked`,
+`missing_parent`, `filtered`, or `error`. `stale` means the seed/delivery fence
+did not advance; `revoked` means the tenant/cluster authority carries a
+revocation tombstone, so a revocation racing an ACK is distinguishable from an
+ordinary replay; `missing_parent` means alias authority disappeared before the
+ACK acquired its parent lock. Navigator's DNS worker also exposes
+`navigator_dns_write_back_cas_misses_total` (in_dns write-backs skipped because
+an ACK advanced the row mid-publish — a sustained rate means something keeps
+moving rows under the publisher),
+`navigator_dns_legacy_continuity_rides_total` (publish-pass occurrences of
+versionless pre-upgrade rows retained as continuity members — sustained
+non-zero after a rollout means edges never re-ACKed a revision), and
+`navigator_dns_legacy_continuity_expired_total` (continuity members demoted by
+the 30-day age bound). `filtered` means local or connected authority
+excluded a tenant bundle; `error` counts only unresolved tenant outcomes
+deferred by an authority failure before the database write. A mixed batch can
+increment both without double-counting an outcome. Foghorn exposes
+`foghorn_config_seed_apply_ack_outbox_pending`,
+`foghorn_config_seed_apply_ack_outbox_oldest_pending_seconds`, and
+`foghorn_config_seed_apply_ack_outbox_quarantined`, and
+`foghorn_config_seed_apply_ack_outbox_outcomes_total{outcome}`. The bounded
+outcomes are `enqueued`, `deduplicated`, `stale`, `enqueue_error`, `delivered`,
+`retry`, `retry_error`, `settle_error`, `superseded`, `quarantined`,
+`quarantine_error`, and `scan_error`. `stale` is an older seed rejected by the
+per-node durable row; `deduplicated` is an equivalent current-seed projection.
+Quarantined
+rows are retained but are not pending; a future same- or newer-seed result can
+repair them. Alert on sustained pending age and on `enqueue_error`,
+`retry_error`, `settle_error`, `quarantine_error`, or `scan_error` increases;
+the quarantine gauge and `quarantined` outcome require inspection of retained rows.
 
 ## Prometheus Metric Wiring Policy
 

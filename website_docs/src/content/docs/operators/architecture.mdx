@@ -12,7 +12,7 @@ FrameWorks runs the same service topology in every environment — local, stagin
 
 - **Local development:** Docker Compose brings up the full stack on one host.
 - **Production and self-hosted:** The FrameWorks CLI (`frameworks cluster provision`) drives Ansible roles against the hosts named in the cluster manifest. Release manifests live in a GitOps repository; the CLI reads them to pin versions and reconcile state. See [CLI Reference](/operators/cli-reference) and [Ansible Provisioning](/operators/ansible-provisioning).
-- **Coordination:** Quartermaster is the runtime source of truth for tenants, clusters, and service discovery; every other service queries it rather than holding its own copy of routing state.
+- **Coordination:** Quartermaster remains the system of record for tenants, clusters, and service discovery. Management paths query it directly; Commodore compiles the media-serving subset with Purser and catalog policy into signed, versioned Foghorn-local authority so an established media cell does not require a live control-plane query for every request.
 
 ## Multi-Plane Architecture
 
@@ -114,16 +114,26 @@ The FrameWorks platform is composed of specialized services, each responsible fo
 
 ## Multi-Cluster Topology
 
-FrameWorks supports multiple clusters. A **cluster** is a Foghorn instance (or HA pair) plus its edge nodes — strictly the media plane. Clusters share the central Control / API Plane (Commodore, Quartermaster, Purser). Event collection is regional, and Periscope Metering follows the logical ClickHouse deployment: one central source in today's unsharded topology, then one local worker and ClickHouse source per wider region after sharding. Purser remains the central financial authority.
+FrameWorks supports multiple media clusters. A Foghorn control cell may serve
+more than one virtual media cluster, so the Foghorn process cluster is never
+used as a substitute for an authenticated edge node's cluster identity.
+Commodore, Quartermaster, and Purser remain the central systems of record, but
+they distribute signed, versioned authority into each Foghorn cell. Already
+authorized media continues from that durable local authority through its signed
+validity bound during a central outage. Event collection is regional, and
+Purser remains the central financial authority.
 
 Cross-cluster coordination is handled exclusively by the **FoghornFederation** gRPC protocol between Foghorn instances:
 
 - **Peer discovery**: Quartermaster maintains a registry of all clusters. Foghorn queries `ListPeers` to find peers and opens `PeerChannel` bidirectional streams for real-time edge telemetry exchange.
 - **Cross-cluster viewer routing**: When a viewer's cluster doesn't have a stream, Foghorn uses `QueryStream` to find it on a peer, then either redirects the viewer or arranges a DTSC origin-pull to serve locally.
-- **Cross-cluster artifacts**: clips, VODs, and DVR chapters on remote clusters are all accessed via `PrepareArtifact`. Origin returns a presigned S3 URL when the artifact is synced, or a short-lived peer-relay URL + opaque capability grant pointing at the specific origin node when the canonical file is on disk but S3 sync is still pending (the origin Foghorn authorizes each pull online; no signing key on the edge) — viewers don't wait on sync. DVR chapter listing flows through the GraphQL chapter API (Commodore → origin Foghorn for the chapter row metadata); each finalized chapter is a regular VOD-shaped artifact with its own Commodore-minted public `playbackId`, so chapter playback follows the same federation rules as any other VOD.
+- **Cross-cluster artifacts**: clips, VODs, and DVR chapters on remote clusters are all accessed via `PrepareArtifact`. Origin returns a presigned S3 URL when the artifact is synced, or a short-lived peer-relay URL + opaque capability grant pointing at the specific origin node when the canonical file is on disk but S3 sync is still pending (the origin Foghorn authorizes each pull online; no signing key on the edge) — viewers don't wait on sync. DVR chapter listing flows through the GraphQL chapter API (Commodore → origin Foghorn for the chapter row metadata); each finalized chapter is a regular VOD-shaped artifact with its own Commodore-minted, shareable `playbackId`, while the snapshotted parent-DVR policy still controls authorization. Chapter playback follows the same federation rules as any other VOD.
 - **Leader-only peering**: Each cluster elects one Foghorn instance (via Redis SET NX) to run PeerChannel connections, avoiding duplicate peer traffic.
 
-Quartermaster is the sole routing authority. Commodore resolves tenant-to-cluster routing dynamically via `GetClusterRouting` — no hardcoded Foghorn addresses between services.
+Quartermaster is the system of record for cluster identity, ownership, and
+grants. Commodore compiles those facts into signed cell-local media authority;
+management routing still resolves dynamically and no service hardcodes Foghorn
+addresses.
 
 **Deployment models:**
 
@@ -147,7 +157,7 @@ graph LR
     MS[MistServer] --> H[Helmsman]
     H <-->|gRPC| F[Foghorn]
     F --> D[Decklog]
-    F -->|gRPC| C[Commodore<br/>validation]
+    C[Commodore<br/>signed authority] -->|durable delivery| F
     D --> K[Kafka]
     K --> PI[Periscope-Ingest]
     K --> S[Signalman]
@@ -160,7 +170,10 @@ graph LR
 - **Helmsman → Foghorn**: MistServer triggers, heartbeats, clip/DVR progress updates
 - **Foghorn → Helmsman**: Clip pull requests, DVR start/stop commands, config seeds
 
-Foghorn routes events to central services (Commodore for validation, Decklog for analytics, Quartermaster for tenant resolution).
+Foghorn routes analytics to Decklog and performs media admission/routing from
+its signed local authority plus local runtime state. Connected control-plane
+lookups remain for new mutations, bootstrap, mixed-version shadowing, and
+explicit online-only operations such as new x402 settlement.
 
 ### Control / API Communications
 

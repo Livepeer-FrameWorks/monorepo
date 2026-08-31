@@ -15,6 +15,7 @@ import (
 	periscopeclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
@@ -4636,7 +4637,7 @@ func (r *Resolver) DoGetNetworkStatus(ctx context.Context) (*model.NetworkStatus
 		}
 
 		var currentStreams, currentViewers, egressMbps, ingressMbps, egressCapacityMbps int
-		if c.ClusterType == "edge" {
+		if models.ClusterTypeCanBePreferred(c.ClusterType) {
 			if ls, ok := liveStatsByCluster[c.ClusterId]; ok {
 				currentStreams = int(ls.ActiveStreams)
 				currentViewers = int(ls.CurrentViewers)

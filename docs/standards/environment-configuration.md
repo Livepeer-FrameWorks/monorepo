@@ -97,6 +97,40 @@ Recommendation:
   non-development manifests require shared secret inputs. Do not copy either
   key into tenant-hosted edge environments.
 
+### Media-authority signing keys
+
+- `MEDIA_AUTHORITY_SIGNING_KEY_ID` and
+  `MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64` are rendered only to Commodore. The private value
+  is one base64-wrapped PKCS#8 Ed25519 PEM; there is no service-token or HMAC fallback.
+- `MEDIA_AUTHORITY_TRUST_SET` is rendered only to Foghorn and is a JSON object mapping accepted key
+  IDs to base64 raw Ed25519 public keys. An overlap set may contain current and next public keys;
+  it never contains the private signer.
+- Development provisioning generates one matching signer/trust tuple. Non-development
+  provisioning requires a complete matching tuple and rejects partial or mismatched values.
+  Local Compose has a fixed development-only tuple so restarting the stack preserves signatures.
+  For a fresh deployment, operators generate the complete production shared-secret set with
+  `frameworks cluster secrets generate-shared --out <new-file>`. For a v0.3.0 upgrade of an
+  existing deployment, `frameworks cluster secrets generate-media-authority --out <new-file>`
+  emits only `MEDIA_AUTHORITY_SIGNING_KEY_ID`,
+  `MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64`, `MEDIA_AUTHORITY_TRUST_SET`,
+  `MEDIA_AUTHORITY_SEAL_ROOT_SECRET`, and `FOGHORN_STATE_ENCRYPTION_KEY`, so unrelated existing
+  credentials are not rotated. Import the chosen fragment into the SOPS-managed shared secret
+  source. Lifecycle commands validate but never silently create or persist production keys.
+- `MEDIA_AUTHORITY_SEAL_ROOT_SECRET` is a 32-byte hex deployment credential. The CLI uses HKDF to
+  derive a distinct X25519 recipient for every declared control cell. The root is never rendered
+  into a workload: Commodore receives only `MEDIA_AUTHORITY_SEAL_RECIPIENTS`, while each Foghorn
+  receives only its cell's `MEDIA_AUTHORITY_SEAL_KEY_ID` and
+  `MEDIA_AUTHORITY_SEAL_PRIVATE_KEY_PEM_B64`. This keeps pull URIs, native sources, webhook
+  secrets, and multistream destinations out of the generally readable signed envelope and prevents
+  one cell from decrypting another cell's section. The key ID is the truncated SHA-256 binding of
+  control-cell ID and raw X25519 public key; both producer and consumer recompute it at startup.
+  Treat these variables as renderer output rather than independently editable values.
+- Rotating the seal root changes every derived recipient. v0.3.0 supports one active recipient per
+  cell, so rotation is a coordinated maintenance operation: stop authority compilation, replace
+  the rendered keys, reissue every secret-bearing authority, and verify cell convergence before
+  relying on outage mode. Do not rotate while bundles encrypted only to the old key must remain
+  usable through an outage.
+
 ### Frontend/public URL mirrors
 
 `configgen` already derives many browser-facing variables:
@@ -128,6 +162,42 @@ Recommendation:
 - Do not add per-service Kafka wrapper variables back into base env, compose, or generated env.
 
 ## High-Value Cleanup Targets
+
+### Media-cell durable state
+
+- `HELMSMAN_STATE_DIR` is required durable local state, separate from
+  `HELMSMAN_STORAGE_LOCAL_PATH`. It owns ConfigSeed, trigger WAL, ingest fences,
+  node identity, processing overrides, and the media-control completion outbox.
+  Container production maps it to `/data/state`; native roles render the
+  platform-specific persistent path.
+- `FRAMEWORKS_TRIGGER_WAL_DIR` is an optional explicit override beneath a
+  durable filesystem. When omitted, Helmsman uses
+  `<HELMSMAN_STATE_DIR>/trigger-wal`; there is no cache or `/tmp` fallback.
+- `FRAMEWORKS_CONTROL_OUTBOX_DIR` optionally overrides the completion outbox;
+  production uses `<HELMSMAN_STATE_DIR>/control-outbox`. The control package has
+  a user-cache/temporary fallback for direct library and test use, but Helmsman
+  production startup rejects an empty `HELMSMAN_STATE_DIR` before that path can
+  be used.
+- In the shared deployment secret input, `FOGHORN_STATE_ENCRYPTION_KEY` is a
+  32-byte hex root. The CLI derives a distinct cell key with HKDF and renders
+  that result under the same variable name only to Foghorn. Replicas in one
+  control cell receive the same derived key; different cells do not. This lets
+  HA replicas read credential-bearing local obligations without giving one
+  cell the key for another cell. Admission payloads are v2 row-bound
+  ciphertext. Foghorn automatically migrates legacy plaintext/v1 obligations;
+  `foghorn_admission_payload_crypto_total{format,result}` is the completion
+  signal, not an operator-managed compatibility flag.
+- Production lifecycle commands require stable operator-supplied shared
+  secrets. Development provisioning generates missing shared secrets once and
+  stores only those generated values in
+  `.frameworks/dev-generated-secrets.env` beside the local manifest with mode
+  `0600`; later provision/apply/diff/upgrade/restart invocations reuse them.
+- `HELMSMAN_ROTATE_NODE_IDENTITY` is not a steady-state operator toggle. The
+  provisioning flow renders it only for an explicit token-backed
+  `--force-reenroll` recovery. Helmsman binds that request to a hash of the
+  fresh enrollment token, keeps the replacement key stable across retries,
+  and records completion after Foghorn accepts the registration. A persisted
+  flag with the same token cannot rotate the key again on restart.
 
 These are the best no-behavior-change cleanup candidates:
 

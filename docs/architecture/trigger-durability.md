@@ -14,6 +14,73 @@ The durability layer closes the gap with three changes:
 
 The scope is intentionally narrow: only the eight final/accounting triggers above are wrapped. Best-effort triggers (`STREAM_BUFFER`, `LIVE_TRACK_LIST`, `THUMBNAIL_UPDATED`, and `PROCESS_EXIT`) stay on the fire-and-forget path. Blocking policy triggers have their own synchronous outcome contract; see [Mist trigger contract](mist-trigger-contract.md).
 
+## Separate media-control completion outbox
+
+`<HELMSMAN_STATE_DIR>/control-outbox` is a second, distinct durability mechanism.
+It protects replay-safe terminal Helmsman-to-Foghorn transitions: terminal
+processing results (but not `cache_update` observations), `DVRStopped`,
+`SyncComplete`, `ThumbnailUploaded`, `ArtifactDeleted`, DVR segment upload/drop
+results, node-update apply results, and config-seed apply results. Processing/DVR
+progress, cache-update observations, and storage lifecycle telemetry are live
+samples and are dropped while disconnected; they must never evict terminal
+transitions from a bounded retry queue.
+
+Unlike the Mist-trigger WAL below, the media-control outbox generally has no
+application-level acknowledgement. A successful send moves a row to an in-flight
+state stamped with the current connection epoch; only a later heartbeat on that
+same epoch confirms removal, while reconnect replays every older unconfirmed row.
+Config-seed apply results add a second durable boundary: Foghorn does not accept
+the stream message until it has stored the latest per-node result in its local
+`config_seed_apply_ack_outbox`. Navigator delivery then retries from that table,
+so a Navigator or Quartermaster outage does not block the media control stream or
+lose an equal-version success/failure transition. The retained row's serialized
+per-node revision is sent as `delivery_sequence`; Navigator persists it to reject
+an older same-seed RPC that outlives its Foghorn lease. Equivalent applied/failed
+bundle sets and the top-level success verdict deduplicate even when a Helmsman
+restart supplies a fresh observation timestamp. Invalid persisted bytes are quarantined instead of retrying forever;
+a same- or newer-seed ACK can replace the quarantined row. If the local write fails,
+Foghorn terminates the control stream deliberately; Helmsman's durable control
+outbox replays the unconfirmed result after reconnect. A trigger-WAL row instead remains until Foghorn explicitly
+acknowledges the downstream Kafka commit. Do not describe the two mechanisms as
+providing the same end-to-end guarantee.
+
+Foghorn ordering values compared per node, stream, thumbnail asset, or artifact
+copy use counters at that same key. During expand, new counters occupy the `2^52`
+namespace and legacy global sequences stay low; moving legacy sequences into the
+counter range would allow old and new binaries to issue conflicting authority.
+
+`ArtifactDeleted` carries the original node deletion time in its payload. Durable
+replay preserves that value; Foghorn applies the deletion only when the current
+placement was not reported after it, so a reconnect cannot erase a copy the same
+node has since reacquired. Every successful local file deletion first removes the
+copy from Helmsman's inventory index. Foghorn also retains a per-copy deletion
+watermark: an older inventory report that commits asynchronously after the
+deletion cannot resurrect the placement, while a genuinely newer reacquisition
+can. Placement writers preserve the greatest node observation time, so a delayed
+sync completion cannot move that fence backward. Watermark rows are created only
+by deletion and live until their artifact parent is removed; ordinary placement
+refreshes do not create empty tombstones. Missing node timestamps from rolling-upgrade peers use the explicit
+control-envelope `SentAt` when available, which is another node-clock reading.
+Only a message lacking both timestamps uses zero, the permissive compatibility
+value; Foghorn's unrelated wall clock is never substituted. The database
+decision gates the corresponding local routing-state removal as well.
+
+The control outbox intentionally has no automatic TTL or drop-oldest bound for
+terminal transitions: exhausting local state is preferable to silently claiming
+completion. Monitor `helmsman_control_outbox_pending` and
+`helmsman_control_outbox_bytes`; investigate growth before the state volume fills.
+Interrupted `.pb.tmp` writes and uncertain `.sent.<epoch>` rows are recovered at
+local startup, without waiting for Foghorn, and checked again during reconnect. A
+file-read error retains the committed row and stops that ordered drain initially;
+after three consecutive read failures it is quarantined so one damaged filesystem
+entry cannot block every later terminal transition. A row whose bytes cannot be
+decoded as a control protobuf is counted separately and quarantined immediately.
+If the quarantine rename itself fails, the drain stops and retains the row rather
+than pretending that the head-of-line blocker was removed.
+Quarantined rows are exposed through `helmsman_control_outbox_quarantined` and
+`_quarantined_bytes`, and retained for 30 days for inspection before automatic
+removal.
+
 ## Source of truth
 
 - The WAL is **durable transport after local acceptance** — once `Append` succeeds, Helmsman retains the trigger until Foghorn acknowledges the committed Kafka publish or classifies it as permanently invalid.
@@ -36,11 +103,17 @@ The id is stamped onto `MistTrigger.RequestId`; Foghorn uses it to address the a
 
 The preferred natural key is Mist's retry-stable `X-Trigger-UUID` plus `X-Trigger-UnixMillis`, captured for both typed and parse-failure records. This collapses transport retries while keeping two distinct events with identical bodies separate. Legacy requests without those headers fall back to the body-derived key. The WAL is `append-only with idempotent natural key`, not a journal of delivery attempts.
 
+For push-target status ordering, an absent `X-Trigger-UnixMillis` is also kept
+as unknown. Known event times reject older observations and rank a terminal
+status above `pushing` at an equal timestamp; unknown-time observations use
+arrival order so a legacy `PUSH_OUT_START` can recover a target previously
+reported failed.
+
 ## WAL layout
 
 `api_sidecar/internal/storage/trigger_wal.go`.
 
-- Directory: `FRAMEWORKS_TRIGGER_WAL_DIR`; native edge provisioning sets it to `/var/lib/frameworks/helmsman/trigger-wal`. If unset, Helmsman falls back to `$HELMSMAN_STORAGE_LOCAL_PATH/trigger-wal`, then the OS user cache dir (`os.UserCacheDir()`) under `frameworks/trigger-wal`, and finally `/tmp/frameworks-trigger-wal`.
+- Directory: explicit `FRAMEWORKS_TRIGGER_WAL_DIR`, otherwise `<HELMSMAN_STATE_DIR>/trigger-wal`. Helmsman refuses startup without a durable state root; it never falls back to the reclaimable media volume, a user cache directory, or `/tmp`.
 - One file per durable trigger: `<received_at_ms>-<source_event_id>.pb` containing the marshaled `pb.MistTrigger`.
 - Writes are atomic: write to `.tmp`, `fsync`, `rename` into place, then fsync the WAL directory. Append returns only after the file and directory entry are durable.
 - `Ack(source_event_id)` deletes the file (glob-on-id so any `received_at_ms` prefix works).
@@ -95,7 +168,7 @@ Proto definition: `pkg/proto/ipc.proto` — `MistTriggerAck` + `TriggerAckErrorC
 - `request_id`: the stable `source_event_id` from the originating trigger. Required.
 - `success`: true iff the trigger's typed analytics event and raw trigger journal event were durably published to Kafka through Decklog.
 - `retryable`: only meaningful when `success=false`. True → Helmsman retries with the same `request_id`; downstream dedupes on the deterministic typed `event_id`. False → Helmsman dead-letters the entry for inspection; no automatic retry.
-- `error_code`: enum mapping to the failure class. Transient codes (`INTERNAL`, `DOWNSTREAM_UNAVAILABLE`, `KAFKA_PUBLISH`) are retryable; permanent codes (`PARSE`, `SCHEMA`, `TENANT_MISSING`) are not.
+- `error_code`: enum mapping to the failure class. `retryable` is authoritative and independent of the enum: for example, `INTERNAL` may describe either a retryable infrastructure failure or a deterministic, permanent lifecycle outcome. `DOWNSTREAM_UNAVAILABLE` and `KAFKA_PUBLISH` are transient; `PARSE`, `SCHEMA`, and `TENANT_MISSING` are permanent.
 - `error_message`: operator-facing detail, never customer-visible.
 
 Foghorn maps processor errors via `classifyTriggerError` (`api_balancing/internal/control/server.go`).
@@ -132,3 +205,23 @@ Foghorn maps processor errors via `classifyTriggerError` (`api_balancing/interna
 - `pkg/clients/decklog/client.go` — Decklog client; respects pre-set `EventId`
 - `api_firehose/internal/grpc/server.go` — Decklog server; ack-after-Kafka
 - `pkg/database/sql/clickhouse/periscope.sql` — `raw_mist_triggers` projection
+
+## Known limitations (open — not yet ruled)
+
+Behaviors reviewed and left in place pending an explicit decision; listed here
+so audits stop rediscovering them.
+
+- **The ConfigSeed ACK outbox retries without a give-up ceiling** (backoff
+  capped at 5 minutes). Dropping an undelivered ACK would lose the edge's
+  readiness state; alert on `foghorn_config_seed_apply_ack_outbox_oldest_
+pending_seconds` instead.
+- **Outbox rows are not purged on node disconnect and delivered rows are
+  retained.** The pending row may hold the only demotion, and the retained
+  row's `revision` is the per-node delivery fence. Row count is bounded by
+  node count; a node-retirement protocol is the place to remove them.
+- **An unconfigured Navigator accumulates pending ACK work** (bounded by node
+  count). Treating "not configured" as delivered would lose the obligation.
+- **ConfigSeed apply results are persisted synchronously on the control
+  stream's Recv loop** (up to 5 s head-of-line per node; a persistence failure
+  tears down the stream, which reconnects and replays). Durability must
+  precede the stream's implicit acknowledgment.

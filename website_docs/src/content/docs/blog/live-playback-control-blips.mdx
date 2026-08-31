@@ -13,7 +13,7 @@ tags:
 
 Live playback has an awkward dependency: the media path can be perfectly healthy while the control plane is briefly unavailable.
 
-A viewer asks MistServer for `playback_id`. Mist fires a blocking `PLAY_REWRITE` trigger to Helmsman. Helmsman asks Foghorn what that token should resolve to. Foghorn may need stream identity, tenant billing state, cluster policy, auth requirements, and federation data before it can answer.
+A viewer asks MistServer for `playback_id`. Mist fires a blocking `PLAY_REWRITE` trigger to Helmsman. Helmsman asks Foghorn what that token should resolve to. Foghorn reads the signed stream/artifact and tenant authority already persisted in its media cell, then combines it with local runtime placement.
 
 That is the right place to enforce policy. A transport failure, however, is not a policy answer.
 
@@ -21,16 +21,16 @@ The old Mist trigger interface could not distinguish a returned value, an explic
 
 The FrameWorks Mist fork now accepts an explicit trigger action. `PLAY_REWRITE` uses `deny` when Helmsman cannot answer, and an authoritative rejection is also returned as `deny`. No sentinel stream name is involved. Helmsman continuously repairs the full managed trigger definition, because a missing trigger skips the decision entirely rather than invoking its failure action.
 
-But "no answer" is still a bad viewer experience when the edge already had a valid answer a few seconds ago.
+But "no answer" is still a bad viewer experience when the media cell already has a valid, durable answer.
 
 FrameWorks handles that in two places.
 
-First, Foghorn's live stream registry can serve a stale-but-known entry when the hydrate path fails transiently. The registry is not using stale data as authority forever. It has a TTL and a bounded stale window. It also treats authoritative not-found differently from an outage. If Commodore says the stream does not exist, or admission rejected it, stale data does not resurrect it. If a dependency has a short blip, a known-live stream can keep resolving while the registry retries.
+First, Commodore distributes signed, versioned tenant and media-object authority to every eligible Foghorn cell. Foghorn verifies and commits it before acknowledging. A soft-expired decision keeps serving while Foghorn requests a refresh; hard expiry, a signed denial/tombstone, or a verification failure never becomes an allow. Because the projection is in the cell database, a Foghorn restart does not create a control-plane cold start.
 
 Second, Helmsman keeps a tiny recovery cache for successful play rewrites. It records the last Foghorn-approved response for a requested stream and will replay it only when forwarding the trigger to Foghorn fails. The cache is small in both time and size: 30 seconds, capped at 4096 entries. Reachable Foghorn requests always go back to Foghorn. The cache is not an edge authority and it is not a billing bypass strategy. It is a bridge for restarts, dropped control streams, and short network stalls.
 
-The two mechanisms cover different failures. Foghorn stale-serving protects the control-plane resolve path while preserving policy semantics; Helmsman recovery protects the media edge from a short Foghorn reachability failure. An authoritative rejection wins. If no valid local answer exists, Mist applies the trigger's explicit denial rather than interpreting an arbitrary fallback string.
+The two mechanisms cover different failures. Signed Foghorn authority protects the media cell from a Commodore, Quartermaster, or Purser outage; Helmsman recovery protects one node from a short Foghorn/control-stream interruption. An authoritative rejection wins. If no valid local answer exists, Mist applies the trigger's explicit denial rather than interpreting an arbitrary fallback string.
 
 The trade-off is explicit. During a Helmsman recovery hit, the viewer path reuses a response that was approved moments earlier, so it can briefly miss fresh billing/account changes. That is why the recovery window is 30 seconds, not minutes. The goal is to survive a blip, not move policy enforcement to the edge.
 
-This is the direction for the rest of the media plane too: operate from still-valid local authority during a control-plane outage, apply authoritative changes locally, and distinguish soft refresh failure from hard expiry. The current billing-change notification carries only a tenant and reason, not a signed/versioned replacement snapshot, so autonomous tenant authority remains a separate design and convergence change rather than something this trigger fix pretends to solve.
+The same authority now covers ingest ownership, pull/native sources, processing policy, multistream targets, and restart configuration. Owner-service changes create durable refresh outboxes; signed replacements and revocations converge independently to each cell. New management operations and new x402 settlement still require the control plane, but already-authorized media does not.

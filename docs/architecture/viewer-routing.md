@@ -36,6 +36,30 @@ Gateway forwards the backend/proxy IP and Foghorn scores against that location.
 Custom players that do not call Gateway from the viewer should use the
 tenant/global/cluster playback DNS name and `/play` URL directly.
 
+### Authority before placement
+
+All entry paths resolve playback identity, tenant billing/lifecycle, serving
+grants, and public/JWT/webhook policy from Foghorn's verified durable media
+authority before node scoring. HTTP, gRPC, `PLAY_REWRITE`, and `USER_NEW` share
+the same object+tenant semantics. Once a projection is marked ready, signed
+denial, tombstone, hard expiry, or missing required sealed policy material never
+falls back to a central allow. A transient local read failure or inconsistent
+row is not an authority decision; the request may use the connected evaluator
+when it is available and otherwise returns unavailable.
+
+Artifact placement receives the already-resolved signed hash, origin, tenant,
+and grant envelope. It does not call Commodore again for optional analytics or
+catalog metadata. Runtime node availability remains Foghorn state and may
+change independently of the signed business decision. See
+[Media-cluster authority and autonomy](media-authority.md).
+
+Connected responses keep those two projections separate. `cluster_peers` is
+health-filtered routing input; `authority_cluster_peers` contains the static
+tenant grants used only to shadow-compare signed authority. Promotion never
+compares cell-local health, addresses, or object-storage endpoints as though
+they were tenant policy. During a mixed-version rollout, absence of the
+authority projection prevents promotion and leaves the connected path active.
+
 ## Scoring Algorithm
 
 Foghorn ranks eligible nodes using a weighted scoring system. **Higher score = better node.**
@@ -285,6 +309,27 @@ A live ingest claim is the one thing that narrows it: while a publisher holds
 the stream, `active_ingest_cluster_id` pins reconnects to the cluster already
 ingesting, because `PUSH_REWRITE` would refuse anywhere else as
 `DUPLICATE_INGEST`.
+
+Ready signed ingest authority does not replace that steady-state placement
+lookup. The HTTP and gRPC ingest front doors first request the connected live
+claim; only when it is unavailable do they use the signed projection and pin to
+the bundle's deterministic outage-owner cluster. Thus a healthy claim in
+cluster B wins over an older origin/outage owner in cluster A, while a media
+cell can still route an encoder during a control-plane outage.
+
+Tenant stream capacity is enforced in the same PostgreSQL transaction that
+creates the durable ingest session. All admissions take a tenant advisory lock;
+capped admissions count active sessions and insert only when a slot remains.
+Session close or fenced reap releases the slot by ending that row. Valkey loss therefore
+cannot revoke a valid publisher or admit a second publisher from a torn lease.
+
+Viewer capacity remains an atomic member lease in shared Valkey. Its identity
+prefers Mist's stable connection ID; Foghorn durably maps
+`(node_id, session_id)` to that capacity ID so `USER_END` may arrive on another
+replica or after a restart. Helmsman's authoritative ten-second client
+inventory renews live viewer leases. Exact close releases promptly; missed
+closes converge by lease expiry, and runtime reconciliation never deletes
+members from a process-local partial view.
 
 Two things differ:
 

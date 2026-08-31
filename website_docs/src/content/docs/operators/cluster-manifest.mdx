@@ -214,6 +214,10 @@ clusters:
   prod-media:
     name: Production Media Plane
     type: edge
+    cell: media-eu
+    class: platform
+    control_cell: media-eu
+    eligible_serving_cells: [media-eu]
     default: true
     platform_official: true
     allow_private_pull_sources: false
@@ -230,6 +234,10 @@ clusters:
 
 - `name` (required) - Display name for the cluster
 - `type` (required) - Cluster type: `central`, `edge`, etc.
+- `cell` (optional) - Stable media-cell identity. Defaults to the cluster ID.
+- `class` (optional) - Placement class used when grouping compatible media cells.
+- `control_cell` (optional) - Foghorn cell that owns this cluster's control-plane projection. Defaults to `cell`.
+- `eligible_serving_cells` (optional) - Explicit Foghorn cells allowed to receive and serve this cluster's signed media authority. Defaults to `[control_cell]`. Every listed cell must contain an enabled Foghorn deployment; production rendering fails instead of silently omitting an unknown cell.
 - `region` (optional) - Region identifier
 - `roles` (optional) - Service roles that belong to this cluster. Used for automatic cluster resolution when services don't have an explicit `cluster` field.
 - `default` (optional) - Mark as the default cluster. New tenants auto-subscribe to this cluster on signup. At most one cluster may have `default: true`.

@@ -96,3 +96,19 @@ Foghorn through Quartermaster routing.
 - Intermediate CA rotation is tracked in `docs/rfcs/internal-ca-intermediate-rotation.md`.
 - SPIFFE-style workload identity is not implemented. It is a larger security
   model change, not required for the current token-over-TLS deployment.
+
+## Restart-safe edge configuration
+
+Foghorn persists the last complete Helmsman `ConfigSeed`, including tenant/site
+configuration and the complete TLS bundle set. A restart with Quartermaster or
+Navigator unavailable preserves only fields whose authority could not be
+resolved; an authoritative empty response removes stale state, and a partial
+TLS refresh cannot replace a complete last-good set. Helmsman persists and
+reapplies its last-good configuration locally, so an already provisioned media
+node does not require a control-plane read merely to restart. Certificate hard
+expiry remains the honest availability boundary; persistence never extends a
+certificate's validity.
+
+The Ed25519 media-authority trust set and X25519 cell seal keys are separate
+from both TLS systems above. Their production render/custody rules are described
+in [Media-cluster authority](media-authority.md).

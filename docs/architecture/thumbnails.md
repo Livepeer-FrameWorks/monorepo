@@ -205,12 +205,15 @@ Foghorn (verify → promote → publish, all guarded, token-fenced)
     (`v/{token}/…`, the projection SOURCE — never served directly), and every post-claim settlement CASes it so a
     stale holder (lease re-acquired by a peer) cannot publish
   → drops immediately if the attempt's lease already expired (recovery will fail it)
+  → resolves the attempt's immutable asset key without a row lock, acquires the
+    per-asset advisory lock, and only then row-locks and revalidates the attempt;
+    every cleanup path uses the same asset-before-row order
   → for EACH object: HEAD-verifies the staged upload (provider etag/size authoritative) and PROMOTES it to its
     per-token candidate key `v/{token}/…` (private to this completion, so a stale holder can only ever write its own
     candidate, never overwrite the winner's object); a missing/failed object leaves the attempt for retry/sweep
-  → guarded monotonic CAS on the tenant-scoped active pointer: advances only if this attempt is at least as new
-    as the pointer's current attempt — a stale attempt that lost the race is settled 'failed' and its promoted
-    objects enqueued for cleanup, never leaked
+  → guarded monotonic CAS on the tenant-scoped active pointer: replaying the same attempt is idempotent, while a
+    distinct attempt advances only with a strictly greater claim. A stale or equal-claim distinct attempt that lost
+    the race is settled 'failed' and its promoted objects are enqueued for cleanup, never leaked
   → on activation, IN THE SAME TX: marks the attempt 'published' and enqueues the now-superseded staging objects
     for cleanup — so a crash right after the CAS can't skip them. has_thumbnails is NOT flipped here: it stays
     false until the deterministic key is durably in place (see next step)
@@ -222,6 +225,11 @@ Foghorn (verify → promote → publish, all guarded, token-fenced)
   → best-effort (self-healing) after commit: Chandler cache invalidation for the asset, plus the origin-cluster
     backfill / Commodore projection
 ```
+
+Control-row deletion follows publication's row order as well. It deletes the
+tenant-scoped assignment first; foreign-key cascades remove its attempt objects
+and active pointer in the same transaction. Cleanup never locks the active
+pointer first and then waits for an assignment row held by publication.
 
 **Deterministic projection (eventual, not strict).** The copy to the shared served key CANNOT be made strictly serial:
 the destination write is unconditional and a copy the store has accepted can complete after the client context is

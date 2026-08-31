@@ -1327,17 +1327,17 @@ https://logbook.frameworks.network/blog/frameworks-0-3-0
 
 0.3.0 is the next FrameWorks tag.
 
-## Upgrade note: edge protocol v3 hard cut
+## Upgrade note: edge protocol v4 hard cut
 
-This release intentionally raises Foghorn's minimum Helmsman control protocol from
-v2 to v3 without a mixed-version window. The provider control plane upgrades before
-the desired edge release is synchronized. During that window, existing v2 edges are
+This release intentionally raises Foghorn's minimum Helmsman control protocol to
+v4 without a mixed-version window. The provider control plane upgrades before
+the desired edge release is synchronized. During that window, older v2/v3 edges are
 rejected, disappear from platform routing, and cannot receive their in-band updater
 command.
 
 Edge-only self-hosters must manually redeploy the 0.3.0 edge image after the control
-plane rollout. The same applies to a v2 edge that was offline during the rollout and
-returns later. It cannot reconnect until it has been updated to v3. This one-time edge
+plane rollout. The same applies to an older edge that was offline during the rollout and
+returns later. It cannot reconnect until it has been updated to v4. This one-time edge
 interruption is an explicit release decision; the generation fence remains fail closed.
 
 The theme is the operating layer: the pieces that make FrameWorks easier to run as a live-video platform. Platform admin, analytics, edge resilience, agent workflows, and the real-time foundation for chat and conferencing.
@@ -1428,7 +1428,7 @@ https://logbook.frameworks.network/blog/live-playback-control-blips
 
 Live playback has an awkward dependency: the media path can be perfectly healthy while the control plane is briefly unavailable.
 
-A viewer asks MistServer for `playback_id`. Mist fires a blocking `PLAY_REWRITE` trigger to Helmsman. Helmsman asks Foghorn what that token should resolve to. Foghorn may need stream identity, tenant billing state, cluster policy, auth requirements, and federation data before it can answer.
+A viewer asks MistServer for `playback_id`. Mist fires a blocking `PLAY_REWRITE` trigger to Helmsman. Helmsman asks Foghorn what that token should resolve to. Foghorn reads the signed stream/artifact and tenant authority already persisted in its media cell, then combines it with local runtime placement.
 
 That is the right place to enforce policy. A transport failure, however, is not a policy answer.
 
@@ -1436,19 +1436,19 @@ The old Mist trigger interface could not distinguish a returned value, an explic
 
 The FrameWorks Mist fork now accepts an explicit trigger action. `PLAY_REWRITE` uses `deny` when Helmsman cannot answer, and an authoritative rejection is also returned as `deny`. No sentinel stream name is involved. Helmsman continuously repairs the full managed trigger definition, because a missing trigger skips the decision entirely rather than invoking its failure action.
 
-But "no answer" is still a bad viewer experience when the edge already had a valid answer a few seconds ago.
+But "no answer" is still a bad viewer experience when the media cell already has a valid, durable answer.
 
 FrameWorks handles that in two places.
 
-First, Foghorn's live stream registry can serve a stale-but-known entry when the hydrate path fails transiently. The registry is not using stale data as authority forever. It has a TTL and a bounded stale window. It also treats authoritative not-found differently from an outage. If Commodore says the stream does not exist, or admission rejected it, stale data does not resurrect it. If a dependency has a short blip, a known-live stream can keep resolving while the registry retries.
+First, Commodore distributes signed, versioned tenant and media-object authority to every eligible Foghorn cell. Foghorn verifies and commits it before acknowledging. A soft-expired decision keeps serving while Foghorn requests a refresh; hard expiry, a signed denial/tombstone, or a verification failure never becomes an allow. Because the projection is in the cell database, a Foghorn restart does not create a control-plane cold start.
 
 Second, Helmsman keeps a tiny recovery cache for successful play rewrites. It records the last Foghorn-approved response for a requested stream and will replay it only when forwarding the trigger to Foghorn fails. The cache is small in both time and size: 30 seconds, capped at 4096 entries. Reachable Foghorn requests always go back to Foghorn. The cache is not an edge authority and it is not a billing bypass strategy. It is a bridge for restarts, dropped control streams, and short network stalls.
 
-The two mechanisms cover different failures. Foghorn stale-serving protects the control-plane resolve path while preserving policy semantics; Helmsman recovery protects the media edge from a short Foghorn reachability failure. An authoritative rejection wins. If no valid local answer exists, Mist applies the trigger's explicit denial rather than interpreting an arbitrary fallback string.
+The two mechanisms cover different failures. Signed Foghorn authority protects the media cell from a Commodore, Quartermaster, or Purser outage; Helmsman recovery protects one node from a short Foghorn/control-stream interruption. An authoritative rejection wins. If no valid local answer exists, Mist applies the trigger's explicit denial rather than interpreting an arbitrary fallback string.
 
 The trade-off is explicit. During a Helmsman recovery hit, the viewer path reuses a response that was approved moments earlier, so it can briefly miss fresh billing/account changes. That is why the recovery window is 30 seconds, not minutes. The goal is to survive a blip, not move policy enforcement to the edge.
 
-This is the direction for the rest of the media plane too: operate from still-valid local authority during a control-plane outage, apply authoritative changes locally, and distinguish soft refresh failure from hard expiry. The current billing-change notification carries only a tenant and reason, not a signed/versioned replacement snapshot, so autonomous tenant authority remains a separate design and convergence change rather than something this trigger fix pretends to solve.
+The same authority now covers ingest ownership, pull/native sources, processing policy, multistream targets, and restart configuration. Owner-service changes create durable refresh outboxes; signed replacements and revocations converge independently to each cell. New management operations and new x402 settlement still require the control plane, but already-authorized media does not.
 
 
 ---
@@ -2652,7 +2652,7 @@ query DVRChapter {
 }
 ```
 
-`playbackId` is the Commodore-minted public playback key for the chapter's VOD artifact. Resolve playback through `resolveViewerEndpoint` against that ID; the resulting endpoint is a standard VOD edge URL. There is no `dvr+chapter_id` token — chapter playback uses the same path as any other VOD.
+`playbackId` is the Commodore-minted, externally shareable playback key for the chapter's VOD artifact. It is a locator, not an authorization grant: public/JWT/webhook policy is snapshotted from the parent DVR and enforced normally. Resolve playback through `resolveViewerEndpoint` against that ID; the resulting endpoint is a standard VOD edge URL. There is no `dvr+chapter_id` token — chapter playback uses the same path as any other VOD.
 
 `wallClockStartUnixMs` and `wallClockEndUnixMs` are absolute Unix epoch milliseconds. Use them to render the chapter's calendar time and to map player timeline position (`videoCurrentTime * 1000 + wallClockStartUnixMs`) back to absolute time. Mist preserves DateUTC end-to-end through the remux, so the artifact itself also carries `unixoffset` natively — but the API metadata is the product contract.
 
@@ -7175,7 +7175,7 @@ Returns all available protocols, primary and fallback nodes:
 
 Use the DVR `playbackId` with `contentType="dvr"` for the active live DVR window (the rolling
 seek-back surface of an actively recording stream). For historical replay, list the recording's
-chapters via the `dvrChapters` query — each finalized chapter has its own public `playbackId`
+chapters via the `dvrChapters` query — each finalized chapter has its own shareable `playbackId`
 that addresses a regular VOD-shaped artifact. Hand that chapter `playbackId` to your player
 exactly the way you would for any VOD; a 90-day recording is navigated one chapter at a time
 instead of as one giant playlist.
@@ -7383,7 +7383,7 @@ Pull streams are on-demand:
 1. A viewer requests `/play/{playback_id}`.
 2. Foghorn routes the viewer to an eligible media edge, even if the stream is currently inactive.
 3. MistServer starts the `pull+` stream and asks Foghorn for the source.
-4. Foghorn ignores untrusted fallback query params and resolves the stored source URI from Commodore.
+4. Foghorn ignores untrusted fallback query params and opens the stored source URI from its verified cell-local signed authority. Connected Commodore lookup is a mixed-version fallback only before that authority is marked ready.
 5. The first edge pulls upstream media; later viewers prefer in-cluster DTSC fanout once available.
 6. When the last viewer leaves, MistServer drops the upstream after the standard grace period.
 
@@ -7650,7 +7650,7 @@ conferences, and always-on streams this is a feature: viewers can rewind a goal,
 
 ### Archive Chapters
 
-For historical replay, FrameWorks splits the DVR archive into **chapter VOD artifacts**. Each chapter is its own canonical `.mkv` produced by the chapter finalization pipeline at boundary close and addressed by a Commodore-minted public `playbackId` — pass it to `resolveViewerEndpoint` like any other VOD.
+For historical replay, FrameWorks splits the DVR archive into **chapter VOD artifacts**. Each chapter is its own canonical `.mkv` produced by the chapter finalization pipeline at boundary close and addressed by a Commodore-minted, shareable `playbackId` — pass it to `resolveViewerEndpoint` like any other VOD. The parent DVR's playback policy is snapshotted onto the chapter and still applies.
 
 For the full chapter-policy story (modes, defaults, resolution semantics) see [DVR Chapters](/builders/dvr-chapters). Storage cost behavior is covered in [Storage & retention](/builders/storage-and-retention).
 
@@ -7665,7 +7665,7 @@ All chapter time fields are UTC epoch milliseconds. The API does not store timez
 
 #### Chapter API
 
-Chapters become playable at boundary close once finalization produces the `.mkv`. Retrieve a chapter to get its public `playbackId`; pass that to `resolveViewerEndpoint` like any other VOD.
+Chapters become playable at boundary close once finalization produces the `.mkv`. Retrieve a chapter to get its `playbackId`; pass that to `resolveViewerEndpoint` like any other VOD and supply whatever authorization the parent DVR policy requires.
 
 ```graphql
 query {
@@ -12566,7 +12566,7 @@ FrameWorks runs the same service topology in every environment — local, stagin
 
 - **Local development:** Docker Compose brings up the full stack on one host.
 - **Production and self-hosted:** The FrameWorks CLI (`frameworks cluster provision`) drives Ansible roles against the hosts named in the cluster manifest. Release manifests live in a GitOps repository; the CLI reads them to pin versions and reconcile state. See [CLI Reference](/operators/cli-reference) and [Ansible Provisioning](/operators/ansible-provisioning).
-- **Coordination:** Quartermaster is the runtime source of truth for tenants, clusters, and service discovery; every other service queries it rather than holding its own copy of routing state.
+- **Coordination:** Quartermaster remains the system of record for tenants, clusters, and service discovery. Management paths query it directly; Commodore compiles the media-serving subset with Purser and catalog policy into signed, versioned Foghorn-local authority so an established media cell does not require a live control-plane query for every request.
 
 ## Multi-Plane Architecture
 
@@ -12668,16 +12668,26 @@ The FrameWorks platform is composed of specialized services, each responsible fo
 
 ## Multi-Cluster Topology
 
-FrameWorks supports multiple clusters. A **cluster** is a Foghorn instance (or HA pair) plus its edge nodes — strictly the media plane. Clusters share the central Control / API Plane (Commodore, Quartermaster, Purser). Event collection is regional, and Periscope Metering follows the logical ClickHouse deployment: one central source in today's unsharded topology, then one local worker and ClickHouse source per wider region after sharding. Purser remains the central financial authority.
+FrameWorks supports multiple media clusters. A Foghorn control cell may serve
+more than one virtual media cluster, so the Foghorn process cluster is never
+used as a substitute for an authenticated edge node's cluster identity.
+Commodore, Quartermaster, and Purser remain the central systems of record, but
+they distribute signed, versioned authority into each Foghorn cell. Already
+authorized media continues from that durable local authority through its signed
+validity bound during a central outage. Event collection is regional, and
+Purser remains the central financial authority.
 
 Cross-cluster coordination is handled exclusively by the **FoghornFederation** gRPC protocol between Foghorn instances:
 
 - **Peer discovery**: Quartermaster maintains a registry of all clusters. Foghorn queries `ListPeers` to find peers and opens `PeerChannel` bidirectional streams for real-time edge telemetry exchange.
 - **Cross-cluster viewer routing**: When a viewer's cluster doesn't have a stream, Foghorn uses `QueryStream` to find it on a peer, then either redirects the viewer or arranges a DTSC origin-pull to serve locally.
-- **Cross-cluster artifacts**: clips, VODs, and DVR chapters on remote clusters are all accessed via `PrepareArtifact`. Origin returns a presigned S3 URL when the artifact is synced, or a short-lived peer-relay URL + opaque capability grant pointing at the specific origin node when the canonical file is on disk but S3 sync is still pending (the origin Foghorn authorizes each pull online; no signing key on the edge) — viewers don't wait on sync. DVR chapter listing flows through the GraphQL chapter API (Commodore → origin Foghorn for the chapter row metadata); each finalized chapter is a regular VOD-shaped artifact with its own Commodore-minted public `playbackId`, so chapter playback follows the same federation rules as any other VOD.
+- **Cross-cluster artifacts**: clips, VODs, and DVR chapters on remote clusters are all accessed via `PrepareArtifact`. Origin returns a presigned S3 URL when the artifact is synced, or a short-lived peer-relay URL + opaque capability grant pointing at the specific origin node when the canonical file is on disk but S3 sync is still pending (the origin Foghorn authorizes each pull online; no signing key on the edge) — viewers don't wait on sync. DVR chapter listing flows through the GraphQL chapter API (Commodore → origin Foghorn for the chapter row metadata); each finalized chapter is a regular VOD-shaped artifact with its own Commodore-minted, shareable `playbackId`, while the snapshotted parent-DVR policy still controls authorization. Chapter playback follows the same federation rules as any other VOD.
 - **Leader-only peering**: Each cluster elects one Foghorn instance (via Redis SET NX) to run PeerChannel connections, avoiding duplicate peer traffic.
 
-Quartermaster is the sole routing authority. Commodore resolves tenant-to-cluster routing dynamically via `GetClusterRouting` — no hardcoded Foghorn addresses between services.
+Quartermaster is the system of record for cluster identity, ownership, and
+grants. Commodore compiles those facts into signed cell-local media authority;
+management routing still resolves dynamically and no service hardcodes Foghorn
+addresses.
 
 **Deployment models:**
 
@@ -12701,7 +12711,7 @@ graph LR
     MS[MistServer] --> H[Helmsman]
     H <-->|gRPC| F[Foghorn]
     F --> D[Decklog]
-    F -->|gRPC| C[Commodore<br/>validation]
+    C[Commodore<br/>signed authority] -->|durable delivery| F
     D --> K[Kafka]
     K --> PI[Periscope-Ingest]
     K --> S[Signalman]
@@ -12714,7 +12724,10 @@ graph LR
 - **Helmsman → Foghorn**: MistServer triggers, heartbeats, clip/DVR progress updates
 - **Foghorn → Helmsman**: Clip pull requests, DVR start/stop commands, config seeds
 
-Foghorn routes events to central services (Commodore for validation, Decklog for analytics, Quartermaster for tenant resolution).
+Foghorn routes analytics to Decklog and performs media admission/routing from
+its signed local authority plus local runtime state. Connected control-plane
+lookups remain for new mutations, bootstrap, mixed-version shadowing, and
+explicit online-only operations such as new x402 settlement.
 
 ### Control / API Communications
 
@@ -13476,28 +13489,30 @@ frameworks cluster init postgres --manifest production.yaml
 
 ### Additional Cluster Provisioning Commands
 
-| Command                                                 | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `frameworks cluster control-plane plan/reconcile`       | Validate or reconcile service-owned platform state by the `quartermaster`, `billing`, `accounts`, `assignments`, or `validation` domain without provisioning or deploying services.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| `frameworks cluster finalize`                           | Deprecated compatibility alias for control-plane reconciliation. Its existing `--only quartermaster`, `--only purser`, `--only commodore`, `--only assignments`, and `--only validation` behavior remains available.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `frameworks cluster seed`                               | Apply idempotent static seed data; add `--demo` for sample tenant/user/stream data and `--force` to skip the prompt.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `frameworks cluster migrate`                            | Apply pending PostgreSQL/YugabyteDB schema migrations from `pkg/database/sql/migrations/`; use `--phase expand --dry-run` for Ansible check/diff mode. Filtered to `--to-version vX.Y.Z` (defaults to cluster's resolved platform version).                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `frameworks cluster migrate validate`                   | Validate migration path layout, checksums-at-source assumptions, and conservative expand-phase SQL safety rules.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `frameworks cluster data-migrate list`                  | List required data migrations declared in the embedded release catalog up to `--to-version`. Empty catalog reports "no required data migrations declared" — never silent OK.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `frameworks cluster data-migrate status <service>.<id>` | Show persisted state for one data migration on its owning service host (queries the service binary's `data-migrations status --format json`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `frameworks cluster data-migrate run <service>.<id>`    | Run one data migration to completion or until error; honors `--batch-size`, `--dry-run`, `--scope-kind/--scope-value`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `frameworks cluster data-migrate verify <service>.<id>` | Run the migration's read-only verification on the service host.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `frameworks cluster data-migrate pause <service>.<id>`  | Mark a data migration paused.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `frameworks cluster data-migrate resume <service>.<id>` | Mark a paused data migration runnable again.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `frameworks cluster skipper knowledge reset`            | Clear Skipper knowledge embeddings and crawl cache so configured sources are fetched and embedded again.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `frameworks cluster skipper posts`                      | Query recent Skipper social post drafts from the skipper database over the manifest-selected SSH/database path.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `frameworks cluster metabase sync`                      | Sync repo-managed Metabase Periscope cards and attach missing cards to the dashboard without overwriting unmanaged manual edits.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `frameworks cluster sync-geoip`                         | Upload GeoLite2-City MMDB data to Foghorn/Quartermaster hosts; supports `--source maxmind` or `--source file`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `frameworks cluster set-channel <channel>`              | Set the manifest release channel. Valid channels are `stable` and `rc`; `cluster release plan/apply` uses this when no explicit version is given.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `frameworks cluster clickhouse migrate backfill`        | Bulk-copy periscope data into the new Replicated node via `remote()` over the WireGuard mesh, using the same idempotent staging + `REPLACE PARTITION`/`EXCHANGE` mechanics as `sync` (re-runnable after a partial failure); stops refreshable MVs for the duration. Requires `--from <source host key>` (and `--from-port` if source/dest run on swapped ports).                                                                                                                                                                                                                                                                                                                                     |
-| `frameworks cluster clickhouse migrate sync`            | Idempotent per-partition re-copy of the growing tail (staging table + atomic `REPLACE PARTITION`; additive-safe — re-runs replace, never double). Unpartitioned tables use an atomic `EXCHANGE`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `frameworks cluster clickhouse migrate verify`          | Parity fingerprint — FINAL row count plus a `cityHash64` content hash over the shared (source-and-destination) columns, each side normalized to the destination type (`AggregateFunction` columns finalized; a type-evolved source column cast to the destination type). Destination-only/new tables absent on the source are asserted EMPTY instead of hashed. Plus a catalog-coverage assertion that fails if the live schema has a table the migration catalog doesn't classify.                                                                                                                                                                                                                  |
-| `frameworks cluster clickhouse migrate cutover`         | Refuses unless `--ingest-stopped` is passed (periscope-ingest must be stopped first; Kafka buffers). Stops the refreshable MVs on BOTH the source (quiescing the old node so a timer refresh can't race the copy) and the destination, runs the final idempotent sync, RE-VERIFIES parity (aborting before any MV starts on a mismatch), then starts the destination MVs; any post-quiesce failure restores the source MVs so the old node stays usable. It then prints the operator repoint steps — either flip BOTH endpoints (downtime, ingest stays stopped) or write-first/drain/read (online) — plus the rollback path. The endpoint flips are operator gitops steps, not done by the command. |
+| Command                                                            | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `frameworks cluster control-plane plan/reconcile`                  | Validate or reconcile service-owned platform state by the `quartermaster`, `billing`, `accounts`, `assignments`, or `validation` domain without provisioning or deploying services.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `frameworks cluster finalize`                                      | Deprecated compatibility alias for control-plane reconciliation. Its existing `--only quartermaster`, `--only purser`, `--only commodore`, `--only assignments`, and `--only validation` behavior remains available.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `frameworks cluster seed`                                          | Apply idempotent static seed data; add `--demo` for sample tenant/user/stream data and `--force` to skip the prompt.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `frameworks cluster migrate`                                       | Apply pending PostgreSQL/YugabyteDB schema migrations from `pkg/database/sql/migrations/`; use `--phase expand --dry-run` for Ansible check/diff mode. Filtered to `--to-version vX.Y.Z` (defaults to cluster's resolved platform version).                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `frameworks cluster migrate validate`                              | Validate migration path layout, checksums-at-source assumptions, and conservative expand-phase SQL safety rules.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `frameworks cluster secrets generate-shared --out <file>`          | Generate the complete production shared-secret set for a fresh deployment into a new mode-0600 dotenv fragment. The output passes the same production validation used by lifecycle commands; import it into the operator-owned SOPS store. It never overwrites a file or mutates the manifest/secret store.                                                                                                                                                                                                                                                                                                                                                                                          |
+| `frameworks cluster secrets generate-media-authority --out <file>` | Generate only the five media-authority values needed when upgrading an existing deployment: the Ed25519 signer/trust tuple, seal root, and Foghorn state-encryption root. Merge the new mode-0600 fragment into the existing shared secret set. The command never overwrites a file and never rotates unrelated platform credentials.                                                                                                                                                                                                                                                                                                                                                                |
+| `frameworks cluster data-migrate list`                             | List required data migrations declared in the embedded release catalog up to `--to-version`. Empty catalog reports "no required data migrations declared" — never silent OK.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `frameworks cluster data-migrate status <service>.<id>`            | Show persisted state for one data migration on its owning service host (queries the service binary's `data-migrations status --format json`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `frameworks cluster data-migrate run <service>.<id>`               | Run one data migration to completion or until error; honors `--batch-size`, `--dry-run`, `--scope-kind/--scope-value`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `frameworks cluster data-migrate verify <service>.<id>`            | Run the migration's read-only verification on the service host.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `frameworks cluster data-migrate pause <service>.<id>`             | Mark a data migration paused.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `frameworks cluster data-migrate resume <service>.<id>`            | Mark a paused data migration runnable again.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `frameworks cluster skipper knowledge reset`                       | Clear Skipper knowledge embeddings and crawl cache so configured sources are fetched and embedded again.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `frameworks cluster skipper posts`                                 | Query recent Skipper social post drafts from the skipper database over the manifest-selected SSH/database path.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `frameworks cluster metabase sync`                                 | Sync repo-managed Metabase Periscope cards and attach missing cards to the dashboard without overwriting unmanaged manual edits.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `frameworks cluster sync-geoip`                                    | Upload GeoLite2-City MMDB data to Foghorn/Quartermaster hosts; supports `--source maxmind` or `--source file`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `frameworks cluster set-channel <channel>`                         | Set the manifest release channel. Valid channels are `stable` and `rc`; `cluster release plan/apply` uses this when no explicit version is given.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `frameworks cluster clickhouse migrate backfill`                   | Bulk-copy periscope data into the new Replicated node via `remote()` over the WireGuard mesh, using the same idempotent staging + `REPLACE PARTITION`/`EXCHANGE` mechanics as `sync` (re-runnable after a partial failure); stops refreshable MVs for the duration. Requires `--from <source host key>` (and `--from-port` if source/dest run on swapped ports).                                                                                                                                                                                                                                                                                                                                     |
+| `frameworks cluster clickhouse migrate sync`                       | Idempotent per-partition re-copy of the growing tail (staging table + atomic `REPLACE PARTITION`; additive-safe — re-runs replace, never double). Unpartitioned tables use an atomic `EXCHANGE`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `frameworks cluster clickhouse migrate verify`                     | Parity fingerprint — FINAL row count plus a `cityHash64` content hash over the shared (source-and-destination) columns, each side normalized to the destination type (`AggregateFunction` columns finalized; a type-evolved source column cast to the destination type). Destination-only/new tables absent on the source are asserted EMPTY instead of hashed. Plus a catalog-coverage assertion that fails if the live schema has a table the migration catalog doesn't classify.                                                                                                                                                                                                                  |
+| `frameworks cluster clickhouse migrate cutover`                    | Refuses unless `--ingest-stopped` is passed (periscope-ingest must be stopped first; Kafka buffers). Stops the refreshable MVs on BOTH the source (quiescing the old node so a timer refresh can't race the copy) and the destination, runs the final idempotent sync, RE-VERIFIES parity (aborting before any MV starts on a mismatch), then starts the destination MVs; any post-quiesce failure restores the source MVs so the old node stays usable. It then prints the operator repoint steps — either flip BOTH endpoints (downtime, ingest stays stopped) or write-first/drain/read (online) — plus the rollback path. The endpoint flips are operator gitops steps, not done by the command. |
 
 **Examples:**
 
@@ -16344,6 +16359,10 @@ clusters:
   prod-media:
     name: Production Media Plane
     type: edge
+    cell: media-eu
+    class: platform
+    control_cell: media-eu
+    eligible_serving_cells: [media-eu]
     default: true
     platform_official: true
     allow_private_pull_sources: false
@@ -16360,6 +16379,10 @@ clusters:
 
 - `name` (required) - Display name for the cluster
 - `type` (required) - Cluster type: `central`, `edge`, etc.
+- `cell` (optional) - Stable media-cell identity. Defaults to the cluster ID.
+- `class` (optional) - Placement class used when grouping compatible media cells.
+- `control_cell` (optional) - Foghorn cell that owns this cluster's control-plane projection. Defaults to `cell`.
+- `eligible_serving_cells` (optional) - Explicit Foghorn cells allowed to receive and serve this cluster's signed media authority. Defaults to `[control_cell]`. Every listed cell must contain an enabled Foghorn deployment; production rendering fails instead of silently omitting an unknown cell.
 - `region` (optional) - Region identifier
 - `roles` (optional) - Service roles that belong to this cluster. Used for automatic cluster resolution when services don't have an explicit `cluster` field.
 - `default` (optional) - Mark as the default cluster. New tenants auto-subscribe to this cluster on signup. At most one cluster may have `default: true`.
@@ -17265,6 +17288,91 @@ https://logbook.frameworks.network/operators/deployment
 
 Deploying FrameWorks gives you full ownership of your video infrastructure.
 
+## Media authority and control-plane outages
+
+Provisioning generates separate signing and per-cell sealing material for the
+media-authority pipeline. The production CLI renderer—not the development
+compose file—places the signing private key and recipient map only on Commodore,
+and the trust set plus one distinct decryption key on each Foghorn cell. The
+derivation root is not rendered into any workload. Do not copy these variables
+between cells or hand-edit Mist trigger configuration. The rendered key ID is
+bound to the control-cell ID and X25519 public key; a cell/key mismatch now
+fails during service startup rather than during the first sealed-source request.
+
+The derived workload variables are intentionally service-specific:
+
+- Commodore receives `MEDIA_AUTHORITY_SEAL_RECIPIENTS`.
+- Each Foghorn receives `MEDIA_AUTHORITY_CELL_ID`, `MEDIA_AUTHORITY_SEAL_KEY_ID`, and
+  `MEDIA_AUTHORITY_SEAL_PRIVATE_KEY_PEM_B64` for its own control cell.
+
+These four values are renderer output, not shared-secret inputs. Operators configure the seal root
+and cell topology; provisioning derives and places the per-cell material.
+
+For a fresh production deployment, create the complete shared input once with
+`frameworks cluster secrets generate-shared --out /secure/path/shared.env`, import that fragment
+through the GitOps repository's supported SOPS editing command, and securely remove the plaintext
+file. The complete input contains `DATABASE_RUNTIME_PASSWORD`, `SERVICE_TOKEN`,
+`CLUSTER_ACCESS_MATERIALIZATION_SECRET`, `FOGHORN_BALANCER_CAPABILITY_SECRET`,
+`FOGHORN_STATE_ENCRYPTION_KEY`, `MEDIA_AUTHORITY_SEAL_ROOT_SECRET`, `JWT_SECRET`,
+`PASSWORD_RESET_SECRET`, `FIELD_ENCRYPTION_KEY`, `USAGE_HASH_SECRET`,
+`TELEMETRY_TOKEN_SECRET`, `MEDIA_AUTHORITY_SIGNING_KEY_ID`,
+`MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64`, and `MEDIA_AUTHORITY_TRUST_SET`. The renderer derives
+the per-cell variables; operators do not add derived recipients or private cell keys to the shared
+input.
+
+After authority has converged, an existing media cell can continue playback,
+ingest under its signed outage owner, source resolution, outputs, and already
+dispatched work while Commodore, Quartermaster, or Purser is unavailable. This
+is bounded by signed hard expiry and certificate validity; never-seen,
+revoked/tombstoned, corrupt, or hard-expired authority remains unavailable.
+Foghorn and Helmsman retain last-good runtime configuration across restart.
+
+This is bounded autonomy, not cross-cell consensus. During an asymmetric
+partition, the deterministic outage owner cannot observe a still-live claim in
+an isolated peer cell, so dual ingest can exist until connectivity or leases
+converge. The cross-cell placement claim is leased; tenant capacity is checked
+from signed policy against durable per-cell ingest sessions. If the complete
+Mist-liveness signal path is isolated, another cell may admit a publisher after
+the placement claim expires. Events
+whose tenant identity cannot be resolved are never allowed to mutate a guessed
+tenant's state. See [Media-cluster authority and autonomy](https://github.com/Livepeer-FrameWorks/monorepo/blob/master/docs/architecture/media-authority.md#known-limitations)
+for the exact boundaries.
+
+During a v0.3 upgrade, an existing node fingerprint without an Ed25519 key is
+not yet usable as outage admission. Keep Quartermaster available for each
+existing media node's first post-upgrade reconnect: after a stable machine-ID or
+MAC match, Quartermaster atomically binds the node's proved key. It never seeds
+that binding from peer IP or replaces a different key. Once Foghorn has stored
+the resulting bounded admission, later reconnects can use the cell-local copy
+during a control-plane outage.
+
+Keep Helmsman's durable state separate from reclaimable media. Container edges
+mount `/data/state` independently from `/data/storage`; native installs render
+the equivalent state directory through the Helmsman role. If that state is
+lost, obtain a fresh enrollment token and run
+`frameworks edge provision --ssh <user>@<host> --force-reenroll --enrollment-token <fresh-token>`
+(or use
+`--local`). The signed request authorizes Quartermaster to rotate the
+pinned node key only when the existing tenant/node and stable machine or MAC
+fingerprint still match. Helmsman binds the one-shot rotation to that token,
+reuses the replacement key across retries, and records completion after
+Foghorn accepts it; a persisted provisioning flag cannot rotate it again on
+restart. Normal redeploys do not rotate it.
+
+The shared production secret named `FOGHORN_STATE_ENCRYPTION_KEY` is a
+deployment root, not a cross-cell runtime key. The CLI derives a different key
+for every Foghorn control cell while keeping replicas in one cell compatible.
+Development commands persist generated authority roots beside the local
+manifest in `.frameworks/dev-generated-secrets.env`; production never relies
+on process-local generated secrets.
+
+The shipped rules alert on authority delivery backlog/version lag, apply or verification rejection,
+hard-expired reads, and durable node-admission failures/saturation. During a planned outage canary,
+query `foghorn_media_request_central_rpcs_total{path,service,method}` before and after the test: a
+request covered by ready local authority must not increment it, except for ingest endpoint discovery's
+single bounded Commodore live-claim check. A static alert on every central RPC would be wrong during
+normal connected operation. New management mutations and new x402 settlement remain online-only.
+
 ## Quick Start
 
 **Production Deployment (Recommended):**
@@ -17856,13 +17964,13 @@ Cross-reference with disk-pressure metrics on the recording sidecar (`storage_no
 
 3. Map the state to action:
 
-   | State                                | What to do                                                                                                             |
-   | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
-   | `open` / `closed`                    | Recording still in flight or queue hasn't picked up yet. Wait one finalization tick (30s).                             |
-   | `finalizing`                         | Processing job dispatched. Check the recording origin's Helmsman logs for `chapter finalize` entries.                  |
-   | `finalized` / `frozen` / `reclaimed` | Chapter is playable. Use the chapter's `playback_id` (public Commodore-minted ID) as the player input.                 |
-   | `failed_source_missing`              | Source segments lost from both local AND the recovery freeze. Chapter is unrecoverable. Inspect `dvr_segments.status`. |
-   | `failed_permanent`                   | Repeated retries exhausted (`finalize_attempts` ≥ 5) or invalid ledger input. Inspect `last_failure_reason`.           |
+   | State                                | What to do                                                                                                                          |
+   | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+   | `open` / `closed`                    | Recording still in flight or queue hasn't picked up yet. Wait one finalization tick (30s).                                          |
+   | `finalizing`                         | Processing job dispatched. Check the recording origin's Helmsman logs for `chapter finalize` entries.                               |
+   | `finalized` / `frozen` / `reclaimed` | Chapter is playable. Use its Commodore-minted `playback_id` as the player input; the parent DVR's snapshotted policy still applies. |
+   | `failed_source_missing`              | Source segments lost from both local AND the recovery freeze. Chapter is unrecoverable. Inspect `dvr_segments.status`.              |
+   | `failed_permanent`                   | Repeated retries exhausted (`finalize_attempts` ≥ 5) or invalid ledger input. Inspect `last_failure_reason`.                        |
 
 ## Triage: chapter finalization stuck
 
@@ -17875,7 +17983,14 @@ SELECT chapter_id, state, finalize_attempts, last_failure_reason, created_at
  ORDER BY created_at;
 ```
 
-If `finalize_attempts` is climbing without state progress, the recording origin Helmsman is rejecting the job (admission, disk pressure, source unavailable). Check Helmsman logs for the chapter's job_id (`chapter-finalize-<chapter_id>`).
+While a finalization is active, Helmsman renews an attempt-fenced progress lease
+through recovery and readiness and reports five-second progress while pushing.
+A healthy long remux therefore remains owned even when its media position has
+not advanced yet. If `finalize_attempts` is climbing,
+check Foghorn for rejected progress/failure fences and Helmsman for expired
+dispatches, superseded local attempts, admission failures, disk pressure, or an
+unavailable source. Correlate both services with the job ID
+`chapter-finalize-v2-<attempt>-<chapter_id>`.
 
 ## Triage: storage node out of space during DVR
 
@@ -18741,9 +18856,11 @@ as canonical `.mkv` VOD artifacts:
   `origin_type='dvr_chapter'`, and `origin_id=chapter_id`, so
   stream-scoped VOD artifact queries can include finalized chapters
   without joining through Foghorn.
-- Policy enforcement walks chapter artifact → parent DVR
-  (`origin_type='dvr_chapter'` + `origin_id=chapter_id`) so a protected
-  DVR's chapters inherit the parent's auth policy transparently.
+- At chapter registration, Commodore joins the tenant-owned parent DVR and
+  snapshots its `requires_auth`, public/JWT/webhook policy, and encrypted
+  webhook secret onto the derived VOD row. The shareable `playbackId` is only a
+  locator; a protected DVR's chapter remains protected without a live parent
+  lookup.
 - The recovery-bridge S3 segment objects are deleted by the chapter
   reclaim sweep once the chapter artifact + `.dtsh` are durably on S3
   (`state='frozen'`).
@@ -20155,6 +20272,10 @@ than dialed directly. A failed attempted probe exits nonzero.
 
 ### Control plane first, then edges
 
+An in-place 0.3.0 upgrade is supported only from the corrected, fully migrated **v0.2.96**
+stepping-stone. Upgrade older installations to v0.2.96, complete and verify its migrations, and
+only then start the v0.3.0 expand phase. The release planner refuses an unproven source version.
+
 Deploy and migrate the **control plane first**; a new Foghorn comes up without requiring
 any edge to be ready. Foghorn enforces a **minimum control-protocol version** at sidecar
 registration: a sidecar declaring a version below the deployed minimum is **rejected**
@@ -20164,13 +20285,141 @@ that sidecar cannot receive an in-band updater command. When a release advances 
 minimum with no mixed-version window, operators must redeploy affected edges out of band;
 the specific minimum and interruption window belong in that release's notes.
 
-<Aside type="caution" title="0.3.0 makes a one-time protocol-v3 hard cut">
-  Foghorn 0.3.0 rejects protocol-v2 Helmsmans. The provider control plane is upgraded before the
-  edge release target is synchronized, so existing v2 edges temporarily disappear from platform
-  routing and cannot auto-update over their rejected control stream. After the control-plane
-  rollout, manually redeploy every self-hosted edge to the 0.3.0 edge image. An offline v2 edge
-  returning later must also be manually updated before it can reconnect.
+<Aside type="caution" title="0.3.0 makes a one-time protocol-v4 hard cut">
+  Foghorn 0.3.0 requires protocol v4 and rejects older Helmsmans. The provider control plane is
+  upgraded before the edge release target is synchronized, so existing v2/v3 edges temporarily
+  disappear from platform routing and cannot auto-update over their rejected control stream. After
+  the control-plane rollout, manually redeploy every self-hosted edge to the 0.3.0 edge image. An
+  offline v2 or v3 edge returning later must also be manually updated before it can reconnect. The
+  interruption lasts from the Foghorn rollout until each edge is redeployed; there is no
+  mixed-version grace period. A single-cell installation therefore has no platform-routed media
+  service during that interval. Schedule and rehearse the edge redeploy as part of the same
+  maintenance window. Attempt-less chapter-finalization results from the retired protocol are
+  deliberately rejected by Foghorn's attempt fence. After the edge is updated, a v2 replacement job
+  cancels and waits out any legacy local owner before reusing the processing stream, so an
+  interrupted chapter may remux again but two attempts never write it concurrently. In the inverse
+  delivery order, an upgraded Helmsman permits an attempt-less legacy dispatch only while that
+  processing stream is idle; without an attempt identity it cannot supersede an active owner.
+  Attempt-zero progress and results are rejected by the upgraded Foghorn fence, so this direction is
+  safe during the cut but is not a completion guarantee. The upgraded control plane reclaims and
+  redispatches the work with an attempt-fenced v2 identity after the edge upgrade.
 </Aside>
+
+Before rendering 0.3.0 services, make the media-authority roots stable in the
+production shared secret source: the Ed25519 signing tuple,
+`MEDIA_AUTHORITY_SEAL_ROOT_SECRET`, and the 32-byte hex
+`FOGHORN_STATE_ENCRYPTION_KEY` deployment root. The CLI derives distinct seal
+and state-encryption material for every declared Foghorn control cell and
+refuses a recipient cell that has no enabled Foghorn deployment. Do not copy a
+rendered cell key back into the shared secret file. v0.3.0 accepts one seal
+recipient per cell, so changing the seal root is a coordinated maintenance and
+full authority-recompilation operation, not an overlap rotation.
+
+Generate the five new production values with the CLI; it writes a new mode-0600 file and refuses
+to overwrite anything:
+
+```bash
+frameworks cluster secrets generate-media-authority --out /secure/path/media-authority.env
+```
+
+The fragment contains exactly `MEDIA_AUTHORITY_SIGNING_KEY_ID`,
+`MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64`, `MEDIA_AUTHORITY_TRUST_SET`,
+`MEDIA_AUTHORITY_SEAL_ROOT_SECRET`, and `FOGHORN_STATE_ENCRYPTION_KEY`. This is the upgrade command;
+do not use `generate-shared` on an existing deployment because that fresh-bootstrap command also
+generates unrelated shared credentials.
+
+Import every value from that fragment into the SOPS-managed shared secret file using the GitOps
+repository's supported secret-editing command, verify `frameworks cluster doctor --deep`, then
+securely remove the fragment. Do not paste the private key or roots into the manifest or command
+arguments.
+
+Before the Quartermaster expand phase, detect cloned or re-provisioned node identities:
+
+```sql
+SELECT 'machine' AS kind, fingerprint_machine_sha256 AS fingerprint,
+       array_agg(node_id ORDER BY last_seen DESC) AS nodes
+FROM quartermaster.node_fingerprints
+WHERE fingerprint_machine_sha256 IS NOT NULL AND btrim(fingerprint_machine_sha256) <> ''
+GROUP BY fingerprint_machine_sha256 HAVING count(*) > 1
+UNION ALL
+SELECT 'mac', fingerprint_macs_sha256, array_agg(node_id ORDER BY last_seen DESC)
+FROM quartermaster.node_fingerprints
+WHERE fingerprint_macs_sha256 IS NOT NULL AND btrim(fingerprint_macs_sha256) <> ''
+GROUP BY fingerprint_macs_sha256 HAVING count(*) > 1;
+```
+
+For each result, keep only the binding for the physical node that still owns that identity. Fix a
+cloned VM's machine ID/MACs, remove the stale `node_fingerprints` binding for that node, and enroll
+it again. Do not pick a winner solely by timestamp. The v0.3.0 unique indexes are built concurrently,
+but they still fail closed while duplicate proofs remain. A failed concurrent build leaves an invalid
+index with its name reserved. After resolving the duplicate data, remove only the invalid indexes
+before retrying the expand phase:
+
+```sql
+DROP INDEX CONCURRENTLY IF EXISTS quartermaster.uq_qm_fingerprints_machine;
+DROP INDEX CONCURRENTLY IF EXISTS quartermaster.uq_qm_fingerprints_macs;
+```
+
+Execute those commands separately with autocommit enabled. The postdeploy phase verifies that both
+indexes exist and are valid, so a partial build cannot be recorded as a healthy rollout.
+
+Foghorn admission-output encryption is rolling-safe without a manual pause or
+configuration edit. A 0.3.0 writer stores credential-bearing obligations in the
+`pending_v2`/`applied_v2` state family, which pre-0.3 workers do not claim. A
+0.3.0 worker continues draining legacy rows and migrates plaintext/v1 payloads
+to row-bound v2 ciphertext under the row lock. During and after the rollout,
+watch `foghorn_admission_payload_crypto_total{format,result}`; plaintext/v1 opens
+should fall to zero while `result="migrated"` accounts for the backlog.
+
+The shipped Prometheus rules alert on `commodore_media_authority_oldest_pending_seconds`,
+`commodore_media_authority_max_version_lag`, Foghorn authority apply/verification rejection,
+hard-expired local reads, durable node-admission failures/saturation, and admission-payload decrypt
+errors, plus Helmsman's trigger-WAL depth and retryable `STREAM_END` acknowledgements. A
+tenantless acknowledged `STREAM_END` is deliberately retried without a fixed attempt cap because
+discarding it could strand live authority; until identity becomes resolvable its WAL entry remains
+pending. Treat a growing `helmsman_trigger_wal_pending` value as an operational incident, not an
+eventual dead-letter condition.
+
+Before the 0.3.0 `postdeploy` phase, run and verify the release-catalogued data
+migrations with `frameworks cluster data-migrate`. In addition to the tenant
+cluster-access and DVR policy jobs, this release requires
+`commodore_chapter_playback_authority_v0_3_0`. Each Foghorn cell separately runs
+the bounded `foghorn_federated_artifact_lifecycle_v0_3_0` and
+`foghorn_federated_pointer_purge_eligibility_v0_3_0` repairs against its own
+physical database in the background, so clustered aliases are not collapsed
+onto one logical service host. The latter restores the age of pointers that
+predate the dedicated purge clock. The expand phase does not hide either
+rewrite inside a DDL transaction.
+
+That Foghorn-local job is intentionally absent from the global release catalog. Check every cell's
+own database before contract by requiring a completed row:
+
+```sql
+SELECT id, status, completed_at, last_error
+FROM _data_migrations
+WHERE id IN (
+  'foghorn_federated_artifact_lifecycle_v0_3_0',
+  'foghorn_federated_pointer_purge_eligibility_v0_3_0'
+);
+```
+
+Both rows must be complete. Missing, running, or failed is not complete. Query each physical Foghorn database; checking a
+service alias or one HA replica is not evidence for the other cells.
+
+The required order is:
+
+```bash
+frameworks cluster data-migrate run quartermaster.quartermaster_cluster_access_provenance_v0_3_0
+frameworks cluster data-migrate verify quartermaster.quartermaster_cluster_access_provenance_v0_3_0
+frameworks cluster data-migrate run commodore.commodore_dvr_playback_authority_v0_3_0
+frameworks cluster data-migrate verify commodore.commodore_dvr_playback_authority_v0_3_0
+frameworks cluster data-migrate run commodore.commodore_chapter_playback_authority_v0_3_0
+frameworks cluster data-migrate verify commodore.commodore_chapter_playback_authority_v0_3_0
+```
+
+The chapter migration depends on the DVR migration and intentionally refuses to run first. During
+the DVR backfill, rows not yet snapshotted use their parent stream only as a rollout-compatibility
+read; completed rows and all newly-created DVRs use their immutable local snapshot.
 
 Because a connected sidecar is always on the current protocol, its artifact inventory
 is always a **versioned whole-node snapshot** (a monotonic per-connection sequence),
@@ -20193,6 +20442,11 @@ Therefore:
   its first versioned snapshot.
 - A supported N−1 / third-party edge protocol range applies only where a release
   declares one; absent that, treat the deployed minimum as a hard floor.
+- Re-render the edge deployment before recreating its container. The 0.3.0 compose render adds the
+  persistent `/data/state` volume used by `HELMSMAN_STATE_DIR`; pulling the new image against an old
+  compose file leaves that state anonymous. Recreating it then loses node identity, the Mist-trigger
+  WAL, ingest-generation fences, processing overrides, and any undelivered media-control completions.
+  Treat the state volume as durable media-plane authority, not as a disposable cache.
 
 ### Thumbnails: deterministic serving, install-time ordering
 
@@ -20377,6 +20631,13 @@ Today, `frameworks cluster migrate --phase expand` applies pending embedded
 PostgreSQL/YugabyteDB migrations from the database/version/phase directory
 layout. The command records phase and checksum in `_migrations`, rejects edited
 applied migrations, and does not run service-specific data migrations.
+Non-transactional `.notx.sql` files may contain multiple validated concurrent
+index statements; PostgreSQL/YugabyteDB receives each statement as a separate
+autocommit query while the file remains one immutable migration ledger entry.
+Each such index has a same-release postdeploy check for the exact index name in
+the same SQL statement through `pg_index.indisready` and `indisvalid`; upgrades
+stop instead of accepting an invalid relation left behind by an interrupted
+concurrent build.
 
 `frameworks cluster doctor` also checks the migration ledger: embedded
 PostgreSQL/YugabyteDB migrations are compared with `_migrations` in each

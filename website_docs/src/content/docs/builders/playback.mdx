@@ -183,7 +183,7 @@ Returns all available protocols, primary and fallback nodes:
 
 Use the DVR `playbackId` with `contentType="dvr"` for the active live DVR window (the rolling
 seek-back surface of an actively recording stream). For historical replay, list the recording's
-chapters via the `dvrChapters` query — each finalized chapter has its own public `playbackId`
+chapters via the `dvrChapters` query — each finalized chapter has its own shareable `playbackId`
 that addresses a regular VOD-shaped artifact. Hand that chapter `playbackId` to your player
 exactly the way you would for any VOD; a 90-day recording is navigated one chapter at a time
 instead of as one giant playlist.

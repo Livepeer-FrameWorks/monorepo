@@ -16,13 +16,13 @@ hostable.
 
 Cluster class, ownership, visibility, and access provenance are separate facts:
 
-| Capacity            | New-work authority                                                                                                                                            |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Platform-official   | Active cluster plus the tenant's active, subscribed, unexpired tier grant. Platform-shared playback is a separate serve-only policy.                          |
-| Tenant-hosted owner | Cluster ownership plus an active, unexpired owner grant. No marketplace subscription or enterprise tier-class gate is required for the owner's own footprint. |
-| Invited private     | Accepted, active, unexpired private-invite grant. Ownership is not inherited.                                                                                 |
-| Marketplace         | Eligible billing tier plus a paid/approved, active, unexpired marketplace-subscription grant. Neither proof substitutes for the other.                        |
-| Operator override   | Explicit platform-operator grant, with actor and before/after state recorded transactionally.                                                                 |
+| Capacity            | New-work authority                                                                                                                                                                                                                                                           |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Platform-official   | Active cluster plus the tenant's active, subscribed, unexpired tier grant. Connected routing and signed authority apply this same predicate, including when the official cluster differs from the preferred route. Platform-shared playback is a separate serve-only policy. |
+| Tenant-hosted owner | Cluster ownership plus an active, unexpired owner grant. No marketplace subscription or enterprise tier-class gate is required for the owner's own footprint.                                                                                                                |
+| Invited private     | Accepted, active, unexpired private-invite grant. Ownership is not inherited.                                                                                                                                                                                                |
+| Marketplace         | Eligible billing tier plus a paid/approved, active, unexpired marketplace-subscription grant. Neither proof substitutes for the other.                                                                                                                                       |
+| Operator override   | Explicit platform-operator grant, with actor and before/after state recorded transactionally.                                                                                                                                                                                |
 
 Effective grant provenance is typed as `platform_tier`, `owner`,
 `private_invite`, `marketplace_subscription`, or `operator_override`. Unknown
@@ -100,10 +100,17 @@ control-plane waterfall.
 
 - Warm viewer and Mist final admission use local validated projections and make
   no synchronous billing or entitlement RPC.
+- The durable projection is a signed tenant+object authority stored in the
+  Foghorn cell database, not a process-local cache. It survives Foghorn restart
+  and remains authoritative through its signed hard-validity bound while
+  Commodore, Quartermaster, or Purser is unavailable.
 - `USER_NEW` evaluates the authoritative cluster envelope already carried in
   its resolved stream context. It neither depends on which Foghorn replica
   received an earlier request nor starts a control-plane lookup.
-- Admission refresh has one 500 ms operation-owned deadline. Independent
+- Readiness is a one-time consumer/schema compatibility cutover and persists
+  across subsequently verified authority versions. Before that cutover during
+  mixed-version rollout, connected admission refresh has one 500 ms
+  operation-owned deadline. Independent
   Quartermaster and Purser reads run concurrently and same-tenant misses
   collapse to one fill. Purser reserves only 350 ms for its database query so
   transport and orchestration retain headroom.
@@ -121,13 +128,18 @@ control-plane waterfall.
   fallback during a read.
 - `GetTenantAdmissionStatus` returns only admission facts and tier identity; it
   does not load allowances, retention, storage pricing, or processing config.
-- Explicit denials are cached briefly; successful payment explicitly
-  invalidates and performs one bounded fresh read.
+- Signed denials and tombstones replace prior authority and are delivered to
+  historical cells. Legacy cache invalidation remains a compatibility
+  accelerator only; it cannot erase or extend signed authority. A new x402
+  settlement is online-only and waits for authoritative replacement before a
+  previously denied local decision becomes an allow.
 - A denial precedes rows, claims, routes, URLs, dispatch, outbox events, and
   billable facts.
 
 The detailed blocking-trigger failure contract is in
 [Mist trigger contract](mist-trigger-contract.md).
+The signed durability, validity, and key boundary is in
+[Media-cluster authority and autonomy](media-authority.md).
 
 ## Network and mutation boundaries
 
@@ -143,12 +155,18 @@ update. Missing four consecutive refreshes eventually denies source lookup;
 that bounded availability cost prevents a copied URL from becoming permanent
 authority.
 
+Deployed Foghorn containers set `GRPC_METADATA_POLICY=deny`. Ambient inbound
+tenant or user metadata is therefore discarded unless a method explicitly
+authenticates and reconstructs delegated identity; the compose-level default is
+not the production service posture.
+
 Helmsman's node mode, Prometheus-node administration, and trigger-WAL controls
 use a loopback-only management listener. Unsafe management binds fail startup.
 
 Federation is disabled by default. When enabled, startup requires an active
 platform-official cluster descriptor and authenticated TLS outside isolated
-development. Every method requires service authentication, and Foghorn drops
+development. Every method requires service authentication. With the deployed
+`GRPC_METADATA_POLICY=deny` posture described above, Foghorn also drops
 delegated tenant/user metadata from shared service credentials. Payload cluster
 identity is still not caller-bound; federation therefore remains restricted to
 provider-operated Foghorns.

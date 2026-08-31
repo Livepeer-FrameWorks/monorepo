@@ -133,9 +133,11 @@ as canonical `.mkv` VOD artifacts:
   `origin_type='dvr_chapter'`, and `origin_id=chapter_id`, so
   stream-scoped VOD artifact queries can include finalized chapters
   without joining through Foghorn.
-- Policy enforcement walks chapter artifact → parent DVR
-  (`origin_type='dvr_chapter'` + `origin_id=chapter_id`) so a protected
-  DVR's chapters inherit the parent's auth policy transparently.
+- At chapter registration, Commodore joins the tenant-owned parent DVR and
+  snapshots its `requires_auth`, public/JWT/webhook policy, and encrypted
+  webhook secret onto the derived VOD row. The shareable `playbackId` is only a
+  locator; a protected DVR's chapter remains protected without a live parent
+  lookup.
 - The recovery-bridge S3 segment objects are deleted by the chapter
   reclaim sweep once the chapter artifact + `.dtsh` are durably on S3
   (`state='frozen'`).

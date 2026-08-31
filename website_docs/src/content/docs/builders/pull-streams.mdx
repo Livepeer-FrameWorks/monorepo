@@ -145,7 +145,7 @@ Pull streams are on-demand:
 1. A viewer requests `/play/{playback_id}`.
 2. Foghorn routes the viewer to an eligible media edge, even if the stream is currently inactive.
 3. MistServer starts the `pull+` stream and asks Foghorn for the source.
-4. Foghorn ignores untrusted fallback query params and resolves the stored source URI from Commodore.
+4. Foghorn ignores untrusted fallback query params and opens the stored source URI from its verified cell-local signed authority. Connected Commodore lookup is a mixed-version fallback only before that authority is marked ready.
 5. The first edge pulls upstream media; later viewers prefer in-cluster DTSC fanout once available.
 6. When the last viewer leaves, MistServer drops the upstream after the standard grace period.
 

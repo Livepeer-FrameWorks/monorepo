@@ -133,6 +133,13 @@ the `artifact_state_current` overlay and the `artifact_events` history.
 
 - Quartermaster does not call Decklog inline: it enqueues its service events into its own transactional outbox (`quartermaster.service_event_outbox`, written inside the state-changing transaction) and a drain worker delivers them to Decklog with retry/backoff (`api_tenants/internal/grpc/service_event_outbox.go`). Quartermaster also keeps separate Navigator intent outboxes (`navigator_custom_domain_outbox`, `navigator_tenant_alias_outbox`) for custom-domain/tenant-alias intents — those carry DNS/ingress intents to Navigator, not service events, and the full pipeline is documented on the Quartermaster/Navigator side.
 - Foghorn's artifact events use the same transactional-outbox shape (`foghorn.artifact_event_outbox`); see the node-copy telemetry section of [analytics-pipeline.md](analytics-pipeline.md).
+- Media-authority refresh is a separate correctness pipeline, not a Decklog
+  service event. Purser and Quartermaster mutations enqueue dedicated refresh
+  outboxes transactionally; Commodore compiles signed replacements and keeps
+  independent per-cell delivery obligations. Foghorn output/placement status
+  likewise uses local durable outboxes so analytics/control recovery cannot
+  change the media admission decision. See
+  [Media-cluster authority](media-authority.md).
 - Demo mode skips ServiceEvent emission in the Gateway.
 - Only **metadata** is stored and broadcast for support events; message content is excluded.
 - API usage aggregates include **HMAC-hashed** user/token identifiers for unique counts (no raw IDs stored).

@@ -68,19 +68,52 @@ For unbounded artifact lifetime (24/7 streams), every chapter operation must sta
 | -------------------------------- | ----------------------------------------------------------------------------------------- |
 | `BuildChapterID`                 | constant time per chapter                                                                 |
 | `ChapterSweeper.processArtifact` | one boundary close per active DVR per tick                                                |
-| `chapter_finalization_queue`     | per-DVR mutex serializes finalize jobs; bounded by `chapterFinalizationDispatchBatchMax`  |
+| `chapter_finalization_queue`     | durable finalizing CAS; bounded by `chapterFinalizationDispatchBatchMax`                  |
 | `chapter_reclaim_sweep`          | per-artifact cap (`chapterReclaimPerArtifact`); per-tick batch (`chapterReclaimBatchMax`) |
 | `ListDVRChapters`                | paginated; default 200, max 1000 per page                                                 |
 | `RetrieveDVRChapter`             | single-row lookup                                                                         |
 
 No code path calls `SELECT * FROM foghorn.dvr_segments WHERE artifact_hash=$1` without a range filter. Admin/export jobs that need the whole artifact use explicit cursors with `--max-rows` flags.
 
-## Public addressing — `playbackId`
+Chapter mutations across replicas are serialized by a transaction-scoped
+two-key PostgreSQL advisory lock in the reserved `dvrc` namespace. The lock is
+held only while the callback reads and mutates chapter rows through that same
+transaction, and is released automatically on commit, rollback, context
+cancellation, connection loss, or process exit. RPC, Helmsman, and object-store
+work must run after that transaction commits. Finalization and reclaim use their
+durable state-transition CAS as the external-work ownership gate; they do not
+hold a pooled database connection or advisory lock while waiting on the media
+cluster. Each finalization claim increments `finalize_attempts`; that attempt is
+encoded in `chapter-finalize-v2-<attempt>-<chapter_id>` and every progress, retry,
+failure, and completion write predicates on it. Node identity alone is not an
+attempt fence because a stale attempt and its replacement normally use the same
+recording-origin node. While media work is active, Helmsman renews the progress
+lease throughout recovery, readiness, and completion; the push loop reports
+fine-grained progress every five seconds, while otherwise quiet phases resend
+the last known progress once per minute. These reports are live lease renewals,
+not queued history: Helmsman drops them while its Foghorn control stream is down,
+so the remote lease can expire and dispatch a replacement even if local work is
+still running. Attempt fencing makes a late superseded completion harmless. The
+attempt-fenced Foghorn write
+advances `finalize_started_at`, so stale recovery measures lost work rather than
+merely slow work. A request whose explicit deadline has already elapsed is
+rejected, not granted a fresh local deadline. If a newer attempt reaches the
+same Helmsman, it cancels and waits for the older local owner for the shorter of
+one minute and the request's remaining deadline before failing that dispatch.
+The progress reporter starts after that ownership handoff succeeds, so the
+supersession wait is not itself a lease-renewal window. An attempt-less legacy
+dispatch may claim an idle stream during rollout but cannot supersede active
+work. The lock never
+uses the one-key ingest-admission namespace
+and there is no explicit session unlock that can leak through the connection
+pool.
 
-Chapter VOD artifacts are addressed by their Commodore-minted public `playback_id`, the same way ordinary VOD uploads are. The mapping is stored in `commodore.dvr_chapter_playback(chapter_id, tenant_id, playback_id, artifact_hash)` and cached on `foghorn.dvr_chapters.playback_id` for the chapter-list resolver hot path.
+## Addressing — `playbackId`
 
-- Raw artifact hashes are **not** accepted as chapter playback IDs anywhere on the public surface. Foghorn's `ResolveContent` only accepts the Commodore-minted public key.
-- Mint failure during finalization dispatch is hard-fail: the chapter stays in `closed` and retries on the next tick. There is no fallback that would expose a chapter without a public playback ID.
+Chapter VOD artifacts are addressed by their Commodore-minted, externally shareable `playback_id`, the same way ordinary VOD uploads are. The ID is a locator, not an authorization grant: the derived VOD snapshots and enforces its parent DVR's playback policy. The mapping is stored in `commodore.dvr_chapter_playback(chapter_id, tenant_id, playback_id, artifact_hash)` and cached on `foghorn.dvr_chapters.playback_id` for the chapter-list resolver hot path.
+
+- Raw artifact hashes are **not** accepted as chapter playback IDs anywhere on the public surface. Foghorn's `ResolveContent` only accepts the Commodore-minted opaque key.
+- Mint or parent-policy snapshot failure during finalization dispatch is hard-fail: the chapter stays in `closed` and retries on the next tick. There is no fallback that would expose a chapter without its playback ID and policy.
 - `dvr+<chapter_id>` no longer resolves anywhere. The only legal `dvr+` token is `dvr+<dvr_internal_name>` (the rolling-DVR surface of an actively recording stream).
 
 ## What Foghorn promises about chapters

@@ -15,6 +15,91 @@ import { Card, CardGrid, LinkCard, Aside } from "@astrojs/starlight/components";
 
 Deploying FrameWorks gives you full ownership of your video infrastructure.
 
+## Media authority and control-plane outages
+
+Provisioning generates separate signing and per-cell sealing material for the
+media-authority pipeline. The production CLI renderer—not the development
+compose file—places the signing private key and recipient map only on Commodore,
+and the trust set plus one distinct decryption key on each Foghorn cell. The
+derivation root is not rendered into any workload. Do not copy these variables
+between cells or hand-edit Mist trigger configuration. The rendered key ID is
+bound to the control-cell ID and X25519 public key; a cell/key mismatch now
+fails during service startup rather than during the first sealed-source request.
+
+The derived workload variables are intentionally service-specific:
+
+- Commodore receives `MEDIA_AUTHORITY_SEAL_RECIPIENTS`.
+- Each Foghorn receives `MEDIA_AUTHORITY_CELL_ID`, `MEDIA_AUTHORITY_SEAL_KEY_ID`, and
+  `MEDIA_AUTHORITY_SEAL_PRIVATE_KEY_PEM_B64` for its own control cell.
+
+These four values are renderer output, not shared-secret inputs. Operators configure the seal root
+and cell topology; provisioning derives and places the per-cell material.
+
+For a fresh production deployment, create the complete shared input once with
+`frameworks cluster secrets generate-shared --out /secure/path/shared.env`, import that fragment
+through the GitOps repository's supported SOPS editing command, and securely remove the plaintext
+file. The complete input contains `DATABASE_RUNTIME_PASSWORD`, `SERVICE_TOKEN`,
+`CLUSTER_ACCESS_MATERIALIZATION_SECRET`, `FOGHORN_BALANCER_CAPABILITY_SECRET`,
+`FOGHORN_STATE_ENCRYPTION_KEY`, `MEDIA_AUTHORITY_SEAL_ROOT_SECRET`, `JWT_SECRET`,
+`PASSWORD_RESET_SECRET`, `FIELD_ENCRYPTION_KEY`, `USAGE_HASH_SECRET`,
+`TELEMETRY_TOKEN_SECRET`, `MEDIA_AUTHORITY_SIGNING_KEY_ID`,
+`MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64`, and `MEDIA_AUTHORITY_TRUST_SET`. The renderer derives
+the per-cell variables; operators do not add derived recipients or private cell keys to the shared
+input.
+
+After authority has converged, an existing media cell can continue playback,
+ingest under its signed outage owner, source resolution, outputs, and already
+dispatched work while Commodore, Quartermaster, or Purser is unavailable. This
+is bounded by signed hard expiry and certificate validity; never-seen,
+revoked/tombstoned, corrupt, or hard-expired authority remains unavailable.
+Foghorn and Helmsman retain last-good runtime configuration across restart.
+
+This is bounded autonomy, not cross-cell consensus. During an asymmetric
+partition, the deterministic outage owner cannot observe a still-live claim in
+an isolated peer cell, so dual ingest can exist until connectivity or leases
+converge. The cross-cell placement claim is leased; tenant capacity is checked
+from signed policy against durable per-cell ingest sessions. If the complete
+Mist-liveness signal path is isolated, another cell may admit a publisher after
+the placement claim expires. Events
+whose tenant identity cannot be resolved are never allowed to mutate a guessed
+tenant's state. See [Media-cluster authority and autonomy](https://github.com/Livepeer-FrameWorks/monorepo/blob/master/docs/architecture/media-authority.md#known-limitations)
+for the exact boundaries.
+
+During a v0.3 upgrade, an existing node fingerprint without an Ed25519 key is
+not yet usable as outage admission. Keep Quartermaster available for each
+existing media node's first post-upgrade reconnect: after a stable machine-ID or
+MAC match, Quartermaster atomically binds the node's proved key. It never seeds
+that binding from peer IP or replaces a different key. Once Foghorn has stored
+the resulting bounded admission, later reconnects can use the cell-local copy
+during a control-plane outage.
+
+Keep Helmsman's durable state separate from reclaimable media. Container edges
+mount `/data/state` independently from `/data/storage`; native installs render
+the equivalent state directory through the Helmsman role. If that state is
+lost, obtain a fresh enrollment token and run
+`frameworks edge provision --ssh <user>@<host> --force-reenroll --enrollment-token <fresh-token>`
+(or use
+`--local`). The signed request authorizes Quartermaster to rotate the
+pinned node key only when the existing tenant/node and stable machine or MAC
+fingerprint still match. Helmsman binds the one-shot rotation to that token,
+reuses the replacement key across retries, and records completion after
+Foghorn accepts it; a persisted provisioning flag cannot rotate it again on
+restart. Normal redeploys do not rotate it.
+
+The shared production secret named `FOGHORN_STATE_ENCRYPTION_KEY` is a
+deployment root, not a cross-cell runtime key. The CLI derives a different key
+for every Foghorn control cell while keeping replicas in one cell compatible.
+Development commands persist generated authority roots beside the local
+manifest in `.frameworks/dev-generated-secrets.env`; production never relies
+on process-local generated secrets.
+
+The shipped rules alert on authority delivery backlog/version lag, apply or verification rejection,
+hard-expired reads, and durable node-admission failures/saturation. During a planned outage canary,
+query `foghorn_media_request_central_rpcs_total{path,service,method}` before and after the test: a
+request covered by ready local authority must not increment it, except for ingest endpoint discovery's
+single bounded Commodore live-claim check. A static alert on every central RPC would be wrong during
+normal connected operation. New management mutations and new x402 settlement remain online-only.
+
 ## Quick Start
 
 **Production Deployment (Recommended):**

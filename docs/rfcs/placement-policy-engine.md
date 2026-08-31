@@ -214,7 +214,7 @@ domain-ownership lines and keeping resolution at the enactor:
 - **Reuse node-copy telemetry as the durability ledger** — rejected: node copies are transient
   cache/local holdings; conflating them with durability breaks the core invariant.
 - **Ingest-time (non-source) ordering for placement convergence** — rejected: not replay-safe; use a
-  source-owned monotonic version like `artifact_node_copy_version_seq`.
+  source-owned monotonic version like the artifact node-copy key-scoped counter.
 
 ## Risks & Mitigations
 
@@ -248,5 +248,5 @@ hook-ins; (4) API + viz. Each phase ships behind its own flag.
 - [Reference] `pkg/database/sql/schema/foghorn.sql` — current single-copy storage lifecycle
   (`storage_location`, `s3_url`, `sync_status`, `frozen_at`, `storage_cluster_id`) that
   `artifact_locations` generalizes.
-- [Reference] `foghorn.artifact_node_copy_version_seq` — the source-owned monotonic version pattern to
+- [Reference] `foghorn.artifact_node_copy_version_counter` — the source-owned monotonic version pattern to
   reuse for placement convergence.

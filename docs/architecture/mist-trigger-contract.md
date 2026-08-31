@@ -4,6 +4,13 @@ FrameWorks installs eighteen MistServer triggers through Helmsman. Six are synch
 
 This contract is specific to the FrameWorks Mist fork. Mist and Helmsman are deployed as a coordinated media-node change; there is no trigger protocol version or negotiation field.
 
+The ingest-generation liveness backstop also depends on the fork's
+`active_streams.sourcepids` array. Unforked or older Mist may omit it or return
+`null`; Helmsman permanently treats that shape as non-authoritative and
+fail-open for reaping while counting it for operations. Such a node can still
+serve, but lost publisher-close convergence then depends on the other session
+and placement reapers rather than the PID inventory path.
+
 ## Synchronous outcomes
 
 An HTTP handler returns an optional `X-Mist-Trigger-Action` header and an optional `X-Mist-Trigger-Reason`. The action is one of:
@@ -20,20 +27,22 @@ A successful response without the header retains Mist's legacy body interpretati
 
 A blank handler, connection failure, timeout, non-2xx response, unknown action, or action invalid for the trigger is a handler failure. Mist applies that trigger entry's configured `onfail` action. This is separate from an authoritative `200` + `deny`: the former says the handler could not decide; the latter is a business decision.
 
-Mist keeps its existing HTTP attempt behavior and five-second response deadline. Helmsman's blocking deadline is four seconds and follows the incoming HTTP request context, leaving time to return a typed result within Mist's attempt. There is no per-trigger timeout or retry configuration.
+Mist keeps its existing HTTP attempt behavior and five-second response deadline. Helmsman's ordinary blocking deadline is four seconds and follows the incoming HTTP request context, leaving time to return a typed result within Mist's attempt. Within that single budget Helmsman may make at most three control-stream delivery attempts, including bounded reconnect grace; those attempts do not extend Mist's deadline and are not Mist trigger configuration. The internal `STREAM_LIFECYCLE` reconciliation call uses a separate 30-second control-path budget. There is no per-trigger Mist timeout or retry configuration.
 
 Multiple matching handlers run in order. `keep` restores the value from immediately before that handler, and `deny` is terminal. Missing trigger configuration is different from a failed handler: Mist skips the trigger entirely. Helmsman's drift reconciler therefore compares and repairs the full definition of all eighteen managed entries, not only their fallback values.
 
+The checked-in `infrastructure/mistserver.conf` is development bootstrap/runtime state, not the trigger source of truth. Development compose may rewrite it while running. Native production installs render only the Mist controller bootstrap into `/etc/mistserver.conf`; in both deployment modes Helmsman's `desiredTriggers()` owns and continuously reconciles the complete trigger definitions through the Mist API.
+
 ## Blocking trigger matrix
 
-| Trigger          | Purpose                                                                | Successful actions                           | `onfail`  | Important call-site behavior                                                                                                                                                                  |
-| ---------------- | ---------------------------------------------------------------------- | -------------------------------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PUSH_REWRITE`   | Authenticate and admit an ingest; rewrite to its runtime stream.       | `value`, `deny`, `keep`                      | `deny`    | `value` is sanitized and becomes the pushed stream name. No admission answer means no ingest.                                                                                                 |
-| `PLAY_REWRITE`   | Resolve a public playback ID and apply resolve-time policy/accounting. | `value`, `deny`, `keep`                      | `deny`    | `deny` ends playback immediately. There is no unresolved sentinel. A literal `true` is a stream name, not a permission grant.                                                                 |
-| `STREAM_SOURCE`  | Select a concrete source, use configured source, or report offline.    | `value`, `offline`, `use-configured`, `keep` | `offline` | `offline` sets Mist's stream-offline state and reports the reason; it is not attempted as a source URI.                                                                                       |
-| `STREAM_PROCESS` | Supply per-instance process JSON or use configured processes.          | `value`, `use-configured`, `keep`            | `keep`    | Resolution remains one-shot. Helmsman preinstalls the dispatched processing job's JSON before activating `processing+<hash>`. Missing job policy is a startup error, not a polling condition. |
-| `PUSH_OUT_START` | Record/enrich an outbound push start while preserving its target.      | `value`, `deny`, `keep`                      | `keep`    | A Helmsman failure does not replace the target with a fallback string or kill multistreaming.                                                                                                 |
-| `USER_NEW`       | Authorize and register a viewer session.                               | `value`, `deny`                              | `deny`    | Mist consumes this as a boolean admission decision. A valid Mist output JWT bypasses `USER_NEW` by Mist design; FrameWorks does not currently configure that JWK path.                        |
+| Trigger          | Purpose                                                                | Successful actions                           | `onfail`  | Important call-site behavior                                                                                                                                                                                                       |
+| ---------------- | ---------------------------------------------------------------------- | -------------------------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PUSH_REWRITE`   | Authenticate and admit an ingest; rewrite to its runtime stream.       | `value`, `deny`, `keep`                      | `deny`    | `value` is sanitized and becomes the pushed stream name. No admission answer means no ingest.                                                                                                                                      |
+| `PLAY_REWRITE`   | Resolve a public playback ID and apply resolve-time policy/accounting. | `value`, `deny`, `keep`                      | `deny`    | `deny` ends playback immediately. There is no unresolved sentinel. A literal `true` is a stream name, not a permission grant.                                                                                                      |
+| `STREAM_SOURCE`  | Select a concrete source, use configured source, or report offline.    | `value`, `offline`, `use-configured`, `keep` | `offline` | `offline` sets Mist's stream-offline state and reports the reason; it is not attempted as a source URI.                                                                                                                            |
+| `STREAM_PROCESS` | Supply per-instance process JSON or use configured processes.          | `value`, `use-configured`, `keep`            | `keep`    | Resolution remains one-shot. Helmsman durably persists the dispatched job's JSON before activating `processing+<hash>` and reloads it on restart. A newly dispatched job without policy fails before activation; it is not polled. |
+| `PUSH_OUT_START` | Record/enrich an outbound push start while preserving its target.      | `value`, `deny`, `keep`                      | `keep`    | A Helmsman failure does not replace the target with a fallback string or kill multistreaming.                                                                                                                                      |
+| `USER_NEW`       | Authorize and register a viewer session.                               | `value`, `deny`                              | `deny`    | Mist consumes this as a boolean admission decision. A valid Mist output JWT bypasses `USER_NEW` by Mist design; FrameWorks does not currently configure that JWK path.                                                             |
 
 `defaultStream` is downstream stream-boot fallback configuration. It is not trigger failure policy, and FrameWorks does not use it to resolve failed `PLAY_REWRITE` decisions.
 
@@ -41,7 +50,7 @@ Multiple matching handlers run in order. `keep` restores the value from immediat
 
 Foghorn returns a typed `MistTriggerResponse` to Helmsman. `action` is authoritative; the legacy `abort` field remains a compatibility alias for `deny`. Internal failures return a non-2xx HTTP response from Helmsman so Mist applies `onfail`. Successful empty values are never guessed generically: Foghorn maps them by trigger to `deny`, `keep`, or `use-configured`.
 
-Mist supplies `X-Trigger-UUID` and `X-Trigger-UnixMillis`. Helmsman captures them on the common trigger envelope. For blocking requests, Foghorn coalesces and replays a complete prior result by `(authenticated node ID, trigger type, trigger UUID)` for ten minutes. That prevents repeated viewer/admission/accounting side effects when Mist retries after a lost response while still returning the exact decision Mist needs. The replay cache is process-local; it is not an exactly-once guarantee across a Foghorn failover.
+Mist supplies `X-Trigger-UUID` and `X-Trigger-UnixMillis`. Helmsman captures them on the common trigger envelope. For blocking requests, Foghorn coalesces and replays a completed business result by `(authenticated node ID, trigger type, trigger UUID)` for ten minutes. Completed results include both approvals and terminal business denials; replaying the denial prevents a retry from repeating admission or accounting side effects. Retryable handler and infrastructure failures wake concurrent waiters but are removed immediately, so a later delivery with the same UUID re-enters the handler. Error disposition is explicit when the public error code is necessarily broad: deterministic internal outcomes such as missing trigger identity, an already-ended connector, or supersession before projection are marked terminal, while storage, transport, and downstream failures remain retryable. A non-owner waiting on an in-flight replay entry also observes its control-stream context, so a disconnected caller does not remain parked behind a wedged owner. The replay cache is process-local; it is not an exactly-once guarantee across a Foghorn failover.
 
 Helmsman's 30-second `PLAY_REWRITE` recovery cache covers a different failure: a recently approved mapping can be reused when the Foghorn control stream is briefly unavailable. Recovery hits are counted because they skip fresh resolve-time side effects. Authoritative denials are never inserted into that cache.
 
@@ -49,28 +58,47 @@ Helmsman's 30-second `PLAY_REWRITE` recovery cache covers a different failure: a
 
 Mist sends `sync:false` triggers and returns after writing the request body. It does not read the HTTP status or body, so a Helmsman `503` is diagnostic and cannot make Mist retry.
 
-| Trigger                               | Role                             | FrameWorks delivery after acceptance                                  |
-| ------------------------------------- | -------------------------------- | --------------------------------------------------------------------- |
-| `PUSH_END`                            | Final outbound-push facts        | Durable Helmsman WAL                                                  |
-| `PUSH_INPUT_CLOSE`                    | Final ingest-connector facts     | Durable Helmsman WAL                                                  |
-| `USER_END`                            | Final viewer-session facts       | Durable Helmsman WAL                                                  |
-| `STREAM_END`                          | Final stream-session facts       | Durable Helmsman WAL                                                  |
-| `RECORDING_END`                       | Final recording facts            | Durable Helmsman WAL                                                  |
-| `RECORDING_SEGMENT`                   | Final recording-segment facts    | Durable Helmsman WAL                                                  |
-| `LIVEPEER_SEGMENT_COMPLETE`           | Livepeer processing usage        | Durable Helmsman WAL                                                  |
-| `PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE` | AV processing usage              | Durable Helmsman WAL                                                  |
-| `STREAM_BUFFER`                       | Stream health/state              | Best effort                                                           |
-| `LIVE_TRACK_LIST`                     | Track inventory                  | Best effort                                                           |
-| `THUMBNAIL_UPDATED`                   | Thumbnail update                 | Best effort                                                           |
-| `PROCESS_EXIT`                        | Local processing-job exit signal | Best effort; missing listeners and full queues are logged and counted |
+| Trigger                               | Role                                | FrameWorks delivery after acceptance                                                                              |
+| ------------------------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `PUSH_END`                            | Final outbound-push facts           | Durable Helmsman WAL                                                                                              |
+| `PUSH_INPUT_CLOSE`                    | Final ingest-connector facts        | Durable Helmsman WAL                                                                                              |
+| `USER_END`                            | Final viewer-session facts          | Durable Helmsman WAL                                                                                              |
+| `STREAM_END`                          | Final stream-session facts          | Durable Helmsman WAL                                                                                              |
+| `RECORDING_END`                       | Final recording facts               | Durable Helmsman WAL                                                                                              |
+| `RECORDING_SEGMENT`                   | Final recording-segment facts       | Durable Helmsman WAL                                                                                              |
+| `LIVEPEER_SEGMENT_COMPLETE`           | Livepeer processing usage           | Durable Helmsman WAL                                                                                              |
+| `PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE` | AV processing usage                 | Durable Helmsman WAL                                                                                              |
+| `STREAM_BUFFER`                       | Stream health/state                 | Best effort                                                                                                       |
+| `LIVE_TRACK_LIST`                     | Track inventory                     | Best effort                                                                                                       |
+| `THUMBNAIL_UPDATED`                   | Thumbnail update                    | Best effort                                                                                                       |
+| `PROCESS_EXIT`                        | Local `processing+` job exit signal | Best effort; configured with `streams: ["processing+"]`; missing listeners and full queues are logged and counted |
 
 For the eight durable entries, durability begins only after Helmsman fsyncs the local WAL row. Foghorn acknowledges after Decklog's Kafka publish commits; Helmsman retains and replays the row until that acknowledgement. See [Trigger durability](trigger-durability.md).
 
+`PROCESS_EXIT` is the only asynchronous entry in this table with a stream
+filter. FrameWorks does not install it globally: only local processing runtime
+names beginning with `processing+` are routed to the in-memory job listener.
+
+Outbound push status uses `X-Trigger-UnixMillis` as event time when Mist supplies it: older observations cannot overwrite newer ones, and terminal status wins a known-time tie. A legacy request without that header has unknown event time and is applied in arrival order, so a later `PUSH_OUT_START` can recover a target from an earlier failure.
+
 ## Tenant authority and outages
 
-Control-plane unavailability is not a healthy billing verdict. Quartermaster obtains its decision from Purser's bounded `GetTenantAdmissionStatus` RPC, which reads subscription, balance, active reservations, and collection readiness without loading entitlements, allowance usage, retention, or storage pricing. Foghorn represents tenant billing state as `healthy`, `denied`, `stale-valid`, or `unavailable`, keyed by tenant rather than only by stream. A verified healthy decision is fresh for ten minutes and may be served for five more minutes while a background refresh fails. A denied decision is cached for 30 seconds with no stale window (`BILLING_DENIED_CACHE_TTL` may set another positive Go duration), limiting rejection-driven authority load while bounding recovery after a missed invalidation. Cold authority work is collapsed per tenant and capped at 500 ms; each caller keeps its own waiting deadline without canceling the shared fill. A cold miss, healthy status older than its grace window, or an explicit billing invalidation is unavailable rather than an unmetered allow. Post-payment verification always invalidates the cached decision and performs one fresh admission lookup.
+Control-plane unavailability is not a healthy billing verdict, but it also does
+not invalidate still-valid local authority. Commodore compiles Quartermaster,
+Purser, and object state into signed, versioned tenant and media-object
+envelopes. Foghorn verifies and persists them before serving. `PLAY_REWRITE`,
+`USER_NEW`, `PUSH_REWRITE`, and `STREAM_SOURCE` use those projections once their
+rollout marker is ready; a marked denial, tombstone, hard expiry, invalid
+signature, or unavailable required secret never falls back to a central allow.
 
-The current billing-change fan-out carries only `{tenant_id, reason}`. It does not carry a replacement snapshot, version, validity bounds, or signature, so it cannot yet be treated as durable local authority. Building autonomous media-cluster authority requires a separately reviewed, versioned replacement/revocation path with convergence after missed notifications. Existing HMAC playback-policy bundles do not contain the required billing fields and are not silently repurposed here.
+Purser and Quartermaster changes create durable refresh outboxes. Signed
+replacement delivery, rather than the legacy `{tenant_id, reason}` cache
+invalidation, advances local authority. The compatibility invalidation signal
+may clear old connected caches during a mixed-version rollout, but cannot delete
+or extend a signed projection. Soft-expired authority continues locally while a
+background refresh is requested; only hard expiry ends its authority. See
+[Media-cluster authority and autonomy](media-authority.md) for validity,
+distribution, restart, key, and outage semantics.
 
 ## Configuration limits
 

@@ -13,17 +13,17 @@ tags:
 
 0.3.0 is the next FrameWorks tag.
 
-## Upgrade note: edge protocol v3 hard cut
+## Upgrade note: edge protocol v4 hard cut
 
-This release intentionally raises Foghorn's minimum Helmsman control protocol from
-v2 to v3 without a mixed-version window. The provider control plane upgrades before
-the desired edge release is synchronized. During that window, existing v2 edges are
+This release intentionally raises Foghorn's minimum Helmsman control protocol to
+v4 without a mixed-version window. The provider control plane upgrades before
+the desired edge release is synchronized. During that window, older v2/v3 edges are
 rejected, disappear from platform routing, and cannot receive their in-band updater
 command.
 
 Edge-only self-hosters must manually redeploy the 0.3.0 edge image after the control
-plane rollout. The same applies to a v2 edge that was offline during the rollout and
-returns later. It cannot reconnect until it has been updated to v3. This one-time edge
+plane rollout. The same applies to an older edge that was offline during the rollout and
+returns later. It cannot reconnect until it has been updated to v4. This one-time edge
 interruption is an explicit release decision; the generation fence remains fail closed.
 
 The theme is the operating layer: the pieces that make FrameWorks easier to run as a live-video platform. Platform admin, analytics, edge resilience, agent workflows, and the real-time foundation for chat and conferencing.

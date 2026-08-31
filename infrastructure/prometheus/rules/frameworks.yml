@@ -61,6 +61,74 @@ groups:
           summary: "High database connection usage"
           description: "Database connection usage is above 80% on {{ $labels.instance }}."
 
+      # Media-authority and durable-trigger safety alerts
+      - alert: MediaAuthorityDeliveryStuck
+        expr: commodore_media_authority_oldest_pending_seconds > 300
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Media authority delivery is not converging"
+          description: "The oldest current {{ $labels.authority_kind }} authority has been unacknowledged for more than five minutes."
+
+      - alert: MediaAuthorityVersionLag
+        expr: commodore_media_authority_max_version_lag > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Media authority versions are lagging"
+          description: "At least one target cell is more than one {{ $labels.authority_kind }} version behind."
+
+      - alert: FoghornAuthorityHardExpired
+        expr: increase(foghorn_media_authority_local_reads_total{outcome="hard_expired"}[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Foghorn encountered hard-expired local authority"
+          description: "A media request could not use its local signed authority. Investigate delivery convergence before a control-plane outage."
+
+      - alert: FoghornMediaAuthorityApplyRejected
+        expr: increase(foghorn_media_authority_apply_total{outcome=~"verification_rejected|rollback_rejected|conflict_rejected|persist_error"}[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Foghorn rejected or could not persist signed authority"
+          description: "A {{ $labels.authority_kind }} authority apply ended as {{ $labels.outcome }}. Delivery cannot converge until the signer, version, payload, or local database failure is corrected."
+
+      - alert: FoghornNodeAdmissionFailure
+        expr: increase(foghorn_node_admission_events_total{result=~"failure|saturated"}[5m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Foghorn node admission is failing"
+          description: "Durable node admission operation {{ $labels.operation }} returned {{ $labels.result }}. Outage enrollment may be unavailable for affected nodes."
+
+      - alert: FoghornAdmissionPayloadDecryptError
+        expr: increase(foghorn_admission_payload_crypto_total{result="error"}[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Foghorn could not decrypt a durable admission obligation"
+          description: "Admission side effects may be blocked by missing or inconsistent cell encryption material."
+
+      - alert: HelmsmanTriggerWALStuck
+        expr: helmsman_trigger_wal_pending > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Helmsman durable trigger WAL is not draining"
+          description: "One or more Mist lifecycle triggers have awaited a positive Foghorn acknowledgement for ten minutes."
+
+      - alert: HelmsmanStreamEndRetrying
+        expr: increase(helmsman_trigger_ack_outcomes_total{trigger_type="STREAM_END",outcome="retryable"}[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "STREAM_END is being retried"
+          description: "A tenant-unresolved or downstream-failed STREAM_END remains in the Helmsman WAL; inspect WAL depth and Foghorn logs."
+
       # Crypto custody and scanner safety alerts
       - alert: CryptoScannerLagging
         expr: (purser_crypto_scanner_block{head="finalized"} - on(network) purser_crypto_scanner_block{head="cursor"}) > 500

@@ -13,8 +13,8 @@ via GraphQL → Commodore    ┌─────┴──────────
                            │   MistServer    │──→ YouTube RTMP
 Stream goes live ──→       │  (origin node)  │──→ Facebook RTMP
 PUSH_REWRITE fires ──→     │                 │──→ Kick RTMP
-Foghorn fetches targets    └─────┬──────────┘
-from Commodore ──→               │
+Foghorn opens signed       └─────┬──────────┘
+cell-local targets ──→           │
 Sends to Helmsman ──→      PUSH_OUT_START / PUSH_END
 Helmsman calls                   │
 PushStart() per target     Foghorn updates status
@@ -42,9 +42,9 @@ MistServer supports auto-push rules in its config, but we don't use them because
 
 1. Streamer starts broadcasting → MistServer fires `PUSH_REWRITE` trigger
 2. Helmsman (sidecar on the node) forwards trigger to Foghorn
-3. Foghorn validates the stream key via `Commodore.ValidateStreamKey`
-4. **Commodore returns push targets** in `ValidateStreamKeyResponse.push_targets` (same query that validates the key — no extra RPC)
-5. Foghorn sends `ActivatePushTargets` control message to the origin Helmsman
+3. Foghorn verifies the publishing credential and tenant decision from signed local authority. In connected rollout mode it may shadow/claim through Commodore; an outage-owner admission uses only ready local authority.
+4. Foghorn opens the exact version's cell-sealed push target payload and stamps it onto the durable ingest admission effects.
+5. The admission-effects worker sends `ActivatePushTargets` to the origin Helmsman. It retains/rearms the same payload after Foghorn or Helmsman reconnect; a newer target version cannot be substituted beneath an existing publisher.
 6. Helmsman calls `mist.PushStart(streamName, targetURI)` for each enabled target
 7. MistServer begins pushing RTMP/SRT to each destination
 
@@ -52,8 +52,8 @@ MistServer supports auto-push rules in its config, but we don't use them because
 
 1. MistServer fires `PUSH_OUT_START` when a push connects
 2. Helmsman forwards to Foghorn
-3. Foghorn looks up the push target by stream name + target URI
-4. Foghorn calls `Commodore.UpdatePushTargetStatus(id, "pushing")`
+3. Foghorn matches the target against the admitted local payload.
+4. Foghorn writes a push-status obligation to its local outbox. The worker updates Commodore after connectivity returns; status reporting cannot stop the push.
 
 Same flow for `PUSH_END`:
 
@@ -119,6 +119,9 @@ rtmp://live.twitch.tv/app/live_abc123xyz
 ```
 
 Internal RPCs (`GetStreamPushTargets`, `ValidateStreamKey`) return unmasked URIs.
+Autonomous cells receive target URIs only inside their X25519-sealed authority
+section; historical recipient cells receive revocations without newly issued
+secret material. See [Media-cluster authority](media-authority.md).
 
 ## Security
 

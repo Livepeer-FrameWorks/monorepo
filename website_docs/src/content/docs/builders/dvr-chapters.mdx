@@ -77,7 +77,7 @@ query DVRChapter {
 }
 ```
 
-`playbackId` is the Commodore-minted public playback key for the chapter's VOD artifact. Resolve playback through `resolveViewerEndpoint` against that ID; the resulting endpoint is a standard VOD edge URL. There is no `dvr+chapter_id` token — chapter playback uses the same path as any other VOD.
+`playbackId` is the Commodore-minted, externally shareable playback key for the chapter's VOD artifact. It is a locator, not an authorization grant: public/JWT/webhook policy is snapshotted from the parent DVR and enforced normally. Resolve playback through `resolveViewerEndpoint` against that ID; the resulting endpoint is a standard VOD edge URL. There is no `dvr+chapter_id` token — chapter playback uses the same path as any other VOD.
 
 `wallClockStartUnixMs` and `wallClockEndUnixMs` are absolute Unix epoch milliseconds. Use them to render the chapter's calendar time and to map player timeline position (`videoCurrentTime * 1000 + wallClockStartUnixMs`) back to absolute time. Mist preserves DateUTC end-to-end through the remux, so the artifact itself also carries `unixoffset` natively — but the API metadata is the product contract.
 

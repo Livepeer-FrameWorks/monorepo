@@ -6,15 +6,18 @@ infrastructure cost, not a tenant-facing billing item.
 ## Data Flow
 
 ```
-Ingest:     MistServer -> Foghorn (PUSH_REWRITE) -> ValidateStreamKey -> serving/executing cluster
+Ingest:     MistServer -> Foghorn (PUSH_REWRITE) -> signed local authority / connected claim -> serving cluster
 Viewer:     MistServer -> Foghorn (USER_NEW/END) -> cluster handling this viewer is serving cluster
 Analytics:  trigger -> Decklog -> Kafka -> Periscope Ingest -> ClickHouse
                                                             -> finalized facts + canonical ledgers
                                                             -> Periscope Metering -> Kafka -> Purser
 ```
 
-**Ingest path:** `sendTriggerToDecklog()` sets `trigger.ClusterId` from the
-Foghorn cluster handling the event. `OriginClusterID` is also preserved from
+**Ingest path:** the publishing node's authenticated local session supplies the
+serving cluster. Ready signed authority validates the credential, tenant, and
+outage owner locally; normal connected operation still takes the distributed
+placement claim through Commodore. `sendTriggerToDecklog()` carries that
+serving cluster in `trigger.ClusterId`. `OriginClusterID` is also preserved from
 stream resolution, but it is lineage/audit metadata rather than the work
 attribution key.
 

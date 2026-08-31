@@ -41,10 +41,10 @@ There are two phases:
 
 Two independent identifiers live on every `foghorn.artifacts` row:
 
-| Field           | What it is                                                                    | Generated where                                                                                                                                                                                                                                                                                                                   |
-| --------------- | ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `artifact_hash` | Stable content/registry key. **The join key** for jobs, node copies, catalog. | Commodore (authoritative) mints it — clip: `generateClipHash` (timestamp+random) `api_control/internal/grpc/server.go:8002`; VOD: `generateVodHash` `api_balancing/internal/grpc/server.go:2901`; chapter: deterministic `sha256("dvr_chapter:"+chapterID)[:32]` `api_balancing/internal/jobs/chapter_finalization_queue.go:298`. |
-| `internal_name` | Random routing name used to address the artifact at playback.                 | Commodore `generateArtifactInternalName` (32-char random) `api_control/internal/grpc/server.go:8045`.                                                                                                                                                                                                                             |
+| Field           | What it is                                                                    | Generated where                                                                                                                                                                                                                                                                                           |
+| --------------- | ----------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `artifact_hash` | Stable content/registry key. **The join key** for jobs, node copies, catalog. | Commodore (authoritative) mints it — clip: `generateClipHash` in `api_control/internal/grpc/server.go`; VOD: `generateVodHash` in `api_balancing/internal/grpc/server.go`; chapter: deterministic `sha256("dvr_chapter:"+chapterID)[:32]` in `api_balancing/internal/jobs/chapter_finalization_queue.go`. |
+| `internal_name` | Random routing name used to address the artifact at playback.                 | Commodore `generateArtifactInternalName` (32-char random) in `api_control/internal/grpc/server.go`.                                                                                                                                                                                                       |
 
 **`artifact_hash` and `internal_name` are independently generated — neither is derived from the
 other.** Any code that resolves one from the other must go through the DB / Commodore, never by
@@ -68,38 +68,50 @@ after the prefix differs by kind** — this is the single most error-prone fact 
 - `dvr+` is the _live_ rolling surface; a finalized DVR chapter becomes an ordinary `vod+`
   artifact (`artifact_type='vod'`, `origin_type='dvr_chapter'`).
 - `vod+<internal_name>` is a **playback resolution token**, not a second stored artifact — the
-  only DB row is the single `clip`/`vod` artifact keyed by `artifact_hash`. Playback resolves
-  `vod+<internal_name>` → `artifact_hash` via Commodore in the STREAM_SOURCE trigger
-  (`api_balancing/internal/triggers/processor.go:2057`).
+  only DB row is the single `clip`/`vod` artifact keyed by `artifact_hash`. Once signed media
+  authority is marked ready, playback and `STREAM_SOURCE` resolve
+  `vod+<internal_name>` → `artifact_hash` from Foghorn's durable verified index; the connected
+  Commodore resolver remains only for unmarked mixed-version authority.
 - `processing+<hash>` carries the **hash**, not a routing name.
+
+`STREAM_PROCESS` is intentionally one-shot. The dispatch path persists the exact
+process JSON under `HELMSMAN_STATE_DIR` before activating
+`processing+<hash>`, and Helmsman reloads it before serving triggers after a
+restart. Live ingest stamps the same policy and authority versions onto its
+durable session, and rolling DVR stores its own snapshot. Foghorn restart
+therefore reads local job/session state rather than polling Commodore or waiting
+for a later trigger retry. Expired override records are reconciled with Mist at
+startup and every minute: an active processing stream retains its policy, an
+authoritatively absent stream loses the record, and a Mist API failure preserves
+the last-good record for the next pass.
 
 ## Phase 1 — Origination
 
 ### Clip from a live stream
 
-1. GraphQL `createClip` → `DoCreateClip` (`api_gateway/internal/resolvers/streams.go:351`) → Commodore.
-2. Commodore `CreateClip` (`api_control/internal/grpc/server.go:8128`) resolves the source
-   stream's active ingest cluster, mints `artifact_hash` (`:8199`) and an independent
-   `internal_name`/`playback_id` (`:8204`), and forwards to that cluster's Foghorn.
-3. Foghorn `CreateClip` (`api_balancing/internal/grpc/server.go:771`) inserts the `clip` artifact
-   row with both identifiers (`:1001`) and enqueues a **`process`** job carrying `source_params`
-   (source kind/stream/time span) (`:1053`).
+1. GraphQL `createClip` → `DoCreateClip` in `api_gateway/internal/resolvers/streams.go` → Commodore.
+2. Commodore `CreateClip` in `api_control/internal/grpc/server.go` resolves the source
+   stream's active ingest cluster, mints `artifact_hash` and an independent
+   `internal_name`/`playback_id`, and forwards to that cluster's Foghorn.
+3. Foghorn `CreateClip` in `api_balancing/internal/grpc/server.go` inserts the `clip` artifact
+   row with both identifiers and enqueues a **`process`** job carrying `source_params`
+   (source kind/stream/time span).
 4. A live clip is a **passthrough/remux, never a fresh transcode**: the cut comes from the live
    shm buffer via a Mist `/view` request, and the job selects the complete renditions already in
    the cut (or the source), stripping any Livepeer transcode config
-   (`api_sidecar/internal/handlers/processing_clip.go:60`).
+   (`api_sidecar/internal/handlers/processing_clip.go`).
 
 ### VOD upload
 
 An S3 multipart lifecycle, both RPCs on Foghorn's gRPC server:
 
-1. `CreateVodUpload` (`api_balancing/internal/grpc/server.go:2909`) creates the S3 multipart,
-   mints/accepts the `vod` `artifact_hash` (`:2947`), and inserts the artifact row
-   `status='uploading'` (`:3000`).
+1. `CreateVodUpload` in `api_balancing/internal/grpc/server.go` creates the S3 multipart,
+   mints/accepts the `vod` `artifact_hash`, and inserts the artifact row
+   `status='uploading'`.
 2. The client uploads parts directly to S3.
-3. `CompleteVodUpload` (`:3240`) finalizes the S3 object, flips the artifact to
-   **`status='processing'`** (`:3319`), and queues a **`process`** job via
-   `VodPipeline.StartPipeline` (`api_balancing/internal/grpc/vod_pipeline.go:45`). This job **is**
+3. `CompleteVodUpload` finalizes the S3 object, flips the artifact to
+   **`status='processing'`**, and queues a **`process`** job via
+   `VodPipeline.StartPipeline` in `api_balancing/internal/grpc/vod_pipeline.go`. This job **is**
    a transcode (the sidecar's default branch).
 
 ### DVR (rolling) and chapter finalization
@@ -108,24 +120,31 @@ DVR has a _live_ phase and a _finalization_ phase; only the second enters the pr
 
 **Live phase (no processing job):**
 
-1. `StartDVR` gateway → Commodore (`api_control/internal/grpc/server.go:2381`) → Foghorn
-   `startDVR` (`api_balancing/internal/grpc/server.go:1284`), which inserts the parent
-   `artifact_type='dvr'` row with the retention/chapter policy snapshot (`:1413`) and sends a
-   `DVRStartRequest` to the storage Helmsman (`:1563`).
-2. Helmsman records the source as rolling TS segments (`api_sidecar/internal/control/dvr_manager.go:667`).
-   `dvr+<internal_name>` is the live playback surface (`api_balancing/internal/triggers/processor.go:1979`).
+1. `StartDVR` gateway → Commodore in `api_control/internal/grpc/server.go` → Foghorn
+   `startDVR` in `api_balancing/internal/grpc/server.go`, which inserts the parent
+   `artifact_type='dvr'` row with the retention/chapter policy snapshot and sends a
+   `DVRStartRequest` to the storage Helmsman.
+2. Helmsman records the source as rolling TS segments (`api_sidecar/internal/control/dvr_manager.go`).
+   `dvr+<internal_name>` is the live playback surface (`api_balancing/internal/triggers/processor.go`).
 3. Each `RECORDING_SEGMENT` webhook appends a row to the **segment ledger**
    `foghorn.dvr_segments` (`status='pending'` → `uploaded`)
-   (`api_balancing/internal/control/dvr_segments_repo.go:224`).
+   (`api_balancing/internal/control/dvr_segments_repo.go`).
 
-**Chapter finalization (enters the pipeline):** 4. A **chapter** is a bounded `[start_ms, end_ms)` slice tracked in `foghorn.dvr_chapters`
-(`open → closed → finalizing → finalized → frozen → reclaimed`). The **ChapterSweeper**
-(60s, `api_balancing/internal/jobs/chapter_sweeper.go:52`) rotates boundaries, closing a
-chapter (`open → closed`) — that is the finalize _trigger_. 5. The **ChapterFinalizationQueue** (30s + immediate wake,
-`api_balancing/internal/jobs/chapter_finalization_queue.go:40`) picks up `state='closed'`
-chapters, allocates the deterministic playback `artifact_hash`, inserts the **chapter VOD**
-row (`artifact_type='vod'`, `origin_type='dvr_chapter'`, `library_visible=false`,
-`status='finalizing'`) (`:540`), and dispatches a **`dvr_chapter_finalize`** job (`:381`).
+**Chapter finalization (enters the pipeline):**
+
+4. A **chapter** is a bounded `[start_ms, end_ms)` slice tracked in
+   `foghorn.dvr_chapters` (`open → closed → finalizing → finalized → frozen → reclaimed`).
+   The **ChapterSweeper** (60s, `api_balancing/internal/jobs/chapter_sweeper.go`) rotates
+   boundaries, closing a chapter (`open → closed`) — that is the finalize _trigger_.
+5. The **ChapterFinalizationQueue** (30s + immediate wake,
+   `api_balancing/internal/jobs/chapter_finalization_queue.go`) picks up `state='closed'`
+   chapters, allocates the deterministic playback `artifact_hash`, inserts the **chapter VOD**
+   row (`artifact_type='vod'`, `origin_type='dvr_chapter'`, `library_visible=false`,
+   `status='finalizing'`), and dispatches a **`dvr_chapter_finalize`** job.
+   Commodore registers that derived VOD only by joining the tenant-owned parent
+   DVR and snapshots its `requires_auth`, playback-policy document, and encrypted
+   webhook secret. A missing parent aborts registration; it can never manufacture
+   a public chapter policy from a permissive column default.
 
 > `api_balancing/internal/control/dvr_chapter_finalize_hook.go` is the **completion** handler
 > (Phase 2), NOT the trigger. The trigger is the sweeper + queue above.
@@ -137,23 +156,23 @@ row (`artifact_type='vod'`, `origin_type='dvr_chapter'`, `library_visible=false`
 Jobs live in `foghorn.processing_jobs`. The dispatcher is
 `api_balancing/internal/jobs/processing_dispatcher.go`.
 
-- **Lifecycle:** `queued` (insert) → `dispatched` (atomic claim, `FOR UPDATE SKIP LOCKED`,
-  `:94`) → `processing` (after the request is sent, `:371`) → `completed`/`failed` (written by
+- **Lifecycle:** `queued` (insert) → `dispatched` (atomic claim, `FOR UPDATE SKIP LOCKED`) →
+  `processing` (after the request is sent) → `completed`/`failed` (written by
   the result callback in `api_balancing/internal/control/server.go`, not the dispatcher). Stale
   `dispatched`/`processing` rows are requeued with backoff and eventually failed by
-  `recoverStale()` (`:552`).
+  `recoverStale()`.
 - **`job_id`** is an independent UUID; **at most one _active_ job per `(artifact_hash, job_type)`**
-  (advisory-lock dedup, `:755`). Retries reuse the row. Results join back
+  (advisory-lock dedup). Retries reuse the row. Results join back
   `processing_jobs.job_id → artifact_hash`.
-- **Node selection:** `job_router.go:21` picks the lowest-loaded alive node with `CapProcessing`
+- **Node selection:** `job_router.go` picks the lowest-loaded alive node with `CapProcessing`
   and per-class capacity.
 - **Request:** `ProcessingJobRequest{job_id, tenant_id, artifact_hash, source_url, job_type,
 internal_name, output_runtime_name, …}`. Crucially,
-  **`output_runtime_name = "vod+" + internal_name`** (`processing_dispatcher.go:337`).
+  **`output_runtime_name = "vod+" + internal_name`** (`processing_dispatcher.go`).
 
 ### Helmsman execution
 
-`ProcessingJobHandler.Handle` (`api_sidecar/internal/handlers/processing.go:465`) branches by
+`ProcessingJobHandler.Handle` (`api_sidecar/internal/handlers/processing.go`) branches by
 work kind:
 
 | Branch  | Condition                                                         | Handler                                           | Output                                         |
@@ -166,6 +185,23 @@ All three mux under `processing+<artifact_hash>`, then **validate the `RECORDING
 stale / failed / retired-generation events, verify output completeness against the authoritative
 source span), generate the `vod+<…>` DTSH sidecar, and return the result via `sendCompletedResult`.
 
+Processing progress and lease renewals are ephemeral: Helmsman sends them only while the Foghorn
+control stream is connected, because replaying stale progress cannot renew current ownership. A
+terminal `ProcessingJobResult` is a durable transition. The `cache_update` status is instead an
+ephemeral observation because replaying an old override can regress the live job. If a terminal
+result's immediate send fails, Helmsman fsyncs it to the local
+`HELMSMAN_STATE_DIR/control-outbox` and replays it after reconnect. The same outbox carries the
+other replay-safe terminal media transitions listed in
+[Trigger durability](trigger-durability.md#separate-media-control-completion-outbox). Progress and
+cache observations therefore cannot fill the bounded in-memory retry queue or evict a completion
+during a control-plane outage; container recreation preserves pending results when the required
+state volume is mounted.
+
+Generic processing-job progress is made monotonic by persisting `GREATEST(current, reported)` and
+emitting the returned value. Chapter-finalization progress has no persisted progress column; it is
+attempt-fenced liveness telemetry and may move backward if reports arrive out of order. Completion
+and failure remain attempt-fenced authoritative transitions.
+
 ### Completion authority — this is where tracks/duration/readiness are captured
 
 The validated result carries the accepted A/V track set:
@@ -174,7 +210,13 @@ The validated result carries the accepted A/V track set:
 
 Foghorn's `processProcessingJobResult` (`api_balancing/internal/control/server.go`):
 
-- Routes chapter results (`chapter-finalize-<id>` job_id) to `handleChapterFinalizeResult`.
+- Routes chapter results (`chapter-finalize-v2-<attempt>-<chapter_id>` job_id) to
+  `handleChapterFinalizeResult`; progress, retry, failure, and completion are
+  fenced by the attempt, while node-originated writes additionally require the
+  assigned node. Helmsman renews the durable ownership clock during every quiet
+  staging/readiness phase and reports five-second progress while pushing; a
+  newer attempt supersedes an older local owner before reusing the processing
+  stream.
 - For clip/VOD, the whole terminal transition is **one transaction**: it locks the job
   `FOR UPDATE` (a cancelled/deleted/duplicate job is a no-op — no resurrection), then the guarded
   readiness UPDATE keyed by `artifact_hash` (`status='ready'`, `format`, `size_bytes`,

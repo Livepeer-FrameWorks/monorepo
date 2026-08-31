@@ -129,13 +129,13 @@ Cross-reference with disk-pressure metrics on the recording sidecar (`storage_no
 
 3. Map the state to action:
 
-   | State                                | What to do                                                                                                             |
-   | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
-   | `open` / `closed`                    | Recording still in flight or queue hasn't picked up yet. Wait one finalization tick (30s).                             |
-   | `finalizing`                         | Processing job dispatched. Check the recording origin's Helmsman logs for `chapter finalize` entries.                  |
-   | `finalized` / `frozen` / `reclaimed` | Chapter is playable. Use the chapter's `playback_id` (public Commodore-minted ID) as the player input.                 |
-   | `failed_source_missing`              | Source segments lost from both local AND the recovery freeze. Chapter is unrecoverable. Inspect `dvr_segments.status`. |
-   | `failed_permanent`                   | Repeated retries exhausted (`finalize_attempts` ≥ 5) or invalid ledger input. Inspect `last_failure_reason`.           |
+   | State                                | What to do                                                                                                                          |
+   | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+   | `open` / `closed`                    | Recording still in flight or queue hasn't picked up yet. Wait one finalization tick (30s).                                          |
+   | `finalizing`                         | Processing job dispatched. Check the recording origin's Helmsman logs for `chapter finalize` entries.                               |
+   | `finalized` / `frozen` / `reclaimed` | Chapter is playable. Use its Commodore-minted `playback_id` as the player input; the parent DVR's snapshotted policy still applies. |
+   | `failed_source_missing`              | Source segments lost from both local AND the recovery freeze. Chapter is unrecoverable. Inspect `dvr_segments.status`.              |
+   | `failed_permanent`                   | Repeated retries exhausted (`finalize_attempts` ≥ 5) or invalid ledger input. Inspect `last_failure_reason`.                        |
 
 ## Triage: chapter finalization stuck
 
@@ -148,7 +148,14 @@ SELECT chapter_id, state, finalize_attempts, last_failure_reason, created_at
  ORDER BY created_at;
 ```
 
-If `finalize_attempts` is climbing without state progress, the recording origin Helmsman is rejecting the job (admission, disk pressure, source unavailable). Check Helmsman logs for the chapter's job_id (`chapter-finalize-<chapter_id>`).
+While a finalization is active, Helmsman renews an attempt-fenced progress lease
+through recovery and readiness and reports five-second progress while pushing.
+A healthy long remux therefore remains owned even when its media position has
+not advanced yet. If `finalize_attempts` is climbing,
+check Foghorn for rejected progress/failure fences and Helmsman for expired
+dispatches, superseded local attempts, admission failures, disk pressure, or an
+unavailable source. Correlate both services with the job ID
+`chapter-finalize-v2-<attempt>-<chapter_id>`.
 
 ## Triage: storage node out of space during DVR
 

@@ -27,8 +27,14 @@ frameworks edge deploy --ssh admin@target --mode container
 One image — `livepeerframeworks/frameworks-edge` (also on GHCR) — runs the whole stack under **s6-overlay v3** as PID 1: `init-seed` (oneshot) → `caddy` + `mistserver` → `helmsman`. Sources live in `edge/` (Dockerfile, s6 service tree, `stage-dist.sh`).
 
 - **Same artifacts as native.** The image is debian-based and ships the pinned **native release tarballs** (glibc) staged by `edge/stage-dist.sh`. Foghorn-driven in-place updates (`DesiredStateUpdate`) therefore download byte-identical artifacts inside the container; `DEPLOY_MODE=container` nodes are fully eligible for automatic release convergence.
-- **Persistent volumes**: `frameworks_opt:/opt/frameworks` (binaries; updates survive recreate), `frameworks_etc:/etc/frameworks` (certs/pki/mist config/version files), `caddy_etc:/etc/caddy` (activated Caddyfile), `caddy_data:/var/lib/caddy`, `edge_storage:/data/storage` (hot storage). Host binds: `./pki` (initial CA) and `./telemetry`.
+- **Persistent volumes**: `frameworks_opt:/opt/frameworks` (binaries; updates survive recreate), `frameworks_etc:/etc/frameworks` (certs/pki/mist config/version files), `caddy_etc:/etc/caddy` (activated Caddyfile), `caddy_data:/var/lib/caddy`, `edge_storage:/data/storage` (reclaimable hot media), and `edge_state:/data/state` (ConfigSeed, trigger WAL, fences, node identity, processing overrides). Remote Ansible installs use stable `./storage` and `./state` host binds for the last two. Host binds also include `./pki` (initial CA) and `./telemetry`.
 - **Seed semantics** (`helmsman seed-edge`, `api_sidecar/internal/edgeseed`): installs image-baked components onto the volume when missing, and upgrades only versions a previous image seeded (tracked in `/etc/frameworks/image-seeded-versions.env`). A Foghorn-pushed version — newer or deliberately pinned older — is never touched; the release reconciler stays the source of truth.
+- **Runtime config recovery**: the image/native seed is bootstrap material, not
+  the ongoing Mist authority. Helmsman applies the last-good ConfigSeed from
+  local persistence immediately and then reconciles with Foghorn. Operators do
+  not hand-edit Mist trigger configuration; a stack restart converges it from
+  code. Foghorn can rebuild ConfigSeed from its durable last complete record
+  while central services are unavailable.
 - **Process control**: the updater's `ServiceController` seam (`api_sidecar/internal/updater/procctl*.go`) selects systemd/launchd/s6 via `HELMSMAN_SUPERVISOR` or auto-detection. Under s6: Caddy restart = admin-API `/stop` + s6 relaunch (ambient `CAP_NET_BIND_SERVICE` re-granted by the run script via `setpriv`); Mist reload = direct same-uid `SIGUSR1`; helmsman self-update = `os.Exit(0)` + s6 relaunch.
 - **Users**: native parity — `frameworks` (1001) runs helmsman + Mist, `caddy` runs the proxy, `frameworks` is in the `caddy` group for the 0640 cert/key contract. The admin socket is `unix//run/caddy/admin.sock|0660`.
 - **Networking**:
@@ -56,6 +62,15 @@ frameworks cluster nodes evict --node edge-1
 
 Before provisioning, `add` probes the target over SSH. New installs write a `CLUSTER_ID` marker into the edge environment; subsequent runs use that marker to distinguish a clean target, a complete same-cluster install, a foreign cluster, and an existing edge install without a cluster marker. A same-cluster target only short-circuits when the edge stack and node marker are present, Quartermaster still has an active node registration, and Foghorn reports live node health. Partial installs, stale markers, missing registrations, non-active registry status, and unmarked installs require `--force-reapply` after operator confirmation. Foreign clusters are refused.
 
+If an enrolled node loses its durable Helmsman state, recover it with a fresh
+enrollment token and `frameworks edge provision --ssh <user>@<host>
+--force-reenroll --enrollment-token <fresh-token>` (or `--local`). That explicit
+flow authorizes a node-key rotation while retaining the tenant/node and stable
+machine/MAC binding. The fresh token identifies that one rotation across
+retries; once Foghorn accepts it, restarts with the same provisioned request
+reuse the accepted key. Normal redeploys never rotate the identity. Do not delete
+Quartermaster rows or edit the Mist config by hand.
+
 Node-targeted commands accept `--node <name-or-id>` and use an interactive node picker on TTYs when no selector is provided. `--node-id` remains as a deprecated scripting alias.
 
 `drain` sets the node to `draining`, which stops new placement while allowing existing sessions to finish. `resume` returns the node to `normal`. `remove` is graceful by default: it sets `draining`, waits up to 4 hours for active streams to reach zero unless `--wait` changes the deadline, then sets `maintenance` and marks the Quartermaster registry row `retired`. `remove --wait 0` is rejected; use `evict` for immediate fencing. `evict` immediately sets `maintenance` and marks the registry row `evicted`. Mesh and DNS eligibility already filter to active nodes, so these non-active statuses remove the node from normal routing surfaces without deleting historical identity data.
@@ -71,6 +86,17 @@ The CLI shape is shared across operator personas, but the auth path is different
 | user       | Account, billing, insights, Skipper interactions                         | Public Bridge/account APIs; no cluster node lifecycle mutation                     |
 
 Self-hosted is not a separate node type from edge. It is the tenant-owned operator persona for a BYO edge footprint. The operator does not run Quartermaster or Foghorn in this flow. Bridge creates or reuses the private edge cluster, mints the enrollment token, validates bootstrap state through Quartermaster, and may proxy only Foghorn's public `PreRegisterEdge` bootstrap RPC. Those edges are still managed by the platform control plane. `frameworks cluster nodes ...` is a platform/operator surface for direct Quartermaster/Foghorn lifecycle operations, not the BYO edge path. Hosted user contexts remain separate: they can inspect account and cluster insights through public account APIs, but they cannot drain, remove, evict, or add infrastructure nodes.
+
+Production service environments are rendered by the CLI's service renderer,
+not copied from the development `docker-compose.yml`. Commodore receives the
+media-authority signer and public recipient map; each Foghorn receives the trust
+set, explicit control-cell ID, and only its own cell decryption key; Helmsman
+receives neither. The seal root is derivation input and is removed from every
+workload environment. Production rendering fails rather than starting a
+partially configured authority plane when any required signer, recipient,
+cell-ID, trust, or seal input is absent. The recipient key ID binds the
+control-cell ID and public key and is recomputed by Commodore and Foghorn at
+startup, so cross-cell key placement is rejected before media serving begins.
 
 ## Edge Release State
 

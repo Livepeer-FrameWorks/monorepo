@@ -70,6 +70,18 @@ State mutation helpers follow this pattern: update in-memory, write-through to R
 
 Identity fields (`NodeID`, `TenantID`, `StreamID`, `PlaybackID`, node `ClusterID`) merge **monotonically** on every path — local writers, replicated changelog entries, and rehydration alike fill blanks but never replace a non-empty value with an empty one. A cold-enrichment write that produced an identity-less entry heals on the next identified event instead of being replicated cluster-wide.
 
+The periodic PostgreSQL `node_outputs` reconciliation is narrower than Redis
+state rehydration: it may refresh durable base URL/output metadata, but it never
+acts as a heartbeat, marks a node healthy, republishes Redis, or clears runtime
+identity/geo. New rows loaded from that projection remain unhealthy until a
+real lifecycle event arrives, and retain the durable row timestamp so stale
+node removal is not postponed by the reconcile interval. Once this process
+evicts such a row, a process-local tombstone suppresses repeated rehydration and
+its Redis/DB side effects; only authenticated node activity clears that
+tombstone. A newly discovered, unverified repository row emits no DNS delta:
+it was never admitted into this process's DNS view, so publishing a withdrawal
+would create churn without proving liveness or membership.
+
 ### Read Path
 
 ```
@@ -129,6 +141,41 @@ Foghorn publishes two addresses with different audiences:
 - HA relay ownership stores `FOGHORN_RELAY_ADVERTISE_ADDR` in Redis, normally the mesh host on `:18019`. Relay traffic uses the internal gRPC listener and internal CA identity `foghorn.internal`.
 
 Provisioning should set `FOGHORN_RELAY_ADVERTISE_ADDR` from the node's mesh DNS or mesh IP. If it is absent, Foghorn falls back to `FOGHORN_RELAY_ADVERTISE_HOST`, then `FOGHORN_HOST`, then the external advertise host with the internal port.
+
+#### Restart-time node authentication
+
+Quartermaster remains authoritative for first enrollment and for an online
+accept/reject decision. After it authenticates a Helmsman fingerprint, Foghorn
+persists the canonical node, tenant, and cluster binding in the shared cell
+database, bound to a node-held Ed25519 public key and a bounded validity time.
+Every reconnect signs the asserted ID, stable fingerprints, timestamp, and a
+fresh nonce; the cell durably consumes the nonce before publishing connection
+state. If Quartermaster is unavailable during a later reconnect, any Foghorn
+replica may recover that exact still-valid key binding locally. The exact stable
+signal Quartermaster matched is retained. Network addresses and a
+client-asserted node ID are never offline authentication.
+
+For nodes provisioned before the key-binding column existed, a null key is
+deliberately unusable for local recovery. The first online machine-ID or MAC
+match after upgrade carries the Foghorn-verified registration public key;
+Quartermaster atomically fills only a null binding and returns it for equality
+checking before Foghorn persists admission. It never replaces a different key,
+and a peer-IP-only match never initializes one. Until that online transition
+completes, reconnect remains control-plane-dependent.
+
+Fallback is limited to dependency absence and transient gRPC failures such as
+`Unavailable`, an open client circuit breaker, or a deadline. `NotFound` and
+`PermissionDenied` are authoritative rejections: Foghorn deletes the matching
+stored admission and never consults it for that request. This keeps an already
+admitted media node operational through a central outage without turning the
+cell database into an enrollment or revocation bypass.
+
+The public control listener verifies the node's signed registration before
+remote identity work and bounds concurrent pre-authentication Quartermaster
+calls. Saturation is treated like temporary authority unavailability for a
+still-valid local binding; first enrollment remains online-only. Persist,
+load, revoke, and saturation outcomes are exposed through
+`foghorn_node_admission_events_total{operation,result}`.
 
 #### Cross-Cluster Interaction
 
@@ -223,7 +270,15 @@ Acceptance specs live in `api_balancing/internal/state/ha_ordering_spec_test.go`
 
 Whole-struct snapshots over the changelog are only safe for **single-writer** state: each node's metrics, health, and stream instances funnel through that node's conn-owner instance, so the log totally orders one writer's snapshots. State writable from multiple instances must not ride them — last-snapshot-wins drops the other writer's contribution even with perfect ordering. Each multi-writer field gets one of three shapes:
 
-> **Caveat — changelog IDs do NOT order across a conn-ownership handoff.** "Single-writer" holds only while one connection owns a node. During a reconnect/failover the owner changes, and a stale old-owner's snapshot can still be appended _after_ the new owner's — earning a higher entry ID and winning the watermark. Redis Stream IDs order by _append_ order, not report/ownership order. The **whole-node artifact inventory** therefore does not rely on the changelog watermark alone: it carries the connection **ownership fence** (issued monotonically at Register from a Postgres sequence) plus a per-connection sequence, and orders by `(fence, seq)` at **every** sink — in-memory acceptance gate, Postgres `node_artifact_report_watermark` CAS, the Redis key (a fenced `SetNodeArtifactsFenced` Lua CAS on a companion `artifacts_wm` watermark), and the changelog apply (gated by the `(fence, seq)` carried on every `NodeArtifactState` row, not the entry ID). Connection ownership itself is a **fenced `conn_owner` CAS**: `AcquireConnOwnerFenced` only takes the key when the caller's fence is strictly higher, a superseded registration is rejected (fail closed), and the losing connection is torn down when its `RefreshConnOwnerFenced` returns `ErrConnOwnerLost`. Redis being unreachable at acquire time also fails closed (the registration is rejected) so an unfenced owner never serves. A genuinely single-Foghorn cell runs without Redis (the fence is still enforced in memory + Postgres); multi-Foghorn without Redis remains unsupported (there is no shared ownership to fence).
+> **Caveat — changelog IDs do NOT order across a conn-ownership handoff.** "Single-writer" holds only while one connection owns a node. During a reconnect/failover the owner changes, and a stale old-owner's snapshot can still be appended _after_ the new owner's — earning a higher entry ID and winning the watermark. Redis Stream IDs order by _append_ order, not report/ownership order. The **whole-node artifact inventory** therefore does not rely on the changelog watermark alone: it carries the connection **ownership fence** (issued monotonically at Register from a durable per-node Postgres counter) plus a per-connection sequence, and orders by `(fence, seq)` at **every** sink — in-memory acceptance gate, Postgres `node_artifact_report_watermark` CAS, the Redis key (a fenced `SetNodeArtifactsFenced` Lua CAS on a companion `artifacts_wm` watermark), and the changelog apply (gated by the `(fence, seq)` carried on every `NodeArtifactState` row, not the entry ID). Connection ownership itself is a **fenced `conn_owner` CAS**: `AcquireConnOwnerFenced` only takes the key when the caller's fence is strictly higher, a superseded registration is rejected (fail closed), and the losing connection is torn down when its `RefreshConnOwnerFenced` returns `ErrConnOwnerLost`. Redis being unreachable at acquire time also fails closed (the registration is rejected) so an unfenced owner never serves. A genuinely single-Foghorn cell runs without Redis (the fence is still enforced in memory + Postgres); multi-Foghorn without Redis remains unsupported (there is no shared ownership to fence).
+
+During the v0.3 expand window, new per-key ordering counters allocate in the
+`2^52` namespace while legacy global sequences remain in their existing low
+namespace. The migration must never restart legacy sequences into the new range:
+old-binary allocations must lose to every new-binary allocation on the same key.
+Redis compares the large decimal integers numerically, but Go constructs the
+persisted `fence-sequence` watermark string so Lua number formatting cannot round
+or rewrite it in scientific notation.
 
 - **Derived at read time** — the stream-union aggregates (`Viewers`, `TotalConnections`, `Inputs`, `BytesUp`, `BytesDown`). Per-(stream,node) instances are single-writer and replicate; the union is their sum, computed in the state getters (`deriveUnionStatsLocked`). The stored union fields still serialize (old-peer wire compat, each writer stores its own derived view) but are never served from an incoming snapshot.
 - **Own keyed changelog entity** — `NodeState.OperationalMode` travels as `node_mode` entries with an independent watermark (`{cluster_id}:node_mode:{node_id}` write-through key). Incoming **node snapshots never overwrite a locally-known mode** (an in-flight heartbeat marshaled before a mode change would otherwise republish the old mode at a newer entry ID); first sight of an unknown node still adopts the snapshot's mode. `SetNodeOperationalMode` stays Postgres-first (`foghorn.node_maintenance`) and publishes both the dedicated entity and the node snapshot, so mixed-version peers converge during a rolling deploy; a mode set through an old-version instance reaches new instances via the 180s Postgres reconcile.
@@ -233,14 +288,21 @@ The merge exceptions live in one place: `mergeIncomingNode` (`internal/state/cac
 
 ### Identity resolution facade
 
-`api_balancing/internal/identity` is the single front door for "who does this stream/artifact belong to, and where does it live". Every trigger handler, gRPC surface, and federation path resolves through it instead of hand-rolling a lookup chain, so a consumer reading only a cold layer (the bug class behind empty-tenant/cluster attribution on HA replicas) can only be fixed once, centrally.
+`api_balancing/internal/identity` is the runtime-placement and connected-mode
+identity facade for "where does this stream/artifact live." Verified signed
+media authority is the separate first-class front door for tenant/object
+identity and business policy on media requests. A ready local projection
+bypasses connected hydration; unready or never-seen authority may still use the
+facade during rollout and connected operation. Non-media lifecycle, federation,
+and management consumers also use the facade instead of hand-rolling cold-layer
+lookup chains.
 
 Resolution layers, in order, each filling blanks monotonically (never erasing earlier layers):
 
-| Kind     | Chain                                                                                                          |
-| -------- | -------------------------------------------------------------------------------------------------------------- |
-| stream   | in-memory state union (serving NodeID + its cluster) → stream registry (which hydrates from Commodore on miss) |
-| artifact | stream registry (cache → `foghorn.artifacts` / processing jobs SQL) → Commodore `Resolve*Hash`                 |
+| Kind     | Chain                                                                                                                  |
+| -------- | ---------------------------------------------------------------------------------------------------------------------- |
+| stream   | in-memory state union (serving NodeID + its cluster) → stream registry → Commodore hydration on a connected fallback   |
+| artifact | stream registry (cache → `foghorn.artifacts` / processing jobs SQL) → Commodore `Resolve*Hash` on a connected fallback |
 
 Only an authoritative not-found (the system of record answered "does not exist", `identity.ErrNotFound` from the adapters) is negative-cached, briefly (30s), so an unknown name arriving with every Mist trigger can't become a Commodore RPC firehose. Transient failures — RPC errors, DB outages, context expiry — are never cached: a dependency flap must retry on the next trigger, not harden into a 30s hard unknown for freeze/mint/thumbnails. A registry with no Commodore client yet (boot window, reconnect) returns `control.ErrRegistryUnavailable`, which is transient by this rule. Per-layer consults are counted in `foghorn_identity_resolutions_total{kind,layer,outcome}` so the next siloing bug shows up on a dashboard.
 
@@ -248,7 +310,34 @@ For artifacts with no kind hint, the Commodore fallback probes clip→vod→dvr;
 
 **Stale-on-transient-error (registry).** The registry's 30s TTL is a revalidation cadence, not an availability cliff: when re-hydration fails _transiently_ (Commodore RPC error, SQL outage, nil client), an expired entry is served as fallback while its age is within `ttl + staleMax` (default 5m, env `FOGHORN_REGISTRY_STALE_MAX`, 0 disables). Authoritative not-found always wins over a stale entry — a retracted stream must not be resurrected from cache. Runtime Locations stay fresh independently of Commodore (admission, federation ads, redis sync touch them), so stale-serving only defers identity refresh. Concurrent hydrations for the same reference share one RPC via singleflight, run on a context detached from the first caller's cancellation (`context.WithoutCancel` + 5s timeout) so an abandoned caller can't fail the round for every waiter. Outcomes are counted in `foghorn_stream_registry_resolutions_total{entity,outcome}` (`cache_hit`, `hydrated`, `stale_served`, `miss`, `unavailable`, `error`) with rate-limited warnings on stale serves.
 
-**Media-plane resolve resilience — scope.** The live PLAY_REWRITE resolve path (`control.ResolveStream`, the synchronous Mist trigger) goes through the registry, so it inherits singleflight + stale-serve and keeps resolving known-live streams during a Commodore/DB blip. To make that lossless the registry hydrates the full playback identity — `requires_auth` (added to Commodore's `ResolveStreamContext`) and `cluster_peers` — alongside routing, and a routing-only warm entry (from PUSH_REWRITE admission) is re-hydrated on the playback path to fill those fields. The trade-off: this path now also depends on Quartermaster + Purser (the admission deps of `ResolveStreamContext`), so on a transient registry-hydrate failure it falls back to a direct (singleflighted) `ResolvePlaybackID`, which needs only Commodore. The `/play` HTTP + gRPC `ResolveViewerEndpoint` path (`control.ResolveContent`) is **not** yet on the registry — it resolves live directly via Commodore and is not stale-served; extending it is open follow-up. Mist's literal legacy fallback `"true"` is not a permission grant; it is merely an untyped value that different call sites consume differently. FrameWorks now configures explicit per-trigger failure actions and reconciles every managed trigger definition. See [Mist trigger contract](mist-trigger-contract.md).
+**Media-plane resolve resilience — signed local authority.** The registry remains
+the runtime location/placement facade, but tenant, object, ingest, source, and
+playback policy authority now comes from the verified projection persisted in
+the Foghorn cell database. `PLAY_REWRITE`, `/play`, gRPC
+`ResolveViewerEndpoint`, and `USER_NEW` consume the same object+tenant version.
+Artifact routing reuses that identity and local artifact/session state; optional
+analytics or catalog metadata cannot trigger a second Commodore lookup. Ready
+marked authority never falls back centrally on denial, corruption, or expiry.
+Before a projection is marked ready, the old connected resolver is retained for
+shadow comparison and mixed-version rollout.
+
+The registry's stale window remains a compatibility/runtime-location aid; it is
+not tenant or billing authority. Soft-expired signed authority remains usable
+until its signed hard bound while a refresh is requested. Every logical
+Commodore, Quartermaster, or Purser client invocation under a tagged media
+request is counted by
+`foghorn_media_request_central_rpcs_total{path,service,method}` so an undeclared
+waterfall is visible and testable. Retries within that logical invocation are
+intentionally not counted. Mist's literal legacy fallback
+`"true"` is a value, not permission; explicit trigger actions remain the engine
+boundary. See [Media-cluster authority](media-authority.md) and
+[Mist trigger contract](mist-trigger-contract.md).
+
+Commodore's pooled Foghorn clients keep breaker state per destination cell, and
+`ApplyMediaAuthority` has an isolated breaker within that cell. A slow authority
+store therefore cannot open the viewer/clip/DVR control breaker, and breaker
+metrics identify the affected cell instead of collapsing every pool entry into
+`name="foghorn"`.
 
 Wiring lives in `cmd/foghorn/main.go` (`identity.SetDefault`); the facade itself imports no other internal package, with layers injected as narrow adapters — it works in every deployment shape, including registry-less tests and single-instance cells.
 
@@ -267,12 +356,20 @@ A **cell** is one Foghorn pool (the instances sharing a Redis, as described abov
 ### How assignments are populated (enforced today)
 
 - **GitOps bootstrap**: the cluster manifest carries `cell` / `class` / `control_cell` / `eligible_serving_cells`, with render-time defaults in `cli/pkg/bootstrap/render.go` (Cell ← cluster ID, ControlCell ← Cell, EligibleServingCells ← [ControlCell]); Quartermaster's desired-state reconciler upserts them (`api_tenants/internal/bootstrap/clusters.go`).
+  Media-authority seal recipients are derived from cells with an enabled Foghorn deployment plus
+  explicitly declared `eligible_serving_cells`. An edge-only or storage-only cluster does not become
+  a recipient merely from its cluster ID; every explicitly eligible cell must still map to an
+  enabled Foghorn or production rendering fails.
 - **Runtime creation**: `CreatePrivateCluster` / `EnableSelfHosting` (`api_tenants/internal/grpc/server.go`) pick a control cell by scoring healthy `platform_official` Foghorn instances (internal-control listener, running + healthy) on load and geo, then write `control_cell_id` = chosen cell and `eligible_serving_cell_ids` = `[control cell]` in the same transaction that creates the cluster row, owner access grant, and Foghorn `service_cluster_assignments` row.
 
 ### What consumes the assignment (enforced today)
 
 - **Navigator tenant-alias DNS membership**: the alias apply-state worker (`api_dns/internal/worker/tenant_alias_worker.go`) only publishes a cluster's edges into a tenant's DNS set when `ClusterControlCellHealthy` passes — resolved via Quartermaster `GetCluster` → `control_cell_id` → the _control cell's_ `health_status`. A degraded or offline controlling cell drops its controlled clusters out of the membership set until it recovers. Empty/self control cell falls back to the cluster's own health.
 - **Public Foghorn addressing**: `lookupClusterPublicFoghornGRPC` falls back to the control cell's `base_url` when the controlled cluster has none, and a background repair batch copies the control cell's `base_url` onto `tenant_private` clusters missing one (`tenant_private_repair.go`).
+- **Signed media authority**: Commodore copies `control_cell_id` and the normalized
+  `eligible_serving_cell_ids` into each effective tenant grant. Their union is the delivery and
+  sealed-secret recipient set. Foghorn retains the same fields in its durable signed projection;
+  local routing may serve only from those delivered grants plus current cell-local reachability.
 - The columns are exposed on the `InfrastructureCluster` proto (`ControlCellId`, `EligibleServingCellIds`) for any reader of `GetCluster`.
 
 ### Schema-only today (not enforced)
@@ -280,7 +377,6 @@ A **cell** is one Foghorn pool (the instances sharing a Redis, as described abov
 Be precise about what does **not** exist yet — until v0.2.33 this model lived only in SQL comments, and parts of those comments are still aspirational:
 
 - **`reassignment_state` has no writer or reader.** The `ReassignClusterControlCell` RPC named in the migration comment does not exist anywhere in the codebase; nothing ever sets `'draining'`, and Navigator does not filter on it. The drain-then-ACK reassignment flow (including the `GetEdgeApplyState` ACK the comment references) is design intent only.
-- **`eligible_serving_cell_ids` has no serving-path consumer.** It is written at creation and carried on the proto, but neither Foghorn routing nor Navigator reads it — multi-cell serving authorization is not enforced anywhere. Today the effective serving set is whatever `service_cluster_assignments` says.
 
 ## Key Schema
 
@@ -373,7 +469,15 @@ foghorn-2:
   ports: [18018, "18039:18029"]
 ```
 
-Both instances register independently with Quartermaster via `BootstrapService` using the internal gRPC port for service-to-service discovery. HA relay addressing is not taken from Quartermaster; it is the internal `FOGHORN_RELAY_ADVERTISE_ADDR` value stored in Redis connection ownership. An upstream load balancer (Nginx, Caddy, or cloud LB) distributes public HTTP and public edge-control requests across instances.
+Both instances register independently with Quartermaster via `BootstrapService`
+using the internal gRPC port for service-to-service discovery. Registration gets
+one bounded startup attempt; an unavailable Quartermaster is reconciled in the
+background and does not delay the local gRPC or HTTP listeners. Likewise,
+served-cluster refresh and Commodore authority replay run as repair work after
+local state is available. HA relay addressing is not taken from Quartermaster;
+it is the internal `FOGHORN_RELAY_ADVERTISE_ADDR` value stored in Redis
+connection ownership. An upstream load balancer (Nginx, Caddy, or cloud LB)
+distributes public HTTP and public edge-control requests across instances.
 
 ### Local HA Relay Validation Matrix
 

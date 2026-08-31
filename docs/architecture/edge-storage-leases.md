@@ -87,7 +87,7 @@ Lease checks protect _open_ files; the durable-copy check protects _cold_ ones. 
 
 Anything else (`sync_pending`, `sync_failed`, `not_synced`, `not_found`, S3 unverifiable, Foghorn disconnected) refuses the eviction; Helmsman skips the candidate and triggers a storage sync instead. Local eviction therefore never removes the sole copy of an artifact — the delete happens only after a durable copy is proven elsewhere.
 
-Successful evictions report back (`StorageLifecycle` EVICTED with warm-duration, plus `ArtifactDeleted`) so Foghorn's placement state stays truthful. Block-cache (`.blocks`) eviction skips the artifact-index purge and `ArtifactDeleted` — it is a derived relay-cache action and the canonical file may still be warm.
+Successful evictions remove the copy through the shared artifact-index mutation before reporting back (`StorageLifecycle` EVICTED with warm-duration, plus `ArtifactDeleted`), so snapshots captured afterward exclude the deleted bytes. Foghorn's per-copy deletion watermark is the database-side resurrection fence: inventory and sync-completion observations captured before the deletion cannot reinsert the placement even when their transactions commit afterward. Block-cache (`.blocks`) eviction skips the artifact-index purge and `ArtifactDeleted` — it is a derived relay-cache action and the canonical file may still be warm.
 
 ### Interaction with Storage Admission
 

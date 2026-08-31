@@ -100,6 +100,10 @@ than dialed directly. A failed attempted probe exits nonzero.
 
 ### Control plane first, then edges
 
+An in-place 0.3.0 upgrade is supported only from the corrected, fully migrated **v0.2.96**
+stepping-stone. Upgrade older installations to v0.2.96, complete and verify its migrations, and
+only then start the v0.3.0 expand phase. The release planner refuses an unproven source version.
+
 Deploy and migrate the **control plane first**; a new Foghorn comes up without requiring
 any edge to be ready. Foghorn enforces a **minimum control-protocol version** at sidecar
 registration: a sidecar declaring a version below the deployed minimum is **rejected**
@@ -109,13 +113,141 @@ that sidecar cannot receive an in-band updater command. When a release advances 
 minimum with no mixed-version window, operators must redeploy affected edges out of band;
 the specific minimum and interruption window belong in that release's notes.
 
-<Aside type="caution" title="0.3.0 makes a one-time protocol-v3 hard cut">
-  Foghorn 0.3.0 rejects protocol-v2 Helmsmans. The provider control plane is upgraded before the
-  edge release target is synchronized, so existing v2 edges temporarily disappear from platform
-  routing and cannot auto-update over their rejected control stream. After the control-plane
-  rollout, manually redeploy every self-hosted edge to the 0.3.0 edge image. An offline v2 edge
-  returning later must also be manually updated before it can reconnect.
+<Aside type="caution" title="0.3.0 makes a one-time protocol-v4 hard cut">
+  Foghorn 0.3.0 requires protocol v4 and rejects older Helmsmans. The provider control plane is
+  upgraded before the edge release target is synchronized, so existing v2/v3 edges temporarily
+  disappear from platform routing and cannot auto-update over their rejected control stream. After
+  the control-plane rollout, manually redeploy every self-hosted edge to the 0.3.0 edge image. An
+  offline v2 or v3 edge returning later must also be manually updated before it can reconnect. The
+  interruption lasts from the Foghorn rollout until each edge is redeployed; there is no
+  mixed-version grace period. A single-cell installation therefore has no platform-routed media
+  service during that interval. Schedule and rehearse the edge redeploy as part of the same
+  maintenance window. Attempt-less chapter-finalization results from the retired protocol are
+  deliberately rejected by Foghorn's attempt fence. After the edge is updated, a v2 replacement job
+  cancels and waits out any legacy local owner before reusing the processing stream, so an
+  interrupted chapter may remux again but two attempts never write it concurrently. In the inverse
+  delivery order, an upgraded Helmsman permits an attempt-less legacy dispatch only while that
+  processing stream is idle; without an attempt identity it cannot supersede an active owner.
+  Attempt-zero progress and results are rejected by the upgraded Foghorn fence, so this direction is
+  safe during the cut but is not a completion guarantee. The upgraded control plane reclaims and
+  redispatches the work with an attempt-fenced v2 identity after the edge upgrade.
 </Aside>
+
+Before rendering 0.3.0 services, make the media-authority roots stable in the
+production shared secret source: the Ed25519 signing tuple,
+`MEDIA_AUTHORITY_SEAL_ROOT_SECRET`, and the 32-byte hex
+`FOGHORN_STATE_ENCRYPTION_KEY` deployment root. The CLI derives distinct seal
+and state-encryption material for every declared Foghorn control cell and
+refuses a recipient cell that has no enabled Foghorn deployment. Do not copy a
+rendered cell key back into the shared secret file. v0.3.0 accepts one seal
+recipient per cell, so changing the seal root is a coordinated maintenance and
+full authority-recompilation operation, not an overlap rotation.
+
+Generate the five new production values with the CLI; it writes a new mode-0600 file and refuses
+to overwrite anything:
+
+```bash
+frameworks cluster secrets generate-media-authority --out /secure/path/media-authority.env
+```
+
+The fragment contains exactly `MEDIA_AUTHORITY_SIGNING_KEY_ID`,
+`MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64`, `MEDIA_AUTHORITY_TRUST_SET`,
+`MEDIA_AUTHORITY_SEAL_ROOT_SECRET`, and `FOGHORN_STATE_ENCRYPTION_KEY`. This is the upgrade command;
+do not use `generate-shared` on an existing deployment because that fresh-bootstrap command also
+generates unrelated shared credentials.
+
+Import every value from that fragment into the SOPS-managed shared secret file using the GitOps
+repository's supported secret-editing command, verify `frameworks cluster doctor --deep`, then
+securely remove the fragment. Do not paste the private key or roots into the manifest or command
+arguments.
+
+Before the Quartermaster expand phase, detect cloned or re-provisioned node identities:
+
+```sql
+SELECT 'machine' AS kind, fingerprint_machine_sha256 AS fingerprint,
+       array_agg(node_id ORDER BY last_seen DESC) AS nodes
+FROM quartermaster.node_fingerprints
+WHERE fingerprint_machine_sha256 IS NOT NULL AND btrim(fingerprint_machine_sha256) <> ''
+GROUP BY fingerprint_machine_sha256 HAVING count(*) > 1
+UNION ALL
+SELECT 'mac', fingerprint_macs_sha256, array_agg(node_id ORDER BY last_seen DESC)
+FROM quartermaster.node_fingerprints
+WHERE fingerprint_macs_sha256 IS NOT NULL AND btrim(fingerprint_macs_sha256) <> ''
+GROUP BY fingerprint_macs_sha256 HAVING count(*) > 1;
+```
+
+For each result, keep only the binding for the physical node that still owns that identity. Fix a
+cloned VM's machine ID/MACs, remove the stale `node_fingerprints` binding for that node, and enroll
+it again. Do not pick a winner solely by timestamp. The v0.3.0 unique indexes are built concurrently,
+but they still fail closed while duplicate proofs remain. A failed concurrent build leaves an invalid
+index with its name reserved. After resolving the duplicate data, remove only the invalid indexes
+before retrying the expand phase:
+
+```sql
+DROP INDEX CONCURRENTLY IF EXISTS quartermaster.uq_qm_fingerprints_machine;
+DROP INDEX CONCURRENTLY IF EXISTS quartermaster.uq_qm_fingerprints_macs;
+```
+
+Execute those commands separately with autocommit enabled. The postdeploy phase verifies that both
+indexes exist and are valid, so a partial build cannot be recorded as a healthy rollout.
+
+Foghorn admission-output encryption is rolling-safe without a manual pause or
+configuration edit. A 0.3.0 writer stores credential-bearing obligations in the
+`pending_v2`/`applied_v2` state family, which pre-0.3 workers do not claim. A
+0.3.0 worker continues draining legacy rows and migrates plaintext/v1 payloads
+to row-bound v2 ciphertext under the row lock. During and after the rollout,
+watch `foghorn_admission_payload_crypto_total{format,result}`; plaintext/v1 opens
+should fall to zero while `result="migrated"` accounts for the backlog.
+
+The shipped Prometheus rules alert on `commodore_media_authority_oldest_pending_seconds`,
+`commodore_media_authority_max_version_lag`, Foghorn authority apply/verification rejection,
+hard-expired local reads, durable node-admission failures/saturation, and admission-payload decrypt
+errors, plus Helmsman's trigger-WAL depth and retryable `STREAM_END` acknowledgements. A
+tenantless acknowledged `STREAM_END` is deliberately retried without a fixed attempt cap because
+discarding it could strand live authority; until identity becomes resolvable its WAL entry remains
+pending. Treat a growing `helmsman_trigger_wal_pending` value as an operational incident, not an
+eventual dead-letter condition.
+
+Before the 0.3.0 `postdeploy` phase, run and verify the release-catalogued data
+migrations with `frameworks cluster data-migrate`. In addition to the tenant
+cluster-access and DVR policy jobs, this release requires
+`commodore_chapter_playback_authority_v0_3_0`. Each Foghorn cell separately runs
+the bounded `foghorn_federated_artifact_lifecycle_v0_3_0` and
+`foghorn_federated_pointer_purge_eligibility_v0_3_0` repairs against its own
+physical database in the background, so clustered aliases are not collapsed
+onto one logical service host. The latter restores the age of pointers that
+predate the dedicated purge clock. The expand phase does not hide either
+rewrite inside a DDL transaction.
+
+That Foghorn-local job is intentionally absent from the global release catalog. Check every cell's
+own database before contract by requiring a completed row:
+
+```sql
+SELECT id, status, completed_at, last_error
+FROM _data_migrations
+WHERE id IN (
+  'foghorn_federated_artifact_lifecycle_v0_3_0',
+  'foghorn_federated_pointer_purge_eligibility_v0_3_0'
+);
+```
+
+Both rows must be complete. Missing, running, or failed is not complete. Query each physical Foghorn database; checking a
+service alias or one HA replica is not evidence for the other cells.
+
+The required order is:
+
+```bash
+frameworks cluster data-migrate run quartermaster.quartermaster_cluster_access_provenance_v0_3_0
+frameworks cluster data-migrate verify quartermaster.quartermaster_cluster_access_provenance_v0_3_0
+frameworks cluster data-migrate run commodore.commodore_dvr_playback_authority_v0_3_0
+frameworks cluster data-migrate verify commodore.commodore_dvr_playback_authority_v0_3_0
+frameworks cluster data-migrate run commodore.commodore_chapter_playback_authority_v0_3_0
+frameworks cluster data-migrate verify commodore.commodore_chapter_playback_authority_v0_3_0
+```
+
+The chapter migration depends on the DVR migration and intentionally refuses to run first. During
+the DVR backfill, rows not yet snapshotted use their parent stream only as a rollout-compatibility
+read; completed rows and all newly-created DVRs use their immutable local snapshot.
 
 Because a connected sidecar is always on the current protocol, its artifact inventory
 is always a **versioned whole-node snapshot** (a monotonic per-connection sequence),
@@ -138,6 +270,11 @@ Therefore:
   its first versioned snapshot.
 - A supported N−1 / third-party edge protocol range applies only where a release
   declares one; absent that, treat the deployed minimum as a hard floor.
+- Re-render the edge deployment before recreating its container. The 0.3.0 compose render adds the
+  persistent `/data/state` volume used by `HELMSMAN_STATE_DIR`; pulling the new image against an old
+  compose file leaves that state anonymous. Recreating it then loses node identity, the Mist-trigger
+  WAL, ingest-generation fences, processing overrides, and any undelivered media-control completions.
+  Treat the state volume as durable media-plane authority, not as a disposable cache.
 
 ### Thumbnails: deterministic serving, install-time ordering
 
@@ -322,6 +459,13 @@ Today, `frameworks cluster migrate --phase expand` applies pending embedded
 PostgreSQL/YugabyteDB migrations from the database/version/phase directory
 layout. The command records phase and checksum in `_migrations`, rejects edited
 applied migrations, and does not run service-specific data migrations.
+Non-transactional `.notx.sql` files may contain multiple validated concurrent
+index statements; PostgreSQL/YugabyteDB receives each statement as a separate
+autocommit query while the file remains one immutable migration ledger entry.
+Each such index has a same-release postdeploy check for the exact index name in
+the same SQL statement through `pg_index.indisready` and `indisvalid`; upgrades
+stop instead of accepting an invalid relation left behind by an interrupted
+concurrent build.
 
 `frameworks cluster doctor` also checks the migration ledger: embedded
 PostgreSQL/YugabyteDB migrations are compared with `_migrations` in each

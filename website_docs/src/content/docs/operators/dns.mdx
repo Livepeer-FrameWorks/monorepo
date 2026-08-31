@@ -210,17 +210,67 @@ service identity and certificate distribution tenant-scoped.
 
 #### Tenant alias lifecycle
 
-| Status         | Meaning                                                                                                      |
-| -------------- | ------------------------------------------------------------------------------------------------------------ |
-| `cert_issuing` | Quartermaster signaled intent on paid-tier activation; Navigator is running ACME (LE primary, GTS fallback). |
-| `cert_issued`  | Cert exists; tenant URLs become visible once Navigator has at least one ACK-gated DNS member.                |
-| `cert_failed`  | ACME error; check `last_error`. The worker retries on the next reconciliation pass.                          |
-| `tearing_down` | Tenant downgraded / cancelled; Navigator is clearing DNS records and per-edge cert distribution.             |
+| Status         | Meaning                                                                                                                                                            |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `cert_issuing` | Quartermaster signaled intent on paid-tier activation; Navigator is running ACME (LE primary, GTS fallback).                                                       |
+| `cert_issued`  | Cert exists; tenant URLs become visible once Navigator has at least one ACK-gated DNS member.                                                                      |
+| `cert_failed`  | ACME error; check `last_error`. The worker retries on the next reconciliation pass.                                                                                |
+| `tearing_down` | Tenant downgraded / cancelled; Navigator clears DNS, per-edge distribution, the tenant TLS bundle, and tenant certificates without active custom-domain authority. |
 
 Additions are ACK-gated: Helmsman applies the ConfigSeed, Foghorn reports
 the ACK to Navigator, and Navigator adds only successfully applied edges to
 Bunny DNS. Removals are DNS-first: Navigator removes the cluster's edges
 from Bunny before later ConfigSeeds drop the tenant cert from those edges.
+Navigator continues serving the existing certificate while teardown clears the
+alias records. After the alias records are gone, Navigator removes credentials only if the alias
+is still `tearing_down`; a concurrent reactivation fences that stale cleanup. The
+same transaction removes the tenant TLS bundle and tenant certificate rows that
+are not backed by an active custom-domain intent. Bundle persistence and renewal
+also require live authority. During rename or issuance retry, edges continue
+serving the last-good certificate under its original SANs; the old alias remains
+in DNS until an edge ACKs the exact replacement bundle revision and Navigator
+publishes the replacement alias. Quartermaster sends ordered cluster grants and
+revocations through its durable Navigator outbox. Navigator stores active or
+revoked authority for each tenant/cluster pair with the outbox sequence, locks
+that decision while admitting an edge ACK, and excludes tombstoned pairs from
+readiness and DNS publication. An edge ACK therefore cannot create or resurrect
+authority. If a rolling-upgrade first-admission lookup is unavailable, Navigator
+still records results backed by local authority before requesting durable replay
+of the unresolved pairs. Quartermaster's repair loop compares the full desired and applied
+cluster sets. Foghorn does not
+treat a shorter successful Quartermaster tenant list as immediate revocation: an
+omitted tenant bundle remains in the durable edge seed only until its certificate
+expires. Navigator's explicit, error-free `GetTLSBundle(found=false)` is
+authoritative and removes that bundle from the next seed. A response error is a
+failed authority read and preserves valid local material. This preserves a still-valid local media
+path through a list gap without retaining a torn-down credential. A completed
+issuance cannot recreate an orphan after teardown.
+Navigator advances a monotonic authority generation on rename, teardown, and
+reactivation, and serializes issuance across replicas. Delayed ACME completion
+therefore cannot cross a same-label reactivation or an a → b → a transition.
+Replacement bundle persistence atomically publishes the revision, alias status,
+and included custom-domain certificate metadata. First alias issuance performs a
+separate fenced status transition after bundle persistence. Foghorn renders every certificate SAN and
+pushes revision-only changes so Helmsman can ACK the exact material it applied.
+
+Custom-domain removal follows the same rule: reactivation wins over stale
+cleanup, late ACME writes cannot cross the lifecycle fence, and Navigator removes
+the tenant ACME account once no custom domain in `verified`, `cert_issuing`,
+`cert_issued`, or `cert_failed` remains. Pending and teardown rows cannot preserve
+an otherwise orphaned account. On addition, `cert_issued` is published only after
+the tenant's edge-distributed multi-SAN bundle includes the custom domain; bundle
+refresh failures remain retryable.
+`cert_failed` retains the domain's retry credentials but is excluded from the
+tenant-wide SAN bundle until it returns to an issuing/issued state, preventing one
+broken custom domain from blocking renewal for the tenant alias and healthy SANs.
+Renewal re-derives the SAN set, and an issuance failure immediately rebuilds the
+aggregate bundle without the failed domain. If that rebuild fails, each
+`cert_failed` pass retries it before re-verifying the domain.
+During mixed-version rollouts, legacy edges may ACK without a bundle revision.
+An already-published legacy row stays in DNS for continuity, but it does not count
+as replacement readiness and an unproven edge cannot enter the pool. A legacy
+failure may demote only legacy state without a newer sequenced result. An upgraded
+Helmsman must ACK the exact current revision for promotion or readiness.
 
 #### Self-hosted trust boundary
 

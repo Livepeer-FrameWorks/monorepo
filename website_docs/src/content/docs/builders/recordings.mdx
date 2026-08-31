@@ -149,7 +149,7 @@ conferences, and always-on streams this is a feature: viewers can rewind a goal,
 
 ### Archive Chapters
 
-For historical replay, FrameWorks splits the DVR archive into **chapter VOD artifacts**. Each chapter is its own canonical `.mkv` produced by the chapter finalization pipeline at boundary close and addressed by a Commodore-minted public `playbackId` — pass it to `resolveViewerEndpoint` like any other VOD.
+For historical replay, FrameWorks splits the DVR archive into **chapter VOD artifacts**. Each chapter is its own canonical `.mkv` produced by the chapter finalization pipeline at boundary close and addressed by a Commodore-minted, shareable `playbackId` — pass it to `resolveViewerEndpoint` like any other VOD. The parent DVR's playback policy is snapshotted onto the chapter and still applies.
 
 For the full chapter-policy story (modes, defaults, resolution semantics) see [DVR Chapters](/builders/dvr-chapters). Storage cost behavior is covered in [Storage & retention](/builders/storage-and-retention).
 
@@ -164,7 +164,7 @@ All chapter time fields are UTC epoch milliseconds. The API does not store timez
 
 #### Chapter API
 
-Chapters become playable at boundary close once finalization produces the `.mkv`. Retrieve a chapter to get its public `playbackId`; pass that to `resolveViewerEndpoint` like any other VOD.
+Chapters become playable at boundary close once finalization produces the `.mkv`. Retrieve a chapter to get its `playbackId`; pass that to `resolveViewerEndpoint` like any other VOD and supply whatever authorization the parent DVR policy requires.
 
 ```graphql
 query {

@@ -67,7 +67,15 @@ PeerChannel is a bidirectional gRPC stream carrying 8 payload types via `oneof`:
 | PeerHeartbeat         | 10s                      | Both      | Cluster liveness, protocol version, capabilities                                                                      |
 | CapacitySummary       | —                        | Both      | Cluster-wide aggregate capacity (proto shell for dCDN bidding)                                                        |
 
-Lifecycle frames carry the publisher source revision. Receivers keep a separate Redis record for
+Lifecycle frames carry the publisher source revision. A cell's global PostgreSQL source-revision
+allocator is a PostgreSQL sequence shared by old and new replicas. The v0.3 expand migration locks
+and advances it above every durable session and effect revision (and the compatibility clock used by
+pre-release builds), so rolling Foghorns cannot issue the same token. Repair that must jump above an
+external watermark releases its read-phase stream lock, briefly locks and advances the sequence in a
+standalone transaction, then reacquires and revalidates the stream before the Redis CAS. Neither slow
+Redis I/O nor a stream-lock waiter can overlap the allocator lock, and an unused token after failed
+revalidation is an intentional harmless gap. A per-stream repair can never rewind another
+stream's ordering fence. Receivers keep a separate Redis record for
 each origin cluster and apply the revision CAS only within that origin: lower same-origin revisions
 are ignored, and offline wins an equal-revision tie. Per-cell PostgreSQL sequences are not compared
 across origins. Lookup returns any origin whose live record remains current. This ordering applies
@@ -189,9 +197,53 @@ must not point the tenant at a cluster outside its allowlist), federate via
 via the single shared upsert `adoptRemoteArtifactRow`:
 `storage_location='s3'` always (the artifact's home is the authoritative
 cluster's S3, which also keeps the row out of the freeze reconciler);
+`status='ready'` and `federated_pointer=true` distinguish the local routing
+pointer from a locally produced artifact;
 `sync_status='synced'` only when origin returned a durable S3 URL, else
 `'pending'`; re-adoption ratchets sync_status up to synced, never back down;
-identity fields fill blanks only.
+identity fields fill blanks only. Adoption and advancement of
+`catalog_synced_rev` commit in one local transaction because origin-owned rows
+are intentionally excluded from this cell's catalog projector. A delivered
+signed artifact tombstone marks the pointer `deleted` and settles the resulting
+local revision in the same authority-apply transaction. A bounded pointer purge
+then removes the routing row after retention while preserving the signed
+object-authority tombstone as the durable version/resurrection fence. A pointer
+can own cell-local thumbnails or disposable cache copies; it does not own the
+remote parent bytes. Purge installs a durable token and lease under the
+shared thumbnail/authority asset lock. Discovery only admits pointer rows in
+`status IN ('ready','deleted')`; fencing a ready cache pointer first terminalizes
+it, then installs `federated_purge_token` and its lease before any external
+cleanup. The worker uses the recorded derivative backend to
+sweep bytes while the pointer remains terminal, and then rechecks token ownership
+under that lock. A legacy pointer without destination rows may synthesize a local
+destination only when its recorded backend fingerprint exactly matches this
+cell's immutable backend fingerprint. Successful settlement removes thumbnail control rows and either
+hard-deletes the parent or, when newer active authority arrived during cleanup,
+restores it with `has_thumbnails=false`. Cleanup failure leaves the pointer
+terminal and makes the lease reclaimable. Artifact authority apply takes this
+same asset lock before its authority-identity lock, so projection and purge use
+one order. Pointer age is read exclusively from
+`federated_purge_eligible_at`; node reports, access metadata, storage-location
+updates, thumbnail state, and re-adoption do not mutate it. The scheduled pass
+runs after locally owned byte cleanup with its own lifecycle-cancelled two-minute
+budget through the same bounded worker pool. A separate 30-second recovery
+goroutine continues while that scheduled cleanup is busy and resumes every
+expired tombstone, stale, and active-restore claim with at most eight concurrent
+two-minute candidate budgets; claim release/deferral has its own five-second
+database budget. Live artifact-node or chapter-ledger
+rows prevent hard deletion. Signed object tombstones are terminal and reject
+later active object authority rather than being reversed.
+If no tombstone arrives, the same bounded job may evict a pointer past its cache-age threshold once
+there is no unexpired active signed authority for its tenant and artifact. That
+fallback removes routing metadata and its cell-local derivatives only; a later valid federation response may
+recreate it.
+
+Federated pointers are excluded from the local retention selector regardless
+of `retention_until`; the origin cell owns byte retention. Re-adoption repairs a
+legacy `active` pointer to `ready`, but it cannot revive a pointer covered by a
+signed object-authority tombstone. An artifact hash already owned by another
+tenant or by a genuine local artifact is never converted into a federated
+pointer.
 
 Adoption is **load-bearing, not best-effort**: `RelayResolve` deliberately
 never federates by hash on a missing row (it has no requesting-tenant
@@ -265,6 +317,12 @@ reconstructing from local rows, which may be cache-healed stubs). Not-found
 targets return accepted=true for idempotent retries; auth/ownership/shape
 failures never collapse into not-found success.
 
+For `artifact_type=thumbnail`, the only accepted target is the exact
+hash-scoped prefix `thumbnails/<artifact_hash>/`; it is intentionally not
+tenant-prefixed. The authenticated tenant must still own the matching local
+artifact row before the prefix can be deleted. Broader prefixes, alternate
+hashes, individual keys, and traversal-shaped targets fail closed.
+
 While the mutation surface is disabled, the artifact purge (`purge_deleted.go`)
 also **excludes remote-owned rows** from its bytes+rows sweep: their bytes can't
 be freed, so reaping them would fail forever and a page of them would starve
@@ -282,7 +340,10 @@ against the tenant's fresh cluster-peer envelope (registry state can
 outlive a revocation), and arranges an origin-pull from the recording node
 via `federation.ArrangeOriginPull` — the viewer's edge then pulls the
 rolling recording over DTSC. No advertised recording or a failed
-arrangement → `offline:not_recorded`.
+arrangement → `offline:not_recorded`. Signed DVR authority includes both the
+parent stream ID and its Mist routing name. A source-promoted remote DVR can
+therefore build the same arrange request without requiring a local artifact row
+or returning to Commodore.
 
 #### DVR chapter replay
 
@@ -292,20 +353,31 @@ run for months; replay is sliced into finalized chapter VOD artifacts:
 1. Gateway calls Commodore `RetrieveDVRChapter` / `ListDVRChapters`.
 2. Commodore validates tenant ownership, routes to the DVR's
    `origin_cluster_id`, and returns the chapter metadata. Each chapter
-   carries a Commodore-minted public `playbackId` (in
+   carries a Commodore-minted, externally shareable `playbackId` (in
    `commodore.dvr_chapter_playback`) once the chapter has been dispatched
    for finalization. Active-but-unfinalized chapters carry no `playbackId`;
    the rolling DVR's own `playbackId` (`dvr+<dvr_internal_name>` surface)
    serves the in-flight portion.
 3. Chapter playback flows through the standard artifact playback path —
-   the chapter `.mkv` is a regular `vod`-shaped artifact (with
+   the chapter `.mkv` is a `chapter` artifact with VOD-shaped byte layout (with
    `origin_type='dvr_chapter'`, `library_visible=false`). Edges resolve
    the chapter playback_id through Commodore exactly the way they resolve
-   any VOD playback_id, and serve it via the relay/block-cache path.
+   any VOD playback_id, and serve it via the relay/block-cache path. The ID is
+   a locator, not an allow: the chapter snapshots its parent DVR's public/JWT/
+   webhook policy at registration and every normal playback gate enforces it.
 
 Federation `PrepareArtifact` rejects DVR. Chapter replay uses the chapter
-API + normal artifact playback; cross-cluster requests for the chapter
-artifact follow the same federation rules as any other VOD.
+API + normal artifact playback; cross-cluster requests for the chapter use the
+VOD relay/delete key shape. A federated chapter row is only a local routing
+pointer: primary-media retention and byte-purge queries exclude every `federated_pointer`, so
+a consuming cell cannot instruct the origin to destroy owned bytes when it
+removes its pointer. Its local metadata row is eventually purged either after a
+signed tombstone is durable, or after the pointer passes its cache-age threshold with no
+unexpired active signed authority. A tombstone remains the stronger
+resurrection fence; without one, a later valid federation response may recreate
+the cache row. Cell-local thumbnail derivatives are fenced and swept before the
+pointer row is removed. The control rows and pointer are finalized atomically;
+live node copies or either of the chapter ledger's artifact references block the purge.
 
 ### Cross-Cluster Artifact Command Routing
 
@@ -336,9 +408,18 @@ If Foghorn receives an artifact command for an artifact not in its local DB:
 
 #### Tenant Operations Fan-Out
 
-`TerminateTenantStreams` and `InvalidateTenantCache` fan out to ALL clusters
-the tenant has access to (via `clusterPeers`), not just the primary cluster.
-Results are aggregated; partial failures are logged but don't block the response.
+`TerminateTenantStreams` and the legacy `InvalidateTenantCache` compatibility
+signal fan out to all clusters the tenant has access to, not just the primary
+cluster. Signed tenant/object replacements use a separate durable per-cell
+delivery ledger that also targets historical recipient cells. An invalidation
+cannot delete or replace signed authority; partial compatibility fan-out failure
+therefore does not turn still-valid authority into unknown state.
+
+Origin-pull destination identity comes from the authenticated destination
+node's locally registered virtual cluster. Foghorn's process `CLUSTER_ID` is not
+a substitute because one control cell serves multiple media clusters. The
+arrangement rejects an unavailable or mismatching node-cluster binding before
+notifying the origin.
 
 ### Artifact Migration
 

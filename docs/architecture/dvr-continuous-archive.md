@@ -134,11 +134,11 @@ When the recording origin is gone past the abandoned-node grace (`chapterReclaim
 
 When every segment overlapping the chapter is `reclaimed` (or `lost_local`), the chapter advances to `state='reclaimed'`.
 
-## Public addressing — `playbackId`
+## Addressing — `playbackId`
 
-Chapter VOD artifacts are addressed by the Commodore-minted public `playback_id` stored in `commodore.dvr_chapter_playback` and cached on `foghorn.dvr_chapters.playback_id`. The cache is non-authoritative; `commodore.dvr_chapter_playback` is the single source of truth.
+Chapter VOD artifacts are addressed by the Commodore-minted, externally shareable `playback_id` stored in `commodore.dvr_chapter_playback` and cached on `foghorn.dvr_chapters.playback_id`. The ID is not an allow: chapter registration snapshots the parent DVR's playback policy onto the derived VOD. The cache is non-authoritative; `commodore.dvr_chapter_playback` is the single source of truth.
 
-- Raw artifact hashes are never accepted as chapter playback IDs on the public surface. Foghorn's `ResolveContent` only accepts Commodore-minted public keys.
+- Raw artifact hashes are never accepted as chapter playback IDs on the public surface. Foghorn's `ResolveContent` only accepts Commodore-minted opaque keys.
 - `dvr+<chapter_id>` is retired. The only legal `dvr+` token is `dvr+<dvr_internal_name>` (rolling-DVR surface for active recordings).
 - Policy inheritance: protected chapter playback resolves through `DVRChapterPolicyPlaybackID` → parent DVR's playback policy.
 
@@ -150,12 +150,18 @@ A DVR artifact may run indefinitely. **All operational paths must be bounded.** 
 | ------------------------------ | ---------------------------------------------------------------------------------------------- |
 | Foghorn ledger queries         | always `WHERE artifact_hash = $1 AND media_start_ms < $end AND media_end_ms > $start`, indexed |
 | Chapter sweeper                | one boundary close per active DVR per tick                                                     |
-| Chapter finalization queue     | per-DVR mutex; per-tick batch capped at `chapterFinalizationDispatchBatchMax`                  |
+| Chapter finalization queue     | durable finalizing CAS; per-tick batch capped at `chapterFinalizationDispatchBatchMax`         |
 | Chapter reclaim sweep          | per-artifact cap (`chapterReclaimPerArtifact`); per-tick batch (`chapterReclaimBatchMax`)      |
 | Sidecar restart reconciliation | walks local `dvr/` tree, batches names into pages of 500                                       |
 | FinalizeDVR                    | bounded retry of pending/failed_upload via keyset cursor; classification via `COUNT(*) FILTER` |
 | Retention soft-delete          | acts on terminal artifacts only                                                                |
 | Chapter listing for player UI  | paginated; default 200, max 1000                                                               |
+
+The `dvrc` transaction-scoped advisory lock covers chapter-row reads and writes
+only. The sweeper and terminal-close paths use the lock-owning transaction for
+their complete database mutation. Finalization RPCs and reclaim calls run after
+commit and are owned by durable compare-and-set transitions, so a stalled node
+or control-plane call cannot pin a Foghorn connection or chapter lock.
 
 `dvr_segments` sizing: 1 year × 6s segments × 1 stream ≈ 5.26M rows. At 100 concurrent always-on streams, ~526M rows. Existing indexes (`(artifact_hash, sequence)` unique; `(artifact_hash, media_start_ms, sequence)` for ledger walks; partials on status) handle it. Partitioning by `artifact_hash` is partition-compatible if vacuum cost ever becomes material.
 
@@ -175,7 +181,7 @@ A DVR artifact may run indefinitely. **All operational paths must be bounded.** 
 - Runs the chapter pipeline workers (sweeper, finalize queue, reclaim sweep) and dispatches finalize jobs.
 - Mints chapter playback IDs via Commodore at finalize dispatch (the mint is the dispatch contract — fail-retryable, no fallback).
 - Drives `FinalizeDVR` for the parent DVR: bounded retry of pending uploads, classification, retention computation, terminal-chapter close.
-- Federation: public chapter playback goes through Commodore (which holds the playback ID registry) and then through normal artifact playback routing — there's no chapter-specific federation surface anymore.
+- Federation: chapter playback goes through Commodore (which holds the playback ID and policy snapshot) and then through normal artifact playback routing — there's no chapter-specific federation surface anymore.
 
 ## Stream session semantics
 
