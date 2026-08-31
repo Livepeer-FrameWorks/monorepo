@@ -88,18 +88,40 @@ func (q *Queries) CompleteBillingEventOutbox(ctx context.Context, id string) err
 	return err
 }
 
+const completeBillingEventOutboxToken = `-- name: CompleteBillingEventOutboxToken :execrows
+UPDATE purser.billing_event_outbox
+SET completed_at = NOW(), last_error = NULL, lease_token = NULL
+WHERE id = $1::text::uuid
+  AND lease_token = $2::text::uuid
+  AND completed_at IS NULL
+`
+
+type CompleteBillingEventOutboxTokenParams struct {
+	ID         string `db:"id" json:"id"`
+	LeaseToken string `db:"lease_token" json:"lease_token"`
+}
+
+func (q *Queries) CompleteBillingEventOutboxToken(ctx context.Context, arg CompleteBillingEventOutboxTokenParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, completeBillingEventOutboxToken, arg.ID, arg.LeaseToken)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const enqueueBillingEventOutbox = `-- name: EnqueueBillingEventOutbox :one
 INSERT INTO purser.billing_event_outbox
-    (event_type, tenant_id, user_id, resource_type, resource_id, billing_event)
+    (id, event_type, tenant_id, user_id, resource_type, resource_id, billing_event)
 VALUES (
-    $1, $2::text::uuid,
-    $3, $4, $5,
-    $6::jsonb
+    $1::uuid, $2, $3::text::uuid,
+    $4, $5, $6,
+    $7::jsonb
 )
 RETURNING id
 `
 
 type EnqueueBillingEventOutboxParams struct {
+	ID           uuid.UUID       `db:"id" json:"id"`
 	EventType    string          `db:"event_type" json:"event_type"`
 	TenantID     string          `db:"tenant_id" json:"tenant_id"`
 	UserID       string          `db:"user_id" json:"user_id"`
@@ -110,6 +132,7 @@ type EnqueueBillingEventOutboxParams struct {
 
 func (q *Queries) EnqueueBillingEventOutbox(ctx context.Context, arg EnqueueBillingEventOutboxParams) (uuid.UUID, error) {
 	row := q.db.QueryRowContext(ctx, enqueueBillingEventOutbox,
+		arg.ID,
 		arg.EventType,
 		arg.TenantID,
 		arg.UserID,
@@ -124,15 +147,16 @@ func (q *Queries) EnqueueBillingEventOutbox(ctx context.Context, arg EnqueueBill
 
 const enqueueBillingEventOutboxNoReturn = `-- name: EnqueueBillingEventOutboxNoReturn :exec
 INSERT INTO purser.billing_event_outbox
-    (event_type, tenant_id, user_id, resource_type, resource_id, billing_event)
+    (id, event_type, tenant_id, user_id, resource_type, resource_id, billing_event)
 VALUES (
-    $1, $2::text::uuid,
-    $3, $4, $5,
-    $6::jsonb
+    $1::uuid, $2, $3::text::uuid,
+    $4, $5, $6,
+    $7::jsonb
 )
 `
 
 type EnqueueBillingEventOutboxNoReturnParams struct {
+	ID           uuid.UUID       `db:"id" json:"id"`
 	EventType    string          `db:"event_type" json:"event_type"`
 	TenantID     string          `db:"tenant_id" json:"tenant_id"`
 	UserID       string          `db:"user_id" json:"user_id"`
@@ -143,6 +167,7 @@ type EnqueueBillingEventOutboxNoReturnParams struct {
 
 func (q *Queries) EnqueueBillingEventOutboxNoReturn(ctx context.Context, arg EnqueueBillingEventOutboxNoReturnParams) error {
 	_, err := q.db.ExecContext(ctx, enqueueBillingEventOutboxNoReturn,
+		arg.ID,
 		arg.EventType,
 		arg.TenantID,
 		arg.UserID,
@@ -169,13 +194,41 @@ func (q *Queries) FailBillingEventOutbox(ctx context.Context, arg FailBillingEve
 	return err
 }
 
-const markBillingEventOutboxClaimed = `-- name: MarkBillingEventOutboxClaimed :exec
+const failBillingEventOutboxToken = `-- name: FailBillingEventOutboxToken :execrows
 UPDATE purser.billing_event_outbox
-SET claimed_at = NOW()
-WHERE id = ANY($1::uuid[])
+SET attempts = attempts + 1, last_error = $1,
+    claimed_at = NULL, lease_token = NULL
+WHERE id = $2::text::uuid
+  AND lease_token = $3::text::uuid
+  AND completed_at IS NULL
 `
 
-func (q *Queries) MarkBillingEventOutboxClaimed(ctx context.Context, ids []uuid.UUID) error {
-	_, err := q.db.ExecContext(ctx, markBillingEventOutboxClaimed, pq.Array(ids))
+type FailBillingEventOutboxTokenParams struct {
+	LastError  sql.NullString `db:"last_error" json:"last_error"`
+	ID         string         `db:"id" json:"id"`
+	LeaseToken string         `db:"lease_token" json:"lease_token"`
+}
+
+func (q *Queries) FailBillingEventOutboxToken(ctx context.Context, arg FailBillingEventOutboxTokenParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, failBillingEventOutboxToken, arg.LastError, arg.ID, arg.LeaseToken)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const markBillingEventOutboxClaimed = `-- name: MarkBillingEventOutboxClaimed :exec
+UPDATE purser.billing_event_outbox
+SET claimed_at = NOW(), lease_token = $1::uuid
+WHERE id = ANY($2::uuid[])
+`
+
+type MarkBillingEventOutboxClaimedParams struct {
+	LeaseToken uuid.UUID   `db:"lease_token" json:"lease_token"`
+	Ids        []uuid.UUID `db:"ids" json:"ids"`
+}
+
+func (q *Queries) MarkBillingEventOutboxClaimed(ctx context.Context, arg MarkBillingEventOutboxClaimedParams) error {
+	_, err := q.db.ExecContext(ctx, markBillingEventOutboxClaimed, arg.LeaseToken, pq.Array(arg.Ids))
 	return err
 }

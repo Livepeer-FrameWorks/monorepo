@@ -52,6 +52,7 @@ type billingOutboxRow struct {
 	billingJSON  []byte
 	attempts     int
 	createdAt    time.Time
+	leaseToken   string
 }
 
 // EnqueueBillingEventTx writes a billing-event outbox row inside the
@@ -73,14 +74,15 @@ func (s *PurserServer) EnqueueBillingEventTx(
 	if err != nil {
 		return "", fmt.Errorf("marshal billing event: %w", err)
 	}
-	id, err := purserdb.New(exec).EnqueueBillingEventOutbox(ctx, purserdb.EnqueueBillingEventOutboxParams{
-		EventType: eventType, TenantID: tenantID, UserID: userID,
+	id := uuid.Must(uuid.NewV7())
+	persistedID, err := purserdb.New(exec).EnqueueBillingEventOutbox(ctx, purserdb.EnqueueBillingEventOutboxParams{
+		ID: id, EventType: eventType, TenantID: tenantID, UserID: userID,
 		ResourceType: resourceType, ResourceID: resourceID, BillingEvent: billingJSON,
 	})
 	if err != nil {
 		return "", fmt.Errorf("insert billing event outbox row: %w", err)
 	}
-	return id.String(), nil
+	return persistedID.String(), nil
 }
 
 // enqueueBillingEvent writes the outbox row in its own short transaction.
@@ -111,9 +113,10 @@ func (st *billingOutboxStore) ClaimBatch(ctx context.Context, _ int, _ time.Dura
 	claims := make([]outbox.Claim[billingOutboxRow], 0, len(rows))
 	for _, r := range rows {
 		claims = append(claims, outbox.Claim[billingOutboxRow]{
-			ID:       r.id,
-			Attempts: r.attempts,
-			Payload:  r,
+			ID:         r.id,
+			Attempts:   r.attempts,
+			LeaseToken: r.leaseToken,
+			Payload:    r,
 		})
 	}
 	return claims, nil
@@ -127,6 +130,14 @@ func (st *billingOutboxStore) MarkCompleted(ctx context.Context, id string) erro
 func (st *billingOutboxStore) RecordFailure(ctx context.Context, id string, currentAttempts int, _ []string, cause error, _ time.Duration) error {
 	st.server.recordBillingOutboxFailure(ctx, id, currentAttempts, cause)
 	return nil
+}
+
+func (st *billingOutboxStore) MarkCompletedToken(ctx context.Context, id, leaseToken string) error {
+	return st.server.markBillingOutboxCompletedToken(ctx, id, leaseToken)
+}
+
+func (st *billingOutboxStore) RecordFailureToken(ctx context.Context, id string, currentAttempts int, _ []string, cause error, _ time.Duration, leaseToken string) error {
+	return st.server.recordBillingOutboxFailureToken(ctx, id, leaseToken, currentAttempts, cause)
 }
 
 type billingOutboxDispatcher struct {
@@ -170,17 +181,21 @@ func (s *PurserServer) claimBillingOutboxBatch(ctx context.Context) ([]billingOu
 
 		batch := make([]billingOutboxRow, 0, billingOutboxBatchSize)
 		ids := make([]uuid.UUID, 0, len(rows))
+		leaseToken := uuid.Must(uuid.NewV7())
 		for _, row := range rows {
 			ids = append(ids, row.ID)
 			batch = append(batch, billingOutboxRow{
 				id: row.ID.String(), eventType: row.EventType, tenantID: row.TenantID.String(),
 				userID: row.UserID, resourceType: row.ResourceType, resourceID: row.ResourceID,
 				billingJSON: row.BillingEvent, attempts: int(row.Attempts), createdAt: row.CreatedAt,
+				leaseToken: leaseToken.String(),
 			})
 		}
 
 		if len(ids) > 0 {
-			if uerr := queries.MarkBillingEventOutboxClaimed(ctx, ids); uerr != nil {
+			if uerr := queries.MarkBillingEventOutboxClaimed(ctx, purserdb.MarkBillingEventOutboxClaimedParams{
+				LeaseToken: leaseToken, Ids: ids,
+			}); uerr != nil {
 				return uerr
 			}
 		}
@@ -188,6 +203,19 @@ func (s *PurserServer) claimBillingOutboxBatch(ctx context.Context) ([]billingOu
 		return nil
 	})
 	return out, err
+}
+
+func (s *PurserServer) markBillingOutboxCompletedToken(ctx context.Context, id, leaseToken string) error {
+	rows, err := purserdb.New(s.db).CompleteBillingEventOutboxToken(ctx, purserdb.CompleteBillingEventOutboxTokenParams{
+		ID: id, LeaseToken: leaseToken,
+	})
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return fmt.Errorf("billing outbox lease lost for %s", id)
+	}
+	return nil
 }
 
 func (s *PurserServer) markBillingOutboxCompleted(ctx context.Context, id string) {
@@ -218,6 +246,27 @@ func (s *PurserServer) recordBillingOutboxFailure(ctx context.Context, id string
 	}
 }
 
+func (s *PurserServer) recordBillingOutboxFailureToken(ctx context.Context, id, leaseToken string, attempts int, cause error) error {
+	msg := ""
+	if cause != nil {
+		msg = cause.Error()
+	}
+	rows, err := purserdb.New(s.db).FailBillingEventOutboxToken(ctx, purserdb.FailBillingEventOutboxTokenParams{
+		ID: id, LeaseToken: leaseToken, LastError: sql.NullString{String: msg, Valid: true},
+	})
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return fmt.Errorf("billing outbox lease lost for %s", id)
+	}
+	if attempts+1 >= billingOutboxAlertAfterAttempts {
+		s.logger.WithFields(logging.Fields{"outbox_id": id, "attempts": attempts + 1, "cause": msg}).
+			Error("Billing event outbox row failing repeatedly — Decklog reachability degraded")
+	}
+	return nil
+}
+
 // dispatchBillingOutboxRow reassembles the pb.ServiceEvent from the outbox
 // row and forwards it through the decklog client (which auto-stamps envelope
 // v2 fields per P0.C).
@@ -235,6 +284,7 @@ func (s *PurserServer) dispatchBillingOutboxRow(ctx context.Context, row billing
 		payload.TenantId = row.tenantID
 	}
 	event := &ipcpb.ServiceEvent{
+		EventId:      row.id,
 		EventType:    row.eventType,
 		Timestamp:    timestamppb.New(row.createdAt),
 		Source:       "purser",

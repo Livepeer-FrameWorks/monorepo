@@ -57,7 +57,7 @@ func TestHandleStripeInvoicePaid_ResetsDunningForKnownCustomer(t *testing.T) {
 		WithArgs(tenant).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO purser\.billing_event_outbox`).
-		WithArgs("invoice_paid", tenant, "", "invoice", "in_known", sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), "invoice_paid", tenant, "", "invoice", "in_known", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	if err := s.handleStripeInvoicePaid(invoicePaidPayload(t, "in_known", "cus_known", "")); err != nil {
@@ -83,7 +83,7 @@ func TestHandleStripeInvoicePaid_FallsBackToMetadataTenant(t *testing.T) {
 		WithArgs(tenant).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`INSERT INTO purser\.billing_event_outbox`).
-		WithArgs("invoice_paid", tenant, "", "invoice", "in_meta", sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), "invoice_paid", tenant, "", "invoice", "in_meta", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
 	if err := s.handleStripeInvoicePaid(invoicePaidPayload(t, "in_meta", "cus_unknown", tenant)); err != nil {

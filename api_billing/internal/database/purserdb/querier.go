@@ -60,6 +60,7 @@ type Querier interface {
 	CollectInvoiceDimensionedUsage(ctx context.Context, arg CollectInvoiceDimensionedUsageParams) ([]CollectInvoiceDimensionedUsageRow, error)
 	CollectInvoiceUsage(ctx context.Context, arg CollectInvoiceUsageParams) ([]CollectInvoiceUsageRow, error)
 	CompleteBillingEventOutbox(ctx context.Context, id string) error
+	CompleteBillingEventOutboxToken(ctx context.Context, arg CompleteBillingEventOutboxTokenParams) (int64, error)
 	CompleteCryptoWallet(ctx context.Context, arg CompleteCryptoWalletParams) (int64, error)
 	CompleteInvoiceEmail(ctx context.Context, arg CompleteInvoiceEmailParams) (int64, error)
 	CompleteInvoiceEmailWithLease(ctx context.Context, arg CompleteInvoiceEmailWithLeaseParams) (int64, error)
@@ -117,6 +118,7 @@ type Querier interface {
 	ExpireStripeIntentBySubscription(ctx context.Context, subscriptionID string) error
 	ExpireX402RateLimitWindows(ctx context.Context) error
 	FailBillingEventOutbox(ctx context.Context, arg FailBillingEventOutboxParams) error
+	FailBillingEventOutboxToken(ctx context.Context, arg FailBillingEventOutboxTokenParams) (int64, error)
 	FailExpiredCryptoInvoicePayments(ctx context.Context, arg FailExpiredCryptoInvoicePaymentsParams) error
 	FailInvoiceEmail(ctx context.Context, arg FailInvoiceEmailParams) (int64, error)
 	FailInvoiceEmailWithLease(ctx context.Context, arg FailInvoiceEmailWithLeaseParams) (int64, error)
@@ -371,7 +373,7 @@ type Querier interface {
 	LockX402SettlementRollup(ctx context.Context, nonceID string) (LockX402SettlementRollupRow, error)
 	MarkActiveX402SettlementFailed(ctx context.Context, arg MarkActiveX402SettlementFailedParams) error
 	MarkAllocatedDepositReorged(ctx context.Context, eventID string) (int64, error)
-	MarkBillingEventOutboxClaimed(ctx context.Context, ids []uuid.UUID) error
+	MarkBillingEventOutboxClaimed(ctx context.Context, arg MarkBillingEventOutboxClaimedParams) error
 	MarkClaimingX402QuoteUnknown(ctx context.Context, quoteID string) error
 	MarkCryptoDepositAllocationReview(ctx context.Context, arg MarkCryptoDepositAllocationReviewParams) error
 	MarkCryptoDepositsReorgedFromBlock(ctx context.Context, arg MarkCryptoDepositsReorgedFromBlockParams) error

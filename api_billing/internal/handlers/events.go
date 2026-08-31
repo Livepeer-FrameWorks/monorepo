@@ -7,6 +7,7 @@ import (
 	"frameworks/api_billing/internal/database/purserdb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"github.com/google/uuid"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
@@ -55,7 +56,7 @@ func emitBillingEvent(db *sql.DB, logger logging.Logger, eventType, tenantID, re
 		return
 	}
 	if err := purserdb.New(db).EnqueueBillingEventOutboxNoReturn(context.Background(), purserdb.EnqueueBillingEventOutboxNoReturnParams{
-		EventType: eventType, TenantID: tenantID, UserID: "", ResourceType: resourceType,
+		ID: uuid.Must(uuid.NewV7()), EventType: eventType, TenantID: tenantID, UserID: "", ResourceType: resourceType,
 		ResourceID: resourceID, BillingEvent: billingJSON,
 	}); err != nil && logger != nil {
 		logger.WithError(err).WithField("event_type", eventType).

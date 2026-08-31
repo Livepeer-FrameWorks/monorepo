@@ -37,7 +37,7 @@ func TestBillingEventOutboxLifecycle_RealPG(t *testing.T) {
 	if len(claimed) != 1 || claimed[0].id != id || claimed[0].tenantID != tenantID {
 		t.Fatalf("claimed rows = %+v", claimed)
 	}
-	if claimed[0].attempts != 0 {
+	if claimed[0].attempts != 0 || claimed[0].leaseToken == "" {
 		t.Fatalf("initial attempts = %d, want 0", claimed[0].attempts)
 	}
 	if got := claimed[0].billingJSON; len(got) == 0 {
@@ -52,7 +52,26 @@ func TestBillingEventOutboxLifecycle_RealPG(t *testing.T) {
 		t.Fatalf("leased row was claimed twice: %+v", claimedAgain)
 	}
 
-	server.recordBillingOutboxFailure(ctx, id, claimed[0].attempts, errors.New("decklog unavailable"))
+	if _, err := db.ExecContext(ctx, `UPDATE purser.billing_event_outbox SET claimed_at = NOW() - INTERVAL '2 minutes' WHERE id = $1`, id); err != nil {
+		t.Fatalf("expire first lease: %v", err)
+	}
+	reclaimedByPeer, err := server.claimBillingOutboxBatch(ctx)
+	if err != nil || len(reclaimedByPeer) != 1 {
+		t.Fatalf("peer reclaim = %+v, %v", reclaimedByPeer, err)
+	}
+	if reclaimedByPeer[0].leaseToken == claimed[0].leaseToken {
+		t.Fatal("peer reclaim reused the stale lease token")
+	}
+	if err := server.markBillingOutboxCompletedToken(ctx, id, claimed[0].leaseToken); err == nil {
+		t.Fatal("stale worker completed a peer-owned row")
+	}
+	if err := server.recordBillingOutboxFailureToken(ctx, id, claimed[0].leaseToken, claimed[0].attempts, errors.New("stale failure")); err == nil {
+		t.Fatal("stale worker failed a peer-owned row")
+	}
+
+	if err := server.recordBillingOutboxFailureToken(ctx, id, reclaimedByPeer[0].leaseToken, reclaimedByPeer[0].attempts, errors.New("decklog unavailable")); err != nil {
+		t.Fatalf("record current worker failure: %v", err)
+	}
 	var attempts int
 	var lastError string
 	var claimedAt sql.NullTime
@@ -74,7 +93,9 @@ func TestBillingEventOutboxLifecycle_RealPG(t *testing.T) {
 	if len(reclaimed) != 1 || reclaimed[0].id != id || reclaimed[0].attempts != 1 {
 		t.Fatalf("reclaimed rows = %+v", reclaimed)
 	}
-	server.markBillingOutboxCompleted(ctx, id)
+	if err := server.markBillingOutboxCompletedToken(ctx, id, reclaimed[0].leaseToken); err != nil {
+		t.Fatalf("complete current lease: %v", err)
+	}
 
 	var completedAt sql.NullTime
 	var persistedError sql.NullString

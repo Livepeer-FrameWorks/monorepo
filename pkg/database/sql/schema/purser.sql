@@ -2553,6 +2553,7 @@ CREATE TABLE IF NOT EXISTS purser.billing_event_outbox (
     billing_event JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     claimed_at   TIMESTAMPTZ,
+    lease_token  UUID,
     attempts     INTEGER NOT NULL DEFAULT 0,
     last_error   TEXT,
     completed_at TIMESTAMPTZ

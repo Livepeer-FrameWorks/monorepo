@@ -274,7 +274,7 @@ type PurserServer struct {
 	rpcClient           *handlers.RPCClient
 	priceFeed           *handlers.PriceFeed
 	x402handler         *handlers.X402Handler
-	decklogClient       *decklogclient.BatchedClient
+	decklogClient       serviceEventSender
 	thresholdEnforcer   *handlers.ThresholdEnforcer
 	tierReconciler      tierAccessReconciler
 	billing             *handlers.Service
@@ -291,6 +291,10 @@ type commercialQuartermasterClient interface {
 type tierAccessReconciler interface {
 	OfficialClusterIDs(ctx context.Context) (map[string]bool, error)
 	Reconcile(ctx context.Context, tenantID string, tierLevel int32, tierName string) ([]string, string, error)
+}
+
+type serviceEventSender interface {
+	SendServiceEvent(event *ipcpb.ServiceEvent) error
 }
 
 // NewPurserServer creates a new Purser gRPC server

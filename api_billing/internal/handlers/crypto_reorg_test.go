@@ -49,7 +49,7 @@ func TestReverseAllocatedPrepaidDepositIsAtomicAndAudited(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	mock.ExpectExec(`INSERT INTO purser\.billing_event_outbox`).
-		WithArgs(eventCryptoDepositReorg, "tenant-1", "", "crypto_deposit_event", "event-1", sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), eventCryptoDepositReorg, "tenant-1", "", "crypto_deposit_event", "event-1", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	if err := monitor.reverseAllocatedDeposit(context.Background(), "event-1", "0xold", "0xnew"); err != nil {

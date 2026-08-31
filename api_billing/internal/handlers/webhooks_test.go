@@ -113,7 +113,7 @@ func TestHandleStripeSubscriptionEventBackfillsBillingPeriod(t *testing.T) {
 		WithArgs(tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("sub-local-1"))
 	mock.ExpectExec(`INSERT INTO purser\.billing_event_outbox`).
-		WithArgs(eventSubscriptionUpdated, tenantID, "", "subscription", "sub-local-1", sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), eventSubscriptionUpdated, tenantID, "", "subscription", "sub-local-1", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	if err := s.handleStripeSubscriptionEvent(payload); err != nil {

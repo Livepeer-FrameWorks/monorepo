@@ -26,6 +26,16 @@ const (
 // exact byte sequence (field ordering in protojson is not contractual).
 type jsonContains struct{ substr string }
 
+type capturingServiceEventSender struct {
+	events []*ipcpb.ServiceEvent
+	err    error
+}
+
+func (s *capturingServiceEventSender) SendServiceEvent(event *ipcpb.ServiceEvent) error {
+	s.events = append(s.events, event)
+	return s.err
+}
+
 func (m jsonContains) Match(v driver.Value) bool {
 	switch b := v.(type) {
 	case []byte:
@@ -43,7 +53,7 @@ func TestEnqueueBillingEventTxInsertsAndBackfillsTenant(t *testing.T) {
 	// payload.TenantId is empty: the method must backfill it from the tenantID
 	// arg before marshaling, so the persisted JSON carries the tenant.
 	mock.ExpectQuery(`INSERT INTO purser\.billing_event_outbox`).
-		WithArgs("payment_succeeded", "tenant-1", "user-1", "payment", "pay-9", jsonContains{"tenant-1"}).
+		WithArgs(sqlmock.AnyArg(), "payment_succeeded", "tenant-1", "user-1", "payment", "pay-9", jsonContains{"tenant-1"}).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(billingOutboxID1))
 
 	id, err := s.EnqueueBillingEventTx(
@@ -68,7 +78,7 @@ func TestEnqueueBillingEventTxNilPayloadDefaults(t *testing.T) {
 	// nil payload must not panic; it is replaced with an empty event and the
 	// tenant backfilled into it.
 	mock.ExpectQuery(`INSERT INTO purser\.billing_event_outbox`).
-		WithArgs("topup_created", "tenant-2", "", "topup", "tp-1", jsonContains{"tenant-2"}).
+		WithArgs(sqlmock.AnyArg(), "topup_created", "tenant-2", "", "topup", "tp-1", jsonContains{"tenant-2"}).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(billingOutboxID2))
 
 	id, err := s.EnqueueBillingEventTx(
@@ -119,7 +129,7 @@ func TestEnqueueBillingEventShortCircuits(t *testing.T) {
 func TestEnqueueBillingEventHappyPath(t *testing.T) {
 	s, mock := newReadServer(t, true)
 	mock.ExpectQuery(`INSERT INTO purser\.billing_event_outbox`).
-		WithArgs("evt", "tenant-1", "u", "r", "rid", jsonContains{"tenant-1"}).
+		WithArgs(sqlmock.AnyArg(), "evt", "tenant-1", "u", "r", "rid", jsonContains{"tenant-1"}).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(billingOutboxID1))
 
 	s.enqueueBillingEvent(context.Background(), "evt", "tenant-1", "u", "r", "rid", &ipcpb.BillingEvent{})
@@ -144,16 +154,20 @@ func TestClaimBillingOutboxBatchMapsRowsAndClaims(t *testing.T) {
 		WillReturnRows(rows)
 	// Claimed ids are stamped in one generated UUID-array update.
 	mock.ExpectExec(`UPDATE purser\.billing_event_outbox\s+SET claimed_at = NOW`).
-		WithArgs(sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 2))
 	mock.ExpectCommit()
 
-	out, err := s.claimBillingOutboxBatch(context.Background())
+	claims, err := (&billingOutboxStore{server: s}).ClaimBatch(context.Background(), 2, time.Second)
 	if err != nil {
-		t.Fatalf("claimBillingOutboxBatch: %v", err)
+		t.Fatalf("ClaimBatch: %v", err)
 	}
-	if len(out) != 2 {
-		t.Fatalf("got %d rows, want 2", len(out))
+	if len(claims) != 2 {
+		t.Fatalf("got %d rows, want 2", len(claims))
+	}
+	out := []billingOutboxRow{claims[0].Payload, claims[1].Payload}
+	if claims[0].LeaseToken == "" || claims[0].LeaseToken != out[0].leaseToken {
+		t.Fatalf("claim lease token was not propagated: %+v", claims[0])
 	}
 	if out[0].id != billingOutboxID1 || out[0].eventType != "payment_succeeded" || out[0].tenantID != billingTenantID1 {
 		t.Fatalf("row0 mapping wrong: %+v", out[0])
@@ -199,7 +213,9 @@ func TestMarkBillingOutboxCompleted(t *testing.T) {
 		WithArgs("outbox-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	s.markBillingOutboxCompleted(context.Background(), "outbox-1")
+	if err := (&billingOutboxStore{server: s}).MarkCompleted(context.Background(), "outbox-1"); err != nil {
+		t.Fatalf("MarkCompleted: %v", err)
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
 	}
@@ -225,7 +241,9 @@ func TestRecordBillingOutboxFailure(t *testing.T) {
 		WithArgs("decklog timeout", "outbox-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	s.recordBillingOutboxFailure(context.Background(), "outbox-1", 4, errors.New("decklog timeout"))
+	if err := (&billingOutboxStore{server: s}).RecordFailure(context.Background(), "outbox-1", 4, nil, errors.New("decklog timeout"), 0); err != nil {
+		t.Fatalf("RecordFailure: %v", err)
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
 	}
@@ -252,5 +270,64 @@ func TestDispatchBillingOutboxRowRequiresDecklogClient(t *testing.T) {
 	_, err := s.dispatchBillingOutboxRow(context.Background(), billingOutboxRow{id: "outbox-1"})
 	if err == nil || !strings.Contains(err.Error(), "decklog client not configured") {
 		t.Fatalf("want decklog-not-configured error, got %v", err)
+	}
+}
+
+func TestDispatchBillingOutboxRowPreservesStableEventIdentity(t *testing.T) {
+	s, _ := newReadServer(t, true)
+	capture := &capturingServiceEventSender{}
+	s.decklogClient = capture
+	createdAt := time.Date(2026, 8, 31, 10, 0, 0, 0, time.UTC)
+	row := billingOutboxRow{
+		id: billingOutboxID1, eventType: "payment_succeeded", tenantID: billingTenantID1,
+		resourceType: "payment", resourceID: "pay-1", billingJSON: []byte(`{}`), createdAt: createdAt,
+	}
+
+	dispatcher := &billingOutboxDispatcher{server: s}
+	for attempt := 0; attempt < 2; attempt++ {
+		if failed, err := dispatcher.Dispatch(context.Background(), row); err != nil || len(failed) != 0 {
+			t.Fatalf("dispatch %d = failed %v, error %v", attempt, failed, err)
+		}
+	}
+	if len(capture.events) != 2 {
+		t.Fatalf("captured %d events, want 2", len(capture.events))
+	}
+	for _, event := range capture.events {
+		if event.GetEventId() != billingOutboxID1 {
+			t.Fatalf("event id = %q, want stable outbox id", event.GetEventId())
+		}
+		if event.GetTenantId() != billingTenantID1 || event.GetBillingEvent().GetTenantId() != billingTenantID1 {
+			t.Fatalf("tenant identity was not preserved: %+v", event)
+		}
+		if !event.GetTimestamp().AsTime().Equal(createdAt) {
+			t.Fatalf("timestamp = %v, want %v", event.GetTimestamp().AsTime(), createdAt)
+		}
+	}
+}
+
+func TestRunBillingOutboxWorkerWithoutDecklogReturns(t *testing.T) {
+	s, _ := newReadServer(t, true)
+	s.runBillingOutboxWorker(context.Background())
+}
+
+func TestBillingOutboxTokenSettlementRejectsStaleLease(t *testing.T) {
+	s, mock := newReadServer(t, true)
+	store := &billingOutboxStore{server: s}
+
+	mock.ExpectExec(`UPDATE purser\.billing_event_outbox[\s\S]*lease_token = NULL[\s\S]*lease_token = \$2`).
+		WithArgs("outbox-1", "lease-current").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	if err := store.MarkCompletedToken(context.Background(), "outbox-1", "lease-current"); err == nil {
+		t.Fatal("stale completion should report a lost lease")
+	}
+
+	mock.ExpectExec(`UPDATE purser\.billing_event_outbox[\s\S]*attempts = attempts \+ 1[\s\S]*lease_token = \$3`).
+		WithArgs("decklog down", "outbox-1", "lease-current").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	if err := store.RecordFailureToken(context.Background(), "outbox-1", 0, nil, errors.New("decklog down"), 0, "lease-current"); err == nil {
+		t.Fatal("stale failure should report a lost lease")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
 	}
 }

@@ -34,7 +34,7 @@ func TestCreateSubscription_PersistsUUIDAndBillingModel(t *testing.T) {
 		).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery(`INSERT INTO purser\.billing_event_outbox`).
-		WithArgs("subscription_created", tenantID, "", "subscription", sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WithArgs(sqlmock.AnyArg(), "subscription_created", tenantID, "", "subscription", sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("22222222-2222-2222-2222-222222222222"))
 	mock.ExpectCommit()
 
