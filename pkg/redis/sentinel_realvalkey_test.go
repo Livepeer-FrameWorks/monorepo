@@ -60,8 +60,34 @@ func TestSentinelFailover_RealValkey(t *testing.T) {
 
 	waitDockerCommand(t, 45*time.Second, func() bool {
 		out, commandErr := dockerpg.CLI("exec", dataNames[0], "valkey-cli", "info", "replication")
-		return commandErr == nil && strings.Contains(out, "connected_slaves:2")
-	}, "two replicas to synchronize")
+		if commandErr != nil || !strings.Contains(out, "connected_slaves:2") {
+			return false
+		}
+		for _, replica := range dataNames[1:] {
+			role, roleErr := dockerpg.CLI("exec", replica, "valkey-cli", "--raw", "role")
+			if roleErr != nil || !strings.Contains(role, "slave\n") || !strings.Contains(role, "connected") {
+				return false
+			}
+		}
+		return true
+	}, "two connected replicas")
+
+	diagnostics := func() string {
+		return sentinelDiagnostics(dataNames, sentinelNames, "frameworks-master")
+	}
+	waitDockerCommandWithDiagnostics(t, 45*time.Second, func() bool {
+		for _, sentinel := range sentinelNames {
+			quorum, quorumErr := dockerpg.CLI("exec", sentinel, "valkey-cli", "-p", "26379", "--raw", "sentinel", "ckquorum", "frameworks-master")
+			if quorumErr != nil || !strings.HasPrefix(strings.TrimSpace(quorum), "OK") {
+				return false
+			}
+			master, masterErr := sentinelMasterState(sentinel, "frameworks-master")
+			if masterErr != nil || master["num-slaves"] != "2" || master["num-other-sentinels"] != "2" || strings.Contains(master["flags"], "down") {
+				return false
+			}
+		}
+		return true
+	}, "all Sentinels to establish quorum and discover two replicas", diagnostics)
 
 	addressMap := make(map[string]string)
 	for _, name := range dataNames {
@@ -98,15 +124,40 @@ func TestSentinelFailover_RealValkey(t *testing.T) {
 	if err = client.Set(ctx, "ha-contract", "before-failover", 0).Err(); err != nil {
 		t.Fatalf("write before failover: %v", err)
 	}
-	if err = client.Do(ctx, "WAIT", 2, 5000).Err(); err != nil {
-		t.Fatalf("replicate before failover: %v", err)
-	}
+	var acknowledged int
+	var waitErr error
+	waitDockerCommandWithDiagnostics(t, 45*time.Second, func() bool {
+		acknowledged, waitErr = client.Do(ctx, "WAIT", 2, 5000).Int()
+		return waitErr == nil && acknowledged == 2
+	}, "both replicas to acknowledge the pre-failover write", func() string {
+		return fmt.Sprintf("last WAIT result: acknowledged=%d err=%v\n%s", acknowledged, waitErr, diagnostics())
+	})
+	oldMaster := containerAddress(t, dataNames[0], "6379")
 	if out, stopErr := dockerpg.CLI("stop", "-t", "1", dataNames[0]); stopErr != nil {
 		t.Fatalf("stop primary: %v\n%s", stopErr, out)
 	}
-	waitDockerCommand(t, 45*time.Second, func() bool {
-		return client.Set(ctx, "ha-contract", "after-failover", 0).Err() == nil
-	}, "Sentinel client to write through promoted primary")
+	var promotedMaster string
+	waitDockerCommandWithDiagnostics(t, 45*time.Second, func() bool {
+		promotedMaster = ""
+		for _, sentinel := range sentinelNames {
+			current, currentErr := sentinelMasterAddress(sentinel, "frameworks-master")
+			if currentErr != nil || current == "" || current == oldMaster {
+				return false
+			}
+			if promotedMaster != "" && current != promotedMaster {
+				return false
+			}
+			promotedMaster = current
+		}
+		return true
+	}, "all Sentinels to agree on a promoted primary", diagnostics)
+	var lastSetErr error
+	waitDockerCommandWithDiagnostics(t, 30*time.Second, func() bool {
+		lastSetErr = client.Set(ctx, "ha-contract", "after-failover", 0).Err()
+		return lastSetErr == nil
+	}, "Sentinel client to write through promoted primary", func() string {
+		return fmt.Sprintf("promoted master=%s; last client SET error=%v\n%s", promotedMaster, lastSetErr, diagnostics())
+	})
 	if value, getErr := client.Get(ctx, "ha-contract").Result(); getErr != nil || value != "after-failover" {
 		t.Fatalf("read after failover: value=%q err=%v", value, getErr)
 	}
@@ -257,6 +308,10 @@ func containerAddress(t testing.TB, name, port string) string {
 }
 
 func waitDockerCommand(t testing.TB, timeout time.Duration, ready func() bool, description string) {
+	waitDockerCommandWithDiagnostics(t, timeout, ready, description, nil)
+}
+
+func waitDockerCommandWithDiagnostics(t testing.TB, timeout time.Duration, ready func() bool, description string, diagnostics func() string) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
@@ -265,5 +320,53 @@ func waitDockerCommand(t testing.TB, timeout time.Duration, ready func() bool, d
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
-	t.Fatalf("timed out waiting for %s", description)
+	if diagnostics == nil {
+		t.Fatalf("timed out waiting for %s", description)
+	}
+	t.Fatalf("timed out waiting for %s\n%s", description, diagnostics())
+}
+
+func sentinelMasterAddress(sentinel, masterName string) (string, error) {
+	out, err := dockerpg.CLI("exec", sentinel, "valkey-cli", "-p", "26379", "--raw", "sentinel", "get-master-addr-by-name", masterName)
+	if err != nil {
+		return "", err
+	}
+	parts := strings.Fields(out)
+	if len(parts) != 2 {
+		return "", fmt.Errorf("unexpected master address response %q", strings.TrimSpace(out))
+	}
+	return net.JoinHostPort(parts[0], parts[1]), nil
+}
+
+func sentinelMasterState(sentinel, masterName string) (map[string]string, error) {
+	out, err := dockerpg.CLI("exec", sentinel, "valkey-cli", "-p", "26379", "--raw", "sentinel", "master", masterName)
+	if err != nil {
+		return nil, err
+	}
+	parts := strings.Split(strings.TrimSpace(out), "\n")
+	if len(parts)%2 != 0 {
+		return nil, fmt.Errorf("unexpected master state response %q", strings.TrimSpace(out))
+	}
+	state := make(map[string]string, len(parts)/2)
+	for index := 0; index < len(parts); index += 2 {
+		state[strings.TrimSpace(parts[index])] = strings.TrimSpace(parts[index+1])
+	}
+	return state, nil
+}
+
+func sentinelDiagnostics(dataNames, sentinelNames []string, masterName string) string {
+	var diagnostics strings.Builder
+	for _, name := range dataNames {
+		role, roleErr := dockerpg.CLI("exec", name, "valkey-cli", "--raw", "role")
+		fmt.Fprintf(&diagnostics, "data %s role (err=%v):\n%s\n", name, roleErr, role)
+	}
+	for _, name := range sentinelNames {
+		for _, command := range []string{"master", "sentinels", "replicas"} {
+			out, commandErr := dockerpg.CLI("exec", name, "valkey-cli", "-p", "26379", "--raw", "sentinel", command, masterName)
+			fmt.Fprintf(&diagnostics, "sentinel %s %s (err=%v):\n%s\n", name, command, commandErr, out)
+		}
+		logs, logsErr := dockerpg.CLI("logs", "--tail", "80", name)
+		fmt.Fprintf(&diagnostics, "sentinel %s logs (err=%v):\n%s\n", name, logsErr, logs)
+	}
+	return diagnostics.String()
 }
