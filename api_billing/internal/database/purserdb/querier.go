@@ -39,8 +39,8 @@ type Querier interface {
 	AttachProviderPaymentIDToAttempt(ctx context.Context, arg AttachProviderPaymentIDToAttemptParams) error
 	AttachProviderPaymentIDToBillingPayment(ctx context.Context, arg AttachProviderPaymentIDToBillingPaymentParams) error
 	AttachProviderPaymentIDToIntent(ctx context.Context, arg AttachProviderPaymentIDToIntentParams) error
-	AttachProviderPaymentToPendingTopup(ctx context.Context, arg AttachProviderPaymentToPendingTopupParams) error
-	AttachStripeIntentToInvoicePayment(ctx context.Context, arg AttachStripeIntentToInvoicePaymentParams) error
+	AttachProviderPaymentToPendingTopup(ctx context.Context, arg AttachProviderPaymentToPendingTopupParams) (int64, error)
+	AttachStripeIntentToInvoicePayment(ctx context.Context, arg AttachStripeIntentToInvoicePaymentParams) (int64, error)
 	BackfillSubscriptionPeriodFromDraft(ctx context.Context, arg BackfillSubscriptionPeriodFromDraftParams) error
 	BackfillTenantBillingPeriod(ctx context.Context, arg BackfillTenantBillingPeriodParams) error
 	CancelLocalMollieSubscription(ctx context.Context, tenantID string) error

@@ -69,40 +69,75 @@ func (q *Queries) ActivateTenantSubscriptionFromStripe(ctx context.Context, arg 
 	return result.RowsAffected()
 }
 
-const attachProviderPaymentToPendingTopup = `-- name: AttachProviderPaymentToPendingTopup :exec
+const attachProviderPaymentToPendingTopup = `-- name: AttachProviderPaymentToPendingTopup :execrows
 UPDATE purser.pending_topups
 SET provider_payment_id = COALESCE(provider_payment_id, NULLIF($1::text, '')),
     checkout_id = COALESCE(checkout_id, NULLIF($2::text, '')), updated_at = NOW()
 WHERE id = $3::text::uuid
+  AND status = 'pending'
+  AND tenant_id = $4::text::uuid
+  AND provider = $5::text
+  AND amount_cents = $6::bigint
+  AND UPPER(currency) = UPPER($7::text)
+  AND (checkout_id IS NULL OR checkout_id = NULLIF($2::text, ''))
+  AND (provider_payment_id IS NULL OR provider_payment_id = NULLIF($1::text, ''))
 `
 
 type AttachProviderPaymentToPendingTopupParams struct {
 	ProviderPaymentID string `db:"provider_payment_id" json:"provider_payment_id"`
 	SessionID         string `db:"session_id" json:"session_id"`
 	TopupID           string `db:"topup_id" json:"topup_id"`
+	TenantID          string `db:"tenant_id" json:"tenant_id"`
+	Provider          string `db:"provider" json:"provider"`
+	AmountCents       int64  `db:"amount_cents" json:"amount_cents"`
+	Currency          string `db:"currency" json:"currency"`
 }
 
-func (q *Queries) AttachProviderPaymentToPendingTopup(ctx context.Context, arg AttachProviderPaymentToPendingTopupParams) error {
-	_, err := q.db.ExecContext(ctx, attachProviderPaymentToPendingTopup, arg.ProviderPaymentID, arg.SessionID, arg.TopupID)
-	return err
+func (q *Queries) AttachProviderPaymentToPendingTopup(ctx context.Context, arg AttachProviderPaymentToPendingTopupParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, attachProviderPaymentToPendingTopup,
+		arg.ProviderPaymentID,
+		arg.SessionID,
+		arg.TopupID,
+		arg.TenantID,
+		arg.Provider,
+		arg.AmountCents,
+		arg.Currency,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
-const attachStripeIntentToInvoicePayment = `-- name: AttachStripeIntentToInvoicePayment :exec
-UPDATE purser.billing_payments
+const attachStripeIntentToInvoicePayment = `-- name: AttachStripeIntentToInvoicePayment :execrows
+UPDATE purser.billing_payments payment
 SET tx_id = $1::text, updated_at = NOW()
-WHERE invoice_id = $2::text::uuid
-  AND method = 'card' AND status = 'pending' AND tx_id = $3::text
+FROM purser.billing_invoices invoice
+WHERE payment.invoice_id = invoice.id
+  AND payment.invoice_id = $2::text::uuid
+  AND invoice.tenant_id = $3::text::uuid
+  AND payment.method = 'card' AND payment.status = 'pending'
+  AND payment.tx_id IN ($4::text, $1::text)
 `
 
 type AttachStripeIntentToInvoicePaymentParams struct {
 	PaymentIntentID string `db:"payment_intent_id" json:"payment_intent_id"`
 	InvoiceID       string `db:"invoice_id" json:"invoice_id"`
+	TenantID        string `db:"tenant_id" json:"tenant_id"`
 	SessionID       string `db:"session_id" json:"session_id"`
 }
 
-func (q *Queries) AttachStripeIntentToInvoicePayment(ctx context.Context, arg AttachStripeIntentToInvoicePaymentParams) error {
-	_, err := q.db.ExecContext(ctx, attachStripeIntentToInvoicePayment, arg.PaymentIntentID, arg.InvoiceID, arg.SessionID)
-	return err
+func (q *Queries) AttachStripeIntentToInvoicePayment(ctx context.Context, arg AttachStripeIntentToInvoicePaymentParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, attachStripeIntentToInvoicePayment,
+		arg.PaymentIntentID,
+		arg.InvoiceID,
+		arg.TenantID,
+		arg.SessionID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const clearStagedStripeClusterSubscription = `-- name: ClearStagedStripeClusterSubscription :exec
@@ -238,21 +273,35 @@ func (q *Queries) LinkStripeIntentSubscription(ctx context.Context, arg LinkStri
 }
 
 const lockPendingTopupForCheckout = `-- name: LockPendingTopupForCheckout :one
-SELECT status, tenant_id::text AS tenant_id
+SELECT status, tenant_id::text AS tenant_id, provider, amount_cents, currency,
+       checkout_id, provider_payment_id
 FROM purser.pending_topups
 WHERE id = $1::text::uuid
 FOR UPDATE
 `
 
 type LockPendingTopupForCheckoutRow struct {
-	Status   string `db:"status" json:"status"`
-	TenantID string `db:"tenant_id" json:"tenant_id"`
+	Status            string         `db:"status" json:"status"`
+	TenantID          string         `db:"tenant_id" json:"tenant_id"`
+	Provider          string         `db:"provider" json:"provider"`
+	AmountCents       int64          `db:"amount_cents" json:"amount_cents"`
+	Currency          string         `db:"currency" json:"currency"`
+	CheckoutID        sql.NullString `db:"checkout_id" json:"checkout_id"`
+	ProviderPaymentID sql.NullString `db:"provider_payment_id" json:"provider_payment_id"`
 }
 
 func (q *Queries) LockPendingTopupForCheckout(ctx context.Context, topupID string) (LockPendingTopupForCheckoutRow, error) {
 	row := q.db.QueryRowContext(ctx, lockPendingTopupForCheckout, topupID)
 	var i LockPendingTopupForCheckoutRow
-	err := row.Scan(&i.Status, &i.TenantID)
+	err := row.Scan(
+		&i.Status,
+		&i.TenantID,
+		&i.Provider,
+		&i.AmountCents,
+		&i.Currency,
+		&i.CheckoutID,
+		&i.ProviderPaymentID,
+	)
 	return i, err
 }
 

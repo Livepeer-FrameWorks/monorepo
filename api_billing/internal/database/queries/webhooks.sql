@@ -56,7 +56,8 @@ WHERE payment.invoice_id = sqlc.arg(invoice_id)::text::uuid
   AND payment.method = 'card'
   AND payment.tx_id = sqlc.arg(transaction_id)
 ORDER BY payment.created_at DESC
-LIMIT 1;
+LIMIT 1
+FOR UPDATE OF payment;
 
 -- name: GetTenantByStripeSubscription :one
 SELECT tenant_id::text AS tenant_id
@@ -175,7 +176,8 @@ JOIN purser.billing_invoices invoice ON invoice.id = payment.invoice_id
 WHERE payment.tx_id = sqlc.arg(payment_intent_id)
   AND payment.method = 'card'
 ORDER BY payment.created_at DESC
-LIMIT 1;
+LIMIT 1
+FOR UPDATE OF payment;
 
 -- name: GetStripePaymentIntentForCharge :one
 SELECT COALESCE(MAX(metadata->>'payment_intent_id'), '')::text AS payment_intent_id
@@ -441,18 +443,24 @@ ORDER BY invoice.created_at DESC
 LIMIT 1;
 
 -- name: GetBillingPaymentByProviderTransaction :one
-SELECT id::text AS payment_id, invoice_id::text AS invoice_id
-FROM purser.billing_payments
-WHERE tx_id = sqlc.arg(transaction_id) AND method = sqlc.arg(method)
-ORDER BY created_at DESC
+SELECT payment.id::text AS payment_id, payment.invoice_id::text AS invoice_id,
+       invoice.tenant_id::text AS tenant_id, payment.amount::text AS amount,
+       payment.currency, payment.status
+FROM purser.billing_payments payment
+JOIN purser.billing_invoices invoice ON invoice.id = payment.invoice_id
+WHERE payment.tx_id = sqlc.arg(transaction_id) AND payment.method = sqlc.arg(method)
+ORDER BY payment.created_at DESC
 LIMIT 1;
 
 -- name: GetPendingBillingPaymentForInvoice :one
-SELECT id::text AS payment_id, invoice_id::text AS invoice_id
-FROM purser.billing_payments
-WHERE invoice_id = sqlc.arg(invoice_id)::text::uuid
-  AND method = sqlc.arg(method) AND status = 'pending' AND tx_id IS NULL
-ORDER BY created_at DESC
+SELECT payment.id::text AS payment_id, payment.invoice_id::text AS invoice_id,
+       invoice.tenant_id::text AS tenant_id, payment.amount::text AS amount,
+       payment.currency, payment.status
+FROM purser.billing_payments payment
+JOIN purser.billing_invoices invoice ON invoice.id = payment.invoice_id
+WHERE payment.invoice_id = sqlc.arg(invoice_id)::text::uuid
+  AND payment.method = sqlc.arg(method) AND payment.status = 'pending' AND payment.tx_id IS NULL
+ORDER BY payment.created_at DESC
 LIMIT 1;
 
 -- name: UpdateBillingPaymentProviderStatus :exec

@@ -54,10 +54,12 @@ type StripeWebhookPayload struct {
 
 // StripePaymentIntentObject for payment_intent events
 type StripePaymentIntentObject struct {
-	ID           string `json:"id"`
-	Status       string `json:"status"`
-	LatestCharge string `json:"latest_charge"`
-	Metadata     struct {
+	ID             string `json:"id"`
+	Status         string `json:"status"`
+	LatestCharge   string `json:"latest_charge"`
+	AmountReceived int64  `json:"amount_received"`
+	Currency       string `json:"currency"`
+	Metadata       struct {
 		InvoiceID string `json:"invoice_id"`
 		TenantID  string `json:"tenant_id"`
 	} `json:"metadata"`
@@ -568,7 +570,9 @@ func (s *Service) handleStripePaymentIntentGRPC(payload StripeWebhookPayload) er
 		status = "failed"
 	}
 
-	updated, err := s.updateInvoicePaymentStatus("stripe", obj.ID, invoiceID, status)
+	updated, err := s.updateInvoicePaymentStatus("stripe", obj.ID, invoiceID, status, providerSettlementEvidence{
+		TenantID: obj.Metadata.TenantID, AmountCents: obj.AmountReceived, Currency: obj.Currency,
+	})
 	if err != nil {
 		return err
 	}
@@ -972,7 +976,7 @@ func (s *Service) handleStripeCheckoutAsyncPaymentFailed(payload StripeWebhookPa
 		if txID == "" {
 			txID = sess.ID
 		}
-		if _, err := s.updateInvoicePaymentStatus("stripe", txID, sess.Metadata.ReferenceID, "failed"); err != nil {
+		if _, err := s.updateInvoicePaymentStatus("stripe", txID, sess.Metadata.ReferenceID, "failed", providerSettlementEvidence{TenantID: sess.Metadata.TenantID}); err != nil {
 			return err
 		}
 		s.logger.WithFields(logging.Fields{
@@ -1381,7 +1385,14 @@ func (s *Service) handleMolliePaymentWebhook(parentCtx context.Context, paymentI
 			return "", fmt.Errorf("attach Mollie payment id to billing payment: %w", attachErr)
 		}
 	}
-	paymentUpdated, err := s.updateInvoicePaymentStatus("mollie", payment.ID, invoiceID, newStatus)
+	settlement := providerSettlementEvidence{TenantID: tenantID}
+	if payment.Amount != nil {
+		settlement.AmountCents, settlement.Currency, err = mollieAmountToCents(payment.Amount.Value, payment.Amount.Currency)
+		if err != nil {
+			return "", err
+		}
+	}
+	paymentUpdated, err := s.updateInvoicePaymentStatus("mollie", payment.ID, invoiceID, newStatus, settlement)
 	if err != nil {
 		return "", err
 	}
@@ -2109,7 +2120,9 @@ func (s *Service) drainMolliePaymentObservationsForInvoice(ctx context.Context, 
 		}); insertErr != nil {
 			return fmt.Errorf("insert drained mollie payment %s: %w", observation.MolliePaymentID, insertErr)
 		}
-		if _, settleErr := s.updateInvoicePaymentStatus("mollie", observation.MolliePaymentID, invoiceID, mapped); settleErr != nil {
+		if _, settleErr := s.updateInvoicePaymentStatus("mollie", observation.MolliePaymentID, invoiceID, mapped, providerSettlementEvidence{
+			TenantID: invoice.TenantID, AmountCents: observation.AmountCents, Currency: observation.Currency,
+		}); settleErr != nil {
 			return fmt.Errorf("settle drained mollie payment %s: %w", observation.MolliePaymentID, settleErr)
 		}
 		if resErr := queries.ResolveMolliePaymentObservation(ctx, purserdb.ResolveMolliePaymentObservationParams{
@@ -2226,7 +2239,13 @@ func mapMolliePaymentStatus(status string) (string, bool) {
 	}
 }
 
-func (s *Service) updateInvoicePaymentStatus(provider, txID, invoiceID, newStatus string) (bool, error) {
+type providerSettlementEvidence struct {
+	TenantID    string
+	AmountCents int64
+	Currency    string
+}
+
+func (s *Service) updateInvoicePaymentStatus(provider, txID, invoiceID, newStatus string, evidence providerSettlementEvidence) (bool, error) {
 	ctx := context.Background()
 	method := invoicePaymentMethodForProvider(provider)
 
@@ -2248,7 +2267,12 @@ func (s *Service) updateInvoicePaymentStatus(provider, txID, invoiceID, newStatu
 		TransactionID: optionalSQLString(txID), Method: method,
 	})
 	paymentID, foundInvoiceID := payment.PaymentID, payment.InvoiceID
+	paymentTenantID, paymentAmount, paymentCurrency := payment.TenantID, payment.Amount, payment.Currency
+	paymentStatus := payment.Status
 	if errors.Is(err, sql.ErrNoRows) {
+		if newStatus == "confirmed" {
+			return false, nil
+		}
 		if invoiceID == "" {
 			return false, nil
 		}
@@ -2260,6 +2284,8 @@ func (s *Service) updateInvoicePaymentStatus(provider, txID, invoiceID, newStatu
 			return false, nil
 		}
 		paymentID, foundInvoiceID = pendingPayment.PaymentID, pendingPayment.InvoiceID
+		paymentTenantID, paymentAmount, paymentCurrency = pendingPayment.TenantID, pendingPayment.Amount, pendingPayment.Currency
+		paymentStatus = pendingPayment.Status
 	}
 	if err != nil {
 		return false, fmt.Errorf("failed to lookup payment: %w", err)
@@ -2268,6 +2294,35 @@ func (s *Service) updateInvoicePaymentStatus(provider, txID, invoiceID, newStatu
 		invoiceID = foundInvoiceID
 	} else if foundInvoiceID != "" && foundInvoiceID != invoiceID {
 		return false, fmt.Errorf("provider payment %s is linked to invoice %s, not webhook invoice %s", txID, foundInvoiceID, invoiceID)
+	}
+	if evidence.TenantID != "" && evidence.TenantID != paymentTenantID {
+		return false, fmt.Errorf("provider payment %s tenant mismatch", txID)
+	}
+	if newStatus == "confirmed" {
+		if evidence.AmountCents <= 0 || strings.TrimSpace(evidence.Currency) == "" {
+			return false, fmt.Errorf("provider payment %s is missing settlement amount or currency", txID)
+		}
+		if !strings.EqualFold(paymentCurrency, evidence.Currency) {
+			return false, fmt.Errorf("provider payment %s currency mismatch: stored %s, received %s", txID, paymentCurrency, evidence.Currency)
+		}
+		expected, parseErr := decimal.NewFromString(paymentAmount)
+		if parseErr != nil {
+			return false, fmt.Errorf("parse stored payment amount: %w", parseErr)
+		}
+		received := decimal.New(evidence.AmountCents, int32(-currencyMinorUnitExponent(evidence.Currency)))
+		if !expected.Equal(received) {
+			return false, fmt.Errorf("provider payment %s amount mismatch: stored %s, received %s", txID, expected, received)
+		}
+	}
+	if paymentStatus == newStatus {
+		if err = tx.Commit(); err != nil {
+			return false, fmt.Errorf("commit idempotent invoice payment status transaction: %w", err)
+		}
+		committed = true
+		return true, nil
+	}
+	if paymentStatus != "pending" {
+		return false, fmt.Errorf("provider payment %s cannot transition from %s to %s", txID, paymentStatus, newStatus)
 	}
 
 	now := time.Now()

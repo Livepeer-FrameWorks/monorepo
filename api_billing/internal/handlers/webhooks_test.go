@@ -328,9 +328,9 @@ func TestUpdateInvoicePaymentStatusDoesNotMarkPartiallyPaidInvoicePaid(t *testin
 	s := &Service{db: mockDB, logger: logrus.New()}
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT id::text AS payment_id, invoice_id::text AS invoice_id`).
+	mock.ExpectQuery(`SELECT payment\.id::text AS payment_id, payment\.invoice_id::text AS invoice_id`).
 		WithArgs("tr_partial", "card").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "invoice_id"}).AddRow("payment-1", "invoice-1"))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "invoice_id", "tenant_id", "amount", "currency", "status"}).AddRow("payment-1", "invoice-1", "tenant-1", "10.00", "EUR", "pending"))
 	mock.ExpectExec(`UPDATE purser\.billing_payments`).
 		WithArgs("confirmed", sqlmock.AnyArg(), "tr_partial", "payment-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -345,7 +345,9 @@ func TestUpdateInvoicePaymentStatusDoesNotMarkPartiallyPaidInvoicePaid(t *testin
 		WithArgs("invoice-1").
 		WillReturnError(sql.ErrNoRows)
 
-	updated, err := s.updateInvoicePaymentStatus("mollie", "tr_partial", "invoice-1", "confirmed")
+	updated, err := s.updateInvoicePaymentStatus("mollie", "tr_partial", "invoice-1", "confirmed", providerSettlementEvidence{
+		TenantID: "tenant-1", AmountCents: 1000, Currency: "EUR",
+	})
 	if err != nil {
 		t.Fatalf("updateInvoicePaymentStatus: %v", err)
 	}
@@ -367,9 +369,9 @@ func TestUpdateInvoicePaymentStatusMarksInvoicePaidWhenConfirmedPaymentsCoverAmo
 	s := &Service{db: mockDB, logger: logrus.New()}
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT id::text AS payment_id, invoice_id::text AS invoice_id`).
+	mock.ExpectQuery(`SELECT payment\.id::text AS payment_id, payment\.invoice_id::text AS invoice_id`).
 		WithArgs("tr_full", "card").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "invoice_id"}).AddRow("payment-2", "invoice-2"))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "invoice_id", "tenant_id", "amount", "currency", "status"}).AddRow("payment-2", "invoice-2", "tenant-2", "25.00", "EUR", "pending"))
 	mock.ExpectExec(`UPDATE purser\.billing_payments`).
 		WithArgs("confirmed", sqlmock.AnyArg(), "tr_full", "payment-2").
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -395,7 +397,9 @@ func TestUpdateInvoicePaymentStatusMarksInvoicePaidWhenConfirmedPaymentsCoverAmo
 		WithArgs("invoice-2").
 		WillReturnError(sql.ErrNoRows)
 
-	updated, err := s.updateInvoicePaymentStatus("mollie", "tr_full", "invoice-2", "confirmed")
+	updated, err := s.updateInvoicePaymentStatus("mollie", "tr_full", "invoice-2", "confirmed", providerSettlementEvidence{
+		TenantID: "tenant-2", AmountCents: 2500, Currency: "EUR",
+	})
 	if err != nil {
 		t.Fatalf("updateInvoicePaymentStatus: %v", err)
 	}
@@ -417,17 +421,141 @@ func TestUpdateInvoicePaymentStatusRejectsInvoiceMismatch(t *testing.T) {
 	s := &Service{db: mockDB, logger: logrus.New()}
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT id::text AS payment_id, invoice_id::text AS invoice_id`).
+	mock.ExpectQuery(`SELECT payment\.id::text AS payment_id, payment\.invoice_id::text AS invoice_id`).
 		WithArgs("tr_wrong", "card").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "invoice_id"}).AddRow("payment-3", "invoice-real"))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "invoice_id", "tenant_id", "amount", "currency", "status"}).AddRow("payment-3", "invoice-real", "tenant-3", "10.00", "EUR", "pending"))
 	mock.ExpectRollback()
 
-	updated, err := s.updateInvoicePaymentStatus("mollie", "tr_wrong", "invoice-webhook", "confirmed")
+	updated, err := s.updateInvoicePaymentStatus("mollie", "tr_wrong", "invoice-webhook", "confirmed", providerSettlementEvidence{
+		TenantID: "tenant-3", AmountCents: 1000, Currency: "EUR",
+	})
 	if err == nil {
 		t.Fatal("expected invoice mismatch error")
 	}
 	if updated {
 		t.Fatal("expected no update on invoice mismatch")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestUpdateInvoicePaymentStatusRejectsSettlementEvidenceMismatch(t *testing.T) {
+	tests := []struct {
+		name     string
+		evidence providerSettlementEvidence
+	}{
+		{name: "tenant", evidence: providerSettlementEvidence{TenantID: "tenant-forged", AmountCents: 1250, Currency: "EUR"}},
+		{name: "underpayment", evidence: providerSettlementEvidence{TenantID: "tenant-real", AmountCents: 1249, Currency: "EUR"}},
+		{name: "overpayment", evidence: providerSettlementEvidence{TenantID: "tenant-real", AmountCents: 1251, Currency: "EUR"}},
+		{name: "currency", evidence: providerSettlementEvidence{TenantID: "tenant-real", AmountCents: 1250, Currency: "USD"}},
+		{name: "missing amount", evidence: providerSettlementEvidence{TenantID: "tenant-real", Currency: "EUR"}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+			if err != nil {
+				t.Fatalf("failed to create sqlmock: %v", err)
+			}
+			defer mockDB.Close()
+
+			s := &Service{db: mockDB, logger: logrus.New()}
+			mock.ExpectBegin()
+			mock.ExpectQuery(`SELECT payment\.id::text AS payment_id, payment\.invoice_id::text AS invoice_id`).
+				WithArgs("pi_settlement", "card").
+				WillReturnRows(sqlmock.NewRows([]string{"id", "invoice_id", "tenant_id", "amount", "currency", "status"}).
+					AddRow("payment-1", "invoice-1", "tenant-real", "12.50", "EUR", "pending"))
+			mock.ExpectRollback()
+
+			updated, err := s.updateInvoicePaymentStatus("stripe", "pi_settlement", "invoice-1", "confirmed", tc.evidence)
+			if err == nil {
+				t.Fatal("expected settlement evidence mismatch")
+			}
+			if updated {
+				t.Fatal("expected no payment mutation")
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("unmet expectations: %v", err)
+			}
+		})
+	}
+}
+
+func TestUpdateInvoicePaymentStatusConfirmedReplayIsReadOnly(t *testing.T) {
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	s := &Service{db: mockDB, logger: logrus.New()}
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT payment\.id::text AS payment_id, payment\.invoice_id::text AS invoice_id`).
+		WithArgs("pi_replay", "card").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "invoice_id", "tenant_id", "amount", "currency", "status"}).
+			AddRow("payment-1", "invoice-1", "tenant-1", "12.50", "EUR", "confirmed"))
+	mock.ExpectCommit()
+
+	updated, err := s.updateInvoicePaymentStatus("stripe", "pi_replay", "invoice-1", "confirmed", providerSettlementEvidence{
+		TenantID: "tenant-1", AmountCents: 1250, Currency: "EUR",
+	})
+	if err != nil || !updated {
+		t.Fatalf("confirmed replay = updated %v, error %v", updated, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestUpdateInvoicePaymentStatusRejectsTerminalTransition(t *testing.T) {
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	s := &Service{db: mockDB, logger: logrus.New()}
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT payment\.id::text AS payment_id, payment\.invoice_id::text AS invoice_id`).
+		WithArgs("pi_failed", "card").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "invoice_id", "tenant_id", "amount", "currency", "status"}).
+			AddRow("payment-1", "invoice-1", "tenant-1", "12.50", "EUR", "failed"))
+	mock.ExpectRollback()
+
+	updated, err := s.updateInvoicePaymentStatus("stripe", "pi_failed", "invoice-1", "confirmed", providerSettlementEvidence{
+		TenantID: "tenant-1", AmountCents: 1250, Currency: "EUR",
+	})
+	if err == nil || updated {
+		t.Fatalf("terminal transition = updated %v, error %v", updated, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestUpdateInvoicePaymentStatusDoesNotFallbackForUnknownConfirmedTransaction(t *testing.T) {
+	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer mockDB.Close()
+
+	s := &Service{db: mockDB, logger: logrus.New()}
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT payment\.id::text AS payment_id, payment\.invoice_id::text AS invoice_id`).
+		WithArgs("pi_unknown", "card").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectRollback()
+
+	updated, err := s.updateInvoicePaymentStatus("stripe", "pi_unknown", "invoice-1", "confirmed", providerSettlementEvidence{
+		TenantID: "tenant-1", AmountCents: 1250, Currency: "EUR",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if updated {
+		t.Fatal("unknown provider transaction must not settle a pending invoice payment")
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)

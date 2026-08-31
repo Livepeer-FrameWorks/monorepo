@@ -143,23 +143,35 @@ WHERE status = 'pending_payment'
   AND (checkout_session_id = NULLIF(sqlc.arg(session_id)::text, '')
        OR stripe_subscription_id = NULLIF(sqlc.arg(subscription_id)::text, ''));
 
--- name: AttachStripeIntentToInvoicePayment :exec
-UPDATE purser.billing_payments
+-- name: AttachStripeIntentToInvoicePayment :execrows
+UPDATE purser.billing_payments payment
 SET tx_id = sqlc.arg(payment_intent_id)::text, updated_at = NOW()
-WHERE invoice_id = sqlc.arg(invoice_id)::text::uuid
-  AND method = 'card' AND status = 'pending' AND tx_id = sqlc.arg(session_id)::text;
+FROM purser.billing_invoices invoice
+WHERE payment.invoice_id = invoice.id
+  AND payment.invoice_id = sqlc.arg(invoice_id)::text::uuid
+  AND invoice.tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND payment.method = 'card' AND payment.status = 'pending'
+  AND payment.tx_id IN (sqlc.arg(session_id)::text, sqlc.arg(payment_intent_id)::text);
 
 -- name: LockPendingTopupForCheckout :one
-SELECT status, tenant_id::text AS tenant_id
+SELECT status, tenant_id::text AS tenant_id, provider, amount_cents, currency,
+       checkout_id, provider_payment_id
 FROM purser.pending_topups
 WHERE id = sqlc.arg(topup_id)::text::uuid
 FOR UPDATE;
 
--- name: AttachProviderPaymentToPendingTopup :exec
+-- name: AttachProviderPaymentToPendingTopup :execrows
 UPDATE purser.pending_topups
 SET provider_payment_id = COALESCE(provider_payment_id, NULLIF(sqlc.arg(provider_payment_id)::text, '')),
     checkout_id = COALESCE(checkout_id, NULLIF(sqlc.arg(session_id)::text, '')), updated_at = NOW()
-WHERE id = sqlc.arg(topup_id)::text::uuid;
+WHERE id = sqlc.arg(topup_id)::text::uuid
+  AND status = 'pending'
+  AND tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND provider = sqlc.arg(provider)::text
+  AND amount_cents = sqlc.arg(amount_cents)::bigint
+  AND UPPER(currency) = UPPER(sqlc.arg(currency)::text)
+  AND (checkout_id IS NULL OR checkout_id = NULLIF(sqlc.arg(session_id)::text, ''))
+  AND (provider_payment_id IS NULL OR provider_payment_id = NULLIF(sqlc.arg(provider_payment_id)::text, ''));
 
 -- name: CompletePendingTopup :exec
 UPDATE purser.pending_topups

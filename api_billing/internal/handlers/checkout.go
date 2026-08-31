@@ -423,6 +423,8 @@ func (s *Service) DispatchStripeCheckoutCompleted(ctx context.Context, sessionDa
 			sess.PaymentIntent,
 			sess.Metadata.TenantID,
 			sess.Metadata.ReferenceID,
+			sess.AmountTotal,
+			sess.Currency,
 			stripeCheckoutPaid(sess.PaymentStatus),
 		)
 	case PurposePrepaid:
@@ -761,18 +763,22 @@ func (s *Service) clearStagedClusterSubscription(ctx context.Context, sessionID,
 // async settlement can match it, but the invoice is confirmed only once funds
 // have actually settled (settled=true); async methods confirm via
 // checkout.session.async_payment_succeeded.
-func (s *Service) handleInvoiceCheckoutCompleted(ctx context.Context, sessionID, paymentIntentID, tenantID, invoiceID string, settled bool) error {
-	if invoiceID == "" {
+func (s *Service) handleInvoiceCheckoutCompleted(ctx context.Context, sessionID, paymentIntentID, tenantID, invoiceID string, amountCents int64, currency string, settled bool) error {
+	if invoiceID == "" || tenantID == "" {
 		s.logger.WithField("session_id", sessionID).Debug("No invoice_id in checkout metadata, skipping")
-		return nil
+		return fmt.Errorf("invoice checkout is missing tenant or invoice identity")
 	}
 	txID := sessionID
 	if paymentIntentID != "" {
 		txID = paymentIntentID
-		if err := purserdb.New(s.db).AttachStripeIntentToInvoicePayment(ctx, purserdb.AttachStripeIntentToInvoicePaymentParams{
-			PaymentIntentID: paymentIntentID, InvoiceID: invoiceID, SessionID: sessionID,
-		}); err != nil {
+		rows, err := purserdb.New(s.db).AttachStripeIntentToInvoicePayment(ctx, purserdb.AttachStripeIntentToInvoicePaymentParams{
+			PaymentIntentID: paymentIntentID, InvoiceID: invoiceID, TenantID: tenantID, SessionID: sessionID,
+		})
+		if err != nil {
 			return fmt.Errorf("attach stripe payment_intent to invoice payment: %w", err)
+		}
+		if rows != 1 && !settled {
+			return fmt.Errorf("invoice checkout identity did not match exactly one pending payment")
 		}
 	}
 	if !settled {
@@ -783,7 +789,9 @@ func (s *Service) handleInvoiceCheckoutCompleted(ctx context.Context, sessionID,
 		}).Info("Invoice checkout pending async settlement; awaiting async_payment_succeeded")
 		return nil
 	}
-	updated, err := s.updateInvoicePaymentStatus("stripe", txID, invoiceID, "confirmed")
+	updated, err := s.updateInvoicePaymentStatus("stripe", txID, invoiceID, "confirmed", providerSettlementEvidence{
+		TenantID: tenantID, AmountCents: amountCents, Currency: currency,
+	})
 	if err != nil {
 		return err
 	}
@@ -842,6 +850,27 @@ func (s *Service) handlePrepaidCheckoutCompleted(ctx context.Context, sessionID,
 		}).Warn("Pending top-up tenant mismatch")
 		return fmt.Errorf("pending top-up tenant mismatch")
 	}
+	if topup.Provider != string(provider) {
+		return fmt.Errorf("pending top-up provider mismatch: stored %s, received %s", topup.Provider, provider)
+	}
+	if topup.AmountCents != amountCents || amountCents <= 0 {
+		return fmt.Errorf("pending top-up amount mismatch: stored %d, received %d", topup.AmountCents, amountCents)
+	}
+	if !strings.EqualFold(topup.Currency, currency) || strings.TrimSpace(currency) == "" {
+		return fmt.Errorf("pending top-up currency mismatch: stored %s, received %s", topup.Currency, currency)
+	}
+	if strings.TrimSpace(sessionID) == "" {
+		return fmt.Errorf("pending top-up provider session is missing")
+	}
+	if topup.CheckoutID.Valid && topup.CheckoutID.String != sessionID {
+		return fmt.Errorf("pending top-up checkout identity mismatch")
+	}
+	if topup.ProviderPaymentID.Valid && topup.ProviderPaymentID.String != providerPaymentID {
+		return fmt.Errorf("pending top-up payment identity mismatch")
+	}
+	if settled && strings.TrimSpace(providerPaymentID) == "" {
+		return fmt.Errorf("settled pending top-up provider payment identity is missing")
+	}
 
 	if topup.Status != "pending" {
 		s.logger.WithFields(logging.Fields{
@@ -851,10 +880,15 @@ func (s *Service) handlePrepaidCheckoutCompleted(ctx context.Context, sessionID,
 		return nil
 	}
 
-	if attachErr := queries.AttachProviderPaymentToPendingTopup(ctx, purserdb.AttachProviderPaymentToPendingTopupParams{
+	attached, attachErr := queries.AttachProviderPaymentToPendingTopup(ctx, purserdb.AttachProviderPaymentToPendingTopupParams{
 		ProviderPaymentID: providerPaymentID, SessionID: sessionID, TopupID: topupID,
-	}); attachErr != nil {
+		TenantID: tenantID, Provider: string(provider), AmountCents: amountCents, Currency: currency,
+	})
+	if attachErr != nil {
 		return fmt.Errorf("failed to attach provider payment to topup: %w", attachErr)
+	}
+	if attached != 1 {
+		return fmt.Errorf("pending top-up evidence changed before provider payment attachment")
 	}
 
 	// Async methods complete the Checkout Session before funds settle; persist

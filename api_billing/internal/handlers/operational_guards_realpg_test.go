@@ -167,6 +167,96 @@ func TestOperationalDatabaseGuards_RealPG(t *testing.T) { //nolint:funlen // One
 		}
 	})
 
+	t.Run("checkout settlement mismatch cannot credit money", func(t *testing.T) {
+		for _, tc := range []struct {
+			name         string
+			provider     CheckoutProvider
+			amountCents  int64
+			currency     string
+			wrongSession bool
+		}{
+			{name: "provider", provider: ProviderMollie, amountCents: 1500, currency: "EUR"},
+			{name: "amount", provider: ProviderStripe, amountCents: 1499, currency: "EUR"},
+			{name: "currency", provider: ProviderStripe, amountCents: 1500, currency: "USD"},
+			{name: "session", provider: ProviderStripe, amountCents: 1500, currency: "EUR", wrongSession: true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				tenantID := uuid.NewString()
+				topupID := uuid.NewString()
+				expectedSession := "cs_" + uuid.NewString()
+				if _, err := db.ExecContext(ctx, `
+					INSERT INTO purser.pending_topups
+					    (id, tenant_id, provider, checkout_id, amount_cents, currency, expires_at)
+					VALUES ($1, $2, 'stripe', $3, 1500, 'EUR', NOW() + INTERVAL '1 hour')
+				`, topupID, tenantID, expectedSession); err != nil {
+					t.Fatal(err)
+				}
+
+				service := &Service{db: db, logger: logging.NewLogger()}
+				receivedSession := expectedSession
+				if tc.wrongSession {
+					receivedSession = "cs_forged_" + uuid.NewString()
+				}
+				if err := service.handlePrepaidCheckoutCompleted(ctx, receivedSession, "pi_forged", tenantID, topupID, tc.amountCents, tc.currency, tc.provider, true); err == nil {
+					t.Fatal("mismatched provider evidence was accepted")
+				}
+
+				var status string
+				var providerPaymentID *string
+				if err := db.QueryRowContext(ctx, `SELECT status, provider_payment_id FROM purser.pending_topups WHERE id = $1`, topupID).Scan(&status, &providerPaymentID); err != nil {
+					t.Fatal(err)
+				}
+				var balanceRows, transactionRows int
+				if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM purser.prepaid_balances WHERE tenant_id = $1`, tenantID).Scan(&balanceRows); err != nil {
+					t.Fatal(err)
+				}
+				if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM purser.balance_transactions WHERE tenant_id = $1`, tenantID).Scan(&transactionRows); err != nil {
+					t.Fatal(err)
+				}
+				if status != "pending" || providerPaymentID != nil || balanceRows != 0 || transactionRows != 0 {
+					t.Fatalf("mismatch mutated state: status=%q payment=%v balances=%d transactions=%d", status, providerPaymentID, balanceRows, transactionRows)
+				}
+			})
+		}
+	})
+
+	t.Run("invoice settlement mismatch cannot confirm value", func(t *testing.T) {
+		tenantID := uuid.NewString()
+		invoiceID := uuid.NewString()
+		paymentID := uuid.NewString()
+		if _, err := db.ExecContext(ctx, `
+			INSERT INTO purser.billing_invoices (id, tenant_id, status, currency, amount, due_date)
+			VALUES ($1, $2, 'pending', 'EUR', 12.50, NOW() + INTERVAL '7 days')
+		`, invoiceID, tenantID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, `
+			INSERT INTO purser.billing_payments (id, invoice_id, method, amount, currency, tx_id, status)
+			VALUES ($2, $1, 'card', 12.50, 'EUR', 'pi_expected', 'pending')
+		`, invoiceID, paymentID); err != nil {
+			t.Fatal(err)
+		}
+
+		service := &Service{db: db, logger: logging.NewLogger()}
+		updated, err := service.updateInvoicePaymentStatus("stripe", "pi_expected", invoiceID, "confirmed", providerSettlementEvidence{
+			TenantID: tenantID, AmountCents: 1249, Currency: "EUR",
+		})
+		if err == nil || updated {
+			t.Fatalf("mismatched invoice settlement = updated %v, error %v", updated, err)
+		}
+
+		var paymentStatus, invoiceStatus string
+		if err := db.QueryRowContext(ctx, `SELECT status FROM purser.billing_payments WHERE id = $1`, paymentID).Scan(&paymentStatus); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.QueryRowContext(ctx, `SELECT status FROM purser.billing_invoices WHERE id = $1`, invoiceID).Scan(&invoiceStatus); err != nil {
+			t.Fatal(err)
+		}
+		if paymentStatus != "pending" || invoiceStatus != "pending" {
+			t.Fatalf("mismatch mutated invoice state: payment=%q invoice=%q", paymentStatus, invoiceStatus)
+		}
+	})
+
 	t.Run("prepaid suspension accepts nullable email", func(t *testing.T) {
 		tierID := uuid.NewString()
 		tenantID := uuid.NewString()

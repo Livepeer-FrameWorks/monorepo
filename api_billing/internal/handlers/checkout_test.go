@@ -23,7 +23,7 @@ func TestHandlePrepaidCheckoutCompletedRejectsTenantMismatch(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery(`(?s)SELECT status, tenant_id::text AS tenant_id.*FROM purser.pending_topups.*FOR UPDATE`).
 		WithArgs("topup-123").
-		WillReturnRows(sqlmock.NewRows([]string{"status", "tenant_id"}).AddRow("pending", "tenant-a"))
+		WillReturnRows(pendingTopupRows("pending", "tenant-a", "stripe", 1500, "EUR", "sess-1", ""))
 	mock.ExpectRollback()
 
 	if err := s.handlePrepaidCheckoutCompleted(context.Background(), "sess-1", "pi-1", "tenant-b", "topup-123", 1500, "EUR", ProviderStripe, true); err == nil {
@@ -32,6 +32,54 @@ func TestHandlePrepaidCheckoutCompletedRejectsTenantMismatch(t *testing.T) {
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestHandlePrepaidCheckoutCompletedRejectsSettlementEvidenceMismatch(t *testing.T) {
+	tests := []struct {
+		name             string
+		storedProvider   string
+		storedAmount     int64
+		storedCurrency   string
+		storedCheckoutID string
+		storedPaymentID  string
+		sessionID        string
+		paymentID        string
+		amount           int64
+		currency         string
+		provider         CheckoutProvider
+	}{
+		{name: "provider", storedProvider: "mollie", storedAmount: 1500, storedCurrency: "EUR", storedCheckoutID: "sess-1", sessionID: "sess-1", paymentID: "pi-1", amount: 1500, currency: "EUR", provider: ProviderStripe},
+		{name: "amount", storedProvider: "stripe", storedAmount: 1500, storedCurrency: "EUR", storedCheckoutID: "sess-1", sessionID: "sess-1", paymentID: "pi-1", amount: 1400, currency: "EUR", provider: ProviderStripe},
+		{name: "currency", storedProvider: "stripe", storedAmount: 1500, storedCurrency: "EUR", storedCheckoutID: "sess-1", sessionID: "sess-1", paymentID: "pi-1", amount: 1500, currency: "USD", provider: ProviderStripe},
+		{name: "session", storedProvider: "stripe", storedAmount: 1500, storedCurrency: "EUR", storedCheckoutID: "sess-real", sessionID: "sess-forged", paymentID: "pi-1", amount: 1500, currency: "EUR", provider: ProviderStripe},
+		{name: "payment", storedProvider: "stripe", storedAmount: 1500, storedCurrency: "EUR", storedCheckoutID: "sess-1", storedPaymentID: "pi-real", sessionID: "sess-1", paymentID: "pi-forged", amount: 1500, currency: "EUR", provider: ProviderStripe},
+		{name: "missing settled payment", storedProvider: "stripe", storedAmount: 1500, storedCurrency: "EUR", storedCheckoutID: "sess-1", sessionID: "sess-1", amount: 1500, currency: "EUR", provider: ProviderStripe},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mockDB, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatalf("failed to create sqlmock: %v", err)
+			}
+			defer mockDB.Close()
+
+			s := &Service{db: mockDB, logger: logrus.New()}
+			mock.ExpectBegin()
+			mock.ExpectQuery(`(?s)SELECT status, tenant_id::text AS tenant_id.*FROM purser.pending_topups.*FOR UPDATE`).
+				WithArgs("topup-1").
+				WillReturnRows(pendingTopupRows("pending", "tenant-a", tc.storedProvider, tc.storedAmount, tc.storedCurrency, tc.storedCheckoutID, tc.storedPaymentID))
+			mock.ExpectRollback()
+
+			err = s.handlePrepaidCheckoutCompleted(context.Background(), tc.sessionID, tc.paymentID, "tenant-a", "topup-1", tc.amount, tc.currency, tc.provider, true)
+			if err == nil {
+				t.Fatal("expected settlement evidence mismatch")
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatalf("unmet expectations: %v", err)
+			}
+		})
 	}
 }
 
@@ -47,7 +95,7 @@ func TestHandlePrepaidCheckoutCompletedSkipsAlreadyProcessed(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery(`(?s)SELECT status, tenant_id::text AS tenant_id.*FROM purser.pending_topups.*FOR UPDATE`).
 		WithArgs("topup-456").
-		WillReturnRows(sqlmock.NewRows([]string{"status", "tenant_id"}).AddRow("completed", "tenant-a"))
+		WillReturnRows(pendingTopupRows("completed", "tenant-a", "stripe", 1500, "USD", "sess-2", "pi-2"))
 	mock.ExpectRollback()
 
 	if err := s.handlePrepaidCheckoutCompleted(context.Background(), "sess-2", "pi-2", "tenant-a", "topup-456", 1500, "USD", ProviderStripe, true); err != nil {
@@ -71,9 +119,9 @@ func TestHandlePrepaidCheckoutCompletedCreditsBalanceWithIdempotencyKey(t *testi
 	mock.ExpectBegin()
 	mock.ExpectQuery(`(?s)SELECT status, tenant_id::text AS tenant_id.*FROM purser.pending_topups.*FOR UPDATE`).
 		WithArgs("topup-789").
-		WillReturnRows(sqlmock.NewRows([]string{"status", "tenant_id"}).AddRow("pending", "tenant-a"))
+		WillReturnRows(pendingTopupRows("pending", "tenant-a", "mollie", 1500, "EUR", "sess-3", ""))
 	mock.ExpectExec("UPDATE purser.pending_topups").
-		WithArgs("pay-3", "sess-3", "topup-789").
+		WithArgs("pay-3", "sess-3", "topup-789", "tenant-a", "mollie", int64(1500), "EUR").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("INSERT INTO purser.prepaid_balances").
 		WithArgs("tenant-a", "EUR").
@@ -312,7 +360,7 @@ func TestHandleInvoiceCheckoutCompletedPendingWhenUnsettled(t *testing.T) {
 
 	// Only the payment_intent attach runs; no updateInvoicePaymentStatus.
 	mock.ExpectExec(`UPDATE purser\.billing_payments`).
-		WithArgs("pi_1", "inv-1", "cs_test_session").
+		WithArgs("pi_1", "inv-1", "tenant-a", "cs_test_session").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	if err := s.handleInvoiceCheckoutCompleted(
@@ -321,6 +369,8 @@ func TestHandleInvoiceCheckoutCompletedPendingWhenUnsettled(t *testing.T) {
 		"pi_1",
 		"tenant-a",
 		"inv-1",
+		1500,
+		"EUR",
 		false,
 	); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -346,9 +396,9 @@ func TestHandlePrepaidCheckoutCompletedPendingWhenUnsettled(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery(`(?s)SELECT status, tenant_id::text AS tenant_id.*FROM purser.pending_topups.*FOR UPDATE`).
 		WithArgs("topup-1").
-		WillReturnRows(sqlmock.NewRows([]string{"status", "tenant_id"}).AddRow("pending", "tenant-a"))
+		WillReturnRows(pendingTopupRows("pending", "tenant-a", "stripe", 1500, "EUR", "cs_test_session", ""))
 	mock.ExpectExec("UPDATE purser.pending_topups").
-		WithArgs("pi_1", "cs_test_session", "topup-1").
+		WithArgs("pi_1", "cs_test_session", "topup-1", "tenant-a", "stripe", int64(1500), "EUR").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
@@ -369,6 +419,20 @@ func TestHandlePrepaidCheckoutCompletedPendingWhenUnsettled(t *testing.T) {
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
 	}
+}
+
+func pendingTopupRows(status, tenantID, provider string, amountCents int64, currency, checkoutID, paymentID string) *sqlmock.Rows {
+	var checkoutValue any
+	if checkoutID != "" {
+		checkoutValue = checkoutID
+	}
+	var paymentValue any
+	if paymentID != "" {
+		paymentValue = paymentID
+	}
+	return sqlmock.NewRows([]string{
+		"status", "tenant_id", "provider", "amount_cents", "currency", "checkout_id", "provider_payment_id",
+	}).AddRow(status, tenantID, provider, amountCents, currency, checkoutValue, paymentValue)
 }
 
 func subscriptionCheckoutUpdatePattern() string {

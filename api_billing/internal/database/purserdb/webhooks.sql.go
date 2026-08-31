@@ -201,10 +201,13 @@ func (q *Queries) GetBillingInvoiceTenant(ctx context.Context, invoiceID string)
 }
 
 const getBillingPaymentByProviderTransaction = `-- name: GetBillingPaymentByProviderTransaction :one
-SELECT id::text AS payment_id, invoice_id::text AS invoice_id
-FROM purser.billing_payments
-WHERE tx_id = $1 AND method = $2
-ORDER BY created_at DESC
+SELECT payment.id::text AS payment_id, payment.invoice_id::text AS invoice_id,
+       invoice.tenant_id::text AS tenant_id, payment.amount::text AS amount,
+       payment.currency, payment.status
+FROM purser.billing_payments payment
+JOIN purser.billing_invoices invoice ON invoice.id = payment.invoice_id
+WHERE payment.tx_id = $1 AND payment.method = $2
+ORDER BY payment.created_at DESC
 LIMIT 1
 `
 
@@ -216,12 +219,23 @@ type GetBillingPaymentByProviderTransactionParams struct {
 type GetBillingPaymentByProviderTransactionRow struct {
 	PaymentID string `db:"payment_id" json:"payment_id"`
 	InvoiceID string `db:"invoice_id" json:"invoice_id"`
+	TenantID  string `db:"tenant_id" json:"tenant_id"`
+	Amount    string `db:"amount" json:"amount"`
+	Currency  string `db:"currency" json:"currency"`
+	Status    string `db:"status" json:"status"`
 }
 
 func (q *Queries) GetBillingPaymentByProviderTransaction(ctx context.Context, arg GetBillingPaymentByProviderTransactionParams) (GetBillingPaymentByProviderTransactionRow, error) {
 	row := q.db.QueryRowContext(ctx, getBillingPaymentByProviderTransaction, arg.TransactionID, arg.Method)
 	var i GetBillingPaymentByProviderTransactionRow
-	err := row.Scan(&i.PaymentID, &i.InvoiceID)
+	err := row.Scan(
+		&i.PaymentID,
+		&i.InvoiceID,
+		&i.TenantID,
+		&i.Amount,
+		&i.Currency,
+		&i.Status,
+	)
 	return i, err
 }
 
@@ -365,11 +379,14 @@ func (q *Queries) GetPaymentStatusEmailDetails(ctx context.Context, invoiceID st
 }
 
 const getPendingBillingPaymentForInvoice = `-- name: GetPendingBillingPaymentForInvoice :one
-SELECT id::text AS payment_id, invoice_id::text AS invoice_id
-FROM purser.billing_payments
-WHERE invoice_id = $1::text::uuid
-  AND method = $2 AND status = 'pending' AND tx_id IS NULL
-ORDER BY created_at DESC
+SELECT payment.id::text AS payment_id, payment.invoice_id::text AS invoice_id,
+       invoice.tenant_id::text AS tenant_id, payment.amount::text AS amount,
+       payment.currency, payment.status
+FROM purser.billing_payments payment
+JOIN purser.billing_invoices invoice ON invoice.id = payment.invoice_id
+WHERE payment.invoice_id = $1::text::uuid
+  AND payment.method = $2 AND payment.status = 'pending' AND payment.tx_id IS NULL
+ORDER BY payment.created_at DESC
 LIMIT 1
 `
 
@@ -381,12 +398,23 @@ type GetPendingBillingPaymentForInvoiceParams struct {
 type GetPendingBillingPaymentForInvoiceRow struct {
 	PaymentID string `db:"payment_id" json:"payment_id"`
 	InvoiceID string `db:"invoice_id" json:"invoice_id"`
+	TenantID  string `db:"tenant_id" json:"tenant_id"`
+	Amount    string `db:"amount" json:"amount"`
+	Currency  string `db:"currency" json:"currency"`
+	Status    string `db:"status" json:"status"`
 }
 
 func (q *Queries) GetPendingBillingPaymentForInvoice(ctx context.Context, arg GetPendingBillingPaymentForInvoiceParams) (GetPendingBillingPaymentForInvoiceRow, error) {
 	row := q.db.QueryRowContext(ctx, getPendingBillingPaymentForInvoice, arg.InvoiceID, arg.Method)
 	var i GetPendingBillingPaymentForInvoiceRow
-	err := row.Scan(&i.PaymentID, &i.InvoiceID)
+	err := row.Scan(
+		&i.PaymentID,
+		&i.InvoiceID,
+		&i.TenantID,
+		&i.Amount,
+		&i.Currency,
+		&i.Status,
+	)
 	return i, err
 }
 
@@ -422,6 +450,7 @@ WHERE payment.invoice_id = $1::text::uuid
   AND payment.tx_id = $2
 ORDER BY payment.created_at DESC
 LIMIT 1
+FOR UPDATE OF payment
 `
 
 type GetStripeInvoiceCardPaymentParams struct {
@@ -471,6 +500,7 @@ WHERE payment.tx_id = $1
   AND payment.method = 'card'
 ORDER BY payment.created_at DESC
 LIMIT 1
+FOR UPDATE OF payment
 `
 
 type GetStripePaymentMappingByIntentRow struct {
