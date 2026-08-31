@@ -88,6 +88,40 @@ func TestIngestGenerationStore_RequiresCompleteIdentityAndBoundsActiveRecords(t 
 	}
 }
 
+func TestIngestGenerationStore_ExactReplayPreservesAdmissionAge(t *testing.T) {
+	store, err := NewIngestGenerationStore(t.TempDir() + "/generations")
+	if err != nil {
+		t.Fatalf("NewIngestGenerationStore: %v", err)
+	}
+	if err = store.Put("live+replayed", "generation-a", 71); err != nil {
+		t.Fatalf("Put initial generation: %v", err)
+	}
+	records, err := store.Load()
+	if err != nil {
+		t.Fatalf("Load initial generation: %v", err)
+	}
+	original := records["live+replayed"].UpdatedAt
+	store.mu.Lock()
+	record := store.records["live+replayed"]
+	record.UpdatedAt = original - int64(time.Minute/time.Millisecond)
+	store.records["live+replayed"] = record
+	store.mu.Unlock()
+	if err = store.writeRecord(record); err != nil {
+		t.Fatalf("age generation fixture: %v", err)
+	}
+
+	if err = store.Put("live+replayed", "generation-a", 71); err != nil {
+		t.Fatalf("Put replayed generation: %v", err)
+	}
+	records, err = store.Load()
+	if err != nil {
+		t.Fatalf("Load replayed generation: %v", err)
+	}
+	if got := records["live+replayed"].UpdatedAt; got != record.UpdatedAt {
+		t.Fatalf("replayed generation timestamp = %d, want preserved %d", got, record.UpdatedAt)
+	}
+}
+
 func TestIngestGenerationStore_ConcurrentPerRuntimeWrites(t *testing.T) {
 	store, err := NewIngestGenerationStore(t.TempDir() + "/generations")
 	if err != nil {

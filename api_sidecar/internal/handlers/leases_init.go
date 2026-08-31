@@ -90,6 +90,10 @@ func InitLeases(logger logging.Logger, storagePath string) {
 	}, func(p leases.PendingDelete, bytes uint64) {
 		artifactType := p.AssetType
 		// Foghorn's control-plane lifecycle uses "clip"/"vod"/"dvr" as-is.
+		// The immediate clip/VOD deleters already forget their index entry, but
+		// keep the reporting boundary self-contained too: every successful
+		// deferred deletion invalidates any scan that raced the byte removal.
+		forgetArtifact(p.AssetHash)
 		if err := control.SendArtifactDeleted(p.AssetHash, "", "manual_deferred", artifactType, bytes); err != nil {
 			logger.WithError(err).WithFields(logging.Fields{
 				"asset_type": p.AssetType,

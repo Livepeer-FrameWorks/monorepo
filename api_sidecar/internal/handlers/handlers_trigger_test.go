@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/control"
@@ -439,7 +440,7 @@ func TestHandleStreamProcessUsesLocalOverride(t *testing.T) {
 	const streamName = "processing+artifact123"
 	const override = `[{"process":"AV","codec":"H264","track_select":"video=maxbps"}]`
 
-	setProcessingProcessOverride(streamName, override)
+	_ = setProcessingProcessOverride(streamName, override, "test-job", time.Now().Add(time.Hour))
 	t.Cleanup(func() {
 		clearProcessingProcessOverride(streamName)
 	})

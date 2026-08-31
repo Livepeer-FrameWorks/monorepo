@@ -2,6 +2,7 @@ package control
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -301,6 +302,9 @@ func TestStartRecording_PushStartError(t *testing.T) {
 // --- StopRecording ---
 
 func TestStopRecording_PushStopCalled(t *testing.T) {
+	clearConn()
+	outboxDir := t.TempDir()
+	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", outboxDir)
 	mc := &startAwareFakeMist{pushIDToReturn: 77}
 	dm := newDVRManagerWithMist(t, mc)
 
@@ -325,9 +329,15 @@ func TestStopRecording_PushStopCalled(t *testing.T) {
 	if _, exists := dm.jobs["hash-stop"]; exists {
 		t.Fatal("expected job to be removed after stop")
 	}
+	files, err := filepath.Glob(filepath.Join(outboxDir, "*.pb"))
+	if err != nil || len(files) != 1 {
+		t.Fatalf("forced stop durable completions = %v, err=%v", files, err)
+	}
 }
 
 func TestStopRecording_PushStopError(t *testing.T) {
+	clearConn()
+	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", t.TempDir())
 	mc := &startAwareFakeMist{
 		pushIDToReturn: 88,
 		pushStopErr:    fmt.Errorf("mist unreachable"),
@@ -831,6 +841,8 @@ func TestMaintainPushStatus_UnconfirmedRecreateDoesNotReissue(t *testing.T) {
 // be stopped by IDENTITY — never skipped — so a live writer is not orphaned and
 // the recording is not falsely reported complete over it.
 func TestStopRecording_UnconfirmedPushStoppedByIdentity(t *testing.T) {
+	clearConn()
+	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", t.TempDir())
 	mc := &startAwareFakeMist{pushIDToReturn: 91}
 	dm := newDVRManagerWithMist(t, mc)
 	if err := dm.StartRecording("hash-unconf-stop", "stream-1", "test-u", "live+test-u", "http://source", &ipcpb.DVRConfig{}, nil); err != nil {

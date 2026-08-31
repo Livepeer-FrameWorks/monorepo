@@ -191,7 +191,7 @@ func TestBuildOfflineLifecycleTrigger(t *testing.T) {
 
 func TestBuildAcknowledgedOfflineLifecycleTrigger(t *testing.T) {
 	observedAt := time.UnixMilli(1_700_000_000_123)
-	trigger := buildAcknowledgedOfflineLifecycleTriggerAt("node-1", "demo", observedAt)
+	trigger := buildAcknowledgedOfflineLifecycleTriggerAt("node-1", "demo", "generation-1", 42, observedAt)
 	if !trigger.GetBlocking() {
 		t.Fatal("admitted-runtime recovery must wait for Foghorn acknowledgement")
 	}
@@ -200,6 +200,9 @@ func TestBuildAcknowledgedOfflineLifecycleTrigger(t *testing.T) {
 	}
 	if trigger.GetTriggerUnixMillis() != observedAt.UnixMilli() {
 		t.Fatalf("event fence = %d, want %d", trigger.GetTriggerUnixMillis(), observedAt.UnixMilli())
+	}
+	if trigger.GetTriggerType() != "INGEST_RUNTIME_ABSENT" || trigger.GetIngestRuntimeAbsent().GetIngestGeneration() != "generation-1" || trigger.GetIngestRuntimeAbsent().GetIngestConnectorPid() != 42 {
+		t.Fatalf("runtime absence payload = %+v", trigger.GetIngestRuntimeAbsent())
 	}
 }
 
@@ -223,7 +226,7 @@ func TestReconcileAdmittedRuntimePresenceRequiresDwellAndTombstonesExactGenerati
 		},
 		sendControlTrigger: func(trigger *ipcpb.MistTrigger, _ logging.Logger) (*control.MistTriggerResult, error) {
 			sent++
-			if !trigger.GetBlocking() || trigger.GetStreamLifecycleUpdate().GetStatus() != "offline" {
+			if !trigger.GetBlocking() || trigger.GetIngestRuntimeAbsent().GetLifecycle().GetStatus() != "offline" {
 				t.Fatalf("unexpected reconciliation trigger: %+v", trigger)
 			}
 			return &control.MistTriggerResult{}, nil
@@ -236,14 +239,56 @@ func TestReconcileAdmittedRuntimePresenceRequiresDwellAndTombstonesExactGenerati
 		},
 	}
 
-	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, now)
-	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, now)
+	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, nil, now)
+	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, nil, now)
 	if sent != 0 {
 		t.Fatalf("sent before dwell threshold: %d", sent)
 	}
-	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, now)
+	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, nil, now)
 	if sent != 1 || len(marked) != 1 || marked[0].RuntimeName != record.RuntimeName || marked[0].Generation != record.Generation || marked[0].ConnectorPID != record.ConnectorPID {
 		t.Fatalf("sent=%d marked=%+v, want exact admitted identity %+v", sent, marked, record)
+	}
+}
+
+func TestReconcileAdmittedRuntimePresenceStartsDwellAfterAdmissionGrace(t *testing.T) {
+	oldLogger := monitorLogger
+	monitorLogger = logging.NewLogger()
+	t.Cleanup(func() { monitorLogger = oldLogger })
+	admittedAt := time.Now()
+	record := control.AdmittedIngestGeneration{
+		RuntimeName: "live+slow-source", Generation: "generation-slow", ConnectorPID: 73, UpdatedAt: admittedAt,
+	}
+	var sent int
+	pm := &PrometheusMonitor{
+		admittedRuntimeMissing: make(map[admittedRuntimeIdentity]int),
+		loadAdmittedGenerations: func() ([]control.AdmittedIngestGeneration, error) {
+			return []control.AdmittedIngestGeneration{record}, nil
+		},
+		sendControlTrigger: func(*ipcpb.MistTrigger, logging.Logger) (*control.MistTriggerResult, error) {
+			sent++
+			return &control.MistTriggerResult{}, nil
+		},
+		markGenerationEnded: func(string, string, int64) error { return nil },
+	}
+	present := map[string]struct{}{record.RuntimeName: {}}
+	emptySourceSet := map[string]map[int64]struct{}{record.RuntimeName: {}}
+
+	for _, elapsed := range []time.Duration{10 * time.Second, 20 * time.Second} {
+		pm.reconcileAdmittedRuntimePresence("node-1", present, emptySourceSet, admittedAt.Add(elapsed))
+	}
+	identity := admittedRuntimeIdentity{runtimeName: record.RuntimeName, generation: record.Generation, connectorPID: record.ConnectorPID}
+	if got := pm.admittedRuntimeMissing[identity]; got != 0 || sent != 0 {
+		t.Fatalf("pre-grace observation: dwell=%d sent=%d, want zero", got, sent)
+	}
+
+	pm.reconcileAdmittedRuntimePresence("node-1", present, emptySourceSet, admittedAt.Add(30*time.Second))
+	pm.reconcileAdmittedRuntimePresence("node-1", present, emptySourceSet, admittedAt.Add(40*time.Second))
+	if got := pm.admittedRuntimeMissing[identity]; got != 2 || sent != 0 {
+		t.Fatalf("post-grace dwell before threshold: dwell=%d sent=%d, want dwell=2 sent=0", got, sent)
+	}
+	pm.reconcileAdmittedRuntimePresence("node-1", present, emptySourceSet, admittedAt.Add(50*time.Second))
+	if sent != 1 {
+		t.Fatalf("third post-grace authoritative miss sent=%d, want 1", sent)
 	}
 }
 
@@ -268,23 +313,72 @@ func TestReconcileAdmittedRuntimePresencePresentAndReplacementResetDwell(t *test
 		markGenerationEnded: func(string, string, int64) error { return nil },
 	}
 
-	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, now)
-	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{record.RuntimeName: {}}, now)
-	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, now)
-	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, now)
+	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, nil, now)
+	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{record.RuntimeName: {}}, map[string]map[int64]struct{}{record.RuntimeName: {record.ConnectorPID: {}}}, now)
+	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, nil, now)
+	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, nil, now)
 	if sent != 0 {
 		t.Fatalf("presence did not reset absence dwell: sent=%d", sent)
 	}
 
 	record.Generation = "generation-2"
-	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, now)
-	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, now)
+	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, nil, now)
+	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, nil, now)
 	if sent != 0 {
 		t.Fatalf("replacement generation inherited stale dwell: sent=%d", sent)
 	}
-	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, now)
+	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, nil, now)
 	if sent != 1 {
 		t.Fatalf("replacement generation was not sent after its own dwell: sent=%d", sent)
+	}
+}
+
+func TestReconcileAdmittedRuntimePresenceRequiresExactSourcePID(t *testing.T) {
+	oldLogger := monitorLogger
+	monitorLogger = logging.NewLogger()
+	t.Cleanup(func() { monitorLogger = oldLogger })
+	now := time.Now()
+	record := control.AdmittedIngestGeneration{
+		RuntimeName: "live+reused", Generation: "generation-old", ConnectorPID: 42, UpdatedAt: now.Add(-time.Minute),
+	}
+	var sent int
+	pm := &PrometheusMonitor{
+		admittedRuntimeMissing: make(map[admittedRuntimeIdentity]int),
+		loadAdmittedGenerations: func() ([]control.AdmittedIngestGeneration, error) {
+			return []control.AdmittedIngestGeneration{record}, nil
+		},
+		sendControlTrigger: func(*ipcpb.MistTrigger, logging.Logger) (*control.MistTriggerResult, error) {
+			sent++
+			return &control.MistTriggerResult{}, nil
+		},
+		markGenerationEnded: func(string, string, int64) error { return nil },
+	}
+	present := map[string]struct{}{record.RuntimeName: {}}
+	replacement := map[string]map[int64]struct{}{record.RuntimeName: {99: {}}}
+	for range admittedRuntimeMissingPollThreshold {
+		pm.reconcileAdmittedRuntimePresence("node-1", present, replacement, now)
+	}
+	if sent != 1 {
+		t.Fatalf("same runtime name with a replacement source pid sent=%d, want 1 offline reconciliation", sent)
+	}
+}
+
+func TestSourcePIDsFromStreamDataRequiresIntegralArray(t *testing.T) {
+	empty, ok := sourcePIDsFromStreamData(map[string]any{"sourcepids": []any{}})
+	if !ok || len(empty) != 0 {
+		t.Fatalf("explicit empty sourcepids = %v, authoritative=%v; want authoritative empty set", empty, ok)
+	}
+	pids, ok := sourcePIDsFromStreamData(map[string]any{"sourcepids": []any{float64(42), float64(99)}})
+	if !ok {
+		t.Fatal("valid sourcepids array was rejected")
+	}
+	if _, found := pids[42]; !found {
+		t.Fatalf("parsed pids = %v, want 42", pids)
+	}
+	for _, value := range []any{nil, "42", []any{"42"}, []any{float64(4.2)}} {
+		if _, ok := sourcePIDsFromStreamData(map[string]any{"sourcepids": value}); ok {
+			t.Fatalf("malformed sourcepids %#v was accepted", value)
+		}
 	}
 }
 
@@ -313,12 +407,12 @@ func TestReconcileAdmittedRuntimePresenceRetriesAbortedAcknowledgement(t *testin
 	}
 
 	for range admittedRuntimeMissingPollThreshold {
-		pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, now)
+		pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, nil, now)
 	}
 	if sent != 1 || marked != 0 {
 		t.Fatalf("aborted acknowledgement must stay pending: sent=%d marked=%d", sent, marked)
 	}
-	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, now)
+	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, nil, now)
 	if sent != 2 || marked != 1 {
 		t.Fatalf("next poll must retry and tombstone after success: sent=%d marked=%d", sent, marked)
 	}
@@ -1023,7 +1117,7 @@ func TestCaptureArtifactSnapshot_IncompleteUntilTrusted(t *testing.T) {
 	prometheusMonitor = &PrometheusMonitor{artifactIndex: make(map[string]*ClipInfo)}
 	t.Cleanup(func() { prometheusMonitor = oldMonitor })
 
-	if _, _, incomplete := captureArtifactSnapshot(); !incomplete {
+	if _, _, _, incomplete := captureArtifactSnapshot(); !incomplete {
 		t.Fatal("expected incomplete=true before any complete scan")
 	}
 
@@ -1033,8 +1127,10 @@ func TestCaptureArtifactSnapshot_IncompleteUntilTrusted(t *testing.T) {
 	prometheusMonitor.artifactScanHealthy = true
 	prometheusMonitor.mutex.Unlock()
 
-	if _, _, incomplete := captureArtifactSnapshot(); incomplete {
+	if _, _, reportedAtMs, incomplete := captureArtifactSnapshot(); incomplete {
 		t.Fatal("expected incomplete=false once the index is trusted and the scan is healthy")
+	} else if reportedAtMs <= 0 {
+		t.Fatalf("snapshot capture time = %d, want node-clock milliseconds", reportedAtMs)
 	}
 
 	// A subsequent FAILED scan drops scan health (while the trusted last-good index is retained), which
@@ -1043,7 +1139,7 @@ func TestCaptureArtifactSnapshot_IncompleteUntilTrusted(t *testing.T) {
 	prometheusMonitor.artifactScanHealthy = false
 	prometheusMonitor.mutex.Unlock()
 
-	if _, _, incomplete := captureArtifactSnapshot(); !incomplete {
+	if _, _, _, incomplete := captureArtifactSnapshot(); !incomplete {
 		t.Fatal("expected incomplete=true after a failed scan drops scan health, even though the index stays trusted")
 	}
 }

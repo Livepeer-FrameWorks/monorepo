@@ -168,14 +168,30 @@ var artifactScanGen atomic.Uint64
 // orders scan-vs-scan; this orders scan-vs-point-mutation.
 var artifactMutationGen atomic.Uint64
 
+// forgetArtifact removes one materialized copy from the authoritative local
+// inventory and invalidates any disk scan that may have enumerated it before
+// the bytes disappeared. Every path that reports ArtifactDeleted must call this
+// before stamping/sending the deletion event.
+func forgetArtifact(artifactHash string) {
+	if prometheusMonitor == nil {
+		return
+	}
+	prometheusMonitor.mutex.Lock()
+	delete(prometheusMonitor.artifactIndex, artifactHash)
+	// Bump even when the entry was already absent: an in-flight filesystem scan
+	// may have observed the file before its successful deletion.
+	artifactMutationGen.Add(1)
+	prometheusMonitor.mutex.Unlock()
+}
+
 // captureArtifactSnapshot returns the current whole-node artifact snapshot paired atomically with a
-// fresh monotonic sequence, so sequence order always matches snapshot-capture order. incomplete is true
+// fresh monotonic sequence and node-clock capture time, so sequence/time order matches the snapshot. incomplete is true
 // when the inventory is not authoritative — either no COMPLETE scan has ever populated the index
 // (artifactIndexTrusted false) OR the most recent scan hit a traversal/mount failure
 // (artifactScanHealthy false). Foghorn must then NOT apply the snapshot as an authoritative whole-node
 // inventory, and cordons the node from artifact routing, because a partial/empty/stale list would
 // orphan real copies. A healthy complete scan clears both flags.
-func captureArtifactSnapshot() (artifacts []*ipcpb.StoredArtifact, seq int64, incomplete bool) {
+func captureArtifactSnapshot() (artifacts []*ipcpb.StoredArtifact, seq, reportedAtMs int64, incomplete bool) {
 	artifactReportMu.Lock()
 	defer artifactReportMu.Unlock()
 	artifactReportSeq++
@@ -188,11 +204,14 @@ func captureArtifactSnapshot() (artifacts []*ipcpb.StoredArtifact, seq int64, in
 		trusted = prometheusMonitor.artifactIndexTrusted
 		healthy = prometheusMonitor.artifactScanHealthy
 		arts = storedArtifactsLocked()
+		reportedAtMs = time.Now().UnixMilli()
 		prometheusMonitor.mutex.RUnlock()
+	} else {
+		reportedAtMs = time.Now().UnixMilli()
 	}
 	// Incomplete when there has never been a complete scan (!trusted) OR the most recent scan failed
 	// (!healthy). The latter re-arms Foghorn's artifact cordon after a disk disappears.
-	return arts, artifactReportSeq, !trusted || !healthy
+	return arts, artifactReportSeq, reportedAtMs, !trusted || !healthy
 }
 
 var (
@@ -250,6 +269,14 @@ var (
 			Help: "Total packets retransmitted",
 		},
 		[]string{"stream", "protocol", "host"},
+	)
+
+	mistSourcePIDObservations = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "mist_source_pid_observations_total",
+			Help: "Mist active-stream source PID field observations by payload shape",
+		},
+		[]string{"shape"},
 	)
 )
 
@@ -559,6 +586,7 @@ func (pm *PrometheusMonitor) emitStreamLifecycle(nodeID, baseURL string) {
 	// Extract active streams data
 	activeStreams, activeStreamsAuthoritative := activeStreamsFromResponse(apiResponse)
 	present := make(map[string]struct{}, len(activeStreams))
+	sourcePIDs := make(map[string]map[int64]struct{}, len(activeStreams))
 	if activeStreamsAuthoritative {
 		monitorLogger.WithFields(logging.Fields{
 			"api_url": baseURL + "/api2",
@@ -568,6 +596,18 @@ func (pm *PrometheusMonitor) emitStreamLifecycle(nodeID, baseURL string) {
 		for streamName, streamData := range activeStreams {
 			present[streamName] = struct{}{}
 			if streamInfo, ok := streamData.(map[string]any); ok {
+				if pids, authoritative := sourcePIDsFromStreamData(streamInfo); authoritative {
+					sourcePIDs[streamName] = pids
+					if len(pids) == 0 {
+						mistSourcePIDObservations.WithLabelValues("authoritative_empty").Inc()
+					} else {
+						mistSourcePIDObservations.WithLabelValues("authoritative_nonempty").Inc()
+					}
+				} else if _, present := streamInfo["sourcepids"]; present {
+					mistSourcePIDObservations.WithLabelValues("malformed").Inc()
+				} else {
+					mistSourcePIDObservations.WithLabelValues("missing").Inc()
+				}
 				pm.processActiveStreamData(nodeID, streamName, streamInfo)
 			}
 		}
@@ -639,7 +679,7 @@ func (pm *PrometheusMonitor) emitStreamLifecycle(nodeID, baseURL string) {
 		delete(pm.pendingOfflineNames, internalName)
 		pm.streamDiffMu.Unlock()
 	}
-	pm.reconcileAdmittedRuntimePresence(nodeID, present, pollStartedAt)
+	pm.reconcileAdmittedRuntimePresence(nodeID, present, sourcePIDs, pollStartedAt)
 
 	markMistActiveStreamsPolled()
 }
@@ -661,6 +701,26 @@ func activeStreamsFromResponse(apiResponse map[string]any) (map[string]any, bool
 	}
 	activeStreams, ok := raw.(map[string]any)
 	return activeStreams, ok
+}
+
+func sourcePIDsFromStreamData(streamData map[string]any) (map[int64]struct{}, bool) {
+	raw, ok := streamData["sourcepids"]
+	if !ok {
+		return nil, false
+	}
+	values, ok := raw.([]any)
+	if !ok {
+		return nil, false
+	}
+	pids := make(map[int64]struct{}, len(values))
+	for _, value := range values {
+		number, ok := value.(float64)
+		if !ok || number <= 0 || number != float64(int64(number)) {
+			return nil, false
+		}
+		pids[int64(number)] = struct{}{}
+	}
+	return pids, true
 }
 
 // offlineReportableInternalName maps a Mist runtime stream name to the
@@ -721,7 +781,7 @@ func diffVanishedStreams(prev, current map[string]struct{}) []string {
 	return vanished
 }
 
-func (pm *PrometheusMonitor) reconcileAdmittedRuntimePresence(nodeID string, present map[string]struct{}, now time.Time) {
+func (pm *PrometheusMonitor) reconcileAdmittedRuntimePresence(nodeID string, present map[string]struct{}, sourcePIDs map[string]map[int64]struct{}, now time.Time) {
 	load := pm.loadAdmittedGenerations
 	if load == nil {
 		load = control.ActiveAdmittedIngestGenerations
@@ -745,12 +805,29 @@ func (pm *PrometheusMonitor) reconcileAdmittedRuntimePresence(nodeID string, pre
 			connectorPID: record.ConnectorPID,
 		}
 		live[identity] = struct{}{}
-		if _, ok := present[record.RuntimeName]; ok {
+		if _, runtimePresent := present[record.RuntimeName]; runtimePresent {
+			pids, authoritative := sourcePIDs[record.RuntimeName]
+			if !authoritative {
+				// A mixed-version or malformed Mist response cannot prove this connector
+				// vanished. Reset dwell so only consecutive authoritative observations reap it.
+				delete(pm.admittedRuntimeMissing, identity)
+				continue
+			}
+			if _, sourcePresent := pids[record.ConnectorPID]; sourcePresent {
+				delete(pm.admittedRuntimeMissing, identity)
+				continue
+			}
+		}
+		// Admission age is a grace period, not part of the absence dwell. A
+		// connected encoder may boot its Mist buffer before it claims a track;
+		// require the complete minimum age before beginning consecutive
+		// authoritative missing-PID observations.
+		if now.Sub(record.UpdatedAt) < admittedRuntimeMinimumAge {
 			delete(pm.admittedRuntimeMissing, identity)
 			continue
 		}
 		pm.admittedRuntimeMissing[identity]++
-		if pm.admittedRuntimeMissing[identity] < admittedRuntimeMissingPollThreshold || now.Sub(record.UpdatedAt) < admittedRuntimeMinimumAge {
+		if pm.admittedRuntimeMissing[identity] < admittedRuntimeMissingPollThreshold {
 			continue
 		}
 		if len(eligible) < maxMissingRuntimeReportsPerPoll {
@@ -777,7 +854,7 @@ func (pm *PrometheusMonitor) reconcileAdmittedRuntimePresence(nodeID string, pre
 		if !ok {
 			continue
 		}
-		trigger := buildAcknowledgedOfflineLifecycleTriggerAt(nodeID, internalName, now)
+		trigger := buildAcknowledgedOfflineLifecycleTriggerAt(nodeID, internalName, record.Generation, record.ConnectorPID, now)
 		result, sendErr := send(trigger, monitorLogger)
 		if sendErr != nil || result == nil || result.Abort {
 			monitorLogger.WithError(sendErr).WithFields(logging.Fields{
@@ -820,8 +897,14 @@ func buildOfflineLifecycleTrigger(nodeID, internalName string) *ipcpb.MistTrigge
 	return buildOfflineLifecycleTriggerAt(nodeID, internalName, time.Now(), false)
 }
 
-func buildAcknowledgedOfflineLifecycleTriggerAt(nodeID, internalName string, observedAt time.Time) *ipcpb.MistTrigger {
-	return buildOfflineLifecycleTriggerAt(nodeID, internalName, observedAt, true)
+func buildAcknowledgedOfflineLifecycleTriggerAt(nodeID, internalName, generation string, connectorPID int64, observedAt time.Time) *ipcpb.MistTrigger {
+	trigger := buildOfflineLifecycleTriggerAt(nodeID, internalName, observedAt, true)
+	lifecycle := trigger.GetStreamLifecycleUpdate()
+	trigger.TriggerType = "INGEST_RUNTIME_ABSENT"
+	trigger.TriggerPayload = &ipcpb.MistTrigger_IngestRuntimeAbsent{IngestRuntimeAbsent: &ipcpb.IngestRuntimeAbsent{
+		Lifecycle: lifecycle, IngestGeneration: generation, IngestConnectorPid: connectorPID,
+	}}
+	return trigger
 }
 
 func buildOfflineLifecycleTriggerAt(nodeID, internalName string, observedAt time.Time, acknowledged bool) *ipcpb.MistTrigger {
@@ -2787,7 +2870,8 @@ func enrichNodeLifecycleTrigger(mistTrigger *ipcpb.MistTrigger, capIngest, capEd
 
 		// Add artifacts from artifactIndex, paired atomically with this report's sequence. incomplete
 		// tells Foghorn not to treat a pre-first-complete-scan snapshot as authoritative inventory.
-		nodeUpdate.Artifacts, nodeUpdate.ArtifactsReportSeq, nodeUpdate.ArtifactsSnapshotIncomplete = captureArtifactSnapshot()
+		nodeUpdate.Artifacts, nodeUpdate.ArtifactsReportSeq, nodeUpdate.ArtifactsReportedAtMs,
+			nodeUpdate.ArtifactsSnapshotIncomplete = captureArtifactSnapshot()
 
 		// Attach tenant_id from last ConfigSeed (provided by Foghorn)
 		if t := sidecarcfg.GetTenantID(); t != "" {

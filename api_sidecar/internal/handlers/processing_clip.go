@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strconv"
@@ -28,12 +29,18 @@ func (h *ProcessingJobHandler) handleClip(req *ipcpb.ProcessingJobRequest, send 
 	log.Info("Clip processing job received")
 
 	streamName := "processing+" + req.GetArtifactHash()
-	defer clearProcessingProcessOverride(streamName)
 
-	if HasPendingJob(streamName) {
-		log.Warn("Clip: previous attempt still active, ignoring duplicate dispatch")
+	doneCh, existingJobID, claimed := claimPendingJob(streamName, req.GetJobId())
+	if !claimed {
+		log.WithField("active_job_id", existingJobID).Warn("Clip: previous attempt still active, ignoring duplicate dispatch")
 		return
 	}
+	reporter := newProcessingReporter(send, req.GetJobId())
+	send = reporter.Send
+	stopLease := reporter.StartLease(time.Minute)
+	defer stopLease()
+	defer releasePendingJob(streamName, req.GetJobId())
+	defer clearProcessingProcessOverride(streamName, req.GetJobId())
 
 	// Resolve + stage the clip source (a Mist /view cut) to local disk; Mist
 	// reads the staged file through the STREAM_SOURCE override.
@@ -63,18 +70,14 @@ func (h *ProcessingJobHandler) handleClip(req *ipcpb.ProcessingJobRequest, send 
 		effectiveProcessesJSON = "[]"
 	}
 	if effectiveProcessesJSON != "" {
-		setProcessingProcessOverride(streamName, effectiveProcessesJSON)
+		if err := setProcessingProcessOverride(streamName, effectiveProcessesJSON, req.GetJobId(), processingOverrideExpiry(req)); err != nil {
+			h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("persist clip processing policy: %v", err), nil, "", 0)
+			return
+		}
 	}
 
-	doneCh := make(chan ProcessingPushEndEvent, 1)
-	pendingJobsMu.Lock()
-	pendingJobs[streamName] = doneCh
-	pendingJobsMu.Unlock()
 	recordingEndCh := registerProcessingRecordingEndListener(streamName)
 	defer func() {
-		pendingJobsMu.Lock()
-		delete(pendingJobs, streamName)
-		pendingJobsMu.Unlock()
 		unregisterProcessingRecordingEndListener(streamName)
 	}()
 	processExitCh := RegisterProcessExitListener(streamName)
@@ -99,7 +102,7 @@ func (h *ProcessingJobHandler) handleClip(req *ipcpb.ProcessingJobRequest, send 
 	}
 
 	ignoredProcessExitBootCounts := map[string]int{}
-	streamOutputs, sourceDurationMs, readinessErr := h.waitForProcessingStreamReady(log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, nil, nil, ignoredProcessExitBootCounts)
+	streamOutputs, sourceDurationMs, readinessErr := h.waitForProcessingStreamReady(context.Background(), log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, nil, nil, ignoredProcessExitBootCounts)
 	if readinessErr != nil {
 		h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 		h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("clip readiness failed: %v", readinessErr), nil, "", 0)

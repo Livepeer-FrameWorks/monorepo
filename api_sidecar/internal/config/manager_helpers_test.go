@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"google.golang.org/protobuf/proto"
 )
 
 // isStaleManagedWildcardStream gates drift-repair deletion: only managed
@@ -171,6 +172,39 @@ func TestAtomicWriteFile(t *testing.T) {
 	}
 	if len(entries) != 1 || entries[0].Name() != "bundle.pem" {
 		t.Errorf("expected only the target file, got %v", entries)
+	}
+}
+
+func TestConfigSeedPersistsAndReloadsForOfflineRestart(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HELMSMAN_STATE_DIR", root)
+	t.Setenv("NODE_ID", "edge-1")
+	seed := &ipcpb.ConfigSeed{
+		NodeId: "edge-1", SeedVersion: 42, TenantId: "tenant-a",
+		FoghornBalancerBase: "https://foghorn.internal/source?cap=secret",
+		Templates:           []*ipcpb.StreamTemplate{{Id: "live", Def: &ipcpb.StreamDef{Name: "live"}}},
+	}
+	if err := persistConfigSeed(seed); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadPersistedConfigSeed()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !proto.Equal(got, seed) {
+		t.Fatalf("reloaded seed = %+v, want %+v", got, seed)
+	}
+	info, err := os.Stat(filepath.Join(root, persistedConfigSeedFilename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("persisted ConfigSeed mode = %o, want 600", info.Mode().Perm())
+	}
+
+	t.Setenv("NODE_ID", "edge-2")
+	if _, err := loadPersistedConfigSeed(); err == nil {
+		t.Fatal("cross-node persisted ConfigSeed was accepted")
 	}
 }
 

@@ -134,9 +134,9 @@ func TestNonBlockingDurableTriggersHappyPath(t *testing.T) {
 	}
 }
 
-// On a WAL enqueue failure these handlers must refuse to acknowledge so Mist
-// retries — 503, not 200. This is the inverse of the fire-and-forget contract
-// and is the whole reason these triggers are "durable".
+// On a WAL enqueue failure these handlers return an honest diagnostic — 503,
+// not 200. Mist does not read responses for sync:false triggers, so this does
+// not cause a retry; durability starts only after a successful local append.
 func TestNonBlockingDurableTriggersRefuseOnWalFailure(t *testing.T) {
 	setupTriggerTest(t, "tenant-life")
 
@@ -218,8 +218,8 @@ func TestNonBlockingDurableTriggersDurablyEnqueueParseFailure(t *testing.T) {
 	}
 }
 
-// And when the WAL itself rejects the parse-failure record, the handler still
-// refuses to ack (503) — a parse failure we can't even record must be retried.
+// When the WAL itself rejects the parse-failure record, the handler likewise
+// returns 503 for diagnostics. The event never entered the durable boundary.
 func TestNonBlockingDurableTriggersParseFailureWalRefusal(t *testing.T) {
 	setupTriggerTest(t, "tenant-life")
 

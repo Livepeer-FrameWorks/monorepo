@@ -54,13 +54,10 @@ func DefaultIngestGenerationStorePath() string {
 	if path := strings.TrimSpace(os.Getenv("FRAMEWORKS_INGEST_GENERATION_STORE_PATH")); path != "" {
 		return path
 	}
-	if storagePath := strings.TrimSpace(os.Getenv("HELMSMAN_STORAGE_LOCAL_PATH")); storagePath != "" {
-		return filepath.Join(storagePath, "ingest-generation-fences")
+	if stateDir := strings.TrimSpace(os.Getenv("HELMSMAN_STATE_DIR")); stateDir != "" {
+		return filepath.Join(stateDir, "ingest-generation-fences")
 	}
-	if cacheDir, err := os.UserCacheDir(); err == nil {
-		return filepath.Join(cacheDir, "frameworks", "ingest-generation-fences")
-	}
-	return filepath.Join(os.TempDir(), "frameworks-ingest-generation-fences")
+	return ""
 }
 
 func NewIngestGenerationStore(dir string) (*IngestGenerationStore, error) {
@@ -100,6 +97,13 @@ func (s *IngestGenerationStore) Put(runtimeName, generation string, connectorPID
 	defer runtimeLock.Unlock()
 	s.mu.Lock()
 	previous, existed := s.records[runtimeName]
+	if existed && previous.Active && previous.Generation == generation && previous.ConnectorPID == connectorPID {
+		// A blocking-trigger replay is the same admission, not a new grace
+		// period. Preserve the original timestamp and avoid a redundant disk
+		// replacement so repeated delivery cannot postpone runtime reconciliation.
+		s.mu.Unlock()
+		return nil
+	}
 	if (!existed || !previous.Active) && s.active >= s.maxActive {
 		s.mu.Unlock()
 		return fmt.Errorf("active ingest generation limit %d reached", s.maxActive)

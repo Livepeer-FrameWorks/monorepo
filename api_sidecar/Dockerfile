@@ -47,7 +47,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 FROM alpine:3.19
 
 # Install runtime dependencies
-RUN apk add --no-cache ca-certificates tzdata
+RUN apk add --no-cache ca-certificates tzdata su-exec
 
 # Create non-root user
 RUN addgroup -g 1001 -S frameworks && \
@@ -57,11 +57,13 @@ WORKDIR /app
 
 # Copy binary from builder stage
 COPY --from=builder /src/frameworks/api_sidecar/helmsman .
+COPY --chmod=0755 api_sidecar/docker-entrypoint.sh /usr/local/bin/helmsman-entrypoint
 
-# Change ownership
-RUN chown frameworks:frameworks /app/helmsman
-
-USER frameworks
+# Seed the ownership copied into a newly-created named volume. A mounted volume
+# may present a root-owned mountpoint, so the entrypoint normalizes that exact
+# directory before dropping privileges.
+RUN chown frameworks:frameworks /app/helmsman && \
+    install -d -o frameworks -g frameworks -m 0700 /var/lib/frameworks/helmsman
 
 # Health check: helmsman serves HTTP (gin) on 18007, not gRPC.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
@@ -69,4 +71,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 
 EXPOSE 18007
 
-CMD ["./helmsman"] 
+ENTRYPOINT ["/usr/local/bin/helmsman-entrypoint"]
+CMD ["./helmsman"]

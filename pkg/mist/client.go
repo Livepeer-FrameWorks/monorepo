@@ -562,7 +562,7 @@ func (c *Client) GetActiveStreams() (map[string]interface{}, error) {
 			"fields": []string{
 				"clients", "viewers", "inputs", "outputs", "tracks",
 				"upbytes", "downbytes", "packsent", "packloss", "packretrans",
-				"firstms", "lastms", "health", "pid", "tags", "status",
+				"firstms", "lastms", "health", "pid", "sourcepids", "tags", "status",
 			},
 		},
 	}

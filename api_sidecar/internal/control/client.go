@@ -27,6 +27,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/nodeidentity"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/google/uuid"
@@ -48,7 +49,8 @@ const foghornInternalServerName = "foghorn.internal"
 //     (ThumbnailStagedProtocolMin=2 on Foghorn). Serving it below this version gets no thumbnail mint.
 //   - Version 3 = durably records admitted ingest generations and rejects stale drain/push-target
 //     commands whose exact source generation no longer owns the local runtime.
-const controlProtocolVersion int32 = 3
+//   - Version 4 = signs every registration with the node's persisted Ed25519 identity.
+const controlProtocolVersion int32 = 4
 
 // DeleteClipFunc is the function type for clip deletion
 type DeleteClipFunc func(clipHash string) (uint64, error)
@@ -62,6 +64,7 @@ type DeleteVodFunc func(vodHash string) (uint64, error)
 type streamConn struct {
 	stream ipcpb.HelmsmanControl_ConnectClient
 	nodeID string
+	epoch  string
 }
 
 // lockedClientStream serializes Send on the single Helmsman→Foghorn control
@@ -327,11 +330,15 @@ func admittedIngestGeneration(runtimeName string) (string, bool) {
 }
 
 func getStream() ipcpb.HelmsmanControl_ConnectClient {
-	c := activeConn.Load()
+	c := getConnection()
 	if c == nil {
 		return nil
 	}
 	return c.stream
+}
+
+func getConnection() *streamConn {
+	return activeConn.Load()
 }
 
 func getNodeID() string {
@@ -347,8 +354,26 @@ func GetNodeID() string {
 	return getNodeID()
 }
 
-func storeConn(stream ipcpb.HelmsmanControl_ConnectClient, nodeID string) {
-	activeConn.Store(&streamConn{stream: stream, nodeID: nodeID})
+func storeConn(stream ipcpb.HelmsmanControl_ConnectClient, nodeID string) *streamConn {
+	conn := newStreamConn(stream, nodeID)
+	publishConn(conn)
+	return conn
+}
+
+func newStreamConn(stream ipcpb.HelmsmanControl_ConnectClient, nodeID string) *streamConn {
+	return &streamConn{stream: stream, nodeID: nodeID, epoch: uuid.NewString()}
+}
+
+func publishConn(conn *streamConn) {
+	activeConn.Store(conn)
+}
+
+func updateConnNodeID(conn *streamConn, nodeID string) {
+	if conn == nil || strings.TrimSpace(nodeID) == "" {
+		return
+	}
+	updated := &streamConn{stream: conn.stream, nodeID: nodeID, epoch: conn.epoch}
+	activeConn.CompareAndSwap(conn, updated)
 }
 
 func clearConn() {
@@ -375,7 +400,8 @@ var (
 	disconnectNotifyMu sync.Mutex
 
 	// test-only hook to avoid flake in disconnect retry tests
-	disconnectSubscribedHook chan struct{}
+	disconnectSubscribedHookMu sync.Mutex
+	disconnectSubscribedHook   chan string
 
 	jitterRandMu sync.Mutex
 	jitterRand   = rand.New(rand.NewSource(time.Now().UnixNano()))
@@ -385,6 +411,12 @@ var (
 	outboxMu  sync.Mutex
 	outbox    []*ipcpb.ControlMessage
 	maxOutbox = 100
+
+	// Serializes durable-file transitions (.pb pending -> .sent in flight ->
+	// removal after a later successful exchange).
+	durableOutboxMu           sync.Mutex
+	durableOutboxReadFile     = os.ReadFile
+	durableOutboxReadFailures = make(map[string]int)
 )
 
 const (
@@ -393,6 +425,8 @@ const (
 	desiredStateComponentApplyTimeout = 30 * time.Minute
 	maxBlockingAttempts               = 3
 	reconnectJitterPct                = 25
+	durableOutboxQuarantineRetention  = 30 * 24 * time.Hour
+	durableOutboxReadFailureLimit     = 3
 )
 
 func blockingTimeoutForTrigger(triggerType string) time.Duration {
@@ -451,6 +485,12 @@ func Start(logger logging.Logger, cfg *sidecarcfg.HelmsmanConfig) {
 	blockingGraceMs = cfg.BlockingGraceMs
 	if blockingGraceMs > 0 {
 		logger.WithField("grace_ms", blockingGraceMs).Info("Blocking trigger grace period enabled")
+	}
+	// Recover local completion state before any control-plane connection is
+	// attempted. This keeps crash cleanup and uncertain-send replay independent
+	// of Foghorn availability; reconnect repeats the preparation for its epoch.
+	if err := prepareDurableOutboxAtStartup(); err != nil {
+		logger.WithError(err).Error("Failed to prepare durable control outbox at startup")
 	}
 	initTriggerForwarder(logger)
 	initIngestGenerationStore(logger)
@@ -600,6 +640,14 @@ var (
 
 var errStreamDisconnected = errors.New("gRPC control stream disconnected")
 
+func offerResponse[T any](ch chan<- T, response T) {
+	select {
+	case ch <- response:
+	default:
+		ControlResponseDrops.WithLabelValues("late_or_duplicate").Inc()
+	}
+}
+
 func sendMistTriggerOnce(triggerType string, mistTrigger *ipcpb.MistTrigger) error {
 	stream := getStream()
 	if stream == nil {
@@ -633,10 +681,13 @@ func awaitMistTriggerResponseContext(ctx context.Context, responseCh chan *ipcpb
 	disconnectCh := disconnectNotify
 	disconnectNotifyMu.Unlock()
 
-	// test hook: allow tests to synchronize on subscription to disconnect notifications
-	if disconnectSubscribedHook != nil {
+	// Test hook: allow a test to synchronize on this request's subscription.
+	disconnectSubscribedHookMu.Lock()
+	subscribedHook := disconnectSubscribedHook
+	disconnectSubscribedHookMu.Unlock()
+	if subscribedHook != nil {
 		select {
-		case disconnectSubscribedHook <- struct{}{}:
+		case subscribedHook <- requestID:
 		default:
 		}
 	}
@@ -689,6 +740,9 @@ func handleMistTriggerResponse(response *ipcpb.MistTriggerResponse) {
 	}
 	pendingMutex <- struct{}{}
 	pending, exists := pendingMistTriggers[response.GetRequestId()]
+	if exists {
+		delete(pendingMistTriggers, response.GetRequestId())
+	}
 	<-pendingMutex
 	if !exists {
 		return
@@ -710,7 +764,9 @@ func handleMistTriggerResponse(response *ipcpb.MistTriggerResponse) {
 			response.ErrorCode = ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL
 		}
 	}
-	pending.responseCh <- response
+	// The waiter consumes exactly one response. A duplicate or late response
+	// must never block the synchronous Recv loop and stall every control message.
+	offerResponse(pending.responseCh, response)
 }
 
 func handleDesiredStateUpdate(ctx context.Context, logger logging.Logger, requestID string, update *ipcpb.DesiredStateUpdate, send func(*ipcpb.ControlMessage) error) {
@@ -778,19 +834,26 @@ func sendDesiredStateResult(msg *ipcpb.ControlMessage, restartSelf bool, logger 
 	if err == nil {
 		return restartSelf
 	}
-	if restartSelf {
-		if durableErr := enqueueDurableOutbox(msg); durableErr == nil {
-			if logger != nil {
-				logger.WithError(err).WithField("request_id", msg.GetRequestId()).Warn("Persisted self-update result after send failure")
-			}
-			return true
-		} else if logger != nil {
-			logger.WithError(durableErr).WithField("request_id", msg.GetRequestId()).Error("Failed to persist self-update result")
+	if durableControlWasPersisted(err) {
+		if logger != nil {
+			logger.WithError(err).WithField("request_id", msg.GetRequestId()).Warn("Desired state update result was not delivered immediately")
 		}
+		return restartSelf
+	}
+	if controlDeliveryUsedFallback(err) {
+		return false
+	}
+	if durableErr := enqueueDurableOutbox(msg); durableErr == nil {
+		if logger != nil {
+			logger.WithError(err).WithField("request_id", msg.GetRequestId()).Warn("Persisted desired state update result after delivery failure")
+		}
+		return restartSelf
+	} else if logger != nil {
+		logger.WithError(durableErr).WithField("request_id", msg.GetRequestId()).Error("Failed to persist desired state update result")
 	}
 	enqueueOutbox(msg)
 	if logger != nil {
-		logger.WithError(err).WithField("request_id", msg.GetRequestId()).Warn("Failed to send desired state update result")
+		logger.WithError(err).WithField("request_id", msg.GetRequestId()).Warn("Desired state update result was not delivered immediately")
 	}
 	return false
 }
@@ -835,11 +898,12 @@ func waitForReconnection(timeout time.Duration) ipcpb.HelmsmanControl_ConnectCli
 	}
 }
 
-// enqueueOutbox saves a message for retry on reconnect.
+// enqueueOutbox is the bounded, in-memory retry tier for non-terminal control messages.
 func enqueueOutbox(msg *ipcpb.ControlMessage) {
 	outboxMu.Lock()
 	defer outboxMu.Unlock()
 	if len(outbox) >= maxOutbox {
+		ControlDeliveryOutcomes.WithLabelValues("bounded", "evicted").Inc()
 		if pkgLogger != nil {
 			pkgLogger.WithField("outbox_size", maxOutbox).Warn("Outbox full, dropping oldest message")
 		}
@@ -848,9 +912,16 @@ func enqueueOutbox(msg *ipcpb.ControlMessage) {
 	outbox = append(outbox, msg)
 }
 
-// drainOutbox re-sends all queued messages on the current stream.
-func drainOutbox(stream ipcpb.HelmsmanControl_ConnectClient) {
-	drainDurableOutbox(stream)
+// drainOutbox sends epoch-fenced durable terminal rows first, then the bounded
+// in-memory tier. The latter is intentionally best-effort and is not covered by
+// the connection-confirmation contract.
+func drainOutbox(conn *streamConn) {
+	if conn == nil {
+		return
+	}
+	if err := drainDurableOutboxForConnection(conn); err != nil && pkgLogger != nil {
+		pkgLogger.WithError(err).Warn("Durable control outbox remains pending")
+	}
 
 	outboxMu.Lock()
 	pending := outbox
@@ -858,8 +929,10 @@ func drainOutbox(stream ipcpb.HelmsmanControl_ConnectClient) {
 	outboxMu.Unlock()
 
 	for _, msg := range pending {
-		msg.SentAt = timestamppb.Now()
-		if err := stream.Send(msg); err != nil {
+		if msg.GetSentAt() == nil {
+			msg.SentAt = timestamppb.Now()
+		}
+		if err := conn.stream.Send(msg); err != nil {
 			// Re-enqueue if send fails again
 			enqueueOutbox(msg)
 		}
@@ -867,65 +940,406 @@ func drainOutbox(stream ipcpb.HelmsmanControl_ConnectClient) {
 }
 
 func enqueueDurableOutbox(msg *ipcpb.ControlMessage) error {
+	durableOutboxMu.Lock()
+	defer durableOutboxMu.Unlock()
+	return enqueueDurableOutboxLocked(msg)
+}
+
+func enqueueDurableOutboxLocked(msg *ipcpb.ControlMessage) error {
 	dir := durableOutboxDir()
 	if mkdirErr := os.MkdirAll(dir, 0o700); mkdirErr != nil {
 		return mkdirErr
 	}
-	payload, err := proto.Marshal(msg)
-	if err != nil {
-		return err
+	payload, marshalErr := proto.Marshal(msg)
+	if marshalErr != nil {
+		return marshalErr
 	}
-	name := fmt.Sprintf("%d-%s.pb", time.Now().UnixNano(), safeOutboxID(msg.GetRequestId()))
+	name := fmt.Sprintf("%d-%s.pb", time.Now().UnixNano(), safeOutboxID(durableOutboxMessageID(msg)))
 	path := filepath.Join(dir, name)
 	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, payload, 0o600); err != nil {
+	file, createErr := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if createErr != nil {
+		return createErr
+	}
+	cleanup := true
+	defer func() {
+		_ = file.Close()
+		if cleanup {
+			_ = os.Remove(tmp)
+		}
+	}()
+	if _, writeErr := file.Write(payload); writeErr != nil {
+		return writeErr
+	}
+	if syncErr := file.Sync(); syncErr != nil {
+		return syncErr
+	}
+	if closeErr := file.Close(); closeErr != nil {
+		return closeErr
+	}
+	if renameErr := os.Rename(tmp, path); renameErr != nil {
+		return renameErr
+	}
+	dirHandle, openErr := os.Open(dir)
+	if openErr != nil {
+		return openErr
+	}
+	if err := dirHandle.Sync(); err != nil {
+		_ = dirHandle.Close()
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := dirHandle.Close(); err != nil {
+		return err
+	}
+	cleanup = false
+	updateDurableOutboxMetricsLocked(dir)
+	return nil
 }
 
-func drainDurableOutbox(stream ipcpb.HelmsmanControl_ConnectClient) {
+func durableOutboxMessageID(msg *ipcpb.ControlMessage) string {
+	if msg == nil {
+		return "message"
+	}
+	if requestID := strings.TrimSpace(msg.GetRequestId()); requestID != "" {
+		return requestID
+	}
+	if result := msg.GetProcessingJobResult(); result != nil {
+		return "processing-" + result.GetJobId() + "-" + result.GetStatus()
+	}
+	if stopped := msg.GetDvrStopped(); stopped != nil {
+		return "dvr-" + stopped.GetDvrHash() + "-" + stopped.GetStatus()
+	}
+	if complete := msg.GetSyncComplete(); complete != nil {
+		return "sync-" + complete.GetRequestId() + "-" + complete.GetStatus()
+	}
+	if uploaded := msg.GetThumbnailUploaded(); uploaded != nil {
+		return "thumbnail-" + uploaded.GetAttemptId()
+	}
+	if deleted := msg.GetArtifactDeleted(); deleted != nil {
+		return "artifact-deleted-" + deleted.GetArtifactHash() + "-" + deleted.GetReason()
+	}
+	if uploaded := msg.GetMarkDvrSegmentUploaded(); uploaded != nil {
+		return "dvr-segment-uploaded-" + uploaded.GetDvrHash() + "-" + uploaded.GetSegmentName()
+	}
+	if dropped := msg.GetDvrSegmentDropped(); dropped != nil {
+		return "dvr-segment-dropped-" + dropped.GetDvrHash() + "-" + dropped.GetSegmentName()
+	}
+	if result := msg.GetUpdateApplyResult(); result != nil {
+		return "update-apply-" + result.GetNodeId() + "-" + result.GetTargetRelease()
+	}
+	if result := msg.GetConfigSeedApplyResult(); result != nil {
+		return fmt.Sprintf("config-seed-apply-%s-%d", result.GetNodeId(), result.GetSeedVersion())
+	}
+	return "message"
+}
+
+func drainDurableOutboxForConnection(conn *streamConn) error {
+	if conn == nil || conn.stream == nil || strings.TrimSpace(conn.epoch) == "" {
+		return errors.New("durable outbox drain requires a connection epoch")
+	}
+	durableOutboxMu.Lock()
+	defer durableOutboxMu.Unlock()
+	if active := getConnection(); active == nil || active.epoch != conn.epoch {
+		return errStreamDisconnected
+	}
 	dir := durableOutboxDir()
 	files, err := filepath.Glob(filepath.Join(dir, "*.pb"))
 	if err != nil {
 		if pkgLogger != nil {
 			pkgLogger.WithError(err).Warn("Unable to list durable control outbox")
 		}
-		return
+		return err
 	}
 	sort.Strings(files)
+	present := make(map[string]struct{}, len(files))
 	for _, path := range files {
-		payload, err := os.ReadFile(path)
-		if err != nil {
-			if pkgLogger != nil {
-				pkgLogger.WithError(err).WithField("path", path).Warn("Unable to read durable control outbox message")
-			}
-			return
-		}
-		var msg ipcpb.ControlMessage
-		if err := proto.Unmarshal(payload, &msg); err != nil {
-			if pkgLogger != nil {
-				pkgLogger.WithError(err).WithField("path", path).Warn("Dropping unreadable durable control outbox message")
-			}
-			_ = os.Remove(path)
-			continue
-		}
-		msg.SentAt = timestamppb.Now()
-		if err := stream.Send(&msg); err != nil {
-			if pkgLogger != nil {
-				pkgLogger.WithError(err).WithField("path", path).Warn("Failed to drain durable control outbox")
-			}
-			return
-		}
-		if err := os.Remove(path); err != nil && pkgLogger != nil {
-			pkgLogger.WithError(err).WithField("path", path).Warn("Failed to remove durable control outbox message")
+		present[path] = struct{}{}
+	}
+	for path := range durableOutboxReadFailures {
+		if _, exists := present[path]; !exists {
+			delete(durableOutboxReadFailures, path)
 		}
 	}
+	for _, path := range files {
+		payload, readErr := durableOutboxReadFile(path)
+		if readErr != nil {
+			ControlOutboxScanErrors.WithLabelValues("drain_read").Inc()
+			durableOutboxReadFailures[path]++
+			failures := durableOutboxReadFailures[path]
+			if failures >= durableOutboxReadFailureLimit {
+				if pkgLogger != nil {
+					pkgLogger.WithError(readErr).WithFields(logging.Fields{
+						"path": path, "failures": failures,
+					}).Error("Quarantining durable control outbox message after repeated read failures")
+				}
+				if quarantineErr := quarantineDurableOutboxFile(path); quarantineErr != nil {
+					ControlOutboxScanErrors.WithLabelValues("quarantine_rename").Inc()
+					return errors.Join(readErr, quarantineErr)
+				}
+				delete(durableOutboxReadFailures, path)
+				continue
+			}
+			if pkgLogger != nil {
+				pkgLogger.WithError(readErr).WithFields(logging.Fields{
+					"path": path, "failures": failures,
+				}).Warn("Unable to read durable control outbox message; retaining for retry")
+			}
+			return readErr
+		}
+		delete(durableOutboxReadFailures, path)
+		var msg ipcpb.ControlMessage
+		if unmarshalErr := proto.Unmarshal(payload, &msg); unmarshalErr != nil {
+			ControlOutboxScanErrors.WithLabelValues("drain_decode").Inc()
+			if pkgLogger != nil {
+				pkgLogger.WithError(unmarshalErr).WithField("path", path).Warn("Dropping unreadable durable control outbox message")
+			}
+			if quarantineErr := quarantineDurableOutboxFile(path); quarantineErr != nil {
+				ControlOutboxScanErrors.WithLabelValues("quarantine_rename").Inc()
+				return errors.Join(unmarshalErr, quarantineErr)
+			}
+			continue
+		}
+		if msg.GetSentAt() == nil {
+			msg.SentAt = timestamppb.Now()
+		}
+		if sendErr := conn.stream.Send(&msg); sendErr != nil {
+			if pkgLogger != nil {
+				pkgLogger.WithError(sendErr).WithField("path", path).Warn("Failed to drain durable control outbox")
+			}
+			return sendErr
+		}
+		ControlDeliveryOutcomes.WithLabelValues("durable", "sent").Inc()
+		// A successful Send is not an application ack. Preserve the row in an
+		// in-flight state until a later heartbeat proves the connection remained
+		// usable; reconnect converts unconfirmed rows back to pending.
+		inflightPath := path + ".sent." + conn.epoch
+		if _, statErr := os.Stat(inflightPath); statErr == nil {
+			return fmt.Errorf("durable control outbox in-flight collision: %s", inflightPath)
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			return statErr
+		}
+		if renameErr := os.Rename(path, inflightPath); renameErr != nil {
+			if pkgLogger != nil {
+				pkgLogger.WithError(renameErr).WithField("path", path).Warn("Failed to mark durable control outbox message in flight")
+			}
+			return renameErr
+		}
+	}
+	err = syncDurableOutboxDir(dir)
+	updateDurableOutboxMetricsLocked(dir)
+	return err
+}
+
+func prepareDurableOutboxForReconnect() error {
+	return prepareDurableOutboxForEpoch("reconnect-test")
+}
+
+func prepareDurableOutboxAtStartup() error {
+	return prepareDurableOutboxForEpoch("")
+}
+
+func prepareDurableOutboxForEpoch(currentEpoch string) error {
+	durableOutboxMu.Lock()
+	defer durableOutboxMu.Unlock()
+	dir := durableOutboxDir()
+	files, err := filepath.Glob(filepath.Join(dir, "*.pb.sent*"))
+	if err != nil {
+		return err
+	}
+	for _, path := range files {
+		if currentEpoch != "" && strings.HasSuffix(path, ".sent."+currentEpoch) {
+			continue
+		}
+		sentAt := strings.Index(path, ".pb.sent")
+		if sentAt < 0 {
+			continue
+		}
+		pendingPath := path[:sentAt+len(".pb")]
+		if _, statErr := os.Stat(pendingPath); statErr == nil {
+			return fmt.Errorf("durable control outbox pending collision: %s", pendingPath)
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			return statErr
+		}
+		if renameErr := os.Rename(path, pendingPath); renameErr != nil {
+			return renameErr
+		}
+	}
+	temps, err := filepath.Glob(filepath.Join(dir, "*.pb.tmp"))
+	if err != nil {
+		return err
+	}
+	for _, path := range temps {
+		if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return removeErr
+		}
+	}
+	if sweepErr := sweepDurableOutboxQuarantineLocked(dir, time.Now()); sweepErr != nil && pkgLogger != nil {
+		pkgLogger.WithError(sweepErr).Warn("Could not reap expired durable control outbox quarantine")
+	}
+	err = syncDurableOutboxDir(dir)
+	updateDurableOutboxMetricsLocked(dir)
+	return err
+}
+
+func confirmDurableOutboxSends() error {
+	return confirmDurableOutboxSendsForEpoch("test")
+}
+
+func confirmDurableOutboxSendsForEpoch(epoch string) error {
+	durableOutboxMu.Lock()
+	defer durableOutboxMu.Unlock()
+	return confirmDurableOutboxSendsLocked(epoch)
+}
+
+func confirmDurableOutboxSendsLocked(epoch string) error {
+	dir := durableOutboxDir()
+	files, err := filepath.Glob(filepath.Join(dir, "*.pb.sent."+epoch))
+	if err != nil {
+		return err
+	}
+	for _, path := range files {
+		if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			return removeErr
+		}
+		ControlDeliveryOutcomes.WithLabelValues("durable", "confirmed").Inc()
+	}
+	if sweepErr := sweepDurableOutboxQuarantineLocked(dir, time.Now()); sweepErr != nil && pkgLogger != nil {
+		pkgLogger.WithError(sweepErr).Warn("Could not reap expired durable control outbox quarantine")
+	}
+	err = syncDurableOutboxDir(dir)
+	updateDurableOutboxMetricsLocked(dir)
+	return err
+}
+
+func sendHeartbeatAndConfirmDurableOutbox(conn *streamConn, msg *ipcpb.ControlMessage) error {
+	if conn == nil || conn.stream == nil || strings.TrimSpace(conn.epoch) == "" {
+		return errors.New("durable confirmation requires a connection epoch")
+	}
+	// Hold the durable transition lock across the heartbeat and confirmation.
+	// Otherwise a terminal message could become .sent immediately after the
+	// heartbeat and be incorrectly confirmed by an exchange that preceded it.
+	durableOutboxMu.Lock()
+	defer durableOutboxMu.Unlock()
+	active := getConnection()
+	if active == nil || active.epoch != conn.epoch {
+		return errStreamDisconnected
+	}
+	if err := conn.stream.Send(msg); err != nil {
+		return err
+	}
+	return confirmDurableOutboxSendsLocked(conn.epoch)
+}
+
+func syncDurableOutboxDir(dir string) error {
+	if len(dir) == 0 {
+		return nil
+	}
+	handle, err := os.Open(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	defer func() { _ = handle.Close() }()
+	return handle.Sync()
+}
+
+func updateDurableOutboxMetricsLocked(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			ControlOutboxPending.Set(0)
+			ControlOutboxBytes.Set(0)
+			ControlOutboxQuarantined.Set(0)
+			ControlOutboxQuarantinedBytes.Set(0)
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			ControlOutboxScanErrors.WithLabelValues("metrics_readdir").Inc()
+		}
+		return
+	}
+	var count, bytes, quarantined, quarantinedBytes int64
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".dead") {
+			info, infoErr := entry.Info()
+			if infoErr == nil {
+				quarantined++
+				quarantinedBytes += info.Size()
+			} else {
+				ControlOutboxScanErrors.WithLabelValues("metrics_stat").Inc()
+			}
+			continue
+		}
+		if entry.IsDir() || (!strings.HasSuffix(entry.Name(), ".pb") && !strings.Contains(entry.Name(), ".pb.sent")) {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			ControlOutboxScanErrors.WithLabelValues("metrics_stat").Inc()
+			continue
+		}
+		count++
+		bytes += info.Size()
+	}
+	ControlOutboxPending.Set(float64(count))
+	ControlOutboxBytes.Set(float64(bytes))
+	ControlOutboxQuarantined.Set(float64(quarantined))
+	ControlOutboxQuarantinedBytes.Set(float64(quarantinedBytes))
+}
+
+func quarantineDurableOutboxFile(path string) error {
+	quarantinePath := path + ".dead"
+	if err := os.Rename(path, quarantinePath); err != nil {
+		if pkgLogger != nil {
+			pkgLogger.WithError(err).WithFields(logging.Fields{
+				"path":            path,
+				"quarantine_path": quarantinePath,
+			}).Warn("Failed to quarantine durable control outbox message")
+		}
+		updateDurableOutboxMetricsLocked(filepath.Dir(path))
+		return err
+	}
+	updateDurableOutboxMetricsLocked(filepath.Dir(path))
+	return nil
+}
+
+func sweepDurableOutboxQuarantineLocked(dir string, now time.Time) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	var sweepErrors []error
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".dead") {
+			continue
+		}
+		info, infoErr := entry.Info()
+		if infoErr != nil {
+			ControlOutboxScanErrors.WithLabelValues("quarantine_stat").Inc()
+			sweepErrors = append(sweepErrors, infoErr)
+			continue
+		}
+		if now.Sub(info.ModTime()) < durableOutboxQuarantineRetention {
+			continue
+		}
+		if removeErr := os.RemoveAll(filepath.Join(dir, entry.Name())); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			ControlOutboxScanErrors.WithLabelValues("quarantine_remove").Inc()
+			sweepErrors = append(sweepErrors, removeErr)
+		}
+	}
+	return errors.Join(sweepErrors...)
 }
 
 func durableOutboxDir() string {
 	if dir := strings.TrimSpace(os.Getenv("FRAMEWORKS_CONTROL_OUTBOX_DIR")); dir != "" {
 		return dir
+	}
+	if stateDir := strings.TrimSpace(os.Getenv("HELMSMAN_STATE_DIR")); stateDir != "" {
+		return filepath.Join(stateDir, "control-outbox")
 	}
 	cacheDir, err := os.UserCacheDir()
 	if err != nil {
@@ -958,8 +1372,9 @@ func safeOutboxID(id string) string {
 	return b.String()
 }
 
-// sendOrEnqueue attempts to send a message on the active stream.
-// If the stream is disconnected, the message is saved to the outbox for retry on reconnect.
+// sendOrEnqueue is the bounded best-effort path for control messages that are
+// neither high-rate samples nor terminal state transitions. Call
+// sendControlMessage when the payload's delivery class matters.
 func sendOrEnqueue(msg *ipcpb.ControlMessage) error {
 	stream := getStream()
 	if stream == nil {
@@ -972,6 +1387,106 @@ func sendOrEnqueue(msg *ipcpb.ControlMessage) error {
 	}
 	return nil
 }
+
+type controlDeliveryClass uint8
+
+const (
+	controlDeliveryBounded controlDeliveryClass = iota
+	controlDeliveryEphemeral
+	controlDeliveryDurable
+)
+
+type controlDeliveryError struct {
+	err            error
+	persisted      bool
+	fallbackQueued bool
+}
+
+func (e *controlDeliveryError) Error() string { return e.err.Error() }
+func (e *controlDeliveryError) Unwrap() error { return e.err }
+
+func durableControlWasPersisted(err error) bool {
+	var deliveryErr *controlDeliveryError
+	return errors.As(err, &deliveryErr) && deliveryErr.persisted
+}
+
+func controlDeliveryUsedFallback(err error) bool {
+	var deliveryErr *controlDeliveryError
+	return errors.As(err, &deliveryErr) && deliveryErr.fallbackQueued
+}
+
+// classifyControlMessage defines delivery from semantic payload type, so a
+// lifecycle cannot silently change when its producer is recovered or refactored.
+func classifyControlMessage(msg *ipcpb.ControlMessage) controlDeliveryClass {
+	if msg == nil {
+		return controlDeliveryBounded
+	}
+	if msg.GetProcessingJobProgress() != nil || msg.GetDvrProgress() != nil {
+		return controlDeliveryEphemeral
+	}
+	if trigger := msg.GetMistTrigger(); trigger != nil && trigger.GetStorageLifecycleData() != nil {
+		return controlDeliveryEphemeral
+	}
+	if result := msg.GetProcessingJobResult(); result != nil {
+		if result.GetStatus() == "cache_update" {
+			return controlDeliveryEphemeral
+		}
+		return controlDeliveryDurable
+	}
+	if msg.GetDvrStopped() != nil || msg.GetSyncComplete() != nil || msg.GetThumbnailUploaded() != nil ||
+		msg.GetArtifactDeleted() != nil || msg.GetMarkDvrSegmentUploaded() != nil ||
+		msg.GetDvrSegmentDropped() != nil || msg.GetUpdateApplyResult() != nil ||
+		msg.GetConfigSeedApplyResult() != nil {
+		return controlDeliveryDurable
+	}
+	return controlDeliveryBounded
+}
+
+// sendControlMessage applies the semantic delivery contract for control-plane
+// samples, bounded requests, and replay-safe terminal media transitions.
+func sendControlMessage(msg *ipcpb.ControlMessage) error {
+	if msg == nil {
+		return nil
+	}
+	switch classifyControlMessage(msg) {
+	case controlDeliveryEphemeral:
+		stream := getStream()
+		if stream == nil {
+			ControlDeliveryOutcomes.WithLabelValues("ephemeral", "dropped").Inc()
+			return errors.New("gRPC control stream not connected (ephemeral message dropped)")
+		}
+		if err := stream.Send(msg); err != nil {
+			ControlDeliveryOutcomes.WithLabelValues("ephemeral", "dropped").Inc()
+			return fmt.Errorf("send ephemeral control message (dropped): %w", err)
+		}
+		return nil
+	case controlDeliveryBounded:
+		return sendOrEnqueue(msg)
+	case controlDeliveryDurable:
+		if err := enqueueDurableOutbox(msg); err != nil {
+			ControlDeliveryOutcomes.WithLabelValues("durable", "persist_failed").Inc()
+			// Preserve the bounded fallback if durable local storage is unavailable.
+			enqueueOutbox(msg)
+			return &controlDeliveryError{
+				err:            fmt.Errorf("persist durable control message failed (queued in memory): %w", err),
+				fallbackQueued: true,
+			}
+		}
+		ControlDeliveryOutcomes.WithLabelValues("durable", "persisted").Inc()
+		conn := getConnection()
+		if conn == nil {
+			return &controlDeliveryError{err: errors.New("gRPC control stream not connected (persisted for reconnect)"), persisted: true}
+		}
+		if err := drainDurableOutboxForConnection(conn); err != nil {
+			return &controlDeliveryError{err: fmt.Errorf("send durable control message (persisted for reconnect): %w", err), persisted: true}
+		}
+		return nil
+	default:
+		return nil
+	}
+}
+
+func sendProcessingJobMessage(msg *ipcpb.ControlMessage) error { return sendControlMessage(msg) }
 
 func applyJitter(backoff time.Duration, jitterPct int) time.Duration {
 	if jitterPct <= 0 {
@@ -989,11 +1504,6 @@ func applyJitter(backoff time.Duration, jitterPct int) time.Duration {
 
 // SendArtifactDeleted notifies Foghorn that an artifact has been deleted
 func SendArtifactDeleted(artifactHash, filePath, reason, artifactType string, sizeBytes uint64) error {
-	stream := getStream()
-	if stream == nil {
-		return fmt.Errorf("gRPC control stream not connected")
-	}
-
 	artifactDeleted := &ipcpb.ArtifactDeleted{
 		ArtifactHash: artifactHash,
 		ArtifactType: artifactType,
@@ -1001,10 +1511,11 @@ func SendArtifactDeleted(artifactHash, filePath, reason, artifactType string, si
 		Reason:       reason,
 		NodeId:       getNodeID(),
 		SizeBytes:    sizeBytes,
+		DeletedAtMs:  time.Now().UnixMilli(),
 	}
 
 	msg := &ipcpb.ControlMessage{SentAt: timestamppb.Now(), Payload: &ipcpb.ControlMessage_ArtifactDeleted{ArtifactDeleted: artifactDeleted}}
-	return stream.Send(msg)
+	return sendControlMessage(msg)
 }
 
 // SendModeChangeRequest sends an operational mode change request upstream to Foghorn.
@@ -1108,32 +1619,52 @@ func runClient(addr string, logger logging.Logger) error {
 	// Detect hardware specs at startup
 	hwSpecs := sidecarcfg.DetectHardware(cfg.StorageLocalPath)
 
-	reg := &ipcpb.ControlMessage{SentAt: timestamppb.Now(), Payload: &ipcpb.ControlMessage_Register{Register: &ipcpb.Register{
-		NodeId:                 nodeID,
-		Roles:                  roles,
-		CapIngest:              cfg.CapIngest,
-		CapEdge:                cfg.CapEdge,
-		CapStorage:             cfg.CapStorage,
-		CapProcessing:          cfg.CapProcessing,
-		StorageLocal:           cfg.StorageLocalPath,
-		StorageBucket:          cfg.StorageS3Bucket,
-		StoragePrefix:          cfg.StorageS3Prefix,
-		EnrollmentToken:        cfg.EnrollmentToken,
-		Fingerprint:            collectNodeFingerprint(),
-		CpuCores:               &hwSpecs.CPUCores,
-		MemoryGb:               &hwSpecs.MemoryGB,
-		DiskGb:                 &hwSpecs.DiskGB,
-		RequestedMode:          parseRequestedMode(cfg.RequestedMode),
-		RelayBaseUrl:           relayBaseURL(),
-		AppliedManagedStreams:  snapshotAppliedManagedStreamsForRegister(),
-		ControlProtocolVersion: controlProtocolVersion,
-	}}}
-	if err := stream.Send(reg); err != nil {
+	registration := &ipcpb.Register{
+		NodeId:                   nodeID,
+		Roles:                    roles,
+		CapIngest:                cfg.CapIngest,
+		CapEdge:                  cfg.CapEdge,
+		CapStorage:               cfg.CapStorage,
+		CapProcessing:            cfg.CapProcessing,
+		StorageLocal:             cfg.StorageLocalPath,
+		StorageBucket:            cfg.StorageS3Bucket,
+		StoragePrefix:            cfg.StorageS3Prefix,
+		EnrollmentToken:          cfg.EnrollmentToken,
+		Fingerprint:              collectNodeFingerprint(),
+		CpuCores:                 &hwSpecs.CPUCores,
+		MemoryGb:                 &hwSpecs.MemoryGB,
+		DiskGb:                   &hwSpecs.DiskGB,
+		RequestedMode:            parseRequestedMode(cfg.RequestedMode),
+		RelayBaseUrl:             relayBaseURL(),
+		AppliedManagedStreams:    snapshotAppliedManagedStreamsForRegister(),
+		ControlProtocolVersion:   controlProtocolVersion,
+		AppliedConfigSeedVersion: sidecarcfg.CurrentSeedVersion(),
+	}
+	identityKey, identityStatus, err := nodeidentity.LoadOrCreatePrivateKey(
+		cfg.StateDir, cfg.NodeID, cfg.StorageLocalPath, cfg.RotateNodeIdentity, cfg.EnrollmentToken,
+	)
+	if err != nil {
+		return fmt.Errorf("load node identity: %w", err)
+	}
+	rotationRequested := identityStatus == nodeidentity.LoadStatusRotated || identityStatus == nodeidentity.LoadStatusRotationPending
+	if rotationRequested && strings.TrimSpace(cfg.EnrollmentToken) == "" {
+		return errors.New("node identity rotation requires a fresh enrollment token")
+	}
+	registration.NodeIdentityRotationRequested = rotationRequested
+	logger.WithFields(logging.Fields{"node_id": cfg.NodeID, "identity_state": identityStatus, "state_dir": cfg.StateDir}).Info("Node identity ready")
+	if signErr := nodeidentity.SignRegistration(registration, identityKey, time.Now()); signErr != nil {
+		return fmt.Errorf("sign node registration: %w", signErr)
+	}
+	reg := &ipcpb.ControlMessage{SentAt: timestamppb.Now(), Payload: &ipcpb.ControlMessage_Register{Register: registration}}
+	connection, err := prepareAndRegisterControlConnection(stream, nodeID, reg)
+	if err != nil {
 		return err
 	}
 
-	// Store current stream for external access
-	storeConn(stream, nodeID)
+	// Publish the stream only after old in-flight rows are pending again. A
+	// concurrent terminal producer before this point persists a .pb row without
+	// trying to send on a connection whose reconnect drain has not run yet.
+	publishConn(connection)
 	ControlStreamStatus.Set(1)
 	streamReconnectedM.Lock()
 	close(streamReconnected)
@@ -1141,8 +1672,8 @@ func runClient(addr string, logger logging.Logger) error {
 	streamReconnectedM.Unlock()
 	notifyControlConnected()
 
-	// Re-send any messages queued during disconnect
-	drainOutbox(stream)
+	// Re-send any messages queued during disconnect.
+	drainOutbox(connection)
 	// Kick the durable trigger forwarder so pending WAL entries get a
 	// fresh send pass without waiting for the periodic tick.
 	wakeupTriggerForwarder()
@@ -1171,15 +1702,35 @@ func runClient(addr string, logger logging.Logger) error {
 			}
 			switch x := msg.GetPayload().(type) {
 			case *ipcpb.ControlMessage_DvrStartRequest:
-				go handleDVRStart(logger, x.DvrStartRequest, func(m *ipcpb.ControlMessage) { _ = stream.Send(m) }) //nolint:errcheck // best-effort report
+				go handleDVRStart(logger, x.DvrStartRequest, func(m *ipcpb.ControlMessage) {
+					if err := sendControlMessage(m); err != nil {
+						logger.WithError(err).WithField("dvr_hash", x.DvrStartRequest.GetDvrHash()).Warn("DVR report was not delivered immediately")
+					}
+				})
 			case *ipcpb.ControlMessage_DvrStopRequest:
-				go handleDVRStop(logger, x.DvrStopRequest, func(m *ipcpb.ControlMessage) { _ = stream.Send(m) }) //nolint:errcheck // best-effort report
+				go handleDVRStop(logger, x.DvrStopRequest, func(m *ipcpb.ControlMessage) {
+					if err := sendControlMessage(m); err != nil {
+						logger.WithError(err).WithField("dvr_hash", x.DvrStopRequest.GetDvrHash()).Warn("DVR stop result was not delivered immediately")
+					}
+				})
 			case *ipcpb.ControlMessage_ClipDelete:
-				go handleClipDelete(logger, x.ClipDelete, func(m *ipcpb.ControlMessage) { _ = stream.Send(m) }) //nolint:errcheck // best-effort report
+				go handleClipDelete(logger, x.ClipDelete, func(m *ipcpb.ControlMessage) {
+					if err := sendControlMessage(m); err != nil {
+						logger.WithError(err).WithField("clip_hash", x.ClipDelete.GetClipHash()).Warn("Clip deletion result was not delivered immediately")
+					}
+				})
 			case *ipcpb.ControlMessage_DvrDelete:
-				go handleDVRDelete(logger, x.DvrDelete, func(m *ipcpb.ControlMessage) { _ = stream.Send(m) }) //nolint:errcheck // best-effort report
+				go handleDVRDelete(logger, x.DvrDelete, func(m *ipcpb.ControlMessage) {
+					if err := sendControlMessage(m); err != nil {
+						logger.WithError(err).WithField("dvr_hash", x.DvrDelete.GetDvrHash()).Warn("DVR delete result was not delivered immediately")
+					}
+				})
 			case *ipcpb.ControlMessage_VodDelete:
-				go handleVodDelete(logger, x.VodDelete, func(m *ipcpb.ControlMessage) { _ = stream.Send(m) }) //nolint:errcheck // best-effort report
+				go handleVodDelete(logger, x.VodDelete, func(m *ipcpb.ControlMessage) {
+					if err := sendControlMessage(m); err != nil {
+						logger.WithError(err).WithField("vod_hash", x.VodDelete.GetVodHash()).Warn("VOD deletion result was not delivered immediately")
+					}
+				})
 			case *ipcpb.ControlMessage_MistTriggerResponse:
 				// Record accepted ingest generations in receive order. This may briefly wait for an
 				// already-running command on the same runtime; that serialization is the fence that
@@ -1216,21 +1767,24 @@ func runClient(addr string, logger logging.Logger) error {
 				// existing bidi stream after TLS bundles are applied and
 				// Caddy is reloaded; Foghorn gates DNS publishing on this.
 				if x.ConfigSeed != nil {
-					ackSender := func(m *ipcpb.ControlMessage) {
-						if sendErr := stream.Send(m); sendErr != nil {
-							logger.WithError(sendErr).Debug("Failed to send ConfigSeedApplyResult ACK")
+					if rotationRequested {
+						if completeErr := nodeidentity.CompleteRotation(cfg.StateDir, cfg.NodeID); completeErr != nil {
+							logger.WithError(completeErr).Error("Failed to durably complete accepted node identity rotation")
 						}
 					}
-					sidecarcfg.ApplySeed(x.ConfigSeed, ackSender)
+					ackSender := func(m *ipcpb.ControlMessage) error {
+						return acceptConfigSeedApplyResult(logger, m)
+					}
+					go sidecarcfg.ApplySeed(x.ConfigSeed, ackSender)
 					// Adopt canonical node_id from seed if provided
 					if nid := x.ConfigSeed.GetNodeId(); nid != "" {
-						storeConn(getStream(), nid)
+						updateConnNodeID(getConnection(), nid)
 					}
 				}
 			case *ipcpb.ControlMessage_BalancerCapabilityUpdate:
 				sidecarcfg.ApplyBalancerCapability(x.BalancerCapabilityUpdate)
 			case *ipcpb.ControlMessage_DesiredStateUpdate:
-				go handleDesiredStateUpdate(stream.Context(), logger, msg.GetRequestId(), x.DesiredStateUpdate, stream.Send)
+				go handleDesiredStateUpdate(stream.Context(), logger, msg.GetRequestId(), x.DesiredStateUpdate, sendControlMessage)
 			case *ipcpb.ControlMessage_FreezePermissionResponse:
 				// Handle freeze permission response from Foghorn
 				go handleFreezePermissionResponse(x.FreezePermissionResponse)
@@ -1345,19 +1899,23 @@ func runClient(addr string, logger logging.Logger) error {
 			case *ipcpb.ControlMessage_EdgeMistAdminSessionResponse:
 				handleEdgeMistAdminSessionResponse(msg.GetRequestId(), x.EdgeMistAdminSessionResponse)
 			case *ipcpb.ControlMessage_ThumbnailUploadResponse:
-				// The ThumbnailUploaded echo is what drives Foghorn's publication (verify → CAS → publish); a
-				// dropped send would silently strand the attempt, so route it through the retry outbox — a send
-				// that fails (or a disconnected stream) is queued and redelivered on reconnect rather than lost.
+				// ThumbnailUploaded drives Foghorn's verify → CAS → publish transition,
+				// so the shared classifier routes it to durable local storage.
 				go handleThumbnailUploadResponse(logger, x.ThumbnailUploadResponse, func(m *ipcpb.ControlMessage) {
-					if err := sendOrEnqueue(m); err != nil {
+					if err := sendControlMessage(m); err != nil {
 						logger.WithError(err).Warn("ThumbnailUploaded completion queued for retry on reconnect")
 					}
 				})
 			case *ipcpb.ControlMessage_ProcessingJobRequest:
 				if processingJobHandler != nil {
 					go processingJobHandler(x.ProcessingJobRequest, func(m *ipcpb.ControlMessage) {
-						if err := sendOrEnqueue(m); err != nil {
-							logger.WithError(err).WithField("job_id", x.ProcessingJobRequest.GetJobId()).Warn("Processing job message queued for retry")
+						if err := sendControlMessage(m); err != nil {
+							entry := logger.WithError(err).WithField("job_id", x.ProcessingJobRequest.GetJobId())
+							if m.GetProcessingJobProgress() != nil {
+								entry.Debug("Processing progress was not delivered")
+							} else {
+								entry.Warn("Processing result was not delivered immediately")
+							}
 						}
 					})
 				}
@@ -1373,19 +1931,48 @@ func runClient(addr string, logger logging.Logger) error {
 			// A Send error means the bidi stream is broken; surface it
 			// so the outer Start loop reconnects (Foghorn will then
 			// receive a fresh snapshot via the new Register).
-			if err := stream.Send(&ipcpb.ControlMessage{
+			if err := sendHeartbeatAndConfirmDurableOutbox(connection, &ipcpb.ControlMessage{
 				SentAt: timestamppb.Now(),
 				Payload: &ipcpb.ControlMessage_Heartbeat{Heartbeat: &ipcpb.Heartbeat{
 					NodeId:                nodeID,
 					AppliedManagedStreams: snapshotAppliedManagedStreamsForRegister(),
 				}},
 			}); err != nil {
-				return fmt.Errorf("heartbeat send: %w", err)
+				return fmt.Errorf("heartbeat send or durable confirmation: %w", err)
+			}
+			// Make a pass over rows persisted since the reconnect edge; these
+			// remain in-flight until the next successful heartbeat.
+			if err := drainDurableOutboxForConnection(connection); err != nil {
+				logger.WithError(err).Warn("Durable control outbox remains pending")
 			}
 		case e := <-errCh:
 			return e
 		}
 	}
+}
+
+func acceptConfigSeedApplyResult(logger logging.Logger, msg *ipcpb.ControlMessage) error {
+	sendErr := sendControlMessage(msg)
+	if sendErr != nil && !durableControlWasPersisted(sendErr) {
+		logger.WithError(sendErr).Warn("Failed to durably accept ConfigSeedApplyResult ACK")
+		return sendErr
+	}
+	return nil
+}
+
+func prepareAndRegisterControlConnection(stream ipcpb.HelmsmanControl_ConnectClient, nodeID string, reg *ipcpb.ControlMessage) (*streamConn, error) {
+	connection := newStreamConn(stream, nodeID)
+	// A row sent on the previous connection but not confirmed by a later
+	// successful exchange is uncertain; replay it idempotently on this one.
+	if err := prepareDurableOutboxForEpoch(connection.epoch); err != nil {
+		return nil, fmt.Errorf("prepare durable control outbox before registration: %w", err)
+	}
+	// Registration allocates upstream ownership and capability state. Do not
+	// create that state until the local durable queue is safe to replay.
+	if err := stream.Send(reg); err != nil {
+		return nil, err
+	}
+	return connection, nil
 }
 
 func loadSidecarRootCAs(caPath string) (*x509.CertPool, error) {
@@ -1725,6 +2312,7 @@ func handleClipDelete(logger logging.Logger, req *ipcpb.ClipDeleteRequest, send 
 			Reason:       "manual",
 			NodeId:       getNodeID(),
 			SizeBytes:    sizeBytes,
+			DeletedAtMs:  time.Now().UnixMilli(),
 		}}})
 	}
 
@@ -1827,6 +2415,7 @@ func handleVodDelete(logger logging.Logger, req *ipcpb.VodDeleteRequest, send fu
 			Reason:       "manual",
 			NodeId:       getNodeID(),
 			SizeBytes:    sizeBytes,
+			DeletedAtMs:  time.Now().UnixMilli(),
 		}}})
 	}
 
@@ -1963,12 +2552,15 @@ func RequestFreezePermission(ctx context.Context, assetType, assetHash string, s
 
 // handleFreezePermissionResponse processes FreezePermissionResponse messages from the stream
 func handleFreezePermissionResponse(response *ipcpb.FreezePermissionResponse) {
+	if response == nil {
+		return
+	}
 	freezePermissionMutex <- struct{}{}
 	responseChan, exists := freezePermissionHandlers[response.RequestId]
 	<-freezePermissionMutex
 
 	if exists {
-		responseChan <- response
+		offerResponse(responseChan, response)
 	}
 }
 
@@ -2085,21 +2677,21 @@ func recordDVRSegment(
 }
 
 func handleRecordDVRSegmentResponse(resp *ipcpb.RecordDVRSegmentResponse) {
+	if resp == nil {
+		return
+	}
 	recordDVRSegmentMutex <- struct{}{}
 	ch, exists := recordDVRSegmentHandlers[resp.GetRequestId()]
 	<-recordDVRSegmentMutex
 	if exists {
-		ch <- resp
+		offerResponse(ch, resp)
 	}
 }
 
 // SendMarkDVRSegmentUploaded reports that an S3 upload completed for a
-// segment. Fire-and-forget; Foghorn updates the ledger row asynchronously.
+// segment. The report is persisted locally before delivery because finalization
+// depends on the ledger leaving its pending state.
 func SendMarkDVRSegmentUploaded(dvrHash, segmentName string, sizeBytes uint64) error {
-	stream := getStream()
-	if stream == nil {
-		return fmt.Errorf("gRPC control stream not connected")
-	}
 	msg := &ipcpb.ControlMessage{
 		SentAt: timestamppb.Now(),
 		Payload: &ipcpb.ControlMessage_MarkDvrSegmentUploaded{MarkDvrSegmentUploaded: &ipcpb.MarkDVRSegmentUploaded{
@@ -2109,7 +2701,7 @@ func SendMarkDVRSegmentUploaded(dvrHash, segmentName string, sizeBytes uint64) e
 			SizeBytes:   sizeBytes,
 		}},
 	}
-	return stream.Send(msg)
+	return sendControlMessage(msg)
 }
 
 // SendDVRSegmentDropped reports a forced eviction. wasUploaded distinguishes
@@ -2122,10 +2714,6 @@ func SendDVRSegmentDropped(
 	sizeBytes uint64,
 	wasUploaded bool,
 ) error {
-	stream := getStream()
-	if stream == nil {
-		return fmt.Errorf("gRPC control stream not connected")
-	}
 	msg := &ipcpb.ControlMessage{
 		SentAt: timestamppb.Now(),
 		Payload: &ipcpb.ControlMessage_DvrSegmentDropped{DvrSegmentDropped: &ipcpb.DVRSegmentDropped{
@@ -2142,7 +2730,7 @@ func SendDVRSegmentDropped(
 			LocalPath:    localPath,
 		}},
 	}
-	return stream.Send(msg)
+	return sendControlMessage(msg)
 }
 
 // RequestEvictableSegments asks Foghorn for the authoritative list of
@@ -2190,11 +2778,14 @@ func RequestEvictableSegments(ctx context.Context, dvrHash string, maxCount int3
 }
 
 func handleEvictableSegmentsResponse(resp *ipcpb.EvictableSegmentsResponse) {
+	if resp == nil {
+		return
+	}
 	evictableSegmentsMutex <- struct{}{}
 	ch, exists := evictableSegmentsHandlers[resp.GetRequestId()]
 	<-evictableSegmentsMutex
 	if exists {
-		ch <- resp
+		offerResponse(ch, resp)
 	}
 }
 
@@ -2257,11 +2848,14 @@ func SendRestoreLocalSegmentIndex(ctx context.Context, dvrHash string, segmentNa
 }
 
 func handleRestoreLocalSegmentIndexResponse(resp *ipcpb.RestoreLocalSegmentIndexResponse) {
+	if resp == nil {
+		return
+	}
 	restoreLocalSegmentIndexMutex <- struct{}{}
 	ch, exists := restoreLocalSegmentIndexHandlers[resp.GetRequestId()]
 	<-restoreLocalSegmentIndexMutex
 	if exists {
-		ch <- resp
+		offerResponse(ch, resp)
 	}
 }
 
@@ -2283,8 +2877,9 @@ func SendFreezeProgress(requestID, assetHash string, percent uint32, bytesUpload
 	return stream.Send(msg)
 }
 
-// SendStorageLifecycle sends a storage lifecycle event to Foghorn (for analytics).
-// Queued for retry on disconnect since these feed ClickHouse storage_events.
+// SendStorageLifecycle sends a live storage telemetry sample to Foghorn.
+// It is intentionally dropped while disconnected; authoritative catalog state
+// converges through inventory and sync-completion messages.
 func SendStorageLifecycle(data *ipcpb.StorageLifecycleData) error {
 	trigger := &ipcpb.MistTrigger{
 		TriggerType: "storage_lifecycle",
@@ -2297,41 +2892,7 @@ func SendStorageLifecycle(data *ipcpb.StorageLifecycleData) error {
 	}
 
 	msg := &ipcpb.ControlMessage{SentAt: timestamppb.Now(), Payload: &ipcpb.ControlMessage_MistTrigger{MistTrigger: trigger}}
-	return sendOrEnqueue(msg)
-}
-
-// SendProcessBillingEvent sends a process billing event to Foghorn (for analytics/billing)
-// ProcessBillingEvent tracks transcoding usage for Livepeer and native processes
-func SendProcessBillingEvent(event *ipcpb.ProcessBillingEvent) error {
-	processType := event.ProcessType
-	stream := getStream()
-	if stream == nil {
-		BillingEventsSent.WithLabelValues(processType, "stream_disconnected").Inc()
-		return fmt.Errorf("gRPC control stream not connected")
-	}
-
-	// Ensure node_id is set
-	if event.NodeId == "" {
-		event.NodeId = getNodeID()
-	}
-
-	trigger := &ipcpb.MistTrigger{
-		TriggerType: "process_billing",
-		RequestId:   uuid.New().String(),
-		NodeId:      getNodeID(),
-		Blocking:    false,
-		TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{
-			ProcessBilling: event,
-		},
-	}
-
-	msg := &ipcpb.ControlMessage{SentAt: timestamppb.Now(), Payload: &ipcpb.ControlMessage_MistTrigger{MistTrigger: trigger}}
-	if err := stream.Send(msg); err != nil {
-		BillingEventsSent.WithLabelValues(processType, "error").Inc()
-		return err
-	}
-	BillingEventsSent.WithLabelValues(processType, "success").Inc()
-	return nil
+	return sendControlMessage(msg)
 }
 
 // IsConnected returns true if the control stream is connected
@@ -2408,12 +2969,15 @@ func RequestCanDelete(ctx context.Context, assetHash string) (bool, string, int6
 
 // handleCanDeleteResponse processes CanDeleteResponse messages from the stream
 func handleCanDeleteResponse(response *ipcpb.CanDeleteResponse) {
+	if response == nil {
+		return
+	}
 	canDeleteMutex <- struct{}{}
 	responseChan, exists := canDeleteHandlers[response.AssetHash]
 	<-canDeleteMutex
 
 	if exists {
-		responseChan <- response
+		offerResponse(responseChan, response)
 	}
 }
 
@@ -2487,7 +3051,7 @@ func handleRelayResolveResponse(response *ipcpb.RelayResolveResponse) {
 	responseChan, exists := relayResolveHandlers[response.GetRequestId()]
 	<-relayResolveMutex
 	if exists {
-		responseChan <- response
+		offerResponse(responseChan, response)
 	}
 }
 
@@ -2546,13 +3110,7 @@ func handleAuthorizeRelayPullResponse(response *ipcpb.AuthorizeRelayPullResponse
 	responseChan, exists := authorizeRelayPullHandlers[response.GetRequestId()]
 	<-authorizeRelayPullMutex
 	if exists {
-		// Non-blocking: the channel is buffered(1) and the waiter takes
-		// exactly one. A duplicate/late response must not wedge this
-		// goroutine on a full channel.
-		select {
-		case responseChan <- response:
-		default:
-		}
+		offerResponse(responseChan, response)
 	}
 }
 
@@ -2573,7 +3131,7 @@ func SendSyncComplete(requestID, assetHash, status string, sizeBytes uint64, err
 	}
 
 	msg := &ipcpb.ControlMessage{SentAt: timestamppb.Now(), Payload: &ipcpb.ControlMessage_SyncComplete{SyncComplete: complete}}
-	return sendOrEnqueue(msg)
+	return sendControlMessage(msg)
 }
 
 // handleStopSessions terminates all sessions for the given streams on this node
@@ -3007,12 +3565,15 @@ var (
 )
 
 func handleValidateEdgeTokenResponse(requestID string, resp *ipcpb.ValidateEdgeTokenResponse) {
+	if resp == nil {
+		return
+	}
 	pendingEdgeTokenMutex <- struct{}{}
 	ch, exists := pendingEdgeTokenValidations[requestID]
 	<-pendingEdgeTokenMutex
 
 	if exists {
-		ch <- resp
+		offerResponse(ch, resp)
 	}
 }
 
@@ -3095,11 +3656,14 @@ var (
 )
 
 func handleEdgeMistAdminSessionResponse(requestID string, resp *ipcpb.EdgeMistAdminSessionResponse) {
+	if resp == nil {
+		return
+	}
 	pendingMistAdminMutex <- struct{}{}
 	ch, exists := pendingMistAdminSessions[requestID]
 	<-pendingMistAdminMutex
 	if exists {
-		ch <- resp
+		offerResponse(ch, resp)
 	}
 }
 

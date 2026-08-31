@@ -222,3 +222,41 @@ func TestHandleEdgeMistAdminSessionResponseIgnoresUnknown(t *testing.T) {
 	// No registered waiter for this request_id; must be a no-op.
 	handleEdgeMistAdminSessionResponse("ghost", &ipcpb.EdgeMistAdminSessionResponse{Valid: true})
 }
+
+func TestSynchronousResponseHandlersDropDuplicates(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func()
+	}{
+		{
+			name: "edge token",
+			run: func() {
+				ch := make(chan *ipcpb.ValidateEdgeTokenResponse, 1)
+				pendingEdgeTokenValidations["duplicate-edge-token"] = ch
+				t.Cleanup(func() { delete(pendingEdgeTokenValidations, "duplicate-edge-token") })
+				handleValidateEdgeTokenResponse("duplicate-edge-token", &ipcpb.ValidateEdgeTokenResponse{Valid: true})
+				handleValidateEdgeTokenResponse("duplicate-edge-token", &ipcpb.ValidateEdgeTokenResponse{Valid: false})
+			},
+		},
+		{
+			name: "mist admin",
+			run: func() {
+				ch := make(chan *ipcpb.EdgeMistAdminSessionResponse, 1)
+				pendingMistAdminSessions["duplicate-mist-admin"] = ch
+				t.Cleanup(func() { delete(pendingMistAdminSessions, "duplicate-mist-admin") })
+				handleEdgeMistAdminSessionResponse("duplicate-mist-admin", &ipcpb.EdgeMistAdminSessionResponse{Valid: true})
+				handleEdgeMistAdminSessionResponse("duplicate-mist-admin", &ipcpb.EdgeMistAdminSessionResponse{Valid: false})
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			done := make(chan struct{})
+			go func() {
+				tt.run()
+				close(done)
+			}()
+			waitForTestDone(t, done, "duplicate response to be dropped")
+		})
+	}
+}

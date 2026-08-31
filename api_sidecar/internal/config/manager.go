@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -35,6 +36,7 @@ import (
 type Manager struct {
 	mu               sync.Mutex
 	reconcileMu      sync.Mutex
+	ackDeliveryMu    sync.Mutex
 	mistClient       mistAPI
 	logger           logging.Logger
 	lastSeed         *ipcpb.ConfigSeed
@@ -44,8 +46,13 @@ type Manager struct {
 	driftRepairOnce  sync.Once
 	lastCaddyHash    string
 	caddyActivated   bool
-	ackSender        func(*ipcpb.ControlMessage)
+	ackSender        ApplySeedSender
 	lastAckedSeedVer uint64
+	lastAckedSeedSum string
+	ackRetryTimer    *time.Timer
+	ackRetryAttempt  int
+	pendingApplyAck  *ipcpb.ControlMessage
+	pendingAckSender ApplySeedSender
 }
 
 type mistAPI interface {
@@ -62,7 +69,7 @@ type mistAPI interface {
 // ApplySeedSender is the signature for the function Helmsman uses to send
 // ConfigSeedApplyResult back to Foghorn over the existing bidi control
 // stream.
-type ApplySeedSender func(*ipcpb.ControlMessage)
+type ApplySeedSender func(*ipcpb.ControlMessage) error
 
 const (
 	maxReconcileRetryDelay = 30 * time.Second
@@ -101,6 +108,14 @@ func InitManager(logger logging.Logger) {
 		mistClient: mist.NewClient(logger),
 		logger:     logger,
 	}
+	if seed, err := loadPersistedConfigSeed(); err != nil {
+		logger.WithError(err).Error("Refusing corrupt persisted ConfigSeed")
+	} else if seed != nil {
+		manager.lastSeed = seed
+		logger.WithFields(logging.Fields{"node_id": seed.GetNodeId(), "seed_version": seed.GetSeedVersion()}).Info("Recovered persisted ConfigSeed")
+		manager.startDriftRepairLoop()
+		go manager.reconcile()
+	}
 }
 
 // ApplySeed stores the latest ConfigSeed and triggers reconcile. The
@@ -111,15 +126,113 @@ func ApplySeed(seed *ipcpb.ConfigSeed, sender ApplySeedSender) {
 	if manager == nil || seed == nil {
 		return
 	}
-	manager.mu.Lock()
-	manager.lastSeed = seed
-	if sender != nil {
-		manager.ackSender = sender
+	cloned := proto.CloneOf(seed)
+	manager.applySeed(cloned, sender)
+}
+
+func (m *Manager) applySeed(seed *ipcpb.ConfigSeed, sender ApplySeedSender) {
+	m.reconcileMu.Lock()
+	m.mu.Lock()
+	current := m.lastSeed
+	if current != nil && seed.GetNodeId() != current.GetNodeId() {
+		m.mu.Unlock()
+		m.reconcileMu.Unlock()
+		m.logger.WithFields(logging.Fields{"node_id": seed.GetNodeId(), "expected_node_id": current.GetNodeId()}).Error("Refusing ConfigSeed for a different node")
+		return
 	}
-	manager.cancelRetryLocked()
-	manager.mu.Unlock()
-	manager.startDriftRepairLoop()
-	go manager.reconcile()
+	if current != nil && seed.GetSeedVersion() < current.GetSeedVersion() {
+		m.mu.Unlock()
+		m.reconcileMu.Unlock()
+		m.logger.WithFields(logging.Fields{"seed_version": seed.GetSeedVersion(), "applied_version": current.GetSeedVersion()}).Warn("Refusing stale ConfigSeed")
+		return
+	}
+	if current != nil && seed.GetSeedVersion() > 0 && seed.GetSeedVersion() == current.GetSeedVersion() && !proto.Equal(seed, current) {
+		m.mu.Unlock()
+		m.reconcileMu.Unlock()
+		m.logger.WithField("seed_version", seed.GetSeedVersion()).Error("Refusing conflicting ConfigSeed at the applied version")
+		return
+	}
+	m.mu.Unlock()
+	if err := persistConfigSeed(seed); err != nil {
+		m.reconcileMu.Unlock()
+		m.logger.WithError(err).WithFields(logging.Fields{"node_id": seed.GetNodeId(), "seed_version": seed.GetSeedVersion()}).Error("Refusing to apply ConfigSeed that was not persisted")
+		return
+	}
+	m.mu.Lock()
+	m.lastSeed = seed
+	if sender != nil {
+		m.ackSender = sender
+	}
+	if m.pendingApplyAck != nil && m.pendingApplyAck.GetConfigSeedApplyResult().GetSeedVersion() < seed.GetSeedVersion() {
+		if m.ackRetryTimer != nil {
+			m.ackRetryTimer.Stop()
+		}
+		m.ackRetryTimer = nil
+		m.ackRetryAttempt = 0
+		m.pendingApplyAck = nil
+		m.pendingAckSender = nil
+	}
+	m.cancelRetryLocked()
+	m.mu.Unlock()
+	m.reconcileMu.Unlock()
+	m.startDriftRepairLoop()
+	m.reconcile()
+}
+
+const persistedConfigSeedFilename = "config-seed.pb"
+
+func persistedConfigSeedPath() string {
+	root := strings.TrimSpace(os.Getenv("HELMSMAN_STATE_DIR"))
+	if root == "" {
+		return ""
+	}
+	return filepath.Join(root, persistedConfigSeedFilename)
+}
+
+func persistConfigSeed(seed *ipcpb.ConfigSeed) error {
+	path := persistedConfigSeedPath()
+	if path == "" || seed == nil {
+		return nil
+	}
+	if seed.GetNodeId() == "" || seed.GetSeedVersion() == 0 {
+		return errors.New("durable ConfigSeed requires node identity and positive version")
+	}
+	encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(seed)
+	if err != nil {
+		return fmt.Errorf("encode ConfigSeed: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create ConfigSeed directory: %w", err)
+	}
+	if err := atomicWriteFile(path, encoded, 0o600); err != nil {
+		return fmt.Errorf("persist ConfigSeed: %w", err)
+	}
+	return nil
+}
+
+func loadPersistedConfigSeed() (*ipcpb.ConfigSeed, error) {
+	path := persistedConfigSeedPath()
+	if path == "" {
+		return nil, nil
+	}
+	encoded, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read ConfigSeed: %w", err)
+	}
+	seed := &ipcpb.ConfigSeed{}
+	if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(encoded, seed); err != nil {
+		return nil, fmt.Errorf("decode ConfigSeed: %w", err)
+	}
+	if seed.GetNodeId() == "" || seed.GetSeedVersion() == 0 {
+		return nil, errors.New("persisted ConfigSeed is missing node identity or version")
+	}
+	if expected := strings.TrimSpace(os.Getenv("NODE_ID")); expected != "" && seed.GetNodeId() != expected {
+		return nil, fmt.Errorf("persisted ConfigSeed belongs to node %q, expected %q", seed.GetNodeId(), expected)
+	}
+	return seed, nil
 }
 
 // ApplyBalancerCapability rotates the source-lookup capability embedded in
@@ -127,10 +240,10 @@ func ApplySeed(seed *ipcpb.ConfigSeed, sender ApplySeedSender) {
 // reconcile, which includes TLS files, Caddy, protocols, baseline config, and
 // a complete Mist backup/save cycle unrelated to capability rotation.
 func ApplyBalancerCapability(update *ipcpb.BalancerCapabilityUpdate) {
-	if manager == nil || update == nil || strings.TrimSpace(update.GetFoghornBalancerBase()) == "" {
+	if manager == nil || update == nil || strings.TrimSpace(update.GetFoghornBalancerBase()) == "" || update.GetSeedVersion() == 0 {
 		return
 	}
-	go manager.applyBalancerCapability(update)
+	go manager.applyBalancerCapability(proto.CloneOf(update))
 }
 
 func (m *Manager) applyBalancerCapability(update *ipcpb.BalancerCapabilityUpdate) {
@@ -142,9 +255,20 @@ func (m *Manager) applyBalancerCapability(update *ipcpb.BalancerCapabilityUpdate
 		m.mu.Unlock()
 		return
 	}
+	if update.GetSeedVersion() <= m.lastSeed.GetSeedVersion() {
+		m.mu.Unlock()
+		return
+	}
 	seed := &ipcpb.ConfigSeed{}
 	proto.Merge(seed, m.lastSeed)
 	seed.FoghornBalancerBase = strings.TrimSpace(update.GetFoghornBalancerBase())
+	seed.SeedVersion = update.GetSeedVersion()
+	m.mu.Unlock()
+	if err := persistConfigSeed(seed); err != nil {
+		m.logger.WithError(err).WithFields(logging.Fields{"node_id": update.GetNodeId(), "seed_version": update.GetSeedVersion()}).Error("Refusing balancer capability update that was not persisted")
+		return
+	}
+	m.mu.Lock()
 	m.lastSeed = seed
 	m.mu.Unlock()
 
@@ -159,6 +283,21 @@ func (m *Manager) applyBalancerCapability(update *ipcpb.BalancerCapabilityUpdate
 	if err := m.mistClient.Save(); err != nil {
 		m.logger.WithError(err).Warn("Mist balancer capability refresh save failed")
 	}
+}
+
+// CurrentSeedVersion returns the highest durable configuration version known
+// locally. It is included in Register so Foghorn can reason about restarts
+// without guessing from connection lifetime.
+func CurrentSeedVersion() uint64 {
+	if manager == nil {
+		return 0
+	}
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.lastSeed == nil {
+		return 0
+	}
+	return manager.lastSeed.GetSeedVersion()
 }
 
 // GetTenantID returns the tenant_id from the last applied ConfigSeed
@@ -644,6 +783,7 @@ func (m *Manager) applyCABundle(bundle []byte) bool {
 // bundleApplyResult records the per-bundle outcome of applyTLSBundles.
 type bundleApplyResult struct {
 	BundleID string
+	Version  string
 	Success  bool
 	Err      string
 }
@@ -663,6 +803,7 @@ func (m *Manager) applyTLSBundles(bundles []*ipcpb.TLSCertBundle) (bool, []bundl
 		for _, b := range bundles {
 			results = append(results, bundleApplyResult{
 				BundleID: b.GetBundleId(),
+				Version:  b.GetVersion(),
 				Success:  false,
 				Err:      "create bundle dir: " + err.Error(),
 			})
@@ -679,6 +820,7 @@ func (m *Manager) applyTLSBundles(bundles []*ipcpb.TLSCertBundle) (bool, []bundl
 		if bundleID == "" {
 			results = append(results, bundleApplyResult{
 				BundleID: "",
+				Version:  bundle.GetVersion(),
 				Success:  false,
 				Err:      "empty bundle_id",
 			})
@@ -692,6 +834,7 @@ func (m *Manager) applyTLSBundles(bundles []*ipcpb.TLSCertBundle) (bool, []bundl
 		if err != nil {
 			results = append(results, bundleApplyResult{
 				BundleID: bundleID,
+				Version:  bundle.GetVersion(),
 				Success:  false,
 				Err:      err.Error(),
 			})
@@ -705,7 +848,7 @@ func (m *Manager) applyTLSBundles(bundles []*ipcpb.TLSCertBundle) (bool, []bundl
 				"expires_at": bundle.GetExpiresAt(),
 			}).Info("Applied TLS bundle from ConfigSeed")
 		}
-		results = append(results, bundleApplyResult{BundleID: bundleID, Success: true})
+		results = append(results, bundleApplyResult{BundleID: bundleID, Version: bundle.GetVersion(), Success: true})
 	}
 
 	// Clean up files for bundles no longer in the seed.
@@ -785,24 +928,23 @@ func (m *Manager) removeAllBundleFiles() {
 
 // sendApplyResultLocked composes a ConfigSeedApplyResult from per-bundle
 // results and the Caddy reload outcome, and dispatches via the sender.
-// Only sends once per seed_version (idempotent on retries).
-func (m *Manager) sendApplyResultLocked(seed *ipcpb.ConfigSeed, results []bundleApplyResult, caddyOK bool, sender func(*ipcpb.ControlMessage)) {
+// Results send once per outcome transition at a seed version. Equal-version
+// success-to-failure withdraws DNS eligibility; failure-to-success makes the
+// recovered edge eligible for publication again.
+func (m *Manager) sendApplyResultLocked(seed *ipcpb.ConfigSeed, results []bundleApplyResult, caddyOK bool, sender ApplySeedSender) {
 	if sender == nil {
 		return
 	}
-	m.mu.Lock()
-	if seed.GetSeedVersion() <= m.lastAckedSeedVer {
-		m.mu.Unlock()
-		return
-	}
-	m.lastAckedSeedVer = seed.GetSeedVersion()
-	m.mu.Unlock()
 
 	applied := make([]string, 0, len(results))
 	failed := make([]string, 0)
+	bundleVersions := make(map[string]string, len(results))
 	var firstErr string
 	allOK := true
 	for _, r := range results {
+		if r.BundleID != "" && r.Version != "" {
+			bundleVersions[r.BundleID] = r.Version
+		}
 		if r.Success {
 			applied = append(applied, r.BundleID)
 		} else {
@@ -826,6 +968,32 @@ func (m *Manager) sendApplyResultLocked(seed *ipcpb.ConfigSeed, results []bundle
 		failed = append(failed, applied...)
 		applied = applied[:0]
 	}
+	sort.Strings(applied)
+	sort.Strings(failed)
+	resultSum := applyResultSignature(allOK, applied, failed, bundleVersions)
+
+	m.mu.Lock()
+	if seed.GetSeedVersion() < m.lastAckedSeedVer {
+		m.mu.Unlock()
+		return
+	}
+	if seed.GetSeedVersion() == m.lastAckedSeedVer && resultSum == m.lastAckedSeedSum {
+		// A not-yet-accepted opposite outcome is now stale: Foghorn still has
+		// the same state we just observed, so allowing its retry to land later
+		// would manufacture a demotion or recovery that is no longer true.
+		if m.pendingApplyAck != nil && m.pendingApplyAck.GetConfigSeedApplyResult().GetSeedVersion() <= seed.GetSeedVersion() {
+			if m.ackRetryTimer != nil {
+				m.ackRetryTimer.Stop()
+			}
+			m.ackRetryTimer = nil
+			m.ackRetryAttempt = 0
+			m.pendingApplyAck = nil
+			m.pendingAckSender = nil
+		}
+		m.mu.Unlock()
+		return
+	}
+	m.mu.Unlock()
 
 	ack := &ipcpb.ConfigSeedApplyResult{
 		NodeId:           seed.GetNodeId(),
@@ -835,12 +1003,113 @@ func (m *Manager) sendApplyResultLocked(seed *ipcpb.ConfigSeed, results []bundle
 		Success:          allOK,
 		Error:            firstErr,
 		AppliedAt:        timestamppb.Now(),
+		BundleVersions:   bundleVersions,
 	}
-	sender(&ipcpb.ControlMessage{
+	msg := &ipcpb.ControlMessage{
 		SentAt: timestamppb.Now(),
 		Payload: &ipcpb.ControlMessage_ConfigSeedApplyResult{
 			ConfigSeedApplyResult: ack,
 		},
+	}
+	m.queueApplyResult(msg, sender)
+}
+
+func (m *Manager) queueApplyResult(msg *ipcpb.ControlMessage, sender ApplySeedSender) {
+	m.mu.Lock()
+	if m.ackRetryTimer != nil {
+		m.ackRetryTimer.Stop()
+		m.ackRetryTimer = nil
+	}
+	m.ackRetryAttempt = 0
+	m.pendingApplyAck = msg
+	m.pendingAckSender = sender
+	m.mu.Unlock()
+	go m.deliverApplyResult(msg, sender)
+}
+
+func (m *Manager) deliverApplyResult(msg *ipcpb.ControlMessage, sender ApplySeedSender) {
+	result := msg.GetConfigSeedApplyResult()
+	if result == nil || sender == nil {
+		return
+	}
+	m.ackDeliveryMu.Lock()
+	defer m.ackDeliveryMu.Unlock()
+
+	// A retry can already be waiting to deliver when reconciliation observes a
+	// newer outcome at the same seed version. Recheck after serializing delivery
+	// so the durable outbox cannot record the replacement before the stale row.
+	m.mu.Lock()
+	current := m.pendingApplyAck == msg
+	m.mu.Unlock()
+	if !current {
+		return
+	}
+	if err := sender(msg); err != nil {
+		m.logger.WithError(err).WithField("seed_version", result.GetSeedVersion()).Warn("Config seed apply result was not durably accepted")
+		m.mu.Lock()
+		if m.pendingApplyAck == msg {
+			m.scheduleApplyResultRetryLocked()
+		}
+		m.mu.Unlock()
+		return
+	}
+
+	m.mu.Lock()
+	if result.GetSeedVersion() >= m.lastAckedSeedVer {
+		m.lastAckedSeedVer = result.GetSeedVersion()
+		m.lastAckedSeedSum = applyResultSignature(result.GetSuccess(), result.GetAppliedBundleIds(), result.GetFailedBundleIds(), result.GetBundleVersions())
+	}
+	if m.pendingApplyAck == msg {
+		if m.ackRetryTimer != nil {
+			m.ackRetryTimer.Stop()
+		}
+		m.ackRetryTimer = nil
+		m.ackRetryAttempt = 0
+		m.pendingApplyAck = nil
+		m.pendingAckSender = nil
+	}
+	m.mu.Unlock()
+}
+
+func applyResultSignature(success bool, applied, failed []string, versions map[string]string) string {
+	appliedCopy := append([]string(nil), applied...)
+	failedCopy := append([]string(nil), failed...)
+	sort.Strings(appliedCopy)
+	sort.Strings(failedCopy)
+	versionKeys := make([]string, 0, len(versions))
+	for bundleID := range versions {
+		versionKeys = append(versionKeys, bundleID)
+	}
+	sort.Strings(versionKeys)
+	versionPairs := make([]string, 0, len(versionKeys))
+	for _, bundleID := range versionKeys {
+		versionPairs = append(versionPairs, bundleID+"\x00"+versions[bundleID])
+	}
+	return fmt.Sprintf("%t\x02%s\x01%s\x03%s", success, strings.Join(appliedCopy, "\x00"), strings.Join(failedCopy, "\x00"), strings.Join(versionPairs, "\x01"))
+}
+
+func (m *Manager) scheduleApplyResultRetryLocked() {
+	if m.pendingApplyAck == nil || m.pendingAckSender == nil || m.ackRetryTimer != nil {
+		return
+	}
+	m.ackRetryAttempt++
+	delay := time.Second << min(m.ackRetryAttempt-1, 5)
+	if delay > maxReconcileRetryDelay {
+		delay = maxReconcileRetryDelay
+	}
+	m.logger.WithFields(logging.Fields{
+		"attempt":  m.ackRetryAttempt,
+		"delay_ms": delay.Milliseconds(),
+	}).Info("Scheduled config seed apply result retry")
+	m.ackRetryTimer = time.AfterFunc(delay, func() {
+		m.mu.Lock()
+		m.ackRetryTimer = nil
+		msg := m.pendingApplyAck
+		sender := m.pendingAckSender
+		m.mu.Unlock()
+		if msg != nil && sender != nil {
+			m.deliverApplyResult(msg, sender)
+		}
 	})
 }
 
@@ -1651,15 +1920,15 @@ func (m *Manager) repairMissingManagedStreams(seed *ipcpb.ConfigSeed) error {
 	if err != nil {
 		return fmt.Errorf("config backup: %w", err)
 	}
-	missing := missingManagedStreams(current, expected)
-	if len(missing) == 0 {
+	drifted := missingManagedStreams(current, expected)
+	if len(drifted) == 0 {
 		return nil
 	}
 
 	m.logger.WithFields(logging.Fields{
-		"missing": missing,
-		"count":   len(missing),
-	}).Warn("Mist config missing managed stream templates; repairing")
+		"drifted": drifted,
+		"count":   len(drifted),
+	}).Warn("Mist managed stream templates drifted; repairing")
 	if addErr := m.mistClient.AddStreams(expected); addErr != nil {
 		return fmt.Errorf("add managed streams: %w", addErr)
 	}
@@ -1785,13 +2054,45 @@ func missingManagedStreams(current map[string]any, expected map[string]map[strin
 		rawStreams = map[string]any{}
 	}
 	missing := make([]string, 0, len(expected))
-	for name := range expected {
-		if _, ok := rawStreams[name]; !ok {
+	for name, desired := range expected {
+		currentStream, ok := rawStreams[name]
+		if !ok || !managedStreamDefinitionMatches(currentStream, desired) {
 			missing = append(missing, name)
 		}
 	}
 	sort.Strings(missing)
 	return missing
+}
+
+func managedStreamDefinitionMatches(current any, desired map[string]any) bool {
+	normalize := func(value any) map[string]any {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return nil
+		}
+		var normalized map[string]any
+		if err := json.Unmarshal(encoded, &normalized); err != nil {
+			return nil
+		}
+		return normalized
+	}
+	got, want := normalize(current), normalize(desired)
+	if got == nil || want == nil {
+		return false
+	}
+	for key, wantValue := range want {
+		gotValue, present := got[key]
+		if !present {
+			if wantValue == nil || reflect.ValueOf(wantValue).IsZero() {
+				continue
+			}
+			return false
+		}
+		if !reflect.DeepEqual(gotValue, wantValue) {
+			return false
+		}
+	}
+	return true
 }
 
 func isStaleManagedWildcardStream(name string) bool {
@@ -1840,9 +2141,9 @@ func hashSeed(seed *ipcpb.ConfigSeed) string {
 }
 
 func atomicWriteFile(path string, content []byte, mode os.FileMode) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".frameworks-*")
-	if err != nil {
-		return err
+	tmp, createErr := os.CreateTemp(filepath.Dir(path), ".frameworks-*")
+	if createErr != nil {
+		return createErr
 	}
 	tmpPath := tmp.Name()
 	cleanup := true
@@ -1851,23 +2152,34 @@ func atomicWriteFile(path string, content []byte, mode os.FileMode) error {
 			_ = os.Remove(tmpPath)
 		}
 	}()
-	if _, err := tmp.Write(content); err != nil {
+	if _, writeErr := tmp.Write(content); writeErr != nil {
 		_ = tmp.Close()
-		return err
+		return writeErr
 	}
-	if err := tmp.Chmod(mode); err != nil {
+	if chmodErr := tmp.Chmod(mode); chmodErr != nil {
 		_ = tmp.Close()
-		return err
+		return chmodErr
 	}
-	if err := tmp.Sync(); err != nil {
+	if syncErr := tmp.Sync(); syncErr != nil {
 		_ = tmp.Close()
-		return err
+		return syncErr
 	}
-	if err := tmp.Close(); err != nil {
-		return err
+	if closeErr := tmp.Close(); closeErr != nil {
+		return closeErr
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		return err
+	if renameErr := os.Rename(tmpPath, path); renameErr != nil {
+		return renameErr
+	}
+	dir, openErr := os.Open(filepath.Dir(path))
+	if openErr != nil {
+		return fmt.Errorf("open parent directory after atomic rename: %w", openErr)
+	}
+	if syncErr := dir.Sync(); syncErr != nil {
+		_ = dir.Close()
+		return fmt.Errorf("sync parent directory after atomic rename: %w", syncErr)
+	}
+	if closeErr := dir.Close(); closeErr != nil {
+		return fmt.Errorf("close parent directory after atomic rename: %w", closeErr)
 	}
 	cleanup = false
 	return nil

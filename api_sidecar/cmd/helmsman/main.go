@@ -46,6 +46,9 @@ func main() {
 
 	// Load configuration
 	cfg := sidecarconfig.LoadHelmsmanConfig()
+	if strings.TrimSpace(cfg.StateDir) == "" {
+		logger.Fatal("HELMSMAN_STATE_DIR is required for durable node identity and media-control state")
+	}
 
 	logger.Info("Starting FrameWorks Helmsman (Edge Sidecar)")
 
@@ -92,6 +95,20 @@ func main() {
 		// cleanup disabled until rehydration + first successful Mist
 		// reconciliation completes.
 		handlers.InitLeases(logger, cfg.StorageLocalPath)
+
+		// Rebuild the local DVR job map from local disk + local Mist without
+		// waiting for Foghorn. Ledger reconciliation remains connection-bound
+		// below, but media-process recovery is a cell-local startup invariant.
+		go func() {
+			for {
+				if err := control.RecoverActiveDVRJobsFromMist(cfg.StorageLocalPath, logger); err == nil {
+					return
+				} else {
+					logger.WithError(err).Warn("Active DVR recovery from local Mist failed; retrying")
+				}
+				time.Sleep(5 * time.Second)
+			}
+		}()
 	}
 
 	var restoreMu sync.Mutex
@@ -106,9 +123,6 @@ func main() {
 		defer cancel()
 		if err := idx.RestoreFromDisk(ctx, cfg.StorageLocalPath); err != nil {
 			logger.WithError(err).Warn("Local segment index restore-from-disk failed")
-		}
-		if err := control.RecoverActiveDVRJobsFromMist(cfg.StorageLocalPath, logger); err != nil {
-			logger.WithError(err).Warn("Active DVR recovery from Mist push list failed")
 		}
 		// Bring the segment ledger and on-disk inventory into agreement:
 		// detect missing-pre-upload files (-> lost_local), heal reappeared

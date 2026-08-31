@@ -410,11 +410,8 @@ func (h *Handlers) deleteClipImmediate(clipHash string) (uint64, error) {
 
 	// Remove from artifact index if prometheus monitor is available — only on
 	// full success; partial deletes keep the entry so cleanup can still see it.
-	if !leaseHeld && prometheusMonitor != nil {
-		prometheusMonitor.mutex.Lock()
-		delete(prometheusMonitor.artifactIndex, clipHash)
-		artifactMutationGen.Add(1) // point mutation — invalidate any in-flight scan's publish
-		prometheusMonitor.mutex.Unlock()
+	if !leaseHeld {
+		forgetArtifact(clipHash)
 	}
 
 	logger.WithFields(logging.Fields{
@@ -461,6 +458,7 @@ func (h *Handlers) deleteDVRImmediate(dvrHash string) (uint64, error) {
 	manifestMatches, _ := filepath.Glob(manifestPattern)
 
 	if len(manifestMatches) == 0 {
+		forgetArtifact(dvrHash)
 		logger.WithField("dvr_hash", dvrHash).Debug("No DVR files found to delete")
 		return 0, nil
 	}
@@ -510,6 +508,7 @@ func (h *Handlers) deleteDVRImmediate(dvrHash string) (uint64, error) {
 		"dvr_hash":   dvrHash,
 		"total_size": totalSize,
 	}).Info("DVR recording deleted")
+	forgetArtifact(dvrHash)
 
 	return totalSize, nil
 }
@@ -622,11 +621,8 @@ func (h *Handlers) deleteVODImmediate(vodHash string) (uint64, error) {
 		}).Debug("Deleted VOD file")
 	}
 
-	if !leaseHeld && prometheusMonitor != nil {
-		prometheusMonitor.mutex.Lock()
-		delete(prometheusMonitor.artifactIndex, vodHash)
-		artifactMutationGen.Add(1) // point mutation — invalidate any in-flight scan's publish
-		prometheusMonitor.mutex.Unlock()
+	if !leaseHeld {
+		forgetArtifact(vodHash)
 	}
 
 	logger.WithFields(logging.Fields{

@@ -611,6 +611,13 @@ func TestEvictClipVodCandidates_UncataloguedSkipsFreeze(t *testing.T) {
 func TestEvictClipVodCandidates_SyncedCandidateDeletedAndCounted(t *testing.T) {
 	sm := newTestStorageManager(t)
 	sm.presignedClient = &fakePresignedClient{}
+	oldMonitor := prometheusMonitor
+	prometheusMonitor = &PrometheusMonitor{
+		artifactIndex:        map[string]*ClipInfo{"hash-synced": {FilePath: "stale"}},
+		artifactIndexTrusted: true,
+		artifactScanHealthy:  true,
+	}
+	t.Cleanup(func() { prometheusMonitor = oldMonitor })
 
 	sm.requestCanDelete = func(_ context.Context, _ string) (bool, string, int64, error) {
 		return true, "remote_synced", 1234, nil
@@ -657,6 +664,15 @@ func TestEvictClipVodCandidates_SyncedCandidateDeletedAndCounted(t *testing.T) {
 	}
 	if _, err := os.Stat(clipPath + ".gop"); !os.IsNotExist(err) {
 		t.Fatalf("expected .gop sidecar deleted, stat err: %v", err)
+	}
+	artifacts, _, _, incomplete := captureArtifactSnapshot()
+	if incomplete {
+		t.Fatal("trusted post-eviction artifact snapshot was unexpectedly incomplete")
+	}
+	for _, artifact := range artifacts {
+		if artifact.GetClipHash() == "hash-synced" {
+			t.Fatalf("evicted artifact remained in the next inventory snapshot: %+v", artifact)
+		}
 	}
 }
 

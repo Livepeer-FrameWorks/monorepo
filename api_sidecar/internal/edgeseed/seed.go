@@ -243,6 +243,7 @@ func ensureLayout(fw, caddyIDs ids) error {
 		{path: "/var/lib/caddy", uid: caddyIDs.uid, gid: caddyIDs.gid, mode: 0o750},
 		{path: "/run/caddy", uid: caddyIDs.uid, gid: caddyIDs.gid, mode: 0o770},
 		{path: "/data/storage", uid: fw.uid, gid: fw.gid, mode: 0o750},
+		{path: "/data/state", uid: fw.uid, gid: fw.gid, mode: 0o700},
 	}
 	for _, spec := range specs {
 		// Chown BEFORE tightening the mode: on optional bind mounts

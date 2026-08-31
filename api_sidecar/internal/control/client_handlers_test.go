@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -15,7 +16,9 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func TestHandleDesiredStateUpdateQueuesResultOnSendFailure(t *testing.T) {
+func TestHandleDesiredStateUpdatePersistsResultOnSendFailure(t *testing.T) {
+	outboxDir := t.TempDir()
+	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", outboxDir)
 	outboxMu.Lock()
 	outbox = nil
 	outboxMu.Unlock()
@@ -32,17 +35,12 @@ func TestHandleDesiredStateUpdateQueuesResultOnSendFailure(t *testing.T) {
 		return errors.New("stream closed")
 	})
 
-	outboxMu.Lock()
-	defer outboxMu.Unlock()
-	if len(outbox) != 1 {
-		t.Fatalf("outbox length = %d, want 1", len(outbox))
+	files, err := filepath.Glob(filepath.Join(outboxDir, "*.pb"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	result := outbox[0].GetUpdateApplyResult()
-	if result == nil {
-		t.Fatal("queued message has no UpdateApplyResult payload")
-	}
-	if result.GetNodeId() != "node-1" || result.GetTargetRelease() != "stable:v1" {
-		t.Fatalf("queued result = node %q target %q", result.GetNodeId(), result.GetTargetRelease())
+	if len(files) != 1 {
+		t.Fatalf("durable outbox files = %d, want 1", len(files))
 	}
 }
 

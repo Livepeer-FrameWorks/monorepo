@@ -45,6 +45,17 @@ func (m *recordingMistAPI) DeleteProtocols([]map[string]interface{}) error {
 
 func (m *recordingMistAPI) AddStreams(streams map[string]map[string]interface{}) error {
 	m.addedStreams = append(m.addedStreams, streams)
+	if m.backupResult == nil {
+		m.backupResult = map[string]interface{}{}
+	}
+	current, _ := m.backupResult["streams"].(map[string]interface{})
+	if current == nil {
+		current = map[string]interface{}{}
+		m.backupResult["streams"] = current
+	}
+	for name, definition := range streams {
+		current[name] = definition
+	}
 	return nil
 }
 

@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -68,9 +70,261 @@ func TestCleanupProcessingStagePathRemovesDerivedSidecars(t *testing.T) {
 	}
 }
 
+func isolateProcessingOverrideState(t *testing.T) {
+	t.Helper()
+	processingProcessOverridesMu.Lock()
+	previousOverrides := processingProcessOverrides
+	previousRecords := processingOverrideRecords
+	previousDir := processingOverrideStateDir
+	previousLogger := processingOverrideLogger
+	processingProcessOverrides = map[string]string{}
+	processingOverrideRecords = map[string]processingOverrideRecord{}
+	processingOverrideStateDir = ""
+	processingOverrideLogger = nil
+	processingProcessOverridesMu.Unlock()
+	t.Cleanup(func() {
+		processingProcessOverridesMu.Lock()
+		processingProcessOverrides = previousOverrides
+		processingOverrideRecords = previousRecords
+		processingOverrideStateDir = previousDir
+		processingOverrideLogger = previousLogger
+		processingProcessOverridesMu.Unlock()
+	})
+}
+
+func TestProcessingOverrideSurvivesHandlerRestart(t *testing.T) {
+	isolateProcessingOverrideState(t)
+
+	stateDir := t.TempDir()
+	logger := logrus.New()
+	_ = NewProcessingJobHandler(logger, "", t.TempDir(), stateDir)
+	const streamName = "processing+restart-proof"
+	const processesJSON = `[{"process":"AV","codec":"H264"}]`
+	if err := setProcessingProcessOverride(streamName, processesJSON, "job-restart-proof", time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("persist processing override: %v", err)
+	}
+
+	processingProcessOverridesMu.Lock()
+	processingProcessOverrides = map[string]string{}
+	processingProcessOverridesMu.Unlock()
+	_ = NewProcessingJobHandler(logger, "", t.TempDir(), stateDir)
+
+	got, ok := getProcessingProcessOverride(streamName)
+	if !ok || got != processesJSON {
+		t.Fatalf("restored override = %q, %v; want %q, true", got, ok, processesJSON)
+	}
+	clearProcessingProcessOverride(streamName)
+}
+
+func TestProcessingOverrideCleanupIsOwnerFenced(t *testing.T) {
+	isolateProcessingOverrideState(t)
+	stateDir := t.TempDir()
+	_ = NewProcessingJobHandler(logrus.New(), "", t.TempDir(), stateDir)
+	const streamName = "processing+owner-fence"
+	const processesJSON = `[{"process":"AV","codec":"H264"}]`
+	if err := setProcessingProcessOverride(streamName, processesJSON, "new-job", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	clearProcessingProcessOverride(streamName, "old-job")
+	if got, ok := getProcessingProcessOverride(streamName); !ok || got != processesJSON {
+		t.Fatalf("stale cleanup removed successor override: got %q ok:%v", got, ok)
+	}
+	overridePath := processingOverridePath(filepath.Join(stateDir, "processing-overrides"), streamName)
+	if _, err := os.Stat(overridePath); err != nil {
+		t.Fatalf("stale cleanup removed durable successor override: %v", err)
+	}
+	processingProcessOverridesMu.Lock()
+	processingProcessOverrides = map[string]string{}
+	processingOverrideRecords = map[string]processingOverrideRecord{}
+	processingProcessOverridesMu.Unlock()
+	clearProcessingProcessOverride(streamName, "old-job")
+	if _, err := os.Stat(overridePath); err != nil {
+		t.Fatalf("stale cleanup removed durable successor without memory state: %v", err)
+	}
+	_ = NewProcessingJobHandler(logrus.New(), "", t.TempDir(), stateDir)
+	if got, ok := getProcessingProcessOverride(streamName); !ok || got != processesJSON {
+		t.Fatalf("durable successor was not restored after fenced cleanup: got %q ok:%v", got, ok)
+	}
+	clearProcessingProcessOverride(streamName, "new-job")
+	if _, ok := getProcessingProcessOverride(streamName); ok {
+		t.Fatal("owner cleanup left override installed")
+	}
+	if _, err := os.Stat(overridePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("owner cleanup left durable override: %v", err)
+	}
+}
+
+func TestProcessingOverrideExpiryPreservesPendingJob(t *testing.T) {
+	isolateProcessingOverrideState(t)
+	stateDir := t.TempDir()
+	_ = NewProcessingJobHandler(logrus.New(), "", t.TempDir(), stateDir)
+	const streamName = "processing+pending-expired-policy"
+	const jobID = "job-pending"
+	if err := setProcessingProcessOverride(streamName, "[]", jobID, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	processingProcessOverridesMu.Lock()
+	record := processingOverrideRecords[streamName]
+	record.ExpiresAt = time.Now().Add(-time.Minute)
+	processingOverrideRecords[streamName] = record
+	processingProcessOverridesMu.Unlock()
+	encoded, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(processingOverridePath(filepath.Join(stateDir, "processing-overrides"), streamName), encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, claimed := claimPendingJob(streamName, jobID); !claimed {
+		t.Fatal("claim pending processing job")
+	}
+	t.Cleanup(func() { releasePendingJob(streamName, jobID) })
+
+	reconcileExpiredProcessingOverrides(map[string]interface{}{}, time.Now())
+	if _, ok := getProcessingProcessOverride(streamName); !ok {
+		t.Fatal("expiry reconciliation removed the policy of a pending job")
+	}
+
+	releasePendingJob(streamName, jobID)
+	reconcileExpiredProcessingOverrides(map[string]interface{}{}, time.Now())
+	if _, ok := getProcessingProcessOverride(streamName); ok {
+		t.Fatal("expiry reconciliation retained an inactive expired policy")
+	}
+}
+
+func TestProcessingOverrideSetterRecordExpiresThroughRealReconciler(t *testing.T) {
+	isolateProcessingOverrideState(t)
+	stateDir := t.TempDir()
+	_ = NewProcessingJobHandler(logrus.New(), "", t.TempDir(), stateDir)
+	const streamName = "processing+setter-expiry"
+	expiresAt := time.Now().Add(time.Minute)
+	if err := setProcessingProcessOverride(streamName, `[{"process":"AV"}]`, "job-expired", expiresAt); err != nil {
+		t.Fatal(err)
+	}
+
+	path := processingOverridePath(filepath.Join(stateDir, "processing-overrides"), streamName)
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("setter did not persist override: %v", err)
+	}
+	reconcileExpiredProcessingOverrides(map[string]interface{}{}, expiresAt.Add(time.Second))
+	if _, ok := getProcessingProcessOverride(streamName); ok {
+		t.Fatal("real setter record survived expiry reconciliation")
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("real setter record remained on disk after expiry: %v", err)
+	}
+}
+
+func TestProcessingOverrideExpiryCannotDeleteReplacement(t *testing.T) {
+	isolateProcessingOverrideState(t)
+	stateDir := t.TempDir()
+	_ = NewProcessingJobHandler(logrus.New(), "", t.TempDir(), stateDir)
+	const streamName = "processing+expiry-replacement"
+	if err := setProcessingProcessOverride(streamName, `[{"process":"old"}]`, "old-job", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	processingProcessOverridesMu.Lock()
+	expected := processingOverrideRecords[streamName]
+	expected.ExpiresAt = time.Now().Add(-time.Minute)
+	processingOverrideRecords[streamName] = expected
+	processingProcessOverridesMu.Unlock()
+	encoded, err := json.Marshal(expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := processingOverridePath(filepath.Join(stateDir, "processing-overrides"), streamName)
+	if err := os.WriteFile(path, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	const replacement = `[{"process":"new"}]`
+	if err := setProcessingProcessOverride(streamName, replacement, "new-job", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	clearExpiredProcessingProcessOverride(streamName, expected, time.Now())
+	if got, ok := getProcessingProcessOverride(streamName); !ok || got != replacement {
+		t.Fatalf("stale expiry cleanup removed replacement: got %q ok:%v", got, ok)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("stale expiry cleanup removed durable replacement: %v", err)
+	}
+}
+
+func TestProcessingOverrideRestoreIsolatesCorruptRecords(t *testing.T) {
+	isolateProcessingOverrideState(t)
+	stateDir := t.TempDir()
+	logger := logrus.New()
+	_ = NewProcessingJobHandler(logger, "", t.TempDir(), stateDir)
+	const streamName = "processing+valid"
+	const processesJSON = `[{"process":"AV","codec":"H264"}]`
+	if err := setProcessingProcessOverride(streamName, processesJSON, "job-valid", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	corruptPath := filepath.Join(stateDir, "processing-overrides", "corrupt.json")
+	if err := os.WriteFile(corruptPath, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	interruptedPath := filepath.Join(stateDir, "processing-overrides", ".processing-override-interrupted")
+	if err := os.WriteFile(interruptedPath, []byte("partial"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	processingProcessOverridesMu.Lock()
+	processingProcessOverrides = map[string]string{}
+	processingOverrideRecords = map[string]processingOverrideRecord{}
+	processingProcessOverridesMu.Unlock()
+	_ = NewProcessingJobHandler(logger, "", t.TempDir(), stateDir)
+	if got, ok := getProcessingProcessOverride(streamName); !ok || got != processesJSON {
+		t.Fatalf("valid record was lost after corrupt neighbor: %q, %v", got, ok)
+	}
+	if _, err := os.Stat(corruptPath); !os.IsNotExist(err) {
+		t.Fatalf("corrupt record was not quarantined: %v", err)
+	}
+	if _, err := os.Stat(interruptedPath); !os.IsNotExist(err) {
+		t.Fatalf("interrupted override write was not removed: %v", err)
+	}
+}
+
+func TestProcessingOverrideExpiryWaitsForMistOwnershipReconciliation(t *testing.T) {
+	isolateProcessingOverrideState(t)
+	stateDir := t.TempDir()
+	logger := logrus.New()
+	_ = NewProcessingJobHandler(logger, "", t.TempDir(), stateDir)
+	const streamName = "processing+still-running"
+	if err := setProcessingProcessOverride(streamName, "[]", "job-live", time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	expired := processingOverrideRecord{
+		Version: 1, StreamName: streamName, ProcessesJSON: "[]", JobID: "job-live",
+		CreatedAt: time.Now().Add(-2 * time.Hour), ExpiresAt: time.Now().Add(-time.Minute),
+	}
+	encoded, err := json.Marshal(expired)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(processingOverridePath(filepath.Join(stateDir, "processing-overrides"), streamName), encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	processingProcessOverridesMu.Lock()
+	processingProcessOverrides = map[string]string{}
+	processingOverrideRecords = map[string]processingOverrideRecord{}
+	processingProcessOverridesMu.Unlock()
+	_ = NewProcessingJobHandler(logger, "", t.TempDir(), stateDir)
+	if _, ok := getProcessingProcessOverride(streamName); !ok {
+		t.Fatal("expired owned policy was deleted before Mist ownership could be checked")
+	}
+	reconcileExpiredProcessingOverrides(map[string]interface{}{streamName: map[string]interface{}{}}, time.Now())
+	if _, ok := getProcessingProcessOverride(streamName); !ok {
+		t.Fatal("active Mist processing policy was deleted")
+	}
+	reconcileExpiredProcessingOverrides(map[string]interface{}{}, time.Now())
+	if _, ok := getProcessingProcessOverride(streamName); ok {
+		t.Fatal("inactive expired processing policy was retained")
+	}
+}
+
 func TestChapterFinalizeCleansProcessingStageOnBuildFailure(t *testing.T) {
 	dir := t.TempDir()
-	h := NewProcessingJobHandler(logrus.New(), "", dir)
+	h := NewProcessingJobHandler(logrus.New(), "", dir, dir)
 	req := &ipcpb.ProcessingJobRequest{
 		JobId:        "job-1",
 		ArtifactHash: "chapter-fail",
@@ -1118,7 +1372,7 @@ func TestWaitForProcessingStreamReadyReturnsLivepeerFallbackOnBootExit(t *testin
 		Reason:      "too many upload failures",
 	}
 
-	_, _, err := h.waitForProcessingStreamReady(logrus.NewEntry(logrus.New()), nil, req, "processing+artifact", req.GetProcessesJson(), processExitCh, nil, nil, map[string]int{})
+	_, _, err := h.waitForProcessingStreamReady(context.Background(), logrus.NewEntry(logrus.New()), nil, req, "processing+artifact", req.GetProcessesJson(), processExitCh, nil, nil, map[string]int{})
 	var fallbackErr *livepeerReadinessFallbackError
 	if !errors.As(err, &fallbackErr) {
 		t.Fatalf("expected livepeer readiness fallback error, got %v", err)
@@ -1353,7 +1607,7 @@ func TestRestartProcessingStreamForLocalFallbackStopsSessionsBeforeDrain(t *test
 	client := &fakeProcessingRuntimeClient{
 		pushes: []mist.PushInfo{{ID: 7, StreamName: streamName}},
 	}
-	h := NewProcessingJobHandler(logrus.New(), "", dir)
+	h := NewProcessingJobHandler(logrus.New(), "", dir, dir)
 
 	if err := h.restartProcessingStreamForLocalFallback(logrus.NewEntry(logrus.New()), client, streamName, outputPath, 99); err != nil {
 		t.Fatalf("restartProcessingStreamForLocalFallback returned error: %v", err)
@@ -1388,7 +1642,7 @@ func TestRestartProcessingStreamForLocalFallbackFallsBackToStreamLookupWhenPushI
 			{ID: 7, StreamName: streamName, TargetURI: processingMuxTargetURI(outputPath)},
 		},
 	}
-	h := NewProcessingJobHandler(logrus.New(), "", dir)
+	h := NewProcessingJobHandler(logrus.New(), "", dir, dir)
 
 	if err := h.restartProcessingStreamForLocalFallback(logrus.NewEntry(logrus.New()), client, streamName, outputPath, 0); err != nil {
 		t.Fatalf("restartProcessingStreamForLocalFallback returned error: %v", err)

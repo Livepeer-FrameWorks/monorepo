@@ -41,19 +41,16 @@ func NewTriggerWAL(dir string) (*TriggerWAL, error) {
 }
 
 // DefaultTriggerWALDir resolves the on-disk directory used by the WAL.
-// Honors FRAMEWORKS_TRIGGER_WAL_DIR, falling back to the edge storage path
-// and finally the user cache dir or /tmp.
+// Honors FRAMEWORKS_TRIGGER_WAL_DIR, falling back only to Helmsman's explicit
+// durable state directory. Media storage and /tmp are not durability bounds.
 func DefaultTriggerWALDir() string {
 	if dir := strings.TrimSpace(os.Getenv("FRAMEWORKS_TRIGGER_WAL_DIR")); dir != "" {
 		return dir
 	}
-	if storagePath := strings.TrimSpace(os.Getenv("HELMSMAN_STORAGE_LOCAL_PATH")); storagePath != "" {
-		return filepath.Join(storagePath, "trigger-wal")
+	if stateDir := strings.TrimSpace(os.Getenv("HELMSMAN_STATE_DIR")); stateDir != "" {
+		return filepath.Join(stateDir, "trigger-wal")
 	}
-	if cacheDir, err := os.UserCacheDir(); err == nil {
-		return filepath.Join(cacheDir, "frameworks", "trigger-wal")
-	}
-	return filepath.Join(os.TempDir(), "frameworks-trigger-wal")
+	return ""
 }
 
 // ComputeSourceEventID derives the stable id for a trigger. Retries from Mist for the

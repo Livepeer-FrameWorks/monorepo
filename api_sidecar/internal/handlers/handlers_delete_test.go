@@ -102,6 +102,11 @@ func TestDeleteClip_EmptyHash(t *testing.T) {
 func TestDeleteDVR_FullDirectory(t *testing.T) {
 	h := setupDeleteHandlers(t)
 	dvrHash := "aabbccddeeff001122"
+	prometheusMonitor = &PrometheusMonitor{
+		artifactIndex:        map[string]*ClipInfo{dvrHash: {FilePath: "stale"}},
+		artifactIndexTrusted: true,
+		artifactScanHealthy:  true,
+	}
 	recordingDir := filepath.Join(h.storagePath, "dvr", "stream-1", dvrHash)
 	segDir := filepath.Join(recordingDir, "segments")
 	if err := os.MkdirAll(segDir, 0o755); err != nil {
@@ -130,6 +135,12 @@ func TestDeleteDVR_FullDirectory(t *testing.T) {
 	}
 	if _, err := os.Stat(recordingDir); !os.IsNotExist(err) {
 		t.Fatal("expected recording directory to be removed")
+	}
+	artifacts, _, _, _ := captureArtifactSnapshot()
+	for _, artifact := range artifacts {
+		if artifact.GetClipHash() == dvrHash {
+			t.Fatalf("deleted DVR remained in the next artifact snapshot: %+v", artifact)
+		}
 	}
 }
 

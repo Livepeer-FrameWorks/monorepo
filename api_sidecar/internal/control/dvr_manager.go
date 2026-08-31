@@ -1221,8 +1221,8 @@ func (dm *DVRManager) adoptExistingDVRJobLocked(dvrHash, internalName, outputDir
 		OutputDir:    outputDir,
 		ManifestPath: manifestPath,
 		SendFunc: func(msg *ipcpb.ControlMessage) {
-			if serr := sendOrEnqueue(msg); serr != nil {
-				dm.logger.WithError(serr).WithField("dvr_hash", dvrHash).Warn("Adopted DVR completion queued for retry")
+			if serr := sendControlMessage(msg); serr != nil {
+				dm.logger.WithError(serr).WithField("dvr_hash", dvrHash).Warn("Adopted DVR report was not delivered immediately")
 			}
 		},
 		Logger:         dm.logger,
@@ -1351,8 +1351,8 @@ func (dm *DVRManager) recoverOneDVRDir(dir localDVRDirectory, pushes []mist.Push
 		ManifestPath:      dir.manifestPath,
 		TargetURI:         push.TargetURI,
 		SendFunc: func(msg *ipcpb.ControlMessage) {
-			if err := sendOrEnqueue(msg); err != nil {
-				logger.WithError(err).WithField("dvr_hash", dir.dvrHash).Warn("Recovered DVR completion queued for retry")
+			if err := sendControlMessage(msg); err != nil {
+				logger.WithError(err).WithField("dvr_hash", dir.dvrHash).Warn("Recovered DVR report was not delivered immediately")
 			}
 		},
 		Logger:         dm.logger,
@@ -1425,7 +1425,11 @@ func scanLocalDVRDirectories(basePath string) ([]localDVRDirectory, error) {
 // path, which has already established via its own PushList that no live push
 // exists). It terminalizes even if the push id is unknown.
 func (dm *DVRManager) StopRecording(dvrHash string) error {
-	return dm.stopRecording(dvrHash, nil, true)
+	return dm.stopRecording(dvrHash, func(msg *ipcpb.ControlMessage) {
+		if err := sendControlMessage(msg); err != nil && !durableControlWasPersisted(err) && dm.logger != nil {
+			dm.logger.WithError(err).WithField("dvr_hash", dvrHash).Warn("Failed to durably accept forced DVR completion")
+		}
+	}, true)
 }
 
 // ConfirmDVRPushStopped stops any live Mist push for dvrHash and reports whether a

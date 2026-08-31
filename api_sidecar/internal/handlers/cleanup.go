@@ -570,13 +570,7 @@ func (cm *CleanupMonitor) cleanupClip(artifact ClipCleanupInfo) error {
 		_ = os.RemoveAll(artifact.FilePath + ".blocks")
 	}
 
-	// Remove from artifact index
-	if prometheusMonitor != nil {
-		prometheusMonitor.mutex.Lock()
-		delete(prometheusMonitor.artifactIndex, artifact.ClipHash)
-		artifactMutationGen.Add(1) // point mutation — invalidate any in-flight scan's publish
-		prometheusMonitor.mutex.Unlock()
-	}
+	forgetArtifact(artifact.ClipHash)
 
 	// Notify Foghorn about the deletion
 	if isEviction {

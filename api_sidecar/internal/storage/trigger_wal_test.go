@@ -114,11 +114,11 @@ func TestDefaultTriggerWALDirPrefersExplicitEnv(t *testing.T) {
 }
 
 func TestDefaultTriggerWALDirFallsBackToStoragePath(t *testing.T) {
-	storagePath := t.TempDir()
+	stateDir := t.TempDir()
 	t.Setenv("FRAMEWORKS_TRIGGER_WAL_DIR", "")
-	t.Setenv("HELMSMAN_STORAGE_LOCAL_PATH", storagePath)
+	t.Setenv("HELMSMAN_STATE_DIR", stateDir)
 
-	want := filepath.Join(storagePath, "trigger-wal")
+	want := filepath.Join(stateDir, "trigger-wal")
 	if got := DefaultTriggerWALDir(); got != want {
 		t.Fatalf("DefaultTriggerWALDir() = %q, want storage fallback %q", got, want)
 	}

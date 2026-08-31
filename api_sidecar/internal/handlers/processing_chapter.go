@@ -58,17 +58,46 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *ipcpb.ProcessingJobReq
 	// The deadline covers EVERY phase of the job — recovery fetches,
 	// admission, push, and the result wait. Without this, a chapter
 	// with many S3-recovered segments could spend the entire
-	// deadline_unix_ms budget in buildChapterHLS (each fetch up to
-	// 5 minutes) before the push timer even started.
-	deadline := chapterFinalizeDeadline(req)
+	// deadline_unix_ms budget in buildChapterHLS before the push timer
+	// even started.
+	deadline, deadlineValid := chapterFinalizeDeadline(req)
+	if !deadlineValid {
+		h.sendResult(send, req.GetJobId(), "failed", "dispatch expired before delivery", nil, "", 0)
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), deadline)
 	defer cancel()
 
 	streamName := "processing+" + req.GetArtifactHash()
-	if HasPendingJob(streamName) {
-		log.Warn("Chapter finalize: previous attempt still active, ignoring duplicate")
-		return
+	var doneCh chan ProcessingPushEndEvent
+	for {
+		duplicate, supersedeErr := supersedePendingChapterJob(ctx, streamName, req.GetJobId())
+		if duplicate {
+			log.Warn("Chapter finalize: duplicate delivery for active attempt; original remains authoritative")
+			return
+		}
+		if supersedeErr != nil {
+			log.WithError(supersedeErr).Warn("Chapter finalize: active job could not be superseded")
+			h.sendResult(send, req.GetJobId(), "failed", supersedeErr.Error(), nil, "", 0)
+			return
+		}
+		var existingJobID string
+		var claimed bool
+		doneCh, existingJobID, claimed = claimPendingJob(streamName, req.GetJobId(), cancel)
+		if claimed {
+			break
+		}
+		if existingJobID == req.GetJobId() {
+			log.Warn("Chapter finalize: duplicate delivery won the reservation race; original remains authoritative")
+			return
+		}
 	}
+	reporter := newProcessingReporter(send, req.GetJobId())
+	send = reporter.Send
+	stopLease := reporter.StartLease(time.Minute)
+	defer stopLease()
+	defer releasePendingJob(streamName, req.GetJobId())
+	defer clearProcessingProcessOverride(streamName, req.GetJobId())
 
 	// Stage the temp HLS playlist + recovery-fetched segments under
 	// {storage}/processing/<hash>.m3u8 so HandleStreamSource picks up
@@ -104,15 +133,8 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *ipcpb.ProcessingJobReq
 		return
 	}
 
-	doneCh := make(chan ProcessingPushEndEvent, 1)
-	pendingJobsMu.Lock()
-	pendingJobs[streamName] = doneCh
-	pendingJobsMu.Unlock()
 	recordingEndCh := registerProcessingRecordingEndListener(streamName)
 	defer func() {
-		pendingJobsMu.Lock()
-		delete(pendingJobs, streamName)
-		pendingJobsMu.Unlock()
 		unregisterProcessingRecordingEndListener(streamName)
 	}()
 
@@ -163,13 +185,15 @@ func (h *ProcessingJobHandler) handleChapterFinalize(req *ipcpb.ProcessingJobReq
 	// push below selects either already-complete rendition tracks from
 	// the recorded input or the source passthrough.
 	if effectiveProcessesJSON != "" {
-		setProcessingProcessOverride(streamName, effectiveProcessesJSON)
-		defer clearProcessingProcessOverride(streamName)
+		if err := setProcessingProcessOverride(streamName, effectiveProcessesJSON, req.GetJobId(), processingOverrideExpiry(req)); err != nil {
+			h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("persist chapter processing policy: %v", err), nil, "", 0)
+			return
+		}
 	}
 
 	ignoredProcessExitBootCounts := map[string]int{}
 
-	streamOutputs, _, readinessErr := h.waitForProcessingStreamReady(log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, nil, nil, ignoredProcessExitBootCounts)
+	streamOutputs, _, readinessErr := h.waitForProcessingStreamReady(ctx, log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, nil, nil, ignoredProcessExitBootCounts)
 	if readinessErr != nil {
 		h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 		h.sendResult(send, req.GetJobId(), "failed",
@@ -289,6 +313,15 @@ loop:
 				lastMs = currentMs
 				lastAdvance = time.Now()
 			}
+			spanMs := int64(chapterSpanMs)
+			var progressPct int32
+			if spanMs > 0 && currentMs > 0 {
+				progressPct = int32(currentMs * 100 / spanMs)
+				if progressPct > 100 {
+					progressPct = 100
+				}
+			}
+			h.sendProgress(send, req.GetJobId(), progressPct, currentMs, spanMs)
 			if time.Since(lastAdvance) >= stallTimeout {
 				log.WithField("last_ms", lastMs).Warn("Chapter finalize: push stalled")
 				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
@@ -610,12 +643,13 @@ func fetchToFile(ctx context.Context, url, dest string) error {
 	return os.Rename(tmp, dest)
 }
 
-func chapterFinalizeDeadline(req *ipcpb.ProcessingJobRequest) time.Duration {
+func chapterFinalizeDeadline(req *ipcpb.ProcessingJobRequest) (time.Duration, bool) {
 	if dl := req.GetDeadlineUnixMs(); dl > 0 {
 		remaining := time.Until(time.UnixMilli(dl))
 		if remaining > 0 {
-			return remaining
+			return remaining, true
 		}
+		return 0, false
 	}
-	return 1 * time.Hour
+	return time.Hour, true
 }

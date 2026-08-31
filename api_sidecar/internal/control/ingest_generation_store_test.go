@@ -179,6 +179,45 @@ func TestHandleMistTriggerResponse_AcceptedPushPersistsBeforeDelivery(t *testing
 	}
 }
 
+func TestHandleMistTriggerResponse_DuplicateAcceptedPushCannotRegressGeneration(t *testing.T) {
+	resetControlState(t)
+	store, err := storage.NewIngestGenerationStore(t.TempDir() + "/generations")
+	if err != nil {
+		t.Fatalf("NewIngestGenerationStore: %v", err)
+	}
+	ingestGenerationStoreMu.Lock()
+	previousStore := ingestGenerationStore
+	ingestGenerationStore = store
+	ingestGenerationStoreMu.Unlock()
+	t.Cleanup(func() {
+		ingestGenerationStoreMu.Lock()
+		ingestGenerationStore = previousStore
+		ingestGenerationStoreMu.Unlock()
+	})
+
+	pendingMistTriggers["old-push"] = pendingMistTrigger{
+		responseCh:  make(chan *ipcpb.MistTriggerResponse, 1),
+		triggerType: string(mist.TriggerPushRewrite),
+	}
+	oldResponse := &ipcpb.MistTriggerResponse{
+		RequestId: "old-push", Response: "live+duplicate-fence",
+		IngestGeneration: "generation-old", IngestConnectorPid: 90,
+	}
+	handleMistTriggerResponse(oldResponse)
+	if recordErr := RecordAdmittedIngestGeneration("live+duplicate-fence", "generation-new", 91); recordErr != nil {
+		t.Fatal(recordErr)
+	}
+	handleMistTriggerResponse(oldResponse)
+
+	records, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := records["live+duplicate-fence"]; got.Generation != "generation-new" || got.ConnectorPID != 91 || !got.Active {
+		t.Fatalf("duplicate old response regressed generation fence: %+v", got)
+	}
+}
+
 func TestHandleMistTriggerResponse_AbortedPushDoesNotPersist(t *testing.T) {
 	resetControlState(t)
 	store, err := storage.NewIngestGenerationStore(t.TempDir() + "/generations")

@@ -3,6 +3,8 @@ package handlers
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -40,8 +42,11 @@ type ProcessingJobHandler struct {
 
 // pendingJobs tracks in-flight processing jobs, signaled by PUSH_END.
 var (
-	pendingJobs   = map[string]chan ProcessingPushEndEvent{}
-	pendingJobsMu sync.Mutex
+	pendingJobs        = map[string]chan ProcessingPushEndEvent{}
+	pendingJobIDs      = map[string]string{}
+	pendingJobCancels  = map[string]context.CancelFunc{}
+	pendingJobReleased = map[string]chan struct{}{}
+	pendingJobsMu      sync.Mutex
 )
 
 var (
@@ -164,7 +169,10 @@ func processingSpeedTelemetry(outputs map[string]string, evt *ProcessingRecordin
 
 var (
 	processingProcessOverrides   = map[string]string{}
+	processingOverrideRecords    = map[string]processingOverrideRecord{}
 	processingProcessOverridesMu sync.Mutex
+	processingOverrideStateDir   string
+	processingOverrideLogger     logging.Logger
 )
 
 var (
@@ -178,6 +186,113 @@ func HasPendingJob(streamName string) bool {
 	_, ok := pendingJobs[streamName]
 	pendingJobsMu.Unlock()
 	return ok
+}
+
+// claimPendingJob atomically checks and reserves a processing stream. Keeping
+// the check and insert under one lock prevents concurrent dispatches from
+// booting the same Mist stream and writing the same output.
+func claimPendingJob(streamName, jobID string, cancel ...context.CancelFunc) (ch chan ProcessingPushEndEvent, existingJobID string, claimed bool) {
+	pendingJobsMu.Lock()
+	defer pendingJobsMu.Unlock()
+	if _, exists := pendingJobs[streamName]; exists {
+		return nil, pendingJobIDs[streamName], false
+	}
+	ch = make(chan ProcessingPushEndEvent, 1)
+	pendingJobs[streamName] = ch
+	pendingJobIDs[streamName] = jobID
+	pendingJobReleased[streamName] = make(chan struct{})
+	if len(cancel) > 0 && cancel[0] != nil {
+		pendingJobCancels[streamName] = cancel[0]
+	}
+	return ch, "", true
+}
+
+func releasePendingJob(streamName, jobID string) {
+	pendingJobsMu.Lock()
+	defer pendingJobsMu.Unlock()
+	if pendingJobIDs[streamName] != jobID {
+		return
+	}
+	if released := pendingJobReleased[streamName]; released != nil {
+		close(released)
+	}
+	delete(pendingJobs, streamName)
+	delete(pendingJobIDs, streamName)
+	delete(pendingJobCancels, streamName)
+	delete(pendingJobReleased, streamName)
+}
+
+// replacePendingJobChannel swaps only the PUSH_END delivery channel while
+// retaining the reservation owner. Processing fallback restarts a push within
+// the same job; it must not reopen the stream to a competing dispatch.
+func replacePendingJobChannel(streamName, jobID string) (chan ProcessingPushEndEvent, bool) {
+	pendingJobsMu.Lock()
+	defer pendingJobsMu.Unlock()
+	if pendingJobIDs[streamName] != jobID {
+		return nil, false
+	}
+	ch := make(chan ProcessingPushEndEvent, 1)
+	pendingJobs[streamName] = ch
+	return ch, true
+}
+
+func chapterFinalizeAttemptFromJobID(jobID string) (int64, bool) {
+	const prefix = "chapter-finalize-v2-"
+	if !strings.HasPrefix(jobID, prefix) {
+		return 0, false
+	}
+	rest := strings.TrimPrefix(jobID, prefix)
+	separator := strings.IndexByte(rest, '-')
+	if separator <= 0 || separator == len(rest)-1 {
+		return 0, false
+	}
+	attempt, err := strconv.ParseInt(rest[:separator], 10, 32)
+	return attempt, err == nil && attempt > 0
+}
+
+// supersedePendingChapterJob cancels and waits out an older chapter attempt.
+// An attempt-less legacy owner is also retired during the rolling job-ID
+// transition: Foghorn rejects its attempt-zero result, while waiting for local
+// release prevents it from writing the same output as the replacement.
+func supersedePendingChapterJob(ctx context.Context, streamName, jobID string) (duplicate bool, err error) {
+	newAttempt, newChapter := chapterFinalizeAttemptFromJobID(jobID)
+	waitCtx, cancelWait := context.WithTimeout(ctx, time.Minute)
+	defer cancelWait()
+	for {
+		pendingJobsMu.Lock()
+		_, exists := pendingJobs[streamName]
+		existingID := pendingJobIDs[streamName]
+		if !exists {
+			pendingJobsMu.Unlock()
+			return false, nil
+		}
+		if existingID == jobID {
+			pendingJobsMu.Unlock()
+			return true, nil
+		}
+		// An attempt-less dispatch from an older Foghorn may claim an idle
+		// upgraded worker during rollout, but it has no ordering identity and
+		// therefore may never displace different work that is already active.
+		if !newChapter {
+			pendingJobsMu.Unlock()
+			return false, fmt.Errorf("chapter job ID %q has no attempt identity and cannot supersede active job %q", jobID, existingID)
+		}
+		oldAttempt, oldChapter := chapterFinalizeAttemptFromJobID(existingID)
+		legacyChapter := strings.HasPrefix(existingID, "chapter-finalize-") && !oldChapter
+		cancel := pendingJobCancels[streamName]
+		released := pendingJobReleased[streamName]
+		pendingJobsMu.Unlock()
+
+		if (!oldChapter && !legacyChapter) || (oldChapter && newAttempt <= oldAttempt) || cancel == nil || released == nil {
+			return false, fmt.Errorf("active processing job %q cannot be superseded by %q", existingID, jobID)
+		}
+		cancel()
+		select {
+		case <-released:
+		case <-waitCtx.Done():
+			return false, fmt.Errorf("timed out waiting for superseded chapter job %q to release: %w", existingID, waitCtx.Err())
+		}
+	}
 }
 
 // CountPendingJobs returns the number of processing jobs currently in-flight on
@@ -326,22 +441,301 @@ func processingPushFailureMessage(evt ProcessingPushEndEvent) string {
 	return msg
 }
 
-func setProcessingProcessOverride(streamName, processesJSON string) {
-	if streamName == "" || processesJSON == "" {
-		return
-	}
-	processingProcessOverridesMu.Lock()
-	processingProcessOverrides[streamName] = processesJSON
-	processingProcessOverridesMu.Unlock()
+type processingOverrideRecord struct {
+	Version       int       `json:"version"`
+	StreamName    string    `json:"stream_name"`
+	ProcessesJSON string    `json:"processes_json"`
+	JobID         string    `json:"job_id,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	ExpiresAt     time.Time `json:"expires_at"`
 }
 
-func clearProcessingProcessOverride(streamName string) {
+const processingOverrideMaxLifetime = 5 * time.Hour
+
+const processingOverrideReconcileInterval = time.Minute
+
+func configureProcessingOverridePersistence(stateDir string, logger logging.Logger) error {
+	stateDir = strings.TrimSpace(stateDir)
+	if stateDir == "" {
+		return errors.New("processing override persistence requires HELMSMAN_STATE_DIR")
+	}
+	dir := filepath.Join(stateDir, "processing-overrides")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create processing override directory: %w", err)
+	}
 	processingProcessOverridesMu.Lock()
-	delete(processingProcessOverrides, streamName)
+	processingOverrideStateDir = dir
+	processingOverrideLogger = logger
 	processingProcessOverridesMu.Unlock()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasPrefix(entry.Name(), ".processing-override-") {
+			if err := os.Remove(filepath.Join(dir, entry.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
+				logger.WithError(err).WithField("file", entry.Name()).Warn("Could not remove interrupted processing override write")
+			}
+			continue
+		}
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		encoded, readErr := os.ReadFile(path)
+		if readErr != nil {
+			logger.WithError(readErr).WithField("file", entry.Name()).Error("Removing unreadable durable processing override")
+			_ = os.Remove(path)
+			continue
+		}
+		var record processingOverrideRecord
+		if unmarshalErr := json.Unmarshal(encoded, &record); unmarshalErr != nil || strings.TrimSpace(record.StreamName) == "" || strings.TrimSpace(record.ProcessesJSON) == "" {
+			logger.WithError(unmarshalErr).WithField("file", entry.Name()).Error("Removing invalid durable processing override")
+			_ = os.Remove(path)
+			continue
+		}
+		if record.ExpiresAt.IsZero() {
+			if info, statErr := entry.Info(); statErr == nil {
+				record.ExpiresAt = info.ModTime().Add(processingOverrideMaxLifetime)
+			}
+		}
+		if record.ExpiresAt.IsZero() || (!record.ExpiresAt.After(time.Now()) && strings.TrimSpace(record.JobID) == "") {
+			logger.WithFields(logging.Fields{"stream_name": record.StreamName, "job_id": record.JobID}).Warn("Removing expired durable processing override")
+			_ = os.Remove(path)
+			continue
+		}
+		processingProcessOverridesMu.Lock()
+		processingProcessOverrides[record.StreamName] = record.ProcessesJSON
+		processingOverrideRecords[record.StreamName] = record
+		processingProcessOverridesMu.Unlock()
+	}
+	return nil
+}
+
+func processingOverridePath(dir, streamName string) string {
+	sum := sha256.Sum256([]byte(streamName))
+	return filepath.Join(dir, hex.EncodeToString(sum[:])+".json")
+}
+
+func setProcessingProcessOverride(streamName, processesJSON, jobID string, expiresAt time.Time) error {
+	if streamName == "" || processesJSON == "" {
+		return errors.New("processing override requires stream name and processes_json")
+	}
+	processingProcessOverridesMu.Lock()
+	defer processingProcessOverridesMu.Unlock()
+	now := time.Now().UTC()
+	if !expiresAt.After(now) {
+		expiresAt = now.Add(processingOverrideMaxLifetime)
+	}
+	record := processingOverrideRecord{
+		Version: 1, StreamName: streamName, ProcessesJSON: processesJSON,
+		JobID: strings.TrimSpace(jobID), CreatedAt: now, ExpiresAt: expiresAt.UTC(),
+	}
+	dir := processingOverrideStateDir
+	if dir != "" {
+		encoded, marshalErr := json.Marshal(record)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		path := processingOverridePath(dir, streamName)
+		tmp, createErr := os.CreateTemp(dir, ".processing-override-*")
+		if createErr != nil {
+			return createErr
+		}
+		tmpPath := tmp.Name()
+		defer func() { _ = os.Remove(tmpPath) }()
+		if chmodErr := tmp.Chmod(0o600); chmodErr != nil {
+			_ = tmp.Close()
+			return chmodErr
+		}
+		if _, writeErr := tmp.Write(encoded); writeErr != nil {
+			_ = tmp.Close()
+			return writeErr
+		}
+		if syncErr := tmp.Sync(); syncErr != nil {
+			_ = tmp.Close()
+			return syncErr
+		}
+		if closeErr := tmp.Close(); closeErr != nil {
+			return closeErr
+		}
+		if renameErr := os.Rename(tmpPath, path); renameErr != nil {
+			return renameErr
+		}
+		dirHandle, openErr := os.Open(dir)
+		if openErr != nil {
+			return openErr
+		}
+		if syncErr := dirHandle.Sync(); syncErr != nil {
+			_ = dirHandle.Close()
+			return syncErr
+		}
+		if closeErr := dirHandle.Close(); closeErr != nil {
+			return closeErr
+		}
+	}
+	processingProcessOverrides[streamName] = processesJSON
+	processingOverrideRecords[streamName] = record
+	return nil
+}
+
+func reconcileExpiredProcessingOverrides(activeStreams map[string]interface{}, now time.Time) {
+	processingProcessOverridesMu.Lock()
+	stale := make(map[string]processingOverrideRecord)
+	for streamName, record := range processingOverrideRecords {
+		if record.ExpiresAt.IsZero() || record.ExpiresAt.After(now) {
+			continue
+		}
+		if _, active := activeStreams[streamName]; !active {
+			stale[streamName] = record
+		}
+	}
+	processingProcessOverridesMu.Unlock()
+	for streamName, expected := range stale {
+		if HasPendingJob(streamName) {
+			continue
+		}
+		clearExpiredProcessingProcessOverride(streamName, expected, now)
+	}
+}
+
+func reconcileProcessingOverridePersistence(mistServerURL string, logger logging.Logger) {
+	processingProcessOverridesMu.Lock()
+	hasExpired := false
+	now := time.Now()
+	for _, record := range processingOverrideRecords {
+		if !record.ExpiresAt.IsZero() && !record.ExpiresAt.After(now) {
+			hasExpired = true
+			break
+		}
+	}
+	processingProcessOverridesMu.Unlock()
+	if !hasExpired || strings.TrimSpace(mistServerURL) == "" {
+		return
+	}
+	client := mist.NewClient(logger)
+	client.BaseURL = mistServerURL
+	response, err := client.GetActiveStreams()
+	if err != nil {
+		logger.WithError(err).Warn("Could not reconcile expired processing policies with Mist; preserving local authority")
+		return
+	}
+	activeStreams, ok := response["active_streams"].(map[string]interface{})
+	if !ok {
+		logger.Warn("Mist active-stream response was incomplete; preserving expired processing policies")
+		return
+	}
+	reconcileExpiredProcessingOverrides(activeStreams, now)
+}
+
+func startProcessingOverridePersistenceReconciler(mistServerURL string, logger logging.Logger) {
+	if strings.TrimSpace(mistServerURL) == "" {
+		return
+	}
+	go func() {
+		reconcileProcessingOverridePersistence(mistServerURL, logger)
+		ticker := time.NewTicker(processingOverrideReconcileInterval)
+		defer ticker.Stop()
+		for range ticker.C {
+			reconcileProcessingOverridePersistence(mistServerURL, logger)
+		}
+	}()
+}
+
+func processingOverrideExpiry(req *ipcpb.ProcessingJobRequest) time.Time {
+	if req != nil && req.GetDeadlineUnixMs() > 0 {
+		deadline := time.UnixMilli(req.GetDeadlineUnixMs()).UTC()
+		if deadline.After(time.Now()) {
+			return deadline.Add(5 * time.Minute)
+		}
+	}
+	return time.Now().UTC().Add(processingOverrideMaxLifetime)
+}
+
+func clearProcessingProcessOverride(streamName string, ownerJobID ...string) {
+	processingProcessOverridesMu.Lock()
+	defer processingProcessOverridesMu.Unlock()
+	dir := processingOverrideStateDir
+	if len(ownerJobID) > 0 && strings.TrimSpace(ownerJobID[0]) != "" {
+		owner := strings.TrimSpace(ownerJobID[0])
+		if record, ok := processingOverrideRecords[streamName]; ok && strings.TrimSpace(record.JobID) != owner {
+			return
+		}
+		if dir != "" {
+			encoded, readErr := os.ReadFile(processingOverridePath(dir, streamName))
+			if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+				logProcessingOverrideCleanupError(readErr, streamName, "read durable processing override before owner cleanup")
+				return
+			}
+			if readErr == nil {
+				var durable processingOverrideRecord
+				if err := json.Unmarshal(encoded, &durable); err != nil {
+					logProcessingOverrideCleanupError(err, streamName, "parse durable processing override before owner cleanup")
+					return
+				}
+				if strings.TrimSpace(durable.JobID) != owner {
+					return
+				}
+			}
+		}
+	}
+	removeProcessingProcessOverrideLocked(streamName)
+}
+
+func clearExpiredProcessingProcessOverride(streamName string, expected processingOverrideRecord, now time.Time) {
+	processingProcessOverridesMu.Lock()
+	defer processingProcessOverridesMu.Unlock()
+	current, ok := processingOverrideRecords[streamName]
+	if !ok || !processingOverrideRecordsEqual(current, expected) ||
+		current.ExpiresAt.IsZero() || current.ExpiresAt.After(now) {
+		return
+	}
+	if dir := processingOverrideStateDir; dir != "" {
+		encoded, readErr := os.ReadFile(processingOverridePath(dir, streamName))
+		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+			logProcessingOverrideCleanupError(readErr, streamName, "read durable processing override before expiry cleanup")
+			return
+		}
+		if readErr == nil {
+			var durable processingOverrideRecord
+			if err := json.Unmarshal(encoded, &durable); err != nil {
+				logProcessingOverrideCleanupError(err, streamName, "parse durable processing override before expiry cleanup")
+				return
+			}
+			if !processingOverrideRecordsEqual(durable, expected) {
+				return
+			}
+		}
+	}
+	removeProcessingProcessOverrideLocked(streamName)
+}
+
+func processingOverrideRecordsEqual(a, b processingOverrideRecord) bool {
+	return a.Version == b.Version && a.StreamName == b.StreamName && a.ProcessesJSON == b.ProcessesJSON &&
+		a.JobID == b.JobID && a.CreatedAt.Equal(b.CreatedAt) && a.ExpiresAt.Equal(b.ExpiresAt)
+}
+
+func removeProcessingProcessOverrideLocked(streamName string) {
+	dir := processingOverrideStateDir
+	if dir != "" {
+		if err := os.Remove(processingOverridePath(dir, streamName)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			logProcessingOverrideCleanupError(err, streamName, "remove durable processing override")
+		}
+	}
+	delete(processingProcessOverrides, streamName)
+	delete(processingOverrideRecords, streamName)
 	processingSourceOverridesMu.Lock()
 	delete(processingSourceOverrides, streamName)
 	processingSourceOverridesMu.Unlock()
+}
+
+func logProcessingOverrideCleanupError(err error, streamName, operation string) {
+	if processingOverrideLogger != nil {
+		processingOverrideLogger.WithError(err).WithFields(logging.Fields{
+			"stream_name": streamName,
+			"operation":   operation,
+		}).Warn("Processing override cleanup failed closed")
+	}
 }
 
 func getProcessingProcessOverride(streamName string) (string, bool) {
@@ -452,7 +846,14 @@ func drainProcessingGenerationFromActiveStreams(log *logrus.Entry, streamName st
 	return fmt.Errorf("processing stream %s still active after drain deadline", streamName)
 }
 
-func NewProcessingJobHandler(logger logging.Logger, mistServerURL, storagePath string) *ProcessingJobHandler {
+func NewProcessingJobHandler(logger logging.Logger, mistServerURL, storagePath, stateDir string) *ProcessingJobHandler {
+	if err := configureProcessingOverridePersistence(stateDir, logger); err != nil {
+		logger.WithError(err).Error("Failed to restore durable processing overrides")
+	}
+	// Restored authority is safe to serve while Mist ownership is checked. Do
+	// not make Helmsman startup depend on a Mist API round trip (which has a
+	// bounded but comparatively long transport timeout).
+	startProcessingOverridePersistenceReconciler(mistServerURL, logger)
 	return &ProcessingJobHandler{
 		logger:        logger,
 		mistServerURL: mistServerURL,
@@ -486,21 +887,30 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 
 	log.Info("Processing job received")
 	streamName := "processing+" + req.GetArtifactHash()
-	defer clearProcessingProcessOverride(streamName)
 
-	// If a previous attempt for this artifact is still running on this node,
-	// silently drop the duplicate. Don't send a failure — the original attempt
-	// is still active and will complete or fail on its own.
-	if HasPendingJob(streamName) {
-		log.Warn("Previous processing attempt still active, ignoring duplicate dispatch")
+	// Reserve before staging or booting anything. All processing job types use
+	// this single atomic boundary, so concurrent deliveries cannot both write
+	// the same output.
+	doneCh, existingJobID, claimed := claimPendingJob(streamName, req.GetJobId())
+	if !claimed {
+		log.WithField("active_job_id", existingJobID).Warn("Previous processing attempt still active, ignoring duplicate dispatch")
 		return
 	}
+	reporter := newProcessingReporter(send, req.GetJobId())
+	send = reporter.Send
+	stopLease := reporter.StartLease(time.Minute)
+	defer stopLease()
+	defer releasePendingJob(streamName, req.GetJobId())
+	defer clearProcessingProcessOverride(streamName, req.GetJobId())
 	processesJSON := strings.TrimSpace(req.GetProcessesJson())
 	if processesJSON == "" {
 		h.sendResult(send, req.GetJobId(), "failed", "processing job is missing processes_json", nil, "", 0)
 		return
 	}
-	setProcessingProcessOverride(streamName, processesJSON)
+	if err := setProcessingProcessOverride(streamName, processesJSON, req.GetJobId(), processingOverrideExpiry(req)); err != nil {
+		h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("persist processing policy: %v", err), nil, "", 0)
+		return
+	}
 
 	// Stage unsafe-wrapper sources to local disk before Mist tries to open
 	// them. Mist's FLV input is fopen-only and the AV input only auto-matches
@@ -548,17 +958,11 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 		}()
 	}
 
-	// Register completion channel BEFORE activating stream
-	doneCh := make(chan ProcessingPushEndEvent, 1)
-	pendingJobsMu.Lock()
-	pendingJobs[streamName] = doneCh
-	pendingJobsMu.Unlock()
+	// Register terminal listeners before activating the stream. The PUSH_END
+	// channel was installed atomically with the reservation above.
 	recordingEndCh := registerProcessingRecordingEndListener(streamName)
 
 	defer func() {
-		pendingJobsMu.Lock()
-		delete(pendingJobs, streamName)
-		pendingJobsMu.Unlock()
 		unregisterProcessingRecordingEndListener(streamName)
 	}()
 
@@ -596,14 +1000,17 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 	activePushID := 0
 	effectiveProcessesJSON := processesJSON
 
-	outputs, sourceDurationMs, waitErr := h.waitForProcessingStreamReady(log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, processAVCh, livepeerSegmentCh, ignoredProcessExitBootCounts)
+	outputs, sourceDurationMs, waitErr := h.waitForProcessingStreamReady(context.Background(), log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, processAVCh, livepeerSegmentCh, ignoredProcessExitBootCounts)
 	if waitErr != nil {
 		var livepeerBootErr *livepeerReadinessFallbackError
 		if errors.As(waitErr, &livepeerBootErr) && !fallbackAttempted {
 			log.WithFields(processExitFields(livepeerBootErr.evt)).Warn("Livepeer unrecoverable during readiness, falling back to local MistProcAV")
 			ignoreProcessExitThrough(ignoredProcessExitBootCounts, livepeerBootErr.evt.ProcessType, livepeerBootErr.evt.BootCount)
 			localConfig := mist.ReplaceLivepeerWithLocal(req.GetProcessesJson())
-			setProcessingProcessOverride(streamName, localConfig)
+			if err := setProcessingProcessOverride(streamName, localConfig, req.GetJobId(), processingOverrideExpiry(req)); err != nil {
+				h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("persist fallback processing policy: %v", err), nil, "", 0)
+				return
+			}
 			effectiveProcessesJSON = localConfig
 			h.updateProcessConfigCache(send, req.GetArtifactHash(), localConfig)
 			if teardownErr := h.restartProcessingStreamForLocalFallback(log, mistClient, streamName, outputPath, activePushID); teardownErr != nil {
@@ -611,12 +1018,14 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 				h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("livepeer fallback teardown: %v", teardownErr), nil, "", 0)
 				return
 			}
-			doneCh = make(chan ProcessingPushEndEvent, 1)
-			pendingJobsMu.Lock()
-			pendingJobs[streamName] = doneCh
-			pendingJobsMu.Unlock()
+			var replaced bool
+			doneCh, replaced = replacePendingJobChannel(streamName, req.GetJobId())
+			if !replaced {
+				h.sendResult(send, req.GetJobId(), "failed", "processing reservation lost during fallback", nil, "", 0)
+				return
+			}
 			recordingEndCh = registerProcessingRecordingEndListener(streamName)
-			outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, processAVCh, livepeerSegmentCh, ignoredProcessExitBootCounts)
+			outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(context.Background(), log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, processAVCh, livepeerSegmentCh, ignoredProcessExitBootCounts)
 			if waitErr != nil {
 				h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 				h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("livepeer fallback readiness: %v", waitErr), nil, "", 0)
@@ -666,7 +1075,10 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 	restartWithLocalFallback := func(ignoreType string, ignoreBoot int) bool {
 		ignoreProcessExitThrough(ignoredProcessExitBootCounts, ignoreType, ignoreBoot)
 		localConfig := mist.ReplaceLivepeerWithLocal(req.GetProcessesJson())
-		setProcessingProcessOverride(streamName, localConfig)
+		if err := setProcessingProcessOverride(streamName, localConfig, req.GetJobId(), processingOverrideExpiry(req)); err != nil {
+			h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("persist fallback processing policy: %v", err), nil, "", 0)
+			return false
+		}
 		effectiveProcessesJSON = localConfig
 		h.updateProcessConfigCache(send, req.GetArtifactHash(), localConfig)
 		if teardownErr := h.restartProcessingStreamForLocalFallback(log, mistClient, streamName, outputPath, activePushID); teardownErr != nil {
@@ -676,17 +1088,19 @@ func (h *ProcessingJobHandler) Handle(req *ipcpb.ProcessingJobRequest, send func
 		}
 		// Fresh doneCh so a PUSH_END from the retired push can't satisfy the
 		// restarted push's completion check.
-		doneCh = make(chan ProcessingPushEndEvent, 1)
-		pendingJobsMu.Lock()
-		pendingJobs[streamName] = doneCh
-		pendingJobsMu.Unlock()
+		var replaced bool
+		doneCh, replaced = replacePendingJobChannel(streamName, req.GetJobId())
+		if !replaced {
+			h.sendResult(send, req.GetJobId(), "failed", "processing reservation lost during fallback", nil, "", 0)
+			return false
+		}
 		recordingEndCh = registerProcessingRecordingEndListener(streamName)
 		// Discard any RECORDING_END captured from the retired push; the
 		// restarted push produces a fresh one. Without this the post-loop
 		// validation would run against the old push's bytes/duration/path.
 		recordingEnd = nil
 		var waitErr error
-		outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, processAVCh, livepeerSegmentCh, ignoredProcessExitBootCounts)
+		outputs, sourceDurationMs, waitErr = h.waitForProcessingStreamReady(context.Background(), log, mistClient, req, streamName, effectiveProcessesJSON, processExitCh, processAVCh, livepeerSegmentCh, ignoredProcessExitBootCounts)
 		if waitErr != nil {
 			h.cleanupFailedProcessing(log, mistClient, streamName, outputPath)
 			h.sendResult(send, req.GetJobId(), "failed", fmt.Sprintf("livepeer fallback readiness: %v", waitErr), nil, "", 0)
@@ -1039,7 +1453,7 @@ type processingTrackPresence struct {
 // until Mist has exposed source media. The file-output path owns the
 // process-output wait before writing the recording header; holding the push here
 // lets short VOD inputs reach EOF and tear down before any file output exists.
-func (h *ProcessingJobHandler) waitForProcessingStreamReady(log *logrus.Entry, mistClient *mist.Client, req *ipcpb.ProcessingJobRequest, streamName string, processesJSON string, processExitCh <-chan ProcessExitEvent, processAVCh <-chan ProcessAVSegmentCompleteEvent, livepeerSegmentCh <-chan LivepeerSegmentCompleteEvent, ignoredProcessExitBootCounts map[string]int) (map[string]string, int64, error) {
+func (h *ProcessingJobHandler) waitForProcessingStreamReady(ctx context.Context, log *logrus.Entry, mistClient *mist.Client, req *ipcpb.ProcessingJobRequest, streamName string, processesJSON string, processExitCh <-chan ProcessExitEvent, processAVCh <-chan ProcessAVSegmentCompleteEvent, livepeerSegmentCh <-chan LivepeerSegmentCompleteEvent, ignoredProcessExitBootCounts map[string]int) (map[string]string, int64, error) {
 	requirements := expectedProcessingTracks(processesJSON)
 	deadline := time.Now().Add(45 * time.Second)
 	var lastPresence processingTrackPresence
@@ -1155,7 +1569,11 @@ func (h *ProcessingJobHandler) waitForProcessingStreamReady(log *logrus.Entry, m
 			return outputs, sourceDurationFromOutputs(outputs), nil
 		}
 
-		<-bootTicker.C
+		select {
+		case <-bootTicker.C:
+		case <-ctx.Done():
+			return nil, 0, ctx.Err()
+		}
 	}
 }
 
@@ -2361,11 +2779,104 @@ func ParseProcessExitTrigger(body []byte) (ProcessExitEvent, error) {
 	return evt, nil
 }
 
-func (h *ProcessingJobHandler) sendProgress(send func(*ipcpb.ControlMessage), jobID string, progressPct int32, lastMs, sourceDurationMs int64) {
-	if send == nil {
+type processingReporter struct {
+	mu               sync.Mutex
+	send             func(*ipcpb.ControlMessage)
+	jobID            string
+	terminal         bool
+	progressPct      int32
+	lastMs           int64
+	sourceDurationMs int64
+	lastProgressAt   time.Time
+}
+
+func newProcessingReporter(send func(*ipcpb.ControlMessage), jobID string) *processingReporter {
+	return &processingReporter{send: send, jobID: jobID}
+}
+
+// Send serializes job reports, remembers the newest progress, and closes the
+// lease when a terminal result is emitted. The background lease sender and the
+// normal processing loop therefore cannot reorder a heartbeat after a result.
+func (r *processingReporter) Send(msg *ipcpb.ControlMessage) {
+	if msg == nil {
 		return
 	}
-	send(&ipcpb.ControlMessage{
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if progress := msg.GetProcessingJobProgress(); progress != nil {
+		if r.terminal {
+			return
+		}
+		if progress.GetProgressPct() < r.progressPct {
+			progress.ProgressPct = r.progressPct
+		}
+		if progress.GetLastMs() < r.lastMs {
+			progress.LastMs = r.lastMs
+		}
+		if progress.GetSourceDurationMs() == 0 && r.sourceDurationMs > 0 {
+			progress.SourceDurationMs = r.sourceDurationMs
+		}
+		r.progressPct = progress.GetProgressPct()
+		r.lastMs = progress.GetLastMs()
+		r.sourceDurationMs = progress.GetSourceDurationMs()
+		r.lastProgressAt = time.Now()
+	}
+	if result := msg.GetProcessingJobResult(); result != nil && result.GetStatus() != "cache_update" {
+		r.terminal = true
+	}
+	if r.send != nil {
+		r.send(msg)
+	}
+}
+
+func (r *processingReporter) renewLease(interval time.Duration, force bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.terminal || r.send == nil {
+		return
+	}
+	now := time.Now()
+	if !force && !r.lastProgressAt.IsZero() && now.Sub(r.lastProgressAt) < interval {
+		return
+	}
+	r.send(processingProgressMessage(r.jobID, r.progressPct, r.lastMs, r.sourceDurationMs))
+	r.lastProgressAt = now
+}
+
+// StartLease keeps Foghorn's durable ownership clock current during blocking
+// phases such as source staging and readiness. It resends the latest observed
+// progress only when the normal loop has been quiet for a full interval.
+func (r *processingReporter) StartLease(interval time.Duration) func() {
+	if interval <= 0 {
+		interval = time.Minute
+	}
+	r.renewLease(interval, true)
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				r.renewLease(interval, false)
+			case <-stop:
+				return
+			}
+		}
+	}()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			close(stop)
+			<-done
+		})
+	}
+}
+
+func processingProgressMessage(jobID string, progressPct int32, lastMs, sourceDurationMs int64) *ipcpb.ControlMessage {
+	return &ipcpb.ControlMessage{
 		Payload: &ipcpb.ControlMessage_ProcessingJobProgress{
 			ProcessingJobProgress: &ipcpb.ProcessingJobProgress{
 				JobId:            jobID,
@@ -2375,7 +2886,13 @@ func (h *ProcessingJobHandler) sendProgress(send func(*ipcpb.ControlMessage), jo
 			},
 		},
 		SentAt: timestamppb.Now(),
-	})
+	}
+}
+
+func (h *ProcessingJobHandler) sendProgress(send func(*ipcpb.ControlMessage), jobID string, progressPct int32, lastMs, sourceDurationMs int64) {
+	if send != nil {
+		send(processingProgressMessage(jobID, progressPct, lastMs, sourceDurationMs))
+	}
 }
 
 // updateProcessConfigCache tells Foghorn to update the STREAM_PROCESS cache

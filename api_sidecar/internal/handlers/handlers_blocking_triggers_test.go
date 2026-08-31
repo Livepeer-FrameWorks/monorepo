@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"frameworks/api_sidecar/internal/config"
 	"frameworks/api_sidecar/internal/control"
@@ -239,7 +240,7 @@ func TestHandleStreamProcessBranches(t *testing.T) {
 	setupTriggerTest(t, "tenant-blk")
 
 	t.Run("local override short-circuits", func(t *testing.T) {
-		setProcessingProcessOverride("processing+ovr", "[{\"process\":\"MKVExec\"}]")
+		_ = setProcessingProcessOverride("processing+ovr", "[{\"process\":\"MKVExec\"}]", "test-job", time.Now().Add(time.Hour))
 		t.Cleanup(func() { clearProcessingProcessOverride("processing+ovr") })
 		stubSendMistTrigger(t, func(trigger *ipcpb.MistTrigger) (*control.MistTriggerResult, error) {
 			t.Fatal("local process override must not reach Foghorn")

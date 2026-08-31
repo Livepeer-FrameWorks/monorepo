@@ -187,7 +187,7 @@ func InitStorageManager(logger logging.Logger, basePath, nodeID string, threshol
 	})
 
 	// Register processing job handler
-	procHandler := NewProcessingJobHandler(logger, os.Getenv("MISTSERVER_URL"), basePath)
+	procHandler := NewProcessingJobHandler(logger, os.Getenv("MISTSERVER_URL"), basePath, os.Getenv("HELMSMAN_STATE_DIR"))
 	control.SetProcessingJobHandler(func(req *ipcpb.ProcessingJobRequest, send func(*ipcpb.ControlMessage)) {
 		procHandler.Handle(req, send)
 	})
@@ -689,6 +689,7 @@ func (sm *StorageManager) evictClipVodCandidates(candidates []FreezeCandidate, b
 		// Clean up auxiliary sidecars after the main file deletion succeeds.
 		_ = os.Remove(candidate.FilePath + ".dtsh")
 		_ = os.Remove(candidate.FilePath + ".gop")
+		forgetArtifact(candidate.AssetHash)
 
 		_ = sm.sendStorageLifecycle(&ipcpb.StorageLifecycleData{ //nolint:errcheck // best-effort report
 			Action:         ipcpb.StorageLifecycleData_ACTION_EVICTED,
@@ -1032,8 +1033,8 @@ func (sm *StorageManager) uploadAsset(ctx context.Context, asset FreezeCandidate
 		errStr := uploadErr.Error()
 		// Distinguish "local source file is gone" (terminal: no S3 copy, no
 		// local copy, retries cannot recover) from a transient sync failure.
-		// Foghorn maps ACTION_LOCAL_MISSING to sync_status='lost_local' and
-		// stops the retry loop.
+		// SyncComplete carries the authoritative lost-local transition. This
+		// lifecycle sample is best-effort operational telemetry for Decklog.
 		action := ipcpb.StorageLifecycleData_ACTION_SYNC_FAILED
 		localMissing := errors.Is(uploadErr, fs.ErrNotExist)
 		if localMissing {

@@ -31,6 +31,7 @@ type HelmsmanConfig struct {
 	MistAPIPassword string
 
 	// Storage configuration
+	StateDir             string
 	StorageLocalPath     string
 	StorageS3Bucket      string
 	StorageS3Prefix      string
@@ -51,8 +52,9 @@ type HelmsmanConfig struct {
 	MaxTranscodes int
 
 	// Edge node configuration
-	EdgePublicURL   string // Full URL like http://localhost:18090/view
-	EnrollmentToken string
+	EdgePublicURL      string // Full URL like http://localhost:18090/view
+	EnrollmentToken    string
+	RotateNodeIdentity bool
 
 	// Webhook URL for MistServer triggers
 	WebhookURL string
@@ -96,6 +98,9 @@ func LoadHelmsmanConfig() *HelmsmanConfig {
 		MistAPIUsername: config.GetEnv("MIST_API_USERNAME", ""),
 		MistAPIPassword: config.GetEnv("MIST_API_PASSWORD", ""),
 
+		// Durable sidecar state is separate from replaceable media storage.
+		StateDir: config.GetEnv("HELMSMAN_STATE_DIR", ""),
+
 		// Storage (optional - empty disables local storage features)
 		StorageLocalPath:     config.GetEnv("HELMSMAN_STORAGE_LOCAL_PATH", ""),
 		StorageS3Bucket:      config.GetEnv("HELMSMAN_STORAGE_S3_BUCKET", ""),
@@ -116,8 +121,9 @@ func LoadHelmsmanConfig() *HelmsmanConfig {
 		MaxTranscodes: config.GetEnvInt("HELMSMAN_MAX_TRANSCODES", 0),
 
 		// Edge node
-		EdgePublicURL:   config.RequireEnv("EDGE_PUBLIC_URL"),
-		EnrollmentToken: config.GetEnv("EDGE_ENROLLMENT_TOKEN", ""),
+		EdgePublicURL:      config.RequireEnv("EDGE_PUBLIC_URL"),
+		EnrollmentToken:    config.GetEnv("EDGE_ENROLLMENT_TOKEN", ""),
+		RotateNodeIdentity: config.GetEnvBool("HELMSMAN_ROTATE_NODE_IDENTITY", false),
 
 		// Webhook URL (defaults handled at usage site if empty)
 		WebhookURL: config.GetEnv("HELMSMAN_WEBHOOK_URL", ""),

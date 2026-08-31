@@ -2,14 +2,16 @@ package control
 
 import (
 	"context"
-	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"testing"
 	"time"
+
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 // --- SendSyncComplete ---
 
 func TestSendSyncComplete_Connected(t *testing.T) {
+	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", t.TempDir())
 	stream := &fakeControlStream{}
 	storeConn(stream, "test-node")
 	t.Cleanup(clearConn)
@@ -38,6 +40,7 @@ func TestSendSyncComplete_Connected(t *testing.T) {
 }
 
 func TestSendSyncComplete_DtshFalse(t *testing.T) {
+	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", t.TempDir())
 	stream := &fakeControlStream{}
 	storeConn(stream, "test-node")
 	t.Cleanup(clearConn)
@@ -120,6 +123,7 @@ func TestSendFreezeProgress_Connected(t *testing.T) {
 // --- SendArtifactDeleted ---
 
 func TestSendArtifactDeleted_Connected(t *testing.T) {
+	t.Setenv("FRAMEWORKS_CONTROL_OUTBOX_DIR", t.TempDir())
 	stream := &fakeControlStream{}
 	storeConn(stream, "test-node")
 	t.Cleanup(clearConn)
@@ -147,6 +151,9 @@ func TestSendArtifactDeleted_Connected(t *testing.T) {
 	}
 	if ad.NodeId != "test-node" {
 		t.Fatalf("expected node ID, got %q", ad.NodeId)
+	}
+	if ad.DeletedAtMs <= 0 {
+		t.Fatalf("expected stable deletion timestamp, got %d", ad.DeletedAtMs)
 	}
 }
 
