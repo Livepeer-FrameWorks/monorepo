@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"io"
 	"testing"
@@ -26,10 +27,6 @@ func TestPublishTenantAliasDowngradesUnpublishedInDNSRows(t *testing.T) {
 		addrs: map[string][]string{"node-a": {"203.0.113.10"}},
 		serviceAddrs: map[string][]ServiceAddress{
 			"foghorn": {{NodeID: "foghorn-a", IP: "198.51.100.20"}},
-		},
-		active: map[string]bool{
-			"tenant-1/cluster-a": true,
-			"tenant-1/cluster-b": false,
 		},
 	}
 	worker := newTestAliasWorker(st, dns, resolver)
@@ -66,7 +63,37 @@ func TestPublishTenantAliasDowngradesUnpublishedInDNSRows(t *testing.T) {
 	}
 }
 
-func TestPublishTenantAliasPreservesDNSOnEligibilityLookupError(t *testing.T) {
+func TestPublishTenantAliasDoesNotReplaySnapshotAdvancedDuringDNSWrite(t *testing.T) {
+	ctx := context.Background()
+	st := newFakeTenantAliasStore()
+	st.alias = &store.TenantAlias{TenantID: "tenant-1", Subdomain: "acme", Status: "cert_issued"}
+	snapshot := tenantEdge("tenant-1", "cluster-a", "node-a", "applied")
+	snapshot.LastSeedVersion = sql.NullInt64{Int64: 7, Valid: true}
+	snapshot.LastDeliverySequence = 11
+	st.rows = []store.TenantEdgeApplyState{snapshot}
+	dns := &fakeTenantAliasDNS{zoneFound: true}
+	dns.onReconcile = func() {
+		// A newer failure ACK lands while the worker is reconciling external DNS.
+		// The subsequent promotion must compare against the old snapshot and lose.
+		st.rows[0].State = "pending_apply"
+		st.rows[0].LastDeliverySequence = 12
+		st.rows[0].InDNSAt = sql.NullTime{}
+	}
+	resolver := &fakeTenantEdgeResolver{
+		addrs: map[string][]string{"node-a": {"203.0.113.10"}},
+	}
+	worker := newTestAliasWorker(st, dns, resolver)
+
+	if err := worker.PublishTenantAlias(ctx, "tenant-1"); err != nil {
+		t.Fatalf("PublishTenantAlias: %v", err)
+	}
+	got := st.rows[0]
+	if got.State != "pending_apply" || got.LastSeedVersion != snapshot.LastSeedVersion || got.LastDeliverySequence != 12 || got.InDNSAt.Valid {
+		t.Fatalf("newer failure ACK was overwritten by stale DNS write-back: %#v", got)
+	}
+}
+
+func TestPublishTenantAliasDoesNotShrinkDNSOnIncompleteTenantListView(t *testing.T) {
 	ctx := context.Background()
 	st := newFakeTenantAliasStore()
 	st.alias = &store.TenantAlias{TenantID: "tenant-1", Subdomain: "acme", Status: "cert_issued"}
@@ -75,16 +102,15 @@ func TestPublishTenantAliasPreservesDNSOnEligibilityLookupError(t *testing.T) {
 	}
 	dns := &fakeTenantAliasDNS{zoneFound: true}
 	resolver := &fakeTenantEdgeResolver{
-		eligibilityErr: errors.New("quartermaster unavailable"),
-		active:         map[string]bool{"tenant-1/cluster-a": true},
+		addrs: map[string][]string{"node-a": {"203.0.113.10"}},
 	}
 	worker := newTestAliasWorker(st, dns, resolver)
 
-	if err := worker.PublishTenantAlias(ctx, "tenant-1"); err == nil {
-		t.Fatal("expected eligibility error")
+	if err := worker.PublishTenantAlias(ctx, "tenant-1"); err != nil {
+		t.Fatalf("PublishTenantAlias: %v", err)
 	}
-	if dns.reconcileCalls != 0 {
-		t.Fatalf("reconcile calls = %d, want 0", dns.reconcileCalls)
+	if records := dns.records["acme"]; len(records) != 1 || records[0].Value != "203.0.113.10" {
+		t.Fatalf("incomplete control-plane tenant list shrank DNS: %#v", records)
 	}
 	if got := st.stateFor("node-a"); got != "in_dns" {
 		t.Fatalf("node-a state = %q, want in_dns", got)
@@ -100,8 +126,7 @@ func TestPublishTenantAliasDowngradesInDNSRowWithoutAddresses(t *testing.T) {
 	}
 	dns := &fakeTenantAliasDNS{zoneFound: true}
 	resolver := &fakeTenantEdgeResolver{
-		addrs:  map[string][]string{"node-a": nil},
-		active: map[string]bool{"tenant-1/cluster-a": true},
+		addrs: map[string][]string{"node-a": nil},
 	}
 	worker := newTestAliasWorker(st, dns, resolver)
 
@@ -118,9 +143,52 @@ func TestPublishTenantAliasDowngradesInDNSRowWithoutAddresses(t *testing.T) {
 	}
 }
 
+func TestPublishTenantAliasExcludesVersionlessAndStaleBundleACKs(t *testing.T) {
+	ctx := context.Background()
+	st := newFakeTenantAliasStore()
+	st.alias = &store.TenantAlias{TenantID: "tenant-1", Subdomain: "acme", Status: "cert_issued"}
+	versionless := tenantEdge("tenant-1", "cluster-a", "node-a", "applied")
+	versionless.BundleVersion = ""
+	staleRevision := tenantEdge("tenant-1", "cluster-a", "node-b", "in_dns")
+	staleRevision.BundleVersion = "revision-old"
+	grandfathered := tenantEdge("tenant-1", "cluster-a", "node-c", "in_dns")
+	grandfathered.BundleVersion = ""
+	// Expand precedes the data backfill, so the current bundle can exist while
+	// its compatibility revision is still empty. Presence, not revision text,
+	// preserves an already-published row through that bounded window.
+	grandfathered.CurrentBundleVersion = ""
+	st.rows = []store.TenantEdgeApplyState{versionless, staleRevision, grandfathered}
+	dns := &fakeTenantAliasDNS{zoneFound: true}
+	resolver := &fakeTenantEdgeResolver{
+		addrs: map[string][]string{
+			"node-a": {"203.0.113.10"},
+			"node-b": {"203.0.113.11"},
+			"node-c": {"203.0.113.12"},
+		},
+	}
+	worker := newTestAliasWorker(st, dns, resolver)
+
+	if err := worker.PublishTenantAlias(ctx, "tenant-1"); err != nil {
+		t.Fatalf("PublishTenantAlias: %v", err)
+	}
+	if records := dns.records["acme"]; len(records) != 1 || records[0].Value != "203.0.113.12" {
+		t.Fatalf("entry gate or rolling-upgrade continuity is wrong: %#v", records)
+	}
+	if got := st.stateFor("node-a"); got != "applied" {
+		t.Fatalf("versionless node state=%q, want applied but DNS-ineligible", got)
+	}
+	if got := st.stateFor("node-b"); got != "applied" {
+		t.Fatalf("stale-revision in_dns node state=%q, want applied", got)
+	}
+	if got := st.stateFor("node-c"); got != "in_dns" {
+		t.Fatalf("versionless established node state=%q, want grandfathered in_dns", got)
+	}
+}
+
 func TestTeardownKeepsLocalStateWhenDNSClearFails(t *testing.T) {
 	ctx := context.Background()
 	st := newFakeTenantAliasStore()
+	st.alias = &store.TenantAlias{TenantID: "tenant-1", Subdomain: "acme", Status: "tearing_down"}
 	dns := &fakeTenantAliasDNS{
 		zoneFound: true,
 		failName:  "foghorn.acme",
@@ -129,21 +197,37 @@ func TestTeardownKeepsLocalStateWhenDNSClearFails(t *testing.T) {
 
 	worker.teardown(ctx, store.TenantAlias{TenantID: "tenant-1", Subdomain: "acme", Status: "tearing_down"})
 
-	if st.deletedEdges || st.deletedAlias {
-		t.Fatalf("deletedEdges=%v deletedAlias=%v, want both false after DNS failure", st.deletedEdges, st.deletedAlias)
+	if st.deletedAlias {
+		t.Fatal("alias deleted after DNS failure")
 	}
 }
 
 func TestTeardownDeletesLocalStateAfterDNSClearSucceeds(t *testing.T) {
 	ctx := context.Background()
 	st := newFakeTenantAliasStore()
+	st.alias = &store.TenantAlias{TenantID: "tenant-1", Subdomain: "acme", Status: "tearing_down"}
 	dns := &fakeTenantAliasDNS{zoneFound: true}
 	worker := newTestAliasWorker(st, dns, &fakeTenantEdgeResolver{})
 
 	worker.teardown(ctx, store.TenantAlias{TenantID: "tenant-1", Subdomain: "acme", Status: "tearing_down"})
 
-	if !st.deletedEdges || !st.deletedAlias {
-		t.Fatalf("deletedEdges=%v deletedAlias=%v, want both true", st.deletedEdges, st.deletedAlias)
+	if !st.deletedAlias {
+		t.Fatal("alias was not deleted after DNS teardown")
+	}
+}
+
+func TestTeardownRechecksAuthorityBeforeClearingDNS(t *testing.T) {
+	ctx := context.Background()
+	st := newFakeTenantAliasStore()
+	st.alias = &store.TenantAlias{TenantID: "tenant-1", Subdomain: "acme", Status: "tearing_down"}
+	st.getAliasHook = func() { st.alias.Status = "cert_issuing" }
+	dns := &fakeTenantAliasDNS{zoneFound: true}
+	worker := newTestAliasWorker(st, dns, &fakeTenantEdgeResolver{})
+
+	worker.teardown(ctx, store.TenantAlias{TenantID: "tenant-1", Subdomain: "acme", Status: "tearing_down"})
+
+	if dns.reconcileCalls != 0 || st.deletedAlias {
+		t.Fatalf("reactivated alias teardown touched DNS=%d deleted=%v", dns.reconcileCalls, st.deletedAlias)
 	}
 }
 
@@ -152,6 +236,7 @@ func TestRetirementPassClearsRetiredLabel(t *testing.T) {
 	st := newFakeTenantAliasStore()
 	// Active alias is the NEW label; the OLD label is retired.
 	st.alias = &store.TenantAlias{TenantID: "tenant-1", Subdomain: "newlabel", Status: "cert_issued", UpdatedAt: time.Now()}
+	st.dnsReady = true
 	st.retirements = []store.TenantAliasRetirement{
 		{TenantID: "tenant-1", Subdomain: "oldlabel", RequestedAt: time.Now()},
 	}
@@ -173,6 +258,33 @@ func TestRetirementPassClearsRetiredLabel(t *testing.T) {
 	}
 	if len(st.retirementFailures) != 0 {
 		t.Fatalf("retirementFailures = %v, want none", st.retirementFailures)
+	}
+}
+
+func TestRetirementPassWaitsForReplacementBundleInDNS(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		status   string
+		dnsReady bool
+	}{
+		{name: "certificate pending", status: "cert_issuing", dnsReady: false},
+		{name: "certificate failed", status: "cert_failed", dnsReady: false},
+		{name: "edge apply pending", status: "cert_issued", dnsReady: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			st := newFakeTenantAliasStore()
+			st.alias = &store.TenantAlias{TenantID: "tenant-1", Subdomain: "newlabel", Status: test.status}
+			st.dnsReady = test.dnsReady
+			st.retirements = []store.TenantAliasRetirement{{TenantID: "tenant-1", Subdomain: "oldlabel"}}
+			dns := &fakeTenantAliasDNS{zoneFound: true}
+			worker := newTestAliasWorker(st, dns, &fakeTenantEdgeResolver{})
+
+			worker.processRetirements(context.Background())
+
+			if dns.reconcileCalls != 0 || len(st.deletedRetirements) != 0 {
+				t.Fatalf("replacement not ready but DNS calls=%d deleted=%v", dns.reconcileCalls, st.deletedRetirements)
+			}
+		})
 	}
 }
 
@@ -228,6 +340,7 @@ func TestRetirementPassRecordsFailureOnBunnyError(t *testing.T) {
 	ctx := context.Background()
 	st := newFakeTenantAliasStore()
 	st.alias = &store.TenantAlias{TenantID: "tenant-1", Subdomain: "newlabel", Status: "cert_issued", UpdatedAt: time.Now()}
+	st.dnsReady = true
 	st.retirements = []store.TenantAliasRetirement{
 		{TenantID: "tenant-1", Subdomain: "oldlabel", RequestedAt: time.Now()},
 	}
@@ -259,24 +372,60 @@ func newTestAliasWorker(st *fakeTenantAliasStore, dns *fakeTenantAliasDNS, resol
 	}
 }
 
+func TestPublishTenantAliasDemotesExpiredLegacyContinuityMember(t *testing.T) {
+	ctx := context.Background()
+	st := newFakeTenantAliasStore()
+	st.alias = &store.TenantAlias{TenantID: "tenant-1", Subdomain: "acme", Status: "cert_issued"}
+	expired := tenantEdge("tenant-1", "cluster-a", "node-a", "in_dns")
+	expired.BundleVersion = ""
+	expired.CurrentBundleVersion = ""
+	expired.UpdatedAt = time.Now().Add(-legacyContinuityMaxAge - time.Hour)
+	current := tenantEdge("tenant-1", "cluster-a", "node-b", "in_dns")
+	st.rows = []store.TenantEdgeApplyState{expired, current}
+	dns := &fakeTenantAliasDNS{zoneFound: true}
+	resolver := &fakeTenantEdgeResolver{
+		addrs: map[string][]string{
+			"node-a": {"203.0.113.10"},
+			"node-b": {"203.0.113.11"},
+		},
+	}
+	worker := newTestAliasWorker(st, dns, resolver)
+
+	if err := worker.PublishTenantAlias(ctx, "tenant-1"); err != nil {
+		t.Fatalf("PublishTenantAlias: %v", err)
+	}
+	if records := dns.records["acme"]; len(records) != 1 || records[0].Value != "203.0.113.11" {
+		t.Fatalf("expired continuity member kept DNS membership: %#v", records)
+	}
+	if got := st.stateFor("node-a"); got != "applied" {
+		t.Fatalf("expired continuity node state=%q, want demoted to applied", got)
+	}
+}
+
+// tenantEdge mirrors a persisted row: updated_at is always set by the store.
 func tenantEdge(tenantID, clusterID, nodeID, state string) store.TenantEdgeApplyState {
 	return store.TenantEdgeApplyState{
-		TenantID:  tenantID,
-		ClusterID: clusterID,
-		NodeID:    nodeID,
-		BundleID:  "tenant:" + tenantID,
-		State:     state,
+		TenantID:             tenantID,
+		ClusterID:            clusterID,
+		NodeID:               nodeID,
+		BundleID:             "tenant:" + tenantID,
+		BundleVersion:        "revision-1",
+		CurrentBundleVersion: "revision-1",
+		CurrentBundlePresent: true,
+		State:                state,
+		UpdatedAt:            time.Now(),
 	}
 }
 
 type fakeTenantAliasStore struct {
 	alias              *store.TenantAlias
 	rows               []store.TenantEdgeApplyState
-	deletedEdges       bool
 	deletedAlias       bool
 	retirements        []store.TenantAliasRetirement
 	deletedRetirements []string
 	retirementFailures []string
+	dnsReady           bool
+	getAliasHook       func()
 }
 
 func newFakeTenantAliasStore() *fakeTenantAliasStore {
@@ -295,21 +444,50 @@ func (s *fakeTenantAliasStore) ListTenantAliasesByStatus(context.Context, []stri
 }
 
 func (s *fakeTenantAliasStore) GetTenantAlias(context.Context, string) (*store.TenantAlias, error) {
+	if s.getAliasHook != nil {
+		hook := s.getAliasHook
+		s.getAliasHook = nil
+		hook()
+	}
 	if s.alias == nil {
 		return nil, store.ErrNotFound
 	}
 	return s.alias, nil
 }
 
-func (s *fakeTenantAliasStore) UpsertTenantEdgeApplyState(_ context.Context, st *store.TenantEdgeApplyState) error {
+func (s *fakeTenantAliasStore) TenantAliasHasDNS(context.Context, string) (bool, error) {
+	return s.dnsReady, nil
+}
+
+func (s *fakeTenantAliasStore) MarkTenantEdgeInDNS(_ context.Context, st *store.TenantEdgeApplyState) (bool, error) {
 	for i := range s.rows {
-		if s.rows[i].NodeID == st.NodeID && s.rows[i].BundleID == st.BundleID {
-			s.rows[i] = *st
-			return nil
+		if sameTenantEdgeSnapshot(s.rows[i], *st) && s.rows[i].State == "applied" {
+			s.rows[i].State = "in_dns"
+			s.rows[i].InDNSAt = sql.NullTime{Time: time.Now(), Valid: true}
+			return true, nil
 		}
 	}
-	s.rows = append(s.rows, *st)
-	return nil
+	return false, nil
+}
+
+func (s *fakeTenantAliasStore) MarkTenantEdgeNotInDNS(_ context.Context, st *store.TenantEdgeApplyState) (bool, error) {
+	for i := range s.rows {
+		if sameTenantEdgeSnapshot(s.rows[i], *st) && s.rows[i].State == "in_dns" {
+			s.rows[i].State = "applied"
+			s.rows[i].InDNSAt = sql.NullTime{}
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func sameTenantEdgeSnapshot(current, snapshot store.TenantEdgeApplyState) bool {
+	return current.TenantID == snapshot.TenantID &&
+		current.NodeID == snapshot.NodeID &&
+		current.BundleID == snapshot.BundleID &&
+		current.BundleVersion == snapshot.BundleVersion &&
+		current.LastSeedVersion == snapshot.LastSeedVersion &&
+		current.LastDeliverySequence == snapshot.LastDeliverySequence
 }
 
 func (s *fakeTenantAliasStore) ListTenantEdgeApplyState(_ context.Context, _ string, stateFilter string) ([]store.TenantEdgeApplyState, error) {
@@ -322,14 +500,9 @@ func (s *fakeTenantAliasStore) ListTenantEdgeApplyState(_ context.Context, _ str
 	return out, nil
 }
 
-func (s *fakeTenantAliasStore) DeleteTenantEdgeApplyState(context.Context, string) error {
-	s.deletedEdges = true
-	return nil
-}
-
-func (s *fakeTenantAliasStore) DeleteTenantAlias(context.Context, string) error {
+func (s *fakeTenantAliasStore) DeleteTenantAlias(context.Context, string) (bool, error) {
 	s.deletedAlias = true
-	return nil
+	return true, nil
 }
 
 func (s *fakeTenantAliasStore) ListTenantAliasRetirements(context.Context) ([]store.TenantAliasRetirement, error) {
@@ -362,11 +535,9 @@ func (s *fakeTenantAliasStore) stateFor(nodeID string) string {
 }
 
 type fakeTenantEdgeResolver struct {
-	addrs          map[string][]string
-	serviceAddrs   map[string][]ServiceAddress
-	serviceErr     error
-	active         map[string]bool
-	eligibilityErr error
+	addrs        map[string][]string
+	serviceAddrs map[string][]ServiceAddress
+	serviceErr   error
 }
 
 func (r *fakeTenantEdgeResolver) ResolveEdgeAddresses(_ context.Context, nodeID string) ([]string, []string, error) {
@@ -392,20 +563,11 @@ func (r *fakeTenantEdgeResolver) ResolveServiceAddressesForClusters(_ context.Co
 	return out, nil
 }
 
-func (r *fakeTenantEdgeResolver) TenantActiveInCluster(_ context.Context, tenantID, clusterID string) (bool, error) {
-	if r.eligibilityErr != nil {
-		return false, r.eligibilityErr
-	}
-	if r.active == nil {
-		return true, nil
-	}
-	return r.active[tenantID+"/"+clusterID], nil
-}
-
 type fakeTenantAliasDNS struct {
 	zoneFound      bool
 	findErr        error
 	failName       string
+	onReconcile    func()
 	reconcileCalls int
 	records        map[string][]bunny.Record
 }
@@ -422,6 +584,11 @@ func (d *fakeTenantAliasDNS) FindZone(context.Context, string) (*bunny.Zone, boo
 
 func (d *fakeTenantAliasDNS) ReconcileRecordSet(_ context.Context, _ int64, name string, _ int, desired []bunny.Record) error {
 	d.reconcileCalls++
+	if d.onReconcile != nil {
+		onReconcile := d.onReconcile
+		d.onReconcile = nil
+		onReconcile()
+	}
 	if name == d.failName {
 		return errors.New("bunny failed")
 	}

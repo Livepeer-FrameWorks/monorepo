@@ -27,6 +27,7 @@ import (
 	"github.com/go-acme/lego/v4/providers/dns/bunny"
 	"github.com/go-acme/lego/v4/providers/dns/cloudflare"
 	"github.com/go-acme/lego/v4/registration"
+	"github.com/google/uuid"
 )
 
 const platformCertTenantID = ""
@@ -37,19 +38,25 @@ type certStore interface {
 	SaveCertificate(ctx context.Context, tenantID string, cert *store.Certificate) error
 	DeleteCertificate(ctx context.Context, tenantID, domain string) error
 	GetTLSBundle(ctx context.Context, bundleID string) (*store.TLSBundle, error)
+	GetTLSBundleForIssuance(ctx context.Context, bundleID string) (*store.TLSBundle, error)
 	SaveTLSBundle(ctx context.Context, bundle *store.TLSBundle) error
+	TryAcquireCertificateIssuanceLease(ctx context.Context, leaseKey, owner string, ttl time.Duration) (bool, error)
+	RenewCertificateIssuanceLease(ctx context.Context, leaseKey, owner string, ttl time.Duration) (bool, error)
+	ReleaseCertificateIssuanceLease(ctx context.Context, leaseKey, owner string) error
 	GetACMEAccount(ctx context.Context, tenantID, email, ca string) (*store.ACMEAccount, error)
 	SaveACMEAccount(ctx context.Context, tenantID string, acc *store.ACMEAccount) error
 	// Tenant alias intent and DNS readiness state.
 	EnsureTenantAlias(ctx context.Context, tenantID, subdomain string) (*store.TenantAlias, error)
 	GetTenantAlias(ctx context.Context, tenantID string) (*store.TenantAlias, error)
 	ListPendingTenantAliases(ctx context.Context) ([]store.TenantAlias, error)
-	SetTenantAliasStatus(ctx context.Context, tenantID, status, errMsg string) error
-	DeleteTenantAlias(ctx context.Context, tenantID string) error
-	UpsertTenantEdgeApplyState(ctx context.Context, st *store.TenantEdgeApplyState) error
+	SetTenantAliasStatus(ctx context.Context, tenantID, expectedSubdomain string, expectedAuthorityVersion int64, status, errMsg string) (bool, error)
+	DeleteTenantAlias(ctx context.Context, tenantID string) (bool, error)
+	UpsertTenantEdgeApplyAck(ctx context.Context, st *store.TenantEdgeApplyState) (store.TenantEdgeApplyAckOutcome, error)
 	TenantAliasHasDNS(ctx context.Context, tenantID string) (bool, error)
-	DeleteTenantEdgeApplyState(ctx context.Context, tenantID string) error
-	DeleteTenantEdgeApplyStateForCluster(ctx context.Context, tenantID, clusterID string) error
+	TenantAliasClusterAuthorityState(ctx context.Context, tenantID, clusterID string) (string, error)
+	GrantTenantAliasClusterAuthority(ctx context.Context, tenantID, clusterID string, sequence int64) (bool, error)
+	RevokeTenantAliasClusterAuthority(ctx context.Context, tenantID, clusterID string, sequence int64) (bool, error)
+	ListTenantAliasAuthorizedClusters(ctx context.Context, tenantID string) ([]string, error)
 	// Retired alias labels awaiting Bunny cleanup after a subdomain rename.
 	InsertTenantAliasRetirement(ctx context.Context, tenantID, subdomain string) error
 	ListTenantAliasRetirementLabels(ctx context.Context, tenantID string) ([]string, error)
@@ -58,8 +65,9 @@ type certStore interface {
 	GetTenantCustomDomain(ctx context.Context, tenantID, domain string) (*store.TenantCustomDomain, error)
 	ListTenantCustomDomainsByStatus(ctx context.Context, statuses []string) ([]store.TenantCustomDomain, error)
 	ListTenantCustomDomains(ctx context.Context, tenantID string) ([]store.TenantCustomDomain, error)
-	SetTenantCustomDomainStatus(ctx context.Context, tenantID, domain, status, errMsg string) error
-	SetTenantCustomDomainCertMetadata(ctx context.Context, tenantID, domain, issuerID string, expiresAt sql.NullTime) error
+	SetTenantCustomDomainStatus(ctx context.Context, tenantID, domain, expectedStatus, status, errMsg string) (bool, error)
+	SetTenantCustomDomainCertMetadata(ctx context.Context, tenantID, domain, expectedStatus, issuerID string, expiresAt sql.NullTime) (bool, error)
+	FinalizeTenantCustomDomainRemoval(ctx context.Context, tenantID, domain string) (bool, error)
 	DeleteTenantCustomDomain(ctx context.Context, tenantID, domain string) error
 }
 
@@ -93,6 +101,42 @@ func NewCertManager(s certStore) *CertManager {
 			return bunny.NewDNSProvider()
 		},
 	}
+}
+
+const certificateIssuanceLeaseTTL = 20 * time.Minute
+
+func (m *CertManager) acquireIssuanceLease(ctx context.Context, leaseKey string) (string, func(), error) {
+	// The owner identifies one issuance attempt, not one Navigator process.
+	// A process-wide owner would let concurrent goroutines re-enter the same
+	// lease through the retry-safe same-owner clause in the SQL upsert.
+	leaseOwner := uuid.NewString()
+	acquired, err := m.store.TryAcquireCertificateIssuanceLease(ctx, leaseKey, leaseOwner, certificateIssuanceLeaseTTL)
+	if err != nil {
+		return "", nil, fmt.Errorf("acquire certificate issuance lease: %w", err)
+	}
+	if !acquired {
+		return "", nil, store.ErrIssuanceInProgress
+	}
+	return leaseOwner, func() {
+		releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		if releaseErr := m.store.ReleaseCertificateIssuanceLease(releaseCtx, leaseKey, leaseOwner); releaseErr != nil {
+			// The durable lease expires independently; issuance has already
+			// completed, so release failure must not rewrite its outcome.
+			return
+		}
+	}, nil
+}
+
+func (m *CertManager) renewIssuanceLeaseForPublish(ctx context.Context, leaseKey, leaseOwner string) error {
+	renewed, err := m.store.RenewCertificateIssuanceLease(ctx, leaseKey, leaseOwner, certificateIssuanceLeaseTTL)
+	if err != nil {
+		return fmt.Errorf("renew certificate issuance lease: %w", err)
+	}
+	if !renewed {
+		return store.ErrIssuanceInProgress
+	}
+	return nil
 }
 
 // UseBunnyForMediaZones wires the DNS-01 provider selector: any domain
@@ -213,6 +257,23 @@ func (m *CertManager) IssueCertificate(ctx context.Context, tenantID, domain, em
 	} else if !errors.Is(err, store.ErrNotFound) {
 		return "", "", time.Time{}, fmt.Errorf("failed to check certificate cache: %w", err)
 	}
+	leaseKey := "certificate:" + tenantID + ":" + domain
+	leaseOwner, release, err := m.acquireIssuanceLease(ctx, leaseKey)
+	if err != nil {
+		return "", "", time.Time{}, err
+	}
+	defer release()
+	cert, err = m.store.GetCertificate(ctx, tenantID, domain)
+	if err == nil {
+		if time.Until(cert.ExpiresAt) > 30*24*time.Hour {
+			return cert.CertPEM, cert.KeyPEM, cert.ExpiresAt, nil
+		}
+		if cert.IssuerCA != "" {
+			existingIssuer = CAProvider(cert.IssuerCA)
+		}
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return "", "", time.Time{}, fmt.Errorf("recheck certificate cache: %w", err)
+	}
 
 	cas := caOrder()
 	if existingIssuer != "" {
@@ -249,6 +310,9 @@ func (m *CertManager) IssueCertificate(ctx context.Context, tenantID, domain, em
 		KeyPEM:    privateKeyPEM,
 		ExpiresAt: expiry,
 		IssuerCA:  string(issuedBy),
+	}
+	if err := m.renewIssuanceLeaseForPublish(ctx, leaseKey, leaseOwner); err != nil {
+		return "", "", time.Time{}, err
 	}
 	if err := m.store.SaveCertificate(ctx, tenantID, newCert); err != nil {
 		return "", "", time.Time{}, fmt.Errorf("failed to save certificate: %w", err)
@@ -294,6 +358,23 @@ func (m *CertManager) issueCertificateViaBunny(ctx context.Context, tenantID, do
 	} else if !errors.Is(err, store.ErrNotFound) {
 		return "", "", time.Time{}, "", fmt.Errorf("failed to check certificate cache: %w", err)
 	}
+	leaseKey := "certificate:" + tenantID + ":" + domain
+	leaseOwner, release, err := m.acquireIssuanceLease(ctx, leaseKey)
+	if err != nil {
+		return "", "", time.Time{}, "", err
+	}
+	defer release()
+	cert, err = m.store.GetCertificate(ctx, tenantID, domain)
+	if err == nil {
+		if time.Until(cert.ExpiresAt) > 30*24*time.Hour {
+			return cert.CertPEM, cert.KeyPEM, cert.ExpiresAt, cert.IssuerCA, nil
+		}
+		if cert.IssuerCA != "" {
+			existingIssuer = CAProvider(cert.IssuerCA)
+		}
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return "", "", time.Time{}, "", fmt.Errorf("recheck certificate cache: %w", err)
+	}
 
 	cas := caOrder()
 	if existingIssuer != "" {
@@ -329,6 +410,9 @@ func (m *CertManager) issueCertificateViaBunny(ctx context.Context, tenantID, do
 		ExpiresAt: expiry,
 		IssuerCA:  string(issuedBy),
 	}
+	if err := m.renewIssuanceLeaseForPublish(ctx, leaseKey, leaseOwner); err != nil {
+		return "", "", time.Time{}, "", err
+	}
 	if err := m.store.SaveCertificate(ctx, tenantID, newCert); err != nil {
 		return "", "", time.Time{}, "", fmt.Errorf("failed to save certificate: %w", err)
 	}
@@ -351,8 +435,12 @@ func (m *CertManager) RenewCertificate(ctx context.Context, tenantID, domain, em
 			if !exp.IsZero() {
 				expSQL = sql.NullTime{Valid: true, Time: exp}
 			}
-			if metaErr := m.store.SetTenantCustomDomainCertMetadata(ctx, tenantID, domain, issuer, expSQL); metaErr != nil {
+			written, metaErr := m.store.SetTenantCustomDomainCertMetadata(ctx, tenantID, domain, row.Status, issuer, expSQL)
+			if metaErr != nil {
 				return "", "", time.Time{}, fmt.Errorf("custom-domain cert metadata: %w", metaErr)
+			}
+			if !written {
+				return "", "", time.Time{}, store.ErrAuthorityLost
 			}
 			return c, k, exp, nil
 		} else if lookupErr != nil && !errors.Is(lookupErr, store.ErrNotFound) {
@@ -375,6 +463,22 @@ func (m *CertManager) ensureTLSBundle(ctx context.Context, bundleID string, doma
 	if bundleID == "" || len(domains) == 0 || strings.TrimSpace(email) == "" {
 		return nil, fmt.Errorf("bundle_id, domains, and email are required")
 	}
+	authoritySubdomain := ""
+	var authorityVersion int64
+	if tenantID, tenantBundle := strings.CutPrefix(bundleID, "tenant:"); tenantBundle {
+		alias, aliasErr := m.store.GetTenantAlias(ctx, tenantID)
+		if aliasErr != nil {
+			if errors.Is(aliasErr, store.ErrNotFound) {
+				return nil, store.ErrAuthorityLost
+			}
+			return nil, fmt.Errorf("tenant alias authority: %w", aliasErr)
+		}
+		if alias.Status == "tearing_down" || alias.AuthorityVersion <= 0 || !tenantBundleDomainsMatchAlias(domains, alias.Subdomain) {
+			return nil, store.ErrAuthorityLost
+		}
+		authoritySubdomain = alias.Subdomain
+		authorityVersion = alias.AuthorityVersion
+	}
 
 	if enforceAllowlist {
 		for _, domain := range domains {
@@ -393,7 +497,7 @@ func (m *CertManager) ensureTLSBundle(ctx context.Context, bundleID string, doma
 	}
 
 	var pinnedCA CAProvider
-	existing, err := m.store.GetTLSBundle(ctx, bundleID)
+	existing, err := m.store.GetTLSBundleForIssuance(ctx, bundleID)
 	switch {
 	case err == nil:
 		if slices.Equal(existing.Domains, domains) && time.Until(existing.ExpiresAt) > 30*24*time.Hour {
@@ -409,6 +513,24 @@ func (m *CertManager) ensureTLSBundle(ctx context.Context, bundleID string, doma
 		}
 	case !errors.Is(err, store.ErrNotFound):
 		return nil, fmt.Errorf("failed to check tls bundle cache: %w", err)
+	}
+	leaseKey := "tls-bundle:" + bundleID
+	leaseOwner, release, err := m.acquireIssuanceLease(ctx, leaseKey)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	existing, err = m.store.GetTLSBundleForIssuance(ctx, bundleID)
+	switch {
+	case err == nil:
+		if slices.Equal(existing.Domains, domains) && time.Until(existing.ExpiresAt) > 30*24*time.Hour {
+			return existing, nil
+		}
+		if existing.IssuerCA != "" {
+			pinnedCA = CAProvider(existing.IssuerCA)
+		}
+	case !errors.Is(err, store.ErrNotFound):
+		return nil, fmt.Errorf("recheck tls bundle cache: %w", err)
 	}
 
 	var cas []CAProvider
@@ -442,22 +564,42 @@ func (m *CertManager) ensureTLSBundle(ctx context.Context, bundleID string, doma
 	}
 
 	bundle := &store.TLSBundle{
-		BundleID:  bundleID,
-		Domains:   domains,
-		CertPEM:   certificatePEM,
-		KeyPEM:    privateKeyPEM,
-		ExpiresAt: expiry,
-		IssuerCA:  string(issuingCA),
+		BundleID:           bundleID,
+		Domains:            domains,
+		CertPEM:            certificatePEM,
+		KeyPEM:             privateKeyPEM,
+		ExpiresAt:          expiry,
+		IssuerCA:           string(issuingCA),
+		AuthoritySubdomain: authoritySubdomain,
+		AuthorityVersion:   authorityVersion,
+	}
+	if err := m.renewIssuanceLeaseForPublish(ctx, leaseKey, leaseOwner); err != nil {
+		return nil, err
 	}
 	if err := m.store.SaveTLSBundle(ctx, bundle); err != nil {
 		return nil, fmt.Errorf("failed to save tls bundle: %w", err)
 	}
-	if strings.HasPrefix(bundleID, "tenant:") {
-		if err := m.updateCustomDomainBundleMetadata(ctx, strings.TrimPrefix(bundleID, "tenant:"), bundle); err != nil {
-			return nil, err
+	return bundle, nil
+}
+
+func tenantBundleDomainsMatchAlias(domains []string, subdomain string) bool {
+	subdomain = strings.TrimSpace(strings.ToLower(subdomain))
+	if subdomain == "" {
+		return false
+	}
+	domainSet := make(map[string]struct{}, len(domains))
+	for _, domain := range domains {
+		domainSet[strings.TrimSpace(strings.ToLower(domain))] = struct{}{}
+	}
+	for domain := range domainSet {
+		if strings.HasPrefix(domain, "*.") || !strings.HasPrefix(domain, subdomain+".") {
+			continue
+		}
+		if _, ok := domainSet["*."+domain]; ok {
+			return true
 		}
 	}
-	return bundle, nil
+	return false
 }
 
 func hasDomainOutsidePlatformAllowlist(domains []string) bool {
@@ -467,30 +609,6 @@ func hasDomainOutsidePlatformAllowlist(domains []string) bool {
 		}
 	}
 	return false
-}
-
-func (m *CertManager) updateCustomDomainBundleMetadata(ctx context.Context, tenantID string, bundle *store.TLSBundle) error {
-	rows, err := m.store.ListTenantCustomDomains(ctx, tenantID)
-	if err != nil {
-		return fmt.Errorf("list tenant custom domains: %w", err)
-	}
-	domainSet := make(map[string]struct{}, len(bundle.Domains))
-	for _, domain := range bundle.Domains {
-		domainSet[domain] = struct{}{}
-	}
-	expSQL := sql.NullTime{}
-	if !bundle.ExpiresAt.IsZero() {
-		expSQL = sql.NullTime{Valid: true, Time: bundle.ExpiresAt}
-	}
-	for _, row := range rows {
-		if _, ok := domainSet[row.Domain]; !ok {
-			continue
-		}
-		if err := m.store.SetTenantCustomDomainCertMetadata(ctx, tenantID, row.Domain, bundle.IssuerCA, expSQL); err != nil {
-			return fmt.Errorf("custom-domain cert metadata: %w", err)
-		}
-	}
-	return nil
 }
 
 func (m *CertManager) GetTLSBundle(ctx context.Context, bundleID string) (*store.TLSBundle, error) {
@@ -783,8 +901,7 @@ func (m *CertManager) verifiedCustomDomainsForTenant(ctx context.Context, tenant
 	}
 	out := make([]string, 0, len(rows))
 	for _, row := range rows {
-		switch row.Status {
-		case "verified", "cert_issuing", "cert_issued":
+		if store.CustomDomainParticipatesInTenantBundle(row.Status) {
 			out = append(out, row.Domain)
 		}
 	}

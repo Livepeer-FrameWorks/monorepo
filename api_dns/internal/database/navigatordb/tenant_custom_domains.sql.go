@@ -32,6 +32,16 @@ INSERT INTO navigator.tenant_custom_domains
     (tenant_id, domain, status, acme_dns_subdomain, created_at, updated_at)
 VALUES ($1::uuid, $2, 'pending_verification', $3, NOW(), NOW())
 ON CONFLICT (tenant_id, domain) DO UPDATE SET
+    status = CASE WHEN navigator.tenant_custom_domains.status = 'tearing_down'
+                  THEN 'pending_verification' ELSE navigator.tenant_custom_domains.status END,
+    issuer_id = CASE WHEN navigator.tenant_custom_domains.status = 'tearing_down'
+                     THEN NULL ELSE navigator.tenant_custom_domains.issuer_id END,
+    cert_issued_at = CASE WHEN navigator.tenant_custom_domains.status = 'tearing_down'
+                          THEN NULL ELSE navigator.tenant_custom_domains.cert_issued_at END,
+    cert_expires_at = CASE WHEN navigator.tenant_custom_domains.status = 'tearing_down'
+                           THEN NULL ELSE navigator.tenant_custom_domains.cert_expires_at END,
+    last_error = CASE WHEN navigator.tenant_custom_domains.status = 'tearing_down'
+                      THEN NULL ELSE navigator.tenant_custom_domains.last_error END,
     updated_at = NOW()
 RETURNING tenant_id, domain, status, acme_dns_subdomain, issuer_id,
           last_verified_at, cert_issued_at, cert_expires_at, last_error,
@@ -61,6 +71,51 @@ func (q *Queries) EnsureTenantCustomDomain(ctx context.Context, arg EnsureTenant
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const finalizeTenantCustomDomainRemoval = `-- name: FinalizeTenantCustomDomainRemoval :execrows
+WITH teardown_authority AS MATERIALIZED (
+    SELECT custom_domain.tenant_id, custom_domain.domain
+    FROM navigator.tenant_custom_domains AS custom_domain
+    WHERE custom_domain.tenant_id = $1::uuid
+      AND custom_domain.domain = $2
+      AND custom_domain.status = 'tearing_down'
+    FOR UPDATE
+), deleted_certificate AS (
+    DELETE FROM navigator.certificates AS certificate
+    USING teardown_authority
+    WHERE certificate.tenant_id = teardown_authority.tenant_id
+      AND certificate.domain = teardown_authority.domain
+), deleted_accounts AS (
+    DELETE FROM navigator.acme_accounts AS account
+    USING teardown_authority
+    WHERE account.tenant_id = teardown_authority.tenant_id
+      AND NOT EXISTS (
+          SELECT 1
+          FROM navigator.tenant_custom_domains AS other_domain
+          WHERE other_domain.tenant_id = teardown_authority.tenant_id
+            AND other_domain.domain <> teardown_authority.domain
+            AND other_domain.status IN ('verified', 'cert_issuing', 'cert_issued', 'cert_failed')
+      )
+)
+DELETE FROM navigator.tenant_custom_domains AS custom_domain
+USING teardown_authority
+WHERE custom_domain.tenant_id = teardown_authority.tenant_id
+  AND custom_domain.domain = teardown_authority.domain
+  AND custom_domain.status = 'tearing_down'
+`
+
+type FinalizeTenantCustomDomainRemovalParams struct {
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+	Domain   string `db:"domain" json:"domain"`
+}
+
+func (q *Queries) FinalizeTenantCustomDomainRemoval(ctx context.Context, arg FinalizeTenantCustomDomainRemovalParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, finalizeTenantCustomDomainRemoval, arg.TenantID, arg.Domain)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const getTenantCustomDomain = `-- name: GetTenantCustomDomain :one
@@ -188,14 +243,17 @@ UPDATE navigator.tenant_custom_domains
 SET issuer_id = NULLIF($1::text, ''),
     cert_expires_at = $2,
     updated_at = NOW()
-WHERE tenant_id = $3::uuid AND domain = $4
+WHERE tenant_id = $3::uuid
+  AND domain = $4
+  AND status = $5
 `
 
 type SetTenantCustomDomainCertMetadataParams struct {
-	IssuerID      string       `db:"issuer_id" json:"issuer_id"`
-	CertExpiresAt sql.NullTime `db:"cert_expires_at" json:"cert_expires_at"`
-	TenantID      string       `db:"tenant_id" json:"tenant_id"`
-	Domain        string       `db:"domain" json:"domain"`
+	IssuerID       string       `db:"issuer_id" json:"issuer_id"`
+	CertExpiresAt  sql.NullTime `db:"cert_expires_at" json:"cert_expires_at"`
+	TenantID       string       `db:"tenant_id" json:"tenant_id"`
+	Domain         string       `db:"domain" json:"domain"`
+	ExpectedStatus string       `db:"expected_status" json:"expected_status"`
 }
 
 func (q *Queries) SetTenantCustomDomainCertMetadata(ctx context.Context, arg SetTenantCustomDomainCertMetadataParams) (int64, error) {
@@ -204,6 +262,7 @@ func (q *Queries) SetTenantCustomDomainCertMetadata(ctx context.Context, arg Set
 		arg.CertExpiresAt,
 		arg.TenantID,
 		arg.Domain,
+		arg.ExpectedStatus,
 	)
 	if err != nil {
 		return 0, err
@@ -218,14 +277,17 @@ SET status = $1,
     cert_issued_at = CASE WHEN $1 = 'cert_issued' THEN NOW() ELSE cert_issued_at END,
     last_error = NULLIF($2::text, ''),
     updated_at = NOW()
-WHERE tenant_id = $3::uuid AND domain = $4
+WHERE tenant_id = $3::uuid
+  AND domain = $4
+  AND ($1 = 'tearing_down' OR status = $5)
 `
 
 type SetTenantCustomDomainStatusParams struct {
-	Status   string `db:"status" json:"status"`
-	ErrMsg   string `db:"err_msg" json:"err_msg"`
-	TenantID string `db:"tenant_id" json:"tenant_id"`
-	Domain   string `db:"domain" json:"domain"`
+	Status         string `db:"status" json:"status"`
+	ErrMsg         string `db:"err_msg" json:"err_msg"`
+	TenantID       string `db:"tenant_id" json:"tenant_id"`
+	Domain         string `db:"domain" json:"domain"`
+	ExpectedStatus string `db:"expected_status" json:"expected_status"`
 }
 
 func (q *Queries) SetTenantCustomDomainStatus(ctx context.Context, arg SetTenantCustomDomainStatusParams) (int64, error) {
@@ -234,6 +296,7 @@ func (q *Queries) SetTenantCustomDomainStatus(ctx context.Context, arg SetTenant
 		arg.ErrMsg,
 		arg.TenantID,
 		arg.Domain,
+		arg.ExpectedStatus,
 	)
 	if err != nil {
 		return 0, err

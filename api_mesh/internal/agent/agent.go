@@ -1135,6 +1135,12 @@ func (a *Agent) syncInternalCertificates() (syncErr error) {
 	if err != nil {
 		return fmt.Errorf("get ca bundle: %w", err)
 	}
+	if bundleResp == nil {
+		return errors.New("navigator returned an empty internal ca bundle response")
+	}
+	if errText := strings.TrimSpace(bundleResp.GetError()); errText != "" {
+		return fmt.Errorf("get ca bundle: navigator: %s", errText)
+	}
 	if !bundleResp.GetFound() || strings.TrimSpace(bundleResp.GetCaPem()) == "" {
 		return fmt.Errorf("navigator returned no internal ca bundle")
 	}
@@ -1460,6 +1466,10 @@ func (a *Agent) syncIngressCertificates() error {
 		resp, err := a.navigatorClient.GetTLSBundle(ctx, &dnspb.GetTLSBundleRequest{BundleId: bundleID})
 		if err != nil {
 			a.logger.WithError(err).WithField("bundle_id", bundleID).Warn("Ingress sync: GetTLSBundle failed")
+			continue
+		}
+		if resp == nil || strings.TrimSpace(resp.GetError()) != "" {
+			a.logger.WithFields(logging.Fields{"bundle_id": bundleID, "navigator_error": responseError(resp)}).Warn("Ingress sync: GetTLSBundle returned no authoritative result")
 			continue
 		}
 		if !resp.GetFound() || strings.TrimSpace(resp.GetCertPem()) == "" || strings.TrimSpace(resp.GetKeyPem()) == "" {

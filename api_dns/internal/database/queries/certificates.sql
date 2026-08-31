@@ -20,8 +20,18 @@ ON CONFLICT (domain) WHERE tenant_id IS NULL DO UPDATE SET
 RETURNING id, tenant_id, created_at;
 
 -- name: SaveTenantCertificate :one
+WITH custom_domain_authority AS MATERIALIZED (
+    SELECT custom_domain.tenant_id
+    FROM navigator.tenant_custom_domains AS custom_domain
+    WHERE custom_domain.tenant_id = sqlc.arg(tenant_id)::uuid
+      AND custom_domain.domain = sqlc.arg(domain)
+      AND custom_domain.status IN ('verified', 'cert_issuing', 'cert_issued', 'cert_failed')
+    FOR UPDATE OF custom_domain
+)
 INSERT INTO navigator.certificates (tenant_id, domain, cert_pem, key_pem, expires_at, updated_at, issuer_ca)
-VALUES ($1, $2, $3, $4, $5, NOW(), $6)
+SELECT custom_domain_authority.tenant_id, sqlc.arg(domain), sqlc.arg(cert_pem), sqlc.arg(key_pem),
+       sqlc.arg(expires_at), NOW(), sqlc.arg(issuer_ca)
+FROM custom_domain_authority
 ON CONFLICT (tenant_id, domain) DO UPDATE SET
     cert_pem = EXCLUDED.cert_pem,
     key_pem = EXCLUDED.key_pem,

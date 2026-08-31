@@ -14,9 +14,11 @@ import (
 )
 
 type fakeRenewStore struct {
-	certs   []store.Certificate
-	bundles []store.TLSBundle
-	err     error
+	certs         []store.Certificate
+	bundles       []store.TLSBundle
+	aliases       map[string]*store.TenantAlias
+	customDomains map[string]*store.TenantCustomDomain
+	err           error
 }
 
 func (f *fakeRenewStore) ListExpiringCertificates(ctx context.Context, threshold time.Duration) ([]store.Certificate, error) {
@@ -27,10 +29,36 @@ func (f *fakeRenewStore) ListExpiringTLSBundles(ctx context.Context, threshold t
 	return f.bundles, f.err
 }
 
+func (f *fakeRenewStore) GetTenantAlias(_ context.Context, tenantID string) (*store.TenantAlias, error) {
+	alias := f.aliases[tenantID]
+	if alias == nil {
+		return nil, store.ErrNotFound
+	}
+	return alias, nil
+}
+
+func (f *fakeRenewStore) GetTenantCustomDomain(_ context.Context, tenantID, domain string) (*store.TenantCustomDomain, error) {
+	customDomain := f.customDomains[tenantID+"\x00"+domain]
+	if customDomain == nil {
+		return nil, store.ErrNotFound
+	}
+	return customDomain, nil
+}
+
+func (f *fakeRenewStore) DeleteExpiredCertificateIssuanceLeases(context.Context) (int64, error) {
+	return 0, nil
+}
+
 type fakeIssuer struct {
-	results []error
-	calls   []string
-	bundles []string
+	results       []error
+	calls         []string
+	bundles       []string
+	tenantBundles []tenantBundleCall
+}
+
+type tenantBundleCall struct {
+	tenantID  string
+	subdomain string
 }
 
 func (f *fakeIssuer) RenewCertificate(ctx context.Context, tenantID, domain, email string) (string, string, time.Time, error) {
@@ -54,6 +82,19 @@ func (f *fakeIssuer) EnsureTLSBundle(ctx context.Context, bundleID string, domai
 		return nil, err
 	}
 	return &store.TLSBundle{BundleID: bundleID, Domains: domains}, nil
+}
+
+func (f *fakeIssuer) EnsureTenantWildcardCertificate(_ context.Context, tenantID, subdomain, _, _, _ string) (*store.TLSBundle, error) {
+	f.tenantBundles = append(f.tenantBundles, tenantBundleCall{tenantID: tenantID, subdomain: subdomain})
+	if len(f.results) == 0 {
+		return &store.TLSBundle{BundleID: "tenant:" + tenantID}, nil
+	}
+	err := f.results[0]
+	f.results = f.results[1:]
+	if err != nil {
+		return nil, err
+	}
+	return &store.TLSBundle{BundleID: "tenant:" + tenantID}, nil
 }
 
 func TestRenewalWorkerRetriesWithBackoff(t *testing.T) {
@@ -110,4 +151,43 @@ func TestRenewalWorkerSkipsRetriesOnNonRetryableErrorAndContinues(t *testing.T) 
 	worker.renewCertificates(context.Background())
 
 	require.Equal(t, []string{"fail.example.com", "next.example.com"}, issuer.calls)
+}
+
+func TestRenewalWorkerRequiresLiveTenantAuthority(t *testing.T) {
+	tenantID := "10000000-0000-0000-0000-000000000001"
+	pendingTenantID := "10000000-0000-0000-0000-000000000002"
+	renewStore := &fakeRenewStore{
+		certs: []store.Certificate{
+			{Domain: "alias.example.test", TenantID: sql.NullString{String: tenantID, Valid: true}},
+			{Domain: "custom.example.test", TenantID: sql.NullString{String: tenantID, Valid: true}},
+			{Domain: "platform.example.test"},
+		},
+		bundles: []store.TLSBundle{
+			{BundleID: "tenant:" + tenantID, Domains: []string{"alias.example.test"}},
+			{BundleID: "tenant:" + pendingTenantID, Domains: []string{"pending.example.test"}},
+			{BundleID: "platform", Domains: []string{"platform.example.test"}},
+		},
+		aliases: map[string]*store.TenantAlias{
+			tenantID:        {TenantID: tenantID, Subdomain: "alias", Status: "cert_issued"},
+			pendingTenantID: {TenantID: pendingTenantID, Status: "cert_issuing"},
+		},
+		customDomains: map[string]*store.TenantCustomDomain{
+			tenantID + "\x00custom.example.test": {TenantID: tenantID, Domain: "custom.example.test", Status: "cert_failed"},
+		},
+	}
+	issuer := &fakeIssuer{}
+	worker := NewRenewalWorker(renewStore, issuer, logging.NewLogger(), "frameworks.network", "ops@example.com")
+	worker.renewCertificates(context.Background())
+
+	require.Equal(t, []string{"custom.example.test", "platform.example.test"}, issuer.calls)
+	require.Equal(t, []tenantBundleCall{{tenantID: tenantID, subdomain: "alias"}}, issuer.tenantBundles)
+	require.Equal(t, []string{"platform"}, issuer.bundles)
+}
+
+func TestRenewalWorkerChecksBundlesWhenNoCertificatesExpire(t *testing.T) {
+	renewStore := &fakeRenewStore{bundles: []store.TLSBundle{{BundleID: "platform", Domains: []string{"platform.example.test"}}}}
+	issuer := &fakeIssuer{}
+	worker := NewRenewalWorker(renewStore, issuer, logging.NewLogger(), "frameworks.network", "ops@example.com")
+	worker.renewCertificates(context.Background())
+	require.Equal(t, []string{"platform"}, issuer.bundles)
 }

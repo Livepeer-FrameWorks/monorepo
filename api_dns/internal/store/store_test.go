@@ -243,7 +243,7 @@ func TestSaveACMEAccount(t *testing.T) {
 	}
 
 	mock.ExpectQuery(`INSERT INTO navigator\.acme_accounts \(tenant_id, email, registration_json, private_key_pem, ca\)`).
-		WithArgs("t1", acc.Email, acc.Registration, acc.PrivateKeyPEM, "letsencrypt").
+		WithArgs(acc.Email, acc.Registration, acc.PrivateKeyPEM, "letsencrypt", "t1").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "created_at"}).AddRow("acme-1", sql.NullString{String: "t1", Valid: true}, now))
 
 	store := NewStore(db, nil)
@@ -307,7 +307,7 @@ func TestStoreSaveCertificateUpsert(t *testing.T) {
 	}
 
 	mock.ExpectQuery(`INSERT INTO navigator\.certificates \(tenant_id, domain, cert_pem, key_pem, expires_at, updated_at, issuer_ca\)`).
-		WithArgs("tenant-123", cert.Domain, cert.CertPEM, cert.KeyPEM, cert.ExpiresAt, "letsencrypt").
+		WithArgs(cert.Domain, cert.CertPEM, cert.KeyPEM, cert.ExpiresAt, "letsencrypt", "tenant-123").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "created_at"}).AddRow("cert-1", sql.NullString{String: "tenant-123", Valid: true}, now))
 
 	store := NewStore(db, nil)

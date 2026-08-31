@@ -8,17 +8,56 @@ package navigatordb
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	"github.com/lib/pq"
 )
 
-const deleteTenantAlias = `-- name: DeleteTenantAlias :exec
-DELETE FROM navigator.tenant_aliases WHERE tenant_id = $1::uuid
+const deleteTenantAlias = `-- name: DeleteTenantAlias :execrows
+WITH teardown_authority AS MATERIALIZED (
+    SELECT tenant_id
+    FROM navigator.tenant_aliases
+    WHERE tenant_id = $1::uuid
+      AND status = 'tearing_down'
+    FOR UPDATE
+), deleted_alias_certificates AS (
+    DELETE FROM navigator.certificates AS certificate
+    USING teardown_authority
+    WHERE certificate.tenant_id = teardown_authority.tenant_id
+      AND NOT EXISTS (
+          SELECT 1
+          FROM navigator.tenant_custom_domains AS custom_domain
+          WHERE custom_domain.tenant_id = certificate.tenant_id
+            AND custom_domain.domain = certificate.domain
+            AND custom_domain.status IN ('verified', 'cert_issuing', 'cert_issued', 'cert_failed')
+      )
+), deleted_alias_bundle AS (
+    DELETE FROM navigator.tls_bundles
+    USING teardown_authority
+    WHERE bundle_id = 'tenant:' || teardown_authority.tenant_id::text
+), deleted_unused_acme_accounts AS (
+    DELETE FROM navigator.acme_accounts AS account
+    USING teardown_authority
+    WHERE account.tenant_id = teardown_authority.tenant_id
+      AND NOT EXISTS (
+          SELECT 1
+          FROM navigator.tenant_custom_domains AS custom_domain
+          WHERE custom_domain.tenant_id = teardown_authority.tenant_id
+            AND custom_domain.status IN ('verified', 'cert_issuing', 'cert_issued', 'cert_failed')
+      )
+)
+DELETE FROM navigator.tenant_aliases AS alias
+USING teardown_authority
+WHERE alias.tenant_id = teardown_authority.tenant_id
+  AND alias.status = 'tearing_down'
 `
 
-func (q *Queries) DeleteTenantAlias(ctx context.Context, tenantID string) error {
-	_, err := q.db.ExecContext(ctx, deleteTenantAlias, tenantID)
-	return err
+func (q *Queries) DeleteTenantAlias(ctx context.Context, tenantID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteTenantAlias, tenantID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const deleteTenantAliasRetirement = `-- name: DeleteTenantAliasRetirement :exec
@@ -36,43 +75,72 @@ func (q *Queries) DeleteTenantAliasRetirement(ctx context.Context, arg DeleteTen
 	return err
 }
 
-const deleteTenantEdgeApplyState = `-- name: DeleteTenantEdgeApplyState :exec
-DELETE FROM navigator.tenant_edge_apply_state WHERE tenant_id = $1::uuid
+const deleteTenantEdgeApplyStateForRevokedCluster = `-- name: DeleteTenantEdgeApplyStateForRevokedCluster :execrows
+DELETE FROM navigator.tenant_edge_apply_state AS edge
+USING navigator.tenant_alias_cluster_authority AS cluster_authority
+WHERE cluster_authority.tenant_id = $1::uuid
+  AND cluster_authority.cluster_id = $2
+  AND cluster_authority.state = 'revoked'
+  AND edge.tenant_id = cluster_authority.tenant_id
+  AND edge.cluster_id = cluster_authority.cluster_id
 `
 
-func (q *Queries) DeleteTenantEdgeApplyState(ctx context.Context, tenantID string) error {
-	_, err := q.db.ExecContext(ctx, deleteTenantEdgeApplyState, tenantID)
-	return err
-}
-
-const deleteTenantEdgeApplyStateForCluster = `-- name: DeleteTenantEdgeApplyStateForCluster :exec
-DELETE FROM navigator.tenant_edge_apply_state
-WHERE tenant_id = $1::uuid AND cluster_id = $2
-`
-
-type DeleteTenantEdgeApplyStateForClusterParams struct {
+type DeleteTenantEdgeApplyStateForRevokedClusterParams struct {
 	TenantID  string `db:"tenant_id" json:"tenant_id"`
 	ClusterID string `db:"cluster_id" json:"cluster_id"`
 }
 
-func (q *Queries) DeleteTenantEdgeApplyStateForCluster(ctx context.Context, arg DeleteTenantEdgeApplyStateForClusterParams) error {
-	_, err := q.db.ExecContext(ctx, deleteTenantEdgeApplyStateForCluster, arg.TenantID, arg.ClusterID)
-	return err
+// Fenced on the tombstone so a replayed delete cannot outrun a newer grant.
+func (q *Queries) DeleteTenantEdgeApplyStateForRevokedCluster(ctx context.Context, arg DeleteTenantEdgeApplyStateForRevokedClusterParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteTenantEdgeApplyStateForRevokedCluster, arg.TenantID, arg.ClusterID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const ensureTenantAlias = `-- name: EnsureTenantAlias :one
-INSERT INTO navigator.tenant_aliases (tenant_id, subdomain, status, created_at, updated_at)
-VALUES ($1::uuid, $2, 'cert_issuing', NOW(), NOW())
-ON CONFLICT (tenant_id) DO UPDATE SET
-    subdomain = EXCLUDED.subdomain,
-    status = CASE WHEN navigator.tenant_aliases.subdomain IS DISTINCT FROM EXCLUDED.subdomain
-                  THEN 'cert_issuing' ELSE navigator.tenant_aliases.status END,
-    cert_issued_at = CASE WHEN navigator.tenant_aliases.subdomain IS DISTINCT FROM EXCLUDED.subdomain
-                          THEN NULL ELSE navigator.tenant_aliases.cert_issued_at END,
-    last_error = CASE WHEN navigator.tenant_aliases.subdomain IS DISTINCT FROM EXCLUDED.subdomain
-                      THEN NULL ELSE navigator.tenant_aliases.last_error END,
-    updated_at = NOW()
-RETURNING tenant_id, subdomain, status, cert_issued_at, last_error, created_at, updated_at
+WITH previous_authority AS MATERIALIZED (
+    SELECT tenant_id, subdomain, status, authority_version
+    FROM navigator.tenant_aliases
+    WHERE tenant_id = $1::uuid
+    FOR UPDATE
+), ensured_alias AS (
+    INSERT INTO navigator.tenant_aliases (tenant_id, subdomain, status, created_at, updated_at)
+    VALUES ($1::uuid, $2, 'cert_issuing', NOW(), NOW())
+    ON CONFLICT (tenant_id) DO UPDATE SET
+        subdomain = EXCLUDED.subdomain,
+        status = CASE WHEN navigator.tenant_aliases.subdomain IS DISTINCT FROM EXCLUDED.subdomain
+                           OR navigator.tenant_aliases.status = 'tearing_down'
+                      THEN 'cert_issuing' ELSE navigator.tenant_aliases.status END,
+        authority_version = CASE WHEN navigator.tenant_aliases.subdomain IS DISTINCT FROM EXCLUDED.subdomain
+                                      OR navigator.tenant_aliases.status = 'tearing_down'
+                                 THEN navigator.tenant_aliases.authority_version + 1
+                                 ELSE navigator.tenant_aliases.authority_version END,
+        cert_issued_at = CASE WHEN navigator.tenant_aliases.subdomain IS DISTINCT FROM EXCLUDED.subdomain
+                                   OR navigator.tenant_aliases.status = 'tearing_down'
+                              THEN NULL ELSE navigator.tenant_aliases.cert_issued_at END,
+        last_error = CASE WHEN navigator.tenant_aliases.subdomain IS DISTINCT FROM EXCLUDED.subdomain
+                               OR navigator.tenant_aliases.status = 'tearing_down'
+                          THEN NULL ELSE navigator.tenant_aliases.last_error END,
+        updated_at = NOW()
+    RETURNING tenant_id, subdomain, status, authority_version, cert_issued_at, last_error, created_at, updated_at
+), reset_edge_authority AS (
+    UPDATE navigator.tenant_edge_apply_state AS edge
+    SET state = 'pending_distribute',
+        in_dns_at = NULL,
+        updated_at = NOW()
+    FROM previous_authority
+    WHERE edge.tenant_id = previous_authority.tenant_id
+      AND (
+          previous_authority.subdomain IS DISTINCT FROM $2
+          OR previous_authority.status = 'tearing_down'
+      )
+    RETURNING edge.tenant_id
+)
+SELECT tenant_id, subdomain, status, authority_version, cert_issued_at, last_error, created_at, updated_at
+FROM ensured_alias
+WHERE (SELECT COUNT(*) FROM reset_edge_authority) >= 0
 `
 
 type EnsureTenantAliasParams struct {
@@ -80,13 +148,25 @@ type EnsureTenantAliasParams struct {
 	Subdomain string `db:"subdomain" json:"subdomain"`
 }
 
-func (q *Queries) EnsureTenantAlias(ctx context.Context, arg EnsureTenantAliasParams) (NavigatorTenantAlias, error) {
+type EnsureTenantAliasRow struct {
+	TenantID         string         `db:"tenant_id" json:"tenant_id"`
+	Subdomain        string         `db:"subdomain" json:"subdomain"`
+	Status           string         `db:"status" json:"status"`
+	AuthorityVersion int64          `db:"authority_version" json:"authority_version"`
+	CertIssuedAt     sql.NullTime   `db:"cert_issued_at" json:"cert_issued_at"`
+	LastError        sql.NullString `db:"last_error" json:"last_error"`
+	CreatedAt        time.Time      `db:"created_at" json:"created_at"`
+	UpdatedAt        time.Time      `db:"updated_at" json:"updated_at"`
+}
+
+func (q *Queries) EnsureTenantAlias(ctx context.Context, arg EnsureTenantAliasParams) (EnsureTenantAliasRow, error) {
 	row := q.db.QueryRowContext(ctx, ensureTenantAlias, arg.TenantID, arg.Subdomain)
-	var i NavigatorTenantAlias
+	var i EnsureTenantAliasRow
 	err := row.Scan(
 		&i.TenantID,
 		&i.Subdomain,
 		&i.Status,
+		&i.AuthorityVersion,
 		&i.CertIssuedAt,
 		&i.LastError,
 		&i.CreatedAt,
@@ -96,7 +176,7 @@ func (q *Queries) EnsureTenantAlias(ctx context.Context, arg EnsureTenantAliasPa
 }
 
 const getTenantAlias = `-- name: GetTenantAlias :one
-SELECT tenant_id, subdomain, status, cert_issued_at, last_error, created_at, updated_at
+SELECT tenant_id, subdomain, status, authority_version, cert_issued_at, last_error, created_at, updated_at
 FROM navigator.tenant_aliases
 WHERE tenant_id = $1::uuid
 `
@@ -108,12 +188,46 @@ func (q *Queries) GetTenantAlias(ctx context.Context, tenantID string) (Navigato
 		&i.TenantID,
 		&i.Subdomain,
 		&i.Status,
+		&i.AuthorityVersion,
 		&i.CertIssuedAt,
 		&i.LastError,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const grantTenantAliasClusterAuthority = `-- name: GrantTenantAliasClusterAuthority :one
+INSERT INTO navigator.tenant_alias_cluster_authority (
+    tenant_id, cluster_id, state, authority_sequence, updated_at
+)
+SELECT alias.tenant_id, $1, 'active', $2, NOW()
+FROM navigator.tenant_aliases AS alias
+WHERE alias.tenant_id = $3::uuid
+  AND alias.status <> 'tearing_down'
+ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
+    state = 'active',
+    authority_sequence = EXCLUDED.authority_sequence,
+    updated_at = NOW()
+WHERE EXCLUDED.authority_sequence > navigator.tenant_alias_cluster_authority.authority_sequence
+   OR (
+       EXCLUDED.authority_sequence = navigator.tenant_alias_cluster_authority.authority_sequence
+       AND navigator.tenant_alias_cluster_authority.state = 'active'
+   )
+RETURNING true
+`
+
+type GrantTenantAliasClusterAuthorityParams struct {
+	ClusterID         string `db:"cluster_id" json:"cluster_id"`
+	AuthoritySequence int64  `db:"authority_sequence" json:"authority_sequence"`
+	TenantID          string `db:"tenant_id" json:"tenant_id"`
+}
+
+func (q *Queries) GrantTenantAliasClusterAuthority(ctx context.Context, arg GrantTenantAliasClusterAuthorityParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, grantTenantAliasClusterAuthority, arg.ClusterID, arg.AuthoritySequence, arg.TenantID)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const insertTenantAliasRetirement = `-- name: InsertTenantAliasRetirement :exec
@@ -133,7 +247,7 @@ func (q *Queries) InsertTenantAliasRetirement(ctx context.Context, arg InsertTen
 }
 
 const listPendingTenantAliases = `-- name: ListPendingTenantAliases :many
-SELECT tenant_id, subdomain, status, cert_issued_at, last_error, created_at, updated_at
+SELECT tenant_id, subdomain, status, authority_version, cert_issued_at, last_error, created_at, updated_at
 FROM navigator.tenant_aliases
 WHERE status IN ('cert_issuing', 'cert_failed')
 ORDER BY updated_at ASC
@@ -152,6 +266,7 @@ func (q *Queries) ListPendingTenantAliases(ctx context.Context) ([]NavigatorTena
 			&i.TenantID,
 			&i.Subdomain,
 			&i.Status,
+			&i.AuthorityVersion,
 			&i.CertIssuedAt,
 			&i.LastError,
 			&i.CreatedAt,
@@ -160,6 +275,37 @@ func (q *Queries) ListPendingTenantAliases(ctx context.Context) ([]NavigatorTena
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTenantAliasAuthorizedClusters = `-- name: ListTenantAliasAuthorizedClusters :many
+SELECT cluster_id
+FROM navigator.tenant_alias_cluster_authority
+WHERE tenant_id = $1::uuid
+  AND state = 'active'
+ORDER BY cluster_id
+`
+
+func (q *Queries) ListTenantAliasAuthorizedClusters(ctx context.Context, tenantID string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listTenantAliasAuthorizedClusters, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var cluster_id string
+		if err := rows.Scan(&cluster_id); err != nil {
+			return nil, err
+		}
+		items = append(items, cluster_id)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -236,7 +382,7 @@ func (q *Queries) ListTenantAliasRetirements(ctx context.Context) ([]NavigatorTe
 }
 
 const listTenantAliasesByStatus = `-- name: ListTenantAliasesByStatus :many
-SELECT tenant_id, subdomain, status, cert_issued_at, last_error, created_at, updated_at
+SELECT tenant_id, subdomain, status, authority_version, cert_issued_at, last_error, created_at, updated_at
 FROM navigator.tenant_aliases
 WHERE status = ANY($1::text[])
 ORDER BY updated_at ASC
@@ -255,6 +401,7 @@ func (q *Queries) ListTenantAliasesByStatus(ctx context.Context, statuses []stri
 			&i.TenantID,
 			&i.Subdomain,
 			&i.Status,
+			&i.AuthorityVersion,
 			&i.CertIssuedAt,
 			&i.LastError,
 			&i.CreatedAt,
@@ -274,32 +421,59 @@ func (q *Queries) ListTenantAliasesByStatus(ctx context.Context, statuses []stri
 }
 
 const listTenantEdgeApplyState = `-- name: ListTenantEdgeApplyState :many
-SELECT tenant_id, cluster_id, node_id, bundle_id,
-       state, last_seed_version, last_ack_at, in_dns_at, updated_at
-FROM navigator.tenant_edge_apply_state
-WHERE tenant_id = $1::uuid
-ORDER BY updated_at DESC
+SELECT edge.tenant_id, edge.cluster_id, edge.node_id, edge.bundle_id, edge.bundle_version,
+       edge.state, edge.last_seed_version, edge.last_delivery_sequence, edge.last_ack_at, edge.in_dns_at, edge.updated_at,
+       COALESCE(bundle.version, '')::text AS current_bundle_version,
+       (bundle.bundle_id IS NOT NULL)::boolean AS current_bundle_present
+FROM navigator.tenant_edge_apply_state AS edge
+JOIN navigator.tenant_alias_cluster_authority AS cluster_authority
+  ON cluster_authority.tenant_id = edge.tenant_id
+ AND cluster_authority.cluster_id = edge.cluster_id
+ AND cluster_authority.state = 'active'
+LEFT JOIN navigator.tls_bundles AS bundle ON bundle.bundle_id = edge.bundle_id
+WHERE edge.tenant_id = $1::uuid
+ORDER BY edge.updated_at DESC
 `
 
-func (q *Queries) ListTenantEdgeApplyState(ctx context.Context, tenantID string) ([]NavigatorTenantEdgeApplyState, error) {
+type ListTenantEdgeApplyStateRow struct {
+	TenantID             string        `db:"tenant_id" json:"tenant_id"`
+	ClusterID            string        `db:"cluster_id" json:"cluster_id"`
+	NodeID               string        `db:"node_id" json:"node_id"`
+	BundleID             string        `db:"bundle_id" json:"bundle_id"`
+	BundleVersion        string        `db:"bundle_version" json:"bundle_version"`
+	State                string        `db:"state" json:"state"`
+	LastSeedVersion      sql.NullInt64 `db:"last_seed_version" json:"last_seed_version"`
+	LastDeliverySequence int64         `db:"last_delivery_sequence" json:"last_delivery_sequence"`
+	LastAckAt            sql.NullTime  `db:"last_ack_at" json:"last_ack_at"`
+	InDnsAt              sql.NullTime  `db:"in_dns_at" json:"in_dns_at"`
+	UpdatedAt            time.Time     `db:"updated_at" json:"updated_at"`
+	CurrentBundleVersion string        `db:"current_bundle_version" json:"current_bundle_version"`
+	CurrentBundlePresent bool          `db:"current_bundle_present" json:"current_bundle_present"`
+}
+
+func (q *Queries) ListTenantEdgeApplyState(ctx context.Context, tenantID string) ([]ListTenantEdgeApplyStateRow, error) {
 	rows, err := q.db.QueryContext(ctx, listTenantEdgeApplyState, tenantID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []NavigatorTenantEdgeApplyState{}
+	items := []ListTenantEdgeApplyStateRow{}
 	for rows.Next() {
-		var i NavigatorTenantEdgeApplyState
+		var i ListTenantEdgeApplyStateRow
 		if err := rows.Scan(
 			&i.TenantID,
 			&i.ClusterID,
 			&i.NodeID,
 			&i.BundleID,
+			&i.BundleVersion,
 			&i.State,
 			&i.LastSeedVersion,
+			&i.LastDeliverySequence,
 			&i.LastAckAt,
 			&i.InDnsAt,
 			&i.UpdatedAt,
+			&i.CurrentBundleVersion,
+			&i.CurrentBundlePresent,
 		); err != nil {
 			return nil, err
 		}
@@ -315,12 +489,19 @@ func (q *Queries) ListTenantEdgeApplyState(ctx context.Context, tenantID string)
 }
 
 const listTenantEdgeApplyStateByState = `-- name: ListTenantEdgeApplyStateByState :many
-SELECT tenant_id, cluster_id, node_id, bundle_id,
-       state, last_seed_version, last_ack_at, in_dns_at, updated_at
-FROM navigator.tenant_edge_apply_state
-WHERE tenant_id = $1::uuid
-  AND state = $2
-ORDER BY updated_at DESC
+SELECT edge.tenant_id, edge.cluster_id, edge.node_id, edge.bundle_id, edge.bundle_version,
+       edge.state, edge.last_seed_version, edge.last_delivery_sequence, edge.last_ack_at, edge.in_dns_at, edge.updated_at,
+       COALESCE(bundle.version, '')::text AS current_bundle_version,
+       (bundle.bundle_id IS NOT NULL)::boolean AS current_bundle_present
+FROM navigator.tenant_edge_apply_state AS edge
+JOIN navigator.tenant_alias_cluster_authority AS cluster_authority
+  ON cluster_authority.tenant_id = edge.tenant_id
+ AND cluster_authority.cluster_id = edge.cluster_id
+ AND cluster_authority.state = 'active'
+LEFT JOIN navigator.tls_bundles AS bundle ON bundle.bundle_id = edge.bundle_id
+WHERE edge.tenant_id = $1::uuid
+  AND edge.state = $2
+ORDER BY edge.updated_at DESC
 `
 
 type ListTenantEdgeApplyStateByStateParams struct {
@@ -328,25 +509,45 @@ type ListTenantEdgeApplyStateByStateParams struct {
 	State    string `db:"state" json:"state"`
 }
 
-func (q *Queries) ListTenantEdgeApplyStateByState(ctx context.Context, arg ListTenantEdgeApplyStateByStateParams) ([]NavigatorTenantEdgeApplyState, error) {
+type ListTenantEdgeApplyStateByStateRow struct {
+	TenantID             string        `db:"tenant_id" json:"tenant_id"`
+	ClusterID            string        `db:"cluster_id" json:"cluster_id"`
+	NodeID               string        `db:"node_id" json:"node_id"`
+	BundleID             string        `db:"bundle_id" json:"bundle_id"`
+	BundleVersion        string        `db:"bundle_version" json:"bundle_version"`
+	State                string        `db:"state" json:"state"`
+	LastSeedVersion      sql.NullInt64 `db:"last_seed_version" json:"last_seed_version"`
+	LastDeliverySequence int64         `db:"last_delivery_sequence" json:"last_delivery_sequence"`
+	LastAckAt            sql.NullTime  `db:"last_ack_at" json:"last_ack_at"`
+	InDnsAt              sql.NullTime  `db:"in_dns_at" json:"in_dns_at"`
+	UpdatedAt            time.Time     `db:"updated_at" json:"updated_at"`
+	CurrentBundleVersion string        `db:"current_bundle_version" json:"current_bundle_version"`
+	CurrentBundlePresent bool          `db:"current_bundle_present" json:"current_bundle_present"`
+}
+
+func (q *Queries) ListTenantEdgeApplyStateByState(ctx context.Context, arg ListTenantEdgeApplyStateByStateParams) ([]ListTenantEdgeApplyStateByStateRow, error) {
 	rows, err := q.db.QueryContext(ctx, listTenantEdgeApplyStateByState, arg.TenantID, arg.State)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	items := []NavigatorTenantEdgeApplyState{}
+	items := []ListTenantEdgeApplyStateByStateRow{}
 	for rows.Next() {
-		var i NavigatorTenantEdgeApplyState
+		var i ListTenantEdgeApplyStateByStateRow
 		if err := rows.Scan(
 			&i.TenantID,
 			&i.ClusterID,
 			&i.NodeID,
 			&i.BundleID,
+			&i.BundleVersion,
 			&i.State,
 			&i.LastSeedVersion,
+			&i.LastDeliverySequence,
 			&i.LastAckAt,
 			&i.InDnsAt,
 			&i.UpdatedAt,
+			&i.CurrentBundleVersion,
+			&i.CurrentBundlePresent,
 		); err != nil {
 			return nil, err
 		}
@@ -359,6 +560,99 @@ func (q *Queries) ListTenantEdgeApplyStateByState(ctx context.Context, arg ListT
 		return nil, err
 	}
 	return items, nil
+}
+
+const markTenantEdgeInDNS = `-- name: MarkTenantEdgeInDNS :execrows
+UPDATE navigator.tenant_edge_apply_state AS edge
+SET state = 'in_dns',
+    in_dns_at = COALESCE(in_dns_at, NOW()),
+    updated_at = NOW()
+WHERE edge.tenant_id = $1::uuid
+  AND edge.node_id = $2
+  AND edge.bundle_id = $3
+  AND edge.state = 'applied'
+  AND edge.bundle_version <> ''
+  AND edge.bundle_version = $4
+  AND EXISTS (
+      SELECT 1
+      FROM navigator.tls_bundles AS bundle
+      WHERE bundle.bundle_id = edge.bundle_id
+        AND bundle.version = edge.bundle_version
+  )
+  -- Promotion enforces active cluster authority itself. The publisher's list
+  -- already filters on it, but a residual row beneath a tombstone must not be
+  -- promotable by any caller-held guarantee alone.
+  AND EXISTS (
+      SELECT 1
+      FROM navigator.tenant_alias_cluster_authority AS cluster_authority
+      WHERE cluster_authority.tenant_id = edge.tenant_id
+        AND cluster_authority.cluster_id = edge.cluster_id
+        AND cluster_authority.state = 'active'
+  )
+  AND edge.last_seed_version IS NOT DISTINCT FROM $5
+  AND edge.last_delivery_sequence = $6
+`
+
+type MarkTenantEdgeInDNSParams struct {
+	TenantID                 string        `db:"tenant_id" json:"tenant_id"`
+	NodeID                   string        `db:"node_id" json:"node_id"`
+	BundleID                 string        `db:"bundle_id" json:"bundle_id"`
+	SnapshotBundleVersion    string        `db:"snapshot_bundle_version" json:"snapshot_bundle_version"`
+	SnapshotSeedVersion      sql.NullInt64 `db:"snapshot_seed_version" json:"snapshot_seed_version"`
+	SnapshotDeliverySequence int64         `db:"snapshot_delivery_sequence" json:"snapshot_delivery_sequence"`
+}
+
+func (q *Queries) MarkTenantEdgeInDNS(ctx context.Context, arg MarkTenantEdgeInDNSParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markTenantEdgeInDNS,
+		arg.TenantID,
+		arg.NodeID,
+		arg.BundleID,
+		arg.SnapshotBundleVersion,
+		arg.SnapshotSeedVersion,
+		arg.SnapshotDeliverySequence,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const markTenantEdgeNotInDNS = `-- name: MarkTenantEdgeNotInDNS :execrows
+UPDATE navigator.tenant_edge_apply_state
+SET state = 'applied',
+    in_dns_at = NULL,
+    updated_at = NOW()
+WHERE tenant_id = $1::uuid
+  AND node_id = $2
+  AND bundle_id = $3
+  AND state = 'in_dns'
+  AND bundle_version = $4
+  AND last_seed_version IS NOT DISTINCT FROM $5
+  AND last_delivery_sequence = $6
+`
+
+type MarkTenantEdgeNotInDNSParams struct {
+	TenantID                 string        `db:"tenant_id" json:"tenant_id"`
+	NodeID                   string        `db:"node_id" json:"node_id"`
+	BundleID                 string        `db:"bundle_id" json:"bundle_id"`
+	SnapshotBundleVersion    string        `db:"snapshot_bundle_version" json:"snapshot_bundle_version"`
+	SnapshotSeedVersion      sql.NullInt64 `db:"snapshot_seed_version" json:"snapshot_seed_version"`
+	SnapshotDeliverySequence int64         `db:"snapshot_delivery_sequence" json:"snapshot_delivery_sequence"`
+}
+
+func (q *Queries) MarkTenantEdgeNotInDNS(ctx context.Context, arg MarkTenantEdgeNotInDNSParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markTenantEdgeNotInDNS,
+		arg.TenantID,
+		arg.NodeID,
+		arg.BundleID,
+		arg.SnapshotBundleVersion,
+		arg.SnapshotSeedVersion,
+		arg.SnapshotDeliverySequence,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const recordTenantAliasRetirementFailure = `-- name: RecordTenantAliasRetirementFailure :exec
@@ -378,30 +672,124 @@ func (q *Queries) RecordTenantAliasRetirementFailure(ctx context.Context, arg Re
 	return err
 }
 
-const setTenantAliasStatus = `-- name: SetTenantAliasStatus :exec
+const revokeTenantAliasClusterAuthority = `-- name: RevokeTenantAliasClusterAuthority :one
+INSERT INTO navigator.tenant_alias_cluster_authority (
+    tenant_id, cluster_id, state, authority_sequence, updated_at
+)
+SELECT alias.tenant_id, $1, 'revoked', $2, NOW()
+FROM navigator.tenant_aliases AS alias
+WHERE alias.tenant_id = $3::uuid
+ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
+    state = 'revoked',
+    authority_sequence = EXCLUDED.authority_sequence,
+    updated_at = NOW()
+WHERE EXCLUDED.authority_sequence >= navigator.tenant_alias_cluster_authority.authority_sequence
+RETURNING true
+`
+
+type RevokeTenantAliasClusterAuthorityParams struct {
+	ClusterID         string `db:"cluster_id" json:"cluster_id"`
+	AuthoritySequence int64  `db:"authority_sequence" json:"authority_sequence"`
+	TenantID          string `db:"tenant_id" json:"tenant_id"`
+}
+
+// Tombstone only. The edge delete runs as its own later statement
+// (DeleteTenantEdgeApplyStateForRevokedCluster) so its snapshot postdates this
+// statement's row lock: an ACK that committed while this tombstone waited is
+// then visible to the delete. Making the tombstone the first statement also
+// creates the serialization row for a previously unseen tenant/cluster pair of
+// an existing alias; with no alias row the FK-backed SELECT finds no parent.
+// Zero rows therefore means an ordered newer decision already superseded this
+// revocation, or the alias intent is absent — the caller reports applied=false
+// for both and the Quartermaster backstop re-drives the absent-alias case.
+func (q *Queries) RevokeTenantAliasClusterAuthority(ctx context.Context, arg RevokeTenantAliasClusterAuthorityParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, revokeTenantAliasClusterAuthority, arg.ClusterID, arg.AuthoritySequence, arg.TenantID)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const setTenantAliasStatus = `-- name: SetTenantAliasStatus :execrows
 UPDATE navigator.tenant_aliases
 SET status = $1,
-    cert_issued_at = CASE WHEN $1 = 'cert_issued' THEN NOW() ELSE cert_issued_at END,
+    authority_version = CASE WHEN $1 = 'tearing_down' AND status <> 'tearing_down'
+                             THEN authority_version + 1 ELSE authority_version END,
+    cert_issued_at = CASE WHEN $1 = 'cert_issued' THEN COALESCE(cert_issued_at, NOW()) ELSE cert_issued_at END,
     last_error = NULLIF($2::text, ''),
     updated_at = NOW()
 WHERE tenant_id = $3::uuid
+  AND (
+      $1 = 'tearing_down'
+      OR (
+          (
+              ($1 = 'cert_issued' AND status IN ('cert_issuing', 'cert_issued', 'cert_failed'))
+              OR ($1 = 'cert_failed' AND status IN ('cert_issuing', 'cert_failed'))
+          )
+          AND subdomain = $4
+          AND authority_version = $5::bigint
+      )
+  )
 `
 
 type SetTenantAliasStatusParams struct {
-	Status   string `db:"status" json:"status"`
-	ErrMsg   string `db:"err_msg" json:"err_msg"`
-	TenantID string `db:"tenant_id" json:"tenant_id"`
+	Status                   string `db:"status" json:"status"`
+	ErrMsg                   string `db:"err_msg" json:"err_msg"`
+	TenantID                 string `db:"tenant_id" json:"tenant_id"`
+	ExpectedSubdomain        string `db:"expected_subdomain" json:"expected_subdomain"`
+	ExpectedAuthorityVersion int64  `db:"expected_authority_version" json:"expected_authority_version"`
 }
 
-func (q *Queries) SetTenantAliasStatus(ctx context.Context, arg SetTenantAliasStatusParams) error {
-	_, err := q.db.ExecContext(ctx, setTenantAliasStatus, arg.Status, arg.ErrMsg, arg.TenantID)
-	return err
+func (q *Queries) SetTenantAliasStatus(ctx context.Context, arg SetTenantAliasStatusParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setTenantAliasStatus,
+		arg.Status,
+		arg.ErrMsg,
+		arg.TenantID,
+		arg.ExpectedSubdomain,
+		arg.ExpectedAuthorityVersion,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const tenantAliasClusterAuthorityState = `-- name: TenantAliasClusterAuthorityState :one
+SELECT COALESCE((
+    SELECT state
+    FROM navigator.tenant_alias_cluster_authority
+    WHERE tenant_id = $1::uuid
+      AND cluster_id = $2
+), '')::text
+`
+
+type TenantAliasClusterAuthorityStateParams struct {
+	TenantID  string `db:"tenant_id" json:"tenant_id"`
+	ClusterID string `db:"cluster_id" json:"cluster_id"`
+}
+
+func (q *Queries) TenantAliasClusterAuthorityState(ctx context.Context, arg TenantAliasClusterAuthorityStateParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, tenantAliasClusterAuthorityState, arg.TenantID, arg.ClusterID)
+	var column_1 string
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const tenantAliasHasDNS = `-- name: TenantAliasHasDNS :one
 SELECT EXISTS (
-    SELECT 1 FROM navigator.tenant_edge_apply_state
-    WHERE tenant_id = $1::uuid AND state = 'in_dns'
+    SELECT 1
+    FROM navigator.tenant_edge_apply_state AS edge
+    JOIN navigator.tenant_aliases AS alias ON alias.tenant_id = edge.tenant_id
+    JOIN navigator.tenant_alias_cluster_authority AS cluster_authority
+      ON cluster_authority.tenant_id = edge.tenant_id
+     AND cluster_authority.cluster_id = edge.cluster_id
+     AND cluster_authority.state = 'active'
+    JOIN navigator.tls_bundles AS bundle ON bundle.bundle_id = edge.bundle_id
+    WHERE edge.tenant_id = $1::uuid
+      AND edge.bundle_id = 'tenant:' || edge.tenant_id::text
+      AND edge.state = 'in_dns'
+      AND alias.status = 'cert_issued'
+      AND edge.bundle_version <> ''
+      AND edge.bundle_version = bundle.version
 )
 `
 
@@ -412,45 +800,159 @@ func (q *Queries) TenantAliasHasDNS(ctx context.Context, tenantID string) (bool,
 	return exists, err
 }
 
-const upsertTenantEdgeApplyState = `-- name: UpsertTenantEdgeApplyState :exec
-INSERT INTO navigator.tenant_edge_apply_state (
-    tenant_id, cluster_id, node_id, bundle_id,
-    state, last_seed_version, last_ack_at, in_dns_at, updated_at
+const upsertTenantEdgeApplyAck = `-- name: UpsertTenantEdgeApplyAck :one
+WITH authority AS MATERIALIZED (
+    SELECT alias.tenant_id, alias.status
+    FROM navigator.tenant_aliases AS alias
+    WHERE alias.tenant_id = $1::uuid
+    FOR KEY SHARE OF alias
+), parent AS MATERIALIZED (
+    SELECT authority.tenant_id
+    FROM authority
+    JOIN navigator.tenant_alias_cluster_authority AS cluster_authority
+      ON cluster_authority.tenant_id = authority.tenant_id
+     AND cluster_authority.cluster_id = $2
+     AND cluster_authority.state = 'active'
+    JOIN navigator.tls_bundles AS bundle
+      ON bundle.bundle_id = $3
+     AND bundle.bundle_id = 'tenant:' || authority.tenant_id::text
+     AND (
+         $4::text = ''
+         OR bundle.version = $4
+    )
+    WHERE authority.status = 'cert_issued'
+    -- state = 'active' must remain a qual on this locked relation: the blocked
+    -- re-check after a conflicting revocation commits (EvalPlanQual) only
+    -- re-evaluates predicates on the locked row itself, so moving the state
+    -- test into a subquery would silently stop fencing.
+    FOR SHARE OF cluster_authority
+), cluster_pair AS MATERIALIZED (
+    -- Locks the pair row WITHOUT a state qual so classification sees its
+    -- post-commit state: an ACK racing a revocation blocks here, and the
+    -- EvalPlanQual re-check returns the latest tuple ('revoked'), which the
+    -- statement's original snapshot (taken before the revocation committed)
+    -- would never show a plain EXISTS subquery.
+    SELECT cluster_authority.state
+    FROM authority
+    JOIN navigator.tenant_alias_cluster_authority AS cluster_authority
+      ON cluster_authority.tenant_id = authority.tenant_id
+     AND cluster_authority.cluster_id = $2
+    FOR SHARE OF cluster_authority
+), upserted AS (
+    INSERT INTO navigator.tenant_edge_apply_state (
+        tenant_id, cluster_id, node_id, bundle_id, bundle_version,
+        state, last_seed_version, last_delivery_sequence, last_ack_at, in_dns_at, updated_at
+    )
+    SELECT
+        parent.tenant_id, $2, $5, $3, $4,
+        $6, $7, $8, $9, NULL, NOW()
+    FROM parent
+    ON CONFLICT (tenant_id, node_id, bundle_id) DO UPDATE SET
+        cluster_id = EXCLUDED.cluster_id,
+        bundle_version = EXCLUDED.bundle_version,
+        state = CASE
+            WHEN EXCLUDED.state = 'applied'
+             AND navigator.tenant_edge_apply_state.state = 'in_dns'
+             AND (
+                 (
+                     navigator.tenant_edge_apply_state.last_seed_version = EXCLUDED.last_seed_version
+                     AND
+                     EXCLUDED.bundle_version <> ''
+                     AND navigator.tenant_edge_apply_state.bundle_version = EXCLUDED.bundle_version
+                 )
+                 OR (
+                     EXCLUDED.bundle_version = ''
+                     AND navigator.tenant_edge_apply_state.bundle_version = ''
+                 )
+             )
+            THEN navigator.tenant_edge_apply_state.state
+            ELSE EXCLUDED.state
+        END,
+        last_seed_version = EXCLUDED.last_seed_version,
+        last_delivery_sequence = CASE
+            WHEN EXCLUDED.last_delivery_sequence = 0
+            THEN navigator.tenant_edge_apply_state.last_delivery_sequence
+            ELSE EXCLUDED.last_delivery_sequence
+        END,
+        last_ack_at = EXCLUDED.last_ack_at,
+        in_dns_at = CASE
+            WHEN EXCLUDED.state = 'applied'
+             AND navigator.tenant_edge_apply_state.state = 'in_dns'
+             AND (
+                 (
+                     navigator.tenant_edge_apply_state.last_seed_version = EXCLUDED.last_seed_version
+                     AND
+                     EXCLUDED.bundle_version <> ''
+                     AND navigator.tenant_edge_apply_state.bundle_version = EXCLUDED.bundle_version
+                 )
+                 OR (
+                     EXCLUDED.bundle_version = ''
+                     AND navigator.tenant_edge_apply_state.bundle_version = ''
+                 )
+             )
+            THEN navigator.tenant_edge_apply_state.in_dns_at
+            ELSE NULL
+        END,
+        updated_at = NOW()
+    WHERE navigator.tenant_edge_apply_state.last_seed_version IS NULL
+       OR navigator.tenant_edge_apply_state.last_seed_version < EXCLUDED.last_seed_version
+       OR (
+           navigator.tenant_edge_apply_state.last_seed_version = EXCLUDED.last_seed_version
+           AND (
+               (
+                   EXCLUDED.last_delivery_sequence > 0
+                   AND EXCLUDED.last_delivery_sequence > navigator.tenant_edge_apply_state.last_delivery_sequence
+               )
+               OR (
+                   EXCLUDED.last_delivery_sequence = 0
+                   AND navigator.tenant_edge_apply_state.last_delivery_sequence = 0
+                   AND (
+                       (EXCLUDED.state = 'pending_apply' AND navigator.tenant_edge_apply_state.state <> 'pending_apply')
+                       OR (EXCLUDED.state = 'applied' AND navigator.tenant_edge_apply_state.state = 'pending_apply')
+                   )
+               )
+           )
+       )
+    RETURNING 1
 )
-VALUES (
-    $1::uuid, $2, $3, $4,
-    $5, $6, $7, $8, NOW()
-)
-ON CONFLICT (tenant_id, node_id, bundle_id) DO UPDATE SET
-    cluster_id = EXCLUDED.cluster_id,
-    state = EXCLUDED.state,
-    last_seed_version = EXCLUDED.last_seed_version,
-    last_ack_at = EXCLUDED.last_ack_at,
-    in_dns_at = EXCLUDED.in_dns_at,
-    updated_at = NOW()
+SELECT CASE
+    WHEN EXISTS (SELECT 1 FROM upserted) THEN 'accepted'
+    WHEN EXISTS (SELECT 1 FROM authority)
+     AND EXISTS (
+         SELECT 1
+         FROM cluster_pair
+         WHERE cluster_pair.state = 'revoked'
+     ) THEN 'revoked'
+    WHEN EXISTS (SELECT 1 FROM authority) THEN 'stale'
+    ELSE 'missing_parent'
+END::text AS outcome
 `
 
-type UpsertTenantEdgeApplyStateParams struct {
-	TenantID        string        `db:"tenant_id" json:"tenant_id"`
-	ClusterID       string        `db:"cluster_id" json:"cluster_id"`
-	NodeID          string        `db:"node_id" json:"node_id"`
-	BundleID        string        `db:"bundle_id" json:"bundle_id"`
-	State           string        `db:"state" json:"state"`
-	LastSeedVersion sql.NullInt64 `db:"last_seed_version" json:"last_seed_version"`
-	LastAckAt       sql.NullTime  `db:"last_ack_at" json:"last_ack_at"`
-	InDnsAt         sql.NullTime  `db:"in_dns_at" json:"in_dns_at"`
+type UpsertTenantEdgeApplyAckParams struct {
+	TenantID             string        `db:"tenant_id" json:"tenant_id"`
+	ClusterID            string        `db:"cluster_id" json:"cluster_id"`
+	BundleID             string        `db:"bundle_id" json:"bundle_id"`
+	BundleVersion        string        `db:"bundle_version" json:"bundle_version"`
+	NodeID               string        `db:"node_id" json:"node_id"`
+	State                string        `db:"state" json:"state"`
+	LastSeedVersion      sql.NullInt64 `db:"last_seed_version" json:"last_seed_version"`
+	LastDeliverySequence int64         `db:"last_delivery_sequence" json:"last_delivery_sequence"`
+	LastAckAt            sql.NullTime  `db:"last_ack_at" json:"last_ack_at"`
 }
 
-func (q *Queries) UpsertTenantEdgeApplyState(ctx context.Context, arg UpsertTenantEdgeApplyStateParams) error {
-	_, err := q.db.ExecContext(ctx, upsertTenantEdgeApplyState,
+func (q *Queries) UpsertTenantEdgeApplyAck(ctx context.Context, arg UpsertTenantEdgeApplyAckParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, upsertTenantEdgeApplyAck,
 		arg.TenantID,
 		arg.ClusterID,
-		arg.NodeID,
 		arg.BundleID,
+		arg.BundleVersion,
+		arg.NodeID,
 		arg.State,
 		arg.LastSeedVersion,
+		arg.LastDeliverySequence,
 		arg.LastAckAt,
-		arg.InDnsAt,
 	)
-	return err
+	var outcome string
+	err := row.Scan(&outcome)
+	return outcome, err
 }

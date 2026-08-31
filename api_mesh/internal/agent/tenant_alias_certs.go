@@ -92,6 +92,10 @@ func (a *Agent) syncTenantAliasCertificates() error {
 			a.logger.WithError(getErr).WithField("bundle_id", bundleID).Warn("Tenant-alias sync: GetTLSBundle failed")
 			continue
 		}
+		if resp == nil || strings.TrimSpace(resp.GetError()) != "" {
+			a.logger.WithField("bundle_id", bundleID).WithField("navigator_error", responseError(resp)).Warn("Tenant-alias sync: GetTLSBundle returned no authoritative result")
+			continue
+		}
 		// Not-found means issuance is still pending in Navigator; the next
 		// cadence tick reconciles it.
 		if !resp.GetFound() || strings.TrimSpace(resp.GetCertPem()) == "" || strings.TrimSpace(resp.GetKeyPem()) == "" {
@@ -125,6 +129,13 @@ func (a *Agent) syncTenantAliasCertificates() error {
 	a.ingressMu.Unlock()
 	a.lastAliasSync.Store(now)
 	return nil
+}
+
+func responseError(resp *dnspb.GetTLSBundleResponse) string {
+	if resp == nil {
+		return "empty response"
+	}
+	return strings.TrimSpace(resp.GetError())
 }
 
 func (a *Agent) tenantAliasDir(sub string) string {

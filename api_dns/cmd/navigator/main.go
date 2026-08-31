@@ -2,9 +2,9 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
+	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"net/netip"
@@ -33,11 +33,9 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 
-	"errors"
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus"
 	"google.golang.org/grpc"
-
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
@@ -54,6 +52,10 @@ type ServerMetrics struct {
 	GRPCDuration *prometheus.HistogramVec
 }
 
+type tenantAckAuthority interface {
+	ListAliasedTenantsForCluster(context.Context, string) (*quartermasterpb.ListAliasedTenantsForClusterResponse, error)
+}
+
 // NavigatorServer holds dependencies for the gRPC and HTTP server
 type NavigatorServer struct {
 	dnspb.UnimplementedNavigatorServiceServer
@@ -61,7 +63,8 @@ type NavigatorServer struct {
 	CertManager       *logic.CertManager
 	InternalCAManager *logic.InternalCAManager
 	AliasPublisher    *worker.AliasApplyStateWorker
-	Quartermaster     *quartermaster.GRPCClient
+	Quartermaster     tenantAckAuthority
+	TenantClusters    tenantClusterAuthority
 	// Reconciler also owns the per-instance physical infra DNS sync; SyncDNS calls
 	// it so a node/service change refreshes <service>.<node>.infra.<root> at once
 	// instead of waiting for the periodic reconcile tick.
@@ -72,6 +75,11 @@ type NavigatorServer struct {
 	// Custom-domain RPCs use it to build the canonical CNAME instructions
 	// returned to the dashboard.
 	RootDomain string
+}
+
+type tenantClusterAuthority interface {
+	TenantAliasClusterAuthorityState(ctx context.Context, tenantID, clusterID string) (string, error)
+	EnsureTenantAliasCluster(ctx context.Context, tenantID, clusterID string, sequence int64) (bool, error)
 }
 
 func main() {
@@ -162,7 +170,7 @@ func main() {
 	}
 
 	// === Background Workers ===
-	renewalWorker := worker.NewRenewalWorker(certStore, certManager, logger, acmeEmail)
+	renewalWorker := worker.NewRenewalWorker(certStore, certManager, logger, rootDomain, acmeEmail)
 	go renewalWorker.Start(context.Background())
 	reconcileIntervalSeconds := config.GetEnvInt("NAVIGATOR_DNS_RECONCILE_INTERVAL_SECONDS", 60)
 	reconciler := worker.NewDNSReconciler(dnsManager, certManager, qmClient, logger, time.Duration(reconcileIntervalSeconds)*time.Second, rootDomain, acmeEmail, pkgdns.ManagedServiceTypes(), staleSeconds)
@@ -201,6 +209,7 @@ func main() {
 		InternalCAManager: internalCAManager,
 		AliasPublisher:    aliasWorker,
 		Quartermaster:     qmClient,
+		TenantClusters:    certManager,
 		Reconciler:        reconciler,
 		Logger:            logger,
 		Metrics:           serverMetrics,
@@ -324,14 +333,13 @@ func main() {
 			return
 		}
 
-		hash := sha256.Sum256([]byte(bundle.CertPEM + bundle.KeyPEM))
 		c.JSON(http.StatusOK, gin.H{
 			"bundle_id":  bundle.BundleID,
 			"domains":    bundle.Domains,
 			"cert_pem":   bundle.CertPEM,
 			"key_pem":    bundle.KeyPEM,
 			"expires_at": bundle.ExpiresAt.Unix(),
-			"version":    hex.EncodeToString(hash[:]),
+			"version":    bundle.Version,
 		})
 	})
 
@@ -543,10 +551,15 @@ func (s *NavigatorServer) GetCertificate(ctx context.Context, req *dnspb.GetCert
 
 	cert, err := s.CertManager.GetCertificate(ctx, tenantID, req.GetDomain())
 	if err != nil {
-		log.WithError(err).Info("Certificate not found")
+		absent, msg := lookupAbsence(err)
+		if absent {
+			log.Info("Certificate not found")
+		} else {
+			log.WithError(err).Warn("Certificate lookup failed")
+		}
 		return &dnspb.GetCertificateResponse{
 			Found: false,
-			Error: err.Error(),
+			Error: msg,
 		}, nil
 	}
 
@@ -572,14 +585,21 @@ func (s *NavigatorServer) GetTLSBundle(ctx context.Context, req *dnspb.GetTLSBun
 
 	bundle, err := s.CertManager.GetTLSBundle(ctx, req.GetBundleId())
 	if err != nil {
-		log.WithError(err).Info("TLS bundle not found")
+		// Only a genuine not-found is authoritative absence (empty Error).
+		// A store failure keeps its message so Foghorn preserves last-good
+		// material instead of treating the bundle as removed.
+		absent, msg := lookupAbsence(err)
+		if absent {
+			log.Info("TLS bundle not found")
+		} else {
+			log.WithError(err).Warn("TLS bundle lookup failed")
+		}
 		return &dnspb.GetTLSBundleResponse{
 			Found: false,
-			Error: err.Error(),
+			Error: msg,
 		}, nil
 	}
 
-	hash := sha256.Sum256([]byte(bundle.CertPEM + bundle.KeyPEM))
 	return &dnspb.GetTLSBundleResponse{
 		Found:     true,
 		BundleId:  bundle.BundleID,
@@ -587,17 +607,22 @@ func (s *NavigatorServer) GetTLSBundle(ctx context.Context, req *dnspb.GetTLSBun
 		CertPem:   bundle.CertPEM,
 		KeyPem:    bundle.KeyPEM,
 		ExpiresAt: bundle.ExpiresAt.Unix(),
-		Version:   hex.EncodeToString(hash[:]),
+		Version:   bundle.Version,
 	}, nil
 }
 
 func (s *NavigatorServer) GetCABundle(ctx context.Context, _ *dnspb.GetCABundleRequest) (*dnspb.GetCABundleResponse, error) {
 	caPEM, err := s.InternalCAManager.GetCABundle(ctx)
 	if err != nil {
-		s.Logger.WithError(err).Error("Failed to get internal CA bundle")
+		absent, msg := lookupAbsence(err)
+		if absent {
+			s.Logger.Info("Internal CA bundle not provisioned yet")
+		} else {
+			s.Logger.WithError(err).Error("Failed to get internal CA bundle")
+		}
 		return &dnspb.GetCABundleResponse{
 			Found: false,
-			Error: err.Error(),
+			Error: msg,
 		}, nil
 	}
 
@@ -671,6 +696,12 @@ func (s *NavigatorServer) GetTenantAliasStatus(ctx context.Context, req *dnspb.G
 		s.Logger.WithError(retErr).WithField("tenant_id", req.GetTenantId()).Debug("Tenant alias retirement lookup failed")
 	}
 	resp.PendingRetirements = retirements
+	authorizedClusters, clusterErr := s.CertManager.ListTenantAliasAuthorizedClusters(ctx, req.GetTenantId())
+	if clusterErr != nil {
+		s.Logger.WithError(clusterErr).WithField("tenant_id", req.GetTenantId()).Debug("Tenant alias cluster-authority lookup failed")
+	} else {
+		resp.AuthorizedClusterIds = authorizedClusters
+	}
 	return resp, nil
 }
 
@@ -692,25 +723,78 @@ func (s *NavigatorServer) RemoveTenantAliasSubdomain(ctx context.Context, req *d
 // by Foghorn, then reconciles affected tenant DNS immediately.
 func (s *NavigatorServer) ReportConfigSeedApplyResult(ctx context.Context, req *dnspb.ReportConfigSeedApplyResultRequest) (*dnspb.ReportConfigSeedApplyResultResponse, error) {
 	appliedAt := time.Unix(req.GetAppliedAt(), 0).UTC()
-	appliedBundleIDs, failedBundleIDs := s.filterTenantBundlesForCluster(ctx, req.GetClusterId(), req.GetAppliedBundleIds(), req.GetFailedBundleIds())
-	affected, err := s.CertManager.RecordConfigSeedApplyResult(ctx,
+	filter := s.filterTenantBundlesForCluster(ctx, req.GetClusterId(), req.GetAppliedBundleIds(), req.GetFailedBundleIds())
+	if filter.err != nil && !errors.Is(filter.err, errMissingClusterIdentity) {
+		// The classifier returns only retryable/unresolved counts on error;
+		// authoritative denials are never double-counted as failures. A
+		// missing cluster identity is terminal (quarantined at the sender),
+		// so its bundles are not "deferred by an authority failure" either.
+		logic.ObserveConfigSeedApplyAckAuthorityErrors(filter.deferredApplied, filter.deferredFailed)
+	}
+	if filter.filteredApplied != 0 || filter.filteredFailed != 0 {
+		logic.ObserveConfigSeedApplyAckFiltered(filter.filteredApplied, filter.filteredFailed)
+		s.Logger.WithFields(logging.Fields{
+			"cluster_id":       req.GetClusterId(),
+			"filtered_applied": filter.filteredApplied,
+			"filtered_failed":  filter.filteredFailed,
+		}).Info("Filtered ConfigSeed tenant apply results outside cluster authority")
+	}
+	if filter.err != nil && len(filter.applied) == 0 && len(filter.failed) == 0 {
+		return nil, status.Errorf(tenantAckAuthorityErrorCode(filter.err), "validate tenant apply ACK authority: %v", filter.err)
+	}
+	affected, discarded, err := s.CertManager.RecordConfigSeedApplyResult(ctx,
 		req.GetNodeId(),
 		req.GetClusterId(),
 		req.GetSeedVersion(),
-		appliedBundleIDs,
-		failedBundleIDs,
+		req.GetDeliverySequence(),
+		filter.applied,
+		filter.failed,
+		req.GetBundleVersions(),
 		appliedAt,
 	)
 	if err != nil {
 		s.Logger.WithError(err).WithField("node_id", req.GetNodeId()).Warn("Failed to record ConfigSeed apply result")
 		return nil, status.Errorf(codes.Internal, "record apply result: %v", err)
 	}
+	if discarded.Stale > 0 {
+		s.Logger.WithFields(logging.Fields{
+			"node_id": req.GetNodeId(), "seed_version": req.GetSeedVersion(),
+			"delivery_sequence": req.GetDeliverySequence(), "discarded": discarded.Stale,
+		}).Info("Discarded stale ConfigSeed tenant apply results")
+	}
+	if discarded.Revoked > 0 {
+		s.Logger.WithFields(logging.Fields{
+			"node_id": req.GetNodeId(), "seed_version": req.GetSeedVersion(),
+			"delivery_sequence": req.GetDeliverySequence(), "discarded": discarded.Revoked,
+		}).Info("Discarded ConfigSeed tenant apply results for revoked cluster authority")
+	}
+	if discarded.MissingParent > 0 {
+		s.Logger.WithFields(logging.Fields{
+			"node_id": req.GetNodeId(), "seed_version": req.GetSeedVersion(),
+			"delivery_sequence": req.GetDeliverySequence(), "discarded": discarded.MissingParent,
+		}).Info("Classified ConfigSeed tenant apply results without alias authority")
+	}
 	if s.AliasPublisher != nil {
-		for _, tenantID := range affected {
+		// On a fully validated delivery, republish every authorized tenant in
+		// the request — not only rows that advanced. A replayed delivery whose
+		// entries are all fenced as duplicates still repairs a publish that
+		// failed on the earlier partial pass.
+		republish := affected
+		if filter.err == nil {
+			republish = tenantIDsFromBundles(filter.applied, filter.failed)
+		}
+		for _, tenantID := range republish {
 			if pubErr := s.AliasPublisher.PublishTenantAlias(ctx, tenantID); pubErr != nil {
 				s.Logger.WithError(pubErr).WithField("tenant_id", tenantID).Warn("Failed to publish tenant alias after apply ACK")
 			}
 		}
+	}
+	if filter.err != nil {
+		// Locally authorized and non-tenant results are durable now. Returning
+		// a retryable code retains the whole Foghorn outbox delivery so only
+		// the unresolved first-admission entries remain pending on its next
+		// replay; a malformed request instead quarantines at the sender.
+		return nil, status.Errorf(tenantAckAuthorityErrorCode(filter.err), "validate tenant apply ACK authority: %v", filter.err)
 	}
 	return &dnspb.ReportConfigSeedApplyResultResponse{
 		Accepted:          true,
@@ -718,22 +802,206 @@ func (s *NavigatorServer) ReportConfigSeedApplyResult(ctx context.Context, req *
 	}, nil
 }
 
-func (s *NavigatorServer) filterTenantBundlesForCluster(ctx context.Context, clusterID string, applied, failed []string) ([]string, []string) {
-	if s.Quartermaster == nil || strings.TrimSpace(clusterID) == "" {
-		return filterNonTenantBundles(applied), filterNonTenantBundles(failed)
+type tenantBundleFilterResult struct {
+	applied, failed                 []string
+	filteredApplied, filteredFailed int
+	deferredApplied, deferredFailed int
+	err                             error
+}
+
+func (s *NavigatorServer) filterTenantBundlesForCluster(ctx context.Context, clusterID string, applied, failed []string) tenantBundleFilterResult {
+	if !containsTenantBundle(applied) && !containsTenantBundle(failed) {
+		return tenantBundleFilterResult{applied: applied, failed: failed}
 	}
-	lookupCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-	resp, err := s.Quartermaster.ListAliasedTenantsForCluster(lookupCtx, clusterID)
-	if err != nil {
-		s.Logger.WithError(err).WithField("cluster_id", clusterID).Debug("Skipping tenant ACKs because active tenant lookup failed")
-		return filterNonTenantBundles(applied), filterNonTenantBundles(failed)
+	clusterID = strings.TrimSpace(clusterID)
+	if clusterID == "" {
+		return tenantBundleFilterResult{
+			deferredApplied: countTenantBundles(applied),
+			deferredFailed:  countTenantBundles(failed),
+			err:             errMissingClusterIdentity,
+		}
 	}
 	allowed := map[string]struct{}{}
-	for _, ref := range resp.GetTenants() {
-		allowed[ref.GetTenantId()] = struct{}{}
+	unknown := map[string]struct{}{}
+	deferred := map[string]struct{}{}
+	classified := map[string]struct{}{}
+	bundleIDs := append(append([]string(nil), applied...), failed...)
+	for index, bundleID := range bundleIDs {
+		tenantID, tenantBundle := strings.CutPrefix(bundleID, "tenant:")
+		if !tenantBundle || tenantID == "" {
+			continue
+		}
+		if _, alreadyClassified := classified[tenantID]; alreadyClassified {
+			continue
+		}
+		classified[tenantID] = struct{}{}
+		authorityState := ""
+		if s.TenantClusters != nil {
+			var authorityErr error
+			authorityState, authorityErr = s.TenantClusters.TenantAliasClusterAuthorityState(ctx, tenantID, clusterID)
+			if authorityErr != nil {
+				deferred[tenantID] = struct{}{}
+				for _, remainingID := range bundleIDs[index+1:] {
+					remainingTenant, ok := strings.CutPrefix(remainingID, "tenant:")
+					if !ok || remainingTenant == "" {
+						continue
+					}
+					// A malformed batch can repeat a tenant already classified
+					// active; deferring it again would drive the terminal
+					// filtered count negative.
+					if _, alreadyAllowed := allowed[remainingTenant]; alreadyAllowed {
+						continue
+					}
+					deferred[remainingTenant] = struct{}{}
+				}
+				// Tenants classified unknown before the failure were never
+				// denied either; defer them too so they are not misreported
+				// as terminally filtered.
+				for unknownTenant := range unknown {
+					deferred[unknownTenant] = struct{}{}
+				}
+				return filterTenantBundlesForAllowed(applied, failed, allowed, deferred, fmt.Errorf("read local tenant cluster authority: %w", authorityErr))
+			}
+		}
+		switch authorityState {
+		case "active":
+			allowed[tenantID] = struct{}{}
+		case "":
+			unknown[tenantID] = struct{}{}
+		}
 	}
-	return filterBundlesForAllowedTenants(applied, allowed), filterBundlesForAllowedTenants(failed, allowed)
+	if len(unknown) > 0 {
+		if s.Quartermaster == nil {
+			return filterTenantBundlesForAllowed(applied, failed, allowed, unknown, errors.New("quartermaster client is unavailable for first tenant-cluster admission"))
+		}
+		lookupCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		resp, err := s.Quartermaster.ListAliasedTenantsForCluster(lookupCtx, clusterID)
+		if err != nil {
+			s.Logger.WithError(err).WithField("cluster_id", clusterID).Warn("Tenant apply ACK authority lookup failed")
+			return filterTenantBundlesForAllowed(applied, failed, allowed, unknown, fmt.Errorf("list aliased tenants for cluster: %w", err))
+		}
+		for _, ref := range resp.GetTenants() {
+			if _, needsAdmission := unknown[ref.GetTenantId()]; needsAdmission {
+				admitted := true
+				if s.TenantClusters != nil {
+					var grantErr error
+					admitted, grantErr = s.TenantClusters.EnsureTenantAliasCluster(ctx, ref.GetTenantId(), clusterID, 0)
+					if grantErr != nil {
+						for tenantID := range unknown {
+							if _, admittedAlready := allowed[tenantID]; !admittedAlready {
+								deferred[tenantID] = struct{}{}
+							}
+						}
+						return filterTenantBundlesForAllowed(applied, failed, allowed, deferred, fmt.Errorf("persist legacy tenant cluster admission: %w", grantErr))
+					}
+				}
+				if admitted {
+					allowed[ref.GetTenantId()] = struct{}{}
+				}
+			}
+		}
+	}
+	return filterTenantBundlesForAllowed(applied, failed, allowed, nil, nil)
+}
+
+func filterTenantBundlesForAllowed(applied, failed []string, allowed, deferred map[string]struct{}, authorityErr error) tenantBundleFilterResult {
+	filteredApplied := filterBundlesForAllowedTenants(applied, allowed)
+	filteredFailed := filterBundlesForAllowedTenants(failed, allowed)
+	deferredApplied := countTenantBundlesForTenants(applied, deferred)
+	deferredFailed := countTenantBundlesForTenants(failed, deferred)
+	return tenantBundleFilterResult{
+		applied: filteredApplied,
+		failed:  filteredFailed,
+		// Clamped: a malformed batch that repeats a tenant across the kept and
+		// deferred sets must degrade to zero, never feed a negative delta into
+		// a Prometheus counter.
+		filteredApplied: max(0, countTenantBundles(applied)-countTenantBundles(filteredApplied)-deferredApplied),
+		filteredFailed:  max(0, countTenantBundles(failed)-countTenantBundles(filteredFailed)-deferredFailed),
+		deferredApplied: deferredApplied,
+		deferredFailed:  deferredFailed,
+		err:             authorityErr,
+	}
+}
+
+func countTenantBundlesForTenants(bundleIDs []string, tenants map[string]struct{}) int {
+	count := 0
+	for _, bundleID := range bundleIDs {
+		tenantID, ok := strings.CutPrefix(bundleID, "tenant:")
+		if !ok {
+			continue
+		}
+		if _, included := tenants[tenantID]; included {
+			count++
+		}
+	}
+	return count
+}
+
+// errMissingClusterIdentity is a permanent request defect: retrying the same
+// delivery can never succeed, so the RPC surfaces it as InvalidArgument and
+// Foghorn quarantines the outbox row instead of retrying forever.
+var errMissingClusterIdentity = errors.New("cluster identity is missing")
+
+// tenantAckAuthorityErrorCode maps an authority-validation failure to its gRPC
+// code: permanent request defects are InvalidArgument (terminal for Foghorn's
+// delivery outbox), everything else stays retryable Unavailable.
+func tenantAckAuthorityErrorCode(err error) codes.Code {
+	if errors.Is(err, errMissingClusterIdentity) {
+		return codes.InvalidArgument
+	}
+	return codes.Unavailable
+}
+
+// lookupAbsence classifies a store read error for the Get* RPCs. Only a
+// genuine not-found is authoritative absence (Found=false with an empty
+// Error); every other failure keeps its message so consumers preserve
+// last-good local state instead of treating the row as removed.
+func lookupAbsence(err error) (absent bool, msg string) {
+	if errors.Is(err, store.ErrNotFound) {
+		return true, ""
+	}
+	return false, err.Error()
+}
+
+// tenantIDsFromBundles returns the deduplicated tenant ids carried by the
+// given tenant: bundle id lists, in first-seen order.
+func tenantIDsFromBundles(bundleLists ...[]string) []string {
+	seen := map[string]struct{}{}
+	out := []string{}
+	for _, list := range bundleLists {
+		for _, bundleID := range list {
+			tenantID, ok := strings.CutPrefix(bundleID, "tenant:")
+			if !ok || tenantID == "" {
+				continue
+			}
+			if _, dup := seen[tenantID]; dup {
+				continue
+			}
+			seen[tenantID] = struct{}{}
+			out = append(out, tenantID)
+		}
+	}
+	return out
+}
+
+func containsTenantBundle(bundleIDs []string) bool {
+	for _, bundleID := range bundleIDs {
+		if strings.HasPrefix(bundleID, "tenant:") {
+			return true
+		}
+	}
+	return false
+}
+
+func countTenantBundles(bundleIDs []string) int {
+	count := 0
+	for _, bundleID := range bundleIDs {
+		if strings.HasPrefix(bundleID, "tenant:") {
+			count++
+		}
+	}
+	return count
 }
 
 func filterBundlesForAllowedTenants(bundleIDs []string, allowed map[string]struct{}) []string {
@@ -750,21 +1018,13 @@ func filterBundlesForAllowedTenants(bundleIDs []string, allowed map[string]struc
 	return out
 }
 
-func filterNonTenantBundles(bundleIDs []string) []string {
-	out := make([]string, 0, len(bundleIDs))
-	for _, bundleID := range bundleIDs {
-		if strings.HasPrefix(bundleID, "tenant:") {
-			continue
-		}
-		out = append(out, bundleID)
-	}
-	return out
-}
-
 // RemoveTenantAliasCluster drops one cluster's edges from a tenant's DNS
 // eligibility before future ConfigSeeds omit that tenant cert.
 func (s *NavigatorServer) RemoveTenantAliasCluster(ctx context.Context, req *dnspb.RemoveTenantAliasClusterRequest) (*dnspb.RemoveTenantAliasClusterResponse, error) {
-	if err := s.CertManager.RemoveTenantAliasCluster(ctx, req.GetTenantId(), req.GetClusterId()); err != nil {
+	if req.GetAuthoritySequence() > math.MaxInt64 {
+		return nil, status.Error(codes.InvalidArgument, "authority_sequence exceeds signed database range")
+	}
+	if _, err := s.CertManager.RemoveTenantAliasCluster(ctx, req.GetTenantId(), req.GetClusterId(), int64(req.GetAuthoritySequence())); err != nil {
 		s.Logger.WithError(err).WithFields(logging.Fields{
 			"tenant_id":  req.GetTenantId(),
 			"cluster_id": req.GetClusterId(),
@@ -777,6 +1037,22 @@ func (s *NavigatorServer) RemoveTenantAliasCluster(ctx context.Context, req *dns
 		}
 	}
 	return &dnspb.RemoveTenantAliasClusterResponse{Accepted: true}, nil
+}
+
+// EnsureTenantAliasCluster installs Quartermaster's ordered positive
+// tenant/cluster authority. ACKs can only update readiness beneath this row.
+func (s *NavigatorServer) EnsureTenantAliasCluster(ctx context.Context, req *dnspb.EnsureTenantAliasClusterRequest) (*dnspb.EnsureTenantAliasClusterResponse, error) {
+	if req.GetAuthoritySequence() > math.MaxInt64 {
+		return nil, status.Error(codes.InvalidArgument, "authority_sequence exceeds signed database range")
+	}
+	if _, err := s.CertManager.EnsureTenantAliasCluster(ctx, req.GetTenantId(), req.GetClusterId(), int64(req.GetAuthoritySequence())); err != nil {
+		s.Logger.WithError(err).WithFields(logging.Fields{
+			"tenant_id":  req.GetTenantId(),
+			"cluster_id": req.GetClusterId(),
+		}).Warn("Failed to ensure tenant alias cluster authority")
+		return nil, status.Errorf(codes.Internal, "ensure tenant alias cluster: %v", err)
+	}
+	return &dnspb.EnsureTenantAliasClusterResponse{Accepted: true}, nil
 }
 
 // EnsureCustomDomain persists tenant custom-domain intent and queues async
@@ -949,22 +1225,6 @@ func (r quartermasterEdgeResolver) ResolveServiceAddressesForClusters(ctx contex
 		}
 	}
 	return out, nil
-}
-
-func (r quartermasterEdgeResolver) TenantActiveInCluster(ctx context.Context, tenantID, clusterID string) (bool, error) {
-	if r.qm == nil || strings.TrimSpace(tenantID) == "" || strings.TrimSpace(clusterID) == "" {
-		return false, nil
-	}
-	resp, err := r.qm.ListAliasedTenantsForCluster(ctx, clusterID)
-	if err != nil {
-		return false, err
-	}
-	for _, ref := range resp.GetTenants() {
-		if ref.GetTenantId() == tenantID {
-			return true, nil
-		}
-	}
-	return false, nil
 }
 
 // ClusterControlCellHealthy returns true when the cluster's control cell

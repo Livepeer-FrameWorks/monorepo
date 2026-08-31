@@ -99,8 +99,19 @@ func (q *Queries) SavePlatformACMEAccount(ctx context.Context, arg SavePlatformA
 }
 
 const saveTenantACMEAccount = `-- name: SaveTenantACMEAccount :one
+WITH custom_domain_authority AS MATERIALIZED (
+    SELECT custom_domain.tenant_id
+    FROM navigator.tenant_custom_domains AS custom_domain
+    WHERE custom_domain.tenant_id = $5::uuid
+      AND custom_domain.status IN ('verified', 'cert_issuing', 'cert_issued', 'cert_failed')
+    ORDER BY custom_domain.domain
+    LIMIT 1
+    FOR UPDATE OF custom_domain
+)
 INSERT INTO navigator.acme_accounts (tenant_id, email, registration_json, private_key_pem, ca)
-VALUES ($1, $2, $3, $4, $5)
+SELECT custom_domain_authority.tenant_id, $1, $2,
+       $3, $4
+FROM custom_domain_authority
 ON CONFLICT (tenant_id, email, ca) DO UPDATE SET
     registration_json = EXCLUDED.registration_json,
     private_key_pem = EXCLUDED.private_key_pem
@@ -108,11 +119,11 @@ RETURNING id, tenant_id, created_at
 `
 
 type SaveTenantACMEAccountParams struct {
-	TenantID         sql.NullString `db:"tenant_id" json:"tenant_id"`
-	Email            string         `db:"email" json:"email"`
-	RegistrationJson string         `db:"registration_json" json:"registration_json"`
-	PrivateKeyPem    string         `db:"private_key_pem" json:"private_key_pem"`
-	Ca               string         `db:"ca" json:"ca"`
+	Email            string `db:"email" json:"email"`
+	RegistrationJson string `db:"registration_json" json:"registration_json"`
+	PrivateKeyPem    string `db:"private_key_pem" json:"private_key_pem"`
+	Ca               string `db:"ca" json:"ca"`
+	TenantID         string `db:"tenant_id" json:"tenant_id"`
 }
 
 type SaveTenantACMEAccountRow struct {
@@ -123,11 +134,11 @@ type SaveTenantACMEAccountRow struct {
 
 func (q *Queries) SaveTenantACMEAccount(ctx context.Context, arg SaveTenantACMEAccountParams) (SaveTenantACMEAccountRow, error) {
 	row := q.db.QueryRowContext(ctx, saveTenantACMEAccount,
-		arg.TenantID,
 		arg.Email,
 		arg.RegistrationJson,
 		arg.PrivateKeyPem,
 		arg.Ca,
+		arg.TenantID,
 	)
 	var i SaveTenantACMEAccountRow
 	err := row.Scan(&i.ID, &i.TenantID, &i.CreatedAt)

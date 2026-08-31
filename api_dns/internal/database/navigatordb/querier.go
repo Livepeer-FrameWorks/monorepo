@@ -11,38 +11,57 @@ import (
 )
 
 type Querier interface {
+	DeleteExpiredCertificateIssuanceLeases(ctx context.Context) (int64, error)
 	DeletePlatformCertificate(ctx context.Context, domain string) error
-	DeleteTenantAlias(ctx context.Context, tenantID string) error
+	DeleteTenantAlias(ctx context.Context, tenantID string) (int64, error)
 	DeleteTenantAliasRetirement(ctx context.Context, arg DeleteTenantAliasRetirementParams) error
 	DeleteTenantCertificate(ctx context.Context, arg DeleteTenantCertificateParams) error
 	DeleteTenantCustomDomain(ctx context.Context, arg DeleteTenantCustomDomainParams) error
-	DeleteTenantEdgeApplyState(ctx context.Context, tenantID string) error
-	DeleteTenantEdgeApplyStateForCluster(ctx context.Context, arg DeleteTenantEdgeApplyStateForClusterParams) error
-	EnsureTenantAlias(ctx context.Context, arg EnsureTenantAliasParams) (NavigatorTenantAlias, error)
+	// Fenced on the tombstone so a replayed delete cannot outrun a newer grant.
+	DeleteTenantEdgeApplyStateForRevokedCluster(ctx context.Context, arg DeleteTenantEdgeApplyStateForRevokedClusterParams) (int64, error)
+	EnsureTenantAlias(ctx context.Context, arg EnsureTenantAliasParams) (EnsureTenantAliasRow, error)
 	EnsureTenantCustomDomain(ctx context.Context, arg EnsureTenantCustomDomainParams) (NavigatorTenantCustomDomain, error)
+	FinalizeTenantCustomDomainRemoval(ctx context.Context, arg FinalizeTenantCustomDomainRemovalParams) (int64, error)
 	GetInternalCA(ctx context.Context, role string) (NavigatorInternalCa, error)
 	GetInternalCertificate(ctx context.Context, arg GetInternalCertificateParams) (NavigatorInternalCertificate, error)
 	GetPlatformACMEAccount(ctx context.Context, arg GetPlatformACMEAccountParams) (NavigatorAcmeAccount, error)
 	GetPlatformCertificate(ctx context.Context, domain string) (NavigatorCertificate, error)
 	GetTLSBundle(ctx context.Context, bundleID string) (NavigatorTlsBundle, error)
+	GetTLSBundleForIssuance(ctx context.Context, bundleID string) (NavigatorTlsBundle, error)
 	GetTenantACMEAccount(ctx context.Context, arg GetTenantACMEAccountParams) (NavigatorAcmeAccount, error)
 	GetTenantAlias(ctx context.Context, tenantID string) (NavigatorTenantAlias, error)
 	GetTenantCertificate(ctx context.Context, arg GetTenantCertificateParams) (NavigatorCertificate, error)
 	GetTenantCustomDomain(ctx context.Context, arg GetTenantCustomDomainParams) (NavigatorTenantCustomDomain, error)
+	GrantTenantAliasClusterAuthority(ctx context.Context, arg GrantTenantAliasClusterAuthorityParams) (bool, error)
 	InsertTenantAliasRetirement(ctx context.Context, arg InsertTenantAliasRetirementParams) error
 	ListExpiringCertificates(ctx context.Context, expiresAt time.Time) ([]NavigatorCertificate, error)
 	ListExpiringTLSBundles(ctx context.Context, expiresAt time.Time) ([]NavigatorTlsBundle, error)
 	ListPendingTenantAliases(ctx context.Context) ([]NavigatorTenantAlias, error)
 	ListPlatformCertificates(ctx context.Context) ([]NavigatorCertificate, error)
+	ListTenantAliasAuthorizedClusters(ctx context.Context, tenantID string) ([]string, error)
 	ListTenantAliasRetirementLabels(ctx context.Context, tenantID string) ([]string, error)
 	ListTenantAliasRetirements(ctx context.Context) ([]NavigatorTenantAliasRetirement, error)
 	ListTenantAliasesByStatus(ctx context.Context, statuses []string) ([]NavigatorTenantAlias, error)
 	ListTenantCertificates(ctx context.Context, tenantID sql.NullString) ([]NavigatorCertificate, error)
 	ListTenantCustomDomains(ctx context.Context, tenantID string) ([]NavigatorTenantCustomDomain, error)
 	ListTenantCustomDomainsByStatus(ctx context.Context, statuses []string) ([]NavigatorTenantCustomDomain, error)
-	ListTenantEdgeApplyState(ctx context.Context, tenantID string) ([]NavigatorTenantEdgeApplyState, error)
-	ListTenantEdgeApplyStateByState(ctx context.Context, arg ListTenantEdgeApplyStateByStateParams) ([]NavigatorTenantEdgeApplyState, error)
+	ListTenantEdgeApplyState(ctx context.Context, tenantID string) ([]ListTenantEdgeApplyStateRow, error)
+	ListTenantEdgeApplyStateByState(ctx context.Context, arg ListTenantEdgeApplyStateByStateParams) ([]ListTenantEdgeApplyStateByStateRow, error)
+	MarkTenantEdgeInDNS(ctx context.Context, arg MarkTenantEdgeInDNSParams) (int64, error)
+	MarkTenantEdgeNotInDNS(ctx context.Context, arg MarkTenantEdgeNotInDNSParams) (int64, error)
 	RecordTenantAliasRetirementFailure(ctx context.Context, arg RecordTenantAliasRetirementFailureParams) error
+	ReleaseCertificateIssuanceLease(ctx context.Context, arg ReleaseCertificateIssuanceLeaseParams) error
+	RenewCertificateIssuanceLease(ctx context.Context, arg RenewCertificateIssuanceLeaseParams) (bool, error)
+	// Tombstone only. The edge delete runs as its own later statement
+	// (DeleteTenantEdgeApplyStateForRevokedCluster) so its snapshot postdates this
+	// statement's row lock: an ACK that committed while this tombstone waited is
+	// then visible to the delete. Making the tombstone the first statement also
+	// creates the serialization row for a previously unseen tenant/cluster pair of
+	// an existing alias; with no alias row the FK-backed SELECT finds no parent.
+	// Zero rows therefore means an ordered newer decision already superseded this
+	// revocation, or the alias intent is absent — the caller reports applied=false
+	// for both and the Quartermaster backstop re-drives the absent-alias case.
+	RevokeTenantAliasClusterAuthority(ctx context.Context, arg RevokeTenantAliasClusterAuthorityParams) (bool, error)
 	SaveInternalCA(ctx context.Context, arg SaveInternalCAParams) (time.Time, error)
 	SaveInternalCertificate(ctx context.Context, arg SaveInternalCertificateParams) (SaveInternalCertificateRow, error)
 	SavePlatformACMEAccount(ctx context.Context, arg SavePlatformACMEAccountParams) (SavePlatformACMEAccountRow, error)
@@ -50,11 +69,13 @@ type Querier interface {
 	SaveTLSBundle(ctx context.Context, arg SaveTLSBundleParams) (SaveTLSBundleRow, error)
 	SaveTenantACMEAccount(ctx context.Context, arg SaveTenantACMEAccountParams) (SaveTenantACMEAccountRow, error)
 	SaveTenantCertificate(ctx context.Context, arg SaveTenantCertificateParams) (SaveTenantCertificateRow, error)
-	SetTenantAliasStatus(ctx context.Context, arg SetTenantAliasStatusParams) error
+	SetTenantAliasStatus(ctx context.Context, arg SetTenantAliasStatusParams) (int64, error)
 	SetTenantCustomDomainCertMetadata(ctx context.Context, arg SetTenantCustomDomainCertMetadataParams) (int64, error)
 	SetTenantCustomDomainStatus(ctx context.Context, arg SetTenantCustomDomainStatusParams) (int64, error)
+	TenantAliasClusterAuthorityState(ctx context.Context, arg TenantAliasClusterAuthorityStateParams) (string, error)
 	TenantAliasHasDNS(ctx context.Context, tenantID string) (bool, error)
-	UpsertTenantEdgeApplyState(ctx context.Context, arg UpsertTenantEdgeApplyStateParams) error
+	TryAcquireCertificateIssuanceLease(ctx context.Context, arg TryAcquireCertificateIssuanceLeaseParams) (bool, error)
+	UpsertTenantEdgeApplyAck(ctx context.Context, arg UpsertTenantEdgeApplyAckParams) (string, error)
 }
 
 var _ Querier = (*Queries)(nil)

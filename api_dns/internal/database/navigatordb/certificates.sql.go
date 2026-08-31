@@ -247,8 +247,18 @@ func (q *Queries) SavePlatformCertificate(ctx context.Context, arg SavePlatformC
 }
 
 const saveTenantCertificate = `-- name: SaveTenantCertificate :one
+WITH custom_domain_authority AS MATERIALIZED (
+    SELECT custom_domain.tenant_id
+    FROM navigator.tenant_custom_domains AS custom_domain
+    WHERE custom_domain.tenant_id = $6::uuid
+      AND custom_domain.domain = $1
+      AND custom_domain.status IN ('verified', 'cert_issuing', 'cert_issued', 'cert_failed')
+    FOR UPDATE OF custom_domain
+)
 INSERT INTO navigator.certificates (tenant_id, domain, cert_pem, key_pem, expires_at, updated_at, issuer_ca)
-VALUES ($1, $2, $3, $4, $5, NOW(), $6)
+SELECT custom_domain_authority.tenant_id, $1, $2, $3,
+       $4, NOW(), $5
+FROM custom_domain_authority
 ON CONFLICT (tenant_id, domain) DO UPDATE SET
     cert_pem = EXCLUDED.cert_pem,
     key_pem = EXCLUDED.key_pem,
@@ -259,12 +269,12 @@ RETURNING id, tenant_id, created_at
 `
 
 type SaveTenantCertificateParams struct {
-	TenantID  sql.NullString `db:"tenant_id" json:"tenant_id"`
-	Domain    string         `db:"domain" json:"domain"`
-	CertPem   string         `db:"cert_pem" json:"cert_pem"`
-	KeyPem    string         `db:"key_pem" json:"key_pem"`
-	ExpiresAt time.Time      `db:"expires_at" json:"expires_at"`
-	IssuerCa  string         `db:"issuer_ca" json:"issuer_ca"`
+	Domain    string    `db:"domain" json:"domain"`
+	CertPem   string    `db:"cert_pem" json:"cert_pem"`
+	KeyPem    string    `db:"key_pem" json:"key_pem"`
+	ExpiresAt time.Time `db:"expires_at" json:"expires_at"`
+	IssuerCa  string    `db:"issuer_ca" json:"issuer_ca"`
+	TenantID  string    `db:"tenant_id" json:"tenant_id"`
 }
 
 type SaveTenantCertificateRow struct {
@@ -275,12 +285,12 @@ type SaveTenantCertificateRow struct {
 
 func (q *Queries) SaveTenantCertificate(ctx context.Context, arg SaveTenantCertificateParams) (SaveTenantCertificateRow, error) {
 	row := q.db.QueryRowContext(ctx, saveTenantCertificate,
-		arg.TenantID,
 		arg.Domain,
 		arg.CertPem,
 		arg.KeyPem,
 		arg.ExpiresAt,
 		arg.IssuerCa,
+		arg.TenantID,
 	)
 	var i SaveTenantCertificateRow
 	err := row.Scan(&i.ID, &i.TenantID, &i.CreatedAt)

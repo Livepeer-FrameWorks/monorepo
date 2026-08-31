@@ -54,13 +54,14 @@ type NavigatorInternalCertificate struct {
 }
 
 type NavigatorTenantAlias struct {
-	TenantID     string         `db:"tenant_id" json:"tenant_id"`
-	Subdomain    string         `db:"subdomain" json:"subdomain"`
-	Status       string         `db:"status" json:"status"`
-	CertIssuedAt sql.NullTime   `db:"cert_issued_at" json:"cert_issued_at"`
-	LastError    sql.NullString `db:"last_error" json:"last_error"`
-	CreatedAt    time.Time      `db:"created_at" json:"created_at"`
-	UpdatedAt    time.Time      `db:"updated_at" json:"updated_at"`
+	TenantID         string         `db:"tenant_id" json:"tenant_id"`
+	Subdomain        string         `db:"subdomain" json:"subdomain"`
+	Status           string         `db:"status" json:"status"`
+	AuthorityVersion int64          `db:"authority_version" json:"authority_version"`
+	CertIssuedAt     sql.NullTime   `db:"cert_issued_at" json:"cert_issued_at"`
+	LastError        sql.NullString `db:"last_error" json:"last_error"`
+	CreatedAt        time.Time      `db:"created_at" json:"created_at"`
+	UpdatedAt        time.Time      `db:"updated_at" json:"updated_at"`
 }
 
 type NavigatorTenantAliasRetirement struct {
@@ -85,18 +86,6 @@ type NavigatorTenantCustomDomain struct {
 	UpdatedAt        time.Time      `db:"updated_at" json:"updated_at"`
 }
 
-type NavigatorTenantEdgeApplyState struct {
-	TenantID        string        `db:"tenant_id" json:"tenant_id"`
-	ClusterID       string        `db:"cluster_id" json:"cluster_id"`
-	NodeID          string        `db:"node_id" json:"node_id"`
-	BundleID        string        `db:"bundle_id" json:"bundle_id"`
-	State           string        `db:"state" json:"state"`
-	LastSeedVersion sql.NullInt64 `db:"last_seed_version" json:"last_seed_version"`
-	LastAckAt       sql.NullTime  `db:"last_ack_at" json:"last_ack_at"`
-	InDnsAt         sql.NullTime  `db:"in_dns_at" json:"in_dns_at"`
-	UpdatedAt       time.Time     `db:"updated_at" json:"updated_at"`
-}
-
 type NavigatorTlsBundle struct {
 	ID        string          `db:"id" json:"id"`
 	BundleID  string          `db:"bundle_id" json:"bundle_id"`
@@ -107,4 +96,5 @@ type NavigatorTlsBundle struct {
 	CreatedAt time.Time       `db:"created_at" json:"created_at"`
 	UpdatedAt time.Time       `db:"updated_at" json:"updated_at"`
 	IssuerCa  string          `db:"issuer_ca" json:"issuer_ca"`
+	Version   string          `db:"version" json:"version"`
 }

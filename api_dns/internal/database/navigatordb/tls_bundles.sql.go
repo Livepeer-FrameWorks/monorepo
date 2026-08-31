@@ -7,14 +7,24 @@ package navigatordb
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"time"
 )
 
 const getTLSBundle = `-- name: GetTLSBundle :one
-SELECT id, bundle_id, domains, cert_pem, key_pem, expires_at, created_at, updated_at, issuer_ca
-FROM navigator.tls_bundles
-WHERE bundle_id = $1
+SELECT bundle.id, bundle.bundle_id, bundle.domains, bundle.cert_pem, bundle.key_pem,
+       bundle.expires_at, bundle.created_at, bundle.updated_at, bundle.issuer_ca, bundle.version
+FROM navigator.tls_bundles AS bundle
+WHERE bundle.bundle_id = $1
+  AND (
+      bundle.bundle_id NOT LIKE 'tenant:%'
+      OR EXISTS (
+          SELECT 1
+          FROM navigator.tenant_aliases AS alias
+          WHERE bundle.bundle_id = 'tenant:' || alias.tenant_id::text
+      )
+  )
 `
 
 func (q *Queries) GetTLSBundle(ctx context.Context, bundleID string) (NavigatorTlsBundle, error) {
@@ -30,12 +40,46 @@ func (q *Queries) GetTLSBundle(ctx context.Context, bundleID string) (NavigatorT
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.IssuerCa,
+		&i.Version,
+	)
+	return i, err
+}
+
+const getTLSBundleForIssuance = `-- name: GetTLSBundleForIssuance :one
+SELECT bundle.id, bundle.bundle_id, bundle.domains, bundle.cert_pem, bundle.key_pem,
+       bundle.expires_at, bundle.created_at, bundle.updated_at, bundle.issuer_ca, bundle.version
+FROM navigator.tls_bundles AS bundle
+WHERE bundle.bundle_id = $1
+  AND (
+      bundle.bundle_id NOT LIKE 'tenant:%'
+      OR EXISTS (
+          SELECT 1
+          FROM navigator.tenant_aliases AS alias
+          WHERE bundle.bundle_id = 'tenant:' || alias.tenant_id::text
+      )
+  )
+`
+
+func (q *Queries) GetTLSBundleForIssuance(ctx context.Context, bundleID string) (NavigatorTlsBundle, error) {
+	row := q.db.QueryRowContext(ctx, getTLSBundleForIssuance, bundleID)
+	var i NavigatorTlsBundle
+	err := row.Scan(
+		&i.ID,
+		&i.BundleID,
+		&i.Domains,
+		&i.CertPem,
+		&i.KeyPem,
+		&i.ExpiresAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.IssuerCa,
+		&i.Version,
 	)
 	return i, err
 }
 
 const listExpiringTLSBundles = `-- name: ListExpiringTLSBundles :many
-SELECT id, bundle_id, domains, cert_pem, key_pem, expires_at, created_at, updated_at, issuer_ca
+SELECT id, bundle_id, domains, cert_pem, key_pem, expires_at, created_at, updated_at, issuer_ca, version
 FROM navigator.tls_bundles
 WHERE expires_at < $1
 ORDER BY expires_at ASC
@@ -60,6 +104,7 @@ func (q *Queries) ListExpiringTLSBundles(ctx context.Context, expiresAt time.Tim
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.IssuerCa,
+			&i.Version,
 		); err != nil {
 			return nil, err
 		}
@@ -75,43 +120,98 @@ func (q *Queries) ListExpiringTLSBundles(ctx context.Context, expiresAt time.Tim
 }
 
 const saveTLSBundle = `-- name: SaveTLSBundle :one
-INSERT INTO navigator.tls_bundles (bundle_id, domains, cert_pem, key_pem, expires_at, issuer_ca, updated_at)
-VALUES (
-    $1, $2::jsonb, $3, $4,
-    $5, $6, NOW()
+WITH tenant_authority AS MATERIALIZED (
+    SELECT alias.tenant_id
+    FROM navigator.tenant_aliases AS alias
+    WHERE $1::text = 'tenant:' || alias.tenant_id::text
+      AND alias.status <> 'tearing_down'
+      AND alias.subdomain = $2::text
+      AND alias.authority_version = $3::bigint
+    FOR UPDATE OF alias
+), bundle_write AS (
+    SELECT
+        $1::text AS bundle_id,
+        $4::jsonb AS domains,
+        $5::text AS cert_pem,
+        $6::text AS key_pem,
+        $7::timestamptz AS expires_at,
+        $8::text AS issuer_ca,
+        $9::text AS version
+    WHERE $1::text NOT LIKE 'tenant:%'
+       OR EXISTS (SELECT 1 FROM tenant_authority)
+), persisted_bundle AS (
+    INSERT INTO navigator.tls_bundles (
+        bundle_id, domains, cert_pem, key_pem, expires_at, issuer_ca, version, updated_at
+    )
+    SELECT bundle_id, domains, cert_pem, key_pem, expires_at, issuer_ca, version, NOW()
+    FROM bundle_write
+    ON CONFLICT (bundle_id) DO UPDATE SET
+        domains = EXCLUDED.domains,
+        cert_pem = EXCLUDED.cert_pem,
+        key_pem = EXCLUDED.key_pem,
+        expires_at = EXCLUDED.expires_at,
+        issuer_ca = EXCLUDED.issuer_ca,
+        version = EXCLUDED.version,
+        updated_at = NOW()
+    RETURNING id, created_at, bundle_id, domains, expires_at, issuer_ca
+), issued_alias AS (
+    UPDATE navigator.tenant_aliases AS alias
+    SET status = 'cert_issued',
+        cert_issued_at = COALESCE(alias.cert_issued_at, NOW()),
+        last_error = NULL,
+        updated_at = NOW()
+    FROM tenant_authority, persisted_bundle
+    WHERE persisted_bundle.bundle_id = 'tenant:' || tenant_authority.tenant_id::text
+      AND alias.tenant_id = tenant_authority.tenant_id
+    RETURNING alias.tenant_id
+), updated_custom_domains AS (
+    UPDATE navigator.tenant_custom_domains AS custom_domain
+    SET issuer_id = NULLIF(persisted_bundle.issuer_ca, ''),
+        cert_expires_at = persisted_bundle.expires_at,
+        updated_at = NOW()
+    FROM tenant_authority, persisted_bundle
+    WHERE custom_domain.tenant_id = tenant_authority.tenant_id
+      AND custom_domain.status IN ('verified', 'cert_issuing', 'cert_issued', 'cert_failed')
+      AND persisted_bundle.domains ? custom_domain.domain
+    RETURNING custom_domain.tenant_id
 )
-ON CONFLICT (bundle_id) DO UPDATE SET
-    domains = EXCLUDED.domains,
-    cert_pem = EXCLUDED.cert_pem,
-    key_pem = EXCLUDED.key_pem,
-    expires_at = EXCLUDED.expires_at,
-    issuer_ca = EXCLUDED.issuer_ca,
-    updated_at = NOW()
-RETURNING id, created_at
+SELECT persisted_bundle.id, persisted_bundle.created_at
+FROM persisted_bundle
+WHERE (
+       persisted_bundle.bundle_id NOT LIKE 'tenant:%'
+       OR EXISTS (SELECT 1 FROM issued_alias)
+  )
+  AND (SELECT COUNT(*) FROM updated_custom_domains) >= 0
 `
 
 type SaveTLSBundleParams struct {
-	BundleID  string          `db:"bundle_id" json:"bundle_id"`
-	Domains   json.RawMessage `db:"domains" json:"domains"`
-	CertPem   string          `db:"cert_pem" json:"cert_pem"`
-	KeyPem    string          `db:"key_pem" json:"key_pem"`
-	ExpiresAt time.Time       `db:"expires_at" json:"expires_at"`
-	IssuerCa  string          `db:"issuer_ca" json:"issuer_ca"`
+	BundleID                 string          `db:"bundle_id" json:"bundle_id"`
+	ExpectedSubdomain        string          `db:"expected_subdomain" json:"expected_subdomain"`
+	ExpectedAuthorityVersion int64           `db:"expected_authority_version" json:"expected_authority_version"`
+	Domains                  json.RawMessage `db:"domains" json:"domains"`
+	CertPem                  string          `db:"cert_pem" json:"cert_pem"`
+	KeyPem                   string          `db:"key_pem" json:"key_pem"`
+	ExpiresAt                time.Time       `db:"expires_at" json:"expires_at"`
+	IssuerCa                 string          `db:"issuer_ca" json:"issuer_ca"`
+	Version                  string          `db:"version" json:"version"`
 }
 
 type SaveTLSBundleRow struct {
-	ID        string    `db:"id" json:"id"`
-	CreatedAt time.Time `db:"created_at" json:"created_at"`
+	ID        string       `db:"id" json:"id"`
+	CreatedAt sql.NullTime `db:"created_at" json:"created_at"`
 }
 
 func (q *Queries) SaveTLSBundle(ctx context.Context, arg SaveTLSBundleParams) (SaveTLSBundleRow, error) {
 	row := q.db.QueryRowContext(ctx, saveTLSBundle,
 		arg.BundleID,
+		arg.ExpectedSubdomain,
+		arg.ExpectedAuthorityVersion,
 		arg.Domains,
 		arg.CertPem,
 		arg.KeyPem,
 		arg.ExpiresAt,
 		arg.IssuerCa,
+		arg.Version,
 	)
 	var i SaveTLSBundleRow
 	err := row.Scan(&i.ID, &i.CreatedAt)

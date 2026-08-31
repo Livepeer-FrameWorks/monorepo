@@ -31,7 +31,10 @@ func (m *CertManager) EnsureCustomDomain(ctx context.Context, tenantID, domain s
 		return nil, fmt.Errorf("tenantID and domain are required")
 	}
 	if existing, err := m.store.GetTenantCustomDomain(ctx, tenantID, domain); err == nil {
-		return existing, nil
+		if existing.Status != "tearing_down" {
+			return existing, nil
+		}
+		return m.store.EnsureTenantCustomDomain(ctx, tenantID, domain, existing.AcmeDNSSubdomain)
 	} else if !errors.Is(err, store.ErrNotFound) {
 		return nil, err
 	}
@@ -48,19 +51,16 @@ func (m *CertManager) GetTenantCustomDomain(ctx context.Context, tenantID, domai
 	return m.store.GetTenantCustomDomain(ctx, tenantID, domain)
 }
 
-// RemoveCustomDomain marks a custom domain for teardown. The worker
-// clears Bunny challenge records + cert material before deleting the row.
-// Idempotent on absent rows.
+// RemoveCustomDomain marks a custom domain for teardown. The worker refreshes
+// any ready tenant SAN bundle, then atomically removes the domain certificate,
+// unused tenant ACME account, and lifecycle row. Idempotent on absent rows.
 func (m *CertManager) RemoveCustomDomain(ctx context.Context, tenantID, domain string) error {
 	tenantID = strings.TrimSpace(tenantID)
 	domain = strings.TrimSpace(strings.ToLower(domain))
 	if tenantID == "" || domain == "" {
 		return fmt.Errorf("tenantID and domain are required")
 	}
-	if err := m.store.SetTenantCustomDomainStatus(ctx, tenantID, domain, "tearing_down", ""); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil
-		}
+	if _, err := m.store.SetTenantCustomDomainStatus(ctx, tenantID, domain, "", "tearing_down", ""); err != nil {
 		return err
 	}
 	return nil
@@ -110,11 +110,12 @@ func (m *CertManager) VerifyCustomDomain(ctx context.Context, row store.TenantCu
 		return setVerifyFailure(ctx, m.store, row,
 			fmt.Sprintf("acme-challenge CNAME mismatch: got %q, expected %q", acmeCNAME, expectedAcme))
 	}
-	return m.store.SetTenantCustomDomainStatus(ctx, row.TenantID, row.Domain, "verified", "")
+	_, err = m.store.SetTenantCustomDomainStatus(ctx, row.TenantID, row.Domain, row.Status, "verified", "")
+	return err
 }
 
 func setVerifyFailure(ctx context.Context, st customDomainStore, row store.TenantCustomDomain, msg string) error {
-	if err := st.SetTenantCustomDomainStatus(ctx, row.TenantID, row.Domain, row.Status, msg); err != nil {
+	if _, err := st.SetTenantCustomDomainStatus(ctx, row.TenantID, row.Domain, row.Status, row.Status, msg); err != nil {
 		return err
 	}
 	return fmt.Errorf("%s", msg)
@@ -124,42 +125,70 @@ func (m *CertManager) IssueCustomDomainCertificate(ctx context.Context, row stor
 	if email = strings.TrimSpace(email); email == "" {
 		return fmt.Errorf("email required for ACME issuance")
 	}
-	if err := m.store.SetTenantCustomDomainStatus(ctx, row.TenantID, row.Domain, "cert_issuing", ""); err != nil {
+	transitioned, err := m.store.SetTenantCustomDomainStatus(ctx, row.TenantID, row.Domain, row.Status, "cert_issuing", "")
+	if err != nil {
 		return fmt.Errorf("status cert_issuing: %w", err)
+	}
+	if !transitioned {
+		return nil
 	}
 	_, _, expiresAt, issuer, err := m.IssueCertificateViaBunnyWithIssuer(ctx, row.TenantID, row.Domain, email)
 	if err != nil {
-		return m.failCustomDomainIssue(ctx, row, err)
+		return m.failCustomDomainIssue(ctx, row, rootDomain, email, err)
 	}
 	expSQL := sql.NullTime{}
 	if !expiresAt.IsZero() {
 		expSQL = sql.NullTime{Valid: true, Time: expiresAt}
 	}
-	if err := m.store.SetTenantCustomDomainCertMetadata(ctx, row.TenantID, row.Domain, issuer, expSQL); err != nil {
+	metadataWritten, err := m.store.SetTenantCustomDomainCertMetadata(ctx, row.TenantID, row.Domain, "cert_issuing", issuer, expSQL)
+	if err != nil {
 		return fmt.Errorf("cert metadata: %w", err)
 	}
-	return m.store.SetTenantCustomDomainStatus(ctx, row.TenantID, row.Domain, "cert_issued", "")
+	if !metadataWritten {
+		return nil
+	}
+	alias, aliasErr := m.store.GetTenantAlias(ctx, row.TenantID)
+	if aliasErr != nil && !errors.Is(aliasErr, store.ErrNotFound) {
+		return m.failCustomDomainIssue(ctx, row, rootDomain, email, fmt.Errorf("tenant alias lookup: %w", aliasErr))
+	}
+	if alias != nil && alias.Status == "cert_issued" {
+		if _, bundleErr := m.EnsureTenantWildcardCertificate(ctx, row.TenantID, alias.Subdomain, TenantAliasZoneLabel, rootDomain, email); bundleErr != nil {
+			return m.failCustomDomainIssue(ctx, row, rootDomain, email, fmt.Errorf("refresh tenant tls bundle: %w", bundleErr))
+		}
+	}
+	_, err = m.store.SetTenantCustomDomainStatus(ctx, row.TenantID, row.Domain, "cert_issuing", "cert_issued", "")
+	return err
 }
 
-func (m *CertManager) failCustomDomainIssue(ctx context.Context, row store.TenantCustomDomain, cause error) error {
-	if statusErr := m.store.SetTenantCustomDomainStatus(ctx, row.TenantID, row.Domain, "cert_failed", cause.Error()); statusErr != nil {
+func (m *CertManager) failCustomDomainIssue(ctx context.Context, row store.TenantCustomDomain, rootDomain, email string, cause error) error {
+	if _, statusErr := m.store.SetTenantCustomDomainStatus(ctx, row.TenantID, row.Domain, "cert_issuing", "cert_failed", cause.Error()); statusErr != nil {
 		return fmt.Errorf("cert issue + status update: %w (status: %w)", cause, statusErr)
+	}
+	// The failed domain no longer participates in the aggregate tenant SAN
+	// set. Rebuild immediately so an already-issued alias bundle cannot keep
+	// retrying the poisoned SAN until its own expiry window.
+	alias, aliasErr := m.store.GetTenantAlias(ctx, row.TenantID)
+	if aliasErr != nil && !errors.Is(aliasErr, store.ErrNotFound) {
+		return errors.Join(cause, fmt.Errorf("refresh tenant tls bundle authority: %w", aliasErr))
+	}
+	if alias != nil && alias.Status == "cert_issued" {
+		if _, bundleErr := m.EnsureTenantWildcardCertificate(ctx, row.TenantID, alias.Subdomain, TenantAliasZoneLabel, rootDomain, email); bundleErr != nil {
+			return errors.Join(cause, fmt.Errorf("refresh tenant tls bundle after domain failure: %w", bundleErr))
+		}
 	}
 	return cause
 }
 
 func (m *CertManager) FinalizeCustomDomainRemoval(ctx context.Context, tenantID, domain, rootDomain, email string) error {
-	if alias, err := m.store.GetTenantAlias(ctx, tenantID); err == nil && alias != nil {
+	if alias, err := m.store.GetTenantAlias(ctx, tenantID); err == nil && alias != nil && alias.Status == "cert_issued" {
 		if _, bundleErr := m.EnsureTenantWildcardCertificate(ctx, tenantID, alias.Subdomain, TenantAliasZoneLabel, rootDomain, email); bundleErr != nil {
 			return fmt.Errorf("refresh tenant tls bundle: %w", bundleErr)
 		}
 	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return fmt.Errorf("tenant alias lookup: %w", err)
 	}
-	if err := m.store.DeleteCertificate(ctx, tenantID, domain); err != nil {
-		return fmt.Errorf("delete cert material: %w", err)
-	}
-	return m.store.DeleteTenantCustomDomain(ctx, tenantID, domain)
+	_, err := m.store.FinalizeTenantCustomDomainRemoval(ctx, tenantID, domain)
+	return err
 }
 
 // generateAcmeDNSSlug returns a 64-bit random hex slug for use under
@@ -177,7 +206,7 @@ func generateAcmeDNSSlug() (string, error) {
 // customDomainStore is the slice of *store.Store this file needs. Mirrors
 // the existing tenantAliasStore shape.
 type customDomainStore interface {
-	SetTenantCustomDomainStatus(ctx context.Context, tenantID, domain, status, errMsg string) error
+	SetTenantCustomDomainStatus(ctx context.Context, tenantID, domain, expectedStatus, status, errMsg string) (bool, error)
 }
 
 // ProcessPendingCustomDomains runs the per-tick custom-domain reconciler.
@@ -203,7 +232,22 @@ func (m *CertManager) ProcessPendingCustomDomains(ctx context.Context, rootDomai
 	processed := 0
 	for _, row := range rows {
 		switch row.Status {
-		case "pending_verification", "cert_failed":
+		case "cert_failed":
+			// A previous issuance failure may have been persisted before the
+			// aggregate tenant-bundle cleanup succeeded. Retry that cleanup on
+			// every pass before re-verifying/re-admitting the failed SAN.
+			if err := m.refreshTenantBundleAfterCustomDomainFailure(ctx, row.TenantID, rootDomain, email); err != nil {
+				continue
+			}
+			sub, lookupErr := tenantSubdomainLookup(ctx, row.TenantID)
+			if lookupErr != nil || sub == "" {
+				continue
+			}
+			if err := m.VerifyCustomDomain(ctx, row, sub, rootDomain); err != nil {
+				continue
+			}
+			processed++
+		case "pending_verification":
 			sub, lookupErr := tenantSubdomainLookup(ctx, row.TenantID)
 			if lookupErr != nil || sub == "" {
 				continue
@@ -227,4 +271,19 @@ func (m *CertManager) ProcessPendingCustomDomains(ctx context.Context, rootDomai
 		}
 	}
 	return processed, nil
+}
+
+func (m *CertManager) refreshTenantBundleAfterCustomDomainFailure(ctx context.Context, tenantID, rootDomain, email string) error {
+	alias, err := m.store.GetTenantAlias(ctx, tenantID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	if alias.Status != "cert_issued" {
+		return nil
+	}
+	_, err = m.EnsureTenantWildcardCertificate(ctx, tenantID, alias.Subdomain, TenantAliasZoneLabel, rootDomain, email)
+	return err
 }

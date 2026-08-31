@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -15,7 +16,11 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 )
 
-var ErrNotFound = errors.New("record not found")
+var (
+	ErrNotFound           = errors.New("record not found")
+	ErrAuthorityLost      = errors.New("write authority no longer exists")
+	ErrIssuanceInProgress = errors.New("certificate issuance already in progress")
+)
 
 type Certificate struct {
 	ID        string
@@ -58,6 +63,14 @@ type TLSBundle struct {
 	// account, ARI hints and rate-limit pool stay consistent. Matches
 	// store.Certificate.IssuerCA.
 	IssuerCA string
+	// Version is an opaque certificate-content revision propagated through the
+	// edge apply ACK so DNS readiness cannot cross a bundle replacement.
+	Version string
+	// AuthoritySubdomain fences tenant bundle writes against alias rename.
+	// AuthorityVersion closes same-label teardown/reactivation and a→b→a
+	// ABA windows. Both are runtime authority context and are not persisted.
+	AuthoritySubdomain string
+	AuthorityVersion   int64
 }
 
 type InternalCA struct {
@@ -84,13 +97,14 @@ type InternalCertificate struct {
 // TenantAlias persists per-tenant alias intent + ACME lifecycle state.
 // One row per paying tenant. Driven by Quartermaster.EnsureTenantAlias.
 type TenantAlias struct {
-	TenantID     string
-	Subdomain    string
-	Status       string // cert_issuing | cert_issued | cert_failed | tearing_down
-	CertIssuedAt sql.NullTime
-	LastError    sql.NullString
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	TenantID         string
+	Subdomain        string
+	Status           string // cert_issuing | cert_issued | cert_failed | tearing_down
+	AuthorityVersion int64
+	CertIssuedAt     sql.NullTime
+	LastError        sql.NullString
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 // TenantAliasRetirement is a retired alias label awaiting Bunny record
@@ -123,27 +137,57 @@ type TenantCustomDomain struct {
 	UpdatedAt        time.Time
 }
 
+// CustomDomainHasCertificateAuthority is the canonical credential-retention
+// status set. Pending verification and teardown do not preserve a certificate
+// or ACME account; cert_failed does, because a retry still owns its prior
+// credentials.
+func CustomDomainHasCertificateAuthority(status string) bool {
+	switch status {
+	case "verified", "cert_issuing", "cert_issued", "cert_failed":
+		return true
+	default:
+		return false
+	}
+}
+
+// CustomDomainParticipatesInTenantBundle is deliberately narrower than
+// credential retention. A failed custom-domain order must not poison renewal
+// of the tenant alias and every otherwise healthy custom SAN.
+func CustomDomainParticipatesInTenantBundle(status string) bool {
+	switch status {
+	case "verified", "cert_issuing", "cert_issued":
+		return true
+	default:
+		return false
+	}
+}
+
 // TenantEdgeApplyState records per-(tenant, edge, bundle) state. Drives
 // DNS membership decisions for tenant smart record sets in cdn.{root}.
 type TenantEdgeApplyState struct {
-	TenantID        string
-	ClusterID       string
-	NodeID          string
-	BundleID        string
-	State           string // pending_distribute | pending_apply | applied | in_dns
-	LastSeedVersion sql.NullInt64
-	LastAckAt       sql.NullTime
-	InDNSAt         sql.NullTime
-	UpdatedAt       time.Time
+	TenantID             string
+	ClusterID            string
+	NodeID               string
+	BundleID             string
+	BundleVersion        string
+	CurrentBundleVersion string
+	CurrentBundlePresent bool
+	State                string // pending_distribute | pending_apply | applied | in_dns
+	LastSeedVersion      sql.NullInt64
+	LastDeliverySequence int64
+	LastAckAt            sql.NullTime
+	InDNSAt              sql.NullTime
+	UpdatedAt            time.Time
 }
 
 type Store struct {
+	db  *sql.DB
 	q   *navigatordb.Queries
 	enc *fieldcrypt.FieldEncryptor // nil = no encryption (backward-compatible)
 }
 
 func NewStore(db *sql.DB, enc *fieldcrypt.FieldEncryptor) *Store {
-	return &Store{q: navigatordb.New(db), enc: enc}
+	return &Store{db: db, q: navigatordb.New(db), enc: enc}
 }
 
 func certificateFromDB(row navigatordb.NavigatorCertificate) Certificate {
@@ -164,7 +208,13 @@ func tlsBundleFromDB(row navigatordb.NavigatorTlsBundle) TLSBundle {
 	return TLSBundle{
 		ID: row.ID, BundleID: row.BundleID, CertPEM: row.CertPem, KeyPEM: row.KeyPem,
 		ExpiresAt: row.ExpiresAt, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, IssuerCA: row.IssuerCa,
+		Version: row.Version,
 	}
+}
+
+func tlsBundleVersion(certPEM string) string {
+	sum := sha256.Sum256([]byte(certPEM))
+	return fmt.Sprintf("%x", sum[:])
 }
 
 func marshalDomains(domains []string) ([]byte, error) {
@@ -206,13 +256,16 @@ func (s *Store) decryptField(stored string) (string, error) {
 func (s *Store) GetCertificate(ctx context.Context, tenantID, domain string) (*Certificate, error) {
 	var row navigatordb.NavigatorCertificate
 	var err error
-	if tenantID == "" {
-		row, err = s.q.GetPlatformCertificate(ctx, domain)
-	} else {
-		row, err = s.q.GetTenantCertificate(ctx, navigatordb.GetTenantCertificateParams{
-			TenantID: sql.NullString{String: tenantID, Valid: true}, Domain: domain,
-		})
-	}
+	err = database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		if tenantID == "" {
+			row, err = s.q.GetPlatformCertificate(ctx, domain)
+		} else {
+			row, err = s.q.GetTenantCertificate(ctx, navigatordb.GetTenantCertificateParams{
+				TenantID: sql.NullString{String: tenantID, Valid: true}, Domain: domain,
+			})
+		}
+		return err
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -238,22 +291,30 @@ func (s *Store) SaveCertificate(ctx context.Context, tenantID string, cert *Cert
 		issuer = "letsencrypt"
 	}
 	if tenantID == "" {
-		row, queryErr := s.q.SavePlatformCertificate(ctx, navigatordb.SavePlatformCertificateParams{
-			Domain: cert.Domain, CertPem: cert.CertPEM, KeyPem: encryptedKey, ExpiresAt: cert.ExpiresAt, IssuerCa: issuer,
+		return database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+			row, queryErr := s.q.SavePlatformCertificate(ctx, navigatordb.SavePlatformCertificateParams{
+				Domain: cert.Domain, CertPem: cert.CertPEM, KeyPem: encryptedKey, ExpiresAt: cert.ExpiresAt, IssuerCa: issuer,
+			})
+			if queryErr == nil {
+				cert.ID, cert.TenantID, cert.CreatedAt = row.ID, row.TenantID, row.CreatedAt
+			}
+			return queryErr
+		})
+	}
+	err = database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		row, queryErr := s.q.SaveTenantCertificate(ctx, navigatordb.SaveTenantCertificateParams{
+			TenantID: tenantID, Domain: cert.Domain, CertPem: cert.CertPEM, KeyPem: encryptedKey,
+			ExpiresAt: cert.ExpiresAt, IssuerCa: issuer,
 		})
 		if queryErr == nil {
 			cert.ID, cert.TenantID, cert.CreatedAt = row.ID, row.TenantID, row.CreatedAt
 		}
 		return queryErr
-	}
-	row, queryErr := s.q.SaveTenantCertificate(ctx, navigatordb.SaveTenantCertificateParams{
-		TenantID: sql.NullString{String: tenantID, Valid: true}, Domain: cert.Domain, CertPem: cert.CertPEM, KeyPem: encryptedKey,
-		ExpiresAt: cert.ExpiresAt, IssuerCa: issuer,
 	})
-	if queryErr == nil {
-		cert.ID, cert.TenantID, cert.CreatedAt = row.ID, row.TenantID, row.CreatedAt
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrAuthorityLost
 	}
-	return queryErr
+	return err
 }
 
 // DeleteCertificate removes a stored cert (and its encrypted key) for the
@@ -261,10 +322,14 @@ func (s *Store) SaveCertificate(ctx context.Context, tenantID string, cert *Cert
 // material doesn't outlive the lifecycle row. Idempotent on missing rows.
 func (s *Store) DeleteCertificate(ctx context.Context, tenantID, domain string) error {
 	if tenantID == "" {
-		return s.q.DeletePlatformCertificate(ctx, domain)
+		return database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+			return s.q.DeletePlatformCertificate(ctx, domain)
+		})
 	}
-	return s.q.DeleteTenantCertificate(ctx, navigatordb.DeleteTenantCertificateParams{
-		TenantID: sql.NullString{String: tenantID, Valid: true}, Domain: domain,
+	return database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		return s.q.DeleteTenantCertificate(ctx, navigatordb.DeleteTenantCertificateParams{
+			TenantID: sql.NullString{String: tenantID, Valid: true}, Domain: domain,
+		})
 	})
 }
 
@@ -279,13 +344,16 @@ func (s *Store) GetACMEAccount(ctx context.Context, tenantID, email, ca string) 
 	}
 	var row navigatordb.NavigatorAcmeAccount
 	var err error
-	if tenantID == "" {
-		row, err = s.q.GetPlatformACMEAccount(ctx, navigatordb.GetPlatformACMEAccountParams{Email: email, Ca: ca})
-	} else {
-		row, err = s.q.GetTenantACMEAccount(ctx, navigatordb.GetTenantACMEAccountParams{
-			TenantID: sql.NullString{String: tenantID, Valid: true}, Email: email, Ca: ca,
-		})
-	}
+	err = database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		if tenantID == "" {
+			row, err = s.q.GetPlatformACMEAccount(ctx, navigatordb.GetPlatformACMEAccountParams{Email: email, Ca: ca})
+		} else {
+			row, err = s.q.GetTenantACMEAccount(ctx, navigatordb.GetTenantACMEAccountParams{
+				TenantID: sql.NullString{String: tenantID, Valid: true}, Email: email, Ca: ca,
+			})
+		}
+		return err
+	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -311,29 +379,42 @@ func (s *Store) SaveACMEAccount(ctx context.Context, tenantID string, acc *ACMEA
 		return fmt.Errorf("encrypt ACME private key: %w", err)
 	}
 	if tenantID == "" {
-		row, queryErr := s.q.SavePlatformACMEAccount(ctx, navigatordb.SavePlatformACMEAccountParams{
-			Email: acc.Email, RegistrationJson: acc.Registration, PrivateKeyPem: encryptedKey, Ca: acc.CA,
+		return database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+			row, queryErr := s.q.SavePlatformACMEAccount(ctx, navigatordb.SavePlatformACMEAccountParams{
+				Email: acc.Email, RegistrationJson: acc.Registration, PrivateKeyPem: encryptedKey, Ca: acc.CA,
+			})
+			if queryErr == nil {
+				acc.ID, acc.TenantID, acc.CreatedAt = row.ID, row.TenantID, row.CreatedAt
+			}
+			return queryErr
+		})
+	}
+	err = database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		row, queryErr := s.q.SaveTenantACMEAccount(ctx, navigatordb.SaveTenantACMEAccountParams{
+			TenantID: tenantID, Email: acc.Email,
+			RegistrationJson: acc.Registration, PrivateKeyPem: encryptedKey, Ca: acc.CA,
 		})
 		if queryErr == nil {
 			acc.ID, acc.TenantID, acc.CreatedAt = row.ID, row.TenantID, row.CreatedAt
 		}
 		return queryErr
-	}
-	row, queryErr := s.q.SaveTenantACMEAccount(ctx, navigatordb.SaveTenantACMEAccountParams{
-		TenantID: sql.NullString{String: tenantID, Valid: true}, Email: acc.Email,
-		RegistrationJson: acc.Registration, PrivateKeyPem: encryptedKey, Ca: acc.CA,
 	})
-	if queryErr == nil {
-		acc.ID, acc.TenantID, acc.CreatedAt = row.ID, row.TenantID, row.CreatedAt
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrAuthorityLost
 	}
-	return queryErr
+	return err
 }
 
 // ListExpiringCertificates finds certs expiring within the given duration.
 // Returns all certificates (platform-wide and tenant-specific) that are expiring.
 func (s *Store) ListExpiringCertificates(ctx context.Context, threshold time.Duration) ([]Certificate, error) {
 	expiryLimit := time.Now().Add(threshold)
-	rows, err := s.q.ListExpiringCertificates(ctx, expiryLimit)
+	var rows []navigatordb.NavigatorCertificate
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		var queryErr error
+		rows, queryErr = s.q.ListExpiringCertificates(ctx, expiryLimit)
+		return queryErr
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -352,11 +433,14 @@ func (s *Store) ListExpiringCertificates(ctx context.Context, threshold time.Dur
 func (s *Store) ListCertificatesForTenant(ctx context.Context, tenantID string) ([]Certificate, error) {
 	var rows []navigatordb.NavigatorCertificate
 	var err error
-	if tenantID == "" {
-		rows, err = s.q.ListPlatformCertificates(ctx)
-	} else {
-		rows, err = s.q.ListTenantCertificates(ctx, sql.NullString{String: tenantID, Valid: true})
-	}
+	err = database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		if tenantID == "" {
+			rows, err = s.q.ListPlatformCertificates(ctx)
+		} else {
+			rows, err = s.q.ListTenantCertificates(ctx, sql.NullString{String: tenantID, Valid: true})
+		}
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -372,10 +456,25 @@ func (s *Store) ListCertificatesForTenant(ctx context.Context, tenantID string) 
 }
 
 func (s *Store) GetTLSBundle(ctx context.Context, bundleID string) (*TLSBundle, error) {
+	return s.getTLSBundle(ctx, bundleID, false)
+}
+
+// GetTLSBundleForIssuance is the cache/CA-pinning read. It remains available
+// while active alias authority is issuing or retrying; serving policy is a
+// separate contract even when both currently preserve the last-good bundle.
+func (s *Store) GetTLSBundleForIssuance(ctx context.Context, bundleID string) (*TLSBundle, error) {
+	return s.getTLSBundle(ctx, bundleID, true)
+}
+
+func (s *Store) getTLSBundle(ctx context.Context, bundleID string, forIssuance bool) (*TLSBundle, error) {
 	var row navigatordb.NavigatorTlsBundle
 	var err error
 	err = database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
-		row, err = s.q.GetTLSBundle(ctx, bundleID)
+		if forIssuance {
+			row, err = s.q.GetTLSBundleForIssuance(ctx, bundleID)
+		} else {
+			row, err = s.q.GetTLSBundle(ctx, bundleID)
+		}
 		return err
 	})
 	if errors.Is(err, sql.ErrNoRows) {
@@ -409,21 +508,96 @@ func (s *Store) SaveTLSBundle(ctx context.Context, bundle *TLSBundle) error {
 	if issuer == "" {
 		issuer = "letsencrypt"
 	}
-	return database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+	version := strings.TrimSpace(bundle.Version)
+	if version == "" {
+		version = tlsBundleVersion(bundle.CertPEM)
+		bundle.Version = version
+	}
+	err = database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
 		row, queryErr := s.q.SaveTLSBundle(ctx, navigatordb.SaveTLSBundleParams{
 			BundleID: bundle.BundleID, Domains: domainsJSON, CertPem: bundle.CertPEM, KeyPem: encryptedKey,
-			ExpiresAt: bundle.ExpiresAt, IssuerCa: issuer,
+			ExpiresAt: bundle.ExpiresAt, IssuerCa: issuer, ExpectedSubdomain: bundle.AuthoritySubdomain,
+			ExpectedAuthorityVersion: bundle.AuthorityVersion, Version: version,
 		})
 		if queryErr == nil {
-			bundle.ID, bundle.CreatedAt = row.ID, row.CreatedAt
+			bundle.ID = row.ID
+			if row.CreatedAt.Valid {
+				bundle.CreatedAt = row.CreatedAt.Time
+			}
 		}
 		return queryErr
 	})
+	if errors.Is(err, sql.ErrNoRows) && strings.HasPrefix(bundle.BundleID, "tenant:") {
+		return ErrAuthorityLost
+	}
+	return err
+}
+
+func (s *Store) TryAcquireCertificateIssuanceLease(ctx context.Context, leaseKey, owner string, ttl time.Duration) (bool, error) {
+	if strings.TrimSpace(leaseKey) == "" || strings.TrimSpace(owner) == "" || ttl <= 0 {
+		return false, errors.New("issuance lease requires key, owner, and positive ttl")
+	}
+	var acquired bool
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		var queryErr error
+		acquired, queryErr = s.q.TryAcquireCertificateIssuanceLease(ctx, navigatordb.TryAcquireCertificateIssuanceLeaseParams{
+			LeaseKey: leaseKey, LeaseOwner: owner, LeaseSeconds: int64(ttl / time.Second),
+		})
+		if errors.Is(queryErr, sql.ErrNoRows) {
+			return nil
+		}
+		return queryErr
+	})
+	return acquired, err
+}
+
+func (s *Store) RenewCertificateIssuanceLease(ctx context.Context, leaseKey, owner string, ttl time.Duration) (bool, error) {
+	if strings.TrimSpace(leaseKey) == "" || strings.TrimSpace(owner) == "" || ttl <= 0 {
+		return false, errors.New("issuance lease renewal requires key, owner, and positive ttl")
+	}
+	var renewed bool
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		var queryErr error
+		renewed, queryErr = s.q.RenewCertificateIssuanceLease(ctx, navigatordb.RenewCertificateIssuanceLeaseParams{
+			LeaseKey: leaseKey, LeaseOwner: owner, LeaseSeconds: int64(ttl / time.Second),
+		})
+		if errors.Is(queryErr, sql.ErrNoRows) {
+			return nil
+		}
+		return queryErr
+	})
+	return renewed, err
+}
+
+func (s *Store) ReleaseCertificateIssuanceLease(ctx context.Context, leaseKey, owner string) error {
+	return database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		return s.q.ReleaseCertificateIssuanceLease(ctx, navigatordb.ReleaseCertificateIssuanceLeaseParams{
+			LeaseKey: leaseKey, LeaseOwner: owner,
+		})
+	})
+}
+
+// DeleteExpiredCertificateIssuanceLeases bounds durable lease metadata after
+// crashed issuers or retired tenant/domain identities. A live owner is never
+// removed; expiry is also the point after which that owner cannot publish.
+func (s *Store) DeleteExpiredCertificateIssuanceLeases(ctx context.Context) (int64, error) {
+	var rows int64
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		var queryErr error
+		rows, queryErr = s.q.DeleteExpiredCertificateIssuanceLeases(ctx)
+		return queryErr
+	})
+	return rows, err
 }
 
 func (s *Store) ListExpiringTLSBundles(ctx context.Context, threshold time.Duration) ([]TLSBundle, error) {
 	expiryLimit := time.Now().Add(threshold)
-	rows, err := s.q.ListExpiringTLSBundles(ctx, expiryLimit)
+	var rows []navigatordb.NavigatorTlsBundle
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		var queryErr error
+		rows, queryErr = s.q.ListExpiringTLSBundles(ctx, expiryLimit)
+		return queryErr
+	})
 	if err != nil {
 		return nil, err
 	}

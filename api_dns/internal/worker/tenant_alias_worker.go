@@ -2,7 +2,6 @@ package worker
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -14,6 +13,8 @@ import (
 
 	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
 // EdgeAddressResolver maps a Foghorn-reported node_id to one or more
@@ -38,10 +39,6 @@ type TenantServiceAddressResolver interface {
 	ResolveServiceAddressesForClusters(ctx context.Context, serviceType string, clusterIDs []string, staleThresholdSeconds int) ([]ServiceAddress, error)
 }
 
-type TenantClusterEligibility interface {
-	TenantActiveInCluster(ctx context.Context, tenantID, clusterID string) (bool, error)
-}
-
 // ClusterControlCellHealth answers whether the cluster's owning Foghorn
 // control cell is currently healthy enough to be in tenant alias DNS.
 // Implemented by the Quartermaster-backed eligibility resolver.
@@ -53,6 +50,35 @@ type tenantAliasDNSProvider interface {
 	FindZone(ctx context.Context, domain string) (*bunny.Zone, bool, error)
 	ReconcileRecordSet(ctx context.Context, zoneID int64, name string, recordType int, desired []bunny.Record) error
 }
+
+// legacyContinuityMaxAge bounds how long a versionless (pre-upgrade) in_dns
+// row may ride as a grandfathered DNS member without a revision-bearing ACK.
+// Past it the edge is demoted like any stale row: an edge whose Helmsman never
+// upgrades must not keep DNS continuity forever.
+const legacyContinuityMaxAge = 30 * 24 * time.Hour
+
+var (
+	// dnsWriteBackCASMisses makes a pathological write-back loop visible: a
+	// lost CAS is normal once, a sustained rate means something keeps moving
+	// rows under the publisher.
+	dnsWriteBackCASMisses = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "navigator_dns_write_back_cas_misses_total",
+		Help: "DNS worker in_dns write-backs skipped because an ACK advanced the row mid-publish",
+	})
+	// legacyContinuityRides increments once per continuity member per publish
+	// pass; a sustained non-zero rate after a rollout completes means edges
+	// never re-ACKed with a bundle revision.
+	legacyContinuityRides = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "navigator_dns_legacy_continuity_rides_total",
+		Help: "Publish-pass occurrences of versionless in_dns rows retained as rolling-upgrade continuity members",
+	})
+	// legacyContinuityExpired counts continuity members demoted by the age
+	// bound.
+	legacyContinuityExpired = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "navigator_dns_legacy_continuity_expired_total",
+		Help: "Versionless in_dns rows demoted because they exceeded the rolling-upgrade continuity age bound",
+	})
+)
 
 // AliasApplyStateWorker reconciles Bunny smart record sets in cdn.{root}
 // from Navigator's durable per-edge ACK state.
@@ -72,10 +98,11 @@ type tenantAliasStore interface {
 	ListPendingTenantAliases(ctx context.Context) ([]store.TenantAlias, error)
 	ListTenantAliasesByStatus(ctx context.Context, statuses []string) ([]store.TenantAlias, error)
 	GetTenantAlias(ctx context.Context, tenantID string) (*store.TenantAlias, error)
-	UpsertTenantEdgeApplyState(ctx context.Context, st *store.TenantEdgeApplyState) error
+	MarkTenantEdgeInDNS(ctx context.Context, st *store.TenantEdgeApplyState) (bool, error)
+	MarkTenantEdgeNotInDNS(ctx context.Context, st *store.TenantEdgeApplyState) (bool, error)
 	ListTenantEdgeApplyState(ctx context.Context, tenantID, stateFilter string) ([]store.TenantEdgeApplyState, error)
-	DeleteTenantEdgeApplyState(ctx context.Context, tenantID string) error
-	DeleteTenantAlias(ctx context.Context, tenantID string) error
+	TenantAliasHasDNS(ctx context.Context, tenantID string) (bool, error)
+	DeleteTenantAlias(ctx context.Context, tenantID string) (bool, error)
 	ListTenantAliasRetirements(ctx context.Context) ([]store.TenantAliasRetirement, error)
 	DeleteTenantAliasRetirement(ctx context.Context, tenantID, subdomain string) error
 	RecordTenantAliasRetirementFailure(ctx context.Context, tenantID, subdomain, errMsg string) error
@@ -170,10 +197,6 @@ func (w *AliasApplyStateWorker) PublishTenantAlias(ctx context.Context, tenantID
 	}
 	eligible := make([]store.TenantEdgeApplyState, 0, len(rows))
 	stale := make([]store.TenantEdgeApplyState, 0)
-	var eligibility TenantClusterEligibility
-	if checker, ok := w.edges.(TenantClusterEligibility); ok {
-		eligibility = checker
-	}
 	var cellHealth ClusterControlCellHealth
 	if checker, ok := w.edges.(ClusterControlCellHealth); ok {
 		cellHealth = checker
@@ -182,19 +205,26 @@ func (w *AliasApplyStateWorker) PublishTenantAlias(ctx context.Context, tenantID
 		if row.State != "applied" && row.State != "in_dns" {
 			continue
 		}
-		if eligibility != nil {
-			active, activeErr := eligibility.TenantActiveInCluster(ctx, tenantID, row.ClusterID)
-			if activeErr != nil {
-				w.logger.WithError(activeErr).WithFields(logging.Fields{
-					"tenant_id":  tenantID,
-					"cluster_id": row.ClusterID,
-				}).Warn("Tenant cluster eligibility check failed; preserving current tenant DNS")
-				return activeErr
-			}
-			if !active {
-				stale = append(stale, row)
-				continue
-			}
+		// Expand migrations cannot reconstruct the certificate revision that an
+		// already-published edge loaded. Keep those versionless in_dns rows as
+		// continuity members during a rolling upgrade, but never admit a merely
+		// applied versionless row. A non-empty mismatch is positive evidence that
+		// the edge serves stale material and must be removed.
+		legacyContinuity := row.BundleVersion == "" && row.State == "in_dns" && row.CurrentBundlePresent
+		if legacyContinuity && time.Since(row.UpdatedAt) > legacyContinuityMaxAge {
+			legacyContinuityExpired.Inc()
+			w.logger.WithFields(logging.Fields{
+				"tenant_id": tenantID,
+				"node_id":   row.NodeID,
+			}).Warn("Demoting versionless DNS continuity member past the rolling-upgrade age bound")
+			legacyContinuity = false
+		}
+		if legacyContinuity {
+			legacyContinuityRides.Inc()
+		}
+		if !legacyContinuity && (row.BundleVersion == "" || row.CurrentBundleVersion == "" || row.BundleVersion != row.CurrentBundleVersion) {
+			stale = append(stale, row)
+			continue
 		}
 		if cellHealth != nil {
 			healthy, healthErr := cellHealth.ClusterControlCellHealthy(ctx, row.ClusterID)
@@ -217,17 +247,34 @@ func (w *AliasApplyStateWorker) PublishTenantAlias(ctx context.Context, tenantID
 
 func (w *AliasApplyStateWorker) teardown(ctx context.Context, alias store.TenantAlias) {
 	log := w.logger.WithField("tenant_id", alias.TenantID)
-	// Clear the label's records first; local state is deleted only after
-	// Bunny accepts the DNS removal.
-	if err := w.clearTenantAliasRecords(ctx, alias.Subdomain); err != nil {
-		log.WithError(err).Warn("Failed to clear tenant alias records during teardown")
+	// The row may have been reactivated since listAllAliasesForReconcile took
+	// its snapshot. Re-read immediately before the external mutation; the final
+	// database delete remains independently fenced as well.
+	current, err := w.store.GetTenantAlias(ctx, alias.TenantID)
+	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) {
+			log.WithError(err).Warn("Failed to recheck tenant alias teardown authority")
+		}
 		return
 	}
-	if err := w.store.DeleteTenantEdgeApplyState(ctx, alias.TenantID); err != nil {
-		log.WithError(err).Warn("Failed to delete tenant edge apply state during teardown")
+	if current.Status != "tearing_down" || current.Subdomain != alias.Subdomain {
+		log.Info("Skipped tenant alias DNS teardown because alias authority changed")
+		return
 	}
-	if err := w.store.DeleteTenantAlias(ctx, alias.TenantID); err != nil && !errors.Is(err, store.ErrNotFound) {
+	// Clear the label's records first; local state is deleted only after
+	// Bunny accepts the DNS removal.
+	if clearErr := w.clearTenantAliasRecords(ctx, alias.Subdomain); clearErr != nil {
+		log.WithError(clearErr).Warn("Failed to clear tenant alias records during teardown")
+		return
+	}
+	// The alias delete atomically removes alias credentials and cascades its
+	// per-edge apply rows. Custom-domain credentials with an active independent
+	// intent remain intact.
+	deleted, err := w.store.DeleteTenantAlias(ctx, alias.TenantID)
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		log.WithError(err).Warn("Failed to delete tenant alias during teardown")
+	} else if !deleted {
+		log.Info("Skipped tenant alias teardown because alias authority changed")
 	}
 }
 
@@ -307,6 +354,23 @@ func (w *AliasApplyStateWorker) processRetirement(ctx context.Context, r store.T
 			"updated_at":   active.UpdatedAt,
 		}).Error("Tenant alias retirement targets the active label but was not superseded; leaving pending (upstream logic bug)")
 		return
+	}
+
+	// A rename is cut over only after the replacement alias is issued and an
+	// edge has ACKed the exact replacement bundle revision into DNS. Until then
+	// the retired label and last-good certificate are the tenant's live path.
+	if active != nil {
+		if active.Status != "cert_issued" {
+			return
+		}
+		ready, readyErr := w.store.TenantAliasHasDNS(ctx, r.TenantID)
+		if readyErr != nil {
+			log.WithError(readyErr).Warn("Failed to verify replacement alias DNS readiness")
+			return
+		}
+		if !ready {
+			return
+		}
 	}
 
 	if clearErr := w.clearTenantAliasRecords(ctx, r.Subdomain); clearErr != nil {
@@ -454,10 +518,15 @@ func (w *AliasApplyStateWorker) publishTenantSmartRecords(ctx context.Context, a
 			}
 			continue
 		}
-		edge.State = "in_dns"
-		edge.InDNSAt = nullNow()
-		if upsertErr := w.store.UpsertTenantEdgeApplyState(ctx, &edge); upsertErr != nil {
-			w.logger.WithError(upsertErr).WithField("node_id", edge.NodeID).Debug("Failed to mark edge in_dns")
+		if edge.State == "in_dns" {
+			continue
+		}
+		advanced, markErr := w.store.MarkTenantEdgeInDNS(ctx, &edge)
+		if markErr != nil {
+			w.logger.WithError(markErr).WithField("node_id", edge.NodeID).Debug("Failed to mark edge in_dns")
+		} else if !advanced {
+			dnsWriteBackCASMisses.Inc()
+			w.logger.WithField("node_id", edge.NodeID).Debug("Skipped stale edge in_dns write-back")
 		}
 	}
 	for _, edge := range stale {
@@ -507,13 +576,11 @@ func bunnyRecordFQDN(recordName, zoneDomain string) string {
 }
 
 func (w *AliasApplyStateWorker) markEdgeNotInDNS(ctx context.Context, edge store.TenantEdgeApplyState) {
-	edge.State = "applied"
-	edge.InDNSAt = sql.NullTime{}
-	if upsertErr := w.store.UpsertTenantEdgeApplyState(ctx, &edge); upsertErr != nil {
-		w.logger.WithError(upsertErr).WithField("node_id", edge.NodeID).Debug("Failed to mark edge out of DNS")
+	advanced, markErr := w.store.MarkTenantEdgeNotInDNS(ctx, &edge)
+	if markErr != nil {
+		w.logger.WithError(markErr).WithField("node_id", edge.NodeID).Debug("Failed to mark edge out of DNS")
+	} else if !advanced {
+		dnsWriteBackCASMisses.Inc()
+		w.logger.WithField("node_id", edge.NodeID).Debug("Skipped stale edge out-of-DNS write-back")
 	}
-}
-
-func nullNow() sql.NullTime {
-	return sql.NullTime{Valid: true, Time: time.Now().UTC()}
 }
