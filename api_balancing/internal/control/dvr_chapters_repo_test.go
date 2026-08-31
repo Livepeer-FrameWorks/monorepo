@@ -103,6 +103,9 @@ func TestCloseChapter_NotifiesOnlyWhenRowChanged(t *testing.T) {
 func TestOpenChapter_TxClearsPreviousAndInserts(t *testing.T) {
 	mock := setupChapterTest(t)
 	mock.ExpectBegin()
+	mock.ExpectExec("pg_advisory_xact_lock").
+		WithArgs(dvrChapterMutationLockNamespace, "art-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE foghorn.dvr_chapters\s+SET is_current = false`).
 		WithArgs("art-1", "chap-1").
 		WillReturnResult(sqlmock.NewResult(0, 0)) // no previous current

@@ -452,7 +452,11 @@ type StreamStateManager struct {
 	streams         map[string]*StreamState                    // internal_name -> union summary
 	streamInstances map[string]map[string]*StreamInstanceState // internal_name -> node_id -> instance
 	nodes           map[string]*NodeState                      // node_id -> node state
-	mu              sync.RWMutex
+	// Process-local eviction tombstones suppress periodic node_outputs
+	// rehydration until an authenticated heartbeat/register observes the node
+	// again. Durable output metadata is not liveness evidence.
+	evictedNodes map[string]nodeEvictionTombstone
+	mu           sync.RWMutex
 
 	// Whole-node artifact report ordering (see SetNodeArtifacts). A report is ordered by (fence,
 	// seq): the connection fence is issued monotonically by Foghorn when the node's control
@@ -516,6 +520,14 @@ type StreamStateManager struct {
 	lastRehydrateAt  time.Time
 	lastRehydrateErr string
 
+	// Serializes each node's persistence against its eviction. An eviction decision is
+	// made under mu, but its Redis/Postgres deletes run after that lock is
+	// released. A genuine reconnect clears the tombstone before publishing;
+	// this mutex makes the resulting order deterministic: either the delete
+	// lands first and the reconnect rewrites, or the delete observes the
+	// cleared tombstone and is skipped.
+	nodePersistenceLocks [64]sync.Mutex
+
 	redisStore  *RedisStateStore
 	instanceID  string
 	redisCancel context.CancelFunc
@@ -537,6 +549,7 @@ func NewStreamStateManager() *StreamStateManager {
 		streams:                    make(map[string]*StreamState),
 		streamInstances:            make(map[string]map[string]*StreamInstanceState),
 		nodes:                      make(map[string]*NodeState),
+		evictedNodes:               make(map[string]nodeEvictionTombstone),
 		lastAcceptedArtifactOrder:  make(map[string]incOrder),
 		lastPublishedArtifactOrder: make(map[string]incOrder),
 		watermarks:                 pkgredis.NewWatermarks(),
@@ -996,6 +1009,15 @@ func (sm *StreamStateManager) persistNodeWriteThrough(nodeID string, payload jso
 	if sm.redisStore == nil {
 		return
 	}
+	persistenceLock := sm.nodePersistenceLock(nodeID)
+	persistenceLock.Lock()
+	defer persistenceLock.Unlock()
+	sm.mu.RLock()
+	_, evicted := sm.evictedNodes[nodeID]
+	sm.mu.RUnlock()
+	if evicted {
+		return
+	}
 	if err := sm.redisStore.setJSONRaw(context.Background(), sm.redisStore.keyNode(nodeID), payload); err != nil {
 		if stateLogger != nil {
 			stateLogger.WithError(err).WithField("node_id", nodeID).Warn("Failed to write node state to redis")
@@ -1003,6 +1025,14 @@ func (sm *StreamStateManager) persistNodeWriteThrough(nodeID string, payload jso
 		return
 	}
 	sm.publishStateChange(StateChange{InstanceID: sm.instanceID, Entity: StateEntityNode, Operation: StateOpUpsert, NodeID: nodeID, Payload: payload})
+}
+
+func (sm *StreamStateManager) nodePersistenceLock(nodeID string) *sync.Mutex {
+	var hash uint32
+	for i := 0; i < len(nodeID); i++ {
+		hash = hash*16777619 ^ uint32(nodeID[i])
+	}
+	return &sm.nodePersistenceLocks[hash%uint32(len(sm.nodePersistenceLocks))]
 }
 
 // persistNodeModeWriteThrough publishes a node's operational mode as its own
@@ -1596,6 +1626,7 @@ func (sm *StreamStateManager) AliveNodeIDs(staleThreshold time.Duration) []strin
 // TouchNode updates only health + last update time without overwriting identity fields.
 func (sm *StreamStateManager) TouchNode(nodeID string, isHealthy bool) {
 	sm.mu.Lock()
+	delete(sm.evictedNodes, nodeID)
 
 	n := sm.nodes[nodeID]
 	if n == nil {
@@ -1624,6 +1655,10 @@ func (sm *StreamStateManager) TouchNode(nodeID string, isHealthy bool) {
 // SetProbeVerified marks whether Foghorn has verified the node's HTTPS endpoint.
 func (sm *StreamStateManager) SetProbeVerified(nodeID string, verified bool) {
 	sm.mu.Lock()
+	if _, evicted := sm.evictedNodes[nodeID]; evicted {
+		sm.mu.Unlock()
+		return
+	}
 	n := sm.nodes[nodeID]
 	if n == nil {
 		n = newNodeState(nodeID)
@@ -1642,6 +1677,7 @@ func (sm *StreamStateManager) SetProbeVerified(nodeID string, verified bool) {
 // SetNodeInfo updates per-node info
 func (sm *StreamStateManager) SetNodeInfo(nodeID, baseURL string, isHealthy bool, lat, lon *float64, location string, outputsRaw string, outputs map[string]any) {
 	sm.mu.Lock()
+	delete(sm.evictedNodes, nodeID)
 	n := sm.nodes[nodeID]
 	isNew := false
 	if n == nil {
@@ -1680,6 +1716,45 @@ func (sm *StreamStateManager) SetNodeInfo(nodeID, baseURL string, isHealthy bool
 	sm.MarkNodeDNSChanged(nodeID)
 }
 
+// mergeRehydratedNode imports the durable node_outputs fields without treating
+// a repository row as a heartbeat. Existing liveness, geo, identity and
+// LastUpdate remain owned by authenticated lifecycle reports and disconnect
+// handling; a newly discovered row uses its durable age only for stale eviction.
+func (sm *StreamStateManager) mergeRehydratedNode(record NodeRecord) {
+	sm.mu.Lock()
+	if _, evicted := sm.evictedNodes[record.NodeID]; evicted {
+		// Repository freshness is not proof that the node returned: an
+		// in-flight pre-eviction write can recreate node_outputs after the
+		// delete. Only an authenticated lifecycle/register path clears this
+		// process-local fence.
+		sm.mu.Unlock()
+		return
+	}
+	n := sm.nodes[record.NodeID]
+	newlyDiscovered := n == nil
+	baseURLChanged := n != nil && n.BaseURL != record.BaseURL
+	if n == nil {
+		n = newNodeState(record.NodeID)
+		n.IsHealthy = false
+		n.IsStale = true
+		n.ProbeVerified = false
+		n.LastUpdate = record.LastUpdated
+		sm.nodes[record.NodeID] = n
+	}
+	n.BaseURL = record.BaseURL
+	if record.OutputsJSON != "" {
+		var outputs map[string]any
+		if err := json.Unmarshal([]byte(record.OutputsJSON), &outputs); err == nil {
+			n.Outputs = outputs
+			n.OutputsRaw = record.OutputsJSON
+		}
+	}
+	sm.mu.Unlock()
+	if !newlyDiscovered && baseURLChanged {
+		sm.MarkNodeDNSChanged(record.NodeID)
+	}
+}
+
 // UpdateNodeMetrics updates node metrics, capabilities, roles, and storage info
 func (sm *StreamStateManager) UpdateNodeMetrics(nodeID string, metrics struct {
 	CPU                  float64
@@ -1698,6 +1773,10 @@ func (sm *StreamStateManager) UpdateNodeMetrics(nodeID string, metrics struct {
 	ProcessingClasses    map[string]ClassCapacity
 }) {
 	sm.mu.Lock()
+	if _, evicted := sm.evictedNodes[nodeID]; evicted {
+		sm.mu.Unlock()
+		return
+	}
 	n := sm.nodes[nodeID]
 	if n == nil {
 		n = newNodeState(nodeID)
@@ -1731,6 +1810,10 @@ func (sm *StreamStateManager) UpdateNodeMetrics(nodeID string, metrics struct {
 // UpdateNodeDiskUsage updates the disk usage statistics for a node
 func (sm *StreamStateManager) UpdateNodeDiskUsage(nodeID string, diskTotal, diskUsed uint64) {
 	sm.mu.Lock()
+	if _, evicted := sm.evictedNodes[nodeID]; evicted {
+		sm.mu.Unlock()
+		return
+	}
 
 	n := sm.nodes[nodeID]
 	if n == nil {
@@ -1746,6 +1829,25 @@ func (sm *StreamStateManager) UpdateNodeDiskUsage(nodeID string, diskTotal, disk
 	sm.mu.Unlock()
 
 	sm.persistNodeWriteThrough(nodeID, nodePayload)
+}
+
+// setNodeDiskUsageForLifecycle updates disk fields before UpdateNodeMetrics
+// serializes the lifecycle snapshot. It deliberately performs no Redis write
+// or changelog publish of its own.
+func (sm *StreamStateManager) setNodeDiskUsageForLifecycle(nodeID string, diskTotal, diskUsed uint64) {
+	sm.mu.Lock()
+	if _, evicted := sm.evictedNodes[nodeID]; evicted {
+		sm.mu.Unlock()
+		return
+	}
+	n := sm.nodes[nodeID]
+	if n == nil {
+		n = newNodeState(nodeID)
+		sm.nodes[nodeID] = n
+	}
+	n.DiskTotalBytes = diskTotal
+	n.DiskUsedBytes = diskUsed
+	sm.mu.Unlock()
 }
 
 // MarkNodeDisconnected immediately flags a node as unhealthy/stale after disconnect.
@@ -2252,8 +2354,9 @@ func (sm *StreamStateManager) FindNodeByArtifactInternalName(internalName string
 // ArtifactReportOrder is the ordering identity of a whole-node artifact report: the ownership fence
 // Foghorn issued to the delivering control connection, plus the sidecar's per-connection sequence.
 type ArtifactReportOrder struct {
-	Fence int64
-	Seq   int64
+	Fence        int64
+	Seq          int64
+	ReportedAtMs int64
 }
 
 func (o ArtifactReportOrder) versioned() bool { return o.Fence > 0 && o.Seq > 0 }
@@ -2510,9 +2613,12 @@ func (sm *StreamStateManager) SetNodeArtifacts(nodeID string, artifacts []*ipcpb
 	n.Artifacts = make([]*ipcpb.StoredArtifact, len(artifacts))
 	copy(n.Artifacts, artifacts)
 	n.LastUpdate = time.Now()
-	// Receipt time versions this report's placement EVENTS (event time only; see
-	// ArtifactRecord.ReportedAtMs).
-	reportedAtMs := n.LastUpdate.UnixMilli()
+	// Versioned current-sidecar reports carry the node-clock instant captured
+	// with the snapshot. Keep an absent timestamp at zero: substituting Foghorn's
+	// receipt clock during a rolling upgrade would make it incomparable with a
+	// legacy sidecar's node-clock deletion timestamp. Zero is the explicit
+	// permissive compatibility value in the database fence.
+	reportedAtMs := reportOrder.ReportedAtMs
 
 	// Get artifact repo reference while holding lock
 	artifactRepo := sm.repos.Artifacts
@@ -3266,12 +3372,25 @@ func (sm *StreamStateManager) runStalenessChecker() {
 // Disconnected nodes have LastHeartbeat zeroed by MarkNodeDisconnected.
 const nodeRemovalThreshold = 5 * time.Minute
 
+type nodeEvictionTombstone struct {
+	at             time.Time
+	durableDeleted bool
+}
+
 // checkStaleNodes marks nodes as stale and evicts long-disconnected nodes.
 func (sm *StreamStateManager) checkStaleNodes() {
 	sm.mu.Lock()
 
 	now := time.Now()
 	staleThreshold := sm.getStaleThreshold()
+	var retryNodeOutputDeletes []string
+	for nodeID, tombstone := range sm.evictedNodes {
+		if tombstone.durableDeleted && now.Sub(tombstone.at) > nodeRemovalThreshold {
+			delete(sm.evictedNodes, nodeID)
+		} else if !tombstone.durableDeleted {
+			retryNodeOutputDeletes = append(retryNodeOutputDeletes, nodeID)
+		}
+	}
 
 	var toRemove []string
 
@@ -3308,6 +3427,7 @@ func (sm *StreamStateManager) checkStaleNodes() {
 	evictTombstone := make(map[string]incOrder, len(toRemove))
 	for _, nodeID := range toRemove {
 		delete(sm.nodes, nodeID)
+		sm.evictedNodes[nodeID] = nodeEvictionTombstone{at: now}
 		// Fence the current connection: raise the accepted seq to the max so no in-flight/duplicate
 		// report of this connection's fence can resurrect the placement we're about to orphan. A
 		// returning node registers a NEW (higher) fence, which supersedes. The tombstone outlives the
@@ -3318,11 +3438,24 @@ func (sm *StreamStateManager) checkStaleNodes() {
 		evictTombstone[nodeID] = fenced
 	}
 	sm.mu.Unlock()
+	for _, nodeID := range retryNodeOutputDeletes {
+		sm.deleteDurableNodeOutputs(nodeID)
+	}
 
 	// Delete from Redis and mark DB artifacts orphaned outside the lock
 	artifactRepo := sm.repos.Artifacts
 	for _, nodeID := range toRemove {
+		sm.deleteDurableNodeOutputs(nodeID)
 		if sm.redisStore != nil {
+			persistenceLock := sm.nodePersistenceLock(nodeID)
+			persistenceLock.Lock()
+			sm.mu.RLock()
+			_, stillEvicted := sm.evictedNodes[nodeID]
+			sm.mu.RUnlock()
+			if !stillEvicted {
+				persistenceLock.Unlock()
+				continue
+			}
 			if err := sm.redisStore.DeleteNode(nodeID); err != nil {
 				if stateLogger != nil {
 					stateLogger.WithError(err).WithField("node_id", nodeID).Warn("Failed to delete stale node from Redis; retrying in background")
@@ -3337,6 +3470,7 @@ func (sm *StreamStateManager) checkStaleNodes() {
 				retryRedisDeleteAsync("node_mode", nid, func() error { return store.DeleteNodeMode(nid) })
 			}
 			sm.publishStateChange(StateChange{InstanceID: sm.instanceID, Entity: StateEntityNode, Operation: StateOpDelete, NodeID: nodeID})
+			persistenceLock.Unlock()
 		}
 		if artifactRepo != nil {
 			evictedAtMs := time.Now().UnixMilli()
@@ -3355,6 +3489,32 @@ func (sm *StreamStateManager) checkStaleNodes() {
 			stateLogger.WithField("node_id", nodeID).Info("Evicted disconnected node from state")
 		}
 	}
+}
+
+func (sm *StreamStateManager) deleteDurableNodeOutputs(nodeID string) {
+	persistenceLock := sm.nodePersistenceLock(nodeID)
+	persistenceLock.Lock()
+	defer persistenceLock.Unlock()
+	sm.mu.RLock()
+	tombstone, exists := sm.evictedNodes[nodeID]
+	sm.mu.RUnlock()
+	if !exists {
+		return
+	}
+	if sm.nodeRepo != nil {
+		if err := sm.nodeRepo.DeleteNodeOutputs(context.Background(), nodeID); err != nil {
+			if stateLogger != nil {
+				stateLogger.WithError(err).WithField("node_id", nodeID).Warn("Failed to delete evicted node outputs")
+			}
+			return
+		}
+	}
+	sm.mu.Lock()
+	if current, exists := sm.evictedNodes[nodeID]; exists && current.at.Equal(tombstone.at) {
+		current.durableDeleted = true
+		sm.evictedNodes[nodeID] = current
+	}
+	sm.mu.Unlock()
 }
 
 // SetStalenessConfig overrides staleness thresholds for detection and checks.
@@ -3494,8 +3654,7 @@ func (sm *StreamStateManager) Rehydrate(ctx context.Context) error {
 			}
 		} else {
 			for _, r := range recs {
-				// Basic node info
-				sm.SetNodeInfo(r.NodeID, r.BaseURL, true, nil, nil, "", r.OutputsJSON, nil)
+				sm.mergeRehydratedNode(r)
 			}
 		}
 
@@ -3718,6 +3877,7 @@ func (sm *StreamStateManager) ApplyNodeLifecycle(ctx context.Context, update *ip
 	sm.TouchNode(update.GetNodeId(), update.GetIsHealthy())
 	sm.SetNodeInfo(update.GetNodeId(), update.GetBaseUrl(), update.GetIsHealthy(), latPtr, lonPtr, update.GetLocation(), update.GetOutputsJson(), nil)
 	sm.SetNodeRuntimeInfo(update.GetNodeId(), update.GetDeployMode(), update.GetOs(), update.GetArch())
+	sm.setNodeDiskUsageForLifecycle(update.GetNodeId(), update.GetDiskTotalBytes(), update.GetDiskUsedBytes())
 	sm.UpdateNodeMetrics(update.GetNodeId(), struct {
 		CPU                  float64
 		RAMMax               float64
@@ -3770,16 +3930,20 @@ func (sm *StreamStateManager) ApplyNodeLifecycle(ctx context.Context, update *ip
 		ProcessingClasses: ProcessingClassesFromLimits(update.GetLimits()),
 	})
 
-	// Update disk usage directly
-	if n := sm.nodes[update.GetNodeId()]; n != nil {
-		n.DiskTotalBytes = update.GetDiskTotalBytes()
-		n.DiskUsedBytes = update.GetDiskUsedBytes()
-	}
-
 	// Write-through: persist outputs/base_url and lifecycle snapshot if policy allows
 	if sm.nodeRepo != nil {
 		if update.GetOutputsJson() != "" {
-			_ = sm.nodeRepo.UpsertNodeOutputs(ctx, update.GetNodeId(), update.GetBaseUrl(), update.GetOutputsJson())
+			persistenceLock := sm.nodePersistenceLock(update.GetNodeId())
+			persistenceLock.Lock()
+			sm.mu.RLock()
+			_, evicted := sm.evictedNodes[update.GetNodeId()]
+			sm.mu.RUnlock()
+			if !evicted {
+				if err := sm.nodeRepo.UpsertNodeOutputs(ctx, update.GetNodeId(), update.GetBaseUrl(), update.GetOutputsJson()); err != nil && stateLogger != nil {
+					stateLogger.WithError(err).WithField("node_id", update.GetNodeId()).Warn("Failed to persist node outputs")
+				}
+			}
+			persistenceLock.Unlock()
 		}
 		sm.queueNodeLifecycleWrite(update)
 	}
@@ -3935,6 +4099,7 @@ type NodeRecord struct {
 	NodeID      string
 	BaseURL     string
 	OutputsJSON string
+	LastUpdated time.Time
 }
 
 type NodeMaintenanceRecord struct {
@@ -3965,11 +4130,21 @@ type DVRRepository interface {
 type NodeRepository interface {
 	ListAllNodes(ctx context.Context) ([]NodeRecord, error)
 	ListNodeMaintenance(ctx context.Context) ([]NodeMaintenanceRecord, error)
+	DeleteNodeOutputs(ctx context.Context, nodeID string) error
 	UpsertNodeOutputs(ctx context.Context, nodeID string, baseURL string, outputsJSON string) error
 	UpsertNodeLifecycles(ctx context.Context, updates []*ipcpb.NodeLifecycleUpdate) error
 	UpsertNodeComponents(ctx context.Context, updates []*ipcpb.NodeLifecycleUpdate) error
 	UpsertNodeMaintenance(ctx context.Context, nodeID string, mode NodeOperationalMode, setBy string) error
 }
+
+type NodeArtifactDeletionOutcome string
+
+const (
+	NodeArtifactDeletionApplied       NodeArtifactDeletionOutcome = "applied"
+	NodeArtifactDeletionFenced        NodeArtifactDeletionOutcome = "fenced"
+	NodeArtifactDeletionAbsent        NodeArtifactDeletionOutcome = "absent"
+	NodeArtifactDeletionParentMissing NodeArtifactDeletionOutcome = "parent_missing"
+)
 
 // ArtifactRepository handles persistence of artifact registry (clips/DVR on storage nodes)
 type ArtifactRepository interface {
@@ -4009,9 +4184,9 @@ type ArtifactRepository interface {
 	// (0 fence / 0 seq = unversioned, always applies).
 	MarkNodeArtifactsOrphaned(ctx context.Context, nodeID string, reportedAtMs int64, reportFence, reportSeq int64) error
 	// DeleteNodeArtifact removes one node's local-copy row on explicit deletion/eviction
-	// and emits a LOST placement in the same transaction. reportedAtMs is the event
-	// timestamp (ordering is the monotonic version); 0 falls back to emit-time.
-	DeleteNodeArtifact(ctx context.Context, artifactHash, nodeID string, reportedAtMs int64) error
+	// and emits a LOST placement in the same transaction. Its result distinguishes a
+	// newer node-clock placement fence from an already-absent copy or missing parent.
+	DeleteNodeArtifact(ctx context.Context, artifactHash, nodeID string, nodeClockDeletedAtMs int64) (NodeArtifactDeletionOutcome, error)
 	// ReconcileNodeCopies emits GAINED for present copies that have never been emitted
 	// (last_emitted_version=0) — boot seed + non-emitting-writer healing. Idempotent and
 	// safe on every replica; returns the number of copies emitted.
@@ -4054,10 +4229,11 @@ type ArtifactRecord struct {
 	// cache content. Empty string is treated as "cache" by the repo.
 	Role       string
 	IsComplete bool
-	// ReportedAtMs is the wall-clock (UnixMilli) captured when Foghorn received this
+	// ReportedAtMs is the node wall-clock (UnixMilli) captured atomically with this
 	// node report. It is the node-copy event's *timestamp* (event time), NOT its
 	// ordering key — the analytics current-state projection is versioned by the
-	// monotonic sequence (see enqueueNodeCopy), not this value. 0 falls back to emit-time.
+	// monotonic sequence (see enqueueNodeCopy), not this value. Zero means a legacy
+	// report with no comparable node-clock timestamp and keeps deletion fencing permissive.
 	ReportedAtMs int64
 	// ReportConnectionFence + ReportSeq are the report's ordering identity: the ownership fence
 	// Foghorn issued to the delivering control connection + the sidecar's per-connection sequence.

@@ -33,7 +33,11 @@ const activateThumbnailPointer = `-- name: ActivateThumbnailPointer :execrows
 INSERT INTO foghorn.thumbnail_active_pointer(asset_key, tenant_id, active_version, active_token, updated_at) VALUES($2, $3, $1, $4, NOW())
 ON CONFLICT(asset_key) DO UPDATE SET active_version = EXCLUDED.active_version, active_token = EXCLUDED.active_token, tenant_id = EXCLUDED.tenant_id, updated_at = NOW()
 WHERE foghorn.thumbnail_active_pointer.tenant_id = EXCLUDED.tenant_id
-AND (SELECT claim_seq FROM foghorn.thumbnail_task_assignment WHERE attempt_id = EXCLUDED.active_version)>=(SELECT claim_seq FROM foghorn.thumbnail_task_assignment WHERE attempt_id = foghorn.thumbnail_active_pointer.active_version)
+AND (
+    foghorn.thumbnail_active_pointer.active_version = EXCLUDED.active_version
+    OR (SELECT claim_seq FROM foghorn.thumbnail_task_assignment WHERE attempt_id = EXCLUDED.active_version)
+       > (SELECT claim_seq FROM foghorn.thumbnail_task_assignment WHERE attempt_id = foghorn.thumbnail_active_pointer.active_version)
+)
 `
 
 type ActivateThumbnailPointerParams struct {
@@ -92,20 +96,6 @@ func (q *Queries) DeleteSupersededThumbnailAttempt(ctx context.Context, arg Dele
 		return 0, err
 	}
 	return result.RowsAffected()
-}
-
-const deleteThumbnailActivePointer = `-- name: DeleteThumbnailActivePointer :exec
-DELETE FROM foghorn.thumbnail_active_pointer WHERE tenant_id = $1 AND asset_key = $2
-`
-
-type DeleteThumbnailActivePointerParams struct {
-	TenantID string `db:"tenant_id" json:"tenant_id"`
-	AssetKey string `db:"asset_key" json:"asset_key"`
-}
-
-func (q *Queries) DeleteThumbnailActivePointer(ctx context.Context, arg DeleteThumbnailActivePointerParams) error {
-	_, err := q.db.ExecContext(ctx, deleteThumbnailActivePointer, arg.TenantID, arg.AssetKey)
-	return err
 }
 
 const deleteThumbnailAssignments = `-- name: DeleteThumbnailAssignments :exec
@@ -245,8 +235,21 @@ func (q *Queries) GetThumbnailAssignment(ctx context.Context, attemptID string) 
 }
 
 const insertThumbnailAssignment = `-- name: InsertThumbnailAssignment :exec
-INSERT INTO foghorn.thumbnail_task_assignment(attempt_id, tenant_id, asset_key, node_id, destination_cluster, status, version, expiry, durable_backend_local, backend_id)
-VALUES($1, $2, $3, $4, $5, 'assigned', $1, $6, true, $7)
+WITH claim AS (
+    INSERT INTO foghorn.thumbnail_claim_counter (asset_key, value)
+    VALUES ($3, 4503599627370497)
+    ON CONFLICT (asset_key) DO UPDATE
+    SET value = foghorn.thumbnail_claim_counter.value + 1
+    RETURNING value
+)
+INSERT INTO foghorn.thumbnail_task_assignment(
+    attempt_id, tenant_id, asset_key, node_id, destination_cluster,
+    status, version, expiry, durable_backend_local, backend_id, claim_seq
+)
+SELECT $1, $2, $3, $4,
+       $5, 'assigned', $1, $6,
+       true, $7, value
+FROM claim
 `
 
 type InsertThumbnailAssignmentParams struct {
@@ -289,7 +292,9 @@ func (q *Queries) InsertThumbnailTaskObject(ctx context.Context, arg InsertThumb
 
 const listAssetThumbnailObjectKeys = `-- name: ListAssetThumbnailObjectKeys :many
 SELECT a.attempt_id, COALESCE(NULLIF(a.publish_lease_token, ''), a.version) AS version, COALESCE(o.version_key, '') AS version_key, o.file_name
-FROM foghorn.thumbnail_task_assignment a JOIN foghorn.thumbnail_task_object o ON o.attempt_id = a.attempt_id WHERE a.tenant_id = $1 AND a.asset_key = $2
+FROM foghorn.thumbnail_task_assignment a JOIN foghorn.thumbnail_task_object o ON o.attempt_id = a.attempt_id
+WHERE a.tenant_id = $1 AND a.asset_key = $2
+FOR UPDATE OF a
 `
 
 type ListAssetThumbnailObjectKeysParams struct {
@@ -615,6 +620,23 @@ func (q *Queries) LockPublishableThumbnailAttempt(ctx context.Context, arg LockP
 	return i, err
 }
 
+const lockThumbnailAttemptAsset = `-- name: LockThumbnailAttemptAsset :exec
+SELECT pg_advisory_xact_lock(
+    $1::integer,
+    hashtext((SELECT asset_key FROM foghorn.thumbnail_task_assignment WHERE attempt_id = $2))
+)
+`
+
+type LockThumbnailAttemptAssetParams struct {
+	LockNamespace int32  `db:"lock_namespace" json:"lock_namespace"`
+	AttemptID     string `db:"attempt_id" json:"attempt_id"`
+}
+
+func (q *Queries) LockThumbnailAttemptAsset(ctx context.Context, arg LockThumbnailAttemptAssetParams) error {
+	_, err := q.db.ExecContext(ctx, lockThumbnailAttemptAsset, arg.LockNamespace, arg.AttemptID)
+	return err
+}
+
 const lockThumbnailParentTerminal = `-- name: LockThumbnailParentTerminal :one
 SELECT status IN ('deleted', 'failed', 'expired', 'aborted') FROM foghorn.artifacts WHERE artifact_hash = $1 FOR UPDATE
 `
@@ -724,17 +746,6 @@ UPDATE foghorn.thumbnail_task_assignment SET status = 'failed', updated_at = NOW
 func (q *Queries) SettlePublishingThumbnailFailed(ctx context.Context, attemptID string) error {
 	_, err := q.db.ExecContext(ctx, settlePublishingThumbnailFailed, attemptID)
 	return err
-}
-
-const thumbnailAttemptFailed = `-- name: ThumbnailAttemptFailed :one
-SELECT status = 'failed' FROM foghorn.thumbnail_task_assignment WHERE attempt_id = $1
-`
-
-func (q *Queries) ThumbnailAttemptFailed(ctx context.Context, attemptID string) (bool, error) {
-	row := q.db.QueryRowContext(ctx, thumbnailAttemptFailed, attemptID)
-	var column_1 bool
-	err := row.Scan(&column_1)
-	return column_1, err
 }
 
 const thumbnailParentTombstoned = `-- name: ThumbnailParentTombstoned :one

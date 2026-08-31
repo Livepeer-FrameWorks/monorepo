@@ -37,7 +37,7 @@ func TestHandleStreamEnd_GenuinelyOfflineStillFinalizes(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`SELECT EXISTS`).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
-	mock.ExpectQuery(`nextval`).WillReturnRows(sqlmock.NewRows([]string{"nextval"}).AddRow(int64(2)))
+	mock.ExpectQuery(`INSERT INTO foghorn.source_projection_revision_counter`).WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnRows(sqlmock.NewRows([]string{"revision"}).AddRow(int64(2)))
 	expectOfflineEffectInsert(mock)
 	mock.ExpectCommit()
 	mock.ExpectQuery(`UPDATE foghorn.artifacts`).WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "node_id"}))
@@ -96,9 +96,6 @@ func TestApplyOfflineEffect_RetriesFailedNodeDispatchAfterLocalCleanup(t *testin
 	)
 	projectSourceForTest(t, reg, internal, node, 10, "trigger-retry", "generation-retry", 1)
 
-	capacity := state.ResetDefaultTenantCapacityForTests()
-	t.Cleanup(func() { state.ResetDefaultTenantCapacityForTests() })
-	capacity.RegisterStream(tenant, internal)
 	trackPushTargets("live+"+internal, tenant, []*commodorepb.PushTargetInternal{{TargetUri: "rtmp://example/retry"}})
 	t.Cleanup(func() { untrackPushTargets("live+" + internal) })
 
@@ -112,9 +109,6 @@ func TestApplyOfflineEffect_RetriesFailedNodeDispatchAfterLocalCleanup(t *testin
 	})
 	if !errors.Is(err, dispatchErr) {
 		t.Fatalf("ApplyOfflineEffect error = %v, want node dispatch failure", err)
-	}
-	if capacity.HasStream(tenant, internal) {
-		t.Fatal("local capacity cleanup must not wait for the node dispatch retry")
 	}
 	if _, found := lookupPushTarget("live+"+internal, "rtmp://example/retry"); found {
 		t.Fatal("local push-target tracking must be cleared before the node dispatch retry")
@@ -164,7 +158,7 @@ func installOfflineFenceDB(t *testing.T, includeDVRBackstop bool, reapLifecycle 
 	mock.ExpectBegin()
 	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`SELECT EXISTS`).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
-	mock.ExpectQuery(`nextval`).WillReturnRows(sqlmock.NewRows([]string{"nextval"}).AddRow(int64(2)))
+	mock.ExpectQuery(`INSERT INTO foghorn.source_projection_revision_counter`).WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnRows(sqlmock.NewRows([]string{"revision"}).AddRow(int64(2)))
 	expectOfflineEffectInsert(mock)
 	mock.ExpectCommit()
 	if includeDVRBackstop {
@@ -322,10 +316,8 @@ func TestOfflineIsStreamWide_ReplicaNeverStreamWide(t *testing.T) {
 
 // TestOwnerVanishRunsStreamEndFinalization proves the owner's vanish (a
 // lifecycle offline standing in for a missed/delayed STREAM_END) runs the
-// same owner-end cleanup as a real STREAM_END: the tenant's
-// concurrent-stream count drops, push-target tracking clears, and
-// SourceActive flips so the publisher's reconnect takes the resume path
-// instead of being rejected as a duplicate.
+// stream-wide cleanup that is safe without an admission claim token:
+// push-target tracking clears and SourceActive flips.
 // When the stream owner is UNRESOLVABLE and the node merely ASSERTS a tenant, the owner-vanish path must
 // retain every stream-wide effect when ownership cannot be resolved. Running only a subset would still
 // mutate a stream whose tenant scope was never authenticated.
@@ -333,15 +325,10 @@ func TestOwnerVanishUnresolvedTenantSkipsTenantScopedFinalization(t *testing.T) 
 	reg := installRegistryForTest(t)
 	state.ResetDefaultManagerForTests()
 	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
-	capacity := state.ResetDefaultTenantCapacityForTests()
-	t.Cleanup(func() { state.ResetDefaultTenantCapacityForTests() })
-
 	const internal = "vanish-unresolved-1"
 	const assertedTenant = "tenant-forged"
 	streamName := "live+" + internal
 	seedActiveSource(t, reg, internal, "node-ingest")
-	// The stream's capacity is held under the forged tenant to prove it is NOT decremented by an unverified path.
-	capacity.RegisterStream(assertedTenant, internal)
 	trackPushTargets(streamName, assertedTenant, []*commodorepb.PushTargetInternal{{Id: "t1", TargetUri: "rtmp://example/push"}})
 	t.Cleanup(func() { untrackPushTargets(streamName) })
 
@@ -364,24 +351,16 @@ func TestOwnerVanishUnresolvedTenantSkipsTenantScopedFinalization(t *testing.T) 
 	if _, found := lookupPushTarget(streamName, "rtmp://example/push"); !found {
 		t.Fatal("an unresolved vanish must retain push-target tracking")
 	}
-	// Tenant-scoped effect must NOT run under the unverified asserted tenant: the forged tenant's count stands.
-	if !capacity.HasStream(assertedTenant, internal) {
-		t.Fatal("an unresolved node-asserted tenant must NOT drive the concurrent-stream decrement")
-	}
 }
 
 func TestOwnerVanishRunsStreamEndFinalization(t *testing.T) {
 	reg := installRegistryForTest(t)
 	state.ResetDefaultManagerForTests()
 	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
-	capacity := state.ResetDefaultTenantCapacityForTests()
-	t.Cleanup(func() { state.ResetDefaultTenantCapacityForTests() })
-
 	const internal = "vanish-finalize-1"
 	const tenantID = "tenant-vanish"
 	streamName := "live+" + internal
 	seedActiveSource(t, reg, internal, "node-ingest")
-	capacity.RegisterStream(tenantID, internal)
 	trackPushTargets(streamName, tenantID, []*commodorepb.PushTargetInternal{
 		{Id: "target-1", TargetUri: "rtmp://example/push"},
 	})
@@ -420,9 +399,6 @@ func TestOwnerVanishRunsStreamEndFinalization(t *testing.T) {
 		t.Fatalf("apply durable offline effect: %v", err)
 	}
 
-	if capacity.HasStream(tenantID, internal) {
-		t.Fatal("owner vanish must decrement the tenant's concurrent-stream count")
-	}
 	if _, found := lookupPushTarget(streamName, "rtmp://example/push"); found {
 		t.Fatal("owner vanish must drop push-target tracking")
 	}
@@ -437,20 +413,15 @@ func TestOwnerVanishRunsStreamEndFinalization(t *testing.T) {
 
 // TestReplicaVanishSkipsStreamEndFinalization is the counterpart: a
 // non-owner's vanish is a node-local fact and must leave every stream-wide
-// state untouched — capacity, push-target tracking, and the owner's live
-// admission claim.
+// state untouched — push-target tracking and the owner's live source.
 func TestReplicaVanishSkipsStreamEndFinalization(t *testing.T) {
 	reg := installRegistryForTest(t)
 	state.ResetDefaultManagerForTests()
 	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
-	capacity := state.ResetDefaultTenantCapacityForTests()
-	t.Cleanup(func() { state.ResetDefaultTenantCapacityForTests() })
-
 	const internal = "vanish-replica-1"
 	const tenantID = "tenant-vanish-replica"
 	streamName := "live+" + internal
 	seedActiveSource(t, reg, internal, "node-ingest")
-	capacity.RegisterStream(tenantID, internal)
 	trackPushTargets(streamName, tenantID, []*commodorepb.PushTargetInternal{
 		{Id: "target-1", TargetUri: "rtmp://example/push"},
 	})
@@ -476,9 +447,6 @@ func TestReplicaVanishSkipsStreamEndFinalization(t *testing.T) {
 		t.Fatalf("replica vanish handleStreamLifecycleUpdate: %v", err)
 	}
 
-	if !capacity.HasStream(tenantID, internal) {
-		t.Fatal("replica vanish must not decrement the tenant's concurrent-stream count")
-	}
 	if _, found := lookupPushTarget(streamName, "rtmp://example/push"); !found {
 		t.Fatal("replica vanish must not drop push-target tracking")
 	}
@@ -506,23 +474,18 @@ func TestOfflineIsStreamWide_NilRegistry(t *testing.T) {
 }
 
 // TestHandleStreamEnd_StreamWideEffectsAreOwnerGated locks the side-effect
-// split: a replica/non-owner STREAM_END must leave stream-wide state — the
-// tenant's concurrent-stream count and the process-global push-target
+// split: a replica/non-owner STREAM_END must leave process-global push-target
 // tracking (whose loss would silently no-op later PUSH_OUT_START/PUSH_END
-// status updates for the still-live owner) — untouched, while the owner's
-// STREAM_END ends the stream for real.
+// status updates for the still-live owner) untouched, while the owner's
+// STREAM_END applies the teardown.
 func TestHandleStreamEnd_StreamWideEffectsAreOwnerGated(t *testing.T) {
 	reg := installRegistryForTest(t)
 	state.ResetDefaultManagerForTests()
 	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
-	capacity := state.ResetDefaultTenantCapacityForTests()
-	t.Cleanup(func() { state.ResetDefaultTenantCapacityForTests() })
-
 	const internal = "owner-gated-1"
 	const tenantID = "tenant-owner-gated"
 	streamName := "live+" + internal
 	seedActiveSource(t, reg, internal, "node-ingest")
-	capacity.RegisterStream(tenantID, internal)
 	trackPushTargets(streamName, tenantID, []*commodorepb.PushTargetInternal{
 		{Id: "target-1", TargetUri: "rtmp://example/push"},
 	})
@@ -544,9 +507,6 @@ func TestHandleStreamEnd_StreamWideEffectsAreOwnerGated(t *testing.T) {
 	if _, _, err := p.handleStreamEnd(endTrigger("node-replica")); err != nil {
 		t.Fatalf("replica handleStreamEnd: %v", err)
 	}
-	if !capacity.HasStream(tenantID, internal) {
-		t.Fatal("replica STREAM_END must not decrement the tenant's concurrent-stream count")
-	}
 	if _, found := lookupPushTarget(streamName, "rtmp://example/push"); !found {
 		t.Fatal("replica STREAM_END must not drop the owner's push-target tracking")
 	}
@@ -561,9 +521,6 @@ func TestHandleStreamEnd_StreamWideEffectsAreOwnerGated(t *testing.T) {
 		SetNodeOffline: true, TeardownStream: true, BroadcastOffline: true,
 	}); err != nil {
 		t.Fatalf("apply durable offline effect: %v", err)
-	}
-	if capacity.HasStream(tenantID, internal) {
-		t.Fatal("owner STREAM_END must decrement the tenant's concurrent-stream count")
 	}
 	if _, found := lookupPushTarget(streamName, "rtmp://example/push"); found {
 		t.Fatal("owner STREAM_END must drop push-target tracking")

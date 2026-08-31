@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -233,16 +234,30 @@ func installMintIdentityResolver(t *testing.T, db *sql.DB, resolver *fakeMintRes
 					TenantID:           resp.GetTenantId(),
 					OriginClusterID:    resp.GetOriginClusterId(),
 				}, nil
-			case "vod":
+			case "vod", "chapter":
 				resp, err := resolver.ResolveVodHash(ctx, hash)
 				if err != nil || resp == nil || !resp.GetFound() {
-					return identity.ArtifactIdentity{}, err
+					if err != nil {
+						return identity.ArtifactIdentity{}, err
+					}
+					return identity.ArtifactIdentity{}, identity.ErrNotFound
+				}
+				resolvedKind := strings.TrimSpace(resp.GetContentType())
+				if resolvedKind == "" {
+					resolvedKind = "vod"
+				}
+				if kind == "chapter" && resolvedKind != "chapter" {
+					return identity.ArtifactIdentity{}, identity.ErrNotFound
+				}
+				streamInternalName := strings.TrimSpace(resp.GetParentStreamInternalName())
+				if streamInternalName == "" {
+					streamInternalName = resp.GetInternalName()
 				}
 				return identity.ArtifactIdentity{
 					ArtifactHash:       hash,
-					Kind:               kind,
+					Kind:               resolvedKind,
 					InternalName:       resp.GetInternalName(),
-					StreamInternalName: resp.GetInternalName(),
+					StreamInternalName: streamInternalName,
 					TenantID:           resp.GetTenantId(),
 					OriginClusterID:    resp.GetOriginClusterId(),
 				}, nil
@@ -261,7 +276,7 @@ func installMintIdentityResolver(t *testing.T, db *sql.DB, resolver *fakeMintRes
 					OriginClusterID:    resp.GetOriginClusterId(),
 				}, nil
 			default:
-				return identity.ArtifactIdentity{}, nil
+				return identity.ArtifactIdentity{}, identity.ErrNotFound
 			}
 		}
 	}

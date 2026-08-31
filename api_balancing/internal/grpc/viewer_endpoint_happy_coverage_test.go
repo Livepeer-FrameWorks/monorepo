@@ -256,7 +256,8 @@ func TestResolveViewerEndpoint_LiveDispatchesToLiveWinner(t *testing.T) {
 		},
 	})
 
-	s := &FoghornGRPCServer{logger: logrus.New(), lb: lb, originPulling: map[string]struct{}{}}
+	s := &FoghornGRPCServer{logger: logrus.New(), lb: lb, originPulling: map[string]struct{}{},
+		cacheInvalidator: &billingCacheViewerHappy{status: &triggers.BillingStatus{TenantID: "tenant-live", BillingModel: "postpaid"}}}
 	resp, err := s.ResolveViewerEndpoint(context.Background(), &sharedpb.ViewerEndpointRequest{ContentId: "live-pid"})
 	if err != nil {
 		t.Fatalf("live resolve failed: %v", err)
@@ -316,7 +317,8 @@ func TestResolveViewerEndpoint_VodDispatchesToStorageNode(t *testing.T) {
 		},
 	})
 
-	s := &FoghornGRPCServer{logger: logrus.New(), lb: lb, db: db, originPulling: map[string]struct{}{}}
+	s := &FoghornGRPCServer{logger: logrus.New(), lb: lb, db: db, originPulling: map[string]struct{}{},
+		cacheInvalidator: &billingCacheViewerHappy{status: &triggers.BillingStatus{TenantID: "tenant-vod", BillingModel: "postpaid"}}}
 	resp, err := s.ResolveViewerEndpoint(context.Background(), &sharedpb.ViewerEndpointRequest{ContentId: "vod-pid"})
 	if err != nil {
 		t.Fatalf("vod resolve failed: %v", err)
@@ -327,6 +329,54 @@ func TestResolveViewerEndpoint_VodDispatchesToStorageNode(t *testing.T) {
 	md := resp.GetMetadata()
 	if md == nil || md.GetContentType() != "vod" {
 		t.Fatalf("vod metadata expected, got %+v", md)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sqlmock expectations: %v", err)
+	}
+}
+
+func TestResolveViewerEndpoint_ChapterDispatchesToVODStorageNode(t *testing.T) {
+	t.Cleanup(control.SetupTestRegistry("", nil))
+	control.SetLocalClusterID("viewer-happy-platform")
+	control.AddPlatformSharedCluster("viewer-happy-platform")
+	sm, lb := newViewerHappyManager(t)
+	seedStorageArtifactViewerHappy(t, sm, "store-chapter", "https://chapter.example.com", "chapterhash1")
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	mock.ExpectQuery(`SELECT COALESCE\(internal_name`).
+		WithArgs("chapterhash1", "vod", "tenant-chapter").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"internal_name", "status", "duration_seconds", "size_bytes", "created_at",
+			"format", "storage_location", "sync_status", "has_thumbnails", "authoritative_cluster", "thumbnail_serving_cluster",
+		}).AddRow("chapterhash1", "ready", int64(60), int64(500), time.Now(), "mkv", "node", "synced", false, "viewer-happy-platform", ""))
+
+	startViewerHappyCommodoreFake(t, &commodoreViewerHappyFake{
+		artifactPlayback: func(_ context.Context, req *commodorepb.ResolveArtifactPlaybackIDRequest) (*commodorepb.ResolveArtifactPlaybackIDResponse, error) {
+			if req.GetPlaybackId() != "chapter-pid" {
+				t.Errorf("ResolveArtifactPlaybackID got %q, want chapter-pid", req.GetPlaybackId())
+			}
+			return &commodorepb.ResolveArtifactPlaybackIDResponse{
+				Found: true, ArtifactHash: "chapterhash1", InternalName: "chapterhash1",
+				TenantId: "tenant-chapter", ContentType: "chapter", OriginClusterId: "viewer-happy-platform",
+			}, nil
+		},
+	})
+
+	s := &FoghornGRPCServer{logger: logrus.New(), lb: lb, db: db, originPulling: map[string]struct{}{},
+		cacheInvalidator: &billingCacheViewerHappy{status: &triggers.BillingStatus{TenantID: "tenant-chapter", BillingModel: "postpaid"}}}
+	resp, err := s.ResolveViewerEndpoint(context.Background(), &sharedpb.ViewerEndpointRequest{ContentId: "chapter-pid"})
+	if err != nil {
+		t.Fatalf("chapter resolve failed: %v", err)
+	}
+	if resp.GetPrimary() == nil || resp.GetPrimary().GetNodeId() != "store-chapter" {
+		t.Fatalf("primary should be the chapter byte-storage node, got %+v", resp.GetPrimary())
+	}
+	if md := resp.GetMetadata(); md == nil || md.GetContentType() != "chapter" {
+		t.Fatalf("chapter metadata expected, got %+v", md)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sqlmock expectations: %v", err)
@@ -399,7 +449,8 @@ func TestResolveViewerEndpoint_ActiveDVRRelabelsLiveWinner(t *testing.T) {
 		},
 	})
 
-	s := &FoghornGRPCServer{logger: logrus.New(), lb: lb, db: db, originPulling: map[string]struct{}{}}
+	s := &FoghornGRPCServer{logger: logrus.New(), lb: lb, db: db, originPulling: map[string]struct{}{},
+		cacheInvalidator: &billingCacheViewerHappy{status: &triggers.BillingStatus{TenantID: "tenant-dvr", BillingModel: "postpaid"}}}
 	resp, err := s.ResolveViewerEndpoint(context.Background(), &sharedpb.ViewerEndpointRequest{ContentId: "dvr-pid"})
 	if err != nil {
 		t.Fatalf("active DVR resolve failed: %v", err)

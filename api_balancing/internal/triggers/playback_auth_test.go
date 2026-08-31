@@ -133,6 +133,27 @@ func TestEvaluatePlaybackPolicyWithRecorder_RecordsSuccessfulJWTUse(t *testing.T
 	}
 }
 
+func TestEvaluatePlaybackPolicyWithRecorder_EnqueuesNonBlockingObservationBeforeAllow(t *testing.T) {
+	priv, pubPEM := mustGeneratePlaybackAuthKey(t)
+	kid := "kid-local-durable"
+	recorder := &durableSigningKeyUseRecorder{}
+	decision := EvaluatePlaybackPolicyDetailed(context.Background(), testPlaybackAuthProcessor().logger, "stream-a", &ipcpb.ViewerConnectTrigger{
+		ViewerToken: mintPlaybackAuthJWT(t, priv, kid),
+	}, &commodorepb.ResolvePlaybackPolicyResponse{
+		Type: "jwt", TenantId: "tenant-local",
+		JwtPolicy: &commodorepb.PlaybackJwtPolicy{
+			AllowedKids: []string{kid},
+			ActiveKeys:  []*commodorepb.PlaybackSigningKey{{Kid: kid, PublicKeyPem: pubPEM}},
+		},
+	}, recorder)
+	if !decision.Allowed {
+		t.Fatalf("valid local viewer token denied: %+v", decision)
+	}
+	if recorder.call != (signingKeyUseCall{tenantID: "tenant-local", kid: kid}) {
+		t.Fatalf("allow returned before local observation enqueue: %+v", recorder.call)
+	}
+}
+
 type signingKeyUseCall struct {
 	tenantID string
 	kid      string
@@ -141,6 +162,17 @@ type signingKeyUseCall struct {
 type recordingSigningKeyUseRecorder struct {
 	calls chan signingKeyUseCall
 }
+
+type durableSigningKeyUseRecorder struct {
+	call signingKeyUseCall
+}
+
+func (r *durableSigningKeyUseRecorder) RecordSigningKeyUse(_ context.Context, tenantID, kid string) error {
+	r.call = signingKeyUseCall{tenantID: tenantID, kid: kid}
+	return nil
+}
+
+func (*durableSigningKeyUseRecorder) SigningKeyUseIsNonBlocking() {}
 
 func (r *recordingSigningKeyUseRecorder) RecordSigningKeyUse(ctx context.Context, tenantID, kid string) error {
 	select {

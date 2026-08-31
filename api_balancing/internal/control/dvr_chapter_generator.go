@@ -64,17 +64,40 @@ func CloseTerminalChapter(ctx context.Context, artifactHash string, terminalAtMs
 	if db == nil {
 		return sql.ErrConnDone
 	}
-	policy, ok, err := ReadDVRChapterPolicy(ctx, artifactHash)
+	var changed bool
+	err := WithDVRChapterMutationTx(ctx, artifactHash, func(tx *sql.Tx) error {
+		var txErr error
+		changed, txErr = CloseTerminalChapterTx(ctx, tx, artifactHash, terminalAtMs)
+		return txErr
+	})
 	if err != nil {
-		logger.WithError(err).WithField("artifact_hash", artifactHash).Warn("CloseTerminalChapter: policy read failed")
+		logger.WithError(err).WithField("artifact_hash", artifactHash).Warn("CloseTerminalChapter: mutation failed")
 		return err
 	}
+	if changed {
+		logger.WithFields(logging.Fields{
+			"artifact_hash":  artifactHash,
+			"terminal_at_ms": terminalAtMs,
+		}).Info("Terminal DVR chapters materialized")
+		notifyChapterClosed()
+	}
+	return nil
+}
+
+// CloseTerminalChapterTx performs only the terminal chapter database
+// mutation. The caller owns the transaction and, for cross-worker
+// serialization, the DVR chapter advisory lock.
+func CloseTerminalChapterTx(ctx context.Context, tx foghorndb.DBTX, artifactHash string, terminalAtMs int64) (bool, error) {
+	policy, ok, err := readDVRChapterPolicy(ctx, tx, artifactHash)
+	if err != nil {
+		return false, err
+	}
 	if !ok {
-		return nil
+		return false, nil
 	}
 	intervalSeconds := policy.EffectiveIntervalSeconds()
 	if intervalSeconds <= 0 || policy.StartedAtMs <= 0 || terminalAtMs <= policy.StartedAtMs {
-		return nil
+		return false, nil
 	}
 	intervalMs := int64(intervalSeconds) * 1000
 	var firstStart int64
@@ -84,15 +107,15 @@ func CloseTerminalChapter(ctx context.Context, artifactHash string, terminalAtMs
 	case ChapterModeFixedInterval:
 		firstStart = (policy.StartedAtMs / intervalMs) * intervalMs
 	default:
-		return nil
+		return false, nil
 	}
 	// Drop any in-flight open chapter: its bounds are scheduled bounds
 	// which won't match the truncated terminal chapter_id we're about to
 	// materialize. 'open' implies no finalization has started, so the
 	// row is purely metadata and safe to delete.
-	q := foghorndb.New(db)
+	q := foghorndb.New(tx)
 	if err := q.DeleteOpenDVRChapters(ctx, artifactHash); err != nil {
-		return fmt.Errorf("drop open chapter at terminal close: %w", err)
+		return false, fmt.Errorf("drop open chapter at terminal close: %w", err)
 	}
 	var intervalArg interface{}
 	if intervalSeconds > 0 {
@@ -111,14 +134,10 @@ func CloseTerminalChapter(ctx context.Context, artifactHash string, terminalAtMs
 			ChapterID: chapterID, ArtifactHash: artifactHash, Mode: policy.Mode,
 			IntervalSeconds: sql.NullInt32{Int32: intervalSeconds, Valid: intervalArg != nil}, StartMs: s, EndMs: e,
 		}); err != nil {
-			return fmt.Errorf("materialize terminal chapter [%d,%d): %w", s, e, err)
+			return false, fmt.Errorf("materialize terminal chapter [%d,%d): %w", s, e, err)
 		}
 	}
-	logger.WithFields(logging.Fields{
-		"artifact_hash":  artifactHash,
-		"terminal_at_ms": terminalAtMs,
-	}).Info("Terminal DVR chapters materialized")
-	return nil
+	return true, nil
 }
 
 // BackfillChaptersThrough materializes every chapter interval from the
@@ -140,15 +159,36 @@ func BackfillChaptersThrough(
 	if db == nil {
 		return sql.ErrConnDone
 	}
+	var notify bool
+	err := WithDVRChapterMutationTx(ctx, artifactHash, func(tx *sql.Tx) error {
+		var txErr error
+		notify, txErr = BackfillChaptersThroughTx(ctx, tx, artifactHash, mode, intervalSeconds, startedAtMs, throughMs)
+		return txErr
+	})
+	if err == nil && notify {
+		notifyChapterClosed()
+	}
+	return err
+}
+
+// BackfillChaptersThroughTx performs only the boundary database mutation on
+// the caller's lock-owning transaction.
+func BackfillChaptersThroughTx(
+	ctx context.Context,
+	tx foghorndb.DBTX,
+	artifactHash, mode string,
+	intervalSeconds int32,
+	startedAtMs, throughMs int64,
+) (bool, error) {
 	if artifactHash == "" || mode == "" || intervalSeconds <= 0 || startedAtMs <= 0 {
-		return nil
+		return false, nil
 	}
 	if throughMs <= startedAtMs {
-		return nil
+		return false, nil
 	}
 	targetStart, targetEnd, ok := CurrentChapterBounds(mode, intervalSeconds, startedAtMs, throughMs)
 	if !ok {
-		return nil
+		return false, nil
 	}
 	intervalMs := int64(intervalSeconds) * 1000
 	// First-interval anchor: window_sized aligns to startedAtMs;
@@ -160,13 +200,14 @@ func BackfillChaptersThrough(
 	case ChapterModeFixedInterval:
 		firstStart = (startedAtMs / intervalMs) * intervalMs
 	default:
-		return nil
+		return false, nil
 	}
 	var intervalArg interface{}
 	if intervalSeconds > 0 {
 		intervalArg = intervalSeconds
 	}
-	q := foghorndb.New(db)
+	q := foghorndb.New(tx)
+	notify := false
 	for s := firstStart; s < targetStart; s += intervalMs {
 		e := s + intervalMs
 		chapterID := BuildChapterID(artifactHash, mode, intervalSeconds, s, e)
@@ -174,11 +215,17 @@ func BackfillChaptersThrough(
 			ChapterID: chapterID, ArtifactHash: artifactHash, Mode: mode,
 			IntervalSeconds: sql.NullInt32{Int32: intervalSeconds, Valid: intervalArg != nil}, StartMs: s, EndMs: e,
 		}); err != nil {
-			return fmt.Errorf("backfill closed chapter [%d,%d): %w", s, e, err)
+			return false, fmt.Errorf("backfill closed chapter [%d,%d): %w", s, e, err)
 		}
+		notify = true
 	}
-	_, err := OpenChapterAtBoundary(ctx, artifactHash, mode, intervalSeconds, targetStart, targetEnd)
-	return err
+	chapterID := BuildChapterID(artifactHash, mode, intervalSeconds, targetStart, targetEnd)
+	openedNotify, err := openChapterTx(ctx, tx, DVRChapterRow{
+		ChapterID: chapterID, ArtifactHash: artifactHash, Mode: mode,
+		IntervalSeconds: sql.NullInt32{Int32: intervalSeconds, Valid: intervalSeconds > 0},
+		StartMs:         targetStart, EndMs: targetEnd, IsCurrent: true, State: ChapterStateOpen,
+	})
+	return notify || openedNotify, err
 }
 
 type DVRChapterPolicy struct {
@@ -197,7 +244,11 @@ func ReadDVRChapterPolicy(ctx context.Context, artifactHash string) (DVRChapterP
 	if db == nil {
 		return DVRChapterPolicy{}, false, sql.ErrConnDone
 	}
-	row, err := foghorndb.New(db).GetDVRChapterPolicy(ctx, artifactHash)
+	return readDVRChapterPolicy(ctx, db, artifactHash)
+}
+
+func readDVRChapterPolicy(ctx context.Context, conn foghorndb.DBTX, artifactHash string) (DVRChapterPolicy, bool, error) {
+	row, err := foghorndb.New(conn).GetDVRChapterPolicy(ctx, artifactHash)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return DVRChapterPolicy{}, false, nil

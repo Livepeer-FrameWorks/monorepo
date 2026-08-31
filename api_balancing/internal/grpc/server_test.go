@@ -9,6 +9,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
+	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
@@ -17,6 +18,19 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+func TestInvalidatePlaybackAuthIgnoresRetiredBundleRevocation(t *testing.T) {
+	server := NewFoghornGRPCServer(nil, logging.NewLogger(), nil, nil, nil, nil, nil, nil)
+	resp, err := server.InvalidatePlaybackAuth(context.Background(), &foghornpb.InvalidatePlaybackAuthRequest{
+		TenantId: "tenant-1", Reason: "bundle_revoke", StreamId: "stream-1", BundleMinVersion: 42,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.GetStreamsInvalidated() != 0 || resp.GetNodesAttempted() != 0 {
+		t.Fatalf("retired bundle invalidation caused session churn: %+v", resp)
+	}
+}
 
 // mockQMRouting is a minimal Quartermaster routing resolver for the durable-storage tests. It returns the
 // tenant's official cluster (or, when officialClusterID is empty, the primary clusterID — mirroring

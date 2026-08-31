@@ -7,6 +7,7 @@ import (
 
 	"frameworks/api_balancing/internal/state"
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
@@ -135,6 +136,57 @@ func TestResolveArtifactPlayback_WarmNodeHappyPath(t *testing.T) {
 	}
 	if resp.GetPrimary().GetUrl() == "" {
 		t.Fatal("primary endpoint url must be populated")
+	}
+}
+
+func TestResolveArtifactPlaybackWithIdentity_DoesNotCallControlPlane(t *testing.T) {
+	previousLocalCluster := GetLocalClusterID()
+	t.Cleanup(func() { SetLocalClusterID(previousLocalCluster) })
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+	lat, lon := 52.0, 5.0
+	sm.SetNodeInfo("n1", "https://n1.example.com", true, &lat, &lon, "ams", "", map[string]any{"HLS": "x"})
+	sm.TouchNode("n1", true)
+	sm.SetNodeArtifacts("n1", []*ipcpb.StoredArtifact{{ClipHash: "h-local"}}, state.ArtifactReportOrder{Fence: 1, Seq: 1})
+	SetLocalClusterID("c1")
+	AddPlatformSharedCluster("c1")
+
+	startFakeCommodoreServer(t, &fakeCommodoreInternal{})
+	mockDB, mock, _ := sqlmock.New()
+	t.Cleanup(func() { _ = mockDB.Close() })
+	mock.ExpectQuery(`FROM foghorn.artifacts\s+WHERE artifact_hash = \$1`).
+		WithArgs("h-local", "vod", "t1").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"internal_name", "status", "duration_seconds", "size_bytes", "created_at",
+			"format", "storage_location", "sync_status", "has_thumbnails", "authoritative_cluster", "thumbnail_serving_cluster",
+		}).AddRow("asset-local", "ready", int64(60), int64(9000), nil, "mp4", "s3", "synced", false, "c1", ""))
+
+	var centralCalls int
+	ctx := ctxkeys.WithMediaRequestRPCObserver(context.Background(), "viewer_test", func(_, _, _ string) {
+		centralCalls++
+	})
+	identity := &commodorepb.ResolveArtifactPlaybackIDResponse{
+		Found: true, ArtifactHash: "h-local", InternalName: "asset-local", TenantId: "t1",
+		ContentType: "vod", OriginClusterId: "c1",
+	}
+	resp, err := ResolveArtifactPlaybackWithIdentity(ctx, &PlaybackDependencies{DB: mockDB, LocalClusterID: "c1", AllowPlatformSharedPlayback: true}, "pb-local", identity)
+	if err != nil {
+		t.Fatalf("local-authority artifact resolution failed: %v", err)
+	}
+	if resp.GetPrimary().GetNodeId() != "n1" {
+		t.Fatalf("primary node = %q, want n1", resp.GetPrimary().GetNodeId())
+	}
+	if centralCalls != 0 {
+		t.Fatalf("local-authority artifact resolution made %d central RPCs", centralCalls)
+	}
+	if _, err := CommodoreClient.ResolveArtifactPlaybackID(ctx, "probe"); err != nil {
+		t.Fatalf("observer probe: %v", err)
+	}
+	if centralCalls != 1 {
+		t.Fatalf("central RPC observer count = %d, want 1 after probe", centralCalls)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 

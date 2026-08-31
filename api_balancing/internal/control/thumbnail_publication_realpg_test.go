@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_balancing/internal/artifacts"
+	"frameworks/api_balancing/internal/database/foghorndb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
@@ -736,7 +738,8 @@ func TestThumbnailPublication_RealPG(t *testing.T) {
 	})
 
 	t.Run("concurrent publish vs recovery-sweep never strands the pointer", func(t *testing.T) {
-		// One goroutine publishes while another concurrently fail-sweeps the SAME attempt. FOR UPDATE serializes
+		// One goroutine publishes while another concurrently fail-sweeps the SAME attempt. The common asset fence
+		// followed by the assignment row lock serializes
 		// them: the outcome is EITHER activated-and-published OR failed-and-not-serving, NEVER a pointer serving
 		// an attempt that is 'failed' with its version queued for deletion.
 		asset, attempt := "stream-concurrent", "att-concurrent"
@@ -858,4 +861,190 @@ func TestThumbnailPublication_RealPG(t *testing.T) {
 			t.Fatalf("pointer must serve a2: v=%q ok=%v", v, ok)
 		}
 	})
+}
+
+func TestPublishThumbnailAttemptTakesAssetLockBeforeAssignmentRow_RealPG(t *testing.T) {
+	conn := startRealPG(t)
+	conn.SetMaxOpenConns(6)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	const asset = "asset-first-publication"
+	const attempt = "asset-first-attempt"
+	if ok, err := ClaimThumbnailAttempt(ctx, conn, attempt, "tenant-a", asset, "node-1", "cluster-a", []string{"poster.jpg"}, time.Now().Add(time.Hour)); err != nil || !ok {
+		t.Fatalf("claim: ok=%v err=%v", ok, err)
+	}
+	token, err := AcquireThumbnailPublishLease(ctx, conn, attempt, time.Minute)
+	if err != nil || token == "" {
+		t.Fatalf("acquire publish lease: token=%q err=%v", token, err)
+	}
+	if _, err := MarkThumbnailObjectVerifiedToken(ctx, conn, attempt, "poster.jpg", ThumbnailVersionKey(asset, token, "poster.jpg"), "etag", 1, token); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := EnterThumbnailPublishingToken(ctx, conn, attempt, token); err != nil || !ok {
+		t.Fatalf("enter publishing: ok=%v err=%v", ok, err)
+	}
+
+	blocker, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Rollback() //nolint:errcheck
+	if err := foghorndb.New(blocker).LockThumbnailAsset(ctx, foghorndb.LockThumbnailAssetParams{
+		LockNamespace: artifacts.ThumbnailAssetLockNamespace, AssetKey: asset,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	publishDone := make(chan error, 1)
+	go func() {
+		_, publishErr := PublishThumbnailAttemptToken(ctx, conn, attempt, token)
+		publishDone <- publishErr
+	}()
+	deadline := time.NewTicker(10 * time.Millisecond)
+	defer deadline.Stop()
+	for {
+		var waiting bool
+		if err := conn.QueryRowContext(ctx, `
+SELECT EXISTS (
+    SELECT 1 FROM pg_stat_activity
+    WHERE datname = current_database()
+      AND state = 'active'
+      AND wait_event_type = 'Lock'
+      AND wait_event = 'advisory'
+      AND query LIKE '%thumbnail_task_assignment%'
+)`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			break
+		}
+		select {
+		case err := <-publishDone:
+			t.Fatalf("publication returned before the held asset lock was released: %v", err)
+		case <-ctx.Done():
+			t.Fatal("publication never reached the held asset lock")
+		case <-deadline.C:
+		}
+	}
+
+	probe, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := probe.ExecContext(ctx, `SELECT 1 FROM foghorn.thumbnail_task_assignment WHERE attempt_id=$1 FOR UPDATE NOWAIT`, attempt); err != nil {
+		_ = probe.Rollback()
+		t.Fatalf("publication row-locked the attempt before acquiring the asset lock: %v", err)
+	}
+	if err := probe.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if err := blocker.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-publishDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-ctx.Done():
+		t.Fatal("publication did not finish after the asset lock was released")
+	}
+}
+
+func TestDeleteThumbnailControlRowsFollowsAssignmentThenPointerOrder_RealPG(t *testing.T) {
+	conn := startRealPG(t)
+	conn.SetMaxOpenConns(6)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	const tenant = "tenant-delete-order"
+	const asset = "asset-delete-order"
+	const attempt = "attempt-delete-order"
+	if ok, err := ClaimThumbnailAttempt(ctx, conn, attempt, tenant, asset, "node-1", "cluster-a", []string{"poster.jpg"}, time.Now().Add(time.Hour)); err != nil || !ok {
+		t.Fatalf("claim: ok=%v err=%v", ok, err)
+	}
+	token, err := AcquireThumbnailPublishLease(ctx, conn, attempt, time.Minute)
+	if err != nil || token == "" {
+		t.Fatalf("acquire publish lease: token=%q err=%v", token, err)
+	}
+	if _, err := MarkThumbnailObjectVerifiedToken(ctx, conn, attempt, "poster.jpg", ThumbnailVersionKey(asset, token, "poster.jpg"), "etag", 1, token); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := EnterThumbnailPublishingToken(ctx, conn, attempt, token); err != nil || !ok {
+		t.Fatalf("enter publishing: ok=%v err=%v", ok, err)
+	}
+	if ok, err := PublishThumbnailAttemptToken(ctx, conn, attempt, token); err != nil || !ok {
+		t.Fatalf("publish: ok=%v err=%v", ok, err)
+	}
+
+	assignmentBlocker, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer assignmentBlocker.Rollback() //nolint:errcheck
+	if _, err := assignmentBlocker.ExecContext(ctx, `SELECT 1 FROM foghorn.thumbnail_task_assignment WHERE attempt_id=$1 FOR UPDATE`, attempt); err != nil {
+		t.Fatal(err)
+	}
+
+	deleteDone := make(chan error, 1)
+	go func() { deleteDone <- DeleteThumbnailControlRows(ctx, conn, tenant, asset) }()
+	waitTicker := time.NewTicker(10 * time.Millisecond)
+	defer waitTicker.Stop()
+	for {
+		var waiting bool
+		if err := conn.QueryRowContext(ctx, `
+SELECT EXISTS (
+    SELECT 1 FROM pg_stat_activity
+    WHERE datname = current_database()
+      AND state = 'active'
+      AND wait_event_type = 'Lock'
+      AND query LIKE '%SELECT a.attempt_id, COALESCE(NULLIF(a.publish_lease_token%'
+)`).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			break
+		}
+		select {
+		case deleteErr := <-deleteDone:
+			t.Fatalf("control-row deletion returned before assignment lock release: %v", deleteErr)
+		case <-ctx.Done():
+			t.Fatal("control-row deletion never waited on the assignment")
+		case <-waitTicker.C:
+		}
+	}
+
+	pointerProbe, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pointerProbe.ExecContext(ctx, `SELECT 1 FROM foghorn.thumbnail_active_pointer WHERE asset_key=$1 FOR UPDATE NOWAIT`, asset); err != nil {
+		_ = pointerProbe.Rollback()
+		t.Fatalf("deletion locked pointer before assignment: %v", err)
+	}
+	if err := pointerProbe.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	queueProbe, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stagingKey := ThumbnailStagingKey(asset, attempt, "poster.jpg")
+	if _, err := queueProbe.ExecContext(ctx, `SELECT 1 FROM foghorn.staging_cleanup_queue WHERE object_key=$1 FOR UPDATE NOWAIT`, stagingKey); err != nil {
+		_ = queueProbe.Rollback()
+		t.Fatalf("deletion locked cleanup queue before assignment: %v", err)
+	}
+	if err := queueProbe.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if err := assignmentBlocker.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case deleteErr := <-deleteDone:
+		if deleteErr != nil {
+			t.Fatal(deleteErr)
+		}
+	case <-ctx.Done():
+		t.Fatal("control-row deletion did not complete after assignment release")
+	}
 }

@@ -69,17 +69,16 @@ func streamEndTriggersSeen(triggers []*ipcpb.MistTrigger) int {
 
 // offlineObservers bundles every stream-wide offline effect this package drives, so a suppression
 // test can assert on ALL of them (not just registry + inputs): per-node routing input, Decklog
-// forwarding, tenant capacity, push-target tracking, and federation broadcast/untrack.
+// forwarding, push-target tracking, and federation broadcast/untrack.
 type offlineObservers struct {
-	reg      *control.StreamRegistry
-	sm       *state.StreamStateManager
-	capacity *state.TenantCapacityManager
-	peer     *recordingPeerNotifier
-	capture  *decklogCapture
+	reg     *control.StreamRegistry
+	sm      *state.StreamStateManager
+	peer    *recordingPeerNotifier
+	capture *decklogCapture
 }
 
 // seedLiveReconnect wires a Processor whose stream has a LIVE source (stamped generation), routing
-// input, tenant capacity, a push target, Decklog, and a federation notifier — plus a mock DB that
+// input, a push target, Decklog, and a federation notifier — plus a mock DB that
 // reports an ACTIVE ingest session (the reconnect) for the offline fence. The trigger carries no
 // event time, so the reaper is a no-op and only the fence runs.
 func seedLiveReconnect(t *testing.T, internal, node, tenant string) (*Processor, offlineObservers) {
@@ -87,9 +86,6 @@ func seedLiveReconnect(t *testing.T, internal, node, tenant string) (*Processor,
 	reg := installRegistryForTest(t)
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
-	capacity := state.ResetDefaultTenantCapacityForTests()
-	t.Cleanup(func() { state.ResetDefaultTenantCapacityForTests() })
-
 	dbMock, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -108,7 +104,6 @@ func seedLiveReconnect(t *testing.T, internal, node, tenant string) (*Processor,
 	// The established live source (a projected DB winner) on the owner node.
 	projectSourceForTest(t, reg, internal, node, 100, "uuid-live", "gen-live", 1)
 	sm.SetStreamInstanceInputs(internal, node, 1)
-	capacity.RegisterStream(tenant, internal)
 	streamName := "live+" + internal
 	trackPushTargets(streamName, tenant, []*commodorepb.PushTargetInternal{
 		{Id: "target-1", TargetUri: "rtmp://example/push"},
@@ -124,21 +119,18 @@ func seedLiveReconnect(t *testing.T, internal, node, tenant string) (*Processor,
 	// (proving suppression, not an accidental unresolved-tenant short-circuit).
 	p.streamCache.Set(tenant+":"+internal, streamContext{TenantID: tenant, StreamID: "stream-x"}, time.Minute)
 
-	return p, offlineObservers{reg: reg, sm: sm, capacity: capacity, peer: peer, capture: capture}
+	return p, offlineObservers{reg: reg, sm: sm, peer: peer, capture: capture}
 }
 
 // assertEverythingStillLive is the shared assertion: a stale STREAM_END/vanish for the OLD
 // connection, suppressed by the live reconnect, must have taken NOTHING offline.
-func assertEverythingStillLive(t *testing.T, o offlineObservers, internal, node, tenant, wantGeneration string) {
+func assertEverythingStillLive(t *testing.T, o offlineObservers, internal, node, wantGeneration string) {
 	t.Helper()
 	if gen, active, ok := o.reg.SourceGenerationSnapshot(internal, node); !ok || !active || gen != wantGeneration {
 		t.Fatalf("registry source must stay active on its generation (ok=%v active=%v gen=%q want=%q)", ok, active, gen, wantGeneration)
 	}
 	if inst, present := o.sm.GetStreamInstances(internal)[node]; !present || inst.Inputs != 1 {
 		t.Fatalf("per-node routing input must be intact, present=%v %+v", present, inst)
-	}
-	if !o.capacity.HasStream(tenant, internal) {
-		t.Fatal("tenant capacity must NOT be decremented for a live reconnect")
 	}
 	if _, found := lookupPushTarget("live+"+internal, "rtmp://example/push"); !found {
 		t.Fatal("push-target tracking must NOT be dropped for a live reconnect")
@@ -152,7 +144,7 @@ func assertEverythingStillLive(t *testing.T, o offlineObservers, internal, node,
 }
 
 // A stale/late STREAM_END for the OLD connection, while a live reconnect holds an active ingest
-// session, must take NOTHING offline — registry, per-node input, Decklog, tenant capacity,
+// session, must take NOTHING offline — registry, per-node input, Decklog,
 // push-target tracking, and federation all stay live for a live reconnect — every stream-wide
 // offline effect, not just the registry flip and per-node input.
 func TestHandleStreamEnd_LiveReconnectSuppressesAllOfflineEffects(t *testing.T) {
@@ -168,7 +160,7 @@ func TestHandleStreamEnd_LiveReconnectSuppressesAllOfflineEffects(t *testing.T) 
 	}); err != nil {
 		t.Fatalf("handleStreamEnd: %v", err)
 	}
-	assertEverythingStillLive(t, o, internal, node, tenant, admitGen)
+	assertEverythingStillLive(t, o, internal, node, admitGen)
 }
 
 // The vanish (STREAM_LIFECYCLE_UPDATE offline) path must suppress the SAME set of offline effects
@@ -193,5 +185,5 @@ func TestOwnerVanish_LiveReconnectSuppressesAllOfflineEffects(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("handleStreamLifecycleUpdate: %v", err)
 	}
-	assertEverythingStillLive(t, o, internal, node, tenant, admitGen)
+	assertEverythingStillLive(t, o, internal, node, admitGen)
 }

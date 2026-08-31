@@ -24,3 +24,12 @@ LIMIT 1;
 SELECT dvr_processes_json
 FROM foghorn.artifacts
 WHERE internal_name = $1 AND artifact_type = 'dvr';
+
+-- name: ActiveLiveProcessConfig :one
+SELECT processes_json
+FROM foghorn.ingest_sessions
+WHERE stream_internal_name = sqlc.arg(stream_internal_name)
+  AND ended_at IS NULL
+  AND projection_state = 'active'
+ORDER BY started_at DESC
+LIMIT 1;

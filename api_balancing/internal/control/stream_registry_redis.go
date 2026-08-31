@@ -66,7 +66,7 @@ if rev == nil or rev < 0 then return -1 end
 local cur = tonumber(redis.call('get', KEYS[2]) or '0')
 if cur > rev or (rev == 0 and cur > 0) then return 0 end
 redis.call('set', KEYS[1], ARGV[1])
-if rev > cur then redis.call('set', KEYS[2], rev) end
+if rev > cur then redis.call('set', KEYS[2], ARGV[5]) end
 redis.call('xadd', KEYS[3], 'MAXLEN', '~', ARGV[4], '*', 'data', ARGV[3])
 return 1
 `)
@@ -77,7 +77,7 @@ if rev == nil or rev < 0 then return -1 end
 local cur = tonumber(redis.call('get', KEYS[2]) or '0')
 if cur > rev then return 0 end
 redis.call('del', KEYS[1])
-if rev > cur then redis.call('set', KEYS[2], rev) end
+if rev > cur then redis.call('set', KEYS[2], ARGV[4]) end
 redis.call('xadd', KEYS[3], 'MAXLEN', '~', ARGV[3], '*', 'data', ARGV[2])
 return 1
 `)
@@ -104,6 +104,24 @@ func (r *RedisRegistryStore) keySourceRevision(internalName string) string {
 	return fmt.Sprintf("{%s}:registry:source_revision:%s", r.clusterID, internalName)
 }
 
+// SourceRevision returns the durable per-stream watermark, including when a
+// revisioned delete removed the source payload. Repair code uses the watermark
+// to allocate above every transition Redis has observed.
+func (r *RedisRegistryStore) SourceRevision(ctx context.Context, internalName string) (int64, error) {
+	value, err := r.client.Get(ctx, r.keySourceRevision(internalName)).Result()
+	if errors.Is(err, goredis.Nil) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	revision, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || revision < 0 {
+		return 0, fmt.Errorf("registry redis: invalid source revision %q", value)
+	}
+	return revision, nil
+}
+
 // SetSourceRevisioned atomically persists a source snapshot and publishes its changelog entry when
 // revision is not older than the stored watermark. Equal revisions are idempotent retries. Revision
 // zero is accepted only while the key has never carried a versioned push-source transition.
@@ -121,7 +139,7 @@ func (r *RedisRegistryStore) SetSourceRevisioned(ctx context.Context, entry Stre
 	}
 	result, err := setSourceRevisioned.Run(ctx, r.client,
 		[]string{r.keySource(entry.InternalName), r.keySourceRevision(entry.InternalName), r.changelog.Key()},
-		payload, revision, changePayload, r.changelog.MaxLen(),
+		payload, revision, changePayload, r.changelog.MaxLen(), strconv.FormatInt(revision, 10),
 	).Int64()
 	if err != nil {
 		return false, err
@@ -147,7 +165,7 @@ func (r *RedisRegistryStore) DeleteSourceRevisioned(ctx context.Context, interna
 	}
 	result, err := deleteSourceRevisioned.Run(ctx, r.client,
 		[]string{r.keySource(internalName), r.keySourceRevision(internalName), r.changelog.Key()},
-		revision, changePayload, r.changelog.MaxLen(),
+		revision, changePayload, r.changelog.MaxLen(), strconv.FormatInt(revision, 10),
 	).Int64()
 	if err != nil {
 		return false, err

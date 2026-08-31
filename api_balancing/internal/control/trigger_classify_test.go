@@ -77,6 +77,12 @@ func TestClassifyTriggerError(t *testing.T) {
 			wantRetryable: true,
 		},
 		{
+			name:          "explicit_terminal_internal_is_not_retried",
+			err:           ingesterrors.NewTerminal(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "already settled"),
+			wantCode:      ipcpb.TriggerAckErrorCode_TRIGGER_ACK_ERROR_INTERNAL,
+			wantRetryable: false,
+		},
+		{
 			name:          "wrapped_ingest_error_still_classified",
 			err:           fmt.Errorf("publish failed: %w", ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT, "to")),
 			wantCode:      ipcpb.TriggerAckErrorCode_TRIGGER_ACK_ERROR_DOWNSTREAM_UNAVAILABLE,

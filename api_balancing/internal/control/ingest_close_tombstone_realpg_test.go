@@ -77,3 +77,63 @@ func TestIngestCloseTombstone_RealPG(t *testing.T) {
 		t.Fatalf("tombstone not purged, %d remain", c)
 	}
 }
+
+// A close tombstone for the newer connector must deny that connector without restoring the stale
+// same-PID incumbent. Retirement, DVR stop, and offline projection are one committed decision.
+func TestIngestCloseTombstoneRetiresPIDReuseIncumbent_RealPG(t *testing.T) {
+	conn := startRealPG(t)
+	prev := db
+	SetDB(conn)
+	t.Cleanup(func() { SetDB(prev) })
+	ctx := context.Background()
+	lg := logging.NewLogger()
+
+	const node, stream = "node-cbt-reuse", "live+cbt-reuse"
+	const pid int64 = 101
+	incumbent, outcome, err := CreateIngestSession(ctx, ingA, node, stream, pid, "uuid-incumbent", 1000, nil, "cell-a", lg)
+	if err != nil || outcome != IngestSessionActive || incumbent == "" {
+		t.Fatalf("seed incumbent: id=%q outcome=%v err=%v", incumbent, outcome, err)
+	}
+	insertDVR(t, "cbt-reuse-dvr", ingA, stream, incumbent)
+	if _, err := db.Exec(`UPDATE foghorn.artifacts SET status='recording' WHERE artifact_hash='cbt-reuse-dvr'`); err != nil {
+		t.Fatalf("mark incumbent DVR recording: %v", err)
+	}
+	if _, err := db.Exec(`INSERT INTO foghorn.ingest_close_tombstones
+		(tenant_id, node_id, connector_pid, stream_internal_name, close_unix_millis)
+		VALUES ($1::uuid, $2, $3, $4, 3000)`, ingA, node, pid, stream); err != nil {
+		t.Fatalf("seed successor close tombstone: %v", err)
+	}
+
+	_, outcome, err = CreateIngestSession(ctx, ingA, node, stream, pid, "uuid-successor", 2000, nil, "cell-a", lg)
+	if err != nil || outcome != IngestSessionAlreadyEnded {
+		t.Fatalf("tombstoned successor: outcome=%v err=%v", outcome, err)
+	}
+	var ended bool
+	if err := db.QueryRow(`SELECT ended_at IS NOT NULL FROM foghorn.ingest_sessions WHERE id=$1::uuid`, incumbent).Scan(&ended); err != nil {
+		t.Fatalf("read incumbent: %v", err)
+	}
+	if !ended {
+		t.Fatal("tombstoned successor restored the PID-reused incumbent")
+	}
+	var successorRows int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM foghorn.ingest_sessions WHERE tenant_id=$1::uuid AND start_trigger_uuid='uuid-successor'`, ingA).Scan(&successorRows); err != nil {
+		t.Fatalf("count successor rows: %v", err)
+	}
+	if successorRows != 0 {
+		t.Fatalf("tombstoned successor rows=%d, want 0", successorRows)
+	}
+	var dvrStatus string
+	if err := db.QueryRow(`SELECT status FROM foghorn.artifacts WHERE artifact_hash='cbt-reuse-dvr'`).Scan(&dvrStatus); err != nil {
+		t.Fatalf("read incumbent DVR: %v", err)
+	}
+	if dvrStatus != "stopping" {
+		t.Fatalf("incumbent DVR status=%q, want stopping", dvrStatus)
+	}
+	var offlineEffects int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM foghorn.ingest_offline_effects WHERE source_generation=$1::uuid`, incumbent).Scan(&offlineEffects); err != nil {
+		t.Fatalf("count offline effects: %v", err)
+	}
+	if offlineEffects != 1 {
+		t.Fatalf("offline effects=%d, want 1", offlineEffects)
+	}
+}

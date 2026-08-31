@@ -144,6 +144,12 @@ func TestClusterServeAccessibleForTenantEnvelopeIsPureAndFailClosed(t *testing.T
 	if !ClusterServeAccessibleForTenantEnvelope("platform-shared", "tenant-a", "", nil) {
 		t.Fatal("platform-shared playback policy denied resolved tenant")
 	}
+	if ClusterServeAccessibleForTenantEnvelopeWithPolicy("platform-shared", "tenant-a", "", nil, false) {
+		t.Fatal("signed policy denial was ignored for platform-shared playback")
+	}
+	if !ClusterServeAccessibleForTenantEnvelopeWithPolicy("platform-shared", "tenant-a", "", nil, true) {
+		t.Fatal("signed platform-shared playback grant was ignored")
+	}
 	if ClusterServeAccessibleForTenantEnvelope("private-peer", "tenant-a", "", nil) {
 		t.Fatal("missing envelope authorized private serving cluster")
 	}

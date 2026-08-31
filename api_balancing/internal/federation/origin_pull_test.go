@@ -40,6 +40,8 @@ func (f *fakePeerResolver) GetPeerAddr(clusterID string) string { return f.addrs
 // test and restores the prior global on cleanup.
 func freshRegistry(t *testing.T) *control.StreamRegistry {
 	t.Helper()
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
 	prev := control.StreamRegistryInstance
 	r := control.NewStreamRegistry(nil, "cluster-local", 0)
 	control.SetStreamRegistry(r)
@@ -55,7 +57,6 @@ func makeDeps(t *testing.T, fed *fakeNotifyFedClient, addrs map[string]string) *
 		PeerResolver: &fakePeerResolver{addrs: addrs},
 		FedClient:    fed,
 		InstanceID:   "foghorn-test",
-		ClusterID:    "cluster-local",
 		Logger:       testLogger(),
 	}
 }
@@ -66,6 +67,7 @@ func makeReq() ArrangeOriginPullRequest {
 		Remote:          &foghornfederationpb.EdgeCandidate{NodeId: "remote-node", BaseUrl: "https://peer"},
 		RemoteCluster:   "cluster-peer",
 		TenantID:        "tenant-1",
+		DestClusterID:   "cluster-local",
 		DestNodeID:      "local-edge",
 		DestNodeBaseURL: "local-edge.cluster-local",
 	}
@@ -103,8 +105,7 @@ func TestArrange_RegistryNil_Refused(t *testing.T) {
 
 func TestArrange_HappyPath_MarksReplicating(t *testing.T) {
 	r := freshRegistry(t)
-	sm := state.ResetDefaultManagerForTests()
-	t.Cleanup(sm.Shutdown)
+	sm := state.DefaultManager()
 	fed := &fakeNotifyFedClient{}
 	d := makeDeps(t, fed, map[string]string{"cluster-peer": "peer:443"})
 
@@ -130,8 +131,38 @@ func TestArrange_HappyPath_MarksReplicating(t *testing.T) {
 	if inst.Inputs != 1 || !inst.Replicated {
 		t.Fatalf("stream instance = %+v, want inputs=1 replicated=true", inst)
 	}
-	if len(fed.calls) != 1 || fed.calls[0].StreamName != "stream-1" {
+	if len(fed.calls) != 1 || fed.calls[0].StreamName != "stream-1" || fed.calls[0].GetDestClusterId() != "cluster-local" {
 		t.Fatalf("NotifyOriginPull calls = %+v", fed.calls)
+	}
+}
+
+func TestArrange_DestinationNodeClusterCannotBeSubstitutedByProcessCluster(t *testing.T) {
+	freshRegistry(t)
+	sm := state.DefaultManager()
+	sm.SetNodeConnectionInfo(context.Background(), "local-edge", "local-edge.example", "", "tenant-media-b", nil)
+	fed := &fakeNotifyFedClient{}
+	d := makeDeps(t, fed, map[string]string{"cluster-peer": "peer:443"})
+	req := makeReq()
+	req.DestClusterID = "tenant-media-b"
+
+	if _, err := d.ArrangeOriginPull(context.Background(), req); err != nil {
+		t.Fatalf("arrange origin pull: %v", err)
+	}
+	if len(fed.calls) != 1 || fed.calls[0].GetDestClusterId() != "tenant-media-b" {
+		t.Fatalf("destination cluster was inferred from Foghorn process: %+v", fed.calls)
+	}
+}
+
+func TestArrange_DestinationNodeClusterMismatchIsRefused(t *testing.T) {
+	freshRegistry(t)
+	sm := state.DefaultManager()
+	sm.SetNodeConnectionInfo(context.Background(), "local-edge", "local-edge.example", "", "tenant-media-b", nil)
+	d := makeDeps(t, &fakeNotifyFedClient{}, map[string]string{"cluster-peer": "peer:443"})
+	req := makeReq()
+	req.DestClusterID = "tenant-media-a"
+
+	if _, err := d.ArrangeOriginPull(context.Background(), req); !errors.Is(err, ErrOriginPullNoDest) {
+		t.Fatalf("want destination-cluster mismatch refusal, got %v", err)
 	}
 }
 
@@ -186,8 +217,8 @@ func TestArrange_LBPickerError_PropagatedAsWrappedError(t *testing.T) {
 	d := makeDeps(t, &fakeNotifyFedClient{}, map[string]string{"cluster-peer": "peer:443"})
 	req := makeReq()
 	req.DestNodeID = ""
-	req.LBPicker = func(context.Context, float64, float64, string) (string, string, error) {
-		return "", "", errors.New("no edges")
+	req.LBPicker = func(context.Context, float64, float64, string) (string, string, string, error) {
+		return "", "", "", errors.New("no edges")
 	}
 	_, err := d.ArrangeOriginPull(context.Background(), req)
 	if err == nil {
@@ -195,6 +226,24 @@ func TestArrange_LBPickerError_PropagatedAsWrappedError(t *testing.T) {
 	}
 	if errors.Is(err, ErrOriginPullNoDest) {
 		t.Fatalf("LB error should not be classified as NoDest, got %v", err)
+	}
+}
+
+func TestArrange_LBPickerCarriesSelectedNodeCluster(t *testing.T) {
+	freshRegistry(t)
+	fed := &fakeNotifyFedClient{}
+	d := makeDeps(t, fed, map[string]string{"cluster-peer": "peer:443"})
+	req := makeReq()
+	req.DestNodeID = ""
+	req.DestClusterID = ""
+	req.LBPicker = func(context.Context, float64, float64, string) (string, string, string, error) {
+		return "local-edge.example", "local-edge", "cluster-local", nil
+	}
+	if _, err := d.ArrangeOriginPull(context.Background(), req); err != nil {
+		t.Fatalf("arrange origin pull: %v", err)
+	}
+	if len(fed.calls) != 1 || fed.calls[0].GetDestClusterId() != "cluster-local" {
+		t.Fatalf("selected node cluster was lost: %+v", fed.calls)
 	}
 }
 

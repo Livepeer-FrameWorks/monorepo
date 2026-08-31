@@ -2,6 +2,7 @@ package control
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strings"
 	"testing"
@@ -87,17 +88,19 @@ func expectNodeCopyGained(mock sqlmock.Sqlmock, hash, node string, size ...int64
 		sz = size[0]
 	}
 	expectPlacementParentLock(mock)
+	expectArtifactDeletionWatermarkLock(mock, hash, 0, node)
 	mock.ExpectQuery("SELECT role, is_orphaned, is_complete FROM foghorn.artifact_nodes").
 		WithArgs(hash, node).
 		WillReturnRows(sqlmock.NewRows([]string{"role", "is_orphaned", "is_complete"}))
 	mock.ExpectQuery("INSERT INTO foghorn.artifact_nodes").
-		WithArgs(hash, node, "", sz).
+		WithArgs(hash, node, "", sz, int64(0)).
 		WillReturnRows(sqlmock.NewRows([]string{"size_bytes"}).AddRow(int64(0)))
 	mock.ExpectQuery("SELECT tenant_id::text FROM foghorn.artifacts").
 		WithArgs(hash).
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow("tenant-1"))
-	mock.ExpectQuery("SELECT nextval\\('foghorn.artifact_node_copy_version_seq'\\)").
-		WillReturnRows(sqlmock.NewRows([]string{"nextval"}).AddRow(int64(1)))
+	mock.ExpectQuery("INSERT INTO foghorn.artifact_node_copy_version_counter").
+		WithArgs(hash, node).
+		WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow(int64(1)))
 	mock.ExpectExec("UPDATE foghorn.artifact_nodes SET last_emitted_version").
 		WithArgs(int64(1), hash, node).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -844,17 +847,16 @@ func TestProcessSyncComplete_LocalMissing_OtherCopySurvives(t *testing.T) {
 	mock.ExpectQuery(`SELECT COALESCE\(tenant_id::text, ''\)::text AS tenant_id, COALESCE\(sync_object_key, ''\)::text AS sync_object_key FROM foghorn.artifacts.*sync_status = 'in_progress'`).
 		WithArgs("hash-lm", "req-lm", "node-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "sync_object_key"}).AddRow("tenant-1", "obj/hash-lm"))
-	mock.ExpectQuery("SELECT role FROM foghorn.artifact_nodes").
-		WithArgs("hash-lm", "node-1").
+	expectPlacementParentLock(mock)
+	mock.ExpectQuery("WITH deletion_watermark AS .*DELETE FROM foghorn.artifact_nodes").
+		WithArgs("hash-lm", "node-1", int64(1234)).
 		WillReturnRows(sqlmock.NewRows([]string{"role"}).AddRow("cache"))
-	mock.ExpectExec("DELETE FROM foghorn.artifact_nodes").
-		WithArgs("hash-lm", "node-1").
-		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectQuery("SELECT tenant_id::text FROM foghorn.artifacts").
 		WithArgs("hash-lm").
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow("tenant-1"))
-	mock.ExpectQuery("SELECT nextval\\('foghorn.artifact_node_copy_version_seq'\\)").
-		WillReturnRows(sqlmock.NewRows([]string{"nextval"}).AddRow(int64(7)))
+	mock.ExpectQuery("INSERT INTO foghorn.artifact_node_copy_version_counter").
+		WithArgs("hash-lm", "node-1").
+		WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow(int64(7)))
 	mock.ExpectExec("UPDATE foghorn.artifact_nodes SET last_emitted_version").
 		WithArgs(int64(0), "hash-lm", "node-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -878,9 +880,99 @@ func TestProcessSyncComplete_LocalMissing_OtherCopySurvives(t *testing.T) {
 	}
 	mock.ExpectCommit()
 
-	processSyncComplete(&ipcpb.SyncComplete{
+	processSyncCompleteAt(&ipcpb.SyncComplete{
 		AssetHash: "hash-lm", Status: "failed", Error: "gone here", RequestId: "req-lm", LocalMissing: true,
-	}, "node-1", logger)
+	}, "node-1", 1234, logger)
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProcessSyncComplete_LocalMissingFencedByNewerInventoryStaysRetryable(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
+	logger := logging.NewLogger()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("UPDATE foghorn.artifacts.*dtsh_status = 'failed'.*RETURNING").
+		WithArgs("stale local view", "hash-fenced", "req-fenced", "node-1", "tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"sync_object_key"}))
+	mock.ExpectRollback()
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT COALESCE\(tenant_id::text, ''\)::text AS tenant_id, COALESCE\(sync_object_key, ''\)::text AS sync_object_key FROM foghorn.artifacts.*sync_status = 'in_progress'`).
+		WithArgs("hash-fenced", "req-fenced", "node-1", "tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "sync_object_key"}).AddRow("tenant-1", "obj/hash-fenced"))
+	expectPlacementParentLock(mock)
+	mock.ExpectQuery("WITH deletion_watermark AS .*DELETE FROM foghorn.artifact_nodes").
+		WithArgs("hash-fenced", "node-1", int64(1234)).
+		WillReturnRows(sqlmock.NewRows([]string{"role"}))
+	mock.ExpectQuery("SELECT role, is_orphaned, is_complete FROM foghorn.artifact_nodes.*FOR UPDATE").
+		WithArgs("hash-fenced", "node-1").
+		WillReturnRows(sqlmock.NewRows([]string{"role", "is_orphaned", "is_complete"}).AddRow("cache", false, true))
+	// The newer inventory proves the reporting node still has the copy. Do not
+	// exclude that node from a surviving-copy count and then declare terminal loss.
+	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status = \\$1::text.*tenant_id::text = \\$4").
+		WithArgs("failed", "stale local view", "hash-fenced", "tenant-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	for _, key := range []string{
+		FreezeStagingKey("obj/hash-fenced", "req-fenced"),
+		FreezeStagingKey("obj/hash-fenced.dtsh", "req-fenced"),
+		FreezePublishKey("obj/hash-fenced", "req-fenced"),
+		FreezePublishDtshKey("obj/hash-fenced", "req-fenced"),
+	} {
+		mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").
+			WithArgs(key, sqlmock.AnyArg()).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+	}
+	mock.ExpectCommit()
+
+	processSyncCompleteAt(&ipcpb.SyncComplete{
+		AssetHash: "hash-fenced", Status: "failed", Error: "stale local view", RequestId: "req-fenced", LocalMissing: true,
+	}, "node-1", 1234, logger)
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProcessSyncComplete_LocalMissingAbsentCopyRemainsRetryable(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
+	logger := logging.NewLogger()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("UPDATE foghorn.artifacts.*dtsh_status = 'failed'.*RETURNING").
+		WithArgs("gone", "hash-absent", "req-absent", "node-1", "tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"sync_object_key"}))
+	mock.ExpectRollback()
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT COALESCE\(tenant_id::text, ''\)::text AS tenant_id, COALESCE\(sync_object_key, ''\)::text AS sync_object_key FROM foghorn.artifacts.*sync_status = 'in_progress'`).
+		WithArgs("hash-absent", "req-absent", "node-1", "tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "sync_object_key"}).AddRow("tenant-1", "obj/hash-absent"))
+	expectPlacementParentLock(mock)
+	mock.ExpectQuery("WITH deletion_watermark AS .*DELETE FROM foghorn.artifact_nodes").
+		WithArgs("hash-absent", "node-1", int64(1234)).
+		WillReturnRows(sqlmock.NewRows([]string{"role"}))
+	mock.ExpectQuery("SELECT role, is_orphaned, is_complete FROM foghorn.artifact_nodes.*FOR UPDATE").
+		WithArgs("hash-absent", "node-1").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectExec("UPDATE foghorn.artifacts.*sync_status = \\$1::text.*tenant_id::text = \\$4").
+		WithArgs("failed", "gone", "hash-absent", "tenant-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	for _, key := range []string{
+		FreezeStagingKey("obj/hash-absent", "req-absent"),
+		FreezeStagingKey("obj/hash-absent.dtsh", "req-absent"),
+		FreezePublishKey("obj/hash-absent", "req-absent"),
+		FreezePublishDtshKey("obj/hash-absent", "req-absent"),
+	} {
+		mock.ExpectExec("INSERT INTO foghorn.staging_cleanup_queue").
+			WithArgs(key, sqlmock.AnyArg()).
+			WillReturnResult(sqlmock.NewResult(0, 1))
+	}
+	mock.ExpectCommit()
+
+	processSyncCompleteAt(&ipcpb.SyncComplete{
+		AssetHash: "hash-absent", Status: "failed", Error: "gone", RequestId: "req-absent", LocalMissing: true,
+	}, "node-1", 1234, logger)
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

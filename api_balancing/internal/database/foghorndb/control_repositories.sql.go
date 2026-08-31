@@ -36,25 +36,38 @@ func (q *Queries) AdvanceNodeArtifactReportWatermark(ctx context.Context, arg Ad
 }
 
 const allocateArtifactNodeCopyVersion = `-- name: AllocateArtifactNodeCopyVersion :one
-SELECT nextval('foghorn.artifact_node_copy_version_seq')::bigint
+INSERT INTO foghorn.artifact_node_copy_version_counter (artifact_hash, node_id, value)
+VALUES ($1, $2, 4503599627370497)
+ON CONFLICT (artifact_hash, node_id) DO UPDATE
+SET value = foghorn.artifact_node_copy_version_counter.value + 1
+RETURNING value
 `
 
-func (q *Queries) AllocateArtifactNodeCopyVersion(ctx context.Context) (int64, error) {
-	row := q.db.QueryRowContext(ctx, allocateArtifactNodeCopyVersion)
-	var column_1 int64
-	err := row.Scan(&column_1)
-	return column_1, err
+type AllocateArtifactNodeCopyVersionParams struct {
+	ArtifactHash string `db:"artifact_hash" json:"artifact_hash"`
+	NodeID       string `db:"node_id" json:"node_id"`
+}
+
+func (q *Queries) AllocateArtifactNodeCopyVersion(ctx context.Context, arg AllocateArtifactNodeCopyVersionParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, allocateArtifactNodeCopyVersion, arg.ArtifactHash, arg.NodeID)
+	var value int64
+	err := row.Scan(&value)
+	return value, err
 }
 
 const allocateNodeControlFence = `-- name: AllocateNodeControlFence :one
-SELECT nextval('foghorn.node_control_fence_seq')::bigint
+INSERT INTO foghorn.node_control_fence_counter (node_id, value)
+VALUES ($1, 4503599627370497)
+ON CONFLICT (node_id) DO UPDATE
+SET value = foghorn.node_control_fence_counter.value + 1
+RETURNING value
 `
 
-func (q *Queries) AllocateNodeControlFence(ctx context.Context) (int64, error) {
-	row := q.db.QueryRowContext(ctx, allocateNodeControlFence)
-	var column_1 int64
-	err := row.Scan(&column_1)
-	return column_1, err
+func (q *Queries) AllocateNodeControlFence(ctx context.Context, nodeID string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, allocateNodeControlFence, nodeID)
+	var value int64
+	err := row.Scan(&value)
+	return value, err
 }
 
 const clipNeedsDtshSync = `-- name: ClipNeedsDtshSync :one
@@ -105,6 +118,56 @@ func (q *Queries) DeleteArtifactNode(ctx context.Context, arg DeleteArtifactNode
 	return err
 }
 
+const deleteArtifactNodeIfNotNewer = `-- name: DeleteArtifactNodeIfNotNewer :one
+WITH deletion_watermark AS (
+  INSERT INTO foghorn.artifact_node_deletion_watermark AS watermark
+      (artifact_hash, node_id, deleted_at_ms, updated_at)
+  SELECT $1::varchar, $2::varchar, GREATEST($3::bigint, 0), NOW()
+  WHERE EXISTS (
+    SELECT 1 FROM foghorn.artifacts WHERE artifact_hash = $1::varchar
+  )
+  ON CONFLICT (artifact_hash, node_id) DO UPDATE SET
+      deleted_at_ms = GREATEST(watermark.deleted_at_ms, EXCLUDED.deleted_at_ms),
+      updated_at = CASE
+        WHEN EXCLUDED.deleted_at_ms > watermark.deleted_at_ms THEN NOW()
+        ELSE watermark.updated_at
+      END
+  RETURNING deleted_at_ms
+)
+DELETE FROM foghorn.artifact_nodes placement
+USING deletion_watermark
+WHERE placement.artifact_hash = $1::varchar
+  AND placement.node_id = $2::varchar
+  AND (
+    $3::bigint <= 0
+    OR placement.inventory_reported_at_ms <= 0
+    OR placement.inventory_reported_at_ms <= $3::bigint
+  )
+RETURNING placement.role
+`
+
+type DeleteArtifactNodeIfNotNewerParams struct {
+	ArtifactHash string `db:"artifact_hash" json:"artifact_hash"`
+	NodeID       string `db:"node_id" json:"node_id"`
+	DeletedAtMs  int64  `db:"deleted_at_ms" json:"deleted_at_ms"`
+}
+
+func (q *Queries) DeleteArtifactNodeIfNotNewer(ctx context.Context, arg DeleteArtifactNodeIfNotNewerParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, deleteArtifactNodeIfNotNewer, arg.ArtifactHash, arg.NodeID, arg.DeletedAtMs)
+	var role string
+	err := row.Scan(&role)
+	return role, err
+}
+
+const deleteNodeOutputs = `-- name: DeleteNodeOutputs :exec
+DELETE FROM foghorn.node_outputs WHERE node_id = $1
+`
+
+func (q *Queries) DeleteNodeOutputs(ctx context.Context, nodeID string) error {
+	_, err := q.db.ExecContext(ctx, deleteNodeOutputs, nodeID)
+	return err
+}
+
 const getArtifactCachedAt = `-- name: GetArtifactCachedAt :one
 SELECT COALESCE(MIN(cached_at), to_timestamp(0))::timestamptz AS cached_at FROM foghorn.artifact_nodes
 WHERE artifact_hash = $1 AND is_orphaned = false
@@ -115,6 +178,25 @@ func (q *Queries) GetArtifactCachedAt(ctx context.Context, artifactHash string) 
 	var cached_at time.Time
 	err := row.Scan(&cached_at)
 	return cached_at, err
+}
+
+const getArtifactNodeDeletionWatermark = `-- name: GetArtifactNodeDeletionWatermark :one
+SELECT deleted_at_ms
+FROM foghorn.artifact_node_deletion_watermark
+WHERE artifact_hash = $1
+  AND node_id = $2
+`
+
+type GetArtifactNodeDeletionWatermarkParams struct {
+	ArtifactHash string `db:"artifact_hash" json:"artifact_hash"`
+	NodeID       string `db:"node_id" json:"node_id"`
+}
+
+func (q *Queries) GetArtifactNodeDeletionWatermark(ctx context.Context, arg GetArtifactNodeDeletionWatermarkParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, getArtifactNodeDeletionWatermark, arg.ArtifactHash, arg.NodeID)
+	var deleted_at_ms int64
+	err := row.Scan(&deleted_at_ms)
+	return deleted_at_ms, err
 }
 
 const getArtifactPlacementTenant = `-- name: GetArtifactPlacementTenant :one
@@ -341,14 +423,17 @@ func (q *Queries) ListAllNodeArtifacts(ctx context.Context) ([]ListAllNodeArtifa
 }
 
 const listAllNodes = `-- name: ListAllNodes :many
-SELECT node_id, COALESCE(base_url, '')::text AS base_url, COALESCE(outputs, '{}'::jsonb) AS outputs
+SELECT node_id, COALESCE(base_url, '')::text AS base_url,
+       COALESCE(outputs, '{}'::jsonb) AS outputs,
+       COALESCE(last_updated, 'epoch'::timestamp) AS last_updated
 FROM foghorn.node_outputs
 `
 
 type ListAllNodesRow struct {
-	NodeID  string          `db:"node_id" json:"node_id"`
-	BaseUrl string          `db:"base_url" json:"base_url"`
-	Outputs json.RawMessage `db:"outputs" json:"outputs"`
+	NodeID      string          `db:"node_id" json:"node_id"`
+	BaseUrl     string          `db:"base_url" json:"base_url"`
+	Outputs     json.RawMessage `db:"outputs" json:"outputs"`
+	LastUpdated sql.NullTime    `db:"last_updated" json:"last_updated"`
 }
 
 func (q *Queries) ListAllNodes(ctx context.Context) ([]ListAllNodesRow, error) {
@@ -360,7 +445,12 @@ func (q *Queries) ListAllNodes(ctx context.Context) ([]ListAllNodesRow, error) {
 	items := []ListAllNodesRow{}
 	for rows.Next() {
 		var i ListAllNodesRow
-		if err := rows.Scan(&i.NodeID, &i.BaseUrl, &i.Outputs); err != nil {
+		if err := rows.Scan(
+			&i.NodeID,
+			&i.BaseUrl,
+			&i.Outputs,
+			&i.LastUpdated,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -558,13 +648,15 @@ func (q *Queries) LockArtifactNodeState(ctx context.Context, arg LockArtifactNod
 	return i, err
 }
 
-const lockArtifactPlacementParent = `-- name: LockArtifactPlacementParent :exec
+const lockArtifactPlacementParent = `-- name: LockArtifactPlacementParent :one
 SELECT artifact_hash FROM foghorn.artifacts WHERE artifact_hash = $1 FOR UPDATE
 `
 
-func (q *Queries) LockArtifactPlacementParent(ctx context.Context, artifactHash string) error {
-	_, err := q.db.ExecContext(ctx, lockArtifactPlacementParent, artifactHash)
-	return err
+func (q *Queries) LockArtifactPlacementParent(ctx context.Context, artifactHash string) (string, error) {
+	row := q.db.QueryRowContext(ctx, lockArtifactPlacementParent, artifactHash)
+	var artifact_hash string
+	err := row.Scan(&artifact_hash)
+	return artifact_hash, err
 }
 
 const lockDVRProgressArtifact = `-- name: LockDVRProgressArtifact :one
@@ -943,13 +1035,17 @@ func (q *Queries) UpdateArtifactReportMetadata(ctx context.Context, arg UpdateAr
 }
 
 const upsertCachedArtifactNode = `-- name: UpsertCachedArtifactNode :one
-INSERT INTO foghorn.artifact_nodes (artifact_hash, node_id, file_path, size_bytes, last_seen_at, is_orphaned, cached_at, role, is_complete)
+INSERT INTO foghorn.artifact_nodes (artifact_hash, node_id, file_path, size_bytes, last_seen_at, inventory_reported_at_ms, is_orphaned, cached_at, role, is_complete)
 VALUES ($1, $2, NULLIF($3::text, ''),
-        NULLIF($4::bigint, 0), NOW(), false, NOW(), 'cache', true)
+        NULLIF($4::bigint, 0), NOW(), $5::bigint, false, NOW(), 'cache', true)
 ON CONFLICT (artifact_hash, node_id) DO UPDATE SET
     file_path = COALESCE(NULLIF(EXCLUDED.file_path, ''), foghorn.artifact_nodes.file_path),
     size_bytes = COALESCE(EXCLUDED.size_bytes, foghorn.artifact_nodes.size_bytes),
     last_seen_at = NOW(),
+    inventory_reported_at_ms = GREATEST(
+        foghorn.artifact_nodes.inventory_reported_at_ms,
+        EXCLUDED.inventory_reported_at_ms
+    ),
     is_orphaned = false,
     is_complete = CASE WHEN foghorn.artifact_nodes.role = 'origin' THEN foghorn.artifact_nodes.is_complete ELSE true END,
     cached_at = COALESCE(foghorn.artifact_nodes.cached_at, NOW())
@@ -961,6 +1057,7 @@ type UpsertCachedArtifactNodeParams struct {
 	NodeID       string `db:"node_id" json:"node_id"`
 	FilePath     string `db:"file_path" json:"file_path"`
 	SizeBytes    int64  `db:"size_bytes" json:"size_bytes"`
+	ReportedAtMs int64  `db:"reported_at_ms" json:"reported_at_ms"`
 }
 
 func (q *Queries) UpsertCachedArtifactNode(ctx context.Context, arg UpsertCachedArtifactNodeParams) (sql.NullInt64, error) {
@@ -969,6 +1066,7 @@ func (q *Queries) UpsertCachedArtifactNode(ctx context.Context, arg UpsertCached
 		arg.NodeID,
 		arg.FilePath,
 		arg.SizeBytes,
+		arg.ReportedAtMs,
 	)
 	var size_bytes sql.NullInt64
 	err := row.Scan(&size_bytes)
@@ -1117,14 +1215,24 @@ func (q *Queries) UpsertOriginArtifactNode(ctx context.Context, arg UpsertOrigin
 
 const upsertReportedArtifactNode = `-- name: UpsertReportedArtifactNode :one
 INSERT INTO foghorn.artifact_nodes
-    (artifact_hash, node_id, file_path, size_bytes, segment_count, segment_bytes, access_count, last_accessed, last_seen_at, is_orphaned, cached_at, role, is_complete)
+    (artifact_hash, node_id, file_path, size_bytes, segment_count, segment_bytes, access_count, last_accessed, last_seen_at, inventory_reported_at_ms, is_orphaned, cached_at, role, is_complete)
 SELECT $1, $2, $3::text, $4::bigint,
        $5::bigint, $6::bigint, $7::bigint,
        CASE WHEN $8::bigint > 0 THEN to_timestamp($8::bigint) ELSE NULL END,
-       NOW(), false,
+       NOW(), $9::bigint, false,
        COALESCE((SELECT cached_at FROM foghorn.artifact_nodes WHERE artifact_hash = $1::varchar AND node_id = $2::varchar), NOW()),
-       $9, $10
+       $10, $11
 WHERE EXISTS (SELECT 1 FROM foghorn.artifacts WHERE artifact_hash = $1)
+  AND (
+    $9::bigint <= 0
+    OR NOT EXISTS (
+      SELECT 1
+      FROM foghorn.artifact_node_deletion_watermark deletion
+      WHERE deletion.artifact_hash = $1
+        AND deletion.node_id = $2
+        AND deletion.deleted_at_ms >= $9::bigint
+    )
+  )
 ON CONFLICT (artifact_hash, node_id) DO UPDATE SET
     file_path = EXCLUDED.file_path,
     size_bytes = EXCLUDED.size_bytes,
@@ -1137,6 +1245,10 @@ ON CONFLICT (artifact_hash, node_id) DO UPDATE SET
         ELSE GREATEST(foghorn.artifact_nodes.last_accessed, EXCLUDED.last_accessed)
     END,
     last_seen_at = NOW(),
+    inventory_reported_at_ms = GREATEST(
+        foghorn.artifact_nodes.inventory_reported_at_ms,
+        EXCLUDED.inventory_reported_at_ms
+    ),
     is_orphaned = false,
     role = CASE WHEN foghorn.artifact_nodes.role = 'origin' THEN 'origin' ELSE EXCLUDED.role END,
     is_complete = CASE WHEN foghorn.artifact_nodes.role = 'origin' THEN foghorn.artifact_nodes.is_complete
@@ -1153,6 +1265,7 @@ type UpsertReportedArtifactNodeParams struct {
 	SegmentBytes int64  `db:"segment_bytes" json:"segment_bytes"`
 	AccessCount  int64  `db:"access_count" json:"access_count"`
 	LastAccessed int64  `db:"last_accessed" json:"last_accessed"`
+	ReportedAtMs int64  `db:"reported_at_ms" json:"reported_at_ms"`
 	Role         string `db:"role" json:"role"`
 	IsComplete   bool   `db:"is_complete" json:"is_complete"`
 }
@@ -1172,6 +1285,7 @@ func (q *Queries) UpsertReportedArtifactNode(ctx context.Context, arg UpsertRepo
 		arg.SegmentBytes,
 		arg.AccessCount,
 		arg.LastAccessed,
+		arg.ReportedAtMs,
 		arg.Role,
 		arg.IsComplete,
 	)

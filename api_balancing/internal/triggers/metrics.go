@@ -41,4 +41,14 @@ type ProcessorMetrics struct {
 	// a replaced publisher's stale buffer until Mist's natural session timeout.
 	// Labels: result ("ok", "failed").
 	DrainDispatch *prometheus.CounterVec
+
+	// MediaAuthorityLocalReads records bounded durable-authority lookup
+	// outcomes. Labels: index (playback_id/internal_name/tenant/
+	// publishing_credential/tenant_ingest) and outcome
+	// (absent/unready/valid/soft_expired/hard_expired/denied/error).
+	MediaAuthorityLocalReads *prometheus.CounterVec
+
+	// MediaAuthorityShadow records why a connected decision did or did not
+	// promote an exact signed authority version. Labels: outcome.
+	MediaAuthorityShadow *prometheus.CounterVec
 }

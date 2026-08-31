@@ -191,8 +191,8 @@ func TestBuildOutputsMapOmitsGenericHTTPForLive(t *testing.T) {
 func TestFilterPullCandidatesByClassFiltersRemoteClusters(t *testing.T) {
 	nodes := []balancer.NodeWithScore{
 		{NodeID: "local-a", Score: 90},
-		{NodeID: "remote-denied", ClusterID: "remote-denied", Score: 95},
-		{NodeID: "remote-allowed", ClusterID: "remote-allowed", Score: 80},
+		{NodeID: "remote-denied", ClusterID: "remote-denied", Score: 95, Remote: true},
+		{NodeID: "remote-allowed", ClusterID: "remote-allowed", Score: 80, Remote: true},
 	}
 	allowed, err := filterPullCandidatesByClass(
 		context.Background(),
@@ -225,7 +225,7 @@ func TestFilterPullCandidatesByClassFiltersRemoteClusters(t *testing.T) {
 func TestFilterPullCandidatesByClassRefusesPrivateWithoutAllowedList(t *testing.T) {
 	nodes := []balancer.NodeWithScore{
 		{NodeID: "local-a", Score: 90},
-		{NodeID: "remote-allowed", ClusterID: "remote-allowed", Score: 80},
+		{NodeID: "remote-allowed", ClusterID: "remote-allowed", Score: 80, Remote: true},
 	}
 	_, err := filterPullCandidatesByClass(
 		context.Background(),
@@ -249,8 +249,8 @@ func TestFilterPullCandidatesByClassRefusesPrivateWithoutAllowedList(t *testing.
 func TestFilterPullCandidatesByClassPinsPublicSource(t *testing.T) {
 	nodes := []balancer.NodeWithScore{
 		{NodeID: "local-a", Score: 90},
-		{NodeID: "remote-denied", ClusterID: "remote-denied", Score: 95},
-		{NodeID: "remote-allowed", ClusterID: "remote-allowed", Score: 80},
+		{NodeID: "remote-denied", ClusterID: "remote-denied", Score: 95, Remote: true},
+		{NodeID: "remote-allowed", ClusterID: "remote-allowed", Score: 80, Remote: true},
 	}
 	allowed, err := filterPullCandidatesByClass(
 		context.Background(),
@@ -701,9 +701,13 @@ func TestResolveRemoteArtifact_AdoptionUpsertHealsMissingOriginMetadata(t *testi
 	}
 	defer mockDB.Close()
 
+	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO foghorn.artifacts").
 		WithArgs("artifact-1", "clip", "tenant-1", "stream-a", "source-stream-a", "mp4", "synced", "cluster-origin", sql.NullString{}).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE foghorn.artifacts").
+		WithArgs("artifact-1", "tenant-1").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	deps := &PlaybackDependencies{
 		DB:             mockDB,
@@ -746,9 +750,13 @@ func TestResolveRemoteArtifact_PeerRelayAdoptsPendingNotSynced(t *testing.T) {
 	}
 	defer mockDB.Close()
 
+	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO foghorn.artifacts").
 		WithArgs("artifact-1", "clip", "tenant-1", "stream-a", "", "mp4", "pending", "cluster-origin", sql.NullString{}).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE foghorn.artifacts").
+		WithArgs("artifact-1", "tenant-1").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	deps := &PlaybackDependencies{
 		DB:             mockDB,
@@ -804,6 +812,7 @@ func TestResolveRemoteArtifact_RedirectPreservesOriginCluster(t *testing.T) {
 	}
 	defer mockDB.Close()
 
+	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO foghorn.artifacts").
 		WithArgs(
 			"artifact-1", "clip", "tenant-1",
@@ -813,6 +822,9 @@ func TestResolveRemoteArtifact_RedirectPreservesOriginCluster(t *testing.T) {
 			sql.NullString{String: "cluster-storage", Valid: true}, // storage_cluster_id captures redirect
 		).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE foghorn.artifacts").
+		WithArgs("artifact-1", "tenant-1").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	deps := &PlaybackDependencies{
 		DB: mockDB,

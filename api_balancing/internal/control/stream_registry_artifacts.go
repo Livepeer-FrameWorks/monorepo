@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"frameworks/api_balancing/internal/artifacts"
 	"frameworks/api_balancing/internal/database/foghorndb"
 )
 
@@ -619,7 +620,7 @@ func (r *StreamRegistry) hydrateProcessingFromSQL(ctx context.Context, db artifa
 }
 
 func artifactKindFromType(artifactType string) ArtifactKind {
-	switch strings.ToLower(strings.TrimSpace(artifactType)) {
+	switch artifacts.CanonicalByteKind(artifactType) {
 	case "vod":
 		return ArtifactKindVOD
 	case "dvr":

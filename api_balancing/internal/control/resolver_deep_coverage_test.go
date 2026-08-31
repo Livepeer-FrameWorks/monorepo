@@ -77,10 +77,10 @@ func TestResolveChapterArtifactContent(t *testing.T) {
 		if got == nil {
 			t.Fatal("playable chapter must resolve")
 		}
-		// DECISION: content is a vod+<artifact_hash> from the parent DVR, with
-		// parent-stream/tenant and policy-derived auth.
-		if got.ContentType != "vod" {
-			t.Fatalf("chapter resolves as vod, got %q", got.ContentType)
+		// DECISION: the authority kind stays chapter while Mist routing uses the
+		// hidden vod+<artifact_hash> storage namespace.
+		if got.ContentType != "chapter" {
+			t.Fatalf("chapter authority kind = %q", got.ContentType)
 		}
 		if got.InternalName != "vod+"+chapterHash32 {
 			t.Fatalf("internal name must be vod+<hash>, got %q", got.InternalName)
@@ -181,10 +181,10 @@ func TestResolveArtifactPlayback_ChapterPath(t *testing.T) {
 	if resp.GetPrimary() == nil || resp.GetPrimary().GetNodeId() != "cn1" {
 		t.Fatalf("expected warm chapter node cn1, got %+v", resp.GetPrimary())
 	}
-	// Tenant on the metadata is the parent DVR's tenant, proving the chapter-synth
-	// path (not the generic registry) drove the resolution.
-	if md := resp.GetMetadata(); md == nil || md.GetTenantId() != "t-chap" || md.GetContentType() != "vod" {
-		t.Fatalf("expected parent-DVR tenant vod metadata, got %+v", resp.GetMetadata())
+	// Tenant on the metadata is the parent DVR's tenant and the public content
+	// identity remains chapter even though the bytes use the VOD storage lane.
+	if md := resp.GetMetadata(); md == nil || md.GetTenantId() != "t-chap" || md.GetContentType() != "chapter" {
+		t.Fatalf("expected parent-DVR tenant chapter metadata, got %+v", resp.GetMetadata())
 	}
 }
 

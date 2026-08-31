@@ -87,12 +87,12 @@ func TestRankArtifactNodes(t *testing.T) {
 
 func TestRankNodeScoresForArtifact(t *testing.T) {
 	// Intent: cold-artifact relay reads run on the LOCAL cluster's edge, so
-	// remote-cluster candidates (ClusterID != "") must be dropped; the rest map
+	// remote-cluster candidates (Remote=true) must be dropped; the rest map
 	// 1:1 into ArtifactNodeInfo and are ranked (cap 5).
 	in := []balancer.NodeWithScore{
-		{NodeID: "local-1", Host: "h1", Score: 3, ClusterID: ""},
-		{NodeID: "remote", Host: "h2", Score: 1, ClusterID: "peer-cluster"},
-		{NodeID: "local-2", Host: "h3", Score: 1, ClusterID: ""},
+		{NodeID: "local-1", Host: "h1", Score: 3, ClusterID: "media-local"},
+		{NodeID: "remote", Host: "h2", Score: 1, ClusterID: "peer-cluster", Remote: true},
+		{NodeID: "local-2", Host: "h3", Score: 1, ClusterID: "media-local"},
 	}
 	got := rankNodeScoresForArtifact(in, 0, 0)
 	if len(got) != 2 {

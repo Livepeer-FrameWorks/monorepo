@@ -1,8 +1,21 @@
 -- name: LockThumbnailParentTerminal :one
 SELECT status IN ('deleted', 'failed', 'expired', 'aborted') FROM foghorn.artifacts WHERE artifact_hash = $1 FOR UPDATE;
 -- name: InsertThumbnailAssignment :exec
-INSERT INTO foghorn.thumbnail_task_assignment(attempt_id, tenant_id, asset_key, node_id, destination_cluster, status, version, expiry, durable_backend_local, backend_id)
-VALUES($1, $2, $3, $4, $5, 'assigned', $1, $6, true, $7);
+WITH claim AS (
+    INSERT INTO foghorn.thumbnail_claim_counter (asset_key, value)
+    VALUES (sqlc.arg(asset_key), 4503599627370497)
+    ON CONFLICT (asset_key) DO UPDATE
+    SET value = foghorn.thumbnail_claim_counter.value + 1
+    RETURNING value
+)
+INSERT INTO foghorn.thumbnail_task_assignment(
+    attempt_id, tenant_id, asset_key, node_id, destination_cluster,
+    status, version, expiry, durable_backend_local, backend_id, claim_seq
+)
+SELECT sqlc.arg(attempt_id), sqlc.arg(tenant_id), sqlc.arg(asset_key), sqlc.arg(node_id),
+       sqlc.arg(destination_cluster), 'assigned', sqlc.arg(attempt_id), sqlc.arg(expiry),
+       true, sqlc.narg(backend_id), value
+FROM claim;
 -- name: InsertThumbnailTaskObject :exec
 INSERT INTO foghorn.thumbnail_task_object(attempt_id, file_name, staging_key) VALUES($1, $2, $3);
 -- name: GetThumbnailAssignment :one
@@ -27,6 +40,11 @@ UPDATE foghorn.thumbnail_task_assignment SET status = 'publishing', updated_at =
 WHERE attempt_id = $1 AND status IN ('assigned', 'uploading', 'verifying') AND expiry>NOW() AND publish_lease_token = $2;
 -- name: SettlePublishingThumbnailFailed :exec
 UPDATE foghorn.thumbnail_task_assignment SET status = 'failed', updated_at = NOW() WHERE attempt_id = $1 AND status = 'publishing';
+-- name: LockThumbnailAttemptAsset :exec
+SELECT pg_advisory_xact_lock(
+    sqlc.arg(lock_namespace)::integer,
+    hashtext((SELECT asset_key FROM foghorn.thumbnail_task_assignment WHERE attempt_id = sqlc.arg(attempt_id)))
+);
 -- name: LockPublishableThumbnailAttempt :one
 SELECT asset_key, tenant_id FROM foghorn.thumbnail_task_assignment
 WHERE attempt_id = $1 AND status = 'publishing' AND expiry>NOW() AND publish_lease_token = $2 FOR UPDATE;
@@ -38,7 +56,11 @@ SELECT active_version FROM foghorn.thumbnail_active_pointer WHERE asset_key = $1
 INSERT INTO foghorn.thumbnail_active_pointer(asset_key, tenant_id, active_version, active_token, updated_at) VALUES($2, $3, $1, $4, NOW())
 ON CONFLICT(asset_key) DO UPDATE SET active_version = EXCLUDED.active_version, active_token = EXCLUDED.active_token, tenant_id = EXCLUDED.tenant_id, updated_at = NOW()
 WHERE foghorn.thumbnail_active_pointer.tenant_id = EXCLUDED.tenant_id
-AND (SELECT claim_seq FROM foghorn.thumbnail_task_assignment WHERE attempt_id = EXCLUDED.active_version)>=(SELECT claim_seq FROM foghorn.thumbnail_task_assignment WHERE attempt_id = foghorn.thumbnail_active_pointer.active_version);
+AND (
+    foghorn.thumbnail_active_pointer.active_version = EXCLUDED.active_version
+    OR (SELECT claim_seq FROM foghorn.thumbnail_task_assignment WHERE attempt_id = EXCLUDED.active_version)
+       > (SELECT claim_seq FROM foghorn.thumbnail_task_assignment WHERE attempt_id = foghorn.thumbnail_active_pointer.active_version)
+);
 -- name: MarkThumbnailSuperseded :exec
 UPDATE foghorn.thumbnail_task_assignment SET superseded_at = NOW() WHERE attempt_id = $1;
 -- name: MarkThumbnailPublished :execrows
@@ -66,21 +88,19 @@ INSERT INTO foghorn.staging_cleanup_queue(object_key, next_attempt_at, backend_i
 ON CONFLICT(object_key) DO UPDATE SET next_attempt_at = GREATEST(foghorn.staging_cleanup_queue.next_attempt_at, EXCLUDED.next_attempt_at), leased_until = NULL, lease_token = NULL, backend_id = COALESCE(foghorn.staging_cleanup_queue.backend_id, EXCLUDED.backend_id);
 -- name: DequeueThumbnailCleanup :exec
 DELETE FROM foghorn.staging_cleanup_queue WHERE object_key = $1;
--- name: ThumbnailAttemptFailed :one
-SELECT status = 'failed' FROM foghorn.thumbnail_task_assignment WHERE attempt_id = $1;
 -- name: ReconstructThumbnailAttemptObjectKeys :many
 SELECT a.asset_key, COALESCE(NULLIF(a.publish_lease_token, ''), a.version) AS version, o.file_name FROM foghorn.thumbnail_task_object o
 JOIN foghorn.thumbnail_task_assignment a ON a.attempt_id = o.attempt_id WHERE o.attempt_id = $1;
 -- name: ListThumbnailDestinations :many
 SELECT destination_cluster, COALESCE(backend_id, '') AS backend_id, bool_or(durable_backend_local) AS backend_local
 FROM foghorn.thumbnail_task_assignment WHERE tenant_id = $1 AND asset_key = $2 GROUP BY destination_cluster, backend_id;
--- name: DeleteThumbnailActivePointer :exec
-DELETE FROM foghorn.thumbnail_active_pointer WHERE tenant_id = $1 AND asset_key = $2;
 -- name: DeleteThumbnailAssignments :exec
 DELETE FROM foghorn.thumbnail_task_assignment WHERE tenant_id = $1 AND asset_key = $2;
 -- name: ListAssetThumbnailObjectKeys :many
 SELECT a.attempt_id, COALESCE(NULLIF(a.publish_lease_token, ''), a.version) AS version, COALESCE(o.version_key, '') AS version_key, o.file_name
-FROM foghorn.thumbnail_task_assignment a JOIN foghorn.thumbnail_task_object o ON o.attempt_id = a.attempt_id WHERE a.tenant_id = $1 AND a.asset_key = $2;
+FROM foghorn.thumbnail_task_assignment a JOIN foghorn.thumbnail_task_object o ON o.attempt_id = a.attempt_id
+WHERE a.tenant_id = $1 AND a.asset_key = $2
+FOR UPDATE OF a;
 -- name: ListThumbnailStagingKeys :many
 SELECT staging_key FROM foghorn.thumbnail_task_object WHERE attempt_id = $1;
 -- name: ListThumbnailVersionKeys :many

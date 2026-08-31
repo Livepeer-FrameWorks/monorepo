@@ -154,7 +154,9 @@ func expectSessionFinalized(mock sqlmock.Sqlmock, generation string) {
 			AddRow(generation, closingClaimToken, "demo-media"))
 	mock.ExpectQuery(`foghorn\.artifacts`).
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "storage_node_id"}))
-	mock.ExpectQuery(`nextval`).WillReturnRows(sqlmock.NewRows([]string{"nextval"}).AddRow(int64(2)))
+	mock.ExpectQuery(`INSERT INTO foghorn.source_projection_revision_counter`).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"revision"}).AddRow(int64(2)))
 	expectOfflineEffectInsert(mock)
 	mock.ExpectCommit()
 }

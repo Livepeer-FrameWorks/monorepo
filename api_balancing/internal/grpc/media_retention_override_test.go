@@ -53,11 +53,11 @@ func TestOverrideArtifactRetention(t *testing.T) {
 		defer done()
 		// One transaction: parent update + child-chapter propagation + commit.
 		mock.ExpectBegin()
-		mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET retention_until = \$1\s+WHERE artifact_hash = \$2\s+AND tenant_id::text = \$3\s+AND artifact_type = \$4\s+AND status IN \('completed', 'completed_partial', 'ready', 'failed'\)`).
+		mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET retention_until = \$1\s+WHERE artifact_hash = \$2\s+AND tenant_id::text = \$3\s+AND artifact_type = \$4\s+AND federated_pointer = false\s+AND status IN \('completed', 'completed_partial', 'ready', 'failed'\)`).
 			WithArgs(sqlmock.AnyArg(), "h", "t", "dvr").
 			WillReturnResult(sqlmock.NewResult(0, 1))
-		mock.ExpectExec(`UPDATE foghorn.artifacts a\s+SET retention_until = \$2.*FROM foghorn.dvr_chapters c`).
-			WithArgs("h", sqlmock.AnyArg()).
+		mock.ExpectExec(`UPDATE foghorn.artifacts a\s+SET retention_until = \$1.*FROM foghorn.dvr_chapters c[\s\S]*a.tenant_id = \$3::uuid[\s\S]*a.federated_pointer = false`).
+			WithArgs(sqlmock.AnyArg(), "h", "t").
 			WillReturnResult(sqlmock.NewResult(0, 2))
 		mock.ExpectCommit()
 		resp, err := s.OverrideArtifactRetention(context.Background(), &foghornpb.OverrideArtifactRetentionRequest{
@@ -84,8 +84,8 @@ func TestOverrideArtifactRetention(t *testing.T) {
 		mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET retention_until = \$1`).
 			WithArgs(nil, "h", "t", "dvr").
 			WillReturnResult(sqlmock.NewResult(0, 1))
-		mock.ExpectExec(`UPDATE foghorn.artifacts a\s+SET retention_until = \$2.*FROM foghorn.dvr_chapters c`).
-			WithArgs("h", nil).
+		mock.ExpectExec(`UPDATE foghorn.artifacts a\s+SET retention_until = \$1.*FROM foghorn.dvr_chapters c[\s\S]*a.tenant_id = \$3::uuid[\s\S]*a.federated_pointer = false`).
+			WithArgs(nil, "h", "t").
 			WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectCommit()
 		resp, err := s.OverrideArtifactRetention(context.Background(), &foghornpb.OverrideArtifactRetentionRequest{

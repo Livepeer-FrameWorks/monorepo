@@ -1,16 +1,34 @@
 package control
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
 
+	"frameworks/api_balancing/internal/ingesterrors"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/sirupsen/logrus"
 )
+
+func resetBlockingTriggerReplayForTest(t *testing.T) {
+	t.Helper()
+	blockingTriggerReplay.Lock()
+	previousReplayEntries := blockingTriggerReplay.entries
+	previousSweep := blockingTriggerReplay.lastSweep
+	blockingTriggerReplay.entries = map[string]*blockingTriggerReplayEntry{}
+	blockingTriggerReplay.lastSweep = time.Time{}
+	blockingTriggerReplay.Unlock()
+	t.Cleanup(func() {
+		blockingTriggerReplay.Lock()
+		blockingTriggerReplay.entries = previousReplayEntries
+		blockingTriggerReplay.lastSweep = previousSweep
+		blockingTriggerReplay.Unlock()
+	})
+}
 
 type captureMistTriggerProcessor struct {
 	last             *ipcpb.MistTrigger
@@ -80,6 +98,161 @@ func TestProcessMistTrigger_ReplaysBlockingResultByMistTriggerUUID(t *testing.T)
 	}
 	if response.GetResponse() != "live+resolved" || response.GetAction() != ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_VALUE {
 		t.Fatalf("replayed result = (%q, %s), want value live+resolved", response.GetResponse(), response.GetAction())
+	}
+}
+
+func TestProcessMistTrigger_ReplayWaitStopsWithControlStream(t *testing.T) {
+	prevProcessor := mistTriggerProcessor
+	t.Cleanup(func() { mistTriggerProcessor = prevProcessor })
+	resetBlockingTriggerReplayForTest(t)
+
+	key := "node-1\x1fPLAY_REWRITE\x1fwedged-attempt"
+	if _, owner := acquireBlockingTriggerReplay(key); !owner {
+		t.Fatal("failed to install in-flight replay owner")
+	}
+	capture := &captureMistTriggerProcessor{response: "must-not-run"}
+	mistTriggerProcessor = capture
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	stream := &captureStream{ctx: ctx}
+
+	processMistTrigger(&ipcpb.MistTrigger{
+		TriggerType: "PLAY_REWRITE",
+		TriggerUuid: "wedged-attempt",
+		Blocking:    true,
+		RequestId:   "waiter-request",
+	}, NodeSession{CanonicalNodeID: "node-1"}, stream, logging.Logger(logrus.New()))
+
+	if capture.calls != 0 || stream.lastSent() != nil {
+		t.Fatalf("cancelled replay waiter executed/sent: calls=%d sent=%v", capture.calls, stream.lastSent())
+	}
+}
+
+func TestProcessMistTrigger_DoesNotReplayTransientBlockingFailure(t *testing.T) {
+	prevProcessor := mistTriggerProcessor
+	t.Cleanup(func() { mistTriggerProcessor = prevProcessor })
+
+	blockingTriggerReplay.Lock()
+	previousReplayEntries := blockingTriggerReplay.entries
+	previousSweep := blockingTriggerReplay.lastSweep
+	blockingTriggerReplay.entries = map[string]*blockingTriggerReplayEntry{}
+	blockingTriggerReplay.lastSweep = time.Time{}
+	blockingTriggerReplay.Unlock()
+	t.Cleanup(func() {
+		blockingTriggerReplay.Lock()
+		blockingTriggerReplay.entries = previousReplayEntries
+		blockingTriggerReplay.lastSweep = previousSweep
+		blockingTriggerReplay.Unlock()
+	})
+
+	capture := &captureMistTriggerProcessor{err: errors.New("temporary database failure")}
+	mistTriggerProcessor = capture
+	session := NodeSession{CanonicalNodeID: "node-1", ClusterID: "cluster-1"}
+	trigger := func(requestID string) *ipcpb.MistTrigger {
+		return &ipcpb.MistTrigger{
+			TriggerType: "INGEST_RUNTIME_ABSENT",
+			TriggerUuid: "mist-attempt-1",
+			Blocking:    true,
+			RequestId:   requestID,
+		}
+	}
+
+	firstStream := &captureStream{}
+	processMistTrigger(trigger("request-1"), session, firstStream, logging.Logger(logrus.New()))
+	if response := firstStream.lastSent().GetMistTriggerResponse(); !response.GetAbort() {
+		t.Fatalf("first response abort = false, want transient failure")
+	}
+
+	capture.err = nil
+	capture.response = "resolved"
+	secondStream := &captureStream{}
+	processMistTrigger(trigger("request-2"), session, secondStream, logging.Logger(logrus.New()))
+
+	if capture.calls != 2 {
+		t.Fatalf("processor calls = %d, want retry to execute handler", capture.calls)
+	}
+	response := secondStream.lastSent().GetMistTriggerResponse()
+	if response.GetAbort() || response.GetResponse() != "resolved" {
+		t.Fatalf("retry response = (%q, abort=%v), want successful fresh result", response.GetResponse(), response.GetAbort())
+	}
+}
+
+func TestProcessMistTrigger_ReplaysTerminalBlockingRejection(t *testing.T) {
+	prevProcessor := mistTriggerProcessor
+	t.Cleanup(func() { mistTriggerProcessor = prevProcessor })
+
+	blockingTriggerReplay.Lock()
+	previousReplayEntries := blockingTriggerReplay.entries
+	previousSweep := blockingTriggerReplay.lastSweep
+	blockingTriggerReplay.entries = map[string]*blockingTriggerReplayEntry{}
+	blockingTriggerReplay.lastSweep = time.Time{}
+	blockingTriggerReplay.Unlock()
+	t.Cleanup(func() {
+		blockingTriggerReplay.Lock()
+		blockingTriggerReplay.entries = previousReplayEntries
+		blockingTriggerReplay.lastSweep = previousSweep
+		blockingTriggerReplay.Unlock()
+	})
+
+	capture := &captureMistTriggerProcessor{err: ingesterrors.New(
+		ipcpb.IngestErrorCode_INGEST_ERROR_INVALID_STREAM_KEY,
+		"invalid stream key",
+	)}
+	mistTriggerProcessor = capture
+	session := NodeSession{CanonicalNodeID: "node-1", ClusterID: "cluster-1"}
+	trigger := func(requestID string) *ipcpb.MistTrigger {
+		return &ipcpb.MistTrigger{
+			TriggerType: "PUSH_REWRITE",
+			TriggerUuid: "terminal-attempt-1",
+			Blocking:    true,
+			RequestId:   requestID,
+		}
+	}
+
+	firstStream := &captureStream{}
+	processMistTrigger(trigger("request-1"), session, firstStream, logging.Logger(logrus.New()))
+	capture.err = nil
+	capture.response = "live+must-not-run"
+	secondStream := &captureStream{}
+	processMistTrigger(trigger("request-2"), session, secondStream, logging.Logger(logrus.New()))
+
+	if capture.calls != 1 {
+		t.Fatalf("processor calls = %d, want terminal outcome replayed", capture.calls)
+	}
+	response := secondStream.lastSent().GetMistTriggerResponse()
+	if !response.GetAbort() || response.GetErrorCode() != ipcpb.IngestErrorCode_INGEST_ERROR_INVALID_STREAM_KEY {
+		t.Fatalf("replayed terminal response = abort:%v code:%s", response.GetAbort(), response.GetErrorCode())
+	}
+}
+
+func TestProcessMistTrigger_ReplaysExplicitTerminalInternalOutcome(t *testing.T) {
+	prevProcessor := mistTriggerProcessor
+	t.Cleanup(func() { mistTriggerProcessor = prevProcessor })
+	resetBlockingTriggerReplayForTest(t)
+
+	capture := &captureMistTriggerProcessor{err: ingesterrors.NewTerminal(
+		ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL,
+		"ingest session already ended",
+	)}
+	mistTriggerProcessor = capture
+	session := NodeSession{CanonicalNodeID: "node-1"}
+	trigger := func(requestID string) *ipcpb.MistTrigger {
+		return &ipcpb.MistTrigger{
+			TriggerType: "PUSH_REWRITE", TriggerUuid: "terminal-internal-1", Blocking: true, RequestId: requestID,
+		}
+	}
+
+	processMistTrigger(trigger("request-1"), session, &captureStream{}, logging.Logger(logrus.New()))
+	capture.err = nil
+	capture.response = "must-not-run"
+	second := &captureStream{}
+	processMistTrigger(trigger("request-2"), session, second, logging.Logger(logrus.New()))
+
+	if capture.calls != 1 {
+		t.Fatalf("processor calls = %d, want terminal internal outcome replayed", capture.calls)
+	}
+	if response := second.lastSent().GetMistTriggerResponse(); !response.GetAbort() || response.GetErrorCode() != ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL {
+		t.Fatalf("replayed response = abort:%v code:%s", response.GetAbort(), response.GetErrorCode())
 	}
 }
 

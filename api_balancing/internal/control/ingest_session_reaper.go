@@ -18,6 +18,7 @@ type OpenIngestSession struct {
 	TenantID     string
 	NodeID       string
 	InternalName string
+	ClaimToken   string
 }
 
 // NodePresenceFunc reports whether a node currently has a control connection to ANY Foghorn replica in
@@ -60,7 +61,7 @@ func ListOpenIngestSessions(ctx context.Context) ([]OpenIngestSession, error) {
 	}
 	out := make([]OpenIngestSession, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, OpenIngestSession{SessionID: row.SessionID, TenantID: row.TenantID, NodeID: row.NodeID, InternalName: row.StreamInternalName})
+		out = append(out, OpenIngestSession{SessionID: row.SessionID, TenantID: row.TenantID, NodeID: row.NodeID, InternalName: row.StreamInternalName, ClaimToken: row.StartTriggerUuid})
 	}
 	return out, nil
 }
@@ -89,7 +90,7 @@ func RetireIngestSession(ctx context.Context, sessionID, tenantID, internalName,
 	if lockErr := qtx.AcquireDVRStartLock(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
 		return false, fmt.Errorf("lock ingest session retirement: %w", lockErr)
 	}
-	nodeID, err := qtx.RetireIngestSession(ctx, foghorndb.RetireIngestSessionParams{
+	retiredRow, err := qtx.RetireIngestSession(ctx, foghorndb.RetireIngestSessionParams{
 		EndedReason: reason, SessionID: sessionID, TenantID: tenantID, StreamInternalName: internalName,
 	})
 	if errors.Is(err, sql.ErrNoRows) {
@@ -98,11 +99,12 @@ func RetireIngestSession(ctx context.Context, sessionID, tenantID, internalName,
 	if err != nil {
 		return false, fmt.Errorf("end ingest session: %w", err)
 	}
+	nodeID := retiredRow.NodeID
 	claims, err := ClaimDVRStops(ctx, tx, `ingest_generation = $1::uuid AND tenant_id::text = $2`, sessionID, tenantID)
 	if err != nil {
 		return false, fmt.Errorf("claim DVR stop on retire: %w", err)
 	}
-	revision, err := nextSourceRevision(ctx, tx)
+	revision, err := nextSourceRevision(ctx, tx, tenantID, internalName)
 	if err != nil {
 		return false, err
 	}
@@ -144,11 +146,11 @@ func RetireIngestSessionByClaim(ctx context.Context, tenantID, internalName, cla
 		return "", false, fmt.Errorf("retire lost placement claim: %w", err)
 	}
 	sessionID, nodeID := retiredRow.SessionID, retiredRow.NodeID
-	claims, err := ClaimDVRStops(ctx, tx, `ingest_generation=$1::uuid AND tenant_id::text=$2`, sessionID, tenantID)
+	claims, err := ClaimDVRStops(ctx, tx, `ingest_generation = $1::uuid AND tenant_id::text = $2`, sessionID, tenantID)
 	if err != nil {
 		return "", false, err
 	}
-	revision, err := nextSourceRevision(ctx, tx)
+	revision, err := nextSourceRevision(ctx, tx, tenantID, internalName)
 	if err != nil {
 		return "", false, err
 	}
@@ -285,10 +287,10 @@ func ReapNeverProjectedIngestSessions(ctx context.Context, olderThan time.Durati
 	if err != nil {
 		return 0, fmt.Errorf("list never-projected ingest sessions: %w", err)
 	}
-	type pending struct{ id, tenant, stream string }
+	type pending struct{ id, tenant, stream, claimToken string }
 	candidates := make([]pending, 0, len(rows))
 	for _, row := range rows {
-		candidates = append(candidates, pending{id: row.SessionID, tenant: row.TenantID, stream: row.StreamInternalName})
+		candidates = append(candidates, pending{id: row.SessionID, tenant: row.TenantID, stream: row.StreamInternalName, claimToken: row.StartTriggerUuid})
 	}
 	retired := 0
 	for _, candidate := range candidates {
@@ -307,7 +309,7 @@ func ReapNeverProjectedIngestSessions(ctx context.Context, olderThan time.Durati
 				err = nil
 			} else if err == nil {
 				var revision int64
-				revision, err = nextSourceRevision(ctx, tx)
+				revision, err = nextSourceRevision(ctx, tx, candidate.tenant, candidate.stream)
 				if err == nil {
 					err = enqueueOfflineEffectTx(ctx, tx, candidate.tenant, candidate.stream, nodeID, candidate.id, revision, OfflineEffectIntent{})
 				}

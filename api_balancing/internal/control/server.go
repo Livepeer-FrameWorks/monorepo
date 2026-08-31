@@ -1,6 +1,7 @@
 package control
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/rand"
@@ -44,6 +45,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/nodeidentity"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	dnspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/dns"
@@ -65,6 +67,7 @@ import (
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -127,6 +130,10 @@ func buildBootstrapEdgeNodeRequest(ctx context.Context, reg *ipcpb.Register, nod
 	}
 
 	req := &quartermasterpb.BootstrapEdgeNodeRequest{Token: token, Hostname: nodeID, Ips: []string{host}, ServedClusterIds: servedClusterIDs}
+	if reg != nil {
+		req.NodeIdentityPublicKeyEd25519 = append([]byte(nil), reg.GetNodeIdentityPublicKeyEd25519()...)
+		req.RotateNodeIdentity = reg.GetNodeIdentityRotationRequested()
+	}
 	if strings.TrimSpace(targetClusterID) != "" {
 		targetCluster := strings.TrimSpace(targetClusterID)
 		req.TargetClusterId = &targetCluster
@@ -538,8 +545,11 @@ type servedClustersAPI interface {
 var servedClustersClient atomic.Pointer[qmclient.GRPCClient]
 
 var navigatorClient *navclient.Client
+var configSeedApplyAckWriter configSeedApplyAckRecorder
 var serverCert serverCertHolder
 var errStreamNotCurrent = errors.New("helmsman control stream is not current for node")
+var errConfigSeedApplyAckDurabilityUnavailable = errors.New("ConfigSeed apply ACK durability unavailable")
+var errConfigSeedApplyAckIdentityMissing = errors.New("ConfigSeed apply ACK requires a registered node and cluster")
 
 // serverCertHolder stores the current server TLS certificate set, updated
 // atomically by the CertRefreshLoop when file-based or Navigator-backed TLS
@@ -551,6 +561,10 @@ type serverCertHolder struct {
 type serverCertSet struct {
 	defaultCert *tls.Certificate
 	byName      map[string]*tls.Certificate
+}
+
+type configSeedApplyAckRecorder interface {
+	Enqueue(context.Context, string, string, *ipcpb.ConfigSeedApplyResult) error
 }
 
 func (h *serverCertHolder) StoreBundles(bundles []*ipcpb.TLSCertBundle) error {
@@ -1368,6 +1382,20 @@ func reconcileNodeCluster(ctx context.Context, canonicalNodeID, clusterID string
 // SetNavigatorClient sets the Navigator client used for cluster TLS bundle retrieval.
 func SetNavigatorClient(c *navclient.Client) { navigatorClient = c }
 
+// SetConfigSeedApplyAckWriter installs Foghorn's local durable boundary for
+// Helmsman apply results. Navigator delivery happens from the outbox worker.
+func SetConfigSeedApplyAckWriter(w configSeedApplyAckRecorder) { configSeedApplyAckWriter = w }
+
+func acceptConfigSeedApplyResult(ctx context.Context, writer configSeedApplyAckRecorder, session NodeSession, ack *ipcpb.ConfigSeedApplyResult) error {
+	if writer == nil {
+		return errConfigSeedApplyAckDurabilityUnavailable
+	}
+	if session.NodeID() == "" || strings.TrimSpace(session.ClusterID) == "" {
+		return errConfigSeedApplyAckIdentityMissing
+	}
+	return writer.Enqueue(ctx, session.NodeID(), session.ClusterID, ack)
+}
+
 // SetGeoIPCache sets the GeoIP cache for cached lookup usage.
 func SetGeoIPCache(c *cache.Cache) { geoipCache = c }
 
@@ -1453,28 +1481,9 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 				}).Warn("Rejecting control registration below the minimum protocol version; upgrade the edge sidecar")
 				return status.Errorf(codes.FailedPrecondition, "control protocol version %d is below the minimum %d; upgrade the edge sidecar", connProtocolVersion, MinControlProtocolVersion)
 			}
-
-			// Issue this connection its ownership fence BEFORE it becomes dispatch-visible. Fail CLOSED: a
-			// connection with no fence would emit unversioned reports that bypass ordering, so we
-			// reject registration and let Helmsman reconnect rather than accept an unfenced owner.
-			fence, ferr := AllocateNodeControlFence(context.Background())
-			if ferr != nil {
-				registry.log.WithError(ferr).WithField("node_id", nodeID).Error("Failed to allocate node control fence; rejecting registration")
-				return status.Error(codes.Unavailable, "control fence allocation failed")
-			}
-			connFence = fence
-
-			// Build the connection but keep it OUT of the dispatchable registry until every ownership claim
-			// below succeeds. Concurrent command dispatch resolves connections through registry.conns, so a
-			// connection published before it owns the node could be selected and then lose the fenced race.
-			newConn := &conn{
-				stream:          stream,
-				last:            time.Now(),
-				rawNodeID:       nodeID,
-				peerAddr:        peerAddr,
-				relayBaseURL:    strings.TrimRight(x.Register.GetRelayBaseUrl(), "/"),
-				protocolVersion: x.Register.GetControlProtocolVersion(),
-				fence:           fence,
+			if proofErr := nodeidentity.VerifyRegistration(x.Register, time.Now()); proofErr != nil {
+				registry.log.WithError(proofErr).WithField("node_id", nodeID).Warn("Rejecting control registration without valid node proof")
+				return status.Error(codes.Unauthenticated, "node identity proof is invalid")
 			}
 
 			cleanup := func() {
@@ -1492,6 +1501,11 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 			tenantID := ""
 			clusterID := ""
 			host := ""
+			var fingerprintResolutionErr error
+			identityResolvedByControlPlane := false
+			identityResolvedFromLocalAdmission := false
+			durableFingerprintMatch := quartermasterpb.NodeFingerprintMatchSource_NODE_FINGERPRINT_MATCH_SOURCE_UNSPECIFIED
+			durableAdmissionEligible := false
 			{
 				// Build resolver request
 				if md, ok := metadata.FromIncomingContext(stream.Context()); ok {
@@ -1515,7 +1529,10 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 				// self-asserted id would let it mutate a victim node's BinHost/liveness/routing/DNS. The write
 				// happens only AFTER resolution succeeds, on the canonical id (see SetNodeConnectionInfo below).
 
-				fpReq := &quartermasterpb.ResolveNodeFingerprintRequest{PeerIp: host}
+				fpReq := &quartermasterpb.ResolveNodeFingerprintRequest{
+					PeerIp:                       host,
+					NodeIdentityPublicKeyEd25519: append([]byte(nil), x.Register.GetNodeIdentityPublicKeyEd25519()...),
+				}
 				if x.Register != nil && x.Register.Fingerprint != nil {
 					fp := x.Register.Fingerprint
 					fpReq.LocalIpv4 = append(fpReq.LocalIpv4, fp.GetLocalIpv4()...)
@@ -1530,16 +1547,33 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 					}
 				}
 				if resolveNodeFingerprintFn != nil {
-					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-					resp, err := resolveNodeFingerprintFn(ctx, fpReq)
-					cancel()
-					if err == nil && resp != nil {
+					release, acquired := acquireNodeAdmissionControlPlaneSlot()
+					var resp *quartermasterpb.ResolveNodeFingerprintResponse
+					var err error
+					if !acquired {
+						incNodeAdmissionEvent("preauth", "saturated")
+						err = status.Error(codes.ResourceExhausted, "node identity authority concurrency limit reached")
+					} else {
+						ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+						resp, err = resolveNodeFingerprintFn(ctx, fpReq)
+						cancel()
+						release()
+					}
+					if err == nil && resp != nil && bytes.Equal(resp.GetNodeIdentityPublicKeyEd25519(), x.Register.GetNodeIdentityPublicKeyEd25519()) {
 						tenantID = resp.TenantId
 						if resp.CanonicalNodeId != "" {
 							canonicalNodeID = resp.CanonicalNodeId
 						}
+						identityResolvedByControlPlane = tenantID != ""
+						durableFingerprintMatch = resp.GetMatchSource()
+						durableAdmissionEligible = durableFingerprintMatch == quartermasterpb.NodeFingerprintMatchSource_NODE_FINGERPRINT_MATCH_SOURCE_MACHINE_ID ||
+							durableFingerprintMatch == quartermasterpb.NodeFingerprintMatchSource_NODE_FINGERPRINT_MATCH_SOURCE_MACS
 						registry.log.WithFields(logging.Fields{"node_id": canonicalNodeID, "tenant_id": tenantID}).Info("Resolved tenant via fingerprint")
+					} else if err == nil && resp != nil {
+						fingerprintResolutionErr = status.Error(codes.PermissionDenied, "node identity key does not match enrolled fingerprint")
+						registry.log.WithField("node_id", nodeID).Warn("Fingerprint resolved to a different enrolled node key")
 					} else if err != nil {
+						fingerprintResolutionErr = err
 						registry.log.WithError(err).WithField("node_id", nodeID).Debug("Fingerprint resolution did not match; enrollment token may be required")
 					}
 				}
@@ -1547,6 +1581,36 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 
 			fingerprintResolved := tenantID != ""
 			tok := strings.TrimSpace(x.Register.GetEnrollmentToken())
+			if !fingerprintResolved && (status.Code(fingerprintResolutionErr) == codes.NotFound || status.Code(fingerprintResolutionErr) == codes.PermissionDenied) {
+				revokeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				revokeErr := revokeDurableNodeAdmission(revokeCtx, x.Register)
+				cancel()
+				if revokeErr != nil {
+					incNodeAdmissionEvent("revoke", "failure")
+					registry.log.WithError(revokeErr).WithField("node_id", nodeID).Warn("Could not remove authoritatively rejected local node admission")
+				} else {
+					incNodeAdmissionEvent("revoke", "success")
+				}
+			}
+			if !fingerprintResolved && tok == "" && nodeIdentityAuthorityUnavailable(fingerprintResolutionErr, resolveNodeFingerprintFn != nil) {
+				lookupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				admission, admissionErr := loadDurableNodeAdmission(lookupCtx, x.Register)
+				cancel()
+				if admissionErr == nil {
+					incNodeAdmissionEvent("load", "success")
+					canonicalNodeID = admission.canonicalNodeID
+					tenantID = admission.tenantID
+					clusterID = admission.clusterID
+					fingerprintResolved = true
+					identityResolvedFromLocalAdmission = true
+					registry.log.WithFields(logging.Fields{
+						"node_id": canonicalNodeID, "tenant_id": tenantID, "cluster_id": clusterID,
+					}).Info("Recovered previously authenticated node admission from the local media cell")
+				} else {
+					incNodeAdmissionEvent("load", "failure")
+					registry.log.WithError(admissionErr).WithField("node_id", nodeID).Debug("No usable local node admission during identity-authority outage")
+				}
+			}
 
 			if !fingerprintResolved && tok == "" {
 				registry.log.WithField("node_id", nodeID).Error("New edge node missing enrollment token")
@@ -1566,10 +1630,20 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 					cleanup()
 					return nil
 				}
+				release, acquired := acquireNodeAdmissionControlPlaneSlot()
+				if !acquired {
+					incNodeAdmissionEvent("preauth", "saturated")
+					if sendErr := sendControlError(stream, "ENROLLMENT_UNAVAILABLE", "enrollment service is busy; retry safely"); sendErr != nil {
+						registry.log.WithError(sendErr).WithField("node_id", nodeID).Debug("Could not report enrollment saturation")
+					}
+					cleanup()
+					return status.Error(codes.ResourceExhausted, "node enrollment concurrency limit reached")
+				}
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
 				req := buildBootstrapEdgeNodeRequest(stream.Context(), x.Register, nodeID, peerAddr, tok, localClusterID, ServedClustersSnapshot())
 				resp, err := quartermasterClient.BootstrapEdgeNode(ctx, req)
+				cancel()
+				release()
 				if err != nil {
 					if categorizeEnrollmentError(err) {
 						registry.log.WithError(err).WithField("node_id", nodeID).Error("Edge enrollment failed: invalid token")
@@ -1592,10 +1666,58 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 				}
 				tenantID = resp.TenantId
 				clusterID = resp.ClusterId
+				identityResolvedByControlPlane = tenantID != ""
+				durableFingerprintMatch = quartermasterpb.NodeFingerprintMatchSource_NODE_FINGERPRINT_MATCH_SOURCE_UNSPECIFIED
+				durableAdmissionEligible = identityResolvedByControlPlane
 				registry.log.WithFields(logging.Fields{"node_id": canonicalNodeID, "tenant_id": tenantID, "cluster_id": clusterID}).Info("Edge node enrolled via Quartermaster")
 			}
+			if fingerprintResolved || identityResolvedByControlPlane {
+				proofCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				proofErr := consumeNodeIdentityProofFn(proofCtx, x.Register)
+				cancel()
+				if proofErr != nil {
+					registry.log.WithError(proofErr).WithField("node_id", nodeID).Warn("Rejecting replayed or unpersistable node identity proof")
+					cleanup()
+					return status.Error(codes.Unauthenticated, "node identity proof was already used")
+				}
+			}
 
-			clusterID = reconcileNodeCluster(stream.Context(), canonicalNodeID, clusterID, registry.log)
+			if !identityResolvedFromLocalAdmission {
+				clusterID = reconcileNodeCluster(stream.Context(), canonicalNodeID, clusterID, registry.log)
+			}
+			if identityResolvedByControlPlane && durableAdmissionEligible {
+				persistCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				persistErr := persistDurableNodeAdmission(persistCtx, canonicalNodeID, tenantID, clusterID, x.Register, durableFingerprintMatch)
+				cancel()
+				if persistErr != nil {
+					incNodeAdmissionEvent("persist", "failure")
+					registry.log.WithError(persistErr).WithField("node_id", canonicalNodeID).
+						Warn("Could not persist authenticated node admission for control-plane outage recovery")
+				} else {
+					incNodeAdmissionEvent("persist", "success")
+				}
+			}
+
+			// Allocate ordering state only after the node has proved possession of its
+			// enrolled key and its identity has resolved. Garbage registrations therefore
+			// cannot advance the node's durable ownership counter or create ownership state.
+			fence, ferr := AllocateNodeControlFence(stream.Context(), canonicalNodeID)
+			if ferr != nil {
+				registry.log.WithError(ferr).WithField("node_id", nodeID).Error("Failed to allocate node control fence; rejecting registration")
+				return status.Error(codes.Unavailable, "control fence allocation failed")
+			}
+			connFence = fence
+			// Keep the connection out of the dispatchable registry until every ownership
+			// claim below succeeds.
+			newConn := &conn{
+				stream:          stream,
+				last:            time.Now(),
+				rawNodeID:       nodeID,
+				peerAddr:        peerAddr,
+				relayBaseURL:    strings.TrimRight(x.Register.GetRelayBaseUrl(), "/"),
+				protocolVersion: x.Register.GetControlProtocolVersion(),
+				fence:           fence,
+			}
 
 			// Identity is now RESOLVED and authenticated. Acquire fenced Redis ownership of the CANONICAL id
 			// (fail CLOSED on err/superseded) — this is the FIRST ownership mutation, so a registration rejected
@@ -1687,6 +1809,27 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 					Info("Node registered under its canonical id; the divergent asserted raw id is not aliased (unverified)")
 			}
 
+			// A completed activation proves only that the prior Helmsman/Mist process created the
+			// admitted generation's outputs. Before this new connection becomes dispatch-visible,
+			// re-arm those exact retained target sets under its higher authenticated fence. This is
+			// local durable recovery: it does not resolve current stream policy from Commodore, and it
+			// does not substitute targets from a newer authority version onto an older live publisher.
+			rearmCtx, rearmCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			rearmed, rearmErr := RequeueActivePushTargetActivationsForNode(rearmCtx, canonicalNodeID, connFence, GetInstanceID())
+			rearmCancel()
+			if rearmErr != nil {
+				// Registration still establishes the node's authenticated local control path. The
+				// durable Foghorn database is the only dependency here (never Commodore/QM/Purser);
+				// if it is unavailable, do not turn that into a control-plane-style edge outage or
+				// discard the existing process state. A later reconnect re-attempts the re-arm.
+				registry.log.WithError(rearmErr).WithField("node_id", canonicalNodeID).
+					Warn("Active push-target restart recovery could not be armed on this registration")
+			}
+			if rearmed > 0 {
+				registry.log.WithFields(logging.Fields{"node_id": canonicalNodeID, "activations": rearmed}).
+					Info("Re-armed active push-target outputs for Helmsman restart recovery")
+			}
+
 			registry.mu.Lock()
 			var retire *conn
 			if prevConn, ok := registry.conns[canonicalNodeID]; ok && prevConn != newConn {
@@ -1701,7 +1844,7 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 				retireConn(retire)
 			}
 			registry.log.WithField("node_id", canonicalNodeID).Info("Helmsman registered")
-			state.DefaultManager().SetNodeInfo(canonicalNodeID, "", true, nil, nil, "", "", nil)
+			state.DefaultManager().TouchNode(canonicalNodeID, true)
 
 			// Hydrate the managed-stream lastSent map from the sidecar's
 			// post-restart applied set so a Foghorn restart followed by a
@@ -1720,12 +1863,42 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 
 			// Determine operational mode: DB-persisted wins over Helmsman's request
 			operationalMode := resolveOperationalMode(canonicalNodeID, x.Register.GetRequestedMode())
-			seed := composeConfigSeed(canonicalNodeID, x.Register.GetRoles(), peerAddr, operationalMode, clusterID)
+			observeCtx, observeCancel := context.WithTimeout(context.Background(), 3*time.Second)
+			observeErr := observeAppliedSeedVersion(observeCtx, canonicalNodeID, x.Register.GetAppliedConfigSeedVersion())
+			observeCancel()
+			if observeErr != nil {
+				fields := logging.Fields{"node_id": canonicalNodeID, "applied_seed_version": x.Register.GetAppliedConfigSeedVersion()}
+				if !canRetainAppliedConfigSeed(fingerprintResolved, x.Register.GetAppliedConfigSeedVersion()) {
+					registry.log.WithError(observeErr).WithFields(fields).Error("Cannot validate durable ConfigSeed state for node without a usable local seed")
+					cleanup()
+					return status.Error(codes.Unavailable, "configuration version state is unavailable")
+				}
+				// Version observation is advisory for an authenticated reconnect.
+				// If the local database cannot advance its counter, composition below
+				// will fail to allocate/persist a replacement and the node retains its
+				// already-applied durable seed.
+				registry.log.WithError(observeErr).WithFields(fields).Warn("Could not advance ConfigSeed counter; retaining the node's locally applied seed")
+			}
+			seed, fallback := composeConfigSeedCandidate(canonicalNodeID, x.Register.GetRoles(), peerAddr, operationalMode, clusterID)
 			if tenantID != "" {
 				seed.TenantId = tenantID
+				fallback.preserveTenant = false
 			}
 			stripWildcardSiteWithoutTLS(seed)
-			_ = SendConfigSeed(nodeID, seed)
+			seedErr := SendConfigSeedWithFallback(canonicalNodeID, seed, fallback)
+			if seedErr != nil {
+				fields := logging.Fields{"node_id": canonicalNodeID, "applied_seed_version": x.Register.GetAppliedConfigSeedVersion()}
+				if !canRetainAppliedConfigSeed(fingerprintResolved, x.Register.GetAppliedConfigSeedVersion()) {
+					state.DefaultManager().SetProbeVerified(canonicalNodeID, false)
+					registry.log.WithError(seedErr).WithFields(fields).Error("Rejecting node without a usable ConfigSeed")
+					cleanup()
+					return status.Error(codes.Unavailable, "node configuration is unavailable")
+				}
+				// The authenticated reconnect keeps its already-applied local seed.
+				// A failure to allocate or persist a replacement must not convert a
+				// Foghorn database outage into a media-plane outage.
+				registry.log.WithError(seedErr).WithFields(fields).Warn("Node retained its locally applied ConfigSeed")
+			}
 
 			// Fresh enrollments without a usable site are not routable.
 			if !fingerprintResolved && (seed.GetSite() == nil || seed.GetSite().GetEdgeDomain() == "") {
@@ -1821,11 +1994,15 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 			// consumer reads it (both consumers are spawned after this synchronous write, so there is no race).
 			if x.ArtifactDeleted != nil {
 				x.ArtifactDeleted.NodeId = connSession.NodeID()
+				// A legacy direct-delivery payload has no explicit deletion time;
+				// its envelope timestamp supplies the same ordering boundary.
+				if x.ArtifactDeleted.GetDeletedAtMs() <= 0 && msg.GetSentAt() != nil {
+					x.ArtifactDeleted.DeletedAtMs = msg.GetSentAt().AsTime().UnixMilli()
+				}
 			}
 			if artifactDeletedHandler != nil {
 				go artifactDeletedHandler(context.Background(), x.ArtifactDeleted)
 			}
-			go handleArtifactDeleted(x.ArtifactDeleted, connSession, registry.log)
 		case *ipcpb.ControlMessage_Heartbeat:
 			if nodeID != "" {
 				canonicalNodeID := nodeID
@@ -1955,42 +2132,42 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 			// Correlated completion of a prior-owner drain dispatched by the admission-effects
 			// worker. unloaded=false with an empty error means the stream was already absent — an
 			// idempotent success. A reported error leaves the obligation leg pending for retry.
-			go func(resp *ipcpb.DrainStreamResponse, nodeID string) {
-				if resp.GetError() != "" {
-					registry.log.WithFields(logging.Fields{
-						"node_id":      nodeID,
-						"runtime_name": resp.GetRuntimeName(),
-						"error":        resp.GetError(),
-					}).Warn("Prior-owner drain reported failure; obligation leg stays pending")
-					return
-				}
-				ackCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer cancel()
-				if err := MarkAdmissionDrainDone(ackCtx, nodeID, resp.GetSourceGeneration()); err != nil {
-					registry.log.WithError(err).WithField("node_id", nodeID).Warn("Failed to record drain acknowledgement")
-				}
-			}(x.DrainStreamResponse, connSession.NodeID())
+			go processDrainStreamResponse(x.DrainStreamResponse, connSession, registry.log)
 		case *ipcpb.ControlMessage_ActivatePushTargetsResult:
 			// Correlated completion of a push-target activation dispatched by the admission-effects
-			// worker. Only converged=true completes the leg; otherwise the obligation retries.
-			go func(result *ipcpb.ActivatePushTargetsResult, nodeID string) {
+			// worker. Only converged=true from the connection that is STILL current completes the
+			// leg; a reconnect re-arms active outputs under its higher authenticated fence, so a
+			// delayed result from the retired connection must not settle the replay.
+			go func(result *ipcpb.ActivatePushTargetsResult, session NodeSession) {
+				activationNodeID := session.NodeID()
 				if !result.GetConverged() {
 					registry.log.WithFields(logging.Fields{
-						"node_id":     nodeID,
+						"node_id":     activationNodeID,
 						"stream_name": result.GetStreamName(),
 						"error":       result.GetError(),
 					}).Warn("Push-target activation did not converge; obligation leg stays pending")
 					return
 				}
+				current, ok := currentNodeSession(activationNodeID)
+				if !ok || current.Fence != session.Fence {
+					registry.log.WithFields(logging.Fields{
+						"node_id": activationNodeID, "connection_fence": session.Fence,
+					}).Warn("Ignoring push-target activation acknowledgement from a retired control connection")
+					return
+				}
 				ackCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
-				if err := MarkAdmissionActivationDone(ackCtx, nodeID, result.GetSourceGeneration()); err != nil {
-					registry.log.WithError(err).WithField("node_id", nodeID).Warn("Failed to record activation acknowledgement")
+				if err := MarkAdmissionActivationDone(ackCtx, activationNodeID, result.GetSourceGeneration(), session.Fence); err != nil {
+					registry.log.WithError(err).WithField("node_id", activationNodeID).Warn("Failed to record activation acknowledgement")
 				}
-			}(x.ActivatePushTargetsResult, connSession.NodeID())
+			}(x.ActivatePushTargetsResult, connSession)
 		case *ipcpb.ControlMessage_SyncComplete:
 			// Handle sync completion from Helmsman (dual-storage architecture)
-			go processSyncComplete(x.SyncComplete, connSession.NodeID(), registry.log)
+			var nodeClockCompletedAtMs int64
+			if msg.GetSentAt() != nil {
+				nodeClockCompletedAtMs = msg.GetSentAt().AsTime().UnixMilli()
+			}
+			go processSyncCompleteAt(x.SyncComplete, connSession.NodeID(), nodeClockCompletedAtMs, registry.log)
 		case *ipcpb.ControlMessage_ModeChangeRequest:
 			go processModeChangeRequest(x.ModeChangeRequest, connSession.NodeID(), stream, registry.log)
 		case *ipcpb.ControlMessage_UpdateApplyResult:
@@ -2025,28 +2202,16 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 			go processRestoreLocalSegmentIndexRequest(x.RestoreLocalSegmentIndexRequest, connSession.NodeID(), stream, registry.log)
 		case *ipcpb.ControlMessage_ConfigSeedApplyResult:
 			if x.ConfigSeedApplyResult != nil {
-				ack := x.ConfigSeedApplyResult
-				canonicalID := nodeID
-				clusterID := ""
-				registry.mu.RLock()
-				if c := registry.conns[nodeID]; c != nil {
-					if c.canonicalID != "" {
-						canonicalID = c.canonicalID
+				ackCtx, cancel := context.WithTimeout(stream.Context(), 5*time.Second)
+				err := acceptConfigSeedApplyResult(ackCtx, configSeedApplyAckWriter, connSession, x.ConfigSeedApplyResult)
+				cancel()
+				if err != nil {
+					if errors.Is(err, errConfigSeedApplyAckIdentityMissing) {
+						return status.Error(codes.FailedPrecondition, err.Error())
 					}
-					clusterID = c.clusterID
+					registry.log.WithError(err).WithField("node_id", connSession.NodeID()).Error("Failed to durably accept ConfigSeed apply ACK")
+					return status.Error(codes.Unavailable, "ConfigSeed apply ACK persistence failed")
 				}
-				registry.mu.RUnlock()
-				go func(a *ipcpb.ConfigSeedApplyResult, canonical, resolvedClusterID string) {
-					ackClusterID := resolvedClusterID
-					if ackClusterID == "" && quartermasterClient != nil && canonical != "" {
-						lookupCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-						defer cancel()
-						if resp, err := quartermasterClient.GetNode(lookupCtx, canonical); err == nil && resp.GetNode() != nil {
-							ackClusterID = resp.GetNode().GetClusterId()
-						}
-					}
-					reportApplyResultToNavigator(a, canonical, ackClusterID, registry.log)
-				}(ack, canonicalID, clusterID)
 			}
 		}
 	}
@@ -2059,6 +2224,36 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 		registry.log.WithField("node_id", nodeID).Info("Helmsman disconnected")
 	}
 	return nil
+}
+
+func processDrainStreamResponse(resp *ipcpb.DrainStreamResponse, session NodeSession, logger logging.Logger) bool {
+	nodeID := session.NodeID()
+	if resp.GetError() != "" {
+		logger.WithFields(logging.Fields{
+			"node_id":      nodeID,
+			"runtime_name": resp.GetRuntimeName(),
+			"error":        resp.GetError(),
+		}).Warn("Prior-owner drain reported failure; obligation leg stays pending")
+		return false
+	}
+	// Drain completion is durable once the stream is absent, so unlike
+	// push-target activation it does not need to be re-armed after a Mist
+	// restart. It still must come from the currently authenticated control
+	// connection: a retired stream cannot settle obligations after node
+	// ownership has moved to a newer fence.
+	current, ok := currentNodeSession(nodeID)
+	if !ok || current.Fence != session.Fence {
+		logger.WithFields(logging.Fields{
+			"node_id": nodeID, "connection_fence": session.Fence,
+		}).Warn("Ignoring drain acknowledgement from a retired control connection")
+		return false
+	}
+	ackCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := MarkAdmissionDrainDone(ackCtx, nodeID, resp.GetSourceGeneration()); err != nil {
+		logger.WithError(err).WithField("node_id", nodeID).Warn("Failed to record drain acknowledgement")
+	}
+	return true
 }
 
 // CleanupLocalConnOwners removes Redis conn_owner keys for currently connected nodes,
@@ -2379,14 +2574,27 @@ func SendVodDelete(nodeID string, req *ipcpb.VodDeleteRequest) error {
 // denied, not admitted — see the AlreadyEnded value). Only meaningful when the returned error is nil.
 type IngestSessionOutcome int
 
+// IngestAuthoritySnapshot identifies the immutable signed policy generation
+// accepted for one publisher session. A nil/absent snapshot is retained only
+// for connected-mode and pre-v0.3.0 compatibility; outage admission always
+// supplies a complete snapshot.
+type IngestAuthoritySnapshot struct {
+	MediaAuthorityID       string
+	MediaAuthorityVersion  int64
+	TenantAuthorityVersion int64
+	ProcessesJSON          string
+	CapacityMaxStreams     int32
+}
+
 const (
 	// IngestSessionActive: an OPEN session backs this push — freshly minted, an idempotent
 	// duplicate of the same connection, or a same-node PID-reuse replacement. The push may be
 	// admitted; the returned id is the durable generation.
 	IngestSessionActive IngestSessionOutcome = iota + 1
-	// IngestSessionAlreadyEnded: this EXACT trigger's session has already been closed (its own
-	// PUSH_INPUT_CLOSE won the race and ended it first). The returned id is that ended session's,
-	// for idempotency/logging — but the caller MUST deny/no-op the admission rather than run
+	// IngestSessionAlreadyEnded: this EXACT trigger's connector has already been closed (its own
+	// PUSH_INPUT_CLOSE won the race and ended it first). The returned id is the existing ended
+	// session's when one was already inserted; it is empty when a durable close-before-insert
+	// tombstone prevented any session from being minted. In either case the caller MUST deny/no-op
 	// admission side effects (input state, capacity, drain, Decklog, DVR) for a connector that is
 	// already gone.
 	IngestSessionAlreadyEnded
@@ -2396,6 +2604,9 @@ const (
 	// succeeds once the incumbent's session is ended by its close or the STREAM_END reaper. Returned
 	// id is empty.
 	IngestSessionRejectedDuplicate
+	// IngestSessionRejectedCapacity means the tenant already has the maximum
+	// number of active publisher sessions allowed by the authority snapshot.
+	IngestSessionRejectedCapacity
 )
 
 // ingestStreamAdvisoryLockKey is the (tenant, stream) advisory-lock key that serializes ingest
@@ -2407,7 +2618,11 @@ func ingestStreamAdvisoryLockKey(tenantID, internalName string) string {
 	return strconv.Itoa(len(tenantID)) + ":" + tenantID + ":" + strconv.Itoa(len(internalName)) + ":" + internalName
 }
 
-func CreateIngestSession(ctx context.Context, tenantID, nodeID, internalName string, connectorPID int64, triggerUUID string, startedAtMillis int64, dvrIntent []byte, ingestClusterID string, logger logging.Logger) (string, IngestSessionOutcome, error) {
+func ingestTenantCapacityAdvisoryLockKey(tenantID string) string {
+	return "tenant-capacity:" + strconv.Itoa(len(tenantID)) + ":" + tenantID
+}
+
+func CreateIngestSession(ctx context.Context, tenantID, nodeID, internalName string, connectorPID int64, triggerUUID string, startedAtMillis int64, dvrIntent []byte, ingestClusterID string, logger logging.Logger, authority ...IngestAuthoritySnapshot) (string, IngestSessionOutcome, error) {
 	if db == nil {
 		// Fail CLOSED: without a DB we cannot persist the session identity the source-presence
 		// fence and DVR obligation depend on, so the caller must deny the push rather than admit
@@ -2420,7 +2635,28 @@ func CreateIngestSession(ctx context.Context, tenantID, nodeID, internalName str
 		// request that must not mint an unidentifiable session (the schema CHECKs reject it too).
 		return "", 0, fmt.Errorf("ingest session missing required identity: tenant=%q node=%q pid=%d trigger_uuid=%q started_millis=%d", tenantID, nodeID, connectorPID, triggerUUID, startedAtMillis)
 	}
-	tx, err := db.BeginTx(ctx, nil)
+	if len(authority) > 1 {
+		return "", 0, errors.New("ingest session accepts at most one authority snapshot")
+	}
+	var authoritySnapshot *IngestAuthoritySnapshot
+	if len(authority) == 1 {
+		authoritySnapshot = &authority[0]
+		hasAuthority := strings.TrimSpace(authoritySnapshot.MediaAuthorityID) != "" || authoritySnapshot.MediaAuthorityVersion != 0 || authoritySnapshot.TenantAuthorityVersion != 0
+		if hasAuthority && (strings.TrimSpace(authoritySnapshot.MediaAuthorityID) == "" || authoritySnapshot.MediaAuthorityVersion <= 0 || authoritySnapshot.TenantAuthorityVersion <= 0) {
+			return "", 0, errors.New("ingest authority snapshot requires identity and positive object/tenant versions")
+		}
+		if !hasAuthority && strings.TrimSpace(authoritySnapshot.ProcessesJSON) == "" && authoritySnapshot.CapacityMaxStreams <= 0 {
+			return "", 0, errors.New("empty ingest session snapshot")
+		}
+		if authoritySnapshot.CapacityMaxStreams < 0 {
+			return "", 0, errors.New("ingest session capacity limit cannot be negative")
+		}
+	}
+	// The tenant advisory lock serializes capped count+insert decisions only when each waiter sees
+	// rows committed before it acquired the lock. Make that PostgreSQL dependency explicit: under
+	// REPEATABLE READ a transaction could retain the snapshot it took while waiting and miss the
+	// preceding admission.
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return "", 0, fmt.Errorf("begin ingest-session tx: %w", err)
 	}
@@ -2429,6 +2665,16 @@ func CreateIngestSession(ctx context.Context, tenantID, nodeID, internalName str
 			logger.WithError(rbErr).Warn("Failed to roll back ingest-session tx")
 		}
 	}()
+
+	q := foghorndb.New(tx)
+	// Serialize every tenant admission before taking the narrower stream lock.
+	// Capped and unlimited authority generations can overlap during rollout or
+	// an outage; taking this lock unconditionally keeps a capped count+insert
+	// atomic against either generation. PostgreSQL is the shared authority, so
+	// cache state can neither revoke nor strand a publisher.
+	if lockErr := q.LockIngestStream(ctx, ingestTenantCapacityAdvisoryLockKey(tenantID)); lockErr != nil {
+		return "", 0, fmt.Errorf("acquire ingest-session tenant capacity lock: %w", lockErr)
+	}
 
 	// STREAM-scoped advisory lock: serialize ALL admissions for this (tenant, stream) — across
 	// Foghorn REPLICAS, since the lock is held in the shared per-cell database. This is the HA
@@ -2439,7 +2685,6 @@ func CreateIngestSession(ctx context.Context, tenantID, nodeID, internalName str
 	// subsumes same-PID serialization. FinalizeIngestSessionClose takes the SAME lock, so a close-before-insert fully
 	// serializes against this mint (the close's tombstone is committed before the mint reads it, or
 	// this mint commits before the close runs and the close ends the row). Released on commit/rollback.
-	q := foghorndb.New(tx)
 	if lockErr := q.LockIngestStream(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
 		return "", 0, fmt.Errorf("acquire ingest-session stream lock: %w", lockErr)
 	}
@@ -2477,6 +2722,7 @@ func CreateIngestSession(ctx context.Context, tenantID, nodeID, internalName str
 	// (uq_foghorn_ingest_sessions_active_per_stream). Under the stream lock this is the authoritative
 	// single-publisher decision.
 	var staleStopClaims []DVRStopClaim // dispatched AFTER commit (PID-reuse orphan stop)
+	var staleSessionID, staleNodeID string
 	inc, incErr := q.LockActiveStreamIngestSession(ctx, foghorndb.LockActiveStreamIngestSessionParams{TenantID: tenantID, StreamInternalName: internalName})
 	switch {
 	case incErr == nil:
@@ -2496,6 +2742,8 @@ func CreateIngestSession(ctx context.Context, tenantID, nodeID, internalName str
 				return "", 0, fmt.Errorf("claim stale DVR stop on PID reuse: %w", claimErr)
 			}
 			staleStopClaims = claims
+			staleSessionID = incID
+			staleNodeID = incNode
 		} else {
 			return "", IngestSessionRejectedDuplicate, tx.Commit()
 		}
@@ -2519,18 +2767,79 @@ func CreateIngestSession(ctx context.Context, tenantID, nodeID, internalName str
 		return "", 0, fmt.Errorf("check ingest close tombstone: %w", tsErr)
 	}
 	if tombstoned {
-		return "", IngestSessionAlreadyEnded, tx.Commit()
+		if staleSessionID != "" {
+			revision, revisionErr := nextSourceRevision(ctx, tx, tenantID, internalName)
+			if revisionErr != nil {
+				return "", 0, revisionErr
+			}
+			if enqueueErr := enqueueOfflineEffectTx(ctx, tx, tenantID, internalName, staleNodeID, staleSessionID, revision, OfflineEffectIntent{
+				SetNodeOffline: true, TeardownStream: true, BroadcastOffline: true,
+			}); enqueueErr != nil {
+				return "", 0, enqueueErr
+			}
+		}
+		if commitErr := tx.Commit(); commitErr != nil {
+			return "", 0, fmt.Errorf("commit tombstoned ingest decision: %w", commitErr)
+		}
+		DispatchDVRStops(staleStopClaims, logger)
+		return "", IngestSessionAlreadyEnded, nil
+	}
+
+	// Count after PID supersession so replacing a stale connector for the same
+	// stream is capacity-neutral. The tenant lock makes count+insert atomic
+	// against admissions for different streams.
+	if authoritySnapshot != nil && authoritySnapshot.CapacityMaxStreams > 0 {
+		activeCount, countErr := q.CountActiveTenantIngestSessions(ctx, tenantID)
+		if countErr != nil {
+			return "", 0, fmt.Errorf("count active tenant ingest sessions: %w", countErr)
+		}
+		if activeCount >= authoritySnapshot.CapacityMaxStreams {
+			// A newer connector on the same (node, PID) proves the old generation is stale even
+			// when the successor cannot be admitted. Retire that generation and its obligations;
+			// rolling this transaction back would resurrect a publisher Mist has already replaced.
+			if staleSessionID != "" {
+				revision, revisionErr := nextSourceRevision(ctx, tx, tenantID, internalName)
+				if revisionErr != nil {
+					return "", 0, revisionErr
+				}
+				if enqueueErr := enqueueOfflineEffectTx(ctx, tx, tenantID, internalName, staleNodeID, staleSessionID, revision, OfflineEffectIntent{
+					SetNodeOffline: true, TeardownStream: true, BroadcastOffline: true,
+				}); enqueueErr != nil {
+					return "", 0, enqueueErr
+				}
+			}
+			if commitErr := tx.Commit(); commitErr != nil {
+				return "", 0, fmt.Errorf("commit capacity-rejected ingest decision: %w", commitErr)
+			}
+			DispatchDVRStops(staleStopClaims, logger)
+			return "", IngestSessionRejectedCapacity, nil
+		}
 	}
 
 	// 3. Mint. No ON CONFLICT clause: the stream lock has already serialized this decision, and the
 	// partial unique (tenant, stream) / (tenant, node, PID) / (tenant, node, UUID) indexes are the
 	// durable backstop — a violation here means a bug or lock-hash collision, so surface it (fail
 	// closed) rather than silently absorb it.
-	newID, insErr := q.InsertIngestSession(ctx, foghorndb.InsertIngestSessionParams{
-		TenantID: tenantID, NodeID: nodeID, StreamInternalName: internalName, ConnectorPid: connectorPID,
-		StartTriggerUuid: triggerUUID, StartedAtUnixMillis: startedAtMillis,
-		DvrIntent: sql.NullString{String: string(dvrIntent), Valid: len(dvrIntent) > 0}, IngestClusterID: ingestClusterID,
-	})
+	var newID string
+	var insErr error
+	if authoritySnapshot == nil {
+		newID, insErr = q.InsertIngestSession(ctx, foghorndb.InsertIngestSessionParams{
+			TenantID: tenantID, NodeID: nodeID, StreamInternalName: internalName, ConnectorPid: connectorPID,
+			StartTriggerUuid: triggerUUID, StartedAtUnixMillis: startedAtMillis,
+			DvrIntent: sql.NullString{String: string(dvrIntent), Valid: len(dvrIntent) > 0}, IngestClusterID: ingestClusterID,
+		})
+	} else {
+		newID, insErr = q.InsertIngestSessionWithAuthority(ctx, foghorndb.InsertIngestSessionWithAuthorityParams{
+			TenantID: tenantID, NodeID: nodeID, StreamInternalName: internalName, ConnectorPid: connectorPID,
+			StartTriggerUuid: triggerUUID, StartedAtUnixMillis: startedAtMillis,
+			DvrIntent: sql.NullString{String: string(dvrIntent), Valid: len(dvrIntent) > 0}, IngestClusterID: ingestClusterID,
+			MediaAuthorityID:       sql.NullString{String: strings.TrimSpace(authoritySnapshot.MediaAuthorityID), Valid: strings.TrimSpace(authoritySnapshot.MediaAuthorityID) != ""},
+			MediaAuthorityVersion:  sql.NullInt64{Int64: authoritySnapshot.MediaAuthorityVersion, Valid: authoritySnapshot.MediaAuthorityVersion > 0},
+			TenantAuthorityVersion: sql.NullInt64{Int64: authoritySnapshot.TenantAuthorityVersion, Valid: authoritySnapshot.TenantAuthorityVersion > 0},
+			ProcessesJson:          authoritySnapshot.ProcessesJSON,
+			CapacityMaxStreams:     authoritySnapshot.CapacityMaxStreams,
+		})
+	}
 	if insErr != nil {
 		return "", 0, fmt.Errorf("insert ingest session: %w", insErr)
 	}
@@ -2802,10 +3111,10 @@ func EndIngestSessionsForStreamEnd(ctx context.Context, tenantID, nodeID, intern
 	// Claim each reaped session's bound DVR stop in the SAME transaction, so a lost close can never
 	// leave a live writer behind a reaped session.
 	var allClaims []DVRStopClaim
-	for _, id := range endedIDs {
-		claims, claimErr := ClaimDVRStops(ctx, tx, `ingest_generation = $1::uuid AND tenant_id::text = $2`, id, tenantID)
+	for _, ended := range endedIDs {
+		claims, claimErr := ClaimDVRStops(ctx, tx, `ingest_generation = $1::uuid AND tenant_id::text = $2`, ended.SessionID, tenantID)
 		if claimErr != nil {
-			return 0, fmt.Errorf("claim DVR stop for reaped session %s: %w", id, claimErr)
+			return 0, fmt.Errorf("claim DVR stop for reaped session %s: %w", ended.SessionID, claimErr)
 		}
 		allClaims = append(allClaims, claims...)
 	}
@@ -2814,6 +3123,49 @@ func EndIngestSessionsForStreamEnd(ctx context.Context, tenantID, nodeID, intern
 	}
 	DispatchDVRStops(allClaims, logger)
 	return len(endedIDs), nil
+}
+
+// EndExactMissingIngestSession retires only the admitted runtime identity that
+// Helmsman's authoritative Mist inventory proved absent. The stream lock orders
+// it against a same-name replacement; a replacement generation remains open and
+// causes the subsequent offline fence to suppress every stream-wide effect.
+func EndExactMissingIngestSession(ctx context.Context, tenantID, nodeID, internalName, generation string, connectorPID, eventMillis int64, logger logging.Logger) (bool, error) {
+	if db == nil {
+		return false, errors.New("runtime-absence reaper requires the durable session store")
+	}
+	if tenantID == "" || nodeID == "" || internalName == "" || generation == "" || connectorPID <= 0 || eventMillis <= 0 {
+		return false, fmt.Errorf("runtime-absence reaper missing identity: tenant=%q node=%q stream=%q generation=%q pid=%d event_millis=%d", tenantID, nodeID, internalName, generation, connectorPID, eventMillis)
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin runtime-absence reaper tx: %w", err)
+	}
+	defer rollbackQuiet(tx)
+	q := foghorndb.New(tx)
+	if lockErr := q.LockIngestStream(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
+		return false, fmt.Errorf("lock runtime-absence reaper: %w", lockErr)
+	}
+	ended, err := q.ReapExactMissingIngestSession(ctx, foghorndb.ReapExactMissingIngestSessionParams{
+		EndedAtUnixMillis: sql.NullInt64{Int64: eventMillis, Valid: true}, TenantID: tenantID,
+		NodeID: nodeID, StreamInternalName: internalName, Generation: generation, ConnectorPid: connectorPID,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, tx.Commit()
+	}
+	if err != nil {
+		return false, fmt.Errorf("reap exact missing ingest session: %w", err)
+	}
+	claims, err := ClaimDVRStops(ctx, tx, `ingest_generation = $1::uuid AND tenant_id::text = $2`, ended.SessionID, tenantID)
+	if err != nil {
+		return false, fmt.Errorf("claim DVR stop for missing runtime %s: %w", ended.SessionID, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit runtime-absence reaper: %w", err)
+	}
+	DispatchDVRStops(claims, logger)
+	return true, nil
 }
 
 // FenceOfflineBackstop serializes a session-agnostic offline edge with admission. Under the shared
@@ -2857,7 +3209,7 @@ func FenceOfflineBackstop(ctx context.Context, registry *StreamRegistry, tenantI
 	if hasActive {
 		return false, 0, tx.Commit()
 	}
-	rev, revErr := nextSourceRevision(ctx, tx)
+	rev, revErr := nextSourceRevision(ctx, tx, tenantID, internalName)
 	if revErr != nil {
 		return false, 0, revErr
 	}
@@ -2934,16 +3286,19 @@ func ProjectSourceIfCurrent(ctx context.Context, registry *StreamRegistry, tenan
 		}
 		// Re-assert the registry projection at the persisted revision so a cache-cold replica repairs
 		// its local view (the equal-revision CAS is idempotent for the exact same identity). The
-		// result is CHECKED, not assumed: applied=false means the shared registry holds a strictly
-		// newer transition (or this exact revision under a DIFFERENT identity) — this publisher is
-		// not the routable source, so accepting it would admit an unroutable/superseded connection.
-		// An error leaves the shared state unknown; both deny (fail closed, Mist retries).
+		// result is CHECKED, not assumed. A strictly newer shared watermark while this DB generation
+		// remains current is cache divergence, so the repair path below advances durable authority and
+		// republishes above that watermark. An error leaves shared state unknown and fails closed.
 		_, projected, republishErr := registry.ProjectSource(internalName, nodeID, connectorPID, triggerUUID, generation, revision.Int64)
 		if republishErr != nil {
 			return false, false, fmt.Errorf("resumed projection re-publish: %w", republishErr)
 		}
 		if !projected {
-			return false, false, nil
+			repaired, repairErr := repairResumedSourceProjection(ctx, registry, tenantID, nodeID, internalName, connectorPID, triggerUUID, generation)
+			// The durable generation was already active before repair began. Surface
+			// that fact even when shared projection repair fails, so the caller never
+			// runs pending-session cleanup against established authority.
+			return repaired, true, repairErr
 		}
 		return true, true, nil
 	}
@@ -2952,7 +3307,7 @@ func ProjectSourceIfCurrent(ctx context.Context, registry *StreamRegistry, tenan
 	rev := revision.Int64
 	if !revision.Valid || rev <= 0 {
 		var revErr error
-		rev, revErr = nextSourceRevision(ctx, tx)
+		rev, revErr = nextSourceRevision(ctx, tx, tenantID, internalName)
 		if revErr != nil {
 			return false, false, revErr
 		}
@@ -3005,6 +3360,136 @@ func ProjectSourceIfCurrent(ctx context.Context, registry *StreamRegistry, tenan
 	return true, false, nil
 }
 
+// repairResumedSourceProjection resolves the only valid source of truth after
+// an active DB generation loses Redis's revision CAS: the stream-locked DB row.
+// It reads the watermark under the stream lock, releases that transaction,
+// allocates above the watermark, then reacquires and revalidates the stream
+// before advancing the session and its once-only effect fence together. The
+// allocator lock and Redis I/O therefore never overlap, and a genuine stream
+// transition in the intentional unlock window is detected before mutation.
+func repairResumedSourceProjection(ctx context.Context, registry *StreamRegistry, tenantID, nodeID, internalName string, connectorPID int64, triggerUUID, generation string) (bool, error) {
+	for {
+		if err := ctx.Err(); err != nil {
+			return false, fmt.Errorf("resumed source repair deadline: %w", err)
+		}
+		tx, err := db.BeginTx(ctx, nil)
+		if err != nil {
+			return false, fmt.Errorf("begin resumed source repair: %w", err)
+		}
+		q := foghorndb.New(tx)
+		if err = q.LockIngestStream(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); err != nil {
+			rollbackQuiet(tx)
+			return false, fmt.Errorf("lock resumed source repair: %w", err)
+		}
+		probe, probeErr := q.ProbeCurrentSourceProjection(ctx, foghorndb.ProbeCurrentSourceProjectionParams{
+			TenantID: tenantID, StreamInternalName: internalName, Generation: generation,
+		})
+		if probeErr != nil {
+			rollbackQuiet(tx)
+			return false, fmt.Errorf("probe resumed source repair: %w", probeErr)
+		}
+		if !probe.IsCurrent || probe.ProjectionState != "active" || !probe.SourceRevision.Valid || probe.SourceRevision.Int64 <= 0 {
+			rollbackQuiet(tx)
+			return false, nil
+		}
+		expectedRevision := probe.SourceRevision.Int64
+		// Release the stream lock before advancing the per-stream repair counter. A
+		// concurrent transition may be waiting for this same stream lock; retaining
+		// both would create a cross-connection lock inversion. The shared
+		// watermark is also read after this rollback: Redis must not extend the
+		// lifetime of the database transaction that serializes publisher state.
+		rollbackQuiet(tx)
+		sharedRevision, sharedErr := registry.sharedSourceRevision(ctx, internalName)
+		if sharedErr != nil {
+			return false, fmt.Errorf("read resumed source watermark: %w", sharedErr)
+		}
+		minimumRevision := max(sharedRevision, expectedRevision)
+		newRevision, revisionErr := foghorndb.AllocateSourceProjectionRevisionAfter(ctx, db, tenantID, internalName, minimumRevision)
+		if revisionErr != nil {
+			return false, fmt.Errorf("allocate resumed source repair revision: %w", revisionErr)
+		}
+		tx, err = db.BeginTx(ctx, nil)
+		if err != nil {
+			return false, fmt.Errorf("begin resumed source repair apply: %w", err)
+		}
+		q = foghorndb.New(tx)
+		if err = q.LockIngestStream(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); err != nil {
+			rollbackQuiet(tx)
+			return false, fmt.Errorf("lock resumed source repair apply: %w", err)
+		}
+		probe, probeErr = q.ProbeCurrentSourceProjection(ctx, foghorndb.ProbeCurrentSourceProjectionParams{
+			TenantID: tenantID, StreamInternalName: internalName, Generation: generation,
+		})
+		if probeErr != nil {
+			rollbackQuiet(tx)
+			return false, fmt.Errorf("revalidate resumed source repair: %w", probeErr)
+		}
+		if !probe.IsCurrent || probe.ProjectionState != "active" || !probe.SourceRevision.Valid || probe.SourceRevision.Int64 <= 0 {
+			rollbackQuiet(tx)
+			return false, nil
+		}
+		if probe.SourceRevision.Int64 != expectedRevision {
+			rollbackQuiet(tx)
+			continue
+		}
+		advanced, advanceErr := q.AdvanceActiveSourceProjectionRevision(ctx, foghorndb.AdvanceActiveSourceProjectionRevisionParams{
+			NewRevision: sql.NullInt64{Int64: newRevision, Valid: true}, Generation: generation,
+			TenantID: tenantID, StreamInternalName: internalName,
+			PreviousRevision: probe.SourceRevision,
+		})
+		if advanceErr != nil {
+			rollbackQuiet(tx)
+			return false, fmt.Errorf("advance resumed source revision: %w", advanceErr)
+		}
+		if advanced != 1 {
+			rollbackQuiet(tx)
+			continue
+		}
+		effectAdvanced, effectErr := q.AdvanceAdmissionEffectSourceRevision(ctx, foghorndb.AdvanceAdmissionEffectSourceRevisionParams{
+			NewRevision: newRevision, Generation: generation, TenantID: tenantID,
+			StreamInternalName: internalName, PreviousRevision: probe.SourceRevision.Int64,
+		})
+		if effectErr != nil {
+			rollbackQuiet(tx)
+			return false, fmt.Errorf("advance resumed admission-effect revision: %w", effectErr)
+		}
+		if effectAdvanced != 1 {
+			effectRevision, lookupErr := q.GetAdmissionEffectSourceRevision(ctx, foghorndb.GetAdmissionEffectSourceRevisionParams{
+				Generation: generation, TenantID: tenantID, StreamInternalName: internalName,
+			})
+			switch {
+			case errors.Is(lookupErr, sql.ErrNoRows):
+				// Terminal effect rows are retention data, not active source authority. Once every
+				// owed leg has settled they may be purged while the ingest session remains active;
+				// repairing that session must not manufacture a new effect or reject its publisher.
+			case lookupErr != nil:
+				rollbackQuiet(tx)
+				return false, fmt.Errorf("inspect resumed admission-effect revision: %w", lookupErr)
+			default:
+				rollbackQuiet(tx)
+				return false, fmt.Errorf("advance resumed admission-effect revision: generation %s has revision %d, expected %d", generation, effectRevision, probe.SourceRevision.Int64)
+			}
+		}
+		// Keep the per-stream advisory lock through the shared CAS. Concurrent
+		// retries for this generation cannot overtake one another in the
+		// commit-to-publish gap. A rejected write rolls back the stream state, but
+		// never the already-issued cell-wide fencing token.
+		_, projected, projectErr := registry.ProjectSource(internalName, nodeID, connectorPID, triggerUUID, generation, newRevision)
+		if projectErr != nil {
+			rollbackQuiet(tx)
+			return false, fmt.Errorf("publish resumed source repair: %w", projectErr)
+		}
+		if !projected {
+			rollbackQuiet(tx)
+			continue
+		}
+		if err := tx.Commit(); err != nil {
+			return false, fmt.Errorf("commit resumed source repair: %w", err)
+		}
+		return true, nil
+	}
+}
+
 // abortPendingSourceProjection releases stream authority after a projection that could not be
 // confirmed. The session end and inactive projection intent commit together under the stream lock,
 // so a denied PUSH_REWRITE cannot leave an open row blocking later publishers.
@@ -3021,18 +3506,18 @@ func abortPendingSourceProjection(ctx context.Context, tenantID, internalName, g
 	if lockErr := q.LockIngestStream(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
 		return fmt.Errorf("lock abort pending source projection: %w", lockErr)
 	}
-	nodeID, err := q.AbortPendingSourceProjection(ctx, foghorndb.AbortPendingSourceProjectionParams{Generation: generation, TenantID: tenantID, StreamInternalName: internalName})
+	aborted, err := q.AbortPendingSourceProjection(ctx, foghorndb.AbortPendingSourceProjectionParams{Generation: generation, TenantID: tenantID, StreamInternalName: internalName})
 	if errors.Is(err, sql.ErrNoRows) {
 		return tx.Commit()
 	}
 	if err != nil {
 		return fmt.Errorf("end pending source projection: %w", err)
 	}
-	revision, err := nextSourceRevision(ctx, tx)
+	revision, err := nextSourceRevision(ctx, tx, tenantID, internalName)
 	if err != nil {
 		return err
 	}
-	if err := enqueueOfflineEffectTx(ctx, tx, tenantID, internalName, nodeID, generation, revision, OfflineEffectIntent{}); err != nil {
+	if err := enqueueOfflineEffectTx(ctx, tx, tenantID, internalName, aborted.NodeID, generation, revision, OfflineEffectIntent{}); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -3041,10 +3526,19 @@ func abortPendingSourceProjection(ctx context.Context, tenantID, internalName, g
 	return nil
 }
 
-// nextSourceRevision draws the next monotonic source-ordering epoch from foghorn.source_projection_revision
-// within the caller's advisory-locked tx.
-func nextSourceRevision(ctx context.Context, tx *sql.Tx) (int64, error) {
-	rev, err := foghorndb.New(tx).NextSourceProjectionRevision(ctx)
+// AbortPendingIngestSession releases a durable admission that could not pass a post-mint gate.
+// The database row is the single-publisher authority, so callers must end it before returning a
+// denial or it would strand the stream behind a pending session.
+func AbortPendingIngestSession(ctx context.Context, tenantID, internalName, generation string) error {
+	return abortPendingSourceProjection(ctx, tenantID, internalName, generation)
+}
+
+// nextSourceRevision advances the counter at the same tenant/stream key where
+// source authority is compared. The caller already holds that stream's lock.
+func nextSourceRevision(ctx context.Context, tx *sql.Tx, tenantID, internalName string) (int64, error) {
+	rev, err := foghorndb.New(tx).NextSourceProjectionRevision(ctx, foghorndb.NextSourceProjectionRevisionParams{
+		TenantID: tenantID, StreamInternalName: internalName,
+	})
 	if err != nil {
 		return 0, fmt.Errorf("draw source projection revision: %w", err)
 	}
@@ -3145,7 +3639,7 @@ func FinalizeIngestSessionClose(ctx context.Context, tenantID, nodeID string, co
 	if claimErr != nil {
 		return CloseFinalization{}, fmt.Errorf("claim DVR stop obligation for ingest generation: %w", claimErr)
 	}
-	revision, revisionErr := nextSourceRevision(ctx, tx)
+	revision, revisionErr := nextSourceRevision(ctx, tx, tenantID, internalName)
 	if revisionErr != nil {
 		return CloseFinalization{}, revisionErr
 	}
@@ -3547,11 +4041,15 @@ const AuthoritativeInventoryProtocolMin int32 = ThumbnailStagedProtocolMin
 // cancellation and may surface later on the old connection.
 const IngestGenerationFencingProtocolMin int32 = 3
 
+// NodeIdentityProofProtocolMin is the first protocol that signs each
+// registration with a persisted node identity and a one-time nonce.
+const NodeIdentityProofProtocolMin int32 = 4
+
 // MinControlProtocolVersion is the HARD minimum a sidecar must declare in Register to connect at all. A registration
 // below this is REJECTED (FailedPrecondition), not admitted under a compatibility path. This is what makes inventory
 // authority session-owned rather than payload-selected: a sub-min sidecar cannot connect, so every report the
 // processor sees is from an authoritative session.
-const MinControlProtocolVersion int32 = IngestGenerationFencingProtocolMin
+const MinControlProtocolVersion int32 = NodeIdentityProofProtocolMin
 
 // ControlFeatures is the SINGLE place a sidecar session's protocol-gated capabilities are decided. It is derived
 // once from the negotiated control-protocol version (Register.control_protocol_version) and consumed by placement
@@ -3628,24 +4126,6 @@ func shouldRelay(nodeID string, err error) bool {
 	c := registry.conns[nodeID]
 	registry.mu.RUnlock()
 	return c == nil
-}
-
-func handleArtifactDeleted(deleted *ipcpb.ArtifactDeleted, session NodeSession, logger logging.Logger) {
-	// Attribute the deletion to THIS connection's authenticated canonical id (passed by value), never the
-	// raw registry key or a payload field — the two diverge under fingerprint/enrollment resolution.
-	nodeID := session.NodeID()
-	artifactHash := deleted.GetArtifactHash()
-	reason := deleted.GetReason()
-
-	logger.WithFields(logging.Fields{
-		"artifact_hash": artifactHash,
-		"reason":        reason,
-		"node_id":       nodeID,
-	}).Info("Artifact deleted on node")
-
-	if err := state.DefaultManager().ApplyArtifactDeleted(streamCtx(), artifactHash, nodeID); err != nil {
-		logger.WithError(err).WithField("artifact_hash", artifactHash).Warn("Failed to apply artifact deletion to stream state")
-	}
 }
 
 // processDVRProgress handles DVR progress updates from storage Helmsman
@@ -3978,6 +4458,12 @@ func classifyTriggerError(err error) (ipcpb.TriggerAckErrorCode, bool) {
 		return ipcpb.TriggerAckErrorCode_TRIGGER_ACK_ERROR_NONE, false
 	}
 	if ingestErr, ok := errors.AsType[*ingesterrors.IngestError](err); ok {
+		if retryable, explicit := ingestErr.RetryableOverride(); explicit {
+			// Disposition and diagnostic class are independent. A deterministic
+			// internal lifecycle outcome is terminal without pretending it was a
+			// schema violation.
+			return ipcpb.TriggerAckErrorCode_TRIGGER_ACK_ERROR_INTERNAL, retryable
+		}
 		switch ingestErr.Code {
 		case ipcpb.IngestErrorCode_INGEST_ERROR_INVALID_STREAM_KEY,
 			ipcpb.IngestErrorCode_INGEST_ERROR_ACCOUNT_SUSPENDED,
@@ -4031,6 +4517,7 @@ func sendMistTriggerAck(stream ipcpb.HelmsmanControl_ConnectServer, requestID st
 const blockingTriggerReplayTTL = 10 * time.Minute
 
 type blockingTriggerReplayEntry struct {
+	key       string
 	ready     chan struct{}
 	response  *ipcpb.MistTriggerResponse
 	expiresAt time.Time
@@ -4057,14 +4544,17 @@ func acquireBlockingTriggerReplay(key string) (*blockingTriggerReplayEntry, bool
 	if entry := blockingTriggerReplay.entries[key]; entry != nil && now.Before(entry.expiresAt) {
 		return entry, false
 	}
-	entry := &blockingTriggerReplayEntry{ready: make(chan struct{}), expiresAt: now.Add(blockingTriggerReplayTTL)}
+	entry := &blockingTriggerReplayEntry{key: key, ready: make(chan struct{}), expiresAt: now.Add(blockingTriggerReplayTTL)}
 	blockingTriggerReplay.entries[key] = entry
 	return entry, true
 }
 
-func completeBlockingTriggerReplay(entry *blockingTriggerReplayEntry, response *ipcpb.MistTriggerResponse) {
+func completeBlockingTriggerReplay(entry *blockingTriggerReplayEntry, response *ipcpb.MistTriggerResponse, retain bool) {
 	blockingTriggerReplay.Lock()
 	entry.response = cloneMistTriggerResponse(response)
+	if !retain && blockingTriggerReplay.entries[entry.key] == entry {
+		delete(blockingTriggerReplay.entries, entry.key)
+	}
 	close(entry.ready)
 	blockingTriggerReplay.Unlock()
 }
@@ -4131,7 +4621,11 @@ func processMistTrigger(trigger *ipcpb.MistTrigger, session NodeSession, stream 
 		key := nodeID + "\x1f" + triggerType + "\x1f" + trigger.GetTriggerUuid()
 		entry, owner := acquireBlockingTriggerReplay(key)
 		if !owner {
-			<-entry.ready
+			select {
+			case <-entry.ready:
+			case <-stream.Context().Done():
+				return
+			}
 			response := cloneMistTriggerResponse(entry.response)
 			if response != nil {
 				response.RequestId = requestID
@@ -4162,7 +4656,7 @@ func processMistTrigger(trigger *ipcpb.MistTrigger, session NodeSession, stream 
 				Abort:     true,
 			}
 			if replayEntry != nil {
-				completeBlockingTriggerReplay(replayEntry, response)
+				completeBlockingTriggerReplay(replayEntry, response, false)
 			}
 			sendMistTriggerResponse(stream, response, logger)
 		}
@@ -4195,7 +4689,12 @@ func processMistTrigger(trigger *ipcpb.MistTrigger, session NodeSession, stream 
 				ErrorCode: errorCode,
 			}
 			if replayEntry != nil {
-				completeBlockingTriggerReplay(replayEntry, response)
+				// A terminal business rejection is a completed trigger outcome and
+				// must replay exactly like an approval. Retryable infrastructure
+				// failures wake current waiters but leave a later delivery free to
+				// execute the handler again.
+				_, retryable := classifyTriggerError(err)
+				completeBlockingTriggerReplay(replayEntry, response, !retryable)
 			}
 			sendMistTriggerResponse(stream, response, logger)
 		}
@@ -4249,7 +4748,7 @@ func processMistTrigger(trigger *ipcpb.MistTrigger, session NodeSession, stream 
 		response.IngestConnectorPid = trigger.GetPushRewrite().GetPid()
 	}
 	if replayEntry != nil {
-		completeBlockingTriggerReplay(replayEntry, response)
+		completeBlockingTriggerReplay(replayEntry, response, true)
 	}
 
 	sendMistTriggerResponse(stream, response, logger)
@@ -4312,10 +4811,12 @@ var geoipReader *geoip.Reader
 
 const edgeTelemetryTokenTTL = 365 * 24 * time.Hour
 
-func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMode ipcpb.NodeOperationalMode, clusterID string) *ipcpb.ConfigSeed {
+func composeConfigSeedCandidate(nodeID string, _ []string, peerAddr string, operationalMode ipcpb.NodeOperationalMode, clusterID string) (*ipcpb.ConfigSeed, configSeedFallback) {
 	var lat, lon float64
 	var loc string
 	var ownerTenantID string
+	ownerResolved := false
+	clusterResolved := strings.TrimSpace(clusterID) != ""
 
 	geoOnce.Do(func() {
 		geoipReader = geoip.GetSharedReader()
@@ -4375,6 +4876,7 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 		node, err := quartermasterClient.GetNodeByLogicalName(ctx, nodeID)
 		cancel()
 		if err == nil && node != nil {
+			clusterResolved = true
 			if resolvedClusterID == "" {
 				resolvedClusterID = strings.TrimSpace(node.GetClusterId())
 			}
@@ -4385,13 +4887,18 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 		ownerResp, err := getNodeOwnerFn(ctx, nodeID)
 		cancel()
 		if err == nil && ownerResp != nil {
+			ownerResolved = true
 			ownerTenantID = strings.TrimSpace(ownerResp.GetOwnerTenantId())
+			clusterResolved = true
 			if resolvedClusterID == "" {
 				resolvedClusterID = strings.TrimSpace(ownerResp.GetClusterId())
 			}
 		}
 	}
 	var isPlatformOfficial bool
+	clusterTLSResolved := resolvedClusterID == "" && clusterResolved
+	clusterClassResolved := clusterTLSResolved
+	platformTLSResolved := clusterTLSResolved
 	if resolvedClusterID != "" {
 		rootDomain := platformRootDomain()
 		slug := pkgdns.SanitizeLabel(resolvedClusterID)
@@ -4403,8 +4910,11 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 			AcmeEmail:   os.Getenv("ACME_EMAIL"),
 		}
 
-		if bundle, found, bundleErr := fetchClusterTLSBundleByClusterID(resolvedClusterID, rootDomain); bundleErr == nil && found {
-			tlsBundle = bundle
+		if bundle, found, bundleErr := fetchClusterTLSBundleByClusterID(resolvedClusterID, rootDomain); bundleErr == nil {
+			clusterTLSResolved = true
+			if found {
+				tlsBundle = bundle
+			}
 		}
 
 		// Resolve cluster kind to decide whether to distribute the
@@ -4416,8 +4926,12 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 			resp, cErr := quartermasterClient.GetCluster(cCtx, resolvedClusterID)
 			cCancel()
 			if cErr == nil && resp != nil && resp.GetCluster() != nil {
+				clusterClassResolved = true
 				isPlatformOfficial = resp.GetCluster().GetIsPlatformOfficial()
 			}
+		}
+		if clusterClassResolved && !isPlatformOfficial {
+			platformTLSResolved = true
 		}
 	}
 
@@ -4437,78 +4951,287 @@ func composeConfigSeed(nodeID string, _ []string, peerAddr string, operationalMo
 		TenantId:            ownerTenantID,
 		Telemetry:           telemetry,
 		FoghornBalancerBase: FoghornBalancerBaseForNode(resolvedClusterID, nodeID),
-		SeedVersion:         nextSeedVersion(nodeID),
+		SeedVersion:         0,
 	}
 	if tlsBundle != nil {
 		seed.TlsBundles = []*ipcpb.TLSCertBundle{tlsBundle}
 	}
 	if isPlatformOfficial {
-		if extra := fetchPlatformEdgeBundle(); extra != nil {
-			seed.TlsBundles = append(seed.TlsBundles, extra)
+		extra, extraErr := fetchPlatformEdgeBundle()
+		if extraErr == nil {
+			platformTLSResolved = true
+			if extra != nil {
+				seed.TlsBundles = append(seed.TlsBundles, extra)
+			}
 		}
 	}
 	// Per-tenant TLS bundles: for every paying tenant subscribed to this
 	// cluster, include their *.{tenant}.cdn.{root} cert. Best-effort;
 	// missing certs (still pending issuance) are skipped silently and
 	// reconciled on the next cycle.
-	seed.TlsBundles = append(seed.TlsBundles, fetchTenantBundles(resolvedClusterID)...)
+	tenantBundles, removedTenantBundleIDs, tenantBundlesErr := fetchTenantBundles(resolvedClusterID)
+	tenantTLSResolved := tenantBundlesErr == nil && clusterResolved
+	if tenantBundlesErr == nil {
+		seed.TlsBundles = append(seed.TlsBundles, tenantBundles...)
+	}
+	tlsResolved := clusterTLSResolved && clusterClassResolved && platformTLSResolved && tenantTLSResolved
+	return seed, configSeedFallback{
+		preserveTenant:      !ownerResolved,
+		preserveSite:        !clusterResolved,
+		preserveTLS:         !tlsResolved,
+		preserveTelemetry:   !ownerResolved || !clusterResolved,
+		removedTLSBundleIDs: removedTenantBundleIDs,
+	}
+}
+
+// composeConfigSeed is retained for pure callers and tests. Production send
+// paths use composeConfigSeedCandidate plus SendConfigSeedWithFallback so the
+// fallback base is read under the same row lock as persistence.
+func composeConfigSeed(nodeID string, roles []string, peerAddr string, operationalMode ipcpb.NodeOperationalMode, clusterID string) *ipcpb.ConfigSeed {
+	seed, fallback := composeConfigSeedCandidate(nodeID, roles, peerAddr, operationalMode, clusterID)
+	lastGood, err := loadLastConfigSeed(context.Background(), nodeID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		logging.NewLogger().WithError(err).WithField("node_id", nodeID).Warn("Failed to load last durable ConfigSeed")
+	}
+	if lastGood != nil {
+		return mergeConfigSeedFallback(seed, lastGood, fallback)
+	}
 	return seed
+}
+
+type configSeedFallback struct {
+	preserveTenant    bool
+	preserveSite      bool
+	preserveTLS       bool
+	preserveTelemetry bool
+	// removedTLSBundleIDs contains authoritative Navigator found=false results.
+	// Unlike a shorter Quartermaster list, these must delete durable last-good
+	// material on the next seed.
+	removedTLSBundleIDs map[string]struct{}
+}
+
+// mergeConfigSeedFallback preserves central-plane-derived fields from the
+// last durably sent seed only when compose observed a central dependency
+// failure. Locally derived identity, templates, mode, capability URL and the
+// newly allocated version always win.
+func mergeConfigSeedFallback(current, lastGood *ipcpb.ConfigSeed, fallback configSeedFallback) *ipcpb.ConfigSeed {
+	if current == nil || lastGood == nil || current.GetNodeId() != lastGood.GetNodeId() {
+		return current
+	}
+	merged := proto.CloneOf(lastGood)
+	merged.NodeId = current.GetNodeId()
+	merged.SeedVersion = current.GetSeedVersion()
+	merged.OperationalMode = current.GetOperationalMode()
+	merged.Templates = current.GetTemplates()
+	if current.GetLatitude() != 0 || current.GetLongitude() != 0 || current.GetLocationName() != "" {
+		merged.Latitude = current.GetLatitude()
+		merged.Longitude = current.GetLongitude()
+		merged.LocationName = current.GetLocationName()
+	}
+	if !fallback.preserveTenant {
+		merged.TenantId = current.GetTenantId()
+	}
+	if !fallback.preserveSite {
+		merged.Site = current.GetSite()
+	}
+	if !fallback.preserveTLS {
+		merged.Tls = current.GetTls()
+	}
+	merged.TlsBundles = mergeConfigSeedTLSBundles(
+		current.GetTlsBundles(), lastGood.GetTlsBundles(), fallback.preserveTLS, fallback.removedTLSBundleIDs, time.Now(),
+	)
+	if len(current.GetCaBundle()) > 0 {
+		merged.CaBundle = current.GetCaBundle()
+	}
+	if !fallback.preserveTelemetry {
+		merged.Telemetry = current.GetTelemetry()
+	}
+	if current.GetFoghornBalancerBase() != "" {
+		merged.FoghornBalancerBase = current.GetFoghornBalancerBase()
+	}
+	if current.GetProcessing() != nil {
+		merged.Processing = current.GetProcessing()
+	}
+	return merged
+}
+
+// mergeConfigSeedTLSBundles treats a shorter tenant-authority list as an
+// incomplete control-plane view, not an edge credential revocation. Current
+// material always wins by bundle ID; an omitted tenant bundle remains local
+// only through its certificate validity bound. Explicit subscription removal
+// first withdraws that cluster's Navigator DNS membership, so retaining the
+// no-longer-routed credential until expiry preserves outage tolerance without
+// preserving traffic authority. On a broader TLS resolution failure, the same
+// rule also preserves missing non-tenant bundles from the durable seed.
+func mergeConfigSeedTLSBundles(current, lastGood []*ipcpb.TLSCertBundle, preserveAll bool, authoritativeRemovals map[string]struct{}, now time.Time) []*ipcpb.TLSCertBundle {
+	merged := make([]*ipcpb.TLSCertBundle, 0, len(current)+len(lastGood))
+	seen := make(map[string]struct{}, len(current)+len(lastGood))
+	for _, bundle := range current {
+		if bundle == nil || strings.TrimSpace(bundle.GetBundleId()) == "" {
+			continue
+		}
+		bundleID := bundle.GetBundleId()
+		if _, duplicate := seen[bundleID]; duplicate {
+			continue
+		}
+		seen[bundleID] = struct{}{}
+		merged = append(merged, bundle)
+	}
+	for _, bundle := range lastGood {
+		if bundle == nil {
+			continue
+		}
+		bundleID := strings.TrimSpace(bundle.GetBundleId())
+		if bundleID == "" {
+			continue
+		}
+		if _, present := seen[bundleID]; present {
+			continue
+		}
+		if _, removed := authoritativeRemovals[bundleID]; removed {
+			continue
+		}
+		validTenantAuthority := strings.HasPrefix(bundleID, "tenant:") && bundle.GetExpiresAt() > now.Unix()
+		if !preserveAll && !validTenantAuthority {
+			continue
+		}
+		seen[bundleID] = struct{}{}
+		merged = append(merged, bundle)
+	}
+	return merged
 }
 
 // fetchTenantBundles queries Quartermaster for the paying tenants
 // subscribed to clusterID, then pulls each tenant's TLS bundle from
-// Navigator. Returns only bundles that exist (cert issuance complete).
-// Bundles for tenants still in cert_issuing state are skipped.
-func fetchTenantBundles(clusterID string) []*ipcpb.TLSCertBundle {
-	if clusterID == "" || quartermasterClient == nil || navigatorClient == nil {
-		return nil
+// Navigator. During an alias transition Navigator may return the last-good
+// bundle; its SANs, not Quartermaster's replacement label, remain the serving
+// authority until the replacement certificate is issued and applied.
+func fetchTenantBundles(clusterID string) ([]*ipcpb.TLSCertBundle, map[string]struct{}, error) {
+	if clusterID == "" {
+		return nil, nil, nil
+	}
+	if quartermasterClient == nil || navigatorClient == nil {
+		return nil, nil, errors.New("tenant TLS authority is unavailable")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	resp, err := quartermasterClient.ListAliasedTenantsForCluster(ctx, clusterID)
-	if err != nil || resp == nil || len(resp.GetTenants()) == 0 {
-		return nil
+	if err != nil {
+		return nil, nil, err
+	}
+	if resp == nil || len(resp.GetTenants()) == 0 {
+		return nil, nil, nil
 	}
 	rootDomain := platformRootDomain()
 	tenantZoneLabel := pkgdns.TenantAliasZoneLabel
-
-	out := make([]*ipcpb.TLSCertBundle, 0, len(resp.GetTenants()))
-	for _, ref := range resp.GetTenants() {
-		bundleID := "tenant:" + ref.GetTenantId()
+	return collectTenantBundles(resp.GetTenants(), tenantZoneLabel, rootDomain, func(bundleID string) (*dnspb.GetTLSBundleResponse, error) {
 		certCtx, certCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		certResp, certErr := navigatorClient.GetTLSBundle(certCtx, &dnspb.GetTLSBundleRequest{BundleId: bundleID})
-		certCancel()
-		if certErr != nil || certResp == nil || !certResp.GetFound() {
+		defer certCancel()
+		return navigatorClient.GetTLSBundle(certCtx, &dnspb.GetTLSBundleRequest{BundleId: bundleID})
+	})
+}
+
+func collectTenantBundles(tenants []*quartermasterpb.AliasedTenantRef, tenantZoneLabel, rootDomain string, fetch func(string) (*dnspb.GetTLSBundleResponse, error)) ([]*ipcpb.TLSCertBundle, map[string]struct{}, error) {
+	out := make([]*ipcpb.TLSCertBundle, 0, len(tenants))
+	authoritativeRemovals := make(map[string]struct{})
+	for _, ref := range tenants {
+		bundleID := "tenant:" + ref.GetTenantId()
+		certResp, certErr := fetch(bundleID)
+		if certErr != nil {
+			return nil, nil, certErr
+		}
+		found, presenceErr := navigatorTLSBundleFound(certResp)
+		if presenceErr != nil {
+			return nil, nil, fmt.Errorf("tenant TLS bundle %s: %w", bundleID, presenceErr)
+		}
+		if !found {
+			authoritativeRemovals[bundleID] = struct{}{}
 			continue
 		}
-		apex := ref.GetSubdomain() + "." + tenantZoneLabel + "." + rootDomain
+		siteAddresses, addressErr := tenantBundleSiteAddresses(certResp.GetDomains(), tenantZoneLabel, rootDomain)
+		if addressErr != nil {
+			return nil, nil, fmt.Errorf("tenant TLS bundle %s: %w", bundleID, addressErr)
+		}
 		out = append(out, &ipcpb.TLSCertBundle{
 			CertPem:       certResp.GetCertPem(),
 			KeyPem:        certResp.GetKeyPem(),
-			Domain:        apex,
+			Domain:        strings.Join(siteAddresses, ","),
 			ExpiresAt:     certResp.GetExpiresAt(),
 			BundleId:      bundleID,
-			SiteAddresses: []string{apex, "*." + apex},
+			SiteAddresses: siteAddresses,
+			Version:       certResp.GetVersion(),
 		})
 	}
-	return out
+	return out, authoritativeRemovals, nil
+}
+
+func tenantBundleSiteAddresses(domains []string, tenantZoneLabel, rootDomain string) ([]string, error) {
+	tenantZoneLabel = strings.Trim(strings.ToLower(strings.TrimSpace(tenantZoneLabel)), ".")
+	rootDomain = strings.Trim(strings.ToLower(strings.TrimSpace(rootDomain)), ".")
+	if tenantZoneLabel == "" || rootDomain == "" {
+		return nil, errors.New("tenant alias zone is empty")
+	}
+	suffix := "." + tenantZoneLabel + "." + rootDomain
+	domainSet := make(map[string]struct{}, len(domains))
+	for _, domain := range domains {
+		domain = strings.Trim(strings.ToLower(strings.TrimSpace(domain)), ".")
+		if domain != "" {
+			domainSet[domain] = struct{}{}
+		}
+	}
+	var apex string
+	for domain := range domainSet {
+		if strings.HasPrefix(domain, "*.") || !strings.HasSuffix(domain, suffix) {
+			continue
+		}
+		label := strings.TrimSuffix(domain, suffix)
+		if label == "" || strings.Contains(label, ".") {
+			continue
+		}
+		if _, covered := domainSet["*."+domain]; !covered {
+			continue
+		}
+		if apex != "" && apex != domain {
+			return nil, errors.New("bundle contains multiple tenant alias authorities")
+		}
+		apex = domain
+	}
+	if apex == "" {
+		return nil, errors.New("bundle does not contain an alias apex/wildcard SAN pair")
+	}
+	wildcard := "*." + apex
+	additional := make([]string, 0, len(domainSet)-2)
+	for domain := range domainSet {
+		if domain != apex && domain != wildcard {
+			additional = append(additional, domain)
+		}
+	}
+	sort.Strings(additional)
+	return append([]string{apex, wildcard}, additional...), nil
 }
 
 // fetchPlatformEdgeBundle pulls the platform-edge multi-SAN cert from
 // Navigator. Returns nil if Navigator is unavailable or the cert hasn't
 // been issued yet. Caller is responsible for deciding which nodes
 // receive this bundle (only platform_official cluster edges).
-func fetchPlatformEdgeBundle() *ipcpb.TLSCertBundle {
+func fetchPlatformEdgeBundle() (*ipcpb.TLSCertBundle, error) {
 	if navigatorClient == nil {
-		return nil
+		return nil, errors.New("platform edge TLS authority is unavailable")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	resp, err := navigatorClient.GetTLSBundle(ctx, &dnspb.GetTLSBundleRequest{
 		BundleId: "platform:edge-multi",
 	})
-	if err != nil || resp == nil || !resp.GetFound() {
-		return nil
+	if err != nil {
+		return nil, err
+	}
+	found, presenceErr := navigatorTLSBundleFound(resp)
+	if presenceErr != nil {
+		return nil, presenceErr
+	}
+	if !found {
+		return nil, nil
 	}
 	rootDomain := platformRootDomain()
 	return &ipcpb.TLSCertBundle{
@@ -4518,7 +5241,8 @@ func fetchPlatformEdgeBundle() *ipcpb.TLSCertBundle {
 		ExpiresAt:     resp.GetExpiresAt(),
 		BundleId:      "platform:edge-multi",
 		SiteAddresses: platformEdgeSiteAddresses(rootDomain),
-	}
+		Version:       resp.GetVersion(),
+	}, nil
 }
 
 // platformEdgeSiteAddresses returns the 5 hostnames the platform-edge
@@ -4750,11 +5474,52 @@ func SendLocalBalancerCapabilityUpdate(nodeID string, update *ipcpb.BalancerCapa
 
 // SendConfigSeed sends a ConfigSeed to the given node, relaying via HA if needed.
 func SendConfigSeed(nodeID string, seed *ipcpb.ConfigSeed) error {
+	persistCtx, persistCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	_, persistErr := allocateAndPersistConfigSeed(persistCtx, nodeID, seed)
+	persistCancel()
+	if persistErr != nil {
+		return persistErr
+	}
 	err := SendLocalConfigSeed(nodeID, seed)
 	if !shouldRelay(nodeID, err) {
 		return err
 	}
 	if commandRelay == nil || seed == nil {
+		return ErrNotConnected
+	}
+	return relayFailure(err, commandRelay.forward(context.Background(), &foghornrelaypb.ForwardCommandRequest{
+		TargetNodeId: nodeID,
+		Command:      &foghornrelaypb.ForwardCommandRequest_ConfigSeed{ConfigSeed: seed},
+	}))
+}
+
+// SendConfigSeedWithFallback merges outage-preserved fields from the latest
+// durable seed while holding the node's ConfigSeed row lock, then sends that
+// exact committed payload. A concurrent producer therefore cannot be rolled
+// back by a stale pre-transaction fallback clone.
+func SendConfigSeedWithFallback(nodeID string, seed *ipcpb.ConfigSeed, fallback configSeedFallback) error {
+	if seed == nil {
+		return fmt.Errorf("nil ConfigSeed")
+	}
+	persistCtx, persistCancel := context.WithTimeout(context.Background(), 3*time.Second)
+	persisted, persistErr := prepareAndPersistConfigSeed(persistCtx, nodeID, func(latest *ipcpb.ConfigSeed) (*ipcpb.ConfigSeed, error) {
+		candidate := proto.CloneOf(seed)
+		if latest != nil {
+			candidate = mergeConfigSeedFallback(candidate, latest, fallback)
+		}
+		return candidate, nil
+	})
+	persistCancel()
+	if persistErr != nil {
+		return persistErr
+	}
+	proto.Reset(seed)
+	proto.Merge(seed, persisted)
+	err := SendLocalConfigSeed(nodeID, seed)
+	if !shouldRelay(nodeID, err) {
+		return err
+	}
+	if commandRelay == nil {
 		return ErrNotConnected
 	}
 	return relayFailure(err, commandRelay.forward(context.Background(), &foghornrelaypb.ForwardCommandRequest{
@@ -4803,30 +5568,22 @@ func SendLocalPushOperationalMode(nodeID string, mode ipcpb.NodeOperationalMode)
 
 	// Helmsman sidecar does NOT merge ConfigSeeds; ApplySeed overwrites lastSeed.
 	// Send a full seed to avoid wiping previously seeded fields.
-	seed := composeConfigSeed(nodeID, nil, c.peerAddr, mode, "")
-	msg := &ipcpb.ControlMessage{
-		Payload: &ipcpb.ControlMessage_ConfigSeed{ConfigSeed: seed},
-		SentAt:  timestamppb.Now(),
-	}
-	return c.stream.Send(msg)
+	seed, fallback := composeConfigSeedCandidate(nodeID, nil, c.peerAddr, mode, "")
+	return SendConfigSeedWithFallback(nodeID, seed, fallback)
 }
 
 // PushOperationalMode sends a ConfigSeed with the specified operational mode to the node,
 // relaying via HA if needed.
 func PushOperationalMode(nodeID string, mode ipcpb.NodeOperationalMode) error {
-	err := SendLocalPushOperationalMode(nodeID, mode)
-	if !shouldRelay(nodeID, err) {
-		return err
+	registry.mu.RLock()
+	c := registry.conns[nodeID]
+	registry.mu.RUnlock()
+	peerAddr := ""
+	if c != nil {
+		peerAddr = c.peerAddr
 	}
-	if commandRelay == nil {
-		return ErrNotConnected
-	}
-	// For relay: compose a full ConfigSeed (without peer addr, since we don't hold the conn)
-	seed := composeConfigSeed(nodeID, nil, "", mode, "")
-	return relayFailure(err, commandRelay.forward(context.Background(), &foghornrelaypb.ForwardCommandRequest{
-		TargetNodeId: nodeID,
-		Command:      &foghornrelaypb.ForwardCommandRequest_ConfigSeed{ConfigSeed: seed},
-	}))
+	seed, fallback := composeConfigSeedCandidate(nodeID, nil, peerAddr, mode, "")
+	return SendConfigSeedWithFallback(nodeID, seed, fallback)
 }
 
 // processModeChangeRequest handles an upstream mode change request from Helmsman.
@@ -6292,12 +7049,13 @@ func processProcessingJobResult(result *ipcpb.ProcessingJobResult, nodeID string
 
 	jobStatus := result.GetStatus()
 
-	// Chapter finalization jobs use a string job_id ("chapter-finalize-<chapter_id>")
+	// Chapter finalization jobs use an attempt-fenced string job_id
+	// ("chapter-finalize-v2-<attempt>-<chapter_id>")
 	// and have no row in foghorn.processing_jobs (its job_id is UUID). Route
 	// them through a dedicated handler that advances chapter state + registers
 	// the chapter VOD artifact without touching the processing_jobs table.
-	if chapterID := chapterIDFromJobID(result.GetJobId()); chapterID != "" {
-		handleChapterFinalizeResult(ctx, chapterID, jobStatus, result, nodeID, logger)
+	if chapterID, attempt, ok := chapterFinalizeIdentityFromJobID(result.GetJobId()); ok {
+		handleChapterFinalizeResult(ctx, chapterID, jobStatus, attempt, result, nodeID, logger)
 		return
 	}
 
@@ -6730,7 +7488,15 @@ func processProcessingJobProgress(progress *ipcpb.ProcessingJobProgress, nodeID 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	progressPct := progress.GetProgressPct()
+	progressPct := clampProgressPct(progress.GetProgressPct())
+	// Chapter jobs deliberately use an attempt-fenced non-UUID identity and do
+	// not have a processing_jobs row. Route them before the generic UUID query;
+	// PostgreSQL would reject the chapter job ID as invalid UUID rather than
+	// returning sql.ErrNoRows, which would otherwise drop the liveness heartbeat.
+	if chapterID, attempt, ok := chapterFinalizeIdentityFromJobID(progress.GetJobId()); ok {
+		processChapterFinalizeProgress(ctx, chapterID, nodeID, attempt, progressPct, logger)
+		return
+	}
 
 	// Update job progress and refresh updated_at so stale recovery doesn't requeue. Bind STRICTLY to the
 	// assigned node so a foreign node cannot refresh another node's job (which would defeat stale recovery on a
@@ -6742,16 +7508,20 @@ func processProcessingJobProgress(progress *ipcpb.ProcessingJobProgress, nodeID 
 		JobID: progress.GetJobId(), Progress: sql.NullInt32{Int32: progressPct, Valid: true}, ProcessingNodeID: sql.NullString{String: nodeID, Valid: true},
 	})
 	if err != nil {
-		if !errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
+			logger.WithFields(logging.Fields{
+				"job_id":  progress.GetJobId(),
+				"node_id": nodeID,
+			}).Debug("Ignored processing progress from a non-owner or terminal job")
+		} else {
 			logger.WithError(err).WithField("job_id", progress.GetJobId()).Warn("Failed to update processing job progress")
-			return
-		}
-		if chapterID := chapterIDFromJobID(progress.GetJobId()); chapterID != "" {
-			processChapterFinalizeProgress(ctx, chapterID, nodeID, progressPct, logger)
 		}
 		return
 	}
 	artifactHash, tenantID := updated.ArtifactHash, updated.TenantID
+	if updated.Progress.Valid {
+		progressPct = clampProgressPct(updated.Progress.Int32)
+	}
 
 	if artifactHash.Valid {
 		lifecycle, typeErr := q.GetProcessingArtifactLifecycle(ctx, artifactHash.String)
@@ -6804,12 +7574,24 @@ func processProcessingJobProgress(progress *ipcpb.ProcessingJobProgress, nodeID 
 	}
 }
 
-func processChapterFinalizeProgress(ctx context.Context, chapterID, nodeID string, progressPct int32, logger logging.Logger) {
-	// Bind to the assigned node: only the connection this finalize was dispatched to may refresh its progress
-	// (which resets the stale-finalize deadline). A foreign node matches 0 rows and is ignored.
-	row, err := foghorndb.New(db).UpdateChapterFinalizeProgress(ctx, foghorndb.UpdateChapterFinalizeProgressParams{ChapterID: chapterID, FinalizeNodeID: sql.NullString{String: nodeID, Valid: true}})
+func clampProgressPct(progress int32) int32 {
+	return max(0, min(progress, 100))
+}
+
+func processChapterFinalizeProgress(ctx context.Context, chapterID, nodeID string, expectedAttempt, progressPct int32, logger logging.Logger) {
+	// The node and attempt together own the lease. A report from a foreign node,
+	// a replaced attempt, or an attempt-less legacy job matches no row.
+	row, err := foghorndb.New(db).UpdateChapterFinalizeProgress(ctx, foghorndb.UpdateChapterFinalizeProgressParams{
+		ChapterID: chapterID, FinalizeNodeID: sql.NullString{String: nodeID, Valid: true}, ExpectedAttempt: expectedAttempt,
+	})
 	if err != nil {
-		if !errors.Is(err, sql.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
+			logger.WithFields(logging.Fields{
+				"chapter_id": chapterID,
+				"node_id":    nodeID,
+				"attempt":    expectedAttempt,
+			}).Debug("Ignored chapter progress from a non-owner or stale attempt")
+		} else {
 			logger.WithError(err).WithField("chapter_id", chapterID).Warn("Failed to update chapter finalize progress")
 		}
 		return
@@ -7034,11 +7816,11 @@ func SetArtifactRepository(repo state.ArtifactRepository) {
 // DeleteNodeArtifact removes a node's local-copy row and emits a LOST placement in
 // one transaction (via the repository), so explicit deletion/eviction updates the
 // analytics projection.
-func DeleteNodeArtifact(ctx context.Context, artifactHash, nodeID string, reportedAtMs int64) error {
+func DeleteNodeArtifact(ctx context.Context, artifactHash, nodeID string, nodeClockDeletedAtMs int64) (state.NodeArtifactDeletionOutcome, error) {
 	if artifactRepo == nil {
-		return nil
+		return state.NodeArtifactDeletionParentMissing, nil
 	}
-	return artifactRepo.DeleteNodeArtifact(ctx, artifactHash, nodeID, reportedAtMs)
+	return artifactRepo.DeleteNodeArtifact(ctx, artifactHash, nodeID, nodeClockDeletedAtMs)
 }
 
 // ReconcileNodeCopies seeds never-emitted present copies and sweeps stale-present rows
@@ -7236,6 +8018,10 @@ func sendCanDeleteResponse(stream ipcpb.HelmsmanControl_ConnectServer, response 
 // processSyncComplete handles sync completion from Helmsman
 // After Helmsman uploads an asset to S3 (without deleting local), it notifies Foghorn
 func processSyncComplete(complete *ipcpb.SyncComplete, nodeID string, logger logging.Logger) {
+	processSyncCompleteAt(complete, nodeID, 0, logger)
+}
+
+func processSyncCompleteAt(complete *ipcpb.SyncComplete, nodeID string, nodeClockCompletedAtMs int64, logger logging.Logger) {
 	requestID := complete.GetRequestId()
 	assetHash := complete.GetAssetHash()
 	status := complete.GetStatus()
@@ -7651,9 +8437,17 @@ func processSyncComplete(complete *ipcpb.SyncComplete, nodeID string, logger log
 
 		// Add this node to cached_nodes (it has a local copy) IN THE SAME TRANSACTION. Pass the synced
 		// size so the row and the emitted node-copy transition carry a real size, not zero.
-		if err := AddCachedNodeCopyTx(ctx, tx, assetHash, reportingNodeID, "", int64(sizeBytes)); err != nil {
+		copyApplied, err := AddCachedNodeCopyTx(ctx, tx, assetHash, reportingNodeID, "", int64(sizeBytes), nodeClockCompletedAtMs)
+		if err != nil {
 			logger.WithError(err).WithField("asset_hash", assetHash).Error("failed to add cached node copy in sync completion")
 			return
+		}
+		if !copyApplied {
+			logger.WithFields(logging.Fields{
+				"asset_hash":                 assetHash,
+				"node_id":                    reportingNodeID,
+				"node_clock_completed_at_ms": nodeClockCompletedAtMs,
+			}).Info("Ignoring sync-complete placement superseded by a newer node deletion")
 		}
 
 		// For VOD, the s3_key in vod_metadata is the canonical S3 key. On processed-VOD replacement
@@ -7744,7 +8538,7 @@ func processSyncComplete(complete *ipcpb.SyncComplete, nodeID string, logger log
 			break
 		}
 		// Shared guarded failure path. Applied only on a real, attempt-matched transition.
-		if applySyncCompletionFailure(ctx, assetHash, reportingNodeID, requestID, errorMsg, ownerTenant, complete.GetLocalMissing(), logger) {
+		if applySyncCompletionFailure(ctx, assetHash, reportingNodeID, requestID, errorMsg, ownerTenant, complete.GetLocalMissing(), nodeClockCompletedAtMs, logger) {
 			logger.WithFields(logging.Fields{"asset_hash": assetHash, "error": errorMsg}).Warn("Asset sync to S3 failed")
 		}
 	}
@@ -7758,7 +8552,7 @@ func processSyncComplete(complete *ipcpb.SyncComplete, nodeID string, logger log
 // survives, otherwise retryable 'failed'. Returns applied=true only on a real transition, so callers
 // run post-completion side effects (S3 cleanup) ONLY for a completion that actually matched — never
 // for a duplicate/stale/wrong-node one.
-func applySyncCompletionFailure(ctx context.Context, assetHash, reportingNodeID, requestID, errorMsg, ownerTenant string, localMissing bool, logger logging.Logger) (applied bool) {
+func applySyncCompletionFailure(ctx context.Context, assetHash, reportingNodeID, requestID, errorMsg, ownerTenant string, localMissing bool, nodeClockCompletedAtMs int64, logger logging.Logger) (applied bool) {
 	if db == nil {
 		incArtifactSyncOutcome("failed")
 		return false
@@ -7800,17 +8594,38 @@ func applySyncCompletionFailure(ctx context.Context, assetHash, reportingNodeID,
 	if localMissing {
 		// Drop the failed node's copy (emit LOST) atomically, then check whether any OTHER node still
 		// holds a present, complete copy.
-		if delErr := DeleteNodeArtifactTx(ctx, tx, assetHash, reportingNodeID, time.Now().UnixMilli()); delErr != nil {
+		deletionOutcome, delErr := DeleteNodeArtifactTx(ctx, tx, assetHash, reportingNodeID, nodeClockCompletedAtMs)
+		if delErr != nil {
 			logger.WithError(delErr).WithField("asset_hash", assetHash).Error("failed to orphan local_missing node copy")
 			return false
 		}
-		otherComplete, cErr := q.CountOtherCompleteArtifactCopies(ctx, foghorndb.CountOtherCompleteArtifactCopiesParams{ArtifactHash: assetHash, NodeID: reportingNodeID})
-		if cErr != nil {
-			logger.WithError(cErr).WithField("asset_hash", assetHash).Error("failed to count surviving copies")
+		ObserveArtifactDeletionOutcome(string(deletionOutcome))
+		switch deletionOutcome {
+		case state.NodeArtifactDeletionFenced:
+			logger.WithFields(logging.Fields{
+				"asset_hash":                 assetHash,
+				"node_id":                    reportingNodeID,
+				"node_clock_completed_at_ms": nodeClockCompletedAtMs,
+				"deletion_outcome":           deletionOutcome,
+			}).Warn("Ignoring stale local_missing copy state superseded by newer node inventory")
+		case state.NodeArtifactDeletionApplied:
+			otherComplete, cErr := q.CountOtherCompleteArtifactCopies(ctx, foghorndb.CountOtherCompleteArtifactCopiesParams{ArtifactHash: assetHash, NodeID: reportingNodeID})
+			if cErr != nil {
+				logger.WithError(cErr).WithField("asset_hash", assetHash).Error("failed to count surviving copies")
+				return false
+			}
+			if otherComplete == 0 {
+				newSyncStatus = "lost_local" // no viable source remains → terminal
+			}
+		case state.NodeArtifactDeletionAbsent:
+			// Absence is not proof that no viable source exists: inventory may not
+			// have observed the reporting copy yet. Keep the attempt retryable.
+		case state.NodeArtifactDeletionParentMissing:
+			logger.WithField("asset_hash", assetHash).Error("sync failure lost its locked artifact parent")
 			return false
-		}
-		if otherComplete == 0 {
-			newSyncStatus = "lost_local" // no viable source remains → terminal
+		default:
+			logger.WithFields(logging.Fields{"asset_hash": assetHash, "deletion_outcome": deletionOutcome}).Error("sync failure received an unknown deletion outcome")
+			return false
 		}
 	}
 	incArtifactSyncOutcome(newSyncStatus)
@@ -8126,17 +8941,23 @@ func refreshTLSBundles(log logging.Logger) {
 		// subscription would never trigger a push until the cluster
 		// bundle itself rotated. Fingerprint the full set instead.
 		mode := resolveOperationalMode(n.canonicalID, ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_UNSPECIFIED)
-		seed := composeConfigSeed(n.canonicalID, nil, n.peerAddr, mode, "")
+		seed, fallback := composeConfigSeedCandidate(n.canonicalID, nil, n.peerAddr, mode, "")
 		stripWildcardSiteWithoutTLS(seed)
 
-		nextState := tlsBundleSetState(seed.GetTlsBundles(), seedCaBundle)
+		preview := seed
+		if lastGood, loadErr := loadLastConfigSeed(context.Background(), n.connID); loadErr == nil && lastGood != nil {
+			preview = mergeConfigSeedFallback(seed, lastGood, fallback)
+		} else if loadErr != nil && !errors.Is(loadErr, sql.ErrNoRows) {
+			log.WithError(loadErr).WithField("node_id", n.canonicalID).Warn("Failed to preview durable TLS authority")
+		}
+		nextState := tlsBundleSetState(preview.GetTlsBundles(), seedCaBundle)
 
 		prev, ok := lastPushedTLSState.Load(n.connID)
 		if prevState, isString := prev.(string); ok && isString && prevState == nextState {
 			continue
 		}
 
-		if err := SendConfigSeed(n.connID, seed); err != nil {
+		if err := SendConfigSeedWithFallback(n.connID, seed, fallback); err != nil {
 			log.WithError(err).WithField("node_id", n.canonicalID).Warn("Failed to push renewed TLS bundles")
 			continue
 		}
@@ -8286,11 +9107,11 @@ func fetchClusterTLSBundle(nodeID string) (*ipcpb.TLSCertBundle, bool, error) {
 
 func fetchClusterTLSBundleByClusterID(clusterID, rootDomain string) (*ipcpb.TLSCertBundle, bool, error) {
 	if navigatorClient == nil {
-		return nil, false, nil
+		return nil, false, errors.New("cluster TLS authority is unavailable")
 	}
 	bundleID, wildcardDomain, ok := clusterTLSBundleLookup(clusterID, rootDomain)
 	if !ok {
-		return nil, false, nil
+		return nil, false, fmt.Errorf("cluster %q has no valid TLS bundle identity", clusterID)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -8299,10 +9120,11 @@ func fetchClusterTLSBundleByClusterID(clusterID, rootDomain string) (*ipcpb.TLSC
 	if certErr != nil {
 		return nil, false, certErr
 	}
-	if certResp == nil || !certResp.GetFound() {
-		if certResp != nil && certResp.GetError() != "" {
-			return nil, false, fmt.Errorf("navigator: %s", certResp.GetError())
-		}
+	found, presenceErr := navigatorTLSBundleFound(certResp)
+	if presenceErr != nil {
+		return nil, false, presenceErr
+	}
+	if !found {
 		return nil, false, nil
 	}
 
@@ -8313,7 +9135,21 @@ func fetchClusterTLSBundleByClusterID(clusterID, rootDomain string) (*ipcpb.TLSC
 		ExpiresAt:     certResp.GetExpiresAt(),
 		BundleId:      bundleID,
 		SiteAddresses: []string{wildcardDomain},
+		Version:       certResp.GetVersion(),
 	}, true, nil
+}
+
+// navigatorTLSBundleFound keeps absence distinct from a failed authority read.
+// Callers may remove durable material only for a non-nil, error-free response
+// that explicitly reports found=false.
+func navigatorTLSBundleFound(resp *dnspb.GetTLSBundleResponse) (bool, error) {
+	if resp == nil {
+		return false, errors.New("navigator returned an empty TLS bundle response")
+	}
+	if errText := strings.TrimSpace(resp.GetError()); errText != "" {
+		return false, fmt.Errorf("navigator: %s", errText)
+	}
+	return resp.GetFound(), nil
 }
 
 func fileServerTLSBundle(certFile, keyFile string) (*ipcpb.TLSCertBundle, error) {
@@ -8362,24 +9198,24 @@ func waitForServedClusterTLSBundles(ctx context.Context, rootDomain string) ([]*
 }
 
 func fetchServedClusterTLSBundles(rootDomain string) ([]*ipcpb.TLSCertBundle, error) {
-	clusterIDs := servedClusterIDsForTLS()
+	return collectServedClusterTLSBundles(servedClusterIDsForTLS(), func(clusterID string) (*ipcpb.TLSCertBundle, bool, error) {
+		return fetchClusterTLSBundleByClusterID(clusterID, rootDomain)
+	})
+}
+
+func collectServedClusterTLSBundles(clusterIDs []string, fetch func(string) (*ipcpb.TLSCertBundle, bool, error)) ([]*ipcpb.TLSCertBundle, error) {
 	if len(clusterIDs) == 0 {
 		return nil, nil
 	}
 	bundles := make([]*ipcpb.TLSCertBundle, 0, len(clusterIDs))
-	var lastErr error
 	for _, clusterID := range clusterIDs {
-		bundle, found, err := fetchClusterTLSBundleByClusterID(clusterID, rootDomain)
+		bundle, found, err := fetch(clusterID)
 		if err != nil {
-			lastErr = err
-			continue
+			return nil, fmt.Errorf("fetch TLS bundle for served cluster %q: %w", clusterID, err)
 		}
 		if found && bundle != nil {
 			bundles = append(bundles, bundle)
 		}
-	}
-	if len(bundles) == 0 && lastErr != nil {
-		return nil, lastErr
 	}
 	return bundles, nil
 }
@@ -8455,6 +9291,12 @@ func tlsBundleSetState(bundles []*ipcpb.TLSCertBundle, caBundle []byte) string {
 		payload = append(payload, b.GetKeyPem()...)
 		payload = append(payload, '\x00')
 		payload = append(payload, b.GetDomain()...)
+		payload = append(payload, '\x00')
+		payload = append(payload, b.GetVersion()...)
+		for _, address := range b.GetSiteAddresses() {
+			payload = append(payload, '\x00')
+			payload = append(payload, address...)
+		}
 		payload = fmt.Appendf(payload, "\x00%d", b.GetExpiresAt())
 		payload = append(payload, '\x00')
 	}

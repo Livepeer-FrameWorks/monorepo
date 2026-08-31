@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -170,17 +171,29 @@ func TestActiveIngestPlacementJob_NoLivePublishersIsNoCall(t *testing.T) {
 // clock rather than corrupting, so the job neither retries in-tick nor aborts.
 func TestActiveIngestPlacementJob_FailedSyncIsNotFatal(t *testing.T) {
 	syncer := &recordingSyncer{err: errors.New("commodore down")}
-	job := placementJob(syncer, func(context.Context) []LiveIngest {
-		return []LiveIngest{
-			{TenantID: "t1", InternalName: "stream-a", ClusterID: "demo-media", ClaimToken: "c1"},
-			{TenantID: "t1", InternalName: "stream-b", ClusterID: "other-media", ClaimToken: "c2"},
-		}
+	var fenced atomic.Int32
+	job := NewActiveIngestPlacementJob(ActiveIngestPlacementConfig{
+		Logger: logging.NewLogger(),
+		Syncer: syncer,
+		Sources: func(context.Context) ([]LiveIngest, error) {
+			return []LiveIngest{
+				{TenantID: "t1", InternalName: "stream-a", ClusterID: "demo-media", ClaimToken: "c1"},
+				{TenantID: "t1", InternalName: "stream-b", ClusterID: "other-media", ClaimToken: "c2"},
+			}, nil
+		},
+		ClaimLost: func(context.Context, *commodorepb.ActiveIngestStream) error {
+			fenced.Add(1)
+			return nil
+		},
 	})
 
 	renewAndWait(job)
 
 	if got := len(syncer.snapshot()); got != 1 {
 		t.Fatalf("attempted %d calls, want one", got)
+	}
+	if got := fenced.Load(); got != 0 {
+		t.Fatalf("control-plane transport failure fenced %d existing publishers; want zero", got)
 	}
 }
 

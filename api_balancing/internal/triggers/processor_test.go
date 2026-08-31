@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -381,6 +382,7 @@ func TestHandleStreamLifecycleDropsMissingStreamID(t *testing.T) {
 
 	_, _, err := p.handleStreamLifecycleUpdate(&ipcpb.MistTrigger{
 		TriggerType: "STREAM_LIFECYCLE_UPDATE",
+		NodeId:      "node-1",
 		TriggerPayload: &ipcpb.MistTrigger_StreamLifecycleUpdate{
 			StreamLifecycleUpdate: &ipcpb.StreamLifecycleUpdate{
 				TenantId:     &tenantID,
@@ -395,6 +397,22 @@ func TestHandleStreamLifecycleDropsMissingStreamID(t *testing.T) {
 	}
 	if got := state.DefaultManager().GetStreamState("artifact-1"); got != nil {
 		t.Fatalf("expected missing stream_id lifecycle not to update stream state, got %#v", got)
+	}
+}
+
+func TestHandleStreamLifecycleRejectsPayloadNodeMismatch(t *testing.T) {
+	p := &Processor{logger: logging.NewLogger()}
+	_, _, err := p.handleStreamLifecycleUpdate(&ipcpb.MistTrigger{
+		TriggerType: "STREAM_LIFECYCLE_UPDATE",
+		NodeId:      "authenticated-node",
+		TriggerPayload: &ipcpb.MistTrigger_StreamLifecycleUpdate{
+			StreamLifecycleUpdate: &ipcpb.StreamLifecycleUpdate{
+				NodeId: "forged-node", InternalName: "live+demo", Status: "offline",
+			},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "node identity mismatch") {
+		t.Fatalf("mismatched lifecycle node err=%v", err)
 	}
 }
 
@@ -707,6 +725,7 @@ func TestPayloadTypeAssertions_ValidTypes(t *testing.T) {
 func TestHandleStreamSource_MistNativePlaybackIDResolvesThroughContext(t *testing.T) {
 	t.Setenv("BRAND_DOMAIN", "frameworks.network")
 	t.Setenv("FOGHORN_BALANCER_CAPABILITY_SECRET", "test-capability-secret")
+	state.DefaultManager().SetNodeConnectionInfo(context.Background(), "edge-eu-1", "edge-eu-1:18090", "", "media-eu-1", nil)
 	commodoreClient, cleanup, stub := setupCommodoreClientWithStub(t, nil, nil)
 	t.Cleanup(cleanup)
 	stub.resolveStreamContextByKey = map[string]*commodorepb.ResolveStreamContextResponse{
@@ -738,8 +757,13 @@ func TestHandleStreamSource_MistNativePlaybackIDResolvesThroughContext(t *testin
 	if abort {
 		t.Fatal("expected non-abort STREAM_SOURCE response")
 	}
-	if !strings.HasPrefix(resp, "balance:https://foghorn.media-eu-1.frameworks.network/_frameworks/balancer/v1/edge-eu-1/") ||
-		strings.Contains(resp, "fh_sig=") {
+	capabilityURL, parseErr := url.Parse(strings.TrimPrefix(resp, "balance:"))
+	if parseErr != nil {
+		t.Fatalf("parse STREAM_SOURCE capability: %v", parseErr)
+	}
+	nodeID, capabilityClusterID, compatibilityPath, valid := control.VerifyBalancerCapabilityPath(capabilityURL.EscapedPath(), time.Now())
+	if !strings.HasPrefix(resp, "balance:https://foghorn.media-eu-1.frameworks.network/") ||
+		strings.Contains(resp, "fh_sig=") || !valid || nodeID != "edge-eu-1" || capabilityClusterID != "media-eu-1" || compatibilityPath != "/" {
 		t.Fatalf("unexpected STREAM_SOURCE response: %q", resp)
 	}
 	keys := stub.ResolveStreamContextKeys()
@@ -1071,9 +1095,12 @@ type stubCommodoreInternalService struct {
 	validateClusterIDs        []string
 	resolveIdentifierResponse *commodorepb.ResolveIdentifierResponse
 	resolveIdentifierErr      error
+	resolvePlaybackResponse   *commodorepb.ResolvePlaybackPolicyResponse
+	resolvePlaybackErr        error
 	resolveStreamContextByKey map[string]*commodorepb.ResolveStreamContextResponse
 	resolveStreamContextErr   error
 	resolveStreamContextKeys  []string
+	resolveStreamClusterIDs   []string
 }
 
 func (s *stubCommodoreInternalService) ValidateStreamKey(ctx context.Context, req *commodorepb.ValidateStreamKeyRequest) (*commodorepb.ValidateStreamKeyResponse, error) {
@@ -1113,6 +1140,10 @@ func (s *stubCommodoreInternalService) ResolveIdentifier(ctx context.Context, re
 	return s.resolveIdentifierResponse, s.resolveIdentifierErr
 }
 
+func (s *stubCommodoreInternalService) ResolvePlaybackPolicy(ctx context.Context, req *commodorepb.ResolvePlaybackPolicyRequest) (*commodorepb.ResolvePlaybackPolicyResponse, error) {
+	return s.resolvePlaybackResponse, s.resolvePlaybackErr
+}
+
 func (s *stubCommodoreInternalService) ResolveStreamContext(ctx context.Context, req *commodorepb.ResolveStreamContextRequest) (*commodorepb.ResolveStreamContextResponse, error) {
 	key := ""
 	switch id := req.GetIdentifier().(type) {
@@ -1125,6 +1156,7 @@ func (s *stubCommodoreInternalService) ResolveStreamContext(ctx context.Context,
 	}
 	s.mu.Lock()
 	s.resolveStreamContextKeys = append(s.resolveStreamContextKeys, key)
+	s.resolveStreamClusterIDs = append(s.resolveStreamClusterIDs, req.GetClusterId())
 	resp := s.resolveStreamContextByKey[key]
 	err := s.resolveStreamContextErr
 	s.mu.Unlock()
@@ -1139,6 +1171,12 @@ func (s *stubCommodoreInternalService) ResolveStreamContext(ctx context.Context,
 		}, nil
 	}
 	return resp, nil
+}
+
+func (s *stubCommodoreInternalService) ResolveStreamContextClusterIDs() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.resolveStreamClusterIDs...)
 }
 
 func (s *stubCommodoreInternalService) ResolveStreamContextKeys() []string {
@@ -1763,6 +1801,17 @@ func TestHandleStorageLifecycleData_UsesCacheAndStreamIDFallback(t *testing.T) {
 	payload := trigger.GetStorageLifecycleData()
 	if payload.GetStreamId() != streamID {
 		t.Fatalf("expected stream ID %q, got %q", streamID, payload.GetStreamId())
+	}
+}
+
+func TestAddArtifactStorageUsage_ChapterUsesVodBucket(t *testing.T) {
+	usage := &ipcpb.TenantStorageUsage{}
+	addArtifactStorageUsage(usage, "chapter", 4096)
+	if usage.GetTotalBytes() != 4096 || usage.GetFileCount() != 1 || usage.GetVodBytes() != 4096 {
+		t.Fatalf("chapter usage = %+v, want total=vod=4096 files=1", usage)
+	}
+	if usage.GetClipBytes() != 0 || usage.GetDvrBytes() != 0 {
+		t.Fatalf("chapter leaked into non-VOD buckets: %+v", usage)
 	}
 }
 

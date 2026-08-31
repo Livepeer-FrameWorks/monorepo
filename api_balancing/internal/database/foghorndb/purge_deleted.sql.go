@@ -29,6 +29,81 @@ func (q *Queries) ClaimStaleUploadingVOD(ctx context.Context, arg ClaimStaleUplo
 	return result.RowsAffected()
 }
 
+const deferFederatedArtifactPointerPurgeClaim = `-- name: DeferFederatedArtifactPointerPurgeClaim :execrows
+UPDATE foghorn.artifacts
+SET federated_purge_lease_until = NOW() + CAST($1 AS text)::interval
+WHERE artifact_hash = $2
+  AND tenant_id::text = $3
+  AND federated_pointer = true
+  AND status = 'deleted'
+  AND federated_purge_token = $4::uuid
+`
+
+type DeferFederatedArtifactPointerPurgeClaimParams struct {
+	RetryInterval string `db:"retry_interval" json:"retry_interval"`
+	ArtifactHash  string `db:"artifact_hash" json:"artifact_hash"`
+	TenantID      string `db:"tenant_id" json:"tenant_id"`
+	PurgeToken    string `db:"purge_token" json:"purge_token"`
+}
+
+// Deterministic evidence gaps need operator/data repair rather than immediate
+// retry churn. Retain token ownership and move only its retry timestamp.
+func (q *Queries) DeferFederatedArtifactPointerPurgeClaim(ctx context.Context, arg DeferFederatedArtifactPointerPurgeClaimParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deferFederatedArtifactPointerPurgeClaim,
+		arg.RetryInterval,
+		arg.ArtifactHash,
+		arg.TenantID,
+		arg.PurgeToken,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deleteFencedFederatedArtifactPointer = `-- name: DeleteFencedFederatedArtifactPointer :execrows
+DELETE FROM foghorn.artifacts AS artifact
+WHERE artifact.artifact_hash = $1
+  AND artifact.tenant_id::text = $2
+  AND artifact.federated_pointer = true
+  AND artifact.status = 'deleted'
+  AND artifact.federated_purge_token = $3::uuid
+  AND NOT EXISTS (
+      SELECT 1 FROM foghorn.dvr_chapters chapter
+      WHERE chapter.artifact_hash = artifact.artifact_hash
+         OR chapter.playback_artifact_hash = artifact.artifact_hash
+  )
+  AND NOT EXISTS (SELECT 1 FROM foghorn.artifact_nodes node WHERE node.artifact_hash = artifact.artifact_hash AND node.is_orphaned = false)
+  AND (
+      EXISTS (
+          SELECT 1 FROM foghorn.media_object_authority_projection authority
+          WHERE authority.tenant_id = artifact.tenant_id
+            AND authority.artifact_hash = artifact.artifact_hash
+            AND authority.lifecycle = 'tombstone'
+      ) OR NOT EXISTS (
+          SELECT 1 FROM foghorn.media_object_authority_projection authority
+          WHERE authority.tenant_id = artifact.tenant_id
+            AND authority.artifact_hash = artifact.artifact_hash
+            AND authority.lifecycle = 'active'
+            AND authority.valid_until > NOW()
+      )
+  )
+`
+
+type DeleteFencedFederatedArtifactPointerParams struct {
+	ArtifactHash string `db:"artifact_hash" json:"artifact_hash"`
+	TenantID     string `db:"tenant_id" json:"tenant_id"`
+	PurgeToken   string `db:"purge_token" json:"purge_token"`
+}
+
+func (q *Queries) DeleteFencedFederatedArtifactPointer(ctx context.Context, arg DeleteFencedFederatedArtifactPointerParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deleteFencedFederatedArtifactPointer, arg.ArtifactHash, arg.TenantID, arg.PurgeToken)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deletePurgedArtifact = `-- name: DeletePurgedArtifact :exec
 DELETE FROM foghorn.artifacts
 WHERE artifact_hash = $1 AND tenant_id::text = $2
@@ -42,6 +117,183 @@ type DeletePurgedArtifactParams struct {
 func (q *Queries) DeletePurgedArtifact(ctx context.Context, arg DeletePurgedArtifactParams) error {
 	_, err := q.db.ExecContext(ctx, deletePurgedArtifact, arg.ArtifactHash, arg.TenantID)
 	return err
+}
+
+const fenceInterruptedActiveFederatedArtifactPointerPurge = `-- name: FenceInterruptedActiveFederatedArtifactPointerPurge :execrows
+UPDATE foghorn.artifacts AS artifact
+SET federated_purge_token = $1::uuid,
+    federated_purge_lease_until = NOW() + CAST($2 AS text)::interval
+WHERE artifact.artifact_hash = $3
+  AND artifact.tenant_id::text = $4
+  AND artifact.federated_pointer = true
+  AND artifact.status = 'deleted'
+  AND (
+      artifact.federated_purge_token IS NULL
+      OR artifact.federated_purge_lease_until <= NOW()
+  )
+  AND EXISTS (
+      SELECT 1
+      FROM foghorn.media_object_authority_projection authority
+      WHERE authority.tenant_id = artifact.tenant_id
+        AND authority.artifact_hash = artifact.artifact_hash
+        AND authority.lifecycle = 'active'
+        AND authority.valid_until > NOW()
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM foghorn.media_object_authority_projection authority
+      WHERE authority.tenant_id = artifact.tenant_id
+        AND authority.artifact_hash = artifact.artifact_hash
+        AND authority.lifecycle = 'tombstone'
+  )
+`
+
+type FenceInterruptedActiveFederatedArtifactPointerPurgeParams struct {
+	PurgeToken    string `db:"purge_token" json:"purge_token"`
+	LeaseInterval string `db:"lease_interval" json:"lease_interval"`
+	ArtifactHash  string `db:"artifact_hash" json:"artifact_hash"`
+	TenantID      string `db:"tenant_id" json:"tenant_id"`
+}
+
+func (q *Queries) FenceInterruptedActiveFederatedArtifactPointerPurge(ctx context.Context, arg FenceInterruptedActiveFederatedArtifactPointerPurgeParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, fenceInterruptedActiveFederatedArtifactPointerPurge,
+		arg.PurgeToken,
+		arg.LeaseInterval,
+		arg.ArtifactHash,
+		arg.TenantID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const fenceStaleFederatedArtifactPointerForPurge = `-- name: FenceStaleFederatedArtifactPointerForPurge :execrows
+UPDATE foghorn.artifacts AS artifact
+SET status = 'deleted',
+    federated_purge_token = $1::uuid,
+    federated_purge_lease_until = NOW() + CAST($2 AS text)::interval
+WHERE artifact.artifact_hash = $3
+  AND artifact.tenant_id::text = $4
+  AND artifact.federated_pointer = true
+  AND artifact.status IN ('ready', 'deleted')
+  AND (
+      artifact.federated_purge_token IS NULL
+      OR artifact.federated_purge_lease_until <= NOW()
+  )
+  AND artifact.federated_purge_eligible_at < NOW() - CAST($5 AS text)::interval
+  AND NOT EXISTS (
+      SELECT 1 FROM foghorn.media_object_authority_projection authority
+      WHERE authority.tenant_id = artifact.tenant_id
+        AND authority.artifact_hash = artifact.artifact_hash
+        AND authority.lifecycle = 'active'
+        AND authority.valid_until > NOW()
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM foghorn.dvr_chapters chapter
+      WHERE chapter.artifact_hash = artifact.artifact_hash
+         OR chapter.playback_artifact_hash = artifact.artifact_hash
+  )
+  AND NOT EXISTS (SELECT 1 FROM foghorn.artifact_nodes node WHERE node.artifact_hash = artifact.artifact_hash AND node.is_orphaned = false)
+`
+
+type FenceStaleFederatedArtifactPointerForPurgeParams struct {
+	PurgeToken        string `db:"purge_token" json:"purge_token"`
+	LeaseInterval     string `db:"lease_interval" json:"lease_interval"`
+	ArtifactHash      string `db:"artifact_hash" json:"artifact_hash"`
+	TenantID          string `db:"tenant_id" json:"tenant_id"`
+	RetentionInterval string `db:"retention_interval" json:"retention_interval"`
+}
+
+func (q *Queries) FenceStaleFederatedArtifactPointerForPurge(ctx context.Context, arg FenceStaleFederatedArtifactPointerForPurgeParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, fenceStaleFederatedArtifactPointerForPurge,
+		arg.PurgeToken,
+		arg.LeaseInterval,
+		arg.ArtifactHash,
+		arg.TenantID,
+		arg.RetentionInterval,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const fenceTombstonedFederatedArtifactPointerForPurge = `-- name: FenceTombstonedFederatedArtifactPointerForPurge :execrows
+UPDATE foghorn.artifacts AS artifact
+SET status = 'deleted',
+    federated_purge_token = $1::uuid,
+    federated_purge_lease_until = NOW() + CAST($2 AS text)::interval
+WHERE artifact.artifact_hash = $3
+  AND artifact.tenant_id::text = $4
+  AND artifact.federated_pointer = true
+  AND artifact.status = 'deleted'
+  AND (
+      artifact.federated_purge_token IS NULL
+      OR artifact.federated_purge_lease_until <= NOW()
+  )
+  AND artifact.federated_purge_eligible_at < NOW() - CAST($5 AS text)::interval
+  AND EXISTS (
+      SELECT 1 FROM foghorn.media_object_authority_projection authority
+      WHERE authority.tenant_id = artifact.tenant_id
+        AND authority.artifact_hash = artifact.artifact_hash
+        AND authority.lifecycle = 'tombstone'
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM foghorn.dvr_chapters chapter
+      WHERE chapter.artifact_hash = artifact.artifact_hash
+         OR chapter.playback_artifact_hash = artifact.artifact_hash
+  )
+  AND NOT EXISTS (SELECT 1 FROM foghorn.artifact_nodes node WHERE node.artifact_hash = artifact.artifact_hash AND node.is_orphaned = false)
+`
+
+type FenceTombstonedFederatedArtifactPointerForPurgeParams struct {
+	PurgeToken        string `db:"purge_token" json:"purge_token"`
+	LeaseInterval     string `db:"lease_interval" json:"lease_interval"`
+	ArtifactHash      string `db:"artifact_hash" json:"artifact_hash"`
+	TenantID          string `db:"tenant_id" json:"tenant_id"`
+	RetentionInterval string `db:"retention_interval" json:"retention_interval"`
+}
+
+func (q *Queries) FenceTombstonedFederatedArtifactPointerForPurge(ctx context.Context, arg FenceTombstonedFederatedArtifactPointerForPurgeParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, fenceTombstonedFederatedArtifactPointerForPurge,
+		arg.PurgeToken,
+		arg.LeaseInterval,
+		arg.ArtifactHash,
+		arg.TenantID,
+		arg.RetentionInterval,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const getFencedFederatedArtifactPointerPurgeState = `-- name: GetFencedFederatedArtifactPointerPurgeState :one
+SELECT COALESCE(backend_id, '')::text AS backend_id, has_thumbnails
+FROM foghorn.artifacts
+WHERE artifact_hash = $1
+  AND tenant_id::text = $2
+  AND federated_pointer = true
+  AND status = 'deleted'
+  AND federated_purge_token = $3::uuid
+`
+
+type GetFencedFederatedArtifactPointerPurgeStateParams struct {
+	ArtifactHash string `db:"artifact_hash" json:"artifact_hash"`
+	TenantID     string `db:"tenant_id" json:"tenant_id"`
+	PurgeToken   string `db:"purge_token" json:"purge_token"`
+}
+
+type GetFencedFederatedArtifactPointerPurgeStateRow struct {
+	BackendID     string       `db:"backend_id" json:"backend_id"`
+	HasThumbnails sql.NullBool `db:"has_thumbnails" json:"has_thumbnails"`
+}
+
+func (q *Queries) GetFencedFederatedArtifactPointerPurgeState(ctx context.Context, arg GetFencedFederatedArtifactPointerPurgeStateParams) (GetFencedFederatedArtifactPointerPurgeStateRow, error) {
+	row := q.db.QueryRowContext(ctx, getFencedFederatedArtifactPointerPurgeState, arg.ArtifactHash, arg.TenantID, arg.PurgeToken)
+	var i GetFencedFederatedArtifactPointerPurgeStateRow
+	err := row.Scan(&i.BackendID, &i.HasThumbnails)
+	return i, err
 }
 
 const listPurgeableArtifacts = `-- name: ListPurgeableArtifacts :many
@@ -60,7 +312,8 @@ SELECT a.artifact_hash, a.artifact_type, a.tenant_id::text,
        a.status
 FROM foghorn.artifacts a
 LEFT JOIN foghorn.vod_metadata v ON v.artifact_hash = a.artifact_hash
-WHERE a.artifact_type IN ('clip', 'dvr', 'vod')
+WHERE a.artifact_type IN ('clip', 'dvr', 'vod', 'chapter')
+  AND a.federated_pointer = false
   AND a.status = 'deleted'
   AND a.updated_at < NOW() - CAST($1 AS text)::interval
   AND a.catalog_revision > 0
@@ -147,7 +400,8 @@ SELECT a.artifact_hash, a.artifact_type, a.tenant_id::text,
        a.status
 FROM foghorn.artifacts a
 LEFT JOIN foghorn.vod_metadata v ON v.artifact_hash = a.artifact_hash
-WHERE a.artifact_type IN ('clip', 'dvr', 'vod')
+WHERE a.artifact_type IN ('clip', 'dvr', 'vod', 'chapter')
+  AND a.federated_pointer = false
   AND a.status = 'deleted'
   AND a.updated_at < NOW() - CAST($1 AS text)::interval
   AND a.catalog_revision > 0
@@ -224,6 +478,158 @@ func (q *Queries) ListPurgeableLocalArtifacts(ctx context.Context, arg ListPurge
 	return items, nil
 }
 
+const listRecoverableFederatedArtifactPointerPurges = `-- name: ListRecoverableFederatedArtifactPointerPurges :many
+SELECT artifact.artifact_hash, artifact.tenant_id::text,
+       COALESCE(artifact.backend_id, '')::text AS backend_id,
+       CASE
+         WHEN EXISTS (
+           SELECT 1
+           FROM foghorn.media_object_authority_projection AS authority
+           WHERE authority.tenant_id = artifact.tenant_id
+             AND authority.artifact_hash = artifact.artifact_hash
+             AND authority.lifecycle = 'tombstone'
+         ) THEN 'tombstone'
+         WHEN EXISTS (
+           SELECT 1
+           FROM foghorn.media_object_authority_projection AS authority
+           WHERE authority.tenant_id = artifact.tenant_id
+             AND authority.artifact_hash = artifact.artifact_hash
+             AND authority.lifecycle = 'active'
+             AND authority.valid_until > NOW()
+         ) THEN 'interrupted_active'
+         ELSE 'stale'
+       END::text AS purge_kind
+FROM foghorn.artifacts AS artifact
+WHERE artifact.federated_pointer = true
+  AND artifact.status = 'deleted'
+  AND artifact.federated_purge_token IS NOT NULL
+  AND artifact.federated_purge_lease_until <= NOW()
+  AND (
+      EXISTS (
+        SELECT 1
+        FROM foghorn.media_object_authority_projection AS authority
+        WHERE authority.tenant_id = artifact.tenant_id
+          AND authority.artifact_hash = artifact.artifact_hash
+          AND authority.lifecycle = 'active'
+          AND authority.valid_until > NOW()
+      )
+      OR artifact.federated_purge_eligible_at < NOW() - CAST($1 AS text)::interval
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM foghorn.dvr_chapters chapter
+      WHERE chapter.artifact_hash = artifact.artifact_hash
+         OR chapter.playback_artifact_hash = artifact.artifact_hash
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM foghorn.artifact_nodes node
+      WHERE node.artifact_hash = artifact.artifact_hash
+        AND node.is_orphaned = false
+  )
+ORDER BY artifact.federated_purge_lease_until NULLS FIRST, artifact.federated_purge_eligible_at, artifact.artifact_hash
+LIMIT 1000
+`
+
+type ListRecoverableFederatedArtifactPointerPurgesRow struct {
+	ArtifactHash     string `db:"artifact_hash" json:"artifact_hash"`
+	ArtifactTenantID string `db:"artifact_tenant_id" json:"artifact_tenant_id"`
+	BackendID        string `db:"backend_id" json:"backend_id"`
+	PurgeKind        string `db:"purge_kind" json:"purge_kind"`
+}
+
+// Recover every expired federated-pointer saga on the short cadence. The
+// current signed-authority state selects the same guarded fence that ordinary
+// discovery would use: tombstone wins, active authority restores only after
+// cleanup settlement, and an authority-free old pointer remains a stale purge.
+func (q *Queries) ListRecoverableFederatedArtifactPointerPurges(ctx context.Context, retentionInterval string) ([]ListRecoverableFederatedArtifactPointerPurgesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listRecoverableFederatedArtifactPointerPurges, retentionInterval)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListRecoverableFederatedArtifactPointerPurgesRow{}
+	for rows.Next() {
+		var i ListRecoverableFederatedArtifactPointerPurgesRow
+		if err := rows.Scan(
+			&i.ArtifactHash,
+			&i.ArtifactTenantID,
+			&i.BackendID,
+			&i.PurgeKind,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStaleFederatedArtifactPointersForPurge = `-- name: ListStaleFederatedArtifactPointersForPurge :many
+SELECT artifact.artifact_hash, artifact.tenant_id::text,
+       COALESCE(artifact.backend_id, '')::text AS backend_id
+FROM foghorn.artifacts AS artifact
+WHERE artifact.federated_pointer = true
+  AND artifact.status IN ('ready', 'deleted')
+  AND (
+      artifact.federated_purge_token IS NULL
+      OR artifact.federated_purge_lease_until <= NOW()
+  )
+  AND artifact.federated_purge_eligible_at < NOW() - CAST($1 AS text)::interval
+  AND NOT EXISTS (
+      SELECT 1
+      FROM foghorn.media_object_authority_projection AS authority
+      WHERE authority.tenant_id = artifact.tenant_id
+        AND authority.artifact_hash = artifact.artifact_hash
+        AND authority.lifecycle = 'active'
+        AND authority.valid_until > NOW()
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM foghorn.dvr_chapters chapter
+      WHERE chapter.artifact_hash = artifact.artifact_hash
+         OR chapter.playback_artifact_hash = artifact.artifact_hash
+  )
+  AND NOT EXISTS (SELECT 1 FROM foghorn.artifact_nodes node WHERE node.artifact_hash = artifact.artifact_hash AND node.is_orphaned = false)
+ORDER BY artifact.federated_purge_eligible_at, artifact.artifact_hash
+LIMIT 1000
+`
+
+type ListStaleFederatedArtifactPointersForPurgeRow struct {
+	ArtifactHash     string `db:"artifact_hash" json:"artifact_hash"`
+	ArtifactTenantID string `db:"artifact_tenant_id" json:"artifact_tenant_id"`
+	BackendID        string `db:"backend_id" json:"backend_id"`
+}
+
+// A pointer whose cache-age threshold has passed may be evicted whenever no
+// unexpired signed authority remains. Its dedicated eligibility clock is not
+// refreshed by metadata, inventory, access, or re-adoption writers; the live
+// predicate remains signed validity.
+func (q *Queries) ListStaleFederatedArtifactPointersForPurge(ctx context.Context, retentionInterval string) ([]ListStaleFederatedArtifactPointersForPurgeRow, error) {
+	rows, err := q.db.QueryContext(ctx, listStaleFederatedArtifactPointersForPurge, retentionInterval)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListStaleFederatedArtifactPointersForPurgeRow{}
+	for rows.Next() {
+		var i ListStaleFederatedArtifactPointersForPurgeRow
+		if err := rows.Scan(&i.ArtifactHash, &i.ArtifactTenantID, &i.BackendID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listStaleUploadingVODs = `-- name: ListStaleUploadingVODs :many
 SELECT a.artifact_hash, a.tenant_id::text,
        COALESCE(a.storage_cluster_id, '')::text AS storage_cluster_id,
@@ -274,10 +680,67 @@ func (q *Queries) ListStaleUploadingVODs(ctx context.Context) ([]ListStaleUpload
 	return items, nil
 }
 
+const listTombstonedFederatedArtifactPointersForPurge = `-- name: ListTombstonedFederatedArtifactPointersForPurge :many
+SELECT artifact.artifact_hash, artifact.tenant_id::text,
+       COALESCE(artifact.backend_id, '')::text AS backend_id
+FROM foghorn.artifacts AS artifact
+JOIN foghorn.media_object_authority_projection AS authority
+  ON authority.tenant_id = artifact.tenant_id
+ AND authority.artifact_hash = artifact.artifact_hash
+ AND authority.lifecycle = 'tombstone'
+WHERE artifact.federated_pointer = true
+  AND artifact.status = 'deleted'
+  AND (
+      artifact.federated_purge_token IS NULL
+      OR artifact.federated_purge_lease_until <= NOW()
+  )
+  AND artifact.federated_purge_eligible_at < NOW() - CAST($1 AS text)::interval
+  AND NOT EXISTS (
+      SELECT 1 FROM foghorn.dvr_chapters chapter
+      WHERE chapter.artifact_hash = artifact.artifact_hash
+         OR chapter.playback_artifact_hash = artifact.artifact_hash
+  )
+  AND NOT EXISTS (SELECT 1 FROM foghorn.artifact_nodes node WHERE node.artifact_hash = artifact.artifact_hash AND node.is_orphaned = false)
+ORDER BY artifact.federated_purge_eligible_at, artifact.artifact_hash
+LIMIT 1000
+`
+
+type ListTombstonedFederatedArtifactPointersForPurgeRow struct {
+	ArtifactHash     string `db:"artifact_hash" json:"artifact_hash"`
+	ArtifactTenantID string `db:"artifact_tenant_id" json:"artifact_tenant_id"`
+	BackendID        string `db:"backend_id" json:"backend_id"`
+}
+
+// A signed tombstone is the resurrection/version fence, but the pointer row is
+// retained until its cell-local derivatives have been fenced and swept.
+func (q *Queries) ListTombstonedFederatedArtifactPointersForPurge(ctx context.Context, retentionInterval string) ([]ListTombstonedFederatedArtifactPointersForPurgeRow, error) {
+	rows, err := q.db.QueryContext(ctx, listTombstonedFederatedArtifactPointersForPurge, retentionInterval)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListTombstonedFederatedArtifactPointersForPurgeRow{}
+	for rows.Next() {
+		var i ListTombstonedFederatedArtifactPointersForPurgeRow
+		if err := rows.Scan(&i.ArtifactHash, &i.ArtifactTenantID, &i.BackendID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markFailedArtifactsDeleted = `-- name: MarkFailedArtifactsDeleted :execrows
 UPDATE foghorn.artifacts a
 SET status = 'deleted'
-WHERE a.artifact_type IN ('clip', 'dvr', 'vod')
+WHERE a.artifact_type IN ('clip', 'dvr', 'vod', 'chapter')
+  AND a.federated_pointer = false
   AND a.status = 'failed'
   AND a.updated_at < NOW() - CAST($1 AS text)::interval
   AND NOT EXISTS (
@@ -303,6 +766,78 @@ WHERE is_orphaned = true
 
 func (q *Queries) PurgeStaleArtifactNodes(ctx context.Context) (int64, error) {
 	result, err := q.db.ExecContext(ctx, purgeStaleArtifactNodes)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const releaseFederatedArtifactPointerPurgeClaim = `-- name: ReleaseFederatedArtifactPointerPurgeClaim :execrows
+UPDATE foghorn.artifacts
+SET federated_purge_lease_until = NOW()
+WHERE artifact_hash = $1
+  AND tenant_id::text = $2
+  AND federated_pointer = true
+  AND status = 'deleted'
+  AND federated_purge_token = $3::uuid
+`
+
+type ReleaseFederatedArtifactPointerPurgeClaimParams struct {
+	ArtifactHash string `db:"artifact_hash" json:"artifact_hash"`
+	TenantID     string `db:"tenant_id" json:"tenant_id"`
+	PurgeToken   string `db:"purge_token" json:"purge_token"`
+}
+
+// Keep the token as evidence that the pointer is inside the ordered cleanup
+// saga, but make the lease immediately reclaimable. Active authority must not
+// restore the pointer around a cleanup whose byte effects are unknown.
+func (q *Queries) ReleaseFederatedArtifactPointerPurgeClaim(ctx context.Context, arg ReleaseFederatedArtifactPointerPurgeClaimParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, releaseFederatedArtifactPointerPurgeClaim, arg.ArtifactHash, arg.TenantID, arg.PurgeToken)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const restoreClaimedFederatedArtifactPointerAfterActiveAuthority = `-- name: RestoreClaimedFederatedArtifactPointerAfterActiveAuthority :execrows
+UPDATE foghorn.artifacts AS artifact
+SET status = 'ready',
+    has_thumbnails = false,
+    thumbnail_serving_cluster_id = NULL,
+    federated_purge_token = NULL,
+    federated_purge_lease_until = NULL,
+    federated_purge_eligible_at = NOW(),
+    updated_at = NOW()
+WHERE artifact.artifact_hash = $1
+  AND artifact.tenant_id::text = $2
+  AND artifact.federated_pointer = true
+  AND artifact.status = 'deleted'
+  AND artifact.federated_purge_token = $3::uuid
+  AND EXISTS (
+      SELECT 1
+      FROM foghorn.media_object_authority_projection authority
+      WHERE authority.tenant_id = artifact.tenant_id
+        AND authority.artifact_hash = artifact.artifact_hash
+        AND authority.lifecycle = 'active'
+        AND authority.valid_until > NOW()
+  )
+  AND NOT EXISTS (
+      SELECT 1
+      FROM foghorn.media_object_authority_projection authority
+      WHERE authority.tenant_id = artifact.tenant_id
+        AND authority.artifact_hash = artifact.artifact_hash
+        AND authority.lifecycle = 'tombstone'
+  )
+`
+
+type RestoreClaimedFederatedArtifactPointerAfterActiveAuthorityParams struct {
+	ArtifactHash string `db:"artifact_hash" json:"artifact_hash"`
+	TenantID     string `db:"tenant_id" json:"tenant_id"`
+	PurgeToken   string `db:"purge_token" json:"purge_token"`
+}
+
+func (q *Queries) RestoreClaimedFederatedArtifactPointerAfterActiveAuthority(ctx context.Context, arg RestoreClaimedFederatedArtifactPointerAfterActiveAuthorityParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, restoreClaimedFederatedArtifactPointerAfterActiveAuthority, arg.ArtifactHash, arg.TenantID, arg.PurgeToken)
 	if err != nil {
 		return 0, err
 	}

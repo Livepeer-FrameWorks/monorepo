@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -96,9 +97,9 @@ type OriginPullFederationClient interface {
 // OriginPullLBPicker selects a local edge to become the puller when the
 // caller doesn't already know its destination node (gRPC viewer-routing
 // path). Implementations return the chosen node's public BaseURL host
-// plus its registered NodeID. /source-style callers can pass nil because
+// plus its registered NodeID and ClusterID. /source-style callers can pass nil because
 // they identify themselves and supply DestNodeID directly.
-type OriginPullLBPicker func(ctx context.Context, lat, lon float64, tenantID string) (host, nodeID string, err error)
+type OriginPullLBPicker func(ctx context.Context, lat, lon float64, tenantID string) (host, nodeID, clusterID string, err error)
 
 // ArrangeOriginPullDeps captures the long-lived dependencies shared by
 // every callsite. Build once at process bootstrap and reuse — these
@@ -110,7 +111,6 @@ type ArrangeOriginPullDeps struct {
 	PeerResolver OriginPullPeerResolver
 	FedClient    OriginPullFederationClient
 	InstanceID   string
-	ClusterID    string
 	Logger       logging.Logger
 	// EventEmitter receives federation lifecycle events. Optional —
 	// nil-safe. HTTP /source supplies it; gRPC /play arrangement runs
@@ -124,6 +124,10 @@ type ArrangeOriginPullRequest struct {
 	Remote        *foghornfederationpb.EdgeCandidate
 	RemoteCluster string
 	TenantID      string
+	// DestClusterID is the authenticated virtual media cluster of the
+	// destination node. It must not be inferred from the Foghorn process:
+	// one control cell can serve nodes from multiple virtual clusters.
+	DestClusterID string
 
 	// DestNodeID identifies the puller when the caller already knows
 	// it (the /source HTTP path: caller IS the puller). When empty,
@@ -216,7 +220,7 @@ func (d *ArrangeOriginPullDeps) ArrangeOriginPull(ctx context.Context, req Arran
 		if req.LBPicker == nil {
 			return nil, ErrOriginPullNoDest
 		}
-		host, nodeID, err := req.LBPicker(ctx, req.Lat, req.Lon, req.TenantID)
+		host, nodeID, clusterID, err := req.LBPicker(ctx, req.Lat, req.Lon, req.TenantID)
 		if err != nil {
 			return nil, fmt.Errorf("LB pick: %w", err)
 		}
@@ -225,6 +229,32 @@ func (d *ArrangeOriginPullDeps) ArrangeOriginPull(ctx context.Context, req Arran
 		}
 		destNodeID = nodeID
 		destNodeBaseURL = host
+		if strings.TrimSpace(req.DestClusterID) == "" {
+			req.DestClusterID = clusterID
+		}
+	}
+	destClusterID := strings.TrimSpace(req.DestClusterID)
+	if node := state.DefaultManager().GetNodeState(destNodeID); node != nil {
+		nodeClusterID := strings.TrimSpace(node.ClusterID)
+		if destClusterID != "" && nodeClusterID != "" && destClusterID != nodeClusterID {
+			return nil, fmt.Errorf("%w: destination node cluster mismatch", ErrOriginPullNoDest)
+		}
+		if nodeClusterID != "" {
+			destClusterID = nodeClusterID
+		}
+	}
+	if destClusterID == "" {
+		d.Logger.WithFields(logging.Fields{
+			"stream": req.InternalName, "dest_node": destNodeID, "remote_cluster": req.RemoteCluster,
+		}).Warn("Origin-pull refused because the selected node has no authenticated cluster identity")
+		if d.EventEmitter != nil {
+			reason := "destination node cluster unavailable"
+			d.EventEmitter(&ipcpb.FederationEventData{
+				EventType: ipcpb.FederationEventType_ORIGIN_PULL_FAILED, RemoteCluster: req.RemoteCluster,
+				StreamName: &req.InternalName, DestNode: &destNodeID, FailureReason: &reason,
+			})
+		}
+		return nil, fmt.Errorf("%w: destination node cluster unavailable", ErrOriginPullNoDest)
 	}
 
 	// NotifyOriginPull — tell the source cluster we're pulling.
@@ -237,7 +267,7 @@ func (d *ArrangeOriginPullDeps) ArrangeOriginPull(ctx context.Context, req Arran
 	ack, err := d.FedClient.NotifyOriginPull(notifyCtx, req.RemoteCluster, peerAddr, &foghornfederationpb.OriginPullNotification{
 		StreamName:    req.InternalName,
 		SourceNodeId:  req.Remote.NodeId,
-		DestClusterId: d.ClusterID,
+		DestClusterId: destClusterID,
 		DestNodeId:    destNodeID,
 		TenantId:      req.TenantID,
 	})

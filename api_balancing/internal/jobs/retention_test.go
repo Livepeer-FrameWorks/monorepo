@@ -108,6 +108,25 @@ func TestRetentionScan(t *testing.T) {
 		}
 	})
 
+	t.Run("legacy chapter discriminator emits the VOD deletion lifecycle", func(t *testing.T) {
+		mockDB, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer mockDB.Close()
+		mock.ExpectQuery(`SELECT artifact_hash.*FROM foghorn.artifacts`).WithArgs(30).
+			WillReturnRows(sqlmock.NewRows(selCols).
+				AddRow("legacy-chapter-1", "chapter", nil, "t1", "u1", nil, nil, nil, nil, nil))
+		expectExpireTx(mock, "legacy-chapter-1")
+
+		j := NewRetentionJob(RetentionConfig{DB: mockDB, Logger: logging.NewLogger()})
+		j.scan()
+
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
 	t.Run("query error is swallowed (logged, no panic)", func(t *testing.T) {
 		mockDB, mock, err := sqlmock.New()
 		if err != nil {

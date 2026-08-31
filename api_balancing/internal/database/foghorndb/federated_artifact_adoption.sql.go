@@ -10,23 +10,44 @@ import (
 	"database/sql"
 )
 
-const adoptRemoteArtifact = `-- name: AdoptRemoteArtifact :exec
+const adoptRemoteArtifact = `-- name: AdoptRemoteArtifact :execrows
 INSERT INTO foghorn.artifacts (
     artifact_hash, artifact_type, tenant_id, internal_name, stream_internal_name, format,
-    status, storage_location, sync_status, origin_cluster_id, storage_cluster_id
-) VALUES (
-    $1, $2, $3::uuid,
+    status, storage_location, sync_status, origin_cluster_id, storage_cluster_id, federated_pointer
+) SELECT
+    $1::varchar(32), $2::varchar(10), $3::uuid,
     $4::text, $5::text, $6::text,
-    'active', 's3', $7::text, $8::text, $9
+    'ready', 's3', $7::text, $8::text, $9, true
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM foghorn.media_object_authority_projection AS authority
+    WHERE authority.tenant_id = $3::uuid
+      AND authority.artifact_hash = $1::text
+      AND authority.lifecycle = 'tombstone'
 )
 ON CONFLICT (artifact_hash) DO UPDATE SET
-    storage_location = 's3',
+	status = 'ready',
+	federated_pointer = true,
+	storage_location = 's3',
     sync_status = CASE WHEN EXCLUDED.sync_status = 'synced' THEN 'synced' ELSE foghorn.artifacts.sync_status END,
     internal_name = CASE WHEN COALESCE(foghorn.artifacts.internal_name, '') = '' AND EXCLUDED.internal_name <> '' THEN EXCLUDED.internal_name ELSE foghorn.artifacts.internal_name END,
     stream_internal_name = CASE WHEN COALESCE(foghorn.artifacts.stream_internal_name, '') = '' AND EXCLUDED.stream_internal_name <> '' THEN EXCLUDED.stream_internal_name ELSE foghorn.artifacts.stream_internal_name END,
     format = CASE WHEN COALESCE(foghorn.artifacts.format, '') = '' AND EXCLUDED.format <> '' THEN EXCLUDED.format ELSE foghorn.artifacts.format END,
     origin_cluster_id = CASE WHEN COALESCE(foghorn.artifacts.origin_cluster_id, '') = '' THEN EXCLUDED.origin_cluster_id ELSE foghorn.artifacts.origin_cluster_id END,
     storage_cluster_id = CASE WHEN COALESCE(foghorn.artifacts.storage_cluster_id, '') = '' AND EXCLUDED.storage_cluster_id IS NOT NULL THEN EXCLUDED.storage_cluster_id ELSE foghorn.artifacts.storage_cluster_id END
+WHERE foghorn.artifacts.tenant_id = EXCLUDED.tenant_id
+  AND foghorn.artifacts.federated_pointer = true
+  -- A terminal pointer is owned by the ordered purge saga. Do not resurrect
+  -- it between the derivative sweep and guarded hard delete; a subsequent
+  -- resolve may insert a fresh pointer after the old row is gone.
+  AND foghorn.artifacts.status <> 'deleted'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM foghorn.media_object_authority_projection AS authority
+      WHERE authority.tenant_id = EXCLUDED.tenant_id
+        AND authority.artifact_hash = EXCLUDED.artifact_hash
+        AND authority.lifecycle = 'tombstone'
+  )
 `
 
 type AdoptRemoteArtifactParams struct {
@@ -41,8 +62,8 @@ type AdoptRemoteArtifactParams struct {
 	StorageClusterID   sql.NullString `db:"storage_cluster_id" json:"storage_cluster_id"`
 }
 
-func (q *Queries) AdoptRemoteArtifact(ctx context.Context, arg AdoptRemoteArtifactParams) error {
-	_, err := q.db.ExecContext(ctx, adoptRemoteArtifact,
+func (q *Queries) AdoptRemoteArtifact(ctx context.Context, arg AdoptRemoteArtifactParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, adoptRemoteArtifact,
 		arg.ArtifactHash,
 		arg.ArtifactType,
 		arg.TenantID,
@@ -53,5 +74,172 @@ func (q *Queries) AdoptRemoteArtifact(ctx context.Context, arg AdoptRemoteArtifa
 		arg.OriginClusterID,
 		arg.StorageClusterID,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const backfillFederatedArtifactLifecycleBatch = `-- name: BackfillFederatedArtifactLifecycleBatch :one
+WITH batch AS (
+    SELECT artifact_hash
+    FROM foghorn.artifacts
+    WHERE status = 'active'
+      AND COALESCE(origin_cluster_id, '') <> ''
+      AND NOT EXISTS (
+          SELECT 1
+          FROM foghorn.artifact_nodes invalid_origin
+          WHERE invalid_origin.artifact_hash = foghorn.artifacts.artifact_hash
+            AND invalid_origin.role = 'origin'
+      )
+    ORDER BY artifact_hash
+    LIMIT $1::integer
+    FOR UPDATE SKIP LOCKED
+), updated AS (
+    UPDATE foghorn.artifacts AS artifact
+	SET federated_pointer = true,
+		status = 'ready',
+		catalog_synced_rev = artifact.catalog_revision,
+		-- artifacts.updated_at is a nullable legacy timestamp without time zone.
+		-- PostgreSQL interprets it in the current session zone, matching the zone
+		-- used when the naive value was written. An absent value has no recoverable
+		-- age and starts its retention clock at conversion.
+		federated_purge_eligible_at = COALESCE(artifact.updated_at, NOW()),
+		updated_at = NOW()
+    FROM batch
+    WHERE artifact.artifact_hash = batch.artifact_hash
+    RETURNING artifact.artifact_hash
+)
+SELECT (SELECT COUNT(*) FROM batch)::bigint AS scanned_count,
+       (SELECT COUNT(*) FROM updated)::bigint AS changed_count
+`
+
+type BackfillFederatedArtifactLifecycleBatchRow struct {
+	ScannedCount int64 `db:"scanned_count" json:"scanned_count"`
+	ChangedCount int64 `db:"changed_count" json:"changed_count"`
+}
+
+func (q *Queries) BackfillFederatedArtifactLifecycleBatch(ctx context.Context, batchSize int32) (BackfillFederatedArtifactLifecycleBatchRow, error) {
+	row := q.db.QueryRowContext(ctx, backfillFederatedArtifactLifecycleBatch, batchSize)
+	var i BackfillFederatedArtifactLifecycleBatchRow
+	err := row.Scan(&i.ScannedCount, &i.ChangedCount)
+	return i, err
+}
+
+const backfillFederatedPointerPurgeEligibilityBatch = `-- name: BackfillFederatedPointerPurgeEligibilityBatch :one
+WITH batch AS (
+    SELECT artifact_hash
+    FROM foghorn.artifacts
+    WHERE federated_pointer = true
+      AND updated_at IS NOT NULL
+      AND federated_purge_eligible_at > updated_at
+    ORDER BY artifact_hash
+    LIMIT $1::integer
+    FOR UPDATE SKIP LOCKED
+), updated AS (
+    UPDATE foghorn.artifacts AS artifact
+    SET federated_purge_eligible_at = artifact.updated_at
+    FROM batch
+    WHERE artifact.artifact_hash = batch.artifact_hash
+    RETURNING artifact.artifact_hash
+)
+SELECT (SELECT COUNT(*) FROM batch)::bigint AS scanned_count,
+       (SELECT COUNT(*) FROM updated)::bigint AS changed_count
+`
+
+type BackfillFederatedPointerPurgeEligibilityBatchRow struct {
+	ScannedCount int64 `db:"scanned_count" json:"scanned_count"`
+	ChangedCount int64 `db:"changed_count" json:"changed_count"`
+}
+
+func (q *Queries) BackfillFederatedPointerPurgeEligibilityBatch(ctx context.Context, batchSize int32) (BackfillFederatedPointerPurgeEligibilityBatchRow, error) {
+	row := q.db.QueryRowContext(ctx, backfillFederatedPointerPurgeEligibilityBatch, batchSize)
+	var i BackfillFederatedPointerPurgeEligibilityBatchRow
+	err := row.Scan(&i.ScannedCount, &i.ChangedCount)
+	return i, err
+}
+
+const countFederatedPointersWithUnnormalizedPurgeEligibility = `-- name: CountFederatedPointersWithUnnormalizedPurgeEligibility :one
+SELECT COUNT(*)::bigint
+FROM foghorn.artifacts
+WHERE federated_pointer = true
+  AND updated_at IS NOT NULL
+  AND federated_purge_eligible_at > updated_at
+`
+
+func (q *Queries) CountFederatedPointersWithUnnormalizedPurgeEligibility(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countFederatedPointersWithUnnormalizedPurgeEligibility)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const countLegacyFederatedArtifactPointers = `-- name: CountLegacyFederatedArtifactPointers :one
+SELECT COUNT(*)::bigint
+FROM foghorn.artifacts
+WHERE status = 'active'
+  AND COALESCE(origin_cluster_id, '') <> ''
+  AND NOT EXISTS (
+      SELECT 1
+      FROM foghorn.artifact_nodes invalid_origin
+      WHERE invalid_origin.artifact_hash = foghorn.artifacts.artifact_hash
+        AND invalid_origin.role = 'origin'
+  )
+`
+
+func (q *Queries) CountLegacyFederatedArtifactPointers(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countLegacyFederatedArtifactPointers)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const settleFederatedArtifactCatalogRevision = `-- name: SettleFederatedArtifactCatalogRevision :execrows
+UPDATE foghorn.artifacts
+SET catalog_synced_rev = catalog_revision
+WHERE artifact_hash = $1
+  AND tenant_id::text = $2
+  AND federated_pointer = true
+  AND catalog_synced_rev < catalog_revision
+`
+
+type SettleFederatedArtifactCatalogRevisionParams struct {
+	ArtifactHash string `db:"artifact_hash" json:"artifact_hash"`
+	TenantID     string `db:"tenant_id" json:"tenant_id"`
+}
+
+// Adopted rows are a local routing pointer, not this cell's authoritative
+// catalog source. Mark their local revision covered so deletion does not wait
+// for an origin-only catalog projector that will intentionally never select it.
+func (q *Queries) SettleFederatedArtifactCatalogRevision(ctx context.Context, arg SettleFederatedArtifactCatalogRevisionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, settleFederatedArtifactCatalogRevision, arg.ArtifactHash, arg.TenantID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const tombstoneFederatedArtifact = `-- name: TombstoneFederatedArtifact :execrows
+UPDATE foghorn.artifacts
+SET status = 'deleted', federated_purge_eligible_at = NOW(), updated_at = NOW()
+WHERE artifact_hash = $1
+  AND tenant_id = $2::uuid
+  AND federated_pointer = true
+  -- A token owner may already have performed an unknown subset of the
+  -- out-of-transaction byte cleanup. The row is already terminal; do not
+  -- reset its discovery clock or mutate saga-owned state.
+  AND federated_purge_token IS NULL
+`
+
+type TombstoneFederatedArtifactParams struct {
+	ArtifactHash string `db:"artifact_hash" json:"artifact_hash"`
+	TenantID     string `db:"tenant_id" json:"tenant_id"`
+}
+
+func (q *Queries) TombstoneFederatedArtifact(ctx context.Context, arg TombstoneFederatedArtifactParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, tombstoneFederatedArtifact, arg.ArtifactHash, arg.TenantID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }

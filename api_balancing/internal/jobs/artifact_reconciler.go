@@ -532,8 +532,8 @@ func (r *ArtifactReconciler) repairDeletedDVRChildren(ctx context.Context) int {
 	return n
 }
 
-// backfillCatalogRevisions assigns a fresh catalog_revision (from nextval, so each is distinct) to
-// up to catalogBackfillBatch of this cluster's authoritative rows still at catalog_revision = 0,
+// backfillCatalogRevisions advances catalog_revision from its durable per-artifact watermark for up
+// to catalogBackfillBatch of this cluster's authoritative rows still at catalog_revision = 0,
 // entering them into the projection queue (catalog_revision > catalog_synced_rev). Runs under the
 // reconciler advisory lock so replicas don't double-assign; converges to a no-op.
 func (r *ArtifactReconciler) backfillCatalogRevisions(ctx context.Context) int64 {
@@ -550,8 +550,8 @@ func (r *ArtifactReconciler) backfillCatalogRevisions(ctx context.Context) int64
 
 // projectCommodoreArtifactState is the sole durable Commodore catalog projector. Each pass
 // projects a whole authoritative snapshot for every locally-authoritative row whose
-// catalog_revision (a source-owned monotonic sequence, bumped by trigger on any catalog
-// change) exceeds its catalog_synced_rev watermark. Rows are served LEAST-RECENTLY-PROJECTED
+// catalog_revision (a source-owned per-artifact monotonic revision, bumped by trigger on any
+// catalog change) exceeds its catalog_synced_rev watermark. Rows are served LEAST-RECENTLY-PROJECTED
 // first (ORDER BY catalog_synced_rev) so a continuously-mutating cohort — active DVRs minting
 // a fresh revision on every segment — cannot stay at the head of the queue and starve rows
 // behind it. Non-origin (adopted pointer) rows are excluded so a remote cluster can't clobber
@@ -1071,7 +1071,11 @@ func (r *ArtifactReconciler) resolveArtifactContext(ctx context.Context, hash, a
 		if !resp.Found {
 			return "", "", fmt.Errorf("vod %s not found in Commodore", hash)
 		}
-		return resp.TenantId, resp.InternalName, nil
+		streamName := resp.InternalName
+		if strings.TrimSpace(resp.GetContentType()) == "chapter" && strings.TrimSpace(resp.GetParentStreamInternalName()) != "" {
+			streamName = resp.GetParentStreamInternalName()
+		}
+		return resp.TenantId, streamName, nil
 
 	default:
 		return "", "", fmt.Errorf("cannot resolve asset type: %s", assetType)

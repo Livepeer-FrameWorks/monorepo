@@ -6,8 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
+	"frameworks/api_balancing/internal/artifacts"
 	"frameworks/api_balancing/internal/database/foghorndb"
+	"github.com/google/uuid"
 )
 
 // RecordStreamCleanupObligation durably records the tombstone + thumbnail-cleanup obligation for a deleted asset
@@ -113,9 +116,10 @@ func assetTombstonedTx(ctx context.Context, tx *sql.Tx, assetKey string) (bool, 
 	return true, nil
 }
 
-// thumbnailAssetLockNamespace namespaces the per-asset advisory lock (two-int32 form) so it cannot collide with
-// any other pg_advisory_xact_lock in the schema. Arbitrary fixed constant ("tmbl").
-const thumbnailAssetLockNamespace = 0x746d626c
+// The remote cleanup phase is bounded to two minutes by the worker. Keeping
+// the durable claim for three minutes prevents a replacement worker from
+// overtaking an operation whose cancellation is still propagating.
+const federatedPointerPurgeLease = 3 * time.Minute
 
 // lockThumbnailAsset takes a transaction-scoped advisory lock keyed by asset_key so RecordStreamCleanupObligation,
 // ClaimThumbnailAttempt, and PublishThumbnailAttempt for the SAME asset serialize. This closes the insert-vs-read
@@ -125,6 +129,207 @@ const thumbnailAssetLockNamespace = 0x746d626c
 // unrelated assets to briefly serialize — never a correctness loss.
 func lockThumbnailAsset(ctx context.Context, tx *sql.Tx, assetKey string) error {
 	return foghorndb.New(tx).LockThumbnailAsset(ctx, foghorndb.LockThumbnailAssetParams{
-		LockNamespace: thumbnailAssetLockNamespace, AssetKey: assetKey,
+		LockNamespace: artifacts.ThumbnailAssetLockNamespace, AssetKey: assetKey,
 	})
+}
+
+// LockThumbnailAssetTx exposes the transaction-scoped asset fence to jobs that
+// compose thumbnail cleanup with service-owned rows in the same transaction.
+// It must be the first lock taken for the asset so tombstone recording,
+// publication, and cleanup all follow asset -> service row -> assignment ->
+// pointer/object -> cleanup queue.
+func LockThumbnailAssetTx(ctx context.Context, tx *sql.Tx, assetKey string) error {
+	if tx == nil || strings.TrimSpace(assetKey) == "" {
+		return nil
+	}
+	return lockThumbnailAsset(ctx, tx, assetKey)
+}
+
+// FederatedPointerPurgeKind selects the signed-authority predicate that must
+// still hold when a replaceable pointer is fenced for deletion.
+type FederatedPointerPurgeKind uint8
+
+const (
+	FederatedPointerPurgeTombstone FederatedPointerPurgeKind = iota + 1
+	FederatedPointerPurgeStale
+	FederatedPointerPurgeInterruptedActive
+)
+
+type FederatedPointerPurgeSettlement uint8
+
+const (
+	FederatedPointerPurgeNotOwned FederatedPointerPurgeSettlement = iota
+	FederatedPointerPurgeDeleted
+	FederatedPointerPurgeRestoredActive
+)
+
+// FenceFederatedPointerForPurge serializes with thumbnail claim/publication
+// for the same asset, rechecks the authority and dependency guards, and makes
+// the parent terminal before any byte sweep begins. Once this commits, a new
+// thumbnail attempt cannot appear behind the purge worker's snapshot.
+func FenceFederatedPointerForPurge(ctx context.Context, db *sql.DB, tenantID, assetKey, retentionInterval string, kind FederatedPointerPurgeKind, allowCrossClusterDelete bool) (string, bool, error) {
+	if db == nil || strings.TrimSpace(tenantID) == "" || strings.TrimSpace(assetKey) == "" {
+		return "", false, nil
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", false, err
+	}
+	defer tx.Rollback() //nolint:errcheck // best-effort on non-commit paths
+	if lockErr := lockThumbnailAsset(ctx, tx, assetKey); lockErr != nil {
+		return "", false, lockErr
+	}
+	q := foghorndb.New(tx)
+	destinations, err := q.ListThumbnailDestinations(ctx, foghorndb.ListThumbnailDestinationsParams{
+		TenantID: tenantID, AssetKey: assetKey,
+	})
+	if err != nil {
+		return "", false, err
+	}
+	for _, destination := range destinations {
+		if !destination.BackendLocal && !allowCrossClusterDelete {
+			// Do not make a pointer terminal before this cell can execute every known byte
+			// deletion. A later run may fence it after federation mutations are enabled.
+			return "", false, nil
+		}
+	}
+	claimToken := uuid.NewString()
+	leaseInterval := federatedPointerPurgeLease.String()
+	var affected int64
+	switch kind {
+	case FederatedPointerPurgeTombstone:
+		affected, err = q.FenceTombstonedFederatedArtifactPointerForPurge(ctx, foghorndb.FenceTombstonedFederatedArtifactPointerForPurgeParams{
+			PurgeToken: claimToken, LeaseInterval: leaseInterval,
+			ArtifactHash: assetKey, TenantID: tenantID, RetentionInterval: retentionInterval,
+		})
+	case FederatedPointerPurgeStale:
+		affected, err = q.FenceStaleFederatedArtifactPointerForPurge(ctx, foghorndb.FenceStaleFederatedArtifactPointerForPurgeParams{
+			PurgeToken: claimToken, LeaseInterval: leaseInterval,
+			ArtifactHash: assetKey, TenantID: tenantID, RetentionInterval: retentionInterval,
+		})
+	case FederatedPointerPurgeInterruptedActive:
+		affected, err = q.FenceInterruptedActiveFederatedArtifactPointerPurge(ctx, foghorndb.FenceInterruptedActiveFederatedArtifactPointerPurgeParams{
+			PurgeToken: claimToken, LeaseInterval: leaseInterval,
+			ArtifactHash: assetKey, TenantID: tenantID,
+		})
+	default:
+		return "", false, errors.New("unknown federated pointer purge kind")
+	}
+	if err != nil {
+		return "", false, err
+	}
+	if affected == 0 {
+		return "", false, nil
+	}
+	if err := tx.Commit(); err != nil {
+		return "", false, err
+	}
+	return claimToken, true, nil
+}
+
+// FinalizeFederatedPointerPurge removes thumbnail control state and its terminal
+// parent in one transaction. If the parent's authority/dependency predicate no
+// longer holds, the transaction rolls back so a later retry retains all routing
+// evidence needed to sweep the bytes safely.
+func FinalizeFederatedPointerPurge(ctx context.Context, db *sql.DB, tenantID, assetKey, claimToken string) (FederatedPointerPurgeSettlement, error) {
+	if db == nil || strings.TrimSpace(tenantID) == "" || strings.TrimSpace(assetKey) == "" || strings.TrimSpace(claimToken) == "" {
+		return FederatedPointerPurgeNotOwned, nil
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return FederatedPointerPurgeNotOwned, err
+	}
+	defer tx.Rollback() //nolint:errcheck // best-effort on non-commit paths
+	if lockErr := lockThumbnailAsset(ctx, tx, assetKey); lockErr != nil {
+		return FederatedPointerPurgeNotOwned, lockErr
+	}
+	q := foghorndb.New(tx)
+	if _, stateErr := q.GetFencedFederatedArtifactPointerPurgeState(ctx, foghorndb.GetFencedFederatedArtifactPointerPurgeStateParams{
+		ArtifactHash: assetKey, TenantID: tenantID, PurgeToken: claimToken,
+	}); errors.Is(stateErr, sql.ErrNoRows) {
+		return FederatedPointerPurgeNotOwned, nil
+	} else if stateErr != nil {
+		return FederatedPointerPurgeNotOwned, stateErr
+	}
+	if cleanupErr := DeleteThumbnailControlRowsTx(ctx, tx, tenantID, assetKey); cleanupErr != nil {
+		return FederatedPointerPurgeNotOwned, cleanupErr
+	}
+	restored, err := q.RestoreClaimedFederatedArtifactPointerAfterActiveAuthority(ctx, foghorndb.RestoreClaimedFederatedArtifactPointerAfterActiveAuthorityParams{
+		ArtifactHash: assetKey, TenantID: tenantID, PurgeToken: claimToken,
+	})
+	if err != nil {
+		return FederatedPointerPurgeNotOwned, err
+	}
+	settlement := FederatedPointerPurgeRestoredActive
+	if restored != 1 {
+		deleted, deleteErr := q.DeleteFencedFederatedArtifactPointer(ctx, foghorndb.DeleteFencedFederatedArtifactPointerParams{
+			ArtifactHash: assetKey, TenantID: tenantID, PurgeToken: claimToken,
+		})
+		if deleteErr != nil {
+			return FederatedPointerPurgeNotOwned, deleteErr
+		}
+		if deleted != 1 {
+			return FederatedPointerPurgeNotOwned, nil
+		}
+		settlement = FederatedPointerPurgeDeleted
+	}
+	if err := tx.Commit(); err != nil {
+		return FederatedPointerPurgeNotOwned, err
+	}
+	return settlement, nil
+}
+
+// ReleaseFederatedPointerPurgeClaim makes a failed attempt immediately
+// reclaimable while retaining its token and terminal pointer state. Byte
+// effects may be partial or unknown, so only successful settlement may restore
+// active routing or delete the pointer.
+func ReleaseFederatedPointerPurgeClaim(ctx context.Context, db *sql.DB, tenantID, assetKey, claimToken string) (bool, error) {
+	if db == nil || strings.TrimSpace(tenantID) == "" || strings.TrimSpace(assetKey) == "" || strings.TrimSpace(claimToken) == "" {
+		return false, nil
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback() //nolint:errcheck // best-effort on non-commit paths
+	if lockErr := lockThumbnailAsset(ctx, tx, assetKey); lockErr != nil {
+		return false, lockErr
+	}
+	released, err := foghorndb.New(tx).ReleaseFederatedArtifactPointerPurgeClaim(ctx, foghorndb.ReleaseFederatedArtifactPointerPurgeClaimParams{
+		ArtifactHash: assetKey, TenantID: tenantID, PurgeToken: claimToken,
+	})
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return released == 1, nil
+}
+
+// DeferFederatedPointerPurgeClaim retains the terminal token fence but moves
+// deterministic repair work out of the hot recovery loop. It is token-bound,
+// so an obsolete worker cannot delay a replacement claim.
+func DeferFederatedPointerPurgeClaim(ctx context.Context, db *sql.DB, tenantID, assetKey, claimToken string, retryAfter time.Duration) (bool, error) {
+	if db == nil || strings.TrimSpace(tenantID) == "" || strings.TrimSpace(assetKey) == "" || strings.TrimSpace(claimToken) == "" || retryAfter <= 0 {
+		return false, nil
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback() //nolint:errcheck // best-effort on non-commit paths
+	if lockErr := lockThumbnailAsset(ctx, tx, assetKey); lockErr != nil {
+		return false, lockErr
+	}
+	deferred, err := foghorndb.New(tx).DeferFederatedArtifactPointerPurgeClaim(ctx, foghorndb.DeferFederatedArtifactPointerPurgeClaimParams{
+		ArtifactHash: assetKey, TenantID: tenantID, PurgeToken: claimToken, RetryInterval: retryAfter.String(),
+	})
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return deferred == 1, nil
 }

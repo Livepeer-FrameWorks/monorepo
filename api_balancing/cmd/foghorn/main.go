@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net"
@@ -17,14 +18,19 @@ import (
 	"frameworks/api_balancing/internal/artifacts"
 	"frameworks/api_balancing/internal/balancer"
 	foghornconfig "frameworks/api_balancing/internal/config"
+	"frameworks/api_balancing/internal/configseedackoutbox"
 	"frameworks/api_balancing/internal/control"
+	foghornmigrations "frameworks/api_balancing/internal/datamigrations"
 	"frameworks/api_balancing/internal/federation"
 	foghorngrpc "frameworks/api_balancing/internal/grpc"
 	"frameworks/api_balancing/internal/handlers"
 	"frameworks/api_balancing/internal/identity"
 	"frameworks/api_balancing/internal/jobs"
+	"frameworks/api_balancing/internal/managedplacementoutbox"
+	localauthority "frameworks/api_balancing/internal/mediaauthority"
 	"frameworks/api_balancing/internal/orchestrator"
-	"frameworks/api_balancing/internal/policybundle"
+	"frameworks/api_balancing/internal/pushstatusoutbox"
+	"frameworks/api_balancing/internal/signingkeyuseoutbox"
 	"frameworks/api_balancing/internal/state"
 	"frameworks/api_balancing/internal/storage"
 	"frameworks/api_balancing/internal/triggers"
@@ -37,8 +43,10 @@ import (
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/datamigrate"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mediakeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
@@ -253,6 +261,21 @@ func main() {
 	if version.HandleCLI() {
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "data-migrations" {
+		logger := logging.NewLoggerWithService("foghorn")
+		config.LoadEnv(logger)
+		foghornmigrations.Register()
+		dbConfig := database.DefaultConfig()
+		dbConfig.ServiceName = "foghorn"
+		dbConfig.URL = config.RequireEnv("DATABASE_URL")
+		err := datamigrate.HandleArgv(context.Background(), func() (*sql.DB, error) {
+			return database.Connect(dbConfig, logger)
+		}, os.Stdout, os.Args[1:])
+		if err != nil && !errors.Is(err, datamigrate.ErrNotDataMigrationsCommand) {
+			logger.WithError(err).Fatal("Data migration command failed")
+		}
+		return
+	}
 
 	// Initialize logger
 	logger := logging.NewLoggerWithService("foghorn")
@@ -260,6 +283,9 @@ func main() {
 
 	// Load environment variables
 	config.LoadEnv(logger)
+	if err := control.ConfigureAdmissionEffectEncryption(os.Getenv("FOGHORN_STATE_ENCRYPTION_KEY")); err != nil {
+		logger.WithError(err).Fatal("Foghorn durable state encryption is unavailable")
+	}
 	foghornCfg := foghornconfig.Load()
 	control.SetLocalClusterID(foghornCfg.ClusterID)
 
@@ -295,6 +321,9 @@ func main() {
 	dbConfig.URL = dbURL
 	db := database.MustConnect(dbConfig, logger)
 	defer db.Close()
+	migrationCtx, stopMigrations := context.WithCancel(context.Background())
+	defer stopMigrations()
+	go foghornmigrations.RunBackground(migrationCtx, db, logger)
 	control.SetDB(db)
 	defer control.SetDB(nil)
 
@@ -335,9 +364,9 @@ func main() {
 		if err := state.DefaultManager().EnableRedisSync(context.Background(), redisStore, instanceID, logger); err != nil {
 			logger.WithError(err).Warn("Failed to enable redis state synchronization")
 		}
-		// Mirror tenant_capacity counters to Redis so HA Foghorn instances
-		// agree on cluster-wide stream/viewer counts at the same cluster_id
-		// keyspace as the existing state store.
+		// Viewer-capacity leases are shared through Redis so USER_NEW and
+		// USER_END may land on different replicas. Publisher capacity is
+		// authoritative in PostgreSQL ingest sessions, not this cache.
 		state.DefaultTenantCapacity().EnableRedisSync(redisClient, foghornCfg.ClusterID)
 	}
 
@@ -451,6 +480,24 @@ func main() {
 	}
 
 	// Control-plane (HelmsmanControl) and data-plane (Decklog fan-out) observability
+	admissionPayloadCrypto := metricsCollector.NewCounter(
+		"admission_payload_crypto_total",
+		"Durable admission push-target payload opens and legacy-to-v2 migrations",
+		[]string{"format", "result"},
+	)
+	for _, format := range []string{"plaintext", "v1", "v2"} {
+		for _, result := range []string{"opened", "migrated", "error"} {
+			admissionPayloadCrypto.WithLabelValues(format, result).Add(0)
+		}
+	}
+	artifactDeletionOutcomes := metricsCollector.NewCounter(
+		"artifact_deletion_outcomes_total",
+		"Node-copy point deletion database decisions",
+		[]string{"outcome"},
+	)
+	for _, outcome := range []string{"applied", "fenced", "absent", "parent_missing", "error"} {
+		artifactDeletionOutcomes.WithLabelValues(outcome).Add(0)
+	}
 	control.SetMetrics(&control.ControlMetrics{
 		MistTriggers: metricsCollector.NewCounter(
 			"control_mist_triggers_total",
@@ -462,7 +509,20 @@ func main() {
 			"Artifact SyncComplete outcomes from Helmsman (success/failed/lost_local/dtsh_failed)",
 			[]string{"outcome"},
 		),
+		ArtifactDeletionOutcomes: artifactDeletionOutcomes,
+		MediaRequestCentralRPCs: metricsCollector.NewCounter(
+			"media_request_central_rpcs_total",
+			"Logical control-plane client invocations made beneath media request paths; internal retries are excluded",
+			[]string{"path", "service", "method"},
+		),
+		NodeAdmissionEvents: metricsCollector.NewCounter(
+			"node_admission_events_total",
+			"Durable media-cell node admission operations by outcome",
+			[]string{"operation", "result"},
+		),
+		AdmissionPayloadCrypto: admissionPayloadCrypto,
 	})
+	go control.RunAdmissionEffectEncryptionMigration(context.Background(), logger)
 
 	// Wire state metrics hooks
 	stateWrites := metricsCollector.NewCounter("state_writes_total", "State write-through operations", []string{"entity", "op"})
@@ -597,6 +657,53 @@ func main() {
 		defer func() { _ = commodoreClient.Close() }()
 	}
 
+	configSeedApplyAckMetrics := &configseedackoutbox.Metrics{
+		Pending: metricsCollector.NewGauge(
+			"config_seed_apply_ack_outbox_pending",
+			"ConfigSeed apply ACK outbox rows awaiting Navigator delivery",
+			[]string{},
+		),
+		OldestPendingSeconds: metricsCollector.NewGauge(
+			"config_seed_apply_ack_outbox_oldest_pending_seconds",
+			"Age in seconds of the oldest ConfigSeed apply ACK awaiting Navigator delivery",
+			[]string{},
+		),
+		Quarantined: metricsCollector.NewGauge(
+			"config_seed_apply_ack_outbox_quarantined",
+			"ConfigSeed apply ACK outbox rows quarantined for invalid durable payloads",
+			[]string{},
+		),
+		Outcomes: metricsCollector.NewCounter(
+			"config_seed_apply_ack_outbox_outcomes_total",
+			"ConfigSeed apply ACK durable outbox operations by bounded outcome",
+			[]string{"outcome"},
+		),
+	}
+	for _, outcome := range []string{"enqueued", "deduplicated", "stale", "enqueue_error", "delivered", "retry", "retry_error", "settle_error", "superseded", "quarantined", "quarantine_error", "scan_error"} {
+		configSeedApplyAckMetrics.Outcomes.WithLabelValues(outcome).Add(0)
+	}
+	configSeedApplyAckWriter := configseedackoutbox.NewWriter(db, configSeedApplyAckMetrics)
+	control.SetConfigSeedApplyAckWriter(configSeedApplyAckWriter)
+	configSeedAckOutboxCtx, cancelConfigSeedAckOutbox := context.WithCancel(context.Background())
+	var configSeedAckOutboxWG sync.WaitGroup
+	startConfigSeedAckOutboxLoop := func(run func(context.Context)) {
+		configSeedAckOutboxWG.Add(1)
+		go func() {
+			defer configSeedAckOutboxWG.Done()
+			run(configSeedAckOutboxCtx)
+		}()
+	}
+	var stopConfigSeedAckOutboxOnce sync.Once
+	stopConfigSeedAckOutbox := func() {
+		stopConfigSeedAckOutboxOnce.Do(func() {
+			cancelConfigSeedAckOutbox()
+			configSeedAckOutboxWG.Wait()
+		})
+	}
+	startConfigSeedAckOutboxLoop(func(ctx context.Context) {
+		configseedackoutbox.RunMetrics(ctx, db, configSeedApplyAckMetrics, logger)
+	})
+
 	// Navigator is optional; dev compose does not run it, and the client
 	// connects lazily, so an unset address is the only reliable off switch.
 	navigatorAddr := strings.TrimSpace(config.GetEnv("NAVIGATOR_GRPC_ADDR", ""))
@@ -618,8 +725,13 @@ func main() {
 		} else {
 			defer navigatorClient.Close()
 			control.SetNavigatorClient(navigatorClient)
+			configSeedAckWorker := configseedackoutbox.NewWorker(db, navigatorClient, logger, configSeedApplyAckMetrics)
+			startConfigSeedAckOutboxLoop(configSeedAckWorker.Run)
 		}
 	}
+	// Register after the Navigator client's Close defer so LIFO shutdown cancels
+	// and joins every worker before closing the RPC transport it may still use.
+	defer stopConfigSeedAckOutbox()
 	// Purser (gRPC) - x402 settlement + billing checks
 	purserGRPCURL := config.GetEnv("PURSER_GRPC_ADDR", "purser:19003")
 	purserClient, err := purserclient.NewGRPCClient(purserclient.GRPCConfig{
@@ -716,7 +828,8 @@ func main() {
 			s3ForFederation = client
 			control.SetS3Client(client)
 			// Enforce the immutable-backend invariant. On steady-state boots the committed cell_storage_identity governs
-			// (exact descriptor match). On a FIRST boot (freshly-created identity table) of an ESTABLISHED cluster
+			// (exact descriptor match), so no Quartermaster lookup belongs on the restart path. On a FIRST boot
+			// (freshly-created identity table) of an ESTABLISHED cluster
 			// (existing data — the Quartermaster row carries a descriptor), Foghorn must PROVE the existing backend
 			// before recording an identity: Quartermaster is the SOLE authority and supplies the FULL tuple
 			// (bucket/endpoint/region/prefix), and the env must match all four. No serving component is consulted, so
@@ -726,7 +839,14 @@ func main() {
 			// descriptor is EMPTY also fails closed (buildFirstBootBackendAuthority returns established-but-incomplete):
 			// Quartermaster is the sole authority, so desired-state bootstrap must establish the descriptor there first.
 			// Foghorn does not establish an identity from its own env.
-			auth := buildFirstBootBackendAuthority(qmClient, foghornCfg.ClusterID, logger)
+			committed, committedErr := control.LocalBackendCommitted(context.Background(), db)
+			if committedErr != nil {
+				logger.WithError(committedErr).Fatal("Refusing to start: could not read this cell's immutable S3 backend identity")
+			}
+			auth := control.LocalBackendAuthority{}
+			if !committed {
+				auth = buildFirstBootBackendAuthority(qmClient, foghornCfg.ClusterID, logger)
+			}
 			if bErr := control.EstablishOrEnforceLocalBackend(context.Background(), db, auth); bErr != nil {
 				logger.WithError(bErr).Fatal("Refusing to start: could not prove or match this cell's immutable S3 backend (backend repointing is not supported)")
 			}
@@ -806,13 +926,26 @@ func main() {
 			bsReq.AdvertiseHost = &host
 		}
 
+		// Service discovery is a central-plane projection, not a prerequisite
+		// for serving from durable local authority. Give a healthy Quartermaster
+		// one short startup opportunity, then reconcile registration in the
+		// background while Foghorn opens its local listeners.
 		retryCfg := qmbootstrap.DefaultRetryConfig("foghorn")
-		retryCfg.AttemptTimeout = 10 * time.Second
-		bootstrapCtx, bootstrapCancel := context.WithTimeout(context.Background(), 60*time.Second)
+		retryCfg.AttemptTimeout = 2 * time.Second
+		retryCfg.MaxAttempts = 1
+		bootstrapCtx, bootstrapCancel := context.WithTimeout(context.Background(), 2*time.Second)
 		bsResp, bsErr := qmbootstrap.BootstrapServiceWithRetry(bootstrapCtx, qmClient, bsReq, logger, retryCfg)
 		bootstrapCancel()
 		if bsErr != nil {
-			logger.WithError(bsErr).Warn("BootstrapService failed — HA relay and federation tenant attribution degraded")
+			logger.WithError(bsErr).Warn("BootstrapService unavailable at startup; local media is starting and service registration will reconcile in the background")
+			go func() {
+				backgroundCfg := qmbootstrap.DefaultRetryConfig("foghorn")
+				if _, reconcileErr := qmbootstrap.BootstrapServiceWithRetry(context.Background(), qmClient, bsReq, logger, backgroundCfg); reconcileErr != nil {
+					logger.WithError(reconcileErr).Warn("Background Foghorn service registration stopped")
+					return
+				}
+				logger.Info("Foghorn service registration reconciled after Quartermaster recovery")
+			}()
 		}
 		if bsResp != nil {
 			advertiseAddr = bsResp.GetAdvertiseAddr()
@@ -970,6 +1103,35 @@ func main() {
 		[]string{"reason", "service"},
 	)
 	triggerProcessor := triggers.NewProcessor(logger, commodoreClient, decklogClient, lb, geoipReader)
+	control.SetManagedStreamPlacementWriter(managedplacementoutbox.NewWriter(db))
+	signingKeyUseWriter := signingkeyuseoutbox.NewWriter(db)
+	signingKeyUseRecorder := signingkeyuseoutbox.NewAsyncRecorder(signingKeyUseWriter, logger)
+	go signingKeyUseRecorder.Run(context.Background())
+	triggerProcessor.SetSigningKeyUseRecorder(signingKeyUseRecorder)
+	mediaAuthorityLocalReads := metricsCollector.NewCounter(
+		"media_authority_local_reads_total",
+		"Durable signed media-authority lookup outcomes",
+		[]string{"index", "outcome"},
+	)
+	for _, index := range []string{"playback_id", "internal_name", "tenant", "publishing_credential", "tenant_ingest"} {
+		for _, outcome := range []string{"absent", "unready", "valid", "soft_expired", "hard_expired", "denied", "error"} {
+			mediaAuthorityLocalReads.WithLabelValues(index, outcome).Add(0)
+		}
+	}
+	mediaAuthorityShadow := metricsCollector.NewCounter(
+		"media_authority_shadow_total",
+		"Connected-to-local authority comparison outcomes",
+		[]string{"outcome"},
+	)
+	for _, outcome := range []string{
+		"object_mismatch", "policy_not_comparable", "policy_mismatch", "tenant_unavailable", "object_promoted", "pair_promoted",
+		"ingest_object_mismatch", "ingest_output_unavailable", "ingest_output_mismatch", "ingest_tenant_mismatch", "ingest_pair_promoted",
+		"pull_source_mismatch", "pull_source_pair_promoted", "artifact_source_mismatch", "artifact_source_pair_promoted",
+		"tenant_mismatch_lifecycle", "tenant_mismatch_billing_decision", "tenant_mismatch_billing_model",
+		"tenant_mismatch_official_cluster", "tenant_mismatch_cluster_grants", "tenant_mismatch_resource_limits", "tenant_mismatch_allowances",
+	} {
+		mediaAuthorityShadow.WithLabelValues(outcome).Add(0)
+	}
 	triggerProcessor.SetMetrics(&triggers.ProcessorMetrics{
 		BillingCacheEvents: metricsCollector.NewCounter(
 			"billing_cache_events_total",
@@ -1002,6 +1164,8 @@ func main() {
 			"Drain dispatches to the prior owner node when the DB-ordered source projection moves to a new node (ok/failed)",
 			[]string{"result"},
 		),
+		MediaAuthorityLocalReads: mediaAuthorityLocalReads,
+		MediaAuthorityShadow:     mediaAuthorityShadow,
 	})
 	if geoipReader != nil && geoipCache != nil {
 		triggerProcessor.SetGeoIPCache(geoipCache)
@@ -1028,9 +1192,7 @@ func main() {
 	if qmClient == nil {
 		go reconnectQuartermaster(quartermasterGRPCURL, serviceToken, logger, clients, clientStatusGauge, clientReconnects, triggerProcessor)
 	}
-	if commodoreClient == nil {
-		go reconnectCommodore(commodoreGRPCURL, serviceToken, logger, commodoreCache, clients, clientStatusGauge, clientReconnects, triggerProcessor)
-	}
+	commodoreReconnectNeeded := commodoreClient == nil
 
 	// Start Helmsman control gRPC server with injected dependencies
 	control.Init(logger, commodoreClient, triggerProcessor)
@@ -1192,19 +1354,33 @@ func main() {
 					TenantID:           resp.GetTenantId(),
 					OriginClusterID:    resp.GetOriginClusterId(),
 				}, nil
-			case "vod":
+			case "vod", "chapter":
 				resp, resolveErr := commodoreClient.ResolveVodHash(ctx, artifactHash)
 				if resolveErr != nil || resp == nil || !resp.GetFound() {
-					return identity.ArtifactIdentity{}, resolveErr
+					if resolveErr != nil {
+						return identity.ArtifactIdentity{}, resolveErr
+					}
+					return identity.ArtifactIdentity{}, identity.ErrNotFound
+				}
+				resolvedKind := strings.TrimSpace(resp.GetContentType())
+				if resolvedKind == "" {
+					resolvedKind = "vod"
+				}
+				if kind == "chapter" && resolvedKind != "chapter" {
+					return identity.ArtifactIdentity{}, identity.ErrNotFound
 				}
 				// VOD uploads have no parent stream; existing consumers
-				// (freeze, mint) use the asset's own internal_name where a
-				// stream name is required, so both fields carry it.
+				// (freeze, mint) use the asset's own internal_name when no
+				// parent exists. Chapters carry their live-stream parent.
+				streamInternalName := strings.TrimSpace(resp.GetParentStreamInternalName())
+				if streamInternalName == "" {
+					streamInternalName = resp.GetInternalName()
+				}
 				return identity.ArtifactIdentity{
 					ArtifactHash:       artifactHash,
-					Kind:               kind,
+					Kind:               resolvedKind,
 					InternalName:       resp.GetInternalName(),
-					StreamInternalName: resp.GetInternalName(),
+					StreamInternalName: streamInternalName,
 					TenantID:           resp.GetTenantId(),
 					OriginClusterID:    resp.GetOriginClusterId(),
 				}, nil
@@ -1223,7 +1399,7 @@ func main() {
 					OriginClusterID:    resp.GetOriginClusterId(),
 				}, nil
 			default:
-				return identity.ArtifactIdentity{}, nil
+				return identity.ArtifactIdentity{}, identity.ErrNotFound
 			}
 		}
 	}
@@ -1265,35 +1441,86 @@ func main() {
 
 	// Create Foghorn control plane gRPC server (for Commodore: clips, DVR, viewer resolution, VOD uploads)
 	foghornServer := foghorngrpc.NewFoghornGRPCServer(db, logger, lb, geoipReader, geoipCache, decklogClient, s3ForGRPC, purserClient)
+	foghornServer.SetSigningKeyUseRecorder(signingKeyUseRecorder)
 	foghornServer.SetClusterID(foghornCfg.ClusterID)
+	foghornServer.SetLocalIngestResolver(triggerProcessor)
+	foghornServer.SetLocalPlaybackPolicyEvaluator(triggerProcessor)
+	var authorityStore *localauthority.Store
+	mediaAuthorityCellID := strings.TrimSpace(os.Getenv("MEDIA_AUTHORITY_CELL_ID"))
+	if encodedTrust := strings.TrimSpace(os.Getenv("MEDIA_AUTHORITY_TRUST_SET")); encodedTrust != "" {
+		if mediaAuthorityCellID == "" {
+			logger.Fatal("MEDIA_AUTHORITY_CELL_ID is required when signed media authority is enabled")
+		}
+		trust, trustErr := sharedauthority.ParseTrustSet(encodedTrust)
+		if trustErr != nil {
+			logger.WithError(trustErr).Fatal("Invalid MEDIA_AUTHORITY_TRUST_SET")
+		}
+		var storeErr error
+		authorityStore, storeErr = localauthority.NewStore(db, mediaAuthorityCellID, trust)
+		if storeErr != nil {
+			logger.WithError(storeErr).Fatal("Failed to initialize media authority store")
+		}
+		if peerManager != nil {
+			authorityStore.SetRuntimePeerResolver(peerManager)
+		}
+		mediaAuthorityApplyOutcomes := metricsCollector.NewCounter(
+			"media_authority_apply_total",
+			"Signed media-authority apply outcomes",
+			[]string{"authority_kind", "outcome"},
+		)
+		for _, kind := range []string{"tenant", "media_object", "unknown"} {
+			for _, outcome := range []string{"applied", "duplicate", "verification_rejected", "rollback_rejected", "conflict_rejected", "persist_error"} {
+				mediaAuthorityApplyOutcomes.WithLabelValues(kind, outcome).Add(0)
+			}
+		}
+		authorityStore.SetApplyOutcomeMetric(mediaAuthorityApplyOutcomes)
+		sealKeyID := strings.TrimSpace(os.Getenv("MEDIA_AUTHORITY_SEAL_KEY_ID"))
+		sealPrivateEncoded := strings.TrimSpace(os.Getenv("MEDIA_AUTHORITY_SEAL_PRIVATE_KEY_PEM_B64"))
+		if sealKeyID != "" || sealPrivateEncoded != "" {
+			if sealKeyID == "" || sealPrivateEncoded == "" {
+				logger.Fatal("MEDIA_AUTHORITY_SEAL_KEY_ID and MEDIA_AUTHORITY_SEAL_PRIVATE_KEY_PEM_B64 must be configured together")
+			}
+			sealPrivateKey, sealErr := sharedauthority.ParseSealPrivateKey(sealPrivateEncoded)
+			if sealErr != nil {
+				logger.WithError(sealErr).Fatal("Invalid media authority seal private key")
+			}
+			if sealErr := authorityStore.SetSealPrivateKey(sealKeyID, sealPrivateKey); sealErr != nil {
+				logger.WithError(sealErr).Fatal("Failed to configure media authority sealed-secret reader")
+			}
+		}
+		foghornServer.SetMediaAuthorityStore(authorityStore)
+		triggerProcessor.SetMediaAuthorityStore(authorityStore)
+		control.SetLocalMediaAuthorityStore(authorityStore)
+		go authorityStore.RunAuditRetention(context.Background(), logger)
+		logger.WithFields(logging.Fields{"trusted_signers": len(trust), "control_cell_id": mediaAuthorityCellID}).Info("Signed media authority apply enabled")
+	} else {
+		logger.Warn("MEDIA_AUTHORITY_TRUST_SET is not configured; signed media authority apply is disabled")
+	}
+	var commodoreDependentWorkers sync.Once
+	onCommodoreConnected := func(client *commodore.GRPCClient) {
+		if client == nil {
+			return
+		}
+		if authorityStore != nil {
+			authorityStore.SetRefreshRequester(func(ctx context.Context) error {
+				_, refreshErr := client.RequestMediaAuthorityReplay(ctx, mediaAuthorityCellID)
+				if refreshErr != nil {
+					logger.WithError(refreshErr).Warn("Soft-expired local media authority refresh request failed; valid authority remains active")
+				}
+				return refreshErr
+			})
+		}
+		commodoreDependentWorkers.Do(func() {
+			go pushstatusoutbox.NewWorker(db, client, logger).Run(context.Background())
+			go managedplacementoutbox.NewWorker(db, client, logger).Run(context.Background())
+			go signingkeyuseoutbox.NewWorker(db, client, logger).Run(context.Background())
+		})
+	}
+	onCommodoreConnected(commodoreClient)
 	if qmClient != nil {
 		foghornServer.SetQuartermasterClient(qmClient)
 	}
 
-	// Signed-policy-bundle cache. FetchFunc dials Commodore; the cache
-	// lives across admission requests with soft/hard TTL semantics from
-	// policybundle.
-	if commodoreClient != nil {
-		bundleCache := policybundle.New()
-		fetcher := policybundle.FetchFunc(func(fctx context.Context, tenantID, streamID string) (policybundle.Entry, error) {
-			resp, fetchErr := commodoreClient.GetSignedPolicyBundle(fctx, tenantID, streamID)
-			if fetchErr != nil {
-				return policybundle.Entry{}, fetchErr
-			}
-			b := resp.GetBundle()
-			if b == nil {
-				return policybundle.Entry{}, fmt.Errorf("commodore returned empty bundle")
-			}
-			return policybundle.Entry{
-				BundleJWT:     b.GetBundleJwt(),
-				BundleVersion: b.GetBundleVersion(),
-				IssuedAt:      b.GetIssuedAt().AsTime(),
-				SoftExpiresAt: b.GetSoftExpiresAt().AsTime(),
-				ExpiresAt:     b.GetExpiresAt().AsTime(),
-			}, nil
-		})
-		foghornServer.SetPolicyBundleCache(bundleCache, fetcher)
-	}
 	// Storage resolver factory: builds a per-request storage.ClusterResolver
 	// using the local Foghorn S3 backing tuple and the tenant's advertised
 	// cluster_peers backings. Used by CreateVodUpload, freeze, and thumbnail
@@ -1357,7 +1584,6 @@ func main() {
 			PeerResolver: peerManager,
 			FedClient:    fedClient,
 			InstanceID:   instanceID,
-			ClusterID:    foghornCfg.ClusterID,
 			Logger:       logger,
 		})
 	}
@@ -1472,13 +1698,22 @@ func main() {
 		}).Fatal("FOGHORN_HA_REQUIRED is true but HA command relay could not be enabled")
 	}
 
-	// Bulk-load served cluster assignments before the TLS listener starts so
-	// Foghorn can present cluster wildcard certificates for every assigned
-	// control-plane name.
-	control.LoadServedClusters()
-	// Seed the platform-shared edge allowlist from Quartermaster's canonical is_platform_official fact (the
-	// only clusters where a tenantless node may serve arbitrary tenants). Additive to the explicit config above.
-	control.LoadPlatformSharedClusters()
+	// Load the initial central projections before the external TLS listener
+	// snapshots the served set. Both calls are independently bounded and
+	// preserve the local/last-good snapshot on failure, so a control-plane
+	// outage cannot prevent local media startup while a healthy multi-cluster
+	// assignment is available to SNI immediately rather than an hour later.
+	var initialClusterLoad sync.WaitGroup
+	initialClusterLoad.Add(2)
+	go func() {
+		defer initialClusterLoad.Done()
+		control.LoadServedClusters()
+	}()
+	go func() {
+		defer initialClusterLoad.Done()
+		control.LoadPlatformSharedClusters()
+	}()
+	initialClusterLoad.Wait()
 
 	internalRegistrars := []control.ServiceRegistrar{foghornServer.RegisterServices}
 	if federationServer != nil {
@@ -1498,6 +1733,13 @@ func main() {
 	})
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to start control gRPC server")
+	}
+	if commodoreClient != nil && authorityStore != nil {
+		// Local persisted authority is immediately usable; replay only repairs
+		// distribution drift and must not hold HTTP startup behind Commodore.
+		go requestMediaAuthorityReplay(commodoreClient, mediaAuthorityCellID, logger)
+	} else if commodoreReconnectNeeded {
+		go reconnectCommodore(commodoreGRPCURL, serviceToken, mediaAuthorityCellID, logger, commodoreCache, clients, clientStatusGauge, clientReconnects, triggerProcessor, onCommodoreConnected)
 	}
 
 	// Start cert refresh loop (re-pushes ConfigSeed when Navigator renews wildcard certs)
@@ -1938,6 +2180,7 @@ func main() {
 		grpcServers.Internal.Stop()
 		grpcServers.External.Stop()
 	}
+	stopConfigSeedAckOutbox()
 }
 
 func foghornRelayAdvertiseAddr(internalBindAddr, fallbackAddr string) string {
@@ -2037,12 +2280,14 @@ func startReleaseReconciler(qmClient *qmclient.GRPCClient, logger logging.Logger
 func reconnectCommodore(
 	grpcAddr string,
 	serviceToken string,
+	controlCellID string,
 	logger logging.Logger,
 	commodoreCache *cache.Cache,
 	clients *clientState,
 	statusGauge *prometheus.GaugeVec,
 	reconnects *prometheus.CounterVec,
 	triggerProcessor *triggers.Processor,
+	onConnected func(*commodore.GRPCClient),
 ) {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
@@ -2075,9 +2320,27 @@ func reconnectCommodore(
 		if control.StreamRegistryInstance != nil {
 			control.StreamRegistryInstance.SetCommodoreClient(client)
 		}
+		if onConnected != nil {
+			onConnected(client)
+		}
+		requestMediaAuthorityReplay(client, controlCellID, logger)
 		logger.Info("Commodore reconnected")
 		return
 	}
+}
+
+func requestMediaAuthorityReplay(client *commodore.GRPCClient, controlCellID string, logger logging.Logger) {
+	if client == nil || strings.TrimSpace(controlCellID) == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	resp, err := client.RequestMediaAuthorityReplay(ctx, controlCellID)
+	if err != nil {
+		logger.WithError(err).WithField("control_cell_id", controlCellID).Warn("Failed to request media authority replay")
+		return
+	}
+	logger.WithField("control_cell_id", controlCellID).WithField("requeued_count", resp.GetRequeuedCount()).Info("Requested current media authority replay")
 }
 
 const (

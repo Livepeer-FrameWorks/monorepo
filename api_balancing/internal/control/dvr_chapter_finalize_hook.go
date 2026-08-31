@@ -19,18 +19,36 @@ import (
 
 // Chapter-finalize jobs don't share the processing_jobs ledger (which
 // keys on UUID job_ids) — they live in foghorn.dvr_chapters and have
-// string job_ids of the form "chapter-finalize-<chapter_id>". Routing
+// string job_ids of the form "chapter-finalize-v2-<attempt>-<chapter_id>". Routing
 // happens at the top of processProcessingJobResult; this file owns the
 // chapter-side state advance, artifact registration, and downstream
 // DTSH dispatch.
 
 const chapterFinalizeJobIDPrefix = "chapter-finalize-"
+const chapterFinalizeAttemptPrefix = "v2-"
 
-func chapterIDFromJobID(jobID string) string {
+func chapterFinalizeIdentityFromJobID(jobID string) (chapterID string, attempt int32, ok bool) {
 	if !strings.HasPrefix(jobID, chapterFinalizeJobIDPrefix) {
-		return ""
+		return "", 0, false
 	}
-	return strings.TrimPrefix(jobID, chapterFinalizeJobIDPrefix)
+	rest := strings.TrimPrefix(jobID, chapterFinalizeJobIDPrefix)
+	if !strings.HasPrefix(rest, chapterFinalizeAttemptPrefix) {
+		// Recognize legacy attempt-less IDs as chapter jobs, but give them
+		// attempt zero so every attempt-fenced mutation rejects them. The
+		// explicit marker avoids misreading a numeric chapter ID as an attempt.
+		return rest, 0, rest != ""
+	}
+	encoded := rest
+	rest = strings.TrimPrefix(rest, chapterFinalizeAttemptPrefix)
+	separator := strings.IndexByte(rest, '-')
+	if separator <= 0 || separator == len(rest)-1 {
+		return encoded, 0, true
+	}
+	parsed, err := strconv.ParseInt(rest[:separator], 10, 32)
+	if err != nil || parsed <= 0 {
+		return encoded, 0, true
+	}
+	return rest[separator+1:], int32(parsed), true
 }
 
 // handleChapterFinalizeResult is the dedicated completion handler for
@@ -42,6 +60,7 @@ func chapterIDFromJobID(jobID string) string {
 func handleChapterFinalizeResult(
 	ctx context.Context,
 	chapterID, jobStatus string,
+	expectedAttempt int32,
 	result *ipcpb.ProcessingJobResult,
 	nodeID string,
 	logger logging.Logger,
@@ -56,23 +75,28 @@ func handleChapterFinalizeResult(
 		"chapter_id": chapterID,
 	}
 
-	// Reporting-node authorization is enforced INSIDE each guarded transition below (the finalize lock, and the
-	// MarkChapterFailed / RetryChapterFinalize guarded UPDATEs all predicate on finalize_node_id = nodeID under
-	// their row lock). Chapter-finalize jobs are routed around foghorn.processing_jobs, so finalize_node_id
-	// (persisted at MarkChapterFinalizing before the node could report) is the reporting-node anchor. Doing the
-	// check inside the consuming transaction — not as a separate read — closes the TOCTOU where a stale-finalize
-	// reclaim reassigns the attempt between an out-of-band check and the transition.
+	// Attempt and reporting-node authorization are enforced inside each guarded
+	// transition. finalize_attempts distinguishes a reclaimed assignment from a
+	// delayed result even when both attempts use the same recording-origin node;
+	// finalize_node_id additionally rejects another connection. Chapter jobs do
+	// not have a processing_jobs row, so both values live on dvr_chapters.
 	if jobStatus == "failed" {
 		if terminal, reason := chapterTerminalFailure(result.GetOutputs(), result.GetError()); terminal {
 			// MarkChapterFailed transitions the chapter, fails the child artifact, AND enqueues the
 			// failed lifecycle in one transaction — no separate (loss-prone) emit needed.
-			if err := MarkChapterFailed(ctx, chapterID, ChapterStateFailedSourceMissing, reason, nodeID); err != nil {
+			changed, err := MarkChapterFailed(ctx, chapterID, ChapterStateFailedSourceMissing, reason, nodeID, expectedAttempt)
+			if err != nil {
 				logger.WithError(err).WithFields(fields).Warn("Chapter finalize: terminal-fail mark failed")
+			} else if !changed {
+				logger.WithFields(fields).Info("Chapter finalize: terminal-fail result rejected by attempt/node fence")
 			}
 			return
 		}
-		if err := RetryChapterFinalize(ctx, chapterID, result.GetError(), nodeID); err != nil {
+		changed, err := RetryChapterFinalize(ctx, chapterID, result.GetError(), nodeID, expectedAttempt)
+		if err != nil {
 			logger.WithError(err).WithFields(fields).Warn("Chapter finalize: retry rollback failed")
+		} else if !changed {
+			logger.WithFields(fields).Info("Chapter finalize: retry result rejected by attempt/node fence")
 		}
 		return
 	}
@@ -92,8 +116,11 @@ func handleChapterFinalizeResult(
 			"has_hash":   playbackHash != "",
 			"has_output": outputPath != "",
 		}).Warn("Chapter finalize: malformed completion (missing hash or output path); bouncing to closed for retry")
-		if err := RetryChapterFinalize(ctx, chapterID, "malformed completion: missing hash or output path", nodeID); err != nil {
+		changed, err := RetryChapterFinalize(ctx, chapterID, "malformed completion: missing hash or output path", nodeID, expectedAttempt)
+		if err != nil {
 			logger.WithError(err).WithFields(fields).Warn("Chapter finalize: bounce finalizing→closed failed")
+		} else if !changed {
+			logger.WithFields(fields).Info("Chapter finalize: malformed completion rejected by attempt/node fence")
 		}
 		return
 	}
@@ -152,7 +179,7 @@ func handleChapterFinalizeResult(
 	// still 'finalizing', or vice versa). A duplicate/late completion (chapter no longer
 	// 'finalizing') is an ignored no-op; any transient failure rolls the whole tx back and
 	// bounces the chapter finalizing→closed so the queue re-dispatches promptly.
-	resolvedHash, txErr := finalizeChapterArtifactTx(ctx, chapterID, playbackHash, outputPath, nodeID,
+	resolvedHash, txErr := finalizeChapterArtifactTx(ctx, chapterID, playbackHash, outputPath, nodeID, expectedAttempt,
 		sizeBytes, segCount, hasGaps, mediaStartMs, mediaEndMs, chapterDurationMs, tracksPresent, tracksJSON,
 		result.GetOutputs(), logger, fields)
 	if txErr != nil {
@@ -165,8 +192,11 @@ func handleChapterFinalizeResult(
 			return
 		}
 		logger.WithError(txErr).WithFields(fields).Warn("Chapter finalize: atomic finalize failed; bouncing chapter to closed for retry")
-		if rbErr := RetryChapterFinalize(ctx, chapterID, "finalize persist failed: "+txErr.Error(), nodeID); rbErr != nil {
+		changed, rbErr := RetryChapterFinalize(ctx, chapterID, "finalize persist failed: "+txErr.Error(), nodeID, expectedAttempt)
+		if rbErr != nil {
 			logger.WithError(rbErr).WithFields(fields).Warn("Chapter finalize: bounce finalizing→closed failed")
+		} else if !changed {
+			logger.WithFields(fields).Info("Chapter finalize: failed-persist retry rejected by attempt/node fence")
 		}
 		return
 	}
@@ -217,6 +247,7 @@ var errChapterFinalizeNodeMismatch = errors.New("chapter finalize reporting node
 func finalizeChapterArtifactTx(
 	ctx context.Context,
 	chapterID, playbackHash, outputPath, nodeID string,
+	expectedAttempt int32,
 	sizeBytes int64,
 	segCount int32,
 	hasGaps bool,
@@ -259,6 +290,9 @@ func finalizeChapterArtifactTx(
 	// an ignored no-op — not a retry — so it does not bounce a legitimately-reassigned attempt.
 	if assignedNode == "" || assignedNode != nodeID {
 		return "", errChapterFinalizeNodeMismatch
+	}
+	if expectedAttempt <= 0 || locked.FinalizeAttempts != expectedAttempt {
+		return "", errChapterNotInFinalizing
 	}
 	if artifactStatus != "finalizing" {
 		// The allocated artifact is no longer awaiting finalization (deleted by a parent cascade,
@@ -308,7 +342,7 @@ func finalizeChapterArtifactTx(
 
 	// Chapter transition. We hold the chapter lock and confirmed 'finalizing', so exactly one
 	// row must transition; anything else is an anomaly that must not commit.
-	rows, finErr := MarkChapterFinalizedTx(ctx, tx, chapterID, segCount, hasGaps, mediaStartMs, mediaEndMs)
+	rows, finErr := MarkChapterFinalizedTx(ctx, tx, chapterID, expectedAttempt, segCount, hasGaps, mediaStartMs, mediaEndMs)
 	if finErr != nil {
 		return "", finErr
 	}
@@ -452,20 +486,20 @@ func resolveChapterArtifactContent(ctx context.Context, input string) *ContentRe
 		return nil
 	}
 	res := &ContentResolution{
-		ContentType: "vod",
+		ContentType: "chapter",
 		// ContentId is what the caller passed in — keep it as the
 		// public playback_id when one was used so downstream URL
 		// generation stays public-ID-shaped (not artifact-hash-shaped).
-		ContentId:    originalInput,
-		TenantId:     parent.GetTenantId(),
-		StreamId:     parent.GetStreamId(),
-		InternalName: "vod+" + input,
-		RequiresAuth: true,
+		ContentId: originalInput,
+		TenantId:  parent.GetTenantId(), UserId: parent.GetUserId(), StreamId: parent.GetStreamId(),
+		InternalName: "vod+" + input, ArtifactHash: input, OriginClusterID: parent.GetOriginClusterId(),
+		ParentStreamInternalName: parent.GetStreamInternalName(), RequiresAuth: true,
 	}
 	if parentPlaybackID := parent.GetPlaybackId(); parentPlaybackID != "" {
 		if policy, perr := CommodoreClient.ResolveArtifactPlaybackID(ctx, parentPlaybackID); perr == nil && policy.GetFound() {
 			res.RequiresAuth = policy.GetRequiresAuth()
 			res.ClusterPeers = policy.GetClusterPeers()
+			res.AuthorityClusterPeers = policy.GetAuthorityClusterPeers()
 		}
 	}
 	return res
@@ -514,13 +548,15 @@ func resolveChapterArtifactPlaybackResp(ctx context.Context, input string) (*com
 		return nil, false
 	}
 	resp := &commodorepb.ResolveArtifactPlaybackIDResponse{
-		Found:           true,
-		ArtifactHash:    input,
-		InternalName:    input, // bare hash; ResolveArtifactPlayback adds vod+ prefix elsewhere if needed
-		TenantId:        parent.GetTenantId(),
-		StreamId:        parent.GetStreamId(),
-		ContentType:     "vod",
-		OriginClusterId: parent.GetOriginClusterId(),
+		Found:                    true,
+		ArtifactHash:             input,
+		InternalName:             input, // bare hash; ResolveArtifactPlayback adds vod+ prefix elsewhere if needed
+		TenantId:                 parent.GetTenantId(),
+		UserId:                   parent.GetUserId(),
+		StreamId:                 parent.GetStreamId(),
+		ContentType:              "chapter",
+		OriginClusterId:          parent.GetOriginClusterId(),
+		ParentStreamInternalName: parent.GetStreamInternalName(),
 		// Fail-closed default: chapter playback inherits parent-DVR
 		// policy. If we can't reach Commodore to confirm public access,
 		// authenticate. Only flip to public when the parent's policy
@@ -531,6 +567,7 @@ func resolveChapterArtifactPlaybackResp(ctx context.Context, input string) (*com
 		if policy, perr := CommodoreClient.ResolveArtifactPlaybackID(ctx, parentPB); perr == nil && policy.GetFound() {
 			resp.RequiresAuth = policy.GetRequiresAuth()
 			resp.ClusterPeers = policy.GetClusterPeers()
+			resp.AuthorityClusterPeers = policy.GetAuthorityClusterPeers()
 		}
 	}
 	return resp, true

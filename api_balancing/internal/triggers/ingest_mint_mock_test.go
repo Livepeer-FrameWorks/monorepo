@@ -33,6 +33,7 @@ func installIngestSessionMintMock(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`start_trigger_uuid = \$3\s+FOR UPDATE`).WillReturnError(sql.ErrNoRows)           // new trigger UUID
 	mock.ExpectQuery(`stream_internal_name = \$2 AND ended_at IS NULL`).WillReturnError(sql.ErrNoRows) // no stream incumbent
 	mock.ExpectQuery(`ingest_close_tombstones`).                                                       // no close-before-insert tombstone
@@ -47,7 +48,7 @@ func installIngestSessionMintMock(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`SELECT EXISTS`).WillReturnRows(sqlmock.NewRows([]string{"exists", "source_revision", "projection_state"}).AddRow(true, nil, "pending"))
-	mock.ExpectQuery(`nextval`).WillReturnRows(sqlmock.NewRows([]string{"nextval"}).AddRow(int64(1)))
+	mock.ExpectQuery(`INSERT INTO foghorn.source_projection_revision_counter`).WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnRows(sqlmock.NewRows([]string{"revision"}).AddRow(int64(1)))
 	mock.ExpectExec(`UPDATE foghorn\.ingest_sessions[\s\S]*SET source_revision`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 	// The confirmation transaction: pending→active plus the durable admission-effect obligation,
@@ -55,6 +56,47 @@ func installIngestSessionMintMock(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec(`UPDATE foghorn\.ingest_sessions[\s\S]*SET projection_state = 'active'`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO foghorn\.ingest_admission_effects`).WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit()
+}
+
+// installIngestSessionMintThenAbortMock stops before projection and expects the caller to retire
+// the committed pending generation. It models a synchronous post-mint gate failure and therefore
+// discriminates the cleanup contract from the normal projection path.
+func installIngestSessionMintThenAbortMock(t *testing.T) {
+	t.Helper()
+	dbMock, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	prev := control.GetDB()
+	control.SetDB(dbMock)
+	t.Cleanup(func() {
+		control.SetDB(prev)
+		if expectationsErr := mock.ExpectationsWereMet(); expectationsErr != nil {
+			t.Errorf("pending-session cleanup SQL: %v", expectationsErr)
+		}
+		_ = dbMock.Close()
+	})
+
+	mock.ExpectQuery(`tenant_id = \$1::uuid AND node_id = \$2 AND start_trigger_uuid = \$3 AND ended_at IS NULL`).WillReturnError(sql.ErrNoRows)
+	mock.ExpectBegin()
+	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`start_trigger_uuid = \$3\s+FOR UPDATE`).WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(`stream_internal_name = \$2 AND ended_at IS NULL`).WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(`ingest_close_tombstones`).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	mock.ExpectQuery(`INSERT INTO foghorn.ingest_sessions`).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("11111111-1111-1111-1111-111111111111"))
+	mock.ExpectCommit()
+
+	// AbortPendingIngestSession: end the exact pending generation and durably order its no-op
+	// offline projection so a stale local registry transition cannot later resurrect it.
+	mock.ExpectBegin()
+	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`UPDATE foghorn\.ingest_sessions[\s\S]*ended_reason\s+=\s+'projection_failed'`).
+		WillReturnRows(sqlmock.NewRows([]string{"node_id", "start_trigger_uuid"}).AddRow("edge-node-1", "test-trigger-uuid"))
+	mock.ExpectQuery(`INSERT INTO foghorn.source_projection_revision_counter`).WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnRows(sqlmock.NewRows([]string{"revision"}).AddRow(int64(1)))
+	mock.ExpectExec(`INSERT INTO foghorn\.ingest_offline_effects`).WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 }
 
@@ -78,6 +120,7 @@ func installIngestSessionEndedMock(t *testing.T) {
 	mock.ExpectQuery(`tenant_id = \$1::uuid AND node_id = \$2 AND start_trigger_uuid = \$3 AND ended_at IS NULL`).WillReturnError(sql.ErrNoRows)
 
 	mock.ExpectBegin()
+	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	// The trigger-UUID lookup finds a row for this exact trigger that is already ENDED.
 	mock.ExpectQuery(`start_trigger_uuid = \$3\s+FOR UPDATE`).
@@ -110,6 +153,7 @@ func installIngestSessionResumedMock(t *testing.T, internalName string, connecto
 	// CreateIngestSession resolves the same trigger UUID to the still-open row (idempotent retry);
 	// the row's full identity (stream AND connector PID) must match the caller's.
 	mock.ExpectBegin()
+	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`start_trigger_uuid = \$3\s+FOR UPDATE`).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "stream_internal_name", "ended", "connector_pid"}).AddRow(sessionID, internalName, false, connectorPID))
@@ -164,6 +208,7 @@ func installIngestSessionMintMockCaptureDecklog(t *testing.T) *byteArgRecorder {
 
 	mock.ExpectBegin()
 	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`start_trigger_uuid = \$3\s+FOR UPDATE`).WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery(`stream_internal_name = \$2 AND ended_at IS NULL`).WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery(`ingest_close_tombstones`).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
@@ -174,7 +219,7 @@ func installIngestSessionMintMockCaptureDecklog(t *testing.T) *byteArgRecorder {
 	mock.ExpectBegin()
 	mock.ExpectExec(`pg_advisory_xact_lock`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`SELECT EXISTS`).WillReturnRows(sqlmock.NewRows([]string{"exists", "source_revision", "projection_state"}).AddRow(true, nil, "pending"))
-	mock.ExpectQuery(`nextval`).WillReturnRows(sqlmock.NewRows([]string{"nextval"}).AddRow(int64(1)))
+	mock.ExpectQuery(`INSERT INTO foghorn.source_projection_revision_counter`).WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnRows(sqlmock.NewRows([]string{"revision"}).AddRow(int64(1)))
 	mock.ExpectExec(`UPDATE foghorn\.ingest_sessions[\s\S]*SET source_revision`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 

@@ -2,7 +2,8 @@
 SELECT c.state, COALESCE(c.playback_artifact_hash, '')::text AS playback_artifact_hash,
        a.tenant_id::text AS tenant_id, a.status AS artifact_status,
        COALESCE(p.status, '')::text AS parent_status,
-       COALESCE(c.finalize_node_id, '')::text AS finalize_node_id
+       COALESCE(c.finalize_node_id, '')::text AS finalize_node_id,
+       c.finalize_attempts
 FROM foghorn.dvr_chapters c
 JOIN foghorn.artifacts a ON a.artifact_hash = c.playback_artifact_hash
 LEFT JOIN foghorn.artifacts p ON p.artifact_hash = c.artifact_hash AND p.artifact_type = 'dvr'
@@ -12,6 +13,7 @@ FOR UPDATE OF c, a;
 -- name: FinalizeChapterPlaybackArtifact :execrows
 UPDATE foghorn.artifacts
 SET status = 'ready', format = 'mkv',
+    federated_pointer = false,
     size_bytes = NULLIF(sqlc.arg(size_bytes)::bigint, 0),
     tracks = CASE WHEN sqlc.arg(tracks_present)::boolean THEN sqlc.arg(tracks_json)::text::jsonb ELSE tracks END,
     duration_ms = CASE WHEN sqlc.arg(duration_ms)::bigint > 0 THEN sqlc.arg(duration_ms)::bigint ELSE duration_ms END,

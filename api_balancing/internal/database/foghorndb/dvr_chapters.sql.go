@@ -12,7 +12,7 @@ import (
 	"github.com/lib/pq"
 )
 
-const claimDVRChapterFinalization = `-- name: ClaimDVRChapterFinalization :execrows
+const claimDVRChapterFinalization = `-- name: ClaimDVRChapterFinalization :one
 UPDATE foghorn.dvr_chapters
 SET state = 'finalizing', playback_artifact_hash = $1,
     finalize_attempts = finalize_attempts + 1, finalize_started_at = NOW(),
@@ -20,6 +20,7 @@ SET state = 'finalizing', playback_artifact_hash = $1,
 WHERE chapter_id = $3
   AND (state = 'closed' OR (state = 'finalizing'
     AND COALESCE(finalize_started_at, created_at) < NOW() - make_interval(secs => $4)))
+RETURNING finalize_attempts
 `
 
 type ClaimDVRChapterFinalizationParams struct {
@@ -29,17 +30,16 @@ type ClaimDVRChapterFinalizationParams struct {
 	StaleSeconds         float64        `db:"stale_seconds" json:"stale_seconds"`
 }
 
-func (q *Queries) ClaimDVRChapterFinalization(ctx context.Context, arg ClaimDVRChapterFinalizationParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, claimDVRChapterFinalization,
+func (q *Queries) ClaimDVRChapterFinalization(ctx context.Context, arg ClaimDVRChapterFinalizationParams) (int32, error) {
+	row := q.db.QueryRowContext(ctx, claimDVRChapterFinalization,
 		arg.PlaybackArtifactHash,
 		arg.FinalizeNodeID,
 		arg.ChapterID,
 		arg.StaleSeconds,
 	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
+	var finalize_attempts int32
+	err := row.Scan(&finalize_attempts)
+	return finalize_attempts, err
 }
 
 const clearCurrentChaptersForInactiveDVRs = `-- name: ClearCurrentChaptersForInactiveDVRs :execrows
@@ -47,6 +47,7 @@ UPDATE foghorn.dvr_chapters c
 SET is_current = false, state = CASE WHEN c.state = 'open' THEN 'closed' ELSE c.state END
 FROM foghorn.artifacts a
 WHERE c.artifact_hash = a.artifact_hash AND c.is_current = true AND a.artifact_type = 'dvr'
+  AND a.federated_pointer = false
   AND a.status IN ('completed', 'completed_partial', 'failed', 'ready', 'deleted')
 `
 
@@ -115,7 +116,9 @@ func (q *Queries) DeleteDVRChapter(ctx context.Context, chapterID string) error 
 
 const deleteDVRChapterRowsForTenant = `-- name: DeleteDVRChapterRowsForTenant :exec
 DELETE FROM foghorn.dvr_chapters c USING foghorn.artifacts parent
-WHERE c.artifact_hash = $1 AND parent.artifact_hash = $1 AND parent.tenant_id = $2::uuid
+WHERE c.artifact_hash = $1 AND parent.artifact_hash = $1
+  AND parent.tenant_id = $2::uuid AND parent.artifact_type = 'dvr'
+  AND parent.federated_pointer = false
 `
 
 type DeleteDVRChapterRowsForTenantParams struct {
@@ -132,8 +135,9 @@ const failDVRChapter = `-- name: FailDVRChapter :one
 UPDATE foghorn.dvr_chapters
 SET state = $1, last_failure_reason = $2, finalize_node_id = NULL
 WHERE chapter_id = $3
-  AND (($4::text = '' AND state IN ('closed', 'finalizing'))
-    OR ($4::text <> '' AND state = 'finalizing' AND finalize_node_id = $4::text))
+  AND finalize_attempts = $4
+  AND (($5::text = '' AND state IN ('closed', 'finalizing'))
+    OR ($5::text <> '' AND state = 'finalizing' AND finalize_node_id = $5::text))
 RETURNING playback_artifact_hash
 `
 
@@ -141,6 +145,7 @@ type FailDVRChapterParams struct {
 	State             string         `db:"state" json:"state"`
 	LastFailureReason sql.NullString `db:"last_failure_reason" json:"last_failure_reason"`
 	ChapterID         string         `db:"chapter_id" json:"chapter_id"`
+	ExpectedAttempt   int32          `db:"expected_attempt" json:"expected_attempt"`
 	ExpectedNode      string         `db:"expected_node" json:"expected_node"`
 }
 
@@ -149,6 +154,7 @@ func (q *Queries) FailDVRChapter(ctx context.Context, arg FailDVRChapterParams) 
 		arg.State,
 		arg.LastFailureReason,
 		arg.ChapterID,
+		arg.ExpectedAttempt,
 		arg.ExpectedNode,
 	)
 	var playback_artifact_hash sql.NullString
@@ -160,6 +166,7 @@ const failDVRChapterArtifact = `-- name: FailDVRChapterArtifact :one
 UPDATE foghorn.artifacts
 SET status = 'failed', error_message = $2, updated_at = NOW()
 WHERE artifact_hash = $1 AND origin_type = 'dvr_chapter'
+  AND federated_pointer = false
   AND status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted')
 RETURNING tenant_id::text
 `
@@ -309,7 +316,8 @@ func (q *Queries) GetDVRChaptersByID(ctx context.Context, dollar_1 []string) ([]
 }
 
 const getDVRParentArtifactStatus = `-- name: GetDVRParentArtifactStatus :one
-SELECT status FROM foghorn.artifacts WHERE artifact_hash = $1 AND artifact_type = 'dvr'
+SELECT status FROM foghorn.artifacts
+WHERE artifact_hash = $1 AND artifact_type = 'dvr' AND federated_pointer = false
 `
 
 func (q *Queries) GetDVRParentArtifactStatus(ctx context.Context, artifactHash string) (sql.NullString, error) {
@@ -458,7 +466,8 @@ WHERE (c.state = 'closed' OR (c.state = 'finalizing'
     GREATEST(make_interval(secs => 2 * GREATEST(c.end_ms - c.start_ms, 0) / 1000.0), make_interval(secs => $1)),
     make_interval(secs => $2))))
   AND EXISTS (SELECT 1 FROM foghorn.artifacts p
-    WHERE p.artifact_hash = c.artifact_hash AND p.artifact_type = 'dvr' AND p.status <> 'deleted')
+    WHERE p.artifact_hash = c.artifact_hash AND p.artifact_type = 'dvr'
+      AND p.federated_pointer = false AND p.status <> 'deleted')
 ORDER BY c.created_at, c.chapter_id LIMIT $3
 `
 
@@ -522,6 +531,9 @@ SELECT c.chapter_id, c.artifact_hash, c.mode, c.interval_seconds, c.start_ms, c.
 FROM foghorn.dvr_chapters c
 WHERE c.state = 'frozen'
   AND (c.reclaim_started_at IS NULL OR c.reclaim_started_at < NOW() - make_interval(secs => $1))
+  AND EXISTS (SELECT 1 FROM foghorn.artifacts p
+    WHERE p.artifact_hash = c.artifact_hash AND p.artifact_type = 'dvr'
+      AND p.federated_pointer = false)
 ORDER BY c.created_at, c.chapter_id LIMIT $2
 `
 
@@ -582,7 +594,7 @@ func (q *Queries) ListDVRChaptersNeedingReclaim(ctx context.Context, arg ListDVR
 const listDeletedDVRParentsWithChapters = `-- name: ListDeletedDVRParentsWithChapters :many
 SELECT p.artifact_hash, p.tenant_id::text AS tenant_id
 FROM foghorn.artifacts p
-WHERE p.artifact_type = 'dvr' AND p.status = 'deleted'
+WHERE p.artifact_type = 'dvr' AND p.federated_pointer = false AND p.status = 'deleted'
   AND EXISTS (SELECT 1 FROM foghorn.dvr_chapters c WHERE c.artifact_hash = p.artifact_hash)
 LIMIT $1
 `
@@ -616,37 +628,46 @@ func (q *Queries) ListDeletedDVRParentsWithChapters(ctx context.Context, limit i
 }
 
 const lockDVRChapterMutation = `-- name: LockDVRChapterMutation :exec
-SELECT pg_advisory_lock(hashtext($1))
+SELECT pg_advisory_xact_lock($1::integer, hashtext($2::text))
 `
 
-func (q *Queries) LockDVRChapterMutation(ctx context.Context, hashtext string) error {
-	_, err := q.db.ExecContext(ctx, lockDVRChapterMutation, hashtext)
+type LockDVRChapterMutationParams struct {
+	LockNamespace int32  `db:"lock_namespace" json:"lock_namespace"`
+	ArtifactHash  string `db:"artifact_hash" json:"artifact_hash"`
+}
+
+func (q *Queries) LockDVRChapterMutation(ctx context.Context, arg LockDVRChapterMutationParams) error {
+	_, err := q.db.ExecContext(ctx, lockDVRChapterMutation, arg.LockNamespace, arg.ArtifactHash)
 	return err
 }
 
 const markDVRChapterFinalized = `-- name: MarkDVRChapterFinalized :execrows
 UPDATE foghorn.dvr_chapters
-SET state = 'finalized', segment_count = $2, has_gaps = $3,
-    actual_media_start_ms = $4,
-    actual_media_end_ms = $5, finalize_node_id = NULL
-WHERE chapter_id = $1 AND state = 'finalizing'
+SET state = 'finalized', segment_count = $1, has_gaps = $2,
+    actual_media_start_ms = $3,
+    actual_media_end_ms = $4, finalize_node_id = NULL
+WHERE chapter_id = $5
+  AND state = 'finalizing'
+  AND finalize_attempts = $6
 `
 
 type MarkDVRChapterFinalizedParams struct {
-	ChapterID    string        `db:"chapter_id" json:"chapter_id"`
-	SegmentCount int32         `db:"segment_count" json:"segment_count"`
-	HasGaps      bool          `db:"has_gaps" json:"has_gaps"`
-	MediaStartMs sql.NullInt64 `db:"media_start_ms" json:"media_start_ms"`
-	MediaEndMs   sql.NullInt64 `db:"media_end_ms" json:"media_end_ms"`
+	SegmentCount    int32         `db:"segment_count" json:"segment_count"`
+	HasGaps         bool          `db:"has_gaps" json:"has_gaps"`
+	MediaStartMs    sql.NullInt64 `db:"media_start_ms" json:"media_start_ms"`
+	MediaEndMs      sql.NullInt64 `db:"media_end_ms" json:"media_end_ms"`
+	ChapterID       string        `db:"chapter_id" json:"chapter_id"`
+	ExpectedAttempt int32         `db:"expected_attempt" json:"expected_attempt"`
 }
 
 func (q *Queries) MarkDVRChapterFinalized(ctx context.Context, arg MarkDVRChapterFinalizedParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, markDVRChapterFinalized,
-		arg.ChapterID,
 		arg.SegmentCount,
 		arg.HasGaps,
 		arg.MediaStartMs,
 		arg.MediaEndMs,
+		arg.ChapterID,
+		arg.ExpectedAttempt,
 	)
 	if err != nil {
 		return 0, err
@@ -694,41 +715,56 @@ func (q *Queries) MarkDVRChapterReclaimed(ctx context.Context, chapterID string)
 }
 
 const propagateDVRChapterRetention = `-- name: PropagateDVRChapterRetention :execrows
-UPDATE foghorn.artifacts a SET retention_until = $2, updated_at = NOW()
+UPDATE foghorn.artifacts a SET retention_until = $1, updated_at = NOW()
 FROM foghorn.dvr_chapters c
-WHERE c.artifact_hash = $1 AND a.artifact_hash = c.playback_artifact_hash
-  AND a.origin_type = 'dvr_chapter' AND a.status <> 'deleted'
+WHERE c.artifact_hash = $2
+  AND a.artifact_hash = c.playback_artifact_hash
+  AND a.tenant_id = $3::uuid
+  AND a.origin_type = 'dvr_chapter'
+  AND a.federated_pointer = false
+  AND a.status <> 'deleted'
 `
 
 type PropagateDVRChapterRetentionParams struct {
-	ArtifactHash   string       `db:"artifact_hash" json:"artifact_hash"`
 	RetentionUntil sql.NullTime `db:"retention_until" json:"retention_until"`
+	ArtifactHash   string       `db:"artifact_hash" json:"artifact_hash"`
+	TenantID       string       `db:"tenant_id" json:"tenant_id"`
 }
 
 func (q *Queries) PropagateDVRChapterRetention(ctx context.Context, arg PropagateDVRChapterRetentionParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, propagateDVRChapterRetention, arg.ArtifactHash, arg.RetentionUntil)
+	result, err := q.db.ExecContext(ctx, propagateDVRChapterRetention, arg.RetentionUntil, arg.ArtifactHash, arg.TenantID)
 	if err != nil {
 		return 0, err
 	}
 	return result.RowsAffected()
 }
 
-const retryDVRChapterFinalize = `-- name: RetryDVRChapterFinalize :exec
+const retryDVRChapterFinalize = `-- name: RetryDVRChapterFinalize :execrows
 UPDATE foghorn.dvr_chapters
 SET state = 'closed', last_failure_reason = $1, finalize_node_id = NULL
 WHERE chapter_id = $2 AND state = 'finalizing'
-  AND ($3::text = '' OR finalize_node_id = $3::text)
+  AND finalize_attempts = $3
+  AND ($4::text = '' OR finalize_node_id = $4::text)
 `
 
 type RetryDVRChapterFinalizeParams struct {
 	LastFailureReason sql.NullString `db:"last_failure_reason" json:"last_failure_reason"`
 	ChapterID         string         `db:"chapter_id" json:"chapter_id"`
+	ExpectedAttempt   int32          `db:"expected_attempt" json:"expected_attempt"`
 	ExpectedNode      string         `db:"expected_node" json:"expected_node"`
 }
 
-func (q *Queries) RetryDVRChapterFinalize(ctx context.Context, arg RetryDVRChapterFinalizeParams) error {
-	_, err := q.db.ExecContext(ctx, retryDVRChapterFinalize, arg.LastFailureReason, arg.ChapterID, arg.ExpectedNode)
-	return err
+func (q *Queries) RetryDVRChapterFinalize(ctx context.Context, arg RetryDVRChapterFinalizeParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, retryDVRChapterFinalize,
+		arg.LastFailureReason,
+		arg.ChapterID,
+		arg.ExpectedAttempt,
+		arg.ExpectedNode,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const setDVRChapterPlaybackID = `-- name: SetDVRChapterPlaybackID :exec
@@ -749,7 +785,15 @@ const softDeleteDVRChapterArtifacts = `-- name: SoftDeleteDVRChapterArtifacts :m
 UPDATE foghorn.artifacts a SET status = 'deleted', updated_at = NOW()
 FROM foghorn.dvr_chapters c
 WHERE c.artifact_hash = $1 AND a.artifact_hash = c.playback_artifact_hash
-  AND a.origin_type = 'dvr_chapter' AND a.tenant_id = $2::uuid AND a.status <> 'deleted'
+  AND a.origin_type = 'dvr_chapter' AND a.tenant_id = $2::uuid
+  AND a.federated_pointer = false AND a.status <> 'deleted'
+  AND EXISTS (
+      SELECT 1 FROM foghorn.artifacts parent
+      WHERE parent.artifact_hash = c.artifact_hash
+        AND parent.tenant_id = $2::uuid
+        AND parent.artifact_type = 'dvr'
+        AND parent.federated_pointer = false
+  )
 RETURNING a.artifact_hash
 `
 
@@ -783,7 +827,8 @@ func (q *Queries) SoftDeleteDVRChapterArtifacts(ctx context.Context, arg SoftDel
 
 const softDeleteDVRParent = `-- name: SoftDeleteDVRParent :execrows
 UPDATE foghorn.artifacts SET status = 'deleted', updated_at = NOW()
-WHERE artifact_hash = $1 AND tenant_id = $2::uuid AND artifact_type = 'dvr' AND status <> 'deleted'
+WHERE artifact_hash = $1 AND tenant_id = $2::uuid
+  AND artifact_type = 'dvr' AND federated_pointer = false AND status <> 'deleted'
 `
 
 type SoftDeleteDVRParentParams struct {
@@ -797,15 +842,6 @@ func (q *Queries) SoftDeleteDVRParent(ctx context.Context, arg SoftDeleteDVRPare
 		return 0, err
 	}
 	return result.RowsAffected()
-}
-
-const unlockDVRChapterMutation = `-- name: UnlockDVRChapterMutation :exec
-SELECT pg_advisory_unlock(hashtext($1))
-`
-
-func (q *Queries) UnlockDVRChapterMutation(ctx context.Context, hashtext string) error {
-	_, err := q.db.ExecContext(ctx, unlockDVRChapterMutation, hashtext)
-	return err
 }
 
 const upsertOpenDVRChapter = `-- name: UpsertOpenDVRChapter :exec

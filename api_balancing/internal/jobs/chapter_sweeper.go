@@ -128,11 +128,15 @@ func (s *ChapterSweeper) sweep() {
 
 	for _, art := range artifacts {
 		artifactCtx, artifactCancel := context.WithTimeout(ctx, perArtifactSweepTimeout)
-		if err := control.WithDVRChapterMutationLock(artifactCtx, art.hash, func() error {
-			s.processArtifact(artifactCtx, art.hash, art.mode, art.intervalSeconds, art.startedAtMs, art.windowSeconds, nowMs)
-			return nil
+		var notify bool
+		if err := control.WithDVRChapterMutationTx(artifactCtx, art.hash, func(tx *sql.Tx) error {
+			var txErr error
+			notify, txErr = s.processArtifact(artifactCtx, tx, art.hash, art.mode, art.intervalSeconds, art.startedAtMs, art.windowSeconds, nowMs)
+			return txErr
 		}); err != nil {
 			s.logger.WithError(err).WithField("artifact_hash", art.hash).Warn("Chapter sweep: failed to lock artifact")
+		} else if notify {
+			control.NotifyChapterMutationCommitted()
 		}
 		artifactCancel()
 	}
@@ -147,12 +151,13 @@ func (s *ChapterSweeper) sweep() {
 // interval must be set; otherwise the artifact is silently skipped.
 func (s *ChapterSweeper) processArtifact(
 	ctx context.Context,
+	tx *sql.Tx,
 	artifactHash, mode string,
 	intervalSeconds int32,
 	startedAtMs int64,
 	windowSeconds int32,
 	nowMs int64,
-) {
+) (bool, error) {
 	logFields := logging.Fields{
 		"artifact_hash": artifactHash,
 		"mode":          mode,
@@ -161,26 +166,28 @@ func (s *ChapterSweeper) processArtifact(
 	effInterval := control.EffectiveChapterInterval(mode, intervalSeconds, windowSeconds)
 	startMs, endMs, ok := control.CurrentChapterBounds(mode, effInterval, startedAtMs, nowMs)
 	if !ok {
-		return
+		return false, nil
 	}
 
-	prev, err := control.CurrentChapter(ctx, artifactHash)
+	prev, err := control.CurrentChapterTx(ctx, tx, artifactHash)
 	if err != nil {
 		s.logger.WithError(err).WithFields(logFields).Warn("Chapter sweep: failed to read current chapter")
-		return
+		return false, err
 	}
 	if prev != nil && prev.StartMs == startMs && prev.EndMs == endMs {
-		return
+		return false, nil
 	}
-	if err := control.BackfillChaptersThrough(ctx, artifactHash, mode, effInterval, startedAtMs, nowMs); err != nil {
+	notify, err := control.BackfillChaptersThroughTx(ctx, tx, artifactHash, mode, effInterval, startedAtMs, nowMs)
+	if err != nil {
 		if errors.Is(err, sql.ErrConnDone) {
-			return
+			return false, err
 		}
 		s.logger.WithError(err).WithFields(logFields).Warn("Chapter sweep: backfill through nowMs failed")
-		return
+		return false, err
 	}
 	s.logger.WithFields(logFields).WithFields(logging.Fields{
 		"start_ms": startMs,
 		"end_ms":   endMs,
 	}).Info("Chapter sweep: boundary advanced (backfilled any missed intervals)")
+	return notify, nil
 }

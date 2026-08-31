@@ -18,6 +18,10 @@ import (
 
 var chapterClosedNotifier func()
 
+// Separate two-key advisory-lock namespace for DVR chapter mutation. It cannot
+// collide with the one-key ingest admission locks even when hashtext collides.
+const dvrChapterMutationLockNamespace int32 = 0x64767263 // "dvrc"
+
 func SetChapterClosedNotifier(fn func()) {
 	chapterClosedNotifier = fn
 }
@@ -26,6 +30,13 @@ func notifyChapterClosed() {
 	if chapterClosedNotifier != nil {
 		chapterClosedNotifier()
 	}
+}
+
+// NotifyChapterMutationCommitted wakes the finalization queue after a caller
+// commits closed chapter rows through a transaction-scoped mutation helper.
+// Polling remains the recovery path if the wake is lost.
+func NotifyChapterMutationCommitted() {
+	notifyChapterClosed()
 }
 
 // Chapter rows record range metadata + the state machine that drives
@@ -75,6 +86,7 @@ type DVRChapterRow struct {
 	PlaybackID           sql.NullString
 	FinalizeAttempts     int32
 	FinalizeStartedAt    sql.NullTime
+	FinalizeNodeID       sql.NullString
 	FrozenAt             sql.NullTime
 	LastFailureReason    sql.NullString
 	ReclaimStartedAt     sql.NullTime
@@ -93,7 +105,7 @@ func mapDVRChapter(row foghorndb.FoghornDvrChapter) DVRChapterRow {
 		IntervalSeconds: row.IntervalSeconds, StartMs: row.StartMs, EndMs: row.EndMs,
 		IsCurrent: row.IsCurrent, State: row.State, PlaybackArtifactHash: row.PlaybackArtifactHash,
 		PlaybackID: row.PlaybackID, FinalizeAttempts: row.FinalizeAttempts,
-		FinalizeStartedAt: row.FinalizeStartedAt, FrozenAt: row.FrozenAt,
+		FinalizeStartedAt: row.FinalizeStartedAt, FinalizeNodeID: row.FinalizeNodeID, FrozenAt: row.FrozenAt,
 		LastFailureReason: row.LastFailureReason, ReclaimStartedAt: row.ReclaimStartedAt,
 		SegmentCount: row.SegmentCount, HasGaps: row.HasGaps,
 		ActualMediaStartMs: row.ActualMediaStartMs, ActualMediaEndMs: row.ActualMediaEndMs,
@@ -140,29 +152,10 @@ func OpenChapter(ctx context.Context, c DVRChapterRow) error {
 		return sql.ErrConnDone
 	}
 	var notify bool
-	err := database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
-		q := foghorndb.New(tx)
-		closedPrevious, txErr := q.ClosePreviousCurrentDVRChapters(ctx, foghorndb.ClosePreviousCurrentDVRChaptersParams{
-			ArtifactHash: c.ArtifactHash, ChapterID: c.ChapterID,
-		})
-		if txErr != nil {
-			return fmt.Errorf("close previous current chapter: %w", txErr)
-		}
-
-		state := c.State
-		if state == "" {
-			state = ChapterStateOpen
-		}
-
-		err := q.UpsertOpenDVRChapter(ctx, foghorndb.UpsertOpenDVRChapterParams{
-			ChapterID: c.ChapterID, ArtifactHash: c.ArtifactHash, Mode: c.Mode,
-			IntervalSeconds: c.IntervalSeconds, StartMs: c.StartMs, EndMs: c.EndMs, State: state,
-		})
-		if err != nil {
-			return fmt.Errorf("open chapter: %w", err)
-		}
-		notify = state == ChapterStateClosed || closedPrevious > 0
-		return nil
+	err := WithDVRChapterMutationTx(ctx, c.ArtifactHash, func(tx *sql.Tx) error {
+		var txErr error
+		notify, txErr = openChapterTx(ctx, tx, c)
+		return txErr
 	})
 	if err != nil {
 		return err
@@ -171,6 +164,27 @@ func OpenChapter(ctx context.Context, c DVRChapterRow) error {
 		notifyChapterClosed()
 	}
 	return nil
+}
+
+func openChapterTx(ctx context.Context, tx foghorndb.DBTX, c DVRChapterRow) (bool, error) {
+	q := foghorndb.New(tx)
+	closedPrevious, err := q.ClosePreviousCurrentDVRChapters(ctx, foghorndb.ClosePreviousCurrentDVRChaptersParams{
+		ArtifactHash: c.ArtifactHash, ChapterID: c.ChapterID,
+	})
+	if err != nil {
+		return false, fmt.Errorf("close previous current chapter: %w", err)
+	}
+	state := c.State
+	if state == "" {
+		state = ChapterStateOpen
+	}
+	if err := q.UpsertOpenDVRChapter(ctx, foghorndb.UpsertOpenDVRChapterParams{
+		ChapterID: c.ChapterID, ArtifactHash: c.ArtifactHash, Mode: c.Mode,
+		IntervalSeconds: c.IntervalSeconds, StartMs: c.StartMs, EndMs: c.EndMs, State: state,
+	}); err != nil {
+		return false, fmt.Errorf("open chapter: %w", err)
+	}
+	return state == ChapterStateClosed || closedPrevious > 0, nil
 }
 
 // CloseChapter flips a single chapter from is_current=true,state='open'
@@ -209,24 +223,24 @@ func CloseCurrentChapterForArtifact(ctx context.Context, artifactHash string) er
 }
 
 // MarkChapterFinalizing transitions closed → finalizing OR refreshes
-// a stale finalizing row (one whose dispatch deadline has lapsed
-// without a PUSH_END result). Increments finalize_attempts and stamps
-// finalize_started_at so the next stale-finalizing scan re-targets the
-// row only if Helmsman drops the result again.
+// a stale finalizing row (one whose dispatch deadline has lapsed without a
+// current-attempt progress heartbeat or result). Increments finalize_attempts
+// and stamps finalize_started_at so the next stale-finalizing scan re-targets
+// the row only if Helmsman stops reporting that attempt.
 //
-// Returning false means the row is already terminal or someone else
-// just claimed it — caller should skip.
+// A successful claim returns the incremented attempt number. Returning ok=false
+// means the row is already terminal or someone else just claimed it.
 //
 // The unique partial index on foghorn.artifacts(origin_id) WHERE
 // origin_type='dvr_chapter' enforces that retries reuse the same
 // playback artifact row.
-func MarkChapterFinalizing(ctx context.Context, chapterID, playbackHash, tenantID, finalizeNodeID string, staleTimeout time.Duration) (ok bool, err error) {
+func MarkChapterFinalizing(ctx context.Context, chapterID, playbackHash, tenantID, finalizeNodeID string, staleTimeout time.Duration) (attempt int32, ok bool, err error) {
 	if db == nil {
-		return false, sql.ErrConnDone
+		return 0, false, sql.ErrConnDone
 	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return false, fmt.Errorf("mark chapter finalizing: begin: %w", err)
+		return 0, false, fmt.Errorf("mark chapter finalizing: begin: %w", err)
 	}
 	committed := false
 	defer func() {
@@ -236,16 +250,16 @@ func MarkChapterFinalizing(ctx context.Context, chapterID, playbackHash, tenantI
 	}()
 	// finalize_node_id is persisted here — before the job is sent to the node — so the result/progress handlers
 	// can bind the reporting connection to the assignment (chapter-finalize jobs have no processing_jobs row).
-	n, err := foghorndb.New(tx).ClaimDVRChapterFinalization(ctx, foghorndb.ClaimDVRChapterFinalizationParams{
+	attempt, err = foghorndb.New(tx).ClaimDVRChapterFinalization(ctx, foghorndb.ClaimDVRChapterFinalizationParams{
 		ChapterID:            chapterID,
 		PlaybackArtifactHash: sql.NullString{String: playbackHash, Valid: playbackHash != ""},
 		StaleSeconds:         staleTimeout.Seconds(), FinalizeNodeID: finalizeNodeID,
 	})
-	if err != nil {
-		return false, fmt.Errorf("mark chapter finalizing: %w", err)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil // not claimable (already advanced / another worker)
 	}
-	if n == 0 {
-		return false, nil // not claimable (already advanced / another worker); no lifecycle emitted
+	if err != nil {
+		return 0, false, fmt.Errorf("mark chapter finalizing: %w", err)
 	}
 	// Enqueue the PROCESSING lifecycle in the SAME transaction so the state transition and its
 	// analytics event commit atomically (never lost between a separate commit and a fire-and-forget
@@ -260,13 +274,13 @@ func MarkChapterFinalizing(ctx context.Context, chapterID, playbackHash, tenantI
 		vodData.TenantId = &tenantID
 	}
 	if enqErr := artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, vodData); enqErr != nil {
-		return false, fmt.Errorf("enqueue chapter processing lifecycle: %w", enqErr)
+		return 0, false, fmt.Errorf("enqueue chapter processing lifecycle: %w", enqErr)
 	}
 	if commitErr := tx.Commit(); commitErr != nil {
-		return false, fmt.Errorf("mark chapter finalizing: commit: %w", commitErr)
+		return 0, false, fmt.Errorf("mark chapter finalizing: commit: %w", commitErr)
 	}
 	committed = true
-	return true, nil
+	return attempt, true, nil
 }
 
 // MarkChapterFinalized transitions finalizing → finalized after the
@@ -281,10 +295,10 @@ func MarkChapterFinalizing(ctx context.Context, chapterID, playbackHash, tenantI
 // requires this to be exactly 1 — a 0 means the row was NOT in 'finalizing' (a duplicate
 // completion, a concurrent worker, or a rolled-back retry), so the whole atomic finalize
 // must roll back rather than persist readiness/origin against an unowned transition.
-func MarkChapterFinalizedTx(ctx context.Context, tx *sql.Tx, chapterID string, segmentCount int32, hasGaps bool, mediaStartMs, mediaEndMs int64) (int64, error) {
+func MarkChapterFinalizedTx(ctx context.Context, tx *sql.Tx, chapterID string, expectedAttempt, segmentCount int32, hasGaps bool, mediaStartMs, mediaEndMs int64) (int64, error) {
 	mediaStartArg, mediaEndArg := chapterMediaBoundNulls(mediaStartMs, mediaEndMs)
 	rows, err := foghorndb.New(tx).MarkDVRChapterFinalized(ctx, foghorndb.MarkDVRChapterFinalizedParams{
-		ChapterID: chapterID, SegmentCount: segmentCount, HasGaps: hasGaps,
+		ChapterID: chapterID, ExpectedAttempt: expectedAttempt, SegmentCount: segmentCount, HasGaps: hasGaps,
 		MediaStartMs: mediaStartArg, MediaEndMs: mediaEndArg,
 	})
 	if err != nil {
@@ -363,26 +377,23 @@ func MarkChapterReclaimed(ctx context.Context, chapterID string) error {
 	return nil
 }
 
-// MarkChapterFailed sets a terminal failure state plus a human-readable
-// reason. Used when recovery from source-missing is exhausted, or when
-// the input ledger is unrecoverable.
 // MarkChapterFailed drives a chapter to a terminal failed state and fails its allocated playback artifact in
-// one transaction. expectedNode binds the transition to the reporting connection when non-empty (same
-// row-locked finalize_node_id predicate as RetryChapterFinalize — a node-reported failure may only affect its
-// own assignment); empty is passed ONLY by trusted internal recovery (the finalization queue), never from a
-// node report.
-func MarkChapterFailed(ctx context.Context, chapterID, terminalState, reason, expectedNode string) error {
+// one transaction. expectedAttempt always binds the write to one durable claim;
+// expectedNode additionally binds node-originated reports to their connection.
+// Internal recovery may omit the node because the attempt fence still prevents
+// it from mutating a replacement claim.
+func MarkChapterFailed(ctx context.Context, chapterID, terminalState, reason, expectedNode string, expectedAttempt int32) (bool, error) {
 	if db == nil {
-		return sql.ErrConnDone
+		return false, sql.ErrConnDone
 	}
 	switch terminalState {
 	case ChapterStateFailedSourceMissing, ChapterStateFailedPermanent:
 	default:
-		return fmt.Errorf("invalid terminal state %q", terminalState)
+		return false, fmt.Errorf("invalid terminal state %q", terminalState)
 	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("mark chapter failed: begin: %w", err)
+		return false, fmt.Errorf("mark chapter failed: begin: %w", err)
 	}
 	committed := false
 	defer func() {
@@ -400,13 +411,13 @@ func MarkChapterFailed(ctx context.Context, chapterID, terminalState, reason, ex
 	playbackHash, scanErr := q.FailDVRChapter(ctx, foghorndb.FailDVRChapterParams{
 		ChapterID: chapterID, State: terminalState,
 		LastFailureReason: sql.NullString{String: reason, Valid: true}, ExpectedNode: expectedNode,
+		ExpectedAttempt: expectedAttempt,
 	})
 	if errors.Is(scanErr, sql.ErrNoRows) {
-		// Chapter wasn't in a failable state (already terminal/frozen) — nothing to do.
-		return nil
+		return false, nil
 	}
 	if scanErr != nil {
-		return fmt.Errorf("mark chapter failed: %w", scanErr)
+		return false, fmt.Errorf("mark chapter failed: %w", scanErr)
 	}
 	// A terminally-failed chapter must not leave its allocated playback artifact stuck
 	// 'finalizing' (it would show "processing" forever and never be reclaimed). Fail it in the
@@ -416,7 +427,7 @@ func MarkChapterFailed(ctx context.Context, chapterID, terminalState, reason, ex
 			ArtifactHash: playbackHash.String, ErrorMessage: sql.NullString{String: reason, Valid: true},
 		})
 		if artErr != nil && !errors.Is(artErr, sql.ErrNoRows) {
-			return fmt.Errorf("mark chapter artifact failed: %w", artErr)
+			return false, fmt.Errorf("mark chapter artifact failed: %w", artErr)
 		}
 		// The artifact was newly failed → enqueue its failed lifecycle in the SAME transaction, so
 		// the state change and its analytics event commit atomically (never lost to a crash between
@@ -433,40 +444,36 @@ func MarkChapterFailed(ctx context.Context, chapterID, terminalState, reason, ex
 				vodData.TenantId = &t
 			}
 			if enqErr := artifactoutbox.EnqueueVodLifecycleTx(ctx, tx, vodData); enqErr != nil {
-				return fmt.Errorf("enqueue chapter failure lifecycle: %w", enqErr)
+				return false, fmt.Errorf("enqueue chapter failure lifecycle: %w", enqErr)
 			}
 		}
 	}
 	if commitErr := tx.Commit(); commitErr != nil {
-		return fmt.Errorf("mark chapter failed: commit: %w", commitErr)
+		return false, fmt.Errorf("mark chapter failed: commit: %w", commitErr)
 	}
 	committed = true
-	return nil
+	return true, nil
 }
 
-// RetryChapterFinalize rolls finalizing → closed after a transient
-// failure so the queue picks the row up again on its next sweep.
-// last_failure_reason carries the transient cause for operator
-// visibility.
 // RetryChapterFinalize bounces a 'finalizing' chapter back to 'closed' so the queue re-dispatches it.
-// expectedNode binds the transition to the reporting connection when non-empty (a node-reported failure/bounce
-// may only affect the attempt currently dispatched to that node — the guarded UPDATE reads finalize_node_id
-// under the row lock, closing the reassignment TOCTOU); empty is passed ONLY by trusted internal recovery
-// (the finalization queue), never derived from a node report, so it acts authoritatively.
-func RetryChapterFinalize(ctx context.Context, chapterID, reason, expectedNode string) error {
+// expectedAttempt binds every bounce to one durable claim. expectedNode also
+// binds node-originated reports to the assigned connection; internal recovery
+// may omit it without gaining authority over a newer attempt.
+func RetryChapterFinalize(ctx context.Context, chapterID, reason, expectedNode string, expectedAttempt int32) (bool, error) {
 	if db == nil {
-		return sql.ErrConnDone
+		return false, sql.ErrConnDone
 	}
 	// Clear finalize_node_id when leaving 'finalizing': the attempt is retired, so the old node's assignment
 	// must not authorize any later transition (a delayed report from it must not terminalize the re-queued
 	// chapter before redispatch reassigns the node).
-	err := foghorndb.New(db).RetryDVRChapterFinalize(ctx, foghorndb.RetryDVRChapterFinalizeParams{
+	rows, err := foghorndb.New(db).RetryDVRChapterFinalize(ctx, foghorndb.RetryDVRChapterFinalizeParams{
 		ChapterID: chapterID, LastFailureReason: sql.NullString{String: reason, Valid: true}, ExpectedNode: expectedNode,
+		ExpectedAttempt: expectedAttempt,
 	})
 	if err != nil {
-		return fmt.Errorf("retry chapter finalize: %w", err)
+		return false, fmt.Errorf("retry chapter finalize: %w", err)
 	}
-	return nil
+	return rows == 1, nil
 }
 
 // ListChaptersNeedingFinalization returns chapters in 'closed' state (or stuck in
@@ -570,7 +577,13 @@ func CurrentChapter(ctx context.Context, artifactHash string) (*DVRChapterRow, e
 	if db == nil {
 		return nil, sql.ErrConnDone
 	}
-	row, err := foghorndb.New(db).GetCurrentDVRChapter(ctx, artifactHash)
+	return CurrentChapterTx(ctx, db, artifactHash)
+}
+
+// CurrentChapterTx reads the current chapter through the caller's
+// lock-owning transaction.
+func CurrentChapterTx(ctx context.Context, conn foghorndb.DBTX, artifactHash string) (*DVRChapterRow, error) {
+	row, err := foghorndb.New(conn).GetCurrentDVRChapter(ctx, artifactHash)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
@@ -615,22 +628,22 @@ func DeleteChapter(ctx context.Context, chapterID string) error {
 // for a concrete horizon or nil for keep-forever (NULL). Child chapters are the vod artifacts
 // linked through their dvr_chapters row's playback_artifact_hash. Returns the number of chapter
 // artifacts updated. Deleted rows are left alone (their retention is moot).
-func PropagateChapterRetention(ctx context.Context, dvrHash string, until interface{}) (int64, error) {
+func PropagateChapterRetention(ctx context.Context, tenantID, dvrHash string, until interface{}) (int64, error) {
 	if db == nil {
 		return 0, sql.ErrConnDone
 	}
-	return propagateChapterRetention(ctx, db, dvrHash, until)
+	return propagateChapterRetention(ctx, db, tenantID, dvrHash, until)
 }
 
 // PropagateChapterRetentionTx runs the same propagation on the caller's transaction so a
 // parent-retention change and its child fan-out commit atomically.
-func PropagateChapterRetentionTx(ctx context.Context, tx *sql.Tx, dvrHash string, until interface{}) (int64, error) {
-	return propagateChapterRetention(ctx, tx, dvrHash, until)
+func PropagateChapterRetentionTx(ctx context.Context, tx *sql.Tx, tenantID, dvrHash string, until interface{}) (int64, error) {
+	return propagateChapterRetention(ctx, tx, tenantID, dvrHash, until)
 }
 
-func propagateChapterRetention(ctx context.Context, dbtx foghorndb.DBTX, dvrHash string, until interface{}) (int64, error) {
+func propagateChapterRetention(ctx context.Context, dbtx foghorndb.DBTX, tenantID, dvrHash string, until interface{}) (int64, error) {
 	rows, err := foghorndb.New(dbtx).PropagateDVRChapterRetention(ctx, foghorndb.PropagateDVRChapterRetentionParams{
-		ArtifactHash: dvrHash, RetentionUntil: retentionNullTime(until),
+		ArtifactHash: dvrHash, TenantID: tenantID, RetentionUntil: retentionNullTime(until),
 	})
 	if err != nil {
 		return 0, fmt.Errorf("propagate chapter retention: %w", err)
@@ -812,27 +825,23 @@ func ClearCurrentChaptersForInactiveDVRs(ctx context.Context) (int64, error) {
 	return rows, nil
 }
 
-func WithDVRChapterMutationLock(ctx context.Context, artifactHash string, fn func() error) error {
+// WithDVRChapterMutationTx serializes a DVR artifact's chapter mutations and
+// commits them on the same transaction that owns the advisory lock. The
+// callback must contain database work only; callers perform RPC, node, and
+// object-store side effects after this function returns.
+func WithDVRChapterMutationTx(ctx context.Context, artifactHash string, fn func(*sql.Tx) error) error {
 	if db == nil {
 		return sql.ErrConnDone
 	}
-	conn, err := db.Conn(ctx)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	q := foghorndb.New(conn)
-	if err := q.LockDVRChapterMutation(ctx, artifactHash); err != nil {
-		return err
-	}
-	defer func() {
-		unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if unlockErr := q.UnlockDVRChapterMutation(unlockCtx, artifactHash); unlockErr != nil {
-			return
+	return database.WithRetryablePostgresTx(ctx, db, nil, func(tx *sql.Tx) error {
+		if err := foghorndb.New(tx).LockDVRChapterMutation(ctx, foghorndb.LockDVRChapterMutationParams{
+			LockNamespace: dvrChapterMutationLockNamespace,
+			ArtifactHash:  artifactHash,
+		}); err != nil {
+			return err
 		}
-	}()
-	return fn()
+		return fn(tx)
+	})
 }
 
 // ListChaptersForArtifact returns chapters for a player UI page.

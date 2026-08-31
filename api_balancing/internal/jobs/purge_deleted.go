@@ -19,8 +19,10 @@ import (
 // artifacts.Cleaner so cross-cluster bytes hit the federation delete
 // delegate and never touch the wrong bucket.
 //
-// Convergence invariant: EVERY physically-purged artifact first emits a
-// catalog deletion. A purgeable 'failed' row is transitioned to 'deleted'
+// Convergence invariant for origin-owned artifacts: every physical purge first
+// emits a catalog deletion. Federated pointers are not catalog authority; their
+// signed tombstone/expiry fence and ordered local-derivative cleanup replace
+// that catalog acknowledgement. A purgeable 'failed' row is transitioned to 'deleted'
 // (revision-bumped) so the reconciler projects its deletion onto the
 // Commodore catalog; only then, once that deletion is confirmed acked
 // (catalog_synced_rev >= catalog_revision), are its bytes and DB row
@@ -34,12 +36,24 @@ type PurgeDeletedJob struct {
 	stopCh       chan struct{}
 	wg           sync.WaitGroup
 	cleaner      *artifacts.Cleaner
+	lifecycleCtx context.Context
+	cancel       context.CancelFunc
 	// crossClusterDeleteEnabled mirrors the federation server's mutation gate. While it is false (the default),
 	// remote-owned bytes can never be freed (the delegate delete fails closed), so the bytes+rows sweep skips
 	// remote rows entirely — otherwise a page of permanently-undeletable remote rows would occupy every fixed
 	// LIMIT pass and starve reapable local rows. When true, remote rows are re-admitted to the sweep.
 	crossClusterDeleteEnabled bool
 }
+
+const (
+	federatedPointerCleanupTimeout   = 2 * time.Minute
+	federatedPointerDailyBudget      = 2 * time.Minute
+	federatedPointerRecoveryInterval = 30 * time.Second
+	federatedPointerCleanupWorkers   = 8
+	federatedPointerReleaseTimeout   = 5 * time.Second
+	federatedPointerMinimumRunBudget = 5 * time.Second
+	federatedPointerEvidenceRetry    = 15 * time.Minute
+)
 
 // PurgeDeletedConfig holds configuration for the purge job
 type PurgeDeletedConfig struct {
@@ -55,6 +69,7 @@ type PurgeDeletedConfig struct {
 
 // NewPurgeDeletedJob creates a new purge deleted job
 func NewPurgeDeletedJob(cfg PurgeDeletedConfig) *PurgeDeletedJob {
+	lifecycleCtx, cancel := context.WithCancel(context.Background())
 	interval := cfg.Interval
 	if interval == 0 {
 		interval = 24 * time.Hour
@@ -70,19 +85,23 @@ func NewPurgeDeletedJob(cfg PurgeDeletedConfig) *PurgeDeletedJob {
 		retentionAge:              retentionAge,
 		stopCh:                    make(chan struct{}),
 		cleaner:                   cfg.Cleaner,
+		lifecycleCtx:              lifecycleCtx,
+		cancel:                    cancel,
 		crossClusterDeleteEnabled: cfg.AllowCrossClusterDelete,
 	}
 }
 
 // Start begins the background purge loop
 func (j *PurgeDeletedJob) Start() {
-	j.wg.Add(1)
+	j.wg.Add(2)
 	go j.run()
+	go j.runFederatedPointerRecovery()
 	j.logger.Info("Purge deleted job started")
 }
 
 // Stop gracefully stops the job
 func (j *PurgeDeletedJob) Stop() {
+	j.cancel()
 	close(j.stopCh)
 	j.wg.Wait()
 	j.logger.Info("Purge deleted job stopped")
@@ -92,14 +111,16 @@ func (j *PurgeDeletedJob) run() {
 	defer j.wg.Done()
 	ticker := time.NewTicker(j.interval)
 	defer ticker.Stop()
-
 	// Run once at startup, staggered by 1 hour to avoid startup load.
-	time.AfterFunc(1*time.Hour, func() {
-		j.purge()
-	})
+	// Keep the timer inside the lifecycle loop so Stop cannot leave a delayed
+	// purge callback behind.
+	firstRun := time.NewTimer(time.Hour)
+	defer firstRun.Stop()
 
 	for {
 		select {
+		case <-firstRun.C:
+			j.purge()
 		case <-ticker.C:
 			j.purge()
 		case <-j.stopCh:
@@ -108,13 +129,40 @@ func (j *PurgeDeletedJob) run() {
 	}
 }
 
+func (j *PurgeDeletedJob) runFederatedPointerRecovery() {
+	defer j.wg.Done()
+	ticker := time.NewTicker(federatedPointerRecoveryInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			ctx, cancel := context.WithTimeout(j.lifecycleCtx, federatedPointerCleanupTimeout)
+			j.purgeRecoverableFederatedPointers(ctx)
+			cancel()
+		case <-j.stopCh:
+			return
+		}
+	}
+}
+
 func (j *PurgeDeletedJob) purge() {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	ctx, cancel := context.WithTimeout(j.lifecycleCtx, 10*time.Minute)
 	defer cancel()
 
 	j.purgeStaleUploadingVODs(ctx)
 	j.purgeArtifactBytesAndRows(ctx)
 	j.purgeStaleNodeRows(ctx)
+	// Federated discovery follows local cleanup in wall-clock order, but it does
+	// not inherit the local sweep's possibly exhausted deadline. Its independent
+	// lifecycle-bound budget lets a slow local store defer neither discovery nor
+	// shutdown indefinitely.
+	dailyCtx, dailyCancel := j.federatedPointerScheduleContext()
+	j.purgeFederatedPointers(dailyCtx)
+	dailyCancel()
+}
+
+func (j *PurgeDeletedJob) federatedPointerScheduleContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(j.lifecycleCtx, federatedPointerDailyBudget)
 }
 
 // markFailedArtifactsDeleted transitions purgeable 'failed' artifacts to
@@ -154,7 +202,7 @@ func (j *PurgeDeletedJob) markFailedArtifactsDeleted(ctx context.Context) {
 // but still needs the federation delegate to free remote bytes).
 func (j *PurgeDeletedJob) purgeArtifactBytesAndRows(ctx context.Context) {
 	if j.cleaner == nil {
-		j.logger.Debug("Purge: artifact cleaner not wired; skipping bytes+rows sweep this cycle")
+		j.logger.Debug("Purge: artifact cleaner not wired; skipping all bytes+rows sweeps this cycle")
 		return
 	}
 	j.markFailedArtifactsDeleted(ctx)
@@ -289,7 +337,7 @@ func (j *PurgeDeletedJob) purgeArtifactBytesAndRows(ctx context.Context) {
 			clipCount++
 		case "dvr":
 			dvrCount++
-		case "vod":
+		case "vod", "chapter":
 			vodCount++
 		}
 	}
@@ -301,6 +349,224 @@ func (j *PurgeDeletedJob) purgeArtifactBytesAndRows(ctx context.Context) {
 	}
 	if vodCount > 0 {
 		j.logger.WithField("count", vodCount).Info("Purged old VOD artifacts")
+	}
+}
+
+type federatedPointerPurgeCandidate struct {
+	hash, tenantID string
+	kind           control.FederatedPointerPurgeKind
+}
+
+// purgeFederatedPointers reaps replaceable routing rows without bypassing the
+// derivative lifecycle. The parent is first made terminal while holding the
+// same per-asset lock as thumbnail claim/publication. That fence prevents a
+// writer appearing after the destination snapshot. Bytes are then swept while
+// the control rows still retain their routing evidence; only confirmed cleanup
+// permits the control rows and parent pointer to be hard-deleted atomically.
+func (j *PurgeDeletedJob) purgeFederatedPointers(ctx context.Context) {
+	if j.db == nil || j.cleaner == nil {
+		return
+	}
+	q := foghorndb.New(j.db)
+	retention := j.retentionAge.String()
+	var candidates []federatedPointerPurgeCandidate
+	tombstoned, err := q.ListTombstonedFederatedArtifactPointersForPurge(ctx, retention)
+	if err != nil {
+		j.logger.WithError(err).Warn("Purge: failed to list tombstoned federated artifact pointers")
+		return
+	}
+	for _, row := range tombstoned {
+		candidates = append(candidates, federatedPointerPurgeCandidate{
+			hash: row.ArtifactHash, tenantID: row.ArtifactTenantID, kind: control.FederatedPointerPurgeTombstone,
+		})
+	}
+	stale, err := q.ListStaleFederatedArtifactPointersForPurge(ctx, retention)
+	if err != nil {
+		j.logger.WithError(err).Warn("Purge: failed to list stale federated artifact pointers")
+		return
+	}
+	for _, row := range stale {
+		candidates = append(candidates, federatedPointerPurgeCandidate{
+			hash: row.ArtifactHash, tenantID: row.ArtifactTenantID, kind: control.FederatedPointerPurgeStale,
+		})
+	}
+	j.purgeFederatedPointerCandidatesConcurrent(ctx, candidates, retention)
+}
+
+// purgeRecoverableFederatedPointers is the short recovery loop for workers
+// that died after fencing. It covers every expired token state; active
+// authority is restored only by successful settlement, while tombstoned and
+// stale pointers resume their original guarded deletion path.
+func (j *PurgeDeletedJob) purgeRecoverableFederatedPointers(ctx context.Context) {
+	if j.db == nil || j.cleaner == nil {
+		return
+	}
+	rows, err := foghorndb.New(j.db).ListRecoverableFederatedArtifactPointerPurges(ctx, j.retentionAge.String())
+	if err != nil {
+		j.logger.WithError(err).Warn("Purge: failed to list recoverable federated pointer cleanups")
+		return
+	}
+	candidates := make([]federatedPointerPurgeCandidate, 0, len(rows))
+	for _, row := range rows {
+		kind := control.FederatedPointerPurgeStale
+		switch row.PurgeKind {
+		case "tombstone":
+			kind = control.FederatedPointerPurgeTombstone
+		case "interrupted_active":
+			kind = control.FederatedPointerPurgeInterruptedActive
+		}
+		candidates = append(candidates, federatedPointerPurgeCandidate{
+			hash: row.ArtifactHash, tenantID: row.ArtifactTenantID, kind: kind,
+		})
+	}
+	j.purgeFederatedPointerCandidatesConcurrent(ctx, candidates, j.retentionAge.String())
+}
+
+// purgeFederatedPointerCandidatesConcurrent bounds cleanup parallelism while
+// preventing one slow remote destination from consuming the entire pass. The
+// scheduling context bounds how long the pass may admit more work; each
+// admitted candidate gets a full independent cleanup budget. At most the
+// worker count can outlive scheduling cancellation, and each of those is
+// bounded by federatedPointerCleanupTimeout.
+func (j *PurgeDeletedJob) purgeFederatedPointerCandidatesConcurrent(scheduleCtx context.Context, candidates []federatedPointerPurgeCandidate, retention string) {
+	if len(candidates) == 0 {
+		return
+	}
+	workerCount := min(federatedPointerCleanupWorkers, len(candidates))
+	work := make(chan federatedPointerPurgeCandidate)
+	var workers sync.WaitGroup
+	workers.Add(workerCount)
+	for range workerCount {
+		go func() {
+			defer workers.Done()
+			for candidate := range work {
+				if deadline, ok := scheduleCtx.Deadline(); ok && time.Until(deadline) < federatedPointerMinimumRunBudget {
+					return
+				}
+				candidateCtx, cancel := context.WithTimeout(j.lifecycleCtx, federatedPointerCleanupTimeout)
+				j.purgeFederatedPointerCandidates(candidateCtx, []federatedPointerPurgeCandidate{candidate}, retention)
+				cancel()
+			}
+		}()
+	}
+	for _, candidate := range candidates {
+		select {
+		case work <- candidate:
+		case <-scheduleCtx.Done():
+			close(work)
+			workers.Wait()
+			return
+		}
+	}
+	close(work)
+	workers.Wait()
+}
+
+func (j *PurgeDeletedJob) purgeFederatedPointerCandidates(ctx context.Context, candidates []federatedPointerPurgeCandidate, retention string) {
+	q := foghorndb.New(j.db)
+	purged := 0
+	restored := 0
+	seen := make(map[string]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		key := candidate.tenantID + "\x00" + candidate.hash
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+
+		claimToken, fenced, fenceErr := control.FenceFederatedPointerForPurge(ctx, j.db, candidate.tenantID, candidate.hash, retention, candidate.kind, j.crossClusterDeleteEnabled)
+		if fenceErr != nil {
+			j.logger.WithError(fenceErr).WithField("artifact_hash", candidate.hash).Warn("Purge: failed to fence federated pointer")
+			continue
+		}
+		if !fenced {
+			continue
+		}
+		releaseClaim := func(cause string) {
+			// Cleanup cancellation must not strand the durable lease. Claim release
+			// gets a small independent settlement budget because its only external
+			// dependency is this cell's database.
+			releaseCtx, releaseCancel := context.WithTimeout(context.Background(), federatedPointerReleaseTimeout)
+			defer releaseCancel()
+			released, releaseErr := control.ReleaseFederatedPointerPurgeClaim(releaseCtx, j.db, candidate.tenantID, candidate.hash, claimToken)
+			if releaseErr != nil {
+				j.logger.WithError(releaseErr).WithFields(logging.Fields{"artifact_hash": candidate.hash, "cause": cause}).Warn("Purge: failed to release federated pointer cleanup claim")
+			} else if released {
+				j.logger.WithFields(logging.Fields{"artifact_hash": candidate.hash, "cause": cause}).Info("Purge: released federated pointer cleanup claim for retry")
+			}
+		}
+		deferClaim := func(cause string) {
+			deferCtx, deferCancel := context.WithTimeout(context.Background(), federatedPointerReleaseTimeout)
+			defer deferCancel()
+			deferred, deferErr := control.DeferFederatedPointerPurgeClaim(deferCtx, j.db, candidate.tenantID, candidate.hash, claimToken, federatedPointerEvidenceRetry)
+			if deferErr != nil {
+				j.logger.WithError(deferErr).WithFields(logging.Fields{"artifact_hash": candidate.hash, "cause": cause}).Warn("Purge: failed to defer federated pointer cleanup claim")
+			} else if deferred {
+				j.logger.WithFields(logging.Fields{"artifact_hash": candidate.hash, "cause": cause, "retry_after": federatedPointerEvidenceRetry}).Warn("Purge: deferred federated pointer cleanup pending backend evidence repair")
+			}
+		}
+		state, stateErr := q.GetFencedFederatedArtifactPointerPurgeState(ctx, foghorndb.GetFencedFederatedArtifactPointerPurgeStateParams{
+			ArtifactHash: candidate.hash, TenantID: candidate.tenantID, PurgeToken: claimToken,
+		})
+		if stateErr != nil {
+			j.logger.WithError(stateErr).WithField("artifact_hash", candidate.hash).Warn("Purge: failed to read fenced federated pointer")
+			releaseClaim("state_read")
+			continue
+		}
+		destinations, destinationErr := control.ThumbnailDestinationClusters(ctx, j.db, candidate.tenantID, candidate.hash)
+		if destinationErr != nil {
+			j.logger.WithError(destinationErr).WithField("artifact_hash", candidate.hash).Warn("Purge: failed to read federated pointer thumbnail destinations")
+			releaseClaim("destination_read")
+			continue
+		}
+		if len(destinations) == 0 && state.HasThumbnails.Valid && state.HasThumbnails.Bool {
+			if state.BackendID == "" || state.BackendID != j.cleaner.LocalBackendID {
+				j.logger.WithFields(logging.Fields{
+					"artifact_hash":    candidate.hash,
+					"recorded_backend": state.BackendID,
+					"local_backend":    j.cleaner.LocalBackendID,
+				}).Warn("Purge: fenced pointer lacks exact local thumbnail backend evidence; retaining for repair")
+				deferClaim("unusable_backend_evidence")
+				continue
+			}
+			destinations = []control.ThumbnailDestination{{BackendID: state.BackendID, BackendLocal: true}}
+		}
+		cleanupCtx, cleanupCancel := context.WithTimeout(ctx, federatedPointerCleanupTimeout)
+		cleanupFailed := false
+		for _, destination := range destinations {
+			if cleanupErr := j.cleaner.DeleteThumbnailsOnCluster(cleanupCtx, candidate.tenantID, candidate.hash, destination.Cluster, destination.BackendLocal, destination.BackendID); cleanupErr != nil {
+				j.logger.WithError(cleanupErr).WithFields(logging.Fields{
+					"artifact_hash": candidate.hash, "destination_cluster": destination.Cluster,
+				}).Warn("Purge: federated pointer thumbnail cleanup not confirmed; retaining for retry")
+				cleanupFailed = true
+				break
+			}
+		}
+		cleanupCancel()
+		if cleanupFailed {
+			releaseClaim("byte_cleanup")
+			continue
+		}
+		settlement, settleErr := control.FinalizeFederatedPointerPurge(ctx, j.db, candidate.tenantID, candidate.hash, claimToken)
+		if settleErr != nil {
+			j.logger.WithError(settleErr).WithField("artifact_hash", candidate.hash).Warn("Purge: failed to atomically settle fenced federated pointer")
+			releaseClaim("settle_error")
+			continue
+		}
+		switch settlement {
+		case control.FederatedPointerPurgeDeleted:
+			purged++
+		case control.FederatedPointerPurgeRestoredActive:
+			restored++
+		default:
+			releaseClaim("settle_fenced")
+		}
+	}
+	if purged > 0 {
+		j.logger.WithField("count", purged).Info("Purged federated artifact pointers after derivative cleanup")
+	}
+	if restored > 0 {
+		j.logger.WithField("count", restored).Info("Restored active federated artifact pointers after completing prior derivative cleanup")
 	}
 }
 

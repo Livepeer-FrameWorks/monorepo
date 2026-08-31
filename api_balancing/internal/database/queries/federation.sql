@@ -47,8 +47,8 @@ SELECT tenant_id FROM foghorn.artifacts WHERE artifact_hash = $1 AND tenant_id I
 -- name: InsertMintArtifactShell :exec
 INSERT INTO foghorn.artifacts
     (artifact_hash, artifact_type, tenant_id, stream_internal_name, internal_name,
-     origin_cluster_id, storage_location, sync_status, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, 'pending', 'pending', NOW(), NOW())
+     origin_cluster_id, storage_location, sync_status, federated_pointer, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, 'pending', 'pending', true, NOW(), NOW())
 ON CONFLICT (artifact_hash) DO NOTHING;
 
 -- name: ListFederatedTenantArtifacts :many
@@ -61,31 +61,75 @@ SELECT artifact_hash, artifact_type, COALESCE(internal_name, '')::text AS intern
        COALESCE(EXTRACT(EPOCH FROM frozen_at)::bigint, 0)::bigint AS frozen_at,
        COALESCE(stream_internal_name, '')::text AS stream_internal_name
 FROM foghorn.artifacts
-WHERE tenant_id = $1 AND status != 'deleted'
+WHERE tenant_id = $1 AND status != 'deleted' AND federated_pointer = false
 ORDER BY created_at DESC;
 
 -- name: InsertMigratedArtifactMetadata :execrows
 INSERT INTO foghorn.artifacts
     (artifact_hash, artifact_type, tenant_id, internal_name, stream_internal_name,
-     format, status, storage_location, sync_status, s3_url, size_bytes, origin_cluster_id)
-VALUES ($1, $2, $3, $4, $11, $5, 'active', $6, $7, $8, $9, $10)
-ON CONFLICT (artifact_hash) DO NOTHING;
+     format, status, storage_location, sync_status, s3_url, size_bytes, origin_cluster_id,
+     federated_pointer)
+SELECT sqlc.arg(artifact_hash)::varchar(32), sqlc.arg(artifact_type)::varchar(10),
+       sqlc.arg(tenant_id)::uuid, sqlc.arg(internal_name), sqlc.arg(stream_internal_name),
+       sqlc.arg(format), 'ready', sqlc.arg(storage_location), sqlc.arg(sync_status),
+       sqlc.arg(s3_url), sqlc.arg(size_bytes), sqlc.arg(origin_cluster_id), true
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM foghorn.media_object_authority_projection AS authority
+    WHERE authority.tenant_id = sqlc.arg(tenant_id)::uuid
+      AND authority.artifact_hash = sqlc.arg(artifact_hash)::text
+      AND authority.lifecycle = 'tombstone'
+)
+ON CONFLICT (artifact_hash) DO UPDATE SET
+    federated_pointer = true,
+    status = 'ready',
+    updated_at = NOW()
+WHERE foghorn.artifacts.tenant_id = EXCLUDED.tenant_id
+  AND foghorn.artifacts.federated_pointer = true
+  -- A terminal pointer may be owned by the out-of-transaction derivative
+  -- purge saga. Metadata migration must not resurrect it mid-sweep.
+  AND foghorn.artifacts.status <> 'deleted'
+  AND foghorn.artifacts.federated_purge_token IS NULL
+  AND NOT EXISTS (
+      SELECT 1
+      FROM foghorn.media_object_authority_projection AS authority
+      WHERE authority.tenant_id = EXCLUDED.tenant_id
+        AND authority.artifact_hash = EXCLUDED.artifact_hash
+        AND authority.lifecycle = 'tombstone'
+  );
 
 -- name: FillMigratedArtifactMetadata :exec
-UPDATE foghorn.artifacts
-SET internal_name = CASE WHEN COALESCE(internal_name, '') = '' AND sqlc.arg(internal_name)::text <> '' THEN sqlc.arg(internal_name)::text ELSE internal_name END,
-    stream_internal_name = CASE WHEN COALESCE(stream_internal_name, '') = '' AND sqlc.arg(stream_internal_name)::text <> '' THEN sqlc.arg(stream_internal_name)::text ELSE stream_internal_name END,
-    format = CASE WHEN COALESCE(format, '') = '' AND sqlc.arg(format)::text <> '' THEN sqlc.arg(format)::text ELSE format END,
-    storage_location = CASE WHEN COALESCE(storage_location, '') = '' AND sqlc.arg(storage_location)::text <> '' THEN sqlc.arg(storage_location)::text ELSE storage_location END,
-    sync_status = CASE WHEN COALESCE(sync_status, '') = '' AND sqlc.arg(sync_status)::text <> '' THEN sqlc.arg(sync_status)::text ELSE sync_status END,
-    s3_url = CASE WHEN COALESCE(s3_url, '') = '' AND sqlc.arg(s3_url)::text <> '' THEN sqlc.arg(s3_url)::text ELSE s3_url END,
-    size_bytes = CASE WHEN COALESCE(size_bytes, 0) = 0 AND sqlc.arg(size_bytes)::bigint > 0 THEN sqlc.arg(size_bytes)::bigint ELSE size_bytes END,
-    origin_cluster_id = CASE WHEN COALESCE(origin_cluster_id, '') = '' THEN sqlc.arg(origin_cluster_id)::text ELSE origin_cluster_id END
-WHERE artifact_hash = sqlc.arg(artifact_hash) AND artifact_type = sqlc.arg(artifact_type) AND tenant_id = sqlc.arg(tenant_id);
+UPDATE foghorn.artifacts AS artifact
+SET internal_name = CASE WHEN COALESCE(artifact.internal_name, '') = '' AND sqlc.arg(internal_name)::text <> '' THEN sqlc.arg(internal_name)::text ELSE artifact.internal_name END,
+    stream_internal_name = CASE WHEN COALESCE(artifact.stream_internal_name, '') = '' AND sqlc.arg(stream_internal_name)::text <> '' THEN sqlc.arg(stream_internal_name)::text ELSE artifact.stream_internal_name END,
+    format = CASE WHEN COALESCE(artifact.format, '') = '' AND sqlc.arg(format)::text <> '' THEN sqlc.arg(format)::text ELSE artifact.format END,
+    storage_location = CASE WHEN COALESCE(artifact.storage_location, '') = '' AND sqlc.arg(storage_location)::text <> '' THEN sqlc.arg(storage_location)::text ELSE artifact.storage_location END,
+    sync_status = CASE WHEN COALESCE(artifact.sync_status, '') = '' AND sqlc.arg(sync_status)::text <> '' THEN sqlc.arg(sync_status)::text ELSE artifact.sync_status END,
+    s3_url = CASE WHEN COALESCE(artifact.s3_url, '') = '' AND sqlc.arg(s3_url)::text <> '' THEN sqlc.arg(s3_url)::text ELSE artifact.s3_url END,
+    size_bytes = CASE WHEN COALESCE(artifact.size_bytes, 0) = 0 AND sqlc.arg(size_bytes)::bigint > 0 THEN sqlc.arg(size_bytes)::bigint ELSE artifact.size_bytes END,
+    origin_cluster_id = CASE WHEN COALESCE(artifact.origin_cluster_id, '') = '' THEN sqlc.arg(origin_cluster_id)::text ELSE artifact.origin_cluster_id END,
+    status = 'ready',
+    updated_at = NOW()
+WHERE artifact.artifact_hash = sqlc.arg(artifact_hash)::varchar(32)
+  AND (artifact.artifact_type = sqlc.arg(artifact_type)
+       OR (artifact.artifact_type IN ('vod', 'chapter') AND sqlc.arg(artifact_type)::text IN ('vod', 'chapter')))
+  AND artifact.tenant_id = sqlc.arg(tenant_id)
+  AND artifact.federated_pointer = true
+  AND artifact.status <> 'deleted'
+  AND artifact.federated_purge_token IS NULL
+  AND NOT EXISTS (
+      SELECT 1
+      FROM foghorn.media_object_authority_projection AS authority
+      WHERE authority.tenant_id = sqlc.arg(tenant_id)
+      AND authority.artifact_hash = sqlc.arg(artifact_hash)::text
+        AND authority.lifecycle = 'tombstone'
+  );
 
 -- name: FederatedArtifactStreamID :one
 SELECT COALESCE(stream_id::text, '')::text AS stream_id
 FROM foghorn.artifacts
-WHERE artifact_hash = $1 AND artifact_type = $2 AND tenant_id = $3
+WHERE artifact_hash = $1
+  AND (artifact_type = $2 OR (artifact_type IN ('vod', 'chapter') AND $2::text IN ('vod', 'chapter')))
+  AND tenant_id = $3
   AND status != 'deleted'
 LIMIT 1;

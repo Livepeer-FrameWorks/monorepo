@@ -136,10 +136,9 @@ func TestLocallyPublishedStreams_ExcludesNodesConnectedToAnotherReplica(t *testi
 	}
 }
 
-// A source that is no longer active is not a live publisher: renewing it would
-// hold placement against a publisher that has gone, and no other cluster could
-// take it.
-func TestLocallyPublishedStreams_ExcludesClosedSources(t *testing.T) {
+// Registry source state is a projection and can transiently flip or disappear
+// before the durable session finalizer runs. Renewal follows the open session.
+func TestLocallyPublishedStreams_RenewsOpenSessionDespiteRegistryClose(t *testing.T) {
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
 	r := registryWithLivePublisher(t, "edge-node-1")
@@ -151,31 +150,28 @@ func TestLocallyPublishedStreams_ExcludesClosedSources(t *testing.T) {
 		t.Fatal("seed close did not flip the source inactive")
 	}
 
-	if live := mustLocallyPublishedStreams(t); len(live) != 0 {
-		t.Fatalf("a closed publisher is still reported live: %+v", live)
+	if live := mustLocallyPublishedStreams(t); len(live) != 1 {
+		t.Fatalf("open durable session was dropped by registry projection: %+v", live)
 	}
 }
 
-// A Location whose owning node this Foghorn has no state for belongs to a
-// federated peer. Renewing it would claim placement in a cluster whose
-// publishers are that peer's to account for.
-func TestLocallyPublishedStreams_ExcludesUnownedNodes(t *testing.T) {
+// A local control connection plus a local durable session is sufficient even
+// when the runtime node projection is cold.
+func TestLocallyPublishedStreams_RenewsWithColdNodeProjection(t *testing.T) {
 	state.ResetDefaultManagerForTests()
 	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
 	registryWithLivePublisher(t, "peer-node-9")
-	installSessionClaim(t, "demo-media", seededTriggerUUID)
+	installSessionClaimForNode(t, "peer-node-9", "demo-media", seededTriggerUUID)
 
-	if live := mustLocallyPublishedStreams(t); len(live) != 0 {
-		t.Fatalf("a publisher on an unknown node was reported: %+v", live)
+	if live := mustLocallyPublishedStreams(t); len(live) != 1 {
+		t.Fatalf("cold node projection dropped the durable publisher: %+v", live)
 	}
 }
 
-// A node record outlives a disconnect: it stays present, first unhealthy and
-// later stale, while a source-active Location is deliberately non-evictable
-// and survives in Redis without a TTL. Reporting such a publisher as live
-// would renew placement for one that has crashed, and no other cluster could
-// then take the claim.
-func TestLocallyPublishedStreams_ExcludesUnhealthyAndStaleOwners(t *testing.T) {
+// Health is media-routing input, not publisher-session authority. While the
+// control connection and durable session remain open, a transient unhealthy
+// node projection cannot make the placement lease lapse.
+func TestLocallyPublishedStreams_IgnoresVolatileNodeHealth(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		degrade func(*state.StreamStateManager)
@@ -203,8 +199,8 @@ func TestLocallyPublishedStreams_ExcludesUnhealthyAndStaleOwners(t *testing.T) {
 			tc.degrade(sm)
 			installSessionClaim(t, "demo-media", seededTriggerUUID)
 
-			if live := mustLocallyPublishedStreams(t); len(live) != 0 {
-				t.Fatalf("a publisher on a %s node is still reported live: %+v", tc.name, live)
+			if live := mustLocallyPublishedStreams(t); len(live) != 1 {
+				t.Fatalf("%s projection dropped an open publisher: %+v", tc.name, live)
 			}
 		})
 	}

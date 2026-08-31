@@ -14,6 +14,8 @@ func TestBuildBootstrapEdgeNodeRequest_IncludesTargetClusterAndFingerprint(t *te
 	machine := "machine-hash"
 
 	req := buildBootstrapEdgeNodeRequest(ctx, &ipcpb.Register{
+		NodeIdentityPublicKeyEd25519:  []byte("12345678901234567890123456789012"),
+		NodeIdentityRotationRequested: true,
 		Fingerprint: &ipcpb.NodeFingerprint{
 			LocalIpv4:       []string{"10.0.0.2"},
 			LocalIpv6:       []string{"2001:db8::2"},
@@ -33,6 +35,9 @@ func TestBuildBootstrapEdgeNodeRequest_IncludesTargetClusterAndFingerprint(t *te
 	}
 	if req.GetMachineIdSha256() != machine {
 		t.Fatalf("expected machine hash %q, got %q", machine, req.GetMachineIdSha256())
+	}
+	if !req.GetRotateNodeIdentity() || string(req.GetNodeIdentityPublicKeyEd25519()) != "12345678901234567890123456789012" {
+		t.Fatalf("identity rotation authorization was not forwarded: %+v", req)
 	}
 	served := req.GetServedClusterIds()
 	if len(served) != 2 || served[0] != "cluster-a" || served[1] != "cluster-b" {

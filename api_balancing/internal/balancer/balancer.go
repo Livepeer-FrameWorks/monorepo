@@ -157,7 +157,8 @@ type NodeWithScore struct {
 	GeoLatitude  float64
 	GeoLongitude float64
 	LocationName string
-	ClusterID    string // non-empty for remote edges from peer clusters
+	ClusterID    string
+	Remote       bool // true only for a federation redirect candidate
 }
 
 // RemoteEdgeCandidate represents a remote edge from a peer cluster's EdgeSummary.
@@ -397,6 +398,7 @@ func (lb *LoadBalancer) GetTopNodesWithScores(ctx context.Context, streamName st
 		result[i] = NodeWithScore{
 			Host: sn.snap.Host, NodeID: sn.snap.NodeID, Score: sn.score,
 			GeoLatitude: sn.snap.GeoLatitude, GeoLongitude: sn.snap.GeoLongitude, LocationName: sn.snap.LocationName,
+			ClusterID: sn.snap.ClusterID,
 		}
 	}
 
@@ -611,6 +613,7 @@ func (lb *LoadBalancer) ScoreRemoteEdges(candidates []RemoteEdgeCandidate, viewe
 			GeoLatitude:  c.GeoLat,
 			GeoLongitude: c.GeoLon,
 			ClusterID:    c.ClusterID,
+			Remote:       true,
 		})
 	}
 

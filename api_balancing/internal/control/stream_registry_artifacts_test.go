@@ -33,6 +33,12 @@ func TestArtifactRuntimeName(t *testing.T) {
 	}
 }
 
+func TestArtifactKindFromTypeCanonicalizesChapterBytes(t *testing.T) {
+	if got := artifactKindFromType(" chapter "); got != ArtifactKindVOD {
+		t.Fatalf("artifactKindFromType(chapter) = %v, want VOD byte kind", got)
+	}
+}
+
 func TestResolveArtifactByHash_HitsSQL(t *testing.T) {
 	tdb, mock, _, _ := setupArtifactTestDepsWithDB(t)
 	defer tdb.Close()

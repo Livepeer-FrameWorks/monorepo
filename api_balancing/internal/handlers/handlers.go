@@ -20,6 +20,7 @@ import (
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/database/foghorndb"
 	"frameworks/api_balancing/internal/federation"
+	localauthority "frameworks/api_balancing/internal/mediaauthority"
 	"frameworks/api_balancing/internal/state"
 	"frameworks/api_balancing/internal/triggers"
 
@@ -221,11 +222,27 @@ func Init(
 			nodeID := del.GetNodeId()
 			reason := del.GetReason()
 
-			// This message indicates node-local deletion/eviction. Remove the node cache
-			// record and emit a LOST placement (in one transaction) so the analytics
-			// projection stops showing this node as holding a copy.
-			if err := control.DeleteNodeArtifact(ctx, artifactHash, nodeID, time.Now().UnixMilli()); err != nil {
+			// This message indicates node-local deletion/eviction. The database removes
+			// the placement and emits LOST atomically unless a newer node-clock inventory
+			// snapshot proves the same node has already reacquired the copy.
+			deletedAtMs := del.GetDeletedAtMs()
+			outcome, err := control.DeleteNodeArtifact(ctx, artifactHash, nodeID, deletedAtMs)
+			if err != nil {
+				control.ObserveArtifactDeletionOutcome("error")
 				logger.WithError(err).WithField("artifact_hash", artifactHash).Error("Failed to remove artifact node assignment")
+				return
+			}
+			control.ObserveArtifactDeletionOutcome(string(outcome))
+			if outcome != state.NodeArtifactDeletionApplied {
+				logger.WithFields(logging.Fields{
+					"artifact_hash": artifactHash,
+					"node_id":       nodeID,
+					"outcome":       outcome,
+				}).Info("Artifact deletion did not remove a placement")
+				return
+			}
+			if stateErr := state.DefaultManager().ApplyArtifactDeleted(ctx, artifactHash, nodeID); stateErr != nil {
+				logger.WithError(stateErr).WithField("artifact_hash", artifactHash).Warn("Failed to apply artifact deletion to stream state")
 			}
 
 			// If the artifact has no remaining cached nodes and is synced, reflect that it is now S3-only.
@@ -352,7 +369,7 @@ func AuthorizedMistServerCompatibilityHandler(c *gin.Context) {
 		c.String(http.StatusForbidden, "weights mutation is internal")
 		return
 	}
-	nodeID, compatibilityPath, ok := control.VerifyBalancerCapabilityPath(c.Request.URL.EscapedPath(), time.Now())
+	nodeID, authenticatedClusterID, compatibilityPath, ok := control.VerifyBalancerCapabilityPath(c.Request.URL.EscapedPath(), time.Now())
 	if !ok {
 		c.String(http.StatusUnauthorized, "invalid or expired balancer capability")
 		return
@@ -382,6 +399,7 @@ func AuthorizedMistServerCompatibilityHandler(c *gin.Context) {
 	c.Request.URL.Path = decodedPath
 	c.Request.URL.RawPath = compatibilityPath
 	c.Set("foghorn_authenticated_node_id", nodeID)
+	c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), ctxkeys.KeyAuthenticatedNodeCluster, authenticatedClusterID))
 	MistServerCompatibilityHandler(c)
 }
 
@@ -894,7 +912,22 @@ func handleListServers(c *gin.Context) {
 // absent. Fails closed (returns "") when the caller can't be identified
 // or the arrangement fails so the puller and registry never diverge.
 func arrangeRemoteOriginPullFromSource(ctx context.Context, streamName string, lat, lon float64, callerNodeID, clientIP string) (dtscURL, remoteCluster string) {
-	candidate, cluster, tenantID := resolveRemoteSourceCandidate(ctx, streamName, lat, lon)
+	if callerNodeID == "" {
+		logger.WithFields(logging.Fields{
+			"stream":    streamName,
+			"client_ip": clientIP,
+		}).Warn("/source cross-cluster: caller IP did not match a known node; refusing to arrange untracked pull")
+		return "", ""
+	}
+	callerClusterID := sourceCallerClusterID(ctx, callerNodeID)
+	if callerClusterID == "" {
+		logger.WithFields(logging.Fields{
+			"stream":      streamName,
+			"caller_node": callerNodeID,
+		}).Warn("/source cross-cluster: caller media cluster is unavailable; refusing to arrange pull")
+		return "", ""
+	}
+	candidate, cluster, tenantID := resolveRemoteSourceCandidate(ctx, streamName, lat, lon, callerClusterID)
 	if candidate == nil {
 		return "", ""
 	}
@@ -903,21 +936,11 @@ func arrangeRemoteOriginPullFromSource(ctx context.Context, streamName string, l
 		internalName = streamName
 	}
 
-	if callerNodeID == "" {
-		logger.WithFields(logging.Fields{
-			"stream":         streamName,
-			"client_ip":      clientIP,
-			"remote_cluster": cluster,
-		}).Warn("/source cross-cluster: caller IP did not match a known node; refusing to arrange untracked pull")
-		return "", ""
-	}
-
 	deps := &federation.ArrangeOriginPullDeps{
 		Cache:        remoteEdgeCache,
 		PeerResolver: peerManager,
 		FedClient:    federationClient,
 		InstanceID:   originPullInstanceID,
-		ClusterID:    clusterID,
 		Logger:       logger,
 		EventEmitter: emitFederationEvent,
 	}
@@ -926,6 +949,7 @@ func arrangeRemoteOriginPullFromSource(ctx context.Context, streamName string, l
 		Remote:          candidate,
 		RemoteCluster:   cluster,
 		TenantID:        tenantID,
+		DestClusterID:   callerClusterID,
 		DestNodeID:      callerNodeID,
 		DestNodeBaseURL: "", // unknown from clientIP alone; MarkReplicating accepts empty
 		Lat:             lat,
@@ -948,7 +972,7 @@ func arrangeRemoteOriginPullFromSource(ctx context.Context, streamName string, l
 // wrapper around resolveRemoteSourceCandidate for callers that only
 // need the URL.
 func resolveRemoteSource(ctx context.Context, streamName string, lat, lon float64) (dtscURL, remoteCluster string) {
-	candidate, cluster, _ := resolveRemoteSourceCandidate(ctx, streamName, lat, lon)
+	candidate, cluster, _ := resolveRemoteSourceCandidate(ctx, streamName, lat, lon, clusterID)
 	if candidate == nil {
 		return "", ""
 	}
@@ -959,7 +983,7 @@ func resolveRemoteSource(ctx context.Context, streamName string, lat, lon float6
 // chosen EdgeCandidate. Needed by callers that want to arrange a
 // tracked origin-pull (NotifyOriginPull needs candidate.NodeId).
 // tenantID returned so the arrangement carries it through.
-func resolveRemoteSourceCandidate(ctx context.Context, streamName string, lat, lon float64) (*foghornfederationpb.EdgeCandidate, string, string) {
+func resolveRemoteSourceCandidate(ctx context.Context, streamName string, lat, lon float64, requestingClusterID string) (*foghornfederationpb.EdgeCandidate, string, string) {
 	if federationClient == nil || peerManager == nil {
 		return nil, "", ""
 	}
@@ -971,9 +995,31 @@ func resolveRemoteSourceCandidate(ctx context.Context, streamName string, lat, l
 
 	// Try cached stream context first (populated from PUSH_REWRITE validation)
 	var tenantID, originClusterID string
+	allowPlatformShared := true
 	var clusterPeers []*clusterpeerpb.TenantClusterPeer
 	if triggerProcessor != nil {
 		tenantID, originClusterID = triggerProcessor.GetStreamOrigin(internalName)
+		if local, handled, localErr := triggerProcessor.ResolveLocalContent(ctx, internalName); handled {
+			switch {
+			case localErr == nil && local != nil:
+				tenantID = local.TenantId
+				originClusterID = local.ActiveIngestClusterID
+				clusterPeers = local.ClusterPeers
+				allowPlatformShared = local.AllowPlatformSharedPlayback
+				billing := triggerProcessor.GetBillingStatus(ctx, internalName, tenantID)
+				if billing == nil || billing.State == triggers.BillingStatusUnavailable || billing.DeniedReason != "" || billing.State == triggers.BillingStatusDenied {
+					logger.WithFields(logging.Fields{
+						"stream":    streamName,
+						"tenant_id": tenantID,
+					}).Warn("Refusing cross-cluster source pull without valid local tenant authority")
+					return nil, "", ""
+				}
+			case triggers.IsLocalAuthorityDenied(localErr), triggers.IsLocalAuthorityExpired(localErr):
+				return nil, "", ""
+			default:
+				logger.WithError(localErr).WithField("stream", streamName).Warn("Local source authority unavailable; using connected resolver")
+			}
+		}
 	}
 
 	// Fallback: ask Commodore for the stream's origin cluster (and the fresh
@@ -986,7 +1032,7 @@ func resolveRemoteSourceCandidate(ctx context.Context, streamName string, lat, l
 		}
 	}
 
-	if originClusterID == "" || originClusterID == clusterID {
+	if originClusterID == "" || originClusterID == requestingClusterID {
 		return nil, "", ""
 	}
 
@@ -1000,7 +1046,7 @@ func resolveRemoteSourceCandidate(ctx context.Context, streamName string, lat, l
 			clusterPeers = resp.GetClusterPeers()
 		}
 	}
-	if !control.AuthoritativeClusterServable(originClusterID, tenantID, clusterPeers) {
+	if !control.AuthoritativeClusterServableWithPolicy(originClusterID, tenantID, clusterPeers, allowPlatformShared) {
 		logger.WithFields(logging.Fields{
 			"stream":         streamName,
 			"origin_cluster": originClusterID,
@@ -1017,7 +1063,7 @@ func resolveRemoteSourceCandidate(ctx context.Context, streamName string, lat, l
 		StreamName:        streamName,
 		ViewerLat:         lat,
 		ViewerLon:         lon,
-		RequestingCluster: clusterID,
+		RequestingCluster: requestingClusterID,
 		TenantId:          tenantID,
 		IsSourceSelection: true,
 	})
@@ -1037,25 +1083,60 @@ func resolveRemoteSourceCandidate(ctx context.Context, streamName string, lat, l
 	return best, originClusterID, tenantID
 }
 
-// resolvePullSourceForSource looks up the full pull-source row for a
-// pull+<internal_name> stream via Commodore. Returns nil on any failure or if
-// the source is disabled. The caller uses both the upstream URI and the
-// allowed_cluster_ids list for placement enforcement.
-func resolvePullSourceForSource(ctx context.Context, streamName string) *commodorepb.ResolvePullSourceByInternalNameResponse {
+type pullSourceLookup struct {
+	response  *commodorepb.ResolvePullSourceByInternalNameResponse
+	snapshot  localauthority.SourceSnapshot
+	usedLocal bool
+	offline   string
+}
+
+// resolvePullSourceForSource uses a marked signed local projection as the
+// authority. Unmarked projections remain in shadow mode and are promoted only
+// after their decoded source descriptor exactly matches Commodore.
+func resolvePullSourceForSource(ctx context.Context, streamName string) pullSourceLookup {
 	internalName := strings.TrimPrefix(streamName, "pull+")
 	if internalName == "" {
-		return nil
+		return pullSourceLookup{offline: control.OfflineInvalidToken}
+	}
+	local, localErr := control.ResolveLocalPullSource(ctx, control.LocalMediaAuthorityStore(), internalName)
+	if local.Marked {
+		if localErr != nil || local.Response == nil {
+			return pullSourceLookup{snapshot: local.Snapshot, usedLocal: true, offline: control.OfflineUnavailable}
+		}
+		if !local.Response.GetEnabled() {
+			return pullSourceLookup{response: local.Response, snapshot: local.Snapshot, usedLocal: true, offline: control.OfflineDisabled}
+		}
+		return pullSourceLookup{response: local.Response, snapshot: local.Snapshot, usedLocal: true}
 	}
 	if control.CommodoreClient == nil {
-		return nil
+		return pullSourceLookup{snapshot: local.Snapshot, offline: control.OfflineUnavailable}
 	}
 	lookupCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	resp, err := control.CommodoreClient.ResolvePullSourceByInternalName(lookupCtx, internalName)
-	if err != nil || resp == nil || !resp.GetFound() || !resp.GetEnabled() {
-		return nil
+	if err != nil || resp == nil {
+		return pullSourceLookup{snapshot: local.Snapshot, offline: control.OfflineUnavailable}
 	}
-	return resp
+	if !resp.GetFound() {
+		return pullSourceLookup{response: resp, snapshot: local.Snapshot, offline: control.OfflineNotConfigured}
+	}
+	if !resp.GetEnabled() {
+		return pullSourceLookup{response: resp, snapshot: local.Snapshot, offline: control.OfflineDisabled}
+	}
+	var streamCtx *commodorepb.ResolveStreamContextResponse
+	if commodoreClient != nil {
+		var contextErr error
+		streamCtx, contextErr = commodoreClient.ResolveStreamContext(ctx, resp.GetStreamId(), "", "", "")
+		if contextErr != nil {
+			logger.WithError(contextErr).WithField("stream", streamName).Debug("Source lookup: connected stream context unavailable for local-authority promotion")
+		}
+	}
+	if promotion, promoteErr := control.PromoteLocalPullSourceIfMatching(ctx, control.LocalMediaAuthorityStore(), resp, streamCtx, local.Snapshot); promoteErr != nil {
+		logger.WithError(promoteErr).WithField("stream", streamName).Warn("Source lookup: failed to promote matching local source authority")
+	} else if promotion == control.PullSourcePromotionMismatch {
+		logger.WithField("stream", streamName).Warn("Source lookup: signed source shadow mismatched connected authority")
+	}
+	return pullSourceLookup{response: resp, snapshot: local.Snapshot}
 }
 
 // summarizePullPlacementRejects flattens FilterPlacementClusters rejections
@@ -1086,10 +1167,11 @@ func pullUpstreamScore(upstream string) uint64 {
 }
 
 func handleGetPullSource(c *gin.Context, streamName string, lat, lon float64, tagAdjust map[string]int, callerNodeID, clientIP string, ctx context.Context, start time.Time) {
-	src := resolvePullSourceForSource(ctx, streamName)
-	if src == nil {
+	lookup := resolvePullSourceForSource(ctx, streamName)
+	src := lookup.response
+	if lookup.offline != "" {
 		logger.WithField("stream", streamName).Warn("Source lookup: pull stream upstream URI unavailable")
-		c.String(http.StatusOK, control.OfflineNotConfigured)
+		c.String(http.StatusOK, lookup.offline)
 		return
 	}
 	upstream := src.GetSourceUri()
@@ -1099,14 +1181,23 @@ func handleGetPullSource(c *gin.Context, streamName string, lat, lon float64, ta
 		c.String(http.StatusOK, control.OfflineBlockedURI)
 		return
 	}
-	// /source runs on a specific Foghorn — which serves a specific media
-	// cluster. Re-run the same placement filter we apply at viewer routing
+	// /source is node-bound, while one Foghorn can serve several virtual media
+	// clusters. Re-run the same placement filter we apply at viewer routing
 	// + STREAM_SOURCE so a stale route handed to this endpoint cannot leak
 	// the upstream onto a cluster the pull source isn't pinned to.
-	localClusterID := config.GetEnv("CLUSTER_ID", "")
+	localClusterID := sourceCallerClusterID(ctx, callerNodeID)
 	localCapability := false
 	if class == pullsource.ClassPrivate {
-		localCapability = control.ClusterAllowsPrivatePulls(ctx, localClusterID)
+		if lookup.usedLocal {
+			localCapability = control.LocalTenantAllowsSourceCluster(lookup.snapshot.Tenant.Authority, localClusterID, true)
+		} else {
+			localCapability = control.ClusterAllowsPrivatePulls(ctx, localClusterID)
+		}
+	}
+	if lookup.usedLocal && !control.LocalTenantAllowsSourceCluster(lookup.snapshot.Tenant.Authority, localClusterID, false) {
+		logger.WithFields(logging.Fields{"stream": streamName, "cluster_id": localClusterID}).Warn("Source lookup: signed local tenant authority does not grant this cluster")
+		c.String(http.StatusOK, control.OfflineNotPlaced)
+		return
 	}
 	localCandidates := []pullsource.ClusterCapability{}
 	if localClusterID != "" {
@@ -1135,7 +1226,7 @@ func handleGetPullSource(c *gin.Context, streamName string, lat, lon float64, ta
 				"remote_cluster": remoteCluster,
 				"dtsc_url":       remoteDTSC,
 			}).Info("Source lookup: pull source federated from allowed cluster")
-			go postBalancingEventEx(c, streamName, "remote", 0, lat, lon, "pull_federated", remoteDTSC, 0, 0, "", durationMs, remoteCluster)
+			postBalancingEventEx(c, streamName, "remote", 0, lat, lon, "pull_federated", remoteDTSC, 0, 0, "", durationMs, remoteCluster)
 			c.String(http.StatusOK, remoteDTSC)
 			return
 		}
@@ -1198,7 +1289,9 @@ func handleGetPullSource(c *gin.Context, streamName string, lat, lon float64, ta
 		"stream":         streamName,
 		"upstream_score": upstreamScore,
 	}).Info("Source lookup: pull stream returning upstream origin")
-	go postBalancingEvent(c, streamName, "", 0, lat, lon, "pull_upstream", pullsource.Redact(upstream), 0, 0, "", durationMs)
+	postBalancingEventWithIdentity(c, streamName, "", 0, lat, lon, "pull_upstream", pullsource.Redact(upstream), 0, 0, "", durationMs, &routingEventIdentity{
+		TenantID: src.GetTenantId(), StreamID: src.GetStreamId(), InternalName: strings.TrimPrefix(streamName, "pull+"),
+	})
 	c.String(http.StatusOK, upstream)
 }
 
@@ -1223,6 +1316,18 @@ func sourceCallerNodeID(c *gin.Context, query url.Values, clientIP string) strin
 	return state.DefaultManager().NodeIDByClientIP(clientIP)
 }
 
+func sourceCallerClusterID(ctx context.Context, nodeID string) string {
+	if ctx != nil {
+		if signedClusterID, ok := ctx.Value(ctxkeys.KeyAuthenticatedNodeCluster).(string); ok && strings.TrimSpace(signedClusterID) != "" {
+			return strings.TrimSpace(signedClusterID)
+		}
+	}
+	if node := state.DefaultManager().GetNodeState(strings.TrimSpace(nodeID)); node != nil {
+		return strings.TrimSpace(node.ClusterID)
+	}
+	return ""
+}
+
 // handleGetSource implements /?source=<stream> (EXACT C++ implementation)
 func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 	start := time.Now()
@@ -1242,7 +1347,7 @@ func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 	var nodeLat, nodeLon float64
 	var nodeName string
 	var err error
-	ctx := c.Request.Context()
+	ctx := control.MediaRequestContext(c.Request.Context(), "source")
 	if requireCap != "" {
 		ctx = context.WithValue(ctx, ctxkeys.KeyCapability, requireCap)
 	}
@@ -1277,7 +1382,7 @@ func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 			"stream":   streamName,
 			"dtsc_url": remoteDTSC,
 		}).Info("Source lookup: using active origin-pull source")
-		go postBalancingEvent(c, streamName, "", 0, lat, lon, "active_replication", remoteDTSC, 0, 0, "", durationMs)
+		postBalancingEvent(c, streamName, "", 0, lat, lon, "active_replication", remoteDTSC, 0, 0, "", durationMs)
 		c.String(http.StatusOK, remoteDTSC)
 		return
 	}
@@ -1304,7 +1409,7 @@ func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 				"stream":   streamName,
 				"dtsc_url": remoteDTSC,
 			}).Info("Source lookup: resolved via cross-cluster federation")
-			go postBalancingEventEx(c, streamName, "remote", 0, lat, lon, "remote_source", remoteDTSC, 0, 0, "", durationMs, remoteCluster)
+			postBalancingEventEx(c, streamName, "remote", 0, lat, lon, "remote_source", remoteDTSC, 0, 0, "", durationMs, remoteCluster)
 			c.String(http.StatusOK, remoteDTSC)
 			return
 		}
@@ -1313,7 +1418,7 @@ func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 		if metrics != nil {
 			metrics.RoutingDecisions.WithLabelValues("source", "failed").Inc()
 		}
-		go postBalancingEvent(c, streamName, "", 0, lat, lon, "failed", err.Error(), 0, 0, "", durationMs)
+		postBalancingEvent(c, streamName, "", 0, lat, lon, "failed", err.Error(), 0, 0, "", durationMs)
 
 		// Per-stream-type terminal answer when no node has the input.
 		// live+: return push:// unconditionally — publishers boot the
@@ -1354,7 +1459,7 @@ func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 			metrics.NodeSelectionDuration.WithLabelValues().Observe(time.Since(start).Seconds())
 		}
 		// Post redirect event
-		go postBalancingEvent(c, streamName, bestNode, score, lat, lon, "redirect", dtscURL, nodeLat, nodeLon, nodeName, durationMs)
+		postBalancingEvent(c, streamName, bestNode, score, lat, lon, "redirect", dtscURL, nodeLat, nodeLon, nodeName, durationMs)
 		c.Redirect(http.StatusFound, dtscURL)
 	} else {
 		if metrics != nil {
@@ -1362,7 +1467,7 @@ func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 			metrics.NodeSelectionDuration.WithLabelValues().Observe(time.Since(start).Seconds())
 		}
 		// Post success event
-		go postBalancingEvent(c, streamName, bestNode, score, lat, lon, "success", "", nodeLat, nodeLon, nodeName, durationMs)
+		postBalancingEvent(c, streamName, bestNode, score, lat, lon, "success", "", nodeLat, nodeLon, nodeName, durationMs)
 		c.String(http.StatusOK, dtscURL)
 	}
 }
@@ -1395,7 +1500,7 @@ func handleFindIngest(c *gin.Context, cpuUsage string, query url.Values) {
 	if err != nil {
 		durationMs := float32(time.Since(start).Milliseconds())
 		// Post failed ingest event
-		go postBalancingEvent(c, "ingest", "", 0, lat, lon, "failed", err.Error(), 0, 0, "", durationMs)
+		postBalancingEvent(c, "ingest", "", 0, lat, lon, "failed", err.Error(), 0, 0, "", durationMs)
 		c.String(http.StatusOK, "FULL") // C++ fallback for no ingest point
 		return
 	}
@@ -1409,7 +1514,7 @@ func handleFindIngest(c *gin.Context, cpuUsage string, query url.Values) {
 				if uint64(node.CPU*10)+uint64(minCpu) >= 1000 {
 					durationMs := float32(time.Since(start).Milliseconds())
 					// Node would be overloaded, return fallback (like C++ FAIL_MSG("No ingest point found!"))
-					go postBalancingEvent(c, "ingest", "", 0, lat, lon, "failed", "CPU overload", 0, 0, "", durationMs)
+					postBalancingEvent(c, "ingest", "", 0, lat, lon, "failed", "CPU overload", 0, 0, "", durationMs)
 					c.String(http.StatusOK, "FULL") // C++ fallback for CPU overload
 					return
 				}
@@ -1420,7 +1525,7 @@ func handleFindIngest(c *gin.Context, cpuUsage string, query url.Values) {
 
 	durationMs := float32(time.Since(start).Milliseconds())
 	// Post successful ingest event
-	go postBalancingEvent(c, "ingest", bestNode, score, lat, lon, "success", "", nodeLat, nodeLon, nodeName, durationMs)
+	postBalancingEvent(c, "ingest", bestNode, score, lat, lon, "success", "", nodeLat, nodeLon, nodeName, durationMs)
 	c.String(http.StatusOK, bestNode)
 }
 
@@ -1514,6 +1619,7 @@ func handleHostStatus(c *gin.Context, hostname string) {
 
 // handleStreamBalancing implements /<stream> (EXACT C++ implementation)
 func handleStreamBalancing(c *gin.Context, streamName string) {
+	c.Request = c.Request.WithContext(control.MediaRequestContext(c.Request.Context(), "mist_balancer"))
 	start := time.Now()
 	query := c.Request.URL.Query()
 	lat := getLatLon(c, query, "lat", "X-Latitude")
@@ -1523,11 +1629,39 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 	logger.WithField("stream", streamName).Info("Balancing stream")
 
 	// Unified resolution: Determine if this is Live (Key) or VOD (Artifact)
-	target, resolveErr := control.ResolveStream(c.Request.Context(), streamName)
+	var target *control.StreamTarget
+	var resolveErr error
+	if triggerProcessor != nil {
+		if resolution, handled, localErr := triggerProcessor.ResolveLocalContent(c.Request.Context(), streamName); handled {
+			if localErr != nil {
+				if triggers.IsLocalAuthorityDenied(localErr) {
+					c.String(http.StatusForbidden, "content owner is not active")
+					return
+				}
+				if triggers.IsLocalAuthorityExpired(localErr) {
+					c.String(http.StatusServiceUnavailable, "local stream authority expired")
+					return
+				}
+				logger.WithError(localErr).WithField("stream", streamName).Warn("Local media authority unavailable; using connected resolver")
+			} else {
+				target = &control.StreamTarget{
+					InternalName: resolution.RoutingInternalName(), StreamID: resolution.StreamId, TenantID: resolution.TenantId,
+					ContentType: resolution.ContentType, ClusterPeers: resolution.ClusterPeers,
+					OfficialClusterID: resolution.OfficialClusterID, AllowPlatformSharedPlayback: resolution.AllowPlatformSharedPlayback,
+					LocalAuthority: resolution.LocalAuthority,
+					RequiresAuth:   resolution.RequiresAuth, RequiresAuthKnown: true,
+				}
+			}
+		}
+	}
+	if target == nil {
+		target, resolveErr = control.ResolveStream(c.Request.Context(), streamName)
+	}
 	if resolveErr != nil || target == nil || target.InternalName == "" {
 		c.String(http.StatusServiceUnavailable, "stream authority unavailable")
 		return
 	}
+	eventIdentity := &routingEventIdentity{TenantID: target.TenantID, StreamID: target.StreamID, InternalName: target.InternalName}
 	internalName := mist.ExtractInternalName(target.InternalName)
 
 	// Prepaid billing check (402)
@@ -1595,13 +1729,13 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 			c.String(http.StatusTemporaryRedirect, redirectURL)
 
 			durationMs := float32(time.Since(start).Milliseconds())
-			go postBalancingEvent(c, target.InternalName, bestNode, 0, lat, lon, "redirect", redirectURL, 0, 0, "", durationMs)
+			postBalancingEventWithIdentity(c, target.InternalName, bestNode, 0, lat, lon, "redirect", redirectURL, 0, 0, "", durationMs, eventIdentity)
 			return
 		}
 
 		durationMs := float32(time.Since(start).Milliseconds())
 		c.String(http.StatusOK, bestNode)
-		go postBalancingEvent(c, target.InternalName, bestNode, 0, lat, lon, "success", "", 0, 0, "", durationMs)
+		postBalancingEventWithIdentity(c, target.InternalName, bestNode, 0, lat, lon, "success", "", 0, 0, "", durationMs, eventIdentity)
 		return
 	}
 
@@ -1624,7 +1758,11 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 		ctx = context.WithValue(ctx, ctxkeys.KeyCapability, requireCap)
 	}
 	if target.TenantID != "" {
-		ctx = context.WithValue(ctx, ctxkeys.KeyClusterServeScope, control.NewClusterServeScope(target.TenantID, "", target.ClusterPeers))
+		if target.LocalAuthority {
+			ctx = context.WithValue(ctx, ctxkeys.KeyClusterServeScope, control.NewClusterServeScope(target.TenantID, target.OfficialClusterID, target.ClusterPeers, target.AllowPlatformSharedPlayback))
+		} else {
+			ctx = context.WithValue(ctx, ctxkeys.KeyClusterServeScope, control.NewClusterServeScope(target.TenantID, target.OfficialClusterID, target.ClusterPeers))
+		}
 	}
 	// Viewer selection -> isSourceSelection=false (allow replicated)
 	bestNode, score, nodeLat, nodeLon, nodeName, err = lb.GetBestNodeWithScore(ctx, internalName, lat, lon, tagAdjust, "", false)
@@ -1657,11 +1795,11 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 							if vars := c.Request.URL.RawQuery; vars != "" {
 								redirectURL += "?" + vars
 							}
-							go postBalancingEventEx(c, internalName, bestRemote.Host, bestRemote.Score, lat, lon, "remote_redirect", redirectURL, bestRemote.GeoLatitude, bestRemote.GeoLongitude, "", durationMs, bestRemote.ClusterID)
+							postBalancingEventExWithIdentity(c, internalName, bestRemote.Host, bestRemote.Score, lat, lon, "remote_redirect", redirectURL, bestRemote.GeoLatitude, bestRemote.GeoLongitude, "", durationMs, bestRemote.ClusterID, eventIdentity)
 							c.Header("Location", redirectURL)
 							c.String(http.StatusTemporaryRedirect, redirectURL)
 						} else {
-							go postBalancingEventEx(c, internalName, bestRemote.Host, bestRemote.Score, lat, lon, "remote_redirect", "", bestRemote.GeoLatitude, bestRemote.GeoLongitude, "", durationMs, bestRemote.ClusterID)
+							postBalancingEventExWithIdentity(c, internalName, bestRemote.Host, bestRemote.Score, lat, lon, "remote_redirect", "", bestRemote.GeoLatitude, bestRemote.GeoLongitude, "", durationMs, bestRemote.ClusterID, eventIdentity)
 							c.String(http.StatusOK, bestRemote.Host)
 						}
 						return
@@ -1684,7 +1822,7 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 					c.String(http.StatusOK, u.Host)
 
 					durationMs := float32(time.Since(start).Milliseconds())
-					go postBalancingEventEx(c, internalName, u.Host, 0, lat, lon, "cross_cluster_dtsc", loc.PullDTSCURL, 0, 0, "", durationMs, loc.ReplicatingFrom)
+					postBalancingEventExWithIdentity(c, internalName, u.Host, 0, lat, lon, "cross_cluster_dtsc", loc.PullDTSCURL, 0, 0, "", durationMs, loc.ReplicatingFrom, eventIdentity)
 					return
 				}
 			}
@@ -1698,7 +1836,7 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 		c.String(http.StatusOK, "localhost") // fallback like C++
 
 		// Post failure event to Firehose
-		go postBalancingEvent(c, streamName, "", 0, lat, lon, "failed", err.Error(), 0, 0, "", durationMs)
+		postBalancingEventWithIdentity(c, streamName, "", 0, lat, lon, "failed", err.Error(), 0, 0, "", durationMs, eventIdentity)
 		return
 	}
 
@@ -1731,7 +1869,7 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 		}
 
 		// Post redirect event to Firehose
-		go postBalancingEvent(c, internalName, bestNode, score, lat, lon, "redirect", redirectURL, nodeLat, nodeLon, nodeName, durationMs)
+		postBalancingEventWithIdentity(c, internalName, bestNode, score, lat, lon, "redirect", redirectURL, nodeLat, nodeLon, nodeName, durationMs, eventIdentity)
 		return
 	}
 
@@ -1744,7 +1882,7 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 	}
 
 	// Post successful balancing event to Firehose
-	go postBalancingEvent(c, internalName, bestNode, score, lat, lon, "success", "", nodeLat, nodeLon, nodeName, durationMs)
+	postBalancingEventWithIdentity(c, internalName, bestNode, score, lat, lon, "success", "", nodeLat, nodeLon, nodeName, durationMs, eventIdentity)
 }
 
 // emitFederationEvent sends a federation lifecycle event to Decklog.
@@ -1787,16 +1925,31 @@ func emitFederationEvent(data *ipcpb.FederationEventData) {
 	}()
 }
 
-// postBalancingEvent enriches a routing decision with gin request context
-// (client IP, country, GeoIP fallback, Commodore tenant resolution) and
-// sends it to Decklog for the /balance HTTP endpoint.
+type routingEventIdentity struct {
+	TenantID     string
+	StreamID     string
+	InternalName string
+}
+
+// postBalancingEvent snapshots request-scoped values before the handler
+// returns. Identity enrichment then runs asynchronously from immutable values;
+// a gin.Context must never escape into a goroutine because Gin reuses it and
+// net/http cancels its request context at handler completion.
 func postBalancingEvent(c *gin.Context, streamName, selectedNode string, score uint64, lat, lon float64, status, details string, nodeLat, nodeLon float64, nodeName string, durationMs float32) {
-	postBalancingEventEx(c, streamName, selectedNode, score, lat, lon, status, details, nodeLat, nodeLon, nodeName, durationMs, "")
+	postBalancingEventExWithIdentity(c, streamName, selectedNode, score, lat, lon, status, details, nodeLat, nodeLon, nodeName, durationMs, "", nil)
+}
+
+func postBalancingEventWithIdentity(c *gin.Context, streamName, selectedNode string, score uint64, lat, lon float64, status, details string, nodeLat, nodeLon float64, nodeName string, durationMs float32, identity *routingEventIdentity) {
+	postBalancingEventExWithIdentity(c, streamName, selectedNode, score, lat, lon, status, details, nodeLat, nodeLon, nodeName, durationMs, "", identity)
 }
 
 // postBalancingEventEx is postBalancingEvent with an explicit remoteClusterID
 // for cross-cluster routing decisions.
 func postBalancingEventEx(c *gin.Context, streamName, selectedNode string, score uint64, lat, lon float64, status, details string, nodeLat, nodeLon float64, nodeName string, durationMs float32, remoteClusterID string) {
+	postBalancingEventExWithIdentity(c, streamName, selectedNode, score, lat, lon, status, details, nodeLat, nodeLon, nodeName, durationMs, remoteClusterID, nil)
+}
+
+func postBalancingEventExWithIdentity(c *gin.Context, streamName, selectedNode string, score uint64, lat, lon float64, status, details string, nodeLat, nodeLon float64, nodeName string, durationMs float32, remoteClusterID string, identity *routingEventIdentity) {
 	if routingEventsDisabled {
 		return
 	}
@@ -1817,23 +1970,6 @@ func postBalancingEventEx(c *gin.Context, streamName, selectedNode string, score
 	if country == "" {
 		country = c.GetHeader("X-Country-Code")
 	}
-	if country == "" && geoipReader != nil && clientIP != "" {
-		if geoData := geoip.LookupCached(c.Request.Context(), geoipReader, geoipCache, clientIP); geoData != nil {
-			country = geoData.CountryCode
-			if !geoip.IsValidLatLon(lat, lon) && geoip.IsValidLatLon(geoData.Latitude, geoData.Longitude) {
-				lat = geoData.Latitude
-				lon = geoData.Longitude
-			}
-			logger.WithFields(logging.Fields{
-				"client_ip":    clientIP,
-				"country_code": geoData.CountryCode,
-				"city":         geoData.City,
-				"latitude":     geoData.Latitude,
-				"longitude":    geoData.Longitude,
-			}).Debug("GeoIP fallback for routing event")
-		}
-	}
-
 	// Resolve node ID from load balancer
 	selectedNodeID := ""
 	if lb != nil {
@@ -1842,26 +1978,11 @@ func postBalancingEventEx(c *gin.Context, streamName, selectedNode string, score
 		}
 	}
 
-	// Enrich with tenant info via Commodore
-	var streamTenantID, internalName, streamID string
-	if commodoreClient != nil && streamName != "" {
-		if identity, err := resolveRoutingStreamIdentity(streamName); err == nil && identity != nil {
-			streamTenantID = identity.GetTenantId()
-			internalName = identity.GetInternalName()
-			streamID = identity.GetStreamId()
-		} else {
-			logger.WithError(err).WithField("stream_name", streamName).Warn("Failed to resolve tenant via Commodore after retry")
-		}
-	}
-
-	enqueueRoutingEvent(nil, &RoutingEvent{
+	event := &RoutingEvent{
 		Status:          status,
 		Details:         details,
 		Score:           score,
 		StreamName:      streamName,
-		InternalName:    internalName,
-		StreamID:        streamID,
-		StreamTenantID:  streamTenantID,
 		ClientIP:        clientIP,
 		ClientCountry:   country,
 		ClientLat:       lat,
@@ -1873,41 +1994,58 @@ func postBalancingEventEx(c *gin.Context, streamName, selectedNode string, score
 		NodeName:        nodeName,
 		LatencyMs:       durationMs,
 		RemoteClusterID: remoteClusterID,
-	})
+	}
+	if identity != nil {
+		event.StreamTenantID = identity.TenantID
+		event.StreamID = identity.StreamID
+		event.InternalName = identity.InternalName
+	}
+	go func(event *RoutingEvent, unresolvedName string) {
+		if event.ClientCountry == "" && geoipReader != nil && event.ClientIP != "" {
+			if geoData := geoip.LookupCached(context.Background(), geoipReader, geoipCache, event.ClientIP); geoData != nil {
+				event.ClientCountry = geoData.CountryCode
+				if !geoip.IsValidLatLon(event.ClientLat, event.ClientLon) && geoip.IsValidLatLon(geoData.Latitude, geoData.Longitude) {
+					event.ClientLat = geoData.Latitude
+					event.ClientLon = geoData.Longitude
+				}
+				logger.WithFields(logging.Fields{
+					"client_ip": event.ClientIP, "country_code": geoData.CountryCode, "city": geoData.City,
+					"latitude": geoData.Latitude, "longitude": geoData.Longitude,
+				}).Debug("GeoIP fallback for routing event")
+			}
+		}
+		if event.StreamID == "" && unresolvedName != "" {
+			resolved := resolveRoutingEventIdentity(unresolvedName)
+			event.StreamTenantID = resolved.TenantID
+			event.StreamID = resolved.StreamID
+			event.InternalName = resolved.InternalName
+		}
+		enqueueRoutingEvent(nil, event)
+	}(event, streamName)
 }
 
-func resolveRoutingStreamIdentity(streamName string) (*commodorepb.ResolveStreamContextResponse, error) {
-	bareInternal := mist.ExtractInternalName(streamName)
-	var lastErr error
-	for attempt := 0; attempt < 2; attempt++ {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		// Identifier-only read: declare no cluster, so the answer reports where
-		// the stream actually is rather than this process's own identity.
-		resp, err := commodoreClient.ResolveStreamContext(ctx, "", "", bareInternal, "")
+func resolveRoutingEventIdentity(streamName string) routingEventIdentity {
+	if triggerProcessor != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		identity, handled, err := triggerProcessor.ResolveLocalContent(ctx, streamName)
 		cancel()
-		if err == nil && resp != nil && resp.GetStreamId() != "" {
-			return resp, nil
-		}
-		if err != nil {
-			lastErr = err
-		}
-		ctx, cancel = context.WithTimeout(context.Background(), 2*time.Second)
-		resp, err = commodoreClient.ResolveStreamContext(ctx, "", streamName, "", "")
-		cancel()
-		if err == nil && resp != nil && resp.GetStreamId() != "" {
-			return resp, nil
-		}
-		if err != nil {
-			lastErr = err
-		}
-		if attempt == 0 {
-			time.Sleep(50 * time.Millisecond)
+		if handled && err == nil && identity != nil {
+			return routingEventIdentity{TenantID: identity.TenantId, StreamID: identity.StreamId, InternalName: identity.InternalName}
 		}
 	}
-	if lastErr != nil {
-		return nil, lastErr
+	if control.StreamRegistryInstance == nil {
+		return routingEventIdentity{}
 	}
-	return nil, fmt.Errorf("stream identity not found")
+	needle := mist.ExtractInternalName(streamName)
+	if needle == "" {
+		needle = streamName
+	}
+	for _, entry := range control.StreamRegistryInstance.Snapshot() {
+		if entry.InternalName == needle || entry.InternalName == streamName || entry.PlaybackID == streamName || entry.StreamID == streamName {
+			return routingEventIdentity{TenantID: entry.TenantID, StreamID: entry.StreamID, InternalName: entry.InternalName}
+		}
+	}
+	return routingEventIdentity{}
 }
 
 // emitViewerRoutingEvent submits a viewer decision to the shared bounded queue.
@@ -1977,6 +2115,15 @@ func viewerPlaybackTokenFromHTTPRequest(req *http.Request) string {
 }
 
 func enforceHTTPResolvePlaybackPolicy(ctx context.Context, req *sharedpb.ViewerEndpointRequest, internalName string) bool {
+	viewer := &ipcpb.ViewerConnectTrigger{
+		StreamName: internalName, SessionId: "resolve:" + req.GetContentId(), Host: req.GetViewerIp(),
+		RequestUrl: "viewer://" + req.GetContentId(), ViewerToken: req.GetViewerToken(), Connector: "resolve-http",
+	}
+	if triggerProcessor != nil {
+		if decision, handled := triggerProcessor.EvaluateLocalPlaybackPolicy(ctx, req.GetContentId(), internalName, viewer); handled {
+			return decision == "true"
+		}
+	}
 	if commodoreClient == nil {
 		logger.WithFields(logging.Fields{
 			"content_id": req.GetContentId(),
@@ -1997,14 +2144,8 @@ func enforceHTTPResolvePlaybackPolicy(ctx context.Context, req *sharedpb.ViewerE
 	if policyInternalName == "" {
 		policyInternalName = internalName
 	}
-	decision := triggers.EvaluatePlaybackPolicyWithRecorder(ctx, logger, policyInternalName, &ipcpb.ViewerConnectTrigger{
-		StreamName:  policyInternalName,
-		SessionId:   "resolve:" + req.GetContentId(),
-		Host:        req.GetViewerIp(),
-		RequestUrl:  "viewer://" + req.GetContentId(),
-		ViewerToken: req.GetViewerToken(),
-		Connector:   "resolve-http",
-	}, policy, commodoreClient)
+	viewer.StreamName = policyInternalName
+	decision := triggers.EvaluatePlaybackPolicyWithRecorder(ctx, logger, policyInternalName, viewer, policy, commodoreClient)
 	return decision == "true"
 }
 
@@ -2070,16 +2211,19 @@ func getTotalViewers(node state.EnhancedBalancerNodeSnapshot) uint64 {
 }
 
 // resolveLiveViewerEndpoint uses load balancer to find optimal edge nodes with fallbacks
-func resolveLiveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest, lat, lon float64, internalName, streamTenantID, streamID string, clusterPeers []*clusterpeerpb.TenantClusterPeer, activeIngestClusterID string) (*sharedpb.ViewerEndpointResponse, error) {
+func resolveLiveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest, lat, lon float64, internalName, streamTenantID, streamID string, clusterPeers []*clusterpeerpb.TenantClusterPeer, activeIngestClusterID, officialClusterID string, allowPlatformShared bool) (*sharedpb.ViewerEndpointResponse, error) {
 	start := time.Now()
 	// Delegate to consolidated control package function
 	deps := &control.PlaybackDependencies{
-		DB:             db,
-		LB:             lb,
-		GeoLat:         lat,
-		GeoLon:         lon,
-		LocalClusterID: clusterID,
-		ClusterPeers:   clusterPeers,
+		DB:                          db,
+		LB:                          lb,
+		GeoLat:                      lat,
+		GeoLon:                      lon,
+		LocalClusterID:              clusterID,
+		ClusterPeers:                clusterPeers,
+		OfficialClusterID:           officialClusterID,
+		AllowPlatformSharedPlayback: allowPlatformShared,
+		LocalAuthority:              true,
 	}
 
 	if internalName == "" {
@@ -2376,7 +2520,6 @@ func arrangeOriginPull(ctx context.Context, remote *foghornfederationpb.EdgeCand
 		PeerResolver: peerManager,
 		FedClient:    federationClient,
 		InstanceID:   originPullInstanceID,
-		ClusterID:    clusterID,
 		Logger:       logger,
 		EventEmitter: emitFederationEvent,
 	}
@@ -2387,16 +2530,19 @@ func arrangeOriginPull(ctx context.Context, remote *foghornfederationpb.EdgeCand
 		TenantID:      tenantID,
 		Lat:           lat,
 		Lon:           lon,
-		LBPicker: func(pickCtx context.Context, pickLat, pickLon float64, pickTenant string) (string, string, error) {
+		LBPicker: func(pickCtx context.Context, pickLat, pickLon float64, pickTenant string) (string, string, string, error) {
 			lbCtx := context.WithValue(pickCtx, ctxkeys.KeyCapability, "edge")
 			if pickTenant != "" {
 				lbCtx = context.WithValue(lbCtx, ctxkeys.KeyClusterScope, pickTenant)
 			}
-			host, _, _, _, _, pickErr := lb.GetBestNodeWithScore(lbCtx, "", pickLat, pickLon, nil, "", false)
+			nodes, pickErr := lb.GetTopNodesWithScores(lbCtx, "", pickLat, pickLon, nil, "", 1, false)
 			if pickErr != nil {
-				return "", "", pickErr
+				return "", "", "", pickErr
 			}
-			return host, lb.GetNodeIDByHost(host), nil
+			if len(nodes) != 1 {
+				return "", "", "", federation.ErrOriginPullNoDest
+			}
+			return nodes[0].Host, nodes[0].NodeID, nodes[0].ClusterID, nil
 		},
 	})
 	if err != nil {
@@ -2526,7 +2672,15 @@ func queryStreamFanOut(ctx context.Context, internalName, tenantID string, lat, 
 // reroute live viewers through the archive lane.
 func resolveDVRViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest, lat, lon float64, resolution *control.ContentResolution) (*sharedpb.ViewerEndpointResponse, error) {
 	dvrInternalName := mist.ExtractInternalName(resolution.InternalName)
-	dispatch, derr := control.ResolveDVRArtifactDispatch(ctx, dvrInternalName)
+	var dispatch *control.DVRArtifactDispatch
+	var derr error
+	if resolution.LocalAuthority {
+		dispatch, derr = control.ResolveLocalDVRArtifactDispatch(
+			ctx, resolution.ArtifactInternalNameIdentity(), resolution.ContentId, resolution.AllowPlatformSharedPlayback,
+		)
+	} else {
+		dispatch, derr = control.ResolveDVRArtifactDispatch(ctx, dvrInternalName)
+	}
 	if derr != nil {
 		logger.WithError(derr).WithFields(logging.Fields{
 			"content_id":    req.GetContentId(),
@@ -2543,7 +2697,7 @@ func resolveDVRViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointR
 			}).Warn("Active DVR has no resolvable recording origin; refusing to fall back to archive routing")
 			return nil, fmt.Errorf("active DVR recording origin not yet registered; retry")
 		}
-		resp, err := resolveLiveViewerEndpoint(ctx, req, lat, lon, resolution.InternalName, resolution.TenantId, resolution.StreamId, resolution.ClusterPeers, resolution.ActiveIngestClusterID)
+		resp, err := resolveLiveViewerEndpoint(ctx, req, lat, lon, resolution.InternalName, resolution.TenantId, resolution.StreamId, resolution.ClusterPeers, resolution.ActiveIngestClusterID, resolution.OfficialClusterID, resolution.AllowPlatformSharedPlayback || !resolution.LocalAuthority)
 		if err != nil {
 			return nil, err
 		}
@@ -2563,7 +2717,7 @@ func resolveDVRViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointR
 	return nil, fmt.Errorf("DVR is no longer active; query dvrChapters and play a chapter playbackId")
 }
 
-func resolveArtifactViewerEndpoint(req *sharedpb.ViewerEndpointRequest, lat, lon float64) (*sharedpb.ViewerEndpointResponse, error) {
+func resolveArtifactViewerEndpoint(req *sharedpb.ViewerEndpointRequest, lat, lon float64, resolution *control.ContentResolution) (*sharedpb.ViewerEndpointResponse, error) {
 	start := time.Now()
 	deps := &control.PlaybackDependencies{
 		DB:             db,
@@ -2579,14 +2733,21 @@ func resolveArtifactViewerEndpoint(req *sharedpb.ViewerEndpointRequest, lat, lon
 			}
 			return &httpRemoteArtifactAdapter{cache: remoteEdgeCache}
 		}(),
+		OfficialClusterID:           resolution.OfficialClusterID,
+		AllowPlatformSharedPlayback: resolution.AllowPlatformSharedPlayback,
 	}
 
 	ctx := context.Background()
-	response, err := control.ResolveArtifactPlayback(ctx, deps, req.ContentId)
+	var response *sharedpb.ViewerEndpointResponse
+	var err error
+	if resolution != nil && resolution.LocalAuthority {
+		response, err = control.ResolveArtifactPlaybackWithIdentity(ctx, deps, req.ContentId, resolution.ArtifactPlaybackIdentity())
+	} else {
+		response, err = control.ResolveArtifactPlayback(ctx, deps, req.ContentId)
+	}
 	if err != nil {
 		return nil, err
 	}
-
 	// Emit routing event for analytics
 	if response.Primary != nil && response.Metadata != nil {
 		durationMs := float32(time.Since(start).Milliseconds())
@@ -2595,8 +2756,8 @@ func resolveArtifactViewerEndpoint(req *sharedpb.ViewerEndpointRequest, lat, lon
 			candidatesCount = int32(1 + len(response.Fallbacks))
 		}
 		internalName := ""
-		if target, _ := control.ResolveStream(ctx, req.ContentId); target != nil {
-			internalName = target.InternalName
+		if resolution != nil {
+			internalName = resolution.InternalName
 		}
 		emitViewerRoutingEvent(req, response.Primary, 0, 0, 0, 0, internalName, response.Metadata.GetTenantId(), response.Metadata.GetStreamId(), durationMs, candidatesCount, "play_rewrite", "http")
 	}
@@ -2633,6 +2794,7 @@ func respondX402Billing(c *gin.Context, ctx context.Context, tenantID, resourceP
 //   - Auto-detects protocol from extension (.m3u8 -> HLS, .webrtc -> WebRTC, etc.)
 //   - Supports view keys (live), clip hashes, and DVR hashes via unified resolution
 func HandleGenericViewerPlayback(c *gin.Context) {
+	c.Request = c.Request.WithContext(control.MediaRequestContext(c.Request.Context(), "viewer_http"))
 	// Extract the full path after /play or /resolve
 	fullPath := c.Param("path")
 	if fullPath == "" {
@@ -2651,8 +2813,33 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 	// UNIFIED RESOLUTION: derive the content type from the public ID.
 	// Never trust or require a caller-provided content type.
 	ctx := c.Request.Context()
-	resolution, err := control.ResolveContent(ctx, viewKey)
-	if err != nil {
+	var resolution *control.ContentResolution
+	var err error
+	if triggerProcessor != nil {
+		var handled bool
+		resolution, handled, err = triggerProcessor.ResolveLocalContent(ctx, viewKey)
+		if handled && err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				respondPlaybackError(c, http.StatusNotFound, "VIEW_KEY_NOT_FOUND", "Invalid or expired view key", nil)
+				return
+			}
+			if triggers.IsLocalAuthorityDenied(err) {
+				respondPlaybackError(c, http.StatusForbidden, "TENANT_INACTIVE", "Content owner is not active", nil)
+				return
+			}
+			if triggers.IsLocalAuthorityExpired(err) {
+				respondPlaybackError(c, http.StatusServiceUnavailable, "MEDIA_AUTHORITY_EXPIRED", "Local media authority expired", nil)
+				return
+			}
+			logger.WithError(err).WithField("view_key", viewKey).Warn("Local media authority unavailable")
+			resolution = nil
+			err = nil
+		}
+	}
+	if resolution == nil {
+		resolution, err = control.ResolveContent(ctx, viewKey)
+	}
+	if err != nil || resolution == nil {
 		logger.WithError(err).WithField("view_key", viewKey).Warn("Failed to resolve content")
 		respondPlaybackError(c, http.StatusNotFound, "VIEW_KEY_NOT_FOUND", "Invalid or expired view key", nil)
 		return
@@ -2673,13 +2860,18 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 	}).Info("Resolved content via unified resolution")
 
 	// Prepaid billing check (402)
+	var resolvedBilling *triggers.BillingStatus
 	if resolution.TenantId != "" {
-		billingTarget := control.ResolvePlaybackPolicyTarget(c.Request.Context(), contentID, resolution.InternalName)
+		billingTarget := control.PlaybackPolicyTarget{ContentID: contentID, InternalName: resolution.InternalName}
+		if !resolution.LocalAuthority {
+			billingTarget = control.ResolvePlaybackPolicyTarget(c.Request.Context(), contentID, resolution.InternalName)
+		}
 		billingInternalName := mist.ExtractInternalName(billingTarget.InternalName)
 		if billingInternalName == "" {
 			billingInternalName = internalName
 		}
 		billing := getBillingStatus(c.Request.Context(), billingInternalName, resolution.TenantId)
+		resolvedBilling = billing
 		if billing == nil || billing.State == triggers.BillingStatusUnavailable {
 			respondPlaybackError(c, http.StatusServiceUnavailable, "BILLING_AUTHORITY_UNAVAILABLE", "Billing authority unavailable; retry safely", nil)
 			return
@@ -2723,6 +2915,9 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 			return
 		}
 	}
+	if triggerProcessor != nil && resolvedBilling != nil && !resolution.LocalAuthority {
+		triggerProcessor.ObserveConnectedPlayback(c.Request.Context(), viewKey, resolution, resolvedBilling)
+	}
 
 	// Normalize protocol
 	protocol = normalizeProtocol(protocol)
@@ -2760,11 +2955,11 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 	var response *sharedpb.ViewerEndpointResponse
 	switch contentType {
 	case "live":
-		response, err = resolveLiveViewerEndpoint(c.Request.Context(), req, lat, lon, resolution.RoutingInternalName(), resolution.TenantId, resolution.StreamId, resolution.ClusterPeers, resolution.ActiveIngestClusterID)
+		response, err = resolveLiveViewerEndpoint(c.Request.Context(), req, lat, lon, resolution.RoutingInternalName(), resolution.TenantId, resolution.StreamId, resolution.ClusterPeers, resolution.ActiveIngestClusterID, resolution.OfficialClusterID, resolution.AllowPlatformSharedPlayback || !resolution.LocalAuthority)
 	case "dvr":
 		response, err = resolveDVRViewerEndpoint(c.Request.Context(), req, lat, lon, resolution)
 	default:
-		response, err = resolveArtifactViewerEndpoint(req, lat, lon)
+		response, err = resolveArtifactViewerEndpoint(req, lat, lon, resolution)
 	}
 
 	if err != nil {

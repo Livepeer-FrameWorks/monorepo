@@ -15,32 +15,36 @@ func TestStreamRegistryContracts_RealValkey(t *testing.T) {
 	ctx := context.Background()
 	store := NewRedisRegistryStore(engine.Client, "registry-contract")
 	entry := StreamEntry{InternalName: "live+one"}
+	const highRevision = int64(4503599627370497)
 	payload, err := json.Marshal(entry)
 	if err != nil {
 		t.Fatal(err)
 	}
-	upsert := RegistryChange{InstanceID: "instance-a", Entity: RegistryEntitySource, Operation: RegistryOpUpsert, Key: entry.InternalName, Payload: payload, SourceRevision: 10}
-	if applied, setErr := store.SetSourceRevisioned(ctx, entry, upsert, 10); setErr != nil || !applied {
+	upsert := RegistryChange{InstanceID: "instance-a", Entity: RegistryEntitySource, Operation: RegistryOpUpsert, Key: entry.InternalName, Payload: payload, SourceRevision: highRevision}
+	if applied, setErr := store.SetSourceRevisioned(ctx, entry, upsert, highRevision); setErr != nil || !applied {
 		t.Fatalf("set source: applied=%v err=%v", applied, setErr)
 	}
-	staleDelete := RegistryChange{InstanceID: "instance-b", Entity: RegistryEntitySource, Operation: RegistryOpDelete, Key: entry.InternalName, SourceRevision: 9}
-	if applied, deleteErr := store.DeleteSourceRevisioned(ctx, entry.InternalName, staleDelete, 9); deleteErr != nil || applied {
+	if raw, getErr := engine.Client.Get(ctx, store.keySourceRevision(entry.InternalName)).Result(); getErr != nil || raw != "4503599627370497" {
+		t.Fatalf("raw source revision=%q err=%v, want exact high-range decimal", raw, getErr)
+	}
+	staleDelete := RegistryChange{InstanceID: "instance-b", Entity: RegistryEntitySource, Operation: RegistryOpDelete, Key: entry.InternalName, SourceRevision: highRevision - 1}
+	if applied, deleteErr := store.DeleteSourceRevisioned(ctx, entry.InternalName, staleDelete, highRevision-1); deleteErr != nil || applied {
 		t.Fatalf("stale delete applied=%v err=%v", applied, deleteErr)
 	}
 	deleteChange := staleDelete
-	deleteChange.SourceRevision = 10
-	if applied, deleteErr := store.DeleteSourceRevisioned(ctx, entry.InternalName, deleteChange, 10); deleteErr != nil || !applied {
+	deleteChange.SourceRevision = highRevision
+	if applied, deleteErr := store.DeleteSourceRevisioned(ctx, entry.InternalName, deleteChange, highRevision); deleteErr != nil || !applied {
 		t.Fatalf("current delete: applied=%v err=%v", applied, deleteErr)
 	}
-	if applied, setErr := store.SetSourceRevisioned(ctx, entry, upsert, 9); setErr != nil || applied {
+	if applied, setErr := store.SetSourceRevisioned(ctx, entry, upsert, highRevision-1); setErr != nil || applied {
 		t.Fatalf("stale upsert resurrected source: applied=%v err=%v", applied, setErr)
 	}
-	upsert.SourceRevision = 11
-	if applied, setErr := store.SetSourceRevisioned(ctx, entry, upsert, 11); setErr != nil || !applied {
+	upsert.SourceRevision = highRevision + 1
+	if applied, setErr := store.SetSourceRevisioned(ctx, entry, upsert, highRevision+1); setErr != nil || !applied {
 		t.Fatalf("newer upsert: applied=%v err=%v", applied, setErr)
 	}
-	if revision, revErr := store.GetSourceRevision(ctx, entry.InternalName); revErr != nil || revision != 11 {
-		t.Fatalf("source revision=%d err=%v, want 11", revision, revErr)
+	if revision, revErr := store.GetSourceRevision(ctx, entry.InternalName); revErr != nil || revision != highRevision+1 {
+		t.Fatalf("source revision=%d err=%v, want %d", revision, revErr, highRevision+1)
 	}
 
 	artifact := ArtifactEntry{ArtifactHash: "artifact-one"}
@@ -53,6 +57,9 @@ func TestStreamRegistryContracts_RealValkey(t *testing.T) {
 	}
 	engine.Restart(t)
 	store = NewRedisRegistryStore(engine.Client, "registry-contract")
+	if raw, getErr := engine.Client.Get(ctx, store.keySourceRevision(entry.InternalName)).Result(); getErr != nil || raw != "4503599627370498" {
+		t.Fatalf("AOF restart source revision=%q err=%v, want exact high-range decimal", raw, getErr)
+	}
 	sources, err := store.GetAllSources()
 	if err != nil || sources[entry.InternalName].InternalName != entry.InternalName {
 		t.Fatalf("container replacement lost source: sources=%+v err=%v", sources, err)

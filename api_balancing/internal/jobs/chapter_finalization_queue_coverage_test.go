@@ -42,7 +42,7 @@ func TestDispatchChapter_MaxAttemptsExceeded(t *testing.T) {
 	// here — no artifact allocated) then commit. Terminal state arg must be failed_permanent.
 	mock.ExpectBegin()
 	mock.ExpectQuery(`UPDATE foghorn\.dvr_chapters.*RETURNING playback_artifact_hash`).
-		WithArgs(control.ChapterStateFailedPermanent, sqlmock.AnyArg(), "chap-maxed", "").
+		WithArgs(control.ChapterStateFailedPermanent, sqlmock.AnyArg(), "chap-maxed", int32(chapterFinalizationMaxAttempts), "").
 		WillReturnRows(sqlmock.NewRows([]string{"playback_artifact_hash"}).AddRow(nil))
 	mock.ExpectCommit()
 
@@ -137,7 +137,7 @@ func TestDispatchChapter_NoSegmentsFailsSourceMissing(t *testing.T) {
 	// Terminal fail: failed_source_missing (tx: transition RETURNING NULL hash → commit).
 	controlMock.ExpectBegin()
 	controlMock.ExpectQuery(`UPDATE foghorn\.dvr_chapters.*RETURNING playback_artifact_hash`).
-		WithArgs(control.ChapterStateFailedSourceMissing, sqlmock.AnyArg(), "chap-empty", "").
+		WithArgs(control.ChapterStateFailedSourceMissing, sqlmock.AnyArg(), "chap-empty", int32(0), "").
 		WillReturnRows(sqlmock.NewRows([]string{"playback_artifact_hash"}).AddRow(nil))
 	controlMock.ExpectCommit()
 
@@ -201,7 +201,7 @@ func TestDispatchChapter_MissingSegmentsFailsSourceMissing(t *testing.T) {
 
 	controlMock.ExpectBegin()
 	controlMock.ExpectQuery(`UPDATE foghorn\.dvr_chapters.*RETURNING playback_artifact_hash`).
-		WithArgs(control.ChapterStateFailedSourceMissing, sqlmock.AnyArg(), "chap-missing", "").
+		WithArgs(control.ChapterStateFailedSourceMissing, sqlmock.AnyArg(), "chap-missing", int32(0), "").
 		WillReturnRows(sqlmock.NewRows([]string{"playback_artifact_hash"}).AddRow(nil))
 	controlMock.ExpectCommit()
 

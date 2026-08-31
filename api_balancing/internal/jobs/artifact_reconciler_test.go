@@ -743,7 +743,7 @@ func TestBackfillCatalogRevisions_SeedsAndReportsCount(t *testing.T) {
 	r := newTestReconciler(t, mockDB, nil, nil, nil)
 	r.clusterID = "c1"
 
-	mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET catalog_revision = nextval`).
+	mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET catalog_revision = GREATEST`).
 		WithArgs(catalogBackfillBatch, "c1").
 		WillReturnResult(sqlmock.NewResult(0, 3))
 	if n := r.backfillCatalogRevisions(context.Background()); n != 3 {
@@ -765,7 +765,7 @@ func TestBackfillCatalogRevisions_NoOpWhenConverged(t *testing.T) {
 	r := newTestReconciler(t, mockDB, nil, nil, nil)
 	r.clusterID = "c1"
 
-	mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET catalog_revision = nextval`).
+	mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET catalog_revision = GREATEST`).
 		WithArgs(catalogBackfillBatch, "c1").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	if n := r.backfillCatalogRevisions(context.Background()); n != 0 {
@@ -1080,6 +1080,25 @@ func TestResolveArtifactContext_Vod(t *testing.T) {
 	}
 	if tenant != "t-vod" || stream != "s-vod" {
 		t.Fatalf("got tenant=%s stream=%s", tenant, stream)
+	}
+}
+
+func TestResolveArtifactContext_ChapterUsesParentStream(t *testing.T) {
+	commodore := &mockCommodoreClient{
+		resolveVodHashFn: func(_ context.Context, hash string) (*commodorepb.ResolveVodHashResponse, error) {
+			return &commodorepb.ResolveVodHashResponse{
+				Found: true, TenantId: "t-chapter", InternalName: "chapter-artifact",
+				ContentType: "chapter", ParentStreamInternalName: "live-parent",
+			}, nil
+		},
+	}
+	r := &ArtifactReconciler{commodore: commodore}
+	tenant, stream, err := r.resolveArtifactContext(context.Background(), "hash", "vod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tenant != "t-chapter" || stream != "live-parent" {
+		t.Fatalf("got tenant=%s stream=%s, want t-chapter/live-parent", tenant, stream)
 	}
 }
 

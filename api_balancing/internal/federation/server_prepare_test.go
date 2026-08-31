@@ -288,6 +288,44 @@ func TestPrepareArtifact_VodSynced_HappyPath(t *testing.T) {
 	}
 }
 
+func TestPrepareArtifact_ChapterRequestUsesStoredVODBytes(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster", "recorded_object_key"}).
+		AddRow("chapter-hash", "source-stream", "vod", "mkv", "s3", "synced", 32768, nil, "vod/tenant-a/chapter-hash/chapter.mkv")
+	mock.ExpectQuery("FROM foghorn.artifacts").WithArgs("chapter-hash", "tenant-a").WillReturnRows(rows)
+
+	fake := &fakeS3Client{presignedGETResult: "https://s3.example.com/chapter.mkv?sig=chapter"}
+	srv := NewFederationServer(FederationServerConfig{
+		AllowFederationMutations: true,
+		Logger:                   logging.NewLogger(),
+		DB:                       db,
+		S3Client:                 fake,
+	})
+
+	resp, err := srv.PrepareArtifact(serviceAuthContext(), &foghornfederationpb.PrepareArtifactRequest{
+		ArtifactId:   "chapter-hash",
+		TenantId:     "tenant-a",
+		ArtifactType: "chapter",
+	})
+	if err != nil {
+		t.Fatalf("PrepareArtifact() err = %v", err)
+	}
+	if !resp.GetReady() || resp.GetUrl() == "" {
+		t.Fatalf("chapter request must resolve the stored VOD object, got %+v", resp)
+	}
+	if fake.lastPresignGETKey != "vod/tenant-a/chapter-hash/chapter.mkv" {
+		t.Fatalf("presigned key = %q, want recorded chapter VOD key", fake.lastPresignGETKey)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
 func TestPrepareArtifact_VodSynced_PresignError(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

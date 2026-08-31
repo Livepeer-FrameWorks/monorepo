@@ -34,18 +34,21 @@ func TestMarkChapterFinalizing_AcceptsClosedOrStaleFinalizing(t *testing.T) {
 	// The WHERE clause now allows reclaiming a stale 'finalizing' row past the deadline so a lost
 	// Helmsman result doesn't wedge the chapter. Now one tx: UPDATE + PROCESSING lifecycle enqueue.
 	mock.ExpectBegin()
-	mock.ExpectExec(`UPDATE foghorn.dvr_chapters.*WHERE chapter_id = \$3\s+AND \(state = 'closed'\s+OR \(state = 'finalizing'.*finalize_started_at.*make_interval.*\)\)`).
+	mock.ExpectQuery(`UPDATE foghorn.dvr_chapters.*WHERE chapter_id = \$3\s+AND \(state = 'closed'\s+OR \(state = 'finalizing'.*finalize_started_at.*make_interval.*\)\).*RETURNING finalize_attempts`).
 		WithArgs("art-hash", "node-x", "chap-1", float64((30 * time.Minute).Seconds())).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WillReturnRows(sqlmock.NewRows([]string{"finalize_attempts"}).AddRow(int32(4)))
 	mock.ExpectExec(`INSERT INTO foghorn.artifact_event_outbox`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
-	ok, err := MarkChapterFinalizing(context.Background(), "chap-1", "art-hash", "tenant-1", "node-x", 30*time.Minute)
+	attempt, ok, err := MarkChapterFinalizing(context.Background(), "chap-1", "art-hash", "tenant-1", "node-x", 30*time.Minute)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !ok {
 		t.Fatal("expected ok=true when one row updated")
+	}
+	if attempt != 4 {
+		t.Fatalf("attempt = %d, want 4", attempt)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
@@ -56,16 +59,19 @@ func TestMarkChapterFinalizing_SkipWhenAlreadyAdvanced(t *testing.T) {
 	mock := setupChapterTest(t)
 	// 0 rows updated → no lifecycle, tx rolls back.
 	mock.ExpectBegin()
-	mock.ExpectExec(`UPDATE foghorn.dvr_chapters`).
+	mock.ExpectQuery(`UPDATE foghorn.dvr_chapters`).
 		WithArgs("art-hash", "node-x", "chap-1", float64((30 * time.Minute).Seconds())).
-		WillReturnResult(sqlmock.NewResult(0, 0))
+		WillReturnError(sql.ErrNoRows)
 	mock.ExpectRollback()
-	ok, err := MarkChapterFinalizing(context.Background(), "chap-1", "art-hash", "tenant-1", "node-x", 30*time.Minute)
+	attempt, ok, err := MarkChapterFinalizing(context.Background(), "chap-1", "art-hash", "tenant-1", "node-x", 30*time.Minute)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if ok {
 		t.Fatal("expected ok=false when no rows updated")
+	}
+	if attempt != 0 {
+		t.Fatalf("attempt = %d, want 0", attempt)
 	}
 }
 
@@ -74,8 +80,8 @@ func TestMarkChapterFinalizing_SkipWhenAlreadyAdvanced(t *testing.T) {
 func TestMarkChapterFinalizedTx_ReturnsRowCount(t *testing.T) {
 	mock := setupChapterTest(t)
 	mock.ExpectBegin()
-	mock.ExpectExec(`UPDATE foghorn.dvr_chapters\s+SET state\s+= 'finalized'.*WHERE chapter_id = \$1\s+AND state\s+= 'finalizing'`).
-		WithArgs("chap-1", int32(3), false, nil, nil).
+	mock.ExpectExec(`UPDATE foghorn.dvr_chapters\s+SET state\s+= 'finalized'.*WHERE chapter_id = \$5\s+AND state\s+= 'finalizing'.*finalize_attempts = \$6`).
+		WithArgs(int32(3), false, nil, nil, "chap-1", int32(7)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
@@ -83,7 +89,7 @@ func TestMarkChapterFinalizedTx_ReturnsRowCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	rows, err := MarkChapterFinalizedTx(context.Background(), tx, "chap-1", 3, false, 0, 0)
+	rows, err := MarkChapterFinalizedTx(context.Background(), tx, "chap-1", 7, 3, false, 0, 0)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -103,10 +109,10 @@ func TestMarkChapterFinalizedTx_ReturnsRowCount(t *testing.T) {
 func TestPropagateChapterRetention(t *testing.T) {
 	mock := setupChapterTest(t)
 	until := time.Unix(1800000000, 0)
-	mock.ExpectExec(`UPDATE foghorn.artifacts a\s+SET retention_until = \$2.*FROM foghorn.dvr_chapters c\s+WHERE c.artifact_hash = \$1\s+AND a.artifact_hash = c.playback_artifact_hash`).
-		WithArgs("dvr-1", until).
+	mock.ExpectExec(`UPDATE foghorn.artifacts a\s+SET retention_until = \$1.*FROM foghorn.dvr_chapters c\s+WHERE c.artifact_hash = \$2\s+AND a.artifact_hash = c.playback_artifact_hash`).
+		WithArgs(until, "dvr-1", "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 2))
-	n, err := PropagateChapterRetention(context.Background(), "dvr-1", until)
+	n, err := PropagateChapterRetention(context.Background(), "tenant-1", "dvr-1", until)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -121,10 +127,10 @@ func TestPropagateChapterRetention(t *testing.T) {
 // keep-forever ⇒ NULL: a nil horizon propagates NULL to the children.
 func TestPropagateChapterRetention_KeepForeverNulls(t *testing.T) {
 	mock := setupChapterTest(t)
-	mock.ExpectExec(`UPDATE foghorn.artifacts a\s+SET retention_until = \$2`).
-		WithArgs("dvr-1", nil).
+	mock.ExpectExec(`UPDATE foghorn.artifacts a\s+SET retention_until = \$1`).
+		WithArgs(nil, "dvr-1", "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	if _, err := PropagateChapterRetention(context.Background(), "dvr-1", nil); err != nil {
+	if _, err := PropagateChapterRetention(context.Background(), "tenant-1", "dvr-1", nil); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -140,10 +146,10 @@ func TestSoftDeleteDVRAndChapters(t *testing.T) {
 	mock.ExpectBegin()
 	// Tenant-scoped parent soft-delete (RowsAffected confirms the transition), then the shared
 	// tenant-scoped child cascade.
-	mock.ExpectExec(`UPDATE foghorn.artifacts SET status = 'deleted'.*WHERE artifact_hash = \$1 AND tenant_id = \$2::uuid AND artifact_type = 'dvr' AND status <> 'deleted'`).
+	mock.ExpectExec(`UPDATE foghorn.artifacts SET status = 'deleted'.*WHERE artifact_hash = \$1 AND tenant_id = \$2::uuid AND artifact_type = 'dvr' AND federated_pointer = false AND status <> 'deleted'`).
 		WithArgs("dvr-1", "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(`UPDATE foghorn.artifacts a\s+SET status = 'deleted'.*FROM foghorn.dvr_chapters c\s+WHERE c.artifact_hash = \$1.*a.tenant_id = \$2::uuid.*RETURNING a.artifact_hash`).
+	mock.ExpectQuery(`UPDATE foghorn.artifacts a\s+SET status = 'deleted'.*FROM foghorn.dvr_chapters c\s+WHERE c.artifact_hash = \$1.*a.tenant_id = \$2::uuid.*a.federated_pointer = false.*RETURNING a.artifact_hash`).
 		WithArgs("dvr-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash"}).AddRow("chap-art-1").AddRow("chap-art-2"))
 	mock.ExpectExec(`DELETE FROM foghorn.dvr_chapters c\s+USING foghorn.artifacts parent.*parent.tenant_id = \$2::uuid`).
@@ -177,11 +183,11 @@ func TestSoftDeleteDVRAndChapters_AlreadyDeletedNoReemit(t *testing.T) {
 	mock := setupChapterTest(t)
 	mock.ExpectBegin()
 	// Parent already deleted → guarded UPDATE affects no rows.
-	mock.ExpectExec(`UPDATE foghorn.artifacts SET status = 'deleted'.*WHERE artifact_hash = \$1 AND tenant_id = \$2::uuid AND artifact_type = 'dvr' AND status <> 'deleted'`).
+	mock.ExpectExec(`UPDATE foghorn.artifacts SET status = 'deleted'.*WHERE artifact_hash = \$1 AND tenant_id = \$2::uuid AND artifact_type = 'dvr' AND federated_pointer = false AND status <> 'deleted'`).
 		WithArgs("dvr-1", "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	// Cascade still runs but finds no live children.
-	mock.ExpectQuery(`UPDATE foghorn.artifacts a\s+SET status = 'deleted'.*FROM foghorn.dvr_chapters c\s+WHERE c.artifact_hash = \$1.*a.tenant_id = \$2::uuid.*RETURNING a.artifact_hash`).
+	mock.ExpectQuery(`UPDATE foghorn.artifacts a\s+SET status = 'deleted'.*FROM foghorn.dvr_chapters c\s+WHERE c.artifact_hash = \$1.*a.tenant_id = \$2::uuid.*a.federated_pointer = false.*RETURNING a.artifact_hash`).
 		WithArgs("dvr-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash"}))
 	mock.ExpectExec(`DELETE FROM foghorn.dvr_chapters c\s+USING foghorn.artifacts parent.*parent.tenant_id = \$2::uuid`).
@@ -212,10 +218,10 @@ func TestSoftDeleteDVRAndChapters_AlreadyDeletedNoReemit(t *testing.T) {
 func TestSoftDeleteDVRAndChapters_RepairsLegacyChildren(t *testing.T) {
 	mock := setupChapterTest(t)
 	mock.ExpectBegin()
-	mock.ExpectExec(`UPDATE foghorn.artifacts SET status = 'deleted'.*tenant_id = \$2::uuid.*status <> 'deleted'`).
+	mock.ExpectExec(`UPDATE foghorn.artifacts SET status = 'deleted'.*tenant_id = \$2::uuid.*federated_pointer = false.*status <> 'deleted'`).
 		WithArgs("dvr-1", "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 0))
-	mock.ExpectQuery(`UPDATE foghorn.artifacts a\s+SET status = 'deleted'.*a.tenant_id = \$2::uuid.*RETURNING a.artifact_hash`).
+	mock.ExpectQuery(`UPDATE foghorn.artifacts a\s+SET status = 'deleted'.*a.tenant_id = \$2::uuid.*a.federated_pointer = false.*RETURNING a.artifact_hash`).
 		WithArgs("dvr-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash"}).AddRow("chap-art-9"))
 	mock.ExpectExec(`DELETE FROM foghorn.dvr_chapters c\s+USING foghorn.artifacts parent.*parent.tenant_id = \$2::uuid`).
@@ -254,12 +260,12 @@ func TestSoftDeleteDVRAndChapters_RequiresTenant(t *testing.T) {
 func TestRepairDeletedDVRChildrenBatch(t *testing.T) {
 	mock := setupChapterTest(t)
 	// Candidate query: deleted parents with a live child.
-	mock.ExpectQuery(`SELECT p.artifact_hash, p.tenant_id.*FROM foghorn.artifacts p\s+WHERE p.artifact_type = 'dvr' AND p.status = 'deleted'\s+AND EXISTS \(SELECT 1 FROM foghorn.dvr_chapters c WHERE c.artifact_hash = p.artifact_hash\)`).
+	mock.ExpectQuery(`SELECT p.artifact_hash, p.tenant_id.*FROM foghorn.artifacts p\s+WHERE p.artifact_type = 'dvr' AND p.federated_pointer = false AND p.status = 'deleted'\s+AND EXISTS \(SELECT 1 FROM foghorn.dvr_chapters c WHERE c.artifact_hash = p.artifact_hash\)`).
 		WithArgs(200).
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "tenant_id"}).AddRow("dvr-1", "tenant-1"))
 	// Per-parent tenant-scoped cascade in its own tx.
 	mock.ExpectBegin()
-	mock.ExpectQuery(`UPDATE foghorn.artifacts a\s+SET status = 'deleted'.*a.tenant_id = \$2::uuid.*RETURNING a.artifact_hash`).
+	mock.ExpectQuery(`UPDATE foghorn.artifacts a\s+SET status = 'deleted'.*a.tenant_id = \$2::uuid.*a.federated_pointer = false.*RETURNING a.artifact_hash`).
 		WithArgs("dvr-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash"}).AddRow("chap-art-1"))
 	mock.ExpectExec(`DELETE FROM foghorn.dvr_chapters c\s+USING foghorn.artifacts parent.*parent.tenant_id = \$2::uuid`).
@@ -309,7 +315,7 @@ func TestMarkChapterReclaimStarted_GatesByFreshness(t *testing.T) {
 
 func TestMarkChapterFailed_RejectsBadTerminalState(t *testing.T) {
 	setupChapterTest(t)
-	if err := MarkChapterFailed(context.Background(), "chap-1", "frozen", "reason", ""); err == nil {
+	if _, err := MarkChapterFailed(context.Background(), "chap-1", "frozen", "reason", "", 1); err == nil {
 		t.Fatal("expected error for invalid terminal state")
 	}
 }
@@ -320,7 +326,7 @@ func TestMarkChapterFailed_AcceptsSourceMissing(t *testing.T) {
 	// allocated child artifact so it isn't stranded 'finalizing'.
 	mock.ExpectBegin()
 	mock.ExpectQuery(`UPDATE foghorn.dvr_chapters\s+SET state\s+= \$1,\s+last_failure_reason = \$2`).
-		WithArgs(ChapterStateFailedSourceMissing, "segments unavailable", "chap-1", "").
+		WithArgs(ChapterStateFailedSourceMissing, "segments unavailable", "chap-1", int32(2), "").
 		WillReturnRows(sqlmock.NewRows([]string{"playback_artifact_hash"}).AddRow("chap-art-1"))
 	mock.ExpectQuery(`UPDATE foghorn.artifacts\s+SET status = 'failed'.*RETURNING tenant_id`).
 		WithArgs("chap-art-1", "segments unavailable").
@@ -328,9 +334,13 @@ func TestMarkChapterFailed_AcceptsSourceMissing(t *testing.T) {
 	mock.ExpectExec(`INSERT INTO foghorn.artifact_event_outbox`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
-	if err := MarkChapterFailed(context.Background(), "chap-1",
-		ChapterStateFailedSourceMissing, "segments unavailable", ""); err != nil {
+	changed, err := MarkChapterFailed(context.Background(), "chap-1",
+		ChapterStateFailedSourceMissing, "segments unavailable", "", 2)
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected the current attempt to transition")
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
@@ -343,11 +353,15 @@ func TestMarkChapterFailed_NoOpWhenNotFailable(t *testing.T) {
 	mock := setupChapterTest(t)
 	mock.ExpectBegin()
 	mock.ExpectQuery(`UPDATE foghorn.dvr_chapters\s+SET state\s+= \$1`).
-		WithArgs(ChapterStateFailedPermanent, "boom", "chap-1", "").
+		WithArgs(ChapterStateFailedPermanent, "boom", "chap-1", int32(2), "").
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectRollback()
-	if err := MarkChapterFailed(context.Background(), "chap-1", ChapterStateFailedPermanent, "boom", ""); err != nil {
+	changed, err := MarkChapterFailed(context.Background(), "chap-1", ChapterStateFailedPermanent, "boom", "", 2)
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if changed {
+		t.Fatal("expected a stale terminal transition to be reported as a no-op")
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
@@ -356,11 +370,15 @@ func TestMarkChapterFailed_NoOpWhenNotFailable(t *testing.T) {
 
 func TestRetryChapterFinalize_OnlyFromFinalizing(t *testing.T) {
 	mock := setupChapterTest(t)
-	mock.ExpectExec(`UPDATE foghorn.dvr_chapters\s+SET state\s+= 'closed',\s+last_failure_reason.*WHERE chapter_id = \$2\s+AND state\s+= 'finalizing'`).
-		WithArgs("transient: disk pressure", "chap-1", "").
+	mock.ExpectExec(`UPDATE foghorn.dvr_chapters\s+SET state\s+= 'closed',\s+last_failure_reason.*WHERE chapter_id = \$2\s+AND state\s+= 'finalizing'.*finalize_attempts = \$3`).
+		WithArgs("transient: disk pressure", "chap-1", int32(2), "").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	if err := RetryChapterFinalize(context.Background(), "chap-1", "transient: disk pressure", ""); err != nil {
+	changed, err := RetryChapterFinalize(context.Background(), "chap-1", "transient: disk pressure", "", 2)
+	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected the current attempt to be requeued")
 	}
 }
 

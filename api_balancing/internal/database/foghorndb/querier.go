@@ -12,17 +12,21 @@ import (
 )
 
 type Querier interface {
-	AbortPendingSourceProjection(ctx context.Context, arg AbortPendingSourceProjectionParams) (string, error)
+	AbortPendingSourceProjection(ctx context.Context, arg AbortPendingSourceProjectionParams) (AbortPendingSourceProjectionRow, error)
 	AcquireDVRStartLock(ctx context.Context, lockKey string) error
 	AcquireThumbnailPublishLease(ctx context.Context, arg AcquireThumbnailPublishLeaseParams) (sql.NullString, error)
 	ActivateThumbnailPointer(ctx context.Context, arg ActivateThumbnailPointerParams) (int64, error)
+	ActiveLiveProcessConfig(ctx context.Context, streamInternalName string) (string, error)
 	AdmissionGenerationActive(ctx context.Context, arg AdmissionGenerationActiveParams) (bool, error)
-	AdoptRemoteArtifact(ctx context.Context, arg AdoptRemoteArtifactParams) error
+	AdoptRemoteArtifact(ctx context.Context, arg AdoptRemoteArtifactParams) (int64, error)
+	AdvanceActiveSourceProjectionRevision(ctx context.Context, arg AdvanceActiveSourceProjectionRevisionParams) (int64, error)
+	AdvanceAdmissionEffectSourceRevision(ctx context.Context, arg AdvanceAdmissionEffectSourceRevisionParams) (int64, error)
 	AdvanceCatalogWatermark(ctx context.Context, arg AdvanceCatalogWatermarkParams) error
 	AdvanceNodeArtifactReportWatermark(ctx context.Context, arg AdvanceNodeArtifactReportWatermarkParams) (int64, error)
 	AdvanceVodToProcessing(ctx context.Context, arg AdvanceVodToProcessingParams) (int64, error)
-	AllocateArtifactNodeCopyVersion(ctx context.Context) (int64, error)
-	AllocateNodeControlFence(ctx context.Context) (int64, error)
+	AllocateArtifactNodeCopyVersion(ctx context.Context, arg AllocateArtifactNodeCopyVersionParams) (int64, error)
+	AllocateConfigSeedVersion(ctx context.Context, nodeID string) (int64, error)
+	AllocateNodeControlFence(ctx context.Context, nodeID string) (int64, error)
 	ArmStreamCleanupSecondSweep(ctx context.Context, arg ArmStreamCleanupSecondSweepParams) error
 	ArtifactHasActiveNodes(ctx context.Context, artifactHash string) (bool, error)
 	ArtifactLifecycleStatus(ctx context.Context, artifactHash string) (sql.NullString, error)
@@ -30,6 +34,8 @@ type Querier interface {
 	AssignProcessingJobNode(ctx context.Context, arg AssignProcessingJobNodeParams) (int64, error)
 	BackfillArtifactOriginCluster(ctx context.Context, arg BackfillArtifactOriginClusterParams) error
 	BackfillCatalogRevisions(ctx context.Context, arg BackfillCatalogRevisionsParams) (int64, error)
+	BackfillFederatedArtifactLifecycleBatch(ctx context.Context, batchSize int32) (BackfillFederatedArtifactLifecycleBatchRow, error)
+	BackfillFederatedPointerPurgeEligibilityBatch(ctx context.Context, batchSize int32) (BackfillFederatedPointerPurgeEligibilityBatchRow, error)
 	BackfillOriginCluster(ctx context.Context, arg BackfillOriginClusterParams) (int64, error)
 	BackoffCatalogProjection(ctx context.Context, arg BackoffCatalogProjectionParams) error
 	BackoffThumbnailRecovery(ctx context.Context, arg BackoffThumbnailRecoveryParams) error
@@ -38,13 +44,17 @@ type Querier interface {
 	CellStorageIdentityCommitted(ctx context.Context) (bool, error)
 	ClaimAdmissionEffects(ctx context.Context, arg ClaimAdmissionEffectsParams) ([]ClaimAdmissionEffectsRow, error)
 	ClaimArtifactEvents(ctx context.Context, arg ClaimArtifactEventsParams) ([]ClaimArtifactEventsRow, error)
-	ClaimDVRChapterFinalization(ctx context.Context, arg ClaimDVRChapterFinalizationParams) (int64, error)
+	ClaimDVRChapterFinalization(ctx context.Context, arg ClaimDVRChapterFinalizationParams) (int32, error)
 	ClaimDVRFinalization(ctx context.Context, arg ClaimDVRFinalizationParams) (ClaimDVRFinalizationRow, error)
 	ClaimDVRStopByArtifact(ctx context.Context, arg ClaimDVRStopByArtifactParams) ([]ClaimDVRStopByArtifactRow, error)
 	ClaimDVRStopsForEndedSource(ctx context.Context, arg ClaimDVRStopsForEndedSourceParams) ([]ClaimDVRStopsForEndedSourceRow, error)
 	ClaimDVRStopsForGeneration(ctx context.Context, arg ClaimDVRStopsForGenerationParams) ([]ClaimDVRStopsForGenerationRow, error)
 	ClaimDtshAttempt(ctx context.Context, arg ClaimDtshAttemptParams) (ClaimDtshAttemptRow, error)
+	ClaimDueConfigSeedApplyAcks(ctx context.Context, arg ClaimDueConfigSeedApplyAcksParams) ([]ClaimDueConfigSeedApplyAcksRow, error)
+	ClaimDueManagedStreamPlacements(ctx context.Context, arg ClaimDueManagedStreamPlacementsParams) ([]ClaimDueManagedStreamPlacementsRow, error)
+	ClaimDuePushTargetStatuses(ctx context.Context, arg ClaimDuePushTargetStatusesParams) ([]ClaimDuePushTargetStatusesRow, error)
 	ClaimDueReassertThumbnailAttempts(ctx context.Context, arg ClaimDueReassertThumbnailAttemptsParams) ([]ClaimDueReassertThumbnailAttemptsRow, error)
+	ClaimDueSigningKeyUses(ctx context.Context, arg ClaimDueSigningKeyUsesParams) ([]ClaimDueSigningKeyUsesRow, error)
 	ClaimFreezeAttempt(ctx context.Context, arg ClaimFreezeAttemptParams) (int64, error)
 	ClaimOfflineEffects(ctx context.Context, arg ClaimOfflineEffectsParams) ([]ClaimOfflineEffectsRow, error)
 	ClaimQueuedProcessingJobs(ctx context.Context) ([]ClaimQueuedProcessingJobsRow, error)
@@ -73,27 +83,43 @@ type Querier interface {
 	CompleteOfflineEffect(ctx context.Context, arg CompleteOfflineEffectParams) (int64, error)
 	CompleteProcessingJob(ctx context.Context, arg CompleteProcessingJobParams) error
 	ConfirmSourceProjection(ctx context.Context, arg ConfirmSourceProjectionParams) (int64, error)
+	ConsumeNodeAdmissionProofNonce(ctx context.Context, arg ConsumeNodeAdmissionProofNonceParams) (int64, error)
 	ConsumeTerminalArtifactCreationCommand(ctx context.Context, arg ConsumeTerminalArtifactCreationCommandParams) error
+	CountActiveTenantIngestSessions(ctx context.Context, tenantID string) (int32, error)
 	CountDVRFinalSegments(ctx context.Context, artifactHash string) (CountDVRFinalSegmentsRow, error)
+	CountFederatedPointersWithUnnormalizedPurgeEligibility(ctx context.Context) (int64, error)
+	CountLegacyFederatedArtifactPointers(ctx context.Context) (int64, error)
 	CountOtherCompleteArtifactCopies(ctx context.Context, arg CountOtherCompleteArtifactCopiesParams) (int64, error)
 	CountStaleUnconsumedCreationCommands(ctx context.Context, retentionSeconds int64) (int64, error)
 	CountUnreclaimedDVRSegments(ctx context.Context, arg CountUnreclaimedDVRSegmentsParams) (int64, error)
 	CountUnverifiedThumbnailObjects(ctx context.Context, attemptID string) (int64, error)
 	DVRNeedsDtshSync(ctx context.Context, artifactHash string) (bool, error)
 	DVRRecordingTenant(ctx context.Context, internalName sql.NullString) (string, error)
+	// Deterministic evidence gaps need operator/data repair rather than immediate
+	// retry churn. Retain token ownership and move only its retry timestamp.
+	DeferFederatedArtifactPointerPurgeClaim(ctx context.Context, arg DeferFederatedArtifactPointerPurgeClaimParams) (int64, error)
 	DeleteArtifactNode(ctx context.Context, arg DeleteArtifactNodeParams) error
+	DeleteArtifactNodeIfNotNewer(ctx context.Context, arg DeleteArtifactNodeIfNotNewerParams) (string, error)
 	DeleteClipCatalog(ctx context.Context, arg DeleteClipCatalogParams) (int64, error)
+	DeleteConflictingNodeAdmissions(ctx context.Context, arg DeleteConflictingNodeAdmissionsParams) (int64, error)
 	DeleteConsumedCreationCommands(ctx context.Context, arg DeleteConsumedCreationCommandsParams) (int64, error)
 	DeleteDVRChapter(ctx context.Context, chapterID string) error
 	DeleteDVRChapterRowsForTenant(ctx context.Context, arg DeleteDVRChapterRowsForTenantParams) error
+	DeleteDeliveredManagedStreamPlacement(ctx context.Context, arg DeleteDeliveredManagedStreamPlacementParams) (int64, error)
+	DeleteDeliveredPushTargetStatus(ctx context.Context, arg DeleteDeliveredPushTargetStatusParams) (int64, error)
+	DeleteDeliveredSigningKeyUse(ctx context.Context, arg DeleteDeliveredSigningKeyUseParams) (int64, error)
+	DeleteExpiredNodeAdmissionProofNonces(ctx context.Context) error
+	DeleteFencedFederatedArtifactPointer(ctx context.Context, arg DeleteFencedFederatedArtifactPointerParams) (int64, error)
 	DeleteFreezePublicationLedgerKeys(ctx context.Context, objectKeys []string) error
 	DeleteFreezePublicationLedgerRow(ctx context.Context, objectKey string) error
+	DeleteNodeAdmissionByFingerprintAndKey(ctx context.Context, arg DeleteNodeAdmissionByFingerprintAndKeyParams) (int64, error)
+	DeleteNodeOutputs(ctx context.Context, nodeID string) error
 	DeleteOpenDVRChapters(ctx context.Context, artifactHash string) error
 	DeletePurgedArtifact(ctx context.Context, arg DeletePurgedArtifactParams) error
 	DeleteStagingCleanupItem(ctx context.Context, arg DeleteStagingCleanupItemParams) (int64, error)
 	DeleteStaleOrphanedArtifactNodes(ctx context.Context) (int64, error)
 	DeleteSupersededThumbnailAttempt(ctx context.Context, arg DeleteSupersededThumbnailAttemptParams) (int64, error)
-	DeleteThumbnailActivePointer(ctx context.Context, arg DeleteThumbnailActivePointerParams) error
+	DeleteTenantAuthorityGrants(ctx context.Context, tenantID string) error
 	DeleteThumbnailAssignments(ctx context.Context, arg DeleteThumbnailAssignmentsParams) error
 	DeleteVODMetadata(ctx context.Context, artifactHash string) error
 	DeleteVodMetadata(ctx context.Context, artifactHash string) error
@@ -102,12 +128,17 @@ type Querier interface {
 	EndSupersededPIDIngestSession(ctx context.Context, arg EndSupersededPIDIngestSessionParams) error
 	EnqueueAdmissionEffect(ctx context.Context, arg EnqueueAdmissionEffectParams) error
 	EnqueueArtifactEvent(ctx context.Context, arg EnqueueArtifactEventParams) error
+	EnqueueConfigSeedApplyAck(ctx context.Context, arg EnqueueConfigSeedApplyAckParams) (int64, error)
+	EnqueueManagedStreamPlacement(ctx context.Context, arg EnqueueManagedStreamPlacementParams) error
 	EnqueueOfflineEffect(ctx context.Context, arg EnqueueOfflineEffectParams) error
 	EnqueueOwnedStagingCleanup(ctx context.Context, arg EnqueueOwnedStagingCleanupParams) error
+	EnqueuePushTargetStatus(ctx context.Context, arg EnqueuePushTargetStatusParams) error
+	EnqueueSigningKeyUse(ctx context.Context, arg EnqueueSigningKeyUseParams) error
 	EnqueueStagingCleanup(ctx context.Context, arg EnqueueStagingCleanupParams) error
 	EnqueueThumbnailCleanup(ctx context.Context, arg EnqueueThumbnailCleanupParams) error
 	EnqueueThumbnailCleanupDeferred(ctx context.Context, arg EnqueueThumbnailCleanupDeferredParams) error
 	EnsureChapterPlaybackArtifact(ctx context.Context, arg EnsureChapterPlaybackArtifactParams) error
+	EnsureConfigSeedVersionAtLeast(ctx context.Context, arg EnsureConfigSeedVersionAtLeastParams) error
 	EnterThumbnailPublishing(ctx context.Context, arg EnterThumbnailPublishingParams) (int64, error)
 	EstablishCellStorageIdentity(ctx context.Context, arg EstablishCellStorageIdentityParams) error
 	ExistingArtifactHashes(ctx context.Context, dollar_1 []string) ([]string, error)
@@ -128,6 +159,9 @@ type Querier interface {
 	FailThumbnailAttempt(ctx context.Context, attemptID string) error
 	FailVodCompletion(ctx context.Context, arg FailVodCompletionParams) (int64, error)
 	FederatedArtifactStreamID(ctx context.Context, arg FederatedArtifactStreamIDParams) (string, error)
+	FenceInterruptedActiveFederatedArtifactPointerPurge(ctx context.Context, arg FenceInterruptedActiveFederatedArtifactPointerPurgeParams) (int64, error)
+	FenceStaleFederatedArtifactPointerForPurge(ctx context.Context, arg FenceStaleFederatedArtifactPointerForPurgeParams) (int64, error)
+	FenceTombstonedFederatedArtifactPointerForPurge(ctx context.Context, arg FenceTombstonedFederatedArtifactPointerForPurgeParams) (int64, error)
 	FillMigratedArtifactMetadata(ctx context.Context, arg FillMigratedArtifactMetadataParams) error
 	FinalizeChapterPlaybackArtifact(ctx context.Context, arg FinalizeChapterPlaybackArtifactParams) (int64, error)
 	FinalizeStreamCleanupObligation(ctx context.Context, arg FinalizeStreamCleanupObligationParams) (int64, error)
@@ -140,9 +174,11 @@ type Querier interface {
 	FindLatestDVRForStream(ctx context.Context, arg FindLatestDVRForStreamParams) (FindLatestDVRForStreamRow, error)
 	GetAbortableVodUpload(ctx context.Context, arg GetAbortableVodUploadParams) (GetAbortableVodUploadRow, error)
 	GetActiveObjectKeyBackfillCursor(ctx context.Context) (string, error)
+	GetAdmissionEffectSourceRevision(ctx context.Context, arg GetAdmissionEffectSourceRevisionParams) (int64, error)
 	GetArtifactCachedAt(ctx context.Context, artifactHash string) (time.Time, error)
 	GetArtifactCreationCommandAckState(ctx context.Context, arg GetArtifactCreationCommandAckStateParams) (GetArtifactCreationCommandAckStateRow, error)
 	GetArtifactCreationCommandStatus(ctx context.Context, arg GetArtifactCreationCommandStatusParams) (GetArtifactCreationCommandStatusRow, error)
+	GetArtifactNodeDeletionWatermark(ctx context.Context, arg GetArtifactNodeDeletionWatermarkParams) (int64, error)
 	GetArtifactOrigin(ctx context.Context, artifactHash string) (GetArtifactOriginRow, error)
 	GetArtifactPlacementTenant(ctx context.Context, artifactHash string) (string, error)
 	GetArtifactPublicationPointers(ctx context.Context, arg GetArtifactPublicationPointersParams) (GetArtifactPublicationPointersRow, error)
@@ -162,6 +198,8 @@ type Querier interface {
 	GetClipForDeletion(ctx context.Context, arg GetClipForDeletionParams) (GetClipForDeletionRow, error)
 	GetClipFulfilledSourceParams(ctx context.Context, arg GetClipFulfilledSourceParamsParams) (sql.NullString, error)
 	GetCompletableVodUpload(ctx context.Context, arg GetCompletableVodUploadParams) (GetCompletableVodUploadRow, error)
+	GetConfigSeedApplyAckOutboxStats(ctx context.Context) (GetConfigSeedApplyAckOutboxStatsRow, error)
+	GetConfigSeedApplyAckSeedVersion(ctx context.Context, nodeID string) (int64, error)
 	GetCurrentDVRChapter(ctx context.Context, artifactHash string) (GetCurrentDVRChapterRow, error)
 	GetDVRArtifactStatus(ctx context.Context, artifactHash string) (sql.NullString, error)
 	GetDVRArtifactTenantID(ctx context.Context, artifactHash string) (string, error)
@@ -191,12 +229,25 @@ type Querier interface {
 	GetExistingDVRSegment(ctx context.Context, arg GetExistingDVRSegmentParams) (GetExistingDVRSegmentRow, error)
 	GetExistingVodUpload(ctx context.Context, arg GetExistingVodUploadParams) (GetExistingVodUploadRow, error)
 	GetFederatedArtifactDescriptor(ctx context.Context, arg GetFederatedArtifactDescriptorParams) (GetFederatedArtifactDescriptorRow, error)
+	GetFencedFederatedArtifactPointerPurgeState(ctx context.Context, arg GetFencedFederatedArtifactPointerPurgeStateParams) (GetFencedFederatedArtifactPointerPurgeStateRow, error)
 	GetFinalizedArtifactEndedAt(ctx context.Context, arg GetFinalizedArtifactEndedAtParams) (sql.NullTime, error)
 	GetFreezeArtifactMetadata(ctx context.Context, arg GetFreezeArtifactMetadataParams) (GetFreezeArtifactMetadataRow, error)
 	GetFreezePublicationLedgerCursor(ctx context.Context) (string, error)
 	GetFreshRelayOriginNode(ctx context.Context, artifactHash string) (GetFreshRelayOriginNodeRow, error)
+	GetIngestSessionAuthoritySnapshot(ctx context.Context, sessionID string) (GetIngestSessionAuthoritySnapshotRow, error)
+	GetLastConfigSeed(ctx context.Context, nodeID string) (GetLastConfigSeedRow, error)
 	GetLatestDVRChapterBefore(ctx context.Context, arg GetLatestDVRChapterBeforeParams) (GetLatestDVRChapterBeforeRow, error)
+	GetLocalMediaObjectAuthorityByInternalName(ctx context.Context, internalName string) (GetLocalMediaObjectAuthorityByInternalNameRow, error)
+	GetLocalMediaObjectAuthorityByPlaybackID(ctx context.Context, playbackID string) (GetLocalMediaObjectAuthorityByPlaybackIDRow, error)
+	GetLocalMediaObjectAuthorityByPublishingCredential(ctx context.Context, publishingCredentialSha256 []byte) (GetLocalMediaObjectAuthorityByPublishingCredentialRow, error)
+	GetLocalMediaObjectSourceAuthorityByInternalName(ctx context.Context, internalName string) (GetLocalMediaObjectSourceAuthorityByInternalNameRow, error)
+	GetLocalTenantAuthority(ctx context.Context, tenantID string) (GetLocalTenantAuthorityRow, error)
+	GetLocalTenantSourceAuthority(ctx context.Context, tenantID string) (GetLocalTenantSourceAuthorityRow, error)
+	GetMediaAuthorityForUpdate(ctx context.Context, arg GetMediaAuthorityForUpdateParams) (GetMediaAuthorityForUpdateRow, error)
+	GetMediaObjectAuthorityByInternalName(ctx context.Context, internalName string) (FoghornMediaObjectAuthorityProjection, error)
+	GetMediaObjectAuthorityByPlaybackID(ctx context.Context, playbackID string) (FoghornMediaObjectAuthorityProjection, error)
 	GetNextDVRSegmentSequence(ctx context.Context, artifactHash string) (int64, error)
+	GetNodeAdmissionByFingerprint(ctx context.Context, fingerprintSha256 []byte) (GetNodeAdmissionByFingerprintRow, error)
 	GetNodeComponentVersion(ctx context.Context, arg GetNodeComponentVersionParams) (string, error)
 	GetNodeUpdatePhase(ctx context.Context, nodeID string) (string, error)
 	GetNodeUpdatePhaseForRelease(ctx context.Context, arg GetNodeUpdatePhaseForReleaseParams) (string, error)
@@ -213,6 +264,7 @@ type Querier interface {
 	GetRelayArtifact(ctx context.Context, artifactHash string) (GetRelayArtifactRow, error)
 	GetRelayVodMetadata(ctx context.Context, artifactHash string) (GetRelayVodMetadataRow, error)
 	GetSyncCompletionAttempt(ctx context.Context, arg GetSyncCompletionAttemptParams) (GetSyncCompletionAttemptRow, error)
+	GetTenantAuthorityProjection(ctx context.Context, tenantID string) (GetTenantAuthorityProjectionRow, error)
 	GetTenantDVRChapterMaxRange(ctx context.Context, arg GetTenantDVRChapterMaxRangeParams) (sql.NullInt32, error)
 	GetThumbnailActiveVersion(ctx context.Context, assetKey string) (string, error)
 	GetThumbnailAssetBackendSnapshot(ctx context.Context, arg GetThumbnailAssetBackendSnapshotParams) (GetThumbnailAssetBackendSnapshotRow, error)
@@ -233,6 +285,8 @@ type Querier interface {
 	InsertDiscoveredArtifact(ctx context.Context, arg InsertDiscoveredArtifactParams) error
 	InsertIngestCloseTombstone(ctx context.Context, arg InsertIngestCloseTombstoneParams) error
 	InsertIngestSession(ctx context.Context, arg InsertIngestSessionParams) (string, error)
+	InsertIngestSessionWithAuthority(ctx context.Context, arg InsertIngestSessionWithAuthorityParams) (string, error)
+	InsertMediaAuthorityApplyAudit(ctx context.Context, arg InsertMediaAuthorityApplyAuditParams) error
 	InsertMigratedArtifactMetadata(ctx context.Context, arg InsertMigratedArtifactMetadataParams) (int64, error)
 	InsertMintArtifactShell(ctx context.Context, arg InsertMintArtifactShellParams) error
 	InsertPendingDVRSegment(ctx context.Context, arg InsertPendingDVRSegmentParams) error
@@ -240,6 +294,7 @@ type Querier interface {
 	InsertQueuedClipArtifact(ctx context.Context, arg InsertQueuedClipArtifactParams) error
 	InsertRequestedDVRArtifact(ctx context.Context, arg InsertRequestedDVRArtifactParams) error
 	InsertStreamCleanupObligation(ctx context.Context, arg InsertStreamCleanupObligationParams) (int64, error)
+	InsertTenantAuthorityGrant(ctx context.Context, arg InsertTenantAuthorityGrantParams) error
 	InsertThumbnailAssignment(ctx context.Context, arg InsertThumbnailAssignmentParams) error
 	InsertThumbnailTaskObject(ctx context.Context, arg InsertThumbnailTaskObjectParams) error
 	InsertUploadingVodArtifact(ctx context.Context, arg InsertUploadingVodArtifactParams) error
@@ -286,6 +341,8 @@ type Querier interface {
 	ListFailedArtifactsForFreezeRetry(ctx context.Context, limit int32) ([]ListFailedArtifactsForFreezeRetryRow, error)
 	ListFederatedTenantArtifacts(ctx context.Context, tenantID string) ([]ListFederatedTenantArtifactsRow, error)
 	ListFinalizedChaptersMissingDTSH(ctx context.Context) ([]ListFinalizedChaptersMissingDTSHRow, error)
+	ListLegacyAdmissionPushTargetsForEncryption(ctx context.Context, rowLimit int32) ([]ListLegacyAdmissionPushTargetsForEncryptionRow, error)
+	ListLocalManagedStreamAuthorities(ctx context.Context) ([]ListLocalManagedStreamAuthoritiesRow, error)
 	ListNeverProjectedIngestSessions(ctx context.Context, olderThanMs int64) ([]ListNeverProjectedIngestSessionsRow, error)
 	ListNodeComponentVersions(ctx context.Context, nodeID string) ([]ListNodeComponentVersionsRow, error)
 	ListNodeComponents(ctx context.Context, nodeID string) ([]ListNodeComponentsRow, error)
@@ -301,34 +358,49 @@ type Querier interface {
 	ListRecentNodeLifecycles(ctx context.Context) ([]ListRecentNodeLifecyclesRow, error)
 	ListRecentProcessingJobs(ctx context.Context, limit int32) ([]ListRecentProcessingJobsRow, error)
 	ListReclaimableDVRSegments(ctx context.Context, arg ListReclaimableDVRSegmentsParams) ([]ListReclaimableDVRSegmentsRow, error)
+	// Recover every expired federated-pointer saga on the short cadence. The
+	// current signed-authority state selects the same guarded fence that ordinary
+	// discovery would use: tombstone wins, active authority restores only after
+	// cleanup settlement, and an authority-free old pointer remains a stale purge.
+	ListRecoverableFederatedArtifactPointerPurges(ctx context.Context, retentionInterval string) ([]ListRecoverableFederatedArtifactPointerPurgesRow, error)
 	ListStaleAbortingVODs(ctx context.Context, arg ListStaleAbortingVODsParams) ([]ListStaleAbortingVODsRow, error)
 	ListStaleCompletingVODs(ctx context.Context, arg ListStaleCompletingVODsParams) ([]ListStaleCompletingVODsRow, error)
 	ListStaleDVRStartObligations(ctx context.Context, arg ListStaleDVRStartObligationsParams) ([]ListStaleDVRStartObligationsRow, error)
+	// A pointer whose cache-age threshold has passed may be evicted whenever no
+	// unexpired signed authority remains. Its dedicated eligibility clock is not
+	// refreshed by metadata, inventory, access, or re-adoption writers; the live
+	// predicate remains signed validity.
+	ListStaleFederatedArtifactPointersForPurge(ctx context.Context, retentionInterval string) ([]ListStaleFederatedArtifactPointersForPurgeRow, error)
 	ListStaleFreezePublicationLedgerRows(ctx context.Context, arg ListStaleFreezePublicationLedgerRowsParams) ([]ListStaleFreezePublicationLedgerRowsRow, error)
 	ListStaleUploadingVODs(ctx context.Context) ([]ListStaleUploadingVODsRow, error)
 	ListStuckIncompleteThumbnailAttemptIDs(ctx context.Context, arg ListStuckIncompleteThumbnailAttemptIDsParams) ([]string, error)
 	ListSupersededThumbnailAttemptIDs(ctx context.Context, arg ListSupersededThumbnailAttemptIDsParams) ([]string, error)
 	ListTenantArtifactNodes(ctx context.Context, arg ListTenantArtifactNodesParams) ([]string, error)
 	ListTenantArtifactSessionNames(ctx context.Context, tenantID string) ([]sql.NullString, error)
+	ListTenantAuthorityGrants(ctx context.Context, tenantID string) ([]ListTenantAuthorityGrantsRow, error)
 	ListThumbnailDestinations(ctx context.Context, arg ListThumbnailDestinationsParams) ([]ListThumbnailDestinationsRow, error)
 	ListThumbnailObjects(ctx context.Context, attemptID string) ([]ListThumbnailObjectsRow, error)
 	ListThumbnailStagingKeys(ctx context.Context, attemptID string) ([]string, error)
 	ListThumbnailVersionKeys(ctx context.Context, attemptID string) ([]string, error)
+	// A signed tombstone is the resurrection/version fence, but the pointer row is
+	// retained until its cell-local derivatives have been fenced and swept.
+	ListTombstonedFederatedArtifactPointersForPurge(ctx context.Context, retentionInterval string) ([]ListTombstonedFederatedArtifactPointersForPurgeRow, error)
 	ListUnattributedStoragePairs(ctx context.Context, arg ListUnattributedStoragePairsParams) ([]ListUnattributedStoragePairsRow, error)
 	ListUnemittedArtifactNodeKeys(ctx context.Context, limit int32) ([]ListUnemittedArtifactNodeKeysRow, error)
 	LocalArtifactTenant(ctx context.Context, artifactHash string) (string, error)
 	LockActiveStreamIngestSession(ctx context.Context, arg LockActiveStreamIngestSessionParams) (LockActiveStreamIngestSessionRow, error)
 	LockArtifactNodeRole(ctx context.Context, arg LockArtifactNodeRoleParams) (string, error)
 	LockArtifactNodeState(ctx context.Context, arg LockArtifactNodeStateParams) (LockArtifactNodeStateRow, error)
-	LockArtifactPlacementParent(ctx context.Context, artifactHash string) error
+	LockArtifactPlacementParent(ctx context.Context, artifactHash string) (string, error)
 	LockChapterFinalizeArtifact(ctx context.Context, chapterID string) (LockChapterFinalizeArtifactRow, error)
-	LockDVRChapterMutation(ctx context.Context, hashtext string) error
+	LockDVRChapterMutation(ctx context.Context, arg LockDVRChapterMutationParams) error
 	LockDVRDispatchOwner(ctx context.Context, arg LockDVRDispatchOwnerParams) (string, error)
 	LockDVRProgressArtifact(ctx context.Context, artifactHash string) (LockDVRProgressArtifactRow, error)
 	LockDVRRecordingOrigin(ctx context.Context, arg LockDVRRecordingOriginParams) (LockDVRRecordingOriginRow, error)
 	LockDVRSegmentParent(ctx context.Context, arg LockDVRSegmentParentParams) (sql.NullString, error)
 	LockIngestSessionByTrigger(ctx context.Context, arg LockIngestSessionByTriggerParams) (LockIngestSessionByTriggerRow, error)
 	LockIngestStream(ctx context.Context, hashtext string) error
+	LockMediaAuthority(ctx context.Context, arg LockMediaAuthorityParams) error
 	LockOfflineEffectLease(ctx context.Context, arg LockOfflineEffectLeaseParams) (bool, error)
 	LockProcessingArtifactForCompletion(ctx context.Context, jobID string) (LockProcessingArtifactForCompletionRow, error)
 	LockProcessingJobForCompletion(ctx context.Context, jobID string) (LockProcessingJobForCompletionRow, error)
@@ -337,6 +409,7 @@ type Querier interface {
 	LockPublishableThumbnailAttempt(ctx context.Context, arg LockPublishableThumbnailAttemptParams) (LockPublishableThumbnailAttemptRow, error)
 	LockSyncFailureAttempt(ctx context.Context, arg LockSyncFailureAttemptParams) (LockSyncFailureAttemptRow, error)
 	LockThumbnailAsset(ctx context.Context, arg LockThumbnailAssetParams) error
+	LockThumbnailAttemptAsset(ctx context.Context, arg LockThumbnailAttemptAssetParams) error
 	LockThumbnailParentTerminal(ctx context.Context, artifactHash string) (bool, error)
 	LockUnemittedArtifactNode(ctx context.Context, arg LockUnemittedArtifactNodeParams) (LockUnemittedArtifactNodeRow, error)
 	LookupDVRSegmentsByName(ctx context.Context, arg LookupDVRSegmentsByNameParams) ([]FoghornDvrSegment, error)
@@ -363,6 +436,9 @@ type Querier interface {
 	MarkDVRStopPending(ctx context.Context, arg MarkDVRStopPendingParams) error
 	MarkExhaustedArtifactFailed(ctx context.Context, arg MarkExhaustedArtifactFailedParams) (int64, error)
 	MarkFailedArtifactsDeleted(ctx context.Context, retentionInterval string) (int64, error)
+	MarkMediaObjectAuthorityLocalIngestReady(ctx context.Context, arg MarkMediaObjectAuthorityLocalIngestReadyParams) (int64, error)
+	MarkMediaObjectAuthorityLocalReadReady(ctx context.Context, arg MarkMediaObjectAuthorityLocalReadReadyParams) (int64, error)
+	MarkMediaObjectAuthorityLocalSourceReady(ctx context.Context, arg MarkMediaObjectAuthorityLocalSourceReadyParams) (int64, error)
 	MarkProcessingArtifactFailed(ctx context.Context, arg MarkProcessingArtifactFailedParams) (int64, error)
 	MarkProcessingArtifactReady(ctx context.Context, arg MarkProcessingArtifactReadyParams) (int64, error)
 	MarkProcessingArtifactStarted(ctx context.Context, arg MarkProcessingArtifactStartedParams) (int64, error)
@@ -370,28 +446,38 @@ type Querier interface {
 	MarkQueuedClipArtifact(ctx context.Context, arg MarkQueuedClipArtifactParams) error
 	MarkRemainingDVRSegmentsLost(ctx context.Context, arg MarkRemainingDVRSegmentsLostParams) (int64, error)
 	MarkStoragePairLocallyAttributed(ctx context.Context, arg MarkStoragePairLocallyAttributedParams) (int64, error)
+	MarkTenantAuthorityLocalIngestReady(ctx context.Context, arg MarkTenantAuthorityLocalIngestReadyParams) (int64, error)
+	MarkTenantAuthorityLocalReadReady(ctx context.Context, arg MarkTenantAuthorityLocalReadReadyParams) (int64, error)
+	MarkTenantAuthorityLocalSourceReady(ctx context.Context, arg MarkTenantAuthorityLocalSourceReadyParams) (int64, error)
 	MarkThumbnailProjected(ctx context.Context, arg MarkThumbnailProjectedParams) (int64, error)
 	MarkThumbnailPublished(ctx context.Context, attemptID string) (int64, error)
 	MarkThumbnailSuperseded(ctx context.Context, attemptID string) error
-	NextSourceProjectionRevision(ctx context.Context) (int64, error)
+	// The database counter includes tenant_id because that is the durable ownership domain.
+	// Commodore guarantees stream_internal_name is globally unique, which is why the corresponding
+	// Redis source projection can remain keyed by internal name alone.
+	NextSourceProjectionRevision(ctx context.Context, arg NextSourceProjectionRevisionParams) (int64, error)
 	NodeHoldsLiveArtifactCopy(ctx context.Context, arg NodeHoldsLiveArtifactCopyParams) (bool, error)
 	OrphanGloballyStaleArtifactNodes(ctx context.Context) ([]OrphanGloballyStaleArtifactNodesRow, error)
 	OrphanNodeArtifacts(ctx context.Context, nodeID string) ([]OrphanNodeArtifactsRow, error)
 	OrphanStaleReportedArtifactNodes(ctx context.Context, nodeID string) ([]OrphanStaleReportedArtifactNodesRow, error)
 	OverrideFinalizedArtifactRetention(ctx context.Context, arg OverrideFinalizedArtifactRetentionParams) (int64, error)
+	PersistConfigSeed(ctx context.Context, arg PersistConfigSeedParams) (int64, error)
 	PersistSourceProjectionRevision(ctx context.Context, arg PersistSourceProjectionRevisionParams) error
 	PersistVodCompletionContract(ctx context.Context, arg PersistVodCompletionContractParams) error
 	ProbeCurrentSourceProjection(ctx context.Context, arg ProbeCurrentSourceProjectionParams) (ProbeCurrentSourceProjectionRow, error)
 	ProjectProcessingArtifactStatus(ctx context.Context, arg ProjectProcessingArtifactStatusParams) error
 	PropagateDVRChapterRetention(ctx context.Context, arg PropagateDVRChapterRetentionParams) (int64, error)
+	PruneMediaAuthorityApplyAudit(ctx context.Context, arg PruneMediaAuthorityApplyAuditParams) (int64, error)
 	PurgeExpiredCloseTombstones(ctx context.Context, olderThanSeconds float64) (int64, error)
 	PurgeStaleArtifactNodes(ctx context.Context) (int64, error)
 	PurgeTerminalAdmissionEffects(ctx context.Context, olderThanMs int64) (int64, error)
 	PurgeTerminalOfflineEffects(ctx context.Context, olderThanMs int64) (int64, error)
 	QuarantineCatalogProjection(ctx context.Context, arg QuarantineCatalogProjectionParams) error
+	QuarantineInvalidConfigSeedApplyAck(ctx context.Context, arg QuarantineInvalidConfigSeedApplyAckParams) (int64, error)
 	ReadAdmissionLegsLocked(ctx context.Context, arg ReadAdmissionLegsLockedParams) (ReadAdmissionLegsLockedRow, error)
 	ReadArtifactCreationCommandIdentity(ctx context.Context, arg ReadArtifactCreationCommandIdentityParams) (ReadArtifactCreationCommandIdentityRow, error)
-	ReapStreamEndIngestSessions(ctx context.Context, arg ReapStreamEndIngestSessionsParams) ([]string, error)
+	ReapExactMissingIngestSession(ctx context.Context, arg ReapExactMissingIngestSessionParams) (ReapExactMissingIngestSessionRow, error)
+	ReapStreamEndIngestSessions(ctx context.Context, arg ReapStreamEndIngestSessionsParams) ([]ReapStreamEndIngestSessionsRow, error)
 	ReconstructThumbnailAttemptObjectKeys(ctx context.Context, attemptID string) ([]ReconstructThumbnailAttemptObjectKeysRow, error)
 	RecordArtifactEventFailure(ctx context.Context, arg RecordArtifactEventFailureParams) error
 	RecordDVRCompletion(ctx context.Context, arg RecordDVRCompletionParams) error
@@ -401,7 +487,16 @@ type Querier interface {
 	RefreshDVRArtifactNodeProgress(ctx context.Context, arg RefreshDVRArtifactNodeProgressParams) error
 	RejectArtifactCreationCommand(ctx context.Context, arg RejectArtifactCreationCommandParams) (int64, error)
 	ReleaseAdmissionEffectNotOwner(ctx context.Context, arg ReleaseAdmissionEffectNotOwnerParams) error
+	ReleaseConfigSeedApplyAckLease(ctx context.Context, arg ReleaseConfigSeedApplyAckLeaseParams) (int64, error)
+	// Keep the token as evidence that the pointer is inside the ordered cleanup
+	// saga, but make the lease immediately reclaimable. Active authority must not
+	// restore the pointer around a cleanup whose byte effects are unknown.
+	ReleaseFederatedArtifactPointerPurgeClaim(ctx context.Context, arg ReleaseFederatedArtifactPointerPurgeClaimParams) (int64, error)
+	ReleaseManagedStreamPlacementLease(ctx context.Context, arg ReleaseManagedStreamPlacementLeaseParams) (int64, error)
 	ReleaseOfflineEffectNotOwner(ctx context.Context, arg ReleaseOfflineEffectNotOwnerParams) error
+	ReleasePushTargetStatusLease(ctx context.Context, arg ReleasePushTargetStatusLeaseParams) (int64, error)
+	ReleaseSigningKeyUseLease(ctx context.Context, arg ReleaseSigningKeyUseLeaseParams) (int64, error)
+	RequeueActivePushTargetActivationsForNode(ctx context.Context, arg RequeueActivePushTargetActivationsForNodeParams) (int64, error)
 	RequeueStaleProcessingJobs(ctx context.Context, arg RequeueStaleProcessingJobsParams) (int64, error)
 	ResetStaleFreezeAttempts(ctx context.Context, staleSeconds int64) ([]ResetStaleFreezeAttemptsRow, error)
 	ResolveActiveDVRNodes(ctx context.Context, dollar_1 []string) ([]ResolveActiveDVRNodesRow, error)
@@ -410,10 +505,15 @@ type Querier interface {
 	ResolveDVRInternalNameByHash(ctx context.Context, artifactHash string) (string, error)
 	ResolveThumbnailProcessingArtifact(ctx context.Context, artifactHash string) (ResolveThumbnailProcessingArtifactRow, error)
 	ResolveThumbnailVODArtifact(ctx context.Context, internalName sql.NullString) (ResolveThumbnailVODArtifactRow, error)
-	RetireIngestSession(ctx context.Context, arg RetireIngestSessionParams) (string, error)
+	RestoreClaimedFederatedArtifactPointerAfterActiveAuthority(ctx context.Context, arg RestoreClaimedFederatedArtifactPointerAfterActiveAuthorityParams) (int64, error)
+	RetireIngestSession(ctx context.Context, arg RetireIngestSessionParams) (RetireIngestSessionRow, error)
 	RetireIngestSessionByClaim(ctx context.Context, arg RetireIngestSessionByClaimParams) (RetireIngestSessionByClaimRow, error)
 	RetireNeverProjectedIngestSession(ctx context.Context, arg RetireNeverProjectedIngestSessionParams) (string, error)
-	RetryDVRChapterFinalize(ctx context.Context, arg RetryDVRChapterFinalizeParams) error
+	RetryConfigSeedApplyAck(ctx context.Context, arg RetryConfigSeedApplyAckParams) (int64, error)
+	RetryDVRChapterFinalize(ctx context.Context, arg RetryDVRChapterFinalizeParams) (int64, error)
+	RetryManagedStreamPlacement(ctx context.Context, arg RetryManagedStreamPlacementParams) (int64, error)
+	RetryPushTargetStatus(ctx context.Context, arg RetryPushTargetStatusParams) (int64, error)
+	RetrySigningKeyUse(ctx context.Context, arg RetrySigningKeyUseParams) (int64, error)
 	RevertFailedFreezeDispatch(ctx context.Context, arg RevertFailedFreezeDispatchParams) (int64, error)
 	RevertProcessingJobToQueued(ctx context.Context, jobID string) error
 	RollingDVRProcessConfig(ctx context.Context, internalName sql.NullString) (sql.NullString, error)
@@ -424,7 +524,13 @@ type Querier interface {
 	SetDVRChapterPlaybackID(ctx context.Context, arg SetDVRChapterPlaybackIDParams) error
 	SetFreezePublicationLedgerCursor(ctx context.Context, lastKey string) error
 	SetLegacyActiveObjectKey(ctx context.Context, arg SetLegacyActiveObjectKeyParams) (int64, error)
+	SetLocalMediaAuthorityLockTimeout(ctx context.Context, lockTimeout string) error
 	SettleAdmissionLegs(ctx context.Context, arg SettleAdmissionLegsParams) (int64, error)
+	SettleDeliveredConfigSeedApplyAck(ctx context.Context, arg SettleDeliveredConfigSeedApplyAckParams) (int64, error)
+	// Adopted rows are a local routing pointer, not this cell's authoritative
+	// catalog source. Mark their local revision covered so deletion does not wait
+	// for an origin-only catalog projector that will intentionally never select it.
+	SettleFederatedArtifactCatalogRevision(ctx context.Context, arg SettleFederatedArtifactCatalogRevisionParams) (int64, error)
 	SettlePublishingThumbnailFailed(ctx context.Context, attemptID string) error
 	SettleThumbnailRecoveryDone(ctx context.Context, arg SettleThumbnailRecoveryDoneParams) error
 	SoftDeleteDVRChapterArtifacts(ctx context.Context, arg SoftDeleteDVRChapterArtifactsParams) ([]string, error)
@@ -432,11 +538,11 @@ type Querier interface {
 	SoftDeleteVodArtifact(ctx context.Context, arg SoftDeleteVodArtifactParams) (int64, error)
 	SumTenantActiveArtifactBytes(ctx context.Context, tenantID string) (int64, error)
 	SupersedeOfflineEffect(ctx context.Context, arg SupersedeOfflineEffectParams) (int64, error)
-	ThumbnailAttemptFailed(ctx context.Context, attemptID string) (bool, error)
 	ThumbnailParentTombstoned(ctx context.Context, artifactHash string) (sql.NullBool, error)
 	ThumbnailProjectionEligible(ctx context.Context, attemptID string) (bool, error)
 	ThumbnailRecoveryBacklog(ctx context.Context, updatedAt time.Time) (int32, error)
 	ThumbnailResourceProducedByNode(ctx context.Context, arg ThumbnailResourceProducedByNodeParams) (sql.NullBool, error)
+	TombstoneFederatedArtifact(ctx context.Context, arg TombstoneFederatedArtifactParams) (int64, error)
 	TouchDVRRecordingNode(ctx context.Context, arg TouchDVRRecordingNodeParams) error
 	TouchStartedDVR(ctx context.Context, arg TouchStartedDVRParams) (int64, error)
 	TryArtifactBillingAttributionLock(ctx context.Context) (bool, error)
@@ -444,7 +550,6 @@ type Querier interface {
 	TryFreezePublicationLedgerLock(ctx context.Context) (bool, error)
 	UnlockArtifactBillingAttribution(ctx context.Context) error
 	UnlockArtifactReconciler(ctx context.Context) error
-	UnlockDVRChapterMutation(ctx context.Context, hashtext string) error
 	UnlockFreezePublicationLedger(ctx context.Context) error
 	UnprojectedThumbnailEligible(ctx context.Context, attemptID string) (bool, error)
 	UnprojectedThumbnailRecoveryBacklog(ctx context.Context, updatedAt time.Time) (int32, error)
@@ -453,12 +558,16 @@ type Querier interface {
 	UpdateCompletedVODMetadata(ctx context.Context, arg UpdateCompletedVODMetadataParams) error
 	UpdateProcessingJobCache(ctx context.Context, arg UpdateProcessingJobCacheParams) (int64, error)
 	UpdateProcessingJobProgress(ctx context.Context, arg UpdateProcessingJobProgressParams) (UpdateProcessingJobProgressRow, error)
+	UpgradeAdmissionPushTargetsEncryption(ctx context.Context, arg UpgradeAdmissionPushTargetsEncryptionParams) (int64, error)
 	UploadedArtifactFormat(ctx context.Context, artifactHash string) (string, error)
 	UpsertCachedArtifactNode(ctx context.Context, arg UpsertCachedArtifactNodeParams) (sql.NullInt64, error)
 	UpsertChapterVodMetadata(ctx context.Context, arg UpsertChapterVodMetadataParams) error
 	UpsertDVRRecordingOrigin(ctx context.Context, arg UpsertDVRRecordingOriginParams) (bool, error)
 	UpsertDiscoveredArtifactNode(ctx context.Context, arg UpsertDiscoveredArtifactNodeParams) error
 	UpsertLostDVRSegment(ctx context.Context, arg UpsertLostDVRSegmentParams) error
+	UpsertMediaAuthority(ctx context.Context, arg UpsertMediaAuthorityParams) error
+	UpsertMediaObjectAuthorityProjection(ctx context.Context, arg UpsertMediaObjectAuthorityProjectionParams) error
+	UpsertNodeAdmission(ctx context.Context, arg UpsertNodeAdmissionParams) (string, error)
 	UpsertNodeComponents(ctx context.Context, arg UpsertNodeComponentsParams) error
 	UpsertNodeLifecycles(ctx context.Context, arg UpsertNodeLifecyclesParams) error
 	UpsertNodeMaintenance(ctx context.Context, arg UpsertNodeMaintenanceParams) error
@@ -468,6 +577,7 @@ type Querier interface {
 	UpsertOriginArtifactNode(ctx context.Context, arg UpsertOriginArtifactNodeParams) (bool, error)
 	UpsertReportedArtifactNode(ctx context.Context, arg UpsertReportedArtifactNodeParams) (UpsertReportedArtifactNodeRow, error)
 	UpsertSyncedVODObjectKey(ctx context.Context, arg UpsertSyncedVODObjectKeyParams) error
+	UpsertTenantAuthorityProjection(ctx context.Context, arg UpsertTenantAuthorityProjectionParams) error
 	VODNeedsDtshSync(ctx context.Context, artifactHash string) (bool, error)
 	VerifyThumbnailObject(ctx context.Context, arg VerifyThumbnailObjectParams) (int64, error)
 }

@@ -749,6 +749,9 @@ func TestPushOperationalMode_MixedLocalAndRemoteOwnership(t *testing.T) {
 	if localSeed == nil || localSeed.GetOperationalMode() != ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_DRAINING {
 		t.Fatalf("expected local draining config seed, got %+v", localSeed)
 	}
+	if localSeed.GetSeedVersion() == 0 {
+		t.Fatal("local operational-mode seed was sent without an allocated version")
+	}
 
 	if err := PushOperationalMode("canonical-remote", ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE); err != nil {
 		t.Fatalf("PushOperationalMode remote: %v", err)
@@ -765,6 +768,9 @@ func TestPushOperationalMode_MixedLocalAndRemoteOwnership(t *testing.T) {
 	}
 	if remoteSeed.GetOperationalMode() != ipcpb.NodeOperationalMode_NODE_OPERATIONAL_MODE_MAINTENANCE {
 		t.Fatalf("expected maintenance mode relay, got %s", remoteSeed.GetOperationalMode())
+	}
+	if remoteSeed.GetSeedVersion() == 0 {
+		t.Fatal("relayed operational-mode seed was sent without an allocated version")
 	}
 }
 

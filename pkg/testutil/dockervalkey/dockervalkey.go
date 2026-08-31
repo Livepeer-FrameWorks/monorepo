@@ -89,7 +89,7 @@ func (i *Instance) ReplaceStopped(t testing.TB) {
 func (i *Instance) launch(t testing.TB) {
 	t.Helper()
 	if out, err := dockerpg.Run("run", "-d", "--name", i.Name, "-P", "-v", i.Volume+":/data", i.Image,
-		"valkey-server", "--appendonly", "yes"); err != nil {
+		"valkey-server", "--appendonly", "yes", "--appendfsync", "always"); err != nil {
 		t.Fatalf("start Valkey: %v\n%s", err, out)
 	}
 	port, err := dockerpg.DiscoverPublishedHostPort(i.Name, "6379/tcp")

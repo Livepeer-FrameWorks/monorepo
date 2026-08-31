@@ -1,8 +1,10 @@
 package control
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/base64"
 	"net/url"
 	"os"
@@ -10,14 +12,14 @@ import (
 	"strings"
 	"time"
 
-	"frameworks/api_balancing/internal/state"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
 	balancerCapabilityTTL             = 2 * time.Hour
 	BalancerCapabilityRefreshInterval = 30 * time.Minute
-	balancerCapabilityPathMarker      = "/_frameworks/balancer/v1/"
+	balancerCapabilityPathMarker      = "/_frameworks/balancer/v2/"
 )
 
 // FoghornBalancerBaseForNode returns a node-bound, short-lived Mist balancer
@@ -38,53 +40,57 @@ func FoghornBalancerBaseForNode(clusterID, nodeID string) string {
 	signature := signBalancerCapability(secret, nodeID, clusterID, expires)
 	pathPrefix := strings.TrimRight(u.Path, "/")
 	rawPrefix := strings.TrimRight(u.EscapedPath(), "/")
-	u.Path = pathPrefix + balancerCapabilityPathMarker + nodeID + "/" + strconv.FormatInt(expires, 10) + "/" + signature
-	u.RawPath = rawPrefix + balancerCapabilityPathMarker + url.PathEscape(nodeID) + "/" + strconv.FormatInt(expires, 10) + "/" + signature
+	clusterID = strings.TrimSpace(clusterID)
+	u.Path = pathPrefix + balancerCapabilityPathMarker + nodeID + "/" + clusterID + "/" + strconv.FormatInt(expires, 10) + "/" + signature
+	u.RawPath = rawPrefix + balancerCapabilityPathMarker + url.PathEscape(nodeID) + "/" + url.PathEscape(clusterID) + "/" + strconv.FormatInt(expires, 10) + "/" + signature
 	return u.String()
 }
 
 // VerifyBalancerCapabilityPath validates a public Mist compatibility request,
-// returns its authenticated node, and strips the capability prefix back to the
-// legacy compatibility path. The capability lives in the path because
+// returns its authenticated node and cluster, and strips the capability prefix
+// back to the compatibility path. The cluster is signed into the URL so a
+// Foghorn restart does not invalidate still-live local Mist configuration. The
+// capability lives in the path because
 // MistInputBalancer replaces all configured query parameters with source and
 // fallback before issuing the request.
-func VerifyBalancerCapabilityPath(escapedPath string, now time.Time) (nodeID, compatibilityPath string, ok bool) {
+func VerifyBalancerCapabilityPath(escapedPath string, now time.Time) (nodeID, clusterID, compatibilityPath string, ok bool) {
 	markerAt := strings.Index(escapedPath, balancerCapabilityPathMarker)
 	if markerAt < 0 {
-		return "", "", false
+		return "", "", "", false
 	}
 	rest := escapedPath[markerAt+len(balancerCapabilityPathMarker):]
-	parts := strings.SplitN(rest, "/", 4)
-	if len(parts) < 3 {
-		return "", "", false
+	parts := strings.SplitN(rest, "/", 5)
+	if len(parts) < 4 {
+		return "", "", "", false
 	}
 	nodeID, err := url.PathUnescape(parts[0])
 	if err != nil || strings.TrimSpace(nodeID) == "" {
-		return "", "", false
+		return "", "", "", false
 	}
 	nodeID = strings.TrimSpace(nodeID)
-	expires, err := strconv.ParseInt(parts[1], 10, 64)
+	clusterID, err = url.PathUnescape(parts[1])
+	if err != nil || strings.TrimSpace(clusterID) == "" {
+		return "", "", "", false
+	}
+	clusterID = strings.TrimSpace(clusterID)
+	expires, err := strconv.ParseInt(parts[2], 10, 64)
 	if err != nil || expires <= now.UTC().Unix() {
-		return "", "", false
+		return "", "", "", false
 	}
 	// Do not accept arbitrarily long attacker-chosen lifetimes even with a
 	// copied query string from a future configuration generation.
 	if expires > now.UTC().Add(balancerCapabilityTTL+time.Minute).Unix() {
-		return "", "", false
+		return "", "", "", false
 	}
-	node := state.DefaultManager().GetNodeState(nodeID)
-	if node == nil || strings.TrimSpace(node.ClusterID) == "" {
-		return "", "", false
-	}
-	want := signBalancerCapability(balancerCapabilitySecret(), nodeID, node.ClusterID, expires)
-	if want == "" || !hmac.Equal([]byte(want), []byte(parts[2])) {
-		return "", "", false
+	want := signBalancerCapability(balancerCapabilitySecret(), nodeID, clusterID, expires)
+	if want == "" || !hmac.Equal([]byte(want), []byte(parts[3])) {
+		return "", "", "", false
 	}
 	compatibilityPath = "/"
-	if len(parts) == 4 && parts[3] != "" {
-		compatibilityPath = "/" + parts[3]
+	if len(parts) == 5 && parts[4] != "" {
+		compatibilityPath = "/" + parts[4]
 	}
-	return nodeID, compatibilityPath, true
+	return nodeID, clusterID, compatibilityPath, true
 }
 
 func signBalancerCapability(secret, nodeID, clusterID string, expires int64) string {
@@ -93,7 +99,7 @@ func signBalancerCapability(secret, nodeID, clusterID string, expires int64) str
 	}
 	mac := hmac.New(sha256.New, []byte(secret))
 	_, _ = mac.Write([]byte(strings.Join([]string{
-		"foghorn-balancer-v1", strings.TrimSpace(nodeID), strings.TrimSpace(clusterID), strconv.FormatInt(expires, 10),
+		"foghorn-balancer-v2", strings.TrimSpace(nodeID), strings.TrimSpace(clusterID), strconv.FormatInt(expires, 10),
 	}, "\x00")))
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
@@ -127,8 +133,33 @@ func RefreshLocalBalancerCapabilities() int {
 		if base == "" {
 			continue
 		}
+		persistCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		seed, err := prepareAndPersistConfigSeed(persistCtx, target.nodeID, func(latest *ipcpb.ConfigSeed) (*ipcpb.ConfigSeed, error) {
+			if latest == nil {
+				return nil, sql.ErrNoRows
+			}
+			candidate := proto.CloneOf(latest)
+			candidate.FoghornBalancerBase = base
+			return candidate, nil
+		})
+		if err != nil {
+			cancel()
+			// The node already holds a durable full seed. Keep rotating the
+			// short-lived source capability during a Foghorn DB outage using an
+			// in-memory monotonic version; the connected node persists this
+			// partial update locally, and its next registration advances the DB
+			// floor before any later producer allocates.
+			fallbackVersion := seedVersions.next(target.nodeID)
+			if SendLocalBalancerCapabilityUpdate(target.nodeID, &ipcpb.BalancerCapabilityUpdate{
+				NodeId: target.nodeID, FoghornBalancerBase: base, SeedVersion: fallbackVersion,
+			}) == nil {
+				sent++
+			}
+			continue
+		}
+		cancel()
 		if SendLocalBalancerCapabilityUpdate(target.nodeID, &ipcpb.BalancerCapabilityUpdate{
-			NodeId: target.nodeID, FoghornBalancerBase: base,
+			NodeId: target.nodeID, FoghornBalancerBase: base, SeedVersion: seed.GetSeedVersion(),
 		}) == nil {
 			sent++
 		}

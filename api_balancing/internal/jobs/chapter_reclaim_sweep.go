@@ -127,9 +127,9 @@ func (s *ChapterReclaimSweep) tick() {
 	}
 	for _, c := range chapters {
 		chCtx, chCancel := context.WithTimeout(ctx, chapterReclaimPerArtifact)
-		if err := control.WithDVRChapterMutationLock(chCtx, c.ArtifactHash, func() error {
-			return s.reclaimChapter(chCtx, c)
-		}); err != nil {
+		// MarkChapterReclaimStarted is the durable cross-replica claim. Keep
+		// Helmsman sends and S3 deletes outside any advisory-lock transaction.
+		if err := s.reclaimChapter(chCtx, c); err != nil {
 			s.logger.WithError(err).WithField("chapter_id", c.ChapterID).Warn("Chapter reclaim failed")
 		}
 		chCancel()

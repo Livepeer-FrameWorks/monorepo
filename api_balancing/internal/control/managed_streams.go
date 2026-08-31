@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	localauthority "frameworks/api_balancing/internal/mediaauthority"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"frameworks/api_balancing/internal/state"
@@ -45,6 +46,19 @@ type ManagedStreamMaterializer interface {
 }
 
 var managedStreamMaterializer ManagedStreamMaterializer
+
+// ManagedStreamPlacementWriter durably projects local managed/native stream
+// placement to Commodore. The media reconcile path commits this obligation and
+// never waits for the control plane.
+type ManagedStreamPlacementWriter interface {
+	Enqueue(ctx context.Context, streamID, tenantID, clusterID string, active bool) error
+}
+
+var managedStreamPlacementWriter ManagedStreamPlacementWriter
+
+func SetManagedStreamPlacementWriter(w ManagedStreamPlacementWriter) {
+	managedStreamPlacementWriter = w
+}
 
 // SetManagedStreamMaterializer registers the materializer the reconciler
 // uses for per-stream cache + DVR side-effects. Triggers package wires this
@@ -186,11 +200,25 @@ func StartManagedStreamReconciler(ctx context.Context, interval time.Duration, l
 }
 
 func runManagedStreamReconcileOnce(ctx context.Context, log logging.Logger) {
-	if CommodoreClient == nil {
-		return
-	}
 	for _, clusterID := range ServedClustersSnapshot() {
-		cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		if store := LocalMediaAuthorityStore(); store != nil {
+			localCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+			local, localErr := store.ManagedStreams(localCtx, clusterID)
+			cancel()
+			if localErr != nil {
+				log.WithError(localErr).WithField("cluster_id", clusterID).Warn("Local managed-stream authority is unusable; preserving applied state")
+				if local.Marked {
+					continue
+				}
+			} else if local.Marked && local.Complete {
+				reconcileClusterManagedStreamsWithContexts(ctx, log, clusterID, local.Rows, local.Contexts)
+				continue
+			}
+		}
+		if CommodoreClient == nil {
+			continue
+		}
+		cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		resp, err := CommodoreClient.ListManagedStreams(cctx, clusterID)
 		cancel()
 		if err != nil {
@@ -225,6 +253,10 @@ func runManagedStreamReconcileOnce(ctx context.Context, log logging.Logger) {
 //     absent from admitted, so the retract loop fires. Transient-error
 //     streams are tracked separately so they neither Apply nor Retract.
 func reconcileClusterManagedStreams(ctx context.Context, log logging.Logger, clusterID string, rows []*commodorepb.ManagedStreamRow) {
+	reconcileClusterManagedStreamsWithContexts(ctx, log, clusterID, rows, nil)
+}
+
+func reconcileClusterManagedStreamsWithContexts(ctx context.Context, log logging.Logger, clusterID string, rows []*commodorepb.ManagedStreamRow, localContexts map[string]*commodorepb.ResolveStreamContextResponse) {
 	localNodes := connectedNodesInCluster(clusterID)
 	sort.Strings(localNodes)
 	// Migrate any Register-hydrated entries for these nodes into this
@@ -338,7 +370,7 @@ func reconcileClusterManagedStreams(ctx context.Context, log logging.Logger, clu
 			// In this iteration the ownership filter guarantees they
 			// match, but the explicit pass-through prevents future
 			// regressions when ownership semantics relax.
-			streamCtx, status := materializeManagedStream(ctx, log, electedClusterID, nodeID, row)
+			streamCtx, status := materializeManagedStreamWithLocal(ctx, log, electedClusterID, nodeID, row, localContexts)
 			switch status {
 			case materializeTransient:
 				if transientNodes[nodeID] == nil {
@@ -402,7 +434,7 @@ func reconcileClusterManagedStreams(ctx context.Context, log logging.Logger, clu
 			// pin routing at a cluster where playback would 404. Uses
 			// the elected node's cluster, not the reconciler's loop var.
 			if verifiedApplied {
-				recordActiveClusterForManagedStream(log, electedClusterID, sid, streamCtx.GetTenantId())
+				recordActiveClusterForManagedStream(ctx, log, electedClusterID, sid, streamCtx.GetTenantId())
 			}
 		}
 	}
@@ -442,45 +474,46 @@ func reconcileClusterManagedStreams(ctx context.Context, log logging.Logger, clu
 			// content routing stops pointing at the now-empty cluster.
 			// Conditional on the recorded value matching this cluster,
 			// so a concurrent peer-cluster placement isn't clobbered.
-			clearActiveClusterForManagedStream(log, clusterID, sid, prevSnap.tenantID, prevSnap.internalName)
+			clearActiveClusterForManagedStream(ctx, log, clusterID, sid, prevSnap.tenantID, prevSnap.internalName)
 			StreamRegistryInstance.ManagedDeleteLastSent(clusterID, nodeID, sid)
 		}
 	}
 }
 
-// clearActiveClusterForManagedStream nulls commodore.streams.active_
-// ingest_cluster_id once a managed stream has been verified-retracted
-// from Mist. The conditional UPDATE (matches on expected_cluster_id)
-// makes this safe to call from any reconciler tick — concurrent peer
-// activity in another cluster won't have its pin wiped.
-func clearActiveClusterForManagedStream(log logging.Logger, clusterID, streamID, tenantID, internalName string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-
+// clearActiveClusterForManagedStream records the desired central projection
+// after a managed stream has been verified-retracted from Mist. Delivery is
+// asynchronous and fenced by the outbox revision.
+func clearActiveClusterForManagedStream(ctx context.Context, log logging.Logger, clusterID, streamID, tenantID, internalName string) {
 	// A snapshot hydrated from a sidecar's applied set after a Foghorn restart
 	// carries no tenant: the wire snapshot deliberately does not, since tenant
 	// identity is not exposed on edge nodes. Resolve it from the registry
 	// instead, which is where Foghorn already keeps stream→tenant.
 	if tenantID == "" && StreamRegistryInstance != nil && internalName != "" {
-		if entry, err := StreamRegistryInstance.ResolveSourceByInternalName(ctx, internalName); err == nil {
+		resolveCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		entry, err := StreamRegistryInstance.ResolveSourceByInternalName(resolveCtx, internalName)
+		cancel()
+		if err == nil {
 			tenantID = strings.TrimSpace(entry.TenantID)
 		}
 	}
 	if tenantID == "" {
-		// Tenant-scoped mutation: without it Commodore rejects the call, and
-		// clearing an unscoped row is exactly what that rule prevents. The
-		// claim still lapses on its lease clock.
 		log.WithFields(logging.Fields{
 			"stream_id":  streamID,
 			"cluster_id": clusterID,
-		}).Warn("Skipping ClearStreamActiveCluster: stream tenant unresolved")
+		}).Warn("Cannot persist managed-stream retraction projection: stream tenant unresolved")
 		return
 	}
-	if _, err := CommodoreClient.ClearStreamActiveCluster(ctx, streamID, clusterID, tenantID); err != nil {
+	if managedStreamPlacementWriter == nil {
+		log.WithFields(logging.Fields{"stream_id": streamID, "cluster_id": clusterID}).Error("Managed-stream placement outbox is not configured")
+		return
+	}
+	enqueueCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	if err := managedStreamPlacementWriter.Enqueue(enqueueCtx, streamID, tenantID, clusterID, false); err != nil {
 		log.WithError(err).WithFields(logging.Fields{
 			"stream_id":  streamID,
 			"cluster_id": clusterID,
-		}).Warn("ClearStreamActiveCluster failed after verified retract; routing column may lag")
+		}).Error("Failed to persist managed-stream retraction projection")
 	}
 }
 
@@ -502,7 +535,28 @@ const (
 // server-side, so running it every tick is fine even when snapshots are
 // stable.
 func materializeManagedStream(ctx context.Context, log logging.Logger, clusterID, nodeID string, row *commodorepb.ManagedStreamRow) (*commodorepb.ResolveStreamContextResponse, materializeStatus) {
+	return materializeManagedStreamWithLocal(ctx, log, clusterID, nodeID, row, nil)
+}
+
+func materializeManagedStreamWithLocal(ctx context.Context, log logging.Logger, clusterID, nodeID string, row *commodorepb.ManagedStreamRow, localContexts map[string]*commodorepb.ResolveStreamContextResponse) (*commodorepb.ResolveStreamContextResponse, materializeStatus) {
 	if row == nil {
+		return nil, materializeTransient
+	}
+	if localContexts != nil {
+		streamCtx := localContexts[row.GetStreamId()]
+		if streamCtx == nil {
+			log.WithFields(logging.Fields{
+				"cluster_id": clusterID, "node_id": nodeID, "stream_id": row.GetStreamId(),
+			}).Warn("Managed-stream local authority snapshot is incomplete; preserving prior state")
+			return nil, materializeTransient
+		}
+		if !streamCtx.GetAdmitted() {
+			return streamCtx, materializeDenied
+		}
+		materializeManagedStreamEffects(ctx, streamCtx, nodeID)
+		return streamCtx, materializeOK
+	}
+	if CommodoreClient == nil {
 		return nil, materializeTransient
 	}
 	rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -525,13 +579,26 @@ func materializeManagedStream(ctx context.Context, log logging.Logger, clusterID
 		}).Info("Managed stream not admitted; retracting if previously applied")
 		return streamCtx, materializeDenied
 	}
-	if managedStreamMaterializer != nil {
-		managedStreamMaterializer.PopulateStreamContext(streamCtx)
-		if streamCtx.GetIsRecordingEnabled() {
-			managedStreamMaterializer.EnsureManagedStreamDVR(ctx, streamCtx, nodeID)
+	if store := LocalMediaAuthorityStore(); store != nil {
+		promotion, promoteErr := store.PromoteManagedStreamIfMatching(ctx, clusterID, row, streamCtx)
+		if promoteErr != nil {
+			log.WithError(promoteErr).WithField("stream_id", row.GetStreamId()).Warn("Failed to promote matching local managed-stream authority")
+		} else if promotion == localauthority.ManagedStreamPromotionMismatch {
+			log.WithField("stream_id", row.GetStreamId()).Warn("Signed managed-stream shadow mismatched connected authority")
 		}
 	}
+	materializeManagedStreamEffects(ctx, streamCtx, nodeID)
 	return streamCtx, materializeOK
+}
+
+func materializeManagedStreamEffects(ctx context.Context, streamCtx *commodorepb.ResolveStreamContextResponse, nodeID string) {
+	if managedStreamMaterializer == nil {
+		return
+	}
+	managedStreamMaterializer.PopulateStreamContext(streamCtx)
+	if streamCtx.GetIsRecordingEnabled() {
+		managedStreamMaterializer.EnsureManagedStreamDVR(ctx, streamCtx, nodeID)
+	}
 }
 
 // shouldRetractManagedStream returns true when a (cluster, node, stream)
@@ -569,34 +636,20 @@ func sendApplyManagedStream(log logging.Logger, clusterID, nodeID string, row *c
 	return SendApplyManagedStream(nodeID, req)
 }
 
-// recordActiveClusterForManagedStream pins the elected cluster in
-// commodore.streams.active_ingest_cluster_id. Called only after the
-// sidecar's Heartbeat-borne applied snapshot confirms the stream is in
-// Mist's config (the verifiedApplied gate in the reconciler); without
-// that gate, a wire-send-succeeds-but-Mist-rejects situation would pin
-// routing at a cluster where playback would 404. Idempotent on retry —
-// the same UPDATE runs every subsequent tick that re-verifies, so a
-// transient RPC error converges on the next tick.
-func recordActiveClusterForManagedStream(log logging.Logger, clusterID, streamID, tenantID string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+// recordActiveClusterForManagedStream persists the latest desired central
+// projection only after the sidecar heartbeat verifies the Mist state.
+func recordActiveClusterForManagedStream(ctx context.Context, log logging.Logger, clusterID, streamID, tenantID string) {
+	if managedStreamPlacementWriter == nil {
+		log.WithFields(logging.Fields{"stream_id": streamID, "cluster_id": clusterID}).Error("Managed-stream placement outbox is not configured")
+		return
+	}
+	enqueueCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	resp, err := CommodoreClient.RecordStreamActiveCluster(ctx, streamID, tenantID, clusterID)
-	if err != nil {
+	if err := managedStreamPlacementWriter.Enqueue(enqueueCtx, streamID, tenantID, clusterID, true); err != nil {
 		log.WithError(err).WithFields(logging.Fields{
 			"stream_id":  streamID,
 			"cluster_id": clusterID,
-		}).Warn("RecordStreamActiveCluster failed; will retry next tick")
-		return
-	}
-	if !resp.GetUpdated() {
-		// Another cluster holds a fresh lease (active_ingest_cluster_updated_at
-		// within the 30s contended-update window). Log once per tick so
-		// operators see the placement conflict; the next reconciler tick
-		// will try again as leases age out.
-		log.WithFields(logging.Fields{
-			"stream_id":  streamID,
-			"cluster_id": clusterID,
-		}).Info("RecordStreamActiveCluster noop: fresher claim held by another cluster")
+		}).Error("Failed to persist managed-stream active projection")
 	}
 }
 

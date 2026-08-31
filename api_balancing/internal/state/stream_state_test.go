@@ -254,6 +254,22 @@ func TestTouchNodeUpdatesLastHeartbeat(t *testing.T) {
 	}
 }
 
+func TestTouchNodePreservesRegisteredNodeMetadata(t *testing.T) {
+	sm := NewStreamStateManager()
+	t.Cleanup(sm.Shutdown)
+	lat, lon := 52.16, 4.49
+	sm.SetNodeInfo("node-registered", "https://edge.example", false, &lat, &lon, "Leiden", `{"HLS":"/hls/$"}`, nil)
+
+	sm.TouchNode("node-registered", true)
+
+	node := sm.GetNodeState("node-registered")
+	if node == nil || !node.IsHealthy || node.BaseURL != "https://edge.example" || node.Location != "Leiden" ||
+		node.Latitude == nil || *node.Latitude != lat || node.Longitude == nil || *node.Longitude != lon ||
+		node.OutputsRaw != `{"HLS":"/hls/$"}` {
+		t.Fatalf("heartbeat erased registered node metadata: %+v", node)
+	}
+}
+
 func TestCheckStaleNodesUsesLastHeartbeat(t *testing.T) {
 	sm := NewStreamStateManager()
 	defer sm.Shutdown()

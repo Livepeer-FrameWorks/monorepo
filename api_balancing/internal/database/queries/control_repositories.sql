@@ -74,8 +74,13 @@ SELECT EXISTS (
 );
 
 -- name: ListAllNodes :many
-SELECT node_id, COALESCE(base_url, '')::text AS base_url, COALESCE(outputs, '{}'::jsonb) AS outputs
+SELECT node_id, COALESCE(base_url, '')::text AS base_url,
+       COALESCE(outputs, '{}'::jsonb) AS outputs,
+       COALESCE(last_updated, 'epoch'::timestamp) AS last_updated
 FROM foghorn.node_outputs;
+
+-- name: DeleteNodeOutputs :exec
+DELETE FROM foghorn.node_outputs WHERE node_id = sqlc.arg(node_id);
 
 -- name: ListNodeMaintenance :many
 SELECT node_id, mode, set_at, COALESCE(set_by, '')::text AS set_by
@@ -122,7 +127,11 @@ WHERE (w.connection_fence, w.seq) < (EXCLUDED.connection_fence, EXCLUDED.seq)
 RETURNING connection_fence;
 
 -- name: AllocateNodeControlFence :one
-SELECT nextval('foghorn.node_control_fence_seq')::bigint;
+INSERT INTO foghorn.node_control_fence_counter (node_id, value)
+VALUES (sqlc.arg(node_id), 4503599627370497)
+ON CONFLICT (node_id) DO UPDATE
+SET value = foghorn.node_control_fence_counter.value + 1
+RETURNING value;
 
 -- name: UpdateArtifactReportMetadata :exec
 UPDATE foghorn.artifacts SET
@@ -136,7 +145,7 @@ UPDATE foghorn.artifacts SET
     updated_at = NOW()
 WHERE artifact_hash = $1;
 
--- name: LockArtifactPlacementParent :exec
+-- name: LockArtifactPlacementParent :one
 SELECT artifact_hash FROM foghorn.artifacts WHERE artifact_hash = $1 FOR UPDATE;
 
 -- name: LockArtifactNodeState :one
@@ -145,16 +154,32 @@ FROM foghorn.artifact_nodes
 WHERE artifact_hash = $1 AND node_id = $2
 FOR UPDATE;
 
+-- name: GetArtifactNodeDeletionWatermark :one
+SELECT deleted_at_ms
+FROM foghorn.artifact_node_deletion_watermark
+WHERE artifact_hash = sqlc.arg(artifact_hash)
+  AND node_id = sqlc.arg(node_id);
+
 -- name: UpsertReportedArtifactNode :one
 INSERT INTO foghorn.artifact_nodes
-    (artifact_hash, node_id, file_path, size_bytes, segment_count, segment_bytes, access_count, last_accessed, last_seen_at, is_orphaned, cached_at, role, is_complete)
+    (artifact_hash, node_id, file_path, size_bytes, segment_count, segment_bytes, access_count, last_accessed, last_seen_at, inventory_reported_at_ms, is_orphaned, cached_at, role, is_complete)
 SELECT sqlc.arg(artifact_hash), sqlc.arg(node_id), sqlc.arg(file_path)::text, sqlc.arg(size_bytes)::bigint,
        sqlc.arg(segment_count)::bigint, sqlc.arg(segment_bytes)::bigint, sqlc.arg(access_count)::bigint,
        CASE WHEN sqlc.arg(last_accessed)::bigint > 0 THEN to_timestamp(sqlc.arg(last_accessed)::bigint) ELSE NULL END,
-       NOW(), false,
+       NOW(), sqlc.arg(reported_at_ms)::bigint, false,
        COALESCE((SELECT cached_at FROM foghorn.artifact_nodes WHERE artifact_hash = sqlc.arg(artifact_hash)::varchar AND node_id = sqlc.arg(node_id)::varchar), NOW()),
        sqlc.arg(role), sqlc.arg(is_complete)
 WHERE EXISTS (SELECT 1 FROM foghorn.artifacts WHERE artifact_hash = sqlc.arg(artifact_hash))
+  AND (
+    sqlc.arg(reported_at_ms)::bigint <= 0
+    OR NOT EXISTS (
+      SELECT 1
+      FROM foghorn.artifact_node_deletion_watermark deletion
+      WHERE deletion.artifact_hash = sqlc.arg(artifact_hash)
+        AND deletion.node_id = sqlc.arg(node_id)
+        AND deletion.deleted_at_ms >= sqlc.arg(reported_at_ms)::bigint
+    )
+  )
 ON CONFLICT (artifact_hash, node_id) DO UPDATE SET
     file_path = EXCLUDED.file_path,
     size_bytes = EXCLUDED.size_bytes,
@@ -167,6 +192,10 @@ ON CONFLICT (artifact_hash, node_id) DO UPDATE SET
         ELSE GREATEST(foghorn.artifact_nodes.last_accessed, EXCLUDED.last_accessed)
     END,
     last_seen_at = NOW(),
+    inventory_reported_at_ms = GREATEST(
+        foghorn.artifact_nodes.inventory_reported_at_ms,
+        EXCLUDED.inventory_reported_at_ms
+    ),
     is_orphaned = false,
     role = CASE WHEN foghorn.artifact_nodes.role = 'origin' THEN 'origin' ELSE EXCLUDED.role END,
     is_complete = CASE WHEN foghorn.artifact_nodes.role = 'origin' THEN foghorn.artifact_nodes.is_complete
@@ -185,7 +214,11 @@ RETURNING artifact_hash, role;
 SELECT tenant_id::text FROM foghorn.artifacts WHERE artifact_hash = $1;
 
 -- name: AllocateArtifactNodeCopyVersion :one
-SELECT nextval('foghorn.artifact_node_copy_version_seq')::bigint;
+INSERT INTO foghorn.artifact_node_copy_version_counter (artifact_hash, node_id, value)
+VALUES (sqlc.arg(artifact_hash), sqlc.arg(node_id), 4503599627370497)
+ON CONFLICT (artifact_hash, node_id) DO UPDATE
+SET value = foghorn.artifact_node_copy_version_counter.value + 1
+RETURNING value;
 
 -- name: SetArtifactNodeLastEmittedVersion :exec
 UPDATE foghorn.artifact_nodes
@@ -220,13 +253,17 @@ SET sync_status = sqlc.arg(sync_status)::text,
 WHERE artifact_hash = $1;
 
 -- name: UpsertCachedArtifactNode :one
-INSERT INTO foghorn.artifact_nodes (artifact_hash, node_id, file_path, size_bytes, last_seen_at, is_orphaned, cached_at, role, is_complete)
+INSERT INTO foghorn.artifact_nodes (artifact_hash, node_id, file_path, size_bytes, last_seen_at, inventory_reported_at_ms, is_orphaned, cached_at, role, is_complete)
 VALUES (sqlc.arg(artifact_hash), sqlc.arg(node_id), NULLIF(sqlc.arg(file_path)::text, ''),
-        NULLIF(sqlc.arg(size_bytes)::bigint, 0), NOW(), false, NOW(), 'cache', true)
+        NULLIF(sqlc.arg(size_bytes)::bigint, 0), NOW(), sqlc.arg(reported_at_ms)::bigint, false, NOW(), 'cache', true)
 ON CONFLICT (artifact_hash, node_id) DO UPDATE SET
     file_path = COALESCE(NULLIF(EXCLUDED.file_path, ''), foghorn.artifact_nodes.file_path),
     size_bytes = COALESCE(EXCLUDED.size_bytes, foghorn.artifact_nodes.size_bytes),
     last_seen_at = NOW(),
+    inventory_reported_at_ms = GREATEST(
+        foghorn.artifact_nodes.inventory_reported_at_ms,
+        EXCLUDED.inventory_reported_at_ms
+    ),
     is_orphaned = false,
     is_complete = CASE WHEN foghorn.artifact_nodes.role = 'origin' THEN foghorn.artifact_nodes.is_complete ELSE true END,
     cached_at = COALESCE(foghorn.artifact_nodes.cached_at, NOW())
@@ -329,6 +366,33 @@ FOR UPDATE;
 
 -- name: DeleteArtifactNode :exec
 DELETE FROM foghorn.artifact_nodes WHERE artifact_hash = $1 AND node_id = $2;
+
+-- name: DeleteArtifactNodeIfNotNewer :one
+WITH deletion_watermark AS (
+  INSERT INTO foghorn.artifact_node_deletion_watermark AS watermark
+      (artifact_hash, node_id, deleted_at_ms, updated_at)
+  SELECT sqlc.arg(artifact_hash)::varchar, sqlc.arg(node_id)::varchar, GREATEST(sqlc.arg(deleted_at_ms)::bigint, 0), NOW()
+  WHERE EXISTS (
+    SELECT 1 FROM foghorn.artifacts WHERE artifact_hash = sqlc.arg(artifact_hash)::varchar
+  )
+  ON CONFLICT (artifact_hash, node_id) DO UPDATE SET
+      deleted_at_ms = GREATEST(watermark.deleted_at_ms, EXCLUDED.deleted_at_ms),
+      updated_at = CASE
+        WHEN EXCLUDED.deleted_at_ms > watermark.deleted_at_ms THEN NOW()
+        ELSE watermark.updated_at
+      END
+  RETURNING deleted_at_ms
+)
+DELETE FROM foghorn.artifact_nodes placement
+USING deletion_watermark
+WHERE placement.artifact_hash = sqlc.arg(artifact_hash)::varchar
+  AND placement.node_id = sqlc.arg(node_id)::varchar
+  AND (
+    sqlc.arg(deleted_at_ms)::bigint <= 0
+    OR placement.inventory_reported_at_ms <= 0
+    OR placement.inventory_reported_at_ms <= sqlc.arg(deleted_at_ms)::bigint
+  )
+RETURNING placement.role;
 
 -- name: OrphanNodeArtifacts :many
 UPDATE foghorn.artifact_nodes

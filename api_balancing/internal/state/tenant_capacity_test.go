@@ -1,118 +1,103 @@
 package state
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
-func TestTenantCapacityRegisterIdempotent(t *testing.T) {
+func TestTenantViewerCapacityPersistsSessionCorrelationAndRefcountsFWCID(t *testing.T) {
 	m := NewTenantCapacityManager()
-	if n := m.RegisterStream("t1", "stream-a"); n != 1 {
-		t.Errorf("first register: got %d want 1", n)
+	if allowed, added, count, err := m.TryRegisterViewer("t1", "node-a", "session-a", "fwcid-1", 1); err != nil || !allowed || !added || count != 1 {
+		t.Fatalf("first viewer = allowed=%v added=%v count=%d err=%v", allowed, added, count, err)
 	}
-	if n := m.RegisterStream("t1", "stream-a"); n != 1 {
-		t.Errorf("duplicate register: got %d want 1 (idempotent)", n)
+	if allowed, _, count, err := m.TryRegisterViewer("t1", "node-a", "session-b", "fwcid-1", 1); err != nil || !allowed || count != 1 {
+		t.Fatalf("second Mist session for same viewer = allowed=%v count=%d err=%v", allowed, count, err)
 	}
-	if n := m.RegisterStream("t1", "stream-b"); n != 2 {
-		t.Errorf("second stream: got %d want 2", n)
+	if allowed, _, count, err := m.TryRegisterViewer("t1", "node-a", "session-c", "fwcid-2", 1); err != nil || allowed || count != 1 {
+		t.Fatalf("second logical viewer = allowed=%v count=%d err=%v", allowed, count, err)
+	}
+	if capacityID, released, count, err := m.ReleaseViewerSession("t1", "node-a", "session-a"); err != nil || capacityID != "fwcid-1" || !released || count != 1 {
+		t.Fatalf("first session release = capacity=%q released=%v count=%d err=%v", capacityID, released, count, err)
+	}
+	if capacityID, released, count, err := m.ReleaseViewerSession("t1", "node-a", "session-b"); err != nil || capacityID != "fwcid-1" || !released || count != 0 {
+		t.Fatalf("last session release = capacity=%q released=%v count=%d err=%v", capacityID, released, count, err)
 	}
 }
 
-func TestTenantCapacityUnregisterRemoves(t *testing.T) {
+func TestTenantViewerCapacityExpiresButCorrelationCanReactivate(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
 	m := NewTenantCapacityManager()
-	m.RegisterStream("t1", "stream-a")
-	m.RegisterStream("t1", "stream-b")
-	if n := m.UnregisterStream("t1", "stream-a"); n != 1 {
-		t.Errorf("unregister: got %d want 1", n)
+	m.now = func() time.Time { return now }
+	if allowed, _, _, err := m.TryRegisterViewer("t1", "node-a", "session-a", "fwcid-1", 1); err != nil || !allowed {
+		t.Fatalf("reserve viewer: allowed=%v err=%v", allowed, err)
 	}
-	if n := m.UnregisterStream("t1", "stream-a"); n != 1 {
-		t.Errorf("duplicate unregister: got %d want 1 (idempotent)", n)
+	now = now.Add(tenantViewerCapacityLease + time.Second)
+	if got := m.CountViewers("t1"); got != 0 {
+		t.Fatalf("expired viewer count=%d, want 0", got)
 	}
-	if n := m.UnregisterStream("t1", "stream-b"); n != 0 {
-		t.Errorf("last unregister: got %d want 0", n)
+	if err := m.RenewViewerSession("t1", "node-a", "session-a", 1); err != nil {
+		t.Fatalf("renew from client inventory: %v", err)
+	}
+	if got := m.CountViewers("t1"); got != 1 {
+		t.Fatalf("reactivated viewer count=%d, want 1", got)
+	}
+	now = now.Add(tenantViewerCorrelationRetention + time.Second)
+	if got := m.CountViewers("t1"); got != 0 {
+		t.Fatalf("long-expired viewer count=%d, want 0", got)
+	}
+	if err := m.RenewViewerSession("t1", "node-a", "session-a", 1); err != nil {
+		t.Fatalf("expired correlation renew: %v", err)
+	}
+	if got := m.CountViewers("t1"); got != 0 {
+		t.Fatalf("expired correlation resurrected viewer count=%d", got)
 	}
 }
 
-func TestTenantCapacityIsolation(t *testing.T) {
+func TestTenantViewerCapacityRenewDoesNotReactivateAboveCap(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
 	m := NewTenantCapacityManager()
-	m.RegisterStream("t1", "stream-a")
-	m.RegisterStream("t2", "stream-a")
-	if m.CountStreams("t1") != 1 || m.CountStreams("t2") != 1 {
-		t.Error("tenants must not share stream counts even with same internal_name")
+	m.now = func() time.Time { return now }
+	if allowed, _, _, err := m.TryRegisterViewer("t1", "node-a", "session-a", "fwcid-1", 1); err != nil || !allowed {
+		t.Fatalf("reserve first viewer: allowed=%v err=%v", allowed, err)
+	}
+	now = now.Add(tenantViewerCapacityLease + time.Second)
+	if allowed, _, _, err := m.TryRegisterViewer("t1", "node-a", "session-b", "fwcid-2", 1); err != nil || !allowed {
+		t.Fatalf("reserve replacement viewer: allowed=%v err=%v", allowed, err)
+	}
+	if err := m.RenewViewerSession("t1", "node-a", "session-a", 1); err != nil {
+		t.Fatalf("renew expired first viewer: %v", err)
+	}
+	if got := m.CountViewers("t1"); got != 1 {
+		t.Fatalf("viewer count after late inventory renew = %d, want cap 1", got)
 	}
 }
 
-func TestTenantCapacityEmptyInputsNoop(t *testing.T) {
+func TestTenantViewerLocalMirrorPrunesExpiredCorrelations(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
 	m := NewTenantCapacityManager()
-	if n := m.RegisterStream("", "stream-a"); n != 0 {
-		t.Errorf("empty tenant ignored: got %d", n)
-	}
-	if n := m.RegisterStream("t1", ""); n != 0 {
-		t.Errorf("empty stream ignored: got %d", n)
-	}
-	if n := m.CountStreams(""); n != 0 {
-		t.Errorf("empty tenant count: got %d", n)
-	}
-}
+	m.now = func() time.Time { return now }
+	m.rememberViewer("expired-tenant", "node-a\x1fsession-a", "viewer-a", now.Add(time.Minute), now.Add(time.Minute))
 
-func TestTenantCapacityViewerSet(t *testing.T) {
-	m := NewTenantCapacityManager()
-	m.RegisterViewer("t1", "sess-a")
-	m.RegisterViewer("t1", "sess-b")
-	m.RegisterViewer("t1", "sess-a") // duplicate
-	if n := m.CountViewers("t1"); n != 2 {
-		t.Errorf("viewer dedupe: got %d want 2", n)
-	}
-	m.UnregisterViewer("t1", "sess-a")
-	if n := m.CountViewers("t1"); n != 1 {
-		t.Errorf("after unregister: got %d want 1", n)
-	}
-}
+	now = now.Add(tenantViewerLocalPruneInterval + time.Second)
+	m.rememberViewer("active-tenant", "node-b\x1fsession-b", "viewer-b", now.Add(time.Minute), now.Add(time.Hour))
 
-func TestTenantCapacityResetsBucketOnEmpty(t *testing.T) {
-	m := NewTenantCapacityManager()
-	m.RegisterStream("t1", "stream-a")
-	m.UnregisterStream("t1", "stream-a")
-	// After last unregister the bucket should be cleared so the map doesn't
-	// leak per-tenant memory for long-departed tenants.
-	if _, present := m.streams["t1"]; present {
-		t.Error("tenant bucket must be deleted when last entry removed")
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if _, exists := m.viewers["expired-tenant"]; exists {
+		t.Fatal("expired Redis-mode mirror correlation was retained")
 	}
-}
-
-func TestTenantCapacityReconcileStreamsRemovesStaleEntries(t *testing.T) {
-	m := NewTenantCapacityManager()
-	m.RegisterStream("t1", "stale-a")
-	m.RegisterStream("t1", "live-b")
-
-	if n := m.ReconcileStreams("t1", []string{"live-b", "live-c"}); n != 2 {
-		t.Fatalf("reconcile count = %d, want 2", n)
-	}
-	if m.HasStream("t1", "stale-a") {
-		t.Error("reconcile must drop streams that no longer exist in stream state")
-	}
-	if !m.HasStream("t1", "live-b") || !m.HasStream("t1", "live-c") {
-		t.Error("reconcile must preserve the current live stream set")
-	}
-}
-
-func TestTenantCapacityReconcileStreamsClearsTenant(t *testing.T) {
-	m := NewTenantCapacityManager()
-	m.RegisterStream("t1", "stale-a")
-
-	if n := m.ReconcileStreams("t1", nil); n != 0 {
-		t.Fatalf("reconcile empty count = %d, want 0", n)
-	}
-	if _, present := m.streams["t1"]; present {
-		t.Error("empty reconcile must clear the tenant bucket")
+	if len(m.viewers["active-tenant"]) != 1 {
+		t.Fatalf("active mirror entries = %d, want 1", len(m.viewers["active-tenant"]))
 	}
 }
 
 func TestDefaultTenantCapacityReset(t *testing.T) {
 	first := DefaultTenantCapacity()
-	first.RegisterStream("t1", "stream-a")
-	second := ResetDefaultTenantCapacityForTests()
-	if second.CountStreams("t1") != 0 {
-		t.Error("reset must return a fresh manager")
+	if allowed, _, _, err := first.TryRegisterViewer("t1", "node-a", "session-a", "viewer-a", 1); err != nil || !allowed {
+		t.Fatalf("seed default manager: allowed=%v err=%v", allowed, err)
 	}
-	if DefaultTenantCapacity() != second {
-		t.Error("DefaultTenantCapacity after reset must return the new instance")
+	second := ResetDefaultTenantCapacityForTests()
+	if second.CountViewers("t1") != 0 || DefaultTenantCapacity() != second {
+		t.Fatal("reset did not install a fresh default manager")
 	}
 }

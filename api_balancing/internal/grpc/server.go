@@ -31,7 +31,7 @@ import (
 	"frameworks/api_balancing/internal/handlers"
 	"frameworks/api_balancing/internal/identity"
 	"frameworks/api_balancing/internal/jobs"
-	"frameworks/api_balancing/internal/policybundle"
+	localauthority "frameworks/api_balancing/internal/mediaauthority"
 	"frameworks/api_balancing/internal/state"
 	"frameworks/api_balancing/internal/storage"
 	"frameworks/api_balancing/internal/triggers"
@@ -89,6 +89,14 @@ type CacheInvalidator interface {
 	GetClusterPeers(internalName, tenantID string) []*clusterpeerpb.TenantClusterPeer
 }
 
+type localIngestResolver interface {
+	ResolveLocalIngestContext(context.Context, string) (*commodorepb.ResolveStreamContextResponse, bool, error)
+}
+
+type localPlaybackPolicyEvaluator interface {
+	EvaluateLocalPlaybackPolicy(context.Context, string, string, *ipcpb.ViewerConnectTrigger) (string, bool)
+}
+
 type federationRPC interface {
 	QueryStream(ctx context.Context, peerClusterID, peerAddr string, req *foghornfederationpb.QueryStreamRequest) (*foghornfederationpb.QueryStreamResponse, error)
 	NotifyOriginPull(ctx context.Context, peerClusterID, peerAddr string, req *foghornfederationpb.OriginPullNotification) (*foghornfederationpb.OriginPullAck, error)
@@ -108,6 +116,7 @@ type FoghornGRPCServer struct {
 	foghornpb.UnimplementedViewerControlServiceServer
 	foghornpb.UnimplementedVodControlServiceServer
 	foghornpb.UnimplementedTenantControlServiceServer
+	foghornpb.UnimplementedMediaAuthorityControlServiceServer
 	foghornpb.UnimplementedNodeControlServiceServer
 	sharedpb.UnimplementedArtifactCreationStatusServiceServer
 
@@ -130,15 +139,14 @@ type FoghornGRPCServer struct {
 	redisStore          *state.RedisStateStore
 	// fanOutShared dedups + memoizes cold QueryStream fan-outs per
 	// (tenant, stream), same machinery as the HTTP /play path.
-	fanOutShared    *balancer.SharedFanOut
-	originPullMu    sync.Mutex
-	originPulling   map[string]struct{}
-	artifactCleaner *artifacts.Cleaner
-	// Signed-policy-bundle cache wired in cmd/foghorn/main.go. nil
-	// disables the bundle pathway; admission falls back to per-request
-	// Commodore ResolvePlaybackPolicy calls.
-	policyBundleCache   *policybundle.Cache
-	policyBundleFetcher policybundle.FetchFunc
+	fanOutShared        *balancer.SharedFanOut
+	originPullMu        sync.Mutex
+	originPulling       map[string]struct{}
+	artifactCleaner     *artifacts.Cleaner
+	mediaAuthorityStore *localauthority.Store
+	signingKeyUse       triggers.SigningKeyUseRecorder
+	localIngestResolver localIngestResolver
+	localPlaybackPolicy localPlaybackPolicyEvaluator
 }
 
 // quartermasterRoutingResolver is the narrow Quartermaster surface this
@@ -154,14 +162,22 @@ type quartermasterRoutingResolver interface {
 // STORAGE_S3_* config and consult Quartermaster for advertised backings.
 type storageResolverFactory func(ctx context.Context, tenantID string) *storage.ClusterResolver
 
-// SetPolicyBundleCache wires the signed-policy-bundle cache and its
-// fetcher. May be called once at startup; nil disables the bundle pathway
-// and admission falls back to per-request policy lookups. The fetcher is
-// stored separately because the cache type doesn't hold a default
-// FetchFunc — admission supplies it per Get call.
-func (s *FoghornGRPCServer) SetPolicyBundleCache(c *policybundle.Cache, fetcher policybundle.FetchFunc) {
-	s.policyBundleCache = c
-	s.policyBundleFetcher = fetcher
+// SetMediaAuthorityStore enables durable application of signed, cell-bound
+// tenant and media-object authority.
+func (s *FoghornGRPCServer) SetMediaAuthorityStore(store *localauthority.Store) {
+	s.mediaAuthorityStore = store
+}
+
+func (s *FoghornGRPCServer) SetSigningKeyUseRecorder(recorder triggers.SigningKeyUseRecorder) {
+	s.signingKeyUse = recorder
+}
+
+func (s *FoghornGRPCServer) SetLocalIngestResolver(resolver localIngestResolver) {
+	s.localIngestResolver = resolver
+}
+
+func (s *FoghornGRPCServer) SetLocalPlaybackPolicyEvaluator(evaluator localPlaybackPolicyEvaluator) {
+	s.localPlaybackPolicy = evaluator
 }
 
 // NewFoghornGRPCServer creates a new Foghorn gRPC server
@@ -196,6 +212,7 @@ func (s *FoghornGRPCServer) RegisterServices(grpcServer *grpc.Server) {
 	foghornpb.RegisterViewerControlServiceServer(grpcServer, s)
 	foghornpb.RegisterVodControlServiceServer(grpcServer, s)
 	foghornpb.RegisterTenantControlServiceServer(grpcServer, s)
+	foghornpb.RegisterMediaAuthorityControlServiceServer(grpcServer, s)
 	foghornpb.RegisterNodeControlServiceServer(grpcServer, s)
 	sharedpb.RegisterArtifactCreationStatusServiceServer(grpcServer, s)
 }
@@ -2497,14 +2514,31 @@ func (s *FoghornGRPCServer) DeleteDVR(ctx context.Context, req *sharedpb.DeleteD
 
 // ResolveViewerEndpoint resolves the best endpoint(s) for a viewer
 func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest) (*sharedpb.ViewerEndpointResponse, error) {
+	ctx = control.MediaRequestContext(ctx, "viewer_grpc")
 	if req.ContentId == "" {
 		return nil, status.Error(codes.InvalidArgument, "content_id is required")
 	}
 
-	// Always resolve content type from the public ID (do not trust caller-provided type)
-	resolution, err := control.ResolveContent(ctx, req.ContentId)
-	if err != nil {
-		return nil, status.Errorf(codes.NotFound, "failed to resolve content: %v", err)
+	paymentHeader := x402.GetPaymentHeaderFromContext(ctx)
+	var resolution *control.ContentResolution
+	var localAuthority localViewerAuthority
+	localUsed := false
+	var err error
+	resolution, localAuthority, localUsed, err = s.resolveLocalViewerContent(ctx, req.ContentId)
+	if localUsed && err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, status.Error(codes.NotFound, "content not found")
+		}
+		return nil, status.Errorf(codes.Unavailable, "local media authority unavailable: %v", err)
+	}
+	if resolution == nil {
+		// Unready shadow state and transient local-store failures use the connected
+		// evaluator. Payment settlement is applied after identity resolution and
+		// cannot opt a caller out of a marked denial, tombstone, or hard expiry.
+		resolution, err = control.ResolveContent(ctx, req.ContentId)
+		if err != nil {
+			return nil, status.Errorf(codes.NotFound, "failed to resolve content: %v", err)
+		}
 	}
 	resolvedType := resolution.ContentType
 	s.logger.WithFields(logging.Fields{
@@ -2514,7 +2548,6 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *shar
 
 	resourcePath := "viewer://" + req.ContentId
 	x402Processed := false
-	paymentHeader := x402.GetPaymentHeaderFromContext(ctx)
 	clientIP := req.GetViewerIp()
 
 	if !x402Processed && paymentHeader != "" && s.purserClient != nil && resolution.TenantId != "" {
@@ -2526,10 +2559,23 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *shar
 	}
 
 	// Check billing status for the content owner
-	if s.cacheInvalidator != nil && resolution.TenantId != "" {
-		billingTarget := control.ResolvePlaybackPolicyTarget(ctx, resolution.ContentId, resolution.InternalName)
+	var resolvedBilling *triggers.BillingStatus
+	if localUsed {
+		paymentRequired, denied := localTenantDenial(localAuthority.tenant.Authority)
+		if paymentRequired {
+			return nil, s.paymentRequiredError(ctx, resolution.TenantId, resourcePath, "payment required - content owner is not currently authorized")
+		}
+		if denied {
+			return nil, status.Error(codes.PermissionDenied, "content owner is not active")
+		}
+	} else if s.cacheInvalidator != nil && resolution.TenantId != "" {
+		billingTarget := control.PlaybackPolicyTarget{ContentID: resolution.ContentId, InternalName: resolution.InternalName}
+		if !resolution.LocalAuthority {
+			billingTarget = control.ResolvePlaybackPolicyTarget(ctx, resolution.ContentId, resolution.InternalName)
+		}
 		billingInternalName := billingTarget.InternalName
 		billing := s.viewerBillingStatus(ctx, billingInternalName, resolution.TenantId, x402Processed)
+		resolvedBilling = billing
 		if billing == nil || billing.State == triggers.BillingStatusUnavailable {
 			s.logger.WithFields(logging.Fields{
 				"content_id": req.ContentId,
@@ -2566,7 +2612,13 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *shar
 			return nil, status.Error(codes.PermissionDenied, "content owner is not active")
 		}
 	}
-
+	if !localUsed && resolvedBilling != nil {
+		if observer, ok := s.cacheInvalidator.(interface {
+			ObserveConnectedPlayback(context.Context, string, *control.ContentResolution, *triggers.BillingStatus)
+		}); ok {
+			observer.ObserveConnectedPlayback(ctx, req.ContentId, resolution, resolvedBilling)
+		}
+	}
 	if resolution.RequiresAuth {
 		if authErr := s.enforceResolvePlaybackPolicy(ctx, req, resolution); authErr != nil {
 			return nil, authErr
@@ -2589,13 +2641,13 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *shar
 
 	switch resolvedType {
 	case "live":
-		response, err = s.resolveLiveViewerEndpoint(ctx, req, lat, lon, resolution.RoutingInternalName(), resolution.TenantId, resolution.StreamId, resolution.ClusterPeers, resolution.ActiveIngestClusterID)
+		response, err = s.resolveLiveViewerEndpoint(ctx, req, lat, lon, resolution.RoutingInternalName(), resolution.TenantId, resolution.StreamId, resolution.ClusterPeers, resolution.ActiveIngestClusterID, resolution.OfficialClusterID, resolution.AllowPlatformSharedPlayback || !resolution.LocalAuthority)
 	case "dvr":
 		response, err = s.resolveDVRViewerEndpoint(ctx, req, lat, lon, resolution)
-	case "clip", "vod":
-		response, err = s.resolveArtifactViewerEndpoint(ctx, req, lat, lon)
+	case "clip", "vod", "chapter":
+		response, err = s.resolveArtifactViewerEndpoint(ctx, req, lat, lon, resolution)
 	default:
-		return nil, status.Error(codes.InvalidArgument, "content_type must resolve to 'live', 'dvr', 'clip', or 'vod'")
+		return nil, status.Error(codes.InvalidArgument, "content_type must resolve to 'live', 'dvr', 'clip', 'vod', or 'chapter'")
 	}
 
 	if err != nil {
@@ -2652,6 +2704,24 @@ func (s *FoghornGRPCServer) viewerBillingStatus(ctx context.Context, internalNam
 }
 
 func (s *FoghornGRPCServer) enforceResolvePlaybackPolicy(ctx context.Context, req *sharedpb.ViewerEndpointRequest, resolution *control.ContentResolution) error {
+	policyInternalName := mist.ExtractInternalName(resolution.InternalName)
+	viewer := &ipcpb.ViewerConnectTrigger{
+		StreamName:  policyInternalName,
+		SessionId:   "resolve:" + req.GetContentId(),
+		Host:        req.GetViewerIp(),
+		RequestUrl:  "viewer://" + req.GetContentId(),
+		ViewerToken: req.GetViewerToken(),
+		Connector:   "resolve",
+	}
+	if s.localPlaybackPolicy != nil {
+		decision, handled := s.localPlaybackPolicy.EvaluateLocalPlaybackPolicy(ctx, resolution.ContentId, policyInternalName, viewer)
+		if handled {
+			if decision != "true" {
+				return status.Error(codes.PermissionDenied, "playback access denied")
+			}
+			return nil
+		}
+	}
 	if control.CommodoreClient == nil {
 		s.logger.WithFields(logging.Fields{
 			"content_id": req.GetContentId(),
@@ -2668,33 +2738,34 @@ func (s *FoghornGRPCServer) enforceResolvePlaybackPolicy(ctx context.Context, re
 		}).Warn("Rejecting protected resolve request")
 		return status.Error(codes.PermissionDenied, "playback access denied")
 	}
-	policyInternalName := mist.ExtractInternalName(target.InternalName)
+	policyInternalName = mist.ExtractInternalName(target.InternalName)
 	if policyInternalName == "" {
-		policyInternalName = resolution.InternalName
+		policyInternalName = mist.ExtractInternalName(resolution.InternalName)
 	}
-	decision := triggers.EvaluatePlaybackPolicyWithRecorder(ctx, s.logger, policyInternalName, &ipcpb.ViewerConnectTrigger{
-		StreamName:  policyInternalName,
-		SessionId:   "resolve:" + req.GetContentId(),
-		Host:        req.GetViewerIp(),
-		RequestUrl:  "viewer://" + req.GetContentId(),
-		ViewerToken: req.GetViewerToken(),
-		Connector:   "resolve",
-	}, policy, control.CommodoreClient)
+	viewer.StreamName = policyInternalName
+	recorder := s.signingKeyUse
+	if recorder == nil {
+		recorder = control.CommodoreClient
+	}
+	decision := triggers.EvaluatePlaybackPolicyWithRecorder(ctx, s.logger, policyInternalName, viewer, policy, recorder)
 	if decision != "true" {
 		return status.Error(codes.PermissionDenied, "playback access denied")
 	}
 	return nil
 }
 
-func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest, lat, lon float64, internalName, tenantID, streamID string, clusterPeers []*clusterpeerpb.TenantClusterPeer, activeIngestClusterID string) (*sharedpb.ViewerEndpointResponse, error) {
+func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest, lat, lon float64, internalName, tenantID, streamID string, clusterPeers []*clusterpeerpb.TenantClusterPeer, activeIngestClusterID, officialClusterID string, allowPlatformShared bool) (*sharedpb.ViewerEndpointResponse, error) {
 	start := time.Now()
 	deps := &control.PlaybackDependencies{
-		DB:             s.db,
-		LB:             s.lb,
-		GeoLat:         lat,
-		GeoLon:         lon,
-		LocalClusterID: s.clusterID,
-		ClusterPeers:   clusterPeers,
+		DB:                          s.db,
+		LB:                          s.lb,
+		GeoLat:                      lat,
+		GeoLon:                      lon,
+		LocalClusterID:              s.clusterID,
+		ClusterPeers:                clusterPeers,
+		OfficialClusterID:           officialClusterID,
+		AllowPlatformSharedPlayback: allowPlatformShared,
+		LocalAuthority:              true,
 	}
 
 	if internalName == "" {
@@ -2979,7 +3050,6 @@ func (s *FoghornGRPCServer) arrangeOriginPull(ctx context.Context, remote *fogho
 		PeerResolver: s.peerManager,
 		FedClient:    s.federationClient,
 		InstanceID:   s.instanceID,
-		ClusterID:    s.clusterID,
 		Logger:       s.logger,
 	}
 	result, err := deps.ArrangeOriginPull(ctx, federation.ArrangeOriginPullRequest{
@@ -2989,16 +3059,19 @@ func (s *FoghornGRPCServer) arrangeOriginPull(ctx context.Context, remote *fogho
 		TenantID:      tenantID,
 		Lat:           lat,
 		Lon:           lon,
-		LBPicker: func(pickCtx context.Context, pickLat, pickLon float64, pickTenant string) (string, string, error) {
+		LBPicker: func(pickCtx context.Context, pickLat, pickLon float64, pickTenant string) (string, string, string, error) {
 			lbCtx := context.WithValue(pickCtx, ctxkeys.KeyCapability, "edge")
 			if pickTenant != "" {
 				lbCtx = context.WithValue(lbCtx, ctxkeys.KeyClusterScope, pickTenant)
 			}
-			host, _, _, _, _, pickErr := s.lb.GetBestNodeWithScore(lbCtx, "", pickLat, pickLon, nil, "", false)
+			nodes, pickErr := s.lb.GetTopNodesWithScores(lbCtx, "", pickLat, pickLon, nil, "", 1, false)
 			if pickErr != nil {
-				return "", "", pickErr
+				return "", "", "", pickErr
 			}
-			return host, s.lb.GetNodeIDByHost(host), nil
+			if len(nodes) != 1 {
+				return "", "", "", federation.ErrOriginPullNoDest
+			}
+			return nodes[0].Host, nodes[0].NodeID, nodes[0].ClusterID, nil
 		},
 	})
 	if err != nil {
@@ -3139,7 +3212,15 @@ func (s *FoghornGRPCServer) queryStreamFanOut(ctx context.Context, internalName,
 // the live segments and produce stale playback.
 func (s *FoghornGRPCServer) resolveDVRViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest, lat, lon float64, resolution *control.ContentResolution) (*sharedpb.ViewerEndpointResponse, error) {
 	dvrInternalName := mist.ExtractInternalName(resolution.InternalName)
-	dispatch, derr := control.ResolveDVRArtifactDispatch(ctx, dvrInternalName)
+	var dispatch *control.DVRArtifactDispatch
+	var derr error
+	if resolution.LocalAuthority {
+		dispatch, derr = control.ResolveLocalDVRArtifactDispatch(
+			ctx, resolution.ArtifactInternalNameIdentity(), resolution.ContentId, resolution.AllowPlatformSharedPlayback,
+		)
+	} else {
+		dispatch, derr = control.ResolveDVRArtifactDispatch(ctx, dvrInternalName)
+	}
 	if derr != nil {
 		s.logger.WithError(derr).WithFields(logging.Fields{
 			"content_id":    req.GetContentId(),
@@ -3159,7 +3240,7 @@ func (s *FoghornGRPCServer) resolveDVRViewerEndpoint(ctx context.Context, req *s
 			}).Warn("Active DVR has no resolvable recording origin; refusing to fall back to archive routing")
 			return nil, status.Error(codes.Unavailable, "active DVR recording origin not yet registered; retry")
 		}
-		resp, err := s.resolveLiveViewerEndpoint(ctx, req, lat, lon, resolution.InternalName, resolution.TenantId, resolution.StreamId, resolution.ClusterPeers, resolution.ActiveIngestClusterID)
+		resp, err := s.resolveLiveViewerEndpoint(ctx, req, lat, lon, resolution.InternalName, resolution.TenantId, resolution.StreamId, resolution.ClusterPeers, resolution.ActiveIngestClusterID, resolution.OfficialClusterID, resolution.AllowPlatformSharedPlayback || !resolution.LocalAuthority)
 		if err != nil {
 			return nil, err
 		}
@@ -3226,20 +3307,28 @@ func overrideActiveDVRMetadata(resp *sharedpb.ViewerEndpointResponse, dispatch *
 	// field carries the distinction between "live" and "recording".
 }
 
-func (s *FoghornGRPCServer) resolveArtifactViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest, lat, lon float64) (*sharedpb.ViewerEndpointResponse, error) {
+func (s *FoghornGRPCServer) resolveArtifactViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest, lat, lon float64, resolution *control.ContentResolution) (*sharedpb.ViewerEndpointResponse, error) {
 	start := time.Now()
 	deps := &control.PlaybackDependencies{
-		DB:              s.db,
-		LB:              s.lb,
-		GeoLat:          lat,
-		GeoLon:          lon,
-		FedClient:       s.federationClient,
-		PeerResolver:    s.peerManager,
-		LocalClusterID:  s.clusterID,
-		RemoteArtifacts: s.remoteArtifactLookup(),
+		DB:                          s.db,
+		LB:                          s.lb,
+		GeoLat:                      lat,
+		GeoLon:                      lon,
+		FedClient:                   s.federationClient,
+		PeerResolver:                s.peerManager,
+		LocalClusterID:              s.clusterID,
+		RemoteArtifacts:             s.remoteArtifactLookup(),
+		OfficialClusterID:           resolution.OfficialClusterID,
+		AllowPlatformSharedPlayback: resolution.AllowPlatformSharedPlayback,
 	}
 
-	response, err := control.ResolveArtifactPlayback(ctx, deps, req.ContentId)
+	var response *sharedpb.ViewerEndpointResponse
+	var err error
+	if resolution != nil && resolution.LocalAuthority {
+		response, err = control.ResolveArtifactPlaybackWithIdentity(ctx, deps, req.ContentId, resolution.ArtifactPlaybackIdentity())
+	} else {
+		response, err = control.ResolveArtifactPlayback(ctx, deps, req.ContentId)
+	}
 	if err != nil {
 		if errors.Is(err, control.ErrCrossClusterArtifactUnavailable) {
 			// Fail-fast — peer origin hasn't pushed the artifact to S3
@@ -3254,7 +3343,6 @@ func (s *FoghornGRPCServer) resolveArtifactViewerEndpoint(ctx context.Context, r
 		}
 		return nil, status.Errorf(codes.Internal, "%v", err)
 	}
-
 	// Emit routing event for analytics
 	if response.Primary != nil && response.Metadata != nil {
 		durationMs := float32(time.Since(start).Milliseconds())
@@ -3263,8 +3351,8 @@ func (s *FoghornGRPCServer) resolveArtifactViewerEndpoint(ctx context.Context, r
 			candidatesCount = int32(1 + len(response.Fallbacks))
 		}
 		internalName := ""
-		if target, _ := control.ResolveStream(ctx, req.ContentId); target != nil {
-			internalName = target.InternalName
+		if resolution != nil {
+			internalName = resolution.InternalName
 		}
 		s.emitRoutingEvent(response.Primary, 0, 0, 0, 0, internalName, response.Metadata.GetTenantId(), response.Metadata.GetStreamId(), durationMs, candidatesCount, "grpc_resolve", "grpc")
 	}
@@ -4988,14 +5076,11 @@ func (s *FoghornGRPCServer) InvalidatePlaybackAuth(ctx context.Context, req *fog
 	if req.GetTenantId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id is required")
 	}
-
-	// bundle_revoke fast path: bump the policy-bundle cache watermark so
-	// any cached bundle below bundle_min_version is rejected on its next
-	// Get. Must run before per-node session-invalidation fanout — the
-	// watermark guards admission and session invalidation re-fires
-	// USER_NEW; both surfaces have to agree on the new minimum.
-	if req.GetReason() == "bundle_revoke" && s.policyBundleCache != nil && req.GetBundleMinVersion() > 0 {
-		s.policyBundleCache.BumpWatermark(req.GetTenantId(), req.GetStreamId(), req.GetBundleMinVersion())
+	if strings.EqualFold(strings.TrimSpace(req.GetReason()), "bundle_revoke") {
+		s.logger.WithFields(logging.Fields{
+			"tenant_id": req.GetTenantId(), "stream_id": req.GetStreamId(), "bundle_min_version": req.GetBundleMinVersion(),
+		}).Info("Ignoring retired policy-bundle invalidation; media-authority replacement owns convergence")
+		return &foghornpb.InvalidatePlaybackAuthResponse{}, nil
 	}
 
 	names := s.resolvePlaybackAuthInvalidationNames(ctx, req.GetTenantId(), req.GetInternalNames())

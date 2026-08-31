@@ -27,7 +27,7 @@ func TestFinalizeIngestSessionClose_EndsAndClaimsStop(t *testing.T) {
 	mock.ExpectQuery(`UPDATE foghorn.artifacts.*'"stop_pending"'.*ingest_generation = \$1::uuid.*RETURNING`).
 		WithArgs("gen-1", "tenant-a").
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "node_id"}).AddRow("dvr-h", "storage-1"))
-	mock.ExpectQuery(`nextval`).WillReturnRows(sqlmock.NewRows([]string{"nextval"}).AddRow(int64(2)))
+	mock.ExpectQuery(`INSERT INTO foghorn.source_projection_revision_counter`).WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnRows(sqlmock.NewRows([]string{"revision"}).AddRow(int64(2)))
 	mock.ExpectExec(`INSERT INTO foghorn.ingest_offline_effects`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
@@ -92,7 +92,7 @@ func TestFinalizeIngestSessionClose_EndedNoDVR(t *testing.T) {
 	mock.ExpectQuery(`UPDATE foghorn.artifacts.*RETURNING`).
 		WithArgs("gen-1", "tenant-a").
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "node_id"}))
-	mock.ExpectQuery(`nextval`).WillReturnRows(sqlmock.NewRows([]string{"nextval"}).AddRow(int64(2)))
+	mock.ExpectQuery(`INSERT INTO foghorn.source_projection_revision_counter`).WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnRows(sqlmock.NewRows([]string{"revision"}).AddRow(int64(2)))
 	mock.ExpectExec(`INSERT INTO foghorn.ingest_offline_effects`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 

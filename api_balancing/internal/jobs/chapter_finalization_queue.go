@@ -27,8 +27,9 @@ import (
 // that boot produces the spritesheet/poster/Chandler thumbnail tracks.
 // A later vod+<hash> boot generates only the .dtsh sidecar. Freeze +
 // dtsh_synced carry the chapter to state='frozen'; chapter_reclaim_sweep
-// then deletes source segments and advances to 'reclaimed'. Per-DVR
-// mutex serializes finalization to bound concurrent disk usage.
+// then deletes source segments and advances to 'reclaimed'. The durable
+// chapter attempt CAS serializes ownership across Foghorn replicas; Helmsman's
+// per-stream pending-job reservation serializes media work on a node.
 //
 // Dispatch timeout: chapter intervals can be hours; we picked
 // max(2*chapter_duration, 30 minutes) capped at 24h, which goes in the
@@ -172,9 +173,10 @@ func (q *ChapterFinalizationQueue) tick() {
 	}
 	for _, c := range chapters {
 		dispatchCtx, dispatchCancel := context.WithTimeout(ctx, 2*time.Minute)
-		if err := control.WithDVRChapterMutationLock(dispatchCtx, c.ArtifactHash, func() error {
-			return q.dispatchChapter(dispatchCtx, c)
-		}); err != nil {
+		// Remote policy lookup, playback-ID minting, and node dispatch must
+		// never run inside a database lock transaction. ClaimDVRChapterFinalization
+		// is the durable cross-replica ownership gate before the request is sent.
+		if err := q.dispatchChapter(dispatchCtx, c); err != nil {
 			q.logger.WithError(err).WithField("chapter_id", c.ChapterID).Warn("Chapter finalization dispatch failed")
 		}
 		dispatchCancel()
@@ -190,8 +192,8 @@ func (q *ChapterFinalizationQueue) tick() {
 // the next tick retries.
 func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c control.DVRChapterRow) error {
 	if c.FinalizeAttempts >= chapterFinalizationMaxAttempts {
-		return control.MarkChapterFailed(ctx, c.ChapterID, control.ChapterStateFailedPermanent,
-			fmt.Sprintf("max attempts (%d) exceeded", chapterFinalizationMaxAttempts), "")
+		return q.markChapterFailed(ctx, c, control.ChapterStateFailedPermanent,
+			fmt.Sprintf("max attempts (%d) exceeded", chapterFinalizationMaxAttempts), c.FinalizeNodeID.String, c.FinalizeAttempts)
 	}
 
 	parent, err := q.readParentDVR(ctx, c.ArtifactHash)
@@ -204,23 +206,23 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 		return fmt.Errorf("list source segments: %w", err)
 	}
 	if len(segments) == 0 {
-		return control.MarkChapterFailed(ctx, c.ChapterID,
+		return q.markChapterFailed(ctx, c,
 			control.ChapterStateFailedSourceMissing,
-			"chapter range has no segments", "")
+			"chapter range has no segments", c.FinalizeNodeID.String, c.FinalizeAttempts)
 	}
 	refs, missing, trimmedTail, refErr := q.buildSegmentRefs(parent.tenantID, parent.streamInternalName, c.ArtifactHash, segments)
 	if refErr != nil {
 		return fmt.Errorf("build segment refs: %w", refErr)
 	}
 	if missing > 0 {
-		return control.MarkChapterFailed(ctx, c.ChapterID,
+		return q.markChapterFailed(ctx, c,
 			control.ChapterStateFailedSourceMissing,
-			fmt.Sprintf("%d source segments missing from both local and recovery freeze", missing), "")
+			fmt.Sprintf("%d source segments missing from both local and recovery freeze", missing), c.FinalizeNodeID.String, c.FinalizeAttempts)
 	}
 	if len(refs) == 0 {
-		return control.MarkChapterFailed(ctx, c.ChapterID,
+		return q.markChapterFailed(ctx, c,
 			control.ChapterStateFailedSourceMissing,
-			"chapter range has no usable source segments", "")
+			"chapter range has no usable source segments", c.FinalizeNodeID.String, c.FinalizeAttempts)
 	}
 	if trimmedTail > 0 {
 		q.logger.WithFields(logging.Fields{
@@ -268,9 +270,9 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 					"dvr_hash":      c.ArtifactHash,
 					"grace_minutes": int(chapterFinalizeAbandonNodeGrace.Minutes()),
 				}).Warn("Chapter finalize: origin gone past grace with pending-local segments; classifying chapter as failed_source_missing")
-				return control.MarkChapterFailed(ctx, c.ChapterID,
+				return q.markChapterFailed(ctx, c,
 					control.ChapterStateFailedSourceMissing,
-					"recording origin unavailable past grace with pending source segments", "")
+					"recording origin unavailable past grace with pending source segments", c.FinalizeNodeID.String, c.FinalizeAttempts)
 			}
 			q.logger.WithFields(logging.Fields{
 				"chapter_id": c.ChapterID,
@@ -363,7 +365,7 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 
 	// MarkChapterFinalizing transitions the chapter AND enqueues the PROCESSING lifecycle in one
 	// transaction (durable, atomic) — no separate fire-and-forget emit here.
-	ok, err := control.MarkChapterFinalizing(ctx, c.ChapterID, playbackHash, parent.tenantID, targetNode, chapterFinalizationDeadline(c))
+	attempt, ok, err := control.MarkChapterFinalizing(ctx, c.ChapterID, playbackHash, parent.tenantID, targetNode, chapterFinalizationDeadline(c))
 	if err != nil {
 		return err
 	}
@@ -376,7 +378,7 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 	deadline := time.Now().Add(chapterFinalizationDeadline(c)).UnixMilli()
 	chapterInt := chapterInternalName(playbackHash)
 	req := &ipcpb.ProcessingJobRequest{
-		JobId:                    "chapter-finalize-" + c.ChapterID,
+		JobId:                    fmt.Sprintf("chapter-finalize-v2-%d-%s", attempt, c.ChapterID),
 		TenantId:                 parent.tenantID,
 		ArtifactHash:             playbackHash,
 		JobType:                  "dvr_chapter_finalize",
@@ -392,9 +394,15 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 		SourceSegments:           refs,
 	}
 	if err := control.SendProcessingJob(targetNode, req); err != nil {
-		retryErr := control.RetryChapterFinalize(ctx, c.ChapterID, fmt.Sprintf("dispatch failed: %v", err), "")
+		changed, retryErr := control.RetryChapterFinalize(ctx, c.ChapterID, fmt.Sprintf("dispatch failed: %v", err), targetNode, attempt)
 		if retryErr != nil {
 			q.logger.WithError(retryErr).WithField("chapter_id", c.ChapterID).Warn("Chapter finalization queue: roll-back to closed failed")
+		} else if !changed {
+			q.logger.WithFields(logging.Fields{
+				"chapter_id": c.ChapterID,
+				"node_id":    targetNode,
+				"attempt":    attempt,
+			}).Info("Chapter finalization queue: dispatch rollback ignored after ownership changed")
 		}
 		return fmt.Errorf("dispatch processing job: %w", err)
 	}
@@ -407,6 +415,19 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 		"deadline_unix": deadline,
 	}).Info("Chapter finalization dispatched")
 	return nil
+}
+
+func (q *ChapterFinalizationQueue) markChapterFailed(ctx context.Context, c control.DVRChapterRow, state, reason, expectedNode string, expectedAttempt int32) error {
+	changed, err := control.MarkChapterFailed(ctx, c.ChapterID, state, reason, expectedNode, expectedAttempt)
+	if err == nil && !changed {
+		q.logger.WithFields(logging.Fields{
+			"chapter_id": c.ChapterID,
+			"node_id":    expectedNode,
+			"attempt":    expectedAttempt,
+			"state":      state,
+		}).Info("Chapter finalization queue: terminal transition ignored after ownership changed")
+	}
+	return err
 }
 
 type parentDVR struct {

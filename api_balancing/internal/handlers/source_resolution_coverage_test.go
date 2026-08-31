@@ -12,9 +12,11 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/state"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	commodorecli "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	"github.com/gin-gonic/gin"
@@ -97,6 +99,28 @@ func newSourceCtxSourceRes(rawQuery string) (*gin.Context, *httptest.ResponseRec
 	return c, w
 }
 
+func seedSourceNodeCluster(nodeID, clusterID string) {
+	state.DefaultManager().SetNodeConnectionInfo(context.Background(), nodeID, nodeID+".example", "", clusterID, nil)
+}
+
+func TestSourceCallerClusterIDUsesAuthenticatedNodeBinding(t *testing.T) {
+	withSeededBalancer(t)
+	t.Setenv("CLUSTER_ID", "foghorn-control-cell")
+	seedSourceNodeCluster("edgeA", "tenant-media-cluster")
+
+	if got := sourceCallerClusterID(context.Background(), "edgeA"); got != "tenant-media-cluster" {
+		t.Fatalf("source caller cluster = %q, want tenant-media-cluster", got)
+	}
+	if got := sourceCallerClusterID(context.Background(), "unknown"); got != "" {
+		t.Fatalf("unknown source caller inherited process cluster %q", got)
+	}
+	authenticated := context.WithValue(context.Background(), ctxkeys.KeyAuthenticatedNodeCluster, "signed-media-cluster")
+	state.ResetDefaultManagerForTests()
+	if got := sourceCallerClusterID(authenticated, "edgeA"); got != "signed-media-cluster" {
+		t.Fatalf("signed caller cluster was lost across empty volatile state: %q", got)
+	}
+}
+
 // Invariant: handleGetPullSource returns the configured upstream origin URI
 // verbatim when (a) Commodore resolves an enabled pull source, (b) the upstream
 // classifies non-blocked, and (c) this cluster passes the placement filter
@@ -107,7 +131,7 @@ func TestHandleGetPullSourceUpstreamReturnedWhenPlaceable(t *testing.T) {
 	withSeededBalancer(t)
 	withLoggerSourceRes(t)
 	t.Cleanup(control.SetupTestRegistry("", nil))
-	t.Setenv("CLUSTER_ID", "cluster-local")
+	seedSourceNodeCluster("edgeA", "cluster-local")
 
 	const upstream = "https://origin.example.com/live/master.m3u8"
 	startPullCommodoreSourceRes(t, &pullSourceFakeSourceRes{
@@ -147,7 +171,8 @@ func TestHandleGetPullSourceStampsFirstDialerAsOwner(t *testing.T) {
 	withSeededBalancer(t)
 	withLoggerSourceRes(t)
 	t.Cleanup(control.SetupTestRegistry("", nil))
-	t.Setenv("CLUSTER_ID", "cluster-local")
+	seedSourceNodeCluster("edgeA", "cluster-local")
+	seedSourceNodeCluster("edgeB", "cluster-local")
 
 	prevStreamRegistry := control.StreamRegistryInstance
 	streamRegistry := control.NewStreamRegistry(nil, "cluster-local", time.Minute)
@@ -207,7 +232,7 @@ func TestHandleGetSourcePullDispatchReturnsUpstream(t *testing.T) {
 	withSeededBalancer(t)
 	withLoggerSourceRes(t)
 	t.Cleanup(control.SetupTestRegistry("", nil))
-	t.Setenv("CLUSTER_ID", "cluster-local")
+	seedSourceNodeCluster("edgeA", "cluster-local")
 
 	const upstream = "srt://origin.example.com:9000"
 	startPullCommodoreSourceRes(t, &pullSourceFakeSourceRes{
@@ -223,6 +248,7 @@ func TestHandleGetSourcePullDispatchReturnsUpstream(t *testing.T) {
 	q := url.Values{}
 	q.Set("source", "pull+cam2")
 	c, w := newSourceCtxSourceRes(q.Encode())
+	c.Set("foghorn_authenticated_node_id", "edgeA")
 	handleGetSource(c, "pull+cam2", q)
 
 	if w.Code != http.StatusOK {
@@ -243,7 +269,7 @@ func TestHandleGetPullSourceNotPlacedWhenPinnedElsewhere(t *testing.T) {
 	withSeededBalancer(t)
 	withLoggerSourceRes(t)
 	t.Cleanup(control.SetupTestRegistry("", nil))
-	t.Setenv("CLUSTER_ID", "cluster-local")
+	seedSourceNodeCluster("edgeA", "cluster-local")
 
 	startPullCommodoreSourceRes(t, &pullSourceFakeSourceRes{
 		resolvePull: func(_ context.Context, _ *commodorepb.ResolvePullSourceByInternalNameRequest) (*commodorepb.ResolvePullSourceByInternalNameResponse, error) {
@@ -275,7 +301,7 @@ func TestHandleGetPullSourceBlockedUpstream(t *testing.T) {
 	withSeededBalancer(t)
 	withLoggerSourceRes(t)
 	t.Cleanup(control.SetupTestRegistry("", nil))
-	t.Setenv("CLUSTER_ID", "cluster-local")
+	seedSourceNodeCluster("edgeA", "cluster-local")
 
 	startPullCommodoreSourceRes(t, &pullSourceFakeSourceRes{
 		resolvePull: func(_ context.Context, _ *commodorepb.ResolvePullSourceByInternalNameRequest) (*commodorepb.ResolvePullSourceByInternalNameResponse, error) {

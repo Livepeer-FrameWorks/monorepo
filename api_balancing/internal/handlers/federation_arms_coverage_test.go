@@ -9,6 +9,7 @@ import (
 
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/federation"
+	"frameworks/api_balancing/internal/state"
 
 	commodorecli "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
@@ -125,6 +126,9 @@ func setupFedArmsStack(t *testing.T, queryResp *foghornfederationpb.QueryStreamR
 	control.SetLocalClusterID(fedArmsLocalCluster)
 	prevRegistry := control.StreamRegistryInstance
 	control.StreamRegistryInstance = control.NewStreamRegistry(nil, fedArmsLocalCluster, time.Minute)
+	for _, nodeID := range []string{"edge-caller-1", "edge-caller-2", "edge-caller-3"} {
+		state.DefaultManager().SetNodeConnectionInfo(context.Background(), nodeID, nodeID+".example", "", fedArmsLocalCluster, nil)
+	}
 
 	prevClusterID := clusterID
 	clusterID = fedArmsLocalCluster
@@ -372,10 +376,6 @@ func TestHandleGetPullSourceNotPlaceableFederates(t *testing.T) {
 	})
 
 	c, w := newSourceRequestGetSource(sourceByNodePathPrefix+"edge-caller-2", url.Values{})
-	// CLUSTER_ID env drives the local placement candidate inside handleGetPullSource;
-	// set it to the local cluster so FilterPlacementClusters sees this cluster but
-	// allowed_cluster_ids excludes it -> eligible==0 -> federation.
-	t.Setenv("CLUSTER_ID", fedArmsLocalCluster)
 	handleGetSource(c, "pull+show", c.Request.URL.Query())
 
 	if w.Code != 200 {
@@ -426,7 +426,6 @@ func TestHandleGetPullSourcePeerRejectsStaysNotPlaced(t *testing.T) {
 	})
 
 	c, w := newSourceRequestGetSource(sourceByNodePathPrefix+"edge-caller-3", url.Values{})
-	t.Setenv("CLUSTER_ID", fedArmsLocalCluster)
 	handleGetSource(c, "pull+show", c.Request.URL.Query())
 
 	if w.Code != 200 {

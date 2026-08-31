@@ -131,6 +131,7 @@ SET status = 'deleted', updated_at = NOW()
 WHERE artifact_hash = $1
   AND artifact_type = 'clip'
   AND tenant_id = $2::uuid
+  AND federated_pointer = false
   AND status != 'deleted'
 `
 
@@ -208,6 +209,7 @@ WHERE stream_internal_name = $1
   AND artifact_type = 'dvr'
   AND status IN ('requested', 'starting', 'recording')
   AND tenant_id = $2::uuid
+  AND federated_pointer = false
 ORDER BY created_at DESC
 LIMIT 1
 `
@@ -350,6 +352,7 @@ FROM foghorn.artifacts
 WHERE artifact_hash = $1
   AND artifact_type = 'clip'
   AND tenant_id = $2::uuid
+  AND federated_pointer = false
 `
 
 type GetClipForDeletionParams struct {
@@ -440,6 +443,7 @@ FROM foghorn.artifacts
 WHERE artifact_hash = $1
   AND artifact_type = 'dvr'
   AND tenant_id = $2::uuid
+  AND federated_pointer = false
 `
 
 type GetDVRForDeletionParams struct {
@@ -495,6 +499,7 @@ FROM foghorn.artifacts
 WHERE artifact_hash = $1
   AND artifact_type = 'dvr'
   AND tenant_id = $2::uuid
+  AND federated_pointer = false
 `
 
 type GetDVRForStopParams struct {
@@ -535,6 +540,7 @@ FROM foghorn.artifacts
 WHERE artifact_hash = $1
   AND artifact_type = 'dvr'
   AND tenant_id::text = $2
+  AND federated_pointer = false
 `
 
 type GetDVRStartDispatchParams struct {
@@ -555,6 +561,7 @@ FROM foghorn.artifacts
 WHERE artifact_hash = $1
   AND artifact_type = 'dvr'
   AND tenant_id = $2::uuid
+  AND federated_pointer = false
 `
 
 type GetDVRStatusParams struct {
@@ -575,6 +582,7 @@ FROM foghorn.artifacts
 WHERE artifact_hash = $1
   AND artifact_type = 'clip'
   AND tenant_id = $2::uuid
+  AND federated_pointer = false
 `
 
 type GetExistingClipStatusParams struct {
@@ -597,6 +605,7 @@ JOIN foghorn.vod_metadata m ON m.artifact_hash = a.artifact_hash
 WHERE a.artifact_hash = $1
   AND a.artifact_type = 'vod'
   AND a.tenant_id = $2::uuid
+  AND a.federated_pointer = false
 `
 
 type GetExistingVodUploadParams struct {
@@ -727,6 +736,7 @@ LEFT JOIN foghorn.vod_metadata v ON a.artifact_hash = v.artifact_hash
 WHERE a.artifact_hash = $1
   AND a.artifact_type = 'vod'
   AND a.tenant_id = $2::uuid
+  AND a.federated_pointer = false
 `
 
 type GetVodForDeletionParams struct {
@@ -1256,6 +1266,7 @@ SET status = 'deleted', sync_request_id = NULL, sync_node_id = NULL, updated_at 
 WHERE artifact_hash = $1
   AND artifact_type = 'vod'
   AND tenant_id = $2::uuid
+  AND federated_pointer = false
   AND status != 'deleted'
 `
 
@@ -1276,6 +1287,7 @@ const sumTenantActiveArtifactBytes = `-- name: SumTenantActiveArtifactBytes :one
 SELECT COALESCE(SUM(size_bytes), 0)::bigint AS total_bytes
 FROM foghorn.artifacts
 WHERE tenant_id = $1::uuid
+  AND federated_pointer = false
   AND status NOT IN ('failed', 'expired', 'deleted', 'aborted')
 `
 

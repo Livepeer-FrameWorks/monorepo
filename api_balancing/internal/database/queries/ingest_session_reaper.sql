@@ -1,5 +1,6 @@
 -- name: ListOpenIngestSessions :many
-SELECT id::text AS session_id, tenant_id::text AS tenant_id, node_id, stream_internal_name
+SELECT id::text AS session_id, tenant_id::text AS tenant_id, node_id, stream_internal_name,
+       start_trigger_uuid
 FROM foghorn.ingest_sessions
 WHERE ended_at IS NULL;
 
@@ -9,7 +10,7 @@ SET ended_at = NOW(), ended_at_unix_millis = (EXTRACT(EPOCH FROM NOW()) * 1000):
     ended_reason = sqlc.arg(ended_reason)::text
 WHERE id = sqlc.arg(session_id)::text::uuid AND tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND stream_internal_name = sqlc.arg(stream_internal_name) AND ended_at IS NULL
-RETURNING node_id;
+RETURNING node_id, start_trigger_uuid;
 
 -- name: RetireIngestSessionByClaim :one
 UPDATE foghorn.ingest_sessions
@@ -21,7 +22,8 @@ WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
 RETURNING id::text AS session_id, node_id;
 
 -- name: ListNeverProjectedIngestSessions :many
-SELECT id::text AS session_id, tenant_id::text AS tenant_id, stream_internal_name
+SELECT id::text AS session_id, tenant_id::text AS tenant_id, stream_internal_name,
+       start_trigger_uuid
 FROM foghorn.ingest_sessions
 WHERE ended_at IS NULL AND projection_state = 'pending'
   AND started_at < NOW() - (sqlc.arg(older_than_ms)::bigint * INTERVAL '1 millisecond')

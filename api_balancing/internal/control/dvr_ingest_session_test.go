@@ -15,6 +15,7 @@ func TestCreateIngestSession_MintsNew(t *testing.T) {
 	mock := withMockDB(t)
 	mock.ExpectBegin()
 	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WithArgs(sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WithArgs(sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 0))
 	// 1. Trigger-UUID lookup — new UUID.
 	mock.ExpectQuery(`start_trigger_uuid = \$3\s+FOR UPDATE`).
 		WithArgs("tenant-a", "node-1", "uuid-1").
@@ -45,11 +46,42 @@ func TestCreateIngestSession_MintsNew(t *testing.T) {
 	}
 }
 
+func TestCreateIngestSession_MintsSignedAuthoritySnapshotAtomically(t *testing.T) {
+	mock := withMockDB(t)
+	mock.ExpectBegin()
+	// Tenant capacity lock, then stream ownership lock.
+	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WithArgs(sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WithArgs(sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`start_trigger_uuid = \$3\s+FOR UPDATE`).WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(`stream_internal_name = \$2 AND ended_at IS NULL\s+FOR UPDATE`).WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(`ingest_close_tombstones`).WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	mock.ExpectQuery(`SELECT COUNT\(\*\)::integer[\s\S]*tenant_id = \$1::uuid`).
+		WithArgs("tenant-a").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int32(0)))
+	mock.ExpectQuery(`INSERT INTO foghorn.ingest_sessions[\s\S]*media_authority_id`).
+		WithArgs("tenant-a", "node-1", "live+s1", int64(1234), "uuid-1", int64(1000), nil, "demo-media",
+			"live_stream:stream-1", int64(4), int64(8), `[{"process":"durable"}]`, int32(3)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("sess-1"))
+	mock.ExpectCommit()
+
+	id, outcome, err := CreateIngestSession(
+		context.Background(), "tenant-a", "node-1", "live+s1", 1234, "uuid-1", 1000, nil, "demo-media", logging.NewLogger(),
+		IngestAuthoritySnapshot{MediaAuthorityID: "live_stream:stream-1", MediaAuthorityVersion: 4, TenantAuthorityVersion: 8, ProcessesJSON: `[{"process":"durable"}]`, CapacityMaxStreams: 3},
+	)
+	if err != nil || outcome != IngestSessionActive || id != "sess-1" {
+		t.Fatalf("signed mint: id=%q outcome=%v err=%v", id, outcome, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // A duplicate PUSH_REWRITE for the SAME connection (same trigger UUID, still open) returns the
 // existing session id and inserts nothing (idempotent).
 func TestCreateIngestSession_DuplicateIsIdempotent(t *testing.T) {
 	mock := withMockDB(t)
 	mock.ExpectBegin()
+	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WithArgs(sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WithArgs(sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`start_trigger_uuid = \$3\s+FOR UPDATE`).
 		WithArgs("tenant-a", "node-1", "uuid-1").
@@ -74,13 +106,14 @@ func TestCreateIngestSession_RejectsDuplicatePublisher(t *testing.T) {
 	mock := withMockDB(t)
 	mock.ExpectBegin()
 	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WithArgs(sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WithArgs(sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`start_trigger_uuid = \$3\s+FOR UPDATE`).
 		WithArgs("tenant-a", "node-2", "uuid-2").
 		WillReturnError(sql.ErrNoRows)
 	// Incumbent is a DIFFERENT node holding the stream → reject.
 	mock.ExpectQuery(`stream_internal_name = \$2 AND ended_at IS NULL\s+FOR UPDATE`).
 		WithArgs("tenant-a", "live+s1").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "node_id", "connector_pid", "started_at_unix_millis"}).AddRow("sess-incumbent", "node-1", int64(999), int64(1000)))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "node_id", "connector_pid", "started_at_unix_millis", "start_trigger_uuid"}).AddRow("sess-incumbent", "node-1", int64(999), int64(1000), "uuid-incumbent"))
 	mock.ExpectCommit()
 
 	id, outcome, err := CreateIngestSession(context.Background(), "tenant-a", "node-2", "live+s1", 1234, "uuid-2", 5000, nil, "demo-media", logging.NewLogger())
@@ -101,13 +134,14 @@ func TestCreateIngestSession_PidReuseEndsStaleAndMintsFresh(t *testing.T) {
 	mock := withMockDB(t)
 	mock.ExpectBegin()
 	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WithArgs(sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`SELECT pg_advisory_xact_lock`).WithArgs(sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectQuery(`start_trigger_uuid = \$3\s+FOR UPDATE`).
 		WithArgs("tenant-a", "node-1", "uuid-new").
 		WillReturnError(sql.ErrNoRows)
 	// Incumbent is the SAME (node, PID) with an OLDER start → PID-reuse supersede.
 	mock.ExpectQuery(`stream_internal_name = \$2 AND ended_at IS NULL\s+FOR UPDATE`).
 		WithArgs("tenant-a", "live+s1").
-		WillReturnRows(sqlmock.NewRows([]string{"id", "node_id", "connector_pid", "started_at_unix_millis"}).AddRow("sess-old", "node-1", int64(1234), int64(1000)))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "node_id", "connector_pid", "started_at_unix_millis", "start_trigger_uuid"}).AddRow("sess-old", "node-1", int64(1234), int64(1000), "uuid-old"))
 	mock.ExpectExec(`UPDATE foghorn.ingest_sessions\s+SET ended_at = NOW.*'superseded_pid_reuse'`).
 		WithArgs(int64(5000), "sess-old").
 		WillReturnResult(sqlmock.NewResult(0, 1))

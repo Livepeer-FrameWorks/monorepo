@@ -11,9 +11,19 @@ import (
 )
 
 func expectPlacementParentLock(mock sqlmock.Sqlmock) {
-	mock.ExpectExec("SELECT artifact_hash FROM foghorn.artifacts WHERE artifact_hash = \\$1 FOR UPDATE").
+	mock.ExpectQuery("SELECT artifact_hash FROM foghorn.artifacts WHERE artifact_hash = \\$1 FOR UPDATE").
 		WithArgs(sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash"}).AddRow("locked"))
+}
+
+func expectArtifactDeletionWatermarkLock(mock sqlmock.Sqlmock, hash string, _ int64, nodeIDs ...string) {
+	nodeID := "node-1"
+	if len(nodeIDs) > 0 {
+		nodeID = nodeIDs[0]
+	}
+	mock.ExpectQuery("SELECT deleted_at_ms FROM foghorn.artifact_node_deletion_watermark").
+		WithArgs(hash, nodeID).
+		WillReturnError(sql.ErrNoRows)
 }
 
 // expectNodeCopyOutbox sets up the tenant lookup + present-transition emit (GAINED /
@@ -34,12 +44,13 @@ func expectNodeCopyLostOutbox(mock sqlmock.Sqlmock, hash string) {
 	expectNodeCopyEmit(mock, hash, int64(0))
 }
 
-// expectNodeCopyEmit is the tenant-less tail (nextval → last_emitted_version UPDATE →
+// expectNodeCopyEmit is the tenant-less tail (key-scoped version → last_emitted_version UPDATE →
 // outbox insert) enqueueNodeCopy performs; rowVersion is what it records on the row
 // (the live version for present events, 0 for LOST).
 func expectNodeCopyEmit(mock sqlmock.Sqlmock, hash string, rowVersion int64) {
-	mock.ExpectQuery("SELECT nextval").
-		WillReturnRows(sqlmock.NewRows([]string{"nextval"}).AddRow(int64(1)))
+	mock.ExpectQuery("INSERT INTO foghorn.artifact_node_copy_version_counter").
+		WithArgs(hash, "node-1").
+		WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow(int64(1)))
 	mock.ExpectExec("UPDATE foghorn.artifact_nodes SET last_emitted_version").
 		WithArgs(rowVersion, hash, "node-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -124,11 +135,12 @@ func TestAddCachedNode_EmitsGainedCache(t *testing.T) {
 
 	mock.ExpectBegin()
 	expectPlacementParentLock(mock)
+	expectArtifactDeletionWatermarkLock(mock, "hash-1", 0)
 	mock.ExpectQuery("SELECT role, is_orphaned, is_complete FROM foghorn.artifact_nodes.*FOR UPDATE").
 		WithArgs("hash-1", "node-1").
 		WillReturnError(sql.ErrNoRows) // newly present
 	mock.ExpectQuery("INSERT INTO foghorn.artifact_nodes.*'cache'.*RETURNING").
-		WithArgs("hash-1", "node-1", "", int64(0)).
+		WithArgs("hash-1", "node-1", "", int64(0), int64(0)).
 		WillReturnRows(sqlmock.NewRows([]string{"size_bytes"}).AddRow(nil))
 	expectNodeCopyOutbox(mock, "hash-1")
 	mock.ExpectCommit()
@@ -148,11 +160,12 @@ func TestAddCachedNode_EmitsOnCompletenessFlip(t *testing.T) {
 
 	mock.ExpectBegin()
 	expectPlacementParentLock(mock)
+	expectArtifactDeletionWatermarkLock(mock, "hash-1", 0)
 	mock.ExpectQuery("SELECT role, is_orphaned, is_complete FROM foghorn.artifact_nodes.*FOR UPDATE").
 		WithArgs("hash-1", "node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"role", "is_orphaned", "is_complete"}).AddRow("cache", false, false)) // present but incomplete
 	mock.ExpectQuery("INSERT INTO foghorn.artifact_nodes.*'cache'.*RETURNING").
-		WithArgs("hash-1", "node-1", "", int64(0)).
+		WithArgs("hash-1", "node-1", "", int64(0), int64(0)).
 		WillReturnRows(sqlmock.NewRows([]string{"size_bytes"}).AddRow(int64(2048))) // already present
 	expectNodeCopyOutbox(mock, "hash-1")
 	mock.ExpectCommit()
@@ -170,17 +183,86 @@ func TestDeleteNodeArtifact_EmitsLost(t *testing.T) {
 	repo, mock := setupRepoTest(t)
 
 	mock.ExpectBegin()
-	mock.ExpectQuery("SELECT role FROM foghorn.artifact_nodes.*FOR UPDATE").
-		WithArgs("hash-1", "node-1").
+	expectPlacementParentLock(mock)
+	mock.ExpectQuery("WITH deletion_watermark AS .*DELETE FROM foghorn.artifact_nodes").
+		WithArgs("hash-1", "node-1", int64(0)).
 		WillReturnRows(sqlmock.NewRows([]string{"role"}).AddRow("cache"))
-	mock.ExpectExec("DELETE FROM foghorn.artifact_nodes").
-		WithArgs("hash-1", "node-1").
-		WillReturnResult(sqlmock.NewResult(0, 1))
 	expectNodeCopyLostOutbox(mock, "hash-1")
 	mock.ExpectCommit()
 
-	if err := repo.DeleteNodeArtifact(context.Background(), "hash-1", "node-1", 0); err != nil {
+	if _, err := repo.DeleteNodeArtifact(context.Background(), "hash-1", "node-1", 0); err != nil {
 		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDeleteNodeArtifact_StaleReplayDoesNotDeleteReacquiredPlacement(t *testing.T) {
+	repo, mock := setupRepoTest(t)
+
+	mock.ExpectBegin()
+	expectPlacementParentLock(mock)
+	mock.ExpectQuery("WITH deletion_watermark AS .*DELETE FROM foghorn.artifact_nodes").
+		WithArgs("hash-1", "node-1", int64(1234)).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("SELECT role, is_orphaned, is_complete FROM foghorn.artifact_nodes.*FOR UPDATE").
+		WithArgs("hash-1", "node-1").
+		WillReturnRows(sqlmock.NewRows([]string{"role", "is_orphaned", "is_complete"}).AddRow("cache", false, true))
+	mock.ExpectCommit()
+
+	outcome, err := repo.DeleteNodeArtifact(context.Background(), "hash-1", "node-1", 1234)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != state.NodeArtifactDeletionFenced {
+		t.Fatalf("stale replay outcome=%q, want fenced", outcome)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDeleteNodeArtifact_DistinguishesAbsentCopy(t *testing.T) {
+	repo, mock := setupRepoTest(t)
+
+	mock.ExpectBegin()
+	expectPlacementParentLock(mock)
+	mock.ExpectQuery("WITH deletion_watermark AS .*DELETE FROM foghorn.artifact_nodes").
+		WithArgs("hash-1", "node-1", int64(1234)).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("SELECT role, is_orphaned, is_complete FROM foghorn.artifact_nodes.*FOR UPDATE").
+		WithArgs("hash-1", "node-1").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectCommit()
+
+	outcome, err := repo.DeleteNodeArtifact(context.Background(), "hash-1", "node-1", 1234)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != state.NodeArtifactDeletionAbsent {
+		t.Fatalf("duplicate deletion outcome=%q, want absent", outcome)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDeleteNodeArtifact_DistinguishesMissingParent(t *testing.T) {
+	repo, mock := setupRepoTest(t)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT artifact_hash FROM foghorn.artifacts WHERE artifact_hash = \\$1 FOR UPDATE").
+		WithArgs("hash-1").
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectCommit()
+
+	outcome, err := repo.DeleteNodeArtifact(context.Background(), "hash-1", "node-1", 1234)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome != state.NodeArtifactDeletionParentMissing {
+		t.Fatalf("missing-parent deletion outcome=%q, want parent_missing", outcome)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
@@ -197,11 +279,12 @@ func TestUpsertArtifacts_ReconnectEmitsGained(t *testing.T) {
 		WithArgs("hash-1", "", int64(0), int64(0)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	expectPlacementParentLock(mock)
+	expectArtifactDeletionWatermarkLock(mock, "hash-1", 0)
 	mock.ExpectQuery("SELECT role, is_orphaned, is_complete FROM foghorn.artifact_nodes.*FOR UPDATE").
 		WithArgs("hash-1", "node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"role", "is_orphaned", "is_complete"}).AddRow("cache", true, false)) // was orphaned
 	mock.ExpectQuery("INSERT INTO foghorn.artifact_nodes.*WHERE EXISTS.*RETURNING").
-		WithArgs("hash-1", "node-1", "", int64(0), int64(0), int64(0), int64(0), int64(0), "cache", false).
+		WithArgs("hash-1", "node-1", "", int64(0), int64(0), int64(0), int64(0), int64(0), int64(0), "cache", false).
 		WillReturnRows(sqlmock.NewRows([]string{"role", "is_complete"}).AddRow("cache", false))
 	expectNodeCopyOutbox(mock, "hash-1")
 	// stale sweep finds nothing this pass
@@ -235,11 +318,12 @@ func TestUpsertArtifacts_VersionedReportDefersNegativeDiffToStaleSweep(t *testin
 		WithArgs("hash-a", "", int64(0), int64(0)).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	expectPlacementParentLock(mock)
+	expectArtifactDeletionWatermarkLock(mock, "hash-a", 0)
 	mock.ExpectQuery("SELECT role, is_orphaned, is_complete FROM foghorn.artifact_nodes.*FOR UPDATE").
 		WithArgs("hash-a", "node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"role", "is_orphaned", "is_complete"}).AddRow("cache", false, false))
 	mock.ExpectQuery("INSERT INTO foghorn.artifact_nodes.*WHERE EXISTS.*RETURNING").
-		WithArgs("hash-a", "node-1", "", int64(0), int64(0), int64(0), int64(0), int64(0), "cache", false).
+		WithArgs("hash-a", "node-1", "", int64(0), int64(0), int64(0), int64(0), int64(0), int64(0), "cache", false).
 		WillReturnRows(sqlmock.NewRows([]string{"role", "is_complete"}).AddRow("cache", false))
 	// Whole-node reports do NOT perform scan-driven negative diffing: the versioned report upserts A but
 	// does NOT immediately orphan the absent B. B is reconciled by the stale sweep / cordon /

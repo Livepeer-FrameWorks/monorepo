@@ -255,15 +255,16 @@ func TestUpdateDVRCompletionByHash(t *testing.T) {
 	}
 }
 
-// ListAllNodes returns node_outputs rows (node_id, base_url, outputs JSON).
+// ListAllNodes returns node_outputs rows without promoting them to live heartbeats.
 func TestListAllNodes(t *testing.T) {
 	_, mock := setupRepoTest(t)
 	repo := &nodeRepositoryDB{}
-	mock.ExpectQuery(`SELECT node_id, COALESCE\(base_url, ''\)::text AS base_url, COALESCE\(outputs, '\{\}'::jsonb\) AS outputs FROM foghorn.node_outputs`).
-		WillReturnRows(sqlmock.NewRows([]string{"node_id", "base_url", "outputs"}).
-			AddRow("node-1", "https://n1", []byte(`{"k":"v"}`)))
+	updated := time.Unix(1700000000, 0)
+	mock.ExpectQuery(`SELECT node_id, COALESCE\(base_url, ''\)::text AS base_url,\s+COALESCE\(outputs, '\{\}'::jsonb\) AS outputs,\s+COALESCE\(last_updated, 'epoch'::timestamp\) AS last_updated\s+FROM foghorn.node_outputs`).
+		WillReturnRows(sqlmock.NewRows([]string{"node_id", "base_url", "outputs", "last_updated"}).
+			AddRow("node-1", "https://n1", []byte(`{"k":"v"}`), updated))
 	out, err := repo.ListAllNodes(context.Background())
-	if err != nil || len(out) != 1 || out[0].NodeID != "node-1" || out[0].OutputsJSON != `{"k":"v"}` {
+	if err != nil || len(out) != 1 || out[0].NodeID != "node-1" || out[0].OutputsJSON != `{"k":"v"}` || !out[0].LastUpdated.Equal(updated) {
 		t.Fatalf("got (%+v,%v)", out, err)
 	}
 }

@@ -10,8 +10,40 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_balancing/internal/database/foghorndb"
+	fieldcrypto "github.com/Livepeer-FrameWorks/monorepo/pkg/crypto"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
+
+const sourceProjectionCounterBase = int64(4503599627370496)
+
+func TestSourceProjectionRepairAllocatorKeyScoped_RealPG(t *testing.T) {
+	conn := startRealPG(t)
+	prev := db
+	SetDB(conn)
+	t.Cleanup(func() { SetDB(prev) })
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	const tenantID = "10000000-0000-0000-0000-000000000001"
+	const internalName = "repair-stream"
+	params := foghorndb.NextSourceProjectionRevisionParams{TenantID: tenantID, StreamInternalName: internalName}
+	first, err := foghorndb.New(conn).NextSourceProjectionRevision(ctx, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repaired, err := foghorndb.AllocateSourceProjectionRevisionAfter(ctx, conn, tenantID, internalName, first+1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, err := foghorndb.New(conn).NextSourceProjectionRevision(ctx, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !(first < repaired && repaired < next) {
+		t.Fatalf("source revisions first=%d repaired=%d next=%d, want strict order", first, repaired, next)
+	}
+}
 
 // TestFenceOfflineBackstop_RealPG proves the offline backstop is DB-authoritative and serializes with
 // admission on the (tenant, stream) advisory lock: while an ingest session is active in the DB the
@@ -187,7 +219,7 @@ func TestProjectSourceFailureAbortsPendingSession_RealPG(t *testing.T) {
 
 	sessionID := seedOpenIngestSession(t, ingA, node, stream, "projection-failure", 401, 1000)
 	store, _, _ := newTestRedis(t)
-	const newerRevision = int64(1_000_000_000)
+	const newerRevision = sourceProjectionCounterBase + 1_000_000_000
 	newer := StreamEntry{InternalName: stream, Locations: map[string]Location{
 		"cluster-test": {ClusterID: "cluster-test", SourceActive: true, OwnerNodeID: "node-newer", SourceRevision: newerRevision},
 	}}
@@ -365,11 +397,10 @@ func TestPushRewriteRetry_IdempotentResumedProjection_RealPG(t *testing.T) {
 	}
 }
 
-// A RESUMED retry must not blindly accept: when the shared registry already holds a strictly newer
-// source transition than the session's persisted revision, the re-publish loses the revision CAS and
-// the retry is DENIED — this publisher is no longer the routable source, and accepting it would
-// admit a superseded connection.
-func TestResumedProjectionDeniedWhenRegistryHoldsNewerRevision_RealPG(t *testing.T) {
+// A RESUMED retry whose active DB generation finds a divergent newer Redis
+// watermark repairs the cache from DB authority. It advances both the session
+// and its durable admission-effect fence before publishing above that watermark.
+func TestResumedProjectionRepairsWhenRegistryHoldsNewerRevision_RealPG(t *testing.T) {
 	conn := startRealPG(t)
 	prev := db
 	SetDB(conn)
@@ -397,7 +428,7 @@ func TestResumedProjectionDeniedWhenRegistryHoldsNewerRevision_RealPG(t *testing
 
 	// A strictly newer source transition lands in the shared registry (e.g. a fence or a newer
 	// publisher on another replica whose DB state this probe cannot see in this scenario).
-	const newerRevision = int64(2_000_000_000)
+	const newerRevision = sourceProjectionCounterBase + 2_000_000_000
 	newer := StreamEntry{InternalName: stream, Locations: map[string]Location{
 		"cluster-A": {ClusterID: "cluster-A", SourceActive: true, OwnerNodeID: "node-newer", SourceRevision: newerRevision},
 	}}
@@ -406,14 +437,81 @@ func TestResumedProjectionDeniedWhenRegistryHoldsNewerRevision_RealPG(t *testing
 		t.Fatalf("seed newer Redis source: applied=%v err=%v", ok, seedErr)
 	}
 
-	// The retry resolves as resumed but the re-publish LOSES the CAS — it must be denied, not
-	// blindly accepted.
-	appliedRetry, _, err := ProjectSourceIfCurrent(ctx, registry, ingA, node, stream, 601, uuid, sid, AdmissionEffectIntent{})
+	// The retry's first re-publish loses the CAS. The stream-locked repair then
+	// advances durable authority above the foreign watermark and converges Redis.
+	appliedRetry, resumedRetry, err := ProjectSourceIfCurrent(ctx, registry, ingA, node, stream, 601, uuid, sid, AdmissionEffectIntent{})
 	if err != nil {
-		t.Fatalf("resumed CAS-loss must deny without error, got: %v", err)
+		t.Fatalf("resumed CAS-loss repair: %v", err)
 	}
-	if appliedRetry {
-		t.Fatal("a resumed retry behind a newer registry revision must be DENIED (applied=false)")
+	if !appliedRetry || !resumedRetry {
+		t.Fatalf("resumed repair = applied:%v resumed:%v, want true/true", appliedRetry, resumedRetry)
+	}
+	var repairedSessionRevision, repairedEffectRevision int64
+	if err := db.QueryRow(`SELECT source_revision FROM foghorn.ingest_sessions WHERE id=$1::uuid`, sid).Scan(&repairedSessionRevision); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRow(`SELECT source_revision FROM foghorn.ingest_admission_effects WHERE source_generation=$1::uuid`, sid).Scan(&repairedEffectRevision); err != nil {
+		t.Fatal(err)
+	}
+	if repairedSessionRevision <= newerRevision || repairedEffectRevision != repairedSessionRevision {
+		t.Fatalf("repaired revisions session=%d effect=%d, want equal and > %d", repairedSessionRevision, repairedEffectRevision, newerRevision)
+	}
+}
+
+// A settled admission effect may be retention-purged while its ingest remains
+// active. Repair advances the active-session authority without recreating
+// already-completed side effects or rejecting that publisher.
+func TestResumedProjectionRepairAllowsPurgedTerminalEffect_RealPG(t *testing.T) {
+	conn := startRealPG(t)
+	prev := db
+	SetDB(conn)
+	t.Cleanup(func() { SetDB(prev) })
+	ctx := context.Background()
+	logger := logging.NewLogger()
+	const node, stream, triggerUUID = "node-resumed-missing-effect", "live+resumed-missing-effect", "resumed-missing-effect-uuid"
+
+	store, _, _ := newTestRedis(t)
+	registry := NewStreamRegistry(nil, "cluster-A", time.Minute)
+	registry.mu.Lock()
+	registry.redisStore = store
+	registry.instanceID = "resumed-missing-effect-test"
+	registry.mu.Unlock()
+
+	sessionID, outcome, err := CreateIngestSession(ctx, ingA, node, stream, 602, triggerUUID, 1000, nil, "cluster-A", logger)
+	if err != nil || outcome != IngestSessionActive {
+		t.Fatalf("mint: outcome=%v err=%v", outcome, err)
+	}
+	applied, resumed, err := ProjectSourceIfCurrent(ctx, registry, ingA, node, stream, 602, triggerUUID, sessionID, AdmissionEffectIntent{})
+	if err != nil || !applied || resumed {
+		t.Fatalf("first projection: applied=%v resumed=%v err=%v", applied, resumed, err)
+	}
+	var originalRevision int64
+	if err := conn.QueryRowContext(ctx, `SELECT source_revision FROM foghorn.ingest_sessions WHERE id=$1::uuid`, sessionID).Scan(&originalRevision); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.ExecContext(ctx, `DELETE FROM foghorn.ingest_admission_effects WHERE source_generation=$1::uuid`, sessionID); err != nil {
+		t.Fatal(err)
+	}
+
+	const divergentRevision = sourceProjectionCounterBase + 2_100_000_000
+	divergent := StreamEntry{InternalName: stream, Locations: map[string]Location{
+		"cluster-A": {ClusterID: "cluster-A", SourceActive: true, OwnerNodeID: "node-divergent", SourceRevision: divergentRevision},
+	}}
+	change := RegistryChange{InstanceID: "peer", Entity: RegistryEntitySource, Operation: RegistryOpUpsert, Key: stream, SourceRevision: divergentRevision}
+	if ok, seedErr := store.SetSourceRevisioned(ctx, divergent, change, divergentRevision); seedErr != nil || !ok {
+		t.Fatalf("seed divergent Redis source: applied=%v err=%v", ok, seedErr)
+	}
+
+	applied, resumed, err = ProjectSourceIfCurrent(ctx, registry, ingA, node, stream, 602, triggerUUID, sessionID, AdmissionEffectIntent{})
+	if err != nil || !applied || !resumed {
+		t.Fatalf("purged effect repair: applied=%v resumed=%v err=%v", applied, resumed, err)
+	}
+	var revisionAfter int64
+	if err := conn.QueryRowContext(ctx, `SELECT source_revision FROM foghorn.ingest_sessions WHERE id=$1::uuid`, sessionID).Scan(&revisionAfter); err != nil {
+		t.Fatal(err)
+	}
+	if revisionAfter <= divergentRevision || revisionAfter <= originalRevision {
+		t.Fatalf("session revision after repair=%d, want > max(%d,%d)", revisionAfter, divergentRevision, originalRevision)
 	}
 }
 
@@ -548,6 +646,9 @@ func TestAdmissionEffectApplyAndSupersede_RealPG(t *testing.T) {
 // retained in last_error while unrelated valid legs (here the Decklog event) still converge — a
 // corrupt push-target intent must not discard a still-owed drain or ingest event.
 func TestAdmissionEffectPoisonSettlesLegOnly_RealPG(t *testing.T) {
+	if err := ConfigureAdmissionEffectEncryption("test-foghorn-state-key"); err != nil {
+		t.Fatal(err)
+	}
 	conn := startRealPG(t)
 	prev := db
 	SetDB(conn)
@@ -586,14 +687,114 @@ func TestAdmissionEffectPoisonSettlesLegOnly_RealPG(t *testing.T) {
 	if err := db.QueryRow(`SELECT state, last_error, push_targets FROM foghorn.ingest_admission_effects WHERE source_generation=$1::uuid`, sid).Scan(&state, &lastError, &payload); err != nil {
 		t.Fatalf("read settled row: %v", err)
 	}
-	if state != "applied" {
-		t.Fatalf("state=%q, want applied (valid legs converged despite the poisoned one)", state)
+	if state != admissionStateAppliedV2 {
+		t.Fatalf("state=%q, want %s (valid legs converged despite the poisoned one)", state, admissionStateAppliedV2)
 	}
 	if !lastError.Valid || lastError.String == "" {
 		t.Fatal("per-leg poison diagnostics must be retained in last_error")
 	}
 	if len(payload) != 0 {
 		t.Fatal("settled rows must not retain the push-target payload")
+	}
+}
+
+// A completed multistream activation is process-local proof, not permanent proof. A newer
+// authenticated Helmsman connection re-arms the exact target set for every still-open publisher,
+// rejects a delayed acknowledgement from the retired connection, and retains the payload only
+// until the generation ends.
+func TestActivePushTargetsRearmAcrossNodeReconnect_RealPG(t *testing.T) {
+	if err := ConfigureAdmissionEffectEncryption("test-foghorn-state-key"); err != nil {
+		t.Fatal(err)
+	}
+	conn := startRealPG(t)
+	prev := db
+	SetDB(conn)
+	t.Cleanup(func() { SetDB(prev) })
+	ctx := context.Background()
+	logger := logging.NewLogger()
+	const node, stream, triggerUUID = "node-output-restart", "live+output-restart", "output-restart-trigger"
+	const initialFence, reconnectFence int64 = 10, 11
+	exactTargets := []byte("exact-admitted-target-set")
+
+	registry := NewStreamRegistry(nil, "cluster-A", time.Minute)
+	sid, outcome, err := CreateIngestSession(ctx, ingA, node, stream, 901, triggerUUID, 1000, nil, "cluster-A", logger)
+	if err != nil || outcome != IngestSessionActive {
+		t.Fatalf("mint: outcome=%v err=%v", outcome, err)
+	}
+	if applied, _, projectErr := ProjectSourceIfCurrent(ctx, registry, ingA, node, stream, 901, triggerUUID, sid, AdmissionEffectIntent{PushTargets: exactTargets}); projectErr != nil || !applied {
+		t.Fatalf("project: applied=%v err=%v", applied, projectErr)
+	}
+
+	effects, err := ClaimAdmissionEffects(ctx, 1, time.Minute, "test-instance")
+	if err != nil || len(effects) != 1 {
+		t.Fatalf("claim initial activation: count=%d err=%v", len(effects), err)
+	}
+	if err := MarkAdmissionActivationDone(ctx, node, sid, initialFence); err != nil {
+		t.Fatalf("ack initial activation: %v", err)
+	}
+	completed, err := ApplyClaimedAdmissionEffect(ctx, effects[0], func(context.Context, AdmissionEffect) (AdmissionEffectLegResults, error) {
+		t.Fatal("the acknowledged activation owes no callback work")
+		return AdmissionEffectLegResults{}, nil
+	})
+	if err != nil || !completed {
+		t.Fatalf("settle initial activation: completed=%v err=%v", completed, err)
+	}
+
+	var state string
+	var activationDone bool
+	var connectionFence int64
+	var retained []byte
+	if err := db.QueryRow(`SELECT state, activation_done, activation_connection_fence, push_targets
+		FROM foghorn.ingest_admission_effects WHERE source_generation=$1::uuid`, sid).
+		Scan(&state, &activationDone, &connectionFence, &retained); err != nil {
+		t.Fatalf("read settled activation: %v", err)
+	}
+	if state != admissionStateAppliedV2 || !activationDone || connectionFence != initialFence || !fieldcrypto.IsEncrypted(string(retained)) || reflect.DeepEqual(retained, exactTargets) {
+		t.Fatalf("initial activation = state:%q done:%v fence:%d payload:%q", state, activationDone, connectionFence, retained)
+	}
+
+	rearmed, err := RequeueActivePushTargetActivationsForNode(ctx, node, reconnectFence, "test-instance")
+	if err != nil || rearmed != 1 {
+		t.Fatalf("rearm on reconnect: rows=%d err=%v", rearmed, err)
+	}
+	if err := MarkAdmissionActivationDone(ctx, node, sid, initialFence); err != nil {
+		t.Fatalf("record delayed retired-connection ACK: %v", err)
+	}
+	if err := db.QueryRow(`SELECT state, activation_done, activation_connection_fence
+		FROM foghorn.ingest_admission_effects WHERE source_generation=$1::uuid`, sid).
+		Scan(&state, &activationDone, &connectionFence); err != nil {
+		t.Fatalf("read rearmed activation: %v", err)
+	}
+	if state != admissionStatePendingV2 || activationDone || connectionFence != reconnectFence {
+		t.Fatalf("retired ACK crossed reconnect fence: state=%q done=%v fence=%d", state, activationDone, connectionFence)
+	}
+	if err := MarkAdmissionActivationDone(ctx, node, sid, reconnectFence); err != nil {
+		t.Fatalf("ack replay on current connection: %v", err)
+	}
+	replayed, err := ClaimAdmissionEffects(ctx, 1, time.Minute, "test-instance")
+	if err != nil || len(replayed) != 1 {
+		t.Fatalf("claim replayed activation: count=%d err=%v", len(replayed), err)
+	}
+	completed, err = ApplyClaimedAdmissionEffect(ctx, replayed[0], func(context.Context, AdmissionEffect) (AdmissionEffectLegResults, error) {
+		t.Fatal("the replay acknowledgement already completed the only leg")
+		return AdmissionEffectLegResults{}, nil
+	})
+	if err != nil || !completed {
+		t.Fatalf("settle replayed activation: completed=%v err=%v", completed, err)
+	}
+
+	if _, err := db.Exec(`UPDATE foghorn.ingest_admission_effects SET updated_at=NOW()-INTERVAL '1 hour'
+		WHERE source_generation=$1::uuid`, sid); err != nil {
+		t.Fatalf("age active activation: %v", err)
+	}
+	if purged, purgeErr := PurgeTerminalAdmissionEffects(ctx, time.Minute); purgeErr != nil || purged != 0 {
+		t.Fatalf("active output authority was purgeable: rows=%d err=%v", purged, purgeErr)
+	}
+	if _, err := db.Exec(`UPDATE foghorn.ingest_sessions SET ended_at=NOW() WHERE id=$1::uuid`, sid); err != nil {
+		t.Fatalf("end publisher generation: %v", err)
+	}
+	if purged, purgeErr := PurgeTerminalAdmissionEffects(ctx, time.Minute); purgeErr != nil || purged != 1 {
+		t.Fatalf("ended output authority was not purged: rows=%d err=%v", purged, purgeErr)
 	}
 }
 

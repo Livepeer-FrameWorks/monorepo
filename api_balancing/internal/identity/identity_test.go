@@ -194,6 +194,32 @@ func TestResolveArtifact_KindHintPinsSingleProbe(t *testing.T) {
 	}
 }
 
+func TestResolveArtifact_VODProbePreservesResolvedChapterKind(t *testing.T) {
+	r := NewResolver(Config{
+		CommodoreArtifact: func(_ context.Context, kind, _ string) (ArtifactIdentity, error) {
+			if kind == "clip" {
+				return ArtifactIdentity{}, ErrNotFound
+			}
+			if kind != "vod" {
+				t.Fatalf("unexpected probe kind %q", kind)
+			}
+			return ArtifactIdentity{
+				Kind:               "chapter",
+				TenantID:           "tenant-1",
+				StreamInternalName: "live-parent",
+			}, nil
+		},
+	})
+
+	id, err := r.ResolveArtifact(context.Background(), "chapter-hash", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id.Kind != "chapter" || id.StreamInternalName != "live-parent" {
+		t.Fatalf("chapter identity lost by VOD probe: %+v", id)
+	}
+}
+
 func TestResolveArtifact_CompleteRegistryHitSkipsCommodore(t *testing.T) {
 	commodoreCalls := 0
 	r := NewResolver(Config{

@@ -3,43 +3,57 @@ package state
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
 )
 
-// TenantCapacityManager tracks per-tenant concurrent stream and viewer counts
-// for runtime fair-use enforcement. Counts are kept as sets keyed by stable
-// identifiers (internal_name for streams, fwcid/session fallback for viewers)
-// so duplicate trigger fires are idempotent — Mist can re-fire PUSH_REWRITE
-// on retry or USER_NEW on reconnect without inflating the count.
+const (
+	// Helmsman emits Mist's current client inventory every ten seconds. Viewer
+	// leases survive several missed polls but recover promptly after a missing
+	// USER_END or a dead media process.
+	tenantViewerCapacityLease = 2 * time.Minute
+	// Correlation outlives active capacity. It lets a Foghorn restart or a
+	// delayed inventory sample reconstruct the fwcid-backed reservation from
+	// the Mist session ID even after the active lease has lapsed.
+	tenantViewerCorrelationRetention = 24 * time.Hour
+	tenantViewerLocalPruneInterval   = time.Minute
+)
+
+type viewerCapacityLease struct {
+	capacityID string
+	expiresAt  time.Time
+	retainTill time.Time
+}
+
+// TenantCapacityManager is the shared admission authority for per-tenant
+// concurrent viewer limits.
 //
-// When EnableRedisSync is called, sets are mirrored to Redis (SADD/SREM)
-// and counts are sourced from Redis (SCARD) so multiple Foghorn instances
-// in an HA pool agree on cluster-wide counts. Local in-memory state remains
-// for fast HasStream/HasViewer probes and for fallback when Redis is
-// unreachable. Single-instance Foghorn (today's prod) works correctly with
-// in-memory only.
+// Viewer reservations persist the mapping Mist's USER_END does not carry:
+// (node, session_id) -> fwcid-preferred capacity ID. Redis is
+// authoritative under HA; the local representation supplies the same contract
+// for single-process deployments and tests.
 type TenantCapacityManager struct {
-	mu      sync.RWMutex
-	streams map[string]map[string]struct{} // tenant_id -> set(internal_name)
-	viewers map[string]map[string]struct{} // tenant_id -> set(viewer capacity id)
+	mu sync.RWMutex
+
+	viewers         map[string]map[string]viewerCapacityLease // tenant -> node/session -> lease
+	lastViewerPrune time.Time
 
 	redis     goredis.UniversalClient
 	clusterID string
+	now       func() time.Time
 }
 
 func NewTenantCapacityManager() *TenantCapacityManager {
 	return &TenantCapacityManager{
-		streams: make(map[string]map[string]struct{}),
-		viewers: make(map[string]map[string]struct{}),
+		viewers: make(map[string]map[string]viewerCapacityLease),
+		now:     time.Now,
 	}
 }
 
-// EnableRedisSync attaches a Redis client so cluster-wide counts agree
-// across multiple Foghorn instances. clusterID partitions keys so two
-// clusters sharing a Redis don't collide. Safe to call once at startup.
 func (m *TenantCapacityManager) EnableRedisSync(client goredis.UniversalClient, clusterID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -47,306 +61,482 @@ func (m *TenantCapacityManager) EnableRedisSync(client goredis.UniversalClient, 
 	m.clusterID = clusterID
 }
 
-func (m *TenantCapacityManager) keyStreams(tenantID string) string {
-	return fmt.Sprintf("{%s}:tenant_streams:%s", m.clusterID, tenantID)
+func (m *TenantCapacityManager) key(kind, tenantID string) string {
+	return fmt.Sprintf("{%s}:tenant_capacity:%s:%s", m.clusterID, tenantID, kind)
 }
 
-func (m *TenantCapacityManager) keyViewers(tenantID string) string {
-	return fmt.Sprintf("{%s}:tenant_viewers:%s", m.clusterID, tenantID)
+func viewerSessionField(nodeID, sessionID string) string {
+	return strings.TrimSpace(nodeID) + "\x1f" + strings.TrimSpace(sessionID)
 }
 
-// redisCtx returns a short-bounded context for Redis ops. Cap check is on
-// the hot trigger path; we do not want to block trigger processing on a
-// slow Redis. On timeout/error the caller falls through to the local
-// count, which is still reasonable for single-instance deploys and a
-// best-effort for HA.
-func redisCtx() (context.Context, context.CancelFunc) {
+func redisCapacityCtx() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 250*time.Millisecond)
 }
 
-// RegisterStream records an active stream for a tenant. Idempotent — the
-// same (tenant, internal_name) added twice counts once. Returns the count
-// after the operation (local view; Redis count may differ briefly under HA).
-func (m *TenantCapacityManager) RegisterStream(tenantID, internalName string) int {
-	if tenantID == "" || internalName == "" {
-		return 0
+// Lua concatenates the current millisecond timestamp only to form an exclusive
+// sorted-set range bound. It is neither persisted as an authority identifier nor
+// compared outside this script, and current epoch milliseconds remain exact in
+// Lua's IEEE-754 integer range.
+var reserveTenantViewer = goredis.NewScript(`
+local now = tonumber(ARGV[4])
+local function expireSession(field)
+  local score = redis.call('ZSCORE', KEYS[2], field)
+  if score and tonumber(score) <= now then
+    local staleCapacity = redis.call('HGET', KEYS[3], field)
+    if staleCapacity then
+      local refs = redis.call('HINCRBY', KEYS[4], staleCapacity, -1)
+      if refs <= 0 then
+        redis.call('HDEL', KEYS[4], staleCapacity)
+        redis.call('ZREM', KEYS[1], staleCapacity)
+      end
+    end
+    redis.call('ZREM', KEYS[2], field)
+  end
+end
+expireSession(ARGV[1])
+local expired = redis.call('ZRANGEBYSCORE', KEYS[2], '-inf', now, 'LIMIT', 0, 128)
+for _, field in ipairs(expired) do
+  expireSession(field)
+end
+local forgotten = redis.call('ZRANGEBYSCORE', KEYS[5], '-inf', now, 'LIMIT', 0, 128)
+for _, field in ipairs(forgotten) do
+  if not redis.call('ZSCORE', KEYS[2], field) then
+    redis.call('HDEL', KEYS[3], field)
+    redis.call('ZREM', KEYS[5], field)
+  end
+end
+local sessionScore = redis.call('ZSCORE', KEYS[2], ARGV[1])
+local oldCapacity = redis.call('HGET', KEYS[3], ARGV[1])
+if sessionScore and tonumber(sessionScore) > now and oldCapacity == ARGV[2] then
+  redis.call('ZADD', KEYS[1], ARGV[5], ARGV[2])
+  redis.call('ZADD', KEYS[2], ARGV[5], ARGV[1])
+  redis.call('ZADD', KEYS[5], ARGV[6], ARGV[1])
+  for i = 1, 5 do redis.call('PEXPIRE', KEYS[i], ARGV[7]) end
+  return {1, 0, redis.call('ZCOUNT', KEYS[1], '(' .. now, '+inf')}
+end
+local capacityScore = redis.call('ZSCORE', KEYS[1], ARGV[2])
+local capacityActive = capacityScore and tonumber(capacityScore) > now
+local count = redis.call('ZCOUNT', KEYS[1], '(' .. now, '+inf')
+local replacingSoleCapacity = sessionScore and tonumber(sessionScore) > now and oldCapacity and oldCapacity ~= ARGV[2]
+  and tonumber(redis.call('HGET', KEYS[4], oldCapacity) or '0') <= 1
+local effectiveCount = count
+if replacingSoleCapacity then effectiveCount = effectiveCount - 1 end
+if not capacityActive and effectiveCount >= tonumber(ARGV[3]) then
+  for i = 1, 5 do redis.call('PEXPIRE', KEYS[i], ARGV[7]) end
+  return {0, 0, count}
+end
+if sessionScore and tonumber(sessionScore) > now and oldCapacity and oldCapacity ~= ARGV[2] then
+  local refs = redis.call('HINCRBY', KEYS[4], oldCapacity, -1)
+  if refs <= 0 then
+    redis.call('HDEL', KEYS[4], oldCapacity)
+    redis.call('ZREM', KEYS[1], oldCapacity)
+    count = count - 1
+  end
+end
+redis.call('HINCRBY', KEYS[4], ARGV[2], 1)
+redis.call('HSET', KEYS[3], ARGV[1], ARGV[2])
+redis.call('ZADD', KEYS[1], ARGV[5], ARGV[2])
+redis.call('ZADD', KEYS[2], ARGV[5], ARGV[1])
+redis.call('ZADD', KEYS[5], ARGV[6], ARGV[1])
+if not capacityActive then count = count + 1 end
+for i = 1, 5 do redis.call('PEXPIRE', KEYS[i], ARGV[7]) end
+return {1, 1, count}
+`)
+
+var renewTenantViewer = goredis.NewScript(`
+local now = tonumber(ARGV[2])
+local function expireSession(field)
+  local score = redis.call('ZSCORE', KEYS[2], field)
+  if score and tonumber(score) <= now then
+    local staleCapacity = redis.call('HGET', KEYS[3], field)
+    if staleCapacity then
+      local refs = redis.call('HINCRBY', KEYS[4], staleCapacity, -1)
+      if refs <= 0 then
+        redis.call('HDEL', KEYS[4], staleCapacity)
+        redis.call('ZREM', KEYS[1], staleCapacity)
+      end
+    end
+    redis.call('ZREM', KEYS[2], field)
+  end
+end
+expireSession(ARGV[1])
+local expired = redis.call('ZRANGEBYSCORE', KEYS[2], '-inf', now, 'LIMIT', 0, 128)
+for _, field in ipairs(expired) do
+  expireSession(field)
+end
+local retained = redis.call('ZSCORE', KEYS[5], ARGV[1])
+if not retained or tonumber(retained) <= now then
+  local sessionScore = redis.call('ZSCORE', KEYS[2], ARGV[1])
+  local capacity = redis.call('HGET', KEYS[3], ARGV[1])
+  if sessionScore and capacity then
+    local refs = redis.call('HINCRBY', KEYS[4], capacity, -1)
+    if refs <= 0 then
+      redis.call('HDEL', KEYS[4], capacity)
+      redis.call('ZREM', KEYS[1], capacity)
+    end
+  end
+  redis.call('ZREM', KEYS[2], ARGV[1])
+  redis.call('HDEL', KEYS[3], ARGV[1])
+  redis.call('ZREM', KEYS[5], ARGV[1])
+  for i = 1, 5 do redis.call('PEXPIRE', KEYS[i], ARGV[5]) end
+  return 0
+end
+local capacity = redis.call('HGET', KEYS[3], ARGV[1])
+if not capacity then return 0 end
+local sessionScore = redis.call('ZSCORE', KEYS[2], ARGV[1])
+if not sessionScore or tonumber(sessionScore) <= now then
+  local capacityScore = redis.call('ZSCORE', KEYS[1], capacity)
+  local maxViewers = tonumber(ARGV[6])
+  if (not capacityScore or tonumber(capacityScore) <= now) and maxViewers > 0 then
+    local activeCount = redis.call('ZCOUNT', KEYS[1], '(' .. now, '+inf')
+    if activeCount >= maxViewers then return 0 end
+  end
+  redis.call('HINCRBY', KEYS[4], capacity, 1)
+end
+redis.call('ZADD', KEYS[1], ARGV[3], capacity)
+redis.call('ZADD', KEYS[2], ARGV[3], ARGV[1])
+redis.call('ZADD', KEYS[5], ARGV[4], ARGV[1])
+for i = 1, 5 do redis.call('PEXPIRE', KEYS[i], ARGV[5]) end
+return 1
+`)
+
+var releaseTenantViewer = goredis.NewScript(`
+local now = tonumber(ARGV[2])
+local function expireSession(field)
+  local score = redis.call('ZSCORE', KEYS[2], field)
+  if score and tonumber(score) <= now then
+    local staleCapacity = redis.call('HGET', KEYS[3], field)
+    if staleCapacity then
+      local refs = redis.call('HINCRBY', KEYS[4], staleCapacity, -1)
+      if refs <= 0 then
+        redis.call('HDEL', KEYS[4], staleCapacity)
+        redis.call('ZREM', KEYS[1], staleCapacity)
+      end
+    end
+    redis.call('ZREM', KEYS[2], field)
+  end
+end
+expireSession(ARGV[1])
+local expired = redis.call('ZRANGEBYSCORE', KEYS[2], '-inf', now, 'LIMIT', 0, 128)
+for _, field in ipairs(expired) do
+  expireSession(field)
+end
+local capacity = redis.call('HGET', KEYS[3], ARGV[1])
+if not capacity then
+  for i = 1, 5 do redis.call('PEXPIRE', KEYS[i], ARGV[3]) end
+  return {'', 0, redis.call('ZCOUNT', KEYS[1], '(' .. now, '+inf')}
+end
+local sessionScore = redis.call('ZSCORE', KEYS[2], ARGV[1])
+local released = 0
+if sessionScore and tonumber(sessionScore) > now then
+  released = 1
+  local refs = redis.call('HINCRBY', KEYS[4], capacity, -1)
+  if refs <= 0 then
+    redis.call('HDEL', KEYS[4], capacity)
+    redis.call('ZREM', KEYS[1], capacity)
+  end
+end
+redis.call('ZREM', KEYS[2], ARGV[1])
+redis.call('HDEL', KEYS[3], ARGV[1])
+redis.call('ZREM', KEYS[5], ARGV[1])
+for i = 1, 5 do redis.call('PEXPIRE', KEYS[i], ARGV[3]) end
+return {capacity, released, redis.call('ZCOUNT', KEYS[1], '(' .. now, '+inf')}
+`)
+
+func (m *TenantCapacityManager) viewerKeys(tenantID string) []string {
+	return []string{
+		m.key("viewers", tenantID), m.key("viewer_sessions", tenantID),
+		m.key("viewer_correlations", tenantID), m.key("viewer_refs", tenantID),
+		m.key("viewer_correlation_expiry", tenantID),
 	}
-	m.mu.Lock()
-	set := m.streams[tenantID]
-	if set == nil {
-		set = make(map[string]struct{})
-		m.streams[tenantID] = set
-	}
-	set[internalName] = struct{}{}
-	r := m.redis
-	key := ""
-	if r != nil {
-		key = m.keyStreams(tenantID)
-	}
-	count := len(set)
-	m.mu.Unlock()
-	if r != nil {
-		ctx, cancel := redisCtx()
-		defer cancel()
-		// Best-effort: local state already updated; HA peers reconcile on
-		// the next op. A failed SADD just means the cluster-wide count is
-		// briefly behind reality, not that the trigger should fail.
-		r.SAdd(ctx, key, internalName) //nolint:errcheck
-	}
-	return count
 }
 
-// ReconcileStreams replaces the tenant's active-stream set with the stream
-// manager's current live-stream view. STREAM_END is best-effort; this prevents
-// a missed end event from permanently consuming a slot in Redis-backed HA mode.
-func (m *TenantCapacityManager) ReconcileStreams(tenantID string, activeInternalNames []string) int {
-	if tenantID == "" {
-		return 0
+// TryRegisterViewer reserves one logical viewer while durably binding the Mist
+// session used by USER_END to the fwcid-preferred capacity ID used by USER_NEW.
+func (m *TenantCapacityManager) TryRegisterViewer(tenantID, nodeID, sessionID, capacityID string, maxViewers int32) (allowed, added bool, count int, err error) {
+	tenantID, sessionID, capacityID = strings.TrimSpace(tenantID), strings.TrimSpace(sessionID), strings.TrimSpace(capacityID)
+	if tenantID == "" || sessionID == "" || capacityID == "" || maxViewers <= 0 {
+		return false, false, 0, nil
 	}
-	next := make(map[string]struct{}, len(activeInternalNames))
-	for _, name := range activeInternalNames {
-		if name != "" {
-			next[name] = struct{}{}
-		}
-	}
-	m.mu.Lock()
-	if len(next) == 0 {
-		delete(m.streams, tenantID)
-	} else {
-		m.streams[tenantID] = next
-	}
-	r := m.redis
-	key := ""
-	if r != nil {
-		key = m.keyStreams(tenantID)
-	}
-	count := len(next)
-	m.mu.Unlock()
-	if r != nil {
-		ctx, cancel := redisCtx()
-		defer cancel()
-		if count == 0 {
-			r.Del(ctx, key) //nolint:errcheck
-			return 0
-		}
-		members := make([]any, 0, count)
-		for name := range next {
-			members = append(members, name)
-		}
-		pipe := r.Pipeline()
-		pipe.Del(ctx, key)
-		pipe.SAdd(ctx, key, members...)
-		if _, err := pipe.Exec(ctx); err != nil {
-			return count
-		}
-	}
-	return count
-}
-
-// UnregisterStream removes an active stream. Safe to call for unknown streams
-// (no-op). Returns the count after the operation.
-func (m *TenantCapacityManager) UnregisterStream(tenantID, internalName string) int {
-	if tenantID == "" || internalName == "" {
-		return 0
-	}
-	m.mu.Lock()
-	set := m.streams[tenantID]
-	r := m.redis
-	key := ""
-	if r != nil {
-		key = m.keyStreams(tenantID)
-	}
-	count := 0
-	if set != nil {
-		delete(set, internalName)
-		if len(set) == 0 {
-			delete(m.streams, tenantID)
-		} else {
-			count = len(set)
-		}
-	}
-	m.mu.Unlock()
-	if r != nil {
-		ctx, cancel := redisCtx()
-		defer cancel()
-		// Best-effort: a failed SREM is recoverable on the next op.
-		r.SRem(ctx, key, internalName) //nolint:errcheck
-	}
-	return count
-}
-
-// CountStreams returns the current concurrent stream count for a tenant.
-// When Redis sync is enabled, sources from SCARD (cluster-wide truth);
-// otherwise from local memory. Falls back to local on Redis error.
-func (m *TenantCapacityManager) CountStreams(tenantID string) int {
-	if tenantID == "" {
-		return 0
-	}
+	field := viewerSessionField(nodeID, sessionID)
+	now := m.now()
+	expiresAt := now.Add(tenantViewerCapacityLease)
+	retainTill := now.Add(tenantViewerCorrelationRetention)
 	m.mu.RLock()
-	local := len(m.streams[tenantID])
 	r := m.redis
-	key := ""
-	if r != nil {
-		key = m.keyStreams(tenantID)
-	}
 	m.mu.RUnlock()
-	if r == nil {
-		return local
-	}
-	ctx, cancel := redisCtx()
-	defer cancel()
-	n, err := r.SCard(ctx, key).Result()
-	if err != nil {
-		return local
-	}
-	return int(n)
-}
-
-// HasStream reports whether (tenant, internal_name) is currently registered.
-// Used so trigger handlers can distinguish a re-fire of an already-tracked
-// stream (admit, since count doesn't go up) from a genuine new stream that
-// would push the tenant over their cap. Sources from Redis when enabled.
-func (m *TenantCapacityManager) HasStream(tenantID, internalName string) bool {
-	if tenantID == "" || internalName == "" {
-		return false
-	}
-	m.mu.RLock()
-	_, local := m.streams[tenantID][internalName]
-	r := m.redis
-	key := ""
 	if r != nil {
-		key = m.keyStreams(tenantID)
+		ctx, cancel := redisCapacityCtx()
+		defer cancel()
+		keyTTL := tenantViewerCorrelationRetention + tenantViewerCapacityLease
+		result, runErr := reserveTenantViewer.Run(ctx, r, m.viewerKeys(tenantID), field, capacityID, maxViewers, now.UnixMilli(), expiresAt.UnixMilli(), retainTill.UnixMilli(), keyTTL.Milliseconds()).Result()
+		if runErr != nil {
+			return false, false, 0, fmt.Errorf("reserve tenant viewer capacity: %w", runErr)
+		}
+		values, parseErr := redisInts(result, 3)
+		if parseErr != nil {
+			return false, false, 0, fmt.Errorf("reserve tenant viewer capacity: %w", parseErr)
+		}
+		allowed, added, count = values[0] == 1, values[1] == 1, int(values[2])
+		if allowed {
+			m.rememberViewer(tenantID, field, capacityID, expiresAt, retainTill)
+		}
+		return allowed, added, count, nil
 	}
-	m.mu.RUnlock()
-	if r == nil {
-		return local
-	}
-	ctx, cancel := redisCtx()
-	defer cancel()
-	present, err := r.SIsMember(ctx, key, internalName).Result()
-	if err != nil {
-		return local
-	}
-	return present
-}
 
-// RegisterViewer records an active viewer capacity id for a tenant. Idempotent.
-func (m *TenantCapacityManager) RegisterViewer(tenantID, viewerID string) int {
-	if tenantID == "" || viewerID == "" {
-		return 0
-	}
 	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pruneLocalLocked(now)
 	set := m.viewers[tenantID]
 	if set == nil {
-		set = make(map[string]struct{})
+		set = make(map[string]viewerCapacityLease)
 		m.viewers[tenantID] = set
 	}
-	set[viewerID] = struct{}{}
-	r := m.redis
-	key := ""
-	if r != nil {
-		key = m.keyViewers(tenantID)
+	if existing, ok := set[field]; ok && existing.expiresAt.After(now) && existing.capacityID == capacityID {
+		existing.expiresAt, existing.retainTill = expiresAt, retainTill
+		set[field] = existing
+		return true, false, len(localViewerCapacitySet(set, now)), nil
 	}
-	count := len(set)
-	m.mu.Unlock()
-	if r != nil {
-		ctx, cancel := redisCtx()
-		defer cancel()
-		// Viewer membership is lifecycle-driven; keep the tenant set
-		// unexpired while any viewer is tracked.
-		pipe := r.Pipeline()
-		pipe.SAdd(ctx, key, viewerID)
-		pipe.Persist(ctx, key)
-		if _, err := pipe.Exec(ctx); err != nil {
-			return count
-		}
+	active := localViewerCapacitySetExcluding(set, now, field)
+	if _, exists := active[capacityID]; !exists && int32(len(active)) >= maxViewers {
+		return false, false, len(active), nil
 	}
-	return count
+	set[field] = viewerCapacityLease{capacityID: capacityID, expiresAt: expiresAt, retainTill: retainTill}
+	return true, true, len(localViewerCapacitySet(set, now)), nil
 }
 
-// UnregisterViewer removes an active viewer capacity id.
-func (m *TenantCapacityManager) UnregisterViewer(tenantID, viewerID string) int {
-	if tenantID == "" || viewerID == "" {
-		return 0
+func (m *TenantCapacityManager) rememberViewer(tenantID, field, capacityID string, expiresAt, retainTill time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pruneLocalIfDueLocked(m.now())
+	set := m.viewers[tenantID]
+	if set == nil {
+		set = make(map[string]viewerCapacityLease)
+		m.viewers[tenantID] = set
+	}
+	set[field] = viewerCapacityLease{capacityID: capacityID, expiresAt: expiresAt, retainTill: retainTill}
+}
+
+// RenewViewerSession consumes Helmsman's current Mist client inventory. It can
+// reactivate a known correlation after a Foghorn restart without requiring the
+// original request URL or admitting a second logical viewer.
+func (m *TenantCapacityManager) RenewViewerSession(tenantID, nodeID, sessionID string, maxViewers int32) error {
+	tenantID, sessionID = strings.TrimSpace(tenantID), strings.TrimSpace(sessionID)
+	if tenantID == "" || sessionID == "" {
+		return nil
+	}
+	field := viewerSessionField(nodeID, sessionID)
+	now := m.now()
+	expiresAt := now.Add(tenantViewerCapacityLease)
+	retainTill := now.Add(tenantViewerCorrelationRetention)
+	m.mu.RLock()
+	r := m.redis
+	m.mu.RUnlock()
+	if r != nil {
+		ctx, cancel := redisCapacityCtx()
+		defer cancel()
+		keyTTL := tenantViewerCorrelationRetention + tenantViewerCapacityLease
+		ok, err := renewTenantViewer.Run(ctx, r, m.viewerKeys(tenantID), field, now.UnixMilli(), expiresAt.UnixMilli(), retainTill.UnixMilli(), keyTTL.Milliseconds(), maxViewers).Int()
+		if err != nil {
+			return fmt.Errorf("renew tenant viewer capacity: %w", err)
+		}
+		if ok == 0 {
+			m.pruneLocalIfDue(now)
+			return nil
+		}
+		m.mu.Lock()
+		m.pruneLocalIfDueLocked(now)
+		if lease, exists := m.viewers[tenantID][field]; exists {
+			lease.expiresAt, lease.retainTill = expiresAt, retainTill
+			m.viewers[tenantID][field] = lease
+		}
+		m.mu.Unlock()
+		return nil
 	}
 	m.mu.Lock()
-	set := m.viewers[tenantID]
-	r := m.redis
-	key := ""
-	if r != nil {
-		key = m.keyViewers(tenantID)
+	defer m.mu.Unlock()
+	lease, ok := m.viewers[tenantID][field]
+	if !ok || !lease.retainTill.After(now) {
+		return nil
 	}
-	count := 0
-	if set != nil {
-		delete(set, viewerID)
-		if len(set) == 0 {
-			delete(m.viewers, tenantID)
-		} else {
-			count = len(set)
+	if !lease.expiresAt.After(now) {
+		active := localViewerCapacitySetExcluding(m.viewers[tenantID], now, field)
+		if _, alreadyActive := active[lease.capacityID]; !alreadyActive && maxViewers > 0 && int32(len(active)) >= maxViewers {
+			return nil
 		}
 	}
-	m.mu.Unlock()
-	if r != nil {
-		ctx, cancel := redisCtx()
-		defer cancel()
-		// Best-effort viewer SREM.
-		r.SRem(ctx, key, viewerID) //nolint:errcheck
-	}
-	return count
+	lease.expiresAt, lease.retainTill = expiresAt, retainTill
+	m.viewers[tenantID][field] = lease
+	return nil
 }
 
-// CountViewers returns the current concurrent viewer count for a tenant.
+// ReleaseViewerSession resolves the durable correlation and releases the
+// logical capacity member only when the last active Mist session using it is
+// gone. The caller never needs the original fwcid-bearing request URL.
+func (m *TenantCapacityManager) ReleaseViewerSession(tenantID, nodeID, sessionID string) (capacityID string, released bool, count int, err error) {
+	tenantID, sessionID = strings.TrimSpace(tenantID), strings.TrimSpace(sessionID)
+	if tenantID == "" || sessionID == "" {
+		return "", false, 0, nil
+	}
+	field := viewerSessionField(nodeID, sessionID)
+	now := m.now()
+	m.mu.RLock()
+	r := m.redis
+	m.mu.RUnlock()
+	if r != nil {
+		ctx, cancel := redisCapacityCtx()
+		defer cancel()
+		keyTTL := tenantViewerCorrelationRetention + tenantViewerCapacityLease
+		result, runErr := releaseTenantViewer.Run(ctx, r, m.viewerKeys(tenantID), field, now.UnixMilli(), keyTTL.Milliseconds()).Result()
+		if runErr != nil {
+			return "", false, 0, fmt.Errorf("release tenant viewer capacity: %w", runErr)
+		}
+		values, ok := result.([]any)
+		if !ok || len(values) != 3 {
+			return "", false, 0, fmt.Errorf("release tenant viewer capacity: malformed Redis result %T", result)
+		}
+		var idOK bool
+		capacityID, idOK = values[0].(string)
+		if !idOK {
+			return "", false, 0, fmt.Errorf("release tenant viewer capacity: malformed capacity id %T", values[0])
+		}
+		numbers, parseErr := redisInts([]any{values[1], values[2]}, 2)
+		if parseErr != nil {
+			return "", false, 0, fmt.Errorf("release tenant viewer capacity: %w", parseErr)
+		}
+		released, count = numbers[0] == 1, int(numbers[1])
+		m.mu.Lock()
+		delete(m.viewers[tenantID], field)
+		if len(m.viewers[tenantID]) == 0 {
+			delete(m.viewers, tenantID)
+		}
+		m.mu.Unlock()
+		return capacityID, released, count, nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	lease, ok := m.viewers[tenantID][field]
+	if !ok {
+		return "", false, len(localViewerCapacitySet(m.viewers[tenantID], now)), nil
+	}
+	delete(m.viewers[tenantID], field)
+	count = len(localViewerCapacitySet(m.viewers[tenantID], now))
+	if len(m.viewers[tenantID]) == 0 {
+		delete(m.viewers, tenantID)
+	}
+	return lease.capacityID, lease.expiresAt.After(now), count, nil
+}
+
 func (m *TenantCapacityManager) CountViewers(tenantID string) int {
+	tenantID = strings.TrimSpace(tenantID)
 	if tenantID == "" {
 		return 0
 	}
+	now := m.now()
 	m.mu.RLock()
-	local := len(m.viewers[tenantID])
 	r := m.redis
-	key := ""
-	if r != nil {
-		key = m.keyViewers(tenantID)
-	}
 	m.mu.RUnlock()
-	if r == nil {
-		return local
+	if r != nil {
+		ctx, cancel := redisCapacityCtx()
+		defer cancel()
+		count, err := r.ZCount(ctx, m.key("viewers", tenantID), "("+strconv.FormatInt(now.UnixMilli(), 10), "+inf").Result()
+		m.pruneLocalIfDue(now)
+		if err == nil {
+			return int(count)
+		}
 	}
-	ctx, cancel := redisCtx()
-	defer cancel()
-	n, err := r.SCard(ctx, key).Result()
-	if err != nil {
-		return local
-	}
-	return int(n)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pruneLocalLocked(now)
+	return len(localViewerCapacitySet(m.viewers[tenantID], now))
 }
 
-// HasViewer reports whether (tenant, viewer capacity id) is currently registered.
-func (m *TenantCapacityManager) HasViewer(tenantID, viewerID string) bool {
-	if tenantID == "" || viewerID == "" {
+func (m *TenantCapacityManager) HasViewer(tenantID, capacityID string) bool {
+	tenantID, capacityID = strings.TrimSpace(tenantID), strings.TrimSpace(capacityID)
+	if tenantID == "" || capacityID == "" {
 		return false
 	}
+	now := m.now()
 	m.mu.RLock()
-	_, local := m.viewers[tenantID][viewerID]
 	r := m.redis
-	key := ""
-	if r != nil {
-		key = m.keyViewers(tenantID)
-	}
 	m.mu.RUnlock()
-	if r == nil {
-		return local
+	if r != nil {
+		ctx, cancel := redisCapacityCtx()
+		defer cancel()
+		score, err := r.ZScore(ctx, m.key("viewers", tenantID), capacityID).Result()
+		m.pruneLocalIfDue(now)
+		return err == nil && score > float64(now.UnixMilli())
 	}
-	ctx, cancel := redisCtx()
-	defer cancel()
-	present, err := r.SIsMember(ctx, key, viewerID).Result()
-	if err != nil {
-		return local
-	}
-	return present
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pruneLocalLocked(now)
+	_, ok := localViewerCapacitySet(m.viewers[tenantID], now)[capacityID]
+	return ok
 }
 
-// Package-level default manager for trigger-handler convenience. Tests can
-// reset via ResetDefaultTenantCapacityForTests.
+func localViewerCapacitySet(set map[string]viewerCapacityLease, now time.Time) map[string]struct{} {
+	return localViewerCapacitySetExcluding(set, now, "")
+}
+
+func localViewerCapacitySetExcluding(set map[string]viewerCapacityLease, now time.Time, excludedField string) map[string]struct{} {
+	active := make(map[string]struct{})
+	for field, lease := range set {
+		if field == excludedField {
+			continue
+		}
+		if lease.expiresAt.After(now) {
+			active[lease.capacityID] = struct{}{}
+		}
+	}
+	return active
+}
+
+func (m *TenantCapacityManager) pruneLocalLocked(now time.Time) {
+	for tenantID, set := range m.viewers {
+		for field, lease := range set {
+			if !lease.retainTill.After(now) {
+				delete(set, field)
+			}
+		}
+		if len(set) == 0 {
+			delete(m.viewers, tenantID)
+		}
+	}
+	m.lastViewerPrune = now
+}
+
+func (m *TenantCapacityManager) pruneLocalIfDue(now time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.pruneLocalIfDueLocked(now)
+}
+
+func (m *TenantCapacityManager) pruneLocalIfDueLocked(now time.Time) {
+	if !m.lastViewerPrune.IsZero() && now.Sub(m.lastViewerPrune) < tenantViewerLocalPruneInterval {
+		return
+	}
+	m.pruneLocalLocked(now)
+}
+
+func redisInts(result any, want int) ([]int64, error) {
+	values, ok := result.([]any)
+	if !ok || len(values) != want {
+		return nil, fmt.Errorf("unexpected Redis result %T", result)
+	}
+	out := make([]int64, len(values))
+	for i, value := range values {
+		switch typed := value.(type) {
+		case int64:
+			out[i] = typed
+		case int:
+			out[i] = int64(typed)
+		default:
+			return nil, fmt.Errorf("malformed Redis result value %T", value)
+		}
+	}
+	return out, nil
+}
+
 var (
 	defaultTenantCapacity   *TenantCapacityManager
 	defaultTenantCapacityMu sync.Mutex

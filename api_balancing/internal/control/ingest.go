@@ -16,6 +16,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
@@ -445,12 +446,24 @@ func ingestClusterAllowed(streamCtx *commodorepb.ResolveStreamContextResponse, c
 	if candidateClusterID == "" {
 		return false
 	}
-	if pinned := strings.TrimSpace(streamCtx.GetActiveIngestClusterId()); pinned != "" {
+	pinned := strings.TrimSpace(streamCtx.GetActiveIngestClusterId())
+	if pinned != "" {
+		// The active lease is the durable placement decision. Commodore only
+		// issues it to a live-ingest-capable cluster; transient health filtering
+		// may remove that cluster from this response, but cannot authorize a
+		// different owner or revoke the existing one.
 		return candidateClusterID == pinned
 	}
 	for _, peer := range streamCtx.GetClusterPeers() {
 		if strings.TrimSpace(peer.GetClusterId()) != candidateClusterID {
 			continue
+		}
+		clusterType := strings.ToLower(strings.TrimSpace(peer.GetClusterType()))
+		// Connected, unpinned routing must positively identify a media-plane
+		// cluster. The signed grant and its local projection both retain the
+		// normalized cluster type.
+		if clusterType == "" || !models.ClusterTypeCanOwnLiveIngest(clusterType) {
+			return false
 		}
 		// Commodore has already dropped unhealthy peers from this envelope, so
 		// this is defence in depth rather than the primary check — but an
@@ -508,34 +521,19 @@ func activeIngestSessionClaims(ctx context.Context) (map[string]LocallyPublished
 	return claims, nil
 }
 
-// LocallyPublishedStreams lists the streams currently being published to nodes
-// this Foghorn owns.
+// LocallyPublishedStreams lists durable open publisher sessions assigned to
+// node control connections owned by this Foghorn replica. The session row is
+// the renewal authority: registry projection, buffer state, and node-health
+// snapshots may all be transiently absent while the publisher remains open.
+// PUSH_INPUT_CLOSE, STREAM_END, and the disconnect reaper end the session and
+// therefore stop renewal.
 //
-// The registry's per-cluster Location is source-active between an accepted
-// PUSH_REWRITE and its PUSH_INPUT_CLOSE — the same fact admission uses to
-// reject a duplicate publisher — so it is the platform's answer to "is someone
-// pushing this right now". Ownership is confirmed against local node state:
-// a Location's cluster may be a federated peer's, whose publishers are that
-// peer's to account for, and whose node this Foghorn has no state for.
-//
-// A source-active Location alone is not enough. Locations are deliberately
-// non-evictable while source-active and survive in Redis without a TTL, and a
-// node record outlives a disconnect (unhealthy, then stale). Renewing from
-// those would hold placement for a publisher that has crashed, which no other
-// cluster could then take. The owner must therefore still be a node this
-// Foghorn considers healthy and non-stale — the same predicate every other
-// serve/placement path applies.
-//
-// The claim is read from the open ingest session rather than re-resolved from
-// the node: the session records the cluster it was admitted into and the
-// publisher connection that owns the claim, so a node reassigned mid-session
-// still has its original claim re-asserted rather than a new one asserted
-// beside it.
+// currentNodeSession is used only to shard work across HA replicas. A node's
+// control stream has one owner, so the owning replica renews its durable rows
+// without every replica replaying the entire cell. The cluster and claim token
+// always come from the session admitted by Commodore; a later node
+// reassignment cannot manufacture a different claim.
 func LocallyPublishedStreams(ctx context.Context) ([]LocallyPublishedStream, error) {
-	registry := StreamRegistryInstance
-	if registry == nil {
-		return nil, nil
-	}
 	claims, err := activeIngestSessionClaims(ctx)
 	if err != nil {
 		// Without the sessions there is no claim to re-assert: renewing under a
@@ -544,47 +542,14 @@ func LocallyPublishedStreams(ctx context.Context) ([]LocallyPublishedStream, err
 		return nil, err
 	}
 	var live []LocallyPublishedStream
-	for _, entry := range registry.Snapshot() {
-		for _, loc := range entry.Locations {
-			if !loc.SourceActive || loc.OwnerNodeID == "" {
-				continue
-			}
-			owner := state.DefaultManager().GetNodeState(loc.OwnerNodeID)
-			if owner == nil || !owner.IsHealthy || owner.IsStale {
-				continue
-			}
-			// Renewal is sharded on the owner node's control connection, which
-			// this process either holds or does not. The stream registry is
-			// synchronized across Foghorn replicas, so every replica sees every
-			// publisher; without this, each would renew the whole fleet and the
-			// per-replica budget would bound nothing. A node's control stream
-			// lives on exactly one replica, so this partitions the fleet with no
-			// gap and no overlap, and adding a replica moves the connections
-			// that land on it along with their renewal work.
-			if _, connected := currentNodeSession(loc.OwnerNodeID); !connected {
-				continue
-			}
-			// Matched on the projection's full session identity — node,
-			// connection, and generation — not just the stream. The registry can
-			// drift, and a looser match lets a stale entry keep an unrelated
-			// session's claim alive for as long as its node stays healthy.
-			claim, ok := claims[sessionClaimKey(
-				entry.TenantID, entry.InternalName,
-				loc.OwnerNodeID, loc.SourceTriggerUUID, loc.SourceGeneration,
-			)]
-			if !ok || claim.ClusterID == "" || claim.ClaimToken == "" {
-				// A source-active projection without its matching open session has
-				// no authoritative cluster or claim token to renew.
-				continue
-			}
-			live = append(live, LocallyPublishedStream{
-				TenantID:     entry.TenantID,
-				InternalName: entry.InternalName,
-				OwnerNodeID:  loc.OwnerNodeID,
-				ClusterID:    claim.ClusterID,
-				ClaimToken:   claim.ClaimToken,
-			})
+	for _, claim := range claims {
+		if claim.ClusterID == "" || claim.ClaimToken == "" {
+			continue
 		}
+		if _, connected := currentNodeSession(claim.OwnerNodeID); !connected {
+			continue
+		}
+		live = append(live, claim)
 	}
 	return live, nil
 }

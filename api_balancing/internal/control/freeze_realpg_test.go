@@ -5,6 +5,7 @@ package control
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_balancing/internal/database/foghorndb"
 	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/testutil/dockerpg"
 	_ "github.com/lib/pq"
@@ -349,9 +351,9 @@ func TestChapterFinalizeNodeBinding_RealPG(t *testing.T) {
 		t.Fatalf("seed parent dvr: %v", err)
 	}
 	seedFinalizing := func(chapterID string) {
-		if _, err := conn.Exec(`INSERT INTO foghorn.dvr_chapters (chapter_id, artifact_hash, mode, start_ms, end_ms, state, finalize_node_id)
-			VALUES ($1, 'dvrparent', 'window_sized_chapters', 0, 1000, 'finalizing', 'node-A')
-			ON CONFLICT (chapter_id) DO UPDATE SET state = 'finalizing', finalize_node_id = 'node-A', last_failure_reason = NULL`, chapterID); err != nil {
+		if _, err := conn.Exec(`INSERT INTO foghorn.dvr_chapters (chapter_id, artifact_hash, mode, start_ms, end_ms, state, finalize_node_id, finalize_attempts)
+			VALUES ($1, 'dvrparent', 'window_sized_chapters', 0, 1000, 'finalizing', 'node-A', 7)
+			ON CONFLICT (chapter_id) DO UPDATE SET state = 'finalizing', finalize_node_id = 'node-A', finalize_attempts = 7, last_failure_reason = NULL`, chapterID); err != nil {
 			t.Fatalf("seed chapter %s: %v", chapterID, err)
 		}
 	}
@@ -363,16 +365,65 @@ func TestChapterFinalizeNodeBinding_RealPG(t *testing.T) {
 		return s
 	}
 
+	// A current-attempt heartbeat advances the stale-recovery clock; stale
+	// attempts cannot keep ownership alive after a replacement claim.
+	seedFinalizing("chap-progress")
+	if _, err := conn.Exec(`INSERT INTO foghorn.artifacts
+            (artifact_hash, artifact_type, tenant_id, status, sync_status, storage_location, origin_type, origin_id)
+        VALUES ('chap-progress-art', 'chapter', $1::uuid, 'finalizing', 'pending', 'local', 'dvr_chapter', 'chap-progress')`, tid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(`UPDATE foghorn.dvr_chapters
+        SET finalize_started_at = NOW() - INTERVAL '1 hour', playback_artifact_hash = 'chap-progress-art'
+        WHERE chapter_id = 'chap-progress'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := foghorndb.New(conn).UpdateChapterFinalizeProgress(ctx, foghorndb.UpdateChapterFinalizeProgressParams{
+		ChapterID: "chap-progress", FinalizeNodeID: sql.NullString{String: "node-A", Valid: true}, ExpectedAttempt: 7,
+	}); err != nil {
+		t.Fatalf("current progress heartbeat: %v", err)
+	}
+	var refreshedAt time.Time
+	if err := conn.QueryRow(`SELECT finalize_started_at FROM foghorn.dvr_chapters WHERE chapter_id = 'chap-progress'`).Scan(&refreshedAt); err != nil {
+		t.Fatal(err)
+	}
+	if refreshedAt.Before(time.Now().Add(-time.Minute)) {
+		t.Fatalf("progress heartbeat did not refresh ownership clock: %s", refreshedAt)
+	}
+	if _, err := foghorndb.New(conn).UpdateChapterFinalizeProgress(ctx, foghorndb.UpdateChapterFinalizeProgressParams{
+		ChapterID: "chap-progress", FinalizeNodeID: sql.NullString{String: "node-A", Valid: true}, ExpectedAttempt: 6,
+	}); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("stale progress heartbeat error = %v, want sql.ErrNoRows", err)
+	}
+
 	// --- MarkChapterFailed: foreign node is a no-op; assigned node transitions. ---
 	seedFinalizing("chap-mf")
-	if err := MarkChapterFailed(ctx, "chap-mf", ChapterStateFailedSourceMissing, "foreign", "node-B"); err != nil {
+	changed, err := MarkChapterFailed(ctx, "chap-mf", ChapterStateFailedSourceMissing, "stale-attempt", "node-A", 6)
+	if err != nil {
+		t.Fatalf("MarkChapterFailed(stale attempt): %v", err)
+	}
+	if changed {
+		t.Fatal("stale attempt unexpectedly changed the chapter")
+	}
+	if got := stateOf("chap-mf"); got != "finalizing" {
+		t.Fatalf("a stale attempt on the assigned node must be a no-op, state=%q", got)
+	}
+	changed, err = MarkChapterFailed(ctx, "chap-mf", ChapterStateFailedSourceMissing, "foreign", "node-B", 7)
+	if err != nil {
 		t.Fatalf("MarkChapterFailed(node-B): %v", err)
+	}
+	if changed {
+		t.Fatal("foreign node unexpectedly changed the chapter")
 	}
 	if got := stateOf("chap-mf"); got != "finalizing" {
 		t.Fatalf("a foreign node's fail must be a no-op, state=%q", got)
 	}
-	if err := MarkChapterFailed(ctx, "chap-mf", ChapterStateFailedSourceMissing, "assigned", "node-A"); err != nil {
+	changed, err = MarkChapterFailed(ctx, "chap-mf", ChapterStateFailedSourceMissing, "assigned", "node-A", 7)
+	if err != nil {
 		t.Fatalf("MarkChapterFailed(node-A): %v", err)
+	}
+	if !changed {
+		t.Fatal("assigned node did not change the chapter")
 	}
 	if got := stateOf("chap-mf"); got != ChapterStateFailedSourceMissing {
 		t.Fatalf("the assigned node's fail must transition, state=%q", got)
@@ -381,14 +432,22 @@ func TestChapterFinalizeNodeBinding_RealPG(t *testing.T) {
 	// --- RetryChapterFinalize: foreign node is a no-op; assigned node bounces to closed AND clears the
 	// assignment so the retired node can no longer act. ---
 	seedFinalizing("chap-rt")
-	if err := RetryChapterFinalize(ctx, "chap-rt", "foreign", "node-B"); err != nil {
+	changed, err = RetryChapterFinalize(ctx, "chap-rt", "foreign", "node-B", 7)
+	if err != nil {
 		t.Fatalf("RetryChapterFinalize(node-B): %v", err)
+	}
+	if changed {
+		t.Fatal("foreign node unexpectedly requeued the chapter")
 	}
 	if got := stateOf("chap-rt"); got != "finalizing" {
 		t.Fatalf("a foreign node's retry must be a no-op, state=%q", got)
 	}
-	if err := RetryChapterFinalize(ctx, "chap-rt", "assigned", "node-A"); err != nil {
+	changed, err = RetryChapterFinalize(ctx, "chap-rt", "assigned", "node-A", 7)
+	if err != nil {
 		t.Fatalf("RetryChapterFinalize(node-A): %v", err)
+	}
+	if !changed {
+		t.Fatal("assigned node did not requeue the chapter")
 	}
 	if got := stateOf("chap-rt"); got != "closed" {
 		t.Fatalf("the assigned node's retry must bounce to closed, state=%q", got)
@@ -404,8 +463,12 @@ func TestChapterFinalizeNodeBinding_RealPG(t *testing.T) {
 	// --- Deterministic stale-node sequence: after A's retry bounced the chapter to 'closed',
 	// a DELAYED terminal-failure report from A must be a NO-OP (a node-reported terminal transition requires
 	// state='finalizing'), so it cannot terminalize the re-queued chapter before redispatch. ---
-	if err := MarkChapterFailed(ctx, "chap-rt", ChapterStateFailedSourceMissing, "delayed-A", "node-A"); err != nil {
+	changed, err = MarkChapterFailed(ctx, "chap-rt", ChapterStateFailedSourceMissing, "delayed-A", "node-A", 7)
+	if err != nil {
 		t.Fatalf("delayed MarkChapterFailed(node-A): %v", err)
+	}
+	if changed {
+		t.Fatal("delayed report unexpectedly changed the requeued chapter")
 	}
 	if got := stateOf("chap-rt"); got != "closed" {
 		t.Fatalf("a delayed report from the retired node must NOT terminalize the re-queued chapter, state=%q", got)
@@ -418,12 +481,13 @@ func TestChapterFinalizeNodeBinding_RealPG(t *testing.T) {
 	var wg sync.WaitGroup
 	start := make(chan struct{})
 	errs := make([]error, len(nodes))
+	changes := make([]bool, len(nodes))
 	for i, n := range nodes {
 		wg.Add(1)
 		go func(i int, node string) {
 			defer wg.Done()
 			<-start
-			errs[i] = MarkChapterFailed(ctx, "chap-race", ChapterStateFailedSourceMissing, "race", node)
+			changes[i], errs[i] = MarkChapterFailed(ctx, "chap-race", ChapterStateFailedSourceMissing, "race", node, 7)
 		}(i, n)
 	}
 	close(start)
@@ -433,21 +497,75 @@ func TestChapterFinalizeNodeBinding_RealPG(t *testing.T) {
 			t.Fatalf("MarkChapterFailed(%s) errored: %v", nodes[i], errs[i])
 		}
 	}
+	changedCount := 0
+	for _, didChange := range changes {
+		if didChange {
+			changedCount++
+		}
+	}
+	if changedCount != 1 {
+		t.Fatalf("terminal race changed %d rows, want exactly 1", changedCount)
+	}
 	if got := stateOf("chap-race"); got != ChapterStateFailedSourceMissing {
 		t.Fatalf("the assigned node must win the race and terminalize, state=%q", got)
+	}
+
+	// --- Completion ABA: the same node's result from attempt 6 cannot finalize
+	// attempt 7; the current attempt can. This is the case node binding alone
+	// cannot distinguish.
+	seedFinalizing("chap-complete")
+	staleTx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := MarkChapterFinalizedTx(ctx, staleTx, "chap-complete", 6, 1, false, 0, 0)
+	if err != nil {
+		_ = staleTx.Rollback()
+		t.Fatal(err)
+	}
+	if rows != 0 {
+		_ = staleTx.Rollback()
+		t.Fatalf("stale same-node attempt finalized %d rows", rows)
+	}
+	if err := staleTx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	currentTx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err = MarkChapterFinalizedTx(ctx, currentTx, "chap-complete", 7, 1, false, 0, 0)
+	if err != nil {
+		_ = currentTx.Rollback()
+		t.Fatal(err)
+	}
+	if rows != 1 {
+		_ = currentTx.Rollback()
+		t.Fatalf("current attempt finalized %d rows, want 1", rows)
+	}
+	if err := currentTx.Commit(); err != nil {
+		t.Fatal(err)
 	}
 
 	// --- Internal recovery ("" node) is authoritative regardless of the assignment, and may terminalize a
 	// 'closed' row (e.g. max attempts exceeded before redispatch). ---
 	seedFinalizing("chap-int")
-	if err := RetryChapterFinalize(ctx, "chap-int", "internal", ""); err != nil {
+	changed, err = RetryChapterFinalize(ctx, "chap-int", "internal", "", 7)
+	if err != nil {
 		t.Fatalf("RetryChapterFinalize(internal): %v", err)
+	}
+	if !changed {
+		t.Fatal("internal recovery did not requeue the chapter")
 	}
 	if got := stateOf("chap-int"); got != "closed" {
 		t.Fatalf("internal recovery must bounce regardless of node, state=%q", got)
 	}
-	if err := MarkChapterFailed(ctx, "chap-int", ChapterStateFailedPermanent, "max attempts", ""); err != nil {
+	changed, err = MarkChapterFailed(ctx, "chap-int", ChapterStateFailedPermanent, "max attempts", "", 7)
+	if err != nil {
 		t.Fatalf("internal MarkChapterFailed on closed: %v", err)
+	}
+	if !changed {
+		t.Fatal("internal recovery did not terminalize the chapter")
 	}
 	if got := stateOf("chap-int"); got != ChapterStateFailedPermanent {
 		t.Fatalf("internal recovery must terminalize a closed row, state=%q", got)

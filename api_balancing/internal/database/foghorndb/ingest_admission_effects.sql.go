@@ -36,7 +36,7 @@ func (q *Queries) AdmissionGenerationActive(ctx context.Context, arg AdmissionGe
 const claimAdmissionEffects = `-- name: ClaimAdmissionEffects :many
 WITH candidates AS (
     SELECT e.id FROM foghorn.ingest_admission_effects e
-    WHERE e.state = 'pending' AND e.next_attempt_at <= NOW()
+    WHERE e.state IN ('pending', 'pending_v2') AND e.next_attempt_at <= NOW()
       AND (e.leased_until IS NULL OR e.leased_until < NOW())
       AND (e.claim_affinity IS NULL OR e.claim_affinity = $1
            OR e.updated_at <= NOW() - INTERVAL '10 seconds')
@@ -53,10 +53,10 @@ WITH candidates AS (
               a.source_generation::text AS source_generation, a.source_revision, a.prior_owner_node_id,
               COALESCE(a.prior_owner_source_generation::text, '')::text AS prior_owner_source_generation,
               a.push_targets, a.broadcast_live, a.decklog_trigger, COALESCE(a.peer_clusters, '[]'::text) AS peer_clusters,
-              a.drain_done, a.activation_done, a.broadcast_done, a.decklog_done,
+              a.drain_done, a.activation_done, a.broadcast_done, a.decklog_done, a.state,
               a.lease_token::text AS lease_token
 )
-SELECT id, tenant_id, stream_internal_name, node_id, source_generation, source_revision, prior_owner_node_id, prior_owner_source_generation, push_targets, broadcast_live, decklog_trigger, peer_clusters, drain_done, activation_done, broadcast_done, decklog_done, lease_token FROM leased ORDER BY id
+SELECT id, tenant_id, stream_internal_name, node_id, source_generation, source_revision, prior_owner_node_id, prior_owner_source_generation, push_targets, broadcast_live, decklog_trigger, peer_clusters, drain_done, activation_done, broadcast_done, decklog_done, state, lease_token FROM leased ORDER BY id
 `
 
 type ClaimAdmissionEffectsParams struct {
@@ -82,6 +82,7 @@ type ClaimAdmissionEffectsRow struct {
 	ActivationDone             bool           `db:"activation_done" json:"activation_done"`
 	BroadcastDone              bool           `db:"broadcast_done" json:"broadcast_done"`
 	DecklogDone                bool           `db:"decklog_done" json:"decklog_done"`
+	State                      string         `db:"state" json:"state"`
 	LeaseToken                 string         `db:"lease_token" json:"lease_token"`
 }
 
@@ -111,6 +112,7 @@ func (q *Queries) ClaimAdmissionEffects(ctx context.Context, arg ClaimAdmissionE
 			&i.ActivationDone,
 			&i.BroadcastDone,
 			&i.DecklogDone,
+			&i.State,
 			&i.LeaseToken,
 		); err != nil {
 			return nil, err
@@ -130,12 +132,14 @@ const enqueueAdmissionEffect = `-- name: EnqueueAdmissionEffect :exec
 INSERT INTO foghorn.ingest_admission_effects
     (tenant_id, stream_internal_name, node_id, source_generation, source_revision,
      prior_owner_node_id, prior_owner_source_generation, push_targets, broadcast_live, decklog_trigger, peer_clusters,
-     drain_done, activation_done, broadcast_done, decklog_done)
+     drain_done, activation_done, broadcast_done, decklog_done, state)
 VALUES ($1::text::uuid, $2, $3,
         $4::text::uuid, $5, $6,
         NULLIF($7::text, '')::uuid, $8,
         $9, $10, $11,
-        $12, $13, $14, $15)
+        $12, $13, $14, $15,
+        CASE WHEN COALESCE(octet_length($8::bytea), 0) = 0
+             THEN 'pending' ELSE 'pending_v2' END)
 ON CONFLICT (source_generation) DO NOTHING
 `
 
@@ -183,7 +187,7 @@ UPDATE foghorn.ingest_admission_effects
 SET leased_until = NULL, lease_token = NULL, updated_at = NOW(),
     last_error = CASE WHEN last_error LIKE 'poison:%' THEN last_error || ' | ' || $1::text ELSE $1::text END,
     next_attempt_at = NOW() + LEAST(INTERVAL '5 minutes', INTERVAL '1 second' * power(2, LEAST(attempts, 8)))
-WHERE id = $2 AND state = 'pending'
+WHERE id = $2 AND state IN ('pending', 'pending_v2')
   AND lease_token = $3::text::uuid
 `
 
@@ -198,6 +202,79 @@ func (q *Queries) FailAdmissionEffect(ctx context.Context, arg FailAdmissionEffe
 	return err
 }
 
+const getAdmissionEffectSourceRevision = `-- name: GetAdmissionEffectSourceRevision :one
+SELECT source_revision
+FROM foghorn.ingest_admission_effects
+WHERE source_generation = $1::text::uuid
+  AND tenant_id = $2::text::uuid
+  AND stream_internal_name = $3
+`
+
+type GetAdmissionEffectSourceRevisionParams struct {
+	Generation         string `db:"generation" json:"generation"`
+	TenantID           string `db:"tenant_id" json:"tenant_id"`
+	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
+}
+
+func (q *Queries) GetAdmissionEffectSourceRevision(ctx context.Context, arg GetAdmissionEffectSourceRevisionParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, getAdmissionEffectSourceRevision, arg.Generation, arg.TenantID, arg.StreamInternalName)
+	var source_revision int64
+	err := row.Scan(&source_revision)
+	return source_revision, err
+}
+
+const listLegacyAdmissionPushTargetsForEncryption = `-- name: ListLegacyAdmissionPushTargetsForEncryption :many
+SELECT id, tenant_id::text AS tenant_id, stream_internal_name,
+       source_generation::text AS source_generation, push_targets, state
+FROM foghorn.ingest_admission_effects
+WHERE push_targets IS NOT NULL
+  AND state IN ('pending', 'applied', 'superseded')
+  AND (leased_until IS NULL OR leased_until < NOW())
+  AND lease_token IS NULL
+ORDER BY id
+LIMIT $1
+FOR UPDATE SKIP LOCKED
+`
+
+type ListLegacyAdmissionPushTargetsForEncryptionRow struct {
+	ID                 int64  `db:"id" json:"id"`
+	TenantID           string `db:"tenant_id" json:"tenant_id"`
+	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
+	SourceGeneration   string `db:"source_generation" json:"source_generation"`
+	PushTargets        []byte `db:"push_targets" json:"push_targets"`
+	State              string `db:"state" json:"state"`
+}
+
+func (q *Queries) ListLegacyAdmissionPushTargetsForEncryption(ctx context.Context, rowLimit int32) ([]ListLegacyAdmissionPushTargetsForEncryptionRow, error) {
+	rows, err := q.db.QueryContext(ctx, listLegacyAdmissionPushTargetsForEncryption, rowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListLegacyAdmissionPushTargetsForEncryptionRow{}
+	for rows.Next() {
+		var i ListLegacyAdmissionPushTargetsForEncryptionRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.StreamInternalName,
+			&i.SourceGeneration,
+			&i.PushTargets,
+			&i.State,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPurgeableAdmissionEffectFences = `-- name: ListPurgeableAdmissionEffectFences :many
 WITH candidates AS (
     SELECT value->>'tenant_id' AS tenant_id,
@@ -210,7 +287,7 @@ SELECT c.internal_name,
            SELECT 1 FROM foghorn.ingest_admission_effects e
            WHERE e.tenant_id = c.tenant_id::uuid
              AND e.stream_internal_name = c.internal_name
-             AND e.source_revision <= c.source_revision AND e.state = 'pending'
+             AND e.source_revision <= c.source_revision AND e.state IN ('pending', 'pending_v2')
        ) AS purgeable
 FROM candidates c
 `
@@ -245,25 +322,29 @@ func (q *Queries) ListPurgeableAdmissionEffectFences(ctx context.Context, fences
 
 const markAdmissionActivationDone = `-- name: MarkAdmissionActivationDone :exec
 UPDATE foghorn.ingest_admission_effects
-SET activation_done = TRUE, updated_at = NOW()
-WHERE state = 'pending' AND source_generation = $1::text::uuid
-  AND node_id = $2
+SET activation_done = TRUE,
+    activation_connection_fence = $1,
+    updated_at = NOW()
+WHERE state IN ('pending', 'pending_v2') AND source_generation = $2::text::uuid
+  AND node_id = $3
+  AND $1 >= activation_connection_fence
 `
 
 type MarkAdmissionActivationDoneParams struct {
+	ConnectionFence  int64  `db:"connection_fence" json:"connection_fence"`
 	SourceGeneration string `db:"source_generation" json:"source_generation"`
 	NodeID           string `db:"node_id" json:"node_id"`
 }
 
 func (q *Queries) MarkAdmissionActivationDone(ctx context.Context, arg MarkAdmissionActivationDoneParams) error {
-	_, err := q.db.ExecContext(ctx, markAdmissionActivationDone, arg.SourceGeneration, arg.NodeID)
+	_, err := q.db.ExecContext(ctx, markAdmissionActivationDone, arg.ConnectionFence, arg.SourceGeneration, arg.NodeID)
 	return err
 }
 
 const markAdmissionDrainDone = `-- name: MarkAdmissionDrainDone :exec
 UPDATE foghorn.ingest_admission_effects
 SET drain_done = TRUE, updated_at = NOW()
-WHERE state = 'pending' AND source_generation = $1::text::uuid
+WHERE state IN ('pending', 'pending_v2') AND source_generation = $1::text::uuid
   AND prior_owner_node_id = $2
 `
 
@@ -280,10 +361,21 @@ func (q *Queries) MarkAdmissionDrainDone(ctx context.Context, arg MarkAdmissionD
 const purgeTerminalAdmissionEffects = `-- name: PurgeTerminalAdmissionEffects :execrows
 DELETE FROM foghorn.ingest_admission_effects
 WHERE id IN (
-    SELECT id FROM foghorn.ingest_admission_effects
-    WHERE state IN ('applied', 'superseded')
-      AND updated_at < NOW() - ($1::bigint * INTERVAL '1 millisecond')
-    ORDER BY updated_at LIMIT 1000
+    SELECT effect.id FROM foghorn.ingest_admission_effects AS effect
+    WHERE effect.state IN ('applied', 'superseded', 'applied_v2', 'superseded_v2')
+      AND effect.updated_at < NOW() - ($1::bigint * INTERVAL '1 millisecond')
+      AND (
+          effect.push_targets IS NULL
+          OR NOT EXISTS (
+              SELECT 1
+              FROM foghorn.ingest_sessions AS session
+              WHERE session.tenant_id = effect.tenant_id
+                AND session.stream_internal_name = effect.stream_internal_name
+                AND session.id = effect.source_generation
+                AND session.ended_at IS NULL
+          )
+      )
+    ORDER BY effect.updated_at LIMIT 1000
 )
 `
 
@@ -298,7 +390,7 @@ func (q *Queries) PurgeTerminalAdmissionEffects(ctx context.Context, olderThanMs
 const readAdmissionLegsLocked = `-- name: ReadAdmissionLegsLocked :one
 SELECT drain_done, activation_done, broadcast_done, decklog_done
 FROM foghorn.ingest_admission_effects
-WHERE id = $1 AND state = 'pending'
+WHERE id = $1 AND state IN ('pending', 'pending_v2')
   AND lease_token = $2::text::uuid
 FOR UPDATE
 `
@@ -331,7 +423,7 @@ const releaseAdmissionEffectNotOwner = `-- name: ReleaseAdmissionEffectNotOwner 
 UPDATE foghorn.ingest_admission_effects
 SET leased_until = NULL, lease_token = NULL, attempts = GREATEST(attempts - 1, 0),
     claim_affinity = NULLIF($1::text, ''), next_attempt_at = NOW(), updated_at = NOW()
-WHERE id = $2 AND state = 'pending'
+WHERE id = $2 AND state IN ('pending', 'pending_v2')
   AND lease_token = $3::text::uuid
 `
 
@@ -346,30 +438,72 @@ func (q *Queries) ReleaseAdmissionEffectNotOwner(ctx context.Context, arg Releas
 	return err
 }
 
+const requeueActivePushTargetActivationsForNode = `-- name: RequeueActivePushTargetActivationsForNode :execrows
+UPDATE foghorn.ingest_admission_effects AS effect
+SET state = CASE WHEN effect.state IN ('pending_v2', 'applied_v2') THEN 'pending_v2' ELSE 'pending' END,
+    activation_done = FALSE,
+    activation_connection_fence = GREATEST(effect.activation_connection_fence, $1),
+    attempts = 0,
+    next_attempt_at = NOW(),
+    leased_until = NULL,
+    lease_token = NULL,
+    claim_affinity = NULLIF($2::text, ''),
+    applied_at = NULL,
+    updated_at = NOW()
+WHERE effect.node_id = $3
+  AND effect.state IN ('pending', 'applied', 'pending_v2', 'applied_v2')
+  AND effect.activation_done = TRUE
+  AND effect.push_targets IS NOT NULL
+  AND effect.activation_connection_fence < $1
+  AND EXISTS (
+      SELECT 1
+      FROM foghorn.ingest_sessions AS session
+      WHERE session.tenant_id = effect.tenant_id
+        AND session.stream_internal_name = effect.stream_internal_name
+        AND session.id = effect.source_generation
+        AND session.ended_at IS NULL
+  )
+`
+
+type RequeueActivePushTargetActivationsForNodeParams struct {
+	ConnectionFence int64  `db:"connection_fence" json:"connection_fence"`
+	InstanceID      string `db:"instance_id" json:"instance_id"`
+	NodeID          string `db:"node_id" json:"node_id"`
+}
+
+func (q *Queries) RequeueActivePushTargetActivationsForNode(ctx context.Context, arg RequeueActivePushTargetActivationsForNodeParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, requeueActivePushTargetActivationsForNode, arg.ConnectionFence, arg.InstanceID, arg.NodeID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const settleAdmissionLegs = `-- name: SettleAdmissionLegs :execrows
 UPDATE foghorn.ingest_admission_effects
 SET drain_done = $1, activation_done = $2,
     broadcast_done = $3, decklog_done = $4,
     state = $5::text, updated_at = NOW(),
     last_error = COALESCE(NULLIF($6::text, ''), last_error),
-    applied_at = CASE WHEN $5::text <> 'pending' THEN NOW() ELSE applied_at END,
-    leased_until = CASE WHEN $5::text <> 'pending' THEN NULL ELSE leased_until END,
-    lease_token = CASE WHEN $5::text <> 'pending' THEN NULL ELSE lease_token END,
-    push_targets = CASE WHEN $5::text <> 'pending' THEN NULL ELSE push_targets END,
-    decklog_trigger = CASE WHEN $5::text <> 'pending' THEN NULL ELSE decklog_trigger END
-WHERE id = $7 AND state = 'pending'
-  AND lease_token = $8::text::uuid
+    applied_at = CASE WHEN $5::text NOT IN ('pending', 'pending_v2') THEN NOW() ELSE applied_at END,
+    leased_until = CASE WHEN $5::text NOT IN ('pending', 'pending_v2') THEN NULL ELSE leased_until END,
+    lease_token = CASE WHEN $5::text NOT IN ('pending', 'pending_v2') THEN NULL ELSE lease_token END,
+    push_targets = CASE WHEN $7::boolean THEN NULL ELSE push_targets END,
+    decklog_trigger = CASE WHEN $5::text NOT IN ('pending', 'pending_v2') THEN NULL ELSE decklog_trigger END
+WHERE id = $8 AND state IN ('pending', 'pending_v2')
+  AND lease_token = $9::text::uuid
 `
 
 type SettleAdmissionLegsParams struct {
-	DrainDone      bool   `db:"drain_done" json:"drain_done"`
-	ActivationDone bool   `db:"activation_done" json:"activation_done"`
-	BroadcastDone  bool   `db:"broadcast_done" json:"broadcast_done"`
-	DecklogDone    bool   `db:"decklog_done" json:"decklog_done"`
-	NewState       string `db:"new_state" json:"new_state"`
-	PoisonNote     string `db:"poison_note" json:"poison_note"`
-	EffectID       int64  `db:"effect_id" json:"effect_id"`
-	LeaseToken     string `db:"lease_token" json:"lease_token"`
+	DrainDone        bool   `db:"drain_done" json:"drain_done"`
+	ActivationDone   bool   `db:"activation_done" json:"activation_done"`
+	BroadcastDone    bool   `db:"broadcast_done" json:"broadcast_done"`
+	DecklogDone      bool   `db:"decklog_done" json:"decklog_done"`
+	NewState         string `db:"new_state" json:"new_state"`
+	PoisonNote       string `db:"poison_note" json:"poison_note"`
+	ClearPushTargets bool   `db:"clear_push_targets" json:"clear_push_targets"`
+	EffectID         int64  `db:"effect_id" json:"effect_id"`
+	LeaseToken       string `db:"lease_token" json:"lease_token"`
 }
 
 func (q *Queries) SettleAdmissionLegs(ctx context.Context, arg SettleAdmissionLegsParams) (int64, error) {
@@ -380,9 +514,37 @@ func (q *Queries) SettleAdmissionLegs(ctx context.Context, arg SettleAdmissionLe
 		arg.DecklogDone,
 		arg.NewState,
 		arg.PoisonNote,
+		arg.ClearPushTargets,
 		arg.EffectID,
 		arg.LeaseToken,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const upgradeAdmissionPushTargetsEncryption = `-- name: UpgradeAdmissionPushTargetsEncryption :execrows
+UPDATE foghorn.ingest_admission_effects
+SET push_targets = $1,
+    state = CASE state
+        WHEN 'pending' THEN 'pending_v2'
+        WHEN 'applied' THEN 'applied_v2'
+        WHEN 'superseded' THEN 'superseded_v2'
+        ELSE state
+    END,
+    updated_at = NOW()
+WHERE id = $2
+  AND state IN ('pending', 'applied', 'superseded')
+`
+
+type UpgradeAdmissionPushTargetsEncryptionParams struct {
+	PushTargets []byte `db:"push_targets" json:"push_targets"`
+	EffectID    int64  `db:"effect_id" json:"effect_id"`
+}
+
+func (q *Queries) UpgradeAdmissionPushTargetsEncryption(ctx context.Context, arg UpgradeAdmissionPushTargetsEncryptionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, upgradeAdmissionPushTargetsEncryption, arg.PushTargets, arg.EffectID)
 	if err != nil {
 		return 0, err
 	}

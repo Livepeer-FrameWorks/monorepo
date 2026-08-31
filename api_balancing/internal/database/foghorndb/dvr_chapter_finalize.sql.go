@@ -13,6 +13,7 @@ import (
 const finalizeChapterPlaybackArtifact = `-- name: FinalizeChapterPlaybackArtifact :execrows
 UPDATE foghorn.artifacts
 SET status = 'ready', format = 'mkv',
+    federated_pointer = false,
     size_bytes = NULLIF($1::bigint, 0),
     tracks = CASE WHEN $2::boolean THEN $3::text::jsonb ELSE tracks END,
     duration_ms = CASE WHEN $4::bigint > 0 THEN $4::bigint ELSE duration_ms END,
@@ -147,7 +148,8 @@ const lockChapterFinalizeArtifact = `-- name: LockChapterFinalizeArtifact :one
 SELECT c.state, COALESCE(c.playback_artifact_hash, '')::text AS playback_artifact_hash,
        a.tenant_id::text AS tenant_id, a.status AS artifact_status,
        COALESCE(p.status, '')::text AS parent_status,
-       COALESCE(c.finalize_node_id, '')::text AS finalize_node_id
+       COALESCE(c.finalize_node_id, '')::text AS finalize_node_id,
+       c.finalize_attempts
 FROM foghorn.dvr_chapters c
 JOIN foghorn.artifacts a ON a.artifact_hash = c.playback_artifact_hash
 LEFT JOIN foghorn.artifacts p ON p.artifact_hash = c.artifact_hash AND p.artifact_type = 'dvr'
@@ -162,6 +164,7 @@ type LockChapterFinalizeArtifactRow struct {
 	ArtifactStatus       sql.NullString `db:"artifact_status" json:"artifact_status"`
 	ParentStatus         string         `db:"parent_status" json:"parent_status"`
 	FinalizeNodeID       string         `db:"finalize_node_id" json:"finalize_node_id"`
+	FinalizeAttempts     int32          `db:"finalize_attempts" json:"finalize_attempts"`
 }
 
 func (q *Queries) LockChapterFinalizeArtifact(ctx context.Context, chapterID string) (LockChapterFinalizeArtifactRow, error) {
@@ -174,6 +177,7 @@ func (q *Queries) LockChapterFinalizeArtifact(ctx context.Context, chapterID str
 		&i.ArtifactStatus,
 		&i.ParentStatus,
 		&i.FinalizeNodeID,
+		&i.FinalizeAttempts,
 	)
 	return i, err
 }

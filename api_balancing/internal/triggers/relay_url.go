@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 
+	"frameworks/api_balancing/internal/artifacts"
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/database/foghorndb"
 )
@@ -170,7 +171,7 @@ func lookupArtifactDescriptor(ctx context.Context, artifactHash string) artifact
 // Commodore's contentType and the DB's artifact_type share the same
 // enum vocabulary here.
 func kindFromAssetType(t string) string {
-	switch strings.ToLower(strings.TrimSpace(t)) {
+	switch artifacts.CanonicalByteKind(t) {
 	case "clip":
 		return "clip"
 	case "vod":

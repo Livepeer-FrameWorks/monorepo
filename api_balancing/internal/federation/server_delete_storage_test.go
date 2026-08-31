@@ -179,6 +179,28 @@ func TestDeleteStorageObjects_DVRSuccess(t *testing.T) {
 	}
 }
 
+func TestDeleteStorageObjects_ThumbnailSuccess(t *testing.T) {
+	fake := &fakeDeleteS3Client{}
+	srv, mock := newDeleteServer(t, fake)
+	expectTenantMatch(mock, "asset-1", "tenant-a")
+	resp, err := srv.DeleteStorageObjects(serviceAuthContext(), &foghornfederationpb.DeleteStorageObjectsRequest{
+		TenantId:        "tenant-a",
+		TargetClusterId: "platform-eu",
+		ArtifactType:    "thumbnail",
+		ArtifactHash:    "asset-1",
+		Target:          &foghornfederationpb.DeleteStorageObjectsRequest_S3Prefix{S3Prefix: "thumbnails/asset-1/"},
+	})
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if !resp.GetAccepted() {
+		t.Fatalf("expected accepted=true, got reason=%q", resp.GetReason())
+	}
+	if got := fake.deletePrefixCalls; len(got) != 1 || got[0] != "thumbnails/asset-1/" {
+		t.Errorf("deletePrefixCalls = %v", got)
+	}
+}
+
 func TestDeleteStorageObjects_InvalidTargetShape(t *testing.T) {
 	cases := []struct {
 		name string
@@ -262,6 +284,16 @@ func TestDeleteStorageObjects_InvalidTargetShape(t *testing.T) {
 				ArtifactType:    "dvr",
 				ArtifactHash:    "d1",
 				Target:          &foghornfederationpb.DeleteStorageObjectsRequest_S3Prefix{S3Prefix: "dvr/tenant-a/stream/d2"},
+			},
+		},
+		{
+			"thumbnail prefix targets a different artifact",
+			&foghornfederationpb.DeleteStorageObjectsRequest{
+				TenantId:        "tenant-a",
+				TargetClusterId: "platform-eu",
+				ArtifactType:    "thumbnail",
+				ArtifactHash:    "asset-1",
+				Target:          &foghornfederationpb.DeleteStorageObjectsRequest_S3Prefix{S3Prefix: "thumbnails/asset-2/"},
 			},
 		},
 	}

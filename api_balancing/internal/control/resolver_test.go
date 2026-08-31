@@ -256,6 +256,18 @@ func TestResolveArtifactHashStreamTarget(t *testing.T) {
 			t.Fatalf("expected nil when all hash lookups miss, got %+v", got)
 		}
 	})
+
+	t.Run("chapter VOD hit preserves chapter content type", func(t *testing.T) {
+		startFakeCommodoreServer(t, &fakeCommodoreInternal{
+			vodHash: func(_ context.Context, _ *commodorepb.ResolveVodHashRequest) (*commodorepb.ResolveVodHashResponse, error) {
+				return &commodorepb.ResolveVodHashResponse{Found: true, InternalName: "chapter1", TenantId: "t1", ContentType: "chapter"}, nil
+			},
+		})
+		got := resolveArtifactHashStreamTarget(ctx, h)
+		if got == nil || got.ContentType != "chapter" {
+			t.Fatalf("chapter hash target = %+v, want chapter", got)
+		}
+	})
 }
 
 // TestResolveArtifactPolicy pins the auth/peer enrichment helper: guards return
@@ -451,6 +463,22 @@ func TestResolveArtifactByHash(t *testing.T) {
 		}
 		if got.ContentType != "dvr" || got.TenantID != "t1" || got.InternalName != "vod+rec" || !got.IsVod {
 			t.Fatalf("unexpected target: %+v", got)
+		}
+	})
+
+	t.Run("chapter VOD hit stamps chapter content type", func(t *testing.T) {
+		_, _, _ = setupArtifactTestDeps(t)
+		startFakeCommodoreServer(t, &fakeCommodoreInternal{
+			vodHash: func(_ context.Context, _ *commodorepb.ResolveVodHashRequest) (*commodorepb.ResolveVodHashResponse, error) {
+				return &commodorepb.ResolveVodHashResponse{Found: true, InternalName: "chapter1", TenantId: "t1", ContentType: "chapter"}, nil
+			},
+		})
+		got, err := ResolveArtifactByHash(ctx, h)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got.ContentType != "chapter" {
+			t.Fatalf("chapter hash content type = %q, want chapter", got.ContentType)
 		}
 	})
 }

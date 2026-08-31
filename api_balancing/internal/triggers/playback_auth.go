@@ -108,6 +108,25 @@ func denyDecision(policyType, reason, detail string) *PlaybackDecision {
 // distinguish "customer-misconfigured" from "actual attack" from
 // "infrastructure error."
 func (p *Processor) enforcePlaybackPolicy(ctx context.Context, internalName string, marker streamContext, userNew *ipcpb.ViewerConnectTrigger) (string, error) {
+	// A marked signed authority is the local source of truth. Consult it before
+	// the connected-mode marker cache: that cache may still describe a stream as
+	// public after a tombstone, tenant denial, policy replacement, or hard expiry.
+	if local, found, err := p.resolveReadyLocalPlayback(ctx, internalName, false); found {
+		if err != nil {
+			if IsLocalAuthorityDenied(err) || errors.Is(err, errLocalAuthorityExpired) {
+				p.logPlaybackDeny(internalName, userNew, "local-authority-denied", err.Error())
+				return "false", nil
+			}
+			p.logger.WithError(err).WithField("internal_name", internalName).Warn("Local playback authority unavailable; using connected evaluator")
+		}
+		if local.target != nil {
+			if policy, ok := p.localPlaybackPolicyForSnapshot(local.object); ok {
+				return p.evaluatePlaybackPolicyDetailed(ctx, internalName, userNew, policy, p.signingKeyUse).MistDecision(), nil
+			}
+			p.logPlaybackDeny(internalName, userNew, "local-policy-secret-unavailable", "marked local authority is not locally evaluable")
+			return "false", nil
+		}
+	}
 	if marker.RequiresAuthKnown && !marker.RequiresAuth {
 		return "true", nil
 	}
@@ -134,6 +153,11 @@ func (p *Processor) enforcePlaybackPolicy(ctx context.Context, internalName stri
 // SigningKeyUseRecorder records successful viewer-token verification for key audit metadata.
 type SigningKeyUseRecorder interface {
 	RecordSigningKeyUse(ctx context.Context, tenantID, kid string) error
+}
+
+type nonBlockingSigningKeyUseRecorder interface {
+	SigningKeyUseRecorder
+	SigningKeyUseIsNonBlocking()
 }
 
 // EvaluatePlaybackPolicy applies a resolved playback policy to a viewer
@@ -171,7 +195,7 @@ func (p *Processor) evaluatePlaybackPolicyDetailed(ctx context.Context, internal
 	case "public":
 		return allowDecision("public")
 	case "jwt":
-		return p.enforceJWTPolicy(internalName, userNew, policy.GetTenantId(), policy.GetJwtPolicy(), recorder)
+		return p.enforceJWTPolicy(ctx, internalName, userNew, policy.GetTenantId(), policy.GetJwtPolicy(), recorder)
 	case "webhook":
 		return p.enforceWebhookPolicy(ctx, internalName, userNew, policy.GetWebhookPolicy())
 	default:
@@ -180,7 +204,7 @@ func (p *Processor) evaluatePlaybackPolicyDetailed(ctx context.Context, internal
 	}
 }
 
-func (p *Processor) enforceJWTPolicy(internalName string, userNew *ipcpb.ViewerConnectTrigger, tenantID string, policy *commodorepb.PlaybackJwtPolicy, recorder SigningKeyUseRecorder) *PlaybackDecision {
+func (p *Processor) enforceJWTPolicy(ctx context.Context, internalName string, userNew *ipcpb.ViewerConnectTrigger, tenantID string, policy *commodorepb.PlaybackJwtPolicy, recorder SigningKeyUseRecorder) *PlaybackDecision {
 	if policy == nil {
 		p.logPlaybackDeny(internalName, userNew, "policy-jwt-empty", "")
 		return denyDecision("jwt", "policy-jwt-empty", "")
@@ -243,7 +267,7 @@ func (p *Processor) enforceJWTPolicy(internalName string, userNew *ipcpb.ViewerC
 			ClaimsJSON: out,
 		}
 	}
-	p.recordSigningKeyUse(recorder, tenantID, kid)
+	p.recordSigningKeyUse(ctx, recorder, tenantID, kid)
 	return &PlaybackDecision{
 		Allowed:    true,
 		PolicyType: "jwt",
@@ -263,8 +287,15 @@ func marshalClaims(claims any) string {
 	return string(buf)
 }
 
-func (p *Processor) recordSigningKeyUse(recorder SigningKeyUseRecorder, tenantID, kid string) {
+func (p *Processor) recordSigningKeyUse(ctx context.Context, recorder SigningKeyUseRecorder, tenantID, kid string) {
 	if recorder == nil || tenantID == "" || kid == "" {
+		return
+	}
+	if _, nonBlocking := recorder.(nonBlockingSigningKeyUseRecorder); nonBlocking {
+		err := recorder.RecordSigningKeyUse(ctx, tenantID, kid)
+		if err != nil && p.logger != nil {
+			p.logger.WithError(err).WithFields(logging.Fields{"tenant_id": tenantID, "kid": kid}).Warn("enqueue local signing key use failed")
+		}
 		return
 	}
 	go func() {

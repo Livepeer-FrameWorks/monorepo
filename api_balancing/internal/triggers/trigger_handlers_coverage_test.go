@@ -85,7 +85,7 @@ func TestHandlePushInputClose_PersistsOfflineEffect(t *testing.T) {
 	mock.ExpectQuery(`UPDATE foghorn.artifacts.*RETURNING`).
 		WithArgs("gen-pic", "tenant-x").
 		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "node_id"}))
-	mock.ExpectQuery(`nextval`).WillReturnRows(sqlmock.NewRows([]string{"nextval"}).AddRow(int64(2)))
+	mock.ExpectQuery(`INSERT INTO foghorn.source_projection_revision_counter`).WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnRows(sqlmock.NewRows([]string{"revision"}).AddRow(int64(2)))
 	expectOfflineEffectInsert(mock)
 	mock.ExpectCommit()
 
@@ -429,7 +429,9 @@ func TestHandleUserNew_TenantViewerCapRejects(t *testing.T) {
 	}, time.Minute)
 
 	// Fill the tenant's single viewer slot with a DIFFERENT capacity id.
-	state.DefaultTenantCapacity().RegisterViewer(tenantID, "existing-viewer")
+	if allowed, _, _, err := state.DefaultTenantCapacity().TryRegisterViewer(tenantID, "seed-node", "seed-session", "existing-viewer", 1); err != nil || !allowed {
+		t.Fatalf("reserve existing viewer capacity: allowed=%v err=%v", allowed, err)
+	}
 
 	resp, abort, err := p.handleUserNew(&ipcpb.MistTrigger{
 		NodeId:    "node-cap",

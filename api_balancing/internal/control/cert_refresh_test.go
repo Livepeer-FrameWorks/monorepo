@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"sync"
 	"testing"
@@ -20,6 +21,18 @@ import (
 	navclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/navigator"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 )
+
+func TestCollectServedClusterTLSBundlesRejectsPartialAuthority(t *testing.T) {
+	bundles, err := collectServedClusterTLSBundles([]string{"cluster-a", "cluster-b"}, func(clusterID string) (*ipcpb.TLSCertBundle, bool, error) {
+		if clusterID == "cluster-b" {
+			return nil, false, errors.New("navigator unavailable")
+		}
+		return &ipcpb.TLSCertBundle{BundleId: "cluster:" + clusterID}, true, nil
+	})
+	if err == nil || bundles != nil {
+		t.Fatalf("partial authority was accepted: bundles=%v err=%v", bundles, err)
+	}
+}
 
 // mockStream satisfies pb.HelmsmanControl_ConnectServer for registry population.
 type mockStream struct {

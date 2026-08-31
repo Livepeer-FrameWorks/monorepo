@@ -1,8 +1,12 @@
 package control
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
+	"errors"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,9 +17,13 @@ import (
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/nodeidentity"
 )
+
+var controlStreamTestPrivateKey = ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x51}, ed25519.SeedSize))
 
 // stubFingerprintResolves makes the Connect handler resolve a node's canonical identity + tenant from its
 // fingerprint, so registration reaches the POST-resolution ownership/marker acquisition with an authenticated
@@ -23,10 +31,22 @@ import (
 func stubFingerprintResolves(t *testing.T, canonical, tenant string) {
 	t.Helper()
 	prev := resolveNodeFingerprintFn
-	resolveNodeFingerprintFn = func(_ context.Context, _ *quartermasterpb.ResolveNodeFingerprintRequest) (*quartermasterpb.ResolveNodeFingerprintResponse, error) {
-		return &quartermasterpb.ResolveNodeFingerprintResponse{CanonicalNodeId: canonical, TenantId: tenant}, nil
+	resolveNodeFingerprintFn = func(_ context.Context, req *quartermasterpb.ResolveNodeFingerprintRequest) (*quartermasterpb.ResolveNodeFingerprintResponse, error) {
+		wantKey := controlStreamTestPrivateKey.Public().(ed25519.PublicKey)
+		if !bytes.Equal(req.GetNodeIdentityPublicKeyEd25519(), wantKey) {
+			t.Fatalf("fingerprint resolution omitted the locally verified node identity key")
+		}
+		return &quartermasterpb.ResolveNodeFingerprintResponse{
+			CanonicalNodeId: canonical, TenantId: tenant,
+			NodeIdentityPublicKeyEd25519: wantKey,
+		}, nil
 	}
-	t.Cleanup(func() { resolveNodeFingerprintFn = prev })
+	previousConsume := consumeNodeIdentityProofFn
+	consumeNodeIdentityProofFn = func(context.Context, *ipcpb.Register) error { return nil }
+	t.Cleanup(func() {
+		resolveNodeFingerprintFn = prev
+		consumeNodeIdentityProofFn = previousConsume
+	})
 }
 
 // registerOnceStream is a fake HelmsmanControl_ConnectServer that yields a single Register message then
@@ -43,6 +63,15 @@ func (s *registerOnceStream) Recv() (*ipcpb.ControlMessage, error) {
 	}
 	m := s.msgs[s.idx]
 	s.idx++
+	if register := m.GetRegister(); register != nil && register.GetControlProtocolVersion() >= MinControlProtocolVersion && len(register.GetNodeIdentityProofEd25519()) == 0 {
+		if register.GetFingerprint() == nil {
+			machineID := strings.Repeat("a", 64)
+			register.Fingerprint = &ipcpb.NodeFingerprint{MachineIdSha256: &machineID}
+		}
+		if err := nodeidentity.SignRegistration(register, controlStreamTestPrivateKey, time.Now()); err != nil {
+			return nil, err
+		}
+	}
 	return m, nil
 }
 
@@ -72,8 +101,8 @@ func TestConnectRejectsAndHidesConnectionWhenOwnershipLost(t *testing.T) {
 	prevDB := db
 	db = mockDB
 	t.Cleanup(func() { db = prevDB; mockDB.Close() })
-	mock.ExpectQuery(`SELECT nextval`).
-		WillReturnRows(sqlmock.NewRows([]string{"nextval"}).AddRow(int64(2)))
+	mock.ExpectQuery(`INSERT INTO foghorn.node_control_fence_counter`).WithArgs("node-x").
+		WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow(int64(2)))
 
 	stream := &registerOnceStream{msgs: []*ipcpb.ControlMessage{
 		{Payload: &ipcpb.ControlMessage_Register{Register: &ipcpb.Register{NodeId: "node-x", ControlProtocolVersion: MinControlProtocolVersion}}},
@@ -171,8 +200,8 @@ func TestConnectRejectsWhenTakeoverMarkerSuperseded(t *testing.T) {
 	prevDB := db
 	db = mockDB
 	t.Cleanup(func() { db = prevDB; mockDB.Close() })
-	mock.ExpectQuery(`SELECT nextval`).
-		WillReturnRows(sqlmock.NewRows([]string{"nextval"}).AddRow(int64(2)))
+	mock.ExpectQuery(`INSERT INTO foghorn.node_control_fence_counter`).WithArgs("node-y").
+		WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow(int64(2)))
 
 	stream := &registerOnceStream{msgs: []*ipcpb.ControlMessage{
 		{Payload: &ipcpb.ControlMessage_Register{Register: &ipcpb.Register{NodeId: "node-y", ControlProtocolVersion: MinControlProtocolVersion}}},
@@ -240,8 +269,8 @@ func TestConnectRejectedRegistrationDoesNotStealAssertedNodeOwnership(t *testing
 	prevDB := db
 	db = mockDB
 	t.Cleanup(func() { db = prevDB; mockDB.Close() })
-	mock.ExpectQuery(`SELECT nextval`).
-		WillReturnRows(sqlmock.NewRows([]string{"nextval"}).AddRow(int64(9)))
+	mock.ExpectQuery(`INSERT INTO foghorn.node_control_fence_counter`).WithArgs("victim").
+		WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow(int64(9)))
 
 	stream := &registerOnceStream{msgs: []*ipcpb.ControlMessage{
 		{Payload: &ipcpb.ControlMessage_Register{Register: &ipcpb.Register{NodeId: "victim", ControlProtocolVersion: MinControlProtocolVersion}}},
@@ -276,6 +305,11 @@ func TestConnectAssertingForeignRawIDDoesNotHijackVictim(t *testing.T) {
 	ensureRegistry(t)
 	// The attacker's fingerprint resolves to its OWN canonical id, while it asserts the victim's raw id.
 	stubFingerprintResolves(t, "attacker-A", "tenant-a")
+	// This security regression test must exercise the real proof verifier and
+	// replay fence. The shared helper stubs persistence for tests whose subject
+	// is later in registration, but doing so here would bypass the identity
+	// property this test claims to prove.
+	consumeNodeIdentityProofFn = consumeNodeIdentityProof
 
 	store, _ := newTestStore(t)
 	setCommandRelay(t, buildRelay(t, store, "inst-self", "10.0.0.1:9090", &mockRelayPool{}))
@@ -299,8 +333,24 @@ func TestConnectAssertingForeignRawIDDoesNotHijackVictim(t *testing.T) {
 	prevDB := db
 	db = mockDB
 	t.Cleanup(func() { db = prevDB; mockDB.Close() })
-	mock.ExpectQuery(`SELECT nextval`).
-		WillReturnRows(sqlmock.NewRows([]string{"nextval"}).AddRow(int64(7)))
+	mock.ExpectExec(`INSERT INTO foghorn.node_admission_proof_nonces`).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`DELETE FROM foghorn.node_admission_proof_nonces`).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`INSERT INTO foghorn.node_control_fence_counter`).WithArgs("attacker-A").
+		WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow(int64(7)))
+	mock.ExpectBegin()
+	mock.ExpectQuery(`INSERT INTO foghorn.node_config_seeds`).
+		WithArgs("attacker-A").
+		WillReturnRows(sqlmock.NewRows([]string{"version_counter"}).AddRow(int64(1)))
+	mock.ExpectQuery(`SELECT COALESCE\(seed_version, 0\)::bigint AS seed_version, seed_payload`).
+		WithArgs("attacker-A").
+		WillReturnRows(sqlmock.NewRows([]string{"seed_version", "seed_payload"}))
+	mock.ExpectExec(`UPDATE foghorn.node_config_seeds`).
+		WithArgs(int64(1), sqlmock.AnyArg(), "attacker-A").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	stream := &registerOnceStream{msgs: []*ipcpb.ControlMessage{
 		{Payload: &ipcpb.ControlMessage_Register{Register: &ipcpb.Register{NodeId: "victim", ControlProtocolVersion: MinControlProtocolVersion}}},
@@ -314,6 +364,9 @@ func TestConnectAssertingForeignRawIDDoesNotHijackVictim(t *testing.T) {
 	registry.mu.RUnlock()
 	if got == nil || got.stream != victimStream {
 		t.Fatal("a connection asserting a foreign raw id must NOT retire/replace the victim's registered connection")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("registration did not exercise the authenticated canonical path: %v", err)
 	}
 }
 
@@ -332,11 +385,11 @@ func TestArtifactDeletedCallbackUsesAuthenticatedNodeID(t *testing.T) {
 	}
 	t.Cleanup(func() { sm.Shutdown() })
 
-	got := make(chan string, 1)
+	got := make(chan *ipcpb.ArtifactDeleted, 1)
 	prevH := artifactDeletedHandler
 	artifactDeletedHandler = func(_ context.Context, del *ipcpb.ArtifactDeleted) {
 		select {
-		case got <- del.GetNodeId():
+		case got <- del:
 		default:
 		}
 	}
@@ -349,23 +402,106 @@ func TestArtifactDeletedCallbackUsesAuthenticatedNodeID(t *testing.T) {
 	prevDB := db
 	db = mockDB
 	t.Cleanup(func() { db = prevDB; mockDB.Close() })
-	mock.ExpectQuery(`SELECT nextval`).WillReturnRows(sqlmock.NewRows([]string{"nextval"}).AddRow(int64(3)))
+	mock.ExpectQuery(`INSERT INTO foghorn.node_control_fence_counter`).
+		WithArgs("node-real").
+		WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow(int64(3)))
+	mock.ExpectBegin()
+	mock.ExpectQuery(`INSERT INTO foghorn.node_config_seeds`).
+		WithArgs("node-real").
+		WillReturnRows(sqlmock.NewRows([]string{"version_counter"}).AddRow(int64(1)))
+	mock.ExpectQuery(`SELECT COALESCE\(seed_version, 0\)::bigint AS seed_version, seed_payload`).
+		WithArgs("node-real").
+		WillReturnRows(sqlmock.NewRows([]string{"seed_version", "seed_payload"}))
+	mock.ExpectExec(`UPDATE foghorn.node_config_seeds`).
+		WithArgs(int64(1), sqlmock.AnyArg(), "node-real").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
 
 	stream := &registerOnceStream{msgs: []*ipcpb.ControlMessage{
 		{Payload: &ipcpb.ControlMessage_Register{Register: &ipcpb.Register{NodeId: "node-real", ControlProtocolVersion: MinControlProtocolVersion}}},
 		// A FORGED payload node_id — the callback must ignore it in favor of the authenticated session id.
-		{Payload: &ipcpb.ControlMessage_ArtifactDeleted{ArtifactDeleted: &ipcpb.ArtifactDeleted{ArtifactHash: "h", NodeId: "victim-node", Reason: "evict"}}},
+		{SentAt: timestamppb.New(time.UnixMilli(1234)), Payload: &ipcpb.ControlMessage_ArtifactDeleted{ArtifactDeleted: &ipcpb.ArtifactDeleted{ArtifactHash: "h", NodeId: "victim-node", Reason: "evict"}}},
 	}}
 	srv := &Server{}
 	_ = srv.Connect(stream)
 
 	select {
-	case id := <-got:
-		if id != "node-real" {
-			t.Fatalf("callback must receive the authenticated node id, got %q (a forged payload id must not reach the repository)", id)
+	case deleted := <-got:
+		if deleted.GetNodeId() != "node-real" {
+			t.Fatalf("callback must receive the authenticated node id, got %q (a forged payload id must not reach the repository)", deleted.GetNodeId())
+		}
+		if deleted.GetDeletedAtMs() != 1234 {
+			t.Fatalf("legacy deletion fence = %d, want envelope time 1234", deleted.GetDeletedAtMs())
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("artifact-deleted callback was not invoked")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestConnectTerminatesWhenConfigSeedApplyResultCannotBePersisted(t *testing.T) {
+	ensureRegistry(t)
+	const nodeID = "node-configseed-persist-fail"
+	stubFingerprintResolves(t, nodeID, "tenant-a")
+
+	store, _ := newTestStore(t)
+	setCommandRelay(t, buildRelay(t, store, "inst-self", "10.0.0.1:9090", &mockRelayPool{}))
+	sm := state.ResetDefaultManagerForTests()
+	if err := sm.EnableRedisSync(context.Background(), store, "inst-self", logging.NewLogger()); err != nil {
+		t.Fatalf("EnableRedisSync: %v", err)
+	}
+	t.Cleanup(func() { sm.Shutdown() })
+
+	previousOwner := getNodeOwnerFn
+	getNodeOwnerFn = func(context.Context, string) (*quartermasterpb.NodeOwnerResponse, error) {
+		return &quartermasterpb.NodeOwnerResponse{ClusterId: "cluster-1"}, nil
+	}
+	t.Cleanup(func() { getNodeOwnerFn = previousOwner })
+
+	persistErr := errors.New("database unavailable")
+	writer := &recordingConfigSeedApplyAckWriter{err: persistErr}
+	previousWriter := configSeedApplyAckWriter
+	configSeedApplyAckWriter = writer
+	t.Cleanup(func() { configSeedApplyAckWriter = previousWriter })
+
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousDB := db
+	db = mockDB
+	t.Cleanup(func() { db = previousDB; mockDB.Close() })
+	mock.ExpectQuery(`INSERT INTO foghorn.node_control_fence_counter`).WithArgs(nodeID).
+		WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow(int64(3)))
+	mock.ExpectBegin()
+	mock.ExpectQuery(`INSERT INTO foghorn.node_config_seeds`).
+		WithArgs(nodeID).
+		WillReturnRows(sqlmock.NewRows([]string{"version_counter"}).AddRow(int64(1)))
+	mock.ExpectQuery(`SELECT COALESCE\(seed_version, 0\)::bigint AS seed_version, seed_payload`).
+		WithArgs(nodeID).
+		WillReturnRows(sqlmock.NewRows([]string{"seed_version", "seed_payload"}))
+	mock.ExpectExec(`UPDATE foghorn.node_config_seeds`).
+		WithArgs(int64(1), sqlmock.AnyArg(), nodeID).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	ack := &ipcpb.ConfigSeedApplyResult{SeedVersion: 1, Success: true}
+	stream := &registerOnceStream{msgs: []*ipcpb.ControlMessage{
+		{Payload: &ipcpb.ControlMessage_Register{Register: &ipcpb.Register{NodeId: nodeID, ControlProtocolVersion: MinControlProtocolVersion}}},
+		{Payload: &ipcpb.ControlMessage_ConfigSeedApplyResult{ConfigSeedApplyResult: ack}},
+	}}
+
+	connectErr := (&Server{}).Connect(stream)
+	if status.Code(connectErr) != codes.Unavailable {
+		t.Fatalf("Connect error=%v, want Unavailable", connectErr)
+	}
+	if writer.nodeID != nodeID || writer.clusterID != "cluster-1" || writer.ack != ack {
+		t.Fatalf("writer saw node=%q cluster=%q ack=%p", writer.nodeID, writer.clusterID, writer.ack)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -400,5 +536,34 @@ func TestCleanupControlDisconnectRemovesOnlyCurrentStream(t *testing.T) {
 	registry.mu.RUnlock()
 	if got != nil {
 		t.Fatal("current stream was not removed")
+	}
+}
+
+func TestDrainAcknowledgementFromRetiredConnectionCannotSettleObligation(t *testing.T) {
+	prevRegistry := registry
+	prevDB := db
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry = &Registry{conns: map[string]*conn{
+		"node-1": {rawNodeID: "node-1", fence: 12},
+	}, log: logging.NewLogger()}
+	db = mockDB
+	t.Cleanup(func() {
+		registry = prevRegistry
+		db = prevDB
+		mockDB.Close()
+	})
+
+	accepted := processDrainStreamResponse(&ipcpb.DrainStreamResponse{
+		RuntimeName: "live+stream", SourceGeneration: "generation-new",
+	}, NodeSession{RawNodeID: "node-1", Fence: 11}, logging.NewLogger())
+	if accepted {
+		t.Fatal("retired connection was accepted as the current drain acknowledger")
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("retired connection reached the durable drain marker: %v", err)
 	}
 }

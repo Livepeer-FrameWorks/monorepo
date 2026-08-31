@@ -37,6 +37,9 @@ func (s *FoghornGRPCServer) OverrideArtifactRetention(ctx context.Context, req *
 	}
 	switch artifactType {
 	case "dvr", "clip", "vod":
+		// Chapters inherit both playback policy and retention from their
+		// parent DVR. Their bytes use the VOD storage machinery, but chapter
+		// is not an independently mutable VOD business object.
 	default:
 		return nil, status.Errorf(codes.InvalidArgument, "unsupported artifact_type %q", artifactType)
 	}
@@ -87,7 +90,7 @@ func (s *FoghornGRPCServer) OverrideArtifactRetention(ctx context.Context, req *
 	}
 
 	if artifactType == "dvr" {
-		if _, propErr := control.PropagateChapterRetentionTx(ctx, tx, artifactHash, untilArg); propErr != nil {
+		if _, propErr := control.PropagateChapterRetentionTx(ctx, tx, tenantID, artifactHash, untilArg); propErr != nil {
 			return nil, status.Errorf(codes.Internal, "retention override: propagate to child chapters failed: %v", propErr)
 		}
 	}

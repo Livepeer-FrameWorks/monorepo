@@ -18,6 +18,26 @@ import (
 // resolved hash whose length isn't exactly 32 (the artifact-hash addressing
 // invariant), so the fixtures must satisfy it.
 const chapterHash32 = "0123456789abcdef0123456789abcdef"
+const chapterFinalizeAttempt int32 = 3
+
+func TestChapterFinalizeIdentityFromJobID(t *testing.T) {
+	chapterID, attempt, ok := chapterFinalizeIdentityFromJobID("chapter-finalize-v2-12-chapter-with-dashes")
+	if !ok || chapterID != "chapter-with-dashes" || attempt != 12 {
+		t.Fatalf("identity = chapter:%q attempt:%d ok:%v", chapterID, attempt, ok)
+	}
+	chapterID, attempt, ok = chapterFinalizeIdentityFromJobID("chapter-finalize-legacy-chapter")
+	if !ok || chapterID != "legacy-chapter" || attempt != 0 {
+		t.Fatalf("legacy identity = chapter:%q attempt:%d ok:%v", chapterID, attempt, ok)
+	}
+	chapterID, attempt, ok = chapterFinalizeIdentityFromJobID("chapter-finalize-12-numeric-legacy-id")
+	if !ok || chapterID != "12-numeric-legacy-id" || attempt != 0 {
+		t.Fatalf("numeric legacy identity = chapter:%q attempt:%d ok:%v", chapterID, attempt, ok)
+	}
+	chapterID, attempt, ok = chapterFinalizeIdentityFromJobID("chapter-finalize-v2-bad-attempt")
+	if !ok || chapterID != "v2-bad-attempt" || attempt != 0 {
+		t.Fatalf("malformed v2 identity = chapter:%q attempt:%d ok:%v", chapterID, attempt, ok)
+	}
+}
 
 // chapterArtifactContentCols matches resolveChapterArtifactContent's SELECT:
 // origin_type, origin_id, tenant_id, internal_name, requires_auth(bool).
@@ -86,8 +106,8 @@ func TestHandleChapterFinalizeResult_CompletedAdvancesToFinalized(t *testing.T) 
 	// artifact='finalizing', parent not deleted.
 	mock.ExpectQuery(`SELECT c.state, COALESCE\(c.playback_artifact_hash`).
 		WithArgs(chapterID).
-		WillReturnRows(sqlmock.NewRows([]string{"state", "playback_artifact_hash", "tenant_id", "status", "parent_status", "finalize_node_id"}).
-			AddRow(ChapterStateFinalizing, chapterHash32, tenant, "finalizing", "ready", "node-1"))
+		WillReturnRows(sqlmock.NewRows([]string{"state", "playback_artifact_hash", "tenant_id", "status", "parent_status", "finalize_node_id", "finalize_attempts"}).
+			AddRow(ChapterStateFinalizing, chapterHash32, tenant, "finalizing", "ready", "node-1", chapterFinalizeAttempt))
 	// Artifacts row → ready/mkv/pending/local, guarded on status='finalizing' (exactly one row).
 	mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET status = 'ready'`).
 		WithArgs(int64(4096), false, "[]", int64(0), chapterHash32).
@@ -106,22 +126,23 @@ func TestHandleChapterFinalizeResult_CompletedAdvancesToFinalized(t *testing.T) 
 	mock.ExpectQuery(`SELECT tenant_id::text FROM foghorn.artifacts WHERE artifact_hash`).
 		WithArgs(chapterHash32).
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow(tenant))
-	mock.ExpectQuery(`SELECT nextval\('foghorn.artifact_node_copy_version_seq'\)`).
-		WillReturnRows(sqlmock.NewRows([]string{"nextval"}).AddRow(int64(1)))
+	mock.ExpectQuery(`INSERT INTO foghorn.artifact_node_copy_version_counter`).
+		WithArgs(chapterHash32, "node-1").
+		WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow(int64(1)))
 	mock.ExpectExec(`UPDATE foghorn.artifact_nodes SET last_emitted_version`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO foghorn.artifact_event_outbox`).
 		WillReturnResult(sqlmock.NewResult(0, 1)) // node-copy event
 	// MarkChapterFinalizedTx: finalizing → finalized, exactly one row.
 	mock.ExpectExec(`UPDATE foghorn.dvr_chapters\s+SET state\s+= 'finalized'`).
-		WithArgs(chapterID, int32(7), false, nil, nil).
+		WithArgs(int32(7), false, nil, nil, chapterID, chapterFinalizeAttempt).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	// Completion lifecycle enqueue (same tx).
 	mock.ExpectExec(`INSERT INTO foghorn.artifact_event_outbox`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	handleChapterFinalizeResult(context.Background(), chapterID, "completed", result, "node-1", logging.NewLogger())
+	handleChapterFinalizeResult(context.Background(), chapterID, "completed", chapterFinalizeAttempt, result, "node-1", logging.NewLogger())
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sqlmock expectations: %v", err)
@@ -150,14 +171,34 @@ func TestHandleChapterFinalizeResult_DuplicateCompletionIsNoOp(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT c.state, COALESCE\(c.playback_artifact_hash`).
 		WithArgs(chapterID).
-		WillReturnRows(sqlmock.NewRows([]string{"state", "playback_artifact_hash", "tenant_id", "status", "parent_status", "finalize_node_id"}).
-			AddRow(ChapterStateFinalized, chapterHash32, "t1", "ready", "ready", "node-1")) // already finalized
+		WillReturnRows(sqlmock.NewRows([]string{"state", "playback_artifact_hash", "tenant_id", "status", "parent_status", "finalize_node_id", "finalize_attempts"}).
+			AddRow(ChapterStateFinalized, chapterHash32, "t1", "ready", "ready", "node-1", chapterFinalizeAttempt)) // already finalized
 	mock.ExpectRollback()
 
-	handleChapterFinalizeResult(context.Background(), chapterID, "completed", result, "node-1", logging.NewLogger())
+	handleChapterFinalizeResult(context.Background(), chapterID, "completed", chapterFinalizeAttempt, result, "node-1", logging.NewLogger())
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sqlmock expectations: %v", err)
+	}
+}
+
+func TestHandleChapterFinalizeResult_RejectsPriorAttemptOnSameNode(t *testing.T) {
+	mock, _, _ := setupArtifactTestDeps(t)
+	startFakeCommodoreServer(t, &fakeCommodoreInternal{})
+	const chapterID = "chap-attempt-aba"
+	result := &ipcpb.ProcessingJobResult{
+		JobId: chapterFinalizeJobIDPrefix + "3-" + chapterID, Outputs: map[string]string{"artifact_hash": chapterHash32},
+		OutputPath: "/data/vod/" + chapterHash32 + ".mkv", OutputSizeBytes: 4096,
+	}
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT c.state, COALESCE\(c.playback_artifact_hash`).WithArgs(chapterID).
+		WillReturnRows(sqlmock.NewRows([]string{"state", "playback_artifact_hash", "tenant_id", "status", "parent_status", "finalize_node_id", "finalize_attempts"}).
+			AddRow(ChapterStateFinalizing, chapterHash32, "t1", "finalizing", "ready", "node-1", int32(4)))
+	mock.ExpectRollback()
+
+	handleChapterFinalizeResult(context.Background(), chapterID, "completed", 3, result, "node-1", logging.NewLogger())
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("stale same-node attempt performed a write: %v", err)
 	}
 }
 
@@ -169,9 +210,9 @@ func TestHandleChapterFinalizeResult_MalformedCompletionBouncesToClosed(t *testi
 		mock, _, _ := setupArtifactTestDeps(t)
 		startFakeCommodoreServer(t, &fakeCommodoreInternal{})
 		mock.ExpectExec(`UPDATE foghorn.dvr_chapters\s+SET state\s+= 'closed'`).
-			WithArgs(sqlmock.AnyArg(), "chap-nohash", "node-1").
+			WithArgs(sqlmock.AnyArg(), "chap-nohash", chapterFinalizeAttempt, "node-1").
 			WillReturnResult(sqlmock.NewResult(0, 1))
-		handleChapterFinalizeResult(context.Background(), "chap-nohash", "completed",
+		handleChapterFinalizeResult(context.Background(), "chap-nohash", "completed", chapterFinalizeAttempt,
 			&ipcpb.ProcessingJobResult{JobId: chapterFinalizeJobIDPrefix + "chap-nohash", Outputs: map[string]string{}}, "node-1", logging.NewLogger())
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Fatalf("unmet: %v", err)
@@ -181,9 +222,9 @@ func TestHandleChapterFinalizeResult_MalformedCompletionBouncesToClosed(t *testi
 		mock, _, _ := setupArtifactTestDeps(t)
 		startFakeCommodoreServer(t, &fakeCommodoreInternal{})
 		mock.ExpectExec(`UPDATE foghorn.dvr_chapters\s+SET state\s+= 'closed'`).
-			WithArgs(sqlmock.AnyArg(), "chap-noout", "node-1").
+			WithArgs(sqlmock.AnyArg(), "chap-noout", chapterFinalizeAttempt, "node-1").
 			WillReturnResult(sqlmock.NewResult(0, 1))
-		handleChapterFinalizeResult(context.Background(), "chap-noout", "completed",
+		handleChapterFinalizeResult(context.Background(), "chap-noout", "completed", chapterFinalizeAttempt,
 			&ipcpb.ProcessingJobResult{JobId: chapterFinalizeJobIDPrefix + "chap-noout", Outputs: map[string]string{"artifact_hash": chapterHash32}}, "node-1", logging.NewLogger())
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Fatalf("unmet: %v", err)
@@ -203,10 +244,10 @@ func TestHandleChapterFinalizeResult_RejectsForeignNode(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT c.state, COALESCE\(c.playback_artifact_hash`).
 		WithArgs("chap-foreign").
-		WillReturnRows(sqlmock.NewRows([]string{"state", "playback_artifact_hash", "tenant_id", "status", "parent_status", "finalize_node_id"}).
-			AddRow(ChapterStateFinalizing, chapterHash32, "t1", "finalizing", "ready", "assigned-node"))
+		WillReturnRows(sqlmock.NewRows([]string{"state", "playback_artifact_hash", "tenant_id", "status", "parent_status", "finalize_node_id", "finalize_attempts"}).
+			AddRow(ChapterStateFinalizing, chapterHash32, "t1", "finalizing", "ready", "assigned-node", chapterFinalizeAttempt))
 	mock.ExpectRollback()
-	handleChapterFinalizeResult(context.Background(), "chap-foreign", "completed",
+	handleChapterFinalizeResult(context.Background(), "chap-foreign", "completed", chapterFinalizeAttempt,
 		&ipcpb.ProcessingJobResult{JobId: chapterFinalizeJobIDPrefix + "chap-foreign", Outputs: map[string]string{"artifact_hash": chapterHash32}, OutputPath: "/data/vod/" + chapterHash32 + ".mkv"},
 		"attacker-node", logging.NewLogger())
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -231,11 +272,11 @@ func TestHandleChapterFinalizeResult_DoesNotResurrectDeletedArtifact(t *testing.
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT c.state, COALESCE\(c.playback_artifact_hash`).
 		WithArgs(chapterID).
-		WillReturnRows(sqlmock.NewRows([]string{"state", "playback_artifact_hash", "tenant_id", "status", "parent_status", "finalize_node_id"}).
-			AddRow(ChapterStateFinalizing, chapterHash32, "t1", "deleted", "deleted", "node-1")) // artifact + parent gone
+		WillReturnRows(sqlmock.NewRows([]string{"state", "playback_artifact_hash", "tenant_id", "status", "parent_status", "finalize_node_id", "finalize_attempts"}).
+			AddRow(ChapterStateFinalizing, chapterHash32, "t1", "deleted", "deleted", "node-1", chapterFinalizeAttempt)) // artifact + parent gone
 	mock.ExpectRollback()
 
-	handleChapterFinalizeResult(context.Background(), chapterID, "completed", result, "node-1", logging.NewLogger())
+	handleChapterFinalizeResult(context.Background(), chapterID, "completed", chapterFinalizeAttempt, result, "node-1", logging.NewLogger())
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sqlmock expectations: %v", err)
@@ -261,17 +302,17 @@ func TestHandleChapterFinalizeResult_TransientPersistFailureBouncesToClosed(t *t
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT c.state, COALESCE\(c.playback_artifact_hash`).
 		WithArgs(chapterID).
-		WillReturnRows(sqlmock.NewRows([]string{"state", "playback_artifact_hash", "tenant_id", "status", "parent_status", "finalize_node_id"}).
-			AddRow(ChapterStateFinalizing, chapterHash32, tenant, "finalizing", "ready", "node-1"))
+		WillReturnRows(sqlmock.NewRows([]string{"state", "playback_artifact_hash", "tenant_id", "status", "parent_status", "finalize_node_id", "finalize_attempts"}).
+			AddRow(ChapterStateFinalizing, chapterHash32, tenant, "finalizing", "ready", "node-1", chapterFinalizeAttempt))
 	mock.ExpectExec(`UPDATE foghorn.artifacts\s+SET status = 'ready'`).
 		WillReturnError(sql.ErrConnDone)
 	mock.ExpectRollback()
 	// Bounce finalizing → closed for retry.
 	mock.ExpectExec(`UPDATE foghorn.dvr_chapters\s+SET state\s+= 'closed'`).
-		WithArgs(sqlmock.AnyArg(), chapterID, "node-1").
+		WithArgs(sqlmock.AnyArg(), chapterID, chapterFinalizeAttempt, "node-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	handleChapterFinalizeResult(context.Background(), chapterID, "completed", result, "node-1", logging.NewLogger())
+	handleChapterFinalizeResult(context.Background(), chapterID, "completed", chapterFinalizeAttempt, result, "node-1", logging.NewLogger())
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sqlmock expectations: %v", err)
@@ -299,7 +340,7 @@ func TestHandleChapterFinalizeResult_TerminalFailureMarksFailed(t *testing.T) {
 	// outbox — all committed together (no separate loss-prone emit).
 	mock.ExpectBegin()
 	mock.ExpectQuery(`UPDATE foghorn.dvr_chapters\s+SET state\s+= \$1.*RETURNING playback_artifact_hash`).
-		WithArgs(ChapterStateFailedSourceMissing, "segments gone", chapterID, "node-1").
+		WithArgs(ChapterStateFailedSourceMissing, "segments gone", chapterID, chapterFinalizeAttempt, "node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"playback_artifact_hash"}).AddRow(chapterHash32))
 	mock.ExpectQuery(`UPDATE foghorn.artifacts\s+SET status = 'failed'.*RETURNING tenant_id`).
 		WithArgs(chapterHash32, "segments gone").
@@ -308,7 +349,7 @@ func TestHandleChapterFinalizeResult_TerminalFailureMarksFailed(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	handleChapterFinalizeResult(context.Background(), chapterID, "failed", result, "node-1", logging.NewLogger())
+	handleChapterFinalizeResult(context.Background(), chapterID, "failed", chapterFinalizeAttempt, result, "node-1", logging.NewLogger())
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sqlmock expectations: %v", err)
@@ -330,10 +371,10 @@ func TestHandleChapterFinalizeResult_TransientFailureRetries(t *testing.T) {
 
 	// RetryChapterFinalize rolls finalizing → closed (the only DB write), bound to the reporting node.
 	mock.ExpectExec(`UPDATE foghorn.dvr_chapters`).
-		WithArgs("network blip", chapterID, "node-1").
+		WithArgs("network blip", chapterID, chapterFinalizeAttempt, "node-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	handleChapterFinalizeResult(context.Background(), chapterID, "failed", result, "node-1", logging.NewLogger())
+	handleChapterFinalizeResult(context.Background(), chapterID, "failed", chapterFinalizeAttempt, result, "node-1", logging.NewLogger())
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sqlmock expectations: %v", err)

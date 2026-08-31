@@ -677,5 +677,5 @@ const ingestTestCluster = "cluster-1"
 // ingestTestPeers is the envelope Commodore returns: plan-filtered and healthy,
 // which is what makes membership alone sufficient to authorize a candidate.
 func ingestTestPeers() []*clusterpeerpb.TenantClusterPeer {
-	return []*clusterpeerpb.TenantClusterPeer{{ClusterId: ingestTestCluster, HealthStatus: "healthy"}}
+	return []*clusterpeerpb.TenantClusterPeer{{ClusterId: ingestTestCluster, ClusterType: "edge", HealthStatus: "healthy"}}
 }

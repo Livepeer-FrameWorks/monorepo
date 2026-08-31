@@ -42,10 +42,14 @@ type StreamTarget struct {
 	// TenantID associated with the stream/artifact.
 	TenantID string
 	// ContentType indicates the artifact type: "clip", "dvr", or "live"
-	ContentType       string
-	ClusterPeers      []*clusterpeerpb.TenantClusterPeer // Tenant's cluster context from Commodore
-	RequiresAuth      bool
-	RequiresAuthKnown bool
+	ContentType                 string
+	ClusterPeers                []*clusterpeerpb.TenantClusterPeer // Tenant's cluster context from Commodore
+	AuthorityClusterPeers       []*clusterpeerpb.TenantClusterPeer // Stable tenant grants used for local-authority comparison
+	OfficialClusterID           string
+	AllowPlatformSharedPlayback bool
+	LocalAuthority              bool
+	RequiresAuth                bool
+	RequiresAuthKnown           bool
 }
 
 // ResolveStream determines the target stream name and node constraint for a given input.
@@ -311,11 +315,12 @@ func resolveArtifactHashStreamTarget(ctx context.Context, artifactHash string) *
 
 	if resp, err := CommodoreClient.ResolveVodHash(ctx, artifactHash); err == nil && resp.GetFound() {
 		requiresAuth, requiresKnown, clusterPeers := resolveArtifactPolicy(ctx, resp.GetInternalName())
+		contentType := canonicalResolvedVODContentType(resp.GetContentType())
 		target := &StreamTarget{
 			InternalName:      "vod+" + resp.GetInternalName(),
 			IsVod:             true,
 			TenantID:          resp.GetTenantId(),
-			ContentType:       "vod",
+			ContentType:       contentType,
 			ClusterPeers:      clusterPeers,
 			RequiresAuth:      requiresAuth,
 			RequiresAuthKnown: requiresKnown,
@@ -369,7 +374,7 @@ func ResolveArtifactByHash(ctx context.Context, artifactHash string) (*StreamTar
 			}
 		} else if resp, err := CommodoreClient.ResolveVodHash(ctx, artifactHash); err == nil && resp.Found {
 			target.TenantID = resp.TenantId
-			target.ContentType = "vod"
+			target.ContentType = canonicalResolvedVODContentType(resp.GetContentType())
 			if resp.InternalName != "" {
 				target.InternalName = "vod+" + resp.InternalName
 			}
@@ -378,6 +383,13 @@ func ResolveArtifactByHash(ctx context.Context, artifactHash string) (*StreamTar
 
 	applyArtifactPlacement(ctx, artifactHash, target)
 	return target, nil
+}
+
+func canonicalResolvedVODContentType(contentType string) string {
+	if strings.EqualFold(strings.TrimSpace(contentType), "chapter") {
+		return "chapter"
+	}
+	return "vod"
 }
 
 func applyArtifactPlacement(ctx context.Context, artifactHash string, target *StreamTarget) {

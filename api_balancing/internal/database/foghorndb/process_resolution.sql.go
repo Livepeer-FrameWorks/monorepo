@@ -10,6 +10,23 @@ import (
 	"database/sql"
 )
 
+const activeLiveProcessConfig = `-- name: ActiveLiveProcessConfig :one
+SELECT processes_json
+FROM foghorn.ingest_sessions
+WHERE stream_internal_name = $1
+  AND ended_at IS NULL
+  AND projection_state = 'active'
+ORDER BY started_at DESC
+LIMIT 1
+`
+
+func (q *Queries) ActiveLiveProcessConfig(ctx context.Context, streamInternalName string) (string, error) {
+	row := q.db.QueryRowContext(ctx, activeLiveProcessConfig, streamInternalName)
+	var processes_json string
+	err := row.Scan(&processes_json)
+	return processes_json, err
+}
+
 const latestActiveProcessingConfig = `-- name: LatestActiveProcessingConfig :one
 SELECT processes_json
 FROM foghorn.processing_jobs

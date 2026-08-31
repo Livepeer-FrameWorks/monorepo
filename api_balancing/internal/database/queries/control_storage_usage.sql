@@ -11,6 +11,7 @@ FROM (
     FROM foghorn.artifacts
     WHERE sync_status = 'synced'
       AND durable_backend_local = false
+      AND federated_pointer = false
       AND tenant_id IS NOT NULL
 ) p
 WHERE (p.tenant, p.cluster) > (sqlc.arg(last_tenant)::text, sqlc.arg(last_cluster)::text)
@@ -22,6 +23,7 @@ UPDATE foghorn.artifacts
 SET durable_backend_local = true
 WHERE sync_status = 'synced'
   AND durable_backend_local = false
+  AND federated_pointer = false
   AND tenant_id::text = sqlc.arg(tenant_id)
   AND COALESCE(NULLIF(storage_cluster_id, ''), NULLIF(origin_cluster_id, ''), '') = sqlc.arg(cluster_id);
 
@@ -36,6 +38,7 @@ SELECT tenant_id::text AS tenant_id, artifact_type,
        COUNT(*)::bigint AS file_count
 FROM foghorn.artifacts
 WHERE tenant_id IS NOT NULL
+  AND federated_pointer = false
   AND status != 'deleted'
   AND sync_status = 'synced'
   AND durable_backend_local = true

@@ -3,13 +3,16 @@ package grpc
 import (
 	"context"
 	"math"
+	"strings"
 	"time"
 
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/handlers"
+	"frameworks/api_balancing/internal/triggers"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
 	"google.golang.org/grpc/codes"
@@ -28,14 +31,31 @@ import (
 // lease. PUSH_REWRITE is still the only push-ingest caller that claims through
 // ValidateStreamKey.
 func (s *FoghornGRPCServer) ResolveIngestEndpoint(ctx context.Context, req *sharedpb.IngestEndpointRequest) (*sharedpb.IngestEndpointResponse, error) {
+	ctx = control.MediaRequestContext(ctx, "ingest_grpc")
 	start := time.Now()
 
 	streamKey := req.GetStreamKey()
 	if streamKey == "" {
 		return nil, status.Error(codes.InvalidArgument, "stream_key is required")
 	}
-	if control.CommodoreClient == nil {
-		return nil, status.Error(codes.Unavailable, "stream validation is unavailable")
+	var localContext *commodorepb.ResolveStreamContextResponse
+	localHandled := false
+	if s.localIngestResolver != nil {
+		var localErr error
+		localContext, localHandled, localErr = s.localIngestResolver.ResolveLocalIngestContext(ctx, streamKey)
+		if localErr != nil {
+			if triggers.IsLocalAuthorityDenied(localErr) || triggers.IsLocalAuthorityExpired(localErr) {
+				return nil, status.Error(codes.Unavailable, "stream validation is unavailable")
+			}
+			s.logger.WithError(localErr).Warn("Local ingest projection unavailable; using connected validation")
+			localContext = nil
+			localHandled = false
+		}
+		if localHandled {
+			if denial := control.EvaluateIngestAdmission(localContext); denial != nil {
+				return nil, status.Error(denial.GRPCCode, denial.Message)
+			}
+		}
 	}
 
 	// No cluster is declared. Everywhere else Foghorn passes its own CLUSTER_ID
@@ -43,8 +63,20 @@ func (s *FoghornGRPCServer) ResolveIngestEndpoint(ctx context.Context, req *shar
 	// asking where a publisher may go, and one process serves many virtual
 	// media clusters. Commodore answers with the tenant's authorized, healthy
 	// cluster_peers envelope, which selection then ranks nodes across.
-	streamCtx, err := control.CommodoreClient.ResolveStreamContextByStreamKey(ctx, streamKey, "")
-	if err != nil {
+	var streamCtx *commodorepb.ResolveStreamContextResponse
+	var err error
+	if control.CommodoreClient != nil {
+		streamCtx, err = control.CommodoreClient.ResolveStreamContextByStreamKey(ctx, streamKey, "")
+	}
+	if err != nil || streamCtx == nil {
+		streamCtx = localContext
+		if localHandled && streamCtx != nil && streamCtx.GetActiveIngestClusterId() == "" {
+			if owner := strings.TrimSpace(streamCtx.GetOriginClusterId()); owner != "" {
+				streamCtx.ActiveIngestClusterId = &owner
+			}
+		}
+	}
+	if streamCtx == nil {
 		s.logger.WithFields(logging.Fields{
 			"error": err,
 		}).Warn("ResolveIngestEndpoint: stream context resolution failed")

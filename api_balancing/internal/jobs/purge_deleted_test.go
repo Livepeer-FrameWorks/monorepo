@@ -9,6 +9,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 
 	"frameworks/api_balancing/internal/artifacts"
+	"frameworks/api_balancing/internal/control"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
@@ -25,6 +26,17 @@ type fakeS3 struct {
 
 type abortCall struct {
 	key, uploadID string
+}
+
+type cancelingThumbnailS3 struct {
+	*fakeS3
+	cancel context.CancelFunc
+}
+
+func (f *cancelingThumbnailS3) DeletePrefix(_ context.Context, prefix string) (int, error) {
+	f.deletePrefixCalls = append(f.deletePrefixCalls, prefix)
+	f.cancel()
+	return 0, context.Canceled
 }
 
 func (f *fakeS3) Delete(_ context.Context, key string) error {
@@ -101,6 +113,16 @@ func expectStaleUploadingNoRows(mock sqlmock.Sqlmock) {
 func expectStaleNodeRowsCleanup(mock sqlmock.Sqlmock) {
 	mock.ExpectExec("DELETE FROM foghorn.artifact_nodes").
 		WillReturnResult(sqlmock.NewResult(0, 0))
+	expectEmptyFederatedPointerDiscovery(mock)
+}
+
+func expectEmptyFederatedPointerDiscovery(mock sqlmock.Sqlmock) {
+	mock.ExpectQuery("ListTombstonedFederatedArtifactPointersForPurge|FROM foghorn.artifacts AS artifact").
+		WithArgs("720h0m0s").
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "tenant_id", "backend_id"}))
+	mock.ExpectQuery("ListStaleFederatedArtifactPointersForPurge|FROM foghorn.artifacts AS artifact").
+		WithArgs("720h0m0s").
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "tenant_id", "backend_id"}))
 }
 
 // expectMarkFailedDeleted matches markFailedArtifactsDeleted, which runs at the top of the
@@ -112,9 +134,9 @@ func expectMarkFailedDeleted(mock sqlmock.Sqlmock) {
 		WillReturnResult(sqlmock.NewResult(0, 0))
 }
 
-// expectThumbnailCleanup matches the thumbnail control-row deletes the purge runs (BEFORE the S3 prefix sweep and
-// the artifact row) so a hard-deleted artifact never strands its thumbnail pointer/assignment rows. Both deletes
-// run in ONE transaction (atomic; no half-deleted control state a racing publisher could observe).
+// expectThumbnailCleanup matches the thumbnail assignment delete the purge runs
+// before the S3 prefix sweep and artifact row. Assignment deletion cascades to
+// objects and the active pointer in the same transaction.
 func expectThumbnailCleanup(mock sqlmock.Sqlmock, tenantID, hash string) {
 	// Route S3 deletion by the thumbnail's own destination cluster + recorded backend-local fact: read them first
 	// (no rows → local sweep).
@@ -122,18 +144,231 @@ func expectThumbnailCleanup(mock sqlmock.Sqlmock, tenantID, hash string) {
 		WithArgs(tenantID, hash).
 		WillReturnRows(sqlmock.NewRows([]string{"destination_cluster", "backend_id", "bool_or"}))
 	mock.ExpectBegin()
-	// Before deleting the control rows, enqueue the deterministic object keys for every attempt (reconstruct SELECT;
-	// no rows here → nothing enqueued) so a late-promoted object is still swept.
+	mock.ExpectExec("pg_advisory_xact_lock").
+		WithArgs(sqlmock.AnyArg(), hash).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	// Under the asset + assignment locks, capture the deterministic object keys
+	// for every attempt before deleting; no rows here means nothing is enqueued
+	// after the cascade.
 	mock.ExpectQuery("FROM foghorn.thumbnail_task_assignment a\\s+JOIN foghorn.thumbnail_task_object o").
 		WithArgs(tenantID, hash).
 		WillReturnRows(sqlmock.NewRows([]string{"attempt_id", "version", "file_name"}))
-	mock.ExpectExec("DELETE FROM foghorn.thumbnail_active_pointer").
-		WithArgs(tenantID, hash).
-		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("DELETE FROM foghorn.thumbnail_task_assignment").
 		WithArgs(tenantID, hash).
 		WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
+}
+
+func TestPurgeFederatedPointerSweepsThumbnailsBeforeHardDelete(t *testing.T) {
+	fake := &fakeS3{}
+	j, mock, closeDB := newPurgeJob(t, fake)
+	defer closeDB()
+
+	mock.ExpectQuery("ListTombstonedFederatedArtifactPointersForPurge|FROM foghorn.artifacts AS artifact").
+		WithArgs("720h0m0s").
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "tenant_id", "backend_id"}).AddRow("pointer-1", "tenant-a", "backend-eu"))
+	mock.ExpectQuery("ListStaleFederatedArtifactPointersForPurge|FROM foghorn.artifacts AS artifact").
+		WithArgs("720h0m0s").
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "tenant_id", "backend_id"}))
+	mock.ExpectBegin()
+	mock.ExpectExec("pg_advisory_xact_lock").
+		WithArgs(sqlmock.AnyArg(), "pointer-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT destination_cluster, COALESCE\(backend_id`).
+		WithArgs("tenant-a", "pointer-1").
+		WillReturnRows(sqlmock.NewRows([]string{"destination_cluster", "backend_id", "backend_local"}).AddRow("platform-eu", "backend-eu", true))
+	mock.ExpectExec("FenceTombstonedFederatedArtifactPointerForPurge|UPDATE foghorn.artifacts AS artifact").
+		WithArgs(sqlmock.AnyArg(), "3m0s", "pointer-1", "tenant-a", "720h0m0s").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	mock.ExpectQuery(`GetFencedFederatedArtifactPointerPurgeState|SELECT COALESCE\(backend_id`).
+		WithArgs("pointer-1", "tenant-a", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"backend_id", "has_thumbnails"}).AddRow("backend-eu", true))
+	mock.ExpectQuery(`SELECT destination_cluster, COALESCE\(backend_id`).
+		WithArgs("tenant-a", "pointer-1").
+		WillReturnRows(sqlmock.NewRows([]string{"destination_cluster", "backend_id", "bool_or"}).AddRow("platform-eu", "backend-eu", true))
+	mock.ExpectBegin()
+	mock.ExpectExec("pg_advisory_xact_lock").
+		WithArgs(sqlmock.AnyArg(), "pointer-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`GetFencedFederatedArtifactPointerPurgeState|SELECT COALESCE\(backend_id`).
+		WithArgs("pointer-1", "tenant-a", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"backend_id", "has_thumbnails"}).AddRow("backend-eu", true))
+	mock.ExpectExec("pg_advisory_xact_lock").
+		WithArgs(sqlmock.AnyArg(), "pointer-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("FROM foghorn.thumbnail_task_assignment a\\s+JOIN foghorn.thumbnail_task_object o").
+		WithArgs("tenant-a", "pointer-1").
+		WillReturnRows(sqlmock.NewRows([]string{"attempt_id", "version", "file_name"}))
+	mock.ExpectExec("DELETE FROM foghorn.thumbnail_task_assignment").
+		WithArgs("tenant-a", "pointer-1").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("RestoreClaimedFederatedArtifactPointerAfterActiveAuthority|UPDATE foghorn.artifacts AS artifact").
+		WithArgs("pointer-1", "tenant-a", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("DeleteFencedFederatedArtifactPointer|DELETE FROM foghorn.artifacts AS artifact").
+		WithArgs("pointer-1", "tenant-a", sqlmock.AnyArg()).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	j.purgeFederatedPointers(context.Background())
+
+	if len(fake.deletePrefixCalls) != 1 || fake.deletePrefixCalls[0] != "thumbnails/pointer-1/" {
+		t.Fatalf("thumbnail sweeps = %v, want pointer prefix", fake.deletePrefixCalls)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPurgeFederatedPointerDoesNotFenceUndelegatableRemoteCleanup(t *testing.T) {
+	fake := &fakeS3{}
+	j, mock, closeDB := newPurgeJob(t, fake)
+	defer closeDB()
+
+	mock.ExpectQuery("ListTombstonedFederatedArtifactPointersForPurge|FROM foghorn.artifacts AS artifact").
+		WithArgs("720h0m0s").
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "tenant_id", "backend_id"}).AddRow("pointer-remote", "tenant-a", "backend-us"))
+	mock.ExpectQuery("ListStaleFederatedArtifactPointersForPurge|FROM foghorn.artifacts AS artifact").
+		WithArgs("720h0m0s").
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "tenant_id", "backend_id"}))
+	mock.ExpectBegin()
+	mock.ExpectExec("pg_advisory_xact_lock").WithArgs(sqlmock.AnyArg(), "pointer-remote").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT destination_cluster, COALESCE\(backend_id`).WithArgs("tenant-a", "pointer-remote").
+		WillReturnRows(sqlmock.NewRows([]string{"destination_cluster", "backend_id", "backend_local"}).AddRow("platform-us", "backend-us", false))
+	mock.ExpectRollback()
+
+	j.purgeFederatedPointers(context.Background())
+	if len(fake.deletePrefixCalls) != 0 {
+		t.Fatalf("remote cleanup ran with federation mutations disabled: %v", fake.deletePrefixCalls)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPurgeStaleFederatedPointerCleanupFailureReleasesFence(t *testing.T) {
+	fake := &fakeS3{deletePrefixErr: errors.New("503 throttled")}
+	j, mock, closeDB := newPurgeJob(t, fake)
+	defer closeDB()
+
+	mock.ExpectQuery("ListTombstonedFederatedArtifactPointersForPurge|FROM foghorn.artifacts AS artifact").
+		WithArgs("720h0m0s").
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "tenant_id", "backend_id"}))
+	mock.ExpectQuery("ListStaleFederatedArtifactPointersForPurge|FROM foghorn.artifacts AS artifact").
+		WithArgs("720h0m0s").
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "tenant_id", "backend_id"}).AddRow("pointer-stale", "tenant-a", "backend-eu"))
+	mock.ExpectBegin()
+	mock.ExpectExec("pg_advisory_xact_lock").WithArgs(sqlmock.AnyArg(), "pointer-stale").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT destination_cluster, COALESCE\(backend_id`).WithArgs("tenant-a", "pointer-stale").
+		WillReturnRows(sqlmock.NewRows([]string{"destination_cluster", "backend_id", "backend_local"}).AddRow("platform-eu", "backend-eu", true))
+	mock.ExpectExec("FenceStaleFederatedArtifactPointerForPurge|UPDATE foghorn.artifacts AS artifact").
+		WithArgs(sqlmock.AnyArg(), "3m0s", "pointer-stale", "tenant-a", "720h0m0s").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	mock.ExpectQuery(`GetFencedFederatedArtifactPointerPurgeState|SELECT COALESCE\(backend_id`).
+		WithArgs("pointer-stale", "tenant-a", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"backend_id", "has_thumbnails"}).AddRow("backend-eu", true))
+	mock.ExpectQuery(`SELECT destination_cluster, COALESCE\(backend_id`).WithArgs("tenant-a", "pointer-stale").
+		WillReturnRows(sqlmock.NewRows([]string{"destination_cluster", "backend_id", "backend_local"}).AddRow("platform-eu", "backend-eu", true))
+
+	// The byte sweep fails after the durable fence was installed. The same
+	// asset lock is reacquired and the claim becomes immediately reclaimable;
+	// uncertain byte effects never make the pointer routable again.
+	mock.ExpectBegin()
+	mock.ExpectExec("pg_advisory_xact_lock").WithArgs(sqlmock.AnyArg(), "pointer-stale").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("ReleaseFederatedArtifactPointerPurgeClaim|UPDATE foghorn.artifacts").
+		WithArgs("pointer-stale", "tenant-a", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	j.purgeFederatedPointers(context.Background())
+	if len(fake.deletePrefixCalls) != 1 || fake.deletePrefixCalls[0] != "thumbnails/pointer-stale/" {
+		t.Fatalf("thumbnail sweeps = %v, want one attempted pointer prefix", fake.deletePrefixCalls)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPurgeFederatedPointerCancellationUsesIndependentReleaseContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	fake := &cancelingThumbnailS3{fakeS3: &fakeS3{}, cancel: cancel}
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	j := NewPurgeDeletedJob(PurgeDeletedConfig{
+		DB: db, Logger: logging.NewLogger(), RetentionAge: 30 * 24 * time.Hour,
+		Cleaner: &artifacts.Cleaner{LocalCluster: "platform-eu", LocalBackendID: "backend-eu", S3: fake},
+	})
+	mock.ExpectBegin()
+	mock.ExpectExec("pg_advisory_xact_lock").WithArgs(sqlmock.AnyArg(), "pointer-cancel").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT destination_cluster, COALESCE\(backend_id`).WithArgs("tenant-a", "pointer-cancel").
+		WillReturnRows(sqlmock.NewRows([]string{"destination_cluster", "backend_id", "backend_local"}).AddRow("platform-eu", "backend-eu", true))
+	mock.ExpectExec("FenceStaleFederatedArtifactPointerForPurge|UPDATE foghorn.artifacts AS artifact").
+		WithArgs(sqlmock.AnyArg(), "3m0s", "pointer-cancel", "tenant-a", "720h0m0s").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	mock.ExpectQuery(`GetFencedFederatedArtifactPointerPurgeState|SELECT COALESCE\(backend_id`).
+		WithArgs("pointer-cancel", "tenant-a", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"backend_id", "has_thumbnails"}).AddRow("backend-eu", true))
+	mock.ExpectQuery(`SELECT destination_cluster, COALESCE\(backend_id`).WithArgs("tenant-a", "pointer-cancel").
+		WillReturnRows(sqlmock.NewRows([]string{"destination_cluster", "backend_id", "backend_local"}).AddRow("platform-eu", "backend-eu", true))
+	mock.ExpectBegin()
+	mock.ExpectExec("pg_advisory_xact_lock").WithArgs(sqlmock.AnyArg(), "pointer-cancel").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("ReleaseFederatedArtifactPointerPurgeClaim|UPDATE foghorn.artifacts").
+		WithArgs("pointer-cancel", "tenant-a", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	j.purgeFederatedPointerCandidates(ctx, []federatedPointerPurgeCandidate{{
+		hash: "pointer-cancel", tenantID: "tenant-a", kind: control.FederatedPointerPurgeStale,
+	}}, "720h0m0s")
+	if !errors.Is(ctx.Err(), context.Canceled) {
+		t.Fatalf("cleanup context = %v, want canceled", ctx.Err())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("claim release did not finish after cleanup cancellation: %v", err)
+	}
+}
+
+func TestPurgeFederatedPointerDefersForeignBackendEvidence(t *testing.T) {
+	fake := &fakeS3{}
+	j, mock, closeDB := newPurgeJob(t, fake)
+	defer closeDB()
+
+	mock.ExpectQuery("ListTombstonedFederatedArtifactPointersForPurge|FROM foghorn.artifacts AS artifact").
+		WithArgs("720h0m0s").
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "tenant_id", "backend_id"}))
+	mock.ExpectQuery("ListStaleFederatedArtifactPointersForPurge|FROM foghorn.artifacts AS artifact").
+		WithArgs("720h0m0s").
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "tenant_id", "backend_id"}).AddRow("pointer-foreign", "tenant-a", "backend-us"))
+	mock.ExpectBegin()
+	mock.ExpectExec("pg_advisory_xact_lock").WithArgs(sqlmock.AnyArg(), "pointer-foreign").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT destination_cluster, COALESCE\(backend_id`).WithArgs("tenant-a", "pointer-foreign").
+		WillReturnRows(sqlmock.NewRows([]string{"destination_cluster", "backend_id", "backend_local"}))
+	mock.ExpectExec("FenceStaleFederatedArtifactPointerForPurge|UPDATE foghorn.artifacts AS artifact").
+		WithArgs(sqlmock.AnyArg(), "3m0s", "pointer-foreign", "tenant-a", "720h0m0s").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+	mock.ExpectQuery(`GetFencedFederatedArtifactPointerPurgeState|SELECT COALESCE\(backend_id`).
+		WithArgs("pointer-foreign", "tenant-a", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"backend_id", "has_thumbnails"}).AddRow("backend-us", true))
+	mock.ExpectQuery(`SELECT destination_cluster, COALESCE\(backend_id`).WithArgs("tenant-a", "pointer-foreign").
+		WillReturnRows(sqlmock.NewRows([]string{"destination_cluster", "backend_id", "backend_local"}))
+	mock.ExpectBegin()
+	mock.ExpectExec("pg_advisory_xact_lock").WithArgs(sqlmock.AnyArg(), "pointer-foreign").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("DeferFederatedArtifactPointerPurgeClaim|UPDATE foghorn.artifacts").
+		WithArgs("15m0s", "pointer-foreign", "tenant-a", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	j.purgeFederatedPointers(context.Background())
+	if len(fake.deletePrefixCalls) != 0 {
+		t.Fatalf("foreign backend was synthesized as local: %v", fake.deletePrefixCalls)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestPurge_ClipUsesFormatColumnFromRow(t *testing.T) {
@@ -424,12 +659,46 @@ func TestPurge_NilCleanerSkipsBytesAndRowSweep(t *testing.T) {
 
 	expectStaleUploadingNoRows(mock)
 	// No SELECT for the main bytes+rows sweep — skipped.
-	expectStaleNodeRowsCleanup(mock)
+	mock.ExpectExec("DELETE FROM foghorn.artifact_nodes").WillReturnResult(sqlmock.NewResult(0, 0))
 
 	j.purge()
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("sql expectations: %v", err)
+	}
+}
+
+func TestFederatedPointerScheduleDoesNotInheritLocalPurgeCancellation(t *testing.T) {
+	j := NewPurgeDeletedJob(PurgeDeletedConfig{Logger: logging.NewLogger()})
+	localCtx, cancelLocal := context.WithCancel(j.lifecycleCtx)
+	cancelLocal()
+	if !errors.Is(localCtx.Err(), context.Canceled) {
+		t.Fatalf("local purge context = %v, want canceled", localCtx.Err())
+	}
+
+	dailyCtx, cancelDaily := j.federatedPointerScheduleContext()
+	defer cancelDaily()
+	if err := dailyCtx.Err(); err != nil {
+		t.Fatalf("federated discovery inherited local purge cancellation: %v", err)
+	}
+	j.cancel()
+	if !errors.Is(dailyCtx.Err(), context.Canceled) {
+		t.Fatalf("federated discovery ignored job shutdown: %v", dailyCtx.Err())
+	}
+}
+
+func TestPurgeJobStopCancelsIndependentSchedules(t *testing.T) {
+	j := NewPurgeDeletedJob(PurgeDeletedConfig{Logger: logging.NewLogger()})
+	j.Start()
+	done := make(chan struct{})
+	go func() {
+		j.Stop()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("purge schedules did not stop with the job lifecycle")
 	}
 }
 

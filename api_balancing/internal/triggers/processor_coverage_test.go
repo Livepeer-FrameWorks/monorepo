@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_balancing/internal/control"
+	"github.com/DATA-DOG/go-sqlmock"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
@@ -230,9 +232,10 @@ func TestProcessTypedTrigger_DispatchAndUnsupported(t *testing.T) {
 //   - vod+ is the read-only playback path and must return an empty config
 //     unconditionally (no Thumbs/sprite/Livepeer boot), even if a stale
 //     process: cache entry exists.
-//   - a live/processing/dvr stream with a process:<internal> cache entry
-//     returns that cached config verbatim (the live-ingest fast path).
-//   - a nil streamCache short-circuits to empty config.
+//   - an active live session's durable config outranks a process cache entry;
+//   - otherwise a live/processing/dvr stream with a process:<internal> cache
+//     entry returns that cached config verbatim;
+//   - a nil streamCache and absent database safely return empty config.
 func TestHandleStreamProcess_PrefixSelectsConfig(t *testing.T) {
 	t.Run("vod+ returns empty even with a cached process config", func(t *testing.T) {
 		p := newTestProcessor(t)
@@ -262,6 +265,71 @@ func TestHandleStreamProcess_PrefixSelectsConfig(t *testing.T) {
 		}
 		if resp != cfg {
 			t.Fatalf("cached process config = %q, want %q", resp, cfg)
+		}
+	})
+
+	t.Run("durable active-session config outranks stale cache", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		previous := control.GetDB()
+		control.SetDB(db)
+		t.Cleanup(func() {
+			control.SetDB(previous)
+			_ = db.Close()
+		})
+		mock.ExpectQuery(`SELECT processes_json[\s\S]*FROM foghorn\.ingest_sessions`).
+			WithArgs("live-stream-1").
+			WillReturnRows(sqlmock.NewRows([]string{"processes_json"}).AddRow(`{"PROC":"durable"}`))
+
+		p := newTestProcessor(t)
+		p.streamCache.Set("process:live-stream-1", `{"PROC":"stale"}`, time.Minute)
+		resp, abort, err := p.handleStreamProcess(&ipcpb.MistTrigger{
+			TriggerPayload: &ipcpb.MistTrigger_StreamProcess{
+				StreamProcess: &ipcpb.StreamProcessTrigger{StreamName: "live+live-stream-1"},
+			},
+		})
+		if err != nil || abort || resp != `{"PROC":"durable"}` {
+			t.Fatalf("durable process config: resp=%q abort=%v err=%v", resp, abort, err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("slow durable lookup is bounded and falls back to local cache", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		previous := control.GetDB()
+		control.SetDB(db)
+		t.Cleanup(func() {
+			control.SetDB(previous)
+			_ = db.Close()
+		})
+		mock.ExpectQuery(`SELECT processes_json[\s\S]*FROM foghorn\.ingest_sessions`).
+			WithArgs("live-stream-1").
+			WillDelayFor(2 * MediaAdmissionTimeout).
+			WillReturnRows(sqlmock.NewRows([]string{"processes_json"}).AddRow(`{"PROC":"late"}`))
+
+		p := newTestProcessor(t)
+		p.streamCache.Set("process:live-stream-1", `{"PROC":"local"}`, time.Minute)
+		started := time.Now()
+		resp, abort, err := p.handleStreamProcess(&ipcpb.MistTrigger{
+			TriggerPayload: &ipcpb.MistTrigger_StreamProcess{
+				StreamProcess: &ipcpb.StreamProcessTrigger{StreamName: "live+live-stream-1"},
+			},
+		})
+		if err != nil || abort || resp != `{"PROC":"local"}` {
+			t.Fatalf("bounded fallback: resp=%q abort=%v err=%v", resp, abort, err)
+		}
+		if elapsed := time.Since(started); elapsed >= 2*MediaAdmissionTimeout {
+			t.Fatalf("durable lookup took %s, want bounded below %s", elapsed, 2*MediaAdmissionTimeout)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
 		}
 	})
 

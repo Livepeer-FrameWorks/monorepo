@@ -49,3 +49,28 @@ type FoghornDvrSegment struct {
 	DeletedLocalAt sql.NullTime   `db:"deleted_local_at" json:"deleted_local_at"`
 	DroppedAt      sql.NullTime   `db:"dropped_at" json:"dropped_at"`
 }
+
+type FoghornMediaObjectAuthorityProjection struct {
+	AuthorityID                string         `db:"authority_id" json:"authority_id"`
+	AuthorityVersion           int64          `db:"authority_version" json:"authority_version"`
+	ObjectKind                 string         `db:"object_kind" json:"object_kind"`
+	TenantID                   string         `db:"tenant_id" json:"tenant_id"`
+	UserID                     sql.NullString `db:"user_id" json:"user_id"`
+	InternalName               string         `db:"internal_name" json:"internal_name"`
+	PlaybackID                 string         `db:"playback_id" json:"playback_id"`
+	Lifecycle                  string         `db:"lifecycle" json:"lifecycle"`
+	OriginClusterID            sql.NullString `db:"origin_cluster_id" json:"origin_cluster_id"`
+	PlaybackPolicyKind         string         `db:"playback_policy_kind" json:"playback_policy_kind"`
+	PlaybackPolicy             []byte         `db:"playback_policy" json:"playback_policy"`
+	StreamID                   sql.NullString `db:"stream_id" json:"stream_id"`
+	IngestMode                 sql.NullString `db:"ingest_mode" json:"ingest_mode"`
+	ArtifactID                 sql.NullString `db:"artifact_id" json:"artifact_id"`
+	ArtifactHash               sql.NullString `db:"artifact_hash" json:"artifact_hash"`
+	ArtifactKind               sql.NullString `db:"artifact_kind" json:"artifact_kind"`
+	LocalReadReady             bool           `db:"local_read_ready" json:"local_read_ready"`
+	LocalIngestReady           bool           `db:"local_ingest_ready" json:"local_ingest_ready"`
+	LocalSourceReady           bool           `db:"local_source_ready" json:"local_source_ready"`
+	PublishingCredentialSha256 []byte         `db:"publishing_credential_sha256" json:"publishing_credential_sha256"`
+	ValidUntil                 time.Time      `db:"valid_until" json:"valid_until"`
+	UpdatedAt                  time.Time      `db:"updated_at" json:"updated_at"`
+}

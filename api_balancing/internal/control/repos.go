@@ -253,7 +253,7 @@ func (r *nodeRepositoryDB) ListAllNodes(ctx context.Context) ([]state.NodeRecord
 	}
 	out := make([]state.NodeRecord, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, state.NodeRecord{NodeID: row.NodeID, BaseURL: row.BaseUrl, OutputsJSON: string(row.Outputs)})
+		out = append(out, state.NodeRecord{NodeID: row.NodeID, BaseURL: row.BaseUrl, OutputsJSON: string(row.Outputs), LastUpdated: row.LastUpdated.Time})
 	}
 	return out, nil
 }
@@ -282,6 +282,13 @@ func (r *nodeRepositoryDB) UpsertNodeOutputs(ctx context.Context, nodeID string,
 	return foghorndb.New(db).UpsertNodeOutputs(ctx, foghorndb.UpsertNodeOutputsParams{
 		NodeID: nodeID, BaseUrl: baseURL, Outputs: json.RawMessage(outputsJSON),
 	})
+}
+
+func (r *nodeRepositoryDB) DeleteNodeOutputs(ctx context.Context, nodeID string) error {
+	if db == nil {
+		return nil
+	}
+	return foghorndb.New(db).DeleteNodeOutputs(ctx, nodeID)
 }
 
 func (r *nodeRepositoryDB) UpsertNodeLifecycles(ctx context.Context, updates []*ipcpb.NodeLifecycleUpdate) error {
@@ -465,14 +472,19 @@ func applyReportRevisionGuard(ctx context.Context, tx *sql.Tx, nodeID string, co
 	return false, nil
 }
 
-// AllocateNodeControlFence issues a fresh monotonic ownership fence for a node control connection.
-// Called once when a connection registers (not on the report hot path). Monotonic across a Redis
-// restart because it is a Postgres sequence.
-func AllocateNodeControlFence(ctx context.Context) (int64, error) {
+// AllocateNodeControlFence issues a fresh monotonic ownership fence for one node.
+// The durable per-node counter matches the comparison domain and survives Redis restarts.
+func AllocateNodeControlFence(ctx context.Context, nodeID string) (int64, error) {
 	if db == nil {
 		return 0, sql.ErrConnDone
 	}
-	return foghorndb.New(db).AllocateNodeControlFence(ctx)
+	var fence int64
+	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		var allocateErr error
+		fence, allocateErr = foghorndb.New(db).AllocateNodeControlFence(ctx, nodeID)
+		return allocateErr
+	})
+	return fence, err
 }
 
 func (r *artifactRepositoryDB) upsertArtifactsOnce(ctx context.Context, nodeID string, artifacts []state.ArtifactRecord) error {
@@ -503,7 +515,7 @@ func (r *artifactRepositoryDB) upsertArtifactsOnce(ctx context.Context, nodeID s
 	//
 	// All records in one report share the capture time (ArtifactRecord.ReportedAtMs) — that is
 	// event time only. The monotonic ordering key for a placement transition is the Postgres
-	// sequence (artifact_node_copy_version_seq) assigned when the GAINED/LOST/UPDATED row is
+	// per-copy counter assigned when the GAINED/LOST/UPDATED row is
 	// emitted, NOT this timestamp.
 	var reportedAtMs int64
 	if len(artifacts) > 0 {
@@ -524,8 +536,12 @@ func (r *artifactRepositoryDB) upsertArtifactsOnce(ctx context.Context, nodeID s
 		var priorRole string
 		var priorOrphaned, priorComplete bool
 		priorExisted := true
-		if lockErr := qtx.LockArtifactPlacementParent(ctx, a.ArtifactHash); lockErr != nil {
+		writable, lockErr := lockPlacementWriteAgainstDeletion(ctx, qtx, a.ArtifactHash, nodeID, a.ReportedAtMs)
+		if lockErr != nil {
 			return lockErr
+		}
+		if !writable {
+			continue
 		}
 		prior, perr := qtx.LockArtifactNodeState(ctx, foghorndb.LockArtifactNodeStateParams{ArtifactHash: a.ArtifactHash, NodeID: nodeID})
 		if perr != nil {
@@ -540,7 +556,8 @@ func (r *artifactRepositoryDB) upsertArtifactsOnce(ctx context.Context, nodeID s
 		upserted, uerr := qtx.UpsertReportedArtifactNode(ctx, foghorndb.UpsertReportedArtifactNodeParams{
 			ArtifactHash: a.ArtifactHash, NodeID: nodeID, FilePath: a.FilePath,
 			SizeBytes: a.SizeBytes, SegmentCount: int64(a.SegmentCount), SegmentBytes: a.SegmentBytes,
-			AccessCount: a.AccessCount, LastAccessed: a.LastAccessed, Role: role, IsComplete: a.IsComplete,
+			AccessCount: a.AccessCount, LastAccessed: a.LastAccessed, ReportedAtMs: a.ReportedAtMs,
+			Role: role, IsComplete: a.IsComplete,
 		})
 		if errors.Is(uerr, sql.ErrNoRows) {
 			continue // FK guard: artifact unknown, nothing upserted
@@ -600,7 +617,7 @@ func placementTenant(ctx context.Context, q foghorndb.DBTX, artifactHash string)
 }
 
 // enqueueNodeCopy writes one node-copy transition to the durable outbox within tx.
-// It assigns a fresh monotonic version from a Postgres sequence inside the same
+// It assigns a fresh monotonic version from a key-scoped counter inside the same
 // transaction (the analytics ReplacingMergeTree version) AND records it on the row's
 // last_emitted_version (the live version on GAINED/UPDATED, 0 on LOST), so
 // reconciliation re-emits only rows the projection is missing. The UPDATE is a no-op when
@@ -616,7 +633,10 @@ func enqueueNodeCopy(ctx context.Context, tx *sql.Tx, tenantID, artifactHash, no
 		return fmt.Errorf("node-copy emit for artifact %s has no tenant attribution (artifact row missing?) — refusing to commit placement change without its analytics event", artifactHash)
 	}
 	qtx := foghorndb.New(tx)
-	version, verr := qtx.AllocateArtifactNodeCopyVersion(ctx)
+	version, verr := qtx.AllocateArtifactNodeCopyVersion(ctx, foghorndb.AllocateArtifactNodeCopyVersionParams{
+		ArtifactHash: artifactHash,
+		NodeID:       nodeID,
+	})
 	if verr != nil {
 		return verr
 	}
@@ -811,7 +831,7 @@ func (r *artifactRepositoryDB) addCached(ctx context.Context, artifactHash, node
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
-	if err := AddCachedNodeCopyTx(ctx, tx, artifactHash, nodeID, filePath, sizeBytes); err != nil {
+	if _, err := AddCachedNodeCopyTx(ctx, tx, artifactHash, nodeID, filePath, sizeBytes, 0); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -820,30 +840,32 @@ func (r *artifactRepositoryDB) addCached(ctx context.Context, artifactHash, node
 // AddCachedNodeCopyTx upserts a cache placement and emits GAINED (cache) on a genuine transition,
 // inside the caller's transaction. Extracted so the sync-completion path can record the node copy
 // atomically with the artifact's terminal transition rather than in a separate connection.
-func AddCachedNodeCopyTx(ctx context.Context, tx *sql.Tx, artifactHash, nodeID, filePath string, sizeBytes int64) error {
+func AddCachedNodeCopyTx(ctx context.Context, tx *sql.Tx, artifactHash, nodeID, filePath string, sizeBytes, nodeClockCompletedAtMs int64) (bool, error) {
 	var priorRole string
 	var priorOrphaned, priorComplete bool
 	existed := true
 	// FOR UPDATE serializes concurrent writers on this (artifact, node).
 	qtx := foghorndb.New(tx)
-	if err := qtx.LockArtifactPlacementParent(ctx, artifactHash); err != nil {
-		return err
+	writable, err := lockPlacementWriteAgainstDeletion(ctx, qtx, artifactHash, nodeID, nodeClockCompletedAtMs)
+	if err != nil || !writable {
+		return writable, err
 	}
 	prior, priorErr := qtx.LockArtifactNodeState(ctx, foghorndb.LockArtifactNodeStateParams{ArtifactHash: artifactHash, NodeID: nodeID})
 	if priorErr != nil {
 		if errors.Is(priorErr, sql.ErrNoRows) {
 			existed = false
 		} else {
-			return priorErr
+			return false, priorErr
 		}
 	} else {
 		priorRole, priorOrphaned, priorComplete = prior.Role, prior.IsOrphaned.Bool, prior.IsComplete
 	}
 	upserted, uerr := qtx.UpsertCachedArtifactNode(ctx, foghorndb.UpsertCachedArtifactNodeParams{
 		ArtifactHash: artifactHash, NodeID: nodeID, FilePath: filePath, SizeBytes: sizeBytes,
+		ReportedAtMs: nodeClockCompletedAtMs,
 	})
 	if uerr != nil {
-		return uerr
+		return false, uerr
 	}
 	// Emit the persisted row size, not the caller's argument: AddCachedNode passes 0,
 	// but the row (via COALESCE in the upsert) keeps the real size from a prior write —
@@ -855,8 +877,32 @@ func AddCachedNodeCopyTx(ctx context.Context, tx *sql.Tx, artifactHash, nodeID, 
 	// AddCachedNode fires after a successful sync, so the cache copy is complete. This
 	// emits even when the row already existed present-but-incomplete (a poller row a
 	// sync just completed), because emitPresentTx also fires on incomplete→complete.
-	return emitPresentTx(ctx, tx, artifactHash, nodeID, roleAfterUpsert(priorRole, existed),
-		true, emitSize, !existed, existed, priorOrphaned, priorComplete, priorRole, 0)
+	if err := emitPresentTx(ctx, tx, artifactHash, nodeID, roleAfterUpsert(priorRole, existed),
+		true, emitSize, !existed, existed, priorOrphaned, priorComplete, priorRole, nodeClockCompletedAtMs); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// lockPlacementWriteAgainstDeletion establishes the shared lock order for
+// node-copy writers and rejects a node-clock observation superseded by a point
+// deletion. Zero is the rolling-upgrade compatibility value and remains
+// permissive because it cannot be compared to a deletion timestamp.
+func lockPlacementWriteAgainstDeletion(ctx context.Context, qtx *foghorndb.Queries, artifactHash, nodeID string, nodeClockObservedAtMs int64) (bool, error) {
+	if _, err := qtx.LockArtifactPlacementParent(ctx, artifactHash); err != nil {
+		return false, err
+	}
+	deletionWatermark, err := qtx.GetArtifactNodeDeletionWatermark(ctx, foghorndb.GetArtifactNodeDeletionWatermarkParams{
+		ArtifactHash: artifactHash,
+		NodeID:       nodeID,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return nodeClockObservedAtMs <= 0 || deletionWatermark < nodeClockObservedAtMs, nil
 }
 
 // RegisterDVRRecordingOrigin registers the DVR recording node as origin (with base_url)
@@ -878,7 +924,7 @@ func (r *artifactRepositoryDB) RegisterDVRRecordingOrigin(ctx context.Context, a
 	var priorRole string
 	var priorComplete, priorOrphaned bool
 	priorExisted := true
-	if lockErr := qtx.LockArtifactPlacementParent(ctx, artifactHash); lockErr != nil {
+	if _, lockErr := qtx.LockArtifactPlacementParent(ctx, artifactHash); lockErr != nil {
 		return lockErr
 	}
 	prior, priorErr := qtx.LockDVRRecordingOrigin(ctx, foghorndb.LockDVRRecordingOriginParams{ArtifactHash: artifactHash, NodeID: nodeID})
@@ -927,7 +973,7 @@ func RegisterOriginArtifactTx(ctx context.Context, tx *sql.Tx, artifactHash, nod
 	var priorRole string
 	var priorComplete, priorOrphaned bool
 	priorExisted := true
-	if lockErr := qtx.LockArtifactPlacementParent(ctx, artifactHash); lockErr != nil {
+	if _, lockErr := qtx.LockArtifactPlacementParent(ctx, artifactHash); lockErr != nil {
 		return lockErr
 	}
 	prior, priorErr := qtx.LockDVRRecordingOrigin(ctx, foghorndb.LockDVRRecordingOriginParams{ArtifactHash: artifactHash, NodeID: nodeID})
@@ -1166,51 +1212,65 @@ func (r *artifactRepositoryDB) reconcileOne(ctx context.Context, artifactHash, n
 
 // DeleteNodeArtifact removes one node's local-copy row (explicit deletion/eviction)
 // and emits a LOST placement in the same transaction, so the analytics projection
-// doesn't keep the node present=true after the copy is gone. atMs is the event
-// timestamp (signal receipt time; ordering is the monotonic version).
-func (r *artifactRepositoryDB) DeleteNodeArtifact(ctx context.Context, artifactHash, nodeID string, reportedAtMs int64) error {
+// doesn't keep the node present=true after the copy is gone. The timestamp is the
+// node clock from the deletion signal and fences older placement observations.
+func (r *artifactRepositoryDB) DeleteNodeArtifact(ctx context.Context, artifactHash, nodeID string, nodeClockDeletedAtMs int64) (state.NodeArtifactDeletionOutcome, error) {
 	if db == nil {
-		return sql.ErrConnDone
+		return "", sql.ErrConnDone
 	}
 
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer tx.Rollback() //nolint:errcheck // rollback is best-effort
 
-	if err := DeleteNodeArtifactTx(ctx, tx, artifactHash, nodeID, reportedAtMs); err != nil {
-		return err
+	outcome, err := DeleteNodeArtifactTx(ctx, tx, artifactHash, nodeID, nodeClockDeletedAtMs)
+	if err != nil {
+		return "", err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return "", err
+	}
+	return outcome, nil
 }
 
 // DeleteNodeArtifactTx orphans one (artifact, node) copy and emits LOST when it was present, inside
 // the caller's transaction — so a completion handler can drop a failed node's copy atomically with
 // the artifact's status transition (e.g. local_missing recovery).
-func DeleteNodeArtifactTx(ctx context.Context, tx *sql.Tx, artifactHash, nodeID string, reportedAtMs int64) error {
-	var role string
-	existed := true
+func DeleteNodeArtifactTx(ctx context.Context, tx *sql.Tx, artifactHash, nodeID string, nodeClockDeletedAtMs int64) (state.NodeArtifactDeletionOutcome, error) {
 	qtx := foghorndb.New(tx)
-	lockedRole, perr := qtx.LockArtifactNodeRole(ctx, foghorndb.LockArtifactNodeRoleParams{ArtifactHash: artifactHash, NodeID: nodeID})
-	if perr != nil {
-		if errors.Is(perr, sql.ErrNoRows) {
-			existed = false
-		} else {
-			return perr
+	if _, err := qtx.LockArtifactPlacementParent(ctx, artifactHash); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return state.NodeArtifactDeletionParentMissing, nil
 		}
-	} else {
-		role = lockedRole
+		return "", err
 	}
-	if err := qtx.DeleteArtifactNode(ctx, foghorndb.DeleteArtifactNodeParams{ArtifactHash: artifactHash, NodeID: nodeID}); err != nil {
-		return err
-	}
-	if existed {
-		if err := emitLost(ctx, tx, nodeID, []lostRow{{hash: artifactHash, role: role}}, reportedAtMs); err != nil {
-			return err
+	role, err := qtx.DeleteArtifactNodeIfNotNewer(ctx, foghorndb.DeleteArtifactNodeIfNotNewerParams{
+		ArtifactHash: artifactHash,
+		NodeID:       nodeID,
+		DeletedAtMs:  nodeClockDeletedAtMs,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		_, placementErr := qtx.LockArtifactNodeState(ctx, foghorndb.LockArtifactNodeStateParams{
+			ArtifactHash: artifactHash,
+			NodeID:       nodeID,
+		})
+		if placementErr == nil {
+			return state.NodeArtifactDeletionFenced, nil
 		}
+		if errors.Is(placementErr, sql.ErrNoRows) {
+			return state.NodeArtifactDeletionAbsent, nil
+		}
+		return "", placementErr
 	}
-	return nil
+	if err != nil {
+		return "", err
+	}
+	if err := emitLost(ctx, tx, nodeID, []lostRow{{hash: artifactHash, role: role}}, nodeClockDeletedAtMs); err != nil {
+		return "", err
+	}
+	return state.NodeArtifactDeletionApplied, nil
 }
 
 func (r *artifactRepositoryDB) MarkNodeArtifactsOrphaned(ctx context.Context, nodeID string, reportedAtMs int64, reportFence, reportSeq int64) error {

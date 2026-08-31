@@ -2,13 +2,30 @@ package control
 
 import (
 	"database/sql"
+	"database/sql/driver"
+	"fmt"
+	"strings"
 	"testing"
 
+	"frameworks/api_balancing/internal/artifactoutbox"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/DATA-DOG/go-sqlmock"
 )
+
+type jsonContains string
+
+func (want jsonContains) Match(value driver.Value) bool {
+	switch typed := value.(type) {
+	case []byte:
+		return strings.Contains(string(typed), string(want))
+	case string:
+		return strings.Contains(typed, string(want))
+	default:
+		return strings.Contains(fmt.Sprint(value), string(want))
+	}
+}
 
 func TestProcessProcessingJobResult_NilDB(t *testing.T) {
 	_, _, _ = setupArtifactTestDeps(t)
@@ -26,18 +43,39 @@ func TestProcessProcessingJobProgress_ChapterFinalizeUsesChapterLedger(t *testin
 	mock, _, _ := setupArtifactTestDeps(t)
 	logger := logging.NewLogger()
 
-	mock.ExpectQuery("UPDATE foghorn.processing_jobs").
-		WithArgs("chapter-finalize-chapter-1", int32(42), "node-1").
-		WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("UPDATE foghorn.dvr_chapters c").
-		WithArgs("chapter-1", "node-1").
+		WithArgs("chapter-1", "node-1", int32(7)).
 		WillReturnRows(sqlmock.NewRows([]string{"playback_artifact_hash", "tenant_id"}).
 			AddRow("chapter-artifact-hash", "5eed517e-ba5e-da7a-517e-ba5eda7a0001"))
 
 	processProcessingJobProgress(&ipcpb.ProcessingJobProgress{
-		JobId:       "chapter-finalize-chapter-1",
+		JobId:       "chapter-finalize-v2-7-chapter-1",
 		ProgressPct: 42,
 	}, "node-1", logger)
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestProcessProcessingJobProgress_ConsumesPersistedMonotonicProgress(t *testing.T) {
+	mockDB, mock, _, _ := setupArtifactTestDepsWithDB(t)
+	artifactoutbox.Init(mockDB, logging.NewLogger(), nil)
+	t.Cleanup(func() { artifactoutbox.Init(nil, nil, nil) })
+	mock.ExpectQuery("UPDATE foghorn.processing_jobs SET progress = GREATEST").
+		WithArgs("11111111-1111-1111-1111-111111111111", sql.NullInt32{Int32: 15, Valid: true}, sql.NullString{String: "node-1", Valid: true}).
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "tenant_id", "progress"}).
+			AddRow("artifact-hash", "5eed517e-ba5e-da7a-517e-ba5eda7a0001", 80))
+	mock.ExpectQuery("SELECT COALESCE\\(artifact_type").
+		WithArgs("artifact-hash").
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_type", "stream_id", "stream_internal_name"}).AddRow("vod", "", ""))
+	mock.ExpectExec("INSERT INTO foghorn.artifact_event_outbox").
+		WithArgs("vod_lifecycle", "5eed517e-ba5e-da7a-517e-ba5eda7a0001", "", "artifact-hash", jsonContains(`"progressPct":80`)).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	processProcessingJobProgress(&ipcpb.ProcessingJobProgress{
+		JobId: "11111111-1111-1111-1111-111111111111", ProgressPct: 15,
+	}, "node-1", logging.NewLogger())
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
@@ -276,8 +314,9 @@ func TestProcessProcessingJobResult_Completed_ClipFullSuccess(t *testing.T) {
 	mock.ExpectQuery(`SELECT tenant_id::text FROM foghorn.artifacts WHERE artifact_hash`).
 		WithArgs("art-clip").
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow(tenant))
-	mock.ExpectQuery(`SELECT nextval\('foghorn.artifact_node_copy_version_seq'\)`).
-		WillReturnRows(sqlmock.NewRows([]string{"nextval"}).AddRow(int64(1)))
+	mock.ExpectQuery(`INSERT INTO foghorn.artifact_node_copy_version_counter`).
+		WithArgs("art-clip", "node-1").
+		WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow(int64(1)))
 	mock.ExpectExec(`UPDATE foghorn.artifact_nodes SET last_emitted_version`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO foghorn.artifact_event_outbox`).

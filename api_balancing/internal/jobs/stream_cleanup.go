@@ -204,6 +204,12 @@ func (j *StreamCleanupJob) settleObligation(it streamCleanupItem) (progressed bo
 		j.recordFailure(it, msg)
 		return false
 	}
+	// Asset is the root lock for every thumbnail mutation. Take it before the
+	// obligation row below; RecordStreamCleanupObligation takes asset then
+	// inserts that row, so reversing the pair here would create a new ABBA.
+	if lErr := control.LockThumbnailAssetTx(txCtx, tx, it.assetKey); lErr != nil {
+		return fail("lock thumbnail asset: " + lErr.Error())
+	}
 
 	// Finalize ONLY at/after the max-copy window (the resurrection-reclaiming SECOND sweep), token-fenced + DB-clock
 	// gated. A lost lease or a pre-window row matches 0 rows here.

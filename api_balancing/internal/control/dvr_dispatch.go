@@ -9,6 +9,7 @@ import (
 
 	"frameworks/api_balancing/internal/database/foghorndb"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 )
 
 // DVRArtifactDispatch is the bundled state STREAM_SOURCE needs to route a
@@ -20,15 +21,16 @@ import (
 // in-flight recording. After finalize the field stays empty and callers
 // fall back to chapter-based playback against the segment ledger.
 type DVRArtifactDispatch struct {
-	DVRHash            string
-	InternalName       string
-	StreamID           string
-	StreamInternalName string
-	PlaybackID         string
-	TenantID           string
-	Status             string
-	RecordingNode      string
-	RequiresAuth       bool
+	DVRHash                     string
+	InternalName                string
+	StreamID                    string
+	StreamInternalName          string
+	PlaybackID                  string
+	TenantID                    string
+	Status                      string
+	RecordingNode               string
+	RequiresAuth                bool
+	AllowPlatformSharedPlayback bool
 	// ClusterPeers is the tenant's freshly-resolved cluster-peer envelope from
 	// Commodore. A cross-cluster DVR arrange must gate the recording peer
 	// against this so a revoked peer can't keep serving rolling DVR off stale
@@ -51,6 +53,17 @@ func ResolveDVRArtifactDispatch(ctx context.Context, dvrInternalName string) (*D
 	if !artifact.GetFound() || artifact.GetContentType() != "dvr" {
 		return nil, nil
 	}
+	return ResolveConnectedDVRArtifactDispatch(ctx, artifact)
+}
+
+// ResolveConnectedDVRArtifactDispatch completes a connected artifact lookup
+// with the source-stream catalog fields that are not part of the artifact
+// response. The caller may reuse the same response for signed-authority shadow
+// comparison instead of issuing the artifact lookup twice.
+func ResolveConnectedDVRArtifactDispatch(ctx context.Context, artifact *commodorepb.ResolveArtifactInternalNameResponse) (*DVRArtifactDispatch, error) {
+	if CommodoreClient == nil || artifact == nil || !artifact.GetFound() || artifact.GetContentType() != "dvr" {
+		return nil, nil
+	}
 	dvr, err := CommodoreClient.ResolveDVRHash(ctx, artifact.GetArtifactHash())
 	if err != nil {
 		return nil, err
@@ -59,14 +72,54 @@ func ResolveDVRArtifactDispatch(ctx context.Context, dvrInternalName string) (*D
 		return nil, nil
 	}
 	out := &DVRArtifactDispatch{
-		DVRHash:            artifact.GetArtifactHash(),
-		InternalName:       artifact.GetInternalName(),
-		StreamID:           dvr.GetStreamId(),
-		StreamInternalName: dvr.GetStreamInternalName(),
-		PlaybackID:         dvr.GetPlaybackId(),
-		TenantID:           dvr.GetTenantId(),
-		RequiresAuth:       artifact.GetRequiresAuth(),
-		ClusterPeers:       artifact.GetClusterPeers(),
+		DVRHash:                     artifact.GetArtifactHash(),
+		InternalName:                artifact.GetInternalName(),
+		StreamID:                    dvr.GetStreamId(),
+		StreamInternalName:          dvr.GetStreamInternalName(),
+		PlaybackID:                  dvr.GetPlaybackId(),
+		TenantID:                    dvr.GetTenantId(),
+		RequiresAuth:                artifact.GetRequiresAuth(),
+		AllowPlatformSharedPlayback: true,
+		ClusterPeers:                artifact.GetClusterPeers(),
+	}
+	return populateDVRArtifactRuntime(ctx, out)
+}
+
+// ResolveLocalDVRArtifactDispatch builds the same dispatch contract entirely
+// from signed identity plus Foghorn's durable artifact/session state.
+func ResolveLocalDVRArtifactDispatch(ctx context.Context, artifact *commodorepb.ResolveArtifactInternalNameResponse, playbackID string, allowPlatformShared bool) (*DVRArtifactDispatch, error) {
+	if artifact == nil || !artifact.GetFound() || artifact.GetContentType() != "dvr" {
+		return nil, nil
+	}
+	out := &DVRArtifactDispatch{
+		DVRHash: artifact.GetArtifactHash(), InternalName: artifact.GetInternalName(), StreamID: artifact.GetStreamId(),
+		PlaybackID: playbackID, TenantID: artifact.GetTenantId(), RequiresAuth: artifact.GetRequiresAuth(),
+		AllowPlatformSharedPlayback: allowPlatformShared, ClusterPeers: artifact.GetClusterPeers(),
+	}
+	out.StreamInternalName = artifact.GetParentStreamInternalName()
+	if db != nil {
+		identity, err := foghorndb.New(db).GetProcessingArtifactLifecycle(ctx, out.DVRHash)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+		if err == nil {
+			if identity.ArtifactType != "dvr" || (identity.StreamID != "" && identity.StreamID != out.StreamID) {
+				return nil, errors.New("durable DVR identity conflicts with signed authority")
+			}
+			if identity.StreamInternalName != "" {
+				out.StreamInternalName = identity.StreamInternalName
+			}
+			if out.StreamID == "" {
+				out.StreamID = identity.StreamID
+			}
+		}
+	}
+	return populateDVRArtifactRuntime(ctx, out)
+}
+
+func populateDVRArtifactRuntime(ctx context.Context, out *DVRArtifactDispatch) (*DVRArtifactDispatch, error) {
+	if out == nil {
+		return nil, nil
 	}
 	if db == nil {
 		return out, nil

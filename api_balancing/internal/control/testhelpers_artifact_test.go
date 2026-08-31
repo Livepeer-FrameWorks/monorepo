@@ -331,11 +331,11 @@ func (m *mockArtifactRepo) MarkNodeArtifactsOrphaned(ctx context.Context, nodeID
 	return nil
 }
 
-func (m *mockArtifactRepo) DeleteNodeArtifact(_ context.Context, artifactHash, nodeID string, _ int64) error {
+func (m *mockArtifactRepo) DeleteNodeArtifact(_ context.Context, artifactHash, nodeID string, _ int64) (state.NodeArtifactDeletionOutcome, error) {
 	m.mu.Lock()
 	m.deleteNodeCalls = append(m.deleteNodeCalls, [2]string{artifactHash, nodeID})
 	m.mu.Unlock()
-	return nil
+	return state.NodeArtifactDeletionApplied, nil
 }
 
 func (m *mockArtifactRepo) ReconcileNodeCopies(_ context.Context) (int, error) {
@@ -447,6 +447,7 @@ type captureStream struct {
 	ipcpb.HelmsmanControl_ConnectServer
 	mu   sync.Mutex
 	sent []*ipcpb.ControlMessage
+	ctx  context.Context
 }
 
 func (cs *captureStream) Send(msg *ipcpb.ControlMessage) error {
@@ -454,6 +455,13 @@ func (cs *captureStream) Send(msg *ipcpb.ControlMessage) error {
 	defer cs.mu.Unlock()
 	cs.sent = append(cs.sent, msg)
 	return nil
+}
+
+func (cs *captureStream) Context() context.Context {
+	if cs.ctx != nil {
+		return cs.ctx
+	}
+	return context.Background()
 }
 
 func (cs *captureStream) lastSent() *ipcpb.ControlMessage {

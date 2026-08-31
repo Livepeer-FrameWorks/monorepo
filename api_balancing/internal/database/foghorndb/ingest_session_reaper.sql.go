@@ -10,7 +10,8 @@ import (
 )
 
 const listNeverProjectedIngestSessions = `-- name: ListNeverProjectedIngestSessions :many
-SELECT id::text AS session_id, tenant_id::text AS tenant_id, stream_internal_name
+SELECT id::text AS session_id, tenant_id::text AS tenant_id, stream_internal_name,
+       start_trigger_uuid
 FROM foghorn.ingest_sessions
 WHERE ended_at IS NULL AND projection_state = 'pending'
   AND started_at < NOW() - ($1::bigint * INTERVAL '1 millisecond')
@@ -22,6 +23,7 @@ type ListNeverProjectedIngestSessionsRow struct {
 	SessionID          string `db:"session_id" json:"session_id"`
 	TenantID           string `db:"tenant_id" json:"tenant_id"`
 	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
+	StartTriggerUuid   string `db:"start_trigger_uuid" json:"start_trigger_uuid"`
 }
 
 func (q *Queries) ListNeverProjectedIngestSessions(ctx context.Context, olderThanMs int64) ([]ListNeverProjectedIngestSessionsRow, error) {
@@ -33,7 +35,12 @@ func (q *Queries) ListNeverProjectedIngestSessions(ctx context.Context, olderTha
 	items := []ListNeverProjectedIngestSessionsRow{}
 	for rows.Next() {
 		var i ListNeverProjectedIngestSessionsRow
-		if err := rows.Scan(&i.SessionID, &i.TenantID, &i.StreamInternalName); err != nil {
+		if err := rows.Scan(
+			&i.SessionID,
+			&i.TenantID,
+			&i.StreamInternalName,
+			&i.StartTriggerUuid,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -48,7 +55,8 @@ func (q *Queries) ListNeverProjectedIngestSessions(ctx context.Context, olderTha
 }
 
 const listOpenIngestSessions = `-- name: ListOpenIngestSessions :many
-SELECT id::text AS session_id, tenant_id::text AS tenant_id, node_id, stream_internal_name
+SELECT id::text AS session_id, tenant_id::text AS tenant_id, node_id, stream_internal_name,
+       start_trigger_uuid
 FROM foghorn.ingest_sessions
 WHERE ended_at IS NULL
 `
@@ -58,6 +66,7 @@ type ListOpenIngestSessionsRow struct {
 	TenantID           string `db:"tenant_id" json:"tenant_id"`
 	NodeID             string `db:"node_id" json:"node_id"`
 	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
+	StartTriggerUuid   string `db:"start_trigger_uuid" json:"start_trigger_uuid"`
 }
 
 func (q *Queries) ListOpenIngestSessions(ctx context.Context) ([]ListOpenIngestSessionsRow, error) {
@@ -74,6 +83,7 @@ func (q *Queries) ListOpenIngestSessions(ctx context.Context) ([]ListOpenIngestS
 			&i.TenantID,
 			&i.NodeID,
 			&i.StreamInternalName,
+			&i.StartTriggerUuid,
 		); err != nil {
 			return nil, err
 		}
@@ -107,7 +117,7 @@ SET ended_at = NOW(), ended_at_unix_millis = (EXTRACT(EPOCH FROM NOW()) * 1000):
     ended_reason = $1::text
 WHERE id = $2::text::uuid AND tenant_id = $3::text::uuid
   AND stream_internal_name = $4 AND ended_at IS NULL
-RETURNING node_id
+RETURNING node_id, start_trigger_uuid
 `
 
 type RetireIngestSessionParams struct {
@@ -117,16 +127,21 @@ type RetireIngestSessionParams struct {
 	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
 }
 
-func (q *Queries) RetireIngestSession(ctx context.Context, arg RetireIngestSessionParams) (string, error) {
+type RetireIngestSessionRow struct {
+	NodeID           string `db:"node_id" json:"node_id"`
+	StartTriggerUuid string `db:"start_trigger_uuid" json:"start_trigger_uuid"`
+}
+
+func (q *Queries) RetireIngestSession(ctx context.Context, arg RetireIngestSessionParams) (RetireIngestSessionRow, error) {
 	row := q.db.QueryRowContext(ctx, retireIngestSession,
 		arg.EndedReason,
 		arg.SessionID,
 		arg.TenantID,
 		arg.StreamInternalName,
 	)
-	var node_id string
-	err := row.Scan(&node_id)
-	return node_id, err
+	var i RetireIngestSessionRow
+	err := row.Scan(&i.NodeID, &i.StartTriggerUuid)
+	return i, err
 }
 
 const retireIngestSessionByClaim = `-- name: RetireIngestSessionByClaim :one

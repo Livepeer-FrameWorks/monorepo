@@ -16,6 +16,7 @@ FROM foghorn.artifacts
 WHERE artifact_hash = $1
   AND tenant_id::text = $2
   AND artifact_type = $3
+  AND federated_pointer = false
   AND status IN ('completed', 'completed_partial', 'ready', 'failed')
   AND ended_at IS NOT NULL
 `
@@ -39,6 +40,7 @@ SET retention_until = $1
 WHERE artifact_hash = $2
   AND tenant_id::text = $3
   AND artifact_type = $4
+  AND federated_pointer = false
   AND status IN ('completed', 'completed_partial', 'ready', 'failed')
 `
 

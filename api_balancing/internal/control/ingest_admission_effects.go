@@ -10,8 +10,85 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/database/foghorndb"
+	fieldcrypto "github.com/Livepeer-FrameWorks/monorepo/pkg/crypto"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/google/uuid"
 )
+
+var admissionEffectEncryptor *fieldcrypto.FieldEncryptor
+
+const (
+	admissionStatePendingV2    = "pending_v2"
+	admissionStateAppliedV2    = "applied_v2"
+	admissionStateSupersededV2 = "superseded_v2"
+)
+
+func ConfigureAdmissionEffectEncryption(secret string) error {
+	secret = strings.TrimSpace(secret)
+	if secret == "" {
+		return errors.New("FOGHORN_STATE_ENCRYPTION_KEY is required")
+	}
+	encryptor, err := fieldcrypto.DeriveFieldEncryptor([]byte(secret), "foghorn-ingest-admission-push-targets-v1")
+	if err != nil {
+		return err
+	}
+	admissionEffectEncryptor = encryptor
+	return nil
+}
+
+func admissionEffectAAD(tenantID, internalName, generation string) ([]byte, error) {
+	tenantUUID, err := uuid.Parse(strings.TrimSpace(tenantID))
+	if err != nil {
+		return nil, fmt.Errorf("invalid admission tenant_id: %w", err)
+	}
+	generationUUID, err := uuid.Parse(strings.TrimSpace(generation))
+	if err != nil {
+		return nil, fmt.Errorf("invalid admission source_generation: %w", err)
+	}
+	return []byte("foghorn:ingest-admission:push-targets\x00" + tenantUUID.String() + "\x00" + strings.TrimSpace(internalName) + "\x00" + generationUUID.String()), nil
+}
+
+func protectAdmissionPushTargets(raw []byte, tenantID, internalName, generation string) ([]byte, error) {
+	if len(raw) == 0 {
+		return raw, nil
+	}
+	if admissionEffectEncryptor == nil {
+		return nil, errors.New("admission effect encryption is not configured")
+	}
+	aad, err := admissionEffectAAD(tenantID, internalName, generation)
+	if err != nil {
+		return nil, err
+	}
+	protected, err := admissionEffectEncryptor.EncryptWithAAD(string(raw), aad)
+	return []byte(protected), err
+}
+
+func openAdmissionPushTargets(stored []byte, tenantID, internalName, generation string, requireV2 ...bool) ([]byte, error) {
+	if len(stored) == 0 {
+		return stored, nil
+	}
+	if admissionEffectEncryptor == nil {
+		return nil, errors.New("admission effect encryption is not configured")
+	}
+	aad, err := admissionEffectAAD(tenantID, internalName, generation)
+	if err != nil {
+		return nil, err
+	}
+	format := fieldcrypto.CiphertextFormat(string(stored))
+	strict := len(requireV2) > 0 && requireV2[0]
+	var opened string
+	if strict {
+		opened, err = admissionEffectEncryptor.DecryptWithAADStrict(string(stored), aad)
+	} else {
+		opened, err = admissionEffectEncryptor.DecryptWithAAD(string(stored), aad)
+	}
+	result := "opened"
+	if err != nil {
+		result = "error"
+	}
+	incAdmissionPayloadCrypto(string(format), result)
+	return []byte(opened), err
+}
 
 // AdmissionEffectIntent describes the once-only external admission effects owed to a freshly
 // admitted generation: push-target activation (a serialized ipcpb.ActivatePushTargets, nil when the
@@ -55,10 +132,16 @@ type AdmissionEffect struct {
 	// PeerHintsInvalid: the persisted peer set could not be decoded. The broadcast leg treats
 	// this as PER-LEG POISON (settled with diagnostics), never as "broadcast without tracking".
 	PeerHintsInvalid bool
-	DrainDone        bool
-	ActivationDone   bool
-	BroadcastDone    bool
-	DecklogDone      bool
+	// ActivationPayloadInvalid isolates an undecryptable durable target set to
+	// this obligation's activation leg. Other rows and legs still converge.
+	ActivationPayloadInvalid bool
+	// EncryptedState means the row belongs to the v2 state family. Old Foghorn
+	// workers ignore this family during rolling upgrades.
+	EncryptedState bool
+	DrainDone      bool
+	ActivationDone bool
+	BroadcastDone  bool
+	DecklogDone    bool
 	// GenerationEnded is resolved under the stream lock during apply: when true, the activation,
 	// broadcast AND drain legs are moot (a dead generation must not be announced, start pushes, or
 	// nuke a runtime name a successor session may now own); only the Decklog leg remains owed.
@@ -99,6 +182,10 @@ func enqueueAdmissionEffectTx(ctx context.Context, tx *sql.Tx, tenantID, interna
 	if revision <= 0 {
 		return fmt.Errorf("enqueue admission effect requires positive source revision")
 	}
+	protectedPushTargets, err := protectAdmissionPushTargets(intent.PushTargets, tenantID, internalName, generation)
+	if err != nil {
+		return fmt.Errorf("protect admission push targets: %w", err)
+	}
 	// Legs that do not apply to this obligation are born complete.
 	var peerClusters sql.NullString
 	if len(intent.PeerHints) > 0 {
@@ -108,10 +195,10 @@ func enqueueAdmissionEffectTx(ctx context.Context, tx *sql.Tx, tenantID, interna
 		}
 		peerClusters = sql.NullString{String: string(raw), Valid: true}
 	}
-	err := foghorndb.New(tx).EnqueueAdmissionEffect(ctx, foghorndb.EnqueueAdmissionEffectParams{
+	err = foghorndb.New(tx).EnqueueAdmissionEffect(ctx, foghorndb.EnqueueAdmissionEffectParams{
 		TenantID: tenantID, StreamInternalName: internalName, NodeID: nodeID, SourceGeneration: generation,
 		SourceRevision: revision, PriorOwnerNodeID: priorOwnerNodeID, PriorOwnerSourceGeneration: priorOwnerSourceGeneration,
-		PushTargets: intent.PushTargets, BroadcastLive: intent.BroadcastLive, DecklogTrigger: intent.DecklogTrigger,
+		PushTargets: protectedPushTargets, BroadcastLive: intent.BroadcastLive, DecklogTrigger: intent.DecklogTrigger,
 		PeerClusters:   peerClusters,
 		DrainDone:      strings.TrimSpace(priorOwnerNodeID) == "" || strings.TrimSpace(priorOwnerNodeID) == nodeID || strings.TrimSpace(priorOwnerSourceGeneration) == "",
 		ActivationDone: len(intent.PushTargets) == 0, BroadcastDone: !intent.BroadcastLive, DecklogDone: len(intent.DecklogTrigger) == 0,
@@ -146,9 +233,18 @@ func ClaimAdmissionEffects(ctx context.Context, limit int, lease time.Duration, 
 			ID: row.ID, TenantID: row.TenantID, InternalName: row.StreamInternalName, NodeID: row.NodeID,
 			SourceGeneration: row.SourceGeneration, SourceRevision: row.SourceRevision,
 			PriorOwnerNodeID: row.PriorOwnerNodeID, PriorOwnerSourceGeneration: row.PriorOwnerSourceGeneration,
-			PushTargets: row.PushTargets, BroadcastLive: row.BroadcastLive, DecklogTrigger: row.DecklogTrigger,
+			BroadcastLive: row.BroadcastLive, DecklogTrigger: row.DecklogTrigger,
 			DrainDone: row.DrainDone, ActivationDone: row.ActivationDone, BroadcastDone: row.BroadcastDone,
-			DecklogDone: row.DecklogDone, LeaseToken: row.LeaseToken,
+			DecklogDone: row.DecklogDone, LeaseToken: row.LeaseToken, EncryptedState: row.State == admissionStatePendingV2,
+		}
+		pushTargets, openErr := openAdmissionPushTargets(row.PushTargets, e.TenantID, e.InternalName, e.SourceGeneration, e.EncryptedState)
+		if openErr != nil {
+			e.ActivationPayloadInvalid = true
+			logging.NewLogger().WithError(openErr).WithFields(logging.Fields{
+				"effect_id": e.ID, "tenant_id": e.TenantID, "generation": e.SourceGeneration,
+			}).Error("Admission effect push targets are undecryptable; activation leg will be poisoned")
+		} else {
+			e.PushTargets = pushTargets
 		}
 		peerClusters := row.PeerClusters.String
 		if peerClusters != "" {
@@ -202,25 +298,111 @@ func readAdmissionLegsLocked(ctx context.Context, tx *sql.Tx, id int64, leaseTok
 }
 
 // settleAdmissionLegsLocked persists merged leg flags and, when every leg is done, the terminal
-// transition (label decided by generation liveness; payload columns cleared — push_targets embeds
-// destination credentials; per-leg poison notes retained in last_error).
-func settleAdmissionLegsLocked(ctx context.Context, tx *sql.Tx, effect AdmissionEffect, f admissionLegFlags, generationEnded bool, poisonNote string) (bool, error) {
+// transition. A valid push-target payload remains attached to an applied, still-active publisher:
+// it is the exact admitted output authority replayed after a Helmsman/Mist restart. It is cleared
+// when the generation ended or the activation payload was undecodable.
+func settleAdmissionLegsLocked(ctx context.Context, tx *sql.Tx, effect AdmissionEffect, f admissionLegFlags, generationEnded bool, poisonNote string, clearPushTargets bool) (bool, error) {
 	newState := "pending"
+	if effect.EncryptedState {
+		newState = admissionStatePendingV2
+	}
 	if f.allDone() {
 		if generationEnded {
 			newState = "superseded"
+			if effect.EncryptedState {
+				newState = admissionStateSupersededV2
+			}
 		} else {
 			newState = "applied"
+			if effect.EncryptedState {
+				newState = admissionStateAppliedV2
+			}
 		}
 	}
 	n, err := foghorndb.New(tx).SettleAdmissionLegs(ctx, foghorndb.SettleAdmissionLegsParams{
 		DrainDone: f.drain, ActivationDone: f.activation, BroadcastDone: f.broadcast, DecklogDone: f.decklog,
-		NewState: newState, PoisonNote: poisonNote, EffectID: effect.ID, LeaseToken: effect.LeaseToken,
+		NewState: newState, PoisonNote: poisonNote, ClearPushTargets: clearPushTargets,
+		EffectID: effect.ID, LeaseToken: effect.LeaseToken,
 	})
 	if err != nil {
 		return false, fmt.Errorf("settle admission effect legs: %w", err)
 	}
-	return newState != "pending" && n == 1, nil
+	return f.allDone() && n == 1, nil
+}
+
+// RunAdmissionEffectEncryptionMigration continuously converts legacy
+// plaintext/v1 rows to row-bound v2 ciphertext. Each batch is locked and state
+// fenced atomically, so a pre-v0.3 worker either owns the legacy row first or
+// can no longer see it after commit.
+func RunAdmissionEffectEncryptionMigration(ctx context.Context, logger logging.Logger) {
+	migrate := func() {
+		for range 10 {
+			count, err := migrateAdmissionEffectEncryptionBatch(ctx, 100)
+			if err != nil {
+				logger.WithError(err).Warn("Admission push-target encryption migration failed")
+				return
+			}
+			if count < 100 {
+				return
+			}
+		}
+	}
+	migrate()
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			migrate()
+		}
+	}
+}
+
+func migrateAdmissionEffectEncryptionBatch(ctx context.Context, limit int32) (int, error) {
+	if db == nil || admissionEffectEncryptor == nil || limit <= 0 {
+		return 0, nil
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer rollbackQuiet(tx)
+	queries := foghorndb.New(tx)
+	rows, err := queries.ListLegacyAdmissionPushTargetsForEncryption(ctx, limit)
+	if err != nil {
+		return 0, err
+	}
+	migrated := 0
+	for _, row := range rows {
+		format := fieldcrypto.CiphertextFormat(string(row.PushTargets))
+		opened, openErr := openAdmissionPushTargets(row.PushTargets, row.TenantID, row.StreamInternalName, row.SourceGeneration)
+		if openErr != nil {
+			logging.NewLogger().WithError(openErr).WithField("effect_id", row.ID).Error("Skipping corrupt legacy admission payload during encryption migration")
+			continue
+		}
+		protected, protectErr := protectAdmissionPushTargets(opened, row.TenantID, row.StreamInternalName, row.SourceGeneration)
+		if protectErr != nil {
+			logging.NewLogger().WithError(protectErr).WithField("effect_id", row.ID).Error("Skipping invalid legacy admission identity during encryption migration")
+			continue
+		}
+		updated, updateErr := queries.UpgradeAdmissionPushTargetsEncryption(ctx, foghorndb.UpgradeAdmissionPushTargetsEncryptionParams{
+			PushTargets: protected,
+			EffectID:    row.ID,
+		})
+		if updateErr != nil {
+			return 0, updateErr
+		}
+		if updated == 1 {
+			incAdmissionPayloadCrypto(string(format), "migrated")
+			migrated++
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return migrated, nil
 }
 
 func probeAdmissionGeneration(ctx context.Context, tx *sql.Tx, effect AdmissionEffect) (ended bool, err error) {
@@ -291,7 +473,7 @@ func ApplyClaimedAdmissionEffect(ctx context.Context, effect AdmissionEffect, ap
 	}
 	effect.DrainDone, effect.ActivationDone, effect.BroadcastDone, effect.DecklogDone = flags.drain, flags.activation, flags.broadcast, flags.decklog
 	effect.GenerationEnded = generationEnded
-	terminal, err := settleAdmissionLegsLocked(ctx, tx, effect, flags, generationEnded, "")
+	terminal, err := settleAdmissionLegsLocked(ctx, tx, effect, flags, generationEnded, "", generationEnded)
 	if err != nil {
 		return false, err
 	}
@@ -334,7 +516,7 @@ func ApplyClaimedAdmissionEffect(ctx context.Context, effect AdmissionEffect, ap
 	if generationEnded {
 		current.activation, current.broadcast, current.drain = true, true, true
 	}
-	terminal, err = settleAdmissionLegsLocked(ctx, tx3, effect, current, generationEnded, legs.PoisonNote)
+	terminal, err = settleAdmissionLegsLocked(ctx, tx3, effect, current, generationEnded, legs.PoisonNote, generationEnded || legs.ActivationPoisoned)
 	if err != nil {
 		return false, errors.Join(applyErr, err)
 	}
@@ -354,7 +536,7 @@ func ApplyClaimedAdmissionEffect(ctx context.Context, effect AdmissionEffect, ap
 // generation's obligation — it matches at most its own single row. The marker only sets the leg
 // flag; the WORKER terminalizes the row on its next pass, under the stream advisory lock, where it
 // can decide applied-vs-superseded against the generation's current liveness.
-func markAdmissionLeg(ctx context.Context, legColumn, nodeColumn, nodeID, sourceGeneration string) error {
+func markAdmissionLeg(ctx context.Context, legColumn, nodeColumn, nodeID, sourceGeneration string, connectionFence int64) error {
 	if db == nil {
 		return nil
 	}
@@ -375,7 +557,12 @@ func markAdmissionLeg(ctx context.Context, legColumn, nodeColumn, nodeID, source
 	case "drain_done":
 		err = q.MarkAdmissionDrainDone(ctx, foghorndb.MarkAdmissionDrainDoneParams{SourceGeneration: sourceGeneration, NodeID: nodeID})
 	case "activation_done":
-		err = q.MarkAdmissionActivationDone(ctx, foghorndb.MarkAdmissionActivationDoneParams{SourceGeneration: sourceGeneration, NodeID: nodeID})
+		if connectionFence <= 0 {
+			return errors.New("mark admission activation requires a positive authenticated connection fence")
+		}
+		err = q.MarkAdmissionActivationDone(ctx, foghorndb.MarkAdmissionActivationDoneParams{
+			SourceGeneration: sourceGeneration, NodeID: nodeID, ConnectionFence: connectionFence,
+		})
 	default:
 		return fmt.Errorf("mark admission: unsupported leg %q/%q", legColumn, nodeColumn)
 	}
@@ -388,13 +575,35 @@ func markAdmissionLeg(ctx context.Context, legColumn, nodeColumn, nodeID, source
 // MarkAdmissionDrainDone records a successful (or nothing-to-drain) DrainStreamResponse from the
 // prior owner node, for the exact obligation whose generation the response echoes.
 func MarkAdmissionDrainDone(ctx context.Context, priorOwnerNodeID, sourceGeneration string) error {
-	return markAdmissionLeg(ctx, "drain_done", "prior_owner_node_id", priorOwnerNodeID, sourceGeneration)
+	return markAdmissionLeg(ctx, "drain_done", "prior_owner_node_id", priorOwnerNodeID, sourceGeneration, 0)
 }
 
 // MarkAdmissionActivationDone records a converged ActivatePushTargetsResult from the publishing
-// node, for the exact obligation whose generation the result echoes.
-func MarkAdmissionActivationDone(ctx context.Context, nodeID, sourceGeneration string) error {
-	return markAdmissionLeg(ctx, "activation_done", "node_id", nodeID, sourceGeneration)
+// node, for the exact obligation whose generation the result echoes. connectionFence is the
+// authenticated control-session fence that delivered the acknowledgement; a retired connection
+// cannot complete output recovery armed by a newer registration.
+func MarkAdmissionActivationDone(ctx context.Context, nodeID, sourceGeneration string, connectionFence int64) error {
+	return markAdmissionLeg(ctx, "activation_done", "node_id", nodeID, sourceGeneration, connectionFence)
+}
+
+// RequeueActivePushTargetActivationsForNode re-arms every exact target set belonging to a still-open
+// publisher on nodeID when Helmsman registers a newer authenticated control connection. It resets
+// only the activation leg; already-completed analytics, federation, and prior-owner work remain
+// complete. The exact admission payload is retained rather than resolving current central policy.
+func RequeueActivePushTargetActivationsForNode(ctx context.Context, nodeID string, connectionFence int64, instanceID string) (int64, error) {
+	if db == nil {
+		return 0, errors.New("requeue active push targets requires the durable session store")
+	}
+	if strings.TrimSpace(nodeID) == "" || connectionFence <= 0 {
+		return 0, errors.New("requeue active push targets requires node identity and positive connection fence")
+	}
+	n, err := foghorndb.New(db).RequeueActivePushTargetActivationsForNode(ctx, foghorndb.RequeueActivePushTargetActivationsForNodeParams{
+		NodeID: nodeID, ConnectionFence: connectionFence, InstanceID: instanceID,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("requeue active push-target activations: %w", err)
+	}
+	return n, nil
 }
 
 // NodeConnOwnerInstance resolves which Foghorn instance owns the node's control connection ("" when
@@ -462,7 +671,8 @@ func FailAdmissionEffect(ctx context.Context, effect AdmissionEffect, cause erro
 }
 
 // PurgeTerminalAdmissionEffects deletes applied/superseded obligations older than the retention
-// window; the pending set is the working state, terminal rows are only diagnostics.
+// window. An applied row holding an active publisher's exact push-target set is restart authority,
+// not merely diagnostics, and remains until that generation ends.
 func PurgeTerminalAdmissionEffects(ctx context.Context, olderThan time.Duration) (int64, error) {
 	if db == nil {
 		return 0, nil

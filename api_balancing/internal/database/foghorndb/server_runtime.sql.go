@@ -723,13 +723,19 @@ func (q *Queries) ThumbnailResourceProducedByNode(ctx context.Context, arg Thumb
 }
 
 const updateChapterFinalizeProgress = `-- name: UpdateChapterFinalizeProgress :one
-UPDATE foghorn.dvr_chapters c SET finalize_started_at = NOW() FROM foghorn.artifacts a WHERE c.chapter_id = $1 AND c.playback_artifact_hash = a.artifact_hash AND c.state = 'finalizing' AND c.finalize_node_id = $2
+UPDATE foghorn.dvr_chapters c SET finalize_started_at = NOW() FROM foghorn.artifacts a
+WHERE c.chapter_id = $1
+  AND c.playback_artifact_hash = a.artifact_hash
+  AND c.state = 'finalizing'
+  AND c.finalize_node_id = $2
+  AND c.finalize_attempts = $3
 RETURNING c.playback_artifact_hash, a.tenant_id::text
 `
 
 type UpdateChapterFinalizeProgressParams struct {
-	ChapterID      string         `db:"chapter_id" json:"chapter_id"`
-	FinalizeNodeID sql.NullString `db:"finalize_node_id" json:"finalize_node_id"`
+	ChapterID       string         `db:"chapter_id" json:"chapter_id"`
+	FinalizeNodeID  sql.NullString `db:"finalize_node_id" json:"finalize_node_id"`
+	ExpectedAttempt int32          `db:"expected_attempt" json:"expected_attempt"`
 }
 
 type UpdateChapterFinalizeProgressRow struct {
@@ -738,7 +744,7 @@ type UpdateChapterFinalizeProgressRow struct {
 }
 
 func (q *Queries) UpdateChapterFinalizeProgress(ctx context.Context, arg UpdateChapterFinalizeProgressParams) (UpdateChapterFinalizeProgressRow, error) {
-	row := q.db.QueryRowContext(ctx, updateChapterFinalizeProgress, arg.ChapterID, arg.FinalizeNodeID)
+	row := q.db.QueryRowContext(ctx, updateChapterFinalizeProgress, arg.ChapterID, arg.FinalizeNodeID, arg.ExpectedAttempt)
 	var i UpdateChapterFinalizeProgressRow
 	err := row.Scan(&i.PlaybackArtifactHash, &i.ATenantID)
 	return i, err
@@ -807,7 +813,7 @@ func (q *Queries) UpdateProcessingJobCache(ctx context.Context, arg UpdateProces
 }
 
 const updateProcessingJobProgress = `-- name: UpdateProcessingJobProgress :one
-UPDATE foghorn.processing_jobs SET progress = $2, updated_at = NOW() WHERE job_id = $1 AND status IN ('dispatched', 'processing') AND processing_node_id = $3 RETURNING artifact_hash, tenant_id::text
+UPDATE foghorn.processing_jobs SET progress = GREATEST(progress, $2), updated_at = NOW() WHERE job_id = $1 AND status IN ('dispatched', 'processing') AND processing_node_id = $3 RETURNING artifact_hash, tenant_id::text, progress
 `
 
 type UpdateProcessingJobProgressParams struct {
@@ -819,12 +825,13 @@ type UpdateProcessingJobProgressParams struct {
 type UpdateProcessingJobProgressRow struct {
 	ArtifactHash sql.NullString `db:"artifact_hash" json:"artifact_hash"`
 	TenantID     string         `db:"tenant_id" json:"tenant_id"`
+	Progress     sql.NullInt32  `db:"progress" json:"progress"`
 }
 
 func (q *Queries) UpdateProcessingJobProgress(ctx context.Context, arg UpdateProcessingJobProgressParams) (UpdateProcessingJobProgressRow, error) {
 	row := q.db.QueryRowContext(ctx, updateProcessingJobProgress, arg.JobID, arg.Progress, arg.ProcessingNodeID)
 	var i UpdateProcessingJobProgressRow
-	err := row.Scan(&i.ArtifactHash, &i.TenantID)
+	err := row.Scan(&i.ArtifactHash, &i.TenantID, &i.Progress)
 	return i, err
 }
 

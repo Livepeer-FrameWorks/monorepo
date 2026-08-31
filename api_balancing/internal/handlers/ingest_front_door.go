@@ -8,10 +8,12 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/triggers"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 
 	"github.com/gin-gonic/gin"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -33,6 +35,7 @@ import (
 // ValidateStreamKey.
 func HandleIngestFrontDoor(c *gin.Context) {
 	start := time.Now()
+	c.Request = c.Request.WithContext(control.MediaRequestContext(c.Request.Context(), "ingest_http"))
 
 	// Set before any return this handler makes: every response is reached via a
 	// credential-bearing URL, including the 404/402/403/429/503 paths. CORS
@@ -62,10 +65,34 @@ func HandleIngestFrontDoor(c *gin.Context) {
 		return
 	}
 
-	if commodoreClient == nil {
-		respondPlaybackError(c, http.StatusServiceUnavailable, "VALIDATION_UNAVAILABLE",
-			"Stream validation is unavailable", nil)
-		return
+	var localContext *commodorepb.ResolveStreamContextResponse
+	localHandled := false
+	if triggerProcessor != nil {
+		var localErr error
+		localContext, localHandled, localErr = triggerProcessor.ResolveLocalIngestContext(c.Request.Context(), streamKey)
+		if localErr != nil {
+			if triggers.IsLocalAuthorityDenied(localErr) || triggers.IsLocalAuthorityExpired(localErr) {
+				respondPlaybackError(c, http.StatusServiceUnavailable, "VALIDATION_UNAVAILABLE", "Stream validation is unavailable", nil)
+				return
+			}
+			logger.WithError(localErr).Warn("Local ingest projection unavailable; using connected validation")
+			localContext = nil
+			localHandled = false
+		}
+		if localHandled && localContext != nil && !localContext.GetAdmitted() {
+			denial := control.EvaluateIngestAdmission(localContext)
+			emitIngestRoutingEventFn(&RoutingEvent{
+				Status:         "failed",
+				Details:        denial.Code,
+				InternalName:   localContext.GetInternalName(),
+				StreamID:       localContext.GetStreamId(),
+				StreamTenantID: localContext.GetTenantId(),
+				ClientIP:       clientIP,
+				LatencyMs:      float32(time.Since(start).Milliseconds()),
+			})
+			respondPlaybackError(c, denial.HTTPStatus, denial.Code, denial.Message, nil)
+			return
+		}
 	}
 
 	// No cluster is declared. Everywhere else Foghorn passes its own CLUSTER_ID
@@ -73,8 +100,23 @@ func HandleIngestFrontDoor(c *gin.Context) {
 	// asking where a publisher may go, and one process serves many virtual
 	// media clusters. Commodore answers with the tenant's authorized, healthy
 	// cluster_peers envelope, which selection then ranks nodes across.
-	streamCtx, err := commodoreClient.ResolveStreamContextByStreamKey(c.Request.Context(), streamKey, "")
-	if err != nil {
+	var streamCtx *commodorepb.ResolveStreamContextResponse
+	var err error
+	if commodoreClient != nil {
+		streamCtx, err = commodoreClient.ResolveStreamContextByStreamKey(c.Request.Context(), streamKey, "")
+	}
+	if err != nil || streamCtx == nil {
+		streamCtx = localContext
+		// The signed outage owner is a fallback placement boundary, not a
+		// steady-state live-claim pin. Only apply it when connected runtime
+		// placement is actually unavailable.
+		if localHandled && streamCtx != nil && streamCtx.GetActiveIngestClusterId() == "" {
+			if owner := strings.TrimSpace(streamCtx.GetOriginClusterId()); owner != "" {
+				streamCtx.ActiveIngestClusterId = &owner
+			}
+		}
+	}
+	if streamCtx == nil {
 		logger.WithFields(logging.Fields{
 			"error": err,
 		}).Warn("Ingest front door: stream context resolution failed")

@@ -31,7 +31,7 @@ func (q *Queries) AdvanceCatalogWatermark(ctx context.Context, arg AdvanceCatalo
 
 const backfillCatalogRevisions = `-- name: BackfillCatalogRevisions :execrows
 UPDATE foghorn.artifacts
-SET catalog_revision = nextval('foghorn.artifact_catalog_revision_seq')
+SET catalog_revision = GREATEST(catalog_synced_rev + 1, 4503599627370496)
 WHERE artifact_hash IN (
     SELECT candidate.artifact_hash
     FROM foghorn.artifacts AS candidate

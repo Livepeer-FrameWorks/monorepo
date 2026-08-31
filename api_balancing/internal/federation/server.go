@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"frameworks/api_balancing/internal/artifacts"
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/database/foghorndb"
@@ -635,10 +636,10 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *foghornfede
 		}
 	}
 
-	artType := strings.ToLower(strings.TrimSpace(artifactType))
+	artType := artifacts.CanonicalByteKind(artifactType)
 	if req.GetArtifactType() != "" {
-		requestedType := strings.ToLower(strings.TrimSpace(req.GetArtifactType()))
-		if requestedType != artType {
+		requestedType := artifacts.CanonicalByteKind(req.GetArtifactType())
+		if !artifacts.SameByteKind(requestedType, artType) {
 			return &foghornfederationpb.PrepareArtifactResponse{Error: "artifact type mismatch"}, nil
 		}
 		artType = requestedType
@@ -761,7 +762,7 @@ func (s *FederationServer) maybePeerRelay(ctx context.Context, artifactHash, for
 // peer URL we hand back lines up with where the origin node's relay
 // actually serves bytes.
 //
-//	vod  → /internal/artifact/vod/<hash>.<ext>            (flat)
+//	vod/chapter → /internal/artifact/vod/<hash>.<ext>     (flat)
 //	clip → /internal/artifact/clip/<stream>/<hash>.<ext>  (nested)
 //
 // Returns "" on empty format (fail closed, matching the local relay URL
@@ -784,7 +785,7 @@ func peerRelayArtifactPath(artifactType, artifactHash, format, streamInternalNam
 		// peer actually requests are byte-identical, and an unusual stream
 		// name can't produce a malformed/misrouted URL.
 		return "/internal/artifact/clip/" + url.PathEscape(stream) + "/" + artifactHash + "." + ext
-	case "vod", "":
+	case "vod", "chapter", "":
 		return "/internal/artifact/vod/" + artifactHash + "." + ext
 	default:
 		return ""
@@ -888,7 +889,7 @@ func (s *FederationServer) MintStorageURLs(ctx context.Context, req *foghornfede
 
 // DeleteStorageObjects handles a peer Foghorn pool asking us to delete an
 // artifact's S3 bytes from our local backing. The caller resolves the
-// deletion target (s3_key for clip/vod, s3_prefix for dvr) from its own
+// deletion target (s3_key for clip/vod, s3_prefix for dvr/thumbnail) from its own
 // authoritative artifact row and passes it on the wire; we validate
 // ownership/tenant/path-shape and operate on exactly the supplied target.
 //
@@ -970,7 +971,7 @@ func (s *FederationServer) DeleteStorageObjects(ctx context.Context, req *foghor
 		}
 		return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: true}, nil
 
-	case "vod":
+	case "vod", "chapter":
 		// Deletion operates on the EXACT caller-supplied key (validated below to bind to the caller's tenant
 		// namespace + artifact hash). The cleaner sends the main, .dtsh, and pending keys as SEPARATE requests,
 		// so each must delete its own supplied object — the owner MUST NOT collapse them onto one resolved key.
@@ -1008,6 +1009,25 @@ func (s *FederationServer) DeleteStorageObjects(ctx context.Context, req *foghor
 		}
 		if _, err := s.s3Client.DeletePrefix(ctx, prefix); err != nil {
 			log.WithError(err).WithField("prefix", prefix).Error("DeleteStorageObjects: s3 delete-prefix failed")
+			return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: false, Reason: "s3_error"}, nil
+		}
+		return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: true}, nil
+
+	case "thumbnail":
+		prefix := strings.TrimSpace(req.GetS3Prefix())
+		expected := artifacts.BuildThumbnailPrefix(hash)
+		if prefix != expected {
+			log.WithField("supplied_prefix", prefix).Warn("DeleteStorageObjects: supplied thumbnail prefix does not bind to artifact_hash")
+			return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: false, Reason: "invalid_target_shape"}, nil
+		}
+		// Thumbnail keys are hash-scoped rather than tenant-prefixed. Bind the
+		// authenticated request's tenant to the local artifact row before using
+		// that hash as delete authority.
+		if !s.tenantMatchesLocalRow(ctx, hash, req.GetTenantId()) {
+			return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: false, Reason: "tenant_mismatch"}, nil
+		}
+		if _, err := s.s3Client.DeletePrefix(ctx, prefix); err != nil {
+			log.WithError(err).WithField("prefix", prefix).Error("DeleteStorageObjects: thumbnail delete-prefix failed")
 			return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: false, Reason: "s3_error"}, nil
 		}
 		return &foghornfederationpb.DeleteStorageObjectsResponse{Accepted: true}, nil
@@ -1140,8 +1160,11 @@ func (s *FederationServer) resolveMintArtifactContext(ctx context.Context, req *
 	if id.TenantID != req.GetTenantId() {
 		return mintArtifactContext{}, false
 	}
-	// A thumbnail must hang off a real clip/dvr/vod parent.
-	if id.Kind != "clip" && id.Kind != "dvr" && id.Kind != "vod" {
+	// A chapter is a playback identity backed by VOD bytes. Normalize at this
+	// storage boundary so both freshly minted chapter identities and legacy VOD
+	// rows follow the same thumbnail path.
+	byteKind := artifacts.CanonicalByteKind(id.Kind)
+	if byteKind != "clip" && byteKind != "dvr" && byteKind != "vod" {
 		return mintArtifactContext{}, false
 	}
 	ctxOut := mintArtifactContext{
@@ -1153,7 +1176,7 @@ func (s *FederationServer) resolveMintArtifactContext(ctx context.Context, req *
 	// When the system of record (not a local row) attributed the artifact, heal a lifecycle row so
 	// subsequent delegated mints fast-path locally.
 	if id.Source == "commodore" {
-		s.healMintArtifactRow(ctx, lookupHash, id.Kind, ctxOut)
+		s.healMintArtifactRow(ctx, lookupHash, byteKind, ctxOut)
 	}
 	return ctxOut, true
 }
@@ -1749,8 +1772,9 @@ func (s *FederationServer) MigrateArtifactMetadata(ctx context.Context, req *fog
 func upsertMigratedArtifactMetadata(ctx context.Context, db *sql.DB, tenantID, sourceClusterID string, a *foghornfederationpb.ArtifactMetadata) (bool, error) {
 	queries := foghorndb.New(db)
 	textValue := func(value string) sql.NullString { return sql.NullString{String: value, Valid: value != ""} }
+	artifactType := artifacts.CanonicalByteKind(a.ArtifactType)
 	inserted, err := queries.InsertMigratedArtifactMetadata(ctx, foghorndb.InsertMigratedArtifactMetadataParams{
-		ArtifactHash: a.ArtifactHash, ArtifactType: a.ArtifactType, TenantID: tenantID,
+		ArtifactHash: a.ArtifactHash, ArtifactType: artifactType, TenantID: tenantID,
 		InternalName: textValue(a.InternalName), Format: textValue(a.Format),
 		StorageLocation: textValue(a.StorageLocation), SyncStatus: textValue(a.SyncStatus),
 		S3Url: textValue(a.S3Url), SizeBytes: sql.NullInt64{Int64: int64(a.SizeBytes), Valid: true},
@@ -1764,7 +1788,7 @@ func upsertMigratedArtifactMetadata(ctx context.Context, db *sql.DB, tenantID, s
 	}
 
 	err = queries.FillMigratedArtifactMetadata(ctx, foghorndb.FillMigratedArtifactMetadataParams{
-		ArtifactHash: a.ArtifactHash, ArtifactType: a.ArtifactType, TenantID: tenantID,
+		ArtifactHash: a.ArtifactHash, ArtifactType: artifactType, TenantID: tenantID,
 		InternalName: a.InternalName, Format: a.Format, StorageLocation: a.StorageLocation,
 		SyncStatus: a.SyncStatus, S3Url: a.S3Url, SizeBytes: int64(a.SizeBytes),
 		OriginClusterID: sourceClusterID, StreamInternalName: a.StreamInternalName,

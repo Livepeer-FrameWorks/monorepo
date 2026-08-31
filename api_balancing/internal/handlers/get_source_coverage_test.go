@@ -130,7 +130,8 @@ func TestHandleGetSourceRedirectMode(t *testing.T) {
 
 // handleGetSource pull resolution: a pull+ stream with no Commodore client
 // configured cannot resolve its upstream URI and returns the explicit
-// "offline: not configured" sentinel — never an origin DTSC and never push://.
+// "offline: unavailable" sentinel — absence of the central dependency is not
+// an authoritative statement that the stream was never configured.
 // This locks the pull-kind branch (handleGetPullSource → resolvePullSourceForSource
 // nil-Commodore short-circuit) as distinct from origin/remote.
 func TestHandleGetSourcePullNoCommodoreOffline(t *testing.T) {
@@ -148,8 +149,8 @@ func TestHandleGetSourcePullNoCommodoreOffline(t *testing.T) {
 	if w.Code != 200 {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
-	if got := w.Body.String(); got != control.OfflineNotConfigured {
-		t.Fatalf("pull+ no-commodore body = %q, want %q", got, control.OfflineNotConfigured)
+	if got := w.Body.String(); got != control.OfflineUnavailable {
+		t.Fatalf("pull+ no-commodore body = %q, want %q", got, control.OfflineUnavailable)
 	}
 }
 

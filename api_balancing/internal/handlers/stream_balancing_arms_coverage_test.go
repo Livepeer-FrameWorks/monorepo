@@ -370,6 +370,48 @@ func TestGenericViewerPlayback_VodJSONSuccessReturnsEndpoint(t *testing.T) {
 	}
 }
 
+func TestGenericViewerPlayback_ChapterJSONPreservesChapterIdentity(t *testing.T) {
+	sm := balancingTestEnv(t)
+	t.Cleanup(control.SetupTestRegistry("", nil))
+	mock := withMockDBArms(t)
+	startQuartermasterFake(t, &fakeTenantService{validate: func(_ context.Context, req *quartermasterpb.ValidateTenantRequest) (*quartermasterpb.ValidateTenantResponse, error) {
+		return &quartermasterpb.ValidateTenantResponse{Valid: true, IsActive: true, TenantId: req.GetTenantId(), BillingModel: "postpaid"}, nil
+	}})
+
+	const hash = "chapterhashaaaaaaaaaaaaaaaaaaaaa1"
+	seedArtifactEdgeArms(t, sm, "store-chapter", "store-chapter.example", "https://store-chapter.example/", hash,
+		map[string]any{"HLS": "https://store-chapter.example/hls/$/index.m3u8"})
+	startCommodoreFakeArms(t, &commodoreArmsFake{
+		artifactPlaybackID: func(_ context.Context, _ *commodorepb.ResolveArtifactPlaybackIDRequest) (*commodorepb.ResolveArtifactPlaybackIDResponse, error) {
+			return &commodorepb.ResolveArtifactPlaybackIDResponse{
+				Found: true, ArtifactHash: hash, InternalName: "chapter-artifact",
+				TenantId: "tenant-vod", StreamId: "stream-vod", ContentType: "chapter",
+			}, nil
+		},
+		vodHash: func(_ context.Context, _ *commodorepb.ResolveVodHashRequest) (*commodorepb.ResolveVodHashResponse, error) {
+			return &commodorepb.ResolveVodHashResponse{Found: true, TenantId: "tenant-vod", ContentType: "chapter"}, nil
+		},
+	})
+	expectArtifactRowArms(mock, hash)
+
+	c, w := playbackCtxArms(t, "chapterkey")
+	HandleGenericViewerPlayback(c)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Metadata struct {
+			ContentType string `json:"contentType"`
+		} `json:"metadata"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal endpoint JSON %q: %v", w.Body.String(), err)
+	}
+	if resp.Metadata.ContentType != "chapter" {
+		t.Fatalf("content type = %q, want chapter", resp.Metadata.ContentType)
+	}
+}
+
 // Invariant: the SAME VOD requested WITH an explicit protocol (hls) is answered
 // with a 307 redirect to the storage edge's HLS output URL, not a JSON body.
 // Locks the protocol-redirect form of the viewer-playback success arm: the

@@ -290,12 +290,12 @@ func (r *Resolver) ResolveStream(ctx context.Context, internalName string) (Stre
 }
 
 // artifactKinds is the fallback probe order when the caller has no kind
-// hint. Clip first: it is by far the most common hash to arrive unannounced
-// (freeze and thumbnail flows fire before finalize lands a row).
+// hint. Chapters share the VOD hash resolver, which reports their playback
+// kind, so a separate chapter probe would only repeat the same RPC.
 var artifactKinds = []string{"clip", "vod", "dvr"}
 
 // ResolveArtifact resolves an artifact hash to its platform identity.
-// kindHint ("clip"|"vod"|"dvr"), when known, pins the Commodore fallback
+// kindHint ("clip"|"vod"|"dvr"|"chapter"), when known, pins the Commodore fallback
 // to one RPC; when empty, the known kinds are probed in order. Returns
 // ErrUnknown when no layer can attribute a tenant.
 func (r *Resolver) ResolveArtifact(ctx context.Context, artifactHash, kindHint string) (ArtifactIdentity, error) {
@@ -391,7 +391,11 @@ func (r *Resolver) ResolveArtifact(ctx context.Context, artifactHash, kindHint s
 			if id.TenantID != "" && com.TenantID != id.TenantID {
 				continue
 			}
-			fill(&id.Kind, kind)
+			resolvedKind := strings.TrimSpace(com.Kind)
+			if resolvedKind == "" {
+				resolvedKind = kind
+			}
+			fill(&id.Kind, resolvedKind)
 			fill(&id.InternalName, com.InternalName)
 			fill(&id.StreamInternalName, com.StreamInternalName)
 			fill(&id.StreamID, com.StreamID)

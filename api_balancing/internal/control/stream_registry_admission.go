@@ -35,6 +35,28 @@ func (r *StreamRegistry) ProjectSource(internalName, nodeID string, connectorPID
 	return priorOwnerNodeID, applied, err
 }
 
+func (r *StreamRegistry) sharedSourceRevision(ctx context.Context, internalName string) (int64, error) {
+	internalName = strings.TrimSpace(internalName)
+	if internalName == "" {
+		return 0, nil
+	}
+	r.mu.RLock()
+	store := r.redisStore
+	localRevision := int64(0)
+	if entry, ok := r.byInt[internalName]; ok {
+		localRevision = sourceRevisionForCluster(entry.entry, r.clusterID)
+	}
+	r.mu.RUnlock()
+	if store == nil {
+		return localRevision, nil
+	}
+	durableRevision, err := store.SourceRevision(ctx, internalName)
+	if err != nil {
+		return 0, err
+	}
+	return max(localRevision, durableRevision), nil
+}
+
 func (r *StreamRegistry) projectSourceWithPriorGeneration(internalName, nodeID string, connectorPID int64, triggerUUID, generation string, revision int64) (priorOwnerNodeID, priorOwnerSourceGeneration string, applied bool, err error) {
 	internalName = strings.TrimSpace(internalName)
 	nodeID = strings.TrimSpace(nodeID)

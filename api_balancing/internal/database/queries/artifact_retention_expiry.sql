@@ -3,6 +3,7 @@ SELECT artifact_hash, artifact_type, stream_internal_name, tenant_id::text AS te
        COALESCE(user_id::text, '')::text AS user_id, size_bytes, retention_until, started_at, ended_at, manifest_path
 FROM foghorn.artifacts
 WHERE status IN ('completed', 'completed_partial', 'ready', 'failed')
+  AND federated_pointer = false
   AND (
       (retention_until IS NOT NULL AND retention_until < NOW())
       OR (artifact_type <> 'dvr'
@@ -17,6 +18,7 @@ UPDATE foghorn.artifacts
 SET status = 'deleted', updated_at = NOW()
 WHERE artifact_hash = sqlc.arg(artifact_hash)
   AND status IN ('completed', 'completed_partial', 'ready', 'failed')
+  AND federated_pointer = false
   AND (
       (retention_until IS NOT NULL AND retention_until < NOW())
       OR (artifact_type <> 'dvr'

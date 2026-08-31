@@ -61,6 +61,7 @@ func TestPlaybackArtifactTypeToProto(t *testing.T) {
 		"clip":    ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
 		" DVR ":   ipcpb.ArtifactEvent_ARTIFACT_TYPE_DVR,
 		"Vod":     ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD,
+		"chapter": ipcpb.ArtifactEvent_ARTIFACT_TYPE_VOD,
 		"unknown": ipcpb.ArtifactEvent_ARTIFACT_TYPE_UNSPECIFIED,
 		"":        ipcpb.ArtifactEvent_ARTIFACT_TYPE_UNSPECIFIED,
 	}

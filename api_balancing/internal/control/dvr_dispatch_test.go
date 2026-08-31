@@ -1,10 +1,15 @@
 package control
 
 import (
+	"context"
+	"database/sql"
 	"path/filepath"
+	"regexp"
 	"testing"
 
 	"frameworks/api_balancing/internal/state"
+	"github.com/DATA-DOG/go-sqlmock"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 )
 
 // TestIsActiveDVRStatus enforces the lifecycle status set that gates
@@ -86,5 +91,114 @@ func TestLocalRollingDVRManifestPath(t *testing.T) {
 				t.Errorf("got %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestResolveLocalDVRArtifactDispatchUsesSignedIdentityAndDurableRuntime(t *testing.T) {
+	localDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousDB, previousCommodore := db, CommodoreClient
+	SetDB(localDB)
+	CommodoreClient = nil
+	t.Cleanup(func() {
+		SetDB(previousDB)
+		CommodoreClient = previousCommodore
+		_ = localDB.Close()
+	})
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COALESCE(artifact_type, '')::text AS artifact_type")).
+		WithArgs("dvr-hash-local").
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_type", "stream_id", "stream_internal_name"}).
+			AddRow("dvr", "stream-id-local", "stream-internal-local"))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT status\nFROM foghorn.artifacts")).
+		WithArgs("dvr-hash-local").
+		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("recording"))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT node_id, COALESCE(is_orphaned, false)::boolean AS is_orphaned")).
+		WithArgs("dvr-hash-local").
+		WillReturnRows(sqlmock.NewRows([]string{"node_id", "is_orphaned"}).AddRow("edge-recording", false))
+
+	artifact := &commodorepb.ResolveArtifactInternalNameResponse{
+		Found: true, ArtifactHash: "dvr-hash-local", InternalName: "dvr-internal-local",
+		StreamId: "stream-id-local", ContentType: "dvr", TenantId: "tenant-local",
+	}
+	dispatch, err := ResolveLocalDVRArtifactDispatch(context.Background(), artifact, "playback-local", false)
+	if err != nil {
+		t.Fatalf("ResolveLocalDVRArtifactDispatch: %v", err)
+	}
+	if dispatch == nil || dispatch.DVRHash != "dvr-hash-local" || dispatch.StreamID != "stream-id-local" ||
+		dispatch.StreamInternalName != "stream-internal-local" || dispatch.PlaybackID != "playback-local" ||
+		dispatch.Status != "recording" || dispatch.RecordingNode != "edge-recording" {
+		t.Fatalf("local DVR dispatch = %+v", dispatch)
+	}
+	if CommodoreClient != nil {
+		t.Fatal("test unexpectedly installed a central control-plane client")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestResolveLocalDVRArtifactDispatchUsesSignedParentNameWithoutLocalArtifactRow(t *testing.T) {
+	localDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousDB, previousCommodore := db, CommodoreClient
+	SetDB(localDB)
+	CommodoreClient = nil
+	t.Cleanup(func() {
+		SetDB(previousDB)
+		CommodoreClient = previousCommodore
+		_ = localDB.Close()
+	})
+
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COALESCE(artifact_type, '')::text AS artifact_type")).
+		WithArgs("remote-dvr-hash").WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT status\nFROM foghorn.artifacts")).
+		WithArgs("remote-dvr-hash").WillReturnError(sql.ErrNoRows)
+
+	dispatch, err := ResolveLocalDVRArtifactDispatch(context.Background(), &commodorepb.ResolveArtifactInternalNameResponse{
+		Found: true, ArtifactHash: "remote-dvr-hash", InternalName: "remote-dvr-internal",
+		StreamId: "parent-stream-id", ParentStreamInternalName: "parent-routing-name",
+		ContentType: "dvr", TenantId: "tenant-remote",
+	}, "remote-playback", false)
+	if err != nil {
+		t.Fatalf("ResolveLocalDVRArtifactDispatch: %v", err)
+	}
+	if dispatch == nil || dispatch.StreamInternalName != "parent-routing-name" || dispatch.StreamID != "parent-stream-id" {
+		t.Fatalf("signed cross-cluster DVR dispatch = %+v", dispatch)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestResolveLocalDVRArtifactDispatchRejectsDurableIdentityConflict(t *testing.T) {
+	localDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousDB := db
+	SetDB(localDB)
+	t.Cleanup(func() {
+		SetDB(previousDB)
+		_ = localDB.Close()
+	})
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT COALESCE(artifact_type, '')::text AS artifact_type")).
+		WithArgs("dvr-hash-conflict").
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_type", "stream_id", "stream_internal_name"}).
+			AddRow("dvr", "different-stream-id", "stream-internal"))
+
+	dispatch, err := ResolveLocalDVRArtifactDispatch(context.Background(), &commodorepb.ResolveArtifactInternalNameResponse{
+		Found: true, ArtifactHash: "dvr-hash-conflict", InternalName: "dvr-internal",
+		StreamId: "signed-stream-id", ContentType: "dvr", TenantId: "tenant-local",
+	}, "playback-local", false)
+	if err == nil || dispatch != nil {
+		t.Fatalf("conflicting durable identity = dispatch:%+v err:%v", dispatch, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }

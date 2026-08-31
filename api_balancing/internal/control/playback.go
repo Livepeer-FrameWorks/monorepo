@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"frameworks/api_balancing/internal/artifacts"
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/database/foghorndb"
 	"frameworks/api_balancing/internal/geo"
@@ -30,16 +31,27 @@ import (
 
 // ContentResolution contains the result of resolving a playback request input
 type ContentResolution struct {
-	ContentType  string // "live", "clip", "dvr"
-	ContentId    string // Public view key (playback_id) for live/clip/dvr/vod
-	FixedNode    string // Storage node URL for VOD content, empty for live
-	FixedNodeID  string // Storage node ID for VOD content
-	TenantId     string
-	StreamId     string
-	InternalName string                             // Original stream internal name (for clips/DVR: the source stream)
-	IngestMode   string                             // "push" or "pull" for live streams
-	ClusterPeers []*clusterpeerpb.TenantClusterPeer // Tenant's cluster context from Commodore (free with every resolve)
-	RequiresAuth bool
+	ContentType                 string // "live", "clip", "dvr", "vod", or "chapter"
+	ContentId                   string // Public view key (playback_id) for live/clip/dvr/vod
+	FixedNode                   string // Storage node URL for VOD content, empty for live
+	FixedNodeID                 string // Storage node ID for VOD content
+	TenantId                    string
+	UserId                      string
+	StreamId                    string
+	InternalName                string                             // Original stream internal name (for clips/DVR: the source stream)
+	ArtifactHash                string                             // Stable artifact identity for clip/DVR/VOD
+	OriginClusterID             string                             // Cluster that created the object
+	IngestMode                  string                             // "push" or "pull" for live streams
+	ClusterPeers                []*clusterpeerpb.TenantClusterPeer // Tenant's cluster context from Commodore (free with every resolve)
+	AuthorityClusterPeers       []*clusterpeerpb.TenantClusterPeer // Static entitlement projection used only for local-authority comparison
+	ParentStreamInternalName    string                             // Parent live-stream routing identity for stream-derived artifacts
+	OfficialClusterID           string
+	AllowPlatformSharedPlayback bool
+	RequiresAuth                bool
+	// LocalAuthority is true only when identity and policy came from a
+	// verified, ready Foghorn media-authority projection. Downstream routing
+	// uses it to avoid re-resolving the same object through Commodore.
+	LocalAuthority bool
 	// ActiveIngestClusterID is the cluster where a live stream currently ingests,
 	// authoritative as of this resolve. Thumbnail URL construction reuses it to pick
 	// the ingest cell's Chandler instead of issuing a second per-viewer Commodore RPC.
@@ -159,6 +171,38 @@ func (r *ContentResolution) RoutingInternalName() string {
 	return internalName
 }
 
+// ArtifactPlaybackIdentity projects an already-resolved artifact into the
+// legacy resolver contract used by the placement engine. It contains routing
+// authority only; descriptive catalog metadata remains optional.
+func (r *ContentResolution) ArtifactPlaybackIdentity() *commodorepb.ResolveArtifactPlaybackIDResponse {
+	if r == nil || r.ArtifactHash == "" || r.ContentType == "live" {
+		return nil
+	}
+	return &commodorepb.ResolveArtifactPlaybackIDResponse{
+		Found: true, ArtifactHash: r.ArtifactHash, InternalName: strings.TrimPrefix(strings.TrimPrefix(r.InternalName, "vod+"), "dvr+"),
+		TenantId: r.TenantId, UserId: r.UserId, StreamId: r.StreamId, ContentType: r.ContentType,
+		OriginClusterId: r.OriginClusterID, ClusterPeers: r.ClusterPeers, AuthorityClusterPeers: r.AuthorityClusterPeers,
+		RequiresAuth: r.RequiresAuth, ParentStreamInternalName: r.ParentStreamInternalName,
+	}
+}
+
+// ArtifactInternalNameIdentity is the corresponding STREAM_SOURCE/DVR
+// dispatch identity. Keeping this conversion beside ContentResolution avoids
+// separate HTTP and gRPC interpretations of signed authority.
+func (r *ContentResolution) ArtifactInternalNameIdentity() *commodorepb.ResolveArtifactInternalNameResponse {
+	identity := r.ArtifactPlaybackIdentity()
+	if identity == nil {
+		return nil
+	}
+	return &commodorepb.ResolveArtifactInternalNameResponse{
+		Found: identity.GetFound(), ArtifactHash: identity.GetArtifactHash(), InternalName: identity.GetInternalName(),
+		TenantId: identity.GetTenantId(), UserId: identity.GetUserId(), StreamId: identity.GetStreamId(),
+		ContentType: identity.GetContentType(), OriginClusterId: identity.GetOriginClusterId(),
+		ClusterPeers: identity.GetClusterPeers(), AuthorityClusterPeers: identity.GetAuthorityClusterPeers(),
+		RequiresAuth: identity.GetRequiresAuth(), ParentStreamInternalName: identity.GetParentStreamInternalName(),
+	}
+}
+
 // ResolveContent determines content type and resolution strategy for a playback request.
 func ResolveContent(ctx context.Context, input string) (*ContentResolution, error) {
 	if input == "" {
@@ -180,7 +224,7 @@ func ResolveContent(ctx context.Context, input string) (*ContentResolution, erro
 		if resp, err := CommodoreClient.ResolveArtifactPlaybackID(ctx, input); err == nil && resp.Found {
 			contentType := strings.ToLower(strings.TrimSpace(resp.ContentType))
 			switch contentType {
-			case "clip", "dvr", "vod":
+			case "clip", "dvr", "vod", "chapter":
 			default:
 				return nil, fmt.Errorf("invalid artifact content_type %q", resp.ContentType)
 			}
@@ -195,16 +239,15 @@ func ResolveContent(ctx context.Context, input string) (*ContentResolution, erro
 			switch contentType {
 			case "dvr":
 				internalName = "dvr+" + resp.InternalName
-			case "clip", "vod":
+			case "clip", "vod", "chapter":
 				internalName = "vod+" + resp.InternalName
 			}
 			res := &ContentResolution{
-				ContentType:  contentType,
-				ContentId:    input,
-				TenantId:     resp.TenantId,
-				StreamId:     resp.StreamId,
-				InternalName: internalName,
-				RequiresAuth: resp.GetRequiresAuth(),
+				ContentType: contentType, ContentId: input, TenantId: resp.TenantId, UserId: resp.UserId,
+				StreamId: resp.StreamId, InternalName: internalName, ArtifactHash: resp.ArtifactHash,
+				OriginClusterID: resp.OriginClusterId, ClusterPeers: resp.ClusterPeers,
+				AuthorityClusterPeers:    resp.AuthorityClusterPeers,
+				ParentStreamInternalName: resp.ParentStreamInternalName, RequiresAuth: resp.GetRequiresAuth(),
 			}
 			if resp.ArtifactHash != "" {
 				if host, _ := state.DefaultManager().FindNodeByArtifactHash(resp.ArtifactHash); host != "" {
@@ -228,17 +271,23 @@ func ResolveContent(ctx context.Context, input string) (*ContentResolution, erro
 				contentID = input
 			}
 			requiresAuth := false
+			var artifactIdentity *commodorepb.ResolveArtifactInternalNameResponse
 			if artifact, artErr := CommodoreClient.ResolveArtifactInternalName(ctx, resp.GetInternalName()); artErr == nil && artifact.GetFound() {
+				artifactIdentity = artifact
 				requiresAuth = artifact.GetRequiresAuth()
 			}
-			return &ContentResolution{
-				ContentType:  "dvr",
-				ContentId:    contentID,
-				TenantId:     resp.GetTenantId(),
-				StreamId:     resp.GetStreamId(),
-				InternalName: "dvr+" + resp.GetInternalName(),
-				RequiresAuth: requiresAuth,
-			}, nil
+			resolution := &ContentResolution{
+				ContentType: "dvr", ContentId: contentID, TenantId: resp.GetTenantId(),
+				StreamId: resp.GetStreamId(), InternalName: "dvr+" + resp.GetInternalName(),
+				ArtifactHash: input, OriginClusterID: resp.GetOriginClusterId(), RequiresAuth: requiresAuth,
+			}
+			if artifactIdentity != nil {
+				resolution.UserId = artifactIdentity.GetUserId()
+				resolution.ClusterPeers = artifactIdentity.GetClusterPeers()
+				resolution.AuthorityClusterPeers = artifactIdentity.GetAuthorityClusterPeers()
+				resolution.ParentStreamInternalName = artifactIdentity.GetParentStreamInternalName()
+			}
+			return resolution, nil
 		}
 	}
 
@@ -257,7 +306,9 @@ func ResolveContent(ctx context.Context, input string) (*ContentResolution, erro
 				StreamId:              resp.StreamId,
 				InternalName:          resp.InternalName,
 				IngestMode:            resp.GetIngestMode(),
+				OriginClusterID:       resp.GetOriginClusterId(),
 				ClusterPeers:          resp.ClusterPeers,
+				AuthorityClusterPeers: resp.AuthorityClusterPeers,
 				RequiresAuth:          resp.GetRequiresAuth(),
 				ActiveIngestClusterID: resp.GetOriginClusterId(),
 			}, nil
@@ -318,8 +369,9 @@ type RemoteArtifactInfo struct {
 // closed (drop the node) — better to route nowhere than to the wrong
 // cluster.
 //
-// Local nodes (NodeWithScore.ClusterID == "") share deps.LocalClusterID;
-// remote edges carry their own ClusterID. The shared cluster lookup
+// New local candidates carry their registered cluster directly; legacy test
+// candidates with an empty cluster share deps.LocalClusterID. Remote edges
+// carry their own ClusterID and set Remote. The shared cluster lookup
 // guarantees a single GetCluster call per cluster_id seen.
 func filterPullCandidatesByEligibility(ctx context.Context, nodes []balancer.NodeWithScore, internalName string, deps *PlaybackDependencies) ([]balancer.NodeWithScore, error) {
 	if len(nodes) == 0 {
@@ -454,17 +506,19 @@ func ClusterAllowsPrivatePulls(ctx context.Context, clusterID string) bool {
 }
 
 type PlaybackDependencies struct {
-	DB                *sql.DB
-	LB                *balancer.LoadBalancer
-	GeoLat            float64
-	GeoLon            float64
-	RemoteEdges       []balancer.RemoteEdgeCandidate // optional: pre-collected remote edge candidates from federation
-	FedClient         ArtifactFederationClient       // optional: for cross-cluster artifact resolution
-	PeerResolver      PeerAddressResolver            // optional: resolves peer cluster addresses
-	LocalClusterID    string                         // this cluster's ID
-	RemoteArtifacts   RemoteArtifactLookup           // optional: hot artifact locations from peering
-	OfficialClusterID string
-	ClusterPeers      []*clusterpeerpb.TenantClusterPeer
+	DB                          *sql.DB
+	LB                          *balancer.LoadBalancer
+	GeoLat                      float64
+	GeoLon                      float64
+	RemoteEdges                 []balancer.RemoteEdgeCandidate // optional: pre-collected remote edge candidates from federation
+	FedClient                   ArtifactFederationClient       // optional: for cross-cluster artifact resolution
+	PeerResolver                PeerAddressResolver            // optional: resolves peer cluster addresses
+	LocalClusterID              string                         // this cluster's ID
+	RemoteArtifacts             RemoteArtifactLookup           // optional: hot artifact locations from peering
+	OfficialClusterID           string
+	ClusterPeers                []*clusterpeerpb.TenantClusterPeer
+	AllowPlatformSharedPlayback bool
+	LocalAuthority              bool
 }
 
 // MistSourceNameForIngestMode returns the concrete Mist stream surface used
@@ -520,20 +574,28 @@ func ResolveArtifactPlayback(ctx context.Context, deps *PlaybackDependencies, pl
 	// because chapter artifacts inherit auth + stream context from the
 	// parent DVR even though Commodore also keeps a hidden VOD registry row.
 	if artifactResp, ok := resolveChapterArtifactPlaybackResp(ctx, playbackID); ok {
-		return resolveArtifactPlaybackWithResp(ctx, deps, playbackID, artifactResp)
+		return resolveArtifactPlaybackWithResp(ctx, deps, playbackID, artifactResp, true)
 	}
 
 	artifactResp, err := CommodoreClient.ResolveArtifactPlaybackID(ctx, playbackID)
 	if err != nil || !artifactResp.Found || artifactResp.ArtifactHash == "" || artifactResp.ContentType == "" {
 		return nil, fmt.Errorf("content not found")
 	}
-	return resolveArtifactPlaybackWithResp(ctx, deps, playbackID, artifactResp)
+	return resolveArtifactPlaybackWithResp(ctx, deps, playbackID, artifactResp, true)
+}
+
+// ResolveArtifactPlaybackWithIdentity routes an artifact from an identity that
+// has already been authorized by the caller. It never re-resolves catalog or
+// descriptive metadata through Commodore, so a verified local authority stays
+// a genuinely local media request path during a control-plane outage.
+func ResolveArtifactPlaybackWithIdentity(ctx context.Context, deps *PlaybackDependencies, playbackID string, artifactResp *commodorepb.ResolveArtifactPlaybackIDResponse) (*sharedpb.ViewerEndpointResponse, error) {
+	return resolveArtifactPlaybackWithResp(ctx, deps, playbackID, artifactResp, false)
 }
 
 // resolveArtifactPlaybackWithResp completes the artifact playback
 // resolution from a pre-resolved artifactResp (Commodore-backed or
 // chapter-synthesized).
-func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependencies, playbackID string, artifactResp *commodorepb.ResolveArtifactPlaybackIDResponse) (*sharedpb.ViewerEndpointResponse, error) {
+func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependencies, playbackID string, artifactResp *commodorepb.ResolveArtifactPlaybackIDResponse, allowConnectedMetadata bool) (*sharedpb.ViewerEndpointResponse, error) {
 	if artifactResp == nil {
 		return nil, fmt.Errorf("content not found")
 	}
@@ -541,8 +603,8 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 		return nil, fmt.Errorf("tenant_id missing for artifact")
 	}
 
-	contentType := strings.ToLower(artifactResp.ContentType)
-	artifactType := contentType
+	contentType := strings.ToLower(strings.TrimSpace(artifactResp.ContentType))
+	artifactType := artifacts.CanonicalByteKind(contentType)
 	tenantID := artifactResp.TenantId
 	originClusterID := artifactResp.GetOriginClusterId()
 	allowedClusters := artifactResp.GetClusterPeers()
@@ -570,7 +632,7 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			if originClusterID != "" && originClusterID != deps.LocalClusterID && deps.FedClient != nil {
-				return resolveRemoteArtifact(ctx, deps, playbackID, artifactResp.ArtifactHash, originClusterID, contentType, tenantID, allowedClusters, artifactResp)
+				return resolveRemoteArtifactWithMetadata(ctx, deps, playbackID, artifactResp.ArtifactHash, originClusterID, artifactType, tenantID, allowedClusters, artifactResp, allowConnectedMetadata)
 			}
 			return nil, fmt.Errorf("%s not found", contentType)
 		}
@@ -596,7 +658,11 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 	// request, so a revoked peer stops serving on the next resolve. Local bytes
 	// still require the operation-scoped platform-shared or tenant grant policy;
 	// the federation branch re-checks the origin/redirect downstream.
-	if !AuthoritativeClusterServable(authoritativeCluster, tenantID, allowedClusters) {
+	allowPlatformShared := true
+	if !allowConnectedMetadata {
+		allowPlatformShared = deps.AllowPlatformSharedPlayback
+	}
+	if !authoritativeClusterServable(authoritativeCluster, tenantID, allowedClusters, allowPlatformShared) {
 		return nil, fmt.Errorf("%s authoritative cluster %q not authorized for tenant", contentType, strings.TrimSpace(authoritativeCluster))
 	}
 
@@ -629,7 +695,7 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 		if sync == "synced" || location == "s3" {
 			lbctx := context.WithValue(ctx, ctxkeys.KeyCapability, "edge,storage")
 			if tenantID != "" {
-				lbctx = context.WithValue(lbctx, ctxkeys.KeyClusterServeScope, NewClusterServeScope(tenantID, "", allowedClusters))
+				lbctx = context.WithValue(lbctx, ctxkeys.KeyClusterServeScope, NewClusterServeScope(tenantID, deps.OfficialClusterID, allowedClusters, allowPlatformShared))
 			}
 			nodes, lbErr := deps.LB.GetTopNodesWithScores(lbctx, "", deps.GeoLat, deps.GeoLon, make(map[string]int), "", 5, false)
 			if lbErr != nil || len(nodes) == 0 {
@@ -639,7 +705,7 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 			artifactNodes = coldRanked
 		} else if originClusterID != "" && originClusterID != deps.LocalClusterID && deps.FedClient != nil {
 			// Federation fallback: artifact exists locally but not on any node and not in S3
-			return resolveRemoteArtifact(ctx, deps, playbackID, artifactResp.ArtifactHash, originClusterID, contentType, tenantID, allowedClusters, artifactResp)
+			return resolveRemoteArtifactWithMetadata(ctx, deps, playbackID, artifactResp.ArtifactHash, originClusterID, artifactType, tenantID, allowedClusters, artifactResp, allowConnectedMetadata)
 		} else {
 			return nil, fmt.Errorf("storage node unknown: no node assignment found")
 		}
@@ -652,8 +718,13 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 	clipDurationMs := int64(0)
 	resolvedPlaybackID := playbackID
 
-	switch contentType {
-	case "clip":
+	switch {
+	case !allowConnectedMetadata:
+		// The signed authority contains the complete routing identity. Title,
+		// description, and legacy catalog aliases are optional presentation
+		// metadata and must not turn a local playback decision into a central
+		// request-path dependency.
+	case contentType == "clip":
 		if resp, err := CommodoreClient.ResolveClipHash(ctx, artifactResp.ArtifactHash); err == nil && resp.Found {
 			if resp.TenantId != "" {
 				tenantID = resp.TenantId
@@ -671,7 +742,7 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 				resolvedPlaybackID = resp.PlaybackId
 			}
 		}
-	case "dvr":
+	case contentType == "dvr":
 		if resp, err := CommodoreClient.ResolveDVRHash(ctx, artifactResp.ArtifactHash); err == nil && resp.Found {
 			if resp.TenantId != "" {
 				tenantID = resp.TenantId
@@ -684,7 +755,7 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 				resolvedPlaybackID = resp.PlaybackId
 			}
 		}
-	case "vod":
+	case contentType == "vod" || contentType == "chapter":
 		if resp, err := CommodoreClient.ResolveVodHash(ctx, artifactResp.ArtifactHash); err == nil && resp.Found {
 			if resp.TenantId != "" {
 				tenantID = resp.TenantId
@@ -742,10 +813,13 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 	}
 
 	metadata := &sharedpb.PlaybackMetadata{
-		Status:      status,
-		IsLive:      contentType == "dvr" && status == "recording",
-		TenantId:    tenantID,
-		ContentId:   resolvedPlaybackID,
+		Status:    status,
+		IsLive:    contentType == "dvr" && status == "recording",
+		TenantId:  tenantID,
+		ContentId: resolvedPlaybackID,
+		// Routing uses artifactType (chapters are stored as VOD bytes), but playback identity is
+		// the caller-visible contentType. Keeping the distinction here prevents every transport
+		// from having to repair chapter metadata independently.
 		ContentType: contentType,
 	}
 	if streamID != "" {
@@ -779,11 +853,11 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 	if format.Valid && format.String != "" {
 		metadata.Format = &format.String
 	}
-	// Chapter artifacts resolve as contentType="vod" but are produced
-	// through the chapter finalization processing pipeline that emits
+	// Chapter artifacts are stored as hidden VOD rows but are produced through
+	// the chapter finalization processing pipeline that emits
 	// thumbnail/sprite assets the same way DVR/clip does. Expose them
 	// on chapter playback so the player has a poster/storyboard.
-	if hasThumbnails && (contentType == "dvr" || contentType == "clip" || contentType == "vod") {
+	if hasThumbnails && (contentType == "dvr" || contentType == "clip" || contentType == "vod" || contentType == "chapter") {
 		// Serve from the Chandler of the authoritative thumbnail serving cluster
 		// (thumbnail_serving_cluster_id, falling back to storage/origin for legacy
 		// rows), NOT the byte-storage cluster, which can differ for a BYOC/cross-cell
@@ -822,7 +896,7 @@ func rankNodeScoresForArtifact(nodes []balancer.NodeWithScore, viewerLat, viewer
 	for _, n := range nodes {
 		// Skip remote-cluster candidates: cold-artifact relay reads run
 		// on the local cluster's edge against the artifact's S3 source.
-		if n.ClusterID != "" {
+		if n.Remote {
 			continue
 		}
 		out = append(out, state.ArtifactNodeInfo{
@@ -837,7 +911,7 @@ func rankNodeScoresForArtifact(nodes []balancer.NodeWithScore, viewerLat, viewer
 }
 
 func playbackArtifactTypeToProto(artifactType string) ipcpb.ArtifactEvent_ArtifactType {
-	switch strings.ToLower(strings.TrimSpace(artifactType)) {
+	switch artifacts.CanonicalByteKind(artifactType) {
 	case "clip":
 		return ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP
 	case "dvr":
@@ -939,7 +1013,11 @@ func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKe
 	// Use load balancer with internal name to find nodes that have the stream
 	lbctx := context.WithValue(ctx, ctxkeys.KeyCapability, "edge")
 	if tenantID != "" {
-		lbctx = context.WithValue(lbctx, ctxkeys.KeyClusterServeScope, NewClusterServeScope(tenantID, deps.OfficialClusterID, deps.ClusterPeers))
+		if deps.LocalAuthority {
+			lbctx = context.WithValue(lbctx, ctxkeys.KeyClusterServeScope, NewClusterServeScope(tenantID, deps.OfficialClusterID, deps.ClusterPeers, deps.AllowPlatformSharedPlayback))
+		} else {
+			lbctx = context.WithValue(lbctx, ctxkeys.KeyClusterServeScope, NewClusterServeScope(tenantID, deps.OfficialClusterID, deps.ClusterPeers))
+		}
 	}
 	nodes, err := deps.LB.GetTopNodesWithScores(lbctx, internalName, deps.GeoLat, deps.GeoLon, make(map[string]int), "", 5, false)
 	if (isPull || isDVR) && (err != nil || len(nodes) == 0) {
@@ -981,7 +1059,7 @@ func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKe
 
 	for _, node := range nodes {
 		// Remote edges: produce a redirect endpoint to the peer cluster's play domain
-		if node.ClusterID != "" {
+		if node.Remote {
 			geoDistance := 0.0
 			if geo.IsValidLatLon(deps.GeoLat, deps.GeoLon) && geo.IsValidLatLon(node.GeoLatitude, node.GeoLongitude) {
 				geoDistance = CalculateGeoDistance(deps.GeoLat, deps.GeoLon, node.GeoLatitude, node.GeoLongitude)
@@ -1655,6 +1733,17 @@ func isAuthorizedPeerCluster(clusterID string, peers []*clusterpeerpb.TenantClus
 // peer-allowlist change takes effect on the next resolve — no reconciliation
 // and no per-block policy lookups.
 func AuthoritativeClusterServable(authoritativeCluster, tenantID string, peers []*clusterpeerpb.TenantClusterPeer) bool {
+	return authoritativeClusterServable(authoritativeCluster, tenantID, peers, true)
+}
+
+// AuthoritativeClusterServableWithPolicy is the signed-authority form. It
+// keeps platform-shared playback opt-in while retaining the same official and
+// explicit-peer rules.
+func AuthoritativeClusterServableWithPolicy(authoritativeCluster, tenantID string, peers []*clusterpeerpb.TenantClusterPeer, allowPlatformShared bool) bool {
+	return authoritativeClusterServable(authoritativeCluster, tenantID, peers, allowPlatformShared)
+}
+
+func authoritativeClusterServable(authoritativeCluster, tenantID string, peers []*clusterpeerpb.TenantClusterPeer, allowPlatformShared bool) bool {
 	auth := strings.TrimSpace(authoritativeCluster)
 	tenantID = strings.TrimSpace(tenantID)
 	if tenantID == "" {
@@ -1667,7 +1756,10 @@ func AuthoritativeClusterServable(authoritativeCluster, tenantID string, peers [
 		return true
 	}
 	if auth == GetLocalClusterID() || isServedCluster(auth) {
-		return ClusterServeAccessibleForTenantEnvelope(auth, tenantID, "", peers)
+		if IsPlatformSharedCluster(auth) && !allowPlatformShared {
+			return false
+		}
+		return ClusterServeAccessibleForTenantEnvelopeWithPolicy(auth, tenantID, "", peers, allowPlatformShared)
 	}
 	return false
 }
@@ -1703,6 +1795,10 @@ func PlaybackEdgeRedirectURL(baseURL, playbackID string) string {
 // peer-relay grant the origin Foghorn authorizes online
 // (hot-but-unsynced). No local copy is created.
 func resolveRemoteArtifact(ctx context.Context, deps *PlaybackDependencies, playbackID, artifactHash, originClusterID, contentType, tenantID string, clusterPeers []*clusterpeerpb.TenantClusterPeer, artifactResp *commodorepb.ResolveArtifactPlaybackIDResponse) (*sharedpb.ViewerEndpointResponse, error) {
+	return resolveRemoteArtifactWithMetadata(ctx, deps, playbackID, artifactHash, originClusterID, contentType, tenantID, clusterPeers, artifactResp, true)
+}
+
+func resolveRemoteArtifactWithMetadata(ctx context.Context, deps *PlaybackDependencies, playbackID, artifactHash, originClusterID, contentType, tenantID string, clusterPeers []*clusterpeerpb.TenantClusterPeer, artifactResp *commodorepb.ResolveArtifactPlaybackIDResponse, allowConnectedMetadata bool) (*sharedpb.ViewerEndpointResponse, error) {
 	if strings.EqualFold(contentType, "dvr") {
 		return nil, fmt.Errorf("DVR archive playback requires a bounded chapter request; use dvrChapter for cross-cluster DVR replay")
 	}
@@ -1787,5 +1883,5 @@ func resolveRemoteArtifact(ctx context.Context, deps *PlaybackDependencies, play
 	// call's DB query will find the adopted row and route playback through
 	// a local storage edge whose Helmsman relay reads peer S3 on demand
 	// via RelayResolve federation. No local byte copy is created.
-	return resolveArtifactPlaybackWithResp(ctx, deps, playbackID, artifactResp)
+	return resolveArtifactPlaybackWithResp(ctx, deps, playbackID, artifactResp, allowConnectedMetadata)
 }

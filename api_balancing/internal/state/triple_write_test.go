@@ -71,8 +71,8 @@ func (r *tripleWriteArtifactRepo) MarkNodeArtifactsOrphaned(ctx context.Context,
 	}
 	return nil
 }
-func (r *tripleWriteArtifactRepo) DeleteNodeArtifact(_ context.Context, _, _ string, _ int64) error {
-	return nil
+func (r *tripleWriteArtifactRepo) DeleteNodeArtifact(_ context.Context, _, _ string, _ int64) (NodeArtifactDeletionOutcome, error) {
+	return NodeArtifactDeletionApplied, nil
 }
 func (r *tripleWriteArtifactRepo) ReconcileNodeCopies(_ context.Context) (int, error) {
 	return 0, nil
@@ -459,7 +459,7 @@ func TestTripleWrite_PostgresReceivesRecords(t *testing.T) {
 			StreamName:   "vod+stream-a",
 			ArtifactType: ipcpb.ArtifactEvent_ARTIFACT_TYPE_CLIP,
 		},
-	}, ArtifactReportOrder{Fence: 1, Seq: 1})
+	}, ArtifactReportOrder{Fence: 1, Seq: 1, ReportedAtMs: 1234})
 
 	// Wait for async goroutine
 	time.Sleep(100 * time.Millisecond)
@@ -486,6 +486,9 @@ func TestTripleWrite_PostgresReceivesRecords(t *testing.T) {
 	}
 	if rec.SizeBytes != 2048 {
 		t.Fatalf("expected 2048, got %d", rec.SizeBytes)
+	}
+	if rec.ReportedAtMs != 1234 {
+		t.Fatalf("snapshot capture time = %d, want 1234", rec.ReportedAtMs)
 	}
 }
 

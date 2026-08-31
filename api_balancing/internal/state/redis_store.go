@@ -310,7 +310,9 @@ type NodeArtifactSnapshot struct {
 // otherwise). seq==0 is the fenced TAKEOVER MARKER (a new owner's Ready=false cordon before its first
 // report): it wins over any lower fence and loses to a real report (seq>=1) of the same fence, so a
 // reconnect re-arms the readiness cordon on every replica. Returns 1 applied, 0 stale no-op, -1
-// unfenced. ARGV: [envelope, fence, seq, changelogEntry, maxLen].
+// unfenced. The Go-built watermark preserves the exact decimal integers; concatenating Lua numbers
+// would format large fences with Lua 5.1's rounded scientific notation.
+// ARGV: [envelope, fence, seq, changelogEntry, maxLen, watermark].
 var setNodeArtifactsFenced = goredis.NewScript(`
 local fence = tonumber(ARGV[2])
 local seq = tonumber(ARGV[3])
@@ -331,7 +333,7 @@ if cur then
   end
 end
 redis.call('set', KEYS[1], ARGV[1])
-redis.call('set', KEYS[2], fence .. '-' .. seq)
+redis.call('set', KEYS[2], ARGV[6])
 redis.call('xadd', KEYS[3], 'MAXLEN', '~', ARGV[5], '*', 'data', ARGV[4])
 return 1
 `)
@@ -354,7 +356,7 @@ func (r *RedisStateStore) SetNodeArtifactsFenced(ctx context.Context, nodeID str
 	}
 	res, err := setNodeArtifactsFenced.Run(ctx, r.client,
 		[]string{r.keyArtifact(nodeID), r.keyArtifactWatermark(nodeID), r.changelog.Key()},
-		envelope, fence, seq, changelogEntry, r.changelog.MaxLen(),
+		envelope, fence, seq, changelogEntry, r.changelog.MaxLen(), fmt.Sprintf("%d-%d", fence, seq),
 	).Int64()
 	if err != nil {
 		return false, err
@@ -393,7 +395,7 @@ type ConnOwner struct {
 	InstanceID string
 	GRPCAddr   string
 	// Fence is the monotonic control-connection ownership fence (issued by Foghorn at Register from a
-	// Postgres sequence). A reconnect ranks strictly higher, so acquisition is a fenced CAS and a
+	// durable per-node Postgres counter). A reconnect ranks strictly higher, so acquisition is a fenced CAS and a
 	// superseded owner loses. Zero for a legacy value written before fencing (treated as lowest).
 	Fence int64
 }

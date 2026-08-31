@@ -103,13 +103,20 @@ func ClusterServeAccessibleForTenant(clusterID, tenantID string) bool {
 // freshly resolved Commodore/Quartermaster envelope. It is the final-trigger
 // form: no cache lookup and no synchronous control-plane RPC are permitted.
 func ClusterServeAccessibleForTenantEnvelope(clusterID, tenantID, officialCluster string, peers []*clusterpeerpb.TenantClusterPeer) bool {
+	return ClusterServeAccessibleForTenantEnvelopeWithPolicy(clusterID, tenantID, officialCluster, peers, true)
+}
+
+// ClusterServeAccessibleForTenantEnvelopeWithPolicy evaluates a signed
+// playback envelope without silently restoring the connected-mode default for
+// platform-shared cells.
+func ClusterServeAccessibleForTenantEnvelopeWithPolicy(clusterID, tenantID, officialCluster string, peers []*clusterpeerpb.TenantClusterPeer, allowPlatformShared bool) bool {
 	clusterID = strings.TrimSpace(clusterID)
 	tenantID = strings.TrimSpace(tenantID)
 	if clusterID == "" || tenantID == "" {
 		return false
 	}
 	if IsPlatformSharedCluster(clusterID) {
-		return true
+		return allowPlatformShared
 	}
 	if officialCluster = strings.TrimSpace(officialCluster); officialCluster != "" && clusterID == officialCluster {
 		return true
@@ -124,11 +131,16 @@ func ClusterServeAccessibleForTenantEnvelope(clusterID, tenantID, officialCluste
 
 // NewClusterServeScope converts the control-plane playback envelope into the
 // value-only form consumed by the balancer.
-func NewClusterServeScope(tenantID, officialCluster string, peers []*clusterpeerpb.TenantClusterPeer) ctxkeys.ClusterServeScope {
+func NewClusterServeScope(tenantID, officialCluster string, peers []*clusterpeerpb.TenantClusterPeer, allowPlatformShared ...bool) ctxkeys.ClusterServeScope {
+	allowShared := true // Connected envelopes historically authorize platform-shared cells.
+	if len(allowPlatformShared) > 0 {
+		allowShared = allowPlatformShared[0]
+	}
 	scope := ctxkeys.ClusterServeScope{
-		TenantID:          strings.TrimSpace(tenantID),
-		OfficialClusterID: strings.TrimSpace(officialCluster),
-		PeerClusterIDs:    make([]string, 0, len(peers)),
+		TenantID:                    strings.TrimSpace(tenantID),
+		OfficialClusterID:           strings.TrimSpace(officialCluster),
+		AllowPlatformSharedPlayback: allowShared,
+		PeerClusterIDs:              make([]string, 0, len(peers)),
 	}
 	for _, peer := range peers {
 		if peer != nil {
@@ -146,7 +158,7 @@ func ClusterServeAccessibleForScope(clusterID string, scope ctxkeys.ClusterServe
 	if clusterID == "" || strings.TrimSpace(scope.TenantID) == "" {
 		return false
 	}
-	if IsPlatformSharedCluster(clusterID) || clusterID == strings.TrimSpace(scope.OfficialClusterID) {
+	if (IsPlatformSharedCluster(clusterID) && scope.AllowPlatformSharedPlayback) || clusterID == strings.TrimSpace(scope.OfficialClusterID) {
 		return true
 	}
 	for _, peerID := range scope.PeerClusterIDs {

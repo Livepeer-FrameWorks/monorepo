@@ -25,21 +25,24 @@ UPDATE foghorn.dvr_chapters
 SET is_current = false, state = CASE WHEN state = 'open' THEN 'closed' ELSE state END
 WHERE artifact_hash = $1 AND is_current = true;
 
--- name: ClaimDVRChapterFinalization :execrows
+-- name: ClaimDVRChapterFinalization :one
 UPDATE foghorn.dvr_chapters
 SET state = 'finalizing', playback_artifact_hash = sqlc.narg(playback_artifact_hash),
     finalize_attempts = finalize_attempts + 1, finalize_started_at = NOW(),
     finalize_node_id = NULLIF(sqlc.arg(finalize_node_id)::text, '')
 WHERE chapter_id = sqlc.arg(chapter_id)
   AND (state = 'closed' OR (state = 'finalizing'
-    AND COALESCE(finalize_started_at, created_at) < NOW() - make_interval(secs => sqlc.arg(stale_seconds))));
+    AND COALESCE(finalize_started_at, created_at) < NOW() - make_interval(secs => sqlc.arg(stale_seconds))))
+RETURNING finalize_attempts;
 
 -- name: MarkDVRChapterFinalized :execrows
 UPDATE foghorn.dvr_chapters
-SET state = 'finalized', segment_count = $2, has_gaps = $3,
+SET state = 'finalized', segment_count = sqlc.arg(segment_count), has_gaps = sqlc.arg(has_gaps),
     actual_media_start_ms = sqlc.narg(media_start_ms),
     actual_media_end_ms = sqlc.narg(media_end_ms), finalize_node_id = NULL
-WHERE chapter_id = $1 AND state = 'finalizing';
+WHERE chapter_id = sqlc.arg(chapter_id)
+  AND state = 'finalizing'
+  AND finalize_attempts = sqlc.arg(expected_attempt);
 
 -- name: MarkDVRChapterFrozen :exec
 UPDATE foghorn.dvr_chapters SET state = 'frozen', frozen_at = NOW()
@@ -58,6 +61,7 @@ WHERE chapter_id = $1 AND state = 'frozen';
 UPDATE foghorn.dvr_chapters
 SET state = sqlc.arg(state), last_failure_reason = sqlc.narg(last_failure_reason), finalize_node_id = NULL
 WHERE chapter_id = sqlc.arg(chapter_id)
+  AND finalize_attempts = sqlc.arg(expected_attempt)
   AND ((sqlc.arg(expected_node)::text = '' AND state IN ('closed', 'finalizing'))
     OR (sqlc.arg(expected_node)::text <> '' AND state = 'finalizing' AND finalize_node_id = sqlc.arg(expected_node)::text))
 RETURNING playback_artifact_hash;
@@ -66,13 +70,15 @@ RETURNING playback_artifact_hash;
 UPDATE foghorn.artifacts
 SET status = 'failed', error_message = $2, updated_at = NOW()
 WHERE artifact_hash = $1 AND origin_type = 'dvr_chapter'
+  AND federated_pointer = false
   AND status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted')
 RETURNING tenant_id::text;
 
--- name: RetryDVRChapterFinalize :exec
+-- name: RetryDVRChapterFinalize :execrows
 UPDATE foghorn.dvr_chapters
 SET state = 'closed', last_failure_reason = sqlc.narg(last_failure_reason), finalize_node_id = NULL
 WHERE chapter_id = sqlc.arg(chapter_id) AND state = 'finalizing'
+  AND finalize_attempts = sqlc.arg(expected_attempt)
   AND (sqlc.arg(expected_node)::text = '' OR finalize_node_id = sqlc.arg(expected_node)::text);
 
 -- name: ListDVRChaptersNeedingFinalization :many
@@ -83,7 +89,8 @@ WHERE (c.state = 'closed' OR (c.state = 'finalizing'
     GREATEST(make_interval(secs => 2 * GREATEST(c.end_ms - c.start_ms, 0) / 1000.0), make_interval(secs => $1)),
     make_interval(secs => $2))))
   AND EXISTS (SELECT 1 FROM foghorn.artifacts p
-    WHERE p.artifact_hash = c.artifact_hash AND p.artifact_type = 'dvr' AND p.status <> 'deleted')
+    WHERE p.artifact_hash = c.artifact_hash AND p.artifact_type = 'dvr'
+      AND p.federated_pointer = false AND p.status <> 'deleted')
 ORDER BY c.created_at, c.chapter_id LIMIT $3;
 
 -- name: ListDVRChaptersNeedingReclaim :many
@@ -91,6 +98,9 @@ SELECT sqlc.embed(c)
 FROM foghorn.dvr_chapters c
 WHERE c.state = 'frozen'
   AND (c.reclaim_started_at IS NULL OR c.reclaim_started_at < NOW() - make_interval(secs => $1))
+  AND EXISTS (SELECT 1 FROM foghorn.artifacts p
+    WHERE p.artifact_hash = c.artifact_hash AND p.artifact_type = 'dvr'
+      AND p.federated_pointer = false)
 ORDER BY c.created_at, c.chapter_id LIMIT $2;
 
 -- name: GetDVRChapter :one
@@ -119,17 +129,22 @@ DELETE FROM foghorn.dvr_chapters WHERE chapter_id = $1;
 -- name: PropagateDVRChapterRetention :execrows
 UPDATE foghorn.artifacts a SET retention_until = sqlc.narg(retention_until), updated_at = NOW()
 FROM foghorn.dvr_chapters c
-WHERE c.artifact_hash = $1 AND a.artifact_hash = c.playback_artifact_hash
-  AND a.origin_type = 'dvr_chapter' AND a.status <> 'deleted';
+WHERE c.artifact_hash = sqlc.arg(artifact_hash)
+  AND a.artifact_hash = c.playback_artifact_hash
+  AND a.tenant_id = sqlc.arg(tenant_id)::uuid
+  AND a.origin_type = 'dvr_chapter'
+  AND a.federated_pointer = false
+  AND a.status <> 'deleted';
 
 -- name: SoftDeleteDVRParent :execrows
 UPDATE foghorn.artifacts SET status = 'deleted', updated_at = NOW()
-WHERE artifact_hash = sqlc.arg(artifact_hash) AND tenant_id = sqlc.arg(tenant_id)::uuid AND artifact_type = 'dvr' AND status <> 'deleted';
+WHERE artifact_hash = sqlc.arg(artifact_hash) AND tenant_id = sqlc.arg(tenant_id)::uuid
+  AND artifact_type = 'dvr' AND federated_pointer = false AND status <> 'deleted';
 
 -- name: ListDeletedDVRParentsWithChapters :many
 SELECT p.artifact_hash, p.tenant_id::text AS tenant_id
 FROM foghorn.artifacts p
-WHERE p.artifact_type = 'dvr' AND p.status = 'deleted'
+WHERE p.artifact_type = 'dvr' AND p.federated_pointer = false AND p.status = 'deleted'
   AND EXISTS (SELECT 1 FROM foghorn.dvr_chapters c WHERE c.artifact_hash = p.artifact_hash)
 LIMIT $1;
 
@@ -137,28 +152,37 @@ LIMIT $1;
 UPDATE foghorn.artifacts a SET status = 'deleted', updated_at = NOW()
 FROM foghorn.dvr_chapters c
 WHERE c.artifact_hash = sqlc.arg(artifact_hash) AND a.artifact_hash = c.playback_artifact_hash
-  AND a.origin_type = 'dvr_chapter' AND a.tenant_id = sqlc.arg(tenant_id)::uuid AND a.status <> 'deleted'
+  AND a.origin_type = 'dvr_chapter' AND a.tenant_id = sqlc.arg(tenant_id)::uuid
+  AND a.federated_pointer = false AND a.status <> 'deleted'
+  AND EXISTS (
+      SELECT 1 FROM foghorn.artifacts parent
+      WHERE parent.artifact_hash = c.artifact_hash
+        AND parent.tenant_id = sqlc.arg(tenant_id)::uuid
+        AND parent.artifact_type = 'dvr'
+        AND parent.federated_pointer = false
+  )
 RETURNING a.artifact_hash;
 
 -- name: DeleteDVRChapterRowsForTenant :exec
 DELETE FROM foghorn.dvr_chapters c USING foghorn.artifacts parent
-WHERE c.artifact_hash = sqlc.arg(artifact_hash) AND parent.artifact_hash = sqlc.arg(artifact_hash) AND parent.tenant_id = sqlc.arg(tenant_id)::uuid;
+WHERE c.artifact_hash = sqlc.arg(artifact_hash) AND parent.artifact_hash = sqlc.arg(artifact_hash)
+  AND parent.tenant_id = sqlc.arg(tenant_id)::uuid AND parent.artifact_type = 'dvr'
+  AND parent.federated_pointer = false;
 
 -- name: GetDVRParentArtifactStatus :one
-SELECT status FROM foghorn.artifacts WHERE artifact_hash = $1 AND artifact_type = 'dvr';
+SELECT status FROM foghorn.artifacts
+WHERE artifact_hash = $1 AND artifact_type = 'dvr' AND federated_pointer = false;
 
 -- name: ClearCurrentChaptersForInactiveDVRs :execrows
 UPDATE foghorn.dvr_chapters c
 SET is_current = false, state = CASE WHEN c.state = 'open' THEN 'closed' ELSE c.state END
 FROM foghorn.artifacts a
 WHERE c.artifact_hash = a.artifact_hash AND c.is_current = true AND a.artifact_type = 'dvr'
+  AND a.federated_pointer = false
   AND a.status IN ('completed', 'completed_partial', 'failed', 'ready', 'deleted');
 
 -- name: LockDVRChapterMutation :exec
-SELECT pg_advisory_lock(hashtext($1));
-
--- name: UnlockDVRChapterMutation :exec
-SELECT pg_advisory_unlock(hashtext($1));
+SELECT pg_advisory_xact_lock(sqlc.arg(lock_namespace)::integer, hashtext(sqlc.arg(artifact_hash)::text));
 
 -- name: ListDVRChaptersForArtifact :many
 SELECT sqlc.embed(c)

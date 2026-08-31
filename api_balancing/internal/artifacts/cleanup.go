@@ -47,7 +47,7 @@ func BuildThumbnailPrefix(assetKey string) string {
 // surfaces typed errors rather than guessing defaults.
 type ArtifactRef struct {
 	Hash             string
-	Type             string // "clip" | "dvr" | "vod"
+	Type             string // physical byte kind: "clip" | "dvr" | "vod" (chapter canonicalizes to "vod")
 	TenantID         string
 	StreamInternal   string
 	Format           string
@@ -125,7 +125,8 @@ var (
 	// clip without format). The caller should not retry until the row
 	// gets the missing field.
 	ErrMissingTarget = errors.New("artifact cleanup: missing deletion target field")
-	// ErrUnsupportedType — artifact_type isn't one of clip/dvr/vod.
+	// ErrUnsupportedType — byte kind isn't one of clip/dvr/vod; callers
+	// canonicalize chapter to vod before crossing this storage boundary.
 	ErrUnsupportedType = errors.New("artifact cleanup: unsupported artifact type")
 	// ErrDelegateMissing — delete needs to go to a peer cluster but the
 	// federation delegate isn't wired.
@@ -280,7 +281,7 @@ func (c *Cleaner) resolveTarget(ref ArtifactRef) (deletionTarget, error) {
 			return deletionTarget{}, fmt.Errorf("%w: dvr needs tenant_id, stream_internal_name, artifact_hash", ErrMissingTarget)
 		}
 		return deletionTarget{S3Prefix: BuildDVRS3Key(ref.TenantID, ref.StreamInternal, ref.Hash)}, nil
-	case "vod":
+	case "vod", "chapter":
 		key, err := c.resolveVODKey(ref)
 		if err != nil {
 			return deletionTarget{}, err

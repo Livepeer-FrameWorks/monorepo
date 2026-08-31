@@ -242,10 +242,16 @@ func FinalizeDVR(ctx context.Context, dvrHash string, opts FinalizeOptions) (Fin
 	// The closed row enters the finalization queue, which produces the
 	// canonical .mkv chapter artifact in the background.
 	terminalMs := endedAt.UnixMilli()
-	if cErr := WithDVRChapterMutationLock(ctx, dvrHash, func() error {
-		return CloseTerminalChapter(ctx, dvrHash, terminalMs, logger)
+	var chaptersChanged bool
+	if cErr := WithDVRChapterMutationTx(ctx, dvrHash, func(tx *sql.Tx) error {
+		var txErr error
+		chaptersChanged, txErr = CloseTerminalChapterTx(ctx, tx, dvrHash, terminalMs)
+		return txErr
 	}); cErr != nil {
 		logger.WithError(cErr).WithField("dvr_hash", dvrHash).Warn("FinalizeDVR: close terminal chapter failed")
+	} else if chaptersChanged {
+		logger.WithFields(logging.Fields{"artifact_hash": dvrHash, "terminal_at_ms": terminalMs}).Info("Terminal DVR chapters materialized")
+		NotifyChapterMutationCommitted()
 	}
 
 	// The parent's final retention horizon and its propagation onto any already-allocated child
@@ -287,7 +293,7 @@ func FinalizeDVR(ctx context.Context, dvrHash string, opts FinalizeOptions) (Fin
 			Warn("FinalizeDVR: row left 'finalizing' during work (deleted/re-claimed); skipping terminal transition")
 		return FinalizeResult{ArtifactStatus: current, UploadedCount: uploadedCount, LostCount: lostCount, NoOp: true}, nil
 	}
-	if _, propErr := PropagateChapterRetentionTx(ctx, finTx, dvrHash, retentionUntilArg); propErr != nil {
+	if _, propErr := PropagateChapterRetentionTx(ctx, finTx, claimTenant, dvrHash, retentionUntilArg); propErr != nil {
 		logger.WithError(propErr).WithField("dvr_hash", dvrHash).Error("Failed to propagate retention to child chapters")
 		return FinalizeResult{ArtifactStatus: finalStatus, UploadedCount: uploadedCount, LostCount: lostCount}, fmt.Errorf("propagate chapter retention: %w", propErr)
 	}

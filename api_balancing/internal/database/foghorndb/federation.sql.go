@@ -29,7 +29,9 @@ func (q *Queries) DVRRecordingTenant(ctx context.Context, internalName sql.NullS
 const federatedArtifactStreamID = `-- name: FederatedArtifactStreamID :one
 SELECT COALESCE(stream_id::text, '')::text AS stream_id
 FROM foghorn.artifacts
-WHERE artifact_hash = $1 AND artifact_type = $2 AND tenant_id = $3
+WHERE artifact_hash = $1
+  AND (artifact_type = $2 OR (artifact_type IN ('vod', 'chapter') AND $2::text IN ('vod', 'chapter')))
+  AND tenant_id = $3
   AND status != 'deleted'
 LIMIT 1
 `
@@ -48,16 +50,31 @@ func (q *Queries) FederatedArtifactStreamID(ctx context.Context, arg FederatedAr
 }
 
 const fillMigratedArtifactMetadata = `-- name: FillMigratedArtifactMetadata :exec
-UPDATE foghorn.artifacts
-SET internal_name = CASE WHEN COALESCE(internal_name, '') = '' AND $1::text <> '' THEN $1::text ELSE internal_name END,
-    stream_internal_name = CASE WHEN COALESCE(stream_internal_name, '') = '' AND $2::text <> '' THEN $2::text ELSE stream_internal_name END,
-    format = CASE WHEN COALESCE(format, '') = '' AND $3::text <> '' THEN $3::text ELSE format END,
-    storage_location = CASE WHEN COALESCE(storage_location, '') = '' AND $4::text <> '' THEN $4::text ELSE storage_location END,
-    sync_status = CASE WHEN COALESCE(sync_status, '') = '' AND $5::text <> '' THEN $5::text ELSE sync_status END,
-    s3_url = CASE WHEN COALESCE(s3_url, '') = '' AND $6::text <> '' THEN $6::text ELSE s3_url END,
-    size_bytes = CASE WHEN COALESCE(size_bytes, 0) = 0 AND $7::bigint > 0 THEN $7::bigint ELSE size_bytes END,
-    origin_cluster_id = CASE WHEN COALESCE(origin_cluster_id, '') = '' THEN $8::text ELSE origin_cluster_id END
-WHERE artifact_hash = $9 AND artifact_type = $10 AND tenant_id = $11
+UPDATE foghorn.artifacts AS artifact
+SET internal_name = CASE WHEN COALESCE(artifact.internal_name, '') = '' AND $1::text <> '' THEN $1::text ELSE artifact.internal_name END,
+    stream_internal_name = CASE WHEN COALESCE(artifact.stream_internal_name, '') = '' AND $2::text <> '' THEN $2::text ELSE artifact.stream_internal_name END,
+    format = CASE WHEN COALESCE(artifact.format, '') = '' AND $3::text <> '' THEN $3::text ELSE artifact.format END,
+    storage_location = CASE WHEN COALESCE(artifact.storage_location, '') = '' AND $4::text <> '' THEN $4::text ELSE artifact.storage_location END,
+    sync_status = CASE WHEN COALESCE(artifact.sync_status, '') = '' AND $5::text <> '' THEN $5::text ELSE artifact.sync_status END,
+    s3_url = CASE WHEN COALESCE(artifact.s3_url, '') = '' AND $6::text <> '' THEN $6::text ELSE artifact.s3_url END,
+    size_bytes = CASE WHEN COALESCE(artifact.size_bytes, 0) = 0 AND $7::bigint > 0 THEN $7::bigint ELSE artifact.size_bytes END,
+    origin_cluster_id = CASE WHEN COALESCE(artifact.origin_cluster_id, '') = '' THEN $8::text ELSE artifact.origin_cluster_id END,
+    status = 'ready',
+    updated_at = NOW()
+WHERE artifact.artifact_hash = $9::varchar(32)
+  AND (artifact.artifact_type = $10
+       OR (artifact.artifact_type IN ('vod', 'chapter') AND $10::text IN ('vod', 'chapter')))
+  AND artifact.tenant_id = $11
+  AND artifact.federated_pointer = true
+  AND artifact.status <> 'deleted'
+  AND artifact.federated_purge_token IS NULL
+  AND NOT EXISTS (
+      SELECT 1
+      FROM foghorn.media_object_authority_projection AS authority
+      WHERE authority.tenant_id = $11
+      AND authority.artifact_hash = $9::text
+        AND authority.lifecycle = 'tombstone'
+  )
 `
 
 type FillMigratedArtifactMetadataParams struct {
@@ -142,9 +159,36 @@ func (q *Queries) GetFederatedArtifactDescriptor(ctx context.Context, arg GetFed
 const insertMigratedArtifactMetadata = `-- name: InsertMigratedArtifactMetadata :execrows
 INSERT INTO foghorn.artifacts
     (artifact_hash, artifact_type, tenant_id, internal_name, stream_internal_name,
-     format, status, storage_location, sync_status, s3_url, size_bytes, origin_cluster_id)
-VALUES ($1, $2, $3, $4, $11, $5, 'active', $6, $7, $8, $9, $10)
-ON CONFLICT (artifact_hash) DO NOTHING
+     format, status, storage_location, sync_status, s3_url, size_bytes, origin_cluster_id,
+     federated_pointer)
+SELECT $1::varchar(32), $2::varchar(10),
+       $3::uuid, $4, $5,
+       $6, 'ready', $7, $8,
+       $9, $10, $11, true
+WHERE NOT EXISTS (
+    SELECT 1
+    FROM foghorn.media_object_authority_projection AS authority
+    WHERE authority.tenant_id = $3::uuid
+      AND authority.artifact_hash = $1::text
+      AND authority.lifecycle = 'tombstone'
+)
+ON CONFLICT (artifact_hash) DO UPDATE SET
+    federated_pointer = true,
+    status = 'ready',
+    updated_at = NOW()
+WHERE foghorn.artifacts.tenant_id = EXCLUDED.tenant_id
+  AND foghorn.artifacts.federated_pointer = true
+  -- A terminal pointer may be owned by the out-of-transaction derivative
+  -- purge saga. Metadata migration must not resurrect it mid-sweep.
+  AND foghorn.artifacts.status <> 'deleted'
+  AND foghorn.artifacts.federated_purge_token IS NULL
+  AND NOT EXISTS (
+      SELECT 1
+      FROM foghorn.media_object_authority_projection AS authority
+      WHERE authority.tenant_id = EXCLUDED.tenant_id
+        AND authority.artifact_hash = EXCLUDED.artifact_hash
+        AND authority.lifecycle = 'tombstone'
+  )
 `
 
 type InsertMigratedArtifactMetadataParams struct {
@@ -152,13 +196,13 @@ type InsertMigratedArtifactMetadataParams struct {
 	ArtifactType       string         `db:"artifact_type" json:"artifact_type"`
 	TenantID           string         `db:"tenant_id" json:"tenant_id"`
 	InternalName       sql.NullString `db:"internal_name" json:"internal_name"`
+	StreamInternalName sql.NullString `db:"stream_internal_name" json:"stream_internal_name"`
 	Format             sql.NullString `db:"format" json:"format"`
 	StorageLocation    sql.NullString `db:"storage_location" json:"storage_location"`
 	SyncStatus         sql.NullString `db:"sync_status" json:"sync_status"`
 	S3Url              sql.NullString `db:"s3_url" json:"s3_url"`
 	SizeBytes          sql.NullInt64  `db:"size_bytes" json:"size_bytes"`
 	OriginClusterID    sql.NullString `db:"origin_cluster_id" json:"origin_cluster_id"`
-	StreamInternalName sql.NullString `db:"stream_internal_name" json:"stream_internal_name"`
 }
 
 func (q *Queries) InsertMigratedArtifactMetadata(ctx context.Context, arg InsertMigratedArtifactMetadataParams) (int64, error) {
@@ -167,13 +211,13 @@ func (q *Queries) InsertMigratedArtifactMetadata(ctx context.Context, arg Insert
 		arg.ArtifactType,
 		arg.TenantID,
 		arg.InternalName,
+		arg.StreamInternalName,
 		arg.Format,
 		arg.StorageLocation,
 		arg.SyncStatus,
 		arg.S3Url,
 		arg.SizeBytes,
 		arg.OriginClusterID,
-		arg.StreamInternalName,
 	)
 	if err != nil {
 		return 0, err
@@ -184,8 +228,8 @@ func (q *Queries) InsertMigratedArtifactMetadata(ctx context.Context, arg Insert
 const insertMintArtifactShell = `-- name: InsertMintArtifactShell :exec
 INSERT INTO foghorn.artifacts
     (artifact_hash, artifact_type, tenant_id, stream_internal_name, internal_name,
-     origin_cluster_id, storage_location, sync_status, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, 'pending', 'pending', NOW(), NOW())
+     origin_cluster_id, storage_location, sync_status, federated_pointer, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, 'pending', 'pending', true, NOW(), NOW())
 ON CONFLICT (artifact_hash) DO NOTHING
 `
 
@@ -243,7 +287,7 @@ SELECT artifact_hash, artifact_type, COALESCE(internal_name, '')::text AS intern
        COALESCE(EXTRACT(EPOCH FROM frozen_at)::bigint, 0)::bigint AS frozen_at,
        COALESCE(stream_internal_name, '')::text AS stream_internal_name
 FROM foghorn.artifacts
-WHERE tenant_id = $1 AND status != 'deleted'
+WHERE tenant_id = $1 AND status != 'deleted' AND federated_pointer = false
 ORDER BY created_at DESC
 `
 

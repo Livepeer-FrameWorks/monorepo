@@ -57,11 +57,16 @@ UPDATE foghorn.processing_jobs SET status = 'failed', error_message = $2, comple
 -- name: MarkProcessingArtifactFailed :execrows
 UPDATE foghorn.artifacts SET status = 'failed', error_message = $2, updated_at = NOW() WHERE artifact_hash = $1 AND tenant_id::text = $3 AND status NOT IN ('ready', 'failed', 'deleted', 'expired', 'aborted');
 -- name: UpdateProcessingJobProgress :one
-UPDATE foghorn.processing_jobs SET progress = $2, updated_at = NOW() WHERE job_id = $1 AND status IN ('dispatched', 'processing') AND processing_node_id = $3 RETURNING artifact_hash, tenant_id::text;
+UPDATE foghorn.processing_jobs SET progress = GREATEST(progress, $2), updated_at = NOW() WHERE job_id = $1 AND status IN ('dispatched', 'processing') AND processing_node_id = $3 RETURNING artifact_hash, tenant_id::text, progress;
 -- name: GetProcessingArtifactLifecycle :one
 SELECT COALESCE(artifact_type, '')::text AS artifact_type, COALESCE(stream_id::text, '')::text AS stream_id, COALESCE(stream_internal_name, '')::text AS stream_internal_name FROM foghorn.artifacts WHERE artifact_hash = $1;
 -- name: UpdateChapterFinalizeProgress :one
-UPDATE foghorn.dvr_chapters c SET finalize_started_at = NOW() FROM foghorn.artifacts a WHERE c.chapter_id = $1 AND c.playback_artifact_hash = a.artifact_hash AND c.state = 'finalizing' AND c.finalize_node_id = $2
+UPDATE foghorn.dvr_chapters c SET finalize_started_at = NOW() FROM foghorn.artifacts a
+WHERE c.chapter_id = sqlc.arg(chapter_id)
+  AND c.playback_artifact_hash = a.artifact_hash
+  AND c.state = 'finalizing'
+  AND c.finalize_node_id = sqlc.arg(finalize_node_id)
+  AND c.finalize_attempts = sqlc.arg(expected_attempt)
 RETURNING c.playback_artifact_hash, a.tenant_id::text;
 -- name: GetArtifactSyncObjectKey :one
 SELECT sync_object_key FROM foghorn.artifacts WHERE artifact_hash = $1 AND tenant_id::text = $2;

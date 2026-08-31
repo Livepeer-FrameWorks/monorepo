@@ -815,7 +815,6 @@ func TestEndIngestSessionsForStreamEnd_ReapsLostCloseFencedByEventTime_RealPG(t 
 	if c := activeSessionCount(t, ingA, node, 10); c != 0 {
 		t.Fatalf("the reaped session must be ended, still %d active", c)
 	}
-
 	// The stream is now free — a reconnect that came up AFTER the STREAM_END event mints (started at
 	// t=250). Admission is no longer wedged.
 	s2, oc, err := CreateIngestSession(ctx, ingA, node, stream, 20, "u-s2", 250, nil, "cell-a", lg)
@@ -841,5 +840,158 @@ func TestEndIngestSessionsForStreamEnd_ReapsLostCloseFencedByEventTime_RealPG(t 
 	// eventMillis <= 0 (old Mist / missing header) is a no-op.
 	if reaped, err := EndIngestSessionsForStreamEnd(ctx, ingA, node, stream, 0, lg); err != nil || reaped != 0 {
 		t.Fatalf("missing event time must be a no-op, reaped=%d err=%v", reaped, err)
+	}
+}
+
+func TestIngestSessionCapacityAuthority_RealPG(t *testing.T) {
+	conn := startRealPG(t)
+	prev := db
+	SetDB(conn)
+	t.Cleanup(func() { SetDB(prev) })
+	ctx := context.Background()
+	lg := logging.NewLogger()
+	limit := IngestAuthoritySnapshot{CapacityMaxStreams: 1}
+
+	first, outcome, err := CreateIngestSession(ctx, ingA, "cap-node-a", "live+cap-a", 8101, "cap-a", 1000, nil, "cell-a", lg, limit)
+	if err != nil || outcome != IngestSessionActive || first == "" {
+		t.Fatalf("first capped admission: id=%q outcome=%v err=%v", first, outcome, err)
+	}
+	duplicate, duplicateOutcome, duplicateErr := CreateIngestSession(ctx, ingA, "cap-node-a", "live+cap-a", 8101, "cap-a", 1000, nil, "cell-a", lg, limit)
+	if duplicateErr != nil || duplicateOutcome != IngestSessionActive || duplicate != first {
+		t.Fatalf("idempotent capped admission: id=%q outcome=%v err=%v", duplicate, duplicateOutcome, duplicateErr)
+	}
+	denied, deniedOutcome, deniedErr := CreateIngestSession(ctx, ingA, "cap-node-b", "live+cap-b", 8102, "cap-b", 1100, nil, "cell-a", lg, limit)
+	if deniedErr != nil || deniedOutcome != IngestSessionRejectedCapacity || denied != "" {
+		t.Fatalf("second capped admission: id=%q outcome=%v err=%v", denied, deniedOutcome, deniedErr)
+	}
+
+	if _, closeErr := FinalizeIngestSessionClose(ctx, ingA, "cap-node-a", 8101, 2000, "live+cap-a", lg); closeErr != nil {
+		t.Fatalf("close first capped session: %v", closeErr)
+	}
+	second, secondOutcome, secondErr := CreateIngestSession(ctx, ingA, "cap-node-b", "live+cap-b", 8102, "cap-b-2", 2100, nil, "cell-a", lg, limit)
+	if secondErr != nil || secondOutcome != IngestSessionActive || second == "" {
+		t.Fatalf("admission after capacity release: id=%q outcome=%v err=%v", second, secondOutcome, secondErr)
+	}
+
+	// Different streams for one tenant race through distinct stream locks. The
+	// tenant-capacity advisory lock must nevertheless serialize the count and
+	// insert so exactly one admission consumes the single slot.
+	type result struct {
+		id      string
+		outcome IngestSessionOutcome
+		err     error
+	}
+	start := make(chan struct{})
+	results := make(chan result, 2)
+	var wg sync.WaitGroup
+	for i, candidate := range []struct {
+		node, stream, uuid string
+		pid                int64
+	}{
+		{node: "cap-race-node-a", stream: "live+cap-race-a", uuid: "cap-race-a", pid: 8201},
+		{node: "cap-race-node-b", stream: "live+cap-race-b", uuid: "cap-race-b", pid: 8202},
+	} {
+		wg.Add(1)
+		go func(i int, candidate struct {
+			node, stream, uuid string
+			pid                int64
+		}) {
+			defer wg.Done()
+			<-start
+			id, outcome, err := CreateIngestSession(
+				ctx, ingB, candidate.node, candidate.stream, candidate.pid,
+				candidate.uuid, int64(3000+i), nil, "cell-a", lg, limit,
+			)
+			results <- result{id: id, outcome: outcome, err: err}
+		}(i, candidate)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	active, rejected := 0, 0
+	for got := range results {
+		if got.err != nil {
+			t.Fatalf("concurrent capped admission: %v", got.err)
+		}
+		switch got.outcome {
+		case IngestSessionActive:
+			active++
+			if got.id == "" {
+				t.Fatal("active concurrent admission returned an empty session id")
+			}
+		case IngestSessionRejectedCapacity:
+			rejected++
+			if got.id != "" {
+				t.Fatalf("capacity rejection returned session id %q", got.id)
+			}
+		default:
+			t.Fatalf("unexpected concurrent admission outcome %v", got.outcome)
+		}
+	}
+	if active != 1 || rejected != 1 {
+		t.Fatalf("cap=1 concurrent admissions: active=%d rejected=%d", active, rejected)
+	}
+}
+
+// Capacity rejection must be atomic with PID-reuse handling. A newer connector on the same
+// (node, PID) proves the incumbent generation is stale even when a downgraded tenant cannot admit
+// the replacement. The stale generation must retire with durable cleanup; it must not be restored.
+func TestIngestSessionCapacityRejectionRetiresPIDReuseIncumbent_RealPG(t *testing.T) {
+	conn := startRealPG(t)
+	prev := db
+	SetDB(conn)
+	t.Cleanup(func() { SetDB(prev) })
+	ctx := context.Background()
+	lg := logging.NewLogger()
+
+	// Seed two sessions without a cap, modelling a later plan downgrade to one stream.
+	if _, outcome, err := CreateIngestSession(ctx, ingA, "cap-retained-node", "live+cap-retained", 8301, "cap-retained", 1000, nil, "cell-a", lg); err != nil || outcome != IngestSessionActive {
+		t.Fatalf("seed retained session: outcome=%v err=%v", outcome, err)
+	}
+	incumbent, outcome, err := CreateIngestSession(ctx, ingA, "cap-reuse-node", "live+cap-reuse", 8302, "cap-reuse-old", 1100, nil, "cell-a", lg)
+	if err != nil || outcome != IngestSessionActive || incumbent == "" {
+		t.Fatalf("seed reuse incumbent: id=%q outcome=%v err=%v", incumbent, outcome, err)
+	}
+	insertDVR(t, "cap-reuse-dvr", ingA, "live+cap-reuse", incumbent)
+	if _, err := db.Exec(`UPDATE foghorn.artifacts SET status='recording' WHERE artifact_hash='cap-reuse-dvr'`); err != nil {
+		t.Fatalf("mark incumbent DVR recording: %v", err)
+	}
+
+	denied, deniedOutcome, deniedErr := CreateIngestSession(
+		ctx, ingA, "cap-reuse-node", "live+cap-reuse", 8302, "cap-reuse-new", 2100,
+		nil, "cell-a", lg, IngestAuthoritySnapshot{CapacityMaxStreams: 1},
+	)
+	if deniedErr != nil || deniedOutcome != IngestSessionRejectedCapacity || denied != "" {
+		t.Fatalf("PID-reuse capacity rejection: id=%q outcome=%v err=%v", denied, deniedOutcome, deniedErr)
+	}
+
+	var incumbentEnded bool
+	if err := db.QueryRow(`SELECT ended_at IS NOT NULL FROM foghorn.ingest_sessions WHERE id=$1::uuid`, incumbent).Scan(&incumbentEnded); err != nil {
+		t.Fatalf("read incumbent: %v", err)
+	}
+	if !incumbentEnded {
+		t.Fatal("capacity rejection resurrected the PID-reused incumbent")
+	}
+	var newRows int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM foghorn.ingest_sessions WHERE tenant_id=$1::uuid AND start_trigger_uuid='cap-reuse-new'`, ingA).Scan(&newRows); err != nil {
+		t.Fatalf("count rejected successor: %v", err)
+	}
+	if newRows != 0 {
+		t.Fatalf("capacity-rejected successor rows=%d, want 0", newRows)
+	}
+	var dvrStatus string
+	if err := db.QueryRow(`SELECT status FROM foghorn.artifacts WHERE artifact_hash='cap-reuse-dvr'`).Scan(&dvrStatus); err != nil {
+		t.Fatalf("read incumbent DVR: %v", err)
+	}
+	if dvrStatus != "stopping" {
+		t.Fatalf("capacity rejection left incumbent DVR in %q, want stopping", dvrStatus)
+	}
+	var offlineEffects int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM foghorn.ingest_offline_effects WHERE source_generation=$1::uuid`, incumbent).Scan(&offlineEffects); err != nil {
+		t.Fatalf("count incumbent offline effects: %v", err)
+	}
+	if offlineEffects != 1 {
+		t.Fatalf("capacity rejection offline effects=%d, want 1", offlineEffects)
 	}
 }

@@ -174,7 +174,7 @@ func (j *RetentionJob) expireArtifactTx(
 	// (operator-visible) rather than swept with the wrong semantics. dvr_chapter rows are artifact_type
 	// 'vod' (origin_type carries the chapter marker), so they pass this guard.
 	switch artifactType {
-	case "clip", "dvr", "vod":
+	case "clip", "dvr", "vod", "chapter":
 	default:
 		j.logger.WithFields(logging.Fields{"artifact_hash": hash, "artifact_type": artifactType}).
 			Warn("Retention: refusing to expire artifact of unknown type (fail closed)")
@@ -249,8 +249,10 @@ func (j *RetentionJob) buildDeletionEvent(
 		return j.buildClipDeletedEvent(ctx, hash, internalName, tenantID, userID, sizeBytes, retentionUntil)
 	case "dvr":
 		return j.buildDVRDeletedEvent(ctx, hash, internalName, tenantID, userID, sizeBytes, retentionUntil)
-	case "vod":
-		// dvr_chapter rows are artifact_type 'vod' (origin_type carries the chapter marker).
+	case "vod", "chapter":
+		// Current DVR chapters are artifact_type 'vod' (origin_type carries the
+		// chapter marker). Treat legacy/federated chapter discriminators as the
+		// same byte kind so their deletion still emits the VOD lifecycle event.
 		return j.buildVodDeletedEvent(ctx, hash, tenantID, userID, sizeBytes, retentionUntil)
 	default:
 		// Unreachable — expireArtifactTx rejects unknown types before this. Explicit nil (no event)

@@ -151,6 +151,27 @@ func TestBillingCacheKeepsDeniedDecisionUntilInvalidated(t *testing.T) {
 	}
 }
 
+func TestBillingCacheDoesNotTrustPartialIdentityContext(t *testing.T) {
+	p := NewProcessor(logging.NewLogger(), nil, nil, nil, nil)
+	fake := &countingTenantAdmission{
+		response: &quartermasterpb.ValidateTenantResponse{Valid: true, IsActive: true, BillingModel: "postpaid"},
+	}
+	p.tenantAdmission = fake
+	p.streamCache.Set("tenant-1:stream-1", streamContext{
+		TenantID: "tenant-1",
+		StreamID: "stream-id-1",
+		Source:   "resolve_internal_name",
+	}, time.Minute)
+
+	status := p.GetBillingStatus(context.Background(), "stream-1", "tenant-1")
+	if status.State != BillingStatusHealthy || status.BillingModel != "postpaid" {
+		t.Fatalf("status = %+v, want owner-resolved postpaid decision", status)
+	}
+	if got := fake.calls.Load(); got != 1 {
+		t.Fatalf("authority calls = %d, want partial identity context to fall through once", got)
+	}
+}
+
 func TestBillingCacheDeniedDecisionRecoversWithoutInvalidation(t *testing.T) {
 	t.Setenv("BILLING_DENIED_CACHE_TTL", "20ms")
 	p := NewProcessor(logging.NewLogger(), nil, nil, nil, nil)

@@ -156,9 +156,10 @@ func TestStreamCleanupSaga_TombstoneFences_RealPG(t *testing.T) {
 }
 
 // Closes the promote-vs-delete leak (a completion promotes a version object after the drainer's prefix-list
-// snapshot / after the assignment is deleted). Part (a): DeleteThumbnailControlRows enqueues the deterministic
-// staging + version keys for every attempt BEFORE deleting the rows, so a to-be-deleted attempt's promoted object
-// is still swept. Part (b): EnqueueThumbnailVersionOrphansIfGone lets a completion clean its own promoted object
+// snapshot / after the assignment is deleted). Part (a): DeleteThumbnailControlRows locks the assignments and
+// captures every deterministic staging + version key, deletes the rows, then enqueues those captured keys, so a
+// to-be-deleted attempt's promoted object is still swept without inverting the publication lock order. Part (b):
+// EnqueueThumbnailVersionOrphansIfGone lets a completion clean its own promoted object
 // when it discovers the asset is GONE after promoting — but only when GONE, never for a live/retryable asset.
 func TestThumbnailPromoteVsDeleteLeak_RealPG(t *testing.T) {
 	conn := startRealPG(t)
@@ -173,7 +174,7 @@ func TestThumbnailPromoteVsDeleteLeak_RealPG(t *testing.T) {
 		return n > 0
 	}
 
-	t.Run("DeleteThumbnailControlRows enqueues deterministic keys before deleting", func(t *testing.T) {
+	t.Run("DeleteThumbnailControlRows captures then enqueues deterministic keys", func(t *testing.T) {
 		asset, attempt := "stream-del", "att-del"
 		if ok, err := ClaimThumbnailAttempt(ctx, conn, attempt, "tenant-a", asset, "node-1", "cluster-a", files, time.Now().Add(time.Hour)); err != nil || !ok {
 			t.Fatalf("claim: ok=%v err=%v", ok, err)
@@ -183,7 +184,7 @@ func TestThumbnailPromoteVsDeleteLeak_RealPG(t *testing.T) {
 		}
 		for _, f := range files {
 			if !queued(ThumbnailVersionKey(asset, attempt, f)) {
-				t.Fatalf("version key for %s must be enqueued before the assignment is deleted", f)
+				t.Fatalf("version key for %s must be enqueued by atomic deletion", f)
 			}
 			if !queued(ThumbnailStagingKey(asset, attempt, f)) {
 				t.Fatalf("staging key for %s must be enqueued", f)
@@ -191,28 +192,6 @@ func TestThumbnailPromoteVsDeleteLeak_RealPG(t *testing.T) {
 		}
 	})
 
-	t.Run("orphan cleanup enqueues promoted objects when the asset is gone OR the attempt is dead", func(t *testing.T) {
-		asset, attempt := "stream-orphan", "att-orphan"
-		if ok, err := ClaimThumbnailAttempt(ctx, conn, attempt, "tenant-a", asset, "node-1", "cluster-a", files, time.Now().Add(time.Hour)); err != nil || !ok {
-			t.Fatalf("claim: ok=%v err=%v", ok, err)
-		}
-		// Live asset + live attempt: must NOT enqueue (a legitimate re-drive may publish the same deterministic key).
-		if enq, err := EnqueueThumbnailVersionOrphansIfDead(ctx, conn, attempt, asset, attempt, files); err != nil || enq {
-			t.Fatalf("live attempt must not enqueue orphans; enq=%v err=%v", enq, err)
-		}
-		// The attempt is failed (e.g. recovery swept it mid-promote) while the ASSET is still live → must enqueue.
-		if _, err := conn.ExecContext(ctx, `UPDATE foghorn.thumbnail_task_assignment SET status = 'failed' WHERE attempt_id = $1`, attempt); err != nil {
-			t.Fatalf("fail attempt: %v", err)
-		}
-		if enq, err := EnqueueThumbnailVersionOrphansIfDead(ctx, conn, attempt, asset, attempt, files); err != nil || !enq {
-			t.Fatalf("failed attempt must enqueue orphans even with a live asset; enq=%v err=%v", enq, err)
-		}
-		for _, f := range files {
-			if !queued(ThumbnailVersionKey(asset, attempt, f)) {
-				t.Fatalf("version key for %s must be enqueued once the attempt is dead", f)
-			}
-		}
-	})
 }
 
 // The publication lease single-flights the HEAD/promote per attempt and is honored by the recovery fail-sweep, so

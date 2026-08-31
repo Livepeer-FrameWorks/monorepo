@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"errors"
 	"net"
 	"sync/atomic"
 	"testing"
@@ -20,6 +21,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 // commodoreIngestFake doubles Commodore's InternalService for the ingest
@@ -29,16 +31,24 @@ type commodoreIngestFake struct {
 	commodorepb.UnimplementedInternalServiceServer
 
 	streamContext   func(context.Context, *commodorepb.ResolveStreamContextRequest) (*commodorepb.ResolveStreamContextResponse, error)
+	streamCtxHits   atomic.Int32
 	validateKeyHits atomic.Int32
 	lastRequest     atomic.Pointer[commodorepb.ResolveStreamContextRequest]
 }
 
 func (f *commodoreIngestFake) ResolveStreamContext(ctx context.Context, req *commodorepb.ResolveStreamContextRequest) (*commodorepb.ResolveStreamContextResponse, error) {
+	f.streamCtxHits.Add(1)
 	f.lastRequest.Store(req)
 	if f.streamContext != nil {
 		return f.streamContext(ctx, req)
 	}
 	return &commodorepb.ResolveStreamContextResponse{Admitted: true, ClusterPeers: ingestTestPeers()}, nil
+}
+
+type localIngestResolverFunc func(context.Context, string) (*commodorepb.ResolveStreamContextResponse, bool, error)
+
+func (resolve localIngestResolverFunc) ResolveLocalIngestContext(ctx context.Context, streamKey string) (*commodorepb.ResolveStreamContextResponse, bool, error) {
+	return resolve(ctx, streamKey)
 }
 
 func (f *commodoreIngestFake) ValidateStreamKey(ctx context.Context, req *commodorepb.ValidateStreamKeyRequest) (*commodorepb.ValidateStreamKeyResponse, error) {
@@ -226,6 +236,96 @@ func TestResolveIngestEndpoint_CommodoreErrorIsUnavailable(t *testing.T) {
 	}
 }
 
+func TestResolveIngestEndpoint_ReadyLocalAuthorityFallsBackAfterConnectedAttempt(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	seedGRPCIngestNode(t, sm, "ingest-a", "ingest-a.example.com:18090")
+
+	fake := &commodoreIngestFake{streamContext: func(context.Context, *commodorepb.ResolveStreamContextRequest) (*commodorepb.ResolveStreamContextResponse, error) {
+		return nil, status.Error(codes.Unavailable, "connected placement unavailable")
+	}}
+	startCommodoreIngestFake(t, fake)
+
+	srv := newIngestGRPCServer()
+	srv.localIngestResolver = localIngestResolverFunc(func(_ context.Context, streamKey string) (*commodorepb.ResolveStreamContextResponse, bool, error) {
+		if streamKey != "sk-local" {
+			t.Fatalf("local resolver key = %q", streamKey)
+		}
+		return &commodorepb.ResolveStreamContextResponse{
+			Admitted: true, StreamId: "stream-local", InternalName: "internal-local", TenantId: "tenant-local",
+			IngestMode: "push", OriginClusterId: proto.String(ingestTestCluster), ClusterPeers: ingestTestPeers(),
+		}, true, nil
+	})
+
+	resp, err := srv.ResolveIngestEndpoint(context.Background(), &sharedpb.IngestEndpointRequest{StreamKey: "sk-local"})
+	if err != nil {
+		t.Fatalf("resolve local ingest: %v", err)
+	}
+	if resp.GetPrimary().GetNodeId() != "ingest-a" {
+		t.Fatalf("local primary = %q", resp.GetPrimary().GetNodeId())
+	}
+	if hits := fake.streamCtxHits.Load(); hits != 1 {
+		t.Fatalf("ready local authority made %d connected placement calls, want 1 before outage fallback", hits)
+	}
+}
+
+func TestResolveIngestEndpoint_ConnectedClaimOverridesSignedOutageOwner(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	seedGRPCIngestNode(t, sm, "ingest-b", "ingest-b.example.com:18090")
+
+	fake := &commodoreIngestFake{streamContext: func(context.Context, *commodorepb.ResolveStreamContextRequest) (*commodorepb.ResolveStreamContextResponse, error) {
+		return &commodorepb.ResolveStreamContextResponse{
+			Admitted: true, StreamId: "stream-claimed", InternalName: "internal-claimed", TenantId: "tenant-claimed",
+			IngestMode: "push", OriginClusterId: proto.String("cluster-origin"), ActiveIngestClusterId: proto.String(ingestTestCluster),
+			ClusterPeers: ingestTestPeers(),
+		}, nil
+	}}
+	startCommodoreIngestFake(t, fake)
+
+	srv := newIngestGRPCServer()
+	srv.localIngestResolver = localIngestResolverFunc(func(context.Context, string) (*commodorepb.ResolveStreamContextResponse, bool, error) {
+		return &commodorepb.ResolveStreamContextResponse{
+			Admitted: true, StreamId: "stream-claimed", InternalName: "internal-claimed", TenantId: "tenant-claimed",
+			IngestMode: "push", OriginClusterId: proto.String("cluster-origin"),
+			ClusterPeers: []*clusterpeerpb.TenantClusterPeer{{ClusterId: "cluster-origin", ClusterType: "edge", HealthStatus: "healthy"}},
+		}, true, nil
+	})
+	resp, err := srv.ResolveIngestEndpoint(context.Background(), &sharedpb.IngestEndpointRequest{StreamKey: "sk-claimed"})
+	if err != nil {
+		t.Fatalf("resolve claimed placement: %v", err)
+	}
+	if resp.GetPrimary().GetClusterId() != ingestTestCluster || resp.GetPrimary().GetNodeId() != "ingest-b" {
+		t.Fatalf("connected claim did not override outage owner: %+v", resp.GetPrimary())
+	}
+	if fake.streamCtxHits.Load() != 1 {
+		t.Fatalf("connected placement calls = %d, want 1", fake.streamCtxHits.Load())
+	}
+}
+
+func TestResolveIngestEndpoint_LocalStoreErrorUsesConnectedCommodore(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	seedGRPCIngestNode(t, sm, "ingest-a", "ingest-a.example.com:18090")
+
+	fake := &commodoreIngestFake{streamContext: func(context.Context, *commodorepb.ResolveStreamContextRequest) (*commodorepb.ResolveStreamContextResponse, error) {
+		return &commodorepb.ResolveStreamContextResponse{
+			Admitted: true, StreamId: "stream-connected", InternalName: "internal-connected", TenantId: "tenant-connected",
+			IngestMode: "push", ClusterPeers: ingestTestPeers(),
+		}, nil
+	}}
+	startCommodoreIngestFake(t, fake)
+
+	srv := newIngestGRPCServer()
+	srv.localIngestResolver = localIngestResolverFunc(func(context.Context, string) (*commodorepb.ResolveStreamContextResponse, bool, error) {
+		return nil, true, errors.New("local database unavailable")
+	})
+	resp, err := srv.ResolveIngestEndpoint(context.Background(), &sharedpb.IngestEndpointRequest{StreamKey: "sk-connected"})
+	if err != nil {
+		t.Fatalf("connected fallback after local store error: %v", err)
+	}
+	if resp.GetPrimary().GetNodeId() != "ingest-a" || fake.streamCtxHits.Load() != 1 {
+		t.Fatalf("connected fallback response=%+v hits=%d", resp, fake.streamCtxHits.Load())
+	}
+}
+
 func TestResolveIngestEndpoint_NoIngestNodesIsUnavailable(t *testing.T) {
 	state.ResetDefaultManagerForTests()
 
@@ -248,5 +348,5 @@ const ingestTestCluster = "cluster-1"
 // ingestTestPeers is the envelope Commodore returns: plan-filtered and healthy,
 // which is what makes membership alone sufficient to authorize a candidate.
 func ingestTestPeers() []*clusterpeerpb.TenantClusterPeer {
-	return []*clusterpeerpb.TenantClusterPeer{{ClusterId: ingestTestCluster, HealthStatus: "healthy"}}
+	return []*clusterpeerpb.TenantClusterPeer{{ClusterId: ingestTestCluster, ClusterType: "edge", HealthStatus: "healthy"}}
 }

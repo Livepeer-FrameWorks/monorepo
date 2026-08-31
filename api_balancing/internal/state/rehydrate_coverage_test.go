@@ -34,6 +34,7 @@ func (r *rehydrateNodeRepo) ListNodeMaintenance(_ context.Context) ([]NodeMainte
 	return r.maintenance, r.maintErr
 }
 func (r *rehydrateNodeRepo) UpsertNodeOutputs(_ context.Context, _, _, _ string) error { return nil }
+func (r *rehydrateNodeRepo) DeleteNodeOutputs(_ context.Context, _ string) error       { return nil }
 func (r *rehydrateNodeRepo) UpsertNodeLifecycles(_ context.Context, _ []*ipcpb.NodeLifecycleUpdate) error {
 	return nil
 }
@@ -111,8 +112,8 @@ func (r *rehydrateArtifactRepo) MarkNodeArtifactsOrphaned(_ context.Context, _ s
 	return nil
 }
 
-func (r *rehydrateArtifactRepo) DeleteNodeArtifact(_ context.Context, _, _ string, _ int64) error {
-	return nil
+func (r *rehydrateArtifactRepo) DeleteNodeArtifact(_ context.Context, _, _ string, _ int64) (NodeArtifactDeletionOutcome, error) {
+	return NodeArtifactDeletionApplied, nil
 }
 
 func (r *rehydrateArtifactRepo) ReconcileNodeCopies(_ context.Context) (int, error) {
@@ -215,6 +216,75 @@ func TestRehydrate_LoadsAllRepositoriesRehydrate(t *testing.T) {
 // an unparseable operational mode is skipped (logged, continue) rather than
 // applied or fatal. The node row that had a valid mode in the same batch must
 // still be applied.
+func TestRehydrateNodeRepositoryDoesNotRefreshLivenessOrEraseIdentity(t *testing.T) {
+	sm := NewStreamStateManager()
+	t.Cleanup(sm.Shutdown)
+	lat, lon := 52.1, 5.1
+	sm.SetNodeInfo("node-1", "https://old.example", true, &lat, &lon, "Leiden", `{"HLS":"old"}`, nil)
+	sm.SetNodeConnectionInfo(context.Background(), "node-1", "", "tenant-1", "cluster-1", nil)
+	sm.MarkNodeDisconnected("node-1")
+	before := sm.GetNodeState("node-1")
+
+	sm.ConfigurePolicies(PoliciesConfig{NodeRepo: &rehydrateNodeRepo{nodes: []NodeRecord{{
+		NodeID: "node-1", BaseURL: "https://durable.example", OutputsJSON: `{"HLS":"new"}`, LastUpdated: time.Now(),
+	}}}})
+	if err := sm.Rehydrate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	after := sm.GetNodeState("node-1")
+	if after == nil || after.IsHealthy || !after.IsStale || !after.LastHeartbeat.IsZero() {
+		t.Fatalf("repository row changed disconnected liveness: %+v", after)
+	}
+	if !after.LastUpdate.Equal(before.LastUpdate) {
+		t.Fatalf("repository row refreshed LastUpdate: before=%v after=%v", before.LastUpdate, after.LastUpdate)
+	}
+	if after.Latitude == nil || *after.Latitude != lat || after.Longitude == nil || *after.Longitude != lon || after.Location != "Leiden" {
+		t.Fatalf("repository row erased geo: %+v", after)
+	}
+	if after.ClusterID != "cluster-1" || after.TenantID != "tenant-1" {
+		t.Fatalf("repository row erased identity: %+v", after)
+	}
+	if after.BaseURL != "https://durable.example" || after.OutputsRaw != `{"HLS":"new"}` {
+		t.Fatalf("repository fields were not refreshed: %+v", after)
+	}
+}
+
+func TestRehydrateNewNodeIsUnhealthyDNSHiddenAndEvictionIsProcessTerminal(t *testing.T) {
+	sm := NewStreamStateManager()
+	t.Cleanup(sm.Shutdown)
+	nodeID := "retired-node"
+	record := NodeRecord{
+		NodeID: nodeID, BaseURL: "https://retired.example", OutputsJSON: `{"HLS":"/hls/$"}`,
+		LastUpdated: time.Now().Add(-(nodeRemovalThreshold + time.Minute)),
+	}
+
+	sm.mergeRehydratedNode(record)
+	node := sm.GetNodeState(nodeID)
+	if node == nil || node.IsHealthy || !node.IsStale || node.ProbeVerified {
+		t.Fatalf("new durable node must rehydrate as stale and unverified: %+v", node)
+	}
+	if deltas := sm.ConsumeDNSRelevantDeltas(); len(deltas) != 0 {
+		t.Fatalf("unverified rehydrated node published DNS delta = %+v", deltas)
+	}
+
+	sm.checkStaleNodes()
+	if sm.GetNodeState(nodeID) != nil {
+		t.Fatal("old durable node was not evicted")
+	}
+	record.LastUpdated = time.Now().Add(time.Minute) // may be an in-flight pre-eviction write
+	sm.mergeRehydratedNode(record)
+	if sm.GetNodeState(nodeID) != nil {
+		t.Fatal("durable row resurrected a node evicted by this process")
+	}
+
+	// Authenticated activity is the only path that clears the process-local
+	// tombstone and proves the node has actually returned.
+	sm.TouchNode(nodeID, true)
+	if node = sm.GetNodeState(nodeID); node == nil || !node.IsHealthy || node.IsStale {
+		t.Fatalf("authenticated return did not clear eviction tombstone: %+v", node)
+	}
+}
+
 func TestRehydrate_SkipsInvalidMaintenanceModeRehydrate(t *testing.T) {
 	sm := NewStreamStateManager()
 	t.Cleanup(sm.Shutdown)

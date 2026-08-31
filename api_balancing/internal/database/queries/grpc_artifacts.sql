@@ -3,7 +3,8 @@ SELECT status
 FROM foghorn.artifacts
 WHERE artifact_hash = sqlc.arg(artifact_hash)
   AND artifact_type = 'clip'
-  AND tenant_id = sqlc.arg(tenant_id)::uuid;
+  AND tenant_id = sqlc.arg(tenant_id)::uuid
+  AND federated_pointer = false;
 
 -- name: InsertQueuedClipArtifact :exec
 INSERT INTO foghorn.artifacts
@@ -23,7 +24,8 @@ SELECT status, size_bytes, retention_until, stream_internal_name, tenant_id, use
 FROM foghorn.artifacts
 WHERE artifact_hash = sqlc.arg(artifact_hash)
   AND artifact_type = 'clip'
-  AND tenant_id = sqlc.arg(tenant_id)::uuid;
+  AND tenant_id = sqlc.arg(tenant_id)::uuid
+  AND federated_pointer = false;
 
 -- name: LatestArtifactNodeID :one
 SELECT node_id
@@ -39,6 +41,7 @@ SET status = 'deleted', updated_at = NOW()
 WHERE artifact_hash = sqlc.arg(artifact_hash)
   AND artifact_type = 'clip'
   AND tenant_id = sqlc.arg(tenant_id)::uuid
+  AND federated_pointer = false
   AND status != 'deleted';
 
 -- name: CancelClipProcessingJobs :exec
@@ -52,14 +55,16 @@ SELECT status
 FROM foghorn.artifacts
 WHERE artifact_hash = sqlc.arg(artifact_hash)
   AND artifact_type = 'dvr'
-  AND tenant_id = sqlc.arg(tenant_id)::uuid;
+  AND tenant_id = sqlc.arg(tenant_id)::uuid
+  AND federated_pointer = false;
 
 -- name: GetDVRStartDispatch :one
 SELECT dvr_start_dispatch::text AS dvr_start_dispatch
 FROM foghorn.artifacts
 WHERE artifact_hash = sqlc.arg(artifact_hash)
   AND artifact_type = 'dvr'
-  AND tenant_id::text = sqlc.arg(tenant_id);
+  AND tenant_id::text = sqlc.arg(tenant_id)
+  AND federated_pointer = false;
 
 -- name: FindActiveDVRForStream :one
 SELECT artifact_hash, status, dvr_start_dispatch::text AS dvr_start_dispatch
@@ -68,6 +73,7 @@ WHERE stream_internal_name = sqlc.arg(stream_internal_name)
   AND artifact_type = 'dvr'
   AND status IN ('requested', 'starting', 'recording')
   AND tenant_id = sqlc.arg(tenant_id)::uuid
+  AND federated_pointer = false
 ORDER BY created_at DESC
 LIMIT 1;
 
@@ -143,7 +149,8 @@ SELECT status, COALESCE(stream_internal_name, '')::text AS stream_internal_name,
 FROM foghorn.artifacts
 WHERE artifact_hash = sqlc.arg(artifact_hash)
   AND artifact_type = 'dvr'
-  AND tenant_id = sqlc.arg(tenant_id)::uuid;
+  AND tenant_id = sqlc.arg(tenant_id)::uuid
+  AND federated_pointer = false;
 
 -- name: LatestArtifactNodeWithSize :one
 SELECT node_id, size_bytes
@@ -161,7 +168,8 @@ SELECT status, COALESCE(stream_internal_name, '')::text AS stream_internal_name,
 FROM foghorn.artifacts
 WHERE artifact_hash = sqlc.arg(artifact_hash)
   AND artifact_type = 'dvr'
-  AND tenant_id = sqlc.arg(tenant_id)::uuid;
+  AND tenant_id = sqlc.arg(tenant_id)::uuid
+  AND federated_pointer = false;
 
 -- name: LatestPlayableDVRChapterID :one
 SELECT playback_id
@@ -179,7 +187,8 @@ FROM foghorn.artifacts a
 JOIN foghorn.vod_metadata m ON m.artifact_hash = a.artifact_hash
 WHERE a.artifact_hash = sqlc.arg(artifact_hash)
   AND a.artifact_type = 'vod'
-  AND a.tenant_id = sqlc.arg(tenant_id)::uuid;
+  AND a.tenant_id = sqlc.arg(tenant_id)::uuid
+  AND a.federated_pointer = false;
 
 -- name: InsertUploadingVodArtifact :exec
 INSERT INTO foghorn.artifacts (
@@ -321,7 +330,8 @@ FROM foghorn.artifacts a
 LEFT JOIN foghorn.vod_metadata v ON a.artifact_hash = v.artifact_hash
 WHERE a.artifact_hash = sqlc.arg(artifact_hash)
   AND a.artifact_type = 'vod'
-  AND a.tenant_id = sqlc.arg(tenant_id)::uuid;
+  AND a.tenant_id = sqlc.arg(tenant_id)::uuid
+  AND a.federated_pointer = false;
 
 -- name: SoftDeleteVodArtifact :execrows
 UPDATE foghorn.artifacts
@@ -329,6 +339,7 @@ SET status = 'deleted', sync_request_id = NULL, sync_node_id = NULL, updated_at 
 WHERE artifact_hash = sqlc.arg(artifact_hash)
   AND artifact_type = 'vod'
   AND tenant_id = sqlc.arg(tenant_id)::uuid
+  AND federated_pointer = false
   AND status != 'deleted';
 
 -- name: ListArtifactNodeIDs :many
@@ -388,4 +399,5 @@ ORDER BY component;
 SELECT COALESCE(SUM(size_bytes), 0)::bigint AS total_bytes
 FROM foghorn.artifacts
 WHERE tenant_id = sqlc.arg(tenant_id)::uuid
+  AND federated_pointer = false
   AND status NOT IN ('failed', 'expired', 'deleted', 'aborted');

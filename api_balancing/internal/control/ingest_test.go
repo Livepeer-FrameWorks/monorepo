@@ -173,7 +173,7 @@ func newIngestDeps(lat, lon float64, _ string) *IngestDependencies {
 func healthyPeers(clusterIDs ...string) []*clusterpeerpb.TenantClusterPeer {
 	peers := make([]*clusterpeerpb.TenantClusterPeer, 0, len(clusterIDs))
 	for _, id := range clusterIDs {
-		peers = append(peers, &clusterpeerpb.TenantClusterPeer{ClusterId: id, HealthStatus: "healthy"})
+		peers = append(peers, &clusterpeerpb.TenantClusterPeer{ClusterId: id, ClusterType: "edge", HealthStatus: "healthy"})
 	}
 	return peers
 }
@@ -564,11 +564,25 @@ func TestResolveIngestEndpoints_RejectsUnhealthyPeerInEnvelope(t *testing.T) {
 	streamCtx := admittedCtx("tenant-a")
 	streamCtx.ClusterPeers = []*clusterpeerpb.TenantClusterPeer{{
 		ClusterId:    "peer-cluster",
+		ClusterType:  "edge",
 		HealthStatus: "degraded",
 	}}
 
 	if _, err := ResolveIngestEndpoints(context.Background(), newIngestDeps(52.0, 4.0, "cluster-a"), streamCtx, "sk"); err == nil {
 		t.Fatal("degraded entitled peer must not be offered")
+	}
+}
+
+func TestResolveIngestEndpoints_RejectsControlPlaneClusterInEnvelope(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	seedIngestNodeInCluster(t, sm, "central-node", "https://central.example.com", 52.0, 4.0, ingestOutputs("central.example.com"), "central-cluster")
+	streamCtx := admittedCtx("tenant-a")
+	streamCtx.ClusterPeers = []*clusterpeerpb.TenantClusterPeer{{
+		ClusterId: "central-cluster", ClusterType: "central", HealthStatus: "healthy",
+	}}
+
+	if _, err := ResolveIngestEndpoints(context.Background(), newIngestDeps(52.0, 4.0, "central-cluster"), streamCtx, "sk"); err == nil {
+		t.Fatal("control-plane cluster from a malformed routing envelope was offered for live ingest")
 	}
 }
 
@@ -655,6 +669,17 @@ func TestResolveIngestEndpoints_LiveClaimPinsToClaimingCluster(t *testing.T) {
 		if fb.GetClusterId() != "eu-media" {
 			t.Fatalf("fallback escaped the live claim: %q", fb.GetClusterId())
 		}
+	}
+}
+
+func TestIngestClusterAllowed_PinnedClusterSurvivesHealthEnvelopeFiltering(t *testing.T) {
+	claimed := "eu-media"
+	streamCtx := &commodorepb.ResolveStreamContextResponse{ActiveIngestClusterId: &claimed}
+	if !ingestClusterAllowed(streamCtx, claimed) {
+		t.Fatal("durably pinned cluster was rejected only because it was absent from the transient health envelope")
+	}
+	if ingestClusterAllowed(streamCtx, "other-media") {
+		t.Fatal("candidate escaped the durable ingest pin")
 	}
 }
 
