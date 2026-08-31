@@ -1,6 +1,7 @@
 package models
 
 import (
+	"strings"
 	"time"
 )
 
@@ -56,7 +57,13 @@ func IsValidNodeType(nt string) bool {
 // ClusterTypeCanBePreferred reports whether ct is eligible as a tenant's
 // preferred (primary) cluster. Only media-plane types qualify.
 func ClusterTypeCanBePreferred(ct string) bool {
-	return ct == ClusterTypeEdge
+	return strings.EqualFold(strings.TrimSpace(ct), ClusterTypeEdge)
+}
+
+// ClusterTypeCanOwnLiveIngest reports whether a cluster participates in the
+// media plane and may therefore hold a publisher's live-ingest claim.
+func ClusterTypeCanOwnLiveIngest(ct string) bool {
+	return strings.EqualFold(strings.TrimSpace(ct), ClusterTypeEdge)
 }
 
 // InfrastructureCluster represents a cluster in the infrastructure

@@ -802,8 +802,8 @@ type ClusterServiceClient interface {
 	// GetTenantEntitlement returns the cluster IDs a tenant is currently
 	// entitled to serve on (active + subscribed) plus the coarse plan class
 	// (the primary cluster's cluster_class). Service-token only. Owns the
-	// entitlement predicates on Quartermaster's side so Commodore can mint
-	// signed policy bundles without reading quartermaster.* directly.
+	// entitlement predicates on Quartermaster's side so Commodore can compile
+	// media authority without reading quartermaster.* directly.
 	GetTenantEntitlement(ctx context.Context, in *GetTenantEntitlementRequest, opts ...grpc.CallOption) (*GetTenantEntitlementResponse, error)
 	// Unsubscribe from a cluster
 	UnsubscribeFromCluster(ctx context.Context, in *UnsubscribeFromClusterRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
@@ -1316,8 +1316,8 @@ type ClusterServiceServer interface {
 	// GetTenantEntitlement returns the cluster IDs a tenant is currently
 	// entitled to serve on (active + subscribed) plus the coarse plan class
 	// (the primary cluster's cluster_class). Service-token only. Owns the
-	// entitlement predicates on Quartermaster's side so Commodore can mint
-	// signed policy bundles without reading quartermaster.* directly.
+	// entitlement predicates on Quartermaster's side so Commodore can compile
+	// media authority without reading quartermaster.* directly.
 	GetTenantEntitlement(context.Context, *GetTenantEntitlementRequest) (*GetTenantEntitlementResponse, error)
 	// Unsubscribe from a cluster
 	UnsubscribeFromCluster(context.Context, *UnsubscribeFromClusterRequest) (*emptypb.Empty, error)

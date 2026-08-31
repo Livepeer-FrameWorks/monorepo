@@ -204,6 +204,16 @@ func (c *Client) ReportConfigSeedApplyResult(ctx context.Context, req *dnspb.Rep
 	return resp, nil
 }
 
+// EnsureTenantAliasCluster installs an ordered positive tenant/cluster alias
+// authority decision.
+func (c *Client) EnsureTenantAliasCluster(ctx context.Context, req *dnspb.EnsureTenantAliasClusterRequest) (*dnspb.EnsureTenantAliasClusterResponse, error) {
+	resp, err := c.service.EnsureTenantAliasCluster(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to ensure tenant alias cluster: %w", err)
+	}
+	return resp, nil
+}
+
 // EnsureCustomDomain signals Navigator that a paying tenant is bringing
 // their own domain. Navigator persists the row, verifies CNAMEs, and
 // runs ACME-DNS-01 issuance asynchronously. Idempotent; the returned

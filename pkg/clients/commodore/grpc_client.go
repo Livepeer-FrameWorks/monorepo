@@ -149,6 +149,7 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		transport,
 		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
 		grpc.WithChainUnaryInterceptor(
+			clients.MediaRequestObserverInterceptor("commodore"),
 			timeoutInterceptor(config.Timeout),
 			authInterceptor(config.ServiceToken),
 			clients.FailsafeUnaryInterceptor("commodore", config.Logger),
@@ -208,6 +209,25 @@ func buildValidateStreamKeyCacheKey(streamKey, clusterID string) string {
 // ============================================================================
 // INTERNAL SERVICE OPERATIONS (Foghorn, Sidecar → Commodore)
 // ============================================================================
+
+// RequestMediaAuthorityRefresh hands one durable source outbox event to
+// Commodore. Accepted=false is an idempotent duplicate and remains success.
+func (c *GRPCClient) RequestMediaAuthorityRefresh(ctx context.Context, sourceService, sourceEventID, tenantID, reason string) (*commodorepb.RequestMediaAuthorityRefreshResponse, error) {
+	return c.internal.RequestMediaAuthorityRefresh(ctx, &commodorepb.RequestMediaAuthorityRefreshRequest{
+		SourceService: sourceService,
+		SourceEventId: sourceEventID,
+		TenantId:      tenantID,
+		Reason:        reason,
+	})
+}
+
+// RequestMediaAuthorityReplay asks Commodore to redeliver every current
+// authority assigned to the control cell. Foghorn calls this after its
+// listener is available, so an acknowledged-but-restored cell cannot remain
+// silently empty until a business-policy mutation creates a new version.
+func (c *GRPCClient) RequestMediaAuthorityReplay(ctx context.Context, controlCellID string) (*commodorepb.RequestMediaAuthorityReplayResponse, error) {
+	return c.internal.RequestMediaAuthorityReplay(ctx, &commodorepb.RequestMediaAuthorityReplayRequest{ControlCellId: controlCellID})
+}
 
 // ValidateStreamKey checks a stream key and takes NO placement claim — the
 // GraphQL and MCP key checks, which only ask whether a key is usable.
@@ -1337,17 +1357,6 @@ func (c *GRPCClient) ResolvePlaybackPolicyByInternalName(ctx context.Context, in
 	return c.internal.ResolvePlaybackPolicy(ctx, &commodorepb.ResolvePlaybackPolicyRequest{
 		InternalName:         internalName,
 		IncludeWebhookSecret: true,
-	})
-}
-
-// GetSignedPolicyBundle fetches a freshly minted signed policy bundle for a
-// (tenant_id, stream_id) pair. Foghorn caches the returned bundle with the
-// soft/hard TTLs encoded in the response; revocation arrives separately via
-// playback_policy_invalidation_outbox 'bundle_revoke' entries.
-func (c *GRPCClient) GetSignedPolicyBundle(ctx context.Context, tenantID, streamID string) (*commodorepb.GetSignedPolicyBundleResponse, error) {
-	return c.internal.GetSignedPolicyBundle(ctx, &commodorepb.GetSignedPolicyBundleRequest{
-		TenantId: tenantID,
-		StreamId: streamID,
 	})
 }
 

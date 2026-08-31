@@ -19,6 +19,7 @@ var valueProtos = map[string]bool{
 	"cluster_peer":      true,
 	"tenant_limits":     true,
 	"metering_contract": true,
+	"media_authority":   true,
 	"x402":              true,
 	"foghorn_control":   true,
 }

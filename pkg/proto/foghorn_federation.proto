@@ -128,7 +128,7 @@ message PrepareArtifactRequest {
   string artifact_id = 1;       // Artifact hash (clip/vod/chapter VOD)
   string clip_hash = 2;         // Clip hash fallback alias
   string requesting_cluster = 3;
-  string artifact_type = 4;     // "clip" or "vod"; parent DVR artifacts are rejected (use the chapter VOD's artifact_hash)
+  string artifact_type = 4;     // "clip", "vod", or public "chapter" (canonical VOD bytes); parent DVR artifacts are rejected
   string tenant_id = 5;
   reserved 6, 7;                // retired dvr_start_ms / dvr_end_ms (chapter-range prototype; chapter playback now goes through the chapter VOD's playback_id)
   reserved "dvr_start_ms", "dvr_end_ms";
@@ -541,17 +541,18 @@ message DeleteStorageObjectsRequest {
 
   string artifact_hash = 4;
 
-  // artifact_type is one of "clip", "dvr", "vod".
+  // artifact_type is one of "clip", "dvr", "vod", "thumbnail".
   string artifact_type = 5;
 
   // Caller-resolved deletion target. Exactly one must be set.
   //   s3_key:    exact object key (clip, vod). Callee calls Delete(key).
-  //   s3_prefix: prefix to recursively delete (dvr). Callee calls
+  //   s3_prefix: prefix to recursively delete (dvr, thumbnail). Callee calls
   //              DeletePrefix(prefix).
   // Callee validates that the supplied target starts with the expected
-  // per-tenant prefix for the artifact_type
-  // (clips/<tenant>/..., dvr/<tenant>/..., vod/<tenant>/...) before
-  // deleting; mismatch → reason="invalid_target_shape".
+  // per-tenant prefix for clip/dvr/vod, or exactly
+  // thumbnails/<artifact_hash>/ for thumbnail, before deleting. Thumbnail
+  // tenant ownership is bound through the callee's local artifact row;
+  // mismatch → reason="invalid_target_shape" or "tenant_mismatch".
   oneof target {
     string s3_key    = 6;
     string s3_prefix = 7;
@@ -562,13 +563,12 @@ message DeleteStorageObjectsResponse {
   bool accepted = 1;
 
   // Populated when accepted = false. One of:
-  //   tenant_mismatch          — caller tenant != row tenant on callee
-  //                              (when callee row exists).
+  //   tenant_mismatch          — caller tenant != row tenant on callee,
+  //                              or the required thumbnail row is absent.
   //   storage_not_owned_here   — target_cluster_id mismatch or
   //                              bucket-tuple mismatch.
   //   invalid_target_shape     — supplied key/prefix doesn't match the
-  //                              expected per-tenant prefix for the
-  //                              artifact_type.
+  //                              expected artifact-bound shape.
   //   unsupported_artifact_type
   //   missing_target           — neither s3_key nor s3_prefix set, or
   //                              wrong oneof case for the artifact_type

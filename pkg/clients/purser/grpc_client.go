@@ -115,6 +115,7 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		transport,
 		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
 		grpc.WithChainUnaryInterceptor(
+			clients.MediaRequestObserverInterceptor("purser"),
 			authInterceptor(config.ServiceToken),
 			clients.FailsafeUnaryInterceptor("purser", config.Logger),
 		),

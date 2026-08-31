@@ -5,6 +5,7 @@ package cluster_peer;
 option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer;clusterpeerpb";
 
 import "google/protobuf/timestamp.proto";
+import "tenant_limits.proto";
 
 enum TenantClusterAccessSource {
   TENANT_CLUSTER_ACCESS_SOURCE_UNSPECIFIED = 0;
@@ -23,7 +24,7 @@ message TenantClusterPeer {
   string base_url = 3;          // e.g., "frameworks.cloud"
   string cluster_name = 4;      // Human label for UX
   string role = 5;              // "preferred", "official", "subscribed"
-  string cluster_type = 6;      // "shared-community", "shared-lb", "dedicated", "self-hosted"
+  string cluster_type = 6;      // infrastructure plane: "central" or "edge"
   string foghorn_grpc_addr = 7; // Resolved Foghorn gRPC address (host:port) from service_instances
   string s3_bucket = 20;        // Cluster S3 bucket (for cross-cluster artifact affinity)
   string s3_endpoint = 21;      // S3 endpoint URL
@@ -51,4 +52,13 @@ message TenantClusterPeer {
   string subscription_status = 38;
   TenantClusterAccessSource access_source = 39;
   optional google.protobuf.Timestamp access_expires_at = 40;
+  // Foghorn HA/database cell that controls this virtual cluster. Authority
+  // delivery targets this cell, not cluster_id.
+  string control_cell_id = 41;
+  // Foghorn cells permitted to serve content for this cluster. The control
+  // cell is the default single entry; multi-cell serving is explicit.
+  repeated string eligible_serving_cell_ids = 42;
+  // Access-specific runtime cap override for this tenant/cluster pair.
+  tenant_limits.TenantResourceLimits resource_limits = 43;
+  bool allow_private_pull_sources = 44;
 }

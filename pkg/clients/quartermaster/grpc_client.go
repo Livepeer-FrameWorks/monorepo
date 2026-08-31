@@ -126,6 +126,7 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		transport,
 		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
 		grpc.WithChainUnaryInterceptor(
+			clients.MediaRequestObserverInterceptor("quartermaster"),
 			authInterceptor(config.ServiceToken, config.PreferServiceToken),
 			clients.FailsafeUnaryInterceptor("quartermaster", config.Logger),
 		),
@@ -247,7 +248,7 @@ func (c *GRPCClient) ListTenantClusterAccess(ctx context.Context, tenantID strin
 
 // GetTenantEntitlement returns the tenant's active+subscribed cluster IDs and
 // coarse plan class. Service-token only; owns the entitlement predicates so
-// Commodore can mint signed policy bundles without reading quartermaster.*.
+// Commodore can compile media authority without reading quartermaster.*.
 func (c *GRPCClient) GetTenantEntitlement(ctx context.Context, tenantID string) (*quartermasterpb.GetTenantEntitlementResponse, error) {
 	return c.cluster.GetTenantEntitlement(ctx, &quartermasterpb.GetTenantEntitlementRequest{
 		TenantId: tenantID,

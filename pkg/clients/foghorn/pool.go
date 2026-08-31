@@ -99,14 +99,15 @@ func (p *FoghornPool) GetOrCreate(clusterID, addr string) (*GRPCClient, error) {
 	}
 
 	client, err := NewGRPCClient(GRPCConfig{
-		GRPCAddr:      addr,
-		Timeout:       p.config.Timeout,
-		Logger:        p.logger,
-		ServiceToken:  p.config.ServiceToken,
-		UseTLS:        p.config.UseTLS,
-		CACertFile:    p.caCertFile(addr),
-		ServerName:    p.serverName(addr),
-		AllowInsecure: p.config.AllowInsecure,
+		GRPCAddr:           addr,
+		Timeout:            p.config.Timeout,
+		Logger:             p.logger,
+		ServiceToken:       p.config.ServiceToken,
+		CircuitBreakerName: "foghorn-cell-" + clusterID,
+		UseTLS:             p.config.UseTLS,
+		CACertFile:         p.caCertFile(addr),
+		ServerName:         p.serverName(addr),
+		AllowInsecure:      p.config.AllowInsecure,
 	})
 	if err != nil {
 		return nil, err

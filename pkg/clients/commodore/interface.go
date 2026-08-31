@@ -126,7 +126,6 @@ type Interface interface {
 	ResolvePlaybackPolicy(ctx context.Context, playbackID string) (*commodorepb.ResolvePlaybackPolicyResponse, error)
 	ResolvePlaybackPolicyForEnforcement(ctx context.Context, playbackID string) (*commodorepb.ResolvePlaybackPolicyResponse, error)
 	ResolvePlaybackPolicyByInternalName(ctx context.Context, internalName string) (*commodorepb.ResolvePlaybackPolicyResponse, error)
-	GetSignedPolicyBundle(ctx context.Context, tenantID, streamID string) (*commodorepb.GetSignedPolicyBundleResponse, error)
 	RecordSigningKeyUse(ctx context.Context, tenantID, kid string) error
 }
 

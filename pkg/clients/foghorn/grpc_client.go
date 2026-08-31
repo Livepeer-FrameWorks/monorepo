@@ -13,6 +13,7 @@ import (
 	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	foghornrelaypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_relay"
+	mediaauthoritypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
 	"google.golang.org/grpc"
@@ -23,17 +24,18 @@ const InternalServerName = "foghorn.internal"
 
 // GRPCClient is the gRPC client for Foghorn control plane services
 type GRPCClient struct {
-	conn     *grpc.ClientConn
-	clip     foghornpb.ClipControlServiceClient
-	dvr      foghornpb.DVRControlServiceClient
-	viewer   foghornpb.ViewerControlServiceClient
-	vod      foghornpb.VodControlServiceClient
-	tenant   foghornpb.TenantControlServiceClient
-	edge     foghornpb.EdgeProvisioningServiceClient
-	nodeMgmt foghornpb.NodeControlServiceClient
-	relay    foghornrelaypb.FoghornRelayClient
-	logger   logging.Logger
-	timeout  time.Duration
+	conn      *grpc.ClientConn
+	clip      foghornpb.ClipControlServiceClient
+	dvr       foghornpb.DVRControlServiceClient
+	viewer    foghornpb.ViewerControlServiceClient
+	vod       foghornpb.VodControlServiceClient
+	tenant    foghornpb.TenantControlServiceClient
+	authority foghornpb.MediaAuthorityControlServiceClient
+	edge      foghornpb.EdgeProvisioningServiceClient
+	nodeMgmt  foghornpb.NodeControlServiceClient
+	relay     foghornrelaypb.FoghornRelayClient
+	logger    logging.Logger
+	timeout   time.Duration
 }
 
 // GRPCConfig represents the configuration for the Foghorn gRPC client
@@ -46,6 +48,9 @@ type GRPCConfig struct {
 	Logger logging.Logger
 	// ServiceToken for service-to-service authentication.
 	ServiceToken string
+	// CircuitBreakerName identifies this destination in breaker metrics. Pooled
+	// cross-cell clients set a stable cell-specific value.
+	CircuitBreakerName string
 	// UseTLS enables TLS transport. Uses system CA pool for validation.
 	UseTLS     bool
 	CACertFile string
@@ -128,6 +133,10 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 	if err != nil {
 		return nil, fmt.Errorf("configure Foghorn gRPC TLS: %w", err)
 	}
+	breakerName := config.CircuitBreakerName
+	if breakerName == "" {
+		breakerName = "foghorn"
+	}
 
 	// Connect to gRPC server with auth interceptor for user context and service token fallback
 	conn, err := grpc.NewClient(
@@ -136,11 +145,17 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
 		grpc.WithChainUnaryInterceptor(
 			authInterceptor(config.ServiceToken),
-			clients.FailsafeUnaryInterceptor("foghorn", config.Logger),
+			clients.FailsafeUnaryInterceptorWithMethodIsolation(
+				breakerName,
+				map[string]string{
+					foghornpb.MediaAuthorityControlService_ApplyMediaAuthority_FullMethodName: breakerName + "-media-authority",
+				},
+				config.Logger,
+			),
 		),
 		grpc.WithChainStreamInterceptor(
 			streamAuthInterceptor(config.ServiceToken),
-			clients.FailsafeStreamInterceptor("foghorn", config.Logger),
+			clients.FailsafeStreamInterceptor(breakerName, config.Logger),
 		),
 	)
 	if err != nil {
@@ -148,18 +163,27 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 	}
 
 	return &GRPCClient{
-		conn:     conn,
-		clip:     foghornpb.NewClipControlServiceClient(conn),
-		dvr:      foghornpb.NewDVRControlServiceClient(conn),
-		viewer:   foghornpb.NewViewerControlServiceClient(conn),
-		vod:      foghornpb.NewVodControlServiceClient(conn),
-		tenant:   foghornpb.NewTenantControlServiceClient(conn),
-		edge:     foghornpb.NewEdgeProvisioningServiceClient(conn),
-		nodeMgmt: foghornpb.NewNodeControlServiceClient(conn),
-		relay:    foghornrelaypb.NewFoghornRelayClient(conn),
-		logger:   config.Logger,
-		timeout:  config.Timeout,
+		conn:      conn,
+		clip:      foghornpb.NewClipControlServiceClient(conn),
+		dvr:       foghornpb.NewDVRControlServiceClient(conn),
+		viewer:    foghornpb.NewViewerControlServiceClient(conn),
+		vod:       foghornpb.NewVodControlServiceClient(conn),
+		tenant:    foghornpb.NewTenantControlServiceClient(conn),
+		authority: foghornpb.NewMediaAuthorityControlServiceClient(conn),
+		edge:      foghornpb.NewEdgeProvisioningServiceClient(conn),
+		nodeMgmt:  foghornpb.NewNodeControlServiceClient(conn),
+		relay:     foghornrelaypb.NewFoghornRelayClient(conn),
+		logger:    config.Logger,
+		timeout:   config.Timeout,
 	}, nil
+}
+
+// ApplyMediaAuthority delivers one signed, cell-bound authority to Foghorn's
+// durable local store. Duplicate versions are successful acknowledgements.
+func (c *GRPCClient) ApplyMediaAuthority(ctx context.Context, authority *mediaauthoritypb.SignedAuthorityEnvelope) (*foghornpb.ApplyMediaAuthorityResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	return c.authority.ApplyMediaAuthority(ctx, &foghornpb.ApplyMediaAuthorityRequest{Authority: authority})
 }
 
 func foghornClientTLSConfig(config GRPCConfig) grpcutil.ClientTLSConfig {
@@ -454,11 +478,9 @@ func (c *GRPCClient) InvalidatePlaybackAuth(ctx context.Context, tenantID, reaso
 	return c.InvalidatePlaybackAuthWithBundle(ctx, tenantID, reason, internalNames, "", 0)
 }
 
-// InvalidatePlaybackAuthWithBundle extends InvalidatePlaybackAuth by
-// forwarding stream_id + bundle_min_version so Foghorn can bump its
-// policy-bundle cache watermark on bundle_revoke entries. When streamID
-// is empty + bundleMinVersion is 0, the call is equivalent to
-// InvalidatePlaybackAuth.
+// InvalidatePlaybackAuthWithBundle retains the legacy stream/version fields
+// on the wire. Foghorn's active behavior is session invalidation; signed media
+// authority replacements and tombstones own policy convergence.
 func (c *GRPCClient) InvalidatePlaybackAuthWithBundle(ctx context.Context, tenantID, reason string, internalNames []string, streamID string, bundleMinVersion int64) (*foghornpb.InvalidatePlaybackAuthResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()

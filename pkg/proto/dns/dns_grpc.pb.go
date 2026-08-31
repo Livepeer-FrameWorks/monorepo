@@ -29,6 +29,7 @@ const (
 	NavigatorService_RemoveTenantAlias_FullMethodName           = "/navigator.NavigatorService/RemoveTenantAlias"
 	NavigatorService_GetTenantAliasStatus_FullMethodName        = "/navigator.NavigatorService/GetTenantAliasStatus"
 	NavigatorService_ReportConfigSeedApplyResult_FullMethodName = "/navigator.NavigatorService/ReportConfigSeedApplyResult"
+	NavigatorService_EnsureTenantAliasCluster_FullMethodName    = "/navigator.NavigatorService/EnsureTenantAliasCluster"
 	NavigatorService_RemoveTenantAliasCluster_FullMethodName    = "/navigator.NavigatorService/RemoveTenantAliasCluster"
 	NavigatorService_RemoveTenantAliasSubdomain_FullMethodName  = "/navigator.NavigatorService/RemoveTenantAliasSubdomain"
 	NavigatorService_EnsureCustomDomain_FullMethodName          = "/navigator.NavigatorService/EnsureCustomDomain"
@@ -73,6 +74,9 @@ type NavigatorServiceClient interface {
 	// as observed by Foghorn. Navigator owns durable per-edge cert readiness
 	// because DNS membership is derived from it.
 	ReportConfigSeedApplyResult(ctx context.Context, in *ReportConfigSeedApplyResultRequest, opts ...grpc.CallOption) (*ReportConfigSeedApplyResultResponse, error)
+	// EnsureTenantAliasCluster installs Quartermaster's ordered positive
+	// tenant/cluster authority. ConfigSeed ACKs cannot create this authority.
+	EnsureTenantAliasCluster(ctx context.Context, in *EnsureTenantAliasClusterRequest, opts ...grpc.CallOption) (*EnsureTenantAliasClusterResponse, error)
 	// RemoveTenantAliasCluster removes one cluster's edges from a tenant
 	// alias DNS pool before Foghorn drops that tenant's cert from future
 	// ConfigSeeds.
@@ -206,6 +210,16 @@ func (c *navigatorServiceClient) ReportConfigSeedApplyResult(ctx context.Context
 	return out, nil
 }
 
+func (c *navigatorServiceClient) EnsureTenantAliasCluster(ctx context.Context, in *EnsureTenantAliasClusterRequest, opts ...grpc.CallOption) (*EnsureTenantAliasClusterResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EnsureTenantAliasClusterResponse)
+	err := c.cc.Invoke(ctx, NavigatorService_EnsureTenantAliasCluster_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *navigatorServiceClient) RemoveTenantAliasCluster(ctx context.Context, in *RemoveTenantAliasClusterRequest, opts ...grpc.CallOption) (*RemoveTenantAliasClusterResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RemoveTenantAliasClusterResponse)
@@ -293,6 +307,9 @@ type NavigatorServiceServer interface {
 	// as observed by Foghorn. Navigator owns durable per-edge cert readiness
 	// because DNS membership is derived from it.
 	ReportConfigSeedApplyResult(context.Context, *ReportConfigSeedApplyResultRequest) (*ReportConfigSeedApplyResultResponse, error)
+	// EnsureTenantAliasCluster installs Quartermaster's ordered positive
+	// tenant/cluster authority. ConfigSeed ACKs cannot create this authority.
+	EnsureTenantAliasCluster(context.Context, *EnsureTenantAliasClusterRequest) (*EnsureTenantAliasClusterResponse, error)
 	// RemoveTenantAliasCluster removes one cluster's edges from a tenant
 	// alias DNS pool before Foghorn drops that tenant's cert from future
 	// ConfigSeeds.
@@ -355,6 +372,9 @@ func (UnimplementedNavigatorServiceServer) GetTenantAliasStatus(context.Context,
 }
 func (UnimplementedNavigatorServiceServer) ReportConfigSeedApplyResult(context.Context, *ReportConfigSeedApplyResultRequest) (*ReportConfigSeedApplyResultResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReportConfigSeedApplyResult not implemented")
+}
+func (UnimplementedNavigatorServiceServer) EnsureTenantAliasCluster(context.Context, *EnsureTenantAliasClusterRequest) (*EnsureTenantAliasClusterResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method EnsureTenantAliasCluster not implemented")
 }
 func (UnimplementedNavigatorServiceServer) RemoveTenantAliasCluster(context.Context, *RemoveTenantAliasClusterRequest) (*RemoveTenantAliasClusterResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RemoveTenantAliasCluster not implemented")
@@ -572,6 +592,24 @@ func _NavigatorService_ReportConfigSeedApplyResult_Handler(srv interface{}, ctx 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _NavigatorService_EnsureTenantAliasCluster_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EnsureTenantAliasClusterRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(NavigatorServiceServer).EnsureTenantAliasCluster(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: NavigatorService_EnsureTenantAliasCluster_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(NavigatorServiceServer).EnsureTenantAliasCluster(ctx, req.(*EnsureTenantAliasClusterRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _NavigatorService_RemoveTenantAliasCluster_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RemoveTenantAliasClusterRequest)
 	if err := dec(in); err != nil {
@@ -708,6 +746,10 @@ var NavigatorService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ReportConfigSeedApplyResult",
 			Handler:    _NavigatorService_ReportConfigSeedApplyResult_Handler,
+		},
+		{
+			MethodName: "EnsureTenantAliasCluster",
+			Handler:    _NavigatorService_EnsureTenantAliasCluster_Handler,
 		},
 		{
 			MethodName: "RemoveTenantAliasCluster",

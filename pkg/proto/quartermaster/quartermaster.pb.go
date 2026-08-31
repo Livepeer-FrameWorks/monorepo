@@ -192,6 +192,58 @@ func (ClusterSubscriptionStatus) EnumDescriptor() ([]byte, []int) {
 	return file_quartermaster_proto_rawDescGZIP(), []int{2}
 }
 
+type NodeFingerprintMatchSource int32
+
+const (
+	NodeFingerprintMatchSource_NODE_FINGERPRINT_MATCH_SOURCE_UNSPECIFIED NodeFingerprintMatchSource = 0
+	NodeFingerprintMatchSource_NODE_FINGERPRINT_MATCH_SOURCE_MACHINE_ID  NodeFingerprintMatchSource = 1
+	NodeFingerprintMatchSource_NODE_FINGERPRINT_MATCH_SOURCE_MACS        NodeFingerprintMatchSource = 2
+	NodeFingerprintMatchSource_NODE_FINGERPRINT_MATCH_SOURCE_PEER_IP     NodeFingerprintMatchSource = 3
+)
+
+// Enum value maps for NodeFingerprintMatchSource.
+var (
+	NodeFingerprintMatchSource_name = map[int32]string{
+		0: "NODE_FINGERPRINT_MATCH_SOURCE_UNSPECIFIED",
+		1: "NODE_FINGERPRINT_MATCH_SOURCE_MACHINE_ID",
+		2: "NODE_FINGERPRINT_MATCH_SOURCE_MACS",
+		3: "NODE_FINGERPRINT_MATCH_SOURCE_PEER_IP",
+	}
+	NodeFingerprintMatchSource_value = map[string]int32{
+		"NODE_FINGERPRINT_MATCH_SOURCE_UNSPECIFIED": 0,
+		"NODE_FINGERPRINT_MATCH_SOURCE_MACHINE_ID":  1,
+		"NODE_FINGERPRINT_MATCH_SOURCE_MACS":        2,
+		"NODE_FINGERPRINT_MATCH_SOURCE_PEER_IP":     3,
+	}
+)
+
+func (x NodeFingerprintMatchSource) Enum() *NodeFingerprintMatchSource {
+	p := new(NodeFingerprintMatchSource)
+	*p = x
+	return p
+}
+
+func (x NodeFingerprintMatchSource) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (NodeFingerprintMatchSource) Descriptor() protoreflect.EnumDescriptor {
+	return file_quartermaster_proto_enumTypes[3].Descriptor()
+}
+
+func (NodeFingerprintMatchSource) Type() protoreflect.EnumType {
+	return &file_quartermaster_proto_enumTypes[3]
+}
+
+func (x NodeFingerprintMatchSource) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use NodeFingerprintMatchSource.Descriptor instead.
+func (NodeFingerprintMatchSource) EnumDescriptor() ([]byte, []int) {
+	return file_quartermaster_proto_rawDescGZIP(), []int{3}
+}
+
 // SetNodeEnrollmentOriginRequest flips a node's enrollment_origin. Used by
 // `frameworks mesh reconcile` (runtime_enrolled → adopted_local) and after
 // a successful `mesh wg rotate` on an adopted node (adopted_local →
@@ -1687,8 +1739,8 @@ type AliasedTenantRef struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	TenantId string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	// The tenant's subdomain label inside the platform tenant zone
-	// (cdn.{root}). Used by Foghorn when composing per-tenant bundle
-	// site_addresses in ConfigSeed.
+	// (cdn.{root}). Navigator owns certificate/SAN serving authority; Foghorn
+	// uses this value only as Quartermaster's current alias intent metadata.
 	Subdomain     string `protobuf:"bytes,2,opt,name=subdomain,proto3" json:"subdomain,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -7383,14 +7435,15 @@ func (x *ClusterReleaseTargetResponse) GetTarget() *ClusterReleaseTarget {
 
 // Matches pkg/api/quartermaster/types.go:ResolveNodeFingerprintRequest (lines 180-190)
 type ResolveNodeFingerprintRequest struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	PeerIp          string                 `protobuf:"bytes,1,opt,name=peer_ip,json=peerIp,proto3" json:"peer_ip,omitempty"`                                    // json:"peer_ip"
-	LocalIpv4       []string               `protobuf:"bytes,2,rep,name=local_ipv4,json=localIpv4,proto3" json:"local_ipv4,omitempty"`                           // json:"local_ipv4,omitempty"
-	LocalIpv6       []string               `protobuf:"bytes,3,rep,name=local_ipv6,json=localIpv6,proto3" json:"local_ipv6,omitempty"`                           // json:"local_ipv6,omitempty"
-	MacsSha256      *string                `protobuf:"bytes,4,opt,name=macs_sha256,json=macsSha256,proto3,oneof" json:"macs_sha256,omitempty"`                  // json:"macs_sha256,omitempty"
-	MachineIdSha256 *string                `protobuf:"bytes,5,opt,name=machine_id_sha256,json=machineIdSha256,proto3,oneof" json:"machine_id_sha256,omitempty"` // json:"machine_id_sha256,omitempty"
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state                        protoimpl.MessageState `protogen:"open.v1"`
+	PeerIp                       string                 `protobuf:"bytes,1,opt,name=peer_ip,json=peerIp,proto3" json:"peer_ip,omitempty"`                                    // json:"peer_ip"
+	LocalIpv4                    []string               `protobuf:"bytes,2,rep,name=local_ipv4,json=localIpv4,proto3" json:"local_ipv4,omitempty"`                           // json:"local_ipv4,omitempty"
+	LocalIpv6                    []string               `protobuf:"bytes,3,rep,name=local_ipv6,json=localIpv6,proto3" json:"local_ipv6,omitempty"`                           // json:"local_ipv6,omitempty"
+	MacsSha256                   *string                `protobuf:"bytes,4,opt,name=macs_sha256,json=macsSha256,proto3,oneof" json:"macs_sha256,omitempty"`                  // json:"macs_sha256,omitempty"
+	MachineIdSha256              *string                `protobuf:"bytes,5,opt,name=machine_id_sha256,json=machineIdSha256,proto3,oneof" json:"machine_id_sha256,omitempty"` // json:"machine_id_sha256,omitempty"
+	NodeIdentityPublicKeyEd25519 []byte                 `protobuf:"bytes,6,opt,name=node_identity_public_key_ed25519,json=nodeIdentityPublicKeyEd25519,proto3" json:"node_identity_public_key_ed25519,omitempty"`
+	unknownFields                protoimpl.UnknownFields
+	sizeCache                    protoimpl.SizeCache
 }
 
 func (x *ResolveNodeFingerprintRequest) Reset() {
@@ -7458,13 +7511,22 @@ func (x *ResolveNodeFingerprintRequest) GetMachineIdSha256() string {
 	return ""
 }
 
+func (x *ResolveNodeFingerprintRequest) GetNodeIdentityPublicKeyEd25519() []byte {
+	if x != nil {
+		return x.NodeIdentityPublicKeyEd25519
+	}
+	return nil
+}
+
 // Matches pkg/api/quartermaster/types.go:ResolveNodeFingerprintResponse (lines 192-195)
 type ResolveNodeFingerprintResponse struct {
-	state           protoimpl.MessageState `protogen:"open.v1"`
-	TenantId        string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                        // json:"tenant_id"
-	CanonicalNodeId string                 `protobuf:"bytes,2,opt,name=canonical_node_id,json=canonicalNodeId,proto3" json:"canonical_node_id,omitempty"` // json:"canonical_node_id"
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state                        protoimpl.MessageState     `protogen:"open.v1"`
+	TenantId                     string                     `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                        // json:"tenant_id"
+	CanonicalNodeId              string                     `protobuf:"bytes,2,opt,name=canonical_node_id,json=canonicalNodeId,proto3" json:"canonical_node_id,omitempty"` // json:"canonical_node_id"
+	MatchSource                  NodeFingerprintMatchSource `protobuf:"varint,3,opt,name=match_source,json=matchSource,proto3,enum=quartermaster.NodeFingerprintMatchSource" json:"match_source,omitempty"`
+	NodeIdentityPublicKeyEd25519 []byte                     `protobuf:"bytes,4,opt,name=node_identity_public_key_ed25519,json=nodeIdentityPublicKeyEd25519,proto3" json:"node_identity_public_key_ed25519,omitempty"`
+	unknownFields                protoimpl.UnknownFields
+	sizeCache                    protoimpl.SizeCache
 }
 
 func (x *ResolveNodeFingerprintResponse) Reset() {
@@ -7509,6 +7571,20 @@ func (x *ResolveNodeFingerprintResponse) GetCanonicalNodeId() string {
 		return x.CanonicalNodeId
 	}
 	return ""
+}
+
+func (x *ResolveNodeFingerprintResponse) GetMatchSource() NodeFingerprintMatchSource {
+	if x != nil {
+		return x.MatchSource
+	}
+	return NodeFingerprintMatchSource_NODE_FINGERPRINT_MATCH_SOURCE_UNSPECIFIED
+}
+
+func (x *ResolveNodeFingerprintResponse) GetNodeIdentityPublicKeyEd25519() []byte {
+	if x != nil {
+		return x.NodeIdentityPublicKeyEd25519
+	}
+	return nil
 }
 
 type GetNodeOwnerRequest struct {
@@ -7962,19 +8038,23 @@ func (x *NodeOwnerResponse) GetFoghornGrpcAddr() string {
 
 // Matches pkg/api/quartermaster/types.go:BootstrapEdgeNodeRequest (lines 235-245)
 type BootstrapEdgeNodeRequest struct {
-	state            protoimpl.MessageState `protogen:"open.v1"`
-	Token            string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`                                                    // json:"token" required
-	Hostname         string                 `protobuf:"bytes,2,opt,name=hostname,proto3" json:"hostname,omitempty"`                                              // json:"hostname"
-	Ips              []string               `protobuf:"bytes,3,rep,name=ips,proto3" json:"ips,omitempty"`                                                        // json:"ips,omitempty"
-	Labels           *structpb.Struct       `protobuf:"bytes,4,opt,name=labels,proto3" json:"labels,omitempty"`                                                  // json:"labels,omitempty"
-	LocalIpv4        []string               `protobuf:"bytes,5,rep,name=local_ipv4,json=localIpv4,proto3" json:"local_ipv4,omitempty"`                           // json:"local_ipv4,omitempty"
-	LocalIpv6        []string               `protobuf:"bytes,6,rep,name=local_ipv6,json=localIpv6,proto3" json:"local_ipv6,omitempty"`                           // json:"local_ipv6,omitempty"
-	MacsSha256       *string                `protobuf:"bytes,7,opt,name=macs_sha256,json=macsSha256,proto3,oneof" json:"macs_sha256,omitempty"`                  // json:"macs_sha256,omitempty"
-	MachineIdSha256  *string                `protobuf:"bytes,8,opt,name=machine_id_sha256,json=machineIdSha256,proto3,oneof" json:"machine_id_sha256,omitempty"` // json:"machine_id_sha256,omitempty"
-	TargetClusterId  *string                `protobuf:"bytes,9,opt,name=target_cluster_id,json=targetClusterId,proto3,oneof" json:"target_cluster_id,omitempty"` // Preferred cluster for unbound tokens
-	ServedClusterIds []string               `protobuf:"bytes,10,rep,name=served_cluster_ids,json=servedClusterIds,proto3" json:"served_cluster_ids,omitempty"`   // Clusters this caller serves; token binding validated against this set
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	state                        protoimpl.MessageState `protogen:"open.v1"`
+	Token                        string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`                                                    // json:"token" required
+	Hostname                     string                 `protobuf:"bytes,2,opt,name=hostname,proto3" json:"hostname,omitempty"`                                              // json:"hostname"
+	Ips                          []string               `protobuf:"bytes,3,rep,name=ips,proto3" json:"ips,omitempty"`                                                        // json:"ips,omitempty"
+	Labels                       *structpb.Struct       `protobuf:"bytes,4,opt,name=labels,proto3" json:"labels,omitempty"`                                                  // json:"labels,omitempty"
+	LocalIpv4                    []string               `protobuf:"bytes,5,rep,name=local_ipv4,json=localIpv4,proto3" json:"local_ipv4,omitempty"`                           // json:"local_ipv4,omitempty"
+	LocalIpv6                    []string               `protobuf:"bytes,6,rep,name=local_ipv6,json=localIpv6,proto3" json:"local_ipv6,omitempty"`                           // json:"local_ipv6,omitempty"
+	MacsSha256                   *string                `protobuf:"bytes,7,opt,name=macs_sha256,json=macsSha256,proto3,oneof" json:"macs_sha256,omitempty"`                  // json:"macs_sha256,omitempty"
+	MachineIdSha256              *string                `protobuf:"bytes,8,opt,name=machine_id_sha256,json=machineIdSha256,proto3,oneof" json:"machine_id_sha256,omitempty"` // json:"machine_id_sha256,omitempty"
+	TargetClusterId              *string                `protobuf:"bytes,9,opt,name=target_cluster_id,json=targetClusterId,proto3,oneof" json:"target_cluster_id,omitempty"` // Preferred cluster for unbound tokens
+	ServedClusterIds             []string               `protobuf:"bytes,10,rep,name=served_cluster_ids,json=servedClusterIds,proto3" json:"served_cluster_ids,omitempty"`   // Clusters this caller serves; token binding validated against this set
+	NodeIdentityPublicKeyEd25519 []byte                 `protobuf:"bytes,11,opt,name=node_identity_public_key_ed25519,json=nodeIdentityPublicKeyEd25519,proto3" json:"node_identity_public_key_ed25519,omitempty"`
+	// Rotate an existing node key after state loss. Requires a valid enrollment
+	// token and exact ownership, cluster, and stable-fingerprint continuity.
+	RotateNodeIdentity bool `protobuf:"varint,12,opt,name=rotate_node_identity,json=rotateNodeIdentity,proto3" json:"rotate_node_identity,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *BootstrapEdgeNodeRequest) Reset() {
@@ -8075,6 +8155,20 @@ func (x *BootstrapEdgeNodeRequest) GetServedClusterIds() []string {
 		return x.ServedClusterIds
 	}
 	return nil
+}
+
+func (x *BootstrapEdgeNodeRequest) GetNodeIdentityPublicKeyEd25519() []byte {
+	if x != nil {
+		return x.NodeIdentityPublicKeyEd25519
+	}
+	return nil
+}
+
+func (x *BootstrapEdgeNodeRequest) GetRotateNodeIdentity() bool {
+	if x != nil {
+		return x.RotateNodeIdentity
+	}
+	return false
 }
 
 // Matches pkg/api/quartermaster/types.go:BootstrapEdgeNodeResponse (lines 247-251)
@@ -14163,7 +14257,7 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\x1eSetClusterReleaseTargetRequest\x12;\n" +
 	"\x06target\x18\x01 \x01(\v2#.quartermaster.ClusterReleaseTargetR\x06target\"[\n" +
 	"\x1cClusterReleaseTargetResponse\x12;\n" +
-	"\x06target\x18\x01 \x01(\v2#.quartermaster.ClusterReleaseTargetR\x06target\"\xf3\x01\n" +
+	"\x06target\x18\x01 \x01(\v2#.quartermaster.ClusterReleaseTargetR\x06target\"\xbb\x02\n" +
 	"\x1dResolveNodeFingerprintRequest\x12\x17\n" +
 	"\apeer_ip\x18\x01 \x01(\tR\x06peerIp\x12\x1d\n" +
 	"\n" +
@@ -14172,12 +14266,15 @@ const file_quartermaster_proto_rawDesc = "" +
 	"local_ipv6\x18\x03 \x03(\tR\tlocalIpv6\x12$\n" +
 	"\vmacs_sha256\x18\x04 \x01(\tH\x00R\n" +
 	"macsSha256\x88\x01\x01\x12/\n" +
-	"\x11machine_id_sha256\x18\x05 \x01(\tH\x01R\x0fmachineIdSha256\x88\x01\x01B\x0e\n" +
+	"\x11machine_id_sha256\x18\x05 \x01(\tH\x01R\x0fmachineIdSha256\x88\x01\x01\x12F\n" +
+	" node_identity_public_key_ed25519\x18\x06 \x01(\fR\x1cnodeIdentityPublicKeyEd25519B\x0e\n" +
 	"\f_macs_sha256B\x14\n" +
-	"\x12_machine_id_sha256\"i\n" +
+	"\x12_machine_id_sha256\"\xff\x01\n" +
 	"\x1eResolveNodeFingerprintResponse\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12*\n" +
-	"\x11canonical_node_id\x18\x02 \x01(\tR\x0fcanonicalNodeId\".\n" +
+	"\x11canonical_node_id\x18\x02 \x01(\tR\x0fcanonicalNodeId\x12L\n" +
+	"\fmatch_source\x18\x03 \x01(\x0e2).quartermaster.NodeFingerprintMatchSourceR\vmatchSource\x12F\n" +
+	" node_identity_public_key_ed25519\x18\x04 \x01(\fR\x1cnodeIdentityPublicKeyEd25519\".\n" +
 	"\x13GetNodeOwnerRequest\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"6\n" +
 	"\x1bGetNodeByLogicalNameRequest\x12\x17\n" +
@@ -14224,7 +14321,7 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\x11foghorn_grpc_addr\x18\x06 \x01(\tH\x02R\x0ffoghornGrpcAddr\x88\x01\x01B\x12\n" +
 	"\x10_owner_tenant_idB\x0e\n" +
 	"\f_tenant_nameB\x14\n" +
-	"\x12_foghorn_grpc_addr\"\xbf\x03\n" +
+	"\x12_foghorn_grpc_addr\"\xb9\x04\n" +
 	"\x18BootstrapEdgeNodeRequest\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\x12\x1a\n" +
 	"\bhostname\x18\x02 \x01(\tR\bhostname\x12\x10\n" +
@@ -14239,7 +14336,9 @@ const file_quartermaster_proto_rawDesc = "" +
 	"\x11machine_id_sha256\x18\b \x01(\tH\x01R\x0fmachineIdSha256\x88\x01\x01\x12/\n" +
 	"\x11target_cluster_id\x18\t \x01(\tH\x02R\x0ftargetClusterId\x88\x01\x01\x12,\n" +
 	"\x12served_cluster_ids\x18\n" +
-	" \x03(\tR\x10servedClusterIdsB\x0e\n" +
+	" \x03(\tR\x10servedClusterIds\x12F\n" +
+	" node_identity_public_key_ed25519\x18\v \x01(\fR\x1cnodeIdentityPublicKeyEd25519\x120\n" +
+	"\x14rotate_node_identity\x18\f \x01(\bR\x12rotateNodeIdentityB\x0e\n" +
 	"\f_macs_sha256B\x14\n" +
 	"\x12_machine_id_sha256B\x14\n" +
 	"\x12_target_cluster_id\"p\n" +
@@ -14860,7 +14959,12 @@ const file_quartermaster_proto_rawDesc = "" +
 	"$SUBSCRIPTION_STATUS_PENDING_APPROVAL\x10\x01\x12\x1e\n" +
 	"\x1aSUBSCRIPTION_STATUS_ACTIVE\x10\x02\x12!\n" +
 	"\x1dSUBSCRIPTION_STATUS_SUSPENDED\x10\x03\x12 \n" +
-	"\x1cSUBSCRIPTION_STATUS_REJECTED\x10\x042\xac\v\n" +
+	"\x1cSUBSCRIPTION_STATUS_REJECTED\x10\x04*\xcc\x01\n" +
+	"\x1aNodeFingerprintMatchSource\x12-\n" +
+	")NODE_FINGERPRINT_MATCH_SOURCE_UNSPECIFIED\x10\x00\x12,\n" +
+	"(NODE_FINGERPRINT_MATCH_SOURCE_MACHINE_ID\x10\x01\x12&\n" +
+	"\"NODE_FINGERPRINT_MATCH_SOURCE_MACS\x10\x02\x12)\n" +
+	"%NODE_FINGERPRINT_MATCH_SOURCE_PEER_IP\x10\x032\xac\v\n" +
 	"\rTenantService\x12N\n" +
 	"\tGetTenant\x12\x1f.quartermaster.GetTenantRequest\x1a .quartermaster.GetTenantResponse\x12]\n" +
 	"\x0eValidateTenant\x12$.quartermaster.ValidateTenantRequest\x1a%.quartermaster.ValidateTenantResponse\x12Z\n" +
@@ -14974,566 +15078,568 @@ func file_quartermaster_proto_rawDescGZIP() []byte {
 	return file_quartermaster_proto_rawDescData
 }
 
-var file_quartermaster_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_quartermaster_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
 var file_quartermaster_proto_msgTypes = make([]protoimpl.MessageInfo, 184)
 var file_quartermaster_proto_goTypes = []any{
 	(ClusterVisibility)(0),                         // 0: quartermaster.ClusterVisibility
 	(ClusterPricingModel)(0),                       // 1: quartermaster.ClusterPricingModel
 	(ClusterSubscriptionStatus)(0),                 // 2: quartermaster.ClusterSubscriptionStatus
-	(*SetNodeEnrollmentOriginRequest)(nil),         // 3: quartermaster.SetNodeEnrollmentOriginRequest
-	(*SetNodeEnrollmentOriginResponse)(nil),        // 4: quartermaster.SetNodeEnrollmentOriginResponse
-	(*GetTenantRequest)(nil),                       // 5: quartermaster.GetTenantRequest
-	(*GetTenantResponse)(nil),                      // 6: quartermaster.GetTenantResponse
-	(*ValidateTenantRequest)(nil),                  // 7: quartermaster.ValidateTenantRequest
-	(*ValidateTenantResponse)(nil),                 // 8: quartermaster.ValidateTenantResponse
-	(*TenantInfo)(nil),                             // 9: quartermaster.TenantInfo
-	(*Tenant)(nil),                                 // 10: quartermaster.Tenant
-	(*ListTenantsRequest)(nil),                     // 11: quartermaster.ListTenantsRequest
-	(*ListTenantsResponse)(nil),                    // 12: quartermaster.ListTenantsResponse
-	(*CreateTenantRequest)(nil),                    // 13: quartermaster.CreateTenantRequest
-	(*CreateTenantResponse)(nil),                   // 14: quartermaster.CreateTenantResponse
-	(*UpdateTenantRequest)(nil),                    // 15: quartermaster.UpdateTenantRequest
-	(*DeleteTenantRequest)(nil),                    // 16: quartermaster.DeleteTenantRequest
-	(*GetTenantClusterRequest)(nil),                // 17: quartermaster.GetTenantClusterRequest
-	(*UpdateTenantClusterRequest)(nil),             // 18: quartermaster.UpdateTenantClusterRequest
-	(*GetTenantsBatchRequest)(nil),                 // 19: quartermaster.GetTenantsBatchRequest
-	(*GetTenantsByClusterRequest)(nil),             // 20: quartermaster.GetTenantsByClusterRequest
-	(*GetTenantsByClusterResponse)(nil),            // 21: quartermaster.GetTenantsByClusterResponse
-	(*ListAliasedTenantsForClusterRequest)(nil),    // 22: quartermaster.ListAliasedTenantsForClusterRequest
-	(*AliasedTenantRef)(nil),                       // 23: quartermaster.AliasedTenantRef
-	(*ListAliasedTenantsForClusterResponse)(nil),   // 24: quartermaster.ListAliasedTenantsForClusterResponse
-	(*ListActiveTenantsRequest)(nil),               // 25: quartermaster.ListActiveTenantsRequest
-	(*ListActiveTenantsResponse)(nil),              // 26: quartermaster.ListActiveTenantsResponse
-	(*ActiveTenant)(nil),                           // 27: quartermaster.ActiveTenant
-	(*GetClusterRoutingRequest)(nil),               // 28: quartermaster.GetClusterRoutingRequest
-	(*ClusterRoutingResponse)(nil),                 // 29: quartermaster.ClusterRoutingResponse
-	(*GetClusterRequest)(nil),                      // 30: quartermaster.GetClusterRequest
-	(*InfrastructureCluster)(nil),                  // 31: quartermaster.InfrastructureCluster
-	(*ClusterResponse)(nil),                        // 32: quartermaster.ClusterResponse
-	(*ListClustersRequest)(nil),                    // 33: quartermaster.ListClustersRequest
-	(*ListClustersResponse)(nil),                   // 34: quartermaster.ListClustersResponse
-	(*CreateClusterRequest)(nil),                   // 35: quartermaster.CreateClusterRequest
-	(*UpdateClusterRequest)(nil),                   // 36: quartermaster.UpdateClusterRequest
-	(*UpdateClusterMeshConfigRequest)(nil),         // 37: quartermaster.UpdateClusterMeshConfigRequest
-	(*UpdateClusterMeshConfigResponse)(nil),        // 38: quartermaster.UpdateClusterMeshConfigResponse
-	(*ListClustersForTenantRequest)(nil),           // 39: quartermaster.ListClustersForTenantRequest
-	(*ClusterAccessEntry)(nil),                     // 40: quartermaster.ClusterAccessEntry
-	(*ClustersAccessResponse)(nil),                 // 41: quartermaster.ClustersAccessResponse
-	(*GrantClusterAccessRequest)(nil),              // 42: quartermaster.GrantClusterAccessRequest
-	(*SubscribeToClusterRequest)(nil),              // 43: quartermaster.SubscribeToClusterRequest
-	(*BootstrapClusterAccessRequest)(nil),          // 44: quartermaster.BootstrapClusterAccessRequest
-	(*MaterializeClusterAccessRequest)(nil),        // 45: quartermaster.MaterializeClusterAccessRequest
-	(*RevokeMaterializedClusterAccessRequest)(nil), // 46: quartermaster.RevokeMaterializedClusterAccessRequest
-	(*DeactivateClusterAccessRequest)(nil),         // 47: quartermaster.DeactivateClusterAccessRequest
-	(*ListTenantClusterAccessRequest)(nil),         // 48: quartermaster.ListTenantClusterAccessRequest
-	(*TenantClusterAccessRow)(nil),                 // 49: quartermaster.TenantClusterAccessRow
-	(*ListTenantClusterAccessResponse)(nil),        // 50: quartermaster.ListTenantClusterAccessResponse
-	(*GetTenantEntitlementRequest)(nil),            // 51: quartermaster.GetTenantEntitlementRequest
-	(*GetTenantEntitlementResponse)(nil),           // 52: quartermaster.GetTenantEntitlementResponse
-	(*UnsubscribeFromClusterRequest)(nil),          // 53: quartermaster.UnsubscribeFromClusterRequest
-	(*ListMySubscriptionsRequest)(nil),             // 54: quartermaster.ListMySubscriptionsRequest
-	(*MarketplaceClusterEntry)(nil),                // 55: quartermaster.MarketplaceClusterEntry
-	(*ListMarketplaceClustersRequest)(nil),         // 56: quartermaster.ListMarketplaceClustersRequest
-	(*ListMarketplaceClustersResponse)(nil),        // 57: quartermaster.ListMarketplaceClustersResponse
-	(*GetMarketplaceClusterRequest)(nil),           // 58: quartermaster.GetMarketplaceClusterRequest
-	(*UpdateClusterMarketplaceRequest)(nil),        // 59: quartermaster.UpdateClusterMarketplaceRequest
-	(*GetClusterMetadataBatchRequest)(nil),         // 60: quartermaster.GetClusterMetadataBatchRequest
-	(*GetClusterMetadataBatchResponse)(nil),        // 61: quartermaster.GetClusterMetadataBatchResponse
-	(*ClusterMetadata)(nil),                        // 62: quartermaster.ClusterMetadata
-	(*CreatePrivateClusterRequest)(nil),            // 63: quartermaster.CreatePrivateClusterRequest
-	(*CreatePrivateClusterResponse)(nil),           // 64: quartermaster.CreatePrivateClusterResponse
-	(*ClusterInvite)(nil),                          // 65: quartermaster.ClusterInvite
-	(*CreateClusterInviteRequest)(nil),             // 66: quartermaster.CreateClusterInviteRequest
-	(*RevokeClusterInviteRequest)(nil),             // 67: quartermaster.RevokeClusterInviteRequest
-	(*ListClusterInvitesRequest)(nil),              // 68: quartermaster.ListClusterInvitesRequest
-	(*ListMyClusterInvitesRequest)(nil),            // 69: quartermaster.ListMyClusterInvitesRequest
-	(*ListClusterInvitesResponse)(nil),             // 70: quartermaster.ListClusterInvitesResponse
-	(*ClusterSubscription)(nil),                    // 71: quartermaster.ClusterSubscription
-	(*RequestClusterSubscriptionRequest)(nil),      // 72: quartermaster.RequestClusterSubscriptionRequest
-	(*AcceptClusterInviteRequest)(nil),             // 73: quartermaster.AcceptClusterInviteRequest
-	(*ListPendingSubscriptionsRequest)(nil),        // 74: quartermaster.ListPendingSubscriptionsRequest
-	(*ListPendingSubscriptionsResponse)(nil),       // 75: quartermaster.ListPendingSubscriptionsResponse
-	(*ApproveClusterSubscriptionRequest)(nil),      // 76: quartermaster.ApproveClusterSubscriptionRequest
-	(*RejectClusterSubscriptionRequest)(nil),       // 77: quartermaster.RejectClusterSubscriptionRequest
-	(*GetNodeRequest)(nil),                         // 78: quartermaster.GetNodeRequest
-	(*InfrastructureNode)(nil),                     // 79: quartermaster.InfrastructureNode
-	(*NodeResponse)(nil),                           // 80: quartermaster.NodeResponse
-	(*ListNodesRequest)(nil),                       // 81: quartermaster.ListNodesRequest
-	(*ListNodesResponse)(nil),                      // 82: quartermaster.ListNodesResponse
-	(*ListHealthyNodesForDNSRequest)(nil),          // 83: quartermaster.ListHealthyNodesForDNSRequest
-	(*ListHealthyNodesForDNSResponse)(nil),         // 84: quartermaster.ListHealthyNodesForDNSResponse
-	(*CreateNodeRequest)(nil),                      // 85: quartermaster.CreateNodeRequest
-	(*UpdateNodeStatusRequest)(nil),                // 86: quartermaster.UpdateNodeStatusRequest
-	(*EdgeRelease)(nil),                            // 87: quartermaster.EdgeRelease
-	(*ListEdgeReleasesRequest)(nil),                // 88: quartermaster.ListEdgeReleasesRequest
-	(*ListEdgeReleasesResponse)(nil),               // 89: quartermaster.ListEdgeReleasesResponse
-	(*UpsertEdgeReleaseRequest)(nil),               // 90: quartermaster.UpsertEdgeReleaseRequest
-	(*EdgeReleaseResponse)(nil),                    // 91: quartermaster.EdgeReleaseResponse
-	(*ClusterReleaseTarget)(nil),                   // 92: quartermaster.ClusterReleaseTarget
-	(*GetClusterReleaseTargetRequest)(nil),         // 93: quartermaster.GetClusterReleaseTargetRequest
-	(*ListClusterReleaseTargetsRequest)(nil),       // 94: quartermaster.ListClusterReleaseTargetsRequest
-	(*ListClusterReleaseTargetsResponse)(nil),      // 95: quartermaster.ListClusterReleaseTargetsResponse
-	(*SetClusterReleaseTargetRequest)(nil),         // 96: quartermaster.SetClusterReleaseTargetRequest
-	(*ClusterReleaseTargetResponse)(nil),           // 97: quartermaster.ClusterReleaseTargetResponse
-	(*ResolveNodeFingerprintRequest)(nil),          // 98: quartermaster.ResolveNodeFingerprintRequest
-	(*ResolveNodeFingerprintResponse)(nil),         // 99: quartermaster.ResolveNodeFingerprintResponse
-	(*GetNodeOwnerRequest)(nil),                    // 100: quartermaster.GetNodeOwnerRequest
-	(*GetNodeByLogicalNameRequest)(nil),            // 101: quartermaster.GetNodeByLogicalNameRequest
-	(*UpdateNodeHardwareRequest)(nil),              // 102: quartermaster.UpdateNodeHardwareRequest
-	(*ReportAliveNodesRequest)(nil),                // 103: quartermaster.ReportAliveNodesRequest
-	(*NodeAliveness)(nil),                          // 104: quartermaster.NodeAliveness
-	(*EdgeCapabilities)(nil),                       // 105: quartermaster.EdgeCapabilities
-	(*NodeOwnerResponse)(nil),                      // 106: quartermaster.NodeOwnerResponse
-	(*BootstrapEdgeNodeRequest)(nil),               // 107: quartermaster.BootstrapEdgeNodeRequest
-	(*BootstrapEdgeNodeResponse)(nil),              // 108: quartermaster.BootstrapEdgeNodeResponse
-	(*BootstrapInfrastructureNodeRequest)(nil),     // 109: quartermaster.BootstrapInfrastructureNodeRequest
-	(*BootstrapInfrastructureNodeResponse)(nil),    // 110: quartermaster.BootstrapInfrastructureNodeResponse
-	(*BootstrapServiceRequest)(nil),                // 111: quartermaster.BootstrapServiceRequest
-	(*BootstrapServiceResponse)(nil),               // 112: quartermaster.BootstrapServiceResponse
-	(*ServiceDiscoveryRequest)(nil),                // 113: quartermaster.ServiceDiscoveryRequest
-	(*ServiceDiscoveryResponse)(nil),               // 114: quartermaster.ServiceDiscoveryResponse
-	(*ServiceInstance)(nil),                        // 115: quartermaster.ServiceInstance
-	(*CreateBootstrapTokenRequest)(nil),            // 116: quartermaster.CreateBootstrapTokenRequest
-	(*BootstrapToken)(nil),                         // 117: quartermaster.BootstrapToken
-	(*CreateBootstrapTokenResponse)(nil),           // 118: quartermaster.CreateBootstrapTokenResponse
-	(*ListBootstrapTokensRequest)(nil),             // 119: quartermaster.ListBootstrapTokensRequest
-	(*ListBootstrapTokensResponse)(nil),            // 120: quartermaster.ListBootstrapTokensResponse
-	(*RevokeBootstrapTokenRequest)(nil),            // 121: quartermaster.RevokeBootstrapTokenRequest
-	(*ValidateBootstrapTokenRequest)(nil),          // 122: quartermaster.ValidateBootstrapTokenRequest
-	(*ValidateBootstrapTokenResponse)(nil),         // 123: quartermaster.ValidateBootstrapTokenResponse
-	(*InfrastructureSyncRequest)(nil),              // 124: quartermaster.InfrastructureSyncRequest
-	(*NodeResourceSnapshot)(nil),                   // 125: quartermaster.NodeResourceSnapshot
-	(*InfrastructurePeer)(nil),                     // 126: quartermaster.InfrastructurePeer
-	(*InfrastructureSyncResponse)(nil),             // 127: quartermaster.InfrastructureSyncResponse
-	(*ServiceEndpoints)(nil),                       // 128: quartermaster.ServiceEndpoints
-	(*EnqueueServiceEventRequest)(nil),             // 129: quartermaster.EnqueueServiceEventRequest
-	(*EnqueueServiceEventResponse)(nil),            // 130: quartermaster.EnqueueServiceEventResponse
-	(*ResolveTenantRequest)(nil),                   // 131: quartermaster.ResolveTenantRequest
-	(*ResolveTenantAliasesRequest)(nil),            // 132: quartermaster.ResolveTenantAliasesRequest
-	(*ResolveTenantAliasesResponse)(nil),           // 133: quartermaster.ResolveTenantAliasesResponse
-	(*ResolveTenantResponse)(nil),                  // 134: quartermaster.ResolveTenantResponse
-	(*ListClustersAvailableRequest)(nil),           // 135: quartermaster.ListClustersAvailableRequest
-	(*AvailableClusterEntry)(nil),                  // 136: quartermaster.AvailableClusterEntry
-	(*ClustersAvailableResponse)(nil),              // 137: quartermaster.ClustersAvailableResponse
-	(*ListServicesRequest)(nil),                    // 138: quartermaster.ListServicesRequest
-	(*Service)(nil),                                // 139: quartermaster.Service
-	(*ListServicesResponse)(nil),                   // 140: quartermaster.ListServicesResponse
-	(*ListClusterServicesRequest)(nil),             // 141: quartermaster.ListClusterServicesRequest
-	(*ClusterServiceAssignment)(nil),               // 142: quartermaster.ClusterServiceAssignment
-	(*ListClusterServicesResponse)(nil),            // 143: quartermaster.ListClusterServicesResponse
-	(*ListServiceInstancesRequest)(nil),            // 144: quartermaster.ListServiceInstancesRequest
-	(*ListServiceInstancesResponse)(nil),           // 145: quartermaster.ListServiceInstancesResponse
-	(*PhysicalServiceInstance)(nil),                // 146: quartermaster.PhysicalServiceInstance
-	(*ListServiceInstancesByTypeRequest)(nil),      // 147: quartermaster.ListServiceInstancesByTypeRequest
-	(*ListServiceInstancesByTypeResponse)(nil),     // 148: quartermaster.ListServiceInstancesByTypeResponse
-	(*ListServiceClusterAssignmentsRequest)(nil),   // 149: quartermaster.ListServiceClusterAssignmentsRequest
-	(*ListServiceClusterAssignmentsResponse)(nil),  // 150: quartermaster.ListServiceClusterAssignmentsResponse
-	(*ListServicesHealthRequest)(nil),              // 151: quartermaster.ListServicesHealthRequest
-	(*GetServiceHealthRequest)(nil),                // 152: quartermaster.GetServiceHealthRequest
-	(*ServiceInstanceHealth)(nil),                  // 153: quartermaster.ServiceInstanceHealth
-	(*ListServicesHealthResponse)(nil),             // 154: quartermaster.ListServicesHealthResponse
-	(*TLSBundle)(nil),                              // 155: quartermaster.TLSBundle
-	(*UpsertTLSBundleRequest)(nil),                 // 156: quartermaster.UpsertTLSBundleRequest
-	(*TLSBundleResponse)(nil),                      // 157: quartermaster.TLSBundleResponse
-	(*ListTLSBundlesRequest)(nil),                  // 158: quartermaster.ListTLSBundlesRequest
-	(*ListTLSBundlesResponse)(nil),                 // 159: quartermaster.ListTLSBundlesResponse
-	(*IngressSite)(nil),                            // 160: quartermaster.IngressSite
-	(*UpsertIngressSiteRequest)(nil),               // 161: quartermaster.UpsertIngressSiteRequest
-	(*IngressSiteResponse)(nil),                    // 162: quartermaster.IngressSiteResponse
-	(*ListIngressSitesRequest)(nil),                // 163: quartermaster.ListIngressSitesRequest
-	(*ListIngressSitesResponse)(nil),               // 164: quartermaster.ListIngressSitesResponse
-	(*GetServicePoolStatusRequest)(nil),            // 165: quartermaster.GetServicePoolStatusRequest
-	(*ServicePoolClusterEntry)(nil),                // 166: quartermaster.ServicePoolClusterEntry
-	(*ServiceInstanceAssignment)(nil),              // 167: quartermaster.ServiceInstanceAssignment
-	(*GetServicePoolStatusResponse)(nil),           // 168: quartermaster.GetServicePoolStatusResponse
-	(*AddToServicePoolRequest)(nil),                // 169: quartermaster.AddToServicePoolRequest
-	(*AddToServicePoolResponse)(nil),               // 170: quartermaster.AddToServicePoolResponse
-	(*DrainServiceInstanceRequest)(nil),            // 171: quartermaster.DrainServiceInstanceRequest
-	(*DrainServiceInstanceResponse)(nil),           // 172: quartermaster.DrainServiceInstanceResponse
-	(*ListPeersRequest)(nil),                       // 173: quartermaster.ListPeersRequest
-	(*PeerCluster)(nil),                            // 174: quartermaster.PeerCluster
-	(*ListPeersResponse)(nil),                      // 175: quartermaster.ListPeersResponse
-	(*AssignServiceToClusterRequest)(nil),          // 176: quartermaster.AssignServiceToClusterRequest
-	(*UnassignServiceFromClusterRequest)(nil),      // 177: quartermaster.UnassignServiceFromClusterRequest
-	(*EnableSelfHostingRequest)(nil),               // 178: quartermaster.EnableSelfHostingRequest
-	(*EnableSelfHostingResponse)(nil),              // 179: quartermaster.EnableSelfHostingResponse
-	(*CreateEnrollmentTokenRequest)(nil),           // 180: quartermaster.CreateEnrollmentTokenRequest
-	nil,                                            // 181: quartermaster.GetClusterMetadataBatchResponse.ClustersEntry
-	nil,                                            // 182: quartermaster.BootstrapInfrastructureNodeResponse.SeedServiceEndpointsEntry
-	nil,                                            // 183: quartermaster.BootstrapServiceRequest.MetadataEntry
-	nil,                                            // 184: quartermaster.ServiceInstance.MetadataEntry
-	nil,                                            // 185: quartermaster.InfrastructureSyncResponse.ServiceEndpointsEntry
-	nil,                                            // 186: quartermaster.ResolveTenantAliasesResponse.MappingEntry
-	(*timestamppb.Timestamp)(nil),                  // 187: google.protobuf.Timestamp
-	(*common.CursorPaginationRequest)(nil),         // 188: common.CursorPaginationRequest
-	(*common.CursorPaginationResponse)(nil),        // 189: common.CursorPaginationResponse
-	(*common.SignupAttribution)(nil),               // 190: common.SignupAttribution
-	(*cluster_peer.TenantClusterPeer)(nil),         // 191: cluster_peer.TenantClusterPeer
-	(*tenant_limits.TenantResourceLimits)(nil),     // 192: tenant_limits.TenantResourceLimits
-	(*structpb.Struct)(nil),                        // 193: google.protobuf.Struct
-	(cluster_peer.TenantClusterAccessSource)(0),    // 194: cluster_peer.TenantClusterAccessSource
-	(*emptypb.Empty)(nil),                          // 195: google.protobuf.Empty
+	(NodeFingerprintMatchSource)(0),                // 3: quartermaster.NodeFingerprintMatchSource
+	(*SetNodeEnrollmentOriginRequest)(nil),         // 4: quartermaster.SetNodeEnrollmentOriginRequest
+	(*SetNodeEnrollmentOriginResponse)(nil),        // 5: quartermaster.SetNodeEnrollmentOriginResponse
+	(*GetTenantRequest)(nil),                       // 6: quartermaster.GetTenantRequest
+	(*GetTenantResponse)(nil),                      // 7: quartermaster.GetTenantResponse
+	(*ValidateTenantRequest)(nil),                  // 8: quartermaster.ValidateTenantRequest
+	(*ValidateTenantResponse)(nil),                 // 9: quartermaster.ValidateTenantResponse
+	(*TenantInfo)(nil),                             // 10: quartermaster.TenantInfo
+	(*Tenant)(nil),                                 // 11: quartermaster.Tenant
+	(*ListTenantsRequest)(nil),                     // 12: quartermaster.ListTenantsRequest
+	(*ListTenantsResponse)(nil),                    // 13: quartermaster.ListTenantsResponse
+	(*CreateTenantRequest)(nil),                    // 14: quartermaster.CreateTenantRequest
+	(*CreateTenantResponse)(nil),                   // 15: quartermaster.CreateTenantResponse
+	(*UpdateTenantRequest)(nil),                    // 16: quartermaster.UpdateTenantRequest
+	(*DeleteTenantRequest)(nil),                    // 17: quartermaster.DeleteTenantRequest
+	(*GetTenantClusterRequest)(nil),                // 18: quartermaster.GetTenantClusterRequest
+	(*UpdateTenantClusterRequest)(nil),             // 19: quartermaster.UpdateTenantClusterRequest
+	(*GetTenantsBatchRequest)(nil),                 // 20: quartermaster.GetTenantsBatchRequest
+	(*GetTenantsByClusterRequest)(nil),             // 21: quartermaster.GetTenantsByClusterRequest
+	(*GetTenantsByClusterResponse)(nil),            // 22: quartermaster.GetTenantsByClusterResponse
+	(*ListAliasedTenantsForClusterRequest)(nil),    // 23: quartermaster.ListAliasedTenantsForClusterRequest
+	(*AliasedTenantRef)(nil),                       // 24: quartermaster.AliasedTenantRef
+	(*ListAliasedTenantsForClusterResponse)(nil),   // 25: quartermaster.ListAliasedTenantsForClusterResponse
+	(*ListActiveTenantsRequest)(nil),               // 26: quartermaster.ListActiveTenantsRequest
+	(*ListActiveTenantsResponse)(nil),              // 27: quartermaster.ListActiveTenantsResponse
+	(*ActiveTenant)(nil),                           // 28: quartermaster.ActiveTenant
+	(*GetClusterRoutingRequest)(nil),               // 29: quartermaster.GetClusterRoutingRequest
+	(*ClusterRoutingResponse)(nil),                 // 30: quartermaster.ClusterRoutingResponse
+	(*GetClusterRequest)(nil),                      // 31: quartermaster.GetClusterRequest
+	(*InfrastructureCluster)(nil),                  // 32: quartermaster.InfrastructureCluster
+	(*ClusterResponse)(nil),                        // 33: quartermaster.ClusterResponse
+	(*ListClustersRequest)(nil),                    // 34: quartermaster.ListClustersRequest
+	(*ListClustersResponse)(nil),                   // 35: quartermaster.ListClustersResponse
+	(*CreateClusterRequest)(nil),                   // 36: quartermaster.CreateClusterRequest
+	(*UpdateClusterRequest)(nil),                   // 37: quartermaster.UpdateClusterRequest
+	(*UpdateClusterMeshConfigRequest)(nil),         // 38: quartermaster.UpdateClusterMeshConfigRequest
+	(*UpdateClusterMeshConfigResponse)(nil),        // 39: quartermaster.UpdateClusterMeshConfigResponse
+	(*ListClustersForTenantRequest)(nil),           // 40: quartermaster.ListClustersForTenantRequest
+	(*ClusterAccessEntry)(nil),                     // 41: quartermaster.ClusterAccessEntry
+	(*ClustersAccessResponse)(nil),                 // 42: quartermaster.ClustersAccessResponse
+	(*GrantClusterAccessRequest)(nil),              // 43: quartermaster.GrantClusterAccessRequest
+	(*SubscribeToClusterRequest)(nil),              // 44: quartermaster.SubscribeToClusterRequest
+	(*BootstrapClusterAccessRequest)(nil),          // 45: quartermaster.BootstrapClusterAccessRequest
+	(*MaterializeClusterAccessRequest)(nil),        // 46: quartermaster.MaterializeClusterAccessRequest
+	(*RevokeMaterializedClusterAccessRequest)(nil), // 47: quartermaster.RevokeMaterializedClusterAccessRequest
+	(*DeactivateClusterAccessRequest)(nil),         // 48: quartermaster.DeactivateClusterAccessRequest
+	(*ListTenantClusterAccessRequest)(nil),         // 49: quartermaster.ListTenantClusterAccessRequest
+	(*TenantClusterAccessRow)(nil),                 // 50: quartermaster.TenantClusterAccessRow
+	(*ListTenantClusterAccessResponse)(nil),        // 51: quartermaster.ListTenantClusterAccessResponse
+	(*GetTenantEntitlementRequest)(nil),            // 52: quartermaster.GetTenantEntitlementRequest
+	(*GetTenantEntitlementResponse)(nil),           // 53: quartermaster.GetTenantEntitlementResponse
+	(*UnsubscribeFromClusterRequest)(nil),          // 54: quartermaster.UnsubscribeFromClusterRequest
+	(*ListMySubscriptionsRequest)(nil),             // 55: quartermaster.ListMySubscriptionsRequest
+	(*MarketplaceClusterEntry)(nil),                // 56: quartermaster.MarketplaceClusterEntry
+	(*ListMarketplaceClustersRequest)(nil),         // 57: quartermaster.ListMarketplaceClustersRequest
+	(*ListMarketplaceClustersResponse)(nil),        // 58: quartermaster.ListMarketplaceClustersResponse
+	(*GetMarketplaceClusterRequest)(nil),           // 59: quartermaster.GetMarketplaceClusterRequest
+	(*UpdateClusterMarketplaceRequest)(nil),        // 60: quartermaster.UpdateClusterMarketplaceRequest
+	(*GetClusterMetadataBatchRequest)(nil),         // 61: quartermaster.GetClusterMetadataBatchRequest
+	(*GetClusterMetadataBatchResponse)(nil),        // 62: quartermaster.GetClusterMetadataBatchResponse
+	(*ClusterMetadata)(nil),                        // 63: quartermaster.ClusterMetadata
+	(*CreatePrivateClusterRequest)(nil),            // 64: quartermaster.CreatePrivateClusterRequest
+	(*CreatePrivateClusterResponse)(nil),           // 65: quartermaster.CreatePrivateClusterResponse
+	(*ClusterInvite)(nil),                          // 66: quartermaster.ClusterInvite
+	(*CreateClusterInviteRequest)(nil),             // 67: quartermaster.CreateClusterInviteRequest
+	(*RevokeClusterInviteRequest)(nil),             // 68: quartermaster.RevokeClusterInviteRequest
+	(*ListClusterInvitesRequest)(nil),              // 69: quartermaster.ListClusterInvitesRequest
+	(*ListMyClusterInvitesRequest)(nil),            // 70: quartermaster.ListMyClusterInvitesRequest
+	(*ListClusterInvitesResponse)(nil),             // 71: quartermaster.ListClusterInvitesResponse
+	(*ClusterSubscription)(nil),                    // 72: quartermaster.ClusterSubscription
+	(*RequestClusterSubscriptionRequest)(nil),      // 73: quartermaster.RequestClusterSubscriptionRequest
+	(*AcceptClusterInviteRequest)(nil),             // 74: quartermaster.AcceptClusterInviteRequest
+	(*ListPendingSubscriptionsRequest)(nil),        // 75: quartermaster.ListPendingSubscriptionsRequest
+	(*ListPendingSubscriptionsResponse)(nil),       // 76: quartermaster.ListPendingSubscriptionsResponse
+	(*ApproveClusterSubscriptionRequest)(nil),      // 77: quartermaster.ApproveClusterSubscriptionRequest
+	(*RejectClusterSubscriptionRequest)(nil),       // 78: quartermaster.RejectClusterSubscriptionRequest
+	(*GetNodeRequest)(nil),                         // 79: quartermaster.GetNodeRequest
+	(*InfrastructureNode)(nil),                     // 80: quartermaster.InfrastructureNode
+	(*NodeResponse)(nil),                           // 81: quartermaster.NodeResponse
+	(*ListNodesRequest)(nil),                       // 82: quartermaster.ListNodesRequest
+	(*ListNodesResponse)(nil),                      // 83: quartermaster.ListNodesResponse
+	(*ListHealthyNodesForDNSRequest)(nil),          // 84: quartermaster.ListHealthyNodesForDNSRequest
+	(*ListHealthyNodesForDNSResponse)(nil),         // 85: quartermaster.ListHealthyNodesForDNSResponse
+	(*CreateNodeRequest)(nil),                      // 86: quartermaster.CreateNodeRequest
+	(*UpdateNodeStatusRequest)(nil),                // 87: quartermaster.UpdateNodeStatusRequest
+	(*EdgeRelease)(nil),                            // 88: quartermaster.EdgeRelease
+	(*ListEdgeReleasesRequest)(nil),                // 89: quartermaster.ListEdgeReleasesRequest
+	(*ListEdgeReleasesResponse)(nil),               // 90: quartermaster.ListEdgeReleasesResponse
+	(*UpsertEdgeReleaseRequest)(nil),               // 91: quartermaster.UpsertEdgeReleaseRequest
+	(*EdgeReleaseResponse)(nil),                    // 92: quartermaster.EdgeReleaseResponse
+	(*ClusterReleaseTarget)(nil),                   // 93: quartermaster.ClusterReleaseTarget
+	(*GetClusterReleaseTargetRequest)(nil),         // 94: quartermaster.GetClusterReleaseTargetRequest
+	(*ListClusterReleaseTargetsRequest)(nil),       // 95: quartermaster.ListClusterReleaseTargetsRequest
+	(*ListClusterReleaseTargetsResponse)(nil),      // 96: quartermaster.ListClusterReleaseTargetsResponse
+	(*SetClusterReleaseTargetRequest)(nil),         // 97: quartermaster.SetClusterReleaseTargetRequest
+	(*ClusterReleaseTargetResponse)(nil),           // 98: quartermaster.ClusterReleaseTargetResponse
+	(*ResolveNodeFingerprintRequest)(nil),          // 99: quartermaster.ResolveNodeFingerprintRequest
+	(*ResolveNodeFingerprintResponse)(nil),         // 100: quartermaster.ResolveNodeFingerprintResponse
+	(*GetNodeOwnerRequest)(nil),                    // 101: quartermaster.GetNodeOwnerRequest
+	(*GetNodeByLogicalNameRequest)(nil),            // 102: quartermaster.GetNodeByLogicalNameRequest
+	(*UpdateNodeHardwareRequest)(nil),              // 103: quartermaster.UpdateNodeHardwareRequest
+	(*ReportAliveNodesRequest)(nil),                // 104: quartermaster.ReportAliveNodesRequest
+	(*NodeAliveness)(nil),                          // 105: quartermaster.NodeAliveness
+	(*EdgeCapabilities)(nil),                       // 106: quartermaster.EdgeCapabilities
+	(*NodeOwnerResponse)(nil),                      // 107: quartermaster.NodeOwnerResponse
+	(*BootstrapEdgeNodeRequest)(nil),               // 108: quartermaster.BootstrapEdgeNodeRequest
+	(*BootstrapEdgeNodeResponse)(nil),              // 109: quartermaster.BootstrapEdgeNodeResponse
+	(*BootstrapInfrastructureNodeRequest)(nil),     // 110: quartermaster.BootstrapInfrastructureNodeRequest
+	(*BootstrapInfrastructureNodeResponse)(nil),    // 111: quartermaster.BootstrapInfrastructureNodeResponse
+	(*BootstrapServiceRequest)(nil),                // 112: quartermaster.BootstrapServiceRequest
+	(*BootstrapServiceResponse)(nil),               // 113: quartermaster.BootstrapServiceResponse
+	(*ServiceDiscoveryRequest)(nil),                // 114: quartermaster.ServiceDiscoveryRequest
+	(*ServiceDiscoveryResponse)(nil),               // 115: quartermaster.ServiceDiscoveryResponse
+	(*ServiceInstance)(nil),                        // 116: quartermaster.ServiceInstance
+	(*CreateBootstrapTokenRequest)(nil),            // 117: quartermaster.CreateBootstrapTokenRequest
+	(*BootstrapToken)(nil),                         // 118: quartermaster.BootstrapToken
+	(*CreateBootstrapTokenResponse)(nil),           // 119: quartermaster.CreateBootstrapTokenResponse
+	(*ListBootstrapTokensRequest)(nil),             // 120: quartermaster.ListBootstrapTokensRequest
+	(*ListBootstrapTokensResponse)(nil),            // 121: quartermaster.ListBootstrapTokensResponse
+	(*RevokeBootstrapTokenRequest)(nil),            // 122: quartermaster.RevokeBootstrapTokenRequest
+	(*ValidateBootstrapTokenRequest)(nil),          // 123: quartermaster.ValidateBootstrapTokenRequest
+	(*ValidateBootstrapTokenResponse)(nil),         // 124: quartermaster.ValidateBootstrapTokenResponse
+	(*InfrastructureSyncRequest)(nil),              // 125: quartermaster.InfrastructureSyncRequest
+	(*NodeResourceSnapshot)(nil),                   // 126: quartermaster.NodeResourceSnapshot
+	(*InfrastructurePeer)(nil),                     // 127: quartermaster.InfrastructurePeer
+	(*InfrastructureSyncResponse)(nil),             // 128: quartermaster.InfrastructureSyncResponse
+	(*ServiceEndpoints)(nil),                       // 129: quartermaster.ServiceEndpoints
+	(*EnqueueServiceEventRequest)(nil),             // 130: quartermaster.EnqueueServiceEventRequest
+	(*EnqueueServiceEventResponse)(nil),            // 131: quartermaster.EnqueueServiceEventResponse
+	(*ResolveTenantRequest)(nil),                   // 132: quartermaster.ResolveTenantRequest
+	(*ResolveTenantAliasesRequest)(nil),            // 133: quartermaster.ResolveTenantAliasesRequest
+	(*ResolveTenantAliasesResponse)(nil),           // 134: quartermaster.ResolveTenantAliasesResponse
+	(*ResolveTenantResponse)(nil),                  // 135: quartermaster.ResolveTenantResponse
+	(*ListClustersAvailableRequest)(nil),           // 136: quartermaster.ListClustersAvailableRequest
+	(*AvailableClusterEntry)(nil),                  // 137: quartermaster.AvailableClusterEntry
+	(*ClustersAvailableResponse)(nil),              // 138: quartermaster.ClustersAvailableResponse
+	(*ListServicesRequest)(nil),                    // 139: quartermaster.ListServicesRequest
+	(*Service)(nil),                                // 140: quartermaster.Service
+	(*ListServicesResponse)(nil),                   // 141: quartermaster.ListServicesResponse
+	(*ListClusterServicesRequest)(nil),             // 142: quartermaster.ListClusterServicesRequest
+	(*ClusterServiceAssignment)(nil),               // 143: quartermaster.ClusterServiceAssignment
+	(*ListClusterServicesResponse)(nil),            // 144: quartermaster.ListClusterServicesResponse
+	(*ListServiceInstancesRequest)(nil),            // 145: quartermaster.ListServiceInstancesRequest
+	(*ListServiceInstancesResponse)(nil),           // 146: quartermaster.ListServiceInstancesResponse
+	(*PhysicalServiceInstance)(nil),                // 147: quartermaster.PhysicalServiceInstance
+	(*ListServiceInstancesByTypeRequest)(nil),      // 148: quartermaster.ListServiceInstancesByTypeRequest
+	(*ListServiceInstancesByTypeResponse)(nil),     // 149: quartermaster.ListServiceInstancesByTypeResponse
+	(*ListServiceClusterAssignmentsRequest)(nil),   // 150: quartermaster.ListServiceClusterAssignmentsRequest
+	(*ListServiceClusterAssignmentsResponse)(nil),  // 151: quartermaster.ListServiceClusterAssignmentsResponse
+	(*ListServicesHealthRequest)(nil),              // 152: quartermaster.ListServicesHealthRequest
+	(*GetServiceHealthRequest)(nil),                // 153: quartermaster.GetServiceHealthRequest
+	(*ServiceInstanceHealth)(nil),                  // 154: quartermaster.ServiceInstanceHealth
+	(*ListServicesHealthResponse)(nil),             // 155: quartermaster.ListServicesHealthResponse
+	(*TLSBundle)(nil),                              // 156: quartermaster.TLSBundle
+	(*UpsertTLSBundleRequest)(nil),                 // 157: quartermaster.UpsertTLSBundleRequest
+	(*TLSBundleResponse)(nil),                      // 158: quartermaster.TLSBundleResponse
+	(*ListTLSBundlesRequest)(nil),                  // 159: quartermaster.ListTLSBundlesRequest
+	(*ListTLSBundlesResponse)(nil),                 // 160: quartermaster.ListTLSBundlesResponse
+	(*IngressSite)(nil),                            // 161: quartermaster.IngressSite
+	(*UpsertIngressSiteRequest)(nil),               // 162: quartermaster.UpsertIngressSiteRequest
+	(*IngressSiteResponse)(nil),                    // 163: quartermaster.IngressSiteResponse
+	(*ListIngressSitesRequest)(nil),                // 164: quartermaster.ListIngressSitesRequest
+	(*ListIngressSitesResponse)(nil),               // 165: quartermaster.ListIngressSitesResponse
+	(*GetServicePoolStatusRequest)(nil),            // 166: quartermaster.GetServicePoolStatusRequest
+	(*ServicePoolClusterEntry)(nil),                // 167: quartermaster.ServicePoolClusterEntry
+	(*ServiceInstanceAssignment)(nil),              // 168: quartermaster.ServiceInstanceAssignment
+	(*GetServicePoolStatusResponse)(nil),           // 169: quartermaster.GetServicePoolStatusResponse
+	(*AddToServicePoolRequest)(nil),                // 170: quartermaster.AddToServicePoolRequest
+	(*AddToServicePoolResponse)(nil),               // 171: quartermaster.AddToServicePoolResponse
+	(*DrainServiceInstanceRequest)(nil),            // 172: quartermaster.DrainServiceInstanceRequest
+	(*DrainServiceInstanceResponse)(nil),           // 173: quartermaster.DrainServiceInstanceResponse
+	(*ListPeersRequest)(nil),                       // 174: quartermaster.ListPeersRequest
+	(*PeerCluster)(nil),                            // 175: quartermaster.PeerCluster
+	(*ListPeersResponse)(nil),                      // 176: quartermaster.ListPeersResponse
+	(*AssignServiceToClusterRequest)(nil),          // 177: quartermaster.AssignServiceToClusterRequest
+	(*UnassignServiceFromClusterRequest)(nil),      // 178: quartermaster.UnassignServiceFromClusterRequest
+	(*EnableSelfHostingRequest)(nil),               // 179: quartermaster.EnableSelfHostingRequest
+	(*EnableSelfHostingResponse)(nil),              // 180: quartermaster.EnableSelfHostingResponse
+	(*CreateEnrollmentTokenRequest)(nil),           // 181: quartermaster.CreateEnrollmentTokenRequest
+	nil,                                            // 182: quartermaster.GetClusterMetadataBatchResponse.ClustersEntry
+	nil,                                            // 183: quartermaster.BootstrapInfrastructureNodeResponse.SeedServiceEndpointsEntry
+	nil,                                            // 184: quartermaster.BootstrapServiceRequest.MetadataEntry
+	nil,                                            // 185: quartermaster.ServiceInstance.MetadataEntry
+	nil,                                            // 186: quartermaster.InfrastructureSyncResponse.ServiceEndpointsEntry
+	nil,                                            // 187: quartermaster.ResolveTenantAliasesResponse.MappingEntry
+	(*timestamppb.Timestamp)(nil),                  // 188: google.protobuf.Timestamp
+	(*common.CursorPaginationRequest)(nil),         // 189: common.CursorPaginationRequest
+	(*common.CursorPaginationResponse)(nil),        // 190: common.CursorPaginationResponse
+	(*common.SignupAttribution)(nil),               // 191: common.SignupAttribution
+	(*cluster_peer.TenantClusterPeer)(nil),         // 192: cluster_peer.TenantClusterPeer
+	(*tenant_limits.TenantResourceLimits)(nil),     // 193: tenant_limits.TenantResourceLimits
+	(*structpb.Struct)(nil),                        // 194: google.protobuf.Struct
+	(cluster_peer.TenantClusterAccessSource)(0),    // 195: cluster_peer.TenantClusterAccessSource
+	(*emptypb.Empty)(nil),                          // 196: google.protobuf.Empty
 }
 var file_quartermaster_proto_depIdxs = []int32{
-	10,  // 0: quartermaster.GetTenantResponse.tenant:type_name -> quartermaster.Tenant
-	187, // 1: quartermaster.Tenant.created_at:type_name -> google.protobuf.Timestamp
-	187, // 2: quartermaster.Tenant.updated_at:type_name -> google.protobuf.Timestamp
-	188, // 3: quartermaster.ListTenantsRequest.pagination:type_name -> common.CursorPaginationRequest
-	10,  // 4: quartermaster.ListTenantsResponse.tenants:type_name -> quartermaster.Tenant
-	189, // 5: quartermaster.ListTenantsResponse.pagination:type_name -> common.CursorPaginationResponse
-	190, // 6: quartermaster.CreateTenantRequest.attribution:type_name -> common.SignupAttribution
-	10,  // 7: quartermaster.CreateTenantResponse.tenant:type_name -> quartermaster.Tenant
-	188, // 8: quartermaster.GetTenantsByClusterRequest.pagination:type_name -> common.CursorPaginationRequest
-	10,  // 9: quartermaster.GetTenantsByClusterResponse.tenants:type_name -> quartermaster.Tenant
-	189, // 10: quartermaster.GetTenantsByClusterResponse.pagination:type_name -> common.CursorPaginationResponse
-	23,  // 11: quartermaster.ListAliasedTenantsForClusterResponse.tenants:type_name -> quartermaster.AliasedTenantRef
-	27,  // 12: quartermaster.ListActiveTenantsResponse.tenants:type_name -> quartermaster.ActiveTenant
-	191, // 13: quartermaster.ClusterRoutingResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
-	192, // 14: quartermaster.ClusterRoutingResponse.tenant_resource_limits:type_name -> tenant_limits.TenantResourceLimits
-	187, // 15: quartermaster.InfrastructureCluster.created_at:type_name -> google.protobuf.Timestamp
-	187, // 16: quartermaster.InfrastructureCluster.updated_at:type_name -> google.protobuf.Timestamp
+	11,  // 0: quartermaster.GetTenantResponse.tenant:type_name -> quartermaster.Tenant
+	188, // 1: quartermaster.Tenant.created_at:type_name -> google.protobuf.Timestamp
+	188, // 2: quartermaster.Tenant.updated_at:type_name -> google.protobuf.Timestamp
+	189, // 3: quartermaster.ListTenantsRequest.pagination:type_name -> common.CursorPaginationRequest
+	11,  // 4: quartermaster.ListTenantsResponse.tenants:type_name -> quartermaster.Tenant
+	190, // 5: quartermaster.ListTenantsResponse.pagination:type_name -> common.CursorPaginationResponse
+	191, // 6: quartermaster.CreateTenantRequest.attribution:type_name -> common.SignupAttribution
+	11,  // 7: quartermaster.CreateTenantResponse.tenant:type_name -> quartermaster.Tenant
+	189, // 8: quartermaster.GetTenantsByClusterRequest.pagination:type_name -> common.CursorPaginationRequest
+	11,  // 9: quartermaster.GetTenantsByClusterResponse.tenants:type_name -> quartermaster.Tenant
+	190, // 10: quartermaster.GetTenantsByClusterResponse.pagination:type_name -> common.CursorPaginationResponse
+	24,  // 11: quartermaster.ListAliasedTenantsForClusterResponse.tenants:type_name -> quartermaster.AliasedTenantRef
+	28,  // 12: quartermaster.ListActiveTenantsResponse.tenants:type_name -> quartermaster.ActiveTenant
+	192, // 13: quartermaster.ClusterRoutingResponse.cluster_peers:type_name -> cluster_peer.TenantClusterPeer
+	193, // 14: quartermaster.ClusterRoutingResponse.tenant_resource_limits:type_name -> tenant_limits.TenantResourceLimits
+	188, // 15: quartermaster.InfrastructureCluster.created_at:type_name -> google.protobuf.Timestamp
+	188, // 16: quartermaster.InfrastructureCluster.updated_at:type_name -> google.protobuf.Timestamp
 	0,   // 17: quartermaster.InfrastructureCluster.visibility:type_name -> quartermaster.ClusterVisibility
 	1,   // 18: quartermaster.InfrastructureCluster.pricing_model:type_name -> quartermaster.ClusterPricingModel
-	31,  // 19: quartermaster.ClusterResponse.cluster:type_name -> quartermaster.InfrastructureCluster
-	188, // 20: quartermaster.ListClustersRequest.pagination:type_name -> common.CursorPaginationRequest
-	31,  // 21: quartermaster.ListClustersResponse.clusters:type_name -> quartermaster.InfrastructureCluster
-	189, // 22: quartermaster.ListClustersResponse.pagination:type_name -> common.CursorPaginationResponse
-	188, // 23: quartermaster.ListClustersForTenantRequest.pagination:type_name -> common.CursorPaginationRequest
-	193, // 24: quartermaster.ClusterAccessEntry.resource_limits:type_name -> google.protobuf.Struct
-	40,  // 25: quartermaster.ClustersAccessResponse.clusters:type_name -> quartermaster.ClusterAccessEntry
-	189, // 26: quartermaster.ClustersAccessResponse.pagination:type_name -> common.CursorPaginationResponse
-	193, // 27: quartermaster.GrantClusterAccessRequest.resource_limits:type_name -> google.protobuf.Struct
-	187, // 28: quartermaster.GrantClusterAccessRequest.expires_at:type_name -> google.protobuf.Timestamp
-	192, // 29: quartermaster.BootstrapClusterAccessRequest.resource_limits:type_name -> tenant_limits.TenantResourceLimits
-	194, // 30: quartermaster.MaterializeClusterAccessRequest.access_source:type_name -> cluster_peer.TenantClusterAccessSource
-	187, // 31: quartermaster.MaterializeClusterAccessRequest.authorized_at:type_name -> google.protobuf.Timestamp
-	194, // 32: quartermaster.RevokeMaterializedClusterAccessRequest.access_source:type_name -> cluster_peer.TenantClusterAccessSource
-	187, // 33: quartermaster.RevokeMaterializedClusterAccessRequest.authorized_at:type_name -> google.protobuf.Timestamp
-	49,  // 34: quartermaster.ListTenantClusterAccessResponse.rows:type_name -> quartermaster.TenantClusterAccessRow
-	191, // 35: quartermaster.GetTenantEntitlementResponse.effective_access:type_name -> cluster_peer.TenantClusterPeer
-	188, // 36: quartermaster.ListMySubscriptionsRequest.pagination:type_name -> common.CursorPaginationRequest
+	32,  // 19: quartermaster.ClusterResponse.cluster:type_name -> quartermaster.InfrastructureCluster
+	189, // 20: quartermaster.ListClustersRequest.pagination:type_name -> common.CursorPaginationRequest
+	32,  // 21: quartermaster.ListClustersResponse.clusters:type_name -> quartermaster.InfrastructureCluster
+	190, // 22: quartermaster.ListClustersResponse.pagination:type_name -> common.CursorPaginationResponse
+	189, // 23: quartermaster.ListClustersForTenantRequest.pagination:type_name -> common.CursorPaginationRequest
+	194, // 24: quartermaster.ClusterAccessEntry.resource_limits:type_name -> google.protobuf.Struct
+	41,  // 25: quartermaster.ClustersAccessResponse.clusters:type_name -> quartermaster.ClusterAccessEntry
+	190, // 26: quartermaster.ClustersAccessResponse.pagination:type_name -> common.CursorPaginationResponse
+	194, // 27: quartermaster.GrantClusterAccessRequest.resource_limits:type_name -> google.protobuf.Struct
+	188, // 28: quartermaster.GrantClusterAccessRequest.expires_at:type_name -> google.protobuf.Timestamp
+	193, // 29: quartermaster.BootstrapClusterAccessRequest.resource_limits:type_name -> tenant_limits.TenantResourceLimits
+	195, // 30: quartermaster.MaterializeClusterAccessRequest.access_source:type_name -> cluster_peer.TenantClusterAccessSource
+	188, // 31: quartermaster.MaterializeClusterAccessRequest.authorized_at:type_name -> google.protobuf.Timestamp
+	195, // 32: quartermaster.RevokeMaterializedClusterAccessRequest.access_source:type_name -> cluster_peer.TenantClusterAccessSource
+	188, // 33: quartermaster.RevokeMaterializedClusterAccessRequest.authorized_at:type_name -> google.protobuf.Timestamp
+	50,  // 34: quartermaster.ListTenantClusterAccessResponse.rows:type_name -> quartermaster.TenantClusterAccessRow
+	192, // 35: quartermaster.GetTenantEntitlementResponse.effective_access:type_name -> cluster_peer.TenantClusterPeer
+	189, // 36: quartermaster.ListMySubscriptionsRequest.pagination:type_name -> common.CursorPaginationRequest
 	0,   // 37: quartermaster.MarketplaceClusterEntry.visibility:type_name -> quartermaster.ClusterVisibility
 	1,   // 38: quartermaster.MarketplaceClusterEntry.pricing_model:type_name -> quartermaster.ClusterPricingModel
 	2,   // 39: quartermaster.MarketplaceClusterEntry.subscription_status:type_name -> quartermaster.ClusterSubscriptionStatus
-	187, // 40: quartermaster.MarketplaceClusterEntry.created_at:type_name -> google.protobuf.Timestamp
-	188, // 41: quartermaster.ListMarketplaceClustersRequest.pagination:type_name -> common.CursorPaginationRequest
-	55,  // 42: quartermaster.ListMarketplaceClustersResponse.clusters:type_name -> quartermaster.MarketplaceClusterEntry
-	189, // 43: quartermaster.ListMarketplaceClustersResponse.pagination:type_name -> common.CursorPaginationResponse
+	188, // 40: quartermaster.MarketplaceClusterEntry.created_at:type_name -> google.protobuf.Timestamp
+	189, // 41: quartermaster.ListMarketplaceClustersRequest.pagination:type_name -> common.CursorPaginationRequest
+	56,  // 42: quartermaster.ListMarketplaceClustersResponse.clusters:type_name -> quartermaster.MarketplaceClusterEntry
+	190, // 43: quartermaster.ListMarketplaceClustersResponse.pagination:type_name -> common.CursorPaginationResponse
 	0,   // 44: quartermaster.UpdateClusterMarketplaceRequest.visibility:type_name -> quartermaster.ClusterVisibility
 	1,   // 45: quartermaster.UpdateClusterMarketplaceRequest.pricing_model:type_name -> quartermaster.ClusterPricingModel
-	181, // 46: quartermaster.GetClusterMetadataBatchResponse.clusters:type_name -> quartermaster.GetClusterMetadataBatchResponse.ClustersEntry
-	31,  // 47: quartermaster.CreatePrivateClusterResponse.cluster:type_name -> quartermaster.InfrastructureCluster
-	117, // 48: quartermaster.CreatePrivateClusterResponse.bootstrap_token:type_name -> quartermaster.BootstrapToken
-	193, // 49: quartermaster.ClusterInvite.resource_limits:type_name -> google.protobuf.Struct
-	187, // 50: quartermaster.ClusterInvite.created_at:type_name -> google.protobuf.Timestamp
-	187, // 51: quartermaster.ClusterInvite.expires_at:type_name -> google.protobuf.Timestamp
-	187, // 52: quartermaster.ClusterInvite.accepted_at:type_name -> google.protobuf.Timestamp
-	193, // 53: quartermaster.CreateClusterInviteRequest.resource_limits:type_name -> google.protobuf.Struct
-	188, // 54: quartermaster.ListClusterInvitesRequest.pagination:type_name -> common.CursorPaginationRequest
-	188, // 55: quartermaster.ListMyClusterInvitesRequest.pagination:type_name -> common.CursorPaginationRequest
-	65,  // 56: quartermaster.ListClusterInvitesResponse.invites:type_name -> quartermaster.ClusterInvite
-	189, // 57: quartermaster.ListClusterInvitesResponse.pagination:type_name -> common.CursorPaginationResponse
+	182, // 46: quartermaster.GetClusterMetadataBatchResponse.clusters:type_name -> quartermaster.GetClusterMetadataBatchResponse.ClustersEntry
+	32,  // 47: quartermaster.CreatePrivateClusterResponse.cluster:type_name -> quartermaster.InfrastructureCluster
+	118, // 48: quartermaster.CreatePrivateClusterResponse.bootstrap_token:type_name -> quartermaster.BootstrapToken
+	194, // 49: quartermaster.ClusterInvite.resource_limits:type_name -> google.protobuf.Struct
+	188, // 50: quartermaster.ClusterInvite.created_at:type_name -> google.protobuf.Timestamp
+	188, // 51: quartermaster.ClusterInvite.expires_at:type_name -> google.protobuf.Timestamp
+	188, // 52: quartermaster.ClusterInvite.accepted_at:type_name -> google.protobuf.Timestamp
+	194, // 53: quartermaster.CreateClusterInviteRequest.resource_limits:type_name -> google.protobuf.Struct
+	189, // 54: quartermaster.ListClusterInvitesRequest.pagination:type_name -> common.CursorPaginationRequest
+	189, // 55: quartermaster.ListMyClusterInvitesRequest.pagination:type_name -> common.CursorPaginationRequest
+	66,  // 56: quartermaster.ListClusterInvitesResponse.invites:type_name -> quartermaster.ClusterInvite
+	190, // 57: quartermaster.ListClusterInvitesResponse.pagination:type_name -> common.CursorPaginationResponse
 	2,   // 58: quartermaster.ClusterSubscription.subscription_status:type_name -> quartermaster.ClusterSubscriptionStatus
-	193, // 59: quartermaster.ClusterSubscription.resource_limits:type_name -> google.protobuf.Struct
-	187, // 60: quartermaster.ClusterSubscription.requested_at:type_name -> google.protobuf.Timestamp
-	187, // 61: quartermaster.ClusterSubscription.approved_at:type_name -> google.protobuf.Timestamp
-	187, // 62: quartermaster.ClusterSubscription.expires_at:type_name -> google.protobuf.Timestamp
-	187, // 63: quartermaster.ClusterSubscription.created_at:type_name -> google.protobuf.Timestamp
-	187, // 64: quartermaster.ClusterSubscription.updated_at:type_name -> google.protobuf.Timestamp
-	188, // 65: quartermaster.ListPendingSubscriptionsRequest.pagination:type_name -> common.CursorPaginationRequest
-	71,  // 66: quartermaster.ListPendingSubscriptionsResponse.subscriptions:type_name -> quartermaster.ClusterSubscription
-	189, // 67: quartermaster.ListPendingSubscriptionsResponse.pagination:type_name -> common.CursorPaginationResponse
-	187, // 68: quartermaster.InfrastructureNode.last_heartbeat:type_name -> google.protobuf.Timestamp
-	193, // 69: quartermaster.InfrastructureNode.tags:type_name -> google.protobuf.Struct
-	193, // 70: quartermaster.InfrastructureNode.metadata:type_name -> google.protobuf.Struct
-	187, // 71: quartermaster.InfrastructureNode.created_at:type_name -> google.protobuf.Timestamp
-	187, // 72: quartermaster.InfrastructureNode.updated_at:type_name -> google.protobuf.Timestamp
-	125, // 73: quartermaster.InfrastructureNode.resource_snapshot:type_name -> quartermaster.NodeResourceSnapshot
-	79,  // 74: quartermaster.NodeResponse.node:type_name -> quartermaster.InfrastructureNode
-	188, // 75: quartermaster.ListNodesRequest.pagination:type_name -> common.CursorPaginationRequest
-	79,  // 76: quartermaster.ListNodesResponse.nodes:type_name -> quartermaster.InfrastructureNode
-	189, // 77: quartermaster.ListNodesResponse.pagination:type_name -> common.CursorPaginationResponse
-	79,  // 78: quartermaster.ListHealthyNodesForDNSResponse.nodes:type_name -> quartermaster.InfrastructureNode
-	193, // 79: quartermaster.CreateNodeRequest.tags:type_name -> google.protobuf.Struct
-	193, // 80: quartermaster.CreateNodeRequest.metadata:type_name -> google.protobuf.Struct
-	187, // 81: quartermaster.EdgeRelease.published_at:type_name -> google.protobuf.Timestamp
-	87,  // 82: quartermaster.ListEdgeReleasesResponse.releases:type_name -> quartermaster.EdgeRelease
-	87,  // 83: quartermaster.UpsertEdgeReleaseRequest.release:type_name -> quartermaster.EdgeRelease
-	87,  // 84: quartermaster.EdgeReleaseResponse.release:type_name -> quartermaster.EdgeRelease
-	187, // 85: quartermaster.ClusterReleaseTarget.updated_at:type_name -> google.protobuf.Timestamp
-	92,  // 86: quartermaster.ListClusterReleaseTargetsResponse.targets:type_name -> quartermaster.ClusterReleaseTarget
-	92,  // 87: quartermaster.SetClusterReleaseTargetRequest.target:type_name -> quartermaster.ClusterReleaseTarget
-	92,  // 88: quartermaster.ClusterReleaseTargetResponse.target:type_name -> quartermaster.ClusterReleaseTarget
-	104, // 89: quartermaster.ReportAliveNodesRequest.nodes:type_name -> quartermaster.NodeAliveness
-	105, // 90: quartermaster.NodeAliveness.capabilities:type_name -> quartermaster.EdgeCapabilities
-	187, // 91: quartermaster.NodeAliveness.observed_at:type_name -> google.protobuf.Timestamp
-	193, // 92: quartermaster.BootstrapEdgeNodeRequest.labels:type_name -> google.protobuf.Struct
-	126, // 93: quartermaster.BootstrapInfrastructureNodeResponse.seed_peers:type_name -> quartermaster.InfrastructurePeer
-	182, // 94: quartermaster.BootstrapInfrastructureNodeResponse.seed_service_endpoints:type_name -> quartermaster.BootstrapInfrastructureNodeResponse.SeedServiceEndpointsEntry
-	183, // 95: quartermaster.BootstrapServiceRequest.metadata:type_name -> quartermaster.BootstrapServiceRequest.MetadataEntry
-	79,  // 96: quartermaster.BootstrapServiceResponse.node:type_name -> quartermaster.InfrastructureNode
-	188, // 97: quartermaster.ServiceDiscoveryRequest.pagination:type_name -> common.CursorPaginationRequest
-	115, // 98: quartermaster.ServiceDiscoveryResponse.instances:type_name -> quartermaster.ServiceInstance
-	189, // 99: quartermaster.ServiceDiscoveryResponse.pagination:type_name -> common.CursorPaginationResponse
-	187, // 100: quartermaster.ServiceInstance.started_at:type_name -> google.protobuf.Timestamp
-	187, // 101: quartermaster.ServiceInstance.stopped_at:type_name -> google.protobuf.Timestamp
-	187, // 102: quartermaster.ServiceInstance.last_health_check:type_name -> google.protobuf.Timestamp
-	187, // 103: quartermaster.ServiceInstance.created_at:type_name -> google.protobuf.Timestamp
-	187, // 104: quartermaster.ServiceInstance.updated_at:type_name -> google.protobuf.Timestamp
-	184, // 105: quartermaster.ServiceInstance.metadata:type_name -> quartermaster.ServiceInstance.MetadataEntry
-	193, // 106: quartermaster.CreateBootstrapTokenRequest.metadata:type_name -> google.protobuf.Struct
-	193, // 107: quartermaster.BootstrapToken.metadata:type_name -> google.protobuf.Struct
-	187, // 108: quartermaster.BootstrapToken.expires_at:type_name -> google.protobuf.Timestamp
-	187, // 109: quartermaster.BootstrapToken.used_at:type_name -> google.protobuf.Timestamp
-	187, // 110: quartermaster.BootstrapToken.created_at:type_name -> google.protobuf.Timestamp
-	117, // 111: quartermaster.CreateBootstrapTokenResponse.token:type_name -> quartermaster.BootstrapToken
-	188, // 112: quartermaster.ListBootstrapTokensRequest.pagination:type_name -> common.CursorPaginationRequest
-	117, // 113: quartermaster.ListBootstrapTokensResponse.tokens:type_name -> quartermaster.BootstrapToken
-	189, // 114: quartermaster.ListBootstrapTokensResponse.pagination:type_name -> common.CursorPaginationResponse
-	193, // 115: quartermaster.ValidateBootstrapTokenResponse.metadata:type_name -> google.protobuf.Struct
-	125, // 116: quartermaster.InfrastructureSyncRequest.resource_snapshot:type_name -> quartermaster.NodeResourceSnapshot
-	187, // 117: quartermaster.NodeResourceSnapshot.collected_at:type_name -> google.protobuf.Timestamp
-	126, // 118: quartermaster.InfrastructureSyncResponse.peers:type_name -> quartermaster.InfrastructurePeer
-	185, // 119: quartermaster.InfrastructureSyncResponse.service_endpoints:type_name -> quartermaster.InfrastructureSyncResponse.ServiceEndpointsEntry
-	186, // 120: quartermaster.ResolveTenantAliasesResponse.mapping:type_name -> quartermaster.ResolveTenantAliasesResponse.MappingEntry
-	188, // 121: quartermaster.ListClustersAvailableRequest.pagination:type_name -> common.CursorPaginationRequest
-	136, // 122: quartermaster.ClustersAvailableResponse.clusters:type_name -> quartermaster.AvailableClusterEntry
-	189, // 123: quartermaster.ClustersAvailableResponse.pagination:type_name -> common.CursorPaginationResponse
-	188, // 124: quartermaster.ListServicesRequest.pagination:type_name -> common.CursorPaginationRequest
-	193, // 125: quartermaster.Service.tags:type_name -> google.protobuf.Struct
-	187, // 126: quartermaster.Service.created_at:type_name -> google.protobuf.Timestamp
-	187, // 127: quartermaster.Service.updated_at:type_name -> google.protobuf.Timestamp
-	139, // 128: quartermaster.ListServicesResponse.services:type_name -> quartermaster.Service
-	189, // 129: quartermaster.ListServicesResponse.pagination:type_name -> common.CursorPaginationResponse
-	188, // 130: quartermaster.ListClusterServicesRequest.pagination:type_name -> common.CursorPaginationRequest
-	193, // 131: quartermaster.ClusterServiceAssignment.config_blob:type_name -> google.protobuf.Struct
-	193, // 132: quartermaster.ClusterServiceAssignment.environment_vars:type_name -> google.protobuf.Struct
-	187, // 133: quartermaster.ClusterServiceAssignment.last_deployed:type_name -> google.protobuf.Timestamp
-	187, // 134: quartermaster.ClusterServiceAssignment.created_at:type_name -> google.protobuf.Timestamp
-	187, // 135: quartermaster.ClusterServiceAssignment.updated_at:type_name -> google.protobuf.Timestamp
-	142, // 136: quartermaster.ListClusterServicesResponse.services:type_name -> quartermaster.ClusterServiceAssignment
-	189, // 137: quartermaster.ListClusterServicesResponse.pagination:type_name -> common.CursorPaginationResponse
-	188, // 138: quartermaster.ListServiceInstancesRequest.pagination:type_name -> common.CursorPaginationRequest
-	115, // 139: quartermaster.ListServiceInstancesResponse.instances:type_name -> quartermaster.ServiceInstance
-	189, // 140: quartermaster.ListServiceInstancesResponse.pagination:type_name -> common.CursorPaginationResponse
-	146, // 141: quartermaster.ListServiceInstancesByTypeResponse.instances:type_name -> quartermaster.PhysicalServiceInstance
-	188, // 142: quartermaster.ListServicesHealthRequest.pagination:type_name -> common.CursorPaginationRequest
-	187, // 143: quartermaster.ServiceInstanceHealth.last_health_check:type_name -> google.protobuf.Timestamp
-	153, // 144: quartermaster.ListServicesHealthResponse.instances:type_name -> quartermaster.ServiceInstanceHealth
-	189, // 145: quartermaster.ListServicesHealthResponse.pagination:type_name -> common.CursorPaginationResponse
-	193, // 146: quartermaster.TLSBundle.metadata:type_name -> google.protobuf.Struct
-	187, // 147: quartermaster.TLSBundle.created_at:type_name -> google.protobuf.Timestamp
-	187, // 148: quartermaster.TLSBundle.updated_at:type_name -> google.protobuf.Timestamp
-	155, // 149: quartermaster.UpsertTLSBundleRequest.bundle:type_name -> quartermaster.TLSBundle
-	155, // 150: quartermaster.TLSBundleResponse.bundle:type_name -> quartermaster.TLSBundle
-	188, // 151: quartermaster.ListTLSBundlesRequest.pagination:type_name -> common.CursorPaginationRequest
-	155, // 152: quartermaster.ListTLSBundlesResponse.bundles:type_name -> quartermaster.TLSBundle
-	189, // 153: quartermaster.ListTLSBundlesResponse.pagination:type_name -> common.CursorPaginationResponse
-	193, // 154: quartermaster.IngressSite.metadata:type_name -> google.protobuf.Struct
-	187, // 155: quartermaster.IngressSite.created_at:type_name -> google.protobuf.Timestamp
-	187, // 156: quartermaster.IngressSite.updated_at:type_name -> google.protobuf.Timestamp
-	160, // 157: quartermaster.UpsertIngressSiteRequest.site:type_name -> quartermaster.IngressSite
-	160, // 158: quartermaster.IngressSiteResponse.site:type_name -> quartermaster.IngressSite
-	188, // 159: quartermaster.ListIngressSitesRequest.pagination:type_name -> common.CursorPaginationRequest
-	160, // 160: quartermaster.ListIngressSitesResponse.sites:type_name -> quartermaster.IngressSite
-	189, // 161: quartermaster.ListIngressSitesResponse.pagination:type_name -> common.CursorPaginationResponse
-	115, // 162: quartermaster.ServicePoolClusterEntry.instances:type_name -> quartermaster.ServiceInstance
-	187, // 163: quartermaster.ServiceInstanceAssignment.created_at:type_name -> google.protobuf.Timestamp
-	166, // 164: quartermaster.GetServicePoolStatusResponse.clusters:type_name -> quartermaster.ServicePoolClusterEntry
-	167, // 165: quartermaster.GetServicePoolStatusResponse.assignments:type_name -> quartermaster.ServiceInstanceAssignment
-	174, // 166: quartermaster.ListPeersResponse.peers:type_name -> quartermaster.PeerCluster
-	31,  // 167: quartermaster.EnableSelfHostingResponse.cluster:type_name -> quartermaster.InfrastructureCluster
-	117, // 168: quartermaster.EnableSelfHostingResponse.bootstrap_token:type_name -> quartermaster.BootstrapToken
-	62,  // 169: quartermaster.GetClusterMetadataBatchResponse.ClustersEntry.value:type_name -> quartermaster.ClusterMetadata
-	128, // 170: quartermaster.BootstrapInfrastructureNodeResponse.SeedServiceEndpointsEntry.value:type_name -> quartermaster.ServiceEndpoints
-	128, // 171: quartermaster.InfrastructureSyncResponse.ServiceEndpointsEntry.value:type_name -> quartermaster.ServiceEndpoints
-	5,   // 172: quartermaster.TenantService.GetTenant:input_type -> quartermaster.GetTenantRequest
-	7,   // 173: quartermaster.TenantService.ValidateTenant:input_type -> quartermaster.ValidateTenantRequest
-	131, // 174: quartermaster.TenantService.ResolveTenant:input_type -> quartermaster.ResolveTenantRequest
-	132, // 175: quartermaster.TenantService.ResolveTenantAliases:input_type -> quartermaster.ResolveTenantAliasesRequest
-	28,  // 176: quartermaster.TenantService.GetClusterRouting:input_type -> quartermaster.GetClusterRoutingRequest
-	11,  // 177: quartermaster.TenantService.ListTenants:input_type -> quartermaster.ListTenantsRequest
-	13,  // 178: quartermaster.TenantService.CreateTenant:input_type -> quartermaster.CreateTenantRequest
-	15,  // 179: quartermaster.TenantService.UpdateTenant:input_type -> quartermaster.UpdateTenantRequest
-	16,  // 180: quartermaster.TenantService.DeleteTenant:input_type -> quartermaster.DeleteTenantRequest
-	17,  // 181: quartermaster.TenantService.GetTenantCluster:input_type -> quartermaster.GetTenantClusterRequest
-	18,  // 182: quartermaster.TenantService.UpdateTenantCluster:input_type -> quartermaster.UpdateTenantClusterRequest
-	19,  // 183: quartermaster.TenantService.GetTenantsBatch:input_type -> quartermaster.GetTenantsBatchRequest
-	20,  // 184: quartermaster.TenantService.GetTenantsByCluster:input_type -> quartermaster.GetTenantsByClusterRequest
-	22,  // 185: quartermaster.TenantService.ListAliasedTenantsForCluster:input_type -> quartermaster.ListAliasedTenantsForClusterRequest
-	25,  // 186: quartermaster.TenantService.ListActiveTenants:input_type -> quartermaster.ListActiveTenantsRequest
-	30,  // 187: quartermaster.ClusterService.GetCluster:input_type -> quartermaster.GetClusterRequest
-	33,  // 188: quartermaster.ClusterService.ListClusters:input_type -> quartermaster.ListClustersRequest
-	35,  // 189: quartermaster.ClusterService.CreateCluster:input_type -> quartermaster.CreateClusterRequest
-	36,  // 190: quartermaster.ClusterService.UpdateCluster:input_type -> quartermaster.UpdateClusterRequest
-	37,  // 191: quartermaster.ClusterService.UpdateClusterMeshConfig:input_type -> quartermaster.UpdateClusterMeshConfigRequest
-	39,  // 192: quartermaster.ClusterService.ListClustersForTenant:input_type -> quartermaster.ListClustersForTenantRequest
-	135, // 193: quartermaster.ClusterService.ListClustersAvailable:input_type -> quartermaster.ListClustersAvailableRequest
-	42,  // 194: quartermaster.ClusterService.GrantClusterAccess:input_type -> quartermaster.GrantClusterAccessRequest
-	43,  // 195: quartermaster.ClusterService.SubscribeToCluster:input_type -> quartermaster.SubscribeToClusterRequest
-	44,  // 196: quartermaster.ClusterService.BootstrapClusterAccess:input_type -> quartermaster.BootstrapClusterAccessRequest
-	45,  // 197: quartermaster.ClusterService.MaterializeClusterAccess:input_type -> quartermaster.MaterializeClusterAccessRequest
-	46,  // 198: quartermaster.ClusterService.RevokeMaterializedClusterAccess:input_type -> quartermaster.RevokeMaterializedClusterAccessRequest
-	47,  // 199: quartermaster.ClusterService.DeactivateClusterAccess:input_type -> quartermaster.DeactivateClusterAccessRequest
-	48,  // 200: quartermaster.ClusterService.ListTenantClusterAccess:input_type -> quartermaster.ListTenantClusterAccessRequest
-	51,  // 201: quartermaster.ClusterService.GetTenantEntitlement:input_type -> quartermaster.GetTenantEntitlementRequest
-	53,  // 202: quartermaster.ClusterService.UnsubscribeFromCluster:input_type -> quartermaster.UnsubscribeFromClusterRequest
-	54,  // 203: quartermaster.ClusterService.ListMySubscriptions:input_type -> quartermaster.ListMySubscriptionsRequest
-	56,  // 204: quartermaster.ClusterService.ListMarketplaceClusters:input_type -> quartermaster.ListMarketplaceClustersRequest
-	58,  // 205: quartermaster.ClusterService.GetMarketplaceCluster:input_type -> quartermaster.GetMarketplaceClusterRequest
-	59,  // 206: quartermaster.ClusterService.UpdateClusterMarketplace:input_type -> quartermaster.UpdateClusterMarketplaceRequest
-	63,  // 207: quartermaster.ClusterService.CreatePrivateCluster:input_type -> quartermaster.CreatePrivateClusterRequest
-	66,  // 208: quartermaster.ClusterService.CreateClusterInvite:input_type -> quartermaster.CreateClusterInviteRequest
-	67,  // 209: quartermaster.ClusterService.RevokeClusterInvite:input_type -> quartermaster.RevokeClusterInviteRequest
-	68,  // 210: quartermaster.ClusterService.ListClusterInvites:input_type -> quartermaster.ListClusterInvitesRequest
-	69,  // 211: quartermaster.ClusterService.ListMyClusterInvites:input_type -> quartermaster.ListMyClusterInvitesRequest
-	72,  // 212: quartermaster.ClusterService.RequestClusterSubscription:input_type -> quartermaster.RequestClusterSubscriptionRequest
-	73,  // 213: quartermaster.ClusterService.AcceptClusterInvite:input_type -> quartermaster.AcceptClusterInviteRequest
-	74,  // 214: quartermaster.ClusterService.ListPendingSubscriptions:input_type -> quartermaster.ListPendingSubscriptionsRequest
-	76,  // 215: quartermaster.ClusterService.ApproveClusterSubscription:input_type -> quartermaster.ApproveClusterSubscriptionRequest
-	77,  // 216: quartermaster.ClusterService.RejectClusterSubscription:input_type -> quartermaster.RejectClusterSubscriptionRequest
-	60,  // 217: quartermaster.ClusterService.GetClusterMetadataBatch:input_type -> quartermaster.GetClusterMetadataBatchRequest
-	173, // 218: quartermaster.ClusterService.ListPeers:input_type -> quartermaster.ListPeersRequest
-	176, // 219: quartermaster.ClusterService.AssignServiceToCluster:input_type -> quartermaster.AssignServiceToClusterRequest
-	177, // 220: quartermaster.ClusterService.UnassignServiceFromCluster:input_type -> quartermaster.UnassignServiceFromClusterRequest
-	178, // 221: quartermaster.ClusterService.EnableSelfHosting:input_type -> quartermaster.EnableSelfHostingRequest
-	180, // 222: quartermaster.ClusterService.CreateEnrollmentToken:input_type -> quartermaster.CreateEnrollmentTokenRequest
-	88,  // 223: quartermaster.ClusterService.ListEdgeReleases:input_type -> quartermaster.ListEdgeReleasesRequest
-	90,  // 224: quartermaster.ClusterService.UpsertEdgeRelease:input_type -> quartermaster.UpsertEdgeReleaseRequest
-	93,  // 225: quartermaster.ClusterService.GetClusterReleaseTarget:input_type -> quartermaster.GetClusterReleaseTargetRequest
-	94,  // 226: quartermaster.ClusterService.ListClusterReleaseTargets:input_type -> quartermaster.ListClusterReleaseTargetsRequest
-	96,  // 227: quartermaster.ClusterService.SetClusterReleaseTarget:input_type -> quartermaster.SetClusterReleaseTargetRequest
-	78,  // 228: quartermaster.NodeService.GetNode:input_type -> quartermaster.GetNodeRequest
-	81,  // 229: quartermaster.NodeService.ListNodes:input_type -> quartermaster.ListNodesRequest
-	83,  // 230: quartermaster.NodeService.ListHealthyNodesForDNS:input_type -> quartermaster.ListHealthyNodesForDNSRequest
-	85,  // 231: quartermaster.NodeService.CreateNode:input_type -> quartermaster.CreateNodeRequest
-	86,  // 232: quartermaster.NodeService.UpdateNodeStatus:input_type -> quartermaster.UpdateNodeStatusRequest
-	3,   // 233: quartermaster.NodeService.SetNodeEnrollmentOrigin:input_type -> quartermaster.SetNodeEnrollmentOriginRequest
-	98,  // 234: quartermaster.NodeService.ResolveNodeFingerprint:input_type -> quartermaster.ResolveNodeFingerprintRequest
-	100, // 235: quartermaster.NodeService.GetNodeOwner:input_type -> quartermaster.GetNodeOwnerRequest
-	101, // 236: quartermaster.NodeService.GetNodeByLogicalName:input_type -> quartermaster.GetNodeByLogicalNameRequest
-	102, // 237: quartermaster.NodeService.UpdateNodeHardware:input_type -> quartermaster.UpdateNodeHardwareRequest
-	103, // 238: quartermaster.NodeService.ReportAliveNodes:input_type -> quartermaster.ReportAliveNodesRequest
-	107, // 239: quartermaster.BootstrapService.BootstrapEdgeNode:input_type -> quartermaster.BootstrapEdgeNodeRequest
-	109, // 240: quartermaster.BootstrapService.BootstrapInfrastructureNode:input_type -> quartermaster.BootstrapInfrastructureNodeRequest
-	111, // 241: quartermaster.BootstrapService.BootstrapService:input_type -> quartermaster.BootstrapServiceRequest
-	113, // 242: quartermaster.BootstrapService.DiscoverServices:input_type -> quartermaster.ServiceDiscoveryRequest
-	165, // 243: quartermaster.BootstrapService.GetServicePoolStatus:input_type -> quartermaster.GetServicePoolStatusRequest
-	169, // 244: quartermaster.BootstrapService.AddToServicePool:input_type -> quartermaster.AddToServicePoolRequest
-	171, // 245: quartermaster.BootstrapService.DrainServiceInstance:input_type -> quartermaster.DrainServiceInstanceRequest
-	116, // 246: quartermaster.BootstrapService.CreateBootstrapToken:input_type -> quartermaster.CreateBootstrapTokenRequest
-	119, // 247: quartermaster.BootstrapService.ListBootstrapTokens:input_type -> quartermaster.ListBootstrapTokensRequest
-	121, // 248: quartermaster.BootstrapService.RevokeBootstrapToken:input_type -> quartermaster.RevokeBootstrapTokenRequest
-	122, // 249: quartermaster.BootstrapService.ValidateBootstrapToken:input_type -> quartermaster.ValidateBootstrapTokenRequest
-	124, // 250: quartermaster.MeshService.SyncMesh:input_type -> quartermaster.InfrastructureSyncRequest
-	138, // 251: quartermaster.ServiceRegistryService.ListServices:input_type -> quartermaster.ListServicesRequest
-	141, // 252: quartermaster.ServiceRegistryService.ListClusterServices:input_type -> quartermaster.ListClusterServicesRequest
-	144, // 253: quartermaster.ServiceRegistryService.ListServiceInstances:input_type -> quartermaster.ListServiceInstancesRequest
-	147, // 254: quartermaster.ServiceRegistryService.ListServiceInstancesByType:input_type -> quartermaster.ListServiceInstancesByTypeRequest
-	149, // 255: quartermaster.ServiceRegistryService.ListServiceClusterAssignments:input_type -> quartermaster.ListServiceClusterAssignmentsRequest
-	151, // 256: quartermaster.ServiceRegistryService.ListServicesHealth:input_type -> quartermaster.ListServicesHealthRequest
-	152, // 257: quartermaster.ServiceRegistryService.GetServiceHealth:input_type -> quartermaster.GetServiceHealthRequest
-	129, // 258: quartermaster.ServiceRegistryService.EnqueueServiceEvent:input_type -> quartermaster.EnqueueServiceEventRequest
-	156, // 259: quartermaster.IngressService.UpsertTLSBundle:input_type -> quartermaster.UpsertTLSBundleRequest
-	158, // 260: quartermaster.IngressService.ListTLSBundles:input_type -> quartermaster.ListTLSBundlesRequest
-	161, // 261: quartermaster.IngressService.UpsertIngressSite:input_type -> quartermaster.UpsertIngressSiteRequest
-	163, // 262: quartermaster.IngressService.ListIngressSites:input_type -> quartermaster.ListIngressSitesRequest
-	6,   // 263: quartermaster.TenantService.GetTenant:output_type -> quartermaster.GetTenantResponse
-	8,   // 264: quartermaster.TenantService.ValidateTenant:output_type -> quartermaster.ValidateTenantResponse
-	134, // 265: quartermaster.TenantService.ResolveTenant:output_type -> quartermaster.ResolveTenantResponse
-	133, // 266: quartermaster.TenantService.ResolveTenantAliases:output_type -> quartermaster.ResolveTenantAliasesResponse
-	29,  // 267: quartermaster.TenantService.GetClusterRouting:output_type -> quartermaster.ClusterRoutingResponse
-	12,  // 268: quartermaster.TenantService.ListTenants:output_type -> quartermaster.ListTenantsResponse
-	14,  // 269: quartermaster.TenantService.CreateTenant:output_type -> quartermaster.CreateTenantResponse
-	10,  // 270: quartermaster.TenantService.UpdateTenant:output_type -> quartermaster.Tenant
-	195, // 271: quartermaster.TenantService.DeleteTenant:output_type -> google.protobuf.Empty
-	6,   // 272: quartermaster.TenantService.GetTenantCluster:output_type -> quartermaster.GetTenantResponse
-	195, // 273: quartermaster.TenantService.UpdateTenantCluster:output_type -> google.protobuf.Empty
-	12,  // 274: quartermaster.TenantService.GetTenantsBatch:output_type -> quartermaster.ListTenantsResponse
-	21,  // 275: quartermaster.TenantService.GetTenantsByCluster:output_type -> quartermaster.GetTenantsByClusterResponse
-	24,  // 276: quartermaster.TenantService.ListAliasedTenantsForCluster:output_type -> quartermaster.ListAliasedTenantsForClusterResponse
-	26,  // 277: quartermaster.TenantService.ListActiveTenants:output_type -> quartermaster.ListActiveTenantsResponse
-	32,  // 278: quartermaster.ClusterService.GetCluster:output_type -> quartermaster.ClusterResponse
-	34,  // 279: quartermaster.ClusterService.ListClusters:output_type -> quartermaster.ListClustersResponse
-	32,  // 280: quartermaster.ClusterService.CreateCluster:output_type -> quartermaster.ClusterResponse
-	32,  // 281: quartermaster.ClusterService.UpdateCluster:output_type -> quartermaster.ClusterResponse
-	38,  // 282: quartermaster.ClusterService.UpdateClusterMeshConfig:output_type -> quartermaster.UpdateClusterMeshConfigResponse
-	41,  // 283: quartermaster.ClusterService.ListClustersForTenant:output_type -> quartermaster.ClustersAccessResponse
-	137, // 284: quartermaster.ClusterService.ListClustersAvailable:output_type -> quartermaster.ClustersAvailableResponse
-	195, // 285: quartermaster.ClusterService.GrantClusterAccess:output_type -> google.protobuf.Empty
-	195, // 286: quartermaster.ClusterService.SubscribeToCluster:output_type -> google.protobuf.Empty
-	195, // 287: quartermaster.ClusterService.BootstrapClusterAccess:output_type -> google.protobuf.Empty
-	195, // 288: quartermaster.ClusterService.MaterializeClusterAccess:output_type -> google.protobuf.Empty
-	195, // 289: quartermaster.ClusterService.RevokeMaterializedClusterAccess:output_type -> google.protobuf.Empty
-	195, // 290: quartermaster.ClusterService.DeactivateClusterAccess:output_type -> google.protobuf.Empty
-	50,  // 291: quartermaster.ClusterService.ListTenantClusterAccess:output_type -> quartermaster.ListTenantClusterAccessResponse
-	52,  // 292: quartermaster.ClusterService.GetTenantEntitlement:output_type -> quartermaster.GetTenantEntitlementResponse
-	195, // 293: quartermaster.ClusterService.UnsubscribeFromCluster:output_type -> google.protobuf.Empty
-	34,  // 294: quartermaster.ClusterService.ListMySubscriptions:output_type -> quartermaster.ListClustersResponse
-	57,  // 295: quartermaster.ClusterService.ListMarketplaceClusters:output_type -> quartermaster.ListMarketplaceClustersResponse
-	55,  // 296: quartermaster.ClusterService.GetMarketplaceCluster:output_type -> quartermaster.MarketplaceClusterEntry
-	32,  // 297: quartermaster.ClusterService.UpdateClusterMarketplace:output_type -> quartermaster.ClusterResponse
-	64,  // 298: quartermaster.ClusterService.CreatePrivateCluster:output_type -> quartermaster.CreatePrivateClusterResponse
-	65,  // 299: quartermaster.ClusterService.CreateClusterInvite:output_type -> quartermaster.ClusterInvite
-	195, // 300: quartermaster.ClusterService.RevokeClusterInvite:output_type -> google.protobuf.Empty
-	70,  // 301: quartermaster.ClusterService.ListClusterInvites:output_type -> quartermaster.ListClusterInvitesResponse
-	70,  // 302: quartermaster.ClusterService.ListMyClusterInvites:output_type -> quartermaster.ListClusterInvitesResponse
-	71,  // 303: quartermaster.ClusterService.RequestClusterSubscription:output_type -> quartermaster.ClusterSubscription
-	71,  // 304: quartermaster.ClusterService.AcceptClusterInvite:output_type -> quartermaster.ClusterSubscription
-	75,  // 305: quartermaster.ClusterService.ListPendingSubscriptions:output_type -> quartermaster.ListPendingSubscriptionsResponse
-	71,  // 306: quartermaster.ClusterService.ApproveClusterSubscription:output_type -> quartermaster.ClusterSubscription
-	71,  // 307: quartermaster.ClusterService.RejectClusterSubscription:output_type -> quartermaster.ClusterSubscription
-	61,  // 308: quartermaster.ClusterService.GetClusterMetadataBatch:output_type -> quartermaster.GetClusterMetadataBatchResponse
-	175, // 309: quartermaster.ClusterService.ListPeers:output_type -> quartermaster.ListPeersResponse
-	195, // 310: quartermaster.ClusterService.AssignServiceToCluster:output_type -> google.protobuf.Empty
-	195, // 311: quartermaster.ClusterService.UnassignServiceFromCluster:output_type -> google.protobuf.Empty
-	179, // 312: quartermaster.ClusterService.EnableSelfHosting:output_type -> quartermaster.EnableSelfHostingResponse
-	118, // 313: quartermaster.ClusterService.CreateEnrollmentToken:output_type -> quartermaster.CreateBootstrapTokenResponse
-	89,  // 314: quartermaster.ClusterService.ListEdgeReleases:output_type -> quartermaster.ListEdgeReleasesResponse
-	91,  // 315: quartermaster.ClusterService.UpsertEdgeRelease:output_type -> quartermaster.EdgeReleaseResponse
-	97,  // 316: quartermaster.ClusterService.GetClusterReleaseTarget:output_type -> quartermaster.ClusterReleaseTargetResponse
-	95,  // 317: quartermaster.ClusterService.ListClusterReleaseTargets:output_type -> quartermaster.ListClusterReleaseTargetsResponse
-	97,  // 318: quartermaster.ClusterService.SetClusterReleaseTarget:output_type -> quartermaster.ClusterReleaseTargetResponse
-	80,  // 319: quartermaster.NodeService.GetNode:output_type -> quartermaster.NodeResponse
-	82,  // 320: quartermaster.NodeService.ListNodes:output_type -> quartermaster.ListNodesResponse
-	84,  // 321: quartermaster.NodeService.ListHealthyNodesForDNS:output_type -> quartermaster.ListHealthyNodesForDNSResponse
-	80,  // 322: quartermaster.NodeService.CreateNode:output_type -> quartermaster.NodeResponse
-	80,  // 323: quartermaster.NodeService.UpdateNodeStatus:output_type -> quartermaster.NodeResponse
-	4,   // 324: quartermaster.NodeService.SetNodeEnrollmentOrigin:output_type -> quartermaster.SetNodeEnrollmentOriginResponse
-	99,  // 325: quartermaster.NodeService.ResolveNodeFingerprint:output_type -> quartermaster.ResolveNodeFingerprintResponse
-	106, // 326: quartermaster.NodeService.GetNodeOwner:output_type -> quartermaster.NodeOwnerResponse
-	80,  // 327: quartermaster.NodeService.GetNodeByLogicalName:output_type -> quartermaster.NodeResponse
-	195, // 328: quartermaster.NodeService.UpdateNodeHardware:output_type -> google.protobuf.Empty
-	195, // 329: quartermaster.NodeService.ReportAliveNodes:output_type -> google.protobuf.Empty
-	108, // 330: quartermaster.BootstrapService.BootstrapEdgeNode:output_type -> quartermaster.BootstrapEdgeNodeResponse
-	110, // 331: quartermaster.BootstrapService.BootstrapInfrastructureNode:output_type -> quartermaster.BootstrapInfrastructureNodeResponse
-	112, // 332: quartermaster.BootstrapService.BootstrapService:output_type -> quartermaster.BootstrapServiceResponse
-	114, // 333: quartermaster.BootstrapService.DiscoverServices:output_type -> quartermaster.ServiceDiscoveryResponse
-	168, // 334: quartermaster.BootstrapService.GetServicePoolStatus:output_type -> quartermaster.GetServicePoolStatusResponse
-	170, // 335: quartermaster.BootstrapService.AddToServicePool:output_type -> quartermaster.AddToServicePoolResponse
-	172, // 336: quartermaster.BootstrapService.DrainServiceInstance:output_type -> quartermaster.DrainServiceInstanceResponse
-	118, // 337: quartermaster.BootstrapService.CreateBootstrapToken:output_type -> quartermaster.CreateBootstrapTokenResponse
-	120, // 338: quartermaster.BootstrapService.ListBootstrapTokens:output_type -> quartermaster.ListBootstrapTokensResponse
-	195, // 339: quartermaster.BootstrapService.RevokeBootstrapToken:output_type -> google.protobuf.Empty
-	123, // 340: quartermaster.BootstrapService.ValidateBootstrapToken:output_type -> quartermaster.ValidateBootstrapTokenResponse
-	127, // 341: quartermaster.MeshService.SyncMesh:output_type -> quartermaster.InfrastructureSyncResponse
-	140, // 342: quartermaster.ServiceRegistryService.ListServices:output_type -> quartermaster.ListServicesResponse
-	143, // 343: quartermaster.ServiceRegistryService.ListClusterServices:output_type -> quartermaster.ListClusterServicesResponse
-	145, // 344: quartermaster.ServiceRegistryService.ListServiceInstances:output_type -> quartermaster.ListServiceInstancesResponse
-	148, // 345: quartermaster.ServiceRegistryService.ListServiceInstancesByType:output_type -> quartermaster.ListServiceInstancesByTypeResponse
-	150, // 346: quartermaster.ServiceRegistryService.ListServiceClusterAssignments:output_type -> quartermaster.ListServiceClusterAssignmentsResponse
-	154, // 347: quartermaster.ServiceRegistryService.ListServicesHealth:output_type -> quartermaster.ListServicesHealthResponse
-	154, // 348: quartermaster.ServiceRegistryService.GetServiceHealth:output_type -> quartermaster.ListServicesHealthResponse
-	130, // 349: quartermaster.ServiceRegistryService.EnqueueServiceEvent:output_type -> quartermaster.EnqueueServiceEventResponse
-	157, // 350: quartermaster.IngressService.UpsertTLSBundle:output_type -> quartermaster.TLSBundleResponse
-	159, // 351: quartermaster.IngressService.ListTLSBundles:output_type -> quartermaster.ListTLSBundlesResponse
-	162, // 352: quartermaster.IngressService.UpsertIngressSite:output_type -> quartermaster.IngressSiteResponse
-	164, // 353: quartermaster.IngressService.ListIngressSites:output_type -> quartermaster.ListIngressSitesResponse
-	263, // [263:354] is the sub-list for method output_type
-	172, // [172:263] is the sub-list for method input_type
-	172, // [172:172] is the sub-list for extension type_name
-	172, // [172:172] is the sub-list for extension extendee
-	0,   // [0:172] is the sub-list for field type_name
+	194, // 59: quartermaster.ClusterSubscription.resource_limits:type_name -> google.protobuf.Struct
+	188, // 60: quartermaster.ClusterSubscription.requested_at:type_name -> google.protobuf.Timestamp
+	188, // 61: quartermaster.ClusterSubscription.approved_at:type_name -> google.protobuf.Timestamp
+	188, // 62: quartermaster.ClusterSubscription.expires_at:type_name -> google.protobuf.Timestamp
+	188, // 63: quartermaster.ClusterSubscription.created_at:type_name -> google.protobuf.Timestamp
+	188, // 64: quartermaster.ClusterSubscription.updated_at:type_name -> google.protobuf.Timestamp
+	189, // 65: quartermaster.ListPendingSubscriptionsRequest.pagination:type_name -> common.CursorPaginationRequest
+	72,  // 66: quartermaster.ListPendingSubscriptionsResponse.subscriptions:type_name -> quartermaster.ClusterSubscription
+	190, // 67: quartermaster.ListPendingSubscriptionsResponse.pagination:type_name -> common.CursorPaginationResponse
+	188, // 68: quartermaster.InfrastructureNode.last_heartbeat:type_name -> google.protobuf.Timestamp
+	194, // 69: quartermaster.InfrastructureNode.tags:type_name -> google.protobuf.Struct
+	194, // 70: quartermaster.InfrastructureNode.metadata:type_name -> google.protobuf.Struct
+	188, // 71: quartermaster.InfrastructureNode.created_at:type_name -> google.protobuf.Timestamp
+	188, // 72: quartermaster.InfrastructureNode.updated_at:type_name -> google.protobuf.Timestamp
+	126, // 73: quartermaster.InfrastructureNode.resource_snapshot:type_name -> quartermaster.NodeResourceSnapshot
+	80,  // 74: quartermaster.NodeResponse.node:type_name -> quartermaster.InfrastructureNode
+	189, // 75: quartermaster.ListNodesRequest.pagination:type_name -> common.CursorPaginationRequest
+	80,  // 76: quartermaster.ListNodesResponse.nodes:type_name -> quartermaster.InfrastructureNode
+	190, // 77: quartermaster.ListNodesResponse.pagination:type_name -> common.CursorPaginationResponse
+	80,  // 78: quartermaster.ListHealthyNodesForDNSResponse.nodes:type_name -> quartermaster.InfrastructureNode
+	194, // 79: quartermaster.CreateNodeRequest.tags:type_name -> google.protobuf.Struct
+	194, // 80: quartermaster.CreateNodeRequest.metadata:type_name -> google.protobuf.Struct
+	188, // 81: quartermaster.EdgeRelease.published_at:type_name -> google.protobuf.Timestamp
+	88,  // 82: quartermaster.ListEdgeReleasesResponse.releases:type_name -> quartermaster.EdgeRelease
+	88,  // 83: quartermaster.UpsertEdgeReleaseRequest.release:type_name -> quartermaster.EdgeRelease
+	88,  // 84: quartermaster.EdgeReleaseResponse.release:type_name -> quartermaster.EdgeRelease
+	188, // 85: quartermaster.ClusterReleaseTarget.updated_at:type_name -> google.protobuf.Timestamp
+	93,  // 86: quartermaster.ListClusterReleaseTargetsResponse.targets:type_name -> quartermaster.ClusterReleaseTarget
+	93,  // 87: quartermaster.SetClusterReleaseTargetRequest.target:type_name -> quartermaster.ClusterReleaseTarget
+	93,  // 88: quartermaster.ClusterReleaseTargetResponse.target:type_name -> quartermaster.ClusterReleaseTarget
+	3,   // 89: quartermaster.ResolveNodeFingerprintResponse.match_source:type_name -> quartermaster.NodeFingerprintMatchSource
+	105, // 90: quartermaster.ReportAliveNodesRequest.nodes:type_name -> quartermaster.NodeAliveness
+	106, // 91: quartermaster.NodeAliveness.capabilities:type_name -> quartermaster.EdgeCapabilities
+	188, // 92: quartermaster.NodeAliveness.observed_at:type_name -> google.protobuf.Timestamp
+	194, // 93: quartermaster.BootstrapEdgeNodeRequest.labels:type_name -> google.protobuf.Struct
+	127, // 94: quartermaster.BootstrapInfrastructureNodeResponse.seed_peers:type_name -> quartermaster.InfrastructurePeer
+	183, // 95: quartermaster.BootstrapInfrastructureNodeResponse.seed_service_endpoints:type_name -> quartermaster.BootstrapInfrastructureNodeResponse.SeedServiceEndpointsEntry
+	184, // 96: quartermaster.BootstrapServiceRequest.metadata:type_name -> quartermaster.BootstrapServiceRequest.MetadataEntry
+	80,  // 97: quartermaster.BootstrapServiceResponse.node:type_name -> quartermaster.InfrastructureNode
+	189, // 98: quartermaster.ServiceDiscoveryRequest.pagination:type_name -> common.CursorPaginationRequest
+	116, // 99: quartermaster.ServiceDiscoveryResponse.instances:type_name -> quartermaster.ServiceInstance
+	190, // 100: quartermaster.ServiceDiscoveryResponse.pagination:type_name -> common.CursorPaginationResponse
+	188, // 101: quartermaster.ServiceInstance.started_at:type_name -> google.protobuf.Timestamp
+	188, // 102: quartermaster.ServiceInstance.stopped_at:type_name -> google.protobuf.Timestamp
+	188, // 103: quartermaster.ServiceInstance.last_health_check:type_name -> google.protobuf.Timestamp
+	188, // 104: quartermaster.ServiceInstance.created_at:type_name -> google.protobuf.Timestamp
+	188, // 105: quartermaster.ServiceInstance.updated_at:type_name -> google.protobuf.Timestamp
+	185, // 106: quartermaster.ServiceInstance.metadata:type_name -> quartermaster.ServiceInstance.MetadataEntry
+	194, // 107: quartermaster.CreateBootstrapTokenRequest.metadata:type_name -> google.protobuf.Struct
+	194, // 108: quartermaster.BootstrapToken.metadata:type_name -> google.protobuf.Struct
+	188, // 109: quartermaster.BootstrapToken.expires_at:type_name -> google.protobuf.Timestamp
+	188, // 110: quartermaster.BootstrapToken.used_at:type_name -> google.protobuf.Timestamp
+	188, // 111: quartermaster.BootstrapToken.created_at:type_name -> google.protobuf.Timestamp
+	118, // 112: quartermaster.CreateBootstrapTokenResponse.token:type_name -> quartermaster.BootstrapToken
+	189, // 113: quartermaster.ListBootstrapTokensRequest.pagination:type_name -> common.CursorPaginationRequest
+	118, // 114: quartermaster.ListBootstrapTokensResponse.tokens:type_name -> quartermaster.BootstrapToken
+	190, // 115: quartermaster.ListBootstrapTokensResponse.pagination:type_name -> common.CursorPaginationResponse
+	194, // 116: quartermaster.ValidateBootstrapTokenResponse.metadata:type_name -> google.protobuf.Struct
+	126, // 117: quartermaster.InfrastructureSyncRequest.resource_snapshot:type_name -> quartermaster.NodeResourceSnapshot
+	188, // 118: quartermaster.NodeResourceSnapshot.collected_at:type_name -> google.protobuf.Timestamp
+	127, // 119: quartermaster.InfrastructureSyncResponse.peers:type_name -> quartermaster.InfrastructurePeer
+	186, // 120: quartermaster.InfrastructureSyncResponse.service_endpoints:type_name -> quartermaster.InfrastructureSyncResponse.ServiceEndpointsEntry
+	187, // 121: quartermaster.ResolveTenantAliasesResponse.mapping:type_name -> quartermaster.ResolveTenantAliasesResponse.MappingEntry
+	189, // 122: quartermaster.ListClustersAvailableRequest.pagination:type_name -> common.CursorPaginationRequest
+	137, // 123: quartermaster.ClustersAvailableResponse.clusters:type_name -> quartermaster.AvailableClusterEntry
+	190, // 124: quartermaster.ClustersAvailableResponse.pagination:type_name -> common.CursorPaginationResponse
+	189, // 125: quartermaster.ListServicesRequest.pagination:type_name -> common.CursorPaginationRequest
+	194, // 126: quartermaster.Service.tags:type_name -> google.protobuf.Struct
+	188, // 127: quartermaster.Service.created_at:type_name -> google.protobuf.Timestamp
+	188, // 128: quartermaster.Service.updated_at:type_name -> google.protobuf.Timestamp
+	140, // 129: quartermaster.ListServicesResponse.services:type_name -> quartermaster.Service
+	190, // 130: quartermaster.ListServicesResponse.pagination:type_name -> common.CursorPaginationResponse
+	189, // 131: quartermaster.ListClusterServicesRequest.pagination:type_name -> common.CursorPaginationRequest
+	194, // 132: quartermaster.ClusterServiceAssignment.config_blob:type_name -> google.protobuf.Struct
+	194, // 133: quartermaster.ClusterServiceAssignment.environment_vars:type_name -> google.protobuf.Struct
+	188, // 134: quartermaster.ClusterServiceAssignment.last_deployed:type_name -> google.protobuf.Timestamp
+	188, // 135: quartermaster.ClusterServiceAssignment.created_at:type_name -> google.protobuf.Timestamp
+	188, // 136: quartermaster.ClusterServiceAssignment.updated_at:type_name -> google.protobuf.Timestamp
+	143, // 137: quartermaster.ListClusterServicesResponse.services:type_name -> quartermaster.ClusterServiceAssignment
+	190, // 138: quartermaster.ListClusterServicesResponse.pagination:type_name -> common.CursorPaginationResponse
+	189, // 139: quartermaster.ListServiceInstancesRequest.pagination:type_name -> common.CursorPaginationRequest
+	116, // 140: quartermaster.ListServiceInstancesResponse.instances:type_name -> quartermaster.ServiceInstance
+	190, // 141: quartermaster.ListServiceInstancesResponse.pagination:type_name -> common.CursorPaginationResponse
+	147, // 142: quartermaster.ListServiceInstancesByTypeResponse.instances:type_name -> quartermaster.PhysicalServiceInstance
+	189, // 143: quartermaster.ListServicesHealthRequest.pagination:type_name -> common.CursorPaginationRequest
+	188, // 144: quartermaster.ServiceInstanceHealth.last_health_check:type_name -> google.protobuf.Timestamp
+	154, // 145: quartermaster.ListServicesHealthResponse.instances:type_name -> quartermaster.ServiceInstanceHealth
+	190, // 146: quartermaster.ListServicesHealthResponse.pagination:type_name -> common.CursorPaginationResponse
+	194, // 147: quartermaster.TLSBundle.metadata:type_name -> google.protobuf.Struct
+	188, // 148: quartermaster.TLSBundle.created_at:type_name -> google.protobuf.Timestamp
+	188, // 149: quartermaster.TLSBundle.updated_at:type_name -> google.protobuf.Timestamp
+	156, // 150: quartermaster.UpsertTLSBundleRequest.bundle:type_name -> quartermaster.TLSBundle
+	156, // 151: quartermaster.TLSBundleResponse.bundle:type_name -> quartermaster.TLSBundle
+	189, // 152: quartermaster.ListTLSBundlesRequest.pagination:type_name -> common.CursorPaginationRequest
+	156, // 153: quartermaster.ListTLSBundlesResponse.bundles:type_name -> quartermaster.TLSBundle
+	190, // 154: quartermaster.ListTLSBundlesResponse.pagination:type_name -> common.CursorPaginationResponse
+	194, // 155: quartermaster.IngressSite.metadata:type_name -> google.protobuf.Struct
+	188, // 156: quartermaster.IngressSite.created_at:type_name -> google.protobuf.Timestamp
+	188, // 157: quartermaster.IngressSite.updated_at:type_name -> google.protobuf.Timestamp
+	161, // 158: quartermaster.UpsertIngressSiteRequest.site:type_name -> quartermaster.IngressSite
+	161, // 159: quartermaster.IngressSiteResponse.site:type_name -> quartermaster.IngressSite
+	189, // 160: quartermaster.ListIngressSitesRequest.pagination:type_name -> common.CursorPaginationRequest
+	161, // 161: quartermaster.ListIngressSitesResponse.sites:type_name -> quartermaster.IngressSite
+	190, // 162: quartermaster.ListIngressSitesResponse.pagination:type_name -> common.CursorPaginationResponse
+	116, // 163: quartermaster.ServicePoolClusterEntry.instances:type_name -> quartermaster.ServiceInstance
+	188, // 164: quartermaster.ServiceInstanceAssignment.created_at:type_name -> google.protobuf.Timestamp
+	167, // 165: quartermaster.GetServicePoolStatusResponse.clusters:type_name -> quartermaster.ServicePoolClusterEntry
+	168, // 166: quartermaster.GetServicePoolStatusResponse.assignments:type_name -> quartermaster.ServiceInstanceAssignment
+	175, // 167: quartermaster.ListPeersResponse.peers:type_name -> quartermaster.PeerCluster
+	32,  // 168: quartermaster.EnableSelfHostingResponse.cluster:type_name -> quartermaster.InfrastructureCluster
+	118, // 169: quartermaster.EnableSelfHostingResponse.bootstrap_token:type_name -> quartermaster.BootstrapToken
+	63,  // 170: quartermaster.GetClusterMetadataBatchResponse.ClustersEntry.value:type_name -> quartermaster.ClusterMetadata
+	129, // 171: quartermaster.BootstrapInfrastructureNodeResponse.SeedServiceEndpointsEntry.value:type_name -> quartermaster.ServiceEndpoints
+	129, // 172: quartermaster.InfrastructureSyncResponse.ServiceEndpointsEntry.value:type_name -> quartermaster.ServiceEndpoints
+	6,   // 173: quartermaster.TenantService.GetTenant:input_type -> quartermaster.GetTenantRequest
+	8,   // 174: quartermaster.TenantService.ValidateTenant:input_type -> quartermaster.ValidateTenantRequest
+	132, // 175: quartermaster.TenantService.ResolveTenant:input_type -> quartermaster.ResolveTenantRequest
+	133, // 176: quartermaster.TenantService.ResolveTenantAliases:input_type -> quartermaster.ResolveTenantAliasesRequest
+	29,  // 177: quartermaster.TenantService.GetClusterRouting:input_type -> quartermaster.GetClusterRoutingRequest
+	12,  // 178: quartermaster.TenantService.ListTenants:input_type -> quartermaster.ListTenantsRequest
+	14,  // 179: quartermaster.TenantService.CreateTenant:input_type -> quartermaster.CreateTenantRequest
+	16,  // 180: quartermaster.TenantService.UpdateTenant:input_type -> quartermaster.UpdateTenantRequest
+	17,  // 181: quartermaster.TenantService.DeleteTenant:input_type -> quartermaster.DeleteTenantRequest
+	18,  // 182: quartermaster.TenantService.GetTenantCluster:input_type -> quartermaster.GetTenantClusterRequest
+	19,  // 183: quartermaster.TenantService.UpdateTenantCluster:input_type -> quartermaster.UpdateTenantClusterRequest
+	20,  // 184: quartermaster.TenantService.GetTenantsBatch:input_type -> quartermaster.GetTenantsBatchRequest
+	21,  // 185: quartermaster.TenantService.GetTenantsByCluster:input_type -> quartermaster.GetTenantsByClusterRequest
+	23,  // 186: quartermaster.TenantService.ListAliasedTenantsForCluster:input_type -> quartermaster.ListAliasedTenantsForClusterRequest
+	26,  // 187: quartermaster.TenantService.ListActiveTenants:input_type -> quartermaster.ListActiveTenantsRequest
+	31,  // 188: quartermaster.ClusterService.GetCluster:input_type -> quartermaster.GetClusterRequest
+	34,  // 189: quartermaster.ClusterService.ListClusters:input_type -> quartermaster.ListClustersRequest
+	36,  // 190: quartermaster.ClusterService.CreateCluster:input_type -> quartermaster.CreateClusterRequest
+	37,  // 191: quartermaster.ClusterService.UpdateCluster:input_type -> quartermaster.UpdateClusterRequest
+	38,  // 192: quartermaster.ClusterService.UpdateClusterMeshConfig:input_type -> quartermaster.UpdateClusterMeshConfigRequest
+	40,  // 193: quartermaster.ClusterService.ListClustersForTenant:input_type -> quartermaster.ListClustersForTenantRequest
+	136, // 194: quartermaster.ClusterService.ListClustersAvailable:input_type -> quartermaster.ListClustersAvailableRequest
+	43,  // 195: quartermaster.ClusterService.GrantClusterAccess:input_type -> quartermaster.GrantClusterAccessRequest
+	44,  // 196: quartermaster.ClusterService.SubscribeToCluster:input_type -> quartermaster.SubscribeToClusterRequest
+	45,  // 197: quartermaster.ClusterService.BootstrapClusterAccess:input_type -> quartermaster.BootstrapClusterAccessRequest
+	46,  // 198: quartermaster.ClusterService.MaterializeClusterAccess:input_type -> quartermaster.MaterializeClusterAccessRequest
+	47,  // 199: quartermaster.ClusterService.RevokeMaterializedClusterAccess:input_type -> quartermaster.RevokeMaterializedClusterAccessRequest
+	48,  // 200: quartermaster.ClusterService.DeactivateClusterAccess:input_type -> quartermaster.DeactivateClusterAccessRequest
+	49,  // 201: quartermaster.ClusterService.ListTenantClusterAccess:input_type -> quartermaster.ListTenantClusterAccessRequest
+	52,  // 202: quartermaster.ClusterService.GetTenantEntitlement:input_type -> quartermaster.GetTenantEntitlementRequest
+	54,  // 203: quartermaster.ClusterService.UnsubscribeFromCluster:input_type -> quartermaster.UnsubscribeFromClusterRequest
+	55,  // 204: quartermaster.ClusterService.ListMySubscriptions:input_type -> quartermaster.ListMySubscriptionsRequest
+	57,  // 205: quartermaster.ClusterService.ListMarketplaceClusters:input_type -> quartermaster.ListMarketplaceClustersRequest
+	59,  // 206: quartermaster.ClusterService.GetMarketplaceCluster:input_type -> quartermaster.GetMarketplaceClusterRequest
+	60,  // 207: quartermaster.ClusterService.UpdateClusterMarketplace:input_type -> quartermaster.UpdateClusterMarketplaceRequest
+	64,  // 208: quartermaster.ClusterService.CreatePrivateCluster:input_type -> quartermaster.CreatePrivateClusterRequest
+	67,  // 209: quartermaster.ClusterService.CreateClusterInvite:input_type -> quartermaster.CreateClusterInviteRequest
+	68,  // 210: quartermaster.ClusterService.RevokeClusterInvite:input_type -> quartermaster.RevokeClusterInviteRequest
+	69,  // 211: quartermaster.ClusterService.ListClusterInvites:input_type -> quartermaster.ListClusterInvitesRequest
+	70,  // 212: quartermaster.ClusterService.ListMyClusterInvites:input_type -> quartermaster.ListMyClusterInvitesRequest
+	73,  // 213: quartermaster.ClusterService.RequestClusterSubscription:input_type -> quartermaster.RequestClusterSubscriptionRequest
+	74,  // 214: quartermaster.ClusterService.AcceptClusterInvite:input_type -> quartermaster.AcceptClusterInviteRequest
+	75,  // 215: quartermaster.ClusterService.ListPendingSubscriptions:input_type -> quartermaster.ListPendingSubscriptionsRequest
+	77,  // 216: quartermaster.ClusterService.ApproveClusterSubscription:input_type -> quartermaster.ApproveClusterSubscriptionRequest
+	78,  // 217: quartermaster.ClusterService.RejectClusterSubscription:input_type -> quartermaster.RejectClusterSubscriptionRequest
+	61,  // 218: quartermaster.ClusterService.GetClusterMetadataBatch:input_type -> quartermaster.GetClusterMetadataBatchRequest
+	174, // 219: quartermaster.ClusterService.ListPeers:input_type -> quartermaster.ListPeersRequest
+	177, // 220: quartermaster.ClusterService.AssignServiceToCluster:input_type -> quartermaster.AssignServiceToClusterRequest
+	178, // 221: quartermaster.ClusterService.UnassignServiceFromCluster:input_type -> quartermaster.UnassignServiceFromClusterRequest
+	179, // 222: quartermaster.ClusterService.EnableSelfHosting:input_type -> quartermaster.EnableSelfHostingRequest
+	181, // 223: quartermaster.ClusterService.CreateEnrollmentToken:input_type -> quartermaster.CreateEnrollmentTokenRequest
+	89,  // 224: quartermaster.ClusterService.ListEdgeReleases:input_type -> quartermaster.ListEdgeReleasesRequest
+	91,  // 225: quartermaster.ClusterService.UpsertEdgeRelease:input_type -> quartermaster.UpsertEdgeReleaseRequest
+	94,  // 226: quartermaster.ClusterService.GetClusterReleaseTarget:input_type -> quartermaster.GetClusterReleaseTargetRequest
+	95,  // 227: quartermaster.ClusterService.ListClusterReleaseTargets:input_type -> quartermaster.ListClusterReleaseTargetsRequest
+	97,  // 228: quartermaster.ClusterService.SetClusterReleaseTarget:input_type -> quartermaster.SetClusterReleaseTargetRequest
+	79,  // 229: quartermaster.NodeService.GetNode:input_type -> quartermaster.GetNodeRequest
+	82,  // 230: quartermaster.NodeService.ListNodes:input_type -> quartermaster.ListNodesRequest
+	84,  // 231: quartermaster.NodeService.ListHealthyNodesForDNS:input_type -> quartermaster.ListHealthyNodesForDNSRequest
+	86,  // 232: quartermaster.NodeService.CreateNode:input_type -> quartermaster.CreateNodeRequest
+	87,  // 233: quartermaster.NodeService.UpdateNodeStatus:input_type -> quartermaster.UpdateNodeStatusRequest
+	4,   // 234: quartermaster.NodeService.SetNodeEnrollmentOrigin:input_type -> quartermaster.SetNodeEnrollmentOriginRequest
+	99,  // 235: quartermaster.NodeService.ResolveNodeFingerprint:input_type -> quartermaster.ResolveNodeFingerprintRequest
+	101, // 236: quartermaster.NodeService.GetNodeOwner:input_type -> quartermaster.GetNodeOwnerRequest
+	102, // 237: quartermaster.NodeService.GetNodeByLogicalName:input_type -> quartermaster.GetNodeByLogicalNameRequest
+	103, // 238: quartermaster.NodeService.UpdateNodeHardware:input_type -> quartermaster.UpdateNodeHardwareRequest
+	104, // 239: quartermaster.NodeService.ReportAliveNodes:input_type -> quartermaster.ReportAliveNodesRequest
+	108, // 240: quartermaster.BootstrapService.BootstrapEdgeNode:input_type -> quartermaster.BootstrapEdgeNodeRequest
+	110, // 241: quartermaster.BootstrapService.BootstrapInfrastructureNode:input_type -> quartermaster.BootstrapInfrastructureNodeRequest
+	112, // 242: quartermaster.BootstrapService.BootstrapService:input_type -> quartermaster.BootstrapServiceRequest
+	114, // 243: quartermaster.BootstrapService.DiscoverServices:input_type -> quartermaster.ServiceDiscoveryRequest
+	166, // 244: quartermaster.BootstrapService.GetServicePoolStatus:input_type -> quartermaster.GetServicePoolStatusRequest
+	170, // 245: quartermaster.BootstrapService.AddToServicePool:input_type -> quartermaster.AddToServicePoolRequest
+	172, // 246: quartermaster.BootstrapService.DrainServiceInstance:input_type -> quartermaster.DrainServiceInstanceRequest
+	117, // 247: quartermaster.BootstrapService.CreateBootstrapToken:input_type -> quartermaster.CreateBootstrapTokenRequest
+	120, // 248: quartermaster.BootstrapService.ListBootstrapTokens:input_type -> quartermaster.ListBootstrapTokensRequest
+	122, // 249: quartermaster.BootstrapService.RevokeBootstrapToken:input_type -> quartermaster.RevokeBootstrapTokenRequest
+	123, // 250: quartermaster.BootstrapService.ValidateBootstrapToken:input_type -> quartermaster.ValidateBootstrapTokenRequest
+	125, // 251: quartermaster.MeshService.SyncMesh:input_type -> quartermaster.InfrastructureSyncRequest
+	139, // 252: quartermaster.ServiceRegistryService.ListServices:input_type -> quartermaster.ListServicesRequest
+	142, // 253: quartermaster.ServiceRegistryService.ListClusterServices:input_type -> quartermaster.ListClusterServicesRequest
+	145, // 254: quartermaster.ServiceRegistryService.ListServiceInstances:input_type -> quartermaster.ListServiceInstancesRequest
+	148, // 255: quartermaster.ServiceRegistryService.ListServiceInstancesByType:input_type -> quartermaster.ListServiceInstancesByTypeRequest
+	150, // 256: quartermaster.ServiceRegistryService.ListServiceClusterAssignments:input_type -> quartermaster.ListServiceClusterAssignmentsRequest
+	152, // 257: quartermaster.ServiceRegistryService.ListServicesHealth:input_type -> quartermaster.ListServicesHealthRequest
+	153, // 258: quartermaster.ServiceRegistryService.GetServiceHealth:input_type -> quartermaster.GetServiceHealthRequest
+	130, // 259: quartermaster.ServiceRegistryService.EnqueueServiceEvent:input_type -> quartermaster.EnqueueServiceEventRequest
+	157, // 260: quartermaster.IngressService.UpsertTLSBundle:input_type -> quartermaster.UpsertTLSBundleRequest
+	159, // 261: quartermaster.IngressService.ListTLSBundles:input_type -> quartermaster.ListTLSBundlesRequest
+	162, // 262: quartermaster.IngressService.UpsertIngressSite:input_type -> quartermaster.UpsertIngressSiteRequest
+	164, // 263: quartermaster.IngressService.ListIngressSites:input_type -> quartermaster.ListIngressSitesRequest
+	7,   // 264: quartermaster.TenantService.GetTenant:output_type -> quartermaster.GetTenantResponse
+	9,   // 265: quartermaster.TenantService.ValidateTenant:output_type -> quartermaster.ValidateTenantResponse
+	135, // 266: quartermaster.TenantService.ResolveTenant:output_type -> quartermaster.ResolveTenantResponse
+	134, // 267: quartermaster.TenantService.ResolveTenantAliases:output_type -> quartermaster.ResolveTenantAliasesResponse
+	30,  // 268: quartermaster.TenantService.GetClusterRouting:output_type -> quartermaster.ClusterRoutingResponse
+	13,  // 269: quartermaster.TenantService.ListTenants:output_type -> quartermaster.ListTenantsResponse
+	15,  // 270: quartermaster.TenantService.CreateTenant:output_type -> quartermaster.CreateTenantResponse
+	11,  // 271: quartermaster.TenantService.UpdateTenant:output_type -> quartermaster.Tenant
+	196, // 272: quartermaster.TenantService.DeleteTenant:output_type -> google.protobuf.Empty
+	7,   // 273: quartermaster.TenantService.GetTenantCluster:output_type -> quartermaster.GetTenantResponse
+	196, // 274: quartermaster.TenantService.UpdateTenantCluster:output_type -> google.protobuf.Empty
+	13,  // 275: quartermaster.TenantService.GetTenantsBatch:output_type -> quartermaster.ListTenantsResponse
+	22,  // 276: quartermaster.TenantService.GetTenantsByCluster:output_type -> quartermaster.GetTenantsByClusterResponse
+	25,  // 277: quartermaster.TenantService.ListAliasedTenantsForCluster:output_type -> quartermaster.ListAliasedTenantsForClusterResponse
+	27,  // 278: quartermaster.TenantService.ListActiveTenants:output_type -> quartermaster.ListActiveTenantsResponse
+	33,  // 279: quartermaster.ClusterService.GetCluster:output_type -> quartermaster.ClusterResponse
+	35,  // 280: quartermaster.ClusterService.ListClusters:output_type -> quartermaster.ListClustersResponse
+	33,  // 281: quartermaster.ClusterService.CreateCluster:output_type -> quartermaster.ClusterResponse
+	33,  // 282: quartermaster.ClusterService.UpdateCluster:output_type -> quartermaster.ClusterResponse
+	39,  // 283: quartermaster.ClusterService.UpdateClusterMeshConfig:output_type -> quartermaster.UpdateClusterMeshConfigResponse
+	42,  // 284: quartermaster.ClusterService.ListClustersForTenant:output_type -> quartermaster.ClustersAccessResponse
+	138, // 285: quartermaster.ClusterService.ListClustersAvailable:output_type -> quartermaster.ClustersAvailableResponse
+	196, // 286: quartermaster.ClusterService.GrantClusterAccess:output_type -> google.protobuf.Empty
+	196, // 287: quartermaster.ClusterService.SubscribeToCluster:output_type -> google.protobuf.Empty
+	196, // 288: quartermaster.ClusterService.BootstrapClusterAccess:output_type -> google.protobuf.Empty
+	196, // 289: quartermaster.ClusterService.MaterializeClusterAccess:output_type -> google.protobuf.Empty
+	196, // 290: quartermaster.ClusterService.RevokeMaterializedClusterAccess:output_type -> google.protobuf.Empty
+	196, // 291: quartermaster.ClusterService.DeactivateClusterAccess:output_type -> google.protobuf.Empty
+	51,  // 292: quartermaster.ClusterService.ListTenantClusterAccess:output_type -> quartermaster.ListTenantClusterAccessResponse
+	53,  // 293: quartermaster.ClusterService.GetTenantEntitlement:output_type -> quartermaster.GetTenantEntitlementResponse
+	196, // 294: quartermaster.ClusterService.UnsubscribeFromCluster:output_type -> google.protobuf.Empty
+	35,  // 295: quartermaster.ClusterService.ListMySubscriptions:output_type -> quartermaster.ListClustersResponse
+	58,  // 296: quartermaster.ClusterService.ListMarketplaceClusters:output_type -> quartermaster.ListMarketplaceClustersResponse
+	56,  // 297: quartermaster.ClusterService.GetMarketplaceCluster:output_type -> quartermaster.MarketplaceClusterEntry
+	33,  // 298: quartermaster.ClusterService.UpdateClusterMarketplace:output_type -> quartermaster.ClusterResponse
+	65,  // 299: quartermaster.ClusterService.CreatePrivateCluster:output_type -> quartermaster.CreatePrivateClusterResponse
+	66,  // 300: quartermaster.ClusterService.CreateClusterInvite:output_type -> quartermaster.ClusterInvite
+	196, // 301: quartermaster.ClusterService.RevokeClusterInvite:output_type -> google.protobuf.Empty
+	71,  // 302: quartermaster.ClusterService.ListClusterInvites:output_type -> quartermaster.ListClusterInvitesResponse
+	71,  // 303: quartermaster.ClusterService.ListMyClusterInvites:output_type -> quartermaster.ListClusterInvitesResponse
+	72,  // 304: quartermaster.ClusterService.RequestClusterSubscription:output_type -> quartermaster.ClusterSubscription
+	72,  // 305: quartermaster.ClusterService.AcceptClusterInvite:output_type -> quartermaster.ClusterSubscription
+	76,  // 306: quartermaster.ClusterService.ListPendingSubscriptions:output_type -> quartermaster.ListPendingSubscriptionsResponse
+	72,  // 307: quartermaster.ClusterService.ApproveClusterSubscription:output_type -> quartermaster.ClusterSubscription
+	72,  // 308: quartermaster.ClusterService.RejectClusterSubscription:output_type -> quartermaster.ClusterSubscription
+	62,  // 309: quartermaster.ClusterService.GetClusterMetadataBatch:output_type -> quartermaster.GetClusterMetadataBatchResponse
+	176, // 310: quartermaster.ClusterService.ListPeers:output_type -> quartermaster.ListPeersResponse
+	196, // 311: quartermaster.ClusterService.AssignServiceToCluster:output_type -> google.protobuf.Empty
+	196, // 312: quartermaster.ClusterService.UnassignServiceFromCluster:output_type -> google.protobuf.Empty
+	180, // 313: quartermaster.ClusterService.EnableSelfHosting:output_type -> quartermaster.EnableSelfHostingResponse
+	119, // 314: quartermaster.ClusterService.CreateEnrollmentToken:output_type -> quartermaster.CreateBootstrapTokenResponse
+	90,  // 315: quartermaster.ClusterService.ListEdgeReleases:output_type -> quartermaster.ListEdgeReleasesResponse
+	92,  // 316: quartermaster.ClusterService.UpsertEdgeRelease:output_type -> quartermaster.EdgeReleaseResponse
+	98,  // 317: quartermaster.ClusterService.GetClusterReleaseTarget:output_type -> quartermaster.ClusterReleaseTargetResponse
+	96,  // 318: quartermaster.ClusterService.ListClusterReleaseTargets:output_type -> quartermaster.ListClusterReleaseTargetsResponse
+	98,  // 319: quartermaster.ClusterService.SetClusterReleaseTarget:output_type -> quartermaster.ClusterReleaseTargetResponse
+	81,  // 320: quartermaster.NodeService.GetNode:output_type -> quartermaster.NodeResponse
+	83,  // 321: quartermaster.NodeService.ListNodes:output_type -> quartermaster.ListNodesResponse
+	85,  // 322: quartermaster.NodeService.ListHealthyNodesForDNS:output_type -> quartermaster.ListHealthyNodesForDNSResponse
+	81,  // 323: quartermaster.NodeService.CreateNode:output_type -> quartermaster.NodeResponse
+	81,  // 324: quartermaster.NodeService.UpdateNodeStatus:output_type -> quartermaster.NodeResponse
+	5,   // 325: quartermaster.NodeService.SetNodeEnrollmentOrigin:output_type -> quartermaster.SetNodeEnrollmentOriginResponse
+	100, // 326: quartermaster.NodeService.ResolveNodeFingerprint:output_type -> quartermaster.ResolveNodeFingerprintResponse
+	107, // 327: quartermaster.NodeService.GetNodeOwner:output_type -> quartermaster.NodeOwnerResponse
+	81,  // 328: quartermaster.NodeService.GetNodeByLogicalName:output_type -> quartermaster.NodeResponse
+	196, // 329: quartermaster.NodeService.UpdateNodeHardware:output_type -> google.protobuf.Empty
+	196, // 330: quartermaster.NodeService.ReportAliveNodes:output_type -> google.protobuf.Empty
+	109, // 331: quartermaster.BootstrapService.BootstrapEdgeNode:output_type -> quartermaster.BootstrapEdgeNodeResponse
+	111, // 332: quartermaster.BootstrapService.BootstrapInfrastructureNode:output_type -> quartermaster.BootstrapInfrastructureNodeResponse
+	113, // 333: quartermaster.BootstrapService.BootstrapService:output_type -> quartermaster.BootstrapServiceResponse
+	115, // 334: quartermaster.BootstrapService.DiscoverServices:output_type -> quartermaster.ServiceDiscoveryResponse
+	169, // 335: quartermaster.BootstrapService.GetServicePoolStatus:output_type -> quartermaster.GetServicePoolStatusResponse
+	171, // 336: quartermaster.BootstrapService.AddToServicePool:output_type -> quartermaster.AddToServicePoolResponse
+	173, // 337: quartermaster.BootstrapService.DrainServiceInstance:output_type -> quartermaster.DrainServiceInstanceResponse
+	119, // 338: quartermaster.BootstrapService.CreateBootstrapToken:output_type -> quartermaster.CreateBootstrapTokenResponse
+	121, // 339: quartermaster.BootstrapService.ListBootstrapTokens:output_type -> quartermaster.ListBootstrapTokensResponse
+	196, // 340: quartermaster.BootstrapService.RevokeBootstrapToken:output_type -> google.protobuf.Empty
+	124, // 341: quartermaster.BootstrapService.ValidateBootstrapToken:output_type -> quartermaster.ValidateBootstrapTokenResponse
+	128, // 342: quartermaster.MeshService.SyncMesh:output_type -> quartermaster.InfrastructureSyncResponse
+	141, // 343: quartermaster.ServiceRegistryService.ListServices:output_type -> quartermaster.ListServicesResponse
+	144, // 344: quartermaster.ServiceRegistryService.ListClusterServices:output_type -> quartermaster.ListClusterServicesResponse
+	146, // 345: quartermaster.ServiceRegistryService.ListServiceInstances:output_type -> quartermaster.ListServiceInstancesResponse
+	149, // 346: quartermaster.ServiceRegistryService.ListServiceInstancesByType:output_type -> quartermaster.ListServiceInstancesByTypeResponse
+	151, // 347: quartermaster.ServiceRegistryService.ListServiceClusterAssignments:output_type -> quartermaster.ListServiceClusterAssignmentsResponse
+	155, // 348: quartermaster.ServiceRegistryService.ListServicesHealth:output_type -> quartermaster.ListServicesHealthResponse
+	155, // 349: quartermaster.ServiceRegistryService.GetServiceHealth:output_type -> quartermaster.ListServicesHealthResponse
+	131, // 350: quartermaster.ServiceRegistryService.EnqueueServiceEvent:output_type -> quartermaster.EnqueueServiceEventResponse
+	158, // 351: quartermaster.IngressService.UpsertTLSBundle:output_type -> quartermaster.TLSBundleResponse
+	160, // 352: quartermaster.IngressService.ListTLSBundles:output_type -> quartermaster.ListTLSBundlesResponse
+	163, // 353: quartermaster.IngressService.UpsertIngressSite:output_type -> quartermaster.IngressSiteResponse
+	165, // 354: quartermaster.IngressService.ListIngressSites:output_type -> quartermaster.ListIngressSitesResponse
+	264, // [264:355] is the sub-list for method output_type
+	173, // [173:264] is the sub-list for method input_type
+	173, // [173:173] is the sub-list for extension type_name
+	173, // [173:173] is the sub-list for extension extendee
+	0,   // [0:173] is the sub-list for field type_name
 }
 
 func init() { file_quartermaster_proto_init() }
@@ -15587,7 +15693,7 @@ func file_quartermaster_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_quartermaster_proto_rawDesc), len(file_quartermaster_proto_rawDesc)),
-			NumEnums:      3,
+			NumEnums:      4,
 			NumMessages:   184,
 			NumExtensions: 0,
 			NumServices:   7,

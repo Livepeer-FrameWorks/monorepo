@@ -7,6 +7,7 @@
 package clusterpeerpb
 
 import (
+	tenant_limits "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/tenant_limits"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
@@ -89,7 +90,7 @@ type TenantClusterPeer struct {
 	BaseUrl         string                 `protobuf:"bytes,3,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`                             // e.g., "frameworks.cloud"
 	ClusterName     string                 `protobuf:"bytes,4,opt,name=cluster_name,json=clusterName,proto3" json:"cluster_name,omitempty"`                 // Human label for UX
 	Role            string                 `protobuf:"bytes,5,opt,name=role,proto3" json:"role,omitempty"`                                                  // "preferred", "official", "subscribed"
-	ClusterType     string                 `protobuf:"bytes,6,opt,name=cluster_type,json=clusterType,proto3" json:"cluster_type,omitempty"`                 // "shared-community", "shared-lb", "dedicated", "self-hosted"
+	ClusterType     string                 `protobuf:"bytes,6,opt,name=cluster_type,json=clusterType,proto3" json:"cluster_type,omitempty"`                 // infrastructure plane: "central" or "edge"
 	FoghornGrpcAddr string                 `protobuf:"bytes,7,opt,name=foghorn_grpc_addr,json=foghornGrpcAddr,proto3" json:"foghorn_grpc_addr,omitempty"`   // Resolved Foghorn gRPC address (host:port) from service_instances
 	S3Bucket        string                 `protobuf:"bytes,20,opt,name=s3_bucket,json=s3Bucket,proto3" json:"s3_bucket,omitempty"`                         // Cluster S3 bucket (for cross-cluster artifact affinity)
 	S3Endpoint      string                 `protobuf:"bytes,21,opt,name=s3_endpoint,json=s3Endpoint,proto3" json:"s3_endpoint,omitempty"`                   // S3 endpoint URL
@@ -116,8 +117,17 @@ type TenantClusterPeer struct {
 	SubscriptionStatus string                    `protobuf:"bytes,38,opt,name=subscription_status,json=subscriptionStatus,proto3" json:"subscription_status,omitempty"`
 	AccessSource       TenantClusterAccessSource `protobuf:"varint,39,opt,name=access_source,json=accessSource,proto3,enum=cluster_peer.TenantClusterAccessSource" json:"access_source,omitempty"`
 	AccessExpiresAt    *timestamppb.Timestamp    `protobuf:"bytes,40,opt,name=access_expires_at,json=accessExpiresAt,proto3,oneof" json:"access_expires_at,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// Foghorn HA/database cell that controls this virtual cluster. Authority
+	// delivery targets this cell, not cluster_id.
+	ControlCellId string `protobuf:"bytes,41,opt,name=control_cell_id,json=controlCellId,proto3" json:"control_cell_id,omitempty"`
+	// Foghorn cells permitted to serve content for this cluster. The control
+	// cell is the default single entry; multi-cell serving is explicit.
+	EligibleServingCellIds []string `protobuf:"bytes,42,rep,name=eligible_serving_cell_ids,json=eligibleServingCellIds,proto3" json:"eligible_serving_cell_ids,omitempty"`
+	// Access-specific runtime cap override for this tenant/cluster pair.
+	ResourceLimits          *tenant_limits.TenantResourceLimits `protobuf:"bytes,43,opt,name=resource_limits,json=resourceLimits,proto3" json:"resource_limits,omitempty"`
+	AllowPrivatePullSources bool                                `protobuf:"varint,44,opt,name=allow_private_pull_sources,json=allowPrivatePullSources,proto3" json:"allow_private_pull_sources,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *TenantClusterPeer) Reset() {
@@ -311,11 +321,39 @@ func (x *TenantClusterPeer) GetAccessExpiresAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *TenantClusterPeer) GetControlCellId() string {
+	if x != nil {
+		return x.ControlCellId
+	}
+	return ""
+}
+
+func (x *TenantClusterPeer) GetEligibleServingCellIds() []string {
+	if x != nil {
+		return x.EligibleServingCellIds
+	}
+	return nil
+}
+
+func (x *TenantClusterPeer) GetResourceLimits() *tenant_limits.TenantResourceLimits {
+	if x != nil {
+		return x.ResourceLimits
+	}
+	return nil
+}
+
+func (x *TenantClusterPeer) GetAllowPrivatePullSources() bool {
+	if x != nil {
+		return x.AllowPrivatePullSources
+	}
+	return false
+}
+
 var File_cluster_peer_proto protoreflect.FileDescriptor
 
 const file_cluster_peer_proto_rawDesc = "" +
 	"\n" +
-	"\x12cluster_peer.proto\x12\fcluster_peer\x1a\x1fgoogle/protobuf/timestamp.proto\"\x97\a\n" +
+	"\x12cluster_peer.proto\x12\fcluster_peer\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x13tenant_limits.proto\"\x85\t\n" +
 	"\x11TenantClusterPeer\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12!\n" +
@@ -341,7 +379,11 @@ const file_cluster_peer_proto_rawDesc = "" +
 	"\raccess_active\x18% \x01(\bR\faccessActive\x12/\n" +
 	"\x13subscription_status\x18& \x01(\tR\x12subscriptionStatus\x12L\n" +
 	"\raccess_source\x18' \x01(\x0e2'.cluster_peer.TenantClusterAccessSourceR\faccessSource\x12K\n" +
-	"\x11access_expires_at\x18( \x01(\v2\x1a.google.protobuf.TimestampH\x00R\x0faccessExpiresAt\x88\x01\x01B\x14\n" +
+	"\x11access_expires_at\x18( \x01(\v2\x1a.google.protobuf.TimestampH\x00R\x0faccessExpiresAt\x88\x01\x01\x12&\n" +
+	"\x0fcontrol_cell_id\x18) \x01(\tR\rcontrolCellId\x129\n" +
+	"\x19eligible_serving_cell_ids\x18* \x03(\tR\x16eligibleServingCellIds\x12L\n" +
+	"\x0fresource_limits\x18+ \x01(\v2#.tenant_limits.TenantResourceLimitsR\x0eresourceLimits\x12;\n" +
+	"\x1aallow_private_pull_sources\x18, \x01(\bR\x17allowPrivatePullSourcesB\x14\n" +
 	"\x12_access_expires_at*\xc1\x02\n" +
 	"\x19TenantClusterAccessSource\x12,\n" +
 	"(TENANT_CLUSTER_ACCESS_SOURCE_UNSPECIFIED\x10\x00\x12.\n" +
@@ -366,18 +408,20 @@ func file_cluster_peer_proto_rawDescGZIP() []byte {
 var file_cluster_peer_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_cluster_peer_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
 var file_cluster_peer_proto_goTypes = []any{
-	(TenantClusterAccessSource)(0), // 0: cluster_peer.TenantClusterAccessSource
-	(*TenantClusterPeer)(nil),      // 1: cluster_peer.TenantClusterPeer
-	(*timestamppb.Timestamp)(nil),  // 2: google.protobuf.Timestamp
+	(TenantClusterAccessSource)(0),             // 0: cluster_peer.TenantClusterAccessSource
+	(*TenantClusterPeer)(nil),                  // 1: cluster_peer.TenantClusterPeer
+	(*timestamppb.Timestamp)(nil),              // 2: google.protobuf.Timestamp
+	(*tenant_limits.TenantResourceLimits)(nil), // 3: tenant_limits.TenantResourceLimits
 }
 var file_cluster_peer_proto_depIdxs = []int32{
 	0, // 0: cluster_peer.TenantClusterPeer.access_source:type_name -> cluster_peer.TenantClusterAccessSource
 	2, // 1: cluster_peer.TenantClusterPeer.access_expires_at:type_name -> google.protobuf.Timestamp
-	2, // [2:2] is the sub-list for method output_type
-	2, // [2:2] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	3, // 2: cluster_peer.TenantClusterPeer.resource_limits:type_name -> tenant_limits.TenantResourceLimits
+	3, // [3:3] is the sub-list for method output_type
+	3, // [3:3] is the sub-list for method input_type
+	3, // [3:3] is the sub-list for extension type_name
+	3, // [3:3] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_cluster_peer_proto_init() }

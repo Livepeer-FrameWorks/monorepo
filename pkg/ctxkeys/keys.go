@@ -40,7 +40,40 @@ const (
 	KeyClientIP     Key = "client_ip"
 	KeyRequestPath  Key = "request_path"
 	KeyRequestStart Key = "request_start"
+	// KeyMediaRequestRPCObserver is private-by-convention plumbing for the
+	// media-cluster autonomy guard. Only WithMediaRequestRPCObserver and
+	// ObserveMediaRequestRPC should access its value.
+	KeyMediaRequestRPCObserver Key = "media_request_rpc_observer"
+	// KeyAuthenticatedNodeCluster is set only after a node-bound balancer
+	// capability has authenticated both the node and its media cluster.
+	KeyAuthenticatedNodeCluster Key = "authenticated_node_cluster"
 )
+
+type mediaRequestRPCObserver struct {
+	path    string
+	observe func(path, service, method string)
+}
+
+// WithMediaRequestRPCObserver marks a media request path so the shared gRPC
+// client interceptor can account every control-plane RPC made beneath it.
+func WithMediaRequestRPCObserver(ctx context.Context, path string, observe func(path, service, method string)) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, KeyMediaRequestRPCObserver, mediaRequestRPCObserver{path: path, observe: observe})
+}
+
+// ObserveMediaRequestRPC invokes the request-scoped observer, if any.
+func ObserveMediaRequestRPC(ctx context.Context, service, method string) {
+	if ctx == nil {
+		return
+	}
+	observer, ok := ctx.Value(KeyMediaRequestRPCObserver).(mediaRequestRPCObserver)
+	if !ok || observer.observe == nil {
+		return
+	}
+	observer.observe(observer.path, service, method)
+}
 
 // Demo mode context keys
 const (
@@ -87,9 +120,10 @@ func GetTenantID(ctx context.Context) string {
 // deliberately contains only value types so balancer selection never performs
 // a synchronous control-plane lookup on the viewer hot path.
 type ClusterServeScope struct {
-	TenantID          string
-	OfficialClusterID string
-	PeerClusterIDs    []string
+	TenantID                    string
+	OfficialClusterID           string
+	AllowPlatformSharedPlayback bool
+	PeerClusterIDs              []string
 }
 
 // GetPlaybackContentID extracts the pre-resolved canonical playback_id from context.

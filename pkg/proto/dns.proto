@@ -37,6 +37,9 @@ service NavigatorService {
   // as observed by Foghorn. Navigator owns durable per-edge cert readiness
   // because DNS membership is derived from it.
   rpc ReportConfigSeedApplyResult(ReportConfigSeedApplyResultRequest) returns (ReportConfigSeedApplyResultResponse);
+  // EnsureTenantAliasCluster installs Quartermaster's ordered positive
+  // tenant/cluster authority. ConfigSeed ACKs cannot create this authority.
+  rpc EnsureTenantAliasCluster(EnsureTenantAliasClusterRequest) returns (EnsureTenantAliasClusterResponse);
   // RemoveTenantAliasCluster removes one cluster's edges from a tenant
   // alias DNS pool before Foghorn drops that tenant's cert from future
   // ConfigSeeds.
@@ -103,6 +106,9 @@ message GetTenantAliasStatusResponse {
   // Bunny). The Quartermaster backstop consults this to avoid re-enqueuing a
   // retire that is already in flight.
   repeated string pending_retirements = 8;
+  // Cluster authority currently active in Navigator's local projection. The
+  // Quartermaster repair loop compares this with its desired cluster set.
+  repeated string authorized_cluster_ids = 9;
 }
 
 message ReportConfigSeedApplyResultRequest {
@@ -114,9 +120,23 @@ message ReportConfigSeedApplyResultRequest {
   bool success = 6;
   string error = 7;
   int64 applied_at = 8;
+  // Monotonic per-node Foghorn outbox revision. Navigator uses this to reject a
+  // stale worker whose lease expired before its RPC reached Navigator. Zero is
+  // the rolling-upgrade compatibility value.
+  uint64 delivery_sequence = 9;
+  // Exact TLS bundle revision Helmsman attempted for each bundle id. Empty is
+  // the rolling-upgrade compatibility value. It cannot grant membership or
+  // readiness; an already-published legacy row may retain continuity until a
+  // revision-bearing ACK replaces it. At the same seed, a zero-sequence legacy
+  // result cannot overwrite a sequenced result; a newer seed remains the
+  // generation boundary during rolling upgrades.
+  map<string, string> bundle_versions = 10;
 }
 
 message ReportConfigSeedApplyResultResponse {
+  // Accepted means Navigator durably classified every authoritative tenant
+  // result. The classification may be applied, stale, or missing_parent; all
+  // are terminal for Foghorn's delivery outbox and must not be retried.
   bool accepted = 1;
   repeated string affected_tenant_ids = 2;
 }
@@ -124,9 +144,24 @@ message ReportConfigSeedApplyResultResponse {
 message RemoveTenantAliasClusterRequest {
   string tenant_id = 1;
   string cluster_id = 2;
+  // Monotonic Quartermaster tenant-alias outbox sequence. Zero is the
+  // rolling-upgrade compatibility value and still wins over a zero-sequence
+  // active projection because revocation wins ties.
+  uint64 authority_sequence = 3;
 }
 
 message RemoveTenantAliasClusterResponse {
+  bool accepted = 1;
+}
+
+message EnsureTenantAliasClusterRequest {
+  string tenant_id = 1;
+  string cluster_id = 2;
+  // Monotonic Quartermaster tenant-alias outbox sequence.
+  uint64 authority_sequence = 3;
+}
+
+message EnsureTenantAliasClusterResponse {
   bool accepted = 1;
 }
 
@@ -230,6 +265,8 @@ message GetCertificateRequest {
 
 // GetCertificateResponse returns the certificate if found.
 message GetCertificateResponse {
+  // found=false is authoritative absence only when error is empty. A non-empty
+  // error means the lookup failed and consumers must preserve valid local state.
   bool found = 1;
   optional string tenant_id = 2; // Tenant that owns the certificate (if any)
   string domain = 3;             // The domain
@@ -244,6 +281,8 @@ message GetTLSBundleRequest {
 }
 
 message GetTLSBundleResponse {
+  // found=false is authoritative absence only when error is empty. A non-empty
+  // error means the lookup failed and consumers must preserve valid local state.
   bool found = 1;
   string bundle_id = 2;
   repeated string domains = 3;
@@ -257,6 +296,8 @@ message GetTLSBundleResponse {
 message GetCABundleRequest {}
 
 message GetCABundleResponse {
+  // found=false is authoritative absence only when error is empty. A non-empty
+  // error means the lookup failed and consumers must preserve valid local state.
   bool found = 1;
   string ca_pem = 2;
   string error = 3;

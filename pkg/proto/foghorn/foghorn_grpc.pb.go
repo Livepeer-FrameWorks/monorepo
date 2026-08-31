@@ -1458,3 +1458,114 @@ var TenantControlService_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "foghorn.proto",
 }
+
+const (
+	MediaAuthorityControlService_ApplyMediaAuthority_FullMethodName = "/foghorn.MediaAuthorityControlService/ApplyMediaAuthority"
+)
+
+// MediaAuthorityControlServiceClient is the client API for MediaAuthorityControlService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// MediaAuthorityControlService is the authenticated internal delivery surface
+// for cell-bound tenant and media-object authority. It is registered only on
+// Foghorn's internal-CA listener; Mist and Helmsman never call it.
+type MediaAuthorityControlServiceClient interface {
+	ApplyMediaAuthority(ctx context.Context, in *ApplyMediaAuthorityRequest, opts ...grpc.CallOption) (*ApplyMediaAuthorityResponse, error)
+}
+
+type mediaAuthorityControlServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewMediaAuthorityControlServiceClient(cc grpc.ClientConnInterface) MediaAuthorityControlServiceClient {
+	return &mediaAuthorityControlServiceClient{cc}
+}
+
+func (c *mediaAuthorityControlServiceClient) ApplyMediaAuthority(ctx context.Context, in *ApplyMediaAuthorityRequest, opts ...grpc.CallOption) (*ApplyMediaAuthorityResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ApplyMediaAuthorityResponse)
+	err := c.cc.Invoke(ctx, MediaAuthorityControlService_ApplyMediaAuthority_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// MediaAuthorityControlServiceServer is the server API for MediaAuthorityControlService service.
+// All implementations must embed UnimplementedMediaAuthorityControlServiceServer
+// for forward compatibility.
+//
+// MediaAuthorityControlService is the authenticated internal delivery surface
+// for cell-bound tenant and media-object authority. It is registered only on
+// Foghorn's internal-CA listener; Mist and Helmsman never call it.
+type MediaAuthorityControlServiceServer interface {
+	ApplyMediaAuthority(context.Context, *ApplyMediaAuthorityRequest) (*ApplyMediaAuthorityResponse, error)
+	mustEmbedUnimplementedMediaAuthorityControlServiceServer()
+}
+
+// UnimplementedMediaAuthorityControlServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedMediaAuthorityControlServiceServer struct{}
+
+func (UnimplementedMediaAuthorityControlServiceServer) ApplyMediaAuthority(context.Context, *ApplyMediaAuthorityRequest) (*ApplyMediaAuthorityResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplyMediaAuthority not implemented")
+}
+func (UnimplementedMediaAuthorityControlServiceServer) mustEmbedUnimplementedMediaAuthorityControlServiceServer() {
+}
+func (UnimplementedMediaAuthorityControlServiceServer) testEmbeddedByValue() {}
+
+// UnsafeMediaAuthorityControlServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to MediaAuthorityControlServiceServer will
+// result in compilation errors.
+type UnsafeMediaAuthorityControlServiceServer interface {
+	mustEmbedUnimplementedMediaAuthorityControlServiceServer()
+}
+
+func RegisterMediaAuthorityControlServiceServer(s grpc.ServiceRegistrar, srv MediaAuthorityControlServiceServer) {
+	// If the following call panics, it indicates UnimplementedMediaAuthorityControlServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&MediaAuthorityControlService_ServiceDesc, srv)
+}
+
+func _MediaAuthorityControlService_ApplyMediaAuthority_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ApplyMediaAuthorityRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MediaAuthorityControlServiceServer).ApplyMediaAuthority(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MediaAuthorityControlService_ApplyMediaAuthority_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MediaAuthorityControlServiceServer).ApplyMediaAuthority(ctx, req.(*ApplyMediaAuthorityRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// MediaAuthorityControlService_ServiceDesc is the grpc.ServiceDesc for MediaAuthorityControlService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var MediaAuthorityControlService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "foghorn.MediaAuthorityControlService",
+	HandlerType: (*MediaAuthorityControlServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ApplyMediaAuthority",
+			Handler:    _MediaAuthorityControlService_ApplyMediaAuthority_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "foghorn.proto",
+}

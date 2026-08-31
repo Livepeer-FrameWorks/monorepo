@@ -186,14 +186,55 @@ func NewGRPCCircuitBreaker[T any](cfg CircuitBreakerConfig) circuitbreaker.Circu
 // "context canceled". This was introduced by the fix for failsafe-go#122 (v0.9.2) and is
 // still present as of v0.9.6. Safe to revisit if failsafe-go fixes the stale-context issue.
 func FailsafeUnaryInterceptor(serviceName string, logger logging.Logger) grpc.UnaryClientInterceptor {
-	retry := newGRPCRetryPolicy()
-	cb := newGRPCCircuitBreaker(serviceName, logger)
+	return FailsafeUnaryInterceptorWithMethodIsolation(serviceName, nil, logger)
+}
+
+type grpcUnaryFailsafePolicy struct {
+	name  string
+	retry retrypolicy.RetryPolicy[any]
+	cb    circuitbreaker.CircuitBreaker[any]
+}
+
+func newGRPCUnaryFailsafePolicy(name string, logger logging.Logger) grpcUnaryFailsafePolicy {
+	return grpcUnaryFailsafePolicy{
+		name:  name,
+		retry: newGRPCRetryPolicy(),
+		cb:    newGRPCCircuitBreaker(name, logger),
+	}
+}
+
+// FailsafeUnaryInterceptorWithMethodIsolation returns a unary interceptor whose
+// listed methods use independent retry and circuit-breaker state. This prevents
+// an asynchronous delivery path from opening the breaker used by synchronous
+// request paths on the same gRPC connection.
+func FailsafeUnaryInterceptorWithMethodIsolation(serviceName string, isolatedMethods map[string]string, logger logging.Logger) grpc.UnaryClientInterceptor {
+	defaultPolicy := newGRPCUnaryFailsafePolicy(serviceName, logger)
+	methodPolicies := make(map[string]grpcUnaryFailsafePolicy, len(isolatedMethods))
+	for method, policyName := range isolatedMethods {
+		methodPolicies[method] = newGRPCUnaryFailsafePolicy(policyName, logger)
+	}
+
 	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
-		_, err := failsafe.With[any](retry, cb).WithContext(ctx).GetWithExecution(func(exec failsafe.Execution[any]) (any, error) {
+		policy := grpcUnaryPolicyForMethod(defaultPolicy, methodPolicies, method)
+		_, err := failsafe.With[any](policy.retry, policy.cb).WithContext(ctx).GetWithExecution(func(exec failsafe.Execution[any]) (any, error) {
 			return nil, invoker(exec.Context(), method, req, reply, cc, opts...)
 		})
-		return err
+		return normalizeCircuitBreakerError(err, policy.name)
 	}
+}
+
+func grpcUnaryPolicyForMethod(defaultPolicy grpcUnaryFailsafePolicy, methodPolicies map[string]grpcUnaryFailsafePolicy, method string) grpcUnaryFailsafePolicy {
+	if isolated, ok := methodPolicies[method]; ok {
+		return isolated
+	}
+	return defaultPolicy
+}
+
+func normalizeCircuitBreakerError(err error, serviceName string) error {
+	if errors.Is(err, circuitbreaker.ErrOpen) {
+		return status.Errorf(codes.Unavailable, "circuit breaker open: %s", serviceName)
+	}
+	return err
 }
 
 // FailsafeStreamInterceptor returns a gRPC stream client interceptor with circuit breaker.

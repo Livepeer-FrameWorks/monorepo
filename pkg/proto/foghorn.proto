@@ -7,6 +7,7 @@ option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn;f
 import "common.proto";
 import "shared.proto";
 import "foghorn_control.proto";
+import "media_authority.proto";
 import "google/protobuf/timestamp.proto";
 
 // FOGHORN CONTROL PLANE SERVICES
@@ -140,6 +141,31 @@ service TenantControlService {
   rpc InvalidatePlaybackAuth(InvalidatePlaybackAuthRequest) returns (InvalidatePlaybackAuthResponse);
 }
 
+// MediaAuthorityControlService is the authenticated internal delivery surface
+// for cell-bound tenant and media-object authority. It is registered only on
+// Foghorn's internal-CA listener; Mist and Helmsman never call it.
+service MediaAuthorityControlService {
+  rpc ApplyMediaAuthority(ApplyMediaAuthorityRequest) returns (ApplyMediaAuthorityResponse);
+}
+
+message ApplyMediaAuthorityRequest {
+  media_authority.SignedAuthorityEnvelope authority = 1;
+}
+
+enum MediaAuthorityApplyOutcome {
+  MEDIA_AUTHORITY_APPLY_OUTCOME_UNSPECIFIED = 0;
+  MEDIA_AUTHORITY_APPLY_OUTCOME_APPLIED = 1;
+  MEDIA_AUTHORITY_APPLY_OUTCOME_DUPLICATE = 2;
+}
+
+message ApplyMediaAuthorityResponse {
+  MediaAuthorityApplyOutcome outcome = 1;
+  media_authority.AuthorityKind authority_kind = 2;
+  string authority_id = 3;
+  uint64 authority_version = 4;
+  bool refresh_due = 5;
+}
+
 message InvalidatePlaybackAuthRequest {
   string tenant_id = 1;
   // internal_names is the list of MistServer internal stream names whose
@@ -147,13 +173,11 @@ message InvalidatePlaybackAuthRequest {
   // stream/artifact for the tenant" (used on signing-key revoke when the
   // policy may reference the revoked kid on any object).
   repeated string internal_names = 2;
-  string reason = 3; // e.g., "policy_change", "key_revoked", "webhook_rotated", "bundle_revoke"
+  string reason = 3; // e.g., "policy_change", "key_revoked", "webhook_rotated"
 
-  // Signed-policy-bundle revocation fields. When reason == "bundle_revoke",
-  // Foghorn calls policybundle.Cache.BumpWatermark(tenant_id, stream_id,
-  // bundle_min_version) on receipt, invalidating cached bundles below the
-  // watermark. stream_id empty means "all streams for this tenant" (used on
-  // tenant-wide plan downgrades; Foghorn loops over its cache).
+  // Legacy policy-bundle prototype fields retained for wire compatibility.
+  // The active media-authority path ignores them and converges through signed
+  // replacement/tombstone delivery.
   string stream_id = 4;
   int64 bundle_min_version = 5;
 }

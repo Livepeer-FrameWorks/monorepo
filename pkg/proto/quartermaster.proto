@@ -133,8 +133,8 @@ service ClusterService {
   // GetTenantEntitlement returns the cluster IDs a tenant is currently
   // entitled to serve on (active + subscribed) plus the coarse plan class
   // (the primary cluster's cluster_class). Service-token only. Owns the
-  // entitlement predicates on Quartermaster's side so Commodore can mint
-  // signed policy bundles without reading quartermaster.* directly.
+  // entitlement predicates on Quartermaster's side so Commodore can compile
+  // media authority without reading quartermaster.* directly.
   rpc GetTenantEntitlement(GetTenantEntitlementRequest) returns (GetTenantEntitlementResponse);
 
   // Unsubscribe from a cluster
@@ -482,8 +482,8 @@ message ListAliasedTenantsForClusterRequest {
 message AliasedTenantRef {
   string tenant_id = 1;
   // The tenant's subdomain label inside the platform tenant zone
-  // (cdn.{root}). Used by Foghorn when composing per-tenant bundle
-  // site_addresses in ConfigSeed.
+  // (cdn.{root}). Navigator owns certificate/SAN serving authority; Foghorn
+  // uses this value only as Quartermaster's current alias intent metadata.
   string subdomain = 2;
 }
 
@@ -1236,12 +1236,22 @@ message ResolveNodeFingerprintRequest {
   repeated string local_ipv6 = 3;       // json:"local_ipv6,omitempty"
   optional string macs_sha256 = 4;      // json:"macs_sha256,omitempty"
   optional string machine_id_sha256 = 5; // json:"machine_id_sha256,omitempty"
+  bytes node_identity_public_key_ed25519 = 6;
 }
 
 // Matches pkg/api/quartermaster/types.go:ResolveNodeFingerprintResponse (lines 192-195)
 message ResolveNodeFingerprintResponse {
   string tenant_id = 1;                 // json:"tenant_id"
   string canonical_node_id = 2;         // json:"canonical_node_id"
+  NodeFingerprintMatchSource match_source = 3;
+  bytes node_identity_public_key_ed25519 = 4;
+}
+
+enum NodeFingerprintMatchSource {
+  NODE_FINGERPRINT_MATCH_SOURCE_UNSPECIFIED = 0;
+  NODE_FINGERPRINT_MATCH_SOURCE_MACHINE_ID = 1;
+  NODE_FINGERPRINT_MATCH_SOURCE_MACS = 2;
+  NODE_FINGERPRINT_MATCH_SOURCE_PEER_IP = 3;
 }
 
 message GetNodeOwnerRequest {
@@ -1319,6 +1329,10 @@ message BootstrapEdgeNodeRequest {
   optional string machine_id_sha256 = 8; // json:"machine_id_sha256,omitempty"
   optional string target_cluster_id = 9; // Preferred cluster for unbound tokens
   repeated string served_cluster_ids = 10; // Clusters this caller serves; token binding validated against this set
+  bytes node_identity_public_key_ed25519 = 11;
+  // Rotate an existing node key after state loss. Requires a valid enrollment
+  // token and exact ownership, cluster, and stable-fingerprint continuity.
+  bool rotate_node_identity = 12;
 }
 
 // Matches pkg/api/quartermaster/types.go:BootstrapEdgeNodeResponse (lines 247-251)

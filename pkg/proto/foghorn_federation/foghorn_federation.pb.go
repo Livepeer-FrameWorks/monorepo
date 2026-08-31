@@ -500,7 +500,7 @@ type PrepareArtifactRequest struct {
 	ArtifactId        string                 `protobuf:"bytes,1,opt,name=artifact_id,json=artifactId,proto3" json:"artifact_id,omitempty"` // Artifact hash (clip/vod/chapter VOD)
 	ClipHash          string                 `protobuf:"bytes,2,opt,name=clip_hash,json=clipHash,proto3" json:"clip_hash,omitempty"`       // Clip hash fallback alias
 	RequestingCluster string                 `protobuf:"bytes,3,opt,name=requesting_cluster,json=requestingCluster,proto3" json:"requesting_cluster,omitempty"`
-	ArtifactType      string                 `protobuf:"bytes,4,opt,name=artifact_type,json=artifactType,proto3" json:"artifact_type,omitempty"` // "clip" or "vod"; parent DVR artifacts are rejected (use the chapter VOD's artifact_hash)
+	ArtifactType      string                 `protobuf:"bytes,4,opt,name=artifact_type,json=artifactType,proto3" json:"artifact_type,omitempty"` // "clip", "vod", or public "chapter" (canonical VOD bytes); parent DVR artifacts are rejected
 	TenantId          string                 `protobuf:"bytes,5,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
@@ -3066,16 +3066,17 @@ type DeleteStorageObjectsRequest struct {
 	// backing per Quartermaster.
 	TargetClusterId string `protobuf:"bytes,3,opt,name=target_cluster_id,json=targetClusterId,proto3" json:"target_cluster_id,omitempty"`
 	ArtifactHash    string `protobuf:"bytes,4,opt,name=artifact_hash,json=artifactHash,proto3" json:"artifact_hash,omitempty"`
-	// artifact_type is one of "clip", "dvr", "vod".
+	// artifact_type is one of "clip", "dvr", "vod", "thumbnail".
 	ArtifactType string `protobuf:"bytes,5,opt,name=artifact_type,json=artifactType,proto3" json:"artifact_type,omitempty"`
 	// Caller-resolved deletion target. Exactly one must be set.
 	//   s3_key:    exact object key (clip, vod). Callee calls Delete(key).
-	//   s3_prefix: prefix to recursively delete (dvr). Callee calls
+	//   s3_prefix: prefix to recursively delete (dvr, thumbnail). Callee calls
 	//              DeletePrefix(prefix).
 	// Callee validates that the supplied target starts with the expected
-	// per-tenant prefix for the artifact_type
-	// (clips/<tenant>/..., dvr/<tenant>/..., vod/<tenant>/...) before
-	// deleting; mismatch → reason="invalid_target_shape".
+	// per-tenant prefix for clip/dvr/vod, or exactly
+	// thumbnails/<artifact_hash>/ for thumbnail, before deleting. Thumbnail
+	// tenant ownership is bound through the callee's local artifact row;
+	// mismatch → reason="invalid_target_shape" or "tenant_mismatch".
 	//
 	// Types that are valid to be assigned to Target:
 	//
@@ -3196,13 +3197,12 @@ type DeleteStorageObjectsResponse struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	Accepted bool                   `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
 	// Populated when accepted = false. One of:
-	//   tenant_mismatch          — caller tenant != row tenant on callee
-	//                              (when callee row exists).
+	//   tenant_mismatch          — caller tenant != row tenant on callee,
+	//                              or the required thumbnail row is absent.
 	//   storage_not_owned_here   — target_cluster_id mismatch or
 	//                              bucket-tuple mismatch.
 	//   invalid_target_shape     — supplied key/prefix doesn't match the
-	//                              expected per-tenant prefix for the
-	//                              artifact_type.
+	//                              expected artifact-bound shape.
 	//   unsupported_artifact_type
 	//   missing_target           — neither s3_key nor s3_prefix set, or
 	//                              wrong oneof case for the artifact_type

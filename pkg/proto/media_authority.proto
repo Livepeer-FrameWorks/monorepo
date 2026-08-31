@@ -1,0 +1,259 @@
+syntax = "proto3";
+
+package media_authority;
+
+option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority;mediaauthoritypb";
+
+import "cluster_peer.proto";
+import "google/protobuf/timestamp.proto";
+import "metering_contract.proto";
+import "shared.proto";
+import "tenant_limits.proto";
+
+// AuthorityKind selects the exact payload type carried by an envelope.
+enum AuthorityKind {
+  AUTHORITY_KIND_UNSPECIFIED = 0;
+  AUTHORITY_KIND_TENANT = 1;
+  AUTHORITY_KIND_MEDIA_OBJECT = 2;
+}
+
+enum AuthorityLifecycle {
+  AUTHORITY_LIFECYCLE_UNSPECIFIED = 0;
+  AUTHORITY_LIFECYCLE_ACTIVE = 1;
+  AUTHORITY_LIFECYCLE_INACTIVE = 2;
+  AUTHORITY_LIFECYCLE_TOMBSTONE = 3;
+}
+
+enum TenantBillingDecision {
+  TENANT_BILLING_DECISION_UNSPECIFIED = 0;
+  TENANT_BILLING_DECISION_ALLOW = 1;
+  TENANT_BILLING_DECISION_PAYMENT_REQUIRED = 2;
+  TENANT_BILLING_DECISION_SUSPENDED = 3;
+  TENANT_BILLING_DECISION_INACTIVE = 4;
+}
+
+enum TenantBillingModel {
+  TENANT_BILLING_MODEL_UNSPECIFIED = 0;
+  TENANT_BILLING_MODEL_POSTPAID = 1;
+  TENANT_BILLING_MODEL_PREPAID = 2;
+}
+
+enum MediaObjectKind {
+  MEDIA_OBJECT_KIND_UNSPECIFIED = 0;
+  MEDIA_OBJECT_KIND_LIVE_STREAM = 1;
+  MEDIA_OBJECT_KIND_ARTIFACT = 2;
+}
+
+enum ArtifactKind {
+  ARTIFACT_KIND_UNSPECIFIED = 0;
+  ARTIFACT_KIND_VOD = 1;
+  ARTIFACT_KIND_DVR = 2;
+  ARTIFACT_KIND_CLIP = 3;
+  ARTIFACT_KIND_CHAPTER = 4;
+}
+
+enum PlaybackPolicyKind {
+  PLAYBACK_POLICY_KIND_UNSPECIFIED = 0;
+  PLAYBACK_POLICY_KIND_PUBLIC = 1;
+  PLAYBACK_POLICY_KIND_JWT = 2;
+  // Webhook evaluation is local when the target cell has a sealed credential.
+  PLAYBACK_POLICY_KIND_WEBHOOK = 3;
+  // Deny is the only policy valid for an inactive or tombstoned media object.
+  PLAYBACK_POLICY_KIND_DENY = 4;
+}
+
+// AuthoritySourceRevision identifies the owner state compiled into a payload.
+// Revision is opaque to the media plane; it exists for reconciliation and audit.
+message AuthoritySourceRevision {
+  string service = 1;
+  string revision = 2;
+}
+
+// AuthorityEnvelope is the deterministic, signed portion of a delivery. The
+// signature is kept in SignedAuthorityEnvelope so signing never depends on
+// clearing a recursive signature field.
+message AuthorityEnvelope {
+  uint32 schema_version = 1;
+  AuthorityKind kind = 2;
+  string authority_id = 3;
+  uint64 authority_version = 4;
+  google.protobuf.Timestamp issued_at = 5;
+  google.protobuf.Timestamp refresh_after = 6;
+  google.protobuf.Timestamp valid_until = 7;
+  string signer_key_id = 8;
+  // Mandatory failure-cell audience. A bundle copied to another cell is invalid.
+  string audience_cell_id = 9;
+  // Deterministic protobuf bytes of the payload selected by kind.
+  bytes payload = 10;
+  bytes payload_sha256 = 11;
+  repeated AuthoritySourceRevision source_revisions = 12;
+}
+
+message SignedAuthorityEnvelope {
+  AuthorityEnvelope envelope = 1;
+  // Ed25519 over the domain-separated deterministic AuthorityEnvelope bytes.
+  bytes signature = 2;
+}
+
+message TenantClusterGrant {
+  string cluster_id = 1;
+  cluster_peer.TenantClusterAccessSource access_source = 2;
+  string access_level = 3;
+  string subscription_status = 4;
+  string cluster_class = 5;
+  string deployment_model = 6;
+  string owner_tenant_id = 7;
+  optional google.protobuf.Timestamp expires_at = 8;
+  tenant_limits.TenantResourceLimits resource_limits = 9;
+  bool allow_private_pull_sources = 10;
+  // The Foghorn database/control cell that owns this virtual cluster. This
+  // remains distinct from cluster_id because one cell may serve many virtual
+  // clusters.
+  string control_cell_id = 11;
+  // Additional Foghorn cells explicitly allowed to serve this grant. These
+  // are the active sealed-secret recipients; historical delivery cells still
+  // receive revocations but never newly sealed credentials.
+  repeated string eligible_serving_cell_ids = 12;
+  // Stable infrastructure class used by offline media-plane admission. Runtime health and
+  // addresses are overlaid locally; the signed grant still has to prove ingest capability.
+  string cluster_type = 13;
+}
+
+// TenantAuthority contains only media-plane decisions. Raw balances, invoices,
+// payment credentials, and mutable control-plane presentation data are excluded.
+message TenantAuthority {
+  uint32 schema_version = 1;
+  string tenant_id = 2;
+  AuthorityLifecycle lifecycle = 3;
+  TenantBillingDecision billing_decision = 4;
+  TenantBillingModel billing_model = 5;
+  string official_cluster_id = 6;
+  bool allow_platform_shared_playback = 7;
+  repeated TenantClusterGrant effective_cluster_grants = 8;
+  tenant_limits.TenantResourceLimits resource_limits = 9;
+  repeated metering.MeterAllowance allowances = 10;
+  // Empty means no media-plane reason text was supplied. Decisions use enums.
+  string decision_reason = 11;
+  shared.DVRPolicy dvr_policy = 12;
+  int32 tier_level = 13;
+  // Tenant-selected steady-state route. This is stable authority used only
+  // to label a healthy runtime peer as preferred; liveness and addresses are
+  // still supplied locally by the media cell.
+  string preferred_cluster_id = 14;
+}
+
+message PlaybackSigningKey {
+  string key_id = 1;
+  string algorithm = 2;
+  string public_key_pem = 3;
+}
+
+message PlaybackJwtPolicy {
+  repeated string allowed_key_ids = 1;
+  repeated string required_audiences = 2;
+  map<string, string> required_claims_json = 3;
+  repeated PlaybackSigningKey active_keys = 4;
+}
+
+message PlaybackPolicy {
+  PlaybackPolicyKind kind = 1;
+  PlaybackJwtPolicy jwt = 2;
+  // True only when this authority intentionally requires connected evaluation.
+  bool connected_only = 3;
+}
+
+// SealedCellSecret is encrypted independently for one control cell using a
+// dedicated X25519 recipient key. Signing and encryption keys are deliberately
+// unrelated. The signed outer payload binds the box metadata and ciphertext;
+// the AEAD additionally binds cell, key, and authority identity.
+message SealedCellSecret {
+  string audience_cell_id = 1;
+  string recipient_key_id = 2;
+  bytes ephemeral_public_key = 3;
+  bytes nonce = 4;
+  bytes ciphertext = 5;
+}
+
+message PushTargetSecret {
+  string target_id = 1;
+  string target_uri = 2;
+  string name = 3;
+  string platform = 4;
+}
+
+message LiveStreamSecret {
+  string authority_id = 1;
+  string tenant_id = 2;
+  string source_uri = 3;
+  bool source_enabled = 4;
+  repeated string allowed_cluster_ids = 5;
+  repeated PushTargetSecret push_targets = 6;
+  // Literal source for operator/system-tenant mist_native streams.
+  string native_source_spec = 7;
+  string native_source_kind = 8;
+  repeated string native_allowed_cluster_ids = 9;
+  int32 native_placement_count = 10;
+  bool native_always_on = 11;
+}
+
+message PlaybackWebhookSecret {
+  string url = 1;
+  int32 timeout_ms = 2;
+  string secret = 3;
+}
+
+message MediaObjectSecret {
+  string authority_id = 1;
+  string tenant_id = 2;
+  PlaybackWebhookSecret playback_webhook = 3;
+}
+
+message LiveStreamAuthority {
+  string stream_id = 1;
+  string ingest_mode = 2;
+  // Domain-separated SHA-256 of the case-normalized, platform-generated
+  // publishing credential. Foghorn indexes and compares this value; the
+  // plaintext credential is never delivered to the media cell.
+  bytes publishing_credential_sha256 = 3;
+  // The only virtual media cluster allowed to admit a new publisher when the
+  // central placement authority cannot be reached.
+  string outage_ingest_cluster_id = 4;
+  bool recording_enabled = 5;
+  string processes_json = 6;
+  string dvr_processes_json = 7;
+  repeated SealedCellSecret sealed_cell_secrets = 8;
+}
+
+message ArtifactAuthority {
+  string artifact_id = 1;
+  string artifact_hash = 2;
+  ArtifactKind artifact_kind = 3;
+  // Optional for standalone VOD; populated for stream-derived DVR, clip,
+  // and chapter artifacts so local resolution preserves correlation.
+  string parent_stream_id = 4;
+  // Routing name used by rolling DVR and stream-derived artifact layouts.
+  // Carried in signed authority so a non-origin media cell does not need a
+  // local artifact registry row or a control-plane lookup to arrange bytes.
+  string parent_stream_internal_name = 5;
+}
+
+// MediaObjectAuthority v1 freezes identity and public/JWT playback authority.
+// Ingest credentials, pull/native sources, processing, and outputs are added by
+// later schema versions rather than smuggled into the playback cut.
+message MediaObjectAuthority {
+  uint32 schema_version = 1;
+  MediaObjectKind object_kind = 2;
+  string tenant_id = 3;
+  string user_id = 4;
+  string internal_name = 5;
+  string playback_id = 6;
+  AuthorityLifecycle lifecycle = 7;
+  string origin_cluster_id = 8;
+  PlaybackPolicy playback_policy = 9;
+  repeated SealedCellSecret sealed_playback_secrets = 10;
+
+  oneof object {
+    LiveStreamAuthority live_stream = 20;
+    ArtifactAuthority artifact = 21;
+  }
+}

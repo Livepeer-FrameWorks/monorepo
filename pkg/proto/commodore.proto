@@ -123,16 +123,9 @@ service InternalService {
   // include_webhook_secret when they need the plaintext HMAC secret.
   rpc ResolvePlaybackPolicy(ResolvePlaybackPolicyRequest) returns (ResolvePlaybackPolicyResponse);
 
-  // Mints and returns a signed policy bundle for a (tenant_id, stream_id)
-  // pair. Foghorn caches the bundle with a soft TTL (background refresh)
-  // and hard TTL (refuse stale). The bundle JWT carries the tenant plan,
-  // allowed cluster set, playback policy snapshot, and a monotonic
-  // bundle_version. Revocation rides the existing
-  // playback_policy_invalidation_outbox channel with a 'bundle_revoke'
-  // reason carrying a minimum-acceptable bundle_version watermark; Foghorn
-  // drops cached entries below the watermark. Survives a central Commodore
-  // outage for the hard-TTL window without serving stale policy past plan
-  // downgrades.
+  // Legacy policy-bundle prototype retained for wire compatibility. The
+  // active v0.3 media path uses Ed25519 media-authority envelopes delivered
+  // into each Foghorn cell; no Foghorn request path consumes this RPC.
   rpc GetSignedPolicyBundle(GetSignedPolicyBundleRequest) returns (GetSignedPolicyBundleResponse);
 
   // Called by Foghorn after a JWT policy successfully verifies.
@@ -199,10 +192,10 @@ service InternalService {
   // Resolve DVR hash to tenant context (for analytics enrichment and playback)
   rpc ResolveDVRHash(ResolveDVRHashRequest) returns (ResolveDVRHashResponse);
 
-// Resolve artifact playback ID to artifact identity (clip/dvr/vod)
+// Resolve artifact playback ID to artifact identity (clip/dvr/vod/chapter)
   rpc ResolveArtifactPlaybackID(ResolveArtifactPlaybackIDRequest) returns (ResolveArtifactPlaybackIDResponse);
 
-  // Resolve artifact internal routing name to artifact identity (clip/dvr/vod)
+  // Resolve artifact internal routing name to artifact identity (clip/dvr/vod/chapter)
   rpc ResolveArtifactInternalName(ResolveArtifactInternalNameRequest) returns (ResolveArtifactInternalNameResponse);
 
   // Unified identifier resolution - checks streams, clips, and DVR in one call
@@ -309,6 +302,36 @@ service InternalService {
   // health" view.
   rpc RecordPullSourceEvent(RecordPullSourceEventRequest) returns (google.protobuf.Empty);
   rpc ListPullSourceEvents(ListPullSourceEventsRequest) returns (ListPullSourceEventsResponse);
+
+  // Purser and Quartermaster deliver their transactionally persisted refresh
+  // obligations here. Acceptance means Commodore durably recorded the source
+  // event; compilation and per-cell delivery continue asynchronously.
+  rpc RequestMediaAuthorityRefresh(RequestMediaAuthorityRefreshRequest) returns (RequestMediaAuthorityRefreshResponse);
+
+  // Called by Foghorn after its internal listener is ready and after a
+  // Commodore reconnect. Commodore requeues the current authority version for
+  // this control cell, closing the gap where a previously acknowledged cell
+  // database was restored or rebuilt after that acknowledgement.
+  rpc RequestMediaAuthorityReplay(RequestMediaAuthorityReplayRequest) returns (RequestMediaAuthorityReplayResponse);
+}
+
+message RequestMediaAuthorityRefreshRequest {
+  string source_service = 1; // purser | quartermaster | commodore
+  string source_event_id = 2;
+  string tenant_id = 3;
+  string reason = 4;
+}
+
+message RequestMediaAuthorityRefreshResponse {
+  bool accepted = 1; // false only when the exact source event was already present
+}
+
+message RequestMediaAuthorityReplayRequest {
+  string control_cell_id = 1;
+}
+
+message RequestMediaAuthorityReplayResponse {
+  int64 requeued_count = 1;
 }
 
 // ============================================================================
@@ -421,6 +444,9 @@ message ValidateStreamKeyResponse {
   // resource_limits. Forwarded so Foghorn can apply them at trigger time
   // without another RPC. nil or zero-valued fields mean unlimited.
   optional tenant_limits.TenantResourceLimits tenant_resource_limits = 19;
+  // Static entitlement projection used only to compare connected and signed
+  // authority. cluster_peers remains health-filtered routing input.
+  repeated cluster_peer.TenantClusterPeer authority_cluster_peers = 33;
 }
 
 // ============================================================================
@@ -500,6 +526,7 @@ message ResolveStreamContextResponse {
 
   // ===== RUNTIME RESOURCE CAPS =====
   optional tenant_limits.TenantResourceLimits tenant_resource_limits = 20;
+  repeated cluster_peer.TenantClusterPeer authority_cluster_peers = 24;
 }
 
 // ============================================================================
@@ -665,6 +692,7 @@ message ResolvePlaybackIDResponse {
   // Source for pull streams: commodore.stream_pull_sources, fetched via
   // ResolvePullSourceByInternalName.
   string ingest_mode = 13;
+  repeated cluster_peer.TenantClusterPeer authority_cluster_peers = 14;
 }
 
 // ============================================================================
@@ -706,9 +734,8 @@ message ResolvePlaybackPolicyRequest {
   bool include_webhook_secret = 3; // enforcement-only; public reads leave false
 }
 
-// Signed policy bundle issuance (Foghorn → Commodore). Bundle carries a
-// monotonic bundle_version, soft + hard expiry, and a signed JWT payload
-// with the tenant plan, allowed cluster IDs, and the playback policy.
+// Retired HMAC policy-bundle prototype. Messages remain for wire compatibility;
+// GetSignedPolicyBundle returns Unimplemented and performs no producer work.
 message GetSignedPolicyBundleRequest {
   string tenant_id = 1;
   string stream_id = 2; // Public stream UUID
@@ -1081,6 +1108,8 @@ message ResolveVodHashResponse {
   string internal_name = 8;    // Artifact routing name (internal)
   string origin_cluster_id = 9;         // Cluster where this VOD was uploaded
   repeated cluster_peer.TenantClusterPeer cluster_peers = 10; // Tenant's authorized cluster peers (cross-cluster federation allowlist)
+  string content_type = 11;             // Playback kind: "vod" or "chapter"
+  string parent_stream_internal_name = 12; // Parent live stream for chapter-backed VOD assets
 }
 
 // Resolve VOD relay ID (commodore.vod_assets.id) to VOD hash + tenant context
@@ -1220,7 +1249,7 @@ message ResolveArtifactPlaybackIDResponse {
   string tenant_id = 4;
   string user_id = 5;
   string stream_id = 6;
-  string content_type = 7;              // "clip" | "dvr" | "vod"
+  string content_type = 7;              // "clip" | "dvr" | "vod" | "chapter"
   string origin_cluster_id = 8;         // Cluster that originally created this artifact
   repeated cluster_peer.TenantClusterPeer cluster_peers = 9; // Tenant cluster access envelope
   // requires_auth marker for fail-closed playback enforcement.
@@ -1228,6 +1257,8 @@ message ResolveArtifactPlaybackIDResponse {
   // DVR: inherited from the source stream's requires_auth at lookup time.
   // VOD: from the vod_asset's own playback_policy.
   bool requires_auth = 10;
+  repeated cluster_peer.TenantClusterPeer authority_cluster_peers = 11;
+  string parent_stream_internal_name = 12;
 }
 
 // Resolve artifact internal name to artifact identity
@@ -1242,10 +1273,14 @@ message ResolveArtifactInternalNameResponse {
   string tenant_id = 4;
   string user_id = 5;
   string stream_id = 6;
-  string content_type = 7;              // "clip" | "dvr" | "vod"
+  string content_type = 7;              // "clip" | "dvr" | "vod" | "chapter"
   string origin_cluster_id = 8;         // Cluster that originally created this artifact
   repeated cluster_peer.TenantClusterPeer cluster_peers = 9; // Tenant cluster access envelope
   bool requires_auth = 10;
+  // Parent routing identity for stream-derived artifacts; returned by both
+  // connected resolution and signed local authority.
+  string parent_stream_internal_name = 11;
+  repeated cluster_peer.TenantClusterPeer authority_cluster_peers = 12;
 }
 
 // ============================================================================

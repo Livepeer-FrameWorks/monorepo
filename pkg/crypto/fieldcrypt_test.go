@@ -80,3 +80,53 @@ func TestEncryptProducesUniqueOutput(t *testing.T) {
 		t.Fatal("two encryptions of same plaintext should produce different ciphertext (random nonce)")
 	}
 }
+
+func TestDecryptWithAADStrictRejectsLegacyFormats(t *testing.T) {
+	fe, _ := DeriveFieldEncryptor([]byte("test-jwt-secret-that-is-long-xxx"), "test")
+	v1, err := fe.Encrypt("legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stored := range []string{"plaintext", v1} {
+		if _, strictErr := fe.DecryptWithAADStrict(stored, []byte("row")); strictErr == nil {
+			t.Fatalf("strict open accepted %s", CiphertextFormat(stored))
+		}
+	}
+	v2, err := fe.EncryptWithAAD("bound", []byte("row"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := fe.DecryptWithAADStrict(v2, []byte("row"))
+	if err != nil || opened != "bound" {
+		t.Fatalf("strict v2 open = %q, %v", opened, err)
+	}
+}
+
+func TestV2CiphertextAuthenticatesPurposeAndVersion(t *testing.T) {
+	secret := []byte("test-jwt-secret-that-is-long-xxx")
+	first, _ := DeriveFieldEncryptor(secret, "purpose-a")
+	second, _ := DeriveFieldEncryptor(secret, "purpose-b")
+	stored, err := first.EncryptWithAAD("secret", []byte("row"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.DecryptWithAADStrict(stored, []byte("row")); err == nil {
+		t.Fatal("v2 ciphertext opened under another HKDF purpose")
+	}
+}
+
+func TestCompatibleAADOpenMigratesPreBindingV2ButStrictRejectsIt(t *testing.T) {
+	fe, _ := DeriveFieldEncryptor([]byte("test-jwt-secret-that-is-long-xxx"), "test")
+	aad := []byte("row")
+	legacyV2, err := fe.encrypt("legacy-v2", aad, prefixV2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := fe.DecryptWithAAD(legacyV2, aad)
+	if err != nil || opened != "legacy-v2" {
+		t.Fatalf("compatible legacy-v2 open = %q, %v", opened, err)
+	}
+	if _, err := fe.DecryptWithAADStrict(legacyV2, aad); err == nil {
+		t.Fatal("strict v2 state accepted pre-binding ciphertext")
+	}
+}

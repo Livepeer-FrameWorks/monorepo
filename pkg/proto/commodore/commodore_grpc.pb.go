@@ -70,6 +70,8 @@ const (
 	InternalService_TestPlaybackAccess_FullMethodName                 = "/commodore.InternalService/TestPlaybackAccess"
 	InternalService_RecordPullSourceEvent_FullMethodName              = "/commodore.InternalService/RecordPullSourceEvent"
 	InternalService_ListPullSourceEvents_FullMethodName               = "/commodore.InternalService/ListPullSourceEvents"
+	InternalService_RequestMediaAuthorityRefresh_FullMethodName       = "/commodore.InternalService/RequestMediaAuthorityRefresh"
+	InternalService_RequestMediaAuthorityReplay_FullMethodName        = "/commodore.InternalService/RequestMediaAuthorityReplay"
 )
 
 // InternalServiceClient is the client API for InternalService service.
@@ -164,16 +166,9 @@ type InternalServiceClient interface {
 	// is true on the resolved playback object. Enforcement callers must set
 	// include_webhook_secret when they need the plaintext HMAC secret.
 	ResolvePlaybackPolicy(ctx context.Context, in *ResolvePlaybackPolicyRequest, opts ...grpc.CallOption) (*ResolvePlaybackPolicyResponse, error)
-	// Mints and returns a signed policy bundle for a (tenant_id, stream_id)
-	// pair. Foghorn caches the bundle with a soft TTL (background refresh)
-	// and hard TTL (refuse stale). The bundle JWT carries the tenant plan,
-	// allowed cluster set, playback policy snapshot, and a monotonic
-	// bundle_version. Revocation rides the existing
-	// playback_policy_invalidation_outbox channel with a 'bundle_revoke'
-	// reason carrying a minimum-acceptable bundle_version watermark; Foghorn
-	// drops cached entries below the watermark. Survives a central Commodore
-	// outage for the hard-TTL window without serving stale policy past plan
-	// downgrades.
+	// Legacy policy-bundle prototype retained for wire compatibility. The
+	// active v0.3 media path uses Ed25519 media-authority envelopes delivered
+	// into each Foghorn cell; no Foghorn request path consumes this RPC.
 	GetSignedPolicyBundle(ctx context.Context, in *GetSignedPolicyBundleRequest, opts ...grpc.CallOption) (*GetSignedPolicyBundleResponse, error)
 	// Called by Foghorn after a JWT policy successfully verifies.
 	RecordSigningKeyUse(ctx context.Context, in *RecordSigningKeyUseRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
@@ -221,9 +216,9 @@ type InternalServiceClient interface {
 	ResolveClipHash(ctx context.Context, in *ResolveClipHashRequest, opts ...grpc.CallOption) (*ResolveClipHashResponse, error)
 	// Resolve DVR hash to tenant context (for analytics enrichment and playback)
 	ResolveDVRHash(ctx context.Context, in *ResolveDVRHashRequest, opts ...grpc.CallOption) (*ResolveDVRHashResponse, error)
-	// Resolve artifact playback ID to artifact identity (clip/dvr/vod)
+	// Resolve artifact playback ID to artifact identity (clip/dvr/vod/chapter)
 	ResolveArtifactPlaybackID(ctx context.Context, in *ResolveArtifactPlaybackIDRequest, opts ...grpc.CallOption) (*ResolveArtifactPlaybackIDResponse, error)
-	// Resolve artifact internal routing name to artifact identity (clip/dvr/vod)
+	// Resolve artifact internal routing name to artifact identity (clip/dvr/vod/chapter)
 	ResolveArtifactInternalName(ctx context.Context, in *ResolveArtifactInternalNameRequest, opts ...grpc.CallOption) (*ResolveArtifactInternalNameResponse, error)
 	// Unified identifier resolution - checks streams, clips, and DVR in one call
 	// Used by Foghorn for analytics enrichment when local state cache misses
@@ -292,6 +287,15 @@ type InternalServiceClient interface {
 	// health" view.
 	RecordPullSourceEvent(ctx context.Context, in *RecordPullSourceEventRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	ListPullSourceEvents(ctx context.Context, in *ListPullSourceEventsRequest, opts ...grpc.CallOption) (*ListPullSourceEventsResponse, error)
+	// Purser and Quartermaster deliver their transactionally persisted refresh
+	// obligations here. Acceptance means Commodore durably recorded the source
+	// event; compilation and per-cell delivery continue asynchronously.
+	RequestMediaAuthorityRefresh(ctx context.Context, in *RequestMediaAuthorityRefreshRequest, opts ...grpc.CallOption) (*RequestMediaAuthorityRefreshResponse, error)
+	// Called by Foghorn after its internal listener is ready and after a
+	// Commodore reconnect. Commodore requeues the current authority version for
+	// this control cell, closing the gap where a previously acknowledged cell
+	// database was restored or rebuilt after that acknowledgement.
+	RequestMediaAuthorityReplay(ctx context.Context, in *RequestMediaAuthorityReplayRequest, opts ...grpc.CallOption) (*RequestMediaAuthorityReplayResponse, error)
 }
 
 type internalServiceClient struct {
@@ -782,6 +786,26 @@ func (c *internalServiceClient) ListPullSourceEvents(ctx context.Context, in *Li
 	return out, nil
 }
 
+func (c *internalServiceClient) RequestMediaAuthorityRefresh(ctx context.Context, in *RequestMediaAuthorityRefreshRequest, opts ...grpc.CallOption) (*RequestMediaAuthorityRefreshResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RequestMediaAuthorityRefreshResponse)
+	err := c.cc.Invoke(ctx, InternalService_RequestMediaAuthorityRefresh_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) RequestMediaAuthorityReplay(ctx context.Context, in *RequestMediaAuthorityReplayRequest, opts ...grpc.CallOption) (*RequestMediaAuthorityReplayResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RequestMediaAuthorityReplayResponse)
+	err := c.cc.Invoke(ctx, InternalService_RequestMediaAuthorityReplay_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // InternalServiceServer is the server API for InternalService service.
 // All implementations must embed UnimplementedInternalServiceServer
 // for forward compatibility.
@@ -874,16 +898,9 @@ type InternalServiceServer interface {
 	// is true on the resolved playback object. Enforcement callers must set
 	// include_webhook_secret when they need the plaintext HMAC secret.
 	ResolvePlaybackPolicy(context.Context, *ResolvePlaybackPolicyRequest) (*ResolvePlaybackPolicyResponse, error)
-	// Mints and returns a signed policy bundle for a (tenant_id, stream_id)
-	// pair. Foghorn caches the bundle with a soft TTL (background refresh)
-	// and hard TTL (refuse stale). The bundle JWT carries the tenant plan,
-	// allowed cluster set, playback policy snapshot, and a monotonic
-	// bundle_version. Revocation rides the existing
-	// playback_policy_invalidation_outbox channel with a 'bundle_revoke'
-	// reason carrying a minimum-acceptable bundle_version watermark; Foghorn
-	// drops cached entries below the watermark. Survives a central Commodore
-	// outage for the hard-TTL window without serving stale policy past plan
-	// downgrades.
+	// Legacy policy-bundle prototype retained for wire compatibility. The
+	// active v0.3 media path uses Ed25519 media-authority envelopes delivered
+	// into each Foghorn cell; no Foghorn request path consumes this RPC.
 	GetSignedPolicyBundle(context.Context, *GetSignedPolicyBundleRequest) (*GetSignedPolicyBundleResponse, error)
 	// Called by Foghorn after a JWT policy successfully verifies.
 	RecordSigningKeyUse(context.Context, *RecordSigningKeyUseRequest) (*emptypb.Empty, error)
@@ -931,9 +948,9 @@ type InternalServiceServer interface {
 	ResolveClipHash(context.Context, *ResolveClipHashRequest) (*ResolveClipHashResponse, error)
 	// Resolve DVR hash to tenant context (for analytics enrichment and playback)
 	ResolveDVRHash(context.Context, *ResolveDVRHashRequest) (*ResolveDVRHashResponse, error)
-	// Resolve artifact playback ID to artifact identity (clip/dvr/vod)
+	// Resolve artifact playback ID to artifact identity (clip/dvr/vod/chapter)
 	ResolveArtifactPlaybackID(context.Context, *ResolveArtifactPlaybackIDRequest) (*ResolveArtifactPlaybackIDResponse, error)
-	// Resolve artifact internal routing name to artifact identity (clip/dvr/vod)
+	// Resolve artifact internal routing name to artifact identity (clip/dvr/vod/chapter)
 	ResolveArtifactInternalName(context.Context, *ResolveArtifactInternalNameRequest) (*ResolveArtifactInternalNameResponse, error)
 	// Unified identifier resolution - checks streams, clips, and DVR in one call
 	// Used by Foghorn for analytics enrichment when local state cache misses
@@ -1002,6 +1019,15 @@ type InternalServiceServer interface {
 	// health" view.
 	RecordPullSourceEvent(context.Context, *RecordPullSourceEventRequest) (*emptypb.Empty, error)
 	ListPullSourceEvents(context.Context, *ListPullSourceEventsRequest) (*ListPullSourceEventsResponse, error)
+	// Purser and Quartermaster deliver their transactionally persisted refresh
+	// obligations here. Acceptance means Commodore durably recorded the source
+	// event; compilation and per-cell delivery continue asynchronously.
+	RequestMediaAuthorityRefresh(context.Context, *RequestMediaAuthorityRefreshRequest) (*RequestMediaAuthorityRefreshResponse, error)
+	// Called by Foghorn after its internal listener is ready and after a
+	// Commodore reconnect. Commodore requeues the current authority version for
+	// this control cell, closing the gap where a previously acknowledged cell
+	// database was restored or rebuilt after that acknowledgement.
+	RequestMediaAuthorityReplay(context.Context, *RequestMediaAuthorityReplayRequest) (*RequestMediaAuthorityReplayResponse, error)
 	mustEmbedUnimplementedInternalServiceServer()
 }
 
@@ -1155,6 +1181,12 @@ func (UnimplementedInternalServiceServer) RecordPullSourceEvent(context.Context,
 }
 func (UnimplementedInternalServiceServer) ListPullSourceEvents(context.Context, *ListPullSourceEventsRequest) (*ListPullSourceEventsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListPullSourceEvents not implemented")
+}
+func (UnimplementedInternalServiceServer) RequestMediaAuthorityRefresh(context.Context, *RequestMediaAuthorityRefreshRequest) (*RequestMediaAuthorityRefreshResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RequestMediaAuthorityRefresh not implemented")
+}
+func (UnimplementedInternalServiceServer) RequestMediaAuthorityReplay(context.Context, *RequestMediaAuthorityReplayRequest) (*RequestMediaAuthorityReplayResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method RequestMediaAuthorityReplay not implemented")
 }
 func (UnimplementedInternalServiceServer) mustEmbedUnimplementedInternalServiceServer() {}
 func (UnimplementedInternalServiceServer) testEmbeddedByValue()                         {}
@@ -2041,6 +2073,42 @@ func _InternalService_ListPullSourceEvents_Handler(srv interface{}, ctx context.
 	return interceptor(ctx, in, info, handler)
 }
 
+func _InternalService_RequestMediaAuthorityRefresh_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RequestMediaAuthorityRefreshRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).RequestMediaAuthorityRefresh(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_RequestMediaAuthorityRefresh_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).RequestMediaAuthorityRefresh(ctx, req.(*RequestMediaAuthorityRefreshRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_RequestMediaAuthorityReplay_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RequestMediaAuthorityReplayRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).RequestMediaAuthorityReplay(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_RequestMediaAuthorityReplay_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).RequestMediaAuthorityReplay(ctx, req.(*RequestMediaAuthorityReplayRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // InternalService_ServiceDesc is the grpc.ServiceDesc for InternalService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -2239,6 +2307,14 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListPullSourceEvents",
 			Handler:    _InternalService_ListPullSourceEvents_Handler,
+		},
+		{
+			MethodName: "RequestMediaAuthorityRefresh",
+			Handler:    _InternalService_RequestMediaAuthorityRefresh_Handler,
+		},
+		{
+			MethodName: "RequestMediaAuthorityReplay",
+			Handler:    _InternalService_RequestMediaAuthorityReplay_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
