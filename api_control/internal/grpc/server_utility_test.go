@@ -433,11 +433,50 @@ func TestFilterHealthyPeers_DropsEveryNonHealthyState(t *testing.T) {
 	}
 }
 
+func TestFilterOfficialClusterByAdmission(t *testing.T) {
+	newRoute := func() *clusterRoute {
+		return &clusterRoute{
+			officialClusterID:       "official",
+			officialClusterSlug:     "official-slug",
+			officialBaseURL:         "example.test",
+			officialClusterName:     "Official",
+			officialFoghornGrpcAddr: "foghorn:5000",
+		}
+	}
+
+	t.Run("retains entitled official peer regardless of health", func(t *testing.T) {
+		route := newRoute()
+		route.admissionPeers = []*clusterpeerpb.TenantClusterPeer{{ClusterId: "official", HealthStatus: "degraded"}}
+		filterOfficialClusterByAdmission(route)
+		if route.officialClusterID != "official" || route.officialFoghornGrpcAddr == "" {
+			t.Fatalf("entitled official identity was cleared: %+v", route)
+		}
+	})
+
+	for _, test := range []struct {
+		name  string
+		peers []*clusterpeerpb.TenantClusterPeer
+	}{
+		{name: "missing peer"},
+		{name: "different peer", peers: []*clusterpeerpb.TenantClusterPeer{{ClusterId: "other"}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			route := newRoute()
+			route.admissionPeers = test.peers
+			filterOfficialClusterByAdmission(route)
+			if route.officialClusterID != "" || route.officialClusterSlug != "" || route.officialBaseURL != "" || route.officialClusterName != "" || route.officialFoghornGrpcAddr != "" {
+				t.Fatalf("unentitled official identity survived: %+v", route)
+			}
+		})
+	}
+}
+
 func TestClusterAdmissionPeer_DistinguishesEntitlementFromHealth(t *testing.T) {
 	route := &clusterRoute{admissionPeers: []*clusterpeerpb.TenantClusterPeer{
-		{ClusterId: "healthy", HealthStatus: "healthy"},
-		{ClusterId: "degraded", HealthStatus: "degraded"},
-		{ClusterId: "unknown"},
+		{ClusterId: "healthy", ClusterType: "edge", HealthStatus: "healthy"},
+		{ClusterId: "degraded", ClusterType: "edge", HealthStatus: "degraded"},
+		{ClusterId: "unknown", ClusterType: "edge"},
+		{ClusterId: "control", ClusterType: "central", HealthStatus: "healthy"},
 	}}
 	tests := []struct {
 		clusterID string
@@ -446,6 +485,7 @@ func TestClusterAdmissionPeer_DistinguishesEntitlementFromHealth(t *testing.T) {
 		{clusterID: "healthy", want: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_UNSPECIFIED},
 		{clusterID: "degraded", want: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_UNHEALTHY},
 		{clusterID: "unknown", want: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_UNHEALTHY},
+		{clusterID: "control", want: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_CLASS_MISMATCH},
 		{clusterID: "not-entitled", want: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_NOT_ENTITLED},
 	}
 	for _, test := range tests {

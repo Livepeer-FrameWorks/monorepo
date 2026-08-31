@@ -46,7 +46,7 @@ func seedClaimStream(t *testing.T, conn *sql.DB, streamKey string) {
 }
 
 func claimServer(conn *sql.DB) *CommodoreServer {
-	peers := []*clusterpeerpb.TenantClusterPeer{{ClusterId: "media-eu", HealthStatus: "healthy"}}
+	peers := []*clusterpeerpb.TenantClusterPeer{{ClusterId: "media-eu", ClusterType: "edge", HealthStatus: "healthy"}}
 	return &CommodoreServer{
 		db:     conn,
 		logger: logrus.New(),
@@ -339,5 +339,38 @@ func TestClearStreamActiveCluster_CannotClearPushClaim_RealPG(t *testing.T) {
 	}
 	if cluster, token := readClaim(t, conn); cluster != "media-eu" || token != "connection-A" {
 		t.Fatalf("push claim disturbed: cluster=%q owner=%q", cluster, token)
+	}
+}
+
+// Deletion starts by soft-deleting the stream, but the cell that owned a
+// managed pull still has to release its exact placement claim. The release is
+// tenant-, cluster-, and owner-fenced; deleted_at is not an ownership fence and
+// must not strand the claim until the row is hard-deleted.
+func TestClearStreamActiveCluster_ReleasesManagedClaimAfterSoftDelete_RealPG(t *testing.T) {
+	conn := startCommodoreRealPG(t)
+	seedClaimStream(t, conn, "sk-managed-soft-delete")
+	server := claimServer(conn)
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "service")
+
+	if _, err := server.RecordStreamActiveCluster(ctx, &commodorepb.RecordStreamActiveClusterRequest{
+		StreamId: claimStreamID, TenantId: claimTenantID, ClusterId: "media-eu",
+	}); err != nil {
+		t.Fatalf("record managed placement: %v", err)
+	}
+	if _, err := conn.ExecContext(ctx, `UPDATE commodore.streams SET deleted_at = NOW() WHERE id = $1::uuid`, claimStreamID); err != nil {
+		t.Fatalf("soft-delete stream: %v", err)
+	}
+
+	resp, err := server.ClearStreamActiveCluster(ctx, &commodorepb.ClearStreamActiveClusterRequest{
+		StreamId: claimStreamID, TenantId: claimTenantID, ExpectedClusterId: "media-eu",
+	})
+	if err != nil {
+		t.Fatalf("clear managed placement: %v", err)
+	}
+	if !resp.GetCleared() {
+		t.Fatal("soft-deleted stream retained its exact managed placement claim")
+	}
+	if cluster, token := readClaim(t, conn); cluster != "" || token != "" {
+		t.Fatalf("claim after clear = %q/%q, want empty", cluster, token)
 	}
 }

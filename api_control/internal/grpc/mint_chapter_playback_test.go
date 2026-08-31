@@ -28,7 +28,7 @@ func TestMintChapterPlaybackID_TombstonedChapterRefused(t *testing.T) {
 	mock.ExpectRollback()
 
 	_, err := s.MintChapterPlaybackID(context.Background(), &commodorepb.MintChapterPlaybackIDRequest{
-		ChapterId: "c1", TenantId: "t1", ArtifactHash: "chap-hash", UserId: "u1",
+		ChapterId: "c1", TenantId: "t1", ArtifactHash: "chap-hash", UserId: "u1", DvrHash: "dvr-1",
 	})
 	wantCode(t, err, codes.FailedPrecondition)
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -54,7 +54,7 @@ func TestMintChapterPlaybackID_FreshChapterRegisters(t *testing.T) {
 	mock.ExpectCommit()
 
 	resp, err := s.MintChapterPlaybackID(context.Background(), &commodorepb.MintChapterPlaybackIDRequest{
-		ChapterId: "c1", TenantId: "t1", ArtifactHash: "chap-hash", UserId: "u1",
+		ChapterId: "c1", TenantId: "t1", ArtifactHash: "chap-hash", UserId: "u1", DvrHash: "dvr-1",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -62,6 +62,31 @@ func TestMintChapterPlaybackID_FreshChapterRegisters(t *testing.T) {
 	if resp.GetPlaybackId() != "pb-chap" {
 		t.Errorf("got playback_id=%q, want pb-chap", resp.GetPlaybackId())
 	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet: %v", err)
+	}
+}
+
+func TestMintChapterPlaybackID_CrossTenantChapterCollisionRefused(t *testing.T) {
+	s, mock, done := newMockServer(t)
+	defer done()
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs("tenant-b:vod:chap-hash-b").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery(`SELECT deletion_revision FROM commodore\.artifact_catalog_tombstones .* FOR UPDATE`).
+		WithArgs("tenant-b", "chap-hash-b").
+		WillReturnError(sql.ErrNoRows)
+	// The tenant-qualified ON CONFLICT branch returns no row when chapter_id is
+	// already owned by another tenant. The transaction must stop before the VOD
+	// projection and roll back both the attempted mapping change and lock scope.
+	mock.ExpectQuery(`INSERT INTO commodore.dvr_chapter_playback`).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectRollback()
+
+	_, err := s.MintChapterPlaybackID(context.Background(), &commodorepb.MintChapterPlaybackIDRequest{
+		ChapterId: "shared-chapter-id", TenantId: "tenant-b", ArtifactHash: "chap-hash-b", UserId: "user-b", DvrHash: "dvr-b",
+	})
+	wantCode(t, err, codes.FailedPrecondition)
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet: %v", err)
 	}

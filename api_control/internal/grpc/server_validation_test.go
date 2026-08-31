@@ -21,6 +21,17 @@ type countingStreamAdmissionBilling struct {
 	calls int
 }
 
+func TestNewCommodoreServerKeepsOptionalClientInterfacesNil(t *testing.T) {
+	server := NewCommodoreServer(CommodoreServerConfig{
+		Logger:    logrus.New(),
+		JWTSecret: []byte("test-only-commodore-field-encryption-secret"),
+	})
+	if server.streamAdmissionBilling != nil || server.authorityBillingSource != nil || server.authorityTenantSource != nil {
+		t.Fatalf("optional interfaces must remain nil: admission=%T billing=%T tenant=%T",
+			server.streamAdmissionBilling, server.authorityBillingSource, server.authorityTenantSource)
+	}
+}
+
 func (c *countingStreamAdmissionBilling) GetTenantBillingStatus(context.Context, string) (*purserpb.GetTenantBillingStatusResponse, error) {
 	c.calls++
 	return &purserpb.GetTenantBillingStatusResponse{BillingModel: "postpaid"}, nil
@@ -141,6 +152,8 @@ func TestValidateStreamKey(t *testing.T) {
 				mock.ExpectQuery("FROM commodore.streams").WithArgs("contended-key").WillReturnRows(rows)
 				mock.ExpectQuery("UPDATE commodore.streams").WithArgs("cluster-eu", "conn-2", int64(activeIngestLease.Seconds()), "contended-key").
 					WillReturnError(sql.ErrNoRows)
+				mock.ExpectQuery("SELECT active_ingest_cluster_id").WithArgs("contended-key").
+					WillReturnRows(sqlmock.NewRows([]string{"active_ingest_cluster_id", "active_ingest_claim_id"}).AddRow("cluster-eu", "conn-2"))
 			},
 			assert: func(t *testing.T, resp *commodorepb.ValidateStreamKeyResponse, err error) {
 				if err != nil {
@@ -575,8 +588,8 @@ func TestResolveArtifactPlaybackID_PopulatesClusterPeersFromCachedRoute(t *testi
 	}
 	defer db.Close()
 
-	rows := sqlmock.NewRows([]string{"clip_hash", "internal_name", "tenant_id", "user_id", "stream_id", "origin_cluster_id", "requires_auth"}).
-		AddRow("clip-hash", "clip-internal", "tenant-1", "user-1", "stream-1", "cluster-origin", false)
+	rows := sqlmock.NewRows([]string{"clip_hash", "internal_name", "tenant_id", "user_id", "stream_id", "origin_cluster_id", "requires_auth", "parent_stream_internal_name"}).
+		AddRow("clip-hash", "clip-internal", "tenant-1", "user-1", "stream-1", "cluster-origin", false, "parent-internal")
 	mock.ExpectQuery("FROM commodore.clips").WithArgs("playback-1").WillReturnRows(rows)
 
 	server := &CommodoreServer{
@@ -586,8 +599,9 @@ func TestResolveArtifactPlaybackID_PopulatesClusterPeersFromCachedRoute(t *testi
 		routeCacheTTL: 5 * time.Minute,
 	}
 	server.routeCache["tenant-1"] = &clusterRoute{
-		clusterPeers: []*clusterpeerpb.TenantClusterPeer{{ClusterId: "cluster-origin"}},
-		resolvedAt:   time.Now(),
+		clusterPeers:   []*clusterpeerpb.TenantClusterPeer{{ClusterId: "cluster-origin"}},
+		admissionPeers: []*clusterpeerpb.TenantClusterPeer{{ClusterId: "cluster-origin"}, {ClusterId: "cluster-degraded", HealthStatus: "degraded"}},
+		resolvedAt:     time.Now(),
 	}
 
 	resp, err := server.ResolveArtifactPlaybackID(ctx, &commodorepb.ResolveArtifactPlaybackIDRequest{PlaybackId: "playback-1"})
@@ -599,6 +613,9 @@ func TestResolveArtifactPlaybackID_PopulatesClusterPeersFromCachedRoute(t *testi
 	}
 	if len(resp.ClusterPeers) != 1 || resp.ClusterPeers[0].GetClusterId() != "cluster-origin" {
 		t.Fatalf("expected cluster peers from route cache, got %+v", resp.ClusterPeers)
+	}
+	if len(resp.AuthorityClusterPeers) != 2 {
+		t.Fatalf("expected static authority peers from route cache, got %+v", resp.AuthorityClusterPeers)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -626,12 +643,12 @@ func TestValidateStreamKey_OriginClusterUsesIngestClusterWhenProvided(t *testing
 			"tenant-id": {
 				clusterID: "cluster-primary",
 				clusterPeers: []*clusterpeerpb.TenantClusterPeer{
-					{ClusterId: "cluster-primary", HealthStatus: "healthy"},
-					{ClusterId: "cluster-ingest", HealthStatus: "healthy"},
+					{ClusterId: "cluster-primary", ClusterType: "edge", HealthStatus: "healthy"},
+					{ClusterId: "cluster-ingest", ClusterType: "edge", HealthStatus: "healthy"},
 				},
 				admissionPeers: []*clusterpeerpb.TenantClusterPeer{
-					{ClusterId: "cluster-primary", HealthStatus: "healthy"},
-					{ClusterId: "cluster-ingest", HealthStatus: "healthy"},
+					{ClusterId: "cluster-primary", ClusterType: "edge", HealthStatus: "healthy"},
+					{ClusterId: "cluster-ingest", ClusterType: "edge", HealthStatus: "healthy"},
 				},
 				resolvedAt:          time.Now(),
 				admissionResolvedAt: time.Now(),
@@ -712,7 +729,7 @@ func TestValidateStreamKey_WithoutClusterDoesNotClaimPlacement(t *testing.T) {
 	}
 }
 
-func TestValidateStreamKey_UsesMediaClusterWhenFoghornRunsOnPlatformCluster(t *testing.T) {
+func TestValidateStreamKey_RejectsControlPlaneClusterForLiveIngest(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("failed to create sqlmock: %v", err)
@@ -722,9 +739,6 @@ func TestValidateStreamKey_UsesMediaClusterWhenFoghornRunsOnPlatformCluster(t *t
 	rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
 		AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123", "push")
 	mock.ExpectQuery("FROM commodore.streams").WithArgs("good-key").WillReturnRows(rows)
-	mock.ExpectQuery("SET active_ingest_cluster_id").WithArgs("demo-media", "conn-media", int64(activeIngestLease.Seconds()), "good-key").
-		WillReturnRows(claimReserved())
-
 	server := &CommodoreServer{
 		db:     db,
 		logger: logrus.New(),
@@ -754,8 +768,8 @@ func TestValidateStreamKey_UsesMediaClusterWhenFoghornRunsOnPlatformCluster(t *t
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if resp.GetOriginClusterId() != "demo-media" {
-		t.Fatalf("expected origin cluster to stay on media cluster, got %q", resp.GetOriginClusterId())
+	if resp.GetValid() || resp.GetRejectionReason() != commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_CLASS_MISMATCH {
+		t.Fatalf("control-plane cluster admission = %+v, want class-mismatch denial", resp)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -820,7 +834,7 @@ func claimReserved() *sqlmock.Rows {
 func admittingRoute(clusterIDs ...string) *clusterRoute {
 	peers := make([]*clusterpeerpb.TenantClusterPeer, 0, len(clusterIDs))
 	for _, id := range clusterIDs {
-		peers = append(peers, &clusterpeerpb.TenantClusterPeer{ClusterId: id, HealthStatus: "healthy"})
+		peers = append(peers, &clusterpeerpb.TenantClusterPeer{ClusterId: id, ClusterType: "edge", HealthStatus: "healthy"})
 	}
 	return &clusterRoute{
 		clusterID:           clusterIDs[0],

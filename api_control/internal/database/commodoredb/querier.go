@@ -11,6 +11,7 @@ import (
 
 type Querier interface {
 	AcquireIngestClaim(ctx context.Context, arg AcquireIngestClaimParams) (AcquireIngestClaimRow, error)
+	AllocateMediaAuthorityVersion(ctx context.Context, arg AllocateMediaAuthorityVersionParams) (int64, error)
 	ApplyClipCatalogSnapshot(ctx context.Context, arg ApplyClipCatalogSnapshotParams) (ApplyClipCatalogSnapshotRow, error)
 	ApplyClipRetentionState(ctx context.Context, arg ApplyClipRetentionStateParams) error
 	ApplyDVRCatalogSnapshot(ctx context.Context, arg ApplyDVRCatalogSnapshotParams) (ApplyDVRCatalogSnapshotRow, error)
@@ -20,15 +21,19 @@ type Querier interface {
 	ApproveDeviceAuthorization(ctx context.Context, arg ApproveDeviceAuthorizationParams) error
 	ArtifactIdentifierExists(ctx context.Context, internalName string) (bool, error)
 	BackoffArtifactCreationCommandAck(ctx context.Context, arg BackoffArtifactCreationCommandAckParams) error
+	BeginMediaAuthorityCompile(ctx context.Context, scopeKey string) (int64, error)
 	ClaimArtifactCreationCommandAcks(ctx context.Context, arg ClaimArtifactCreationCommandAcksParams) ([]ClaimArtifactCreationCommandAcksRow, error)
 	ClaimArtifactCreationIntents(ctx context.Context, arg ClaimArtifactCreationIntentsParams) ([]ClaimArtifactCreationIntentsRow, error)
 	ClaimInvalidationBatch(ctx context.Context, batchSize int32) ([]ClaimInvalidationBatchRow, error)
+	ClaimMediaAuthorityDeliveries(ctx context.Context, arg ClaimMediaAuthorityDeliveriesParams) ([]ClaimMediaAuthorityDeliveriesRow, error)
+	ClaimMediaAuthorityRefreshInbox(ctx context.Context, arg ClaimMediaAuthorityRefreshInboxParams) ([]ClaimMediaAuthorityRefreshInboxRow, error)
 	ClaimServiceEventOutboxBatch(ctx context.Context, arg ClaimServiceEventOutboxBatchParams) ([]ClaimServiceEventOutboxBatchRow, error)
 	ClaimStreamCleanupBatch(ctx context.Context, batchSize int32) ([]ClaimStreamCleanupBatchRow, error)
 	ClearArtifactCatalogTombstone(ctx context.Context, arg ClearArtifactCatalogTombstoneParams) error
 	ClearArtifactCreationCommandAck(ctx context.Context, arg ClearArtifactCreationCommandAckParams) error
 	ClearManagedStreamActiveCluster(ctx context.Context, arg ClearManagedStreamActiveClusterParams) (int64, error)
 	CompleteInvalidation(ctx context.Context, id string) error
+	CompleteMediaAuthorityRefreshInbox(ctx context.Context, arg CompleteMediaAuthorityRefreshInboxParams) (int64, error)
 	CompleteServiceEventOutbox(ctx context.Context, id string) error
 	ConsumeAuthorizationCode(ctx context.Context, id string) error
 	ConsumeWalletChallenge(ctx context.Context, arg ConsumeWalletChallengeParams) (string, error)
@@ -59,10 +64,12 @@ type Querier interface {
 	DeleteUserWallet(ctx context.Context, arg DeleteUserWalletParams) (string, error)
 	EnableCreatedStreamRecording(ctx context.Context, id string) error
 	EnqueueInvalidation(ctx context.Context, arg EnqueueInvalidationParams) (string, error)
+	EnqueueMediaAuthorityDelivery(ctx context.Context, arg EnqueueMediaAuthorityDeliveryParams) (int64, error)
 	EnqueueServiceEvent(ctx context.Context, arg EnqueueServiceEventParams) (string, error)
 	EnqueueStreamCleanup(ctx context.Context, arg EnqueueStreamCleanupParams) (string, error)
 	ExpireDeviceAuthorization(ctx context.Context, id string) error
 	FailInvalidation(ctx context.Context, arg FailInvalidationParams) error
+	FailMediaAuthorityRefreshInbox(ctx context.Context, arg FailMediaAuthorityRefreshInboxParams) (int64, error)
 	FailServiceEventOutbox(ctx context.Context, arg FailServiceEventOutboxParams) error
 	FailStreamCleanup(ctx context.Context, arg FailStreamCleanupParams) error
 	FenceParentStreamLive(ctx context.Context, arg FenceParentStreamLiveParams) (bool, error)
@@ -74,6 +81,7 @@ type Querier interface {
 	GetArtifactCatalogTombstoneForUpdate(ctx context.Context, arg GetArtifactCatalogTombstoneForUpdateParams) (GetArtifactCatalogTombstoneForUpdateRow, error)
 	GetArtifactCatalogTombstoneOrigin(ctx context.Context, arg GetArtifactCatalogTombstoneOriginParams) (string, error)
 	GetArtifactDeletionMarkerForUpdate(ctx context.Context, arg GetArtifactDeletionMarkerForUpdateParams) (int64, error)
+	GetArtifactMediaAuthoritySource(ctx context.Context, authorityID string) (GetArtifactMediaAuthoritySourceRow, error)
 	GetArtifactRouteByContent(ctx context.Context, dollar_1 string) (GetArtifactRouteByContentRow, error)
 	GetBootstrapMistNativeStream(ctx context.Context, arg GetBootstrapMistNativeStreamParams) (GetBootstrapMistNativeStreamRow, error)
 	GetBootstrapOwnerUser(ctx context.Context, tenantID string) (string, error)
@@ -87,6 +95,7 @@ type Querier interface {
 	GetClipRetentionUntil(ctx context.Context, arg GetClipRetentionUntilParams) (sql.NullTime, error)
 	GetClipSourceStream(ctx context.Context, arg GetClipSourceStreamParams) (GetClipSourceStreamRow, error)
 	GetClipWebhookSecret(ctx context.Context, arg GetClipWebhookSecretParams) (sql.NullString, error)
+	GetCurrentMediaAuthorityPayload(ctx context.Context, arg GetCurrentMediaAuthorityPayloadParams) (GetCurrentMediaAuthorityPayloadRow, error)
 	GetDVRCatalogState(ctx context.Context, arg GetDVRCatalogStateParams) (GetDVRCatalogStateRow, error)
 	GetDVRDeletionRoute(ctx context.Context, arg GetDVRDeletionRouteParams) (GetDVRDeletionRouteRow, error)
 	GetDVRRetentionStreamID(ctx context.Context, arg GetDVRRetentionStreamIDParams) (string, error)
@@ -95,10 +104,13 @@ type Querier interface {
 	GetLiveDVRCatalogStateForUpdate(ctx context.Context, arg GetLiveDVRCatalogStateForUpdateParams) (GetLiveDVRCatalogStateForUpdateRow, error)
 	GetLiveStreamIDByInternalName(ctx context.Context, arg GetLiveStreamIDByInternalNameParams) (string, error)
 	GetLiveStreamInternalName(ctx context.Context, arg GetLiveStreamInternalNameParams) (string, error)
+	GetLiveStreamMediaAuthoritySource(ctx context.Context, streamID string) (GetLiveStreamMediaAuthoritySourceRow, error)
 	GetLiveVODCatalogStateForUpdate(ctx context.Context, arg GetLiveVODCatalogStateForUpdateParams) (GetLiveVODCatalogStateForUpdateRow, error)
 	GetLoginUserByEmail(ctx context.Context, email sql.NullString) (GetLoginUserByEmailRow, error)
+	GetNativeMediaAuthoritySecret(ctx context.Context, streamID string) (GetNativeMediaAuthoritySecretRow, error)
 	GetNewsletterUser(ctx context.Context, arg GetNewsletterUserParams) (GetNewsletterUserRow, error)
 	GetOwnedPullSourceState(ctx context.Context, arg GetOwnedPullSourceStateParams) (GetOwnedPullSourceStateRow, error)
+	GetPullMediaAuthoritySecret(ctx context.Context, streamID string) (GetPullMediaAuthoritySecretRow, error)
 	GetRefreshTokenSuccessorState(ctx context.Context, id string) (bool, error)
 	GetRefreshUser(ctx context.Context, arg GetRefreshUserParams) (GetRefreshUserRow, error)
 	GetSigningKey(ctx context.Context, arg GetSigningKeyParams) (GetSigningKeyRow, error)
@@ -147,6 +159,8 @@ type Querier interface {
 	InsertDVRRegistration(ctx context.Context, arg InsertDVRRegistrationParams) error
 	InsertDeviceAuthorization(ctx context.Context, arg InsertDeviceAuthorizationParams) error
 	InsertLinkedWallet(ctx context.Context, arg InsertLinkedWalletParams) (InsertLinkedWalletRow, error)
+	InsertMediaAuthorityRefreshInbox(ctx context.Context, arg InsertMediaAuthorityRefreshInboxParams) (int64, error)
+	InsertMediaAuthorityVersion(ctx context.Context, arg InsertMediaAuthorityVersionParams) error
 	InsertPolicyBundle(ctx context.Context, arg InsertPolicyBundleParams) error
 	InsertPullSourceEvent(ctx context.Context, arg InsertPullSourceEventParams) error
 	InsertPushTarget(ctx context.Context, arg InsertPushTargetParams) error
@@ -160,6 +174,7 @@ type Querier interface {
 	InsertWalletChallenge(ctx context.Context, arg InsertWalletChallengeParams) error
 	InsertWalletIdentity(ctx context.Context, arg InsertWalletIdentityParams) error
 	InsertWalletUser(ctx context.Context, arg InsertWalletUserParams) error
+	IsDVRChapterPlaybackTarget(ctx context.Context, arg IsDVRChapterPlaybackTargetParams) (bool, error)
 	LeaseInvalidation(ctx context.Context, arg LeaseInvalidationParams) error
 	LeaseStreamCleanup(ctx context.Context, arg LeaseStreamCleanupParams) (sql.NullString, error)
 	LinkUserEmail(ctx context.Context, arg LinkUserEmailParams) error
@@ -168,9 +183,15 @@ type Querier interface {
 	ListAPITokensForward(ctx context.Context, arg ListAPITokensForwardParams) ([]ListAPITokensForwardRow, error)
 	ListAPITokensForwardAfter(ctx context.Context, arg ListAPITokensForwardAfterParams) ([]ListAPITokensForwardAfterRow, error)
 	ListActivePlaybackSigningKeys(ctx context.Context, tenantID string) ([]ListActivePlaybackSigningKeysRow, error)
+	ListArtifactMediaAuthoritySources(ctx context.Context) ([]ListArtifactMediaAuthoritySourcesRow, error)
 	ListBootstrapMistNativeStreams(ctx context.Context, tenantID string) ([]ListBootstrapMistNativeStreamsRow, error)
+	ListCurrentMediaAuthorityDeliveryCells(ctx context.Context, arg ListCurrentMediaAuthorityDeliveryCellsParams) ([]string, error)
+	ListCurrentTenantAuthorityIDs(ctx context.Context) ([]string, error)
 	ListEnabledPushTargets(ctx context.Context, arg ListEnabledPushTargetsParams) ([]ListEnabledPushTargetsRow, error)
+	ListLiveStreamMediaAuthoritySources(ctx context.Context) ([]ListLiveStreamMediaAuthoritySourcesRow, error)
 	ListManagedStreams(ctx context.Context, clusterID string) ([]ListManagedStreamsRow, error)
+	ListMediaAuthorityDeliveryStats(ctx context.Context) ([]ListMediaAuthorityDeliveryStatsRow, error)
+	ListMediaAuthorityPriorCells(ctx context.Context, arg ListMediaAuthorityPriorCellsParams) ([]string, error)
 	ListPullSourceEventsByInternalName(ctx context.Context, arg ListPullSourceEventsByInternalNameParams) ([]ListPullSourceEventsByInternalNameRow, error)
 	ListPullSourceEventsByStream(ctx context.Context, arg ListPullSourceEventsByStreamParams) ([]ListPullSourceEventsByStreamRow, error)
 	ListPushTargets(ctx context.Context, arg ListPushTargetsParams) ([]ListPushTargetsRow, error)
@@ -189,12 +210,15 @@ type Querier interface {
 	ListStreamsBackwardBefore(ctx context.Context, arg ListStreamsBackwardBeforeParams) ([]ListStreamsBackwardBeforeRow, error)
 	ListStreamsForward(ctx context.Context, arg ListStreamsForwardParams) ([]ListStreamsForwardRow, error)
 	ListStreamsForwardAfter(ctx context.Context, arg ListStreamsForwardAfterParams) ([]ListStreamsForwardAfterRow, error)
+	ListTenantArtifactMediaAuthoritySources(ctx context.Context, tenantID string) ([]ListTenantArtifactMediaAuthoritySourcesRow, error)
+	ListTenantLiveStreamMediaAuthoritySources(ctx context.Context, tenantID string) ([]ListTenantLiveStreamMediaAuthoritySourcesRow, error)
 	ListUserWallets(ctx context.Context, userID string) ([]ListUserWalletsRow, error)
 	LockArtifactCatalogKey(ctx context.Context, hashtext string) error
 	LockArtifactCreationIdentity(ctx context.Context, lockKey string) error
 	LockAuthorizationCode(ctx context.Context, codeHash string) (LockAuthorizationCodeRow, error)
 	LockDeviceAuthorizationByHash(ctx context.Context, deviceCodeHash string) (LockDeviceAuthorizationByHashRow, error)
 	LockDeviceAuthorizationByUserCode(ctx context.Context, userCode string) (LockDeviceAuthorizationByUserCodeRow, error)
+	LockMediaAuthorityCompile(ctx context.Context, scopeKey string) (int64, error)
 	LockPolicyBundleStream(ctx context.Context, arg LockPolicyBundleStreamParams) error
 	LockRefreshTokenByHash(ctx context.Context, tokenHash string) (LockRefreshTokenByHashRow, error)
 	LockSigningKeyTenant(ctx context.Context, tenantID string) error
@@ -208,16 +232,19 @@ type Querier interface {
 	LookupVODPolicyByInternalName(ctx context.Context, internalName string) (LookupVODPolicyByInternalNameRow, error)
 	LookupVODPolicyByPlaybackID(ctx context.Context, playbackID string) (LookupVODPolicyByPlaybackIDRow, error)
 	MarkCreatedStreamPull(ctx context.Context, arg MarkCreatedStreamPullParams) error
+	MarkMediaAuthorityDeliveryAcknowledged(ctx context.Context, arg MarkMediaAuthorityDeliveryAcknowledgedParams) (int64, error)
 	MarkServiceEventOutboxClaimed(ctx context.Context, ids []string) error
 	MarkStreamThumbnailCleanupAcked(ctx context.Context, arg MarkStreamThumbnailCleanupAckedParams) error
 	NextPolicyBundleVersion(ctx context.Context, arg NextPolicyBundleVersionParams) (int64, error)
 	NormalizeArtifactPlaybackID(ctx context.Context, clipHash string) (string, error)
 	NoteArtifactCreationIntentAttempt(ctx context.Context, arg NoteArtifactCreationIntentAttemptParams) error
 	RecordManagedStreamActiveCluster(ctx context.Context, arg RecordManagedStreamActiveClusterParams) (int64, error)
+	RecordMediaAuthorityDeliveryFailure(ctx context.Context, arg RecordMediaAuthorityDeliveryFailureParams) (int64, error)
 	RecordSigningKeyUse(ctx context.Context, arg RecordSigningKeyUseParams) error
 	RefreshPrimaryStreamKey(ctx context.Context, arg RefreshPrimaryStreamKeyParams) (int64, error)
 	RegisterStreamThumbnailServingCell(ctx context.Context, arg RegisterStreamThumbnailServingCellParams) (int64, error)
 	RelinkRefreshToken(ctx context.Context, arg RelinkRefreshTokenParams) error
+	RequeueCurrentMediaAuthoritiesForCell(ctx context.Context, cellID string) (int64, error)
 	ResetUserPassword(ctx context.Context, arg ResetUserPasswordParams) error
 	ResolveChapterByPlaybackID(ctx context.Context, playbackID string) (ResolveChapterByPlaybackIDRow, error)
 	ResolveClipByHash(ctx context.Context, clipHash string) (ResolveClipByHashRow, error)
@@ -253,6 +280,7 @@ type Querier interface {
 	SoftDeleteStream(ctx context.Context, arg SoftDeleteStreamParams) error
 	StampResolvedPullStreamPlacement(ctx context.Context, arg StampResolvedPullStreamPlacementParams) error
 	StreamExistsForUser(ctx context.Context, arg StreamExistsForUserParams) (bool, error)
+	SupersedeOlderMediaAuthorityDeliveries(ctx context.Context, arg SupersedeOlderMediaAuthorityDeliveriesParams) (int64, error)
 	TerminalizeArtifactCreationIntent(ctx context.Context, arg TerminalizeArtifactCreationIntentParams) (int64, error)
 	TerminalizeClaimedArtifactCreationIntent(ctx context.Context, arg TerminalizeClaimedArtifactCreationIntentParams) (int64, error)
 	TouchAPITokenLastUsed(ctx context.Context, tokenID string) error
@@ -279,7 +307,10 @@ type Querier interface {
 	UpsertBootstrapPullSource(ctx context.Context, arg UpsertBootstrapPullSourceParams) error
 	UpsertBootstrapStreamProcessingConfig(ctx context.Context, arg UpsertBootstrapStreamProcessingConfigParams) error
 	UpsertChapterPlaybackID(ctx context.Context, arg UpsertChapterPlaybackIDParams) (string, error)
-	UpsertChapterVODAsset(ctx context.Context, arg UpsertChapterVODAssetParams) error
+	UpsertChapterVODAsset(ctx context.Context, arg UpsertChapterVODAssetParams) (int64, error)
+	UpsertCurrentMediaAuthority(ctx context.Context, arg UpsertCurrentMediaAuthorityParams) (int64, error)
+	UpsertMediaAuthorityDistribution(ctx context.Context, arg UpsertMediaAuthorityDistributionParams) error
+	UpsertMediaAuthorityTarget(ctx context.Context, arg UpsertMediaAuthorityTargetParams) error
 	UpsertTenantMediaRetentionPolicy(ctx context.Context, arg UpsertTenantMediaRetentionPolicyParams) error
 	UserOwnsWallet(ctx context.Context, arg UserOwnsWalletParams) (bool, error)
 	ValidateAPITokenHash(ctx context.Context, tokenHash string) (ValidateAPITokenHashRow, error)

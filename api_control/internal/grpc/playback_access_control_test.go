@@ -27,6 +27,9 @@ func TestSetPlaybackPolicy_DeletedAssetReturnsNotFoundNoMutation(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectQuery(`(?s)UPDATE commodore.vod_assets AS v.*NOT EXISTS.*artifact_catalog_tombstones.*RETURNING v.vod_hash`).
 		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(`(?s)SELECT EXISTS.*origin_type = 'dvr_chapter'`).
+		WithArgs("vod-1", "t1").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 	mock.ExpectRollback()
 
 	_, err := s.SetPlaybackPolicy(ctxAs("u1", "t1", "owner"), &commodorepb.SetPlaybackPolicyRequest{
@@ -34,6 +37,28 @@ func TestSetPlaybackPolicy_DeletedAssetReturnsNotFoundNoMutation(t *testing.T) {
 		Type:       "public",
 	})
 	wantCode(t, err, codes.NotFound)
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("unmet: %v", err)
+	}
+}
+
+func TestSetPlaybackPolicy_DVRChapterReturnsFailedPrecondition(t *testing.T) {
+	s, mock, done := newMockServer(t)
+	defer done()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`(?s)UPDATE commodore.vod_assets AS v.*origin_type.*dvr_chapter`).
+		WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery(`(?s)SELECT EXISTS.*origin_type = 'dvr_chapter'`).
+		WithArgs("chapter-1", "t1").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectRollback()
+
+	_, err := s.SetPlaybackPolicy(ctxAs("u1", "t1", "owner"), &commodorepb.SetPlaybackPolicyRequest{
+		VodAssetId: "chapter-1",
+		Type:       "public",
+	})
+	wantCode(t, err, codes.FailedPrecondition)
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unmet: %v", err)
 	}

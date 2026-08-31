@@ -2,12 +2,12 @@
 INSERT INTO commodore.vod_assets (
     id, tenant_id, user_id, vod_hash, internal_name, playback_id,
     title, description, filename, content_type, size_bytes,
-    origin_cluster_id, retention_until, created_at, updated_at
+    origin_cluster_id, retention_until, requires_auth, created_at, updated_at
 ) VALUES (
     sqlc.arg(id), sqlc.arg(tenant_id), sqlc.arg(user_id), sqlc.arg(vod_hash),
     sqlc.arg(internal_name), sqlc.arg(playback_id), sqlc.arg(title), sqlc.arg(description),
     sqlc.arg(filename), sqlc.arg(content_type), sqlc.arg(size_bytes),
-    sqlc.arg(origin_cluster_id), sqlc.arg(retention_until), NOW(), NOW()
+    sqlc.arg(origin_cluster_id), sqlc.arg(retention_until), false, NOW(), NOW()
 );
 
 -- name: GetVODPlaybackID :one

@@ -10,9 +10,9 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
-// MintChapterPlaybackID is idempotent on chapter_id — the SQL uses
+// MintChapterPlaybackID is idempotent on (tenant_id, chapter_id) — the SQL uses
 // ON CONFLICT DO UPDATE … RETURNING playback_id, so retries return
-// the existing public key even when the caller passes a freshly-
+// the existing opaque playback key even when the caller passes a freshly-
 // generated one.
 func TestMintChapterPlaybackID_IdempotentOnChapterID(t *testing.T) {
 	db, mock, err := sqlmock.New()
@@ -32,8 +32,8 @@ func TestMintChapterPlaybackID_IdempotentOnChapterID(t *testing.T) {
 		WithArgs("chap-1", "tenant-1", sqlmock.AnyArg(), "artifact-aaa", "dvr-parent-aaa").
 		WillReturnRows(sqlmock.NewRows([]string{"playback_id"}).AddRow("pb_existing_chapter"))
 	mock.ExpectExec(`INSERT INTO commodore\.vod_assets`).
-		WithArgs(sqlmock.AnyArg(), "tenant-1", "user-1", "stream-1", "artifact-aaa", "artifact-aaa", "pb_existing_chapter",
-			"DVR chapter", "", "chapter.mkv", "video/x-matroska", "cluster-1", "", "chap-1").
+		WithArgs(sqlmock.AnyArg(), "artifact-aaa", "artifact-aaa", "pb_existing_chapter",
+			"DVR chapter", "", "chapter.mkv", "video/x-matroska", "cluster-1", "", "chap-1", "tenant-1", "dvr-parent-aaa").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 

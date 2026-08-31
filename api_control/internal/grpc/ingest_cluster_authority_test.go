@@ -27,6 +27,14 @@ func healthyPeer(clusterID string) *clusterpeerpb.TenantClusterPeer {
 	}
 }
 
+func healthyControlPeer(clusterID string) *clusterpeerpb.TenantClusterPeer {
+	return &clusterpeerpb.TenantClusterPeer{
+		ClusterId:    clusterID,
+		ClusterType:  "central",
+		HealthStatus: "healthy",
+	}
+}
+
 // serverWithRoute builds a Commodore whose tenant route is already cached, so
 // resolution needs no Quartermaster and no admission refresh.
 func serverWithRoute(t *testing.T, db *sql.DB, route *clusterRoute) *CommodoreServer {
@@ -113,6 +121,9 @@ func TestResolveStreamContext_PublishIntentAdmitsWhenAnyClusterIsHealthy(t *test
 	if len(resp.GetClusterPeers()) != 1 || resp.GetClusterPeers()[0].GetClusterId() != "media-us" {
 		t.Fatalf("envelope should carry only the healthy cluster: %+v", resp.GetClusterPeers())
 	}
+	if len(resp.GetAuthorityClusterPeers()) != 2 {
+		t.Fatalf("authority projection must retain both static grants: %+v", resp.GetAuthorityClusterPeers())
+	}
 }
 
 // When nothing in the envelope is healthy, the publish is refused as a health
@@ -136,6 +147,48 @@ func TestResolveStreamContext_PublishIntentRejectsWhenNoClusterIsHealthy(t *test
 	resp := resolveByStreamKey(t, s, "")
 	if resp.GetRejectionReason() != commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_UNHEALTHY {
 		t.Fatalf("rejection reason = %v, want CLUSTER_UNHEALTHY", resp.GetRejectionReason())
+	}
+}
+
+func TestResolveStreamContext_PublishIntentRejectsControlPlaneCluster(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	expectStreamKeyRow(mock, nil, false)
+
+	central := healthyControlPeer("central-primary")
+	s := serverWithRoute(t, db, &clusterRoute{
+		clusterID:      "central-primary",
+		admissionPeers: []*clusterpeerpb.TenantClusterPeer{central},
+		clusterPeers:   []*clusterpeerpb.TenantClusterPeer{central},
+	})
+
+	resp := resolveByStreamKey(t, s, "central-primary")
+	if resp.GetAdmitted() || resp.GetRejectionReason() != commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_CLASS_MISMATCH {
+		t.Fatalf("control-plane ingest = admitted:%v reason:%v", resp.GetAdmitted(), resp.GetRejectionReason())
+	}
+}
+
+func TestResolveStreamContext_PublishIntentRequiresAnIngestCapablePeer(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	expectStreamKeyRow(mock, nil, false)
+
+	central := healthyControlPeer("central-primary")
+	s := serverWithRoute(t, db, &clusterRoute{
+		clusterID:      "central-primary",
+		admissionPeers: []*clusterpeerpb.TenantClusterPeer{central},
+		clusterPeers:   []*clusterpeerpb.TenantClusterPeer{central},
+	})
+
+	resp := resolveByStreamKey(t, s, "")
+	if resp.GetAdmitted() || resp.GetRejectionReason() != commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_CLASS_MISMATCH {
+		t.Fatalf("control-only envelope = admitted:%v reason:%v", resp.GetAdmitted(), resp.GetRejectionReason())
 	}
 }
 

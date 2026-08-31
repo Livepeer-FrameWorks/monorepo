@@ -11,19 +11,22 @@ import (
 )
 
 const resolveClipByInternalName = `-- name: ResolveClipByInternalName :one
-SELECT clip_hash, internal_name, tenant_id, user_id, stream_id::text, origin_cluster_id, requires_auth
-FROM commodore.clips
-WHERE internal_name = $1
+SELECT c.clip_hash, c.internal_name, c.tenant_id, c.user_id, c.stream_id::text AS stream_id, c.origin_cluster_id, c.requires_auth,
+       COALESCE(parent.internal_name, '')::text AS parent_stream_internal_name
+FROM commodore.clips AS c
+LEFT JOIN commodore.streams AS parent ON parent.id = c.stream_id AND parent.tenant_id = c.tenant_id
+WHERE c.internal_name = $1
 `
 
 type ResolveClipByInternalNameRow struct {
-	ClipHash        string         `db:"clip_hash" json:"clip_hash"`
-	InternalName    string         `db:"internal_name" json:"internal_name"`
-	TenantID        string         `db:"tenant_id" json:"tenant_id"`
-	UserID          string         `db:"user_id" json:"user_id"`
-	StreamID        string         `db:"stream_id" json:"stream_id"`
-	OriginClusterID sql.NullString `db:"origin_cluster_id" json:"origin_cluster_id"`
-	RequiresAuth    bool           `db:"requires_auth" json:"requires_auth"`
+	ClipHash                 string         `db:"clip_hash" json:"clip_hash"`
+	InternalName             string         `db:"internal_name" json:"internal_name"`
+	TenantID                 string         `db:"tenant_id" json:"tenant_id"`
+	UserID                   string         `db:"user_id" json:"user_id"`
+	StreamID                 string         `db:"stream_id" json:"stream_id"`
+	OriginClusterID          sql.NullString `db:"origin_cluster_id" json:"origin_cluster_id"`
+	RequiresAuth             bool           `db:"requires_auth" json:"requires_auth"`
+	ParentStreamInternalName string         `db:"parent_stream_internal_name" json:"parent_stream_internal_name"`
 }
 
 func (q *Queries) ResolveClipByInternalName(ctx context.Context, internalName string) (ResolveClipByInternalNameRow, error) {
@@ -37,24 +40,28 @@ func (q *Queries) ResolveClipByInternalName(ctx context.Context, internalName st
 		&i.StreamID,
 		&i.OriginClusterID,
 		&i.RequiresAuth,
+		&i.ParentStreamInternalName,
 	)
 	return i, err
 }
 
 const resolveClipByPlaybackID = `-- name: ResolveClipByPlaybackID :one
-SELECT clip_hash, internal_name, tenant_id, user_id, stream_id::text, origin_cluster_id, requires_auth
-FROM commodore.clips
-WHERE lower(playback_id::text) = lower($1::text)
+SELECT c.clip_hash, c.internal_name, c.tenant_id, c.user_id, c.stream_id::text AS stream_id, c.origin_cluster_id, c.requires_auth,
+       COALESCE(parent.internal_name, '')::text AS parent_stream_internal_name
+FROM commodore.clips AS c
+LEFT JOIN commodore.streams AS parent ON parent.id = c.stream_id AND parent.tenant_id = c.tenant_id
+WHERE lower(c.playback_id::text) = lower($1::text)
 `
 
 type ResolveClipByPlaybackIDRow struct {
-	ClipHash        string         `db:"clip_hash" json:"clip_hash"`
-	InternalName    string         `db:"internal_name" json:"internal_name"`
-	TenantID        string         `db:"tenant_id" json:"tenant_id"`
-	UserID          string         `db:"user_id" json:"user_id"`
-	StreamID        string         `db:"stream_id" json:"stream_id"`
-	OriginClusterID sql.NullString `db:"origin_cluster_id" json:"origin_cluster_id"`
-	RequiresAuth    bool           `db:"requires_auth" json:"requires_auth"`
+	ClipHash                 string         `db:"clip_hash" json:"clip_hash"`
+	InternalName             string         `db:"internal_name" json:"internal_name"`
+	TenantID                 string         `db:"tenant_id" json:"tenant_id"`
+	UserID                   string         `db:"user_id" json:"user_id"`
+	StreamID                 string         `db:"stream_id" json:"stream_id"`
+	OriginClusterID          sql.NullString `db:"origin_cluster_id" json:"origin_cluster_id"`
+	RequiresAuth             bool           `db:"requires_auth" json:"requires_auth"`
+	ParentStreamInternalName string         `db:"parent_stream_internal_name" json:"parent_stream_internal_name"`
 }
 
 func (q *Queries) ResolveClipByPlaybackID(ctx context.Context, dollar_1 string) (ResolveClipByPlaybackIDRow, error) {
@@ -68,26 +75,30 @@ func (q *Queries) ResolveClipByPlaybackID(ctx context.Context, dollar_1 string) 
 		&i.StreamID,
 		&i.OriginClusterID,
 		&i.RequiresAuth,
+		&i.ParentStreamInternalName,
 	)
 	return i, err
 }
 
 const resolveDVRByInternalName = `-- name: ResolveDVRByInternalName :one
-SELECT d.dvr_hash, d.internal_name, d.tenant_id, d.user_id, d.stream_id::text,
-       d.origin_cluster_id, s.requires_auth
+SELECT d.dvr_hash, d.internal_name, d.tenant_id, d.user_id, d.stream_id::text AS stream_id,
+       d.origin_cluster_id,
+       (CASE WHEN d.playback_authority_ready THEN d.requires_auth ELSE COALESCE(s.requires_auth, TRUE) END)::boolean AS requires_auth,
+       COALESCE(d.stream_internal_name, s.internal_name, '')::text AS parent_stream_internal_name
 FROM commodore.dvr_recordings d
-LEFT JOIN commodore.streams s ON s.id = d.stream_id
+LEFT JOIN commodore.streams s ON s.id = d.stream_id AND s.tenant_id = d.tenant_id
 WHERE d.internal_name = $1
 `
 
 type ResolveDVRByInternalNameRow struct {
-	DvrHash         string         `db:"dvr_hash" json:"dvr_hash"`
-	InternalName    string         `db:"internal_name" json:"internal_name"`
-	TenantID        string         `db:"tenant_id" json:"tenant_id"`
-	UserID          string         `db:"user_id" json:"user_id"`
-	DStreamID       string         `db:"d_stream_id" json:"d_stream_id"`
-	OriginClusterID sql.NullString `db:"origin_cluster_id" json:"origin_cluster_id"`
-	RequiresAuth    sql.NullBool   `db:"requires_auth" json:"requires_auth"`
+	DvrHash                  string         `db:"dvr_hash" json:"dvr_hash"`
+	InternalName             string         `db:"internal_name" json:"internal_name"`
+	TenantID                 string         `db:"tenant_id" json:"tenant_id"`
+	UserID                   string         `db:"user_id" json:"user_id"`
+	StreamID                 string         `db:"stream_id" json:"stream_id"`
+	OriginClusterID          sql.NullString `db:"origin_cluster_id" json:"origin_cluster_id"`
+	RequiresAuth             bool           `db:"requires_auth" json:"requires_auth"`
+	ParentStreamInternalName string         `db:"parent_stream_internal_name" json:"parent_stream_internal_name"`
 }
 
 func (q *Queries) ResolveDVRByInternalName(ctx context.Context, internalName string) (ResolveDVRByInternalNameRow, error) {
@@ -98,29 +109,33 @@ func (q *Queries) ResolveDVRByInternalName(ctx context.Context, internalName str
 		&i.InternalName,
 		&i.TenantID,
 		&i.UserID,
-		&i.DStreamID,
+		&i.StreamID,
 		&i.OriginClusterID,
 		&i.RequiresAuth,
+		&i.ParentStreamInternalName,
 	)
 	return i, err
 }
 
 const resolveDVRByPlaybackID = `-- name: ResolveDVRByPlaybackID :one
-SELECT d.dvr_hash, d.internal_name, d.tenant_id, d.user_id, d.stream_id::text,
-       d.origin_cluster_id, s.requires_auth
+SELECT d.dvr_hash, d.internal_name, d.tenant_id, d.user_id, d.stream_id::text AS stream_id,
+       d.origin_cluster_id,
+       (CASE WHEN d.playback_authority_ready THEN d.requires_auth ELSE COALESCE(s.requires_auth, TRUE) END)::boolean AS requires_auth,
+       COALESCE(d.stream_internal_name, s.internal_name, '')::text AS parent_stream_internal_name
 FROM commodore.dvr_recordings d
-LEFT JOIN commodore.streams s ON s.id = d.stream_id
+LEFT JOIN commodore.streams s ON s.id = d.stream_id AND s.tenant_id = d.tenant_id
 WHERE lower(d.playback_id::text) = lower($1::text)
 `
 
 type ResolveDVRByPlaybackIDRow struct {
-	DvrHash         string         `db:"dvr_hash" json:"dvr_hash"`
-	InternalName    string         `db:"internal_name" json:"internal_name"`
-	TenantID        string         `db:"tenant_id" json:"tenant_id"`
-	UserID          string         `db:"user_id" json:"user_id"`
-	DStreamID       string         `db:"d_stream_id" json:"d_stream_id"`
-	OriginClusterID sql.NullString `db:"origin_cluster_id" json:"origin_cluster_id"`
-	RequiresAuth    sql.NullBool   `db:"requires_auth" json:"requires_auth"`
+	DvrHash                  string         `db:"dvr_hash" json:"dvr_hash"`
+	InternalName             string         `db:"internal_name" json:"internal_name"`
+	TenantID                 string         `db:"tenant_id" json:"tenant_id"`
+	UserID                   string         `db:"user_id" json:"user_id"`
+	StreamID                 string         `db:"stream_id" json:"stream_id"`
+	OriginClusterID          sql.NullString `db:"origin_cluster_id" json:"origin_cluster_id"`
+	RequiresAuth             bool           `db:"requires_auth" json:"requires_auth"`
+	ParentStreamInternalName string         `db:"parent_stream_internal_name" json:"parent_stream_internal_name"`
 }
 
 func (q *Queries) ResolveDVRByPlaybackID(ctx context.Context, dollar_1 string) (ResolveDVRByPlaybackIDRow, error) {
@@ -131,26 +146,38 @@ func (q *Queries) ResolveDVRByPlaybackID(ctx context.Context, dollar_1 string) (
 		&i.InternalName,
 		&i.TenantID,
 		&i.UserID,
-		&i.DStreamID,
+		&i.StreamID,
 		&i.OriginClusterID,
 		&i.RequiresAuth,
+		&i.ParentStreamInternalName,
 	)
 	return i, err
 }
 
 const resolveVODByInternalName = `-- name: ResolveVODByInternalName :one
-SELECT vod_hash, internal_name, tenant_id, user_id, origin_cluster_id, requires_auth
-FROM commodore.vod_assets
-WHERE internal_name = $1
+SELECT v.vod_hash, v.internal_name, v.tenant_id, v.user_id, COALESCE(v.stream_id::text, '')::text AS stream_id,
+       v.origin_cluster_id, v.requires_auth,
+       CASE WHEN v.origin_type = 'dvr_chapter' THEN 'chapter'::text ELSE 'vod'::text END AS content_type,
+       COALESCE(parent_dvr.stream_internal_name, parent_stream.internal_name, '')::text AS parent_stream_internal_name
+FROM commodore.vod_assets AS v
+LEFT JOIN commodore.dvr_chapter_playback AS chapter
+  ON chapter.tenant_id = v.tenant_id AND chapter.artifact_hash = v.vod_hash
+LEFT JOIN commodore.dvr_recordings AS parent_dvr
+  ON parent_dvr.tenant_id = chapter.tenant_id AND parent_dvr.dvr_hash = chapter.dvr_hash
+LEFT JOIN commodore.streams AS parent_stream ON parent_stream.id = v.stream_id AND parent_stream.tenant_id = v.tenant_id
+WHERE v.internal_name = $1
 `
 
 type ResolveVODByInternalNameRow struct {
-	VodHash         string         `db:"vod_hash" json:"vod_hash"`
-	InternalName    string         `db:"internal_name" json:"internal_name"`
-	TenantID        string         `db:"tenant_id" json:"tenant_id"`
-	UserID          string         `db:"user_id" json:"user_id"`
-	OriginClusterID sql.NullString `db:"origin_cluster_id" json:"origin_cluster_id"`
-	RequiresAuth    bool           `db:"requires_auth" json:"requires_auth"`
+	VodHash                  string         `db:"vod_hash" json:"vod_hash"`
+	InternalName             string         `db:"internal_name" json:"internal_name"`
+	TenantID                 string         `db:"tenant_id" json:"tenant_id"`
+	UserID                   string         `db:"user_id" json:"user_id"`
+	StreamID                 string         `db:"stream_id" json:"stream_id"`
+	OriginClusterID          sql.NullString `db:"origin_cluster_id" json:"origin_cluster_id"`
+	RequiresAuth             bool           `db:"requires_auth" json:"requires_auth"`
+	ContentType              string         `db:"content_type" json:"content_type"`
+	ParentStreamInternalName string         `db:"parent_stream_internal_name" json:"parent_stream_internal_name"`
 }
 
 func (q *Queries) ResolveVODByInternalName(ctx context.Context, internalName string) (ResolveVODByInternalNameRow, error) {
@@ -161,25 +188,39 @@ func (q *Queries) ResolveVODByInternalName(ctx context.Context, internalName str
 		&i.InternalName,
 		&i.TenantID,
 		&i.UserID,
+		&i.StreamID,
 		&i.OriginClusterID,
 		&i.RequiresAuth,
+		&i.ContentType,
+		&i.ParentStreamInternalName,
 	)
 	return i, err
 }
 
 const resolveVODByPlaybackID = `-- name: ResolveVODByPlaybackID :one
-SELECT vod_hash, internal_name, tenant_id, user_id, origin_cluster_id, requires_auth
-FROM commodore.vod_assets
-WHERE lower(playback_id::text) = lower($1::text)
+SELECT v.vod_hash, v.internal_name, v.tenant_id, v.user_id, COALESCE(v.stream_id::text, '')::text AS stream_id,
+       v.origin_cluster_id, v.requires_auth,
+       CASE WHEN v.origin_type = 'dvr_chapter' THEN 'chapter'::text ELSE 'vod'::text END AS content_type,
+       COALESCE(parent_dvr.stream_internal_name, parent_stream.internal_name, '')::text AS parent_stream_internal_name
+FROM commodore.vod_assets AS v
+LEFT JOIN commodore.dvr_chapter_playback AS chapter
+  ON chapter.tenant_id = v.tenant_id AND chapter.artifact_hash = v.vod_hash
+LEFT JOIN commodore.dvr_recordings AS parent_dvr
+  ON parent_dvr.tenant_id = chapter.tenant_id AND parent_dvr.dvr_hash = chapter.dvr_hash
+LEFT JOIN commodore.streams AS parent_stream ON parent_stream.id = v.stream_id AND parent_stream.tenant_id = v.tenant_id
+WHERE lower(v.playback_id::text) = lower($1::text)
 `
 
 type ResolveVODByPlaybackIDRow struct {
-	VodHash         string         `db:"vod_hash" json:"vod_hash"`
-	InternalName    string         `db:"internal_name" json:"internal_name"`
-	TenantID        string         `db:"tenant_id" json:"tenant_id"`
-	UserID          string         `db:"user_id" json:"user_id"`
-	OriginClusterID sql.NullString `db:"origin_cluster_id" json:"origin_cluster_id"`
-	RequiresAuth    bool           `db:"requires_auth" json:"requires_auth"`
+	VodHash                  string         `db:"vod_hash" json:"vod_hash"`
+	InternalName             string         `db:"internal_name" json:"internal_name"`
+	TenantID                 string         `db:"tenant_id" json:"tenant_id"`
+	UserID                   string         `db:"user_id" json:"user_id"`
+	StreamID                 string         `db:"stream_id" json:"stream_id"`
+	OriginClusterID          sql.NullString `db:"origin_cluster_id" json:"origin_cluster_id"`
+	RequiresAuth             bool           `db:"requires_auth" json:"requires_auth"`
+	ContentType              string         `db:"content_type" json:"content_type"`
+	ParentStreamInternalName string         `db:"parent_stream_internal_name" json:"parent_stream_internal_name"`
 }
 
 func (q *Queries) ResolveVODByPlaybackID(ctx context.Context, dollar_1 string) (ResolveVODByPlaybackIDRow, error) {
@@ -190,8 +231,11 @@ func (q *Queries) ResolveVODByPlaybackID(ctx context.Context, dollar_1 string) (
 		&i.InternalName,
 		&i.TenantID,
 		&i.UserID,
+		&i.StreamID,
 		&i.OriginClusterID,
 		&i.RequiresAuth,
+		&i.ContentType,
+		&i.ParentStreamInternalName,
 	)
 	return i, err
 }

@@ -70,6 +70,7 @@ ON CONFLICT (chapter_id) DO UPDATE
 SET artifact_hash = EXCLUDED.artifact_hash,
     dvr_hash = COALESCE(EXCLUDED.dvr_hash, commodore.dvr_chapter_playback.dvr_hash),
     updated_at = NOW()
+WHERE commodore.dvr_chapter_playback.tenant_id = EXCLUDED.tenant_id
 RETURNING playback_id
 `
 
@@ -94,20 +95,29 @@ func (q *Queries) UpsertChapterPlaybackID(ctx context.Context, arg UpsertChapter
 	return playback_id, err
 }
 
-const upsertChapterVODAsset = `-- name: UpsertChapterVODAsset :exec
+const upsertChapterVODAsset = `-- name: UpsertChapterVODAsset :execrows
 INSERT INTO commodore.vod_assets (
     id, tenant_id, user_id, stream_id, vod_hash, internal_name, playback_id,
     title, description, filename, content_type,
     origin_cluster_id, storage_cluster_id,
     library_visible, origin_type, origin_id,
+    requires_auth, playback_policy, playback_webhook_secret_enc,
     created_at, updated_at
-) VALUES (
-    $1, $2::uuid, $3::uuid, NULLIF($4::text, '')::uuid,
-    $5, $6, $7,
-    $8, NULLIF($9::text, ''), $10, $11,
-    NULLIF($12::text, ''), NULLIF($13::text, ''),
-    false, 'dvr_chapter', $14, NOW(), NOW()
-)
+) SELECT
+    $1, parent.tenant_id, parent.user_id, parent.stream_id,
+    $2, $3, $4,
+    $5, NULLIF($6::text, ''), $7, $8,
+    NULLIF($9::text, ''), NULLIF($10::text, ''),
+    false, 'dvr_chapter', $11,
+    CASE WHEN parent.playback_authority_ready THEN parent.requires_auth ELSE COALESCE(parent_stream.requires_auth, TRUE) END,
+    CASE WHEN parent.playback_authority_ready THEN parent.playback_policy ELSE parent_stream.playback_policy END,
+    CASE WHEN parent.playback_authority_ready THEN parent.playback_webhook_secret_enc ELSE parent_stream.playback_webhook_secret_enc END,
+    NOW(), NOW()
+FROM commodore.dvr_recordings AS parent
+LEFT JOIN commodore.streams AS parent_stream
+  ON parent_stream.id = parent.stream_id AND parent_stream.tenant_id = parent.tenant_id
+WHERE parent.tenant_id = $12::uuid
+  AND parent.dvr_hash = $13
 ON CONFLICT (vod_hash) DO UPDATE SET
     user_id = EXCLUDED.user_id,
     stream_id = EXCLUDED.stream_id,
@@ -122,14 +132,15 @@ ON CONFLICT (vod_hash) DO UPDATE SET
     library_visible = false,
     origin_type = 'dvr_chapter',
     origin_id = EXCLUDED.origin_id,
+    requires_auth = EXCLUDED.requires_auth,
+    playback_policy = EXCLUDED.playback_policy,
+    playback_webhook_secret_enc = EXCLUDED.playback_webhook_secret_enc,
     updated_at = NOW()
+WHERE commodore.vod_assets.tenant_id = EXCLUDED.tenant_id
 `
 
 type UpsertChapterVODAssetParams struct {
 	ID               string         `db:"id" json:"id"`
-	TenantID         string         `db:"tenant_id" json:"tenant_id"`
-	UserID           string         `db:"user_id" json:"user_id"`
-	StreamID         string         `db:"stream_id" json:"stream_id"`
 	VodHash          string         `db:"vod_hash" json:"vod_hash"`
 	InternalName     string         `db:"internal_name" json:"internal_name"`
 	PlaybackID       string         `db:"playback_id" json:"playback_id"`
@@ -140,14 +151,13 @@ type UpsertChapterVODAssetParams struct {
 	OriginClusterID  string         `db:"origin_cluster_id" json:"origin_cluster_id"`
 	StorageClusterID string         `db:"storage_cluster_id" json:"storage_cluster_id"`
 	OriginID         sql.NullString `db:"origin_id" json:"origin_id"`
+	TenantID         string         `db:"tenant_id" json:"tenant_id"`
+	DvrHash          string         `db:"dvr_hash" json:"dvr_hash"`
 }
 
-func (q *Queries) UpsertChapterVODAsset(ctx context.Context, arg UpsertChapterVODAssetParams) error {
-	_, err := q.db.ExecContext(ctx, upsertChapterVODAsset,
+func (q *Queries) UpsertChapterVODAsset(ctx context.Context, arg UpsertChapterVODAssetParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, upsertChapterVODAsset,
 		arg.ID,
-		arg.TenantID,
-		arg.UserID,
-		arg.StreamID,
 		arg.VodHash,
 		arg.InternalName,
 		arg.PlaybackID,
@@ -158,6 +168,11 @@ func (q *Queries) UpsertChapterVODAsset(ctx context.Context, arg UpsertChapterVO
 		arg.OriginClusterID,
 		arg.StorageClusterID,
 		arg.OriginID,
+		arg.TenantID,
+		arg.DvrHash,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }

@@ -50,12 +50,12 @@ const insertVODUploadRegistration = `-- name: InsertVODUploadRegistration :exec
 INSERT INTO commodore.vod_assets (
     id, tenant_id, user_id, vod_hash, internal_name, playback_id,
     title, description, filename, content_type, size_bytes,
-    origin_cluster_id, retention_until, created_at, updated_at
+    origin_cluster_id, retention_until, requires_auth, created_at, updated_at
 ) VALUES (
     $1, $2, $3, $4,
     $5, $6, $7, $8,
     $9, $10, $11,
-    $12, $13, NOW(), NOW()
+    $12, $13, false, NOW(), NOW()
 )
 `
 

@@ -480,4 +480,37 @@ func TestValidateStreamKey_ContendedClaimIsNotAcquired(t *testing.T) {
 	if resp.GetClaimAcquired() {
 		t.Fatal("a contended claim was reported as acquired")
 	}
+	if resp.GetValid() || resp.GetRejectionReason() != commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_DUPLICATE_INGEST {
+		t.Fatalf("contended claim response = %+v, want duplicate-ingest denial", resp)
+	}
+}
+
+func TestValidateStreamKey_ContendedClaimReadFailureDenies(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
+		AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk", "push")
+	mock.ExpectQuery("FROM commodore.streams").WithArgs("good-key").WillReturnRows(rows)
+	mock.ExpectQuery("UPDATE commodore.streams").WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("SELECT active_ingest_cluster_id").WithArgs("good-key").WillReturnError(context.DeadlineExceeded)
+
+	server := &CommodoreServer{
+		db: db, logger: logrus.New(), routeCache: map[string]*clusterRoute{"tenant-id": admittingRoute("cluster-us")}, routeCacheTTL: 5 * time.Minute,
+	}
+	resp, err := server.ValidateStreamKey(context.Background(), &commodorepb.ValidateStreamKeyRequest{
+		StreamKey: "good-key", ClusterId: "cluster-us", ClaimToken: "trigger-uuid-2",
+	})
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if resp.GetValid() || resp.GetRejectionReason() != commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_DUPLICATE_INGEST {
+		t.Fatalf("ambiguous claim response = %+v, want fail-closed denial", resp)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
 }

@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	"database/sql"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -9,6 +12,7 @@ import (
 	"strings"
 
 	"frameworks/api_control/internal/clusterurls"
+	commodoremigrations "frameworks/api_control/internal/datamigrations"
 	commodoregrpc "frameworks/api_control/internal/grpc"
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	foghornclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
@@ -18,7 +22,9 @@ import (
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/datamigrate"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
@@ -29,6 +35,21 @@ import (
 
 func main() {
 	if version.HandleCLI() {
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "data-migrations" {
+		logger := logging.NewLoggerWithService("commodore")
+		config.LoadEnv(logger)
+		commodoremigrations.Register()
+		dbConfig := database.DefaultConfig()
+		dbConfig.ServiceName = "commodore"
+		dbConfig.URL = config.RequireEnv("DATABASE_URL")
+		err := datamigrate.HandleArgv(context.Background(), func() (*sql.DB, error) {
+			return database.Connect(dbConfig, logger)
+		}, os.Stdout, os.Args[1:])
+		if err != nil && !errors.Is(err, datamigrate.ErrNotDataMigrationsCommand) {
+			logger.WithError(err).Fatal("Data migration command failed")
+		}
 		return
 	}
 
@@ -50,6 +71,30 @@ func main() {
 	dbURL := config.RequireEnv("DATABASE_URL")
 	jwtSecret := config.RequireEnv("JWT_SECRET")
 	serviceToken := config.RequireEnv("SERVICE_TOKEN")
+	mediaAuthorityKeyID := strings.TrimSpace(os.Getenv("MEDIA_AUTHORITY_SIGNING_KEY_ID"))
+	mediaAuthorityPrivateEncoded := strings.TrimSpace(os.Getenv("MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64"))
+	var mediaAuthorityPrivateKey ed25519.PrivateKey
+	var err error
+	if mediaAuthorityKeyID != "" || mediaAuthorityPrivateEncoded != "" {
+		if mediaAuthorityKeyID == "" || mediaAuthorityPrivateEncoded == "" {
+			logger.Fatal("MEDIA_AUTHORITY_SIGNING_KEY_ID and MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64 must be configured together")
+		}
+		mediaAuthorityPrivateKey, err = sharedauthority.ParseSigningPrivateKey(mediaAuthorityPrivateEncoded)
+		if err != nil {
+			logger.WithError(err).Fatal("Invalid media authority signing private key")
+		}
+		logger.WithField("signer_key_id", mediaAuthorityKeyID).Info("Signed media authority compiler enabled")
+	} else {
+		logger.Warn("Media authority signing key is not configured; authority compilation is disabled")
+	}
+	var mediaAuthoritySealRecipients sharedauthority.SealRecipientSet
+	if encodedRecipients := strings.TrimSpace(os.Getenv("MEDIA_AUTHORITY_SEAL_RECIPIENTS")); encodedRecipients != "" {
+		mediaAuthoritySealRecipients, err = sharedauthority.ParseSealRecipients(encodedRecipients)
+		if err != nil {
+			logger.WithError(err).Fatal("Invalid media authority seal recipient set")
+		}
+		logger.WithField("recipient_cells", len(mediaAuthoritySealRecipients)).Info("Media authority sealed-secret delivery enabled")
+	}
 
 	// Connect to database
 	dbConfig := database.DefaultConfig()
@@ -76,6 +121,26 @@ func main() {
 	serverMetrics := &commodoregrpc.ServerMetrics{
 		GRPCRequests: metricsCollector.NewCounter("grpc_requests_total", "Total gRPC requests", []string{"method", "status"}),
 		GRPCDuration: metricsCollector.NewHistogram("grpc_request_duration_seconds", "gRPC request duration", []string{"method"}, nil),
+		MediaAuthorityDeliveryAttempts: metricsCollector.NewCounter(
+			"media_authority_delivery_attempts_total",
+			"Signed media-authority delivery attempts by result",
+			[]string{"authority_kind", "result"},
+		),
+		MediaAuthorityPending: metricsCollector.NewGauge(
+			"media_authority_pending_deliveries",
+			"Current authority deliveries not yet acknowledged",
+			[]string{"authority_kind"},
+		),
+		MediaAuthorityMaxVersionLag: metricsCollector.NewGauge(
+			"media_authority_max_version_lag",
+			"Largest current-version minus acknowledged-version lag across target cells",
+			[]string{"authority_kind"},
+		),
+		MediaAuthorityOldestPendingSeconds: metricsCollector.NewGauge(
+			"media_authority_oldest_pending_seconds",
+			"Age in seconds of the oldest unacknowledged current authority delivery",
+			[]string{"authority_kind"},
+		),
 	}
 
 	foghornPool := foghornclient.NewPool(foghornclient.PoolConfig{
@@ -208,26 +273,29 @@ func main() {
 		}
 
 		grpcServer := commodoregrpc.NewGRPCServer(commodoregrpc.CommodoreServerConfig{
-			DB:                   db,
-			DBMaxIdleConns:       dbConfig.MaxIdleConns,
-			Logger:               logger,
-			FoghornPool:          foghornPool,
-			QuartermasterClient:  quartermasterGRPCClient,
-			NavigatorClient:      navigatorGRPCClient,
-			PurserClient:         purserGRPCClient,
-			ListmonkClient:       listmonkClient,
-			DecklogClient:        decklogClient,
-			ClusterURLs:          clusterURLsResolver,
-			DefaultMailingListID: defaultMailingListID,
-			Metrics:              serverMetrics,
-			ServiceToken:         serviceToken,
-			JWTSecret:            []byte(jwtSecret),
-			TurnstileSecretKey:   config.GetEnv("TURNSTILE_AUTH_SECRET_KEY", ""),
-			TurnstileFailOpen:    config.GetEnvBool("TURNSTILE_FAIL_OPEN", false),
-			PasswordResetSecret:  []byte(config.GetEnv("PASSWORD_RESET_SECRET", "")),
-			CertFile:             config.GetEnv("GRPC_TLS_CERT_PATH", ""),
-			KeyFile:              config.GetEnv("GRPC_TLS_KEY_PATH", ""),
-			AllowInsecure:        config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
+			DB:                              db,
+			DBMaxIdleConns:                  dbConfig.MaxIdleConns,
+			Logger:                          logger,
+			FoghornPool:                     foghornPool,
+			QuartermasterClient:             quartermasterGRPCClient,
+			NavigatorClient:                 navigatorGRPCClient,
+			PurserClient:                    purserGRPCClient,
+			ListmonkClient:                  listmonkClient,
+			DecklogClient:                   decklogClient,
+			ClusterURLs:                     clusterURLsResolver,
+			DefaultMailingListID:            defaultMailingListID,
+			Metrics:                         serverMetrics,
+			ServiceToken:                    serviceToken,
+			JWTSecret:                       []byte(jwtSecret),
+			TurnstileSecretKey:              config.GetEnv("TURNSTILE_AUTH_SECRET_KEY", ""),
+			TurnstileFailOpen:               config.GetEnvBool("TURNSTILE_FAIL_OPEN", false),
+			PasswordResetSecret:             []byte(config.GetEnv("PASSWORD_RESET_SECRET", "")),
+			MediaAuthoritySigningKeyID:      mediaAuthorityKeyID,
+			MediaAuthoritySigningPrivateKey: mediaAuthorityPrivateKey,
+			MediaAuthoritySealRecipients:    mediaAuthoritySealRecipients,
+			CertFile:                        config.GetEnv("GRPC_TLS_CERT_PATH", ""),
+			KeyFile:                         config.GetEnv("GRPC_TLS_KEY_PATH", ""),
+			AllowInsecure:                   config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
 		})
 		logger.WithField("addr", grpcAddr).Info("Starting gRPC server")
 

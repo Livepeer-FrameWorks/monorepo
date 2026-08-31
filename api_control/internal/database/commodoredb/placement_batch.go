@@ -15,6 +15,7 @@ SET active_ingest_cluster_id = t.cluster_id,
 FROM unnest($1::uuid[], $2::text[], $3::text[], $4::text[]) AS t(tenant_id, internal_name, claim_token, cluster_id)
 WHERE s.tenant_id = t.tenant_id
   AND s.internal_name = t.internal_name
+  AND s.deleted_at IS NULL
   AND (
       s.active_ingest_cluster_id IS NULL
       OR s.active_ingest_cluster_id = ''
@@ -32,6 +33,7 @@ SET active_ingest_cluster_id = NULL,
 FROM unnest($1::uuid[], $2::text[], $3::text[], $4::text[]) AS t(tenant_id, internal_name, claim_token, cluster_id)
 WHERE s.tenant_id = t.tenant_id
   AND s.internal_name = t.internal_name
+  AND s.deleted_at IS NULL
   AND s.active_ingest_cluster_id = t.cluster_id
   AND s.active_ingest_claim_id = t.claim_token`
 

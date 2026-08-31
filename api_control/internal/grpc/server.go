@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -42,8 +43,10 @@ import (
 	emailpkg "github.com/Livepeer-FrameWorks/monorepo/pkg/email"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
@@ -112,8 +115,12 @@ func validateBehavior(req botProtectionRequest) bool {
 // request count + duration are captured by GRPCMetricsInterceptor and
 // emitted on the GRPCRequests / GRPCDuration vectors below.
 type ServerMetrics struct {
-	GRPCRequests *prometheus.CounterVec
-	GRPCDuration *prometheus.HistogramVec
+	GRPCRequests                       *prometheus.CounterVec
+	GRPCDuration                       *prometheus.HistogramVec
+	MediaAuthorityDeliveryAttempts     *prometheus.CounterVec
+	MediaAuthorityPending              *prometheus.GaugeVec
+	MediaAuthorityMaxVersionLag        *prometheus.GaugeVec
+	MediaAuthorityOldestPendingSeconds *prometheus.GaugeVec
 }
 
 type streamAdmissionBilling interface {
@@ -134,26 +141,27 @@ type CommodoreServer struct {
 	commodorepb.UnimplementedNodeManagementServiceServer
 	commodorepb.UnimplementedPushTargetServiceServer
 	commodorepb.UnimplementedPlaybackAccessControlServiceServer
-	db                  *sql.DB
-	dbMaxIdleConns      int
-	logger              logging.Logger
-	foghornPool         *foghornclient.FoghornPool
-	quartermasterClient *qmclient.GRPCClient
-	// qmEntitlements is the narrow Quartermaster surface used by the signed-
-	// policy-bundle path (tenant entitlement lookups). Nil when no
-	// Quartermaster client is configured.
-	qmEntitlements         tenantEntitlementAPI
-	navigatorClient        *navigator.Client
-	purserClient           *purserclient.GRPCClient
-	streamAdmissionBilling streamAdmissionBilling
-	listmonkClient         *listmonk.Client
-	decklogClient          *decklogclient.BatchedClient
-	defaultMailingListID   int
-	metrics                *ServerMetrics
-	turnstileValidator     *turnstile.Validator
-	turnstileFailOpen      bool
-	passwordResetSecret    []byte
-	fieldEncryptor         *fieldcrypt.FieldEncryptor
+	db                       *sql.DB
+	dbMaxIdleConns           int
+	logger                   logging.Logger
+	foghornPool              *foghornclient.FoghornPool
+	quartermasterClient      *qmclient.GRPCClient
+	navigatorClient          *navigator.Client
+	purserClient             *purserclient.GRPCClient
+	streamAdmissionBilling   streamAdmissionBilling
+	authorityTenantSource    mediaAuthorityTenantSource
+	authorityBillingSource   mediaAuthorityBillingSource
+	mediaAuthorityKeyID      string
+	mediaAuthorityPrivateKey ed25519.PrivateKey
+	mediaAuthorityRecipients sharedauthority.SealRecipientSet
+	listmonkClient           *listmonk.Client
+	decklogClient            *decklogclient.BatchedClient
+	defaultMailingListID     int
+	metrics                  *ServerMetrics
+	turnstileValidator       *turnstile.Validator
+	turnstileFailOpen        bool
+	passwordResetSecret      []byte
+	fieldEncryptor           *fieldcrypt.FieldEncryptor
 	// Separate FieldEncryptor for playback webhook secrets so HKDF purpose
 	// isolation prevents cross-feature key reuse.
 	playbackWebhookEncryptor *fieldcrypt.FieldEncryptor
@@ -665,10 +673,13 @@ type CommodoreServerConfig struct {
 	TurnstileSecretKey string
 	TurnstileFailOpen  bool
 	// Password reset token signing
-	PasswordResetSecret []byte
-	CertFile            string
-	KeyFile             string
-	AllowInsecure       bool
+	PasswordResetSecret             []byte
+	MediaAuthoritySigningKeyID      string
+	MediaAuthoritySigningPrivateKey ed25519.PrivateKey
+	MediaAuthoritySealRecipients    sharedauthority.SealRecipientSet
+	CertFile                        string
+	KeyFile                         string
+	AllowInsecure                   bool
 }
 
 // NewCommodoreServer creates a new Commodore gRPC server
@@ -705,7 +716,9 @@ func NewCommodoreServer(cfg CommodoreServerConfig) *CommodoreServer {
 		quartermasterClient:      cfg.QuartermasterClient,
 		navigatorClient:          cfg.NavigatorClient,
 		purserClient:             cfg.PurserClient,
-		streamAdmissionBilling:   cfg.PurserClient,
+		mediaAuthorityKeyID:      strings.TrimSpace(cfg.MediaAuthoritySigningKeyID),
+		mediaAuthorityPrivateKey: append(ed25519.PrivateKey(nil), cfg.MediaAuthoritySigningPrivateKey...),
+		mediaAuthorityRecipients: cfg.MediaAuthoritySealRecipients,
 		listmonkClient:           cfg.ListmonkClient,
 		decklogClient:            cfg.DecklogClient,
 		clusterURLs:              cfg.ClusterURLs,
@@ -721,11 +734,15 @@ func NewCommodoreServer(cfg CommodoreServerConfig) *CommodoreServer {
 		routeCacheTTL:            5 * time.Minute,
 		foghornCandidateNext:     make(map[string]int),
 	}
-	// Assign conditionally so the interface field stays an untyped nil when no
-	// client is configured (a nil *qmclient.GRPCClient stored in the interface
-	// would defeat the nil-guard in lookupTenantClusterEntitlement).
+	// Keep these interface fields genuinely nil when an optional dependency
+	// client could not be constructed. A typed nil stored in an interface would
+	// make mediaAuthorityEnabled report true and panic in the reconciler.
 	if cfg.QuartermasterClient != nil {
-		srv.qmEntitlements = cfg.QuartermasterClient
+		srv.authorityTenantSource = cfg.QuartermasterClient
+	}
+	if cfg.PurserClient != nil {
+		srv.streamAdmissionBilling = cfg.PurserClient
+		srv.authorityBillingSource = cfg.PurserClient
 	}
 	return srv
 }
@@ -815,6 +832,7 @@ func (s *CommodoreServer) buildClusterRoute(ctx context.Context, tenantID string
 		resolvedAt:              time.Now(),
 		admissionResolvedAt:     time.Now(),
 	}
+	filterOfficialClusterByAdmission(route)
 	for _, cid := range routeClusterIDs(route) {
 		discovered := s.discoverFoghornAddrs(ctx, cid)
 		route.foghornAddrsByCluster[cid] = dedupeAddrs(append(foghornCandidatesFromRoute(route, cid), discovered...)...)
@@ -901,10 +919,30 @@ func (s *CommodoreServer) refreshAdmissionRoute(ctx context.Context, tenantID st
 	refreshed := *route
 	refreshed.admissionPeers = filterPeersByPolicy(resp.GetClusterPeers(), allowedClasses)
 	refreshed.clusterPeers = filterHealthyPeers(refreshed.admissionPeers)
+	refreshed.officialClusterID = resp.GetOfficialClusterId()
+	refreshed.officialClusterSlug = resp.GetOfficialClusterSlug()
+	refreshed.officialBaseURL = resp.GetOfficialBaseUrl()
+	refreshed.officialClusterName = resp.GetOfficialClusterName()
+	refreshed.officialFoghornGrpcAddr = resp.GetOfficialFoghornGrpcAddr()
+	filterOfficialClusterByAdmission(&refreshed)
 	refreshed.tenantResourceLimits = resp.GetTenantResourceLimits()
 	refreshed.admissionResolvedAt = time.Now()
 
 	return s.installRefreshedAdmissionRoute(tenantID, route, &refreshed), nil
+}
+
+// filterOfficialClusterByAdmission prevents Quartermaster's convenience
+// fields from bypassing the same entitlement filter applied to cluster peers.
+// The official identity is admission authority, not an independent fallback.
+func filterOfficialClusterByAdmission(route *clusterRoute) {
+	if route == nil || route.officialClusterID == "" || findPeerByClusterID(route.admissionPeers, route.officialClusterID) != nil {
+		return
+	}
+	route.officialClusterID = ""
+	route.officialClusterSlug = ""
+	route.officialBaseURL = ""
+	route.officialClusterName = ""
+	route.officialFoghornGrpcAddr = ""
 }
 
 // loadAdmissionRouteInputs resolves independent routing and billing-tier facts
@@ -1091,6 +1129,9 @@ func clusterAdmissionPeer(route *clusterRoute, clusterID string) (*clusterpeerpb
 	peer := findPeerByClusterID(route.admissionPeers, clusterID)
 	if peer == nil {
 		return nil, commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_NOT_ENTITLED
+	}
+	if !canOwnLiveIngest(peer.GetClusterType()) {
+		return peer, commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_CLASS_MISMATCH
 	}
 	if !peerIsHealthy(peer) {
 		return peer, commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_UNHEALTHY
@@ -1519,12 +1560,16 @@ func clusterInPeers(peers []*clusterpeerpb.TenantClusterPeer, clusterID string) 
 }
 
 func canOwnLiveIngest(clusterType string) bool {
-	switch strings.ToLower(strings.TrimSpace(clusterType)) {
-	case "", "edge", "media", "selfhosted", "self-hosted":
-		return true
-	default:
-		return false
+	return models.ClusterTypeCanOwnLiveIngest(strings.ToLower(strings.TrimSpace(clusterType)))
+}
+
+func firstLiveIngestPeer(peers []*clusterpeerpb.TenantClusterPeer) *clusterpeerpb.TenantClusterPeer {
+	for _, peer := range peers {
+		if peer != nil && canOwnLiveIngest(peer.GetClusterType()) {
+			return peer
+		}
 	}
+	return nil
 }
 
 // liveIngestClusterID answers which media cluster a publish for this stream
@@ -1551,19 +1596,21 @@ func resolveLiveIngestClusterID(route *clusterRoute, requestedClusterID string) 
 		return requestedClusterID
 	}
 
-	resolvedClusterID := route.clusterID
-	if requestedClusterID == "" {
-		return resolvedClusterID
-	}
-	if requestedClusterID == route.clusterID || requestedClusterID == route.officialClusterID {
-		return requestedClusterID
-	}
-	for _, peer := range route.clusterPeers {
-		if peer.GetClusterId() == requestedClusterID && canOwnLiveIngest(peer.GetClusterType()) {
+	if requestedClusterID != "" {
+		if peer := findPeerByClusterID(route.clusterPeers, requestedClusterID); peer != nil && canOwnLiveIngest(peer.GetClusterType()) {
 			return requestedClusterID
 		}
+		return ""
 	}
-	return resolvedClusterID
+	for _, candidate := range []string{route.clusterID, route.officialClusterID} {
+		if peer := findPeerByClusterID(route.clusterPeers, candidate); peer != nil && canOwnLiveIngest(peer.GetClusterType()) {
+			return candidate
+		}
+	}
+	if peer := firstLiveIngestPeer(route.clusterPeers); peer != nil {
+		return peer.GetClusterId()
+	}
+	return ""
 }
 
 func hasTenantResourceLimits(limits *tenantlimitspb.TenantResourceLimits) bool {
@@ -1588,6 +1635,17 @@ func mergeTenantResourceLimits(base, override *tenantlimitspb.TenantResourceLimi
 		merged.MaxViewers = override.GetMaxViewers()
 	}
 	return merged
+}
+
+func mergeTenantResourceLimitsForCluster(base *tenantlimitspb.TenantResourceLimits, route *clusterRoute, clusterID string) *tenantlimitspb.TenantResourceLimits {
+	if route == nil {
+		return mergeTenantResourceLimits(base, nil)
+	}
+	override := route.tenantResourceLimits
+	if peer := findPeerByClusterID(route.admissionPeers, strings.TrimSpace(clusterID)); peer != nil && hasTenantResourceLimits(peer.GetResourceLimits()) {
+		override = peer.GetResourceLimits()
+	}
+	return mergeTenantResourceLimits(base, override)
 }
 
 // resolveFoghornForArtifact returns a Foghorn client routed to the artifact's
@@ -1719,6 +1777,13 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *commodorep
 				RejectionReason: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_UNHEALTHY,
 			}, nil
 		}
+		if rejectionReason == commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_CLASS_MISMATCH {
+			return &commodorepb.ValidateStreamKeyResponse{
+				Valid:           false,
+				Error:           "Cluster " + requestedClusterID + " cannot own live ingest",
+				RejectionReason: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_CLASS_MISMATCH,
+			}, nil
+		}
 	}
 
 	// Get billing status via Purser gRPC (not direct DB access)
@@ -1763,9 +1828,8 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *commodorep
 			resp.OfficialClusterId = &route.officialClusterID
 		}
 		resp.ClusterPeers = route.clusterPeers
-		if hasTenantResourceLimits(route.tenantResourceLimits) {
-			resp.TenantResourceLimits = mergeTenantResourceLimits(resp.TenantResourceLimits, route.tenantResourceLimits)
-		}
+		resp.AuthorityClusterPeers = route.admissionPeers
+		resp.TenantResourceLimits = mergeTenantResourceLimitsForCluster(resp.TenantResourceLimits, route, requestedClusterID)
 	}
 
 	// Load enabled push targets for multistreaming
@@ -1860,8 +1924,13 @@ func (s *CommodoreServer) ValidateStreamKey(ctx context.Context, req *commodorep
 			// same fact at federation cadence ~10s; this gate fires
 			// synchronously at admission time).
 			held, scanErr := queries.GetActiveIngestClaim(ctx, streamKey)
-			if scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
-				s.logger.WithError(scanErr).WithField("stream_key", logging.RedactSecret(streamKey)).Warn("ValidateStreamKey: active-ingest lookup failed")
+			if scanErr != nil {
+				s.logger.WithError(scanErr).WithField("stream_key", logging.RedactSecret(streamKey)).Warn("ValidateStreamKey: active-ingest lookup failed; denying ambiguous claim")
+				return &commodorepb.ValidateStreamKeyResponse{
+					Valid:           false,
+					Error:           "Stream placement is currently unavailable",
+					RejectionReason: commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_DUPLICATE_INGEST,
+				}, nil
 			}
 			if held.ActiveIngestClusterID.Valid && held.ActiveIngestClusterID.String != "" && held.ActiveIngestClaimID.String != claimToken {
 				where := "cluster " + held.ActiveIngestClusterID.String
@@ -2042,13 +2111,24 @@ func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *commodo
 				resp.RejectionReason = commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_UNHEALTHY
 				return resp, nil
 			}
+			if rejectionReason == commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_CLASS_MISMATCH {
+				resp.Admitted = false
+				resp.AdmissionReason = "Cluster " + admissionClusterID + " cannot own live ingest"
+				resp.RejectionReason = commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_CLASS_MISMATCH
+				return resp, nil
+			}
 		} else if len(route.admissionPeers) == 0 {
 			// No cluster the tenant's plan permits at all.
 			resp.Admitted = false
 			resp.AdmissionReason = "Tenant is not entitled to any ingest cluster"
 			resp.RejectionReason = commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_NOT_ENTITLED
 			return resp, nil
-		} else if len(route.clusterPeers) == 0 {
+		} else if firstLiveIngestPeer(route.admissionPeers) == nil {
+			resp.Admitted = false
+			resp.AdmissionReason = "Tenant has no entitled media cluster capable of live ingest"
+			resp.RejectionReason = commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_CLUSTER_CLASS_MISMATCH
+			return resp, nil
+		} else if firstLiveIngestPeer(route.clusterPeers) == nil {
 			// Entitled, but nothing healthy to publish into. Reported as its
 			// own reason: a degraded fleet is not a plan problem.
 			resp.Admitted = false
@@ -2120,9 +2200,12 @@ func (s *CommodoreServer) ResolveStreamContext(ctx context.Context, req *commodo
 			resp.OfficialClusterId = &route.officialClusterID
 		}
 		resp.ClusterPeers = route.clusterPeers
-		if hasTenantResourceLimits(route.tenantResourceLimits) {
-			resp.TenantResourceLimits = mergeTenantResourceLimits(resp.TenantResourceLimits, route.tenantResourceLimits)
+		resp.AuthorityClusterPeers = route.admissionPeers
+		limitClusterID := requestedClusterID
+		if limitClusterID == "" {
+			limitClusterID = resolvedOriginClusterID
 		}
+		resp.TenantResourceLimits = mergeTenantResourceLimitsForCluster(resp.TenantResourceLimits, route, limitClusterID)
 	}
 
 	// A publish-intent resolve that reached here without routing has nothing to
@@ -2537,6 +2620,7 @@ func (s *CommodoreServer) ResolvePlaybackID(ctx context.Context, req *commodorep
 			resp.OfficialClusterId = &route.officialClusterID
 		}
 		resp.ClusterPeers = route.clusterPeers
+		resp.AuthorityClusterPeers = route.admissionPeers
 	}
 	// Managed (mist_native) streams may be placed in a cluster other than the
 	// tenant's default route; active_ingest_cluster_id is the verified-applied
@@ -2712,7 +2796,7 @@ func (s *CommodoreServer) listPullSourceClusterCapabilities(ctx context.Context)
 			return nil, status.Errorf(codes.FailedPrecondition, "cannot validate pull source eligibility: %v", err)
 		}
 		for _, c := range resp.GetClusters() {
-			if c.GetClusterType() != "edge" {
+			if !models.ClusterTypeCanBePreferred(c.GetClusterType()) {
 				continue
 			}
 			out = append(out, pullsource.ClusterCapability{
@@ -3440,15 +3524,17 @@ func (s *CommodoreServer) ResolveVodHash(ctx context.Context, req *commodorepb.R
 	}
 
 	resp := &commodorepb.ResolveVodHashResponse{
-		Found:           true,
-		TenantId:        vod.TenantID,
-		UserId:          vod.UserID,
-		Filename:        vod.Filename,
-		Title:           vod.Title.String,
-		Description:     vod.Description.String,
-		PlaybackId:      vod.PlaybackID,
-		InternalName:    vod.InternalName,
-		OriginClusterId: vod.OriginClusterID.String,
+		Found:                    true,
+		TenantId:                 vod.TenantID,
+		UserId:                   vod.UserID,
+		Filename:                 vod.Filename,
+		Title:                    vod.Title.String,
+		Description:              vod.Description.String,
+		PlaybackId:               vod.PlaybackID,
+		InternalName:             vod.InternalName,
+		OriginClusterId:          vod.OriginClusterID.String,
+		ContentType:              vod.ContentType,
+		ParentStreamInternalName: vod.ParentStreamInternalName,
 	}
 	// Carry the tenant's cluster peers so a cross-cluster relay resolve can
 	// enforce the federation allowlist on the origin (and any storage redirect).
@@ -3493,8 +3579,8 @@ func (s *CommodoreServer) ResolveVodID(ctx context.Context, req *commodorepb.Res
 	}, nil
 }
 
-// MintChapterPlaybackID mints (or returns the existing) public playback_id
-// for a hidden chapter artifact. Called by Foghorn at chapter finalization
+// MintChapterPlaybackID mints (or returns the existing) playback_id for a
+// hidden chapter artifact. Called by Foghorn at chapter finalization
 // dispatch. Idempotent on chapter_id — repeat calls return the same
 // playback_id even across finalization retries; artifact_hash is upserted
 // because retries may reuse the same hash via the deterministic
@@ -3504,8 +3590,9 @@ func (s *CommodoreServer) MintChapterPlaybackID(ctx context.Context, req *commod
 	tenantID := req.GetTenantId()
 	artifactHash := req.GetArtifactHash()
 	userID := req.GetUserId()
-	if chapterID == "" || tenantID == "" || artifactHash == "" || userID == "" {
-		return nil, status.Error(codes.InvalidArgument, "chapter_id, tenant_id, artifact_hash, and user_id are required")
+	dvrHash := req.GetDvrHash()
+	if chapterID == "" || tenantID == "" || artifactHash == "" || userID == "" || dvrHash == "" {
+		return nil, status.Error(codes.InvalidArgument, "chapter_id, tenant_id, artifact_hash, user_id, and dvr_hash are required")
 	}
 
 	// Mint a fresh playback_id for the INSERT path. ON CONFLICT returns
@@ -3565,6 +3652,9 @@ func (s *CommodoreServer) MintChapterPlaybackID(ctx context.Context, req *commod
 		ArtifactHash: artifactHash, DvrHash: req.GetDvrHash(),
 	})
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, status.Error(codes.FailedPrecondition, "chapter identity belongs to a different tenant")
+		}
 		s.logger.WithFields(logging.Fields{
 			"chapter_id":    chapterID,
 			"tenant_id":     tenantID,
@@ -3574,11 +3664,10 @@ func (s *CommodoreServer) MintChapterPlaybackID(ctx context.Context, req *commod
 		return nil, status.Errorf(codes.Internal, "mint chapter playback id: %v", err)
 	}
 
-	err = chapterQueries.UpsertChapterVODAsset(ctx, commodoredb.UpsertChapterVODAssetParams{
+	affected, err := chapterQueries.UpsertChapterVODAsset(ctx, commodoredb.UpsertChapterVODAssetParams{
 		ID:               uuid.New().String(),
 		TenantID:         tenantID,
-		UserID:           userID,
-		StreamID:         req.GetStreamId(),
+		DvrHash:          dvrHash,
 		VodHash:          artifactHash,
 		InternalName:     artifactHash,
 		PlaybackID:       stored,
@@ -3598,6 +3687,9 @@ func (s *CommodoreServer) MintChapterPlaybackID(ctx context.Context, req *commod
 			"error":         err,
 		}).Error("Failed to register chapter VOD asset")
 		return nil, status.Errorf(codes.Internal, "register chapter VOD asset: %v", err)
+	}
+	if affected != 1 {
+		return nil, status.Error(codes.FailedPrecondition, "parent DVR is unavailable; chapter policy cannot be snapshotted")
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -3677,17 +3769,19 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *co
 	})
 	if err == nil {
 		resp := &commodorepb.ResolveArtifactPlaybackIDResponse{
-			Found:           true,
-			ArtifactHash:    clip.ClipHash,
-			InternalName:    clip.InternalName,
-			TenantId:        clip.TenantID,
-			UserId:          clip.UserID,
-			StreamId:        clip.StreamID,
-			ContentType:     "clip",
-			OriginClusterId: clip.OriginClusterID.String,
-			RequiresAuth:    clip.RequiresAuth,
+			Found:                    true,
+			ArtifactHash:             clip.ClipHash,
+			InternalName:             clip.InternalName,
+			TenantId:                 clip.TenantID,
+			UserId:                   clip.UserID,
+			StreamId:                 clip.StreamID,
+			ContentType:              "clip",
+			OriginClusterId:          clip.OriginClusterID.String,
+			RequiresAuth:             clip.RequiresAuth,
+			ParentStreamInternalName: clip.ParentStreamInternalName,
 		}
 		s.populateArtifactClusterContext(ctx, clip.TenantID, &resp.ClusterPeers)
+		s.populateArtifactAuthorityClusterContext(ctx, clip.TenantID, &resp.AuthorityClusterPeers)
 		return resp, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -3698,10 +3792,8 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *co
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 
-	// 2. DVR — inherits requires_auth from the source stream at lookup time.
-	// dvr_recordings has no requires_auth column; we LEFT JOIN streams to read
-	// the source stream's marker. No row in streams (rare cleanup race) means
-	// we treat as protected (fail closed) for safety.
+	// 2. DVR. Playback policy is snapshotted onto the recording so later
+	// parent-stream changes cannot silently rewrite artifact policy.
 	var dvr commodoredb.ResolveDVRByPlaybackIDRow
 	err = s.retryPostgres(ctx, func() error {
 		var queryErr error
@@ -3709,20 +3801,20 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *co
 		return queryErr
 	})
 	if err == nil {
-		// Missing source stream → treat as protected so a deleted-stream race
-		// does not silently expose what was once gated content.
 		resp := &commodorepb.ResolveArtifactPlaybackIDResponse{
-			Found:           true,
-			ArtifactHash:    dvr.DvrHash,
-			InternalName:    dvr.InternalName,
-			TenantId:        dvr.TenantID,
-			UserId:          dvr.UserID,
-			StreamId:        dvr.DStreamID,
-			ContentType:     "dvr",
-			OriginClusterId: dvr.OriginClusterID.String,
-			RequiresAuth:    !dvr.RequiresAuth.Valid || dvr.RequiresAuth.Bool,
+			Found:                    true,
+			ArtifactHash:             dvr.DvrHash,
+			InternalName:             dvr.InternalName,
+			TenantId:                 dvr.TenantID,
+			UserId:                   dvr.UserID,
+			StreamId:                 dvr.StreamID,
+			ContentType:              "dvr",
+			OriginClusterId:          dvr.OriginClusterID.String,
+			RequiresAuth:             dvr.RequiresAuth,
+			ParentStreamInternalName: dvr.ParentStreamInternalName,
 		}
 		s.populateArtifactClusterContext(ctx, dvr.TenantID, &resp.ClusterPeers)
+		s.populateArtifactAuthorityClusterContext(ctx, dvr.TenantID, &resp.AuthorityClusterPeers)
 		return resp, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -3742,16 +3834,19 @@ func (s *CommodoreServer) ResolveArtifactPlaybackID(ctx context.Context, req *co
 	})
 	if err == nil {
 		resp := &commodorepb.ResolveArtifactPlaybackIDResponse{
-			Found:           true,
-			ArtifactHash:    vod.VodHash,
-			InternalName:    vod.InternalName,
-			TenantId:        vod.TenantID,
-			UserId:          vod.UserID,
-			ContentType:     "vod",
-			OriginClusterId: vod.OriginClusterID.String,
-			RequiresAuth:    vod.RequiresAuth,
+			Found:                    true,
+			ArtifactHash:             vod.VodHash,
+			InternalName:             vod.InternalName,
+			TenantId:                 vod.TenantID,
+			UserId:                   vod.UserID,
+			StreamId:                 vod.StreamID,
+			ContentType:              vod.ContentType,
+			OriginClusterId:          vod.OriginClusterID.String,
+			RequiresAuth:             vod.RequiresAuth,
+			ParentStreamInternalName: vod.ParentStreamInternalName,
 		}
 		s.populateArtifactClusterContext(ctx, vod.TenantID, &resp.ClusterPeers)
+		s.populateArtifactAuthorityClusterContext(ctx, vod.TenantID, &resp.AuthorityClusterPeers)
 		return resp, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -3774,6 +3869,15 @@ func (s *CommodoreServer) populateArtifactClusterContext(ctx context.Context, te
 	}
 }
 
+func (s *CommodoreServer) populateArtifactAuthorityClusterContext(ctx context.Context, tenantID string, peers *[]*clusterpeerpb.TenantClusterPeer) {
+	if tenantID == "" || peers == nil {
+		return
+	}
+	if route, err := s.resolveClusterRouteForTenant(ctx, tenantID); err == nil {
+		*peers = route.admissionPeers
+	}
+}
+
 // ResolveArtifactInternalName resolves an artifact internal routing name to artifact identity
 func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *commodorepb.ResolveArtifactInternalNameRequest) (*commodorepb.ResolveArtifactInternalNameResponse, error) {
 	internalName := req.GetInternalName()
@@ -3790,17 +3894,19 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 	})
 	if err == nil {
 		resp := &commodorepb.ResolveArtifactInternalNameResponse{
-			Found:           true,
-			ArtifactHash:    clip.ClipHash,
-			InternalName:    clip.InternalName,
-			TenantId:        clip.TenantID,
-			UserId:          clip.UserID,
-			StreamId:        clip.StreamID,
-			ContentType:     "clip",
-			OriginClusterId: clip.OriginClusterID.String,
-			RequiresAuth:    clip.RequiresAuth,
+			Found:                    true,
+			ArtifactHash:             clip.ClipHash,
+			InternalName:             clip.InternalName,
+			TenantId:                 clip.TenantID,
+			UserId:                   clip.UserID,
+			StreamId:                 clip.StreamID,
+			ContentType:              "clip",
+			OriginClusterId:          clip.OriginClusterID.String,
+			RequiresAuth:             clip.RequiresAuth,
+			ParentStreamInternalName: clip.ParentStreamInternalName,
 		}
 		s.populateArtifactClusterContext(ctx, clip.TenantID, &resp.ClusterPeers)
+		s.populateArtifactAuthorityClusterContext(ctx, clip.TenantID, &resp.AuthorityClusterPeers)
 		return resp, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -3820,17 +3926,19 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 	})
 	if err == nil {
 		resp := &commodorepb.ResolveArtifactInternalNameResponse{
-			Found:           true,
-			ArtifactHash:    dvr.DvrHash,
-			InternalName:    dvr.InternalName,
-			TenantId:        dvr.TenantID,
-			UserId:          dvr.UserID,
-			StreamId:        dvr.DStreamID,
-			ContentType:     "dvr",
-			OriginClusterId: dvr.OriginClusterID.String,
-			RequiresAuth:    !dvr.RequiresAuth.Valid || dvr.RequiresAuth.Bool,
+			Found:                    true,
+			ArtifactHash:             dvr.DvrHash,
+			InternalName:             dvr.InternalName,
+			TenantId:                 dvr.TenantID,
+			UserId:                   dvr.UserID,
+			StreamId:                 dvr.StreamID,
+			ContentType:              "dvr",
+			OriginClusterId:          dvr.OriginClusterID.String,
+			RequiresAuth:             dvr.RequiresAuth,
+			ParentStreamInternalName: dvr.ParentStreamInternalName,
 		}
 		s.populateArtifactClusterContext(ctx, dvr.TenantID, &resp.ClusterPeers)
+		s.populateArtifactAuthorityClusterContext(ctx, dvr.TenantID, &resp.AuthorityClusterPeers)
 		return resp, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -3850,16 +3958,19 @@ func (s *CommodoreServer) ResolveArtifactInternalName(ctx context.Context, req *
 	})
 	if err == nil {
 		resp := &commodorepb.ResolveArtifactInternalNameResponse{
-			Found:           true,
-			ArtifactHash:    vod.VodHash,
-			InternalName:    vod.InternalName,
-			TenantId:        vod.TenantID,
-			UserId:          vod.UserID,
-			ContentType:     "vod",
-			OriginClusterId: vod.OriginClusterID.String,
-			RequiresAuth:    vod.RequiresAuth,
+			Found:                    true,
+			ArtifactHash:             vod.VodHash,
+			InternalName:             vod.InternalName,
+			TenantId:                 vod.TenantID,
+			UserId:                   vod.UserID,
+			StreamId:                 vod.StreamID,
+			ContentType:              vod.ContentType,
+			OriginClusterId:          vod.OriginClusterID.String,
+			RequiresAuth:             vod.RequiresAuth,
+			ParentStreamInternalName: vod.ParentStreamInternalName,
 		}
 		s.populateArtifactClusterContext(ctx, vod.TenantID, &resp.ClusterPeers)
+		s.populateArtifactAuthorityClusterContext(ctx, vod.TenantID, &resp.AuthorityClusterPeers)
 		return resp, nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -8960,6 +9071,11 @@ func NewGRPCServer(cfg CommodoreServerConfig) *grpc.Server {
 	// (Foghorn rejected; no tombstone, since an aborted create never had a Foghorn
 	// revision) — so no Clip/VOD/DVR creation strands one plane.
 	go commodoreServer.runCreationIntentSweep(context.Background())
+
+	// Compile owner-service refresh obligations and independently deliver each
+	// signed authority version to every target Foghorn control cell.
+	go commodoreServer.runMediaAuthorityWorkers(context.Background())
+	go commodoreServer.runMediaAuthorityReconciler(context.Background())
 
 	// Register all services
 	commodorepb.RegisterInternalServiceServer(server, commodoreServer)

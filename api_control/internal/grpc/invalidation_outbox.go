@@ -147,9 +147,8 @@ type invalidationOutboxStore struct {
 	server *CommodoreServer
 }
 
-// dispatchKey passes the per-row routing data (stream_id, bundle version)
-// alongside the payload so the Dispatcher can forward bundle_revoke fields
-// to Foghorn.
+// dispatchKey includes legacy per-row policy-bundle fields for wire/storage
+// compatibility; active invalidation behavior is session re-evaluation.
 func (st *invalidationOutboxStore) ClaimBatch(ctx context.Context, _ int, _ time.Duration) ([]outbox.Claim[invalidationOutboxRow], error) {
 	rows, err := st.server.claimInvalidationOutboxBatch(ctx)
 	if err != nil {
@@ -281,9 +280,8 @@ func (s *CommodoreServer) tryDispatchInvalidationOutbox(
 }
 
 // dispatchInvalidationOutboxRow forwards a claimed outbox row to Foghorn.
-// Per-stream invalidations and bundle_revoke entries share the path —
-// bundle_revoke carries stream_id + bundle_min_version through to Foghorn
-// so the cache watermark bump rides in-band with session invalidation.
+// Legacy bundle fields remain on the row and wire message but are not active
+// media authority; signed replacements and tombstones own that convergence.
 func (s *CommodoreServer) dispatchInvalidationOutboxRow(ctx context.Context, row invalidationOutboxRow) ([]string, error) {
 	route, err := s.resolveClusterRouteForTenant(ctx, row.tenantID)
 	if err != nil {

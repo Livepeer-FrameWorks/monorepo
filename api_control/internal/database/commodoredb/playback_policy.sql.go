@@ -183,6 +183,28 @@ func (q *Queries) InsertPolicyBundle(ctx context.Context, arg InsertPolicyBundle
 	return err
 }
 
+const isDVRChapterPlaybackTarget = `-- name: IsDVRChapterPlaybackTarget :one
+SELECT EXISTS (
+    SELECT 1
+    FROM commodore.vod_assets v
+    WHERE (v.id::text = $1 OR v.vod_hash = $1)
+      AND v.tenant_id = $2::uuid
+      AND v.origin_type = 'dvr_chapter'
+)
+`
+
+type IsDVRChapterPlaybackTargetParams struct {
+	TargetID string `db:"target_id" json:"target_id"`
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+}
+
+func (q *Queries) IsDVRChapterPlaybackTarget(ctx context.Context, arg IsDVRChapterPlaybackTargetParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, isDVRChapterPlaybackTarget, arg.TargetID, arg.TenantID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const lockPolicyBundleStream = `-- name: LockPolicyBundleStream :exec
 SELECT pg_advisory_xact_lock(
     hashtext($1::text),
@@ -241,17 +263,19 @@ func (q *Queries) LookupClipPolicyByPlaybackID(ctx context.Context, playbackID s
 }
 
 const lookupDVRPolicyByInternalName = `-- name: LookupDVRPolicyByInternalName :one
-SELECT COALESCE(s.playback_policy::text, ''::text)::text AS playback_policy, s.playback_webhook_secret_enc,
-       s.tenant_id::text AS tenant_id
+SELECT COALESCE((CASE WHEN d.playback_authority_ready THEN d.playback_policy ELSE parent.playback_policy END)::text, ''::text)::text AS playback_policy,
+       COALESCE(CASE WHEN d.playback_authority_ready THEN d.playback_webhook_secret_enc ELSE parent.playback_webhook_secret_enc END, '')::text AS playback_webhook_secret_enc,
+       d.tenant_id::text AS tenant_id
 FROM commodore.dvr_recordings d
-JOIN commodore.streams s ON s.id = d.stream_id
+LEFT JOIN commodore.streams parent ON parent.id = d.stream_id AND parent.tenant_id = d.tenant_id
 WHERE d.internal_name = $1
+  AND (d.playback_authority_ready OR parent.id IS NOT NULL)
 `
 
 type LookupDVRPolicyByInternalNameRow struct {
-	PlaybackPolicy           string         `db:"playback_policy" json:"playback_policy"`
-	PlaybackWebhookSecretEnc sql.NullString `db:"playback_webhook_secret_enc" json:"playback_webhook_secret_enc"`
-	TenantID                 string         `db:"tenant_id" json:"tenant_id"`
+	PlaybackPolicy           string `db:"playback_policy" json:"playback_policy"`
+	PlaybackWebhookSecretEnc string `db:"playback_webhook_secret_enc" json:"playback_webhook_secret_enc"`
+	TenantID                 string `db:"tenant_id" json:"tenant_id"`
 }
 
 func (q *Queries) LookupDVRPolicyByInternalName(ctx context.Context, internalName string) (LookupDVRPolicyByInternalNameRow, error) {
@@ -262,17 +286,19 @@ func (q *Queries) LookupDVRPolicyByInternalName(ctx context.Context, internalNam
 }
 
 const lookupDVRPolicyByPlaybackID = `-- name: LookupDVRPolicyByPlaybackID :one
-SELECT COALESCE(s.playback_policy::text, ''::text)::text AS playback_policy, s.playback_webhook_secret_enc,
-       s.tenant_id::text AS tenant_id
+SELECT COALESCE((CASE WHEN d.playback_authority_ready THEN d.playback_policy ELSE parent.playback_policy END)::text, ''::text)::text AS playback_policy,
+       COALESCE(CASE WHEN d.playback_authority_ready THEN d.playback_webhook_secret_enc ELSE parent.playback_webhook_secret_enc END, '')::text AS playback_webhook_secret_enc,
+       d.tenant_id::text AS tenant_id
 FROM commodore.dvr_recordings d
-JOIN commodore.streams s ON s.id = d.stream_id
+LEFT JOIN commodore.streams parent ON parent.id = d.stream_id AND parent.tenant_id = d.tenant_id
 WHERE lower(d.playback_id::text) = lower($1::text)
+  AND (d.playback_authority_ready OR parent.id IS NOT NULL)
 `
 
 type LookupDVRPolicyByPlaybackIDRow struct {
-	PlaybackPolicy           string         `db:"playback_policy" json:"playback_policy"`
-	PlaybackWebhookSecretEnc sql.NullString `db:"playback_webhook_secret_enc" json:"playback_webhook_secret_enc"`
-	TenantID                 string         `db:"tenant_id" json:"tenant_id"`
+	PlaybackPolicy           string `db:"playback_policy" json:"playback_policy"`
+	PlaybackWebhookSecretEnc string `db:"playback_webhook_secret_enc" json:"playback_webhook_secret_enc"`
+	TenantID                 string `db:"tenant_id" json:"tenant_id"`
 }
 
 func (q *Queries) LookupDVRPolicyByPlaybackID(ctx context.Context, playbackID string) (LookupDVRPolicyByPlaybackIDRow, error) {
@@ -420,14 +446,74 @@ func (q *Queries) SetClipPlaybackPolicy(ctx context.Context, arg SetClipPlayback
 }
 
 const setStreamPlaybackPolicy = `-- name: SetStreamPlaybackPolicy :one
-UPDATE commodore.streams
-SET requires_auth = $1,
-    playback_policy = $2::text::jsonb,
-    playback_webhook_secret_enc = $3,
-    updated_at = NOW()
-WHERE id::text = $4
-  AND tenant_id = $5::uuid
-RETURNING id::text
+WITH updated_stream AS (
+    UPDATE commodore.streams AS stream_row
+    SET requires_auth = $1,
+        playback_policy = $2::text::jsonb,
+        playback_webhook_secret_enc = $3,
+        updated_at = NOW()
+    WHERE stream_row.id::text = $4
+      AND stream_row.tenant_id = $5::uuid
+    RETURNING stream_row.id, stream_row.tenant_id, stream_row.requires_auth,
+              stream_row.playback_policy, stream_row.playback_webhook_secret_enc
+), updated_dvrs AS (
+    UPDATE commodore.dvr_recordings AS dvr
+    SET requires_auth = stream.requires_auth,
+        playback_policy = stream.playback_policy,
+        playback_webhook_secret_enc = stream.playback_webhook_secret_enc,
+        playback_authority_ready = TRUE
+    FROM updated_stream AS stream
+    WHERE dvr.tenant_id = stream.tenant_id
+      AND dvr.stream_id = stream.id
+    RETURNING dvr.tenant_id, dvr.dvr_hash, dvr.requires_auth,
+              dvr.playback_policy, dvr.playback_webhook_secret_enc
+), chapter_authority AS (
+	SELECT chapter_asset.id,
+	       CASE WHEN parent_dvr.dvr_hash IS NOT NULL THEN parent_dvr.requires_auth
+	            WHEN chapter_identity.dvr_hash IS NULL THEN stream.requires_auth
+	            ELSE TRUE END AS requires_auth,
+	       CASE WHEN parent_dvr.dvr_hash IS NOT NULL THEN parent_dvr.playback_policy
+	            WHEN chapter_identity.dvr_hash IS NULL THEN stream.playback_policy
+	            ELSE NULL END AS playback_policy,
+	       CASE WHEN parent_dvr.dvr_hash IS NOT NULL THEN parent_dvr.playback_webhook_secret_enc
+	            WHEN chapter_identity.dvr_hash IS NULL THEN stream.playback_webhook_secret_enc
+	            ELSE NULL END AS playback_webhook_secret_enc
+	FROM commodore.vod_assets AS chapter_asset
+	JOIN updated_stream AS stream ON stream.tenant_id = chapter_asset.tenant_id
+	LEFT JOIN commodore.dvr_chapter_playback AS chapter_identity
+	  ON chapter_identity.tenant_id = chapter_asset.tenant_id
+	 AND chapter_identity.artifact_hash = chapter_asset.vod_hash
+	LEFT JOIN commodore.dvr_recordings AS recorded_parent
+	  ON recorded_parent.tenant_id = chapter_identity.tenant_id
+	 AND recorded_parent.dvr_hash = chapter_identity.dvr_hash
+	LEFT JOIN updated_dvrs AS parent_dvr
+	  ON parent_dvr.tenant_id = chapter_asset.tenant_id
+	 AND parent_dvr.dvr_hash = chapter_identity.dvr_hash
+	WHERE chapter_asset.origin_type = 'dvr_chapter'
+	  AND (
+	      parent_dvr.dvr_hash IS NOT NULL
+	      OR (
+	          chapter_asset.stream_id = stream.id
+	          AND (chapter_identity.dvr_hash IS NULL OR recorded_parent.dvr_hash IS NULL)
+	      )
+	  )
+	  AND NOT EXISTS (
+	      SELECT 1 FROM commodore.artifact_catalog_tombstones AS tombstone
+	      WHERE tombstone.tenant_id = chapter_asset.tenant_id
+	        AND tombstone.kind = 'vod'
+	        AND tombstone.artifact_hash = chapter_asset.vod_hash
+	  )
+), updated_chapters AS (
+    UPDATE commodore.vod_assets AS chapter_asset
+	SET requires_auth = authority.requires_auth,
+		playback_policy = authority.playback_policy,
+		playback_webhook_secret_enc = authority.playback_webhook_secret_enc,
+		updated_at = NOW()
+	FROM chapter_authority AS authority
+	WHERE chapter_asset.id = authority.id
+	RETURNING chapter_asset.id
+)
+SELECT id::text FROM updated_stream
 `
 
 type SetStreamPlaybackPolicyParams struct {
@@ -459,6 +545,7 @@ SET requires_auth = $1,
     updated_at = NOW()
 WHERE (v.id::text = $4 OR v.vod_hash = $4)
   AND v.tenant_id = $5::uuid
+  AND COALESCE(v.origin_type, '') <> 'dvr_chapter'
   AND NOT EXISTS (
       SELECT 1 FROM commodore.artifact_catalog_tombstones t
       WHERE t.tenant_id = v.tenant_id AND t.kind = 'vod' AND t.artifact_hash = v.vod_hash

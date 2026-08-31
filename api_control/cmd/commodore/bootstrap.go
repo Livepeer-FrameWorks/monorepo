@@ -16,6 +16,7 @@ import (
 	fieldcrypt "github.com/Livepeer-FrameWorks/monorepo/pkg/crypto"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
 
@@ -242,7 +243,7 @@ func (r *grpcClusterResolver) MediaClusterCapabilities(ctx context.Context) ([]p
 		for _, c := range resp.GetClusters() {
 			// "edge" type is the media-capable role in this codebase. Central
 			// clusters host control plane only.
-			if c.GetClusterType() != "edge" {
+			if !models.ClusterTypeCanBePreferred(c.GetClusterType()) {
 				continue
 			}
 			out = append(out, pullsource.ClusterCapability{

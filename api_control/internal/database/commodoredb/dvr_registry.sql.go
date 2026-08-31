@@ -90,12 +90,18 @@ func (q *Queries) GetStreamIDForDVRRegistration(ctx context.Context, arg GetStre
 const insertDVRRegistration = `-- name: InsertDVRRegistration :exec
 INSERT INTO commodore.dvr_recordings (
     id, tenant_id, user_id, stream_id, dvr_hash, internal_name, playback_id, stream_internal_name,
-    origin_cluster_id, storage_cluster_id, retention_until, created_at, updated_at
-) VALUES (
+    origin_cluster_id, storage_cluster_id, retention_until, requires_auth, playback_policy,
+    playback_webhook_secret_enc, playback_authority_ready,
+    created_at, updated_at
+)
+SELECT
     $1, $2, $3, $4::uuid,
     $5, $6, $7, $8,
-    $9, $10, $11, NOW(), NOW()
-)
+    $9, $10, $11,
+    stream.requires_auth, stream.playback_policy, stream.playback_webhook_secret_enc, TRUE, NOW(), NOW()
+FROM commodore.streams AS stream
+WHERE stream.id = $4::uuid
+  AND stream.tenant_id = $2::uuid
 `
 
 type InsertDVRRegistrationParams struct {
@@ -205,20 +211,30 @@ func (q *Queries) ResolveDVRByHash(ctx context.Context, dvrHash string) (Resolve
 }
 
 const resolveVODByHash = `-- name: ResolveVODByHash :one
-SELECT tenant_id, user_id, filename, title, description, playback_id, internal_name, origin_cluster_id
-FROM commodore.vod_assets
-WHERE vod_hash = $1
+SELECT v.tenant_id, v.user_id, v.filename, v.title, v.description, v.playback_id,
+       v.internal_name, v.origin_cluster_id,
+       CASE WHEN v.origin_type = 'dvr_chapter' THEN 'chapter'::text ELSE 'vod'::text END AS content_type,
+       COALESCE(parent_dvr.stream_internal_name, parent_stream.internal_name, '')::text AS parent_stream_internal_name
+FROM commodore.vod_assets AS v
+LEFT JOIN commodore.dvr_chapter_playback AS chapter
+  ON chapter.tenant_id = v.tenant_id AND chapter.artifact_hash = v.vod_hash
+LEFT JOIN commodore.dvr_recordings AS parent_dvr
+  ON parent_dvr.tenant_id = chapter.tenant_id AND parent_dvr.dvr_hash = chapter.dvr_hash
+LEFT JOIN commodore.streams AS parent_stream ON parent_stream.id = v.stream_id
+WHERE v.vod_hash = $1
 `
 
 type ResolveVODByHashRow struct {
-	TenantID        string         `db:"tenant_id" json:"tenant_id"`
-	UserID          string         `db:"user_id" json:"user_id"`
-	Filename        string         `db:"filename" json:"filename"`
-	Title           sql.NullString `db:"title" json:"title"`
-	Description     sql.NullString `db:"description" json:"description"`
-	PlaybackID      string         `db:"playback_id" json:"playback_id"`
-	InternalName    string         `db:"internal_name" json:"internal_name"`
-	OriginClusterID sql.NullString `db:"origin_cluster_id" json:"origin_cluster_id"`
+	TenantID                 string         `db:"tenant_id" json:"tenant_id"`
+	UserID                   string         `db:"user_id" json:"user_id"`
+	Filename                 string         `db:"filename" json:"filename"`
+	Title                    sql.NullString `db:"title" json:"title"`
+	Description              sql.NullString `db:"description" json:"description"`
+	PlaybackID               string         `db:"playback_id" json:"playback_id"`
+	InternalName             string         `db:"internal_name" json:"internal_name"`
+	OriginClusterID          sql.NullString `db:"origin_cluster_id" json:"origin_cluster_id"`
+	ContentType              string         `db:"content_type" json:"content_type"`
+	ParentStreamInternalName string         `db:"parent_stream_internal_name" json:"parent_stream_internal_name"`
 }
 
 func (q *Queries) ResolveVODByHash(ctx context.Context, vodHash string) (ResolveVODByHashRow, error) {
@@ -233,6 +249,8 @@ func (q *Queries) ResolveVODByHash(ctx context.Context, vodHash string) (Resolve
 		&i.PlaybackID,
 		&i.InternalName,
 		&i.OriginClusterID,
+		&i.ContentType,
+		&i.ParentStreamInternalName,
 	)
 	return i, err
 }

@@ -25,8 +25,8 @@ func TestResolveArtifactPlaybackIDRetriesRetryablePostgresErrors(t *testing.T) {
 		WithArgs("playback-1").
 		WillReturnError(retryable)
 	rows := sqlmock.NewRows([]string{
-		"clip_hash", "internal_name", "tenant_id", "user_id", "stream_id", "origin_cluster_id", "requires_auth",
-	}).AddRow("clip-hash", "clip-internal", "tenant-1", "user-1", "stream-1", "cluster-origin", false)
+		"clip_hash", "internal_name", "tenant_id", "user_id", "stream_id", "origin_cluster_id", "requires_auth", "parent_stream_internal_name",
+	}).AddRow("clip-hash", "clip-internal", "tenant-1", "user-1", "stream-1", "cluster-origin", false, "parent-internal")
 	mock.ExpectQuery("FROM commodore.clips").
 		WithArgs("playback-1").
 		WillReturnRows(rows)

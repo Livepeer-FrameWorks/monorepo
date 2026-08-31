@@ -38,7 +38,8 @@ RETURNING held.prev_cluster, held.prev_token, held.prev_fresh;
 -- name: GetActiveIngestClaim :one
 SELECT active_ingest_cluster_id, active_ingest_claim_id
 FROM commodore.streams
-WHERE stream_key = $1;
+WHERE stream_key = $1
+  AND deleted_at IS NULL;
 
 -- name: ResolveStreamContextByIdentifier :one
 SELECT s.id, s.user_id, s.tenant_id, s.internal_name,

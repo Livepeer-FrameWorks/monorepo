@@ -330,6 +330,18 @@ func (s *CommodoreServer) SetPlaybackPolicy(ctx context.Context, req *commodorep
 		})
 	}
 	if errors.Is(err, sql.ErrNoRows) {
+		if target.kind == "vod_asset" {
+			isChapter, chapterErr := queries.IsDVRChapterPlaybackTarget(ctx, commodoredb.IsDVRChapterPlaybackTargetParams{
+				TargetID: target.id, TenantID: tenantID,
+			})
+			if chapterErr != nil {
+				s.logger.WithError(chapterErr).Error("classify DVR chapter playback target failed")
+				return nil, status.Error(codes.Internal, "database error")
+			}
+			if isChapter {
+				return nil, status.Error(codes.FailedPrecondition, "artifact is a DVR chapter; update playback policy on the recording")
+			}
+		}
 		return nil, status.Errorf(codes.NotFound, "%s not found", target.kind)
 	}
 	if err != nil {
@@ -346,6 +358,18 @@ func (s *CommodoreServer) SetPlaybackPolicy(ctx context.Context, req *commodorep
 	outboxID, enqueueErr := s.enqueueInvalidationOutbox(ctx, tx, tenantID, "policy_change", scopedNames)
 	if enqueueErr != nil {
 		s.logger.WithError(enqueueErr).Error("enqueue invalidation outbox failed; aborting policy change")
+		return nil, status.Errorf(codes.Internal, "database error")
+	}
+	// Playback policy is snapshotted into every signed media-object authority.
+	// Queue a tenant fanout in the same transaction as the mutation so local
+	// playback cannot retain an older stream/DVR/chapter decision after commit.
+	if _, refreshErr := queries.InsertMediaAuthorityRefreshInbox(ctx, commodoredb.InsertMediaAuthorityRefreshInboxParams{
+		SourceService: "commodore",
+		SourceEventID: "playback-policy:" + outboxID,
+		TenantID:      tenantID,
+		Reason:        "playback_policy_changed",
+	}); refreshErr != nil {
+		s.logger.WithError(refreshErr).Error("enqueue media authority refresh failed; aborting policy change")
 		return nil, status.Errorf(codes.Internal, "database error")
 	}
 
@@ -759,7 +783,7 @@ func (s *CommodoreServer) lookupPolicyByPlaybackID(ctx context.Context, playback
 		}},
 		{"dvr", func() (string, sql.NullString, string, error) {
 			row, err := queries.LookupDVRPolicyByPlaybackID(ctx, playbackID)
-			return row.PlaybackPolicy, row.PlaybackWebhookSecretEnc, row.TenantID, err
+			return row.PlaybackPolicy, sql.NullString{String: row.PlaybackWebhookSecretEnc, Valid: row.PlaybackWebhookSecretEnc != ""}, row.TenantID, err
 		}},
 	}
 	for _, candidate := range candidates {
@@ -778,7 +802,7 @@ func (s *CommodoreServer) lookupPolicyByPlaybackID(ctx context.Context, playback
 // lookupPolicyByInternalName mirrors lookupPolicyByPlaybackID for the
 // Foghorn USER_NEW path, which has the MistServer internal stream name
 // instead of the public playback_id. Searches streams, vod_assets, clips,
-// dvr_recordings (the latter inheriting the source stream's policy).
+// dvr_recordings (using the recording's immutable policy snapshot).
 func (s *CommodoreServer) lookupPolicyByInternalName(ctx context.Context, internalName string) ([]byte, sql.NullString, string, error) {
 	queries := commodoredb.New(s.db)
 	type lookup func() (string, sql.NullString, string, error)
@@ -800,7 +824,7 @@ func (s *CommodoreServer) lookupPolicyByInternalName(ctx context.Context, intern
 		}},
 		{"dvr", func() (string, sql.NullString, string, error) {
 			row, err := queries.LookupDVRPolicyByInternalName(ctx, internalName)
-			return row.PlaybackPolicy, row.PlaybackWebhookSecretEnc, row.TenantID, err
+			return row.PlaybackPolicy, sql.NullString{String: row.PlaybackWebhookSecretEnc, Valid: row.PlaybackWebhookSecretEnc != ""}, row.TenantID, err
 		}},
 	}
 	for _, candidate := range candidates {
