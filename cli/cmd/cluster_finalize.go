@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"frameworks/cli/internal/ux"
-	"frameworks/cli/pkg/credentials"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/remoteaccess"
 	"frameworks/cli/pkg/ssh"
@@ -134,16 +133,9 @@ func runClusterFinalizeWithLabels(cmd *cobra.Command, rc *resolvedCluster, only 
 		fmt.Fprintf(out, "Platform release: %s\n\n", releaseVersion)
 	}
 
-	sharedEnv, err := rc.SharedEnv()
+	sharedEnv, err := rc.PreparedSharedEnv()
 	if err != nil {
 		return fmt.Errorf("load manifest env_files: %w", err)
-	}
-	if isDevProfile(manifest) {
-		if _, genErr := credentials.GenerateIfMissing(sharedEnv); genErr != nil {
-			return fmt.Errorf("auto-generate dev secrets: %w", genErr)
-		}
-	} else if valErr := credentials.ValidateShared(sharedEnv); valErr != nil {
-		return valErr
 	}
 
 	runtimeData := map[string]any{}

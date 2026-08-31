@@ -42,6 +42,11 @@ const testSharedSecrets = "SERVICE_TOKEN=test-token\n" +
 	"FIELD_ENCRYPTION_KEY=test-enc\n" +
 	"USAGE_HASH_SECRET=test-hash\n" +
 	"TELEMETRY_TOKEN_SECRET=abababababababababababababababababababababababababababababababab\n" +
+	"FOGHORN_STATE_ENCRYPTION_KEY=cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd\n" +
+	"MEDIA_AUTHORITY_SEAL_ROOT_SECRET=abababababababababababababababababababababababababababababababab\n" +
+	"MEDIA_AUTHORITY_SIGNING_KEY_ID=dev-media-authority-1\n" +
+	"MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64=LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1DNENBUUF3QlFZREsyVndCQ0lFSUoxaHNaM3YvVnBndW9SSzlKTHNMTVJFU2NWcGV6SnBHWEE3ckFNY3JuOWcKLS0tLS1FTkQgUFJJVkFURSBLRVktLS0tLQo=\n" +
+	"MEDIA_AUTHORITY_TRUST_SET={\"dev-media-authority-1\":\"11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo=\"}\n" +
 	"LISTMONK_API_USERNAME=frameworks-api\n" +
 	"LISTMONK_API_TOKEN=listmonk-api-token\n"
 
@@ -1444,6 +1449,9 @@ func TestBuildServiceEnvVarsKeepsInternalLeafForFoghornControl(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Profile:    "production",
 		RootDomain: "frameworks.network",
+		Clusters: map[string]inventory.ClusterConfig{
+			"media-us-1": {Name: "Media US"},
+		},
 		Services: map[string]inventory.ServiceConfig{
 			"navigator":  {Enabled: true, Host: "central-eu-1"},
 			"foghorn-us": {Enabled: true, Deploy: "foghorn", Host: "regional-us-1", Cluster: "media-us-1"},
@@ -1457,7 +1465,11 @@ func TestBuildServiceEnvVarsKeepsInternalLeafForFoghornControl(t *testing.T) {
 		Host:      "regional-us-1",
 		ClusterID: "media-us-1",
 		Phase:     orchestrator.PhaseApplications,
-	}, manifest, map[string]any{"service_token": "runtime-service-token"}, "", "", nil, nil, "native")
+	}, manifest, map[string]any{"service_token": "runtime-service-token"}, "", "", map[string]string{
+		"MEDIA_AUTHORITY_SEAL_ROOT_SECRET": strings.Repeat("ab", 32),
+		"MEDIA_AUTHORITY_TRUST_SET":        `{"test":"public"}`,
+		"FOGHORN_STATE_ENCRYPTION_KEY":     strings.Repeat("cd", 32),
+	}, nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars returned error: %v", err)
 	}
@@ -1481,6 +1493,7 @@ func TestBuildServiceEnvVarsDerivesProxyTrustFromDeployMode(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Profile:    "production",
 		RootDomain: "frameworks.network",
+		Clusters:   map[string]inventory.ClusterConfig{"media-eu-1": {Name: "Media EU"}},
 		Services: map[string]inventory.ServiceConfig{
 			"foghorn": {Enabled: true, Host: "regional-eu-1", Cluster: "media-eu-1"},
 		},
@@ -1492,7 +1505,12 @@ func TestBuildServiceEnvVarsDerivesProxyTrustFromDeployMode(t *testing.T) {
 		}
 	}
 
-	native, err := buildServiceEnvVars(newTask(), manifest, map[string]any{}, "", "", nil, nil, "native")
+	authorityEnv := map[string]string{
+		"MEDIA_AUTHORITY_SEAL_ROOT_SECRET": strings.Repeat("ab", 32),
+		"MEDIA_AUTHORITY_TRUST_SET":        `{"test":"public"}`,
+		"FOGHORN_STATE_ENCRYPTION_KEY":     strings.Repeat("cd", 32),
+	}
+	native, err := buildServiceEnvVars(newTask(), manifest, map[string]any{}, "", "", authorityEnv, nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars(native): %v", err)
 	}
@@ -1500,7 +1518,7 @@ func TestBuildServiceEnvVarsDerivesProxyTrustFromDeployMode(t *testing.T) {
 		t.Errorf("native TRUSTED_PROXY_CIDRS = %q, want loopback only", got)
 	}
 
-	docker, err := buildServiceEnvVars(newTask(), manifest, map[string]any{}, "", "", nil, nil, "docker")
+	docker, err := buildServiceEnvVars(newTask(), manifest, map[string]any{}, "", "", authorityEnv, nil, "docker")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars(docker): %v", err)
 	}
@@ -1523,6 +1541,7 @@ func TestBuildServiceEnvVarsProxyTrustIsOverridable(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Profile:    "production",
 		RootDomain: "frameworks.network",
+		Clusters:   map[string]inventory.ClusterConfig{"media-eu-1": {Name: "Media EU"}},
 		Services: map[string]inventory.ServiceConfig{
 			"foghorn": {Enabled: true, Host: "regional-eu-1"},
 		},
@@ -1530,9 +1549,14 @@ func TestBuildServiceEnvVarsProxyTrustIsOverridable(t *testing.T) {
 
 	env, err := buildServiceEnvVars(&orchestrator.Task{
 		Name: "foghorn@regional-eu-1", Type: "foghorn", ServiceID: "foghorn",
-		Host: "regional-eu-1", Phase: orchestrator.PhaseApplications,
+		Host: "regional-eu-1", ClusterID: "media-eu-1", Phase: orchestrator.PhaseApplications,
 	}, manifest, map[string]any{}, "", "",
-		map[string]string{"TRUSTED_PROXY_CIDRS": "203.0.113.7/32"}, nil, "native")
+		map[string]string{
+			"TRUSTED_PROXY_CIDRS":              "203.0.113.7/32",
+			"MEDIA_AUTHORITY_SEAL_ROOT_SECRET": strings.Repeat("ab", 32),
+			"MEDIA_AUTHORITY_TRUST_SET":        `{"test":"public"}`,
+			"FOGHORN_STATE_ENCRYPTION_KEY":     strings.Repeat("cd", 32),
+		}, nil, "native")
 	if err != nil {
 		t.Fatalf("buildServiceEnvVars: %v", err)
 	}
@@ -1688,6 +1712,9 @@ func TestBuildServiceEnvVarsProductionForcesSecureDefaults(t *testing.T) {
 		Profile:    "production",
 		RootDomain: "frameworks.network",
 		EnvFiles:   []string{envFile},
+		Clusters: map[string]inventory.ClusterConfig{
+			"cluster-a": {Name: "Cluster A"},
+		},
 		Hosts: map[string]inventory.Host{
 			"core-1": {ExternalIP: "10.0.0.1", Roles: []string{"control"}},
 		},
@@ -2537,8 +2564,11 @@ func TestYugabyteRuntimePasswordMatchesServiceDSN(t *testing.T) {
 		},
 	}
 	sharedEnv := map[string]string{
-		"DATABASE_PASSWORD":         "shared-owner-secret",
-		"DATABASE_RUNTIME_PASSWORD": "shared-runtime-secret",
+		"DATABASE_PASSWORD":                "shared-owner-secret",
+		"DATABASE_RUNTIME_PASSWORD":        "shared-runtime-secret",
+		"MEDIA_AUTHORITY_SEAL_ROOT_SECRET": strings.Repeat("ab", 32),
+		"MEDIA_AUTHORITY_TRUST_SET":        `{"test":"public"}`,
+		"FOGHORN_STATE_ENCRYPTION_KEY":     strings.Repeat("cd", 32),
 	}
 	clusterEnvs := map[string]map[string]string{
 		"media-eu-1": {
@@ -4979,25 +5009,167 @@ func TestRestrictClusterAccessSecrets(t *testing.T) {
 		service             string
 		wantMaterialization bool
 		wantBalancer        bool
+		wantAuthoritySigner bool
+		wantAuthorityTrust  bool
+		wantSealRecipients  bool
+		wantSealPrivate     bool
 	}{
 		{service: "quartermaster", wantMaterialization: true},
 		{service: "purser", wantMaterialization: true},
-		{service: "foghorn", wantBalancer: true},
-		{service: "commodore"},
+		{service: "foghorn", wantBalancer: true, wantAuthorityTrust: true, wantSealPrivate: true},
+		{service: "commodore", wantAuthoritySigner: true, wantSealRecipients: true},
 		{service: "helmsman"},
 	}
 	for _, test := range tests {
 		t.Run(test.service, func(t *testing.T) {
 			env := map[string]string{
-				"CLUSTER_ACCESS_MATERIALIZATION_SECRET": "materialize",
-				"FOGHORN_BALANCER_CAPABILITY_SECRET":    "balance",
+				"CLUSTER_ACCESS_MATERIALIZATION_SECRET":       "materialize",
+				"FOGHORN_BALANCER_CAPABILITY_SECRET":          "balance",
+				"MEDIA_AUTHORITY_SIGNING_KEY_ID":              "current",
+				"MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64": "private",
+				"MEDIA_AUTHORITY_TRUST_SET":                   "trust",
+				"MEDIA_AUTHORITY_SEAL_ROOT_SECRET":            "root",
+				"MEDIA_AUTHORITY_SEAL_RECIPIENTS":             "recipients",
+				"MEDIA_AUTHORITY_SEAL_KEY_ID":                 "seal-key",
+				"MEDIA_AUTHORITY_SEAL_PRIVATE_KEY_PEM_B64":    "seal-private",
 			}
 			restrictClusterAccessSecrets(test.service, env)
 			_, hasMaterialization := env["CLUSTER_ACCESS_MATERIALIZATION_SECRET"]
 			_, hasBalancer := env["FOGHORN_BALANCER_CAPABILITY_SECRET"]
-			if hasMaterialization != test.wantMaterialization || hasBalancer != test.wantBalancer {
-				t.Fatalf("rendered secrets materialization=%v balancer=%v, want %v/%v", hasMaterialization, hasBalancer, test.wantMaterialization, test.wantBalancer)
+			_, hasSignerID := env["MEDIA_AUTHORITY_SIGNING_KEY_ID"]
+			_, hasSignerKey := env["MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64"]
+			_, hasTrust := env["MEDIA_AUTHORITY_TRUST_SET"]
+			_, hasRecipients := env["MEDIA_AUTHORITY_SEAL_RECIPIENTS"]
+			_, hasSealKey := env["MEDIA_AUTHORITY_SEAL_KEY_ID"]
+			_, hasSealPrivate := env["MEDIA_AUTHORITY_SEAL_PRIVATE_KEY_PEM_B64"]
+			_, hasSealRoot := env["MEDIA_AUTHORITY_SEAL_ROOT_SECRET"]
+			if hasMaterialization != test.wantMaterialization || hasBalancer != test.wantBalancer || hasSignerID != test.wantAuthoritySigner || hasSignerKey != test.wantAuthoritySigner || hasTrust != test.wantAuthorityTrust || hasRecipients != test.wantSealRecipients || hasSealKey != test.wantSealPrivate || hasSealPrivate != test.wantSealPrivate || hasSealRoot {
+				t.Fatalf("rendered secrets materialization=%v balancer=%v signer=%v/%v trust=%v recipients=%v seal=%v/%v root=%v", hasMaterialization, hasBalancer, hasSignerID, hasSignerKey, hasTrust, hasRecipients, hasSealKey, hasSealPrivate, hasSealRoot)
 			}
 		})
+	}
+}
+
+func TestRenderMediaAuthoritySealEnvScopesKeysByControlCell(t *testing.T) {
+	manifest := &inventory.Manifest{Profile: "dev", Clusters: map[string]inventory.ClusterConfig{
+		"media-a": {Cell: "cell-a", ControlCell: "cell-a", EligibleServingCells: []string{"cell-a", "cell-c"}},
+		"edge-b":  {Cell: "data-b", ControlCell: "cell-b"},
+	}, Services: map[string]inventory.ServiceConfig{
+		"foghorn-a": {Enabled: true, Deploy: "foghorn", Cluster: "media-a"},
+		"foghorn-b": {Enabled: true, Deploy: "foghorn", Cluster: "edge-b"},
+	}}
+	root := strings.Repeat("ab", 32)
+	commodoreEnv := map[string]string{"MEDIA_AUTHORITY_SEAL_ROOT_SECRET": root}
+	if err := renderMediaAuthoritySealEnv(&orchestrator.Task{Name: "commodore", Type: "commodore"}, manifest, "commodore", commodoreEnv); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(commodoreEnv["MEDIA_AUTHORITY_SEAL_RECIPIENTS"], `"cell-a"`) || !strings.Contains(commodoreEnv["MEDIA_AUTHORITY_SEAL_RECIPIENTS"], `"cell-b"`) || !strings.Contains(commodoreEnv["MEDIA_AUTHORITY_SEAL_RECIPIENTS"], `"cell-c"`) {
+		t.Fatalf("Commodore recipient map = %q", commodoreEnv["MEDIA_AUTHORITY_SEAL_RECIPIENTS"])
+	}
+	foghornA := map[string]string{"MEDIA_AUTHORITY_SEAL_ROOT_SECRET": root, "FOGHORN_STATE_ENCRYPTION_KEY": strings.Repeat("cd", 32)}
+	foghornB := map[string]string{"MEDIA_AUTHORITY_SEAL_ROOT_SECRET": root, "FOGHORN_STATE_ENCRYPTION_KEY": strings.Repeat("cd", 32)}
+	if err := renderMediaAuthoritySealEnv(&orchestrator.Task{Name: "foghorn-a", Type: "foghorn", ClusterID: "media-a"}, manifest, "foghorn", foghornA); err != nil {
+		t.Fatal(err)
+	}
+	if err := renderMediaAuthoritySealEnv(&orchestrator.Task{Name: "foghorn-b", Type: "foghorn", ClusterID: "edge-b"}, manifest, "foghorn", foghornB); err != nil {
+		t.Fatal(err)
+	}
+	if foghornA["MEDIA_AUTHORITY_SEAL_KEY_ID"] == "" || foghornB["MEDIA_AUTHORITY_SEAL_KEY_ID"] == "" || foghornA["MEDIA_AUTHORITY_SEAL_KEY_ID"] == foghornB["MEDIA_AUTHORITY_SEAL_KEY_ID"] {
+		t.Fatalf("Foghorn cell keys were not isolated: a=%q b=%q", foghornA["MEDIA_AUTHORITY_SEAL_KEY_ID"], foghornB["MEDIA_AUTHORITY_SEAL_KEY_ID"])
+	}
+}
+
+func TestMediaAuthorityControlCellsIgnoreClustersWithoutFoghorn(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Clusters: map[string]inventory.ClusterConfig{
+			"media-a":      {ControlCell: "cell-a"},
+			"storage-only": {ControlCell: "storage-cell"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"foghorn-a": {Enabled: true, Deploy: "foghorn", Cluster: "media-a"},
+		},
+	}
+	if got := mediaAuthorityControlCells(manifest); !slices.Equal(got, []string{"cell-a"}) {
+		t.Fatalf("recipient cells = %v, want only deployed Foghorn cell", got)
+	}
+}
+
+func TestMediaAuthorityTaskControlCellRejectsUnknownClusterEvenWithOneCell(t *testing.T) {
+	manifest := &inventory.Manifest{Clusters: map[string]inventory.ClusterConfig{
+		"media-a": {ControlCell: "cell-a"},
+	}}
+	task := &orchestrator.Task{Name: "foghorn-typo", Type: "foghorn", ClusterID: "media-typo"}
+	if got := mediaAuthorityTaskControlCell(task, manifest, []string{"cell-a"}); got != "" {
+		t.Fatalf("unknown task cluster inherited cell %q", got)
+	}
+}
+
+func TestValidateMediaAuthorityRecipientCellsRejectsUndeployableEligibleCell(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Clusters: map[string]inventory.ClusterConfig{
+			"media-a": {ControlCell: "cell-a", EligibleServingCells: []string{"cell-b"}},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"foghorn-a": {Enabled: true, Deploy: "foghorn", Cluster: "media-a"},
+		},
+	}
+	if err := validateMediaAuthorityRecipientCells(manifest, mediaAuthorityControlCells(manifest)); err == nil || !strings.Contains(err.Error(), "cell-b") {
+		t.Fatalf("undeployable eligible recipient was accepted: %v", err)
+	}
+}
+
+func TestProductionServiceRenderScopesMediaAuthorityMaterial(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "production",
+		Clusters: map[string]inventory.ClusterConfig{
+			"media-a": {Cell: "cell-a", ControlCell: "cell-a"},
+			"media-b": {Cell: "cell-b", ControlCell: "cell-b"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"foghorn-a": {Enabled: true, Deploy: "foghorn", Cluster: "media-a"},
+			"foghorn-b": {Enabled: true, Deploy: "foghorn", Cluster: "media-b"},
+		},
+	}
+	shared := map[string]string{
+		"DATABASE_HOST":                               "postgres.internal",
+		"DATABASE_PASSWORD":                           "database-password",
+		"MEDIA_AUTHORITY_SIGNING_KEY_ID":              "signer-1",
+		"MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64": "signing-private",
+		"MEDIA_AUTHORITY_TRUST_SET":                   `{"signer-1":"signing-public"}`,
+		"MEDIA_AUTHORITY_SEAL_ROOT_SECRET":            strings.Repeat("ab", 32),
+		"FOGHORN_STATE_ENCRYPTION_KEY":                strings.Repeat("cd", 32),
+	}
+	build := func(service, cluster string) map[string]string {
+		env, err := buildServiceEnvVars(&orchestrator.Task{
+			Name: service + "@host", Type: service, ServiceID: service, Host: "host", ClusterID: cluster, Phase: orchestrator.PhaseApplications,
+		}, manifest, map[string]any{}, "", "", shared, nil, "native")
+		if err != nil {
+			t.Fatalf("render %s: %v", service, err)
+		}
+		if _, ok := env["MEDIA_AUTHORITY_SEAL_ROOT_SECRET"]; ok {
+			t.Fatalf("%s retained the seal root", service)
+		}
+		return env
+	}
+	commodore := build("commodore", "")
+	if commodore["MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64"] == "" || commodore["MEDIA_AUTHORITY_SEAL_RECIPIENTS"] == "" || commodore["MEDIA_AUTHORITY_TRUST_SET"] != "" || commodore["MEDIA_AUTHORITY_SEAL_PRIVATE_KEY_PEM_B64"] != "" {
+		t.Fatalf("Commodore authority material is incorrectly scoped: signer=%v recipients=%v trust=%v seal_private=%v",
+			commodore["MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64"] != "", commodore["MEDIA_AUTHORITY_SEAL_RECIPIENTS"] != "", commodore["MEDIA_AUTHORITY_TRUST_SET"] != "", commodore["MEDIA_AUTHORITY_SEAL_PRIVATE_KEY_PEM_B64"] != "")
+	}
+	foghornA := build("foghorn", "media-a")
+	foghornB := build("foghorn", "media-b")
+	for name, env := range map[string]map[string]string{"foghorn-a": foghornA, "foghorn-b": foghornB} {
+		if env["MEDIA_AUTHORITY_TRUST_SET"] == "" || env["MEDIA_AUTHORITY_SEAL_PRIVATE_KEY_PEM_B64"] == "" || env["MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64"] != "" || env["MEDIA_AUTHORITY_SEAL_RECIPIENTS"] != "" {
+			t.Fatalf("%s authority material is incorrectly scoped", name)
+		}
+	}
+	if foghornA["MEDIA_AUTHORITY_SEAL_KEY_ID"] == foghornB["MEDIA_AUTHORITY_SEAL_KEY_ID"] || foghornA["MEDIA_AUTHORITY_SEAL_PRIVATE_KEY_PEM_B64"] == foghornB["MEDIA_AUTHORITY_SEAL_PRIVATE_KEY_PEM_B64"] {
+		t.Fatal("production Foghorn tasks received shared cross-cell seal material")
+	}
+	helmsman := build("helmsman", "media-a")
+	for _, key := range []string{"MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64", "MEDIA_AUTHORITY_TRUST_SET", "MEDIA_AUTHORITY_SEAL_RECIPIENTS", "MEDIA_AUTHORITY_SEAL_PRIVATE_KEY_PEM_B64"} {
+		if helmsman[key] != "" {
+			t.Fatalf("Helmsman received %s", key)
+		}
 	}
 }

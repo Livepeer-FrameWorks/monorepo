@@ -124,6 +124,7 @@ func TestBuildTaskConfig_RedisInstanceConfigIncludesRoleKeys(t *testing.T) {
 
 func TestBuildTaskConfig_RedisDefaultsBindToLoopbackAndMeshIP(t *testing.T) {
 	manifest := &inventory.Manifest{
+		Profile: "dev",
 		Hosts: map[string]inventory.Host{
 			"control-1": {WireguardIP: "10.88.0.2"},
 		},
@@ -191,6 +192,7 @@ func TestBuildTaskConfig_RedisDuplicateNamesUseTaskClusterAndHost(t *testing.T) 
 
 func TestBuildTaskConfig_ClusterScopedServiceAliasesUseTaskConfig(t *testing.T) {
 	manifest := &inventory.Manifest{
+		Profile: "dev",
 		Hosts: map[string]inventory.Host{
 			"regional-eu-1": {WireguardIP: "10.88.158.227"},
 			"regional-us-1": {WireguardIP: "10.88.236.29"},

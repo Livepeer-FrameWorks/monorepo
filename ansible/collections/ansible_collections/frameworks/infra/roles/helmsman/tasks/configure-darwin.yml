@@ -1,4 +1,10 @@
 ---
+- name: Ensure Helmsman state directory
+  ansible.builtin.file:
+    path: "{{ helmsman_state_dir }}"
+    state: directory
+    mode: "0700"
+
 - name: Ensure trigger WAL directory
   ansible.builtin.file:
     path: "{{ helmsman_effective_trigger_wal_dir }}"

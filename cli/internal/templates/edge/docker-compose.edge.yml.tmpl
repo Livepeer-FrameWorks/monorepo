@@ -25,6 +25,7 @@ services:
       - caddy_etc:/etc/caddy
       - caddy_data:/var/lib/caddy
       - edge_storage:/data/storage
+      - edge_state:/data/state
     restart: unless-stopped
 
 {{EDGE_TUNING_SERVICE}}{{VMAGENT_EDGE_SERVICE}}
@@ -34,3 +35,4 @@ volumes:
   caddy_etc: {}
   caddy_data: {}
   edge_storage: {}
+  edge_state: {}

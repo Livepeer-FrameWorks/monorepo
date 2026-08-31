@@ -110,10 +110,9 @@ func runRestart(cmd *cobra.Command, rc *resolvedCluster, serviceName string, val
 		Idempotent: true,
 	}
 	manifestDir := filepath.Dir(rc.ManifestPath)
-	sharedEnv, envErr := rc.SharedEnv()
+	sharedEnv, envErr := rc.PreparedSharedEnv()
 	if envErr != nil {
-		fmt.Fprintf(cmd.OutOrStderr(), "  warning: shared env decrypt failed: %v\n", envErr)
-		sharedEnv = nil
+		return fmt.Errorf("prepare shared environment: %w", envErr)
 	}
 	clusterEnvs, clusterEnvsErr := rc.ClusterEnvs()
 	if clusterEnvsErr != nil {

@@ -24,6 +24,9 @@
     # Hot-storage host bind — same path the retired 3-container stack used,
     # so migrated nodes keep their DVR/clip artifacts.
     - storage
+    # ConfigSeed, trigger WAL, identity, fences, and processing policy must
+    # survive media cleanup and container replacement.
+    - state
 
 - name: Mirror CA bundle into compose project (when provided)
   ansible.builtin.copy:

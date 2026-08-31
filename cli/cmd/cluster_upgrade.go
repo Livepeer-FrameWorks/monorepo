@@ -642,7 +642,7 @@ func upgradeServiceOnHost(ctx context.Context, cmd *cobra.Command, rc *resolvedC
 		Idempotent: true,
 	}
 	manifestDir := filepath.Dir(rc.ManifestPath)
-	sharedEnv, envErr := rc.SharedEnv()
+	sharedEnv, envErr := rc.PreparedSharedEnv()
 	if envErr != nil {
 		return false, fmt.Errorf("load manifest env_files: %w", envErr)
 	}

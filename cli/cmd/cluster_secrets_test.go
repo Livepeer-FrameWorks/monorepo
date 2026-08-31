@@ -1,178 +1,68 @@
 package cmd
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
-	"frameworks/cli/pkg/inventory"
+	"frameworks/cli/pkg/credentials"
 )
 
-func TestEffectiveGeoIPLicenseKey_FlagWins(t *testing.T) {
-	shared := map[string]string{"MAXMIND_LICENSE_KEY": "from-gitops"}
-	got := effectiveGeoIPLicenseKey(shared, "from-flag")
-	if got != "from-flag" {
-		t.Fatalf("explicit flag should win, got %q", got)
+func TestClusterSecretsGenerateMediaAuthorityWritesExclusivePrivateFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "authority.env")
+	cmd := newClusterSecretsGenerateMediaAuthorityCmd()
+	cmd.SetArgs([]string{"--out", path})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestEffectiveGeoIPLicenseKey_SharedEnv(t *testing.T) {
-	shared := map[string]string{"MAXMIND_LICENSE_KEY": "from-gitops"}
-	got := effectiveGeoIPLicenseKey(shared, "")
-	if got != "from-gitops" {
-		t.Fatalf("should resolve from sharedEnv when flag empty, got %q", got)
-	}
-}
-
-func TestEffectiveGeoIPLicenseKey_Empty(t *testing.T) {
-	got := effectiveGeoIPLicenseKey(map[string]string{}, "")
-	if got != "" {
-		t.Fatalf("should be empty when both absent, got %q", got)
-	}
-	got = effectiveGeoIPLicenseKey(nil, "")
-	if got != "" {
-		t.Fatalf("nil sharedEnv with no flag should return empty, got %q", got)
-	}
-}
-
-func TestResolveYugabytePassword_YamlWins(t *testing.T) {
-	pg := &inventory.PostgresConfig{
-		Engine:   "yugabyte",
-		Password: "from-yaml",
-	}
-	shared := map[string]string{"DATABASE_PASSWORD": "from-gitops"}
-	got, err := resolveYugabytePassword(pg, shared)
+	info, err := os.Stat(path)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatal(err)
 	}
-	if got != "from-yaml" {
-		t.Fatalf("pg.Password should win over sharedEnv, got %q", got)
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("mode = %o, want 600", info.Mode().Perm())
 	}
-}
-
-func TestResolveYugabytePassword_SharedEnvFallback(t *testing.T) {
-	pg := &inventory.PostgresConfig{Engine: "yugabyte"}
-	shared := map[string]string{"DATABASE_PASSWORD": "from-gitops"}
-	got, err := resolveYugabytePassword(pg, shared)
+	payload, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatal(err)
 	}
-	if got != "from-gitops" {
-		t.Fatalf("should fall back to DATABASE_PASSWORD, got %q", got)
+	for _, key := range []string{
+		"MEDIA_AUTHORITY_SIGNING_KEY_ID=",
+		"MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64=",
+		"MEDIA_AUTHORITY_TRUST_SET=",
+		"MEDIA_AUTHORITY_SEAL_ROOT_SECRET=",
+		"FOGHORN_STATE_ENCRYPTION_KEY=",
+	} {
+		if !strings.Contains(string(payload), key) {
+			t.Fatalf("generated fragment is missing %s", key)
+		}
+	}
+	if err := cmd.Execute(); err == nil {
+		t.Fatal("generator overwrote an existing secret fragment")
 	}
 }
 
-func TestResolveYugabytePassword_VanillaPostgres(t *testing.T) {
-	pg := &inventory.PostgresConfig{
-		Engine:   "postgres",
-		Password: "ignored",
+func TestClusterSecretsGenerateSharedPassesProductionValidation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "shared.env")
+	cmd := newClusterSecretsGenerateSharedCmd()
+	cmd.SetArgs([]string{"--out", path})
+	if err := cmd.Execute(); err != nil {
+		t.Fatal(err)
 	}
-	shared := map[string]string{"DATABASE_PASSWORD": "also-ignored"}
-	got, err := resolveYugabytePassword(pg, shared)
+	payload, err := os.ReadFile(path)
 	if err != nil {
-		t.Fatalf("vanilla Postgres should not error, got %v", err)
+		t.Fatal(err)
 	}
-	if got != "" {
-		t.Fatalf("vanilla Postgres uses peer auth, should return empty, got %q", got)
+	values := make(map[string]string)
+	for _, line := range strings.Split(string(payload), "\n") {
+		if strings.HasPrefix(line, "#") || !strings.Contains(line, "=") {
+			continue
+		}
+		key, value, _ := strings.Cut(line, "=")
+		values[key] = value
 	}
-}
-
-func TestResolveYugabytePassword_YugabyteNoSecretErrors(t *testing.T) {
-	pg := &inventory.PostgresConfig{Engine: "yugabyte"}
-	_, err := resolveYugabytePassword(pg, map[string]string{})
-	if err == nil {
-		t.Fatal("expected error when Yugabyte has no password source (empty sharedEnv)")
-	}
-	if !strings.Contains(err.Error(), "env_files") {
-		t.Fatalf("error should mention env_files, got %q", err.Error())
-	}
-	if !strings.Contains(err.Error(), "DATABASE_PASSWORD") {
-		t.Fatalf("error should mention the canonical key, got %q", err.Error())
-	}
-
-	_, err = resolveYugabytePassword(pg, nil)
-	if err == nil {
-		t.Fatal("expected error when sharedEnv is nil and no yaml password")
-	}
-}
-
-func TestResolveGeoIPMMDBPath_MaxMindMissingKeyMentionsEnvFiles(t *testing.T) {
-	_, _, err := resolveGeoIPMMDBPath(context.TODO(), "maxmind", "", "")
-	if err == nil {
-		t.Fatal("expected error when MaxMind source has no license key")
-	}
-	if !strings.Contains(err.Error(), "env_files") {
-		t.Fatalf("error should mention env_files, got %q", err.Error())
-	}
-	if !strings.Contains(err.Error(), "MAXMIND_LICENSE_KEY") {
-		t.Fatalf("error should mention the canonical key, got %q", err.Error())
-	}
-}
-
-func TestGeoIPCacheFresh_MissingFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "GeoLite2-City.mmdb")
-	fresh, err := geoIPCacheFresh(path, time.Now())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if fresh {
-		t.Fatal("missing cache file should not be fresh")
-	}
-}
-
-func TestGeoIPCacheFresh_EmptyFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "GeoLite2-City.mmdb")
-	if err := os.WriteFile(path, nil, 0o644); err != nil {
-		t.Fatalf("write empty cache file: %v", err)
-	}
-	fresh, err := geoIPCacheFresh(path, time.Now())
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if fresh {
-		t.Fatal("empty cache file should not be fresh")
-	}
-}
-
-func TestGeoIPCacheFresh_RecentFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "GeoLite2-City.mmdb")
-	now := time.Now()
-	if err := os.WriteFile(path, []byte("mmdb"), 0o644); err != nil {
-		t.Fatalf("write cache file: %v", err)
-	}
-	recent := now.Add(-2 * time.Hour)
-	if err := os.Chtimes(path, recent, recent); err != nil {
-		t.Fatalf("set file times: %v", err)
-	}
-	fresh, err := geoIPCacheFresh(path, now)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !fresh {
-		t.Fatal("recent cache file should be fresh")
-	}
-}
-
-func TestGeoIPCacheFresh_StaleFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "GeoLite2-City.mmdb")
-	now := time.Now()
-	if err := os.WriteFile(path, []byte("mmdb"), 0o644); err != nil {
-		t.Fatalf("write cache file: %v", err)
-	}
-	stale := now.Add(-(geoIPCacheTTL + time.Hour))
-	if err := os.Chtimes(path, stale, stale); err != nil {
-		t.Fatalf("set file times: %v", err)
-	}
-	fresh, err := geoIPCacheFresh(path, now)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if fresh {
-		t.Fatal("stale cache file should not be fresh")
+	if err := credentials.ValidateShared(values); err != nil {
+		t.Fatalf("generated shared fragment fails production validation: %v", err)
 	}
 }

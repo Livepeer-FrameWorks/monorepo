@@ -55,6 +55,7 @@ ENV DEPLOY_MODE=container \
     MISTSERVER_HTTP_URL=http://localhost:8080 \
     HELMSMAN_WEBHOOK_URL=http://localhost:18007 \
     HELMSMAN_STORAGE_LOCAL_PATH=/data/storage \
+    HELMSMAN_STATE_DIR=/data/state \
     S6_BEHAVIOUR_IF_STAGE2_FAILS=2 \
     S6_KEEP_ENV=1 \
     S6_CMD_WAIT_FOR_SERVICES_MAXTIME=0
@@ -66,7 +67,7 @@ ENV DEPLOY_MODE=container \
 # advertising it would make `docker run -P` publish it.
 EXPOSE 80 443 1935 4200 5554 8080 8889/udp 18203/udp
 
-VOLUME ["/opt/frameworks", "/etc/frameworks", "/etc/caddy", "/var/lib/caddy", "/data/storage"]
+VOLUME ["/opt/frameworks", "/etc/frameworks", "/etc/caddy", "/var/lib/caddy", "/data/storage", "/data/state"]
 
 # Helmsman serves HTTP (gin) on 18007; /health is the platform-wide health
 # route. edge status treats "unhealthy" as failed, so this must match the

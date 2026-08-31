@@ -10,6 +10,11 @@
     helmsman_darwin_log_dir: >-
       {{ helmsman_darwin_user_log_dir if helmsman_darwin_domain == 'user'
          else helmsman_darwin_system_log_dir }}
+    # HELMSMAN_STATE_DIR carries identity and trigger durability. Keep it in
+    # the selected launchd domain rather than inheriting Linux's /var/lib.
+    helmsman_state_dir: >-
+      {{ helmsman_darwin_user_state_dir if helmsman_darwin_domain == 'user'
+         else helmsman_darwin_system_state_dir }}
     helmsman_darwin_plist_dir: >-
       {{ helmsman_darwin_user_plist_dir if helmsman_darwin_domain == 'user'
          else helmsman_darwin_system_plist_dir }}

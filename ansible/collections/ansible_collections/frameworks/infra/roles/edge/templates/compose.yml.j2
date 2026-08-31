@@ -60,6 +60,9 @@ services:
    DVR/clip artifacts with zero copying. The operator-local Go renderer
    uses a named volume instead (no legacy data, better macOS IO). #}
       - ./storage:/data/storage
+{# Durable Helmsman authority/config/fence state is separate from reclaimable
+   media. Keep a stable host bind across container replacement. #}
+      - ./state:/data/state
     restart: unless-stopped
 {% if edge_container_flavor | default('linux') == 'darwin' %}
 

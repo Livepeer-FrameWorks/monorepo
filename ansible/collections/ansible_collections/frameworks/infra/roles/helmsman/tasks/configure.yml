@@ -26,6 +26,8 @@
         'MISTSERVER_HTTP_URL': 'http://' ~ helmsman_mist_http_upstream,
         'HELMSMAN_WEBHOOK_URL': 'http://' ~ helmsman_webhook_upstream,
         'FRAMEWORKS_TRIGGER_WAL_DIR': helmsman_effective_trigger_wal_dir,
+        'HELMSMAN_STATE_DIR': helmsman_state_dir,
+        'HELMSMAN_ROTATE_NODE_IDENTITY': helmsman_rotate_node_identity | bool | ternary('true', 'false'),
         'CADDY_ADMIN_URL': helmsman_caddy_admin_url,
         'CADDY_CONFIG_PATH': helmsman_caddy_config_path,
         'HELMSMAN_BIND_ADDR': helmsman_bind_addr,

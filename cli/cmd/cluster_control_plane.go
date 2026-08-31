@@ -5,7 +5,6 @@ import (
 	"path/filepath"
 
 	"frameworks/cli/internal/ux"
-	"frameworks/cli/pkg/credentials"
 
 	"github.com/spf13/cobra"
 )
@@ -150,18 +149,9 @@ func runClusterControlPlanePlan(cmd *cobra.Command, rc *resolvedCluster, domain 
 	fmt.Fprintf(out, "Domain: %s\n", domain)
 
 	if finalizeStepsContainBootstrap(steps) {
-		sharedEnv, envErr := rc.SharedEnv()
+		sharedEnv, envErr := rc.PreparedSharedEnv()
 		if envErr != nil {
 			return fmt.Errorf("load manifest env_files: %w", envErr)
-		}
-		if isDevProfile(manifest) {
-			if _, generateErr := credentials.GenerateIfMissing(sharedEnv); generateErr != nil {
-				return fmt.Errorf("prepare dev bootstrap secrets: %w", generateErr)
-			}
-		} else {
-			if validateErr := credentials.ValidateShared(sharedEnv); validateErr != nil {
-				return validateErr
-			}
 		}
 		if _, renderErr := renderBootstrapYAML(cmd, manifest, manifestDir, sharedEnv); renderErr != nil {
 			return renderErr

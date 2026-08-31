@@ -1,7 +1,12 @@
 package credentials
 
 import (
+	"crypto/ecdh"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
+	"encoding/pem"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -26,20 +31,62 @@ func TestIsMissing(t *testing.T) {
 
 func TestKeys(t *testing.T) {
 	keys := Keys()
-	if len(keys) != len(generatable) {
-		t.Fatalf("Keys() len = %d, want %d", len(keys), len(generatable))
+	if len(keys) != len(generatable)+len(mediaAuthorityKeys) {
+		t.Fatalf("Keys() len = %d, want %d", len(keys), len(generatable)+len(mediaAuthorityKeys))
 	}
 	want := map[string]bool{
 		"DATABASE_RUNTIME_PASSWORD": true,
 		"SERVICE_TOKEN":             true, "JWT_SECRET": true, "PASSWORD_RESET_SECRET": true,
 		"FIELD_ENCRYPTION_KEY": true, "USAGE_HASH_SECRET": true, "TELEMETRY_TOKEN_SECRET": true,
-		"CLUSTER_ACCESS_MATERIALIZATION_SECRET": true,
-		"FOGHORN_BALANCER_CAPABILITY_SECRET":    true,
+		"CLUSTER_ACCESS_MATERIALIZATION_SECRET":       true,
+		"FOGHORN_BALANCER_CAPABILITY_SECRET":          true,
+		"FOGHORN_STATE_ENCRYPTION_KEY":                true,
+		"MEDIA_AUTHORITY_SEAL_ROOT_SECRET":            true,
+		"MEDIA_AUTHORITY_SIGNING_KEY_ID":              true,
+		"MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64": true,
+		"MEDIA_AUTHORITY_TRUST_SET":                   true,
 	}
 	for _, k := range keys {
 		if !want[k] {
 			t.Errorf("unexpected key %q", k)
 		}
+	}
+}
+
+func TestDeriveMediaAuthoritySealMaterialIsCellScopedAndStable(t *testing.T) {
+	root := strings.Repeat("ab", 32)
+	recipientsJSON, privateKeys, deriveErr := DeriveMediaAuthoritySealMaterial(root, []string{"cell-b", "cell-a", "cell-a"})
+	if deriveErr != nil {
+		t.Fatal(deriveErr)
+	}
+	var recipients map[string]mediaAuthoritySealRecipientJSON
+	if unmarshalErr := json.Unmarshal([]byte(recipientsJSON), &recipients); unmarshalErr != nil {
+		t.Fatal(unmarshalErr)
+	}
+	if len(recipients) != 2 || len(privateKeys) != 2 || privateKeys["cell-a"].KeyID == privateKeys["cell-b"].KeyID {
+		t.Fatalf("unexpected derived material: recipients=%+v private=%+v", recipients, privateKeys)
+	}
+	for cellID, privateMaterial := range privateKeys {
+		pemBytes, decodeErr := base64.StdEncoding.DecodeString(privateMaterial.PrivateKeyPEMBase64)
+		if decodeErr != nil {
+			t.Fatal(decodeErr)
+		}
+		block, _ := pem.Decode(pemBytes)
+		parsed, parseErr := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		privateKey, ok := parsed.(*ecdh.PrivateKey)
+		if !ok || privateMaterial.KeyID != recipients[cellID].KeyID || base64.StdEncoding.EncodeToString(privateKey.PublicKey().Bytes()) != recipients[cellID].PublicKey {
+			t.Fatalf("cell %q private/public material mismatch", cellID)
+		}
+	}
+	again, _, err := DeriveMediaAuthoritySealMaterial(root, []string{"cell-a", "cell-b"})
+	if err != nil || again != recipientsJSON {
+		t.Fatalf("derivation is not stable: %v, %q != %q", err, again, recipientsJSON)
+	}
+	if _, _, err := DeriveMediaAuthoritySealMaterial("bad", []string{"cell-a"}); err == nil {
+		t.Fatal("invalid seal root was accepted")
 	}
 }
 
@@ -116,6 +163,14 @@ func TestGenerateIfMissingFillsOnlyMissing(t *testing.T) {
 			t.Errorf("%s: not valid hex: %v", spec.Key, decErr)
 		}
 	}
+	for _, key := range mediaAuthorityKeys {
+		if _, ok := generated[key]; !ok {
+			t.Errorf("%s was not generated", key)
+		}
+	}
+	if err := validateMediaAuthorityKeys(env); err != nil {
+		t.Fatalf("generated media authority key material is inconsistent: %v", err)
+	}
 }
 
 // Two generated secrets must not collide (sanity check on randomness).
@@ -129,6 +184,25 @@ func TestGenerateIfMissingProducesDistinctValues(t *testing.T) {
 	}
 }
 
+func TestDeriveFoghornStateEncryptionKeyScopesByCell(t *testing.T) {
+	root := strings.Repeat("ab", 32)
+	a, err := DeriveFoghornStateEncryptionKey(root, "cell-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	aReplica, err := DeriveFoghornStateEncryptionKey(root, "cell-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := DeriveFoghornStateEncryptionKey(root, "cell-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a != aReplica || a == b || len(a) != 64 {
+		t.Fatalf("unexpected cell derivation: a=%q replica=%q b=%q", a, aReplica, b)
+	}
+}
+
 func TestValidateShared(t *testing.T) {
 	// All present -> no error.
 	full := map[string]string{}
@@ -138,6 +212,9 @@ func TestValidateShared(t *testing.T) {
 	full["DATABASE_PASSWORD"] = "owner-value"
 	full["DATABASE_RUNTIME_PASSWORD"] = "runtime-value"
 	full["TELEMETRY_TOKEN_SECRET"] = strings.Repeat("ab", 32)
+	if _, err := GenerateIfMissing(full); err != nil {
+		t.Fatalf("generate media authority test keys: %v", err)
+	}
 	if err := ValidateShared(full); err != nil {
 		t.Fatalf("ValidateShared(full) = %v, want nil", err)
 	}
@@ -157,6 +234,28 @@ func TestValidateShared(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "SERVICE_TOKEN") {
 		t.Errorf("error should not name the present key SERVICE_TOKEN, got: %v", err)
+	}
+}
+
+func TestGenerateIfMissingRejectsPartialMediaAuthorityKeys(t *testing.T) {
+	env := map[string]string{"MEDIA_AUTHORITY_SIGNING_KEY_ID": "current"}
+	if _, err := GenerateIfMissing(env); err == nil {
+		t.Fatal("partial media authority key configuration was accepted")
+	}
+}
+
+func TestGenerateMediaAuthorityDeploymentMaterialIsCompleteAndValid(t *testing.T) {
+	values, err := GenerateMediaAuthorityDeploymentMaterial()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateMediaAuthorityKeys(values); err != nil {
+		t.Fatalf("generated signing tuple is invalid: %v", err)
+	}
+	for _, key := range []string{"MEDIA_AUTHORITY_SEAL_ROOT_SECRET", "FOGHORN_STATE_ENCRYPTION_KEY"} {
+		if raw, err := hex.DecodeString(values[key]); err != nil || len(raw) != 32 {
+			t.Fatalf("%s is not a 32-byte hex root", key)
+		}
 	}
 }
 

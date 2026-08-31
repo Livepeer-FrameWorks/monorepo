@@ -10,6 +10,7 @@ volumes:
   foghorn_redis_data:
   mistserver_data:
   mist_thumbs:
+  helmsman_state:
   kafka_data:
   clickhouse_data:
   platform_redis_data:
@@ -239,6 +240,11 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       FOGHORN_BALANCER_CAPABILITY_SECRET: ${FOGHORN_BALANCER_CAPABILITY_SECRET:-dev-foghorn-balancer-capability-secret}
+      FOGHORN_STATE_ENCRYPTION_KEY: ${FOGHORN_STATE_ENCRYPTION_KEY:-dev-foghorn-state-encryption-key}
+      MEDIA_AUTHORITY_TRUST_SET: '${MEDIA_AUTHORITY_TRUST_SET:-{"dev-media-authority-1":"11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="}}'
+      MEDIA_AUTHORITY_CELL_ID: central-primary
+      MEDIA_AUTHORITY_SEAL_KEY_ID: ${MEDIA_AUTHORITY_SEAL_KEY_ID:-media-seal-94db25f9b9bdae44}
+      MEDIA_AUTHORITY_SEAL_PRIVATE_KEY_PEM_B64: ${MEDIA_AUTHORITY_SEAL_PRIVATE_KEY_PEM_B64:-LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1DNENBUUF3QlFZREsyVnVCQ0lFSUFoTVd3ZXZPY1Q3TUZGL2NXYXRHcGhndW9Ha0tMaUpxQTJsZ3h0ZDVpaCsKLS0tLS1FTkQgUFJJVkFURSBLRVktLS0tLQo=}
       GRPC_METADATA_POLICY: deny
       CLUSTER_ID: ${CLUSTER_ID}
       NODE_ID: central-node-1
@@ -315,6 +321,11 @@ services:
       STREAM_BONUS: ${STREAM_BONUS}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       FOGHORN_BALANCER_CAPABILITY_SECRET: ${FOGHORN_BALANCER_CAPABILITY_SECRET:-dev-foghorn-balancer-capability-secret}
+      FOGHORN_STATE_ENCRYPTION_KEY: ${FOGHORN_STATE_ENCRYPTION_KEY:-dev-foghorn-state-encryption-key}
+      MEDIA_AUTHORITY_TRUST_SET: '${MEDIA_AUTHORITY_TRUST_SET:-{"dev-media-authority-1":"11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="}}'
+      MEDIA_AUTHORITY_CELL_ID: central-primary
+      MEDIA_AUTHORITY_SEAL_KEY_ID: ${MEDIA_AUTHORITY_SEAL_KEY_ID:-media-seal-94db25f9b9bdae44}
+      MEDIA_AUTHORITY_SEAL_PRIVATE_KEY_PEM_B64: ${MEDIA_AUTHORITY_SEAL_PRIVATE_KEY_PEM_B64:-LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1DNENBUUF3QlFZREsyVnVCQ0lFSUFoTVd3ZXZPY1Q3TUZGL2NXYXRHcGhndW9Ha0tMaUpxQTJsZ3h0ZDVpaCsKLS0tLS1FTkQgUFJJVkFURSBLRVktLS0tLQo=}
       GRPC_METADATA_POLICY: deny
       CLUSTER_ID: ${CLUSTER_ID}
       NODE_ID: central-node-1
@@ -601,6 +612,9 @@ services:
       WEBAPP_PUBLIC_URL: ${WEBAPP_PUBLIC_URL}
       CHANDLER_BASE_URL: ${CHANDLER_BASE_URL:-http://localhost:18090}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
+      MEDIA_AUTHORITY_SIGNING_KEY_ID: ${MEDIA_AUTHORITY_SIGNING_KEY_ID:-dev-media-authority-1}
+      MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64: ${MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64:-LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1DNENBUUF3QlFZREsyVndCQ0lFSUoxaHNaM3YvVnBndW9SSzlKTHNMTVJFU2NWcGV6SnBHWEE3ckFNY3JuOWcKLS0tLS1FTkQgUFJJVkFURSBLRVktLS0tLQo=}
+      MEDIA_AUTHORITY_SEAL_RECIPIENTS: '${MEDIA_AUTHORITY_SEAL_RECIPIENTS:-{"central-primary":{"key_id":"media-seal-94db25f9b9bdae44","public_key":"JaEasgpxyPIW4/xA1JhymdXICyyvyF/iOvIudl7z70Y="}}}'
       TURNSTILE_AUTH_SECRET_KEY: ${TURNSTILE_AUTH_SECRET_KEY}
       LISTMONK_URL: http://listmonk:9000
       LISTMONK_API_USERNAME: ${LISTMONK_API_USERNAME}
@@ -654,6 +668,7 @@ services:
       LOG_LEVEL: ${LOG_LEVEL}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       HELMSMAN_STORAGE_LOCAL_PATH: /var/lib/mistserver/recordings
+      HELMSMAN_STATE_DIR: /var/lib/frameworks/helmsman
       # Mist runs in a separate container in compose and reaches Helmsman
       # via the service DNS name, not loopback.
       HELMSMAN_RELAY_BASE_URL: http://helmsman:18007
@@ -665,6 +680,7 @@ services:
     volumes:
       - ./infrastructure/edge/machine-id:/etc/machine-id:ro
       - ./infrastructure/demo-recordings:/var/lib/mistserver/recordings
+      - helmsman_state:/var/lib/frameworks/helmsman
       - mist_thumbs:/tmp/mist_thumbs
     depends_on:
       commodore:

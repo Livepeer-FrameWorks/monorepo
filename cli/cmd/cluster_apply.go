@@ -121,7 +121,7 @@ func runClusterApply(cmd *cobra.Command, rc *resolvedCluster) error {
 	sshPool := fwssh.NewPool(30*time.Second, sshKey)
 	defer sshPool.Close()
 
-	sharedEnv, err := rc.SharedEnv()
+	sharedEnv, err := rc.PreparedSharedEnv()
 	if err != nil {
 		return fmt.Errorf("load manifest env_files: %w", err)
 	}

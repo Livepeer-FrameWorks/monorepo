@@ -213,20 +213,13 @@ func runProvision(cmd *cobra.Command, rc *resolvedCluster, only string, dryRun, 
 	// here. Running before the dry-run exit also catches missing age keys
 	// and missing secrets before the operator commits to a live run.
 	manifestDir := filepath.Dir(manifestPath)
-	sharedEnv, err := rc.SharedEnv()
+	sharedEnv, err := rc.PreparedSharedEnv()
 	if err != nil {
 		return fmt.Errorf("load manifest env_files: %w", err)
 	}
 	clusterEnvs, err := rc.ClusterEnvs()
 	if err != nil {
 		return fmt.Errorf("load cluster env_files: %w", err)
-	}
-	if isDevProfile(manifest) {
-		if _, genErr := credentials.GenerateIfMissing(sharedEnv); genErr != nil {
-			return fmt.Errorf("auto-generate dev secrets: %w", genErr)
-		}
-	} else if valErr := credentials.ValidateShared(sharedEnv); valErr != nil {
-		return valErr
 	}
 	if topologyErr := validateEdgeTelemetryTopology(manifest, sharedEnv); topologyErr != nil {
 		return fmt.Errorf("invalid manifest: %w", topologyErr)
@@ -6897,6 +6890,9 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	if baseName != "navigator" {
 		removeNavigatorInternalCAEnv(env)
 	}
+	if err := renderMediaAuthoritySealEnv(task, manifest, baseName, env); err != nil {
+		return nil, err
+	}
 	restrictClusterAccessSecrets(baseName, env)
 
 	applyProductionRuntimeDefaults(manifest, env)
@@ -6970,7 +6966,153 @@ func restrictClusterAccessSecrets(serviceID string, env map[string]string) {
 	}
 	if serviceID != "foghorn" {
 		delete(env, "FOGHORN_BALANCER_CAPABILITY_SECRET")
+		delete(env, "FOGHORN_STATE_ENCRYPTION_KEY")
 	}
+	if serviceID != "commodore" {
+		delete(env, "MEDIA_AUTHORITY_SIGNING_KEY_ID")
+		delete(env, "MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64")
+		delete(env, "MEDIA_AUTHORITY_SEAL_RECIPIENTS")
+	}
+	if serviceID != "foghorn" {
+		delete(env, "MEDIA_AUTHORITY_TRUST_SET")
+		delete(env, "MEDIA_AUTHORITY_CELL_ID")
+		delete(env, "MEDIA_AUTHORITY_SEAL_KEY_ID")
+		delete(env, "MEDIA_AUTHORITY_SEAL_PRIVATE_KEY_PEM_B64")
+	}
+	delete(env, "MEDIA_AUTHORITY_SEAL_ROOT_SECRET")
+}
+
+func renderMediaAuthoritySealEnv(task *orchestrator.Task, manifest *inventory.Manifest, serviceID string, env map[string]string) error {
+	required := !isDevProfile(manifest) && (serviceID == "commodore" || serviceID == "foghorn")
+	root := strings.TrimSpace(env["MEDIA_AUTHORITY_SEAL_ROOT_SECRET"])
+	if root == "" {
+		if required {
+			return fmt.Errorf("service %s: non-dev deploy requires MEDIA_AUTHORITY_SEAL_ROOT_SECRET", task.Name)
+		}
+		return nil
+	}
+	cells := mediaAuthorityControlCells(manifest)
+	if len(cells) == 0 {
+		if required {
+			return fmt.Errorf("service %s: non-dev media authority requires at least one declared control cell", task.Name)
+		}
+		return nil
+	}
+	if required {
+		if err := validateMediaAuthorityRecipientCells(manifest, cells); err != nil {
+			return err
+		}
+	}
+	recipients, privateKeys, err := credentials.DeriveMediaAuthoritySealMaterial(root, cells)
+	if err != nil {
+		return err
+	}
+	if serviceID == "commodore" {
+		env["MEDIA_AUTHORITY_SEAL_RECIPIENTS"] = recipients
+	}
+	if serviceID != "foghorn" {
+		return nil
+	}
+	cellID := mediaAuthorityTaskControlCell(task, manifest, cells)
+	if cellID == "" {
+		return fmt.Errorf("service %s: cannot determine Foghorn control cell for media-authority seal key", task.Name)
+	}
+	material, ok := privateKeys[cellID]
+	if !ok {
+		return fmt.Errorf("service %s: no media-authority seal key derived for control cell %q", task.Name, cellID)
+	}
+	env["MEDIA_AUTHORITY_SEAL_KEY_ID"] = material.KeyID
+	env["MEDIA_AUTHORITY_SEAL_PRIVATE_KEY_PEM_B64"] = material.PrivateKeyPEMBase64
+	env["MEDIA_AUTHORITY_CELL_ID"] = cellID
+	stateKey, stateKeyErr := credentials.DeriveFoghornStateEncryptionKey(env["FOGHORN_STATE_ENCRYPTION_KEY"], cellID)
+	if stateKeyErr != nil {
+		return fmt.Errorf("service %s: %w", task.Name, stateKeyErr)
+	}
+	env["FOGHORN_STATE_ENCRYPTION_KEY"] = stateKey
+	return nil
+}
+
+func validateMediaAuthorityRecipientCells(manifest *inventory.Manifest, cells []string) error {
+	assignable := make(map[string]struct{})
+	for clusterID, cluster := range manifest.Clusters {
+		if _, ok := foghornForCluster(manifest, clusterID); !ok {
+			continue
+		}
+		cellID := strings.TrimSpace(cluster.ControlCell)
+		if cellID == "" {
+			cellID = strings.TrimSpace(cluster.Cell)
+		}
+		if cellID == "" {
+			cellID = strings.TrimSpace(clusterID)
+		}
+		if cellID != "" {
+			assignable[cellID] = struct{}{}
+		}
+	}
+	for _, cellID := range cells {
+		if _, ok := assignable[cellID]; !ok {
+			return fmt.Errorf("media-authority recipient cell %q has no enabled Foghorn deployment that can receive its private key", cellID)
+		}
+	}
+	return nil
+}
+
+func mediaAuthorityControlCells(manifest *inventory.Manifest) []string {
+	if manifest == nil {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(manifest.Clusters))
+	for clusterID, cluster := range manifest.Clusters {
+		// A cluster's fallback cell is a recipient only when that cluster
+		// actually deploys Foghorn. Edge-only and storage-only clusters are not
+		// media-authority cells merely because they have a cluster ID.
+		if _, ok := foghornForCluster(manifest, clusterID); ok {
+			cellID := strings.TrimSpace(cluster.ControlCell)
+			if cellID == "" {
+				cellID = strings.TrimSpace(cluster.Cell)
+			}
+			if cellID == "" {
+				cellID = strings.TrimSpace(clusterID)
+			}
+			if cellID != "" {
+				seen[cellID] = struct{}{}
+			}
+		}
+		for _, eligibleCellID := range cluster.EligibleServingCells {
+			if eligibleCellID = strings.TrimSpace(eligibleCellID); eligibleCellID != "" {
+				seen[eligibleCellID] = struct{}{}
+			}
+		}
+	}
+	result := make([]string, 0, len(seen))
+	for cellID := range seen {
+		result = append(result, cellID)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func mediaAuthorityTaskControlCell(task *orchestrator.Task, manifest *inventory.Manifest, cells []string) string {
+	if task != nil && manifest != nil {
+		taskClusterID := strings.TrimSpace(task.ClusterID)
+		if cluster, ok := manifest.Clusters[taskClusterID]; ok {
+			if value := strings.TrimSpace(cluster.ControlCell); value != "" {
+				return value
+			}
+			if value := strings.TrimSpace(cluster.Cell); value != "" {
+				return value
+			}
+			if value := strings.TrimSpace(task.ClusterID); value != "" {
+				return value
+			}
+		} else if taskClusterID != "" {
+			return ""
+		}
+	}
+	if len(cells) == 1 {
+		return cells[0]
+	}
+	return ""
 }
 
 // validateClusteredFoghornEffectiveDB fails when a CLUSTERED, ALIASED Foghorn's rendered env would connect to anything
@@ -7428,6 +7570,18 @@ func validateProductionServiceEnv(manifest *inventory.Manifest, serviceID string
 		}
 		if strings.TrimSpace(env["DATABASE_PASSWORD"]) == "" && strings.TrimSpace(env["DATABASE_URL"]) == "" {
 			return fmt.Errorf("service %s: non-dev deploy requires DATABASE_PASSWORD (or DATABASE_URL with embedded credentials)", serviceID)
+		}
+	}
+	var requiredAuthority []string
+	switch serviceID {
+	case "commodore":
+		requiredAuthority = []string{"MEDIA_AUTHORITY_SIGNING_KEY_ID", "MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64", "MEDIA_AUTHORITY_SEAL_RECIPIENTS"}
+	case "foghorn":
+		requiredAuthority = []string{"MEDIA_AUTHORITY_TRUST_SET", "MEDIA_AUTHORITY_CELL_ID", "MEDIA_AUTHORITY_SEAL_KEY_ID", "MEDIA_AUTHORITY_SEAL_PRIVATE_KEY_PEM_B64", "FOGHORN_STATE_ENCRYPTION_KEY"}
+	}
+	for _, key := range requiredAuthority {
+		if strings.TrimSpace(env[key]) == "" {
+			return fmt.Errorf("service %s: non-dev deploy requires %s", serviceID, key)
 		}
 	}
 

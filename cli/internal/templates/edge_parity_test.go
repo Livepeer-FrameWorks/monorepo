@@ -75,6 +75,12 @@ func TestEdgeTemplateParity(t *testing.T) {
 	if !strings.Contains(jinjaCompose, "./storage:/data/storage") {
 		t.Error("jinja compose must keep the ./storage host bind at /data/storage (legacy-stack migration continuity)")
 	}
+	if !strings.Contains(goCompose, "edge_state:/data/state") {
+		t.Error("go compose must mount durable Helmsman state independently at /data/state")
+	}
+	if !strings.Contains(jinjaCompose, "./state:/data/state") {
+		t.Error("jinja compose must keep durable Helmsman state in the stable ./state host bind")
+	}
 	// The retired 3-container services must not resurface.
 	for _, legacy := range []string{"edge-proxy", "caddy_admin", "mist_thumbs"} {
 		if strings.Contains(goCompose, legacy) {
@@ -85,7 +91,7 @@ func TestEdgeTemplateParity(t *testing.T) {
 		}
 	}
 
-	wantEnvKeys := []string{"NODE_ID", "EDGE_DOMAIN", "FOGHORN_CONTROL_ADDR", "DEPLOY_MODE", "TELEMETRY_URL"}
+	wantEnvKeys := []string{"NODE_ID", "EDGE_DOMAIN", "FOGHORN_CONTROL_ADDR", "DEPLOY_MODE", "TELEMETRY_URL", "HELMSMAN_ROTATE_NODE_IDENTITY"}
 	for _, key := range wantEnvKeys {
 		if !strings.Contains(goEnv, key+"=") {
 			t.Errorf("go .edge.env missing key %q", key)
