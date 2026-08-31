@@ -1,6 +1,7 @@
 package grpc
 
 import (
+	"bytes"
 	"database/sql"
 	"testing"
 	"time"
@@ -54,14 +55,19 @@ func TestBootstrapEdgeNode_UsesDerivedNodeIDFromHostname(t *testing.T) {
 	mock.ExpectExec(`INSERT INTO quartermaster\.infrastructure_nodes \(id, node_id, cluster_id, node_name, node_type, external_ip, latitude, longitude, tags, metadata, created_at, updated_at\)`).
 		WithArgs(sqlmock.AnyArg(), "edge-abcd1234", "cluster-1", "edge-abcd1234.example.com", nil, nil, nil).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(`INSERT INTO quartermaster\.node_fingerprints`).
+		WithArgs("tenant-1", "edge-abcd1234", "machine-sha", "", testNodeIdentityPublicKey(), sqlmock.AnyArg(), "{}").
+		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(`UPDATE quartermaster\.bootstrap_tokens\s+SET usage_count = usage_count \+ 1, used_at = NOW\(\)\s+WHERE id = \$1`).
 		WithArgs("token-id").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectCommit()
 
 	resp, err := srv.BootstrapEdgeNode(t.Context(), &quartermasterpb.BootstrapEdgeNodeRequest{
-		Token:    "tok-1",
-		Hostname: "edge-abcd1234.example.com",
+		Token:                        "tok-1",
+		Hostname:                     "edge-abcd1234.example.com",
+		MachineIdSha256:              ptr("machine-sha"),
+		NodeIdentityPublicKeyEd25519: testNodeIdentityPublicKey(),
 	})
 	if err != nil {
 		t.Fatalf("BootstrapEdgeNode returned error: %v", err)
@@ -74,3 +80,5 @@ func TestBootstrapEdgeNode_UsesDerivedNodeIDFromHostname(t *testing.T) {
 		t.Fatalf("unmet sql expectations: %v", err)
 	}
 }
+
+func testNodeIdentityPublicKey() []byte { return bytes.Repeat([]byte{0x42}, 32) }

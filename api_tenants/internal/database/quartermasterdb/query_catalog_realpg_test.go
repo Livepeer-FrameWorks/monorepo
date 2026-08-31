@@ -3,6 +3,7 @@
 package quartermasterdb
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"fmt"
@@ -32,8 +33,8 @@ func TestGeneratedQueryCatalogPrepares_RealYugabyte(t *testing.T) {
 func prepareQuartermasterQueryCatalog(t *testing.T, db *sql.DB) {
 	t.Helper()
 	queries := quartermasterGeneratedQueries(t)
-	if len(queries) != 159 {
-		t.Fatalf("found %d generated Quartermaster queries, want 159", len(queries))
+	if len(queries) != 163 {
+		t.Fatalf("found %d generated Quartermaster queries, want 163", len(queries))
 	}
 	ctx := context.Background()
 	conn, err := db.Conn(ctx)
@@ -373,9 +374,26 @@ func runConvertedRuntimeWriteAdapters(t *testing.T, ctx context.Context, db *sql
 	if _, err := queries.GetExistingInfrastructureNode(ctx, "contract-runtime-node"); err != nil {
 		t.Fatalf("get existing infrastructure node: %v", err)
 	}
+	nodeIdentityKey := make([]byte, 32)
 	if err := queries.UpsertEdgeNodeFingerprint(ctx, UpsertEdgeNodeFingerprintParams{TenantID: tenantID, NodeID: "contract-runtime-node",
-		MachineIDSHA: "contract-machine", MACsSHA: "contract-macs", AttrsJSON: `{"contract":true}`, IPs: []string{"192.0.2.20"}}); err != nil {
+		MachineIDSHA: "contract-machine", MACsSHA: "contract-macs", AttrsJSON: `{"contract":true}`, IPs: []string{"192.0.2.20"},
+		PublicKeyEd25519: nodeIdentityKey}); err != nil {
 		t.Fatalf("upsert edge fingerprint: %v", err)
+	}
+	if _, err := queries.BindNodeFingerprintPublicKey(ctx, "contract-runtime-node", nodeIdentityKey); err != nil {
+		t.Fatalf("bind edge fingerprint public key: %v", err)
+	}
+	if _, err := queries.GetEdgeNodeFingerprintBindingForUpdate(ctx, "contract-runtime-node"); err != nil {
+		t.Fatalf("get edge fingerprint binding: %v", err)
+	}
+	rotatedNodeIdentityKey := make([]byte, 32)
+	rotatedNodeIdentityKey[0] = 1
+	if err := queries.RotateEdgeNodeIdentityKey(ctx, tenantID, "contract-runtime-node", "contract-machine", "contract-macs", rotatedNodeIdentityKey); err != nil {
+		t.Fatalf("rotate edge fingerprint public key: %v", err)
+	}
+	rotatedBinding, err := queries.GetEdgeNodeFingerprintBindingForUpdate(ctx, "contract-runtime-node")
+	if err != nil || !bytes.Equal(rotatedBinding.PublicKeyEd25519, rotatedNodeIdentityKey) {
+		t.Fatalf("rotated edge fingerprint binding mismatch: %+v err=%v", rotatedBinding, err)
 	}
 	if err := queries.UpsertFingerprintSeenIP(ctx, "contract-runtime-node", "192.0.2.21"); err != nil {
 		t.Fatalf("upsert fingerprint seen IP: %v", err)

@@ -8,6 +8,8 @@ package quartermasterdb
 import (
 	"context"
 	"database/sql"
+
+	"github.com/lib/pq"
 )
 
 const bootstrapTenantClusterAccess = `-- name: BootstrapTenantClusterAccess :exec
@@ -279,11 +281,15 @@ SELECT ic.cluster_id,
        COALESCE(ic.owner_tenant_id::text, '')::text AS owner_tenant_id,
        COALESCE(ic.cluster_class, '')::text AS cluster_class,
        COALESCE(ic.health_status, '')::text AS health_status,
+	   COALESCE(NULLIF(ic.control_cell_id, ''), NULLIF(ic.cell_id, ''), ic.cluster_id)::text AS control_cell_id,
+	   ic.eligible_serving_cell_ids,
        COALESCE(tca.access_level, '')::text AS access_level,
        COALESCE(tca.access_source, 'unknown')::text AS access_source,
        tca.is_active AS access_active,
        tca.subscription_status,
-       tca.expires_at AS access_expires_at
+       tca.expires_at AS access_expires_at,
+       tca.resource_limits::text AS resource_limits,
+       ic.allow_private_pull_sources
 FROM quartermaster.tenant_cluster_access tca
 JOIN quartermaster.infrastructure_clusters ic ON ic.cluster_id = tca.cluster_id
 WHERE tca.tenant_id = $1::uuid
@@ -296,19 +302,23 @@ ORDER BY ic.cluster_id
 `
 
 type ListTenantEffectiveAccessRow struct {
-	ClusterID          string         `db:"cluster_id" json:"cluster_id"`
-	ClusterName        string         `db:"cluster_name" json:"cluster_name"`
-	ClusterType        string         `db:"cluster_type" json:"cluster_type"`
-	BaseUrl            string         `db:"base_url" json:"base_url"`
-	DeploymentModel    string         `db:"deployment_model" json:"deployment_model"`
-	OwnerTenantID      string         `db:"owner_tenant_id" json:"owner_tenant_id"`
-	ClusterClass       string         `db:"cluster_class" json:"cluster_class"`
-	HealthStatus       string         `db:"health_status" json:"health_status"`
-	AccessLevel        string         `db:"access_level" json:"access_level"`
-	AccessSource       string         `db:"access_source" json:"access_source"`
-	AccessActive       sql.NullBool   `db:"access_active" json:"access_active"`
-	SubscriptionStatus sql.NullString `db:"subscription_status" json:"subscription_status"`
-	AccessExpiresAt    sql.NullTime   `db:"access_expires_at" json:"access_expires_at"`
+	ClusterID               string         `db:"cluster_id" json:"cluster_id"`
+	ClusterName             string         `db:"cluster_name" json:"cluster_name"`
+	ClusterType             string         `db:"cluster_type" json:"cluster_type"`
+	BaseUrl                 string         `db:"base_url" json:"base_url"`
+	DeploymentModel         string         `db:"deployment_model" json:"deployment_model"`
+	OwnerTenantID           string         `db:"owner_tenant_id" json:"owner_tenant_id"`
+	ClusterClass            string         `db:"cluster_class" json:"cluster_class"`
+	HealthStatus            string         `db:"health_status" json:"health_status"`
+	ControlCellID           string         `db:"control_cell_id" json:"control_cell_id"`
+	EligibleServingCellIds  []string       `db:"eligible_serving_cell_ids" json:"eligible_serving_cell_ids"`
+	AccessLevel             string         `db:"access_level" json:"access_level"`
+	AccessSource            string         `db:"access_source" json:"access_source"`
+	AccessActive            sql.NullBool   `db:"access_active" json:"access_active"`
+	SubscriptionStatus      sql.NullString `db:"subscription_status" json:"subscription_status"`
+	AccessExpiresAt         sql.NullTime   `db:"access_expires_at" json:"access_expires_at"`
+	ResourceLimits          string         `db:"resource_limits" json:"resource_limits"`
+	AllowPrivatePullSources bool           `db:"allow_private_pull_sources" json:"allow_private_pull_sources"`
 }
 
 func (q *Queries) ListTenantEffectiveAccess(ctx context.Context, tenantID string) ([]ListTenantEffectiveAccessRow, error) {
@@ -329,11 +339,15 @@ func (q *Queries) ListTenantEffectiveAccess(ctx context.Context, tenantID string
 			&i.OwnerTenantID,
 			&i.ClusterClass,
 			&i.HealthStatus,
+			&i.ControlCellID,
+			pq.Array(&i.EligibleServingCellIds),
 			&i.AccessLevel,
 			&i.AccessSource,
 			&i.AccessActive,
 			&i.SubscriptionStatus,
 			&i.AccessExpiresAt,
+			&i.ResourceLimits,
+			&i.AllowPrivatePullSources,
 		); err != nil {
 			return nil, err
 		}

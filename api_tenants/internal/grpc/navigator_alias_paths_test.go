@@ -11,6 +11,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
+	dnspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/dns"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -19,6 +20,21 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+func TestTenantAliasBackstopReconcilesClusterAuthorityAsASet(t *testing.T) {
+	actions := tenantAliasBackstopActions(tenantAliasDesired{
+		tenantID: "tenant-1", subdomain: "acme", want: true, clusterIDs: []string{"cluster-1", "cluster-2"},
+	}, &dnspb.GetTenantAliasStatusResponse{
+		Found: true, Subdomain: "acme", AuthorizedClusterIds: []string{"cluster-2", "cluster-removed"},
+	})
+	got := map[string]string{}
+	for _, action := range actions {
+		got[action.action] = action.clusterID
+	}
+	if got["ensure_cluster"] != "cluster-1" || got["remove_cluster"] != "cluster-removed" || len(actions) != 2 {
+		t.Fatalf("cluster repair actions = %#v", actions)
+	}
+}
 
 // Rename must retire the OLD label before ensuring the NEW one: retire is
 // enqueued first so it gets the lower BIGSERIAL seq and the worker dispatches
@@ -254,6 +270,9 @@ func TestGrantClusterAccessEnqueuesEnsure(t *testing.T) {
 	mock.ExpectQuery(`INSERT INTO quartermaster\.navigator_tenant_alias_outbox`).
 		WithArgs("tenant-1", "acme", "", "", "ensure").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("ensure-1"))
+	mock.ExpectQuery(`INSERT INTO quartermaster\.navigator_tenant_alias_outbox`).
+		WithArgs("tenant-1", "", "core-1", "cluster_access_active", "ensure_cluster").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("cluster-ensure-1"))
 	mock.ExpectQuery(`SELECT jsonb_build_object`).
 		WithArgs("tenant-1", "core-1").
 		WillReturnRows(sqlmock.NewRows([]string{"state"}).AddRow(`{"access_level":"read","access_source":"operator_override","expires_at":null}`))
@@ -377,6 +396,9 @@ func TestMaterializeClusterAccessOwnerGrantIsAuditedAtomically(t *testing.T) {
 	mock.ExpectQuery(`INSERT INTO quartermaster\.navigator_tenant_alias_outbox`).
 		WithArgs("tenant-1", "acme", "", "", "ensure").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("ensure-1"))
+	mock.ExpectQuery(`INSERT INTO quartermaster\.navigator_tenant_alias_outbox`).
+		WithArgs("tenant-1", "", "byo-1", "cluster_access_active", "ensure_cluster").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("cluster-ensure-1"))
 	mock.ExpectQuery(`INSERT INTO quartermaster\.service_event_outbox`).
 		WithArgs(eventClusterAccessMaterialized, "tenant-1", "", "cluster_access", "tenant-1:byo-1", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("audit-1"))

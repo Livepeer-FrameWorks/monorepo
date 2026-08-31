@@ -4269,6 +4269,7 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 	// on every Purser replica; SKIP LOCKED + lease in the claim query
 	// distributes work safely without leader election.
 	go purserServer.runBillingOutboxWorker(context.Background())
+	go purserServer.runMediaAuthorityRefreshOutboxWorker(context.Background())
 
 	// Register all services
 	purserpb.RegisterBillingServiceServer(server, purserServer)

@@ -73,6 +73,7 @@ func (q *Queries) ClaimNavigatorCustomDomainOutboxBatch(ctx context.Context, arg
 
 const claimNavigatorTenantAliasOutboxBatch = `-- name: ClaimNavigatorTenantAliasOutboxBatch :many
 SELECT o.id::text AS id,
+       o.seq,
        o.tenant_id::text AS tenant_id,
        COALESCE(o.subdomain, '')::text AS subdomain,
        COALESCE(o.cluster_id, '')::text AS cluster_id,
@@ -102,6 +103,7 @@ type ClaimNavigatorTenantAliasOutboxBatchParams struct {
 
 type ClaimNavigatorTenantAliasOutboxBatchRow struct {
 	ID        string `db:"id" json:"id"`
+	Seq       int64  `db:"seq" json:"seq"`
 	TenantID  string `db:"tenant_id" json:"tenant_id"`
 	Subdomain string `db:"subdomain" json:"subdomain"`
 	ClusterID string `db:"cluster_id" json:"cluster_id"`
@@ -121,6 +123,7 @@ func (q *Queries) ClaimNavigatorTenantAliasOutboxBatch(ctx context.Context, arg 
 		var i ClaimNavigatorTenantAliasOutboxBatchRow
 		if err := rows.Scan(
 			&i.ID,
+			&i.Seq,
 			&i.TenantID,
 			&i.Subdomain,
 			&i.ClusterID,

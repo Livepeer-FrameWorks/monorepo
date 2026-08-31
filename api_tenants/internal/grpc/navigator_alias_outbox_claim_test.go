@@ -24,8 +24,8 @@ func TestClaimAliasOutboxBatchClaimsReturnedRows(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`FROM quartermaster\.navigator_tenant_alias_outbox o`).
-		WillReturnRows(sqlmock.NewRows([]string{"id", "tenant_id", "subdomain", "cluster_id", "reason", "action", "attempts"}).
-			AddRow("outbox-1", "tenant-1", "acme", "", "rename", "ensure", 0))
+		WillReturnRows(sqlmock.NewRows([]string{"id", "seq", "tenant_id", "subdomain", "cluster_id", "reason", "action", "attempts"}).
+			AddRow("outbox-1", int64(17), "tenant-1", "acme", "", "rename", "ensure", 0))
 	mock.ExpectExec(`UPDATE quartermaster\.navigator_tenant_alias_outbox\s+SET claimed_at = NOW\(\)`).
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -38,7 +38,7 @@ func TestClaimAliasOutboxBatchClaimsReturnedRows(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("rows = %d, want 1", len(rows))
 	}
-	if rows[0].id != "outbox-1" || rows[0].tenantID != "tenant-1" || rows[0].action != "ensure" {
+	if rows[0].id != "outbox-1" || rows[0].sequence != 17 || rows[0].tenantID != "tenant-1" || rows[0].action != "ensure" {
 		t.Fatalf("unexpected row scan: %+v", rows[0])
 	}
 	if mErr := mock.ExpectationsWereMet(); mErr != nil {

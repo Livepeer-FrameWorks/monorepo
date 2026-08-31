@@ -36,6 +36,7 @@ func aliasOutboxConfig() outbox.Config {
 
 type aliasOutboxRow struct {
 	id        string
+	sequence  int64
 	tenantID  string
 	subdomain string
 	clusterID string
@@ -48,7 +49,7 @@ type aliasOutboxRow struct {
 // inside the caller's tx. Each row is self-contained — the paid/active
 // decision is made at enqueue time, so the drain worker dispatches purely
 // from stored fields. action must be one of ensure, retire, remove,
-// remove_cluster.
+// ensure_cluster, remove_cluster.
 //
 // When a transition needs more than one action (e.g. retire(old) +
 // ensure(new) on a rename), call this once per row in intended order: the
@@ -69,9 +70,9 @@ func (s *QuartermasterServer) EnqueueNavigatorTenantAliasTx(
 		}
 	case "remove":
 		// tenant-only; subdomain optional (audit)
-	case "remove_cluster":
+	case "ensure_cluster", "remove_cluster":
 		if clusterID == "" {
-			return "", errors.New("action remove_cluster requires a cluster_id")
+			return "", fmt.Errorf("action %s requires a cluster_id", action)
 		}
 	default:
 		return "", fmt.Errorf("unsupported action %q", action)
@@ -123,8 +124,9 @@ func (d *aliasOutboxDispatcher) Dispatch(ctx context.Context, row aliasOutboxRow
 
 // runNavigatorTenantAliasOutboxWorker drains pending subdomain-alias rows
 // until Navigator confirms each hand-off. Safe on every QM replica — the
-// per-tenant claim predicate keeps at most one row per tenant in flight, so
-// a newer remove never overtakes an older ensure.
+// per-tenant claim predicate keeps at most one committed row per tenant in
+// flight. Navigator's sequence fence and the backstop converge concurrently
+// committed rows that become visible in the opposite order.
 func (s *QuartermasterServer) runNavigatorTenantAliasOutboxWorker(ctx context.Context) {
 	if s.navigatorClient == nil {
 		s.logger.Info("navigator tenant-alias outbox worker disabled: no navigator client")
@@ -162,7 +164,7 @@ func (s *QuartermasterServer) claimAliasOutboxBatch(ctx context.Context) ([]alia
 		batch := make([]aliasOutboxRow, 0, aliasOutboxBatchSize)
 		for _, row := range rows {
 			batch = append(batch, aliasOutboxRow{
-				id: row.ID, tenantID: row.TenantID, subdomain: row.Subdomain,
+				id: row.ID, sequence: row.Seq, tenantID: row.TenantID, subdomain: row.Subdomain,
 				clusterID: row.ClusterID, reason: row.Reason, action: row.Action, attempts: int(row.Attempts),
 			})
 		}
@@ -265,8 +267,7 @@ func (s *QuartermasterServer) dispatchAliasOutboxRow(ctx context.Context, row al
 		}
 	case "remove_cluster":
 		resp, err := s.navigatorClient.RemoveTenantAliasCluster(ctx, &dnspb.RemoveTenantAliasClusterRequest{
-			TenantId:  row.tenantID,
-			ClusterId: row.clusterID,
+			TenantId: row.tenantID, ClusterId: row.clusterID, AuthoritySequence: uint64(row.sequence),
 		})
 		if err != nil {
 			return []string{"navigator"}, err
@@ -276,6 +277,19 @@ func (s *QuartermasterServer) dispatchAliasOutboxRow(ctx context.Context, row al
 		}
 		if !resp.GetAccepted() {
 			return []string{"navigator"}, errors.New("navigator remove tenant alias cluster rejected")
+		}
+	case "ensure_cluster":
+		resp, err := s.navigatorClient.EnsureTenantAliasCluster(ctx, &dnspb.EnsureTenantAliasClusterRequest{
+			TenantId: row.tenantID, ClusterId: row.clusterID, AuthoritySequence: uint64(row.sequence),
+		})
+		if err != nil {
+			return []string{"navigator"}, err
+		}
+		if resp == nil {
+			return []string{"navigator"}, errors.New("navigator ensure tenant alias cluster returned nil response")
+		}
+		if !resp.GetAccepted() {
+			return []string{"navigator"}, errors.New("navigator ensure tenant alias cluster rejected")
 		}
 	default:
 		return []string{"navigator"}, fmt.Errorf("unsupported action %q", row.action)

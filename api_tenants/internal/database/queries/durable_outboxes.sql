@@ -109,6 +109,7 @@ RETURNING id::text;
 
 -- name: ClaimNavigatorTenantAliasOutboxBatch :many
 SELECT o.id::text AS id,
+       o.seq,
        o.tenant_id::text AS tenant_id,
        COALESCE(o.subdomain, '')::text AS subdomain,
        COALESCE(o.cluster_id, '')::text AS cluster_id,

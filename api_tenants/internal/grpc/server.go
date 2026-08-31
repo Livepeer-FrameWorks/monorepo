@@ -1,7 +1,9 @@
 package grpc
 
 import (
+	"bytes"
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/sha512"
@@ -71,13 +73,14 @@ type QuartermasterServer struct {
 	quartermasterpb.UnimplementedMeshServiceServer
 	quartermasterpb.UnimplementedServiceRegistryServiceServer
 	quartermasterpb.UnimplementedIngressServiceServer
-	db              *sql.DB
-	logger          logging.Logger
-	navigatorClient *navigator.Client
-	decklogClient   *decklogclient.BatchedClient
-	purserClient    *purserclient.GRPCClient // For billing status lookups (cross-service via gRPC, not DB)
-	geoipReader     *geoip.Reader
-	metrics         *ServerMetrics
+	db                          *sql.DB
+	logger                      logging.Logger
+	navigatorClient             *navigator.Client
+	decklogClient               *decklogclient.BatchedClient
+	purserClient                *purserclient.GRPCClient // For billing status lookups (cross-service via gRPC, not DB)
+	mediaAuthorityRefreshClient mediaAuthorityRefreshClient
+	geoipReader                 *geoip.Reader
+	metrics                     *ServerMetrics
 
 	// quartermasterGRPCAddr is the address enrolling nodes should use to
 	// reach this Quartermaster once they have mesh connectivity. Returned in
@@ -482,12 +485,10 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *quarte
 	primaryClusterID := routingSelection.PrimaryClusterID.String
 	officialClusterID := routingSelection.OfficialClusterID
 
-	// Get cluster info with capacity validation. If a tenant's preferred grant
+	// Get the selected active cluster. If a tenant's preferred grant
 	// expired or was revoked between reconciliation passes, route new work to
 	// the still-entitled platform-official cluster instead of turning a stale
 	// preference into a tenant-wide outage.
-	// max_streams = 0 means unlimited
-	// max_bandwidth_mbps = 0 means unlimited
 	var cluster quartermasterdb.GetTenantPrimaryClusterRoutingRow
 	loadRoutingCluster := func(clusterID string) error {
 		return database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
@@ -514,7 +515,7 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *quarte
 	}
 
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.NotFound, "No suitable cluster found (capacity exceeded or inactive)")
+		return nil, status.Error(codes.NotFound, "no active entitled cluster is available for this tenant")
 	}
 
 	if err != nil {
@@ -583,74 +584,123 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *quarte
 	slug := dns.SanitizeLabel(resp.ClusterId)
 	resp.ClusterSlug = &slug
 
-	// Resolve official cluster info when it differs from primary (best-effort)
-	if officialClusterID != "" && officialClusterID != primaryClusterID {
-		officialCluster, officialErr := queries.GetActiveClusterIdentity(ctx, officialClusterID)
-
-		if officialErr == nil {
+	// Official identity is explicit even when the official and preferred
+	// clusters are the same. Consumers compare this authority independently
+	// from the selected route; omitting it turns equality into "unknown".
+	if officialClusterID != "" {
+		if officialClusterID == primaryClusterID {
 			resp.OfficialClusterId = &officialClusterID
 			offSlug := dns.SanitizeLabel(officialClusterID)
 			resp.OfficialClusterSlug = &offSlug
-			resp.OfficialBaseUrl = &officialCluster.BaseUrl
-			resp.OfficialClusterName = &officialCluster.ClusterName
-
-			// Resolve official cluster's Foghorn address via assignments
-			offFoghorn, offFoghornErr := queries.GetHealthyFoghornAddressForCluster(ctx, officialClusterID)
-			if offFoghornErr == nil {
-				if addr, ok := buildAdvertiseAddr(offFoghorn.AdvertiseHost, offFoghorn.Port); ok {
-					resp.OfficialFoghornGrpcAddr = &addr
+			resp.OfficialBaseUrl = &resp.BaseUrl
+			resp.OfficialClusterName = &resp.ClusterName
+			if resp.FoghornGrpcAddr != nil {
+				officialFoghornAddr := resp.GetFoghornGrpcAddr()
+				resp.OfficialFoghornGrpcAddr = &officialFoghornAddr
+			}
+		} else {
+			var officialCluster quartermasterdb.GetTenantPrimaryClusterRoutingRow
+			officialErr := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+				var queryErr error
+				officialCluster, queryErr = queries.GetTenantPrimaryClusterRouting(ctx, quartermasterdb.GetTenantPrimaryClusterRoutingParams{
+					TenantID: tenantID, ClusterID: officialClusterID,
+				})
+				return queryErr
+			})
+			if officialErr != nil {
+				if errors.Is(officialErr, sql.ErrNoRows) {
+					s.logger.WithFields(logging.Fields{"tenant_id": tenantID, "cluster_id": officialClusterID}).Warn("Official cluster is not currently entitled and routable")
+				} else {
+					s.logger.WithError(officialErr).WithFields(logging.Fields{"tenant_id": tenantID, "cluster_id": officialClusterID}).Warn("Failed to resolve entitled official cluster")
 				}
-			} else if !errors.Is(offFoghornErr, sql.ErrNoRows) {
-				s.logger.WithError(offFoghornErr).WithField("cluster_id", officialClusterID).Warn("Failed to resolve official Foghorn address")
+			} else {
+				resp.OfficialClusterId = &officialClusterID
+				offSlug := dns.SanitizeLabel(officialClusterID)
+				resp.OfficialClusterSlug = &offSlug
+				resp.OfficialBaseUrl = &officialCluster.BaseUrl
+				resp.OfficialClusterName = &officialCluster.ClusterName
+
+				// Resolve official cluster's Foghorn address via assignments
+				offFoghorn, offFoghornErr := queries.GetHealthyFoghornAddressForCluster(ctx, officialClusterID)
+				if offFoghornErr == nil {
+					if addr, ok := buildAdvertiseAddr(offFoghorn.AdvertiseHost, offFoghorn.Port); ok {
+						resp.OfficialFoghornGrpcAddr = &addr
+					}
+				} else if !errors.Is(offFoghornErr, sql.ErrNoRows) {
+					s.logger.WithError(offFoghornErr).WithField("cluster_id", officialClusterID).Warn("Failed to resolve official Foghorn address")
+				}
 			}
 		}
 	}
 
-	// Build cluster_peers: all clusters this tenant has access to (best-effort).
+	// Build cluster_peers: all clusters this tenant has access to. This list is
+	// admission input, not optional decoration: returning a confident empty list
+	// on a database failure would make Commodore erase a previously valid
+	// official-cluster identity during refresh.
 	// Resolves Foghorn gRPC address per peer so Commodore can route commands to
 	// any cluster. region_id / cell_id / cluster_class / health_status ride
 	// along so Commodore's plan-aware route filter can reject ineligible peers
 	// without a second round-trip.
-	peerRows, peerErr := queries.ListTenantClusterRoutingPeers(ctx, tenantID)
-	if peerErr == nil {
-		for _, peerRow := range peerRows {
-			foghornGrpcAddr, _ := buildAdvertiseAddr(peerRow.FoghornAdvertiseHost, peerRow.FoghornPort)
-			var role string
-			switch peerRow.ClusterID {
-			case primaryClusterID:
-				role = "preferred"
-			case officialClusterID:
-				role = "official"
-			default:
-				role = "subscribed"
+	var peerRows []quartermasterdb.ListTenantClusterRoutingPeersRow
+	peerErr := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+		var queryErr error
+		peerRows, queryErr = queries.ListTenantClusterRoutingPeers(ctx, tenantID)
+		return queryErr
+	})
+	if peerErr != nil {
+		s.logger.WithError(peerErr).WithField("tenant_id", tenantID).Error("Failed to resolve tenant routing peers")
+		return nil, status.Errorf(codes.Internal, "database error resolving tenant routing peers: %v", peerErr)
+	}
+	for _, peerRow := range peerRows {
+		foghornGrpcAddr, _ := buildAdvertiseAddr(peerRow.FoghornAdvertiseHost, peerRow.FoghornPort)
+		var role string
+		switch peerRow.ClusterID {
+		case primaryClusterID:
+			role = "preferred"
+		case officialClusterID:
+			role = "official"
+		default:
+			role = "subscribed"
+		}
+		resp.ClusterPeers = append(resp.ClusterPeers, &clusterpeerpb.TenantClusterPeer{
+			ClusterId:               peerRow.ClusterID,
+			ClusterSlug:             dns.SanitizeLabel(peerRow.ClusterID),
+			BaseUrl:                 peerRow.BaseUrl,
+			ClusterName:             peerRow.ClusterName,
+			Role:                    role,
+			ClusterType:             peerRow.ClusterType,
+			FoghornGrpcAddr:         foghornGrpcAddr,
+			S3Bucket:                peerRow.S3Bucket,
+			S3Endpoint:              peerRow.S3Endpoint,
+			S3Region:                peerRow.S3Region,
+			S3Prefix:                peerRow.S3Prefix,
+			S3PrefixPresent:         peerRow.S3PrefixPresent,
+			RegionId:                peerRow.RegionID,
+			CellId:                  peerRow.CellID,
+			ClusterClass:            peerRow.ClusterClass,
+			ControlCellId:           peerRow.ControlCellID,
+			EligibleServingCellIds:  append([]string(nil), peerRow.EligibleServingCellIds...),
+			HealthStatus:            peerRow.HealthStatus,
+			DeploymentModel:         peerRow.DeploymentModel,
+			OwnerTenantId:           peerRow.OwnerTenantID,
+			AccessLevel:             peerRow.AccessLevel,
+			AccessActive:            true,
+			SubscriptionStatus:      "active",
+			AccessSource:            clusterAccessSourceProto(peerRow.AccessSource),
+			AllowPrivatePullSources: peerRow.AllowPrivatePullSources,
+		})
+		if strings.TrimSpace(peerRow.ResourceLimits) != "" && strings.TrimSpace(peerRow.ResourceLimits) != "{}" {
+			var values map[string]int32
+			if decodeErr := json.Unmarshal([]byte(peerRow.ResourceLimits), &values); decodeErr != nil {
+				s.logger.WithError(decodeErr).WithField("cluster_id", peerRow.ClusterID).Warn("Failed to decode routing-peer resource limits")
+			} else if values["max_streams"] > 0 || values["max_viewers"] > 0 {
+				resp.ClusterPeers[len(resp.ClusterPeers)-1].ResourceLimits = &tenantlimitspb.TenantResourceLimits{
+					MaxStreams: values["max_streams"], MaxViewers: values["max_viewers"],
+				}
 			}
-			resp.ClusterPeers = append(resp.ClusterPeers, &clusterpeerpb.TenantClusterPeer{
-				ClusterId:          peerRow.ClusterID,
-				ClusterSlug:        dns.SanitizeLabel(peerRow.ClusterID),
-				BaseUrl:            peerRow.BaseUrl,
-				ClusterName:        peerRow.ClusterName,
-				Role:               role,
-				ClusterType:        peerRow.ClusterType,
-				FoghornGrpcAddr:    foghornGrpcAddr,
-				S3Bucket:           peerRow.S3Bucket,
-				S3Endpoint:         peerRow.S3Endpoint,
-				S3Region:           peerRow.S3Region,
-				S3Prefix:           peerRow.S3Prefix,
-				S3PrefixPresent:    peerRow.S3PrefixPresent,
-				RegionId:           peerRow.RegionID,
-				CellId:             peerRow.CellID,
-				ClusterClass:       peerRow.ClusterClass,
-				HealthStatus:       peerRow.HealthStatus,
-				DeploymentModel:    peerRow.DeploymentModel,
-				OwnerTenantId:      peerRow.OwnerTenantID,
-				AccessLevel:        peerRow.AccessLevel,
-				AccessActive:       true,
-				SubscriptionStatus: "active",
-				AccessSource:       clusterAccessSourceProto(peerRow.AccessSource),
-			})
-			if peerRow.AccessExpiresAt.Valid {
-				resp.ClusterPeers[len(resp.ClusterPeers)-1].AccessExpiresAt = timestamppb.New(peerRow.AccessExpiresAt.Time)
-			}
+		}
+		if peerRow.AccessExpiresAt.Valid {
+			resp.ClusterPeers[len(resp.ClusterPeers)-1].AccessExpiresAt = timestamppb.New(peerRow.AccessExpiresAt.Time)
 		}
 	}
 
@@ -1604,6 +1654,9 @@ func (s *QuartermasterServer) EnableSelfHosting(ctx context.Context, req *quarte
 	if enqErr := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true); enqErr != nil {
 		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias ensure: %v", enqErr)
 	}
+	if enqErr := s.enqueueTenantAliasClusterEnsureTx(ctx, tx, tenantID, clusterID); enqErr != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias cluster authority: %v", enqErr)
+	}
 
 	if commitErr := tx.Commit(); commitErr != nil {
 		return nil, status.Errorf(codes.Internal, "commit self-hosting enable: %v", commitErr)
@@ -2074,6 +2127,11 @@ func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *quartermast
 	if enqErr := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true); enqErr != nil {
 		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias ensure: %v", enqErr)
 	}
+	if defaultClusterID.Valid {
+		if enqErr := s.enqueueTenantAliasClusterEnsureTx(ctx, tx, tenantID, defaultClusterID.String); enqErr != nil {
+			return nil, status.Errorf(codes.Internal, "enqueue tenant-alias cluster authority: %v", enqErr)
+		}
+	}
 
 	// Commit the transaction
 	if err := tx.Commit(); err != nil {
@@ -2368,6 +2426,19 @@ func (s *QuartermasterServer) enqueueTenantAliasEnsureTx(ctx context.Context, tx
 	}
 	if _, err := s.EnqueueNavigatorTenantAliasTx(ctx, tx, tenantID, label, "ensure", "", ""); err != nil {
 		return fmt.Errorf("enqueue ensure: %w", err)
+	}
+	return nil
+}
+
+// enqueueTenantAliasClusterEnsureTx records one ordered positive cluster
+// authority decision beside the access mutation that created it. Navigator
+// fences it against remove_cluster using this outbox row's sequence.
+func (s *QuartermasterServer) enqueueTenantAliasClusterEnsureTx(ctx context.Context, tx *sql.Tx, tenantID, clusterID string) error {
+	if strings.TrimSpace(clusterID) == "" {
+		return errors.New("cluster_id required for tenant alias cluster ensure")
+	}
+	if _, err := s.EnqueueNavigatorTenantAliasTx(ctx, tx, tenantID, "", "ensure_cluster", clusterID, "cluster_access_active"); err != nil {
+		return fmt.Errorf("enqueue cluster ensure: %w", err)
 	}
 	return nil
 }
@@ -3490,6 +3561,9 @@ func (s *QuartermasterServer) GrantClusterAccess(ctx context.Context, req *quart
 	if enqErr := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true); enqErr != nil {
 		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias ensure: %v", enqErr)
 	}
+	if enqErr := s.enqueueTenantAliasClusterEnsureTx(ctx, tx, tenantID, clusterID); enqErr != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias cluster authority: %v", enqErr)
+	}
 	state, stateErr := txQueries.GetTenantClusterAccessState(ctx, quartermasterdb.GetTenantClusterAccessStateParams{TenantID: tenantID, ClusterID: clusterID})
 	if stateErr != nil {
 		return nil, status.Errorf(codes.Internal, "load granted access state: %v", stateErr)
@@ -3631,6 +3705,9 @@ func (s *QuartermasterServer) BootstrapClusterAccess(ctx context.Context, req *q
 	if enqErr := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true); enqErr != nil {
 		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias ensure: %v", enqErr)
 	}
+	if enqErr := s.enqueueTenantAliasClusterEnsureTx(ctx, tx, tenantID, clusterID); enqErr != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias cluster authority: %v", enqErr)
+	}
 
 	if commitErr := tx.Commit(); commitErr != nil {
 		return nil, status.Errorf(codes.Internal, "commit bootstrap cluster access: %v", commitErr)
@@ -3732,6 +3809,9 @@ func (s *QuartermasterServer) MaterializeClusterAccess(ctx context.Context, req 
 	if changed > 0 && subscriptionStatus == "active" {
 		if enqErr := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true); enqErr != nil {
 			return nil, status.Errorf(codes.Internal, "enqueue tenant-alias ensure: %v", enqErr)
+		}
+		if enqErr := s.enqueueTenantAliasClusterEnsureTx(ctx, tx, tenantID, clusterID); enqErr != nil {
+			return nil, status.Errorf(codes.Internal, "enqueue tenant-alias cluster authority: %v", enqErr)
 		}
 		if enqErr := s.emitClusterEventTx(ctx, tx, eventClusterAccessMaterialized, tenantID, middleware.GetUserID(ctx), clusterID, "cluster_access", tenantID+":"+clusterID, "", reference, accessSource); enqErr != nil {
 			return nil, status.Errorf(codes.Internal, "enqueue access materialization audit: %v", enqErr)
@@ -3923,13 +4003,23 @@ func (s *QuartermasterServer) GetTenantEntitlement(ctx context.Context, req *qua
 			ClusterId: row.ClusterID, ClusterSlug: dns.SanitizeLabel(row.ClusterID),
 			BaseUrl: row.BaseUrl, ClusterName: row.ClusterName, ClusterType: row.ClusterType,
 			ClusterClass: row.ClusterClass, HealthStatus: row.HealthStatus,
-			DeploymentModel: row.DeploymentModel, OwnerTenantId: row.OwnerTenantID,
+			ControlCellId:          row.ControlCellID,
+			EligibleServingCellIds: append([]string(nil), row.EligibleServingCellIds...),
+			DeploymentModel:        row.DeploymentModel, OwnerTenantId: row.OwnerTenantID,
 			AccessLevel: row.AccessLevel, AccessActive: row.AccessActive.Valid && row.AccessActive.Bool,
-			SubscriptionStatus: row.SubscriptionStatus.String,
-			AccessSource:       clusterAccessSourceProto(row.AccessSource),
+			SubscriptionStatus:      row.SubscriptionStatus.String,
+			AccessSource:            clusterAccessSourceProto(row.AccessSource),
+			AllowPrivatePullSources: row.AllowPrivatePullSources,
 		}
 		if row.AccessExpiresAt.Valid {
 			peer.AccessExpiresAt = timestamppb.New(row.AccessExpiresAt.Time)
+		}
+		if strings.TrimSpace(row.ResourceLimits) != "" && strings.TrimSpace(row.ResourceLimits) != "{}" {
+			var values map[string]int32
+			if err := json.Unmarshal([]byte(row.ResourceLimits), &values); err != nil {
+				return nil, status.Errorf(codes.Internal, "decode tenant cluster resource limits: %v", err)
+			}
+			peer.ResourceLimits = &tenantlimitspb.TenantResourceLimits{MaxStreams: values["max_streams"], MaxViewers: values["max_viewers"]}
 		}
 		out.AllowedClusterIds = append(out.AllowedClusterIds, row.ClusterID)
 		out.EffectiveAccess = append(out.EffectiveAccess, peer)
@@ -5645,13 +5735,22 @@ func (s *QuartermasterServer) ResolveNodeFingerprint(ctx context.Context, req *q
 		var err error
 		resolved, err = queries.ResolveNodeFingerprint(ctx, quartermasterdb.NodeFingerprintByMachineID, machineIDSHA)
 		if err == nil {
+			resolved, err = bindResolvedNodeIdentityKey(ctx, queries, resolved, req.GetNodeIdentityPublicKeyEd25519())
+			if err != nil {
+				return nil, err
+			}
 			if upsertErr := s.upsertSeenIP(ctx, resolved.NodeID, peerIP); upsertErr != nil {
 				s.logger.WithError(upsertErr).WithField("node_id", resolved.NodeID).Warn("Failed to update fingerprint seen IP")
 			}
 			return &quartermasterpb.ResolveNodeFingerprintResponse{
-				TenantId:        resolved.TenantID,
-				CanonicalNodeId: resolved.NodeID,
+				TenantId:                     resolved.TenantID,
+				CanonicalNodeId:              resolved.NodeID,
+				MatchSource:                  quartermasterpb.NodeFingerprintMatchSource_NODE_FINGERPRINT_MATCH_SOURCE_MACHINE_ID,
+				NodeIdentityPublicKeyEd25519: resolved.PublicKeyEd25519,
 			}, nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return nil, nodeFingerprintLookupError(err)
 		}
 	}
 
@@ -5661,13 +5760,22 @@ func (s *QuartermasterServer) ResolveNodeFingerprint(ctx context.Context, req *q
 		var err error
 		resolved, err = queries.ResolveNodeFingerprint(ctx, quartermasterdb.NodeFingerprintByMACs, macsSHA)
 		if err == nil {
+			resolved, err = bindResolvedNodeIdentityKey(ctx, queries, resolved, req.GetNodeIdentityPublicKeyEd25519())
+			if err != nil {
+				return nil, err
+			}
 			if upsertErr := s.upsertSeenIP(ctx, resolved.NodeID, peerIP); upsertErr != nil {
 				s.logger.WithError(upsertErr).WithField("node_id", resolved.NodeID).Warn("Failed to update fingerprint seen IP")
 			}
 			return &quartermasterpb.ResolveNodeFingerprintResponse{
-				TenantId:        resolved.TenantID,
-				CanonicalNodeId: resolved.NodeID,
+				TenantId:                     resolved.TenantID,
+				CanonicalNodeId:              resolved.NodeID,
+				MatchSource:                  quartermasterpb.NodeFingerprintMatchSource_NODE_FINGERPRINT_MATCH_SOURCE_MACS,
+				NodeIdentityPublicKeyEd25519: resolved.PublicKeyEd25519,
 			}, nil
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			return nil, nodeFingerprintLookupError(err)
 		}
 	}
 
@@ -5678,14 +5786,44 @@ func (s *QuartermasterServer) ResolveNodeFingerprint(ctx context.Context, req *q
 			s.logger.WithError(upsertErr).WithField("node_id", resolved.NodeID).Warn("Failed to update fingerprint seen IP")
 		}
 		return &quartermasterpb.ResolveNodeFingerprintResponse{
-			TenantId:        resolved.TenantID,
-			CanonicalNodeId: resolved.NodeID,
+			TenantId:                     resolved.TenantID,
+			CanonicalNodeId:              resolved.NodeID,
+			MatchSource:                  quartermasterpb.NodeFingerprintMatchSource_NODE_FINGERPRINT_MATCH_SOURCE_PEER_IP,
+			NodeIdentityPublicKeyEd25519: resolved.PublicKeyEd25519,
 		}, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, nodeFingerprintLookupError(err)
 	}
 
 	// No match: do not create mappings here to avoid bypassing enrollment.
 	// Fingerprint mappings must be provisioned/admin-created.
 	return nil, status.Error(codes.NotFound, "fingerprint not recognized")
+}
+
+func nodeFingerprintLookupError(err error) error {
+	if errors.Is(err, quartermasterdb.ErrAmbiguousNodeFingerprint) {
+		return status.Error(codes.PermissionDenied, "fingerprint matches multiple enrolled nodes")
+	}
+	return status.Errorf(codes.Internal, "resolve node fingerprint: %v", err)
+}
+
+func bindResolvedNodeIdentityKey(ctx context.Context, queries *quartermasterdb.Queries, resolved quartermasterdb.NodeFingerprintRow, presented []byte) (quartermasterdb.NodeFingerprintRow, error) {
+	if len(presented) == 0 {
+		return resolved, nil
+	}
+	if len(presented) != ed25519.PublicKeySize {
+		return resolved, status.Error(codes.InvalidArgument, "node identity Ed25519 public key has invalid length")
+	}
+	bound, err := queries.BindNodeFingerprintPublicKey(ctx, resolved.NodeID, presented)
+	if err != nil {
+		return resolved, status.Errorf(codes.Internal, "bind node identity public key: %v", err)
+	}
+	if !bytes.Equal(bound, presented) {
+		return resolved, status.Error(codes.PermissionDenied, "node identity key does not match enrolled fingerprint")
+	}
+	resolved.PublicKeyEd25519 = bound
+	return resolved, nil
 }
 
 // upsertSeenIP updates the node_fingerprints with the current peer IP if not already present
@@ -5844,11 +5982,42 @@ func (s *QuartermasterServer) bootstrapEdgeNodeOnce(ctx context.Context, req *qu
 			return nil, status.Errorf(codes.FailedPrecondition,
 				"node %s already exists in cluster %s", nodeID, existingClusterID)
 		}
-		if upsertErr := upsertEdgeNodeFingerprint(ctx, tx, tokenRow.TenantID.String, nodeID, req); upsertErr != nil {
-			return nil, upsertErr
+		binding, bindingErr := txQueries.GetEdgeNodeFingerprintBindingForUpdate(ctx, nodeID)
+		if bindingErr != nil {
+			if errors.Is(bindingErr, sql.ErrNoRows) {
+				return nil, status.Errorf(codes.FailedPrecondition, "node %s exists without an enrolled identity binding", nodeID)
+			}
+			return nil, status.Errorf(codes.Internal, "load existing node identity binding: %v", bindingErr)
+		}
+		machineMatches := req.GetMachineIdSha256() != "" && binding.MachineIDSHA == req.GetMachineIdSha256()
+		macsMatch := req.GetMacsSha256() != "" && binding.MACsSHA == req.GetMacsSha256()
+		stableMismatch := (req.GetMachineIdSha256() != "" && !machineMatches) || (req.GetMacsSha256() != "" && !macsMatch)
+		if binding.TenantID != tokenRow.TenantID.String || stableMismatch || (!machineMatches && !macsMatch) {
+			return nil, status.Errorf(codes.PermissionDenied, "node %s identity binding does not match enrollment", nodeID)
+		}
+		keyMatches := bytes.Equal(binding.PublicKeyEd25519, req.GetNodeIdentityPublicKeyEd25519())
+		if !keyMatches && !req.GetRotateNodeIdentity() {
+			return nil, status.Errorf(codes.PermissionDenied, "node %s identity key does not match enrollment; explicit rotation is required", nodeID)
+		}
+		if keyMatches {
+			if upsertErr := upsertEdgeNodeFingerprint(ctx, tx, tokenRow.TenantID.String, nodeID, req); upsertErr != nil {
+				return nil, upsertErr
+			}
+		} else {
+			if rotateErr := txQueries.RotateEdgeNodeIdentityKey(ctx, tokenRow.TenantID.String, nodeID, req.GetMachineIdSha256(), req.GetMacsSha256(), req.GetNodeIdentityPublicKeyEd25519()); rotateErr != nil {
+				return nil, status.Errorf(codes.FailedPrecondition, "rotate node identity: %v", rotateErr)
+			}
+			if usageErr := txQueries.IncrementBootstrapTokenUsage(ctx, tokenRow.ID); usageErr != nil {
+				return nil, status.Errorf(codes.Internal, "record node identity rotation token use: %v", usageErr)
+			}
 		}
 		if commitErr := tx.Commit(); commitErr != nil {
 			return nil, status.Errorf(codes.Internal, "failed to commit: %v", commitErr)
+		}
+		if !keyMatches {
+			s.logger.WithFields(logging.Fields{
+				"node_id": nodeID, "tenant_id": tokenRow.TenantID.String, "cluster_id": resolvedClusterID,
+			}).Warn("Rotated edge node identity after token-authorized recovery")
 		}
 		return &quartermasterpb.BootstrapEdgeNodeResponse{
 			NodeId:    nodeID,
@@ -6187,8 +6356,11 @@ func upsertEdgeNodeFingerprint(ctx context.Context, tx *sql.Tx, tenantID, nodeID
 	labels := req.GetLabels()
 
 	hasLabels := labels != nil && len(labels.GetFields()) > 0
-	if machineIDSHA == "" && macsSHA == "" && len(ips) == 0 && !hasLabels {
-		return nil
+	if len(req.GetNodeIdentityPublicKeyEd25519()) != 32 {
+		return status.Error(codes.InvalidArgument, "node identity Ed25519 public key is required")
+	}
+	if machineIDSHA == "" && macsSHA == "" {
+		return status.Error(codes.InvalidArgument, "stable node fingerprint is required")
 	}
 
 	attrsJSON := "{}"
@@ -6202,6 +6374,7 @@ func upsertEdgeNodeFingerprint(ctx context.Context, tx *sql.Tx, tenantID, nodeID
 
 	err := quartermasterdb.New(tx).UpsertEdgeNodeFingerprint(ctx, quartermasterdb.UpsertEdgeNodeFingerprintParams{
 		TenantID: tenantID, NodeID: nodeID, MachineIDSHA: machineIDSHA, MACsSHA: macsSHA, IPs: ips, AttrsJSON: attrsJSON,
+		PublicKeyEd25519: req.GetNodeIdentityPublicKeyEd25519(),
 	})
 	if err != nil {
 		return status.Errorf(codes.Internal, "failed to upsert node fingerprint: %v", err)
@@ -8712,6 +8885,9 @@ func (s *QuartermasterServer) CreatePrivateCluster(ctx context.Context, req *qua
 	if enqErr := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true); enqErr != nil {
 		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias ensure: %v", enqErr)
 	}
+	if enqErr := s.enqueueTenantAliasClusterEnsureTx(ctx, tx, tenantID, clusterID); enqErr != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias cluster authority: %v", enqErr)
+	}
 
 	if commitErr := tx.Commit(); commitErr != nil {
 		return nil, status.Errorf(codes.Internal, "commit private cluster create: %v", commitErr)
@@ -9301,6 +9477,9 @@ func (s *QuartermasterServer) AcceptClusterInvite(ctx context.Context, req *quar
 	if enqErr := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true); enqErr != nil {
 		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias ensure: %v", enqErr)
 	}
+	if enqErr := s.enqueueTenantAliasClusterEnsureTx(ctx, tx, tenantID, inviteRow.ClusterID); enqErr != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias cluster authority: %v", enqErr)
+	}
 
 	if err = tx.Commit(); err != nil {
 		return nil, status.Errorf(codes.Internal, "commit invite acceptance: %v", err)
@@ -9444,6 +9623,9 @@ func (s *QuartermasterServer) ApproveClusterSubscription(ctx context.Context, re
 	}
 	if enqErr := s.enqueueTenantAliasEnsureTx(ctx, tx, subscriptionRow.TenantID, true); enqErr != nil {
 		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias ensure: %v", enqErr)
+	}
+	if enqErr := s.enqueueTenantAliasClusterEnsureTx(ctx, tx, subscriptionRow.TenantID, subscriptionRow.ClusterID); enqErr != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias cluster authority: %v", enqErr)
 	}
 
 	if err = tx.Commit(); err != nil {
@@ -9666,18 +9848,19 @@ func clusterSubscriptionFromListRow(row quartermasterdb.ClusterSubscriptionListR
 }
 
 type GRPCServerConfig struct {
-	DB              *sql.DB
-	Logger          logging.Logger
-	ServiceToken    string
-	JWTSecret       []byte
-	NavigatorClient *navigator.Client
-	DecklogClient   *decklogclient.BatchedClient
-	PurserClient    *purserclient.GRPCClient // For billing status lookups (cross-service via gRPC)
-	GeoIPReader     *geoip.Reader
-	Metrics         *ServerMetrics
-	CertFile        string
-	KeyFile         string
-	AllowInsecure   bool
+	DB                          *sql.DB
+	Logger                      logging.Logger
+	ServiceToken                string
+	JWTSecret                   []byte
+	NavigatorClient             *navigator.Client
+	DecklogClient               *decklogclient.BatchedClient
+	PurserClient                *purserclient.GRPCClient // For billing status lookups (cross-service via gRPC)
+	MediaAuthorityRefreshClient mediaAuthorityRefreshClient
+	GeoIPReader                 *geoip.Reader
+	Metrics                     *ServerMetrics
+	CertFile                    string
+	KeyFile                     string
+	AllowInsecure               bool
 	// AdvertiseGRPCAddr is the "how nodes reach me" address that gets returned
 	// to freshly-enrolled nodes via BootstrapInfrastructureNodeResponse. Empty
 	// means enrollment will tell the node to rediscover via DNS aliases.
@@ -9748,11 +9931,13 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 	qmServer.SetQuartermasterGRPCAddr(cfg.AdvertiseGRPCAddr)
 	qmServer.SetPlatformRootDomain(cfg.PlatformRootDomain)
 	qmServer.SetPhysicalEndpointStaleSeconds(cfg.PhysicalEndpointStaleSeconds)
+	qmServer.mediaAuthorityRefreshClient = cfg.MediaAuthorityRefreshClient
 
 	// Drain worker for quartermaster.service_event_outbox. SKIP LOCKED +
 	// lease let this run safely on every Quartermaster replica.
 	go qmServer.runMeshTopologyConfigWarmer(context.Background())
 	go qmServer.runServiceEventOutboxWorker(context.Background())
+	go qmServer.runMediaAuthorityRefreshOutboxWorker(context.Background())
 	go qmServer.runTenantPrivateBaseURLRepair(context.Background())
 	// Drain the Navigator custom-domain outbox so a Navigator outage at the
 	// moment UpdateTenant lands can't leave QM saying the tenant has a

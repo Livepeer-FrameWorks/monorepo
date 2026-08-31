@@ -3,6 +3,7 @@ package quartermasterdb
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"time"
 
 	"github.com/lib/pq"
@@ -86,20 +87,73 @@ func (q *Queries) IncrementBootstrapTokenUsage(ctx context.Context, tokenID stri
 type UpsertEdgeNodeFingerprintParams struct {
 	TenantID, NodeID, MachineIDSHA, MACsSHA, AttrsJSON string
 	IPs                                                []string
+	PublicKeyEd25519                                   []byte
 }
 
 func (q *Queries) UpsertEdgeNodeFingerprint(ctx context.Context, arg UpsertEdgeNodeFingerprintParams) error {
-	_, err := q.db.ExecContext(ctx, `
-		INSERT INTO quartermaster.node_fingerprints (tenant_id, node_id, fingerprint_machine_sha256, fingerprint_macs_sha256, seen_ips, attrs)
-		VALUES ($1, $2, NULLIF($3,''), NULLIF($4,''), $5::inet[], $6)
+	result, err := q.db.ExecContext(ctx, `
+		INSERT INTO quartermaster.node_fingerprints (
+			tenant_id, node_id, fingerprint_machine_sha256, fingerprint_macs_sha256,
+			node_identity_public_key_ed25519, seen_ips, attrs
+		)
+		VALUES ($1, $2, NULLIF($3,''), NULLIF($4,''), $5, $6::inet[], $7)
 		ON CONFLICT (node_id) DO UPDATE SET
-			tenant_id = EXCLUDED.tenant_id,
-			fingerprint_machine_sha256 = COALESCE(EXCLUDED.fingerprint_machine_sha256, quartermaster.node_fingerprints.fingerprint_machine_sha256),
-			fingerprint_macs_sha256 = COALESCE(EXCLUDED.fingerprint_macs_sha256, quartermaster.node_fingerprints.fingerprint_macs_sha256),
 			attrs = CASE WHEN EXCLUDED.attrs IS NULL OR EXCLUDED.attrs = '{}'::jsonb THEN quartermaster.node_fingerprints.attrs ELSE EXCLUDED.attrs END,
 			last_seen = NOW(), seen_ips = quartermaster.node_fingerprints.seen_ips || EXCLUDED.seen_ips
-	`, arg.TenantID, arg.NodeID, arg.MachineIDSHA, arg.MACsSHA, pq.Array(arg.IPs), arg.AttrsJSON)
-	return err
+		WHERE quartermaster.node_fingerprints.tenant_id = EXCLUDED.tenant_id
+		  AND quartermaster.node_fingerprints.node_identity_public_key_ed25519 = EXCLUDED.node_identity_public_key_ed25519
+		  AND (EXCLUDED.fingerprint_machine_sha256 IS NULL OR quartermaster.node_fingerprints.fingerprint_machine_sha256 = EXCLUDED.fingerprint_machine_sha256)
+		  AND (EXCLUDED.fingerprint_macs_sha256 IS NULL OR quartermaster.node_fingerprints.fingerprint_macs_sha256 = EXCLUDED.fingerprint_macs_sha256)
+	`, arg.TenantID, arg.NodeID, arg.MachineIDSHA, arg.MACsSHA, arg.PublicKeyEd25519, pq.Array(arg.IPs), arg.AttrsJSON)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return errors.New("node fingerprint binding conflicts with existing owner, key, or stable fingerprint")
+	}
+	return nil
+}
+
+type EdgeNodeFingerprintBinding struct {
+	TenantID, MachineIDSHA, MACsSHA string
+	PublicKeyEd25519                []byte
+}
+
+func (q *Queries) GetEdgeNodeFingerprintBindingForUpdate(ctx context.Context, nodeID string) (EdgeNodeFingerprintBinding, error) {
+	var out EdgeNodeFingerprintBinding
+	err := q.db.QueryRowContext(ctx, `
+		SELECT tenant_id::text, COALESCE(fingerprint_machine_sha256, ''),
+		       COALESCE(fingerprint_macs_sha256, ''), node_identity_public_key_ed25519
+		FROM quartermaster.node_fingerprints
+		WHERE node_id = $1
+		FOR UPDATE
+	`, nodeID).Scan(&out.TenantID, &out.MachineIDSHA, &out.MACsSHA, &out.PublicKeyEd25519)
+	return out, err
+}
+
+func (q *Queries) RotateEdgeNodeIdentityKey(ctx context.Context, tenantID, nodeID, machineIDSHA, macsSHA string, publicKey []byte) error {
+	result, err := q.db.ExecContext(ctx, `
+		UPDATE quartermaster.node_fingerprints
+		SET node_identity_public_key_ed25519 = $5, last_seen = NOW()
+		WHERE tenant_id = $1::uuid AND node_id = $2
+		  AND ($3 = '' OR fingerprint_machine_sha256 = $3)
+		  AND ($4 = '' OR fingerprint_macs_sha256 = $4)
+	`, tenantID, nodeID, machineIDSHA, macsSHA, publicKey)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return errors.New("node identity rotation lost its ownership or stable-fingerprint fence")
+	}
+	return nil
 }
 
 type ExistingInfrastructureNodeRow struct {

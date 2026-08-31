@@ -1,6 +1,15 @@
 -- name: ListDesiredTenantAliases :many
 SELECT t.id::text AS tenant_id,
        COALESCE(t.subdomain, '')::text AS subdomain,
+       COALESCE((
+           SELECT array_agg(tca.cluster_id ORDER BY tca.cluster_id)
+           FROM quartermaster.tenant_cluster_access tca
+           WHERE tca.tenant_id = t.id
+             AND tca.is_active = true
+             AND tca.subscription_status = 'active'
+             AND tca.access_source <> 'unknown'
+             AND (tca.expires_at IS NULL OR tca.expires_at > NOW())
+       ), ARRAY[]::text[])::text[] AS cluster_ids,
        (
            t.is_active
            AND t.deployment_tier IN ('supporter', 'developer', 'production', 'enterprise')

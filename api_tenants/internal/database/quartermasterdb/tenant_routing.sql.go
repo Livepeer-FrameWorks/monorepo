@@ -271,12 +271,16 @@ SELECT ic.cluster_id,
        COALESCE(ic.region_id, '')::text AS region_id,
        COALESCE(ic.cell_id, '')::text AS cell_id,
        COALESCE(ic.cluster_class, '')::text AS cluster_class,
+	   COALESCE(NULLIF(ic.control_cell_id, ''), NULLIF(ic.cell_id, ''), ic.cluster_id)::text AS control_cell_id,
+	   ic.eligible_serving_cell_ids,
        COALESCE(ic.health_status, '')::text AS health_status,
        COALESCE(ic.deployment_model, '')::text AS deployment_model,
        COALESCE(ic.owner_tenant_id::text, '')::text AS owner_tenant_id,
        COALESCE(tca.access_level, '')::text AS access_level,
        COALESCE(tca.access_source, 'unknown')::text AS access_source,
        tca.expires_at AS access_expires_at,
+       tca.resource_limits::text AS resource_limits,
+       ic.allow_private_pull_sources,
        foghorn.advertise_host AS foghorn_advertise_host,
        foghorn.port AS foghorn_port
 FROM quartermaster.tenant_cluster_access tca
@@ -315,26 +319,30 @@ ORDER BY ic.cluster_id ASC
 `
 
 type ListTenantClusterRoutingPeersRow struct {
-	ClusterID            string         `db:"cluster_id" json:"cluster_id"`
-	ClusterName          string         `db:"cluster_name" json:"cluster_name"`
-	ClusterType          string         `db:"cluster_type" json:"cluster_type"`
-	BaseUrl              string         `db:"base_url" json:"base_url"`
-	S3Bucket             string         `db:"s3_bucket" json:"s3_bucket"`
-	S3Endpoint           string         `db:"s3_endpoint" json:"s3_endpoint"`
-	S3Region             string         `db:"s3_region" json:"s3_region"`
-	S3Prefix             string         `db:"s3_prefix" json:"s3_prefix"`
-	S3PrefixPresent      bool           `db:"s3_prefix_present" json:"s3_prefix_present"`
-	RegionID             string         `db:"region_id" json:"region_id"`
-	CellID               string         `db:"cell_id" json:"cell_id"`
-	ClusterClass         string         `db:"cluster_class" json:"cluster_class"`
-	HealthStatus         string         `db:"health_status" json:"health_status"`
-	DeploymentModel      string         `db:"deployment_model" json:"deployment_model"`
-	OwnerTenantID        string         `db:"owner_tenant_id" json:"owner_tenant_id"`
-	AccessLevel          string         `db:"access_level" json:"access_level"`
-	AccessSource         string         `db:"access_source" json:"access_source"`
-	AccessExpiresAt      sql.NullTime   `db:"access_expires_at" json:"access_expires_at"`
-	FoghornAdvertiseHost sql.NullString `db:"foghorn_advertise_host" json:"foghorn_advertise_host"`
-	FoghornPort          sql.NullInt32  `db:"foghorn_port" json:"foghorn_port"`
+	ClusterID               string         `db:"cluster_id" json:"cluster_id"`
+	ClusterName             string         `db:"cluster_name" json:"cluster_name"`
+	ClusterType             string         `db:"cluster_type" json:"cluster_type"`
+	BaseUrl                 string         `db:"base_url" json:"base_url"`
+	S3Bucket                string         `db:"s3_bucket" json:"s3_bucket"`
+	S3Endpoint              string         `db:"s3_endpoint" json:"s3_endpoint"`
+	S3Region                string         `db:"s3_region" json:"s3_region"`
+	S3Prefix                string         `db:"s3_prefix" json:"s3_prefix"`
+	S3PrefixPresent         bool           `db:"s3_prefix_present" json:"s3_prefix_present"`
+	RegionID                string         `db:"region_id" json:"region_id"`
+	CellID                  string         `db:"cell_id" json:"cell_id"`
+	ClusterClass            string         `db:"cluster_class" json:"cluster_class"`
+	ControlCellID           string         `db:"control_cell_id" json:"control_cell_id"`
+	EligibleServingCellIds  []string       `db:"eligible_serving_cell_ids" json:"eligible_serving_cell_ids"`
+	HealthStatus            string         `db:"health_status" json:"health_status"`
+	DeploymentModel         string         `db:"deployment_model" json:"deployment_model"`
+	OwnerTenantID           string         `db:"owner_tenant_id" json:"owner_tenant_id"`
+	AccessLevel             string         `db:"access_level" json:"access_level"`
+	AccessSource            string         `db:"access_source" json:"access_source"`
+	AccessExpiresAt         sql.NullTime   `db:"access_expires_at" json:"access_expires_at"`
+	ResourceLimits          string         `db:"resource_limits" json:"resource_limits"`
+	AllowPrivatePullSources bool           `db:"allow_private_pull_sources" json:"allow_private_pull_sources"`
+	FoghornAdvertiseHost    sql.NullString `db:"foghorn_advertise_host" json:"foghorn_advertise_host"`
+	FoghornPort             sql.NullInt32  `db:"foghorn_port" json:"foghorn_port"`
 }
 
 func (q *Queries) ListTenantClusterRoutingPeers(ctx context.Context, tenantID string) ([]ListTenantClusterRoutingPeersRow, error) {
@@ -359,12 +367,16 @@ func (q *Queries) ListTenantClusterRoutingPeers(ctx context.Context, tenantID st
 			&i.RegionID,
 			&i.CellID,
 			&i.ClusterClass,
+			&i.ControlCellID,
+			pq.Array(&i.EligibleServingCellIds),
 			&i.HealthStatus,
 			&i.DeploymentModel,
 			&i.OwnerTenantID,
 			&i.AccessLevel,
 			&i.AccessSource,
 			&i.AccessExpiresAt,
+			&i.ResourceLimits,
+			&i.AllowPrivatePullSources,
 			&i.FoghornAdvertiseHost,
 			&i.FoghornPort,
 		); err != nil {

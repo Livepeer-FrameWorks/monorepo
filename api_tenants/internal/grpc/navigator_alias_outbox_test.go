@@ -29,6 +29,7 @@ func TestEnqueueNavigatorTenantAliasTxValidation(t *testing.T) {
 	}{
 		{"ensure requires subdomain", "", "ensure", "", true},
 		{"retire requires subdomain", "", "retire", "", true},
+		{"ensure_cluster requires cluster", "", "ensure_cluster", "", true},
 		{"remove_cluster requires cluster", "", "remove_cluster", "", true},
 		{"unknown action", "acme", "frobnicate", "", true},
 		{"remove is tenant-only", "", "remove", "", false},

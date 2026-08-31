@@ -3,6 +3,7 @@ package quartermasterdb
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -64,6 +65,7 @@ func (q *Queries) UpsertInfrastructureNode(ctx context.Context, arg UpsertInfras
 
 type NodeFingerprintRow struct {
 	TenantID, NodeID string
+	PublicKeyEd25519 []byte
 }
 
 type NodeFingerprintLookup int
@@ -74,30 +76,76 @@ const (
 	NodeFingerprintBySeenIP
 )
 
+var ErrAmbiguousNodeFingerprint = errors.New("ambiguous node fingerprint")
+
 func (q *Queries) ResolveNodeFingerprint(ctx context.Context, kind NodeFingerprintLookup, value string) (NodeFingerprintRow, error) {
 	predicate := "nf.fingerprint_machine_sha256 = $1"
-	tail := ""
 	switch kind {
 	case NodeFingerprintByMachineID:
 	case NodeFingerprintByMACs:
 		predicate = "nf.fingerprint_macs_sha256 = $1"
 	case NodeFingerprintBySeenIP:
-		predicate = "$1::inet = ANY(nf.seen_ips)"
-		tail = "\n\t\tORDER BY nf.last_seen DESC\n\t\tLIMIT 1"
+		row := q.db.QueryRowContext(ctx, `
+			SELECT nf.tenant_id::text, nf.node_id, nf.node_identity_public_key_ed25519
+			FROM quartermaster.node_fingerprints nf
+			JOIN quartermaster.infrastructure_nodes n ON n.node_id = nf.node_id
+			JOIN quartermaster.infrastructure_clusters c ON c.cluster_id = n.cluster_id
+			WHERE $1::inet = ANY(nf.seen_ips)
+			  AND c.is_active = TRUE
+			ORDER BY nf.last_seen DESC, nf.node_id
+			LIMIT 1
+		`, value)
+		var out NodeFingerprintRow
+		err := row.Scan(&out.TenantID, &out.NodeID, &out.PublicKeyEd25519)
+		return out, err
 	default:
 		return NodeFingerprintRow{}, fmt.Errorf("unsupported fingerprint lookup %d", kind)
 	}
-	row := q.db.QueryRowContext(ctx, fmt.Sprintf(`
-		SELECT nf.tenant_id::text, nf.node_id
+	rows, err := q.db.QueryContext(ctx, fmt.Sprintf(`
+		SELECT nf.tenant_id::text, nf.node_id, nf.node_identity_public_key_ed25519
 		FROM quartermaster.node_fingerprints nf
 		JOIN quartermaster.infrastructure_nodes n ON n.node_id = nf.node_id
 		JOIN quartermaster.infrastructure_clusters c ON c.cluster_id = n.cluster_id
 		WHERE %s
-		  AND c.is_active = TRUE%s
-	`, predicate, tail), value)
+		  AND c.is_active = TRUE
+		ORDER BY nf.node_id
+		LIMIT 2
+	`, predicate), value)
+	if err != nil {
+		return NodeFingerprintRow{}, err
+	}
+	defer rows.Close()
+
 	var out NodeFingerprintRow
-	err := row.Scan(&out.TenantID, &out.NodeID)
-	return out, err
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return NodeFingerprintRow{}, err
+		}
+		return NodeFingerprintRow{}, sql.ErrNoRows
+	}
+	if err := rows.Scan(&out.TenantID, &out.NodeID, &out.PublicKeyEd25519); err != nil {
+		return NodeFingerprintRow{}, err
+	}
+	if rows.Next() {
+		return NodeFingerprintRow{}, fmt.Errorf("%w for %s", ErrAmbiguousNodeFingerprint, value)
+	}
+	if err := rows.Err(); err != nil {
+		return NodeFingerprintRow{}, err
+	}
+	return out, nil
+}
+
+func (q *Queries) BindNodeFingerprintPublicKey(ctx context.Context, nodeID string, publicKey []byte) ([]byte, error) {
+	row := q.db.QueryRowContext(ctx, `
+		UPDATE quartermaster.node_fingerprints
+		SET node_identity_public_key_ed25519 = COALESCE(node_identity_public_key_ed25519, $2),
+		    last_seen = NOW()
+		WHERE node_id = $1
+		RETURNING node_identity_public_key_ed25519
+	`, nodeID, publicKey)
+	var bound []byte
+	err := row.Scan(&bound)
+	return bound, err
 }
 
 func (q *Queries) UpsertFingerprintSeenIP(ctx context.Context, nodeID, peerIP string) error {

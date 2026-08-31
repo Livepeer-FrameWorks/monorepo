@@ -9,6 +9,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/lib/pq"
+	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -23,7 +24,7 @@ func newMockQuartermasterServer(t *testing.T) (*QuartermasterServer, *sql.DB, sq
 		t.Fatalf("failed to create sqlmock: %v", err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	return &QuartermasterServer{db: db}, db, mock
+	return &QuartermasterServer{db: db, logger: logrus.New()}, db, mock
 }
 
 func TestValidateBootstrapTokenConsumeRaceRejected(t *testing.T) {
@@ -349,6 +350,9 @@ func TestBootstrapEdgeNode_ServedClusterValidation(t *testing.T) {
 		mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO quartermaster.infrastructure_nodes`)).
 			WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), "cluster-b", sqlmock.AnyArg(), nil, nil, nil).
 			WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO quartermaster.node_fingerprints`)).
+			WithArgs("tenant-1", "node-2", "machine-sha", "", testNodeIdentityPublicKey(), sqlmock.AnyArg(), "{}").
+			WillReturnResult(sqlmock.NewResult(0, 1))
 		// Token update
 		mock.ExpectExec(regexp.QuoteMeta(`UPDATE quartermaster.bootstrap_tokens`)).
 			WithArgs(sqlmock.AnyArg()).
@@ -357,10 +361,12 @@ func TestBootstrapEdgeNode_ServedClusterValidation(t *testing.T) {
 
 		clusterA := "cluster-a"
 		resp, err := srv.BootstrapEdgeNode(context.Background(), &quartermasterpb.BootstrapEdgeNodeRequest{
-			Token:            "tok-2",
-			Hostname:         "node-2",
-			TargetClusterId:  &clusterA,
-			ServedClusterIds: []string{"cluster-a", "cluster-b"},
+			Token:                        "tok-2",
+			Hostname:                     "node-2",
+			TargetClusterId:              &clusterA,
+			ServedClusterIds:             []string{"cluster-a", "cluster-b"},
+			MachineIdSha256:              ptr("machine-sha"),
+			NodeIdentityPublicKeyEd25519: testNodeIdentityPublicKey(),
 		})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)

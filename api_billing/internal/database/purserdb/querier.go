@@ -47,6 +47,7 @@ type Querier interface {
 	CancelTenantSubscriptions(ctx context.Context, tenantID string) (int64, error)
 	ClaimBillingEventOutboxCandidates(ctx context.Context, arg ClaimBillingEventOutboxCandidatesParams) ([]ClaimBillingEventOutboxCandidatesRow, error)
 	ClaimInvoiceEmailCandidates(ctx context.Context, arg ClaimInvoiceEmailCandidatesParams) ([]ClaimInvoiceEmailCandidatesRow, error)
+	ClaimMediaAuthorityRefreshBatch(ctx context.Context, arg ClaimMediaAuthorityRefreshBatchParams) ([]ClaimMediaAuthorityRefreshBatchRow, error)
 	ClaimProviderWebhooks(ctx context.Context, arg ClaimProviderWebhooksParams) ([]ClaimProviderWebhooksRow, error)
 	ClaimSubmittingX402Intent(ctx context.Context, id string) (int64, error)
 	ClaimWebhookEvent(ctx context.Context, arg ClaimWebhookEventParams) (ClaimWebhookEventRow, error)
@@ -62,6 +63,7 @@ type Querier interface {
 	CompleteCryptoWallet(ctx context.Context, arg CompleteCryptoWalletParams) (int64, error)
 	CompleteInvoiceEmail(ctx context.Context, arg CompleteInvoiceEmailParams) (int64, error)
 	CompleteInvoiceEmailWithLease(ctx context.Context, arg CompleteInvoiceEmailWithLeaseParams) (int64, error)
+	CompleteMediaAuthorityRefresh(ctx context.Context, arg CompleteMediaAuthorityRefreshParams) (int64, error)
 	CompletePendingTopup(ctx context.Context, arg CompletePendingTopupParams) error
 	CompletePendingTopupProviderIntent(ctx context.Context, arg CompletePendingTopupProviderIntentParams) error
 	CompleteProviderWebhook(ctx context.Context, arg CompleteProviderWebhookParams) (sql.Result, error)
@@ -96,6 +98,7 @@ type Querier interface {
 	EnqueueBillingEventOutbox(ctx context.Context, arg EnqueueBillingEventOutboxParams) (uuid.UUID, error)
 	EnqueueBillingEventOutboxNoReturn(ctx context.Context, arg EnqueueBillingEventOutboxNoReturnParams) error
 	EnqueueInvoiceEmail(ctx context.Context, arg EnqueueInvoiceEmailParams) error
+	EnqueueMediaAuthorityRefresh(ctx context.Context, arg EnqueueMediaAuthorityRefreshParams) (int64, error)
 	EnqueueProviderWebhook(ctx context.Context, arg EnqueueProviderWebhookParams) error
 	EnqueueStripeMeterEvents(ctx context.Context, arg EnqueueStripeMeterEventsParams) error
 	EnsureBillingCollectionBalance(ctx context.Context, arg EnsureBillingCollectionBalanceParams) error
@@ -117,6 +120,7 @@ type Querier interface {
 	FailExpiredCryptoInvoicePayments(ctx context.Context, arg FailExpiredCryptoInvoicePaymentsParams) error
 	FailInvoiceEmail(ctx context.Context, arg FailInvoiceEmailParams) (int64, error)
 	FailInvoiceEmailWithLease(ctx context.Context, arg FailInvoiceEmailWithLeaseParams) (int64, error)
+	FailMediaAuthorityRefresh(ctx context.Context, arg FailMediaAuthorityRefreshParams) (int64, error)
 	FailPendingCardTopup(ctx context.Context, topupID string) (int64, error)
 	FailProviderWebhook(ctx context.Context, arg FailProviderWebhookParams) (sql.Result, error)
 	GetActiveInvoiceCryptoPaymentQuote(ctx context.Context, arg GetActiveInvoiceCryptoPaymentQuoteParams) (GetActiveInvoiceCryptoPaymentQuoteRow, error)

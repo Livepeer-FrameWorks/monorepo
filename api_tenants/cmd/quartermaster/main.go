@@ -18,6 +18,7 @@ import (
 	quartermastermigrations "frameworks/api_tenants/internal/datamigrations"
 	qmgrpc "frameworks/api_tenants/internal/grpc"
 	"frameworks/api_tenants/internal/handlers"
+	commodoreclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/navigator"
 	purserclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/purser"
@@ -194,6 +195,25 @@ func main() {
 		logger.WithField("addr", purserGRPCAddr).Info("Connected to Purser gRPC")
 	}
 
+	commodoreGRPCAddr := config.GetEnv("COMMODORE_GRPC_ADDR", "commodore:19001")
+	var commodoreClient *commodoreclient.GRPCClient
+	commodoreClient, err = commodoreclient.NewGRPCClient(commodoreclient.GRPCConfig{
+		GRPCAddr:      commodoreGRPCAddr,
+		Timeout:       10 * time.Second,
+		Logger:        logger,
+		ServiceToken:  serviceToken,
+		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
+		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:    config.GetServiceGRPCTLSServerName("commodore"),
+	})
+	if err != nil {
+		logger.WithError(err).Warn("Failed to create Commodore gRPC client - media authority refresh delivery will be disabled")
+		commodoreClient = nil
+	} else {
+		defer func() { _ = commodoreClient.Close() }()
+		logger.WithField("addr", commodoreGRPCAddr).Info("Connected to Commodore gRPC")
+	}
+
 	// Initialize handlers used by the health poller.
 	handlers.Init(db, logger)
 
@@ -306,20 +326,21 @@ func main() {
 		}
 
 		grpcServer := qmgrpc.NewGRPCServer(qmgrpc.GRPCServerConfig{
-			DB:                 db,
-			Logger:             logger,
-			ServiceToken:       serviceToken,
-			JWTSecret:          []byte(jwtSecret),
-			NavigatorClient:    navigatorClient,
-			DecklogClient:      decklogClient,
-			PurserClient:       purserClient,
-			GeoIPReader:        geoipReader,
-			Metrics:            serverMetrics,
-			CertFile:           config.GetEnv("GRPC_TLS_CERT_PATH", ""),
-			KeyFile:            config.GetEnv("GRPC_TLS_KEY_PATH", ""),
-			AllowInsecure:      config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-			AdvertiseGRPCAddr:  quartermasterGRPCAddr,
-			PlatformRootDomain: config.GetEnv("BRAND_DOMAIN", "frameworks.network"),
+			DB:                          db,
+			Logger:                      logger,
+			ServiceToken:                serviceToken,
+			JWTSecret:                   []byte(jwtSecret),
+			NavigatorClient:             navigatorClient,
+			DecklogClient:               decklogClient,
+			PurserClient:                purserClient,
+			MediaAuthorityRefreshClient: commodoreClient,
+			GeoIPReader:                 geoipReader,
+			Metrics:                     serverMetrics,
+			CertFile:                    config.GetEnv("GRPC_TLS_CERT_PATH", ""),
+			KeyFile:                     config.GetEnv("GRPC_TLS_KEY_PATH", ""),
+			AllowInsecure:               config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
+			AdvertiseGRPCAddr:           quartermasterGRPCAddr,
+			PlatformRootDomain:          config.GetEnv("BRAND_DOMAIN", "frameworks.network"),
 			// Same var Navigator reads, so the public_instance_host freshness gate and
 			// Navigator's physical-DNS publish freshness can't drift.
 			PhysicalEndpointStaleSeconds: config.GetEnvInt("NAVIGATOR_DNS_HEALTH_STALE_SECONDS", 300),

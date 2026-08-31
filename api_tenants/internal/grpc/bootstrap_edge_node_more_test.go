@@ -1,6 +1,7 @@
 package grpc
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"regexp"
@@ -13,6 +14,102 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+func TestBootstrapEdgeNode_ExistingIdentityRequiresExplicitRotation(t *testing.T) {
+	srv, _, mock := newMockQuartermasterServer(t)
+	expiresAt := time.Now().Add(time.Hour)
+	newKey := bytes.Repeat([]byte{0x24}, 32)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, tenant_id::text, COALESCE(cluster_id, ''), usage_limit, usage_count, expires_at, expected_ip::text
+		FROM quartermaster.bootstrap_tokens
+		WHERE token_hash = $1 AND kind = 'edge_node'
+		  AND (
+		    (usage_limit IS NULL AND used_at IS NULL) OR
+		    (usage_limit IS NOT NULL AND usage_count < usage_limit)
+		  )
+		FOR UPDATE
+	`)).WithArgs(hashBootstrapToken("tok-rotate")).WillReturnRows(
+		sqlmock.NewRows([]string{"id", "tenant_id", "cluster_id", "usage_limit", "usage_count", "expires_at", "expected_ip"}).
+			AddRow("token-id", "tenant-1", "cluster-1", nil, int32(0), expiresAt, nil),
+	)
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT cluster_id FROM quartermaster.infrastructure_nodes WHERE node_id = $1`)).
+		WithArgs("edge-existing").
+		WillReturnRows(sqlmock.NewRows([]string{"cluster_id"}).AddRow("cluster-1"))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT tenant_id::text, COALESCE(fingerprint_machine_sha256, ''),`)).
+		WithArgs("edge-existing").
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "machine", "macs", "public_key"}).
+			AddRow("tenant-1", "machine-sha", "macs-sha", testNodeIdentityPublicKey()))
+	mock.ExpectRollback()
+
+	_, err := srv.BootstrapEdgeNode(context.Background(), &quartermasterpb.BootstrapEdgeNodeRequest{
+		Token:                        "tok-rotate",
+		Hostname:                     "edge-existing.example.com",
+		MachineIdSha256:              ptr("machine-sha"),
+		MacsSha256:                   ptr("macs-sha"),
+		NodeIdentityPublicKeyEd25519: newKey,
+	})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied without explicit rotation, got %v: %v", status.Code(err), err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestBootstrapEdgeNode_RotatesIdentityWithFreshTokenAndStableFingerprint(t *testing.T) {
+	srv, _, mock := newMockQuartermasterServer(t)
+	expiresAt := time.Now().Add(time.Hour)
+	newKey := bytes.Repeat([]byte{0x24}, 32)
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta(`
+		SELECT id, tenant_id::text, COALESCE(cluster_id, ''), usage_limit, usage_count, expires_at, expected_ip::text
+		FROM quartermaster.bootstrap_tokens
+		WHERE token_hash = $1 AND kind = 'edge_node'
+		  AND (
+		    (usage_limit IS NULL AND used_at IS NULL) OR
+		    (usage_limit IS NOT NULL AND usage_count < usage_limit)
+		  )
+		FOR UPDATE
+	`)).WithArgs(hashBootstrapToken("tok-rotate")).WillReturnRows(
+		sqlmock.NewRows([]string{"id", "tenant_id", "cluster_id", "usage_limit", "usage_count", "expires_at", "expected_ip"}).
+			AddRow("token-id", "tenant-1", "cluster-1", int32(1), int32(0), expiresAt, nil),
+	)
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT cluster_id FROM quartermaster.infrastructure_nodes WHERE node_id = $1`)).
+		WithArgs("edge-existing").
+		WillReturnRows(sqlmock.NewRows([]string{"cluster_id"}).AddRow("cluster-1"))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT tenant_id::text, COALESCE(fingerprint_machine_sha256, ''),`)).
+		WithArgs("edge-existing").
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "machine", "macs", "public_key"}).
+			AddRow("tenant-1", "machine-sha", "macs-sha", testNodeIdentityPublicKey()))
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE quartermaster.node_fingerprints`)).
+		WithArgs("tenant-1", "edge-existing", "machine-sha", "macs-sha", newKey).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE quartermaster.bootstrap_tokens SET usage_count = usage_count + 1, used_at = NOW() WHERE id = $1`)).
+		WithArgs("token-id").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	resp, err := srv.BootstrapEdgeNode(context.Background(), &quartermasterpb.BootstrapEdgeNodeRequest{
+		Token:                        "tok-rotate",
+		Hostname:                     "edge-existing.example.com",
+		MachineIdSha256:              ptr("machine-sha"),
+		MacsSha256:                   ptr("macs-sha"),
+		NodeIdentityPublicKeyEd25519: newKey,
+		RotateNodeIdentity:           true,
+	})
+	if err != nil {
+		t.Fatalf("BootstrapEdgeNode rotation returned error: %v", err)
+	}
+	if resp.GetNodeId() != "edge-existing" {
+		t.Fatalf("expected edge-existing, got %q", resp.GetNodeId())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
 
 func TestBootstrapEdgeNode_IdempotentWhenExistingClusterMatches(t *testing.T) {
 	srv, _, mock := newMockQuartermasterServer(t)
@@ -36,17 +133,22 @@ func TestBootstrapEdgeNode_IdempotentWhenExistingClusterMatches(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT cluster_id FROM quartermaster.infrastructure_nodes WHERE node_id = $1`)).
 		WithArgs("edge-existing").
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id"}).AddRow("cluster-1"))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT tenant_id::text, COALESCE(fingerprint_machine_sha256, ''),`)).
+		WithArgs("edge-existing").
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "machine", "macs", "public_key"}).
+			AddRow("tenant-1", "machine-sha", "macs-sha", testNodeIdentityPublicKey()))
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO quartermaster.node_fingerprints`)).
-		WithArgs("tenant-1", "edge-existing", "machine-sha", "macs-sha", sqlmock.AnyArg(), "{}").
+		WithArgs("tenant-1", "edge-existing", "machine-sha", "macs-sha", testNodeIdentityPublicKey(), sqlmock.AnyArg(), "{}").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
 	resp, err := srv.BootstrapEdgeNode(context.Background(), &quartermasterpb.BootstrapEdgeNodeRequest{
-		Token:           "tok-idempotent",
-		Hostname:        "edge-existing.example.com",
-		Ips:             []string{"203.0.113.10"},
-		MachineIdSha256: ptr("machine-sha"),
-		MacsSha256:      ptr("macs-sha"),
+		Token:                        "tok-idempotent",
+		Hostname:                     "edge-existing.example.com",
+		Ips:                          []string{"203.0.113.10"},
+		MachineIdSha256:              ptr("machine-sha"),
+		MacsSha256:                   ptr("macs-sha"),
+		NodeIdentityPublicKeyEd25519: testNodeIdentityPublicKey(),
 	})
 	if err != nil {
 		t.Fatalf("BootstrapEdgeNode returned error: %v", err)
@@ -92,15 +194,20 @@ func TestBootstrapEdgeNode_RetriesSchemaVersionMismatch(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta(`SELECT cluster_id FROM quartermaster.infrastructure_nodes WHERE node_id = $1`)).
 		WithArgs("edge-retry").
 		WillReturnRows(sqlmock.NewRows([]string{"cluster_id"}).AddRow("cluster-1"))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT tenant_id::text, COALESCE(fingerprint_machine_sha256, ''),`)).
+		WithArgs("edge-retry").
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "machine", "macs", "public_key"}).
+			AddRow("tenant-1", "machine-sha", "", testNodeIdentityPublicKey()))
 	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO quartermaster.node_fingerprints`)).
-		WithArgs("tenant-1", "edge-retry", "machine-sha", "", sqlmock.AnyArg(), "{}").
+		WithArgs("tenant-1", "edge-retry", "machine-sha", "", testNodeIdentityPublicKey(), sqlmock.AnyArg(), "{}").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
 	resp, err := srv.BootstrapEdgeNode(context.Background(), &quartermasterpb.BootstrapEdgeNodeRequest{
-		Token:           "tok-retry",
-		Hostname:        "edge-retry.example.com",
-		MachineIdSha256: ptr("machine-sha"),
+		Token:                        "tok-retry",
+		Hostname:                     "edge-retry.example.com",
+		MachineIdSha256:              ptr("machine-sha"),
+		NodeIdentityPublicKeyEd25519: testNodeIdentityPublicKey(),
 	})
 	if err != nil {
 		t.Fatalf("BootstrapEdgeNode returned error after retry: %v", err)
@@ -188,6 +295,9 @@ func TestBootstrapEdgeNode_UsesFallbackActiveCluster(t *testing.T) {
 	`)).
 		WithArgs(sqlmock.AnyArg(), "edge-fallback", "cluster-fallback", "edge-fallback.example.com", nil, nil, nil).
 		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectExec(regexp.QuoteMeta(`INSERT INTO quartermaster.node_fingerprints`)).
+		WithArgs("tenant-1", "edge-fallback", "machine-sha", "", testNodeIdentityPublicKey(), sqlmock.AnyArg(), "{}").
+		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(regexp.QuoteMeta(`
 		UPDATE quartermaster.bootstrap_tokens
 		SET usage_count = usage_count + 1, used_at = NOW()
@@ -198,8 +308,10 @@ func TestBootstrapEdgeNode_UsesFallbackActiveCluster(t *testing.T) {
 	mock.ExpectCommit()
 
 	resp, err := srv.BootstrapEdgeNode(context.Background(), &quartermasterpb.BootstrapEdgeNodeRequest{
-		Token:    "tok-fallback",
-		Hostname: "edge-fallback.example.com",
+		Token:                        "tok-fallback",
+		Hostname:                     "edge-fallback.example.com",
+		MachineIdSha256:              ptr("machine-sha"),
+		NodeIdentityPublicKeyEd25519: testNodeIdentityPublicKey(),
 	})
 	if err != nil {
 		t.Fatalf("BootstrapEdgeNode returned error: %v", err)

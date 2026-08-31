@@ -35,9 +35,17 @@ func (s *QuartermasterServer) runTenantAliasBackstop(ctx context.Context) {
 }
 
 type tenantAliasDesired struct {
-	tenantID  string
+	tenantID   string
+	subdomain  string
+	want       bool
+	clusterIDs []string
+}
+
+type tenantAliasBackstopAction struct {
 	subdomain string
-	want      bool
+	clusterID string
+	action    string
+	reason    string
 }
 
 func (s *QuartermasterServer) reconcileTenantAliasesOnce(ctx context.Context) {
@@ -69,7 +77,13 @@ func (s *QuartermasterServer) listDesiredTenantAliases(ctx context.Context) ([]t
 	}
 	desired := make([]tenantAliasDesired, 0, len(rows))
 	for _, row := range rows {
-		desired = append(desired, tenantAliasDesired{tenantID: row.TenantID, subdomain: row.Subdomain, want: row.Want})
+		clusterIDs := row.ClusterIds
+		if !row.Want {
+			clusterIDs = nil
+		}
+		desired = append(desired, tenantAliasDesired{
+			tenantID: row.TenantID, subdomain: row.Subdomain, want: row.Want, clusterIDs: clusterIDs,
+		})
 	}
 	return desired, nil
 }
@@ -95,28 +109,7 @@ func (s *QuartermasterServer) reconcileOneTenantAlias(ctx context.Context, d ten
 		return false
 	}
 
-	want := d.want && d.subdomain != ""
-	found := statusResp.GetFound()
-	activeLabel := statusResp.GetSubdomain()
-	pending := statusResp.GetPendingRetirements()
-
-	type aliasAct struct {
-		subdomain, action, reason string
-	}
-	var acts []aliasAct
-	switch {
-	case want && !found:
-		acts = append(acts, aliasAct{d.subdomain, "ensure", "backstop_missing"})
-	case want && found && activeLabel != d.subdomain:
-		// Drift: Navigator's active label differs from intent. Retire the old
-		// label (unless already in flight) and ensure the current one.
-		if activeLabel != "" && !slices.Contains(pending, activeLabel) {
-			acts = append(acts, aliasAct{activeLabel, "retire", "backstop_mismatch"})
-		}
-		acts = append(acts, aliasAct{d.subdomain, "ensure", "backstop_mismatch"})
-	case !want && found:
-		acts = append(acts, aliasAct{"", "remove", "backstop_undesired"})
-	}
+	acts := tenantAliasBackstopActions(d, statusResp)
 	if len(acts) == 0 {
 		return false
 	}
@@ -128,7 +121,7 @@ func (s *QuartermasterServer) reconcileOneTenantAlias(ctx context.Context, d ten
 	}
 	defer tx.Rollback() //nolint:errcheck
 	for _, a := range acts {
-		if _, enqErr := s.EnqueueNavigatorTenantAliasTx(ctx, tx, d.tenantID, a.subdomain, a.action, "", a.reason); enqErr != nil {
+		if _, enqErr := s.EnqueueNavigatorTenantAliasTx(ctx, tx, d.tenantID, a.subdomain, a.action, a.clusterID, a.reason); enqErr != nil {
 			s.logger.WithError(enqErr).WithField("tenant_id", d.tenantID).Warn("tenant-alias backstop: enqueue failed")
 			return false
 		}
@@ -138,6 +131,47 @@ func (s *QuartermasterServer) reconcileOneTenantAlias(ctx context.Context, d ten
 		return false
 	}
 	return true
+}
+
+func tenantAliasBackstopActions(d tenantAliasDesired, statusResp *dnspb.GetTenantAliasStatusResponse) []tenantAliasBackstopAction {
+	var acts []tenantAliasBackstopAction
+	want := d.want && d.subdomain != ""
+	found := statusResp.GetFound()
+	activeLabel := statusResp.GetSubdomain()
+	pending := statusResp.GetPendingRetirements()
+	switch {
+	case want && !found:
+		acts = append(acts, tenantAliasBackstopAction{subdomain: d.subdomain, action: "ensure", reason: "backstop_missing"})
+	case want && found && activeLabel != d.subdomain:
+		// Drift: Navigator's active label differs from intent. Retire the old
+		// label (unless already in flight) and ensure the current one.
+		if activeLabel != "" && !slices.Contains(pending, activeLabel) {
+			acts = append(acts, tenantAliasBackstopAction{subdomain: activeLabel, action: "retire", reason: "backstop_mismatch"})
+		}
+		acts = append(acts, tenantAliasBackstopAction{subdomain: d.subdomain, action: "ensure", reason: "backstop_mismatch"})
+	case !want && found:
+		acts = append(acts, tenantAliasBackstopAction{action: "remove", reason: "backstop_undesired"})
+	}
+
+	desiredClusters := make(map[string]struct{}, len(d.clusterIDs))
+	for _, clusterID := range d.clusterIDs {
+		desiredClusters[clusterID] = struct{}{}
+	}
+	appliedClusters := make(map[string]struct{}, len(statusResp.GetAuthorizedClusterIds()))
+	for _, clusterID := range statusResp.GetAuthorizedClusterIds() {
+		appliedClusters[clusterID] = struct{}{}
+	}
+	for clusterID := range desiredClusters {
+		if _, applied := appliedClusters[clusterID]; !applied {
+			acts = append(acts, tenantAliasBackstopAction{clusterID: clusterID, action: "ensure_cluster", reason: "backstop_cluster_missing"})
+		}
+	}
+	for clusterID := range appliedClusters {
+		if _, desired := desiredClusters[clusterID]; !desired {
+			acts = append(acts, tenantAliasBackstopAction{clusterID: clusterID, action: "remove_cluster", reason: "backstop_cluster_undesired"})
+		}
+	}
+	return acts
 }
 
 func (s *QuartermasterServer) tenantAliasOutboxHasPending(ctx context.Context, tenantID string) (bool, error) {

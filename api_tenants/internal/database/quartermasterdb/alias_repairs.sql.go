@@ -7,11 +7,22 @@ package quartermasterdb
 
 import (
 	"context"
+
+	"github.com/lib/pq"
 )
 
 const listDesiredTenantAliases = `-- name: ListDesiredTenantAliases :many
 SELECT t.id::text AS tenant_id,
        COALESCE(t.subdomain, '')::text AS subdomain,
+       COALESCE((
+           SELECT array_agg(tca.cluster_id ORDER BY tca.cluster_id)
+           FROM quartermaster.tenant_cluster_access tca
+           WHERE tca.tenant_id = t.id
+             AND tca.is_active = true
+             AND tca.subscription_status = 'active'
+             AND tca.access_source <> 'unknown'
+             AND (tca.expires_at IS NULL OR tca.expires_at > NOW())
+       ), ARRAY[]::text[])::text[] AS cluster_ids,
        (
            t.is_active
            AND t.deployment_tier IN ('supporter', 'developer', 'production', 'enterprise')
@@ -29,9 +40,10 @@ FROM quartermaster.tenants t
 `
 
 type ListDesiredTenantAliasesRow struct {
-	TenantID  string `db:"tenant_id" json:"tenant_id"`
-	Subdomain string `db:"subdomain" json:"subdomain"`
-	Want      bool   `db:"want" json:"want"`
+	TenantID   string   `db:"tenant_id" json:"tenant_id"`
+	Subdomain  string   `db:"subdomain" json:"subdomain"`
+	ClusterIds []string `db:"cluster_ids" json:"cluster_ids"`
+	Want       bool     `db:"want" json:"want"`
 }
 
 func (q *Queries) ListDesiredTenantAliases(ctx context.Context) ([]ListDesiredTenantAliasesRow, error) {
@@ -43,7 +55,12 @@ func (q *Queries) ListDesiredTenantAliases(ctx context.Context) ([]ListDesiredTe
 	items := []ListDesiredTenantAliasesRow{}
 	for rows.Next() {
 		var i ListDesiredTenantAliasesRow
-		if err := rows.Scan(&i.TenantID, &i.Subdomain, &i.Want); err != nil {
+		if err := rows.Scan(
+			&i.TenantID,
+			&i.Subdomain,
+			pq.Array(&i.ClusterIds),
+			&i.Want,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

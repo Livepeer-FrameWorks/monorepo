@@ -113,11 +113,15 @@ SELECT ic.cluster_id,
        COALESCE(ic.owner_tenant_id::text, '')::text AS owner_tenant_id,
        COALESCE(ic.cluster_class, '')::text AS cluster_class,
        COALESCE(ic.health_status, '')::text AS health_status,
+	   COALESCE(NULLIF(ic.control_cell_id, ''), NULLIF(ic.cell_id, ''), ic.cluster_id)::text AS control_cell_id,
+	   ic.eligible_serving_cell_ids,
        COALESCE(tca.access_level, '')::text AS access_level,
        COALESCE(tca.access_source, 'unknown')::text AS access_source,
        tca.is_active AS access_active,
        tca.subscription_status,
-       tca.expires_at AS access_expires_at
+       tca.expires_at AS access_expires_at,
+       tca.resource_limits::text AS resource_limits,
+       ic.allow_private_pull_sources
 FROM quartermaster.tenant_cluster_access tca
 JOIN quartermaster.infrastructure_clusters ic ON ic.cluster_id = tca.cluster_id
 WHERE tca.tenant_id = sqlc.arg(tenant_id)::uuid

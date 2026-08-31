@@ -16,11 +16,13 @@ type Querier interface {
 	ApproveClusterSubscriptionRecord(ctx context.Context, arg ApproveClusterSubscriptionRecordParams) error
 	BootstrapTenantClusterAccess(ctx context.Context, arg BootstrapTenantClusterAccessParams) error
 	ClaimIdleFoghornsForCluster(ctx context.Context, arg ClaimIdleFoghornsForClusterParams) (int64, error)
+	ClaimMediaAuthorityRefreshBatch(ctx context.Context, arg ClaimMediaAuthorityRefreshBatchParams) ([]ClaimMediaAuthorityRefreshBatchRow, error)
 	ClaimNavigatorCustomDomainOutboxBatch(ctx context.Context, arg ClaimNavigatorCustomDomainOutboxBatchParams) ([]ClaimNavigatorCustomDomainOutboxBatchRow, error)
 	ClaimNavigatorTenantAliasOutboxBatch(ctx context.Context, arg ClaimNavigatorTenantAliasOutboxBatchParams) ([]ClaimNavigatorTenantAliasOutboxBatchRow, error)
 	ClaimServiceEventOutboxBatch(ctx context.Context, arg ClaimServiceEventOutboxBatchParams) ([]ClaimServiceEventOutboxBatchRow, error)
 	ClearBootstrapDefaultCluster(ctx context.Context) error
 	ClearDefaultCluster(ctx context.Context) error
+	CompleteMediaAuthorityRefresh(ctx context.Context, id string) (int64, error)
 	CompleteNavigatorCustomDomainOutbox(ctx context.Context, id string) error
 	CompleteNavigatorTenantAliasOutbox(ctx context.Context, id string) error
 	CompleteServiceEventOutbox(ctx context.Context, id string) error
@@ -33,9 +35,11 @@ type Querier interface {
 	CreateTenantRecordWithProvisioningKey(ctx context.Context, arg CreateTenantRecordWithProvisioningKeyParams) error
 	DeactivateTenant(ctx context.Context, tenantID string) (int64, error)
 	DeactivateTenantClusterAccess(ctx context.Context, arg DeactivateTenantClusterAccessParams) error
+	EnqueueMediaAuthorityRefresh(ctx context.Context, arg EnqueueMediaAuthorityRefreshParams) (int64, error)
 	EnqueueNavigatorCustomDomain(ctx context.Context, arg EnqueueNavigatorCustomDomainParams) (string, error)
 	EnqueueNavigatorTenantAlias(ctx context.Context, arg EnqueueNavigatorTenantAliasParams) (string, error)
 	EnqueueServiceEvent(ctx context.Context, arg EnqueueServiceEventParams) (string, error)
+	FailMediaAuthorityRefresh(ctx context.Context, arg FailMediaAuthorityRefreshParams) (int64, error)
 	FailNavigatorCustomDomainOutbox(ctx context.Context, arg FailNavigatorCustomDomainOutboxParams) error
 	FailServiceEventOutbox(ctx context.Context, arg FailServiceEventOutboxParams) error
 	FindNodeByClusterIP(ctx context.Context, arg FindNodeByClusterIPParams) (string, error)
