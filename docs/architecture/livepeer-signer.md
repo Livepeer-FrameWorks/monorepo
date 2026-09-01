@@ -1,60 +1,35 @@
-# Livepeer Signer - Keystore-Backed Remote ETH Signer
+# Livepeer wallet signing boundary
 
-The Livepeer Signer is our go-livepeer fork running in remote-signer mode
-(`-remoteSigner`, port 18016). It is the only process that holds the Livepeer
-gateway wallet's ETH keystore; gateways sign nothing themselves and instead call the
-signer over HTTP for every transaction and ticket signature.
+Platform 0.3.0 gateways keep a local keystore. The upstream go-livepeer remote signer is **not** a complete signer for our transcode path: it covers orchestrator-info, discovery, and Live-AI payment routes, while marketplace transcoding still creates ticket batches through the gateway's local `pm.Sender`. A gateway configured only with `remote_signer_url` cannot pay orchestrators and cannot reliably transcode.
 
-## Why the gateway holds no key custody
+Remote-signer-only gateways are therefore deferred until the go-livepeer fork gains remote ticket-batch signing. Production provisioning rejects `remote_signer_url` on `livepeer-gateway` and requires a local keystore.
 
-Livepeer gateways are horizontally scaled, regionally paired, and rolled frequently
-(canary + region-stagger update strategy). Placing the ETH key on every gateway host
-would multiply the custody surface by the fleet size and couple key handling to
-routine rollouts. Instead:
+## Current protection
 
-- One signer per gateway wallet holds the keystore; gateways get
-  `remote_signer_url` (`LIVEPEER_REMOTE_SIGNER_URL`) plus the public
-  `eth_acct_addr` and no keystore material.
-- One physical gateway pool can serve multiple media clusters (Quartermaster
-  synthesizes `public_host` per cluster in `DiscoverServices`); the signer stays a
-  singleton control-plane concern regardless of gateway topology.
-- Purser's deposit monitor credits tenant deposits by reading `wallet_address` from
-  the gateway's service-registry metadata — it needs the address, never the key.
+- The gateway HTTP and CLI listeners bind loopback and are reached only through the configured reverse proxy or SSH.
+- Transaction routes are absent unless an operator temporarily sets `enable_cli_tx_routes: "true"`; upstream mutation handlers are POST-only and take form bodies.
+- The keystore is rendered only for Livepeer key-consuming services. The systemd unit uses a strict sandbox and mode-0600 key/password files.
+- Purser owns routine TicketBroker deposit/reserve funding and enforces a durable daily cap. Gateways do not auto-deposit and receive no routine native ETH top-up.
+- `frameworks livepeer` reads wallet state directly from Arbitrum. Exceptional reserve/unlock/withdraw operations SSH to the selected gateway and call its loopback CLI; the maintenance flag must be removed afterward.
+- Public `/live/` ingest is restricted to POST/PUT, authenticates a Foghorn-signed job capability, binds the assigned edge node and source IP, and rejects client changes to the stored transcode specification.
 
-## Provisioning
+## Planned remote signer
 
-The CLI provisioner deploys the signer like any native/Docker service from the
-release manifest (`ghcr.io/livepeer-frameworks/go-livepeer`), with signer-specific
-handling in `serviceNativeVars` / `livepeerNativeArgs`:
+The `livepeer-signer` service definition remains available for development of the future boundary, but it is not wired to production transcode gateways. Before enabling keyless gateways, go-livepeer must add authenticated ticket-batch signing whose signer independently validates sender, ticket parameters, batch bounds, and policy. Only then may provisioning remove the gateway keystore and synthesize `remote_signer_url`.
 
-- **Keystore materialization**: `LIVEPEER_ETH_KEYSTORE_B64` (SOPS-sourced) is
-  decoded to `{state_dir}/keystore/key.json` mode 0600;
-  `LIVEPEER_ETH_KEYSTORE_PASSWORD` becomes `{state_dir}/eth-password` mode 0600 and
-  is passed as `-ethPassword`. The env vars are deleted after file rendering so the
-  unit environment never carries key material. An operator-managed
-  `keystore_path` (e.g. `/etc/frameworks/livepeer-signer-keystore`) is also
-  supported.
-- **Required external env**: an ETH RPC (`eth_url`, typically
-  `ARBITRUM_RPC_ENDPOINT` / `LIVEPEER_ETH_URL` from shared env; an RPC pool is
-  distributed across instances by host index).
-- **Rollout**: `livepeer-signer` is a singleton in the update-strategy registry
-  (`max_unavailable=1`); servicedef `18016`, health `/status` over HTTP.
-- Not in the dev compose — dev runs without on-chain settlement.
+When a signer service is provisioned for that future work, current validation already requires:
 
-## Key Files
+- native deployment;
+- a loopback CLI listener;
+- a local keystore, password, and Ethereum RPC;
+- an explicit HTTP bind on the host WireGuard address unless an auth webhook is configured;
+- `remote_signer_allow_no_auth` disabled; and
+- Privateer coverage for the signer host.
 
-- `pkg/servicedefs/servicedefs.go` - service definition (port 18016, `/status`)
-- `cli/pkg/provisioner/service_role.go` - keystore/password file rendering, `-remoteSigner` args
-- `cli/cmd/cluster_provision.go` - env normalization (`normalizeLivepeerEnvVars`), RPC pool
-- `cli/examples/cluster-dev.yaml` - reference manifest entries for signer + gateway
-- `docs/architecture/bootstrap-desired-state.md` - gateway `wallet_address` registry requirement
+## Key files
 
-## Gotchas
-
-- The signer and gateway are the same binary; only the flag set differs. Upgrading
-  one via release manifests upgrades the artifact both roles resolve.
-- A gateway configured with both a keystore and `remote_signer_url` defeats the
-  custody split — production gateways must carry no keystore env at all.
-- `validateGatewayMeshCoverage` requires Privateer on every gateway host (the auth
-  webhook resolves `foghorn.internal`); the signer has no such mesh requirement of
-  its own beyond normal service TLS.
+- `cli/cmd/cluster_provision.go` — custody, listener, mesh, and production validation
+- `cli/pkg/provisioner/service_role.go` — native arguments, keystore rendering, and systemd sandbox inputs
+- `cli/cmd/livepeer.go` — on-chain reads and SSH-to-loopback maintenance commands
+- `api_billing/internal/handlers/livepeer_deposit.go` — Purser funding policy
+- `pkg/livepeer/chain` — shared Arbitrum/TicketBroker read client

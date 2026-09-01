@@ -107,6 +107,7 @@ func TestRecordAndAverage_SeparateNodes(t *testing.T) {
 func TestEnrichFederationEventGeo_UsesPeerClusterForRemoteGeo(t *testing.T) {
 	pm := &PeerManager{
 		clusterID:     "local-cluster",
+		controlCellID: "control-cell",
 		ownerTenantID: "tenant-a",
 		logger:        testLogger(),
 		peers:         map[string]*peerState{"peer-1": {lat: 37.7749, lon: -122.4194}},
@@ -128,6 +129,9 @@ func TestEnrichFederationEventGeo_UsesPeerClusterForRemoteGeo(t *testing.T) {
 	}
 	if data.GetLocalCluster() != "local-cluster" {
 		t.Fatalf("local_cluster = %q, want local-cluster", data.GetLocalCluster())
+	}
+	if data.GetControlCellId() != "control-cell" {
+		t.Fatalf("control_cell_id = %q, want control-cell", data.GetControlCellId())
 	}
 	if data.GetRemoteCluster() != peerCluster {
 		t.Fatalf("remote_cluster = %q, want %q", data.GetRemoteCluster(), peerCluster)
@@ -787,6 +791,22 @@ func TestCheckReplicationCompletion_ClearsRecordWhenDestinationNodeLive(t *testi
 
 	if _, ok := registry.LocalReplication(context.Background(), internalName); ok {
 		t.Fatal("expected replication mark to be cleared when destination node is live")
+	}
+}
+
+func TestOriginPullCompletedEventAttributesContentOwner(t *testing.T) {
+	event := originPullCompletedEvent("tenant1+stream1", control.Location{
+		ReplicatingFrom:  "cluster-b",
+		DestNodeID:       "dest-node",
+		PullSourceNodeID: "source-node",
+		PullDTSCURL:      "dtsc://source/tenant1+stream1",
+	}, "cluster-b", "tenant-content-owner")
+
+	if event.GetStreamTenantId() != "tenant-content-owner" {
+		t.Fatalf("stream tenant = %q, want tenant-content-owner", event.GetStreamTenantId())
+	}
+	if event.GetRemoteCluster() != "cluster-b" || event.GetOriginClusterId() != "cluster-b" {
+		t.Fatalf("unexpected federation placement: remote=%q origin=%q", event.GetRemoteCluster(), event.GetOriginClusterId())
 	}
 }
 

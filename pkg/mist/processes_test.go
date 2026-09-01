@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -139,6 +140,29 @@ func TestSetLivepeerWorkloadNoLivepeerIsNoop(t *testing.T) {
 	out := SetLivepeerWorkload(input, WorkloadVOD, LivepeerVODSegmentDeadlineMs, LivepeerVODMinSpeed)
 	if out != input {
 		t.Fatalf("expected passthrough, got %s", out)
+	}
+}
+
+func TestLivepeerJobTokenAndSpecDigest(t *testing.T) {
+	input := `[{"process":"Livepeer","target_profiles":[{"name":"360p","height":360,"bitrate":900000}]}]`
+	stamped := SetLivepeerWorkload(input, WorkloadVOD, LivepeerVODSegmentDeadlineMs, LivepeerVODMinSpeed)
+	digestBefore, err := LivepeerJobSpecDigest(stamped)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withToken := SetLivepeerJobToken(stamped, "v1.claims.signature")
+	if !strings.Contains(withToken, `"job_token":"v1.claims.signature"`) {
+		t.Fatalf("job token not stamped: %s", withToken)
+	}
+	digestAfter, err := LivepeerJobSpecDigest(withToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if digestAfter != digestBefore {
+		t.Fatalf("token changed semantic digest: before=%s after=%s", digestBefore, digestAfter)
+	}
+	if stripped := StripLivepeerJobToken(withToken); strings.Contains(stripped, "job_token") {
+		t.Fatalf("job token not stripped: %s", stripped)
 	}
 }
 

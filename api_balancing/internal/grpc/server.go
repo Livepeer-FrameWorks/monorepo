@@ -667,7 +667,7 @@ func (s *FoghornGRPCServer) dvrClusterPolicy() *dvrpolicy.Cluster {
 func (s *FoghornGRPCServer) emitRoutingEvent(
 	primary *sharedpb.ViewerEndpoint,
 	viewerLat, viewerLon, nodeLat, nodeLon float64,
-	internalName, streamTenantID, streamID string,
+	internalName, streamTenantID, streamID, originClusterID string,
 	durationMs float32,
 	candidatesCount int32,
 	eventType, source string,
@@ -682,23 +682,25 @@ func (s *FoghornGRPCServer) emitRoutingEvent(
 	}
 
 	handlers.EnqueueRoutingEvent(s.decklogClient, &handlers.RoutingEvent{
-		Status:          "success",
-		Details:         "grpc_resolve",
-		Score:           uint64(primary.LoadScore),
-		InternalName:    internalName,
-		StreamID:        streamID,
-		StreamTenantID:  streamTenantID,
-		ClientLat:       viewerLat,
-		ClientLon:       viewerLon,
-		SelectedNode:    selectedNode,
-		SelectedNodeID:  primary.NodeId,
-		NodeLat:         nodeLat,
-		NodeLon:         nodeLon,
-		NodeName:        primary.NodeId,
-		LatencyMs:       durationMs,
-		CandidatesCount: candidatesCount,
-		EventType:       eventType,
-		Source:          source,
+		Status:            "success",
+		Details:           "grpc_resolve",
+		Score:             uint64(primary.LoadScore),
+		InternalName:      internalName,
+		StreamID:          streamID,
+		StreamTenantID:    streamTenantID,
+		OriginClusterID:   originClusterID,
+		ClientLat:         viewerLat,
+		ClientLon:         viewerLon,
+		SelectedNode:      selectedNode,
+		SelectedNodeID:    primary.NodeId,
+		SelectedClusterID: primary.ClusterId,
+		NodeLat:           nodeLat,
+		NodeLon:           nodeLon,
+		NodeName:          primary.NodeId,
+		LatencyMs:         durationMs,
+		CandidatesCount:   candidatesCount,
+		EventType:         eventType,
+		Source:            source,
 	})
 }
 
@@ -2641,7 +2643,7 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *shar
 
 	switch resolvedType {
 	case "live":
-		response, err = s.resolveLiveViewerEndpoint(ctx, req, lat, lon, resolution.RoutingInternalName(), resolution.TenantId, resolution.StreamId, resolution.ClusterPeers, resolution.ActiveIngestClusterID, resolution.OfficialClusterID, resolution.AllowPlatformSharedPlayback || !resolution.LocalAuthority)
+		response, err = s.resolveLiveViewerEndpoint(ctx, req, lat, lon, resolution.RoutingInternalName(), resolution.TenantId, resolution.StreamId, resolution.OriginClusterID, resolution.ClusterPeers, resolution.ActiveIngestClusterID, resolution.OfficialClusterID, resolution.AllowPlatformSharedPlayback || !resolution.LocalAuthority)
 	case "dvr":
 		response, err = s.resolveDVRViewerEndpoint(ctx, req, lat, lon, resolution)
 	case "clip", "vod", "chapter":
@@ -2754,7 +2756,7 @@ func (s *FoghornGRPCServer) enforceResolvePlaybackPolicy(ctx context.Context, re
 	return nil
 }
 
-func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest, lat, lon float64, internalName, tenantID, streamID string, clusterPeers []*clusterpeerpb.TenantClusterPeer, activeIngestClusterID, officialClusterID string, allowPlatformShared bool) (*sharedpb.ViewerEndpointResponse, error) {
+func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest, lat, lon float64, internalName, tenantID, streamID, originClusterID string, clusterPeers []*clusterpeerpb.TenantClusterPeer, activeIngestClusterID, officialClusterID string, allowPlatformShared bool) (*sharedpb.ViewerEndpointResponse, error) {
 	start := time.Now()
 	deps := &control.PlaybackDependencies{
 		DB:                          s.db,
@@ -2838,7 +2840,7 @@ func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *
 		if response.Primary != nil {
 			candidatesCount = int32(1 + len(response.Fallbacks))
 		}
-		s.emitRoutingEvent(response.Primary, lat, lon, 0, 0, internalName, tenantID, streamID, durationMs, candidatesCount, "grpc_resolve", "grpc")
+		s.emitRoutingEvent(response.Primary, lat, lon, 0, 0, internalName, tenantID, streamID, originClusterID, durationMs, candidatesCount, "grpc_resolve", "grpc")
 	}
 
 	return response, nil
@@ -3240,7 +3242,7 @@ func (s *FoghornGRPCServer) resolveDVRViewerEndpoint(ctx context.Context, req *s
 			}).Warn("Active DVR has no resolvable recording origin; refusing to fall back to archive routing")
 			return nil, status.Error(codes.Unavailable, "active DVR recording origin not yet registered; retry")
 		}
-		resp, err := s.resolveLiveViewerEndpoint(ctx, req, lat, lon, resolution.InternalName, resolution.TenantId, resolution.StreamId, resolution.ClusterPeers, resolution.ActiveIngestClusterID, resolution.OfficialClusterID, resolution.AllowPlatformSharedPlayback || !resolution.LocalAuthority)
+		resp, err := s.resolveLiveViewerEndpoint(ctx, req, lat, lon, resolution.InternalName, resolution.TenantId, resolution.StreamId, resolution.OriginClusterID, resolution.ClusterPeers, resolution.ActiveIngestClusterID, resolution.OfficialClusterID, resolution.AllowPlatformSharedPlayback || !resolution.LocalAuthority)
 		if err != nil {
 			return nil, err
 		}
@@ -3351,10 +3353,12 @@ func (s *FoghornGRPCServer) resolveArtifactViewerEndpoint(ctx context.Context, r
 			candidatesCount = int32(1 + len(response.Fallbacks))
 		}
 		internalName := ""
+		originClusterID := ""
 		if resolution != nil {
 			internalName = resolution.InternalName
+			originClusterID = resolution.OriginClusterID
 		}
-		s.emitRoutingEvent(response.Primary, 0, 0, 0, 0, internalName, response.Metadata.GetTenantId(), response.Metadata.GetStreamId(), durationMs, candidatesCount, "grpc_resolve", "grpc")
+		s.emitRoutingEvent(response.Primary, 0, 0, 0, 0, internalName, response.Metadata.GetTenantId(), response.Metadata.GetStreamId(), originClusterID, durationMs, candidatesCount, "grpc_resolve", "grpc")
 	}
 
 	return response, nil

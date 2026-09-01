@@ -82,13 +82,14 @@ func HandleIngestFrontDoor(c *gin.Context) {
 		if localHandled && localContext != nil && !localContext.GetAdmitted() {
 			denial := control.EvaluateIngestAdmission(localContext)
 			emitIngestRoutingEventFn(&RoutingEvent{
-				Status:         "failed",
-				Details:        denial.Code,
-				InternalName:   localContext.GetInternalName(),
-				StreamID:       localContext.GetStreamId(),
-				StreamTenantID: localContext.GetTenantId(),
-				ClientIP:       clientIP,
-				LatencyMs:      float32(time.Since(start).Milliseconds()),
+				Status:          "failed",
+				Details:         denial.Code,
+				InternalName:    localContext.GetInternalName(),
+				StreamID:        localContext.GetStreamId(),
+				StreamTenantID:  localContext.GetTenantId(),
+				OriginClusterID: localContext.GetOriginClusterId(),
+				ClientIP:        clientIP,
+				LatencyMs:       float32(time.Since(start).Milliseconds()),
 			})
 			respondPlaybackError(c, denial.HTTPStatus, denial.Code, denial.Message, nil)
 			return
@@ -133,13 +134,14 @@ func HandleIngestFrontDoor(c *gin.Context) {
 
 	if denial := control.EvaluateIngestAdmission(streamCtx); denial != nil {
 		emitIngestRoutingEventFn(&RoutingEvent{
-			Status:         "failed",
-			Details:        denial.Code,
-			InternalName:   streamCtx.GetInternalName(),
-			StreamID:       streamCtx.GetStreamId(),
-			StreamTenantID: streamCtx.GetTenantId(),
-			ClientIP:       clientIP,
-			LatencyMs:      float32(time.Since(start).Milliseconds()),
+			Status:          "failed",
+			Details:         denial.Code,
+			InternalName:    streamCtx.GetInternalName(),
+			StreamID:        streamCtx.GetStreamId(),
+			StreamTenantID:  streamCtx.GetTenantId(),
+			OriginClusterID: streamCtx.GetOriginClusterId(),
+			ClientIP:        clientIP,
+			LatencyMs:       float32(time.Since(start).Milliseconds()),
 		})
 		respondPlaybackError(c, denial.HTTPStatus, denial.Code, denial.Message, nil)
 		return
@@ -167,15 +169,16 @@ func HandleIngestFrontDoor(c *gin.Context) {
 			"internal_name": streamCtx.GetInternalName(),
 		}).Warn("Ingest front door: no ingest-capable nodes")
 		emitIngestRoutingEventFn(&RoutingEvent{
-			Status:         "failed",
-			Details:        "no ingest-capable nodes",
-			InternalName:   streamCtx.GetInternalName(),
-			StreamID:       streamCtx.GetStreamId(),
-			StreamTenantID: streamCtx.GetTenantId(),
-			ClientIP:       clientIP,
-			ClientLat:      lat,
-			ClientLon:      lon,
-			LatencyMs:      float32(time.Since(start).Milliseconds()),
+			Status:          "failed",
+			Details:         "no ingest-capable nodes",
+			InternalName:    streamCtx.GetInternalName(),
+			StreamID:        streamCtx.GetStreamId(),
+			StreamTenantID:  streamCtx.GetTenantId(),
+			OriginClusterID: streamCtx.GetOriginClusterId(),
+			ClientIP:        clientIP,
+			ClientLat:       lat,
+			ClientLon:       lon,
+			LatencyMs:       float32(time.Since(start).Milliseconds()),
 		})
 		respondPlaybackError(c, http.StatusServiceUnavailable, "NO_INGEST_NODES",
 			"No ingest-capable nodes are available", nil)
@@ -184,16 +187,18 @@ func HandleIngestFrontDoor(c *gin.Context) {
 
 	primary := response.GetPrimary()
 	event := &RoutingEvent{
-		InternalName:    streamCtx.GetInternalName(),
-		StreamID:        streamCtx.GetStreamId(),
-		StreamTenantID:  streamCtx.GetTenantId(),
-		ClientIP:        clientIP,
-		ClientLat:       lat,
-		ClientLon:       lon,
-		SelectedNodeID:  primary.GetNodeId(),
-		Score:           uint64(primary.GetLoadScore()),
-		LatencyMs:       float32(time.Since(start).Milliseconds()),
-		CandidatesCount: int32(1 + len(response.GetFallbacks())),
+		InternalName:      streamCtx.GetInternalName(),
+		StreamID:          streamCtx.GetStreamId(),
+		StreamTenantID:    streamCtx.GetTenantId(),
+		OriginClusterID:   streamCtx.GetOriginClusterId(),
+		ClientIP:          clientIP,
+		ClientLat:         lat,
+		ClientLon:         lon,
+		SelectedNodeID:    primary.GetNodeId(),
+		SelectedClusterID: primary.GetClusterId(),
+		Score:             uint64(primary.GetLoadScore()),
+		LatencyMs:         float32(time.Since(start).Milliseconds()),
+		CandidatesCount:   int32(1 + len(response.GetFallbacks())),
 	}
 
 	if c.Request.Method == http.MethodPost {

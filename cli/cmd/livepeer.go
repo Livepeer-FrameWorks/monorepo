@@ -2,341 +2,345 @@ package cmd
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
+	"math/big"
+	"net"
 	"net/http"
+	"os/exec"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"frameworks/cli/internal/ux"
+	"frameworks/cli/pkg/inventory"
+	"frameworks/cli/pkg/ssh"
+	livepeerchain "github.com/Livepeer-FrameWorks/monorepo/pkg/livepeer/chain"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 
 	"github.com/spf13/cobra"
 )
 
 func newLivepeerCmd() *cobra.Command {
-	lp := &cobra.Command{
-		Use:   "livepeer",
-		Short: "Livepeer gateway management (status, deposits, wallet)",
-	}
+	lp := &cobra.Command{Use: "livepeer", Short: "Inspect and maintain the Livepeer gateway wallet"}
+	lp.PersistentFlags().String("address", "", "gateway wallet address (overrides discovery)")
+	lp.PersistentFlags().String("rpc", "", "Arbitrum JSON-RPC URL (overrides cluster shared env)")
+	lp.PersistentFlags().String("host", "", "gateway manifest host for an exceptional mutation")
+	lp.PersistentFlags().String("cluster", "", "cluster ID for discovery or manifest selection")
+	lp.PersistentFlags().String("manifest", "", "path to a single cluster.yaml")
+	lp.PersistentFlags().String("gitops-dir", "", "path to a local gitops repository")
+	lp.PersistentFlags().String("github-repo", "", "GitHub repository containing the cluster manifest")
+	lp.PersistentFlags().String("github-ref", "", "branch or tag for --github-repo")
+	lp.PersistentFlags().String("age-key", "", "age private key for SOPS-encrypted files")
+	lp.PersistentFlags().String("ssh-key", "", "SSH private key path")
+	lp.PersistentFlags().Int64("github-app-id", 0, "GitHub App ID")
+	lp.PersistentFlags().Int64("github-installation-id", 0, "GitHub App installation ID")
+	lp.PersistentFlags().String("github-private-key", "", "GitHub App private key PEM")
 
-	lp.PersistentFlags().String("gateway", "", "gateway address (host:port) — overrides discovery")
-	lp.PersistentFlags().String("cluster", "", "cluster ID for discovery")
-
-	lp.AddCommand(newLivepeerStatusCmd())
-	lp.AddCommand(newLivepeerDepositCmd())
-	lp.AddCommand(newLivepeerWalletCmd())
-
+	lp.AddCommand(newLivepeerStatusCmd(), newLivepeerWalletCmd(), newLivepeerDepositCmd(), newLivepeerSimpleMutationCmd("unlock", "/unlock"), newLivepeerSimpleMutationCmd("withdraw", "/withdraw"))
 	return lp
 }
 
-// resolveGatewayAddr returns the gateway CLI address. If --gateway is set, use it directly.
-// Otherwise, discover via Quartermaster.
-func resolveGatewayAddr(cmd *cobra.Command) (string, error) {
-	if addr, _ := cmd.Flags().GetString("gateway"); addr != "" {
-		return addr, nil
+func discoverLivepeerWalletAddress(cmd *cobra.Command) (string, error) {
+	explicit, err := cmd.Flags().GetString("address")
+	if err != nil {
+		return "", err
 	}
-
-	clusterID, _ := cmd.Flags().GetString("cluster")
+	if strings.TrimSpace(explicit) != "" {
+		return strings.TrimSpace(explicit), nil
+	}
+	clusterID, err := cmd.Flags().GetString("cluster")
+	if err != nil {
+		return "", err
+	}
 	qc, _, cleanup, err := newQMGRPCClientFromContext(cmd.Context())
 	if err != nil {
-		return "", fmt.Errorf("cannot discover gateway (use --gateway to specify directly): %w", err)
+		return "", fmt.Errorf("discover Livepeer wallet (or pass --address): %w", err)
 	}
 	defer cleanup()
 	defer func() { _ = qc.Close() }()
-
 	ctx, cancel := context.WithTimeout(cmd.Context(), 10*time.Second)
 	defer cancel()
-
 	resp, err := qc.DiscoverServices(ctx, "livepeer-gateway", clusterID, nil)
 	if err != nil {
-		return "", fmt.Errorf("discovery failed: %w", err)
+		return "", fmt.Errorf("discover Livepeer wallet: %w", err)
 	}
+	return livepeerWalletFromDiscovery(resp)
+}
 
-	for _, inst := range resp.Instances {
-		if inst.Status != "running" {
-			continue
-		}
-		host := strings.TrimSpace(inst.GetMetadata()[servicedefs.LivepeerGatewayMetadataAdminHost])
-		if host == "" {
-			host = inst.GetHost()
-		}
-		port := inst.GetPort()
-		if rawPort := strings.TrimSpace(inst.GetMetadata()[servicedefs.LivepeerGatewayMetadataAdminPort]); rawPort != "" {
-			if parsed, convErr := strconv.Atoi(rawPort); convErr == nil && parsed > 0 {
-				port = int32(parsed)
+func livepeerWalletFromDiscovery(resp *quartermasterpb.ServiceDiscoveryResponse) (string, error) {
+	if resp != nil {
+		for _, instance := range resp.GetInstances() {
+			if instance.GetStatus() != "running" {
+				continue
 			}
-		} else if port == 8935 {
-			port = 7935
-		}
-		if host != "" && port != 0 {
-			return fmt.Sprintf("%s:%d", host, port), nil
+			if wallet := strings.TrimSpace(instance.GetMetadata()[servicedefs.LivepeerGatewayMetadataWalletAddress]); wallet != "" {
+				return wallet, nil
+			}
 		}
 	}
-
-	return "", fmt.Errorf("no running livepeer-gateway found (use --gateway to specify directly)")
+	return "", fmt.Errorf("no running livepeer-gateway with wallet_address metadata found (or pass --address)")
 }
 
-type livepeerStatus struct {
-	Manifests                  interface{} `json:"Manifests"`
-	Version                    string      `json:"Version"`
-	GolangRuntimeVersion       string      `json:"GolangRuntimeVersion"`
-	GOArch                     string      `json:"GOArch"`
-	GOOS                       string      `json:"GOOS"`
-	OrchestratorPool           interface{} `json:"OrchestratorPool"`
-	RegisteredTranscodersCount int         `json:"RegisteredTranscodersCount"`
-	EthereumAddr               string      `json:"EthereumAddr"`
-	TranscodingConfig          interface{} `json:"TranscodingConfig"`
+func resolveLivepeerRPC(cmd *cobra.Command) (string, error) {
+	explicit, err := cmd.Flags().GetString("rpc")
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(explicit) != "" {
+		return strings.TrimSpace(explicit), nil
+	}
+	rc, err := resolveClusterManifest(cmd)
+	if err != nil {
+		return "", fmt.Errorf("resolve Arbitrum RPC (or pass --rpc): %w", err)
+	}
+	defer rc.Cleanup()
+	env, err := rc.PreparedSharedEnv()
+	if err != nil {
+		return "", fmt.Errorf("load cluster shared env: %w", err)
+	}
+	return livepeerRPCFromEnv(env)
 }
 
-func gatewayGET(addr, path string) ([]byte, error) {
-	url := fmt.Sprintf("http://%s%s", addr, path)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, err
+func livepeerRPCFromEnv(env map[string]string) (string, error) {
+	for _, key := range livepeerRPCPoolEnvKeys(env) {
+		if urls := splitLivepeerRPCURLs(env[key]); len(urls) > 0 {
+			return urls[0], nil
+		}
 	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	b, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("GET %s returned %d: %s", path, resp.StatusCode, string(b))
-	}
-	return b, nil
+	return "", fmt.Errorf("cluster shared env contains no Livepeer/Arbitrum RPC URL (or pass --rpc)")
 }
-
-func gatewayPOST(addr, path, body string) ([]byte, error) {
-	url := fmt.Sprintf("http://%s%s", addr, path)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, "POST", url, strings.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	b, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("POST %s returned %d: %s", path, resp.StatusCode, string(b))
-	}
-	return b, nil
-}
-
-// --- fw livepeer status ---
 
 func newLivepeerStatusCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "status",
-		Short: "Show gateway status (version, address, sessions, deposit)",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			addr, err := resolveGatewayAddr(cmd)
-			if err != nil {
-				return err
-			}
-
-			body, err := gatewayGET(addr, "/status")
-			if err != nil {
-				return fmt.Errorf("GET /status failed: %w", err)
-			}
-
-			var status livepeerStatus
-			if err = json.Unmarshal(body, &status); err != nil {
-				return fmt.Errorf("invalid /status response: %w", err)
-			}
-
-			out := cmd.OutOrStdout()
-			ux.Heading(out, fmt.Sprintf("Livepeer gateway status (%s)", addr))
-			fmt.Fprintf(out, "Version:    %s\n", status.Version)
-			fmt.Fprintf(out, "ETH Addr:   %s\n", status.EthereumAddr)
-			fmt.Fprintf(out, "Arch:       %s/%s\n", status.GOOS, status.GOArch)
-
-			depositBody, err := gatewayGET(addr, "/senderInfo")
-			if err == nil {
-				var senderInfo map[string]interface{}
-				if json.Unmarshal(depositBody, &senderInfo) == nil {
-					if deposit, ok := senderInfo["Deposit"]; ok {
-						fmt.Fprintf(out, "Deposit:    %v\n", deposit)
-					}
-					if reserve, ok := senderInfo["Reserve"]; ok {
-						fmt.Fprintf(out, "Reserve:    %v\n", reserve)
-					}
-				}
-			}
-
-			return nil
-		},
-	}
+	return &cobra.Command{Use: "status", Short: "Read wallet, deposit, and reserve state from Arbitrum", RunE: func(cmd *cobra.Command, _ []string) error {
+		address, err := discoverLivepeerWalletAddress(cmd)
+		if err != nil {
+			return err
+		}
+		rpc, err := resolveLivepeerRPC(cmd)
+		if err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
+		defer cancel()
+		client := livepeerchain.NewClient(rpc, nil)
+		balance, err := client.ETHBalance(ctx, address)
+		if err != nil {
+			return fmt.Errorf("read ETH balance: %w", err)
+		}
+		sender, err := client.GetSenderInfo(ctx, address)
+		if err != nil {
+			return fmt.Errorf("read TicketBroker sender info: %w", err)
+		}
+		out := cmd.OutOrStdout()
+		ux.Heading(out, "Livepeer gateway wallet")
+		fmt.Fprintf(out, "Address:        %s\n", address)
+		fmt.Fprintf(out, "ETH Balance:    %s ETH\n", livepeerchain.WeiToETH(balance))
+		fmt.Fprintf(out, "Deposit:        %s ETH\n", livepeerchain.WeiToETH(sender.Deposit))
+		fmt.Fprintf(out, "Reserve:        %s ETH\n", livepeerchain.WeiToETH(sender.Reserve))
+		fmt.Fprintf(out, "Withdraw Round: %s\n", sender.WithdrawRound)
+		return nil
+	}}
 }
-
-// --- fw livepeer deposit ---
-
-func newLivepeerDepositCmd() *cobra.Command {
-	dep := &cobra.Command{
-		Use:   "deposit",
-		Short: "Manage TicketBroker deposit and reserve",
-	}
-	dep.AddCommand(newLivepeerDepositFundCmd())
-	dep.AddCommand(newLivepeerDepositReserveCmd())
-	dep.AddCommand(newLivepeerDepositUnlockCmd())
-	dep.AddCommand(newLivepeerDepositWithdrawCmd())
-	return dep
-}
-
-func newLivepeerDepositFundCmd() *cobra.Command {
-	var amount string
-	cmd := &cobra.Command{
-		Use:   "fund",
-		Short: "Fund TicketBroker deposit",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			addr, err := resolveGatewayAddr(cmd)
-			if err != nil {
-				return err
-			}
-			body, err := gatewayPOST(addr, "/fundDeposit", "amount="+amount)
-			if err != nil {
-				return fmt.Errorf("POST /fundDeposit failed: %w", err)
-			}
-			fmt.Printf("Response: %s\n", string(body))
-			return nil
-		},
-	}
-	cmd.Flags().StringVar(&amount, "amount", "", "amount in wei")
-	_ = cmd.MarkFlagRequired("amount")
-	return cmd
-}
-
-func newLivepeerDepositReserveCmd() *cobra.Command {
-	var depositAmount, reserveAmount string
-	cmd := &cobra.Command{
-		Use:   "reserve",
-		Short: "Fund both deposit and reserve",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			addr, err := resolveGatewayAddr(cmd)
-			if err != nil {
-				return err
-			}
-			body, err := gatewayPOST(addr, "/fundDepositAndReserve",
-				fmt.Sprintf("depositAmount=%s&penaltyEscrowAmount=%s", depositAmount, reserveAmount))
-			if err != nil {
-				return fmt.Errorf("POST /fundDepositAndReserve failed: %w", err)
-			}
-			fmt.Printf("Response: %s\n", string(body))
-			return nil
-		},
-	}
-	cmd.Flags().StringVar(&depositAmount, "deposit", "", "deposit amount in wei")
-	cmd.Flags().StringVar(&reserveAmount, "reserve", "", "reserve amount in wei")
-	_ = cmd.MarkFlagRequired("deposit")
-	_ = cmd.MarkFlagRequired("reserve")
-	return cmd
-}
-
-func newLivepeerDepositUnlockCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "unlock",
-		Short: "Start unlock period for deposit and reserve",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			addr, err := resolveGatewayAddr(cmd)
-			if err != nil {
-				return err
-			}
-			body, err := gatewayPOST(addr, "/unlock", "")
-			if err != nil {
-				return fmt.Errorf("POST /unlock failed: %w", err)
-			}
-			fmt.Printf("Response: %s\n", string(body))
-			return nil
-		},
-	}
-}
-
-func newLivepeerDepositWithdrawCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "withdraw",
-		Short: "Withdraw unlocked deposit and reserve",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			addr, err := resolveGatewayAddr(cmd)
-			if err != nil {
-				return err
-			}
-			body, err := gatewayPOST(addr, "/withdraw", "")
-			if err != nil {
-				return fmt.Errorf("POST /withdraw failed: %w", err)
-			}
-			fmt.Printf("Response: %s\n", string(body))
-			return nil
-		},
-	}
-}
-
-// --- fw livepeer wallet ---
 
 func newLivepeerWalletCmd() *cobra.Command {
-	wallet := &cobra.Command{
-		Use:   "wallet",
-		Short: "Gateway wallet info",
-	}
-	wallet.AddCommand(newLivepeerWalletAddressCmd())
-	wallet.AddCommand(newLivepeerWalletBalanceCmd())
+	wallet := &cobra.Command{Use: "wallet", Short: "Read gateway wallet information from discovery and Arbitrum"}
+	wallet.AddCommand(&cobra.Command{Use: "address", Short: "Show the discovered gateway wallet address", RunE: func(cmd *cobra.Command, _ []string) error {
+		address, err := discoverLivepeerWalletAddress(cmd)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(cmd.OutOrStdout(), address)
+		return nil
+	}})
+	wallet.AddCommand(&cobra.Command{Use: "balance", Short: "Read the gateway wallet ETH balance from Arbitrum", RunE: func(cmd *cobra.Command, _ []string) error {
+		address, err := discoverLivepeerWalletAddress(cmd)
+		if err != nil {
+			return err
+		}
+		rpc, err := resolveLivepeerRPC(cmd)
+		if err != nil {
+			return err
+		}
+		ctx, cancel := context.WithTimeout(cmd.Context(), 15*time.Second)
+		defer cancel()
+		balance, err := livepeerchain.NewClient(rpc, nil).ETHBalance(ctx, address)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "%s ETH\n", livepeerchain.WeiToETH(balance))
+		return nil
+	}})
 	return wallet
 }
 
-func newLivepeerWalletAddressCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "address",
-		Short: "Show the gateway's ETH address",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			addr, err := resolveGatewayAddr(cmd)
-			if err != nil {
-				return err
-			}
-			body, err := gatewayGET(addr, "/status")
-			if err != nil {
-				return fmt.Errorf("GET /status failed: %w", err)
-			}
-			var status struct {
-				EthereumAddr string `json:"EthereumAddr"`
-			}
-			if err := json.Unmarshal(body, &status); err != nil {
-				return err
-			}
-			fmt.Println(status.EthereumAddr)
-			return nil
-		},
+func newLivepeerDepositCmd() *cobra.Command {
+	deposit := &cobra.Command{Use: "deposit", Short: "Exceptional TicketBroker maintenance (routine funding is Purser-owned)"}
+	var reserveAmount string
+	reserve := &cobra.Command{Use: "reserve", Short: "Add reserve through a temporarily enabled loopback tx route", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		amount := strings.TrimSpace(reserveAmount)
+		parsed, ok := new(big.Int).SetString(amount, 10)
+		if !ok || parsed.Sign() < 0 {
+			return fmt.Errorf("--amount must be a non-negative integer number of wei")
+		}
+		return runLivepeerMutation(cmd, "/fundDepositAndReserve", []string{"depositAmount=0", "reserveAmount=" + amount})
+	}}
+	reserve.Flags().StringVar(&reserveAmount, "amount", "", "reserve amount in wei")
+	if err := reserve.MarkFlagRequired("amount"); err != nil {
+		panic(err)
 	}
+	deposit.AddCommand(reserve)
+	return deposit
 }
 
-func newLivepeerWalletBalanceCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "balance",
-		Short: "Show the gateway's ETH balance",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			addr, err := resolveGatewayAddr(cmd)
-			if err != nil {
-				return err
-			}
-			body, err := gatewayGET(addr, "/ethBalance")
-			if err != nil {
-				return fmt.Errorf("GET /ethBalance failed: %w", err)
-			}
-			fmt.Printf("ETH Balance: %s\n", strings.TrimSpace(string(body)))
-			return nil
-		},
+func newLivepeerSimpleMutationCmd(use, route string) *cobra.Command {
+	return &cobra.Command{Use: use, Short: "Run an exceptional wallet mutation over SSH to the loopback CLI", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		return runLivepeerMutation(cmd, route, nil)
+	}}
+}
+
+type livepeerMutationTarget struct {
+	ServiceName string
+	Host        inventory.Host
+	Port        int
+	SSHKey      string
+}
+
+func resolveLivepeerMutationTarget(cmd *cobra.Command) (livepeerMutationTarget, func(), error) {
+	rc, err := resolveClusterManifest(cmd)
+	if err != nil {
+		return livepeerMutationTarget{}, func() {}, err
 	}
+	hostFlag, err := cmd.Flags().GetString("host")
+	if err != nil {
+		rc.Cleanup()
+		return livepeerMutationTarget{}, func() {}, err
+	}
+	clusterFlag, err := cmd.Flags().GetString("cluster")
+	if err != nil {
+		rc.Cleanup()
+		return livepeerMutationTarget{}, func() {}, err
+	}
+	names := make([]string, 0, len(rc.Manifest.Services))
+	for name := range rc.Manifest.Services {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		svc := rc.Manifest.Services[name]
+		if !svc.Enabled || !serviceDeployMatches(name, svc, "livepeer-gateway") {
+			continue
+		}
+		if clusterFlag != "" && svc.Cluster != clusterFlag && !slices.Contains(svc.Clusters, clusterFlag) {
+			continue
+		}
+		hosts := serviceHosts(svc)
+		selected := ""
+		if hostFlag != "" && slices.Contains(hosts, hostFlag) {
+			selected = hostFlag
+		} else if hostFlag == "" && len(hosts) > 0 {
+			selected = hosts[0]
+		}
+		if selected == "" {
+			continue
+		}
+		host, ok := rc.Manifest.GetHost(selected)
+		if !ok {
+			continue
+		}
+		port := 7935
+		if cliAddr := strings.TrimSpace(svc.Config["cli_addr"]); cliAddr != "" {
+			_, rawPort, splitErr := net.SplitHostPort(cliAddr)
+			if splitErr != nil {
+				return livepeerMutationTarget{}, rc.Cleanup, fmt.Errorf("service %s has invalid cli_addr %q", name, cliAddr)
+			}
+			port, err = strconv.Atoi(rawPort)
+			if err != nil {
+				return livepeerMutationTarget{}, rc.Cleanup, err
+			}
+		}
+		sshKey, err := cmd.Flags().GetString("ssh-key")
+		if err != nil {
+			rc.Cleanup()
+			return livepeerMutationTarget{}, func() {}, err
+		}
+		return livepeerMutationTarget{ServiceName: name, Host: host, Port: port, SSHKey: sshKey}, rc.Cleanup, nil
+	}
+	rc.Cleanup()
+	return livepeerMutationTarget{}, func() {}, fmt.Errorf("no matching livepeer-gateway host found in the manifest")
+}
+
+func livepeerMutationCurlArgs(port int, route string, fields []string) []string {
+	args := []string{"-sS", "-X", http.MethodPost, "-w", "\n%{http_code}"}
+	for _, field := range fields {
+		args = append(args, "--data-urlencode", field)
+	}
+	return append(args, fmt.Sprintf("http://127.0.0.1:%d%s", port, route))
+}
+
+func runLivepeerMutation(cmd *cobra.Command, route string, fields []string) error {
+	target, cleanup, err := resolveLivepeerMutationTarget(cmd)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	stdout, err := executeLivepeerCurl(cmd.Context(), target, livepeerMutationCurlArgs(target.Port, route, fields))
+	if err != nil {
+		return err
+	}
+	body, status, err := splitCurlStatus(stdout)
+	if err != nil {
+		return err
+	}
+	if err := livepeerMutationHTTPError(status, body, target.ServiceName); err != nil {
+		return err
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), body)
+	return nil
+}
+
+func livepeerMutationHTTPError(status int, body, serviceName string) error {
+	if status == http.StatusNotFound {
+		return fmt.Errorf("tx routes disabled; set enable_cli_tx_routes: \"true\" on %s in the manifest, provision, retry, then remove it", serviceName)
+	}
+	if status < 200 || status >= 300 {
+		return fmt.Errorf("gateway CLI returned HTTP %d: %s", status, body)
+	}
+	return nil
+}
+
+func executeLivepeerCurl(ctx context.Context, target livepeerMutationTarget, curlArgs []string) (string, error) {
+	if target.Host.ExternalIP == "" || target.Host.ExternalIP == "localhost" || target.Host.ExternalIP == "127.0.0.1" {
+		out, err := exec.CommandContext(ctx, "curl", curlArgs...).CombinedOutput()
+		return string(out), err
+	}
+	client, err := ssh.NewClient(&ssh.ConnectionConfig{Address: target.Host.ExternalIP, Port: 22, User: target.Host.User, KeyPath: target.SSHKey, HostName: target.Host.Name, Timeout: 30 * time.Second})
+	if err != nil {
+		return "", err
+	}
+	defer client.Close()
+	parts := []string{"curl"}
+	for _, arg := range curlArgs {
+		parts = append(parts, ssh.ShellQuote(arg))
+	}
+	result, err := client.Run(ctx, strings.Join(parts, " "))
+	if err != nil {
+		return "", err
+	}
+	return result.Stdout, nil
+}
+
+func splitCurlStatus(output string) (string, int, error) {
+	output = strings.TrimSpace(output)
+	idx := strings.LastIndexByte(output, '\n')
+	if idx < 0 {
+		return "", 0, fmt.Errorf("gateway CLI response did not include an HTTP status")
+	}
+	status, err := strconv.Atoi(strings.TrimSpace(output[idx+1:]))
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid gateway CLI HTTP status: %w", err)
+	}
+	return strings.TrimSpace(output[:idx]), status, nil
 }

@@ -10,27 +10,28 @@ import (
 )
 
 type FoghornDvrChapter struct {
-	ChapterID            string         `db:"chapter_id" json:"chapter_id"`
-	ArtifactHash         string         `db:"artifact_hash" json:"artifact_hash"`
-	Mode                 string         `db:"mode" json:"mode"`
-	IntervalSeconds      sql.NullInt32  `db:"interval_seconds" json:"interval_seconds"`
-	StartMs              int64          `db:"start_ms" json:"start_ms"`
-	EndMs                int64          `db:"end_ms" json:"end_ms"`
-	IsCurrent            bool           `db:"is_current" json:"is_current"`
-	State                string         `db:"state" json:"state"`
-	PlaybackArtifactHash sql.NullString `db:"playback_artifact_hash" json:"playback_artifact_hash"`
-	PlaybackID           sql.NullString `db:"playback_id" json:"playback_id"`
-	FinalizeAttempts     int32          `db:"finalize_attempts" json:"finalize_attempts"`
-	FrozenAt             sql.NullTime   `db:"frozen_at" json:"frozen_at"`
-	FinalizeStartedAt    sql.NullTime   `db:"finalize_started_at" json:"finalize_started_at"`
-	FinalizeNodeID       sql.NullString `db:"finalize_node_id" json:"finalize_node_id"`
-	LastFailureReason    sql.NullString `db:"last_failure_reason" json:"last_failure_reason"`
-	ReclaimStartedAt     sql.NullTime   `db:"reclaim_started_at" json:"reclaim_started_at"`
-	SegmentCount         int32          `db:"segment_count" json:"segment_count"`
-	HasGaps              bool           `db:"has_gaps" json:"has_gaps"`
-	ActualMediaStartMs   sql.NullInt64  `db:"actual_media_start_ms" json:"actual_media_start_ms"`
-	ActualMediaEndMs     sql.NullInt64  `db:"actual_media_end_ms" json:"actual_media_end_ms"`
-	CreatedAt            time.Time      `db:"created_at" json:"created_at"`
+	ChapterID             string         `db:"chapter_id" json:"chapter_id"`
+	ArtifactHash          string         `db:"artifact_hash" json:"artifact_hash"`
+	Mode                  string         `db:"mode" json:"mode"`
+	IntervalSeconds       sql.NullInt32  `db:"interval_seconds" json:"interval_seconds"`
+	StartMs               int64          `db:"start_ms" json:"start_ms"`
+	EndMs                 int64          `db:"end_ms" json:"end_ms"`
+	IsCurrent             bool           `db:"is_current" json:"is_current"`
+	State                 string         `db:"state" json:"state"`
+	PlaybackArtifactHash  sql.NullString `db:"playback_artifact_hash" json:"playback_artifact_hash"`
+	PlaybackID            sql.NullString `db:"playback_id" json:"playback_id"`
+	FinalizeAttempts      int32          `db:"finalize_attempts" json:"finalize_attempts"`
+	FrozenAt              sql.NullTime   `db:"frozen_at" json:"frozen_at"`
+	FinalizeStartedAt     sql.NullTime   `db:"finalize_started_at" json:"finalize_started_at"`
+	FinalizeNodeID        sql.NullString `db:"finalize_node_id" json:"finalize_node_id"`
+	FinalizeProcessesJson sql.NullString `db:"finalize_processes_json" json:"finalize_processes_json"`
+	LastFailureReason     sql.NullString `db:"last_failure_reason" json:"last_failure_reason"`
+	ReclaimStartedAt      sql.NullTime   `db:"reclaim_started_at" json:"reclaim_started_at"`
+	SegmentCount          int32          `db:"segment_count" json:"segment_count"`
+	HasGaps               bool           `db:"has_gaps" json:"has_gaps"`
+	ActualMediaStartMs    sql.NullInt64  `db:"actual_media_start_ms" json:"actual_media_start_ms"`
+	ActualMediaEndMs      sql.NullInt64  `db:"actual_media_end_ms" json:"actual_media_end_ms"`
+	CreatedAt             time.Time      `db:"created_at" json:"created_at"`
 }
 
 type FoghornDvrSegment struct {

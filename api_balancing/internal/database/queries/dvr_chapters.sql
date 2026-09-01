@@ -29,7 +29,8 @@ WHERE artifact_hash = $1 AND is_current = true;
 UPDATE foghorn.dvr_chapters
 SET state = 'finalizing', playback_artifact_hash = sqlc.narg(playback_artifact_hash),
     finalize_attempts = finalize_attempts + 1, finalize_started_at = NOW(),
-    finalize_node_id = NULLIF(sqlc.arg(finalize_node_id)::text, '')
+    finalize_node_id = NULLIF(sqlc.arg(finalize_node_id)::text, ''),
+    finalize_processes_json = NULLIF(sqlc.arg(finalize_processes_json)::text, '')
 WHERE chapter_id = sqlc.arg(chapter_id)
   AND (state = 'closed' OR (state = 'finalizing'
     AND COALESCE(finalize_started_at, created_at) < NOW() - make_interval(secs => sqlc.arg(stale_seconds))))

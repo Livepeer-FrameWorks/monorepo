@@ -17,12 +17,15 @@ func TestBuildLoadBalancingData_PopulatedOptionalFields(t *testing.T) {
 		Status:    "success",
 		ClientLat: 52.0, ClientLon: 5.0,
 		NodeLat: 48.0, NodeLon: 2.0, // distinct from client → non-zero distance
-		LatencyMs:       12.5,
-		CandidatesCount: 3,
-		EventType:       "load_balancing",
-		Source:          "http",
-		RemoteClusterID: "cluster-remote",
-		InternalName:    "live+x",
+		LatencyMs:         12.5,
+		CandidatesCount:   3,
+		EventType:         "load_balancing",
+		Source:            "http",
+		RemoteClusterID:   "cluster-remote",
+		SelectedClusterID: "cluster-us",
+		ControlCellID:     "cell-control",
+		OriginClusterID:   "cluster-eu",
+		InternalName:      "live+x",
 	}
 	data := BuildLoadBalancingData(e)
 
@@ -40,6 +43,9 @@ func TestBuildLoadBalancingData_PopulatedOptionalFields(t *testing.T) {
 	}
 	if data.RemoteClusterId == nil || *data.RemoteClusterId != "cluster-remote" {
 		t.Errorf("remote_cluster_id = %v", data.RemoteClusterId)
+	}
+	if data.GetSelectedClusterId() != "cluster-us" || data.GetControlCellId() != "cell-control" || data.GetOriginClusterId() != "cluster-eu" {
+		t.Errorf("placement = selected %q, control %q, origin %q", data.GetSelectedClusterId(), data.GetControlCellId(), data.GetOriginClusterId())
 	}
 }
 

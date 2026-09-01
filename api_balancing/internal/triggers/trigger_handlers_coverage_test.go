@@ -467,13 +467,14 @@ func TestHandleUserNew_AdmittedViewerRegistersUnderCap(t *testing.T) {
 	const tenantID = "tenant-admit"
 	p.streamCache.Set(tenantID+":"+internal, streamContext{
 		TenantID:          tenantID,
+		OriginClusterID:   "cluster-origin",
 		MaxViewers:        5,
 		RequiresAuthKnown: true,
 		RequiresAuth:      false,
 	}, time.Minute)
 
 	before := state.DefaultTenantCapacity().CountViewers(tenantID)
-	resp, abort, err := p.handleUserNew(&ipcpb.MistTrigger{
+	trigger := &ipcpb.MistTrigger{
 		NodeId:    "node-admit",
 		ClusterId: ptrTrigHandlers("test-cluster"),
 		TenantId:  ptrTrigHandlers(tenantID),
@@ -485,7 +486,8 @@ func TestHandleUserNew_AdmittedViewerRegistersUnderCap(t *testing.T) {
 				SessionId:  "sess-admit",
 			},
 		},
-	})
+	}
+	resp, abort, err := p.handleUserNew(trigger)
 	if err != nil || abort {
 		t.Fatalf("handleUserNew err=%v abort=%v", err, abort)
 	}
@@ -494,6 +496,9 @@ func TestHandleUserNew_AdmittedViewerRegistersUnderCap(t *testing.T) {
 	}
 	if after := state.DefaultTenantCapacity().CountViewers(tenantID); after != before+1 {
 		t.Errorf("admitted viewer must be registered against the cap: count %d -> %d", before, after)
+	}
+	if trigger.GetOriginClusterId() != "cluster-origin" || trigger.GetViewerConnect().GetOriginClusterId() != "cluster-origin" {
+		t.Fatalf("origin not preserved in viewer envelope and payload: %+v", trigger)
 	}
 }
 

@@ -234,7 +234,7 @@ func CloseCurrentChapterForArtifact(ctx context.Context, artifactHash string) er
 // The unique partial index on foghorn.artifacts(origin_id) WHERE
 // origin_type='dvr_chapter' enforces that retries reuse the same
 // playback artifact row.
-func MarkChapterFinalizing(ctx context.Context, chapterID, playbackHash, tenantID, finalizeNodeID string, staleTimeout time.Duration) (attempt int32, ok bool, err error) {
+func MarkChapterFinalizing(ctx context.Context, chapterID, playbackHash, tenantID, finalizeNodeID, processesJSON string, staleTimeout time.Duration) (attempt int32, ok bool, err error) {
 	if db == nil {
 		return 0, false, sql.ErrConnDone
 	}
@@ -254,6 +254,7 @@ func MarkChapterFinalizing(ctx context.Context, chapterID, playbackHash, tenantI
 		ChapterID:            chapterID,
 		PlaybackArtifactHash: sql.NullString{String: playbackHash, Valid: playbackHash != ""},
 		StaleSeconds:         staleTimeout.Seconds(), FinalizeNodeID: finalizeNodeID,
+		FinalizeProcessesJson: processesJSON,
 	})
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, false, nil // not claimable (already advanced / another worker)

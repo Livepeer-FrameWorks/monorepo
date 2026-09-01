@@ -365,7 +365,7 @@ func (q *ChapterFinalizationQueue) dispatchChapter(ctx context.Context, c contro
 
 	// MarkChapterFinalizing transitions the chapter AND enqueues the PROCESSING lifecycle in one
 	// transaction (durable, atomic) — no separate fire-and-forget emit here.
-	attempt, ok, err := control.MarkChapterFinalizing(ctx, c.ChapterID, playbackHash, parent.tenantID, targetNode, chapterFinalizationDeadline(c))
+	attempt, ok, err := control.MarkChapterFinalizing(ctx, c.ChapterID, playbackHash, parent.tenantID, targetNode, processesJSON, chapterFinalizationDeadline(c))
 	if err != nil {
 		return err
 	}

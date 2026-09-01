@@ -64,6 +64,7 @@ var (
 	// clusterID = emitting cluster identifier
 	// ownerTenantID = cluster operator tenant (infra owner) for event storage
 	clusterID     string
+	controlCellID string
 	ownerTenantID string
 	// Self-geo: cached from infrastructure_nodes.external_ip via GeoIP on bootstrap
 	selfLat      float64
@@ -152,6 +153,9 @@ type FoghornMetrics struct {
 	// Reasons: stream_not_found, stream_not_live, peer_context_missing,
 	// peer_unreachable, commodore_unreachable, invalid_request.
 	LivepeerAuthRejected *prometheus.CounterVec
+	// LivepeerAuthProfileNormalized counts accepted client profile payloads
+	// whose harmless representation drift was replaced with canonical policy.
+	LivepeerAuthProfileNormalized *prometheus.CounterVec
 
 	// StorageMint counts MintStorageURLs federation-handler outcomes.
 	// Labels: result. Values: accepted, tenant_mismatch,
@@ -197,6 +201,7 @@ func Init(
 	geoipCache = geoCache
 	// Initialize cluster ID for dual-tenant attribution
 	clusterID = config.GetEnv("CLUSTER_ID", "")
+	controlCellID = config.GetEnv("MEDIA_AUTHORITY_CELL_ID", clusterID)
 
 	startIngestRateLimiterJanitor()
 	StartRoutingEventQueue()
@@ -1646,7 +1651,8 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 			} else {
 				target = &control.StreamTarget{
 					InternalName: resolution.RoutingInternalName(), StreamID: resolution.StreamId, TenantID: resolution.TenantId,
-					ContentType: resolution.ContentType, ClusterPeers: resolution.ClusterPeers,
+					OriginClusterID: resolution.OriginClusterID,
+					ContentType:     resolution.ContentType, ClusterPeers: resolution.ClusterPeers,
 					OfficialClusterID: resolution.OfficialClusterID, AllowPlatformSharedPlayback: resolution.AllowPlatformSharedPlayback,
 					LocalAuthority: resolution.LocalAuthority,
 					RequiresAuth:   resolution.RequiresAuth, RequiresAuthKnown: true,
@@ -1661,7 +1667,7 @@ func handleStreamBalancing(c *gin.Context, streamName string) {
 		c.String(http.StatusServiceUnavailable, "stream authority unavailable")
 		return
 	}
-	eventIdentity := &routingEventIdentity{TenantID: target.TenantID, StreamID: target.StreamID, InternalName: target.InternalName}
+	eventIdentity := &routingEventIdentity{TenantID: target.TenantID, StreamID: target.StreamID, InternalName: target.InternalName, OriginClusterID: target.OriginClusterID}
 	internalName := mist.ExtractInternalName(target.InternalName)
 
 	// Prepaid billing check (402)
@@ -1907,6 +1913,9 @@ func emitFederationEvent(data *ipcpb.FederationEventData) {
 	if data.LocalCluster == "" {
 		data.LocalCluster = clusterID
 	}
+	if data.ControlCellId == nil && controlCellID != "" {
+		data.ControlCellId = &controlCellID
+	}
 	if data.LocalLat == nil && (selfLat != 0 || selfLon != 0) {
 		data.LocalLat = &selfLat
 		data.LocalLon = &selfLon
@@ -1926,9 +1935,10 @@ func emitFederationEvent(data *ipcpb.FederationEventData) {
 }
 
 type routingEventIdentity struct {
-	TenantID     string
-	StreamID     string
-	InternalName string
+	TenantID        string
+	StreamID        string
+	InternalName    string
+	OriginClusterID string
 }
 
 // postBalancingEvent snapshots request-scoped values before the handler
@@ -1999,8 +2009,9 @@ func postBalancingEventExWithIdentity(c *gin.Context, streamName, selectedNode s
 		event.StreamTenantID = identity.TenantID
 		event.StreamID = identity.StreamID
 		event.InternalName = identity.InternalName
+		event.OriginClusterID = identity.OriginClusterID
 	}
-	go func(event *RoutingEvent, unresolvedName string) {
+	go func(event *RoutingEvent, unresolvedName string, needsIdentityResolution bool) {
 		if event.ClientCountry == "" && geoipReader != nil && event.ClientIP != "" {
 			if geoData := geoip.LookupCached(context.Background(), geoipReader, geoipCache, event.ClientIP); geoData != nil {
 				event.ClientCountry = geoData.CountryCode
@@ -2014,14 +2025,26 @@ func postBalancingEventExWithIdentity(c *gin.Context, streamName, selectedNode s
 				}).Debug("GeoIP fallback for routing event")
 			}
 		}
-		if event.StreamID == "" && unresolvedName != "" {
-			resolved := resolveRoutingEventIdentity(unresolvedName)
-			event.StreamTenantID = resolved.TenantID
-			event.StreamID = resolved.StreamID
-			event.InternalName = resolved.InternalName
+		if needsIdentityResolution && unresolvedName != "" {
+			mergeRoutingEventIdentity(event, resolveRoutingEventIdentity(unresolvedName))
 		}
 		enqueueRoutingEvent(nil, event)
-	}(event, streamName)
+	}(event, streamName, identity == nil)
+}
+
+func mergeRoutingEventIdentity(event *RoutingEvent, resolved routingEventIdentity) {
+	if event.StreamTenantID == "" {
+		event.StreamTenantID = resolved.TenantID
+	}
+	if event.StreamID == "" {
+		event.StreamID = resolved.StreamID
+	}
+	if event.InternalName == "" {
+		event.InternalName = resolved.InternalName
+	}
+	if event.OriginClusterID == "" {
+		event.OriginClusterID = resolved.OriginClusterID
+	}
 }
 
 func resolveRoutingEventIdentity(streamName string) routingEventIdentity {
@@ -2030,7 +2053,7 @@ func resolveRoutingEventIdentity(streamName string) routingEventIdentity {
 		identity, handled, err := triggerProcessor.ResolveLocalContent(ctx, streamName)
 		cancel()
 		if handled && err == nil && identity != nil {
-			return routingEventIdentity{TenantID: identity.TenantId, StreamID: identity.StreamId, InternalName: identity.InternalName}
+			return routingEventIdentity{TenantID: identity.TenantId, StreamID: identity.StreamId, InternalName: identity.InternalName, OriginClusterID: identity.OriginClusterID}
 		}
 	}
 	if control.StreamRegistryInstance == nil {
@@ -2042,14 +2065,14 @@ func resolveRoutingEventIdentity(streamName string) routingEventIdentity {
 	}
 	for _, entry := range control.StreamRegistryInstance.Snapshot() {
 		if entry.InternalName == needle || entry.InternalName == streamName || entry.PlaybackID == streamName || entry.StreamID == streamName {
-			return routingEventIdentity{TenantID: entry.TenantID, StreamID: entry.StreamID, InternalName: entry.InternalName}
+			return routingEventIdentity{TenantID: entry.TenantID, StreamID: entry.StreamID, InternalName: entry.InternalName, OriginClusterID: entry.OriginClusterID}
 		}
 	}
 	return routingEventIdentity{}
 }
 
 // emitViewerRoutingEvent submits a viewer decision to the shared bounded queue.
-func emitViewerRoutingEvent(req *sharedpb.ViewerEndpointRequest, primary *sharedpb.ViewerEndpoint, viewerLat, viewerLon, nodeLat, nodeLon float64, internalName, streamTenantID, streamID string, durationMs float32, candidatesCount int32, eventType, source string) {
+func emitViewerRoutingEvent(req *sharedpb.ViewerEndpointRequest, primary *sharedpb.ViewerEndpoint, viewerLat, viewerLon, nodeLat, nodeLon float64, internalName, streamTenantID, streamID, originClusterID string, durationMs float32, candidatesCount int32, eventType, source string) {
 	if decklogClient == nil || primary == nil {
 		return
 	}
@@ -2060,24 +2083,26 @@ func emitViewerRoutingEvent(req *sharedpb.ViewerEndpointRequest, primary *shared
 	}
 
 	enqueueRoutingEvent(nil, &RoutingEvent{
-		Status:          "success",
-		Details:         "play_rewrite",
-		Score:           uint64(primary.LoadScore),
-		StreamName:      req.GetContentId(),
-		InternalName:    internalName,
-		StreamID:        streamID,
-		StreamTenantID:  streamTenantID,
-		ClientLat:       viewerLat,
-		ClientLon:       viewerLon,
-		SelectedNode:    selectedNode,
-		SelectedNodeID:  primary.NodeId,
-		NodeLat:         nodeLat,
-		NodeLon:         nodeLon,
-		NodeName:        primary.NodeId,
-		LatencyMs:       durationMs,
-		CandidatesCount: candidatesCount,
-		EventType:       eventType,
-		Source:          source,
+		Status:            "success",
+		Details:           "play_rewrite",
+		Score:             uint64(primary.LoadScore),
+		StreamName:        req.GetContentId(),
+		InternalName:      internalName,
+		StreamID:          streamID,
+		StreamTenantID:    streamTenantID,
+		OriginClusterID:   originClusterID,
+		ClientLat:         viewerLat,
+		ClientLon:         viewerLon,
+		SelectedNode:      selectedNode,
+		SelectedNodeID:    primary.NodeId,
+		SelectedClusterID: primary.ClusterId,
+		NodeLat:           nodeLat,
+		NodeLon:           nodeLon,
+		NodeName:          primary.NodeId,
+		LatencyMs:         durationMs,
+		CandidatesCount:   candidatesCount,
+		EventType:         eventType,
+		Source:            source,
 	})
 }
 
@@ -2211,7 +2236,7 @@ func getTotalViewers(node state.EnhancedBalancerNodeSnapshot) uint64 {
 }
 
 // resolveLiveViewerEndpoint uses load balancer to find optimal edge nodes with fallbacks
-func resolveLiveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest, lat, lon float64, internalName, streamTenantID, streamID string, clusterPeers []*clusterpeerpb.TenantClusterPeer, activeIngestClusterID, officialClusterID string, allowPlatformShared bool) (*sharedpb.ViewerEndpointResponse, error) {
+func resolveLiveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest, lat, lon float64, internalName, streamTenantID, streamID, originClusterID string, clusterPeers []*clusterpeerpb.TenantClusterPeer, activeIngestClusterID, officialClusterID string, allowPlatformShared bool) (*sharedpb.ViewerEndpointResponse, error) {
 	start := time.Now()
 	// Delegate to consolidated control package function
 	deps := &control.PlaybackDependencies{
@@ -2296,7 +2321,7 @@ func resolveLiveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpoint
 		if response.Primary != nil {
 			candidatesCount = int32(1 + len(response.Fallbacks))
 		}
-		emitViewerRoutingEvent(req, response.Primary, lat, lon, 0, 0, internalName, streamTenantID, streamID, durationMs, candidatesCount, "play_rewrite", "http")
+		emitViewerRoutingEvent(req, response.Primary, lat, lon, 0, 0, internalName, streamTenantID, streamID, originClusterID, durationMs, candidatesCount, "play_rewrite", "http")
 	}
 
 	return response, nil
@@ -2697,7 +2722,7 @@ func resolveDVRViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointR
 			}).Warn("Active DVR has no resolvable recording origin; refusing to fall back to archive routing")
 			return nil, fmt.Errorf("active DVR recording origin not yet registered; retry")
 		}
-		resp, err := resolveLiveViewerEndpoint(ctx, req, lat, lon, resolution.InternalName, resolution.TenantId, resolution.StreamId, resolution.ClusterPeers, resolution.ActiveIngestClusterID, resolution.OfficialClusterID, resolution.AllowPlatformSharedPlayback || !resolution.LocalAuthority)
+		resp, err := resolveLiveViewerEndpoint(ctx, req, lat, lon, resolution.InternalName, resolution.TenantId, resolution.StreamId, resolution.OriginClusterID, resolution.ClusterPeers, resolution.ActiveIngestClusterID, resolution.OfficialClusterID, resolution.AllowPlatformSharedPlayback || !resolution.LocalAuthority)
 		if err != nil {
 			return nil, err
 		}
@@ -2756,10 +2781,12 @@ func resolveArtifactViewerEndpoint(req *sharedpb.ViewerEndpointRequest, lat, lon
 			candidatesCount = int32(1 + len(response.Fallbacks))
 		}
 		internalName := ""
+		originClusterID := ""
 		if resolution != nil {
 			internalName = resolution.InternalName
+			originClusterID = resolution.OriginClusterID
 		}
-		emitViewerRoutingEvent(req, response.Primary, 0, 0, 0, 0, internalName, response.Metadata.GetTenantId(), response.Metadata.GetStreamId(), durationMs, candidatesCount, "play_rewrite", "http")
+		emitViewerRoutingEvent(req, response.Primary, 0, 0, 0, 0, internalName, response.Metadata.GetTenantId(), response.Metadata.GetStreamId(), originClusterID, durationMs, candidatesCount, "play_rewrite", "http")
 	}
 
 	return response, nil
@@ -2955,7 +2982,7 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 	var response *sharedpb.ViewerEndpointResponse
 	switch contentType {
 	case "live":
-		response, err = resolveLiveViewerEndpoint(c.Request.Context(), req, lat, lon, resolution.RoutingInternalName(), resolution.TenantId, resolution.StreamId, resolution.ClusterPeers, resolution.ActiveIngestClusterID, resolution.OfficialClusterID, resolution.AllowPlatformSharedPlayback || !resolution.LocalAuthority)
+		response, err = resolveLiveViewerEndpoint(c.Request.Context(), req, lat, lon, resolution.RoutingInternalName(), resolution.TenantId, resolution.StreamId, resolution.OriginClusterID, resolution.ClusterPeers, resolution.ActiveIngestClusterID, resolution.OfficialClusterID, resolution.AllowPlatformSharedPlayback || !resolution.LocalAuthority)
 	case "dvr":
 		response, err = resolveDVRViewerEndpoint(c.Request.Context(), req, lat, lon, resolution)
 	default:

@@ -16,24 +16,27 @@ const claimDVRChapterFinalization = `-- name: ClaimDVRChapterFinalization :one
 UPDATE foghorn.dvr_chapters
 SET state = 'finalizing', playback_artifact_hash = $1,
     finalize_attempts = finalize_attempts + 1, finalize_started_at = NOW(),
-    finalize_node_id = NULLIF($2::text, '')
-WHERE chapter_id = $3
+    finalize_node_id = NULLIF($2::text, ''),
+    finalize_processes_json = NULLIF($3::text, '')
+WHERE chapter_id = $4
   AND (state = 'closed' OR (state = 'finalizing'
-    AND COALESCE(finalize_started_at, created_at) < NOW() - make_interval(secs => $4)))
+    AND COALESCE(finalize_started_at, created_at) < NOW() - make_interval(secs => $5)))
 RETURNING finalize_attempts
 `
 
 type ClaimDVRChapterFinalizationParams struct {
-	PlaybackArtifactHash sql.NullString `db:"playback_artifact_hash" json:"playback_artifact_hash"`
-	FinalizeNodeID       string         `db:"finalize_node_id" json:"finalize_node_id"`
-	ChapterID            string         `db:"chapter_id" json:"chapter_id"`
-	StaleSeconds         float64        `db:"stale_seconds" json:"stale_seconds"`
+	PlaybackArtifactHash  sql.NullString `db:"playback_artifact_hash" json:"playback_artifact_hash"`
+	FinalizeNodeID        string         `db:"finalize_node_id" json:"finalize_node_id"`
+	FinalizeProcessesJson string         `db:"finalize_processes_json" json:"finalize_processes_json"`
+	ChapterID             string         `db:"chapter_id" json:"chapter_id"`
+	StaleSeconds          float64        `db:"stale_seconds" json:"stale_seconds"`
 }
 
 func (q *Queries) ClaimDVRChapterFinalization(ctx context.Context, arg ClaimDVRChapterFinalizationParams) (int32, error) {
 	row := q.db.QueryRowContext(ctx, claimDVRChapterFinalization,
 		arg.PlaybackArtifactHash,
 		arg.FinalizeNodeID,
+		arg.FinalizeProcessesJson,
 		arg.ChapterID,
 		arg.StaleSeconds,
 	)
@@ -184,7 +187,7 @@ func (q *Queries) FailDVRChapterArtifact(ctx context.Context, arg FailDVRChapter
 }
 
 const getCurrentDVRChapter = `-- name: GetCurrentDVRChapter :one
-SELECT c.chapter_id, c.artifact_hash, c.mode, c.interval_seconds, c.start_ms, c.end_ms, c.is_current, c.state, c.playback_artifact_hash, c.playback_id, c.finalize_attempts, c.frozen_at, c.finalize_started_at, c.finalize_node_id, c.last_failure_reason, c.reclaim_started_at, c.segment_count, c.has_gaps, c.actual_media_start_ms, c.actual_media_end_ms, c.created_at
+SELECT c.chapter_id, c.artifact_hash, c.mode, c.interval_seconds, c.start_ms, c.end_ms, c.is_current, c.state, c.playback_artifact_hash, c.playback_id, c.finalize_attempts, c.frozen_at, c.finalize_started_at, c.finalize_node_id, c.finalize_processes_json, c.last_failure_reason, c.reclaim_started_at, c.segment_count, c.has_gaps, c.actual_media_start_ms, c.actual_media_end_ms, c.created_at
 FROM foghorn.dvr_chapters c
 WHERE c.artifact_hash = $1 AND c.is_current = true
 ORDER BY c.start_ms DESC, c.chapter_id DESC LIMIT 1
@@ -212,6 +215,7 @@ func (q *Queries) GetCurrentDVRChapter(ctx context.Context, artifactHash string)
 		&i.FoghornDvrChapter.FrozenAt,
 		&i.FoghornDvrChapter.FinalizeStartedAt,
 		&i.FoghornDvrChapter.FinalizeNodeID,
+		&i.FoghornDvrChapter.FinalizeProcessesJson,
 		&i.FoghornDvrChapter.LastFailureReason,
 		&i.FoghornDvrChapter.ReclaimStartedAt,
 		&i.FoghornDvrChapter.SegmentCount,
@@ -224,7 +228,7 @@ func (q *Queries) GetCurrentDVRChapter(ctx context.Context, artifactHash string)
 }
 
 const getDVRChapter = `-- name: GetDVRChapter :one
-SELECT c.chapter_id, c.artifact_hash, c.mode, c.interval_seconds, c.start_ms, c.end_ms, c.is_current, c.state, c.playback_artifact_hash, c.playback_id, c.finalize_attempts, c.frozen_at, c.finalize_started_at, c.finalize_node_id, c.last_failure_reason, c.reclaim_started_at, c.segment_count, c.has_gaps, c.actual_media_start_ms, c.actual_media_end_ms, c.created_at
+SELECT c.chapter_id, c.artifact_hash, c.mode, c.interval_seconds, c.start_ms, c.end_ms, c.is_current, c.state, c.playback_artifact_hash, c.playback_id, c.finalize_attempts, c.frozen_at, c.finalize_started_at, c.finalize_node_id, c.finalize_processes_json, c.last_failure_reason, c.reclaim_started_at, c.segment_count, c.has_gaps, c.actual_media_start_ms, c.actual_media_end_ms, c.created_at
 FROM foghorn.dvr_chapters c WHERE c.chapter_id = $1
 `
 
@@ -250,6 +254,7 @@ func (q *Queries) GetDVRChapter(ctx context.Context, chapterID string) (GetDVRCh
 		&i.FoghornDvrChapter.FrozenAt,
 		&i.FoghornDvrChapter.FinalizeStartedAt,
 		&i.FoghornDvrChapter.FinalizeNodeID,
+		&i.FoghornDvrChapter.FinalizeProcessesJson,
 		&i.FoghornDvrChapter.LastFailureReason,
 		&i.FoghornDvrChapter.ReclaimStartedAt,
 		&i.FoghornDvrChapter.SegmentCount,
@@ -262,7 +267,7 @@ func (q *Queries) GetDVRChapter(ctx context.Context, chapterID string) (GetDVRCh
 }
 
 const getDVRChaptersByID = `-- name: GetDVRChaptersByID :many
-SELECT c.chapter_id, c.artifact_hash, c.mode, c.interval_seconds, c.start_ms, c.end_ms, c.is_current, c.state, c.playback_artifact_hash, c.playback_id, c.finalize_attempts, c.frozen_at, c.finalize_started_at, c.finalize_node_id, c.last_failure_reason, c.reclaim_started_at, c.segment_count, c.has_gaps, c.actual_media_start_ms, c.actual_media_end_ms, c.created_at
+SELECT c.chapter_id, c.artifact_hash, c.mode, c.interval_seconds, c.start_ms, c.end_ms, c.is_current, c.state, c.playback_artifact_hash, c.playback_id, c.finalize_attempts, c.frozen_at, c.finalize_started_at, c.finalize_node_id, c.finalize_processes_json, c.last_failure_reason, c.reclaim_started_at, c.segment_count, c.has_gaps, c.actual_media_start_ms, c.actual_media_end_ms, c.created_at
 FROM foghorn.dvr_chapters c WHERE c.chapter_id = ANY($1::text[])
 `
 
@@ -294,6 +299,7 @@ func (q *Queries) GetDVRChaptersByID(ctx context.Context, dollar_1 []string) ([]
 			&i.FoghornDvrChapter.FrozenAt,
 			&i.FoghornDvrChapter.FinalizeStartedAt,
 			&i.FoghornDvrChapter.FinalizeNodeID,
+			&i.FoghornDvrChapter.FinalizeProcessesJson,
 			&i.FoghornDvrChapter.LastFailureReason,
 			&i.FoghornDvrChapter.ReclaimStartedAt,
 			&i.FoghornDvrChapter.SegmentCount,
@@ -328,7 +334,7 @@ func (q *Queries) GetDVRParentArtifactStatus(ctx context.Context, artifactHash s
 }
 
 const getLatestDVRChapterBefore = `-- name: GetLatestDVRChapterBefore :one
-SELECT c.chapter_id, c.artifact_hash, c.mode, c.interval_seconds, c.start_ms, c.end_ms, c.is_current, c.state, c.playback_artifact_hash, c.playback_id, c.finalize_attempts, c.frozen_at, c.finalize_started_at, c.finalize_node_id, c.last_failure_reason, c.reclaim_started_at, c.segment_count, c.has_gaps, c.actual_media_start_ms, c.actual_media_end_ms, c.created_at
+SELECT c.chapter_id, c.artifact_hash, c.mode, c.interval_seconds, c.start_ms, c.end_ms, c.is_current, c.state, c.playback_artifact_hash, c.playback_id, c.finalize_attempts, c.frozen_at, c.finalize_started_at, c.finalize_node_id, c.finalize_processes_json, c.last_failure_reason, c.reclaim_started_at, c.segment_count, c.has_gaps, c.actual_media_start_ms, c.actual_media_end_ms, c.created_at
 FROM foghorn.dvr_chapters c
 WHERE c.artifact_hash = $1 AND c.mode = $2 AND COALESCE(c.interval_seconds, 0) = $3 AND c.start_ms < $4
 ORDER BY c.start_ms DESC, c.chapter_id DESC LIMIT 1
@@ -368,6 +374,7 @@ func (q *Queries) GetLatestDVRChapterBefore(ctx context.Context, arg GetLatestDV
 		&i.FoghornDvrChapter.FrozenAt,
 		&i.FoghornDvrChapter.FinalizeStartedAt,
 		&i.FoghornDvrChapter.FinalizeNodeID,
+		&i.FoghornDvrChapter.FinalizeProcessesJson,
 		&i.FoghornDvrChapter.LastFailureReason,
 		&i.FoghornDvrChapter.ReclaimStartedAt,
 		&i.FoghornDvrChapter.SegmentCount,
@@ -380,7 +387,7 @@ func (q *Queries) GetLatestDVRChapterBefore(ctx context.Context, arg GetLatestDV
 }
 
 const listDVRChaptersForArtifact = `-- name: ListDVRChaptersForArtifact :many
-SELECT c.chapter_id, c.artifact_hash, c.mode, c.interval_seconds, c.start_ms, c.end_ms, c.is_current, c.state, c.playback_artifact_hash, c.playback_id, c.finalize_attempts, c.frozen_at, c.finalize_started_at, c.finalize_node_id, c.last_failure_reason, c.reclaim_started_at, c.segment_count, c.has_gaps, c.actual_media_start_ms, c.actual_media_end_ms, c.created_at
+SELECT c.chapter_id, c.artifact_hash, c.mode, c.interval_seconds, c.start_ms, c.end_ms, c.is_current, c.state, c.playback_artifact_hash, c.playback_id, c.finalize_attempts, c.frozen_at, c.finalize_started_at, c.finalize_node_id, c.finalize_processes_json, c.last_failure_reason, c.reclaim_started_at, c.segment_count, c.has_gaps, c.actual_media_start_ms, c.actual_media_end_ms, c.created_at
 FROM foghorn.dvr_chapters c
 WHERE c.artifact_hash = $1 AND c.start_ms >= $2 AND ($3::bigint = 0 OR c.start_ms < $3::bigint)
   AND ($4::text = '' OR c.mode = $4::text)
@@ -437,6 +444,7 @@ func (q *Queries) ListDVRChaptersForArtifact(ctx context.Context, arg ListDVRCha
 			&i.FoghornDvrChapter.FrozenAt,
 			&i.FoghornDvrChapter.FinalizeStartedAt,
 			&i.FoghornDvrChapter.FinalizeNodeID,
+			&i.FoghornDvrChapter.FinalizeProcessesJson,
 			&i.FoghornDvrChapter.LastFailureReason,
 			&i.FoghornDvrChapter.ReclaimStartedAt,
 			&i.FoghornDvrChapter.SegmentCount,
@@ -459,7 +467,7 @@ func (q *Queries) ListDVRChaptersForArtifact(ctx context.Context, arg ListDVRCha
 }
 
 const listDVRChaptersNeedingFinalization = `-- name: ListDVRChaptersNeedingFinalization :many
-SELECT c.chapter_id, c.artifact_hash, c.mode, c.interval_seconds, c.start_ms, c.end_ms, c.is_current, c.state, c.playback_artifact_hash, c.playback_id, c.finalize_attempts, c.frozen_at, c.finalize_started_at, c.finalize_node_id, c.last_failure_reason, c.reclaim_started_at, c.segment_count, c.has_gaps, c.actual_media_start_ms, c.actual_media_end_ms, c.created_at
+SELECT c.chapter_id, c.artifact_hash, c.mode, c.interval_seconds, c.start_ms, c.end_ms, c.is_current, c.state, c.playback_artifact_hash, c.playback_id, c.finalize_attempts, c.frozen_at, c.finalize_started_at, c.finalize_node_id, c.finalize_processes_json, c.last_failure_reason, c.reclaim_started_at, c.segment_count, c.has_gaps, c.actual_media_start_ms, c.actual_media_end_ms, c.created_at
 FROM foghorn.dvr_chapters c
 WHERE (c.state = 'closed' OR (c.state = 'finalizing'
   AND COALESCE(c.finalize_started_at, c.created_at) < NOW() - LEAST(
@@ -505,6 +513,7 @@ func (q *Queries) ListDVRChaptersNeedingFinalization(ctx context.Context, arg Li
 			&i.FoghornDvrChapter.FrozenAt,
 			&i.FoghornDvrChapter.FinalizeStartedAt,
 			&i.FoghornDvrChapter.FinalizeNodeID,
+			&i.FoghornDvrChapter.FinalizeProcessesJson,
 			&i.FoghornDvrChapter.LastFailureReason,
 			&i.FoghornDvrChapter.ReclaimStartedAt,
 			&i.FoghornDvrChapter.SegmentCount,
@@ -527,7 +536,7 @@ func (q *Queries) ListDVRChaptersNeedingFinalization(ctx context.Context, arg Li
 }
 
 const listDVRChaptersNeedingReclaim = `-- name: ListDVRChaptersNeedingReclaim :many
-SELECT c.chapter_id, c.artifact_hash, c.mode, c.interval_seconds, c.start_ms, c.end_ms, c.is_current, c.state, c.playback_artifact_hash, c.playback_id, c.finalize_attempts, c.frozen_at, c.finalize_started_at, c.finalize_node_id, c.last_failure_reason, c.reclaim_started_at, c.segment_count, c.has_gaps, c.actual_media_start_ms, c.actual_media_end_ms, c.created_at
+SELECT c.chapter_id, c.artifact_hash, c.mode, c.interval_seconds, c.start_ms, c.end_ms, c.is_current, c.state, c.playback_artifact_hash, c.playback_id, c.finalize_attempts, c.frozen_at, c.finalize_started_at, c.finalize_node_id, c.finalize_processes_json, c.last_failure_reason, c.reclaim_started_at, c.segment_count, c.has_gaps, c.actual_media_start_ms, c.actual_media_end_ms, c.created_at
 FROM foghorn.dvr_chapters c
 WHERE c.state = 'frozen'
   AND (c.reclaim_started_at IS NULL OR c.reclaim_started_at < NOW() - make_interval(secs => $1))
@@ -570,6 +579,7 @@ func (q *Queries) ListDVRChaptersNeedingReclaim(ctx context.Context, arg ListDVR
 			&i.FoghornDvrChapter.FrozenAt,
 			&i.FoghornDvrChapter.FinalizeStartedAt,
 			&i.FoghornDvrChapter.FinalizeNodeID,
+			&i.FoghornDvrChapter.FinalizeProcessesJson,
 			&i.FoghornDvrChapter.LastFailureReason,
 			&i.FoghornDvrChapter.ReclaimStartedAt,
 			&i.FoghornDvrChapter.SegmentCount,

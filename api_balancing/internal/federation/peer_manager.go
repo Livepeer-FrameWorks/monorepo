@@ -35,6 +35,7 @@ import (
 // peering loop (Redis-based leader lease).
 type PeerManager struct {
 	clusterID              string
+	controlCellID          string
 	instanceID             string // unique per-process, for leader election
 	pool                   federationPeerPool
 	peerDiscovery          clusterPeerDiscovery
@@ -153,6 +154,7 @@ func (c *foghornPeerClient) OpenPeerChannel(ctx context.Context) (foghornfederat
 // PeerManagerConfig holds dependencies for the peer manager.
 type PeerManagerConfig struct {
 	ClusterID     string
+	ControlCellID string
 	InstanceID    string // unique per-process; used for leader lease
 	Pool          *foghorn.FoghornPool
 	QM            *quartermaster.GRPCClient
@@ -180,6 +182,7 @@ func NewPeerManager(cfg PeerManagerConfig) *PeerManager {
 
 	pm := &PeerManager{
 		clusterID:              cfg.ClusterID,
+		controlCellID:          cfg.ControlCellID,
 		instanceID:             cfg.InstanceID,
 		pool:                   newFoghornPoolAdapter(cfg.Pool),
 		peerDiscovery:          peerDiscovery,
@@ -250,6 +253,10 @@ func (pm *PeerManager) enrichFederationEventGeo(data *ipcpb.FederationEventData)
 	}
 	if data.LocalCluster == "" {
 		data.LocalCluster = pm.clusterID
+	}
+	if data.ControlCellId == nil && pm.controlCellID != "" {
+		controlCellID := pm.controlCellID
+		data.ControlCellId = &controlCellID
 	}
 	if data.RemoteCluster == "" && data.PeerCluster != nil {
 		data.RemoteCluster = data.GetPeerCluster()
@@ -2146,8 +2153,9 @@ func (pm *PeerManager) pushStreamAds() {
 	}
 
 	type streamInfo struct {
-		ss    *state.StreamState
-		edges []*foghornfederationpb.PeerStreamEdge
+		ss              *state.StreamState
+		edges           []*foghornfederationpb.PeerStreamEdge
+		originClusterID string
 	}
 	streams := make(map[string]*streamInfo)
 
@@ -2166,14 +2174,21 @@ func (pm *PeerManager) pushStreamAds() {
 				if ss == nil || ss.Status != "live" {
 					continue
 				}
-				si = &streamInfo{ss: ss}
+				si = &streamInfo{ss: ss, originClusterID: pm.clusterID}
 				streams[streamName] = si
 			}
 			isOrigin := si.ss.NodeID == snap.NodeID && si.ss.Inputs > 0
 			sourceStreamName := streamName
 			if control.StreamRegistryInstance != nil {
-				if entry, err := control.StreamRegistryInstance.ResolveSourceByInternalName(context.Background(), streamName); err == nil && entry.IngestMode != 0 {
-					sourceStreamName = control.RuntimeNameFor(entry.IngestMode, entry.InternalName)
+				if entry, err := control.StreamRegistryInstance.ResolveSourceByInternalName(context.Background(), streamName); err == nil {
+					if entry.OriginClusterID != "" {
+						si.originClusterID = entry.OriginClusterID
+					}
+					if entry.IngestMode != 0 {
+						sourceStreamName = control.RuntimeNameFor(entry.IngestMode, entry.InternalName)
+					} else if strings.Contains(si.ss.StreamName, "+") {
+						sourceStreamName = control.MistSourceNameFromObservedStream(si.ss.StreamName)
+					}
 				} else if strings.Contains(si.ss.StreamName, "+") {
 					sourceStreamName = control.MistSourceNameFromObservedStream(si.ss.StreamName)
 				}
@@ -2223,7 +2238,7 @@ func (pm *PeerManager) pushStreamAds() {
 					InternalName:       si.ss.InternalName,
 					TenantId:           si.ss.TenantID,
 					PlaybackId:         si.ss.PlaybackID,
-					OriginClusterId:    pm.clusterID,
+					OriginClusterId:    si.originClusterID,
 					IsLive:             true,
 					Edges:              si.edges,
 					Timestamp:          now,
@@ -2351,15 +2366,12 @@ func (pm *PeerManager) checkReplicationCompletion() {
 
 		control.StreamRegistryInstance.ClearReplicating(streamName)
 		nameCopy := streamName
-		destNode := loc.DestNodeID
-		sourceNode := loc.PullSourceNodeID
-		dtsc := loc.PullDTSCURL
 		pm.broadcastToPeers(&foghornfederationpb.PeerMessage{
 			ClusterId: pm.clusterID,
 			Payload: &foghornfederationpb.PeerMessage_ReplicationEvent{
 				ReplicationEvent: &foghornfederationpb.ReplicationEvent{
 					StreamName: nameCopy,
-					NodeId:     destNode,
+					NodeId:     loc.DestNodeID,
 					ClusterId:  pm.clusterID,
 					Available:  true,
 					BaseUrl:    loc.DestNodeBaseURL,
@@ -2367,15 +2379,31 @@ func (pm *PeerManager) checkReplicationCompletion() {
 			},
 		})
 		pm.logger.WithField("stream", nameCopy).Info("Replication complete, registry mark cleared")
-		pm.emitFederationEvent(&ipcpb.FederationEventData{
-			EventType:     ipcpb.FederationEventType_ORIGIN_PULL_COMPLETED,
-			RemoteCluster: loc.ReplicatingFrom,
-			StreamName:    &nameCopy,
-			SourceNode:    &sourceNode,
-			DestNode:      &destNode,
-			DtscUrl:       &dtsc,
-		})
+		originClusterID := loc.ReplicatingFrom
+		if registryOrigin, ok := control.StreamRegistryInstance.OriginCluster(nameCopy); ok {
+			originClusterID = registryOrigin
+		}
+		pm.emitFederationEvent(originPullCompletedEvent(nameCopy, loc, originClusterID, st.TenantID))
 	}
+}
+
+func originPullCompletedEvent(streamName string, loc control.Location, originClusterID, streamTenantID string) *ipcpb.FederationEventData {
+	destNode := loc.DestNodeID
+	sourceNode := loc.PullSourceNodeID
+	dtsc := loc.PullDTSCURL
+	data := &ipcpb.FederationEventData{
+		EventType:       ipcpb.FederationEventType_ORIGIN_PULL_COMPLETED,
+		RemoteCluster:   loc.ReplicatingFrom,
+		OriginClusterId: &originClusterID,
+		StreamName:      &streamName,
+		SourceNode:      &sourceNode,
+		DestNode:        &destNode,
+		DtscUrl:         &dtsc,
+	}
+	if tenantID := strings.TrimSpace(streamTenantID); tenantID != "" {
+		data.StreamTenantId = &tenantID
+	}
+	return data
 }
 
 // broadcastToPeers sends a message to all connected peer channels. Used for

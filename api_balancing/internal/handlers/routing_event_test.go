@@ -62,3 +62,21 @@ func TestBuildLoadBalancingDataEnrichesSelectedNodeBucketFromState(t *testing.T)
 		t.Fatal("expected routing distance after node geo enrichment")
 	}
 }
+
+func TestMergeRoutingEventIdentityNeverErasesResolvedOrigin(t *testing.T) {
+	event := &RoutingEvent{
+		StreamTenantID:  "tenant-known",
+		StreamID:        "stream-known",
+		InternalName:    "internal-known",
+		OriginClusterID: "origin-known",
+	}
+	mergeRoutingEventIdentity(event, routingEventIdentity{
+		TenantID:     "tenant-fallback",
+		StreamID:     "stream-fallback",
+		InternalName: "internal-fallback",
+	})
+	if event.StreamTenantID != "tenant-known" || event.StreamID != "stream-known" ||
+		event.InternalName != "internal-known" || event.OriginClusterID != "origin-known" {
+		t.Fatalf("fallback overwrote authoritative identity: %+v", event)
+	}
+}

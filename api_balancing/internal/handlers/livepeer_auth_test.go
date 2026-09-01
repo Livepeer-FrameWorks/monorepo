@@ -1,173 +1,324 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
-	"sync"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/state"
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
-	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
-	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
-	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 
-	"github.com/sirupsen/logrus"
+	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
-type stubCommodore struct {
-	resp *commodorepb.ResolveInternalNameResponse
-	err  error
-
-	mu    sync.Mutex
-	calls int
-}
-
-func (s *stubCommodore) ResolveInternalName(_ context.Context, _ string) (*commodorepb.ResolveInternalNameResponse, error) {
-	s.mu.Lock()
-	s.calls++
-	s.mu.Unlock()
-	return s.resp, s.err
-}
-
-func (s *stubCommodore) callCount() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.calls
-}
-
-type stubFederation struct {
-	respByCluster map[string]*foghornfederationpb.QueryStreamResponse
-	errByCluster  map[string]error
-
-	mu    sync.Mutex
-	calls map[string]int
-}
-
-func (s *stubFederation) QueryStream(_ context.Context, clusterID, _ string, _ *foghornfederationpb.QueryStreamRequest) (*foghornfederationpb.QueryStreamResponse, error) {
-	s.mu.Lock()
-	if s.calls == nil {
-		s.calls = map[string]int{}
-	}
-	s.calls[clusterID]++
-	s.mu.Unlock()
-	if err, ok := s.errByCluster[clusterID]; ok && err != nil {
-		return nil, err
-	}
-	return s.respByCluster[clusterID], nil
-}
-
-func (s *stubFederation) callCount(clusterID string) int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.calls[clusterID]
-}
-
-type stubPeerAddrs struct {
-	addrs map[string]string
-}
-
-func (s stubPeerAddrs) GetPeerAddr(clusterID string) string { return s.addrs[clusterID] }
-func (s stubPeerAddrs) GetPeerGeo(_ string) (float64, float64) {
-	return 0, 0
-}
-
-func newAuthTestLogger() logging.Logger {
-	l := logrus.New()
-	l.SetLevel(logrus.FatalLevel)
-	return logging.Logger(l)
-}
-
-func newAuthResolver(t *testing.T) *LivepeerAuthResolver {
+func configureLivepeerAuthNode(t *testing.T, healthy, ingest, processing bool) *state.StreamStateManager {
 	t.Helper()
-	return &LivepeerAuthResolver{
-		LocalCluster:  "local-cluster",
-		PositiveCache: newAuthPositiveCache(15 * time.Second),
-		PeerQueryWait: time.Second,
-		Logger:        newAuthTestLogger(),
+	t.Setenv("FOGHORN_BALANCER_CAPABILITY_SECRET", "test-job-secret")
+	oldCluster := clusterID
+	clusterID = "media-gateway"
+	t.Cleanup(func() { clusterID = oldCluster })
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
+	sm.SetNodeInfo("edge-1", "http://203.0.113.4:4242", true, nil, nil, "", "", nil)
+	sm.TouchNode("edge-1", healthy)
+	sm.SetNodeConnectionInfo(context.Background(), "edge-1", "203.0.113.4", "tenant-1", "edge-cell", nil)
+	sm.UpdateNodeMetrics("edge-1", struct {
+		CPU                  float64
+		RAMMax               float64
+		RAMCurrent           float64
+		UpSpeed              float64
+		DownSpeed            float64
+		BWLimit              float64
+		CapIngest            bool
+		CapEdge              bool
+		CapStorage           bool
+		CapProcessing        bool
+		Roles                []string
+		StorageCapacityBytes uint64
+		StorageUsedBytes     uint64
+		ProcessingClasses    map[string]state.ClassCapacity
+	}{CapEdge: true, CapIngest: ingest, CapProcessing: processing, ProcessingClasses: map[string]state.ClassCapacity{
+		mist.ProcessingClassVideoTranscode: {Total: 1, Ready: []string{"slot-1"}},
+	}})
+	return sm
+}
+
+func mintLivepeerAuthToken(t *testing.T, claims control.TranscodeJobClaims) string {
+	t.Helper()
+	claims.NodeID = "edge-1"
+	claims.ClusterID = "edge-cell"
+	claims.TenantID = "tenant-1"
+	claims.AllowedGatewayClusterIDs = []string{"media-gateway"}
+	claims.IssuedAt = time.Now().Unix()
+	token, err := control.MintTranscodeJobToken("test-job-secret", claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return token
+}
+
+func TestHandleLivepeerAuthRejectsMissingTokenWithHTTP403(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oldLogger := logger
+	logger = logging.NewLogger()
+	t.Cleanup(func() { logger = oldLogger })
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldDB := db
+	db = mockDB
+	t.Cleanup(func() { db = oldDB; _ = mockDB.Close() })
+
+	body := []byte(`{"url":"http://gateway/live/processing+secret-artifact/0.ts","remoteIP":"203.0.113.4"}`)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/webhooks/livepeer/auth", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	HandleLivepeerAuth(c)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("missing token status=%d body=%s", w.Code, w.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("missing token reached database: %v", err)
 	}
 }
 
-// localCtx returns a tenant/stream context as if local state had a record.
-func localCtx(manifestID string) *LivepeerAuthContext {
-	return &LivepeerAuthContext{
-		TenantID:     "tenant-local",
-		StreamID:     "stream-local",
-		InternalName: manifestID,
+func TestAuthorizeSignedLivepeerJobRejectsManifestIPClusterAndCapabilityDrift(t *testing.T) {
+	configureLivepeerAuthNode(t, true, false, false)
+	claims := control.TranscodeJobClaims{
+		ManifestID: "processing+artifact", JobID: "job-1", AttemptOrGeneration: "2", Session: "job-1", SpecDigest: strings.Repeat("a", 64),
+	}
+	token := mintLivepeerAuthToken(t, claims)
+
+	for _, tc := range []struct {
+		name, manifestID, remoteIP, wantReason string
+	}{
+		{name: "manifest swap", manifestID: "processing+other", remoteIP: "203.0.113.4", wantReason: authRejectInvalidToken},
+		{name: "unrecognized remote IP", manifestID: "processing+artifact", remoteIP: "203.0.113.9", wantReason: authRejectNodeMismatch},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, reason := authorizeSignedLivepeerJob(context.Background(), tc.manifestID, livepeerAuthRequest{JobToken: token, RemoteIP: tc.remoteIP})
+			if got != nil || reason != tc.wantReason {
+				t.Fatalf("reason=%q context=%+v, want %q", reason, got, tc.wantReason)
+			}
+		})
+	}
+
+	oldCluster := clusterID
+	clusterID = "unapproved-gateway"
+	got, reason := authorizeSignedLivepeerJob(context.Background(), "processing+artifact", livepeerAuthRequest{JobToken: token, RemoteIP: "203.0.113.4"})
+	clusterID = oldCluster
+	if got != nil || reason != authRejectInvalidToken {
+		t.Fatalf("unapproved gateway cluster: reason=%q context=%+v", reason, got)
+	}
+
+	got, reason = authorizeSignedLivepeerJob(context.Background(), "processing+artifact", livepeerAuthRequest{JobToken: token, RemoteIP: "203.0.113.4"})
+	if got != nil || reason != authRejectNodeCapability {
+		t.Fatalf("missing processing capability: reason=%q context=%+v", reason, got)
 	}
 }
 
-func TestLivepeerAuth_LocalStateHitAuthorizesWithoutCommodore(t *testing.T) {
-	commod := &stubCommodore{}
-	r := newAuthResolver(t)
-	r.StreamLookup = func(m string) *LivepeerAuthContext { return localCtx(m) }
-	r.Commodore = commod
+func TestAuthorizeSignedLivepeerLiveJobBindsGenerationAndCanonicalSpec(t *testing.T) {
+	sm := configureLivepeerAuthNode(t, true, true, false)
+	normalizedCounter := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_livepeer_auth_profile_normalized_total"}, nil)
+	oldMetrics := metrics
+	metrics = &FoghornMetrics{LivepeerAuthProfileNormalized: normalizedCounter}
+	t.Cleanup(func() { metrics = oldMetrics })
+	processesJSON := `[{"process":"Livepeer","target_profiles":[{"name":"360p","bitrate":900000,"height":360,"profile":"H264ConstrainedHigh"}],"workload":"live","deadline_ms":1000,"min_speed":1,"frameworks_gateway_cluster_ids":["media-gateway"]}]`
+	digest, err := mist.LivepeerJobSpecDigest(processesJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sm.UpdateStreamFromBuffer("live+stream", "stream", "edge-1", "tenant-1", "FULL", ""); err != nil {
+		t.Fatal(err)
+	}
+	sm.SetStreamStreamID("stream", "stream-id")
+	if _, err := sm.BindStreamLivepeerAuth("stream", processesJSON, digest, "state:generation-1"); err != nil {
+		t.Fatal(err)
+	}
+	claims := control.TranscodeJobClaims{
+		ManifestID: "live+stream", AttemptOrGeneration: "state:generation-1", Session: "state:generation-1", SpecDigest: digest,
+	}
+	token := mintLivepeerAuthToken(t, claims)
+	request := livepeerAuthRequest{
+		JobToken: token, RemoteIP: "203.0.113.4", Source: livepeerSource{Width: 1280, Height: 720, FPS: 30, Codec: "h264"},
+		Profiles: []livepeerJSONProfile{{"name": "360p", "bitrate": 900000, "height": 360, "profile": "H264ConstrainedHigh"}},
+	}
+	got, reason := authorizeSignedLivepeerJob(context.Background(), "live+stream", request)
+	if got == nil || reason != "" || got.StreamID != "stream-id" || got.Workload != "live" || got.SpecDigest != digest {
+		t.Fatalf("live authorization failed: reason=%q context=%+v", reason, got)
+	}
+	if got := testutil.ToFloat64(normalizedCounter.WithLabelValues()); got != 1 {
+		t.Fatalf("profile normalization counter=%v, want 1", got)
+	}
 
-	authCtx, reason := r.Authorize(context.Background(), "manifest-1")
-	if authCtx == nil {
-		t.Fatalf("expected authorize success, got reason=%q", reason)
+	claims.AttemptOrGeneration = "state:generation-2"
+	claims.Session = "state:generation-2"
+	request.JobToken = mintLivepeerAuthToken(t, claims)
+	got, reason = authorizeSignedLivepeerJob(context.Background(), "live+stream", request)
+	if got != nil || reason != authRejectStaleJob {
+		t.Fatalf("stale live generation accepted: reason=%q context=%+v", reason, got)
 	}
-	if authCtx.TenantID != "tenant-local" {
-		t.Fatalf("expected local tenant context, got %+v", authCtx)
-	}
-	if commod.callCount() != 0 {
-		t.Fatalf("local hit must not call Commodore, got %d calls", commod.callCount())
+
+	claims.AttemptOrGeneration = "state:generation-1"
+	claims.Session = "state:generation-1"
+	claims.SpecDigest = strings.Repeat("b", 64)
+	request.JobToken = mintLivepeerAuthToken(t, claims)
+	got, reason = authorizeSignedLivepeerJob(context.Background(), "live+stream", request)
+	if got != nil || reason != authRejectStaleJob {
+		t.Fatalf("tampered live spec digest accepted: reason=%q context=%+v", reason, got)
 	}
 }
 
-func TestLivepeerAuth_PositiveCacheHitSkipsCommodoreAndPeers(t *testing.T) {
-	commod := &stubCommodore{}
-	r := newAuthResolver(t)
-	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
-	r.Commodore = commod
-	cached := &LivepeerAuthContext{TenantID: "tenant-cached", StreamID: "stream-cached", InternalName: "manifest-cached"}
-	r.PositiveCache.add("manifest-cached", cached)
+func TestAuthorizeSignedLivepeerProcessingJobReturnsStoredCanonicalContract(t *testing.T) {
+	t.Setenv("FOGHORN_BALANCER_CAPABILITY_SECRET", "test-job-secret")
+	oldCluster := clusterID
+	clusterID = "media-gateway"
+	t.Cleanup(func() { clusterID = oldCluster })
 
-	authCtx, reason := r.Authorize(context.Background(), "manifest-cached")
-	if authCtx == nil {
-		t.Fatalf("expected cache-backed authorize success, got reason=%q", reason)
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
+	sm.SetNodeInfo("edge-1", "http://203.0.113.4:4242", true, nil, nil, "", "", nil)
+	sm.TouchNode("edge-1", true)
+	sm.SetNodeConnectionInfo(context.Background(), "edge-1", "203.0.113.4", "tenant-1", "edge-cell", nil)
+	sm.UpdateNodeMetrics("edge-1", struct {
+		CPU                  float64
+		RAMMax               float64
+		RAMCurrent           float64
+		UpSpeed              float64
+		DownSpeed            float64
+		BWLimit              float64
+		CapIngest            bool
+		CapEdge              bool
+		CapStorage           bool
+		CapProcessing        bool
+		Roles                []string
+		StorageCapacityBytes uint64
+		StorageUsedBytes     uint64
+		ProcessingClasses    map[string]state.ClassCapacity
+	}{CapEdge: true, CapProcessing: true, ProcessingClasses: map[string]state.ClassCapacity{
+		mist.ProcessingClassVideoTranscode: {Total: 1, Ready: []string{"slot-1"}},
+	}})
+
+	processesJSON := `[{"process":"Livepeer","target_profiles":[{"name":"360p","bitrate":900000,"height":360,"profile":"H264ConstrainedHigh"}],"workload":"vod","deadline_ms":30000,"min_speed":0.5,"frameworks_gateway_cluster_ids":["media-gateway"]}]`
+	digest, err := mist.LivepeerJobSpecDigest(processesJSON)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if authCtx != cached {
-		t.Fatalf("expected cached context to flow through, got %+v", authCtx)
+	claims := control.TranscodeJobClaims{
+		ManifestID: "processing+artifact", JobID: "job-1", AttemptOrGeneration: "2", Session: "job-1",
+		NodeID: "edge-1", ClusterID: "edge-cell", TenantID: "tenant-1", SpecDigest: digest,
+		AllowedGatewayClusterIDs: []string{"media-gateway"}, IssuedAt: time.Now().Unix(),
 	}
-	if commod.callCount() != 0 {
-		t.Fatalf("cache hit must not call Commodore, got %d calls", commod.callCount())
+	token, err := control.MintTranscodeJobToken("test-job-secret", claims)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldDB := db
+	db = mockDB
+	t.Cleanup(func() { db = oldDB; _ = mockDB.Close() })
+	mock.ExpectQuery(`SELECT pj\.job_id::text AS job_id[\s\S]*FROM foghorn\.processing_jobs`).
+		WithArgs("job-1", "artifact").
+		WillReturnRows(sqlmock.NewRows([]string{"job_id", "tenant_id", "stream_id", "processes_json", "retry_count", "processing_node_id", "status", "width", "height", "fps", "input_codec"}).
+			AddRow("job-1", "tenant-1", "stream-1", processesJSON, int32(2), "edge-1", "processing", 1920, 1080, 30.0, "h264"))
+
+	got, reason := authorizeSignedLivepeerJob(context.Background(), "processing+artifact-Ab12Cd34", livepeerAuthRequest{
+		URL: "http://gateway/live/processing+artifact-Ab12Cd34/0.ts", JobToken: token, RemoteIP: "203.0.113.4",
+		Source: livepeerSource{Width: 1920, Height: 1080, FPS: 30, Codec: "h264", PixelFormat: "yuv420p"},
+		Profiles: []livepeerJSONProfile{{"name": "360p", "bitrate": 900000, "height": 360, "width": 640,
+			"fps": 30000, "fpsDen": 1000, "profile": "H264ConstrainedHigh", "gop": "0.0"}},
+	})
+	if got == nil || reason != "" {
+		t.Fatalf("authorization failed: reason=%q context=%+v", reason, got)
+	}
+	if got.TenantID != "tenant-1" || got.StreamID != "stream-1" || got.NodeID != "edge-1" || got.SpecDigest != digest || got.Workload != "vod" || got.DeadlineMs != 30000 || got.MinSpeed != 0.5 || len(got.Profiles) != 1 {
+		t.Fatalf("unexpected canonical context: %+v", got)
+	}
+
+	// A self-hosted edge may omit its observed profiles, but it may not replace
+	// the canonical profile values embedded in the signed job spec.
+	mock.ExpectQuery(`SELECT pj\.job_id::text AS job_id[\s\S]*FROM foghorn\.processing_jobs`).
+		WithArgs("job-1", "artifact").
+		WillReturnRows(sqlmock.NewRows([]string{"job_id", "tenant_id", "stream_id", "processes_json", "retry_count", "processing_node_id", "status", "width", "height", "fps", "input_codec"}).
+			AddRow("job-1", "tenant-1", "stream-1", processesJSON, int32(2), "edge-1", "processing", 1920, 1080, 30.0, "h264"))
+	got, reason = authorizeSignedLivepeerJob(context.Background(), "processing+artifact-Ab12Cd34", livepeerAuthRequest{
+		URL: "http://gateway/live/processing+artifact-Ab12Cd34/0.ts", JobToken: token, RemoteIP: "203.0.113.4",
+		Source:   livepeerSource{Width: 1920, Height: 1080, FPS: 30, Codec: "h264", PixelFormat: "yuv420p"},
+		Profiles: []livepeerJSONProfile{{"name": "360p", "bitrate": 1, "height": 360, "profile": "H264ConstrainedHigh"}},
+	})
+	if got != nil || reason != authRejectSpecMismatch {
+		t.Fatalf("modified client profiles were not rejected: reason=%q context=%+v", reason, got)
+	}
+
+	mock.ExpectQuery(`SELECT pj\.job_id::text AS job_id[\s\S]*FROM foghorn\.processing_jobs`).
+		WithArgs("job-1", "artifact").
+		WillReturnRows(sqlmock.NewRows([]string{"job_id", "tenant_id", "stream_id", "processes_json", "retry_count", "processing_node_id", "status", "width", "height", "fps", "input_codec"}).
+			AddRow("job-1", "tenant-1", "stream-1", processesJSON, int32(2), "edge-1", "processing", 1920, 1080, 30.0, "h264"))
+	got, reason = authorizeSignedLivepeerJob(context.Background(), "processing+artifact-Ab12Cd34", livepeerAuthRequest{
+		URL: "http://gateway/live/processing+artifact-Ab12Cd34/0.ts", JobToken: token, RemoteIP: "203.0.113.4",
+		Source: livepeerSource{Width: 1280, Height: 720, FPS: 30, Codec: "h264", PixelFormat: "yuv420p"},
+	})
+	if got != nil || reason != authRejectSourceMismatch {
+		t.Fatalf("modified source media was not rejected: reason=%q context=%+v", reason, got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 
-func TestLivepeerAuth_ProcessingSessionManifestAuthorizesFromBaseJob(t *testing.T) {
-	commod := &stubCommodore{}
-	r := newAuthResolver(t)
-	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
-	r.Commodore = commod
-	r.ProcessingJob = func(_ context.Context, manifestID string, _ livepeerAuthRequest) *LivepeerAuthContext {
-		if manifestID != "processing+artifact123" {
-			return nil
+func TestAuthorizeSignedLivepeerJobRejectsInvalidTokenBeforeDatabaseLookup(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldDB := db
+	db = mockDB
+	t.Cleanup(func() { db = oldDB; _ = mockDB.Close() })
+
+	got, reason := authorizeSignedLivepeerJob(context.Background(), "processing+secret-artifact", livepeerAuthRequest{
+		URL: "http://gateway/live/processing+secret-artifact/0.ts", JobToken: "attacker-controlled", RemoteIP: "203.0.113.4",
+	})
+	if got != nil || reason != authRejectInvalidToken {
+		t.Fatalf("invalid token result: reason=%q context=%+v", reason, got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("invalid token reached the database: %v", err)
+	}
+}
+
+func TestLivepeerAuthResponseHasExactConsumerKeys(t *testing.T) {
+	encoded, err := json.Marshal(livepeerAuthResponse{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &got); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"manifestID", "tenantID", "streamID", "profiles", "workload", "deadlineMs", "minSpeed", "authorizedEdgeNodeID", "specDigest"}
+	if len(got) != len(want) {
+		t.Fatalf("response keys=%v", got)
+	}
+	for _, key := range want {
+		if _, ok := got[key]; !ok {
+			t.Fatalf("response missing %s: %s", key, encoded)
 		}
-		return &LivepeerAuthContext{
-			TenantID:     "tenant-processing",
-			StreamID:     "stream-processing",
-			InternalName: manifestID,
-		}
-	}
-
-	authCtx, reason := r.Authorize(context.Background(), "processing+artifact123-4VrbXAvV")
-	if authCtx == nil {
-		t.Fatalf("expected processing authorize success, got reason=%q", reason)
-	}
-	if authCtx.TenantID != "tenant-processing" || authCtx.StreamID != "stream-processing" || authCtx.InternalName != "processing+artifact123" {
-		t.Fatalf("unexpected auth context: %+v", authCtx)
-	}
-	if commod.callCount() != 0 {
-		t.Fatalf("processing job hit must not call Commodore, got %d calls", commod.callCount())
-	}
-	if cached := r.PositiveCache.get("processing+artifact123-4VrbXAvV"); cached == nil {
-		t.Fatal("expected suffixed processing manifest to be cached")
-	}
-	if cached := r.PositiveCache.get("processing+artifact123"); cached == nil {
-		t.Fatal("expected base processing manifest to be cached")
 	}
 }
 
@@ -223,95 +374,6 @@ func TestLivepeerProfilesFromProcessesJSONDropsInhibitedProfiles(t *testing.T) {
 	}
 }
 
-func TestLivepeerValidatedProfilesAcceptsMistComputedHeader(t *testing.T) {
-	processesJSON := `[{"process":"Livepeer","source_track":"maxbps","track_select":"video=maxbps","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh","track_inhibit":"video=<640x360"},{"name":"480p","bitrate":1600000,"fps":0,"height":480,"profile":"H264ConstrainedHigh","track_inhibit":"video=<850x480"}]}]`
-	requested := []livepeerJSONProfile{
-		{
-			"name":    "360p",
-			"bitrate": float64(900000),
-			"fps":     float64(24000),
-			"fpsDen":  float64(1000),
-			"height":  float64(360),
-			"width":   float64(560),
-			"profile": "H264ConstrainedHigh",
-			"gop":     "0.0",
-		},
-		{
-			"name":    "480p",
-			"bitrate": float64(1600000),
-			"fps":     float64(24000),
-			"fpsDen":  float64(1000),
-			"height":  float64(480),
-			"width":   float64(746),
-			"profile": "H264ConstrainedHigh",
-			"gop":     "0.0",
-		},
-	}
-
-	got := livepeerValidatedProfiles(processesJSON, livepeerAuthRequest{
-		Profiles:          requested,
-		ContentResolution: "2718x1750",
-	}, mist.SourceMediaInfo{})
-
-	assertJSONEqual(t, requested, got)
-}
-
-func TestLivepeerValidatedProfilesAcceptsMistComputedHeaderAsAuthority(t *testing.T) {
-	processesJSON := `[{"process":"Livepeer","source_track":"maxbps","track_select":"video=maxbps","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh"}]}]`
-	requested := []livepeerJSONProfile{
-		{
-			"name":    "360p",
-			"bitrate": float64(1),
-			"fps":     float64(24000),
-			"fpsDen":  float64(1000),
-			"height":  float64(360),
-			"width":   float64(560),
-			"profile": "H264ConstrainedHigh",
-			"gop":     "0.0",
-		},
-	}
-
-	got := livepeerValidatedProfiles(processesJSON, livepeerAuthRequest{
-		Profiles:          requested,
-		ContentResolution: "2718x1750",
-	}, mist.SourceMediaInfo{})
-
-	assertJSONEqual(t, requested, got)
-}
-
-func TestLivepeerValidatedProfilesDerivesMissingProfilesFromContentResolution(t *testing.T) {
-	processesJSON := `[{"process":"Livepeer","source_track":"maxbps","track_select":"video=maxbps","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh"}]}]`
-
-	got := livepeerValidatedProfiles(processesJSON, livepeerAuthRequest{
-		ContentResolution: "2718x1750",
-	}, mist.SourceMediaInfo{})
-	if len(got) != 1 {
-		t.Fatalf("expected one derived profile, got %#v", got)
-	}
-	want := []livepeerJSONProfile{
-		{
-			"name":    "360p",
-			"bitrate": float64(900000),
-			"fps":     25000,
-			"fpsDen":  1000,
-			"height":  360,
-			"width":   560,
-			"profile": "H264ConstrainedHigh",
-			"gop":     "0.0",
-		},
-	}
-	assertJSONEqual(t, want, got)
-}
-
-func TestLivepeerValidatedProfilesRejectsMissingProfilesWithoutSourceMetadata(t *testing.T) {
-	processesJSON := `[{"process":"Livepeer","source_track":"maxbps","track_select":"video=maxbps","target_profiles":[{"name":"360p","bitrate":900000,"fps":0,"height":360,"profile":"H264ConstrainedHigh"}]}]`
-
-	got := livepeerValidatedProfiles(processesJSON, livepeerAuthRequest{}, mist.SourceMediaInfo{})
-	if got != nil {
-		t.Fatalf("expected missing request profiles without source metadata to be rejected, got %#v", got)
-	}
-}
-
 func assertJSONEqual(t *testing.T, want, got interface{}) {
 	t.Helper()
 	wantJSON, err := json.Marshal(want)
@@ -324,216 +386,6 @@ func assertJSONEqual(t *testing.T, want, got interface{}) {
 	}
 	if string(gotJSON) != string(wantJSON) {
 		t.Fatalf("json mismatch\nwant: %s\n got: %s", wantJSON, gotJSON)
-	}
-}
-
-func TestLivepeerAuth_ProcessingSessionManifestFallsThroughWhenJobMissing(t *testing.T) {
-	r := newAuthResolver(t)
-	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
-	r.ProcessingJob = func(context.Context, string, livepeerAuthRequest) *LivepeerAuthContext { return nil }
-	r.Commodore = &stubCommodore{resp: &commodorepb.ResolveInternalNameResponse{TenantId: ""}}
-
-	authCtx, reason := r.Authorize(context.Background(), "processing+artifact123-4VrbXAvV")
-	if authCtx != nil {
-		t.Fatal("expected reject for unknown processing manifest")
-	}
-	if reason != authRejectStreamNotFound {
-		t.Fatalf("expected reason=%q, got %q", authRejectStreamNotFound, reason)
-	}
-}
-
-func TestLivepeerAuth_CommodoreNotFoundReturnsStreamNotFound(t *testing.T) {
-	r := newAuthResolver(t)
-	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
-	// Empty TenantId means "Commodore doesn't recognise this manifest".
-	r.Commodore = &stubCommodore{resp: &commodorepb.ResolveInternalNameResponse{TenantId: ""}}
-
-	authCtx, reason := r.Authorize(context.Background(), "ghost-manifest")
-	if authCtx != nil {
-		t.Fatal("expected reject for unknown manifest")
-	}
-	if reason != authRejectStreamNotFound {
-		t.Fatalf("expected reason=%q, got %q", authRejectStreamNotFound, reason)
-	}
-}
-
-func TestLivepeerAuth_CommodoreErrorReturnsCommodoreUnreachable(t *testing.T) {
-	r := newAuthResolver(t)
-	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
-	r.Commodore = &stubCommodore{err: errors.New("rpc closed")}
-
-	authCtx, reason := r.Authorize(context.Background(), "manifest-x")
-	if authCtx != nil {
-		t.Fatal("expected reject when Commodore is unreachable")
-	}
-	if reason != authRejectCommodoreUnreachable {
-		t.Fatalf("expected reason=%q, got %q", authRejectCommodoreUnreachable, reason)
-	}
-}
-
-func TestLivepeerAuth_NoClusterPeersReturnsPeerContextMissing(t *testing.T) {
-	r := newAuthResolver(t)
-	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
-	r.Commodore = &stubCommodore{resp: &commodorepb.ResolveInternalNameResponse{
-		TenantId:     "tenant-a",
-		ClusterPeers: nil,
-	}}
-
-	authCtx, reason := r.Authorize(context.Background(), "manifest-y")
-	if authCtx != nil {
-		t.Fatal("expected reject when Commodore returns no peers")
-	}
-	if reason != authRejectPeerContextMissing {
-		t.Fatalf("expected reason=%q, got %q", authRejectPeerContextMissing, reason)
-	}
-}
-
-func TestLivepeerAuth_PeerConfirmsLiveAuthorizesAndCaches(t *testing.T) {
-	r := newAuthResolver(t)
-	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
-	r.Commodore = &stubCommodore{resp: &commodorepb.ResolveInternalNameResponse{
-		TenantId: "tenant-a",
-		StreamId: "stream-a",
-		ClusterPeers: []*clusterpeerpb.TenantClusterPeer{
-			{ClusterId: "peer-cluster"},
-		},
-	}}
-	r.Federation = &stubFederation{respByCluster: map[string]*foghornfederationpb.QueryStreamResponse{
-		"peer-cluster": {Candidates: []*foghornfederationpb.EdgeCandidate{{NodeId: "edge-1"}}},
-	}}
-	r.PeerAddrs = stubPeerAddrs{addrs: map[string]string{"peer-cluster": "peer-cluster.internal:18011"}}
-
-	authCtx, reason := r.Authorize(context.Background(), "manifest-live")
-	if authCtx == nil {
-		t.Fatalf("expected authorize via peer, got reason=%q", reason)
-	}
-	if authCtx.TenantID != "tenant-a" || authCtx.StreamID != "stream-a" || authCtx.InternalName != "manifest-live" {
-		t.Fatalf("unexpected auth context: %+v", authCtx)
-	}
-	cached := r.PositiveCache.get("manifest-live")
-	if cached == nil {
-		t.Fatal("expected positive cache to be populated after peer confirmation")
-	}
-	if cached.TenantID != "tenant-a" || cached.StreamID != "stream-a" {
-		t.Fatalf("expected cached context to carry tenant/stream, got %+v", cached)
-	}
-
-	// Re-authorize: must hit cache, not call Commodore again.
-	commodCalls := r.Commodore.(*stubCommodore).callCount()
-	authCtx2, _ := r.Authorize(context.Background(), "manifest-live")
-	if authCtx2 == nil {
-		t.Fatal("expected second authorize to hit cache")
-	}
-	if r.Commodore.(*stubCommodore).callCount() != commodCalls {
-		t.Fatalf("expected zero additional Commodore calls on cache hit, got %d more", r.Commodore.(*stubCommodore).callCount()-commodCalls)
-	}
-}
-
-func TestLivepeerAuth_PeerKnownButNotLiveReturnsStreamNotLive(t *testing.T) {
-	r := newAuthResolver(t)
-	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
-	r.Commodore = &stubCommodore{resp: &commodorepb.ResolveInternalNameResponse{
-		TenantId: "tenant-a",
-		ClusterPeers: []*clusterpeerpb.TenantClusterPeer{
-			{ClusterId: "peer-cluster"},
-		},
-	}}
-	// Peer reachable but reports zero candidates → not live anywhere.
-	r.Federation = &stubFederation{respByCluster: map[string]*foghornfederationpb.QueryStreamResponse{
-		"peer-cluster": {Candidates: nil},
-	}}
-	r.PeerAddrs = stubPeerAddrs{addrs: map[string]string{"peer-cluster": "peer-cluster.internal:18011"}}
-
-	authCtx, reason := r.Authorize(context.Background(), "manifest-dead")
-	if authCtx != nil {
-		t.Fatal("expected reject when no peer reports the stream live")
-	}
-	if reason != authRejectStreamNotLive {
-		t.Fatalf("expected reason=%q, got %q", authRejectStreamNotLive, reason)
-	}
-}
-
-func TestLivepeerAuth_AllPeerQueriesErrorReturnsPeerUnreachable(t *testing.T) {
-	r := newAuthResolver(t)
-	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
-	r.Commodore = &stubCommodore{resp: &commodorepb.ResolveInternalNameResponse{
-		TenantId: "tenant-a",
-		ClusterPeers: []*clusterpeerpb.TenantClusterPeer{
-			{ClusterId: "peer-cluster-a"},
-			{ClusterId: "peer-cluster-b"},
-		},
-	}}
-	// Peers reachable (addrs known) but QueryStream fails for both. No peer
-	// actually voted "not live", so the answer must be peer_unreachable, not
-	// stream_not_live.
-	r.Federation = &stubFederation{errByCluster: map[string]error{
-		"peer-cluster-a": errors.New("rpc connection refused"),
-		"peer-cluster-b": errors.New("rpc deadline exceeded"),
-	}}
-	r.PeerAddrs = stubPeerAddrs{addrs: map[string]string{
-		"peer-cluster-a": "peer-a.internal:18011",
-		"peer-cluster-b": "peer-b.internal:18011",
-	}}
-
-	authCtx, reason := r.Authorize(context.Background(), "manifest-flapping")
-	if authCtx != nil {
-		t.Fatal("expected reject when every peer QueryStream errors")
-	}
-	if reason != authRejectPeerUnreachable {
-		t.Fatalf("expected reason=%q, got %q", authRejectPeerUnreachable, reason)
-	}
-}
-
-func TestLivepeerAuth_PeerListedButUnreachableReturnsPeerUnreachable(t *testing.T) {
-	r := newAuthResolver(t)
-	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
-	r.Commodore = &stubCommodore{resp: &commodorepb.ResolveInternalNameResponse{
-		TenantId: "tenant-a",
-		ClusterPeers: []*clusterpeerpb.TenantClusterPeer{
-			{ClusterId: "peer-cluster"},
-		},
-	}}
-	r.Federation = &stubFederation{}
-	// Peer present in Commodore response but PeerManager has no addr → unreachable.
-	r.PeerAddrs = stubPeerAddrs{addrs: map[string]string{}}
-
-	authCtx, reason := r.Authorize(context.Background(), "manifest-isolated")
-	if authCtx != nil {
-		t.Fatal("expected reject when no peer is reachable")
-	}
-	if reason != authRejectPeerUnreachable {
-		t.Fatalf("expected reason=%q, got %q", authRejectPeerUnreachable, reason)
-	}
-}
-
-func TestLivepeerAuth_LocalClusterPeerIsSkipped(t *testing.T) {
-	r := newAuthResolver(t)
-	r.StreamLookup = func(string) *LivepeerAuthContext { return nil }
-	r.Commodore = &stubCommodore{resp: &commodorepb.ResolveInternalNameResponse{
-		TenantId: "tenant-a",
-		ClusterPeers: []*clusterpeerpb.TenantClusterPeer{
-			{ClusterId: r.LocalCluster}, // local cluster — must be skipped from fan-out
-			{ClusterId: "peer-cluster"},
-		},
-	}}
-	fed := &stubFederation{respByCluster: map[string]*foghornfederationpb.QueryStreamResponse{
-		"peer-cluster": {Candidates: []*foghornfederationpb.EdgeCandidate{{NodeId: "edge-1"}}},
-	}}
-	r.Federation = fed
-	r.PeerAddrs = stubPeerAddrs{addrs: map[string]string{
-		r.LocalCluster: "should-not-be-called",
-		"peer-cluster": "peer-cluster.internal:18011",
-	}}
-
-	authCtx, _ := r.Authorize(context.Background(), "manifest-z")
-	if authCtx == nil {
-		t.Fatal("expected authorize via remote peer")
-	}
-	if fed.callCount(r.LocalCluster) != 0 {
-		t.Fatalf("must not query the local cluster as a peer, got %d calls", fed.callCount(r.LocalCluster))
-	}
-	if fed.callCount("peer-cluster") != 1 {
-		t.Fatalf("expected exactly one peer-cluster query, got %d", fed.callCount("peer-cluster"))
 	}
 }
 

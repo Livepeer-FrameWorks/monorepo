@@ -233,8 +233,8 @@ func TestProcessTypedTrigger_DispatchAndUnsupported(t *testing.T) {
 //     unconditionally (no Thumbs/sprite/Livepeer boot), even if a stale
 //     process: cache entry exists.
 //   - an active live session's durable config outranks a process cache entry;
-//   - otherwise a live/processing/dvr stream with a process:<internal> cache
-//     entry returns that cached config verbatim;
+//   - otherwise a live/processing stream with a process:<internal> cache entry
+//     returns that cached config, while dvr+ still rejects unsigned Livepeer;
 //   - a nil streamCache and absent database safely return empty config.
 func TestHandleStreamProcess_PrefixSelectsConfig(t *testing.T) {
 	t.Run("vod+ returns empty even with a cached process config", func(t *testing.T) {
@@ -268,6 +268,19 @@ func TestHandleStreamProcess_PrefixSelectsConfig(t *testing.T) {
 		}
 	})
 
+	t.Run("cached dvr config cannot bypass unsigned Livepeer rejection", func(t *testing.T) {
+		p := newTestProcessor(t)
+		p.streamCache.Set("process:dvr-stream-1", `[{"process":"Livepeer","target_profiles":[{"height":360}]}]`, time.Minute)
+		resp, abort, err := p.handleStreamProcess(&ipcpb.MistTrigger{
+			TriggerPayload: &ipcpb.MistTrigger_StreamProcess{
+				StreamProcess: &ipcpb.StreamProcessTrigger{StreamName: "dvr+dvr-stream-1"},
+			},
+		})
+		if err == nil || !abort || resp != "" {
+			t.Fatalf("cached dvr Livepeer config was not rejected: resp=%q abort=%v err=%v", resp, abort, err)
+		}
+	})
+
 	t.Run("durable active-session config outranks stale cache", func(t *testing.T) {
 		db, mock, err := sqlmock.New()
 		if err != nil {
@@ -279,9 +292,10 @@ func TestHandleStreamProcess_PrefixSelectsConfig(t *testing.T) {
 			control.SetDB(previous)
 			_ = db.Close()
 		})
-		mock.ExpectQuery(`SELECT processes_json[\s\S]*FROM foghorn\.ingest_sessions`).
+		mock.ExpectQuery(`SELECT id::text AS session_id[\s\S]*FROM foghorn\.ingest_sessions`).
 			WithArgs("live-stream-1").
-			WillReturnRows(sqlmock.NewRows([]string{"processes_json"}).AddRow(`{"PROC":"durable"}`))
+			WillReturnRows(sqlmock.NewRows([]string{"session_id", "tenant_id", "node_id", "cluster_id", "stream_internal_name", "processes_json"}).
+				AddRow("session-1", "tenant-1", "", "cluster-1", "live-stream-1", `{"PROC":"durable"}`))
 
 		p := newTestProcessor(t)
 		p.streamCache.Set("process:live-stream-1", `{"PROC":"stale"}`, time.Minute)
@@ -309,10 +323,11 @@ func TestHandleStreamProcess_PrefixSelectsConfig(t *testing.T) {
 			control.SetDB(previous)
 			_ = db.Close()
 		})
-		mock.ExpectQuery(`SELECT processes_json[\s\S]*FROM foghorn\.ingest_sessions`).
+		mock.ExpectQuery(`SELECT id::text AS session_id[\s\S]*FROM foghorn\.ingest_sessions`).
 			WithArgs("live-stream-1").
 			WillDelayFor(2 * MediaAdmissionTimeout).
-			WillReturnRows(sqlmock.NewRows([]string{"processes_json"}).AddRow(`{"PROC":"late"}`))
+			WillReturnRows(sqlmock.NewRows([]string{"session_id", "tenant_id", "node_id", "cluster_id", "stream_internal_name", "processes_json"}).
+				AddRow("session-1", "tenant-1", "", "cluster-1", "live-stream-1", `{"PROC":"late"}`))
 
 		p := newTestProcessor(t)
 		p.streamCache.Set("process:live-stream-1", `{"PROC":"local"}`, time.Minute)

@@ -31,8 +31,9 @@ func SetCommodoreClient(client *commodore.GRPCClient) {
 
 // StreamTarget describes the resolution result.
 type StreamTarget struct {
-	InternalName string
-	StreamID     string
+	InternalName    string
+	StreamID        string
+	OriginClusterID string
 	// FixedNode is set if the stream is pinned to a specific node (e.g. VOD artifact).
 	// If empty, the stream is dynamic/live and can be served by any capable edge.
 	FixedNode string
@@ -72,6 +73,7 @@ func ResolveStream(ctx context.Context, input string) (*StreamTarget, error) {
 				}
 				target.TenantID = resp.TenantId
 				target.StreamID = resp.StreamId
+				target.OriginClusterID = resp.GetOriginClusterId()
 				target.ContentType = "live"
 				target.ClusterPeers = resp.ClusterPeers
 				target.RequiresAuth = resp.GetRequiresAuth()
@@ -94,6 +96,7 @@ func ResolveStream(ctx context.Context, input string) (*StreamTarget, error) {
 			}
 			target.TenantID = resp.TenantId
 			target.StreamID = resp.StreamId
+			target.OriginClusterID = resp.GetOriginClusterId()
 			target.ContentType = resp.ContentType
 			target.ClusterPeers = resp.ClusterPeers
 			target.RequiresAuth = resp.GetRequiresAuth()
@@ -122,6 +125,7 @@ func ResolveStream(ctx context.Context, input string) (*StreamTarget, error) {
 					IsVod:             false,
 					TenantID:          resp.TenantId,
 					StreamID:          resp.StreamId,
+					OriginClusterID:   resp.GetOriginClusterId(),
 					ClusterPeers:      resp.ClusterPeers,
 					RequiresAuth:      resp.GetRequiresAuth(),
 					RequiresAuthKnown: true,
@@ -145,6 +149,7 @@ func ResolveStream(ctx context.Context, input string) (*StreamTarget, error) {
 			IsVod:             true,
 			TenantID:          resp.TenantId,
 			StreamID:          resp.StreamId,
+			OriginClusterID:   resp.GetOriginClusterId(),
 			ContentType:       resp.ContentType,
 			ClusterPeers:      resp.ClusterPeers,
 			RequiresAuth:      resp.GetRequiresAuth(),
@@ -173,6 +178,7 @@ func ResolveStream(ctx context.Context, input string) (*StreamTarget, error) {
 				IsVod:             isVod,
 				TenantID:          resp.TenantId,
 				StreamID:          resp.StreamId,
+				OriginClusterID:   resp.GetOriginClusterId(),
 				ContentType:       resp.ContentType,
 				ClusterPeers:      resp.ClusterPeers,
 				RequiresAuth:      resp.GetRequiresAuth(),
@@ -212,6 +218,7 @@ func ResolveStream(ctx context.Context, input string) (*StreamTarget, error) {
 				IsVod:             false,
 				TenantID:          entry.TenantID,
 				StreamID:          entry.StreamID,
+				OriginClusterID:   entry.OriginClusterID,
 				ContentType:       "live",
 				ClusterPeers:      entry.ClusterPeers,
 				RequiresAuth:      entry.RequiresAuth,
@@ -259,6 +266,7 @@ func ResolveStream(ctx context.Context, input string) (*StreamTarget, error) {
 				IsVod:             false,
 				TenantID:          resp.TenantId,
 				StreamID:          resp.StreamId,
+				OriginClusterID:   resp.GetOriginClusterId(),
 				ContentType:       "live",
 				ClusterPeers:      resp.ClusterPeers,
 				RequiresAuth:      resp.GetRequiresAuth(),
@@ -288,6 +296,7 @@ func resolveArtifactHashStreamTarget(ctx context.Context, artifactHash string) *
 			IsVod:             false,
 			TenantID:          resp.GetTenantId(),
 			StreamID:          resp.GetStreamId(),
+			OriginClusterID:   resp.GetOriginClusterId(),
 			ContentType:       "dvr",
 			ClusterPeers:      clusterPeers,
 			RequiresAuth:      requiresAuth,
@@ -304,6 +313,7 @@ func resolveArtifactHashStreamTarget(ctx context.Context, artifactHash string) *
 			IsVod:             true,
 			TenantID:          resp.GetTenantId(),
 			StreamID:          resp.GetStreamId(),
+			OriginClusterID:   resp.GetOriginClusterId(),
 			ContentType:       "clip",
 			ClusterPeers:      clusterPeers,
 			RequiresAuth:      requiresAuth,
@@ -320,6 +330,7 @@ func resolveArtifactHashStreamTarget(ctx context.Context, artifactHash string) *
 			InternalName:      "vod+" + resp.GetInternalName(),
 			IsVod:             true,
 			TenantID:          resp.GetTenantId(),
+			OriginClusterID:   resp.GetOriginClusterId(),
 			ContentType:       contentType,
 			ClusterPeers:      clusterPeers,
 			RequiresAuth:      requiresAuth,
@@ -361,6 +372,7 @@ func ResolveArtifactByHash(ctx context.Context, artifactHash string) (*StreamTar
 		if resp, err := CommodoreClient.ResolveClipHash(ctx, artifactHash); err == nil && resp.Found {
 			target.TenantID = resp.TenantId
 			target.StreamID = resp.StreamId
+			target.OriginClusterID = resp.GetOriginClusterId()
 			target.ContentType = "clip"
 			if resp.InternalName != "" {
 				target.InternalName = "vod+" + resp.InternalName
@@ -368,12 +380,14 @@ func ResolveArtifactByHash(ctx context.Context, artifactHash string) (*StreamTar
 		} else if resp, err := CommodoreClient.ResolveDVRHash(ctx, artifactHash); err == nil && resp.Found {
 			target.TenantID = resp.TenantId
 			target.StreamID = resp.StreamId
+			target.OriginClusterID = resp.GetOriginClusterId()
 			target.ContentType = "dvr"
 			if resp.InternalName != "" {
 				target.InternalName = "vod+" + resp.InternalName
 			}
 		} else if resp, err := CommodoreClient.ResolveVodHash(ctx, artifactHash); err == nil && resp.Found {
 			target.TenantID = resp.TenantId
+			target.OriginClusterID = resp.GetOriginClusterId()
 			target.ContentType = canonicalResolvedVODContentType(resp.GetContentType())
 			if resp.InternalName != "" {
 				target.InternalName = "vod+" + resp.InternalName

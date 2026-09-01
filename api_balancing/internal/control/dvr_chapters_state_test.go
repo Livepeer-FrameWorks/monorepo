@@ -34,13 +34,13 @@ func TestMarkChapterFinalizing_AcceptsClosedOrStaleFinalizing(t *testing.T) {
 	// The WHERE clause now allows reclaiming a stale 'finalizing' row past the deadline so a lost
 	// Helmsman result doesn't wedge the chapter. Now one tx: UPDATE + PROCESSING lifecycle enqueue.
 	mock.ExpectBegin()
-	mock.ExpectQuery(`UPDATE foghorn.dvr_chapters.*WHERE chapter_id = \$3\s+AND \(state = 'closed'\s+OR \(state = 'finalizing'.*finalize_started_at.*make_interval.*\)\).*RETURNING finalize_attempts`).
-		WithArgs("art-hash", "node-x", "chap-1", float64((30 * time.Minute).Seconds())).
+	mock.ExpectQuery(`UPDATE foghorn.dvr_chapters.*WHERE chapter_id = \$4\s+AND \(state = 'closed'\s+OR \(state = 'finalizing'.*finalize_started_at.*make_interval.*\)\).*RETURNING finalize_attempts`).
+		WithArgs("art-hash", "node-x", `[{"process":"Livepeer"}]`, "chap-1", float64((30 * time.Minute).Seconds())).
 		WillReturnRows(sqlmock.NewRows([]string{"finalize_attempts"}).AddRow(int32(4)))
 	mock.ExpectExec(`INSERT INTO foghorn.artifact_event_outbox`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
-	attempt, ok, err := MarkChapterFinalizing(context.Background(), "chap-1", "art-hash", "tenant-1", "node-x", 30*time.Minute)
+	attempt, ok, err := MarkChapterFinalizing(context.Background(), "chap-1", "art-hash", "tenant-1", "node-x", `[{"process":"Livepeer"}]`, 30*time.Minute)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -60,10 +60,10 @@ func TestMarkChapterFinalizing_SkipWhenAlreadyAdvanced(t *testing.T) {
 	// 0 rows updated → no lifecycle, tx rolls back.
 	mock.ExpectBegin()
 	mock.ExpectQuery(`UPDATE foghorn.dvr_chapters`).
-		WithArgs("art-hash", "node-x", "chap-1", float64((30 * time.Minute).Seconds())).
+		WithArgs("art-hash", "node-x", `[{"process":"Livepeer"}]`, "chap-1", float64((30 * time.Minute).Seconds())).
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectRollback()
-	attempt, ok, err := MarkChapterFinalizing(context.Background(), "chap-1", "art-hash", "tenant-1", "node-x", 30*time.Minute)
+	attempt, ok, err := MarkChapterFinalizing(context.Background(), "chap-1", "art-hash", "tenant-1", "node-x", `[{"process":"Livepeer"}]`, 30*time.Minute)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

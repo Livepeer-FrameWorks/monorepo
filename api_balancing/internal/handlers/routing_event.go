@@ -47,6 +47,11 @@ type RoutingEvent struct {
 
 	// Federation: set when the decision routes to a remote cluster
 	RemoteClusterID string
+	// SelectedClusterID is the cluster containing SelectedNodeID. It is
+	// decision intent; confirmed delivery comes from viewer connection facts.
+	SelectedClusterID string
+	ControlCellID     string
+	OriginClusterID   string
 }
 
 // BuildLoadBalancingData converts a RoutingEvent into a proto-ready
@@ -114,6 +119,13 @@ func BuildLoadBalancingData(e *RoutingEvent) *ipcpb.LoadBalancingData {
 	data.EventType = optStr(e.EventType)
 	data.Source = optStr(e.Source)
 	data.RemoteClusterId = optStr(e.RemoteClusterID)
+	data.SelectedClusterId = optStr(e.SelectedClusterID)
+	if e.ControlCellID != "" {
+		data.ControlCellId = optStr(e.ControlCellID)
+	} else {
+		data.ControlCellId = optStr(controlCellID)
+	}
+	data.OriginClusterId = optStr(e.OriginClusterID)
 
 	if hasRoutingDistance {
 		data.RoutingDistanceKm = &routingDistanceKm
@@ -147,6 +159,9 @@ func EnrichRoutingEventNodeFromState(e *RoutingEvent) {
 		} else {
 			e.NodeName = node.NodeID
 		}
+	}
+	if e.SelectedClusterID == "" {
+		e.SelectedClusterID = node.ClusterID
 	}
 }
 

@@ -63,7 +63,7 @@ func TestResolveLiveViewerEndpoint_EmptyInternalNameNotFound(t *testing.T) {
 	s := newViewerEndpointServer(t)
 	_, err := s.resolveLiveViewerEndpoint(context.Background(),
 		&sharedpb.ViewerEndpointRequest{ContentId: "c1"},
-		0, 0, "" /*internalName*/, "tenant-1", "stream-1", nil, "", "", false)
+		0, 0, "" /*internalName*/, "tenant-1", "stream-1", "", nil, "", "", false)
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("empty internalName: want NotFound, got %v", err)
 	}

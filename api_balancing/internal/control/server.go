@@ -466,6 +466,7 @@ var registry *Registry
 var clipHashResolver func(string) (string, string, error)
 var db *sql.DB
 var localClusterID string
+var localControlCellID string
 var servedClusters atomic.Pointer[sync.Map]
 
 // The platform-shared allowlist names the clusters that may serve ANY resolved tenant's durable bytes (the fast path
@@ -1124,8 +1125,20 @@ func controlLogger() logging.Logger {
 // is_platform_official fact (LoadPlatformSharedClusters) or explicit validated config — see nodeMayServeTenant.
 func SetLocalClusterID(id string) {
 	localClusterID = id
+	if strings.TrimSpace(localControlCellID) == "" {
+		localControlCellID = id
+	}
 	servedClusters.Load().Store(id, true)
 	clearResolvedChandlerBaseURL()
+}
+
+// SetLocalControlCellID records the failure-isolation cell independently of
+// the virtual clusters served by authenticated node sessions.
+func SetLocalControlCellID(id string) {
+	localControlCellID = strings.TrimSpace(id)
+	if localControlCellID == "" {
+		localControlCellID = strings.TrimSpace(localClusterID)
+	}
 }
 
 // LoadPlatformSharedClusters refreshes the Quartermaster-DERIVED platform-shared snapshot from the canonical
@@ -4587,7 +4600,13 @@ func processMistTrigger(trigger *ipcpb.MistTrigger, session NodeSession, stream 
 		// work. There is NO local-cluster fallback: an authenticated connection carries its resolved cluster.
 		trigger.NodeId = nodeID
 		cid := strings.TrimSpace(session.ClusterID)
-		trigger.ClusterId = &cid
+		trigger.ClusterId = stringPtrIfNotEmpty(cid)
+		controlCellID := strings.TrimSpace(localControlCellID)
+		trigger.ControlCellId = stringPtrIfNotEmpty(controlCellID)
+		// Origin is resource identity, not connection identity. Nodes cannot assert it;
+		// the trigger processor restores it only from server-owned stream/artifact state.
+		trigger.OriginClusterId = nil
+		syncMistTriggerPlacement(trigger, cid, controlCellID)
 	}
 
 	triggerType := trigger.GetTriggerType()
@@ -4759,12 +4778,56 @@ func processMistTrigger(trigger *ipcpb.MistTrigger, session NodeSession, stream 
 		sendMistTriggerAck(stream, requestID, nil, logger)
 	}
 
+	loggedResponse := responseText
+	if triggerType == string(mist.TriggerStreamProcess) && loggedResponse != "" {
+		// STREAM_PROCESS responses can contain the short-lived Livepeer job
+		// capability. The response belongs on the Mist control stream only; a
+		// raw copy in logs would turn the log backend into a credential store.
+		loggedResponse = "<redacted process configuration>"
+	}
 	logger.WithFields(logging.Fields{
 		"trigger_type": triggerType,
 		"request_id":   requestID,
-		"response":     responseText,
+		"response":     loggedResponse,
 		"abort":        shouldAbort,
 	}).Info("Sent MistTrigger response")
+}
+
+func syncMistTriggerPlacement(trigger *ipcpb.MistTrigger, clusterID, controlCellID string) {
+	originClusterID := trigger.GetOriginClusterId()
+	clusterIDPtr := stringPtrIfNotEmpty(clusterID)
+	originClusterIDPtr := stringPtrIfNotEmpty(originClusterID)
+	controlCellIDPtr := stringPtrIfNotEmpty(controlCellID)
+	switch payload := trigger.GetTriggerPayload().(type) {
+	case *ipcpb.MistTrigger_ViewerConnect:
+		if payload.ViewerConnect == nil {
+			return
+		}
+		payload.ViewerConnect.ClusterId = clusterIDPtr
+		payload.ViewerConnect.OriginClusterId = originClusterIDPtr
+		payload.ViewerConnect.ControlCellId = controlCellIDPtr
+	case *ipcpb.MistTrigger_ViewerDisconnect:
+		if payload.ViewerDisconnect == nil {
+			return
+		}
+		payload.ViewerDisconnect.ClusterId = clusterIDPtr
+		payload.ViewerDisconnect.OriginClusterId = originClusterIDPtr
+		payload.ViewerDisconnect.ControlCellId = controlCellIDPtr
+	case *ipcpb.MistTrigger_StorageLifecycleData:
+		if payload.StorageLifecycleData == nil {
+			return
+		}
+		payload.StorageLifecycleData.ClusterId = clusterIDPtr
+		payload.StorageLifecycleData.OriginClusterId = originClusterIDPtr
+		payload.StorageLifecycleData.ControlCellId = controlCellIDPtr
+	case *ipcpb.MistTrigger_ProcessBilling:
+		if payload.ProcessBilling == nil {
+			return
+		}
+		payload.ProcessBilling.ClusterId = clusterIDPtr
+		payload.ProcessBilling.OriginClusterId = originClusterIDPtr
+		payload.ProcessBilling.ControlCellId = controlCellIDPtr
+	}
 }
 
 // sendMistTriggerResponse sends a MistTriggerResponse back to Helmsman

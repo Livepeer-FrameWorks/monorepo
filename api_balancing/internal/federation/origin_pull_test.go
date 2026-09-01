@@ -9,6 +9,7 @@ import (
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/state"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
 
 type fakeNotifyFedClient struct {
@@ -105,9 +106,14 @@ func TestArrange_RegistryNil_Refused(t *testing.T) {
 
 func TestArrange_HappyPath_MarksReplicating(t *testing.T) {
 	r := freshRegistry(t)
+	r.UpsertFederatedSource("cluster-peer", control.StreamEntry{
+		InternalName: "stream-1", OriginClusterID: "cluster-origin",
+	}, control.Location{IsLiveNow: true})
 	sm := state.DefaultManager()
 	fed := &fakeNotifyFedClient{}
 	d := makeDeps(t, fed, map[string]string{"cluster-peer": "peer:443"})
+	var emitted *ipcpb.FederationEventData
+	d.EventEmitter = func(data *ipcpb.FederationEventData) { emitted = data }
 
 	res, err := d.ArrangeOriginPull(context.Background(), makeReq())
 	if err != nil {
@@ -133,6 +139,9 @@ func TestArrange_HappyPath_MarksReplicating(t *testing.T) {
 	}
 	if len(fed.calls) != 1 || fed.calls[0].StreamName != "stream-1" || fed.calls[0].GetDestClusterId() != "cluster-local" {
 		t.Fatalf("NotifyOriginPull calls = %+v", fed.calls)
+	}
+	if emitted == nil || emitted.GetStreamTenantId() != "tenant-1" || emitted.GetOriginClusterId() != "cluster-origin" {
+		t.Fatalf("federation attribution = %+v", emitted)
 	}
 }
 

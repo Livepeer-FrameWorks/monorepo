@@ -1737,12 +1737,22 @@ func TestHandleProcessBilling_EnrichesFromCache(t *testing.T) {
 	}, time.Minute)
 
 	streamID := "stream-id"
+	servingClusterID := "cluster-us"
+	controlCellID := "control-eu"
+	originClusterID := "cluster-eu"
+	assertedPlacement := "node-asserted"
 	trigger := &ipcpb.MistTrigger{
-		StreamId: &streamID,
-		TenantId: &tenantID,
+		StreamId:        &streamID,
+		TenantId:        &tenantID,
+		ClusterId:       &servingClusterID,
+		ControlCellId:   &controlCellID,
+		OriginClusterId: &originClusterID,
 		TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{
 			ProcessBilling: &ipcpb.ProcessBillingEvent{
-				StreamName: "live+" + internalName,
+				StreamName:      "live+" + internalName,
+				ClusterId:       &assertedPlacement,
+				OriginClusterId: &assertedPlacement,
+				ControlCellId:   &assertedPlacement,
 			},
 		},
 	}
@@ -1762,6 +1772,11 @@ func TestHandleProcessBilling_EnrichesFromCache(t *testing.T) {
 	if payload.GetStreamId() != streamID {
 		t.Fatalf("expected stream ID %q, got %q", streamID, payload.GetStreamId())
 	}
+	if payload.GetClusterId() != servingClusterID || payload.GetOriginClusterId() != originClusterID || payload.GetControlCellId() != controlCellID {
+		t.Fatalf("expected authoritative processing placement serving=%q origin=%q control=%q, got serving=%q origin=%q control=%q",
+			servingClusterID, originClusterID, controlCellID,
+			payload.GetClusterId(), payload.GetOriginClusterId(), payload.GetControlCellId())
+	}
 }
 
 func TestHandleStorageLifecycleData_UsesCacheAndStreamIDFallback(t *testing.T) {
@@ -1770,10 +1785,11 @@ func TestHandleStorageLifecycleData_UsesCacheAndStreamIDFallback(t *testing.T) {
 	internalName := "storage-stream"
 	cacheKey := tenantID + ":" + internalName
 	processor.streamCache.Set(cacheKey, streamContext{
-		TenantID: tenantID,
-		UserID:   "user-2",
-		StreamID: "stream-2",
-		Source:   "test",
+		TenantID:        tenantID,
+		UserID:          "user-2",
+		StreamID:        "stream-2",
+		OriginClusterID: "cluster-origin",
+		Source:          "test",
 	}, time.Minute)
 
 	streamID := "stream-2"
@@ -1801,6 +1817,9 @@ func TestHandleStorageLifecycleData_UsesCacheAndStreamIDFallback(t *testing.T) {
 	payload := trigger.GetStorageLifecycleData()
 	if payload.GetStreamId() != streamID {
 		t.Fatalf("expected stream ID %q, got %q", streamID, payload.GetStreamId())
+	}
+	if payload.GetOriginClusterId() != "cluster-origin" {
+		t.Fatalf("expected origin cluster on storage payload, got %q", payload.GetOriginClusterId())
 	}
 }
 
@@ -2157,6 +2176,18 @@ func TestApplyStreamContext_SeparatesClusterAndOrigin(t *testing.T) {
 	}
 	if trigger.GetClusterId() != "cluster-local" {
 		t.Fatalf("expected emitting cluster_id from processor, got %q", trigger.GetClusterId())
+	}
+}
+
+func TestApplyResolvedStreamContextOverwritesAssertedOrigin(t *testing.T) {
+	processor := newTestProcessor(t)
+	asserted := "node-asserted-cluster"
+	trigger := &ipcpb.MistTrigger{OriginClusterId: &asserted}
+
+	processor.applyResolvedStreamContext(trigger, "stream-a", streamContext{OriginClusterID: "cluster-authoritative"})
+
+	if trigger.GetOriginClusterId() != "cluster-authoritative" {
+		t.Fatalf("origin cluster = %q, want server-resolved cluster-authoritative", trigger.GetOriginClusterId())
 	}
 }
 
@@ -2712,5 +2743,15 @@ func TestApplyLivepeerBroadcasters_NoLivepeerProcessIsNoop(t *testing.T) {
 	}
 	if disc.callCount("any-cluster") != 0 {
 		t.Fatalf("expected zero discovery calls when no Livepeer process present, got %d", disc.callCount("any-cluster"))
+	}
+}
+
+func TestSafeRollingDVRProcessConfigRejectsUnsignedLivepeer(t *testing.T) {
+	if _, err := safeRollingDVRProcessConfig(`[{"process":"Livepeer","target_profiles":[{"height":360}]}]`); err == nil {
+		t.Fatal("rolling DVR accepted a Livepeer process without an assigned signed job")
+	}
+	want := `[{"process":"Thumbs","track_select":"video=maxbps"}]`
+	if got, err := safeRollingDVRProcessConfig(want); err != nil || got != want {
+		t.Fatalf("safe DVR config got=%q err=%v", got, err)
 	}
 }

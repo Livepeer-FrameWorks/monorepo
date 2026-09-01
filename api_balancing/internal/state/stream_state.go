@@ -184,6 +184,12 @@ type StreamState struct {
 	StartedAt    *time.Time     `json:"started_at,omitempty"` // Current live interval start
 	LastUpdate   time.Time      `json:"last_update"`
 	RawDetails   map[string]any `json:"raw_details,omitempty"` // Raw MistServer data
+	// Token-free canonical Livepeer contract for pull/managed streams that do
+	// not own a durable ingest_sessions row. The generation is tied to the
+	// current StreamState.StartedAt and changes on restart.
+	LivepeerProcessesJSON string `json:"livepeer_processes_json,omitempty"`
+	LivepeerSpecDigest    string `json:"livepeer_spec_digest,omitempty"`
+	LivepeerGeneration    string `json:"livepeer_generation,omitempty"`
 	// Viewers/TotalConnections/Inputs/BytesUp/BytesDown are cross-instance
 	// aggregates derived at read time by summing per-node instances (the
 	// single-writer state). The stored values are whatever the last
@@ -196,6 +202,41 @@ type StreamState struct {
 	Inputs           int    `json:"inputs,omitempty"`
 	BytesUp          int64  `json:"bytes_up,omitempty"`
 	BytesDown        int64  `json:"bytes_down,omitempty"`
+}
+
+// BindStreamLivepeerAuth atomically binds a token-free Livepeer policy to one
+// live stream generation. A second request in the same generation may reuse
+// the exact policy, but can never replace it with a different policy. The
+// resulting stream snapshot is written through and published with the rest of
+// the HA stream entry before the caller releases a capability for it.
+func (sm *StreamStateManager) BindStreamLivepeerAuth(internalName, processesJSON, specDigest, generation string) (*StreamState, error) {
+	if internalName == "" || processesJSON == "" || specDigest == "" || generation == "" {
+		return nil, errors.New("incomplete Livepeer stream authorization binding")
+	}
+	sm.mu.Lock()
+	stream := sm.streams[internalName]
+	if stream == nil {
+		sm.mu.Unlock()
+		return nil, errors.New("stream authorization binding has no active stream")
+	}
+	if stream.LivepeerGeneration == generation &&
+		(stream.LivepeerProcessesJSON != processesJSON || stream.LivepeerSpecDigest != specDigest) {
+		sm.mu.Unlock()
+		return nil, errors.New("livepeer policy already bound to a different spec in this stream generation")
+	}
+	stream.LivepeerProcessesJSON = processesJSON
+	stream.LivepeerSpecDigest = specDigest
+	stream.LivepeerGeneration = generation
+	payload, err := json.Marshal(stream)
+	snapshot := *stream
+	sm.mu.Unlock()
+	if err != nil {
+		return nil, fmt.Errorf("marshal Livepeer stream authorization binding: %w", err)
+	}
+	if err := sm.persistStreamWriteThroughContext(context.Background(), internalName, payload); err != nil {
+		return nil, fmt.Errorf("persist Livepeer stream authorization binding: %w", err)
+	}
+	return &snapshot, nil
 }
 
 // StreamInstanceState represents per-node state for a specific stream

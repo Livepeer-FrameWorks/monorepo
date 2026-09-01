@@ -1,6 +1,7 @@
 package mist
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -51,6 +52,16 @@ type SourceMediaInfo struct {
 	Width  int
 	Height int
 	FPS    float64
+}
+
+// LivepeerJobSpec is the token-bound, Foghorn-authoritative transcode policy.
+// It intentionally excludes routing and job_token so a broadcaster-list refresh
+// or capability rotation cannot change the semantic digest.
+type LivepeerJobSpec struct {
+	Profiles   []LivepeerJSONProfile `json:"profiles"`
+	Workload   string                `json:"workload"`
+	DeadlineMs int                   `json:"deadlineMs"`
+	MinSpeed   float64               `json:"minSpeed"`
 }
 
 // StripLivepeerProcesses removes Livepeer process entries from a MistServer
@@ -265,6 +276,66 @@ func SetLivepeerBroadcasters(processesJSON string, addrs []string) string {
 	return string(out)
 }
 
+// SetLivepeerGatewayClusters records the exact gateway cell selected alongside
+// hardcoded_broadcasters. Mist ignores this private option; Foghorn consumes it
+// only when minting the signed job capability at STREAM_PROCESS time.
+func SetLivepeerGatewayClusters(processesJSON string, clusterIDs []string) string {
+	clean := make([]string, 0, len(clusterIDs))
+	seen := map[string]struct{}{}
+	for _, id := range clusterIDs {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		clean = append(clean, id)
+	}
+	if len(clean) == 0 {
+		return processesJSON
+	}
+	var processes []map[string]interface{}
+	if err := json.Unmarshal([]byte(processesJSON), &processes); err != nil {
+		return processesJSON
+	}
+	changed := false
+	for _, proc := range processes {
+		if processName, ok := proc["process"].(string); ok && processName == "Livepeer" {
+			proc["frameworks_gateway_cluster_ids"] = clean
+			changed = true
+		}
+	}
+	if !changed {
+		return processesJSON
+	}
+	out, err := json.Marshal(processes)
+	if err != nil {
+		return processesJSON
+	}
+	return string(out)
+}
+
+func LivepeerGatewayClusters(processesJSON string) []string {
+	var processes []map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(processesJSON), &processes); err != nil {
+		return nil
+	}
+	for _, proc := range processes {
+		var processName string
+		if err := json.Unmarshal(proc["process"], &processName); err != nil || processName != "Livepeer" {
+			continue
+		}
+		var ids []string
+		if err := json.Unmarshal(proc["frameworks_gateway_cluster_ids"], &ids); err != nil {
+			return nil
+		}
+		return ids
+	}
+	return nil
+}
+
 // SetLivepeerWorkload stamps the workload-aware transcode contract onto every
 // Livepeer process entry: the workload tag plus, when supplied, a per-segment
 // gateway response budget (deadline_ms) and a minimum sustained speed factor
@@ -302,6 +373,110 @@ func SetLivepeerWorkload(processesJSON, workload string, deadlineMs int, minSpee
 		return processesJSON
 	}
 	return string(out)
+}
+
+// SetLivepeerJobToken stamps the mandatory capability on every Livepeer
+// process. MistProcLivepeer forwards it as jobToken in the strict ingest header.
+func SetLivepeerJobToken(processesJSON, token string) string {
+	if strings.TrimSpace(token) == "" {
+		return processesJSON
+	}
+	var processes []map[string]interface{}
+	if err := json.Unmarshal([]byte(processesJSON), &processes); err != nil {
+		return processesJSON
+	}
+	changed := false
+	for _, proc := range processes {
+		if processName, ok := proc["process"].(string); ok && processName == "Livepeer" {
+			proc["job_token"] = token
+			changed = true
+		}
+	}
+	if !changed {
+		return processesJSON
+	}
+	out, err := json.Marshal(processes)
+	if err != nil {
+		return processesJSON
+	}
+	return string(out)
+}
+
+// StripLivepeerJobToken removes capabilities before a process config is
+// exposed through public/control-plane projections or structured logs.
+func StripLivepeerJobToken(processesJSON string) string {
+	var processes []map[string]interface{}
+	if err := json.Unmarshal([]byte(processesJSON), &processes); err != nil {
+		return processesJSON
+	}
+	changed := false
+	for _, proc := range processes {
+		if _, ok := proc["job_token"]; ok {
+			delete(proc, "job_token")
+			changed = true
+		}
+	}
+	if !changed {
+		return processesJSON
+	}
+	out, err := json.Marshal(processes)
+	if err != nil {
+		return processesJSON
+	}
+	return string(out)
+}
+
+// LivepeerJobSpecFromProcessesJSON extracts the first Livepeer process's
+// semantic contract. A valid dispatch has exactly the workload-stamped policy
+// Mist will send; source-dependent width/FPS normalization happens only after
+// the gateway reports parsed media facts to Foghorn.
+func LivepeerJobSpecFromProcessesJSON(processesJSON string) (LivepeerJobSpec, error) {
+	var processes []map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(processesJSON), &processes); err != nil {
+		return LivepeerJobSpec{}, fmt.Errorf("parse process config: %w", err)
+	}
+	for _, proc := range processes {
+		var processName string
+		if err := json.Unmarshal(proc["process"], &processName); err != nil || processName != "Livepeer" {
+			continue
+		}
+		var spec LivepeerJobSpec
+		if err := json.Unmarshal(proc["target_profiles"], &spec.Profiles); err != nil || len(spec.Profiles) == 0 {
+			return LivepeerJobSpec{}, fmt.Errorf("livepeer process has invalid target_profiles")
+		}
+		if raw, ok := proc["workload"]; ok {
+			if err := json.Unmarshal(raw, &spec.Workload); err != nil {
+				return LivepeerJobSpec{}, fmt.Errorf("livepeer process has invalid workload: %w", err)
+			}
+		}
+		if raw, ok := proc["deadline_ms"]; ok {
+			if err := json.Unmarshal(raw, &spec.DeadlineMs); err != nil {
+				return LivepeerJobSpec{}, fmt.Errorf("livepeer process has invalid deadline_ms: %w", err)
+			}
+		}
+		if raw, ok := proc["min_speed"]; ok {
+			if err := json.Unmarshal(raw, &spec.MinSpeed); err != nil {
+				return LivepeerJobSpec{}, fmt.Errorf("livepeer process has invalid min_speed: %w", err)
+			}
+		}
+		if spec.Workload != WorkloadLive && spec.Workload != WorkloadVOD {
+			return LivepeerJobSpec{}, fmt.Errorf("livepeer process has invalid workload %q", spec.Workload)
+		}
+		return spec, nil
+	}
+	return LivepeerJobSpec{}, fmt.Errorf("process config has no Livepeer process")
+}
+
+func LivepeerJobSpecDigest(processesJSON string) (string, error) {
+	spec, err := LivepeerJobSpecFromProcessesJSON(processesJSON)
+	if err != nil {
+		return "", err
+	}
+	encoded, err := json.Marshal(spec)
+	if err != nil {
+		return "", fmt.Errorf("encode Livepeer job spec: %w", err)
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(encoded)), nil
 }
 
 // HasLivepeerProcesses returns true if the config contains a Livepeer process entry.

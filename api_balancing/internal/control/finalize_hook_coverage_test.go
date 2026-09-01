@@ -60,7 +60,7 @@ func playableChapterRow(chapterID, parentDVRHash, chapterState string) *sqlmock.
 		chapterID, parentDVRHash, "window_sized_chapters", nil,
 		int64(1000), int64(2000), false,
 		chapterState, chapterHash32, "pb-id", int64(0),
-		nil, nil, nil,
+		nil, nil, nil, nil,
 		nil, nil,
 		int64(5), false,
 		nil, nil,

@@ -463,7 +463,8 @@ func (p *Processor) ApplyLivepeerBroadcasters(processesJSON string, candidates [
 		tried = append(tried, candidate)
 
 		if urls := p.getLivepeerGatewayURLsForCluster(candidate); len(urls) > 0 {
-			return mist.SetLivepeerBroadcasters(processesJSON, urls)
+			withBroadcasters := mist.SetLivepeerBroadcasters(processesJSON, urls)
+			return mist.SetLivepeerGatewayClusters(withBroadcasters, []string{candidate})
 		}
 	}
 
@@ -1297,20 +1298,12 @@ func (p *Processor) handleProcessBilling(trigger *ipcpb.MistTrigger) (string, bo
 		}
 	}
 
-	// Stamp cluster identity onto the billing event so processing minutes
-	// are billed against the right cluster's pricing model. Foghorn has the
-	// authoritative local cluster_id; Helmsman doesn't, which is why this
-	// enrichment lives here rather than at the producer.
-	if (pbill.ClusterId == nil || *pbill.ClusterId == "") && p.clusterID != "" {
-		clusterID := p.clusterID
-		pbill.ClusterId = &clusterID
-	}
-	if pbill.OriginClusterId == nil || *pbill.OriginClusterId == "" {
-		if origin := trigger.GetOriginClusterId(); origin != "" {
-			oc := origin
-			pbill.OriginClusterId = &oc
-		}
-	}
+	// Placement on the authenticated envelope is authoritative. The boundary
+	// already removes node assertions; always mirror the resolved values so a
+	// forged non-empty payload cannot bypass fill-if-empty enrichment.
+	pbill.ClusterId = stringPtrIfNotEmpty(trigger.GetClusterId())
+	pbill.OriginClusterId = stringPtrIfNotEmpty(trigger.GetOriginClusterId())
+	pbill.ControlCellId = stringPtrIfNotEmpty(trigger.GetControlCellId())
 
 	p.logger.WithFields(logging.Fields{
 		"internal_name": internalName,
@@ -1386,6 +1379,9 @@ func (p *Processor) handleStorageLifecycleData(trigger *ipcpb.MistTrigger) (stri
 		if streamID := trigger.GetStreamId(); streamID != "" {
 			sld.StreamId = &streamID
 		}
+	}
+	if info.OriginClusterID != "" {
+		sld.OriginClusterId = &info.OriginClusterID
 	}
 
 	// Forward to Decklog. These node-originated transitions are edge-cache ANALYTICS
@@ -3316,6 +3312,14 @@ func (p *Processor) resolveProcessSource(artifactHash, nodeID string) (string, b
 func (p *Processor) handleStreamProcess(trigger *ipcpb.MistTrigger) (string, bool, error) {
 	streamName := trigger.GetStreamProcess().GetStreamName()
 	internalName := mist.ExtractInternalName(streamName)
+	cachedConfig := ""
+	if p.streamCache != nil {
+		if val, ok := p.streamCache.Peek("process:" + internalName); ok {
+			if config, ok := val.(string); ok {
+				cachedConfig = config
+			}
+		}
+	}
 
 	p.logger.WithFields(logging.Fields{
 		"stream_name":   streamName,
@@ -3329,29 +3333,27 @@ func (p *Processor) handleStreamProcess(trigger *ipcpb.MistTrigger) (string, boo
 	if strings.HasPrefix(streamName, "vod+") {
 		return "", false, nil
 	}
-
 	// A live publisher's accepted process config is part of its durable ingest
 	// generation. Read it before the cache so a Foghorn restart, or a newer
 	// authority arriving during an idempotent PUSH_REWRITE retry, cannot swap
 	// policy beneath the active publisher.
 	if strings.HasPrefix(streamName, "live+") || strings.HasPrefix(streamName, "pull+") {
-		if cfg := resolveActiveLiveProcessConfig(internalName); cfg != "" {
-			return cfg, false, nil
+		if cfg, err := p.livepeerLiveProcessConfig(streamName, internalName, trigger.GetNodeId(), cachedConfig); cfg != "" || err != nil {
+			return cfg, err != nil, err
 		}
 	}
-
-	if p.streamCache != nil {
-		if val, ok := p.streamCache.Peek("process:" + internalName); ok {
-			if processesJSON, valid := val.(string); valid {
-				return processesJSON, false, nil
-			}
-		}
-	}
-
 	if strings.HasPrefix(streamName, "processing+") {
-		if cfg := p.resolveProcessingProcessConfig(internalName); cfg != "" {
-			return cfg, false, nil
+		if cfg, err := p.livepeerProcessingProcessConfig(streamName, internalName, trigger.GetNodeId(), cachedConfig); cfg != "" || err != nil {
+			return cfg, err != nil, err
 		}
+	}
+
+	if cachedConfig != "" {
+		if strings.HasPrefix(streamName, "dvr+") {
+			cfg, err := safeRollingDVRProcessConfig(cachedConfig)
+			return cfg, err != nil, err
+		}
+		return cachedConfig, false, nil
 	}
 
 	// dvr+<dvr_internal_name>: the durable answer is the dvr_processes_json
@@ -3361,48 +3363,140 @@ func (p *Processor) handleStreamProcess(trigger *ipcpb.MistTrigger) (string, boo
 	// restarts and cache TTL.
 	if strings.HasPrefix(streamName, "dvr+") {
 		if cfg := p.resolveRollingDVRProcessConfig(internalName); cfg != "" {
-			return cfg, false, nil
+			safeConfig, err := safeRollingDVRProcessConfig(cfg)
+			return safeConfig, err != nil, err
 		}
 	}
 
 	return "", false, nil
 }
 
-func resolveActiveLiveProcessConfig(internalName string) string {
-	db := control.GetDB()
-	if db == nil || internalName == "" {
-		return ""
+func safeRollingDVRProcessConfig(processesJSON string) (string, error) {
+	if mist.HasLivepeerProcesses(processesJSON) {
+		return "", fmt.Errorf("rolling DVR process config cannot contain Livepeer; transcodes require an assigned signed job")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), MediaAdmissionTimeout)
-	defer cancel()
-	processesJSON, err := foghorndb.New(db).ActiveLiveProcessConfig(ctx, internalName)
-	if err != nil {
-		return ""
-	}
-	return processesJSON
+	return processesJSON, nil
 }
 
-func (p *Processor) resolveProcessingProcessConfig(artifactHash string) string {
-	db := control.GetDB()
-	if db == nil || artifactHash == "" {
-		return ""
+func stampSignedLivepeerJob(processesJSON string, claims control.TranscodeJobClaims) (string, error) {
+	return control.StampTranscodeJobConfigFromEnvironment(processesJSON, claims, time.Now())
+}
+
+func (p *Processor) livepeerLiveProcessConfig(streamName, internalName, requestingNodeID, cachedConfig string) (string, error) {
+	database := control.GetDB()
+	if database != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), MediaAdmissionTimeout)
+		defer cancel()
+		row, err := foghorndb.New(database).ActiveLiveTranscodeJobContext(ctx, internalName)
+		if err == nil {
+			if row.NodeID != requestingNodeID {
+				return "", fmt.Errorf("live transcode config requested by node %q, assigned to %q", requestingNodeID, row.NodeID)
+			}
+			return stampSignedLivepeerJob(row.ProcessesJson, control.TranscodeJobClaims{
+				ManifestID: streamName, AttemptOrGeneration: row.SessionID, Session: row.SessionID,
+				NodeID: row.NodeID, ClusterID: row.ClusterID, TenantID: row.TenantID,
+			})
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			if cachedConfig != "" && !mist.HasLivepeerProcesses(cachedConfig) {
+				return cachedConfig, nil
+			}
+			return "", fmt.Errorf("resolve active live transcode job: %w", err)
+		}
 	}
-	processesJSON, err := foghorndb.New(db).LatestActiveProcessingConfig(context.Background(), sql.NullString{String: artifactHash, Valid: true})
+	if cachedConfig == "" {
+		return "", nil
+	}
+	if !mist.HasLivepeerProcesses(cachedConfig) {
+		return cachedConfig, nil
+	}
+
+	// Managed/pull streams do not own an ingest_sessions row. Bind them to the
+	// HA-replicated current stream generation instead of minting an unbounded
+	// node-only bearer token.
+	stream := state.DefaultManager().GetStreamState(internalName)
+	if stream == nil || stream.NodeID != requestingNodeID || stream.TenantID == "" || stream.StartedAt == nil || stream.Status != "live" {
+		return "", fmt.Errorf("managed live transcode has no active assigned generation")
+	}
+	node := state.DefaultManager().GetNodeState(requestingNodeID)
+	if node == nil || node.ClusterID == "" {
+		return "", fmt.Errorf("managed live transcode node has no cluster")
+	}
+	generation := "state:" + strconv.FormatInt(stream.StartedAt.UTC().UnixNano(), 10)
+	authoritativeConfig := mist.StripLivepeerJobToken(cachedConfig)
+	digest, err := mist.LivepeerJobSpecDigest(authoritativeConfig)
 	if err != nil {
-		return ""
+		return "", err
 	}
-	if !processesJSON.Valid {
-		return ""
+	if stream.LivepeerGeneration == generation {
+		if stream.LivepeerProcessesJSON == "" || stream.LivepeerSpecDigest == "" {
+			return "", fmt.Errorf("managed live transcode generation has an incomplete policy binding")
+		}
+		authoritativeConfig = stream.LivepeerProcessesJSON
+		digest = stream.LivepeerSpecDigest
+	} else {
+		bound, bindErr := state.DefaultManager().BindStreamLivepeerAuth(internalName, authoritativeConfig, digest, generation)
+		if bindErr != nil {
+			return "", bindErr
+		}
+		authoritativeConfig = bound.LivepeerProcessesJSON
+		digest = bound.LivepeerSpecDigest
 	}
-	cfg := strings.TrimSpace(processesJSON.String)
-	if cfg == "" {
-		return ""
+	stamped, err := stampSignedLivepeerJob(authoritativeConfig, control.TranscodeJobClaims{
+		ManifestID: streamName, AttemptOrGeneration: generation, Session: generation,
+		NodeID: requestingNodeID, ClusterID: node.ClusterID, TenantID: stream.TenantID,
+	})
+	if err != nil {
+		return "", err
 	}
-	cfg = mist.MaskLivepeerSourceForVOD(cfg)
-	cfg = p.ApplyLivepeerBroadcasters(cfg, nil)
-	cfg = p.ApplyLivepeerWorkload(cfg, mist.WorkloadVOD)
-	p.CacheProcessConfig(artifactHash, cfg)
-	return cfg
+	_ = digest // stampSignedLivepeerJob independently verifies the bound digest.
+	return stamped, nil
+}
+
+func (p *Processor) livepeerProcessingProcessConfig(streamName, artifactHash, requestingNodeID, cachedConfig string) (string, error) {
+	database := control.GetDB()
+	if database == nil {
+		if cachedConfig == "" {
+			return "", nil
+		}
+		return "", fmt.Errorf("processing transcode database unavailable")
+	}
+	row, err := foghorndb.New(database).ActiveProcessingTranscodeJobContext(context.Background(), artifactHash)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			chapter, chapterErr := foghorndb.New(database).ActiveChapterTranscodeJobContext(context.Background(), artifactHash)
+			if chapterErr == nil {
+				if chapter.ProcessingNodeID != requestingNodeID || chapter.ProcessesJson == "" {
+					return "", fmt.Errorf("chapter transcode config requested by unassigned node")
+				}
+				node := state.DefaultManager().GetNodeState(requestingNodeID)
+				if node == nil || node.ClusterID == "" {
+					return "", fmt.Errorf("chapter transcode node has no cluster")
+				}
+				jobID := fmt.Sprintf("chapter-finalize-v2-%d-%s", chapter.FinalizeAttempts, chapter.ChapterID)
+				return stampSignedLivepeerJob(chapter.ProcessesJson, control.TranscodeJobClaims{
+					ManifestID: streamName, JobID: jobID, AttemptOrGeneration: strconv.Itoa(int(chapter.FinalizeAttempts)),
+					Session: jobID, NodeID: requestingNodeID, ClusterID: node.ClusterID, TenantID: chapter.TenantID,
+				})
+			}
+			err = chapterErr
+		}
+		if cachedConfig != "" && !mist.HasLivepeerProcesses(cachedConfig) {
+			return cachedConfig, nil
+		}
+		return "", err
+	}
+	if row.ProcessingNodeID != requestingNodeID || !row.ProcessesJson.Valid {
+		return "", fmt.Errorf("processing transcode config requested by unassigned node")
+	}
+	node := state.DefaultManager().GetNodeState(requestingNodeID)
+	if node == nil || node.ClusterID == "" {
+		return "", fmt.Errorf("processing transcode node has no cluster")
+	}
+	return stampSignedLivepeerJob(row.ProcessesJson.String, control.TranscodeJobClaims{
+		ManifestID: streamName, JobID: row.JobID, AttemptOrGeneration: strconv.Itoa(int(row.RetryCount.Int32)),
+		Session: row.JobID, NodeID: requestingNodeID, ClusterID: node.ClusterID, TenantID: row.TenantID,
+	})
 }
 
 // resolveRollingDVRProcessConfig returns the DVR lifecycle processes_json
@@ -3652,6 +3746,7 @@ func (p *Processor) handleUserNew(trigger *ipcpb.MistTrigger) (string, bool, err
 	}
 	if info.OriginClusterID != "" {
 		trigger.OriginClusterId = &info.OriginClusterID
+		userNew.OriginClusterId = &info.OriginClusterID
 	}
 
 	// The serving cluster comes from the immutable NodeSession rebound in
@@ -4299,6 +4394,7 @@ func (p *Processor) handleUserEnd(trigger *ipcpb.MistTrigger) (string, bool, err
 	}
 	if info.OriginClusterID != "" {
 		trigger.OriginClusterId = &info.OriginClusterID
+		userEnd.OriginClusterId = &info.OriginClusterID
 	}
 
 	userEnd.NodeId = func() *string { s := trigger.GetNodeId(); return &s }()
@@ -5528,6 +5624,14 @@ func stringPtr(s string) *string {
 	return &s
 }
 
+func stringPtrIfNotEmpty(s string) *string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
 func (p *Processor) resolveStreamContext(ctx context.Context, key, tenantIDHint string, allowCache bool) (streamContext, bool, error) {
 	if local, found, err := p.resolveReadyLocalPlayback(ctx, key, false); found {
 		if err != nil {
@@ -5777,8 +5881,9 @@ func (p *Processor) applyResolvedStreamContext(trigger *ipcpb.MistTrigger, strea
 	if info.StreamID != "" && (trigger.StreamId == nil || *trigger.StreamId == "") {
 		trigger.StreamId = &info.StreamID
 	}
-	if info.OriginClusterID != "" && (trigger.OriginClusterId == nil || *trigger.OriginClusterId == "") {
-		trigger.OriginClusterId = &info.OriginClusterID
+	if info.OriginClusterID != "" {
+		resolved := info.OriginClusterID
+		trigger.OriginClusterId = &resolved
 	}
 	if (trigger.ClusterId == nil || *trigger.ClusterId == "") && p.clusterID != "" {
 		clusterID := p.clusterID

@@ -49,14 +49,14 @@ func TestResolveStream(t *testing.T) {
 				if req.GetInternalName() != "abc" {
 					t.Errorf("expected stripped internal name abc, got %q", req.GetInternalName())
 				}
-				return &commodorepb.ResolveInternalNameResponse{TenantId: "t1", StreamId: "s1", RequiresAuth: true}, nil
+				return &commodorepb.ResolveInternalNameResponse{TenantId: "t1", StreamId: "s1", OriginClusterId: "origin-eu", RequiresAuth: true}, nil
 			},
 		})
 		got, err := ResolveStream(ctx, "live+abc")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if got.InternalName != "live+abc" || got.TenantID != "t1" || got.StreamID != "s1" ||
+		if got.InternalName != "live+abc" || got.TenantID != "t1" || got.StreamID != "s1" || got.OriginClusterID != "origin-eu" ||
 			got.ContentType != "live" || !got.RequiresAuth || !got.RequiresAuthKnown {
 			t.Fatalf("unexpected target: %+v", got)
 		}

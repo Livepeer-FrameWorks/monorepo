@@ -581,6 +581,117 @@ func TestProcessMistTrigger_UsesSessionClusterAuthoritatively(t *testing.T) {
 	}
 }
 
+func TestProcessMistTrigger_DropsNodeAssertedOriginFromRealtimePayload(t *testing.T) {
+	prevProcessor := mistTriggerProcessor
+	prevControlCell := localControlCellID
+	t.Cleanup(func() {
+		mistTriggerProcessor = prevProcessor
+		localControlCellID = prevControlCell
+	})
+	capture := &captureMistTriggerProcessor{}
+	mistTriggerProcessor = capture
+	localControlCellID = "control-eu"
+	origin := "origin-eu"
+	trigger := &ipcpb.MistTrigger{
+		TriggerType:     "USER_NEW",
+		RequestId:       "req-viewer",
+		OriginClusterId: &origin,
+		TriggerPayload: &ipcpb.MistTrigger_ViewerConnect{ViewerConnect: &ipcpb.ViewerConnectTrigger{
+			StreamName: "live+demo",
+		}},
+	}
+
+	processMistTrigger(trigger, NodeSession{CanonicalNodeID: "edge-us", ClusterID: "serving-us"}, nil, logging.Logger(logrus.New()))
+
+	payload := capture.last.GetViewerConnect()
+	if payload.GetClusterId() != "serving-us" || payload.GetOriginClusterId() != "" || payload.GetControlCellId() != "control-eu" {
+		t.Fatalf("realtime placement = serving %q origin %q control %q", payload.GetClusterId(), payload.GetOriginClusterId(), payload.GetControlCellId())
+	}
+	if capture.last.GetOriginClusterId() != "" {
+		t.Fatalf("node-asserted envelope origin survived authentication boundary: %q", capture.last.GetOriginClusterId())
+	}
+}
+
+func TestProcessMistTrigger_DropsNodeAssertedOriginFromAllPlacementPayloads(t *testing.T) {
+	prevProcessor := mistTriggerProcessor
+	prevControlCell := localControlCellID
+	t.Cleanup(func() {
+		mistTriggerProcessor = prevProcessor
+		localControlCellID = prevControlCell
+	})
+	localControlCellID = "control-authoritative"
+
+	tests := []struct {
+		name    string
+		trigger func(*string) *ipcpb.MistTrigger
+		fields  func(*ipcpb.MistTrigger) (string, string, string)
+	}{
+		{
+			name: "viewer disconnect",
+			trigger: func(origin *string) *ipcpb.MistTrigger {
+				return &ipcpb.MistTrigger{
+					TriggerType:     "placement-test",
+					RequestId:       "req-placement",
+					OriginClusterId: origin,
+					TriggerPayload:  &ipcpb.MistTrigger_ViewerDisconnect{ViewerDisconnect: &ipcpb.ViewerDisconnectTrigger{}},
+				}
+			},
+			fields: func(trigger *ipcpb.MistTrigger) (string, string, string) {
+				payload := trigger.GetViewerDisconnect()
+				return payload.GetClusterId(), payload.GetOriginClusterId(), payload.GetControlCellId()
+			},
+		},
+		{
+			name: "storage lifecycle",
+			trigger: func(origin *string) *ipcpb.MistTrigger {
+				return &ipcpb.MistTrigger{
+					TriggerType:     "placement-test",
+					RequestId:       "req-placement",
+					OriginClusterId: origin,
+					TriggerPayload:  &ipcpb.MistTrigger_StorageLifecycleData{StorageLifecycleData: &ipcpb.StorageLifecycleData{}},
+				}
+			},
+			fields: func(trigger *ipcpb.MistTrigger) (string, string, string) {
+				payload := trigger.GetStorageLifecycleData()
+				return payload.GetClusterId(), payload.GetOriginClusterId(), payload.GetControlCellId()
+			},
+		},
+		{
+			name: "process billing",
+			trigger: func(origin *string) *ipcpb.MistTrigger {
+				return &ipcpb.MistTrigger{
+					TriggerType:     "placement-test",
+					RequestId:       "req-placement",
+					OriginClusterId: origin,
+					TriggerPayload: &ipcpb.MistTrigger_ProcessBilling{ProcessBilling: &ipcpb.ProcessBillingEvent{
+						ClusterId: origin, OriginClusterId: origin, ControlCellId: origin,
+					}},
+				}
+			},
+			fields: func(trigger *ipcpb.MistTrigger) (string, string, string) {
+				payload := trigger.GetProcessBilling()
+				return payload.GetClusterId(), payload.GetOriginClusterId(), payload.GetControlCellId()
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			capture := &captureMistTriggerProcessor{}
+			mistTriggerProcessor = capture
+			assertedOrigin := "node-asserted-origin"
+			trigger := tt.trigger(&assertedOrigin)
+
+			processMistTrigger(trigger, NodeSession{CanonicalNodeID: "node-authenticated", ClusterID: "cluster-authoritative"}, nil, logging.Logger(logrus.New()))
+
+			clusterID, originClusterID, controlCellID := tt.fields(capture.last)
+			if clusterID != "cluster-authoritative" || originClusterID != "" || controlCellID != "control-authoritative" {
+				t.Fatalf("placement = serving %q origin %q control %q", clusterID, originClusterID, controlCellID)
+			}
+		})
+	}
+}
+
 // The trigger is attributed to the session's CANONICAL node id, not the raw registry key and not a payload id.
 func TestProcessMistTrigger_AttributesToCanonicalNodeID(t *testing.T) {
 	prev := mistTriggerProcessor

@@ -52,41 +52,105 @@ func (q *Queries) GetDVRArtifactTenantID(ctx context.Context, artifactHash strin
 	return tenant_id, err
 }
 
+const getLiveTranscodeAuthContext = `-- name: GetLiveTranscodeAuthContext :one
+SELECT s.id::text AS session_id,
+       s.tenant_id::text AS tenant_id,
+       s.node_id,
+       COALESCE(s.ingest_cluster_id, '')::text AS ingest_cluster_id,
+       s.stream_internal_name,
+       s.processes_json
+FROM foghorn.ingest_sessions s
+WHERE s.id::text = $1::text
+  AND s.stream_internal_name = $2::text
+  AND s.ended_at IS NULL
+  AND s.projection_state = 'active'
+LIMIT 1
+`
+
+type GetLiveTranscodeAuthContextParams struct {
+	SessionID          string `db:"session_id" json:"session_id"`
+	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
+}
+
+type GetLiveTranscodeAuthContextRow struct {
+	SessionID          string `db:"session_id" json:"session_id"`
+	TenantID           string `db:"tenant_id" json:"tenant_id"`
+	NodeID             string `db:"node_id" json:"node_id"`
+	IngestClusterID    string `db:"ingest_cluster_id" json:"ingest_cluster_id"`
+	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
+	ProcessesJson      string `db:"processes_json" json:"processes_json"`
+}
+
+func (q *Queries) GetLiveTranscodeAuthContext(ctx context.Context, arg GetLiveTranscodeAuthContextParams) (GetLiveTranscodeAuthContextRow, error) {
+	row := q.db.QueryRowContext(ctx, getLiveTranscodeAuthContext, arg.SessionID, arg.StreamInternalName)
+	var i GetLiveTranscodeAuthContextRow
+	err := row.Scan(
+		&i.SessionID,
+		&i.TenantID,
+		&i.NodeID,
+		&i.IngestClusterID,
+		&i.StreamInternalName,
+		&i.ProcessesJson,
+	)
+	return i, err
+}
+
 const getProcessingJobAuthContext = `-- name: GetProcessingJobAuthContext :one
-SELECT pj.tenant_id::text AS tenant_id,
+SELECT pj.job_id::text AS job_id,
+       pj.tenant_id::text AS tenant_id,
        COALESCE(a.stream_id::text, '')::text AS stream_id,
        pj.processes_json,
+       pj.retry_count,
+       COALESCE(pj.processing_node_id, '')::text AS processing_node_id,
+       pj.status,
        vm.width,
        vm.height,
-       vm.fps
+       vm.fps,
+       COALESCE(NULLIF(pj.input_codec, ''), NULLIF(vm.video_codec, ''), '')::text AS input_codec
 FROM foghorn.processing_jobs pj
 LEFT JOIN foghorn.artifacts a ON a.artifact_hash = pj.artifact_hash
 LEFT JOIN foghorn.vod_metadata vm ON vm.artifact_hash = pj.artifact_hash
-WHERE pj.artifact_hash = $1::text
-  AND pj.status IN ('queued', 'dispatched', 'processing')
+WHERE pj.job_id::text = $1::text
+  AND pj.artifact_hash = $2::text
+  AND pj.status IN ('dispatched', 'processing')
 ORDER BY pj.updated_at DESC
 LIMIT 1
 `
 
-type GetProcessingJobAuthContextRow struct {
-	TenantID      string          `db:"tenant_id" json:"tenant_id"`
-	StreamID      string          `db:"stream_id" json:"stream_id"`
-	ProcessesJson sql.NullString  `db:"processes_json" json:"processes_json"`
-	Width         sql.NullInt32   `db:"width" json:"width"`
-	Height        sql.NullInt32   `db:"height" json:"height"`
-	Fps           sql.NullFloat64 `db:"fps" json:"fps"`
+type GetProcessingJobAuthContextParams struct {
+	JobID        string `db:"job_id" json:"job_id"`
+	ArtifactHash string `db:"artifact_hash" json:"artifact_hash"`
 }
 
-func (q *Queries) GetProcessingJobAuthContext(ctx context.Context, artifactHash string) (GetProcessingJobAuthContextRow, error) {
-	row := q.db.QueryRowContext(ctx, getProcessingJobAuthContext, artifactHash)
+type GetProcessingJobAuthContextRow struct {
+	JobID            string          `db:"job_id" json:"job_id"`
+	TenantID         string          `db:"tenant_id" json:"tenant_id"`
+	StreamID         string          `db:"stream_id" json:"stream_id"`
+	ProcessesJson    sql.NullString  `db:"processes_json" json:"processes_json"`
+	RetryCount       sql.NullInt32   `db:"retry_count" json:"retry_count"`
+	ProcessingNodeID string          `db:"processing_node_id" json:"processing_node_id"`
+	Status           sql.NullString  `db:"status" json:"status"`
+	Width            sql.NullInt32   `db:"width" json:"width"`
+	Height           sql.NullInt32   `db:"height" json:"height"`
+	Fps              sql.NullFloat64 `db:"fps" json:"fps"`
+	InputCodec       string          `db:"input_codec" json:"input_codec"`
+}
+
+func (q *Queries) GetProcessingJobAuthContext(ctx context.Context, arg GetProcessingJobAuthContextParams) (GetProcessingJobAuthContextRow, error) {
+	row := q.db.QueryRowContext(ctx, getProcessingJobAuthContext, arg.JobID, arg.ArtifactHash)
 	var i GetProcessingJobAuthContextRow
 	err := row.Scan(
+		&i.JobID,
 		&i.TenantID,
 		&i.StreamID,
 		&i.ProcessesJson,
+		&i.RetryCount,
+		&i.ProcessingNodeID,
+		&i.Status,
 		&i.Width,
 		&i.Height,
 		&i.Fps,
+		&i.InputCodec,
 	)
 	return i, err
 }

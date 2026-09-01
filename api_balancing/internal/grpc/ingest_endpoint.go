@@ -109,7 +109,7 @@ func (s *FoghornGRPCServer) ResolveIngestEndpoint(ctx context.Context, req *shar
 		return nil, status.Error(codes.Unavailable, "no ingest-capable nodes are available")
 	}
 
-	s.emitIngestRoutingEvent(streamCtx.GetInternalName(), streamCtx.GetStreamId(), streamCtx.GetTenantId(),
+	s.emitIngestRoutingEvent(streamCtx.GetInternalName(), streamCtx.GetStreamId(), streamCtx.GetTenantId(), streamCtx.GetOriginClusterId(),
 		req.GetViewerIp(), lat, lon, response, float32(time.Since(start).Milliseconds()))
 
 	return response, nil
@@ -119,7 +119,7 @@ func (s *FoghornGRPCServer) ResolveIngestEndpoint(ctx context.Context, req *shar
 // emitRoutingEvent takes a ViewerEndpoint, so the RoutingEvent is filled
 // directly here rather than reused.
 func (s *FoghornGRPCServer) emitIngestRoutingEvent(
-	internalName, streamID, streamTenantID, clientIP string,
+	internalName, streamID, streamTenantID, originClusterID, clientIP string,
 	lat, lon float64,
 	response *sharedpb.IngestEndpointResponse,
 	durationMs float32,
@@ -133,18 +133,20 @@ func (s *FoghornGRPCServer) emitIngestRoutingEvent(
 	// a goroutine-per-event scheme would pile up during an outage. Queue workers
 	// impose the send deadline.
 	handlers.EnqueueRoutingEvent(s.decklogClient, &handlers.RoutingEvent{
-		Status:          "success",
-		InternalName:    internalName,
-		StreamID:        streamID,
-		StreamTenantID:  streamTenantID,
-		ClientIP:        clientIP,
-		ClientLat:       lat,
-		ClientLon:       lon,
-		SelectedNodeID:  primary.GetNodeId(),
-		Score:           uint64(primary.GetLoadScore()),
-		LatencyMs:       durationMs,
-		CandidatesCount: int32(1 + len(response.GetFallbacks())),
-		EventType:       "ingest_resolve",
-		Source:          "grpc",
+		Status:            "success",
+		InternalName:      internalName,
+		StreamID:          streamID,
+		StreamTenantID:    streamTenantID,
+		OriginClusterID:   originClusterID,
+		ClientIP:          clientIP,
+		ClientLat:         lat,
+		ClientLon:         lon,
+		SelectedNodeID:    primary.GetNodeId(),
+		SelectedClusterID: primary.GetClusterId(),
+		Score:             uint64(primary.GetLoadScore()),
+		LatencyMs:         durationMs,
+		CandidatesCount:   int32(1 + len(response.GetFallbacks())),
+		EventType:         "ingest_resolve",
+		Source:            "grpc",
 	})
 }

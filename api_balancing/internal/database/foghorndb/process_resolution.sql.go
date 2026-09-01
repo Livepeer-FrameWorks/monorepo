@@ -10,6 +10,45 @@ import (
 	"database/sql"
 )
 
+const activeChapterTranscodeJobContext = `-- name: ActiveChapterTranscodeJobContext :one
+SELECT c.chapter_id,
+       c.finalize_attempts,
+       COALESCE(c.finalize_node_id, '')::text AS processing_node_id,
+       COALESCE(c.finalize_processes_json, '')::text AS processes_json,
+       a.tenant_id::text AS tenant_id,
+       COALESCE(a.stream_id::text, '')::text AS stream_id
+FROM foghorn.dvr_chapters c
+JOIN foghorn.artifacts a ON a.artifact_hash = c.playback_artifact_hash
+WHERE c.playback_artifact_hash = $1::text
+  AND c.state = 'finalizing'
+  AND c.finalize_node_id IS NOT NULL
+  AND c.finalize_processes_json IS NOT NULL
+LIMIT 1
+`
+
+type ActiveChapterTranscodeJobContextRow struct {
+	ChapterID        string `db:"chapter_id" json:"chapter_id"`
+	FinalizeAttempts int32  `db:"finalize_attempts" json:"finalize_attempts"`
+	ProcessingNodeID string `db:"processing_node_id" json:"processing_node_id"`
+	ProcessesJson    string `db:"processes_json" json:"processes_json"`
+	TenantID         string `db:"tenant_id" json:"tenant_id"`
+	StreamID         string `db:"stream_id" json:"stream_id"`
+}
+
+func (q *Queries) ActiveChapterTranscodeJobContext(ctx context.Context, artifactHash string) (ActiveChapterTranscodeJobContextRow, error) {
+	row := q.db.QueryRowContext(ctx, activeChapterTranscodeJobContext, artifactHash)
+	var i ActiveChapterTranscodeJobContextRow
+	err := row.Scan(
+		&i.ChapterID,
+		&i.FinalizeAttempts,
+		&i.ProcessingNodeID,
+		&i.ProcessesJson,
+		&i.TenantID,
+		&i.StreamID,
+	)
+	return i, err
+}
+
 const activeLiveProcessConfig = `-- name: ActiveLiveProcessConfig :one
 SELECT processes_json
 FROM foghorn.ingest_sessions
@@ -25,6 +64,82 @@ func (q *Queries) ActiveLiveProcessConfig(ctx context.Context, streamInternalNam
 	var processes_json string
 	err := row.Scan(&processes_json)
 	return processes_json, err
+}
+
+const activeLiveTranscodeJobContext = `-- name: ActiveLiveTranscodeJobContext :one
+SELECT id::text AS session_id,
+       tenant_id::text AS tenant_id,
+       node_id,
+       COALESCE(ingest_cluster_id, '')::text AS cluster_id,
+       stream_internal_name,
+       processes_json
+FROM foghorn.ingest_sessions
+WHERE stream_internal_name = $1
+  AND ended_at IS NULL
+  AND projection_state = 'active'
+ORDER BY started_at DESC
+LIMIT 1
+`
+
+type ActiveLiveTranscodeJobContextRow struct {
+	SessionID          string `db:"session_id" json:"session_id"`
+	TenantID           string `db:"tenant_id" json:"tenant_id"`
+	NodeID             string `db:"node_id" json:"node_id"`
+	ClusterID          string `db:"cluster_id" json:"cluster_id"`
+	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
+	ProcessesJson      string `db:"processes_json" json:"processes_json"`
+}
+
+func (q *Queries) ActiveLiveTranscodeJobContext(ctx context.Context, streamInternalName string) (ActiveLiveTranscodeJobContextRow, error) {
+	row := q.db.QueryRowContext(ctx, activeLiveTranscodeJobContext, streamInternalName)
+	var i ActiveLiveTranscodeJobContextRow
+	err := row.Scan(
+		&i.SessionID,
+		&i.TenantID,
+		&i.NodeID,
+		&i.ClusterID,
+		&i.StreamInternalName,
+		&i.ProcessesJson,
+	)
+	return i, err
+}
+
+const activeProcessingTranscodeJobContext = `-- name: ActiveProcessingTranscodeJobContext :one
+SELECT job_id::text AS job_id,
+       tenant_id::text AS tenant_id,
+       artifact_hash,
+       retry_count,
+       COALESCE(processing_node_id, '')::text AS processing_node_id,
+       processes_json
+FROM foghorn.processing_jobs
+WHERE artifact_hash = $1::text
+  AND status IN ('dispatched', 'processing')
+  AND processing_node_id IS NOT NULL
+ORDER BY updated_at DESC
+LIMIT 1
+`
+
+type ActiveProcessingTranscodeJobContextRow struct {
+	JobID            string         `db:"job_id" json:"job_id"`
+	TenantID         string         `db:"tenant_id" json:"tenant_id"`
+	ArtifactHash     sql.NullString `db:"artifact_hash" json:"artifact_hash"`
+	RetryCount       sql.NullInt32  `db:"retry_count" json:"retry_count"`
+	ProcessingNodeID string         `db:"processing_node_id" json:"processing_node_id"`
+	ProcessesJson    sql.NullString `db:"processes_json" json:"processes_json"`
+}
+
+func (q *Queries) ActiveProcessingTranscodeJobContext(ctx context.Context, artifactHash string) (ActiveProcessingTranscodeJobContextRow, error) {
+	row := q.db.QueryRowContext(ctx, activeProcessingTranscodeJobContext, artifactHash)
+	var i ActiveProcessingTranscodeJobContextRow
+	err := row.Scan(
+		&i.JobID,
+		&i.TenantID,
+		&i.ArtifactHash,
+		&i.RetryCount,
+		&i.ProcessingNodeID,
+		&i.ProcessesJson,
+	)
+	return i, err
 }
 
 const latestActiveProcessingConfig = `-- name: LatestActiveProcessingConfig :one

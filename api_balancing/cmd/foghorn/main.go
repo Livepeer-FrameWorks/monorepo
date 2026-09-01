@@ -283,11 +283,17 @@ func main() {
 
 	// Load environment variables
 	config.LoadEnv(logger)
+	// Transcode job capabilities are mandatory: without this shared secret,
+	// Livepeer dispatches would be minted/rejected only at request time and every
+	// ingest would fail as an opaque 403. Refuse to start the release instead.
+	_ = config.RequireEnv("FOGHORN_BALANCER_CAPABILITY_SECRET")
 	if err := control.ConfigureAdmissionEffectEncryption(os.Getenv("FOGHORN_STATE_ENCRYPTION_KEY")); err != nil {
 		logger.WithError(err).Fatal("Foghorn durable state encryption is unavailable")
 	}
 	foghornCfg := foghornconfig.Load()
 	control.SetLocalClusterID(foghornCfg.ClusterID)
+	controlCellID := config.GetEnv("MEDIA_AUTHORITY_CELL_ID", foghornCfg.ClusterID)
+	control.SetLocalControlCellID(controlCellID)
 
 	// Explicit platform-shared edge clusters: only on these may a tenantless node serve arbitrary tenants'
 	// durable bytes (control.nodeMayServeTenant). Comma-separated cluster IDs. This is the operator-declared
@@ -466,6 +472,11 @@ func main() {
 			"livepeer_auth_rejected_total",
 			"Livepeer gateway auth-webhook rejections by reason",
 			[]string{"reason"},
+		),
+		LivepeerAuthProfileNormalized: metricsCollector.NewCounter(
+			"livepeer_auth_profile_normalized_total",
+			"Accepted Livepeer auth requests whose observed profiles were normalized to canonical policy",
+			nil,
 		),
 		StorageMint: metricsCollector.NewCounter(
 			"storage_mint_total",
@@ -1062,6 +1073,7 @@ func main() {
 
 		peerManager = federation.NewPeerManager(federation.PeerManagerConfig{
 			ClusterID:           foghornCfg.ClusterID,
+			ControlCellID:       controlCellID,
 			InstanceID:          instanceID,
 			Pool:                fedPool,
 			QM:                  qmClient,

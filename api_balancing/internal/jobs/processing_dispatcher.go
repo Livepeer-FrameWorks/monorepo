@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"path"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"frameworks/api_balancing/internal/artifactoutbox"
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/database/foghorndb"
+	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
@@ -84,6 +86,28 @@ type processingJob struct {
 	StreamID       sql.NullString
 	StreamInternal sql.NullString
 	DurableLocal   bool
+}
+
+func prepareProcessingDispatchConfig(processesJSON string, job *processingJob, nodeID, clusterID string, now time.Time) (string, error) {
+	if !mist.HasLivepeerProcesses(processesJSON) {
+		return processesJSON, nil
+	}
+	if job == nil {
+		return "", errors.New("livepeer processing dispatch has no job")
+	}
+	artifactHash := strings.TrimSpace(job.ArtifactHash.String)
+	if !job.ArtifactHash.Valid || artifactHash == "" {
+		return "", errors.New("livepeer processing dispatch has no artifact manifest")
+	}
+	return control.StampTranscodeJobConfigFromEnvironment(processesJSON, control.TranscodeJobClaims{
+		ManifestID:          "processing+" + artifactHash,
+		JobID:               job.JobID,
+		AttemptOrGeneration: strconv.Itoa(job.RetryCount),
+		Session:             job.JobID,
+		NodeID:              nodeID,
+		ClusterID:           clusterID,
+		TenantID:            job.TenantID,
+	}, now)
 }
 
 func NewProcessingDispatcher(cfg ProcessingDispatcherConfig) *ProcessingDispatcher {
@@ -309,6 +333,7 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 	if internalName != "" {
 		req.OutputRuntimeName = "vod+" + internalName
 	}
+	authoritativeProcessesJSON := ""
 	if job.ProcessesJSON.Valid {
 		resolved := job.ProcessesJSON.String
 		resolved = mist.MaskLivepeerSourceForVOD(resolved)
@@ -321,12 +346,7 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 			resolved = d.gatewayResolver.ApplyLivepeerBroadcasters(resolved, nil)
 			resolved = d.gatewayResolver.ApplyLivepeerWorkload(resolved, mist.WorkloadVOD)
 		}
-		req.ProcessesJson = resolved
-
-		// Cache process config for STREAM_PROCESS trigger before dispatching
-		if d.configCacher != nil && artifactHash != "" && resolved != "" {
-			d.configCacher.CacheProcessConfig(artifactHash, resolved)
-		}
+		authoritativeProcessesJSON = mist.StripLivepeerJobToken(resolved)
 	}
 
 	// Persist the node assignment BEFORE the node can report a result. processing_node_id is what the
@@ -353,6 +373,45 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 	if n == 0 {
 		d.logger.WithField("job_id", job.JobID).Info("Dispatch: job left 'dispatched' before assignment persisted (cancelled/raced); not sending")
 		return
+	}
+
+	// The sidecar serves this request's process config from a local override and
+	// intentionally bypasses Foghorn's STREAM_PROCESS handler. Stamp the delivery
+	// copy here, after the exact processing node assignment is durable. Keep the
+	// DB/cache copy token-free so capabilities cannot be replayed across retries.
+	deliveryProcessesJSON := authoritativeProcessesJSON
+	if mist.HasLivepeerProcesses(authoritativeProcessesJSON) {
+		node := state.DefaultManager().GetNodeState(nodeID)
+		if node == nil || strings.TrimSpace(node.ClusterID) == "" {
+			d.logger.WithFields(logging.Fields{"job_id": job.JobID, "node_id": nodeID}).
+				Warn("Assigned Livepeer processing node has no cluster binding")
+			d.revertToQueued(ctx, job.JobID)
+			d.markArtifactQueued(ctx, job, "Livepeer node cluster unavailable")
+			return
+		}
+		var stampErr error
+		deliveryProcessesJSON, stampErr = prepareProcessingDispatchConfig(authoritativeProcessesJSON, job, nodeID, node.ClusterID, time.Now())
+		if stampErr != nil {
+			d.logger.WithError(stampErr).WithFields(logging.Fields{"job_id": job.JobID, "node_id": nodeID}).
+				Warn("Failed to authorize Livepeer processing dispatch")
+			d.revertToQueued(ctx, job.JobID)
+			d.markArtifactQueued(ctx, job, "Livepeer authorization unavailable")
+			return
+		}
+	}
+	req.ProcessesJson = deliveryProcessesJSON
+	if d.configCacher != nil && artifactHash != "" && authoritativeProcessesJSON != "" {
+		d.configCacher.CacheProcessConfig(artifactHash, authoritativeProcessesJSON)
+	}
+	if authoritativeProcessesJSON != "" && job.ArtifactHash.Valid {
+		if _, err := queries.UpdateProcessingJobCache(ctx, foghorndb.UpdateProcessingJobCacheParams{
+			JobID: job.JobID, ArtifactHash: job.ArtifactHash,
+			ProcessesJson: sql.NullString{String: authoritativeProcessesJSON, Valid: true}, ProcessingNodeID: sql.NullString{String: nodeID, Valid: true},
+		}); err != nil {
+			d.logger.WithError(err).WithField("job_id", job.JobID).Warn("Failed to persist authoritative processing config before dispatch")
+			d.revertToQueued(ctx, job.JobID)
+			return
+		}
 	}
 
 	if err := control.SendProcessingJob(nodeID, req); err != nil {

@@ -647,6 +647,10 @@ CREATE TABLE IF NOT EXISTS foghorn.dvr_chapters (
         -- progress handlers bind the reporting connection to the assignment —
         -- a chapter-finalize job is routed around processing_jobs, so this is
         -- its only reporting-node authorization anchor.
+    finalize_processes_json TEXT,
+        -- Token-free, fully resolved process snapshot for the current
+        -- finalize_attempts value. Foghorn signs and verifies the exact
+        -- Livepeer contract from this durable snapshot.
     last_failure_reason    TEXT,
     reclaim_started_at     TIMESTAMPTZ,
     segment_count          INTEGER NOT NULL DEFAULT 0,

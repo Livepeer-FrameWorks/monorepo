@@ -165,6 +165,27 @@ func (d *ArrangeOriginPullDeps) ArrangeOriginPull(ctx context.Context, req Arran
 		return nil, fmt.Errorf("invalid arrange request: stream=%q remote=%v cluster=%q",
 			req.InternalName, req.Remote, req.RemoteCluster)
 	}
+	emit := func(data *ipcpb.FederationEventData) {
+		if d.EventEmitter == nil {
+			return
+		}
+		if req.TenantID != "" {
+			data.StreamTenantId = &req.TenantID
+		}
+		if data.GetOriginClusterId() == "" {
+			originClusterID := ""
+			if control.StreamRegistryInstance != nil {
+				originClusterID, _ = control.StreamRegistryInstance.OriginCluster(req.InternalName)
+			}
+			if originClusterID == "" {
+				originClusterID = req.RemoteCluster
+			}
+			if originClusterID != "" {
+				data.OriginClusterId = &originClusterID
+			}
+		}
+		d.EventEmitter(data)
+	}
 	// Refuse pre-NotifyOriginPull when we can't durably MarkReplicating
 	// locally. Mirrors the source-side guard in PrepareOriginPull
 	// (federation/server.go) so neither side records a half-committed
@@ -200,7 +221,7 @@ func (d *ArrangeOriginPullDeps) ArrangeOriginPull(ctx context.Context, req Arran
 		for _, r := range replications {
 			if r.ClusterID == req.RemoteCluster {
 				if d.EventEmitter != nil {
-					d.EventEmitter(&ipcpb.FederationEventData{
+					emit(&ipcpb.FederationEventData{
 						EventType:                  ipcpb.FederationEventType_REPLICATION_LOOP_PREVENTED,
 						RemoteCluster:              req.RemoteCluster,
 						StreamName:                 &req.InternalName,
@@ -249,7 +270,7 @@ func (d *ArrangeOriginPullDeps) ArrangeOriginPull(ctx context.Context, req Arran
 		}).Warn("Origin-pull refused because the selected node has no authenticated cluster identity")
 		if d.EventEmitter != nil {
 			reason := "destination node cluster unavailable"
-			d.EventEmitter(&ipcpb.FederationEventData{
+			emit(&ipcpb.FederationEventData{
 				EventType: ipcpb.FederationEventType_ORIGIN_PULL_FAILED, RemoteCluster: req.RemoteCluster,
 				StreamName: &req.InternalName, DestNode: &destNodeID, FailureReason: &reason,
 			})
@@ -279,7 +300,7 @@ func (d *ArrangeOriginPullDeps) ArrangeOriginPull(ctx context.Context, req Arran
 			reason = ack.GetReason()
 		}
 		if d.EventEmitter != nil {
-			d.EventEmitter(&ipcpb.FederationEventData{
+			emit(&ipcpb.FederationEventData{
 				EventType:     ipcpb.FederationEventType_ORIGIN_PULL_FAILED,
 				RemoteCluster: req.RemoteCluster,
 				StreamName:    &req.InternalName,
@@ -313,7 +334,7 @@ func (d *ArrangeOriginPullDeps) ArrangeOriginPull(ctx context.Context, req Arran
 	}).Info("Origin-pull arranged")
 
 	if d.EventEmitter != nil {
-		d.EventEmitter(&ipcpb.FederationEventData{
+		emit(&ipcpb.FederationEventData{
 			EventType:     ipcpb.FederationEventType_ORIGIN_PULL_ARRANGED,
 			RemoteCluster: req.RemoteCluster,
 			StreamName:    &req.InternalName,
