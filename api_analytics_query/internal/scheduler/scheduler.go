@@ -4,7 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
+	"regexp"
+	"strings"
 	"time"
 
 	"frameworks/api_analytics_query/internal/database/meteringdb"
@@ -16,6 +19,23 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 )
 
+var sourceIdentityPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
+
+// NormalizeSourceIdentity validates the durable logical-dataset identity used
+// by leases, cursors, and emitted reports. Callers must retain the returned
+// values so whitespace cannot fork one configured source into two identities.
+func NormalizeSourceIdentity(sourceID, sourceRegion string) (string, string, error) {
+	sourceID = strings.TrimSpace(sourceID)
+	sourceRegion = strings.TrimSpace(sourceRegion)
+	if sourceID == "" || len(sourceID) > 128 || !sourceIdentityPattern.MatchString(sourceID) {
+		return "", "", fmt.Errorf("METERING_SOURCE_ID %q must match %s and be at most 128 characters", sourceID, sourceIdentityPattern.String())
+	}
+	if sourceRegion == "" || len(sourceRegion) > 64 || !sourceIdentityPattern.MatchString(sourceRegion) {
+		return "", "", fmt.Errorf("METERING_SOURCE_REGION %q must match %s and be at most 64 characters", sourceRegion, sourceIdentityPattern.String())
+	}
+	return sourceID, sourceRegion, nil
+}
+
 // Scheduler handles periodic tasks for billing and usage summarization
 type Scheduler struct {
 	logger            logging.Logger
@@ -26,11 +46,12 @@ type Scheduler struct {
 	queries           meteringdb.Querier
 	sourceID          string
 	ownerID           string
+	initialDelay      time.Duration
 }
 
 // NewScheduler creates a new scheduler instance
-func NewScheduler(yugaDB database.PostgresConn, clickhouse database.ClickHouseConn, logger logging.Logger) *Scheduler {
-	billingSummarizer := handlers.NewBillingSummarizer(yugaDB, clickhouse, logger)
+func NewScheduler(yugaDB database.PostgresConn, clickhouse database.ClickHouseConn, logger logging.Logger, sourceID, sourceRegion string) *Scheduler {
+	billingSummarizer := handlers.NewBillingSummarizer(yugaDB, clickhouse, logger, sourceID, sourceRegion)
 	hostname, hostnameErr := os.Hostname()
 	if hostnameErr != nil || hostname == "" {
 		hostname = "periscope-metering"
@@ -45,8 +66,9 @@ func NewScheduler(yugaDB database.PostgresConn, clickhouse database.ClickHouseCo
 		billingSummarizer: billingSummarizer,
 		stopChan:          make(chan struct{}),
 		queries:           meteringdb.New(yugaDB),
-		sourceID:          config.GetEnv("METERING_SOURCE_ID", "periscope-default"),
+		sourceID:          sourceID,
 		ownerID:           ownerID,
+		initialDelay:      10 * time.Second,
 	}
 }
 
@@ -73,6 +95,12 @@ func (s *Scheduler) runReservations(ctx context.Context) error {
 	return s.runWithLease(ctx, "reservations", 90*time.Second, s.billingSummarizer.PublishUsageReservations)
 }
 
+// ValidateSource establishes the immutable source identity before the worker
+// starts serving health checks or competing for leases.
+func (s *Scheduler) ValidateSource(ctx context.Context) error {
+	return s.billingSummarizer.ValidateSource(ctx)
+}
+
 // Start begins the scheduled tasks
 func (s *Scheduler) Start() {
 	s.logger.Info("Starting usage summarization scheduler")
@@ -88,19 +116,8 @@ func (s *Scheduler) Start() {
 
 	s.billingTicker = time.NewTicker(interval)
 	s.reservationTicker = time.NewTicker(time.Minute)
-	go s.runFinalizedTasks()
+	go s.runFinalizedTasks(s.runOnce)
 	go s.runReservationTasks()
-
-	// Run initial summarization immediately (in background)
-	go func() {
-		time.Sleep(10 * time.Second) // Wait for service to fully start
-		s.logger.Info("Running initial usage summarization")
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		defer cancel()
-		if err := s.runOnce(ctx); err != nil {
-			s.logger.WithError(err).Error("Failed to run initial usage summarization")
-		}
-	}()
 }
 
 // Stop stops all scheduled tasks
@@ -117,13 +134,25 @@ func (s *Scheduler) Stop() {
 	close(s.stopChan)
 }
 
-func (s *Scheduler) runFinalizedTasks() {
+func (s *Scheduler) runFinalizedTasks(run func(context.Context) error) {
+	initialTimer := time.NewTimer(s.initialDelay)
+	defer initialTimer.Stop()
+	initialRun := initialTimer.C
+
 	for {
 		select {
+		case <-initialRun:
+			initialRun = nil
+			s.logger.Info("Running initial usage summarization")
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			if err := run(ctx); err != nil {
+				s.logger.WithError(err).Error("Failed to run initial usage summarization")
+			}
+			cancel()
 		case <-s.billingTicker.C:
 			s.logger.Info("Running scheduled usage summarization")
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-			if err := s.runOnce(ctx); err != nil {
+			if err := run(ctx); err != nil {
 				s.logger.WithError(err).Error("Failed to run usage summarization")
 			}
 			cancel()

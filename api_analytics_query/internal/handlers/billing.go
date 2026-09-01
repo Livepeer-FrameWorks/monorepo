@@ -81,7 +81,7 @@ type usageProducer interface {
 }
 
 // NewBillingSummarizer creates a new billing summarizer instance
-func NewBillingSummarizer(yugaDB database.PostgresConn, clickhouse database.ClickHouseConn, logger logging.Logger) *BillingSummarizer {
+func NewBillingSummarizer(yugaDB database.PostgresConn, clickhouse database.ClickHouseConn, logger logging.Logger, sourceID, sourceRegion string) *BillingSummarizer {
 	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
 	serviceToken := config.RequireEnv("SERVICE_TOKEN")
 
@@ -90,7 +90,7 @@ func NewBillingSummarizer(yugaDB database.PostgresConn, clickhouse database.Clic
 	billingTopic := config.GetEnv("BILLING_KAFKA_TOPIC", "billing.usage_reports")
 	kLogger := logrus.New()
 
-	kafkaProducer, err := kafka.NewKafkaProducer(brokers, billingTopic, "periscope-query", kLogger)
+	kafkaProducer, err := kafka.NewKafkaProducer(brokers, billingTopic, "periscope-metering", kLogger)
 	if err != nil {
 		logger.WithError(err).Fatal("Failed to create Kafka producer for billing")
 	}
@@ -118,8 +118,8 @@ func NewBillingSummarizer(yugaDB database.PostgresConn, clickhouse database.Clic
 		logger:          logger,
 		usageProducer:   kafkaProducer,
 		billingTopic:    billingTopic,
-		sourceID:        config.GetEnv("METERING_SOURCE_ID", "periscope-default"),
-		sourceRegion:    config.GetEnv("METERING_SOURCE_REGION", ""),
+		sourceID:        sourceID,
+		sourceRegion:    sourceRegion,
 		systemTenantID:  systemTenantID.String(),
 	}
 	bs.resolvePrimaryCluster = func(tenantID string) (string, error) {
@@ -1357,15 +1357,28 @@ func (bs *BillingSummarizer) ProcessPendingUsage(ctx context.Context) error {
 }
 
 func (bs *BillingSummarizer) ensureSourceActivation(ctx context.Context) (time.Time, error) {
-	var activatedAt time.Time
+	var source meteringdb.EnsureMeteringSourceRow
 	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
 		var queryErr error
-		activatedAt, queryErr = bs.postgresQueries.EnsureMeteringSource(ctx, meteringdb.EnsureMeteringSourceParams{
+		source, queryErr = bs.postgresQueries.EnsureMeteringSource(ctx, meteringdb.EnsureMeteringSourceParams{
 			SourceID: bs.sourceID, SourceRegion: bs.sourceRegion, ActivatedAt: time.Now().UTC().Truncate(5 * time.Minute),
 		})
 		return queryErr
 	})
-	return activatedAt.UTC(), err
+	if err != nil {
+		return time.Time{}, err
+	}
+	if persistedRegion := strings.TrimSpace(source.SourceRegion); persistedRegion != strings.TrimSpace(bs.sourceRegion) {
+		return time.Time{}, fmt.Errorf("metering source %q is registered in region %q, configured %q", bs.sourceID, persistedRegion, bs.sourceRegion)
+	}
+	return source.ActivatedAt.UTC(), nil
+}
+
+// ValidateSource registers the configured logical dataset on first startup and
+// rejects reuse of an existing source ID with conflicting ownership metadata.
+func (bs *BillingSummarizer) ValidateSource(ctx context.Context) error {
+	_, err := bs.ensureSourceActivation(ctx)
+	return err
 }
 
 func (bs *BillingSummarizer) earliestCanonicalBillingFact(ctx context.Context, tenantID string) (time.Time, bool, error) {

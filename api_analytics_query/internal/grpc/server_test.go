@@ -782,27 +782,28 @@ func TestBuildOrchestratorVantagesQueryFiltersOrchInLatestAndGeo(t *testing.T) {
 	}
 }
 
-func TestValidateRelatedTenantIDs(t *testing.T) {
-	t.Run("allows empty related list", func(t *testing.T) {
-		ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-a")
-		if err := validateRelatedTenantIDs(ctx, nil); err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	})
+func TestGetLiveNodesIgnoresDeprecatedRelatedTenantExpansion(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	server := &PeriscopeServer{clickhouse: db, logger: logging.NewLoggerWithService("periscope-query-test")}
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-a")
+	mock.ExpectQuery(`(?s)FROM periscope\.node_state_current FINAL\s+WHERE tenant_id = \?`).
+		WithArgs("tenant-a").
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}))
 
-	t.Run("rejects related list for authenticated tenant", func(t *testing.T) {
-		ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-a")
-		err := validateRelatedTenantIDs(ctx, []string{"tenant-b"})
-		if status.Code(err) != codes.PermissionDenied {
-			t.Fatalf("expected permission denied, got %v", err)
-		}
+	resp, err := server.GetLiveNodes(ctx, &periscopepb.GetLiveNodesRequest{
+		TenantId:         "tenant-a",
+		RelatedTenantIds: []string{"tenant-b"}, //nolint:staticcheck // Exercise compatibility with the legacy wire input.
 	})
-
-	t.Run("allows related list for service calls", func(t *testing.T) {
-		if err := validateRelatedTenantIDs(serviceTestContext(), []string{"tenant-b"}); err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	})
+	if err != nil || len(resp.GetNodes()) != 0 {
+		t.Fatalf("GetLiveNodes = (%+v, %v), want empty owner-scoped result", resp, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestGetCursorPagination(t *testing.T) {
@@ -1204,12 +1205,12 @@ func TestGetFederationEvents_IncludesGeoCoordinates(t *testing.T) {
 	end := time.Now().UTC()
 	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-1")
 
-	mock.ExpectQuery(`SELECT count\(\) FROM periscope.federation_events`).
-		WithArgs("tenant-1", sqlmock.AnyArg(), sqlmock.AnyArg()).
+	mock.ExpectQuery(`(?s)SELECT toInt32\(sum\(cnt\)\).*WHERE tenant_id = \?.*UNION ALL.*WHERE stream_tenant_id = \? AND tenant_id != \?`).
+		WithArgs("tenant-1", sqlmock.AnyArg(), sqlmock.AnyArg(), "tenant-1", "tenant-1", sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int32(1)))
 
 	mock.ExpectQuery("FROM periscope.federation_events").
-		WithArgs("tenant-1", sqlmock.AnyArg(), sqlmock.AnyArg(), int32(100)).
+		WithArgs("tenant-1", "tenant-1", "tenant-1", "tenant-1", sqlmock.AnyArg(), sqlmock.AnyArg(), "tenant-1", "tenant-1", sqlmock.AnyArg(), sqlmock.AnyArg(), int32(100)).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"timestamp", "event_type", "local_cluster", "remote_cluster",
 			"stream_name", "stream_id", "source_node", "dest_node", "dtsc_url",
@@ -1217,13 +1218,15 @@ func TestGetFederationEvents_IncludesGeoCoordinates(t *testing.T) {
 			"queried_clusters", "responding_clusters", "total_candidates",
 			"best_remote_score", "peer_cluster", "role", "reason",
 			"local_lat", "local_lon", "remote_lat", "remote_lon",
+			"stream_tenant_id", "control_cell_id", "stream_origin_cluster_id",
 		}).AddRow(
 			end, "origin_pull_completed", "cluster-a", "cluster-b",
-			"stream-1", "11111111-1111-1111-1111-111111111111", "src-node", "dest-node", "https://example.com/live",
+			"stream-1", "11111111-1111-1111-1111-111111111111", "src-node", "dest-node", nil,
 			12.5, 345.0, "",
 			2, 1, 4,
 			99, "cluster-b", "peer_manager", "test",
 			47.6062, -122.3321, 37.7749, -122.4194,
+			"tenant-1", "control-eu", "cluster-b",
 		))
 
 	resp, err := server.GetFederationEvents(ctx, &periscopepb.GetFederationEventsRequest{
@@ -1243,9 +1246,220 @@ func TestGetFederationEvents_IncludesGeoCoordinates(t *testing.T) {
 	if *evt.LocalLatitude != 47.6062 || *evt.RemoteLongitude != -122.4194 {
 		t.Fatalf("unexpected geo values: local=%v,%v remote=%v,%v", evt.GetLocalLatitude(), evt.GetLocalLongitude(), evt.GetRemoteLatitude(), evt.GetRemoteLongitude())
 	}
+	if evt.GetControlCellId() != "control-eu" || evt.GetOriginClusterId() != "cluster-b" {
+		t.Fatalf("unexpected federation attribution: control=%q origin=%q", evt.GetControlCellId(), evt.GetOriginClusterId())
+	}
+	if evt.GetStreamTenantId() != "tenant-1" {
+		t.Fatalf("content owner stream tenant = %q, want tenant-1", evt.GetStreamTenantId())
+	}
+	if evt.DtscUrl != nil {
+		t.Fatalf("internal DTSC URL must be redacted, got %q", evt.GetDtscUrl())
+	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet mock expectations: %v", err)
+	}
+}
+
+func TestGetFederationEvents_RedactsUnrelatedContentIdentityForOperator(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	server := &PeriscopeServer{clickhouse: db, logger: logging.NewLoggerWithService("periscope-query-test")}
+	start := time.Now().Add(-time.Hour).UTC()
+	end := time.Now().UTC()
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "operator-tenant")
+
+	mock.ExpectQuery(`(?s)SELECT toInt32\(sum\(cnt\)\).*WHERE tenant_id = \?.*UNION ALL.*WHERE stream_tenant_id = \? AND tenant_id != \?`).
+		WithArgs("operator-tenant", sqlmock.AnyArg(), sqlmock.AnyArg(), "operator-tenant", "operator-tenant", sqlmock.AnyArg(), sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int32(1)))
+	mock.ExpectQuery(`if\(stream_tenant_id = \?, stream_tenant_id, NULL\) AS stream_tenant_id`).
+		WithArgs(
+			"operator-tenant", "operator-tenant", "operator-tenant",
+			"operator-tenant", sqlmock.AnyArg(), sqlmock.AnyArg(),
+			"operator-tenant", "operator-tenant", sqlmock.AnyArg(), sqlmock.AnyArg(), int32(100),
+		).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"timestamp", "event_type", "local_cluster", "remote_cluster",
+			"stream_name", "stream_id", "source_node", "dest_node", "dtsc_url",
+			"latency_ms", "time_to_live_ms", "failure_reason",
+			"queried_clusters", "responding_clusters", "total_candidates",
+			"best_remote_score", "peer_cluster", "role", "reason",
+			"local_lat", "local_lon", "remote_lat", "remote_lon",
+			"stream_tenant_id", "control_cell_id", "stream_origin_cluster_id",
+		}).AddRow(
+			end, "origin_pull_completed", "cluster-a", "cluster-b",
+			nil, nil, "src-node", "dest-node", nil,
+			12.5, 345.0, "", 2, 1, 4, 99, "cluster-b", "peer_manager", "test",
+			47.6062, -122.3321, 37.7749, -122.4194,
+			nil, "control-eu", "cluster-b",
+		))
+
+	resp, err := server.GetFederationEvents(ctx, &periscopepb.GetFederationEventsRequest{
+		TimeRange: &commonpb.TimeRange{Start: timestamppb.New(start), End: timestamppb.New(end)},
+	})
+	if err != nil {
+		t.Fatalf("GetFederationEvents returned error: %v", err)
+	}
+	if len(resp.GetEvents()) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(resp.GetEvents()))
+	}
+	evt := resp.GetEvents()[0]
+	if evt.StreamTenantId != nil || evt.StreamName != nil || evt.StreamId != nil || evt.DtscUrl != nil {
+		t.Fatalf("operator row leaked content identity: tenant=%q stream_name=%q stream_id=%q dtsc=%q",
+			evt.GetStreamTenantId(), evt.GetStreamName(), evt.GetStreamId(), evt.GetDtscUrl())
+	}
+	if evt.GetLocalCluster() != "cluster-a" || evt.GetSourceNode() != "src-node" || evt.GetControlCellId() != "control-eu" {
+		t.Fatalf("operator placement was redacted: local=%q source=%q control=%q",
+			evt.GetLocalCluster(), evt.GetSourceNode(), evt.GetControlCellId())
+	}
+
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet mock expectations: %v", err)
+	}
+}
+
+func TestGetFederationSummaryCombinesOperatorHistoryWithForeignContentOwnership(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	server := &PeriscopeServer{clickhouse: db, logger: logging.NewLoggerWithService("periscope-query-test")}
+	start := time.Now().Add(-time.Hour).UTC()
+	end := time.Now().UTC()
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-1")
+
+	mock.ExpectQuery(`(?s)FROM \(.*FROM periscope\.federation_hourly.*UNION ALL.*FROM periscope\.federation_hourly_v2.*content_tenant_id = \?.*tenant_id != \?`).
+		WithArgs(
+			"tenant-1", sqlmock.AnyArg(), sqlmock.AnyArg(),
+			"tenant-1", "tenant-1", sqlmock.AnyArg(), sqlmock.AnyArg(),
+		).
+		WillReturnRows(sqlmock.NewRows([]string{"event_type", "total", "failures", "avg_latency_ms"}).
+			AddRow("origin_pull_completed", uint64(3), uint64(0), 20.0).
+			AddRow("origin_pull_failed", uint64(1), uint64(1), 100.0))
+
+	resp, err := server.GetFederationSummary(ctx, &periscopepb.GetFederationSummaryRequest{
+		TimeRange: &commonpb.TimeRange{Start: timestamppb.New(start), End: timestamppb.New(end)},
+	})
+	if err != nil {
+		t.Fatalf("GetFederationSummary returned error: %v", err)
+	}
+
+	summary := resp.GetSummary()
+	if summary.GetTotalEvents() != 4 || len(summary.GetEventCounts()) != 2 {
+		t.Fatalf("unexpected summary counts: total=%d rows=%d", summary.GetTotalEvents(), len(summary.GetEventCounts()))
+	}
+	if summary.GetOverallFailureRate() != 0.25 {
+		t.Fatalf("overall failure rate = %v, want 0.25", summary.GetOverallFailureRate())
+	}
+	if summary.GetOverallAvgLatencyMs() != 40 {
+		t.Fatalf("overall average latency = %v, want 40", summary.GetOverallAvgLatencyMs())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet mock expectations: %v", err)
+	}
+}
+
+func TestGetRoutingEventsRejectsForeignSubjectTenant(t *testing.T) {
+	server := &PeriscopeServer{logger: logging.NewLoggerWithService("periscope-query-test")}
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-a")
+
+	foreign := "tenant-b"
+	_, err := server.GetRoutingEvents(ctx, &periscopepb.GetRoutingEventsRequest{
+		TenantId:       "tenant-a",
+		StreamTenantId: &foreign,
+	})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("foreign subject error = %v, want PermissionDenied", err)
+	}
+}
+
+func TestGetRoutingEventsFailsClosedWithoutSubjectAttribution(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	server := &PeriscopeServer{clickhouse: db, logger: logging.NewLoggerWithService("periscope-query-test")}
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-a")
+	start := time.Now().Add(-time.Hour).UTC()
+	end := time.Now().UTC()
+
+	mock.ExpectQuery(`SELECT count\(\*\) FROM periscope\.routing_decisions WHERE stream_tenant_id = \? AND timestamp >= \? AND timestamp <= \?`).
+		WithArgs("tenant-a", start, end).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(0))
+	mock.ExpectQuery(`(?s)FROM periscope\.routing_decisions\s+WHERE stream_tenant_id = \? AND timestamp >= \? AND timestamp <= \?`).
+		WithArgs("tenant-a", start, end).
+		WillReturnRows(sqlmock.NewRows([]string{"timestamp"}))
+
+	resp, err := server.GetRoutingEvents(ctx, &periscopepb.GetRoutingEventsRequest{
+		TenantId:         "tenant-a",
+		RelatedTenantIds: []string{"tenant-b"}, //nolint:staticcheck // Legacy input must be ignored, never expanded.
+		TimeRange:        &commonpb.TimeRange{Start: timestamppb.New(start), End: timestamppb.New(end)},
+	})
+	if err != nil {
+		t.Fatalf("GetRoutingEvents: %v", err)
+	}
+	if len(resp.GetEvents()) != 0 {
+		t.Fatalf("unexpected routing events: %+v", resp.GetEvents())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGetClusterWorkloadReturnsRedactedAggregate(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	server := &PeriscopeServer{clickhouse: db, logger: logging.NewLoggerWithService("periscope-query-test")}
+	ctx := serviceTestContext()
+	start := time.Now().Add(-time.Hour).UTC()
+	end := time.Now().UTC()
+	any := sqlmock.AnyArg()
+	mock.ExpectQuery(`(?s)SELECT cluster_id, node_id, work_kind, measurement_kind, storage_scope,.*'storage', 'window'.*'storage', 'current', storage_scope.*timestamp >= now\(\) - INTERVAL 2 HOUR`).
+		WithArgs(any, any, "cluster-a", any, any, "cluster-a", any, any, "cluster-a", any, any, "cluster-a", any, any, "cluster-a", "cluster-a", "cluster-a", "cluster-a").
+		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "node_id", "work_kind", "measurement_kind", "storage_scope", "event_count", "active_count", "bytes", "media_seconds", "error_count", "observed_at_ms"}).
+			AddRow("cluster-a", "edge-1", "storage", "window", "", int64(12), int64(0), uint64(4096), 0.0, int64(0), int64(0)).
+			AddRow("cluster-a", "edge-1", "storage", "current", "hot", int64(0), int64(3), uint64(8192), 0.0, int64(0), end.UnixMilli()))
+
+	resp, err := server.GetClusterWorkload(ctx, &periscopepb.GetClusterWorkloadRequest{
+		TenantId: "operator-tenant", ClusterIds: []string{"cluster-a"},
+		TimeRange: &commonpb.TimeRange{Start: timestamppb.New(start), End: timestamppb.New(end)},
+	})
+	if err != nil {
+		t.Fatalf("GetClusterWorkload: %v", err)
+	}
+	if len(resp.GetRows()) != 2 {
+		t.Fatalf("unexpected workload response: %+v", resp.GetRows())
+	}
+	window, current := resp.GetRows()[0], resp.GetRows()[1]
+	if window.GetMeasurementKind() != "window" || window.GetBytes() != 4096 || window.GetStorageScope() != "" || window.GetObservedAt() != nil {
+		t.Fatalf("window storage semantics: %+v", window)
+	}
+	if current.GetMeasurementKind() != "current" || current.GetBytes() != 8192 || current.GetStorageScope() != "hot" || current.GetObservedAt().AsTime().UnixMilli() != end.UnixMilli() {
+		t.Fatalf("current storage semantics: %+v", current)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGetClusterWorkloadRequiresServiceCredentials(t *testing.T) {
+	server := &PeriscopeServer{logger: logging.NewLoggerWithService("periscope-query-test")}
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "operator-tenant")
+	_, err := server.GetClusterWorkload(ctx, &periscopepb.GetClusterWorkloadRequest{
+		TenantId: "operator-tenant", ClusterIds: []string{"cluster-a"},
+	})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("error = %v, want PermissionDenied", err)
 	}
 }
 

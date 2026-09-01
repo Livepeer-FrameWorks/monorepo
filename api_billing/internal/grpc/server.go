@@ -310,6 +310,10 @@ func NewPurserServer(db *sql.DB, logger logging.Logger, metrics *ServerMetrics, 
 	}
 	rpcClient := handlers.NewRPCClient()
 	priceFeed := handlers.NewPriceFeed(rpcClient, logger)
+	var eventSender serviceEventSender
+	if decklogClient != nil {
+		eventSender = decklogClient
+	}
 	return &PurserServer{
 		db:                  db,
 		logger:              logger,
@@ -322,7 +326,7 @@ func NewPurserServer(db *sql.DB, logger logging.Logger, metrics *ServerMetrics, 
 		rpcClient:           rpcClient,
 		priceFeed:           priceFeed,
 		x402handler:         handlers.NewX402Handler(db, logger, hdwallet, rpcClient, commodoreClient),
-		decklogClient:       decklogClient,
+		decklogClient:       eventSender,
 		thresholdEnforcer:   handlers.NewThresholdEnforcer(db, logger, commodoreClient, nil, billing),
 		tierReconciler:      tieraccess.NewReconciler(db, qmClient, logger),
 		billing:             billing,
@@ -959,7 +963,7 @@ func (s *PurserServer) GetUsageRecords(ctx context.Context, req *purserpb.GetUsa
 	for _, row := range rows {
 		rec := &purserpb.UsageRecord{
 			Id: row.ID, TenantId: row.TenantID, ClusterId: row.ClusterID,
-			UsageType: row.UsageType, UsageValue: row.UsageValue, Granularity: row.Granularity,
+			UsageType: row.UsageType, Unit: row.Unit, UsageValue: row.UsageValue, Granularity: row.Granularity,
 		}
 		if row.CreatedAt.Valid {
 			rec.CreatedAt = timestamppb.New(row.CreatedAt.Time)
@@ -974,6 +978,12 @@ func (s *PurserServer) GetUsageRecords(ctx context.Context, req *purserpb.GetUsa
 			var detailsMap map[string]any
 			if json.Unmarshal(row.UsageDetails, &detailsMap) == nil {
 				rec.UsageDetails = mapToProtoStruct(detailsMap)
+			}
+		}
+		if len(row.Dimensions) > 0 {
+			var dimensionsMap map[string]any
+			if json.Unmarshal(row.Dimensions, &dimensionsMap) == nil {
+				rec.Dimensions = mapToProtoStruct(dimensionsMap)
 			}
 		}
 		records = append(records, rec)

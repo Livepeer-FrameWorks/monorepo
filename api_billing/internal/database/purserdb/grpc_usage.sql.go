@@ -53,12 +53,12 @@ WITH dimensioned_rows AS (
       AND status = 'applied' AND value_kind = 'correction_delta'
 )
 SELECT row.cluster_id, row.usage_type, row.unit, row.dimensions,
-       (CASE WHEN definition.aggregation = 'max' THEN MAX(row.usage_value)
+       (CASE WHEN COALESCE(definition.aggregation, 'sum') = 'max' THEN MAX(row.usage_value)
              ELSE SUM(row.usage_value) END)::text AS quantity
 FROM dimensioned_rows row
-JOIN purser.meter_definitions definition
-  ON definition.meter = row.usage_type AND definition.active = TRUE
-GROUP BY row.cluster_id, row.usage_type, row.unit, row.dimensions, definition.aggregation
+LEFT JOIN purser.meter_definitions definition ON definition.meter = row.usage_type
+GROUP BY row.cluster_id, row.usage_type, row.unit, row.dimensions,
+         COALESCE(definition.aggregation, 'sum')
 `
 
 type ListTenantDimensionedUsageParams struct {
@@ -186,21 +186,22 @@ WITH usage_surface AS (
       AND period_end > $4::timestamptz
       AND (NOT $5::boolean OR usage_type = ANY($6::text[]))
 )
-SELECT usage_type, bucket_start::timestamptz AS period_start,
+SELECT bucketed.usage_type, bucket_start::timestamptz AS period_start,
        (bucket_start + CASE $1::text
            WHEN 'hourly' THEN INTERVAL '1 hour'
            WHEN 'daily' THEN INTERVAL '1 day'
            WHEN 'monthly' THEN INTERVAL '1 month'
        END)::timestamptz AS period_end,
        CASE
-           WHEN usage_type IN ('peak_bandwidth_mbps', 'max_viewers', 'total_streams', 'total_viewers', 'unique_users')
+           WHEN COALESCE(definition.aggregation, 'sum') = 'max'
                THEN MAX(usage_value)::double precision
-           ELSE GREATEST(SUM(usage_value), 0)::double precision
+           ELSE SUM(usage_value)::double precision
        END AS usage_value,
        $1::text AS granularity
 FROM bucketed
-GROUP BY usage_type, bucket_start
-ORDER BY bucket_start ASC, usage_type ASC
+LEFT JOIN purser.meter_definitions definition ON definition.meter = bucketed.usage_type
+GROUP BY bucketed.usage_type, bucket_start, COALESCE(definition.aggregation, 'sum')
+ORDER BY bucket_start ASC, bucketed.usage_type ASC
 `
 
 type ListUsageAggregatesParams struct {
@@ -259,6 +260,7 @@ func (q *Queries) ListUsageAggregates(ctx context.Context, arg ListUsageAggregat
 const listUsageRecords = `-- name: ListUsageRecords :many
 WITH usage_surface AS (
     SELECT id::text AS id, tenant_id::text AS tenant_id, cluster_id, usage_type,
+           unit, COALESCE(dimensions, '{}'::jsonb) AS dimensions,
            usage_value::double precision AS usage_value,
            COALESCE(usage_details, '{}'::jsonb) AS usage_details,
            created_at, period_start, period_end, granularity
@@ -266,14 +268,15 @@ WITH usage_surface AS (
     WHERE value_kind = 'delta' AND granularity = 'minute_5'
     UNION ALL
     SELECT id::text AS id, tenant_id::text AS tenant_id, NULLIF(cluster_id, '') AS cluster_id,
-           usage_type, delta_value::double precision AS usage_value,
+           usage_type, unit, COALESCE(dimensions, '{}'::jsonb) AS dimensions,
+           delta_value::double precision AS usage_value,
            COALESCE(details, '{}'::jsonb) AS usage_details,
            created_at, period_start, period_end, 'minute_5'::text AS granularity
     FROM purser.usage_adjustments
     WHERE status = 'applied' AND value_kind = 'correction_delta'
 )
 SELECT id, tenant_id, COALESCE(cluster_id, '')::text AS cluster_id,
-       usage_type, usage_value, usage_details,
+       usage_type, unit, dimensions, usage_value, usage_details,
        COALESCE(created_at, TIMESTAMPTZ 'epoch') AS created_at,
        period_start, period_end, COALESCE(granularity, '')::text AS granularity
 FROM usage_surface
@@ -317,6 +320,8 @@ type ListUsageRecordsRow struct {
 	TenantID     string          `db:"tenant_id" json:"tenant_id"`
 	ClusterID    string          `db:"cluster_id" json:"cluster_id"`
 	UsageType    string          `db:"usage_type" json:"usage_type"`
+	Unit         string          `db:"unit" json:"unit"`
+	Dimensions   json.RawMessage `db:"dimensions" json:"dimensions"`
 	UsageValue   float64         `db:"usage_value" json:"usage_value"`
 	UsageDetails json.RawMessage `db:"usage_details" json:"usage_details"`
 	CreatedAt    sql.NullTime    `db:"created_at" json:"created_at"`
@@ -352,6 +357,8 @@ func (q *Queries) ListUsageRecords(ctx context.Context, arg ListUsageRecordsPara
 			&i.TenantID,
 			&i.ClusterID,
 			&i.UsageType,
+			&i.Unit,
+			&i.Dimensions,
 			&i.UsageValue,
 			&i.UsageDetails,
 			&i.CreatedAt,

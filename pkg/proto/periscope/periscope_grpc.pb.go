@@ -1621,6 +1621,7 @@ const (
 	AggregatedAnalyticsService_GetClusterBootOps_FullMethodName           = "/periscope.AggregatedAnalyticsService/GetClusterBootOps"
 	AggregatedAnalyticsService_GetSessionQoeSummary_FullMethodName        = "/periscope.AggregatedAnalyticsService/GetSessionQoeSummary"
 	AggregatedAnalyticsService_GetClusterQoeOps_FullMethodName            = "/periscope.AggregatedAnalyticsService/GetClusterQoeOps"
+	AggregatedAnalyticsService_GetClusterWorkload_FullMethodName          = "/periscope.AggregatedAnalyticsService/GetClusterWorkload"
 	AggregatedAnalyticsService_GetVodRetention_FullMethodName             = "/periscope.AggregatedAnalyticsService/GetVodRetention"
 	AggregatedAnalyticsService_GetPlayerBootTimeSeries_FullMethodName     = "/periscope.AggregatedAnalyticsService/GetPlayerBootTimeSeries"
 	AggregatedAnalyticsService_GetSessionQoeTimeSeries_FullMethodName     = "/periscope.AggregatedAnalyticsService/GetSessionQoeTimeSeries"
@@ -1668,6 +1669,7 @@ type AggregatedAnalyticsServiceClient interface {
 	// the per-artifact VOD retention curve.
 	GetSessionQoeSummary(ctx context.Context, in *GetSessionQoeSummaryRequest, opts ...grpc.CallOption) (*GetSessionQoeSummaryResponse, error)
 	GetClusterQoeOps(ctx context.Context, in *GetClusterQoeOpsRequest, opts ...grpc.CallOption) (*GetClusterQoeOpsResponse, error)
+	GetClusterWorkload(ctx context.Context, in *GetClusterWorkloadRequest, opts ...grpc.CallOption) (*GetClusterWorkloadResponse, error)
 	GetVodRetention(ctx context.Context, in *GetVodRetentionRequest, opts ...grpc.CallOption) (*GetVodRetentionResponse, error)
 	// Time-bucketed companions to the boot/QoE summaries (read-time percentiles/ratios
 	// per toStartOfInterval window) and the eligible-VOD-asset list backing the
@@ -1930,6 +1932,16 @@ func (c *aggregatedAnalyticsServiceClient) GetClusterQoeOps(ctx context.Context,
 	return out, nil
 }
 
+func (c *aggregatedAnalyticsServiceClient) GetClusterWorkload(ctx context.Context, in *GetClusterWorkloadRequest, opts ...grpc.CallOption) (*GetClusterWorkloadResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetClusterWorkloadResponse)
+	err := c.cc.Invoke(ctx, AggregatedAnalyticsService_GetClusterWorkload_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *aggregatedAnalyticsServiceClient) GetVodRetention(ctx context.Context, in *GetVodRetentionRequest, opts ...grpc.CallOption) (*GetVodRetentionResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(GetVodRetentionResponse)
@@ -2047,6 +2059,7 @@ type AggregatedAnalyticsServiceServer interface {
 	// the per-artifact VOD retention curve.
 	GetSessionQoeSummary(context.Context, *GetSessionQoeSummaryRequest) (*GetSessionQoeSummaryResponse, error)
 	GetClusterQoeOps(context.Context, *GetClusterQoeOpsRequest) (*GetClusterQoeOpsResponse, error)
+	GetClusterWorkload(context.Context, *GetClusterWorkloadRequest) (*GetClusterWorkloadResponse, error)
 	GetVodRetention(context.Context, *GetVodRetentionRequest) (*GetVodRetentionResponse, error)
 	// Time-bucketed companions to the boot/QoE summaries (read-time percentiles/ratios
 	// per toStartOfInterval window) and the eligible-VOD-asset list backing the
@@ -2140,6 +2153,9 @@ func (UnimplementedAggregatedAnalyticsServiceServer) GetSessionQoeSummary(contex
 }
 func (UnimplementedAggregatedAnalyticsServiceServer) GetClusterQoeOps(context.Context, *GetClusterQoeOpsRequest) (*GetClusterQoeOpsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetClusterQoeOps not implemented")
+}
+func (UnimplementedAggregatedAnalyticsServiceServer) GetClusterWorkload(context.Context, *GetClusterWorkloadRequest) (*GetClusterWorkloadResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetClusterWorkload not implemented")
 }
 func (UnimplementedAggregatedAnalyticsServiceServer) GetVodRetention(context.Context, *GetVodRetentionRequest) (*GetVodRetentionResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetVodRetention not implemented")
@@ -2619,6 +2635,24 @@ func _AggregatedAnalyticsService_GetClusterQoeOps_Handler(srv interface{}, ctx c
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AggregatedAnalyticsService_GetClusterWorkload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetClusterWorkloadRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AggregatedAnalyticsServiceServer).GetClusterWorkload(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AggregatedAnalyticsService_GetClusterWorkload_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AggregatedAnalyticsServiceServer).GetClusterWorkload(ctx, req.(*GetClusterWorkloadRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AggregatedAnalyticsService_GetVodRetention_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetVodRetentionRequest)
 	if err := dec(in); err != nil {
@@ -2865,6 +2899,10 @@ var AggregatedAnalyticsService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetClusterQoeOps",
 			Handler:    _AggregatedAnalyticsService_GetClusterQoeOps_Handler,
+		},
+		{
+			MethodName: "GetClusterWorkload",
+			Handler:    _AggregatedAnalyticsService_GetClusterWorkload_Handler,
 		},
 		{
 			MethodName: "GetVodRetention",

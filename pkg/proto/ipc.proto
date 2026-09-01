@@ -779,6 +779,10 @@ message MistTrigger {
   string event_id = 57;
   string trigger_uuid = 58;       // Stable across Mist's transport retries for one doTrigger invocation.
   int64 trigger_unix_millis = 59; // Mist event time from X-Trigger-UnixMillis.
+  // Failure-isolation/control cell that accepted this trigger. This is
+  // deliberately distinct from cluster_id: one Foghorn cell may control
+  // authenticated nodes serving several virtual media clusters.
+  optional string control_cell_id = 60;
 
   reserved 20;               // Legacy: removed stream_bandwidth field
   reserved "stream_bandwidth";
@@ -1431,6 +1435,7 @@ message StorageLifecycleData {
     CACHE_REASON_PRESIGNED_INVALID  = 4;  // missing/expired URL
   }
   optional CacheFailureReason reason = 16;
+  optional string control_cell_id = 18;
 }
 
 // Typed MistServer trigger messages (matches mist package structures)
@@ -1588,6 +1593,9 @@ message ViewerConnectTrigger {
   optional GeoBucket client_bucket = 13;
   optional GeoBucket node_bucket = 14;
   optional string stream_id = 15; // Enriched by Foghorn (UUID)
+  optional string cluster_id = 16;
+  optional string origin_cluster_id = 17;
+  optional string control_cell_id = 18;
 }
 
 // ViewerDisconnectTrigger (formerly USER_END) indicates a viewer disconnect.
@@ -1624,6 +1632,9 @@ message ViewerDisconnectTrigger {
   repeated SessionTimeShare stream_times = 19;
   repeated SessionTimeShare connector_times = 20;
   repeated SessionTimeShare host_times = 21;
+  optional string cluster_id = 22;
+  optional string origin_cluster_id = 23;
+  optional string control_cell_id = 24;
 }
 
 // SessionTimeShare is one (name, seconds) entry from a MistServer
@@ -2170,6 +2181,9 @@ message LoadBalancingData {
   optional string event_type = 23;          // "play_rewrite", "grpc_resolve", etc.
   optional string source = 24;              // "http", "grpc", "internal"
   optional string remote_cluster_id = 25;   // Destination cluster on cross-cluster decisions (remote_redirect, cross_cluster_dtsc)
+  optional string selected_cluster_id = 26; // Cluster containing the selected node; decision intent, not confirmed delivery
+  optional string control_cell_id = 27;     // Foghorn cell that made the decision
+  optional string origin_cluster_id = 28;   // Stream/artifact origin when known
 }
 
 // Clip lifecycle specific data (separate from ClipProgress/ClipDone control messages)
@@ -2405,6 +2419,9 @@ message FederationEventData {
   optional double local_lon = 23;
   optional double remote_lat = 24;
   optional double remote_lon = 25;
+  optional string stream_tenant_id = 26; // Content owner; tenant_id remains infra owner
+  optional string control_cell_id = 27;
+  optional string origin_cluster_id = 28; // Stream origin for content-scoped federation movement
 }
 
 message NodeCapabilities {
@@ -2509,6 +2526,7 @@ message ProcessBillingEvent {
   optional string model_id = 77;
   optional string model_version = 78;
   repeated ProcessMeterQuantity meter_quantities = 79;
+  optional string control_cell_id = 80; // Foghorn cell that enriched/observed the work
 }
 
 message StorageInfo {

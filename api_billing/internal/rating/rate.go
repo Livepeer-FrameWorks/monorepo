@@ -66,6 +66,10 @@ func Rate(in Input) (Result, error) {
 			if ok {
 				usageLines = append(usageLines, line)
 			}
+		case ModelCodecMultiplier:
+			// Expanded v0.2.96 databases may still contain this model. The v3
+			// envelope intentionally does not reconstruct its lossy per-codec
+			// inputs, so retain loadability without inventing a charge.
 		case ModelDimensioned:
 			lines, dimensionErr := rateDimensioned(rule, quantitiesForMeter(in.Quantities, rule.Meter), currency)
 			if dimensionErr != nil {

@@ -218,6 +218,23 @@ func TestRate_DimensionedPerCodecLineItems(t *testing.T) {
 	}
 }
 
+func TestRate_LegacyCodecMultiplierRemainsReadableDuringBetaCutover(t *testing.T) {
+	res, err := Rate(Input{
+		Currency: "EUR",
+		Usage:    map[Meter]decimal.Decimal{MeterMediaSeconds: dec("120")},
+		Rules: []Rule{{
+			Meter: MeterMediaSeconds, Model: ModelCodecMultiplier, Currency: "EUR", UnitPrice: dec("0.01"),
+			Config: map[string]any{"codec_multipliers": map[string]any{"h264": 1.5}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Rate: %v", err)
+	}
+	if len(res.UsageLines) != 0 || !res.UsageAmount.IsZero() {
+		t.Fatalf("legacy codec rule produced charges: %+v", res.UsageLines)
+	}
+}
+
 func TestRate_CurrencyMismatchRejected(t *testing.T) {
 	rules := []Rule{{
 		Meter: MeterDeliveredMinutes, Model: ModelTieredGraduated, Currency: "USD",

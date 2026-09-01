@@ -382,9 +382,18 @@ type EventData struct {
 	//	*EventData_StreamSource
 	//	*EventData_StorageSnapshot
 	//	*EventData_MessageLifecycle
-	Payload       isEventData_Payload `protobuf_oneof:"payload"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Payload isEventData_Payload `protobuf_oneof:"payload"`
+	// Placement envelope copied from MistTrigger. Keeping this outside the
+	// payload oneof makes live subscription events preserve the same topology
+	// dimensions as their historical Periscope counterparts.
+	SourceRegion          string `protobuf:"bytes,40,opt,name=source_region,json=sourceRegion,proto3" json:"source_region,omitempty"`
+	SourceClusterId       string `protobuf:"bytes,41,opt,name=source_cluster_id,json=sourceClusterId,proto3" json:"source_cluster_id,omitempty"`
+	StreamOriginRegion    string `protobuf:"bytes,42,opt,name=stream_origin_region,json=streamOriginRegion,proto3" json:"stream_origin_region,omitempty"`
+	StreamOriginClusterId string `protobuf:"bytes,43,opt,name=stream_origin_cluster_id,json=streamOriginClusterId,proto3" json:"stream_origin_cluster_id,omitempty"`
+	SchemaVersion         int32  `protobuf:"varint,44,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	ControlCellId         string `protobuf:"bytes,45,opt,name=control_cell_id,json=controlCellId,proto3" json:"control_cell_id,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *EventData) Reset() {
@@ -620,6 +629,48 @@ func (x *EventData) GetMessageLifecycle() *ipc.MessageLifecycleData {
 		}
 	}
 	return nil
+}
+
+func (x *EventData) GetSourceRegion() string {
+	if x != nil {
+		return x.SourceRegion
+	}
+	return ""
+}
+
+func (x *EventData) GetSourceClusterId() string {
+	if x != nil {
+		return x.SourceClusterId
+	}
+	return ""
+}
+
+func (x *EventData) GetStreamOriginRegion() string {
+	if x != nil {
+		return x.StreamOriginRegion
+	}
+	return ""
+}
+
+func (x *EventData) GetStreamOriginClusterId() string {
+	if x != nil {
+		return x.StreamOriginClusterId
+	}
+	return ""
+}
+
+func (x *EventData) GetSchemaVersion() int32 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
+}
+
+func (x *EventData) GetControlCellId() string {
+	if x != nil {
+		return x.ControlCellId
+	}
+	return ""
 }
 
 type isEventData_Payload interface {
@@ -1298,7 +1349,7 @@ const file_signalman_proto_rawDesc = "" +
 	"\x12UnsubscribeRequest\x12.\n" +
 	"\bchannels\x18\x01 \x03(\x0e2\x12.signalman.ChannelR\bchannels\"_\n" +
 	"\x18SubscriptionConfirmation\x12C\n" +
-	"\x13subscribed_channels\x18\x01 \x03(\x0e2\x12.signalman.ChannelR\x12subscribedChannels\"\xdf\r\n" +
+	"\x13subscribed_channels\x18\x01 \x03(\x0e2\x12.signalman.ChannelR\x12subscribedChannels\"\xea\x0f\n" +
 	"\tEventData\x12S\n" +
 	"\x10client_lifecycle\x18\x01 \x01(\v2&.helmsmancontrol.ClientLifecycleUpdateH\x00R\x0fclientLifecycle\x12M\n" +
 	"\x0enode_lifecycle\x18\x02 \x01(\v2$.helmsmancontrol.NodeLifecycleUpdateH\x00R\rnodeLifecycle\x12H\n" +
@@ -1324,7 +1375,13 @@ const file_signalman_proto_rawDesc = "" +
 	"\fplay_rewrite\x18\x14 \x01(\v2%.helmsmancontrol.ViewerResolveTriggerH\x00R\vplayRewrite\x12K\n" +
 	"\rstream_source\x18\x15 \x01(\v2$.helmsmancontrol.StreamSourceTriggerH\x00R\fstreamSource\x12M\n" +
 	"\x10storage_snapshot\x18\x16 \x01(\v2 .helmsmancontrol.StorageSnapshotH\x00R\x0fstorageSnapshot\x12T\n" +
-	"\x11message_lifecycle\x18\x17 \x01(\v2%.helmsmancontrol.MessageLifecycleDataH\x00R\x10messageLifecycleB\t\n" +
+	"\x11message_lifecycle\x18\x17 \x01(\v2%.helmsmancontrol.MessageLifecycleDataH\x00R\x10messageLifecycle\x12#\n" +
+	"\rsource_region\x18( \x01(\tR\fsourceRegion\x12*\n" +
+	"\x11source_cluster_id\x18) \x01(\tR\x0fsourceClusterId\x120\n" +
+	"\x14stream_origin_region\x18* \x01(\tR\x12streamOriginRegion\x127\n" +
+	"\x18stream_origin_cluster_id\x18+ \x01(\tR\x15streamOriginClusterId\x12%\n" +
+	"\x0eschema_version\x18, \x01(\x05R\rschemaVersion\x12&\n" +
+	"\x0fcontrol_cell_id\x18- \x01(\tR\rcontrolCellIdB\t\n" +
 	"\apayloadJ\x04\b\r\x10\x0eR\x10stream_bandwidth\"\x87\x02\n" +
 	"\x0eSignalmanEvent\x123\n" +
 	"\n" +

@@ -61,6 +61,7 @@ type Interface interface {
 	GetClusterBootOps(ctx context.Context, tenantID string, clusterIDs []string, timeRange *TimeRangeOpts) (*periscopepb.GetClusterBootOpsResponse, error)
 	GetSessionQoeSummary(ctx context.Context, tenantID string, streamID *string, artifactHash *string, timeRange *TimeRangeOpts) (*periscopepb.GetSessionQoeSummaryResponse, error)
 	GetClusterQoeOps(ctx context.Context, tenantID string, clusterIDs []string, timeRange *TimeRangeOpts) (*periscopepb.GetClusterQoeOpsResponse, error)
+	GetClusterWorkload(ctx context.Context, tenantID string, clusterIDs []string, timeRange *TimeRangeOpts) (*periscopepb.GetClusterWorkloadResponse, error)
 	GetVodRetention(ctx context.Context, tenantID string, artifactHash string, timeRange *TimeRangeOpts) (*periscopepb.GetVodRetentionResponse, error)
 	GetPlayerBootTimeSeries(ctx context.Context, tenantID string, streamID *string, artifactHash *string, timeRange *TimeRangeOpts, interval string) (*periscopepb.GetPlayerBootTimeSeriesResponse, error)
 	GetSessionQoeTimeSeries(ctx context.Context, tenantID string, streamID *string, artifactHash *string, timeRange *TimeRangeOpts, interval string) (*periscopepb.GetSessionQoeTimeSeriesResponse, error)

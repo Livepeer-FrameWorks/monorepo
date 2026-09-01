@@ -23,6 +23,7 @@ type Querier interface {
 	AddPendingTopupRefundedAmount(ctx context.Context, arg AddPendingTopupRefundedAmountParams) error
 	AddPrepaidBalance(ctx context.Context, arg AddPrepaidBalanceParams) (int64, error)
 	AddX402TenantBalanceRollup(ctx context.Context, arg AddX402TenantBalanceRollupParams) error
+	AdoptLegacyUsageRecord(ctx context.Context, arg AdoptLegacyUsageRecordParams) (int64, error)
 	AdvanceConsumedX402Attempt(ctx context.Context, arg AdvanceConsumedX402AttemptParams) error
 	AdvanceCryptoScanCursor(ctx context.Context, arg AdvanceCryptoScanCursorParams) (int64, error)
 	AdvanceSubscriptionBillingPeriod(ctx context.Context, arg AdvanceSubscriptionBillingPeriodParams) (int64, error)
@@ -271,7 +272,7 @@ type Querier interface {
 	InsertPendingCardTopup(ctx context.Context, arg InsertPendingCardTopupParams) error
 	InsertPendingStripeDispute(ctx context.Context, arg InsertPendingStripeDisputeParams) error
 	InsertPrepaidTopupReversalTransaction(ctx context.Context, arg InsertPrepaidTopupReversalTransactionParams) error
-	InsertPrepaidUsageSettlement(ctx context.Context, arg InsertPrepaidUsageSettlementParams) error
+	InsertPrepaidUsageSettlement(ctx context.Context, arg InsertPrepaidUsageSettlementParams) (int64, error)
 	InsertPreparedX402SettlementAttempt(ctx context.Context, arg InsertPreparedX402SettlementAttemptParams) error
 	InsertProviderBillingPaymentAttempt(ctx context.Context, arg InsertProviderBillingPaymentAttemptParams) error
 	InsertProviderUsageOperatorCredit(ctx context.Context, arg InsertProviderUsageOperatorCreditParams) error
@@ -501,8 +502,9 @@ type Querier interface {
 	UpsertInvoiceDraft(ctx context.Context, arg UpsertInvoiceDraftParams) (string, error)
 	UpsertInvoiceForPeriod(ctx context.Context, arg UpsertInvoiceForPeriodParams) (string, error)
 	UpsertInvoiceLineItem(ctx context.Context, arg UpsertInvoiceLineItemParams) error
+	UpsertLegacyProviderUsageRecord(ctx context.Context, arg UpsertLegacyProviderUsageRecordParams) error
 	UpsertManualReviewInvoice(ctx context.Context, arg UpsertManualReviewInvoiceParams) (uuid.UUID, error)
-	UpsertMeteringSource(ctx context.Context, arg UpsertMeteringSourceParams) error
+	UpsertMeteringSource(ctx context.Context, arg UpsertMeteringSourceParams) (string, error)
 	UpsertMollieCustomer(ctx context.Context, arg UpsertMollieCustomerParams) error
 	UpsertMollieFirstPaymentIntent(ctx context.Context, arg UpsertMollieFirstPaymentIntentParams) (string, error)
 	UpsertMollieMandate(ctx context.Context, arg UpsertMollieMandateParams) error

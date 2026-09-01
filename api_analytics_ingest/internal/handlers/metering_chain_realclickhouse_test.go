@@ -28,13 +28,17 @@ func TestSourceFactProjectionAndLedgerReplay_RealClickHouse(t *testing.T) {
 	tenantID := uuid.NewString()
 	streamID := uuid.NewString()
 	const sourceID = "metering-chain-user-end"
+	const servingClusterID = "cluster-us"
+	const originClusterID = "cluster-eu"
+	const controlCellID = "control-eu"
 	endedAt := time.Now().UTC().Add(-20 * time.Minute).Truncate(time.Second)
 	projectionStart := time.Now().UTC().Add(-time.Second)
 
 	makeMessage := func(duration int64) kafka.Message {
 		trigger := &ipcpb.MistTrigger{
 			NodeId: "edge-chain-1", TriggerType: "USER_END", RequestId: sourceID,
-			Timestamp: endedAt.UnixMilli(), TenantId: proto.String(tenantID), ClusterId: proto.String("cluster-chain-1"), StreamId: proto.String(streamID),
+			Timestamp: endedAt.UnixMilli(), TenantId: proto.String(tenantID), ClusterId: proto.String(servingClusterID),
+			OriginClusterId: proto.String(originClusterID), ControlCellId: proto.String(controlCellID), StreamId: proto.String(streamID),
 			TriggerPayload: &ipcpb.MistTrigger_ViewerDisconnect{ViewerDisconnect: &ipcpb.ViewerDisconnectTrigger{
 				StreamName: "live+chain", StreamId: proto.String(streamID), SessionId: "session-chain-1",
 				Connector: "hls", Host: "203.0.113.1", Duration: duration, UpBytes: 2 << 30, DownBytes: 1 << 30,
@@ -45,7 +49,7 @@ func TestSourceFactProjectionAndLedgerReplay_RealClickHouse(t *testing.T) {
 			t.Fatal(marshalErr)
 		}
 		return kafka.Message{Topic: "analytics.raw_mist_triggers", Value: payload, Headers: map[string]string{
-			"tenant_id": tenantID, "cluster_id": "cluster-chain-1", "source_event_id": sourceID,
+			"tenant_id": tenantID, "cluster_id": servingClusterID, "source_event_id": sourceID,
 			"trigger_type": "USER_END", "node_id": "edge-chain-1",
 		}}
 	}
@@ -72,6 +76,17 @@ func TestSourceFactProjectionAndLedgerReplay_RealClickHouse(t *testing.T) {
 	}
 	if rawLogical != 1 || finalLogical != 1 {
 		t.Fatalf("logical fact counts raw=%d final=%d, want 1/1", rawLogical, finalLogical)
+	}
+	var gotServing, gotOrigin, gotControl string
+	if err := conn.QueryRow(ctx, `SELECT cluster_id, origin_cluster_id, control_cell_id
+		FROM periscope.viewer_sessions_topology_v
+		WHERE tenant_id = ? AND node_id = ? AND session_id = ?`, tenantID, "edge-chain-1", "session-chain-1").
+		Scan(&gotServing, &gotOrigin, &gotControl); err != nil {
+		t.Fatal(err)
+	}
+	if gotServing != servingClusterID || gotOrigin != originClusterID || gotControl != controlCellID {
+		t.Fatalf("real ClickHouse placement serving=%q origin=%q control=%q, want %q/%q/%q",
+			gotServing, gotOrigin, gotControl, servingClusterID, originClusterID, controlCellID)
 	}
 	var duration uint32
 	var billableAtMS, latestProjectionMS int64

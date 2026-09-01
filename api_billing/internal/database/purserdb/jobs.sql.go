@@ -15,6 +15,48 @@ import (
 	"github.com/lib/pq"
 )
 
+const adoptLegacyUsageRecord = `-- name: AdoptLegacyUsageRecord :execrows
+UPDATE purser.usage_records
+SET unit = $1,
+    report_id = $2,
+    usage_details = $3::jsonb,
+    updated_at = NOW()
+WHERE tenant_id = $4::text::uuid
+  AND cluster_id = $5
+  AND source_id = 'legacy'
+  AND usage_type = $6
+  AND period_start = $7
+  AND period_end = $8
+`
+
+type AdoptLegacyUsageRecordParams struct {
+	Unit         string          `db:"unit" json:"unit"`
+	ReportID     string          `db:"report_id" json:"report_id"`
+	UsageDetails json.RawMessage `db:"usage_details" json:"usage_details"`
+	TenantID     string          `db:"tenant_id" json:"tenant_id"`
+	ClusterID    string          `db:"cluster_id" json:"cluster_id"`
+	UsageType    string          `db:"usage_type" json:"usage_type"`
+	PeriodStart  sql.NullTime    `db:"period_start" json:"period_start"`
+	PeriodEnd    sql.NullTime    `db:"period_end" json:"period_end"`
+}
+
+func (q *Queries) AdoptLegacyUsageRecord(ctx context.Context, arg AdoptLegacyUsageRecordParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, adoptLegacyUsageRecord,
+		arg.Unit,
+		arg.ReportID,
+		arg.UsageDetails,
+		arg.TenantID,
+		arg.ClusterID,
+		arg.UsageType,
+		arg.PeriodStart,
+		arg.PeriodEnd,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const advanceSubscriptionBillingPeriod = `-- name: AdvanceSubscriptionBillingPeriod :execrows
 UPDATE purser.tenant_subscriptions
 SET next_billing_date = $1::timestamp,
@@ -612,7 +654,7 @@ func (q *Queries) InsertInvoiceCreditBalanceTransaction(ctx context.Context, arg
 	return err
 }
 
-const insertPrepaidUsageSettlement = `-- name: InsertPrepaidUsageSettlement :exec
+const insertPrepaidUsageSettlement = `-- name: InsertPrepaidUsageSettlement :execrows
 INSERT INTO purser.prepaid_usage_settlements (
     report_id, tenant_id, billing_period_start, billing_period_end,
     amount_micro, cumulative_amount_micro, currency
@@ -634,8 +676,8 @@ type InsertPrepaidUsageSettlementParams struct {
 	Currency              string    `db:"currency" json:"currency"`
 }
 
-func (q *Queries) InsertPrepaidUsageSettlement(ctx context.Context, arg InsertPrepaidUsageSettlementParams) error {
-	_, err := q.db.ExecContext(ctx, insertPrepaidUsageSettlement,
+func (q *Queries) InsertPrepaidUsageSettlement(ctx context.Context, arg InsertPrepaidUsageSettlementParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, insertPrepaidUsageSettlement,
 		arg.ReportID,
 		arg.TenantID,
 		arg.BillingPeriodStart,
@@ -644,7 +686,10 @@ func (q *Queries) InsertPrepaidUsageSettlement(ctx context.Context, arg InsertPr
 		arg.CumulativeAmountMicro,
 		arg.Currency,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const insertProviderBillingPaymentAttempt = `-- name: InsertProviderBillingPaymentAttempt :exec
@@ -685,7 +730,7 @@ INSERT INTO purser.balance_transactions (
     'usage', $4, $5::text::uuid, 'usage_summary', NOW()
 )
 ON CONFLICT (tenant_id, reference_type, reference_id)
-    WHERE reference_type = 'usage_summary'
+    WHERE reference_type IS NOT NULL AND reference_id IS NOT NULL
 DO NOTHING
 `
 
@@ -1490,13 +1535,7 @@ INSERT INTO purser.usage_records (
 )
 ON CONFLICT (
     tenant_id, cluster_id, source_id, usage_type, dimension_key, period_start, period_end
-) DO UPDATE SET
-    usage_value = EXCLUDED.usage_value,
-    report_id = EXCLUDED.report_id,
-    usage_details = EXCLUDED.usage_details,
-    granularity = EXCLUDED.granularity,
-    value_kind = EXCLUDED.value_kind,
-    updated_at = NOW()
+) DO NOTHING
 `
 
 type UpsertCanonicalUsageRecordParams struct {
@@ -1691,13 +1730,83 @@ func (q *Queries) UpsertInvoiceForPeriod(ctx context.Context, arg UpsertInvoiceF
 	return id, err
 }
 
-const upsertMeteringSource = `-- name: UpsertMeteringSource :exec
+const upsertLegacyProviderUsageRecord = `-- name: UpsertLegacyProviderUsageRecord :exec
+INSERT INTO purser.provider_usage_records (
+    usage_tenant_id, work_cluster_id,
+    provider_tenant_id, provider_cluster_id,
+    usage_type, unit, usage_value, dimensions, dimension_key,
+    source_id, report_id, period_start, period_end,
+    granularity, value_kind, source, usage_details
+) VALUES (
+    $1::text::uuid, $2,
+    $3, $4,
+    $5, $6, $7::double precision,
+    COALESCE($8::jsonb, '{}'::jsonb),
+    encode(digest(COALESCE($8::jsonb, '{}'::jsonb)::text, 'sha256'), 'hex'),
+    'legacy', $9, $10,
+    $11, 'minute_5', 'delta', $12,
+    $13::jsonb
+)
+ON CONFLICT (
+    usage_tenant_id, work_cluster_id,
+    provider_tenant_id, provider_cluster_id,
+    source_id, usage_type, dimension_key,
+    period_start, period_end
+) DO UPDATE SET
+    unit = EXCLUDED.unit,
+    usage_value = EXCLUDED.usage_value,
+    report_id = EXCLUDED.report_id,
+    source = EXCLUDED.source,
+    usage_details = EXCLUDED.usage_details,
+    updated_at = NOW()
+`
+
+type UpsertLegacyProviderUsageRecordParams struct {
+	UsageTenantID     string          `db:"usage_tenant_id" json:"usage_tenant_id"`
+	WorkClusterID     string          `db:"work_cluster_id" json:"work_cluster_id"`
+	ProviderTenantID  string          `db:"provider_tenant_id" json:"provider_tenant_id"`
+	ProviderClusterID string          `db:"provider_cluster_id" json:"provider_cluster_id"`
+	UsageType         string          `db:"usage_type" json:"usage_type"`
+	Unit              string          `db:"unit" json:"unit"`
+	UsageValue        float64         `db:"usage_value" json:"usage_value"`
+	Dimensions        json.RawMessage `db:"dimensions" json:"dimensions"`
+	ReportID          string          `db:"report_id" json:"report_id"`
+	PeriodStart       time.Time       `db:"period_start" json:"period_start"`
+	PeriodEnd         time.Time       `db:"period_end" json:"period_end"`
+	Source            string          `db:"source" json:"source"`
+	UsageDetails      json.RawMessage `db:"usage_details" json:"usage_details"`
+}
+
+func (q *Queries) UpsertLegacyProviderUsageRecord(ctx context.Context, arg UpsertLegacyProviderUsageRecordParams) error {
+	_, err := q.db.ExecContext(ctx, upsertLegacyProviderUsageRecord,
+		arg.UsageTenantID,
+		arg.WorkClusterID,
+		arg.ProviderTenantID,
+		arg.ProviderClusterID,
+		arg.UsageType,
+		arg.Unit,
+		arg.UsageValue,
+		arg.Dimensions,
+		arg.ReportID,
+		arg.PeriodStart,
+		arg.PeriodEnd,
+		arg.Source,
+		arg.UsageDetails,
+	)
+	return err
+}
+
+const upsertMeteringSource = `-- name: UpsertMeteringSource :one
 INSERT INTO purser.metering_sources (source_id, region, active_from, required, updated_at)
 VALUES ($1, $2, $3, TRUE, NOW())
 ON CONFLICT (source_id) DO UPDATE SET
-    region = EXCLUDED.region,
+	region = CASE
+		WHEN purser.metering_sources.region = '' THEN EXCLUDED.region
+		ELSE purser.metering_sources.region
+	END,
     active_from = LEAST(purser.metering_sources.active_from, EXCLUDED.active_from),
-    updated_at = NOW()
+	updated_at = NOW()
+RETURNING region
 `
 
 type UpsertMeteringSourceParams struct {
@@ -1706,9 +1815,11 @@ type UpsertMeteringSourceParams struct {
 	ActiveFrom time.Time `db:"active_from" json:"active_from"`
 }
 
-func (q *Queries) UpsertMeteringSource(ctx context.Context, arg UpsertMeteringSourceParams) error {
-	_, err := q.db.ExecContext(ctx, upsertMeteringSource, arg.SourceID, arg.Region, arg.ActiveFrom)
-	return err
+func (q *Queries) UpsertMeteringSource(ctx context.Context, arg UpsertMeteringSourceParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, upsertMeteringSource, arg.SourceID, arg.Region, arg.ActiveFrom)
+	var region string
+	err := row.Scan(&region)
+	return region, err
 }
 
 const upsertPendingProviderBillingPayment = `-- name: UpsertPendingProviderBillingPayment :one
@@ -1806,7 +1917,7 @@ INSERT INTO purser.provider_usage_records (
     granularity, value_kind, source, usage_details
 ) VALUES (
     $1::text::uuid, $2,
-    $3::text::uuid, $4,
+    $3, $4,
     $5, $6, $7::double precision,
     COALESCE($8::jsonb, '{}'::jsonb), $9,
     $10, $11, $12,
@@ -1818,14 +1929,7 @@ ON CONFLICT (
     provider_tenant_id, provider_cluster_id,
     source_id, usage_type, dimension_key,
     period_start, period_end
-) DO UPDATE SET
-    usage_value = EXCLUDED.usage_value,
-    report_id = EXCLUDED.report_id,
-    granularity = EXCLUDED.granularity,
-    value_kind = EXCLUDED.value_kind,
-    source = EXCLUDED.source,
-    usage_details = EXCLUDED.usage_details,
-    updated_at = NOW()
+) DO NOTHING
 `
 
 type UpsertProviderUsageRecordParams struct {
@@ -1879,20 +1983,7 @@ INSERT INTO purser.usage_adjustments (
     $9, 'correction_delta', 'applied', $10,
     $11, $12, $13::jsonb
 )
-ON CONFLICT (source_system, source_id) DO UPDATE SET
-    tenant_id = EXCLUDED.tenant_id,
-    cluster_id = EXCLUDED.cluster_id,
-    usage_type = EXCLUDED.usage_type,
-    unit = EXCLUDED.unit,
-    dimensions = EXCLUDED.dimensions,
-    dimension_key = EXCLUDED.dimension_key,
-    delta_value = EXCLUDED.delta_value,
-    period_start = EXCLUDED.period_start,
-    period_end = EXCLUDED.period_end,
-    status = EXCLUDED.status,
-    reason = EXCLUDED.reason,
-    details = EXCLUDED.details,
-    updated_at = NOW()
+ON CONFLICT (source_system, source_id) DO NOTHING
 `
 
 type UpsertUsageAdjustmentParams struct {

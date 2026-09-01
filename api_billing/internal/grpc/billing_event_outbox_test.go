@@ -10,6 +10,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 
+	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
@@ -270,6 +271,28 @@ func TestDispatchBillingOutboxRowRequiresDecklogClient(t *testing.T) {
 	_, err := s.dispatchBillingOutboxRow(context.Background(), billingOutboxRow{id: "outbox-1"})
 	if err == nil || !strings.Contains(err.Error(), "decklog client not configured") {
 		t.Fatalf("want decklog-not-configured error, got %v", err)
+	}
+}
+
+func TestNewPurserServerDoesNotBoxTypedNilDecklogClient(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	mock.ExpectQuery(`SELECT xpub\s+FROM purser\.hd_wallet_state`).
+		WillReturnRows(sqlmock.NewRows([]string{"xpub"}).AddRow("test-xpub"))
+
+	var decklogClient *decklogclient.BatchedClient
+	server := NewPurserServer(db, logging.NewLogger(), nil, nil, nil, nil, nil, decklogClient, nil)
+	if server.decklogClient != nil {
+		t.Fatalf("typed-nil Decklog client was boxed as non-nil: %#v", server.decklogClient)
+	}
+	if _, err := server.dispatchBillingOutboxRow(context.Background(), billingOutboxRow{id: "outbox-1"}); err == nil || !strings.Contains(err.Error(), "decklog client not configured") {
+		t.Fatalf("dispatch with typed-nil client = %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
 	}
 }
 

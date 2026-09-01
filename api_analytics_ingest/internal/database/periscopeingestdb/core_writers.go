@@ -83,7 +83,7 @@ const insertStreamLifecycleState = `INSERT INTO stream_state_current (
 	track_count, quality_tier, primary_width, primary_height,
 	primary_fps, primary_codec, primary_bitrate,
 	packets_sent, packets_lost, packets_retransmitted,
-	started_at, updated_at
+	started_at, updated_at, cluster_id
 )`
 
 type StreamLifecycleStateRow struct {
@@ -91,6 +91,7 @@ type StreamLifecycleStateRow struct {
 	StreamID             uuid.UUID
 	InternalName         string
 	NodeID               string
+	ClusterID            string
 	Status               string
 	BufferState          string
 	CurrentViewers       uint32
@@ -123,7 +124,7 @@ func PrepareStreamLifecycleState(ctx context.Context, db BatchPreparer) (*Writer
 			row.TrackCount, row.QualityTier, row.PrimaryWidth, row.PrimaryHeight,
 			row.PrimaryFPS, row.PrimaryCodec, row.PrimaryBitrate,
 			row.PacketsSent, row.PacketsLost, row.PacketsRetransmitted,
-			row.StartedAt, row.UpdatedAt,
+			row.StartedAt, row.UpdatedAt, row.ClusterID,
 		}
 	})
 }
@@ -235,7 +236,7 @@ func PrepareStreamLifecycleHealth(ctx context.Context, db BatchPreparer) (*Write
 const insertViewerConnectionEvent = `INSERT INTO viewer_connection_events (
 	event_id, timestamp, tenant_id, stream_id, internal_name,
 	session_id, connection_addr, connector, node_id,
-	cluster_id, origin_cluster_id,
+	cluster_id, origin_cluster_id, control_cell_id,
 	request_url,
 	country_code, city, latitude, longitude,
 	client_bucket_h3, client_bucket_res, node_bucket_h3, node_bucket_res,
@@ -255,6 +256,7 @@ type ViewerConnectionEventRow struct {
 	NodeID                string
 	ClusterID             string
 	OriginClusterID       string
+	ControlCellID         string
 	RequestURL            *string
 	CountryCode           string
 	City                  string
@@ -278,7 +280,7 @@ func PrepareViewerConnectionEvent(ctx context.Context, db BatchPreparer) (*Write
 		return []interface{}{
 			row.EventID, row.Timestamp, row.TenantID, row.StreamID, row.InternalName,
 			row.SessionID, row.ConnectionAddr, row.Connector, row.NodeID,
-			row.ClusterID, row.OriginClusterID,
+			row.ClusterID, row.OriginClusterID, row.ControlCellID,
 			row.RequestURL,
 			row.CountryCode, row.City, row.Latitude, row.Longitude,
 			row.ClientBucketH3, row.ClientBucketRes, row.NodeBucketH3, row.NodeBucketRes,

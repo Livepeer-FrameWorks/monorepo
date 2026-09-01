@@ -52,6 +52,12 @@ Columns include:
 - `internal_name String` (stream identifier)
 - `client_ip String` (stored internally; not exposed by the Periscope routing event response)
 
+`stream_tenant_id` has a data-skipping index because content-owner reads intentionally cross the
+infrastructure-owner partition dimension. The pending v0.3.0 migration materializes that index for
+retained parts; it does not relabel unattributed rows. Those rows are deliberately excluded from
+content-owner reads and expire with the table's 90-day TTL. Routing decisions are temporary
+diagnostic telemetry, so no historical ownership backfill is required.
+
 ## Emission paths (Foghorn)
 
 Foghorn emits routing events for **both** viewer-resolve paths.
@@ -111,6 +117,11 @@ Foghorn resolves the subject tenant from Commodore during content resolution:
 
 This tenant is emitted as `LoadBalancingData.stream_tenant_id`.
 
+The same resolution result carries `origin_cluster_id` into the HTTP routing event. Once a request
+has an authoritative `StreamTarget`, analytics does not run a second asynchronous identity lookup.
+The fallback remains only for older call sites that supplied no resolved identity, and it fills
+missing fields without overwriting a known origin when resolution fails.
+
 ## Ingestion and querying
 
 ### Decklog → Kafka
@@ -130,7 +141,8 @@ Periscope-Ingest writes routing events to ClickHouse:
 Periscope-Query reads routing events and supports optional filters:
 
 - `api_analytics_query/internal/grpc` (`GetRoutingEvents`)
-  - provider-scope via `tenant_id` and `related_tenant_ids`
+  - content-owner scope via exact `stream_tenant_id = authenticated tenant`
+  - deprecated `related_tenant_ids` input is ignored for rolling-upgrade compatibility
   - optional filters:
     - `stream_tenant_id`
     - `cluster_id`
@@ -140,16 +152,10 @@ Bridge GraphQL exposes routing events with the same filters:
 - `pkg/graphql` (`routingEventsConnection(... subjectTenantId, clusterId ...)`)
 - `api_gateway/internal/resolvers` (`DoGetRoutingEventsConnection`)
 
-Subscription-based visibility (infra pool model):
-
-- Bridge gathers provider owner tenant IDs from Quartermaster subscriptions and passes them as `related_tenant_ids`:
-  - `api_gateway/internal/resolvers`
-  - `api_gateway/internal/resolvers` (`loadRoutingEvents`)
-
 Typical usage:
 
-- **Infra operator:** query with `subjectTenantId = null` to see cluster-wide routing events; optionally set `clusterId`.
-- **Subscriber/customer:** query with `subjectTenantId = <my tenant id>` (and optionally `stream`) to see only their relevant routing events.
+- **Content owner:** query with `subjectTenantId = <my tenant id>` (and optionally `stream` or `clusterId`) to see only routing events attributed to owned content.
+- **Infrastructure operator:** use the separate owned-cluster workload and traffic fields; content routing events are not widened through subscriptions.
 
 ## Troubleshooting
 

@@ -35,7 +35,8 @@ const insertRoutingDecision = `INSERT INTO routing_decisions (
 	timestamp, tenant_id, stream_id, internal_name, selected_node, status, details, score,
 	client_ip, client_country, client_latitude, client_longitude, client_bucket_h3, client_bucket_res,
 	node_latitude, node_longitude, node_name, node_bucket_h3, node_bucket_res,
-	selected_node_id, routing_distance_km, stream_tenant_id, cluster_id, remote_cluster_id, latency_ms,
+	selected_node_id, routing_distance_km, stream_tenant_id, cluster_id, remote_cluster_id,
+	selected_cluster_id, control_cell_id, origin_cluster_id, latency_ms,
 	candidates_count, event_type, source, source_region, stream_origin_region, stream_origin_cluster_id, schema_version
 )`
 
@@ -64,6 +65,9 @@ type RoutingDecisionRow struct {
 	StreamTenantID        *uuid.UUID
 	ClusterID             string
 	RemoteClusterID       string
+	SelectedClusterID     string
+	ControlCellID         string
+	OriginClusterID       string
 	LatencyMS             *float32
 	CandidatesCount       *int32
 	EventType             *string
@@ -76,7 +80,7 @@ type RoutingDecisionRow struct {
 
 func PrepareRoutingDecision(ctx context.Context, db BatchPreparer) (*Writer[RoutingDecisionRow], error) {
 	return prepare(ctx, db, insertRoutingDecision, func(row RoutingDecisionRow) []interface{} {
-		return []interface{}{row.Timestamp, row.TenantID, row.StreamID, row.InternalName, row.SelectedNode, row.Status, row.Details, row.Score, row.ClientIP, row.ClientCountry, row.ClientLatitude, row.ClientLongitude, row.ClientBucketH3, row.ClientBucketRes, row.NodeLatitude, row.NodeLongitude, row.NodeName, row.NodeBucketH3, row.NodeBucketRes, row.SelectedNodeID, row.RoutingDistanceKM, row.StreamTenantID, row.ClusterID, row.RemoteClusterID, row.LatencyMS, row.CandidatesCount, row.EventType, row.Source, row.SourceRegion, row.StreamOriginRegion, row.StreamOriginClusterID, row.SchemaVersion}
+		return []interface{}{row.Timestamp, row.TenantID, row.StreamID, row.InternalName, row.SelectedNode, row.Status, row.Details, row.Score, row.ClientIP, row.ClientCountry, row.ClientLatitude, row.ClientLongitude, row.ClientBucketH3, row.ClientBucketRes, row.NodeLatitude, row.NodeLongitude, row.NodeName, row.NodeBucketH3, row.NodeBucketRes, row.SelectedNodeID, row.RoutingDistanceKM, row.StreamTenantID, row.ClusterID, row.RemoteClusterID, row.SelectedClusterID, row.ControlCellID, row.OriginClusterID, row.LatencyMS, row.CandidatesCount, row.EventType, row.Source, row.SourceRegion, row.StreamOriginRegion, row.StreamOriginClusterID, row.SchemaVersion}
 	})
 }
 

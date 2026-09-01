@@ -112,6 +112,16 @@ message EventData {
 
   reserved 13;
   reserved "stream_bandwidth";
+
+  // Placement envelope copied from MistTrigger. Keeping this outside the
+  // payload oneof makes live subscription events preserve the same topology
+  // dimensions as their historical Periscope counterparts.
+  string source_region = 40;
+  string source_cluster_id = 41;
+  string stream_origin_region = 42;
+  string stream_origin_cluster_id = 43;
+  int32 schema_version = 44;
+  string control_cell_id = 45;
 }
 
 // ============================================================================

@@ -11,7 +11,7 @@
 -- 0. Stream Current State (stream_state_current)
 -- =================================================================================================
 INSERT INTO periscope.stream_state_current (
-    tenant_id, stream_id, internal_name, node_id,
+    tenant_id, stream_id, internal_name, node_id, cluster_id,
     status, buffer_state,
     current_viewers, total_inputs,
     uploaded_bytes, downloaded_bytes, viewer_seconds,
@@ -24,6 +24,7 @@ INSERT INTO periscope.stream_state_current (
     '5eedfeed-11fe-ca57-feed-11feca570001',
     'demo_live_stream_001',
     'edge-node-1',
+    'central-primary',
     'offline',
     'EMPTY',
     0,

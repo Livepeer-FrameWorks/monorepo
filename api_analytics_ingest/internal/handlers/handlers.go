@@ -667,7 +667,8 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 	tenantUUID := uuid.MustParse(event.TenantID)
 	if appendErr := stateBatch.Append(periscopeingestdb.StreamLifecycleStateRow{
 		TenantID: tenantUUID, StreamID: parseUUID(streamID), InternalName: internalName, NodeID: mt.GetNodeId(),
-		Status: status, BufferState: bufferState, CurrentViewers: streamLifecycle.GetTotalViewers(),
+		ClusterID: mt.GetClusterId(),
+		Status:    status, BufferState: bufferState, CurrentViewers: streamLifecycle.GetTotalViewers(),
 		TotalInputs: uint16(streamLifecycle.GetTotalInputs()), UploadedBytes: streamLifecycle.GetUploadedBytes(),
 		DownloadedBytes: streamLifecycle.GetDownloadedBytes(), ViewerSeconds: streamLifecycle.GetViewerSeconds(),
 		HasIssues: optionalBoolUInt8(streamLifecycle.GetHasIssues()), IssuesDescription: optionalString(streamLifecycle.GetIssuesDescription()),
@@ -926,12 +927,7 @@ func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, event ka
 
 	clusterID := mt.GetClusterId()
 	originClusterID := mt.GetOriginClusterId()
-	if clusterID == "" {
-		clusterID = originClusterID
-	}
-	if originClusterID == "" {
-		originClusterID = clusterID
-	}
+	controlCellID := mt.GetControlCellId()
 	env := analyticsEnvelopeColumns(event)
 
 	batch, err := periscopeingestdb.PrepareViewerConnectionEvent(ctx, h.clickhouse)
@@ -955,7 +951,7 @@ func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, event ka
 	if err := batch.Append(periscopeingestdb.ViewerConnectionEventRow{
 		EventID: parseUUID(event.EventID), Timestamp: event.Timestamp, TenantID: uuid.MustParse(event.TenantID), StreamID: parseUUID(streamID),
 		InternalName: streamName, SessionID: sessionID, ConnectionAddr: host, Connector: connector, NodeID: nodeID,
-		ClusterID: clusterID, OriginClusterID: originClusterID, RequestURL: optionalString(requestURL),
+		ClusterID: clusterID, OriginClusterID: originClusterID, ControlCellID: controlCellID, RequestURL: optionalString(requestURL),
 		CountryCode: countryCode, City: city, Latitude: latitude, Longitude: longitude,
 		ClientBucketH3: clientBucketH3, ClientBucketRes: clientBucketRes,
 		NodeBucketH3: nodeBucketH3, NodeBucketRes: nodeBucketRes,
@@ -1532,7 +1528,7 @@ func (h *AnalyticsHandler) processPushRewrite(ctx context.Context, event kafka.A
 		defer stateBatch.Close()
 		if appendErr := stateBatch.Append(periscopeingestdb.StreamLifecycleStateRow{
 			TenantID: uuid.MustParse(event.TenantID), StreamID: streamUUID, InternalName: internalName,
-			NodeID: mt.GetNodeId(), Status: "live", BufferState: "UNKNOWN", TotalInputs: 1,
+			NodeID: mt.GetNodeId(), ClusterID: mt.GetClusterId(), Status: "live", BufferState: "UNKNOWN", TotalInputs: 1,
 			StartedAt: &startedAt, UpdatedAt: event.Timestamp,
 		}); appendErr != nil {
 			return appendErr
@@ -1679,7 +1675,9 @@ func (h *AnalyticsHandler) processLoadBalancing(ctx context.Context, event kafka
 		ClientBucketH3: clientBucketH3, ClientBucketRes: clientBucketRes,
 		NodeLatitude: loadBalancing.GetNodeLatitude(), NodeLongitude: loadBalancing.GetNodeLongitude(), NodeName: loadBalancing.GetNodeName(),
 		NodeBucketH3: nodeBucketH3, NodeBucketRes: nodeBucketRes, SelectedNodeID: selID, RoutingDistanceKM: routeKm,
-		StreamTenantID: streamTenantID, ClusterID: clusterID, RemoteClusterID: remoteClusterID, LatencyMS: &latencyMS,
+		StreamTenantID: streamTenantID, ClusterID: clusterID, RemoteClusterID: remoteClusterID,
+		SelectedClusterID: loadBalancing.GetSelectedClusterId(), ControlCellID: loadBalancing.GetControlCellId(),
+		OriginClusterID: loadBalancing.GetOriginClusterId(), LatencyMS: &latencyMS,
 		CandidatesCount: candidatesCount, EventType: optionalString(eventType), Source: optionalString(source),
 		SourceRegion: env.sourceRegion, StreamOriginRegion: env.streamOriginRegion,
 		StreamOriginClusterID: env.streamOriginClusterID, SchemaVersion: env.schemaVersion,
@@ -2439,7 +2437,8 @@ func (h *AnalyticsHandler) processStreamEnd(ctx context.Context, event kafka.Ana
 
 	if appendErr := stateBatch.Append(periscopeingestdb.StreamLifecycleStateRow{
 		TenantID: parseUUID(event.TenantID), StreamID: streamUUID, InternalName: internalName, NodeID: nodeID,
-		Status: "offline", BufferState: "EMPTY", UploadedBytes: nonNegativeUint64(streamEnd.GetUploadedBytes()),
+		ClusterID: mt.GetClusterId(),
+		Status:    "offline", BufferState: "EMPTY", UploadedBytes: nonNegativeUint64(streamEnd.GetUploadedBytes()),
 		DownloadedBytes: nonNegativeUint64(streamEnd.GetDownloadedBytes()), ViewerSeconds: nonNegativeUint64(streamEnd.GetViewerSeconds()),
 		StartedAt: startedAt, UpdatedAt: event.Timestamp,
 	}); appendErr != nil {
@@ -3128,7 +3127,7 @@ func (h *AnalyticsHandler) processStorageLifecycle(ctx context.Context, event ka
 		AssetHash: sld.GetAssetHash(), Action: actionStr, AssetType: sld.GetAssetType(), SizeBytes: sld.GetSizeBytes(),
 		S3URL: optionalString(sld.GetS3Url()), LocalPath: optionalString(sld.GetLocalPath()), NodeID: optionalString(mt.GetNodeId()),
 		DurationMS: optionalInt64(sld.GetDurationMs()), WarmDurationMS: optionalInt64(sld.GetWarmDurationMs()), Error: optionalString(sld.GetError()),
-		ClusterID: sld.GetClusterId(), OriginClusterID: sld.GetOriginClusterId(), SourceRegion: env.sourceRegion,
+		ClusterID: sld.GetClusterId(), OriginClusterID: sld.GetOriginClusterId(), ControlCellID: mt.GetControlCellId(), SourceRegion: env.sourceRegion,
 		StreamOriginRegion: env.streamOriginRegion, StreamOriginClusterID: env.streamOriginClusterID, SchemaVersion: env.schemaVersion,
 	}); err != nil {
 		h.logger.Errorf("Failed to append to storage_events batch: %v", err)
@@ -3166,6 +3165,10 @@ func (h *AnalyticsHandler) processFederationEvent(ctx context.Context, event kaf
 
 	eventType := strings.ToLower(fed.GetEventType().String())
 	env := analyticsEnvelopeColumns(event)
+	originClusterID := fed.GetOriginClusterId()
+	if originClusterID == "" {
+		originClusterID = env.streamOriginClusterID
+	}
 
 	batch, err := periscopeingestdb.PrepareFederationEvent(ctx, h.clickhouse)
 	if err != nil {
@@ -3175,7 +3178,7 @@ func (h *AnalyticsHandler) processFederationEvent(ctx context.Context, event kaf
 	defer batch.Close()
 
 	if err := batch.Append(periscopeingestdb.FederationEventRow{
-		Timestamp: event.Timestamp, TenantID: parseUUID(event.TenantID), EventType: eventType,
+		Timestamp: event.Timestamp, TenantID: parseUUID(event.TenantID), StreamTenantID: optionalUUID(fed.GetStreamTenantId()), EventType: eventType,
 		LocalCluster: fed.GetLocalCluster(), RemoteCluster: fed.GetRemoteCluster(), StreamName: fed.GetStreamName(),
 		StreamID: optionalUUID(fed.GetStreamId()), SourceNode: optionalString(fed.GetSourceNode()), DestNode: optionalString(fed.GetDestNode()),
 		DTSCURL: optionalString(fed.GetDtscUrl()), LatencyMS: fed.LatencyMs, TimeToLiveMS: fed.TimeToLiveMs,
@@ -3185,7 +3188,7 @@ func (h *AnalyticsHandler) processFederationEvent(ctx context.Context, event kaf
 		BlockedCluster: optionalString(fed.GetBlockedCluster()), ExistingReplicationCluster: optionalString(fed.GetExistingReplicationCluster()),
 		LocalLat: fed.LocalLat, LocalLon: fed.LocalLon, RemoteLat: fed.RemoteLat, RemoteLon: fed.RemoteLon,
 		SourceRegion: env.sourceRegion, StreamOriginRegion: env.streamOriginRegion,
-		StreamOriginClusterID: env.streamOriginClusterID, SchemaVersion: env.schemaVersion,
+		StreamOriginClusterID: originClusterID, ControlCellID: fed.GetControlCellId(), SchemaVersion: env.schemaVersion,
 	}); err != nil {
 		h.logger.Errorf("Failed to append to federation_events batch: %v", err)
 		return err
@@ -3270,6 +3273,10 @@ func (h *AnalyticsHandler) processProcessBilling(ctx context.Context, event kafk
 	if originClusterID == "" {
 		originClusterID = mt.GetOriginClusterId()
 	}
+	controlCellID := pbe.GetControlCellId()
+	if controlCellID == "" {
+		controlCellID = mt.GetControlCellId()
+	}
 	env := analyticsEnvelopeColumns(event)
 
 	batch, err := periscopeingestdb.PrepareProcessingEvent(ctx, h.clickhouse)
@@ -3289,7 +3296,7 @@ func (h *AnalyticsHandler) processProcessBilling(ctx context.Context, event kafk
 
 	if err := batch.Append(periscopeingestdb.ProcessingEventRow{
 		Timestamp: event.Timestamp, TenantID: parseUUID(tenantID), NodeID: pbe.GetNodeId(), ClusterID: clusterID,
-		OriginClusterID: originClusterID, StreamID: parseUUID(mistTriggerStreamID(&mt)), InternalName: streamName,
+		OriginClusterID: originClusterID, ControlCellID: controlCellID, StreamID: parseUUID(mistTriggerStreamID(&mt)), InternalName: streamName,
 		ProcessType: pbe.GetProcessType(), TrackType: trackType, DurationMS: pbe.GetDurationMs(),
 		InputCodec: optionalStringPointer(pbe.InputCodec), OutputCodec: optionalStringPointer(pbe.OutputCodec),
 		SegmentNumber: optionalInt32Pointer(pbe.SegmentNumber), Width: optionalInt32Pointer(pbe.Width), Height: optionalInt32Pointer(pbe.Height),

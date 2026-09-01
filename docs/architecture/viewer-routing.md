@@ -273,14 +273,23 @@ type LoadBalancingPayload struct {
     NodeLongitude     float64
     Status            string   // "success", "redirect", "error"
     DurationMs        float32  // Decision latency
-    ClusterID         string   // Emitting cluster
+    ClusterID         string   // Emitting cluster context
+    SelectedClusterID string   // Authenticated cluster of SelectedNode
+    ControlCellID     string   // Foghorn/media-authority cell
+    OriginClusterID   string   // Stream origin when known
     RemoteClusterID   string   // Set when viewer was routed cross-cluster
 }
 ```
 
 Stored in: `periscope.routing_decisions` (ClickHouse)
 
-When `RemoteClusterID` is set and differs from `ClusterID`, the routing decision involved cross-cluster serving (origin-pull or redirect). The UI audience page uses this to render cross-cluster flows in amber on the routing map and tag routing events with a "cross-cluster" badge.
+Tenant routing analytics require `stream_tenant_id` to equal the authenticated content tenant. If
+stream ownership enrichment is missing, the row is excluded rather than falling back to the
+infrastructure-owner `tenant_id`; this deliberately trades partial retained coverage for isolation.
+Unattributed decisions expire under the routing table's 90-day TTL and are not backfilled because
+routing decisions are temporary diagnostic telemetry rather than durable delivery facts.
+
+`SelectedClusterID` is the placement answer: it identifies the cluster containing the node returned to the viewer. It is derived from authenticated node state, not from the Foghorn process. `OriginClusterID` answers where the content came from, while `ControlCellID` answers which control plane made the decision. `RemoteClusterID` records a cross-cluster target during federation. These fields are deliberately independent; missing values remain empty rather than being copied from one another.
 
 ## Ingest Routing
 

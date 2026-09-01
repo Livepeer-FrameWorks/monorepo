@@ -69,17 +69,17 @@ func testMeteringStateTransitions(t *testing.T, db *sql.DB) {
 	tenantA := "10000000-0000-4000-8000-000000000001"
 	tenantB := "20000000-0000-4000-8000-000000000002"
 
-	activatedAt, err := queries.EnsureMeteringSource(ctx, EnsureMeteringSourceParams{
+	activated, err := queries.EnsureMeteringSource(ctx, EnsureMeteringSourceParams{
 		SourceID: "region-a", SourceRegion: "", ActivatedAt: now,
 	})
-	if err != nil || !activatedAt.Equal(now) {
-		t.Fatalf("activate source = %v, %v", activatedAt, err)
+	if err != nil || !activated.ActivatedAt.Equal(now) || activated.SourceRegion != "" {
+		t.Fatalf("activate source = %+v, %v", activated, err)
 	}
-	replayedAt, err := queries.EnsureMeteringSource(ctx, EnsureMeteringSourceParams{
+	replayed, err := queries.EnsureMeteringSource(ctx, EnsureMeteringSourceParams{
 		SourceID: "region-a", SourceRegion: "eu-west", ActivatedAt: now.Add(time.Hour),
 	})
-	if err != nil || !replayedAt.Equal(now) {
-		t.Fatalf("replay source activation = %v, %v", replayedAt, err)
+	if err != nil || !replayed.ActivatedAt.Equal(now) || replayed.SourceRegion != "eu-west" {
+		t.Fatalf("replay source activation = %+v, %v", replayed, err)
 	}
 	var persistedRegion string
 	if err := db.QueryRowContext(ctx, `SELECT source_region FROM periscope.metering_sources WHERE source_id = 'region-a'`).Scan(&persistedRegion); err != nil {

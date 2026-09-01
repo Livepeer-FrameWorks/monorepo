@@ -14,7 +14,6 @@ import (
 
 	"frameworks/api_analytics_query/internal/database/periscopequerydb"
 	"frameworks/api_analytics_query/internal/metrics"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -93,24 +92,6 @@ func requireTenantID(ctx context.Context, reqTenantID string) (string, error) {
 		return "", status.Error(codes.InvalidArgument, "tenant_id required")
 	}
 	return reqTenantID, nil
-}
-
-func validateRelatedTenantIDs(ctx context.Context, relatedIDs []string) error {
-	if len(relatedIDs) == 0 {
-		return nil
-	}
-
-	// related_tenant_ids are used by Gateway calls (user JWT) to fetch routing/live-node
-	// data across subscribed clusters. Don't block purely because a tenant_id exists.
-	// If we want to restrict this further, we need to check for actual service creds/role,
-	// not just the presence of tenant context.
-	if middleware.IsServiceCall(ctx) {
-		return nil
-	}
-	if middleware.GetUserID(ctx) == "" && ctxkeys.GetServiceToken(ctx) == "" {
-		return status.Error(codes.PermissionDenied, "related_tenant_ids require authentication")
-	}
-	return nil
 }
 
 // validateTimeRangeProto validates time range from proto message
@@ -434,7 +415,8 @@ func (s *PeriscopeServer) GetStreamEvents(ctx context.Context, req *periscopepb.
 		       buffer_state, has_issues, track_count, quality_tier,
 		       primary_width, primary_height, primary_fps, primary_codec, primary_bitrate,
 		       downloaded_bytes, uploaded_bytes, total_viewers, total_inputs, total_outputs, viewer_seconds,
-		       request_url, protocol, latitude, longitude, location, country_code, city
+		       request_url, protocol, latitude, longitude, location, country_code, city,
+		       source_region, cluster_id, stream_origin_region, stream_origin_cluster_id, schema_version
 		FROM periscope.stream_event_log
 		WHERE tenant_id = ? AND stream_id = ? AND timestamp >= ? AND timestamp <= ?
 		  AND event_type IN ('stream_lifecycle','stream_buffer','stream_end','stream_start','track_list_update')
@@ -472,6 +454,7 @@ func (s *PeriscopeServer) GetStreamEvents(ctx context.Context, req *periscopepb.
 		var totalViewers *uint32
 		var totalInputs, totalOutputs *uint16
 		var latitude, longitude *float64
+		var schemaVersion uint8
 
 		err := rows.Scan(
 			&event.EventId, &ts, &event.EventType, &event.Status, &event.NodeId, &eventData, &event.StreamId,
@@ -479,6 +462,7 @@ func (s *PeriscopeServer) GetStreamEvents(ctx context.Context, req *periscopepb.
 			&primaryWidth, &primaryHeight, &primaryFps, &primaryCodec, &primaryBitrate,
 			&downloadedBytes, &uploadedBytes, &totalViewers, &totalInputs, &totalOutputs, &viewerSeconds,
 			&requestURL, &protocol, &latitude, &longitude, &location, &countryCode, &city,
+			&event.SourceRegion, &event.SourceClusterId, &event.StreamOriginRegion, &event.StreamOriginClusterId, &schemaVersion,
 		)
 		if err != nil {
 			continue
@@ -549,6 +533,7 @@ func (s *PeriscopeServer) GetStreamEvents(ctx context.Context, req *periscopepb.
 		event.Location = location
 		event.CountryCode = countryCode
 		event.City = city
+		event.SchemaVersion = int32(schemaVersion)
 
 		events = append(events, &event)
 	}
@@ -1647,7 +1632,8 @@ func (s *PeriscopeServer) GetConnectionEvents(ctx context.Context, req *periscop
 		       connection_addr, connector, node_id, country_code, city,
 		       latitude, longitude,
 		       client_bucket_h3, client_bucket_res, node_bucket_h3, node_bucket_res,
-		       event_type, session_duration, bytes_transferred, request_url
+		       event_type, session_duration, bytes_transferred, request_url,
+		       cluster_id, origin_cluster_id, control_cell_id
 		FROM periscope.viewer_connection_events
 		WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?
 	`
@@ -1688,6 +1674,7 @@ func (s *PeriscopeServer) GetConnectionEvents(ctx context.Context, req *periscop
 			&event.Latitude, &event.Longitude,
 			&clientBucketH3, &clientBucketRes, &nodeBucketH3, &nodeBucketRes,
 			&event.EventType, &event.SessionDurationSeconds, &event.BytesTransferred, &requestURL,
+			&event.ClusterId, &event.OriginClusterId, &event.ControlCellId,
 		)
 		if err != nil {
 			continue
@@ -2047,39 +2034,24 @@ func (s *PeriscopeServer) GetNodeMetricsAggregated(ctx context.Context, req *per
 
 // GetLiveNodes returns current state of nodes from node_state_current (ReplacingMergeTree)
 // This is the source of truth for real-time node status - simple SELECT, no time-series
-// Supports multi-tenant access for subscribed clusters via related_tenant_ids
 func (s *PeriscopeServer) GetLiveNodes(ctx context.Context, req *periscopepb.GetLiveNodesRequest) (*periscopepb.GetLiveNodesResponse, error) {
 	tenantID, err := requireTenantID(ctx, req.GetTenantId())
 	if err != nil {
 		return nil, err
 	}
-	if validateErr := validateRelatedTenantIDs(ctx, req.GetRelatedTenantIds()); validateErr != nil {
-		return nil, validateErr
-	}
-
-	// Support querying across multiple tenants (e.g. self + subscribed clusters)
-	relatedIDs := req.GetRelatedTenantIds()
-	allIDs := append([]string{tenantID}, relatedIDs...)
-
-	placeholders := make([]string, len(allIDs))
-	for i := range allIDs {
-		placeholders[i] = "?"
-	}
-	inClause := fmt.Sprintf("tenant_id IN (%s)", strings.Join(placeholders, ", "))
+	// related_tenant_ids is a deprecated wire-compatibility field. Ignore it:
+	// the authenticated tenant predicate below is the only node-state scope.
 
 	// Simple query against node_state_current - no JOINs, no aggregations
-	query := fmt.Sprintf(`
+	query := `
 		SELECT tenant_id, node_id, cpu_percent, ram_used_bytes, ram_total_bytes,
 		       disk_used_bytes, disk_total_bytes, up_speed, down_speed,
 		       active_streams, is_healthy, latitude, longitude, location,
 		       toString(metadata) as metadata, updated_at
 		FROM periscope.node_state_current FINAL
-		WHERE %s
-	`, inClause)
-	args := []any{}
-	for _, id := range allIDs {
-		args = append(args, id)
-	}
+		WHERE tenant_id = ?
+	`
+	args := []any{tenantID}
 
 	if nodeID := req.GetNodeId(); nodeID != "" {
 		query += " AND node_id = ?"
@@ -2142,8 +2114,10 @@ func (s *PeriscopeServer) GetRoutingEvents(ctx context.Context, req *periscopepb
 	if err != nil {
 		return nil, err
 	}
-	if validateErr := validateRelatedTenantIDs(ctx, req.GetRelatedTenantIds()); validateErr != nil {
-		return nil, validateErr
+	// related_tenant_ids is a deprecated wire-compatibility field. Ignore it:
+	// stream_tenant_id = authenticated tenant remains the only content scope.
+	if subjectTenantID := req.GetStreamTenantId(); subjectTenantID != "" && subjectTenantID != tenantID {
+		return nil, status.Error(codes.PermissionDenied, "stream_tenant_id must match authenticated tenant")
 	}
 
 	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
@@ -2156,32 +2130,18 @@ func (s *PeriscopeServer) GetRoutingEvents(ctx context.Context, req *periscopepb
 		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
 	}
 
-	// Support querying across multiple tenants (e.g. self + subscribed providers)
-	relatedIDs := req.GetRelatedTenantIds()
-	allIDs := append([]string{tenantID}, relatedIDs...)
-
-	placeholders := make([]string, len(allIDs))
-	for i := range allIDs {
-		placeholders[i] = "?"
-	}
-	inClause := fmt.Sprintf("tenant_id IN (%s)", strings.Join(placeholders, ", "))
-
 	// Count total for pagination
-	countQuery := fmt.Sprintf(`SELECT count(*) FROM periscope.routing_decisions WHERE %s AND timestamp >= ? AND timestamp <= ?`, inClause)
-	countArgs := []any{}
-	for _, id := range allIDs {
-		countArgs = append(countArgs, id)
-	}
-	countArgs = append(countArgs, startTime, endTime)
+	// Content-owner reads fail closed. tenant_id identifies the infrastructure
+	// owner on current rows and cannot safely stand in for missing subject
+	// attribution. Unattributed rows remain unavailable and age out under the
+	// routing_decisions retention policy; they are not relabeled speculatively.
+	contentScope := "stream_tenant_id = ?"
+	countQuery := fmt.Sprintf(`SELECT count(*) FROM periscope.routing_decisions WHERE %s AND timestamp >= ? AND timestamp <= ?`, contentScope)
+	countArgs := []any{tenantID, startTime, endTime}
 
 	if streamID := req.GetStreamId(); streamID != "" {
 		countQuery += " AND stream_id = ?"
 		countArgs = append(countArgs, streamID)
-	}
-	// Dual-tenant filtering (RFC: routing-events-dual-tenant-attribution)
-	if streamTenantID := req.GetStreamTenantId(); streamTenantID != "" {
-		countQuery += " AND stream_tenant_id = ?"
-		countArgs = append(countArgs, streamTenantID)
 	}
 	if clusterID := req.GetClusterId(); clusterID != "" {
 		countQuery += " AND cluster_id = ?"
@@ -2199,27 +2159,19 @@ func (s *PeriscopeServer) GetRoutingEvents(ctx context.Context, req *periscopepb
 		       client_country, client_latitude, client_longitude, client_bucket_h3, client_bucket_res,
 		       node_latitude, node_longitude, node_name, node_bucket_h3, node_bucket_res,
 		       selected_node_id, routing_distance_km, tenant_id, stream_tenant_id, cluster_id,
-		       latency_ms, candidates_count, event_type, source, remote_cluster_id
+		       latency_ms, candidates_count, event_type, source, remote_cluster_id,
+		       selected_cluster_id, control_cell_id, origin_cluster_id
 		FROM periscope.routing_decisions
 		WHERE %s AND timestamp >= ? AND timestamp <= ?
-	`, inClause)
+	`, contentScope)
 
-	args := []any{}
-	for _, id := range allIDs {
-		args = append(args, id)
-	}
-	args = append(args, startTime, endTime)
+	args := []any{tenantID, startTime, endTime}
 
 	if streamID := req.GetStreamId(); streamID != "" {
 		query += " AND stream_id = ?"
 		args = append(args, streamID)
 	}
 
-	// Dual-tenant filtering (RFC: routing-events-dual-tenant-attribution)
-	if streamTenantID := req.GetStreamTenantId(); streamTenantID != "" {
-		query += " AND stream_tenant_id = ?"
-		args = append(args, streamTenantID)
-	}
 	if clusterID := req.GetClusterId(); clusterID != "" {
 		query += " AND cluster_id = ?"
 		args = append(args, clusterID)
@@ -2271,12 +2223,14 @@ func (s *PeriscopeServer) GetRoutingEvents(ctx context.Context, req *periscopepb
 		var eventType *string
 		var source *string
 		var remoteClusterID string
+		var selectedClusterID, controlCellID, originClusterID string
 
 		err := rows.Scan(&ts, &streamID, &selectedNode, &statusStr, &details, &score,
 			&clientCountry, &clientLat, &clientLon, &clientBucketH3, &clientBucketRes,
 			&nodeLat, &nodeLon, &nodeName, &nodeBucketH3, &nodeBucketRes,
 			&selectedNodeID, &routingDistance, &rowTenantID, &streamTenantID, &clusterID,
-			&latencyMs, &candidatesCount, &eventType, &source, &remoteClusterID)
+			&latencyMs, &candidatesCount, &eventType, &source, &remoteClusterID,
+			&selectedClusterID, &controlCellID, &originClusterID)
 		if err != nil {
 			s.logger.WithError(err).Info("Failed to scan routing event row")
 			continue
@@ -2365,6 +2319,15 @@ func (s *PeriscopeServer) GetRoutingEvents(ctx context.Context, req *periscopepb
 		}
 		if remoteClusterID != "" {
 			event.RemoteClusterId = &remoteClusterID
+		}
+		if selectedClusterID != "" {
+			event.SelectedClusterId = &selectedClusterID
+		}
+		if controlCellID != "" {
+			event.ControlCellId = &controlCellID
+		}
+		if originClusterID != "" {
+			event.OriginClusterId = &originClusterID
 		}
 
 		events = append(events, event)
@@ -2559,11 +2522,30 @@ func (s *PeriscopeServer) GetFederationEvents(ctx context.Context, req *periscop
 		limit = req.GetLimit()
 	}
 
-	// Count total matching rows before applying LIMIT
-	countQuery := "SELECT count() FROM periscope.federation_events WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?"
+	// Keep infrastructure-owner and content-owner paths separate. tenant_id is
+	// the partition key, while stream_tenant_id is served by a skip index; an OR
+	// across the two prevents partition pruning for operator-owned history.
+	eventType := req.GetEventType()
+	eventFilter := ""
+	if eventType != "" {
+		eventFilter = " AND event_type = ?"
+	}
+	countQuery := fmt.Sprintf(`
+		SELECT toInt32(sum(cnt)) FROM (
+			SELECT count() AS cnt
+			FROM periscope.federation_events
+			WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?%[1]s
+			UNION ALL
+			SELECT count() AS cnt
+			FROM periscope.federation_events
+			WHERE stream_tenant_id = ? AND tenant_id != ? AND timestamp >= ? AND timestamp <= ?%[1]s
+		)`, eventFilter)
 	countArgs := []any{tenantID, startTime, endTime}
-	if eventType := req.GetEventType(); eventType != "" {
-		countQuery += " AND event_type = ?"
+	if eventType != "" {
+		countArgs = append(countArgs, eventType)
+	}
+	countArgs = append(countArgs, tenantID, tenantID, startTime, endTime)
+	if eventType != "" {
 		countArgs = append(countArgs, eventType)
 	}
 	var totalCount int32
@@ -2571,21 +2553,42 @@ func (s *PeriscopeServer) GetFederationEvents(ctx context.Context, req *periscop
 		s.logger.WithError(countErr).Warn("Failed to get federation events total count")
 	}
 
-	query := `
+	query := fmt.Sprintf(`
+		SELECT * FROM (
 		SELECT
 			timestamp, event_type, local_cluster, remote_cluster,
-			stream_name, stream_id, source_node, dest_node, dtsc_url,
+			if(stream_tenant_id = ?, stream_name, NULL) AS stream_name,
+			if(stream_tenant_id = ?, stream_id, NULL) AS stream_id,
+			source_node, dest_node,
+			CAST(NULL AS Nullable(String)) AS dtsc_url,
 			latency_ms, time_to_live_ms, failure_reason,
 			queried_clusters, responding_clusters, total_candidates,
 			best_remote_score, peer_cluster, role, reason,
-			local_lat, local_lon, remote_lat, remote_lon
+			local_lat, local_lon, remote_lat, remote_lon,
+			if(stream_tenant_id = ?, stream_tenant_id, NULL) AS stream_tenant_id,
+			control_cell_id, stream_origin_cluster_id
 		FROM periscope.federation_events
-		WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?
-	`
-	args := []any{tenantID, startTime, endTime}
-
-	if eventType := req.GetEventType(); eventType != "" {
-		query += " AND event_type = ?"
+		WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?%[1]s
+		UNION ALL
+		SELECT
+			timestamp, event_type, local_cluster, remote_cluster,
+			CAST(stream_name AS Nullable(String)) AS stream_name,
+			stream_id, source_node, dest_node,
+			CAST(NULL AS Nullable(String)) AS dtsc_url,
+			latency_ms, time_to_live_ms, failure_reason,
+			queried_clusters, responding_clusters, total_candidates,
+			best_remote_score, peer_cluster, role, reason,
+			local_lat, local_lon, remote_lat, remote_lon,
+			stream_tenant_id, control_cell_id, stream_origin_cluster_id
+		FROM periscope.federation_events
+		WHERE stream_tenant_id = ? AND tenant_id != ? AND timestamp >= ? AND timestamp <= ?%[1]s
+		)`, eventFilter)
+	args := []any{tenantID, tenantID, tenantID, tenantID, startTime, endTime}
+	if eventType != "" {
+		args = append(args, eventType)
+	}
+	args = append(args, tenantID, tenantID, startTime, endTime)
+	if eventType != "" {
 		args = append(args, eventType)
 	}
 
@@ -2611,13 +2614,16 @@ func (s *PeriscopeServer) GetFederationEvents(ctx context.Context, req *periscop
 		var role string
 		var reason sql.NullString
 		var localLat, localLon, remoteLat, remoteLon sql.NullFloat64
+		var streamTenantID sql.NullString
+		var controlCellID, originClusterID string
 
 		if err := rows.Scan(&ts, &eventType, &localCluster, &remoteCluster,
 			&streamName, &streamID, &sourceNode, &destNode, &dtscURL,
 			&latencyMs, &timeToLiveMs, &failureReason,
 			&queriedClusters, &respondingClusters, &totalCandidates,
 			&bestRemoteScore, &peerCluster, &role, &reason,
-			&localLat, &localLon, &remoteLat, &remoteLon); err != nil {
+			&localLat, &localLon, &remoteLat, &remoteLon,
+			&streamTenantID, &controlCellID, &originClusterID); err != nil {
 			s.logger.WithError(err).Warn("Failed to scan federation event row")
 			continue
 		}
@@ -2689,6 +2695,15 @@ func (s *PeriscopeServer) GetFederationEvents(ctx context.Context, req *periscop
 		if remoteLon.Valid {
 			evt.RemoteLongitude = &remoteLon.Float64
 		}
+		if streamTenantID.Valid {
+			evt.StreamTenantId = &streamTenantID.String
+		}
+		if controlCellID != "" {
+			evt.ControlCellId = &controlCellID
+		}
+		if originClusterID != "" {
+			evt.OriginClusterId = &originClusterID
+		}
 
 		events = append(events, evt)
 	}
@@ -2713,16 +2728,38 @@ func (s *PeriscopeServer) GetFederationSummary(ctx context.Context, req *perisco
 	query := `
 		SELECT
 			event_type,
-			sum(event_count) AS total,
-			sum(failure_count) AS failures,
-			sum(sum_latency_ms) / greatest(sum(event_count), 1) AS avg_latency_ms
-		FROM periscope.federation_hourly
-		WHERE tenant_id = ? AND hour >= ? AND hour <= ?
+			sum(row_count) AS total_events,
+			sum(row_failures) AS total_failures,
+			sum(row_latency_sum) / greatest(sum(row_count), 1) AS avg_latency_ms
+		FROM (
+			SELECT
+				event_type,
+				sum(event_count) AS row_count,
+				sum(failure_count) AS row_failures,
+				sum(sum_latency_ms) AS row_latency_sum
+			FROM periscope.federation_hourly
+			WHERE tenant_id = ? AND hour >= ? AND hour <= ?
+			GROUP BY event_type
+
+			UNION ALL
+
+			SELECT
+				event_type,
+				sum(event_count) AS row_count,
+				sum(failure_count) AS row_failures,
+				sum(sum_latency_ms) AS row_latency_sum
+			FROM periscope.federation_hourly_v2
+			WHERE content_tenant_id = ? AND tenant_id != ? AND hour >= ? AND hour <= ?
+			GROUP BY event_type
+		)
 		GROUP BY event_type
-		ORDER BY total DESC
+		ORDER BY total_events DESC
 	`
 
-	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, tenantID, startTime, endTime)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query,
+		tenantID, startTime, endTime,
+		tenantID, tenantID, startTime, endTime,
+	)
 	if err != nil {
 		return nil, wrapClickhouseError(err, "database error")
 	}
@@ -4747,7 +4784,8 @@ func (s *PeriscopeServer) GetStorageEvents(ctx context.Context, req *periscopepb
 
 	query := `
 		SELECT timestamp, tenant_id, stream_id, asset_hash, action, asset_type,
-		       size_bytes, s3_url, local_path, node_id, duration_ms, warm_duration_ms, error
+		       size_bytes, s3_url, local_path, node_id, duration_ms, warm_duration_ms, error,
+		       cluster_id, origin_cluster_id, control_cell_id
 		FROM storage_events
 		WHERE tenant_id = ? AND timestamp >= ? AND timestamp <= ?
 	`
@@ -4784,9 +4822,11 @@ func (s *PeriscopeServer) GetStorageEvents(ctx context.Context, req *periscopepb
 		var sizeBytes uint64
 		var s3URL, localPath, errorMsg sql.NullString
 		var durationMs, warmDurationMs sql.NullInt64
+		var clusterID, originClusterID, controlCellID string
 
 		err := rows.Scan(&timestamp, &tenantIDStr, &streamIDStr, &assetHash, &action, &assetTypeStr,
-			&sizeBytes, &s3URL, &localPath, &nodeID, &durationMs, &warmDurationMs, &errorMsg)
+			&sizeBytes, &s3URL, &localPath, &nodeID, &durationMs, &warmDurationMs, &errorMsg,
+			&clusterID, &originClusterID, &controlCellID)
 		if err != nil {
 			s.logger.WithError(err).Error("Failed to scan storage_events row")
 			continue
@@ -4802,6 +4842,15 @@ func (s *PeriscopeServer) GetStorageEvents(ctx context.Context, req *periscopepb
 			AssetType: assetTypeStr,
 			SizeBytes: sizeBytes,
 			NodeId:    nodeID,
+		}
+		if clusterID != "" {
+			event.ClusterId = &clusterID
+		}
+		if originClusterID != "" {
+			event.OriginClusterId = &originClusterID
+		}
+		if controlCellID != "" {
+			event.ControlCellId = &controlCellID
 		}
 		if s3URL.Valid {
 			event.S3Url = &s3URL.String
@@ -5527,6 +5576,151 @@ func (s *PeriscopeServer) GetClusterQoeOps(ctx context.Context, req *periscopepb
 		})
 	}
 	return &periscopepb.GetClusterQoeOpsResponse{Rows: out}, nil
+}
+
+// GetClusterWorkload returns redacted work placement for clusters ownership-
+// authorized by Bridge. It intentionally aggregates away tenant, content,
+// stream, session, URL, and client identity before returning any row.
+func (s *PeriscopeServer) GetClusterWorkload(ctx context.Context, req *periscopepb.GetClusterWorkloadRequest) (*periscopepb.GetClusterWorkloadResponse, error) {
+	if !middleware.IsServiceCall(ctx) {
+		return nil, status.Error(codes.PermissionDenied, "service credentials required")
+	}
+	if _, err := requireTenantID(ctx, req.GetTenantId()); err != nil {
+		return nil, err
+	}
+	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
+	}
+	clusterIDs := req.GetClusterIds()
+	if len(clusterIDs) == 0 {
+		return &periscopepb.GetClusterWorkloadResponse{}, nil
+	}
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(clusterIDs)), ",")
+	args := make([]any, 0, 14+len(clusterIDs)*7)
+	appendRangeAndClusters := func(start, end any) {
+		args = append(args, start, end)
+		for _, id := range clusterIDs {
+			args = append(args, id)
+		}
+	}
+	appendClusters := func() {
+		for _, id := range clusterIDs {
+			args = append(args, id)
+		}
+	}
+	appendRangeAndClusters(startTime.UnixMilli(), endTime.UnixMilli()) // viewer
+	appendRangeAndClusters(startTime.UnixMilli(), endTime.UnixMilli()) // ingest
+	appendRangeAndClusters(startTime.UnixMilli(), endTime.UnixMilli()) // processing
+	appendRangeAndClusters(startTime, endTime)                         // storage
+	appendRangeAndClusters(startTime, endTime)                         // federation
+	appendClusters()                                                   // active viewers
+	appendClusters()                                                   // active ingests
+	appendClusters()                                                   // current storage
+
+	query := fmt.Sprintf(`
+		SELECT cluster_id, node_id, work_kind, measurement_kind, storage_scope,
+		       toInt64(sum(event_count)), toInt64(sum(active_count)),
+		       toUInt64(sum(byte_count)), sum(media_seconds), toInt64(sum(error_count)),
+		       toInt64(max(observed_at_ms))
+		FROM (
+			SELECT cluster_id, node_id, 'viewer' AS work_kind, 'window' AS measurement_kind,
+			       '' AS storage_scope,
+			       toInt64(count()) AS event_count, toInt64(0) AS active_count,
+			       toUInt64(sum(downloaded_bytes)) AS byte_count,
+			       toFloat64(sum(duration_seconds)) AS media_seconds, toInt64(0) AS error_count,
+			       toInt64(0) AS observed_at_ms
+			FROM viewer_sessions_final_v
+			WHERE source_ended_at_ms >= ? AND source_ended_at_ms < ? AND cluster_id IN (%[1]s)
+			GROUP BY cluster_id, node_id
+			UNION ALL
+			SELECT cluster_id, node_id, 'ingest', 'window', '', toInt64(count()), toInt64(0),
+			       toUInt64(greatest(sum(downloaded_bytes) + sum(uploaded_bytes), 0)),
+			       toFloat64(sum((source_ended_at_ms - source_started_at_ms) / 1000.0)), toInt64(0), toInt64(0)
+			FROM stream_sessions_final_v
+			WHERE source_ended_at_ms >= ? AND source_ended_at_ms < ? AND cluster_id IN (%[1]s)
+			GROUP BY cluster_id, node_id
+			UNION ALL
+			SELECT cluster_id, node_id, 'processing', 'window', '', toInt64(count()), toInt64(0),
+			       toUInt64(greatest(sum(output_bytes_total), 0)), toFloat64(sum(media_seconds)), toInt64(0), toInt64(0)
+			FROM processing_segments_final_v
+			WHERE source_ended_at_ms >= ? AND source_ended_at_ms < ? AND cluster_id IN (%[1]s)
+			GROUP BY cluster_id, node_id
+			UNION ALL
+			SELECT cluster_id, node_id, 'storage', 'window', '', toInt64(count()), toInt64(0),
+			       toUInt64(sum(size_bytes)), toFloat64(0), toInt64(countIf(action LIKE '%%failed')), toInt64(0)
+			FROM storage_events
+			WHERE timestamp >= ? AND timestamp <= ? AND cluster_id IN (%[1]s)
+			GROUP BY cluster_id, node_id
+			UNION ALL
+			SELECT local_cluster, ifNull(dest_node, ifNull(source_node, '')), 'federation', 'window', '', toInt64(count()), toInt64(0),
+			       toUInt64(0), toFloat64(0), toInt64(countIf(event_type LIKE '%%failed')), toInt64(0)
+			FROM federation_events
+			WHERE timestamp >= ? AND timestamp <= ? AND local_cluster IN (%[1]s)
+			GROUP BY local_cluster, ifNull(dest_node, ifNull(source_node, ''))
+			UNION ALL
+			SELECT v.cluster_id, v.node_id, 'viewer', 'current', '', toInt64(0), toInt64(countIf(isNull(v.disconnected_at))),
+			       toUInt64(0), toFloat64(0), toInt64(0), toInt64(toUnixTimestamp(max(v.last_updated))) * 1000
+			FROM viewer_sessions_current AS v FINAL
+			WHERE v.cluster_id IN (%[1]s)
+			  AND v.last_updated >= now() - INTERVAL 5 MINUTE
+			GROUP BY v.cluster_id, v.node_id
+			UNION ALL
+			SELECT s.cluster_id, s.node_id, 'ingest', 'current', '', toInt64(0), toInt64(countIf(s.status = 'live')),
+			       toUInt64(0), toFloat64(0), toInt64(0), toInt64(toUnixTimestamp(max(s.updated_at))) * 1000
+			FROM stream_state_current AS s FINAL
+			WHERE s.cluster_id IN (%[1]s)
+			  AND s.updated_at >= now() - INTERVAL 5 MINUTE
+			GROUP BY s.cluster_id, s.node_id
+			UNION ALL
+			SELECT cluster_id, node_id, 'storage', 'current', storage_scope, toInt64(0), toInt64(sum(file_count)),
+			       toUInt64(sum(total_bytes)), toFloat64(0), toInt64(0), toInt64(max(observed_at_ms))
+			FROM (
+				SELECT
+					coalesce(nullIf(storage_provider_cluster_id, ''), nullIf(cluster_id, ''), '') AS cluster_id,
+					node_id, tenant_id, storage_scope,
+					argMax(total_bytes, (timestamp, ingested_at_ms)) AS total_bytes,
+					argMax(file_count, (timestamp, ingested_at_ms)) AS file_count,
+					toInt64(toUnixTimestamp(argMax(timestamp, (timestamp, ingested_at_ms)))) * 1000 AS observed_at_ms
+				FROM storage_snapshots
+				WHERE coalesce(nullIf(storage_provider_cluster_id, ''), nullIf(cluster_id, ''), '') IN (%[1]s)
+				  AND timestamp >= now() - INTERVAL 2 HOUR
+				GROUP BY cluster_id, node_id, tenant_id, storage_scope
+			)
+			GROUP BY cluster_id, node_id, storage_scope
+		)
+		GROUP BY cluster_id, node_id, work_kind, measurement_kind, storage_scope
+		ORDER BY cluster_id, node_id, work_kind, measurement_kind, storage_scope
+		LIMIT 5000
+	`, placeholders)
+
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
+	if err != nil {
+		return nil, wrapClickhouseError(err, "database error")
+	}
+	defer rows.Close()
+	response := &periscopepb.GetClusterWorkloadResponse{}
+	for rows.Next() {
+		row := &periscopepb.ClusterWorkload{}
+		var storageScope string
+		var observedAtMS int64
+		if err := rows.Scan(&row.ClusterId, &row.NodeId, &row.WorkKind, &row.MeasurementKind, &storageScope, &row.EventCount, &row.ActiveCount, &row.Bytes, &row.MediaSeconds, &row.ErrorCount, &observedAtMS); err != nil {
+			s.logger.WithError(err).Warn("failed to scan cluster workload")
+			continue
+		}
+		if storageScope != "" {
+			row.StorageScope = &storageScope
+		}
+		if observedAtMS > 0 {
+			row.ObservedAt = timestamppb.New(time.UnixMilli(observedAtMS))
+		}
+		row.MediaSeconds = sanitizeFloat64(row.MediaSeconds)
+		response.Rows = append(response.Rows, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, wrapClickhouseError(err, "database error")
+	}
+	return response, nil
 }
 
 // GetVodRetention returns the per-bucket retention curve for one artifact. Watch
@@ -6315,7 +6509,8 @@ func (s *PeriscopeServer) GetProcessingUsage(ctx context.Context, req *periscope
 	}
 	countCh := s.countAsync(ctx, countQuery, countArgs...)
 
-	// Query detailed records from finalized processing facts. Raw
+	// Query detailed records from the additive topology projection over
+	// finalized processing facts. Raw
 	// process_billing telemetry stays in processing_events for diagnostics;
 	// this public usage surface follows the same canonical facts as billing.
 	query := `
@@ -6337,8 +6532,9 @@ func (s *PeriscopeServer) GetProcessingUsage(ctx context.Context, req *periscope
 		       -- MistProcAV timing
 		       source_started_at_ms, source_ended_at_ms, NULL, NULL,
 		       -- MistProcAV performance
-		       nullIf(rtf_in, 0), nullIf(rtf_out, 0), NULL, NULL
-		FROM processing_segments_final_v
+		       nullIf(rtf_in, 0), nullIf(rtf_out, 0), NULL, NULL,
+		       nullIf(cluster_id, ''), nullIf(origin_cluster_id, ''), nullIf(control_cell_id, '')
+		FROM processing_segments_topology_v
 		WHERE tenant_id = ? AND source_ended_at_ms >= ? AND source_ended_at_ms < ?
 	`
 	args := []any{tenantID, startTime.UnixMilli(), endTime.UnixMilli()}
@@ -6402,6 +6598,7 @@ func (s *PeriscopeServer) GetProcessingUsage(ctx context.Context, req *periscope
 		// MistProcAV performance
 		var rtfIn, rtfOut *float64
 		var pipelineLagMs, outputBitrateBps *int64
+		var clusterID, originClusterID, controlCellID *string
 
 		err := rows.Scan(&timestamp, &tenantIDStr, &nodeID, &streamIDStr, &processTypeStr, &durationMs,
 			&inputCodec, &outputCodec, &trackType,
@@ -6420,20 +6617,24 @@ func (s *PeriscopeServer) GetProcessingUsage(ctx context.Context, req *periscope
 			// MistProcAV timing
 			&sourceTimestampMs, &sinkTimestampMs, &sourceAdvancedMs, &sinkAdvancedMs,
 			// MistProcAV performance
-			&rtfIn, &rtfOut, &pipelineLagMs, &outputBitrateBps)
+			&rtfIn, &rtfOut, &pipelineLagMs, &outputBitrateBps,
+			&clusterID, &originClusterID, &controlCellID)
 		if err != nil {
 			s.logger.WithError(err).Error("Failed to scan processing_segments_final_v row")
 			continue
 		}
 
 		record := &periscopepb.ProcessingUsageRecord{
-			Id:          fmt.Sprintf("%s_%s", timestamp.Format(time.RFC3339Nano), streamIDStr),
-			Timestamp:   timestamppb.New(timestamp),
-			TenantId:    tenantIDStr,
-			NodeId:      nodeID,
-			StreamId:    streamIDStr,
-			ProcessType: processTypeStr,
-			DurationMs:  durationMs,
+			Id:              fmt.Sprintf("%s_%s", timestamp.Format(time.RFC3339Nano), streamIDStr),
+			Timestamp:       timestamppb.New(timestamp),
+			TenantId:        tenantIDStr,
+			NodeId:          nodeID,
+			StreamId:        streamIDStr,
+			ProcessType:     processTypeStr,
+			DurationMs:      durationMs,
+			ClusterId:       clusterID,
+			OriginClusterId: originClusterID,
+			ControlCellId:   controlCellID,
 			// Common fields
 			InputCodec:  inputCodec,
 			OutputCodec: outputCodec,

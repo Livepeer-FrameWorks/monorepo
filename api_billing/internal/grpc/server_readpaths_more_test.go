@@ -204,11 +204,11 @@ func TestGetUsageRecordsMapsRows(t *testing.T) {
 	end := timestamppb.New(now)
 
 	rows := sqlmock.NewRows([]string{
-		"id", "tenant_id", "cluster_id", "usage_type", "usage_value",
+		"id", "tenant_id", "cluster_id", "usage_type", "unit", "dimensions", "usage_value",
 		"usage_details", "created_at", "period_start", "period_end", "granularity",
 	}).
-		AddRow("u1", "tenant-1", "cl-1", "delivered_minutes", 12.5, []byte(`{"codec":"h264"}`), now, now, now, "minute_5").
-		AddRow("u2", "tenant-1", "", "egress_gb", 3.0, []byte(`{}`), now, nil, nil, "")
+		AddRow("u1", "tenant-1", "cl-1", "transcode_rendition_seconds", "second", []byte(`{"execution_backend":"livepeer_network","output_codec":"h264"}`), 12.5, []byte(`{"source":"kafka"}`), now, now, now, "minute_5").
+		AddRow("u2", "tenant-1", "", "egress_gb", "gibibyte", []byte(`{}`), 3.0, []byte(`{}`), now, nil, nil, "")
 
 	// Typed query arguments include explicit optional-filter and cursor flags.
 	mock.ExpectQuery(`FROM purser\.usage_records`).
@@ -226,11 +226,14 @@ func TestGetUsageRecordsMapsRows(t *testing.T) {
 		t.Fatalf("got %d records, want 2", len(resp.UsageRecords))
 	}
 	r0 := resp.UsageRecords[0]
-	if r0.ClusterId != "cl-1" || r0.UsageValue != 12.5 {
+	if r0.ClusterId != "cl-1" || r0.UsageValue != 12.5 || r0.Unit != "second" {
 		t.Fatalf("record0 mapped wrong: %+v", r0)
 	}
-	if r0.UsageDetails == nil || r0.UsageDetails.GetFields()["codec"].GetStringValue() != "h264" {
+	if r0.UsageDetails == nil || r0.UsageDetails.GetFields()["source"].GetStringValue() != "kafka" {
 		t.Fatalf("usage_details JSONB not decoded: %+v", r0.UsageDetails)
+	}
+	if r0.Dimensions == nil || r0.Dimensions.GetFields()["execution_backend"].GetStringValue() != "livepeer_network" || r0.Dimensions.GetFields()["output_codec"].GetStringValue() != "h264" {
+		t.Fatalf("dimensions JSONB not decoded: %+v", r0.Dimensions)
 	}
 	// NULL cluster_id stays empty; NULL period bounds stay unset.
 	r1 := resp.UsageRecords[1]

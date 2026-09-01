@@ -608,6 +608,10 @@ func (c *BatchedClient) SendFederationEvent(data *ipcpb.FederationEventData) err
 		clusterID := data.GetLocalCluster()
 		trigger.ClusterId = &clusterID
 	}
+	if data.GetOriginClusterId() != "" {
+		originClusterID := data.GetOriginClusterId()
+		trigger.OriginClusterId = &originClusterID
+	}
 	c.stampTriggerEnvelope(trigger)
 	_, err := c.client.SendEvent(ctx, trigger)
 	if err != nil {

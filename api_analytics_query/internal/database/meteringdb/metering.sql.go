@@ -86,7 +86,7 @@ ON CONFLICT (source_id) DO UPDATE SET
         WHEN periscope.metering_sources.source_region = '' THEN EXCLUDED.source_region
         ELSE periscope.metering_sources.source_region
     END
-RETURNING activated_at
+RETURNING activated_at, source_region
 `
 
 type EnsureMeteringSourceParams struct {
@@ -95,11 +95,16 @@ type EnsureMeteringSourceParams struct {
 	ActivatedAt  time.Time `db:"activated_at" json:"activated_at"`
 }
 
-func (q *Queries) EnsureMeteringSource(ctx context.Context, arg EnsureMeteringSourceParams) (time.Time, error) {
+type EnsureMeteringSourceRow struct {
+	ActivatedAt  time.Time `db:"activated_at" json:"activated_at"`
+	SourceRegion string    `db:"source_region" json:"source_region"`
+}
+
+func (q *Queries) EnsureMeteringSource(ctx context.Context, arg EnsureMeteringSourceParams) (EnsureMeteringSourceRow, error) {
 	row := q.db.QueryRowContext(ctx, ensureMeteringSource, arg.SourceID, arg.SourceRegion, arg.ActivatedAt)
-	var activated_at time.Time
-	err := row.Scan(&activated_at)
-	return activated_at, err
+	var i EnsureMeteringSourceRow
+	err := row.Scan(&i.ActivatedAt, &i.SourceRegion)
+	return i, err
 }
 
 const getBillingCursor = `-- name: GetBillingCursor :one

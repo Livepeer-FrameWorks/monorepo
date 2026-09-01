@@ -60,6 +60,10 @@ const (
 	ModelTieredGraduated Model = "tiered_graduated"
 	// ModelAllUsage bills every unit at unit_price.
 	ModelAllUsage Model = "all_usage"
+	// ModelCodecMultiplier keeps expanded v0.2.96 pricing rows readable until
+	// the v0.3 contract migration retires them. It deliberately does not rate:
+	// the v3 meter stream has no lossless codec-multiplier input.
+	ModelCodecMultiplier Model = "codec_multiplier"
 	// ModelDimensioned applies the most-specific selector rate to each bounded
 	// dimension bucket while sharing one included allowance across the meter.
 	ModelDimensioned Model = "dimensioned"
@@ -68,7 +72,7 @@ const (
 // ValidModel reports whether m is one of the pricing models Rate can execute.
 func ValidModel(m Model) bool {
 	switch m {
-	case ModelTieredGraduated, ModelAllUsage, ModelDimensioned:
+	case ModelTieredGraduated, ModelAllUsage, ModelCodecMultiplier, ModelDimensioned:
 		return true
 	default:
 		return false

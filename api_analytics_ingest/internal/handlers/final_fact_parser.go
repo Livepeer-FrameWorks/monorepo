@@ -146,6 +146,8 @@ func (h *AnalyticsHandler) projectViewerSessionFinal(ctx context.Context, trigge
 		sessionID:           sessionID,
 		sourceEventID:       sourceEventID,
 		clusterID:           clusterID,
+		originClusterID:     trigger.GetOriginClusterId(),
+		controlCellID:       trigger.GetControlCellId(),
 		streamID:            streamID,
 		streamName:          vd.GetStreamName(),
 		connector:           vd.GetConnector(),
@@ -181,7 +183,8 @@ func (h *AnalyticsHandler) projectViewerSessionFinal(ctx context.Context, trigge
 	defer func() { _ = batch.Close() }()
 	if err := batch.Append(periscopeingestdb.ViewerSessionFinalRow{
 		TenantID: row.tenantID, NodeID: row.nodeID, SessionID: row.sessionID, SourceEventID: row.sourceEventID,
-		ClusterID: row.clusterID, StreamID: row.streamID, StreamName: row.streamName, Connector: row.connector, Host: row.host,
+		ClusterID: row.clusterID, OriginClusterID: row.originClusterID, ControlCellID: row.controlCellID,
+		StreamID: row.streamID, StreamName: row.streamName, Connector: row.connector, Host: row.host,
 		CountryCode: row.countryCode, City: row.city, Latitude: row.latitude, Longitude: row.longitude, Tags: row.tags,
 		DurationSeconds: row.durationSeconds, UploadedBytes: row.uploadedBytes, DownloadedBytes: row.downloadedBytes, SecondsConnected: row.secondsConnected,
 		SourceStartedAtMS: row.sourceStartedAtMS, SourceEndedAtMS: row.sourceEndedAtMS, EdgeReceivedAtMS: row.edgeReceivedAtMS, ProjectionVersionMS: row.projectionVersionMS,
@@ -275,6 +278,8 @@ func (h *AnalyticsHandler) projectStreamSessionFinal(ctx context.Context, trigge
 		streamID:            streamID,
 		sourceEventID:       sourceEventID,
 		clusterID:           clusterID,
+		originClusterID:     trigger.GetOriginClusterId(),
+		controlCellID:       trigger.GetControlCellId(),
 		streamName:          streamName,
 		downloadedBytes:     se.GetDownloadedBytes(),
 		uploadedBytes:       se.GetUploadedBytes(),
@@ -300,7 +305,7 @@ func (h *AnalyticsHandler) projectStreamSessionFinal(ctx context.Context, trigge
 	defer func() { _ = batch.Close() }()
 	if err := batch.Append(periscopeingestdb.StreamSessionFinalRow{
 		TenantID: row.tenantID, NodeID: row.nodeID, StreamID: row.streamID, SourceEventID: row.sourceEventID,
-		ClusterID: row.clusterID, StreamName: row.streamName,
+		ClusterID: row.clusterID, OriginClusterID: row.originClusterID, ControlCellID: row.controlCellID, StreamName: row.streamName,
 		DownloadedBytes: row.downloadedBytes, UploadedBytes: row.uploadedBytes, TotalViewers: row.totalViewers,
 		TotalInputs: row.totalInputs, TotalOutputs: row.totalOutputs, ViewerSeconds: row.viewerSeconds,
 		SourceStartedAtMS: row.sourceStartedAtMS, SourceEndedAtMS: row.sourceEndedAtMS,
@@ -472,7 +477,8 @@ func (h *AnalyticsHandler) projectProcessingSegmentFinal(ctx context.Context, tr
 	if err := batch.Append(periscopeingestdb.ProcessingSegmentFinalRow{
 		TenantID: tenantID, NodeID: nodeID, StreamID: streamID, ProcessType: processType, OutputCodec: outputCodec, TrackType: trackType,
 		SegmentNumber: segmentNumber, SourceEventID: sourceEventID,
-		ClusterID: clusterID, StreamName: pb_.GetStreamName(), InputCodec: pb_.GetInputCodec(), MediaSeconds: rawDurationSeconds,
+		ClusterID: clusterID, OriginClusterID: trigger.GetOriginClusterId(), ControlCellID: trigger.GetControlCellId(),
+		StreamName: pb_.GetStreamName(), InputCodec: pb_.GetInputCodec(), MediaSeconds: rawDurationSeconds,
 		Width: pb_.GetWidth(), Height: pb_.GetHeight(), RenditionCount: pb_.GetRenditionCount(), InputBytes: pb_.GetInputBytes(),
 		OutputBytesTotal: pb_.GetOutputBytesTotal(), TurnaroundMS: pb_.GetTurnaroundMs(), SpeedFactor: pb_.GetSpeedFactor(),
 		LivepeerSessionID: pb_.GetLivepeerSessionId(), RenditionsJSON: pb_.GetRenditionsJson(),
@@ -503,6 +509,8 @@ type viewerSessionFinalRow struct {
 	sessionID           string
 	sourceEventID       string
 	clusterID           string
+	originClusterID     string
+	controlCellID       string
 	streamID            uuid.UUID
 	streamName          string
 	connector           string
@@ -533,6 +541,8 @@ type streamSessionFinalRow struct {
 	streamID            uuid.UUID
 	sourceEventID       string
 	clusterID           string
+	originClusterID     string
+	controlCellID       string
 	streamName          string
 	downloadedBytes     int64
 	uploadedBytes       int64

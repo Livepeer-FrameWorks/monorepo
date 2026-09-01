@@ -45,7 +45,7 @@ ON CONFLICT (source_id) DO UPDATE SET
         WHEN periscope.metering_sources.source_region = '' THEN EXCLUDED.source_region
         ELSE periscope.metering_sources.source_region
     END
-RETURNING activated_at;
+RETURNING activated_at, source_region;
 
 -- name: GetBillingCursor :one
 SELECT last_processed_at

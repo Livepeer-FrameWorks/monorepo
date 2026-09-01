@@ -22,10 +22,12 @@ func TestStreamLifecycleDefaultsBufferStateForCurrentStateOnly(t *testing.T) {
 	conn := newFakeClickhouseConn()
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
 	streamID := uuid.NewString()
+	clusterID := "serving-us"
 	bufferMs := uint32(2000)
 	data := mustMistTriggerData(t, &ipcpb.MistTrigger{
-		StreamId: &streamID,
-		NodeId:   "edge-eu-1",
+		StreamId:  &streamID,
+		NodeId:    "edge-eu-1",
+		ClusterId: &clusterID,
 		TriggerPayload: &ipcpb.MistTrigger_StreamLifecycleUpdate{
 			StreamLifecycleUpdate: &ipcpb.StreamLifecycleUpdate{
 				InternalName: "live+demo",
@@ -54,6 +56,9 @@ func TestStreamLifecycleDefaultsBufferStateForCurrentStateOnly(t *testing.T) {
 	}
 	if got := state.rows[0][5]; got != "FULL" {
 		t.Fatalf("current-state buffer_state = %#v, want defaulted FULL", got)
+	}
+	if got := state.rows[0][25]; got != clusterID {
+		t.Fatalf("current-state cluster_id = %#v, want authenticated serving cluster %q", got, clusterID)
 	}
 
 	log := conn.batches["stream_event_log"]

@@ -13,6 +13,7 @@ LIMIT 1;
 -- name: ListUsageRecords :many
 WITH usage_surface AS (
     SELECT id::text AS id, tenant_id::text AS tenant_id, cluster_id, usage_type,
+           unit, COALESCE(dimensions, '{}'::jsonb) AS dimensions,
            usage_value::double precision AS usage_value,
            COALESCE(usage_details, '{}'::jsonb) AS usage_details,
            created_at, period_start, period_end, granularity
@@ -20,14 +21,15 @@ WITH usage_surface AS (
     WHERE value_kind = 'delta' AND granularity = 'minute_5'
     UNION ALL
     SELECT id::text AS id, tenant_id::text AS tenant_id, NULLIF(cluster_id, '') AS cluster_id,
-           usage_type, delta_value::double precision AS usage_value,
+           usage_type, unit, COALESCE(dimensions, '{}'::jsonb) AS dimensions,
+           delta_value::double precision AS usage_value,
            COALESCE(details, '{}'::jsonb) AS usage_details,
            created_at, period_start, period_end, 'minute_5'::text AS granularity
     FROM purser.usage_adjustments
     WHERE status = 'applied' AND value_kind = 'correction_delta'
 )
 SELECT id, tenant_id, COALESCE(cluster_id, '')::text AS cluster_id,
-       usage_type, usage_value, usage_details,
+       usage_type, unit, dimensions, usage_value, usage_details,
        COALESCE(created_at, TIMESTAMPTZ 'epoch') AS created_at,
        period_start, period_end, COALESCE(granularity, '')::text AS granularity
 FROM usage_surface
@@ -73,21 +75,22 @@ WITH usage_surface AS (
       AND period_end > sqlc.arg(window_start)::timestamptz
       AND (NOT sqlc.arg(filter_usage_types)::boolean OR usage_type = ANY(sqlc.arg(usage_types)::text[]))
 )
-SELECT usage_type, bucket_start::timestamptz AS period_start,
+SELECT bucketed.usage_type, bucket_start::timestamptz AS period_start,
        (bucket_start + CASE sqlc.arg(granularity)::text
            WHEN 'hourly' THEN INTERVAL '1 hour'
            WHEN 'daily' THEN INTERVAL '1 day'
            WHEN 'monthly' THEN INTERVAL '1 month'
        END)::timestamptz AS period_end,
        CASE
-           WHEN usage_type IN ('peak_bandwidth_mbps', 'max_viewers', 'total_streams', 'total_viewers', 'unique_users')
+           WHEN COALESCE(definition.aggregation, 'sum') = 'max'
                THEN MAX(usage_value)::double precision
-           ELSE GREATEST(SUM(usage_value), 0)::double precision
+           ELSE SUM(usage_value)::double precision
        END AS usage_value,
        sqlc.arg(granularity)::text AS granularity
 FROM bucketed
-GROUP BY usage_type, bucket_start
-ORDER BY bucket_start ASC, usage_type ASC;
+LEFT JOIN purser.meter_definitions definition ON definition.meter = bucketed.usage_type
+GROUP BY bucketed.usage_type, bucket_start, COALESCE(definition.aggregation, 'sum')
+ORDER BY bucket_start ASC, bucketed.usage_type ASC;
 
 -- name: ListTenantUsageTotals :many
 WITH usage_rows AS (
@@ -131,9 +134,9 @@ WITH dimensioned_rows AS (
       AND status = 'applied' AND value_kind = 'correction_delta'
 )
 SELECT row.cluster_id, row.usage_type, row.unit, row.dimensions,
-       (CASE WHEN definition.aggregation = 'max' THEN MAX(row.usage_value)
+       (CASE WHEN COALESCE(definition.aggregation, 'sum') = 'max' THEN MAX(row.usage_value)
              ELSE SUM(row.usage_value) END)::text AS quantity
 FROM dimensioned_rows row
-JOIN purser.meter_definitions definition
-  ON definition.meter = row.usage_type AND definition.active = TRUE
-GROUP BY row.cluster_id, row.usage_type, row.unit, row.dimensions, definition.aggregation;
+LEFT JOIN purser.meter_definitions definition ON definition.meter = row.usage_type
+GROUP BY row.cluster_id, row.usage_type, row.unit, row.dimensions,
+         COALESCE(definition.aggregation, 'sum');

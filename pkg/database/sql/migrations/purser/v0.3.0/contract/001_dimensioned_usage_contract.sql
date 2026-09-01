@@ -1,21 +1,14 @@
 -- Complete the v0.3 vocabulary switch only after the rollback window closes.
 
-UPDATE purser.tier_pricing_rules r
-SET model = 'dimensioned',
-    config = (r.config - 'codec_multipliers') || jsonb_build_object(
-        'rated_quantity_divisor', 60,
-        'rates', COALESCE((
-            SELECT jsonb_agg(jsonb_build_object(
-                'selectors', jsonb_build_object('output_codec', lower(CASE WHEN position(':' IN k.key) > 0 THEN split_part(k.key, ':', 2) ELSE k.key END)),
-                'unit_price', r.unit_price * (k.value::text)::numeric
-            ))
-            FROM jsonb_each(COALESCE(r.config->'codec_multipliers', '{}'::jsonb)) k
-        ), '[]'::jsonb)
-    )
+-- v0.2 codec multipliers cannot be mapped losslessly: backend-qualified keys
+-- collapse onto the same codec selector, and v3 processing uses separate input
+-- and rendition meters. Usage is waived during this beta cutover, so retire the
+-- legacy rules explicitly; operators can add deliberate v3 dimensioned pricing
+-- before usage charging is enabled.
+DELETE FROM purser.subscription_pricing_overrides
 WHERE model = 'codec_multiplier';
 
-UPDATE purser.subscription_pricing_overrides
-SET model = 'dimensioned'
+DELETE FROM purser.tier_pricing_rules
 WHERE model = 'codec_multiplier';
 
 ALTER TABLE purser.tier_pricing_rules

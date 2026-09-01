@@ -14,8 +14,10 @@ import (
 	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -84,24 +86,37 @@ type TimeRangeOpts struct {
 	EndTime   time.Time
 }
 
+type serviceAuthContextKey struct{}
+
+func withServiceAuth(ctx context.Context) context.Context {
+	return context.WithValue(ctx, serviceAuthContextKey{}, struct{}{})
+}
+
 // authInterceptor propagates authentication to gRPC metadata.
 // This reads user_id, tenant_id, and jwt_token from the Go context (set by Gateway middleware)
 // and adds them to outgoing gRPC metadata for downstream services.
 // If no user JWT is available, it falls back to the service token for service-to-service calls.
 func authInterceptor(serviceToken string) grpc.UnaryClientInterceptor {
 	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		forceServiceAuth := ctx.Value(serviceAuthContextKey{}) != nil
+		if forceServiceAuth && serviceToken == "" {
+			return status.Error(codes.Unauthenticated, "service token not configured")
+		}
+
 		// Extract user context from Go context and add to gRPC metadata
 		md := metadata.MD{}
 
-		if userID := ctxkeys.GetUserID(ctx); userID != "" {
-			md.Set("x-user-id", userID)
-		}
-		if tenantID := ctxkeys.GetTenantID(ctx); tenantID != "" {
-			md.Set("x-tenant-id", tenantID)
+		if !forceServiceAuth {
+			if userID := ctxkeys.GetUserID(ctx); userID != "" {
+				md.Set("x-user-id", userID)
+			}
+			if tenantID := ctxkeys.GetTenantID(ctx); tenantID != "" {
+				md.Set("x-tenant-id", tenantID)
+			}
 		}
 
 		// Use user's JWT from context if available, otherwise fall back to service token
-		if jwtToken := ctxkeys.GetJWTToken(ctx); jwtToken != "" {
+		if jwtToken := ctxkeys.GetJWTToken(ctx); jwtToken != "" && !forceServiceAuth {
 			md.Set("authorization", "Bearer "+jwtToken)
 		} else if serviceToken != "" {
 			md.Set("authorization", "Bearer "+serviceToken)
@@ -456,15 +471,13 @@ func (c *GRPCClient) GetNodeMetricsAggregated(ctx context.Context, tenantID stri
 }
 
 // GetLiveNodes returns current state of nodes from live_nodes (ReplacingMergeTree)
-// Supports multi-tenant access for subscribed clusters via relatedTenantIDs
+// relatedTenantIDs is retained in the client interface for rolling-upgrade
+// compatibility. New clients do not send the deprecated expansion field.
 func (c *GRPCClient) GetLiveNodes(ctx context.Context, tenantID string, nodeID *string, relatedTenantIDs []string) (*periscopepb.GetLiveNodesResponse, error) {
 	if err := requireTenantID(tenantID); err != nil {
 		return nil, err
 	}
-	req := &periscopepb.GetLiveNodesRequest{
-		TenantId:         tenantID,
-		RelatedTenantIds: relatedTenantIDs,
-	}
+	req := &periscopepb.GetLiveNodesRequest{TenantId: tenantID}
 	if nodeID != nil {
 		req.NodeId = nodeID
 	}
@@ -481,10 +494,9 @@ func (c *GRPCClient) GetRoutingEvents(ctx context.Context, tenantID string, stre
 		return nil, err
 	}
 	req := &periscopepb.GetRoutingEventsRequest{
-		TenantId:         tenantID,
-		TimeRange:        buildTimeRange(timeRange),
-		Pagination:       buildCursorPagination(opts),
-		RelatedTenantIds: relatedTenantIDs,
+		TenantId:   tenantID,
+		TimeRange:  buildTimeRange(timeRange),
+		Pagination: buildCursorPagination(opts),
 	}
 	if streamID != nil {
 		req.StreamId = streamID
@@ -1077,6 +1089,15 @@ func (c *GRPCClient) GetClusterQoeOps(ctx context.Context, tenantID string, clus
 		TimeRange:  buildTimeRange(timeRange),
 	}
 	return c.aggregated.GetClusterQoeOps(ctx, req)
+}
+
+func (c *GRPCClient) GetClusterWorkload(ctx context.Context, tenantID string, clusterIDs []string, timeRange *TimeRangeOpts) (*periscopepb.GetClusterWorkloadResponse, error) {
+	if err := requireTenantID(tenantID); err != nil {
+		return nil, err
+	}
+	return c.aggregated.GetClusterWorkload(withServiceAuth(ctx), &periscopepb.GetClusterWorkloadRequest{
+		TenantId: tenantID, ClusterIds: clusterIDs, TimeRange: buildTimeRange(timeRange),
+	})
 }
 
 // GetVodRetention returns the per-bucket VOD retention curve for one artifact.

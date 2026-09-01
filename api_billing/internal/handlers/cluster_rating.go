@@ -95,7 +95,11 @@ func (jm *JobManager) collectInvoiceUsage(ctx context.Context, tenantID string, 
 }
 
 func (jm *JobManager) collectInvoiceDimensionedUsage(ctx context.Context, tenantID string, periodStart, periodEnd time.Time) (map[string][]rating.DimensionedQuantity, error) {
-	rows, err := purserdb.New(jm.db).CollectInvoiceDimensionedUsage(ctx, purserdb.CollectInvoiceDimensionedUsageParams{
+	return collectInvoiceDimensionedUsage(ctx, purserdb.New(jm.db), tenantID, periodStart, periodEnd)
+}
+
+func collectInvoiceDimensionedUsage(ctx context.Context, queries *purserdb.Queries, tenantID string, periodStart, periodEnd time.Time) (map[string][]rating.DimensionedQuantity, error) {
+	rows, err := queries.CollectInvoiceDimensionedUsage(ctx, purserdb.CollectInvoiceDimensionedUsageParams{
 		TenantID:    tenantID,
 		WindowStart: periodStart,
 		WindowEnd:   periodEnd,

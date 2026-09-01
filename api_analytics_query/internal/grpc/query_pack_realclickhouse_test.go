@@ -92,7 +92,7 @@ func fillQueryPackMessage(message protoreflect.Message, variant int) {
 		field := fields.Get(i)
 		name := string(field.Name())
 		if field.IsList() {
-			if field.Kind() == protoreflect.StringKind && (name == "stream_ids" || name == "tenant_ids" || name == "related_tenant_ids" || name == "cluster_ids" || name == "serving_cluster_ids") {
+			if field.Kind() == protoreflect.StringKind && (name == "stream_ids" || name == "tenant_ids" || name == "cluster_ids" || name == "serving_cluster_ids") {
 				value := queryPackTenantID
 				if name == "stream_ids" {
 					if omitStream {

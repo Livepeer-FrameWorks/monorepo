@@ -227,6 +227,17 @@ Settlement lag (`targetEnd = now - settlement_lag`, default 2 min) absorbs in-Ka
 
 The component that executes the cursor walk is the standalone regional `periscope-metering` binary (`api_analytics_query/cmd/periscope-metering`). It is deployed beside one logical ClickHouse source; Periscope Query has no scheduler or billing dependency. Multiple worker replicas share a source ID and use PostgreSQL fenced leases, while different regional ClickHouse deployments use different source IDs.
 
+The source ID identifies ownership of a logical billing dataset. It is stable
+across process/host/replica changes and physical ClickHouse migration, and it
+is not derived from `cluster_id` or region. The current centralized deployment
+uses `periscope-default` for all cells. `METERING_SOURCE_REGION=eu-west` is
+bookkeeping for source ownership and audit; report-level work attribution still
+comes from `cluster_id`. The persisted source-to-region mapping is
+authoritative, so reusing an ID with a different region fails the worker.
+Source activation/deactivation and dataset splits must be coordinated with
+Purser completeness; config-only renames and overlapping source ownership are
+invalid.
+
 1. **Tenant set.** Active tenants are discovered from the canonical billing surfaces themselves (finalized-fact tables, storage snapshots, canonical ledgers, projection divergences over the last 7 days) — sourcing from these tables, not event logs, guarantees any tenant the rated meters can see is a tenant the cursor walks. That set is unioned with every tenant that already has a cursor row, so a tenant that goes quiet still gets its trailing slices closed.
 2. **Cursor.** Each tenant has one row in `periscope.billing_cursors` — a **Postgres** (Yugabyte) table, not ClickHouse. `periscope.metering_sources.activated_at` is the no-history-replay boundary. A first-seen tenant starts at the later of that boundary and its earliest canonical fact. The walk target is `targetEnd = now − 2 min settlement lag`, truncated to the 5-minute grid.
 3. **Slices.** The walk emits exact, half-open, 5-minute slices from the cursor to the target — a catch-up after downtime produces many 5-minute records, never one wide record. Per slice the summarizer runs first-projection/ingestion cursor queries against viewer, stream, processing, and API facts plus the closed storage ledger. Source-time 5-minute ledgers remain dashboard projections and are not used as delivery-time cursors. The summarizer ships the resulting `UsageSummary` rows to Kafka `billing.usage_reports` and only then advances the cursor. Empty slices still advance it; a mid-walk failure stops advancement so nothing is skipped, and the next tick resumes from the same slice.

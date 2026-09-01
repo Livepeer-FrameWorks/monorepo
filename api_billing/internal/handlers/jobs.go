@@ -5,11 +5,13 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -45,6 +47,10 @@ type canonicalUsageDelta struct {
 	usageDetails models.JSONB
 }
 
+const maxPersistedUsageQuantity = 100_000_000_000_000
+
+var meteringSourceIdentityPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
+
 func normalizedUsageDimensions(dimensions models.JSONB) models.JSONB {
 	if dimensions == nil {
 		return models.JSONB{}
@@ -52,11 +58,19 @@ func normalizedUsageDimensions(dimensions models.JSONB) models.JSONB {
 	return dimensions
 }
 
+func truncateRunes(value string, maximum int) string {
+	runes := []rune(value)
+	if len(runes) <= maximum {
+		return value
+	}
+	return string(runes[:maximum])
+}
+
 func (jm *JobManager) quarantineUsageReport(ctx context.Context, msg kafka.Message, summary *models.UsageSummary, reason string) error {
 	reportID, sourceID, tenantID := "", "", any(nil)
 	if summary != nil {
-		reportID = summary.ReportID
-		sourceID = summary.SourceID
+		reportID = truncateRunes(summary.ReportID, 64)
+		sourceID = truncateRunes(summary.SourceID, 128)
 		if parsed, err := uuid.Parse(summary.TenantID); err == nil {
 			tenantID = parsed
 		}
@@ -77,7 +91,7 @@ func (jm *JobManager) quarantineUsageReport(ctx context.Context, msg kafka.Messa
 		tenant = sql.NullString{String: id.String(), Valid: true}
 	}
 	return purserdb.New(jm.db).InsertUsageReportQuarantine(ctx, purserdb.InsertUsageReportQuarantineParams{
-		ReportID: reportID, SourceID: sourceID, TenantID: tenant, RejectedReason: reason,
+		ReportID: reportID, SourceID: sourceID, TenantID: tenant, RejectedReason: truncateRunes(reason, 100),
 		SourceTopic: msg.Topic, SourcePartition: sql.NullInt32{Int32: msg.Partition, Valid: true},
 		SourceOffset: sql.NullInt64{Int64: msg.Offset, Valid: true}, RawPayload: raw,
 	})
@@ -87,8 +101,14 @@ func validateUsageSummaryEnvelope(summary models.UsageSummary) error {
 	if len(summary.ReportID) != 64 {
 		return errors.New("invalid_report_id")
 	}
-	if summary.SourceID == "" {
-		return errors.New("missing_source_id")
+	if _, err := hex.DecodeString(summary.ReportID); err != nil {
+		return errors.New("invalid_report_id")
+	}
+	if len(summary.SourceID) == 0 || len(summary.SourceID) > 128 || !meteringSourceIdentityPattern.MatchString(summary.SourceID) {
+		return errors.New("invalid_source_id")
+	}
+	if summary.SourceRegion != "" && (len(summary.SourceRegion) > 64 || !meteringSourceIdentityPattern.MatchString(summary.SourceRegion)) {
+		return errors.New("invalid_source_region")
 	}
 	if summary.ReportKind != "finalized" && summary.ReportKind != "reservation" && summary.ReportKind != "window_complete" {
 		return errors.New("invalid_report_kind")
@@ -96,11 +116,14 @@ func validateUsageSummaryEnvelope(summary models.UsageSummary) error {
 	if summary.Sequence == 0 {
 		return errors.New("missing_sequence")
 	}
+	if summary.Sequence > math.MaxInt64 {
+		return errors.New("invalid_sequence")
+	}
 	if _, err := uuid.Parse(summary.TenantID); err != nil {
 		return errors.New("invalid_tenant_id")
 	}
-	if summary.ClusterID == "" {
-		return errors.New("missing_cluster_id")
+	if len(summary.ClusterID) == 0 || len(summary.ClusterID) > 100 {
+		return errors.New("invalid_cluster_id")
 	}
 	if _, _, _, err := parseUsageSummaryPeriod(summary); err != nil {
 		return errors.New("invalid_period")
@@ -111,39 +134,122 @@ func validateUsageSummaryEnvelope(summary models.UsageSummary) error {
 	if summary.ReportKind == "window_complete" && (len(summary.Meters) != 0 || len(summary.ProviderUsage) != 0 || len(summary.UsageAdjustments) != 0) {
 		return errors.New("window_complete_contains_usage")
 	}
+	if summary.ReportKind == "window_complete" && strings.TrimSpace(summary.SourceRegion) == "" {
+		return errors.New("window_complete_missing_source_region")
+	}
 	return nil
 }
 
 func (jm *JobManager) validateUsageSummaryMeters(ctx context.Context, summary models.UsageSummary) error {
-	for _, meter := range summary.Meters {
-		if !rating.ValidMeter(rating.Meter(meter.Meter)) {
-			return fmt.Errorf("invalid_meter:%s", meter.Meter)
+	type meterDefinition struct {
+		unit              string
+		allowedDimensions map[string]struct{}
+	}
+	definitions := make(map[string]meterDefinition)
+	validateContract := func(meter, unit string, dimensions models.JSONB, allowEmptyUnit bool) error {
+		if !rating.ValidMeter(rating.Meter(meter)) {
+			return fmt.Errorf("invalid_meter:%s", meter)
 		}
-		if math.IsNaN(meter.Quantity) || math.IsInf(meter.Quantity, 0) || meter.Quantity < 0 {
-			return fmt.Errorf("invalid_quantity:%s", meter.Meter)
-		}
-		definition, err := purserdb.New(jm.db).GetActiveMeterDefinition(ctx, meter.Meter)
-		if err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return fmt.Errorf("unknown_meter:%s", meter.Meter)
+		definition, ok := definitions[meter]
+		if !ok {
+			row, err := purserdb.New(jm.db).GetActiveMeterDefinition(ctx, meter)
+			if err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return fmt.Errorf("unknown_meter:%s", meter)
+				}
+				return fmt.Errorf("load_meter_definition:%w", err)
 			}
-			return fmt.Errorf("load_meter_definition:%w", err)
+			definition = meterDefinition{unit: row.Unit, allowedDimensions: make(map[string]struct{}, len(row.AllowedDimensions))}
+			for _, key := range row.AllowedDimensions {
+				definition.allowedDimensions[key] = struct{}{}
+			}
+			definitions[meter] = definition
 		}
-		if meter.Unit != definition.Unit {
-			return fmt.Errorf("unit_mismatch:%s", meter.Meter)
+		if (!allowEmptyUnit || unit != "") && unit != definition.unit {
+			return fmt.Errorf("unit_mismatch:%s", meter)
 		}
-		allowedSet := make(map[string]struct{}, len(definition.AllowedDimensions))
-		for _, key := range definition.AllowedDimensions {
-			allowedSet[key] = struct{}{}
-		}
-		for key, value := range meter.Dimensions {
-			if _, ok := allowedSet[key]; !ok {
-				return fmt.Errorf("dimension_not_allowed:%s:%s", meter.Meter, key)
+		for key, value := range dimensions {
+			if _, ok := definition.allowedDimensions[key]; !ok {
+				return fmt.Errorf("dimension_not_allowed:%s:%s", meter, key)
 			}
 			if _, ok := value.(string); !ok {
-				return fmt.Errorf("dimension_not_string:%s:%s", meter.Meter, key)
+				return fmt.Errorf("dimension_not_string:%s:%s", meter, key)
 			}
 		}
+		return nil
+	}
+	validQuantity := func(quantity float64, allowNegative bool) bool {
+		return !math.IsNaN(quantity) && !math.IsInf(quantity, 0) && math.Abs(quantity) < maxPersistedUsageQuantity && (allowNegative || quantity >= 0)
+	}
+	dimensionKey := func(dimensions models.JSONB) (string, error) {
+		encoded, err := json.Marshal(normalizedUsageDimensions(dimensions))
+		if err != nil {
+			return "", err
+		}
+		return usageDimensionKey(encoded), nil
+	}
+
+	canonicalKeys := make(map[string]struct{}, len(summary.Meters))
+	for _, meter := range summary.Meters {
+		if !validQuantity(meter.Quantity, false) {
+			return fmt.Errorf("invalid_quantity:%s", meter.Meter)
+		}
+		if err := validateContract(meter.Meter, meter.Unit, meter.Dimensions, false); err != nil {
+			return err
+		}
+		key, err := dimensionKey(meter.Dimensions)
+		if err != nil {
+			return fmt.Errorf("invalid_dimensions:%s", meter.Meter)
+		}
+		key = meter.Meter + ":" + key
+		if _, duplicate := canonicalKeys[key]; duplicate {
+			return fmt.Errorf("duplicate_meter:%s", meter.Meter)
+		}
+		canonicalKeys[key] = struct{}{}
+	}
+	providerKeys := make(map[string]struct{}, len(summary.ProviderUsage))
+	for _, provider := range summary.ProviderUsage {
+		if len(provider.ProviderTenantID) > 100 || len(provider.ProviderClusterID) > 100 {
+			return errors.New("invalid_provider_identity")
+		}
+		if !validQuantity(provider.Meter.Quantity, false) {
+			return fmt.Errorf("invalid_provider_quantity:%s", provider.Meter.Meter)
+		}
+		if err := validateContract(provider.Meter.Meter, provider.Meter.Unit, provider.Meter.Dimensions, false); err != nil {
+			return err
+		}
+		key, err := dimensionKey(provider.Meter.Dimensions)
+		if err != nil {
+			return fmt.Errorf("invalid_provider_dimensions:%s", provider.Meter.Meter)
+		}
+		key = provider.ProviderTenantID + ":" + provider.ProviderClusterID + ":" + provider.Meter.Meter + ":" + key
+		if _, duplicate := providerKeys[key]; duplicate {
+			return fmt.Errorf("duplicate_provider_meter:%s", provider.Meter.Meter)
+		}
+		providerKeys[key] = struct{}{}
+	}
+	adjustmentKeys := make(map[string]struct{}, len(summary.UsageAdjustments))
+	for _, adjustment := range summary.UsageAdjustments {
+		if len(adjustment.SourceSystem) == 0 || len(adjustment.SourceSystem) > 64 || len(adjustment.SourceID) == 0 || len(adjustment.SourceID) > 255 {
+			return errors.New("invalid_adjustment_source")
+		}
+		if len(adjustment.ClusterID) > 100 || len(adjustment.Reason) > 255 {
+			return errors.New("invalid_adjustment_metadata")
+		}
+		if !validQuantity(adjustment.DeltaValue, true) {
+			return fmt.Errorf("invalid_adjustment_quantity:%s", adjustment.UsageType)
+		}
+		if rejection := validateCanonicalUsageWindow(adjustment.PeriodStart.UTC(), adjustment.PeriodEnd.UTC(), "minute_5", "delta"); rejection != "" {
+			return fmt.Errorf("invalid_adjustment_period:%s", rejection)
+		}
+		if err := validateContract(adjustment.UsageType, adjustment.Unit, adjustment.Dimensions, true); err != nil {
+			return err
+		}
+		key := adjustment.SourceSystem + ":" + adjustment.SourceID
+		if _, duplicate := adjustmentKeys[key]; duplicate {
+			return errors.New("duplicate_adjustment")
+		}
+		adjustmentKeys[key] = struct{}{}
 	}
 	return nil
 }
@@ -498,8 +604,8 @@ func (jm *JobManager) Stop() {
 
 // handleUsageReport consumes billing usage reports from Kafka
 func (jm *JobManager) handleUsageReport(ctx context.Context, msg kafka.Message) error {
-	var summary models.UsageSummary
-	if err := json.Unmarshal(msg.Value, &summary); err != nil {
+	summary, ingestSource, err := decodeUsageSummary(msg.Value)
+	if err != nil {
 		jm.logger.WithError(err).WithFields(logging.Fields{
 			"topic":     msg.Topic,
 			"partition": msg.Partition,
@@ -510,14 +616,14 @@ func (jm *JobManager) handleUsageReport(ctx context.Context, msg kafka.Message) 
 		}
 		return nil
 	}
-	if err := validateUsageSummaryEnvelope(summary); err != nil {
-		if quarantineErr := jm.quarantineUsageReport(ctx, msg, &summary, err.Error()); quarantineErr != nil {
+	if envelopeErr := validateUsageSummaryEnvelope(summary); envelopeErr != nil {
+		if quarantineErr := jm.quarantineUsageReport(ctx, msg, &summary, envelopeErr.Error()); quarantineErr != nil {
 			return fmt.Errorf("quarantine invalid usage report: %w", quarantineErr)
 		}
 		return nil
 	}
-	if err := jm.validateUsageSummaryMeters(ctx, summary); err != nil {
-		if quarantineErr := jm.quarantineUsageReport(ctx, msg, &summary, err.Error()); quarantineErr != nil {
+	if meterErr := jm.validateUsageSummaryMeters(ctx, summary); meterErr != nil {
+		if quarantineErr := jm.quarantineUsageReport(ctx, msg, &summary, meterErr.Error()); quarantineErr != nil {
 			return fmt.Errorf("quarantine invalid usage meters: %w", quarantineErr)
 		}
 		return nil
@@ -537,7 +643,7 @@ func (jm *JobManager) handleUsageReport(ctx context.Context, msg kafka.Message) 
 		return jm.processUsageReservation(ctx, summary)
 	}
 
-	acceptedUsage, err := jm.processUsageSummary(ctx, summary, "kafka")
+	acceptedUsage, err := jm.processUsageSummary(ctx, summary, ingestSource)
 	if err != nil {
 		jm.logger.WithError(err).WithFields(logging.Fields{
 			"tenant_id": summary.TenantID,
@@ -601,10 +707,14 @@ func (jm *JobManager) processWindowCompletion(ctx context.Context, summary model
 		return err
 	}
 	queries := purserdb.New(tx)
-	if err := queries.UpsertMeteringSource(ctx, purserdb.UpsertMeteringSourceParams{
+	persistedRegion, err := queries.UpsertMeteringSource(ctx, purserdb.UpsertMeteringSourceParams{
 		SourceID: summary.SourceID, Region: summary.SourceRegion, ActiveFrom: periodStart,
-	}); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("register metering source: %w", err)
+	}
+	if strings.TrimSpace(persistedRegion) != strings.TrimSpace(summary.SourceRegion) {
+		return fmt.Errorf("metering source %q is registered in region %q, report says %q", summary.SourceID, persistedRegion, summary.SourceRegion)
 	}
 	if err := queries.InsertUsageReportReceipt(ctx, purserdb.InsertUsageReportReceiptParams{
 		ReportID: summary.ReportID, ReportKind: summary.ReportKind, SourceID: summary.SourceID,
@@ -770,6 +880,14 @@ func usageSummaryReferenceID(summary models.UsageSummary) uuid.UUID {
 	return uuid.NewSHA1(uuid.NameSpaceOID, []byte(summary.ReportID))
 }
 
+type prepaidUsageSettlementResult struct {
+	previousBalanceCents   int64
+	newBalanceCents        int64
+	applied                bool
+	marginalMicro          int64
+	desiredCumulativeMicro int64
+}
+
 // processPrepaidUsage rates the tenant's cumulative billing-period usage and
 // deducts only the marginal change from prepaid balance. Applying included
 // allowances to each five-minute report would renew the allowance every five
@@ -813,57 +931,101 @@ func (jm *JobManager) processPrepaidUsage(ctx context.Context, summary models.Us
 	if err != nil {
 		return err
 	}
-	perCluster, err := jm.collectInvoiceDimensionedUsage(ctx, summary.TenantID, billingPeriodStart, billingPeriodEnd)
-	if err != nil {
-		return fmt.Errorf("collect cumulative prepaid usage: %w", err)
-	}
-	desiredAmount, err := jm.rateCumulativePrepaidUsage(ctx, summary.TenantID, billingPeriodStart, billingPeriodEnd, tier, perCluster)
+	referenceID := usageSummaryReferenceID(summary)
+	periodLabel := summary.PeriodStart.UTC().Format(time.RFC3339) + "/" + summary.PeriodEnd.UTC().Format(time.RFC3339)
+	result := prepaidUsageSettlementResult{}
+	settledByPeer := false
+	err = database.WithRetryablePostgresTx(ctx, jm.db, nil, func(tx *sql.Tx) error {
+		// WithRetryablePostgresTx can invoke this closure again after either a
+		// body or commit failure. Never carry an aborted attempt's outcome into
+		// the successful attempt's post-commit threshold handling.
+		result = prepaidUsageSettlementResult{}
+		settledByPeer = false
+		queries := purserdb.New(tx)
+		if insertErr := queries.EnsurePrepaidBalance(ctx, purserdb.EnsurePrepaidBalanceParams{
+			TenantID: summary.TenantID, Currency: currency,
+		}); insertErr != nil {
+			return fmt.Errorf("ensure prepaid balance: %w", insertErr)
+		}
+		lockedBalance, lockErr := queries.LockPrepaidBalance(ctx, purserdb.LockPrepaidBalanceParams{
+			TenantID: summary.TenantID, Currency: currency,
+		})
+		if lockErr != nil {
+			return fmt.Errorf("lock prepaid balance: %w", lockErr)
+		}
+
+		alreadySettled, existsErr := queries.PrepaidUsageSettlementExists(ctx, summary.ReportID)
+		if existsErr != nil {
+			return fmt.Errorf("recheck prepaid usage settlement: %w", existsErr)
+		}
+		if alreadySettled {
+			settledByPeer = true
+			return nil
+		}
+
+		perCluster, collectErr := collectInvoiceDimensionedUsage(ctx, queries, summary.TenantID, billingPeriodStart, billingPeriodEnd)
+		if collectErr != nil {
+			return fmt.Errorf("collect cumulative prepaid usage: %w", collectErr)
+		}
+		desiredAmount, rateErr := jm.rateCumulativePrepaidUsage(ctx, summary.TenantID, billingPeriodStart, billingPeriodEnd, tier, perCluster)
+		if rateErr != nil {
+			return rateErr
+		}
+		result.desiredCumulativeMicro = desiredAmount.Mul(decimal.NewFromInt(1_000_000)).Round(0).IntPart()
+
+		previouslySettledMicro, sumErr := queries.SumPrepaidUsageSettlements(ctx, purserdb.SumPrepaidUsageSettlementsParams{
+			TenantID: summary.TenantID, BillingPeriodStart: billingPeriodStart, BillingPeriodEnd: billingPeriodEnd,
+		})
+		if sumErr != nil {
+			return fmt.Errorf("sum prior prepaid usage settlements: %w", sumErr)
+		}
+		result.marginalMicro = result.desiredCumulativeMicro - previouslySettledMicro
+		result.previousBalanceCents = lockedBalance.BalanceCents
+		result.newBalanceCents = lockedBalance.BalanceCents
+		if result.marginalMicro != 0 {
+			var applyErr error
+			result.previousBalanceCents, result.newBalanceCents, result.applied, applyErr = applyPrepaidBalanceForUsageMicroLocked(
+				ctx, queries, summary.TenantID, result.marginalMicro, "Usage: "+periodLabel, referenceID,
+				lockedBalance.BalanceCents, lockedBalance.BalanceRemainderMicro,
+			)
+			if applyErr != nil {
+				return fmt.Errorf("apply prepaid usage amount: %w", applyErr)
+			}
+			if !result.applied {
+				return fmt.Errorf("usage balance transaction %s exists without settlement %s", referenceID, summary.ReportID)
+			}
+		}
+
+		rows, insertErr := queries.InsertPrepaidUsageSettlement(ctx, purserdb.InsertPrepaidUsageSettlementParams{
+			ReportID: summary.ReportID, TenantID: summary.TenantID,
+			BillingPeriodStart: billingPeriodStart, BillingPeriodEnd: billingPeriodEnd,
+			AmountMicro: result.marginalMicro, CumulativeAmountMicro: result.desiredCumulativeMicro,
+			Currency: currency,
+		})
+		if insertErr != nil {
+			return fmt.Errorf("record prepaid usage settlement: %w", insertErr)
+		}
+		if rows != 1 {
+			return fmt.Errorf("prepaid usage settlement %s was not inserted", summary.ReportID)
+		}
+		return nil
+	})
 	if err != nil {
 		return err
 	}
-
-	microPerUnit := decimal.NewFromInt(1_000_000)
-	desiredCumulativeMicro := desiredAmount.Mul(microPerUnit).Round(0).IntPart()
-	previouslySettledMicro, queryErr := purserdb.New(jm.db).SumPrepaidUsageSettlements(ctx, purserdb.SumPrepaidUsageSettlementsParams{
-		TenantID:           summary.TenantID,
-		BillingPeriodStart: billingPeriodStart,
-		BillingPeriodEnd:   billingPeriodEnd,
-	})
-	if queryErr != nil {
-		return fmt.Errorf("sum prior prepaid usage settlements: %w", queryErr)
-	}
-	marginalMicro := desiredCumulativeMicro - previouslySettledMicro
-
-	referenceID := usageSummaryReferenceID(summary)
-	periodLabel := summary.PeriodStart.UTC().Format(time.RFC3339) + "/" + summary.PeriodEnd.UTC().Format(time.RFC3339)
-	previousBalance, newBalanceCents, applied := int64(0), int64(0), false
-	if marginalMicro != 0 {
-		previousBalance, newBalanceCents, applied, err = jm.deductPrepaidBalanceForUsageMicro(ctx, summary.TenantID, marginalMicro, "Usage: "+periodLabel, referenceID)
-		if err != nil {
-			return fmt.Errorf("failed to apply prepaid usage amount: %w", err)
-		}
-	}
-	if err := purserdb.New(jm.db).InsertPrepaidUsageSettlement(ctx, purserdb.InsertPrepaidUsageSettlementParams{
-		ReportID:              summary.ReportID,
-		TenantID:              summary.TenantID,
-		BillingPeriodStart:    billingPeriodStart,
-		BillingPeriodEnd:      billingPeriodEnd,
-		AmountMicro:           marginalMicro,
-		CumulativeAmountMicro: desiredCumulativeMicro,
-		Currency:              currency,
-	}); err != nil {
-		return fmt.Errorf("record prepaid usage settlement: %w", err)
+	if settledByPeer {
+		return nil
 	}
 
 	jm.logger.WithFields(logging.Fields{
 		"tenant_id":               summary.TenantID,
 		"period":                  periodLabel,
-		"marginal_micro":          marginalMicro,
-		"cumulative_amount_micro": desiredCumulativeMicro,
+		"marginal_micro":          result.marginalMicro,
+		"cumulative_amount_micro": result.desiredCumulativeMicro,
 	}).Info("Settled cumulative prepaid usage")
 
-	if applied && jm.thresholdEnforcer != nil {
-		if err := jm.thresholdEnforcer.EnforcePrepaidThresholds(ctx, summary.TenantID, previousBalance, newBalanceCents); err != nil {
+	if result.applied && jm.thresholdEnforcer != nil {
+		if err := jm.thresholdEnforcer.EnforcePrepaidThresholds(ctx, summary.TenantID, result.previousBalanceCents, result.newBalanceCents); err != nil {
 			jm.logger.WithError(err).WithField("tenant_id", summary.TenantID).Warn("Failed to enforce prepaid thresholds")
 		}
 	}
@@ -1063,14 +1225,14 @@ func (jm *JobManager) applyInvoicePrepaidCreditTx(ctx context.Context, tx *sql.T
 	return applied + deltaApplied, nil
 }
 
-// microPerCent is the residual unit: 10^-8 of a currency unit, i.e. 10^4
-// micro-cents per cent. Sub-cent residuals accumulate here so a stream of
+// microPerCent converts micro currency units (10^-6) to cents, so there are
+// 10^4 micro units per cent. Sub-cent residuals accumulate here so a stream of
 // per-event deductions under €0.01 each eventually crosses a whole-cent
 // boundary instead of being truncated to zero.
 const microPerCent = int64(10_000)
 
 // deductPrepaidBalanceForUsageMicro applies a signed prepaid usage amount in
-// micro-cents (10^-8 of a currency unit). Positive amounts debit balance;
+// micro currency units (10^-6 of a currency unit). Positive amounts debit balance;
 // negative correction amounts credit balance. The fractional residual is
 // carried in prepaid_balances.balance_remainder_micro across events so
 // sub-cent usage and credits do not structurally leak revenue. Returns
@@ -1103,9 +1265,28 @@ func (jm *JobManager) deductPrepaidBalanceForUsageMicro(ctx context.Context, ten
 	if scanErr != nil {
 		return 0, 0, false, scanErr
 	}
-	currentBalance := lockedBalance.BalanceCents
-	currentRemainder := lockedBalance.BalanceRemainderMicro
+	previousBalance, newBalance, applied, err := applyPrepaidBalanceForUsageMicroLocked(
+		ctx, queries, tenantID, amountMicro, description, referenceID,
+		lockedBalance.BalanceCents, lockedBalance.BalanceRemainderMicro,
+	)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	if commitErr := tx.Commit(); commitErr != nil {
+		return 0, 0, false, commitErr
+	}
+	return previousBalance, newBalance, applied, nil
+}
 
+func applyPrepaidBalanceForUsageMicroLocked(
+	ctx context.Context,
+	queries *purserdb.Queries,
+	tenantID string,
+	amountMicro int64,
+	description string,
+	referenceID uuid.UUID,
+	currentBalance, currentRemainder int64,
+) (int64, int64, bool, error) {
 	// Accumulate the residual; commit whole cents, carry the rest. Go integer
 	// division truncates toward zero, so normalize negative residuals to keep
 	// balance_remainder_micro in [0, microPerCent).
@@ -1129,9 +1310,6 @@ func (jm *JobManager) deductPrepaidBalanceForUsageMicro(ctx context.Context, ten
 		return 0, 0, false, err
 	}
 	if rowsAffected == 0 {
-		if commitErr := tx.Commit(); commitErr != nil {
-			return 0, 0, false, commitErr
-		}
 		return currentBalance, currentBalance, false, nil
 	}
 
@@ -1139,14 +1317,11 @@ func (jm *JobManager) deductPrepaidBalanceForUsageMicro(ctx context.Context, ten
 		BalanceCents:          newBalance,
 		BalanceRemainderMicro: newRemainder,
 		TenantID:              tenantID,
-		Currency:              currency,
+		Currency:              billing.DefaultCurrency(),
 	}); updErr != nil {
 		return 0, 0, false, updErr
 	}
 
-	if commitErr := tx.Commit(); commitErr != nil {
-		return 0, 0, false, commitErr
-	}
 	return currentBalance, newBalance, true, nil
 }
 
@@ -1376,9 +1551,11 @@ func (jm *JobManager) generateMonthlyInvoices(ctx context.Context) {
 		if periodEnd.After(now) {
 			continue // Billing period not closed yet
 		}
-		if completenessErr := jm.assertMeteringComplete(ctx, tenantID, periodStart, periodEnd); completenessErr != nil {
-			jm.logger.WithError(completenessErr).WithField("tenant_id", tenantID).Error("Metering incomplete; invoice finalization blocked")
-			continue
+		if meteringCompletenessRequired(meteringEnabled) {
+			if completenessErr := jm.assertMeteringComplete(ctx, tenantID, periodStart, periodEnd); completenessErr != nil {
+				jm.logger.WithError(completenessErr).WithField("tenant_id", tenantID).Error("Metering incomplete; invoice finalization blocked")
+				continue
+			}
 		}
 
 		// Check if a terminally-finalized invoice already exists for the
@@ -1762,6 +1939,10 @@ func finalizedInvoiceStatus(total decimal.Decimal) string {
 		return "paid"
 	}
 	return "pending"
+}
+
+func meteringCompletenessRequired(meteringEnabled bool) bool {
+	return meteringEnabled && !config.WaiveUsageChargesEnabled()
 }
 
 func (jm *JobManager) assertMeteringComplete(ctx context.Context, tenantID string, periodStart, periodEnd time.Time) error {
@@ -2670,8 +2851,7 @@ func (jm *JobManager) processUsageSummary(ctx context.Context, summary models.Us
 		if marshalErr != nil {
 			return nil, fmt.Errorf("marshal dimensions for %s: %w", usageType, marshalErr)
 		}
-		dimensionHash := sha256.Sum256(dimensionJSON)
-		dimensionKey := fmt.Sprintf("%x", dimensionHash[:])
+		dimensionKey := usageDimensionKey(dimensionJSON)
 		usageDetails := models.JSONB{
 			"source":        source,
 			"source_id":     summary.SourceID,
@@ -2721,6 +2901,24 @@ func (jm *JobManager) processUsageSummary(ctx context.Context, summary models.Us
 			}
 			continue
 		}
+		if source == legacyKafkaSource {
+			adopted, legacyErr := purserdb.New(jm.db).AdoptLegacyUsageRecord(ctx, purserdb.AdoptLegacyUsageRecordParams{
+				Unit: meter.Unit, ReportID: summary.ReportID, UsageDetails: json.RawMessage(usageDetailsJSON),
+				TenantID: summary.TenantID, ClusterID: summary.ClusterID, UsageType: usageType,
+				PeriodStart: sql.NullTime{Time: periodStart, Valid: true},
+				PeriodEnd:   sql.NullTime{Time: periodEnd, Valid: true},
+			})
+			if legacyErr != nil {
+				return nil, fmt.Errorf("adopt migrated legacy usage %s: %w", usageType, legacyErr)
+			}
+			if adopted > 0 {
+				acceptedUsage = append(acceptedUsage, canonicalUsageDelta{
+					clusterID: summary.ClusterID, usageType: usageType, unit: meter.Unit,
+					dimensions: dimensions, usageValue: usageValue, usageDetails: usageDetails,
+				})
+				continue
+			}
+		}
 
 		err = purserdb.New(jm.db).UpsertCanonicalUsageRecord(ctx, purserdb.UpsertCanonicalUsageRecordParams{
 			TenantID:     summary.TenantID,
@@ -2767,6 +2965,11 @@ func (jm *JobManager) processUsageSummary(ctx context.Context, summary models.Us
 	return acceptedUsage, nil
 }
 
+func usageDimensionKey(dimensionJSON []byte) string {
+	dimensionHash := sha256.Sum256(dimensionJSON)
+	return fmt.Sprintf("%x", dimensionHash[:])
+}
+
 func (jm *JobManager) persistProviderUsage(ctx context.Context, summary models.UsageSummary, periodStart, periodEnd time.Time, granularity, source string) error {
 	if rejection := validateCanonicalUsageWindow(periodStart, periodEnd, granularity, "delta"); rejection != "" {
 		return fmt.Errorf("reject storage provider usage for non-canonical period: %s", rejection)
@@ -2796,6 +2999,20 @@ func (jm *JobManager) persistProviderUsage(ctx context.Context, summary models.U
 		detailsJSON, marshalErr := json.Marshal(details)
 		if marshalErr != nil {
 			return fmt.Errorf("marshal provider usage details: %w", marshalErr)
+		}
+		if source == legacyKafkaSource {
+			err = purserdb.New(jm.db).UpsertLegacyProviderUsageRecord(ctx, purserdb.UpsertLegacyProviderUsageRecordParams{
+				UsageTenantID: summary.TenantID, WorkClusterID: summary.ClusterID,
+				ProviderTenantID: rec.ProviderTenantID, ProviderClusterID: rec.ProviderClusterID,
+				UsageType: rec.Meter.Meter, Unit: rec.Meter.Unit, UsageValue: rec.Meter.Quantity,
+				Dimensions: json.RawMessage(dimensionJSON), ReportID: summary.ReportID,
+				PeriodStart: periodStart, PeriodEnd: periodEnd, Source: source,
+				UsageDetails: json.RawMessage(detailsJSON),
+			})
+			if err != nil {
+				return fmt.Errorf("upsert legacy provider usage %s/%s: %w", rec.ProviderTenantID, rec.Meter.Meter, err)
+			}
+			continue
 		}
 		err = purserdb.New(jm.db).UpsertProviderUsageRecord(ctx, purserdb.UpsertProviderUsageRecordParams{
 			UsageTenantID:     summary.TenantID,

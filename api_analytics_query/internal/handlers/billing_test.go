@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_analytics_query/internal/database/meteringdb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 
@@ -218,5 +219,30 @@ func TestUsageMessageKeyOrdersFinalReportsBeforeWindowMarker(t *testing.T) {
 	reservation := models.UsageSummary{ReportKind: "reservation", TenantID: "tenant-a", PeriodEnd: end}
 	if bs.usageMessageKey(reservation) != "tenant-a" {
 		t.Fatalf("reservation key = %q, want tenant ordering", bs.usageMessageKey(reservation))
+	}
+}
+
+func TestEnsureSourceActivationRejectsPersistedRegionChange(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	activatedAt := time.Date(2026, 8, 20, 10, 0, 0, 0, time.UTC)
+	mock.ExpectQuery(`INSERT INTO periscope\.metering_sources`).
+		WithArgs("periscope-default", "us-east", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"activated_at", "source_region"}).AddRow(activatedAt, "eu-west"))
+
+	bs := &BillingSummarizer{
+		postgresQueries: meteringdb.New(db),
+		sourceID:        "periscope-default",
+		sourceRegion:    "us-east",
+	}
+	if _, err := bs.ensureSourceActivation(context.Background()); err == nil {
+		t.Fatal("expected persisted source region mismatch to fail")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }

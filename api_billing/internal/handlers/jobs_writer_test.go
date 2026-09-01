@@ -62,8 +62,9 @@ func TestProcessWindowCompletionRecordsReceiptAndWindowAtomically(t *testing.T) 
 		ClusterID: "_source", PeriodStart: start, PeriodEnd: start.Add(5 * time.Minute), Complete: true,
 	}
 	mock.ExpectBegin()
-	mock.ExpectExec("INSERT INTO purser\\.metering_sources").
-		WithArgs(summary.SourceID, summary.SourceRegion, summary.PeriodStart).WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery("INSERT INTO purser\\.metering_sources").
+		WithArgs(summary.SourceID, summary.SourceRegion, summary.PeriodStart).
+		WillReturnRows(sqlmock.NewRows([]string{"region"}).AddRow(summary.SourceRegion))
 	mock.ExpectExec("INSERT INTO purser\\.usage_reports").
 		WithArgs(summary.ReportID, summary.ReportKind, summary.SourceID, summary.SourceRegion, summary.Sequence,
 			summary.TenantID, summary.ClusterID, summary.PeriodStart, summary.PeriodEnd, true).
@@ -75,6 +76,33 @@ func TestProcessWindowCompletionRecordsReceiptAndWindowAtomically(t *testing.T) 
 	jm := &JobManager{db: db}
 	if err := jm.processWindowCompletion(context.Background(), summary); err != nil {
 		t.Fatalf("process window completion: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestProcessWindowCompletionRejectsPersistedRegionMismatch(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+	start := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	summary := models.UsageSummary{
+		ReportID: strings.Repeat("d", 64), ReportKind: "window_complete", SourceID: "periscope-default", SourceRegion: "us-east",
+		Sequence: uint64(start.Add(5 * time.Minute).Unix()), TenantID: "11111111-1111-4111-8111-111111111111",
+		ClusterID: "_source", PeriodStart: start, PeriodEnd: start.Add(5 * time.Minute), Complete: true,
+	}
+	mock.ExpectBegin()
+	mock.ExpectQuery("INSERT INTO purser\\.metering_sources").
+		WithArgs(summary.SourceID, summary.SourceRegion, summary.PeriodStart).
+		WillReturnRows(sqlmock.NewRows([]string{"region"}).AddRow("eu-west"))
+	mock.ExpectRollback()
+
+	jm := &JobManager{db: db}
+	if err := jm.processWindowCompletion(context.Background(), summary); err == nil || !strings.Contains(err.Error(), "registered in region") {
+		t.Fatalf("processWindowCompletion error = %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("expectations: %v", err)

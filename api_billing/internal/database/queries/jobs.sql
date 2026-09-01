@@ -38,6 +38,19 @@ SELECT EXISTS (
     SELECT 1 FROM purser.usage_reports WHERE report_id = sqlc.arg(report_id)
 );
 
+-- name: AdoptLegacyUsageRecord :execrows
+UPDATE purser.usage_records
+SET unit = sqlc.arg(unit),
+    report_id = sqlc.arg(report_id),
+    usage_details = sqlc.arg(usage_details)::jsonb,
+    updated_at = NOW()
+WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
+  AND cluster_id = sqlc.arg(cluster_id)
+  AND source_id = 'legacy'
+  AND usage_type = sqlc.arg(usage_type)
+  AND period_start = sqlc.arg(period_start)
+  AND period_end = sqlc.arg(period_end);
+
 -- name: InsertUsageReportReceipt :exec
 INSERT INTO purser.usage_reports (
     report_id, report_kind, source_id, source_region, sequence,
@@ -49,13 +62,17 @@ INSERT INTO purser.usage_reports (
 )
 ON CONFLICT (report_id) DO NOTHING;
 
--- name: UpsertMeteringSource :exec
+-- name: UpsertMeteringSource :one
 INSERT INTO purser.metering_sources (source_id, region, active_from, required, updated_at)
 VALUES (sqlc.arg(source_id), sqlc.arg(region), sqlc.arg(active_from), TRUE, NOW())
 ON CONFLICT (source_id) DO UPDATE SET
-    region = EXCLUDED.region,
+	region = CASE
+		WHEN purser.metering_sources.region = '' THEN EXCLUDED.region
+		ELSE purser.metering_sources.region
+	END,
     active_from = LEAST(purser.metering_sources.active_from, EXCLUDED.active_from),
-    updated_at = NOW();
+	updated_at = NOW()
+RETURNING region;
 
 -- name: UpsertCompletedMeteringWindow :exec
 INSERT INTO purser.metering_windows (
@@ -105,7 +122,7 @@ WHERE tenant_id = sqlc.arg(tenant_id)::text::uuid
   AND billing_period_start = sqlc.arg(billing_period_start)
   AND billing_period_end = sqlc.arg(billing_period_end);
 
--- name: InsertPrepaidUsageSettlement :exec
+-- name: InsertPrepaidUsageSettlement :execrows
 INSERT INTO purser.prepaid_usage_settlements (
     report_id, tenant_id, billing_period_start, billing_period_end,
     amount_micro, cumulative_amount_micro, currency
@@ -176,7 +193,7 @@ INSERT INTO purser.balance_transactions (
     'usage', sqlc.arg(description), sqlc.arg(reference_id)::text::uuid, 'usage_summary', NOW()
 )
 ON CONFLICT (tenant_id, reference_type, reference_id)
-    WHERE reference_type = 'usage_summary'
+    WHERE reference_type IS NOT NULL AND reference_id IS NOT NULL
 DO NOTHING;
 
 -- name: UpdatePrepaidBalanceWithRemainder :exec
@@ -632,13 +649,7 @@ INSERT INTO purser.usage_records (
 )
 ON CONFLICT (
     tenant_id, cluster_id, source_id, usage_type, dimension_key, period_start, period_end
-) DO UPDATE SET
-    usage_value = EXCLUDED.usage_value,
-    report_id = EXCLUDED.report_id,
-    usage_details = EXCLUDED.usage_details,
-    granularity = EXCLUDED.granularity,
-    value_kind = EXCLUDED.value_kind,
-    updated_at = NOW();
+) DO NOTHING;
 
 -- name: UpsertProviderUsageRecord :exec
 INSERT INTO purser.provider_usage_records (
@@ -649,7 +660,7 @@ INSERT INTO purser.provider_usage_records (
     granularity, value_kind, source, usage_details
 ) VALUES (
     sqlc.arg(usage_tenant_id)::text::uuid, sqlc.arg(work_cluster_id),
-    sqlc.arg(provider_tenant_id)::text::uuid, sqlc.arg(provider_cluster_id),
+    sqlc.arg(provider_tenant_id), sqlc.arg(provider_cluster_id),
     sqlc.arg(usage_type), sqlc.arg(unit), sqlc.arg(usage_value)::double precision,
     COALESCE(sqlc.arg(dimensions)::jsonb, '{}'::jsonb), sqlc.arg(dimension_key),
     sqlc.arg(source_id), sqlc.arg(report_id), sqlc.arg(period_start),
@@ -661,11 +672,34 @@ ON CONFLICT (
     provider_tenant_id, provider_cluster_id,
     source_id, usage_type, dimension_key,
     period_start, period_end
+) DO NOTHING;
+
+-- name: UpsertLegacyProviderUsageRecord :exec
+INSERT INTO purser.provider_usage_records (
+    usage_tenant_id, work_cluster_id,
+    provider_tenant_id, provider_cluster_id,
+    usage_type, unit, usage_value, dimensions, dimension_key,
+    source_id, report_id, period_start, period_end,
+    granularity, value_kind, source, usage_details
+) VALUES (
+    sqlc.arg(usage_tenant_id)::text::uuid, sqlc.arg(work_cluster_id),
+    sqlc.arg(provider_tenant_id), sqlc.arg(provider_cluster_id),
+    sqlc.arg(usage_type), sqlc.arg(unit), sqlc.arg(usage_value)::double precision,
+    COALESCE(sqlc.arg(dimensions)::jsonb, '{}'::jsonb),
+    encode(digest(COALESCE(sqlc.arg(dimensions)::jsonb, '{}'::jsonb)::text, 'sha256'), 'hex'),
+    'legacy', sqlc.arg(report_id), sqlc.arg(period_start),
+    sqlc.arg(period_end), 'minute_5', 'delta', sqlc.arg(source),
+    sqlc.arg(usage_details)::jsonb
+)
+ON CONFLICT (
+    usage_tenant_id, work_cluster_id,
+    provider_tenant_id, provider_cluster_id,
+    source_id, usage_type, dimension_key,
+    period_start, period_end
 ) DO UPDATE SET
+    unit = EXCLUDED.unit,
     usage_value = EXCLUDED.usage_value,
     report_id = EXCLUDED.report_id,
-    granularity = EXCLUDED.granularity,
-    value_kind = EXCLUDED.value_kind,
     source = EXCLUDED.source,
     usage_details = EXCLUDED.usage_details,
     updated_at = NOW();
@@ -687,20 +721,7 @@ INSERT INTO purser.usage_adjustments (
     sqlc.arg(period_end), 'correction_delta', 'applied', sqlc.arg(source_system),
     sqlc.arg(source_id), sqlc.arg(reason), sqlc.arg(details)::jsonb
 )
-ON CONFLICT (source_system, source_id) DO UPDATE SET
-    tenant_id = EXCLUDED.tenant_id,
-    cluster_id = EXCLUDED.cluster_id,
-    usage_type = EXCLUDED.usage_type,
-    unit = EXCLUDED.unit,
-    dimensions = EXCLUDED.dimensions,
-    dimension_key = EXCLUDED.dimension_key,
-    delta_value = EXCLUDED.delta_value,
-    period_start = EXCLUDED.period_start,
-    period_end = EXCLUDED.period_end,
-    status = EXCLUDED.status,
-    reason = EXCLUDED.reason,
-    details = EXCLUDED.details,
-    updated_at = NOW();
+ON CONFLICT (source_system, source_id) DO NOTHING;
 
 -- name: GetSubscriptionProviderIDs :one
 SELECT stripe_subscription_id, mollie_subscription_id

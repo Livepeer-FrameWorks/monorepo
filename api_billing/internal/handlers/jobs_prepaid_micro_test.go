@@ -29,7 +29,7 @@ func TestDeductPrepaidBalanceForUsageMicro(t *testing.T) {
 		tenantID := uuid.New().String()
 		ref := uuid.New()
 		const currentBalance = int64(1000)
-		const currentRemainder = int64(9000) // micro-cents already carried
+		const currentRemainder = int64(9000) // micro currency units already carried
 		// amountMicro 2000 -> total 11000 -> 1 cent applied, 1000 carried.
 		const amountMicro = int64(2000)
 		const wantApplied = int64(1)

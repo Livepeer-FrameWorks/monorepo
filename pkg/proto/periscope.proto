@@ -342,6 +342,9 @@ message ConnectionEvent {
   uint32 session_duration_seconds = 16;  // Duration of session (disconnect events)
   uint64 bytes_transferred = 17;         // Bytes transferred during session
   optional string request_url = 18;
+  string cluster_id = 19;         // Authenticated serving cluster
+  string origin_cluster_id = 20;  // Content origin, distinct from serving cluster
+  string control_cell_id = 21;    // Foghorn control cell that observed the connection
 }
 
 message GetConnectionEventsRequest {
@@ -488,7 +491,7 @@ message LiveNode {
 message GetLiveNodesRequest {
   string tenant_id = 1;
   optional string node_id = 2;  // Filter by specific node
-  repeated string related_tenant_ids = 3;  // Include nodes from subscribed clusters
+  repeated string related_tenant_ids = 3 [deprecated = true]; // ignored; raw node state is owner-only
 }
 
 message GetLiveNodesResponse {
@@ -531,6 +534,9 @@ message RoutingEvent {
   optional string stream_tenant_id = 25;    // Subject tenant (stream/customer owner)
   optional string cluster_id = 26;          // Emitting cluster identifier
   optional string remote_cluster_id = 27;   // Target cluster for cross-cluster routing
+  optional string selected_cluster_id = 28; // Cluster containing selected_node_id
+  optional string control_cell_id = 29;     // Foghorn control cell that made the decision
+  optional string origin_cluster_id = 30;   // Stream/artifact origin when known
 }
 
 message GetRoutingEventsRequest {
@@ -538,7 +544,7 @@ message GetRoutingEventsRequest {
   optional string stream_id = 2;
   common.TimeRange time_range = 3;
   common.CursorPaginationRequest pagination = 4;
-  repeated string related_tenant_ids = 5;
+  repeated string related_tenant_ids = 5 [deprecated = true]; // ignored; routing is content-owner scoped
   // Dual-tenant filtering (RFC: routing-events-dual-tenant-attribution)
   optional string stream_tenant_id = 6;     // Filter by subject tenant (stream owner)
   optional string cluster_id = 7;           // Filter by cluster
@@ -1052,6 +1058,9 @@ message StorageEvent {
   optional int64 duration_ms = 12; // Time taken for operation
   optional string error = 13;
   optional int64 warm_duration_ms = 14;
+  optional string cluster_id = 15;
+  optional string origin_cluster_id = 16;
+  optional string control_cell_id = 17;
 }
 
 message GetStorageEventsRequest {
@@ -1262,6 +1271,7 @@ service AggregatedAnalyticsService {
   // the per-artifact VOD retention curve.
   rpc GetSessionQoeSummary(GetSessionQoeSummaryRequest) returns (GetSessionQoeSummaryResponse);
   rpc GetClusterQoeOps(GetClusterQoeOpsRequest) returns (GetClusterQoeOpsResponse);
+  rpc GetClusterWorkload(GetClusterWorkloadRequest) returns (GetClusterWorkloadResponse);
   rpc GetVodRetention(GetVodRetentionRequest) returns (GetVodRetentionResponse);
   // Time-bucketed companions to the boot/QoE summaries (read-time percentiles/ratios
   // per toStartOfInterval window) and the eligible-VOD-asset list backing the
@@ -1487,6 +1497,9 @@ message ProcessingUsageRecord {
   optional double rtf_out = 67;
   optional int64 pipeline_lag_ms = 68;
   optional int64 output_bitrate_bps = 69;
+  optional string cluster_id = 70;         // Authenticated cluster of node_id
+  optional string origin_cluster_id = 71;  // Content origin, if different
+  optional string control_cell_id = 72;    // Foghorn control cell
 }
 
 // Daily processing usage summary.
@@ -1842,6 +1855,9 @@ message FederationEvent {
   optional double local_longitude = 21;
   optional double remote_latitude = 22;
   optional double remote_longitude = 23;
+  optional string stream_tenant_id = 24;  // Content owner; tenant_id is infra owner
+  optional string control_cell_id = 25;
+  optional string origin_cluster_id = 26;
 }
 
 message GetFederationEventsRequest {
@@ -2074,6 +2090,32 @@ message GetClusterQoeOpsRequest {
 
 message GetClusterQoeOpsResponse {
   repeated ClusterQoeOps rows = 1;
+}
+
+// Redacted infrastructure workload aggregate. No content tenant, stream,
+// session, URL, or client identifiers are exposed.
+message ClusterWorkload {
+  string cluster_id = 1;
+  string node_id = 2;
+  string work_kind = 3; // viewer | ingest | processing | storage | federation
+  int64 event_count = 4;
+  int64 active_count = 5; // open sessions/ingests or current object count; current rows only
+  uint64 bytes = 6;
+  double media_seconds = 7;
+  int64 error_count = 8;
+  string measurement_kind = 9; // window | current; stock and flow are never combined
+  optional string storage_scope = 10; // hot | cold for current storage rows
+  google.protobuf.Timestamp observed_at = 11; // source observation time for current rows
+}
+
+message GetClusterWorkloadRequest {
+  string tenant_id = 1;
+  repeated string cluster_ids = 2; // ownership-authorized by Bridge
+  common.TimeRange time_range = 3;
+}
+
+message GetClusterWorkloadResponse {
+  repeated ClusterWorkload rows = 1;
 }
 
 // VOD retention — one point per fixed-width timeline bucket for an artifact, with

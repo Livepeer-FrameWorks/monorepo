@@ -298,7 +298,7 @@ func (h *AnalyticsHandler) staleMarkStreamStateOffline(ctx context.Context) erro
 			track_count, quality_tier, primary_width, primary_height,
 			primary_fps, primary_codec, primary_bitrate,
 			packets_sent, packets_lost, packets_retransmitted,
-			started_at, updated_at
+			started_at, updated_at, cluster_id
 		)
 		SELECT
 			tenant_id, stream_id, internal_name, node_id,
@@ -309,7 +309,7 @@ func (h *AnalyticsHandler) staleMarkStreamStateOffline(ctx context.Context) erro
 			track_count, quality_tier, primary_width, primary_height,
 			primary_fps, primary_codec, primary_bitrate,
 			packets_sent, packets_lost, packets_retransmitted,
-			started_at, now()
+			started_at, now(), cluster_id
 		FROM periscope.stream_state_current FINAL
 		WHERE status NOT IN ('offline', 'stopped', 'gone')
 		  AND stream_id != toUUIDOrZero('')

@@ -142,6 +142,7 @@ CREATE TABLE IF NOT EXISTS stream_state_current (
     stream_id UUID,
     internal_name String,
     node_id LowCardinality(String),
+    cluster_id LowCardinality(String) DEFAULT '',
 
     status LowCardinality(String),
     buffer_state LowCardinality(String),
@@ -403,6 +404,7 @@ CREATE TABLE IF NOT EXISTS viewer_connection_events (
     node_id LowCardinality(String),
     cluster_id LowCardinality(String) DEFAULT '',
     origin_cluster_id LowCardinality(String) DEFAULT '',
+    control_cell_id LowCardinality(String) DEFAULT '',
     request_url Nullable(String),
 
     country_code FixedString(2),
@@ -432,6 +434,7 @@ CREATE TABLE IF NOT EXISTS viewer_sessions_current (
     internal_name LowCardinality(String),
     session_id String,
     node_id LowCardinality(String),
+    cluster_id SimpleAggregateFunction(any, LowCardinality(String)),
 
     connected_at SimpleAggregateFunction(min, Nullable(DateTime)),
     disconnected_at SimpleAggregateFunction(max, Nullable(DateTime)),
@@ -457,6 +460,7 @@ SELECT
     internal_name,
     session_id,
     node_id,
+    cluster_id,
     timestamp AS connected_at,
     CAST(NULL AS Nullable(DateTime)) AS disconnected_at,
     connector,
@@ -477,6 +481,7 @@ SELECT
     internal_name,
     session_id,
     node_id,
+    cluster_id,
     CAST(NULL AS Nullable(DateTime)) AS connected_at,
     timestamp AS disconnected_at,
     connector,
@@ -795,6 +800,9 @@ CREATE TABLE IF NOT EXISTS routing_decisions (
     stream_tenant_id Nullable(UUID),
     cluster_id LowCardinality(String) DEFAULT '',
     remote_cluster_id LowCardinality(String) DEFAULT '',
+    selected_cluster_id LowCardinality(String) DEFAULT '',
+    control_cell_id LowCardinality(String) DEFAULT '',
+    origin_cluster_id LowCardinality(String) DEFAULT '',
 
     latency_ms Nullable(Float32),
     candidates_count Nullable(Int32),
@@ -803,7 +811,8 @@ CREATE TABLE IF NOT EXISTS routing_decisions (
     source_region LowCardinality(String) DEFAULT '',
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
-    schema_version UInt8 DEFAULT 0
+    schema_version UInt8 DEFAULT 0,
+    INDEX idx_routing_stream_tenant stream_tenant_id TYPE bloom_filter(0.01) GRANULARITY 1
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp)
@@ -850,6 +859,7 @@ GROUP BY hour, tenant_id, cluster_id, remote_cluster_id, status;
 CREATE TABLE IF NOT EXISTS federation_events (
     timestamp DateTime,
     tenant_id UUID,
+    stream_tenant_id Nullable(UUID),
     event_type LowCardinality(String),
     local_cluster LowCardinality(String),
     remote_cluster LowCardinality(String),
@@ -877,7 +887,9 @@ CREATE TABLE IF NOT EXISTS federation_events (
     source_region LowCardinality(String) DEFAULT '',
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
-    schema_version UInt8 DEFAULT 0
+    control_cell_id LowCardinality(String) DEFAULT '',
+    schema_version UInt8 DEFAULT 0,
+    INDEX idx_federation_stream_tenant stream_tenant_id TYPE bloom_filter(0.01) GRANULARITY 1
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, local_cluster, event_type, timestamp)
@@ -912,6 +924,41 @@ SELECT
     countIf(failure_reason != '' AND failure_reason IS NOT NULL) AS failure_count
 FROM federation_events
 GROUP BY hour, tenant_id, local_cluster, remote_cluster, event_type;
+
+-- Dual-tenant federation summary rollup. The original federation_hourly table
+-- remains the complete operator-history source. Queries add only v2 rows where
+-- the content tenant differs from the infrastructure tenant, avoiding duplicate
+-- counts while exposing content-owner activity from the deployment point onward.
+CREATE TABLE IF NOT EXISTS federation_hourly_v2 (
+    hour DateTime,
+    tenant_id UUID,
+    content_tenant_id UUID DEFAULT toUUIDOrZero(''),
+    local_cluster LowCardinality(String),
+    remote_cluster LowCardinality(String),
+    event_type LowCardinality(String),
+    event_count UInt32,
+    sum_latency_ms Float32,
+    sum_time_to_live_ms Float32,
+    failure_count UInt32
+) ENGINE = ReplicatedSummingMergeTree((event_count, sum_latency_ms, sum_time_to_live_ms, failure_count))
+PARTITION BY toYYYYMM(hour)
+ORDER BY (hour, tenant_id, content_tenant_id, local_cluster, remote_cluster, event_type)
+TTL hour + INTERVAL 365 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS federation_hourly_v2_mv TO federation_hourly_v2 AS
+SELECT
+    toStartOfHour(timestamp) AS hour,
+    tenant_id,
+    ifNull(stream_tenant_id, toUUIDOrZero('')) AS content_tenant_id,
+    local_cluster,
+    remote_cluster,
+    event_type,
+    count() AS event_count,
+    sum(ifNull(latency_ms, 0)) AS sum_latency_ms,
+    sum(ifNull(time_to_live_ms, 0)) AS sum_time_to_live_ms,
+    countIf(event_type LIKE '%failed' OR (failure_reason != '' AND failure_reason IS NOT NULL)) AS failure_count
+FROM federation_events
+GROUP BY hour, tenant_id, content_tenant_id, local_cluster, remote_cluster, event_type;
 
 -- ============================================================================
 -- NODE STATE + METRICS
@@ -1338,6 +1385,7 @@ CREATE TABLE IF NOT EXISTS storage_events (
     error Nullable(String),
     cluster_id LowCardinality(String) DEFAULT '',
     origin_cluster_id LowCardinality(String) DEFAULT '',
+    control_cell_id LowCardinality(String) DEFAULT '',
     source_region LowCardinality(String) DEFAULT '',
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
@@ -1357,6 +1405,7 @@ CREATE TABLE IF NOT EXISTS processing_events (
     node_id LowCardinality(String),
     cluster_id LowCardinality(String) DEFAULT '',
     origin_cluster_id LowCardinality(String) DEFAULT '',
+    control_cell_id LowCardinality(String) DEFAULT '',
     stream_id UUID,
     internal_name String,
 
@@ -1913,6 +1962,8 @@ CREATE TABLE IF NOT EXISTS viewer_sessions_final (
 
     -- Enrichment
     cluster_id LowCardinality(String) DEFAULT '',
+    origin_cluster_id LowCardinality(String) DEFAULT '',
+    control_cell_id LowCardinality(String) DEFAULT '',
     stream_id UUID DEFAULT toUUIDOrZero(''),
     stream_name String DEFAULT '',
     connector LowCardinality(String) DEFAULT '',
@@ -1995,6 +2046,8 @@ CREATE TABLE IF NOT EXISTS stream_sessions_final (
     source_event_id String,
 
     cluster_id LowCardinality(String) DEFAULT '',
+    origin_cluster_id LowCardinality(String) DEFAULT '',
+    control_cell_id LowCardinality(String) DEFAULT '',
     stream_name String DEFAULT '',
 
     -- Stream-end counters
@@ -2062,6 +2115,8 @@ CREATE TABLE IF NOT EXISTS processing_segments_final (
 
     -- Common
     cluster_id LowCardinality(String) DEFAULT '',
+    origin_cluster_id LowCardinality(String) DEFAULT '',
+    control_cell_id LowCardinality(String) DEFAULT '',
     stream_name String DEFAULT '',
     input_codec LowCardinality(String) DEFAULT '',
     media_seconds Float64 DEFAULT 0,
@@ -2137,6 +2192,44 @@ SELECT
     max(projection_version_ms) AS latest_projection_version_ms
 FROM processing_segments_final
 GROUP BY tenant_id, node_id, stream_id, source_event_id;
+
+-- Additive topology projections expose origin/control placement without
+-- changing the canonical billing views during rolling upgrades.
+CREATE VIEW IF NOT EXISTS viewer_sessions_topology_v AS
+SELECT f.*, p.origin_cluster_id, p.control_cell_id
+FROM viewer_sessions_final_v AS f
+LEFT JOIN
+(
+    SELECT tenant_id, node_id, session_id,
+           argMax(origin_cluster_id, projection_version_ms) AS origin_cluster_id,
+           argMax(control_cell_id, projection_version_ms) AS control_cell_id
+    FROM viewer_sessions_final
+    GROUP BY tenant_id, node_id, session_id
+) AS p USING (tenant_id, node_id, session_id);
+
+CREATE VIEW IF NOT EXISTS stream_sessions_topology_v AS
+SELECT f.*, p.origin_cluster_id, p.control_cell_id
+FROM stream_sessions_final_v AS f
+LEFT JOIN
+(
+    SELECT tenant_id, node_id, stream_id, source_event_id,
+           argMax(origin_cluster_id, projection_version_ms) AS origin_cluster_id,
+           argMax(control_cell_id, projection_version_ms) AS control_cell_id
+    FROM stream_sessions_final
+    GROUP BY tenant_id, node_id, stream_id, source_event_id
+) AS p USING (tenant_id, node_id, stream_id, source_event_id);
+
+CREATE VIEW IF NOT EXISTS processing_segments_topology_v AS
+SELECT f.*, p.origin_cluster_id, p.control_cell_id
+FROM processing_segments_final_v AS f
+LEFT JOIN
+(
+    SELECT tenant_id, node_id, stream_id, source_event_id,
+           argMax(origin_cluster_id, projection_version_ms) AS origin_cluster_id,
+           argMax(control_cell_id, projection_version_ms) AS control_cell_id
+    FROM processing_segments_final
+    GROUP BY tenant_id, node_id, stream_id, source_event_id
+) AS p USING (tenant_id, node_id, stream_id, source_event_id);
 
 -- ============================================================================
 -- ANOMALY TABLES — stale closes and operator-visible non-billable facts.

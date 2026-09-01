@@ -50,6 +50,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # Runtime stage
 FROM alpine:3.19
 
+ARG HEALTH_PORT=18004
+ENV HEALTH_PORT=${HEALTH_PORT}
+
 # Install runtime dependencies
 RUN apk add --no-cache ca-certificates tzdata
 
@@ -72,7 +75,7 @@ USER frameworks
 
 # Both query and metering binaries expose the standard HTTP health endpoint.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:${PORT:-18004}/health || exit 1
+    CMD wget --no-verbose --tries=1 --spider http://localhost:${PORT:-${HEALTH_PORT}}/health || exit 1
 
 EXPOSE 18004 18021 19004
 

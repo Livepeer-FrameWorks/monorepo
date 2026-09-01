@@ -841,6 +841,8 @@ message UsageRecord {
   google.protobuf.Timestamp period_start = 9; // json:"period_start"
   google.protobuf.Timestamp period_end = 10;  // json:"period_end"
   string granularity = 11;              // json:"granularity"
+  string unit = 12;                     // canonical physical unit
+  google.protobuf.Struct dimensions = 13; // bounded meter dimensions
 }
 
 message UsageRecordsResponse {

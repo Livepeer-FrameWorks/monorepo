@@ -529,11 +529,11 @@ func mapEventTypeToProto(eventType string) signalmanpb.EventType {
 // eventToProtoData converts Kafka event data to proto EventData
 // Data comes as a MistTrigger envelope from Kafka
 func eventToProtoData(data map[string]interface{}, logger logging.Logger) *signalmanpb.EventData {
-	eventData := &signalmanpb.EventData{}
 	mt, ok := mistTriggerFromEventData(data, logger)
 	if !ok {
-		return eventData
+		return &signalmanpb.EventData{}
 	}
+	eventData := mistEnvelopeToProtoData(mt)
 
 	// Extract typed payload from MistTrigger oneof
 	switch p := mt.GetTriggerPayload().(type) {
@@ -586,6 +586,21 @@ func eventToProtoData(data map[string]interface{}, logger logging.Logger) *signa
 	return eventData
 }
 
+func mistEnvelopeToProtoData(mt *ipcpb.MistTrigger) *signalmanpb.EventData {
+	eventData := &signalmanpb.EventData{}
+	if mt == nil {
+		return eventData
+	}
+	eventData.SourceRegion = mt.GetSourceRegion()
+	eventData.SourceClusterId = mt.GetClusterId()
+	eventData.StreamOriginRegion = mt.GetStreamOriginRegion()
+	eventData.StreamOriginClusterId = mt.GetOriginClusterId()
+	eventData.SchemaVersion = mt.GetSchemaVersion()
+	eventData.ControlCellId = mt.GetControlCellId()
+
+	return eventData
+}
+
 func clientLifecycleBatchToProtoData(data map[string]interface{}, logger logging.Logger) []*signalmanpb.EventData {
 	mt, ok := mistTriggerFromEventData(data, logger)
 	if !ok {
@@ -600,9 +615,9 @@ func clientLifecycleBatchToProtoData(data map[string]interface{}, logger logging
 		if sample == nil {
 			continue
 		}
-		out = append(out, &signalmanpb.EventData{
-			Payload: &signalmanpb.EventData_ClientLifecycle{ClientLifecycle: sample},
-		})
+		eventData := mistEnvelopeToProtoData(mt)
+		eventData.Payload = &signalmanpb.EventData_ClientLifecycle{ClientLifecycle: sample}
+		out = append(out, eventData)
 	}
 	return out
 }
@@ -628,6 +643,13 @@ func mistTriggerFromEventData(data map[string]interface{}, logger logging.Logger
 }
 
 func serviceEventToProtoData(event kafka.ServiceEvent, logger logging.Logger) *signalmanpb.EventData {
+	eventData := &signalmanpb.EventData{
+		SourceRegion:          event.SourceRegion,
+		SourceClusterId:       event.SourceClusterID,
+		StreamOriginRegion:    event.StreamOriginRegion,
+		StreamOriginClusterId: event.StreamOriginClusterID,
+		SchemaVersion:         event.SchemaVersion,
+	}
 	switch event.EventType {
 	case "message_received", "message_updated", "conversation_created", "conversation_updated":
 		ml := &ipcpb.MessageLifecycleData{}
@@ -674,9 +696,10 @@ func serviceEventToProtoData(event kafka.ServiceEvent, logger logging.Logger) *s
 		}
 		ml.Timestamp = ts.Unix()
 
-		return &signalmanpb.EventData{Payload: &signalmanpb.EventData_MessageLifecycle{MessageLifecycle: ml}}
+		eventData.Payload = &signalmanpb.EventData_MessageLifecycle{MessageLifecycle: ml}
+		return eventData
 	case "skipper_investigation":
-		return &signalmanpb.EventData{}
+		return eventData
 	default:
 		return nil
 	}

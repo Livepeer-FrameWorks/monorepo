@@ -63,8 +63,12 @@ func TestGRPCQueryPack_RealPG(t *testing.T) { //nolint:funlen // One engine star
 			TenantID: tenantID, WindowStart: windowStart, WindowEnd: windowEnd,
 			ResultLimit: 10,
 		})
-		if err != nil || len(records) != 1 || records[0].UsageValue != 4.5 {
+		if err != nil || len(records) != 1 || records[0].UsageValue != 4.5 || records[0].Unit != "gibibyte" {
 			t.Fatalf("usage records=%+v err=%v", records, err)
+		}
+		var dimensions map[string]string
+		if err := json.Unmarshal(records[0].Dimensions, &dimensions); err != nil || dimensions["direction"] != "egress" {
+			t.Fatalf("usage dimensions=%s err=%v", records[0].Dimensions, err)
 		}
 		aggregates, err := queries.ListUsageAggregates(ctx, purserdb.ListUsageAggregatesParams{
 			Granularity: "hourly", TenantID: tenantID, WindowStart: windowStart,
@@ -85,6 +89,88 @@ func TestGRPCQueryPack_RealPG(t *testing.T) { //nolint:funlen // One engine star
 		if err != nil || len(dimensioned) != 1 || dimensioned[0].Quantity != "4.500000" {
 			t.Fatalf("dimensioned usage=%+v err=%v", dimensioned, err)
 		}
+	})
+
+	t.Run("usage aggregates follow meter definition aggregation", func(t *testing.T) {
+		if _, err := db.ExecContext(ctx, `
+			INSERT INTO purser.usage_records (
+				tenant_id, cluster_id, usage_type, unit, dimensions, dimension_key,
+				source_id, report_id, usage_value, value_kind, period_start, period_end, granularity
+			) VALUES
+				($1,'cluster-contract','total_streams','stream','{}'::jsonb,$2,'source-contract',$3,2,'delta',$4,$5,'minute_5'),
+				($1,'cluster-contract','total_streams','stream','{}'::jsonb,$2,'source-contract',$6,3,'delta',$5,$7,'minute_5'),
+				($1,'cluster-contract','max_viewers','viewer','{}'::jsonb,$2,'source-contract',$8,5,'delta',$4,$5,'minute_5'),
+				($1,'cluster-contract','max_viewers','viewer','{}'::jsonb,$2,'source-contract',$9,7,'delta',$5,$7,'minute_5')
+		`, tenantID, strings.Repeat("c", 64), strings.Repeat("d", 64), windowStart, windowStart.Add(5*time.Minute),
+			strings.Repeat("e", 64), windowStart.Add(10*time.Minute), strings.Repeat("f", 64), strings.Repeat("1", 64)); err != nil {
+			t.Fatal(err)
+		}
+		rows, err := queries.ListUsageAggregates(ctx, purserdb.ListUsageAggregatesParams{
+			Granularity: "hourly", TenantID: tenantID, WindowStart: windowStart,
+			WindowEnd: windowStart.Add(time.Hour), FilterUsageTypes: true, UsageTypes: []string{"total_streams", "max_viewers"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		values := map[string]float64{}
+		for _, row := range rows {
+			values[row.UsageType] = row.UsageValue
+		}
+		if values["total_streams"] != 5 || values["max_viewers"] != 7 {
+			t.Fatalf("aggregates = %#v, want total_streams sum 5 and max_viewers max 7", values)
+		}
+	})
+
+	t.Run("historical usage survives meter retirement and catalog removal", func(t *testing.T) {
+		const meter = "retired_contract_meter"
+		if _, err := db.ExecContext(ctx, `
+			INSERT INTO purser.meter_definitions
+				(meter, unit, aggregation, display_name, active)
+			VALUES ($1, 'event', 'sum', 'Retired contract meter', FALSE)
+		`, meter); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.ExecContext(ctx, `
+			INSERT INTO purser.usage_records (
+				tenant_id, cluster_id, usage_type, unit, dimensions, dimension_key,
+				source_id, report_id, usage_value, value_kind, period_start, period_end, granularity
+			) VALUES ($1,'cluster-contract',$2,'event','{}'::jsonb,$3,
+				'source-contract',$4,6,'delta',$5,$6,'minute_5')
+		`, tenantID, meter, strings.Repeat("2", 64), strings.Repeat("3", 64), windowStart, windowEnd); err != nil {
+			t.Fatal(err)
+		}
+
+		assertVisible := func(stage string) {
+			t.Helper()
+			aggregates, err := queries.ListUsageAggregates(ctx, purserdb.ListUsageAggregatesParams{
+				Granularity: "hourly", TenantID: tenantID, WindowStart: windowStart,
+				WindowEnd: windowEnd, FilterUsageTypes: true, UsageTypes: []string{meter},
+			})
+			if err != nil || len(aggregates) != 1 || aggregates[0].UsageValue != 6 {
+				t.Fatalf("%s aggregates=%+v err=%v", stage, aggregates, err)
+			}
+			dimensioned, err := queries.ListTenantDimensionedUsage(ctx, purserdb.ListTenantDimensionedUsageParams{
+				TenantID: tenantID, StartDate: windowStart, EndDate: windowStart,
+			})
+			if err != nil {
+				t.Fatalf("%s dimensioned usage: %v", stage, err)
+			}
+			found := false
+			for _, row := range dimensioned {
+				if row.UsageType == meter && row.Quantity == "6.000000" {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("%s dimensioned usage omitted %s: %+v", stage, meter, dimensioned)
+			}
+		}
+
+		assertVisible("inactive definition")
+		if _, err := db.ExecContext(ctx, `DELETE FROM purser.meter_definitions WHERE meter = $1`, meter); err != nil {
+			t.Fatal(err)
+		}
+		assertVisible("missing definition")
 	})
 
 	t.Run("billing and provider boundaries", func(t *testing.T) {

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"strings"
+	"time"
 
 	"frameworks/api_analytics_query/internal/database/periscopequerydb"
 	"frameworks/api_analytics_query/internal/scheduler"
@@ -28,7 +30,13 @@ func main() {
 	clickhousePassword := config.RequireEnv("CLICKHOUSE_PASSWORD")
 	_ = config.RequireEnv("KAFKA_BROKERS")
 	_ = config.RequireEnv("SERVICE_TOKEN")
-	_ = config.RequireEnv("METERING_SOURCE_ID")
+	sourceID, sourceRegion, err := scheduler.NormalizeSourceIdentity(
+		config.RequireEnv("METERING_SOURCE_ID"),
+		config.RequireEnv("METERING_SOURCE_REGION"),
+	)
+	if err != nil {
+		logger.WithError(err).Fatal("Invalid metering source identity")
+	}
 
 	dbConfig := database.DefaultConfig()
 	dbConfig.ServiceName = "periscope-metering"
@@ -50,13 +58,20 @@ func main() {
 	health.AddCheck("postgres", monitoring.DatabaseHealthCheck(postgres))
 	health.AddCheck("clickhouse", monitoring.DatabaseHealthCheck(clickhouse))
 	health.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
-		"DATABASE_URL":       dbURL,
-		"CLICKHOUSE_ADDR":    clickhouseAddr,
-		"CLICKHOUSE_DB":      clickhouseDB,
-		"METERING_SOURCE_ID": config.GetEnv("METERING_SOURCE_ID", ""),
+		"DATABASE_URL":           dbURL,
+		"CLICKHOUSE_ADDR":        clickhouseAddr,
+		"CLICKHOUSE_DB":          clickhouseDB,
+		"METERING_SOURCE_ID":     sourceID,
+		"METERING_SOURCE_REGION": sourceRegion,
 	}))
 
-	tasks := scheduler.NewScheduler(postgres, clickhouse, logger)
+	tasks := scheduler.NewScheduler(postgres, clickhouse, logger, sourceID, sourceRegion)
+	validationCtx, cancelValidation := context.WithTimeout(context.Background(), 30*time.Second)
+	if err := tasks.ValidateSource(validationCtx); err != nil {
+		cancelValidation()
+		logger.WithError(err).Fatal("Invalid metering source identity")
+	}
+	cancelValidation()
 	tasks.Start()
 	defer tasks.Stop()
 

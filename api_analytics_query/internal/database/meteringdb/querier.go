@@ -14,7 +14,7 @@ type Querier interface {
 	AcquireMeteringLease(ctx context.Context, arg AcquireMeteringLeaseParams) (int64, error)
 	AdvanceBillingCursor(ctx context.Context, arg AdvanceBillingCursorParams) error
 	DeleteReservationKey(ctx context.Context, arg DeleteReservationKeyParams) error
-	EnsureMeteringSource(ctx context.Context, arg EnsureMeteringSourceParams) (time.Time, error)
+	EnsureMeteringSource(ctx context.Context, arg EnsureMeteringSourceParams) (EnsureMeteringSourceRow, error)
 	GetBillingCursor(ctx context.Context, arg GetBillingCursorParams) (time.Time, error)
 	GetMeteringSourceCompletion(ctx context.Context, sourceID string) (sql.NullTime, error)
 	InitializeBillingCursor(ctx context.Context, arg InitializeBillingCursorParams) error

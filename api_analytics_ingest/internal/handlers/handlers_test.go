@@ -1100,8 +1100,8 @@ func TestViewerConnectTenantAttribution(t *testing.T) {
 	if row[4] != "demo" {
 		t.Fatalf("expected internal_name demo, got %#v", row[4])
 	}
-	if row[20] != "connect" {
-		t.Fatalf("expected event_type connect, got %#v", row[20])
+	if row[21] != "connect" {
+		t.Fatalf("expected event_type connect, got %#v", row[21])
 	}
 }
 
@@ -1143,11 +1143,11 @@ func TestViewerConnectionPreservesZeroCoordinateWhenPresent(t *testing.T) {
 		t.Fatalf("expected viewer_connection_events row, got %#v", batch)
 	}
 	row := batch.rows[0]
-	if row[14] != lat {
-		t.Fatalf("expected latitude %v, got %#v", lat, row[14])
+	if row[15] != lat {
+		t.Fatalf("expected latitude %v, got %#v", lat, row[15])
 	}
-	if row[15] != lon {
-		t.Fatalf("expected longitude %v, got %#v", lon, row[15])
+	if row[16] != lon {
+		t.Fatalf("expected longitude %v, got %#v", lon, row[16])
 	}
 }
 
@@ -1187,11 +1187,11 @@ func TestViewerDisconnectOutOfOrderStillRecorded(t *testing.T) {
 		t.Fatalf("expected viewer_connection_events row, got %#v", batch)
 	}
 	row := batch.rows[0]
-	if row[20] != "disconnect" {
-		t.Fatalf("expected event_type disconnect, got %#v", row[20])
+	if row[21] != "disconnect" {
+		t.Fatalf("expected event_type disconnect, got %#v", row[21])
 	}
-	if row[21] != uint32(42) {
-		t.Fatalf("expected session_duration 42, got %#v", row[21])
+	if row[22] != uint32(42) {
+		t.Fatalf("expected session_duration 42, got %#v", row[22])
 	}
 }
 
@@ -1238,12 +1238,18 @@ func TestRawUserEndProjectsFinalSessionWithHeaderTenantFallback(t *testing.T) {
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
 	tenantID := uuid.NewString()
 	streamID := uuid.NewString()
+	servingClusterID := "cluster-us"
+	originClusterID := "cluster-eu"
+	controlCellID := "control-eu"
 	trigger := &ipcpb.MistTrigger{
-		NodeId:      "edge-1",
-		TriggerType: "USER_END",
-		RequestId:   "source-event-1",
-		Timestamp:   time.Now().UnixMilli(),
-		StreamId:    &streamID,
+		NodeId:          "edge-us-1",
+		TriggerType:     "USER_END",
+		RequestId:       "source-event-1",
+		Timestamp:       time.Now().UnixMilli(),
+		StreamId:        &streamID,
+		ClusterId:       &servingClusterID,
+		OriginClusterId: &originClusterID,
+		ControlCellId:   &controlCellID,
 		TriggerPayload: &ipcpb.MistTrigger_ViewerDisconnect{
 			ViewerDisconnect: &ipcpb.ViewerDisconnectTrigger{
 				StreamName: "live+demo",
@@ -1268,7 +1274,7 @@ func TestRawUserEndProjectsFinalSessionWithHeaderTenantFallback(t *testing.T) {
 			"tenant_id":       tenantID,
 			"source_event_id": "source-event-1",
 			"trigger_type":    "USER_END",
-			"node_id":         "edge-1",
+			"node_id":         "edge-us-1",
 		},
 		Topic: "analytics.raw_mist_triggers",
 	})
@@ -1293,8 +1299,13 @@ func TestRawUserEndProjectsFinalSessionWithHeaderTenantFallback(t *testing.T) {
 	if finalBatch.rows[0][2] != "sess-final" {
 		t.Fatalf("expected session_id sess-final, got %#v", finalBatch.rows[0][2])
 	}
-	if finalBatch.rows[0][15] != uint64(11) || finalBatch.rows[0][16] != uint64(99) {
-		t.Fatalf("expected Mist USER_END bytes mapped to uploaded=11 downloaded=99, got uploaded=%#v downloaded=%#v", finalBatch.rows[0][15], finalBatch.rows[0][16])
+	if finalBatch.rows[0][1] != "edge-us-1" || finalBatch.rows[0][4] != "cluster-us" ||
+		finalBatch.rows[0][5] != "cluster-eu" || finalBatch.rows[0][6] != "control-eu" {
+		t.Fatalf("expected EU-origin/US-serving placement, got node=%#v cluster=%#v origin=%#v control=%#v",
+			finalBatch.rows[0][1], finalBatch.rows[0][4], finalBatch.rows[0][5], finalBatch.rows[0][6])
+	}
+	if finalBatch.rows[0][17] != uint64(11) || finalBatch.rows[0][18] != uint64(99) {
+		t.Fatalf("expected Mist USER_END bytes mapped to uploaded=11 downloaded=99, got uploaded=%#v downloaded=%#v", finalBatch.rows[0][17], finalBatch.rows[0][18])
 	}
 }
 
@@ -1445,11 +1456,11 @@ func TestRawStreamEndUsesEventLogStart(t *testing.T) {
 		t.Fatalf("expected stream_sessions_final row, got %#v", finalBatch)
 	}
 	row := finalBatch.rows[0]
-	if row[12] != startedAt.UnixMilli() {
-		t.Fatalf("expected event-log source_started_at_ms %d, got %#v", startedAt.UnixMilli(), row[12])
+	if row[14] != startedAt.UnixMilli() {
+		t.Fatalf("expected event-log source_started_at_ms %d, got %#v", startedAt.UnixMilli(), row[14])
 	}
-	if row[13] != endedAt.UnixMilli() {
-		t.Fatalf("expected source_ended_at_ms %d, got %#v", endedAt.UnixMilli(), row[13])
+	if row[15] != endedAt.UnixMilli() {
+		t.Fatalf("expected source_ended_at_ms %d, got %#v", endedAt.UnixMilli(), row[15])
 	}
 	var eventLogQuery *fakeQuery
 	for i := range conn.queries {
@@ -1538,11 +1549,11 @@ func TestRawStreamEndUsesOfflineCurrentStartedAt(t *testing.T) {
 		t.Fatalf("expected stream_sessions_final row, got %#v", finalBatch)
 	}
 	row := finalBatch.rows[0]
-	if row[12] != startedAt.UnixMilli() {
-		t.Fatalf("expected source_started_at_ms %d, got %#v", startedAt.UnixMilli(), row[12])
+	if row[14] != startedAt.UnixMilli() {
+		t.Fatalf("expected source_started_at_ms %d, got %#v", startedAt.UnixMilli(), row[14])
 	}
-	if row[13] != endedAt.UnixMilli() {
-		t.Fatalf("expected source_ended_at_ms %d, got %#v", endedAt.UnixMilli(), row[13])
+	if row[15] != endedAt.UnixMilli() {
+		t.Fatalf("expected source_ended_at_ms %d, got %#v", endedAt.UnixMilli(), row[15])
 	}
 }
 
@@ -2195,13 +2206,13 @@ func TestViewerConnectionDuplicateEventSkipped(t *testing.T) {
 	}
 }
 
-func TestViewerConnectionClusterContextFallback(t *testing.T) {
+func TestViewerConnectionClusterContextDoesNotFabricateAttribution(t *testing.T) {
 	conn := newFakeClickhouseConn()
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
 	tenantID := uuid.NewString()
 	streamID := uuid.NewString()
 
-	t.Run("cluster inherits origin when missing", func(t *testing.T) {
+	t.Run("cluster remains empty when only origin is present", func(t *testing.T) {
 		clusterFromOrigin := "origin-cluster-a"
 		data := mustMistTriggerData(t, &ipcpb.MistTrigger{
 			StreamId:        &streamID,
@@ -2233,15 +2244,15 @@ func TestViewerConnectionClusterContextFallback(t *testing.T) {
 			t.Fatalf("expected viewer_connection_events row, got %#v", batch)
 		}
 		row := batch.rows[len(batch.rows)-1]
-		if row[9] != clusterFromOrigin {
-			t.Fatalf("expected cluster_id fallback %q, got %#v", clusterFromOrigin, row[9])
+		if row[9] != "" {
+			t.Fatalf("expected empty serving cluster without authenticated cluster attribution, got %#v", row[9])
 		}
 		if row[10] != clusterFromOrigin {
 			t.Fatalf("expected origin_cluster_id %q, got %#v", clusterFromOrigin, row[10])
 		}
 	})
 
-	t.Run("origin inherits cluster when missing", func(t *testing.T) {
+	t.Run("origin remains empty when only serving cluster is present", func(t *testing.T) {
 		clusterID := "local-cluster-b"
 		data := mustMistTriggerData(t, &ipcpb.MistTrigger{
 			StreamId:  &streamID,
@@ -2276,8 +2287,8 @@ func TestViewerConnectionClusterContextFallback(t *testing.T) {
 		if row[9] != clusterID {
 			t.Fatalf("expected cluster_id %q, got %#v", clusterID, row[9])
 		}
-		if row[10] != clusterID {
-			t.Fatalf("expected origin_cluster_id fallback %q, got %#v", clusterID, row[10])
+		if row[10] != "" {
+			t.Fatalf("expected empty origin cluster when no origin attribution was observed, got %#v", row[10])
 		}
 	})
 }
@@ -2390,6 +2401,7 @@ func TestHandleAnalyticsEventFederationEventPreservesOptionalZeroValues(t *testi
 	conn := newFakeClickhouseConn()
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
 	streamID := uuid.NewString()
+	streamTenantID := uuid.NewString()
 	event := kafka.AnalyticsEvent{
 		EventID:   uuid.NewString(),
 		EventType: "federation_event",
@@ -2397,6 +2409,7 @@ func TestHandleAnalyticsEventFederationEventPreservesOptionalZeroValues(t *testi
 		Source:    "decklog",
 		TenantID:  uuid.NewString(),
 		Data: mustMistTriggerData(t, &ipcpb.MistTrigger{
+			OriginClusterId: stringPtr("origin-eu"),
 			TriggerPayload: &ipcpb.MistTrigger_FederationEventData{
 				FederationEventData: &ipcpb.FederationEventData{
 					EventType:                  ipcpb.FederationEventType_REPLICATION_LOOP_PREVENTED,
@@ -2417,6 +2430,9 @@ func TestHandleAnalyticsEventFederationEventPreservesOptionalZeroValues(t *testi
 					LocalLon:                   float64Ptr(0),
 					RemoteLat:                  float64Ptr(40.7128),
 					RemoteLon:                  float64Ptr(-74.0060),
+					StreamTenantId:             stringPtr(streamTenantID),
+					ControlCellId:              stringPtr("cell-central"),
+					OriginClusterId:            stringPtr("origin-eu"),
 				},
 			},
 		}),
@@ -2432,26 +2448,32 @@ func TestHandleAnalyticsEventFederationEventPreservesOptionalZeroValues(t *testi
 	}
 	row := batch.rows[0]
 
-	if got, ok := row[10].(*float32); !ok || got == nil || *got != 0 {
-		t.Fatalf("expected latency_ms 0.0, got %#v", row[10])
-	}
 	if got, ok := row[11].(*float32); !ok || got == nil || *got != 0 {
-		t.Fatalf("expected time_to_live_ms 0.0, got %#v", row[11])
+		t.Fatalf("expected latency_ms 0.0, got %#v", row[11])
 	}
-	if *row[13].(*uint32) != 0 || *row[14].(*uint32) != 0 || *row[15].(*uint32) != 0 {
-		t.Fatalf("expected queried/responding/total candidates zeros, got %#v %#v %#v", row[13], row[14], row[15])
+	if got, ok := row[12].(*float32); !ok || got == nil || *got != 0 {
+		t.Fatalf("expected time_to_live_ms 0.0, got %#v", row[12])
 	}
-	if got, ok := row[16].(*uint64); !ok || got == nil || *got != 0 {
-		t.Fatalf("expected best_remote_score 0, got %#v", row[16])
+	if *row[14].(*uint32) != 0 || *row[15].(*uint32) != 0 || *row[16].(*uint32) != 0 {
+		t.Fatalf("expected queried/responding/total candidates zeros, got %#v %#v %#v", row[14], row[15], row[16])
 	}
-	if got, ok := row[20].(*string); !ok || got == nil || *got != "apac-edge" {
-		t.Fatalf("expected blocked_cluster apac-edge, got %#v", row[20])
+	if got, ok := row[17].(*uint64); !ok || got == nil || *got != 0 {
+		t.Fatalf("expected best_remote_score 0, got %#v", row[17])
 	}
-	if got, ok := row[21].(*string); !ok || got == nil || *got != "us-east-edge" {
-		t.Fatalf("expected existing_replication_cluster us-east-edge, got %#v", row[21])
+	if got, ok := row[21].(*string); !ok || got == nil || *got != "apac-edge" {
+		t.Fatalf("expected blocked_cluster apac-edge, got %#v", row[21])
 	}
-	if *row[22].(*float64) != 0 || *row[23].(*float64) != 0 {
-		t.Fatalf("expected local coordinates 0,0, got %#v %#v", row[22], row[23])
+	if got, ok := row[22].(*string); !ok || got == nil || *got != "us-east-edge" {
+		t.Fatalf("expected existing_replication_cluster us-east-edge, got %#v", row[22])
+	}
+	if *row[23].(*float64) != 0 || *row[24].(*float64) != 0 {
+		t.Fatalf("expected local coordinates 0,0, got %#v %#v", row[23], row[24])
+	}
+	if got, ok := row[2].(*uuid.UUID); !ok || got == nil || got.String() != streamTenantID {
+		t.Fatalf("expected stream tenant %q, got %#v", streamTenantID, row[2])
+	}
+	if row[29] != "origin-eu" || row[30] != "cell-central" {
+		t.Fatalf("expected federation placement origin/control, got %#v %#v", row[29], row[30])
 	}
 }
 

@@ -8,7 +8,7 @@ import (
 
 const insertViewerSessionFinal = `INSERT INTO periscope.viewer_sessions_final (
 	tenant_id, node_id, session_id, source_event_id,
-	cluster_id, stream_id, stream_name, connector, host,
+	cluster_id, origin_cluster_id, control_cell_id, stream_id, stream_name, connector, host,
 	country_code, city, latitude, longitude, tags,
 	duration_seconds, uploaded_bytes, downloaded_bytes, seconds_connected,
 	source_started_at_ms, source_ended_at_ms, edge_received_at_ms, projection_version_ms,
@@ -21,6 +21,8 @@ type ViewerSessionFinalRow struct {
 	SessionID           string
 	SourceEventID       string
 	ClusterID           string
+	OriginClusterID     string
+	ControlCellID       string
 	StreamID            uuid.UUID
 	StreamName          string
 	Connector           string
@@ -49,7 +51,7 @@ func PrepareViewerSessionFinal(ctx context.Context, db BatchPreparer) (*Writer[V
 	return prepare(ctx, db, insertViewerSessionFinal, func(row ViewerSessionFinalRow) []interface{} {
 		return []interface{}{
 			row.TenantID, row.NodeID, row.SessionID, row.SourceEventID,
-			row.ClusterID, row.StreamID, row.StreamName, row.Connector, row.Host,
+			row.ClusterID, row.OriginClusterID, row.ControlCellID, row.StreamID, row.StreamName, row.Connector, row.Host,
 			row.CountryCode, row.City, row.Latitude, row.Longitude, row.Tags,
 			row.DurationSeconds, row.UploadedBytes, row.DownloadedBytes, row.SecondsConnected,
 			row.SourceStartedAtMS, row.SourceEndedAtMS, row.EdgeReceivedAtMS, row.ProjectionVersionMS,
@@ -60,7 +62,7 @@ func PrepareViewerSessionFinal(ctx context.Context, db BatchPreparer) (*Writer[V
 
 const insertStreamSessionFinal = `INSERT INTO periscope.stream_sessions_final (
 	tenant_id, node_id, stream_id, source_event_id,
-	cluster_id, stream_name,
+	cluster_id, origin_cluster_id, control_cell_id, stream_name,
 	downloaded_bytes, uploaded_bytes, total_viewers, total_inputs, total_outputs, viewer_seconds,
 	source_started_at_ms, source_ended_at_ms, edge_received_at_ms, projection_version_ms,
 	closed_reason, payload_raw
@@ -72,6 +74,8 @@ type StreamSessionFinalRow struct {
 	StreamID            uuid.UUID
 	SourceEventID       string
 	ClusterID           string
+	OriginClusterID     string
+	ControlCellID       string
 	StreamName          string
 	DownloadedBytes     int64
 	UploadedBytes       int64
@@ -91,7 +95,7 @@ func PrepareStreamSessionFinal(ctx context.Context, db BatchPreparer) (*Writer[S
 	return prepare(ctx, db, insertStreamSessionFinal, func(row StreamSessionFinalRow) []interface{} {
 		return []interface{}{
 			row.TenantID, row.NodeID, row.StreamID, row.SourceEventID,
-			row.ClusterID, row.StreamName,
+			row.ClusterID, row.OriginClusterID, row.ControlCellID, row.StreamName,
 			row.DownloadedBytes, row.UploadedBytes, row.TotalViewers, row.TotalInputs, row.TotalOutputs, row.ViewerSeconds,
 			row.SourceStartedAtMS, row.SourceEndedAtMS, row.EdgeReceivedAtMS, row.ProjectionVersionMS,
 			row.ClosedReason, row.PayloadRaw,
@@ -102,7 +106,7 @@ func PrepareStreamSessionFinal(ctx context.Context, db BatchPreparer) (*Writer[S
 const insertProcessingSegmentFinal = `INSERT INTO periscope.processing_segments_final (
 	tenant_id, node_id, stream_id, process_type, output_codec, track_type, segment_number,
 	source_event_id,
-	cluster_id, stream_name, input_codec, media_seconds,
+	cluster_id, origin_cluster_id, control_cell_id, stream_name, input_codec, media_seconds,
 	width, height, rendition_count, input_bytes, output_bytes_total, turnaround_ms, speed_factor, livepeer_session_id, renditions_json,
 	input_frames, output_frames, input_frames_delta, output_frames_delta, input_bytes_delta, output_bytes_delta,
 	rtf_in, rtf_out, is_final,
@@ -120,6 +124,8 @@ type ProcessingSegmentFinalRow struct {
 	SegmentNumber       int32
 	SourceEventID       string
 	ClusterID           string
+	OriginClusterID     string
+	ControlCellID       string
 	StreamName          string
 	InputCodec          string
 	MediaSeconds        float64
@@ -153,7 +159,7 @@ func PrepareProcessingSegmentFinal(ctx context.Context, db BatchPreparer) (*Writ
 		return []interface{}{
 			row.TenantID, row.NodeID, row.StreamID, row.ProcessType, row.OutputCodec, row.TrackType, row.SegmentNumber,
 			row.SourceEventID,
-			row.ClusterID, row.StreamName, row.InputCodec, row.MediaSeconds,
+			row.ClusterID, row.OriginClusterID, row.ControlCellID, row.StreamName, row.InputCodec, row.MediaSeconds,
 			row.Width, row.Height, row.RenditionCount, row.InputBytes, row.OutputBytesTotal, row.TurnaroundMS, row.SpeedFactor, row.LivepeerSessionID, row.RenditionsJSON,
 			row.InputFrames, row.OutputFrames, row.InputFramesDelta, row.OutputFramesDelta, row.InputBytesDelta, row.OutputBytesDelta,
 			row.RTFIn, row.RTFOut, row.IsFinal,

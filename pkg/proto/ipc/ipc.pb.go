@@ -5549,8 +5549,12 @@ type MistTrigger struct {
 	EventId           string `protobuf:"bytes,57,opt,name=event_id,json=eventId,proto3" json:"event_id,omitempty"`
 	TriggerUuid       string `protobuf:"bytes,58,opt,name=trigger_uuid,json=triggerUuid,proto3" json:"trigger_uuid,omitempty"`                      // Stable across Mist's transport retries for one doTrigger invocation.
 	TriggerUnixMillis int64  `protobuf:"varint,59,opt,name=trigger_unix_millis,json=triggerUnixMillis,proto3" json:"trigger_unix_millis,omitempty"` // Mist event time from X-Trigger-UnixMillis.
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// Failure-isolation/control cell that accepted this trigger. This is
+	// deliberately distinct from cluster_id: one Foghorn cell may control
+	// authenticated nodes serving several virtual media clusters.
+	ControlCellId *string `protobuf:"bytes,60,opt,name=control_cell_id,json=controlCellId,proto3,oneof" json:"control_cell_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *MistTrigger) Reset() {
@@ -6002,6 +6006,13 @@ func (x *MistTrigger) GetTriggerUnixMillis() int64 {
 		return x.TriggerUnixMillis
 	}
 	return 0
+}
+
+func (x *MistTrigger) GetControlCellId() string {
+	if x != nil && x.ControlCellId != nil {
+		return *x.ControlCellId
+	}
+	return ""
 }
 
 type isMistTrigger_TriggerPayload interface {
@@ -9475,6 +9486,7 @@ type StorageLifecycleData struct {
 	OriginClusterId *string                                  `protobuf:"bytes,15,opt,name=origin_cluster_id,json=originClusterId,proto3,oneof" json:"origin_cluster_id,omitempty"` // Cluster that originally created the artifact
 	DtshIncluded    *bool                                    `protobuf:"varint,17,opt,name=dtsh_included,json=dtshIncluded,proto3,oneof" json:"dtsh_included,omitempty"`           // True when the S3 sync included a Mist .dtsh index.
 	Reason          *StorageLifecycleData_CacheFailureReason `protobuf:"varint,16,opt,name=reason,proto3,enum=helmsmancontrol.StorageLifecycleData_CacheFailureReason,oneof" json:"reason,omitempty"`
+	ControlCellId   *string                                  `protobuf:"bytes,18,opt,name=control_cell_id,json=controlCellId,proto3,oneof" json:"control_cell_id,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -9626,6 +9638,13 @@ func (x *StorageLifecycleData) GetReason() StorageLifecycleData_CacheFailureReas
 		return *x.Reason
 	}
 	return StorageLifecycleData_CACHE_REASON_UNSPECIFIED
+}
+
+func (x *StorageLifecycleData) GetControlCellId() string {
+	if x != nil && x.ControlCellId != nil {
+		return *x.ControlCellId
+	}
+	return ""
 }
 
 type PushRewriteTrigger struct {
@@ -10425,6 +10444,9 @@ type ViewerConnectTrigger struct {
 	ClientBucket    *GeoBucket `protobuf:"bytes,13,opt,name=client_bucket,json=clientBucket,proto3,oneof" json:"client_bucket,omitempty"`
 	NodeBucket      *GeoBucket `protobuf:"bytes,14,opt,name=node_bucket,json=nodeBucket,proto3,oneof" json:"node_bucket,omitempty"`
 	StreamId        *string    `protobuf:"bytes,15,opt,name=stream_id,json=streamId,proto3,oneof" json:"stream_id,omitempty"` // Enriched by Foghorn (UUID)
+	ClusterId       *string    `protobuf:"bytes,16,opt,name=cluster_id,json=clusterId,proto3,oneof" json:"cluster_id,omitempty"`
+	OriginClusterId *string    `protobuf:"bytes,17,opt,name=origin_cluster_id,json=originClusterId,proto3,oneof" json:"origin_cluster_id,omitempty"`
+	ControlCellId   *string    `protobuf:"bytes,18,opt,name=control_cell_id,json=controlCellId,proto3,oneof" json:"control_cell_id,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -10557,6 +10579,27 @@ func (x *ViewerConnectTrigger) GetStreamId() string {
 	return ""
 }
 
+func (x *ViewerConnectTrigger) GetClusterId() string {
+	if x != nil && x.ClusterId != nil {
+		return *x.ClusterId
+	}
+	return ""
+}
+
+func (x *ViewerConnectTrigger) GetOriginClusterId() string {
+	if x != nil && x.OriginClusterId != nil {
+		return *x.OriginClusterId
+	}
+	return ""
+}
+
+func (x *ViewerConnectTrigger) GetControlCellId() string {
+	if x != nil && x.ControlCellId != nil {
+		return *x.ControlCellId
+	}
+	return ""
+}
+
 // ViewerDisconnectTrigger (formerly USER_END) indicates a viewer disconnect.
 type ViewerDisconnectTrigger struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
@@ -10587,11 +10630,14 @@ type ViewerDisconnectTrigger struct {
 	// these arrays expose the actual per-element seconds so downstream
 	// attribution can split a single session across the streams /
 	// connectors / hosts it touched.
-	StreamTimes    []*SessionTimeShare `protobuf:"bytes,19,rep,name=stream_times,json=streamTimes,proto3" json:"stream_times,omitempty"`
-	ConnectorTimes []*SessionTimeShare `protobuf:"bytes,20,rep,name=connector_times,json=connectorTimes,proto3" json:"connector_times,omitempty"`
-	HostTimes      []*SessionTimeShare `protobuf:"bytes,21,rep,name=host_times,json=hostTimes,proto3" json:"host_times,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	StreamTimes     []*SessionTimeShare `protobuf:"bytes,19,rep,name=stream_times,json=streamTimes,proto3" json:"stream_times,omitempty"`
+	ConnectorTimes  []*SessionTimeShare `protobuf:"bytes,20,rep,name=connector_times,json=connectorTimes,proto3" json:"connector_times,omitempty"`
+	HostTimes       []*SessionTimeShare `protobuf:"bytes,21,rep,name=host_times,json=hostTimes,proto3" json:"host_times,omitempty"`
+	ClusterId       *string             `protobuf:"bytes,22,opt,name=cluster_id,json=clusterId,proto3,oneof" json:"cluster_id,omitempty"`
+	OriginClusterId *string             `protobuf:"bytes,23,opt,name=origin_cluster_id,json=originClusterId,proto3,oneof" json:"origin_cluster_id,omitempty"`
+	ControlCellId   *string             `protobuf:"bytes,24,opt,name=control_cell_id,json=controlCellId,proto3,oneof" json:"control_cell_id,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ViewerDisconnectTrigger) Reset() {
@@ -10769,6 +10815,27 @@ func (x *ViewerDisconnectTrigger) GetHostTimes() []*SessionTimeShare {
 		return x.HostTimes
 	}
 	return nil
+}
+
+func (x *ViewerDisconnectTrigger) GetClusterId() string {
+	if x != nil && x.ClusterId != nil {
+		return *x.ClusterId
+	}
+	return ""
+}
+
+func (x *ViewerDisconnectTrigger) GetOriginClusterId() string {
+	if x != nil && x.OriginClusterId != nil {
+		return *x.OriginClusterId
+	}
+	return ""
+}
+
+func (x *ViewerDisconnectTrigger) GetControlCellId() string {
+	if x != nil && x.ControlCellId != nil {
+		return *x.ControlCellId
+	}
+	return ""
 }
 
 // SessionTimeShare is one (name, seconds) entry from a MistServer
@@ -13587,16 +13654,19 @@ type LoadBalancingData struct {
 	ClientBucket *GeoBucket `protobuf:"bytes,16,opt,name=client_bucket,json=clientBucket,proto3,oneof" json:"client_bucket,omitempty"`
 	NodeBucket   *GeoBucket `protobuf:"bytes,17,opt,name=node_bucket,json=nodeBucket,proto3,oneof" json:"node_bucket,omitempty"`
 	// Dual-tenant attribution (RFC: routing-events-dual-tenant-attribution)
-	StreamTenantId  *string  `protobuf:"bytes,18,opt,name=stream_tenant_id,json=streamTenantId,proto3,oneof" json:"stream_tenant_id,omitempty"` // Subject tenant (stream/customer owner)
-	ClusterId       *string  `protobuf:"bytes,19,opt,name=cluster_id,json=clusterId,proto3,oneof" json:"cluster_id,omitempty"`                  // Emitting cluster identifier
-	LatencyMs       *float32 `protobuf:"fixed32,20,opt,name=latency_ms,json=latencyMs,proto3,oneof" json:"latency_ms,omitempty"`
-	StreamId        *string  `protobuf:"bytes,21,opt,name=stream_id,json=streamId,proto3,oneof" json:"stream_id,omitempty"`                        // Public stream ID (UUID); REQUIRED for analytics joins
-	CandidatesCount *uint32  `protobuf:"varint,22,opt,name=candidates_count,json=candidatesCount,proto3,oneof" json:"candidates_count,omitempty"`  // Number of eligible candidates considered
-	EventType       *string  `protobuf:"bytes,23,opt,name=event_type,json=eventType,proto3,oneof" json:"event_type,omitempty"`                     // "play_rewrite", "grpc_resolve", etc.
-	Source          *string  `protobuf:"bytes,24,opt,name=source,proto3,oneof" json:"source,omitempty"`                                            // "http", "grpc", "internal"
-	RemoteClusterId *string  `protobuf:"bytes,25,opt,name=remote_cluster_id,json=remoteClusterId,proto3,oneof" json:"remote_cluster_id,omitempty"` // Destination cluster on cross-cluster decisions (remote_redirect, cross_cluster_dtsc)
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	StreamTenantId    *string  `protobuf:"bytes,18,opt,name=stream_tenant_id,json=streamTenantId,proto3,oneof" json:"stream_tenant_id,omitempty"` // Subject tenant (stream/customer owner)
+	ClusterId         *string  `protobuf:"bytes,19,opt,name=cluster_id,json=clusterId,proto3,oneof" json:"cluster_id,omitempty"`                  // Emitting cluster identifier
+	LatencyMs         *float32 `protobuf:"fixed32,20,opt,name=latency_ms,json=latencyMs,proto3,oneof" json:"latency_ms,omitempty"`
+	StreamId          *string  `protobuf:"bytes,21,opt,name=stream_id,json=streamId,proto3,oneof" json:"stream_id,omitempty"`                              // Public stream ID (UUID); REQUIRED for analytics joins
+	CandidatesCount   *uint32  `protobuf:"varint,22,opt,name=candidates_count,json=candidatesCount,proto3,oneof" json:"candidates_count,omitempty"`        // Number of eligible candidates considered
+	EventType         *string  `protobuf:"bytes,23,opt,name=event_type,json=eventType,proto3,oneof" json:"event_type,omitempty"`                           // "play_rewrite", "grpc_resolve", etc.
+	Source            *string  `protobuf:"bytes,24,opt,name=source,proto3,oneof" json:"source,omitempty"`                                                  // "http", "grpc", "internal"
+	RemoteClusterId   *string  `protobuf:"bytes,25,opt,name=remote_cluster_id,json=remoteClusterId,proto3,oneof" json:"remote_cluster_id,omitempty"`       // Destination cluster on cross-cluster decisions (remote_redirect, cross_cluster_dtsc)
+	SelectedClusterId *string  `protobuf:"bytes,26,opt,name=selected_cluster_id,json=selectedClusterId,proto3,oneof" json:"selected_cluster_id,omitempty"` // Cluster containing the selected node; decision intent, not confirmed delivery
+	ControlCellId     *string  `protobuf:"bytes,27,opt,name=control_cell_id,json=controlCellId,proto3,oneof" json:"control_cell_id,omitempty"`             // Foghorn cell that made the decision
+	OriginClusterId   *string  `protobuf:"bytes,28,opt,name=origin_cluster_id,json=originClusterId,proto3,oneof" json:"origin_cluster_id,omitempty"`       // Stream/artifact origin when known
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *LoadBalancingData) Reset() {
@@ -13800,6 +13870,27 @@ func (x *LoadBalancingData) GetSource() string {
 func (x *LoadBalancingData) GetRemoteClusterId() string {
 	if x != nil && x.RemoteClusterId != nil {
 		return *x.RemoteClusterId
+	}
+	return ""
+}
+
+func (x *LoadBalancingData) GetSelectedClusterId() string {
+	if x != nil && x.SelectedClusterId != nil {
+		return *x.SelectedClusterId
+	}
+	return ""
+}
+
+func (x *LoadBalancingData) GetControlCellId() string {
+	if x != nil && x.ControlCellId != nil {
+		return *x.ControlCellId
+	}
+	return ""
+}
+
+func (x *LoadBalancingData) GetOriginClusterId() string {
+	if x != nil && x.OriginClusterId != nil {
+		return *x.OriginClusterId
 	}
 	return ""
 }
@@ -14779,12 +14870,15 @@ type FederationEventData struct {
 	BlockedCluster             *string `protobuf:"bytes,20,opt,name=blocked_cluster,json=blockedCluster,proto3,oneof" json:"blocked_cluster,omitempty"`
 	ExistingReplicationCluster *string `protobuf:"bytes,21,opt,name=existing_replication_cluster,json=existingReplicationCluster,proto3,oneof" json:"existing_replication_cluster,omitempty"`
 	// Geo (from foghorn self-GeoIP + peer geo cache)
-	LocalLat      *float64 `protobuf:"fixed64,22,opt,name=local_lat,json=localLat,proto3,oneof" json:"local_lat,omitempty"`
-	LocalLon      *float64 `protobuf:"fixed64,23,opt,name=local_lon,json=localLon,proto3,oneof" json:"local_lon,omitempty"`
-	RemoteLat     *float64 `protobuf:"fixed64,24,opt,name=remote_lat,json=remoteLat,proto3,oneof" json:"remote_lat,omitempty"`
-	RemoteLon     *float64 `protobuf:"fixed64,25,opt,name=remote_lon,json=remoteLon,proto3,oneof" json:"remote_lon,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	LocalLat        *float64 `protobuf:"fixed64,22,opt,name=local_lat,json=localLat,proto3,oneof" json:"local_lat,omitempty"`
+	LocalLon        *float64 `protobuf:"fixed64,23,opt,name=local_lon,json=localLon,proto3,oneof" json:"local_lon,omitempty"`
+	RemoteLat       *float64 `protobuf:"fixed64,24,opt,name=remote_lat,json=remoteLat,proto3,oneof" json:"remote_lat,omitempty"`
+	RemoteLon       *float64 `protobuf:"fixed64,25,opt,name=remote_lon,json=remoteLon,proto3,oneof" json:"remote_lon,omitempty"`
+	StreamTenantId  *string  `protobuf:"bytes,26,opt,name=stream_tenant_id,json=streamTenantId,proto3,oneof" json:"stream_tenant_id,omitempty"` // Content owner; tenant_id remains infra owner
+	ControlCellId   *string  `protobuf:"bytes,27,opt,name=control_cell_id,json=controlCellId,proto3,oneof" json:"control_cell_id,omitempty"`
+	OriginClusterId *string  `protobuf:"bytes,28,opt,name=origin_cluster_id,json=originClusterId,proto3,oneof" json:"origin_cluster_id,omitempty"` // Stream origin for content-scoped federation movement
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *FederationEventData) Reset() {
@@ -14990,6 +15084,27 @@ func (x *FederationEventData) GetRemoteLon() float64 {
 		return *x.RemoteLon
 	}
 	return 0
+}
+
+func (x *FederationEventData) GetStreamTenantId() string {
+	if x != nil && x.StreamTenantId != nil {
+		return *x.StreamTenantId
+	}
+	return ""
+}
+
+func (x *FederationEventData) GetControlCellId() string {
+	if x != nil && x.ControlCellId != nil {
+		return *x.ControlCellId
+	}
+	return ""
+}
+
+func (x *FederationEventData) GetOriginClusterId() string {
+	if x != nil && x.OriginClusterId != nil {
+		return *x.OriginClusterId
+	}
+	return ""
 }
 
 type NodeCapabilities struct {
@@ -15280,6 +15395,7 @@ type ProcessBillingEvent struct {
 	ModelId           *string                 `protobuf:"bytes,77,opt,name=model_id,json=modelId,proto3,oneof" json:"model_id,omitempty"`
 	ModelVersion      *string                 `protobuf:"bytes,78,opt,name=model_version,json=modelVersion,proto3,oneof" json:"model_version,omitempty"`
 	MeterQuantities   []*ProcessMeterQuantity `protobuf:"bytes,79,rep,name=meter_quantities,json=meterQuantities,proto3" json:"meter_quantities,omitempty"`
+	ControlCellId     *string                 `protobuf:"bytes,80,opt,name=control_cell_id,json=controlCellId,proto3,oneof" json:"control_cell_id,omitempty"` // Foghorn cell that enriched/observed the work
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -15732,6 +15848,13 @@ func (x *ProcessBillingEvent) GetMeterQuantities() []*ProcessMeterQuantity {
 		return x.MeterQuantities
 	}
 	return nil
+}
+
+func (x *ProcessBillingEvent) GetControlCellId() string {
+	if x != nil && x.ControlCellId != nil {
+		return *x.ControlCellId
+	}
+	return ""
 }
 
 type StorageInfo struct {
@@ -20062,7 +20185,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\amessage\x18\x02 \x01(\tR\amessage\"\x83\x01\n" +
 	"\tHeartbeat\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12]\n" +
-	"\x17applied_managed_streams\x18\x02 \x03(\v2%.helmsmancontrol.AppliedManagedStreamR\x15appliedManagedStreams\"\x8d\x1b\n" +
+	"\x17applied_managed_streams\x18\x02 \x03(\v2%.helmsmancontrol.AppliedManagedStreamR\x15appliedManagedStreams\"\xce\x1b\n" +
 	"\vMistTrigger\x12!\n" +
 	"\ftrigger_type\x18\x01 \x01(\tR\vtriggerType\x12\x17\n" +
 	"\anode_id\x18\x03 \x01(\tR\x06nodeId\x12\x1c\n" +
@@ -20118,7 +20241,8 @@ const file_ipc_proto_rawDesc = "" +
 	"\fcausation_id\x188 \x01(\tR\vcausationId\x12\x19\n" +
 	"\bevent_id\x189 \x01(\tR\aeventId\x12!\n" +
 	"\ftrigger_uuid\x18: \x01(\tR\vtriggerUuid\x12.\n" +
-	"\x13trigger_unix_millis\x18; \x01(\x03R\x11triggerUnixMillisB\x11\n" +
+	"\x13trigger_unix_millis\x18; \x01(\x03R\x11triggerUnixMillis\x12+\n" +
+	"\x0fcontrol_cell_id\x18< \x01(\tH\x06R\rcontrolCellId\x88\x01\x01B\x11\n" +
 	"\x0ftrigger_payloadB\f\n" +
 	"\n" +
 	"_tenant_idB\n" +
@@ -20127,7 +20251,8 @@ const file_ipc_proto_rawDesc = "" +
 	"\n" +
 	"_stream_idB\r\n" +
 	"\v_cluster_idB\x14\n" +
-	"\x12_origin_cluster_idJ\x04\b\x14\x10\x15R\x10stream_bandwidth\"Y\n" +
+	"\x12_origin_cluster_idB\x12\n" +
+	"\x10_control_cell_idJ\x04\b\x14\x10\x15R\x10stream_bandwidth\"Y\n" +
 	"\x15RawMistWebhookTrigger\x12\x1f\n" +
 	"\vpayload_raw\x18\x01 \x01(\fR\n" +
 	"payloadRaw\x12\x1f\n" +
@@ -20484,8 +20609,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\n" +
 	"local_path\x18\x04 \x01(\tR\tlocalPath\x12*\n" +
 	"\x11presigned_put_url\x18\x05 \x01(\tR\x0fpresignedPutUrl\x12,\n" +
-	"\x12url_expiry_seconds\x18\x06 \x01(\x03R\x10urlExpirySecondsJ\x04\b\a\x10\bR\tdtsh_urls\"\xd2\n" +
-	"\n" +
+	"\x12url_expiry_seconds\x18\x06 \x01(\x03R\x10urlExpirySecondsJ\x04\b\a\x10\bR\tdtsh_urls\"\x93\v\n" +
 	"\x14StorageLifecycleData\x12D\n" +
 	"\x06action\x18\x01 \x01(\x0e2,.helmsmancontrol.StorageLifecycleData.ActionR\x06action\x12\x1d\n" +
 	"\n" +
@@ -20511,7 +20635,8 @@ const file_ipc_proto_rawDesc = "" +
 	"\x11origin_cluster_id\x18\x0f \x01(\tH\n" +
 	"R\x0foriginClusterId\x88\x01\x01\x12(\n" +
 	"\rdtsh_included\x18\x11 \x01(\bH\vR\fdtshIncluded\x88\x01\x01\x12U\n" +
-	"\x06reason\x18\x10 \x01(\x0e28.helmsmancontrol.StorageLifecycleData.CacheFailureReasonH\fR\x06reason\x88\x01\x01\"\x85\x02\n" +
+	"\x06reason\x18\x10 \x01(\x0e28.helmsmancontrol.StorageLifecycleData.CacheFailureReasonH\fR\x06reason\x88\x01\x01\x12+\n" +
+	"\x0fcontrol_cell_id\x18\x12 \x01(\tH\rR\rcontrolCellId\x88\x01\x01\"\x85\x02\n" +
 	"\x06Action\x12\x16\n" +
 	"\x12ACTION_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13ACTION_SYNC_STARTED\x10\x01\x12\x11\n" +
@@ -20546,7 +20671,8 @@ const file_ipc_proto_rawDesc = "" +
 	"\v_cluster_idB\x14\n" +
 	"\x12_origin_cluster_idB\x10\n" +
 	"\x0e_dtsh_includedB\t\n" +
-	"\a_reason\"\xb4\b\n" +
+	"\a_reasonB\x12\n" +
+	"\x10_control_cell_id\"\xb4\b\n" +
 	"\x12PushRewriteTrigger\x12\x19\n" +
 	"\bpush_url\x18\x01 \x01(\tR\apushUrl\x12\x1a\n" +
 	"\bhostname\x18\x02 \x01(\tR\bhostname\x12\x1f\n" +
@@ -20678,7 +20804,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\n" +
 	"\b_node_idB\f\n" +
 	"\n" +
-	"_stream_id\"\xd2\x05\n" +
+	"_stream_id\"\x8d\a\n" +
 	"\x14ViewerConnectTrigger\x12\x1f\n" +
 	"\vstream_name\x18\x01 \x01(\tR\n" +
 	"streamName\x12\x12\n" +
@@ -20699,7 +20825,12 @@ const file_ipc_proto_rawDesc = "" +
 	"\rclient_bucket\x18\r \x01(\v2\x1a.helmsmancontrol.GeoBucketH\x05R\fclientBucket\x88\x01\x01\x12@\n" +
 	"\vnode_bucket\x18\x0e \x01(\v2\x1a.helmsmancontrol.GeoBucketH\x06R\n" +
 	"nodeBucket\x88\x01\x01\x12 \n" +
-	"\tstream_id\x18\x0f \x01(\tH\aR\bstreamId\x88\x01\x01B\n" +
+	"\tstream_id\x18\x0f \x01(\tH\aR\bstreamId\x88\x01\x01\x12\"\n" +
+	"\n" +
+	"cluster_id\x18\x10 \x01(\tH\bR\tclusterId\x88\x01\x01\x12/\n" +
+	"\x11origin_cluster_id\x18\x11 \x01(\tH\tR\x0foriginClusterId\x88\x01\x01\x12+\n" +
+	"\x0fcontrol_cell_id\x18\x12 \x01(\tH\n" +
+	"R\rcontrolCellId\x88\x01\x01B\n" +
 	"\n" +
 	"\b_node_idB\x11\n" +
 	"\x0f_client_countryB\x0e\n" +
@@ -20709,7 +20840,10 @@ const file_ipc_proto_rawDesc = "" +
 	"\x0e_client_bucketB\x0e\n" +
 	"\f_node_bucketB\f\n" +
 	"\n" +
-	"_stream_idJ\x04\b\b\x10\t\"\x9a\b\n" +
+	"_stream_idB\r\n" +
+	"\v_cluster_idB\x14\n" +
+	"\x12_origin_cluster_idB\x12\n" +
+	"\x10_control_cell_idJ\x04\b\b\x10\t\"\xd5\t\n" +
 	"\x17ViewerDisconnectTrigger\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x1f\n" +
@@ -20737,7 +20871,12 @@ const file_ipc_proto_rawDesc = "" +
 	"\fstream_times\x18\x13 \x03(\v2!.helmsmancontrol.SessionTimeShareR\vstreamTimes\x12J\n" +
 	"\x0fconnector_times\x18\x14 \x03(\v2!.helmsmancontrol.SessionTimeShareR\x0econnectorTimes\x12@\n" +
 	"\n" +
-	"host_times\x18\x15 \x03(\v2!.helmsmancontrol.SessionTimeShareR\thostTimesB\n" +
+	"host_times\x18\x15 \x03(\v2!.helmsmancontrol.SessionTimeShareR\thostTimes\x12\"\n" +
+	"\n" +
+	"cluster_id\x18\x16 \x01(\tH\n" +
+	"R\tclusterId\x88\x01\x01\x12/\n" +
+	"\x11origin_cluster_id\x18\x17 \x01(\tH\vR\x0foriginClusterId\x88\x01\x01\x12+\n" +
+	"\x0fcontrol_cell_id\x18\x18 \x01(\tH\fR\rcontrolCellId\x88\x01\x01B\n" +
 	"\n" +
 	"\b_node_idB\x0f\n" +
 	"\r_country_codeB\a\n" +
@@ -20750,7 +20889,10 @@ const file_ipc_proto_rawDesc = "" +
 	"\x0e_client_bucketB\x0e\n" +
 	"\f_node_bucketB\f\n" +
 	"\n" +
-	"_stream_id\"@\n" +
+	"_stream_idB\r\n" +
+	"\v_cluster_idB\x14\n" +
+	"\x12_origin_cluster_idB\x12\n" +
+	"\x10_control_cell_id\"@\n" +
 	"\x10SessionTimeShare\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aseconds\x18\x02 \x01(\rR\aseconds\"\xab\x05\n" +
@@ -21212,7 +21354,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\n" +
 	"_tenant_idB\f\n" +
 	"\n" +
-	"_node_uuidJ\x04\b3\x104R\x1cartifacts_scan_started_at_ms\"\xcf\t\n" +
+	"_node_uuidJ\x04\b3\x104R\x1cartifacts_scan_started_at_ms\"\xa4\v\n" +
 	"\x11LoadBalancingData\x12#\n" +
 	"\rselected_node\x18\x01 \x01(\tR\fselectedNode\x12\x1a\n" +
 	"\blatitude\x18\x02 \x01(\x01R\blatitude\x12\x1c\n" +
@@ -21244,7 +21386,10 @@ const file_ipc_proto_rawDesc = "" +
 	"\n" +
 	"event_type\x18\x17 \x01(\tH\vR\teventType\x88\x01\x01\x12\x1b\n" +
 	"\x06source\x18\x18 \x01(\tH\fR\x06source\x88\x01\x01\x12/\n" +
-	"\x11remote_cluster_id\x18\x19 \x01(\tH\rR\x0fremoteClusterId\x88\x01\x01B\x13\n" +
+	"\x11remote_cluster_id\x18\x19 \x01(\tH\rR\x0fremoteClusterId\x88\x01\x01\x123\n" +
+	"\x13selected_cluster_id\x18\x1a \x01(\tH\x0eR\x11selectedClusterId\x88\x01\x01\x12+\n" +
+	"\x0fcontrol_cell_id\x18\x1b \x01(\tH\x0fR\rcontrolCellId\x88\x01\x01\x12/\n" +
+	"\x11origin_cluster_id\x18\x1c \x01(\tH\x10R\x0foriginClusterId\x88\x01\x01B\x13\n" +
 	"\x11_selected_node_idB\x16\n" +
 	"\x14_routing_distance_kmB\f\n" +
 	"\n" +
@@ -21260,7 +21405,10 @@ const file_ipc_proto_rawDesc = "" +
 	"\x11_candidates_countB\r\n" +
 	"\v_event_typeB\t\n" +
 	"\a_sourceB\x14\n" +
-	"\x12_remote_cluster_id\"\xac\x0f\n" +
+	"\x12_remote_cluster_idB\x16\n" +
+	"\x14_selected_cluster_idB\x12\n" +
+	"\x10_control_cell_idB\x14\n" +
+	"\x12_origin_cluster_id\"\xac\x0f\n" +
 	"\x11ClipLifecycleData\x12>\n" +
 	"\x05stage\x18\x01 \x01(\x0e2(.helmsmancontrol.ClipLifecycleData.StageR\x05stage\x12\x1b\n" +
 	"\tclip_hash\x18\x02 \x01(\tR\bclipHash\x12\"\n" +
@@ -21528,7 +21676,7 @@ const file_ipc_proto_rawDesc = "" +
 	"\n" +
 	"_tenant_idB\n" +
 	"\n" +
-	"\b_user_id\"\x93\v\n" +
+	"\b_user_id\"\xdf\f\n" +
 	"\x13FederationEventData\x12C\n" +
 	"\n" +
 	"event_type\x18\x01 \x01(\x0e2$.helmsmancontrol.FederationEventTypeR\teventType\x12 \n" +
@@ -21562,7 +21710,10 @@ const file_ipc_proto_rawDesc = "" +
 	"\n" +
 	"remote_lat\x18\x18 \x01(\x01H\x14R\tremoteLat\x88\x01\x01\x12\"\n" +
 	"\n" +
-	"remote_lon\x18\x19 \x01(\x01H\x15R\tremoteLon\x88\x01\x01B\f\n" +
+	"remote_lon\x18\x19 \x01(\x01H\x15R\tremoteLon\x88\x01\x01\x12-\n" +
+	"\x10stream_tenant_id\x18\x1a \x01(\tH\x16R\x0estreamTenantId\x88\x01\x01\x12+\n" +
+	"\x0fcontrol_cell_id\x18\x1b \x01(\tH\x17R\rcontrolCellId\x88\x01\x01\x12/\n" +
+	"\x11origin_cluster_id\x18\x1c \x01(\tH\x18R\x0foriginClusterId\x88\x01\x01B\f\n" +
 	"\n" +
 	"_tenant_idB\x0e\n" +
 	"\f_stream_nameB\f\n" +
@@ -21589,7 +21740,10 @@ const file_ipc_proto_rawDesc = "" +
 	"\n" +
 	"_local_lonB\r\n" +
 	"\v_remote_latB\r\n" +
-	"\v_remote_lon\"\x8e\x01\n" +
+	"\v_remote_lonB\x13\n" +
+	"\x11_stream_tenant_idB\x12\n" +
+	"\x10_control_cell_idB\x14\n" +
+	"\x12_origin_cluster_id\"\x8e\x01\n" +
 	"\x10NodeCapabilities\x12\x16\n" +
 	"\x06ingest\x18\x01 \x01(\bR\x06ingest\x12\x12\n" +
 	"\x04edge\x18\x02 \x01(\bR\x04edge\x12\x18\n" +
@@ -21612,7 +21766,7 @@ const file_ipc_proto_rawDesc = "" +
 	"dimensions\x1a=\n" +
 	"\x0fDimensionsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x9a\x1c\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xdb\x1c\n" +
 	"\x13ProcessBillingEvent\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x1f\n" +
 	"\vstream_name\x18\x02 \x01(\tR\n" +
@@ -21684,7 +21838,8 @@ const file_ipc_proto_rawDesc = "" +
 	"\x13provider_cluster_id\x18L \x01(\tH3R\x11providerClusterId\x88\x01\x01\x12\x1e\n" +
 	"\bmodel_id\x18M \x01(\tH4R\amodelId\x88\x01\x01\x12(\n" +
 	"\rmodel_version\x18N \x01(\tH5R\fmodelVersion\x88\x01\x01\x12P\n" +
-	"\x10meter_quantities\x18O \x03(\v2%.helmsmancontrol.ProcessMeterQuantityR\x0fmeterQuantitiesB\f\n" +
+	"\x10meter_quantities\x18O \x03(\v2%.helmsmancontrol.ProcessMeterQuantityR\x0fmeterQuantities\x12+\n" +
+	"\x0fcontrol_cell_id\x18P \x01(\tH6R\rcontrolCellId\x88\x01\x01B\f\n" +
 	"\n" +
 	"_tenant_idB\f\n" +
 	"\n" +
@@ -21741,7 +21896,8 @@ const file_ipc_proto_rawDesc = "" +
 	"\x13_provider_tenant_idB\x16\n" +
 	"\x14_provider_cluster_idB\v\n" +
 	"\t_model_idB\x10\n" +
-	"\x0e_model_version\"f\n" +
+	"\x0e_model_versionB\x12\n" +
+	"\x10_control_cell_id\"f\n" +
 	"\vStorageInfo\x12\x1d\n" +
 	"\n" +
 	"local_path\x18\x01 \x01(\tR\tlocalPath\x12\x1b\n" +

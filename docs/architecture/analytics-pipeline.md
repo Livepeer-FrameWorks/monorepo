@@ -19,6 +19,9 @@ It is written as a “how the system works” reference (vs an audit checklist).
 - `session_id`: Viewer session identifier from MistServer (connect/disconnect lifecycle). Session IDs are node-scoped, so `viewer_sessions_current` keys on `node_id` plus `session_id` to avoid cross-node collisions.
 - `event_id`: Event identifier used for pagination/cursors and uniqueness in ClickHouse.
 - `request_id`: Clip/DVR workflow identifier.
+- `cluster_id`: Authenticated cluster of the node that performed or served the work. This is the serving cluster for viewer delivery and must never be inferred from the stream origin or from the Foghorn process.
+- `origin_cluster_id`: Cluster where the stream or artifact originated. Empty means unknown; it does not fall back to `cluster_id`.
+- `control_cell_id`: Foghorn/media-authority control cell that made or observed the decision. A control cell may manage nodes in multiple clusters, so this is not a serving-cluster alias.
 
 ## Services (What Each Does)
 
@@ -44,6 +47,25 @@ stable, unique `METERING_SOURCE_ID`; all workers publish to the same central
 Purser topic. Query API replicas remain stateless and may scale horizontally
 independently. The aggregation boundary is the logical ClickHouse source, not
 an individual ClickHouse replica or Query pod.
+
+Production currently uses one centralized ClickHouse dataset, one Purser, and
+one metering source for every media cell, including cells in other regions:
+`METERING_SOURCE_ID=periscope-default` and
+`METERING_SOURCE_REGION=eu-west`. The region is durable source ownership/audit
+metadata; it does not route traffic or imply that usage from other regions is
+excluded. Each report independently carries the work-performing `cluster_id`.
+The CLI pins the worker to aggregator Kafka and routes its ClickHouse reads to
+the configured `write_endpoint`. Source IDs are at most 128 characters and
+match `^[a-z0-9][a-z0-9._-]*$`.
+
+A source ID survives worker restarts, replica changes, host moves, and physical
+ClickHouse replacement. Periscope persists the first non-empty region for an ID
+and rejects a later conflicting value. Creating, renaming, or retiring a source
+is a coordinated billing lifecycle operation: Purser must activate/deactivate
+the corresponding required source and the old and new workers must not own
+overlapping facts. A media-cluster split alone is not a source split. Only a
+future split into independently owned ClickHouse billing datasets creates new
+source IDs and local worker sets.
 
 ## 1) Emission: MistServer → Helmsman
 
@@ -184,21 +206,26 @@ If you need to add a new event type, the switch lives in `api_analytics_ingest/i
 
 The exact schema is in `pkg/database/sql/clickhouse`, but conceptually:
 
-- `viewer_connection_events`: Viewer connect/disconnect session events retained for support diagnostics. The rated billing source is `viewer_sessions_final`, projected from durable `USER_END` triggers.
+- `viewer_connection_events`: Viewer connect/disconnect session events retained for support diagnostics. Rows carry authenticated serving `cluster_id`, independent `origin_cluster_id`, and `control_cell_id`. The rated billing source is `viewer_sessions_final`, projected from durable `USER_END` triggers with the same attribution.
 - `stream_event_log`: Stream lifecycle + notable stream events (start/end/errors, etc.).
 - `stream_health_samples`: QoE / buffer health samples (bitrate/fps/codec/buffer state, issues).
 - `client_qoe_samples`: Client lifecycle samples; input for rollups like `client_qoe_5m`. Diagnostic-only — see "Client QoE sampling" below for cadence and the explicit non-authority over viewer counts / billing.
 - `player_boot_samples`: Browser-originated player startup waterfall (time-to-first-frame split into spans, plus Resource Timing for manifest/segment/CDN). Diagnostic-only — see "Player boot telemetry" below. No rollup MV: percentiles are computed at read time (`quantileIf`) because `quantile()` is not mergeable in a plain MergeTree.
 - `node_metrics_samples` and `node_state_current`: Node telemetry and “current state” snapshots.
-- `stream_state_current`: Current per-stream snapshot (including derived fields like `current_viewers`).
+- `stream_state_current`: Current per-stream snapshot (including derived fields like `current_viewers`) with serving `cluster_id` copied from the authenticated Mist envelope.
 - `artifact_events` and `artifact_state_current`: Clip/DVR/VOD lifecycle events + current artifact state. The authoritative durable-storage fields in `artifact_state_current` (`is_synced`, `sync_status`, `storage_location`, `is_finalized`) are set SOLELY by the Foghorn-validated Clip/DVR/Vod lifecycle events (emitted after `processSyncComplete`/freeze validation), and the diagnostic `storage_lifecycle` stream never writes them. `has_local_copy` (placement) is NOT taken from those events — it is derived at read time from present-copy counts in `artifact_node_copy_current` (a node holds a present copy), independent of any lifecycle-written column.
-- `routing_decisions`: Load balancing decision telemetry (routing maps, etc.).
+- `routing_decisions`: Load balancing decision telemetry. `cluster_id` is the emitting cluster context, `selected_cluster_id` is the cluster that owns the selected node, `remote_cluster_id` is the cross-cluster target, and `control_cell_id` identifies the decision-maker. Resolved content identity, including origin, is carried into the event synchronously; legacy asynchronous enrichment is fill-only and is skipped when resolution already supplied an identity.
 - `processing_events`: Transcoding/processing usage telemetry retained for diagnostics. The rated processing source is `processing_segments_final`, projected from durable Livepeer and AV segment-complete triggers.
 - `storage_snapshots` and `storage_events`: Storage capacity snapshots and lifecycle actions. `storage_events` is a DIAGNOSTIC stream: the sidecar (Helmsman) emits `storage_lifecycle` (e.g. `ACTION_SYNCED`) before Foghorn validates the sync attempt, so it can reflect a stale, timed-out, or ultimately-rejected attempt. `processStorageLifecycle` therefore writes ONLY `storage_events` and never `artifact_state_current`.
-- `federation_events`: Cross-cluster federation telemetry (peering, replication, artifact access, redirects) with geo coordinates (`local_lat`/`local_lon`/`remote_lat`/`remote_lon`).
+- `federation_events`: Cross-cluster federation telemetry (peering, replication, artifact access, redirects) with geo coordinates. `tenant_id` remains the infrastructure owner; stream-scoped events, including completed origin pulls, also carry `stream_tenant_id`, allowing the content owner to see its own replication without gaining access to unrelated provider traffic.
+- Federation summaries preserve `federation_hourly` as the complete infrastructure-owner history. The additive `federation_hourly_v2` rollup supplies only rows where the authenticated content owner differs from the infrastructure owner. Querying those two disjoint sets avoids double counting while retaining pre-upgrade operator history. Cross-tenant content-owner summary coverage begins when v2 is deployed; older events without trustworthy content ownership are not guessed or backfilled.
 - `api_requests` and `api_events`: GraphQL/API usage aggregates + audit trail (from `service_events` / `api_request_batch`).
 - `client_qoe_session_deltas` and `vod_retention_buckets`: Browser-originated session QoE deltas and the VOD watch-density histogram (added in the v0.2.82 `session_qoe_telemetry` migration; also in the baseline). Diagnostic-only — see "Viewer-experienced QoE (session deltas)" below for dedup keys and trust boundary.
 - `tenant_dim`: Not an ingest-written table but a ClickHouse **dictionary** over `quartermaster.tenants` (via the `quartermaster_pg` named collection, read-only `frameworks_analytics_ro` role — the sanctioned operator-analytics exception to the no-cross-service-DB-reads rule). Labels `tenant_id` columns with name/tier in operator queries via `dictGet('periscope.tenant_dim', 'name', tuple(tenant_id))`; lazy-loaded with a 5–10 min refresh lifetime.
+
+The additive `viewer_sessions_topology_v`, `stream_sessions_topology_v`, and `processing_segments_topology_v` projections join origin/control attribution onto the stable finalized-fact views without changing billing views during an expand rollout. `clusterWorkload` exposes identity-redacted infrastructure telemetry for an ownership-authorized cluster list. Every row declares `measurementKind`: `window` rows contain activity in the requested interval, while `current` rows contain freshness-bounded observations and an `observedAt` source time. These rows must not be summed together. Current viewer and ingest rows use the event-carried serving cluster stored in `viewer_sessions_current` and `stream_state_current`; joining those content-owned rows to `node_state_current` by node name is forbidden because node names are tenant-qualified. Current storage is additionally separated by `storageScope` (`hot` or `cold`); lifecycle-event byte flow is never added to resident-byte stock. Storage snapshots older than two hours and live viewer/ingest observations older than five minutes are omitted as stale.
+
+Signalman copies the MistTrigger placement envelope into realtime `EventData`, so live stream and processing subscriptions carry the same source cluster, origin cluster, control cell, region, and schema-version semantics as historical Periscope reads. A realtime event must not silently fall back to the Signalman or Bridge process location.
 
 ### Error handling: commits must not skip failures
 
@@ -441,9 +468,11 @@ Notes:
 
 ### Cross-cluster billing attribution
 
-In multi-cluster deployments, viewer/session billing events carry `cluster_id` (serving cluster) and `origin_cluster_id` (where the stream was ingested) when that context is known. Other analytics families carry the cluster fields that match their domain; for example, stream lifecycle rows currently store the emitting `cluster_id`, while routing decisions store local and remote cluster IDs. The regional Periscope Metering worker generates per-cluster usage records for Purser from finalized facts and canonical ledgers, enabling settlement of inter-cluster traffic.
+In multi-cluster deployments, viewer/session, stream-session, and processing final facts carry independent serving, origin, and control-cell attribution. Storage lifecycle events carry the same placement context. Routing decisions additionally distinguish the emitting cluster from the selected-node cluster and remote target. Empty attribution means unknown and is never repaired by copying another field. The regional Periscope Metering worker generates per-cluster usage records for Purser from finalized facts and canonical ledgers, enabling settlement of inter-cluster traffic.
 
-See `docs/architecture/cross-cluster-billing.md` for the full attribution model, ClickHouse schema additions (`cluster_id` + `origin_cluster_id` on viewer connection events and viewer rollups; `cluster_id` only on stream lifecycle rows), and the settlement query.
+See `docs/architecture/cross-cluster-billing.md` for the billing attribution model and settlement
+query. Analytics topology adds control-cell and origin dimensions without changing the canonical
+rating authority of finalized facts.
 
 ### Artifact node-copy telemetry
 

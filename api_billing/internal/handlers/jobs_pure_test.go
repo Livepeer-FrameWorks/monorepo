@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -117,6 +118,143 @@ func TestValidateUsageSummaryEnvelopeRequiresSequence(t *testing.T) {
 	}
 }
 
+func TestValidateUsageSummaryEnvelopeRejectsUnpersistableIdentity(t *testing.T) {
+	start := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	valid := models.UsageSummary{
+		ReportID: strings.Repeat("a", 64), SourceID: "periscope-default", SourceRegion: "eu-west",
+		ReportKind: "finalized", Sequence: 1, TenantID: "11111111-1111-4111-8111-111111111111",
+		ClusterID: "cluster-eu-1", PeriodStart: start, PeriodEnd: start.Add(5 * time.Minute), Complete: true,
+	}
+	tests := []struct {
+		name   string
+		mutate func(*models.UsageSummary)
+		want   string
+	}{
+		{name: "non-hex report id", mutate: func(s *models.UsageSummary) { s.ReportID = strings.Repeat("z", 64) }, want: "invalid_report_id"},
+		{name: "invalid source id", mutate: func(s *models.UsageSummary) { s.SourceID = "Periscope EU" }, want: "invalid_source_id"},
+		{name: "invalid source region", mutate: func(s *models.UsageSummary) { s.SourceRegion = "EU West" }, want: "invalid_source_region"},
+		{name: "sequence overflow", mutate: func(s *models.UsageSummary) { s.Sequence = math.MaxUint64 }, want: "invalid_sequence"},
+		{name: "oversized cluster", mutate: func(s *models.UsageSummary) { s.ClusterID = strings.Repeat("c", 101) }, want: "invalid_cluster_id"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			summary := valid
+			tc.mutate(&summary)
+			if err := validateUsageSummaryEnvelope(summary); err == nil || err.Error() != tc.want {
+				t.Fatalf("validation error = %v, want %s", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestValidateUsageSummaryMetersCoversProviderAndAdjustments(t *testing.T) {
+	periodStart := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	periodEnd := periodStart.Add(5 * time.Minute)
+	newManager := func(t *testing.T) (*JobManager, sqlmock.Sqlmock) {
+		t.Helper()
+		db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+		if err != nil {
+			t.Fatalf("sqlmock: %v", err)
+		}
+		t.Cleanup(func() { _ = db.Close() })
+		return &JobManager{db: db}, mock
+	}
+	expectStorageDefinition := func(mock sqlmock.Sqlmock) {
+		mock.ExpectQuery("SELECT unit, allowed_dimensions").
+			WithArgs("storage_gb_seconds_hot").
+			WillReturnRows(sqlmock.NewRows([]string{"unit", "allowed_dimensions"}).
+				AddRow("gibibyte_second", "{storage_backend,storage_scope}"))
+	}
+
+	t.Run("rejects non-finite provider quantity before persistence", func(t *testing.T) {
+		jm, mock := newManager(t)
+		summary := models.UsageSummary{ProviderUsage: []models.ProviderUsage{{
+			Meter: models.MeterQuantity{Meter: "storage_gb_seconds_hot", Unit: "gibibyte_second", Quantity: math.NaN()},
+		}}}
+		if err := jm.validateUsageSummaryMeters(context.Background(), summary); err == nil || !strings.HasPrefix(err.Error(), "invalid_provider_quantity:") {
+			t.Fatalf("validation error = %v", err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("rejects provider unit mismatch", func(t *testing.T) {
+		jm, mock := newManager(t)
+		expectStorageDefinition(mock)
+		summary := models.UsageSummary{ProviderUsage: []models.ProviderUsage{{
+			Meter: models.MeterQuantity{Meter: "storage_gb_seconds_hot", Unit: "second", Quantity: 1},
+		}}}
+		if err := jm.validateUsageSummaryMeters(context.Background(), summary); err == nil || err.Error() != "unit_mismatch:storage_gb_seconds_hot" {
+			t.Fatalf("validation error = %v", err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("rejects adjustment dimensions outside the meter contract", func(t *testing.T) {
+		jm, mock := newManager(t)
+		expectStorageDefinition(mock)
+		summary := models.UsageSummary{UsageAdjustments: []models.UsageAdjustment{{
+			SourceSystem: "periscope.projection_divergences", SourceID: "adjustment-1",
+			UsageType: "storage_gb_seconds_hot", DeltaValue: -1, PeriodStart: periodStart, PeriodEnd: periodEnd,
+			Dimensions: models.JSONB{"not_allowed": "value"},
+		}}}
+		if err := jm.validateUsageSummaryMeters(context.Background(), summary); err == nil || !strings.HasPrefix(err.Error(), "dimension_not_allowed:") {
+			t.Fatalf("validation error = %v", err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("allows omitted adjustment unit and caches the meter definition", func(t *testing.T) {
+		jm, mock := newManager(t)
+		expectStorageDefinition(mock)
+		summary := models.UsageSummary{
+			ProviderUsage: []models.ProviderUsage{{Meter: models.MeterQuantity{
+				Meter: "storage_gb_seconds_hot", Unit: "gibibyte_second", Quantity: 1,
+				Dimensions: models.JSONB{"storage_backend": "s3"},
+			}}},
+			UsageAdjustments: []models.UsageAdjustment{{
+				SourceSystem: "periscope.projection_divergences", SourceID: "adjustment-1",
+				UsageType: "storage_gb_seconds_hot", DeltaValue: -1, PeriodStart: periodStart, PeriodEnd: periodEnd,
+				Dimensions: models.JSONB{"storage_scope": "hot"},
+			}},
+		}
+		if err := jm.validateUsageSummaryMeters(context.Background(), summary); err != nil {
+			t.Fatalf("valid provider/adjustment rejected: %v", err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("rejects duplicate canonical meter dimensions", func(t *testing.T) {
+		jm, mock := newManager(t)
+		expectStorageDefinition(mock)
+		meter := models.MeterQuantity{
+			Meter: "storage_gb_seconds_hot", Unit: "gibibyte_second", Quantity: 1,
+			Dimensions: models.JSONB{"storage_scope": "hot"},
+		}
+		summary := models.UsageSummary{Meters: []models.MeterQuantity{meter, meter}}
+		if err := jm.validateUsageSummaryMeters(context.Background(), summary); err == nil || err.Error() != "duplicate_meter:storage_gb_seconds_hot" {
+			t.Fatalf("validation error = %v", err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+func TestTruncateRunesPreservesUTF8(t *testing.T) {
+	got := truncateRunes(strings.Repeat("é", 101), 100)
+	if len([]rune(got)) != 100 || !strings.HasSuffix(got, "é") {
+		t.Fatalf("truncated value is not 100 intact runes: %q", got)
+	}
+}
+
 func TestValidateWindowCompletionRejectsUsage(t *testing.T) {
 	start := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 	summary := models.UsageSummary{
@@ -127,6 +265,33 @@ func TestValidateWindowCompletionRejectsUsage(t *testing.T) {
 	}
 	if err := validateUsageSummaryEnvelope(summary); err == nil || err.Error() != "window_complete_contains_usage" {
 		t.Fatalf("expected window_complete_contains_usage, got %v", err)
+	}
+}
+
+func TestValidateWindowCompletionRequiresSourceRegion(t *testing.T) {
+	start := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
+	summary := models.UsageSummary{
+		ReportID: strings.Repeat("b", 64), SourceID: "eu-1", ReportKind: "window_complete", Sequence: 1,
+		TenantID: "11111111-1111-4111-8111-111111111111", ClusterID: "_source",
+		PeriodStart: start, PeriodEnd: start.Add(5 * time.Minute), Complete: true,
+	}
+	if err := validateUsageSummaryEnvelope(summary); err == nil || err.Error() != "window_complete_missing_source_region" {
+		t.Fatalf("expected window_complete_missing_source_region, got %v", err)
+	}
+}
+
+func TestMeteringCompletenessRequiredFollowsExistingBetaWaiver(t *testing.T) {
+	t.Setenv("WAIVE_USAGE_CHARGES", "true")
+	if meteringCompletenessRequired(true) {
+		t.Fatal("waived usage charges must not block subscription invoices on metering completeness")
+	}
+
+	t.Setenv("WAIVE_USAGE_CHARGES", "false")
+	if !meteringCompletenessRequired(true) {
+		t.Fatal("metered billing must require complete source windows")
+	}
+	if meteringCompletenessRequired(false) {
+		t.Fatal("a tier with metering disabled must not require metering completeness")
 	}
 }
 

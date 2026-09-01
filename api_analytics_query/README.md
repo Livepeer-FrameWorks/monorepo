@@ -21,6 +21,13 @@ PostgreSQL for source activation, fenced leases, cursors, and reservation keys,
 then publishes dimensioned reports to Purser through Kafka. Query replicas can
 scale independently from the singleton-per-source metering lease holder.
 
+`METERING_SOURCE_ID` names the logical ClickHouse billing dataset, not the
+worker, host, replica, media cluster, or Purser instance. Every worker replica
+over the current shared dataset uses `periscope-default`; physical ClickHouse
+moves keep that ID. `METERING_SOURCE_REGION` is immutable audit/ownership
+metadata for that source. It does not select Kafka, Purser, or ClickHouse—the
+deployment topology does—and production must set both values explicitly.
+
 ## Run (dev)
 
 - Start the full stack from repo root: `docker-compose up -d`
