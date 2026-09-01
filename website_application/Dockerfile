@@ -56,6 +56,7 @@ COPY npm_studio/packages/wc/package.json npm_studio/packages/wc/
 # shared workspace packages (site-config has no build step, so all source
 # files must be present before install for injection to capture them)
 COPY packages/site-config/ packages/site-config/
+COPY packages/map-core/ packages/map-core/
 
 # remaining workspace members (pnpm requires all manifests for graph resolution)
 COPY website_marketing/package.json website_marketing/
@@ -100,6 +101,7 @@ ENV HOST=0.0.0.0
 WORKDIR /app
 
 COPY --from=builder /app/deployed .
+COPY scripts/render-public-runtime-config.mjs ./scripts/render-public-runtime-config.mjs
 
 EXPOSE ${APP_PORT}
 
@@ -108,4 +110,4 @@ ENV NODE_ENV=production
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
   CMD nc -z -w 2 127.0.0.1 ${PORT:-18030} || exit 1
 
-CMD ["node", "build/index.js"]
+CMD ["sh", "-c", "node scripts/render-public-runtime-config.mjs build/client/runtime-config.js && exec node build/index.js"]

@@ -50,6 +50,7 @@ export function Layout({ children }) {
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <Meta />
         <Links />
+        <script src="/runtime-config.js" />
         <noscript>
           <link rel="stylesheet" href={fontStylesheet} />
         </noscript>

@@ -43,6 +43,7 @@ COPY npm_studio/packages/react/package.json npm_studio/packages/react/
 COPY npm_studio/packages/svelte/package.json npm_studio/packages/svelte/
 COPY npm_studio/packages/wc/package.json npm_studio/packages/wc/
 COPY packages/site-config/ packages/site-config/
+COPY packages/map-core/ packages/map-core/
 COPY website_application/package.json website_application/
 COPY website_docs/package.json website_docs/
 COPY website_marketing/package.json website_marketing/
@@ -79,6 +80,7 @@ RUN apk add --no-cache ca-certificates tzdata \
 WORKDIR /app
 
 COPY --from=builder /app/website_marketing/build/client ./build/client
+COPY scripts/render-public-runtime-config.mjs ./scripts/render-public-runtime-config.mjs
 
 RUN chown -R appuser:appuser /app
 USER appuser
@@ -88,4 +90,4 @@ EXPOSE ${APP_PORT}
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
   CMD wget --no-verbose --tries=1 --spider http://localhost:${PORT:-18031}/health || exit 1
 
-CMD ["sh", "-c", "serve build/client -l ${PORT:-18031}"]
+CMD ["sh", "-c", "node scripts/render-public-runtime-config.mjs build/client/runtime-config.js && serve build/client -l ${PORT:-18031}"]

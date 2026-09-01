@@ -1,24 +1,22 @@
 <script lang="ts">
   import { onMount, onDestroy, untrack } from "svelte";
   import { SvelteMap } from "svelte/reactivity";
-  import type {
-    Map as LeafletMap,
-    LayerGroup,
-    GeoJSON as LeafletGeoJSON,
-    Layer,
-    CircleMarker,
-  } from "leaflet";
   import type { Feature } from "geojson";
+  import type { GeoJSONSource, Map as MapLibreMap, Popup } from "maplibre-gl";
+  import {
+    addRequiredAttribution,
+    basemapMapOptions,
+    bindModifierScrollZoom,
+    featureCollection,
+    firstBasemapSymbolLayer,
+    readRuntimePublicConfig,
+    setLayerVisibility,
+  } from "@frameworks/map-core";
   import { getIconComponent } from "$lib/iconUtils";
   import { iso2ToIso3, iso3ToIso2, getCountryName } from "$lib/utils/country-names";
   import { samplePath } from "./arc";
-  import { palette, heatGradient } from "./theme";
-  import "leaflet/dist/leaflet.css";
+  import { palette } from "./theme";
 
-  // One alive audience map. A base layer (viewer-demand heat OR country choropleth,
-  // mutually exclusive) with a routing overlay toggled on top: curved client-to-edge
-  // arcs with animated traveling pulses, H3 routing buckets, and glowing edge nodes.
-  // Mirrors the marketing GeoPanel; driven by the audience geographic + routing queries.
   interface HeatPoint {
     lat: number;
     lng: number;
@@ -57,10 +55,7 @@
     height?: number;
     selectedBucket?: string | null;
     onBucketClick?: (id: string) => void;
-    // Only "countries" flips the default base off heat.
     initialView?: "heat" | "countries" | "routes" | "buckets";
-    // "audience" (default): viewer heat/countries + routing overlay. "placement":
-    // a plain node map (edges holding an asset) — no base legend or routing toggle.
     variant?: "audience" | "placement";
   }
 
@@ -77,18 +72,17 @@
     variant = "audience",
   }: Props = $props();
 
-  const TILE = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png";
   const HomeIcon = getIconComponent("Home");
   const MaximizeIcon = getIconComponent("Maximize2");
   const MinimizeIcon = getIconComponent("Minimize2");
-
   let mapContainer = $state<HTMLElement>();
-  let map: LeafletMap | null = null;
-  let L: typeof import("leaflet") | null = null;
+  let map: MapLibreMap | null = null;
+  let popup: Popup | null = null;
   let worldFeatures: Feature[] = [];
+  let animationFrame: number | null = null;
+  let unbindWheel = () => {};
   let ready = $state(false);
-
-  // Mutually-exclusive base; routing rides on top.
+  let unavailable = $state(false);
   let base = $state<BaseKind>(
     untrack(() =>
       initialView === "countries" ? "countries" : heat.length > 0 ? "heat" : "countries"
@@ -98,245 +92,373 @@
   let isFullscreen = $state(false);
   let showHint = $state(true);
 
-  // Base layer (only one at a time) plus one group per routing concern so bucket
-  // reselection doesn't restart the pulse animation.
-  let heatGroup: LayerGroup | null = null;
-  let geoLayer: LeafletGeoJSON | null = null;
-  let routeGroup: LayerGroup | null = null;
-  let pulseGroup: LayerGroup | null = null;
-  let bucketGroup: LayerGroup | null = null;
-  let nodeGroup: LayerGroup | null = null;
-  let pulseTimers: ReturnType<typeof setInterval>[] = [];
-
   const heatAvailable = $derived(heat.length > 0);
   const countriesAvailable = $derived(countries.length > 0);
   const routingAvailable = $derived(routes.length > 0 || buckets.length > 0 || nodes.length > 0);
 
   onMount(async () => {
-    const mod = await import("leaflet");
-    L = mod.default;
-    await import("leaflet.heat");
-    const geo = await import("$lib/data/countries.geo.json");
-    worldFeatures = geo.default.features as Feature[];
-    if (mapContainer) initMap();
+    let runtime;
+    try {
+      runtime = readRuntimePublicConfig();
+    } catch {
+      console.error("Map unavailable: invalid basemap runtime configuration");
+      unavailable = true;
+      return;
+    }
+    try {
+      const [maplibreModule, geo] = await Promise.all([
+        import("maplibre-gl"),
+        import("$lib/data/countries.geo.json"),
+        import("maplibre-gl/dist/maplibre-gl.css"),
+      ]);
+      if (!mapContainer) return;
+      worldFeatures = geo.default.features as Feature[];
+      map = new maplibreModule.Map({
+        container: mapContainer,
+        center: [0, 20],
+        zoom: 2,
+        minZoom: 1,
+        maxZoom: 10,
+        scrollZoom: false,
+        ...basemapMapOptions(runtime.basemap),
+      });
+      addRequiredAttribution(map, runtime.basemap);
+      unbindWheel = bindModifierScrollZoom(map, () => (showHint = false));
+      popup = new maplibreModule.Popup({ closeButton: false, closeOnClick: false, offset: 8 });
+
+      map.once("load", () => {
+        if (!map) return;
+        initializeLayers(map);
+        bindFeatureInteractions(map);
+        ready = true;
+        drawBase();
+        drawArcs();
+        drawBuckets();
+        drawNodes();
+        startPulseAnimation();
+      });
+    } catch {
+      console.error("Map unavailable: renderer initialization failed");
+      unavailable = true;
+    }
   });
 
   onDestroy(() => {
-    clearPulses();
-    if (map) {
-      map.remove();
-      map = null;
-    }
+    unbindWheel();
+    popup?.remove();
+    if (animationFrame !== null) cancelAnimationFrame(animationFrame);
+    animationFrame = null;
+    map?.remove();
+    map = null;
   });
 
-  function clearPulses() {
-    pulseTimers.forEach(clearInterval);
-    pulseTimers = [];
+  function initializeLayers(currentMap: MapLibreMap) {
+    const empty = featureCollection([]);
+    const beforeLabels = firstBasemapSymbolLayer(currentMap);
+    for (const sourceID of ["countries", "heat", "routes", "pulses", "buckets", "nodes"]) {
+      currentMap.addSource(`geoview-${sourceID}`, { type: "geojson", data: empty });
+    }
+
+    currentMap.addLayer(
+      {
+        id: "geoview-countries-fill",
+        type: "fill",
+        source: "geoview-countries",
+        paint: {
+          "fill-color": ["get", "color"],
+          "fill-opacity": ["get", "opacity"],
+        },
+      },
+      beforeLabels
+    );
+    currentMap.addLayer(
+      {
+        id: "geoview-countries-line",
+        type: "line",
+        source: "geoview-countries",
+        paint: { "line-color": "rgba(169,177,214,0.4)", "line-width": 0.5 },
+      },
+      beforeLabels
+    );
+    currentMap.addLayer(
+      {
+        id: "geoview-heat",
+        type: "heatmap",
+        source: "geoview-heat",
+        maxzoom: 10,
+        paint: {
+          "heatmap-weight": ["get", "intensity"],
+          "heatmap-intensity": ["interpolate", ["linear"], ["zoom"], 1, 0.7, 10, 1.7],
+          "heatmap-radius": ["interpolate", ["linear"], ["zoom"], 1, 20, 10, 38],
+          "heatmap-opacity": 0.82,
+          "heatmap-color": [
+            "interpolate",
+            ["linear"],
+            ["heatmap-density"],
+            0,
+            "rgba(122,162,247,0)",
+            0.2,
+            "rgba(122,162,247,0.55)",
+            0.4,
+            "rgba(125,207,255,0.75)",
+            0.6,
+            "rgba(158,206,106,0.85)",
+            0.8,
+            "rgba(224,175,104,0.9)",
+            1,
+            "rgba(247,118,142,0.95)",
+          ],
+        },
+      },
+      beforeLabels
+    );
+    currentMap.addLayer(
+      {
+        id: "geoview-buckets-fill",
+        type: "fill",
+        source: "geoview-buckets",
+        paint: {
+          "fill-color": [
+            "match",
+            ["get", "kind"],
+            "client",
+            "rgb(125,207,255)",
+            "rgb(122,162,247)",
+          ],
+          "fill-opacity": ["case", ["boolean", ["get", "selected"], false], 0.25, 0.08],
+        },
+      },
+      beforeLabels
+    );
+    currentMap.addLayer(
+      {
+        id: "geoview-buckets-line",
+        type: "line",
+        source: "geoview-buckets",
+        paint: {
+          "line-color": [
+            "match",
+            ["get", "kind"],
+            "client",
+            "rgba(125,207,255,0.6)",
+            "rgba(122,162,247,0.6)",
+          ],
+          "line-width": ["case", ["boolean", ["get", "selected"], false], 2.5, 1],
+        },
+      },
+      beforeLabels
+    );
+    currentMap.addLayer(
+      {
+        id: "geoview-routes",
+        type: "line",
+        source: "geoview-routes",
+        layout: { "line-cap": "round", "line-join": "round" },
+        paint: {
+          "line-color": ["case", ["boolean", ["get", "ok"], false], palette.green, palette.red],
+          "line-width": 1.5,
+          "line-opacity": ["case", ["boolean", ["get", "ok"], false], 0.75, 0.5],
+          "line-dasharray": [3.5, 3],
+        },
+      },
+      beforeLabels
+    );
+    currentMap.addLayer({
+      id: "geoview-pulses",
+      type: "circle",
+      source: "geoview-pulses",
+      paint: {
+        "circle-radius": 3,
+        "circle-color": ["case", ["boolean", ["get", "ok"], false], palette.green, palette.red],
+        "circle-opacity": ["get", "opacity"],
+      },
+    });
+    currentMap.addLayer({
+      id: "geoview-nodes-glow",
+      type: "circle",
+      source: "geoview-nodes",
+      paint: {
+        "circle-radius": 9,
+        "circle-color": "rgba(125,207,255,0.25)",
+        "circle-blur": 0.7,
+      },
+    });
+    currentMap.addLayer({
+      id: "geoview-nodes",
+      type: "circle",
+      source: "geoview-nodes",
+      paint: {
+        "circle-radius": 5.5,
+        "circle-color": "rgb(125,207,255)",
+        "circle-stroke-color": "rgba(22,22,30,0.8)",
+        "circle-stroke-width": 2,
+      },
+    });
   }
 
-  function initMap() {
-    if (!L || !mapContainer) return;
-    map = L.map(mapContainer, {
-      center: [20, 0],
-      zoom: 2,
-      minZoom: 1,
-      maxZoom: 10,
-      zoomControl: false,
-      attributionControl: false,
-      scrollWheelZoom: false,
-    });
-    L.tileLayer(TILE, { maxZoom: 19, subdomains: "abcd" }).addTo(map);
-    mapContainer.addEventListener(
-      "wheel",
-      (e) => {
-        if (!map) return;
-        if (e.altKey || e.ctrlKey || e.metaKey) {
-          e.preventDefault();
-          map.scrollWheelZoom.enable();
-          showHint = false;
-        } else {
-          map.scrollWheelZoom.disable();
+  function bindFeatureInteractions(currentMap: MapLibreMap) {
+    for (const layer of ["geoview-countries-fill", "geoview-buckets-fill", "geoview-nodes"]) {
+      currentMap.on("mouseenter", layer, (event) => {
+        const item = event.features?.[0];
+        if (!item || !popup) return;
+        currentMap.getCanvas().style.cursor =
+          layer === "geoview-buckets-fill" ? "pointer" : "default";
+        const properties = item.properties ?? {};
+        let label = "";
+        if (layer === "geoview-countries-fill" && Number(properties.viewerCount) > 0) {
+          label = `${String(properties.name)} · ${Number(properties.viewerCount).toLocaleString()} viewers`;
+        } else if (layer === "geoview-buckets-fill" && properties.count != null) {
+          label = `${Number(properties.count).toLocaleString()} events`;
+        } else if (layer === "geoview-nodes") {
+          label = String(properties.label ?? "Edge node");
         }
-      },
-      { passive: false }
-    );
-    ready = true;
-    drawBase();
-    drawArcs();
-    drawBuckets();
-    drawNodes();
+        if (label) popup.setLngLat(event.lngLat).setText(label).addTo(currentMap);
+      });
+      currentMap.on("mouseleave", layer, () => {
+        currentMap.getCanvas().style.cursor = "";
+        popup?.remove();
+      });
+    }
+    currentMap.on("click", "geoview-buckets-fill", (event) => {
+      const id = event.features?.[0]?.properties?.id;
+      if (typeof id === "string") onBucketClick?.(id);
+    });
+  }
+
+  function source(id: string): GeoJSONSource | null {
+    return (map?.getSource(id) as GeoJSONSource | undefined) ?? null;
   }
 
   function drawBase() {
-    if (!map || !L) return;
-    if (heatGroup) {
-      map.removeLayer(heatGroup);
-      heatGroup = null;
-    }
-    if (geoLayer) {
-      map.removeLayer(geoLayer);
-      geoLayer = null;
-    }
+    if (!map) return;
+    source("geoview-heat")?.setData(
+      featureCollection(
+        heat.map((point) => ({
+          type: "Feature",
+          properties: { intensity: point.intensity },
+          geometry: { type: "Point", coordinates: [point.lng, point.lat] },
+        }))
+      )
+    );
 
-    if (base === "heat") {
-      heatGroup = L.layerGroup().addTo(map);
-      // leaflet.heat augments L.heatLayer at runtime.
-      (L as typeof L & { heatLayer: (pts: [number, number, number][], opts: object) => Layer })
-        .heatLayer(
-          heat.map((p) => [p.lat, p.lng, p.intensity]),
-          { radius: 30, blur: 18, minOpacity: 0.3, maxZoom: 10, gradient: heatGradient }
-        )
-        .addTo(heatGroup);
-    } else {
-      const valueMap = new SvelteMap<string, number>();
-      countries.forEach((d) => {
-        const iso3 = iso2ToIso3[d.countryCode.toUpperCase()];
-        if (iso3) valueMap.set(iso3, d.viewerCount);
-      });
-      const maxVal = Math.max(...countries.map((d) => d.viewerCount), 1);
-      const color = (v: number) => {
-        const t = Math.log1p(v) / Math.log1p(maxVal);
-        if (t < 0.33) return "rgba(115, 218, 202, 0.45)";
-        if (t < 0.66) return "rgba(122, 162, 247, 0.55)";
-        return "rgba(255, 158, 100, 0.6)";
-      };
-      geoLayer = L.geoJSON(worldFeatures as GeoJSON.Feature[], {
-        style: (f) => {
-          const iso3 = String(f?.id ?? "").toUpperCase();
-          const val = valueMap.get(iso3) || 0;
-          return {
-            fillColor: color(val),
-            fillOpacity: val === 0 ? 0.08 : 0.35,
-            weight: 0.4,
-            color: "rgba(169, 177, 214, 0.4)",
-          };
-        },
-        onEachFeature: (f: Feature, layer: Layer) => {
-          const iso3 = String(f?.id ?? "").toUpperCase();
-          const val = valueMap.get(iso3) || 0;
-          if (val > 0) {
-            layer.bindTooltip(
-              `${getCountryName(iso3ToIso2[iso3] || iso3)}<br>${val.toLocaleString()} viewers`,
-              { direction: "top", className: "dark-tooltip" }
-            );
-          }
-        },
-      }).addTo(map);
+    const values = new SvelteMap<string, number>();
+    for (const datum of countries) {
+      const iso3 = iso2ToIso3[datum.countryCode.toUpperCase()];
+      if (iso3) values.set(iso3, datum.viewerCount);
     }
+    const max = Math.max(...countries.map((datum) => datum.viewerCount), 1);
+    const countryFeatures = worldFeatures.map((item) => {
+      const iso3 = String(item.id ?? "").toUpperCase();
+      const viewerCount = values.get(iso3) ?? 0;
+      const intensity = Math.log1p(viewerCount) / Math.log1p(max);
+      const color =
+        intensity < 0.33
+          ? "rgb(115,218,202)"
+          : intensity < 0.66
+            ? "rgb(122,162,247)"
+            : "rgb(255,158,100)";
+      return {
+        ...item,
+        properties: {
+          ...(item.properties ?? {}),
+          viewerCount,
+          name: getCountryName(iso3ToIso2[iso3] || iso3),
+          color,
+          opacity: viewerCount === 0 ? 0.08 : 0.35,
+        },
+      } as Feature;
+    });
+    source("geoview-countries")?.setData(featureCollection(countryFeatures));
+    setLayerVisibility(map, ["geoview-heat"], base === "heat");
+    setLayerVisibility(
+      map,
+      ["geoview-countries-fill", "geoview-countries-line"],
+      base === "countries"
+    );
+  }
+
+  function routePaths() {
+    return routes.map((route) => ({
+      ok: route.status === "success" || route.status === "ok",
+      points: samplePath(route.from, route.to).map(([lat, lng]) => [lng, lat]),
+    }));
   }
 
   function drawArcs() {
-    if (!map || !L) return;
-    clearPulses();
-    if (routeGroup) {
-      map.removeLayer(routeGroup);
-      routeGroup = null;
-    }
-    if (pulseGroup) {
-      map.removeLayer(pulseGroup);
-      pulseGroup = null;
-    }
-    if (!showRouting || routes.length === 0) return;
-
-    routeGroup = L.layerGroup().addTo(map);
-    pulseGroup = L.layerGroup().addTo(map);
-    routes.forEach((r) => {
-      const ok = r.status === "success" || r.status === "ok";
-      const color = ok ? palette.green : palette.red;
-      const pts = samplePath(r.from, r.to);
-      L!
-        .polyline(pts, {
-          color,
-          weight: 1.5,
-          opacity: ok ? 0.75 : 0.5,
-          dashArray: "7 6",
-          interactive: false,
-        })
-        .addTo(routeGroup!);
-
-      // Pulse traveling client -> edge along the visible arc, fading at the ends.
-      let step = 0;
-      let pulse: CircleMarker | null = null;
-      const id = setInterval(() => {
-        if (!L || !pulseGroup) return;
-        const idx = Math.floor((step / 60) * (pts.length - 1));
-        const at = pts[idx];
-        if (!pulse) {
-          pulse = L.circleMarker(at, {
-            radius: 3,
-            fillColor: color,
-            fillOpacity: 0.9,
-            stroke: false,
-            interactive: false,
-          }).addTo(pulseGroup);
-        } else {
-          pulse.setLatLng(at);
-        }
-        const t = step / 60;
-        pulse.setStyle({ fillOpacity: t < 0.1 ? t / 0.1 : t > 0.9 ? (1 - t) / 0.1 : 0.9 });
-        step = (step + 1) % 60;
-      }, 50);
-      pulseTimers.push(id);
-    });
+    const paths = routePaths();
+    source("geoview-routes")?.setData(
+      featureCollection(
+        paths.map((route) => ({
+          type: "Feature",
+          properties: { ok: route.ok },
+          geometry: { type: "LineString", coordinates: route.points },
+        }))
+      )
+    );
+    if (map) setLayerVisibility(map, ["geoview-routes", "geoview-pulses"], showRouting);
   }
 
   function drawBuckets() {
-    if (!map || !L) return;
-    if (bucketGroup) {
-      map.removeLayer(bucketGroup);
-      bucketGroup = null;
-    }
-    if (!showRouting || buckets.length === 0) return;
-
-    bucketGroup = L.layerGroup().addTo(map);
-    buckets.forEach((b) => {
-      const isClient = b.kind === "client";
-      const selected = selectedBucket === b.id;
-      const poly = L!
-        .polygon(b.coords, {
-          color: isClient ? "rgba(125, 207, 255, 0.6)" : "rgba(122, 162, 247, 0.6)",
-          weight: selected ? 2.5 : 1,
-          fillColor: isClient ? "rgb(125, 207, 255)" : "rgb(122, 162, 247)",
-          fillOpacity: selected ? 0.25 : 0.08,
-        })
-        .addTo(bucketGroup!);
-      if (b.stats?.count != null) {
-        poly.bindTooltip(`${b.stats.count} events`, {
-          direction: "top",
-          className: "dark-tooltip",
-        });
-      }
-      poly.on("click", () => onBucketClick?.(b.id));
+    const items = buckets.map((bucket) => {
+      const ring = bucket.coords.map(([lat, lng]) => [lng, lat]);
+      if (ring.length > 0) ring.push(ring[0]);
+      return {
+        type: "Feature" as const,
+        properties: {
+          id: bucket.id,
+          kind: bucket.kind,
+          selected: selectedBucket === bucket.id,
+          count: bucket.stats?.count ?? null,
+        },
+        geometry: { type: "Polygon" as const, coordinates: [ring] },
+      };
     });
+    source("geoview-buckets")?.setData(featureCollection(items));
+    if (map) {
+      setLayerVisibility(map, ["geoview-buckets-fill", "geoview-buckets-line"], showRouting);
+    }
   }
 
   function drawNodes() {
-    if (!map || !L) return;
-    if (nodeGroup) {
-      map.removeLayer(nodeGroup);
-      nodeGroup = null;
+    const items = nodes.map((node) => ({
+      type: "Feature" as const,
+      properties: {
+        id: node.id,
+        label: node.count != null ? `${node.name} (${node.count})` : node.name,
+      },
+      geometry: { type: "Point" as const, coordinates: [node.lng, node.lat] },
+    }));
+    source("geoview-nodes")?.setData(featureCollection(items));
+    if (map) {
+      setLayerVisibility(map, ["geoview-nodes-glow", "geoview-nodes"], showRouting);
     }
-    if (!showRouting || nodes.length === 0) return;
-
-    nodeGroup = L.layerGroup().addTo(map);
-    nodes.forEach((n) => {
-      const icon = L!.divIcon({
-        className: "geoview__marker",
-        html: `<span class="geoview__node"></span>`,
-        iconSize: [12, 12],
-        iconAnchor: [6, 6],
-      });
-      L!
-        .marker([n.lat, n.lng], { icon })
-        .addTo(nodeGroup!)
-        .bindTooltip(n.count != null ? `${n.name} (${n.count})` : n.name, {
-          direction: "top",
-          className: "dark-tooltip",
-        });
-    });
   }
 
-  // Redraw the base when its layer or data changes.
+  function startPulseAnimation() {
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const animate = (now: number) => {
+      const cycle = reducedMotion ? 0.5 : (now % 3000) / 3000;
+      const opacity = reducedMotion
+        ? 0.75
+        : cycle < 0.1
+          ? cycle / 0.1
+          : cycle > 0.9
+            ? (1 - cycle) / 0.1
+            : 0.9;
+      const items = routePaths().map((route) => ({
+        type: "Feature" as const,
+        properties: { ok: route.ok, opacity },
+        geometry: {
+          type: "Point" as const,
+          coordinates: route.points[Math.floor(cycle * (route.points.length - 1))],
+        },
+      }));
+      source("geoview-pulses")?.setData(featureCollection(items));
+      if (!reducedMotion) animationFrame = requestAnimationFrame(animate);
+    };
+    animate(performance.now());
+  }
+
   $effect(() => {
     void base;
     void heat;
@@ -344,8 +466,6 @@
     if (ready) drawBase();
   });
 
-  // Arcs + pulses depend only on routing toggle + route data (not bucket selection),
-  // so reselecting a bucket never restarts the animation.
   $effect(() => {
     void showRouting;
     void routes;
@@ -365,18 +485,18 @@
     if (ready) drawNodes();
   });
 
-  // If the current base loses its data, fall back to the other one.
   $effect(() => {
     if (base === "heat" && !heatAvailable && countriesAvailable) base = "countries";
     else if (base === "countries" && !countriesAvailable && heatAvailable) base = "heat";
   });
 
   function resetView() {
-    map?.setView([20, 0], 2);
+    map?.easeTo({ center: [0, 20], zoom: 2, duration: 500 });
   }
+
   function toggleFullscreen() {
     isFullscreen = !isFullscreen;
-    setTimeout(() => map?.invalidateSize(), 310);
+    setTimeout(() => map?.resize(), 310);
   }
 </script>
 
@@ -386,8 +506,10 @@
   style="height: {isFullscreen ? '100%' : `${height}px`};"
 >
   <div bind:this={mapContainer} class="geoview__map"></div>
+  {#if unavailable}
+    <div class="geoview__unavailable" role="status">Basemap unavailable</div>
+  {/if}
 
-  <!-- Base toggle: heatmap vs countries (mutually exclusive) -->
   {#if heatAvailable && countriesAvailable}
     <div class="geoview__base">
       <button
@@ -395,6 +517,7 @@
         class="geoview__seg"
         class:geoview__seg--on={base === "heat"}
         onclick={() => (base = "heat")}
+        disabled={!ready}
       >
         Heatmap
       </button>
@@ -403,6 +526,7 @@
         class="geoview__seg"
         class:geoview__seg--on={base === "countries"}
         onclick={() => (base = "countries")}
+        disabled={!ready}
       >
         Countries
       </button>
@@ -410,7 +534,7 @@
   {/if}
 
   <div class="geoview__controls">
-    <button class="geoview__ctrl" onclick={resetView} title="Reset view"
+    <button class="geoview__ctrl" onclick={resetView} title="Reset view" disabled={!ready}
       ><HomeIcon class="w-4 h-4" /></button
     >
     <button
@@ -422,7 +546,7 @@
     </button>
   </div>
 
-  {#if showHint && !isFullscreen}
+  {#if showHint && !isFullscreen && ready}
     <button class="geoview__hint" type="button" onclick={() => (showHint = false)}>
       Hold <kbd>⌥</kbd> or <kbd>Ctrl</kbd> + scroll to zoom
     </button>
@@ -438,6 +562,7 @@
           class="geoview__toggle"
           class:geoview__toggle--on={showRouting}
           onclick={() => (showRouting = !showRouting)}
+          disabled={!ready}
         >
           {showRouting ? "Hide routing" : "Show routing"}
         </button>
@@ -462,6 +587,55 @@
     border-radius: 0.5rem;
     overflow: hidden;
     background: rgb(22, 22, 30);
+  }
+  .geoview--fullscreen {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    border-radius: 0;
+    height: 100% !important;
+  }
+  .geoview__map {
+    width: 100%;
+    height: 100%;
+    z-index: 1;
+  }
+  .geoview :global(.maplibregl-map) {
+    background: rgb(22, 22, 30) !important;
+    font-family: inherit;
+  }
+  .geoview :global(.frameworks-map-attribution) {
+    padding: 0.1rem 0.3rem;
+    border-radius: 0.2rem;
+    background: rgb(22 22 30 / 78%);
+    color: rgb(169 177 214 / 80%);
+    font-size: 0.58rem;
+    line-height: 1.25;
+  }
+  .geoview :global(.frameworks-map-attribution a) {
+    color: inherit;
+    text-decoration: none;
+  }
+  .geoview :global(.maplibregl-popup-content) {
+    padding: 0.35rem 0.55rem;
+    border: 1px solid hsl(var(--tn-blue) / 0.3);
+    border-radius: 0.4rem;
+    background: hsl(var(--tn-bg-highlight));
+    color: hsl(var(--tn-fg));
+    font-size: 0.72rem;
+  }
+  .geoview :global(.maplibregl-popup-tip) {
+    border-top-color: hsl(var(--tn-bg-highlight));
+  }
+  .geoview__unavailable {
+    position: absolute;
+    inset: 0;
+    z-index: 4;
+    display: grid;
+    place-items: center;
+    color: hsl(var(--tn-fg-dark));
+    background: rgb(22, 22, 30);
+    font-size: 0.8rem;
   }
   .geoview__legend {
     position: absolute;
@@ -530,30 +704,6 @@
     border-color: hsl(var(--tn-green) / 0.4);
     color: hsl(var(--tn-green));
   }
-  .geoview--fullscreen {
-    position: fixed;
-    inset: 0;
-    z-index: 50;
-    border-radius: 0;
-    height: 100% !important;
-  }
-  .geoview__map {
-    width: 100%;
-    height: 100%;
-    z-index: 1;
-  }
-  .geoview :global(.leaflet-container) {
-    background: rgb(22, 22, 30) !important;
-  }
-  :global(.geoview__node) {
-    display: block;
-    width: 11px;
-    height: 11px;
-    border-radius: 999px;
-    background: hsl(var(--tn-cyan));
-    border: 2px solid rgba(22, 22, 30, 0.8);
-    box-shadow: 0 0 8px hsl(var(--tn-cyan) / 0.9);
-  }
   .geoview__base {
     position: absolute;
     top: 0.75rem;
@@ -604,6 +754,12 @@
   }
   .geoview__ctrl:hover {
     color: hsl(var(--tn-fg));
+  }
+  .geoview__ctrl:disabled,
+  .geoview__seg:disabled,
+  .geoview__toggle:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
   }
   .geoview__hint {
     position: absolute;

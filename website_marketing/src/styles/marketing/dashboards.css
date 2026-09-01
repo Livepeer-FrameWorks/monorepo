@@ -462,7 +462,7 @@
     background: rgb(var(--brand-orange-rgb));
   }
 
-  /* Geo panel (Leaflet) */
+  /* Geo panel (MapLibre) */
   .geo-panel {
     position: relative;
     width: 100%;
@@ -483,18 +483,47 @@
     z-index: 1;
   }
 
-  .geo-panel .leaflet-container {
+  .geo-panel .maplibregl-map {
     background: rgb(15, 23, 42);
     font-family: inherit;
   }
 
-  .geo-panel__node {
-    display: block;
-    width: 11px;
-    height: 11px;
-    border-radius: 999px;
-    background: rgb(125, 207, 255);
-    border: 2px solid rgba(15, 23, 42, 0.8);
+  .geo-panel .frameworks-map-attribution {
+    padding: 0.1rem 0.3rem;
+    border-radius: 0.2rem;
+    background: rgba(12, 16, 28, 0.76);
+    color: rgba(203, 213, 225, 0.78);
+    font-size: 0.58rem;
+    line-height: 1.25;
+  }
+
+  .geo-panel .frameworks-map-attribution a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .geo-panel .maplibregl-popup-content {
+    padding: 0.35rem 0.55rem;
+    border: 1px solid rgba(var(--accent-rgb) / 0.32);
+    border-radius: 0.4rem;
+    background: hsl(var(--brand-surface));
+    color: hsl(var(--foreground));
+    font-size: 0.74rem;
+  }
+
+  .geo-panel .maplibregl-popup-tip {
+    border-top-color: hsl(var(--brand-surface));
+  }
+
+  .geo-panel__unavailable {
+    position: absolute;
+    inset: 0;
+    z-index: 4;
+    display: grid;
+    place-items: center;
+    color: hsl(var(--muted-foreground));
+    background: rgb(15, 23, 42);
+    font-size: 0.8rem;
   }
 
   .geo-panel__controls {
@@ -526,6 +555,12 @@
   .geo-panel__btn:hover {
     background: rgba(var(--accent-rgb) / 0.2);
     color: hsl(var(--foreground));
+  }
+
+  .geo-panel__btn:disabled,
+  .geo-panel__toggle:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
   }
 
   .geo-panel__legend {
@@ -609,14 +644,6 @@
     background: rgba(var(--accent-rgb) / 0.2);
     font-family: inherit;
     font-size: 0.68rem;
-  }
-
-  .geo-panel__tip {
-    background: hsl(var(--brand-surface));
-    border: 1px solid rgba(var(--accent-rgb) / 0.32);
-    color: hsl(var(--foreground));
-    font-size: 0.74rem;
-    border-radius: 0.4rem;
   }
 
   @media (max-width: 1023px) {

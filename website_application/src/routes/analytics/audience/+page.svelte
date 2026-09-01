@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
+  import { SvelteMap } from "svelte/reactivity";
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
   import { auth } from "$lib/stores/auth";
@@ -34,7 +35,6 @@
     NonNullable<NonNullable<typeof $connectionEventsStore.data>["analytics"]>["lifecycle"]
   >["connectionEventsConnection"];
   type ConnectionEventNode = NonNullable<ConnectionEventsConnection["edges"]>[0]["node"];
-
   let isAuthenticated = false;
   let loading = $derived(
     $geoDistStore.fetching ||
@@ -115,6 +115,15 @@
 
   // Viewer events from connection events store (with pagination support)
   let viewerEvents = $derived(connectionEvents);
+  let confirmedDeliveryEvents = $derived.by(() => {
+    const sessions = new SvelteMap<string, ConnectionEventNode>();
+    for (const event of connectionEvents) {
+      const key = event.sessionId || event.eventId;
+      const current = sessions.get(key);
+      if (!current || event.eventType.toLowerCase() === "disconnect") sessions.set(key, event);
+    }
+    return [...sessions.values()];
+  });
   let selectedBucket = $state<string | null>(null);
   // Routing-analysis panels are operator detail; hidden by default for a clean view.
   let showRoutingDetails = $state(false);
@@ -163,9 +172,18 @@
     }
   };
 
-  let routingMapData = $derived.by(() => {
-    const events = $routingEventsStore.data?.analytics?.infra?.routingEventsConnection?.edges ?? [];
+  const bucketToCentroid = (bucket?: { h3Index?: string | null } | null) => {
+    if (!bucket?.h3Index || !cellToLatLngFn) return null;
+    try {
+      const [lat, lng] = cellToLatLngFn(bucket.h3Index);
+      return [lat, lng] as [number, number];
+    } catch (e) {
+      console.warn("[bucketToCentroid] Failed for h3Index:", bucket.h3Index, e);
+      return null;
+    }
+  };
 
+  let routingMapData = $derived.by(() => {
     const routes: {
       from: [number, number];
       to: [number, number];
@@ -189,69 +207,81 @@
       { id: string; name: string; lat: number; lng: number; count: number }
     > = {};
 
-    events.forEach((edge) => {
-      const evt = edge.node;
-      const nodeKey = evt.nodeId ?? evt.selectedNode ?? "";
-      if (nodeKey && evt.nodeLatitude && evt.nodeLongitude) {
+    confirmedDeliveryEvents.forEach((evt) => {
+      const nodeKey = evt.nodeId || evt.clusterId;
+      const nodePoint = bucketToCentroid(evt.nodeBucket);
+      const hasClientCoordinates =
+        typeof evt.latitude === "number" &&
+        Number.isFinite(evt.latitude) &&
+        typeof evt.longitude === "number" &&
+        Number.isFinite(evt.longitude);
+      const clientPoint = hasClientCoordinates
+        ? ([evt.latitude!, evt.longitude!] as [number, number])
+        : bucketToCentroid(evt.clientBucket);
+
+      if (nodeKey && nodePoint) {
         const existing = nodesById[nodeKey];
         if (existing) {
           existing.count++;
         } else {
           nodesById[nodeKey] = {
             id: nodeKey,
-            name: evt.nodeName ?? evt.selectedNode ?? evt.nodeId ?? "Node",
-            lat: evt.nodeLatitude,
-            lng: evt.nodeLongitude,
+            name: evt.nodeId || evt.clusterId || "Serving node",
+            lat: nodePoint[0],
+            lng: nodePoint[1],
             count: 1,
           };
         }
       }
 
-      // We need client lat/lng AND a resolved node lat/lng
-      if (evt.clientLatitude && evt.clientLongitude) {
-        let nodeLat = evt.nodeLatitude;
-        let nodeLng = evt.nodeLongitude;
+      if (clientPoint && nodePoint) {
+        const ownership =
+          evt.originClusterId && evt.originClusterId !== evt.clusterId
+            ? ` · origin ${evt.originClusterId}`
+            : "";
+        routes.push({
+          from: nodePoint,
+          to: clientPoint,
+          status: "success",
+          details: `Confirmed delivery · served by ${evt.clusterId}${ownership}`,
+        });
+      }
 
-        if (nodeLat && nodeLng) {
-          routes.push({
-            from: [evt.clientLatitude, evt.clientLongitude],
-            to: [nodeLat, nodeLng],
-            status: evt.status ?? "unknown",
-            score: evt.score ?? undefined,
-            details: evt.details ?? undefined,
-          });
+      const clientBucket = evt.clientBucket;
+      const clientPoly = bucketToPolygon(clientBucket);
+      if (clientBucket?.h3Index && clientPoly) {
+        const id = `c-${clientBucket.h3Index}`;
+        if (!bucketSeen[id]) {
+          bucketSeen[id] = true;
+          bucketPolys.push({ id, coords: clientPoly, kind: "client" });
         }
+        const stat = bucketStats[clientBucket.h3Index] || {
+          count: 0,
+          success: 0,
+          distanceSum: 0,
+          nodeSeen: false,
+        };
+        stat.count++;
+        stat.success++;
+        if (clientPoint && nodePoint) {
+          stat.distanceSum += haversineDistance(
+            clientPoint[0],
+            clientPoint[1],
+            nodePoint[0],
+            nodePoint[1]
+          );
+        }
+        if (evt.nodeBucket?.h3Index) stat.nodeSeen = true;
+        bucketStats[clientBucket.h3Index] = stat;
+      }
 
-        // Buckets -> polygons
-        const clientBucket = evt.clientBucket;
-        const clientPoly = bucketToPolygon(clientBucket);
-        if (clientBucket && clientPoly) {
-          const id = `c-${clientBucket.h3Index}`;
-          if (!bucketSeen[id]) {
-            bucketSeen[id] = true;
-            bucketPolys.push({ id, coords: clientPoly, kind: "client" });
-          }
-          const statKey = clientBucket.h3Index!;
-          const stat = bucketStats[statKey] || {
-            count: 0,
-            success: 0,
-            distanceSum: 0,
-            nodeSeen: false,
-          };
-          stat.count++;
-          if (evt.status?.toLowerCase() === "success") stat.success++;
-          stat.distanceSum += evt.routingDistance ?? 0;
-          if (evt.nodeBucket?.h3Index) stat.nodeSeen = true;
-          bucketStats[statKey] = stat;
-        }
-        const nodeBucket = evt.nodeBucket;
-        const nodePoly = bucketToPolygon(nodeBucket);
-        if (nodeBucket && nodePoly) {
-          const id = `n-${nodeBucket.h3Index}`;
-          if (!bucketSeen[id]) {
-            bucketSeen[id] = true;
-            bucketPolys.push({ id, coords: nodePoly, kind: "node" });
-          }
+      const nodeBucket = evt.nodeBucket;
+      const nodePoly = bucketToPolygon(nodeBucket);
+      if (nodeBucket?.h3Index && nodePoly) {
+        const id = `n-${nodeBucket.h3Index}`;
+        if (!bucketSeen[id]) {
+          bucketSeen[id] = true;
+          bucketPolys.push({ id, coords: nodePoly, kind: "node" });
         }
       }
     });
@@ -264,31 +294,20 @@
         bp.stats = {
           count: stat.count,
           successRate: stat.count > 0 ? stat.success / stat.count : undefined,
-          avgDistance: stat.count > 0 ? stat.distanceSum / stat.count : undefined,
+          avgDistance: stat.nodeSeen && stat.count > 0 ? stat.distanceSum / stat.count : undefined,
         };
       }
     }
 
     const displayNodes = Object.values(nodesById).map((node) => ({
       id: node.id,
-      name: node.count > 1 ? `${node.name} (${node.count} routes)` : node.name,
+      name: node.count > 1 ? `${node.name} (${node.count} deliveries)` : node.name,
       lat: node.lat,
       lng: node.lng,
     }));
 
     return { routes, nodes: displayNodes, buckets: bucketPolys, bucketStats };
   });
-
-  const bucketToCentroid = (bucket?: { h3Index?: string | null } | null) => {
-    if (!bucket?.h3Index || !cellToLatLngFn) return null;
-    try {
-      const [lat, lng] = cellToLatLngFn(bucket.h3Index);
-      return [lat, lng] as [number, number];
-    } catch (e) {
-      console.warn("[bucketToCentroid] Failed for h3Index:", bucket.h3Index, e);
-      return null;
-    }
-  };
 
   // Simple Haversine distance in km
   function haversineDistance(lat1: number, lon1: number, lat2: number, lon2: number) {
@@ -711,13 +730,13 @@
 
         <!-- Main Content Grid -->
         <div class="dashboard-grid">
-          <!-- Viewer geography & routing (single layered map: heat / countries / routes / buckets) -->
+          <!-- Viewer geography and confirmed delivery (heat / countries / routes / buckets) -->
           {#if geographicDistribution?.topCities?.length || geographicDistribution?.topCountries?.length || routingMapData.routes.length > 0}
             <div class="slab col-span-full">
               <div class="slab-header">
                 <div class="flex items-center gap-2">
                   <Globe2Icon class="w-4 h-4 text-primary" />
-                  <h3>Viewer geography & routing</h3>
+                  <h3>Viewer geography & confirmed delivery</h3>
                 </div>
               </div>
               <div class="slab-body--flush h-[500px]">

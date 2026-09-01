@@ -20,6 +20,7 @@ export default tseslint.config(
       "**/*.config.ts",
       "**/*.svelte.ts",
       "test/**",
+      "static/runtime-config.js",
     ],
   },
   {

@@ -6,6 +6,7 @@
   import {
     GetNetworkStatusStore,
     GetClusterTrafficMatrixStore,
+    GetClusterWorkloadStore,
     GetFederationSummaryStore,
     GetFederationEventsStore,
     GetOrchestratorVantagesStore,
@@ -31,6 +32,7 @@
 
   const networkStore = new GetNetworkStatusStore();
   const trafficStore = new GetClusterTrafficMatrixStore();
+  const workloadStore = new GetClusterWorkloadStore();
   const summaryStore = new GetFederationSummaryStore();
   const eventsStore = new GetFederationEventsStore();
   const orchVantagesStore = new GetOrchestratorVantagesStore();
@@ -42,7 +44,11 @@
 
   let hasData = $derived(!!$networkStore.data?.networkStatus);
   let loading = $derived(
-    ($networkStore.fetching || $trafficStore.fetching || $summaryStore.fetching) && !hasData
+    ($networkStore.fetching ||
+      $trafficStore.fetching ||
+      $workloadStore.fetching ||
+      $summaryStore.fetching) &&
+      !hasData
   );
 
   // Network topology
@@ -56,6 +62,12 @@
 
   // Traffic matrix
   let trafficMatrix = $derived($trafficStore.data?.analytics?.infra?.clusterTrafficMatrix ?? []);
+  let clusterWorkload = $derived($workloadStore.data?.analytics?.infra?.clusterWorkload ?? []);
+  // The current renderer aggregates rows by work kind. Feed it one measurement
+  // family so point-in-time state is never added to time-window counters.
+  let mapClusterWorkload = $derived(
+    clusterWorkload.filter((row) => row.measurementKind === "window")
+  );
 
   // Federation summary
   let fedSummary = $derived($summaryStore.data?.analytics?.infra?.federationSummary);
@@ -288,8 +300,9 @@
       await Promise.all([networkStore.fetch(), orchVantagesStore.fetch()]);
 
       if (authenticated) {
-        await Promise.all([
+        await Promise.allSettled([
           trafficStore.fetch({ variables: { timeRange: timeRangeInput } }),
+          workloadStore.fetch({ variables: { timeRange: timeRangeInput } }),
           summaryStore.fetch({ variables: { timeRange: timeRangeInput } }),
           eventsStore.fetch({ variables: { timeRange: timeRangeInput, first: 25 } }),
         ]);
@@ -319,6 +332,10 @@
 
       if (authenticated && $eventsStore.errors?.length) {
         console.error("Failed to load federation events:", $eventsStore.errors);
+      }
+
+      if (authenticated && $workloadStore.errors?.length) {
+        console.info("Owned cluster workload is unavailable for this cluster access scope");
       }
     } catch (error) {
       console.error("Failed to load federation data:", error);
@@ -384,6 +401,13 @@
 
   function formatEventType(type: string): string {
     return type.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  }
+
+  function formatBytes(bytes: number): string {
+    if (bytes < 1_000) return `${bytes.toFixed(0)} B`;
+    if (bytes < 1_000_000) return `${(bytes / 1_000).toFixed(1)} kB`;
+    if (bytes < 1_000_000_000) return `${(bytes / 1_000_000).toFixed(1)} MB`;
+    return `${(bytes / 1_000_000_000).toFixed(1)} GB`;
   }
 
   function formatTimeAgo(dateStr: string | null | undefined): string {
@@ -515,10 +539,10 @@
           <div class="slab-header">
             <div class="flex items-center gap-2">
               <GlobeIcon class="w-4 h-4 text-info" />
-              <h3>Cluster Topology</h3>
+              <h3>Owned Workload Topology</h3>
             </div>
             <p class="text-sm text-muted-foreground mt-1">
-              Geographic distribution of clusters and peer connections.
+              Clusters, peer connections, and confirmed work performed by each node.
             </p>
           </div>
           <div class="slab-body">
@@ -547,6 +571,7 @@
               clusters={mapClusters}
               relationships={mapRelationships}
               {serviceInstances}
+              workloads={mapClusterWorkload}
               orchestratorVantages={mapOrchestratorVantages}
               height={450}
               zoom={2}
@@ -564,6 +589,66 @@
             </div>
           </div>
         </div>
+
+        {#if clusterWorkload.length > 0}
+          <div class="slab col-span-full">
+            <div class="slab-header">
+              <div class="flex items-center gap-2">
+                <ActivityIcon class="w-4 h-4 text-info" />
+                <h3>Confirmed Cluster Workload</h3>
+              </div>
+              <p class="text-sm text-muted-foreground mt-1">
+                Media work attributed to the cluster and node that actually performed it.
+              </p>
+            </div>
+            <div class="slab-body">
+              <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                  <thead>
+                    <tr class="border-b border-border/50 text-left">
+                      <th class="px-4 py-2 font-medium text-muted-foreground">Cluster</th>
+                      <th class="px-4 py-2 font-medium text-muted-foreground">Node</th>
+                      <th class="px-4 py-2 font-medium text-muted-foreground">Work</th>
+                      <th class="px-4 py-2 font-medium text-muted-foreground">Measurement</th>
+                      <th class="px-4 py-2 font-medium text-muted-foreground">Storage scope</th>
+                      <th class="px-4 py-2 font-medium text-muted-foreground text-right">Events</th>
+                      <th class="px-4 py-2 font-medium text-muted-foreground text-right">Active</th>
+                      <th class="px-4 py-2 font-medium text-muted-foreground text-right">Data</th>
+                      <th class="px-4 py-2 font-medium text-muted-foreground text-right">Media</th>
+                      <th class="px-4 py-2 font-medium text-muted-foreground text-right">Errors</th>
+                      <th class="px-4 py-2 font-medium text-muted-foreground text-right"
+                        >Observed</th
+                      >
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {#each clusterWorkload as row (`${row.clusterId}:${row.nodeId}:${row.workKind}:${row.measurementKind}:${row.storageScope ?? ""}`)}
+                      <tr class="border-b border-border/30 hover:bg-muted/30">
+                        <td class="px-4 py-2 font-mono text-xs">{row.clusterId}</td>
+                        <td class="px-4 py-2 font-mono text-xs">{row.nodeId}</td>
+                        <td class="px-4 py-2">{formatEventType(row.workKind)}</td>
+                        <td class="px-4 py-2">{formatEventType(row.measurementKind)}</td>
+                        <td class="px-4 py-2">{row.storageScope ?? "—"}</td>
+                        <td class="px-4 py-2 text-right">{row.eventCount.toLocaleString()}</td>
+                        <td class="px-4 py-2 text-right">{row.activeCount.toLocaleString()}</td>
+                        <td class="px-4 py-2 text-right">{formatBytes(row.bytes)}</td>
+                        <td class="px-4 py-2 text-right">{row.mediaSeconds.toLocaleString()}s</td>
+                        <td class="px-4 py-2 text-right">
+                          <span class:text-destructive={row.errorCount > 0}
+                            >{row.errorCount.toLocaleString()}</span
+                          >
+                        </td>
+                        <td class="px-4 py-2 text-right text-xs text-muted-foreground">
+                          {row.observedAt ? formatTimeAgo(row.observedAt) : "—"}
+                        </td>
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        {/if}
 
         <!-- Traffic Matrix -->
         {#if trafficMatrix.length > 0}

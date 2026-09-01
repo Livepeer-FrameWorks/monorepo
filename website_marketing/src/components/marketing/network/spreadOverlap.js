@@ -6,8 +6,8 @@ const DEFAULT_GAP_PX = 4;
  * pack around the group's pixel centroid; detail panels read from source data,
  * not marker coords.
  *
- * @param {import("leaflet").Map} map
- * @param {Array<{marker: import("leaflet").Marker, iconRadius: number}>} items
+ * @param {import("maplibre-gl").Map} map
+ * @param {Array<{marker: import("maplibre-gl").Marker, iconRadius: number}>} items
  * @param {{gapPx?: number, groupThresholdMultiplier?: number, maxExpandedGroupSize?: number, denseStepScale?: number}} [opts]
  */
 export function spreadOverlappingMarkers(map, items, opts = {}) {
@@ -22,7 +22,7 @@ export function spreadOverlappingMarkers(map, items, opts = {}) {
 
   items.forEach((it) => resetToOriginal(it.marker));
 
-  const points = items.map((it) => map.latLngToContainerPoint(it.marker.getLatLng()));
+  const points = items.map((it) => map.project(it.marker.getLngLat()));
 
   const parent = items.map((_, i) => i);
   const find = (i) => {
@@ -74,8 +74,8 @@ export function spreadOverlappingMarkers(map, items, opts = {}) {
 
     indices.forEach((idx, i) => {
       const [ox, oy] = offsets[i];
-      const newLatLng = map.containerPointToLatLng([anchor.x + ox, anchor.y + oy]);
-      items[idx].marker.setLatLng(newLatLng);
+      const newLngLat = map.unproject([anchor.x + ox, anchor.y + oy]);
+      items[idx].marker.setLngLat(newLngLat);
     });
   });
 }
@@ -150,9 +150,9 @@ function hexSpiral(n) {
 }
 
 function resetToOriginal(marker) {
-  if (marker.__originalLatLng === undefined) {
-    marker.__originalLatLng = marker.getLatLng();
+  if (marker.__originalLngLat === undefined) {
+    marker.__originalLngLat = marker.getLngLat();
     return;
   }
-  marker.setLatLng(marker.__originalLatLng);
+  marker.setLngLat(marker.__originalLngLat);
 }

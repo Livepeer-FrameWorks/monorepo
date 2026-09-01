@@ -3,7 +3,7 @@
 // the marketing visualizations behave like the product, but the numbers are
 // hand-crafted demo values, not benchmarks. No live data, no tenant data.
 
-// Tokyo Night brand palette as concrete colors (Chart.js / Leaflet can't read
+// Tokyo Night brand palette as concrete colors (Chart.js / WebGL can't read
 // the HSL CSS custom properties), kept in sync with src/index.css :root tokens.
 export const palette = {
   blue: "rgb(122, 162, 247)", // --accent #7aa2f7

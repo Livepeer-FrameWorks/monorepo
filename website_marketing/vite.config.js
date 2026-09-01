@@ -55,6 +55,9 @@ export default defineConfig(({ mode, command }) => {
       },
     },
     server: devServer,
+    optimizeDeps: {
+      exclude: ["maplibre-gl"],
+    },
     build: {
       sourcemap: false,
     },

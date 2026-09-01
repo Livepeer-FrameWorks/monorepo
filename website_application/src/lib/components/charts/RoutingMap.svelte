@@ -1,32 +1,27 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { SvelteMap } from "svelte/reactivity";
-  import type { Map as LeafletMap, LayerGroup, Marker } from "leaflet";
+  import { SvelteMap, SvelteSet } from "svelte/reactivity";
+  import type { Feature, Geometry } from "geojson";
+  import type { GeoJSONSource, Map as MapLibreMap, Marker } from "maplibre-gl";
+  import {
+    addRequiredAttribution,
+    basemapMapOptions,
+    bindModifierScrollZoom,
+    featureCollection,
+    firstBasemapSymbolLayer,
+    readRuntimePublicConfig,
+  } from "@frameworks/map-core";
   import { getIconComponent } from "$lib/iconUtils";
   import { spreadOverlappingMarkers, type Spreadable } from "./spreadOverlap";
   import { pointOnPath, samplePath } from "./arc";
-  import "leaflet/dist/leaflet.css";
-  import markerIconUrl from "leaflet/dist/images/marker-icon.png";
-  import markerIconRetinaUrl from "leaflet/dist/images/marker-icon-2x.png";
-  import markerShadowUrl from "leaflet/dist/images/marker-shadow.png";
-
-  // Leaflet is client-side only
-  let L: typeof import("leaflet") | null = null;
-
-  // Icons for controls
-  const MaximizeIcon = getIconComponent("Maximize2");
-  const MinimizeIcon = getIconComponent("Minimize2");
-  const HomeIcon = getIconComponent("Home");
-  const CpuIcon = getIconComponent("Cpu");
 
   interface Route {
-    from: [number, number]; // [lat, lng]
-    to: [number, number]; // [lat, lng]
-    score?: number; // 0-100 routing score
-    status: string; // 'success' | 'failed'
+    from: [number, number];
+    to: [number, number];
+    score?: number;
+    status: string;
     details?: string;
   }
-
   interface NodeLocation {
     id: string;
     lat: number;
@@ -36,27 +31,19 @@
     nodeType?: string;
     status?: string;
   }
-
   type BucketType = "client" | "node";
-
   interface BucketPolygon {
     id: string;
     coords: [number, number][];
     kind: BucketType;
-    stats?: {
-      count?: number;
-      successRate?: number;
-      avgDistance?: number;
-    };
+    stats?: { count?: number; successRate?: number; avgDistance?: number };
   }
-
   interface Flow {
     from: [number, number];
     to: [number, number];
     weight?: number;
     color?: string;
   }
-
   interface ClusterMarker {
     id: string;
     name: string;
@@ -78,7 +65,6 @@
     ingressMbps?: number;
     services?: string[];
   }
-
   interface RelationshipLine {
     sourceClusterId?: string;
     targetClusterId?: string;
@@ -87,13 +73,8 @@
     type: "peering" | "traffic" | "replication" | "assignment";
     active: boolean;
     weight?: number;
-    metrics?: {
-      eventCount?: number;
-      avgLatencyMs?: number;
-      successRate?: number;
-    };
+    metrics?: { eventCount?: number; avgLatencyMs?: number; successRate?: number };
   }
-
   interface ServiceInstance {
     instanceId?: string;
     serviceId: string;
@@ -102,9 +83,6 @@
     healthStatus?: string | null;
     status?: string | null;
   }
-
-  // Orchestrator vantage pin: one per (gateway, orch_addr, resolved_ip).
-  // Multi-IP orchs surface as multiple pins; the detail panel groups by orch.
   interface OrchestratorVantagePin {
     orchAddr: string;
     resolvedIp: string;
@@ -117,18 +95,25 @@
     dialedRecently: boolean;
     instanceCount?: number;
   }
-
+  interface ClusterWorkload {
+    clusterId: string;
+    nodeId: string;
+    workKind: string;
+    eventCount: number;
+    activeCount: number;
+    bytes: number;
+    mediaSeconds: number;
+    errorCount: number;
+  }
   interface DetailRow {
     label: string;
     value: string;
     code?: boolean;
   }
-
   interface DetailSection {
     title: string;
     rows: DetailRow[];
   }
-
   interface MapDetail {
     title: string;
     rows: DetailRow[];
@@ -136,7 +121,6 @@
     tags?: string[];
     description?: string;
   }
-
   interface Props {
     routes: Route[];
     nodes: NodeLocation[];
@@ -146,56 +130,35 @@
     clusters?: ClusterMarker[];
     relationships?: RelationshipLine[];
     serviceInstances?: ServiceInstance[];
+    workloads?: ClusterWorkload[];
     orchestratorVantages?: OrchestratorVantagePin[];
     onOrchestratorClick?: (orchAddr: string) => void;
     height?: number;
     zoom?: number;
     center?: [number, number];
-    tileLayerUrl?: string;
   }
 
   let {
     routes = [],
     nodes = [],
     buckets = [],
-    onBucketClick = undefined,
+    onBucketClick,
     flows = [],
     clusters = [],
     relationships = [],
     serviceInstances = [],
+    workloads = [],
     orchestratorVantages = [],
-    onOrchestratorClick = undefined,
+    onOrchestratorClick,
     height = 500,
     zoom = 2,
     center = [20, 0],
-    tileLayerUrl = "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
   }: Props = $props();
 
-  let mapContainer = $state<HTMLElement>();
-  let mapWrapper = $state<HTMLElement>();
-  let mapControls = $state<HTMLElement>();
-  let map: LeafletMap | null = null;
-  let layerGroup: LayerGroup | null = null;
-  let bucketLayer: LayerGroup | null = null;
-  let flowLayer: LayerGroup | null = null;
-  let clusterLayer: LayerGroup | null = null;
-  let relationshipLayer: LayerGroup | null = null;
-  let membershipLayer: LayerGroup | null = null;
-  let serviceLayer: LayerGroup | null = null;
-  let orchestratorLayer: LayerGroup | null = null;
-  let pulseTimers: number[] = [];
-  let nodeSpreadables: Spreadable[] = [];
-  let clusterSpreadables: Spreadable[] = [];
-  let orchestratorSpreadables: Spreadable[] = [];
-  let nodeMarkersByID: Record<string, Marker> = {};
-  let aggregateNodeMarkersByClusterID: Record<string, Marker> = {};
-  let clusterMarkersByID: Record<string, Marker> = {};
-  let renderedNodes: NodeLocation[] = [];
-  let renderedClusters: ClusterMarker[] = [];
-  let renderedRelationships: RelationshipLine[] = [];
-  let renderedServicesByNode: Record<string, string[]> = {};
-  let zoomHandlerAttached = false;
-
+  const MaximizeIcon = getIconComponent("Maximize2");
+  const MinimizeIcon = getIconComponent("Minimize2");
+  const HomeIcon = getIconComponent("Home");
+  const CpuIcon = getIconComponent("Cpu");
   const ROLE_COLORS: Record<string, string> = {
     core: "rgb(249, 115, 22)",
     central: "rgb(249, 115, 22)",
@@ -209,1075 +172,1056 @@
     default: "rgb(169, 177, 214)",
   };
 
-  // UX state
+  let mapContainer = $state<HTMLElement>();
+  let map: MapLibreMap | null = null;
+  let maplibre: typeof import("maplibre-gl") | null = null;
+  let ready = $state(false);
+  let unavailable = $state(false);
   let isFullscreen = $state(false);
   let showScrollHint = $state(true);
   let showOrchestrators = $state(true);
   let selectedDetail = $state<MapDetail | null>(null);
+  let markers: Marker[] = [];
+  let animationFrame: number | null = null;
+  let unbindWheel = () => {};
+  let pulsePaths: Array<{ from: [number, number]; to: [number, number]; color: string }> = [];
+  const detailRegistry = new SvelteMap<string, MapDetail>();
 
   onMount(async () => {
-    const leafletModule = await import("leaflet");
-    L = leafletModule.default;
-
-    const iconDefaultPrototype = L.Icon.Default.prototype as typeof L.Icon.Default.prototype & {
-      _getIconUrl?: unknown;
-    };
-    delete iconDefaultPrototype._getIconUrl;
-    L.Icon.Default.mergeOptions({
-      iconRetinaUrl: markerIconRetinaUrl,
-      iconUrl: markerIconUrl,
-      shadowUrl: markerShadowUrl,
-    });
-
-    if (mapContainer) {
-      initMap();
+    let runtime;
+    try {
+      runtime = readRuntimePublicConfig();
+    } catch {
+      console.error("Map unavailable: invalid basemap runtime configuration");
+      unavailable = true;
+      return;
+    }
+    try {
+      const [module] = await Promise.all([
+        import("maplibre-gl"),
+        import("maplibre-gl/dist/maplibre-gl.css"),
+      ]);
+      if (!mapContainer) return;
+      maplibre = module;
+      map = new module.Map({
+        container: mapContainer,
+        center: [center[1], center[0]],
+        zoom,
+        minZoom: 2,
+        maxZoom: 8,
+        scrollZoom: false,
+        ...basemapMapOptions(runtime.basemap),
+      });
+      addRequiredAttribution(map, runtime.basemap);
+      unbindWheel = bindModifierScrollZoom(map, () => (showScrollHint = false));
+      map.once("load", () => {
+        if (!map) return;
+        initializeLayers(map);
+        bindLayerInteractions(map);
+        ready = true;
+        drawMap();
+        map.on("zoomend", drawMap);
+        startPulseAnimation();
+      });
+    } catch {
+      console.error("Map unavailable: renderer initialization failed");
+      unavailable = true;
     }
   });
 
   onDestroy(() => {
-    pulseTimers.forEach(clearInterval);
-    pulseTimers = [];
-    if (map) {
-      map.remove();
-      map = null;
-    }
+    unbindWheel();
+    if (animationFrame !== null) cancelAnimationFrame(animationFrame);
+    animationFrame = null;
+    markers.forEach((marker) => marker.remove());
+    markers = [];
+    map?.remove();
+    map = null;
   });
 
-  function initMap() {
-    if (!L || !mapContainer) return;
+  function source(id: string): GeoJSONSource | null {
+    return (map?.getSource(id) as GeoJSONSource | undefined) ?? null;
+  }
 
-    map = L.map(mapContainer, {
-      center: center,
-      zoom: zoom,
-      minZoom: 2,
-      maxZoom: 8,
-      zoomControl: false,
-      attributionControl: false,
-      scrollWheelZoom: false, // Disabled by default - use modifier key
+  function initializeLayers(currentMap: MapLibreMap) {
+    const empty = featureCollection([]);
+    const beforeLabels = firstBasemapSymbolLayer(currentMap);
+    for (const id of [
+      "buckets",
+      "flows",
+      "workloads",
+      "membership",
+      "relationships",
+      "routes",
+      "clients",
+      "pulses",
+    ]) {
+      currentMap.addSource(`routing-${id}`, { type: "geojson", data: empty });
+    }
+    currentMap.addLayer(
+      {
+        id: "routing-buckets-fill",
+        type: "fill",
+        source: "routing-buckets",
+        paint: {
+          "fill-color": ["match", ["get", "kind"], "client", "rgb(59,130,246)", "rgb(16,185,129)"],
+          "fill-opacity": ["get", "opacity"],
+        },
+      },
+      beforeLabels
+    );
+    currentMap.addLayer(
+      {
+        id: "routing-buckets-line",
+        type: "line",
+        source: "routing-buckets",
+        paint: {
+          "line-color": [
+            "match",
+            ["get", "kind"],
+            "client",
+            "rgba(59,130,246,0.55)",
+            "rgba(16,185,129,0.55)",
+          ],
+          "line-width": ["case", ["boolean", ["feature-state", "hover"], false], 2, 1],
+          "line-opacity": 0.8,
+        },
+      },
+      beforeLabels
+    );
+    currentMap.addLayer(
+      {
+        id: "routing-flows",
+        type: "line",
+        source: "routing-flows",
+        paint: {
+          "line-color": ["get", "color"],
+          "line-width": ["get", "weight"],
+          "line-opacity": 0.7,
+        },
+      },
+      beforeLabels
+    );
+    currentMap.addLayer(
+      {
+        id: "routing-workloads",
+        type: "circle",
+        source: "routing-workloads",
+        paint: {
+          "circle-radius": ["get", "radius"],
+          "circle-color": ["get", "color"],
+          "circle-opacity": 0.18,
+          "circle-stroke-color": ["get", "color"],
+          "circle-stroke-opacity": 0.75,
+          "circle-stroke-width": 1.5,
+        },
+      },
+      beforeLabels
+    );
+    currentMap.addLayer(
+      {
+        id: "routing-membership-fill",
+        type: "fill",
+        source: "routing-membership",
+        filter: ["==", ["geometry-type"], "Polygon"],
+        paint: { "fill-color": ["get", "color"], "fill-opacity": 0.12 },
+      },
+      beforeLabels
+    );
+    currentMap.addLayer(
+      {
+        id: "routing-membership-outline",
+        type: "line",
+        source: "routing-membership",
+        filter: ["==", ["geometry-type"], "Polygon"],
+        paint: { "line-color": ["get", "outline"], "line-width": 1 },
+      },
+      beforeLabels
+    );
+    currentMap.addLayer(
+      {
+        id: "routing-membership-lines",
+        type: "line",
+        source: "routing-membership",
+        filter: ["==", ["geometry-type"], "LineString"],
+        paint: {
+          "line-color": ["get", "color"],
+          "line-width": ["get", "weight"],
+          "line-opacity": 0.7,
+        },
+      },
+      beforeLabels
+    );
+    for (const [type, dash] of [
+      ["peering", [4, 2]],
+      ["assignment", [6, 3]],
+      ["replication", [6, 3]],
+      ["traffic", [1, 0]],
+    ] as const) {
+      currentMap.addLayer(
+        {
+          id: `routing-relationship-${type}`,
+          type: "line",
+          source: "routing-relationships",
+          filter: ["==", ["get", "type"], type],
+          layout: { "line-cap": "round", "line-join": "round" },
+          paint: {
+            "line-color": ["get", "color"],
+            "line-width": ["get", "weight"],
+            "line-opacity": ["get", "opacity"],
+            ...(type === "traffic" ? {} : { "line-dasharray": [...dash] }),
+          },
+        },
+        beforeLabels
+      );
+    }
+    currentMap.addLayer(
+      {
+        id: "routing-routes",
+        type: "line",
+        source: "routing-routes",
+        paint: {
+          "line-color": [
+            "case",
+            ["boolean", ["get", "success"], false],
+            "rgba(158,206,106,0.4)",
+            "rgba(247,118,142,0.4)",
+          ],
+          "line-width": 1,
+          "line-opacity": 0.6,
+        },
+      },
+      beforeLabels
+    );
+    currentMap.addLayer({
+      id: "routing-clients",
+      type: "circle",
+      source: "routing-clients",
+      paint: {
+        "circle-radius": 3,
+        "circle-color": [
+          "case",
+          ["boolean", ["get", "success"], false],
+          "rgb(158,206,106)",
+          "rgb(247,118,142)",
+        ],
+      },
     });
+    currentMap.addLayer({
+      id: "routing-pulses",
+      type: "circle",
+      source: "routing-pulses",
+      paint: {
+        "circle-radius": 3,
+        "circle-color": ["get", "color"],
+        "circle-opacity": ["get", "opacity"],
+      },
+    });
+  }
 
-    L.tileLayer(tileLayerUrl, {
-      maxZoom: 19,
-      subdomains: "abcd",
-    }).addTo(map);
-
-    // Enable scroll zoom only with modifier key (Alt/Option or Ctrl)
-    mapContainer.addEventListener("wheel", handleWheel, { passive: false });
-    if (mapControls) {
-      L.DomEvent.disableClickPropagation(mapControls);
-      L.DomEvent.disableScrollPropagation(mapControls);
+  function bindLayerInteractions(currentMap: MapLibreMap) {
+    const clickable = [
+      "routing-buckets-fill",
+      "routing-workloads",
+      "routing-routes",
+      "routing-clients",
+      "routing-relationship-peering",
+      "routing-relationship-assignment",
+      "routing-relationship-replication",
+      "routing-relationship-traffic",
+    ];
+    for (const layer of clickable) {
+      currentMap.on("mouseenter", layer, () => (currentMap.getCanvas().style.cursor = "pointer"));
+      currentMap.on("mouseleave", layer, () => (currentMap.getCanvas().style.cursor = ""));
+      currentMap.on("click", layer, (event) => {
+        const feature = event.features?.[0];
+        const detailID = feature?.properties?.detailID;
+        if (typeof detailID === "string") selectedDetail = detailRegistry.get(detailID) ?? null;
+        if (layer === "routing-buckets-fill") {
+          const id = feature?.properties?.bucketID;
+          if (typeof id === "string") onBucketClick?.(id);
+        }
+      });
     }
-
-    // Order matters: first added is at the bottom
-    bucketLayer = L.layerGroup().addTo(map);
-    flowLayer = L.layerGroup().addTo(map);
-    membershipLayer = L.layerGroup().addTo(map);
-    relationshipLayer = L.layerGroup().addTo(map);
-    layerGroup = L.layerGroup().addTo(map);
-    serviceLayer = L.layerGroup().addTo(map);
-    clusterLayer = L.layerGroup().addTo(map);
-    // Orchestrator layer sits on top: pins are interactive and should be
-    // clickable through other markers when stacked.
-    orchestratorLayer = L.layerGroup().addTo(map);
-
-    drawMap(routes, nodes, buckets, flows, clusters, relationships);
-    drawOrchestrators(showOrchestrators ? orchestratorVantages : []);
-  }
-
-  function handleWheel(e: WheelEvent) {
-    if (!map) return;
-    if (e.altKey || e.ctrlKey || e.metaKey) {
-      e.preventDefault();
-      map.scrollWheelZoom.enable();
-      showScrollHint = false;
-    } else {
-      map.scrollWheelZoom.disable();
-    }
-  }
-
-  function toggleFullscreen() {
-    isFullscreen = !isFullscreen;
-    // Invalidate map size after transition
-    setTimeout(() => map?.invalidateSize(), 310);
-  }
-
-  function resetView() {
-    map?.setView(center, zoom);
-  }
-
-  function toggleOrchestrators(event: MouseEvent) {
-    event.stopPropagation();
-    const next = !showOrchestrators;
-    showOrchestrators = next;
-    if (!next) selectedDetail = null;
-    drawOrchestrators(next ? orchestratorVantages : []);
-  }
-
-  function formatLoad(current: number | undefined, max: number | undefined): string {
-    if (!max) return `${current ?? 0}`;
-    return `${current ?? 0} / ${max}`;
   }
 
   function detailRow(label: string, value: string, code = false): DetailRow {
     return { label, value, code };
   }
 
-  function openDetail(detail: MapDetail): void {
-    selectedDetail = detail;
+  function formatLoad(current: number | undefined, max: number | undefined): string {
+    return max ? `${current ?? 0} / ${max}` : `${current ?? 0}`;
   }
 
-  function stopPulseTimers(): void {
-    pulseTimers.forEach(clearInterval);
-    pulseTimers.forEach(clearTimeout);
-    pulseTimers = [];
+  function formatBytes(bytes: number): string {
+    if (bytes < 1_000) return `${bytes.toFixed(0)} B`;
+    if (bytes < 1_000_000) return `${(bytes / 1_000).toFixed(1)} kB`;
+    if (bytes < 1_000_000_000) return `${(bytes / 1_000_000).toFixed(1)} MB`;
+    return `${(bytes / 1_000_000_000).toFixed(1)} GB`;
   }
 
-  function shouldAggregateNodes(): boolean {
-    return (map?.getZoom() ?? zoom) <= 3;
+  function workloadColor(workKind: string): string {
+    const kind = workKind.toLowerCase();
+    if (kind.includes("deliver") || kind.includes("connection")) return "rgb(158, 206, 106)";
+    if (kind.includes("process") || kind.includes("transcod")) return "rgb(187, 154, 247)";
+    if (kind.includes("store") || kind.includes("storage")) return "rgb(125, 207, 255)";
+    if (kind.includes("origin") || kind.includes("federat")) return "rgb(224, 175, 104)";
+    return "rgb(169, 177, 214)";
   }
 
-  function nodeDetail(node: NodeLocation, services: string[] | undefined): MapDetail {
-    const rows = [
-      detailRow("Type", node.nodeType || "node"),
-      detailRow("Status", node.status || "active"),
-    ];
-    if (node.clusterId) rows.push(detailRow("Cluster", node.clusterId));
-    if (services?.length) rows.push(detailRow("Services", services.join(", ")));
+  function workloadSection(items: ClusterWorkload[]): DetailSection | null {
+    if (items.length === 0) return null;
+    const byKind = new SvelteMap<string, ClusterWorkload>();
+    for (const item of items) {
+      const current = byKind.get(item.workKind);
+      if (current) {
+        current.eventCount += item.eventCount;
+        current.activeCount += item.activeCount;
+        current.bytes += item.bytes;
+        current.mediaSeconds += item.mediaSeconds;
+        current.errorCount += item.errorCount;
+      } else {
+        byKind.set(item.workKind, { ...item });
+      }
+    }
     return {
-      title: node.name,
-      rows,
-      tags: services,
+      title: "Confirmed Workload",
+      rows: [...byKind.values()]
+        .sort((left, right) => right.eventCount - left.eventCount)
+        .map((item) =>
+          detailRow(
+            item.workKind.replaceAll("_", " "),
+            [
+              `${item.eventCount.toLocaleString()} events`,
+              item.activeCount ? `${item.activeCount.toLocaleString()} active` : "",
+              item.bytes ? formatBytes(item.bytes) : "",
+              item.mediaSeconds ? `${item.mediaSeconds.toLocaleString()} media s` : "",
+              item.errorCount ? `${item.errorCount.toLocaleString()} errors` : "",
+            ]
+              .filter(Boolean)
+              .join(" · ")
+          )
+        ),
     };
-  }
-
-  function aggregateNodeDetail(
-    nodesInGroup: NodeLocation[],
-    servicesByNode: Record<string, string[]>
-  ): MapDetail {
-    const sorted = [...nodesInGroup].sort((a, b) => a.name.localeCompare(b.name));
-    return {
-      title: `${nodesInGroup.length} nodes`,
-      rows: sorted.map((node) => {
-        const services = servicesByNode[node.id];
-        const meta = [
-          node.nodeType || "node",
-          node.status || "active",
-          services?.length ? services.join(", ") : "",
-        ]
-          .filter(Boolean)
-          .join(" · ");
-        return detailRow(node.name, meta);
-      }),
-    };
-  }
-
-  function markerLatLng(marker: Marker | undefined, fallback: [number, number]): [number, number] {
-    if (!marker) return fallback;
-    const ll = marker.getLatLng();
-    return [ll.lat, ll.lng];
   }
 
   function roleColor(role: string | undefined, status?: string): string {
     if (status === "offline" || status === "down") return "rgb(100, 116, 139)";
-    const normalized = (role ?? "").toLowerCase();
-    return ROLE_COLORS[normalized] ?? ROLE_COLORS.default;
+    return ROLE_COLORS[(role ?? "").toLowerCase()] ?? ROLE_COLORS.default;
   }
 
   function serviceRole(services: string[] | undefined): string | undefined {
-    if (!services?.length) return undefined;
-    if (services.some((s) => s === "livepeer-gateway" || s.startsWith("livepeer-"))) {
-      return "compute";
-    }
-    return undefined;
+    return services?.some(
+      (service) => service === "livepeer-gateway" || service.startsWith("livepeer-")
+    )
+      ? "compute"
+      : undefined;
   }
 
   function nodeRole(node: NodeLocation, services: string[] | undefined): string {
     return serviceRole(services) ?? node.nodeType ?? "default";
   }
 
-  function aggregateRole(
-    nodesInGroup: NodeLocation[],
-    servicesByNode: Record<string, string[]>
-  ): string {
-    if (nodesInGroup.some((node) => serviceRole(servicesByNode[node.id]) === "compute")) {
-      return "compute";
-    }
-    if (nodesInGroup.some((node) => (node.nodeType ?? "").toLowerCase() === "core")) {
-      return "core";
-    }
-    return "media";
-  }
-
   function withAlpha(rgb: string, alpha: number): string {
     return rgb.replace("rgb(", "rgba(").replace(")", `, ${alpha})`);
   }
 
-  function convexHull(pts: Array<{ x: number; y: number }>): Array<{ x: number; y: number }> {
-    if (pts.length < 3) return pts.slice();
-    const sorted = [...pts].sort((a, b) => a.x - b.x || a.y - b.y);
-    const cross = (
-      o: { x: number; y: number },
-      a: { x: number; y: number },
-      b: { x: number; y: number }
-    ) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
-    const lower: Array<{ x: number; y: number }> = [];
-    for (const p of sorted) {
-      while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) {
-        lower.pop();
-      }
-      lower.push(p);
-    }
-    const upper: Array<{ x: number; y: number }> = [];
-    for (let i = sorted.length - 1; i >= 0; i--) {
-      const p = sorted[i];
-      while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) {
-        upper.pop();
-      }
-      upper.push(p);
-    }
-    lower.pop();
-    upper.pop();
-    return lower.concat(upper);
-  }
-
-  function inflateHull(
-    points: Array<{ x: number; y: number }>,
-    padding: number
-  ): Array<{ x: number; y: number }> {
-    if (!points.length) return points;
-    let cx = 0;
-    let cy = 0;
-    points.forEach((p) => {
-      cx += p.x;
-      cy += p.y;
-    });
-    cx /= points.length;
-    cy /= points.length;
-    return points.map((p) => {
-      const dx = p.x - cx;
-      const dy = p.y - cy;
-      const len = Math.hypot(dx, dy) || 1;
-      return { x: p.x + (dx / len) * padding, y: p.y + (dy / len) * padding };
-    });
-  }
-
-  // Rounds each polygon vertex with a quadratic Bezier so the hull reads as a
-  // soft blob. cornerRadius is in pixels; clamped per-vertex to half the
-  // adjacent edge length so tight clusters don't fold in on themselves.
-  function smoothPolygon(
-    points: Array<{ x: number; y: number }>,
-    cornerRadius: number,
-    samplesPerCorner = 6
-  ): Array<{ x: number; y: number }> {
-    const n = points.length;
-    if (n < 3) return points;
-    const out: Array<{ x: number; y: number }> = [];
-    for (let i = 0; i < n; i++) {
-      const prev = points[(i - 1 + n) % n];
-      const curr = points[i];
-      const next = points[(i + 1) % n];
-      const vpx = prev.x - curr.x;
-      const vpy = prev.y - curr.y;
-      const vnx = next.x - curr.x;
-      const vny = next.y - curr.y;
-      const lp = Math.hypot(vpx, vpy) || 1;
-      const ln = Math.hypot(vnx, vny) || 1;
-      const r = Math.min(cornerRadius, lp / 2, ln / 2);
-      const sx = curr.x + (vpx / lp) * r;
-      const sy = curr.y + (vpy / lp) * r;
-      const ex = curr.x + (vnx / ln) * r;
-      const ey = curr.y + (vny / ln) * r;
-      for (let s = 0; s <= samplesPerCorner; s++) {
-        const t = s / samplesPerCorner;
-        const u = 1 - t;
-        out.push({
-          x: u * u * sx + 2 * u * t * curr.x + t * t * ex,
-          y: u * u * sy + 2 * u * t * curr.y + t * t * ey,
-        });
-      }
-    }
-    return out;
-  }
-
-  function shouldDrawClusterHull(points: Array<{ x: number; y: number }>): boolean {
-    if (points.length < 3) return false;
-    let minX = Number.POSITIVE_INFINITY;
-    let maxX = Number.NEGATIVE_INFINITY;
-    let minY = Number.POSITIVE_INFINITY;
-    let maxY = Number.NEGATIVE_INFINITY;
-    points.forEach((p) => {
-      minX = Math.min(minX, p.x);
-      maxX = Math.max(maxX, p.x);
-      minY = Math.min(minY, p.y);
-      maxY = Math.max(maxY, p.y);
-    });
-    const width = maxX - minX;
-    const height = maxY - minY;
-    const major = Math.max(width, height);
-    const minor = Math.max(1, Math.min(width, height));
-    if (major > 360) return false;
-    if (major / minor > 4) return false;
-    if (major > 220 && minor < 56) return false;
-    return true;
-  }
-
   function relationshipColor(type: RelationshipLine["type"]): string {
-    if (type === "traffic") return "rgba(158, 206, 106, 0.6)";
-    if (type === "assignment") return "rgba(187, 154, 247, 0.72)";
-    if (type === "replication") return "rgba(187, 154, 247, 0.7)";
-    return "rgba(125, 207, 255, 0.72)";
+    if (type === "traffic") return "rgba(158,206,106,0.6)";
+    if (type === "assignment" || type === "replication") return "rgba(187,154,247,0.72)";
+    return "rgba(125,207,255,0.72)";
   }
 
-  function startPulse(
-    from: [number, number],
-    to: [number, number],
-    color: string = "rgb(125, 207, 255)"
-  ) {
-    if (!L || !relationshipLayer) return;
-    const steps = 60;
-    const interval = 50;
-    const layer = relationshipLayer;
-    const leaflet = L;
+  function markerLatLng(marker: Marker | undefined, fallback: [number, number]): [number, number] {
+    if (!marker) return fallback;
+    const point = marker.getLngLat();
+    return [point.lat, point.lng];
+  }
 
-    function createPulse(delay: number) {
-      let step = 0;
-      let marker: ReturnType<typeof leaflet.circleMarker> | null = null;
+  function createMarkerElement(html: string, label: string): HTMLButtonElement {
+    const element = document.createElement("button");
+    element.type = "button";
+    element.className = "routing-marker";
+    element.setAttribute("aria-label", label);
+    element.innerHTML = html;
+    return element;
+  }
 
-      const timerId = window.setTimeout(() => {
-        const id = window.setInterval(() => {
-          const t = step / steps;
-          const [lat, lng] = pointOnPath(from, to, t);
-
-          if (!marker) {
-            marker = leaflet
-              .circleMarker([lat, lng], {
-                radius: 3,
-                fillColor: color,
-                fillOpacity: 0.9,
-                stroke: false,
-                interactive: false,
-              })
-              .addTo(layer);
-          } else {
-            marker.setLatLng([lat, lng]);
-          }
-
-          const opacity = t < 0.1 ? t / 0.1 : t > 0.9 ? (1 - t) / 0.1 : 0.9;
-          marker.setStyle({ fillOpacity: opacity });
-
-          step++;
-          if (step > steps) step = 0;
-        }, interval);
-
-        pulseTimers.push(id);
-      }, delay);
-
-      pulseTimers.push(timerId);
+  function servicesByNode(): Record<string, string[]> {
+    const output: Record<string, string[]> = {};
+    for (const instance of serviceInstances) {
+      if (!instance.nodeId) continue;
+      output[instance.nodeId] ??= [];
+      if (!output[instance.nodeId].includes(instance.serviceId))
+        output[instance.nodeId].push(instance.serviceId);
     }
-
-    createPulse(0);
-    createPulse(1500);
+    Object.values(output).forEach((services) => services.sort());
+    return output;
   }
 
-  function drawMap(
-    currentRoutes: Route[],
-    currentNodes: NodeLocation[],
-    currentBuckets: BucketPolygon[],
-    currentFlows: Flow[],
-    currentClusters: ClusterMarker[] = [],
-    currentRelationships: RelationshipLine[] = []
-  ) {
-    if (!map || !L) return;
-    const leaflet = L;
+  function nodeDetail(
+    node: NodeLocation,
+    services: string[] | undefined,
+    nodeWorkloads: ClusterWorkload[]
+  ): MapDetail {
+    const rows = [
+      detailRow("Type", node.nodeType || "node"),
+      detailRow("Status", node.status || "active"),
+    ];
+    if (node.clusterId) rows.push(detailRow("Cluster", node.clusterId));
+    const section = workloadSection(nodeWorkloads);
+    return { title: node.name, rows, sections: section ? [section] : [], tags: services };
+  }
 
-    stopPulseTimers();
-    nodeSpreadables = [];
-    clusterSpreadables = [];
-    nodeMarkersByID = {};
-    aggregateNodeMarkersByClusterID = {};
-    clusterMarkersByID = {};
-    renderedNodes = currentNodes;
-    renderedClusters = currentClusters;
-    renderedRelationships = currentRelationships;
-
-    // Remove old layer groups from map entirely
-    if (bucketLayer) map.removeLayer(bucketLayer);
-    if (flowLayer) map.removeLayer(flowLayer);
-    if (membershipLayer) map.removeLayer(membershipLayer);
-    if (relationshipLayer) map.removeLayer(relationshipLayer);
-    if (layerGroup) map.removeLayer(layerGroup);
-    if (serviceLayer) map.removeLayer(serviceLayer);
-    if (clusterLayer) map.removeLayer(clusterLayer);
-
-    // Recreate layer groups (order = z-order)
-    bucketLayer = leaflet.layerGroup().addTo(map);
-    flowLayer = leaflet.layerGroup().addTo(map);
-    membershipLayer = leaflet.layerGroup().addTo(map);
-    relationshipLayer = leaflet.layerGroup().addTo(map);
-    layerGroup = leaflet.layerGroup().addTo(map);
-    serviceLayer = leaflet.layerGroup().addTo(map);
-    clusterLayer = leaflet.layerGroup().addTo(map);
-
-    // 0. Draw bucket polygons first (optional)
-    // Build a simple count map for heat intensity
-    const bucketCounts: Record<string, number> = {};
-    currentBuckets.forEach((b) => {
-      bucketCounts[b.id] = (bucketCounts[b.id] || 0) + 1;
-    });
-
-    currentBuckets.forEach((b) => {
-      // log-like scaling so sparse buckets still show
-      const count = bucketCounts[b.id] ?? 1;
-      const intensity = Math.min(
-        1,
-        Math.log1p(count) / Math.log1p(Math.max(...Object.values(bucketCounts)))
-      );
-      // Leaflet expects [lat, lng]
-      const poly = leaflet.polygon(b.coords, {
-        color: b.kind === "client" ? "rgba(59,130,246,0.55)" : "rgba(16,185,129,0.55)",
-        weight: 1,
-        fillOpacity: 0.12 + intensity * 0.35,
-        opacity: 0.8,
-      });
-      // Bucket popup with stats
-      const bucketRows = [detailRow("Type", b.kind === "client" ? "Viewer Bucket" : "Node Bucket")];
-      if (b.stats?.count != null) bucketRows.push(detailRow("Events", `${b.stats.count}`));
-      if (b.stats?.successRate != null)
-        bucketRows.push(detailRow("Success", `${(b.stats.successRate * 100).toFixed(1)}%`));
-      if (b.stats?.avgDistance != null)
-        bucketRows.push(detailRow("Avg Distance", `${b.stats.avgDistance.toFixed(0)}km`));
-      poly.on("click", () => {
-        openDetail({
-          title: b.kind === "client" ? "Viewer Bucket" : "Node Bucket",
-          rows: bucketRows,
-        });
-        if (onBucketClick) onBucketClick(b.id);
-      });
-      poly.on("mouseover", () => poly.setStyle({ weight: 2 }));
-      poly.on("mouseout", () => poly.setStyle({ weight: 1 }));
-      poly.addTo(bucketLayer!);
-    });
-
-    // 1b. Draw flows (client bucket -> node bucket centroids)
-    currentFlows.forEach((f) => {
-      const color = f.color || "rgba(187, 154, 247, 0.5)"; // purple
-      const weight = f.weight || 1.2;
-      leaflet
-        .polyline([f.from, f.to], {
-          color,
-          weight,
-          opacity: 0.7,
-          smoothFactor: 1,
-        })
-        .addTo(flowLayer!);
-    });
-
-    // Build cluster lookup for membership lines
-    const clusterMap: Record<string, ClusterMarker> = {};
-    currentClusters.forEach((c) => {
-      clusterMap[c.id] = c;
-    });
-
-    // Build per-node service list (populated when serviceInstances prop is provided)
-    const servicesByNode: Record<string, string[]> = {};
-    const pushUniqueService = (
-      target: Record<string, string[]>,
-      key: string,
-      serviceID: string
-    ) => {
-      if (!target[key]) target[key] = [];
-      if (!target[key].includes(serviceID)) {
-        target[key].push(serviceID);
-      }
+  function aggregateNodeDetail(
+    group: NodeLocation[],
+    byNode: Record<string, string[]>,
+    workloadsByNode: Record<string, ClusterWorkload[]>
+  ): MapDetail {
+    const section = workloadSection(group.flatMap((node) => workloadsByNode[node.id] ?? []));
+    return {
+      title: `${group.length} nodes`,
+      rows: [...group]
+        .sort((left, right) => left.name.localeCompare(right.name))
+        .map((node) =>
+          detailRow(
+            node.name,
+            [node.nodeType || "node", node.status || "active", byNode[node.id]?.join(", ")]
+              .filter(Boolean)
+              .join(" · ")
+          )
+        ),
+      sections: section ? [section] : [],
     };
-    serviceInstances.forEach((si) => {
-      if (!si.nodeId) return;
-      pushUniqueService(servicesByNode, si.nodeId, si.serviceId);
-    });
-    Object.values(servicesByNode).forEach((svcs) => svcs.sort());
-    renderedServicesByNode = servicesByNode;
+  }
 
-    const aggregateNodes = shouldAggregateNodes();
-    const nodesByCluster: Record<string, NodeLocation[]> = {};
-
-    // 1. Draw Infrastructure Nodes
-    const nodeMap: Record<string, NodeLocation> = {};
-    const nodeTypeCountByCluster: Record<string, { core: number; edge: number; other: number }> =
-      {};
-    currentNodes.forEach((node) => {
-      nodeMap[node.id] = node;
-      const clusterID = node.clusterId ?? "";
-      if (clusterID) {
-        if (!nodeTypeCountByCluster[clusterID]) {
-          nodeTypeCountByCluster[clusterID] = { core: 0, edge: 0, other: 0 };
-        }
-        const normalizedType = (node.nodeType ?? "").toLowerCase();
-        if (normalizedType === "core") nodeTypeCountByCluster[clusterID].core++;
-        else if (normalizedType === "edge") nodeTypeCountByCluster[clusterID].edge++;
-        else nodeTypeCountByCluster[clusterID].other++;
-        const group = nodesByCluster[clusterID] ?? [];
-        group.push(node);
-        nodesByCluster[clusterID] = group;
-      }
-    });
-
-    const collapsedNodeIDs: Record<string, true> = {};
-    if (aggregateNodes) {
-      Object.entries(nodesByCluster).forEach(([clusterID, nodesInGroup]) => {
-        if (nodesInGroup.length < 4) return;
-        const avgLat = nodesInGroup.reduce((sum, node) => sum + node.lat, 0) / nodesInGroup.length;
-        const avgLng = nodesInGroup.reduce((sum, node) => sum + node.lng, 0) / nodesInGroup.length;
-        const activeCount = nodesInGroup.filter(
-          (node) => (node.status ?? "active") === "active"
-        ).length;
-        const size = Math.max(24, Math.min(42, 18 + nodesInGroup.length * 3));
-        const color = roleColor(
-          aggregateRole(nodesInGroup, servicesByNode),
-          activeCount === 0 ? "offline" : "active"
-        );
-        const icon = leaflet.divIcon({
-          className: "node-dot-marker",
-          html: `<div style="background-color: color-mix(in srgb, ${color} 20%, rgb(22, 22, 30)); width: ${size}px; height: ${size}px; border-radius: 8px; border: 2px solid ${color}; display: flex; align-items: center; justify-content: center; color: ${color}; font-size: 11px; font-weight: 700; box-shadow: 0 0 10px color-mix(in srgb, ${color} 35%, transparent);">${nodesInGroup.length}</div>`,
-          iconSize: [size, size],
-          iconAnchor: [size / 2, size / 2],
-        });
-        const marker = leaflet.marker([avgLat, avgLng], { icon }).addTo(layerGroup!);
-        marker.on("click", () => openDetail(aggregateNodeDetail(nodesInGroup, servicesByNode)));
-        aggregateNodeMarkersByClusterID[clusterID] = marker;
-        nodeSpreadables.push({ marker, iconRadius: size / 2 });
-        nodesInGroup.forEach((node) => {
-          collapsedNodeIDs[node.id] = true;
-        });
+  function clusterDetail(
+    cluster: ClusterMarker,
+    counts: { core: number; edge: number },
+    tags: string[],
+    clusterWorkloads: ClusterWorkload[]
+  ): MapDetail {
+    const rows: DetailRow[] = [];
+    if (cluster.region) rows.push(detailRow("Region", cluster.region));
+    if (cluster.clusterType) rows.push(detailRow("Type", cluster.clusterType));
+    rows.push(detailRow("Nodes", `${cluster.healthyNodeCount} / ${cluster.nodeCount}`));
+    if (cluster.peerCount != null) rows.push(detailRow("Peers", `${cluster.peerCount}`));
+    rows.push(detailRow("Status", cluster.status));
+    if (counts.core > 0) rows.push(detailRow("Core Nodes", `${counts.core}`));
+    if (counts.edge > 0) rows.push(detailRow("Edge Nodes", `${counts.edge}`));
+    const sections: DetailSection[] = [];
+    if (
+      (cluster.currentStreams ?? 0) > 0 ||
+      (cluster.currentViewers ?? 0) > 0 ||
+      (cluster.egressMbps ?? 0) > 0 ||
+      (cluster.ingressMbps ?? 0) > 0 ||
+      (cluster.egressCapacityMbps ?? 0) > 0
+    ) {
+      sections.push({
+        title: "Load",
+        rows: [
+          detailRow("Streams", `${cluster.currentStreams ?? 0}`),
+          detailRow("Viewers", `${cluster.currentViewers ?? 0}`),
+          detailRow("Egress", `${formatLoad(cluster.egressMbps, cluster.egressCapacityMbps)} Mbps`),
+          detailRow("Ingress", `${cluster.ingressMbps ?? 0} Mbps`),
+        ],
       });
     }
+    const confirmedWorkload = workloadSection(clusterWorkloads);
+    if (confirmedWorkload) sections.push(confirmedWorkload);
+    return { title: cluster.name, rows, sections, tags, description: cluster.shortDescription };
+  }
 
-    currentNodes.forEach((node) => {
-      if (collapsedNodeIDs[node.id]) return;
-
-      const nodeSvcs = servicesByNode[node.id];
-      const isComputeNode = serviceRole(nodeSvcs) === "compute";
-      const color = roleColor(nodeRole(node, nodeSvcs), node.status);
-      const nt = (node.nodeType ?? "").toLowerCase();
-      const isCoreNode = !isComputeNode && (nt === "core" || nt === "central");
-
-      let size: number;
-      let html: string;
-      if (isComputeNode) {
-        size = 9;
-        html = `<div class="node-shape node-shape--ring" style="width:${size}px; height:${size}px; --node-color:${color}; box-shadow: 0 0 7px ${color};"></div>`;
-      } else if (isCoreNode) {
-        size = 14;
-        html = `<div class="shape-wrap shape-wrap--glow" style="--glow-color:${color};"><div class="node-shape node-shape--diamond" style="width:${size}px; height:${size}px; --node-color:${color};"></div></div>`;
-      } else {
-        size = 10;
-        html = `<div class="node-shape node-shape--circle" style="width:${size}px; height:${size}px; --node-color:${color}; box-shadow: 0 0 6px ${color};"></div>`;
+  function convexHull(points: Array<{ x: number; y: number }>): Array<{ x: number; y: number }> {
+    if (points.length < 3) return points.slice();
+    const sorted = [...points].sort((left, right) => left.x - right.x || left.y - right.y);
+    const cross = (
+      origin: { x: number; y: number },
+      left: { x: number; y: number },
+      right: { x: number; y: number }
+    ) => (left.x - origin.x) * (right.y - origin.y) - (left.y - origin.y) * (right.x - origin.x);
+    const half = (items: Array<{ x: number; y: number }>) => {
+      const output: Array<{ x: number; y: number }> = [];
+      for (const point of items) {
+        while (output.length >= 2 && cross(output.at(-2)!, output.at(-1)!, point) <= 0)
+          output.pop();
+        output.push(point);
       }
+      output.pop();
+      return output;
+    };
+    return half(sorted).concat(half([...sorted].reverse()));
+  }
 
-      const nodeIcon = leaflet.divIcon({
-        className: "node-dot-marker",
-        html,
-        iconSize: [size, size],
-        iconAnchor: [size / 2, size / 2],
-      });
-
-      const nodeMarker: Marker = leaflet
-        .marker([node.lat, node.lng], { icon: nodeIcon })
-        .addTo(layerGroup!);
-      nodeMarker.on("click", () => openDetail(nodeDetail(node, nodeSvcs)));
-      nodeMarkersByID[node.id] = nodeMarker;
-      nodeSpreadables.push({ marker: nodeMarker, iconRadius: size / 2 });
+  function smoothHull(
+    points: Array<{ x: number; y: number }>,
+    padding = 10
+  ): Array<[number, number]> {
+    if (!map || points.length < 3) return [];
+    const centerPoint = points.reduce(
+      (sum, point) => ({ x: sum.x + point.x / points.length, y: sum.y + point.y / points.length }),
+      { x: 0, y: 0 }
+    );
+    const inflated = convexHull(points).map((point) => {
+      const dx = point.x - centerPoint.x;
+      const dy = point.y - centerPoint.y;
+      const length = Math.hypot(dx, dy) || 1;
+      return { x: point.x + (dx / length) * padding, y: point.y + (dy / length) * padding };
     });
-
-    // Build per-cluster service list from node-owned services.
-    // This keeps service display tied to node ownership instead of detached markers.
-    const servicesByClusterFromNodes: Record<string, string[]> = {};
-    Object.entries(servicesByNode).forEach(([nodeID, nodeServices]) => {
-      const clusterID = nodeMap[nodeID]?.clusterId;
-      if (!clusterID) return;
-      nodeServices.forEach((serviceID) => {
-        pushUniqueService(servicesByClusterFromNodes, clusterID, serviceID);
-      });
+    const output: Array<{ x: number; y: number }> = [];
+    for (let index = 0; index < inflated.length; index++) {
+      const previous = inflated[(index - 1 + inflated.length) % inflated.length];
+      const current = inflated[index];
+      const next = inflated[(index + 1) % inflated.length];
+      const previousLength = Math.hypot(previous.x - current.x, previous.y - current.y) || 1;
+      const nextLength = Math.hypot(next.x - current.x, next.y - current.y) || 1;
+      const radius = Math.min(14, previousLength / 2, nextLength / 2);
+      const start = {
+        x: current.x + ((previous.x - current.x) / previousLength) * radius,
+        y: current.y + ((previous.y - current.y) / previousLength) * radius,
+      };
+      const end = {
+        x: current.x + ((next.x - current.x) / nextLength) * radius,
+        y: current.y + ((next.y - current.y) / nextLength) * radius,
+      };
+      for (let sample = 0; sample <= 6; sample++) {
+        const t = sample / 6;
+        const u = 1 - t;
+        output.push({
+          x: u * u * start.x + 2 * u * t * current.x + t * t * end.x,
+          y: u * u * start.y + 2 * u * t * current.y + t * t * end.y,
+        });
+      }
+    }
+    const ring = output.map((point) => {
+      const lngLat = map!.unproject([point.x, point.y]);
+      return [lngLat.lng, lngLat.lat] as [number, number];
     });
-    Object.values(servicesByClusterFromNodes).forEach((svcs) => svcs.sort());
+    if (ring.length) ring.push(ring[0]);
+    return ring;
+  }
 
-    // 2. Draw Routes (Bezier curves or straight lines)
-    currentRoutes.forEach((route) => {
-      const isSuccess = route.status === "success" || route.status === "SUCCESS";
-      const color = isSuccess ? "rgba(158, 206, 106, 0.4)" : "rgba(247, 118, 142, 0.4)";
-      const weight = 1;
+  function drawMap() {
+    if (!map || !maplibre || !ready) return;
+    markers.forEach((marker) => marker.remove());
+    markers = [];
+    detailRegistry.clear();
+    pulsePaths = [];
 
-      // Draw line
-      const line = leaflet.polyline([route.from, route.to], {
-        color: color,
-        weight: weight,
-        opacity: 0.6,
-        smoothFactor: 1,
-      });
+    const bucketsMax = Math.max(buckets.length, 1);
+    source("routing-buckets")?.setData(
+      featureCollection(
+        buckets.map((bucket, index) => {
+          const ring = bucket.coords.map(([lat, lng]) => [lng, lat]);
+          if (ring.length) ring.push(ring[0]);
+          const detailID = `bucket:${index}`;
+          const rows = [
+            detailRow("Type", bucket.kind === "client" ? "Viewer Bucket" : "Node Bucket"),
+          ];
+          if (bucket.stats?.count != null) rows.push(detailRow("Events", `${bucket.stats.count}`));
+          if (bucket.stats?.successRate != null)
+            rows.push(detailRow("Success", `${(bucket.stats.successRate * 100).toFixed(1)}%`));
+          if (bucket.stats?.avgDistance != null)
+            rows.push(detailRow("Avg Distance", `${bucket.stats.avgDistance.toFixed(0)}km`));
+          detailRegistry.set(detailID, { title: rows[0].value, rows });
+          return {
+            id: bucket.id,
+            type: "Feature" as const,
+            properties: {
+              bucketID: bucket.id,
+              kind: bucket.kind,
+              opacity: 0.12 + (Math.log1p(index + 1) / Math.log1p(bucketsMax)) * 0.35,
+              detailID,
+            },
+            geometry: { type: "Polygon" as const, coordinates: [ring] },
+          };
+        })
+      )
+    );
+    source("routing-flows")?.setData(
+      featureCollection(
+        flows.map((flow) => ({
+          type: "Feature",
+          properties: { color: flow.color || "rgba(187,154,247,0.5)", weight: flow.weight || 1.2 },
+          geometry: {
+            type: "LineString",
+            coordinates: [
+              [flow.from[1], flow.from[0]],
+              [flow.to[1], flow.to[0]],
+            ],
+          },
+        }))
+      )
+    );
 
-      const routeRows = [detailRow("Status", isSuccess ? "Success" : "Failed")];
-      if (route.score != null) routeRows.push(detailRow("Score", `${route.score}`));
-      if (route.details) routeRows.push(detailRow("Details", route.details));
-      line.on("click", () => openDetail({ title: "Route", rows: routeRows }));
-      line.addTo(layerGroup!);
+    const byNode = servicesByNode();
+    const nodesByCluster: Record<string, NodeLocation[]> = {};
+    const nodeCounts: Record<string, { core: number; edge: number }> = {};
+    const servicesByCluster: Record<string, string[]> = {};
+    const workloadsByNode: Record<string, ClusterWorkload[]> = {};
+    const workloadsByCluster: Record<string, ClusterWorkload[]> = {};
+    for (const workload of workloads) {
+      (workloadsByNode[workload.nodeId] ??= []).push(workload);
+      (workloadsByCluster[workload.clusterId] ??= []).push(workload);
+    }
+    for (const node of nodes) {
+      if (!node.clusterId) continue;
+      (nodesByCluster[node.clusterId] ??= []).push(node);
+      nodeCounts[node.clusterId] ??= { core: 0, edge: 0 };
+      const type = (node.nodeType || "").toLowerCase();
+      if (type === "core") nodeCounts[node.clusterId].core++;
+      else if (type === "edge") nodeCounts[node.clusterId].edge++;
+      servicesByCluster[node.clusterId] ??= [];
+      for (const service of byNode[node.id] || []) {
+        if (!servicesByCluster[node.clusterId].includes(service))
+          servicesByCluster[node.clusterId].push(service);
+      }
+    }
+    Object.values(servicesByCluster).forEach((services) => services.sort());
 
-      // Draw Client (Origin) dot
-      const clientIcon = leaflet.divIcon({
-        className: "custom-client-icon",
-        html: `<div style="background-color: ${isSuccess ? "rgb(158, 206, 106)" : "rgb(247, 118, 142)"}; width: 6px; height: 6px; border-radius: 50%;"></div>`,
-        iconSize: [6, 6],
-        iconAnchor: [3, 3],
-      });
+    const nodesByID = new SvelteMap(nodes.map((node) => [node.id, node]));
+    const clustersByID = new SvelteMap(clusters.map((cluster) => [cluster.id, cluster]));
+    source("routing-workloads")?.setData(
+      featureCollection(
+        Object.entries(workloadsByNode).flatMap(([nodeID, nodeWorkloads], index) => {
+          const node = nodesByID.get(nodeID);
+          const cluster = clustersByID.get(nodeWorkloads[0]?.clusterId ?? "");
+          const location = node ?? cluster;
+          if (!location || !Number.isFinite(location.lat) || !Number.isFinite(location.lng))
+            return [];
+          const dominant = [...nodeWorkloads].sort(
+            (left, right) => right.eventCount - left.eventCount
+          )[0];
+          const magnitude = nodeWorkloads.reduce(
+            (sum, item) => sum + item.eventCount + item.activeCount + item.errorCount,
+            0
+          );
+          const detailID = `workload:${index}`;
+          const section = workloadSection(nodeWorkloads);
+          detailRegistry.set(detailID, {
+            title: node?.name ?? nodeID,
+            rows: [detailRow("Node", nodeID, true), detailRow("Cluster", dominant.clusterId, true)],
+            sections: section ? [section] : [],
+          });
+          return [
+            {
+              type: "Feature" as const,
+              properties: {
+                radius: Math.min(30, 7 + Math.log10(magnitude + 1) * 4),
+                color: workloadColor(dominant.workKind),
+                detailID,
+              },
+              geometry: {
+                type: "Point" as const,
+                coordinates: [location.lng, location.lat],
+              },
+            },
+          ];
+        })
+      )
+    );
 
-      const clientRows = [
-        detailRow("Status", isSuccess ? "Success" : "Failed"),
-        detailRow("Location", `${route.from[0].toFixed(2)}, ${route.from[1].toFixed(2)}`),
-      ];
-      if (route.score != null) clientRows.splice(1, 0, detailRow("Score", `${route.score}`));
-      const clientMarker = leaflet.marker(route.from, { icon: clientIcon }).addTo(layerGroup!);
-      clientMarker.on("click", () => openDetail({ title: "Viewer", rows: clientRows }));
-    });
+    const nodeMarkers: Record<string, Marker> = {};
+    const aggregateMarkers: Record<string, Marker> = {};
+    const clusterMarkers: Record<string, Marker> = {};
+    const spreadables: Spreadable[] = [];
+    const collapsed = new SvelteSet<string>();
+    if (map.getZoom() <= 3) {
+      for (const [clusterID, group] of Object.entries(nodesByCluster)) {
+        if (group.length < 4) continue;
+        const lat = group.reduce((sum, node) => sum + node.lat, 0) / group.length;
+        const lng = group.reduce((sum, node) => sum + node.lng, 0) / group.length;
+        const size = Math.max(24, Math.min(42, 18 + group.length * 3));
+        const role = group.some((node) => serviceRole(byNode[node.id]) === "compute")
+          ? "compute"
+          : group.some((node) => (node.nodeType || "").toLowerCase() === "core")
+            ? "core"
+            : "media";
+        const color = roleColor(
+          role,
+          group.some((node) => (node.status || "active") === "active") ? "active" : "offline"
+        );
+        const element = createMarkerElement(
+          `<span class="aggregate-shape" style="width:${size}px;height:${size}px;--node-color:${color}">${group.length}</span>`,
+          `${group.length} nodes`
+        );
+        element.addEventListener(
+          "click",
+          () => (selectedDetail = aggregateNodeDetail(group, byNode, workloadsByNode))
+        );
+        const marker = new maplibre.Marker({ element, anchor: "center" })
+          .setLngLat([lng, lat])
+          .addTo(map);
+        aggregateMarkers[clusterID] = marker;
+        markers.push(marker);
+        spreadables.push({ marker, iconRadius: size / 2 });
+        group.forEach((node) => collapsed.add(node.id));
+      }
+    }
 
-    // 4. Draw cluster markers
-    currentClusters.forEach((cluster) => {
+    for (const node of nodes) {
+      if (collapsed.has(node.id)) continue;
+      const services = byNode[node.id];
+      const compute = serviceRole(services) === "compute";
+      const color = roleColor(nodeRole(node, services), node.status);
+      const type = (node.nodeType || "").toLowerCase();
+      const core = !compute && (type === "core" || type === "central");
+      const size = compute ? 9 : core ? 14 : 10;
+      const html = compute
+        ? `<span class="node-shape node-shape--ring" style="width:${size}px;height:${size}px;--node-color:${color};box-shadow:0 0 7px ${color}"></span>`
+        : core
+          ? `<span class="shape-wrap shape-wrap--glow" style="--glow-color:${color}"><span class="node-shape node-shape--diamond" style="width:${size}px;height:${size}px;--node-color:${color}"></span></span>`
+          : `<span class="node-shape node-shape--circle" style="width:${size}px;height:${size}px;--node-color:${color};box-shadow:0 0 6px ${color}"></span>`;
+      const element = createMarkerElement(html, node.name);
+      element.addEventListener(
+        "click",
+        () => (selectedDetail = nodeDetail(node, services, workloadsByNode[node.id] ?? []))
+      );
+      const marker = new maplibre.Marker({ element, anchor: "center" })
+        .setLngLat([node.lng, node.lat])
+        .addTo(map);
+      nodeMarkers[node.id] = marker;
+      markers.push(marker);
+      spreadables.push({ marker, iconRadius: size / 2 });
+    }
+
+    for (const cluster of clusters) {
       const color = roleColor(cluster.clusterType, cluster.status);
       const radius = Math.max(10, Math.min(24, 10 + cluster.nodeCount * 2));
-      const ct = (cluster.clusterType ?? "").toLowerCase();
-      const isCore = ct === "central" || ct === "core";
       const size = radius * 2;
-
-      const clusterHtml = isCore
-        ? `<div class="cluster-shape cluster-shape--core cluster-marker--glow" style="width:${size}px; height:${size}px; --node-color:${color};">${cluster.nodeCount}</div>`
-        : `<div class="cluster-shape cluster-shape--edge" style="width:${size}px; height:${size}px; --node-color:${color};">
-            <svg class="cluster-shape__hex" viewBox="0 0 100 100" preserveAspectRatio="none">
-              <polygon points="50,6 92,30 92,70 50,94 8,70 8,30"
-                fill="color-mix(in srgb, ${color} 22%, rgba(15,23,42,0.7))"
-                stroke="${color}" stroke-width="3"
-                stroke-dasharray="6 4" stroke-linejoin="round" stroke-linecap="round" />
-            </svg>
-            <span class="cluster-shape__count" style="color:${color};">${cluster.nodeCount}</span>
-          </div>`;
-
-      const icon = leaflet.divIcon({
-        className: "cluster-marker",
-        html: clusterHtml,
-        iconSize: [size, size],
-        iconAnchor: [radius, radius],
-      });
-
-      // Build cluster popup with structured table layout
-      const infoRows: DetailRow[] = [];
-      if (cluster.region) infoRows.push(detailRow("Region", cluster.region));
-      if (cluster.clusterType) infoRows.push(detailRow("Type", cluster.clusterType));
-      infoRows.push(detailRow("Nodes", `${cluster.healthyNodeCount} / ${cluster.nodeCount}`));
-      if (cluster.peerCount != null) infoRows.push(detailRow("Peers", `${cluster.peerCount}`));
-      infoRows.push(detailRow("Status", cluster.status));
-      const nodeTypeCounts = nodeTypeCountByCluster[cluster.id];
-      if (nodeTypeCounts) {
-        if (nodeTypeCounts.core > 0)
-          infoRows.push(detailRow("Core Nodes", `${nodeTypeCounts.core}`));
-        if (nodeTypeCounts.edge > 0)
-          infoRows.push(detailRow("Edge Nodes", `${nodeTypeCounts.edge}`));
-      }
-
-      const sections: DetailSection[] = [];
-
-      if (
-        (cluster.currentStreams ?? 0) > 0 ||
-        (cluster.currentViewers ?? 0) > 0 ||
-        (cluster.egressMbps ?? 0) > 0 ||
-        (cluster.ingressMbps ?? 0) > 0 ||
-        (cluster.egressCapacityMbps ?? 0) > 0
-      ) {
-        sections.push({
-          title: "Load",
-          rows: [
-            detailRow("Streams", `${cluster.currentStreams ?? 0}`),
-            detailRow("Viewers", `${cluster.currentViewers ?? 0}`),
-            detailRow(
-              "Egress",
-              `${formatLoad(cluster.egressMbps, cluster.egressCapacityMbps)} Mbps`
-            ),
-            detailRow("Ingress", `${cluster.ingressMbps ?? 0} Mbps`),
-          ],
-        });
-      }
-
-      const clusterNodeServices = servicesByClusterFromNodes[cluster.id] ?? [];
-      const clusterDetail: MapDetail = {
-        title: cluster.name,
-        rows: infoRows,
-        sections,
-        tags: clusterNodeServices,
-        description: cluster.shortDescription,
-      };
-
-      const clusterMarker: Marker = leaflet
-        .marker([cluster.lat, cluster.lng], { icon, zIndexOffset: 1000 })
-        .addTo(clusterLayer!);
-      clusterMarker.on("click", () => openDetail(clusterDetail));
-      clusterMarkersByID[cluster.id] = clusterMarker;
-      clusterSpreadables.push({ marker: clusterMarker, iconRadius: radius });
-    });
-
-    applySpread();
-
-    if (!zoomHandlerAttached && map) {
-      map.on("zoomend", () => {
-        drawMap(routes, nodes, buckets, flows, clusters, relationships);
-        drawOrchestrators(showOrchestrators ? orchestratorVantages : []);
-      });
-      zoomHandlerAttached = true;
+      const core = ["central", "core"].includes((cluster.clusterType || "").toLowerCase());
+      const html = core
+        ? `<span class="cluster-shape cluster-shape--core cluster-marker--glow" style="width:${size}px;height:${size}px;--node-color:${color}">${cluster.nodeCount}</span>`
+        : `<span class="cluster-shape cluster-shape--edge" style="width:${size}px;height:${size}px;--node-color:${color}"><svg class="cluster-shape__hex" viewBox="0 0 100 100" preserveAspectRatio="none"><polygon points="50,6 92,30 92,70 50,94 8,70 8,30" fill="color-mix(in srgb, ${color} 22%, rgba(15,23,42,0.7))" stroke="${color}" stroke-width="3" stroke-dasharray="6 4" stroke-linejoin="round" stroke-linecap="round"/></svg><span class="cluster-shape__count" style="color:${color}">${cluster.nodeCount}</span></span>`;
+      const element = createMarkerElement(html, cluster.name);
+      element.addEventListener(
+        "click",
+        () =>
+          (selectedDetail = clusterDetail(
+            cluster,
+            nodeCounts[cluster.id] || { core: 0, edge: 0 },
+            servicesByCluster[cluster.id] || [],
+            workloadsByCluster[cluster.id] || []
+          ))
+      );
+      const marker = new maplibre.Marker({ element, anchor: "center" })
+        .setLngLat([cluster.lng, cluster.lat])
+        .addTo(map);
+      clusterMarkers[cluster.id] = marker;
+      markers.push(marker);
+      spreadables.push({ marker, iconRadius: radius });
     }
-  }
 
-  function applySpread() {
-    if (!map || !L) return;
-    const zoomLevel = map.getZoom();
-    const spreadOrchs = zoomLevel >= 5;
-    spreadOverlappingMarkers(
-      map,
-      [...nodeSpreadables, ...clusterSpreadables, ...(spreadOrchs ? orchestratorSpreadables : [])],
-      {
-        groupThresholdMultiplier: zoomLevel >= 6 ? 1.55 : 2.15,
-        maxExpandedGroupSize: 24,
-        denseStepScale: 0.82,
+    if (showOrchestrators) {
+      const deduped = new SvelteMap<string, OrchestratorVantagePin>();
+      for (const vantage of orchestratorVantages) {
+        if (
+          !vantage.dialedRecently ||
+          !Number.isFinite(vantage.lat) ||
+          !Number.isFinite(vantage.lng) ||
+          (vantage.lat === 0 && vantage.lng === 0)
+        )
+          continue;
+        const key = `${vantage.orchAddr}:${vantage.resolvedIp}`;
+        const current = deduped.get(key);
+        if (
+          !current ||
+          vantage.latestLatencyMs < current.latestLatencyMs ||
+          (vantage.latestLatencyMs === current.latestLatencyMs && vantage.score > current.score)
+        )
+          deduped.set(key, vantage);
       }
-    );
-    drawTopologyLines(renderedNodes, renderedClusters, renderedRelationships);
-  }
-
-  function drawTopologyLines(
-    currentNodes: NodeLocation[],
-    currentClusters: ClusterMarker[],
-    currentRelationships: RelationshipLine[]
-  ): void {
-    if (!L || !membershipLayer || !relationshipLayer) return;
-    const leaflet = L;
-    stopPulseTimers();
-    membershipLayer.clearLayers();
-    relationshipLayer.clearLayers();
-
-    // Group nodes by cluster: clusters with ≥2 visible nodes get a hull halo;
-    // solo nodes keep a single radial line for legibility.
-    const nodesByCluster: Record<string, NodeLocation[]> = {};
-    const aggregateClusters: Record<string, true> = {};
-    currentNodes.forEach((node) => {
-      if (!node.clusterId) return;
-      if (!clusterMarkersByID[node.clusterId]) return;
-      if (aggregateNodeMarkersByClusterID[node.clusterId]) {
-        aggregateClusters[node.clusterId] = true;
-        return;
+      const visible = [...deduped.values()];
+      const size = map.getZoom() <= 3 ? 8 : map.getZoom() <= 5 ? 11 : 14;
+      const glow = map.getZoom() <= 3 ? 2 : map.getZoom() <= 5 ? 4 : 6;
+      for (const vantage of visible) {
+        const color =
+          vantage.latestLatencyMs >= 750
+            ? "rgb(74,111,91)"
+            : vantage.latestLatencyMs >= 250
+              ? "rgb(45,150,96)"
+              : "rgb(158,206,106)";
+        const element = createMarkerElement(
+          `<span class="shape-wrap" style="filter:drop-shadow(0 0 ${glow}px ${color})"><span class="orch-triangle" style="width:${size}px;height:${size}px;--glow-color:${color}"></span></span>`,
+          "Livepeer orchestrator"
+        );
+        const peerRows = visible
+          .filter((candidate) => candidate.orchAddr === vantage.orchAddr)
+          .sort((left, right) => left.resolvedIp.localeCompare(right.resolvedIp))
+          .map((candidate) =>
+            detailRow(
+              candidate.resolvedIp || "unknown",
+              `${candidate.gatewayId} (${candidate.gatewayRegion}) · ${candidate.latestLatencyMs} ms`
+            )
+          );
+        element.addEventListener("click", () => {
+          selectedDetail = {
+            title: "Orchestrator",
+            rows: [
+              detailRow("Orch", vantage.orchAddr, true),
+              detailRow("IP", vantage.resolvedIp),
+              detailRow("Gateway", `${vantage.gatewayId} (${vantage.gatewayRegion})`),
+              detailRow("Latency", `${vantage.latestLatencyMs} ms`),
+              detailRow("Score", vantage.score.toFixed(2)),
+            ],
+            sections: peerRows.length ? [{ title: "Observed Instances", rows: peerRows }] : [],
+          };
+          onOrchestratorClick?.(vantage.orchAddr);
+        });
+        const marker = new maplibre.Marker({ element, anchor: "center" })
+          .setLngLat([vantage.lng, vantage.lat])
+          .addTo(map);
+        markers.push(marker);
+        if (map.getZoom() >= 5) spreadables.push({ marker, iconRadius: size / 2 });
       }
-      if (!nodeMarkersByID[node.id]) return;
-      (nodesByCluster[node.clusterId] ??= []).push(node);
+    }
+
+    spreadOverlappingMarkers(map, spreadables, {
+      groupThresholdMultiplier: map.getZoom() >= 6 ? 1.55 : 2.15,
+      maxExpandedGroupSize: 24,
+      denseStepScale: 0.82,
     });
 
-    // Aggregate-node clusters: one line from cluster center to the aggregate
-    // marker (drawing a hull around a single aggregate marker is pointless).
-    Object.keys(aggregateClusters).forEach((clusterId) => {
-      const clusterMarker = clusterMarkersByID[clusterId];
-      const aggregateMarker = aggregateNodeMarkersByClusterID[clusterId];
-      if (!clusterMarker || !aggregateMarker) return;
-      const clusterCenter = clusterMarker.getLatLng();
-      const from = markerLatLng(aggregateMarker, [clusterCenter.lat, clusterCenter.lng]);
-      const to = markerLatLng(clusterMarker, from);
-      if (from[0] === to[0] && from[1] === to[1]) return;
-      const repNode = currentNodes.find((n) => n.clusterId === clusterId);
-      const baseColor = repNode
-        ? roleColor(nodeRole(repNode, renderedServicesByNode[repNode.id]), repNode.status)
-        : "rgb(169, 177, 214)";
-      leaflet
-        .polyline([from, to], {
-          color: withAlpha(baseColor, 0.42),
-          weight: 2,
-          opacity: 0.7,
-          smoothFactor: 1,
-          interactive: false,
-        })
-        .addTo(membershipLayer!);
-    });
-
-    Object.entries(nodesByCluster).forEach(([clusterId, members]) => {
-      const clusterMarker = clusterMarkersByID[clusterId];
-      if (!clusterMarker) return;
-      const cluster = currentClusters.find((c) => c.id === clusterId);
-      const clusterColor = cluster
-        ? roleColor(cluster.clusterType, cluster.status)
-        : "rgb(169, 177, 214)";
-
-      const drawMemberLine = (node: NodeLocation) => {
-        const from = markerLatLng(nodeMarkersByID[node.id], [node.lat, node.lng]);
+    const membershipFeatures: Feature<Geometry>[] = [];
+    for (const [clusterID, group] of Object.entries(nodesByCluster)) {
+      const clusterMarker = clusterMarkers[clusterID];
+      if (!clusterMarker) continue;
+      const aggregateMarker = aggregateMarkers[clusterID];
+      if (aggregateMarker) {
+        const from = markerLatLng(aggregateMarker, [group[0].lat, group[0].lng]);
+        const to = markerLatLng(clusterMarker, from);
+        if (from[0] !== to[0] || from[1] !== to[1]) {
+          membershipFeatures.push({
+            type: "Feature",
+            properties: {
+              color: withAlpha(
+                roleColor(nodeRole(group[0], byNode[group[0].id]), group[0].status),
+                0.42
+              ),
+              weight: 2,
+            },
+            geometry: {
+              type: "LineString",
+              coordinates: [
+                [from[1], from[0]],
+                [to[1], to[0]],
+              ],
+            },
+          });
+        }
+        continue;
+      }
+      const visible = group.filter((node) => nodeMarkers[node.id]);
+      const lineFor = (node: NodeLocation) => {
+        const from = markerLatLng(nodeMarkers[node.id], [node.lat, node.lng]);
         const to = markerLatLng(clusterMarker, from);
         if (from[0] === to[0] && from[1] === to[1]) return;
-        const lineColor = withAlpha(
-          roleColor(nodeRole(node, renderedServicesByNode[node.id]), node.status),
-          0.3
-        );
-        leaflet
-          .polyline([from, to], {
-            color: lineColor,
+        membershipFeatures.push({
+          type: "Feature",
+          properties: {
+            color: withAlpha(roleColor(nodeRole(node, byNode[node.id]), node.status), 0.3),
             weight: 1.4,
-            opacity: 0.7,
-            smoothFactor: 1,
-            interactive: false,
-          })
-          .addTo(membershipLayer!);
+          },
+          geometry: {
+            type: "LineString",
+            coordinates: [
+              [from[1], from[0]],
+              [to[1], to[0]],
+            ],
+          },
+        });
       };
-
-      if (members.length === 1) {
-        drawMemberLine(members[0]);
-        return;
-      }
-
-      if (!map) return;
-      const markersForHull = [clusterMarker, ...members.map((n) => nodeMarkersByID[n.id])].filter(
-        Boolean
+      const points = [clusterMarker, ...visible.map((node) => nodeMarkers[node.id])].map((marker) =>
+        map!.project(marker.getLngLat())
       );
-      const pts = markersForHull.map((m) => map!.latLngToContainerPoint(m.getLatLng()));
-      if (pts.length < 3) return;
-      if (!shouldDrawClusterHull(pts)) {
-        members.forEach(drawMemberLine);
-        return;
+      const xs = points.map((point) => point.x);
+      const ys = points.map((point) => point.y);
+      const major = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+      const minor = Math.max(
+        1,
+        Math.min(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys))
+      );
+      if (points.length < 3 || major > 360 || major / minor > 4 || (major > 220 && minor < 56)) {
+        visible.forEach(lineFor);
+      } else {
+        const cluster = clusters.find((item) => item.id === clusterID);
+        const color = roleColor(cluster?.clusterType, cluster?.status);
+        membershipFeatures.push({
+          type: "Feature",
+          properties: { color, outline: withAlpha(color, 0.5), weight: 1 },
+          geometry: { type: "Polygon", coordinates: [smoothHull(points)] },
+        });
       }
-      const hull = convexHull(pts);
-      const inflated = inflateHull(hull, 10);
-      const smoothed = smoothPolygon(inflated, 14);
-      const ring = smoothed.map((p) => {
-        const ll = map!.containerPointToLatLng([p.x, p.y]);
-        return [ll.lat, ll.lng] as [number, number];
-      });
-      leaflet
-        .polygon(ring, {
-          className: "cluster-hull",
-          color: withAlpha(clusterColor, 0.5),
-          weight: 1,
-          fillColor: clusterColor,
-          fillOpacity: 0.12,
-          smoothFactor: 1,
-          interactive: false,
-        })
-        .addTo(membershipLayer!);
-    });
+    }
+    source("routing-membership")?.setData(featureCollection(membershipFeatures));
 
-    currentRelationships.forEach((rel) => {
-      const from = rel.sourceClusterId
-        ? markerLatLng(clusterMarkersByID[rel.sourceClusterId], rel.from)
-        : rel.from;
-      const to = rel.targetClusterId
-        ? markerLatLng(clusterMarkersByID[rel.targetClusterId], rel.to)
-        : rel.to;
-      const eventCount = rel.metrics?.eventCount ?? 0;
-      // Log-scale traffic into a weight: a single event still draws, busy
-      // pairs go thick. Inactive links collapse to a hair-thin trace.
-      const trafficWeight = Math.min(5, 1.2 + Math.log10(1 + eventCount) * 1.1);
-      const lineWeight = rel.active
-        ? Math.max(trafficWeight, Math.min(4, (rel.weight ?? 1) * 0.5))
+    const relationshipFeatures: Feature<Geometry>[] = relationships.map((relationship, index) => {
+      const from = relationship.sourceClusterId
+        ? markerLatLng(clusterMarkers[relationship.sourceClusterId], relationship.from)
+        : relationship.from;
+      const to = relationship.targetClusterId
+        ? markerLatLng(clusterMarkers[relationship.targetClusterId], relationship.to)
+        : relationship.to;
+      const count = relationship.metrics?.eventCount ?? 0;
+      const trafficWeight = Math.min(5, 1.2 + Math.log10(1 + count) * 1.1);
+      const weight = relationship.active
+        ? Math.max(trafficWeight, Math.min(4, (relationship.weight ?? 1) * 0.5))
         : 1.2;
-      const successRate = rel.metrics?.successRate ?? 1;
-      const baseOpacity = rel.active ? 0.55 + 0.35 * successRate : 0.4;
-      const dashMap: Record<RelationshipLine["type"], string | undefined> = {
-        peering: "8 4",
-        assignment: "12 6",
-        replication: "12 6",
-        traffic: undefined,
+      const opacity = relationship.active
+        ? 0.55 + 0.35 * (relationship.metrics?.successRate ?? 1)
+        : 0.4;
+      const detailID = `relationship:${index}`;
+      const rows = [detailRow("Type", relationship.type)];
+      if (relationship.metrics?.eventCount != null)
+        rows.push(detailRow("Events", relationship.metrics.eventCount.toLocaleString()));
+      if (relationship.metrics?.avgLatencyMs != null)
+        rows.push(detailRow("Latency", `${relationship.metrics.avgLatencyMs.toFixed(1)}ms`));
+      if (relationship.metrics?.successRate != null)
+        rows.push(detailRow("Success", `${(relationship.metrics.successRate * 100).toFixed(1)}%`));
+      detailRegistry.set(detailID, { title: "Topology Link", rows });
+      if (
+        relationship.active &&
+        ["peering", "assignment", "replication"].includes(relationship.type)
+      ) {
+        pulsePaths.push({
+          from,
+          to,
+          color: relationship.type === "peering" ? "rgb(125,207,255)" : "rgb(192,132,252)",
+        });
+      }
+      return {
+        type: "Feature",
+        properties: {
+          type: relationship.type,
+          color: relationshipColor(relationship.type),
+          weight,
+          opacity,
+          detailID,
+        },
+        geometry: {
+          type: "LineString",
+          coordinates: samplePath(from, to).map(([lat, lng]) => [lng, lat]),
+        },
       };
-
-      const line = leaflet.polyline(samplePath(from, to), {
-        color: relationshipColor(rel.type),
-        weight: lineWeight,
-        opacity: baseOpacity,
-        dashArray: dashMap[rel.type],
-        smoothFactor: 1,
-      });
-
-      const rows = [detailRow("Type", rel.type)];
-      if (rel.metrics?.eventCount != null)
-        rows.push(detailRow("Events", rel.metrics.eventCount.toLocaleString()));
-      if (rel.metrics?.avgLatencyMs != null)
-        rows.push(detailRow("Latency", `${rel.metrics.avgLatencyMs.toFixed(1)}ms`));
-      if (rel.metrics?.successRate != null)
-        rows.push(detailRow("Success", `${(rel.metrics.successRate * 100).toFixed(1)}%`));
-      line.on("click", () => openDetail({ title: "Topology Link", rows }));
-      line.addTo(relationshipLayer!);
-
-      if (
-        rel.active &&
-        (rel.type === "peering" || rel.type === "assignment" || rel.type === "replication")
-      ) {
-        const pulseColor = rel.type === "peering" ? "rgb(125, 207, 255)" : "rgb(192, 132, 252)";
-        startPulse(from, to, pulseColor);
-      }
     });
+    source("routing-relationships")?.setData(featureCollection(relationshipFeatures));
+
+    const routeFeatures: Feature<Geometry>[] = [];
+    const clientFeatures: Feature<Geometry>[] = [];
+    routes.forEach((route, index) => {
+      const success = route.status === "success" || route.status === "SUCCESS";
+      const detailID = `route:${index}`;
+      const rows = [detailRow("Status", success ? "Success" : "Failed")];
+      if (route.score != null) rows.push(detailRow("Score", `${route.score}`));
+      if (route.details) rows.push(detailRow("Details", route.details));
+      detailRegistry.set(detailID, { title: "Route", rows });
+      routeFeatures.push({
+        type: "Feature",
+        properties: { success, detailID },
+        geometry: {
+          type: "LineString",
+          coordinates: [
+            [route.from[1], route.from[0]],
+            [route.to[1], route.to[0]],
+          ],
+        },
+      });
+      const clientDetailID = `client:${index}`;
+      detailRegistry.set(clientDetailID, {
+        title: "Viewer",
+        rows: [
+          detailRow("Status", success ? "Success" : "Failed"),
+          ...(route.score != null ? [detailRow("Score", `${route.score}`)] : []),
+          detailRow("Location", `${route.from[0].toFixed(2)}, ${route.from[1].toFixed(2)}`),
+        ],
+      });
+      clientFeatures.push({
+        type: "Feature",
+        properties: { success, detailID: clientDetailID },
+        geometry: { type: "Point", coordinates: [route.from[1], route.from[0]] },
+      });
+    });
+    source("routing-routes")?.setData(featureCollection(routeFeatures));
+    source("routing-clients")?.setData(featureCollection(clientFeatures));
   }
 
-  let drawTrigger = $derived({
-    routesKey: routes
-      .map((r) => `${r.from[0]}:${r.from[1]}:${r.to[0]}:${r.to[1]}:${r.status}:${r.score ?? ""}`)
-      .sort()
-      .join("|"),
-    nodesKey: nodes
-      .map(
-        (n) =>
-          `${n.id}:${n.lat}:${n.lng}:${n.clusterId ?? ""}:${n.nodeType ?? ""}:${n.status ?? ""}`
-      )
-      .sort()
-      .join("|"),
-    bucketsKey: buckets
-      .map(
-        (b) =>
-          `${b.id}:${b.kind}:${b.coords.length}:${b.stats?.count ?? ""}:${b.stats?.successRate ?? ""}`
-      )
-      .sort()
-      .join("|"),
-    flowsKey: flows
-      .map(
-        (f) => `${f.from[0]}:${f.from[1]}:${f.to[0]}:${f.to[1]}:${f.weight ?? ""}:${f.color ?? ""}`
-      )
-      .sort()
-      .join("|"),
-    clustersKey: clusters
-      .map(
-        (c) =>
-          `${c.id}:${c.lat}:${c.lng}:${c.status}:${c.nodeCount}:${c.healthyNodeCount}:${c.peerCount ?? ""}:${(c.services ?? []).join(",")}`
-      )
-      .sort()
-      .join("|"),
-    relationshipsKey: relationships
-      .map(
-        (r) =>
-          `${r.from[0]}:${r.from[1]}:${r.to[0]}:${r.to[1]}:${r.type}:${r.active}:${r.weight ?? ""}:${r.metrics?.eventCount ?? ""}:${r.metrics?.avgLatencyMs ?? ""}:${r.metrics?.successRate ?? ""}`
-      )
-      .sort()
-      .join("|"),
-    servicesKey: serviceInstances
-      .map(
-        (s) =>
-          `${s.instanceId ?? ""}:${s.serviceId}:${s.nodeId ?? ""}:${s.clusterId ?? ""}:${s.healthStatus ?? ""}:${s.status ?? ""}`
-      )
-      .sort()
-      .join("|"),
-  });
+  function startPulseAnimation() {
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const animate = (now: number) => {
+      const cycle = reducedMotion ? 0.5 : (now % 3000) / 3000;
+      const opacity = reducedMotion
+        ? 0.75
+        : cycle < 0.1
+          ? cycle / 0.1
+          : cycle > 0.9
+            ? (1 - cycle) / 0.1
+            : 0.9;
+      const features = pulsePaths.flatMap((path) =>
+        [cycle, (cycle + 0.5) % 1].map((position) => {
+          const [lat, lng] = pointOnPath(path.from, path.to, position);
+          return {
+            type: "Feature" as const,
+            properties: { color: path.color, opacity },
+            geometry: { type: "Point" as const, coordinates: [lng, lat] },
+          };
+        })
+      );
+      source("routing-pulses")?.setData(featureCollection(features));
+      if (!reducedMotion) animationFrame = requestAnimationFrame(animate);
+    };
+    animate(performance.now());
+  }
 
   $effect(() => {
-    const _trigger = drawTrigger;
-    if (map) {
-      drawMap(routes, nodes, buckets, flows, clusters, relationships);
-    }
+    void routes;
+    void nodes;
+    void buckets;
+    void flows;
+    void clusters;
+    void relationships;
+    void serviceInstances;
+    void workloads;
+    void orchestratorVantages;
+    void showOrchestrators;
+    if (ready) drawMap();
   });
 
-  // Orchestrator pins react independently — their data source (Periscope
-  // discovery rollups) updates on a different cadence than nodes/clusters.
-  $effect(() => {
-    if (map) {
-      drawOrchestrators(showOrchestrators ? orchestratorVantages : []);
-    }
-  });
-
-  // At low zoom many vantages pile across a region; spread + glow can paint
-  // over a continent. Scale icon and shadow with zoom so they only get loud
-  // once the user is close enough to disambiguate them.
-  function orchestratorSizeForZoom(z: number): { size: number; glow: number } {
-    if (z <= 3) return { size: 8, glow: 2 };
-    if (z <= 5) return { size: 11, glow: 4 };
-    return { size: 14, glow: 6 };
+  function toggleFullscreen() {
+    isFullscreen = !isFullscreen;
+    setTimeout(() => map?.resize(), 310);
   }
 
-  function orchestratorPinColor(vantage: OrchestratorVantagePin): string {
-    if (vantage.latestLatencyMs >= 750) return "rgb(74, 111, 91)";
-    if (vantage.latestLatencyMs >= 250) return "rgb(45, 150, 96)";
-    return "rgb(158, 206, 106)";
+  function resetView() {
+    map?.easeTo({ center: [center[1], center[0]], zoom, duration: 500 });
   }
 
-  function dedupeOrchestratorVantages(
-    vantages: OrchestratorVantagePin[]
-  ): OrchestratorVantagePin[] {
-    const byInstance = new SvelteMap<string, OrchestratorVantagePin>();
-    for (const v of vantages) {
-      if (!v.dialedRecently) continue;
-      const key = `${v.orchAddr}:${v.resolvedIp}`;
-      const current = byInstance.get(key);
-      if (
-        !current ||
-        v.latestLatencyMs < current.latestLatencyMs ||
-        (v.latestLatencyMs === current.latestLatencyMs && v.score > current.score)
-      ) {
-        byInstance.set(key, v);
-      }
-    }
-    return [...byInstance.values()];
-  }
-
-  function drawOrchestrators(vantages: OrchestratorVantagePin[]): void {
-    if (!L || !orchestratorLayer || !map) return;
-    const leaflet = L;
-    orchestratorLayer.clearLayers();
-    orchestratorSpreadables = [];
-    if (!vantages.length) {
-      applySpread();
-      return;
-    }
-
-    const visibleVantages = dedupeOrchestratorVantages(
-      vantages.filter(
-        (v) => Number.isFinite(v.lat) && Number.isFinite(v.lng) && (v.lat !== 0 || v.lng !== 0)
-      )
-    );
-    const { size: orchSize, glow: orchGlow } = orchestratorSizeForZoom(map.getZoom());
-    for (const v of visibleVantages) {
-      const orchColor = orchestratorPinColor(v);
-      const orchIcon = leaflet.divIcon({
-        className: "node-dot-marker",
-        html: `<div class="shape-wrap" style="filter: drop-shadow(0 0 ${orchGlow}px ${orchColor});"><div class="orch-triangle" style="width:${orchSize}px; height:${orchSize}px; --glow-color:${orchColor};"></div></div>`,
-        iconSize: [orchSize, orchSize],
-        iconAnchor: [orchSize / 2, orchSize / 2 + 1],
-      });
-      const marker = leaflet.marker([v.lat, v.lng], { icon: orchIcon });
-      const rows = [
-        detailRow("Orch", v.orchAddr, true),
-        detailRow("IP", v.resolvedIp),
-        detailRow("Gateway", `${v.gatewayId} (${v.gatewayRegion})`),
-        detailRow("Latency", `${v.latestLatencyMs} ms`),
-        detailRow("Score", v.score.toFixed(2)),
-      ];
-      const instanceRows: DetailRow[] = visibleVantages
-        .filter((candidate) => candidate.orchAddr === v.orchAddr)
-        .sort((a, b) => a.resolvedIp.localeCompare(b.resolvedIp))
-        .map((candidate) =>
-          detailRow(
-            candidate.resolvedIp || "unknown",
-            `${candidate.gatewayId} (${candidate.gatewayRegion}) · ${candidate.latestLatencyMs} ms`
-          )
-        );
-      const sections = instanceRows.length
-        ? [{ title: "Observed Instances", rows: instanceRows }]
-        : [];
-      const detail = { title: "Orchestrator", rows, sections };
-      marker.on("click", () => {
-        openDetail(detail);
-        if (onOrchestratorClick) onOrchestratorClick(v.orchAddr);
-      });
-      marker.addTo(orchestratorLayer);
-      orchestratorSpreadables.push({ marker, iconRadius: orchSize / 2 });
-    }
-    applySpread();
+  function toggleOrchestrators(event: MouseEvent) {
+    event.stopPropagation();
+    showOrchestrators = !showOrchestrators;
+    if (!showOrchestrators) selectedDetail = null;
   }
 </script>
 
 <div
-  bind:this={mapWrapper}
   class="map-wrapper"
   class:map-wrapper--fullscreen={isFullscreen}
   style="height: {isFullscreen ? '100%' : `${height}px`};"
 >
-  {#if routes.length === 0 && nodes.length === 0 && clusters.length === 0}
-    <div class="empty-state">
-      <span class="text-muted-foreground text-sm">No routing data available</span>
-    </div>
+  {#if routes.length === 0 && nodes.length === 0 && clusters.length === 0 && workloads.length === 0}
+    <div class="empty-state"><span>No routing data available</span></div>
+  {/if}
+  {#if unavailable}
+    <div class="map-unavailable" role="status">Basemap unavailable</div>
   {/if}
 
-  <!-- Map Controls -->
-  <div bind:this={mapControls} class="map-controls">
-    <button class="map-control-btn" type="button" onclick={resetView} title="Reset view">
+  <div class="map-controls">
+    <button
+      class="map-control-btn"
+      type="button"
+      onclick={resetView}
+      title="Reset view"
+      disabled={!ready}
+    >
       <HomeIcon class="w-4 h-4" />
     </button>
     <button
@@ -1286,6 +1230,7 @@
       class:map-control-btn--active={showOrchestrators}
       onclick={toggleOrchestrators}
       title={showOrchestrators ? "Hide Livepeer compute" : "Show Livepeer compute"}
+      disabled={!ready}
     >
       <CpuIcon class="w-4 h-4" />
     </button>
@@ -1295,18 +1240,13 @@
       onclick={toggleFullscreen}
       title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
     >
-      {#if isFullscreen}
-        <MinimizeIcon class="w-4 h-4" />
-      {:else}
-        <MaximizeIcon class="w-4 h-4" />
-      {/if}
+      {#if isFullscreen}<MinimizeIcon class="w-4 h-4" />{:else}<MaximizeIcon class="w-4 h-4" />{/if}
     </button>
   </div>
 
-  <!-- Scroll Hint Overlay -->
-  {#if showScrollHint && !isFullscreen}
+  {#if showScrollHint && !isFullscreen && ready}
     <button class="scroll-hint" type="button" onclick={() => (showScrollHint = false)}>
-      <span>Hold <kbd>⌥</kbd> or <kbd>Ctrl</kbd> + scroll to zoom</span>
+      Hold <kbd>⌥</kbd> or <kbd>Ctrl</kbd> + scroll to zoom
     </button>
   {/if}
 
@@ -1318,25 +1258,20 @@
         class="map-detail-panel__close"
         type="button"
         onclick={() => (selectedDetail = null)}
-        aria-label="Close details"
+        aria-label="Close details">×</button
       >
-        ×
-      </button>
       <div class="map-detail-panel__body">
         <div class="map-popup">
           <div class="map-popup__title">{selectedDetail.title}</div>
           <table class="map-popup__table">
             <tbody>
-              {#each selectedDetail.rows as row, i (`${row.label}:${row.value}:${i}`)}
+              {#each selectedDetail.rows as row, index (`${row.label}:${row.value}:${index}`)}
                 <tr>
                   <td class="map-popup__label">{row.label}</td>
-                  <td class="map-popup__value">
-                    {#if row.code}
-                      <code class="map-popup__code">{row.value}</code>
-                    {:else}
-                      {row.value}
-                    {/if}
-                  </td>
+                  <td class="map-popup__value"
+                    >{#if row.code}<code class="map-popup__code">{row.value}</code
+                      >{:else}{row.value}{/if}</td
+                  >
                 </tr>
               {/each}
             </tbody>
@@ -1345,31 +1280,26 @@
             <div class="map-popup__section-title">{section.title}</div>
             <table class="map-popup__table">
               <tbody>
-                {#each section.rows as row, rowIndex (`${section.title}:${row.label}:${row.value}:${rowIndex}`)}
-                  <tr>
-                    <td class="map-popup__label">{row.label}</td>
-                    <td class="map-popup__value">
-                      {#if row.code}
-                        <code class="map-popup__code">{row.value}</code>
-                      {:else}
-                        {row.value}
-                      {/if}
-                    </td>
-                  </tr>
+                {#each section.rows as row, rowIndex (`${section.title}:${row.label}:${rowIndex}`)}
+                  <tr
+                    ><td class="map-popup__label">{row.label}</td><td class="map-popup__value"
+                      >{row.value}</td
+                    ></tr
+                  >
                 {/each}
               </tbody>
             </table>
           {/each}
           {#if selectedDetail.tags?.length}
             <div class="map-popup__tags">
-              {#each selectedDetail.tags as tag, i (`${tag}:${i}`)}
-                <span class="map-popup__tag">{tag}</span>
-              {/each}
+              {#each selectedDetail.tags as tag, tagIndex (`${tag}:${tagIndex}`)}<span
+                  class="map-popup__tag">{tag}</span
+                >{/each}
             </div>
           {/if}
-          {#if selectedDetail.description}
-            <div class="map-popup__desc">{selectedDetail.description}</div>
-          {/if}
+          {#if selectedDetail.description}<div class="map-popup__desc">
+              {selectedDetail.description}
+            </div>{/if}
         </div>
       </div>
     </aside>
@@ -1380,25 +1310,110 @@
   .map-wrapper {
     position: relative;
     width: 100%;
+    overflow: hidden;
     border-radius: 0.5rem;
-    background-color: rgb(22, 22, 30);
+    background: rgb(22, 22, 30);
     transition: all 0.3s ease;
   }
-
   .map-wrapper--fullscreen {
     position: fixed;
     inset: 0;
     z-index: 50;
-    border-radius: 0;
     height: 100% !important;
+    border-radius: 0;
   }
-
   .map-container {
     width: 100%;
     height: 100%;
     z-index: 1;
   }
-
+  .map-wrapper :global(.maplibregl-map) {
+    background: rgb(22, 22, 30) !important;
+    font-family: inherit;
+  }
+  .map-wrapper :global(.frameworks-map-attribution) {
+    padding: 0.1rem 0.3rem;
+    border-radius: 0.2rem;
+    background: rgb(22 22 30 / 78%);
+    color: rgb(169 177 214 / 82%);
+    font-size: 0.58rem;
+    line-height: 1.25;
+  }
+  .map-wrapper :global(.frameworks-map-attribution a) {
+    color: inherit;
+    text-decoration: none;
+  }
+  .map-controls {
+    position: absolute;
+    top: 0.75rem;
+    right: 0.75rem;
+    z-index: 20;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+  .map-control-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    padding: 0;
+    border: 1px solid rgba(59, 66, 97, 0.6);
+    border-radius: 0.375rem;
+    background: rgba(36, 40, 59, 0.9);
+    color: rgb(169, 177, 214);
+    cursor: pointer;
+  }
+  .map-control-btn:hover {
+    background: rgba(59, 66, 97, 0.9);
+    color: rgb(192, 202, 245);
+  }
+  .map-control-btn--active {
+    border-color: rgba(158, 206, 106, 0.65);
+    color: rgb(134, 239, 172);
+    box-shadow: 0 0 0 1px rgba(158, 206, 106, 0.18);
+  }
+  .map-control-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+  }
+  .scroll-hint {
+    position: absolute;
+    bottom: 0.75rem;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 15;
+    padding: 0.375rem 0.75rem;
+    border: 1px solid rgba(59, 66, 97, 0.6);
+    border-radius: 0.375rem;
+    background: rgba(36, 40, 59, 0.95);
+    color: rgb(169, 177, 214);
+    font-size: 0.75rem;
+    cursor: pointer;
+  }
+  .scroll-hint kbd {
+    padding: 0.125rem 0.375rem;
+    border-radius: 0.25rem;
+    background: rgba(59, 66, 97, 0.8);
+    font: inherit;
+  }
+  .empty-state,
+  .map-unavailable {
+    position: absolute;
+    inset: 0;
+    z-index: 10;
+    display: grid;
+    place-items: center;
+    pointer-events: none;
+    background: rgb(22 22 30 / 55%);
+    color: rgb(169, 177, 214);
+    font-size: 0.8rem;
+  }
+  .map-unavailable {
+    z-index: 11;
+    background: rgb(22, 22, 30);
+  }
   .map-detail-panel {
     position: absolute;
     top: 0.75rem;
@@ -1413,7 +1428,6 @@
     box-shadow: 0 20px 50px rgba(0, 0, 0, 0.36);
     backdrop-filter: blur(10px);
   }
-
   .map-detail-panel__close {
     position: absolute;
     top: 0.45rem;
@@ -1425,265 +1439,140 @@
     border-radius: 6px;
     background: rgba(36, 40, 59, 0.92);
     color: rgb(169, 177, 214);
-    font-size: 1rem;
-    line-height: 1;
     cursor: pointer;
   }
-
-  .map-detail-panel__close:hover {
-    color: rgb(192, 202, 245);
-    border-color: rgba(169, 177, 214, 0.72);
-  }
-
   .map-detail-panel__body {
     height: 100%;
     overflow-y: auto;
     overscroll-behavior: contain;
   }
-
-  .map-controls {
-    position: absolute;
-    top: 0.75rem;
-    right: 0.75rem;
-    z-index: 20;
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-  }
-
-  .map-control-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 2rem;
-    height: 2rem;
-    background-color: rgba(36, 40, 59, 0.9);
-    border: 1px solid rgba(59, 66, 97, 0.6);
-    border-radius: 0.375rem;
-    color: rgb(169, 177, 214);
-    cursor: pointer;
-    transition: all 0.15s ease;
-  }
-
-  .map-control-btn:hover {
-    background-color: rgba(59, 66, 97, 0.9);
-    color: rgb(192, 202, 245);
-  }
-
-  .map-control-btn--active {
-    border-color: rgba(158, 206, 106, 0.65);
-    color: rgb(134, 239, 172);
-    box-shadow: 0 0 0 1px rgba(158, 206, 106, 0.18);
-  }
-
-  .scroll-hint {
-    position: absolute;
-    bottom: 0.75rem;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 15;
-    background-color: rgba(36, 40, 59, 0.95);
-    border: 1px solid rgba(59, 66, 97, 0.6);
-    border-radius: 0.375rem;
-    padding: 0.375rem 0.75rem;
-    font-size: 0.75rem;
-    color: rgb(169, 177, 214);
-    cursor: pointer;
-    transition: opacity 0.2s ease;
-  }
-
-  .scroll-hint:hover {
-    opacity: 0.7;
-  }
-
-  .scroll-hint kbd {
-    display: inline-block;
-    padding: 0.125rem 0.375rem;
-    background-color: rgba(59, 66, 97, 0.8);
-    border-radius: 0.25rem;
-    font-family: inherit;
-    font-size: 0.7rem;
-  }
-
-  .empty-state {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 10;
-    pointer-events: none;
-    background-color: rgba(22, 22, 30, 0.5);
-  }
-
-  :global(.leaflet-container) {
-    background-color: rgb(22, 22, 30) !important;
-  }
-
-  /* Undo Tailwind Preflight resets that break Leaflet rendering */
-  :global(.leaflet-container img) {
-    max-width: none !important;
-    max-height: none !important;
-  }
-
-  :global(.leaflet-container svg) {
-    max-width: none !important;
-    max-height: none !important;
-  }
-
-  :global(.leaflet-container *) {
-    border-style: none;
-  }
-
-  :global(.map-popup) {
+  .map-popup {
     padding: 0.75rem 1rem;
-    max-height: none;
-    overflow: visible;
   }
-
-  :global(.map-popup__title) {
-    font-weight: 600;
-    font-size: 0.85rem;
+  .map-popup__title {
     margin-bottom: 0.5rem;
     padding-bottom: 0.4rem;
     border-bottom: 1px solid rgba(59, 66, 97, 0.6);
     color: rgb(241, 245, 249);
+    font-size: 0.85rem;
+    font-weight: 600;
   }
-
-  :global(.map-popup__table) {
+  .map-popup__table {
     width: 100%;
     border-collapse: collapse;
     font-size: 0.78rem;
   }
-
-  :global(.map-popup__table tr + tr) {
+  .map-popup__table tr + tr {
     border-top: 1px solid rgba(59, 66, 97, 0.3);
   }
-
-  :global(.map-popup__label) {
-    color: rgb(169, 177, 214);
+  .map-popup__label {
     padding: 0.2rem 0.75rem 0.2rem 0;
+    color: rgb(169, 177, 214);
     white-space: nowrap;
     vertical-align: top;
   }
-
-  :global(.map-popup__value) {
-    color: rgb(192, 202, 245);
+  .map-popup__value {
     padding: 0.2rem 0;
+    color: rgb(192, 202, 245);
     text-align: right;
-    white-space: normal;
-    font-variant-numeric: tabular-nums;
     overflow-wrap: anywhere;
-    word-break: break-word;
   }
-
-  :global(.map-popup__code) {
+  .map-popup__code {
     display: block;
     max-width: 100%;
-    font-size: 0.72rem;
-    line-height: 1.25;
     white-space: normal;
-    overflow-wrap: anywhere;
     word-break: break-all;
   }
-
-  :global(.map-popup__section-title) {
+  .map-popup__section-title {
+    margin: 0.6rem 0 0.25rem;
+    color: rgb(100, 116, 139);
     font-size: 0.7rem;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: rgb(100, 116, 139);
-    margin-top: 0.6rem;
-    margin-bottom: 0.25rem;
   }
-
-  :global(.map-popup__tags) {
+  .map-popup__tags {
     display: flex;
     flex-wrap: wrap;
     gap: 0.25rem;
     margin-top: 0.5rem;
   }
-
-  :global(.map-popup__tag) {
-    display: inline-block;
+  .map-popup__tag {
     padding: 0.1rem 0.4rem;
-    font-size: 0.65rem;
-    background: rgba(122, 162, 247, 0.15);
     border: 1px solid rgba(122, 162, 247, 0.3);
     border-radius: 3px;
+    background: rgba(122, 162, 247, 0.15);
     color: rgb(147, 197, 253);
+    font-size: 0.65rem;
   }
-
-  :global(.map-popup__desc) {
+  .map-popup__desc {
     margin-top: 0.5rem;
+    color: rgb(169, 177, 214);
     font-size: 0.75rem;
     font-style: italic;
-    color: rgb(169, 177, 214);
   }
-
-  :global(.cluster-marker--glow) {
-    animation: cluster-glow 3s ease-in-out infinite alternate;
+  :global(.routing-marker) {
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
   }
-
-  @keyframes cluster-glow {
-    from {
-      box-shadow: 0 0 8px color-mix(in srgb, var(--node-color) 20%, transparent);
-    }
-    to {
-      box-shadow: 0 0 16px color-mix(in srgb, var(--node-color) 40%, transparent);
-    }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    :global(.cluster-marker--glow) {
-      animation: none;
-    }
-  }
-
-  /* --- Marker shape vocabulary (parallel to website_marketing/network.css) --- */
   :global(.shape-wrap) {
     display: inline-flex;
     align-items: center;
     justify-content: center;
   }
-  /* drop-shadow respects clip-path; box-shadow doesn't. */
   :global(.shape-wrap--glow) {
     filter: drop-shadow(0 0 6px var(--glow-color, currentColor));
   }
   :global(.node-shape) {
-    background-color: var(--node-color);
+    display: block;
+    background: var(--node-color);
   }
   :global(.node-shape--circle) {
     border-radius: 50%;
   }
   :global(.node-shape--ring) {
-    background-color: rgba(22, 22, 30, 0.85);
     border: 2px solid var(--node-color);
     border-radius: 50%;
+    background: rgba(22, 22, 30, 0.85);
   }
   :global(.node-shape--diamond) {
     clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
   }
   :global(.orch-triangle) {
-    background-color: var(--glow-color);
+    display: block;
+    background: var(--glow-color);
     clip-path: polygon(50% 8%, 100% 92%, 0 92%);
+  }
+  :global(.aggregate-shape) {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 2px solid var(--node-color);
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--node-color) 20%, rgb(22, 22, 30));
+    color: var(--node-color);
+    box-shadow: 0 0 10px color-mix(in srgb, var(--node-color) 35%, transparent);
+    font-size: 11px;
+    font-weight: 700;
   }
   :global(.cluster-shape) {
     position: relative;
     display: flex;
     align-items: center;
     justify-content: center;
+    color: var(--node-color);
     font-size: 10px;
     font-weight: 600;
-    color: var(--node-color);
   }
   :global(.cluster-shape--core) {
+    border: 2px solid var(--node-color);
     border-radius: 10px;
     background: color-mix(in srgb, var(--node-color) 22%, rgba(22, 22, 30, 0.85));
-    border: 2px solid var(--node-color);
     box-shadow: 0 0 12px color-mix(in srgb, var(--node-color) 40%, transparent);
   }
   :global(.cluster-shape--edge) {
@@ -1697,5 +1586,21 @@
   :global(.cluster-shape__count) {
     position: relative;
     z-index: 1;
+  }
+  :global(.cluster-marker--glow) {
+    animation: cluster-glow 3s ease-in-out infinite alternate;
+  }
+  @keyframes cluster-glow {
+    from {
+      filter: brightness(0.9);
+    }
+    to {
+      filter: brightness(1.15);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    :global(.cluster-marker--glow) {
+      animation: none;
+    }
   }
 </style>

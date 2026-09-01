@@ -1,7 +1,7 @@
-import type { CircleMarker, Map as LMap, Marker } from "leaflet";
+import type { Map as MapLibreMap, Marker } from "maplibre-gl";
 
 export interface Spreadable {
-  marker: Marker | CircleMarker;
+  marker: Marker;
   iconRadius: number;
 }
 
@@ -13,9 +13,9 @@ interface SpreadOptions {
 }
 
 interface MarkerWithOriginal {
-  getLatLng: Marker["getLatLng"];
-  setLatLng: Marker["setLatLng"];
-  __originalLatLng?: ReturnType<Marker["getLatLng"]>;
+  getLngLat: Marker["getLngLat"];
+  setLngLat: Marker["setLngLat"];
+  __originalLngLat?: ReturnType<Marker["getLngLat"]>;
 }
 
 const DEFAULT_GAP_PX = 4;
@@ -27,7 +27,7 @@ const DEFAULT_GAP_PX = 4;
  * not marker coords.
  */
 export function spreadOverlappingMarkers(
-  map: LMap,
+  map: MapLibreMap,
   items: Spreadable[],
   opts: SpreadOptions = {}
 ): void {
@@ -43,8 +43,7 @@ export function spreadOverlappingMarkers(
   items.forEach((it) => resetToOriginal(it.marker));
 
   const points = items.map((it) => {
-    const ll = it.marker.getLatLng();
-    return map.latLngToContainerPoint(ll);
+    return map.project(it.marker.getLngLat());
   });
 
   const parent = items.map((_, i) => i);
@@ -97,8 +96,8 @@ export function spreadOverlappingMarkers(
 
     indices.forEach((idx, i) => {
       const [ox, oy] = offsets[i];
-      const newLatLng = map.containerPointToLatLng([anchor.x + ox, anchor.y + oy]);
-      items[idx].marker.setLatLng(newLatLng);
+      const newLngLat = map.unproject([anchor.x + ox, anchor.y + oy]);
+      items[idx].marker.setLngLat(newLngLat);
     });
   });
 }
@@ -171,11 +170,11 @@ function hexSpiral(n: number): Array<[number, number]> {
   return out;
 }
 
-function resetToOriginal(marker: Marker | CircleMarker): void {
+function resetToOriginal(marker: Marker): void {
   const m = marker as MarkerWithOriginal;
-  if (m.__originalLatLng === undefined) {
-    m.__originalLatLng = marker.getLatLng();
+  if (m.__originalLngLat === undefined) {
+    m.__originalLngLat = marker.getLngLat();
     return;
   }
-  marker.setLatLng(m.__originalLatLng);
+  marker.setLngLat(m.__originalLngLat);
 }

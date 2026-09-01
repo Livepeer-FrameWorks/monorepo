@@ -1,0 +1,14 @@
+{
+  "name": "@frameworks/map-core",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "./index.ts",
+  "types": "./index.ts",
+  "dependencies": {
+    "@types/geojson": "^7946.0.16"
+  },
+  "peerDependencies": {
+    "maplibre-gl": "^6.6.0"
+  }
+}

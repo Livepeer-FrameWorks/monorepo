@@ -89,7 +89,7 @@ for (const deferredRuntime of [
   "hls-",
   "video.es-",
   "dash.all",
-  "leaflet-",
+  "maplibre-gl-",
 ]) {
   if (executableHomeHead.includes(deferredRuntime)) {
     failures.push(`build/client/index.html eagerly loads deferred runtime ${deferredRuntime}`);

@@ -444,22 +444,22 @@
                 acc.stream_hours += entry.usageValue / 3600;
                 break;
               case "ingress_gb":
-                acc.ingress_gb += Math.max(entry.usageValue, 0);
+                acc.ingress_gb += entry.usageValue;
                 break;
               case "egress_gb":
-                acc.egress_gb += Math.max(entry.usageValue, 0);
+                acc.egress_gb += entry.usageValue;
                 break;
               case "peak_bandwidth_mbps":
                 acc.peak_bandwidth_mbps = Math.max(acc.peak_bandwidth_mbps, entry.usageValue);
                 break;
               case "total_streams":
-                acc.total_streams = Math.max(acc.total_streams, entry.usageValue);
+                acc.total_streams += entry.usageValue;
                 break;
               case "max_viewers":
                 acc.max_viewers = Math.max(acc.max_viewers, entry.usageValue);
                 break;
               case "total_viewers":
-                acc.total_viewers = Math.max(acc.total_viewers, entry.usageValue);
+                acc.total_viewers += entry.usageValue;
                 break;
             }
             return acc;
@@ -475,6 +475,9 @@
             period: `${range.days} days`,
           }
         );
+        aggregated.stream_hours = Math.max(aggregated.stream_hours, 0);
+        aggregated.ingress_gb = Math.max(aggregated.ingress_gb, 0);
+        aggregated.egress_gb = Math.max(aggregated.egress_gb, 0);
         usageData = aggregated;
       } else if (usageRecords.length > 0) {
         const aggregated = usageRecords.reduce(
@@ -484,19 +487,22 @@
                 acc.stream_hours += record.usageValue / 3600;
                 break;
               case "ingress_gb":
-                acc.ingress_gb += Math.max(record.usageValue, 0);
+                acc.ingress_gb += record.usageValue;
                 break;
               case "egress_gb":
-                acc.egress_gb += Math.max(record.usageValue, 0);
+                acc.egress_gb += record.usageValue;
                 break;
               case "peak_bandwidth_mbps":
                 acc.peak_bandwidth_mbps = Math.max(acc.peak_bandwidth_mbps, record.usageValue);
                 break;
               case "total_streams":
-                acc.total_streams = Math.max(acc.total_streams, record.usageValue);
+                acc.total_streams += record.usageValue;
                 break;
               case "max_viewers":
                 acc.max_viewers = Math.max(acc.max_viewers, record.usageValue);
+                break;
+              case "total_viewers":
+                acc.total_viewers += record.usageValue;
                 break;
             }
             return acc;
@@ -512,6 +518,9 @@
             period: `${range.days} days`,
           }
         );
+        aggregated.stream_hours = Math.max(aggregated.stream_hours, 0);
+        aggregated.ingress_gb = Math.max(aggregated.ingress_gb, 0);
+        aggregated.egress_gb = Math.max(aggregated.egress_gb, 0);
         usageData = aggregated;
       }
 
@@ -592,6 +601,22 @@
     if (Number.isInteger(value)) return formatNumber(value);
     if (Math.abs(value) >= 1000) return formatNumber(value);
     return value.toFixed(2);
+  }
+
+  function usageDimensionLabels(value: unknown): string[] {
+    let parsed = value;
+    if (typeof parsed === "string") {
+      try {
+        parsed = JSON.parse(parsed);
+      } catch {
+        return [];
+      }
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return [];
+    return Object.entries(parsed as Record<string, unknown>)
+      .filter(([, dimensionValue]) => typeof dimensionValue === "string" && dimensionValue !== "")
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, dimensionValue]) => `${key.replaceAll("_", " ")}: ${dimensionValue}`);
   }
 
   function formatUsagePeriod(record: UsageRecord | null | undefined) {
@@ -1800,6 +1825,7 @@
                     >
                       <th class="text-left py-3 px-4">Type</th>
                       <th class="text-right py-3 px-4">Value</th>
+                      <th class="text-left py-3 px-4">Dimensions</th>
                       <th class="text-right py-3 px-4">Granularity</th>
                       <th class="text-right py-3 px-4">Period</th>
                       <th class="text-right py-3 px-4">Recorded</th>
@@ -1813,6 +1839,10 @@
                         </td>
                         <td class="py-3 px-4 text-right font-mono">
                           {formatUsageValue(record.usageValue)}
+                          {record.unit}
+                        </td>
+                        <td class="py-3 px-4 text-xs text-muted-foreground">
+                          {usageDimensionLabels(record.dimensions).join(" · ") || "—"}
                         </td>
                         <td class="py-3 px-4 text-right">
                           {record.granularity ?? "—"}
