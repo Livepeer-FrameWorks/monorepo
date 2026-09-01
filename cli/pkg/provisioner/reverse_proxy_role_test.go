@@ -57,6 +57,21 @@ func TestReverseProxyComposeVarsRendersNginxConfigMount(t *testing.T) {
 	}
 }
 
+func TestRenderCaddyfileRestrictsMediaIngestAndOverwritesForwardingHeaders(t *testing.T) {
+	content := renderCaddyfile([]proxySite{{
+		Domains: []string{"livepeer.example.com"}, Upstream: "127.0.0.1:8935", Profile: "media_ingest",
+	}})
+	for _, want := range []string{
+		"@media_ingest {", "path /live /live/*", "method POST PUT",
+		"reverse_proxy @media_ingest 127.0.0.1:8935 {",
+		"header_up X-Real-IP {remote_host}", "header_up X-Forwarded-For {remote_host}", "respond 404",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("Caddy media ingest config missing %q:\n%s", want, content)
+		}
+	}
+}
+
 func TestReverseProxyComposeVarsRendersTLSMountsAndHTTPSPort(t *testing.T) {
 	vars, err := reverseProxyComposeVars("nginx", 18090, ServiceConfig{
 		Mode:  "docker",
@@ -109,6 +124,9 @@ func TestReverseProxyComposeVarsAppliesMediaIngestProfile(t *testing.T) {
 	files := vars["compose_stack_files"].(map[string]any)
 	conf := files["frameworks.conf"].(string)
 	for _, want := range []string{
+		"location ^~ /live/ {",
+		"limit_except POST PUT { deny all; }",
+		"proxy_set_header X-Forwarded-For $remote_addr;",
 		"client_max_body_size 512m;",
 		"client_body_timeout 900s;",
 		"send_timeout 900s;",
@@ -123,6 +141,9 @@ func TestReverseProxyComposeVarsAppliesMediaIngestProfile(t *testing.T) {
 		if !strings.Contains(conf, want) {
 			t.Fatalf("docker nginx media ingest config missing %q:\n%s", want, conf)
 		}
+	}
+	if strings.Contains(conf, "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;") || strings.Contains(conf, "location / {") || strings.Contains(conf, "/runtime-config.js") {
+		t.Fatalf("media ingest must neither trust an incoming forwarding chain nor proxy arbitrary paths:\n%s", conf)
 	}
 }
 
@@ -280,6 +301,36 @@ func TestRenderCaddyfileSupportsTLSAndPathPrefixes(t *testing.T) {
 		if !strings.Contains(content, want) {
 			t.Fatalf("Caddyfile missing %q:\n%s", want, content)
 		}
+	}
+}
+
+func TestRenderCaddyfileNeverCachesRuntimeConfigForCatchAllSites(t *testing.T) {
+	content := renderCaddyfile([]proxySite{{
+		Domains:  []string{"chartroom.example.com"},
+		Upstream: "127.0.0.1:18001",
+	}})
+
+	for _, want := range []string{
+		"@runtime_config path /runtime-config.js",
+		"header @runtime_config {",
+		"Cache-Control \"no-store\"",
+		"-Expires",
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("Caddyfile runtime config policy missing %q:\n%s", want, content)
+		}
+	}
+}
+
+func TestRenderCaddyfileRuntimeConfigDoesNotWidenRestrictedSites(t *testing.T) {
+	content := renderCaddyfile([]proxySite{{
+		Domains:      []string{"bridge.example.com"},
+		Upstream:     "127.0.0.1:18000",
+		PathPrefixes: []string{"/graphql"},
+	}})
+
+	if strings.Contains(content, "runtime_config") || strings.Contains(content, "/runtime-config.js") {
+		t.Errorf("restricted site gained runtime config handling:\n%s", content)
 	}
 }
 
@@ -688,6 +739,39 @@ func TestNginxCredentialLocationsDecorateCatchAllSites(t *testing.T) {
 	}
 	if !strings.Contains(out, "location / {") {
 		t.Errorf("catch-all location missing:\n%s", out)
+	}
+}
+
+func TestNginxRuntimeConfigIsNeverCachedForCatchAllSites(t *testing.T) {
+	out := renderSite(proxySite{
+		Name:     "chartroom",
+		Domains:  []string{"chartroom.example.com"},
+		Upstream: "127.0.0.1:18001",
+	})
+
+	for _, want := range []string{
+		"location = /runtime-config.js {",
+		"proxy_hide_header Cache-Control;",
+		"proxy_hide_header Expires;",
+		"add_header Cache-Control \"no-store\" always;",
+		"proxy_pass http://127.0.0.1:18001;",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("runtime config location missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestNginxRuntimeConfigDoesNotWidenRestrictedSites(t *testing.T) {
+	out := renderSite(proxySite{
+		Name:         "bridge",
+		Domains:      []string{"bridge.example.com"},
+		Upstream:     "127.0.0.1:18000",
+		PathPrefixes: []string{"/graphql"},
+	})
+
+	if strings.Contains(out, "location = /runtime-config.js") {
+		t.Errorf("restricted site gained runtime config location:\n%s", out)
 	}
 }
 

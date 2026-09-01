@@ -39,7 +39,7 @@ jobs:
           # Keep full matrices so downstream jobs are never skipped by an
           # empty matrix. Individual build steps inspect release-plan and
           # skip expensive work for carry-forward components.
-          image_matrix=$(jq -c '{service:[.services[] | select(.dockerfile != null) | {name, context, dockerfile}]}' "$COMPONENTS_FILE")
+          image_matrix=$(jq -c '{service:[.services[] | select(.dockerfile != null) | {name, context, dockerfile, docker_cmd:(.docker_cmd // ""), health_port:(.health_port // 0)} ]}' "$COMPONENTS_FILE")
           webapp_matrix=$(jq -c '{webapp:.webapps}' "$COMPONENTS_FILE")
           echo "image_matrix=${image_matrix}" >> "$GITHUB_OUTPUT"
           echo "webapp_matrix=${webapp_matrix}" >> "$GITHUB_OUTPUT"
@@ -198,6 +198,8 @@ jobs:
             BUILD_DATE=${{ github.event.repository.updated_at }}
             COMPONENT_NAME=${{ matrix.service.name }}
             COMPONENT_VERSION=${{ steps.svcver.outputs.version }}
+            ${{ matrix.service.docker_cmd != '' && format('CMD_PACKAGE={0}', matrix.service.docker_cmd) || '' }}
+            ${{ matrix.service.health_port != 0 && format('HEALTH_PORT={0}', matrix.service.health_port) || '' }}
           tags: |
             ${{ env.REGISTRY }}/frameworks-${{ matrix.service.name }}:${{ github.ref_name }}-amd64
             livepeerframeworks/frameworks-${{ matrix.service.name }}:${{ github.ref_name }}-amd64
@@ -304,6 +306,8 @@ jobs:
             BUILD_DATE=${{ github.event.repository.updated_at }}
             COMPONENT_NAME=${{ matrix.service.name }}
             COMPONENT_VERSION=${{ steps.svcver.outputs.version }}
+            ${{ matrix.service.docker_cmd != '' && format('CMD_PACKAGE={0}', matrix.service.docker_cmd) || '' }}
+            ${{ matrix.service.health_port != 0 && format('HEALTH_PORT={0}', matrix.service.health_port) || '' }}
           tags: |
             ${{ env.REGISTRY }}/frameworks-${{ matrix.service.name }}:${{ github.ref_name }}-arm64
             livepeerframeworks/frameworks-${{ matrix.service.name }}:${{ github.ref_name }}-arm64

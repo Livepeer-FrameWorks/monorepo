@@ -10,6 +10,7 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
+	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -84,6 +85,151 @@ func TestValidateProductionServiceEnvRequiresSharedTelemetrySecretForBridge(t *t
 	}
 	if err := validateProductionServiceEnv(&inventory.Manifest{Profile: "dev"}, "bridge", map[string]string{}); err != nil {
 		t.Fatalf("dev bridge must allow missing secret: %v", err)
+	}
+}
+
+func TestValidateProductionServiceEnvRequiresMeteringSourceIdentity(t *testing.T) {
+	manifest := &inventory.Manifest{Profile: "production"}
+	valid := map[string]string{
+		"METERING_SOURCE_ID":     "periscope-default",
+		"METERING_SOURCE_REGION": "eu-west",
+	}
+	if err := validateProductionServiceEnv(manifest, "periscope-metering", valid); err != nil {
+		t.Fatalf("valid metering source rejected: %v", err)
+	}
+
+	for name, env := range map[string]map[string]string{
+		"missing_id":     {"METERING_SOURCE_REGION": "eu-west"},
+		"missing_region": {"METERING_SOURCE_ID": "periscope-default"},
+		"invalid_id":     {"METERING_SOURCE_ID": "Periscope EU", "METERING_SOURCE_REGION": "eu-west"},
+		"invalid_region": {"METERING_SOURCE_ID": "periscope-default", "METERING_SOURCE_REGION": "EU West"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateProductionServiceEnv(manifest, "periscope-metering", env); err == nil {
+				t.Fatal("invalid metering source config accepted")
+			}
+		})
+	}
+	if err := validateProductionServiceEnv(&inventory.Manifest{Profile: "dev"}, "periscope-metering", nil); err != nil {
+		t.Fatalf("dev metering source may use process defaults: %v", err)
+	}
+}
+
+func TestValidateProductionPurserRequiresCompleteLivepeerFundingConfig(t *testing.T) {
+	manifest := &inventory.Manifest{Profile: "production"}
+	valid := map[string]string{
+		"DATABASE_HOST": "postgres.internal", "DATABASE_PASSWORD": "test-password",
+		"LIVEPEER_DEPOSIT_MONITOR_ENABLED": "true", "ARBITRUM_RPC_ENDPOINT": "https://arb.example",
+		"X402_GAS_WALLET_ADDRESS": "0x1111111111111111111111111111111111111111",
+		"X402_GAS_WALLET_PRIVKEY": "encrypted-at-rest-test-value",
+	}
+	if err := validateProductionServiceEnv(manifest, "purser", valid); err != nil {
+		t.Fatalf("complete Livepeer funding config rejected: %v", err)
+	}
+	for _, key := range []string{"ARBITRUM_RPC_ENDPOINT", "X402_GAS_WALLET_ADDRESS", "X402_GAS_WALLET_PRIVKEY"} {
+		t.Run("missing "+key, func(t *testing.T) {
+			env := maps.Clone(valid)
+			delete(env, key)
+			if err := validateProductionServiceEnv(manifest, "purser", env); err == nil || !strings.Contains(err.Error(), key) {
+				t.Fatalf("missing %s accepted: %v", key, err)
+			}
+		})
+	}
+}
+
+func TestValidateProductionServiceEnvBasemapConfiguration(t *testing.T) {
+	manifest := &inventory.Manifest{Profile: "production"}
+	for _, serviceID := range []string{"chartroom", "foredeck"} {
+		t.Run(serviceID+" carto", func(t *testing.T) {
+			env := map[string]string{
+				"BASEMAP_PROVIDER":          "carto",
+				"BASEMAP_STYLE":             "dark-matter",
+				"CARTO_BASEMAP_BROWSER_KEY": "synthetic-key",
+			}
+			if err := validateProductionServiceEnv(manifest, serviceID, env); err != nil {
+				t.Fatalf("valid CARTO configuration rejected: %v", err)
+			}
+		})
+		t.Run(serviceID+" openfreemap", func(t *testing.T) {
+			env := map[string]string{
+				"BASEMAP_PROVIDER": "openfreemap",
+				"BASEMAP_STYLE":    "dark",
+			}
+			if err := validateProductionServiceEnv(manifest, serviceID, env); err != nil {
+				t.Fatalf("valid OpenFreeMap configuration rejected: %v", err)
+			}
+		})
+	}
+
+	for name, env := range map[string]map[string]string{
+		"missing key": {"BASEMAP_PROVIDER": "carto", "BASEMAP_STYLE": "dark-matter"},
+		"unknown provider": {
+			"BASEMAP_PROVIDER": "arbitrary",
+			"BASEMAP_STYLE":    "dark",
+		},
+		"provider style mismatch": {
+			"BASEMAP_PROVIDER": "carto",
+			"BASEMAP_STYLE":    "dark",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateProductionServiceEnv(manifest, "chartroom", env); err == nil {
+				t.Fatal("invalid basemap configuration accepted")
+			}
+		})
+	}
+
+	if err := validateProductionServiceEnv(
+		&inventory.Manifest{Profile: "dev"},
+		"chartroom",
+		nil,
+	); err != nil {
+		t.Fatalf("dev interface may use its local runtime config: %v", err)
+	}
+}
+
+func TestRestrictBasemapCredentials(t *testing.T) {
+	for name, tc := range map[string]struct {
+		serviceID string
+		provider  string
+		wantKey   bool
+	}{
+		"carto chartroom":       {serviceID: "chartroom", provider: "carto", wantKey: true},
+		"openfree chartroom":    {serviceID: "chartroom", provider: "openfreemap", wantKey: false},
+		"carto foredeck":        {serviceID: "foredeck", provider: "carto", wantKey: true},
+		"unrelated backend":     {serviceID: "bridge", provider: "carto", wantKey: false},
+		"unconfigured frontend": {serviceID: "foredeck", provider: "", wantKey: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := map[string]string{
+				"BASEMAP_PROVIDER":          tc.provider,
+				"CARTO_BASEMAP_BROWSER_KEY": "synthetic-key",
+			}
+			restrictBasemapCredentials(tc.serviceID, env)
+			_, gotKey := env["CARTO_BASEMAP_BROWSER_KEY"]
+			if gotKey != tc.wantKey {
+				t.Fatalf("key presence = %v, want %v", gotKey, tc.wantKey)
+			}
+		})
+	}
+}
+
+func TestRestrictMeteringSourceIdentity(t *testing.T) {
+	for _, serviceID := range []string{"purser", "periscope-query", "commodore"} {
+		env := map[string]string{"METERING_SOURCE_ID": "periscope-default", "METERING_SOURCE_REGION": "eu-west"}
+		restrictMeteringSourceIdentity(serviceID, env)
+		if _, ok := env["METERING_SOURCE_ID"]; ok {
+			t.Fatalf("%s retained METERING_SOURCE_ID", serviceID)
+		}
+		if _, ok := env["METERING_SOURCE_REGION"]; ok {
+			t.Fatalf("%s retained METERING_SOURCE_REGION", serviceID)
+		}
+	}
+
+	env := map[string]string{"METERING_SOURCE_ID": "periscope-default", "METERING_SOURCE_REGION": "eu-west"}
+	restrictMeteringSourceIdentity("periscope-metering", env)
+	if env["METERING_SOURCE_ID"] != "periscope-default" || env["METERING_SOURCE_REGION"] != "eu-west" {
+		t.Fatalf("metering identity was removed: %#v", env)
 	}
 }
 
@@ -1302,6 +1448,7 @@ func TestServiceRegistrationMetadataUsesResolvedGatewayWallet(t *testing.T) {
 			"livepeer-gateway": {
 				Enabled: true,
 				Host:    "central-eu-1",
+				Mode:    "native",
 			},
 		},
 	}
@@ -1322,11 +1469,11 @@ func TestServiceRegistrationMetadataUsesResolvedGatewayWallet(t *testing.T) {
 	if metadata[servicedefs.LivepeerGatewayMetadataPublicScheme] != "https" {
 		t.Fatalf("expected public scheme https, got %q", metadata[servicedefs.LivepeerGatewayMetadataPublicScheme])
 	}
-	if metadata[servicedefs.LivepeerGatewayMetadataAdminHost] != "10.0.0.10" {
-		t.Fatalf("expected admin host from external IP, got %q", metadata[servicedefs.LivepeerGatewayMetadataAdminHost])
+	if _, ok := metadata["admin_host"]; ok {
+		t.Fatalf("admin_host must not be published for the loopback-only CLI, got %v", metadata)
 	}
-	if metadata[servicedefs.LivepeerGatewayMetadataAdminPort] != "7935" {
-		t.Fatalf("expected admin port 7935, got %q", metadata[servicedefs.LivepeerGatewayMetadataAdminPort])
+	if _, ok := metadata["admin_port"]; ok {
+		t.Fatalf("admin_port must not be published for the loopback-only CLI, got %v", metadata)
 	}
 }
 
@@ -2809,6 +2956,8 @@ func TestBuildServiceEnvVarsCoversRuntimeEnvDependencies(t *testing.T) {
 		"CLOUDFLARE_ACCOUNT_ID=test-account",
 		"ACME_EMAIL=ops@example.com",
 		"GATEWAY_PUBLIC_URL=https://api.frameworks.network",
+		"LIVEPEER_ETH_ACCT_ADDR=0xabc123",
+		"LIVEPEER_ETH_KEYSTORE_B64=e30=",
 		"NAVIGATOR_INTERNAL_CA_ROOT_CERT_PEM_B64=cm9vdA==",
 		"NAVIGATOR_INTERNAL_CA_INTERMEDIATE_CERT_PEM_B64=aW50ZXJtZWRpYXRl",
 		"NAVIGATOR_INTERNAL_CA_INTERMEDIATE_KEY_PEM_B64=a2V5",
@@ -2823,6 +2972,7 @@ func TestBuildServiceEnvVarsCoversRuntimeEnvDependencies(t *testing.T) {
 			"yuga-eu-1":    {ExternalIP: "10.0.0.11", Roles: []string{"infrastructure"}},
 			"kafka-eu-1":   {ExternalIP: "10.0.0.12", Roles: []string{"infrastructure"}},
 			"ch-eu-1":      {ExternalIP: "10.0.0.13", Roles: []string{"infrastructure"}},
+			"ch-read-1":    {ExternalIP: "10.0.0.14", Roles: []string{"infrastructure"}},
 		},
 		Clusters: map[string]inventory.ClusterConfig{
 			"core-central-primary": {Name: "Core Central Primary"},
@@ -2835,9 +2985,11 @@ func TestBuildServiceEnvVarsCoversRuntimeEnvDependencies(t *testing.T) {
 				Nodes:   []inventory.PostgresNode{{Host: "yuga-eu-1", ID: 1}},
 			},
 			ClickHouse: &inventory.ClickHouseConfig{
-				Enabled: true,
-				Nodes:   []inventory.ClickHouseNode{{Host: "ch-eu-1", ID: 1}},
-				Port:    9000,
+				Enabled:       true,
+				Nodes:         []inventory.ClickHouseNode{{Host: "ch-eu-1", ID: 1}},
+				ReadEndpoint:  "ch-read-1",
+				WriteEndpoint: "ch-eu-1",
+				Port:          9000,
 			},
 			Kafka: &inventory.KafkaConfig{
 				Enabled:   true,
@@ -2846,11 +2998,19 @@ func TestBuildServiceEnvVarsCoversRuntimeEnvDependencies(t *testing.T) {
 			},
 		},
 		Services: map[string]inventory.ServiceConfig{
-			"bridge":           {Enabled: true, Host: "central-eu-1"},
-			"commodore":        {Enabled: true, Host: "central-eu-1"},
-			"quartermaster":    {Enabled: true, Host: "central-eu-1"},
-			"purser":           {Enabled: true, Host: "central-eu-1"},
-			"periscope-query":  {Enabled: true, Host: "central-eu-1"},
+			"bridge":          {Enabled: true, Host: "central-eu-1"},
+			"commodore":       {Enabled: true, Host: "central-eu-1"},
+			"quartermaster":   {Enabled: true, Host: "central-eu-1"},
+			"purser":          {Enabled: true, Host: "central-eu-1"},
+			"periscope-query": {Enabled: true, Host: "central-eu-1"},
+			"periscope-metering": {
+				Enabled: true,
+				Host:    "central-eu-1",
+				Config: map[string]string{
+					"METERING_SOURCE_ID":     "periscope-default",
+					"METERING_SOURCE_REGION": "eu-west",
+				},
+			},
 			"periscope-ingest": {Enabled: true, Host: "central-eu-1"},
 			"decklog":          {Enabled: true, Host: "central-eu-1"},
 			"signalman":        {Enabled: true, Host: "central-eu-1"},
@@ -2924,6 +3084,16 @@ func TestBuildServiceEnvVarsCoversRuntimeEnvDependencies(t *testing.T) {
 			serviceID: "periscope-ingest",
 			want:      map[string]string{"QUARTERMASTER_GRPC_ADDR": "quartermaster.internal:19002"},
 			keys:      []string{"CLICKHOUSE_ADDR", "CLICKHOUSE_DB", "CLICKHOUSE_USER", "CLICKHOUSE_PASSWORD", "KAFKA_BROKERS", "KAFKA_CLUSTER_ID", "SERVICE_TOKEN"},
+		},
+		{
+			serviceID: "periscope-metering",
+			want: map[string]string{
+				"QUARTERMASTER_GRPC_ADDR": "quartermaster.internal:19002",
+				"METERING_SOURCE_ID":      "periscope-default",
+				"METERING_SOURCE_REGION":  "eu-west",
+				"CLICKHOUSE_ADDR":         "ch-eu-1.internal:9000",
+			},
+			keys: []string{"DATABASE_URL", "CLICKHOUSE_DB", "CLICKHOUSE_USER", "CLICKHOUSE_PASSWORD", "KAFKA_BROKERS", "KAFKA_CLUSTER_ID", "SERVICE_TOKEN"},
 		},
 		{
 			serviceID: "decklog",
@@ -3497,6 +3667,27 @@ func TestBuildVMAgentScrapeTargetsUsesDeployAlias(t *testing.T) {
 	}
 }
 
+func TestBuildVMAgentScrapeTargetsIncludesPeriscopeMetering(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "production",
+		Hosts: map[string]inventory.Host{
+			"central-eu-1": {ExternalIP: "10.0.0.10"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"periscope-metering": {
+				Enabled: true,
+				Host:    "central-eu-1",
+			},
+		},
+	}
+
+	targets := buildVMAgentScrapeTargets(manifest, "central-eu-1")
+	target := findScrapeTarget(t, targets, "periscope-metering", "127.0.0.1:18021")
+	if got := target["path"]; got != "/metrics" {
+		t.Fatalf("path = %v, want /metrics", got)
+	}
+}
+
 func TestBuildVMAgentScrapeTargetsIncludesVMAUTH(t *testing.T) {
 	manifest := &inventory.Manifest{
 		Profile: "production",
@@ -4038,6 +4229,9 @@ func TestBuildTaskConfigProxySitesResolveDeployAliases(t *testing.T) {
 	}
 	if got := byDomain["foghorn.frameworks.network"]["upstream"]; got != "127.0.0.1:18008" {
 		t.Fatalf("global foghorn upstream = %v, want 127.0.0.1:18008", got)
+	}
+	if got := byDomain["livepeer.frameworks.network"]["upstream"]; got != "127.0.0.1:8935" {
+		t.Fatalf("global livepeer upstream = %v, want 127.0.0.1:8935", got)
 	}
 	if got := byDomain["foghorn.frameworks.network"]["tls_bundle_id"]; got != "wildcard-frameworks-network" {
 		t.Fatalf("global foghorn tls_bundle_id = %v, want wildcard-frameworks-network", got)
@@ -4771,14 +4965,14 @@ func TestBatchContainsServiceMatchesTaskType(t *testing.T) {
 }
 
 // TestBuildServiceEnvVarsAggregatorPinnedServicesIgnoreHostRegion proves that
-// periscope-ingest, purser, periscope-query, and commodore bind aggregator
+// periscope-ingest, periscope-metering, purser, periscope-query, and commodore bind aggregator
 // Kafka regardless of which region's host they're deployed on. Pinning here
 // prevents a regional host placement from dual-writing central ClickHouse or
 // missing centralized billing rows.
 func TestBuildServiceEnvVarsAggregatorPinnedServicesIgnoreHostRegion(t *testing.T) {
 	manifest := threeRegionKafkaManifest()
 
-	pinned := []string{"periscope-ingest", "purser", "periscope-query", "commodore"}
+	pinned := []string{"periscope-ingest", "periscope-metering", "purser", "periscope-query", "commodore"}
 	for _, svc := range pinned {
 		for _, host := range []string{"regional-eu-1", "regional-us-1", "regional-ap-1"} {
 			task := &orchestrator.Task{Type: svc, ServiceID: svc, Host: host}
@@ -5013,9 +5207,10 @@ func TestRestrictClusterAccessSecrets(t *testing.T) {
 		wantAuthorityTrust  bool
 		wantSealRecipients  bool
 		wantSealPrivate     bool
+		wantFundingKey      bool
 	}{
 		{service: "quartermaster", wantMaterialization: true},
-		{service: "purser", wantMaterialization: true},
+		{service: "purser", wantMaterialization: true, wantFundingKey: true},
 		{service: "foghorn", wantBalancer: true, wantAuthorityTrust: true, wantSealPrivate: true},
 		{service: "commodore", wantAuthoritySigner: true, wantSealRecipients: true},
 		{service: "helmsman"},
@@ -5032,6 +5227,7 @@ func TestRestrictClusterAccessSecrets(t *testing.T) {
 				"MEDIA_AUTHORITY_SEAL_RECIPIENTS":             "recipients",
 				"MEDIA_AUTHORITY_SEAL_KEY_ID":                 "seal-key",
 				"MEDIA_AUTHORITY_SEAL_PRIVATE_KEY_PEM_B64":    "seal-private",
+				"X402_GAS_WALLET_PRIVKEY":                     "funding-private",
 			}
 			restrictClusterAccessSecrets(test.service, env)
 			_, hasMaterialization := env["CLUSTER_ACCESS_MATERIALIZATION_SECRET"]
@@ -5043,8 +5239,9 @@ func TestRestrictClusterAccessSecrets(t *testing.T) {
 			_, hasSealKey := env["MEDIA_AUTHORITY_SEAL_KEY_ID"]
 			_, hasSealPrivate := env["MEDIA_AUTHORITY_SEAL_PRIVATE_KEY_PEM_B64"]
 			_, hasSealRoot := env["MEDIA_AUTHORITY_SEAL_ROOT_SECRET"]
-			if hasMaterialization != test.wantMaterialization || hasBalancer != test.wantBalancer || hasSignerID != test.wantAuthoritySigner || hasSignerKey != test.wantAuthoritySigner || hasTrust != test.wantAuthorityTrust || hasRecipients != test.wantSealRecipients || hasSealKey != test.wantSealPrivate || hasSealPrivate != test.wantSealPrivate || hasSealRoot {
-				t.Fatalf("rendered secrets materialization=%v balancer=%v signer=%v/%v trust=%v recipients=%v seal=%v/%v root=%v", hasMaterialization, hasBalancer, hasSignerID, hasSignerKey, hasTrust, hasRecipients, hasSealKey, hasSealPrivate, hasSealRoot)
+			_, hasFundingKey := env["X402_GAS_WALLET_PRIVKEY"]
+			if hasMaterialization != test.wantMaterialization || hasBalancer != test.wantBalancer || hasSignerID != test.wantAuthoritySigner || hasSignerKey != test.wantAuthoritySigner || hasTrust != test.wantAuthorityTrust || hasRecipients != test.wantSealRecipients || hasSealKey != test.wantSealPrivate || hasSealPrivate != test.wantSealPrivate || hasSealRoot || hasFundingKey != test.wantFundingKey {
+				t.Fatalf("rendered secrets materialization=%v balancer=%v signer=%v/%v trust=%v recipients=%v seal=%v/%v root=%v funding=%v", hasMaterialization, hasBalancer, hasSignerID, hasSignerKey, hasTrust, hasRecipients, hasSealKey, hasSealPrivate, hasSealRoot, hasFundingKey)
 			}
 		})
 	}

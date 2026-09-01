@@ -74,6 +74,7 @@ releases:
     rollback_disabled:
       - foghorn
       - navigator
+      - purser
     required_data_migrations:
       - id: quartermaster_cluster_access_provenance_v0_3_0
         service: quartermaster

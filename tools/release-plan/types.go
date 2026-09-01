@@ -20,6 +20,8 @@ type ReleaseComponent struct {
 	Context        string   `json:"context"`
 	Cmd            string   `json:"cmd"`
 	Dockerfile     string   `json:"dockerfile"`
+	DockerCmd      string   `json:"docker_cmd,omitempty"`
+	HealthPort     int      `json:"health_port,omitempty"`
 	CGO            bool     `json:"cgo"`
 	DarwinBinary   bool     `json:"darwin_binary"`
 	ExtraHashPaths []string `json:"extra_hash_paths,omitempty"`

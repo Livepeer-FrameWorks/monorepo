@@ -423,7 +423,8 @@ type ClickHouseConfig struct {
 	Nodes   []ClickHouseNode `yaml:"nodes,omitempty"` // Replicated cluster nodes (>=1); sole PROVISIONING target
 	// ReadEndpoint / WriteEndpoint decouple the SERVICE endpoint from the
 	// provisioning target (Nodes). They are host keys: ReadEndpoint overrides
-	// periscope-query's CLICKHOUSE_ADDR, WriteEndpoint overrides periscope-ingest's.
+	// periscope-query's CLICKHOUSE_ADDR. WriteEndpoint overrides the address for
+	// periscope-ingest and periscope-metering, which both follow authoritative writes.
 	// Empty → use Nodes. Used during migration to keep services on the live old node
 	// while the new node is provisioned, then flip write-then-read at cutover (write
 	// first so ingest drains into the new node, read after so dashboards never read
@@ -441,12 +442,12 @@ type ClickHouseConfig struct {
 
 // EndpointFor returns the host-key override a given periscope service should use
 // for CLICKHOUSE_ADDR, or "" to fall back to Nodes. periscope-query follows
-// ReadEndpoint; periscope-ingest follows WriteEndpoint.
+// ReadEndpoint; periscope-ingest and periscope-metering follow WriteEndpoint.
 func (ch *ClickHouseConfig) EndpointFor(serviceID string) string {
 	switch serviceID {
 	case "periscope-query":
 		return ch.ReadEndpoint
-	case "periscope-ingest":
+	case "periscope-ingest", "periscope-metering":
 		return ch.WriteEndpoint
 	}
 	return ""

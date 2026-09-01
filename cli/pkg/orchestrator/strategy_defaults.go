@@ -28,7 +28,7 @@ package orchestrator
 //     replicas, but reload-preferred means low-blast even at one host.
 //
 //   - Singletons (commodore, quartermaster, purser, navigator, skipper,
-//     periscope-query, deckhand, helmsman, livepeer-signer, mirrormaker
+//     periscope-query, periscope-metering, deckhand, helmsman, livepeer-signer, mirrormaker
 //     instances, edges): max_unavailable=1. Nothing to parallelize.
 //
 //   - Unknown services: max_unavailable=1, no stagger. Safe default —
@@ -85,22 +85,23 @@ var serviceStrategyDefaults = map[string]UpdateStrategy{
 	"logbook":   {MaxUnavailable: 1},
 
 	// Singletons.
-	"commodore":       {MaxUnavailable: 1},
-	"quartermaster":   {MaxUnavailable: 1},
-	"purser":          {MaxUnavailable: 1},
-	"navigator":       {MaxUnavailable: 1},
-	"skipper":         {MaxUnavailable: 1},
-	"periscope-query": {MaxUnavailable: 1},
-	"deckhand":        {MaxUnavailable: 1},
-	"helmsman":        {MaxUnavailable: 1},
-	"livepeer-signer": {MaxUnavailable: 1},
-	"steward":         {MaxUnavailable: 1},
-	"grafana":         {MaxUnavailable: 1},
-	"metabase":        {MaxUnavailable: 1},
-	"prometheus":      {MaxUnavailable: 1},
-	"victoriametrics": {MaxUnavailable: 1},
-	"listmonk":        {MaxUnavailable: 1},
-	"chatwoot":        {MaxUnavailable: 1},
+	"commodore":          {MaxUnavailable: 1},
+	"quartermaster":      {MaxUnavailable: 1},
+	"purser":             {MaxUnavailable: 1},
+	"navigator":          {MaxUnavailable: 1},
+	"skipper":            {MaxUnavailable: 1},
+	"periscope-query":    {MaxUnavailable: 1},
+	"periscope-metering": {MaxUnavailable: 1},
+	"deckhand":           {MaxUnavailable: 1},
+	"helmsman":           {MaxUnavailable: 1},
+	"livepeer-signer":    {MaxUnavailable: 1},
+	"steward":            {MaxUnavailable: 1},
+	"grafana":            {MaxUnavailable: 1},
+	"metabase":           {MaxUnavailable: 1},
+	"prometheus":         {MaxUnavailable: 1},
+	"victoriametrics":    {MaxUnavailable: 1},
+	"listmonk":           {MaxUnavailable: 1},
+	"chatwoot":           {MaxUnavailable: 1},
 
 	// Mesh.
 	"privateer": {MaxUnavailable: 1},

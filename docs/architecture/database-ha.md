@@ -188,7 +188,8 @@ for upgrade/restart/preflight) is not yet built — `cluster init` **refuses** N
 clear message. Growth to a 3-replica cluster is the documented expansion runbook, not an
 automatic flip. Moving a single node's analytics onto a new Replicated node is an
 operator-driven `cluster clickhouse migrate` (backfill → sync → verify → cutover); the
-concrete node/endpoint sequence for a given deployment lives in that deployment's internal
-plan, not here. Node identity (`id`) is validated unique and positive, shared with the
+write/metering/read endpoint sequence is documented in the operator
+[ClickHouse migration runbook](../../website_docs/src/content/docs/operators/clickhouse-migrations.mdx).
+Node identity (`id`) is validated unique and positive, shared with the
 Postgres/Kafka invariant (`validateClusterNodeIDs`); ClickHouse and Yugabyte additionally
 require unique hosts.

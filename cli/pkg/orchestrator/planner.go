@@ -220,6 +220,34 @@ func (p *Planner) tasksByClusterForDeploy(deployName string) (map[string][]strin
 	return out, nil
 }
 
+// taskNamesForDeploy returns every application task for a deploy slug. It is
+// alias-aware and mirrors NewServiceTask's singleton/multi-host naming.
+func (p *Planner) taskNamesForDeploy(deployName string) ([]string, error) {
+	var out []string
+	for name, svc := range p.manifest.Services {
+		if !svc.Enabled {
+			continue
+		}
+		deploy, ok := servicedefs.DeployName(name, svc.Deploy)
+		if !ok {
+			return nil, fmt.Errorf("unknown service id: %s", name)
+		}
+		if deploy != deployName {
+			continue
+		}
+		hosts := resolveHosts(svc)
+		for _, host := range hosts {
+			taskName := name
+			if len(hosts) > 1 {
+				taskName = name + "@" + host
+			}
+			out = append(out, taskName)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
 func (p *Planner) topologyInfraTaskDeps(serviceID string, svc inventory.ServiceConfig, clusterID string, appendIfInGraph func([]string, ...string) []string) []string {
 	var deps []string
 	for _, dep := range topology.InfraDependencies(serviceID) {
@@ -671,6 +699,14 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 	if fErr != nil {
 		return fErr
 	}
+	periscopeQueryTasks, queryErr := p.taskNamesForDeploy("periscope-query")
+	if queryErr != nil {
+		return queryErr
+	}
+	purserTasks, purserErr := p.taskNamesForDeploy("purser")
+	if purserErr != nil {
+		return purserErr
+	}
 
 	for name, svc := range p.manifest.Services {
 		if !svc.Enabled {
@@ -693,6 +729,17 @@ func (p *Planner) addApplicationTasks(graph *DependencyGraph) error {
 			task := NewServiceTask(deploy, name, instanceID, hostName, PhaseApplications)
 			task.ClusterID = effectiveServiceCluster(svc, hostName, p.manifest)
 			task.DependsOn = append(p.topologyInfraTaskDeps(deploy, svc, task.ClusterID, appendIfInGraph), coreDeps...)
+			// Query must stop any embedded producer before Purser changes the
+			// accepted envelope, and the standalone worker must start only after
+			// both services are current. These edges also make clean provision
+			// deterministic without relying on map iteration.
+			if deploy == "purser" {
+				task.DependsOn = append(task.DependsOn, periscopeQueryTasks...)
+			}
+			if deploy == "periscope-metering" {
+				task.DependsOn = append(task.DependsOn, periscopeQueryTasks...)
+				task.DependsOn = append(task.DependsOn, purserTasks...)
+			}
 			if name == "skipper" {
 				if bridge, ok := p.manifest.Services["bridge"]; ok && bridge.Enabled {
 					bridgeHosts := resolveHosts(bridge)

@@ -163,6 +163,9 @@ func TestClickHouseConfigHelpers(t *testing.T) {
 		if got := ch.EndpointFor("periscope-ingest"); got != "old-rw" {
 			t.Fatalf("EndpointFor(ingest) = %q, want old-rw", got)
 		}
+		if got := ch.EndpointFor("periscope-metering"); got != "old-rw" {
+			t.Fatalf("EndpointFor(metering) = %q, want old-rw", got)
+		}
 		// Unset endpoints and unrelated services fall back to "" (→ Nodes).
 		if got := ch.EndpointFor("some-other-service"); got != "" {
 			t.Fatalf("EndpointFor(other) = %q, want empty", got)

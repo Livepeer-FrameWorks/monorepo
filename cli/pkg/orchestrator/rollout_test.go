@@ -190,6 +190,7 @@ func TestDefaultStrategyFor(t *testing.T) {
 		{"redis", UpdateStrategy{MaxUnavailable: 1, PrimaryLast: true}},
 		{"bridge", UpdateStrategy{MaxUnavailable: 1, Canary: 1, RegionStagger: true}},
 		{"commodore", UpdateStrategy{MaxUnavailable: 1}},
+		{"periscope-metering", UpdateStrategy{MaxUnavailable: 1}},
 		{"this-service-does-not-exist", UpdateStrategy{MaxUnavailable: 1}},
 	}
 	for _, tc := range cases {

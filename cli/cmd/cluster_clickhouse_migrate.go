@@ -41,7 +41,7 @@ cluster. Subcommands run in order:
   sync      idempotent per-partition re-copy of the growing tail (staging + REPLACE)
   verify    FINAL count + content-hash parity (new vs source) + catalog coverage
   cutover   final delta sync, RE-VERIFY parity, then start refreshable MVs — requires
-            ingest already stopped; a failed re-verify aborts before any MV starts.
+            ingest and metering already stopped; a failed re-verify aborts before any MV starts.
             The write/read endpoint flips are operator gitops steps cutover PRINTS.
 
 The source is supplied with --from (a manifest host key, e.g. yuga-eu-1; use
@@ -50,8 +50,9 @@ manifest's ClickHouse coordinator node.`,
 	}
 	cmd.PersistentFlags().String("from", "", "source ClickHouse host key to migrate FROM (e.g. yuga-eu-1)")
 	cmd.PersistentFlags().Int("from-port", 0, "source ClickHouse native port (default: same as destination; set when source/dest run on swapped ports, e.g. a same-host docker drill)")
-	cutover := newCHMigrateSubCmd("cutover", "Final sync + re-verify parity + start refreshable MVs (requires ingest stopped)", runCHMigrateCutover)
+	cutover := newCHMigrateSubCmd("cutover", "Final sync + re-verify parity + start refreshable MVs (requires writers stopped)", runCHMigrateCutover)
 	cutover.Flags().Bool("ingest-stopped", false, "confirm periscope-ingest is already stopped (Kafka buffering); required to run cutover")
+	cutover.Flags().Bool("metering-stopped", false, "confirm periscope-metering is already stopped (PostgreSQL cursor frozen); required to run cutover")
 	cmd.AddCommand(
 		newCHMigrateSubCmd("backfill", "Idempotent bulk copy into the new node (refreshable MVs stopped)", runCHMigrateBackfill),
 		newCHMigrateSubCmd("sync", "Idempotent per-partition re-copy of the tail", runCHMigrateSync),
@@ -621,28 +622,34 @@ func oneLineTSV(s string) string { return strings.ReplaceAll(s, "\t", " ") }
 
 func runCHMigrateCutover(cmd *cobra.Command, m *chMigrateCtx) error {
 	out := cmd.OutOrStdout()
-	stopped, err := cmd.Flags().GetBool("ingest-stopped")
+	ingestStopped, err := cmd.Flags().GetBool("ingest-stopped")
 	if err != nil {
 		return err
 	}
-	if !stopped {
+	meteringStopped, err := cmd.Flags().GetBool("metering-stopped")
+	if err != nil {
+		return err
+	}
+	if !ingestStopped || !meteringStopped {
 		// Refuse: starting refreshable MVs / doing the "final" sync while ingest is
-		// still writing the old node would re-enable APPEND views on incomplete data
-		// and never converge. The operator stops ingest FIRST (Kafka buffers, no
-		// loss), then runs cutover once.
+		// still writing or metering is still reading the old node would make the
+		// cutover boundary inconsistent. Kafka buffers ingest and the PostgreSQL
+		// cursor freezes metering without losing its position.
 		fmt.Fprintln(out, strings.TrimSpace(`
-Cutover requires periscope-ingest to be STOPPED first (Kafka buffers; the consumer
-offset freezes; no data loss). Then re-run with --ingest-stopped. Full sequence:
+Cutover requires periscope-ingest and periscope-metering to be STOPPED first.
+Kafka buffers ingest and the metering cursor remains durable. Then re-run with
+--ingest-stopped --metering-stopped. Full sequence:
 
-  1. Stop periscope-ingest and confirm its Kafka consumer lag is frozen.
-  2. cluster clickhouse migrate cutover --from <src> --ingest-stopped
+  1. Stop periscope-ingest and periscope-metering; confirm ingest consumer lag and the metering cursor are frozen.
+  2. cluster clickhouse migrate cutover --from <src> --ingest-stopped --metering-stopped
      (final delta sync, RE-VERIFY parity, then start refreshable MVs; a failed
      re-verify aborts before any MV starts).
-  3. gitops: set clickhouse.write_endpoint -> new node; re-provision + resume
-     periscope-ingest (--only-services periscope-ingest); watch Kafka lag drain to 0.
-  4. gitops: set clickhouse.read_endpoint -> new node; re-provision periscope-query.
-  5. Decommission the old ClickHouse; drop the endpoint overrides.`))
-		return fmt.Errorf("refusing cutover: periscope-ingest not confirmed stopped (re-run with --ingest-stopped)")
+  3. gitops: set clickhouse.write_endpoint -> new node; re-provision + resume periscope-ingest
+     (--only-services periscope-ingest); watch Kafka lag drain to 0.
+  4. Re-provision + resume periscope-metering (--only-services periscope-metering), preserving METERING_SOURCE_ID.
+  5. gitops: set clickhouse.read_endpoint -> new node; re-provision periscope-query.
+  6. Decommission the old ClickHouse; drop the endpoint overrides.`))
+		return fmt.Errorf("refusing cutover: ClickHouse writers/readers not confirmed stopped (re-run with --ingest-stopped --metering-stopped)")
 	}
 
 	if err := m.finishCutover(cmd, runCHMigrateSync, runCHMigrateVerify, m.cutoverViewControls(cmd)); err != nil {
@@ -650,10 +657,10 @@ offset freezes; no data loss). Then re-run with --ingest-stopped. Full sequence:
 	}
 	ux.Success(out, strings.TrimSpace(`
 Final sync verified + destination refreshable MVs started (source quiesced). Repoint the endpoints, then decommission:
-  DOWNTIME migration (ingest stays stopped until after applications start): flip BOTH write_endpoint AND read_endpoint
-    to the new node now (safe: the source is quiesced and the final sync was re-verified), then provision applications.
-  ONLINE migration (ingest resumes on the new node first): flip write_endpoint->new, resume periscope-ingest and drain
-    Kafka lag to 0, then flip read_endpoint->new.
+  DOWNTIME migration (ingest and metering stay stopped until applications start): flip BOTH write_endpoint AND
+    read_endpoint to the new node now, then provision applications in release order.
+  ONLINE migration: flip write_endpoint->new, resume periscope-ingest and drain Kafka lag to 0, then resume
+    periscope-metering with the unchanged METERING_SOURCE_ID; finally flip read_endpoint->new for periscope-query.
 ROLLBACK: a simple repoint-back is safe ONLY before periscope-ingest has written the new node (committed Kafka offsets).
   In that window, repoint the endpoints back, restart the old node's refreshable views (SYSTEM START VIEW), and resume
   ingest on it. AFTER the new node has ingested, a plain repoint LOSES those rows — reverse-migrate (new->old) or

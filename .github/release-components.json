@@ -61,6 +61,18 @@
       "context": "api_analytics_query",
       "cmd": "./cmd/periscope",
       "dockerfile": "api_analytics_query/Dockerfile",
+      "docker_cmd": "./cmd/periscope",
+      "health_port": 18004,
+      "cgo": false,
+      "darwin_binary": true
+    },
+    {
+      "name": "periscope-metering",
+      "context": "api_analytics_query",
+      "cmd": "./cmd/periscope-metering",
+      "dockerfile": "api_analytics_query/Dockerfile",
+      "docker_cmd": "./cmd/periscope-metering",
+      "health_port": 18021,
       "cgo": false,
       "darwin_binary": true
     },

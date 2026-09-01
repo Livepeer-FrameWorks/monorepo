@@ -54,7 +54,37 @@
 {% if site.tls_mode | default('') != 'off' %}
     header Strict-Transport-Security "max-age=31536000"
 {% endif %}
+{# Keep browser-visible deployment config immediately replaceable during
+   provider changes and key rotation, without widening restricted routes. #}
+{% set runtime_config = namespace(served=false) %}
+{% if site.path_prefixes | default([]) | length == 0 %}
+{% set runtime_config.served = true %}
+{% else %}
+{% for path_prefix in site.path_prefixes %}
+{% if path_prefix | length > 0 and '/runtime-config.js'.startswith(path_prefix) %}
+{% set runtime_config.served = true %}
+{% endif %}
+{% endfor %}
+{% endif %}
+{% if runtime_config.served and site.profile | default('api') != 'media_ingest' %}
+    @runtime_config path /runtime-config.js
+    header @runtime_config {
+        Cache-Control "no-store"
+        -Expires
+    }
+{% endif %}
 {% if site.upstream is defined and site.upstream | length > 0 %}
+{% if site.profile | default('api') == 'media_ingest' %}
+    @media_ingest {
+        path /live /live/*
+        method POST PUT
+    }
+    reverse_proxy @media_ingest {{ site.upstream }} {
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+    }
+    respond 404
+{% else %}
 {% if site.path_prefixes | default([]) | length > 0 %}
 {% for path_prefix in site.path_prefixes %}
 {% if (site.upstream | string | lower).startswith('https://') %}
@@ -72,6 +102,7 @@
     }
 {% else %}
     reverse_proxy {{ site.upstream }}
+{% endif %}
 {% endif %}
 {% endif %}
 {% endif %}

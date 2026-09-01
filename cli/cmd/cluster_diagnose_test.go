@@ -15,6 +15,7 @@ func TestMediaDiagnosticHostServicesIncludesAliasedMediaServices(t *testing.T) {
 			"chandler-us":         {Enabled: true, Deploy: "chandler", Host: "regional-us-1"},
 			"livepeer-gateway-us": {Enabled: true, Deploy: "livepeer-gateway", Hosts: []string{"regional-us-1"}},
 			"bridge":              {Enabled: true, Hosts: []string{"regional-eu-1"}},
+			"periscope-metering":  {Enabled: true, Host: "central-eu-1"},
 			"grafana":             {Enabled: true, Host: "central-eu-1"},
 		},
 	}
@@ -32,8 +33,17 @@ func TestMediaDiagnosticHostServicesIncludesAliasedMediaServices(t *testing.T) {
 	if !slices.Contains(got["regional-us-1"], "livepeer-gateway") {
 		t.Fatalf("expected livepeer-gateway on regional-us-1, got %#v", got["regional-us-1"])
 	}
-	if _, ok := got["central-eu-1"]; ok {
-		t.Fatalf("unexpected non-media diagnostic host central-eu-1: %#v", got["central-eu-1"])
+	if !slices.Contains(got["central-eu-1"], "periscope-metering") {
+		t.Fatalf("expected periscope-metering on central-eu-1, got %#v", got["central-eu-1"])
+	}
+	if slices.Contains(got["central-eu-1"], "grafana") {
+		t.Fatalf("unexpected grafana diagnostic on central-eu-1: %#v", got["central-eu-1"])
+	}
+}
+
+func TestMediaDiagnosticPortsIncludesPeriscopeMetering(t *testing.T) {
+	if !slices.Contains(mediaDiagnosticPorts(), 18021) {
+		t.Fatalf("diagnostic ports missing periscope-metering: %v", mediaDiagnosticPorts())
 	}
 }
 

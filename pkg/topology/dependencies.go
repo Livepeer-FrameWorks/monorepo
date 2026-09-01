@@ -89,6 +89,9 @@ var serviceDependencies = map[string][]ServiceDependency{
 	"periscope-query": {
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "service bootstrap and billing helpers"},
 	},
+	"periscope-metering": {
+		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Purpose: "tenant primary-cluster attribution"},
+	},
 	"privateer": {
 		{TargetServiceID: "quartermaster", EnvKey: "QUARTERMASTER_GRPC_ADDR", Transport: "grpc", Purpose: "mesh sync and certificate distribution"},
 		{TargetServiceID: "navigator", EnvKey: "NAVIGATOR_GRPC_ADDR", Transport: "grpc", Optional: true, Purpose: "certificate sync bootstrap"},

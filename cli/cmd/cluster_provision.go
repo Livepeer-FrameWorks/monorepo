@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -3326,6 +3327,9 @@ func buildTaskConfig(task *orchestrator.Task, manifest *inventory.Manifest, runt
 
 	// Generate merged env vars for application/interface services.
 	// Infrastructure services (postgres, kafka, etc.) manage their own config.
+	if (baseName == "livepeer-gateway" || baseName == "livepeer-signer") && config.Mode != "native" {
+		return config, fmt.Errorf("service %s: livepeer services are native-only (compose renders no args)", task.Name)
+	}
 	if task.Phase != orchestrator.PhaseInfrastructure && manifest != nil {
 		envVars, err := buildServiceEnvVars(task, manifest, runtimeData, config.EnvFile, manifestDir, sharedEnv, clusterEnvs, config.Mode)
 		if err != nil {
@@ -3614,28 +3618,29 @@ func buildVMAgentScrapeTargets(manifest *inventory.Manifest, hostName string) []
 		configKey   string
 	}
 	metricsCapableServices := map[string]metricsScrapeSpec{
-		"bridge":           {},
-		"chandler":         {},
-		"commodore":        {},
-		"deckhand":         {},
-		"decklog":          {port: 18026, configKey: "metrics_port"},
-		"foghorn":          {},
-		"helmsman":         {},
-		"livepeer-gateway": {port: 7935, bindAddrKey: "cli_addr"},
-		"livepeer-signer":  {},
-		"mistserver":       {},
-		"navigator":        {},
-		"periscope-ingest": {},
-		"periscope-query":  {},
-		"privateer":        {},
-		"purser":           {},
-		"quartermaster":    {},
-		"signalman":        {},
-		"skipper":          {},
-		"steward":          {},
-		"victoriametrics":  {},
-		"vmagent":          {},
-		"vmauth":           {},
+		"bridge":             {},
+		"chandler":           {},
+		"commodore":          {},
+		"deckhand":           {},
+		"decklog":            {port: 18026, configKey: "metrics_port"},
+		"foghorn":            {},
+		"helmsman":           {},
+		"livepeer-gateway":   {port: 7935, bindAddrKey: "cli_addr"},
+		"livepeer-signer":    {},
+		"mistserver":         {},
+		"navigator":          {},
+		"periscope-ingest":   {},
+		"periscope-metering": {},
+		"periscope-query":    {},
+		"privateer":          {},
+		"purser":             {},
+		"quartermaster":      {},
+		"signalman":          {},
+		"skipper":            {},
+		"steward":            {},
+		"victoriametrics":    {},
+		"vmagent":            {},
+		"vmauth":             {},
 	}
 
 	type target struct {
@@ -5329,7 +5334,7 @@ type kafkaClusterView struct {
 //
 //   - periscope-ingest: writes central ClickHouse; every replica consumes the
 //     same aggregator Kafka topic set in one consumer group.
-//   - purser / periscope-query: central billing producer and consumer.
+//   - purser / periscope-metering: central billing consumer and producer.
 //   - commodore: central control-plane Kafka producer.
 //
 // Region-local services (decklog, signalman) and pool-assigned media services
@@ -5337,7 +5342,7 @@ type kafkaClusterView struct {
 // region resolution. See docs/architecture/service-events.md.
 func isAggregatorPinnedService(serviceType string) bool {
 	switch serviceType {
-	case "periscope-ingest", "purser", "periscope-query", "commodore":
+	case "periscope-ingest", "periscope-metering", "purser", "periscope-query", "commodore":
 		return true
 	default:
 		return false
@@ -6195,16 +6200,9 @@ func serviceRegistrationMetadata(name, hostName, clusterID string, manifest *inv
 		return nil, err
 	}
 
-	hostInfo, ok := manifest.GetHost(hostName)
-	if !ok {
-		return nil, fmt.Errorf("host %q not found in manifest", hostName)
-	}
-
 	metadata := map[string]string{
 		servicedefs.LivepeerGatewayMetadataPublicPort:   "443",
 		servicedefs.LivepeerGatewayMetadataPublicScheme: "https",
-		servicedefs.LivepeerGatewayMetadataAdminHost:    hostInfo.ExternalIP,
-		servicedefs.LivepeerGatewayMetadataAdminPort:    strconv.Itoa(portFromBindAddr(config.EnvVars["cli_addr"], 7935)),
 	}
 	if walletAddr := firstNonEmptyEnv(config.EnvVars, "eth_acct_addr", "LIVEPEER_ETH_ACCT_ADDR"); walletAddr != "" {
 		metadata[servicedefs.LivepeerGatewayMetadataWalletAddress] = walletAddr
@@ -6894,6 +6892,8 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		return nil, err
 	}
 	restrictClusterAccessSecrets(baseName, env)
+	restrictBasemapCredentials(baseName, env)
+	restrictMeteringSourceIdentity(baseName, env)
 
 	applyProductionRuntimeDefaults(manifest, env)
 	if err := validateProductionServiceEnv(manifest, baseName, env); err != nil {
@@ -6911,6 +6911,9 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 		applyLivepeerRPCPool(env, livepeerServiceHostIndex(task, manifest))
 	}
 	normalizeServiceEnvVars(baseName, env)
+	if err := validateLivepeerProductionEnv(manifest, task, baseName, env); err != nil {
+		return nil, err
+	}
 
 	// Shared platform secrets are validated (non-dev) or generated (dev) once
 	// in runProvision before tasks run — not per-task.
@@ -6961,6 +6964,9 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 // The shared SERVICE_TOKEN migration is tracked separately; these newer keys do
 // not need to inherit that ambient distribution model.
 func restrictClusterAccessSecrets(serviceID string, env map[string]string) {
+	if serviceID != "purser" {
+		delete(env, "X402_GAS_WALLET_PRIVKEY")
+	}
 	if serviceID != "quartermaster" && serviceID != "purser" {
 		delete(env, "CLUSTER_ACCESS_MATERIALIZATION_SECRET")
 	}
@@ -6980,6 +6986,41 @@ func restrictClusterAccessSecrets(serviceID string, env map[string]string) {
 		delete(env, "MEDIA_AUTHORITY_SEAL_PRIVATE_KEY_PEM_B64")
 	}
 	delete(env, "MEDIA_AUTHORITY_SEAL_ROOT_SECRET")
+	if serviceID != "livepeer-gateway" && serviceID != "livepeer-signer" {
+		delete(env, "LIVEPEER_ETH_KEYSTORE_B64")
+		delete(env, "LIVEPEER_ETH_KEYSTORE_PASSWORD")
+		delete(env, "keystore_path")
+		delete(env, "eth_password")
+		delete(env, "LIVEPEER_REMOTE_SIGNER_HEADERS")
+		delete(env, "remote_signer_headers")
+		delete(env, "LIVEPEER_REMOTE_SIGNER_WEBHOOK_URL")
+		delete(env, "remote_signer_webhook_url")
+		delete(env, "LIVEPEER_REMOTE_SIGNER_WEBHOOK_HEADERS")
+		delete(env, "remote_signer_webhook_headers")
+		delete(env, "remote_signer_allow_no_auth")
+	}
+}
+
+// CARTO_BASEMAP_BROWSER_KEY is a browser credential, but it still has no
+// business being delivered to backend services or to an interface configured
+// for another provider. Runtime config exposes it only after this least-scope
+// provisioning boundary has selected CARTO for Chartroom or Foredeck.
+func restrictBasemapCredentials(serviceID string, env map[string]string) {
+	if serviceID != "chartroom" && serviceID != "foredeck" {
+		delete(env, "CARTO_BASEMAP_BROWSER_KEY")
+		return
+	}
+	if strings.TrimSpace(env["BASEMAP_PROVIDER"]) != "carto" {
+		delete(env, "CARTO_BASEMAP_BROWSER_KEY")
+	}
+}
+
+func restrictMeteringSourceIdentity(serviceID string, env map[string]string) {
+	if serviceID == "periscope-metering" {
+		return
+	}
+	delete(env, "METERING_SOURCE_ID")
+	delete(env, "METERING_SOURCE_REGION")
 }
 
 func renderMediaAuthoritySealEnv(task *orchestrator.Task, manifest *inventory.Manifest, serviceID string, env map[string]string) error {
@@ -7557,6 +7598,20 @@ func validateProductionServiceEnv(manifest *inventory.Manifest, serviceID string
 	}
 
 	switch serviceID {
+	case "chartroom", "foredeck":
+		provider := strings.TrimSpace(env["BASEMAP_PROVIDER"])
+		style := strings.TrimSpace(env["BASEMAP_STYLE"])
+		switch {
+		case provider == "carto" && style == "dark-matter":
+			if strings.TrimSpace(env["CARTO_BASEMAP_BROWSER_KEY"]) == "" {
+				return fmt.Errorf("service %s: non-dev deploy requires CARTO_BASEMAP_BROWSER_KEY for carto/dark-matter", serviceID)
+			}
+		case provider == "openfreemap" && style == "dark":
+			return nil
+		default:
+			return fmt.Errorf("service %s: non-dev deploy requires BASEMAP_PROVIDER/BASEMAP_STYLE to be carto/dark-matter or openfreemap/dark", serviceID)
+		}
+		return nil
 	case "bridge":
 		if err := credentials.ValidateTelemetryTokenSecret(env["TELEMETRY_TOKEN_SECRET"]); err != nil {
 			return fmt.Errorf("service bridge: non-dev deploy: %w", err)
@@ -7564,12 +7619,34 @@ func validateProductionServiceEnv(manifest *inventory.Manifest, serviceID string
 		return nil
 	case "navigator":
 		return validateNavigatorProductionEnv(env)
+	case "periscope-metering":
+		sourceID := strings.TrimSpace(env["METERING_SOURCE_ID"])
+		if sourceID == "" {
+			return fmt.Errorf("service periscope-metering: non-dev deploy requires METERING_SOURCE_ID")
+		}
+		if len(sourceID) > 128 || !meteringSourceIDPattern.MatchString(sourceID) {
+			return fmt.Errorf("service periscope-metering: METERING_SOURCE_ID %q must match %s and be at most 128 characters", sourceID, meteringSourceIDPattern.String())
+		}
+		sourceRegion := strings.TrimSpace(env["METERING_SOURCE_REGION"])
+		if sourceRegion == "" {
+			return fmt.Errorf("service periscope-metering: non-dev deploy requires METERING_SOURCE_REGION")
+		}
+		if len(sourceRegion) > 64 || !meteringSourceIDPattern.MatchString(sourceRegion) {
+			return fmt.Errorf("service periscope-metering: METERING_SOURCE_REGION %q must match %s and be at most 64 characters", sourceRegion, meteringSourceIDPattern.String())
+		}
 	case "quartermaster", "commodore", "purser":
 		if strings.TrimSpace(env["DATABASE_HOST"]) == "" {
 			return fmt.Errorf("service %s: non-dev deploy requires DATABASE_HOST", serviceID)
 		}
 		if strings.TrimSpace(env["DATABASE_PASSWORD"]) == "" && strings.TrimSpace(env["DATABASE_URL"]) == "" {
 			return fmt.Errorf("service %s: non-dev deploy requires DATABASE_PASSWORD (or DATABASE_URL with embedded credentials)", serviceID)
+		}
+		if serviceID == "purser" && truthyLivepeerSetting(env["LIVEPEER_DEPOSIT_MONITOR_ENABLED"]) {
+			for _, key := range []string{"ARBITRUM_RPC_ENDPOINT", "X402_GAS_WALLET_ADDRESS", "X402_GAS_WALLET_PRIVKEY"} {
+				if strings.TrimSpace(env[key]) == "" {
+					return fmt.Errorf("service purser: enabled Livepeer deposit monitor requires %s", key)
+				}
+			}
 		}
 	}
 	var requiredAuthority []string
@@ -7587,6 +7664,8 @@ func validateProductionServiceEnv(manifest *inventory.Manifest, serviceID string
 
 	return nil
 }
+
+var meteringSourceIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
 
 func validateNavigatorProductionEnv(env map[string]string) error {
 	fileKeys := []string{
@@ -7640,6 +7719,7 @@ func normalizeServiceEnvVars(serviceID string, env map[string]string) {
 		}
 	case "livepeer-signer":
 		normalizeLivepeerEnvVars(env)
+		applyLivepeerSignerRuntimeDefaults(env)
 	}
 }
 
@@ -7680,9 +7760,10 @@ func manifestServiceEnabledForDeploy(manifest *inventory.Manifest, deploy string
 func applyLivepeerGatewayRuntimeDefaults(env map[string]string) {
 	defaults := map[string]string{
 		"network":                "arbitrum-one-mainnet",
-		"http_addr":              "0.0.0.0:8935",
+		"http_addr":              "127.0.0.1:8935",
 		"http_ingest":            "true",
-		"cli_addr":               ":7935",
+		"cli_addr":               "127.0.0.1:7935",
+		"trusted_proxy_cidrs":    "127.0.0.1/32,::1/128",
 		"rtmp_addr":              "",
 		"max_sessions":           "500",
 		"max_price_per_unit":     "1200",
@@ -7696,6 +7777,12 @@ func applyLivepeerGatewayRuntimeDefaults(env map[string]string) {
 		if _, ok := env[key]; !ok {
 			env[key] = value
 		}
+	}
+}
+
+func applyLivepeerSignerRuntimeDefaults(env map[string]string) {
+	if _, ok := env["cli_addr"]; !ok {
+		env["cli_addr"] = "127.0.0.1:3935"
 	}
 }
 
@@ -8026,18 +8113,101 @@ func normalizeLivepeerEnvVars(env map[string]string) {
 	setEnvIfEmpty(env, "eth_acct_addr", "LIVEPEER_ETH_ACCT_ADDR")
 	setEnvIfEmpty(env, "orch_webhook_url", "LIVEPEER_ORCH_WEBHOOK_URL")
 	setEnvIfEmpty(env, "remote_signer_url", "LIVEPEER_REMOTE_SIGNER_URL")
+	setEnvIfEmpty(env, "remote_signer_headers", "LIVEPEER_REMOTE_SIGNER_HEADERS")
+	setEnvIfEmpty(env, "remote_signer_webhook_url", "LIVEPEER_REMOTE_SIGNER_WEBHOOK_URL")
+	setEnvIfEmpty(env, "remote_signer_webhook_headers", "LIVEPEER_REMOTE_SIGNER_WEBHOOK_HEADERS")
 	setEnvIfEmpty(env, "auth_webhook_url", "LIVEPEER_AUTH_WEBHOOK_URL")
+	setEnvIfEmpty(env, "trusted_proxy_cidrs", "LIVEPEER_TRUSTED_PROXY_CIDRS")
+	setEnvIfEmpty(env, "enable_cli_tx_routes", "LIVEPEER_ENABLE_CLI_TX_ROUTES")
+}
+
+func validateLivepeerProductionEnv(manifest *inventory.Manifest, task *orchestrator.Task, serviceID string, env map[string]string) error {
+	if isDevProfile(manifest) || (serviceID != "livepeer-gateway" && serviceID != "livepeer-signer") {
+		return nil
+	}
+	for _, key := range []string{"cli_addr"} {
+		if !isLoopbackBindAddress(env[key]) {
+			return fmt.Errorf("service %s: non-dev deploy requires %s to bind loopback", serviceID, key)
+		}
+	}
+	if serviceID == "livepeer-signer" {
+		if strings.TrimSpace(env["keystore_path"]) == "" && strings.TrimSpace(env["LIVEPEER_ETH_KEYSTORE_B64"]) == "" {
+			return fmt.Errorf("service livepeer-signer: non-dev deploy requires a local keystore")
+		}
+		if strings.TrimSpace(env["eth_password"]) == "" && strings.TrimSpace(env["LIVEPEER_ETH_KEYSTORE_PASSWORD"]) == "" {
+			return fmt.Errorf("service livepeer-signer: non-dev deploy requires a keystore password")
+		}
+		if strings.TrimSpace(env["eth_url"]) == "" {
+			return fmt.Errorf("service livepeer-signer: non-dev deploy requires eth_url")
+		}
+		if truthyLivepeerSetting(env["remote_signer_allow_no_auth"]) {
+			return fmt.Errorf("service livepeer-signer: remote_signer_allow_no_auth is forbidden")
+		}
+		httpHost, _, err := net.SplitHostPort(strings.TrimSpace(env["http_addr"]))
+		if err != nil || net.ParseIP(strings.Trim(httpHost, "[]")) == nil || net.ParseIP(strings.Trim(httpHost, "[]")).IsUnspecified() {
+			return fmt.Errorf("service livepeer-signer: non-dev deploy requires http_addr to bind an explicit address")
+		}
+		if strings.TrimSpace(env["remote_signer_webhook_url"]) == "" {
+			if task == nil || task.Host == "" {
+				return fmt.Errorf("service livepeer-signer: cannot verify http_addr without an assigned host")
+			}
+			host, ok := manifest.GetHost(task.Host)
+			if !ok || strings.TrimSpace(host.WireguardIP) == "" || strings.Trim(httpHost, "[]") != strings.TrimSpace(host.WireguardIP) {
+				return fmt.Errorf("service livepeer-signer: http_addr must bind the assigned host wireguard_ip unless remote_signer_webhook_url is configured")
+			}
+		}
+		return nil
+	}
+	if !isLoopbackBindAddress(env["http_addr"]) {
+		return fmt.Errorf("service livepeer-gateway: non-dev deploy requires http_addr to bind loopback behind the media_ingest proxy")
+	}
+	if strings.TrimSpace(env["eth_acct_addr"]) == "" {
+		return fmt.Errorf("service livepeer-gateway: non-dev deploy requires eth_acct_addr")
+	}
+	if strings.TrimSpace(env["keystore_path"]) == "" && strings.TrimSpace(env["LIVEPEER_ETH_KEYSTORE_B64"]) == "" {
+		return fmt.Errorf("service livepeer-gateway: non-dev deploy requires a local keystore")
+	}
+	if strings.TrimSpace(env["remote_signer_url"]) != "" {
+		return fmt.Errorf("service livepeer-gateway: remote_signer_url is not supported for transcode gateways until remote ticket-batch signing is implemented")
+	}
+	if strings.TrimSpace(env["auth_webhook_url"]) == "" {
+		return fmt.Errorf("service livepeer-gateway: non-dev deploy requires auth_webhook_url")
+	}
+	if truthyLivepeerSetting(env["remote_signer_allow_no_auth"]) {
+		return fmt.Errorf("service livepeer-gateway: remote_signer_allow_no_auth is forbidden")
+	}
+	for _, cidr := range strings.Split(env["trusted_proxy_cidrs"], ",") {
+		_, network, err := net.ParseCIDR(strings.TrimSpace(cidr))
+		if err != nil || network == nil || !network.IP.IsLoopback() {
+			return fmt.Errorf("service livepeer-gateway: trusted_proxy_cidrs must contain only loopback proxies")
+		}
+	}
+	return nil
+}
+
+func isLoopbackBindAddress(value string) bool {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(value))
+	if err != nil {
+		return false
+	}
+	host = strings.Trim(host, "[]")
+	return strings.EqualFold(host, "localhost") || (net.ParseIP(host) != nil && net.ParseIP(host).IsLoopback())
+}
+
+func truthyLivepeerSetting(value string) bool {
+	parsed, err := strconv.ParseBool(strings.TrimSpace(value))
+	return err == nil && parsed
 }
 
 func validateGatewayMeshCoverage(manifest *inventory.Manifest) error {
-	gateways := servicesByDeploy(manifest, "livepeer-gateway")
-	if len(gateways) == 0 {
+	services := append(servicesByDeploy(manifest, "livepeer-gateway"), servicesByDeploy(manifest, "livepeer-signer")...)
+	if len(services) == 0 {
 		return nil
 	}
 
 	privateerSvc, ok := manifest.Services["privateer"]
 	if !ok || !privateerSvc.Enabled {
-		return fmt.Errorf("livepeer-gateway requires privateer to resolve foghorn.internal")
+		return fmt.Errorf("livepeer services require privateer coverage")
 	}
 
 	privateerHosts := make(map[string]struct{})
@@ -8045,19 +8215,19 @@ func validateGatewayMeshCoverage(manifest *inventory.Manifest) error {
 		privateerHosts[hostName] = struct{}{}
 	}
 
-	for _, gatewaySvc := range gateways {
-		if !gatewaySvc.Enabled {
+	for _, livepeerSvc := range services {
+		if !livepeerSvc.Enabled {
 			continue
 		}
-		var gatewayHosts []string
-		if len(gatewaySvc.Hosts) > 0 {
-			gatewayHosts = gatewaySvc.Hosts
-		} else if gatewaySvc.Host != "" {
-			gatewayHosts = []string{gatewaySvc.Host}
+		var serviceHosts []string
+		if len(livepeerSvc.Hosts) > 0 {
+			serviceHosts = livepeerSvc.Hosts
+		} else if livepeerSvc.Host != "" {
+			serviceHosts = []string{livepeerSvc.Host}
 		}
-		for _, hostName := range gatewayHosts {
+		for _, hostName := range serviceHosts {
 			if _, ok := privateerHosts[hostName]; !ok {
-				return fmt.Errorf("livepeer-gateway host %q is not covered by privateer; gateway auth webhook uses foghorn.internal", hostName)
+				return fmt.Errorf("livepeer service host %q is not covered by privateer", hostName)
 			}
 		}
 	}

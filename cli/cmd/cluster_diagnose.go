@@ -352,16 +352,17 @@ func mediaDiagnosticHostServices(manifest *inventory.Manifest) map[string][]stri
 		return out
 	}
 	serviceTypes := map[string]struct{}{
-		"bridge":           {},
-		"chandler":         {},
-		"commodore":        {},
-		"decklog":          {},
-		"foghorn":          {},
-		"livepeer-gateway": {},
-		"navigator":        {},
-		"periscope-query":  {},
-		"quartermaster":    {},
-		"signalman":        {},
+		"bridge":             {},
+		"chandler":           {},
+		"commodore":          {},
+		"decklog":            {},
+		"foghorn":            {},
+		"livepeer-gateway":   {},
+		"navigator":          {},
+		"periscope-metering": {},
+		"periscope-query":    {},
+		"quartermaster":      {},
+		"signalman":          {},
 	}
 
 	for name, svc := range manifest.Services {
@@ -395,6 +396,7 @@ func mediaDiagnosticPorts() []int {
 		"foghorn",
 		"livepeer-gateway",
 		"navigator",
+		"periscope-metering",
 		"periscope-query",
 		"quartermaster",
 		"signalman",

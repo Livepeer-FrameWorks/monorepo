@@ -6,6 +6,7 @@ profiles:
     - purser
     - periscope-ingest
     - periscope-query
+    - periscope-metering
     - foghorn
     - decklog
     - signalman
@@ -28,6 +29,7 @@ profiles:
     - signalman
     - periscope-ingest
     - periscope-query
+    - periscope-metering
   control:
     - bridge
     - commodore
@@ -39,6 +41,7 @@ profiles:
     - signalman
     - periscope-ingest
     - periscope-query
+    - periscope-metering
     - chandler
   media:
     - foghorn
@@ -139,6 +142,16 @@ services:
       protocol: http
       path: /health
       port: 18004
+  periscope-metering:
+    name: periscope-metering
+    title: Periscope Metering
+    role: analytics
+    image: ghcr.io/livepeer-frameworks/frameworks-periscope-metering:latest
+    ports: ["18021:18021"]
+    health:
+      protocol: http
+      path: /health
+      port: 18021
   purser:
     name: purser
     title: Purser (Billing)
@@ -207,7 +220,7 @@ services:
     ports: ["8935:8935"]
     health:
       protocol: http
-      path: /status
+      path: /healthz
       port: 8935
   livepeer-signer:
     name: livepeer-signer

@@ -615,6 +615,49 @@ func TestPlan_SkipperDependsOnBridge(t *testing.T) {
 	}
 }
 
+func TestPlan_PeriscopeMeteringCutoverOrder(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"central-1": {ExternalIP: "10.0.0.1"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"periscope-query":    {Enabled: true, Host: "central-1"},
+			"purser":             {Enabled: true, Host: "central-1"},
+			"periscope-metering": {Enabled: true, Host: "central-1"},
+		},
+	}
+	plan, err := NewPlanner(manifest).Plan(context.Background(), ProvisionOptions{Phase: PhaseApplications})
+	if err != nil {
+		t.Fatalf("plan applications: %v", err)
+	}
+
+	byName := map[string]*Task{}
+	for _, task := range plan.AllTasks {
+		byName[task.Name] = task
+	}
+	purser := byName["purser"]
+	metering := byName["periscope-metering"]
+	if purser == nil || metering == nil {
+		t.Fatalf("missing tasks: purser=%v metering=%v", purser, metering)
+	}
+	if !slices.Contains(purser.DependsOn, "periscope-query") {
+		t.Fatalf("purser deps = %v, want periscope-query first", purser.DependsOn)
+	}
+	for _, dependency := range []string{"periscope-query", "purser"} {
+		if !slices.Contains(metering.DependsOn, dependency) {
+			t.Fatalf("metering deps = %v, want %s", metering.DependsOn, dependency)
+		}
+	}
+
+	position := map[string]int{}
+	for i, task := range plan.AllTasks {
+		position[task.Name] = i
+	}
+	if position["periscope-query"] >= position["purser"] || position["purser"] >= position["periscope-metering"] {
+		t.Fatalf("cutover order positions = query:%d purser:%d metering:%d", position["periscope-query"], position["purser"], position["periscope-metering"])
+	}
+}
+
 // Serving is runtime-independent: Chandler resolves nothing at request time (a dumb path→S3-key cache), so it has no
 // runtime dependency on Foghorn's version. INSTALL is ordered: Chandler reads the /ready sentinel the in-cell Foghorn
 // establishes, so the planner adds a Chandler→Foghorn deploy edge and requires the pair per cell. See

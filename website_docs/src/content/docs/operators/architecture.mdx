@@ -66,21 +66,21 @@ The FrameWorks platform is composed of specialized services, each responsible fo
 
 ### Infrastructure Components
 
-| Component                                    | Role                                                     | Plane                         | Port(s)                                           | Deploy Location                            |
-| -------------------------------------------- | -------------------------------------------------------- | ----------------------------- | ------------------------------------------------- | ------------------------------------------ |
-| MistServer                                   | Media processing, ingest, and edge delivery              | Media                         | 4242, 8080, 1935, 5554, 4200, 8889/udp, 18203/udp | Edge                                       |
-| Livepeer Gateway                             | Transcoding gateway and compute-marketplace integration  | Media                         | 8935                                              | Edge (co-located with MistServer)          |
-| Livepeer Signer                              | ETH transaction signer for gateway                       | Control / API                 | 18016                                             | Central                                    |
-| PostgreSQL-compatible DB (Postgres/Yugabyte) | Service-owned state and configuration database substrate | Infrastructure                | Operator-defined                                  | Central                                    |
-| ClickHouse                                   | Time-series analytics database                           | Event & Analytics             | 8123 (HTTP), 9000 (Native)                        | Central                                    |
-| Kafka                                        | Event streaming backbone                                 | Event & Analytics             | 9092 (Int), 29092 (Ext)                           | Central + Regional (single shared cluster) |
-| Foghorn Redis                                | Foghorn HA state sync                                    | Media                         | 6379                                              | Regional                                   |
-| Nginx                                        | Reverse proxy and local development routing              | Network & Trust               | 18090                                             | Central                                    |
-| Caddy                                        | Edge TLS termination and reverse proxy                   | Network & Trust               | 80, 443, 18090                                    | Edge                                       |
-| VictoriaMetrics + vmagent                    | Metrics collection and remote-write fan-in               | Observability & Operations    | Operator-defined                                  | Central + every backend and edge host      |
-| Grafana                                      | Metrics visualization                                    | Observability & Operations    | Operator-defined                                  | Central                                    |
-| Metabase                                     | BI analytics                                             | Observability & Operations    | Operator-defined                                  | Central                                    |
-| Listmonk                                     | Newsletter and mailing list manager                      | Support & Experience Services | 9000 (service), 9001 (docker-compose host)        | Central                                    |
+| Component                                    | Role                                                        | Plane                         | Port(s)                                           | Deploy Location                            |
+| -------------------------------------------- | ----------------------------------------------------------- | ----------------------------- | ------------------------------------------------- | ------------------------------------------ |
+| MistServer                                   | Media processing, ingest, and edge delivery                 | Media                         | 4242, 8080, 1935, 5554, 4200, 8889/udp, 18203/udp | Edge                                       |
+| Livepeer Gateway                             | Transcoding gateway and compute-marketplace integration     | Media                         | 8935                                              | Edge (co-located with MistServer)          |
+| Livepeer Signer (planned)                    | Future ticket-batch signer; not wired to transcode gateways | Control / API                 | 18016                                             | Central                                    |
+| PostgreSQL-compatible DB (Postgres/Yugabyte) | Service-owned state and configuration database substrate    | Infrastructure                | Operator-defined                                  | Central                                    |
+| ClickHouse                                   | Time-series analytics database                              | Event & Analytics             | 8123 (HTTP), 9000 (Native)                        | Central                                    |
+| Kafka                                        | Event streaming backbone                                    | Event & Analytics             | 9092 (Int), 29092 (Ext)                           | Central + Regional (single shared cluster) |
+| Foghorn Redis                                | Foghorn HA state sync                                       | Media                         | 6379                                              | Regional                                   |
+| Nginx                                        | Reverse proxy and local development routing                 | Network & Trust               | 18090                                             | Central                                    |
+| Caddy                                        | Edge TLS termination and reverse proxy                      | Network & Trust               | 80, 443, 18090                                    | Edge                                       |
+| VictoriaMetrics + vmagent                    | Metrics collection and remote-write fan-in                  | Observability & Operations    | Operator-defined                                  | Central + every backend and edge host      |
+| Grafana                                      | Metrics visualization                                       | Observability & Operations    | Operator-defined                                  | Central                                    |
+| Metabase                                     | BI analytics                                                | Observability & Operations    | Operator-defined                                  | Central                                    |
+| Listmonk                                     | Newsletter and mailing list manager                         | Support & Experience Services | 9000 (service), 9001 (docker-compose host)        | Central                                    |
 
 **Livepeer integration**: The Livepeer Gateway is provisioned via the CLI and discovered via Quartermaster service discovery. MistServer sends segments to the gateway automatically when Livepeer transcoding is configured for a stream. Ingest auth stays in the media plane: the gateway calls Foghorn's internal `/webhooks/livepeer/auth` webhook, and wallet/top-up automation reads `wallet_address` from Quartermaster service-instance metadata.
 
@@ -174,6 +174,29 @@ Foghorn routes analytics to Decklog and performs media admission/routing from
 its signed local authority plus local runtime state. Connected control-plane
 lookups remain for new mutations, bootstrap, mixed-version shadowing, and
 explicit online-only operations such as new x402 settlement.
+
+Analytics keeps physical placement separate from control-plane and content
+origin. `cluster_id` identifies the authenticated cluster of the node that
+served or performed work; `origin_cluster_id` identifies where the content
+originated; `control_cell_id` identifies the Foghorn/media-authority cell that
+made or observed the decision. One control cell may manage multiple media
+clusters, so operators should not treat these fields as aliases.
+
+The API exposes three deliberately different views: anonymous callers receive
+official cluster-level network status; tenants receive viewer, routing,
+processing, storage, and federation facts for content they own; cluster owners
+receive private node/service topology and operational metrics for clusters they
+own. Marketplace/subscription access adds aggregate cluster status but never
+another tenant's streams, sessions, URLs, or raw node telemetry.
+
+Cluster owners can use the `analytics.infra.clusterWorkload` GraphQL field for
+the redacted operational overlay: viewer, ingest, processing, storage, and
+federation work grouped by owned cluster, node, and work kind. It includes
+counts, active work, bytes, media seconds, and errors, but deliberately omits
+tenant, content, stream, session, URL, and client identifiers. Each row says
+whether it represents activity in the requested window or a freshness-bounded
+current observation. Current storage rows also retain their hot/cold scope and
+observation time; resident bytes are never added to lifecycle-event byte flow.
 
 ### Control / API Communications
 

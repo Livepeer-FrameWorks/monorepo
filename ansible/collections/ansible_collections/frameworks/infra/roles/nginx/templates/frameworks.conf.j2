@@ -46,6 +46,42 @@
 {% endif %}
 {% endfor %}
 {% endmacro %}
+{# The runtime config contains only browser-visible, allowlisted values. It must
+   not be cached so provider changes and browser-key rotation apply at once.
+   Only decorate sites that already route this path. #}
+{% macro runtime_config_location(site, profile) %}
+{% set site_prefixes = site.path_prefixes | default(['/']) %}
+{% set route = namespace(serves=false) %}
+{% for site_prefix in site_prefixes %}
+{% if site_prefix and '/runtime-config.js'.startswith(site_prefix) %}
+{% set route.serves = true %}
+{% endif %}
+{% endfor %}
+{% if route.serves %}
+    location = /runtime-config.js {
+        proxy_hide_header Cache-Control;
+        proxy_hide_header Expires;
+        add_header Cache-Control "no-store" always;
+        proxy_pass {{ site.proxy_pass }};
+        proxy_http_version 1.1;
+        client_max_body_size {{ site.client_max_body_size | default(profile.client_max_body_size) }};
+        client_body_timeout {{ site.client_body_timeout | default(profile.client_body_timeout) }};
+        send_timeout {{ site.send_timeout | default(profile.send_timeout) }};
+        proxy_request_buffering {{ 'on' if site.proxy_request_buffering | default(profile.proxy_request_buffering) else 'off' }};
+        proxy_buffering {{ 'on' if site.proxy_buffering | default(profile.proxy_buffering) else 'off' }};
+        proxy_buffer_size {{ site.proxy_buffer_size | default(profile.proxy_buffer_size) }};
+        proxy_buffers {{ site.proxy_buffers | default(profile.proxy_buffers) }};
+        proxy_busy_buffers_size {{ site.proxy_busy_buffers_size | default(profile.proxy_busy_buffers_size) }};
+        proxy_connect_timeout {{ site.proxy_connect_timeout | default(profile.proxy_connect_timeout) }};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout {{ site.proxy_read_timeout | default(profile.proxy_read_timeout) }};
+        proxy_send_timeout {{ site.proxy_send_timeout | default(profile.proxy_send_timeout) }};
+    }
+{% endif %}
+{% endmacro %}
 {% if nginx_sites | length == 0 %}
 server {
     listen {{ nginx_http_port }} default_server;
@@ -133,9 +169,16 @@ server {
     listen {{ nginx_http_port }};
     server_name {{ site.domains | join(' ') }};
 
+{% if profile_name != 'media_ingest' %}
+{{ runtime_config_location(site, profile) }}
+{% endif %}
 {{ credential_path_locations(site, profile) }}
-{% for path_prefix in site.path_prefixes | default(['/']) %}
-    location {{ path_prefix }} {
+{% set effective_path_prefixes = ['/live/'] if profile_name == 'media_ingest' else site.path_prefixes | default(['/']) %}
+{% for path_prefix in effective_path_prefixes %}
+    location {% if profile_name == 'media_ingest' %}^~ {% endif %}{{ path_prefix }} {
+{% if profile_name == 'media_ingest' %}
+        limit_except POST PUT { deny all; }
+{% endif %}
 {% if path_prefix in ['/ingest/', '/webrtc/', '/ingest', '/webrtc'] %}
 {# Declared explicitly by the site: suppress error logging here rather
    than emitting a duplicate decorated location. #}
@@ -154,7 +197,7 @@ server {
         proxy_connect_timeout {{ site.proxy_connect_timeout | default(profile.proxy_connect_timeout) }};
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For {{ '$remote_addr' if profile_name == 'media_ingest' else '$proxy_add_x_forwarded_for' }};
         proxy_set_header X-Forwarded-Proto $scheme;
 {% if site.websocket | default(profile.websocket) %}
         proxy_set_header Upgrade $http_upgrade;
@@ -227,9 +270,16 @@ server {
     ssl_certificate_key {{ site.tls_key_path }};
     add_header Strict-Transport-Security "max-age=31536000" always;
 
+{% if profile_name != 'media_ingest' %}
+{{ runtime_config_location(site, profile) }}
+{% endif %}
 {{ credential_path_locations(site, profile) }}
-{% for path_prefix in site.path_prefixes | default(['/']) %}
-    location {{ path_prefix }} {
+{% set effective_path_prefixes = ['/live/'] if profile_name == 'media_ingest' else site.path_prefixes | default(['/']) %}
+{% for path_prefix in effective_path_prefixes %}
+    location {% if profile_name == 'media_ingest' %}^~ {% endif %}{{ path_prefix }} {
+{% if profile_name == 'media_ingest' %}
+        limit_except POST PUT { deny all; }
+{% endif %}
 {% if path_prefix in ['/ingest/', '/webrtc/', '/ingest', '/webrtc'] %}
 {# Declared explicitly by the site: suppress error logging here rather
    than emitting a duplicate decorated location. #}
@@ -248,7 +298,7 @@ server {
         proxy_connect_timeout {{ site.proxy_connect_timeout | default(profile.proxy_connect_timeout) }};
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For {{ '$remote_addr' if profile_name == 'media_ingest' else '$proxy_add_x_forwarded_for' }};
         proxy_set_header X-Forwarded-Proto $scheme;
 {% if site.websocket | default(profile.websocket) %}
         proxy_set_header Upgrade $http_upgrade;

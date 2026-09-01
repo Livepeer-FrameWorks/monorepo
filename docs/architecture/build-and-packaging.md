@@ -60,6 +60,10 @@ of truth for their runner and compiler details.
 ### Docker Images
 
 Service and webapp Docker images are built per arch, then `merge-image-manifests` and `merge-webapp-manifests` assemble multi-arch tags for GHCR and Docker Hub.
+When multiple binaries share one Dockerfile/context, the component catalog's
+optional `docker_cmd` selects the command package passed as `CMD_PACKAGE`.
+It must match the component's native `cmd`; release tests enforce this for the
+Periscope Query and Metering sibling binaries.
 
 ## Code Signing & Notarization
 
@@ -158,7 +162,7 @@ The hash inputs match `tools/release-plan/hash.go`:
 | `<service>/go.mod` + `go.sum`                                                                                                                                                              | Third-party dependency pins                                                                        |
 | `pkg/go.mod` + `pkg/go.sum`                                                                                                                                                                | Required because of `replace github.com/Livepeer-FrameWorks/monorepo/pkg => ../pkg`                |
 | `<service>/Dockerfile`                                                                                                                                                                     | Image build is a function of the Dockerfile too                                                    |
-| The component's `release-components.json` entry (cgo, darwin_binary flags)                                                                                                                 | Build flags affect output                                                                          |
+| The component's `release-components.json` entry (`cmd`, `docker_cmd`, cgo, darwin_binary flags)                                                                                            | Entrypoints and build flags affect output                                                          |
 | `.go-version` (Go toolchain)                                                                                                                                                               | Toolchain bumps invalidate everything                                                              |
 | Workflow salt: `sha256(release.yml + tools/release-plan/*.go excluding *_test.go)`                                                                                                         | CI build-logic changes force a full rebuild                                                        |
 

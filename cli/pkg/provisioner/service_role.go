@@ -389,6 +389,7 @@ func serviceNativeVars(ctx context.Context, cfg ServiceRoleConfig, host inventor
 		"go_service_livepeer_expected_wallet_address": envMap["eth_acct_addr"],
 		"go_service_data_migrations_marker":           dataMigrationsMarker(cfg, config),
 		"go_service_supports_sighup_reload":           servicedefs.SupportsSIGHUPReload(cfg.ServiceName),
+		"go_service_sandbox":                          cfg.ServiceName == "livepeer-gateway" || cfg.ServiceName == "livepeer-signer",
 	}
 	if ca := metaString(config.Metadata, "internal_ca_bundle_pem"); ca != "" {
 		vars["go_service_internal_ca_bundle_pem"] = ca
@@ -593,8 +594,15 @@ func livepeerNativeArgs(serviceName string, env map[string]string, stateDirs []s
 		{"http_addr", "httpAddr"},
 		{"http_ingest", "httpIngest"},
 		{"cli_addr", "cliAddr"},
+		{"trusted_proxy_cidrs", "trustedProxyCIDRs"},
 		{"rtmp_addr", "rtmpAddr"},
+		{"enable_cli_tx_routes", "enableCliTxRoutes"},
+		{"max_total_ev", "maxTotalEV"},
 		{"remote_signer_url", "remoteSignerUrl"},
+		{"remote_signer_headers", "remoteSignerHeaders"},
+		{"remote_signer_webhook_url", "remoteSignerWebhookUrl"},
+		{"remote_signer_webhook_headers", "remoteSignerWebhookHeaders"},
+		{"remote_signer_allow_no_auth", "remoteSignerAllowNoAuth"},
 		{"auth_webhook_url", "authWebhookUrl"},
 		{"gateway_host", "gatewayHost"},
 		{"max_sessions", "maxSessions"},
@@ -611,9 +619,14 @@ func livepeerNativeArgs(serviceName string, env map[string]string, stateDirs []s
 		{"keystore_path", "ethKeystorePath"},
 		{"eth_password", "ethPassword"},
 	} {
-		if value, ok := env[mapping.envKey]; ok {
-			args = append(args, "-"+mapping.flag+"="+value)
+		value, configured := env[mapping.envKey]
+		// rtmp_addr deliberately supports an explicit empty value to disable
+		// go-livepeer's listener. Other empty settings must not emit malformed
+		// or misleading command-line flags.
+		if !configured || (strings.TrimSpace(value) == "" && mapping.envKey != "rtmp_addr") {
+			continue
 		}
+		args = append(args, "-"+mapping.flag+"="+value)
 	}
 
 	return args

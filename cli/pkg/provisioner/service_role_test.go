@@ -540,26 +540,33 @@ func TestServiceNativeVarsBuildsLivepeerGatewayArgsAndStateDir(t *testing.T) {
 		Version:   "vtest",
 		BinaryURL: "https://example.test/livepeer.tar.gz",
 		EnvVars: map[string]string{
-			"network":                "arbitrum-one-mainnet",
-			"http_addr":              "0.0.0.0:8935",
-			"http_ingest":            "true",
-			"cli_addr":               ":7935",
-			"rtmp_addr":              "",
-			"auth_webhook_url":       "http://foghorn.internal:18008/webhooks/livepeer/auth",
-			"gateway_host":           "livepeer.media.example",
-			"max_sessions":           "500",
-			"max_price_per_unit":     "1200",
-			"pixels_per_unit":        "1",
-			"max_ticket_ev":          "3000000000000",
-			"deposit_multiplier":     "1",
-			"block_polling_interval": "20",
-			"monitor":                "true",
-			"remote_signer_url":      "http://127.0.0.1:18016",
-			"eth_url":                "https://arb.example",
-			"eth_acct_addr":          "0xabc123",
-			"orch_webhook_url":       "https://orch.example",
-			"remote_discovery":       "true",
-			"keystore_path":          "/etc/frameworks/livepeer-keystore",
+			"network":                       "arbitrum-one-mainnet",
+			"http_addr":                     "127.0.0.1:8935",
+			"http_ingest":                   "true",
+			"cli_addr":                      "127.0.0.1:7935",
+			"trusted_proxy_cidrs":           "127.0.0.1/32,::1/128",
+			"enable_cli_tx_routes":          "true",
+			"max_total_ev":                  "9000000000000",
+			"rtmp_addr":                     "",
+			"auth_webhook_url":              "http://foghorn.internal:18008/webhooks/livepeer/auth",
+			"gateway_host":                  "livepeer.media.example",
+			"max_sessions":                  "500",
+			"max_price_per_unit":            "1200",
+			"pixels_per_unit":               "1",
+			"max_ticket_ev":                 "3000000000000",
+			"deposit_multiplier":            "1",
+			"block_polling_interval":        "20",
+			"monitor":                       "true",
+			"remote_signer_url":             "http://127.0.0.1:18016",
+			"remote_signer_headers":         "Authorization: Bearer test",
+			"remote_signer_webhook_url":     "https://auth.example",
+			"remote_signer_webhook_headers": "X-Test: yes",
+			"remote_signer_allow_no_auth":   "false",
+			"eth_url":                       "https://arb.example",
+			"eth_acct_addr":                 "0xabc123",
+			"orch_webhook_url":              "https://orch.example",
+			"remote_discovery":              "true",
+			"keystore_path":                 "/etc/frameworks/livepeer-keystore",
 		},
 		Metadata: map[string]any{},
 	}, RoleBuildHelpers{})
@@ -585,11 +592,18 @@ func TestServiceNativeVarsBuildsLivepeerGatewayArgsAndStateDir(t *testing.T) {
 		"-gateway",
 		"-dataDir=/var/lib/frameworks/livepeer-gateway",
 		"-network=arbitrum-one-mainnet",
-		"-httpAddr=0.0.0.0:8935",
+		"-httpAddr=127.0.0.1:8935",
 		"-httpIngest=true",
-		"-cliAddr=:7935",
+		"-cliAddr=127.0.0.1:7935",
+		"-trustedProxyCIDRs=127.0.0.1/32,::1/128",
 		"-rtmpAddr=",
+		"-enableCliTxRoutes=true",
+		"-maxTotalEV=9000000000000",
 		"-remoteSignerUrl=http://127.0.0.1:18016",
+		"-remoteSignerHeaders=Authorization: Bearer test",
+		"-remoteSignerWebhookUrl=https://auth.example",
+		"-remoteSignerWebhookHeaders=X-Test: yes",
+		"-remoteSignerAllowNoAuth=false",
 		"-authWebhookUrl=http://foghorn.internal:18008/webhooks/livepeer/auth",
 		"-gatewayHost=livepeer.media.example",
 		"-maxSessions=500",
@@ -605,6 +619,9 @@ func TestServiceNativeVarsBuildsLivepeerGatewayArgsAndStateDir(t *testing.T) {
 		"-remoteDiscovery=true",
 		"-ethKeystorePath=/etc/frameworks/livepeer-keystore",
 	})
+	if got := vars["go_service_sandbox"]; got != true {
+		t.Fatalf("go_service_sandbox got %v, want true", got)
+	}
 }
 
 func TestServiceNativeVarsMaterializesLivepeerKeystoreFiles(t *testing.T) {
@@ -667,6 +684,46 @@ func TestServiceNativeVarsMaterializesLivepeerKeystoreFiles(t *testing.T) {
 	}
 	if got := vars["go_service_livepeer_expected_keystore_dir"]; got != "/var/lib/frameworks/livepeer-gateway/keystore" {
 		t.Fatalf("unexpected expected keystore dir: %v", got)
+	}
+}
+
+func TestLivepeerNativeArgsIgnoreEmptyOptionalFlags(t *testing.T) {
+	args := livepeerNativeArgs("livepeer-signer", map[string]string{
+		"rtmp_addr":                     "",
+		"max_total_ev":                  "  ",
+		"remote_signer_headers":         "",
+		"remote_signer_webhook_url":     "",
+		"remote_signer_webhook_headers": "",
+		"remote_signer_allow_no_auth":   "",
+	}, nil)
+	assertStringSlice(t, args, []string{"-remoteSigner", "-rtmpAddr="})
+}
+
+func TestLivepeerNativeSandboxAppliesOnlyToGatewayAndSigner(t *testing.T) {
+	for _, serviceName := range []string{"livepeer-gateway", "livepeer-signer"} {
+		vars, err := serviceNativeVars(context.Background(), ServiceRoleConfig{
+			ServiceName: serviceName,
+			DefaultPort: 8935,
+		}, inventory.Host{Name: "media-1"}, ServiceConfig{
+			Mode: "native", BinaryURL: "https://example.test/livepeer.tar.gz", Metadata: map[string]any{},
+		}, RoleBuildHelpers{})
+		if err != nil {
+			t.Fatalf("%s vars: %v", serviceName, err)
+		}
+		if got := vars["go_service_sandbox"]; got != true {
+			t.Fatalf("%s sandbox=%v, want true", serviceName, got)
+		}
+	}
+	vars, err := serviceNativeVars(context.Background(), ServiceRoleConfig{
+		ServiceName: "foghorn", DefaultPort: 18008,
+	}, inventory.Host{Name: "media-1"}, ServiceConfig{
+		Mode: "native", BinaryURL: "https://example.test/foghorn.tar.gz", Metadata: map[string]any{},
+	}, RoleBuildHelpers{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := vars["go_service_sandbox"]; got != false {
+		t.Fatalf("non-Livepeer sandbox=%v, want false", got)
 	}
 }
 

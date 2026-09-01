@@ -137,6 +137,37 @@ Direct `cluster upgrade --all` does not run declared release transitions and
 fails closed when one gates a downstream service. It is not the normal whole
 release path.
 
+## Moving the physical ClickHouse node
+
+`frameworks cluster clickhouse migrate` moves the existing Periscope dataset
+to a new Replicated ClickHouse node. This is a data cutover, separate from the
+versioned schema-migration commands above. The service endpoints deliberately
+split readers from writers:
+
+- `periscope-ingest` and `periscope-metering` follow `write_endpoint`;
+- `periscope-query` follows `read_endpoint`;
+- `METERING_SOURCE_ID` continues to identify the same logical dataset and must
+  not change during the move.
+
+Before the final sync, stop both Ingest and Metering. Kafka buffers analytics
+events while Ingest is stopped, and Metering's PostgreSQL cursor retains its
+exact position. The cutover command requires both confirmations:
+
+```bash
+frameworks cluster clickhouse migrate cutover \
+  --from <old-clickhouse-host> \
+  --ingest-stopped \
+  --metering-stopped
+```
+
+For the online endpoint sequence, first set `write_endpoint` to the new node,
+re-provision and resume Ingest, and let its Kafka lag drain. Then re-provision
+and resume Metering with the unchanged source ID. Finally set `read_endpoint`
+to the new node and re-provision Query. Do not resume Metering against the old
+source after Ingest has begun writing the destination, and do not decommission
+the old node until parity, service health, cursor progress, and Purser report
+consumption are verified.
+
 ## Ledger details
 
 The role creates `<db>._migrations` per ClickHouse database with this shape:

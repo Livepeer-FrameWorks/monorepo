@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"errors"
 	"io"
 	"strings"
@@ -10,6 +11,38 @@ import (
 
 	"github.com/spf13/cobra"
 )
+
+func TestRunCHMigrateCutoverPlanOrdersIngestMeteringAndQuery(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.Flags().Bool("ingest-stopped", false, "")
+	cmd.Flags().Bool("metering-stopped", false, "")
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+
+	if err := runCHMigrateCutover(cmd, &chMigrateCtx{}); err == nil {
+		t.Fatal("cutover accepted without stopped ingest and metering")
+	}
+	plan := out.String()
+	for _, required := range []string{
+		"Stop periscope-ingest and periscope-metering",
+		"--ingest-stopped --metering-stopped",
+		"clickhouse.write_endpoint -> new node",
+		"resume periscope-ingest",
+		"resume periscope-metering",
+		"clickhouse.read_endpoint -> new node",
+		"preserving METERING_SOURCE_ID",
+	} {
+		if !strings.Contains(plan, required) {
+			t.Fatalf("cutover plan missing %q:\n%s", required, plan)
+		}
+	}
+	ingest := strings.Index(plan, "resume periscope-ingest")
+	metering := strings.Index(plan, "resume periscope-metering")
+	query := strings.Index(plan, "clickhouse.read_endpoint -> new node")
+	if ingest >= metering || metering >= query {
+		t.Fatalf("cutover order = ingest:%d metering:%d query:%d\n%s", ingest, metering, query, plan)
+	}
+}
 
 // finishCutover must: stop destination AND source refresh views before the final sync (source-quiesce + retry clean
 // slate), RE-VERIFY parity after the sync, start destination views only on a clean verify, roll back a partial

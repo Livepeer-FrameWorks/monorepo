@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"maps"
 	"os"
 	"path/filepath"
 	"testing"
@@ -41,6 +42,7 @@ func TestBuildServiceEnvVarsMapsLivepeerRPCFromNetworkEnv(t *testing.T) {
 
 func TestBuildServiceEnvVarsWiresOrchHealthRedisForGateway(t *testing.T) {
 	manifest := &inventory.Manifest{
+		Profile: "dev",
 		Hosts: map[string]inventory.Host{
 			"regional-eu-1": {Labels: map[string]string{"region": "media-eu-1"}},
 		},
@@ -82,6 +84,7 @@ func TestBuildServiceEnvVarsWiresOrchHealthRedisForGateway(t *testing.T) {
 
 func TestBuildServiceEnvVarsWiresOrchHealthSentinelAndPerfWeightsForGateway(t *testing.T) {
 	manifest := &inventory.Manifest{
+		Profile: "dev",
 		Hosts: map[string]inventory.Host{
 			"regional-eu-1": {Labels: map[string]string{"region": "media-eu-1"}},
 			"regional-eu-2": {Labels: map[string]string{"region": "media-eu-1"}},
@@ -147,6 +150,7 @@ func TestBuildServiceEnvVarsWiresOrchHealthSentinelAndPerfWeightsForGateway(t *t
 
 func TestBuildServiceEnvVarsInjectsGeoIPForAliasedLivepeerGateway(t *testing.T) {
 	manifest := &inventory.Manifest{
+		Profile: "dev",
 		GeoIP: &inventory.GeoIPConfig{
 			Enabled:    true,
 			RemotePath: "/usr/share/GeoIP/GeoLite2-City.mmdb",
@@ -353,7 +357,8 @@ func TestBuildServiceEnvVarsIgnoresSharedLivepeerGatewayHostAlias(t *testing.T) 
 func TestBuildServiceEnvVarsSelectsLivepeerRPCPoolByGatewayHostOrder(t *testing.T) {
 	envFile := writeTestEnvFile(t, ""+
 		"LIVEPEER_ETH_URLS=https://rpc-one.example,https://rpc-two.example\n"+
-		"LIVEPEER_ETH_ACCT_ADDR=0xabc123\n")
+		"LIVEPEER_ETH_ACCT_ADDR=0xabc123\n"+
+		"LIVEPEER_ETH_KEYSTORE_B64=e30=\n")
 
 	manifest := &inventory.Manifest{
 		Profile:    "production",
@@ -392,7 +397,8 @@ func TestBuildServiceEnvVarsSelectsLivepeerRPCPoolByGatewayHostOrder(t *testing.
 func TestBuildServiceEnvVarsLivepeerGatewayRuntimeDefaults(t *testing.T) {
 	envFile := writeTestEnvFile(t, ""+
 		"LIVEPEER_ETH_URLS=https://rpc-one.example\n"+
-		"LIVEPEER_ETH_ACCT_ADDR=0xabc123\n")
+		"LIVEPEER_ETH_ACCT_ADDR=0xabc123\n"+
+		"LIVEPEER_ETH_KEYSTORE_B64=e30=\n")
 
 	manifest := &inventory.Manifest{
 		Profile:    "production",
@@ -422,9 +428,10 @@ func TestBuildServiceEnvVarsLivepeerGatewayRuntimeDefaults(t *testing.T) {
 
 	want := map[string]string{
 		"network":                "arbitrum-one-mainnet",
-		"http_addr":              "0.0.0.0:8935",
+		"http_addr":              "127.0.0.1:8935",
 		"http_ingest":            "true",
-		"cli_addr":               ":7935",
+		"cli_addr":               "127.0.0.1:7935",
+		"trusted_proxy_cidrs":    "127.0.0.1/32,::1/128",
 		"rtmp_addr":              "",
 		"max_sessions":           "500",
 		"max_price_per_unit":     "1200",
@@ -437,6 +444,116 @@ func TestBuildServiceEnvVarsLivepeerGatewayRuntimeDefaults(t *testing.T) {
 	for key, wantValue := range want {
 		if got := env[key]; got != wantValue {
 			t.Fatalf("%s got %q, want %q", key, got, wantValue)
+		}
+	}
+}
+
+func TestValidateLivepeerProductionEnv(t *testing.T) {
+	manifest := &inventory.Manifest{Profile: "production"}
+	valid := map[string]string{
+		"cli_addr": "127.0.0.1:7935", "http_addr": "127.0.0.1:8935",
+		"trusted_proxy_cidrs": "127.0.0.1/32,::1/128", "eth_acct_addr": "0xabc",
+		"keystore_path":    "/var/lib/frameworks/livepeer-gateway/keystore/key.json",
+		"auth_webhook_url": "http://foghorn.internal:18008/webhooks/livepeer/auth",
+	}
+	if err := validateLivepeerProductionEnv(manifest, nil, "livepeer-gateway", valid); err != nil {
+		t.Fatalf("valid gateway rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(map[string]string){
+		"public http":     func(env map[string]string) { env["http_addr"] = "0.0.0.0:8935" },
+		"public cli":      func(env map[string]string) { env["cli_addr"] = ":7935" },
+		"untrusted proxy": func(env map[string]string) { env["trusted_proxy_cidrs"] = "10.0.0.0/8" },
+		"missing key":     func(env map[string]string) { delete(env, "keystore_path") },
+		"no auth":         func(env map[string]string) { delete(env, "auth_webhook_url") },
+		"deferred signer": func(env map[string]string) { env["remote_signer_url"] = "http://signer.internal:18016" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := maps.Clone(valid)
+			mutate(env)
+			if err := validateLivepeerProductionEnv(manifest, nil, "livepeer-gateway", env); err == nil {
+				t.Fatal("insecure production gateway accepted")
+			}
+		})
+	}
+}
+
+func TestValidateLivepeerSignerProductionEnv(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "production",
+		Hosts: map[string]inventory.Host{
+			"signer-1": {WireguardIP: "10.88.0.9"},
+		},
+	}
+	task := &orchestrator.Task{Host: "signer-1"}
+	valid := map[string]string{
+		"cli_addr": "127.0.0.1:3935", "http_addr": "10.88.0.9:18016",
+		"keystore_path": "/var/lib/frameworks/livepeer-signer/keystore/key.json",
+		"eth_password":  "/var/lib/frameworks/livepeer-signer/eth-password",
+		"eth_url":       "https://rpc.example",
+	}
+	if err := validateLivepeerProductionEnv(manifest, task, "livepeer-signer", valid); err != nil {
+		t.Fatalf("valid signer rejected: %v", err)
+	}
+	for name, mutate := range map[string]func(map[string]string){
+		"public cli":       func(env map[string]string) { env["cli_addr"] = ":3935" },
+		"missing key":      func(env map[string]string) { delete(env, "keystore_path") },
+		"missing password": func(env map[string]string) { delete(env, "eth_password") },
+		"missing rpc":      func(env map[string]string) { delete(env, "eth_url") },
+		"wrong bind":       func(env map[string]string) { env["http_addr"] = "10.88.0.10:18016" },
+		"no auth":          func(env map[string]string) { env["remote_signer_allow_no_auth"] = "true" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := maps.Clone(valid)
+			mutate(env)
+			if err := validateLivepeerProductionEnv(manifest, task, "livepeer-signer", env); err == nil {
+				t.Fatal("insecure production signer accepted")
+			}
+		})
+	}
+}
+
+func TestNormalizeLivepeerSignerRuntimeContract(t *testing.T) {
+	env := map[string]string{
+		"LIVEPEER_REMOTE_SIGNER_HEADERS":         "Authorization: Bearer test",
+		"LIVEPEER_REMOTE_SIGNER_WEBHOOK_URL":     "https://auth.example",
+		"LIVEPEER_REMOTE_SIGNER_WEBHOOK_HEADERS": "X-Test: yes",
+	}
+	normalizeServiceEnvVars("livepeer-signer", env)
+	if env["cli_addr"] != "127.0.0.1:3935" ||
+		env["remote_signer_headers"] == "" || env["remote_signer_webhook_url"] == "" || env["remote_signer_webhook_headers"] == "" {
+		t.Fatalf("incomplete signer runtime normalization: %#v", env)
+	}
+}
+
+func TestRestrictClusterAccessSecretsScopesLivepeerKeystore(t *testing.T) {
+	for _, service := range []string{"foghorn", "purser", "mistserver", "helmsman"} {
+		env := map[string]string{
+			"LIVEPEER_ETH_KEYSTORE_B64": "key", "LIVEPEER_ETH_KEYSTORE_PASSWORD": "password",
+			"keystore_path": "/key", "eth_password": "/password", "LIVEPEER_ETH_ACCT_ADDR": "0xabc",
+			"LIVEPEER_REMOTE_SIGNER_HEADERS": "Authorization: secret", "remote_signer_headers": "Authorization: secret",
+			"LIVEPEER_REMOTE_SIGNER_WEBHOOK_URL": "https://auth.example", "remote_signer_webhook_url": "https://auth.example",
+			"LIVEPEER_REMOTE_SIGNER_WEBHOOK_HEADERS": "X-Key: secret", "remote_signer_webhook_headers": "X-Key: secret",
+			"remote_signer_allow_no_auth": "true",
+		}
+		restrictClusterAccessSecrets(service, env)
+		for _, key := range []string{
+			"LIVEPEER_ETH_KEYSTORE_B64", "LIVEPEER_ETH_KEYSTORE_PASSWORD", "keystore_path", "eth_password",
+			"LIVEPEER_REMOTE_SIGNER_HEADERS", "remote_signer_headers", "LIVEPEER_REMOTE_SIGNER_WEBHOOK_URL", "remote_signer_webhook_url",
+			"LIVEPEER_REMOTE_SIGNER_WEBHOOK_HEADERS", "remote_signer_webhook_headers", "remote_signer_allow_no_auth",
+		} {
+			if _, ok := env[key]; ok {
+				t.Fatalf("%s retained %s", service, key)
+			}
+		}
+		if env["LIVEPEER_ETH_ACCT_ADDR"] != "0xabc" {
+			t.Fatalf("%s lost public wallet address", service)
+		}
+	}
+	for _, service := range []string{"livepeer-gateway", "livepeer-signer"} {
+		env := map[string]string{"LIVEPEER_ETH_KEYSTORE_B64": "key", "LIVEPEER_ETH_KEYSTORE_PASSWORD": "password"}
+		restrictClusterAccessSecrets(service, env)
+		if env["LIVEPEER_ETH_KEYSTORE_B64"] == "" || env["LIVEPEER_ETH_KEYSTORE_PASSWORD"] == "" {
+			t.Fatalf("%s lost its local key material", service)
 		}
 	}
 }

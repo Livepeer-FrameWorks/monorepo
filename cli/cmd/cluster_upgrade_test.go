@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -10,6 +11,30 @@ import (
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/orchestrator"
 )
+
+func TestUpgradeTaskConfigEnforcesLivepeerProductionValidation(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Profile: "production",
+		Hosts: map[string]inventory.Host{
+			"media-1": {Name: "media-1", Cluster: "media-eu"},
+		},
+		Clusters: map[string]inventory.ClusterConfig{"media-eu": {}},
+		Services: map[string]inventory.ServiceConfig{
+			"livepeer-gateway": {
+				Enabled: true, Host: "media-1", Cluster: "media-eu", Mode: "native",
+				Config: map[string]string{"http_addr": "0.0.0.0:8935"},
+			},
+		},
+	}
+	task := &orchestrator.Task{
+		Name: "livepeer-gateway", Type: "livepeer-gateway", ServiceID: "livepeer-gateway",
+		Host: "media-1", ClusterID: "media-eu", Phase: orchestrator.PhaseApplications,
+	}
+	_, err := buildTaskConfig(task, manifest, map[string]any{}, true, "", map[string]string{}, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "http_addr to bind loopback") {
+		t.Fatalf("upgrade builder accepted public Livepeer HTTP bind: %v", err)
+	}
+}
 
 func TestWaitForHealthRetriesUntilSuccess(t *testing.T) {
 	var attempts int32
@@ -89,6 +114,31 @@ func TestCollectUpgradeableServices_SkipsPrivateerMeshRole(t *testing.T) {
 	}
 	if got[0] != "bridge" {
 		t.Fatalf("expected [bridge], got %v", got)
+	}
+}
+
+func TestCollectUpgradeableServices_PreservesMeteringCutoverOrder(t *testing.T) {
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{"central-1": {ExternalIP: "10.0.0.1"}},
+		Services: map[string]inventory.ServiceConfig{
+			"periscope-metering": {Enabled: true, Host: "central-1"},
+			"purser":             {Enabled: true, Host: "central-1"},
+			"periscope-query":    {Enabled: true, Host: "central-1"},
+		},
+	}
+	plan, err := orchestrator.NewPlanner(manifest).Plan(context.Background(), orchestrator.ProvisionOptions{Phase: orchestrator.PhaseApplications})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := collectUpgradeableServices(plan)
+	want := []string{"periscope-query", "purser", "periscope-metering"}
+	if len(got) != len(want) {
+		t.Fatalf("upgrade services = %v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("upgrade services = %v, want %v", got, want)
+		}
 	}
 }
 

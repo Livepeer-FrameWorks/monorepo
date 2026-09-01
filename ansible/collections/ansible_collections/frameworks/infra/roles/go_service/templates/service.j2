@@ -15,6 +15,19 @@ ExecReload=/bin/kill -HUP $MAINPID
 Restart=always
 RestartSec=5
 LimitNOFILE=1048576
+{% if go_service_sandbox | default(false) | bool %}
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+UMask=0077
+{% if go_service_state_dirs | default([]) | length > 0 %}
+ReadWritePaths={{ go_service_state_dirs | join(' ') }}
+{% endif %}
+{% endif %}
 
 [Install]
 WantedBy=multi-user.target

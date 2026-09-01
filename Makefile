@@ -1,6 +1,6 @@
 .PHONY: build build-images build-bin-commodore build-bin-quartermaster build-bin-purser build-bin-decklog build-bin-foghorn build-bin-helmsman build-bin-periscope-ingest build-bin-periscope-query build-bin-periscope-metering build-bin-signalman build-bin-bridge build-bin-navigator build-bin-privateer build-bin-deckhand build-bin-steward build-bin-skipper build-bin-chandler build-bin-cli \
 		build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-periscope-metering build-image-signalman build-image-bridge build-image-logbook build-image-navigator build-image-deckhand build-image-steward build-image-skipper build-image-chandler \
-		proto proto-check sqlc sqlc-check graphql graphql-frontend graphql-tray graphql-all clean version install-tools verify test test-cli test-pkg test-topology test-crypto-evm test-dashboards test-commodore test-quartermaster test-purser test-decklog test-foghorn test-helmsman test-periscope-ingest test-periscope-query test-signalman test-bridge test-navigator test-privateer test-deckhand test-steward test-skipper test-chandler coverage env frontend-env tidy update outdated fmt format \
+		proto proto-check sqlc sqlc-check graphql graphql-frontend graphql-tray graphql-all clean version install-tools verify test test-cli test-pkg test-topology test-crypto-evm test-dashboards test-commodore test-quartermaster test-purser test-decklog test-foghorn test-helmsman test-periscope-ingest test-periscope-query test-media-topology-real-clickhouse test-signalman test-bridge test-navigator test-privateer test-deckhand test-steward test-skipper test-chandler coverage env frontend-env tidy update outdated fmt format \
 		lint lint-go lint-frontend lint-all lint-fix lint-report lint-analyze ci-local ci-local-go ci-local-frontend \
 		validate-migrations verify-release-state test-release-state verify-schema verify-schema-migrations verify-schema-migrations-core verify-schema-postgres verify-navigator-db verify-skipper-db verify-periscope-metering-db verify-periscope-ingest-db verify-periscope-query-db verify-periscope-metering-chain verify-commodore-db verify-quartermaster-db verify-quartermaster-yugabyte-db verify-foghorn-db verify-foghorn-valkey verify-foghorn-test-selection verify-schema-yugabyte verify-yugabyte-ha verify-schema-clickhouse verify-feature-registry seed-demo seed-demo-postgres seed-demo-clickhouse reset-demo-databases-plan reset-demo-databases release-plan test-release-plan \
 		dead-code-install dead-code-go dead-code-ts dead-code-report dead-code \
@@ -236,12 +236,14 @@ build-image-periscope-ingest:
 build-image-periscope-query:
 	docker build -t frameworks-periscope-query:$(VERSION) \
 		$(call component_build_args,periscope-query,api_analytics_query) \
+		--build-arg HEALTH_PORT=18004 \
 		-f api_analytics_query/Dockerfile .
 
 build-image-periscope-metering:
 	docker build -t frameworks-periscope-metering:$(VERSION) \
 		$(call component_build_args,periscope-metering,api_analytics_query) \
 		--build-arg CMD_PACKAGE=./cmd/periscope-metering \
+		--build-arg HEALTH_PORT=18021 \
 		-f api_analytics_query/Dockerfile .
 
 build-image-signalman:
@@ -415,6 +417,11 @@ test-periscope-ingest:
 
 test-periscope-query:
 	$(call run-go-tests,periscope-query,$(SERVICE_DIR_periscope-query))
+
+test-media-topology-real-clickhouse:
+	@docker info >/dev/null 2>&1 || { echo "ERROR: test-media-topology-real-clickhouse requires a running Docker daemon"; exit 1; }
+	@$(CONTRACT_GO_TEST) api_analytics_ingest clickhouse/media-topology-ingest -tags schema_verify -run 'TestSourceFactProjectionAndLedgerReplay_RealClickHouse' -count=1 -timeout 600s ./internal/handlers/
+	@$(CONTRACT_GO_TEST) api_analytics_query clickhouse/media-topology-query -tags schema_verify -run 'TestClusterWorkloadSeparatesStorageFlowStockAndScope_RealClickHouse|TestFederationSummaryPreservesOperatorHistoryWithoutDualRollupDuplicates_RealClickHouse' -count=1 -timeout 600s ./internal/grpc/
 
 test-signalman:
 	$(call run-go-tests,signalman,$(SERVICE_DIR_signalman))
@@ -725,9 +732,9 @@ verify-schema-migrations-core: verify-foghorn-test-selection
 	@$(CONTRACT_GO_TEST) api_analytics_ingest clickhouse/periscope-ingest-writers -tags schema_verify -run 'TestEveryTypedWriterAppendsToCurrentClickHouse' -count=1 -timeout 600s ./internal/database/periscopeingestdb/
 	@$(CONTRACT_GO_TEST) api_analytics_ingest clickhouse/periscope-metering-chain-ingest -tags schema_verify -run 'TestSourceFactProjectionAndLedgerReplay_RealClickHouse' -count=1 -timeout 600s ./internal/handlers/
 	@$(CONTRACT_GO_TEST) api_analytics_query clickhouse/periscope-query -tags schema_verify -run 'TestBillingCatalogExecutesAgainstCurrentClickHouse' -count=1 -timeout 600s ./internal/database/periscopequerydb/
-	@$(CONTRACT_GO_TEST) api_analytics_query clickhouse/periscope-query-rpc -tags schema_verify -run 'TestEveryRPCQuerySiteExecutesAgainstCurrentClickHouse' -count=1 -timeout 1200s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_analytics_query clickhouse/periscope-query-rpc -tags schema_verify -run 'TestEveryRPCQuerySiteExecutesAgainstCurrentClickHouse|TestClusterWorkloadSeparatesStorageFlowStockAndScope_RealClickHouse|TestFederationSummaryPreservesOperatorHistoryWithoutDualRollupDuplicates_RealClickHouse' -count=1 -timeout 1200s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_analytics_query clickhouse/periscope-metering-chain -tags schema_verify -run 'TestCrossEngineMeteringReplayLateCorrectionAndFencing_RealEngines' -count=1 -timeout 600s ./internal/handlers/
-	@$(CONTRACT_GO_TEST) api_billing postgres/purser-handlers -tags schema_verify -run 'TestProcessUsageSummaryAbsentDimensions_RealPG|TestProviderWebhookInboxRepository_RealPG|TestCryptoTaxDocuments_RealPG|TestCryptoTaxDocumentAnomalyReopensAndResolves_RealPG|TestEmbeddedFacilitatorSerializesRelayerNoncesAcrossReplicas_RealPG|TestInvoiceEmailOutboxLifecycleAndReads_RealPG|TestInvoiceEmailOverdueBalanceRead_RealPG|TestOperationalDatabaseGuards_RealPG|TestInvoiceCollectionMinimumSerializesAndPersists_RealPG|TestInvoiceRatingRepository_RealPG' -count=1 -timeout 600s ./internal/handlers/
+	@$(CONTRACT_GO_TEST) api_billing postgres/purser-handlers -tags schema_verify -run 'TestProcessUsageSummaryAbsentDimensions_RealPG|TestV3UsageRowsRemainImmutableOnConflictingReplay_RealPG|TestV2UsageEnvelopePersistsIdempotentlyOnV3Schema_RealPG|TestMeteringSourceRegionRemainsAuthoritative_RealPG|TestPrepaidUsageSettlementMatchesAppliedBalanceTransactions_RealPG|TestProviderWebhookInboxRepository_RealPG|TestCryptoTaxDocuments_RealPG|TestCryptoTaxDocumentAnomalyReopensAndResolves_RealPG|TestEmbeddedFacilitatorSerializesRelayerNoncesAcrossReplicas_RealPG|TestInvoiceEmailOutboxLifecycleAndReads_RealPG|TestInvoiceEmailOverdueBalanceRead_RealPG|TestOperationalDatabaseGuards_RealPG|TestInvoiceCollectionMinimumSerializesAndPersists_RealPG|TestInvoiceRatingRepository_RealPG' -count=1 -timeout 600s ./internal/handlers/
 	@$(CONTRACT_GO_TEST) api_billing postgres/purser-grpc -tags schema_verify -run 'TestBillingTransitionsSerializeAndPreserveCredit_RealPG|TestBillingEventOutboxLifecycle_RealPG|TestTierCatalogReads_RealPG|TestSubscriptionLifecycleRepository_RealPG|TestAccountOnboardingConvergence_RealPG|TestPrepaidBalanceRepository_RealPG|TestGRPCQueryPack_RealPG|TestTenantAdmissionStatus_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_billing postgres/purser-query-catalog -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG' -count=1 -timeout 600s ./internal/database/purserdb/
 	@$(CONTRACT_GO_TEST) api_dns postgres/navigator-query-catalog -tags schema_verify -run '$(NAVIGATOR_QUERY_CATALOG_REALPG_TESTS)' -count=1 -timeout 600s ./internal/database/navigatordb/
@@ -799,13 +806,14 @@ verify-periscope-query-db:
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-periscope-query-db requires a running Docker daemon"; exit 1; }
 	@echo "Verifying Periscope Query's service-owned ClickHouse catalog (Docker)..."
 	@$(CONTRACT_GO_TEST) api_analytics_query clickhouse/periscope-query -tags schema_verify -run 'TestBillingCatalogExecutesAgainstCurrentClickHouse' -count=1 -timeout 600s ./internal/database/periscopequerydb/
-	@$(CONTRACT_GO_TEST) api_analytics_query clickhouse/periscope-query-rpc -tags schema_verify -run 'TestEveryRPCQuerySiteExecutesAgainstCurrentClickHouse' -count=1 -timeout 1200s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_analytics_query clickhouse/periscope-query-rpc -tags schema_verify -run 'TestEveryRPCQuerySiteExecutesAgainstCurrentClickHouse|TestClusterWorkloadSeparatesStorageFlowStockAndScope_RealClickHouse|TestFederationSummaryPreservesOperatorHistoryWithoutDualRollupDuplicates_RealClickHouse' -count=1 -timeout 1200s ./internal/grpc/
 
 verify-periscope-metering-chain:
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-periscope-metering-chain requires a running Docker daemon"; exit 1; }
 	@echo "Verifying the source-fact, final-fact, ledger, billing, cursor, and reservation chain on real ClickHouse/PostgreSQL (Docker)..."
 	@$(CONTRACT_GO_TEST) api_analytics_ingest clickhouse/periscope-metering-chain-ingest -tags schema_verify -run 'TestSourceFactProjectionAndLedgerReplay_RealClickHouse' -count=1 -timeout 600s ./internal/handlers/
 	@$(CONTRACT_GO_TEST) api_analytics_query clickhouse/periscope-metering-chain -tags schema_verify -run 'TestCrossEngineMeteringReplayLateCorrectionAndFencing_RealEngines' -count=1 -timeout 600s ./internal/handlers/
+	@$(CONTRACT_GO_TEST) api_billing postgres/periscope-metering-v2-compat -tags schema_verify -run 'TestV3UsageRowsRemainImmutableOnConflictingReplay_RealPG|TestV2UsageEnvelopePersistsIdempotentlyOnV3Schema_RealPG|TestMeteringSourceRegionRemainsAuthoritative_RealPG|TestPrepaidUsageSettlementMatchesAppliedBalanceTransactions_RealPG' -count=1 -timeout 600s ./internal/handlers/
 
 verify-commodore-db:
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-commodore-db requires a running Docker daemon"; exit 1; }
@@ -855,7 +863,7 @@ verify-schema-postgres: verify-foghorn-test-selection
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-schema-postgres requires a running Docker daemon"; exit 1; }
 	@echo "Verifying Postgres current baseline and tagged-release upgrade convergence (Docker)..."
 	@FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' $(CONTRACT_GO_TEST) cli postgres/schema -tags schema_verify -run '$(SCHEMA_VERIFY_COMMON_TESTS)|$(SCHEMA_VERIFY_POSTGRES_TESTS)' -count=1 -timeout 1200s ./pkg/provisioner/
-	@cd api_billing && go test -tags schema_verify -run 'TestProcessUsageSummaryAbsentDimensions_RealPG|TestProviderWebhookInboxRepository_RealPG|TestCryptoTaxDocuments_RealPG|TestCryptoTaxDocumentAnomalyReopensAndResolves_RealPG|TestEmbeddedFacilitatorSerializesRelayerNoncesAcrossReplicas_RealPG|TestInvoiceEmailOutboxLifecycleAndReads_RealPG|TestInvoiceEmailOverdueBalanceRead_RealPG|TestOperationalDatabaseGuards_RealPG|TestInvoiceCollectionMinimumSerializesAndPersists_RealPG|TestInvoiceRatingRepository_RealPG' -count=1 -timeout 600s ./internal/handlers/
+	@cd api_billing && go test -tags schema_verify -run 'TestProcessUsageSummaryAbsentDimensions_RealPG|TestV3UsageRowsRemainImmutableOnConflictingReplay_RealPG|TestV2UsageEnvelopePersistsIdempotentlyOnV3Schema_RealPG|TestMeteringSourceRegionRemainsAuthoritative_RealPG|TestPrepaidUsageSettlementMatchesAppliedBalanceTransactions_RealPG|TestProviderWebhookInboxRepository_RealPG|TestCryptoTaxDocuments_RealPG|TestCryptoTaxDocumentAnomalyReopensAndResolves_RealPG|TestEmbeddedFacilitatorSerializesRelayerNoncesAcrossReplicas_RealPG|TestInvoiceEmailOutboxLifecycleAndReads_RealPG|TestInvoiceEmailOverdueBalanceRead_RealPG|TestOperationalDatabaseGuards_RealPG|TestInvoiceCollectionMinimumSerializesAndPersists_RealPG|TestInvoiceRatingRepository_RealPG' -count=1 -timeout 600s ./internal/handlers/
 	@cd api_billing && go test -tags schema_verify -run 'TestBillingTransitionsSerializeAndPreserveCredit_RealPG|TestBillingEventOutboxLifecycle_RealPG|TestTierCatalogReads_RealPG|TestSubscriptionLifecycleRepository_RealPG|TestAccountOnboardingConvergence_RealPG|TestPrepaidBalanceRepository_RealPG|TestGRPCQueryPack_RealPG|TestTenantAdmissionStatus_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@cd api_billing && go test -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG' -count=1 -timeout 600s ./internal/database/purserdb/
 	@cd api_dns && go test -tags schema_verify -run '$(NAVIGATOR_QUERY_CATALOG_REALPG_TESTS)' -count=1 -timeout 600s ./internal/database/navigatordb/

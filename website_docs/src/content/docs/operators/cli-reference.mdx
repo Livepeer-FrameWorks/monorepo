@@ -2260,63 +2260,23 @@ frameworks edge mist cores analyze ./edge1-mist-core.tar.gz --cache-dir ~/.cache
 
 ## Livepeer Commands
 
-Livepeer gateway management. Uses Quartermaster service discovery by default; override with `--gateway host:port`.
+Livepeer wallet reads come from Arbitrum, using the wallet address in Quartermaster discovery and the cluster's configured RPC. The gateway CLI listener remains loopback-only. Routine TicketBroker funding is Purser-owned; exceptional reserve/unlock/withdraw operations SSH to the selected manifest host and require a temporary maintenance-window flag.
 
 ### frameworks livepeer status
 
-Show gateway status (version, ETH address, deposit info).
+Show the wallet's ETH balance and TicketBroker deposit, reserve, and withdraw round.
 
 ```bash
 frameworks livepeer status
-frameworks livepeer status --gateway 10.0.1.5:8935
-frameworks livepeer status --cluster edge-us-east
+frameworks livepeer status --cluster media-us-1
+frameworks livepeer status --address 0x... --rpc https://arb1.example
 ```
 
 **Flags:**
 
-- `--gateway` - Gateway address (host:port), bypasses discovery
+- `--address` - Wallet address; overrides Quartermaster discovery
+- `--rpc` - Arbitrum JSON-RPC URL; overrides cluster shared env
 - `--cluster` - Cluster ID for discovery
-
-### frameworks livepeer deposit fund
-
-Fund the TicketBroker deposit.
-
-```bash
-frameworks livepeer deposit fund --amount 1000000000000000000
-```
-
-**Flags:**
-
-- `--amount` (required) - Amount in wei
-
-### frameworks livepeer deposit reserve
-
-Fund both deposit and reserve.
-
-```bash
-frameworks livepeer deposit reserve --deposit 1000000000000000000 --reserve 500000000000000000
-```
-
-**Flags:**
-
-- `--deposit` (required) - Deposit amount in wei
-- `--reserve` (required) - Reserve amount in wei
-
-### frameworks livepeer deposit unlock
-
-Start the unlock period for deposit and reserve.
-
-```bash
-frameworks livepeer deposit unlock
-```
-
-### frameworks livepeer deposit withdraw
-
-Withdraw unlocked deposit and reserve.
-
-```bash
-frameworks livepeer deposit withdraw
-```
 
 ### frameworks livepeer wallet address
 
@@ -2332,6 +2292,25 @@ Show the gateway's ETH balance.
 
 ```bash
 frameworks livepeer wallet balance
+```
+
+### frameworks livepeer deposit reserve
+
+Exceptionally add TicketBroker reserve over SSH to the gateway's loopback CLI. The amount is wei. Routine funding remains Purser-owned.
+
+```bash
+frameworks livepeer deposit reserve --host regional-eu-1 --amount 200000000000000000
+```
+
+The command fails with a runbook message while tx routes are disabled. Temporarily set `enable_cli_tx_routes: "true"` on the selected gateway service, provision, run the command, and remove the setting immediately.
+
+### frameworks livepeer unlock / withdraw
+
+Start the TicketBroker unlock period or withdraw after it has elapsed:
+
+```bash
+frameworks livepeer unlock --host regional-eu-1
+frameworks livepeer withdraw --host regional-eu-1
 ```
 
 ---

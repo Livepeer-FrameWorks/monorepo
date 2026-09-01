@@ -12620,21 +12620,21 @@ The FrameWorks platform is composed of specialized services, each responsible fo
 
 ### Infrastructure Components
 
-| Component                                    | Role                                                     | Plane                         | Port(s)                                           | Deploy Location                            |
-| -------------------------------------------- | -------------------------------------------------------- | ----------------------------- | ------------------------------------------------- | ------------------------------------------ |
-| MistServer                                   | Media processing, ingest, and edge delivery              | Media                         | 4242, 8080, 1935, 5554, 4200, 8889/udp, 18203/udp | Edge                                       |
-| Livepeer Gateway                             | Transcoding gateway and compute-marketplace integration  | Media                         | 8935                                              | Edge (co-located with MistServer)          |
-| Livepeer Signer                              | ETH transaction signer for gateway                       | Control / API                 | 18016                                             | Central                                    |
-| PostgreSQL-compatible DB (Postgres/Yugabyte) | Service-owned state and configuration database substrate | Infrastructure                | Operator-defined                                  | Central                                    |
-| ClickHouse                                   | Time-series analytics database                           | Event & Analytics             | 8123 (HTTP), 9000 (Native)                        | Central                                    |
-| Kafka                                        | Event streaming backbone                                 | Event & Analytics             | 9092 (Int), 29092 (Ext)                           | Central + Regional (single shared cluster) |
-| Foghorn Redis                                | Foghorn HA state sync                                    | Media                         | 6379                                              | Regional                                   |
-| Nginx                                        | Reverse proxy and local development routing              | Network & Trust               | 18090                                             | Central                                    |
-| Caddy                                        | Edge TLS termination and reverse proxy                   | Network & Trust               | 80, 443, 18090                                    | Edge                                       |
-| VictoriaMetrics + vmagent                    | Metrics collection and remote-write fan-in               | Observability & Operations    | Operator-defined                                  | Central + every backend and edge host      |
-| Grafana                                      | Metrics visualization                                    | Observability & Operations    | Operator-defined                                  | Central                                    |
-| Metabase                                     | BI analytics                                             | Observability & Operations    | Operator-defined                                  | Central                                    |
-| Listmonk                                     | Newsletter and mailing list manager                      | Support & Experience Services | 9000 (service), 9001 (docker-compose host)        | Central                                    |
+| Component                                    | Role                                                        | Plane                         | Port(s)                                           | Deploy Location                            |
+| -------------------------------------------- | ----------------------------------------------------------- | ----------------------------- | ------------------------------------------------- | ------------------------------------------ |
+| MistServer                                   | Media processing, ingest, and edge delivery                 | Media                         | 4242, 8080, 1935, 5554, 4200, 8889/udp, 18203/udp | Edge                                       |
+| Livepeer Gateway                             | Transcoding gateway and compute-marketplace integration     | Media                         | 8935                                              | Edge (co-located with MistServer)          |
+| Livepeer Signer (planned)                    | Future ticket-batch signer; not wired to transcode gateways | Control / API                 | 18016                                             | Central                                    |
+| PostgreSQL-compatible DB (Postgres/Yugabyte) | Service-owned state and configuration database substrate    | Infrastructure                | Operator-defined                                  | Central                                    |
+| ClickHouse                                   | Time-series analytics database                              | Event & Analytics             | 8123 (HTTP), 9000 (Native)                        | Central                                    |
+| Kafka                                        | Event streaming backbone                                    | Event & Analytics             | 9092 (Int), 29092 (Ext)                           | Central + Regional (single shared cluster) |
+| Foghorn Redis                                | Foghorn HA state sync                                       | Media                         | 6379                                              | Regional                                   |
+| Nginx                                        | Reverse proxy and local development routing                 | Network & Trust               | 18090                                             | Central                                    |
+| Caddy                                        | Edge TLS termination and reverse proxy                      | Network & Trust               | 80, 443, 18090                                    | Edge                                       |
+| VictoriaMetrics + vmagent                    | Metrics collection and remote-write fan-in                  | Observability & Operations    | Operator-defined                                  | Central + every backend and edge host      |
+| Grafana                                      | Metrics visualization                                       | Observability & Operations    | Operator-defined                                  | Central                                    |
+| Metabase                                     | BI analytics                                                | Observability & Operations    | Operator-defined                                  | Central                                    |
+| Listmonk                                     | Newsletter and mailing list manager                         | Support & Experience Services | 9000 (service), 9001 (docker-compose host)        | Central                                    |
 
 **Livepeer integration**: The Livepeer Gateway is provisioned via the CLI and discovered via Quartermaster service discovery. MistServer sends segments to the gateway automatically when Livepeer transcoding is configured for a stream. Ingest auth stays in the media plane: the gateway calls Foghorn's internal `/webhooks/livepeer/auth` webhook, and wallet/top-up automation reads `wallet_address` from Quartermaster service-instance metadata.
 
@@ -12728,6 +12728,29 @@ Foghorn routes analytics to Decklog and performs media admission/routing from
 its signed local authority plus local runtime state. Connected control-plane
 lookups remain for new mutations, bootstrap, mixed-version shadowing, and
 explicit online-only operations such as new x402 settlement.
+
+Analytics keeps physical placement separate from control-plane and content
+origin. `cluster_id` identifies the authenticated cluster of the node that
+served or performed work; `origin_cluster_id` identifies where the content
+originated; `control_cell_id` identifies the Foghorn/media-authority cell that
+made or observed the decision. One control cell may manage multiple media
+clusters, so operators should not treat these fields as aliases.
+
+The API exposes three deliberately different views: anonymous callers receive
+official cluster-level network status; tenants receive viewer, routing,
+processing, storage, and federation facts for content they own; cluster owners
+receive private node/service topology and operational metrics for clusters they
+own. Marketplace/subscription access adds aggregate cluster status but never
+another tenant's streams, sessions, URLs, or raw node telemetry.
+
+Cluster owners can use the `analytics.infra.clusterWorkload` GraphQL field for
+the redacted operational overlay: viewer, ingest, processing, storage, and
+federation work grouped by owned cluster, node, and work kind. It includes
+counts, active work, bytes, media seconds, and errors, but deliberately omits
+tenant, content, stream, session, URL, and client identifiers. Each row says
+whether it represents activity in the requested window or a freshness-bounded
+current observation. Current storage rows also retain their hot/cold scope and
+observation time; resident bytes are never added to lifecycle-event byte flow.
 
 ### Control / API Communications
 
@@ -15215,63 +15238,23 @@ frameworks edge mist cores analyze ./edge1-mist-core.tar.gz --cache-dir ~/.cache
 
 ## Livepeer Commands
 
-Livepeer gateway management. Uses Quartermaster service discovery by default; override with `--gateway host:port`.
+Livepeer wallet reads come from Arbitrum, using the wallet address in Quartermaster discovery and the cluster's configured RPC. The gateway CLI listener remains loopback-only. Routine TicketBroker funding is Purser-owned; exceptional reserve/unlock/withdraw operations SSH to the selected manifest host and require a temporary maintenance-window flag.
 
 ### frameworks livepeer status
 
-Show gateway status (version, ETH address, deposit info).
+Show the wallet's ETH balance and TicketBroker deposit, reserve, and withdraw round.
 
 ```bash
 frameworks livepeer status
-frameworks livepeer status --gateway 10.0.1.5:8935
-frameworks livepeer status --cluster edge-us-east
+frameworks livepeer status --cluster media-us-1
+frameworks livepeer status --address 0x... --rpc https://arb1.example
 ```
 
 **Flags:**
 
-- `--gateway` - Gateway address (host:port), bypasses discovery
+- `--address` - Wallet address; overrides Quartermaster discovery
+- `--rpc` - Arbitrum JSON-RPC URL; overrides cluster shared env
 - `--cluster` - Cluster ID for discovery
-
-### frameworks livepeer deposit fund
-
-Fund the TicketBroker deposit.
-
-```bash
-frameworks livepeer deposit fund --amount 1000000000000000000
-```
-
-**Flags:**
-
-- `--amount` (required) - Amount in wei
-
-### frameworks livepeer deposit reserve
-
-Fund both deposit and reserve.
-
-```bash
-frameworks livepeer deposit reserve --deposit 1000000000000000000 --reserve 500000000000000000
-```
-
-**Flags:**
-
-- `--deposit` (required) - Deposit amount in wei
-- `--reserve` (required) - Reserve amount in wei
-
-### frameworks livepeer deposit unlock
-
-Start the unlock period for deposit and reserve.
-
-```bash
-frameworks livepeer deposit unlock
-```
-
-### frameworks livepeer deposit withdraw
-
-Withdraw unlocked deposit and reserve.
-
-```bash
-frameworks livepeer deposit withdraw
-```
 
 ### frameworks livepeer wallet address
 
@@ -15287,6 +15270,25 @@ Show the gateway's ETH balance.
 
 ```bash
 frameworks livepeer wallet balance
+```
+
+### frameworks livepeer deposit reserve
+
+Exceptionally add TicketBroker reserve over SSH to the gateway's loopback CLI. The amount is wei. Routine funding remains Purser-owned.
+
+```bash
+frameworks livepeer deposit reserve --host regional-eu-1 --amount 200000000000000000
+```
+
+The command fails with a runbook message while tx routes are disabled. Temporarily set `enable_cli_tx_routes: "true"` on the selected gateway service, provision, run the command, and remove the setting immediately.
+
+### frameworks livepeer unlock / withdraw
+
+Start the TicketBroker unlock period or withdraw after it has elapsed:
+
+```bash
+frameworks livepeer unlock --host regional-eu-1
+frameworks livepeer withdraw --host regional-eu-1
 ```
 
 ---
@@ -16024,6 +16026,37 @@ frameworks cluster migrate --phase postdeploy --to-version v0.5.0
 Direct `cluster upgrade --all` does not run declared release transitions and
 fails closed when one gates a downstream service. It is not the normal whole
 release path.
+
+## Moving the physical ClickHouse node
+
+`frameworks cluster clickhouse migrate` moves the existing Periscope dataset
+to a new Replicated ClickHouse node. This is a data cutover, separate from the
+versioned schema-migration commands above. The service endpoints deliberately
+split readers from writers:
+
+- `periscope-ingest` and `periscope-metering` follow `write_endpoint`;
+- `periscope-query` follows `read_endpoint`;
+- `METERING_SOURCE_ID` continues to identify the same logical dataset and must
+  not change during the move.
+
+Before the final sync, stop both Ingest and Metering. Kafka buffers analytics
+events while Ingest is stopped, and Metering's PostgreSQL cursor retains its
+exact position. The cutover command requires both confirmations:
+
+```bash
+frameworks cluster clickhouse migrate cutover \
+  --from <old-clickhouse-host> \
+  --ingest-stopped \
+  --metering-stopped
+```
+
+For the online endpoint sequence, first set `write_endpoint` to the new node,
+re-provision and resume Ingest, and let its Kafka lag drain. Then re-provision
+and resume Metering with the unchanged source ID. Finally set `read_endpoint`
+to the new node and re-provision Query. Do not resume Metering against the old
+source after Ingest has begun writing the destination, and do not decommission
+the old node until parity, service health, cursor progress, and Purser report
+consumption are verified.
 
 ## Ledger details
 
@@ -17763,17 +17796,67 @@ service identity and certificate distribution tenant-scoped.
 
 #### Tenant alias lifecycle
 
-| Status         | Meaning                                                                                                      |
-| -------------- | ------------------------------------------------------------------------------------------------------------ |
-| `cert_issuing` | Quartermaster signaled intent on paid-tier activation; Navigator is running ACME (LE primary, GTS fallback). |
-| `cert_issued`  | Cert exists; tenant URLs become visible once Navigator has at least one ACK-gated DNS member.                |
-| `cert_failed`  | ACME error; check `last_error`. The worker retries on the next reconciliation pass.                          |
-| `tearing_down` | Tenant downgraded / cancelled; Navigator is clearing DNS records and per-edge cert distribution.             |
+| Status         | Meaning                                                                                                                                                            |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `cert_issuing` | Quartermaster signaled intent on paid-tier activation; Navigator is running ACME (LE primary, GTS fallback).                                                       |
+| `cert_issued`  | Cert exists; tenant URLs become visible once Navigator has at least one ACK-gated DNS member.                                                                      |
+| `cert_failed`  | ACME error; check `last_error`. The worker retries on the next reconciliation pass.                                                                                |
+| `tearing_down` | Tenant downgraded / cancelled; Navigator clears DNS, per-edge distribution, the tenant TLS bundle, and tenant certificates without active custom-domain authority. |
 
 Additions are ACK-gated: Helmsman applies the ConfigSeed, Foghorn reports
 the ACK to Navigator, and Navigator adds only successfully applied edges to
 Bunny DNS. Removals are DNS-first: Navigator removes the cluster's edges
 from Bunny before later ConfigSeeds drop the tenant cert from those edges.
+Navigator continues serving the existing certificate while teardown clears the
+alias records. After the alias records are gone, Navigator removes credentials only if the alias
+is still `tearing_down`; a concurrent reactivation fences that stale cleanup. The
+same transaction removes the tenant TLS bundle and tenant certificate rows that
+are not backed by an active custom-domain intent. Bundle persistence and renewal
+also require live authority. During rename or issuance retry, edges continue
+serving the last-good certificate under its original SANs; the old alias remains
+in DNS until an edge ACKs the exact replacement bundle revision and Navigator
+publishes the replacement alias. Quartermaster sends ordered cluster grants and
+revocations through its durable Navigator outbox. Navigator stores active or
+revoked authority for each tenant/cluster pair with the outbox sequence, locks
+that decision while admitting an edge ACK, and excludes tombstoned pairs from
+readiness and DNS publication. An edge ACK therefore cannot create or resurrect
+authority. If a rolling-upgrade first-admission lookup is unavailable, Navigator
+still records results backed by local authority before requesting durable replay
+of the unresolved pairs. Quartermaster's repair loop compares the full desired and applied
+cluster sets. Foghorn does not
+treat a shorter successful Quartermaster tenant list as immediate revocation: an
+omitted tenant bundle remains in the durable edge seed only until its certificate
+expires. Navigator's explicit, error-free `GetTLSBundle(found=false)` is
+authoritative and removes that bundle from the next seed. A response error is a
+failed authority read and preserves valid local material. This preserves a still-valid local media
+path through a list gap without retaining a torn-down credential. A completed
+issuance cannot recreate an orphan after teardown.
+Navigator advances a monotonic authority generation on rename, teardown, and
+reactivation, and serializes issuance across replicas. Delayed ACME completion
+therefore cannot cross a same-label reactivation or an a → b → a transition.
+Replacement bundle persistence atomically publishes the revision, alias status,
+and included custom-domain certificate metadata. First alias issuance performs a
+separate fenced status transition after bundle persistence. Foghorn renders every certificate SAN and
+pushes revision-only changes so Helmsman can ACK the exact material it applied.
+
+Custom-domain removal follows the same rule: reactivation wins over stale
+cleanup, late ACME writes cannot cross the lifecycle fence, and Navigator removes
+the tenant ACME account once no custom domain in `verified`, `cert_issuing`,
+`cert_issued`, or `cert_failed` remains. Pending and teardown rows cannot preserve
+an otherwise orphaned account. On addition, `cert_issued` is published only after
+the tenant's edge-distributed multi-SAN bundle includes the custom domain; bundle
+refresh failures remain retryable.
+`cert_failed` retains the domain's retry credentials but is excluded from the
+tenant-wide SAN bundle until it returns to an issuing/issued state, preventing one
+broken custom domain from blocking renewal for the tenant alias and healthy SANs.
+Renewal re-derives the SAN set, and an issuance failure immediately rebuilds the
+aggregate bundle without the failed domain. If that rebuild fails, each
+`cert_failed` pass retries it before re-verifying the domain.
+During mixed-version rollouts, legacy edges may ACK without a bundle revision.
+An already-published legacy row stays in DNS for continuity, but it does not count
+as replacement readiness and an unproven edge cannot enter the pool. A legacy
+failure may demote only legacy state without a newer sequenced result. An upgraded
+Helmsman must ACK the exact current revision for promotion or readiness.
 
 #### Self-hosted trust boundary
 

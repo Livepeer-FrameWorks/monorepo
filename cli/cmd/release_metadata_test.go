@@ -25,8 +25,8 @@ func TestReleaseMetadata_EmitsV0_3Boundary(t *testing.T) {
 	if err := yaml.Unmarshal(buf.Bytes(), &meta); err != nil {
 		t.Fatalf("emitted manifest is not valid YAML: %v\n%s", err, buf.String())
 	}
-	if meta.MinCLIVersion != "v0.3.0-rc1" || len(meta.RollbackDisabled) != 2 || meta.RollbackDisabled[0] != "foghorn" || meta.RollbackDisabled[1] != "navigator" {
-		t.Fatalf("metadata = %+v, want v0.3.0 floor and Foghorn/Navigator rollback disabled\nfull output:\n%s", meta, buf.String())
+	if meta.MinCLIVersion != "v0.3.0-rc1" || len(meta.RollbackDisabled) != 3 || meta.RollbackDisabled[0] != "foghorn" || meta.RollbackDisabled[1] != "navigator" || meta.RollbackDisabled[2] != "purser" {
+		t.Fatalf("metadata = %+v, want v0.3.0 floor and Foghorn/Navigator/Purser rollback disabled\nfull output:\n%s", meta, buf.String())
 	}
 }
 
@@ -39,7 +39,7 @@ func TestReleaseMetadata_RollbackDisabledIsBaseNormalized(t *testing.T) {
 	if err := cmd.Execute(); err != nil {
 		t.Fatalf("release-metadata v0.3.0-rc3: %v", err)
 	}
-	if !strings.Contains(buf.String(), "min_cli_version: v0.3.0-rc1") || !strings.Contains(buf.String(), "- foghorn") || !strings.Contains(buf.String(), "- navigator") {
+	if !strings.Contains(buf.String(), "min_cli_version: v0.3.0-rc1") || !strings.Contains(buf.String(), "- foghorn") || !strings.Contains(buf.String(), "- navigator") || !strings.Contains(buf.String(), "- purser") {
 		t.Fatalf("prerelease must emit the base release's v0.3 metadata; got:\n%s", buf.String())
 	}
 }

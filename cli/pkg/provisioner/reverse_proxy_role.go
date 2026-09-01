@@ -287,6 +287,7 @@ func renderCaddyfile(sites []proxySite) string {
 		if site.TLSMode != "off" {
 			b.WriteString("    header Strict-Transport-Security \"max-age=31536000\"\n")
 		}
+		writeCaddyRuntimeConfigHeaders(&b, site)
 		writeCaddyProxyDirectives(&b, site)
 		for _, directive := range site.ExtraDirectives {
 			b.WriteString("    ")
@@ -296,6 +297,21 @@ func renderCaddyfile(sites []proxySite) string {
 		b.WriteString("}\n\n")
 	}
 	return b.String()
+}
+
+// writeCaddyRuntimeConfigHeaders makes browser-visible deployment config
+// immediately replaceable during provider changes and key rotation. It only
+// decorates sites that already serve the path, so it cannot widen routing.
+func writeCaddyRuntimeConfigHeaders(b *strings.Builder, site proxySite) {
+	const path = "/runtime-config.js"
+	if strings.EqualFold(strings.TrimSpace(site.Profile), "media_ingest") || !siteServesPath(site, path) {
+		return
+	}
+	b.WriteString("    @runtime_config path /runtime-config.js\n")
+	b.WriteString("    header @runtime_config {\n")
+	b.WriteString("        Cache-Control \"no-store\"\n")
+	b.WriteString("        -Expires\n")
+	b.WriteString("    }\n")
 }
 
 // splitWWWRedirectDomains partitions a site's domain list into served domains
@@ -410,6 +426,21 @@ func writeNginxTenantAliasPlayback(b *strings.Builder, tap *tenantAliasPlayback)
 }
 
 func writeCaddyProxyDirectives(b *strings.Builder, site proxySite) {
+	if strings.EqualFold(strings.TrimSpace(site.Profile), "media_ingest") {
+		b.WriteString("    @media_ingest {\n")
+		b.WriteString("        path /live /live/*\n")
+		b.WriteString("        method POST PUT\n")
+		b.WriteString("    }\n")
+		fmt.Fprintf(b, "    reverse_proxy @media_ingest %s {\n", site.Upstream)
+		if caddyHTTPSUpstreamNeedsHostRewrite(site.Upstream) {
+			b.WriteString("        header_up Host {upstream_hostport}\n")
+		}
+		b.WriteString("        header_up X-Real-IP {remote_host}\n")
+		b.WriteString("        header_up X-Forwarded-For {remote_host}\n")
+		b.WriteString("    }\n")
+		b.WriteString("    respond 404\n")
+		return
+	}
 	paths := site.PathPrefixes
 	if len(paths) == 0 {
 		writeCaddyReverseProxy(b, "", site.Upstream)
@@ -462,12 +493,19 @@ func writeNginxServer(b *strings.Builder, port int, listenSuffix string, site pr
 		b.WriteString("    add_header Strict-Transport-Security \"max-age=31536000\" always;\n")
 	}
 	paths := site.PathPrefixes
+	if strings.EqualFold(strings.TrimSpace(site.Profile), "media_ingest") {
+		paths = []string{"^~ /live/"}
+	}
 	if len(paths) == 0 {
 		paths = []string{"/"}
 	}
+	writeNginxRuntimeConfigLocation(b, site)
 	writeNginxCredentialPathLocation(b, site)
 	for _, path := range paths {
 		fmt.Fprintf(b, "\n    location %s {\n", path)
+		if strings.EqualFold(strings.TrimSpace(site.Profile), "media_ingest") {
+			b.WriteString("        limit_except POST PUT { deny all; }\n")
+		}
 		// A site that declares a credential-bearing prefix itself gets the
 		// error-log suppression on its own location rather than a second one.
 		if isCredentialPath(path) {
@@ -477,6 +515,22 @@ func writeNginxServer(b *strings.Builder, port int, listenSuffix string, site pr
 		b.WriteString("    }\n")
 	}
 	b.WriteString("}\n\n")
+}
+
+// writeNginxRuntimeConfigLocation makes the browser-visible deployment config
+// immediately replaceable during provider changes and key rotation. It only
+// decorates sites that already serve the path, so it cannot widen routing.
+func writeNginxRuntimeConfigLocation(b *strings.Builder, site proxySite) {
+	const path = "/runtime-config.js"
+	if strings.EqualFold(strings.TrimSpace(site.Profile), "media_ingest") || !siteServesPath(site, path) {
+		return
+	}
+	fmt.Fprintf(b, "\n    location = %s {\n", path)
+	b.WriteString("        proxy_hide_header Cache-Control;\n")
+	b.WriteString("        proxy_hide_header Expires;\n")
+	b.WriteString("        add_header Cache-Control \"no-store\" always;\n")
+	writeNginxProxyBlock(b, site)
+	b.WriteString("    }\n")
 }
 
 // credentialPathPrefixes are request paths whose first segment is a publishing
@@ -552,6 +606,10 @@ func isCredentialPath(path string) bool {
 
 func writeNginxProxyBlock(b *strings.Builder, site proxySite) {
 	profile := nginxProxyProfile(site.Profile)
+	forwardedFor := "$proxy_add_x_forwarded_for"
+	if strings.EqualFold(strings.TrimSpace(site.Profile), "media_ingest") {
+		forwardedFor = "$remote_addr"
+	}
 	fmt.Fprintf(b, `        proxy_pass %s;
         proxy_http_version 1.1;
         client_max_body_size %s;
@@ -565,7 +623,7 @@ func writeNginxProxyBlock(b *strings.Builder, site proxySite) {
         proxy_connect_timeout %s;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For %s;
         proxy_set_header X-Forwarded-Proto $scheme;
 `,
 		nginxProxyPassTarget(site.Upstream),
@@ -578,6 +636,7 @@ func writeNginxProxyBlock(b *strings.Builder, site proxySite) {
 		firstNonEmpty(site.ProxyBuffers, profile.ProxyBuffers),
 		firstNonEmpty(site.ProxyBusyBuffersSize, profile.ProxyBusyBuffersSize),
 		firstNonEmpty(site.ProxyConnectTimeout, profile.ProxyConnectTimeout),
+		forwardedFor,
 	)
 	if site.Websocket.Or(profile.Websocket) {
 		b.WriteString(`        proxy_set_header Upgrade $http_upgrade;
