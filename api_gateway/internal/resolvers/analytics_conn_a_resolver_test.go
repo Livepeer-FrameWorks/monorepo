@@ -3,13 +3,16 @@ package resolvers
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"frameworks/api_gateway/internal/clients/clientstest"
 
 	periscope "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
+	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 )
 
 // periA wires a resolver to a FakePeriscope only. Every other client stays nil
@@ -835,7 +838,7 @@ func TestDoGetSessionQoeTimeSeries_TenantGuard(t *testing.T) {
 
 // --- Access-scope-gated resolvers: tenant guard only ---
 //
-// DoGetClusterBootOps, DoGetClusterQoeOps, DoGetNodeMetricsAggregated and
+// DoGetClusterBootOps, DoGetClusterQoeOps, DoGetClusterWorkload, DoGetNodeMetricsAggregated and
 // DoGetNodePerformance5mConnection all gate access through Quartermaster
 // (requireClusterOperatorTenant / requireOwnedNode), which is nil here and would
 // panic on the happy path. Their tenant guard runs before any client call, so
@@ -858,6 +861,73 @@ func TestDoGetClusterQoeOps_TenantGuard(t *testing.T) {
 	}
 	if p.Calls != 0 {
 		t.Fatalf("backend hit despite missing tenant: Calls=%d", p.Calls)
+	}
+}
+
+func TestDoGetClusterWorkload_TenantGuard(t *testing.T) {
+	p := &clientstest.FakePeriscope{}
+	if _, err := periA(p).DoGetClusterWorkload(authedNoTenantCtx(), nil, nil, nil); err == nil {
+		t.Fatal("expected tenant required error")
+	}
+	if p.Calls != 0 {
+		t.Fatalf("backend hit despite missing tenant: Calls=%d", p.Calls)
+	}
+}
+
+func TestDoGetClusterWorkload_OwnershipScope(t *testing.T) {
+	qm := &clientstest.FakeQuartermaster{
+		ListClustersByOwnerFn: func(_ context.Context, owner string, _ *commonpb.CursorPaginationRequest) (*quartermasterpb.ListClustersResponse, error) {
+			if owner != "tenant-1" {
+				t.Fatalf("owner = %q", owner)
+			}
+			return &quartermasterpb.ListClustersResponse{Clusters: []*quartermasterpb.InfrastructureCluster{{ClusterId: "cluster-owned"}}}, nil
+		},
+	}
+	var requested []string
+	p := &clientstest.FakePeriscope{
+		GetClusterWorkloadFn: func(_ context.Context, tenantID string, clusterIDs []string, _ *periscope.TimeRangeOpts) (*periscopepb.GetClusterWorkloadResponse, error) {
+			if tenantID != "tenant-1" {
+				t.Fatalf("tenant = %q", tenantID)
+			}
+			requested = append([]string(nil), clusterIDs...)
+			return &periscopepb.GetClusterWorkloadResponse{Rows: []*periscopepb.ClusterWorkload{{ClusterId: "cluster-owned", NodeId: "edge-1", WorkKind: "viewer"}}}, nil
+		},
+	}
+	r := &Resolver{Clients: clientstest.Clients(clientstest.WithPeriscope(p), clientstest.WithQuartermaster(qm)), Logger: clientstest.DiscardLogger()}
+
+	foreign := "cluster-foreign"
+	if _, err := r.DoGetClusterWorkload(clientstest.AuthedCtx("tenant-1"), &foreign, nil, nil); err == nil {
+		t.Fatal("expected foreign cluster to be rejected")
+	}
+	if p.Calls != 0 {
+		t.Fatalf("Periscope called for foreign cluster: %d", p.Calls)
+	}
+
+	owned := "cluster-owned"
+	rows, err := r.DoGetClusterWorkload(clientstest.AuthedCtx("tenant-1"), &owned, nil, nil)
+	if err != nil {
+		t.Fatalf("owned workload: %v", err)
+	}
+	if len(requested) != 1 || requested[0] != owned || len(rows) != 1 || rows[0].GetNodeId() != "edge-1" {
+		t.Fatalf("owned scope/result mismatch: clusters=%v rows=%v", requested, rows)
+	}
+}
+
+func TestDoGetClusterWorkload_RejectsTenantWithoutOwnedClusters(t *testing.T) {
+	qm := &clientstest.FakeQuartermaster{
+		ListClustersByOwnerFn: func(context.Context, string, *commonpb.CursorPaginationRequest) (*quartermasterpb.ListClustersResponse, error) {
+			return &quartermasterpb.ListClustersResponse{}, nil
+		},
+	}
+	p := &clientstest.FakePeriscope{}
+	r := &Resolver{Clients: clientstest.Clients(clientstest.WithPeriscope(p), clientstest.WithQuartermaster(qm)), Logger: clientstest.DiscardLogger()}
+
+	_, err := r.DoGetClusterWorkload(clientstest.AuthedCtx("tenant-subscriber"), nil, nil, nil)
+	if err == nil || !strings.Contains(err.Error(), "cluster owner access required") {
+		t.Fatalf("error = %v, want cluster owner denial", err)
+	}
+	if p.Calls != 0 {
+		t.Fatalf("Periscope called for non-owner tenant: %d", p.Calls)
 	}
 }
 

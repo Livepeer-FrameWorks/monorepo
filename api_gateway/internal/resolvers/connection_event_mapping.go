@@ -26,21 +26,24 @@ func mapSignalmanConnectionEvent(event *signalmanpb.SignalmanEvent) *periscopepb
 		}
 		streamID := vc.GetStreamId()
 		return &periscopepb.ConnectionEvent{
-			EventId:        buildLiveConnectionEventID(streamID, vc.GetSessionId(), ts),
-			Timestamp:      ts,
-			TenantId:       event.GetTenantId(),
-			StreamId:       streamID,
-			SessionId:      vc.GetSessionId(),
-			ConnectionAddr: vc.GetHost(),
-			Connector:      vc.GetConnector(),
-			NodeId:         vc.GetNodeId(),
-			CountryCode:    vc.GetClientCountry(),
-			City:           vc.GetClientCity(),
-			Latitude:       vc.GetClientLatitude(),
-			Longitude:      vc.GetClientLongitude(),
-			EventType:      "connect",
-			ClientBucket:   vc.GetClientBucket(),
-			NodeBucket:     vc.GetNodeBucket(),
+			EventId:         buildLiveConnectionEventID(streamID, vc.GetSessionId(), ts),
+			Timestamp:       ts,
+			TenantId:        event.GetTenantId(),
+			StreamId:        streamID,
+			SessionId:       vc.GetSessionId(),
+			ConnectionAddr:  vc.GetHost(),
+			Connector:       vc.GetConnector(),
+			NodeId:          vc.GetNodeId(),
+			CountryCode:     vc.GetClientCountry(),
+			City:            vc.GetClientCity(),
+			Latitude:        vc.GetClientLatitude(),
+			Longitude:       vc.GetClientLongitude(),
+			EventType:       "connect",
+			ClientBucket:    vc.GetClientBucket(),
+			NodeBucket:      vc.GetNodeBucket(),
+			ClusterId:       preferPlacement(vc.GetClusterId(), event.Data.GetSourceClusterId()),
+			OriginClusterId: preferPlacement(vc.GetOriginClusterId(), event.Data.GetStreamOriginClusterId()),
+			ControlCellId:   preferPlacement(vc.GetControlCellId(), event.Data.GetControlCellId()),
 		}
 
 	case signalmanpb.EventType_EVENT_TYPE_VIEWER_DISCONNECT:
@@ -81,6 +84,9 @@ func mapSignalmanConnectionEvent(event *signalmanpb.SignalmanEvent) *periscopepb
 			NodeBucket:             vd.GetNodeBucket(),
 			SessionDurationSeconds: duration,
 			BytesTransferred:       bytesTransferred,
+			ClusterId:              preferPlacement(vd.GetClusterId(), event.Data.GetSourceClusterId()),
+			OriginClusterId:        preferPlacement(vd.GetOriginClusterId(), event.Data.GetStreamOriginClusterId()),
+			ControlCellId:          preferPlacement(vd.GetControlCellId(), event.Data.GetControlCellId()),
 		}
 	}
 

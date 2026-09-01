@@ -51,10 +51,15 @@ func TestRedactInternalJSONMalformedPayload(t *testing.T) {
 func TestMapPeriscopeStreamEventMalformedDetails(t *testing.T) {
 	badDetails := "{not-json"
 	event := &periscopepb.StreamEvent{
-		EventId:   "evt-1",
-		StreamId:  "stream-1",
-		EventType: "STREAM_LIFECYCLE",
-		EventData: badDetails,
+		EventId:               "evt-1",
+		StreamId:              "stream-1",
+		EventType:             "STREAM_LIFECYCLE",
+		EventData:             badDetails,
+		SourceRegion:          "us-east",
+		SourceClusterId:       "edge-us",
+		StreamOriginRegion:    "eu-west",
+		StreamOriginClusterId: "origin-eu",
+		SchemaVersion:         3,
 	}
 
 	result := mapPeriscopeStreamEvent(event)
@@ -66,6 +71,9 @@ func TestMapPeriscopeStreamEventMalformedDetails(t *testing.T) {
 	}
 	if *result.Details != badDetails {
 		t.Fatalf("expected details to preserve malformed payload, got %q", *result.Details)
+	}
+	if result.SourceClusterId != "edge-us" || result.StreamOriginClusterId != "origin-eu" || result.SchemaVersion != 3 {
+		t.Fatalf("placement metadata not mapped: %+v", result)
 	}
 }
 
@@ -192,6 +200,11 @@ func TestMapSignalmanStreamEventMappingRules(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			tt.event.Data.SourceRegion = "us-east"
+			tt.event.Data.SourceClusterId = "cluster-us"
+			tt.event.Data.StreamOriginRegion = "eu-west"
+			tt.event.Data.StreamOriginClusterId = "cluster-eu"
+			tt.event.Data.SchemaVersion = 2
 			got := mapSignalmanStreamEvent(tt.event)
 			if got == nil {
 				t.Fatalf("expected mapped event, got nil")
@@ -210,6 +223,11 @@ func TestMapSignalmanStreamEventMappingRules(t *testing.T) {
 			}
 			if got.EventId == "" {
 				t.Fatal("EventId must be set")
+			}
+			if got.SourceRegion != "us-east" || got.SourceClusterId != "cluster-us" ||
+				got.StreamOriginRegion != "eu-west" || got.StreamOriginClusterId != "cluster-eu" || got.SchemaVersion != 2 {
+				t.Fatalf("placement = source %q/%q origin %q/%q schema %d",
+					got.SourceRegion, got.SourceClusterId, got.StreamOriginRegion, got.StreamOriginClusterId, got.SchemaVersion)
 			}
 			switch {
 			case tt.wantStatus == nil && got.Status != nil:

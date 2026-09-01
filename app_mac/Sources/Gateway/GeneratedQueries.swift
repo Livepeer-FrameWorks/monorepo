@@ -1202,6 +1202,30 @@ enum GQL {
   }
   """
 
+  static let GetClusterWorkload = """
+  # Owner-only infrastructure workload. Kept separate from generally available
+  # traffic analytics so a non-owner authorization error cannot null that query.
+  query GetClusterWorkload($clusterId: ID, $timeRange: TimeRangeInput, $noCache: Boolean = false) {
+    analytics {
+      infra {
+        clusterWorkload(clusterId: $clusterId, timeRange: $timeRange, noCache: $noCache) {
+          clusterId
+          nodeId
+          workKind
+          measurementKind
+          storageScope
+          observedAt
+          eventCount
+          activeCount
+          bytes
+          mediaSeconds
+          errorCount
+        }
+      }
+    }
+  }
+  """
+
   static let GetConnectionEvents = """
   # Fetch paginated viewer connection events with geographic and session details
   # Returns connect/disconnect events for analytics and monitoring
@@ -1233,6 +1257,9 @@ enum GQL {
               connectionAddr
               connector
               nodeId
+              clusterId
+              originClusterId
+              controlCellId
               countryCode
               city
               latitude
@@ -1333,6 +1360,8 @@ enum GQL {
               peerCluster
               role
               reason
+              controlCellId
+              originClusterId
             }
           }
           pageInfo {
@@ -2594,6 +2623,10 @@ enum GQL {
               nodeLatitude
               nodeLongitude
               nodeName
+              clusterId
+              selectedClusterId
+              originClusterId
+              controlCellId
               routingDistance
               candidatesCount
             }
@@ -2659,6 +2692,9 @@ enum GQL {
               streamTenantId
               clusterId
               remoteClusterId
+              selectedClusterId
+              originClusterId
+              controlCellId
             }
           }
           pageInfo {
@@ -3901,6 +3937,8 @@ enum GQL {
           clusterId
           clusterName
           usageType
+          unit
+          dimensions
           usageValue
           createdAt
           periodStart

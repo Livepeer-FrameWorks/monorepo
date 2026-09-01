@@ -51,14 +51,17 @@ func mapSignalmanRoutingEvent(event *signalmanpb.SignalmanEvent) *periscopepb.Ro
 			}
 			return 0
 		}(),
-		ClientBucket:    data.ClientBucket,
-		NodeBucket:      data.NodeBucket,
-		StreamTenantId:  data.StreamTenantId,
-		ClusterId:       data.ClusterId,
-		EventType:       data.EventType,
-		Source:          data.Source,
-		RoutingDistance: data.RoutingDistanceKm,
-		RemoteClusterId: data.RemoteClusterId,
+		ClientBucket:      data.ClientBucket,
+		NodeBucket:        data.NodeBucket,
+		StreamTenantId:    data.StreamTenantId,
+		ClusterId:         preferPlacementPtr(data.ClusterId, event.Data.GetSourceClusterId()),
+		EventType:         data.EventType,
+		Source:            data.Source,
+		RoutingDistance:   data.RoutingDistanceKm,
+		RemoteClusterId:   data.RemoteClusterId,
+		SelectedClusterId: data.SelectedClusterId,
+		ControlCellId:     preferPlacementPtr(data.ControlCellId, event.Data.GetControlCellId()),
+		OriginClusterId:   preferPlacementPtr(data.OriginClusterId, event.Data.GetStreamOriginClusterId()),
 	}
 
 	if data.TenantId != nil {

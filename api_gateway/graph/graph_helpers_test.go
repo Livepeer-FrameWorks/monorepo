@@ -1,9 +1,11 @@
 package graph
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"frameworks/api_gateway/graph/model"
@@ -74,6 +76,19 @@ func TestEncodeTimeParts(t *testing.T) {
 	}
 	if got := encodeProtoTimestampPart(timestamppb.New(tm)); got != "12345" {
 		t.Errorf("encodeProtoTimestampPart = %q, want 12345", got)
+	}
+}
+
+func TestClusterWorkloadObservedAtResolver(t *testing.T) {
+	resolver := &clusterWorkloadResolver{}
+	if got, err := resolver.ObservedAt(context.Background(), &periscopepb.ClusterWorkload{}); err != nil || got != nil {
+		t.Fatalf("nil observed_at = (%v, %v), want (nil, nil)", got, err)
+	}
+
+	want := time.Unix(1_700_000_000, 123_000_000).UTC()
+	got, err := resolver.ObservedAt(context.Background(), &periscopepb.ClusterWorkload{ObservedAt: timestamppb.New(want)})
+	if err != nil || got == nil || !got.Equal(want) {
+		t.Fatalf("observed_at = (%v, %v), want (%v, nil)", got, err, want)
 	}
 }
 

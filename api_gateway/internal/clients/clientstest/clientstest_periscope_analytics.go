@@ -83,6 +83,14 @@ func (f *FakePeriscope) GetClusterQoeOps(ctx context.Context, tenantID string, c
 	return f.GetClusterQoeOpsFn(ctx, tenantID, clusterIDs, timeRange)
 }
 
+func (f *FakePeriscope) GetClusterWorkload(ctx context.Context, tenantID string, clusterIDs []string, timeRange *periscope.TimeRangeOpts) (*periscopepb.GetClusterWorkloadResponse, error) {
+	f.Calls++
+	if f.GetClusterWorkloadFn == nil {
+		panic("FakePeriscope.GetClusterWorkload not stubbed")
+	}
+	return f.GetClusterWorkloadFn(ctx, tenantID, clusterIDs, timeRange)
+}
+
 func (f *FakePeriscope) GetClusterTrafficMatrix(ctx context.Context, tenantID string, timeRange *periscope.TimeRangeOpts) (*periscopepb.GetClusterTrafficMatrixResponse, error) {
 	f.Calls++
 	if f.GetClusterTrafficMatrixFn == nil {

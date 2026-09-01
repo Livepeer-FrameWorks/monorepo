@@ -132,6 +132,9 @@ models:
         resolver: true
       stream:
         resolver: true
+  ClusterWorkload:
+    model:
+      - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.ClusterWorkload
   ViewerSession:
     model:
       - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope.ViewerSession

@@ -2,7 +2,7 @@
 
 # GraphQL generation using gqlgen
 graphql: clean
-	gqlgen generate
+	go run github.com/99designs/gqlgen generate
 
 # Clean generated files (keep schema.resolvers.go as it contains implementations)
 clean:
@@ -11,7 +11,7 @@ clean:
 
 # Install required tools
 install-tools:
-	go install github.com/99designs/gqlgen@latest
+	go install github.com/99designs/gqlgen@v0.17.89
 
 # Generate GraphQL and display info
 generate-all: graphql

@@ -8,6 +8,8 @@ query GetUsageRecords($timeRange: TimeRangeInput, $first: Int = 50, $after: Stri
         clusterId
         clusterName
         usageType
+        unit
+        dimensions
         usageValue
         createdAt
         periodStart

@@ -266,19 +266,7 @@ func (l *LiveNodeStateLoader) loadAll(ctx context.Context) {
 		return
 	}
 
-	var relatedTenantIDs []string
-	subs, err := l.sc.Quartermaster.ListMySubscriptions(ctx, &quartermasterpb.ListMySubscriptionsRequest{
-		TenantId: tenantID,
-	})
-	if err == nil && subs != nil {
-		for _, cluster := range subs.Clusters {
-			if cluster.OwnerTenantId != nil && *cluster.OwnerTenantId != "" && *cluster.OwnerTenantId != tenantID {
-				relatedTenantIDs = append(relatedTenantIDs, *cluster.OwnerTenantId)
-			}
-		}
-	}
-
-	response, err := l.sc.Periscope.GetLiveNodes(ctx, tenantID, nil, relatedTenantIDs)
+	response, err := l.sc.Periscope.GetLiveNodes(ctx, tenantID, nil, nil)
 	if err != nil {
 		l.loadErr = err
 		return

@@ -725,12 +725,29 @@ func TestDoListVodRetentionAssets_TenantGuard(t *testing.T) {
 	}
 }
 
-// --- DoGetLiveNodeState (Periscope GetLiveNodes + Quartermaster ListMySubscriptions) ---
+// --- DoGetLiveNodeState (owned-node Periscope state) ---
 
 func liveNodeCtx(tenantID string) context.Context {
 	ctx := clientstest.AuthedCtx(tenantID)
-	// Resolver reads the user (not just the tenant key) to scope related tenants.
 	return context.WithValue(ctx, ctxkeys.KeyUser, &middleware.UserContext{TenantID: tenantID})
+}
+
+func ownedNodeQuartermaster(t *testing.T, nodeID, tenantID string) *clientstest.FakeQuartermaster {
+	t.Helper()
+	return &clientstest.FakeQuartermaster{
+		GetNodeFn: func(_ context.Context, requestedNodeID string) (*quartermasterpb.NodeResponse, error) {
+			return &quartermasterpb.NodeResponse{Node: &quartermasterpb.InfrastructureNode{
+				NodeId:    requestedNodeID,
+				ClusterId: "cluster-owned",
+			}}, nil
+		},
+		ListClustersByOwnerFn: func(_ context.Context, ownerTenantID string, _ *commonpb.CursorPaginationRequest) (*quartermasterpb.ListClustersResponse, error) {
+			if ownerTenantID != tenantID {
+				t.Fatalf("owner tenant = %q, want %q", ownerTenantID, tenantID)
+			}
+			return &quartermasterpb.ListClustersResponse{Clusters: []*quartermasterpb.InfrastructureCluster{{ClusterId: "cluster-owned"}}}, nil
+		},
+	}
 }
 
 func TestDoGetLiveNodeState_ReturnsFirstMatchingNode(t *testing.T) {
@@ -744,15 +761,7 @@ func TestDoGetLiveNodeState_ReturnsFirstMatchingNode(t *testing.T) {
 			}, nil
 		},
 	}
-	owner := "owner-t"
-	qm := &clientstest.FakeQuartermaster{
-		ListMySubscriptionsFn: func(_ context.Context, _ *quartermasterpb.ListMySubscriptionsRequest) (*quartermasterpb.ListClustersResponse, error) {
-			// A subscribed cluster owned by another tenant widens infra visibility.
-			return &quartermasterpb.ListClustersResponse{
-				Clusters: []*quartermasterpb.InfrastructureCluster{{OwnerTenantId: &owner}},
-			}, nil
-		},
-	}
+	qm := ownedNodeQuartermaster(t, "node-1", "t1")
 	r := &Resolver{
 		Clients: clientstest.Clients(clientstest.WithPeriscope(p), clientstest.WithQuartermaster(qm)),
 		Logger:  clientstest.DiscardLogger(),
@@ -764,8 +773,8 @@ func TestDoGetLiveNodeState_ReturnsFirstMatchingNode(t *testing.T) {
 	if gotNodeID == nil || *gotNodeID != "node-1" {
 		t.Fatalf("nodeID not forwarded: %v", gotNodeID)
 	}
-	if len(gotRelated) != 1 || gotRelated[0] != "owner-t" {
-		t.Fatalf("related tenant IDs not derived from subscriptions: %v", gotRelated)
+	if len(gotRelated) != 0 {
+		t.Fatalf("owned-node read widened to related tenants: %v", gotRelated)
 	}
 	if got == nil || got.NodeId != "node-1" {
 		t.Fatalf("node not returned: %+v", got)
@@ -778,11 +787,7 @@ func TestDoGetLiveNodeState_NoMatchReturnsNil(t *testing.T) {
 			return &periscopepb.GetLiveNodesResponse{}, nil // offline / not reporting
 		},
 	}
-	qm := &clientstest.FakeQuartermaster{
-		ListMySubscriptionsFn: func(context.Context, *quartermasterpb.ListMySubscriptionsRequest) (*quartermasterpb.ListClustersResponse, error) {
-			return &quartermasterpb.ListClustersResponse{}, nil
-		},
-	}
+	qm := ownedNodeQuartermaster(t, "node-x", "t1")
 	r := &Resolver{
 		Clients: clientstest.Clients(clientstest.WithPeriscope(p), clientstest.WithQuartermaster(qm)),
 		Logger:  clientstest.DiscardLogger(),

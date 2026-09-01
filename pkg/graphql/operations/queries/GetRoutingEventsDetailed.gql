@@ -47,6 +47,9 @@ query GetRoutingEventsDetailed(
             streamTenantId
             clusterId
             remoteClusterId
+            selectedClusterId
+            originClusterId
+            controlCellId
           }
         }
         pageInfo {

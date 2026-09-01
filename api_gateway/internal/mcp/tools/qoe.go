@@ -566,7 +566,7 @@ func handleDiagnoseRouting(ctx context.Context, args DiagnoseRoutingInput, servi
 	}
 
 	timeRangeLabel, timeRange := normalizeTimeRange(args.TimeRange)
-	resp, err := serviceClients.Periscope.GetRoutingEvents(ctx, tenantID, &streamID, timeRange, nil, []string{tenantID}, nil, nil)
+	resp, err := serviceClients.Periscope.GetRoutingEvents(ctx, tenantID, &streamID, timeRange, nil, nil, nil, nil)
 	if err != nil {
 		logger.WithError(err).Warn("Failed to get routing events")
 		return toolError(fmt.Sprintf("Failed to fetch routing data: %v", err))

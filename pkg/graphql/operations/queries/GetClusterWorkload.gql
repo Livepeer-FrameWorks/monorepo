@@ -1,0 +1,21 @@
+# Owner-only infrastructure workload. Kept separate from generally available
+# traffic analytics so a non-owner authorization error cannot null that query.
+query GetClusterWorkload($clusterId: ID, $timeRange: TimeRangeInput, $noCache: Boolean = false) {
+  analytics {
+    infra {
+      clusterWorkload(clusterId: $clusterId, timeRange: $timeRange, noCache: $noCache) {
+        clusterId
+        nodeId
+        workKind
+        measurementKind
+        storageScope
+        observedAt
+        eventCount
+        activeCount
+        bytes
+        mediaSeconds
+        errorCount
+      }
+    }
+  }
+}

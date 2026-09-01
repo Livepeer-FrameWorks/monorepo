@@ -422,6 +422,7 @@ func GenerateInvoices() []*purserpb.Invoice {
 				demoLineSpec{LineKey: "base_subscription", Quantity: "1", IncludedQuantity: "0", BillableQuantity: "1", UnitPrice: "249.00", Total: "249.00"},
 				demoLineSpec{LineKey: "meter:delivered_minutes:demo-media:current", Meter: "delivered_minutes", Quantity: "42500", IncludedQuantity: "500000", BillableQuantity: "0", UnitPrice: "0.00052", Total: "0.00", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
 				demoLineSpec{LineKey: "meter:storage_gb_seconds_cold:demo-media:current", Meter: "storage_gb_seconds_cold", Quantity: "15.2", IncludedQuantity: "0", BillableQuantity: "15.2", UnitPrice: "0.030", Total: "0.46", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
+				demoLineSpec{LineKey: "meter:transcode_rendition_seconds:demo-media:current:h264", Meter: "transcode_rendition_seconds", Description: "Transcode renditions", Quantity: "3245.7", IncludedQuantity: "0", BillableQuantity: "3245.7", UnitPrice: "0", Total: "0.00", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "free_unmetered", PricingLabel: "Usage charges waived", Unit: "second", Dimensions: map[string]any{"execution_backend": "livepeer_network", "output_codec": "h264", "track_type": "video", "rendition_profile": "720p"}},
 				demoLineSpec{LineKey: "meter:delivered_minutes:demo-selfhosted:current", Meter: "delivered_minutes", Quantity: "8300", IncludedQuantity: "0", BillableQuantity: "8300", UnitPrice: "0.00", Total: "0.00", ClusterID: DemoSelfHostedCluster, ClusterName: "Demo Self-hosted Cluster", ClusterKind: "tenant_private", PricingSource: "self_hosted", PricingLabel: "Self-hosted (no charge)"},
 			),
 		},
@@ -446,6 +447,7 @@ func GenerateInvoices() []*purserpb.Invoice {
 				demoLineSpec{LineKey: "base_subscription", Quantity: "1", IncludedQuantity: "0", BillableQuantity: "1", UnitPrice: "249.00", Total: "249.00"},
 				demoLineSpec{LineKey: "meter:delivered_minutes:demo-media:previous", Meter: "delivered_minutes", Quantity: "35000", IncludedQuantity: "500000", BillableQuantity: "0", UnitPrice: "0.00052", Total: "0.00", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
 				demoLineSpec{LineKey: "meter:storage_gb_seconds_cold:demo-media:previous", Meter: "storage_gb_seconds_cold", Quantity: "19", IncludedQuantity: "0", BillableQuantity: "19", UnitPrice: "0.030", Total: "0.57", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
+				demoLineSpec{LineKey: "meter:transcode_rendition_seconds:demo-media:previous:h264", Meter: "transcode_rendition_seconds", Description: "Transcode renditions", Quantity: "2405", IncludedQuantity: "0", BillableQuantity: "2405", UnitPrice: "0", Total: "0.00", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "free_unmetered", PricingLabel: "Usage charges waived", Unit: "second", Dimensions: map[string]any{"execution_backend": "livepeer_network", "output_codec": "h264", "track_type": "video", "rendition_profile": "720p"}},
 				demoLineSpec{LineKey: "meter:delivered_minutes:demo-selfhosted:previous", Meter: "delivered_minutes", Quantity: "6100", IncludedQuantity: "0", BillableQuantity: "6100", UnitPrice: "0.00", Total: "0.00", ClusterID: DemoSelfHostedCluster, ClusterName: "Demo Self-hosted Cluster", ClusterKind: "tenant_private", PricingSource: "self_hosted", PricingLabel: "Self-hosted (no charge)"},
 			),
 		},
@@ -492,6 +494,7 @@ func GenerateInvoicePreview() *purserpb.Invoice {
 			demoLineSpec{LineKey: "base_subscription", Quantity: "1", IncludedQuantity: "0", BillableQuantity: "1", UnitPrice: "249.00", Total: "249.00"},
 			demoLineSpec{LineKey: "meter:delivered_minutes:demo-media:draft", Meter: "delivered_minutes", Quantity: "250000", IncludedQuantity: "500000", BillableQuantity: "0", UnitPrice: "0.00052", Total: "0.00", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
 			demoLineSpec{LineKey: "meter:storage_gb_seconds_cold:demo-media:draft", Meter: "storage_gb_seconds_cold", Quantity: "23.5", IncludedQuantity: "0", BillableQuantity: "23.5", UnitPrice: "0.030", Total: "0.71", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "tier", PricingLabel: "Subscription tier"},
+			demoLineSpec{LineKey: "meter:transcode_rendition_seconds:demo-media:draft:h264", Meter: "transcode_rendition_seconds", Description: "Transcode renditions", Quantity: "3245.7", IncludedQuantity: "0", BillableQuantity: "3245.7", UnitPrice: "0", Total: "0.00", ClusterID: DemoMediaClusterID, ClusterName: "Demo Media Cluster", ClusterKind: "platform_official", PricingSource: "free_unmetered", PricingLabel: "Usage charges waived", Unit: "second", Dimensions: map[string]any{"execution_backend": "livepeer_network", "output_codec": "h264", "track_type": "video", "rendition_profile": "720p"}},
 			demoLineSpec{LineKey: "meter:delivered_minutes:demo-selfhosted:draft", Meter: "delivered_minutes", Quantity: "4200", IncludedQuantity: "0", BillableQuantity: "4200", UnitPrice: "0.00", Total: "0.00", ClusterID: DemoSelfHostedCluster, ClusterName: "Demo Self-hosted Cluster", ClusterKind: "tenant_private", PricingSource: "self_hosted", PricingLabel: "Self-hosted (no charge)"},
 		),
 	}
@@ -658,25 +661,23 @@ func GenerateUsageRecords() []*purserpb.UsageRecord {
 
 	// Define usage type data: type name, value, unit for details
 	usageData := []struct {
-		usageType string
-		value     float64
-		unit      string
-		details   map[string]interface{}
+		usageType  string
+		value      float64
+		unit       string
+		dimensions map[string]interface{}
 	}{
 		// Core streaming metrics
-		{"stream_runtime_seconds", 90000, "seconds", nil},
-		{"ingress_gb", 284, "GB", nil},
-		{"egress_gb", 1628, "GB", nil},
-		{"storage_gb_seconds_cold", 134100, "GB-seconds", nil},
-		{"peak_bandwidth_mbps", 850.5, "Mbps", nil},
-		{"total_streams", 1, "streams", nil},
-		{"total_viewers", 1847, "viewers", nil},
-		{"max_viewers", 342, "viewers", nil},
-		{"unique_users", 1203, "users", nil},
-		{"media_seconds", 5066.2, "seconds", map[string]interface{}{
-			"codec_seconds":   map[string]interface{}{"h264": 3600.0, "hevc": 100.0, "vp9": 800.0, "av1": 366.2, "aac": 150.0, "opus": 50.0},
-			"process_seconds": map[string]interface{}{"Livepeer": 3245.7, "AV": 1820.5},
-		}},
+		{"stream_runtime_seconds", 90000, "second", nil},
+		{"ingress_gb", 284, "gibibyte", nil},
+		{"egress_gb", 1628, "gibibyte", nil},
+		{"storage_gb_seconds_cold", 134100, "gibibyte_second", map[string]interface{}{"storage_backend": "object", "storage_scope": "cold"}},
+		{"peak_bandwidth_mbps", 850.5, "megabit_per_second", nil},
+		{"total_streams", 1, "stream", nil},
+		{"total_viewers", 1847, "viewer", nil},
+		{"max_viewers", 342, "viewer", nil},
+		{"unique_users", 1203, "user", nil},
+		{"transcode_input_seconds", 1820.5, "second", map[string]interface{}{"execution_backend": "native_av", "output_codec": "h264", "track_type": "video"}},
+		{"transcode_rendition_seconds", 3245.7, "second", map[string]interface{}{"execution_backend": "livepeer_network", "output_codec": "h264", "track_type": "video", "rendition_profile": "720p"}},
 	}
 
 	records := make([]*purserpb.UsageRecord, len(usageData))
@@ -690,12 +691,13 @@ func GenerateUsageRecords() []*purserpb.UsageRecord {
 				"unit":       data.unit,
 			},
 		}
-		for k, v := range data.details {
-			details[k] = v
-		}
 		usageDetails, err := structpb.NewStruct(details)
 		if err != nil {
 			usageDetails = &structpb.Struct{}
+		}
+		dimensions, err := structpb.NewStruct(data.dimensions)
+		if err != nil {
+			dimensions = &structpb.Struct{}
 		}
 
 		periodStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Add(-time.Duration(i) * time.Hour)
@@ -706,6 +708,8 @@ func GenerateUsageRecords() []*purserpb.UsageRecord {
 			ClusterId:    "cluster_demo_us_west",
 			ClusterName:  stringPtr("US West Demo Cluster"),
 			UsageType:    data.usageType,
+			Unit:         data.unit,
+			Dimensions:   dimensions,
 			UsageValue:   data.value,
 			UsageDetails: usageDetails,
 			CreatedAt:    timestamppb.New(now.Add(-time.Duration(i) * time.Hour)),
@@ -4567,6 +4571,19 @@ func GenerateClusterQoeOps() []*periscopepb.ClusterQoeOps {
 	}
 }
 
+// GenerateClusterWorkload returns demo rows that preserve window/current and
+// hot/cold distinctions used by the infrastructure topology contract.
+func GenerateClusterWorkload() []*periscopepb.ClusterWorkload {
+	now := timestamppb.Now()
+	return []*periscopepb.ClusterWorkload{
+		{ClusterId: "cluster-us-east", NodeId: "edge-nyc-1", WorkKind: "viewer", MeasurementKind: "window", EventCount: 1840, Bytes: 18_400_000_000, MediaSeconds: 512_400},
+		{ClusterId: "cluster-us-east", NodeId: "edge-nyc-1", WorkKind: "viewer", MeasurementKind: "current", ActiveCount: 42, ObservedAt: now},
+		{ClusterId: "cluster-us-east", NodeId: "edge-nyc-1", WorkKind: "storage", MeasurementKind: "current", StorageScope: stringPtr("hot"), ActiveCount: 18, Bytes: 3_200_000_000, ObservedAt: now},
+		{ClusterId: "cluster-us-east", NodeId: "s3-us-east", WorkKind: "storage", MeasurementKind: "current", StorageScope: stringPtr("cold"), ActiveCount: 64, Bytes: 28_000_000_000, ObservedAt: now},
+		{ClusterId: "cluster-us-east", NodeId: "edge-nyc-1", WorkKind: "federation", MeasurementKind: "window", EventCount: 180, ErrorCount: 6},
+	}
+}
+
 // GenerateVodRetention returns a demo VOD retention curve: a typical "high early
 // drop-off, replayed climax" shape over a 5-minute (300s / 2s-bucket) asset.
 func GenerateVodRetention() *periscopepb.VodRetention {
@@ -4861,6 +4878,8 @@ type demoLineSpec struct {
 	ClusterKind      string
 	PricingSource    string
 	PricingLabel     string
+	Unit             string
+	Dimensions       map[string]any
 }
 
 // demoLineItems builds proto line items in the same identity/order shape as the
@@ -4887,6 +4906,10 @@ func demoLineItems(specs ...demoLineSpec) []*purserpb.LineItem {
 		if desc == "" {
 			desc = demoLineDescription(spec.LineKey)
 		}
+		dimensions, err := structpb.NewStruct(spec.Dimensions)
+		if err != nil {
+			dimensions = &structpb.Struct{}
+		}
 		out = append(out, &purserpb.LineItem{
 			LineKey:          spec.LineKey,
 			Meter:            spec.Meter,
@@ -4902,6 +4925,8 @@ func demoLineItems(specs ...demoLineSpec) []*purserpb.LineItem {
 			ClusterKind:      spec.ClusterKind,
 			PricingSource:    spec.PricingSource,
 			PricingLabel:     spec.PricingLabel,
+			Unit:             spec.Unit,
+			Dimensions:       dimensions,
 		})
 	}
 	return out

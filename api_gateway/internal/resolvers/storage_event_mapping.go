@@ -38,20 +38,23 @@ func mapSignalmanStorageEvent(event *signalmanpb.SignalmanEvent) *periscopepb.St
 	}
 
 	return &periscopepb.StorageEvent{
-		Id:             eventID,
-		Timestamp:      timestamppb.New(timestamp),
-		TenantId:       tenantID,
-		StreamId:       streamID,
-		AssetHash:      data.GetAssetHash(),
-		Action:         action,
-		AssetType:      data.GetAssetType(),
-		SizeBytes:      data.GetSizeBytes(),
-		S3Url:          stringPtr(data.GetS3Url()),
-		LocalPath:      stringPtr(data.GetLocalPath()),
-		NodeId:         data.GetNodeId(),
-		DurationMs:     int64PtrIfNonZero(data.GetDurationMs()),
-		WarmDurationMs: int64PtrIfNonZero(data.GetWarmDurationMs()),
-		Error:          stringPtr(data.GetError()),
+		Id:              eventID,
+		Timestamp:       timestamppb.New(timestamp),
+		TenantId:        tenantID,
+		StreamId:        streamID,
+		AssetHash:       data.GetAssetHash(),
+		Action:          action,
+		AssetType:       data.GetAssetType(),
+		SizeBytes:       data.GetSizeBytes(),
+		S3Url:           stringPtr(data.GetS3Url()),
+		LocalPath:       stringPtr(data.GetLocalPath()),
+		NodeId:          data.GetNodeId(),
+		DurationMs:      int64PtrIfNonZero(data.GetDurationMs()),
+		WarmDurationMs:  int64PtrIfNonZero(data.GetWarmDurationMs()),
+		Error:           stringPtr(data.GetError()),
+		ClusterId:       preferPlacementPtr(data.ClusterId, event.Data.GetSourceClusterId()),
+		OriginClusterId: preferPlacementPtr(data.OriginClusterId, event.Data.GetStreamOriginClusterId()),
+		ControlCellId:   preferPlacementPtr(data.ControlCellId, event.Data.GetControlCellId()),
 	}
 }
 

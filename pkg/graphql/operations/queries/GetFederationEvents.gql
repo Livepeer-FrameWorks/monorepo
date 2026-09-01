@@ -25,6 +25,8 @@ query GetFederationEvents($timeRange: TimeRangeInput!, $first: Int = 50, $eventT
             peerCluster
             role
             reason
+            controlCellId
+            originClusterId
           }
         }
         pageInfo {

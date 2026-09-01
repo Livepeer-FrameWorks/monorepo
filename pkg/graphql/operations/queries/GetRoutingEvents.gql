@@ -29,6 +29,10 @@ query GetRoutingEvents(
             nodeLatitude
             nodeLongitude
             nodeName
+            clusterId
+            selectedClusterId
+            originClusterId
+            controlCellId
             routingDistance
             candidatesCount
           }

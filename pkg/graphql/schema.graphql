@@ -1203,6 +1203,15 @@ type AnalyticsInfra {
     noCache: Boolean = false
   ): [ClusterQoeOps!]!
   """
+  Aggregate/redacted media work on clusters the caller owns. Contains placement
+  and volume only; never tenant, content, stream, session, URL, or client IDs.
+  """
+  clusterWorkload(
+    clusterId: ID
+    timeRange: TimeRangeInput
+    noCache: Boolean = false
+  ): [ClusterWorkload!]!
+  """
   Federation events: origin pulls, peer connections, leader elections, etc.
   """
   federationEventsConnection(
@@ -3582,6 +3591,11 @@ type StreamEvent implements Node {
   location: String
   countryCode: String
   city: String
+  sourceRegion: String!
+  sourceClusterId: String!
+  streamOriginRegion: String!
+  streamOriginClusterId: String!
+  schemaVersion: Int!
 }
 
 # Stream buffer event (raw STREAM_BUFFER payloads)
@@ -4406,6 +4420,9 @@ type StorageEvent implements Node {
   s3Url: String
   localPath: String
   nodeId: String!
+  clusterId: String
+  originClusterId: String
+  controlCellId: String
   durationMs: Int # Time taken for operation
   warmDurationMs: Int # For evicted: how long asset was cached before eviction
   error: String
@@ -4435,6 +4452,9 @@ type ProcessingUsageRecord implements Node {
   streamId: ID!
   stream: Stream
   processType: String! # "Livepeer", "AV", "FFmpeg"
+  clusterId: String
+  originClusterId: String
+  controlCellId: String
   trackType: String # "audio" or "video" (KEY FOR BILLING)
   durationMs: Int! # Segment duration or time since last event
   inputCodec: String
@@ -5340,6 +5360,10 @@ type UsageRecord {
   clusterId: String
   clusterName: String
   usageType: String!
+  "Canonical physical unit for usageValue."
+  unit: String!
+  "Bounded dimensions that distinguish records for the same meter."
+  dimensions: JSON!
   usageValue: Float!
   createdAt: Time
   periodStart: Time
@@ -6074,6 +6098,9 @@ type RoutingEvent {
   streamTenantId: ID
   clusterId: String
   remoteClusterId: String
+  selectedClusterId: String
+  controlCellId: String
+  originClusterId: String
 }
 
 # Cross-cluster routing traffic pair from routing_cluster_hourly MV
@@ -6090,6 +6117,23 @@ type ClusterPairTraffic {
   localLongitude: Float
   remoteLatitude: Float
   remoteLongitude: Float
+}
+
+type ClusterWorkload {
+  clusterId: String!
+  nodeId: String!
+  workKind: String!
+  "Whether metrics describe the requested window or a freshness-bounded current observation."
+  measurementKind: String!
+  "Storage residency scope for current storage observations (`hot` or `cold`)."
+  storageScope: String
+  "Source observation time for current rows."
+  observedAt: Time
+  eventCount: Int!
+  activeCount: Int!
+  bytes: Float!
+  mediaSeconds: Float!
+  errorCount: Int!
 }
 
 # Federation event (origin pulls, peer topology, leader elections)
@@ -6113,6 +6157,9 @@ type FederationEvent {
   peerCluster: String
   role: String!
   reason: String
+  streamTenantId: ID
+  controlCellId: String
+  originClusterId: String
 }
 
 type FederationEventEdge {
@@ -6171,7 +6218,8 @@ type NetworkPeerConnection {
   connectionType: String!
 }
 
-# Individual node in public, subscribed, or owned cluster topology.
+# Individual node in deliberately public or caller-owned cluster topology.
+# Marketplace/subscription access exposes cluster aggregates, not node rows.
 type NetworkNode {
   nodeId: String!
   name: String!
@@ -6255,6 +6303,9 @@ type ConnectionEvent implements Node {
   nodeBucket: GeoBucket
   eventType: String! # "connect" or "disconnect"
   requestUrl: String
+  clusterId: String!
+  originClusterId: String
+  controlCellId: String
 
   # Session metrics (for disconnect events)
   sessionDurationSeconds: Int # Duration in seconds

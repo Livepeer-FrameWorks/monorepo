@@ -147,6 +147,7 @@ func TestDemoListGeneratorsNonEmpty(t *testing.T) {
 		{"VodAssets", GenerateVodAssets()},
 		{"ClusterBootOps", GenerateClusterBootOps()},
 		{"ClusterQoeOps", GenerateClusterQoeOps()},
+		{"ClusterWorkload", GenerateClusterWorkload()},
 		{"PlayerBootTimeSeries", GeneratePlayerBootTimeSeries()},
 		{"SessionQoeTimeSeries", GenerateSessionQoeTimeSeries()},
 		{"ClusterTrafficMatrix", GenerateClusterTrafficMatrix()},
@@ -155,6 +156,39 @@ func TestDemoListGeneratorsNonEmpty(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			assertNonEmptyNoNil(t, tc.name, tc.slice)
 		})
+	}
+}
+
+func TestDemoUsageUsesDimensionedV3ProcessingMeters(t *testing.T) {
+	foundRendition := false
+	for _, record := range GenerateUsageRecords() {
+		if record.GetUsageType() == "media_seconds" {
+			t.Fatal("demo usage retained legacy media_seconds")
+		}
+		if record.GetUsageType() != "transcode_rendition_seconds" {
+			continue
+		}
+		foundRendition = true
+		if record.GetUnit() != "second" || record.GetDimensions().GetFields()["execution_backend"].GetStringValue() == "" || record.GetDimensions().GetFields()["output_codec"].GetStringValue() == "" {
+			t.Fatalf("dimensioned rendition demo record = %+v", record)
+		}
+	}
+	if !foundRendition {
+		t.Fatal("demo usage missing transcode_rendition_seconds")
+	}
+
+	foundInvoiceLine := false
+	for _, line := range GenerateInvoicePreview().GetLineItems() {
+		if line.GetMeter() != "transcode_rendition_seconds" {
+			continue
+		}
+		foundInvoiceLine = true
+		if line.GetUnit() != "second" || line.GetDimensions().GetFields()["output_codec"].GetStringValue() == "" || line.GetTotal() != "0.00" {
+			t.Fatalf("dimensioned rendition demo invoice line = %+v", line)
+		}
+	}
+	if !foundInvoiceLine {
+		t.Fatal("demo invoice missing transcode_rendition_seconds line")
 	}
 }
 

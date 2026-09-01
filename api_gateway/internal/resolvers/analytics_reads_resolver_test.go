@@ -497,32 +497,46 @@ func TestDoGetRoutingEventsConnection_NormalizesStreamAndForwardsFilters(t *test
 	var gotStream *string
 	var gotSubject *string
 	var gotCluster *string
+	var gotRelated []string
 	p := &clientstest.FakePeriscope{
-		GetRoutingEventsFn: func(_ context.Context, _ string, streamID *string, _ *periscope.TimeRangeOpts, _ *periscope.CursorPaginationOpts, _ []string, subjectTenantID, clusterID *string) (*periscopepb.GetRoutingEventsResponse, error) {
-			gotStream, gotSubject, gotCluster = streamID, subjectTenantID, clusterID
+		GetRoutingEventsFn: func(_ context.Context, _ string, streamID *string, _ *periscope.TimeRangeOpts, _ *periscope.CursorPaginationOpts, related []string, subjectTenantID, clusterID *string) (*periscopepb.GetRoutingEventsResponse, error) {
+			gotStream, gotSubject, gotCluster, gotRelated = streamID, subjectTenantID, clusterID, related
 			return &periscopepb.GetRoutingEventsResponse{
 				Events: []*periscopepb.RoutingEvent{{Id: "r1", StreamId: "raw-re"}},
 			}, nil
 		},
 	}
 	relayID := globalid.Encode(globalid.TypeStream, "raw-re")
-	subject := "subject-t"
 	cluster := "cl-1"
-	got, err := periR(p).DoGetRoutingEventsConnection(clientstest.AuthedCtx("t1"), &relayID, testRange(), &subject, &cluster, nil, nil, nil, nil, nil)
+	got, err := periR(p).DoGetRoutingEventsConnection(clientstest.AuthedCtx("t1"), &relayID, testRange(), nil, &cluster, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if gotStream == nil || *gotStream != "raw-re" {
 		t.Fatalf("stream not normalized: %v", gotStream)
 	}
-	if gotSubject == nil || *gotSubject != "subject-t" {
-		t.Fatalf("subjectTenantID not forwarded: %v", gotSubject)
+	if gotSubject == nil || *gotSubject != "t1" {
+		t.Fatalf("subjectTenantID not forced to authenticated tenant: %v", gotSubject)
+	}
+	if len(gotRelated) != 0 {
+		t.Fatalf("routing scope widened to related tenants: %v", gotRelated)
 	}
 	if gotCluster == nil || *gotCluster != "cl-1" {
 		t.Fatalf("clusterID not forwarded: %v", gotCluster)
 	}
 	if len(got.Edges) != 1 || got.Edges[0].Node.Id != "r1" {
 		t.Fatalf("edges not built: %+v", got.Edges)
+	}
+}
+
+func TestDoGetRoutingEventsConnection_RejectsForeignSubjectTenant(t *testing.T) {
+	p := &clientstest.FakePeriscope{}
+	foreign := "tenant-b"
+	if _, err := periR(p).DoGetRoutingEventsConnection(clientstest.AuthedCtx("tenant-a"), nil, testRange(), &foreign, nil, nil, nil, nil, nil, nil); err == nil {
+		t.Fatal("expected foreign subject tenant to be rejected")
+	}
+	if p.Calls != 0 {
+		t.Fatalf("backend hit despite foreign subject tenant: Calls=%d", p.Calls)
 	}
 }
 

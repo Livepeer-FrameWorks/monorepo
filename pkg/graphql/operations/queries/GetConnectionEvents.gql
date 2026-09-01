@@ -28,6 +28,9 @@ query GetConnectionEvents(
             connectionAddr
             connector
             nodeId
+            clusterId
+            originClusterId
+            controlCellId
             countryCode
             city
             latitude

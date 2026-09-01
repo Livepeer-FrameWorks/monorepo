@@ -68,12 +68,29 @@ func mapPeriscopeStreamEvent(event *periscopepb.StreamEvent) *model.StreamEvent 
 		Location:    event.Location,
 		CountryCode: event.CountryCode,
 		City:        event.City,
+
+		SourceRegion:          event.SourceRegion,
+		SourceClusterId:       event.SourceClusterId,
+		StreamOriginRegion:    event.StreamOriginRegion,
+		StreamOriginClusterId: event.StreamOriginClusterId,
+		SchemaVersion:         int(event.SchemaVersion),
 	}
 }
 
 func mapSignalmanStreamEvent(event *signalmanpb.SignalmanEvent) *model.StreamEvent {
 	if event == nil || event.Data == nil {
 		return nil
+	}
+	withPlacement := func(mapped *model.StreamEvent) *model.StreamEvent {
+		if mapped == nil {
+			return nil
+		}
+		mapped.SourceRegion = event.Data.GetSourceRegion()
+		mapped.SourceClusterId = event.Data.GetSourceClusterId()
+		mapped.StreamOriginRegion = event.Data.GetStreamOriginRegion()
+		mapped.StreamOriginClusterId = event.Data.GetStreamOriginClusterId()
+		mapped.SchemaVersion = int(event.Data.GetSchemaVersion())
+		return mapped
 	}
 
 	timestamp := time.Now()
@@ -91,7 +108,7 @@ func mapSignalmanStreamEvent(event *signalmanpb.SignalmanEvent) *model.StreamEve
 		nodeID := stringPtrOrNil(data.GetNodeId())
 		status := model.StreamStatusLive
 		eventID := buildLiveEventID(streamID, model.StreamEventTypeStreamStart, timestamp, nodeID)
-		return &model.StreamEvent{
+		return withPlacement(&model.StreamEvent{
 			Id:        globalid.Encode(globalid.TypeStreamEvent, fmt.Sprintf("%s|%s|%d", streamID, eventID, timestamp.UnixNano())),
 			EventId:   eventID,
 			StreamId:  streamID,
@@ -101,7 +118,7 @@ func mapSignalmanStreamEvent(event *signalmanpb.SignalmanEvent) *model.StreamEve
 			Timestamp: timestamp,
 			Payload:   protoPayloadJSON(data),
 			Source:    model.StreamEventSourceLive,
-		}
+		})
 
 	case signalmanpb.EventType_EVENT_TYPE_STREAM_LIFECYCLE_UPDATE:
 		data := event.Data.GetStreamLifecycle()
@@ -111,7 +128,7 @@ func mapSignalmanStreamEvent(event *signalmanpb.SignalmanEvent) *model.StreamEve
 		nodeID := stringPtrOrNil(data.GetNodeId())
 		streamID := data.GetStreamId()
 		eventID := buildLiveEventID(streamID, model.StreamEventTypeStreamLifecycleUpdate, timestamp, nodeID)
-		return &model.StreamEvent{
+		return withPlacement(&model.StreamEvent{
 			Id:        globalid.Encode(globalid.TypeStreamEvent, fmt.Sprintf("%s|%s|%d", streamID, eventID, timestamp.UnixNano())),
 			EventId:   eventID,
 			StreamId:  streamID,
@@ -121,7 +138,7 @@ func mapSignalmanStreamEvent(event *signalmanpb.SignalmanEvent) *model.StreamEve
 			Timestamp: timestamp,
 			Payload:   protoPayloadJSON(data),
 			Source:    model.StreamEventSourceLive,
-		}
+		})
 
 	case signalmanpb.EventType_EVENT_TYPE_STREAM_END:
 		data := event.Data.GetStreamEnd()
@@ -132,7 +149,7 @@ func mapSignalmanStreamEvent(event *signalmanpb.SignalmanEvent) *model.StreamEve
 		status := model.StreamStatusEnded
 		streamID := data.GetStreamId()
 		eventID := buildLiveEventID(streamID, model.StreamEventTypeStreamEnd, timestamp, nodeID)
-		return &model.StreamEvent{
+		return withPlacement(&model.StreamEvent{
 			Id:        globalid.Encode(globalid.TypeStreamEvent, fmt.Sprintf("%s|%s|%d", streamID, eventID, timestamp.UnixNano())),
 			EventId:   eventID,
 			StreamId:  streamID,
@@ -142,7 +159,7 @@ func mapSignalmanStreamEvent(event *signalmanpb.SignalmanEvent) *model.StreamEve
 			Timestamp: timestamp,
 			Payload:   protoPayloadJSON(data),
 			Source:    model.StreamEventSourceLive,
-		}
+		})
 
 	case signalmanpb.EventType_EVENT_TYPE_STREAM_BUFFER:
 		data := event.Data.GetStreamBuffer()
@@ -151,7 +168,7 @@ func mapSignalmanStreamEvent(event *signalmanpb.SignalmanEvent) *model.StreamEve
 		}
 		streamID := data.GetStreamId()
 		eventID := buildLiveEventID(streamID, model.StreamEventTypeBufferUpdate, timestamp, nil)
-		return &model.StreamEvent{
+		return withPlacement(&model.StreamEvent{
 			Id:        globalid.Encode(globalid.TypeStreamEvent, fmt.Sprintf("%s|%s|%d", streamID, eventID, timestamp.UnixNano())),
 			EventId:   eventID,
 			StreamId:  streamID,
@@ -159,7 +176,7 @@ func mapSignalmanStreamEvent(event *signalmanpb.SignalmanEvent) *model.StreamEve
 			Timestamp: timestamp,
 			Payload:   protoPayloadJSON(data),
 			Source:    model.StreamEventSourceLive,
-		}
+		})
 
 	case signalmanpb.EventType_EVENT_TYPE_STREAM_TRACK_LIST:
 		data := event.Data.GetTrackList()
@@ -168,7 +185,7 @@ func mapSignalmanStreamEvent(event *signalmanpb.SignalmanEvent) *model.StreamEve
 		}
 		streamID := data.GetStreamId()
 		eventID := buildLiveEventID(streamID, model.StreamEventTypeTrackListUpdate, timestamp, nil)
-		return &model.StreamEvent{
+		return withPlacement(&model.StreamEvent{
 			Id:        globalid.Encode(globalid.TypeStreamEvent, fmt.Sprintf("%s|%s|%d", streamID, eventID, timestamp.UnixNano())),
 			EventId:   eventID,
 			StreamId:  streamID,
@@ -176,7 +193,7 @@ func mapSignalmanStreamEvent(event *signalmanpb.SignalmanEvent) *model.StreamEve
 			Timestamp: timestamp,
 			Payload:   protoPayloadJSON(data),
 			Source:    model.StreamEventSourceLive,
-		}
+		})
 
 	case signalmanpb.EventType_EVENT_TYPE_PLAY_REWRITE:
 		data := event.Data.GetPlayRewrite()
@@ -185,7 +202,7 @@ func mapSignalmanStreamEvent(event *signalmanpb.SignalmanEvent) *model.StreamEve
 		}
 		streamID := data.GetStreamId()
 		eventID := buildLiveEventID(streamID, model.StreamEventTypePlayRewrite, timestamp, nil)
-		return &model.StreamEvent{
+		return withPlacement(&model.StreamEvent{
 			Id:        globalid.Encode(globalid.TypeStreamEvent, fmt.Sprintf("%s|%s|%d", streamID, eventID, timestamp.UnixNano())),
 			EventId:   eventID,
 			StreamId:  streamID,
@@ -193,7 +210,7 @@ func mapSignalmanStreamEvent(event *signalmanpb.SignalmanEvent) *model.StreamEve
 			Timestamp: timestamp,
 			Payload:   protoPayloadJSON(data),
 			Source:    model.StreamEventSourceLive,
-		}
+		})
 
 	case signalmanpb.EventType_EVENT_TYPE_STREAM_SOURCE:
 		data := event.Data.GetStreamSource()
@@ -202,7 +219,7 @@ func mapSignalmanStreamEvent(event *signalmanpb.SignalmanEvent) *model.StreamEve
 		}
 		streamID := data.GetStreamId()
 		eventID := buildLiveEventID(streamID, model.StreamEventTypeStreamSource, timestamp, nil)
-		return &model.StreamEvent{
+		return withPlacement(&model.StreamEvent{
 			Id:        globalid.Encode(globalid.TypeStreamEvent, fmt.Sprintf("%s|%s|%d", streamID, eventID, timestamp.UnixNano())),
 			EventId:   eventID,
 			StreamId:  streamID,
@@ -210,7 +227,7 @@ func mapSignalmanStreamEvent(event *signalmanpb.SignalmanEvent) *model.StreamEve
 			Timestamp: timestamp,
 			Payload:   protoPayloadJSON(data),
 			Source:    model.StreamEventSourceLive,
-		}
+		})
 	}
 
 	return nil
@@ -297,6 +314,20 @@ func stringPtrOrNil(value string) *string {
 		return nil
 	}
 	return &value
+}
+
+func preferPlacement(value, envelopeValue string) string {
+	if value != "" {
+		return value
+	}
+	return envelopeValue
+}
+
+func preferPlacementPtr(value *string, envelopeValue string) *string {
+	if value != nil && *value != "" {
+		return value
+	}
+	return stringPtrOrNil(envelopeValue)
 }
 
 func intPtrFromInt32(value *int32) *int {

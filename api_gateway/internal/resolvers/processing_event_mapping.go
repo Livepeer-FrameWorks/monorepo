@@ -18,6 +18,9 @@ func mapSignalmanProcessingEvent(event *signalmanpb.SignalmanEvent) *periscopepb
 	if data == nil {
 		return nil
 	}
+	clusterID := preferPlacementPtr(data.ClusterId, event.Data.GetSourceClusterId())
+	originClusterID := preferPlacementPtr(data.OriginClusterId, event.Data.GetStreamOriginClusterId())
+	controlCellID := preferPlacementPtr(data.ControlCellId, event.Data.GetControlCellId())
 
 	timestamp := time.Now()
 	if event.Timestamp != nil {
@@ -87,5 +90,8 @@ func mapSignalmanProcessingEvent(event *signalmanpb.SignalmanEvent) *periscopepb
 		RtfOut:              data.RtfOut,
 		PipelineLagMs:       data.PipelineLagMs,
 		OutputBitrateBps:    data.OutputBitrateBps,
+		ClusterId:           clusterID,
+		OriginClusterId:     originClusterID,
+		ControlCellId:       controlCellID,
 	}
 }

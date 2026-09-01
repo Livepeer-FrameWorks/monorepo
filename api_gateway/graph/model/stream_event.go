@@ -38,4 +38,10 @@ type StreamEvent struct {
 	Location    *string  `json:"location"`
 	CountryCode *string  `json:"countryCode"`
 	City        *string  `json:"city"`
+
+	SourceRegion          string `json:"sourceRegion"`
+	SourceClusterId       string `json:"sourceClusterId"`
+	StreamOriginRegion    string `json:"streamOriginRegion"`
+	StreamOriginClusterId string `json:"streamOriginClusterId"`
+	SchemaVersion         int    `json:"schemaVersion"`
 }

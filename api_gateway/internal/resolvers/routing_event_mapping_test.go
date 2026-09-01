@@ -11,18 +11,23 @@ import (
 
 func TestMapSignalmanRoutingEventPreservesZeroCoordinateWithBucket(t *testing.T) {
 	streamID := "stream-1"
+	selectedClusterID := "serving-us"
 	event := &signalmanpb.SignalmanEvent{
 		Timestamp: timestamppb.New(time.Unix(123, 0)),
 		Data: &signalmanpb.EventData{
+			SourceClusterId:       "serving-us",
+			StreamOriginClusterId: "origin-eu",
+			ControlCellId:         "control-eu",
 			Payload: &signalmanpb.EventData_LoadBalancing{
 				LoadBalancing: &ipcpb.LoadBalancingData{
-					StreamId:      &streamID,
-					Latitude:      0,
-					Longitude:     4.9041,
-					NodeLatitude:  52.3676,
-					NodeLongitude: 0,
-					ClientBucket:  &ipcpb.GeoBucket{H3Index: 1, Resolution: 5},
-					NodeBucket:    &ipcpb.GeoBucket{H3Index: 2, Resolution: 5},
+					StreamId:          &streamID,
+					Latitude:          0,
+					Longitude:         4.9041,
+					NodeLatitude:      52.3676,
+					NodeLongitude:     0,
+					ClientBucket:      &ipcpb.GeoBucket{H3Index: 1, Resolution: 5},
+					NodeBucket:        &ipcpb.GeoBucket{H3Index: 2, Resolution: 5},
+					SelectedClusterId: &selectedClusterID,
 				},
 			},
 		},
@@ -43,5 +48,8 @@ func TestMapSignalmanRoutingEventPreservesZeroCoordinateWithBucket(t *testing.T)
 	}
 	if got.NodeLongitude == nil || *got.NodeLongitude != 0 {
 		t.Fatalf("expected node longitude 0, got %#v", got.NodeLongitude)
+	}
+	if got.GetSelectedClusterId() != selectedClusterID || got.GetClusterId() != "serving-us" || got.GetControlCellId() != "control-eu" || got.GetOriginClusterId() != "origin-eu" {
+		t.Fatalf("unexpected placement: %+v", got)
 	}
 }

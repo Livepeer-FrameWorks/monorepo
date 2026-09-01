@@ -31,6 +31,9 @@ func TestMapSignalmanStorageEvent(t *testing.T) {
 			Timestamp: timestamppb.New(time.Unix(1000, 0)),
 			TenantId:  &tenant,
 			Data: &signalmanpb.EventData{
+				SourceClusterId:       "serving-us",
+				StreamOriginClusterId: "origin-eu",
+				ControlCellId:         "control-eu",
 				Payload: &signalmanpb.EventData_StorageLifecycle{
 					StorageLifecycle: &ipcpb.StorageLifecycleData{
 						Action:     ipcpb.StorageLifecycleData_ACTION_SYNCED,
@@ -62,6 +65,9 @@ func TestMapSignalmanStorageEvent(t *testing.T) {
 		}
 		if got.DurationMs == nil || *got.DurationMs != 50 {
 			t.Errorf("durationMs = %v, want 50", got.DurationMs)
+		}
+		if got.GetClusterId() != "serving-us" || got.GetOriginClusterId() != "origin-eu" || got.GetControlCellId() != "control-eu" {
+			t.Errorf("envelope placement fallback = cluster %q, origin %q, control %q", got.GetClusterId(), got.GetOriginClusterId(), got.GetControlCellId())
 		}
 		if !strings.HasPrefix(got.Id, "live:hash-1:synced:") {
 			t.Errorf("id = %q, want prefix live:hash-1:synced:", got.Id)
@@ -96,13 +102,19 @@ func TestMapSignalmanProcessingEvent(t *testing.T) {
 			Timestamp: timestamppb.New(time.Unix(2000, 0)),
 			TenantId:  &eventTenant,
 			Data: &signalmanpb.EventData{
+				SourceClusterId:       "serving-us",
+				StreamOriginClusterId: "origin-eu",
+				ControlCellId:         "control-eu",
 				Payload: &signalmanpb.EventData_ProcessBilling{
 					ProcessBilling: &ipcpb.ProcessBillingEvent{
-						StreamId:    stringPtr("stream-2"),
-						NodeId:      "node-2",
-						ProcessType: "Livepeer",
-						DurationMs:  120,
-						TenantId:    stringPtr("payload-tenant"),
+						StreamId:        stringPtr("stream-2"),
+						NodeId:          "node-2",
+						ProcessType:     "Livepeer",
+						DurationMs:      120,
+						TenantId:        stringPtr("payload-tenant"),
+						ClusterId:       stringPtr("cluster-us"),
+						OriginClusterId: stringPtr("cluster-eu"),
+						ControlCellId:   stringPtr("control-eu"),
 					},
 				},
 			},
@@ -120,6 +132,9 @@ func TestMapSignalmanProcessingEvent(t *testing.T) {
 		if got.DurationMs != 120 {
 			t.Errorf("durationMs = %d, want 120", got.DurationMs)
 		}
+		if got.GetClusterId() != "cluster-us" || got.GetOriginClusterId() != "cluster-eu" || got.GetControlCellId() != "control-eu" {
+			t.Errorf("placement = cluster %q, origin %q, control %q", got.GetClusterId(), got.GetOriginClusterId(), got.GetControlCellId())
+		}
 		if !strings.HasPrefix(got.Id, "live:stream-2:node-2:") {
 			t.Errorf("id = %q, want prefix live:stream-2:node-2:", got.Id)
 		}
@@ -130,6 +145,9 @@ func TestMapSignalmanProcessingEvent(t *testing.T) {
 			Timestamp: timestamppb.New(time.Unix(2000, 0)),
 			TenantId:  &eventTenant,
 			Data: &signalmanpb.EventData{
+				SourceClusterId:       "serving-us",
+				StreamOriginClusterId: "origin-eu",
+				ControlCellId:         "control-eu",
 				Payload: &signalmanpb.EventData_ProcessBilling{
 					ProcessBilling: &ipcpb.ProcessBillingEvent{StreamId: stringPtr("s"), NodeId: "n"},
 				},
@@ -138,6 +156,9 @@ func TestMapSignalmanProcessingEvent(t *testing.T) {
 		got := mapSignalmanProcessingEvent(ev)
 		if got == nil || got.TenantId != "event-tenant" {
 			t.Errorf("tenant = %v, want event-tenant", got)
+		}
+		if got.GetClusterId() != "serving-us" || got.GetOriginClusterId() != "origin-eu" || got.GetControlCellId() != "control-eu" {
+			t.Errorf("envelope placement fallback = %+v", got)
 		}
 	})
 }
@@ -159,8 +180,11 @@ func TestMapSignalmanConnectionEvent(t *testing.T) {
 			Data: &signalmanpb.EventData{
 				Payload: &signalmanpb.EventData_ViewerConnect{
 					ViewerConnect: &ipcpb.ViewerConnectTrigger{
-						StreamId:  stringPtr("stream-3"),
-						SessionId: "sess-3",
+						StreamId:        stringPtr("stream-3"),
+						SessionId:       "sess-3",
+						ClusterId:       stringPtr("serving-us"),
+						OriginClusterId: stringPtr("origin-eu"),
+						ControlCellId:   stringPtr("control-eu"),
 					},
 				},
 			},
@@ -178,12 +202,18 @@ func TestMapSignalmanConnectionEvent(t *testing.T) {
 		if !strings.HasPrefix(got.EventId, "live:conn:stream-3:sess-3:") {
 			t.Errorf("eventId = %q, want prefix live:conn:stream-3:sess-3:", got.EventId)
 		}
+		if got.GetClusterId() != "serving-us" || got.GetOriginClusterId() != "origin-eu" || got.GetControlCellId() != "control-eu" {
+			t.Errorf("unexpected placement: %+v", got)
+		}
 	})
 	t.Run("disconnect_sums_bytes_and_duration", func(t *testing.T) {
 		ev := &signalmanpb.SignalmanEvent{
 			EventType: signalmanpb.EventType_EVENT_TYPE_VIEWER_DISCONNECT,
 			Timestamp: timestamppb.New(time.Unix(3000, 0)),
 			Data: &signalmanpb.EventData{
+				SourceClusterId:       "serving-us",
+				StreamOriginClusterId: "origin-eu",
+				ControlCellId:         "control-eu",
 				Payload: &signalmanpb.EventData_ViewerDisconnect{
 					ViewerDisconnect: &ipcpb.ViewerDisconnectTrigger{
 						StreamId:         stringPtr("stream-4"),
@@ -207,6 +237,9 @@ func TestMapSignalmanConnectionEvent(t *testing.T) {
 		}
 		if got.BytesTransferred != 1000 {
 			t.Errorf("bytes = %d, want 1000 (up+down)", got.BytesTransferred)
+		}
+		if got.GetClusterId() != "serving-us" || got.GetOriginClusterId() != "origin-eu" || got.GetControlCellId() != "control-eu" {
+			t.Errorf("envelope placement fallback = %+v", got)
 		}
 	})
 }

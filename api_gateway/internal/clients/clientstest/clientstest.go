@@ -520,6 +520,7 @@ type FakePeriscope struct {
 	GetClipEventsFn                    func(ctx context.Context, tenantID string, streamID *string, stage *string, contentType *string, timeRange *periscope.TimeRangeOpts, opts *periscope.CursorPaginationOpts) (*periscopepb.GetClipEventsResponse, error)
 	GetClusterBootOpsFn                func(ctx context.Context, tenantID string, clusterIDs []string, timeRange *periscope.TimeRangeOpts) (*periscopepb.GetClusterBootOpsResponse, error)
 	GetClusterQoeOpsFn                 func(ctx context.Context, tenantID string, clusterIDs []string, timeRange *periscope.TimeRangeOpts) (*periscopepb.GetClusterQoeOpsResponse, error)
+	GetClusterWorkloadFn               func(ctx context.Context, tenantID string, clusterIDs []string, timeRange *periscope.TimeRangeOpts) (*periscopepb.GetClusterWorkloadResponse, error)
 	GetClusterTrafficMatrixFn          func(ctx context.Context, tenantID string, timeRange *periscope.TimeRangeOpts) (*periscopepb.GetClusterTrafficMatrixResponse, error)
 	GetFederationEventsFn              func(ctx context.Context, tenantID string, timeRange *periscope.TimeRangeOpts, eventType *string, limit int32) (*periscopepb.GetFederationEventsResponse, error)
 	GetFederationSummaryFn             func(ctx context.Context, tenantID string, timeRange *periscope.TimeRangeOpts) (*periscopepb.GetFederationSummaryResponse, error)
