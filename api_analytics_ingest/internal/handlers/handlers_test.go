@@ -1100,8 +1100,92 @@ func TestViewerConnectTenantAttribution(t *testing.T) {
 	if row[4] != "demo" {
 		t.Fatalf("expected internal_name demo, got %#v", row[4])
 	}
-	if row[21] != "connect" {
-		t.Fatalf("expected event_type connect, got %#v", row[21])
+	if row[22] != "connect" {
+		t.Fatalf("expected event_type connect, got %#v", row[22])
+	}
+}
+
+func TestViewerConnectExtractsClientSessionAndRedactsCredentials(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	streamID := uuid.NewString()
+	data := mustMistTriggerData(t, &ipcpb.MistTrigger{
+		StreamId: &streamID,
+		TriggerPayload: &ipcpb.MistTrigger_ViewerConnect{
+			ViewerConnect: &ipcpb.ViewerConnectTrigger{
+				StreamName: "live+demo", SessionId: "mist-session", Connector: "WHEP",
+				RequestUrl: "https://edge.test/whep?JWT=signed&TkN=bundle&sessId=secret&access_TOKEN=also-secret&fwsid=attach_01",
+			},
+		},
+	})
+	event := kafka.AnalyticsEvent{
+		EventID: uuid.NewString(), EventType: "viewer_connect", Timestamp: time.Now(),
+		TenantID: uuid.NewString(), Data: data,
+	}
+
+	if err := handler.HandleAnalyticsEvent(event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	row := conn.batches["viewer_connection_events"].rows[0]
+	if row[6] != "attach_01" {
+		t.Fatalf("client_session_id = %#v, want attach_01", row[6])
+	}
+	stored, ok := row[13].(*string)
+	if !ok || stored == nil {
+		t.Fatalf("request_url = %#v, want sanitized URL", row[13])
+	}
+	if strings.Contains(strings.ToLower(*stored), "jwt=") ||
+		strings.Contains(strings.ToLower(*stored), "tkn=") ||
+		strings.Contains(strings.ToLower(*stored), "sessid=") ||
+		strings.Contains(strings.ToLower(*stored), "access_token=") {
+		t.Fatalf("stored request URL retained credentials: %q", *stored)
+	}
+	if !strings.Contains(*stored, "fwsid=attach_01") {
+		t.Fatalf("stored request URL lost fwsid: %q", *stored)
+	}
+}
+
+func TestClientSessionIDValidation(t *testing.T) {
+	tests := []struct {
+		raw, want string
+	}{
+		{"https://edge.test/view?fwsid=valid-._01", "valid-._01"},
+		{"https://edge.test/view?fwsid=contains%20space", ""},
+		{"https://edge.test/view?fwsid=" + strings.Repeat("a", 65), ""},
+	}
+	for _, test := range tests {
+		got, _ := clientSessionIDAndSanitizedRequestURL(test.raw)
+		if got != test.want {
+			t.Errorf("client id from %q = %q, want %q", test.raw, got, test.want)
+		}
+	}
+}
+
+func TestViewerRequestURLRetentionUsesAnExplicitAllowlist(t *testing.T) {
+	clientSessionID, sanitized := clientSessionIDAndSanitizedRequestURL(
+		"https://viewer:password@edge.test/view?future_signature=secret&quality=high#fragment",
+	)
+	if clientSessionID != "" {
+		t.Fatalf("client_session_id = %q, want empty", clientSessionID)
+	}
+	if sanitized != "https://edge.test/view" {
+		t.Fatalf("sanitized URL = %q", sanitized)
+	}
+}
+
+func TestViewerRequestURLMalformedQueryRetainsOnlySafePath(t *testing.T) {
+	clientSessionID, sanitized := clientSessionIDAndSanitizedRequestURL(
+		"https://viewer:password@edge.test/view?signature=%zz#fragment",
+	)
+	if clientSessionID != "" {
+		t.Fatalf("client_session_id = %q, want empty", clientSessionID)
+	}
+	if sanitized != "https://edge.test/view" {
+		t.Fatalf("sanitized malformed URL = %q", sanitized)
+	}
+	_, unsafePath := clientSessionIDAndSanitizedRequestURL("https://edge.test/%zz?signature=secret")
+	if unsafePath != "" {
+		t.Fatalf("unparseable path was retained: %q", unsafePath)
 	}
 }
 
@@ -1143,11 +1227,11 @@ func TestViewerConnectionPreservesZeroCoordinateWhenPresent(t *testing.T) {
 		t.Fatalf("expected viewer_connection_events row, got %#v", batch)
 	}
 	row := batch.rows[0]
-	if row[15] != lat {
-		t.Fatalf("expected latitude %v, got %#v", lat, row[15])
+	if row[16] != lat {
+		t.Fatalf("expected latitude %v, got %#v", lat, row[16])
 	}
-	if row[16] != lon {
-		t.Fatalf("expected longitude %v, got %#v", lon, row[16])
+	if row[17] != lon {
+		t.Fatalf("expected longitude %v, got %#v", lon, row[17])
 	}
 }
 
@@ -1187,11 +1271,11 @@ func TestViewerDisconnectOutOfOrderStillRecorded(t *testing.T) {
 		t.Fatalf("expected viewer_connection_events row, got %#v", batch)
 	}
 	row := batch.rows[0]
-	if row[21] != "disconnect" {
-		t.Fatalf("expected event_type disconnect, got %#v", row[21])
+	if row[22] != "disconnect" {
+		t.Fatalf("expected event_type disconnect, got %#v", row[22])
 	}
-	if row[22] != uint32(42) {
-		t.Fatalf("expected session_duration 42, got %#v", row[22])
+	if row[23] != uint32(42) {
+		t.Fatalf("expected session_duration 42, got %#v", row[23])
 	}
 }
 
@@ -2244,11 +2328,11 @@ func TestViewerConnectionClusterContextDoesNotFabricateAttribution(t *testing.T)
 			t.Fatalf("expected viewer_connection_events row, got %#v", batch)
 		}
 		row := batch.rows[len(batch.rows)-1]
-		if row[9] != "" {
-			t.Fatalf("expected empty serving cluster without authenticated cluster attribution, got %#v", row[9])
+		if row[10] != "" {
+			t.Fatalf("expected empty serving cluster without authenticated cluster attribution, got %#v", row[10])
 		}
-		if row[10] != clusterFromOrigin {
-			t.Fatalf("expected origin_cluster_id %q, got %#v", clusterFromOrigin, row[10])
+		if row[11] != clusterFromOrigin {
+			t.Fatalf("expected origin_cluster_id %q, got %#v", clusterFromOrigin, row[11])
 		}
 	})
 
@@ -2284,11 +2368,11 @@ func TestViewerConnectionClusterContextDoesNotFabricateAttribution(t *testing.T)
 			t.Fatalf("expected viewer_connection_events row, got %#v", batch)
 		}
 		row := batch.rows[len(batch.rows)-1]
-		if row[9] != clusterID {
-			t.Fatalf("expected cluster_id %q, got %#v", clusterID, row[9])
+		if row[10] != clusterID {
+			t.Fatalf("expected cluster_id %q, got %#v", clusterID, row[10])
 		}
-		if row[10] != "" {
-			t.Fatalf("expected empty origin cluster when no origin attribution was observed, got %#v", row[10])
+		if row[11] != "" {
+			t.Fatalf("expected empty origin cluster when no origin attribution was observed, got %#v", row[11])
 		}
 	})
 }

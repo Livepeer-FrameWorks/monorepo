@@ -170,6 +170,75 @@ graph LR
 - **Helmsman → Foghorn**: MistServer triggers, heartbeats, clip/DVR progress updates
 - **Foghorn → Helmsman**: Clip pull requests, DVR start/stop commands, config seeds
 
+Helmsman normally samples Mist stream state every 10 seconds and also maintains one
+authenticated MistController WebSocket per configured node. The socket detects
+status/input/output changes and requests an immediate, filtered refresh through the
+same lifecycle pipeline. It never replaces polling: viewer-only changes are ignored,
+and offline synthesis, source-lease reconciliation, health sampling, and boot
+readiness remain owned by the full poll. Ping/pong liveness closes and reconnects
+half-open controller sockets, and node replacement cancels any in-flight targeted
+refresh rather than waiting for the Mist HTTP timeout.
+
+Node replacement and shutdown are generation boundaries. Replacement cancels the old
+generation, publishes the new node/client pair without waiting on an active transport
+write, and joins retired authoritative/accelerator HTTP clients, edge-API requests,
+queued full sweeps, and WebSocket work asynchronously. Shutdown joins all current and
+retired work before returning.
+Changing nodes clears node-scoped vanish, admission, and stream observation state;
+re-registering the same node preserves pending offline/reconciliation evidence while replacing
+the runtime generation. Observation IDs remain monotonic across both paths. Node metrics
+use a joined, deadline-bounded, one-slot-coalesced forwarding worker, so a slow control
+send cannot fill the monitor update queue. Every control write, including context-free heartbeat,
+relay, and outbox traffic, gets a 15-second transport watchdog beginning only after it owns the
+serialized send lane. The ordinary non-blocking send budget remains five seconds, so transient
+flow-control backpressure can outlive one caller without immediately recycling the shared stream.
+Caller cancellation controls lane acquisition. After ownership, explicit
+cancellation is not transport-failure evidence; a caller deadline may stop waiting while the
+serialized write retains the lane until it completes or reaches its independent transport
+watchdog. Non-blocking Mist webhooks are detached from request disconnects. If an active
+production gRPC write exceeds that watchdog, Helmsman cancels the owning control stream and
+reconnects. Node-runtime cancellation also reaches lifecycle sends, bounding replacement and
+shutdown when Foghorn is connected but not reading.
+Once shutdown marks the monitor stopped under its node-lifecycle lock, later desired-state
+add/remove callbacks are ignored and cannot register retirement work while shutdown waits.
+
+The controller's initial stream dump has a fixed deadline relative to connection time;
+continuous frames cannot keep bootstrap open indefinitely. Expiry schedules one authoritative
+full sweep; first-seen dump-tail frames remain snapshot data until it succeeds, while later
+changes to already observed streams remain actionable. Monotonic observation ordering
+is held through lifecycle-trigger send. A targeted read newer than an in-flight poll is
+merged into one stable presence snapshot for source leases, vanish detection, admitted
+runtime reconciliation, and freshness pruning. It suppresses absence only for that stream;
+the next authoritative poll confirms or removes it, while boot reconciliation still completes. Failed
+targeted refreshes fall back without reserving freshness or consuming their throttle slot.
+Failed full sweeps retry with bounded jittered exponential backoff; CAS contention waits for
+the already-running poll, whose successful inventory also completes bootstrap. Stream-end
+frames rely on the normal vanish diff instead of requesting an all-stream replay. If
+lifecycle-observation or WebSocket-dedup cardinality exceeds its cap, targeted rows remain
+disabled until a bounded authoritative poll clears the condition. Dedup overflow requests
+one accelerated sweep rather than one per subsequent frame; the normal poll and all
+reconciliation work continue throughout.
+
+Stream-frame dedup survives reconnects, so a repeated initial dump does not refresh every
+unchanged stream. Authoritative inventories prune departed names from the reconnect dedup map.
+Successful fallback sweeps are paced to at most one every two seconds,
+and an authoritative poll advances freshness only to its own observation rather than
+discarding targeted refreshes that began while it was running.
+Targeted requests keep request-start ordering but register only after a successful Mist
+response, and inventory pruning preserves nudges newer than the poll snapshot. This prevents
+slow targeted responses from reviving removed streams or an in-flight poll from deleting a
+newer queued change.
+
+Source reconciliation requires 10 seconds of continuous absence. Runtime-admission cleanup
+requires the existing 30-second minimum age plus 20 seconds of continuous absence. These
+elapsed-time windows are independent of how many accelerator sweeps run.
+
+Monitor `helmsman_stream_ws_connections`,
+`helmsman_stream_ws_reconnects_total`, `helmsman_stream_ws_nudges_total`, and
+`helmsman_stream_ws_refreshes_total` together with normal control-trigger delivery.
+Closing the socket must only increase reconnect activity; lifecycle polling must
+continue unchanged.
+
 Foghorn routes analytics to Decklog and performs media admission/routing from
 its signed local authority plus local runtime state. Connected control-plane
 lookups remain for new mutations, bootstrap, mixed-version shadowing, and

@@ -1270,6 +1270,7 @@ service AggregatedAnalyticsService {
   // tenant-scoped summary, cluster-ops aggregate (token-attributed rows only), and
   // the per-artifact VOD retention curve.
   rpc GetSessionQoeSummary(GetSessionQoeSummaryRequest) returns (GetSessionQoeSummaryResponse);
+  rpc GetSessionQoeDetail(GetSessionQoeDetailRequest) returns (GetSessionQoeDetailResponse);
   rpc GetClusterQoeOps(GetClusterQoeOpsRequest) returns (GetClusterQoeOpsResponse);
   rpc GetClusterWorkload(GetClusterWorkloadRequest) returns (GetClusterWorkloadResponse);
   rpc GetVodRetention(GetVodRetentionRequest) returns (GetVodRetentionResponse);
@@ -2042,6 +2043,59 @@ message GetSessionQoeSummaryRequest {
 
 message GetSessionQoeSummaryResponse {
   SessionQoeSummary summary = 1;
+}
+
+// Best-effort diagnostic join between an attach-scoped browser QoE session and
+// the canonical Mist media connection observed for that id. Connection rows are
+// collapsed before joining; this is never billing or viewer-count authority.
+message SessionQoeDetail {
+  string client_session_id = 1;
+  google.protobuf.Timestamp first_seen = 2;
+  google.protobuf.Timestamp last_seen = 3;
+  string content_id = 4;
+  string stream_id = 5;
+  string artifact_hash = 6;
+  string internal_name = 7;
+  uint64 played_ms = 8;
+  uint64 rebuffer_ms = 9;
+  uint32 rebuffer_count = 10;
+  uint64 seek_wait_ms = 11;
+  uint64 frames_decoded = 12;
+  uint64 frames_dropped = 13;
+  double rebuffering_ratio = 14;
+  double frame_drop_ratio = 15;
+  double avg_bitrate_bps = 16;
+  uint32 abr_upswitch_count = 17;
+  uint32 abr_downswitch_count = 18;
+  bool first_frame = 19;
+  bool fatal_error = 20;
+  string error_code = 21;
+  string player_type = 22;
+  string protocol = 23;
+  double avg_live_edge_latency_ms = 24;
+  string mist_session_id = 25;
+  string connector = 26;
+  string node_id = 27;
+  string serving_cluster_id = 28;
+  string origin_cluster_id = 29;
+  string control_cell_id = 30;
+  optional string request_url = 31;
+  string country_code = 32;
+  string city = 33;
+  double latitude = 34;
+  double longitude = 35;
+}
+
+message GetSessionQoeDetailRequest {
+  string tenant_id = 1;
+  string content_id = 2;  // required exact client_qoe_session_deltas.content_id
+  common.TimeRange time_range = 3;  // required bounded diagnostic window
+  common.CursorPaginationRequest pagination = 4;
+}
+
+message GetSessionQoeDetailResponse {
+  repeated SessionQoeDetail sessions = 1;
+  common.CursorPaginationResponse pagination = 2;
 }
 
 // One toStartOfInterval window of the session-QoE summary. Ratios are computed

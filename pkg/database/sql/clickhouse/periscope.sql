@@ -191,6 +191,7 @@ CREATE TABLE IF NOT EXISTS stream_health_samples (
     height Nullable(UInt16),
 
     buffer_size Nullable(UInt32),
+    max_keepaway_ms Nullable(UInt32),
     buffer_health Nullable(Float32),
     buffer_state LowCardinality(String),
 
@@ -399,6 +400,7 @@ CREATE TABLE IF NOT EXISTS viewer_connection_events (
     stream_id UUID,
     internal_name String,
     session_id String,
+    client_session_id String DEFAULT '',
     connection_addr String,
     connector LowCardinality(String),
     node_id LowCardinality(String),
@@ -422,7 +424,8 @@ CREATE TABLE IF NOT EXISTS viewer_connection_events (
     source_region LowCardinality(String) DEFAULT '',
     stream_origin_region LowCardinality(String) DEFAULT '',
     stream_origin_cluster_id LowCardinality(String) DEFAULT '',
-    schema_version UInt8 DEFAULT 0
+    schema_version UInt8 DEFAULT 0,
+    INDEX idx_viewer_client_session client_session_id TYPE bloom_filter(0.01) GRANULARITY 1
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY (toYYYYMM(timestamp), tenant_id)
 ORDER BY (tenant_id, stream_id, timestamp, event_id)

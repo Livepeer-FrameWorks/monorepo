@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // fakeSegmentIndex records AcquireView/ReleaseView calls.
@@ -234,7 +235,7 @@ func TestAcquireResolvedSource_ReplacesDegradedAndStale(t *testing.T) {
 // Absence reconciliation must forget the source-registry entry ATOMICALLY with
 // the lease removal (under the tracker lock) — not leave it for a separate poller
 // forget that could race a concurrent STREAM_SOURCE. Deterministic: after the
-// 2-strike release, the registry entry must be gone too.
+// absence-dwell release, the registry entry must be gone too.
 func TestReconcileSources_ForgetsRegistryAtomically(t *testing.T) {
 	tr := NewTracker(newFakeSegmentIndex(), NewHeatTracker())
 	tr.AttachSourceRegistry(NewSourceRegistry())
@@ -249,8 +250,9 @@ func TestReconcileSources_ForgetsRegistryAtomically(t *testing.T) {
 	}
 
 	absent := map[string]struct{}{}
-	tr.ReconcileSources(absent)
-	tr.ReconcileSources(absent) // 2-strike release
+	firstMissing := time.Now()
+	tr.ReconcileSourcesAt(absent, firstMissing)
+	tr.ReconcileSourcesAt(absent, firstMissing.Add(sourceMissingDwell))
 
 	if tr.HasSourceLease(stream) {
 		t.Fatal("lease must be released after two absent polls")
@@ -297,7 +299,9 @@ func TestReconcileVsStreamEnd_LeaseAndRegistryNeverTear(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for range rounds {
-			tr.ReconcileSources(absent)
+			firstMissing := time.Now()
+			tr.ReconcileSourcesAt(absent, firstMissing)
+			tr.ReconcileSourcesAt(absent, firstMissing.Add(sourceMissingDwell))
 		}
 	}()
 	// Observer: reads lease presence and registry presence under ONE lock; they
@@ -399,21 +403,23 @@ func TestIsAssetLeased_DVRMatchesByHash(t *testing.T) {
 	}
 }
 
-func TestReconcileSources_2StrikesReleasesAbsent(t *testing.T) {
+func TestReconcileSources_ElapsedDwellReleasesAbsent(t *testing.T) {
 	tr := NewTracker(nil, NewHeatTracker())
 	tr.acquireSourceForTest("vod+a", []string{"/a"}, AssetKey{Type: "vod", Hash: "a"}, nil, false)
 	tr.acquireSourceForTest("vod+b", []string{"/b"}, AssetKey{Type: "vod", Hash: "b"}, nil, false)
 
-	// First poll: only 'a' present.
-	tr.ReconcileSources(map[string]struct{}{"vod+a": {}})
+	firstMissing := time.Now()
+	tr.ReconcileSourcesAt(map[string]struct{}{"vod+a": {}}, firstMissing)
 	if tr.SourceCount() != 2 {
-		t.Fatalf("expected no releases after 1 strike, got SourceCount=%d", tr.SourceCount())
+		t.Fatalf("expected no release at the first absence, got SourceCount=%d", tr.SourceCount())
 	}
 
-	// Second poll: still only 'a'.
-	released := tr.ReconcileSources(map[string]struct{}{"vod+a": {}})
+	if released := tr.ReconcileSourcesAt(map[string]struct{}{"vod+a": {}}, firstMissing.Add(sourceMissingDwell-time.Millisecond)); len(released) != 0 {
+		t.Fatalf("released before the source-missing dwell elapsed: %v", released)
+	}
+	released := tr.ReconcileSourcesAt(map[string]struct{}{"vod+a": {}}, firstMissing.Add(sourceMissingDwell))
 	if len(released) != 1 || released[0] != "vod+b" {
-		t.Fatalf("expected release of vod+b after 2 strikes, got %v", released)
+		t.Fatalf("expected release of vod+b after the absence dwell, got %v", released)
 	}
 	if tr.IsPathLeased("/b") {
 		t.Fatalf("/b should be unleased after reconciliation drop")
@@ -424,9 +430,10 @@ func TestReconcileSources_PresentResetsStrikes(t *testing.T) {
 	tr := NewTracker(nil, NewHeatTracker())
 	tr.acquireSourceForTest("vod+a", []string{"/a"}, AssetKey{Type: "vod", Hash: "a"}, nil, false)
 
-	tr.ReconcileSources(map[string]struct{}{})             // 1 strike
-	tr.ReconcileSources(map[string]struct{}{"vod+a": {}})  // reset
-	released := tr.ReconcileSources(map[string]struct{}{}) // 1 strike again
+	firstMissing := time.Now()
+	tr.ReconcileSourcesAt(map[string]struct{}{}, firstMissing)
+	tr.ReconcileSourcesAt(map[string]struct{}{"vod+a": {}}, firstMissing.Add(sourceMissingDwell))
+	released := tr.ReconcileSourcesAt(map[string]struct{}{}, firstMissing.Add(2*sourceMissingDwell))
 	if len(released) != 0 {
 		t.Fatalf("expected no release after strikes reset, got %v", released)
 	}

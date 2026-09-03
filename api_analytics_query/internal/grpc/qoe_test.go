@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -179,5 +180,175 @@ func TestGetSessionQoeSummary_MapsColumnsInOrder(t *testing.T) {
 	}
 	if mock.ExpectationsWereMet() != nil {
 		t.Errorf("unmet mock expectations: %v", mock.ExpectationsWereMet())
+	}
+}
+
+func TestGetSessionQoeDetail_CollapsesConnectionsBeforeJoin(t *testing.T) {
+	server, mock := newQoeTestServer(t)
+	start := time.Unix(1_700_000_000, 0).UTC()
+	end := start.Add(time.Hour)
+	mock.ExpectQuery("LIMIT 2.*FROM qoe_sessions q").
+		WithArgs("tenant-1", "live-1", start, end).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"client_session_id", "first_seen", "last_seen", "content_id", "stream_id",
+			"artifact_hash", "internal_name", "played_ms", "rebuffer_ms", "rebuffer_count",
+			"seek_wait_ms", "frames_decoded", "frames_dropped", "bitrate_bps_seconds",
+			"abr_up", "abr_down", "first_frame", "fatal_error", "error_code", "player_type",
+			"protocol", "avg_live_edge",
+		}).AddRow(
+			"attach-1", start.Add(time.Minute), end.Add(-time.Minute), "live-1", "stream-uuid",
+			"", "live-1", uint64(10_000), uint64(500), uint32(2), uint64(100),
+			uint64(1_000), uint64(10), uint64(40_000_000), uint32(1), uint32(2),
+			uint8(1), uint8(0), "", "webcodecs", "RAW_WSS", 2_500.0,
+		).AddRow(
+			"attach-older", start, start.Add(time.Minute), "live-1", "stream-uuid",
+			"", "live-1", uint64(1_000), uint64(0), uint32(0), uint64(0),
+			uint64(100), uint64(0), uint64(1_000_000), uint32(0), uint32(0),
+			uint8(1), uint8(0), "", "webcodecs", "RAW_WSS", 2_000.0,
+		))
+	mock.ExpectQuery("argMax.*tuple\\(session_id, connector.*request_url.*event_id").
+		WithArgs("tenant-1", end.Add(-sessionQoeConnectionLookback), end, "attach-1").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"client_session_id", "mist_session_id", "connector", "node_id", "serving_cluster_id",
+			"origin_cluster_id", "control_cell_id", "request_url", "country_code", "city", "latitude", "longitude",
+		}).AddRow(
+			"attach-1", "mist-media-1", "WHEP", "node-1", "serving-1", "origin-1", "cell-1",
+			"https://edge.test/whep?fwsid=attach-1", "NL", "Amsterdam", 52.37, 4.90,
+		))
+	mock.ExpectQuery("SELECT count\\(\\).*GROUP BY session_id").
+		WithArgs("tenant-1", "live-1", start, end).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int32(2)))
+
+	resp, err := server.GetSessionQoeDetail(context.Background(), &periscopepb.GetSessionQoeDetailRequest{
+		TenantId: "tenant-1", ContentId: "live-1",
+		TimeRange:  &commonpb.TimeRange{Start: timestamppb.New(start), End: timestamppb.New(end)},
+		Pagination: &commonpb.CursorPaginationRequest{First: 1},
+	})
+	if err != nil {
+		t.Fatalf("GetSessionQoeDetail: %v", err)
+	}
+	if len(resp.GetSessions()) != 1 {
+		t.Fatalf("sessions = %d, want 1", len(resp.GetSessions()))
+	}
+	detail := resp.GetSessions()[0]
+	if detail.GetClientSessionId() != "attach-1" || detail.GetMistSessionId() != "mist-media-1" || detail.GetConnector() != "WHEP" {
+		t.Fatalf("correlation fields mismapped: %+v", detail)
+	}
+	if detail.GetRebufferingRatio() != 0.05 || detail.GetFrameDropRatio() != 0.01 || detail.GetAvgBitrateBps() != 4_000_000 {
+		t.Fatalf("QoE ratios mismapped: %+v", detail)
+	}
+	if resp.GetPagination().GetTotalCount() != 2 || !resp.GetPagination().GetHasNextPage() {
+		t.Fatalf("pagination = %+v, want total_count=2 and next page", resp.GetPagination())
+	}
+	if mock.ExpectationsWereMet() != nil {
+		t.Errorf("unmet mock expectations: %v", mock.ExpectationsWereMet())
+	}
+}
+
+func TestGetSessionQoeDetail_PreservesPageWhenConnectionEnrichmentFails(t *testing.T) {
+	server, mock := newQoeTestServer(t)
+	start := time.Unix(1_700_000_000, 0).UTC()
+	end := start.Add(time.Hour)
+	mock.ExpectQuery("LIMIT 51.*FROM qoe_sessions q").
+		WithArgs("tenant-1", "live-1", start, end).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"client_session_id", "first_seen", "last_seen", "content_id", "stream_id",
+			"artifact_hash", "internal_name", "played_ms", "rebuffer_ms", "rebuffer_count",
+			"seek_wait_ms", "frames_decoded", "frames_dropped", "bitrate_bps_seconds",
+			"abr_up", "abr_down", "first_frame", "fatal_error", "error_code", "player_type",
+			"protocol", "avg_live_edge",
+		}).AddRow(
+			"attach-1", start, end, "live-1", "stream-uuid", "", "live-1",
+			uint64(1_000), uint64(0), uint32(0), uint64(0), uint64(100), uint64(0),
+			uint64(1_000_000), uint32(0), uint32(0), uint8(1), uint8(0), "", "mews",
+			"RAW_WSS", 2_000.0,
+		))
+	mock.ExpectQuery("argMax.*tuple\\(session_id, connector.*request_url.*event_id").
+		WithArgs("tenant-1", end.Add(-sessionQoeConnectionLookback), end, "attach-1").
+		WillReturnError(errors.New("connection table unavailable"))
+	mock.ExpectQuery("SELECT count\\(\\).*GROUP BY session_id").
+		WithArgs("tenant-1", "live-1", start, end).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int32(1)))
+
+	response, err := server.GetSessionQoeDetail(context.Background(), &periscopepb.GetSessionQoeDetailRequest{
+		TenantId: "tenant-1", ContentId: "live-1",
+		TimeRange: &commonpb.TimeRange{Start: timestamppb.New(start), End: timestamppb.New(end)},
+	})
+	if err != nil {
+		t.Fatalf("best-effort enrichment failed the QoE page: %v", err)
+	}
+	if len(response.GetSessions()) != 1 || response.GetSessions()[0].GetClientSessionId() != "attach-1" {
+		t.Fatalf("QoE page was not preserved: %+v", response)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPopulateSessionQoeConnectionsEnrichesVODWithoutStreamID(t *testing.T) {
+	server, mock := newQoeTestServer(t)
+	end := time.Unix(1_700_000_000, 0).UTC()
+	sessions := []*periscopepb.SessionQoeDetail{{ClientSessionId: "vod-attach"}}
+
+	mock.ExpectQuery("argMax.*tuple\\(session_id, connector.*request_url.*event_id").
+		WithArgs("tenant-1", end.Add(-sessionQoeConnectionLookback), end, "vod-attach").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"client_session_id", "mist_session_id", "connector", "node_id", "serving_cluster_id",
+			"origin_cluster_id", "control_cell_id", "request_url", "country_code", "city", "latitude", "longitude",
+		}).AddRow(
+			"vod-attach", "mist-vod-1", "HTTP", "node-1", "serving-1", "origin-1", "cell-1",
+			"https://edge.test/video.mp4?fwsid=vod-attach", "NL", "Amsterdam", 52.37, 4.90,
+		))
+
+	if err := server.populateSessionQoeConnections(context.Background(), "tenant-1", end.Add(-time.Hour), end, sessions); err != nil {
+		t.Fatalf("populate VOD session connection: %v", err)
+	}
+	if sessions[0].GetMistSessionId() != "mist-vod-1" || sessions[0].GetConnector() != "HTTP" {
+		t.Fatalf("VOD connection not enriched: %+v", sessions[0])
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestGetSessionQoeDetail_RequiresContentAndBoundedTime(t *testing.T) {
+	server, _ := newQoeTestServer(t)
+	if _, err := server.GetSessionQoeDetail(context.Background(), &periscopepb.GetSessionQoeDetailRequest{TenantId: "tenant-1"}); err == nil {
+		t.Fatal("expected missing content_id to fail")
+	}
+	if _, err := server.GetSessionQoeDetail(context.Background(), &periscopepb.GetSessionQoeDetailRequest{TenantId: "tenant-1", ContentId: "live-1"}); err == nil {
+		t.Fatal("expected missing bounded time_range to fail")
+	}
+}
+
+func TestGetSessionQoeDetail_SkipsConnectionLookupForEmptyPage(t *testing.T) {
+	server, mock := newQoeTestServer(t)
+	start := time.Unix(1_700_000_000, 0).UTC()
+	end := start.Add(time.Hour)
+	mock.ExpectQuery("LIMIT 51.*FROM qoe_sessions q").
+		WithArgs("tenant-1", "live-1", start, end).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"client_session_id", "first_seen", "last_seen", "content_id", "stream_id",
+			"artifact_hash", "internal_name", "played_ms", "rebuffer_ms", "rebuffer_count",
+			"seek_wait_ms", "frames_decoded", "frames_dropped", "bitrate_bps_seconds",
+			"abr_up", "abr_down", "first_frame", "fatal_error", "error_code", "player_type",
+			"protocol", "avg_live_edge",
+		}))
+	mock.ExpectQuery("SELECT count\\(\\).*GROUP BY session_id").
+		WithArgs("tenant-1", "live-1", start, end).
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int32(0)))
+
+	response, err := server.GetSessionQoeDetail(context.Background(), &periscopepb.GetSessionQoeDetailRequest{
+		TenantId: "tenant-1", ContentId: "live-1",
+		TimeRange: &commonpb.TimeRange{Start: timestamppb.New(start), End: timestamppb.New(end)},
+	})
+	if err != nil {
+		t.Fatalf("GetSessionQoeDetail: %v", err)
+	}
+	if len(response.GetSessions()) != 0 {
+		t.Fatalf("sessions = %d, want empty page", len(response.GetSessions()))
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }

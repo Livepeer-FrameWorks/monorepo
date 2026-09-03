@@ -5428,6 +5428,279 @@ func (s *PeriscopeServer) GetSessionQoeSummary(ctx context.Context, req *perisco
 	}, nil
 }
 
+// GetSessionQoeDetail pages attach-scoped browser QoE before looking up one
+// canonical Mist connection per returned client id. The bounded second query
+// prefers the latest media-bearing connector over HTTP/JSON info sockets and
+// collapses all dimensions from the same row.
+func (s *PeriscopeServer) GetSessionQoeDetail(ctx context.Context, req *periscopepb.GetSessionQoeDetailRequest) (*periscopepb.GetSessionQoeDetailResponse, error) {
+	tenantID, err := requireTenantID(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
+	}
+	contentID := strings.TrimSpace(req.GetContentId())
+	if contentID == "" {
+		return nil, status.Error(codes.InvalidArgument, "content_id required")
+	}
+	if req.GetTimeRange() == nil || req.GetTimeRange().GetStart() == nil || req.GetTimeRange().GetEnd() == nil {
+		return nil, status.Error(codes.InvalidArgument, "bounded time_range required")
+	}
+	startTime, endTime, err := validateTimeRangeProto(req.GetTimeRange())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid time range: %v", err)
+	}
+	if endTime.Sub(startTime) > 90*24*time.Hour {
+		return nil, status.Error(codes.InvalidArgument, "time_range cannot exceed 90 days")
+	}
+	params, err := getCursorPagination(req.GetPagination())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
+	}
+	keysetCondition, keysetArgs := buildKeysetCondition(params, "last_seen", "client_session_id")
+	pageOrder := buildOrderBy(params, "last_seen", "client_session_id")
+	direction := "DESC"
+	if params.Direction == pagination.Backward {
+		direction = "ASC"
+	}
+
+	query := fmt.Sprintf(`
+		WITH all_qoe_sessions AS (
+			SELECT
+				session_id AS client_session_id,
+				min(timestamp) AS first_seen,
+				max(timestamp) AS last_seen,
+				any(content_id) AS qoe_content_id,
+				ifNull(toString(any(stream_id)), '') AS stream_id,
+				any(artifact_hash) AS artifact_hash,
+				any(internal_name) AS internal_name,
+				sum(played_ms) AS played_ms,
+				sum(rebuffer_ms) AS rebuffer_ms,
+				sum(rebuffer_count) AS rebuffer_count,
+				sum(seek_wait_ms) AS seek_wait_ms,
+				sumIf(frames_decoded, frame_stats_supported = 1) AS frames_decoded,
+				sumIf(frames_dropped, frame_stats_supported = 1) AS frames_dropped,
+				sum(bitrate_bps_seconds) AS bitrate_bps_seconds,
+				sum(abr_upswitch_count) AS abr_upswitch_count,
+				sum(abr_downswitch_count) AS abr_downswitch_count,
+				max(first_frame) AS first_frame,
+				max(fatal_error) AS fatal_error,
+				argMax(error_code, timestamp) AS error_code,
+				argMax(player_type, timestamp) AS player_type,
+				argMax(protocol, timestamp) AS protocol,
+				avgIf(live_edge_latency_ms, live_edge_latency_ms > 0) AS avg_live_edge
+			FROM client_qoe_session_deltas FINAL
+			WHERE tenant_id = ? AND content_id = ? AND timestamp >= ? AND timestamp <= ?
+			GROUP BY session_id
+		), qoe_sessions AS (
+			SELECT *
+			FROM all_qoe_sessions
+			WHERE 1 = 1%s%s
+			LIMIT %d
+		)
+		SELECT
+			q.client_session_id, q.first_seen, q.last_seen, q.qoe_content_id, q.stream_id,
+			q.artifact_hash, q.internal_name, q.played_ms, q.rebuffer_ms, q.rebuffer_count,
+			q.seek_wait_ms, q.frames_decoded, q.frames_dropped, q.bitrate_bps_seconds,
+			q.abr_upswitch_count, q.abr_downswitch_count, q.first_frame, q.fatal_error,
+			q.error_code, q.player_type, q.protocol, q.avg_live_edge
+		FROM qoe_sessions q
+		ORDER BY q.last_seen %s, q.client_session_id %s`, keysetCondition, pageOrder, params.Limit+1, direction, direction)
+
+	args := []any{tenantID, contentID, startTime, endTime}
+	args = append(args, keysetArgs...)
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
+	if err != nil {
+		return nil, wrapClickhouseError(err, "database error")
+	}
+	defer rows.Close()
+
+	response := &periscopepb.GetSessionQoeDetailResponse{}
+	for rows.Next() {
+		var clientSessionID, rowContentID, streamID, artifactHash, internalName string
+		var firstSeen, lastSeen time.Time
+		var playedMS, rebufferMS, seekWaitMS, framesDecoded, framesDropped, bitrateBPSSeconds uint64
+		var rebufferCount, abrUp, abrDown uint32
+		var firstFrame, fatalError uint8
+		var errorCode, playerType, protocol string
+		var avgLiveEdge sql.NullFloat64
+		if err := rows.Scan(
+			&clientSessionID, &firstSeen, &lastSeen, &rowContentID, &streamID,
+			&artifactHash, &internalName, &playedMS, &rebufferMS, &rebufferCount,
+			&seekWaitMS, &framesDecoded, &framesDropped, &bitrateBPSSeconds,
+			&abrUp, &abrDown, &firstFrame, &fatalError, &errorCode, &playerType, &protocol,
+			&avgLiveEdge,
+		); err != nil {
+			return nil, wrapClickhouseError(err, "failed to scan session qoe detail")
+		}
+		detail := &periscopepb.SessionQoeDetail{
+			ClientSessionId: clientSessionID, FirstSeen: timestamppb.New(firstSeen), LastSeen: timestamppb.New(lastSeen),
+			ContentId: rowContentID, StreamId: streamID, ArtifactHash: artifactHash, InternalName: internalName,
+			PlayedMs: playedMS, RebufferMs: rebufferMS, RebufferCount: rebufferCount, SeekWaitMs: seekWaitMS,
+			FramesDecoded: framesDecoded, FramesDropped: framesDropped,
+			AbrUpswitchCount: abrUp, AbrDownswitchCount: abrDown, FirstFrame: firstFrame == 1,
+			FatalError: fatalError == 1, ErrorCode: errorCode, PlayerType: playerType, Protocol: protocol,
+			AvgLiveEdgeLatencyMs: sanitizeFloat64(avgLiveEdge.Float64),
+		}
+		if playedMS > 0 {
+			detail.RebufferingRatio = float64(rebufferMS) / float64(playedMS)
+			detail.AvgBitrateBps = float64(bitrateBPSSeconds) / (float64(playedMS) / 1000)
+		}
+		if framesDecoded > 0 {
+			detail.FrameDropRatio = float64(framesDropped) / float64(framesDecoded)
+		}
+		response.Sessions = append(response.Sessions, detail)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, wrapClickhouseError(err, "database error")
+	}
+
+	resultsLen := len(response.Sessions)
+	if resultsLen > params.Limit {
+		response.Sessions = response.Sessions[:params.Limit]
+	}
+	if params.Direction == pagination.Backward {
+		slices.Reverse(response.Sessions)
+	}
+
+	if err := s.populateSessionQoeConnections(ctx, tenantID, startTime, endTime, response.Sessions); err != nil {
+		// Connection correlation is diagnostic enrichment. Preserve the already
+		// fetched QoE page when the secondary lookup is unavailable.
+		s.logger.WithError(err).Warn("Failed to enrich session QoE detail with viewer connections")
+	}
+
+	var total int32
+	if err := periscopequerydb.QueryRow(ctx, s.clickhouse, `
+		SELECT count()
+		FROM (
+			SELECT session_id
+			FROM client_qoe_session_deltas FINAL
+			WHERE tenant_id = ? AND content_id = ? AND timestamp >= ? AND timestamp <= ?
+			GROUP BY session_id
+		)
+	`, tenantID, contentID, startTime, endTime).Scan(&total); err != nil {
+		s.logger.WithError(err).Warn("Failed to get session QoE detail total count")
+	}
+
+	var startCursor, endCursor string
+	if len(response.Sessions) > 0 {
+		first := response.Sessions[0]
+		last := response.Sessions[len(response.Sessions)-1]
+		startCursor = pagination.EncodeCursor(first.LastSeen.AsTime(), first.ClientSessionId)
+		endCursor = pagination.EncodeCursor(last.LastSeen.AsTime(), last.ClientSessionId)
+	}
+	response.Pagination = buildCursorResponse(resultsLen, params.Limit, params.Direction, total, startCursor, endCursor)
+	return response, nil
+}
+
+type sessionQoeConnection struct {
+	mistSessionID, connector, nodeID, servingClusterID string
+	originClusterID, controlCellID                     string
+	requestURL                                         sql.NullString
+	countryCode, city                                  string
+	latitude, longitude                                float64
+}
+
+const sessionQoeConnectionLookback = 90 * 24 * time.Hour
+
+func (s *PeriscopeServer) populateSessionQoeConnections(
+	ctx context.Context,
+	tenantID string,
+	startTime, endTime time.Time,
+	sessions []*periscopepb.SessionQoeDetail,
+) error {
+	if len(sessions) == 0 {
+		return nil
+	}
+	queryIDs := make([]string, 0, len(sessions))
+	for _, session := range sessions {
+		queryIDs = append(queryIDs, session.GetClientSessionId())
+	}
+	placeholders := make([]string, len(queryIDs))
+	args := make([]any, 0, 3+len(queryIDs))
+	// A viewer connection can predate the requested QoE slice for a long-lived
+	// playback session. Search at most one source-table retention window ending
+	// at the requested slice and constrain the second ORDER BY key before time.
+	connectionStart := endTime.Add(-sessionQoeConnectionLookback)
+	args = append(args, tenantID, connectionStart, endTime)
+	for index, clientSessionID := range queryIDs {
+		placeholders[index] = "?"
+		args = append(args, clientSessionID)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT
+			client_session_id,
+			tupleElement(connection, 1), tupleElement(connection, 2),
+			tupleElement(connection, 3), tupleElement(connection, 4),
+			tupleElement(connection, 5), tupleElement(connection, 6),
+			tupleElement(connection, 7), toString(tupleElement(connection, 8)),
+			tupleElement(connection, 9), tupleElement(connection, 10),
+			tupleElement(connection, 11)
+		FROM (
+			SELECT
+				client_session_id,
+				argMax(
+					tuple(session_id, connector, node_id, cluster_id, origin_cluster_id,
+						control_cell_id, request_url, country_code, city, latitude, longitude),
+					tuple(if(upper(connector) IN ('HTTP', 'JSON'), 0, 1), timestamp, toString(event_id))
+				) AS connection
+			FROM viewer_connection_events
+			WHERE tenant_id = ?
+				AND event_type = 'connect' AND client_session_id != ''
+				AND timestamp >= ? AND timestamp <= ?
+				AND client_session_id IN (%s)
+			GROUP BY tenant_id, client_session_id
+		)
+	`, strings.Join(placeholders, ", "))
+
+	rows, err := periscopequerydb.Query(ctx, s.clickhouse, query, args...)
+	if err != nil {
+		return wrapClickhouseError(err, "failed to query session QoE connection correlation")
+	}
+	defer rows.Close()
+
+	connections := make(map[string]sessionQoeConnection, len(sessions))
+	for rows.Next() {
+		var clientSessionID string
+		var connection sessionQoeConnection
+		if err := rows.Scan(
+			&clientSessionID,
+			&connection.mistSessionID, &connection.connector,
+			&connection.nodeID, &connection.servingClusterID,
+			&connection.originClusterID, &connection.controlCellID,
+			&connection.requestURL, &connection.countryCode, &connection.city,
+			&connection.latitude, &connection.longitude,
+		); err != nil {
+			return wrapClickhouseError(err, "failed to scan session QoE connection correlation")
+		}
+		connections[clientSessionID] = connection
+	}
+	if err := rows.Err(); err != nil {
+		return wrapClickhouseError(err, "failed to query session QoE connection correlation")
+	}
+
+	for _, session := range sessions {
+		connection, ok := connections[session.GetClientSessionId()]
+		if !ok {
+			continue
+		}
+		session.MistSessionId = connection.mistSessionID
+		session.Connector = connection.connector
+		session.NodeId = connection.nodeID
+		session.ServingClusterId = connection.servingClusterID
+		session.OriginClusterId = connection.originClusterID
+		session.ControlCellId = connection.controlCellID
+		session.CountryCode = connection.countryCode
+		session.City = connection.city
+		session.Latitude = connection.latitude
+		session.Longitude = connection.longitude
+		if connection.requestURL.Valid {
+			requestURL := connection.requestURL.String
+			session.RequestUrl = &requestURL
+		}
+	}
+	return nil
+}
+
 // GetSessionQoeTimeSeries returns the tenant-scoped viewer-experienced QoE summary
 // bucketed by toStartOfInterval. The inner query rolls additive beacon deltas up
 // per (bucket, session) over client_qoe_session_deltas FINAL — same sum-of-deltas

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -41,16 +42,100 @@ import (
 // USER_NEW/USER_END remain authoritative for connect/disconnect and billing.
 const clientLifecycleTickStride = 6
 
+var nodeMetricsForwardTimeout = 5 * time.Second
+
 const (
-	admittedRuntimeMissingPollThreshold = 3
-	admittedRuntimeMinimumAge           = 30 * time.Second
-	maxMissingRuntimeReportsPerPoll     = 64
+	admittedRuntimeMinimumAge       = 30 * time.Second
+	admittedRuntimeMissingDwell     = 20 * time.Second
+	maxMissingRuntimeReportsPerPoll = 64
+	maxStreamObservationEntries     = 8192
 )
 
 type admittedRuntimeIdentity struct {
 	runtimeName  string
 	generation   string
 	connectorPID int64
+}
+
+// mistNodeRuntime is an immutable node/client identity with a cancellable task
+// lifetime. Poll work captures one runtime, so a node replacement can never
+// pair the new node ID with the old node's Mist client.
+type mistNodeRuntime struct {
+	generation        uint64
+	nodeID            string
+	baseURL           string
+	client            *mist.Client
+	clientMu          sync.Mutex
+	acceleratorClient *mist.Client
+	acceleratorMu     sync.Mutex
+	ctx               context.Context
+	cancel            context.CancelFunc
+
+	taskMu   sync.Mutex
+	stopping bool
+	tasks    sync.WaitGroup
+}
+
+func newMistNodeRuntime(generation uint64, nodeID, baseURL, username, password string) *mistNodeRuntime {
+	ctx, cancel := context.WithCancel(context.Background())
+	client := mist.NewClient(monitorLogger)
+	client.BaseURL = baseURL
+	client.Username = username
+	client.Password = password
+	acceleratorClient := mist.NewClient(monitorLogger)
+	acceleratorClient.BaseURL = baseURL
+	acceleratorClient.Username = username
+	acceleratorClient.Password = password
+	return &mistNodeRuntime{
+		generation:        generation,
+		nodeID:            nodeID,
+		baseURL:           baseURL,
+		client:            client,
+		acceleratorClient: acceleratorClient,
+		ctx:               ctx,
+		cancel:            cancel,
+	}
+}
+
+func (runtime *mistNodeRuntime) launch(task func(context.Context)) bool {
+	runtime.taskMu.Lock()
+	defer runtime.taskMu.Unlock()
+	if runtime.stopping {
+		return false
+	}
+	runtime.tasks.Add(1)
+	go func() {
+		defer runtime.tasks.Done()
+		task(runtime.ctx)
+	}()
+	return true
+}
+
+func (runtime *mistNodeRuntime) stop() {
+	runtime.beginStop()
+	runtime.waitStopped()
+}
+
+func (runtime *mistNodeRuntime) beginStop() {
+	runtime.taskMu.Lock()
+	if !runtime.stopping {
+		runtime.stopping = true
+		runtime.cancel()
+	}
+	runtime.taskMu.Unlock()
+}
+
+func (runtime *mistNodeRuntime) waitStopped() {
+	runtime.tasks.Wait()
+}
+
+func (runtime *mistNodeRuntime) requestContext(parent context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(parent)
+	stop := context.AfterFunc(runtime.ctx, cancel)
+	return ctx, func() {
+		stop()
+		cancel()
+	}
 }
 
 func isInternalMistRuntimeStream(streamName string) bool {
@@ -109,9 +194,25 @@ type PrometheusMonitor struct {
 	// scan (lower generation) that finishes after a newer one must NOT overwrite it.
 	lastScanGen uint64
 
-	// Shared Mist API client
-	mistClient *mist.Client
-	mistMu     sync.Mutex
+	// nodeRuntime is the sole authority for node identity and Mist API clients.
+	// The visible fields above are a status snapshot only.
+	nodeRuntimeMu             sync.RWMutex
+	nodeLifecycleMu           sync.Mutex
+	nodeRuntime               *mistNodeRuntime
+	nextNodeGeneration        uint64
+	stopOnce                  sync.Once
+	stopped                   atomic.Bool
+	monitorWorkers            sync.WaitGroup
+	nodeMetricsWake           chan struct{}
+	nodeMetricsVersion        atomic.Uint64
+	nodeMetricsSendInFlight   atomic.Bool
+	streamObservationNext     atomic.Uint64
+	streamObservationFloor    uint64
+	streamObservationOverflow bool
+	streamObservationApply    sync.Mutex
+	streamObservationMu       sync.Mutex
+	streamObservationLast     map[string]uint64
+	streamObservationIssued   map[string]uint64
 
 	// Bandwidth rate calculation state
 	lastBwUp     uint64
@@ -130,15 +231,28 @@ type PrometheusMonitor struct {
 	streamDiffMu            sync.Mutex
 	lastActiveInternalNames map[string]struct{}
 	pendingOfflineNames     map[string]struct{}
-	admittedRuntimeMissing  map[admittedRuntimeIdentity]int
+	targetedActiveNames     map[string]uint64
+	admittedRuntimeMissing  map[admittedRuntimeIdentity]time.Time
 	activeStreamsSeeded     bool
+	reconciliationNodeID    string
 	loadAdmittedGenerations func() ([]control.AdmittedIngestGeneration, error)
 	sendControlTrigger      func(*ipcpb.MistTrigger, logging.Logger) (*control.MistTriggerResult, error)
+	sendControlTriggerCtx   func(context.Context, *ipcpb.MistTrigger, logging.Logger) (*control.MistTriggerResult, error)
 	markGenerationEnded     func(string, string, int64) error
 	// emitStreamLifecycle is spawned with `go` every tick; a slow Mist
 	// API response could overlap runs and a late finisher would swap in
 	// a stale set. Ticks that find a run in flight are dropped.
 	streamLifecycleInFlight atomic.Bool
+
+	// The controller WebSocket is a lossy change detector. Its
+	// generation fence prevents a replaced node connection from refreshing the
+	// new node with frames or API results from the old socket.
+	streamWSMu         sync.Mutex
+	streamWSGeneration uint64
+	streamWSCancel     func()
+	streamWSDone       <-chan struct{}
+	streamWSQueue      *streamWSRefreshQueue
+	streamWSFullSweep  func(string, string) bool
 }
 
 var prometheusMonitor *PrometheusMonitor
@@ -146,11 +260,9 @@ var monitorLogger logging.Logger
 var monitorInitMu sync.Mutex
 var fileStabilityThreshold = 10 * time.Second
 
-// Artifact-report ordering. forwardNodeMetrics runs on concurrent goroutines, so the whole-node
-// artifact snapshot and its sequence must be captured together, under one lock, or a newer snapshot
-// could be paired with an older sequence. artifactReportSeq is a strictly-monotonic per-process
-// counter (only ever increments). It orders reports WITHIN one control connection; Foghorn pairs it
-// with the connection's ownership fence to order across reconnects.
+// Artifact-report ordering. Node metrics are coalesced, but artifact mutations
+// can still race a report. Capture the whole-node snapshot and its sequence
+// together so a newer snapshot cannot be paired with an older sequence.
 var (
 	artifactReportMu  sync.Mutex
 	artifactReportSeq int64
@@ -361,12 +473,14 @@ func InitPrometheusMonitor(logger logging.Logger) {
 		mistAPIPassword:         mistAPIPassword,
 		updateChannel:           make(chan models.NodeUpdate, 10),
 		stopChannel:             make(chan bool, 1),
+		nodeMetricsWake:         make(chan struct{}, 1),
 		isHealthy:               true,
 		lastJSONData:            make(map[string]any),
 		artifactIndex:           make(map[string]*ClipInfo),
-		admittedRuntimeMissing:  make(map[admittedRuntimeIdentity]int),
+		admittedRuntimeMissing:  make(map[admittedRuntimeIdentity]time.Time),
 		loadAdmittedGenerations: control.ActiveAdmittedIngestGenerations,
 		sendControlTrigger:      control.SendMistTrigger,
+		sendControlTriggerCtx:   control.SendMistTriggerContext,
 		markGenerationEnded:     control.MarkAdmittedIngestGenerationEndedExact,
 	}
 
@@ -374,17 +488,300 @@ func InitPrometheusMonitor(logger logging.Logger) {
 		"mist_api_user": mistUsername,
 	}).Info("Prometheus monitor initialized")
 
-	// Start monitoring goroutines
-	go prometheusMonitor.monitorNodes()
-	go prometheusMonitor.processUpdates()
+	// Start monitoring goroutines.
+	prometheusMonitor.monitorWorkers.Add(3)
+	go func() {
+		defer prometheusMonitor.monitorWorkers.Done()
+		prometheusMonitor.monitorNodes()
+	}()
+	go func() {
+		defer prometheusMonitor.monitorWorkers.Done()
+		prometheusMonitor.processUpdates()
+	}()
+	go func() {
+		defer prometheusMonitor.monitorWorkers.Done()
+		prometheusMonitor.forwardNodeMetricsLoop()
+	}()
+}
+
+func (pm *PrometheusMonitor) currentNodeRuntime() *mistNodeRuntime {
+	pm.nodeRuntimeMu.RLock()
+	defer pm.nodeRuntimeMu.RUnlock()
+	return pm.nodeRuntime
+}
+
+func (pm *PrometheusMonitor) nodeRuntimeCurrent(runtime *mistNodeRuntime) bool {
+	if runtime == nil || pm.stopped.Load() || runtime.ctx.Err() != nil {
+		return false
+	}
+	pm.nodeRuntimeMu.RLock()
+	defer pm.nodeRuntimeMu.RUnlock()
+	return pm.nodeRuntime == runtime
+}
+
+func (pm *PrometheusMonitor) detachNodeRuntime() *mistNodeRuntime {
+	pm.nodeRuntimeMu.Lock()
+	runtime := pm.nodeRuntime
+	pm.nodeRuntime = nil
+	pm.nodeRuntimeMu.Unlock()
+	if runtime != nil {
+		runtime.beginStop()
+	}
+	return runtime
+}
+
+func (pm *PrometheusMonitor) joinRetiredNodeRuntime(runtime *mistNodeRuntime, streamWSDone <-chan struct{}) {
+	if runtime == nil && streamWSDone == nil {
+		return
+	}
+	pm.monitorWorkers.Add(1)
+	go func() {
+		defer pm.monitorWorkers.Done()
+		if streamWSDone != nil {
+			<-streamWSDone
+		}
+		if runtime != nil {
+			runtime.waitStopped()
+		}
+	}()
+}
+
+func (pm *PrometheusMonitor) resetNodeScopedStreamState(preserveReconciliation bool) {
+	if !preserveReconciliation {
+		pm.streamDiffMu.Lock()
+		pm.lastActiveInternalNames = nil
+		pm.pendingOfflineNames = make(map[string]struct{})
+		pm.targetedActiveNames = make(map[string]uint64)
+		pm.admittedRuntimeMissing = make(map[admittedRuntimeIdentity]time.Time)
+		pm.activeStreamsSeeded = false
+		pm.reconciliationNodeID = ""
+		pm.streamDiffMu.Unlock()
+	}
+
+	pm.streamObservationApply.Lock()
+	pm.streamObservationMu.Lock()
+	pm.streamObservationLast = make(map[string]uint64)
+	pm.streamObservationIssued = make(map[string]uint64)
+	pm.streamObservationFloor = 0
+	pm.streamObservationOverflow = false
+	pm.streamObservationMu.Unlock()
+	pm.streamObservationApply.Unlock()
+}
+
+func (pm *PrometheusMonitor) beginStreamObservation() uint64 {
+	return pm.streamObservationNext.Add(1)
+}
+
+func (pm *PrometheusMonitor) beginTargetedStreamObservation(streamNames []string) uint64 {
+	observation := pm.beginStreamObservation()
+	if !pm.issueTargetedStreamObservation(observation, streamNames) {
+		return 0
+	}
+	return observation
+}
+
+func (pm *PrometheusMonitor) issueTargetedStreamObservation(observation uint64, streamNames []string) bool {
+	pm.streamObservationApply.Lock()
+	defer pm.streamObservationApply.Unlock()
+	pm.streamObservationMu.Lock()
+	defer pm.streamObservationMu.Unlock()
+	if pm.streamObservationIssued == nil {
+		pm.streamObservationIssued = make(map[string]uint64)
+	}
+	if observation == 0 || observation < pm.streamObservationFloor || pm.streamObservationOverflow {
+		return false
+	}
+	newEntries := 0
+	for _, streamName := range streamNames {
+		if pm.streamObservationIssued[streamName] > observation {
+			return false
+		}
+		if _, exists := pm.streamObservationIssued[streamName]; !exists {
+			newEntries++
+		}
+	}
+	if len(pm.streamObservationIssued)+newEntries > maxStreamObservationEntries {
+		pm.streamObservationLast = make(map[string]uint64)
+		pm.streamObservationIssued = make(map[string]uint64)
+		if observation > pm.streamObservationFloor {
+			pm.streamObservationFloor = observation
+		}
+		pm.streamObservationOverflow = true
+		return false
+	}
+	for _, streamName := range streamNames {
+		pm.streamObservationIssued[streamName] = observation
+	}
+	return true
+}
+
+func (pm *PrometheusMonitor) claimStreamObservation(streamName string, observation uint64) bool {
+	pm.streamObservationMu.Lock()
+	defer pm.streamObservationMu.Unlock()
+	if observation == 0 || observation < pm.streamObservationFloor {
+		return false
+	}
+	if pm.streamObservationOverflow {
+		return true
+	}
+	if pm.streamObservationLast == nil {
+		pm.streamObservationLast = make(map[string]uint64)
+	}
+	if _, exists := pm.streamObservationLast[streamName]; !exists && len(pm.streamObservationLast) >= maxStreamObservationEntries {
+		pm.streamObservationLast = make(map[string]uint64)
+		pm.streamObservationIssued = make(map[string]uint64)
+		if observation > pm.streamObservationFloor {
+			pm.streamObservationFloor = observation
+		}
+		pm.streamObservationOverflow = true
+		return true
+	}
+	if pm.streamObservationIssued[streamName] > observation || pm.streamObservationLast[streamName] > observation {
+		return false
+	}
+	pm.streamObservationLast[streamName] = observation
+	return true
+}
+
+// applyStreamObservation spans freshness claim through trigger send. Targeted
+// issuance uses the same apply mutex, so once a newer observation is issued an
+// older row cannot claim and then publish after it.
+func (pm *PrometheusMonitor) applyStreamObservation(streamName string, observation uint64, apply func()) bool {
+	pm.streamObservationApply.Lock()
+	defer pm.streamObservationApply.Unlock()
+	if !pm.claimStreamObservation(streamName, observation) {
+		return false
+	}
+	apply()
+	return true
+}
+
+func (pm *PrometheusMonitor) recordTargetedStreamPresence(streamName string, observation uint64) {
+	internalName, ok := offlineReportableInternalName(streamName)
+	if !ok || observation == 0 {
+		return
+	}
+	pm.streamDiffMu.Lock()
+	defer pm.streamDiffMu.Unlock()
+	if pm.lastActiveInternalNames == nil {
+		pm.lastActiveInternalNames = make(map[string]struct{})
+	}
+	if pm.targetedActiveNames == nil {
+		pm.targetedActiveNames = make(map[string]uint64)
+	}
+	pm.lastActiveInternalNames[internalName] = struct{}{}
+	if observation > pm.targetedActiveNames[streamName] {
+		pm.targetedActiveNames[streamName] = observation
+	}
+	// A successful targeted read is authoritative for this stream even before
+	// the first complete inventory. Its later absence must produce an offline
+	// edge instead of being absorbed as bootstrap state.
+	pm.activeStreamsSeeded = true
+}
+
+// reconcileStreamPresenceSnapshot merges only targeted reads that began after
+// the authoritative poll. The returned runtime-name set is the single presence
+// view used by lease, vanish, admission, and observation reconciliation for
+// this poll, so a stream cannot be present for one subsystem and absent for
+// another solely because their reconciliation ran at different times.
+func (pm *PrometheusMonitor) reconcileStreamPresenceSnapshot(
+	present map[string]struct{},
+	observation uint64,
+) (map[string]struct{}, []string) {
+	reconciled := make(map[string]struct{}, len(present))
+	for streamName := range present {
+		reconciled[streamName] = struct{}{}
+	}
+
+	pm.streamDiffMu.Lock()
+	defer pm.streamDiffMu.Unlock()
+	for streamName, targetedObservation := range pm.targetedActiveNames {
+		if targetedObservation > observation {
+			reconciled[streamName] = struct{}{}
+		} else {
+			delete(pm.targetedActiveNames, streamName)
+		}
+	}
+
+	presentInternal := make(map[string]struct{}, len(reconciled))
+	for streamName := range reconciled {
+		if internalName, ok := offlineReportableInternalName(streamName); ok {
+			presentInternal[internalName] = struct{}{}
+		}
+	}
+	if pm.pendingOfflineNames == nil {
+		pm.pendingOfflineNames = make(map[string]struct{})
+	}
+	toReport := updatePendingOffline(
+		pm.pendingOfflineNames,
+		pm.lastActiveInternalNames,
+		presentInternal,
+		pm.activeStreamsSeeded,
+	)
+	pm.lastActiveInternalNames = presentInternal
+	pm.activeStreamsSeeded = true
+	return reconciled, toReport
+}
+
+func (pm *PrometheusMonitor) pruneStreamObservations(present map[string]struct{}, observation uint64) {
+	pm.streamObservationApply.Lock()
+	defer pm.streamObservationApply.Unlock()
+	pm.streamObservationMu.Lock()
+	defer pm.streamObservationMu.Unlock()
+	if observation < pm.streamObservationFloor {
+		return
+	}
+	// This authoritative inventory supersedes observations that began before
+	// it, but not targeted refreshes issued while the poll was in flight.
+	// Advancing to streamObservationNext would invalidate those in-flight rows
+	// even though this inventory never observed their later change.
+	if observation > pm.streamObservationFloor {
+		pm.streamObservationFloor = observation
+	}
+	pm.streamObservationOverflow = len(present) > maxStreamObservationEntries
+	if pm.streamObservationOverflow {
+		clear(pm.streamObservationLast)
+		clear(pm.streamObservationIssued)
+		return
+	}
+	for name, lastObservation := range pm.streamObservationLast {
+		if _, ok := present[name]; !ok && lastObservation <= observation {
+			delete(pm.streamObservationLast, name)
+		}
+	}
+	for name, issuedObservation := range pm.streamObservationIssued {
+		if _, ok := present[name]; !ok && issuedObservation <= observation {
+			delete(pm.streamObservationIssued, name)
+		}
+	}
 }
 
 // AddNode adds a MistServer node to monitor
 // baseURL is internal MistServer URL, edgePublicURL is client-facing URL
 func (pm *PrometheusMonitor) AddNode(nodeID, baseURL, edgePublicURL string) {
-	pm.mutex.Lock()
-	defer pm.mutex.Unlock()
+	pm.nodeLifecycleMu.Lock()
+	if pm.stopped.Load() {
+		pm.nodeLifecycleMu.Unlock()
+		return
+	}
+	previousRuntime := pm.currentNodeRuntime()
+	pm.streamDiffMu.Lock()
+	preserveReconciliation := pm.reconciliationNodeID == nodeID
+	pm.streamDiffMu.Unlock()
+	preserveReconciliation = preserveReconciliation || previousRuntime != nil && previousRuntime.nodeID == nodeID
+	streamWSDone := pm.detachStreamWS()
+	retiredRuntime := pm.detachNodeRuntime()
+	pm.nodeRuntimeMu.Lock()
+	pm.nextNodeGeneration++
+	generation := pm.nextNodeGeneration
+	pm.nodeRuntimeMu.Unlock()
+	runtime := newMistNodeRuntime(generation, nodeID, baseURL, pm.mistUsername, pm.mistAPIPassword)
+	pm.resetNodeScopedStreamState(preserveReconciliation)
+	pm.streamDiffMu.Lock()
+	pm.reconciliationNodeID = nodeID
+	pm.streamDiffMu.Unlock()
 
+	pm.mutex.Lock()
 	pm.nodeID = nodeID
 	pm.baseURL = baseURL
 	pm.edgePublicURL = edgePublicURL
@@ -395,11 +792,16 @@ func (pm *PrometheusMonitor) AddNode(nodeID, baseURL, edgePublicURL string) {
 	pm.location = ""
 	pm.lastJSONData = make(map[string]any) // Clear previous data
 
-	// Initialize or update Mist client for this node
-	if pm.mistClient == nil {
-		pm.mistClient = mist.NewClient(monitorLogger)
-	}
-	pm.mistClient.BaseURL = baseURL // Internal URL for API calls
+	pm.mutex.Unlock()
+
+	// Publish node identity and both client lanes as one immutable runtime.
+	pm.nodeRuntimeMu.Lock()
+	pm.nodeRuntime = runtime
+	pm.nodeRuntimeMu.Unlock()
+
+	pm.startStreamWS(runtime)
+	pm.joinRetiredNodeRuntime(retiredRuntime, streamWSDone)
+	pm.nodeLifecycleMu.Unlock()
 
 	monitorLogger.WithFields(logging.Fields{
 		"node_id":         nodeID,
@@ -410,17 +812,32 @@ func (pm *PrometheusMonitor) AddNode(nodeID, baseURL, edgePublicURL string) {
 
 // RemoveNode removes a MistServer node from monitoring
 func (pm *PrometheusMonitor) RemoveNode(nodeID string) {
+	pm.nodeLifecycleMu.Lock()
+	if pm.stopped.Load() {
+		pm.nodeLifecycleMu.Unlock()
+		return
+	}
+	streamWSDone := pm.detachStreamWS()
+	retiredRuntime := pm.detachNodeRuntime()
+	// Keep reconciliation evidence until the next AddNode reveals whether this
+	// was a same-node replacement or a genuinely different node. The latter
+	// clears it before publishing its runtime.
+	pm.resetNodeScopedStreamState(true)
+
 	pm.mutex.Lock()
-	defer pm.mutex.Unlock()
 
 	pm.nodeID = ""
 	pm.baseURL = ""
+	pm.edgePublicURL = ""
 	pm.lastSeen = time.Time{}
 	pm.isHealthy = false
 	pm.latitude = nil
 	pm.longitude = nil
 	pm.location = ""
 	pm.lastJSONData = make(map[string]any) // Clear previous data
+	pm.mutex.Unlock()
+	pm.joinRetiredNodeRuntime(retiredRuntime, streamWSDone)
+	pm.nodeLifecycleMu.Unlock()
 
 	monitorLogger.WithFields(logging.Fields{
 		"node_id": nodeID,
@@ -429,26 +846,20 @@ func (pm *PrometheusMonitor) RemoveNode(nodeID string) {
 
 // TriggerImmediatePoll triggers immediate JSON and stream polling using the stored node
 func (pm *PrometheusMonitor) TriggerImmediatePoll() {
-	pm.mutex.RLock()
-	nodeID := pm.nodeID
-	baseURL := pm.baseURL
-	pm.mutex.RUnlock()
-	if nodeID == "" || baseURL == "" {
+	runtime := pm.currentNodeRuntime()
+	if runtime == nil {
 		return
 	}
-	go pm.emitNodeLifecycle(nodeID, baseURL)
-	go pm.emitStreamLifecycle(nodeID, baseURL)
+	runtime.launch(func(context.Context) { pm.emitNodeLifecycleRuntime(runtime) })
+	runtime.launch(func(context.Context) { pm.emitStreamLifecycleRuntime(runtime) })
 }
 
 func (pm *PrometheusMonitor) TriggerArtifactReport() {
-	pm.mutex.RLock()
-	nodeID := pm.nodeID
-	baseURL := pm.baseURL
-	pm.mutex.RUnlock()
-	if nodeID == "" || baseURL == "" {
+	runtime := pm.currentNodeRuntime()
+	if runtime == nil {
 		return
 	}
-	go pm.emitNodeLifecycle(nodeID, baseURL)
+	runtime.launch(func(context.Context) { pm.emitNodeLifecycleRuntime(runtime) })
 }
 
 // TriggerImmediatePoll triggers immediate polling if the monitor is initialized
@@ -503,20 +914,17 @@ func (pm *PrometheusMonitor) monitorNodes() {
 	for {
 		select {
 		case <-Ticker.C:
-			pm.mutex.RLock()
-			if pm.nodeID != "" && pm.baseURL != "" {
-				nodeID := pm.nodeID
-				baseURL := pm.baseURL
-				pm.mutex.RUnlock()
-
-				go pm.emitNodeLifecycle(nodeID, baseURL)
-				go pm.emitStreamLifecycle(nodeID, baseURL)
+			if runtime := pm.currentNodeRuntime(); runtime != nil {
+				runtime.launch(func(context.Context) { pm.emitNodeLifecycleRuntime(runtime) })
+				runtime.launch(func(context.Context) { pm.emitStreamLifecycleRuntime(runtime) })
 				if clientTickCount%clientLifecycleTickStride == 0 {
-					go pm.emitClientLifecycle(nodeID, baseURL) //nolint:errcheck // goroutine; errors logged internally
+					runtime.launch(func(context.Context) {
+						if err := pm.emitClientLifecycleRuntime(runtime); err != nil {
+							return
+						}
+					})
 				}
 				clientTickCount++
-			} else {
-				pm.mutex.RUnlock()
 			}
 
 		case <-artifactTicker.C:
@@ -534,15 +942,29 @@ func (pm *PrometheusMonitor) monitorNodes() {
 
 // emitNodeLifecycle fetches metrics from a single node (JSON only)
 func (pm *PrometheusMonitor) emitNodeLifecycle(nodeID, baseURL string) {
+	runtime := pm.currentNodeRuntime()
+	if runtime == nil || runtime.nodeID != nodeID || runtime.baseURL != baseURL {
+		return
+	}
+	pm.emitNodeLifecycleRuntime(runtime)
+}
+
+func (pm *PrometheusMonitor) emitNodeLifecycleRuntime(runtime *mistNodeRuntime) {
+	if !pm.nodeRuntimeCurrent(runtime) {
+		return
+	}
 	// Fetch JSON data using Mist client (/{secret}.json)
-	pm.mistMu.Lock()
-	jsonData, jsonErr := pm.mistClient.FetchJSON("")
-	pm.mistMu.Unlock()
+	runtime.clientMu.Lock()
+	jsonData, jsonErr := runtime.client.FetchJSONContext(runtime.ctx, "")
+	runtime.clientMu.Unlock()
+	if !pm.nodeRuntimeCurrent(runtime) {
+		return
+	}
 
 	// Send update through channel
 	update := models.NodeUpdate{
-		NodeID:   nodeID,
-		BaseURL:  baseURL,
+		NodeID:   runtime.nodeID,
+		BaseURL:  runtime.baseURL,
 		JSONData: jsonData,
 		Error:    jsonErr,
 	}
@@ -552,18 +974,56 @@ func (pm *PrometheusMonitor) emitNodeLifecycle(nodeID, baseURL string) {
 	default:
 		control.TriggersDropped.WithLabelValues("node_lifecycle", "channel_full").Inc()
 		monitorLogger.WithFields(logging.Fields{
-			"node_id": nodeID,
+			"node_id": runtime.nodeID,
 		}).Warn("Update channel full, dropping update for node")
 	}
 }
 
 // emitStreamLifecycle fetches data from MistServer's TCP API directly
 func (pm *PrometheusMonitor) emitStreamLifecycle(nodeID, baseURL string) {
-	if !pm.streamLifecycleInFlight.CompareAndSwap(false, true) {
-		monitorLogger.WithField("node_id", nodeID).Debug("Stream lifecycle poll still in flight, dropping tick")
+	runtime := pm.currentNodeRuntime()
+	if runtime == nil || runtime.nodeID != nodeID || runtime.baseURL != baseURL {
 		return
 	}
+	pm.emitStreamLifecycleRuntime(runtime)
+}
+
+func (pm *PrometheusMonitor) emitStreamLifecycleRuntime(runtime *mistNodeRuntime) {
+	pm.emitStreamLifecycleWithClient(
+		runtime.ctx,
+		runtime.nodeID,
+		runtime.baseURL,
+		runtime.client,
+		&runtime.clientMu,
+		func() bool { return pm.nodeRuntimeCurrent(runtime) },
+	)
+}
+
+type streamLifecyclePollResult uint8
+
+const (
+	streamLifecyclePollFailed streamLifecyclePollResult = iota
+	streamLifecyclePollContended
+	streamLifecyclePollSucceeded
+)
+
+func (pm *PrometheusMonitor) emitStreamLifecycleWithClient(
+	ctx context.Context,
+	nodeID string,
+	baseURL string,
+	client *mist.Client,
+	clientMu *sync.Mutex,
+	current func() bool,
+) streamLifecyclePollResult {
+	if client == nil || !current() {
+		return streamLifecyclePollFailed
+	}
+	if !pm.streamLifecycleInFlight.CompareAndSwap(false, true) {
+		monitorLogger.WithField("node_id", nodeID).Debug("Stream lifecycle poll still in flight, dropping tick")
+		return streamLifecyclePollContended
+	}
 	defer pm.streamLifecycleInFlight.Store(false)
+	observation := pm.beginStreamObservation()
 
 	monitorLogger.WithFields(logging.Fields{
 		"api_url": baseURL + "/api2",
@@ -571,16 +1031,22 @@ func (pm *PrometheusMonitor) emitStreamLifecycle(nodeID, baseURL string) {
 	}).Info("Fetching active streams from Mist API")
 
 	pollStartedAt := time.Now()
-	pm.mistMu.Lock()
-	apiResponse, err := pm.mistClient.GetActiveStreams()
-	pm.mistMu.Unlock()
+	clientMu.Lock()
+	apiResponse, err := client.GetActiveStreamsContext(ctx)
+	clientMu.Unlock()
 	if err != nil {
+		if ctx.Err() != nil || !current() {
+			return streamLifecyclePollFailed
+		}
 		monitorLogger.WithFields(logging.Fields{
 			"api_url": baseURL + "/api2",
 			"node_id": nodeID,
 			"error":   err,
 		}).Error("Failed to fetch active streams")
-		return
+		return streamLifecyclePollFailed
+	}
+	if !current() {
+		return streamLifecyclePollFailed
 	}
 
 	// Extract active streams data
@@ -594,6 +1060,9 @@ func (pm *PrometheusMonitor) emitStreamLifecycle(nodeID, baseURL string) {
 			"count":   len(activeStreams),
 		}).Info("Found active streams via Mist API")
 		for streamName, streamData := range activeStreams {
+			if !current() {
+				return streamLifecyclePollFailed
+			}
 			present[streamName] = struct{}{}
 			if streamInfo, ok := streamData.(map[string]any); ok {
 				if pids, authoritative := sourcePIDsFromStreamData(streamInfo); authoritative {
@@ -608,7 +1077,9 @@ func (pm *PrometheusMonitor) emitStreamLifecycle(nodeID, baseURL string) {
 				} else {
 					mistSourcePIDObservations.WithLabelValues("missing").Inc()
 				}
-				pm.processActiveStreamData(nodeID, streamName, streamInfo)
+				pm.applyStreamObservation(streamName, observation, func() {
+					pm.processActiveStreamDataContext(ctx, nodeID, streamName, streamInfo)
+				})
 			}
 		}
 	} else {
@@ -616,8 +1087,16 @@ func (pm *PrometheusMonitor) emitStreamLifecycle(nodeID, baseURL string) {
 			"api_url": baseURL + "/api2",
 			"node_id": nodeID,
 		}).Warn("active_streams missing or malformed in Mist response; skipping stream-presence reconciliation this poll")
-		return
+		return streamLifecyclePollFailed
 	}
+	presenceObservedAt := time.Now()
+	if !current() {
+		return streamLifecyclePollFailed
+	}
+	// A targeted refresh issued after this poll began is newer evidence for its
+	// one stream. Merge it once, then give every reconciliation path the same
+	// stable view; the next authoritative poll confirms or removes it.
+	reconciledPresent, toReport := pm.reconcileStreamPresenceSnapshot(present, observation)
 	// Reconcile source leases against Mist's authoritative view. Only fires
 	// after a successful GetActiveStreams response with a well-formed
 	// active_streams member — poll errors and malformed payloads returned
@@ -630,13 +1109,13 @@ func (pm *PrometheusMonitor) emitStreamLifecycle(nodeID, baseURL string) {
 		// no source lease yet because STREAM_SOURCE only fires once per
 		// session. Install leases for everything Mist currently serves before
 		// reconciliation releases anything.
-		rebuildSourceLeasesFromMist(tracker, present, control.LookupActiveDVRByInternalName)
+		rebuildSourceLeasesFromMist(tracker, reconciledPresent, control.LookupActiveDVRByInternalName)
 
 		// ReconcileSources forgets each released stream's source-registry entry
 		// under the tracker lock (atomic with the lease removal), so no separate
 		// registry forget is needed here — doing it separately could race a
 		// concurrent STREAM_SOURCE reinstalling the lease+entry.
-		if released := tracker.ReconcileSources(present); len(released) > 0 {
+		if released := tracker.ReconcileSourcesAt(reconciledPresent, presenceObservedAt); len(released) > 0 {
 			monitorLogger.WithField("released", released).Info("Source leases released by Mist reconciliation")
 		}
 	}
@@ -647,26 +1126,14 @@ func (pm *PrometheusMonitor) emitStreamLifecycle(nodeID, baseURL string) {
 	// user-visible status stays "live". Only authoritative payloads reach
 	// this point: synthesizing mass offlines from a malformed payload is
 	// worse than leaving the residue to the ingest backstop.
-	presentInternal := make(map[string]struct{}, len(present))
-	for streamName := range present {
-		if internalName, ok := offlineReportableInternalName(streamName); ok {
-			presentInternal[internalName] = struct{}{}
-		}
-	}
-	pm.streamDiffMu.Lock()
-	if pm.pendingOfflineNames == nil {
-		pm.pendingOfflineNames = make(map[string]struct{})
-	}
-	toReport := updatePendingOffline(pm.pendingOfflineNames, pm.lastActiveInternalNames, presentInternal, pm.activeStreamsSeeded)
-	pm.lastActiveInternalNames = presentInternal
-	pm.activeStreamsSeeded = true
-	pm.streamDiffMu.Unlock()
-
 	// Names stay pending until a send succeeds, so a transient Foghorn
 	// failure retries on the next poll instead of silently dropping the
 	// offline edge until the ingest backstop catches it minutes later.
 	for _, internalName := range toReport {
-		result, err := control.SendMistTrigger(buildOfflineLifecycleTrigger(nodeID, internalName), monitorLogger)
+		if !current() {
+			return streamLifecyclePollFailed
+		}
+		result, err := pm.sendMistTriggerContext(ctx, buildOfflineLifecycleTrigger(nodeID, internalName))
 		if err != nil || result == nil || result.Abort {
 			monitorLogger.WithFields(logging.Fields{
 				"error":         err,
@@ -679,9 +1146,15 @@ func (pm *PrometheusMonitor) emitStreamLifecycle(nodeID, baseURL string) {
 		delete(pm.pendingOfflineNames, internalName)
 		pm.streamDiffMu.Unlock()
 	}
-	pm.reconcileAdmittedRuntimePresence(nodeID, present, sourcePIDs, pollStartedAt)
+	pm.reconcileAdmittedRuntimePresenceContext(ctx, nodeID, reconciledPresent, sourcePIDs, presenceObservedAt)
+	if !current() {
+		return streamLifecyclePollFailed
+	}
 
+	pm.pruneStreamObservations(reconciledPresent, observation)
+	pm.recordAuthoritativeStreamInventory(nodeID, baseURL, present, pollStartedAt)
 	markMistActiveStreamsPolled()
+	return streamLifecyclePollSucceeded
 }
 
 // activeStreamsFromResponse extracts the active_streams member of a Mist
@@ -782,6 +1255,10 @@ func diffVanishedStreams(prev, current map[string]struct{}) []string {
 }
 
 func (pm *PrometheusMonitor) reconcileAdmittedRuntimePresence(nodeID string, present map[string]struct{}, sourcePIDs map[string]map[int64]struct{}, now time.Time) {
+	pm.reconcileAdmittedRuntimePresenceContext(context.Background(), nodeID, present, sourcePIDs, now)
+}
+
+func (pm *PrometheusMonitor) reconcileAdmittedRuntimePresenceContext(ctx context.Context, nodeID string, present map[string]struct{}, sourcePIDs map[string]map[int64]struct{}, now time.Time) {
 	load := pm.loadAdmittedGenerations
 	if load == nil {
 		load = control.ActiveAdmittedIngestGenerations
@@ -796,7 +1273,7 @@ func (pm *PrometheusMonitor) reconcileAdmittedRuntimePresence(nodeID string, pre
 	eligible := make([]control.AdmittedIngestGeneration, 0)
 	pm.streamDiffMu.Lock()
 	if pm.admittedRuntimeMissing == nil {
-		pm.admittedRuntimeMissing = make(map[admittedRuntimeIdentity]int)
+		pm.admittedRuntimeMissing = make(map[admittedRuntimeIdentity]time.Time)
 	}
 	for _, record := range records {
 		identity := admittedRuntimeIdentity{
@@ -826,8 +1303,12 @@ func (pm *PrometheusMonitor) reconcileAdmittedRuntimePresence(nodeID string, pre
 			delete(pm.admittedRuntimeMissing, identity)
 			continue
 		}
-		pm.admittedRuntimeMissing[identity]++
-		if pm.admittedRuntimeMissing[identity] < admittedRuntimeMissingPollThreshold {
+		missingSince := pm.admittedRuntimeMissing[identity]
+		if missingSince.IsZero() {
+			pm.admittedRuntimeMissing[identity] = now
+			continue
+		}
+		if now.Before(missingSince.Add(admittedRuntimeMissingDwell)) {
 			continue
 		}
 		if len(eligible) < maxMissingRuntimeReportsPerPoll {
@@ -841,10 +1322,6 @@ func (pm *PrometheusMonitor) reconcileAdmittedRuntimePresence(nodeID string, pre
 	}
 	pm.streamDiffMu.Unlock()
 
-	send := pm.sendControlTrigger
-	if send == nil {
-		send = control.SendMistTrigger
-	}
 	markEnded := pm.markGenerationEnded
 	if markEnded == nil {
 		markEnded = control.MarkAdmittedIngestGenerationEndedExact
@@ -855,7 +1332,7 @@ func (pm *PrometheusMonitor) reconcileAdmittedRuntimePresence(nodeID string, pre
 			continue
 		}
 		trigger := buildAcknowledgedOfflineLifecycleTriggerAt(nodeID, internalName, record.Generation, record.ConnectorPID, now)
-		result, sendErr := send(trigger, monitorLogger)
+		result, sendErr := pm.sendMistTriggerContext(ctx, trigger)
 		if sendErr != nil || result == nil || result.Abort {
 			monitorLogger.WithError(sendErr).WithFields(logging.Fields{
 				"runtime_name":      record.RuntimeName,
@@ -1078,6 +1555,10 @@ func rebuildSourceLeasesFromMist(tracker *leases.Tracker, present map[string]str
 
 // processActiveStreamData processes individual stream data from MistServer API
 func (pm *PrometheusMonitor) processActiveStreamData(nodeID, streamName string, streamData map[string]any) {
+	pm.processActiveStreamDataContext(context.Background(), nodeID, streamName, streamData)
+}
+
+func (pm *PrometheusMonitor) processActiveStreamDataContext(ctx context.Context, nodeID, streamName string, streamData map[string]any) {
 	// Extract internal name from wildcard stream
 	var internalName string
 	if _, after, ok := strings.Cut(streamName, "+"); ok {
@@ -1296,8 +1777,7 @@ func (pm *PrometheusMonitor) processActiveStreamData(nodeID, streamName string, 
 	// Convert API response to MistTrigger using converter
 	mistTrigger := convertStreamAPIToMistTrigger(nodeID, streamName, internalName, streamData, healthData, trackDetails, trackCount, monitorLogger)
 
-	// Send
-	if _, err := control.SendMistTrigger(mistTrigger, monitorLogger); err != nil {
+	if _, err := pm.sendMistTriggerContext(ctx, mistTrigger); err != nil {
 		monitorLogger.WithFields(logging.Fields{
 			"error":         err,
 			"internal_name": internalName,
@@ -1305,13 +1785,36 @@ func (pm *PrometheusMonitor) processActiveStreamData(nodeID, streamName string, 
 	}
 }
 
+func (pm *PrometheusMonitor) sendMistTriggerContext(ctx context.Context, trigger *ipcpb.MistTrigger) (*control.MistTriggerResult, error) {
+	if pm.sendControlTriggerCtx != nil {
+		return pm.sendControlTriggerCtx(ctx, trigger, monitorLogger)
+	}
+	if pm.sendControlTrigger != nil {
+		return pm.sendControlTrigger(trigger, monitorLogger)
+	}
+	return control.SendMistTriggerContext(ctx, trigger, monitorLogger)
+}
+
 // processUpdates processes node updates from the update channel
 func (pm *PrometheusMonitor) processUpdates() {
-	for update := range pm.updateChannel {
+	for {
+		var update models.NodeUpdate
+		var ok bool
+		select {
+		case <-pm.stopChannel:
+			return
+		case update, ok = <-pm.updateChannel:
+			if !ok {
+				return
+			}
+		}
+		if pm.stopped.Load() {
+			return
+		}
 		pm.mutex.Lock()
 
 		// Check if this is our monitored node
-		if pm.nodeID != update.NodeID {
+		if pm.nodeID != update.NodeID || pm.baseURL != update.BaseURL {
 			pm.mutex.Unlock()
 			continue
 		}
@@ -1381,15 +1884,53 @@ func (pm *PrometheusMonitor) processUpdates() {
 			}
 		}
 
+		pm.nodeMetricsVersion.Add(1)
 		pm.mutex.Unlock()
 
-		// Forward metrics to API and analytics
-		go pm.forwardNodeMetrics(update.NodeID)
+		// Forwarding has its own coalescing, deadline-bounded worker so a control
+		// outage cannot block this single update consumer and fill updateChannel.
+		pm.requestNodeMetricsForward()
 	}
 }
 
-// forwardNodeMetrics forwards node metrics to API and analytics services - TYPED VERSION
-func (pm *PrometheusMonitor) forwardNodeMetrics(nodeID string) {
+func (pm *PrometheusMonitor) requestNodeMetricsForward() {
+	select {
+	case pm.nodeMetricsWake <- struct{}{}:
+	default:
+	}
+}
+
+func (pm *PrometheusMonitor) forwardNodeMetricsLoop() {
+	for {
+		select {
+		case <-pm.stopChannel:
+			return
+		case <-pm.nodeMetricsWake:
+		}
+		runtime := pm.currentNodeRuntime()
+		if runtime == nil {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(runtime.ctx, nodeMetricsForwardTimeout)
+		pm.forwardNodeMetricsContext(ctx, runtime)
+		cancel()
+	}
+}
+
+// forwardNodeMetricsContext forwards the latest coalesced node snapshot. The
+// immutable runtime prevents a replaced node's identity and data from mixing.
+func (pm *PrometheusMonitor) forwardNodeMetricsContext(ctx context.Context, runtime *mistNodeRuntime) {
+	if pm.stopped.Load() || !pm.nodeRuntimeCurrent(runtime) {
+		return
+	}
+	pm.mutex.RLock()
+	if pm.nodeID != runtime.nodeID {
+		pm.mutex.RUnlock()
+		return
+	}
+	jsonData := pm.lastJSONData
+	version := pm.nodeMetricsVersion.Load()
+	pm.mutex.RUnlock()
 	// Capabilities from environment (fallback defaults: all true in dev)
 	capIngest := os.Getenv("HELMSMAN_CAP_INGEST")
 	capEdge := os.Getenv("HELMSMAN_CAP_EDGE")
@@ -1398,27 +1939,93 @@ func (pm *PrometheusMonitor) forwardNodeMetrics(nodeID string) {
 	roles := rolesFromCapabilityFlags(capIngest, capEdge, capStorage, capProcessing)
 
 	// Convert API response to MistTrigger using converter
-	mistTrigger := pm.convertNodeAPIToMistTrigger(nodeID, pm.getLastJSONData(), monitorLogger)
+	mistTrigger := pm.convertNodeAPIToMistTrigger(runtime.nodeID, jsonData, monitorLogger)
 
 	// Enrich with Helmsman-specific capabilities, storage, limits
 	enrichNodeLifecycleTrigger(mistTrigger, capIngest, capEdge, capStorage, capProcessing, roles)
 
 	// Send
-	if _, err := control.SendMistTrigger(mistTrigger, monitorLogger); err != nil {
+	if pm.stopped.Load() || !pm.nodeRuntimeCurrent(runtime) {
+		return
+	}
+	send := pm.sendControlTriggerCtx
+	if send == nil {
+		send = control.SendMistTriggerContext
+	}
+	_, err, started := pm.sendNodeMetricsAttempt(ctx, runtime, version, send, mistTrigger)
+	if !started {
+		return
+	}
+	if err != nil {
+		if ctx.Err() != nil || !pm.nodeRuntimeCurrent(runtime) {
+			return
+		}
 		monitorLogger.WithError(err).Error("Failed to send node lifecycle update via gRPC")
 		return
 	}
 	monitorLogger.WithFields(logging.Fields{
-		"node_id":  nodeID,
+		"node_id":  runtime.nodeID,
 		"bw_limit": mistTrigger.GetNodeLifecycleUpdate().GetBwLimit(),
 		"ram_max":  mistTrigger.GetNodeLifecycleUpdate().GetRamMax(),
 	}).Info("Sent node lifecycle update to Foghorn")
 }
 
+func (pm *PrometheusMonitor) sendNodeMetricsAttempt(
+	ctx context.Context,
+	runtime *mistNodeRuntime,
+	version uint64,
+	send func(context.Context, *ipcpb.MistTrigger, logging.Logger) (*control.MistTriggerResult, error),
+	trigger *ipcpb.MistTrigger,
+) (*control.MistTriggerResult, error, bool) {
+	// gRPC SendMsg has no per-message cancellation once it enters the transport.
+	// Quarantine at most one such attempt so the joined monitor worker still
+	// honors its deadline and repeated updates cannot accumulate goroutines.
+	if !pm.nodeMetricsSendInFlight.CompareAndSwap(false, true) {
+		return nil, nil, false
+	}
+	type sendResult struct {
+		result *control.MistTriggerResult
+		err    error
+	}
+	done := make(chan sendResult, 1)
+	go func() {
+		result, err := send(ctx, trigger, monitorLogger)
+		pm.nodeMetricsSendInFlight.Store(false)
+		done <- sendResult{result: result, err: err}
+		// If updates arrived while this attempt occupied the single transport
+		// slot, schedule exactly one fresh snapshot after it becomes available.
+		if pm.nodeMetricsVersion.Load() > version && pm.nodeRuntimeCurrent(runtime) && !pm.stopped.Load() {
+			pm.requestNodeMetricsForward()
+		}
+	}()
+	select {
+	case result := <-done:
+		return result.result, result.err, true
+	case <-ctx.Done():
+		return nil, ctx.Err(), true
+	}
+}
+
 // Stop stops the Prometheus monitor
 func (pm *PrometheusMonitor) Stop() {
-	close(pm.stopChannel)
-	close(pm.updateChannel)
+	pm.stopOnce.Do(func() {
+		pm.nodeLifecycleMu.Lock()
+		pm.stopped.Store(true)
+		streamWSDone := pm.detachStreamWS()
+		retiredRuntime := pm.detachNodeRuntime()
+		if pm.stopChannel != nil {
+			close(pm.stopChannel)
+		}
+		pm.nodeLifecycleMu.Unlock()
+		if streamWSDone != nil {
+			<-streamWSDone
+		}
+		if retiredRuntime != nil {
+			retiredRuntime.waitStopped()
+		}
+		pm.monitorWorkers.Wait()
+		streamWSConnections.Set(0)
+	})
 }
 
 // HTTP handlers for Prometheus monitoring endpoints
@@ -1545,17 +2152,35 @@ func getMapKeys(m map[string]any) []string {
 }
 
 func (pm *PrometheusMonitor) emitClientLifecycle(nodeID, mistURL string) error {
+	runtime := pm.currentNodeRuntime()
+	if runtime == nil || runtime.nodeID != nodeID || runtime.baseURL != mistURL {
+		return nil
+	}
+	return pm.emitClientLifecycleRuntime(runtime)
+}
+
+func (pm *PrometheusMonitor) emitClientLifecycleRuntime(runtime *mistNodeRuntime) error {
+	if !pm.nodeRuntimeCurrent(runtime) {
+		return nil
+	}
 	// Query MistServer clients API for detailed metrics using shared client
-	pm.mistMu.Lock()
-	result, err := pm.mistClient.GetClients()
-	pm.mistMu.Unlock()
+	runtime.clientMu.Lock()
+	result, err := runtime.client.GetClientsContext(runtime.ctx)
+	runtime.clientMu.Unlock()
 	if err != nil {
+		if runtime.ctx.Err() != nil || !pm.nodeRuntimeCurrent(runtime) {
+			return err
+		}
 		monitorLogger.WithFields(logging.Fields{
 			"error": err,
-			"url":   mistURL + "/api2",
+			"url":   runtime.baseURL + "/api2",
 		}).Error("Failed to query MistServer clients API")
 		return err
 	}
+	if !pm.nodeRuntimeCurrent(runtime) {
+		return nil
+	}
+	nodeID := runtime.nodeID
 
 	// Process client metrics.
 	presentSessions := make(map[string]struct{})
@@ -1587,6 +2212,9 @@ func (pm *PrometheusMonitor) emitClientLifecycle(nodeID, mistURL string) error {
 
 			// Process each client connection
 			for _, clientData := range data {
+				if !pm.nodeRuntimeCurrent(runtime) {
+					return nil
+				}
 				client, ok := clientData.([]any)
 				if !ok {
 					monitorLogger.WithField("clientData", clientData).Error("Failed to parse client data as []any")
@@ -1768,7 +2396,7 @@ func (pm *PrometheusMonitor) emitClientLifecycle(nodeID, mistURL string) error {
 				mistTrigger := convertClientAPIToMistTrigger(nodeID, streamName, internalName, protocol, host, sessionID, connectionTime, position, bandwidthIn, bandwidthOut, bytesDown, bytesUp, packetsSent, packetsLost, packetsRetransmitted, monitorLogger)
 
 				// Send
-				if _, err := control.SendMistTrigger(mistTrigger, monitorLogger); err != nil {
+				if _, err := pm.sendMistTriggerContext(runtime.ctx, mistTrigger); err != nil {
 					monitorLogger.WithFields(logging.Fields{
 						"error":  err,
 						"stream": streamName,

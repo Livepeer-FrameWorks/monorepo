@@ -6,6 +6,7 @@ require (
 	github.com/Livepeer-FrameWorks/monorepo/pkg v0.0.0
 	github.com/gin-gonic/gin v1.12.0
 	github.com/google/uuid v1.6.0
+	github.com/gorilla/websocket v1.5.3
 	github.com/prometheus/client_golang v1.23.2
 	github.com/sirupsen/logrus v1.9.4
 	golang.org/x/sys v0.43.0

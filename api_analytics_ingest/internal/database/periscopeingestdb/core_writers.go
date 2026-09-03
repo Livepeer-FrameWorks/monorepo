@@ -183,7 +183,7 @@ func PrepareStreamLifecycleEvent(ctx context.Context, db BatchPreparer) (*Writer
 const insertStreamLifecycleHealth = `INSERT INTO stream_health_samples (
 	timestamp, tenant_id, stream_id, internal_name, node_id,
 	bitrate, fps, width, height, codec, quality_tier,
-	buffer_state, buffer_size, buffer_health,
+	buffer_state, buffer_size, max_keepaway_ms, buffer_health, frame_jitter_ms,
 	has_issues, issues_description, track_count,
 	track_metadata,
 	audio_channels, audio_sample_rate, audio_codec, audio_bitrate,
@@ -204,7 +204,9 @@ type StreamLifecycleHealthRow struct {
 	QualityTier           *string
 	BufferState           string
 	BufferSize            *uint32
+	MaxKeepawayMS         *uint32
 	BufferHealth          *float32
+	FrameJitterMS         *float32
 	HasIssues             *uint8
 	IssuesDescription     *string
 	TrackCount            *uint16
@@ -224,7 +226,7 @@ func PrepareStreamLifecycleHealth(ctx context.Context, db BatchPreparer) (*Write
 		return []interface{}{
 			row.Timestamp, row.TenantID, row.StreamID, row.InternalName, row.NodeID,
 			row.Bitrate, row.FPS, row.Width, row.Height, row.Codec, row.QualityTier,
-			row.BufferState, row.BufferSize, row.BufferHealth,
+			row.BufferState, row.BufferSize, row.MaxKeepawayMS, row.BufferHealth, row.FrameJitterMS,
 			row.HasIssues, row.IssuesDescription, row.TrackCount,
 			row.TrackMetadata,
 			row.AudioChannels, row.AudioSampleRate, row.AudioCodec, row.AudioBitrate,
@@ -235,7 +237,7 @@ func PrepareStreamLifecycleHealth(ctx context.Context, db BatchPreparer) (*Write
 
 const insertViewerConnectionEvent = `INSERT INTO viewer_connection_events (
 	event_id, timestamp, tenant_id, stream_id, internal_name,
-	session_id, connection_addr, connector, node_id,
+	session_id, client_session_id, connection_addr, connector, node_id,
 	cluster_id, origin_cluster_id, control_cell_id,
 	request_url,
 	country_code, city, latitude, longitude,
@@ -251,6 +253,7 @@ type ViewerConnectionEventRow struct {
 	StreamID              uuid.UUID
 	InternalName          string
 	SessionID             string
+	ClientSessionID       string
 	ConnectionAddr        string
 	Connector             string
 	NodeID                string
@@ -279,7 +282,7 @@ func PrepareViewerConnectionEvent(ctx context.Context, db BatchPreparer) (*Write
 	return prepare(ctx, db, insertViewerConnectionEvent, func(row ViewerConnectionEventRow) []interface{} {
 		return []interface{}{
 			row.EventID, row.Timestamp, row.TenantID, row.StreamID, row.InternalName,
-			row.SessionID, row.ConnectionAddr, row.Connector, row.NodeID,
+			row.SessionID, row.ClientSessionID, row.ConnectionAddr, row.Connector, row.NodeID,
 			row.ClusterID, row.OriginClusterID, row.ControlCellID,
 			row.RequestURL,
 			row.CountryCode, row.City, row.Latitude, row.Longitude,

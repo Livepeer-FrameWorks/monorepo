@@ -1,15 +1,81 @@
 package mist
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
+
+func TestGetActiveStreamsFilteredContextCancelsInFlightRequest(t *testing.T) {
+	requestStarted := make(chan struct{}, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Query().Get("command"), "authorize") {
+			_, _ = w.Write([]byte(`{"authorize":{"status":"OK"}}`))
+			return
+		}
+		requestStarted <- struct{}{}
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	client := NewClient(logging.NewLogger())
+	client.BaseURL = srv.URL
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := client.GetActiveStreamsFilteredContext(ctx, []string{"live+alpha"})
+		result <- err
+	}()
+	<-requestStarted
+	cancel()
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("expected canceled request to return an error")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("canceled request waited for the HTTP client timeout")
+	}
+}
+
+func TestGetStreamInfoContextCancelsInFlightRequest(t *testing.T) {
+	requestStarted := make(chan struct{}, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Query().Get("command"), "authorize") {
+			_, _ = w.Write([]byte(`{"authorize":{"status":"OK"}}`))
+			return
+		}
+		requestStarted <- struct{}{}
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	client := NewClient(logging.NewLogger())
+	client.BaseURL = srv.URL
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := client.GetStreamInfoContext(ctx, "live+alpha")
+		result <- err
+	}()
+	<-requestStarted
+	cancel()
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("expected canceled request to return an error")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("canceled request waited for the HTTP client timeout")
+	}
+}
 
 // Ambiguity must distinguish "the mutation may have reached Mist" (accepted-but-
 // unconfirmed) from "authentication failed before the mutation was ever sent".

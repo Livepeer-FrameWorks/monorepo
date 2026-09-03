@@ -72,21 +72,120 @@ type streamConn struct {
 // but the Recv loop dispatches handlers as separate goroutines and many
 // Request*/Send* helpers (the high-frequency RequestAuthorizeRelayPull among
 // them) send on this same bidi stream. Wrapping the stream once at connect and
-// storing that wrapper funnels every Send through this mutex with no call-site
-// changes. Recv stays on the embedded stream: gRPC allows concurrent Send+Recv,
-// only Send+Send is unsafe.
+// storing that wrapper funnels every Send through one cancellable lane with no
+// call-site changes. Recv stays on the embedded stream: gRPC allows concurrent
+// Send+Recv, only Send+Send is unsafe.
 type lockedClientStream struct {
 	ipcpb.HelmsmanControl_ConnectClient
-	sendMu sync.Mutex
+	sendOnce sync.Once
+	sendLane chan struct{}
+	cancel   context.CancelFunc
 }
 
 func (s *lockedClientStream) Send(msg *ipcpb.ControlMessage) error {
-	s.sendMu.Lock()
-	defer s.sendMu.Unlock()
-	return s.HelmsmanControl_ConnectClient.Send(msg)
+	return s.sendContext(context.Background(), msg)
 }
 
-var activeConn atomic.Pointer[streamConn]
+func (s *lockedClientStream) SendContext(ctx context.Context, msg *ipcpb.ControlMessage) error {
+	return s.sendContext(ctx, msg)
+}
+
+func (s *lockedClientStream) sendContext(waitCtx context.Context, msg *ipcpb.ControlMessage) error {
+	if err := waitCtx.Err(); err != nil {
+		return err
+	}
+	if !s.lockSend(waitCtx) {
+		return waitCtx.Err()
+	}
+	// Cancellation that becomes ready while the lane handoff wins still belongs
+	// to the waiter. Once this check passes, the send owns the lane until gRPC
+	// completes. A caller deadline may stop waiting for that completion, but only
+	// the fixed transport watchdog may recycle the shared stream.
+	if err := waitCtx.Err(); err != nil {
+		s.unlockSend()
+		return err
+	}
+	callerDeadline, hasCallerDeadline := waitCtx.Deadline()
+
+	var stateMu sync.Mutex
+	finished := false
+	timedOut := false
+	transportTimer := time.AfterFunc(controlStreamSendTimeout, func() {
+		stateMu.Lock()
+		defer stateMu.Unlock()
+		if !finished && s.cancel != nil {
+			timedOut = true
+			s.cancel()
+		}
+	})
+	result := make(chan error, 1)
+	go func() {
+		err := s.HelmsmanControl_ConnectClient.Send(msg)
+		stateMu.Lock()
+		finished = true
+		transportTimedOut := timedOut
+		stateMu.Unlock()
+		transportTimer.Stop()
+		s.unlockSend()
+		if transportTimedOut {
+			// A Send that completed successfully owns the result even if the
+			// watchdog won the scheduler race immediately after Send returned.
+			// Replaying it would duplicate a write that gRPC already accepted.
+			if err == nil {
+				result <- nil
+				return
+			}
+			result <- errors.Join(context.DeadlineExceeded, err)
+			return
+		}
+		result <- err
+	}()
+
+	if !hasCallerDeadline {
+		// Explicit cancellation after lane ownership does not tear down or
+		// abandon a send. Runtime and request cancellation remain relevant while
+		// waiting for the lane; the transport watchdog bounds an owned write.
+		return <-result
+	}
+	remaining := time.Until(callerDeadline)
+	if remaining <= 0 {
+		return context.DeadlineExceeded
+	}
+	callerTimer := time.NewTimer(remaining)
+	defer callerTimer.Stop()
+	select {
+	case err := <-result:
+		return err
+	case <-callerTimer.C:
+		// Prefer a concurrently completed send over reporting a deadline. The
+		// buffered result keeps the owner independent if completion comes later.
+		select {
+		case err := <-result:
+			return err
+		default:
+			return context.DeadlineExceeded
+		}
+	}
+}
+
+func (s *lockedClientStream) lockSend(ctx context.Context) bool {
+	s.sendOnce.Do(func() { s.sendLane = make(chan struct{}, 1) })
+	select {
+	case s.sendLane <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+func (s *lockedClientStream) unlockSend() {
+	<-s.sendLane
+}
+
+var (
+	activeConn               atomic.Pointer[streamConn]
+	controlStreamSendTimeout = 15 * time.Second
+)
 
 type ingestGenerationFence struct {
 	sync.Mutex
@@ -422,6 +521,7 @@ var (
 const (
 	blockingTriggerTimeout            = 4 * time.Second
 	lifecycleReconciliationTimeout    = 30 * time.Second
+	mistTriggerTransportSendTimeout   = 5 * time.Second
 	desiredStateComponentApplyTimeout = 30 * time.Minute
 	maxBlockingAttempts               = 3
 	reconnectJitterPct                = 25
@@ -540,7 +640,9 @@ func SendMistTrigger(mistTrigger *ipcpb.MistTrigger, logger logging.Logger) (*Mi
 func SendMistTriggerContext(ctx context.Context, mistTrigger *ipcpb.MistTrigger, logger logging.Logger) (*MistTriggerResult, error) {
 	triggerType := mistTrigger.TriggerType
 	if !mistTrigger.Blocking {
-		if err := sendMistTriggerOnce(triggerType, mistTrigger); err != nil {
+		sendCtx, cancel := boundedMistTriggerSendContext(ctx, mistTriggerTransportSendTimeout)
+		defer cancel()
+		if err := sendMistTriggerOnceContext(sendCtx, triggerType, mistTrigger); err != nil {
 			return &MistTriggerResult{Abort: true, ErrorCode: ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL}, err
 		}
 		return &MistTriggerResult{}, nil
@@ -590,12 +692,15 @@ func SendMistTriggerContext(ctx context.Context, mistTrigger *ipcpb.MistTrigger,
 		}
 		<-pendingMutex
 
-		if err := sendMistTriggerOnce(triggerType, mistTrigger); err != nil {
+		sendCtx, cancel := context.WithDeadline(context.Background(), deadline)
+		sendErr := sendMistTriggerOnceContext(sendCtx, triggerType, mistTrigger)
+		cancel()
+		if sendErr != nil {
 			pendingMutex <- struct{}{}
 			delete(pendingMistTriggers, mistTrigger.RequestId)
 			<-pendingMutex
 			BlockingTriggerRetries.WithLabelValues(triggerType, "send_error").Inc()
-			lastErr = err
+			lastErr = sendErr
 			continue
 		}
 
@@ -625,6 +730,13 @@ func SendMistTriggerContext(ctx context.Context, mistTrigger *ipcpb.MistTrigger,
 	return &MistTriggerResult{Abort: true, ErrorCode: ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT}, lastErr
 }
 
+func boundedMistTriggerSendContext(parent context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if timeout <= 0 {
+		return context.WithCancel(parent)
+	}
+	return context.WithTimeout(parent, timeout)
+}
+
 type pendingMistTrigger struct {
 	responseCh  chan *ipcpb.MistTriggerResponse
 	triggerType string
@@ -649,6 +761,10 @@ func offerResponse[T any](ch chan<- T, response T) {
 }
 
 func sendMistTriggerOnce(triggerType string, mistTrigger *ipcpb.MistTrigger) error {
+	return sendMistTriggerOnceContext(context.Background(), triggerType, mistTrigger)
+}
+
+func sendMistTriggerOnceContext(ctx context.Context, triggerType string, mistTrigger *ipcpb.MistTrigger) error {
 	stream := getStream()
 	if stream == nil {
 		TriggersSent.WithLabelValues(triggerType, "stream_disconnected").Inc()
@@ -660,7 +776,15 @@ func sendMistTriggerOnce(triggerType string, mistTrigger *ipcpb.MistTrigger) err
 		Payload: &ipcpb.ControlMessage_MistTrigger{MistTrigger: mistTrigger},
 	}
 
-	if err := stream.Send(msg); err != nil {
+	var err error
+	if contextStream, ok := stream.(interface {
+		SendContext(context.Context, *ipcpb.ControlMessage) error
+	}); ok {
+		err = contextStream.SendContext(ctx, msg)
+	} else {
+		err = stream.Send(msg)
+	}
+	if err != nil {
 		TriggersSent.WithLabelValues(triggerType, "send_error").Inc()
 		return fmt.Errorf("failed to send MistTrigger: %w", err)
 	}
@@ -1601,7 +1725,9 @@ func runClient(addr string, logger logging.Logger) error {
 	}
 	defer func() { _ = conn.Close() }()
 	client := ipcpb.NewHelmsmanControlClient(conn)
-	stream, err := client.Connect(context.Background())
+	streamCtx, cancelStream := context.WithCancel(context.Background())
+	defer cancelStream()
+	stream, err := client.Connect(streamCtx)
 	if err != nil {
 		return err
 	}
@@ -1610,7 +1736,7 @@ func runClient(addr string, logger logging.Logger) error {
 	// below fans out handler goroutines and many Request*/Send* helpers
 	// (RequestAuthorizeRelayPull on the hot relay path among them) send
 	// concurrently, but gRPC's ClientStream.SendMsg is not concurrency-safe.
-	stream = &lockedClientStream{HelmsmanControl_ConnectClient: stream}
+	stream = &lockedClientStream{HelmsmanControl_ConnectClient: stream, cancel: cancelStream}
 
 	// Send Register using config values
 	nodeID := cfg.NodeID

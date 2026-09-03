@@ -40,6 +40,20 @@ func newWebhookContext(body string) (*gin.Context, *httptest.ResponseRecorder) {
 	return ctx, recorder
 }
 
+func TestMistTriggerForwardContextDetachesOnlyNonBlockingTriggers(t *testing.T) {
+	requestContext, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	nonBlocking := mistTriggerForwardContext(requestContext, &ipcpb.MistTrigger{})
+	if err := nonBlocking.Err(); err != nil {
+		t.Fatalf("non-blocking trigger inherited request cancellation: %v", err)
+	}
+	blocking := mistTriggerForwardContext(requestContext, &ipcpb.MistTrigger{Blocking: true})
+	if !errors.Is(blocking.Err(), context.Canceled) {
+		t.Fatalf("blocking trigger lost request cancellation: %v", blocking.Err())
+	}
+}
+
 func stubSendMistTrigger(t *testing.T, fn func(*ipcpb.MistTrigger) (*control.MistTriggerResult, error)) {
 	t.Helper()
 	originalSend := sendMistTrigger

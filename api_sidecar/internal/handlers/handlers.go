@@ -42,6 +42,16 @@ var (
 
 var sendMistTrigger = control.SendMistTriggerContext
 
+func mistTriggerForwardContext(requestContext context.Context, trigger *ipcpb.MistTrigger) context.Context {
+	if trigger.GetBlocking() {
+		return requestContext
+	}
+	// Non-blocking triggers describe events that have already happened. Their
+	// transport write has its own bounded deadline and must not inherit a client
+	// disconnect that could tear down the shared Helmsman↔Foghorn stream.
+	return context.WithoutCancel(requestContext)
+}
+
 // sendDurableMistTrigger is the indirection tests stub to intercept the
 // durable-path send. Production callers go through forwardDurable, which
 // stamps source_event_id and dispatches via this variable.
@@ -737,7 +747,7 @@ func HandlePushRewrite(c *gin.Context) {
 
 	// Forward trigger to Foghorn via gRPC and get response
 	applyTenantContext(mistTrigger)
-	result, err := sendMistTrigger(c.Request.Context(), mistTrigger, logger)
+	result, err := sendMistTrigger(mistTriggerForwardContext(c.Request.Context(), mistTrigger), mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("PUSH_REWRITE", "forward_error")
 		logger.WithFields(logging.Fields{
@@ -857,7 +867,7 @@ func HandlePlayRewrite(c *gin.Context) {
 
 	// Forward trigger to Foghorn via gRPC and get response
 	applyTenantContext(mistTrigger)
-	result, err := sendMistTrigger(c.Request.Context(), mistTrigger, logger)
+	result, err := sendMistTrigger(mistTriggerForwardContext(c.Request.Context(), mistTrigger), mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("PLAY_REWRITE", "forward_error")
 		logger.WithFields(logging.Fields{
@@ -957,7 +967,7 @@ func HandleStreamProcess(c *gin.Context) {
 	}
 
 	applyTenantContext(mistTrigger)
-	result, err := sendMistTrigger(c.Request.Context(), mistTrigger, logger)
+	result, err := sendMistTrigger(mistTriggerForwardContext(c.Request.Context(), mistTrigger), mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("STREAM_PROCESS", "forward_error")
 		logger.WithError(err).Error("Failed to forward STREAM_PROCESS to Foghorn")
@@ -1077,7 +1087,7 @@ func HandleStreamSource(c *gin.Context) {
 
 	// Forward trigger to Foghorn via gRPC and get response
 	applyTenantContext(mistTrigger)
-	result, err := sendMistTrigger(c.Request.Context(), mistTrigger, logger)
+	result, err := sendMistTrigger(mistTriggerForwardContext(c.Request.Context(), mistTrigger), mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("STREAM_SOURCE", "forward_error")
 		logger.WithFields(logging.Fields{
@@ -1491,7 +1501,7 @@ func HandlePushOutStart(c *gin.Context) {
 
 	// Forward trigger to Foghorn via gRPC and get response
 	applyTenantContext(mistTrigger)
-	result, err := sendMistTrigger(c.Request.Context(), mistTrigger, logger)
+	result, err := sendMistTrigger(mistTriggerForwardContext(c.Request.Context(), mistTrigger), mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("PUSH_OUT_START", "forward_error")
 		logger.WithFields(logging.Fields{
@@ -1558,7 +1568,7 @@ func HandleStreamBuffer(c *gin.Context) {
 
 	// Forward enriched trigger to Foghorn via gRPC (non-blocking)
 	applyTenantContext(mistTrigger)
-	_, err = sendMistTrigger(c.Request.Context(), mistTrigger, logger)
+	_, err = sendMistTrigger(mistTriggerForwardContext(c.Request.Context(), mistTrigger), mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("STREAM_BUFFER", "forward_error")
 		logger.WithFields(logging.Fields{
@@ -1680,7 +1690,7 @@ func HandleUserNew(c *gin.Context) {
 
 	// Forward trigger to Foghorn via gRPC and get response
 	applyTenantContext(mistTrigger)
-	result, err := sendMistTrigger(c.Request.Context(), mistTrigger, logger)
+	result, err := sendMistTrigger(mistTriggerForwardContext(c.Request.Context(), mistTrigger), mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("USER_NEW", "forward_error")
 		logger.WithFields(logging.Fields{

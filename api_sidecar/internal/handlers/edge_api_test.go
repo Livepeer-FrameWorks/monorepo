@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
@@ -104,11 +106,12 @@ func TestHandleEdgeHealth(t *testing.T) {
 }
 
 func TestHandleEdgeMetricsExtractsTotals(t *testing.T) {
-	setMonitor(t, &PrometheusMonitor{
-		lastJSONData: map[string]any{
-			"totals": map[string]any{"cpu": 12.5, "mem": 2048.0, "viewers": 7.0},
-		},
-	})
+	client := mist.NewClient(logging.NewLogger())
+	pm := monitorWithMistRuntime(client)
+	pm.lastJSONData = map[string]any{
+		"totals": map[string]any{"cpu": 12.5, "mem": 2048.0, "viewers": 7.0},
+	}
+	setMonitor(t, pm)
 	rec := doRequest(t, HandleEdgeMetrics, http.MethodGet, "/edge/metrics", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("code = %d, want 200", rec.Code)
@@ -120,6 +123,14 @@ func TestHandleEdgeMetricsExtractsTotals(t *testing.T) {
 	}
 	if body["total_viewers"] != float64(7) {
 		t.Errorf("total_viewers = %v, want 7", body["total_viewers"])
+	}
+}
+
+func TestHandleEdgeMetricsReturnsUnavailableWithoutNode(t *testing.T) {
+	setMonitor(t, &PrometheusMonitor{})
+	rec := doRequest(t, HandleEdgeMetrics, http.MethodGet, "/edge/metrics", nil)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("code = %d, want 503", rec.Code)
 	}
 }
 
@@ -138,7 +149,7 @@ func TestHandleEdgeStreamsHappyPath(t *testing.T) {
 			},
 		},
 	})
-	setMonitor(t, &PrometheusMonitor{mistClient: client})
+	setMonitor(t, monitorWithMistRuntime(client))
 
 	rec := doRequest(t, HandleEdgeStreams, http.MethodGet, "/edge/streams", nil)
 	if rec.Code != http.StatusOK {
@@ -172,11 +183,68 @@ func TestHandleEdgeStreamsBadGatewayOnMistError(t *testing.T) {
 	t.Cleanup(srv.Close)
 	client := mist.NewClient(logging.NewLogger())
 	client.BaseURL = srv.URL
-	setMonitor(t, &PrometheusMonitor{mistClient: client})
+	setMonitor(t, monitorWithMistRuntime(client))
 
 	rec := doRequest(t, HandleEdgeStreams, http.MethodGet, "/edge/streams", nil)
 	if rec.Code != http.StatusBadGateway {
 		t.Errorf("mist error code = %d, want 502", rec.Code)
+	}
+}
+
+func monitorWithMistRuntime(client *mist.Client) *PrometheusMonitor {
+	ctx, cancel := context.WithCancel(context.Background())
+	runtime := &mistNodeRuntime{
+		generation:        1,
+		nodeID:            "node-test",
+		baseURL:           client.BaseURL,
+		client:            client,
+		acceleratorClient: client,
+		ctx:               ctx,
+		cancel:            cancel,
+	}
+	return &PrometheusMonitor{nodeRuntime: runtime}
+}
+
+func TestHandleEdgeStreamsReturnsUnavailableWithoutNode(t *testing.T) {
+	setMonitor(t, &PrometheusMonitor{})
+	rec := doRequest(t, HandleEdgeStreams, http.MethodGet, "/edge/streams", nil)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("code = %d, want 503", rec.Code)
+	}
+}
+
+func TestHandleEdgeStreamsReturnsUnavailableWhenNodeIsRemovedMidRequest(t *testing.T) {
+	monitorLogger = logging.NewLogger()
+	requestStarted := make(chan struct{}, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Query().Get("command"), "authorize") {
+			_ = json.NewEncoder(w).Encode(map[string]any{"authorize": map[string]any{"status": "OK"}})
+			return
+		}
+		requestStarted <- struct{}{}
+		<-r.Context().Done()
+	}))
+	defer server.Close()
+	client := mist.NewClient(logging.NewLogger())
+	client.BaseURL = server.URL
+	pm := monitorWithMistRuntime(client)
+	pm.nodeID = "node-test"
+	pm.baseURL = server.URL
+	setMonitor(t, pm)
+
+	response := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		response <- doRequest(t, HandleEdgeStreams, http.MethodGet, "/edge/streams", nil)
+	}()
+	<-requestStarted
+	pm.RemoveNode("node-test")
+	select {
+	case rec := <-response:
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("code = %d, want 503; body=%s", rec.Code, rec.Body.String())
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("edge request did not stop when its node runtime was removed")
 	}
 }
 

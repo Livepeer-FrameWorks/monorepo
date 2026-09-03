@@ -3,6 +3,7 @@ package handlers
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"frameworks/api_sidecar/internal/leases"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -101,11 +102,12 @@ func TestRebuildSourceLeasesFromMist_DVRDegradedPauseLiftsOnRelease(t *testing.T
 		t.Fatal("expected degraded pause active after installing the degraded lease")
 	}
 
-	// Stream vanished from Mist: two consecutive absent polls release the lease
-	// (ReconcileSources' 2-strike threshold), which decrements degradedDvrCount.
+	// Stream vanished from Mist: the complete absence dwell releases the lease
+	// and decrements degradedDvrCount.
 	empty := map[string]struct{}{}
-	tracker.ReconcileSources(empty)
-	tracker.ReconcileSources(empty)
+	firstMissing := time.Now()
+	tracker.ReconcileSourcesAt(empty, firstMissing)
+	tracker.ReconcileSourcesAt(empty, firstMissing.Add(10*time.Second))
 
 	if tracker.DegradedDvrCleanupActive() {
 		t.Fatal("degraded pause must lift once the unresolved DVR lease is released")

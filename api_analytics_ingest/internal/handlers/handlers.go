@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -763,8 +764,8 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 
 	// Calculate buffer_health ratio (0.0-1.0): buffer_ms / max_keepaway_ms.
 	var bufferHealth *float32
-	if streamLifecycle.GetBufferMs() > 0 && streamLifecycle.GetMaxKeepawayMs() > 0 {
-		ratio := float32(streamLifecycle.GetBufferMs()) / float32(streamLifecycle.GetMaxKeepawayMs())
+	if streamLifecycle.BufferMs != nil && streamLifecycle.GetMaxKeepawayMs() > 0 {
+		ratio := float32(*streamLifecycle.BufferMs) / float32(streamLifecycle.GetMaxKeepawayMs())
 		if ratio > 1 {
 			ratio = 1
 		}
@@ -792,8 +793,10 @@ func (h *AnalyticsHandler) processStreamLifecycle(ctx context.Context, event kaf
 		Bitrate: optionalUint32(uint32(streamLifecycle.GetPrimaryBitrate())), FPS: optionalFloat32(streamLifecycle.GetPrimaryFps()),
 		Width: optionalUint16(streamLifecycle.GetPrimaryWidth()), Height: optionalUint16(streamLifecycle.GetPrimaryHeight()),
 		Codec: optionalString(streamLifecycle.GetPrimaryCodec()), QualityTier: optionalString(streamLifecycle.GetQualityTier()),
-		BufferState: bufferState, BufferSize: optionalUint32(streamLifecycle.GetBufferMs()), BufferHealth: bufferHealth,
-		HasIssues: optionalBoolUInt8(streamLifecycle.GetHasIssues()), IssuesDescription: optionalString(streamLifecycle.GetIssuesDescription()),
+		BufferState: bufferState, BufferSize: optionalUint32Pointer(streamLifecycle.BufferMs),
+		MaxKeepawayMS: optionalUint32Pointer(streamLifecycle.MaxKeepawayMs), BufferHealth: bufferHealth,
+		FrameJitterMS: optionalFloat32FromUint32Pointer(streamLifecycle.JitterMs),
+		HasIssues:     optionalBoolUInt8(streamLifecycle.GetHasIssues()), IssuesDescription: optionalString(streamLifecycle.GetIssuesDescription()),
 		TrackCount: optionalUint16(streamLifecycle.GetTrackCount()), TrackMetadata: trackMetadataJSON,
 		AudioChannels: audioChannels, AudioSampleRate: optionalUint32(streamLifecycle.GetAudioSampleRate()),
 		AudioCodec: optionalString(streamLifecycle.GetAudioCodec()), AudioBitrate: optionalUint32(streamLifecycle.GetAudioBitrate()),
@@ -922,6 +925,13 @@ func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, event ka
 		return fmt.Errorf("viewer connection payload mismatch: expected %s, got %s", expectedType, payloadType)
 	}
 
+	extractedClientSessionID, sanitizedRequestURL := clientSessionIDAndSanitizedRequestURL(requestURL)
+	requestURL = sanitizedRequestURL
+	clientSessionID := ""
+	if isConnect {
+		clientSessionID = extractedClientSessionID
+	}
+
 	// Normalize internal name by stripping live+/vod+ prefix for consistent analytics keys
 	streamName = mist.ExtractInternalName(streamName)
 
@@ -950,7 +960,8 @@ func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, event ka
 
 	if err := batch.Append(periscopeingestdb.ViewerConnectionEventRow{
 		EventID: parseUUID(event.EventID), Timestamp: event.Timestamp, TenantID: uuid.MustParse(event.TenantID), StreamID: parseUUID(streamID),
-		InternalName: streamName, SessionID: sessionID, ConnectionAddr: host, Connector: connector, NodeID: nodeID,
+		InternalName: streamName, SessionID: sessionID, ClientSessionID: clientSessionID,
+		ConnectionAddr: host, Connector: connector, NodeID: nodeID,
 		ClusterID: clusterID, OriginClusterID: originClusterID, ControlCellID: controlCellID, RequestURL: optionalString(requestURL),
 		CountryCode: countryCode, City: city, Latitude: latitude, Longitude: longitude,
 		ClientBucketH3: clientBucketH3, ClientBucketRes: clientBucketRes,
@@ -962,6 +973,52 @@ func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, event ka
 		return err
 	}
 	return batch.Send()
+}
+
+var clientSessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+
+func clientSessionIDAndSanitizedRequestURL(raw string) (string, string) {
+	if raw == "" {
+		return "", ""
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", sanitizedMalformedRequestURL(raw)
+	}
+	query := parsed.Query()
+	clientSessionID := query.Get("fwsid")
+	if !clientSessionIDPattern.MatchString(clientSessionID) {
+		clientSessionID = ""
+	}
+	// Retention is allowlisted, not credential-name denylisted. Credential
+	// producers can add or rename query parameters without creating a new
+	// 90-day analytics secret-retention path.
+	retained := url.Values{}
+	if clientSessionID != "" {
+		retained.Set("fwsid", clientSessionID)
+	}
+	parsed.User = nil
+	parsed.RawQuery = retained.Encode()
+	parsed.Fragment = ""
+	return clientSessionID, parsed.String()
+}
+
+func sanitizedMalformedRequestURL(raw string) string {
+	// A malformed query can make url.Parse reject the entire request URL. Keep
+	// only a parseable scheme/host/path prefix; query, fragment, and userinfo are
+	// never retained on this best-effort diagnostic path.
+	prefix := raw
+	if index := strings.IndexAny(prefix, "?#"); index >= 0 {
+		prefix = prefix[:index]
+	}
+	parsed, err := url.Parse(prefix)
+	if err != nil {
+		return ""
+	}
+	parsed.User = nil
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return parsed.String()
 }
 
 func max64(a, b int64) int64 {
@@ -1122,6 +1179,38 @@ func optionalBoolUint8Pointer(value *bool) *uint8 {
 		return nil
 	}
 	converted := boolToUint8(*value)
+	return &converted
+}
+
+func optionalUint32Pointer(value *uint32) *uint32 {
+	if value == nil {
+		return nil
+	}
+	converted := *value
+	return &converted
+}
+
+func optionalFloat32FromUint32Pointer(value *uint32) *float32 {
+	if value == nil {
+		return nil
+	}
+	converted := float32(*value)
+	return &converted
+}
+
+func optionalUint32FromInt32Pointer(value *int32) *uint32 {
+	if value == nil || *value < 0 {
+		return nil
+	}
+	converted := uint32(*value)
+	return &converted
+}
+
+func optionalFloat32FromInt32Pointer(value *int32) *float32 {
+	if value == nil || *value < 0 {
+		return nil
+	}
+	converted := float32(*value)
 	return &converted
 }
 
@@ -2361,8 +2450,8 @@ func (h *AnalyticsHandler) processStreamBuffer(ctx context.Context, event kafka.
 		TrackCount: optionalUint16(streamBuffer.GetTrackCount()), TrackMetadata: trackMetadataJSON,
 		Bitrate: bitrate, FPS: fps, Width: width, Height: height, Codec: codec, QualityTier: optionalString(streamBuffer.GetQualityTier()),
 		FrameMSMax: frameMsMax, FrameMSMin: frameMsMin, KeyframeMSMax: keyframeMsMax, KeyframeMSMin: keyframeMsMin,
-		FrameJitterMS: optionalFloat32(float32(streamBuffer.GetStreamJitterMs())), FramesMax: framesMax, FramesMin: framesMin,
-		GOPSize: gopSize, BufferSize: bufferSize, BufferHealth: bufferHealth,
+		FrameJitterMS: optionalFloat32FromInt32Pointer(streamBuffer.StreamJitterMs), FramesMax: framesMax, FramesMin: framesMin,
+		GOPSize: gopSize, BufferSize: bufferSize, MaxKeepawayMS: optionalUint32FromInt32Pointer(streamBuffer.MaxKeepawayMs), BufferHealth: bufferHealth,
 		AudioChannels: audioChannels, AudioSampleRate: audioSampleRate, AudioCodec: audioCodec, AudioBitrate: audioBitrate,
 		SourceRegion: env.sourceRegion, StreamOriginRegion: env.streamOriginRegion,
 		StreamOriginClusterID: env.streamOriginClusterID, SchemaVersion: env.schemaVersion,

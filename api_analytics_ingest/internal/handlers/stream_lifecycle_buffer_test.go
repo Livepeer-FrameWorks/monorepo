@@ -70,6 +70,118 @@ func TestStreamLifecycleDefaultsBufferStateForCurrentStateOnly(t *testing.T) {
 	}
 }
 
+func TestStreamLifecycleWritesKeepawayAndJitterHealth(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	streamID := uuid.NewString()
+	bufferMs := uint32(2_000)
+	maxKeepawayMS := uint32(8_000)
+	jitterMS := uint32(23)
+	data := mustMistTriggerData(t, &ipcpb.MistTrigger{
+		StreamId: &streamID,
+		NodeId:   "edge-eu-1",
+		TriggerPayload: &ipcpb.MistTrigger_StreamLifecycleUpdate{
+			StreamLifecycleUpdate: &ipcpb.StreamLifecycleUpdate{
+				InternalName:  "live+demo",
+				Status:        "live",
+				BufferMs:      &bufferMs,
+				MaxKeepawayMs: &maxKeepawayMS,
+				JitterMs:      &jitterMS,
+			},
+		},
+	})
+	event := kafka.AnalyticsEvent{
+		EventID: uuid.NewString(), EventType: "stream_lifecycle_update",
+		Timestamp: time.Unix(1710000000, 0), TenantID: uuid.NewString(), Data: data,
+	}
+
+	if err := handler.HandleAnalyticsEvent(event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	health := conn.batches["stream_health_samples"]
+	if health == nil || len(health.rows) != 1 {
+		t.Fatalf("expected one stream_health_samples row, got %#v", health)
+	}
+	row := health.rows[0]
+	if got, ok := row[13].(*uint32); !ok || got == nil || *got != maxKeepawayMS {
+		t.Fatalf("max_keepaway_ms = %#v, want %d", row[13], maxKeepawayMS)
+	}
+	if got, ok := row[15].(*float32); !ok || got == nil || *got != float32(jitterMS) {
+		t.Fatalf("frame_jitter_ms = %#v, want %d", row[15], jitterMS)
+	}
+	if got, ok := row[14].(*float32); !ok || got == nil || *got != 0.25 {
+		t.Fatalf("buffer_health = %#v, want 0.25", row[14])
+	}
+}
+
+func TestStreamLifecyclePreservesPresentZeroKeepawayAndJitter(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	streamID := uuid.NewString()
+	zero := uint32(0)
+	data := mustMistTriggerData(t, &ipcpb.MistTrigger{
+		StreamId: &streamID,
+		NodeId:   "edge-eu-1",
+		TriggerPayload: &ipcpb.MistTrigger_StreamLifecycleUpdate{
+			StreamLifecycleUpdate: &ipcpb.StreamLifecycleUpdate{
+				InternalName:  "live+perfect",
+				Status:        "live",
+				BufferMs:      &zero,
+				JitterMs:      &zero,
+				MaxKeepawayMs: &zero,
+			},
+		},
+	})
+	event := kafka.AnalyticsEvent{
+		EventID: uuid.NewString(), EventType: "stream_lifecycle_update",
+		Timestamp: time.Unix(1710000000, 0), TenantID: uuid.NewString(), Data: data,
+	}
+	if err := handler.HandleAnalyticsEvent(event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	row := conn.batches["stream_health_samples"].rows[0]
+	if got, ok := row[12].(*uint32); !ok || got == nil || *got != 0 {
+		t.Fatalf("present buffer_ms zero = %#v, want *uint32(0)", row[12])
+	}
+	if got, ok := row[13].(*uint32); !ok || got == nil || *got != 0 {
+		t.Fatalf("present max_keepaway_ms zero = %#v, want *uint32(0)", row[13])
+	}
+	if got, ok := row[15].(*float32); !ok || got == nil || *got != 0 {
+		t.Fatalf("present frame_jitter_ms zero = %#v, want *float32(0)", row[15])
+	}
+}
+
+func TestStreamLifecyclePreservesZeroBufferHealth(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	streamID := uuid.NewString()
+	zero := uint32(0)
+	maxKeepawayMS := uint32(8_000)
+	data := mustMistTriggerData(t, &ipcpb.MistTrigger{
+		StreamId: &streamID,
+		NodeId:   "edge-eu-1",
+		TriggerPayload: &ipcpb.MistTrigger_StreamLifecycleUpdate{
+			StreamLifecycleUpdate: &ipcpb.StreamLifecycleUpdate{
+				InternalName:  "live+dry",
+				Status:        "live",
+				BufferMs:      &zero,
+				MaxKeepawayMs: &maxKeepawayMS,
+			},
+		},
+	})
+	event := kafka.AnalyticsEvent{
+		EventID: uuid.NewString(), EventType: "stream_lifecycle_update",
+		Timestamp: time.Unix(1710000000, 0), TenantID: uuid.NewString(), Data: data,
+	}
+	if err := handler.HandleAnalyticsEvent(event); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	row := conn.batches["stream_health_samples"].rows[0]
+	if got, ok := row[14].(*float32); !ok || got == nil || *got != 0 {
+		t.Fatalf("zero buffer_health = %#v, want *float32(0)", row[14])
+	}
+}
+
 // TestStreamLifecycleBufferStateNotDefaultedWithoutBuffer confirms the guard is
 // conditional: with no buffer_ms signal there is nothing to infer, so an empty
 // buffer_state stays empty rather than being asserted as FULL.

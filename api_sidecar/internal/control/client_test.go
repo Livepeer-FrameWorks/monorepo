@@ -26,10 +26,12 @@ import (
 )
 
 type fakeControlStream struct {
-	sendMu  sync.Mutex
-	sent    []*ipcpb.ControlMessage
-	sendErr error
-	sendCh  chan *ipcpb.ControlMessage
+	sendMu    sync.Mutex
+	sent      []*ipcpb.ControlMessage
+	sendErr   error
+	sendCh    chan *ipcpb.ControlMessage
+	sendCtx   context.Context
+	sendBlock <-chan struct{}
 }
 
 func (f *fakeControlStream) Send(msg *ipcpb.ControlMessage) error {
@@ -38,9 +40,176 @@ func (f *fakeControlStream) Send(msg *ipcpb.ControlMessage) error {
 	if f.sendCh != nil {
 		f.sendCh <- msg
 	}
+	if f.sendBlock != nil {
+		<-f.sendBlock
+	}
+	if f.sendCtx != nil {
+		<-f.sendCtx.Done()
+	}
 	err := f.sendErr
 	f.sendMu.Unlock()
 	return err
+}
+
+func TestLockedClientStreamTransportDeadlineBreaksWedgedSend(t *testing.T) {
+	oldTimeout := controlStreamSendTimeout
+	controlStreamSendTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { controlStreamSendTimeout = oldTimeout })
+
+	streamCtx, cancelStream := context.WithCancel(context.Background())
+	fake := &fakeControlStream{sendCtx: streamCtx, sendErr: context.Canceled}
+	stream := &lockedClientStream{HelmsmanControl_ConnectClient: fake, cancel: cancelStream}
+
+	done := make(chan error, 1)
+	go func() { done <- stream.Send(&ipcpb.ControlMessage{}) }()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("send error = %v, want transport deadline", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("transport deadline did not cancel the owning control stream")
+	}
+	if streamCtx.Err() == nil {
+		t.Fatal("owning control stream remained live after a wedged send deadline")
+	}
+}
+
+func TestControlStreamWatchdogOutlivesOrdinarySendBudget(t *testing.T) {
+	if controlStreamSendTimeout <= mistTriggerTransportSendTimeout {
+		t.Fatalf(
+			"control stream watchdog = %v, want greater than ordinary send budget %v",
+			controlStreamSendTimeout,
+			mistTriggerTransportSendTimeout,
+		)
+	}
+}
+
+func TestLockedClientStreamSuccessfulSendWinsTimeoutRace(t *testing.T) {
+	oldTimeout := controlStreamSendTimeout
+	controlStreamSendTimeout = 20 * time.Millisecond
+	t.Cleanup(func() { controlStreamSendTimeout = oldTimeout })
+
+	streamCtx, cancelStream := context.WithCancel(context.Background())
+	fake := &fakeControlStream{sendCtx: streamCtx}
+	stream := &lockedClientStream{HelmsmanControl_ConnectClient: fake, cancel: cancelStream}
+
+	if err := stream.Send(&ipcpb.ControlMessage{}); err != nil {
+		t.Fatalf("successful send reported timeout and would be replayed: %v", err)
+	}
+}
+
+func TestLockedClientStreamCallerCancellationDoesNotBreakOwnedSend(t *testing.T) {
+	oldTimeout := controlStreamSendTimeout
+	controlStreamSendTimeout = time.Second
+	t.Cleanup(func() { controlStreamSendTimeout = oldTimeout })
+
+	t.Run("explicit cancellation", func(t *testing.T) {
+		streamCtx, cancelStream := context.WithCancel(context.Background())
+		release := make(chan struct{})
+		fake := &fakeControlStream{
+			sendCh:    make(chan *ipcpb.ControlMessage, 1),
+			sendBlock: release,
+		}
+		stream := &lockedClientStream{HelmsmanControl_ConnectClient: fake, cancel: cancelStream}
+		callerCtx, cancelCaller := context.WithCancel(context.Background())
+		defer cancelCaller()
+		done := make(chan error, 1)
+		go func() { done <- stream.SendContext(callerCtx, &ipcpb.ControlMessage{}) }()
+
+		select {
+		case <-fake.sendCh:
+		case <-time.After(time.Second):
+			t.Fatal("send did not acquire the transport lane")
+		}
+		cancelCaller()
+		select {
+		case <-streamCtx.Done():
+			t.Fatal("caller cancellation tore down the owned transport send")
+		case err := <-done:
+			t.Fatalf("send returned before the transport completed: %v", err)
+		case <-time.After(40 * time.Millisecond):
+		}
+
+		close(release)
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("completed send error = %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("send did not complete after transport release")
+		}
+		if streamCtx.Err() != nil {
+			t.Fatal("healthy transport was cancelled")
+		}
+	})
+}
+
+func TestLockedClientStreamCallerDeadlineAbandonsOwnedSendWithoutRecyclingTransport(t *testing.T) {
+	oldTimeout := controlStreamSendTimeout
+	controlStreamSendTimeout = time.Second
+	t.Cleanup(func() { controlStreamSendTimeout = oldTimeout })
+
+	streamCtx, cancelStream := context.WithCancel(context.Background())
+	release := make(chan struct{})
+	fake := &fakeControlStream{sendBlock: release}
+	stream := &lockedClientStream{HelmsmanControl_ConnectClient: fake, cancel: cancelStream}
+	callerCtx, cancelCaller := context.WithTimeout(context.Background(), 2*time.Millisecond)
+	defer cancelCaller()
+
+	err := stream.SendContext(callerCtx, &ipcpb.ControlMessage{})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("send error = %v, want caller deadline", err)
+	}
+	if streamCtx.Err() != nil {
+		t.Fatal("caller deadline recycled the shared transport")
+	}
+	close(release)
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- stream.Send(&ipcpb.ControlMessage{}) }()
+	select {
+	case err := <-secondDone:
+		if err != nil {
+			t.Fatalf("send after abandoned owner failed: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("abandoned owner did not release the send lane after transport completion")
+	}
+	if streamCtx.Err() != nil {
+		t.Fatal("healthy transport was recycled after the abandoned send completed")
+	}
+}
+
+func TestLockedClientStreamWaiterDeadlineDoesNotCancelHealthyOwner(t *testing.T) {
+	streamCtx, cancelStream := context.WithCancel(context.Background())
+	fake := &fakeControlStream{sendCtx: streamCtx, sendCh: make(chan *ipcpb.ControlMessage, 1)}
+	stream := &lockedClientStream{HelmsmanControl_ConnectClient: fake, cancel: cancelStream}
+
+	ownerDone := make(chan error, 1)
+	go func() { ownerDone <- stream.Send(&ipcpb.ControlMessage{}) }()
+	select {
+	case <-fake.sendCh:
+	case <-time.After(time.Second):
+		t.Fatal("first send did not acquire the transport lane")
+	}
+
+	waitCtx, cancelWait := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancelWait()
+	if err := stream.SendContext(waitCtx, &ipcpb.ControlMessage{}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("waiting send error = %v, want deadline exceeded", err)
+	}
+	if streamCtx.Err() != nil {
+		t.Fatal("a deadline waiting for the send lane cancelled the healthy owner")
+	}
+
+	cancelStream()
+	select {
+	case <-ownerDone:
+	case <-time.After(time.Second):
+		t.Fatal("first send did not exit after test cleanup")
+	}
 }
 
 func (f *fakeControlStream) Recv() (*ipcpb.ControlMessage, error) {
@@ -1181,6 +1350,55 @@ func TestSendMistTriggerReconnectsAndReceivesResponse(t *testing.T) {
 	}
 	if len(stream.sent) != 1 {
 		t.Fatalf("expected 1 send, got %d", len(stream.sent))
+	}
+}
+
+func TestBlockingMistTriggerDeadlineDoesNotRecycleSharedStream(t *testing.T) {
+	resetControlState(t)
+	oldTimeout := controlStreamSendTimeout
+	controlStreamSendTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { controlStreamSendTimeout = oldTimeout })
+
+	streamCtx, cancelStream := context.WithCancel(context.Background())
+	t.Cleanup(cancelStream)
+	release := make(chan struct{})
+	fake := &fakeControlStream{sendCh: make(chan *ipcpb.ControlMessage, 1), sendBlock: release}
+	stream := &lockedClientStream{HelmsmanControl_ConnectClient: fake, cancel: cancelStream}
+	storeConn(stream, "")
+	trigger := &ipcpb.MistTrigger{
+		TriggerType: "stream_start",
+		RequestId:   "req-near-deadline",
+		Blocking:    true,
+	}
+	requestCtx, cancelRequest := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancelRequest()
+
+	resultCh := make(chan *MistTriggerResult, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		result, err := SendMistTriggerContext(requestCtx, trigger, logging.NewLogger())
+		resultCh <- result
+		errCh <- err
+	}()
+	waitForControlMessage(t, fake.sendCh, "near-deadline Mist trigger send")
+	result := waitForMistTriggerResult(t, resultCh, "near-deadline Mist trigger result")
+	err := waitForError(t, errCh, "near-deadline Mist trigger error")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("trigger error = %v, want request deadline", err)
+	}
+	if result == nil || !result.Abort {
+		t.Fatalf("deadline result = %#v, want abort", result)
+	}
+	if streamCtx.Err() != nil {
+		t.Fatal("nearly exhausted trigger budget recycled the shared stream")
+	}
+
+	close(release)
+	if err := stream.Send(&ipcpb.ControlMessage{}); err != nil {
+		t.Fatalf("send after request deadline failed: %v", err)
+	}
+	if streamCtx.Err() != nil {
+		t.Fatal("healthy shared stream was recycled after the timed-out request completed")
 	}
 }
 

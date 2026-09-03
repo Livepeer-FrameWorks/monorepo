@@ -41,7 +41,7 @@ const insertStreamBufferHealth = `INSERT INTO stream_health_samples (
 	has_issues, issues_description, track_count, track_metadata,
 	bitrate, fps, width, height, codec, quality_tier,
 	frame_ms_max, frame_ms_min, keyframe_ms_max, keyframe_ms_min, frame_jitter_ms,
-	frames_max, frames_min, gop_size, buffer_size, buffer_health,
+	frames_max, frames_min, gop_size, buffer_size, max_keepaway_ms, buffer_health,
 	audio_channels, audio_sample_rate, audio_codec, audio_bitrate,
 	source_region, stream_origin_region, stream_origin_cluster_id, schema_version
 )`
@@ -62,6 +62,7 @@ type StreamBufferHealthRow struct {
 	FramesMax, FramesMin                                                *uint32
 	GOPSize                                                             *uint16
 	BufferSize                                                          *uint32
+	MaxKeepawayMS                                                       *uint32
 	BufferHealth                                                        *float32
 	AudioChannels                                                       *uint8
 	AudioSampleRate                                                     *uint32
@@ -73,7 +74,7 @@ type StreamBufferHealthRow struct {
 
 func PrepareStreamBufferHealth(ctx context.Context, db BatchPreparer) (*Writer[StreamBufferHealthRow], error) {
 	return prepare(ctx, db, insertStreamBufferHealth, func(row StreamBufferHealthRow) []interface{} {
-		return []interface{}{row.Timestamp, row.TenantID, row.StreamID, row.InternalName, row.NodeID, row.BufferState, row.HasIssues, row.IssuesDescription, row.TrackCount, row.TrackMetadata, row.Bitrate, row.FPS, row.Width, row.Height, row.Codec, row.QualityTier, row.FrameMSMax, row.FrameMSMin, row.KeyframeMSMax, row.KeyframeMSMin, row.FrameJitterMS, row.FramesMax, row.FramesMin, row.GOPSize, row.BufferSize, row.BufferHealth, row.AudioChannels, row.AudioSampleRate, row.AudioCodec, row.AudioBitrate, row.SourceRegion, row.StreamOriginRegion, row.StreamOriginClusterID, row.SchemaVersion}
+		return []interface{}{row.Timestamp, row.TenantID, row.StreamID, row.InternalName, row.NodeID, row.BufferState, row.HasIssues, row.IssuesDescription, row.TrackCount, row.TrackMetadata, row.Bitrate, row.FPS, row.Width, row.Height, row.Codec, row.QualityTier, row.FrameMSMax, row.FrameMSMin, row.KeyframeMSMax, row.KeyframeMSMin, row.FrameJitterMS, row.FramesMax, row.FramesMin, row.GOPSize, row.BufferSize, row.MaxKeepawayMS, row.BufferHealth, row.AudioChannels, row.AudioSampleRate, row.AudioCodec, row.AudioBitrate, row.SourceRegion, row.StreamOriginRegion, row.StreamOriginClusterID, row.SchemaVersion}
 	})
 }
 

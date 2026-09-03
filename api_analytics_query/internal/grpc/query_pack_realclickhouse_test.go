@@ -60,6 +60,12 @@ func TestEveryRPCQuerySiteExecutesAgainstCurrentClickHouse(t *testing.T) {
 				continue
 			}
 			fillQueryPackMessage(message.ProtoReflect(), variant)
+			if methodInfo.Name == "GetSessionQoeDetail" {
+				contentID := message.ProtoReflect().Descriptor().Fields().ByName("content_id")
+				if contentID != nil {
+					message.ProtoReflect().Set(contentID, protoreflect.ValueOfString("live:demo_live_stream_001"))
+				}
+			}
 			t.Run(fmt.Sprintf("%s/variant=%d", methodInfo.Name, variant), func(t *testing.T) {
 				callCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 				defer cancel()
@@ -152,6 +158,8 @@ func queryPackString(name string) (string, bool) {
 		return queryPackTenantID, true
 	case "stream_id":
 		return queryPackStreamID, true
+	case "content_id":
+		return "pk_query_pack", true
 	case "node_id":
 		return "edge-node-1", false
 	case "cluster_id":

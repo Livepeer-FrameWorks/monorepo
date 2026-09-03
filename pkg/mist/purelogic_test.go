@@ -2,6 +2,7 @@ package mist
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -277,5 +278,20 @@ func TestCalculatePasswordHash_GoldenVectors(t *testing.T) {
 		if got := c.calculatePasswordHash(tc.password, tc.challenge); got != tc.want {
 			t.Errorf("calculatePasswordHash(%q,%q)=%q, want %q", tc.password, tc.challenge, got, tc.want)
 		}
+	}
+}
+
+func TestActiveStreamsCommand_FilterPreservesLongFormFields(t *testing.T) {
+	all := activeStreamsCommand(nil)["active_streams"].(map[string]interface{})
+	filtered := activeStreamsCommand([]string{"live+alpha", "live+beta"})["active_streams"].(map[string]interface{})
+	if _, exists := all["streams"]; exists {
+		t.Fatal("unfiltered active_streams command unexpectedly contains a streams filter")
+	}
+	want := []string{"live+alpha", "live+beta"}
+	if got, ok := filtered["streams"].([]string); !ok || !reflect.DeepEqual(got, want) {
+		t.Fatalf("streams filter = %#v, want %#v", filtered["streams"], want)
+	}
+	if !reflect.DeepEqual(filtered["fields"], all["fields"]) || filtered["longform"] != true {
+		t.Fatalf("filtered query drifted from the full long-form shape: %#v", filtered)
 	}
 }

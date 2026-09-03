@@ -1077,6 +1077,29 @@ func (c *GRPCClient) GetSessionQoeSummary(ctx context.Context, tenantID string, 
 	return c.aggregated.GetSessionQoeSummary(ctx, req)
 }
 
+// GetSessionQoeDetail returns the bounded, tenant-scoped diagnostic correlation
+// between attach-scoped client QoE and the canonical Mist media connection.
+func (c *GRPCClient) GetSessionQoeDetail(ctx context.Context, tenantID string, contentID string, timeRange *TimeRangeOpts) (*periscopepb.GetSessionQoeDetailResponse, error) {
+	return c.GetSessionQoeDetailPage(ctx, tenantID, contentID, timeRange, nil)
+}
+
+// GetSessionQoeDetailPage returns one bounded page of attach-scoped QoE and
+// canonical Mist connection correlations.
+func (c *GRPCClient) GetSessionQoeDetailPage(ctx context.Context, tenantID string, contentID string, timeRange *TimeRangeOpts, page *commonpb.CursorPaginationRequest) (*periscopepb.GetSessionQoeDetailResponse, error) {
+	if err := requireTenantID(tenantID); err != nil {
+		return nil, err
+	}
+	if contentID == "" {
+		return nil, fmt.Errorf("contentID is required")
+	}
+	if timeRange == nil || timeRange.StartTime.IsZero() || timeRange.EndTime.IsZero() {
+		return nil, fmt.Errorf("bounded timeRange is required")
+	}
+	return c.aggregated.GetSessionQoeDetail(ctx, &periscopepb.GetSessionQoeDetailRequest{
+		TenantId: tenantID, ContentId: contentID, TimeRange: buildTimeRange(timeRange), Pagination: page,
+	})
+}
+
 // GetClusterQoeOps returns the redacted operator QoE aggregate for the given owned
 // clusters (token-attributed rows only).
 func (c *GRPCClient) GetClusterQoeOps(ctx context.Context, tenantID string, clusterIDs []string, timeRange *TimeRangeOpts) (*periscopepb.GetClusterQoeOpsResponse, error) {

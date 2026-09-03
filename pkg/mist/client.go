@@ -88,6 +88,10 @@ func NewClient(logger logging.Logger) *Client {
 
 // makeAPIRequest makes an authenticated request to MistServer TCP API
 func (c *Client) makeAPIRequest(command map[string]interface{}) (map[string]interface{}, error) {
+	return c.makeAPIRequestContext(context.Background(), command)
+}
+
+func (c *Client) makeAPIRequestContext(ctx context.Context, command map[string]interface{}) (map[string]interface{}, error) {
 	if c.BaseURL == "" {
 		return nil, fmt.Errorf("MISTSERVER_URL not configured")
 	}
@@ -96,12 +100,12 @@ func (c *Client) makeAPIRequest(command map[string]interface{}) (map[string]inte
 	// command has not been sent. Return a new error rather than wrapping so an
 	// ErrMistAmbiguous from the auth handshake does not escape to the caller.
 	if !c.authenticated {
-		if err := c.authenticate(); err != nil {
+		if err := c.authenticateContext(ctx); err != nil {
 			return nil, errors.New("authentication failed, command not sent: " + err.Error())
 		}
 	}
 
-	result, err := c.callAPI(command)
+	result, err := c.callAPIContext(ctx, command)
 	if err != nil {
 		return nil, err
 	}
@@ -111,21 +115,21 @@ func (c *Client) makeAPIRequest(command map[string]interface{}) (map[string]inte
 		if status, ok := authInfo["status"].(string); ok && status == "CHALL" {
 			c.Logger.Debug("MistServer session expired, re-authenticating")
 			c.authenticated = false
-			if err := c.authenticate(); err != nil {
+			if err := c.authenticateContext(ctx); err != nil {
 				// CHALL means Mist did not execute the command. Do not propagate an
 				// ambiguity marker from the authentication request itself.
 				return nil, errors.New("re-authentication failed, command not sent: " + err.Error())
 			}
 			// Retry the original request
-			return c.callAPI(command)
+			return c.callAPIContext(ctx, command)
 		}
 	}
 
 	return result, nil
 }
 
-// callAPI performs a single API call without triggering authenticate()
-func (c *Client) callAPI(command map[string]interface{}) (map[string]interface{}, error) {
+// callAPIContext performs a single API call without triggering authentication.
+func (c *Client) callAPIContext(ctx context.Context, command map[string]interface{}) (map[string]interface{}, error) {
 	base := strings.TrimRight(c.BaseURL, "/")
 	commandJSON, err := json.Marshal(command)
 	if err != nil {
@@ -133,7 +137,7 @@ func (c *Client) callAPI(command map[string]interface{}) (map[string]interface{}
 	}
 	u := fmt.Sprintf("%s/api2?command=%s", base, url.QueryEscape(string(commandJSON)))
 
-	req, err := http.NewRequestWithContext(context.Background(), "GET", u, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -324,11 +328,17 @@ func (c *Client) PushKill(pushID int) error {
 
 // GetStreamInfo gets information about a specific stream
 func (c *Client) GetStreamInfo(streamName string) (*StreamInfo, error) {
+	return c.GetStreamInfoContext(context.Background(), streamName)
+}
+
+// GetStreamInfoContext gets information about a specific stream and cancels
+// the Mist API request when the caller's node/request lifetime ends.
+func (c *Client) GetStreamInfoContext(ctx context.Context, streamName string) (*StreamInfo, error) {
 	command := map[string]interface{}{
 		"streams": true,
 	}
 
-	response, err := c.makeAPIRequest(command)
+	response, err := c.makeAPIRequestContext(ctx, command)
 	if err != nil {
 		return nil, fmt.Errorf("streams query failed: %w", err)
 	}
@@ -418,8 +428,8 @@ func BuildDVRTarget(storagePath, dvrHash string, config map[string]interface{}) 
 	return target
 }
 
-// authenticate handles MistServer TCP API authentication using MD5 challenge-response
-func (c *Client) authenticate() error {
+// authenticateContext handles MistServer API authentication using MD5 challenge-response.
+func (c *Client) authenticateContext(ctx context.Context) error {
 	if c.BaseURL == "" {
 		return fmt.Errorf("MISTSERVER_URL not configured")
 	}
@@ -432,7 +442,7 @@ func (c *Client) authenticate() error {
 	}
 
 	// Use direct call without auth requirement
-	resp1, err := c.callAPI(challengeReq)
+	resp1, err := c.callAPIContext(ctx, challengeReq)
 	if err != nil {
 		return fmt.Errorf("failed to send challenge request: %w", err)
 	}
@@ -484,7 +494,7 @@ func (c *Client) authenticate() error {
 		},
 	}
 
-	resp2, err := c.callAPI(authReq)
+	resp2, err := c.callAPIContext(ctx, authReq)
 	if err != nil {
 		return fmt.Errorf("failed to send auth request: %w", err)
 	}
@@ -503,6 +513,13 @@ func (c *Client) authenticate() error {
 
 // calculatePasswordHash calculates MD5(MD5(password) + challenge)
 func (c *Client) calculatePasswordHash(password, challenge string) string {
+	return ControllerPasswordHash(password, challenge)
+}
+
+// ControllerPasswordHash returns MistController's challenge response:
+// MD5(hex(MD5(password)) + challenge). The controller WebSocket and HTTP API
+// deliberately share this authentication primitive.
+func ControllerPasswordHash(password, challenge string) string {
 	// First MD5: hash the password
 	passwordMD5 := md5.Sum([]byte(password))
 	passwordMD5Hex := hex.EncodeToString(passwordMD5[:])
@@ -514,6 +531,12 @@ func (c *Client) calculatePasswordHash(password, challenge string) string {
 
 // FetchJSON fetches data from MistServer's JSON metrics endpoint.
 func (c *Client) FetchJSON(endpoint string) (map[string]interface{}, error) {
+	return c.FetchJSONContext(context.Background(), endpoint)
+}
+
+// FetchJSONContext is the cancellation-aware form used by monitor runtimes
+// that must stop promptly when their Mist node is replaced.
+func (c *Client) FetchJSONContext(ctx context.Context, endpoint string) (map[string]interface{}, error) {
 	if c.BaseURL == "" {
 		return nil, fmt.Errorf("MISTSERVER_URL not configured")
 	}
@@ -531,7 +554,7 @@ func (c *Client) FetchJSON(endpoint string) (map[string]interface{}, error) {
 	}
 	urlStr := base + path
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, urlStr, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create JSON request: %w", err)
 	}
@@ -554,20 +577,30 @@ func (c *Client) FetchJSON(endpoint string) (map[string]interface{}, error) {
 	return data, nil
 }
 
-// GetActiveStreams fetches active streams using the authenticated API
-func (c *Client) GetActiveStreams() (map[string]interface{}, error) {
-	command := map[string]interface{}{
-		"active_streams": map[string]interface{}{
-			"longform": true,
-			"fields": []string{
-				"clients", "viewers", "inputs", "outputs", "tracks",
-				"upbytes", "downbytes", "packsent", "packloss", "packretrans",
-				"firstms", "lastms", "health", "pid", "sourcepids", "tags", "status",
-			},
+func activeStreamsCommand(streams []string) map[string]interface{} {
+	query := map[string]interface{}{
+		"longform": true,
+		"fields": []string{
+			"clients", "viewers", "inputs", "outputs", "tracks",
+			"upbytes", "downbytes", "packsent", "packloss", "packretrans",
+			"firstms", "lastms", "health", "pid", "sourcepids", "tags", "status",
 		},
 	}
+	if len(streams) > 0 {
+		query["streams"] = streams
+	}
+	return map[string]interface{}{"active_streams": query}
+}
 
-	response, err := c.makeAPIRequest(command)
+// GetActiveStreams fetches all active streams using the authenticated API.
+func (c *Client) GetActiveStreams() (map[string]interface{}, error) {
+	return c.GetActiveStreamsContext(context.Background())
+}
+
+// GetActiveStreamsContext is the cancellation-aware form used by Helmsman's
+// generation-scoped node runtime.
+func (c *Client) GetActiveStreamsContext(ctx context.Context) (map[string]interface{}, error) {
+	response, err := c.makeAPIRequestContext(ctx, activeStreamsCommand(nil))
 	if err != nil {
 		return nil, fmt.Errorf("active_streams query failed: %w", err)
 	}
@@ -575,8 +608,35 @@ func (c *Client) GetActiveStreams() (map[string]interface{}, error) {
 	return response, nil
 }
 
+// GetActiveStreamsFiltered fetches the same long-form fields as
+// GetActiveStreams, restricted to the supplied Mist stream names.
+func (c *Client) GetActiveStreamsFiltered(streams []string) (map[string]interface{}, error) {
+	return c.GetActiveStreamsFilteredContext(context.Background(), streams)
+}
+
+// GetActiveStreamsFilteredContext is the cancellation-aware form used by
+// Helmsman's stream-change accelerator during node replacement.
+func (c *Client) GetActiveStreamsFilteredContext(ctx context.Context, streams []string) (map[string]interface{}, error) {
+	if len(streams) == 0 {
+		return map[string]interface{}{"active_streams": map[string]interface{}{}}, nil
+	}
+
+	response, err := c.makeAPIRequestContext(ctx, activeStreamsCommand(streams))
+	if err != nil {
+		return nil, fmt.Errorf("filtered active_streams query failed: %w", err)
+	}
+
+	return response, nil
+}
+
 // GetClients fetches client metrics using the API
 func (c *Client) GetClients() (map[string]interface{}, error) {
+	return c.GetClientsContext(context.Background())
+}
+
+// GetClientsContext is the cancellation-aware form used by Helmsman's
+// generation-scoped node runtime.
+func (c *Client) GetClientsContext(ctx context.Context) (map[string]interface{}, error) {
 	command := map[string]interface{}{
 		"clients": map[string]interface{}{
 			"time": -5,
@@ -590,7 +650,7 @@ func (c *Client) GetClients() (map[string]interface{}, error) {
 		},
 	}
 
-	response, err := c.makeAPIRequest(command)
+	response, err := c.makeAPIRequestContext(ctx, command)
 	if err != nil {
 		return nil, fmt.Errorf("clients query failed: %w", err)
 	}

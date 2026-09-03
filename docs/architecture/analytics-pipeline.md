@@ -95,6 +95,56 @@ Some “state” is better polled (or only available via Mist APIs), e.g.:
 
 Poller outputs are still delivered as typed protobuf triggers, but **often need tenant enrichment downstream** (because Mist doesn’t know FrameWorks tenants).
 
+The always-on stream-change accelerator does not change that authority model.
+One authenticated `/ws?streams=1` connection per Mist node observes only
+status/input/output changes; viewer-only frames are ignored. A relevant frame
+coalesces stream names into one filtered `active_streams` API request, then passes
+the full long-form response through the same `processActiveStreamData` conversion
+and trigger path as the 10-second poll. Per-stream refreshes are limited to once
+every two seconds, with a trailing refresh for a change received inside that
+window.
+
+Dedup state survives socket reconnects, so a repeated controller snapshot does
+not refresh every unchanged stream. Each successful authoritative inventory
+prunes entries for streams no longer present, preventing a long-lived node from
+remaining at the dedup cap. Successful fallback sweeps are paced to at most one
+every two seconds; failures still use bounded exponential backoff.
+
+The socket is lossy and is never an event source. Its initial dump only warms
+dedup state. The full poll remains enabled and exclusively owns vanish-to-offline
+synthesis, source-lease reconciliation, and the boot reconciliation gate. A
+missing or malformed targeted result asks the CAS-guarded full poll to run
+immediately. Stream-end frames do not request an all-stream sweep: the normal
+poll's vanish diff remains the sole offline authority. Failed sweeps are re-armed
+with bounded jittered exponential backoff; contention waits briefly for the
+already-running authoritative poll, whose successful inventory also completes
+WebSocket bootstrap. Failed targeted refreshes do not reserve freshness or
+consume their two-second throttle slot. Per-stream lifecycle rows are ordered from freshness
+claim through trigger send. A targeted read newer than an in-flight poll is merged
+into one stable presence snapshot for source leases, vanish detection, admitted-runtime
+reconciliation, and freshness pruning. It suppresses absence only for that stream;
+the next authoritative poll confirms or removes it, while boot reconciliation still
+completes. An authoritative poll advances the freshness floor only to its own observation,
+so it cannot discard targeted refreshes issued while that poll was in flight.
+Targeted observations are registered only after their Mist request succeeds, but
+retain the request-start ordering token; a response from a request that began
+before a newer authoritative poll cannot revive a stream that poll removed.
+Authoritative pruning likewise removes only queue entries observed no later than
+the poll snapshot, preserving a nudge received while the poll was in flight.
+Bootstrap and per-stream bookkeeping use fixed bounds. Either lifecycle-observation
+or WebSocket-dedup cap overflow disables targeted rows until a later authoritative
+poll reports a bounded stream set; only the first dedup overflow requests an
+accelerated sweep. Full polling and its reconciliation tail continue throughout.
+Node-generation fencing and cancellation prevent a late frame,
+API response, or edge-API request from a removed/replaced node acting on the new
+node.
+
+Source disappearance and runtime-admission reconciliation use elapsed-time dwell,
+not a count of poll cycles. Source leases require 10 seconds of continuous absence;
+admitted runtime streams require their existing 30-second minimum age plus 20 seconds
+of continuous absence. Accelerator-triggered sweeps therefore cannot compress the
+reconciliation safety window by increasing poll frequency.
+
 ## 2) Enrichment + Routing: Helmsman → Foghorn
 
 Foghorn is where events become "platform-shaped":
@@ -173,30 +223,37 @@ It also consumes `service_events` for API usage/audit events (notably `api_reque
 
 Periscope Ingest routes on Kafka `event_type` (the canonical strings emitted by Decklog):
 
-| Kafka `event_type`                     | Ingest handler                | Primary ClickHouse writes                                                               |
-| -------------------------------------- | ----------------------------- | --------------------------------------------------------------------------------------- |
-| `viewer_connect` / `viewer_disconnect` | `processViewerConnection`     | `viewer_connection_events` (`event_type` stored as `connect` / `disconnect`)            |
-| `stream_buffer`                        | `processStreamBuffer`         | `stream_event_log` + `stream_health_samples`                                            |
-| `stream_end`                           | `processStreamEnd`            | `stream_state_current` (`status='offline'`) + `stream_event_log`                        |
-| `push_rewrite`                         | `processPushRewrite`          | `stream_event_log`                                                                      |
-| `play_rewrite`                         | `skipEvent`                   | _(no ClickHouse write; non-canonical)_                                                  |
-| `stream_source`                        | `skipEvent`                   | _(no ClickHouse write; non-canonical)_                                                  |
-| `push_end` / `push_out_start`          | `skipEvent`                   | _(no ClickHouse write; non-canonical)_                                                  |
-| `stream_track_list`                    | `processTrackList`            | `track_list_events`                                                                     |
-| `recording_complete`                   | `skipEvent`                   | _(no ClickHouse write; non-canonical)_                                                  |
-| `recording_segment`                    | `skipEvent`                   | _(no ClickHouse write; non-canonical)_                                                  |
-| `stream_lifecycle_update`              | `processStreamLifecycle`      | `stream_state_current` (current state) + `stream_event_log` (history)                   |
-| `node_lifecycle_update`                | `processNodeLifecycle`        | `node_state_current` (current state) + `node_metrics_samples` (history)                 |
-| `client_lifecycle_batch`               | `processClientLifecycleBatch` | `client_qoe_samples` (one ClickHouse insert per batch; see "Client QoE sampling" below) |
-| `load_balancing`                       | `processLoadBalancing`        | `routing_decisions`                                                                     |
-| `clip_lifecycle`                       | `processClipLifecycle`        | `artifact_state_current` (current state) + `artifact_events` (history)                  |
-| `dvr_lifecycle`                        | `processDVRLifecycle`         | `artifact_state_current` (current state) + `artifact_events` (history)                  |
-| `storage_lifecycle`                    | `processStorageLifecycle`     | `storage_events`                                                                        |
-| `storage_snapshot`                     | `processStorageSnapshot`      | `storage_snapshots`                                                                     |
-| `process_billing`                      | `processProcessBilling`       | `processing_events` diagnostic telemetry                                                |
-| `vod_lifecycle`                        | `processVodLifecycle`         | `artifact_state_current` + `artifact_events` (`content_type='vod'`)                     |
-| `federation_event`                     | `processFederationEvent`      | `federation_events`                                                                     |
-| `api_request_batch`                    | `processAPIRequestBatch`      | `api_requests`                                                                          |
+| Kafka `event_type`                     | Ingest handler                         | Primary ClickHouse writes                                                               |
+| -------------------------------------- | -------------------------------------- | --------------------------------------------------------------------------------------- |
+| `viewer_connect` / `viewer_disconnect` | `processViewerConnection`              | `viewer_connection_events` (`event_type` stored as `connect` / `disconnect`)            |
+| `stream_buffer`                        | `processStreamBuffer`                  | `stream_event_log` + `stream_health_samples`                                            |
+| `stream_end`                           | `processStreamEnd`                     | `stream_state_current` (`status='offline'`) + `stream_event_log`                        |
+| `push_rewrite`                         | `processPushRewrite`                   | `stream_event_log`                                                                      |
+| `play_rewrite`                         | `skipEvent`                            | _(no ClickHouse write; non-canonical)_                                                  |
+| `stream_source`                        | `skipEvent`                            | _(no ClickHouse write; non-canonical)_                                                  |
+| `push_end` / `push_out_start`          | `skipEvent`                            | _(no ClickHouse write; non-canonical)_                                                  |
+| `push_input_close`                     | `skipEvent`                            | _(audit metric/log only; source-presence ownership remains in Foghorn)_                 |
+| `stream_track_list`                    | `processTrackList`                     | `track_list_events`                                                                     |
+| `recording_complete`                   | `skipEvent`                            | _(no ClickHouse write; non-canonical)_                                                  |
+| `recording_segment`                    | `skipEvent`                            | _(no ClickHouse write; non-canonical)_                                                  |
+| `stream_lifecycle_update`              | `processStreamLifecycle`               | `stream_state_current` + `stream_event_log` + primary 10s `stream_health_samples`       |
+| `node_lifecycle_update`                | `processNodeLifecycle`                 | `node_state_current` (current state) + `node_metrics_samples` (history)                 |
+| `client_lifecycle_batch`               | `processClientLifecycleBatch`          | `client_qoe_samples` (one ClickHouse insert per batch; see "Client QoE sampling" below) |
+| `playback_boot`                        | `processPlaybackBootTrace`             | `player_boot_samples`                                                                   |
+| `playback_session_qoe`                 | `processPlaybackSessionQoe`            | `client_qoe_session_deltas`                                                             |
+| `load_balancing`                       | `processLoadBalancing`                 | `routing_decisions`                                                                     |
+| `clip_lifecycle`                       | `processClipLifecycle`                 | `artifact_state_current` (current state) + `artifact_events` (history)                  |
+| `dvr_lifecycle`                        | `processDVRLifecycle`                  | `artifact_state_current` (current state) + `artifact_events` (history)                  |
+| `storage_lifecycle`                    | `processStorageLifecycle`              | `storage_events`                                                                        |
+| `storage_snapshot`                     | `processStorageSnapshot`               | `storage_snapshots`                                                                     |
+| `process_billing`                      | `processProcessBilling`                | `processing_events` diagnostic telemetry                                                |
+| `vod_lifecycle`                        | `processVodLifecycle`                  | `artifact_state_current` + `artifact_events` (`content_type='vod'`)                     |
+| `federation_event`                     | `processFederationEvent`               | `federation_events`                                                                     |
+| `orchestrator_discovery_observed`      | `processOrchestratorDiscoveryObserved` | `orchestrator_discovery_samples` + latest dialed `orchestrator_vantage_current`         |
+| `orchestrator_state_update`            | `processOrchestratorStateUpdate`       | `orchestrator_state_current` + per-IP `orchestrator_instance_state_current`             |
+| `orchestrator_transcode_outcome`       | `processOrchestratorTranscodeOutcome`  | `orchestrator_transcode_outcomes`                                                       |
+| `orchestrator_ai_outcome`              | `processOrchestratorAIOutcome`         | `orchestrator_ai_outcomes`                                                              |
+| `api_request_batch`                    | `processAPIRequestBatch`               | `api_requests`                                                                          |
 
 _Note: `api_request_batch` also arrives via `service_events` and is written to `api_requests` (with audit rows in `api_events`)._
 
@@ -206,9 +263,9 @@ If you need to add a new event type, the switch lives in `api_analytics_ingest/i
 
 The exact schema is in `pkg/database/sql/clickhouse`, but conceptually:
 
-- `viewer_connection_events`: Viewer connect/disconnect session events retained for support diagnostics. Rows carry authenticated serving `cluster_id`, independent `origin_cluster_id`, and `control_cell_id`. The rated billing source is `viewer_sessions_final`, projected from durable `USER_END` triggers with the same attribution.
+- `viewer_connection_events`: Viewer connect/disconnect session events retained for support diagnostics. Rows carry authenticated serving `cluster_id`, independent `origin_cluster_id`, and `control_cell_id`. Connect rows also retain a validated, attach-scoped browser `client_session_id` when the player opted into session telemetry. The stored `request_url` uses a fail-closed query allowlist: only that validated `fwsid` may remain; every other query parameter and the fragment are removed. The rated billing source is `viewer_sessions_final`, projected from durable `USER_END` triggers with the same attribution.
 - `stream_event_log`: Stream lifecycle + notable stream events (start/end/errors, etc.).
-- `stream_health_samples`: QoE / buffer health samples (bitrate/fps/codec/buffer state, issues).
+- `stream_health_samples`: QoE / buffer health samples (bitrate/fps/codec/buffer state, issues), including the raw `max_keepaway_ms` denominator and stream-wide jitter on both Mist-triggered and 10-second lifecycle samples.
 - `client_qoe_samples`: Client lifecycle samples; input for rollups like `client_qoe_5m`. Diagnostic-only — see "Client QoE sampling" below for cadence and the explicit non-authority over viewer counts / billing.
 - `player_boot_samples`: Browser-originated player startup waterfall (time-to-first-frame split into spans, plus Resource Timing for manifest/segment/CDN). Diagnostic-only — see "Player boot telemetry" below. No rollup MV: percentiles are computed at read time (`quantileIf`) because `quantile()` is not mergeable in a plain MergeTree.
 - `node_metrics_samples` and `node_state_current`: Node telemetry and “current state” snapshots.
@@ -260,6 +317,10 @@ Operational rollups:
 The client-side QoE pipeline is rate-shaped at two points:
 
 - **Helmsman polls MistServer's clients API every 60 seconds**, not every 10s. The 10s monitor tick still drives node and stream lifecycle, but `emitClientLifecycle` runs once per 6 ticks. Helmsman generates a UUID per sample so `client_qoe_samples.event_id` is a stable replay-dedup key.
+- **The Mist stream WebSocket does not alter sampling cadence.** It can
+  add lifecycle rows after status/input/output transitions, but never health-only
+  samples or viewer-count changes. Uniform 10-second health rollups remain based
+  on the authoritative poll path.
 - **Foghorn batches enriched `ClientLifecycleUpdate`s per `(tenant_id, stream_id, node_id)`** into `ClientLifecycleBatch` triggers (flushed at 1 s or 1000 samples). Decklog publishes one Kafka record per batch; Periscope does one ClickHouse `INSERT INTO client_qoe_samples` per batch. A batch flush failure is logged + counted on `foghorn_client_lifecycle_batch_drops_total` and dropped after one retry — QoE telemetry is intentionally lossy at the edge to keep the trigger processor unblocked.
 
 This makes `client_qoe_samples` (and the derived `client_qoe_5m` MV) **diagnostic-only**, not the source of truth for viewer counts or billing:
@@ -340,7 +401,10 @@ lost final beacon — which correlates with bad QoE and early exit — still lea
 partial data under `sum()` instead of biasing results upward. Heartbeats also carry the
 non-additive signals — play-intent (EBVS) and VOD reach — not just the delta counters, so
 even a session that never reaches first frame or only seeks survives a lost final. The
-beacon is opt-in (default-off `telemetry.session`) and shares the boot trace's `session_id`.
+beacon is opt-in (default-off `telemetry.session`). The player generates one ephemeral
+browser session ID per `PlayerController.attach()` and reuses it for the session beacon,
+the boot trace, media URLs, and Mist `json_*` HTTP/WebSocket requests. The ID is not a
+viewer, account, or billing identity, and a boot-tracer re-anchor does not rotate it.
 
 Same trust boundary as the boot beacon (server-derived attribution, token-gated
 `cluster_attributed`), forwarded by Bridge at `/playback/telemetry/session` via the shared
@@ -351,6 +415,35 @@ collapsed by the table's `ReplacingMergeTree` on the client-stable
 request, so `event_id` cannot catch it). Ratios are computed at read time over the deduped
 rows; any future rollup must be built from a deduped surface, never summed off the raw
 `ReplacingMergeTree` before merges run.
+
+Best-effort support correlation joins that browser session to Mist's connection lifecycle:
+
+- Mist records the session-initial request URL on `USER_NEW`; Periscope Ingest accepts
+  `fwsid` only when it matches `[A-Za-z0-9._-]{1,64}` and stores it as
+  `viewer_connection_events.client_session_id`. The retained query is rebuilt from an
+  explicit allowlist containing only that validated `fwsid`; all other current or future
+  parameters, URL userinfo, and the URL fragment are discarded. If a malformed query prevents
+  normal parsing, only a separately reparsed scheme/host/path prefix is retained; an unsafe path
+  is stored as empty rather than risking credential retention.
+- `GetSessionQoeDetail` requires tenant scope, one `content_id`, and an explicit time
+  range no wider than 90 days. It collapses and keyset-pages browser beacons once, then
+  looks up Mist connection data by the concrete browser IDs retained on that page. This
+  bounds both the response and the connection-side aggregation and avoids re-evaluating the
+  page CTE for correlation. Media connectors are preferred over HTTP/JSON metadata
+  requests, with a deterministic fallback when no media row exists. Every connection
+  dimension, including nullable `request_url`, is selected from one canonical row. Raw beacon rows and raw
+  connection rows are never joined directly. The page-filtered connection lookup constrains
+  the tenant and concrete client-session IDs and scans at most one 90-day source-retention
+  window ending at the requested range. `viewer_connection_events.client_session_id` has a
+  bloom-filter data-skipping index so the page-ID predicate remains selective even for VOD.
+  It does not require `stream_id`: VOD and standalone
+  artifact sessions intentionally leave that field empty. Correlation failure is best-effort: the QoE page is still
+  returned without connection enrichment. Sessions without a matched connect row return
+  an empty country code rather than ClickHouse's NUL-padded `FixedString(2)` default.
+- The result is diagnostic, not authoritative. Mist can bundle connections under a reused
+  `tkn`, so a reloaded player may leave the first `fwsid` attached to the Mist session;
+  `USER_END` carries no request URL, and older/non-player clients have no `fwsid` at all.
+  The detail RPC is currently internal gRPC only; public GraphQL exposure is deferred.
 
 The VOD retention heatmap rides the same beacon: for VOD content the player folds a
 per-bucket watched-seconds histogram (fixed-width buckets, sparse deltas) into the
@@ -377,6 +470,8 @@ until volume demands it — reads compute ratios at read time over the raw dedup
 > `client_qoe_session_deltas` + `vod_retention_buckets` → Periscope query
 > (`GetSessionQoeSummary`/`GetClusterQoeOps`/`GetVodRetention`) → GraphQL →
 > `/analytics/qoe` dashboard.
+> Attach-to-Mist support correlation is live through the internal
+> `GetSessionQoeDetail` gRPC surface; it intentionally has no GraphQL field yet.
 
 ## 6) Query: Periscope Query (gRPC API)
 

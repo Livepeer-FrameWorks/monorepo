@@ -75,7 +75,8 @@ USER_END trigger (uploaded/downloaded bytes total)
 | `fps`                                      | frames/sec  | Gauge | Primary video FPS; Mist `0` means unknown/dynamic and is treated as absent   |
 | `width` / `height`                         | pixels      | Gauge | Primary video dimensions                                                     |
 | `codec`                                    | string      | Gauge | Primary video codec                                                          |
-| `buffer_size`                              | ms          | Gauge | Overall buffer in ms (`StreamBufferTrigger.stream_buffer_ms`)                |
+| `buffer_size`                              | ms          | Gauge | Overall buffer in ms (`stream_buffer_ms` / lifecycle `buffer_ms`)            |
+| `max_keepaway_ms`                          | ms          | Gauge | Mist's maximum viewer distance from live; retained as the health denominator |
 | `buffer_health`                            | 0.0-1.0     | Gauge | `buffer_size / max_keepaway_ms` (clamped to 1.0)                             |
 | `buffer_state`                             | enum string | Gauge | Buffer state (`FULL`, `EMPTY`, `DRY`, `RECOVER`, …)                          |
 | `quality_tier`                             | string      | Gauge | Rich tier label (e.g. `"1080p60 H264 @ 6Mbps"`)                              |
@@ -87,7 +88,16 @@ USER_END trigger (uploaded/downloaded bytes total)
 **Where packet loss + jitter live**
 
 - Packet loss rate is derived from client QoE rollups (`client_qoe_5m.pkt_loss_rate`).
-- Jitter is stored in `stream_health_samples.frame_jitter_ms` (from `StreamBufferTrigger.stream_jitter_ms`) with 5m rollups in `stream_health_5m.avg_frame_jitter_ms` and `stream_health_5m.max_frame_jitter_ms`. Per-track jitter is also available inside `track_metadata`.
+- Stream-wide jitter is stored in `stream_health_samples.frame_jitter_ms` from both `StreamBufferTrigger.stream_jitter_ms` and the primary 10-second `StreamLifecycleUpdate.jitter_ms` producer. It has 5m rollups in `stream_health_5m.avg_frame_jitter_ms` and `stream_health_5m.max_frame_jitter_ms`. Per-track jitter is also available inside `track_metadata`.
+- Presence and value are independent for `buffer_size`, `buffer_health`,
+  `max_keepaway_ms`, and `frame_jitter_ms`: a
+  producer-supplied zero is retained as zero, while an absent field remains `NULL`.
+  This distinction is required for correct source fidelity and must not be implemented
+  with a `value > 0` presence check.
+- Historical `stream_health_samples` written before the v0.3.0 fidelity change may
+  represent a supplied zero as `NULL`. Because ClickHouse averages ignore `NULL`,
+  aggregates spanning that deployment boundary are not strictly comparable to
+  post-change aggregates that correctly include zero-valued samples.
 
 ### 4. Real-time Viewer Metrics (Live Dashboard)
 
@@ -137,6 +147,26 @@ at read time (`quantileIf` over boots that reached first frame), not pre-rolled.
 | `prebuffer_ms`       | ms   | Initial buffering before first frame    |
 
 Ingest exposes `periscope_player_boot_events_total{status}` (Counter; `processed`/`error`).
+
+### Client Session Correlation (landed)
+
+`client_session_id` is an opaque, attach-scoped diagnostic identifier. The browser
+generates it only when `telemetry.session` is enabled and sends it as `fwsid` on Mist
+playback and stream-info URLs. It has no unit, must match `[A-Za-z0-9._-]{1,64}`, and
+must never be interpreted as a viewer, account, billing, or globally unique identity.
+It may be absent or ambiguous when Mist reuses a token-backed session, so all joins are
+best-effort and bounded by tenant, content, and time.
+
+Stored request URLs are diagnostic dimensions, not authentication records. Ingest rebuilds
+the retained query from an explicit allowlist containing only a validated `fwsid`; every
+other parameter, URL userinfo, and the fragment are discarded. If only the query is malformed,
+ingest retains a safely reparsed scheme/host/path prefix; an unparseable path stores an empty URL.
+Session-detail reads must collapse both source tables before joining;
+joining raw browser beacons to raw Mist connection events multiplies rows and corrupts
+additive QoE counters. The collapsed browser-session surface is keyset-paginated before
+connection lookup; only IDs on the selected page participate in that lookup. Unmatched
+connection dimensions use semantic empty values, not storage-type defaults such as
+NUL-padded `FixedString` bytes.
 
 ## Counter vs Gauge Semantics
 
@@ -243,6 +273,77 @@ MistServer's per-stream counters (`streams[x].bw`, `streams[x].tot`) reset when 
 | `helmsman_trigger_wal_pending`              | Gauge   | Final/accounting Mist triggers awaiting a positive Foghorn acknowledgement |
 | `helmsman_trigger_wal_appends_total`        | Counter | Trigger-WAL append, duplicate, and error outcomes                          |
 | `helmsman_trigger_ack_outcomes_total`       | Counter | Foghorn trigger acknowledgement outcomes                                   |
+
+### Helmsman stream WebSocket metrics
+
+| Metric                                | Type    | Meaning                                                                |
+| ------------------------------------- | ------- | ---------------------------------------------------------------------- |
+| `helmsman_stream_ws_connections`      | Gauge   | `1` while the MistController change-detector socket is open            |
+| `helmsman_stream_ws_reconnects_total` | Counter | Reconnect attempts after the initial WebSocket dial                    |
+| `helmsman_stream_ws_nudges_total`     | Counter | Relevant status/input/output changes queued for targeted refresh       |
+| `helmsman_stream_ws_refreshes_total`  | Counter | Batched filtered `active_streams` API requests made by the accelerator |
+
+These metrics describe latency acceleration, not source-of-truth health. Alerting
+must retain the normal poll/control-trigger signals. A sustained zero connection
+gauge plus increasing reconnects indicates that Helmsman is operating on its
+unchanged polling backstop. Helmsman sends periodic WebSocket pings and requires
+pongs within a bounded read window, so a half-open or wedged controller connection
+is closed, reflected in the gauge, and reconnected instead of remaining indefinitely
+reported as open.
+
+Each configured Mist node is owned by one immutable Helmsman runtime generation: node
+identity, authoritative and accelerator API-client lanes, cancellation, serialized
+requests, WebSocket queue, edge-API request lifetime, and spawned poll work change
+together. Replacement cancels the old generation, publishes the new one without waiting
+on an active transport write, and joins retired work asynchronously; shutdown joins all
+current and retired work before returning. A different node clears
+vanish/admission/observation maps; re-registering the same node preserves pending offline
+and reconciliation evidence. Observation IDs remain monotonic across both paths.
+Node-metric forwarding
+runs in a joined worker with a bounded deadline and one-slot wake coalescing, so a slow
+control send cannot block the monitor update consumer. Because gRPC streaming sends have no
+per-message cancellation, every send—including context-free heartbeat, relay, and outbox
+writes—gets an independent 15-second transport watchdog that begins only after it owns the
+send lane. The ordinary non-blocking send budget remains five seconds, so transient
+flow-control backpressure can outlive a caller without immediately recycling the shared
+stream. A caller context governs lane acquisition. After ownership, explicit cancellation is
+not transport-failure evidence; a caller deadline may stop waiting while the serialized
+write retains the lane until it completes or reaches the transport watchdog. Non-blocking
+Mist webhooks do not inherit browser/request disconnects. If an active write
+exceeds its transport deadline, Helmsman cancels its owning control stream; the serialized
+send lane is released and the normal reconnect loop creates a fresh stream. Node-runtime
+cancellation is propagated through lifecycle sends, so replacement and shutdown cannot wait
+forever on an unread control connection.
+Once shutdown marks the monitor stopped under its node-lifecycle lock, later desired-state
+add/remove callbacks are ignored and cannot register new retirement work while shutdown waits.
+
+The controller's initial stream dump has a fixed connect-relative warm-up deadline, so
+continuous traffic cannot extend bootstrap indefinitely. Deadline expiry requests one
+authoritative full sweep. Until that succeeds, first-seen tail frames remain bootstrap
+snapshot data while changes to already observed streams stay actionable; this recovers
+warm-up transitions without turning a slow dump tail into targeted-refresh bursts. Full polls and targeted
+refreshes carry monotonic observation IDs; the per-stream claim is held through trigger
+send so rows cannot publish out of order. A targeted read newer than an in-flight poll is
+merged into one stable presence snapshot used by source leases, vanish detection, admitted
+runtime reconciliation, and freshness pruning. It suppresses absence only for that stream;
+the next authoritative poll confirms or removes it, and boot reconciliation still completes.
+Failed targeted refreshes request a full sweep without reserving freshness
+or stamping the refresh throttle. Failed full sweeps retry with bounded jittered exponential
+backoff; CAS contention waits briefly for the already-running poll instead of being classified
+as a Mist failure, and that poll's success completes bootstrap. Stream-end frames rely on the
+normal vanish diff rather than requesting an all-stream replay. Successful fallback sweeps are debounced
+to one per two seconds, and stream-frame dedup survives socket reconnects so a repeated
+initial dump is not emitted as a fresh change set. Socket dedup, refresh-throttle,
+pending-name, and observation maps are bounded; authoritative inventories prune reconnect
+dedup entries for streams no longer present, but only when those entries are not newer
+than the inventory snapshot. Targeted response ordering is assigned at request start and
+registered only after a successful response, preventing a slow pre-poll request from
+reviving state removed by the newer poll. Observation-cap overflow switches the
+accelerator to poll-only mode until a bounded authoritative inventory clears it.
+
+Source leases use a 10-second continuous-missing dwell and admitted runtime streams use
+a 20-second continuous-missing dwell after their 30-second minimum age. These are time
+windows rather than poll counts, so accelerator sweeps cannot shorten reconciliation.
 
 `helmsman_control_delivery_outcomes_total` uses these bounded pairs:
 `durable/{persisted,sent,confirmed,persist_failed}`, `bounded/evicted`, and

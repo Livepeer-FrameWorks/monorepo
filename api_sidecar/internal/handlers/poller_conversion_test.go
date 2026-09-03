@@ -220,7 +220,7 @@ func TestReconcileAdmittedRuntimePresenceRequiresDwellAndTombstonesExactGenerati
 	var sent int
 	var marked []control.AdmittedIngestGeneration
 	pm := &PrometheusMonitor{
-		admittedRuntimeMissing: make(map[admittedRuntimeIdentity]int),
+		admittedRuntimeMissing: make(map[admittedRuntimeIdentity]time.Time),
 		loadAdmittedGenerations: func() ([]control.AdmittedIngestGeneration, error) {
 			return []control.AdmittedIngestGeneration{record}, nil
 		},
@@ -240,11 +240,11 @@ func TestReconcileAdmittedRuntimePresenceRequiresDwellAndTombstonesExactGenerati
 	}
 
 	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, nil, now)
-	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, nil, now)
+	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, nil, now.Add(admittedRuntimeMissingDwell-time.Millisecond))
 	if sent != 0 {
 		t.Fatalf("sent before dwell threshold: %d", sent)
 	}
-	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, nil, now)
+	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, nil, now.Add(admittedRuntimeMissingDwell))
 	if sent != 1 || len(marked) != 1 || marked[0].RuntimeName != record.RuntimeName || marked[0].Generation != record.Generation || marked[0].ConnectorPID != record.ConnectorPID {
 		t.Fatalf("sent=%d marked=%+v, want exact admitted identity %+v", sent, marked, record)
 	}
@@ -260,7 +260,7 @@ func TestReconcileAdmittedRuntimePresenceStartsDwellAfterAdmissionGrace(t *testi
 	}
 	var sent int
 	pm := &PrometheusMonitor{
-		admittedRuntimeMissing: make(map[admittedRuntimeIdentity]int),
+		admittedRuntimeMissing: make(map[admittedRuntimeIdentity]time.Time),
 		loadAdmittedGenerations: func() ([]control.AdmittedIngestGeneration, error) {
 			return []control.AdmittedIngestGeneration{record}, nil
 		},
@@ -277,14 +277,14 @@ func TestReconcileAdmittedRuntimePresenceStartsDwellAfterAdmissionGrace(t *testi
 		pm.reconcileAdmittedRuntimePresence("node-1", present, emptySourceSet, admittedAt.Add(elapsed))
 	}
 	identity := admittedRuntimeIdentity{runtimeName: record.RuntimeName, generation: record.Generation, connectorPID: record.ConnectorPID}
-	if got := pm.admittedRuntimeMissing[identity]; got != 0 || sent != 0 {
-		t.Fatalf("pre-grace observation: dwell=%d sent=%d, want zero", got, sent)
+	if got := pm.admittedRuntimeMissing[identity]; !got.IsZero() || sent != 0 {
+		t.Fatalf("pre-grace observation: missing_since=%v sent=%d, want zero", got, sent)
 	}
 
 	pm.reconcileAdmittedRuntimePresence("node-1", present, emptySourceSet, admittedAt.Add(30*time.Second))
 	pm.reconcileAdmittedRuntimePresence("node-1", present, emptySourceSet, admittedAt.Add(40*time.Second))
-	if got := pm.admittedRuntimeMissing[identity]; got != 2 || sent != 0 {
-		t.Fatalf("post-grace dwell before threshold: dwell=%d sent=%d, want dwell=2 sent=0", got, sent)
+	if got := pm.admittedRuntimeMissing[identity]; !got.Equal(admittedAt.Add(30*time.Second)) || sent != 0 {
+		t.Fatalf("post-grace dwell before threshold: missing_since=%v sent=%d", got, sent)
 	}
 	pm.reconcileAdmittedRuntimePresence("node-1", present, emptySourceSet, admittedAt.Add(50*time.Second))
 	if sent != 1 {
@@ -302,7 +302,7 @@ func TestReconcileAdmittedRuntimePresencePresentAndReplacementResetDwell(t *test
 	}
 	var sent int
 	pm := &PrometheusMonitor{
-		admittedRuntimeMissing: make(map[admittedRuntimeIdentity]int),
+		admittedRuntimeMissing: make(map[admittedRuntimeIdentity]time.Time),
 		loadAdmittedGenerations: func() ([]control.AdmittedIngestGeneration, error) {
 			return []control.AdmittedIngestGeneration{record}, nil
 		},
@@ -314,20 +314,21 @@ func TestReconcileAdmittedRuntimePresencePresentAndReplacementResetDwell(t *test
 	}
 
 	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, nil, now)
-	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{record.RuntimeName: {}}, map[string]map[int64]struct{}{record.RuntimeName: {record.ConnectorPID: {}}}, now)
-	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, nil, now)
-	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, nil, now)
+	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{record.RuntimeName: {}}, map[string]map[int64]struct{}{record.RuntimeName: {record.ConnectorPID: {}}}, now.Add(time.Second))
+	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, nil, now.Add(2*time.Second))
+	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, nil, now.Add(2*time.Second+admittedRuntimeMissingDwell-time.Millisecond))
 	if sent != 0 {
 		t.Fatalf("presence did not reset absence dwell: sent=%d", sent)
 	}
 
 	record.Generation = "generation-2"
-	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, nil, now)
-	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, nil, now)
+	replacementMissing := now.Add(3 * time.Second)
+	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, nil, replacementMissing)
+	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, nil, replacementMissing.Add(admittedRuntimeMissingDwell-time.Millisecond))
 	if sent != 0 {
 		t.Fatalf("replacement generation inherited stale dwell: sent=%d", sent)
 	}
-	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, nil, now)
+	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, nil, replacementMissing.Add(admittedRuntimeMissingDwell))
 	if sent != 1 {
 		t.Fatalf("replacement generation was not sent after its own dwell: sent=%d", sent)
 	}
@@ -343,7 +344,7 @@ func TestReconcileAdmittedRuntimePresenceRequiresExactSourcePID(t *testing.T) {
 	}
 	var sent int
 	pm := &PrometheusMonitor{
-		admittedRuntimeMissing: make(map[admittedRuntimeIdentity]int),
+		admittedRuntimeMissing: make(map[admittedRuntimeIdentity]time.Time),
 		loadAdmittedGenerations: func() ([]control.AdmittedIngestGeneration, error) {
 			return []control.AdmittedIngestGeneration{record}, nil
 		},
@@ -355,9 +356,8 @@ func TestReconcileAdmittedRuntimePresenceRequiresExactSourcePID(t *testing.T) {
 	}
 	present := map[string]struct{}{record.RuntimeName: {}}
 	replacement := map[string]map[int64]struct{}{record.RuntimeName: {99: {}}}
-	for range admittedRuntimeMissingPollThreshold {
-		pm.reconcileAdmittedRuntimePresence("node-1", present, replacement, now)
-	}
+	pm.reconcileAdmittedRuntimePresence("node-1", present, replacement, now)
+	pm.reconcileAdmittedRuntimePresence("node-1", present, replacement, now.Add(admittedRuntimeMissingDwell))
 	if sent != 1 {
 		t.Fatalf("same runtime name with a replacement source pid sent=%d, want 1 offline reconciliation", sent)
 	}
@@ -392,7 +392,7 @@ func TestReconcileAdmittedRuntimePresenceRetriesAbortedAcknowledgement(t *testin
 	}
 	var sent, marked int
 	pm := &PrometheusMonitor{
-		admittedRuntimeMissing: make(map[admittedRuntimeIdentity]int),
+		admittedRuntimeMissing: make(map[admittedRuntimeIdentity]time.Time),
 		loadAdmittedGenerations: func() ([]control.AdmittedIngestGeneration, error) {
 			return []control.AdmittedIngestGeneration{record}, nil
 		},
@@ -406,13 +406,12 @@ func TestReconcileAdmittedRuntimePresenceRetriesAbortedAcknowledgement(t *testin
 		},
 	}
 
-	for range admittedRuntimeMissingPollThreshold {
-		pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, nil, now)
-	}
+	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, nil, now)
+	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, nil, now.Add(admittedRuntimeMissingDwell))
 	if sent != 1 || marked != 0 {
 		t.Fatalf("aborted acknowledgement must stay pending: sent=%d marked=%d", sent, marked)
 	}
-	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, nil, now)
+	pm.reconcileAdmittedRuntimePresence("node-1", map[string]struct{}{}, nil, now.Add(admittedRuntimeMissingDwell+time.Second))
 	if sent != 2 || marked != 1 {
 		t.Fatalf("next poll must retry and tombstone after success: sent=%d marked=%d", sent, marked)
 	}

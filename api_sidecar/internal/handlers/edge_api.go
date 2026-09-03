@@ -34,15 +34,16 @@ func HandleEdgeStatus(c *gin.Context) {
 
 // HandleEdgeHealth returns health status of the local services.
 func HandleEdgeHealth(c *gin.Context) {
-	if prometheusMonitor == nil {
+	pm := prometheusMonitor
+	if pm == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "monitor not initialized"})
 		return
 	}
 
-	prometheusMonitor.mutex.RLock()
-	healthy := prometheusMonitor.isHealthy
-	lastSeen := prometheusMonitor.lastSeen
-	prometheusMonitor.mutex.RUnlock()
+	pm.mutex.RLock()
+	healthy := pm.isHealthy
+	lastSeen := pm.lastSeen
+	pm.mutex.RUnlock()
 
 	c.JSON(http.StatusOK, gin.H{
 		"healthy":        healthy,
@@ -54,14 +55,25 @@ func HandleEdgeHealth(c *gin.Context) {
 
 // HandleEdgeStreams returns active streams with viewer counts and bandwidth.
 func HandleEdgeStreams(c *gin.Context) {
-	if prometheusMonitor == nil {
+	pm := prometheusMonitor
+	if pm == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "monitor not initialized"})
 		return
 	}
-
-	prometheusMonitor.mistMu.Lock()
-	apiResponse, err := prometheusMonitor.mistClient.GetActiveStreams()
-	prometheusMonitor.mistMu.Unlock()
+	runtime := pm.currentNodeRuntime()
+	if runtime == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "MistServer node unavailable"})
+		return
+	}
+	ctx, cancel := runtime.requestContext(c.Request.Context())
+	defer cancel()
+	runtime.clientMu.Lock()
+	apiResponse, err := runtime.client.GetActiveStreamsContext(ctx)
+	runtime.clientMu.Unlock()
+	if !pm.nodeRuntimeCurrent(runtime) {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "MistServer node changed during request"})
+		return
+	}
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to query MistServer", "detail": err.Error()})
 		return
@@ -99,7 +111,7 @@ func HandleEdgeStreams(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"node_id": control.GetNodeID(),
+		"node_id": runtime.nodeID,
 		"count":   len(streams),
 		"streams": streams,
 	})
@@ -113,14 +125,25 @@ func HandleEdgeStreamDetail(c *gin.Context) {
 		return
 	}
 
-	if prometheusMonitor == nil {
+	pm := prometheusMonitor
+	if pm == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "monitor not initialized"})
 		return
 	}
-
-	prometheusMonitor.mistMu.Lock()
-	info, err := prometheusMonitor.mistClient.GetStreamInfo(streamName)
-	prometheusMonitor.mistMu.Unlock()
+	runtime := pm.currentNodeRuntime()
+	if runtime == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "MistServer node unavailable"})
+		return
+	}
+	ctx, cancel := runtime.requestContext(c.Request.Context())
+	defer cancel()
+	runtime.clientMu.Lock()
+	info, err := runtime.client.GetStreamInfoContext(ctx, streamName)
+	runtime.clientMu.Unlock()
+	if !pm.nodeRuntimeCurrent(runtime) {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "MistServer node changed during request"})
+		return
+	}
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to query stream", "detail": err.Error()})
 		return
@@ -131,41 +154,62 @@ func HandleEdgeStreamDetail(c *gin.Context) {
 
 // HandleEdgeClients returns active client connections.
 func HandleEdgeClients(c *gin.Context) {
-	if prometheusMonitor == nil {
+	pm := prometheusMonitor
+	if pm == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "monitor not initialized"})
 		return
 	}
-
-	prometheusMonitor.mistMu.Lock()
-	clientData, err := prometheusMonitor.mistClient.GetClients()
-	prometheusMonitor.mistMu.Unlock()
+	runtime := pm.currentNodeRuntime()
+	if runtime == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "MistServer node unavailable"})
+		return
+	}
+	ctx, cancel := runtime.requestContext(c.Request.Context())
+	defer cancel()
+	runtime.clientMu.Lock()
+	clientData, err := runtime.client.GetClientsContext(ctx)
+	runtime.clientMu.Unlock()
+	if !pm.nodeRuntimeCurrent(runtime) {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "MistServer node changed during request"})
+		return
+	}
 	if err != nil {
 		c.JSON(http.StatusBadGateway, gin.H{"error": "failed to query clients", "detail": err.Error()})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"node_id": control.GetNodeID(),
+		"node_id": runtime.nodeID,
 		"clients": clientData,
 	})
 }
 
 // HandleEdgeMetrics returns a bandwidth and resource snapshot from the last poll.
 func HandleEdgeMetrics(c *gin.Context) {
-	if prometheusMonitor == nil {
+	pm := prometheusMonitor
+	if pm == nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "monitor not initialized"})
 		return
 	}
+	runtime := pm.currentNodeRuntime()
+	if runtime == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "MistServer node unavailable"})
+		return
+	}
 
-	prometheusMonitor.mutex.RLock()
-	jsonData := prometheusMonitor.lastJSONData
-	bwUp := prometheusMonitor.lastBwUp
-	bwDown := prometheusMonitor.lastBwDown
-	lastPoll := prometheusMonitor.lastPollTime
-	prometheusMonitor.mutex.RUnlock()
+	pm.mutex.RLock()
+	jsonData := pm.lastJSONData
+	bwUp := pm.lastBwUp
+	bwDown := pm.lastBwDown
+	lastPoll := pm.lastPollTime
+	pm.mutex.RUnlock()
+	if !pm.nodeRuntimeCurrent(runtime) {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "MistServer node changed during request"})
+		return
+	}
 
 	result := gin.H{
-		"node_id":        control.GetNodeID(),
+		"node_id":        runtime.nodeID,
 		"last_poll":      lastPoll,
 		"bandwidth_up":   bwUp,
 		"bandwidth_down": bwDown,

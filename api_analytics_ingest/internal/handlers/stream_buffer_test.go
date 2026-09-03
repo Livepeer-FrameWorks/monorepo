@@ -48,10 +48,12 @@ func TestProcessStreamBuffer_MapsAndStripsPrefix(t *testing.T) {
 
 	streamID := uuid.NewString()
 	sb := &ipcpb.StreamBufferTrigger{
-		StreamName:  "live+abc123",
-		BufferState: "FULL",
-		TrackCount:  proto.Int32(2),
-		QualityTier: proto.String("1080p"),
+		StreamName:     "live+abc123",
+		BufferState:    "FULL",
+		TrackCount:     proto.Int32(2),
+		QualityTier:    proto.String("1080p"),
+		StreamJitterMs: proto.Int32(17),
+		MaxKeepawayMs:  proto.Int32(8_000),
 		Tracks: []*ipcpb.StreamTrack{
 			{TrackType: "video", Width: proto.Int32(1920), Height: proto.Int32(1080), Fps: proto.Float64(30), Codec: "H264", BitrateKbps: proto.Int32(5000)},
 			{TrackType: "audio", Codec: "AAC", Channels: proto.Int32(2), SampleRate: proto.Int32(48000), BitrateKbps: proto.Int32(128)},
@@ -90,6 +92,40 @@ func TestProcessStreamBuffer_MapsAndStripsPrefix(t *testing.T) {
 	// primary_width column (index 14) is a *uint16 from the primary video track.
 	if w, ok := ev[14].(*uint16); !ok || w == nil || *w != 1920 {
 		t.Errorf("primary_width = %v, want *uint16(1920) from the video track", ev[14])
+	}
+
+	// stream_health_samples carries the raw denominator alongside its derived
+	// ratio, and keeps stream-wide jitter on both health producer paths.
+	health := batch.rows[1]
+	if maxKeepaway, ok := health[25].(*uint32); !ok || maxKeepaway == nil || *maxKeepaway != 8_000 {
+		t.Errorf("max_keepaway_ms = %v, want *uint32(8000)", health[25])
+	}
+	if jitter, ok := health[20].(*float32); !ok || jitter == nil || *jitter != 17 {
+		t.Errorf("frame_jitter_ms = %v, want *float32(17)", health[20])
+	}
+}
+
+func TestProcessStreamBuffer_PreservesPresentZeroKeepawayAndJitter(t *testing.T) {
+	batch := &captureBatch{}
+	h := &AnalyticsHandler{clickhouse: &captureClickhouse{batch: batch}, logger: logging.NewLoggerWithService("test")}
+	streamID := uuid.NewString()
+	sb := &ipcpb.StreamBufferTrigger{
+		StreamName: "live+perfect", BufferState: "FULL",
+		StreamJitterMs: proto.Int32(0), MaxKeepawayMs: proto.Int32(0),
+	}
+	event := mistTriggerEvent(t, typedWriterTestTenantID, time.Unix(1_700_000_000, 0).UTC(), &ipcpb.MistTrigger{
+		StreamId: proto.String(streamID), NodeId: "node-1",
+		TriggerPayload: &ipcpb.MistTrigger_StreamBuffer{StreamBuffer: sb},
+	})
+	if err := h.processStreamBuffer(context.Background(), event); err != nil {
+		t.Fatalf("processStreamBuffer: %v", err)
+	}
+	health := batch.rows[1]
+	if got, ok := health[25].(*uint32); !ok || got == nil || *got != 0 {
+		t.Fatalf("present max_keepaway_ms zero = %#v, want *uint32(0)", health[25])
+	}
+	if got, ok := health[20].(*float32); !ok || got == nil || *got != 0 {
+		t.Fatalf("present frame_jitter_ms zero = %#v, want *float32(0)", health[20])
 	}
 }
 

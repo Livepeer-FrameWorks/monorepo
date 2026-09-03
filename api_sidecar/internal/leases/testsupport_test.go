@@ -18,7 +18,7 @@ func (t *Tracker) acquireSourceForTest(streamName string, localPaths []string, k
 	defer t.mu.Unlock()
 	if existing, ok := t.sources[streamName]; ok {
 		existing.LastSeen = time.Now()
-		existing.missingPolls = 0
+		existing.missingSince = time.Time{}
 		return
 	}
 	t.installSourceLocked(streamName, localPaths, key, segmentNames, degraded)

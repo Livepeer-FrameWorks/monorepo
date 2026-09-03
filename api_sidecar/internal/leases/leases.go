@@ -23,6 +23,8 @@ import (
 // still pins the target.
 var ErrLeaseHeld = errors.New("lease held")
 
+const sourceMissingDwell = 10 * time.Second
+
 // AssetKey identifies a logical asset. For VOD the Hash is the Mist
 // internal_name (the suffix of vod+), not the artifact hash — those are not
 // the same value in Foghorn. For DVR the Hash is the dvr_artifact_id.
@@ -47,7 +49,7 @@ type SourceLease struct {
 	Degraded     bool     // dvr with unrecoverable segment list; cleanup pauses while held
 	Acquired     time.Time
 	LastSeen     time.Time
-	missingPolls int // reconciliation 2-strikes
+	missingSince time.Time
 }
 
 // ViewerLease — heat / accounting.
@@ -136,7 +138,7 @@ func (t *Tracker) AcquireResolvedSource(streamName string, localPaths []string, 
 	if existing, ok := t.sources[streamName]; ok {
 		if resolvedSourceMatches(existing, localPaths, key, segmentNames) {
 			existing.LastSeen = time.Now()
-			existing.missingPolls = 0
+			existing.missingSince = time.Time{}
 		} else {
 			t.replaceSourceResolutionLocked(existing, streamName, localPaths, key, segmentNames)
 		}
@@ -245,7 +247,7 @@ func (t *Tracker) replaceSourceResolutionLocked(existing *SourceLease, streamNam
 	existing.SegmentNames = append([]string(nil), segmentNames...)
 	existing.Degraded = false
 	existing.LastSeen = time.Now()
-	existing.missingPolls = 0
+	existing.missingSince = time.Time{}
 
 	for _, p := range existing.LocalPaths {
 		t.addPathSource(p, streamName)
@@ -306,7 +308,7 @@ func (t *Tracker) ReconcileResolvedSource(streamName string, localPaths []string
 	}
 	// Resolved lease is authoritative — preserve path/key, refresh liveness only.
 	existing.LastSeen = time.Now()
-	existing.missingPolls = 0
+	existing.missingSince = time.Time{}
 	return SourceUnchanged
 }
 
@@ -323,7 +325,7 @@ func (t *Tracker) EnsureDegradedSource(streamName string, key AssetKey) SourceOu
 	defer t.mu.Unlock()
 	if existing, ok := t.sources[streamName]; ok {
 		existing.LastSeen = time.Now()
-		existing.missingPolls = 0
+		existing.missingSince = time.Time{}
 		return SourceUnchanged
 	}
 	t.installSourceLocked(streamName, nil, key, nil, true)
@@ -575,25 +577,38 @@ func (t *Tracker) DegradedDvrCleanupActive() bool {
 	return t.degradedDvrCount > 0
 }
 
-// ReconcileSources releases SourceLeases that have been absent from Mist's
-// active-streams report for two consecutive successful polls. Callers MUST
-// only invoke after a successful GetActiveStreams call; on poll error they
-// must not call this function.
+// ReconcileSources releases SourceLeases only after a full source-missing dwell.
+// Callers MUST only invoke after a successful GetActiveStreams call; on poll
+// error they must not call this function.
 func (t *Tracker) ReconcileSources(present map[string]struct{}) []string {
+	return t.ReconcileSourcesAt(present, time.Now())
+}
+
+// ReconcileSourcesAt is ReconcileSources with an explicit authoritative
+// observation time. The elapsed-time dwell keeps accelerator sweeps from
+// shortening the protection window that was originally provided by two
+// ten-second lifecycle polls.
+func (t *Tracker) ReconcileSourcesAt(present map[string]struct{}, observedAt time.Time) []string {
 	if t == nil {
 		return nil
+	}
+	if observedAt.IsZero() {
+		observedAt = time.Now()
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	var released []string
 	for name, lease := range t.sources {
 		if _, ok := present[name]; ok {
-			lease.missingPolls = 0
-			lease.LastSeen = time.Now()
+			lease.missingSince = time.Time{}
+			lease.LastSeen = observedAt
 			continue
 		}
-		lease.missingPolls++
-		if lease.missingPolls >= 2 {
+		if lease.missingSince.IsZero() {
+			lease.missingSince = observedAt
+			continue
+		}
+		if !observedAt.Before(lease.missingSince.Add(sourceMissingDwell)) {
 			released = append(released, name)
 		}
 	}
