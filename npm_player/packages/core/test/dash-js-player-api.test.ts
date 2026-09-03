@@ -173,10 +173,15 @@ describe("DashJsPlayerImpl — text tracks", () => {
     const p = new DashJsPlayerImpl();
     inject(p, {
       dash: {},
-      video: { textTracks: [{ label: "English", language: "en", mode: "showing" }] },
+      video: {
+        textTracks: [
+          { kind: "metadata", label: "Events", language: "", mode: "hidden" },
+          { kind: "subtitles", label: "English", language: "en", mode: "showing" },
+        ],
+      },
     });
     expect(p.getTextTracks()[0]).toMatchObject({
-      id: "0",
+      id: "1",
       label: "English",
       lang: "en",
       active: true,

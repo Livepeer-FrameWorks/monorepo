@@ -61,6 +61,8 @@ export interface TrackInfo {
   codec: string;
   codecstring?: string;
   init?: string;
+  h264_profile?: string;
+  h264_level?: string;
   // Video-specific
   width?: number;
   height?: number;
@@ -134,7 +136,8 @@ export interface OnTimeMessage {
 
 export interface TracksMessage {
   type: "tracks";
-  tracks: TrackInfo[];
+  /** Selected track indices; Mist sends raw numeric ids, not track metadata. */
+  tracks?: number[];
   codecs?: string[];
 }
 
@@ -206,7 +209,7 @@ export interface FastForwardCommand {
 
 export interface TracksCommand {
   type: "tracks";
-  video?: string;
+  video?: string | null;
   audio?: string;
   subtitle?: string;
 }

@@ -80,6 +80,38 @@ describe("StreamStateClient", () => {
   // HTTP polling
   // ===========================================================================
   describe("HTTP polling", () => {
+    it("does not apply an HTTP response from a superseded stream configuration", async () => {
+      let resolveFirst!: (response: { ok: boolean; text: () => Promise<string> }) => void;
+      const first = new Promise<{ ok: boolean; text: () => Promise<string> }>((resolve) => {
+        resolveFirst = resolve;
+      });
+      globalThis.fetch = vi
+        .fn()
+        .mockImplementationOnce(() => first)
+        .mockResolvedValueOnce({
+          ok: true,
+          text: async () => JSON.stringify(makeMistResponse(true, { streamName: "stream-b" })),
+        }) as unknown as typeof globalThis.fetch;
+      const client = new StreamStateClient(makeConfig({ streamName: "stream-a" }));
+
+      client.start();
+      await vi.advanceTimersByTimeAsync(150);
+      client.updateConfig({ streamName: "stream-b" });
+      await vi.advanceTimersByTimeAsync(150);
+      expect(client.getState().streamInfo).toMatchObject({ streamName: "stream-b" });
+
+      resolveFirst({
+        ok: true,
+        text: async () => JSON.stringify(makeMistResponse(false, { error: "stale stream-a" })),
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(client.getState().status).toBe("ONLINE");
+      expect(client.getState().streamInfo).toMatchObject({ streamName: "stream-b" });
+      client.destroy();
+    });
+
     it("polls stream info on start", async () => {
       globalThis.fetch = mockFetch(makeMistResponse(true));
       const client = new StreamStateClient(makeConfig());
@@ -94,6 +126,21 @@ describe("StreamStateClient", () => {
       );
       expect(client.isOnline()).toBe(true);
       expect(client.getState().status).toBe("ONLINE");
+      client.destroy();
+    });
+
+    it("stamps the optional client session parameter on HTTP info requests", async () => {
+      globalThis.fetch = mockFetch(makeMistResponse(true));
+      const client = new StreamStateClient(
+        makeConfig({ sessionParam: () => ({ name: "fwsid", value: "attach-1" }) })
+      );
+      client.start();
+      await vi.advanceTimersByTimeAsync(150);
+
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringContaining("fwsid=attach-1"),
+        expect.any(Object)
+      );
       client.destroy();
     });
 
@@ -423,12 +470,13 @@ describe("StreamStateClient", () => {
   // ===========================================================================
   describe("WebSocket", () => {
     class MockWebSocket {
+      static CONNECTING = 0;
       static OPEN = 1;
       static CLOSED = 3;
       static instances: MockWebSocket[] = [];
       static throwOnConstruct = false;
 
-      readyState = MockWebSocket.OPEN;
+      readyState = MockWebSocket.CONNECTING;
       url: string;
       onopen: (() => void) | null = null;
       onmessage: ((event: { data: string }) => void) | null = null;
@@ -464,6 +512,8 @@ describe("StreamStateClient", () => {
       const client = new StreamStateClient(makeConfig({ useWebSocket: true, pollInterval: 500 }));
       client.start();
       await vi.advanceTimersByTimeAsync(150);
+      if (MockWebSocket.instances[0]) MockWebSocket.instances[0].readyState = MockWebSocket.OPEN;
+      MockWebSocket.instances[0]?.onopen?.();
       return client;
     }
 
@@ -476,6 +526,21 @@ describe("StreamStateClient", () => {
       expect(sock.url).toContain("json_test-stream.js");
       expect(client.getSocket()).toBe(sock as unknown as WebSocket);
       expect(client.isSocketReady()).toBe(true);
+      client.destroy();
+    });
+
+    it("stamps the optional client session parameter on WebSocket info requests", async () => {
+      globalThis.fetch = mockFetch(makeMistResponse(true));
+      const client = new StreamStateClient(
+        makeConfig({
+          useWebSocket: true,
+          sessionParam: () => ({ name: "fwsid", value: "attach-ws" }),
+        })
+      );
+      client.start();
+      await vi.advanceTimersByTimeAsync(150);
+
+      expect(MockWebSocket.instances[0].url).toContain("fwsid=attach-ws");
       client.destroy();
     });
 
@@ -519,9 +584,129 @@ describe("StreamStateClient", () => {
       expect(globalThis.fetch).toHaveBeenCalledTimes(2);
       expect(client.getSocket()).toBeNull();
 
-      // With WebSocket now disabled, HTTP polling is scheduled on the interval.
+      // HTTP polling remains active while WebSocket reconnect is pending.
       await vi.advanceTimersByTimeAsync(500);
       expect(globalThis.fetch).toHaveBeenCalledTimes(3);
+      client.destroy();
+    });
+
+    it("does not let a stale fallback poll overwrite a reconnected socket", async () => {
+      vi.spyOn(Math, "random").mockReturnValue(0.5);
+      const client = await startWithWs();
+      let resolvePoll!: (response: { ok: boolean; text: () => Promise<string> }) => void;
+      const stalePoll = new Promise<{ ok: boolean; text: () => Promise<string> }>((resolve) => {
+        resolvePoll = resolve;
+      });
+      vi.mocked(globalThis.fetch).mockImplementationOnce(() => stalePoll as Promise<Response>);
+
+      MockWebSocket.instances[0].onclose!();
+      await vi.advanceTimersByTimeAsync(1000);
+      const reconnected = MockWebSocket.instances[1];
+      reconnected.readyState = MockWebSocket.OPEN;
+      reconnected.onopen!();
+      reconnected.onmessage!({ data: JSON.stringify(makeMistResponse(true)) });
+
+      resolvePoll({
+        ok: true,
+        text: async () => JSON.stringify(makeMistResponse(false, { error: "stale poll" })),
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(client.getState().status).toBe("ONLINE");
+      client.destroy();
+    });
+
+    it("does not emit a stale fallback error after socket reconnect", async () => {
+      vi.spyOn(Math, "random").mockReturnValue(0.5);
+      const client = await startWithWs();
+      const errorHandler = vi.fn();
+      client.on("error", errorHandler);
+      let rejectPoll!: (error: Error) => void;
+      const stalePoll = new Promise<Response>((_resolve, reject) => {
+        rejectPoll = reject;
+      });
+      vi.mocked(globalThis.fetch).mockImplementationOnce(() => stalePoll);
+
+      MockWebSocket.instances[0].onclose!();
+      await vi.advanceTimersByTimeAsync(1000);
+      const reconnected = MockWebSocket.instances[1];
+      reconnected.readyState = MockWebSocket.OPEN;
+      reconnected.onopen!();
+      reconnected.onmessage!({ data: JSON.stringify(makeMistResponse(true)) });
+      rejectPoll(new Error("stale network failure"));
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(errorHandler).not.toHaveBeenCalled();
+      expect(client.getState().status).toBe("ONLINE");
+      client.destroy();
+    });
+
+    it("reconnects with exponential backoff while polling continues", async () => {
+      vi.spyOn(Math, "random").mockReturnValue(0.5);
+      const client = await startWithWs();
+
+      MockWebSocket.instances[0].onclose!();
+      await vi.advanceTimersByTimeAsync(999);
+      expect(MockWebSocket.instances).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(MockWebSocket.instances).toHaveLength(2);
+
+      MockWebSocket.instances[1].onclose!();
+      await vi.advanceTimersByTimeAsync(1999);
+      expect(MockWebSocket.instances).toHaveLength(2);
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(MockWebSocket.instances).toHaveLength(3);
+      expect(globalThis.fetch).toHaveBeenCalled();
+      client.destroy();
+    });
+
+    it("does not add an immediate HTTP request for every failed reconnect", async () => {
+      vi.spyOn(Math, "random").mockReturnValue(0.5);
+      const client = await startWithWs();
+
+      MockWebSocket.instances[0].onclose!();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(1000);
+      const requestsBeforeFailedReconnect = vi.mocked(globalThis.fetch).mock.calls.length;
+      MockWebSocket.instances[1].onclose!();
+
+      expect(globalThis.fetch).toHaveBeenCalledTimes(requestsBeforeFailedReconnect);
+      client.destroy();
+    });
+
+    it("resets reconnect backoff only after a healthy socket interval", async () => {
+      vi.spyOn(Math, "random").mockReturnValue(0.5);
+      const client = await startWithWs();
+
+      MockWebSocket.instances[0].onclose!();
+      await vi.advanceTimersByTimeAsync(1000);
+      const reconnected = MockWebSocket.instances[1];
+      reconnected.readyState = MockWebSocket.OPEN;
+      reconnected.onopen!();
+      await vi.advanceTimersByTimeAsync(60000);
+
+      reconnected.onclose!();
+      await vi.advanceTimersByTimeAsync(999);
+      expect(MockWebSocket.instances).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(MockWebSocket.instances).toHaveLength(3);
+      client.destroy();
+    });
+
+    it("does not reconnect after stop", async () => {
+      vi.spyOn(Math, "random").mockReturnValue(0.5);
+      const client = await startWithWs();
+      MockWebSocket.instances[0].onclose!();
+      client.stop();
+
+      await vi.advanceTimersByTimeAsync(30000);
+      expect(MockWebSocket.instances).toHaveLength(1);
       client.destroy();
     });
 
@@ -532,8 +717,9 @@ describe("StreamStateClient", () => {
 
       expect(client.getSocket()).toBeNull();
       expect(client.isSocketReady()).toBe(false);
-      // Initial poll + the catch-path fallback poll.
-      expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+      // The initial HTTP fallback timer remains authoritative; a failed socket
+      // construction must not add a duplicate immediate request.
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
       warnSpy.mockRestore();
       client.destroy();
     });

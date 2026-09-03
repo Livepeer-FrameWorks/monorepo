@@ -60,6 +60,7 @@ export interface PlayerControllerHostState {
     active?: boolean;
   }>;
   textTracks: Array<{ id: string; label: string; lang?: string; active: boolean }>;
+  audioTracks: Array<{ id: string; label: string; lang?: string; active: boolean }>;
   streamInfo: StreamInfo | null;
   toast: { message: string; timestamp: number } | null;
   thumbnailCues: ThumbnailCue[];
@@ -99,6 +100,7 @@ const initialState: PlayerControllerHostState = {
   subtitlesEnabled: false,
   qualities: [],
   textTracks: [],
+  audioTracks: [],
   streamInfo: null,
   toast: null,
   thumbnailCues: [],
@@ -222,6 +224,7 @@ export class PlayerControllerHost implements ReactiveController {
       subtitlesEnabled: c.isSubtitlesEnabled(),
       qualities: c.getQualities(),
       textTracks: c.getTextTracks(),
+      audioTracks: c.getAudioTracks(),
       streamInfo: c.getStreamInfo(),
       thumbnailCues: c.getThumbnailCues?.() ?? this.s.thumbnailCues,
       loadingPoster: c.getLoadingPoster?.() ?? this.s.loadingPoster,
@@ -310,6 +313,7 @@ export class PlayerControllerHost implements ReactiveController {
           currentSourceInfo: controller.getCurrentSourceInfo(),
           qualities: controller.getQualities(),
           textTracks: controller.getTextTracks(),
+          audioTracks: controller.getAudioTracks(),
           thumbnailCues: controller.getThumbnailCues?.() ?? this.s.thumbnailCues,
           loadingPoster: controller.getLoadingPoster?.() ?? this.s.loadingPoster,
           shouldShowLoadingPoster: controller.getShouldShowLoadingPoster(),
@@ -342,6 +346,7 @@ export class PlayerControllerHost implements ReactiveController {
           playbackQuality: null,
           qualities: controller.getQualities(),
           textTracks: controller.getTextTracks(),
+          audioTracks: controller.getAudioTracks(),
         });
         this.syncState();
       })
@@ -404,6 +409,12 @@ export class PlayerControllerHost implements ReactiveController {
     u.push(
       controller.on("captionsChange", ({ enabled }) => {
         this.update({ subtitlesEnabled: enabled, textTracks: controller.getTextTracks() });
+      })
+    );
+
+    u.push(
+      controller.on("tracksChange", ({ textTracks, audioTracks }) => {
+        this.update({ textTracks, audioTracks });
       })
     );
 
@@ -546,6 +557,13 @@ export class PlayerControllerHost implements ReactiveController {
   }
   selectTextTrack(id: string | null) {
     this.controller?.selectTextTrack(id);
+  }
+  getAudioTracks() {
+    return this.controller?.getAudioTracks() ?? [];
+  }
+  selectAudioTrack(id: string) {
+    this.controller?.selectAudioTrack(id);
+    this.update({ audioTracks: this.controller?.getAudioTracks() ?? [] });
   }
   setPlaybackRate(rate: number) {
     this.controller?.setPlaybackRate(rate);

@@ -78,6 +78,8 @@ export interface BootTrace {
 
 export interface BootTracerConfig {
   contentId: string;
+  /** Optional attach-scoped correlation id shared with session QoE telemetry. */
+  sessionId?: string;
   contentType?: ContentType;
   playerVersion?: string;
   /** Invoked exactly once when the trace finalizes. */
@@ -142,10 +144,11 @@ export class BootTracer {
     Pick<BootResourceTiming, "cacheStatus" | "ageSeconds">
   >();
   readonly traceId = generateId();
-  readonly sessionId = generateId();
+  readonly sessionId: string;
 
   constructor(config: BootTracerConfig) {
     this.config = config;
+    this.sessionId = config.sessionId ?? generateId();
     this.mark("boot_start");
   }
 

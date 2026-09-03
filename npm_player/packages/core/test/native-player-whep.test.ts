@@ -268,4 +268,26 @@ describe("NativePlayer WHEP control channel", () => {
       type: "play",
     });
   });
+
+  it("emits one track-list change for each distinct WHEP on_time track set", async () => {
+    const player = new NativePlayerImpl();
+    const changed = vi.fn();
+    player.on("trackschange", changed);
+
+    await player.initialize(
+      makeContainer(),
+      { type: "whep", url: "https://mist.example.test/view/webrtc/live" },
+      { autoplay: true, muted: true, controls: false },
+      streamInfo
+    );
+
+    const update = JSON.stringify({
+      type: "on_time",
+      data: { current: 0, begin: 0, end: 0, tracks: ["1", "2"], paused: true },
+    });
+    lastDataChannel?.dispatch("message", { data: update });
+    lastDataChannel?.dispatch("message", { data: update });
+
+    expect(changed).toHaveBeenCalledTimes(1);
+  });
 });

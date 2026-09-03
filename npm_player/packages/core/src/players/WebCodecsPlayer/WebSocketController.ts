@@ -18,6 +18,7 @@ import type {
   InfoMessage,
   OnTimeMessage,
   SetSpeedMessage,
+  TracksMessage,
   RawChunk,
   TrackInfo,
 } from "./types";
@@ -40,7 +41,7 @@ export interface WebSocketControllerEvents {
   info: InfoMessage;
   ontime: OnTimeMessage;
   setspeed: SetSpeedMessage;
-  tracks: TrackInfo[];
+  tracks: TracksMessage;
   chunk: RawChunk;
   pause: { paused: boolean; reason?: string; begin?: number; end?: number };
   stop: void;
@@ -199,7 +200,7 @@ export class WebSocketController {
     return this.send({ type: "fast_forward", ff_add: Math.round(ms) });
   }
 
-  setTracks(options: { video?: string; audio?: string; subtitle?: string }): boolean {
+  setTracks(options: { video?: string | null; audio?: string }): boolean {
     return this.send({ type: "tracks", ...options });
   }
 
@@ -379,7 +380,7 @@ export class WebSocketController {
         }
 
         case "tracks":
-          this.emit("tracks", (message as any).tracks);
+          this.emit("tracks", message as TracksMessage);
           break;
 
         case "on_stop":

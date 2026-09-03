@@ -246,8 +246,9 @@ describe("BasePlayer", () => {
     const player = new TestPlayer();
     const video = createMockVideo();
     const tracks = [
-      { label: "", language: "en", mode: "disabled" },
-      { label: "English", language: "en", mode: "showing" },
+      { kind: "captions", label: "", language: "en", mode: "disabled" },
+      { kind: "chapters", label: "Chapters", language: "en", mode: "hidden" },
+      { kind: "subtitles", label: "English", language: "en", mode: "showing" },
     ];
     (video as any).textTracks = tracks;
     player.setVideoElement(video);
@@ -255,16 +256,18 @@ describe("BasePlayer", () => {
     const mapped = player.getTextTracks();
     expect(mapped).toEqual([
       { id: "0", label: "CC 1", lang: "en", active: false },
-      { id: "1", label: "English", lang: "en", active: true },
+      { id: "2", label: "English", lang: "en", active: true },
     ]);
 
     player.selectTextTrack("0");
     expect(tracks[0].mode).toBe("showing");
-    expect(tracks[1].mode).toBe("disabled");
+    expect(tracks[1].mode).toBe("hidden");
+    expect(tracks[2].mode).toBe("disabled");
 
     player.selectTextTrack(null);
     expect(tracks[0].mode).toBe("disabled");
-    expect(tracks[1].mode).toBe("disabled");
+    expect(tracks[1].mode).toBe("hidden");
+    expect(tracks[2].mode).toBe("disabled");
   });
 
   it("detects live streams and jumps to live edge", () => {

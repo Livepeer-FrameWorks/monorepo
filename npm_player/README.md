@@ -261,7 +261,13 @@ Full `CreatePlayerConfig` accepted by `createPlayer()`:
 | `locale`         | `string`                                             | `"en"`      | UI language (`en`, `es`, `fr`, `de`, `nl`)            |
 | `translations`   | `Partial<TranslationStrings>`                        | —           | Custom UI string overrides layered over the locale    |
 | `skin`           | `string \| SkinDefinition \| false`                  | `"default"` | Skin name, inline definition, or `false` for headless |
+| `telemetry`      | `{ boot?: boolean; session?: boolean }`              | off         | Opt-in lossy startup and session QoE diagnostics      |
 | `debug`          | `boolean`                                            | `false`     | Debug logging                                         |
+
+Session telemetry generates a fresh ephemeral identifier for each `attach()` and places
+it in Mist playback, stream-info, and timed-metadata URLs as `fwsid`. It correlates player QoE with edge
+connection diagnostics; it is not a viewer/account identifier and must not be used for
+billing. Both telemetry modes are default-off.
 
 ### Source Resolution
 
@@ -356,6 +362,27 @@ createPlayer({
 | Native WHEP  | WebRTC         | Browser-native WebRTC           |
 | WebCodecs    | WebSocket      | Frame-accurate, background-safe |
 | Native HLS   | HLS            | Safari native                   |
+
+WebCodecs direct rendering uses Canvas2D on iPhone and iPad, including iPads using a desktop Safari user agent, because those devices cannot safely upload `VideoFrame` objects as WebGL textures. Subtitle strings are rendered literally even when their text happens to be valid JSON. WebCodecs renders through its own metadata socket; MEWS and WHEP use the controller-owned timed-subtitle overlay renderer, which honors cue end times and transport durations. The controller keeps desired, explicit, and applied caption state separate: requested enablement updates immediately, an enable request made before tracks arrive remains retryable, an absent explicit language is not replaced by a fallback, a second toggle can cancel the pending request, and a temporarily missing selected track is reapplied when it returns. Reactive track-change events update every bundled UI.
+
+Caption controls only enumerate and change `subtitles`/`captions` text tracks; chapter
+and metadata tracks keep their cue-loading mode for host application listeners.
+
+Audio and subtitle menu values use Mist's absolute track identity (`idx`, or a numeric
+metadata-record key when `idx` is absent). A track without a stable transport identity is
+not offered as selectable; its filtered array position is never sent to Mist. Native WHEP
+keeps the user's desired quality and audio choices while signaling is offline and replays
+them whenever a replacement control channel opens. Mist implements `tracks` per output:
+MEWS, Native WHEP, and Mist WebRTC accept video and audio selectors, while subtitles
+remain owned by the metadata renderer. WebCodecs `ws/video/h264` accepts video-only
+selection and restores Auto by removing the server selector; `ws/video/raw` accepts no
+track commands, so the player hides its unsupported quality and audio controls instead of
+showing locally active no-op choices. WebCodecs replays supported H264 selection and its
+metadata subscriptions on the independent timed-metadata socket, and repeats codec
+negotiation on every socket generation. WebCodecs marks selected
+subtitle subscriptions explicitly. For compatibility, the public two-argument subtitle
+subscription also treats otherwise untyped plain cues as subtitles; generic callers can
+declare `unknown` explicitly.
 
 ### Keyboard Shortcuts
 

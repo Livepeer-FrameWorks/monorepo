@@ -549,6 +549,8 @@ export interface MetaTrackEvent {
   timestamp: number;
   trackId: string;
   data: unknown;
+  /** Optional event duration in milliseconds when supplied by the transport. */
+  durationMs?: number;
 }
 
 export interface SubtitleCue {

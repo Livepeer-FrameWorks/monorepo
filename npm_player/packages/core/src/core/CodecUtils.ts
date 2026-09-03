@@ -10,6 +10,8 @@ export interface TrackInfo {
   codec: string;
   init?: string;
   codecstring?: string;
+  h264_profile?: string;
+  h264_level?: string;
   width?: number;
   height?: number;
   bps?: number;
@@ -84,7 +86,7 @@ export function translateCodec(track: TrackInfo): string {
       case "AVC1": {
         // Try to extract profile/level from init data
         const profileLevel = extractH264Profile(track.init);
-        return profileLevel || "avc1.42E01E"; // Default: Baseline Profile, Level 3.0
+        return profileLevel || h264CodecFromMetadata(track) || "avc1.42E01E";
       }
       case "H265":
       case "HEVC":
@@ -112,6 +114,41 @@ export function translateCodec(track: TrackInfo): string {
   }
 
   return codec.toLowerCase();
+}
+
+function h264CodecFromMetadata(track: TrackInfo): string | null {
+  const profile = track.h264_profile?.trim().toLowerCase();
+  const level = track.h264_level?.trim().toLowerCase();
+  if (!profile || !level) return null;
+
+  const profilePrefix: Record<string, string> = {
+    "constrained baseline": "42e0",
+    baseline: "4200",
+    main: "4d00",
+    extended: "5800",
+    high: "6400",
+    "high-10": "6e00",
+    "high-10 intra": "6e10",
+    "high-4:2:2": "7a00",
+    "high-4:2:2 intra": "7a10",
+    "high-4:4:4": "f400",
+    "high-4:4:4 intra": "f410",
+    "cavlc 4:4:4 intra": "2c10",
+  };
+  const prefix = profilePrefix[profile];
+  if (!prefix) return null;
+
+  let levelIdc: number;
+  if (level === "1b") {
+    levelIdc = 9;
+  } else {
+    const numericLevel = Number(level);
+    if (!Number.isFinite(numericLevel) || numericLevel <= 0) return null;
+    levelIdc = Math.round(numericLevel * 10);
+  }
+  if (levelIdc > 255) return null;
+
+  return `avc1.${prefix}${toHex(levelIdc)}`;
 }
 
 function isBrowserCodecString(codecstring: string, trackType: string): boolean {

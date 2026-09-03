@@ -113,6 +113,18 @@ export class FwSettingsMenu extends LitElement {
     this._close();
   }
 
+  private _handleAudioChange(id: string): void {
+    this.pc.selectAudioTrack(id);
+    this.dispatchEvent(
+      new CustomEvent("fw-audio-track-change", {
+        detail: { audioTrack: id },
+        bubbles: true,
+        composed: true,
+      })
+    );
+    this._close();
+  }
+
   private _handleLocaleChange(locale: FwLocale): void {
     this.dispatchEvent(
       new CustomEvent("fw-locale-change", {
@@ -171,10 +183,12 @@ export class FwSettingsMenu extends LitElement {
     const qualities =
       controllerQualities.length > 0 ? controllerQualities : this._deriveFallbackQualities();
     const textTracks = state.textTracks ?? [];
+    const audioTracks = state.audioTracks ?? [];
     const activeQuality =
       this.qualityValue ?? qualities.find((quality) => quality.active)?.id ?? "auto";
     const activeCaption =
       this.captionValue ?? textTracks.find((track) => track.active)?.id ?? "none";
+    const activeAudio = audioTracks.find((track) => track.active)?.id;
 
     const supportsPlaybackRate =
       this.supportsPlaybackRate ?? coreSupportsPlaybackRate(state.videoElement);
@@ -288,6 +302,29 @@ export class FwSettingsMenu extends LitElement {
                           "fw-settings-list-item--active": activeCaption === track.id,
                         })}
                         @click=${() => this._handleCaptionChange(track.id)}
+                      >
+                        ${track.label || track.id}
+                      </button>
+                    `
+                  )}
+                </div>
+              </div>
+            `
+          : nothing}
+        ${audioTracks.length > 1
+          ? html`
+              <div class="fw-settings-section">
+                <div class="fw-settings-label">${this.pc.t("audio")}</div>
+                <div class="fw-settings-list">
+                  ${audioTracks.map(
+                    (track) => html`
+                      <button
+                        type="button"
+                        class=${classMap({
+                          "fw-settings-list-item": true,
+                          "fw-settings-list-item--active": activeAudio === track.id,
+                        })}
+                        @click=${() => this._handleAudioChange(track.id)}
                       >
                         ${track.label || track.id}
                       </button>

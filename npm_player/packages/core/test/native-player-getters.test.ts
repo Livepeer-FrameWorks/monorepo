@@ -112,19 +112,67 @@ describe("getQualities / selectQuality", () => {
     expect((p as any).controlChannel.setTracks).not.toHaveBeenCalled();
   });
 
-  it("maps 'auto' to an empty track set and a concrete id to a video track", () => {
+  it("maps 'auto' and a concrete id to explicit video track commands", () => {
     const p = new NativePlayerImpl();
     (p as any).currentMimeType = "whep";
     const cc = fakeControlChannel(true);
     (p as any).controlChannel = cc;
 
     p.selectQuality("auto");
-    expect(cc.setTracks).toHaveBeenCalledWith({});
+    expect(cc.setTracks).toHaveBeenCalledWith({ video: "auto" });
     expect((p as any).selectedTrack).toBe("auto");
 
     p.selectQuality("720p");
     expect(cc.setTracks).toHaveBeenCalledWith({ video: "720p" });
     expect((p as any).selectedTrack).toBe("720p");
+  });
+});
+
+describe("WHEP audio and subtitle selection", () => {
+  const stream: StreamInfo = {
+    source: [{ type: "whep", url: "x" }],
+    meta: {
+      tracks: [
+        { type: "audio", codec: "opus", idx: 2, lang: "en" },
+        { type: "audio", codec: "opus", idx: 3, lang: "es" },
+        { type: "meta", codec: "subtitle", idx: 4, lang: "en" },
+      ],
+    },
+    type: "live",
+  };
+
+  it("uses the audio control-channel leg and keeps subtitles controller-local", () => {
+    const p = new NativePlayerImpl();
+    const cc = fakeControlChannel(true);
+    (p as any).currentMimeType = "whep";
+    (p as any).streamInfoRef = stream;
+    (p as any).controlChannel = cc;
+
+    expect(p.getAudioTracks()).toHaveLength(2);
+    expect(p.getTextTracks()).toHaveLength(1);
+    p.selectAudioTrack("3");
+    p.selectTextTrack("4");
+    p.selectTextTrack(null);
+    expect(cc.setTracks).toHaveBeenCalledWith({ audio: "3" });
+    expect(cc.setTracks).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains desired selections between WHEP control channels and replays them", () => {
+    const p = new NativePlayerImpl();
+    (p as any).currentMimeType = "whep";
+    (p as any).controlChannel = null;
+
+    p.selectQuality("7");
+    p.selectAudioTrack("3");
+    p.selectTextTrack(null);
+
+    const replacement = fakeControlChannel(true);
+    (p as any).replayDesiredTracks(replacement);
+    expect(replacement.setTracks).toHaveBeenCalledTimes(1);
+    expect(replacement.setTracks).toHaveBeenCalledWith({
+      video: "7",
+      audio: "3",
+    });
   });
 });
 

@@ -124,6 +124,43 @@ describe("CodecUtils", () => {
     });
   });
 
+  describe("translateCodec — H264 Mist metadata", () => {
+    it.each([
+      ["Constrained baseline", "3.1", "avc1.42e01F"],
+      ["Main", "4", "avc1.4d0028"],
+      ["High", "4.1", "avc1.640029"],
+      ["High-10 Intra", "5.1", "avc1.6e1033"],
+    ])("maps %s level %s", (h264_profile, h264_level, expected) => {
+      expect(translateCodec({ codec: "H264", type: "video", h264_profile, h264_level })).toBe(
+        expected
+      );
+    });
+
+    it("prefers SPS init data over descriptive metadata", () => {
+      const init = btoa(String.fromCharCode(0, 0, 0, 1, 0x67, 0x64, 0, 0x1f));
+      expect(
+        translateCodec({
+          codec: "H264",
+          type: "video",
+          init,
+          h264_profile: "Baseline",
+          h264_level: "3",
+        })
+      ).toBe("avc1.64001F");
+    });
+
+    it("keeps the conservative fallback for unknown metadata", () => {
+      expect(
+        translateCodec({
+          codec: "H264",
+          type: "video",
+          h264_profile: "Unknown",
+          h264_level: "unknown",
+        })
+      ).toBe("avc1.42E01E");
+    });
+  });
+
   // =========================================================================
   // translateCodec — HEVC init data parsing
   // =========================================================================

@@ -4,6 +4,7 @@ import {
   PlayerController,
   buildQualityLevelsFromMistTracks,
   buildStreamInfoFromEndpoints,
+  withQueryParam,
 } from "../src/core/PlayerController";
 import { normalizeMistSourceUrls } from "../src/core/MistSourceUrls";
 import type { ContentEndpoints } from "../src/types";
@@ -44,6 +45,41 @@ describe("buildStreamInfoFromEndpoints", () => {
         expect.objectContaining({ type: "audio", codec: "Opus", codecstring: "opus" }),
       ])
     );
+  });
+});
+
+describe("client session URL stamping", () => {
+  it("sets one idempotent query parameter without losing a fragment", () => {
+    const once = withQueryParam("https://edge.test/view?tkn=1#frag", "fwsid", "attach-1");
+    expect(once).toBe("https://edge.test/view?tkn=1&fwsid=attach-1#frag");
+    expect(withQueryParam(once, "fwsid", "attach-2")).toBe(
+      "https://edge.test/view?tkn=1&fwsid=attach-2#frag"
+    );
+  });
+
+  it("stamps every endpoint only when the telemetry-gated attach id exists", () => {
+    const controller = new PlayerController({
+      contentId: "live-1",
+      playerManager: { on: vi.fn(() => () => {}) } as any,
+    });
+    (controller as any).endpoints = {
+      primary: {
+        nodeId: "node-1",
+        protocol: "WHEP",
+        url: "https://edge.test/whep?tkn=1",
+        outputs: { HLS: { protocol: "HLS", url: "https://edge.test/hls.m3u8?tkn=1" } },
+      },
+      fallbacks: [{ nodeId: "node-2", protocol: "MP4", url: "https://edge2.test/v.mp4" }],
+    };
+
+    (controller as any).applyPlaybackAuthToEndpoints();
+    expect((controller as any).endpoints.primary.url).not.toContain("fwsid");
+
+    (controller as any).clientSessionId = "attach-1";
+    (controller as any).applyPlaybackAuthToEndpoints();
+    expect((controller as any).endpoints.primary.url).toContain("fwsid=attach-1");
+    expect((controller as any).endpoints.primary.outputs.HLS.url).toContain("fwsid=attach-1");
+    expect((controller as any).endpoints.fallbacks[0].url).toContain("fwsid=attach-1");
   });
 });
 

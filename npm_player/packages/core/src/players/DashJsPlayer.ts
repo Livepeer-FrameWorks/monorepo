@@ -1,4 +1,4 @@
-import { BasePlayer } from "../core/PlayerInterface";
+import { BasePlayer, isCaptionTextTrack } from "../core/PlayerInterface";
 import { checkProtocolMismatch, getBrowserInfo, isFileProtocol } from "../core/detector";
 import { translateCodec } from "../core/CodecUtils";
 import { formatQualityLabel } from "../core/TimeFormat";
@@ -189,6 +189,7 @@ export class DashJsPlayerImpl extends BasePlayer {
         this.selectTextTrack(this.pendingSubtitleId);
         this.pendingSubtitleId = null;
       }
+      this.emit("trackschange", undefined);
     });
   }
 
@@ -524,6 +525,7 @@ export class DashJsPlayerImpl extends BasePlayer {
         this.dashStreamInitialized = true;
         const isDynamic = this.dashPlayer.isDynamic?.() ?? false;
         this.debugLog("[DashJS v5] streamInitialized - isDynamic:", isDynamic);
+        this.emit("trackschange", undefined);
       });
 
       this.applyDashSettings();
@@ -852,6 +854,7 @@ export class DashJsPlayerImpl extends BasePlayer {
       const textTracks = (v.textTracks || []) as any;
       for (let i = 0; i < textTracks.length; i++) {
         const tt = textTracks[i];
+        if (!isCaptionTextTrack(tt)) continue;
         out.push({
           id: String(i),
           label: tt.label || `CC ${i + 1}`,
@@ -893,6 +896,7 @@ export class DashJsPlayerImpl extends BasePlayer {
     const list = v.textTracks as TextTrackList;
     for (let i = 0; i < list.length; i++) {
       const tt = list[i];
+      if (!isCaptionTextTrack(tt)) continue;
       if (id !== null && String(i) === id) tt.mode = "showing";
       else tt.mode = "disabled";
     }

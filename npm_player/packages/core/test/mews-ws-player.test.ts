@@ -143,7 +143,7 @@ describe("MewsWsPlayerImpl — control commands", () => {
   it("selectQuality sends a tracks command and tracks the selection", () => {
     const { p, send } = playerWithWs();
     p.selectQuality("auto");
-    expect(send).toHaveBeenCalledWith({ type: "tracks" });
+    expect(send).toHaveBeenCalledWith({ type: "tracks", video: "auto" });
     expect((p as any).selectedTrack).toBe("auto");
 
     p.selectQuality("0");
@@ -159,12 +159,41 @@ describe("MewsWsPlayerImpl — control commands", () => {
     expect(send).toHaveBeenCalledWith({ type: "tracks", audio: "2" });
   });
 
-  it("selectTextTrack maps null to 'none' and an id through", () => {
+  it("keeps text-track state local for controller-owned metadata rendering", () => {
     const { p, send } = playerWithWs();
     p.selectTextTrack(null);
-    expect(send).toHaveBeenCalledWith({ type: "tracks", subtitle: "none" });
     p.selectTextTrack("3");
-    expect(send).toHaveBeenCalledWith({ type: "tracks", subtitle: "3" });
+    expect(send).not.toHaveBeenCalled();
+    expect((p as any).selectedSubtitleTrack).toBe("3");
+  });
+
+  it("derives audio and subtitle menus and selects audio", () => {
+    const { p, send } = playerWithWs();
+    (p as any).streamInfoRef = {
+      meta: {
+        tracks: [
+          { type: "audio", codec: "AAC", idx: 2, lang: "en" },
+          { type: "audio", codec: "AAC", idx: 3, lang: "es" },
+          { type: "meta", codec: "subtitle", idx: 4, lang: "en" },
+        ],
+      },
+    };
+    expect(p.getAudioTracks()).toHaveLength(2);
+    expect(p.getTextTracks()).toHaveLength(1);
+    p.selectAudioTrack("3");
+    expect(send).toHaveBeenCalledWith({ type: "tracks", audio: "3" });
+    expect(p.getAudioTracks()[1].active).toBe(true);
+  });
+
+  it("emits track-list changes even when a Mist tracks message keeps the same codecs", () => {
+    const { p } = playerWithWs();
+    const changed = vi.fn();
+    p.on("trackschange", changed);
+    (p as any).lastCodecs = ["H264", "AAC"];
+
+    (p as any).handleTracks({ data: { codecs: ["H264", "AAC"], current: 0 } });
+
+    expect(changed).toHaveBeenCalledTimes(1);
   });
 
   it("setPlaybackRate maps rate 1 to 'auto' and other rates through", () => {
@@ -233,5 +262,41 @@ describe("MewsWsPlayerImpl — resume on reconnect", () => {
     (p as any).sbManager.paused = true;
     resume(p);
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it("replays selected video and audio tracks on socket open", () => {
+    const p = new MewsWsPlayerImpl();
+    const send = vi.fn();
+    (p as any).wsManager = {
+      send,
+      addListener: vi.fn(),
+    };
+    (p as any).supportedCodecs = ["H264", "AAC"];
+    (p as any).selectedTrack = "4";
+    (p as any).videoSelectionExplicit = true;
+    (p as any).selectedAudioTrack = "2";
+
+    (p as any).handleWsOpen();
+
+    expect(send.mock.calls).toEqual([
+      [{ type: "request_codec_data", supported_codecs: ["H264", "AAC"] }],
+      [{ type: "tracks", video: "4", audio: "2" }],
+    ]);
+  });
+
+  it("replays explicit automatic video across reconnect", () => {
+    const p = new MewsWsPlayerImpl();
+    p.selectQuality("auto");
+    p.selectTextTrack(null);
+    const send = vi.fn();
+    (p as any).wsManager = { send, addListener: vi.fn() };
+    (p as any).supportedCodecs = ["H264", "AAC"];
+
+    (p as any).handleWsOpen();
+
+    expect(send.mock.calls).toEqual([
+      [{ type: "request_codec_data", supported_codecs: ["H264", "AAC"] }],
+      [{ type: "tracks", video: "auto" }],
+    ]);
   });
 });

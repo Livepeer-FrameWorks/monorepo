@@ -231,6 +231,7 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
   }, [propQualities, player, mistTracks]);
 
   const textTracks = player?.getTextTracks?.() ?? [];
+  const audioTracks = player?.getAudioTracks?.() ?? [];
 
   // Internal state - used as fallback when props not provided
   const [internalIsPlaying, setInternalIsPlaying] = useState(false);
@@ -253,6 +254,7 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
   const volumeValue = isMuted ? 0 : actualVolume;
   const [qualityValue, setQualityValue] = useState<string>("auto");
   const [captionValue, setCaptionValue] = useState<string>("none");
+  const [audioValue, setAudioValue] = useState<string>("");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   // Hysteresis state for Live badge - prevents flip-flopping
   const [isNearLiveState, setIsNearLiveState] = useState(true);
@@ -439,6 +441,11 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
     const activeTrack = textTracks.find((track) => track.active);
     setCaptionValue(activeTrack ? activeTrack.id : "none");
   }, [textTracks]);
+
+  useEffect(() => {
+    const activeTrack = audioTracks.find((track) => track.active);
+    setAudioValue(activeTrack?.id ?? "");
+  }, [audioTracks]);
 
   // Track buffered ranges for SeekBar
   useEffect(() => {
@@ -661,6 +668,12 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
     setCaptionValue(value);
     if (value === "none") player?.selectTextTrack?.(null);
     else player?.selectTextTrack?.(value);
+  };
+
+  const handleAudioChange = (value: string) => {
+    if (disabled) return;
+    setAudioValue(value);
+    player?.selectAudioTrack?.(value);
   };
 
   // Time display - using core formatTimeDisplay
@@ -990,6 +1003,28 @@ const PlayerControls: React.FC<PlayerControlsProps> = ({
                             }}
                           >
                             {t.label || t.id}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {audioTracks.length > 1 && (
+                    <div className="fw-settings-section">
+                      <div className="fw-settings-label">{t("audio")}</div>
+                      <div className="fw-settings-list">
+                        {audioTracks.map((track) => (
+                          <button
+                            key={track.id}
+                            className={cn(
+                              "fw-settings-list-item",
+                              audioValue === track.id && "fw-settings-list-item--active"
+                            )}
+                            onClick={() => {
+                              handleAudioChange(track.id);
+                              setIsSettingsOpen(false);
+                            }}
+                          >
+                            {track.label || track.id}
                           </button>
                         ))}
                       </div>

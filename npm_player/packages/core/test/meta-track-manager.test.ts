@@ -49,6 +49,41 @@ describe("MetaTrackManager", () => {
     expect((manager as any).buildWsUrl()).toBe("wss://mist.test/json_abc.js?rate=1");
   });
 
+  it("carries the attach correlation parameter on the metadata socket", () => {
+    const manager = new MetaTrackManager({
+      mistBaseUrl: "https://mist.test",
+      streamName: "live/name",
+      sessionParam: { name: "fwsid", value: "attach-1" },
+    });
+
+    expect((manager as any).buildWsUrl()).toBe(
+      "wss://mist.test/json_live%2Fname.js?rate=1&fwsid=attach-1"
+    );
+  });
+
+  it("dispatches events to an all-tracks subscription", () => {
+    const manager = new MetaTrackManager({ mistBaseUrl: "http://mist.test", streamName: "abc" });
+    const callback = vi.fn();
+    manager.subscribe("all", callback);
+
+    (manager as any).handleMessage(JSON.stringify({ time: 0, track: 7, data: "plain cue" }));
+
+    expect(callback).toHaveBeenCalledWith(
+      expect.objectContaining({ trackId: "7", data: "plain cue" })
+    );
+  });
+
+  it("does not call the same callback twice when subscribed directly and to all tracks", () => {
+    const manager = new MetaTrackManager({ mistBaseUrl: "http://mist.test", streamName: "abc" });
+    const callback = vi.fn();
+    manager.subscribe("7", callback);
+    manager.subscribe("all", callback);
+
+    (manager as any).handleMessage(JSON.stringify({ time: 0, track: 7, data: "plain cue" }));
+
+    expect(callback).toHaveBeenCalledTimes(1);
+  });
+
   it("connects with debounce, sends tracks and seek", () => {
     const manager = new MetaTrackManager({ mistBaseUrl: "http://mist.test", streamName: "abc" });
     manager.subscribe("1", vi.fn());
@@ -153,6 +188,18 @@ describe("MetaTrackManager", () => {
     expect(cb).toHaveBeenCalledWith(
       expect.objectContaining({ type: "subtitle", trackId: "1", timestamp: 1000 })
     );
+  });
+
+  it("treats a null cue duration as absent", () => {
+    const manager = new MetaTrackManager({ mistBaseUrl: "http://mist.test", streamName: "abc" });
+    const event = (manager as any).parseMetaTrackEvent({
+      time: 1000,
+      track: 7,
+      data: { text: "Hello" },
+      duration: null,
+    });
+
+    expect(event.durationMs).toBeUndefined();
   });
 
   it("dispatches non-timed events after playback time advances past them", () => {
@@ -341,5 +388,16 @@ describe("MetaTrackManager", () => {
 
     vi.advanceTimersByTime(1100);
     expect(MockWebSocket.instances.length).toBe(2);
+  });
+
+  it("preserves transport cue duration for subtitle rendering", () => {
+    const manager = new MetaTrackManager({ mistBaseUrl: "http://mist.test", streamName: "abc" });
+    const event = (manager as any).parseMetaTrackEvent({
+      track: 7,
+      time: 1_000,
+      duration: 750,
+      data: "Hello",
+    });
+    expect(event).toMatchObject({ trackId: "7", timestamp: 1_000, durationMs: 750 });
   });
 });

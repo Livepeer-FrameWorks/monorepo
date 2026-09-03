@@ -1,4 +1,4 @@
-import { BasePlayer } from "../core/PlayerInterface";
+import { BasePlayer, isCaptionTextTrack } from "../core/PlayerInterface";
 import { checkProtocolMismatch, getBrowserInfo, isFileProtocol } from "../core/detector";
 import { translateCodec } from "../core/CodecUtils";
 import { formatQualityLabel } from "../core/TimeFormat";
@@ -317,6 +317,12 @@ export class HlsJsPlayerImpl extends BasePlayer {
           // DVR seeking is handled natively by HLS.js through the playlist —
           // no startunix URL rewriting needed (that's only for progressive formats).
         });
+        this.hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, () => {
+          if (!this.destroyed) this.emit("trackschange", undefined);
+        });
+        this.hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, () => {
+          if (!this.destroyed) this.emit("trackschange", undefined);
+        });
         if (this.destroyed) {
           throw new Error("HLS player destroyed during initialization");
         }
@@ -487,6 +493,7 @@ export class HlsJsPlayerImpl extends BasePlayer {
     const out: any[] = [];
     for (let i = 0; i < list.length; i++) {
       const tt = list[i];
+      if (!isCaptionTextTrack(tt)) continue;
       out.push({
         id: String(i),
         label: tt.label || `CC ${i + 1}`,
@@ -503,6 +510,7 @@ export class HlsJsPlayerImpl extends BasePlayer {
     const list = v.textTracks as TextTrackList;
     for (let i = 0; i < list.length; i++) {
       const tt = list[i];
+      if (!isCaptionTextTrack(tt)) continue;
       if (id !== null && String(i) === id) tt.mode = "showing";
       else tt.mode = "disabled";
     }

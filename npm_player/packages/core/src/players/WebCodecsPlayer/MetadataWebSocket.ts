@@ -15,6 +15,7 @@
  */
 
 import type { MetaTrackEvent, MetaTrackEventType } from "../../types";
+import { detectMetaTrackEventType } from "../../core/MetaTrackManager";
 import { MistMetadataWsTransport } from "../../core/mist/transports/metadata-transport";
 
 interface MetaMessage {
@@ -27,12 +28,15 @@ interface MetaMessage {
 interface Subscription {
   buffer: MetaMessage[];
   callbacks: Array<(event: MetaTrackEvent) => void>;
+  declaredType?: MetaTrackEventType;
 }
 
 export interface MetadataWebSocketOptions {
   debug?: boolean;
   /** Seconds to request ahead of current playback (default: 1) */
   stayAhead?: number;
+  /** Resolve a declared event type from Mist track metadata when available. */
+  resolveEventType?: (trackId: string) => MetaTrackEventType | undefined;
 }
 
 type MetadataCallback = (event: MetaTrackEvent) => void;
@@ -51,7 +55,11 @@ export class MetadataWebSocket {
   private isFarAhead = false;
   private farAheadTimer: ReturnType<typeof setTimeout> | null = null;
   private destroyed = false;
-  private options: Required<MetadataWebSocketOptions>;
+  private options: {
+    debug: boolean;
+    stayAhead: number;
+    resolveEventType?: (trackId: string) => MetaTrackEventType | undefined;
+  };
 
   constructor(
     url: string,
@@ -67,6 +75,7 @@ export class MetadataWebSocket {
     this.options = {
       debug: options.debug ?? false,
       stayAhead: options.stayAhead ?? 1,
+      resolveEventType: options.resolveEventType,
     };
   }
 
@@ -74,9 +83,15 @@ export class MetadataWebSocket {
    * Subscribe to a metadata track. Pass "all" to receive events from all tracks.
    * Returns an unsubscribe function.
    */
-  subscribe(trackId: string, callback: MetadataCallback): () => void {
+  subscribe(
+    trackId: string,
+    callback: MetadataCallback,
+    declaredType?: MetaTrackEventType
+  ): () => void {
     if (!(trackId in this.subscriptions)) {
-      this.subscriptions[trackId] = { buffer: [], callbacks: [] };
+      this.subscriptions[trackId] = { buffer: [], callbacks: [], declaredType };
+    } else if (declaredType) {
+      this.subscriptions[trackId].declaredType = declaredType;
     }
     this.subscriptions[trackId].callbacks.push(callback);
 
@@ -214,12 +229,11 @@ export class MetadataWebSocket {
   }
 
   private sendTrackSelection(): void {
-    const trackIds = Object.keys(this.subscriptions)
-      .filter((id) => id !== "all")
-      .join(",");
-    if (trackIds) {
-      this.send({ type: "tracks", meta: trackIds });
-    }
+    const subscriptionIds = Object.keys(this.subscriptions);
+    const meta = subscriptionIds.includes("all")
+      ? "all"
+      : subscriptionIds.filter((id) => id !== "all").join(",");
+    if (meta) this.send({ type: "tracks", meta });
   }
 
   private handleParsedMessage(message: any): void {
@@ -365,13 +379,25 @@ export class MetadataWebSocket {
       timestamp: msg.time,
       trackId: String(msg.track),
       data: msg.data,
+      durationMs: msg.duration,
     };
   }
 
-  private guessEventType(_msg: MetaMessage): MetaTrackEventType {
-    // MistServer doesn't send an explicit event type — infer from track metadata
-    // or just default to "subtitle" since that's the primary use case
-    return "subtitle";
+  private guessEventType(msg: MetaMessage): MetaTrackEventType {
+    const declared = this.options.resolveEventType?.(String(msg.track));
+    if (declared) return declared;
+    const subscribedType = this.subscriptions[String(msg.track)]?.declaredType;
+    if (subscribedType) return subscribedType;
+    const allSubscribedType = this.subscriptions.all?.declaredType;
+    if (allSubscribedType) return allSubscribedType;
+
+    const inferred = detectMetaTrackEventType(msg.data);
+    if (inferred !== "unknown") return inferred;
+
+    // The original two-argument API is consumed by the framework subtitle
+    // renderers. Callers that subscribe to generic untyped metadata can pass
+    // an explicit "unknown" declaration to opt out of this compatibility default.
+    return this.subscriptions[String(msg.track)] || this.subscriptions.all ? "subtitle" : "unknown";
   }
 
   private clearBuffers(): void {

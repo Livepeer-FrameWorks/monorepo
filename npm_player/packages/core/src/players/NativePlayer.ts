@@ -7,6 +7,11 @@ import {
 } from "../core/delivery/keep-away-rate-controller";
 import { MistControlChannel } from "../core/MistControlChannel";
 import { buildQualityLevelsFromStreamTracks } from "../core/QualityLevels";
+import {
+  buildAudioTrackList,
+  buildSubtitleTrackList,
+  buildTrackSelectionReplay,
+} from "../core/TrackSelection";
 import { translateCodec } from "../core/CodecUtils";
 import { normalizeLiveCatchupConfig } from "../core/delivery/live-catchup";
 import { decideDeadPointRecovery } from "../core/mist/dead-point-recovery";
@@ -76,6 +81,7 @@ export class NativePlayerImpl extends BasePlayer {
   private whepDurationMs = 0;
   private whepIsLive = true;
   private whepBufferWindow = 0;
+  private whepCurrentTracks: string[] = [];
   private whepBeginMs = 0;
   private whepEndMs = 0;
   private whepPlayRate: number | "auto" | "fast-forward" = "auto";
@@ -84,6 +90,9 @@ export class NativePlayerImpl extends BasePlayer {
   private currentOptions: PlayerOptions | null = null;
   private streamInfoRef: StreamInfo | null = null;
   private selectedTrack = "auto";
+  private selectedAudioTrack: string | null = null;
+  private selectedSubtitleTrack: string | null = null;
+  private videoSelectionExplicit = false;
 
   // Read-ahead (ms) below which we must not speed up (protect the buffer), and below
   // which we actively slow down to rebuild. Decouples the low-latency goal (latency
@@ -251,6 +260,10 @@ export class NativePlayerImpl extends BasePlayer {
     this.currentMimeType = source.type;
     this.currentOptions = options;
     this.streamInfoRef = streamInfo ?? null;
+    this.selectedTrack = "auto";
+    this.selectedAudioTrack = null;
+    this.selectedSubtitleTrack = null;
+    this.videoSelectionExplicit = false;
     // The initial startunix offset below uses the default target; the controller refines
     // targetLatencyMs to the jitter-aware keepaway via setLiveKeepAwayMs on the first hint.
     this.isMP3Source = source.type === "html5/audio/mp3";
@@ -538,14 +551,55 @@ export class NativePlayerImpl extends BasePlayer {
   }
 
   selectQuality(id: string): void {
-    if (this.currentMimeType !== "whep" || !this.controlChannel) return;
+    if (this.currentMimeType !== "whep") return;
+    this.selectedTrack = id;
+    this.videoSelectionExplicit = true;
+    if (!this.controlChannel) return;
     if (id === "auto") {
-      this.controlChannel.setTracks({});
-      this.selectedTrack = "auto";
+      this.controlChannel.setTracks({ video: "auto" });
       return;
     }
     this.controlChannel.setTracks({ video: id });
-    this.selectedTrack = id;
+  }
+
+  getTextTracks(): Array<{ id: string; label: string; lang?: string; active: boolean }> {
+    if (this.currentMimeType !== "whep") return super.getTextTracks();
+    return buildSubtitleTrackList(this.streamInfoRef?.meta?.tracks, this.selectedSubtitleTrack);
+  }
+
+  selectTextTrack(id: string | null): void {
+    if (this.currentMimeType !== "whep") {
+      super.selectTextTrack(id);
+      return;
+    }
+    this.selectedSubtitleTrack = id;
+  }
+
+  getAudioTracks(): Array<{ id: string; label: string; lang?: string; active: boolean }> {
+    if (this.currentMimeType !== "whep") {
+      const audioTracks = (this.videoElement as any)?.audioTracks;
+      if (!audioTracks) return [];
+      return Array.from(audioTracks as ArrayLike<any>).map((track, index) => ({
+        id: String(index),
+        label: track.label || `Audio ${index + 1}`,
+        lang: track.language,
+        active: track.enabled !== false,
+      }));
+    }
+    return buildAudioTrackList(this.streamInfoRef?.meta?.tracks, this.selectedAudioTrack);
+  }
+
+  selectAudioTrack(id: string): void {
+    if (this.currentMimeType === "whep") {
+      this.selectedAudioTrack = id;
+      this.controlChannel?.setTracks({ audio: id });
+      return;
+    }
+    const audioTracks = (this.videoElement as any)?.audioTracks;
+    if (!audioTracks) return;
+    for (let index = 0; index < audioTracks.length; index++) {
+      audioTracks[index].enabled = String(index) === id;
+    }
   }
 
   getCurrentTime(): number {
@@ -618,6 +672,7 @@ export class NativePlayerImpl extends BasePlayer {
     this.whepSeekOffset = 0;
     this.whepDurationMs = 0;
     this.whepBufferWindow = 0;
+    this.whepCurrentTracks = [];
     this.whepBeginMs = 0;
     this.whepEndMs = 0;
     this.whepPlayRequested = false;
@@ -663,6 +718,9 @@ export class NativePlayerImpl extends BasePlayer {
     this.currentMimeType = null;
     this.streamInfoRef = null;
     this.selectedTrack = "auto";
+    this.selectedAudioTrack = null;
+    this.selectedSubtitleTrack = null;
+    this.videoSelectionExplicit = false;
     this.cleanupLiveSeek();
     this.listeners.clear();
   }
@@ -827,6 +885,7 @@ export class NativePlayerImpl extends BasePlayer {
       } else if (this.whepHoldRequested || video.paused) {
         control.hold();
       }
+      this.replayDesiredTracks(control);
       this.emit("seekablechange", {
         start: this.whepBeginMs,
         end: this.whepEndMs,
@@ -857,6 +916,14 @@ export class NativePlayerImpl extends BasePlayer {
         end: this.whepEndMs,
         bufferWindow: this.whepBufferWindow,
       });
+      if (
+        update.tracks &&
+        (update.tracks.length !== this.whepCurrentTracks.length ||
+          update.tracks.some((track) => !this.whepCurrentTracks.includes(track)))
+      ) {
+        this.whepCurrentTracks = [...update.tracks];
+        this.emit("trackschange", undefined);
+      }
       if (!update.paused && video.paused) {
         video.play().catch(() => {});
       }
@@ -903,6 +970,17 @@ export class NativePlayerImpl extends BasePlayer {
       if (this.destroyed) return;
       this.emit("error", message);
     });
+  }
+
+  private replayDesiredTracks(control: MistControlChannel): void {
+    const { tracks } = buildTrackSelectionReplay({
+      videoId: this.selectedTrack,
+      videoExplicit: this.videoSelectionExplicit,
+      audioId: this.selectedAudioTrack,
+    });
+    if (Object.keys(tracks).length > 0) {
+      control.setTracks(tracks);
+    }
   }
 
   private async startWhep(

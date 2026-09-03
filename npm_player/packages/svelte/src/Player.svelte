@@ -236,6 +236,8 @@
     currentSourceInfo: null as { url: string; type: string } | null,
     playbackQuality: null as any,
     subtitlesEnabled: false,
+    textTracks: [] as Array<{ id: string; label: string; lang?: string; active: boolean }>,
+    audioTracks: [] as Array<{ id: string; label: string; lang?: string; active: boolean }>,
     toast: null as { message: string; timestamp: number } | null,
     controllerSeekableStart: 0,
     controllerLiveEdge: 0,
@@ -740,6 +742,11 @@
               onStatsToggle={() => (isStatsOpen = !isStatsOpen)}
               isContentLive={storeState.isEffectivelyLive}
               onJumpToLive={() => playerStore?.getController()?.jumpToLive()}
+              onSelectQuality={(id) => playerStore?.selectQuality(id)}
+              onSelectTextTrack={(id) => playerStore?.selectTextTrack(id)}
+              onSelectAudioTrack={(id) => playerStore?.selectAudioTrack(id)}
+              textTracks={storeState.textTracks}
+              audioTracks={storeState.audioTracks}
               controllerSeekableStart={storeState?.controllerSeekableStart ?? 0}
               controllerLiveEdge={storeState?.controllerLiveEdge ?? 0}
               controllerCanSeek={storeState?.controllerCanSeek}

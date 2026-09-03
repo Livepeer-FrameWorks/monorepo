@@ -19,6 +19,11 @@ import { SourceBufferManager } from "./SourceBufferManager";
 import { translateCodec } from "../../core/CodecUtils";
 import { getBrowserInfo, isFileProtocol, isIPadWithBrokenHEVC } from "../../core/detector";
 import { buildQualityLevelsFromStreamTracks } from "../../core/QualityLevels";
+import {
+  buildAudioTrackList,
+  buildSubtitleTrackList,
+  buildTrackSelectionReplay,
+} from "../../core/TrackSelection";
 import { DeliveryPolicy } from "../../core/delivery/delivery-policy";
 import { DesiredBufferModel } from "../../core/delivery/desired-buffer";
 import { normalizeLiveCatchupConfig } from "../../core/delivery/live-catchup";
@@ -64,6 +69,9 @@ export class MewsWsPlayerImpl extends BasePlayer {
   // Current tracks for change detection
   private currentTracks: string[] = [];
   private selectedTrack: string = "auto";
+  private videoSelectionExplicit = false;
+  private selectedAudioTrack: string | null = null;
+  private selectedSubtitleTrack: string | null = null;
   private streamInfoRef: StreamInfo | null = null;
 
   // Last codecs for track switch comparison
@@ -179,6 +187,10 @@ export class MewsWsPlayerImpl extends BasePlayer {
   ): Promise<HTMLVideoElement> {
     this.container = container;
     this.streamInfoRef = streamInfo ?? null;
+    this.selectedTrack = "auto";
+    this.videoSelectionExplicit = false;
+    this.selectedAudioTrack = null;
+    this.selectedSubtitleTrack = null;
     container.classList.add("fw-player-container");
 
     const video = document.createElement("video");
@@ -394,6 +406,16 @@ export class MewsWsPlayerImpl extends BasePlayer {
     // Send request with SHORT codec names
     // CRITICAL: MistServer expects short names like "H264", not browser codec strings
     this.send({ type: "request_codec_data", supported_codecs: this.supportedCodecs });
+    this.replayDesiredTracks();
+  }
+
+  private replayDesiredTracks(): void {
+    const { tracks } = buildTrackSelectionReplay({
+      videoId: this.selectedTrack,
+      videoExplicit: this.videoSelectionExplicit,
+      audioId: this.selectedAudioTrack,
+    });
+    if (Object.keys(tracks).length > 0) this.send({ type: "tracks", ...tracks });
   }
 
   /**
@@ -625,6 +647,11 @@ export class MewsWsPlayerImpl extends BasePlayer {
   private handleTracks(msg: MewsMessage): void {
     const codecs: string[] = msg.data?.codecs || [];
     const switchPointMs = msg.data?.current;
+
+    // The track command is also the only in-band change signal for late
+    // audio/subtitle metadata. Notify the controller even when codecs stayed
+    // identical so menus can re-read the shared Mist track inventory.
+    this.emit("trackschange", undefined);
 
     if (!codecs.length) {
       this.emit("error", "Track switch contains no codecs");
@@ -908,20 +935,20 @@ export class MewsWsPlayerImpl extends BasePlayer {
   }
 
   selectQuality(id: string): void {
+    this.selectedTrack = id;
+    this.videoSelectionExplicit = true;
     if (id === "auto") {
       // Reset to automatic track selection (not set_speed which controls delivery rate)
-      this.send({ type: "tracks" });
-      this.selectedTrack = "auto";
+      this.send({ type: "tracks", video: "auto" });
     } else {
       this.send({ type: "tracks", video: id });
-      this.selectedTrack = id;
     }
   }
 
   /**
    * Set tracks for ABR or quality selection.
    */
-  setTracks(obj: { video?: string; audio?: string; subtitle?: string }): void {
+  setTracks(obj: { video?: string; audio?: string }): void {
     if (!Object.keys(obj).length) return;
     this.send({ type: "tracks", ...obj });
   }
@@ -930,11 +957,20 @@ export class MewsWsPlayerImpl extends BasePlayer {
    * Select a subtitle track.
    */
   selectTextTrack(id: string | null): void {
-    if (id === null) {
-      this.send({ type: "tracks", subtitle: "none" });
-    } else {
-      this.send({ type: "tracks", subtitle: id });
-    }
+    this.selectedSubtitleTrack = id;
+  }
+
+  getTextTracks(): Array<{ id: string; label: string; lang?: string; active: boolean }> {
+    return buildSubtitleTrackList(this.streamInfoRef?.meta?.tracks, this.selectedSubtitleTrack);
+  }
+
+  getAudioTracks(): Array<{ id: string; label: string; lang?: string; active: boolean }> {
+    return buildAudioTrackList(this.streamInfoRef?.meta?.tracks, this.selectedAudioTrack);
+  }
+
+  selectAudioTrack(id: string): void {
+    this.send({ type: "tracks", audio: id });
+    this.selectedAudioTrack = id;
   }
 
   isLive(): boolean {

@@ -41,7 +41,7 @@ export type MistCommand =
   | { type: "set_speed"; play_rate: number | "auto" }
   | { type: "fast_forward"; ff_add: number }
   | { type: "request_codec_data"; supported_combinations?: string[][][] }
-  | { type: "tracks"; video?: string; audio?: string; subtitle?: string }
+  | { type: "tracks"; video?: string | null; audio?: string }
   | { type: "offer_sdp"; offer_sdp: string };
 
 export type MistMetadataCommand =

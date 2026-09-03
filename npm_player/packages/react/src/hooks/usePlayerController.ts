@@ -121,7 +121,9 @@ export interface PlayerControllerState {
     active?: boolean;
   }>;
   /** Available text/caption tracks */
-  textTracks: Array<{ id: string; label: string; language?: string; active: boolean }>;
+  textTracks: Array<{ id: string; label: string; lang?: string; active: boolean }>;
+  /** Available audio tracks */
+  audioTracks: Array<{ id: string; label: string; lang?: string; active: boolean }>;
   /** Stream info for player selection (sources + tracks) */
   streamInfo: StreamInfo | null;
   /** Toast message to display (auto-dismisses) */
@@ -235,6 +237,7 @@ const initialState: PlayerControllerState = {
   subtitlesEnabled: false,
   qualities: [],
   textTracks: [],
+  audioTracks: [],
   streamInfo: null,
   toast: null,
   thumbnailCues: [],
@@ -333,6 +336,8 @@ export function usePlayerController(config: UsePlayerControllerConfig): UsePlaye
         isLoopEnabled: c.isLoopEnabled(),
         subtitlesEnabled: c.isSubtitlesEnabled(),
         qualities: c.getQualities(),
+        textTracks: c.getTextTracks(),
+        audioTracks: c.getAudioTracks(),
         streamInfo: c.getStreamInfo(),
         thumbnailCues: c.getThumbnailCues?.() ?? prev.thumbnailCues,
         loadingPoster: c.getLoadingPoster?.() ?? prev.loadingPoster,
@@ -528,6 +533,12 @@ export function usePlayerController(config: UsePlayerControllerConfig): UsePlaye
     unsubs.push(
       controller.on("captionsChange", ({ enabled }) => {
         setState((prev) => ({ ...prev, subtitlesEnabled: enabled }));
+      })
+    );
+
+    unsubs.push(
+      controller.on("tracksChange", ({ textTracks, audioTracks }) => {
+        setState((prev) => ({ ...prev, textTracks, audioTracks }));
       })
     );
 

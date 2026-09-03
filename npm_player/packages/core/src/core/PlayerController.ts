@@ -20,6 +20,7 @@ import { BootTracer, type BootTrace } from "./BootTracer";
 import { SessionQoeReporter, type SessionQoeDelta } from "./SessionQoeReporter";
 import { QualityMonitor, type PlayerProtocol } from "./QualityMonitor";
 import { MetaTrackManager } from "./MetaTrackManager";
+import { SubtitleOverlayRenderer } from "./SubtitleOverlayRenderer";
 import { normalizeMistSourceUrls } from "./MistSourceUrls";
 import { ThumbnailSpriteManager } from "./ThumbnailSpriteManager";
 import { normalizeThumbnailCueTimeline, type ThumbnailCue } from "./ThumbnailVttParser";
@@ -36,7 +37,7 @@ import {
   type LatencyTier,
   type LiveThresholds,
 } from "./SeekingUtils";
-import type { ABRMode, PlaybackQuality, ContentType } from "../types";
+import type { ABRMode, PlaybackQuality, ContentType, MetaTrackEvent } from "../types";
 import type {
   ContentEndpoints,
   ContentMetadata,
@@ -80,6 +81,25 @@ function withPlaybackJWT(rawUrl: string, token: string): string {
   params.set("jwt", token);
   const encoded = params.toString();
   return `${base}${encoded ? `?${encoded}` : ""}${hash}`;
+}
+
+export function withQueryParam(rawUrl: string, name: string, value: string): string {
+  const hashIndex = rawUrl.indexOf("#");
+  const beforeHash = hashIndex === -1 ? rawUrl : rawUrl.slice(0, hashIndex);
+  const hash = hashIndex === -1 ? "" : rawUrl.slice(hashIndex);
+  const queryIndex = beforeHash.indexOf("?");
+  const base = queryIndex === -1 ? beforeHash : beforeHash.slice(0, queryIndex);
+  const query = queryIndex === -1 ? "" : beforeHash.slice(queryIndex + 1);
+  const params = new URLSearchParams(query);
+  params.set(name, value);
+  const encoded = params.toString();
+  return `${base}${encoded ? `?${encoded}` : ""}${hash}`;
+}
+
+function generateClientSessionID(): string {
+  const random = new Uint8Array(12);
+  crypto.getRandomValues(random);
+  return Array.from(random, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function sourceCanCarryPlaybackHeaders(source: StreamSource): boolean {
@@ -213,6 +233,11 @@ export interface PlayerControllerEvents {
   holdSpeedEnd: void;
   /** Captions/subtitles toggled */
   captionsChange: { enabled: boolean };
+  /** Selectable text or audio tracks changed. */
+  tracksChange: {
+    textTracks: Array<{ id: string; label: string; lang?: string; active: boolean }>;
+    audioTracks: Array<{ id: string; label: string; lang?: string; active: boolean }>;
+  };
   /** Mute state changed (e.g. autoplay muted fallback) */
   muteChange: { muted: boolean };
   /** Autoplay attempt resolved */
@@ -725,6 +750,13 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   // Subtitles/Captions (Phase A5b audit)
   // ============================================================================
   private _subtitlesEnabled: boolean = false;
+  private subtitleEnableRequested: boolean = false;
+  private selectedTextTrackId: string | null = null;
+  private selectedTextTrackExplicit: boolean = false;
+  private selectedTextTrackOwner: IPlayer | null = null;
+  private selectedTextTrackLang: string | null = null;
+  private selectedTextTrackLabel: string | null = null;
+  private appliedTextTrackId: string | null = null;
 
   // ============================================================================
   // Stall Detection (Phase A5b audit)
@@ -797,8 +829,11 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private mistReporter: MistReporter | null = null;
   private bootTracer: BootTracer | null = null;
   private sessionReporter: SessionQoeReporter | null = null;
+  private clientSessionId: string | null = null;
   private qualityMonitor: QualityMonitor | null = null;
   private metaTrackManager: MetaTrackManager | null = null;
+  private metaSubtitleUnsubscribe: (() => void) | null = null;
+  private metaSubtitleRenderer: SubtitleOverlayRenderer | null = null;
   private thumbnailSpriteManager: ThumbnailSpriteManager | null = null;
   private _thumbnailVttUrl: string | null = null;
   private _rawThumbnailCues: ThumbnailCue[] = [];
@@ -838,6 +873,17 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   // Lifecycle Methods
   // ============================================================================
 
+  private resetAttachScopedTrackSelection(): void {
+    this._subtitlesEnabled = false;
+    this.subtitleEnableRequested = false;
+    this.selectedTextTrackId = null;
+    this.selectedTextTrackExplicit = false;
+    this.selectedTextTrackOwner = null;
+    this.selectedTextTrackLang = null;
+    this.selectedTextTrackLabel = null;
+    this.appliedTextTrackId = null;
+  }
+
   /**
    * Attach to a container element and start the player lifecycle.
    * This is the main entry point after construction.
@@ -853,6 +899,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
     this.container = container;
     this.isAttached = true;
+    this.resetAttachScopedTrackSelection();
+    this.clientSessionId = this.config.telemetry?.session ? generateClientSessionID() : null;
 
     // Start the boot waterfall before the first state transition so boot_start
     // anchors at attach time. Always records locally; reporting is via the event.
@@ -971,6 +1019,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     this._qualityFallbackInProgress = false;
     this._reloadRequestCount = 0;
     this._reloadRequestWindowStartedAt = 0;
+    this.clientSessionId = null;
   }
 
   /**
@@ -1027,21 +1076,27 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
   /**
    * applyPlaybackAuthToEndpoints walks the current resolved endpoints and
-   * appends the customer-supplied viewer JWT to every URL. Called after
-   * every `this.endpoints = ...` assignment so the token rides along on
-   * Gateway-resolved URLs, fallbacks, the outputs map, and any URLs
-   * hydrated from a direct MistServer poll.
+   * appends the configured viewer JWT and attach-scoped diagnostic session
+   * identifier. Called after every `this.endpoints = ...` assignment so both
+   * values ride along on Gateway-resolved URLs, fallbacks, the outputs map,
+   * and URLs hydrated from a direct MistServer poll.
    *
-   * No-op when playbackAuth isn't configured. Query-mode (`?jwt=<token>`)
-   * works across HLS, DASH, WHEP/WebRTC, and MP4 progressive.
+   * Query-mode (`?jwt=<token>`) works across HLS, DASH, WHEP/WebRTC, and MP4
+   * progressive. `fwsid` is only added when session telemetry is enabled.
    */
   private applyPlaybackAuthToEndpoints(): void {
+    if (!this.endpoints) return;
     const auth = this.config.playbackAuth;
-    if (!auth || !auth.token || !this.endpoints) return;
-    if (auth.transport === "header") return;
     const rewriteUrl = (u: string | undefined): string | undefined => {
       if (!u) return u;
-      return withPlaybackJWT(u, auth.token);
+      let rewritten = u;
+      if (auth?.token && auth.transport !== "header") {
+        rewritten = withPlaybackJWT(rewritten, auth.token);
+      }
+      if (this.clientSessionId) {
+        rewritten = withQueryParam(rewritten, "fwsid", this.clientSessionId);
+      }
+      return rewritten;
     };
     const rewriteEndpoint = (e: EndpointInfo | undefined): void => {
       if (!e) return;
@@ -1068,12 +1123,19 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   }
 
   private applyPlaybackAuthToStreamInfo(info: StreamInfo | null): StreamInfo | null {
+    if (!info) return info;
     const headers = this.playbackAuthHeaders();
-    if (!headers || !info) return info;
-
-    const source = info.source
-      .filter(sourceCanCarryPlaybackHeaders)
-      .map((s) => ({ ...s, headers: { ...(s.headers ?? {}), ...headers } }));
+    let source = info.source.map((item) => ({
+      ...item,
+      url: this.clientSessionId
+        ? withQueryParam(item.url, "fwsid", this.clientSessionId)
+        : item.url,
+    }));
+    if (headers) {
+      source = source
+        .filter(sourceCanCarryPlaybackHeaders)
+        .map((item) => ({ ...item, headers: { ...(item.headers ?? {}), ...headers } }));
+    }
     return { ...info, source };
   }
 
@@ -1184,6 +1246,9 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
             bps: track.bps,
             fpks: track.fpks,
             codecstring: track.codecstring,
+            init: track.init,
+            h264_profile: track.h264_profile,
+            h264_level: track.h264_level,
             firstms: track.firstms,
             lastms: track.lastms,
             lang: track.lang,
@@ -1302,24 +1367,22 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
   /** Set subtitles/captions enabled state */
   setSubtitlesEnabled(enabled: boolean): void {
-    if (this._subtitlesEnabled === enabled) return;
-    this._subtitlesEnabled = enabled;
-    // Apply to video text tracks if available
-    if (this.videoElement) {
-      const tracks = this.videoElement.textTracks;
-      for (let i = 0; i < tracks.length; i++) {
-        const track = tracks[i];
-        if (track.kind === "subtitles" || track.kind === "captions") {
-          track.mode = enabled ? "showing" : "hidden";
-        }
-      }
+    if (!enabled) {
+      this.subtitleEnableRequested = false;
+      this.currentPlayer?.selectTextTrack?.(null);
+      this.syncMetadataSubtitleRenderer(null);
+      this.appliedTextTrackId = null;
+      this.setSubtitlesEnabledState(false);
+      return;
     }
-    this.emit("captionsChange", { enabled });
+    this.subtitleEnableRequested = true;
+    this.setSubtitlesEnabledState(true);
+    this.applyRequestedSubtitleSelection();
   }
 
   /** Toggle subtitles/captions */
   toggleSubtitles(): void {
-    this.setSubtitlesEnabled(!this._subtitlesEnabled);
+    this.setSubtitlesEnabled(!this.subtitleEnableRequested);
   }
 
   // ============================================================================
@@ -1561,11 +1624,28 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
         void this.retry();
       }
     };
+    const onTracksChange = () => {
+      const textTracks = playerForListener.getTextTracks?.() ?? [];
+      if (
+        this.appliedTextTrackId !== null &&
+        !textTracks.some((track) => track.id === this.appliedTextTrackId)
+      ) {
+        playerForListener.selectTextTrack?.(null);
+        this.syncMetadataSubtitleRenderer(null);
+        this.appliedTextTrackId = null;
+      }
+      this.applyRequestedSubtitleSelection();
+      this.emit("tracksChange", {
+        textTracks: playerForListener.getTextTracks?.() ?? [],
+        audioTracks: playerForListener.getAudioTracks?.() ?? [],
+      });
+    };
 
     playerForListener.on("seekablechange", onSeekableChange);
     playerForListener.on("bufferlow", onBufferLow);
     playerForListener.on("error", onPlayerError);
     playerForListener.on("reloadrequested", onReloadRequested);
+    playerForListener.on("trackschange", onTracksChange);
     this.playerEventsBoundFor = playerForListener;
 
     let onDirectRenderTimeUpdate: ((timeMs: number) => void) | null = null;
@@ -1586,6 +1666,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       playerForListener.off("bufferlow", onBufferLow);
       playerForListener.off("error", onPlayerError);
       playerForListener.off("reloadrequested", onReloadRequested);
+      playerForListener.off("trackschange", onTracksChange);
       if (onDirectRenderTimeUpdate) {
         playerForListener.off("timeupdate", onDirectRenderTimeUpdate);
       }
@@ -1669,6 +1750,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     });
     this.mediaCleanupFns = [];
     this.playerEventsBoundFor = null;
+    this.appliedTextTrackId = null;
     this.unbindMediaStreamAudioListeners();
   }
 
@@ -2006,7 +2088,70 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
   /** Select a text track */
   selectTextTrack(id: string | null): void {
-    this.currentPlayer?.selectTextTrack?.(id);
+    if (id === null) {
+      this.subtitleEnableRequested = false;
+      this.selectedTextTrackExplicit = false;
+      this.currentPlayer?.selectTextTrack?.(null);
+      this.syncMetadataSubtitleRenderer(null);
+      this.appliedTextTrackId = null;
+      this.setSubtitlesEnabledState(false);
+      return;
+    }
+    this.selectedTextTrackId = id;
+    this.selectedTextTrackExplicit = true;
+    this.selectedTextTrackOwner = this.currentPlayer;
+    const selectedTrack = this.currentPlayer?.getTextTracks?.().find((track) => track.id === id);
+    this.selectedTextTrackLang = selectedTrack?.lang ?? null;
+    this.selectedTextTrackLabel = selectedTrack?.label ?? null;
+    this.subtitleEnableRequested = true;
+    this.setSubtitlesEnabledState(true);
+    this.applyRequestedSubtitleSelection();
+  }
+
+  private setSubtitlesEnabledState(enabled: boolean): void {
+    if (this._subtitlesEnabled === enabled) return;
+    this._subtitlesEnabled = enabled;
+    this.emit("captionsChange", { enabled });
+  }
+
+  private applyRequestedSubtitleSelection(): boolean {
+    if (!this.subtitleEnableRequested) return false;
+    const player = this.currentPlayer;
+    if (!player?.selectTextTrack) return false;
+    const tracks = player.getTextTracks?.() ?? [];
+    if (this.selectedTextTrackOwner && this.selectedTextTrackOwner !== player) {
+      // Adapter track IDs are protocol-local. Carry the user's desire for
+      // captions across a fallback, but never reuse an explicit ID in a new
+      // namespace where it could select another language by accident.
+      const semanticMatch =
+        (this.selectedTextTrackLang
+          ? tracks.find((track) => track.lang === this.selectedTextTrackLang)
+          : undefined) ??
+        (this.selectedTextTrackLabel
+          ? tracks.find((track) => track.label === this.selectedTextTrackLabel)
+          : undefined);
+      if (!semanticMatch) return false;
+      this.selectedTextTrackId = semanticMatch.id;
+      this.selectedTextTrackExplicit = true;
+      this.appliedTextTrackId = null;
+      this.selectedTextTrackOwner = player;
+    }
+    const requested = this.selectedTextTrackId
+      ? tracks.find((track) => track.id === this.selectedTextTrackId)
+      : undefined;
+    const selected = this.selectedTextTrackExplicit
+      ? requested
+      : (requested ?? tracks.find((track) => track.active) ?? tracks[0]);
+    if (!selected) return false;
+    if (this.appliedTextTrackId === selected.id) return true;
+    this.selectedTextTrackId = selected.id;
+    this.selectedTextTrackOwner = player;
+    this.selectedTextTrackLang = selected.lang ?? this.selectedTextTrackLang;
+    this.selectedTextTrackLabel = selected.label ?? this.selectedTextTrackLabel;
+    player.selectTextTrack(selected.id);
+    this.syncMetadataSubtitleRenderer(selected.id);
+    this.appliedTextTrackId = selected.id;
+    return true;
   }
 
   /** Get available audio tracks */
@@ -3099,7 +3244,10 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   ): Promise<MistStreamInfo & Record<string, any>> {
     let baseUrl = mistUrl;
     while (baseUrl.endsWith("/")) baseUrl = baseUrl.slice(0, -1);
-    const jsonUrl = `${baseUrl}/json_${encodeURIComponent(contentId)}.js?metaeverywhere=1&inclzero=1`;
+    const rawJsonUrl = `${baseUrl}/json_${encodeURIComponent(contentId)}.js?metaeverywhere=1&inclzero=1`;
+    const jsonUrl = this.clientSessionId
+      ? withQueryParam(rawJsonUrl, "fwsid", this.clientSessionId)
+      : rawJsonUrl;
     this.log(`[${logScope}] Fetching ${jsonUrl}`);
 
     const response = await fetch(jsonUrl, {
@@ -3347,6 +3495,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       useWebSocket,
       pollInterval,
       headers: playbackHeaders,
+      sessionParam: () =>
+        this.clientSessionId ? { name: "fwsid", value: this.clientSessionId } : null,
     });
 
     // Subscribe to state changes
@@ -3362,12 +3512,10 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
           state.streamInfo.source as StreamSource[],
           mistBaseUrl
         ) as StreamSource[];
-        const headers = this.playbackAuthHeaders();
-        this.streamInfo.source = headers
-          ? normalizedSources
-              .filter(sourceCanCarryPlaybackHeaders)
-              .map((s) => ({ ...s, headers: { ...(s.headers ?? {}), ...headers } }))
-          : normalizedSources;
+        this.streamInfo.source = this.applyPlaybackAuthToStreamInfo({
+          ...this.streamInfo,
+          source: normalizedSources,
+        })!.source;
       }
 
       // Update track metadata if MistServer provides better data
@@ -3377,6 +3525,15 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
         if (mistTracks.length > 0) {
           this.streamInfo.meta.tracks = mistTracks;
           this.log(`[stateChange] Updated ${mistTracks.length} tracks from MistServer`);
+
+          // Live in-band subtitle tracks can appear after attach. A pending
+          // caption request remains desired state until one becomes selectable.
+          this.applyRequestedSubtitleSelection();
+
+          this.emit("tracksChange", {
+            textTracks: this.getTextTracks(),
+            audioTracks: this.getAudioTracks(),
+          });
 
           // Recalculate seeking state with new track data — video events may not
           // fire if the video is stalled, so we must trigger this explicitly
@@ -3810,15 +3967,18 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
    */
   private parseMistTracks(tracksObj: Record<string, unknown>): StreamTrack[] {
     const tracks: StreamTrack[] = [];
-    for (const [, trackData] of Object.entries(tracksObj)) {
+    for (const [trackKey, trackData] of Object.entries(tracksObj)) {
       const t = trackData as Record<string, unknown>;
       const trackType = t.type as string;
       if (trackType === "video" || trackType === "audio" || trackType === "meta") {
         tracks.push({
           type: trackType,
           codec: t.codec as string,
+          id: t.idx !== undefined ? String(t.idx) : /^\d+$/.test(trackKey) ? trackKey : undefined,
           codecstring: t.codecstring as string | undefined,
           init: t.init as string | undefined,
+          h264_profile: t.h264_profile as string | undefined,
+          h264_level: t.h264_level as string | undefined,
           idx: t.idx as number | undefined,
           width: t.width as number | undefined,
           height: t.height as number | undefined,
@@ -4510,6 +4670,10 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
     // Initialize MetaTrackManager
     this.initializeMetaTrackManager();
+
+    // A caption request may arrive before the selected player has exposed its
+    // tracks. Apply it only now that the adapter and metadata transport exist.
+    this.applyRequestedSubtitleSelection();
   }
 
   private initializeABRController(): void {
@@ -4805,6 +4969,13 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   }
 
   private initializeMetaTrackManager(): void {
+    const playerShortname =
+      this.currentPlayer?.capability?.shortname ?? this._currentPlayerInfo?.shortname;
+    if (playerShortname === "webcodecs") {
+      this.log(`[MetaTrackManager] ${playerShortname} owns its metadata transport`);
+      return;
+    }
+
     const mistUrl = this.getSelectedMistBaseUrl();
     if (!mistUrl) return;
 
@@ -4812,6 +4983,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       mistBaseUrl: mistUrl,
       streamName: this.getMistStreamName(),
       debug: this.config.debug,
+      sessionParam: this.clientSessionId ? { name: "fwsid", value: this.clientSessionId } : null,
       deferInitialSeekUntilPlaybackTime:
         this.isEffectivelyLive() && sourceUsesManifestTimeline(this._currentSourceInfo?.type),
     });
@@ -4824,6 +4996,9 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     }
 
     this.metaTrackManager.connect();
+    if (this._subtitlesEnabled && this.selectedTextTrackId) {
+      this.syncMetadataSubtitleRenderer(this.selectedTextTrackId);
+    }
 
     // Wire video timeupdate to MetaTrackManager
     // Use player's effective time (includes lastms offset for NativePlayer) so the
@@ -4846,9 +5021,42 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     }
 
     this.mediaCleanupFns.push(() => {
+      this.syncMetadataSubtitleRenderer(null);
       this.metaTrackManager?.disconnect();
       this.metaTrackManager = null;
     });
+  }
+
+  private playerNeedsMetadataSubtitleRenderer(): boolean {
+    const shortname =
+      this.currentPlayer?.capability?.shortname ?? this._currentPlayerInfo?.shortname;
+    return (
+      shortname === "mews" ||
+      shortname === "mist-webrtc" ||
+      (shortname === "native" && this._currentSourceInfo?.type === "whep")
+    );
+  }
+
+  private syncMetadataSubtitleRenderer(trackId: string | null): void {
+    this.metaSubtitleUnsubscribe?.();
+    this.metaSubtitleUnsubscribe = null;
+    this.metaSubtitleRenderer?.destroy();
+    this.metaSubtitleRenderer = null;
+    if (!trackId || !this.metaTrackManager || !this.playerNeedsMetadataSubtitleRenderer()) {
+      return;
+    }
+    if (!this.container) return;
+    this.metaSubtitleRenderer = new SubtitleOverlayRenderer(this.container, {
+      getPlaybackTimeMs: () => this.getMistMetadataPlaybackTime(),
+    });
+    this.metaSubtitleUnsubscribe = this.metaTrackManager.subscribe(trackId, (event) => {
+      this.renderMetadataSubtitle(event, trackId);
+    });
+  }
+
+  private renderMetadataSubtitle(event: MetaTrackEvent, trackId: string): void {
+    if (event.trackId !== trackId || this.selectedTextTrackId !== trackId) return;
+    this.metaSubtitleRenderer?.render(event);
   }
 
   private cleanup(): void {
@@ -4904,6 +5112,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private createBootTracer(): BootTracer {
     return new BootTracer({
       contentId: this.config.contentId,
+      sessionId: this.clientSessionId ?? undefined,
       contentType: this.getResolvedContentType() ?? undefined,
       playerVersion: PlayerController.VERSION,
       getEndpoints: () => this.endpoints,
@@ -4928,8 +5137,9 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
   /**
    * Build the session QoE reporter when `telemetry.session` is on (otherwise it
-   * is never created, so playback carries zero instrumentation cost). Shares the
-   * boot trace's sessionId so the two beacons join. Idempotent per attach.
+   * is never created, so playback carries zero instrumentation cost). Uses the
+   * attach-scoped session ID shared by boot telemetry and Mist request URLs.
+   * Idempotent per attach.
    */
   private startSessionReporter(video: HTMLVideoElement): void {
     if (!this.config.telemetry?.session) return;
@@ -4943,7 +5153,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
     const reporter = new SessionQoeReporter({
       contentId: this.config.contentId,
-      sessionId: this.bootTracer?.sessionId ?? `${Date.now().toString(36)}`,
+      sessionId: this.clientSessionId ?? this.bootTracer?.sessionId ?? `${Date.now().toString(36)}`,
       contentType: this.getResolvedContentType() ?? undefined,
       isLive: this.isLive(),
       playerVersion: PlayerController.VERSION,

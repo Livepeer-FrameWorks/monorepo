@@ -19,6 +19,11 @@ import type {
 } from "../../core/PlayerInterface";
 import { MistSignaling, type MistTimeUpdate } from "../../core/MistSignaling";
 import { buildQualityLevelsFromStreamTracks } from "../../core/QualityLevels";
+import {
+  buildAudioTrackList,
+  buildSubtitleTrackList,
+  buildTrackSelectionReplay,
+} from "../../core/TrackSelection";
 import { normalizeLiveCatchupConfig } from "../../core/delivery/live-catchup";
 import { decideDeadPointRecovery } from "../../core/mist/dead-point-recovery";
 import { LiveEdgeRateController } from "../../core/mist/live-edge-rate-controller";
@@ -59,6 +64,9 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
   private currentOptions: PlayerOptions | null = null;
   private streamInfoRef: StreamInfo | null = null;
   private selectedTrack = "auto";
+  private selectedAudioTrack: string | null = null;
+  private selectedSubtitleTrack: string | null = null;
+  private videoSelectionExplicit = false;
 
   // Stats tracking
   private lastInboundStats: {
@@ -165,6 +173,9 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
     this.currentSource = source;
     this.currentOptions = options;
     this.streamInfoRef = streamInfo ?? null;
+    this.selectedAudioTrack = null;
+    this.selectedSubtitleTrack = null;
+    this.videoSelectionExplicit = false;
     this.playRequested = false;
     this.holdRequested = false;
     container.classList.add("fw-player-container");
@@ -278,6 +289,7 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
     this.currentOptions = null;
     this.streamInfoRef = null;
     this.selectedTrack = "auto";
+    this.videoSelectionExplicit = false;
     this.playRequested = false;
     this.holdRequested = false;
     this.listeners.clear();
@@ -347,25 +359,46 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
   }
 
   selectQuality(id: string): void {
+    this.selectedTrack = id;
+    this.videoSelectionExplicit = true;
     if (!this.signaling?.isConnected) return;
-
     if (id === "auto") {
-      this.signaling.setTracks({});
-      this.selectedTrack = "auto";
+      this.signaling.setTracks({ video: "auto" });
     } else {
       this.signaling.setTracks({ video: id });
-      this.selectedTrack = id;
     }
   }
 
-  // Text track selection via signaling
-  selectTextTrack(id: string | null): void {
-    if (!this.signaling?.isConnected) return;
+  getTextTracks(): Array<{ id: string; label: string; lang?: string; active: boolean }> {
+    return buildSubtitleTrackList(this.streamInfoRef?.meta?.tracks, this.selectedSubtitleTrack);
+  }
 
-    if (id === null) {
-      this.signaling.setTracks({ video: "none" });
-    } else {
-      this.signaling.setTracks({ video: id });
+  getAudioTracks(): Array<{ id: string; label: string; lang?: string; active: boolean }> {
+    return buildAudioTrackList(this.streamInfoRef?.meta?.tracks, this.selectedAudioTrack);
+  }
+
+  selectAudioTrack(id: string): void {
+    this.selectedAudioTrack = id;
+    if (this.signaling?.isConnected) {
+      this.signaling.setTracks({ audio: id });
+    }
+  }
+
+  // Mist subtitles are metadata tracks rendered by PlayerController. The
+  // signaling tracks command only supports audio and video selectors.
+  selectTextTrack(id: string | null): void {
+    this.selectedSubtitleTrack = id;
+  }
+
+  private replayDesiredTracks(): void {
+    if (!this.signaling?.isConnected) return;
+    const { tracks } = buildTrackSelectionReplay({
+      videoId: this.selectedTrack,
+      videoExplicit: this.videoSelectionExplicit,
+      audioId: this.selectedAudioTrack,
+    });
+    if (Object.keys(tracks).length > 0) {
+      this.signaling.setTracks(tracks);
     }
   }
 
@@ -727,6 +760,7 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
     // Dispatch webrtc_connected event (P2)
     this.signaling.on("connected", () => {
       if (this.destroyed) return;
+      this.replayDesiredTracks();
       if (this.playRequested && !video.paused) {
         this.signaling?.play();
       } else if (this.holdRequested || video.paused) {
@@ -827,6 +861,7 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
         }
       }
       this.currentTracks = [...update.tracks];
+      this.emit("trackschange", undefined);
     }
 
     // Resume playback if not paused on server

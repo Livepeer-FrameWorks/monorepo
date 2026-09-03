@@ -59,8 +59,9 @@ describe("HlsJsPlayerImpl — text & audio tracks", () => {
   it("reads native textTracks and toggles their mode", () => {
     const p = new HlsJsPlayerImpl();
     const textTracks = [
-      { label: "English", language: "en", mode: "disabled" },
-      { label: "", language: "es", mode: "disabled" },
+      { kind: "subtitles", label: "English", language: "en", mode: "disabled" },
+      { kind: "captions", label: "", language: "es", mode: "disabled" },
+      { kind: "metadata", label: "Events", language: "", mode: "hidden" },
     ];
     inject(p, {}, { textTracks });
     const tracks = p.getTextTracks();
@@ -72,7 +73,9 @@ describe("HlsJsPlayerImpl — text & audio tracks", () => {
     expect(textTracks[0].mode).toBe("disabled");
 
     p.selectTextTrack(null); // disable all
-    expect(textTracks.every((t) => t.mode === "disabled")).toBe(true);
+    expect(textTracks[0].mode).toBe("disabled");
+    expect(textTracks[1].mode).toBe("disabled");
+    expect(textTracks[2].mode).toBe("hidden");
   });
 
   it("reads hls.js audioTracks and selects within bounds", () => {

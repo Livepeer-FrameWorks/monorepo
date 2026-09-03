@@ -90,6 +90,10 @@ export interface PlayerControllerState {
   playbackQuality: PlaybackQuality | null;
   /** Subtitles enabled */
   subtitlesEnabled: boolean;
+  /** Available text/caption tracks. */
+  textTracks: Array<{ id: string; label: string; lang?: string; active: boolean }>;
+  /** Available audio tracks. */
+  audioTracks: Array<{ id: string; label: string; lang?: string; active: boolean }>;
   /** Toast message to display (auto-dismisses) */
   toast: { message: string; timestamp: number } | null;
   /** Controller-derived seekable start (ms) — reactively updated via seekingStateChange */
@@ -159,6 +163,10 @@ export interface PlayerControllerStore extends Readable<PlayerControllerState> {
   getQualities: () => Array<{ id: string; label: string; bitrate?: number }>;
   /** Select quality */
   selectQuality: (id: string) => void;
+  /** Select or disable a subtitle track through the controller. */
+  selectTextTrack: (id: string | null) => void;
+  /** Select an audio track through the controller. */
+  selectAudioTrack: (id: string) => void;
   /** Handle mouse enter (for controls visibility) */
   handleMouseEnter: () => void;
   /** Handle mouse leave (for controls visibility) */
@@ -211,6 +219,8 @@ const initialState: PlayerControllerState = {
   currentSourceInfo: null,
   playbackQuality: null,
   subtitlesEnabled: false,
+  textTracks: [],
+  audioTracks: [],
   toast: null,
   controllerSeekableStart: 0,
   controllerLiveEdge: 0,
@@ -297,6 +307,8 @@ export function createPlayerControllerStore(
       playbackQuality: controller!.getPlaybackQuality(),
       isLoopEnabled: controller!.isLoopEnabled(),
       subtitlesEnabled: controller!.isSubtitlesEnabled(),
+      textTracks: controller!.getTextTracks(),
+      audioTracks: controller!.getAudioTracks(),
       streamInfo: controller!.getStreamInfo(),
       thumbnailCues: controller!.getThumbnailCues?.() ?? prev.thumbnailCues,
       loadingPoster: controller!.getLoadingPoster?.() ?? prev.loadingPoster,
@@ -528,6 +540,12 @@ export function createPlayerControllerStore(
     );
 
     unsubscribers.push(
+      controller.on("tracksChange", ({ textTracks, audioTracks }) => {
+        store.update((prev) => ({ ...prev, textTracks, audioTracks }));
+      })
+    );
+
+    unsubscribers.push(
       controller.on("seekingStateChange", (data) => {
         store.update((prev) => ({
           ...prev,
@@ -717,6 +735,14 @@ export function createPlayerControllerStore(
     controller?.selectQuality(id);
   }
 
+  function selectTextTrack(id: string | null): void {
+    controller?.selectTextTrack(id);
+  }
+
+  function selectAudioTrack(id: string): void {
+    controller?.selectAudioTrack(id);
+  }
+
   function handleMouseEnter(): void {
     controller?.handleMouseEnter();
   }
@@ -770,6 +796,8 @@ export function createPlayerControllerStore(
     reload,
     getQualities,
     selectQuality,
+    selectTextTrack,
+    selectAudioTrack,
     handleMouseEnter,
     handleMouseLeave,
     handleMouseMove,

@@ -28,6 +28,7 @@ import type {
   InfoMessage,
   OnTimeMessage,
   SetSpeedMessage,
+  TracksMessage,
   RawChunk,
   WebCodecsPlayerOptions,
   WebCodecsStats,
@@ -47,7 +48,10 @@ import {
   hasNativeMediaStreamTrackGenerator,
 } from "./polyfills/MediaStreamTrackGenerator";
 import { translateCodec, buildDescription } from "../../core/CodecUtils";
+import { getBrowserInfo } from "../../core/detector";
 import { buildQualityLevelsFromStreamTracks } from "../../core/QualityLevels";
+import { buildSubtitleTrackList } from "../../core/TrackSelection";
+import { SubtitleOverlayRenderer } from "../../core/SubtitleOverlayRenderer";
 import { decideDeadPointRecovery } from "../../core/mist/dead-point-recovery";
 import { WebGLRenderer } from "../../rendering/WebGLRenderer";
 import { CanvasRenderer } from "../../rendering/CanvasRenderer";
@@ -60,6 +64,10 @@ function isSafari(): boolean {
   if (typeof navigator === "undefined") return false;
   const ua = navigator.userAgent;
   return /^((?!chrome|android).)*safari/i.test(ua);
+}
+
+export function canUseWebGLVideoFrameTextures(): boolean {
+  return !getBrowserInfo().isIOS;
 }
 
 function isRawVideoCodec(codec: string): boolean {
@@ -152,7 +160,8 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     shortname: "webcodecs",
     priority: 0, // Highest priority - lowest latency option
     // Raw WebSocket (12-byte header + codec frames) - NOT MP4-muxed
-    // MistServer's output_wsraw.cpp provides full codec negotiation (audio + video)
+    // MistServer's output_wsraw.cpp provides codec negotiation (audio + video),
+    // but does not implement the tracks control command.
     // MistServer's output_h264.cpp uses same 12-byte header but Annex B payload (video-only)
     // NOTE: ws/video/mp4 is MP4-fragmented which needs MEWS player (uses MSE)
     mimes: [
@@ -180,6 +189,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
   private tracksByIndex = new Map<number, TrackInfo>(); // Track metadata indexed by track idx
   private selectedMediaTrackIds: Set<number> | null = null;
   private selectedVideoTrack = "auto";
+  private videoSelectionExplicit = false;
   private queuedInitData = new Map<number, Uint8Array>(); // Queued INIT data waiting for track info
   private queuedChunks = new Map<number, RawChunk[]>(); // Queued chunks waiting for decoder config
   private isDestroyed = false;
@@ -189,6 +199,8 @@ export class WebCodecsPlayerImpl extends BasePlayer {
   private streamType: "live" | "vod" = "live";
   /** Payload format: 'avcc' for ws/video/raw, 'annexb' for ws/video/h264 */
   private payloadFormat: "avcc" | "annexb" = "avcc";
+  /** Only the H264 output implements media-track control, and only for video. */
+  private mediaTrackControl: "none" | "video" = "none";
   private workerUidCounter = 0;
   private workerListeners = new Map<number, (msg: WorkerToMainMessage) => void>();
 
@@ -219,11 +231,18 @@ export class WebCodecsPlayerImpl extends BasePlayer {
 
   // Metadata/subtitle track support
   private metadataWs: MetadataWebSocket | null = null;
+  private metadataSourceUrl: string | null = null;
   private activeSubtitleTrackId: string | null = null;
+  private activeSubtitleUnsubscribe: (() => void) | null = null;
+  private subtitleRenderer: SubtitleOverlayRenderer | null = null;
   private pendingMetaSubs: Array<{
     trackId: string;
     callback: (event: MetaTrackEvent) => void;
+    declaredType?: MetaTrackEvent["type"];
+    cancelled: boolean;
+    activeUnsubscribe: (() => void) | null;
   }> = [];
+  private supportedCombinations: string[][][] | null = null;
 
   // Codec support cache - keyed by "codec|init_hash"
   private static codecCache = new Map<string, boolean>();
@@ -236,12 +255,16 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     codecstring?: string;
     init?: string;
     type?: string;
+    h264_profile?: string;
+    h264_level?: string;
   }): string {
     const codecStr = translateCodec({
       type: track.type ?? "video",
       codec: track.codec,
       codecstring: track.codecstring,
       init: track.init,
+      h264_profile: track.h264_profile,
+      h264_level: track.h264_level,
     });
     // Simple hash of init data for cache key (just first/last bytes + length)
     const init = track.init ?? "";
@@ -461,6 +484,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     this.queuedChunks.clear();
     this.selectedMediaTrackIds = null;
     this.selectedVideoTrack = "auto";
+    this.videoSelectionExplicit = false;
     this.isDestroyed = false;
     this.useDirectRendering = false;
     this._duration = Infinity;
@@ -476,13 +500,16 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     this._messagesReceived = 0;
     this.metadataWs?.destroy();
     this.metadataWs = null;
-    this.activeSubtitleTrackId = null;
+    this.metadataSourceUrl = source.url;
+    this.stopSubtitleRendering();
     this.pendingMetaSubs = [];
+    this.supportedCombinations = null;
 
     // ws/video/h264 sends no INIT frame — SPS/PPS inline in Annex B bitstream, no description needed.
     // ws/video/raw sends AVCC init data — used as decoder description. Frame data may be Annex B
     // (detected and converted at runtime in the worker).
     this.payloadFormat = source.type?.includes("h264") ? "annexb" : "avcc";
+    this.mediaTrackControl = this.payloadFormat === "annexb" ? "video" : "none";
     if (this.payloadFormat === "annexb") {
       this.log("Using Annex B payload format (ws/video/h264)");
     }
@@ -502,6 +529,8 @@ export class WebCodecsPlayerImpl extends BasePlayer {
             codec: track.codec,
             codecstring: track.codecstring,
             init: track.init,
+            h264_profile: track.h264_profile,
+            h264_level: track.h264_level,
             width: track.width,
             height: track.height,
             fpks: track.fpks,
@@ -653,6 +682,8 @@ export class WebCodecsPlayerImpl extends BasePlayer {
             codec: track.codec,
             codecstring: track.codecstring,
             init: track.init,
+            h264_profile: track.h264_profile,
+            h264_level: track.h264_level,
             width: track.width,
             height: track.height,
             fpks: track.fpks,
@@ -705,6 +736,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
         Array.from(supportedVideoCodecs), // Video codecs (position 1)
       ],
     ];
+    this.supportedCombinations = supportedCombinations;
 
     this.log(
       `Requesting codecs: audio=[${supportedCombinations[0][0].join(", ")}], video=[${supportedCombinations[0][1].join(", ")}]`
@@ -712,7 +744,6 @@ export class WebCodecsPlayerImpl extends BasePlayer {
 
     try {
       await this.wsController.connect();
-      this.wsController.requestCodecData(supportedCombinations);
     } catch (err) {
       this.log(`Failed to connect: ${err}`, "error");
       this.emit("error", err instanceof Error ? err : new Error(String(err)));
@@ -755,15 +786,21 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     this.renderCanvas.style.objectFit = "contain";
     container.appendChild(this.renderCanvas);
 
-    // Try WebGL, fall back to Canvas2D
-    try {
-      this.webglRenderer = new WebGLRenderer(this.renderCanvas, { prefer16bit: true });
-      this.log(
-        "WebGL renderer initialized" + (this.webglRenderer.hasWebGL2 ? " (WebGL2)" : " (WebGL1)")
-      );
-    } catch (err) {
-      this.log(`WebGL failed, falling back to Canvas2D: ${err}`, "warn");
+    // iOS WebKit crashes when texImage2D receives a VideoFrame, including in
+    // non-Safari branded browsers. Canvas2D keeps direct rendering without
+    // entering that texture upload path.
+    if (!canUseWebGLVideoFrameTextures()) {
       this.canvasRenderer = new CanvasRenderer(this.renderCanvas);
+    } else {
+      try {
+        this.webglRenderer = new WebGLRenderer(this.renderCanvas, { prefer16bit: true });
+        this.log(
+          "WebGL renderer initialized" + (this.webglRenderer.hasWebGL2 ? " (WebGL2)" : " (WebGL1)")
+        );
+      } catch (err) {
+        this.log(`WebGL failed, falling back to Canvas2D: ${err}`, "warn");
+        this.canvasRenderer = new CanvasRenderer(this.renderCanvas);
+      }
     }
 
     // AudioWorklet renderer — only for browsers where audio routes through it.
@@ -905,8 +942,10 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     // Stop metadata WebSocket
     this.metadataWs?.destroy();
     this.metadataWs = null;
+    this.metadataSourceUrl = null;
     this.pendingMetaSubs = [];
-    this.activeSubtitleTrackId = null;
+    this.supportedCombinations = null;
+    this.stopSubtitleRendering();
 
     // Stop WebSocket
     this.wsController?.disconnect();
@@ -1284,13 +1323,17 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     this.wsController.on("info", (msg) => this.handleInfo(msg));
     this.wsController.on("ontime", (msg) => this.handleOnTime(msg));
     this.wsController.on("setspeed", (msg) => this.handleSetSpeed(msg));
-    this.wsController.on("tracks", (tracks) => this.handleTracksChange(tracks));
+    this.wsController.on("tracks", (message) => this.handleTracksChange(message));
     this.wsController.on("chunk", (chunk) => this.handleChunk(chunk));
     this.wsController.on("pause", (msg) => this.handleServerPause(msg));
     this.wsController.on("stop", () => this.handleStop());
     this.wsController.on("error", (err) => this.handleError(err));
     this.wsController.on("statechange", (state) => {
       this.log(`Connection state: ${state}`);
+      if (state === "connected" && this.supportedCombinations) {
+        this.wsController?.requestCodecData(this.supportedCombinations);
+        this.replayDesiredMediaTracks();
+      }
       if (state === "error") {
         this.emit("error", new Error("WebSocket connection failed"));
       }
@@ -1394,6 +1437,10 @@ export class WebCodecsPlayerImpl extends BasePlayer {
 
       // Also update tracks array
       this.tracks = Object.values(tracksObj);
+      if (this.tracks.some((track) => track.type === "meta") && this.metadataSourceUrl) {
+        this.initMetadataWebSocket(this.metadataSourceUrl);
+      }
+      this.emit("trackschange", undefined);
     }
   }
 
@@ -1486,12 +1533,16 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     });
   }
 
-  private async handleTracksChange(tracks: TrackInfo[]): Promise<void> {
-    this.log(`Tracks changed: ${tracks.map((t) => `${t.idx}:${t.type}`).join(", ")}`);
+  private async handleTracksChange(message: TracksMessage): Promise<void> {
+    const trackIds = message.tracks ?? [];
+    const codecs = message.codecs ?? [];
+    this.log(`Tracks changed: ${trackIds.join(", ") || "none"}`);
 
-    // Check if codecs changed
-    const newTrackIds = new Set(tracks.map((t) => t.idx));
+    // Mist's tracks message is the selected track set, not a replacement for
+    // the full metadata inventory received in info messages.
+    const newTrackIds = new Set(trackIds);
     const oldTrackIds = new Set(this.pipelines.keys());
+    this.selectedMediaTrackIds = newTrackIds;
 
     // Remove old pipelines
     for (const idx of oldTrackIds) {
@@ -1500,20 +1551,31 @@ export class WebCodecsPlayerImpl extends BasePlayer {
       }
     }
 
-    // Update tracksByIndex and create new pipelines
-    for (const track of tracks) {
-      this.tracksByIndex.set(track.idx, track);
-
-      if (track.type === "video" || track.type === "audio") {
-        if (!this.isSelectedMediaTrack(track.idx)) continue;
-        if (!this.pipelines.has(track.idx)) {
-          this.configureAudioRendererForTrack(track);
-          await this.createPipeline(track);
+    // Codec strings and track ids are parallel arrays. Refresh the selected
+    // rows without deleting unselected quality/audio/subtitle metadata.
+    for (let position = 0; position < trackIds.length; position++) {
+      const trackId = trackIds[position];
+      const codec = codecs[position];
+      const track = this.tracksByIndex.get(trackId);
+      if (track && codec) track.codec = codec;
+      if (track) {
+        if (track.type === "video" || track.type === "audio") {
+          if (!this.pipelines.has(track.idx)) {
+            this.configureAudioRendererForTrack(track);
+            await this.createPipeline(track);
+          }
         }
       }
     }
 
-    this.tracks = tracks;
+    this.tracks = Array.from(this.tracksByIndex.values());
+    if (
+      trackIds.some((trackId) => this.tracksByIndex.get(trackId)?.type === "meta") &&
+      this.metadataSourceUrl
+    ) {
+      this.initMetadataWebSocket(this.metadataSourceUrl);
+    }
+    this.emit("trackschange", undefined);
   }
 
   private handleChunk(chunk: RawChunk): void {
@@ -1704,6 +1766,7 @@ export class WebCodecsPlayerImpl extends BasePlayer {
    * Uses a separate socket at the same URL with ?rate=1.
    */
   private initMetadataWebSocket(sourceUrl: string): void {
+    if (this.metadataWs || this.isDestroyed) return;
     const hasMetaTracks = Array.from(this.tracksByIndex.values()).some((t) => t.type === "meta");
 
     if (!hasMetaTracks && this.pendingMetaSubs.length === 0) {
@@ -1716,33 +1779,71 @@ export class WebCodecsPlayerImpl extends BasePlayer {
       () => this._currentTime,
       () => this.videoElement?.playbackRate ?? 1,
       () => this._isPaused,
-      { debug: this.debugging }
+      {
+        debug: this.debugging,
+        resolveEventType: (trackId) => {
+          const codec = this.tracksByIndex.get(Number(trackId))?.codec?.toLowerCase();
+          if (codec === "subtitle") return "subtitle";
+          if (codec === "score") return "score";
+          if (codec === "chapter") return "chapter";
+          if (codec === "event") return "event";
+          return undefined;
+        },
+      }
     );
 
-    // Drain pending subscriptions that were registered before the socket existed
-    for (const sub of this.pendingMetaSubs) {
-      this.metadataWs.subscribe(sub.trackId, sub.callback);
-    }
-    this.pendingMetaSubs = [];
+    this.activatePendingMetaSubscriptions();
 
     this.log(`Metadata WebSocket initialized at ${metaUrl}`);
+  }
+
+  private activatePendingMetaSubscriptions(): void {
+    if (!this.metadataWs) return;
+    for (const sub of this.pendingMetaSubs) {
+      if (!sub.cancelled) {
+        sub.activeUnsubscribe = this.metadataWs.subscribe(
+          sub.trackId,
+          sub.callback,
+          sub.declaredType
+        );
+      }
+    }
+    this.pendingMetaSubs = [];
   }
 
   /**
    * Subscribe to metadata track events (subtitles, scores, etc.).
    * Returns an unsubscribe function.
    */
-  subscribeToMetaTrack(trackId: string, callback: (event: MetaTrackEvent) => void): () => void {
+  subscribeToMetaTrack(
+    trackId: string,
+    callback: (event: MetaTrackEvent) => void,
+    declaredType?: MetaTrackEvent["type"]
+  ): () => void {
     if (this.metadataWs) {
-      return this.metadataWs.subscribe(trackId, callback);
+      return this.metadataWs.subscribe(trackId, callback, declaredType);
     }
 
     // Queue subscription until metadata socket is ready
-    this.pendingMetaSubs.push({ trackId, callback });
+    const pending = {
+      trackId,
+      callback,
+      declaredType,
+      cancelled: false,
+      activeUnsubscribe: null as (() => void) | null,
+    };
+    this.pendingMetaSubs.push(pending);
+    if (this.metadataSourceUrl) {
+      this.initMetadataWebSocket(this.metadataSourceUrl);
+    }
     return () => {
+      if (pending.cancelled) return;
+      pending.cancelled = true;
       this.pendingMetaSubs = this.pendingMetaSubs.filter(
-        (s) => s.trackId !== trackId || s.callback !== callback
+        (subscription) => subscription !== pending
       );
+      pending.activeUnsubscribe?.();
+      pending.activeUnsubscribe = null;
     };
   }
 
@@ -1755,30 +1856,17 @@ export class WebCodecsPlayerImpl extends BasePlayer {
     lang?: string;
     active: boolean;
   }> {
-    const tracks: Array<{
-      id: string;
-      label: string;
-      lang?: string;
-      active: boolean;
-    }> = [];
-
-    for (const [idx, track] of this.tracksByIndex) {
-      if (track.type === "meta" && track.codec?.toLowerCase() === "subtitle") {
-        tracks.push({
-          id: String(idx),
-          label: track.codecstring || `Subtitle ${idx}`,
-          active: this.activeSubtitleTrackId === String(idx),
-        });
-      }
-    }
-
-    return tracks;
+    return buildSubtitleTrackList(
+      Array.from(this.tracksByIndex.values()),
+      this.activeSubtitleTrackId
+    );
   }
 
   getQualities(): Array<{ id: string; label: string; isAuto?: boolean; active?: boolean }> {
     const qualities: Array<{ id: string; label: string; isAuto?: boolean; active?: boolean }> = [
       { id: "auto", label: "Auto", isAuto: true, active: this.selectedVideoTrack === "auto" },
     ];
+    if (this.mediaTrackControl === "none") return qualities;
     for (const level of buildQualityLevelsFromStreamTracks(
       Array.from(this.tracksByIndex.values())
     )) {
@@ -1788,31 +1876,70 @@ export class WebCodecsPlayerImpl extends BasePlayer {
   }
 
   selectQuality(id: string): void {
+    if (this.mediaTrackControl === "none") return;
+    this.selectedVideoTrack = id;
+    this.videoSelectionExplicit = true;
     if (!this.wsController) return;
     if (id === "auto") {
-      this.wsController.setTracks({});
-      this.selectedVideoTrack = "auto";
+      // output_h264.cpp restores its default selector by removing targetParams.video.
+      this.wsController.setTracks({ video: null });
       return;
     }
     this.wsController.setTracks({ video: id });
-    this.selectedVideoTrack = id;
   }
 
   /**
    * Select a subtitle track by ID, or null to disable.
    */
   selectTextTrack(id: string | null): void {
-    // Unsubscribe from current track
-    if (this.activeSubtitleTrackId !== null) {
-      this.activeSubtitleTrackId = null;
-    }
+    this.stopSubtitleRendering();
 
     if (id === null) {
       return;
     }
 
     this.activeSubtitleTrackId = id;
+    this.activeSubtitleUnsubscribe = this.subscribeToMetaTrack(
+      id,
+      (event) => this.renderSubtitleEvent(event),
+      "subtitle"
+    );
     this.log(`Selected subtitle track: ${id}`);
+  }
+
+  getAudioTracks(): Array<{ id: string; label: string; lang?: string; active: boolean }> {
+    // output_wsraw.cpp ignores tracks commands and output_h264.cpp is video-only.
+    // An empty list prevents every UI package from presenting a no-op selector.
+    return [];
+  }
+
+  selectAudioTrack(_id: string): void {
+    // Neither WebCodecs transport can switch audio tracks.
+  }
+
+  private replayDesiredMediaTracks(): void {
+    if (this.mediaTrackControl !== "video" || !this.videoSelectionExplicit) return;
+    this.wsController?.setTracks({
+      video: this.selectedVideoTrack === "auto" ? null : this.selectedVideoTrack,
+    });
+  }
+
+  private renderSubtitleEvent(event: MetaTrackEvent): void {
+    if (event.type !== "subtitle" || event.trackId !== this.activeSubtitleTrackId) return;
+    if (!this.subtitleRenderer && this.container) {
+      this.subtitleRenderer = new SubtitleOverlayRenderer(this.container, {
+        getPlaybackTimeMs: () => this.getCurrentTime(),
+      });
+    }
+    this.subtitleRenderer?.render(event);
+  }
+
+  private stopSubtitleRendering(): void {
+    this.activeSubtitleUnsubscribe?.();
+    this.activeSubtitleUnsubscribe = null;
+    this.activeSubtitleTrackId = null;
+    this.subtitleRenderer?.destroy();
+    this.subtitleRenderer = null;
   }
 
   // ============================================================================

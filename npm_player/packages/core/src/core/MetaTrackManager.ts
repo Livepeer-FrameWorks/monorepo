@@ -25,6 +25,27 @@ export interface MetaTrackManagerConfig {
   fastForwardInterval?: number;
   /** Wait for a non-zero playback time before sending the socket's first seek. */
   deferInitialSeekUntilPlaybackTime?: boolean;
+  /** Optional query parameter shared with other attach-scoped Mist requests. */
+  sessionParam?: { name: string; value: string } | null;
+}
+
+export function detectMetaTrackEventType(data: unknown): MetaTrackEventType {
+  let candidate = data;
+  if (typeof candidate === "string") {
+    try {
+      candidate = JSON.parse(candidate);
+    } catch {
+      return "unknown";
+    }
+  }
+  if (typeof candidate !== "object" || candidate === null) return "unknown";
+
+  const obj = candidate as Record<string, unknown>;
+  if ("text" in obj && ("startTime" in obj || "start" in obj)) return "subtitle";
+  if ("key" in obj && "value" in obj) return "score";
+  if ("title" in obj && "startTime" in obj) return "chapter";
+  if ("name" in obj) return "event";
+  return "unknown";
 }
 
 type ConnectionState = "disconnected" | "connecting" | "connected" | "reconnecting";
@@ -556,7 +577,13 @@ export class MetaTrackManager {
 
     // MistServer meta track WebSocket uses /json_<streamname>.js endpoint
     // The rate=1 param tells MistServer to stream metadata in real-time
-    return `${baseUrl}/json_${this.config.streamName}.js?rate=1`;
+    const url = new URL(`${baseUrl}/json_${encodeURIComponent(this.config.streamName)}.js`);
+    url.searchParams.set("rate", "1");
+    const sessionParam = this.config.sessionParam;
+    if (sessionParam?.name && sessionParam.value) {
+      url.searchParams.set(sessionParam.name, sessionParam.value);
+    }
+    return url.toString();
   }
 
   /**
@@ -808,6 +835,7 @@ export class MetaTrackManager {
     track: string | number;
     time: number;
     data?: unknown;
+    duration?: unknown;
     [key: string]: unknown;
   }): MetaTrackEvent {
     const trackId = String(message.track);
@@ -817,11 +845,21 @@ export class MetaTrackManager {
     // Detect event type from data shape
     const type = this.detectEventType(data);
 
+    const rawDuration = message.duration;
+    const durationMs =
+      rawDuration !== null &&
+      rawDuration !== undefined &&
+      rawDuration !== "" &&
+      Number.isFinite(Number(rawDuration))
+        ? Number(rawDuration)
+        : undefined;
+
     return {
       type,
       timestamp,
       trackId,
       data,
+      durationMs,
     };
   }
 
@@ -829,47 +867,21 @@ export class MetaTrackManager {
    * Detect event type from data shape
    */
   private detectEventType(data: unknown): MetaTrackEventType {
-    if (typeof data !== "object" || data === null) {
-      return "unknown";
-    }
-
-    const obj = data as Record<string, unknown>;
-
-    // Subtitle: has text, startTime/endTime
-    if ("text" in obj && ("startTime" in obj || "start" in obj)) {
-      return "subtitle";
-    }
-
-    // Score: has key and value
-    if ("key" in obj && "value" in obj) {
-      return "score";
-    }
-
-    // Chapter: has title and startTime
-    if ("title" in obj && "startTime" in obj) {
-      return "chapter";
-    }
-
-    // Event: has name
-    if ("name" in obj) {
-      return "event";
-    }
-
-    return "unknown";
+    return detectMetaTrackEventType(data);
   }
 
   /**
    * Dispatch event to subscribers
    */
   private dispatchEvent(event: MetaTrackEvent): void {
-    const callbacks = this.subscriptions.get(event.trackId);
-    if (callbacks) {
-      for (const callback of callbacks) {
-        try {
-          callback(event);
-        } catch (error) {
-          console.error("[MetaTrackManager] Callback error:", error);
-        }
+    const callbacks = new Set(this.subscriptions.get(event.trackId));
+    const allCallbacks = this.subscriptions.get("all");
+    for (const callback of allCallbacks ?? []) callbacks.add(callback);
+    for (const callback of callbacks) {
+      try {
+        callback(event);
+      } catch (error) {
+        console.error("[MetaTrackManager] Callback error:", error);
       }
     }
   }

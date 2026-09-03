@@ -25,6 +25,8 @@ export interface StreamStateClientConfig {
   useWebSocket?: boolean;
   /** Headers for MistServer HTTP polling requests. */
   headers?: Record<string, string>;
+  /** Optional query parameter applied to every Mist info HTTP and WebSocket URL. */
+  sessionParam?: () => { name: string; value: string } | null;
 }
 
 type StreamStateClientResolvedConfig = Omit<
@@ -136,10 +138,20 @@ export class StreamStateClient extends TypedEventEmitter<StreamStateClientEvents
   private timers = new TimerManager();
   private isRunning: boolean = false;
   private wasOnline: boolean = false;
-  private connectionId: number = 0; // Track connection attempts to prevent stale callbacks
+  private connectionId: number = 0;
+  private reconnectAttempt = 0;
+  private pollTimer: number | null = null;
+  private pollInFlightConnectionId: number | null = null;
+  private pollAbortController: AbortController | null = null;
+  private reconnectTimer: number | null = null;
+  private healthySocketTimer: number | null = null;
 
   // Debounce time for rapid mount/unmount cycles (ms)
   private static readonly CONNECTION_DEBOUNCE_MS = 100;
+  private static readonly INITIAL_RECONNECT_DELAY_MS = 1000;
+  private static readonly MAX_RECONNECT_DELAY_MS = 30000;
+  private static readonly RECONNECT_JITTER = 0.2;
+  private static readonly HEALTHY_SOCKET_RESET_MS = 60000;
 
   constructor(config: StreamStateClientConfig) {
     super();
@@ -205,15 +217,25 @@ export class StreamStateClient extends TypedEventEmitter<StreamStateClientEvents
    */
   stop(): void {
     this.isRunning = false;
+    this.connectionId++;
+    this.pollAbortController?.abort();
+    this.pollAbortController = null;
+    this.pollInFlightConnectionId = null;
 
     // Close WebSocket
     if (this.ws) {
-      this.ws.close();
+      const ws = this.ws;
       this.ws = null;
+      ws.onclose = null;
+      ws.close();
     }
 
     // Clear all timers
     this.timers.destroy();
+    this.pollTimer = null;
+    this.reconnectTimer = null;
+    this.healthySocketTimer = null;
+    this.reconnectAttempt = 0;
   }
 
   /**
@@ -281,15 +303,17 @@ export class StreamStateClient extends TypedEventEmitter<StreamStateClientEvents
   // ============================================================================
 
   private connectWebSocket(): void {
-    if (!this.isRunning) return;
+    if (!this.isRunning || !this.config.useWebSocket) return;
 
     const { mistBaseUrl, streamName } = this.config;
     const currentConnectionId = this.connectionId;
 
     // Clean up existing connection
     if (this.ws) {
-      this.ws.close();
+      const existing = this.ws;
       this.ws = null;
+      existing.onclose = null;
+      existing.close();
     }
 
     try {
@@ -299,16 +323,32 @@ export class StreamStateClient extends TypedEventEmitter<StreamStateClientEvents
         .replace(/^https:/, "wss:")
         .replace(/\/$/, "");
 
-      const ws = new WebSocket(
-        `${wsUrl}/json_${encodeURIComponent(streamName)}.js?metaeverywhere=1&inclzero=1`
-      );
+      const ws = new WebSocket(this.buildInfoUrl(wsUrl, streamName));
       this.ws = ws;
 
       ws.onopen = () => {
+        if (!this.isRunning || this.connectionId !== currentConnectionId || this.ws !== ws) {
+          ws.close();
+          return;
+        }
+        this.stopPollTimer();
+        this.pollAbortController?.abort();
+        this.stopHealthySocketTimer();
+        this.healthySocketTimer = this.timers.start(
+          () => {
+            this.healthySocketTimer = null;
+            if (this.isRunning && this.ws === ws && ws.readyState === WebSocket.OPEN) {
+              this.reconnectAttempt = 0;
+            }
+          },
+          StreamStateClient.HEALTHY_SOCKET_RESET_MS,
+          "ws-healthy"
+        );
         console.debug("[StreamStateClient] WebSocket connected");
       };
 
       ws.onmessage = (event) => {
+        if (!this.isRunning || this.connectionId !== currentConnectionId || this.ws !== ws) return;
         try {
           const data = JSON.parse(event.data) as MistStreamInfo;
           this.processStreamInfo(data);
@@ -323,34 +363,98 @@ export class StreamStateClient extends TypedEventEmitter<StreamStateClientEvents
       };
 
       ws.onclose = () => {
+        if (this.connectionId !== currentConnectionId || this.ws !== ws) return;
         this.ws = null;
+        this.stopHealthySocketTimer();
 
-        if (!this.isRunning || this.connectionId !== currentConnectionId) return;
+        if (!this.isRunning) return;
 
-        // Disable WebSocket and switch to HTTP polling
-        this.config.useWebSocket = false;
-        console.debug("[StreamStateClient] WebSocket closed, switching to HTTP polling");
-        this.pollHttp();
+        console.debug("[StreamStateClient] WebSocket closed, polling until reconnect");
+        this.resumeHttpPolling();
+        this.scheduleReconnect();
       };
     } catch (error) {
       console.warn("[StreamStateClient] WebSocket connection failed:", error);
-      // Disable WebSocket and switch to HTTP polling
-      this.config.useWebSocket = false;
-      this.pollHttp();
+      this.resumeHttpPolling();
+      this.scheduleReconnect();
     }
+  }
+
+  private resumeHttpPolling(): void {
+    if (
+      !this.isRunning ||
+      this.pollTimer !== null ||
+      this.pollInFlightConnectionId === this.connectionId
+    )
+      return;
+    void this.pollHttp();
+  }
+
+  private scheduleReconnect(): void {
+    if (!this.isRunning || !this.config.useWebSocket || this.reconnectTimer !== null) return;
+
+    const baseDelay = Math.min(
+      StreamStateClient.INITIAL_RECONNECT_DELAY_MS * 2 ** this.reconnectAttempt,
+      StreamStateClient.MAX_RECONNECT_DELAY_MS
+    );
+    const jitter = 1 + (Math.random() * 2 - 1) * StreamStateClient.RECONNECT_JITTER;
+    const delay = Math.round(baseDelay * jitter);
+    this.reconnectAttempt++;
+
+    this.reconnectTimer = this.timers.start(
+      () => {
+        this.reconnectTimer = null;
+        this.connectWebSocket();
+      },
+      delay,
+      "ws-reconnect"
+    );
+  }
+
+  private schedulePoll(): void {
+    if (!this.isRunning || this.pollTimer !== null || this.isSocketReady()) return;
+    this.pollTimer = this.timers.start(
+      () => {
+        this.pollTimer = null;
+        if (!this.isSocketReady()) void this.pollHttp();
+      },
+      this.config.pollInterval,
+      "poll"
+    );
+  }
+
+  private stopPollTimer(): void {
+    if (this.pollTimer === null) return;
+    this.timers.stop(this.pollTimer);
+    this.pollTimer = null;
+  }
+
+  private stopHealthySocketTimer(): void {
+    if (this.healthySocketTimer === null) return;
+    this.timers.stop(this.healthySocketTimer);
+    this.healthySocketTimer = null;
   }
 
   private async pollHttp(): Promise<void> {
     if (!this.isRunning) return;
 
-    const { mistBaseUrl, streamName, pollInterval } = this.config;
+    const pollConnectionId = this.connectionId;
+    if (this.pollInFlightConnectionId === pollConnectionId) return;
+    this.pollInFlightConnectionId = pollConnectionId;
+    const abortController = new AbortController();
+    this.pollAbortController = abortController;
+
+    const { mistBaseUrl, streamName } = this.config;
 
     try {
-      const url = `${mistBaseUrl.replace(/\/$/, "")}/json_${encodeURIComponent(streamName)}.js?metaeverywhere=1&inclzero=1`;
+      const url = this.buildInfoUrl(mistBaseUrl.replace(/\/$/, ""), streamName);
       const response = await fetch(url, {
         method: "GET",
         headers: { Accept: "application/json", ...this.config.headers },
+        signal: abortController.signal,
       });
+
+      if (!this.isRunning || this.connectionId !== pollConnectionId || this.isSocketReady()) return;
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
@@ -365,9 +469,11 @@ export class StreamStateClient extends TypedEventEmitter<StreamStateClientEvents
       }
 
       const data = JSON.parse(text) as MistStreamInfo;
+      if (!this.isRunning || this.connectionId !== pollConnectionId || this.isSocketReady()) return;
       this.processStreamInfo(data);
     } catch (error) {
-      if (!this.isRunning) return;
+      if (!this.isRunning || this.connectionId !== pollConnectionId || this.isSocketReady()) return;
+      if (error instanceof DOMException && error.name === "AbortError") return;
 
       const errorMessage = error instanceof Error ? error.message : "Connection failed";
       this.setState({
@@ -379,12 +485,24 @@ export class StreamStateClient extends TypedEventEmitter<StreamStateClientEvents
         error: errorMessage,
       });
       this.emit("error", { error: errorMessage });
+    } finally {
+      if (this.pollInFlightConnectionId === pollConnectionId) {
+        this.pollInFlightConnectionId = null;
+      }
+      if (this.pollAbortController === abortController) {
+        this.pollAbortController = null;
+      }
+      if (this.connectionId === pollConnectionId && !this.isSocketReady()) this.schedulePoll();
     }
+  }
 
-    // Schedule next poll
-    if (this.isRunning && !this.config.useWebSocket) {
-      this.timers.start(() => this.pollHttp(), pollInterval, "poll");
-    }
+  private buildInfoUrl(baseUrl: string, streamName: string): string {
+    const raw = `${baseUrl}/json_${encodeURIComponent(streamName)}.js?metaeverywhere=1&inclzero=1`;
+    const sessionParam = this.config.sessionParam?.();
+    if (!sessionParam?.name || !sessionParam.value) return raw;
+    const url = new URL(raw);
+    url.searchParams.set(sessionParam.name, sessionParam.value);
+    return url.toString();
   }
 
   private processStreamInfo(data: MistStreamInfo): void {

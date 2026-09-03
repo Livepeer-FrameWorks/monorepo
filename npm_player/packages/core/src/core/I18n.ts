@@ -80,6 +80,7 @@ export interface TranslationStrings {
   // Quality
   quality: string;
   auto: string;
+  audio: string;
 
   // Captions
   captions: string;
@@ -203,6 +204,7 @@ export const DEFAULT_TRANSLATIONS: TranslationStrings = {
   // Quality
   quality: "Quality",
   auto: "Auto",
+  audio: "Audio",
 
   // Captions
   captions: "Captions",
@@ -320,6 +322,7 @@ const LOCALE_PACKS: Record<FwLocale, TranslationStrings> = {
     track: "Pista",
     quality: "Calidad",
     auto: "Auto",
+    audio: "Audio",
     captions: "Subtítulos",
     captionsOff: "Desactivados",
     playbackSpeed: "Velocidad de reproducción",
@@ -414,6 +417,7 @@ const LOCALE_PACKS: Record<FwLocale, TranslationStrings> = {
     track: "Piste",
     quality: "Qualité",
     auto: "Auto",
+    audio: "Audio",
     captions: "Sous-titres",
     captionsOff: "Désactivés",
     playbackSpeed: "Vitesse de lecture",
@@ -508,6 +512,7 @@ const LOCALE_PACKS: Record<FwLocale, TranslationStrings> = {
     track: "Spur",
     quality: "Qualität",
     auto: "Auto",
+    audio: "Audio",
     captions: "Untertitel",
     captionsOff: "Aus",
     playbackSpeed: "Wiedergabegeschwindigkeit",
@@ -602,6 +607,7 @@ const LOCALE_PACKS: Record<FwLocale, TranslationStrings> = {
     track: "Spoor",
     quality: "Kwaliteit",
     auto: "Auto",
+    audio: "Audio",
     captions: "Ondertiteling",
     captionsOff: "Uit",
     playbackSpeed: "Afspeelsnelheid",

@@ -32,11 +32,20 @@ export interface CodecSupport {
   opus: boolean;
 }
 
+function isDesktopUAIPad(userAgent: string): boolean {
+  return /macintosh/.test(userAgent) && (navigator.maxTouchPoints ?? 0) > 1;
+}
+
+function isIOSLikeDevice(userAgent: string): boolean {
+  return /iphone|ipad|ipod/.test(userAgent) || isDesktopUAIPad(userAgent);
+}
+
 /**
  * Detect browser information
  */
 export function getBrowserInfo(): BrowserInfo {
   const ua = navigator.userAgent.toLowerCase();
+  const isIOS = isIOSLikeDevice(ua);
 
   return {
     isChrome: /chrome|crios/.test(ua) && !/edge|edg/.test(ua),
@@ -44,8 +53,8 @@ export function getBrowserInfo(): BrowserInfo {
     isSafari: /safari/.test(ua) && !/chrome|crios/.test(ua),
     isEdge: /edge|edg/.test(ua),
     isAndroid: /android/.test(ua),
-    isIOS: /iphone|ipad|ipod/.test(ua),
-    isMobile: /mobile|android|iphone|ipad|ipod/.test(ua),
+    isIOS,
+    isMobile: isIOS || /mobile|android/.test(ua),
     supportsMediaSource: "MediaSource" in window,
     supportsWebRTC: "RTCPeerConnection" in window,
     supportsWebSocket: "WebSocket" in window,
@@ -160,10 +169,11 @@ export function isFileProtocol(): boolean {
  */
 export function isIPadWithBrokenHEVC(): boolean {
   const ua = navigator.userAgent;
-  const isIPad = /iPad/.test(ua) || (/Macintosh/.test(ua) && "ontouchend" in document);
+  const desktopUAIPad = isDesktopUAIPad(ua.toLowerCase());
+  const isIPad = /iPad/i.test(ua) || desktopUAIPad;
   if (!isIPad) return false;
 
-  const match = ua.match(/OS (\d+)/);
+  const match = ua.match(/OS (\d+)/) ?? (desktopUAIPad ? ua.match(/Version\/(\d+)/) : null);
   if (!match) return false;
   return parseInt(match[1], 10) < 17;
 }

@@ -364,6 +364,43 @@ The player wraps multiple playback engines and selects the best one for each bro
 
 Protocol selection uses a scoring algorithm ported from MistServer's MistMetaPlayer, evaluating codec support, browser compatibility, and source priority.
 
+On iPhone and iPad—including iPads presenting a desktop Safari user agent—the
+WebCodecs engine uses Canvas2D instead of uploading `VideoFrame` objects as WebGL
+textures. Subtitle selection is handled once by the active engine, and literal cue
+text remains literal even when it resembles JSON.
+
+Caption controls touch only subtitle and caption text tracks. Chapter and metadata
+tracks remain loaded, so host-side `cuechange` listeners continue to work while captions
+are off.
+
+WebCodecs renders captions from its own timed-metadata socket. MEWS and WHEP use the
+same timed-subtitle overlay renderer, so every subtitle offered by those transports has a
+visible rendering path with cue end-time and transport-duration timing. Caption enablement
+reflects the user's requested state immediately, while the applied track remains separate.
+An early request is retried when tracks arrive, an absent explicit language
+is not replaced by a fallback, a second toggle cancels a pending request, and periodic stream
+snapshots do not restart the same active cue. If a selected track disappears and later returns,
+the controller clears the stale renderer and reapplies the request. The bundled React, Svelte,
+and web-component settings consume reactive controller track lists and route choices through
+this contract. Standalone Svelte controls without a controller callback expose only native
+browser text tracks, avoiding a selected state with no rendering owner.
+
+Track selectors preserve Mist's absolute identity (`idx`, or a numeric metadata key
+when `idx` is absent). Tracks without a stable transport identity are omitted from
+selection menus instead of using their filtered list position. Native WHEP also retains
+desired quality and audio choices while signaling is disconnected and sends them again
+whenever a replacement control channel opens. Mist implements `tracks` per output: MEWS,
+Native WHEP, and Mist WebRTC accept video and audio selectors, not a `subtitle` key;
+subtitle selection remains local to the controller-owned metadata renderer. WebCodecs
+`ws/video/h264` accepts video-only selection and restores Auto by removing the server
+selector. `ws/video/raw` accepts no track commands, so the player hides unsupported quality
+and audio controls instead of showing locally active no-op choices. WebCodecs replays
+supported H264 selection, repeats its codec handshake, and independently restores
+timed-metadata subscriptions.
+WebCodecs binds selected subtitle subscriptions to the `subtitle`
+type, and the framework subtitle renderers' two-argument subscription remains compatible
+with plain cues received before Mist track metadata arrives.
+
 ## Thumbnails
 
 ### Poster image
@@ -469,6 +506,38 @@ player.selectTextTrack(textTracks[0].id);
 ```ts
 const stats = await player.getStats();
 ```
+
+## Diagnostic Telemetry
+
+Browser telemetry is opt-in and intentionally lossy. Enable only the signals you need:
+
+```ts
+const player = createPlayer({
+  target: "#player",
+  contentId: "pk_...",
+  telemetry: {
+    boot: true, // Startup waterfall and time to first frame
+    session: true, // Rebuffering, frame, bitrate, and retention deltas
+  },
+});
+```
+
+With `session` enabled, the player generates a fresh ephemeral identifier for each
+`attach()` and adds it to Mist playback, stream-info, and timed-metadata URLs as `fwsid`. FrameWorks uses
+that value only to correlate browser QoE with edge connection diagnostics. It is not a
+viewer or account identifier and is never a billing source. The analytics ingest removes
+every query parameter except a validated `fwsid`, and always removes URL userinfo and the fragment, before
+retaining a diagnostic request URL. This allowlist also excludes future credential names
+without requiring a denylist update.
+
+Session-level correlation is currently an internal support surface. The public analytics
+API exposes aggregate QoE and retention, not raw request URLs or per-session identities.
+The internal detail RPC evaluates and keyset-paginates the collapsed browser-session page
+once before looking up only those concrete connection IDs. All returned connection
+dimensions come from one canonical connect row; unmatched sessions report empty dimensions.
+The connection lookup filters both the selected client-session IDs and their concrete stream
+IDs, and scans at most one source-retention window ending at the requested slice. If that
+diagnostic enrichment query fails, the QoE page is still returned with empty connection fields.
 
 ## Content Types
 

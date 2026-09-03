@@ -25,8 +25,12 @@ export interface StreamSource {
 export interface StreamTrack {
   type: "video" | "audio" | "meta";
   codec: string;
+  /** Stable Mist track selector, derived from idx or a numeric metadata record key. */
+  id?: string;
   codecstring?: string;
   init?: string;
+  h264_profile?: string;
+  h264_level?: string;
   /** Track index from MistServer (used for binary chunk routing) */
   idx?: number;
   // Video-specific
@@ -55,6 +59,10 @@ export interface StreamInfo {
     buffer_window?: number;
   };
   type?: MistStreamType;
+}
+
+export function isCaptionTextTrack(track: Pick<TextTrack, "kind">): boolean {
+  return track.kind === "subtitles" || track.kind === "captions";
 }
 
 export type MistStreamType = "live" | "live+vod" | "vod";
@@ -128,6 +136,8 @@ export interface PlayerEvents {
   seekablechange: { start: number; end: number; bufferWindow: number };
   /** Player-internal buffer manager reported low buffer pressure (values in ms) */
   bufferlow: { current: number; desired: number };
+  /** Selectable audio/text tracks changed after initial media attachment. */
+  trackschange: void;
 }
 
 /**
@@ -500,6 +510,14 @@ export abstract class BasePlayer implements IPlayer {
       this.emit("error", error);
     });
 
+    const textTracks = video.textTracks;
+    if (textTracks?.addEventListener) {
+      const emitTracksChange = () => this.emit("trackschange", undefined);
+      textTracks.addEventListener("addtrack", emitTracksChange);
+      textTracks.addEventListener("removetrack", emitTracksChange);
+      textTracks.addEventListener("change", emitTracksChange);
+    }
+
     // Call onReady LAST - after all listeners are attached and the element has
     // reached a real media startup boundary. Protocol handlers may still choose
     // immediate when they already waited on an equivalent library-level event.
@@ -730,6 +748,7 @@ export abstract class BasePlayer implements IPlayer {
     const list = video.textTracks as any as TextTrackList;
     for (let i = 0; i < list.length; i++) {
       const tt = list[i];
+      if (!isCaptionTextTrack(tt)) continue;
       out.push({
         id: String(i),
         label: tt.label || `CC ${i + 1}`,
@@ -746,6 +765,7 @@ export abstract class BasePlayer implements IPlayer {
     const list = video.textTracks as any as TextTrackList;
     for (let i = 0; i < list.length; i++) {
       const tt = list[i];
+      if (!isCaptionTextTrack(tt)) continue;
       if (id !== null && String(i) === id) {
         tt.mode = "showing";
       } else {

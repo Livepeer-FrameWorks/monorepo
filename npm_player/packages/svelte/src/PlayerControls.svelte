@@ -65,6 +65,14 @@
     isContentLive?: boolean;
     /** Jump to live edge callback */
     onJumpToLive?: () => void;
+    /** Controller-owned track selection callbacks. */
+    onSelectQuality?: (id: string) => void;
+    onSelectTextTrack?: (id: string | null) => void;
+    onSelectAudioTrack?: (id: string) => void;
+    /** Reactive controller-owned text tracks. */
+    textTracks?: Array<{ id: string; label: string; lang?: string; active: boolean }>;
+    /** Reactive controller-owned audio tracks. */
+    audioTracks?: Array<{ id: string; label: string; lang?: string; active: boolean }>;
     activeLocale?: FwLocale;
     onLocaleChange?: (locale: FwLocale) => void;
     /** Controller-derived seekable start (ms) — preferred over player direct */
@@ -92,6 +100,11 @@
     onStatsToggle = undefined,
     isContentLive = undefined,
     onJumpToLive = undefined,
+    onSelectQuality = undefined,
+    onSelectTextTrack = undefined,
+    onSelectAudioTrack = undefined,
+    textTracks: propTextTracks = undefined,
+    audioTracks: propAudioTracks = undefined,
     activeLocale = undefined,
     onLocaleChange = undefined,
     controllerSeekableStart = undefined,
@@ -154,6 +167,7 @@
   let _hasSeekToLive = false; // Track if we've auto-seeked to live
   let qualityValue = $state("auto");
   let captionValue = $state("none");
+  let audioValue = $state("");
 
   // Audio detection: trust MistServer metadata first, then DOM fallback
   $effect(() => {
@@ -234,7 +248,31 @@
 
   // Text tracks from player
   let textTracks = $derived.by(() => {
-    return globalPlayerManager.getCurrentPlayer()?.getTextTracks?.() ?? [];
+    if (propTextTracks) return propTextTracks;
+    if (onSelectTextTrack) return globalPlayerManager.getCurrentPlayer()?.getTextTracks?.() ?? [];
+    const nativeTracks = video?.textTracks;
+    if (!nativeTracks) return [];
+    return Array.from(nativeTracks).flatMap((track, index) =>
+      track.kind === "subtitles" || track.kind === "captions"
+        ? [
+            {
+              id: String(index),
+              label: track.label || `CC ${index + 1}`,
+              lang: track.language,
+              active: track.mode === "showing",
+            },
+          ]
+        : []
+    );
+  });
+
+  let selectableAudioTracks = $derived.by(() => {
+    return propAudioTracks ?? globalPlayerManager.getCurrentPlayer()?.getAudioTracks?.() ?? [];
+  });
+
+  $effect(() => {
+    const active = selectableAudioTracks.find((track) => track.active);
+    audioValue = active?.id ?? "";
   });
 
   // Quality selection priority:
@@ -567,18 +605,25 @@
   function handleQualityChange(value: string) {
     if (disabled) return;
     qualityValue = value;
-    globalPlayerManager.getCurrentPlayer()?.selectQuality?.(value);
+    if (onSelectQuality) onSelectQuality(value);
+    else globalPlayerManager.getCurrentPlayer()?.selectQuality?.(value);
     showSettingsMenu = false;
   }
 
   function handleCaptionChange(value: string) {
     if (disabled) return;
     captionValue = value;
-    if (value === "none") {
-      globalPlayerManager.getCurrentPlayer()?.selectTextTrack?.(null);
-    } else {
-      globalPlayerManager.getCurrentPlayer()?.selectTextTrack?.(value);
-    }
+    const trackId = value === "none" ? null : value;
+    if (onSelectTextTrack) onSelectTextTrack(trackId);
+    else globalPlayerManager.getCurrentPlayer()?.selectTextTrack?.(trackId);
+    showSettingsMenu = false;
+  }
+
+  function handleAudioChange(value: string) {
+    if (disabled) return;
+    audioValue = value;
+    if (onSelectAudioTrack) onSelectAudioTrack(value);
+    else globalPlayerManager.getCurrentPlayer()?.selectAudioTrack?.(value);
     showSettingsMenu = false;
   }
 
@@ -914,6 +959,26 @@
                         onclick={() => handleCaptionChange(tt.id)}
                       >
                         {tt.label || tt.id}
+                      </button>
+                    {/each}
+                  </div>
+                </div>
+              {/if}
+
+              <!-- Audio track -->
+              {#if selectableAudioTracks.length > 1}
+                <div class="fw-settings-section">
+                  <div class="fw-settings-label">{t("audio")}</div>
+                  <div class="fw-settings-list">
+                    {#each selectableAudioTracks as track}
+                      <button
+                        class={cn(
+                          "fw-settings-list-item",
+                          audioValue === track.id && "fw-settings-list-item--active"
+                        )}
+                        onclick={() => handleAudioChange(track.id)}
+                      >
+                        {track.label || track.id}
                       </button>
                     {/each}
                   </div>

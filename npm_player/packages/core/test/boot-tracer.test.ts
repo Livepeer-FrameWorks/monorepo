@@ -52,6 +52,15 @@ describe("BootTracer", () => {
     vi.restoreAllMocks();
   });
 
+  it("accepts an attach-scoped session id", () => {
+    const tracer = new BootTracer({
+      contentId: "demo",
+      sessionId: "attach-session",
+      onComplete: () => {},
+    });
+    expect(tracer.sessionId).toBe("attach-session");
+  });
+
   it("computes the boot waterfall spans and total TTF", () => {
     clock.set(0);
     let trace: BootTrace | null = null;
