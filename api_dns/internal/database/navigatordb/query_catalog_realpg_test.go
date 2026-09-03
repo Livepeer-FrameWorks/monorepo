@@ -1212,6 +1212,16 @@ func startNavigatorQueryCatalogRealPG(t *testing.T) *sql.DB {
 
 func startNavigatorQueryCatalogRealYugabyte(t *testing.T) *sql.DB {
 	t.Helper()
+	if db, ok := dockerpg.OpenSharedYugabyteDatabase(t, "navigator"); ok {
+		schema, err := dbsql.Content.ReadFile("schema/navigator.sql")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(string(schema)); err != nil {
+			t.Fatal(err)
+		}
+		return db
+	}
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker not available")
 	}

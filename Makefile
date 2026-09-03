@@ -2,7 +2,7 @@
 		build-image-commodore build-image-quartermaster build-image-purser build-image-decklog build-image-foghorn build-image-helmsman build-image-periscope-ingest build-image-periscope-query build-image-periscope-metering build-image-signalman build-image-bridge build-image-logbook build-image-navigator build-image-deckhand build-image-steward build-image-skipper build-image-chandler \
 		proto proto-check sqlc sqlc-check graphql graphql-frontend graphql-tray graphql-all clean version install-tools verify test test-cli test-pkg test-topology test-crypto-evm test-dashboards test-commodore test-quartermaster test-purser test-decklog test-foghorn test-helmsman test-periscope-ingest test-periscope-query test-media-topology-real-clickhouse test-signalman test-bridge test-navigator test-privateer test-deckhand test-steward test-skipper test-chandler coverage env frontend-env tidy update outdated fmt format \
 		lint lint-go lint-frontend lint-all lint-fix lint-report lint-analyze ci-local ci-local-go ci-local-frontend \
-		validate-migrations verify-release-state test-release-state verify-schema verify-schema-migrations verify-schema-migrations-core verify-schema-postgres verify-navigator-db verify-skipper-db verify-periscope-metering-db verify-periscope-ingest-db verify-periscope-query-db verify-periscope-metering-chain verify-commodore-db verify-quartermaster-db verify-quartermaster-yugabyte-db verify-foghorn-db verify-foghorn-valkey verify-foghorn-test-selection verify-schema-yugabyte verify-yugabyte-ha verify-schema-clickhouse verify-feature-registry seed-demo seed-demo-postgres seed-demo-clickhouse reset-demo-databases-plan reset-demo-databases release-plan test-release-plan \
+		validate-migrations verify-release-state test-release-state verify-schema verify-schema-migrations verify-schema-migrations-core verify-schema-postgres verify-navigator-db verify-skipper-db verify-periscope-metering-db verify-periscope-ingest-db verify-periscope-query-db verify-periscope-metering-chain verify-commodore-db verify-quartermaster-db verify-quartermaster-yugabyte-db verify-foghorn-db verify-foghorn-valkey verify-foghorn-test-selection verify-schema-yugabyte verify-schema-yugabyte-schema verify-schema-yugabyte-schema-contracts verify-yugabyte-services verify-yugabyte-services-isolated verify-yugabyte-service verify-yugabyte-database verify-yugabyte-shared-fixture verify-yugabyte-commodore-contracts verify-yugabyte-purser-contracts verify-yugabyte-navigator-contracts verify-yugabyte-skipper-contracts verify-yugabyte-quartermaster-contracts verify-yugabyte-periscope-metering-contracts verify-yugabyte-foghorn-contracts-a verify-yugabyte-foghorn-contracts-b verify-yugabyte-ha verify-schema-clickhouse verify-feature-registry seed-demo seed-demo-postgres seed-demo-clickhouse reset-demo-databases-plan reset-demo-databases release-plan test-release-plan \
 		dead-code-install dead-code-go dead-code-ts dead-code-report dead-code \
 		ansible-galaxy-install ansible-lint ansible-yamllint ansible-test ansible-check ansible-molecule ansible-molecule-run ansible-molecule-all provision-hello
 
@@ -666,7 +666,7 @@ SCHEMA_VERIFY_FROM_TAG ?= $(shell git tag --merged HEAD --sort=-v:refname | awk 
 SCHEMA_VERIFY_COMMON_TESTS := TestComposeUsesSchemaHarnessImages|TestSchemaVerifyFromTagIsRequiredInCI
 SCHEMA_VERIFY_POSTGRES_TESTS := TestPurserViewsUseExplicitProjectionLists|TestPostgresServiceDatabaseInitialization|TestPostgresIntrospectionCoversDeployRelevantObjects|TestPostgresServiceCapabilitiesExecute|TestPostgresBaselineEqualsReplay|TestPostgresTaggedBaselineUpgradeEqualsCurrent|TestPostgresDemoSeedAppliesToCurrentBaseline|TestArtifactPlaybackIndexUpgradeFromReleasedLower|TestCreationCommandCASMutualExclusion
 SCHEMA_VERIFY_CLICKHOUSE_TESTS := TestClickHouseServiceCapabilitiesExecute|TestClickHouseBaselineEqualsReplay|TestClickHouseTaggedBaselineUpgradeEqualsCurrent|TestClickHouseDemoSeedAndMeteringQueries|TestArtifactEventsDedupedPreservesLegacyRows
-SCHEMA_VERIFY_YUGABYTE_TESTS := TestYugabyteTaggedMigrationPaths|TestYugabyteCurrentBaselinesAndCapabilities
+SCHEMA_VERIFY_YUGABYTE_TESTS := TestYugabyteDatabaseSelection|TestYugabyteTaggedMigrationPaths|TestYugabyteCurrentBaselinesAndCapabilities
 SCHEMA_VERIFY_TESTS := $(SCHEMA_VERIFY_COMMON_TESTS)|$(SCHEMA_VERIFY_POSTGRES_TESTS)|$(SCHEMA_VERIFY_CLICKHOUSE_TESTS)|$(SCHEMA_VERIFY_YUGABYTE_TESTS)
 # CI sets CONTRACT_COVERAGE_DIR so these same test executions emit engine-specific profiles.
 # Leaving it unset preserves the ordinary local targets without coverage artifacts.
@@ -677,7 +677,9 @@ FOGHORN_CONTROL_REALPG_TESTS := $(FOGHORN_CONTROL_REALPG_TESTS_BASE)|TestDelayed
 FOGHORN_JOBS_REALPG_TESTS := TestStaleFreezeCleanup_RealPG|TestPurgeOwnershipFilter_RealPG|TestFederatedPointerPurgeDefersActiveRestoreUntilCleanupSettlement_RealPG|TestFederatedPointerRecoveryDoesNotSerializeBehindSlowDestination_RealPG|TestDailyFederatedPointerPurgeDoesNotSerializeBehindSlowDestination_RealPG|TestStreamCleanupDrainer_ConvergesFromDurableRow_RealPG|TestStreamCleanupDrainer_LocallyBackedAliasSweepsLocally_RealPG|TestThumbnailLifecycleIntegration_RealPG|TestStreamCleanupDrainer_RepointGuardFailsClosed_RealPG|TestStreamCleanupDrainer_DelayedResweep_RealPG|TestStreamCleanupDrainer_FinalizeAtomicOnControlCleanupFailure_RealPG
 FOGHORN_FEDERATION_REALPG_TESTS := TestMembershipTombstoneCleanup_PostgresProofToRedisPurge_RealPG
 FOGHORN_QUERY_CATALOG_REALPG_TESTS := TestFoghornGeneratedQueryCatalogPrepares_RealPG|TestConfigSeedApplyAckOutboxSameVersionReplacement_RealPG|TestSourceProjectionRevisionMigrationSeedsDurableHighWater_RealPG|TestSourceProjectionAllocatorKeyScoped_RealPG|TestKeyScopedOrderingAllocators_RealPG|TestLegacyOrderingSequencesRemainBelowCounters_RealPG|TestFederatedArtifactLifecycleDataMigration_RealPG|TestFederatedPointerPurgeEligibilityDataMigrationPreservesAge_RealPG|TestFederatedPointerPurgeEligibilityUsesSessionTimezone_RealPG|TestPurgeableArtifactsIncludeOwnedChaptersAndExcludeFederatedPointers_RealPG|TestFederatedPointerPurgeRetainsSignedTombstoneFence_RealPG|TestTombstoneDuringFederatedPointerPurgePreservesRecoveryClock_RealPG|TestFederatedPointerEligibilityIgnoresOrdinaryMetadataWriters_RealPG|TestFederatedPointerFenceSerializesWithAuthorityProjection_RealPG|TestFailedFederatedPointerCleanupRemainsFencedAndReclaimable_RealPG|TestActiveAuthorityRestoresOnlyInterruptedStalePointerFence_RealPG|TestFederatedPointersAreCacheOnlyForCapacityAndStalePurge_RealPG|TestFederatedPointersCannotEnterOwnerDeletionPaths_RealPG|TestMintArtifactShellRemainsRemoteParentPointer_RealPG|TestArtifactNodePlacementSerializesAbsentRows_RealPG|TestArtifactDeletionRejectsReplayOlderThanPlacement_RealPG|TestMediaAuthorityLookupIndexes_RealPG|TestPushTargetStatusRejectsOlderEvent_RealPG|TestPushTargetStatusUnknownEventTimeUsesArrivalOrder_RealPG
-FOGHORN_QUERY_CATALOG_REALYB_TESTS := TestFoghornGeneratedQueryCatalogPrepares_RealYugabyte|TestConfigSeedApplyAckOutboxSameVersionReplacement_RealYugabyte|TestSourceProjectionRevisionMigrationSeedsDurableHighWater_RealYugabyte|TestSourceProjectionRepairAllocator_RealYugabyte|TestSourceProjectionAllocatorKeyScoped_RealYugabyte|TestKeyScopedOrderingAllocators_RealYugabyte|TestLegacyOrderingSequencesRemainBelowCounters_RealYugabyte|TestArtifactNodePlacementSerializesAbsentRows_RealYugabyte|TestArtifactDeletionRejectsReplayOlderThanPlacement_RealYugabyte
+FOGHORN_QUERY_CATALOG_REALYB_TESTS_A := TestFoghornGeneratedQueryCatalogPrepares_RealYugabyte|TestConfigSeedApplyAckOutboxSameVersionReplacement_RealYugabyte|TestSourceProjectionRevisionMigrationSeedsDurableHighWater_RealYugabyte|TestSourceProjectionRepairAllocator_RealYugabyte|TestSourceProjectionAllocatorKeyScoped_RealYugabyte
+FOGHORN_QUERY_CATALOG_REALYB_TESTS_B := TestKeyScopedOrderingAllocators_RealYugabyte|TestLegacyOrderingSequencesRemainBelowCounters_RealYugabyte|TestArtifactNodePlacementSerializesAbsentRows_RealYugabyte|TestArtifactDeletionRejectsReplayOlderThanPlacement_RealYugabyte
+FOGHORN_QUERY_CATALOG_REALYB_TESTS := $(FOGHORN_QUERY_CATALOG_REALYB_TESTS_A)|$(FOGHORN_QUERY_CATALOG_REALYB_TESTS_B)
 COMMODORE_QUERY_CATALOG_REALYB_TESTS := TestGeneratedQueryCatalogPrepares_RealYugabyte|TestArtifactCreationCommandAckLease_RealYugabyte
 YUGABYTE_HA_TESTS := TestYugabyteSmartDriverThreeNodeHA
 NAVIGATOR_QUERY_CATALOG_REALPG_TESTS := TestGeneratedQueryCatalogPrepares_RealPG|TestTenantEdgeApplyAckDeliveryFence_RealPG|TestTenantEdgeApplyAckTeardownSerialization_RealPG|TestTenantEdgeApplyAckClusterRevocationSerialization_RealPG|TestTenantAliasReactivationTeardownSerialization_RealPG|TestTenantBundleAuthoritySerialization_RealPG|TestTenantEdgeApplyAliasFKMigrationCleansOrphans_RealPG|TestNavigatorAutomaticMigrationPhasesConverge_RealPG|TestTenantTLSBundleRevisionExpandReadsLegacyRows_RealPG
@@ -777,8 +779,7 @@ verify-navigator-db: verify-foghorn-test-selection
 	@echo "Verifying Navigator's generated query catalog and store behavior on PostgreSQL and YugabyteDB (Docker)..."
 	@$(CONTRACT_GO_TEST) api_dns postgres/navigator-query-catalog -tags schema_verify -run '$(NAVIGATOR_QUERY_CATALOG_REALPG_TESTS)' -count=1 -timeout 600s ./internal/database/navigatordb/
 	@$(CONTRACT_GO_TEST) api_dns postgres/navigator-store -tags schema_verify -run '$(NAVIGATOR_STORE_REALPG_TESTS)' -count=1 -timeout 600s ./internal/store/
-	@$(CONTRACT_GO_TEST) api_dns yugabyte/navigator-query-catalog -tags schema_verify -run '$(NAVIGATOR_QUERY_CATALOG_REALYB_TESTS)' -count=1 -timeout 1200s ./internal/database/navigatordb/
-	@$(CONTRACT_GO_TEST) api_dns yugabyte/navigator-store -tags schema_verify -run '$(NAVIGATOR_STORE_REALYB_TESTS)' -count=1 -timeout 1200s ./internal/store/
+	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-yugabyte-navigator-contracts
 
 verify-skipper-db:
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-skipper-db requires a running Docker daemon"; exit 1; }
@@ -840,7 +841,7 @@ verify-quartermaster-db:
 verify-quartermaster-yugabyte-db:
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-quartermaster-yugabyte-db requires a running Docker daemon"; exit 1; }
 	@echo "Verifying Quartermaster's converted repositories on Yugabyte (Docker)..."
-	@$(CONTRACT_GO_TEST) api_tenants yugabyte/quartermaster-query-catalog -tags schema_verify -run 'TestConvertedRuntimeAdapters_RealYugabyte' -count=1 -timeout 1200s ./internal/database/quartermasterdb/
+	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-yugabyte-quartermaster-contracts
 
 verify-foghorn-db: verify-foghorn-test-selection
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-foghorn-db requires a running Docker daemon"; exit 1; }
@@ -849,7 +850,8 @@ verify-foghorn-db: verify-foghorn-test-selection
 	@$(CONTRACT_GO_TEST) api_balancing postgres/foghorn-control -tags schema_verify -run '$(FOGHORN_CONTROL_REALPG_TESTS)' -count=1 -timeout 600s ./internal/control/
 	@$(CONTRACT_GO_TEST) api_balancing postgres/foghorn-jobs -tags schema_verify -run '$(FOGHORN_JOBS_REALPG_TESTS)' -count=1 -timeout 600s ./internal/jobs/
 	@$(CONTRACT_GO_TEST) api_balancing postgres/foghorn-federation -tags schema_verify -run '$(FOGHORN_FEDERATION_REALPG_TESTS)' -count=1 -timeout 600s ./internal/federation/
-	@$(CONTRACT_GO_TEST) api_balancing yugabyte/foghorn-query-catalog -tags schema_verify -run '$(FOGHORN_QUERY_CATALOG_REALYB_TESTS)' -count=1 -timeout 1200s ./internal/database/foghorndb/
+	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-yugabyte-foghorn-contracts-a
+	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-yugabyte-foghorn-contracts-b
 
 verify-foghorn-valkey: verify-foghorn-test-selection
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-foghorn-valkey requires a running Docker daemon"; exit 1; }
@@ -900,16 +902,77 @@ verify-schema-postgres: verify-foghorn-test-selection
 
 verify-schema-yugabyte: verify-foghorn-test-selection
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-schema-yugabyte requires a running Docker daemon"; exit 1; }
+	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-schema-yugabyte-schema-contracts
+	@$(MAKE) --no-print-directory verify-yugabyte-services-isolated
+
+verify-schema-yugabyte-schema: verify-foghorn-test-selection
+	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-schema-yugabyte-schema requires a running Docker daemon"; exit 1; }
+	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-schema-yugabyte-schema-contracts
+
+verify-yugabyte-services: verify-foghorn-test-selection
+	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-yugabyte-services requires a running Docker daemon"; exit 1; }
+	@$(MAKE) --no-print-directory verify-yugabyte-services-isolated
+
+verify-yugabyte-services-isolated:
+	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-yugabyte-commodore-contracts
+	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-yugabyte-purser-contracts
+	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-yugabyte-navigator-contracts
+	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-yugabyte-skipper-contracts
+	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-yugabyte-quartermaster-contracts
+	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-yugabyte-periscope-metering-contracts
+	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-yugabyte-foghorn-contracts-a
+	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-yugabyte-foghorn-contracts-b
+
+verify-schema-yugabyte-schema-contracts:
+	@test -n "$$FRAMEWORKS_YUGABYTE_TEST_DSN" -a -n "$$FRAMEWORKS_YUGABYTE_TEST_CONTAINER" || { echo "ERROR: use make verify-schema-yugabyte so the contracts share one isolated engine"; exit 1; }
 	@echo "Verifying supported Yugabyte baselines and runtime SQL capabilities (Docker)..."
-	@FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' $(CONTRACT_GO_TEST) cli yugabyte/schema -tags schema_verify -run '$(SCHEMA_VERIFY_COMMON_TESTS)|$(SCHEMA_VERIFY_YUGABYTE_TESTS)' -count=1 -timeout 3600s ./pkg/provisioner/
+	@FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' $(CONTRACT_GO_TEST) cli yugabyte/schema -tags schema_verify -run '$(SCHEMA_VERIFY_COMMON_TESTS)|$(SCHEMA_VERIFY_YUGABYTE_TESTS)' -count=1 -timeout 1200s ./pkg/provisioner/
+
+verify-yugabyte-shared-fixture:
+	@test -n "$$FRAMEWORKS_YUGABYTE_TEST_DSN" -a -n "$$FRAMEWORKS_YUGABYTE_TEST_CONTAINER" || { echo "ERROR: invoke Yugabyte contracts through their public Make target"; exit 1; }
+
+verify-yugabyte-commodore-contracts: verify-yugabyte-shared-fixture
 	@$(CONTRACT_GO_TEST) api_control yugabyte/commodore-query-catalog -tags schema_verify -run '$(COMMODORE_QUERY_CATALOG_REALYB_TESTS)' -count=1 -timeout 1200s ./internal/database/commodoredb/
+
+verify-yugabyte-purser-contracts: verify-yugabyte-shared-fixture
 	@$(CONTRACT_GO_TEST) api_billing yugabyte/purser-query-catalog -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealYugabyte' -count=1 -timeout 1200s ./internal/database/purserdb/
+
+verify-yugabyte-navigator-contracts: verify-yugabyte-shared-fixture
 	@$(CONTRACT_GO_TEST) api_dns yugabyte/navigator-query-catalog -tags schema_verify -run '$(NAVIGATOR_QUERY_CATALOG_REALYB_TESTS)' -count=1 -timeout 1200s ./internal/database/navigatordb/
 	@$(CONTRACT_GO_TEST) api_dns yugabyte/navigator-store -tags schema_verify -run '$(NAVIGATOR_STORE_REALYB_TESTS)' -count=1 -timeout 1200s ./internal/store/
+
+verify-yugabyte-skipper-contracts: verify-yugabyte-shared-fixture
 	@$(CONTRACT_GO_TEST) api_consultant yugabyte/skipper-query-catalog -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealYugabyte' -count=1 -timeout 1200s ./internal/database/skipperdb/
+
+verify-yugabyte-quartermaster-contracts: verify-yugabyte-shared-fixture
 	@$(CONTRACT_GO_TEST) api_tenants yugabyte/quartermaster-query-catalog -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealYugabyte|TestConvertedRuntimeAdapters_RealYugabyte' -count=1 -timeout 1200s ./internal/database/quartermasterdb/
+
+verify-yugabyte-periscope-metering-contracts: verify-yugabyte-shared-fixture
 	@$(CONTRACT_GO_TEST) api_analytics_query yugabyte/periscope-metering -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealYugabyte|TestMeteringStateTransitions_RealYugabyte' -count=1 -timeout 1200s ./internal/database/meteringdb/
-	@$(CONTRACT_GO_TEST) api_balancing yugabyte/foghorn-query-catalog -tags schema_verify -run '$(FOGHORN_QUERY_CATALOG_REALYB_TESTS)' -count=1 -timeout 1200s ./internal/database/foghorndb/
+
+verify-yugabyte-foghorn-contracts-a: verify-yugabyte-shared-fixture
+	@$(CONTRACT_GO_TEST) api_balancing yugabyte/foghorn-query-catalog-a -tags schema_verify -run '$(FOGHORN_QUERY_CATALOG_REALYB_TESTS_A)' -count=1 -timeout 1200s ./internal/database/foghorndb/
+
+verify-yugabyte-foghorn-contracts-b: verify-yugabyte-shared-fixture
+	@$(CONTRACT_GO_TEST) api_balancing yugabyte/foghorn-query-catalog-b -tags schema_verify -run '$(FOGHORN_QUERY_CATALOG_REALYB_TESTS_B)' -count=1 -timeout 1200s ./internal/database/foghorndb/
+
+verify-yugabyte-service: verify-foghorn-test-selection
+	@case "$(SERVICE)" in commodore|purser|navigator|skipper|quartermaster|periscope-metering|foghorn) ;; *) echo "ERROR: SERVICE must be commodore, purser, navigator, skipper, quartermaster, periscope-metering, or foghorn"; exit 2;; esac
+ifeq ($(SERVICE),foghorn)
+	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-yugabyte-foghorn-contracts-a
+	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-yugabyte-foghorn-contracts-b
+else
+	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-yugabyte-$(SERVICE)-contracts
+endif
+
+verify-yugabyte-database: verify-foghorn-test-selection
+	@case "$(DATABASE)" in commodore|foghorn|navigator|periscope|purser|quartermaster|skipper) ;; *) echo "ERROR: DATABASE must be commodore, foghorn, navigator, periscope, purser, quartermaster, or skipper"; exit 2;; esac
+ifeq ($(DATABASE),foghorn)
+	@FRAMEWORKS_YUGABYTE_DATABASES=foghorn $(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-schema-yugabyte-schema-contracts verify-yugabyte-foghorn-contracts-a
+	@FRAMEWORKS_YUGABYTE_DATABASES=foghorn $(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-yugabyte-foghorn-contracts-b
+else
+	@service="$(DATABASE)"; if [ "$$service" = periscope ]; then service=periscope-metering; fi; FRAMEWORKS_YUGABYTE_DATABASES="$(DATABASE)" $(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-schema-yugabyte-schema-contracts verify-yugabyte-$$service-contracts
+endif
 
 verify-yugabyte-ha: verify-foghorn-test-selection
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-yugabyte-ha requires a running Docker daemon"; exit 1; }

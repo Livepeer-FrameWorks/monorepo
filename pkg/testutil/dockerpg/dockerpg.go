@@ -9,12 +9,30 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
+	"testing"
 	"time"
 )
+
+const (
+	// SharedYugabyteDSNEnv points real-engine tests at a suite-owned Yugabyte
+	// process. Each test still creates its own database so mutable contracts do
+	// not share state.
+	SharedYugabyteDSNEnv = "FRAMEWORKS_YUGABYTE_TEST_DSN"
+	// SharedYugabyteContainerEnv lets Docker-based schema introspection reuse the
+	// same suite-owned process without attempting to remove it from a subtest.
+	SharedYugabyteContainerEnv = "FRAMEWORKS_YUGABYTE_TEST_CONTAINER"
+	// RetainSharedYugabyteDatabasesEnv leaves isolated databases for the bounded
+	// fixture to discard with its container, avoiding slow distributed DROP DDL.
+	RetainSharedYugabyteDatabasesEnv = "FRAMEWORKS_YUGABYTE_TEST_RETAIN_DATABASES"
+)
+
+var sharedYugabyteDatabaseSequence atomic.Uint64
 
 // PostgresImage resolves the release-pinned PostgreSQL contract image from
 // config/infrastructure.yaml. Real-engine service tests use this instead of
@@ -70,6 +88,87 @@ func YugabyteImage() (string, error) {
 		dir = parent
 	}
 	return "", errors.New("config/infrastructure.yaml not found from test working directory")
+}
+
+// OpenSharedYugabyteDatabase creates an isolated database in the suite-owned
+// Yugabyte process. The boolean is false when the caller should retain its
+// standalone-container fallback. Cleanup closes the connection and either
+// drops the database or leaves it for a bounded fixture to discard atomically.
+func OpenSharedYugabyteDatabase(t testing.TB, prefix string) (*sql.DB, bool) {
+	t.Helper()
+	baseDSN := strings.TrimSpace(os.Getenv(SharedYugabyteDSNEnv))
+	if baseDSN == "" {
+		return nil, false
+	}
+	parsed, err := url.Parse(baseDSN)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		t.Fatalf("parse %s: %v", SharedYugabyteDSNEnv, err)
+	}
+	databaseName := sharedYugabyteDatabaseName(prefix, os.Getpid(), sharedYugabyteDatabaseSequence.Add(1))
+	admin, err := sql.Open("postgres", baseDSN)
+	if err != nil {
+		t.Fatalf("open shared Yugabyte admin connection: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	if _, execErr := admin.ExecContext(ctx, "CREATE DATABASE "+databaseName); execErr != nil {
+		_ = admin.Close()
+		t.Fatalf("create shared Yugabyte test database %s: %v", databaseName, execErr)
+	}
+	if closeErr := admin.Close(); closeErr != nil {
+		t.Fatalf("close shared Yugabyte admin connection: %v", closeErr)
+	}
+	parsed.Path = "/" + databaseName
+	db, err := sql.Open("postgres", parsed.String())
+	if err != nil {
+		t.Fatalf("open shared Yugabyte test database %s: %v", databaseName, err)
+	}
+	if err := WaitReadyFor(db, strings.TrimSpace(os.Getenv(SharedYugabyteContainerEnv)), 90*time.Second); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close shared Yugabyte test database %s: %v", databaseName, err)
+		}
+		if strings.TrimSpace(os.Getenv(RetainSharedYugabyteDatabasesEnv)) == "1" {
+			return
+		}
+		admin, err := sql.Open("postgres", baseDSN)
+		if err != nil {
+			t.Errorf("open shared Yugabyte cleanup connection: %v", err)
+			return
+		}
+		defer admin.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+		if _, err := admin.ExecContext(ctx, "DROP DATABASE "+databaseName); err != nil {
+			t.Errorf("drop shared Yugabyte test database %s: %v", databaseName, err)
+		}
+	})
+	return db, true
+}
+
+func sharedYugabyteDatabaseName(prefix string, pid int, sequence uint64) string {
+	var cleaned strings.Builder
+	for _, char := range strings.ToLower(prefix) {
+		switch {
+		case char >= 'a' && char <= 'z', char >= '0' && char <= '9':
+			cleaned.WriteRune(char)
+		default:
+			cleaned.WriteByte('_')
+		}
+	}
+	base := strings.Trim(cleaned.String(), "_")
+	if base == "" {
+		base = "contract"
+	}
+	suffix := fmt.Sprintf("_%d_%d", pid, sequence)
+	const maxIdentifierLength = 63
+	if len(base)+len(suffix) > maxIdentifierLength {
+		base = base[:maxIdentifierLength-len(suffix)]
+	}
+	return base + suffix
 }
 
 func infrastructureImage(yaml, name string) (string, string, error) {

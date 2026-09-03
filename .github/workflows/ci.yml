@@ -26,6 +26,14 @@ jobs:
       registry: ${{ steps.filter.outputs.registry }}
       release: ${{ steps.filter.outputs.release }}
       database: ${{ steps.filter.outputs.database }}
+      yugabyte_core: ${{ steps.filter.outputs.yugabyte_core }}
+      yugabyte_commodore: ${{ steps.filter.outputs.yugabyte_commodore }}
+      yugabyte_purser: ${{ steps.filter.outputs.yugabyte_purser }}
+      yugabyte_navigator: ${{ steps.filter.outputs.yugabyte_navigator }}
+      yugabyte_skipper: ${{ steps.filter.outputs.yugabyte_skipper }}
+      yugabyte_quartermaster: ${{ steps.filter.outputs.yugabyte_quartermaster }}
+      yugabyte_periscope: ${{ steps.filter.outputs.yugabyte_periscope }}
+      yugabyte_foghorn: ${{ steps.filter.outputs.yugabyte_foghorn }}
     steps:
       - uses: actions/checkout@v6
       - uses: dorny/paths-filter@v4
@@ -102,6 +110,54 @@ jobs:
               - 'scripts/reset-demo-databases.sh'
               - 'scripts/run-go-contract-test.sh'
               - 'Makefile'
+            yugabyte_core:
+              - 'ansible/collections/ansible_collections/frameworks/infra/roles/yugabyte/**'
+              - 'cli/internal/releases/catalog.yaml'
+              - 'cli/pkg/provisioner/**'
+              - 'config/infrastructure.yaml'
+              - 'infrastructure/postgres/**'
+              - 'pkg/database/*.go'
+              - 'pkg/database/sql/schema/commodore.sql'
+              - 'pkg/database/sql/schema/foghorn.sql'
+              - 'pkg/database/sql/schema/navigator.sql'
+              - 'pkg/database/sql/schema/periscope.sql'
+              - 'pkg/database/sql/schema/purser.sql'
+              - 'pkg/database/sql/schema/quartermaster.sql'
+              - 'pkg/database/sql/schema/skipper.sql'
+              - 'pkg/database/sql/migrations/**'
+              - 'pkg/testutil/dockerpg/**'
+              - 'scripts/run-go-contract-test.sh'
+              - 'scripts/run-yugabyte-contract-fixture.sh'
+              - 'Makefile'
+            yugabyte_commodore:
+              - 'api_control/internal/database/commodoredb/**'
+              - 'api_control/go.mod'
+              - 'api_control/go.sum'
+            yugabyte_purser:
+              - 'api_billing/internal/database/purserdb/**'
+              - 'api_billing/go.mod'
+              - 'api_billing/go.sum'
+            yugabyte_navigator:
+              - 'api_dns/internal/database/navigatordb/**'
+              - 'api_dns/internal/store/**'
+              - 'api_dns/go.mod'
+              - 'api_dns/go.sum'
+            yugabyte_skipper:
+              - 'api_consultant/internal/database/skipperdb/**'
+              - 'api_consultant/go.mod'
+              - 'api_consultant/go.sum'
+            yugabyte_quartermaster:
+              - 'api_tenants/internal/database/quartermasterdb/**'
+              - 'api_tenants/go.mod'
+              - 'api_tenants/go.sum'
+            yugabyte_periscope:
+              - 'api_analytics_query/internal/database/meteringdb/**'
+              - 'api_analytics_query/go.mod'
+              - 'api_analytics_query/go.sum'
+            yugabyte_foghorn:
+              - 'api_balancing/internal/database/foghorndb/**'
+              - 'api_balancing/go.mod'
+              - 'api_balancing/go.sum'
 
   go-build:
     name: Go build
@@ -394,7 +450,7 @@ jobs:
   database-yugabyte:
     name: Yugabyte database contract
     needs: changes
-    if: needs.changes.outputs.database == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    if: needs.changes.outputs.yugabyte_core == 'true' || needs.changes.outputs.yugabyte_commodore == 'true' || needs.changes.outputs.yugabyte_purser == 'true' || needs.changes.outputs.yugabyte_navigator == 'true' || needs.changes.outputs.yugabyte_skipper == 'true' || needs.changes.outputs.yugabyte_quartermaster == 'true' || needs.changes.outputs.yugabyte_periscope == 'true' || needs.changes.outputs.yugabyte_foghorn == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -406,10 +462,49 @@ jobs:
           cache-dependency-path: "**/go.sum"
         env:
           GOTOOLCHAIN: local
-      - run: make verify-schema-yugabyte
+      - name: Run exhaustive Yugabyte contracts
+        if: needs.changes.outputs.yugabyte_core == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+        run: make verify-schema-yugabyte
         env:
           CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
-      - run: make verify-yugabyte-ha
+      - name: Run Commodore Yugabyte contracts
+        if: github.event_name != 'workflow_dispatch' && github.event_name != 'schedule' && needs.changes.outputs.yugabyte_core != 'true' && needs.changes.outputs.yugabyte_commodore == 'true'
+        run: make verify-yugabyte-service SERVICE=commodore
+        env:
+          CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
+      - name: Run Purser Yugabyte contracts
+        if: github.event_name != 'workflow_dispatch' && github.event_name != 'schedule' && needs.changes.outputs.yugabyte_core != 'true' && needs.changes.outputs.yugabyte_purser == 'true'
+        run: make verify-yugabyte-service SERVICE=purser
+        env:
+          CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
+      - name: Run Navigator Yugabyte contracts
+        if: github.event_name != 'workflow_dispatch' && github.event_name != 'schedule' && needs.changes.outputs.yugabyte_core != 'true' && needs.changes.outputs.yugabyte_navigator == 'true'
+        run: make verify-yugabyte-service SERVICE=navigator
+        env:
+          CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
+      - name: Run Skipper Yugabyte contracts
+        if: github.event_name != 'workflow_dispatch' && github.event_name != 'schedule' && needs.changes.outputs.yugabyte_core != 'true' && needs.changes.outputs.yugabyte_skipper == 'true'
+        run: make verify-yugabyte-service SERVICE=skipper
+        env:
+          CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
+      - name: Run Quartermaster Yugabyte contracts
+        if: github.event_name != 'workflow_dispatch' && github.event_name != 'schedule' && needs.changes.outputs.yugabyte_core != 'true' && needs.changes.outputs.yugabyte_quartermaster == 'true'
+        run: make verify-yugabyte-service SERVICE=quartermaster
+        env:
+          CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
+      - name: Run Periscope Metering Yugabyte contracts
+        if: github.event_name != 'workflow_dispatch' && github.event_name != 'schedule' && needs.changes.outputs.yugabyte_core != 'true' && needs.changes.outputs.yugabyte_periscope == 'true'
+        run: make verify-yugabyte-service SERVICE=periscope-metering
+        env:
+          CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
+      - name: Run Foghorn Yugabyte contracts
+        if: github.event_name != 'workflow_dispatch' && github.event_name != 'schedule' && needs.changes.outputs.yugabyte_core != 'true' && needs.changes.outputs.yugabyte_foghorn == 'true'
+        run: make verify-yugabyte-service SERVICE=foghorn
+        env:
+          CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
+      - name: Run Yugabyte HA contract
+        if: needs.changes.outputs.yugabyte_core == 'true' || github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+        run: make verify-yugabyte-ha
         env:
           CONTRACT_COVERAGE_DIR: ${{ github.workspace }}/coverage/contracts
       - name: Upload Yugabyte contract coverage artifact
@@ -426,7 +521,7 @@ jobs:
         uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: coverage/contracts/yugabyte/schema.out,coverage/contracts/yugabyte/quartermaster-query-catalog.out,coverage/contracts/yugabyte/periscope-metering.out,coverage/contracts/yugabyte/foghorn-query-catalog.out,coverage/contracts/yugabyte/navigator-query-catalog.out,coverage/contracts/yugabyte/navigator-store.out,coverage/contracts/yugabyte/ha.out
+          files: coverage/contracts/yugabyte/schema.out,coverage/contracts/yugabyte/commodore-query-catalog.out,coverage/contracts/yugabyte/purser-query-catalog.out,coverage/contracts/yugabyte/navigator-query-catalog.out,coverage/contracts/yugabyte/navigator-store.out,coverage/contracts/yugabyte/skipper-query-catalog.out,coverage/contracts/yugabyte/quartermaster-query-catalog.out,coverage/contracts/yugabyte/periscope-metering.out,coverage/contracts/yugabyte/foghorn-query-catalog-a.out,coverage/contracts/yugabyte/foghorn-query-catalog-b.out,coverage/contracts/yugabyte/ha.out
           flags: yugabyte-contract
           name: yugabyte-contract-coverage
           fail_ci_if_error: false

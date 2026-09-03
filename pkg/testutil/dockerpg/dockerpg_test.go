@@ -50,3 +50,16 @@ func TestParseInspectedHostPort(t *testing.T) {
 		t.Fatalf("invalid JSON port = %q, want empty", got)
 	}
 }
+
+func TestSharedYugabyteDatabaseNameIsSafeAndBounded(t *testing.T) {
+	name := sharedYugabyteDatabaseName("Navigator Query/Catalog with a deliberately overlong suffix that cannot fit", 42, 7)
+	if len(name) > 63 {
+		t.Fatalf("database name has %d bytes, want at most 63: %q", len(name), name)
+	}
+	if name != "navigator_query_catalog_with_a_deliberately_overlong_suffi_42_7" {
+		t.Fatalf("database name = %q", name)
+	}
+	if got := sharedYugabyteDatabaseName("---", 1, 2); got != "contract_1_2" {
+		t.Fatalf("empty normalized prefix = %q", got)
+	}
+}

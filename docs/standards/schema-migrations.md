@@ -98,6 +98,20 @@ history and runs the same proof as two independently gated jobs whenever release
 migrations, or baseline/provisioner schema code changes: `make verify-schema-migrations-core`
 for PostgreSQL and ClickHouse, and `make verify-schema-yugabyte` for YugabyteDB.
 
+The exhaustive Yugabyte target reconstructs every supported tagged/current database and is
+therefore a release and scheduled-CI proof, not the default inner-loop check for every Go
+change. Use `make verify-yugabyte-service SERVICE=<name>` for query or repository changes in
+one of `commodore`, `purser`, `navigator`, `skipper`, `quartermaster`,
+`periscope-metering`, or `foghorn`. Use
+`make verify-yugabyte-database DATABASE=<name>` when that database's baseline, migrations,
+or capability assumptions changed; this runs its tagged/current convergence plus its service
+contracts. The database name for Periscope Metering is `periscope`. Both focused targets use
+one bounded suite-owned Yugabyte process per service batch and a fresh database per mutating
+test. CI follows the same split: shared Yugabyte/schema/harness changes run the exhaustive
+and HA gates, while a service-owned repository change runs only that service's
+real-Yugabyte contracts. Scheduled
+and manually dispatched CI continue to run the exhaustive gates.
+
 ## The baseline floor
 
 `schemaMigrationBaselineFloor` in `cli/pkg/provisioner/migrate.go` is the consolidation
@@ -224,7 +238,13 @@ capabilities, and compares every service's tagged upgrade with its current
 baseline whether or not that service has a post-tag migration. PostgreSQL
 success never substitutes for Yugabyte proof. The tests remain behind
 `schema_verify` so a plain `make test` needs no Docker; CI splits them between
-`make verify-schema-migrations-core` and `make verify-schema-yugabyte`.
+`make verify-schema-migrations-core` and the scoped/exhaustive Yugabyte targets described
+above. The exhaustive lane uses separate suite-owned engines for schema convergence and
+service behavior so the single-node tablet safety ceiling cannot be exceeded; mutating
+service tests receive isolated databases, and each bounded service fixture discards all of
+them with its container. Foghorn's larger schema runs in two bounded batches so neither
+tablet accumulation nor repeated distributed teardown can destabilize the single-node test
+engine.
 
 PostgreSQL/Yugabyte relation comparison uses `format_type(atttypid, atttypmod)`,
 so length, precision, and other typmod drift is significant. Physical relation

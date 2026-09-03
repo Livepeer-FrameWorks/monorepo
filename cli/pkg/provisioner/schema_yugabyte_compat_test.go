@@ -4,13 +4,9 @@ package provisioner
 
 import (
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
+	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -19,18 +15,62 @@ import (
 	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 )
 
-func yugabyteServiceDatabases(t *testing.T) []string {
+func yugabyteServiceDatabases(t *testing.T) ([]string, bool) {
 	t.Helper()
 	baselines := pgBaselineFiles(t)
-	services := make([]string, 0, len(baselines))
+	available := make(map[string]struct{}, len(baselines))
 	for _, baseline := range baselines {
-		services = append(services, strings.TrimSuffix(filepath.Base(baseline), ".sql"))
+		available[strings.TrimSuffix(filepath.Base(baseline), ".sql")] = struct{}{}
 	}
-	return services
+	selection := strings.TrimSpace(os.Getenv("FRAMEWORKS_YUGABYTE_DATABASES"))
+	if selection == "" {
+		services := make([]string, 0, len(available))
+		for service := range available {
+			services = append(services, service)
+		}
+		sort.Strings(services)
+		return services, false
+	}
+	selected := make(map[string]struct{})
+	for _, service := range strings.FieldsFunc(selection, func(r rune) bool { return r == ',' || r == ' ' }) {
+		if _, ok := available[service]; !ok {
+			t.Fatalf("FRAMEWORKS_YUGABYTE_DATABASES selects unknown database %q", service)
+		}
+		selected[service] = struct{}{}
+	}
+	if len(selected) == 0 {
+		t.Fatal("FRAMEWORKS_YUGABYTE_DATABASES must select at least one database")
+	}
+	services := make([]string, 0, len(selected))
+	for service := range selected {
+		services = append(services, service)
+	}
+	sort.Strings(services)
+	return services, true
 }
 
-func ybStart(t *testing.T, name string) {
+func TestYugabyteDatabaseSelection(t *testing.T) {
+	t.Setenv("FRAMEWORKS_YUGABYTE_DATABASES", "purser, navigator purser")
+	services, constrained := yugabyteServiceDatabases(t)
+	if !constrained {
+		t.Fatal("explicit Yugabyte database selection was not constrained")
+	}
+	want := []string{"navigator", "purser"}
+	if len(services) != len(want) {
+		t.Fatalf("selected databases = %v, want %v", services, want)
+	}
+	for i := range want {
+		if services[i] != want[i] {
+			t.Fatalf("selected databases = %v, want %v", services, want)
+		}
+	}
+}
+
+func ybStart(t *testing.T, name string) string {
 	t.Helper()
+	if shared := strings.TrimSpace(os.Getenv("FRAMEWORKS_YUGABYTE_TEST_CONTAINER")); shared != "" {
+		return shared
+	}
 	rmContainer(t, name)
 	image := infrastructureContractImage(t, "yugabyte")
 	if _, err := docker(t, "", "run", "-d", "--name", name, image,
@@ -42,7 +82,7 @@ func ybStart(t *testing.T, name string) {
 	deadline := time.Now().Add(3 * time.Minute)
 	for {
 		if out, err := docker(t, "", "exec", name, "ysqlsh", "-h", "127.0.0.1", "-U", "yugabyte", "-d", "yugabyte", "-tAc", "SELECT 1"); err == nil && strings.TrimSpace(out) == "1" {
-			return
+			return name
 		}
 		if time.Now().After(deadline) {
 			logs, _ := docker(t, "", "logs", "--tail", "80", name)
@@ -52,16 +92,23 @@ func ybStart(t *testing.T, name string) {
 	}
 }
 
+func ybSQLHost(name string) string {
+	if strings.TrimSpace(os.Getenv("FRAMEWORKS_YUGABYTE_TEST_CONTAINER")) != "" {
+		return name
+	}
+	return "127.0.0.1"
+}
+
 func ybApply(t *testing.T, name, db, sql string) {
 	t.Helper()
-	if out, err := docker(t, sql, "exec", "-i", name, "ysqlsh", "-h", "127.0.0.1", "-U", "yugabyte", "-d", db, "-v", "ON_ERROR_STOP=1", "-q"); err != nil {
+	if out, err := docker(t, sql, "exec", "-i", name, "ysqlsh", "-h", ybSQLHost(name), "-U", "yugabyte", "-d", db, "-v", "ON_ERROR_STOP=1", "-q"); err != nil {
 		t.Fatalf("apply SQL to %s/%s: %v\n%s", name, db, err, out)
 	}
 }
 
 func ybIntrospect(t *testing.T, name, db string) string {
 	t.Helper()
-	out, err := docker(t, "", "exec", name, "ysqlsh", "-h", "127.0.0.1", "-U", "yugabyte", "-d", db, "-tAc", pgIntrospectQuery)
+	out, err := docker(t, "", "exec", name, "ysqlsh", "-h", ybSQLHost(name), "-U", "yugabyte", "-d", db, "-tAc", pgIntrospectQuery)
 	if err != nil {
 		t.Fatalf("introspect Yugabyte schema %s: %v\n%s", db, err, out)
 	}
@@ -72,14 +119,21 @@ func ybIntrospect(t *testing.T, name, db string) string {
 
 func ybCreateDatabase(t *testing.T, name, databaseName string) {
 	t.Helper()
-	if out, err := docker(t, "", "exec", name, "ysqlsh", "-h", "127.0.0.1", "-U", "yugabyte", "-d", "yugabyte", "-v", "ON_ERROR_STOP=1", "-c", "CREATE DATABASE "+databaseName); err != nil {
+	if out, err := docker(t, "", "exec", name, "ysqlsh", "-h", ybSQLHost(name), "-U", "yugabyte", "-d", "yugabyte", "-v", "ON_ERROR_STOP=1", "-c", "CREATE DATABASE "+databaseName); err != nil {
 		t.Fatalf("create Yugabyte database %s: %v\n%s", databaseName, err, out)
+	}
+}
+
+func ybDropDatabase(t *testing.T, name, databaseName string) {
+	t.Helper()
+	if out, err := docker(t, "", "exec", name, "ysqlsh", "-h", ybSQLHost(name), "-U", "yugabyte", "-d", "yugabyte", "-v", "ON_ERROR_STOP=1", "-c", "DROP DATABASE "+databaseName); err != nil {
+		t.Errorf("drop Yugabyte database %s: %v\n%s", databaseName, err, out)
 	}
 }
 
 func ybRequireAllIndexesValid(t *testing.T, name, databaseName string) {
 	t.Helper()
-	output, err := docker(t, "", "exec", name, "ysqlsh", "-h", "127.0.0.1", "-U", "yugabyte", "-d", databaseName, "-tAc", `
+	output, err := docker(t, "", "exec", name, "ysqlsh", "-h", ybSQLHost(name), "-U", "yugabyte", "-d", databaseName, "-tAc", `
 SELECT count(*)
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -94,151 +148,6 @@ WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
 	}
 }
 
-type yugabyteGeneratedQuery struct {
-	file string
-	name string
-	sql  string
-}
-
-func generatedQueriesInDirectory(t *testing.T, directory string) []yugabyteGeneratedQuery {
-	t.Helper()
-	paths, err := filepath.Glob(filepath.Join(directory, "*.sql.go"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	queries := make([]yugabyteGeneratedQuery, 0, len(paths))
-	for _, path := range paths {
-		file, parseErr := parser.ParseFile(token.NewFileSet(), path, nil, 0)
-		if parseErr != nil {
-			t.Fatalf("parse %s: %v", path, parseErr)
-		}
-		for _, declaration := range file.Decls {
-			general, ok := declaration.(*ast.GenDecl)
-			if !ok || general.Tok != token.CONST {
-				continue
-			}
-			for _, specification := range general.Specs {
-				value, ok := specification.(*ast.ValueSpec)
-				if !ok {
-					continue
-				}
-				for valueIndex, expression := range value.Values {
-					literal, ok := expression.(*ast.BasicLit)
-					if !ok || literal.Kind != token.STRING {
-						continue
-					}
-					querySQL, unquoteErr := strconv.Unquote(literal.Value)
-					if unquoteErr != nil {
-						t.Fatalf("unquote constant in %s: %v", path, unquoteErr)
-					}
-					if !strings.HasPrefix(querySQL, "-- name:") {
-						continue
-					}
-					name := "unknown"
-					if valueIndex < len(value.Names) {
-						name = value.Names[valueIndex].Name
-					}
-					queries = append(queries, yugabyteGeneratedQuery{
-						file: filepath.Base(path),
-						name: name,
-						sql:  querySQL,
-					})
-				}
-			}
-		}
-	}
-	return queries
-}
-
-func generatedServiceQueries(t *testing.T, relativeDirectory string) []yugabyteGeneratedQuery {
-	t.Helper()
-	_, currentFile, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("resolve Yugabyte contract test path")
-	}
-	return generatedQueriesInDirectory(t, filepath.Join(filepath.Dir(currentFile), relativeDirectory))
-}
-
-func ybPreparePurserCatalog(t *testing.T, name string) {
-	t.Helper()
-	queries := generatedServiceQueries(t, "../../../api_billing/internal/database/purserdb")
-	if len(queries) < 100 {
-		t.Fatalf("found only %d generated Purser queries; Yugabyte catalog discovery is incomplete", len(queries))
-	}
-	var statements strings.Builder
-	for index, query := range queries {
-		preparedName := fmt.Sprintf("purser_contract_%d", index)
-		fmt.Fprintf(&statements, "\\echo preparing %s from %s\n", query.name, query.file)
-		fmt.Fprintf(&statements, "PREPARE %s AS %s;\n", preparedName, query.sql)
-		fmt.Fprintf(&statements, "DEALLOCATE %s;\n", preparedName)
-	}
-	ybApply(t, name, "purser", statements.String())
-}
-
-func ybPrepareNavigatorCatalog(t *testing.T, name string) {
-	t.Helper()
-	queries := generatedServiceQueries(t, "../../../api_dns/internal/database/navigatordb")
-	if len(queries) != 55 {
-		t.Fatalf("found %d generated Navigator queries, want 55", len(queries))
-	}
-	var statements strings.Builder
-	for index, query := range queries {
-		preparedName := fmt.Sprintf("navigator_contract_%d", index)
-		fmt.Fprintf(&statements, "\\echo preparing %s from %s\n", query.name, query.file)
-		fmt.Fprintf(&statements, "PREPARE %s AS %s;\n", preparedName, query.sql)
-		fmt.Fprintf(&statements, "DEALLOCATE %s;\n", preparedName)
-	}
-	ybApply(t, name, "navigator", statements.String())
-}
-
-func ybPrepareSkipperCatalog(t *testing.T, name string) {
-	t.Helper()
-	queries := generatedServiceQueries(t, "../../../api_consultant/internal/database/skipperdb")
-	if len(queries) != 62 {
-		t.Fatalf("found %d generated Skipper queries, want 62", len(queries))
-	}
-	var statements strings.Builder
-	for index, query := range queries {
-		preparedName := fmt.Sprintf("skipper_contract_%d", index)
-		fmt.Fprintf(&statements, "\\echo preparing %s from %s\n", query.name, query.file)
-		fmt.Fprintf(&statements, "PREPARE %s AS %s;\n", preparedName, query.sql)
-		fmt.Fprintf(&statements, "DEALLOCATE %s;\n", preparedName)
-	}
-	ybApply(t, name, "skipper", statements.String())
-}
-
-func ybPrepareMeteringCatalog(t *testing.T, name string) {
-	t.Helper()
-	queries := generatedServiceQueries(t, "../../../api_analytics_query/internal/database/meteringdb")
-	if len(queries) != 11 {
-		t.Fatalf("found %d generated Periscope Metering queries, want 11", len(queries))
-	}
-	var statements strings.Builder
-	for index, query := range queries {
-		preparedName := fmt.Sprintf("metering_contract_%d", index)
-		fmt.Fprintf(&statements, "\\echo preparing %s from %s\n", query.name, query.file)
-		fmt.Fprintf(&statements, "PREPARE %s AS %s;\n", preparedName, query.sql)
-		fmt.Fprintf(&statements, "DEALLOCATE %s;\n", preparedName)
-	}
-	ybApply(t, name, "periscope", statements.String())
-}
-
-func ybPrepareCommodoreCatalog(t *testing.T, name string) {
-	t.Helper()
-	queries := generatedServiceQueries(t, "../../../api_control/internal/database/commodoredb")
-	if len(queries) != 305 {
-		t.Fatalf("found %d generated Commodore queries, want 305", len(queries))
-	}
-	var statements strings.Builder
-	for index, query := range queries {
-		preparedName := fmt.Sprintf("commodore_contract_%d", index)
-		fmt.Fprintf(&statements, "\\echo preparing %s from %s\n", query.name, query.file)
-		fmt.Fprintf(&statements, "PREPARE %s AS %s;\n", preparedName, query.sql)
-		fmt.Fprintf(&statements, "DEALLOCATE %s;\n", preparedName)
-	}
-	ybApply(t, name, "commodore", statements.String())
-}
-
 func ybVerifyTaggedMigrationPaths(t *testing.T) {
 	t.Helper()
 	fromTag := schemaVerifyFromTag(t)
@@ -251,26 +160,30 @@ func ybVerifyTaggedMigrationPaths(t *testing.T) {
 		t.Fatalf("discover PostgreSQL migrations: %v", err)
 	}
 	postTag := migrationsAfterVersion(allMigrations, fromTag)
-	serviceSet := make(map[string]struct{})
-	for _, service := range yugabyteServiceDatabases(t) {
+	selectedServices, constrained := yugabyteServiceDatabases(t)
+	serviceSet := make(map[string]struct{}, len(selectedServices))
+	for _, service := range selectedServices {
 		serviceSet[service] = struct{}{}
 	}
-	for _, migration := range postTag {
-		serviceSet[migration.Database] = struct{}{}
+	if !constrained {
+		for _, migration := range postTag {
+			serviceSet[migration.Database] = struct{}{}
+		}
 	}
 	services := make([]string, 0, len(serviceSet))
 	for service := range serviceSet {
 		services = append(services, service)
 	}
 	sort.Strings(services)
+	name := ybStart(t, fmt.Sprintf("fw-sv-yb-upgrades-%d", time.Now().UnixNano()))
 	for _, service := range services {
 		t.Run(service, func(t *testing.T) {
-			name := fmt.Sprintf("fw-sv-yb-upgrade-%s-%d", service, time.Now().UnixNano())
-			ybStart(t, name)
 			upgradeDatabase := service + "_upgrade"
 			currentDatabase := service + "_current"
 			ybCreateDatabase(t, name, upgradeDatabase)
+			t.Cleanup(func() { ybDropDatabase(t, name, upgradeDatabase) })
 			ybCreateDatabase(t, name, currentDatabase)
+			t.Cleanup(func() { ybDropDatabase(t, name, currentDatabase) })
 			ybApply(t, name, upgradeDatabase, repositoryFileAtTag(t, fromTag, "pkg/database/sql/schema/"+service+".sql"))
 
 			applied := 0
@@ -294,22 +207,6 @@ func ybVerifyTaggedMigrationPaths(t *testing.T) {
 	}
 }
 
-func ybPrepareQuartermasterCatalog(t *testing.T, name string) {
-	t.Helper()
-	queries := generatedServiceQueries(t, "../../../api_tenants/internal/database/quartermasterdb")
-	if len(queries) != 163 {
-		t.Fatalf("found %d generated Quartermaster queries, want 163", len(queries))
-	}
-	var statements strings.Builder
-	for index, query := range queries {
-		preparedName := fmt.Sprintf("quartermaster_contract_%d", index)
-		fmt.Fprintf(&statements, "\\echo preparing %s from %s\n", query.name, query.file)
-		fmt.Fprintf(&statements, "PREPARE %s AS %s;\n", preparedName, query.sql)
-		fmt.Fprintf(&statements, "DEALLOCATE %s;\n", preparedName)
-	}
-	ybApply(t, name, "quartermaster", statements.String())
-}
-
 func TestYugabyteTaggedMigrationPaths(t *testing.T) {
 	requireDocker(t)
 	ybVerifyTaggedMigrationPaths(t)
@@ -318,10 +215,13 @@ func TestYugabyteTaggedMigrationPaths(t *testing.T) {
 func TestYugabyteCurrentBaselinesAndCapabilities(t *testing.T) {
 	requireDocker(t)
 	name := fmt.Sprintf("fw-sv-yb-%d", time.Now().UnixNano())
-	ybStart(t, name)
+	name = ybStart(t, name)
 
-	for _, service := range yugabyteServiceDatabases(t) {
-		if out, err := docker(t, "", "exec", name, "ysqlsh", "-h", "127.0.0.1", "-U", "yugabyte", "-d", "yugabyte", "-v", "ON_ERROR_STOP=1", "-c", "CREATE DATABASE "+service); err != nil {
+	services, _ := yugabyteServiceDatabases(t)
+	selected := make(map[string]struct{}, len(services))
+	for _, service := range services {
+		selected[service] = struct{}{}
+		if out, err := docker(t, "", "exec", name, "ysqlsh", "-h", ybSQLHost(name), "-U", "yugabyte", "-d", "yugabyte", "-v", "ON_ERROR_STOP=1", "-c", "CREATE DATABASE "+service); err != nil {
 			t.Fatalf("create Yugabyte database %s: %v\n%s", service, err, out)
 		}
 		path := "schema/" + service + ".sql"
@@ -332,7 +232,7 @@ func TestYugabyteCurrentBaselinesAndCapabilities(t *testing.T) {
 		ybApply(t, name, service, string(schemaSQL))
 		ybRequireAllIndexesValid(t, name, service)
 		runtimeRole := service + "_runtime"
-		if out, createErr := docker(t, "", "exec", name, "ysqlsh", "-h", "127.0.0.1", "-U", "yugabyte", "-d", "yugabyte", "-v", "ON_ERROR_STOP=1", "-c", "CREATE ROLE "+runtimeRole+" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION"); createErr != nil {
+		if out, createErr := docker(t, "", "exec", name, "ysqlsh", "-h", ybSQLHost(name), "-U", "yugabyte", "-d", "yugabyte", "-v", "ON_ERROR_STOP=1", "-c", "CREATE ROLE "+runtimeRole+" LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION"); createErr != nil {
 			t.Fatalf("create Yugabyte runtime role %s: %v\n%s", runtimeRole, createErr, out)
 		}
 		ybApply(t, name, service, fmt.Sprintf(`
@@ -353,6 +253,9 @@ ALTER DEFAULT PRIVILEGES FOR ROLE yugabyte IN SCHEMA %[1]s GRANT EXECUTE ON FUNC
 	}
 	for _, binary := range pkgdatabase.CapabilityServices() {
 		databaseName := databaseByService[binary]
+		if _, ok := selected[databaseName]; !ok {
+			continue
+		}
 		for _, capability := range pkgdatabase.CapabilitiesFor(binary, pkgdatabase.EnginePostgres) {
 			if databaseName == "" {
 				t.Fatalf("PostgreSQL capability service %q has no Yugabyte database", binary)
@@ -360,26 +263,22 @@ ALTER DEFAULT PRIVILEGES FOR ROLE yugabyte IN SCHEMA %[1]s GRANT EXECUTE ON FUNC
 			ybApply(t, name, databaseName, fmt.Sprintf("SET ROLE %s_runtime; %s; RESET ROLE;", databaseName, capability.Probe))
 		}
 	}
-	if out, ddlErr := docker(t, "", "exec", name, "ysqlsh", "-h", "127.0.0.1", "-U", "yugabyte", "-d", "purser", "-v", "ON_ERROR_STOP=1", "-c", "SET ROLE purser_runtime; CREATE TABLE purser.runtime_role_must_not_create (id integer)"); ddlErr == nil {
-		t.Fatalf("Yugabyte runtime role unexpectedly created a table: %s", out)
+	if _, ok := selected["purser"]; ok {
+		if out, ddlErr := docker(t, "", "exec", name, "ysqlsh", "-h", ybSQLHost(name), "-U", "yugabyte", "-d", "purser", "-v", "ON_ERROR_STOP=1", "-c", "SET ROLE purser_runtime; CREATE TABLE purser.runtime_role_must_not_create (id integer)"); ddlErr == nil {
+			t.Fatalf("Yugabyte runtime role unexpectedly created a table: %s", out)
+		}
+		purserSeed, err := dbsql.Content.ReadFile(demoSeeds["purser"])
+		if err != nil {
+			t.Fatalf("read Purser demo seed: %v", err)
+		}
+		ybApply(t, name, "purser", string(purserSeed))
+		ybApply(t, name, "purser", string(purserSeed))
 	}
-	purserSeed, err := dbsql.Content.ReadFile(demoSeeds["purser"])
-	if err != nil {
-		t.Fatalf("read Purser demo seed: %v", err)
-	}
-	ybApply(t, name, "purser", string(purserSeed))
-	ybApply(t, name, "purser", string(purserSeed))
-	ybPreparePurserCatalog(t, name)
-	ybPrepareNavigatorCatalog(t, name)
-	ybPrepareSkipperCatalog(t, name)
-	ybPrepareMeteringCatalog(t, name)
-	ybPrepareCommodoreCatalog(t, name)
-	ybPrepareQuartermasterCatalog(t, name)
-
 	// These statements represent concrete runtime assumptions not proven by
 	// merely accepting DDL: JSONB null normalization, conflict inference,
 	// transactional advisory locks, and work-queue row locking.
-	ybApply(t, name, "purser", `
+	if _, ok := selected["purser"]; ok {
+		ybApply(t, name, "purser", `
 BEGIN;
 SELECT pg_advisory_xact_lock(8675309);
 SELECT COALESCE(NULL::jsonb, '{}'::jsonb);
@@ -387,9 +286,12 @@ SELECT id FROM purser.stripe_meter_events_outbox
 FOR UPDATE SKIP LOCKED;
 ROLLBACK;
 `)
-	ybApply(t, name, "commodore", `
+	}
+	if _, ok := selected["commodore"]; ok {
+		ybApply(t, name, "commodore", `
 BEGIN;
 SELECT pg_advisory_xact_lock(hashtext('tenant-contract'), hashtext('stream-contract'));
 ROLLBACK;
 `)
+	}
 }

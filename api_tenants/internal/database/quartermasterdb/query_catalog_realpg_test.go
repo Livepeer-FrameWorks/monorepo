@@ -715,6 +715,16 @@ func startQuartermasterQueryCatalogRealPG(t *testing.T) *sql.DB {
 
 func startQuartermasterQueryCatalogRealYugabyte(t *testing.T) *sql.DB {
 	t.Helper()
+	if db, ok := dockerpg.OpenSharedYugabyteDatabase(t, "quartermaster"); ok {
+		schema, err := dbsql.Content.ReadFile("schema/quartermaster.sql")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec(string(schema)); err != nil {
+			t.Fatal(err)
+		}
+		return db
+	}
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Skip("docker not available")
 	}
