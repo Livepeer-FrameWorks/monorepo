@@ -1,14 +1,15 @@
 -- name: EnqueuePushTargetStatus :exec
 INSERT INTO foghorn.push_target_status_outbox (
-    target_id, tenant_id, status, last_error, event_unix_millis, revision, attempts,
+    target_id, tenant_id, status, reason_code, last_error, event_unix_millis, revision, attempts,
     next_attempt_at, last_attempt_at, created_at, updated_at
 ) VALUES (
     sqlc.arg(target_id)::uuid, sqlc.arg(tenant_id)::uuid, sqlc.arg(status),
-    sqlc.narg(last_error), sqlc.arg(event_unix_millis), 1, 0, NOW(), NULL, NOW(), NOW()
+    COALESCE(NULLIF(sqlc.arg(reason_code), ''), 'unspecified'), sqlc.narg(last_error), sqlc.arg(event_unix_millis), 1, 0, NOW(), NULL, NOW(), NOW()
 )
 ON CONFLICT (target_id) DO UPDATE
 SET tenant_id = EXCLUDED.tenant_id,
     status = EXCLUDED.status,
+    reason_code = EXCLUDED.reason_code,
     last_error = EXCLUDED.last_error,
     event_unix_millis = EXCLUDED.event_unix_millis,
     revision = foghorn.push_target_status_outbox.revision + 1,
@@ -22,6 +23,7 @@ WHERE (
        AND (
            foghorn.push_target_status_outbox.tenant_id IS DISTINCT FROM EXCLUDED.tenant_id
            OR foghorn.push_target_status_outbox.status IS DISTINCT FROM EXCLUDED.status
+           OR foghorn.push_target_status_outbox.reason_code IS DISTINCT FROM EXCLUDED.reason_code
            OR foghorn.push_target_status_outbox.last_error IS DISTINCT FROM EXCLUDED.last_error
        )
    )
@@ -33,6 +35,7 @@ WHERE (
        AND (
            foghorn.push_target_status_outbox.tenant_id IS DISTINCT FROM EXCLUDED.tenant_id
            OR foghorn.push_target_status_outbox.status IS DISTINCT FROM EXCLUDED.status
+           OR foghorn.push_target_status_outbox.reason_code IS DISTINCT FROM EXCLUDED.reason_code
            OR foghorn.push_target_status_outbox.last_error IS DISTINCT FROM EXCLUDED.last_error
        )
    );
@@ -55,7 +58,7 @@ SET lease_owner = sqlc.arg(lease_owner),
 FROM candidates
 WHERE outbox.id = candidates.id
 RETURNING outbox.id, outbox.target_id::text AS target_id,
-          outbox.tenant_id::text AS tenant_id, outbox.status, outbox.last_error,
+          outbox.tenant_id::text AS tenant_id, outbox.status, outbox.reason_code, outbox.last_error,
           outbox.revision, outbox.attempts;
 
 -- name: DeleteDeliveredPushTargetStatus :execrows

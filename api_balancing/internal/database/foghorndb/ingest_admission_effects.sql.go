@@ -33,6 +33,115 @@ func (q *Queries) AdmissionGenerationActive(ctx context.Context, arg AdmissionGe
 	return exists, err
 }
 
+const admissionPushTargetAttemptCurrent = `-- name: AdmissionPushTargetAttemptCurrent :one
+SELECT EXISTS (
+    SELECT 1
+    FROM foghorn.admission_push_target_revisions AS history
+    WHERE history.source_generation = $1::text::uuid
+      AND history.node_id = $2
+      AND history.target_revision = $3
+      AND history.activation_attempt = NULLIF($4::text, '')::uuid
+) AS current
+`
+
+type AdmissionPushTargetAttemptCurrentParams struct {
+	SourceGeneration  string `db:"source_generation" json:"source_generation"`
+	NodeID            string `db:"node_id" json:"node_id"`
+	TargetRevision    int64  `db:"target_revision" json:"target_revision"`
+	ActivationAttempt string `db:"activation_attempt" json:"activation_attempt"`
+}
+
+func (q *Queries) AdmissionPushTargetAttemptCurrent(ctx context.Context, arg AdmissionPushTargetAttemptCurrentParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, admissionPushTargetAttemptCurrent,
+		arg.SourceGeneration,
+		arg.NodeID,
+		arg.TargetRevision,
+		arg.ActivationAttempt,
+	)
+	var current bool
+	err := row.Scan(&current)
+	return current, err
+}
+
+const bindAdmissionPushTargetMistID = `-- name: BindAdmissionPushTargetMistID :execrows
+UPDATE foghorn.admission_push_target_revisions
+SET mist_push_ids = jsonb_set(
+        mist_push_ids,
+        ARRAY[$1::text],
+        to_jsonb($2::bigint),
+        TRUE
+    )
+WHERE node_id = $3
+  AND source_generation = $4::text::uuid
+  AND target_revision = $5
+  AND activation_attempt = COALESCE(NULLIF($6, '')::uuid, '00000000-0000-0000-0000-000000000000'::uuid)
+  AND $2::bigint > 0
+`
+
+type BindAdmissionPushTargetMistIDParams struct {
+	TargetID          string      `db:"target_id" json:"target_id"`
+	MistPushID        int64       `db:"mist_push_id" json:"mist_push_id"`
+	NodeID            string      `db:"node_id" json:"node_id"`
+	SourceGeneration  string      `db:"source_generation" json:"source_generation"`
+	TargetRevision    int64       `db:"target_revision" json:"target_revision"`
+	ActivationAttempt interface{} `db:"activation_attempt" json:"activation_attempt"`
+}
+
+func (q *Queries) BindAdmissionPushTargetMistID(ctx context.Context, arg BindAdmissionPushTargetMistIDParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, bindAdmissionPushTargetMistID,
+		arg.TargetID,
+		arg.MistPushID,
+		arg.NodeID,
+		arg.SourceGeneration,
+		arg.TargetRevision,
+		arg.ActivationAttempt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const bindAdmissionPushTargetMistIDIfAbsent = `-- name: BindAdmissionPushTargetMistIDIfAbsent :execrows
+UPDATE foghorn.admission_push_target_revisions
+SET mist_push_ids = jsonb_set(
+        mist_push_ids,
+        ARRAY[$1::text],
+        to_jsonb($2::bigint),
+        TRUE
+    )
+WHERE node_id = $3
+  AND source_generation = $4::text::uuid
+  AND target_revision = $5
+  AND activation_attempt = COALESCE(NULLIF($6, '')::uuid, '00000000-0000-0000-0000-000000000000'::uuid)
+  AND $2::bigint > 0
+  AND COALESCE(NULLIF(mist_push_ids ->> $1::text, '')::bigint, 0) <= 0
+`
+
+type BindAdmissionPushTargetMistIDIfAbsentParams struct {
+	TargetID          string      `db:"target_id" json:"target_id"`
+	MistPushID        int64       `db:"mist_push_id" json:"mist_push_id"`
+	NodeID            string      `db:"node_id" json:"node_id"`
+	SourceGeneration  string      `db:"source_generation" json:"source_generation"`
+	TargetRevision    int64       `db:"target_revision" json:"target_revision"`
+	ActivationAttempt interface{} `db:"activation_attempt" json:"activation_attempt"`
+}
+
+func (q *Queries) BindAdmissionPushTargetMistIDIfAbsent(ctx context.Context, arg BindAdmissionPushTargetMistIDIfAbsentParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, bindAdmissionPushTargetMistIDIfAbsent,
+		arg.TargetID,
+		arg.MistPushID,
+		arg.NodeID,
+		arg.SourceGeneration,
+		arg.TargetRevision,
+		arg.ActivationAttempt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const claimAdmissionEffects = `-- name: ClaimAdmissionEffects :many
 WITH candidates AS (
     SELECT e.id FROM foghorn.ingest_admission_effects e
@@ -52,11 +161,11 @@ WITH candidates AS (
     RETURNING a.id, a.tenant_id::text AS tenant_id, a.stream_internal_name, a.node_id,
               a.source_generation::text AS source_generation, a.source_revision, a.prior_owner_node_id,
               COALESCE(a.prior_owner_source_generation::text, '')::text AS prior_owner_source_generation,
-              a.push_targets, a.broadcast_live, a.decklog_trigger, COALESCE(a.peer_clusters, '[]'::text) AS peer_clusters,
+              a.push_targets, a.target_revision, a.capacity_pending, a.broadcast_live, a.decklog_trigger, COALESCE(a.peer_clusters, '[]'::text) AS peer_clusters,
               a.drain_done, a.activation_done, a.broadcast_done, a.decklog_done, a.state,
               a.lease_token::text AS lease_token
 )
-SELECT id, tenant_id, stream_internal_name, node_id, source_generation, source_revision, prior_owner_node_id, prior_owner_source_generation, push_targets, broadcast_live, decklog_trigger, peer_clusters, drain_done, activation_done, broadcast_done, decklog_done, state, lease_token FROM leased ORDER BY id
+SELECT id, tenant_id, stream_internal_name, node_id, source_generation, source_revision, prior_owner_node_id, prior_owner_source_generation, push_targets, target_revision, capacity_pending, broadcast_live, decklog_trigger, peer_clusters, drain_done, activation_done, broadcast_done, decklog_done, state, lease_token FROM leased ORDER BY id
 `
 
 type ClaimAdmissionEffectsParams struct {
@@ -75,6 +184,8 @@ type ClaimAdmissionEffectsRow struct {
 	PriorOwnerNodeID           string         `db:"prior_owner_node_id" json:"prior_owner_node_id"`
 	PriorOwnerSourceGeneration string         `db:"prior_owner_source_generation" json:"prior_owner_source_generation"`
 	PushTargets                []byte         `db:"push_targets" json:"push_targets"`
+	TargetRevision             int64          `db:"target_revision" json:"target_revision"`
+	CapacityPending            bool           `db:"capacity_pending" json:"capacity_pending"`
 	BroadcastLive              bool           `db:"broadcast_live" json:"broadcast_live"`
 	DecklogTrigger             []byte         `db:"decklog_trigger" json:"decklog_trigger"`
 	PeerClusters               sql.NullString `db:"peer_clusters" json:"peer_clusters"`
@@ -105,6 +216,8 @@ func (q *Queries) ClaimAdmissionEffects(ctx context.Context, arg ClaimAdmissionE
 			&i.PriorOwnerNodeID,
 			&i.PriorOwnerSourceGeneration,
 			&i.PushTargets,
+			&i.TargetRevision,
+			&i.CapacityPending,
 			&i.BroadcastLive,
 			&i.DecklogTrigger,
 			&i.PeerClusters,
@@ -131,13 +244,13 @@ func (q *Queries) ClaimAdmissionEffects(ctx context.Context, arg ClaimAdmissionE
 const enqueueAdmissionEffect = `-- name: EnqueueAdmissionEffect :exec
 INSERT INTO foghorn.ingest_admission_effects
     (tenant_id, stream_internal_name, node_id, source_generation, source_revision,
-     prior_owner_node_id, prior_owner_source_generation, push_targets, broadcast_live, decklog_trigger, peer_clusters,
+     prior_owner_node_id, prior_owner_source_generation, push_targets, target_revision, broadcast_live, decklog_trigger, peer_clusters,
      drain_done, activation_done, broadcast_done, decklog_done, state)
 VALUES ($1::text::uuid, $2, $3,
         $4::text::uuid, $5, $6,
-        NULLIF($7::text, '')::uuid, $8,
-        $9, $10, $11,
-        $12, $13, $14, $15,
+        NULLIF($7::text, '')::uuid, $8, $9,
+        $10, $11, $12,
+        $13, $14, $15, $16,
         CASE WHEN COALESCE(octet_length($8::bytea), 0) = 0
              THEN 'pending' ELSE 'pending_v2' END)
 ON CONFLICT (source_generation) DO NOTHING
@@ -152,6 +265,7 @@ type EnqueueAdmissionEffectParams struct {
 	PriorOwnerNodeID           string         `db:"prior_owner_node_id" json:"prior_owner_node_id"`
 	PriorOwnerSourceGeneration string         `db:"prior_owner_source_generation" json:"prior_owner_source_generation"`
 	PushTargets                []byte         `db:"push_targets" json:"push_targets"`
+	TargetRevision             int64          `db:"target_revision" json:"target_revision"`
 	BroadcastLive              bool           `db:"broadcast_live" json:"broadcast_live"`
 	DecklogTrigger             []byte         `db:"decklog_trigger" json:"decklog_trigger"`
 	PeerClusters               sql.NullString `db:"peer_clusters" json:"peer_clusters"`
@@ -171,6 +285,7 @@ func (q *Queries) EnqueueAdmissionEffect(ctx context.Context, arg EnqueueAdmissi
 		arg.PriorOwnerNodeID,
 		arg.PriorOwnerSourceGeneration,
 		arg.PushTargets,
+		arg.TargetRevision,
 		arg.BroadcastLive,
 		arg.DecklogTrigger,
 		arg.PeerClusters,
@@ -221,6 +336,446 @@ func (q *Queries) GetAdmissionEffectSourceRevision(ctx context.Context, arg GetA
 	var source_revision int64
 	err := row.Scan(&source_revision)
 	return source_revision, err
+}
+
+const getAdmissionPushTargetRuntimeRearmForUpdate = `-- name: GetAdmissionPushTargetRuntimeRearmForUpdate :one
+SELECT effect.id, effect.push_targets
+FROM foghorn.ingest_admission_effects AS effect
+WHERE effect.tenant_id = $1::text::uuid
+  AND effect.stream_internal_name = $2
+  AND effect.source_generation = $3::text::uuid
+  AND effect.target_revision = $4
+  AND effect.push_targets IS NOT NULL
+  AND effect.state IN ('pending_v2', 'applied_v2')
+  AND (effect.attempts < 12 OR effect.updated_at <= NOW() - INTERVAL '5 minutes')
+  AND EXISTS (
+      SELECT 1 FROM foghorn.ingest_sessions AS session
+      WHERE session.id = effect.source_generation
+        AND session.tenant_id = effect.tenant_id
+        AND session.ended_at IS NULL
+  )
+FOR UPDATE
+`
+
+type GetAdmissionPushTargetRuntimeRearmForUpdateParams struct {
+	TenantID           string `db:"tenant_id" json:"tenant_id"`
+	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
+	SourceGeneration   string `db:"source_generation" json:"source_generation"`
+	TargetRevision     int64  `db:"target_revision" json:"target_revision"`
+}
+
+type GetAdmissionPushTargetRuntimeRearmForUpdateRow struct {
+	ID          int64  `db:"id" json:"id"`
+	PushTargets []byte `db:"push_targets" json:"push_targets"`
+}
+
+func (q *Queries) GetAdmissionPushTargetRuntimeRearmForUpdate(ctx context.Context, arg GetAdmissionPushTargetRuntimeRearmForUpdateParams) (GetAdmissionPushTargetRuntimeRearmForUpdateRow, error) {
+	row := q.db.QueryRowContext(ctx, getAdmissionPushTargetRuntimeRearmForUpdate,
+		arg.TenantID,
+		arg.StreamInternalName,
+		arg.SourceGeneration,
+		arg.TargetRevision,
+	)
+	var i GetAdmissionPushTargetRuntimeRearmForUpdateRow
+	err := row.Scan(&i.ID, &i.PushTargets)
+	return i, err
+}
+
+const getAdmissionPushTargetsForStatus = `-- name: GetAdmissionPushTargetsForStatus :one
+SELECT history.tenant_id::text AS tenant_id,
+       history.stream_internal_name,
+       history.node_id,
+       history.push_targets,
+       history.mist_push_ids,
+       history.target_revision,
+       history.activation_attempt::text AS activation_attempt,
+       (SELECT COALESCE(max(latest.target_revision), history.target_revision)::bigint
+        FROM foghorn.admission_push_target_revisions AS latest
+        WHERE latest.source_generation = history.source_generation) AS latest_target_revision,
+       EXISTS (
+           SELECT 1
+           FROM foghorn.ingest_sessions AS session
+           WHERE session.id = history.source_generation
+             AND session.tenant_id = history.tenant_id
+             AND session.ended_at IS NULL
+       ) AS source_live
+FROM foghorn.admission_push_target_revisions AS history
+WHERE history.tenant_id = $1::text::uuid
+  AND history.source_generation = $2::text::uuid
+  AND history.target_revision = $3
+  AND history.activation_attempt = COALESCE(NULLIF($4, '')::uuid, '00000000-0000-0000-0000-000000000000'::uuid)
+ORDER BY history.id DESC
+LIMIT 1
+`
+
+type GetAdmissionPushTargetsForStatusParams struct {
+	TenantID          string      `db:"tenant_id" json:"tenant_id"`
+	SourceGeneration  string      `db:"source_generation" json:"source_generation"`
+	TargetRevision    int64       `db:"target_revision" json:"target_revision"`
+	ActivationAttempt interface{} `db:"activation_attempt" json:"activation_attempt"`
+}
+
+type GetAdmissionPushTargetsForStatusRow struct {
+	TenantID             string          `db:"tenant_id" json:"tenant_id"`
+	StreamInternalName   string          `db:"stream_internal_name" json:"stream_internal_name"`
+	NodeID               string          `db:"node_id" json:"node_id"`
+	PushTargets          []byte          `db:"push_targets" json:"push_targets"`
+	MistPushIds          json.RawMessage `db:"mist_push_ids" json:"mist_push_ids"`
+	TargetRevision       int64           `db:"target_revision" json:"target_revision"`
+	ActivationAttempt    string          `db:"activation_attempt" json:"activation_attempt"`
+	LatestTargetRevision int64           `db:"latest_target_revision" json:"latest_target_revision"`
+	SourceLive           bool            `db:"source_live" json:"source_live"`
+}
+
+func (q *Queries) GetAdmissionPushTargetsForStatus(ctx context.Context, arg GetAdmissionPushTargetsForStatusParams) (GetAdmissionPushTargetsForStatusRow, error) {
+	row := q.db.QueryRowContext(ctx, getAdmissionPushTargetsForStatus,
+		arg.TenantID,
+		arg.SourceGeneration,
+		arg.TargetRevision,
+		arg.ActivationAttempt,
+	)
+	var i GetAdmissionPushTargetsForStatusRow
+	err := row.Scan(
+		&i.TenantID,
+		&i.StreamInternalName,
+		&i.NodeID,
+		&i.PushTargets,
+		&i.MistPushIds,
+		&i.TargetRevision,
+		&i.ActivationAttempt,
+		&i.LatestTargetRevision,
+		&i.SourceLive,
+	)
+	return i, err
+}
+
+const getAdmissionPushTargetsForTeardown = `-- name: GetAdmissionPushTargetsForTeardown :one
+SELECT history.tenant_id::text AS tenant_id,
+       history.stream_internal_name,
+       history.node_id,
+       history.push_targets,
+       history.mist_push_ids,
+       history.target_revision,
+       history.activation_attempt::text AS activation_attempt
+FROM foghorn.admission_push_target_revisions AS history
+WHERE history.source_generation = $1::text::uuid
+  AND history.node_id = $2
+  AND ($3::bigint = 0 OR history.target_revision = $3::bigint)
+  AND (NULLIF($4::text, '') IS NULL
+       OR history.activation_attempt = NULLIF($4::text, '')::uuid)
+ORDER BY history.target_revision DESC, history.id DESC
+LIMIT 1
+`
+
+type GetAdmissionPushTargetsForTeardownParams struct {
+	SourceGeneration  string `db:"source_generation" json:"source_generation"`
+	NodeID            string `db:"node_id" json:"node_id"`
+	TargetRevision    int64  `db:"target_revision" json:"target_revision"`
+	ActivationAttempt string `db:"activation_attempt" json:"activation_attempt"`
+}
+
+type GetAdmissionPushTargetsForTeardownRow struct {
+	TenantID           string          `db:"tenant_id" json:"tenant_id"`
+	StreamInternalName string          `db:"stream_internal_name" json:"stream_internal_name"`
+	NodeID             string          `db:"node_id" json:"node_id"`
+	PushTargets        []byte          `db:"push_targets" json:"push_targets"`
+	MistPushIds        json.RawMessage `db:"mist_push_ids" json:"mist_push_ids"`
+	TargetRevision     int64           `db:"target_revision" json:"target_revision"`
+	ActivationAttempt  string          `db:"activation_attempt" json:"activation_attempt"`
+}
+
+func (q *Queries) GetAdmissionPushTargetsForTeardown(ctx context.Context, arg GetAdmissionPushTargetsForTeardownParams) (GetAdmissionPushTargetsForTeardownRow, error) {
+	row := q.db.QueryRowContext(ctx, getAdmissionPushTargetsForTeardown,
+		arg.SourceGeneration,
+		arg.NodeID,
+		arg.TargetRevision,
+		arg.ActivationAttempt,
+	)
+	var i GetAdmissionPushTargetsForTeardownRow
+	err := row.Scan(
+		&i.TenantID,
+		&i.StreamInternalName,
+		&i.NodeID,
+		&i.PushTargets,
+		&i.MistPushIds,
+		&i.TargetRevision,
+		&i.ActivationAttempt,
+	)
+	return i, err
+}
+
+const getAdmissionTargetRevision = `-- name: GetAdmissionTargetRevision :one
+SELECT target_revision
+FROM foghorn.admission_push_target_revisions
+WHERE source_generation = $1::text::uuid
+  AND node_id = $2
+ORDER BY target_revision DESC, id DESC
+LIMIT 1
+`
+
+type GetAdmissionTargetRevisionParams struct {
+	SourceGeneration string `db:"source_generation" json:"source_generation"`
+	NodeID           string `db:"node_id" json:"node_id"`
+}
+
+func (q *Queries) GetAdmissionTargetRevision(ctx context.Context, arg GetAdmissionTargetRevisionParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, getAdmissionTargetRevision, arg.SourceGeneration, arg.NodeID)
+	var target_revision int64
+	err := row.Scan(&target_revision)
+	return target_revision, err
+}
+
+const listActiveAdmissionPushTargetEffectsForUpdate = `-- name: ListActiveAdmissionPushTargetEffectsForUpdate :many
+SELECT effect.id, effect.node_id, effect.source_generation::text AS source_generation,
+       effect.push_targets, effect.state, effect.target_revision
+FROM foghorn.ingest_admission_effects AS effect
+WHERE effect.tenant_id = $1::text::uuid
+  AND effect.stream_internal_name = $2
+  AND effect.state IN ('pending', 'applied', 'pending_v2', 'applied_v2')
+  AND EXISTS (
+      SELECT 1 FROM foghorn.ingest_sessions AS session
+      WHERE session.tenant_id = effect.tenant_id
+        AND session.stream_internal_name = effect.stream_internal_name
+        AND session.id = effect.source_generation
+        AND session.ended_at IS NULL
+  )
+FOR UPDATE
+`
+
+type ListActiveAdmissionPushTargetEffectsForUpdateParams struct {
+	TenantID           string `db:"tenant_id" json:"tenant_id"`
+	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
+}
+
+type ListActiveAdmissionPushTargetEffectsForUpdateRow struct {
+	ID               int64  `db:"id" json:"id"`
+	NodeID           string `db:"node_id" json:"node_id"`
+	SourceGeneration string `db:"source_generation" json:"source_generation"`
+	PushTargets      []byte `db:"push_targets" json:"push_targets"`
+	State            string `db:"state" json:"state"`
+	TargetRevision   int64  `db:"target_revision" json:"target_revision"`
+}
+
+func (q *Queries) ListActiveAdmissionPushTargetEffectsForUpdate(ctx context.Context, arg ListActiveAdmissionPushTargetEffectsForUpdateParams) ([]ListActiveAdmissionPushTargetEffectsForUpdateRow, error) {
+	rows, err := q.db.QueryContext(ctx, listActiveAdmissionPushTargetEffectsForUpdate, arg.TenantID, arg.StreamInternalName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListActiveAdmissionPushTargetEffectsForUpdateRow{}
+	for rows.Next() {
+		var i ListActiveAdmissionPushTargetEffectsForUpdateRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.NodeID,
+			&i.SourceGeneration,
+			&i.PushTargets,
+			&i.State,
+			&i.TargetRevision,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listActivePushTargetActivationsForNodeRequeue = `-- name: ListActivePushTargetActivationsForNodeRequeue :many
+SELECT effect.id, effect.tenant_id::text AS tenant_id, effect.stream_internal_name,
+       effect.source_generation::text AS source_generation, effect.target_revision,
+       effect.push_targets
+FROM foghorn.ingest_admission_effects AS effect
+WHERE effect.node_id = $1
+  AND effect.state IN ('pending', 'applied', 'pending_v2', 'applied_v2')
+  AND effect.activation_done = TRUE
+  AND effect.push_targets IS NOT NULL
+  AND effect.target_revision > 0
+  AND effect.activation_connection_fence < $2
+  AND EXISTS (
+      SELECT 1
+      FROM foghorn.ingest_sessions AS session
+      WHERE session.tenant_id = effect.tenant_id
+        AND session.stream_internal_name = effect.stream_internal_name
+        AND session.id = effect.source_generation
+        AND session.ended_at IS NULL
+  )
+ORDER BY effect.id
+LIMIT 100
+FOR UPDATE
+`
+
+type ListActivePushTargetActivationsForNodeRequeueParams struct {
+	NodeID          string `db:"node_id" json:"node_id"`
+	ConnectionFence int64  `db:"connection_fence" json:"connection_fence"`
+}
+
+type ListActivePushTargetActivationsForNodeRequeueRow struct {
+	ID                 int64  `db:"id" json:"id"`
+	TenantID           string `db:"tenant_id" json:"tenant_id"`
+	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
+	SourceGeneration   string `db:"source_generation" json:"source_generation"`
+	TargetRevision     int64  `db:"target_revision" json:"target_revision"`
+	PushTargets        []byte `db:"push_targets" json:"push_targets"`
+}
+
+func (q *Queries) ListActivePushTargetActivationsForNodeRequeue(ctx context.Context, arg ListActivePushTargetActivationsForNodeRequeueParams) ([]ListActivePushTargetActivationsForNodeRequeueRow, error) {
+	rows, err := q.db.QueryContext(ctx, listActivePushTargetActivationsForNodeRequeue, arg.NodeID, arg.ConnectionFence)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListActivePushTargetActivationsForNodeRequeueRow{}
+	for rows.Next() {
+		var i ListActivePushTargetActivationsForNodeRequeueRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.StreamInternalName,
+			&i.SourceGeneration,
+			&i.TargetRevision,
+			&i.PushTargets,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCapacityPendingPushTargetEffectsForRearm = `-- name: ListCapacityPendingPushTargetEffectsForRearm :many
+SELECT effect.id, effect.tenant_id::text AS tenant_id, effect.stream_internal_name,
+       effect.source_generation::text AS source_generation, effect.target_revision,
+       effect.push_targets
+FROM foghorn.ingest_admission_effects AS effect
+WHERE effect.capacity_pending
+  AND effect.activation_done
+  AND effect.push_targets IS NOT NULL
+  AND effect.target_revision > 0
+  AND effect.next_attempt_at <= NOW()
+  AND effect.state IN ('pending', 'applied', 'pending_v2', 'applied_v2')
+	AND (effect.attempts < 12 OR effect.updated_at <= NOW() - INTERVAL '5 minutes')
+  AND EXISTS (
+      SELECT 1 FROM foghorn.ingest_sessions AS session
+      WHERE session.id = effect.source_generation
+        AND session.tenant_id = effect.tenant_id
+        AND session.ended_at IS NULL
+  )
+ORDER BY effect.next_attempt_at, effect.id
+LIMIT 100
+FOR UPDATE
+`
+
+type ListCapacityPendingPushTargetEffectsForRearmRow struct {
+	ID                 int64  `db:"id" json:"id"`
+	TenantID           string `db:"tenant_id" json:"tenant_id"`
+	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
+	SourceGeneration   string `db:"source_generation" json:"source_generation"`
+	TargetRevision     int64  `db:"target_revision" json:"target_revision"`
+	PushTargets        []byte `db:"push_targets" json:"push_targets"`
+}
+
+func (q *Queries) ListCapacityPendingPushTargetEffectsForRearm(ctx context.Context) ([]ListCapacityPendingPushTargetEffectsForRearmRow, error) {
+	rows, err := q.db.QueryContext(ctx, listCapacityPendingPushTargetEffectsForRearm)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCapacityPendingPushTargetEffectsForRearmRow{}
+	for rows.Next() {
+		var i ListCapacityPendingPushTargetEffectsForRearmRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.StreamInternalName,
+			&i.SourceGeneration,
+			&i.TargetRevision,
+			&i.PushTargets,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCooledDownRuntimePushTargetEffectsForRearm = `-- name: ListCooledDownRuntimePushTargetEffectsForRearm :many
+SELECT effect.id, effect.tenant_id::text AS tenant_id, effect.stream_internal_name,
+       effect.source_generation::text AS source_generation, effect.target_revision,
+       effect.push_targets
+FROM foghorn.ingest_admission_effects AS effect
+WHERE effect.state = 'applied_v2'
+  AND effect.activation_done
+  AND NOT effect.capacity_pending
+  AND effect.push_targets IS NOT NULL
+  AND effect.target_revision > 0
+  AND effect.attempts >= 12
+  AND effect.updated_at <= NOW() - INTERVAL '5 minutes'
+  AND EXISTS (
+      SELECT 1 FROM foghorn.ingest_sessions AS session
+      WHERE session.id = effect.source_generation
+        AND session.tenant_id = effect.tenant_id
+        AND session.ended_at IS NULL
+  )
+ORDER BY effect.updated_at, effect.id
+LIMIT 100
+FOR UPDATE
+`
+
+type ListCooledDownRuntimePushTargetEffectsForRearmRow struct {
+	ID                 int64  `db:"id" json:"id"`
+	TenantID           string `db:"tenant_id" json:"tenant_id"`
+	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
+	SourceGeneration   string `db:"source_generation" json:"source_generation"`
+	TargetRevision     int64  `db:"target_revision" json:"target_revision"`
+	PushTargets        []byte `db:"push_targets" json:"push_targets"`
+}
+
+func (q *Queries) ListCooledDownRuntimePushTargetEffectsForRearm(ctx context.Context) ([]ListCooledDownRuntimePushTargetEffectsForRearmRow, error) {
+	rows, err := q.db.QueryContext(ctx, listCooledDownRuntimePushTargetEffectsForRearm)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListCooledDownRuntimePushTargetEffectsForRearmRow{}
+	for rows.Next() {
+		var i ListCooledDownRuntimePushTargetEffectsForRearmRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.StreamInternalName,
+			&i.SourceGeneration,
+			&i.TargetRevision,
+			&i.PushTargets,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listLegacyAdmissionPushTargetsForEncryption = `-- name: ListLegacyAdmissionPushTargetsForEncryption :many
@@ -320,25 +875,47 @@ func (q *Queries) ListPurgeableAdmissionEffectFences(ctx context.Context, fences
 	return items, nil
 }
 
-const markAdmissionActivationDone = `-- name: MarkAdmissionActivationDone :exec
-UPDATE foghorn.ingest_admission_effects
+const markAdmissionActivationDone = `-- name: MarkAdmissionActivationDone :execrows
+UPDATE foghorn.ingest_admission_effects AS effect
 SET activation_done = TRUE,
     activation_connection_fence = $1,
     updated_at = NOW()
-WHERE state IN ('pending', 'pending_v2') AND source_generation = $2::text::uuid
-  AND node_id = $3
-  AND $1 >= activation_connection_fence
+WHERE effect.state IN ('pending', 'pending_v2') AND effect.source_generation = $2::text::uuid
+  AND effect.node_id = $3
+  AND effect.target_revision = $4
+  AND $1 >= effect.activation_connection_fence
+  AND (
+      NULLIF($5::text, '') IS NULL
+      OR EXISTS (
+          SELECT 1
+          FROM foghorn.admission_push_target_revisions AS history
+          WHERE history.source_generation = effect.source_generation
+            AND history.target_revision = effect.target_revision
+            AND history.activation_attempt = NULLIF($5::text, '')::uuid
+      )
+  )
 `
 
 type MarkAdmissionActivationDoneParams struct {
-	ConnectionFence  int64  `db:"connection_fence" json:"connection_fence"`
-	SourceGeneration string `db:"source_generation" json:"source_generation"`
-	NodeID           string `db:"node_id" json:"node_id"`
+	ConnectionFence   int64  `db:"connection_fence" json:"connection_fence"`
+	SourceGeneration  string `db:"source_generation" json:"source_generation"`
+	NodeID            string `db:"node_id" json:"node_id"`
+	TargetRevision    int64  `db:"target_revision" json:"target_revision"`
+	ActivationAttempt string `db:"activation_attempt" json:"activation_attempt"`
 }
 
-func (q *Queries) MarkAdmissionActivationDone(ctx context.Context, arg MarkAdmissionActivationDoneParams) error {
-	_, err := q.db.ExecContext(ctx, markAdmissionActivationDone, arg.ConnectionFence, arg.SourceGeneration, arg.NodeID)
-	return err
+func (q *Queries) MarkAdmissionActivationDone(ctx context.Context, arg MarkAdmissionActivationDoneParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markAdmissionActivationDone,
+		arg.ConnectionFence,
+		arg.SourceGeneration,
+		arg.NodeID,
+		arg.TargetRevision,
+		arg.ActivationAttempt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const markAdmissionDrainDone = `-- name: MarkAdmissionDrainDone :exec
@@ -356,6 +933,30 @@ type MarkAdmissionDrainDoneParams struct {
 func (q *Queries) MarkAdmissionDrainDone(ctx context.Context, arg MarkAdmissionDrainDoneParams) error {
 	_, err := q.db.ExecContext(ctx, markAdmissionDrainDone, arg.SourceGeneration, arg.NodeID)
 	return err
+}
+
+const purgeAdmissionPushTargetRevisions = `-- name: PurgeAdmissionPushTargetRevisions :execrows
+DELETE FROM foghorn.admission_push_target_revisions
+WHERE id IN (
+    SELECT history.id
+    FROM foghorn.admission_push_target_revisions AS history
+    WHERE history.created_at < NOW() - ($1::bigint * INTERVAL '1 millisecond')
+      AND NOT EXISTS (
+          SELECT 1 FROM foghorn.ingest_sessions AS session
+          WHERE session.id = history.source_generation
+            AND session.tenant_id = history.tenant_id
+            AND session.ended_at IS NULL
+      )
+    ORDER BY history.created_at LIMIT 1000
+)
+`
+
+func (q *Queries) PurgeAdmissionPushTargetRevisions(ctx context.Context, olderThanMs int64) (int64, error) {
+	result, err := q.db.ExecContext(ctx, purgeAdmissionPushTargetRevisions, olderThanMs)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const purgeTerminalAdmissionEffects = `-- name: PurgeTerminalAdmissionEffects :execrows
@@ -388,7 +989,7 @@ func (q *Queries) PurgeTerminalAdmissionEffects(ctx context.Context, olderThanMs
 }
 
 const readAdmissionLegsLocked = `-- name: ReadAdmissionLegsLocked :one
-SELECT drain_done, activation_done, broadcast_done, decklog_done
+SELECT drain_done, activation_done, broadcast_done, decklog_done, capacity_pending
 FROM foghorn.ingest_admission_effects
 WHERE id = $1 AND state IN ('pending', 'pending_v2')
   AND lease_token = $2::text::uuid
@@ -401,10 +1002,11 @@ type ReadAdmissionLegsLockedParams struct {
 }
 
 type ReadAdmissionLegsLockedRow struct {
-	DrainDone      bool `db:"drain_done" json:"drain_done"`
-	ActivationDone bool `db:"activation_done" json:"activation_done"`
-	BroadcastDone  bool `db:"broadcast_done" json:"broadcast_done"`
-	DecklogDone    bool `db:"decklog_done" json:"decklog_done"`
+	DrainDone       bool `db:"drain_done" json:"drain_done"`
+	ActivationDone  bool `db:"activation_done" json:"activation_done"`
+	BroadcastDone   bool `db:"broadcast_done" json:"broadcast_done"`
+	DecklogDone     bool `db:"decklog_done" json:"decklog_done"`
+	CapacityPending bool `db:"capacity_pending" json:"capacity_pending"`
 }
 
 func (q *Queries) ReadAdmissionLegsLocked(ctx context.Context, arg ReadAdmissionLegsLockedParams) (ReadAdmissionLegsLockedRow, error) {
@@ -415,8 +1017,172 @@ func (q *Queries) ReadAdmissionLegsLocked(ctx context.Context, arg ReadAdmission
 		&i.ActivationDone,
 		&i.BroadcastDone,
 		&i.DecklogDone,
+		&i.CapacityPending,
 	)
 	return i, err
+}
+
+const rearmAdmissionPushTargetEffect = `-- name: RearmAdmissionPushTargetEffect :execrows
+UPDATE foghorn.ingest_admission_effects
+SET push_targets = $1,
+    target_revision = $2,
+    capacity_pending = FALSE,
+    state = 'pending_v2',
+    activation_done = FALSE,
+    attempts = 0,
+    next_attempt_at = NOW(),
+    leased_until = NULL,
+    lease_token = NULL,
+    claim_affinity = NULL,
+    applied_at = NULL,
+    last_error = NULL,
+    updated_at = NOW()
+WHERE id = $3
+  AND state IN ('pending', 'applied', 'pending_v2', 'applied_v2')
+`
+
+type RearmAdmissionPushTargetEffectParams struct {
+	PushTargets    []byte `db:"push_targets" json:"push_targets"`
+	TargetRevision int64  `db:"target_revision" json:"target_revision"`
+	EffectID       int64  `db:"effect_id" json:"effect_id"`
+}
+
+func (q *Queries) RearmAdmissionPushTargetEffect(ctx context.Context, arg RearmAdmissionPushTargetEffectParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, rearmAdmissionPushTargetEffect, arg.PushTargets, arg.TargetRevision, arg.EffectID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const rearmAdmissionPushTargetsAfterRuntimeEnd = `-- name: RearmAdmissionPushTargetsAfterRuntimeEnd :execrows
+UPDATE foghorn.ingest_admission_effects AS effect
+SET state = 'pending_v2', activation_done = FALSE,
+	push_targets = $1,
+	attempts = CASE WHEN effect.updated_at <= NOW() - INTERVAL '5 minutes' THEN 0 ELSE effect.attempts END,
+	next_attempt_at = NOW() + LEAST(
+		INTERVAL '5 minutes',
+		INTERVAL '1 second' * power(2, LEAST(CASE WHEN effect.updated_at <= NOW() - INTERVAL '5 minutes' THEN 0 ELSE effect.attempts END, 8))
+	),
+    leased_until = NULL, lease_token = NULL,
+    claim_affinity = NULL, applied_at = NULL, last_error = NULL, updated_at = NOW()
+WHERE effect.tenant_id = $2::text::uuid
+  AND effect.stream_internal_name = $3
+  AND effect.source_generation = $4::text::uuid
+  AND effect.target_revision = $5
+  AND effect.push_targets IS NOT NULL
+  AND effect.state IN ('pending_v2', 'applied_v2')
+	AND (effect.attempts < 12 OR effect.updated_at <= NOW() - INTERVAL '5 minutes')
+  AND EXISTS (
+      SELECT 1 FROM foghorn.ingest_sessions AS session
+      WHERE session.id = effect.source_generation
+        AND session.tenant_id = effect.tenant_id
+        AND session.ended_at IS NULL
+	  )
+`
+
+type RearmAdmissionPushTargetsAfterRuntimeEndParams struct {
+	PushTargets        []byte `db:"push_targets" json:"push_targets"`
+	TenantID           string `db:"tenant_id" json:"tenant_id"`
+	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
+	SourceGeneration   string `db:"source_generation" json:"source_generation"`
+	TargetRevision     int64  `db:"target_revision" json:"target_revision"`
+}
+
+func (q *Queries) RearmAdmissionPushTargetsAfterRuntimeEnd(ctx context.Context, arg RearmAdmissionPushTargetsAfterRuntimeEndParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, rearmAdmissionPushTargetsAfterRuntimeEnd,
+		arg.PushTargets,
+		arg.TenantID,
+		arg.StreamInternalName,
+		arg.SourceGeneration,
+		arg.TargetRevision,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const rearmCapacityPendingPushTargetEffectByID = `-- name: RearmCapacityPendingPushTargetEffectByID :execrows
+UPDATE foghorn.ingest_admission_effects AS effect
+SET state = CASE WHEN effect.state IN ('pending_v2', 'applied_v2') THEN 'pending_v2' ELSE 'pending' END,
+    push_targets = $1, activation_done = FALSE,
+    attempts = CASE WHEN effect.updated_at <= NOW() - INTERVAL '5 minutes' THEN 0 ELSE effect.attempts END,
+    next_attempt_at = NOW() + LEAST(
+        INTERVAL '5 minutes',
+        INTERVAL '1 second' * power(2, LEAST(CASE WHEN effect.updated_at <= NOW() - INTERVAL '5 minutes' THEN 0 ELSE effect.attempts END, 8))
+    ),
+    leased_until = NULL, lease_token = NULL, claim_affinity = NULL,
+    applied_at = NULL, updated_at = NOW()
+WHERE effect.id = $2
+  AND effect.capacity_pending
+  AND effect.activation_done
+`
+
+type RearmCapacityPendingPushTargetEffectByIDParams struct {
+	PushTargets []byte `db:"push_targets" json:"push_targets"`
+	EffectID    int64  `db:"effect_id" json:"effect_id"`
+}
+
+func (q *Queries) RearmCapacityPendingPushTargetEffectByID(ctx context.Context, arg RearmCapacityPendingPushTargetEffectByIDParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, rearmCapacityPendingPushTargetEffectByID, arg.PushTargets, arg.EffectID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const rearmCooledDownRuntimePushTargetEffectByID = `-- name: RearmCooledDownRuntimePushTargetEffectByID :execrows
+UPDATE foghorn.ingest_admission_effects AS effect
+SET state = 'pending_v2', push_targets = $1, activation_done = FALSE, attempts = 0,
+    next_attempt_at = NOW(), leased_until = NULL, lease_token = NULL,
+    claim_affinity = NULL, applied_at = NULL, last_error = NULL, updated_at = NOW()
+WHERE effect.id = $2
+  AND effect.state = 'applied_v2'
+  AND effect.activation_done
+  AND NOT effect.capacity_pending
+`
+
+type RearmCooledDownRuntimePushTargetEffectByIDParams struct {
+	PushTargets []byte `db:"push_targets" json:"push_targets"`
+	EffectID    int64  `db:"effect_id" json:"effect_id"`
+}
+
+func (q *Queries) RearmCooledDownRuntimePushTargetEffectByID(ctx context.Context, arg RearmCooledDownRuntimePushTargetEffectByIDParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, rearmCooledDownRuntimePushTargetEffectByID, arg.PushTargets, arg.EffectID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const recordAdmissionPushTargetDispatch = `-- name: RecordAdmissionPushTargetDispatch :execrows
+UPDATE foghorn.admission_push_target_revisions
+SET push_targets = $1,
+    created_at = NOW()
+WHERE source_generation = $2::text::uuid
+  AND target_revision = $3
+  AND activation_attempt = NULLIF($4::text, '')::uuid
+`
+
+type RecordAdmissionPushTargetDispatchParams struct {
+	PushTargets       []byte `db:"push_targets" json:"push_targets"`
+	SourceGeneration  string `db:"source_generation" json:"source_generation"`
+	TargetRevision    int64  `db:"target_revision" json:"target_revision"`
+	ActivationAttempt string `db:"activation_attempt" json:"activation_attempt"`
+}
+
+func (q *Queries) RecordAdmissionPushTargetDispatch(ctx context.Context, arg RecordAdmissionPushTargetDispatchParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, recordAdmissionPushTargetDispatch,
+		arg.PushTargets,
+		arg.SourceGeneration,
+		arg.TargetRevision,
+		arg.ActivationAttempt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const releaseAdmissionEffectNotOwner = `-- name: ReleaseAdmissionEffectNotOwner :exec
@@ -438,41 +1204,98 @@ func (q *Queries) ReleaseAdmissionEffectNotOwner(ctx context.Context, arg Releas
 	return err
 }
 
-const requeueActivePushTargetActivationsForNode = `-- name: RequeueActivePushTargetActivationsForNode :execrows
+const repairAdmissionPushTargetRevision = `-- name: RepairAdmissionPushTargetRevision :execrows
+UPDATE foghorn.admission_push_target_revisions
+SET push_targets = $1,
+    activation_attempt = $2::text::uuid,
+    mist_push_ids = '{}'::jsonb,
+    created_at = NOW()
+WHERE source_generation = $3::text::uuid
+  AND target_revision = $4
+`
+
+type RepairAdmissionPushTargetRevisionParams struct {
+	PushTargets       []byte `db:"push_targets" json:"push_targets"`
+	ActivationAttempt string `db:"activation_attempt" json:"activation_attempt"`
+	SourceGeneration  string `db:"source_generation" json:"source_generation"`
+	TargetRevision    int64  `db:"target_revision" json:"target_revision"`
+}
+
+func (q *Queries) RepairAdmissionPushTargetRevision(ctx context.Context, arg RepairAdmissionPushTargetRevisionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, repairAdmissionPushTargetRevision,
+		arg.PushTargets,
+		arg.ActivationAttempt,
+		arg.SourceGeneration,
+		arg.TargetRevision,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const requeueActivePushTargetActivationByID = `-- name: RequeueActivePushTargetActivationByID :execrows
 UPDATE foghorn.ingest_admission_effects AS effect
 SET state = CASE WHEN effect.state IN ('pending_v2', 'applied_v2') THEN 'pending_v2' ELSE 'pending' END,
+    push_targets = $1,
     activation_done = FALSE,
-    activation_connection_fence = GREATEST(effect.activation_connection_fence, $1),
+    activation_connection_fence = GREATEST(effect.activation_connection_fence, $2),
     attempts = 0,
     next_attempt_at = NOW(),
     leased_until = NULL,
     lease_token = NULL,
-    claim_affinity = NULLIF($2::text, ''),
+    claim_affinity = NULLIF($3::text, ''),
     applied_at = NULL,
     updated_at = NOW()
-WHERE effect.node_id = $3
-  AND effect.state IN ('pending', 'applied', 'pending_v2', 'applied_v2')
+WHERE effect.id = $4
   AND effect.activation_done = TRUE
-  AND effect.push_targets IS NOT NULL
-  AND effect.activation_connection_fence < $1
-  AND EXISTS (
-      SELECT 1
-      FROM foghorn.ingest_sessions AS session
-      WHERE session.tenant_id = effect.tenant_id
-        AND session.stream_internal_name = effect.stream_internal_name
-        AND session.id = effect.source_generation
-        AND session.ended_at IS NULL
-  )
+  AND effect.activation_connection_fence < $2
 `
 
-type RequeueActivePushTargetActivationsForNodeParams struct {
+type RequeueActivePushTargetActivationByIDParams struct {
+	PushTargets     []byte `db:"push_targets" json:"push_targets"`
 	ConnectionFence int64  `db:"connection_fence" json:"connection_fence"`
 	InstanceID      string `db:"instance_id" json:"instance_id"`
-	NodeID          string `db:"node_id" json:"node_id"`
+	EffectID        int64  `db:"effect_id" json:"effect_id"`
 }
 
-func (q *Queries) RequeueActivePushTargetActivationsForNode(ctx context.Context, arg RequeueActivePushTargetActivationsForNodeParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, requeueActivePushTargetActivationsForNode, arg.ConnectionFence, arg.InstanceID, arg.NodeID)
+func (q *Queries) RequeueActivePushTargetActivationByID(ctx context.Context, arg RequeueActivePushTargetActivationByIDParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, requeueActivePushTargetActivationByID,
+		arg.PushTargets,
+		arg.ConnectionFence,
+		arg.InstanceID,
+		arg.EffectID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const rotateAdmissionPushTargetRuntimeAttempt = `-- name: RotateAdmissionPushTargetRuntimeAttempt :execrows
+UPDATE foghorn.admission_push_target_revisions
+SET push_targets = $1,
+    activation_attempt = $2::text::uuid,
+    mist_push_ids = '{}'::jsonb,
+    created_at = NOW()
+WHERE source_generation = $3::text::uuid
+  AND target_revision = $4
+`
+
+type RotateAdmissionPushTargetRuntimeAttemptParams struct {
+	PushTargets       []byte `db:"push_targets" json:"push_targets"`
+	ActivationAttempt string `db:"activation_attempt" json:"activation_attempt"`
+	SourceGeneration  string `db:"source_generation" json:"source_generation"`
+	TargetRevision    int64  `db:"target_revision" json:"target_revision"`
+}
+
+func (q *Queries) RotateAdmissionPushTargetRuntimeAttempt(ctx context.Context, arg RotateAdmissionPushTargetRuntimeAttemptParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, rotateAdmissionPushTargetRuntimeAttempt,
+		arg.PushTargets,
+		arg.ActivationAttempt,
+		arg.SourceGeneration,
+		arg.TargetRevision,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -483,15 +1306,16 @@ const settleAdmissionLegs = `-- name: SettleAdmissionLegs :execrows
 UPDATE foghorn.ingest_admission_effects
 SET drain_done = $1, activation_done = $2,
     broadcast_done = $3, decklog_done = $4,
-    state = $5::text, updated_at = NOW(),
-    last_error = COALESCE(NULLIF($6::text, ''), last_error),
-    applied_at = CASE WHEN $5::text NOT IN ('pending', 'pending_v2') THEN NOW() ELSE applied_at END,
-    leased_until = CASE WHEN $5::text NOT IN ('pending', 'pending_v2') THEN NULL ELSE leased_until END,
-    lease_token = CASE WHEN $5::text NOT IN ('pending', 'pending_v2') THEN NULL ELSE lease_token END,
-    push_targets = CASE WHEN $7::boolean THEN NULL ELSE push_targets END,
-    decklog_trigger = CASE WHEN $5::text NOT IN ('pending', 'pending_v2') THEN NULL ELSE decklog_trigger END
-WHERE id = $8 AND state IN ('pending', 'pending_v2')
-  AND lease_token = $9::text::uuid
+    capacity_pending = $5,
+    state = $6::text, updated_at = NOW(),
+    last_error = COALESCE(NULLIF($7::text, ''), last_error),
+    applied_at = CASE WHEN $6::text NOT IN ('pending', 'pending_v2') THEN NOW() ELSE applied_at END,
+    leased_until = CASE WHEN $6::text NOT IN ('pending', 'pending_v2') THEN NULL ELSE leased_until END,
+    lease_token = CASE WHEN $6::text NOT IN ('pending', 'pending_v2') THEN NULL ELSE lease_token END,
+    push_targets = CASE WHEN $8::boolean THEN NULL ELSE push_targets END,
+    decklog_trigger = CASE WHEN $6::text NOT IN ('pending', 'pending_v2') THEN NULL ELSE decklog_trigger END
+WHERE id = $9 AND state IN ('pending', 'pending_v2')
+  AND lease_token = $10::text::uuid
 `
 
 type SettleAdmissionLegsParams struct {
@@ -499,6 +1323,7 @@ type SettleAdmissionLegsParams struct {
 	ActivationDone   bool   `db:"activation_done" json:"activation_done"`
 	BroadcastDone    bool   `db:"broadcast_done" json:"broadcast_done"`
 	DecklogDone      bool   `db:"decklog_done" json:"decklog_done"`
+	CapacityPending  bool   `db:"capacity_pending" json:"capacity_pending"`
 	NewState         string `db:"new_state" json:"new_state"`
 	PoisonNote       string `db:"poison_note" json:"poison_note"`
 	ClearPushTargets bool   `db:"clear_push_targets" json:"clear_push_targets"`
@@ -512,6 +1337,7 @@ func (q *Queries) SettleAdmissionLegs(ctx context.Context, arg SettleAdmissionLe
 		arg.ActivationDone,
 		arg.BroadcastDone,
 		arg.DecklogDone,
+		arg.CapacityPending,
 		arg.NewState,
 		arg.PoisonNote,
 		arg.ClearPushTargets,
@@ -522,6 +1348,72 @@ func (q *Queries) SettleAdmissionLegs(ctx context.Context, arg SettleAdmissionLe
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const skipReconnectPushTargetActivationByID = `-- name: SkipReconnectPushTargetActivationByID :execrows
+UPDATE foghorn.ingest_admission_effects AS effect
+SET activation_connection_fence = GREATEST(effect.activation_connection_fence, $1),
+    last_error = CONCAT_WS(' | ', NULLIF(effect.last_error, ''), $2::text),
+    updated_at = NOW()
+WHERE effect.id = $3
+  AND effect.activation_done = TRUE
+  AND effect.activation_connection_fence < $1
+`
+
+type SkipReconnectPushTargetActivationByIDParams struct {
+	ConnectionFence int64  `db:"connection_fence" json:"connection_fence"`
+	ErrorMessage    string `db:"error_message" json:"error_message"`
+	EffectID        int64  `db:"effect_id" json:"effect_id"`
+}
+
+func (q *Queries) SkipReconnectPushTargetActivationByID(ctx context.Context, arg SkipReconnectPushTargetActivationByIDParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, skipReconnectPushTargetActivationByID, arg.ConnectionFence, arg.ErrorMessage, arg.EffectID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const storeAdmissionPushTargetRevision = `-- name: StoreAdmissionPushTargetRevision :exec
+INSERT INTO foghorn.admission_push_target_revisions
+    (tenant_id, stream_internal_name, node_id, source_generation, target_revision, activation_attempt, push_targets)
+VALUES ($1::text::uuid, $2, $3,
+        $4::text::uuid, $5, $6::text::uuid, $7)
+ON CONFLICT (source_generation, target_revision) DO NOTHING
+`
+
+type StoreAdmissionPushTargetRevisionParams struct {
+	TenantID           string `db:"tenant_id" json:"tenant_id"`
+	StreamInternalName string `db:"stream_internal_name" json:"stream_internal_name"`
+	NodeID             string `db:"node_id" json:"node_id"`
+	SourceGeneration   string `db:"source_generation" json:"source_generation"`
+	TargetRevision     int64  `db:"target_revision" json:"target_revision"`
+	ActivationAttempt  string `db:"activation_attempt" json:"activation_attempt"`
+	PushTargets        []byte `db:"push_targets" json:"push_targets"`
+}
+
+func (q *Queries) StoreAdmissionPushTargetRevision(ctx context.Context, arg StoreAdmissionPushTargetRevisionParams) error {
+	_, err := q.db.ExecContext(ctx, storeAdmissionPushTargetRevision,
+		arg.TenantID,
+		arg.StreamInternalName,
+		arg.NodeID,
+		arg.SourceGeneration,
+		arg.TargetRevision,
+		arg.ActivationAttempt,
+		arg.PushTargets,
+	)
+	return err
+}
+
+const tryAcquireRestreamCapacityRearmLock = `-- name: TryAcquireRestreamCapacityRearmLock :one
+SELECT pg_try_advisory_xact_lock(hashtext('foghorn_restream_capacity_rearm')) AS acquired
+`
+
+func (q *Queries) TryAcquireRestreamCapacityRearmLock(ctx context.Context) (bool, error) {
+	row := q.db.QueryRowContext(ctx, tryAcquireRestreamCapacityRearmLock)
+	var acquired bool
+	err := row.Scan(&acquired)
+	return acquired, err
 }
 
 const upgradeAdmissionPushTargetsEncryption = `-- name: UpgradeAdmissionPushTargetsEncryption :execrows

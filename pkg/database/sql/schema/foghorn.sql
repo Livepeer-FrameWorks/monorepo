@@ -831,12 +831,18 @@ CREATE TABLE IF NOT EXISTS foghorn.ingest_offline_effects (
     source_generation    UUID,
     source_revision      BIGINT NOT NULL CHECK (source_revision > 0),
     set_node_offline     BOOLEAN NOT NULL DEFAULT FALSE,
+    set_node_offline_done BOOLEAN NOT NULL DEFAULT FALSE,
     teardown_stream      BOOLEAN NOT NULL DEFAULT FALSE,
+    teardown_done        BOOLEAN NOT NULL DEFAULT FALSE,
     broadcast_offline    BOOLEAN NOT NULL DEFAULT FALSE,
+    broadcast_offline_done BOOLEAN NOT NULL DEFAULT FALSE,
     decklog_trigger      BYTEA,
+    decklog_done         BOOLEAN NOT NULL DEFAULT FALSE,
     state                VARCHAR(16) NOT NULL DEFAULT 'pending'
-                             CHECK (state IN ('pending', 'applied', 'superseded')),
+                             CONSTRAINT ck_foghorn_ingest_offline_effects_state
+                             CHECK (state IN ('pending', 'applied', 'superseded', 'failed')),
     attempts             INTEGER NOT NULL DEFAULT 0,
+    ack_wait_attempts    INTEGER NOT NULL DEFAULT 0,
     next_attempt_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     leased_until         TIMESTAMPTZ,
     lease_token          UUID,
@@ -855,7 +861,10 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_offline_effects_pending
 
 CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_offline_effects_terminal
     ON foghorn.ingest_offline_effects(updated_at)
-    WHERE state IN ('applied', 'superseded');
+    WHERE state IN ('applied', 'superseded', 'failed');
+CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_offline_effects_teardown_ack
+    ON foghorn.ingest_offline_effects(source_node_id, source_generation)
+    WHERE teardown_stream AND NOT teardown_done AND state IN ('pending', 'failed');
 
 -- Durable, leased application of the once-only ADMISSION effects (mirror of the offline outbox
 -- above). The obligation row is inserted in the SAME transaction that confirms the source
@@ -880,6 +889,8 @@ CREATE TABLE IF NOT EXISTS foghorn.ingest_admission_effects (
     -- only while its publisher generation remains active, so a Helmsman/Mist restart can recreate
     -- the outputs without substituting a newer stream policy.
     push_targets        BYTEA,
+    target_revision     BIGINT NOT NULL DEFAULT 0 CONSTRAINT ck_foghorn_ingest_admission_target_revision CHECK (target_revision >= 0),
+    capacity_pending    BOOLEAN NOT NULL DEFAULT FALSE,
     -- JSON array of complete federation peer hints (cluster ID, internal Foghorn address, and
     -- lifecycle). The leader establishes stream tracking from this durable payload before the
     -- broadcast leg can settle.
@@ -937,6 +948,27 @@ CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_admission_effects_pending_fence
 CREATE INDEX IF NOT EXISTS idx_foghorn_ingest_admission_effects_terminal
     ON foghorn.ingest_admission_effects(updated_at)
     WHERE state IN ('applied', 'superseded', 'applied_v2', 'superseded_v2');
+
+-- Immutable encrypted target-set snapshots keep late runtime finals
+-- attributable across Foghorn restarts and live desired-state revisions.
+CREATE TABLE IF NOT EXISTS foghorn.admission_push_target_revisions (
+    id                   BIGSERIAL PRIMARY KEY,
+    tenant_id            UUID NOT NULL,
+    stream_internal_name VARCHAR(255) NOT NULL,
+    node_id              VARCHAR(100) NOT NULL,
+    source_generation    UUID NOT NULL,
+    target_revision      BIGINT NOT NULL
+        CONSTRAINT ck_foghorn_admission_push_target_revision_positive CHECK (target_revision > 0),
+    activation_attempt   UUID NOT NULL DEFAULT gen_random_uuid(),
+    push_targets         BYTEA NOT NULL,
+    mist_push_ids        JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT uq_foghorn_admission_push_target_revision UNIQUE (source_generation, target_revision)
+);
+CREATE INDEX IF NOT EXISTS idx_foghorn_admission_push_target_revisions_lookup
+    ON foghorn.admission_push_target_revisions(tenant_id, source_generation, target_revision);
+CREATE INDEX IF NOT EXISTS idx_foghorn_admission_push_target_revisions_created
+    ON foghorn.admission_push_target_revisions(created_at, id);
 
 -- ============================================================================
 -- NODE OUTPUT CACHING & LOAD BALANCING
@@ -1005,6 +1037,7 @@ CREATE TABLE IF NOT EXISTS foghorn.push_target_status_outbox (
     target_id UUID NOT NULL UNIQUE,
     tenant_id UUID NOT NULL,
     status VARCHAR(20) NOT NULL,
+    reason_code VARCHAR(32) NOT NULL DEFAULT 'unspecified',
     last_error TEXT,
     event_unix_millis BIGINT NOT NULL DEFAULT 0 CHECK (event_unix_millis >= 0),
     revision BIGINT NOT NULL DEFAULT 1 CHECK (revision > 0),
@@ -1016,7 +1049,9 @@ CREATE TABLE IF NOT EXISTS foghorn.push_target_status_outbox (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT ck_foghorn_push_target_status_outbox_status
-        CHECK (status IN ('idle', 'pushing', 'failed'))
+        CHECK (status IN ('pending', 'pushing', 'retrying', 'stopping', 'idle', 'failed')),
+    CONSTRAINT ck_foghorn_push_target_status_outbox_reason
+        CHECK (reason_code IN ('unspecified', 'connected', 'completed', 'destination_rejected', 'network_error', 'process_error', 'capacity_exhausted', 'configuration_error', 'edge_upgrade_required', 'stopped'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_foghorn_push_target_status_outbox_due

@@ -28,7 +28,7 @@ SET lease_owner = $1,
 FROM candidates
 WHERE outbox.id = candidates.id
 RETURNING outbox.id, outbox.target_id::text AS target_id,
-          outbox.tenant_id::text AS tenant_id, outbox.status, outbox.last_error,
+          outbox.tenant_id::text AS tenant_id, outbox.status, outbox.reason_code, outbox.last_error,
           outbox.revision, outbox.attempts
 `
 
@@ -38,13 +38,14 @@ type ClaimDuePushTargetStatusesParams struct {
 }
 
 type ClaimDuePushTargetStatusesRow struct {
-	ID        int64          `db:"id" json:"id"`
-	TargetID  string         `db:"target_id" json:"target_id"`
-	TenantID  string         `db:"tenant_id" json:"tenant_id"`
-	Status    string         `db:"status" json:"status"`
-	LastError sql.NullString `db:"last_error" json:"last_error"`
-	Revision  int64          `db:"revision" json:"revision"`
-	Attempts  int32          `db:"attempts" json:"attempts"`
+	ID         int64          `db:"id" json:"id"`
+	TargetID   string         `db:"target_id" json:"target_id"`
+	TenantID   string         `db:"tenant_id" json:"tenant_id"`
+	Status     string         `db:"status" json:"status"`
+	ReasonCode string         `db:"reason_code" json:"reason_code"`
+	LastError  sql.NullString `db:"last_error" json:"last_error"`
+	Revision   int64          `db:"revision" json:"revision"`
+	Attempts   int32          `db:"attempts" json:"attempts"`
 }
 
 func (q *Queries) ClaimDuePushTargetStatuses(ctx context.Context, arg ClaimDuePushTargetStatusesParams) ([]ClaimDuePushTargetStatusesRow, error) {
@@ -61,6 +62,7 @@ func (q *Queries) ClaimDuePushTargetStatuses(ctx context.Context, arg ClaimDuePu
 			&i.TargetID,
 			&i.TenantID,
 			&i.Status,
+			&i.ReasonCode,
 			&i.LastError,
 			&i.Revision,
 			&i.Attempts,
@@ -100,15 +102,16 @@ func (q *Queries) DeleteDeliveredPushTargetStatus(ctx context.Context, arg Delet
 
 const enqueuePushTargetStatus = `-- name: EnqueuePushTargetStatus :exec
 INSERT INTO foghorn.push_target_status_outbox (
-    target_id, tenant_id, status, last_error, event_unix_millis, revision, attempts,
+    target_id, tenant_id, status, reason_code, last_error, event_unix_millis, revision, attempts,
     next_attempt_at, last_attempt_at, created_at, updated_at
 ) VALUES (
     $1::uuid, $2::uuid, $3,
-    $4, $5, 1, 0, NOW(), NULL, NOW(), NOW()
+    COALESCE(NULLIF($4, ''), 'unspecified'), $5, $6, 1, 0, NOW(), NULL, NOW(), NOW()
 )
 ON CONFLICT (target_id) DO UPDATE
 SET tenant_id = EXCLUDED.tenant_id,
     status = EXCLUDED.status,
+    reason_code = EXCLUDED.reason_code,
     last_error = EXCLUDED.last_error,
     event_unix_millis = EXCLUDED.event_unix_millis,
     revision = foghorn.push_target_status_outbox.revision + 1,
@@ -122,6 +125,7 @@ WHERE (
        AND (
            foghorn.push_target_status_outbox.tenant_id IS DISTINCT FROM EXCLUDED.tenant_id
            OR foghorn.push_target_status_outbox.status IS DISTINCT FROM EXCLUDED.status
+           OR foghorn.push_target_status_outbox.reason_code IS DISTINCT FROM EXCLUDED.reason_code
            OR foghorn.push_target_status_outbox.last_error IS DISTINCT FROM EXCLUDED.last_error
        )
    )
@@ -133,6 +137,7 @@ WHERE (
        AND (
            foghorn.push_target_status_outbox.tenant_id IS DISTINCT FROM EXCLUDED.tenant_id
            OR foghorn.push_target_status_outbox.status IS DISTINCT FROM EXCLUDED.status
+           OR foghorn.push_target_status_outbox.reason_code IS DISTINCT FROM EXCLUDED.reason_code
            OR foghorn.push_target_status_outbox.last_error IS DISTINCT FROM EXCLUDED.last_error
        )
    )
@@ -142,6 +147,7 @@ type EnqueuePushTargetStatusParams struct {
 	TargetID        string         `db:"target_id" json:"target_id"`
 	TenantID        string         `db:"tenant_id" json:"tenant_id"`
 	Status          string         `db:"status" json:"status"`
+	ReasonCode      interface{}    `db:"reason_code" json:"reason_code"`
 	LastError       sql.NullString `db:"last_error" json:"last_error"`
 	EventUnixMillis int64          `db:"event_unix_millis" json:"event_unix_millis"`
 }
@@ -151,6 +157,7 @@ func (q *Queries) EnqueuePushTargetStatus(ctx context.Context, arg EnqueuePushTa
 		arg.TargetID,
 		arg.TenantID,
 		arg.Status,
+		arg.ReasonCode,
 		arg.LastError,
 		arg.EventUnixMillis,
 	)

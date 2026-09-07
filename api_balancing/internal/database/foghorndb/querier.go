@@ -21,6 +21,7 @@ type Querier interface {
 	ActiveLiveTranscodeJobContext(ctx context.Context, streamInternalName string) (ActiveLiveTranscodeJobContextRow, error)
 	ActiveProcessingTranscodeJobContext(ctx context.Context, artifactHash string) (ActiveProcessingTranscodeJobContextRow, error)
 	AdmissionGenerationActive(ctx context.Context, arg AdmissionGenerationActiveParams) (bool, error)
+	AdmissionPushTargetAttemptCurrent(ctx context.Context, arg AdmissionPushTargetAttemptCurrentParams) (bool, error)
 	AdoptRemoteArtifact(ctx context.Context, arg AdoptRemoteArtifactParams) (int64, error)
 	AdvanceActiveSourceProjectionRevision(ctx context.Context, arg AdvanceActiveSourceProjectionRevisionParams) (int64, error)
 	AdvanceAdmissionEffectSourceRevision(ctx context.Context, arg AdvanceAdmissionEffectSourceRevisionParams) (int64, error)
@@ -42,6 +43,8 @@ type Querier interface {
 	BackfillOriginCluster(ctx context.Context, arg BackfillOriginClusterParams) (int64, error)
 	BackoffCatalogProjection(ctx context.Context, arg BackoffCatalogProjectionParams) error
 	BackoffThumbnailRecovery(ctx context.Context, arg BackoffThumbnailRecoveryParams) error
+	BindAdmissionPushTargetMistID(ctx context.Context, arg BindAdmissionPushTargetMistIDParams) (int64, error)
+	BindAdmissionPushTargetMistIDIfAbsent(ctx context.Context, arg BindAdmissionPushTargetMistIDIfAbsentParams) (int64, error)
 	BindDVRDispatchOwner(ctx context.Context, arg BindDVRDispatchOwnerParams) (int64, error)
 	CancelClipProcessingJobs(ctx context.Context, artifactHash sql.NullString) error
 	CellStorageIdentityCommitted(ctx context.Context) (bool, error)
@@ -83,7 +86,6 @@ type Querier interface {
 	CompleteDVRFinalization(ctx context.Context, arg CompleteDVRFinalizationParams) (int64, error)
 	CompleteIncrementalDtshSync(ctx context.Context, arg CompleteIncrementalDtshSyncParams) (int64, error)
 	CompleteMainArtifactSync(ctx context.Context, arg CompleteMainArtifactSyncParams) (int64, error)
-	CompleteOfflineEffect(ctx context.Context, arg CompleteOfflineEffectParams) (int64, error)
 	CompleteProcessingJob(ctx context.Context, arg CompleteProcessingJobParams) error
 	ConfirmSourceProjection(ctx context.Context, arg ConfirmSourceProjectionParams) (int64, error)
 	ConsumeNodeAdmissionProofNonce(ctx context.Context, arg ConsumeNodeAdmissionProofNonceParams) (int64, error)
@@ -153,6 +155,7 @@ type Querier interface {
 	FailDVRFinalization(ctx context.Context, arg FailDVRFinalizationParams) (int64, error)
 	FailDVRIntent(ctx context.Context, arg FailDVRIntentParams) error
 	FailDtshAttempt(ctx context.Context, arg FailDtshAttemptParams) (string, error)
+	FailExhaustedOfflineEffects(ctx context.Context) ([]FailExhaustedOfflineEffectsRow, error)
 	FailExhaustedProcessingJob(ctx context.Context, arg FailExhaustedProcessingJobParams) (FailExhaustedProcessingJobRow, error)
 	FailExpiredThumbnailAttempt(ctx context.Context, attemptID string) (int64, error)
 	FailMainArtifactSync(ctx context.Context, arg FailMainArtifactSyncParams) error
@@ -178,6 +181,10 @@ type Querier interface {
 	GetAbortableVodUpload(ctx context.Context, arg GetAbortableVodUploadParams) (GetAbortableVodUploadRow, error)
 	GetActiveObjectKeyBackfillCursor(ctx context.Context) (string, error)
 	GetAdmissionEffectSourceRevision(ctx context.Context, arg GetAdmissionEffectSourceRevisionParams) (int64, error)
+	GetAdmissionPushTargetRuntimeRearmForUpdate(ctx context.Context, arg GetAdmissionPushTargetRuntimeRearmForUpdateParams) (GetAdmissionPushTargetRuntimeRearmForUpdateRow, error)
+	GetAdmissionPushTargetsForStatus(ctx context.Context, arg GetAdmissionPushTargetsForStatusParams) (GetAdmissionPushTargetsForStatusRow, error)
+	GetAdmissionPushTargetsForTeardown(ctx context.Context, arg GetAdmissionPushTargetsForTeardownParams) (GetAdmissionPushTargetsForTeardownRow, error)
+	GetAdmissionTargetRevision(ctx context.Context, arg GetAdmissionTargetRevisionParams) (int64, error)
 	GetArtifactCachedAt(ctx context.Context, artifactHash string) (time.Time, error)
 	GetArtifactCreationCommandAckState(ctx context.Context, arg GetArtifactCreationCommandAckStateParams) (GetArtifactCreationCommandAckStateRow, error)
 	GetArtifactCreationCommandStatus(ctx context.Context, arg GetArtifactCreationCommandStatusParams) (GetArtifactCreationCommandStatusRow, error)
@@ -311,12 +318,14 @@ type Querier interface {
 	LatestLiveOriginNode(ctx context.Context, artifactHash string) (LatestLiveOriginNodeRow, error)
 	LatestPlayableDVRChapterID(ctx context.Context, artifactHash string) (sql.NullString, error)
 	LatestRecordingNode(ctx context.Context, artifactHash string) (string, error)
+	ListActiveAdmissionPushTargetEffectsForUpdate(ctx context.Context, arg ListActiveAdmissionPushTargetEffectsForUpdateParams) ([]ListActiveAdmissionPushTargetEffectsForUpdateRow, error)
 	ListActiveArtifactNodes(ctx context.Context, artifactHash string) ([]string, error)
 	ListActiveClips(ctx context.Context) ([]ListActiveClipsRow, error)
 	ListActiveDVRChapterPolicies(ctx context.Context) ([]ListActiveDVRChapterPoliciesRow, error)
 	ListActiveDVRRecordingNodes(ctx context.Context, artifactHash string) ([]string, error)
 	ListActiveIngestSessionClaims(ctx context.Context) ([]ListActiveIngestSessionClaimsRow, error)
 	ListActiveObjectKeyBackfillRows(ctx context.Context, arg ListActiveObjectKeyBackfillRowsParams) ([]ListActiveObjectKeyBackfillRowsRow, error)
+	ListActivePushTargetActivationsForNodeRequeue(ctx context.Context, arg ListActivePushTargetActivationsForNodeRequeueParams) ([]ListActivePushTargetActivationsForNodeRequeueRow, error)
 	ListAdminArtifacts(ctx context.Context, limit int32) ([]ListAdminArtifactsRow, error)
 	ListAllDVR(ctx context.Context) ([]ListAllDVRRow, error)
 	ListAllDVRSegmentsForArtifact(ctx context.Context, artifactHash string) ([]FoghornDvrSegment, error)
@@ -326,7 +335,9 @@ type Querier interface {
 	ListArtifactNodeIDs(ctx context.Context, artifactHash string) ([]string, error)
 	ListArtifactsForCatalogProjection(ctx context.Context, arg ListArtifactsForCatalogProjectionParams) ([]ListArtifactsForCatalogProjectionRow, error)
 	ListAssetThumbnailObjectKeys(ctx context.Context, arg ListAssetThumbnailObjectKeysParams) ([]ListAssetThumbnailObjectKeysRow, error)
+	ListCapacityPendingPushTargetEffectsForRearm(ctx context.Context) ([]ListCapacityPendingPushTargetEffectsForRearmRow, error)
 	ListColdStorageUsage(ctx context.Context) ([]ListColdStorageUsageRow, error)
+	ListCooledDownRuntimePushTargetEffectsForRearm(ctx context.Context) ([]ListCooledDownRuntimePushTargetEffectsForRearmRow, error)
 	ListDVRChaptersForArtifact(ctx context.Context, arg ListDVRChaptersForArtifactParams) ([]ListDVRChaptersForArtifactRow, error)
 	ListDVRChaptersNeedingFinalization(ctx context.Context, arg ListDVRChaptersNeedingFinalizationParams) ([]ListDVRChaptersNeedingFinalizationRow, error)
 	ListDVRChaptersNeedingReclaim(ctx context.Context, arg ListDVRChaptersNeedingReclaimParams) ([]ListDVRChaptersNeedingReclaimRow, error)
@@ -405,7 +416,6 @@ type Querier interface {
 	LockIngestSessionByTrigger(ctx context.Context, arg LockIngestSessionByTriggerParams) (LockIngestSessionByTriggerRow, error)
 	LockIngestStream(ctx context.Context, hashtext string) error
 	LockMediaAuthority(ctx context.Context, arg LockMediaAuthorityParams) error
-	LockOfflineEffectLease(ctx context.Context, arg LockOfflineEffectLeaseParams) (bool, error)
 	LockProcessingArtifactForCompletion(ctx context.Context, jobID string) (LockProcessingArtifactForCompletionRow, error)
 	LockProcessingJobForCompletion(ctx context.Context, jobID string) (LockProcessingJobForCompletionRow, error)
 	LockProcessingJobForFailure(ctx context.Context, jobID string) (LockProcessingJobForFailureRow, error)
@@ -418,7 +428,7 @@ type Querier interface {
 	LockUnemittedArtifactNode(ctx context.Context, arg LockUnemittedArtifactNodeParams) (LockUnemittedArtifactNodeRow, error)
 	LookupDVRSegmentsByName(ctx context.Context, arg LookupDVRSegmentsByNameParams) ([]FoghornDvrSegment, error)
 	MarkAbortingVODDeleted(ctx context.Context, arg MarkAbortingVODDeletedParams) (int64, error)
-	MarkAdmissionActivationDone(ctx context.Context, arg MarkAdmissionActivationDoneParams) error
+	MarkAdmissionActivationDone(ctx context.Context, arg MarkAdmissionActivationDoneParams) (int64, error)
 	MarkAdmissionDrainDone(ctx context.Context, arg MarkAdmissionDrainDoneParams) error
 	MarkArtifactEventCompleted(ctx context.Context, id string) error
 	MarkArtifactEventsClaimed(ctx context.Context, ids []string) error
@@ -443,6 +453,7 @@ type Querier interface {
 	MarkMediaObjectAuthorityLocalIngestReady(ctx context.Context, arg MarkMediaObjectAuthorityLocalIngestReadyParams) (int64, error)
 	MarkMediaObjectAuthorityLocalReadReady(ctx context.Context, arg MarkMediaObjectAuthorityLocalReadReadyParams) (int64, error)
 	MarkMediaObjectAuthorityLocalSourceReady(ctx context.Context, arg MarkMediaObjectAuthorityLocalSourceReadyParams) (int64, error)
+	MarkOfflineTeardownDone(ctx context.Context, arg MarkOfflineTeardownDoneParams) (int64, error)
 	MarkProcessingArtifactFailed(ctx context.Context, arg MarkProcessingArtifactFailedParams) (int64, error)
 	MarkProcessingArtifactReady(ctx context.Context, arg MarkProcessingArtifactReadyParams) (int64, error)
 	MarkProcessingArtifactStarted(ctx context.Context, arg MarkProcessingArtifactStartedParams) (int64, error)
@@ -472,6 +483,7 @@ type Querier interface {
 	ProjectProcessingArtifactStatus(ctx context.Context, arg ProjectProcessingArtifactStatusParams) error
 	PropagateDVRChapterRetention(ctx context.Context, arg PropagateDVRChapterRetentionParams) (int64, error)
 	PruneMediaAuthorityApplyAudit(ctx context.Context, arg PruneMediaAuthorityApplyAuditParams) (int64, error)
+	PurgeAdmissionPushTargetRevisions(ctx context.Context, olderThanMs int64) (int64, error)
 	PurgeExpiredCloseTombstones(ctx context.Context, olderThanSeconds float64) (int64, error)
 	PurgeStaleArtifactNodes(ctx context.Context) (int64, error)
 	PurgeTerminalAdmissionEffects(ctx context.Context, olderThanMs int64) (int64, error)
@@ -480,9 +492,15 @@ type Querier interface {
 	QuarantineInvalidConfigSeedApplyAck(ctx context.Context, arg QuarantineInvalidConfigSeedApplyAckParams) (int64, error)
 	ReadAdmissionLegsLocked(ctx context.Context, arg ReadAdmissionLegsLockedParams) (ReadAdmissionLegsLockedRow, error)
 	ReadArtifactCreationCommandIdentity(ctx context.Context, arg ReadArtifactCreationCommandIdentityParams) (ReadArtifactCreationCommandIdentityRow, error)
+	ReadOfflineEffectLegsLocked(ctx context.Context, arg ReadOfflineEffectLegsLockedParams) (ReadOfflineEffectLegsLockedRow, error)
 	ReapExactMissingIngestSession(ctx context.Context, arg ReapExactMissingIngestSessionParams) (ReapExactMissingIngestSessionRow, error)
 	ReapStreamEndIngestSessions(ctx context.Context, arg ReapStreamEndIngestSessionsParams) ([]ReapStreamEndIngestSessionsRow, error)
+	RearmAdmissionPushTargetEffect(ctx context.Context, arg RearmAdmissionPushTargetEffectParams) (int64, error)
+	RearmAdmissionPushTargetsAfterRuntimeEnd(ctx context.Context, arg RearmAdmissionPushTargetsAfterRuntimeEndParams) (int64, error)
+	RearmCapacityPendingPushTargetEffectByID(ctx context.Context, arg RearmCapacityPendingPushTargetEffectByIDParams) (int64, error)
+	RearmCooledDownRuntimePushTargetEffectByID(ctx context.Context, arg RearmCooledDownRuntimePushTargetEffectByIDParams) (int64, error)
 	ReconstructThumbnailAttemptObjectKeys(ctx context.Context, attemptID string) ([]ReconstructThumbnailAttemptObjectKeysRow, error)
+	RecordAdmissionPushTargetDispatch(ctx context.Context, arg RecordAdmissionPushTargetDispatchParams) (int64, error)
 	RecordArtifactEventFailure(ctx context.Context, arg RecordArtifactEventFailureParams) error
 	RecordDVRCompletion(ctx context.Context, arg RecordDVRCompletionParams) error
 	RecordDVRProgress(ctx context.Context, arg RecordDVRProgressParams) error
@@ -500,7 +518,8 @@ type Querier interface {
 	ReleaseOfflineEffectNotOwner(ctx context.Context, arg ReleaseOfflineEffectNotOwnerParams) error
 	ReleasePushTargetStatusLease(ctx context.Context, arg ReleasePushTargetStatusLeaseParams) (int64, error)
 	ReleaseSigningKeyUseLease(ctx context.Context, arg ReleaseSigningKeyUseLeaseParams) (int64, error)
-	RequeueActivePushTargetActivationsForNode(ctx context.Context, arg RequeueActivePushTargetActivationsForNodeParams) (int64, error)
+	RepairAdmissionPushTargetRevision(ctx context.Context, arg RepairAdmissionPushTargetRevisionParams) (int64, error)
+	RequeueActivePushTargetActivationByID(ctx context.Context, arg RequeueActivePushTargetActivationByIDParams) (int64, error)
 	RequeueStaleProcessingJobs(ctx context.Context, arg RequeueStaleProcessingJobsParams) (int64, error)
 	ResetStaleFreezeAttempts(ctx context.Context, staleSeconds int64) ([]ResetStaleFreezeAttemptsRow, error)
 	ResolveActiveDVRNodes(ctx context.Context, dollar_1 []string) ([]ResolveActiveDVRNodesRow, error)
@@ -520,7 +539,9 @@ type Querier interface {
 	RetrySigningKeyUse(ctx context.Context, arg RetrySigningKeyUseParams) (int64, error)
 	RevertFailedFreezeDispatch(ctx context.Context, arg RevertFailedFreezeDispatchParams) (int64, error)
 	RevertProcessingJobToQueued(ctx context.Context, jobID string) error
+	ReviveFailedOfflineTeardownDone(ctx context.Context, arg ReviveFailedOfflineTeardownDoneParams) (int64, error)
 	RollingDVRProcessConfig(ctx context.Context, internalName sql.NullString) (sql.NullString, error)
+	RotateAdmissionPushTargetRuntimeAttempt(ctx context.Context, arg RotateAdmissionPushTargetRuntimeAttemptParams) (int64, error)
 	SetActiveObjectKeyBackfillCursor(ctx context.Context, lastHash string) error
 	SetArtifactNodeLastEmittedVersion(ctx context.Context, arg SetArtifactNodeLastEmittedVersionParams) error
 	SetArtifactSyncStatus(ctx context.Context, arg SetArtifactSyncStatusParams) error
@@ -535,11 +556,14 @@ type Querier interface {
 	// catalog source. Mark their local revision covered so deletion does not wait
 	// for an origin-only catalog projector that will intentionally never select it.
 	SettleFederatedArtifactCatalogRevision(ctx context.Context, arg SettleFederatedArtifactCatalogRevisionParams) (int64, error)
+	SettleOfflineEffect(ctx context.Context, arg SettleOfflineEffectParams) (int64, error)
 	SettlePublishingThumbnailFailed(ctx context.Context, attemptID string) error
 	SettleThumbnailRecoveryDone(ctx context.Context, arg SettleThumbnailRecoveryDoneParams) error
+	SkipReconnectPushTargetActivationByID(ctx context.Context, arg SkipReconnectPushTargetActivationByIDParams) (int64, error)
 	SoftDeleteDVRChapterArtifacts(ctx context.Context, arg SoftDeleteDVRChapterArtifactsParams) ([]string, error)
 	SoftDeleteDVRParent(ctx context.Context, arg SoftDeleteDVRParentParams) (int64, error)
 	SoftDeleteVodArtifact(ctx context.Context, arg SoftDeleteVodArtifactParams) (int64, error)
+	StoreAdmissionPushTargetRevision(ctx context.Context, arg StoreAdmissionPushTargetRevisionParams) error
 	SumTenantActiveArtifactBytes(ctx context.Context, tenantID string) (int64, error)
 	SupersedeOfflineEffect(ctx context.Context, arg SupersedeOfflineEffectParams) (int64, error)
 	ThumbnailParentTombstoned(ctx context.Context, artifactHash string) (sql.NullBool, error)
@@ -549,6 +573,7 @@ type Querier interface {
 	TombstoneFederatedArtifact(ctx context.Context, arg TombstoneFederatedArtifactParams) (int64, error)
 	TouchDVRRecordingNode(ctx context.Context, arg TouchDVRRecordingNodeParams) error
 	TouchStartedDVR(ctx context.Context, arg TouchStartedDVRParams) (int64, error)
+	TryAcquireRestreamCapacityRearmLock(ctx context.Context) (bool, error)
 	TryArtifactBillingAttributionLock(ctx context.Context) (bool, error)
 	TryArtifactReconcilerLock(ctx context.Context) (bool, error)
 	TryFreezePublicationLedgerLock(ctx context.Context) (bool, error)
