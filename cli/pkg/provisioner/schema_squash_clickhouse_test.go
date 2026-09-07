@@ -136,6 +136,57 @@ func TestClickHouseServiceCapabilitiesExecute(t *testing.T) {
 	}
 }
 
+func TestClickHouseDeliveryRollupContractSeedsAndRetainsDiscoveryThroughScheduledRefreshes(t *testing.T) {
+	requireDocker(t)
+	const name = "fw-sv-ch-rollup-seed"
+	chStart(t, name)
+	baseline, err := dbsql.Content.ReadFile("clickhouse/periscope.sql")
+	if err != nil {
+		t.Fatalf("read ClickHouse baseline: %v", err)
+	}
+	chApply(t, name, string(baseline))
+	chApply(t, name, `
+		INSERT INTO periscope.delivery_usage_5m
+		(window_start, tenant_id, cluster_id, stream_id, node_id, delivery_kind,
+		 delivery_id, seconds_observed, down_bytes_observed, source_event_id, projection_version_ms)
+		SELECT toStartOfFiveMinute(now()),
+		       toUUID('a11ce000-0000-4000-8000-000000000001'), 'cluster-a',
+		       toUUID('a11ce000-0000-4000-8000-000000000002'), 'node-a',
+		       'restream', 'delivery-a', 300, 1073741824, 'event-a', toUnixTimestamp64Milli(now64(3));
+	`)
+
+	contractRefresh, err := dbsql.Content.ReadFile("clickhouse/migrations/periscope/v0.3.0/contract/011_refresh_delivery_rollups.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{
+		"clickhouse/migrations/periscope/v0.3.0/contract/008_delivery_dashboard_rollups.sql",
+		"clickhouse/migrations/periscope/v0.3.0/contract/009_ledger_tombstone_rollups.sql",
+		"clickhouse/migrations/periscope/v0.3.0/contract/010_bound_tenant_usage_daily.sql",
+	} {
+		migration, readErr := dbsql.Content.ReadFile(path)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		chApply(t, name, string(migration))
+	}
+	chApply(t, name, string(contractRefresh))
+	// A migration runner retries a file that failed before its ledger write. The
+	// contract must therefore be self-contained after its first successful
+	// attempt. Discovery rows remain available for an overlapping scheduled
+	// refresh and expire through their table TTL instead of a racy truncate.
+	chApply(t, name, string(contractRefresh))
+	if out, queryErr := docker(t, "", "exec", name, "clickhouse-client", "-q", `
+		SELECT concat(
+		  toString((SELECT count() FROM periscope.rollup_backfill_markers FINAL)), '/',
+		  toString((SELECT count() FROM periscope.rollup_backfill_seed_receipts FINAL)), '/',
+		  toString((SELECT seconds_observed FROM periscope.tenant_usage_5m
+		            WHERE tenant_id = toUUID('a11ce000-0000-4000-8000-000000000001') LIMIT 1)))
+	`); queryErr != nil || strings.TrimSpace(out) != "4/6/300" {
+		t.Fatalf("contract result = %q, err=%v, want 4/6/300", strings.TrimSpace(out), queryErr)
+	}
+}
+
 // TestClickHouseBaselineEqualsReplay proves periscope.sql (baseline) is logically
 // equal to periscope.sql + every periscope migration replayed on top — modulo the
 // Replicated-vs-plain engine divergence that the squash exists to resolve.

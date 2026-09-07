@@ -47,6 +47,7 @@ var capabilityCatalog = map[string][]Capability{
 	},
 	"foghorn": {
 		{Name: "ingest admission fencing", Engine: EnginePostgres, Probe: "SELECT id, tenant_id, node_id, stream_internal_name, connector_pid, projection_state, source_revision FROM foghorn.ingest_sessions LIMIT 0"},
+		{Name: "restream activation-attempt fencing", Engine: EnginePostgres, Probe: "SELECT source_generation, target_revision, activation_attempt, mist_push_ids FROM foghorn.admission_push_target_revisions LIMIT 0"},
 		{Name: "cell storage identity", Engine: EnginePostgres, Probe: "SELECT backend_id, bucket, endpoint, region, prefix FROM foghorn.cell_storage_identity LIMIT 0"},
 		{Name: "artifact placement stable identity", Engine: EnginePostgres, Probe: "SELECT a.artifact_hash, a.tenant_id, n.node_id, n.last_emitted_version FROM foghorn.artifacts a LEFT JOIN foghorn.artifact_nodes n ON n.artifact_hash = a.artifact_hash LIMIT 0"},
 		{Name: "artifact reconciliation cursors", Engine: EnginePostgres, Probe: "SELECT id, last_hash FROM foghorn.active_object_key_backfill_cursor LIMIT 0"},
@@ -56,10 +57,12 @@ var capabilityCatalog = map[string][]Capability{
 		{Name: "tenant alias retirement queue", Engine: EnginePostgres, Probe: "SELECT tenant_id, subdomain, requested_at, attempts, last_error FROM navigator.tenant_alias_retirements LIMIT 0"},
 	},
 	"periscope-ingest": {
+		{Name: "distributed ledger-worker locking", Engine: EnginePostgres, Probe: "SELECT pg_try_advisory_xact_lock(hashtext('periscope-ingest:capability'))"},
 		{Name: "API delivery identity", Engine: EngineClickHouse, Probe: "SELECT tenant_id, source_event_id, ingested_at_ms FROM periscope.api_requests LIMIT 0"},
 		{Name: "viewer attribution", Engine: EngineClickHouse, Probe: "SELECT tenant_id, cluster_id, node_id, session_id FROM periscope.viewer_connection_events LIMIT 0"},
 	},
 	"periscope-query": {
+		{Name: "delegated-token replay fencing", Engine: EnginePostgres, Probe: "SELECT jti, expires_at FROM periscope.delegated_jwt_replays LIMIT 0"},
 		{Name: "final viewer facts", Engine: EngineClickHouse, Probe: "SELECT tenant_id, cluster_id, session_id, source_started_at_ms, source_ended_at_ms FROM periscope.viewer_sessions_final_v LIMIT 0"},
 		{Name: "dimensioned API usage", Engine: EngineClickHouse, Probe: "SELECT tenant_id, auth_type, operation_type, service, llm_model, llm_provider, requests FROM periscope.api_usage_5m_v LIMIT 0"},
 	},

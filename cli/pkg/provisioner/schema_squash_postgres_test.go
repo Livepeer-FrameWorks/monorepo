@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/cli/internal/releases"
 	pkgdatabase "github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 )
@@ -210,6 +211,22 @@ func pgIntrospect(t *testing.T, name, db string) string {
 	return strings.Join(lines, "\n")
 }
 
+func requireDeliveryMeterDimensions(t *testing.T, name, db string) {
+	t.Helper()
+	const query = `SELECT meter || '|' || array_to_string(allowed_dimensions, ',')
+FROM purser.meter_definitions
+WHERE meter IN ('delivered_minutes', 'egress_gb')
+ORDER BY meter`
+	out, err := docker(t, "", "exec", name, "psql", "-U", "postgres", "-d", db, "-tAc", query)
+	if err != nil {
+		t.Fatalf("read delivery meter dimensions from %s/%s: %v", name, db, err)
+	}
+	const expected = "delivered_minutes|delivery_kind,platform\negress_gb|delivery_kind,platform"
+	if got := strings.TrimSpace(out); got != expected {
+		t.Fatalf("delivery meter dimensions in %s/%s = %q, want %q", name, db, got, expected)
+	}
+}
+
 func requirePGSchemasEqual(t *testing.T, label, expected, actual string) {
 	t.Helper()
 	if expected == actual {
@@ -243,18 +260,14 @@ func TestPostgresServiceCapabilitiesExecute(t *testing.T) {
 	const name = "fw-sv-pg-capabilities"
 	pgStart(t, name)
 
-	databaseByService := map[string]string{
-		"commodore": "commodore", "foghorn": "foghorn", "navigator": "navigator",
-		"periscope-metering": "periscope", "purser": "purser", "quartermaster": "quartermaster", "skipper": "skipper",
-	}
 	applied := map[string]bool{}
 	for _, service := range pkgdatabase.CapabilityServices() {
-		databaseName := databaseByService[service]
+		databaseName, ownsDatabase := releases.ServiceDatabaseLookup(service)
 		capabilities := pkgdatabase.CapabilitiesFor(service, pkgdatabase.EnginePostgres)
 		if len(capabilities) == 0 {
 			continue
 		}
-		if databaseName == "" {
+		if !ownsDatabase || databaseName == "" {
 			t.Fatalf("PostgreSQL capability service %q has no owning baseline", service)
 		}
 		if !applied[databaseName] {
@@ -441,6 +454,7 @@ func TestPostgresBaselineEqualsReplay(t *testing.T) {
 	// A: baselines only.
 	pgCreateDB(t, name, "sv_a")
 	applyBaselines("sv_a")
+	requireDeliveryMeterDimensions(t, name, "sv_a")
 	baseline := pgIntrospect(t, name, "sv_a")
 
 	// B: baselines + every post-floor migration in discovery order.
@@ -454,6 +468,7 @@ func TestPostgresBaselineEqualsReplay(t *testing.T) {
 		replayedCount++
 		pgApply(t, name, "sv_b", m.content)
 	}
+	requireDeliveryMeterDimensions(t, name, "sv_b")
 	replayed := pgIntrospect(t, name, "sv_b")
 
 	t.Logf("postgres: %d baseline files, %d/%d migrations post-floor (floor=%s)",
@@ -491,6 +506,7 @@ func TestPostgresTaggedBaselineUpgradeEqualsCurrent(t *testing.T) {
 		}
 		pgApply(t, name, "sv_current", string(sql))
 	}
+	requireDeliveryMeterDimensions(t, name, "sv_current")
 	current := pgIntrospect(t, name, "sv_current")
 
 	pgCreateDB(t, name, "sv_upgraded")
@@ -501,6 +517,7 @@ func TestPostgresTaggedBaselineUpgradeEqualsCurrent(t *testing.T) {
 	for _, migration := range migrations {
 		pgApply(t, name, "sv_upgraded", migration.content)
 	}
+	requireDeliveryMeterDimensions(t, name, "sv_upgraded")
 	upgraded := pgIntrospect(t, name, "sv_upgraded")
 
 	t.Logf("postgres: upgraded %s baseline with %d migration(s) to current", fromTag, len(migrations))

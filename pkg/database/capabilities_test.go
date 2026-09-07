@@ -41,6 +41,15 @@ func TestCapabilitiesForReturnsCopyForEngine(t *testing.T) {
 	}
 }
 
+func TestPeriscopeIngestDeclaresBothRuntimeStores(t *testing.T) {
+	if got := len(CapabilitiesFor("periscope-ingest", EnginePostgres)); got != 1 {
+		t.Fatalf("periscope-ingest PostgreSQL capabilities = %d, want 1", got)
+	}
+	if got := len(CapabilitiesFor("periscope-ingest", EngineClickHouse)); got != 2 {
+		t.Fatalf("periscope-ingest ClickHouse capabilities = %d, want 2", got)
+	}
+}
+
 func TestNavigatorCapabilitiesCoverAliasWorkQueues(t *testing.T) {
 	capabilities := CapabilitiesFor("navigator", EnginePostgres)
 	if len(capabilities) != 2 {

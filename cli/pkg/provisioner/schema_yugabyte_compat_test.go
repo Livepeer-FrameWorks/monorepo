@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/cli/internal/releases"
 	pkgdatabase "github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 )
@@ -247,19 +248,15 @@ ALTER DEFAULT PRIVILEGES FOR ROLE yugabyte IN SCHEMA %[1]s GRANT USAGE, SELECT, 
 ALTER DEFAULT PRIVILEGES FOR ROLE yugabyte IN SCHEMA %[1]s GRANT EXECUTE ON FUNCTIONS TO %[2]s;
 `, service, runtimeRole))
 	}
-	databaseByService := map[string]string{
-		"commodore": "commodore", "foghorn": "foghorn", "navigator": "navigator",
-		"periscope-metering": "periscope", "purser": "purser", "quartermaster": "quartermaster", "skipper": "skipper",
-	}
 	for _, binary := range pkgdatabase.CapabilityServices() {
-		databaseName := databaseByService[binary]
+		databaseName, ownsDatabase := releases.ServiceDatabaseLookup(binary)
+		if !ownsDatabase || strings.TrimSpace(databaseName) == "" {
+			t.Fatalf("PostgreSQL capability service %q has no catalogued Yugabyte database", binary)
+		}
 		if _, ok := selected[databaseName]; !ok {
 			continue
 		}
 		for _, capability := range pkgdatabase.CapabilitiesFor(binary, pkgdatabase.EnginePostgres) {
-			if databaseName == "" {
-				t.Fatalf("PostgreSQL capability service %q has no Yugabyte database", binary)
-			}
 			ybApply(t, name, databaseName, fmt.Sprintf("SET ROLE %s_runtime; %s; RESET ROLE;", databaseName, capability.Probe))
 		}
 	}
