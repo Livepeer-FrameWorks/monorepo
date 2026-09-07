@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -9,6 +10,29 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/google/uuid"
 )
+
+type scriptedLedgerLease struct {
+	results  []bool
+	calls    int
+	releases int
+	cancel   context.CancelFunc
+}
+
+func (l *scriptedLedgerLease) TryAcquire(context.Context, string) (func(context.Context) error, bool, error) {
+	l.calls++
+	index := l.calls - 1
+	acquired := index < len(l.results) && l.results[index]
+	if !acquired {
+		if l.cancel != nil {
+			l.cancel()
+		}
+		return nil, false, nil
+	}
+	return func(context.Context) error {
+		l.releases++
+		return nil
+	}, true, nil
+}
 
 const (
 	ledgerTestTenantID = "33333333-3333-4333-8333-333333333333"
@@ -88,6 +112,177 @@ func TestWindowsForSpan_DegenerateAndZero(t *testing.T) {
 	}
 }
 
+func TestWindowsForSpanRejectsUnboundedSourceFact(t *testing.T) {
+	start := time.Date(2026, 5, 23, 0, 0, 0, 0, time.UTC).UnixMilli()
+	end := start + LedgerMaxSpan.Milliseconds() + 1
+	if got := windowsForSpan(start, end); len(got) != 0 {
+		t.Fatalf("unbounded source fact produced %d ledger windows", len(got))
+	}
+}
+
+func TestOnlyDeliveryLedgerReplaysHistoricalBackfillWindow(t *testing.T) {
+	if got := initialLedgerLookback("delivery_usage_5m"); got != 90*24*time.Hour {
+		t.Fatalf("delivery bootstrap lookback=%s, want 90d", got)
+	}
+	if got := initialLedgerLookback("viewer_usage_5m"); got != LedgerInitialLookback {
+		t.Fatalf("viewer bootstrap lookback=%s, want normal %s lookback", got, LedgerInitialLookback)
+	}
+}
+
+func TestDeliveryRebuilderBoundsEmissionBatchVolume(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	h := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	window := time.Date(2026, 6, 5, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < LedgerEmissionBatchSize+1; i++ {
+		conn.addQueryRow("periscope.viewer_sessions_final",
+			ledgerTestTenantID, "node-a", fmt.Sprintf("viewer-%d", i), fmt.Sprintf("event-%d", i),
+			"cluster-a", ledgerTestStreamID, window.UnixMilli(), window.Add(5*time.Minute).UnixMilli(), uint64(0), uint64(1), "final")
+	}
+	if err := h.rebuildDeliveryUsage5m(context.Background(), window, window.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if got := conn.prepares["periscope.delivery_usage_5m"]; got != 2 {
+		t.Fatalf("delivery insert batches=%d, want 2 for %d emissions with cap %d", got, LedgerEmissionBatchSize+1, LedgerEmissionBatchSize)
+	}
+}
+
+func TestViewerRebuilderBoundsEmissionBatchVolume(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	h := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	window := time.Date(2026, 6, 5, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < LedgerEmissionBatchSize+1; i++ {
+		conn.addQueryRow("periscope.viewer_sessions_final",
+			ledgerTestTenantID, "node-a", fmt.Sprintf("viewer-%d", i), fmt.Sprintf("event-%d", i),
+			"cluster-a", ledgerTestStreamID, window.UnixMilli(), window.Add(5*time.Minute).UnixMilli(),
+			uint32(300), uint64(0), uint64(1))
+	}
+	if err := h.rebuildViewerUsage5m(context.Background(), window, window.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if got := conn.prepares["periscope.viewer_usage_5m"]; got != 2 {
+		t.Fatalf("viewer insert batches=%d, want 2 for %d emissions with cap %d", got, LedgerEmissionBatchSize+1, LedgerEmissionBatchSize)
+	}
+}
+
+func TestLedgerCatchupIsChunkedAndCheckpointed(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	h := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	scheduler := NewLedgerScheduler(h)
+	end := time.Date(2026, 6, 5, 0, 0, 0, 0, time.UTC)
+	start := end.Add(-DeliveryLedgerInitialLookback)
+	var windows [][2]time.Time
+	err := scheduler.runLedgerPass(context.Background(), "delivery_usage_5m", end, func(_ context.Context, from, to time.Time) error {
+		windows = append(windows, [2]time.Time{from, to})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(windows) != LedgerCatchupChunksPerPass {
+		t.Fatalf("chunks=%d, want %d", len(windows), LedgerCatchupChunksPerPass)
+	}
+	for i, window := range windows {
+		wantStart := start.Add(time.Duration(i) * DeliveryLedgerChunkSpan)
+		if !window[0].Equal(wantStart) || window[1].Sub(window[0]) != DeliveryLedgerChunkSpan {
+			t.Fatalf("chunk %d=%v, want start %v and span %s", i, window, wantStart, DeliveryLedgerChunkSpan)
+		}
+	}
+	batch := conn.batches["periscope.ledger_rebuild_cursors_v2"]
+	if batch == nil || len(batch.rows) != 1 {
+		t.Fatalf("final cursor checkpoint=%#v", batch)
+	}
+	row := batch.rows[0]
+	wantCheckpoint := start.Add(time.Duration(LedgerCatchupChunksPerPass) * DeliveryLedgerChunkSpan).UnixMilli()
+	if row[1] != wantCheckpoint || row[2].(int64) <= 0 || row[2] == wantCheckpoint {
+		t.Fatalf("cursor watermark/version=%#v, want watermark %d and independent write version", row, wantCheckpoint)
+	}
+}
+
+func TestLedgerRunLoopHonorsLeaderGate(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	lease := &scriptedLedgerLease{results: []bool{false}, cancel: cancel}
+	conn := newFakeClickhouseConn()
+	scheduler := NewLedgerScheduler(NewAnalyticsHandler(conn, logging.NewLogger(), nil), lease)
+	runs := 0
+	scheduler.runLoop(ctx, "delivery_usage_5m", func(context.Context, time.Time, time.Time) error {
+		runs++
+		return nil
+	})
+	if lease.calls != 1 || runs != 0 {
+		t.Fatalf("lease calls=%d rebuild runs=%d, want one denied election and no rebuild", lease.calls, runs)
+	}
+}
+
+func TestLedgerRunLoopReacquiresLeasePerChunk(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	lease := &scriptedLedgerLease{results: []bool{true, false}, cancel: cancel}
+	conn := newFakeClickhouseConn()
+	scheduler := NewLedgerScheduler(NewAnalyticsHandler(conn, logging.NewLogger(), nil), lease)
+	runs := 0
+	scheduler.runLoop(ctx, "delivery_usage_5m", func(context.Context, time.Time, time.Time) error {
+		runs++
+		return nil
+	})
+	if lease.calls != 2 || lease.releases != 1 || runs != 1 {
+		t.Fatalf("lease calls=%d releases=%d rebuild runs=%d, want reacquire after one released chunk", lease.calls, lease.releases, runs)
+	}
+}
+
+func TestLedgerRunLoopBoundsHungChunk(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	lease := &scriptedLedgerLease{results: []bool{true}}
+	conn := newFakeClickhouseConn()
+	scheduler := NewLedgerScheduler(NewAnalyticsHandler(conn, logging.NewLogger(), nil), lease)
+	scheduler.chunkTimeout = 10 * time.Millisecond
+	deadlineObserved := false
+	scheduler.runLoop(ctx, "delivery_usage_5m", func(runCtx context.Context, _, _ time.Time) error {
+		_, deadlineObserved = runCtx.Deadline()
+		<-runCtx.Done()
+		cancel()
+		return runCtx.Err()
+	})
+	if !deadlineObserved {
+		t.Fatal("ledger rebuild chunk ran without a deadline")
+	}
+	if lease.releases != 1 {
+		t.Fatalf("lease releases=%d, want one release after timed-out chunk", lease.releases)
+	}
+}
+
+func TestOverSpanFactsDoNotScanOrEmitTombstones(t *testing.T) {
+	start := time.Date(2026, 6, 3, 12, 0, 0, 0, time.UTC).UnixMilli()
+	end := start + LedgerMaxSpan.Milliseconds() + 1
+
+	t.Run("viewer", func(t *testing.T) {
+		conn := newFakeClickhouseConn()
+		conn.addQueryRow("periscope.viewer_sessions_final",
+			ledgerTestTenantID, "node-a", "viewer-long", "viewer-event", "cluster-a", ledgerTestStreamID,
+			start, end, uint32(0), uint64(1), uint64(1))
+		h := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+		if err := h.rebuildViewerUsage5m(context.Background(), time.UnixMilli(start), time.UnixMilli(end)); err != nil {
+			t.Fatal(err)
+		}
+		if len(conn.queries) != 1 || conn.batches["periscope.viewer_usage_5m"] != nil || conn.batches["periscope.delivery_usage_5m"] != nil {
+			t.Fatalf("over-span viewer touched tombstones or emitted rows: queries=%d batches=%v", len(conn.queries), conn.batches)
+		}
+	})
+
+	t.Run("restream", func(t *testing.T) {
+		conn := newFakeClickhouseConn()
+		conn.addQueryRow("periscope.restream_sessions_final",
+			ledgerTestTenantID, "node-a", "restream-event", "restream", "restream-event", "cluster-a", ledgerTestStreamID,
+			"youtube", "idle", start, end, uint64(0), uint64(1))
+		h := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+		if err := h.rebuildDeliveryUsage5m(context.Background(), time.UnixMilli(start), time.UnixMilli(end)); err != nil {
+			t.Fatal(err)
+		}
+		if len(conn.queries) != 2 || conn.batches["periscope.delivery_usage_5m"] != nil {
+			t.Fatalf("over-span restream touched tombstones or emitted rows: queries=%d batches=%v", len(conn.queries), conn.batches)
+		}
+	})
+}
+
 func TestWindowsForSpan_AlignedBoundary(t *testing.T) {
 	// Span starting exactly on a 5-min boundary and ending exactly on
 	// the next — single window, full 5 minutes.
@@ -114,22 +309,45 @@ func TestViewerUsageTombstonesOnlyRetractsStaleNonZeroWindows(t *testing.T) {
 	currentWindow := time.Date(2026, 6, 3, 12, 0, 0, 0, time.UTC).UnixMilli()
 	staleWindow := time.Date(2026, 6, 3, 12, 5, 0, 0, time.UTC).UnixMilli()
 	alreadyZeroWindow := time.Date(2026, 6, 3, 12, 10, 0, 0, time.UTC).UnixMilli()
-	conn.addQueryRow("periscope.viewer_usage_5m", currentWindow, "cluster-a", "stream-a", "source-current", uint32(60), uint64(100), uint64(200))
-	conn.addQueryRow("periscope.viewer_usage_5m", staleWindow, "cluster-a", "stream-a", "source-stale", uint32(60), uint64(100), uint64(200))
-	conn.addQueryRow("periscope.viewer_usage_5m", alreadyZeroWindow, "cluster-a", "stream-a", "source-zero", uint32(0), uint64(0), uint64(0))
+	conn.addQueryRow("periscope.viewer_usage_5m", "tenant-a", "node-a", "session-a", currentWindow, "cluster-a", "stream-a", "source-current", uint32(60), uint64(100), uint64(200))
+	conn.addQueryRow("periscope.viewer_usage_5m", "tenant-a", "node-a", "session-a", staleWindow, "cluster-a", "stream-a", "source-stale", uint32(60), uint64(100), uint64(200))
+	conn.addQueryRow("periscope.viewer_usage_5m", "tenant-a", "node-a", "session-a", alreadyZeroWindow, "cluster-a", "stream-a", "source-zero", uint32(0), uint64(0), uint64(0))
 
-	tombstones, err := handler.viewerUsageTombstones(context.Background(), "tenant-a", "node-a", "session-a", map[viewerUsageWindowKey]struct{}{
-		{windowStartMS: currentWindow, clusterID: "cluster-a", streamID: "stream-a"}: {},
+	identity := viewerUsageIdentity{tenantID: "tenant-a", nodeID: "node-a", sessionID: "session-a"}
+	tombstonesByIdentity, err := handler.viewerUsageTombstonesForProjectionWindow(context.Background(), time.UnixMilli(currentWindow), time.UnixMilli(staleWindow+1), map[viewerUsageIdentity]map[viewerUsageWindowKey]struct{}{
+		identity: {{windowStartMS: currentWindow, clusterID: "cluster-a", streamID: "stream-a"}: {}},
 	})
 	if err != nil {
 		t.Fatalf("viewerUsageTombstones: %v", err)
 	}
+	tombstones := tombstonesByIdentity[identity]
 	if len(tombstones) != 1 {
-		t.Fatalf("expected one tombstone, got %#v", tombstones)
+		t.Fatalf("expected one tombstone, got %#v", tombstonesByIdentity)
 	}
 	got := tombstones[0]
 	if got.windowStartMS != staleWindow || got.clusterID != "cluster-a" || got.streamID != "stream-a" || got.sourceEventID != "source-stale" {
 		t.Fatalf("unexpected tombstone: %#v", got)
+	}
+}
+
+func TestViewerUsageTombstonesBatchChangedSessions(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	window := time.Date(2026, 6, 3, 12, 0, 0, 0, time.UTC)
+	conn.addQueryRow("periscope.viewer_usage_5m",
+		ledgerTestTenantID, "node-a", "session-b", window.UnixMilli(), "cluster-a", ledgerTestStreamID,
+		"source-b", uint32(60), uint64(0), uint64(200))
+	desired := map[viewerUsageIdentity]map[viewerUsageWindowKey]struct{}{
+		{tenantID: ledgerTestTenantID, nodeID: "node-a", sessionID: "session-a"}: {},
+		{tenantID: ledgerTestTenantID, nodeID: "node-a", sessionID: "session-b"}: {},
+	}
+	tombstones, err := handler.viewerUsageTombstonesForProjectionWindow(context.Background(), window, window.Add(time.Hour), desired)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := viewerUsageIdentity{tenantID: ledgerTestTenantID, nodeID: "node-a", sessionID: "session-b"}
+	if len(conn.queries) != 1 || len(tombstones[identity]) != 1 {
+		t.Fatalf("changed sessions were not tombstoned in one query: queries=%d tombstones=%+v", len(conn.queries), tombstones)
 	}
 }
 
@@ -188,6 +406,71 @@ func TestRebuildViewerUsage5mSplitsSessionAcrossWindows(t *testing.T) {
 	}
 	check(w1200, 120000) // 12:03 → 12:05 = 2 min in the 12:00 window
 	check(w1205, 300000) // 12:05 → 12:10 = 5 min in the 12:05 window
+
+	if delivery := conn.batches["periscope.delivery_usage_5m"]; delivery != nil {
+		t.Fatalf("viewer rebuilder must not write the delivery ledger: %#v", delivery)
+	}
+}
+
+func TestRebuildDeliveryUsage5mProjectsRestreamAndReconcilesPlayback(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	start := time.Date(2026, 6, 3, 12, 0, 0, 0, time.UTC).UnixMilli()
+	end := start + 60_000
+	conn.addQueryRow("periscope.restream_sessions_final",
+		ledgerTestTenantID, "edge-a", "restream-event", "restream", "restream-event",
+		"cluster-a", ledgerTestStreamID, "youtube", "idle", start, end, uint64(0), uint64(300))
+	conn.addQueryRow("periscope.viewer_sessions_final", ledgerTestTenantID, "edge-a", "viewer-session", "viewer-event",
+		"cluster-a", ledgerTestStreamID, start, end, uint64(10), uint64(20), "final")
+
+	if err := handler.rebuildDeliveryUsage5m(context.Background(), time.UnixMilli(start), time.UnixMilli(end+1)); err != nil {
+		t.Fatalf("rebuildDeliveryUsage5m: %v", err)
+	}
+	batch := conn.batches["periscope.delivery_usage_5m"]
+	if batch == nil || len(batch.rows) != 2 {
+		t.Fatalf("expected one restream and one reconciled playback ledger row, got %#v", batch)
+	}
+	byKind := make(map[string][]any)
+	for _, row := range batch.rows {
+		byKind[row[5].(string)] = row
+	}
+	if byKind["restream"] == nil || byKind["restream"][7] != "youtube" {
+		t.Fatalf("restream kind/platform collapsed: %#v", batch.rows)
+	}
+	if byKind["playback"] == nil || byKind["playback"][6] != "viewer-session" || byKind["playback"][10] != uint64(20) {
+		t.Fatalf("playback reconciliation missing or malformed: %#v", batch.rows)
+	}
+}
+
+func TestDeliveryUsageTombstonesRetractMovedWindowsAndDimensions(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	currentWindow := time.Date(2026, 6, 3, 12, 0, 0, 0, time.UTC).UnixMilli()
+	staleWindow := time.Date(2026, 6, 3, 12, 5, 0, 0, time.UTC).UnixMilli()
+	conn.addQueryRow("periscope.delivery_usage_5m", ledgerTestTenantID, "edge-a", "restream", "delivery-a", currentWindow, "cluster-new", ledgerTestStreamID, "youtube", "event-current", uint32(60), uint64(0), uint64(200))
+	conn.addQueryRow("periscope.delivery_usage_5m", ledgerTestTenantID, "edge-a", "restream", "delivery-a", staleWindow, "cluster-old", ledgerTestStreamID, "youtube", "event-stale", uint32(60), uint64(0), uint64(300))
+	conn.addQueryRow("periscope.delivery_usage_5m", ledgerTestTenantID, "edge-a", "restream", "delivery-a", staleWindow, "cluster-old", ledgerTestStreamID, "twitch", "event-zero", uint32(0), uint64(0), uint64(0))
+
+	identity := deliveryUsageIdentity{tenantID: ledgerTestTenantID, nodeID: "edge-a", kind: "restream", deliveryID: "delivery-a"}
+	tombstonesByIdentity, err := handler.deliveryUsageTombstonesForProjectionWindow(context.Background(), time.UnixMilli(currentWindow), time.UnixMilli(staleWindow+1), map[deliveryUsageIdentity]map[deliveryUsageWindowKey]struct{}{
+		identity: {{windowStartMS: currentWindow, clusterID: "cluster-new", streamID: ledgerTestStreamID, platform: "youtube"}: {}},
+	})
+	if err != nil {
+		t.Fatalf("deliveryUsageTombstones: %v", err)
+	}
+	tombstones := tombstonesByIdentity[identity]
+	if len(tombstones) != 1 {
+		t.Fatalf("expected one non-zero stale natural key, got %#v", tombstonesByIdentity)
+	}
+	got := tombstones[0]
+	if got.windowStartMS != staleWindow || got.clusterID != "cluster-old" || got.platform != "youtube" || got.sourceEventID != "event-stale" {
+		t.Fatalf("unexpected delivery tombstone: %#v", got)
+	}
+	if len(conn.queries) != 1 || !strings.Contains(conn.queries[0].query, "scan_bounds AS") ||
+		!strings.Contains(conn.queries[0].query, "ledger.window_start >= (SELECT min_window_start FROM scan_bounds)") ||
+		!strings.Contains(conn.queries[0].query, "ledger.window_start < (SELECT max_window_start FROM scan_bounds)") {
+		t.Fatalf("delivery tombstone lookup is not pruned by scalar changed-window bounds: %#v", conn.queries)
+	}
 }
 
 // TestRebuildStorageGBSeconds5mIntegratesClosedWindow verifies the GB-seconds
@@ -263,7 +546,7 @@ func TestStorageProjectionDiverged(t *testing.T) {
 	t.Run("equal prior is noop", func(t *testing.T) {
 		conn := newFakeClickhouseConn()
 		// divergence lookup scans (gb_seconds float64, file_count uint64).
-		conn.addQueryRow("periscope.storage_gb_seconds_5m", float64(300.0), uint64(4))
+		conn.addQueryRow("periscope.storage_gb_seconds_5m", float64(300.0), uint64(4), int64(1000))
 		if err := call(conn, 300.0, 4); err != nil {
 			t.Fatalf("storageProjectionDiverged: %v", err)
 		}
@@ -274,7 +557,7 @@ func TestStorageProjectionDiverged(t *testing.T) {
 
 	t.Run("differing prior records divergence", func(t *testing.T) {
 		conn := newFakeClickhouseConn()
-		conn.addQueryRow("periscope.storage_gb_seconds_5m", float64(250.0), uint64(4))
+		conn.addQueryRow("periscope.storage_gb_seconds_5m", float64(250.0), uint64(4), int64(1000))
 		if err := call(conn, 300.0, 4); err != nil {
 			t.Fatalf("storageProjectionDiverged: %v", err)
 		}
@@ -372,7 +655,7 @@ func TestLedgerRebuildCursor(t *testing.T) {
 
 	t.Run("non-positive cursor returns default", func(t *testing.T) {
 		conn := newFakeClickhouseConn()
-		conn.addQueryRow("periscope.ledger_rebuild_cursors", int64(0))
+		conn.addQueryRow("periscope.ledger_rebuild_cursors_v2", int64(0))
 		h := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
 		got, err := h.getLedgerRebuildCursor(context.Background(), "viewer_usage_5m", defaultStart)
 		if err != nil {
@@ -386,7 +669,7 @@ func TestLedgerRebuildCursor(t *testing.T) {
 	t.Run("stored cursor is returned", func(t *testing.T) {
 		conn := newFakeClickhouseConn()
 		stored := time.Date(2026, 6, 3, 12, 5, 0, 0, time.UTC)
-		conn.addQueryRow("periscope.ledger_rebuild_cursors", stored.UnixMilli())
+		conn.addQueryRow("periscope.ledger_rebuild_cursors_v2", stored.UnixMilli())
 		h := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
 		got, err := h.getLedgerRebuildCursor(context.Background(), "viewer_usage_5m", defaultStart)
 		if err != nil {
@@ -404,11 +687,11 @@ func TestLedgerRebuildCursor(t *testing.T) {
 		if err := h.recordLedgerRebuildCursor(context.Background(), "viewer_usage_5m", processed); err != nil {
 			t.Fatalf("recordLedgerRebuildCursor: %v", err)
 		}
-		batch := conn.batches["periscope.ledger_rebuild_cursors"]
+		batch := conn.batches["periscope.ledger_rebuild_cursors_v2"]
 		if batch == nil || len(batch.rows) != 1 {
 			t.Fatalf("expected one cursor row, got %#v", batch)
 		}
-		if batch.rows[0][0] != "viewer_usage_5m" || batch.rows[0][1].(int64) != processed.UnixMilli() {
+		if batch.rows[0][0] != "viewer_usage_5m" || batch.rows[0][1].(int64) != processed.UnixMilli() || batch.rows[0][2].(int64) <= 0 || batch.rows[0][2].(int64) == processed.UnixMilli() {
 			t.Fatalf("cursor row = %#v, want [viewer_usage_5m %d ...]", batch.rows[0], processed.UnixMilli())
 		}
 	})

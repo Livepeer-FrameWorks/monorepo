@@ -40,6 +40,7 @@ func main() {
 
 	logger.Info("Starting Periscope-Ingest (Analytics Event Processing)")
 
+	dbURL := config.RequireEnv("DATABASE_URL")
 	clickhouseAddr := config.RequireEnv("CLICKHOUSE_ADDR")
 	clickhouseDB := config.RequireEnv("CLICKHOUSE_DB")
 	clickhouseUser := config.RequireEnv("CLICKHOUSE_USER")
@@ -48,6 +49,12 @@ func main() {
 	clusterID := config.RequireEnv("KAFKA_CLUSTER_ID")
 	serviceToken := config.RequireEnv("SERVICE_TOKEN")
 	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
+
+	dbConfig := database.DefaultConfig()
+	dbConfig.ServiceName = "periscope-ingest"
+	dbConfig.URL = dbURL
+	postgres := database.MustConnect(dbConfig, logger)
+	defer func() { _ = postgres.Close() }()
 
 	// Connect to ClickHouse
 	chConfig := database.DefaultClickHouseConfig()
@@ -71,6 +78,8 @@ func main() {
 		DuplicateEvents:         metricsCollector.NewCounter("duplicate_events_total", "Duplicate analytics events skipped", []string{"event_type"}),
 		DLQMessages:             metricsCollector.NewCounter("dlq_messages_total", "Messages sent to the DLQ", []string{"topic", "error_type"}),
 		ProjectionDivergences:   metricsCollector.NewCounter("projection_divergence_total", "Projection rows whose rated field value diverged from a prior projection beyond per-meter epsilon", []string{"table", "meter", "field"}),
+		LedgerLeader:            metricsCollector.NewGauge("ledger_rebuild_leader", "Result of this Periscope ingest replica's latest ledger-rebuilder lease election", []string{"ledger"}),
+		LedgerCursorLag:         metricsCollector.NewGauge("ledger_rebuild_cursor_lag_seconds", "Wall-clock age of each ledger rebuild cursor", []string{"ledger"}),
 	}
 
 	// Create Kafka metrics
@@ -302,11 +311,13 @@ func main() {
 
 	// Now add health checks with all dependencies
 	healthChecker.AddCheck("clickhouse", monitoring.ClickHouseNativeHealthCheck(clickhouse))
+	healthChecker.AddCheck("postgres", monitoring.DatabaseHealthCheck(postgres))
 	healthChecker.AddCheck("kafka", monitoring.KafkaConsumerHealthCheck(consumer.GetClient()))
 	if dlqProducer != nil {
 		healthChecker.AddCheck("kafka_dlq_producer", monitoring.KafkaProducerHealthCheck(dlqProducer.GetClient()))
 	}
 	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
+		"DATABASE_URL":               dbURL,
 		"CLICKHOUSE_ADDR":            clickhouseAddr,
 		"KAFKA_BROKERS":              brokersEnv,
 		"KAFKA_GROUP_ID":             groupID,
@@ -325,7 +336,7 @@ func main() {
 	// goroutine at LedgerRebuildInterval and projects the trailing window
 	// from its source table into the append-only ledger. See
 	// docs/architecture/meter-contracts.md.
-	ledgerScheduler := handlers.NewLedgerScheduler(analyticsHandler)
+	ledgerScheduler := handlers.NewLedgerScheduler(analyticsHandler, handlers.NewPostgresLedgerLease(postgres))
 	ledgerScheduler.Start(ctx)
 	logger.Info("Started 5-minute ledger rebuilders")
 

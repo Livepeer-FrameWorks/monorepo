@@ -1,6 +1,7 @@
 package grpc
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,41 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+func TestPushLifecycleCanarySecretNeverReachesKafka(t *testing.T) {
+	const canary = "restream-canary-secret-7f4d9b"
+	producer := &fakeProducer{}
+	server := newTestServer(producer)
+	tenantID := "2f64c7d0-8c66-4b3b-88c4-421f8a3027f2"
+	trigger := &ipcpb.MistTrigger{
+		TriggerType: "PUSH_END", RequestId: "canary-push-end", TenantId: proto.String(tenantID),
+		TriggerPayload: &ipcpb.MistTrigger_PushEnd{PushEnd: &ipcpb.PushEndTrigger{
+			TargetUriBefore: "rtmp://example.test/live/" + canary,
+			TargetUriAfter:  "srt://example.test:9000?passphrase=" + canary,
+			LogMessages:     "failed target=" + canary,
+		}},
+	}
+	if _, err := server.SendEvent(context.Background(), trigger); err != nil {
+		t.Fatal(err)
+	}
+	if len(producer.publishCalls) != 1 || len(producer.produceCalls) != 0 {
+		t.Fatalf("typed/raw publishes=%d/%d, want 1/0", len(producer.publishCalls), len(producer.produceCalls))
+	}
+	payload, err := json.Marshal(producer.publishCalls[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(payload, []byte(canary)) {
+		t.Fatalf("canary credential reached Kafka payload: %s", payload)
+	}
+}
+
+func TestSanitizePushLifecycleEnvelopeDoesNotCloneUnrelatedTriggers(t *testing.T) {
+	trigger := &ipcpb.MistTrigger{TriggerType: "STREAM_END"}
+	if got := sanitizePushLifecycleEnvelope(trigger); got != trigger {
+		t.Fatal("unrelated trigger was cloned")
+	}
+}
 
 type produceCall struct {
 	topic   string
@@ -885,6 +921,28 @@ func TestUnwrapMistTriggerDefaultUnknown(t *testing.T) {
 				t.Errorf("eventType = %q, want %q", eventType, "unknown")
 			}
 		})
+	}
+}
+
+func TestUnwrapMistTriggerDistinguishesLiveAndFinalRestreamStatus(t *testing.T) {
+	server := newTestServer(&fakeProducer{})
+	for _, tc := range []struct {
+		triggerType string
+		want        string
+	}{
+		{triggerType: "RESTREAM_STATUS", want: "restream_status"},
+		{triggerType: "RESTREAM_STATUS_FINAL", want: "restream_status_final"},
+	} {
+		trigger := &ipcpb.MistTrigger{
+			TriggerType: tc.triggerType,
+			TriggerPayload: &ipcpb.MistTrigger_RestreamStatus{
+				RestreamStatus: &ipcpb.PushTargetStatusReport{},
+			},
+		}
+		_, got, _ := server.unwrapMistTrigger(trigger)
+		if got != tc.want {
+			t.Fatalf("trigger %s mapped to %q, want %q", tc.triggerType, got, tc.want)
+		}
 	}
 }
 

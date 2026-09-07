@@ -60,6 +60,118 @@ func PrepareViewerSessionFinal(ctx context.Context, db BatchPreparer) (*Writer[V
 	})
 }
 
+const insertRestreamSessionFinal = `INSERT INTO periscope.restream_sessions_final (
+	tenant_id, node_id, source_event_id,
+	cluster_id, origin_cluster_id, control_cell_id, stream_id, stream_name,
+	source_generation, target_id, target_revision, mist_push_id, platform, state, reason,
+	duration_ms, bytes_sent, source_started_at_ms, source_ended_at_ms,
+	edge_received_at_ms, projection_version_ms, payload_raw
+)`
+
+type RestreamSessionFinalRow struct {
+	TenantID            uuid.UUID
+	NodeID              string
+	SourceEventID       string
+	ClusterID           string
+	OriginClusterID     string
+	ControlCellID       string
+	StreamID            uuid.UUID
+	StreamName          string
+	SourceGeneration    uuid.UUID
+	TargetID            uuid.UUID
+	TargetRevision      int64
+	MistPushID          int64
+	Platform            string
+	State               string
+	Reason              string
+	DurationMS          uint64
+	BytesSent           uint64
+	SourceStartedAtMS   int64
+	SourceEndedAtMS     int64
+	EdgeReceivedAtMS    int64
+	ProjectionVersionMS int64
+	PayloadRaw          []byte
+}
+
+func PrepareRestreamSessionFinal(ctx context.Context, db BatchPreparer) (*Writer[RestreamSessionFinalRow], error) {
+	return prepare(ctx, db, insertRestreamSessionFinal, func(row RestreamSessionFinalRow) []interface{} {
+		return []interface{}{
+			row.TenantID, row.NodeID, row.SourceEventID,
+			row.ClusterID, row.OriginClusterID, row.ControlCellID, row.StreamID, row.StreamName,
+			row.SourceGeneration, row.TargetID, row.TargetRevision, row.MistPushID, row.Platform, row.State, row.Reason,
+			row.DurationMS, row.BytesSent, row.SourceStartedAtMS, row.SourceEndedAtMS,
+			row.EdgeReceivedAtMS, row.ProjectionVersionMS, row.PayloadRaw,
+		}
+	})
+}
+
+const insertRestreamSessionCurrent = `INSERT INTO periscope.restream_sessions_current (
+	tenant_id, node_id, cluster_id, stream_id, stream_name, source_generation,
+	target_id, target_revision, mist_push_id, platform, state, source_started_at_ms,
+	last_observed_at_ms, projection_version_ms, payload_raw
+)`
+
+type RestreamSessionCurrentRow struct {
+	TenantID            uuid.UUID
+	NodeID              string
+	ClusterID           string
+	StreamID            uuid.UUID
+	StreamName          string
+	SourceGeneration    uuid.UUID
+	TargetID            uuid.UUID
+	TargetRevision      int64
+	MistPushID          int64
+	Platform            string
+	State               string
+	SourceStartedAtMS   int64
+	LastObservedAtMS    int64
+	ProjectionVersionMS int64
+	PayloadRaw          []byte
+}
+
+func PrepareRestreamSessionCurrent(ctx context.Context, db BatchPreparer) (*Writer[RestreamSessionCurrentRow], error) {
+	return prepare(ctx, db, insertRestreamSessionCurrent, func(row RestreamSessionCurrentRow) []interface{} {
+		return []interface{}{
+			row.TenantID, row.NodeID, row.ClusterID, row.StreamID, row.StreamName, row.SourceGeneration,
+			row.TargetID, row.TargetRevision, row.MistPushID, row.Platform, row.State, row.SourceStartedAtMS,
+			row.LastObservedAtMS, row.ProjectionVersionMS, row.PayloadRaw,
+		}
+	})
+}
+
+const insertRestreamSessionAnomalous = `INSERT INTO periscope.restream_sessions_anomalous (
+	tenant_id, node_id, source_event_id, cluster_id, stream_id, source_generation,
+	target_id, target_revision, platform, observed_at_ms, reason, notes,
+	projection_version_ms, payload_raw
+)`
+
+type RestreamSessionAnomalousRow struct {
+	TenantID            uuid.UUID
+	NodeID              string
+	SourceEventID       string
+	ClusterID           string
+	StreamID            uuid.UUID
+	SourceGeneration    uuid.UUID
+	TargetID            uuid.UUID
+	TargetRevision      int64
+	Platform            string
+	ObservedAtMS        int64
+	Reason              string
+	Notes               string
+	ProjectionVersionMS int64
+	PayloadRaw          []byte
+}
+
+func PrepareRestreamSessionAnomalous(ctx context.Context, db BatchPreparer) (*Writer[RestreamSessionAnomalousRow], error) {
+	return prepare(ctx, db, insertRestreamSessionAnomalous, func(row RestreamSessionAnomalousRow) []interface{} {
+		return []interface{}{
+			row.TenantID, row.NodeID, row.SourceEventID, row.ClusterID, row.StreamID, row.SourceGeneration,
+			row.TargetID, row.TargetRevision, row.Platform, row.ObservedAtMS, row.Reason, row.Notes,
+			row.ProjectionVersionMS, row.PayloadRaw,
+		}
+	})
+}
+
 const insertStreamSessionFinal = `INSERT INTO periscope.stream_sessions_final (
 	tenant_id, node_id, stream_id, source_event_id,
 	cluster_id, origin_cluster_id, control_cell_id, stream_name,
@@ -171,7 +283,7 @@ func PrepareProcessingSegmentFinal(ctx context.Context, db BatchPreparer) (*Writ
 
 const insertProjectionDivergence = `INSERT INTO periscope.projection_divergences (
 	observed_at_ms, table_name, meter, field,
-	natural_key_json, prior_value_json, new_value_json, source_event_id
+	natural_key_json, prior_value_json, new_value_json, source_event_id, occurrence_id
 )`
 
 type ProjectionDivergenceRow struct {
@@ -183,13 +295,14 @@ type ProjectionDivergenceRow struct {
 	PriorValueJSON string
 	NewValueJSON   string
 	SourceEventID  string
+	OccurrenceID   string
 }
 
 func PrepareProjectionDivergence(ctx context.Context, db BatchPreparer) (*Writer[ProjectionDivergenceRow], error) {
 	return prepare(ctx, db, insertProjectionDivergence, func(row ProjectionDivergenceRow) []interface{} {
 		return []interface{}{
 			row.ObservedAtMS, row.TableName, row.Meter, row.Field,
-			row.NaturalKeyJSON, row.PriorValueJSON, row.NewValueJSON, row.SourceEventID,
+			row.NaturalKeyJSON, row.PriorValueJSON, row.NewValueJSON, row.SourceEventID, row.OccurrenceID,
 		}
 	})
 }

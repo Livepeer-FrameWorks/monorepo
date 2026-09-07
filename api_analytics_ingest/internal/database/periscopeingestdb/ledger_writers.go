@@ -7,7 +7,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const insertLedgerRebuildCursor = `INSERT INTO periscope.ledger_rebuild_cursors (
+const insertLedgerRebuildCursor = `INSERT INTO periscope.ledger_rebuild_cursors_v2 (
 	ledger_name, last_processed_projection_ms, updated_at_ms
 )`
 
@@ -48,6 +48,38 @@ func PrepareViewerUsage5m(ctx context.Context, db BatchPreparer) (*Writer[Viewer
 		return []interface{}{
 			row.WindowStart, row.TenantID, row.ClusterID, row.StreamID, row.NodeID, row.SessionID,
 			row.SecondsObserved, row.UpBytesObserved, row.DownBytesObserved,
+			row.SourceEventID, row.ProjectionVersionMS,
+		}
+	})
+}
+
+const insertDeliveryUsage5m = `INSERT INTO periscope.delivery_usage_5m (
+	window_start, tenant_id, cluster_id, stream_id, node_id, delivery_kind,
+	delivery_id, platform, seconds_observed, up_bytes_observed, down_bytes_observed,
+	source_event_id, projection_version_ms
+)`
+
+type DeliveryUsage5mRow struct {
+	WindowStart         time.Time
+	TenantID            uuid.UUID
+	ClusterID           string
+	StreamID            uuid.UUID
+	NodeID              string
+	DeliveryKind        string
+	DeliveryID          string
+	Platform            string
+	SecondsObserved     uint32
+	UpBytesObserved     uint64
+	DownBytesObserved   uint64
+	SourceEventID       string
+	ProjectionVersionMS int64
+}
+
+func PrepareDeliveryUsage5m(ctx context.Context, db BatchPreparer) (*Writer[DeliveryUsage5mRow], error) {
+	return prepare(ctx, db, insertDeliveryUsage5m, func(row DeliveryUsage5mRow) []interface{} {
+		return []interface{}{
+			row.WindowStart, row.TenantID, row.ClusterID, row.StreamID, row.NodeID, row.DeliveryKind,
+			row.DeliveryID, row.Platform, row.SecondsObserved, row.UpBytesObserved, row.DownBytesObserved,
 			row.SourceEventID, row.ProjectionVersionMS,
 		}
 	})

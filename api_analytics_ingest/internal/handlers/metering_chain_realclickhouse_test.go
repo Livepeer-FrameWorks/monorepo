@@ -65,6 +65,42 @@ func TestSourceFactProjectionAndLedgerReplay_RealClickHouse(t *testing.T) {
 	if err := h.HandleRawMistTriggerMessage(ctx, makeMessage(480)); err != nil {
 		t.Fatalf("corrected replay: %v", err)
 	}
+	restreamGenerationID, restreamTargetID := uuid.NewString(), uuid.NewString()
+	const restreamSourceID = "metering-chain-restream-final"
+	makeRestreamMessage := func(durationMS int64, bytesSent uint64) kafka.Message {
+		report := &ipcpb.PushTargetStatusReport{
+			TargetId: restreamTargetID, TenantId: tenantID, StreamId: streamID, StreamName: "live+chain",
+			SourceGeneration: restreamGenerationID, TargetRevision: 3, Platform: "youtube",
+			State: ipcpb.RestreamState_RESTREAM_STATE_IDLE, Reason: ipcpb.RestreamReason_RESTREAM_REASON_COMPLETED,
+			StartedAtMs: endedAt.UnixMilli() - durationMS, EndedAtMs: endedAt.UnixMilli(), DurationMs: durationMS,
+			BytesSent: bytesSent, BytesObserved: true, SourceEventId: restreamSourceID,
+		}
+		trigger := &ipcpb.MistTrigger{
+			NodeId: "edge-chain-1", TriggerType: "RESTREAM_STATUS_FINAL", RequestId: restreamSourceID,
+			Timestamp: endedAt.UnixMilli(), TenantId: proto.String(tenantID), ClusterId: proto.String(servingClusterID),
+			OriginClusterId: proto.String(originClusterID), ControlCellId: proto.String(controlCellID), StreamId: proto.String(streamID),
+			TriggerPayload: &ipcpb.MistTrigger_RestreamStatus{RestreamStatus: report},
+		}
+		payload, marshalErr := proto.Marshal(trigger)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		return kafka.Message{Topic: "analytics.raw_mist_triggers", Value: payload, Headers: map[string]string{
+			"tenant_id": tenantID, "cluster_id": servingClusterID, "source_event_id": restreamSourceID,
+			"trigger_type": "RESTREAM_STATUS_FINAL", "node_id": "edge-chain-1",
+		}}
+	}
+	if err := h.HandleRawMistTriggerMessage(ctx, makeRestreamMessage(600_000, 3<<30)); err != nil {
+		t.Fatalf("first restream source fact: %v", err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	if err := h.HandleRawMistTriggerMessage(ctx, makeRestreamMessage(600_000, 3<<30)); err != nil {
+		t.Fatalf("restream pure replay: %v", err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	if err := h.HandleRawMistTriggerMessage(ctx, makeRestreamMessage(660_000, 4<<30)); err != nil {
+		t.Fatalf("restream corrected replay: %v", err)
+	}
 	projectionEnd := time.Now().UTC().Add(time.Second)
 
 	var rawLogical, finalLogical uint64
@@ -74,8 +110,8 @@ func TestSourceFactProjectionAndLedgerReplay_RealClickHouse(t *testing.T) {
 	if err := conn.QueryRow(ctx, `SELECT count() FROM periscope.viewer_sessions_final_v WHERE tenant_id = ? AND node_id = ? AND session_id = ?`, tenantID, "edge-chain-1", "session-chain-1").Scan(&finalLogical); err != nil {
 		t.Fatal(err)
 	}
-	if rawLogical != 1 || finalLogical != 1 {
-		t.Fatalf("logical fact counts raw=%d final=%d, want 1/1", rawLogical, finalLogical)
+	if rawLogical != 2 || finalLogical != 1 {
+		t.Fatalf("logical fact counts raw=%d viewer_final=%d, want 2/1", rawLogical, finalLogical)
 	}
 	var gotServing, gotOrigin, gotControl string
 	if err := conn.QueryRow(ctx, `SELECT cluster_id, origin_cluster_id, control_cell_id
@@ -103,6 +139,23 @@ func TestSourceFactProjectionAndLedgerReplay_RealClickHouse(t *testing.T) {
 	if divergences != 1 {
 		t.Fatalf("duration correction divergences=%d, want 1", divergences)
 	}
+	var restreamDuration, restreamBytes uint64
+	if err := conn.QueryRow(ctx, `SELECT duration_ms, bytes_sent FROM periscope.restream_sessions_final_v
+		WHERE tenant_id = ? AND node_id = ? AND source_event_id = ?`, tenantID, "edge-chain-1", restreamSourceID).
+		Scan(&restreamDuration, &restreamBytes); err != nil {
+		t.Fatal(err)
+	}
+	if restreamDuration != 660_000 || restreamBytes != 4<<30 {
+		t.Fatalf("materialized restream duration=%d bytes=%d, want 660000/%d", restreamDuration, restreamBytes, uint64(4<<30))
+	}
+	var restreamDivergences uint64
+	if err := conn.QueryRow(ctx, `SELECT count() FROM periscope.projection_divergences
+		WHERE table_name = 'restream_sessions_final' AND field IN ('duration_ms', 'bytes_sent')`).Scan(&restreamDivergences); err != nil {
+		t.Fatal(err)
+	}
+	if restreamDivergences != 2 {
+		t.Fatalf("restream correction divergences=%d, want 2", restreamDivergences)
+	}
 
 	if err := h.rebuildViewerUsage5m(ctx, projectionStart, projectionEnd); err != nil {
 		t.Fatalf("first ledger rebuild: %v", err)
@@ -126,6 +179,22 @@ func TestSourceFactProjectionAndLedgerReplay_RealClickHouse(t *testing.T) {
 	}
 	if physicalRows != 2*logicalRows {
 		t.Fatalf("ledger replay physical=%d logical=%d, want exact 2x collapse", physicalRows, logicalRows)
+	}
+	if err := h.rebuildDeliveryUsage5m(ctx, projectionStart, projectionEnd); err != nil {
+		t.Fatalf("first delivery ledger rebuild: %v", err)
+	}
+	if err := h.rebuildDeliveryUsage5m(ctx, projectionStart, projectionEnd); err != nil {
+		t.Fatalf("replayed delivery ledger rebuild: %v", err)
+	}
+	var restreamLedgerSeconds, restreamLedgerBytes uint64
+	if err := conn.QueryRow(ctx, `SELECT sum(seconds_observed), sum(down_bytes_observed)
+		FROM periscope.delivery_usage_5m_v WHERE tenant_id = ? AND node_id = ?
+		  AND delivery_kind = 'restream' AND delivery_id = ? AND platform = 'youtube'`,
+		tenantID, "edge-chain-1", restreamSourceID).Scan(&restreamLedgerSeconds, &restreamLedgerBytes); err != nil {
+		t.Fatal(err)
+	}
+	if restreamLedgerSeconds != 660 || restreamLedgerBytes != 4<<30 {
+		t.Fatalf("restream delivery ledger seconds=%d bytes=%d, want 660/%d", restreamLedgerSeconds, restreamLedgerBytes, uint64(4<<30))
 	}
 
 	apiTimestamp := endedAt.Add(-2 * time.Hour)

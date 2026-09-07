@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/bits"
+	"sort"
 	"strings"
 	"time"
 
@@ -40,20 +42,46 @@ const (
 	// explicit historical backfills use admin tooling rather than
 	// first-boot scans.
 	LedgerInitialLookback = 2 * LedgerRebuildInterval
+
+	// DeliveryLedgerInitialLookback populates the newly introduced shared
+	// playback/restream delivery ledger. Established ledgers resume from the
+	// v1-to-v2 cursor seed and never replay their retained history on each
+	// replica merely because the cursor engine changed.
+	DeliveryLedgerInitialLookback = 90 * 24 * time.Hour
+
+	// LedgerRebuildChunkSpan caps each source scan. Emission batches separately
+	// cap client memory and ClickHouse insert volume. Catch-up checkpoints every
+	// successful chunk independently.
+	LedgerRebuildChunkSpan     = time.Hour
+	DeliveryLedgerChunkSpan    = time.Hour
+	LedgerCatchupChunksPerPass = 24
+	LedgerCatchupPassesOnBoot  = 96
+	LedgerEmissionBatchSize    = 1000
+	LedgerChunkTimeout         = 10 * time.Minute
+
+	// LedgerMaxSpan bounds rows emitted by one corrupted or malicious source
+	// fact. Longer sessions must be split upstream or quarantined.
+	LedgerMaxSpan = 90 * 24 * time.Hour
 )
 
-// LedgerScheduler runs the five ledger rebuilders on independent goroutines.
+// LedgerScheduler runs the six ledger rebuilders on independent goroutines.
 // Each runs at LedgerRebuildInterval with its own ticker.
 type LedgerScheduler struct {
-	h      *AnalyticsHandler
-	logger logging.Logger
+	h            *AnalyticsHandler
+	logger       logging.Logger
+	lease        LedgerLease
+	chunkTimeout time.Duration
 }
 
-func NewLedgerScheduler(h *AnalyticsHandler) *LedgerScheduler {
-	return &LedgerScheduler{h: h, logger: h.logger}
+func NewLedgerScheduler(h *AnalyticsHandler, optionalLease ...LedgerLease) *LedgerScheduler {
+	lease := LedgerLease(localLedgerLease{})
+	if len(optionalLease) > 0 && optionalLease[0] != nil {
+		lease = optionalLease[0]
+	}
+	return &LedgerScheduler{h: h, logger: h.logger, lease: lease, chunkTimeout: LedgerChunkTimeout}
 }
 
-// Start launches the five rebuild goroutines. They run until ctx is
+// Start launches the six rebuild goroutines. They run until ctx is
 // cancelled. Errors per pass are logged but do not terminate the
 // goroutine; the next tick retries.
 func (s *LedgerScheduler) Start(ctx context.Context) {
@@ -62,6 +90,7 @@ func (s *LedgerScheduler) Start(ctx context.Context) {
 		run  func(context.Context, time.Time, time.Time) error
 	}{
 		{"viewer_usage_5m", s.h.rebuildViewerUsage5m},
+		{"delivery_usage_5m", s.h.rebuildDeliveryUsage5m},
 		{"stream_runtime_5m", s.h.rebuildStreamRuntime5m},
 		{"storage_gb_seconds_5m", s.h.rebuildStorageGBSeconds5m},
 		{"processing_5m", s.h.rebuildProcessing5m},
@@ -76,53 +105,495 @@ func (s *LedgerScheduler) Start(ctx context.Context) {
 	s.startStaleCloseLoops(ctx)
 }
 
+// rebuildDeliveryUsage5m is the sole writer for the shared playback/restream
+// delivery ledger. Its cursor discovers both source projections so playback
+// cannot be emitted independently by the viewer worker.
+func (h *AnalyticsHandler) rebuildDeliveryUsage5m(ctx context.Context, windowStart, windowEnd time.Time) error {
+	emissions := make([]deliveryUsageEmission, 0, LedgerEmissionBatchSize)
+	flush := func() error {
+		if len(emissions) == 0 {
+			return nil
+		}
+		if err := h.writeDeliveryUsage5m(ctx, emissions, time.Now().UnixMilli()); err != nil {
+			return err
+		}
+		emissions = emissions[:0]
+		return nil
+	}
+	emit := func(emission deliveryUsageEmission) error {
+		emissions = append(emissions, emission)
+		if len(emissions) >= LedgerEmissionBatchSize {
+			return flush()
+		}
+		return nil
+	}
+	desiredByIdentity := make(map[deliveryUsageIdentity]map[deliveryUsageWindowKey]struct{})
+	if err := h.reconcilePlaybackDeliveryUsage5m(ctx, windowStart, windowEnd, desiredByIdentity, emit); err != nil {
+		return err
+	}
+	rows, err := h.clickhouse.Query(ctx, `
+		WITH delivery_sessions AS (
+			SELECT tenant_id, node_id, source_event_id AS delivery_id, 'restream' AS delivery_kind,
+				source_event_id, argMax(cluster_id, projection_version_ms) AS cluster_id,
+				argMax(stream_id, projection_version_ms) AS stream_id,
+				argMax(platform, projection_version_ms) AS platform,
+				argMax(state, projection_version_ms) AS state,
+				argMax(source_started_at_ms, projection_version_ms) AS started_at_ms,
+				argMax(source_ended_at_ms, projection_version_ms) AS ended_at_ms,
+				toUInt64(0) AS up_bytes,
+				argMax(bytes_sent, projection_version_ms) AS down_bytes
+			FROM periscope.restream_sessions_final
+			WHERE projection_version_ms >= ? AND projection_version_ms < ?
+			GROUP BY tenant_id, node_id, source_event_id
+		)
+		SELECT toString(tenant_id), node_id, delivery_id, delivery_kind, source_event_id,
+		       cluster_id, toString(stream_id), platform, state, started_at_ms, ended_at_ms, up_bytes, down_bytes
+		FROM delivery_sessions`,
+		windowStart.UnixMilli(), windowEnd.UnixMilli())
+	if err != nil {
+		return fmt.Errorf("delivery_usage_5m source query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	type source struct {
+		tenantID, nodeID, deliveryID, kind, sourceEventID string
+		clusterID, streamID, platform                     string
+		state                                             string
+		startMS, endMS                                    int64
+		upBytes, downBytes                                uint64
+	}
+	for rows.Next() {
+		var s source
+		if scanErr := rows.Scan(&s.tenantID, &s.nodeID, &s.deliveryID, &s.kind, &s.sourceEventID, &s.clusterID, &s.streamID, &s.platform, &s.state, &s.startMS, &s.endMS, &s.upBytes, &s.downBytes); scanErr != nil {
+			return fmt.Errorf("delivery_usage_5m scan: %w", scanErr)
+		}
+		identity := deliveryUsageIdentity{tenantID: s.tenantID, nodeID: s.nodeID, kind: s.kind, deliveryID: s.deliveryID}
+		if (s.state != "idle" && s.state != "failed") || s.startMS <= 0 || s.endMS <= s.startMS {
+			desiredByIdentity[identity] = map[deliveryUsageWindowKey]struct{}{}
+			continue
+		}
+		totalMS := s.endMS - s.startMS
+		if totalMS > LedgerMaxSpan.Milliseconds() {
+			h.logger.WithFields(logging.Fields{
+				"ledger": "delivery_usage_5m", "delivery_kind": s.kind,
+			}).Warn("Skipping over-span delivery fact without retracting prior ledger rows")
+			if h.metrics != nil && h.metrics.ClickHouseInserts != nil {
+				h.metrics.ClickHouseInserts.WithLabelValues("delivery_usage_5m", "quarantined_span").Inc()
+			}
+			continue
+		}
+		desiredKeys := map[deliveryUsageWindowKey]struct{}{}
+		desiredByIdentity[identity] = desiredKeys
+		var cumulativeOverlapMS int64
+		for _, window := range orderedWindowsForSpan(s.startMS, s.endMS) {
+			windowMS, overlapMS := window.windowStartMS, window.overlapMS
+			if overlapMS <= 0 {
+				continue
+			}
+			desiredKeys[deliveryUsageWindowKey{
+				windowStartMS: windowMS, clusterID: s.clusterID, streamID: s.streamID, platform: s.platform,
+			}] = struct{}{}
+			previousOverlapMS := cumulativeOverlapMS
+			cumulativeOverlapMS += overlapMS
+			upObserved := mulDivUint64(s.upBytes, uint64(cumulativeOverlapMS), uint64(totalMS)) -
+				mulDivUint64(s.upBytes, uint64(previousOverlapMS), uint64(totalMS))
+			downObserved := mulDivUint64(s.downBytes, uint64(cumulativeOverlapMS), uint64(totalMS)) -
+				mulDivUint64(s.downBytes, uint64(previousOverlapMS), uint64(totalMS))
+			if emitErr := emit(deliveryUsageEmission{
+				windowStartMS: windowMS, tenantID: s.tenantID, clusterID: s.clusterID, streamID: s.streamID,
+				nodeID: s.nodeID, kind: s.kind, deliveryID: s.deliveryID, platform: s.platform,
+				secondsObserved: uint32(overlapMS / 1000), upObserved: upObserved,
+				downObserved: downObserved, sourceEventID: s.sourceEventID,
+			}); emitErr != nil {
+				return emitErr
+			}
+		}
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return fmt.Errorf("delivery_usage_5m iterate: %w", rowsErr)
+	}
+	tombstones, err := h.deliveryUsageTombstonesForProjectionWindow(ctx, windowStart, windowEnd, desiredByIdentity)
+	if err != nil {
+		return err
+	}
+	for identity, identityTombstones := range tombstones {
+		for _, tombstone := range identityTombstones {
+			if err := emit(deliveryUsageEmission{
+				windowStartMS: tombstone.windowStartMS, tenantID: identity.tenantID, clusterID: tombstone.clusterID,
+				streamID: tombstone.streamID, nodeID: identity.nodeID, kind: identity.kind, deliveryID: identity.deliveryID,
+				platform: tombstone.platform, sourceEventID: tombstone.sourceEventID,
+			}); err != nil {
+				return err
+			}
+		}
+	}
+	return flush()
+}
+
+func (h *AnalyticsHandler) reconcilePlaybackDeliveryUsage5m(ctx context.Context, windowStart, windowEnd time.Time, desiredByIdentity map[deliveryUsageIdentity]map[deliveryUsageWindowKey]struct{}, emit func(deliveryUsageEmission) error) error {
+	rows, err := h.clickhouse.Query(ctx, `
+		WITH sessions AS (
+			SELECT tenant_id, node_id, session_id,
+				argMax(source_event_id, projection_version_ms) AS source_event_id,
+				argMax(cluster_id, projection_version_ms) AS cluster_id,
+				argMax(stream_id, projection_version_ms) AS stream_id,
+				argMax(source_started_at_ms, projection_version_ms) AS source_started_at_ms,
+				argMax(source_ended_at_ms, projection_version_ms) AS source_ended_at_ms,
+				argMax(uploaded_bytes, projection_version_ms) AS uploaded_bytes,
+				argMax(downloaded_bytes, projection_version_ms) AS downloaded_bytes,
+				argMax(closed_reason, projection_version_ms) AS closed_reason
+			FROM periscope.viewer_sessions_final
+			WHERE projection_version_ms >= ? AND projection_version_ms < ?
+			GROUP BY tenant_id, node_id, session_id
+		)
+		SELECT
+			toString(tenant_id), node_id, session_id, source_event_id,
+			cluster_id, toString(stream_id), source_started_at_ms,
+			source_ended_at_ms, uploaded_bytes, downloaded_bytes, closed_reason
+		FROM sessions`,
+		windowStart.UnixMilli(), windowEnd.UnixMilli())
+	if err != nil {
+		return fmt.Errorf("delivery_usage_5m playback reconciliation query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var tenantID, nodeID, sessionID, sourceEventID, clusterID, streamID string
+		var closedReason string
+		var startMS, endMS int64
+		var upBytes, downBytes uint64
+		if scanErr := rows.Scan(&tenantID, &nodeID, &sessionID, &sourceEventID, &clusterID, &streamID, &startMS, &endMS, &upBytes, &downBytes, &closedReason); scanErr != nil {
+			return fmt.Errorf("delivery_usage_5m playback reconciliation scan: %w", scanErr)
+		}
+		identity := deliveryUsageIdentity{tenantID: tenantID, nodeID: nodeID, kind: "playback", deliveryID: sessionID}
+		if closedReason != "final" || startMS <= 0 || endMS <= startMS {
+			desiredByIdentity[identity] = map[deliveryUsageWindowKey]struct{}{}
+			continue
+		}
+		totalMS := endMS - startMS
+		if totalMS > LedgerMaxSpan.Milliseconds() {
+			h.logger.WithFields(logging.Fields{"ledger": "delivery_usage_5m", "delivery_kind": "playback"}).Warn("Skipping over-span delivery fact without retracting prior ledger rows")
+			if h.metrics != nil && h.metrics.ClickHouseInserts != nil {
+				h.metrics.ClickHouseInserts.WithLabelValues("delivery_usage_5m", "quarantined_span").Inc()
+			}
+			continue
+		}
+		desiredKeys := make(map[deliveryUsageWindowKey]struct{})
+		desiredByIdentity[identity] = desiredKeys
+		var cumulativeOverlapMS int64
+		for _, window := range orderedWindowsForSpan(startMS, endMS) {
+			if window.overlapMS <= 0 {
+				continue
+			}
+			desiredKeys[deliveryUsageWindowKey{windowStartMS: window.windowStartMS, clusterID: clusterID, streamID: streamID}] = struct{}{}
+			previousOverlapMS := cumulativeOverlapMS
+			cumulativeOverlapMS += window.overlapMS
+			if emitErr := emit(deliveryUsageEmission{
+				windowStartMS: window.windowStartMS, tenantID: tenantID, clusterID: clusterID, streamID: streamID,
+				nodeID: nodeID, kind: "playback", deliveryID: sessionID, sourceEventID: sourceEventID,
+				secondsObserved: uint32(window.overlapMS / 1000),
+				upObserved: mulDivUint64(upBytes, uint64(cumulativeOverlapMS), uint64(totalMS)) -
+					mulDivUint64(upBytes, uint64(previousOverlapMS), uint64(totalMS)),
+				downObserved: mulDivUint64(downBytes, uint64(cumulativeOverlapMS), uint64(totalMS)) -
+					mulDivUint64(downBytes, uint64(previousOverlapMS), uint64(totalMS)),
+			}); emitErr != nil {
+				return emitErr
+			}
+		}
+	}
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return fmt.Errorf("delivery_usage_5m playback reconciliation iterate: %w", rowsErr)
+	}
+	return nil
+}
+
+type deliveryUsageEmission struct {
+	windowStartMS                                                     int64
+	tenantID, clusterID, streamID, nodeID, kind, deliveryID, platform string
+	secondsObserved                                                   uint32
+	upObserved, downObserved                                          uint64
+	sourceEventID                                                     string
+}
+
+func (h *AnalyticsHandler) writeDeliveryUsage5m(ctx context.Context, emissions []deliveryUsageEmission, projectionVersionMS int64) error {
+	if len(emissions) == 0 {
+		return nil
+	}
+	batch, err := periscopeingestdb.PrepareDeliveryUsage5m(ctx, h.clickhouse)
+	if err != nil {
+		return fmt.Errorf("delivery_usage_5m prepare: %w", err)
+	}
+	defer func() { _ = batch.Close() }()
+	for _, emission := range emissions {
+		tenantID, parseErr := uuid.Parse(emission.tenantID)
+		if parseErr != nil {
+			return fmt.Errorf("delivery_usage_5m tenant_id %q: %w", emission.tenantID, parseErr)
+		}
+		streamID, parseErr := uuid.Parse(emission.streamID)
+		if parseErr != nil {
+			return fmt.Errorf("delivery_usage_5m stream_id %q: %w", emission.streamID, parseErr)
+		}
+		if appendErr := batch.Append(periscopeingestdb.DeliveryUsage5mRow{
+			WindowStart: time.UnixMilli(emission.windowStartMS).UTC(), TenantID: tenantID, ClusterID: emission.clusterID,
+			StreamID: streamID, NodeID: emission.nodeID, DeliveryKind: emission.kind, DeliveryID: emission.deliveryID,
+			Platform: emission.platform, SecondsObserved: emission.secondsObserved,
+			UpBytesObserved: emission.upObserved, DownBytesObserved: emission.downObserved,
+			SourceEventID: emission.sourceEventID, ProjectionVersionMS: projectionVersionMS,
+		}); appendErr != nil {
+			return fmt.Errorf("delivery_usage_5m append: %w", appendErr)
+		}
+	}
+	if err := batch.Send(); err != nil {
+		return fmt.Errorf("delivery_usage_5m send: %w", err)
+	}
+	if h.metrics != nil && h.metrics.ClickHouseInserts != nil {
+		h.metrics.ClickHouseInserts.WithLabelValues("delivery_usage_5m", "inserted").Add(float64(len(emissions)))
+	}
+	return nil
+}
+
+type deliveryUsageWindowKey struct {
+	windowStartMS int64
+	clusterID     string
+	streamID      string
+	platform      string
+}
+
+type deliveryUsageIdentity struct {
+	tenantID, nodeID, kind, deliveryID string
+}
+
+type deliveryUsageTombstone struct {
+	deliveryUsageWindowKey
+	sourceEventID string
+}
+
+func (h *AnalyticsHandler) deliveryUsageTombstonesForProjectionWindow(ctx context.Context, windowStart, windowEnd time.Time, desiredByIdentity map[deliveryUsageIdentity]map[deliveryUsageWindowKey]struct{}) (map[deliveryUsageIdentity][]deliveryUsageTombstone, error) {
+	out := make(map[deliveryUsageIdentity][]deliveryUsageTombstone)
+	if len(desiredByIdentity) == 0 {
+		return out, nil
+	}
+	rows, err := h.clickhouse.Query(ctx, `
+		WITH changed_bounds AS (
+			SELECT tenant_id, node_id, delivery_kind, delivery_id,
+				greatest(minIf(source_started_at_ms, source_started_at_ms > 0 AND source_ended_at_ms > source_started_at_ms),
+					toUnixTimestamp64Milli(now64(3) - INTERVAL 90 DAY)) AS min_started_at_ms,
+				if(maxIf(source_ended_at_ms, source_started_at_ms > 0 AND source_ended_at_ms > source_started_at_ms) > 0,
+					maxIf(source_ended_at_ms, source_started_at_ms > 0 AND source_ended_at_ms > source_started_at_ms),
+					toUnixTimestamp64Milli(now64(3))) AS max_ended_at_ms,
+				countIf(source_started_at_ms <= 0 OR source_ended_at_ms <= source_started_at_ms) > 0 AS has_unbounded_retraction
+			FROM (
+				SELECT tenant_id, node_id, 'restream' AS delivery_kind, source_event_id AS delivery_id,
+					source_started_at_ms, source_ended_at_ms
+				FROM periscope.restream_sessions_final
+				WHERE projection_version_ms >= ? AND projection_version_ms < ?
+				UNION ALL
+				SELECT tenant_id, node_id, 'playback' AS delivery_kind, session_id AS delivery_id,
+					source_started_at_ms, source_ended_at_ms
+				FROM periscope.viewer_sessions_final
+				WHERE projection_version_ms >= ? AND projection_version_ms < ?
+			)
+			GROUP BY tenant_id, node_id, delivery_kind, delivery_id
+		), scan_bounds AS (
+			SELECT
+				if(countIf(has_unbounded_retraction) > 0,
+					toStartOfFiveMinute(now() - INTERVAL 90 DAY),
+					toDateTime(intDiv(min(min_started_at_ms), 1000)) - INTERVAL 5 MINUTE) AS min_window_start,
+				if(countIf(has_unbounded_retraction) > 0,
+					now(),
+					toDateTime(intDiv(max(max_ended_at_ms), 1000)) + INTERVAL 5 MINUTE) AS max_window_start
+			FROM changed_bounds
+		)
+		SELECT toString(ledger.tenant_id), ledger.node_id, ledger.delivery_kind, ledger.delivery_id,
+			toInt64(toUnixTimestamp(ledger.window_start)) * 1000 AS window_start_ms,
+			ledger.cluster_id, toString(ledger.stream_id), ledger.platform,
+			argMax(ledger.source_event_id, ledger.projection_version_ms) AS source_event_id,
+			argMax(ledger.seconds_observed, ledger.projection_version_ms) AS seconds_observed,
+			argMax(ledger.up_bytes_observed, ledger.projection_version_ms) AS up_bytes_observed,
+			argMax(ledger.down_bytes_observed, ledger.projection_version_ms) AS down_bytes_observed
+		FROM periscope.delivery_usage_5m AS ledger
+		INNER JOIN changed_bounds AS changed
+		  ON ledger.tenant_id = changed.tenant_id
+		 AND ledger.node_id = changed.node_id
+		 AND ledger.delivery_kind = changed.delivery_kind
+		 AND ledger.delivery_id = changed.delivery_id
+		WHERE ledger.projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 90 DAY)
+		  AND ledger.window_start >= (SELECT min_window_start FROM scan_bounds)
+		  AND ledger.window_start < (SELECT max_window_start FROM scan_bounds)
+		  AND (changed.has_unbounded_retraction
+		    OR (ledger.window_start >= toDateTime(intDiv(changed.min_started_at_ms, 1000)) - INTERVAL 5 MINUTE
+		    AND ledger.window_start < toDateTime(intDiv(changed.max_ended_at_ms, 1000)) + INTERVAL 5 MINUTE))
+		GROUP BY ledger.tenant_id, ledger.node_id, ledger.delivery_kind, ledger.delivery_id,
+			ledger.window_start, ledger.cluster_id, ledger.stream_id, ledger.platform`,
+		windowStart.UnixMilli(), windowEnd.UnixMilli(), windowStart.UnixMilli(), windowEnd.UnixMilli())
+	if err != nil {
+		return nil, fmt.Errorf("delivery_usage_5m batched tombstone lookup: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var (
+			identity                 deliveryUsageIdentity
+			key                      deliveryUsageWindowKey
+			sourceEventID            string
+			secondsObserved          uint32
+			upObserved, downObserved uint64
+		)
+		if err := rows.Scan(&identity.tenantID, &identity.nodeID, &identity.kind, &identity.deliveryID, &key.windowStartMS, &key.clusterID, &key.streamID, &key.platform, &sourceEventID, &secondsObserved, &upObserved, &downObserved); err != nil {
+			return nil, fmt.Errorf("delivery_usage_5m batched tombstone scan: %w", err)
+		}
+		desired, eligible := desiredByIdentity[identity]
+		if !eligible || (secondsObserved == 0 && upObserved == 0 && downObserved == 0) {
+			continue
+		}
+		if _, current := desired[key]; current {
+			continue
+		}
+		out[identity] = append(out[identity], deliveryUsageTombstone{deliveryUsageWindowKey: key, sourceEventID: sourceEventID})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("delivery_usage_5m batched tombstone iterate: %w", err)
+	}
+	return out, nil
+}
+
 func (s *LedgerScheduler) runLoop(ctx context.Context, name string, run func(context.Context, time.Time, time.Time) error) {
 	ticker := time.NewTicker(LedgerRebuildInterval)
 	defer ticker.Stop()
 
-	doPass := func() {
+	doPass := func(maxPasses int) {
 		now := time.Now().UTC()
 		windowEnd := now.Add(-LedgerSettlementLag).Truncate(5 * time.Minute)
-		windowStart, err := s.h.getLedgerRebuildCursor(ctx, name, windowEnd.Add(-LedgerInitialLookback))
-		if err != nil {
-			s.logger.WithError(err).WithField("ledger", name).Warn("Ledger cursor read failed")
-			return
-		}
-		if !windowStart.Before(windowEnd) {
-			return
-		}
-		if err := run(ctx, windowStart, windowEnd); err != nil {
-			s.logger.WithError(err).WithFields(logging.Fields{
-				"ledger":       name,
-				"window_start": windowStart,
-				"window_end":   windowEnd,
-			}).Warn("Ledger rebuild pass failed")
-			return
-		}
-		if err := s.h.recordLedgerRebuildCursor(ctx, name, windowEnd); err != nil {
-			s.logger.WithError(err).WithFields(logging.Fields{
-				"ledger": name,
-				"cursor": windowEnd,
-			}).Warn("Ledger cursor write failed after successful rebuild")
+		maxChunks := maxPasses * LedgerCatchupChunksPerPass
+		for chunk := 0; chunk < maxChunks; chunk++ {
+			release, leader, leaderErr := s.lease.TryAcquire(ctx, "ledger:"+name)
+			if leaderErr != nil {
+				s.setLedgerLeader(name, false)
+				s.logger.WithError(leaderErr).WithField("ledger", name).Warn("Ledger rebuild lease acquisition failed")
+				return
+			}
+			if !leader {
+				s.setLedgerLeader(name, false)
+				// Keep every replica's cursor-lag series current even when another
+				// process owns the writer lease.
+				if _, err := s.h.getLedgerRebuildCursor(ctx, name, windowEnd.Add(-initialLedgerLookback(name))); err != nil {
+					s.logger.WithError(err).WithField("ledger", name).Warn("Ledger cursor observation failed on non-leader")
+				}
+				s.logger.WithField("ledger", name).Debug("Ledger rebuild chunk assigned to another Periscope replica")
+				return
+			}
+			s.setLedgerLeader(name, true)
+			chunkCtx, chunkCancel := context.WithTimeout(ctx, s.chunkTimeout)
+			caughtUp, passErr := s.runLedgerChunk(chunkCtx, name, windowEnd, run)
+			chunkCancel()
+			releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			releaseErr := release(releaseCtx)
+			cancel()
+			if releaseErr != nil {
+				s.logger.WithError(releaseErr).WithField("ledger", name).Warn("Ledger rebuild lease release failed")
+				return
+			}
+			s.setLedgerLeader(name, false)
+			if passErr != nil {
+				s.logger.WithError(passErr).WithFields(logging.Fields{
+					"ledger":     name,
+					"window_end": windowEnd,
+				}).Warn("Ledger rebuild chunk failed")
+				return
+			}
+			if caughtUp {
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
 		}
 	}
 
-	doPass() // initial pass on boot
+	doPass(LedgerCatchupPassesOnBoot)
 	for {
 		select {
 		case <-ctx.Done():
 			s.logger.WithField("ledger", name).Info("Ledger rebuilder stopping")
 			return
 		case <-ticker.C:
-			doPass()
+			doPass(1)
 		}
 	}
 }
 
+func (s *LedgerScheduler) setLedgerLeader(name string, leader bool) {
+	if s.h.metrics == nil || s.h.metrics.LedgerLeader == nil {
+		return
+	}
+	value := 0.0
+	if leader {
+		value = 1
+	}
+	s.h.metrics.LedgerLeader.WithLabelValues(name).Set(value)
+}
+
+func (s *LedgerScheduler) runLedgerPass(ctx context.Context, name string, windowEnd time.Time, run func(context.Context, time.Time, time.Time) error) error {
+	windowStart, err := s.h.getLedgerRebuildCursor(ctx, name, windowEnd.Add(-initialLedgerLookback(name)))
+	if err != nil {
+		return fmt.Errorf("read cursor: %w", err)
+	}
+	for chunks := 0; chunks < LedgerCatchupChunksPerPass && windowStart.Before(windowEnd); chunks++ {
+		chunkEnd := windowStart.Add(ledgerRebuildChunkSpan(name))
+		if chunkEnd.After(windowEnd) {
+			chunkEnd = windowEnd
+		}
+		if err := run(ctx, windowStart, chunkEnd); err != nil {
+			return fmt.Errorf("rebuild [%s, %s): %w", windowStart, chunkEnd, err)
+		}
+		if err := s.h.recordLedgerRebuildCursor(ctx, name, chunkEnd); err != nil {
+			return fmt.Errorf("checkpoint %s: %w", chunkEnd, err)
+		}
+		windowStart = chunkEnd
+	}
+	return nil
+}
+
+func (s *LedgerScheduler) runLedgerChunk(ctx context.Context, name string, windowEnd time.Time, run func(context.Context, time.Time, time.Time) error) (bool, error) {
+	windowStart, err := s.h.getLedgerRebuildCursor(ctx, name, windowEnd.Add(-initialLedgerLookback(name)))
+	if err != nil {
+		return false, fmt.Errorf("read cursor: %w", err)
+	}
+	if !windowStart.Before(windowEnd) {
+		return true, nil
+	}
+	chunkEnd := windowStart.Add(ledgerRebuildChunkSpan(name))
+	if chunkEnd.After(windowEnd) {
+		chunkEnd = windowEnd
+	}
+	if err := run(ctx, windowStart, chunkEnd); err != nil {
+		return false, fmt.Errorf("rebuild [%s, %s): %w", windowStart, chunkEnd, err)
+	}
+	if err := s.h.recordLedgerRebuildCursor(ctx, name, chunkEnd); err != nil {
+		return false, fmt.Errorf("checkpoint %s: %w", chunkEnd, err)
+	}
+	return !chunkEnd.Before(windowEnd), nil
+}
+
+func initialLedgerLookback(name string) time.Duration {
+	if name == "delivery_usage_5m" {
+		return DeliveryLedgerInitialLookback
+	}
+	return LedgerInitialLookback
+}
+
+func ledgerRebuildChunkSpan(name string) time.Duration {
+	if name == "delivery_usage_5m" {
+		return DeliveryLedgerChunkSpan
+	}
+	return LedgerRebuildChunkSpan
+}
+
 func (h *AnalyticsHandler) getLedgerRebuildCursor(ctx context.Context, ledgerName string, defaultStart time.Time) (time.Time, error) {
 	rows, err := h.clickhouse.Query(ctx, `
-		SELECT argMax(last_processed_projection_ms, updated_at_ms)
-		FROM periscope.ledger_rebuild_cursors
+		SELECT max(last_processed_projection_ms)
+		FROM periscope.ledger_rebuild_cursors_v2
 		WHERE ledger_name = ?
 		GROUP BY ledger_name`,
 		ledgerName)
@@ -131,16 +602,33 @@ func (h *AnalyticsHandler) getLedgerRebuildCursor(ctx context.Context, ledgerNam
 	}
 	defer func() { _ = rows.Close() }()
 	if !rows.Next() {
-		return defaultStart.UTC(), nil
+		cursor := defaultStart.UTC()
+		h.observeLedgerCursorLag(ledgerName, cursor)
+		return cursor, nil
 	}
 	var lastProcessedMS int64
 	if err := rows.Scan(&lastProcessedMS); err != nil {
 		return time.Time{}, err
 	}
 	if lastProcessedMS <= 0 {
-		return defaultStart.UTC(), nil
+		cursor := defaultStart.UTC()
+		h.observeLedgerCursorLag(ledgerName, cursor)
+		return cursor, nil
 	}
-	return time.UnixMilli(lastProcessedMS).UTC(), nil
+	cursor := time.UnixMilli(lastProcessedMS).UTC()
+	h.observeLedgerCursorLag(ledgerName, cursor)
+	return cursor, nil
+}
+
+func (h *AnalyticsHandler) observeLedgerCursorLag(ledgerName string, cursor time.Time) {
+	if h.metrics == nil || h.metrics.LedgerCursorLag == nil {
+		return
+	}
+	lag := time.Since(cursor).Seconds()
+	if lag < 0 {
+		lag = 0
+	}
+	h.metrics.LedgerCursorLag.WithLabelValues(ledgerName).Set(lag)
 }
 
 func (h *AnalyticsHandler) recordLedgerRebuildCursor(ctx context.Context, ledgerName string, processedThrough time.Time) error {
@@ -207,37 +695,50 @@ func (h *AnalyticsHandler) rebuildViewerUsage5m(ctx context.Context, windowStart
 		durationSeconds                    uint32
 		upBytes, downBytes                 uint64
 	}
-	var sessions []viewerSessionProjection
+
+	emissions := make([]viewerUsageEmission, 0, LedgerEmissionBatchSize)
+	flush := func() error {
+		if len(emissions) == 0 {
+			return nil
+		}
+		if writeErr := h.writeViewerUsage5m(ctx, emissions, time.Now().UnixMilli()); writeErr != nil {
+			return writeErr
+		}
+		emissions = emissions[:0]
+		return nil
+	}
+	emit := func(emission viewerUsageEmission) error {
+		emissions = append(emissions, emission)
+		if len(emissions) >= LedgerEmissionBatchSize {
+			return flush()
+		}
+		return nil
+	}
+	desiredByIdentity := make(map[viewerUsageIdentity]map[viewerUsageWindowKey]struct{})
+	hadSessions := false
 	for rows.Next() {
 		var s viewerSessionProjection
 		if scanErr := rows.Scan(&s.tenantID, &s.nodeID, &s.sessionID, &s.sourceEventID, &s.clusterID, &s.streamID, &s.startMS, &s.endMS, &s.durationSeconds, &s.upBytes, &s.downBytes); scanErr != nil {
 			return fmt.Errorf("viewer_usage_5m scan: %w", scanErr)
 		}
-		sessions = append(sessions, s)
-	}
-	if iterErr := rows.Err(); iterErr != nil {
-		return fmt.Errorf("viewer_usage_5m iterate: %w", iterErr)
-	}
-	if len(sessions) == 0 {
-		return nil
-	}
-
-	projectionVersionMS := time.Now().UnixMilli()
-	type viewerUsageEmission struct {
-		windowStartMS                    int64
-		tenantID, clusterID, streamID    string
-		nodeID, sessionID, sourceEventID string
-		secondsObserved                  uint32
-		upObserved, downObserved         uint64
-	}
-	var emissions []viewerUsageEmission
-	for _, s := range sessions {
+		hadSessions = true
 		totalSpanMS := s.endMS - s.startMS
 		if totalSpanMS <= 0 {
 			continue
 		}
+		if totalSpanMS > LedgerMaxSpan.Milliseconds() {
+			h.logger.WithField("ledger", "viewer_usage_5m").Warn("Skipping over-span viewer fact without retracting prior ledger rows")
+			if h.metrics != nil && h.metrics.ClickHouseInserts != nil {
+				h.metrics.ClickHouseInserts.WithLabelValues("viewer_usage_5m", "quarantined_span").Inc()
+			}
+			continue
+		}
 		desiredKeys := map[viewerUsageWindowKey]struct{}{}
-		for windowMS, overlapMS := range windowsForSpan(s.startMS, s.endMS) {
+		identity := viewerUsageIdentity{tenantID: s.tenantID, nodeID: s.nodeID, sessionID: s.sessionID}
+		desiredByIdentity[identity] = desiredKeys
+		var cumulativeOverlapMS int64
+		for _, window := range orderedWindowsForSpan(s.startMS, s.endMS) {
+			windowMS, overlapMS := window.windowStartMS, window.overlapMS
 			if overlapMS <= 0 {
 				continue
 			}
@@ -246,10 +747,13 @@ func (h *AnalyticsHandler) rebuildViewerUsage5m(ctx context.Context, windowStart
 				clusterID:     s.clusterID,
 				streamID:      s.streamID,
 			}] = struct{}{}
-			fraction := float64(overlapMS) / float64(totalSpanMS)
-			upObserved := uint64(float64(s.upBytes) * fraction)
-			downObserved := uint64(float64(s.downBytes) * fraction)
-			emissions = append(emissions, viewerUsageEmission{
+			previousOverlapMS := cumulativeOverlapMS
+			cumulativeOverlapMS += overlapMS
+			upObserved := mulDivUint64(s.upBytes, uint64(cumulativeOverlapMS), uint64(totalSpanMS)) -
+				mulDivUint64(s.upBytes, uint64(previousOverlapMS), uint64(totalSpanMS))
+			downObserved := mulDivUint64(s.downBytes, uint64(cumulativeOverlapMS), uint64(totalSpanMS)) -
+				mulDivUint64(s.downBytes, uint64(previousOverlapMS), uint64(totalSpanMS))
+			if emitErr := emit(viewerUsageEmission{
 				windowStartMS:   windowMS,
 				tenantID:        s.tenantID,
 				clusterID:       s.clusterID,
@@ -260,28 +764,48 @@ func (h *AnalyticsHandler) rebuildViewerUsage5m(ctx context.Context, windowStart
 				secondsObserved: uint32(overlapMS / 1000),
 				upObserved:      upObserved,
 				downObserved:    downObserved,
-			})
-		}
-		tombstones, tombstoneErr := h.viewerUsageTombstones(ctx, s.tenantID, s.nodeID, s.sessionID, desiredKeys)
-		if tombstoneErr != nil {
-			return tombstoneErr
-		}
-		for _, t := range tombstones {
-			emissions = append(emissions, viewerUsageEmission{
-				windowStartMS: t.windowStartMS,
-				tenantID:      s.tenantID,
-				clusterID:     t.clusterID,
-				streamID:      t.streamID,
-				nodeID:        s.nodeID,
-				sessionID:     s.sessionID,
-				sourceEventID: t.sourceEventID,
-			})
+			}); emitErr != nil {
+				return emitErr
+			}
 		}
 	}
-	if len(emissions) == 0 {
+	if iterErr := rows.Err(); iterErr != nil {
+		return fmt.Errorf("viewer_usage_5m iterate: %w", iterErr)
+	}
+	if !hadSessions {
 		return nil
 	}
+	tombstones, err := h.viewerUsageTombstonesForProjectionWindow(ctx, windowStart, windowEnd, desiredByIdentity)
+	if err != nil {
+		return err
+	}
+	for identity, identityTombstones := range tombstones {
+		for _, t := range identityTombstones {
+			if err := emit(viewerUsageEmission{
+				windowStartMS: t.windowStartMS,
+				tenantID:      identity.tenantID,
+				clusterID:     t.clusterID,
+				streamID:      t.streamID,
+				nodeID:        identity.nodeID,
+				sessionID:     identity.sessionID,
+				sourceEventID: t.sourceEventID,
+			}); err != nil {
+				return err
+			}
+		}
+	}
+	return flush()
+}
 
+type viewerUsageEmission struct {
+	windowStartMS                    int64
+	tenantID, clusterID, streamID    string
+	nodeID, sessionID, sourceEventID string
+	secondsObserved                  uint32
+	upObserved, downObserved         uint64
+}
+
+func (h *AnalyticsHandler) writeViewerUsage5m(ctx context.Context, emissions []viewerUsageEmission, projectionVersionMS int64) error {
 	batch, err := periscopeingestdb.PrepareViewerUsage5m(ctx, h.clickhouse)
 	if err != nil {
 		return fmt.Errorf("viewer_usage_5m prepare: %w", err)
@@ -321,56 +845,77 @@ type viewerUsageWindowKey struct {
 	streamID      string
 }
 
+type viewerUsageIdentity struct {
+	tenantID, nodeID, sessionID string
+}
+
 type viewerUsageTombstone struct {
 	viewerUsageWindowKey
 	sourceEventID string
 }
 
-func (h *AnalyticsHandler) viewerUsageTombstones(ctx context.Context, tenantID, nodeID, sessionID string, desired map[viewerUsageWindowKey]struct{}) ([]viewerUsageTombstone, error) {
+func (h *AnalyticsHandler) viewerUsageTombstonesForProjectionWindow(ctx context.Context, windowStart, windowEnd time.Time, desiredByIdentity map[viewerUsageIdentity]map[viewerUsageWindowKey]struct{}) (map[viewerUsageIdentity][]viewerUsageTombstone, error) {
+	out := make(map[viewerUsageIdentity][]viewerUsageTombstone)
+	if len(desiredByIdentity) == 0 {
+		return out, nil
+	}
 	rows, err := h.clickhouse.Query(ctx, `
-		SELECT
-			toInt64(toUnixTimestamp(window_start)) * 1000 AS window_start_ms,
-			cluster_id,
-			toString(stream_id) AS stream_id,
-			argMax(source_event_id, projection_version_ms) AS source_event_id,
-			argMax(seconds_observed, projection_version_ms) AS seconds_observed,
-			argMax(up_bytes_observed, projection_version_ms) AS up_bytes_observed,
-			argMax(down_bytes_observed, projection_version_ms) AS down_bytes_observed
-		FROM periscope.viewer_usage_5m
-		WHERE tenant_id = ?
-		  AND node_id = ?
-		  AND session_id = ?
-		GROUP BY window_start, cluster_id, stream_id`,
-		tenantID, nodeID, sessionID)
+		WITH changed_bounds AS (
+			SELECT tenant_id, node_id, session_id,
+				greatest(minIf(source_started_at_ms, source_started_at_ms > 0 AND source_ended_at_ms > source_started_at_ms),
+					toUnixTimestamp64Milli(now64(3) - INTERVAL 90 DAY)) AS min_started_at_ms,
+				if(maxIf(source_ended_at_ms, source_started_at_ms > 0 AND source_ended_at_ms > source_started_at_ms) > 0,
+					maxIf(source_ended_at_ms, source_started_at_ms > 0 AND source_ended_at_ms > source_started_at_ms),
+					toUnixTimestamp64Milli(now64(3))) AS max_ended_at_ms,
+				countIf(source_started_at_ms <= 0 OR source_ended_at_ms <= source_started_at_ms) > 0 AS has_unbounded_retraction
+			FROM periscope.viewer_sessions_final
+			WHERE projection_version_ms >= ? AND projection_version_ms < ?
+			GROUP BY tenant_id, node_id, session_id
+		)
+		SELECT toString(ledger.tenant_id), ledger.node_id, ledger.session_id,
+			toInt64(toUnixTimestamp(ledger.window_start)) * 1000 AS window_start_ms,
+			ledger.cluster_id, toString(ledger.stream_id),
+			argMax(ledger.source_event_id, ledger.projection_version_ms) AS source_event_id,
+			argMax(ledger.seconds_observed, ledger.projection_version_ms) AS seconds_observed,
+			argMax(ledger.up_bytes_observed, ledger.projection_version_ms) AS up_bytes_observed,
+			argMax(ledger.down_bytes_observed, ledger.projection_version_ms) AS down_bytes_observed
+		FROM periscope.viewer_usage_5m AS ledger
+		INNER JOIN changed_bounds AS changed
+		  ON ledger.tenant_id = changed.tenant_id
+		 AND ledger.node_id = changed.node_id
+		 AND ledger.session_id = changed.session_id
+		WHERE ledger.projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 90 DAY)
+		  AND (changed.has_unbounded_retraction
+		    OR (ledger.window_start >= toDateTime(intDiv(changed.min_started_at_ms, 1000)) - INTERVAL 5 MINUTE
+		    AND ledger.window_start < toDateTime(intDiv(changed.max_ended_at_ms, 1000)) + INTERVAL 5 MINUTE))
+		GROUP BY ledger.tenant_id, ledger.node_id, ledger.session_id, ledger.window_start, ledger.cluster_id, ledger.stream_id`,
+		windowStart.UnixMilli(), windowEnd.UnixMilli())
 	if err != nil {
-		return nil, fmt.Errorf("viewer_usage_5m tombstone lookup: %w", err)
+		return nil, fmt.Errorf("viewer_usage_5m batched tombstone lookup: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
-
-	var out []viewerUsageTombstone
 	for rows.Next() {
 		var (
+			identity                 viewerUsageIdentity
 			key                      viewerUsageWindowKey
 			sourceEventID            string
 			secondsObserved          uint32
 			upObserved, downObserved uint64
 		)
-		if err := rows.Scan(&key.windowStartMS, &key.clusterID, &key.streamID, &sourceEventID, &secondsObserved, &upObserved, &downObserved); err != nil {
-			return nil, fmt.Errorf("viewer_usage_5m tombstone scan: %w", err)
+		if err := rows.Scan(&identity.tenantID, &identity.nodeID, &identity.sessionID, &key.windowStartMS, &key.clusterID, &key.streamID, &sourceEventID, &secondsObserved, &upObserved, &downObserved); err != nil {
+			return nil, fmt.Errorf("viewer_usage_5m batched tombstone scan: %w", err)
 		}
-		if secondsObserved == 0 && upObserved == 0 && downObserved == 0 {
+		desired, eligible := desiredByIdentity[identity]
+		if !eligible || (secondsObserved == 0 && upObserved == 0 && downObserved == 0) {
 			continue
 		}
-		if _, ok := desired[key]; ok {
+		if _, current := desired[key]; current {
 			continue
 		}
-		out = append(out, viewerUsageTombstone{
-			viewerUsageWindowKey: key,
-			sourceEventID:        sourceEventID,
-		})
+		out[identity] = append(out[identity], viewerUsageTombstone{viewerUsageWindowKey: key, sourceEventID: sourceEventID})
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("viewer_usage_5m tombstone iterate: %w", err)
+		return nil, fmt.Errorf("viewer_usage_5m batched tombstone iterate: %w", err)
 	}
 	return out, nil
 }
@@ -865,7 +1410,7 @@ func (h *AnalyticsHandler) storageProjectionDiverged(
 		return fmt.Errorf("storage_gb_seconds_5m divergence key: %w", err)
 	}
 
-	record := func(priorGBSeconds float64, priorFileCount uint64) error {
+	record := func(priorGBSeconds float64, priorFileCount uint64, priorProjectionVersionMS int64) error {
 		priorValue, marshalErr := json.Marshal(map[string]any{"gb_seconds": priorGBSeconds, "file_count": priorFileCount})
 		if marshalErr != nil {
 			return fmt.Errorf("storage_gb_seconds_5m divergence prior: %w", marshalErr)
@@ -875,7 +1420,7 @@ func (h *AnalyticsHandler) storageProjectionDiverged(
 			return fmt.Errorf("storage_gb_seconds_5m divergence new: %w", marshalErr)
 		}
 		sourceEventID := fmt.Sprintf("storage_gb_seconds_5m:%s", string(naturalKey))
-		if recordErr := h.recordProjectionDivergence(ctx, observedAtMS, "storage_gb_seconds_5m", "storage_gb_seconds_"+scope, "projection", string(naturalKey), string(priorValue), string(newValue), sourceEventID); recordErr != nil {
+		if recordErr := h.recordProjectionDivergence(ctx, observedAtMS, priorProjectionVersionMS, "storage_gb_seconds_5m", "storage_gb_seconds_"+scope, "projection", string(naturalKey), string(priorValue), string(newValue), sourceEventID); recordErr != nil {
 			return fmt.Errorf("record storage_gb_seconds_5m divergence: %w", recordErr)
 		}
 		return nil
@@ -884,7 +1429,8 @@ func (h *AnalyticsHandler) storageProjectionDiverged(
 	rows, err := h.clickhouse.Query(ctx, `
 		SELECT
 			argMax(gb_seconds, projection_version_ms) AS gb_seconds,
-			argMax(file_count, projection_version_ms) AS file_count
+			argMax(file_count, projection_version_ms) AS file_count,
+			max(projection_version_ms) AS latest_projection_version_ms
 		FROM periscope.storage_gb_seconds_5m
 		WHERE tenant_id = ?
 		  AND cluster_id = ?
@@ -910,7 +1456,8 @@ func (h *AnalyticsHandler) storageProjectionDiverged(
 
 	var priorGBSeconds float64
 	var priorFileCount uint64
-	if err := rows.Scan(&priorGBSeconds, &priorFileCount); err != nil {
+	var priorProjectionVersionMS int64
+	if err := rows.Scan(&priorGBSeconds, &priorFileCount, &priorProjectionVersionMS); err != nil {
 		return fmt.Errorf("storage_gb_seconds_5m divergence scan: %w", err)
 	}
 	if err := rows.Err(); err != nil {
@@ -919,7 +1466,7 @@ func (h *AnalyticsHandler) storageProjectionDiverged(
 	if math.Abs(priorGBSeconds-gbSeconds) <= 1e-9 && priorFileCount == fileCount {
 		return nil
 	}
-	return record(priorGBSeconds, priorFileCount)
+	return record(priorGBSeconds, priorFileCount, priorProjectionVersionMS)
 }
 
 // --- processing_5m ---
@@ -1083,7 +1630,7 @@ func (h *AnalyticsHandler) rebuildApiUsage5m(ctx context.Context, windowStart, w
 // boundary contributes nothing to that boundary's window.
 func windowsForSpan(startMS, endMS int64) map[int64]int64 {
 	out := map[int64]int64{}
-	if endMS <= startMS {
+	if endMS <= startMS || endMS-startMS > LedgerMaxSpan.Milliseconds() {
 		return out
 	}
 	const fiveMinMS = int64(5 * 60 * 1000)
@@ -1099,6 +1646,34 @@ func windowsForSpan(startMS, endMS int64) map[int64]int64 {
 		cur = next
 	}
 	return out
+}
+
+type windowOverlap struct {
+	windowStartMS int64
+	overlapMS     int64
+}
+
+func orderedWindowsForSpan(startMS, endMS int64) []windowOverlap {
+	windows := windowsForSpan(startMS, endMS)
+	starts := make([]int64, 0, len(windows))
+	for windowStartMS := range windows {
+		starts = append(starts, windowStartMS)
+	}
+	sort.Slice(starts, func(i, j int) bool { return starts[i] < starts[j] })
+	out := make([]windowOverlap, 0, len(starts))
+	for _, windowStartMS := range starts {
+		out = append(out, windowOverlap{windowStartMS: windowStartMS, overlapMS: windows[windowStartMS]})
+	}
+	return out
+}
+
+func mulDivUint64(value, numerator, denominator uint64) uint64 {
+	if value == 0 || numerator == 0 || denominator == 0 {
+		return 0
+	}
+	hi, lo := bits.Mul64(value, numerator)
+	quotient, _ := bits.Div64(hi, lo, denominator)
+	return quotient
 }
 
 func maxTwoInt64(a, b int64) int64 {

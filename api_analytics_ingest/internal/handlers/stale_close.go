@@ -52,6 +52,7 @@ const (
 func (s *LedgerScheduler) startStaleCloseLoops(ctx context.Context) {
 	go s.runStaleCloseLoop(ctx, "viewer_sessions_anomalous", s.h.staleCloseViewerSessions)
 	go s.runStaleCloseLoop(ctx, "stream_sessions_anomalous", s.h.staleCloseStreamSessions)
+	go s.runStaleCloseLoop(ctx, "restream_sessions_anomalous", s.h.staleCloseRestreamSessions)
 	go s.runStaleCloseLoop(ctx, "stream_state_offline", s.h.staleMarkStreamStateOffline)
 }
 
@@ -64,11 +65,111 @@ func (s *LedgerScheduler) runStaleCloseLoop(ctx context.Context, name string, ru
 			s.logger.WithField("worker", name).Info("Stale-close worker stopping")
 			return
 		case <-ticker.C:
-			if err := run(ctx); err != nil {
-				s.logger.WithError(err).WithField("worker", name).Warn("Stale-close pass failed")
+			release, leader, err := s.lease.TryAcquire(ctx, "stale-close:"+name)
+			if err != nil {
+				s.logger.WithError(err).WithField("worker", name).Warn("Stale-close lease acquisition failed")
+				continue
 			}
+			if !leader {
+				s.logger.WithField("worker", name).Debug("Stale-close pass assigned to another Periscope replica")
+				continue
+			}
+			func() {
+				defer func() {
+					releaseCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					if releaseErr := release(releaseCtx); releaseErr != nil {
+						s.logger.WithError(releaseErr).WithField("worker", name).Warn("Stale-close lease release failed")
+					}
+				}()
+				if runErr := run(ctx); runErr != nil {
+					s.logger.WithError(runErr).WithField("worker", name).Warn("Stale-close pass failed")
+				}
+			}()
 		}
 	}
+}
+
+// staleCloseRestreamSessions turns a silent non-terminal destination into an
+// anomalous, explicitly non-billable fact. A real final arriving later still
+// remains the sole source of delivered-minute and egress usage.
+func (h *AnalyticsHandler) staleCloseRestreamSessions(ctx context.Context) error {
+	cutoffMS := time.Now().Add(-StaleCloseTimeout).UnixMilli()
+	rows, err := h.clickhouse.Query(ctx, fmt.Sprintf(`
+		SELECT tenant_id, node_id, cluster_id, stream_id, stream_name,
+		       source_generation, target_id, target_revision, platform,
+		       source_started_at_ms, last_observed_at_ms, payload_raw
+		FROM periscope.restream_sessions_current FINAL
+		WHERE state IN ('pending', 'pushing', 'retrying', 'stopping')
+		  AND last_observed_at_ms < ?
+		  AND (tenant_id, node_id, source_generation, target_revision, target_id) NOT IN (
+		      SELECT tenant_id, node_id, source_generation, target_revision, target_id
+		      FROM periscope.restream_sessions_final
+		      WHERE projection_version_ms >= toUnixTimestamp(now() - INTERVAL 90 DAY) * 1000
+		      GROUP BY tenant_id, node_id, source_generation, target_revision, target_id
+		  )
+		  AND (tenant_id, node_id, source_generation, target_revision, target_id) NOT IN (
+		      SELECT tenant_id, node_id, source_generation, target_revision, target_id
+		      FROM periscope.restream_sessions_anomalous
+		      WHERE projection_version_ms >= toUnixTimestamp(now() - INTERVAL 90 DAY) * 1000
+		      GROUP BY tenant_id, node_id, source_generation, target_revision, target_id
+		  )
+		LIMIT %d`, StaleCloseScanLimit), cutoffMS)
+	if err != nil {
+		return fmt.Errorf("restream stale-close query: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	projectionVersionMS := time.Now().UnixMilli()
+	batch, err := periscopeingestdb.PrepareRestreamSessionAnomalous(ctx, h.clickhouse)
+	if err != nil {
+		return fmt.Errorf("restream_sessions_anomalous prepare: %w", err)
+	}
+	defer func() { _ = batch.Close() }()
+	rowsEmitted := 0
+	for rows.Next() {
+		var tenantValue, streamValue, generationValue, targetValue string
+		var nodeID, clusterID, streamName, platform, payloadRaw string
+		var targetRevision, startedAtMS, observedAtMS int64
+		if err := rows.Scan(&tenantValue, &nodeID, &clusterID, &streamValue, &streamName,
+			&generationValue, &targetValue, &targetRevision, &platform,
+			&startedAtMS, &observedAtMS, &payloadRaw); err != nil {
+			return fmt.Errorf("restream stale-close scan: %w", err)
+		}
+		tenantID, tenantErr := uuid.Parse(tenantValue)
+		streamID, streamErr := uuid.Parse(streamValue)
+		generationID, generationErr := uuid.Parse(generationValue)
+		targetID, targetErr := uuid.Parse(targetValue)
+		if tenantErr != nil || streamErr != nil || generationErr != nil || targetErr != nil {
+			return fmt.Errorf("restream stale-close returned invalid fenced identity")
+		}
+		sourceEventID := fmt.Sprintf("stale:%s:%d:%s", generationID.String(), targetRevision, targetID.String())
+		notes := fmt.Sprintf("stale: no RESTREAM_STATUS_FINAL within %s; started_at_ms=%d; stream_name=%s", StaleCloseTimeout, startedAtMS, streamName)
+		if err := batch.Append(periscopeingestdb.RestreamSessionAnomalousRow{
+			TenantID: tenantID, NodeID: nodeID, SourceEventID: sourceEventID, ClusterID: clusterID,
+			StreamID: streamID, SourceGeneration: generationID, TargetID: targetID,
+			TargetRevision: targetRevision, Platform: platform, ObservedAtMS: observedAtMS,
+			Reason: "stale", Notes: notes, ProjectionVersionMS: projectionVersionMS,
+			PayloadRaw: []byte(payloadRaw),
+		}); err != nil {
+			return fmt.Errorf("restream_sessions_anomalous append: %w", err)
+		}
+		rowsEmitted++
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("restream stale-close rows: %w", err)
+	}
+	if rowsEmitted == 0 {
+		return nil
+	}
+	if err := batch.Send(); err != nil {
+		return fmt.Errorf("restream_sessions_anomalous send: %w", err)
+	}
+	if h.metrics != nil && h.metrics.ClickHouseInserts != nil {
+		h.metrics.ClickHouseInserts.WithLabelValues("restream_sessions_anomalous", "stale").Add(float64(rowsEmitted))
+	}
+	h.logger.WithField("count", rowsEmitted).Info("Stale-closed restream sessions")
+	return nil
 }
 
 // staleCloseViewerSessions scans viewer_sessions_current for sessions

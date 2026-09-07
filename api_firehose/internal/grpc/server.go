@@ -9,6 +9,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -105,11 +106,11 @@ func NewDecklogServerWithConfig(producer kafka.ProducerInterface, logger logging
 var triggerTypesForRawJournal = map[string]struct{}{
 	"USER_END":                            {},
 	"STREAM_END":                          {},
-	"PUSH_END":                            {},
 	"RECORDING_END":                       {},
 	"RECORDING_SEGMENT":                   {},
 	"LIVEPEER_SEGMENT_COMPLETE":           {},
 	"PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE": {},
+	"RESTREAM_STATUS_FINAL":               {},
 }
 
 // convertProtobufToKafkaEvent converts any protobuf message to kafka.AnalyticsEvent with transparent JSON serialization
@@ -386,6 +387,12 @@ func (s *DecklogServer) unwrapMistTrigger(trigger *ipcpb.MistTrigger) (proto.Mes
 		eventType = "push_out_start"
 	case *ipcpb.MistTrigger_PushEnd:
 		eventType = "push_end"
+	case *ipcpb.MistTrigger_RestreamStatus:
+		if trigger.GetTriggerType() == string(mist.TriggerRestreamStatusFinal) {
+			eventType = "restream_status_final"
+		} else {
+			eventType = "restream_status"
+		}
 	case *ipcpb.MistTrigger_ViewerConnect:
 		eventType = "viewer_connect"
 	case *ipcpb.MistTrigger_ViewerDisconnect:
@@ -486,6 +493,7 @@ func (s *DecklogServer) SendEvent(ctx context.Context, trigger *ipcpb.MistTrigge
 		}
 		return nil, fmt.Errorf("mist trigger cannot be nil")
 	}
+	trigger = sanitizePushLifecycleEnvelope(trigger)
 
 	// Unwrap inner payload and determine event type + tenant
 	msg, eventType, tenantID := s.unwrapMistTrigger(trigger)
@@ -586,6 +594,25 @@ func (s *DecklogServer) SendEvent(ctx context.Context, trigger *ipcpb.MistTrigge
 	}
 
 	return &emptypb.Empty{}, nil
+}
+
+func sanitizePushLifecycleEnvelope(trigger *ipcpb.MistTrigger) *ipcpb.MistTrigger {
+	if trigger == nil || (trigger.GetPushOutStart() == nil && trigger.GetPushEnd() == nil) {
+		return trigger
+	}
+	clean, ok := proto.Clone(trigger).(*ipcpb.MistTrigger)
+	if !ok {
+		return trigger
+	}
+	if start := clean.GetPushOutStart(); start != nil {
+		start.PushTarget = ""
+	}
+	if end := clean.GetPushEnd(); end != nil {
+		end.TargetUriBefore = ""
+		end.TargetUriAfter = ""
+		end.LogMessages = ""
+	}
+	return clean
 }
 
 // publishRawMistTrigger forwards the original MistTrigger envelope to the

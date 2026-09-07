@@ -1393,6 +1393,185 @@ func TestRawUserEndProjectsFinalSessionWithHeaderTenantFallback(t *testing.T) {
 	}
 }
 
+func TestRawRestreamStatusProjectsCredentialFreeDeliveryFact(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	tenantID := uuid.NewString()
+	streamID := uuid.NewString()
+	generationID := uuid.NewString()
+	targetID := uuid.NewString()
+	clusterID := "media-eu"
+	report := &ipcpb.PushTargetStatusReport{
+		TargetId: targetID, TenantId: tenantID, StreamId: streamID, StreamName: "live+demo",
+		SourceGeneration: generationID, TargetRevision: 7, Platform: "youtube",
+		State: ipcpb.RestreamState_RESTREAM_STATE_IDLE, Reason: ipcpb.RestreamReason_RESTREAM_REASON_COMPLETED,
+		StartedAtMs: 1_000, EndedAtMs: 61_000, DurationMs: 60_000,
+		BytesSent: 1_048_576, BytesObserved: true, SourceEventId: "restream-event-1",
+	}
+	trigger := &ipcpb.MistTrigger{
+		NodeId: "edge-eu", TriggerType: "RESTREAM_STATUS_FINAL", RequestId: "restream-event-1",
+		Timestamp: report.EndedAtMs, TenantId: &tenantID, StreamId: &streamID, ClusterId: &clusterID,
+		TriggerPayload: &ipcpb.MistTrigger_RestreamStatus{RestreamStatus: report},
+	}
+	payload, err := proto.Marshal(trigger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.HandleRawMistTriggerMessage(context.Background(), kafka.Message{
+		Value: payload, Topic: "analytics.raw_mist_triggers",
+		Headers: map[string]string{"tenant_id": tenantID, "source_event_id": "restream-event-1", "trigger_type": "RESTREAM_STATUS_FINAL", "node_id": "edge-eu"},
+	}); err != nil {
+		t.Fatalf("HandleRawMistTriggerMessage: %v", err)
+	}
+	batch := conn.batches["periscope.restream_sessions_final"]
+	if batch == nil || len(batch.rows) != 1 {
+		t.Fatalf("expected one restream final row, got %#v", batch)
+	}
+	if batch.rows[0][10] != int64(7) || batch.rows[0][12] != "youtube" || batch.rows[0][14] != "completed" || batch.rows[0][16] != uint64(1_048_576) {
+		t.Fatalf("unexpected restream fact: %#v", batch.rows[0])
+	}
+}
+
+func TestRawRestreamStatusWithoutObservedBytesBillsDurationOnly(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	tenantID := uuid.NewString()
+	streamID := uuid.NewString()
+	report := &ipcpb.PushTargetStatusReport{
+		TargetId: uuid.NewString(), TenantId: tenantID, StreamId: streamID, StreamName: "live+demo",
+		SourceGeneration: uuid.NewString(), State: ipcpb.RestreamState_RESTREAM_STATE_IDLE,
+		StartedAtMs: 1_000, EndedAtMs: 2_000, SourceEventId: "restream-event-no-bytes",
+	}
+	trigger := &ipcpb.MistTrigger{
+		NodeId: "edge-eu", TriggerType: "RESTREAM_STATUS_FINAL", RequestId: report.SourceEventId,
+		Timestamp: report.EndedAtMs, TenantId: &tenantID, StreamId: &streamID,
+		TriggerPayload: &ipcpb.MistTrigger_RestreamStatus{RestreamStatus: report},
+	}
+	payload, err := proto.Marshal(trigger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.HandleRawMistTriggerMessage(context.Background(), kafka.Message{
+		Value: payload, Topic: "analytics.raw_mist_triggers",
+		Headers: map[string]string{"tenant_id": tenantID, "source_event_id": report.SourceEventId, "trigger_type": "RESTREAM_STATUS_FINAL", "node_id": "edge-eu"},
+	}); err != nil {
+		t.Fatalf("HandleRawMistTriggerMessage: %v", err)
+	}
+	finalBatch := conn.batches["periscope.restream_sessions_final"]
+	if finalBatch == nil || len(finalBatch.rows) != 1 {
+		t.Fatalf("expected duration-only final fact, got %#v", finalBatch)
+	}
+	if finalBatch.rows[0][15] != uint64(1_000) || finalBatch.rows[0][16] != uint64(0) {
+		t.Fatalf("duration-only fact duration=%#v bytes=%#v, want 1000ms and zero bytes", finalBatch.rows[0][15], finalBatch.rows[0][16])
+	}
+	batch := conn.batches["periscope.restream_sessions_anomalous"]
+	if batch == nil || len(batch.rows) != 1 || batch.rows[0][10] != "bytes_unobserved" {
+		t.Fatalf("expected bytes_unobserved anomaly, got %#v", batch)
+	}
+}
+
+func TestRawRestreamFinalWithNonTerminalStateIsQuarantined(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	tenantID := uuid.NewString()
+	streamID := uuid.NewString()
+	report := &ipcpb.PushTargetStatusReport{
+		TargetId: uuid.NewString(), TenantId: tenantID, StreamId: streamID, StreamName: "live+demo",
+		SourceGeneration: uuid.NewString(), State: ipcpb.RestreamState_RESTREAM_STATE_PUSHING,
+		StartedAtMs: 1_000, EndedAtMs: 2_000, DurationMs: 1_000,
+		BytesSent: 42, BytesObserved: true, SourceEventId: "restream-event-nonterminal",
+	}
+	trigger := &ipcpb.MistTrigger{
+		NodeId: "edge-eu", TriggerType: "RESTREAM_STATUS_FINAL", RequestId: report.SourceEventId,
+		Timestamp: report.EndedAtMs, TenantId: &tenantID, StreamId: &streamID,
+		TriggerPayload: &ipcpb.MistTrigger_RestreamStatus{RestreamStatus: report},
+	}
+	payload, err := proto.Marshal(trigger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handler.HandleRawMistTriggerMessage(context.Background(), kafka.Message{
+		Value: payload, Headers: map[string]string{"tenant_id": tenantID, "source_event_id": report.SourceEventId},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if batch := conn.batches["periscope.restream_sessions_final"]; batch != nil && len(batch.rows) != 0 {
+		t.Fatalf("nonterminal final reached billable facts: %#v", batch.rows)
+	}
+	batch := conn.batches["periscope.restream_sessions_anomalous"]
+	if batch == nil || len(batch.rows) != 1 || batch.rows[0][10] != "non_terminal_state" {
+		t.Fatalf("expected non_terminal_state quarantine, got %#v", batch)
+	}
+}
+
+func TestRawRestreamStatusRejectsEpochFallbackAndBoundsPlatform(t *testing.T) {
+	t.Run("zero start and duration are quarantined", func(t *testing.T) {
+		conn := newFakeClickhouseConn()
+		handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+		tenantID := uuid.NewString()
+		streamID := uuid.NewString()
+		report := &ipcpb.PushTargetStatusReport{
+			TargetId: uuid.NewString(), TenantId: tenantID, StreamId: streamID, StreamName: "live+demo",
+			SourceGeneration: uuid.NewString(), Platform: "youtube", State: ipcpb.RestreamState_RESTREAM_STATE_IDLE,
+			Reason: ipcpb.RestreamReason_RESTREAM_REASON_COMPLETED, EndedAtMs: 1_780_000_000_000,
+			BytesSent: 42, BytesObserved: true, SourceEventId: "restream-event-epoch",
+		}
+		trigger := &ipcpb.MistTrigger{
+			NodeId: "edge-eu", TriggerType: "RESTREAM_STATUS_FINAL", RequestId: report.SourceEventId,
+			Timestamp: report.EndedAtMs, TenantId: &tenantID, StreamId: &streamID,
+			TriggerPayload: &ipcpb.MistTrigger_RestreamStatus{RestreamStatus: report},
+		}
+		payload, err := proto.Marshal(trigger)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := handler.HandleRawMistTriggerMessage(context.Background(), kafka.Message{
+			Value: payload, Headers: map[string]string{"tenant_id": tenantID, "source_event_id": report.SourceEventId},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if batch := conn.batches["periscope.restream_sessions_final"]; batch != nil && len(batch.rows) != 0 {
+			t.Fatalf("epoch-scale restream reached billable facts: %#v", batch.rows)
+		}
+		batch := conn.batches["periscope.restream_sessions_anomalous"]
+		if batch == nil || len(batch.rows) != 1 || batch.rows[0][10] != "invalid_time_range" {
+			t.Fatalf("expected invalid_time_range quarantine, got %#v", batch)
+		}
+	})
+
+	t.Run("unknown platform is projected as custom", func(t *testing.T) {
+		conn := newFakeClickhouseConn()
+		handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+		tenantID := uuid.NewString()
+		streamID := uuid.NewString()
+		report := &ipcpb.PushTargetStatusReport{
+			TargetId: uuid.NewString(), TenantId: tenantID, StreamId: streamID, StreamName: "live+demo",
+			SourceGeneration: uuid.NewString(), Platform: strings.Repeat("unbounded-", 100),
+			State: ipcpb.RestreamState_RESTREAM_STATE_IDLE, Reason: ipcpb.RestreamReason_RESTREAM_REASON_COMPLETED,
+			StartedAtMs: 1_000, EndedAtMs: 2_000, DurationMs: 5_000,
+			BytesSent: 42, BytesObserved: true, SourceEventId: "restream-event-platform",
+		}
+		trigger := &ipcpb.MistTrigger{
+			NodeId: "edge-eu", TriggerType: "RESTREAM_STATUS_FINAL", RequestId: report.SourceEventId,
+			Timestamp: report.EndedAtMs, TenantId: &tenantID, StreamId: &streamID,
+			TriggerPayload: &ipcpb.MistTrigger_RestreamStatus{RestreamStatus: report},
+		}
+		payload, err := proto.Marshal(trigger)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := handler.HandleRawMistTriggerMessage(context.Background(), kafka.Message{
+			Value: payload, Headers: map[string]string{"tenant_id": tenantID, "source_event_id": report.SourceEventId},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		batch := conn.batches["periscope.restream_sessions_final"]
+		if batch == nil || len(batch.rows) != 1 || batch.rows[0][12] != "custom" || batch.rows[0][15] != uint64(1_000) {
+			t.Fatalf("platform/duration not bounded: %#v", batch)
+		}
+	})
+}
+
 func TestRawStreamEndProjectsFinalSessionWithPayloadStreamID(t *testing.T) {
 	conn := newFakeClickhouseConn()
 	handler := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
@@ -2608,6 +2787,7 @@ func mustMistTriggerData(t *testing.T, mt *ipcpb.MistTrigger) map[string]interfa
 
 type fakeClickhouseConn struct {
 	batches    map[string]*fakeBatch
+	prepares   map[string]int
 	duplicates map[string]map[uuid.UUID]bool
 	queries    []fakeQuery
 	execs      []fakeQuery
@@ -2623,6 +2803,7 @@ type fakeQuery struct {
 func newFakeClickhouseConn() *fakeClickhouseConn {
 	return &fakeClickhouseConn{
 		batches:    make(map[string]*fakeBatch),
+		prepares:   make(map[string]int),
 		duplicates: make(map[string]map[uuid.UUID]bool),
 		queryRows:  make(map[string][][]any),
 	}
@@ -2648,6 +2829,12 @@ func (f *fakeClickhouseConn) Select(ctx context.Context, dest any, query string,
 }
 func (f *fakeClickhouseConn) Query(ctx context.Context, query string, args ...any) (driver.Rows, error) {
 	table := tableFromQuery(query, "from")
+	if strings.Contains(query, "WITH changed_bounds AS") && strings.Contains(query, "FROM periscope.viewer_usage_5m") {
+		table = "periscope.viewer_usage_5m"
+	}
+	if strings.Contains(query, "WITH changed_bounds AS") && strings.Contains(query, "FROM periscope.delivery_usage_5m") {
+		table = "periscope.delivery_usage_5m"
+	}
 	f.queries = append(f.queries, fakeQuery{table: table, query: query, args: append([]any(nil), args...)})
 	if rows, ok := f.queryRows[table]; ok {
 		return &fakeRows{rows: rows}, nil
@@ -2669,6 +2856,7 @@ func (f *fakeClickhouseConn) QueryRow(ctx context.Context, query string, args ..
 }
 func (f *fakeClickhouseConn) PrepareBatch(ctx context.Context, query string, opts ...driver.PrepareBatchOption) (driver.Batch, error) {
 	table := tableFromQuery(query, "into")
+	f.prepares[table]++
 	batch := &fakeBatch{table: table}
 	f.batches[table] = batch
 	return batch, nil
@@ -2743,6 +2931,10 @@ func (f *fakeRows) Scan(dest ...any) error {
 			}
 		case *float64:
 			if v, ok := values[i].(float64); ok {
+				*d = v
+			}
+		case *bool:
+			if v, ok := values[i].(bool); ok {
 				*d = v
 			}
 		case *string:

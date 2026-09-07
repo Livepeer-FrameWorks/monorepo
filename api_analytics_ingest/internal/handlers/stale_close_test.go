@@ -4,10 +4,46 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/google/uuid"
 )
+
+func TestRestreamStatusPersistsSanitizedCurrentObservation(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	h := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	tenantID := uuid.NewString()
+	streamID := uuid.NewString()
+	generationID := uuid.NewString()
+	targetID := uuid.NewString()
+	eventTime := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+	err := h.HandleAnalyticsEvent(kafka.AnalyticsEvent{
+		EventID: uuid.NewString(), EventType: "restream_status", Timestamp: eventTime,
+		TenantID: tenantID, SourceClusterID: "cluster-a",
+		Data: map[string]interface{}{
+			"targetId": targetID, "streamId": streamID, "streamName": "live+demo",
+			"sourceGeneration": generationID, "targetRevision": float64(3), "mistPushId": float64(17),
+			"tenantId": tenantID, "nodeId": "node-a", "platform": " YouTube ",
+			"state": "RESTREAM_STATE_PUSHING", "startedAtMs": float64(eventTime.Add(-time.Minute).UnixMilli()),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := conn.batches["periscope.restream_sessions_current"]
+	if batch == nil || len(batch.rows) != 1 || !batch.sent {
+		t.Fatalf("current restream observation was not persisted: %#v", batch)
+	}
+	row := batch.rows[0]
+	if row[0] != uuid.MustParse(tenantID) || row[1] != "node-a" || row[2] != "cluster-a" || row[3] != uuid.MustParse(streamID) || row[5] != uuid.MustParse(generationID) || row[6] != uuid.MustParse(targetID) {
+		t.Fatalf("current restream identity mismatch: %#v", row)
+	}
+	if row[9] != "youtube" || row[10] != "pushing" || row[12] != eventTime.UnixMilli() {
+		t.Fatalf("current restream state mismatch: %#v", row)
+	}
+}
 
 // TestStaleCloseViewerSessionsEmitsAnomalyRow proves the core invariant: a stale
 // live viewer session (returned by the scan) is materialized into one
@@ -112,6 +148,37 @@ func TestStaleCloseStreamSessionsClampsViewerSeconds(t *testing.T) {
 	}
 	if len(conn.queries) != 1 || !strings.Contains(conn.queries[0].query, "FROM periscope.stream_sessions_anomalous") {
 		t.Fatalf("stream scan must exclude existing anomaly keys, queries=%#v", conn.queries)
+	}
+}
+
+func TestStaleCloseRestreamSessionsEmitsNonBillableAnomaly(t *testing.T) {
+	conn := newFakeClickhouseConn()
+	h := NewAnalyticsHandler(conn, logging.NewLogger(), nil)
+	tenantID := uuid.MustParse("11111111-1111-4111-8111-111111111111")
+	streamID := uuid.MustParse("22222222-2222-4222-8222-222222222222")
+	generationID := uuid.MustParse("33333333-3333-4333-8333-333333333333")
+	targetID := uuid.MustParse("44444444-4444-4444-8444-444444444444")
+	conn.addQueryRow("periscope.restream_sessions_current",
+		tenantID.String(), "node-1", "cluster-a", streamID.String(), "live+demo",
+		generationID.String(), targetID.String(), int64(7), "youtube",
+		int64(1_700_000_000_000), int64(1_700_000_300_000), "safe-payload")
+
+	if err := h.staleCloseRestreamSessions(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	batch := conn.batches["periscope.restream_sessions_anomalous"]
+	if batch == nil || len(batch.rows) != 1 || !batch.sent {
+		t.Fatalf("expected one restream anomaly, got %#v", batch)
+	}
+	row := batch.rows[0]
+	if row[0] != tenantID || row[1] != "node-1" || row[4] != streamID || row[5] != generationID || row[6] != targetID || row[7] != int64(7) {
+		t.Fatalf("restream anomaly identity mismatch: %#v", row)
+	}
+	if row[10] != "stale" || !strings.Contains(row[11].(string), "no RESTREAM_STATUS_FINAL within") {
+		t.Fatalf("restream anomaly is not marked stale: %#v", row)
+	}
+	if len(conn.queries) != 1 || !strings.Contains(conn.queries[0].query, "FROM periscope.restream_sessions_final") || !strings.Contains(conn.queries[0].query, "FROM periscope.restream_sessions_anomalous") {
+		t.Fatalf("stale scan must exclude final and prior anomalous identities: %#v", conn.queries)
 	}
 }
 

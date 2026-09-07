@@ -18,6 +18,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/restream"
 
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
@@ -41,6 +42,8 @@ type PeriscopeMetrics struct {
 	// invariant), and the audit is also written to
 	// periscope.projection_divergences. Labels: table, meter, field.
 	ProjectionDivergences *prometheus.CounterVec
+	LedgerLeader          *prometheus.GaugeVec
+	LedgerCursorLag       *prometheus.GaugeVec
 }
 
 // AnalyticsHandler handles analytics events
@@ -192,6 +195,12 @@ func (h *AnalyticsHandler) HandleAnalyticsEvent(event kafka.AnalyticsEvent) erro
 		err = h.skipEvent(event, "non_canonical_stream_event")
 	case "push_end":
 		err = h.skipEvent(event, "non_canonical_stream_event")
+	case "restream_status_final":
+		// The canonical final fact is projected from the raw durable envelope,
+		// preserving its stable source_event_id and edge receive time.
+		err = h.skipEvent(event, "canonical_raw_final_fact")
+	case "restream_status":
+		err = h.processRestreamStatus(ctx, event)
 	case "push_input_close":
 		// PUSH_INPUT_CLOSE is the source-presence "publisher gone" edge
 		// owned by Foghorn's AdmitAndReserve admission state machine.
@@ -1586,6 +1595,57 @@ func (h *AnalyticsHandler) requireStreamID(ctx context.Context, event kafka.Anal
 		h.metrics.AnalyticsEvents.WithLabelValues(event.EventType, "dropped").Inc()
 	}
 	return errDropped
+}
+
+// processRestreamStatus persists the latest sanitized runtime observation for
+// stale-close accounting. It is deliberately separate from the immutable
+// terminal fact: current rows are operational evidence and never bill usage.
+func (h *AnalyticsHandler) processRestreamStatus(ctx context.Context, event kafka.AnalyticsEvent) error {
+	var report ipcpb.PushTargetStatusReport
+	if err := h.parseProtobufData(event, &report); err != nil {
+		return fmt.Errorf("parse restream status: %w", err)
+	}
+	tenantID, tenantErr := uuid.Parse(event.TenantID)
+	streamID, streamErr := uuid.Parse(report.GetStreamId())
+	generationID, generationErr := uuid.Parse(report.GetSourceGeneration())
+	targetID, targetErr := uuid.Parse(report.GetTargetId())
+	if tenantErr != nil || tenantID == uuid.Nil || streamErr != nil || streamID == uuid.Nil ||
+		generationErr != nil || generationID == uuid.Nil || targetErr != nil || targetID == uuid.Nil ||
+		report.GetTargetRevision() <= 0 {
+		h.writeIngestError(ctx, event, report.GetStreamId(), "invalid_restream_runtime_identity", nil)
+		return errDropped
+	}
+	payloadRaw, err := proto.Marshal(&report)
+	if err != nil {
+		return fmt.Errorf("marshal restream status: %w", err)
+	}
+	platform, _ := restream.NormalizePlatform(report.GetPlatform())
+	observedAtMS := event.Timestamp.UnixMilli()
+	if observedAtMS <= 0 {
+		observedAtMS = time.Now().UnixMilli()
+	}
+	state := strings.TrimPrefix(strings.ToLower(report.GetState().String()), "restream_state_")
+	batch, err := periscopeingestdb.PrepareRestreamSessionCurrent(ctx, h.clickhouse)
+	if err != nil {
+		return fmt.Errorf("restream_sessions_current prepare: %w", err)
+	}
+	defer func() { _ = batch.Close() }()
+	if err := batch.Append(periscopeingestdb.RestreamSessionCurrentRow{
+		TenantID: tenantID, NodeID: report.GetNodeId(), ClusterID: event.SourceClusterID,
+		StreamID: streamID, StreamName: report.GetStreamName(), SourceGeneration: generationID,
+		TargetID: targetID, TargetRevision: report.GetTargetRevision(), MistPushID: report.GetMistPushId(),
+		Platform: platform, State: state, SourceStartedAtMS: report.GetStartedAtMs(),
+		LastObservedAtMS: observedAtMS, ProjectionVersionMS: time.Now().UnixMilli(), PayloadRaw: payloadRaw,
+	}); err != nil {
+		return fmt.Errorf("restream_sessions_current append: %w", err)
+	}
+	if err := batch.Send(); err != nil {
+		return fmt.Errorf("restream_sessions_current send: %w", err)
+	}
+	if h.metrics != nil && h.metrics.ClickHouseInserts != nil {
+		h.metrics.ClickHouseInserts.WithLabelValues("restream_sessions_current", "inserted").Inc()
+	}
+	return nil
 }
 
 // processPushRewrite handles PUSH_REWRITE events (publisher ingest start)

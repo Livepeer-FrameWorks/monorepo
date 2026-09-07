@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -13,10 +14,13 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/restream"
 
 	"github.com/google/uuid"
 	"google.golang.org/protobuf/proto"
 )
+
+const maxRestreamSessionDuration = 90 * 24 * time.Hour
 
 // Finalized-fact parser. Reads MistTrigger envelopes from the raw audit
 // topic (republished by Decklog for the seven final/accounting trigger
@@ -43,9 +47,11 @@ var triggerTypesWithFinalProjection = map[string]struct{}{
 	"STREAM_END":                          {},
 	"LIVEPEER_SEGMENT_COMPLETE":           {},
 	"PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE": {},
-	// PUSH_END, RECORDING_END, RECORDING_SEGMENT travel through the WAL
-	// (so they're durable for audit) but are not projected into
-	// final-fact tables because they don't drive a rated meter.
+	"RESTREAM_STATUS_FINAL":               {},
+	// RECORDING_END and RECORDING_SEGMENT travel through the WAL for audit but
+	// are not projected into final-fact tables because they do not drive a
+	// rated meter. Raw PUSH_END is deliberately non-durable and non-rated;
+	// only its fenced, sanitized RESTREAM_STATUS_FINAL projection is durable.
 }
 
 // projectFinalFact dispatches by trigger_type to the right *_final
@@ -75,6 +81,8 @@ func (h *AnalyticsHandler) projectFinalFact(ctx context.Context, trigger *ipcpb.
 		return h.projectStreamSessionFinal(ctx, trigger, sourceEventID, edgeReceivedAtMS, projectionVersionMS)
 	case "LIVEPEER_SEGMENT_COMPLETE", "PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE":
 		return h.projectProcessingSegmentFinal(ctx, trigger, sourceEventID, edgeReceivedAtMS, projectionVersionMS)
+	case "RESTREAM_STATUS_FINAL":
+		return h.projectRestreamSessionFinal(ctx, trigger, sourceEventID, edgeReceivedAtMS, projectionVersionMS)
 	}
 	return nil
 }
@@ -197,6 +205,158 @@ func (h *AnalyticsHandler) projectViewerSessionFinal(ctx context.Context, trigge
 	}
 	if h.metrics != nil && h.metrics.ClickHouseInserts != nil {
 		h.metrics.ClickHouseInserts.WithLabelValues("viewer_sessions_final", "inserted").Inc()
+	}
+	return nil
+}
+
+// projectRestreamSessionFinal records one destination delivery attempt. A
+// restream consumes the same delivery minutes and egress as playback, but it
+// stays separate from viewer_sessions_final so audience counts remain human.
+func (h *AnalyticsHandler) projectRestreamSessionFinal(ctx context.Context, trigger *ipcpb.MistTrigger, sourceEventID string, edgeReceivedAtMS, projectionVersionMS int64) error {
+	report := trigger.GetRestreamStatus()
+	if report == nil {
+		return nil
+	}
+	tenantID, tenantOK := parseTenantID(trigger.GetTenantId())
+	if !tenantOK {
+		h.logger.WithField("source_event_id", sourceEventID).Warn("Skipping restream projection: missing or invalid tenant_id")
+		return nil
+	}
+	clusterID := strings.TrimSpace(trigger.GetClusterId())
+	if clusterID == "" {
+		clusterID = strings.TrimSpace(trigger.GetOriginClusterId())
+	}
+
+	payloadRaw, err := proto.Marshal(trigger)
+	if err != nil {
+		return fmt.Errorf("marshal RESTREAM_STATUS_FINAL payload: %w", err)
+	}
+	streamID, streamErr := uuid.Parse(report.GetStreamId())
+	generationID, generationErr := uuid.Parse(report.GetSourceGeneration())
+	targetID, targetErr := uuid.Parse(report.GetTargetId())
+	identityValid := streamErr == nil && streamID != uuid.Nil && generationErr == nil && generationID != uuid.Nil && targetErr == nil && targetID != uuid.Nil
+	reportEventID := strings.TrimSpace(report.GetSourceEventId())
+	if reportEventID != "" && reportEventID != sourceEventID {
+		identityValid = false
+	}
+	platform, _ := restream.NormalizePlatform(report.GetPlatform())
+	if !identityValid {
+		return h.projectRestreamSessionAnomalous(ctx, periscopeingestdb.RestreamSessionAnomalousRow{
+			TenantID: tenantID, NodeID: trigger.GetNodeId(), SourceEventID: sourceEventID,
+			ClusterID: clusterID, StreamID: streamID, SourceGeneration: generationID,
+			TargetID: targetID, TargetRevision: report.GetTargetRevision(), Platform: platform,
+			ObservedAtMS: edgeReceivedAtMS, Reason: "invalid_identity", Notes: "restream final fact has an invalid fenced identity",
+			ProjectionVersionMS: projectionVersionMS, PayloadRaw: payloadRaw,
+		})
+	}
+	if report.GetState() != ipcpb.RestreamState_RESTREAM_STATE_IDLE && report.GetState() != ipcpb.RestreamState_RESTREAM_STATE_FAILED {
+		return h.projectRestreamSessionAnomalous(ctx, periscopeingestdb.RestreamSessionAnomalousRow{
+			TenantID: tenantID, NodeID: trigger.GetNodeId(), SourceEventID: sourceEventID,
+			ClusterID: clusterID, StreamID: streamID, SourceGeneration: generationID,
+			TargetID: targetID, TargetRevision: report.GetTargetRevision(), Platform: platform,
+			ObservedAtMS: edgeReceivedAtMS, Reason: "non_terminal_state", Notes: "restream final fact has a non-terminal runtime state",
+			ProjectionVersionMS: projectionVersionMS, PayloadRaw: payloadRaw,
+		})
+	}
+
+	endedAtMS := report.GetEndedAtMs()
+	if endedAtMS <= 0 {
+		endedAtMS = edgeReceivedAtMS
+	}
+	durationMS := report.GetDurationMs()
+	if durationMS < 0 {
+		durationMS = 0
+	}
+	startedAtMS := report.GetStartedAtMs()
+	if startedAtMS <= 0 && durationMS > 0 {
+		startedAtMS = endedAtMS - durationMS
+	}
+	if startedAtMS <= 0 || endedAtMS <= startedAtMS || endedAtMS-startedAtMS > maxRestreamSessionDuration.Milliseconds() {
+		return h.projectRestreamSessionAnomalous(ctx, periscopeingestdb.RestreamSessionAnomalousRow{
+			TenantID: tenantID, NodeID: trigger.GetNodeId(), SourceEventID: sourceEventID,
+			ClusterID: clusterID, StreamID: streamID, SourceGeneration: generationID,
+			TargetID: targetID, TargetRevision: report.GetTargetRevision(), Platform: platform,
+			ObservedAtMS: edgeReceivedAtMS, Reason: "invalid_time_range", Notes: "restream session has an invalid or unbounded time range",
+			ProjectionVersionMS: projectionVersionMS, PayloadRaw: payloadRaw,
+		})
+	}
+	if durationMS == 0 && endedAtMS > startedAtMS {
+		durationMS = endedAtMS - startedAtMS
+	}
+	if spanMS := endedAtMS - startedAtMS; durationMS > spanMS {
+		durationMS = spanMS
+	}
+	bytesSent := report.GetBytesSent()
+	if !report.GetBytesObserved() {
+		if anomalyErr := h.projectRestreamSessionAnomalous(ctx, periscopeingestdb.RestreamSessionAnomalousRow{
+			TenantID: tenantID, NodeID: trigger.GetNodeId(), SourceEventID: sourceEventID,
+			ClusterID: clusterID, StreamID: streamID, SourceGeneration: generationID,
+			TargetID: targetID, TargetRevision: report.GetTargetRevision(), Platform: platform,
+			ObservedAtMS: edgeReceivedAtMS, Reason: "bytes_unobserved", Notes: "Mist did not supply a trustworthy byte counter; byte usage was not billed",
+			ProjectionVersionMS: projectionVersionMS, PayloadRaw: payloadRaw,
+		}); anomalyErr != nil {
+			return anomalyErr
+		}
+		bytesSent = 0
+	}
+
+	row := restreamSessionFinalRow{
+		tenantID: tenantID, nodeID: trigger.GetNodeId(), sourceEventID: sourceEventID,
+		clusterID: clusterID, streamID: streamID, targetID: targetID,
+		platform: platform, durationMS: uint64(durationMS), bytesSent: bytesSent,
+	}
+	if divergenceErr := h.checkRestreamSessionDivergence(ctx, row); divergenceErr != nil {
+		return fmt.Errorf("restream_sessions_final divergence guardrail: %w", divergenceErr)
+	}
+
+	batch, err := periscopeingestdb.PrepareRestreamSessionFinal(ctx, h.clickhouse)
+	if err != nil {
+		return fmt.Errorf("restream_sessions_final prepare: %w", err)
+	}
+	defer func() { _ = batch.Close() }()
+	state := strings.TrimPrefix(strings.ToLower(report.GetState().String()), "restream_state_")
+	reason := strings.TrimPrefix(strings.ToLower(report.GetReason().String()), "restream_reason_")
+	if err := batch.Append(periscopeingestdb.RestreamSessionFinalRow{
+		TenantID: tenantID, NodeID: trigger.GetNodeId(), SourceEventID: sourceEventID,
+		ClusterID: clusterID, OriginClusterID: trigger.GetOriginClusterId(), ControlCellID: trigger.GetControlCellId(),
+		StreamID: streamID, StreamName: report.GetStreamName(), SourceGeneration: generationID,
+		TargetID: targetID, TargetRevision: report.GetTargetRevision(), MistPushID: report.GetMistPushId(),
+		Platform: platform, State: state, Reason: reason,
+		DurationMS: uint64(durationMS), BytesSent: bytesSent, SourceStartedAtMS: startedAtMS,
+		SourceEndedAtMS: endedAtMS, EdgeReceivedAtMS: edgeReceivedAtMS, ProjectionVersionMS: projectionVersionMS,
+		PayloadRaw: payloadRaw,
+	}); err != nil {
+		return fmt.Errorf("restream_sessions_final append: %w", err)
+	}
+	if err := batch.Send(); err != nil {
+		return fmt.Errorf("restream_sessions_final send: %w", err)
+	}
+	if h.metrics != nil && h.metrics.ClickHouseInserts != nil {
+		h.metrics.ClickHouseInserts.WithLabelValues("restream_sessions_final", "inserted").Inc()
+	}
+	return nil
+}
+
+func (h *AnalyticsHandler) projectRestreamSessionAnomalous(ctx context.Context, row periscopeingestdb.RestreamSessionAnomalousRow) error {
+	batch, err := periscopeingestdb.PrepareRestreamSessionAnomalous(ctx, h.clickhouse)
+	if err != nil {
+		return fmt.Errorf("restream_sessions_anomalous prepare: %w", err)
+	}
+	defer func() { _ = batch.Close() }()
+	if err := batch.Append(periscopeingestdb.RestreamSessionAnomalousRow{
+		TenantID: row.TenantID, NodeID: row.NodeID, SourceEventID: row.SourceEventID,
+		ClusterID: row.ClusterID, StreamID: row.StreamID, SourceGeneration: row.SourceGeneration,
+		TargetID: row.TargetID, TargetRevision: row.TargetRevision, Platform: row.Platform,
+		ObservedAtMS: row.ObservedAtMS, Reason: row.Reason, Notes: row.Notes,
+		ProjectionVersionMS: row.ProjectionVersionMS, PayloadRaw: row.PayloadRaw,
+	}); err != nil {
+		return fmt.Errorf("restream_sessions_anomalous append: %w", err)
+	}
+	if err := batch.Send(); err != nil {
+		return fmt.Errorf("restream_sessions_anomalous send: %w", err)
+	}
+	if h.metrics != nil && h.metrics.ClickHouseInserts != nil {
+		h.metrics.ClickHouseInserts.WithLabelValues("restream_sessions_anomalous", row.Reason).Inc()
 	}
 	return nil
 }
@@ -558,6 +718,91 @@ type streamSessionFinalRow struct {
 	payloadRaw          []byte
 }
 
+type restreamSessionFinalRow struct {
+	tenantID      uuid.UUID
+	nodeID        string
+	sourceEventID string
+	clusterID     string
+	streamID      uuid.UUID
+	targetID      uuid.UUID
+	platform      string
+	durationMS    uint64
+	bytesSent     uint64
+}
+
+func (h *AnalyticsHandler) checkRestreamSessionDivergence(ctx context.Context, row restreamSessionFinalRow) error {
+	rows, err := h.clickhouse.Query(ctx, `
+		SELECT argMax(duration_ms, projection_version_ms),
+		       argMax(bytes_sent, projection_version_ms),
+		       argMax(cluster_id, projection_version_ms),
+		       max(projection_version_ms)
+		FROM periscope.restream_sessions_final
+		WHERE tenant_id = ? AND node_id = ? AND source_event_id = ?
+		GROUP BY tenant_id, node_id, source_event_id`, row.tenantID, row.nodeID, row.sourceEventID)
+	if err != nil {
+		return fmt.Errorf("lookup prior restream projection: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		return rows.Err()
+	}
+	var priorDuration, priorBytes uint64
+	var priorCluster string
+	var priorProjectionVersionMS int64
+	if scanErr := rows.Scan(&priorDuration, &priorBytes, &priorCluster, &priorProjectionVersionMS); scanErr != nil {
+		return fmt.Errorf("scan prior restream projection: %w", scanErr)
+	}
+	type divergence struct {
+		field string
+		meter string
+		prior any
+		newer any
+	}
+	var divergences []divergence
+	if priorCluster != row.clusterID {
+		divergences = append(divergences, divergence{
+			"cluster_id", "delivered_minutes",
+			map[string]any{"cluster_id": priorCluster, "duration_ms": priorDuration, "bytes_sent": priorBytes},
+			map[string]any{"cluster_id": row.clusterID, "duration_ms": row.durationMS, "bytes_sent": row.bytesSent},
+		})
+	} else {
+		if absDeltaUint64(priorDuration, row.durationMS) >= 1000 {
+			divergences = append(divergences, divergence{"duration_ms", "delivered_minutes", priorDuration, row.durationMS})
+		}
+		if absDeltaUint64(priorBytes, row.bytesSent) >= 1024 {
+			divergences = append(divergences, divergence{"bytes_sent", "egress_gb", priorBytes, row.bytesSent})
+		}
+	}
+	if len(divergences) == 0 {
+		return nil
+	}
+	naturalKeyJSON, err := json.Marshal(map[string]string{
+		"tenant_id": row.tenantID.String(), "node_id": row.nodeID, "source_event_id": row.sourceEventID,
+		"stream_id": row.streamID.String(), "target_id": row.targetID.String(), "cluster_id": row.clusterID,
+		"platform": row.platform,
+	})
+	if err != nil {
+		return err
+	}
+	for _, d := range divergences {
+		priorJSON, marshalErr := json.Marshal(d.prior)
+		if marshalErr != nil {
+			return fmt.Errorf("marshal prior restream divergence: %w", marshalErr)
+		}
+		newJSON, marshalErr := json.Marshal(d.newer)
+		if marshalErr != nil {
+			return fmt.Errorf("marshal new restream divergence: %w", marshalErr)
+		}
+		if recordErr := h.recordProjectionDivergence(ctx, time.Now().UnixMilli(), priorProjectionVersionMS, "restream_sessions_final", d.meter, d.field, string(naturalKeyJSON), string(priorJSON), string(newJSON), row.sourceEventID); recordErr != nil {
+			return recordErr
+		}
+		if h.metrics != nil && h.metrics.ProjectionDivergences != nil {
+			h.metrics.ProjectionDivergences.WithLabelValues("restream_sessions_final", d.meter, d.field).Inc()
+		}
+	}
+	return nil
+}
+
 // checkViewerSessionDivergence looks up the prior materialized row for
 // this natural key and, if found, compares rated fields to the new
 // projection. Material divergence must be durably recorded before the
@@ -569,7 +814,8 @@ func (h *AnalyticsHandler) checkViewerSessionDivergence(ctx context.Context, row
 			argMax(duration_seconds,    projection_version_ms),
 			argMax(uploaded_bytes,      projection_version_ms),
 			argMax(downloaded_bytes,    projection_version_ms),
-			argMax(cluster_id,          projection_version_ms)
+			argMax(cluster_id,          projection_version_ms),
+			max(projection_version_ms)
 		FROM periscope.viewer_sessions_final
 		WHERE tenant_id = ? AND node_id = ? AND session_id = ?
 		GROUP BY tenant_id, node_id, session_id`,
@@ -588,7 +834,8 @@ func (h *AnalyticsHandler) checkViewerSessionDivergence(ctx context.Context, row
 	var priorDuration uint32
 	var priorUp, priorDown uint64
 	var priorCluster string
-	if scanErr := rows.Scan(&priorDuration, &priorUp, &priorDown, &priorCluster); scanErr != nil {
+	var priorProjectionVersionMS int64
+	if scanErr := rows.Scan(&priorDuration, &priorUp, &priorDown, &priorCluster, &priorProjectionVersionMS); scanErr != nil {
 		return fmt.Errorf("scan prior viewer session projection: %w", scanErr)
 	}
 
@@ -654,7 +901,7 @@ func (h *AnalyticsHandler) checkViewerSessionDivergence(ctx context.Context, row
 		if err != nil {
 			return fmt.Errorf("marshal viewer session divergence new value: %w", err)
 		}
-		if err := h.recordProjectionDivergence(ctx, observedAtMS, "viewer_sessions_final", "delivered_minutes", d.field, string(naturalKeyJSON), string(priorJSON), string(newJSON), row.sourceEventID); err != nil {
+		if err := h.recordProjectionDivergence(ctx, observedAtMS, priorProjectionVersionMS, "viewer_sessions_final", "delivered_minutes", d.field, string(naturalKeyJSON), string(priorJSON), string(newJSON), row.sourceEventID); err != nil {
 			return fmt.Errorf("record viewer session divergence for field %s: %w", d.field, err)
 		}
 		if h.metrics != nil && h.metrics.ProjectionDivergences != nil {
@@ -669,7 +916,8 @@ func (h *AnalyticsHandler) checkStreamSessionDivergence(ctx context.Context, row
 		SELECT
 			argMax(cluster_id,           projection_version_ms),
 			argMax(source_started_at_ms, projection_version_ms),
-			argMax(source_ended_at_ms,   projection_version_ms)
+			argMax(source_ended_at_ms,   projection_version_ms),
+			max(projection_version_ms)
 		FROM periscope.stream_sessions_final
 		WHERE tenant_id = ? AND node_id = ? AND stream_id = ? AND source_event_id = ?
 		GROUP BY tenant_id, node_id, stream_id, source_event_id`,
@@ -688,7 +936,8 @@ func (h *AnalyticsHandler) checkStreamSessionDivergence(ctx context.Context, row
 
 	var priorCluster string
 	var priorStartedAtMS, priorEndedAtMS int64
-	if scanErr := rows.Scan(&priorCluster, &priorStartedAtMS, &priorEndedAtMS); scanErr != nil {
+	var priorProjectionVersionMS int64
+	if scanErr := rows.Scan(&priorCluster, &priorStartedAtMS, &priorEndedAtMS, &priorProjectionVersionMS); scanErr != nil {
 		return fmt.Errorf("scan prior stream session projection: %w", scanErr)
 	}
 
@@ -725,7 +974,7 @@ func (h *AnalyticsHandler) checkStreamSessionDivergence(ctx context.Context, row
 	if err != nil {
 		return fmt.Errorf("marshal stream session divergence new value: %w", err)
 	}
-	if err := h.recordProjectionDivergence(ctx, time.Now().UnixMilli(), "stream_sessions_final", "stream_runtime_seconds", field, string(naturalKeyJSON), string(priorJSON), string(newJSON), row.sourceEventID); err != nil {
+	if err := h.recordProjectionDivergence(ctx, time.Now().UnixMilli(), priorProjectionVersionMS, "stream_sessions_final", "stream_runtime_seconds", field, string(naturalKeyJSON), string(priorJSON), string(newJSON), row.sourceEventID); err != nil {
 		return fmt.Errorf("record stream session divergence for field %s: %w", field, err)
 	}
 	if h.metrics != nil && h.metrics.ProjectionDivergences != nil {
@@ -771,7 +1020,8 @@ func (h *AnalyticsHandler) checkProcessingSegmentDivergence(ctx context.Context,
 			argMax(output_codec,   projection_version_ms),
 			argMax(track_type,     projection_version_ms),
 			argMax(media_seconds, projection_version_ms),
-			argMax(cluster_id,    projection_version_ms)
+			argMax(cluster_id,    projection_version_ms),
+			max(projection_version_ms)
 		FROM periscope.processing_segments_final
 		WHERE tenant_id = ? AND node_id = ? AND stream_id = ?
 		  AND source_event_id = ?
@@ -791,7 +1041,8 @@ func (h *AnalyticsHandler) checkProcessingSegmentDivergence(ctx context.Context,
 	var priorProcessType, priorOutputCodec, priorTrackType string
 	var priorMediaSeconds float64
 	var priorCluster string
-	if scanErr := rows.Scan(&priorProcessType, &priorOutputCodec, &priorTrackType, &priorMediaSeconds, &priorCluster); scanErr != nil {
+	var priorProjectionVersionMS int64
+	if scanErr := rows.Scan(&priorProcessType, &priorOutputCodec, &priorTrackType, &priorMediaSeconds, &priorCluster, &priorProjectionVersionMS); scanErr != nil {
 		return fmt.Errorf("scan prior processing segment projection: %w", scanErr)
 	}
 
@@ -818,7 +1069,7 @@ func (h *AnalyticsHandler) checkProcessingSegmentDivergence(ctx context.Context,
 				"source_event_id": row.sourceEventID,
 			},
 		})
-		return h.recordProcessingSegmentDivergences(ctx, row, found)
+		return h.recordProcessingSegmentDivergences(ctx, row, priorProjectionVersionMS, found)
 	}
 	clusterChanged := priorCluster != row.clusterID
 	if clusterChanged {
@@ -845,10 +1096,10 @@ func (h *AnalyticsHandler) checkProcessingSegmentDivergence(ctx context.Context,
 	if len(found) == 0 {
 		return nil
 	}
-	return h.recordProcessingSegmentDivergences(ctx, row, found)
+	return h.recordProcessingSegmentDivergences(ctx, row, priorProjectionVersionMS, found)
 }
 
-func (h *AnalyticsHandler) recordProcessingSegmentDivergences(ctx context.Context, row processingSegmentFinalRow, found []processingDivergence) error {
+func (h *AnalyticsHandler) recordProcessingSegmentDivergences(ctx context.Context, row processingSegmentFinalRow, priorProjectionVersionMS int64, found []processingDivergence) error {
 	naturalKey := map[string]string{
 		"tenant_id":       row.tenantID.String(),
 		"node_id":         row.nodeID,
@@ -873,7 +1124,7 @@ func (h *AnalyticsHandler) recordProcessingSegmentDivergences(ctx context.Contex
 		if mErr != nil {
 			return fmt.Errorf("marshal processing segment divergence new value: %w", mErr)
 		}
-		if rErr := h.recordProjectionDivergence(ctx, observedAtMS, "processing_segments_final", "media_seconds", d.field, string(naturalKeyJSON), string(priorJSON), string(newJSON), row.sourceEventID); rErr != nil {
+		if rErr := h.recordProjectionDivergence(ctx, observedAtMS, priorProjectionVersionMS, "processing_segments_final", "media_seconds", d.field, string(naturalKeyJSON), string(priorJSON), string(newJSON), row.sourceEventID); rErr != nil {
 			return fmt.Errorf("record processing segment divergence for field %s: %w", d.field, rErr)
 		}
 		if h.metrics != nil && h.metrics.ProjectionDivergences != nil {
@@ -883,7 +1134,17 @@ func (h *AnalyticsHandler) recordProcessingSegmentDivergences(ctx context.Contex
 	return nil
 }
 
-func (h *AnalyticsHandler) recordProjectionDivergence(ctx context.Context, observedAtMS int64, tableName, meter, field, naturalKeyJSON, priorJSON, newJSON, sourceEventID string) error {
+func (h *AnalyticsHandler) recordProjectionDivergence(ctx context.Context, observedAtMS, priorProjectionVersionMS int64, tableName, meter, field, naturalKeyJSON, priorJSON, newJSON, sourceEventID string) error {
+	occurrenceID := ""
+	keyWithOccurrence := naturalKeyJSON
+	if tableName == "restream_sessions_final" {
+		occurrenceID = projectionDivergenceOccurrenceID(tableName, field, naturalKeyJSON, newJSON, sourceEventID, priorProjectionVersionMS)
+		var err error
+		keyWithOccurrence, err = projectionDivergenceNaturalKey(naturalKeyJSON, occurrenceID)
+		if err != nil {
+			return fmt.Errorf("encode projection divergence occurrence key: %w", err)
+		}
+	}
 	batch, err := periscopeingestdb.PrepareProjectionDivergence(ctx, h.clickhouse)
 	if err != nil {
 		return err
@@ -891,11 +1152,27 @@ func (h *AnalyticsHandler) recordProjectionDivergence(ctx context.Context, obser
 	defer func() { _ = batch.Close() }()
 	if err := batch.Append(periscopeingestdb.ProjectionDivergenceRow{
 		ObservedAtMS: observedAtMS, TableName: tableName, Meter: meter, Field: field,
-		NaturalKeyJSON: naturalKeyJSON, PriorValueJSON: priorJSON, NewValueJSON: newJSON, SourceEventID: sourceEventID,
+		NaturalKeyJSON: keyWithOccurrence, PriorValueJSON: priorJSON, NewValueJSON: newJSON, SourceEventID: sourceEventID,
+		OccurrenceID: occurrenceID,
 	}); err != nil {
 		return err
 	}
 	return batch.Send()
+}
+
+func projectionDivergenceNaturalKey(naturalKeyJSON, occurrenceID string) (string, error) {
+	var key map[string]any
+	if err := json.Unmarshal([]byte(naturalKeyJSON), &key); err != nil {
+		return "", err
+	}
+	key["_correction_occurrence"] = occurrenceID
+	encoded, err := json.Marshal(key)
+	return string(encoded), err
+}
+
+func projectionDivergenceOccurrenceID(tableName, field, naturalKeyJSON, newJSON, sourceEventID string, priorProjectionVersionMS int64) string {
+	material := fmt.Sprintf("%s\x00%s\x00%s\x00%s\x00%s\x00%d", tableName, field, naturalKeyJSON, newJSON, sourceEventID, priorProjectionVersionMS)
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(material)))
 }
 
 // --- helpers ---

@@ -4,6 +4,7 @@ go 1.27.0
 
 require (
 	github.com/ClickHouse/clickhouse-go/v2 v2.45.0
+	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/Livepeer-FrameWorks/monorepo/pkg v0.0.0
 	github.com/google/uuid v1.6.0
 	github.com/prometheus/client_golang v1.23.2
