@@ -16,10 +16,12 @@ func TestInfraDependenciesOnlyIncludeDirectInfraClients(t *testing.T) {
 func TestPeriscopeInfraDependenciesMatchEntrypoints(t *testing.T) {
 	tests := map[string][]InfraDependency{
 		"periscope-ingest": {
+			{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "distributed ledger-worker leases"},
 			{Kind: InfraClickHouse, Provider: InfraProviderPrimary, Purpose: "analytics writes"},
 			{Kind: InfraKafka, Provider: InfraProviderAggregator, Purpose: "analytics and service event ingestion"},
 		},
 		"periscope-query": {
+			{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "delegated-token replay fencing"},
 			{Kind: InfraClickHouse, Provider: InfraProviderPrimary, Purpose: "analytics reads"},
 		},
 		"periscope-metering": {

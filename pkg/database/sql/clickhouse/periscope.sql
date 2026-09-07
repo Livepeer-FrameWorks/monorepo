@@ -2006,6 +2006,9 @@ PARTITION BY toYYYYMM(toDateTime(projection_version_ms / 1000))
 ORDER BY (tenant_id, projection_version_ms, node_id, session_id)
 TTL toDateTime(projection_version_ms / 1000) + INTERVAL 730 DAY;
 
+ALTER TABLE viewer_sessions_final
+    ADD INDEX IF NOT EXISTS viewer_final_source_end_minmax source_ended_at_ms TYPE minmax GRANULARITY 1;
+
 CREATE VIEW IF NOT EXISTS viewer_sessions_final_v AS
 SELECT
     tenant_id, node_id, session_id,
@@ -2039,6 +2042,124 @@ SELECT
     argMax(host_times,            projection_version_ms) AS host_times
 FROM viewer_sessions_final
 GROUP BY tenant_id, node_id, session_id;
+
+-- Restream delivery is viewer-like delivery capacity and usage, but it is not
+-- an audience session. Keeping it in a separate final-fact table prevents
+-- dashboards from counting destinations as people while allowing the same
+-- delivered-minutes and egress meters to rate both delivery kinds.
+CREATE TABLE IF NOT EXISTS restream_sessions_current (
+    tenant_id UUID,
+    node_id LowCardinality(String),
+    cluster_id LowCardinality(String) DEFAULT '',
+    stream_id UUID,
+    stream_name String DEFAULT '',
+    source_generation UUID,
+    target_id UUID,
+    target_revision Int64,
+    mist_push_id Int64 DEFAULT 0,
+    platform LowCardinality(String) DEFAULT '',
+    state LowCardinality(String),
+    source_started_at_ms Int64 DEFAULT 0,
+    last_observed_at_ms Int64,
+    projection_version_ms Int64,
+    payload_raw String CODEC(ZSTD(3))
+) ENGINE = ReplicatedReplacingMergeTree(projection_version_ms)
+PARTITION BY toYYYYMM(toDateTime(projection_version_ms / 1000))
+ORDER BY (tenant_id, node_id, source_generation, target_revision, target_id)
+TTL toDateTime(projection_version_ms / 1000) + INTERVAL 90 DAY;
+
+CREATE TABLE IF NOT EXISTS restream_sessions_final (
+    tenant_id UUID,
+    node_id LowCardinality(String),
+    source_event_id String,
+
+    cluster_id LowCardinality(String) DEFAULT '',
+    origin_cluster_id LowCardinality(String) DEFAULT '',
+    control_cell_id LowCardinality(String) DEFAULT '',
+    stream_id UUID,
+    stream_name String DEFAULT '',
+    source_generation UUID,
+    target_id UUID,
+    target_revision Int64,
+    mist_push_id Int64 DEFAULT 0,
+    platform LowCardinality(String) DEFAULT '',
+    state LowCardinality(String) DEFAULT '',
+    reason LowCardinality(String) DEFAULT '',
+
+    duration_ms UInt64 DEFAULT 0,
+    bytes_sent UInt64 DEFAULT 0,
+    source_started_at_ms Int64,
+    source_ended_at_ms Int64,
+    edge_received_at_ms Int64,
+    projection_version_ms Int64,
+    payload_raw String CODEC(ZSTD(3))
+) ENGINE = ReplicatedMergeTree()
+PARTITION BY toYYYYMM(toDateTime(projection_version_ms / 1000))
+ORDER BY (tenant_id, projection_version_ms, node_id, source_event_id)
+TTL toDateTime(projection_version_ms / 1000) + INTERVAL 730 DAY;
+
+ALTER TABLE restream_sessions_final
+    ADD INDEX IF NOT EXISTS restream_final_source_end_minmax source_ended_at_ms TYPE minmax GRANULARITY 1;
+
+CREATE VIEW IF NOT EXISTS restream_sessions_final_v AS
+SELECT
+    tenant_id, node_id, source_event_id,
+    min(projection_version_ms) AS billable_at_ms,
+    argMax(cluster_id, projection_version_ms) AS cluster_id,
+    argMax(stream_id, projection_version_ms) AS stream_id,
+    argMax(stream_name, projection_version_ms) AS stream_name,
+    argMax(source_generation, projection_version_ms) AS source_generation,
+    argMax(target_id, projection_version_ms) AS target_id,
+    argMax(target_revision, projection_version_ms) AS target_revision,
+    argMax(mist_push_id, projection_version_ms) AS mist_push_id,
+    argMax(platform, projection_version_ms) AS platform,
+    argMax(state, projection_version_ms) AS state,
+    argMax(reason, projection_version_ms) AS reason,
+    argMax(duration_ms, projection_version_ms) AS duration_ms,
+    argMax(bytes_sent, projection_version_ms) AS bytes_sent,
+    argMax(source_started_at_ms, projection_version_ms) AS source_started_at_ms,
+    argMax(source_ended_at_ms, projection_version_ms) AS source_ended_at_ms,
+    argMax(edge_received_at_ms, projection_version_ms) AS edge_received_at_ms,
+    max(projection_version_ms) AS latest_projection_version_ms
+FROM restream_sessions_final
+GROUP BY tenant_id, node_id, source_event_id;
+
+CREATE TABLE IF NOT EXISTS restream_sessions_anomalous (
+    tenant_id UUID,
+    node_id LowCardinality(String),
+    source_event_id String,
+    cluster_id LowCardinality(String) DEFAULT '',
+    stream_id UUID DEFAULT toUUIDOrZero(''),
+    source_generation UUID DEFAULT toUUIDOrZero(''),
+    target_id UUID DEFAULT toUUIDOrZero(''),
+    target_revision Int64 DEFAULT 0,
+    platform LowCardinality(String) DEFAULT '',
+    observed_at_ms Int64,
+    reason LowCardinality(String),
+    notes String DEFAULT '',
+    projection_version_ms Int64,
+    payload_raw String CODEC(ZSTD(3))
+) ENGINE = ReplicatedMergeTree()
+PARTITION BY toYYYYMM(toDateTime(projection_version_ms / 1000))
+ORDER BY (tenant_id, projection_version_ms, node_id, source_event_id)
+TTL toDateTime(projection_version_ms / 1000) + INTERVAL 365 DAY;
+
+CREATE VIEW IF NOT EXISTS restream_sessions_anomalous_v AS
+SELECT
+    tenant_id, node_id, source_event_id,
+    argMax(cluster_id, projection_version_ms) AS cluster_id,
+    argMax(stream_id, projection_version_ms) AS stream_id,
+    argMax(source_generation, projection_version_ms) AS source_generation,
+    argMax(target_id, projection_version_ms) AS target_id,
+    argMax(target_revision, projection_version_ms) AS target_revision,
+    argMax(platform, projection_version_ms) AS platform,
+    argMax(observed_at_ms, projection_version_ms) AS observed_at_ms,
+    argMax(reason, projection_version_ms) AS reason,
+    argMax(notes, projection_version_ms) AS notes,
+    max(projection_version_ms) AS latest_projection_version_ms,
+    argMax(payload_raw, projection_version_ms) AS payload_raw
+FROM restream_sessions_anomalous
+GROUP BY tenant_id, node_id, source_event_id;
 
 -- stream_sessions_final: one logical row per Mist STREAM_END accepted by
 -- Periscope. Source proto: StreamEndTrigger.
@@ -2347,6 +2468,16 @@ CREATE TABLE IF NOT EXISTS ledger_rebuild_cursors (
 ORDER BY ledger_name
 TTL toDateTime(updated_at_ms / 1000) + INTERVAL 365 DAY;
 
+-- v2 versions replacement by the monotonic watermark itself. A delayed writer
+-- can no longer publish an older checkpoint merely because it committed later.
+CREATE TABLE IF NOT EXISTS ledger_rebuild_cursors_v2 (
+    ledger_name LowCardinality(String),
+    last_processed_projection_ms Int64,
+    updated_at_ms Int64
+) ENGINE = ReplicatedReplacingMergeTree(last_processed_projection_ms)
+ORDER BY ledger_name
+TTL toDateTime(updated_at_ms / 1000) + INTERVAL 365 DAY;
+
 CREATE TABLE IF NOT EXISTS viewer_usage_5m (
     -- Natural key
     window_start DateTime,             -- toStartOfFiveMinute boundary
@@ -2371,6 +2502,11 @@ PARTITION BY toYYYYMM(toDateTime(projection_version_ms / 1000))
 ORDER BY (tenant_id, projection_version_ms, cluster_id, stream_id, node_id, session_id, window_start)
 TTL toDateTime(projection_version_ms / 1000) + INTERVAL 90 DAY;
 
+ALTER TABLE viewer_usage_5m
+    ADD INDEX IF NOT EXISTS viewer_usage_session_bf session_id TYPE bloom_filter(0.01) GRANULARITY 1;
+ALTER TABLE viewer_usage_5m
+    ADD INDEX IF NOT EXISTS viewer_usage_window_minmax window_start TYPE minmax GRANULARITY 1;
+
 CREATE VIEW IF NOT EXISTS viewer_usage_5m_v AS
 SELECT
     window_start, tenant_id, cluster_id, stream_id, node_id, session_id,
@@ -2389,6 +2525,64 @@ FROM (
     GROUP BY window_start, tenant_id, cluster_id, stream_id, node_id, session_id
 )
 WHERE seconds_observed > 0 OR up_bytes_observed > 0 OR down_bytes_observed > 0;
+
+CREATE TABLE IF NOT EXISTS delivery_usage_5m (
+    window_start DateTime,
+    tenant_id UUID,
+    cluster_id LowCardinality(String) DEFAULT '',
+    stream_id UUID DEFAULT toUUIDOrZero(''),
+    node_id LowCardinality(String),
+    delivery_kind LowCardinality(String),
+    delivery_id String,
+    platform LowCardinality(String) DEFAULT '',
+    seconds_observed UInt32 DEFAULT 0,
+    up_bytes_observed UInt64 DEFAULT 0,
+    down_bytes_observed UInt64 DEFAULT 0,
+    source_event_id String,
+    projection_version_ms Int64,
+    INDEX delivery_usage_id_bf delivery_id TYPE bloom_filter(0.01) GRANULARITY 1,
+    INDEX delivery_usage_window_minmax window_start TYPE minmax GRANULARITY 1
+) ENGINE = ReplicatedMergeTree()
+PARTITION BY toYYYYMM(toDateTime(projection_version_ms / 1000))
+ORDER BY (tenant_id, projection_version_ms, delivery_kind, delivery_id, window_start, cluster_id, stream_id, node_id)
+TTL toDateTime(projection_version_ms / 1000) + INTERVAL 90 DAY;
+
+CREATE VIEW IF NOT EXISTS delivery_usage_5m_v AS
+SELECT
+    window_start, tenant_id, cluster_id, stream_id, node_id, delivery_kind,
+    delivery_id, platform,
+    min(projection_version_ms) AS billable_at_ms,
+    argMax(seconds_observed, projection_version_ms) AS seconds_observed,
+    argMax(up_bytes_observed, projection_version_ms) AS up_bytes_observed,
+    argMax(down_bytes_observed, projection_version_ms) AS down_bytes_observed,
+    argMax(source_event_id, projection_version_ms) AS source_event_id,
+    max(projection_version_ms) AS latest_projection_version_ms
+FROM delivery_usage_5m
+GROUP BY window_start, tenant_id, cluster_id, stream_id, node_id, delivery_kind, delivery_id, platform
+HAVING seconds_observed > 0 OR up_bytes_observed > 0 OR down_bytes_observed > 0;
+
+-- Upgrade-only discovery keys. The contract migration seeds retained
+-- identities and refreshes every dependent view. A short TTL removes the
+-- keys after in-flight scheduled refreshes have safely observed them.
+CREATE TABLE IF NOT EXISTS rollup_backfill_markers (
+    scope LowCardinality(String),
+    bucket DateTime,
+    tenant_id UUID,
+    cluster_id LowCardinality(String) DEFAULT '',
+    stream_id UUID DEFAULT toUUIDOrZero(''),
+    seed_version_ms DateTime64(3)
+) ENGINE = ReplicatedReplacingMergeTree(seed_version_ms)
+ORDER BY (scope, tenant_id, bucket, cluster_id, stream_id)
+TTL seed_version_ms + INTERVAL 2 DAY;
+
+-- One receipt per rollup scope proves that the contract-local seed ran
+-- recently and completely before contract refreshes the views.
+CREATE TABLE IF NOT EXISTS rollup_backfill_seed_receipts (
+    scope LowCardinality(String),
+    seed_version_ms DateTime64(3)
+) ENGINE = ReplicatedReplacingMergeTree(seed_version_ms)
+ORDER BY scope
+TTL seed_version_ms + INTERVAL 2 DAY;
 
 CREATE TABLE IF NOT EXISTS stream_runtime_5m (
     window_start DateTime,
@@ -2560,7 +2754,8 @@ CREATE TABLE IF NOT EXISTS projection_divergences (
     natural_key_json String CODEC(ZSTD(3)),
     prior_value_json String CODEC(ZSTD(3)),
     new_value_json String CODEC(ZSTD(3)),
-    source_event_id String
+    source_event_id String,
+    occurrence_id String DEFAULT ''
 ) ENGINE = ReplicatedMergeTree()
 PARTITION BY toYYYYMM(toDateTime(observed_at_ms / 1000))
 ORDER BY (table_name, observed_at_ms, source_event_id)
@@ -2593,23 +2788,53 @@ TTL window_start + INTERVAL 30 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS tenant_usage_5m_mv
 REFRESH EVERY 1 MINUTE APPEND TO tenant_usage_5m_store AS
-SELECT
-    window_start,
-    tenant_id,
-    cluster_id,
-    toUInt64(sum(seconds_observed))    AS seconds_observed,
-    toUInt64(sum(up_bytes_observed))   AS up_bytes,
-    toUInt64(sum(down_bytes_observed)) AS down_bytes,
-    uniqCombinedState(session_id)      AS unique_sessions_state,
-    uniqCombinedState(stream_id)       AS unique_streams_state,
-    now64(3)                           AS refresh_version_ms
-FROM viewer_usage_5m_v
-WHERE (window_start, tenant_id, cluster_id) IN (
+WITH affected AS (
     SELECT DISTINCT window_start, tenant_id, cluster_id
-    FROM viewer_usage_5m_v
-    WHERE latest_projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 HOUR)
+    FROM delivery_usage_5m
+    WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 HOUR)
+      AND window_start >= toStartOfFiveMinute(now() - INTERVAL 29 DAY)
+    UNION DISTINCT
+    SELECT DISTINCT window_start, tenant_id, cluster_id
+    FROM viewer_usage_5m
+    WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 HOUR)
+      AND window_start >= toStartOfFiveMinute(now() - INTERVAL 29 DAY)
+    UNION DISTINCT
+    SELECT bucket AS window_start, tenant_id, cluster_id
+    FROM rollup_backfill_markers
+    WHERE scope = 'tenant_usage_5m'
+      AND seed_version_ms >= now64(3) - INTERVAL 1 DAY
+      AND bucket >= toStartOfFiveMinute(now() - INTERVAL 29 DAY)
 )
-GROUP BY window_start, tenant_id, cluster_id;
+SELECT
+    affected.window_start AS window_start,
+    affected.tenant_id AS tenant_id,
+    affected.cluster_id AS cluster_id,
+    delivery.seconds_observed AS seconds_observed,
+    delivery.up_bytes AS up_bytes,
+    delivery.down_bytes AS down_bytes,
+    audience.unique_sessions_state AS unique_sessions_state,
+    delivery.unique_streams_state AS unique_streams_state,
+    now64(3) AS refresh_version_ms
+FROM affected
+LEFT JOIN (
+    SELECT window_start, tenant_id, cluster_id,
+        toUInt64(sum(seconds_observed)) AS seconds_observed,
+        toUInt64(sum(up_bytes_observed)) AS up_bytes,
+        toUInt64(sum(down_bytes_observed)) AS down_bytes,
+        uniqCombinedState(stream_id) AS unique_streams_state
+    FROM delivery_usage_5m_v
+    WHERE (window_start, tenant_id, cluster_id) IN (SELECT window_start, tenant_id, cluster_id FROM affected)
+    GROUP BY window_start, tenant_id, cluster_id
+) AS delivery USING (window_start, tenant_id, cluster_id)
+LEFT JOIN (
+    SELECT window_start, tenant_id, cluster_id,
+        uniqCombinedState(session_id) AS unique_sessions_state
+    FROM viewer_usage_5m_v
+    WHERE (window_start, tenant_id, cluster_id) IN (SELECT window_start, tenant_id, cluster_id FROM affected)
+    GROUP BY window_start, tenant_id, cluster_id
+) AS audience USING (window_start, tenant_id, cluster_id)
+SETTINGS max_bytes_before_external_group_by = 268435456,
+         max_bytes_before_external_sort = 268435456;
 
 CREATE VIEW IF NOT EXISTS tenant_usage_5m AS
 SELECT
@@ -2644,23 +2869,53 @@ TTL hour + INTERVAL 730 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS tenant_usage_hourly_mv
 REFRESH EVERY 5 MINUTE APPEND TO tenant_usage_hourly_store AS
-SELECT
-    toStartOfHour(window_start) AS hour,
-    tenant_id,
-    cluster_id,
-    toUInt64(sum(seconds_observed))    AS seconds_observed,
-    toUInt64(sum(up_bytes_observed))   AS up_bytes,
-    toUInt64(sum(down_bytes_observed)) AS down_bytes,
-    uniqCombinedState(session_id)      AS unique_sessions_state,
-    uniqCombinedState(stream_id)       AS unique_streams_state,
-    now64(3)                           AS refresh_version_ms
-FROM viewer_usage_5m_v
-WHERE (hour, tenant_id, cluster_id) IN (
+WITH affected AS (
     SELECT DISTINCT toStartOfHour(window_start) AS hour, tenant_id, cluster_id
-    FROM viewer_usage_5m_v
-    WHERE latest_projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
+    FROM delivery_usage_5m
+    WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
+      AND window_start >= toStartOfHour(now() - INTERVAL 89 DAY)
+    UNION DISTINCT
+    SELECT DISTINCT toStartOfHour(window_start) AS hour, tenant_id, cluster_id
+    FROM viewer_usage_5m
+    WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
+      AND window_start >= toStartOfHour(now() - INTERVAL 89 DAY)
+    UNION DISTINCT
+    SELECT toStartOfHour(bucket) AS hour, tenant_id, cluster_id
+    FROM rollup_backfill_markers
+    WHERE scope = 'tenant_usage_hourly'
+      AND seed_version_ms >= now64(3) - INTERVAL 1 DAY
+      AND bucket >= toStartOfHour(now() - INTERVAL 89 DAY)
 )
-GROUP BY hour, tenant_id, cluster_id;
+SELECT
+    affected.hour AS hour,
+    affected.tenant_id AS tenant_id,
+    affected.cluster_id AS cluster_id,
+    delivery.seconds_observed AS seconds_observed,
+    delivery.up_bytes AS up_bytes,
+    delivery.down_bytes AS down_bytes,
+    audience.unique_sessions_state AS unique_sessions_state,
+    delivery.unique_streams_state AS unique_streams_state,
+    now64(3) AS refresh_version_ms
+FROM affected
+LEFT JOIN (
+    SELECT toStartOfHour(window_start) AS hour, tenant_id, cluster_id,
+        toUInt64(sum(seconds_observed)) AS seconds_observed,
+        toUInt64(sum(up_bytes_observed)) AS up_bytes,
+        toUInt64(sum(down_bytes_observed)) AS down_bytes,
+        uniqCombinedState(stream_id) AS unique_streams_state
+    FROM delivery_usage_5m_v
+    WHERE (toStartOfHour(window_start), tenant_id, cluster_id) IN (SELECT hour, tenant_id, cluster_id FROM affected)
+    GROUP BY hour, tenant_id, cluster_id
+) AS delivery USING (hour, tenant_id, cluster_id)
+LEFT JOIN (
+    SELECT toStartOfHour(window_start) AS hour, tenant_id, cluster_id,
+        uniqCombinedState(session_id) AS unique_sessions_state
+    FROM viewer_usage_5m_v
+    WHERE (toStartOfHour(window_start), tenant_id, cluster_id) IN (SELECT hour, tenant_id, cluster_id FROM affected)
+    GROUP BY hour, tenant_id, cluster_id
+) AS audience USING (hour, tenant_id, cluster_id)
+SETTINGS max_bytes_before_external_group_by = 268435456,
+         max_bytes_before_external_sort = 268435456;
 
 CREATE VIEW IF NOT EXISTS tenant_usage_hourly AS
 SELECT
@@ -2692,26 +2947,30 @@ TTL hour + INTERVAL 365 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS viewer_hours_hourly_mv
 REFRESH EVERY 5 MINUTE APPEND TO viewer_hours_hourly_store AS
-SELECT
-    toStartOfHour(u.window_start) AS hour,
-    u.tenant_id,
-    u.cluster_id,
-    u.stream_id,
-    s.country_code,
-    toUInt64(sum(u.seconds_observed))                          AS total_session_seconds,
-    toUInt64(sum(u.up_bytes_observed + u.down_bytes_observed)) AS total_bytes,
-    toUInt64(sum(u.down_bytes_observed))                        AS egress_bytes,
-    uniqCombinedState(if(s.host != '', s.host, concat(toString(u.node_id), '|', u.session_id))) AS unique_viewers_state,
-    now64(3)                                                   AS refresh_version_ms
-FROM viewer_usage_5m_v u
-LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
-WHERE (hour, u.tenant_id, u.cluster_id, u.stream_id, s.country_code) IN (
+WITH affected AS (
     SELECT DISTINCT toStartOfHour(u.window_start) AS hour, u.tenant_id, u.cluster_id, u.stream_id, s.country_code
+    FROM viewer_usage_5m u
+    LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
+    WHERE u.projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
+      AND u.window_start >= toStartOfHour(now() - INTERVAL 89 DAY)
+)
+SELECT
+    affected.hour, affected.tenant_id, affected.cluster_id, affected.stream_id, affected.country_code,
+    metrics.total_session_seconds, metrics.total_bytes, metrics.egress_bytes, metrics.unique_viewers_state,
+    now64(3) AS refresh_version_ms
+FROM affected
+LEFT JOIN (
+    SELECT toStartOfHour(u.window_start) AS hour, u.tenant_id, u.cluster_id, u.stream_id, s.country_code,
+        toUInt64(sum(u.seconds_observed)) AS total_session_seconds,
+        toUInt64(sum(u.up_bytes_observed + u.down_bytes_observed)) AS total_bytes,
+        toUInt64(sum(u.down_bytes_observed)) AS egress_bytes,
+        uniqCombinedState(if(s.host != '', s.host, concat(toString(u.node_id), '|', u.session_id))) AS unique_viewers_state
     FROM viewer_usage_5m_v u
     LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
-    WHERE u.latest_projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
-)
-GROUP BY hour, u.tenant_id, u.cluster_id, u.stream_id, s.country_code;
+    WHERE (toStartOfHour(u.window_start), u.tenant_id, u.cluster_id, u.stream_id, s.country_code) IN
+          (SELECT hour, tenant_id, cluster_id, stream_id, country_code FROM affected)
+    GROUP BY hour, u.tenant_id, u.cluster_id, u.stream_id, s.country_code
+) AS metrics USING (hour, tenant_id, cluster_id, stream_id, country_code);
 
 CREATE VIEW IF NOT EXISTS viewer_hours_hourly AS
 SELECT
@@ -2740,24 +2999,30 @@ TTL hour + INTERVAL 365 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS viewer_geo_hourly_mv
 REFRESH EVERY 5 MINUTE APPEND TO viewer_geo_hourly_store AS
-SELECT
-    toStartOfHour(u.window_start) AS hour,
-    u.tenant_id,
-    s.country_code,
-    toUInt64(uniqCombined(if(s.host != '', s.host, concat(toString(u.node_id), '|', u.session_id)))) AS viewer_count,
-    sum(u.seconds_observed) / 3600.0                                AS viewer_hours,
-    sum(u.down_bytes_observed) / pow(1024, 3) AS egress_gb,
-    uniqCombinedState(if(s.host != '', s.host, concat(toString(u.node_id), '|', u.session_id))) AS unique_viewers_state,
-    now64(3)                                                        AS refresh_version_ms
-FROM viewer_usage_5m_v u
-LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
-WHERE (hour, u.tenant_id, s.country_code) IN (
+WITH affected AS (
     SELECT DISTINCT toStartOfHour(u.window_start) AS hour, u.tenant_id, s.country_code
+    FROM viewer_usage_5m u
+    LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
+    WHERE u.projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
+      AND u.window_start >= toStartOfHour(now() - INTERVAL 89 DAY)
+)
+SELECT
+    affected.hour, affected.tenant_id, affected.country_code,
+    metrics.viewer_count, metrics.viewer_hours, metrics.egress_gb, metrics.unique_viewers_state,
+    now64(3) AS refresh_version_ms
+FROM affected
+LEFT JOIN (
+    SELECT toStartOfHour(u.window_start) AS hour, u.tenant_id, s.country_code,
+        toUInt64(uniqCombined(if(s.host != '', s.host, concat(toString(u.node_id), '|', u.session_id)))) AS viewer_count,
+        sum(u.seconds_observed) / 3600.0 AS viewer_hours,
+        sum(u.down_bytes_observed) / pow(1024, 3) AS egress_gb,
+        uniqCombinedState(if(s.host != '', s.host, concat(toString(u.node_id), '|', u.session_id))) AS unique_viewers_state
     FROM viewer_usage_5m_v u
     LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
-    WHERE u.latest_projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
-)
-GROUP BY hour, u.tenant_id, s.country_code;
+    WHERE (toStartOfHour(u.window_start), u.tenant_id, s.country_code) IN
+          (SELECT hour, tenant_id, country_code FROM affected)
+    GROUP BY hour, u.tenant_id, s.country_code
+) AS metrics USING (hour, tenant_id, country_code);
 
 CREATE VIEW IF NOT EXISTS viewer_geo_hourly AS
 SELECT
@@ -2790,29 +3055,33 @@ TTL hour + INTERVAL 365 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS viewer_city_hourly_mv
 REFRESH EVERY 5 MINUTE APPEND TO viewer_city_hourly_store AS
-SELECT
-    toStartOfHour(u.window_start) AS hour,
-    u.tenant_id,
-    u.stream_id,
-    s.country_code,
-    s.city,
-    any(s.latitude)                                                 AS latitude,
-    any(s.longitude)                                                AS longitude,
-    toUInt64(uniqCombined(if(s.host != '', s.host, concat(toString(u.node_id), '|', u.session_id)))) AS viewer_count,
-    sum(u.seconds_observed) / 3600.0                                AS viewer_hours,
-    sum(u.down_bytes_observed) / pow(1024, 3) AS egress_gb,
-    uniqCombinedState(if(s.host != '', s.host, concat(toString(u.node_id), '|', u.session_id))) AS unique_viewers_state,
-    now64(3)                                                        AS refresh_version_ms
-FROM viewer_usage_5m_v u
-INNER JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
-WHERE (hour, u.tenant_id, u.stream_id, s.country_code, s.city) IN (
+WITH affected AS (
     SELECT DISTINCT toStartOfHour(u.window_start) AS hour, u.tenant_id, u.stream_id, s.country_code, s.city
+    FROM viewer_usage_5m u
+    INNER JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
+    WHERE u.projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
+      AND u.window_start >= toStartOfHour(now() - INTERVAL 89 DAY)
+      AND s.city != ''
+)
+SELECT
+    affected.hour, affected.tenant_id, affected.stream_id, affected.country_code, affected.city,
+    metrics.latitude, metrics.longitude, metrics.viewer_count, metrics.viewer_hours, metrics.egress_gb,
+    metrics.unique_viewers_state, now64(3) AS refresh_version_ms
+FROM affected
+LEFT JOIN (
+    SELECT toStartOfHour(u.window_start) AS hour, u.tenant_id, u.stream_id, s.country_code, s.city,
+        any(s.latitude) AS latitude,
+        any(s.longitude) AS longitude,
+        toUInt64(uniqCombined(if(s.host != '', s.host, concat(toString(u.node_id), '|', u.session_id)))) AS viewer_count,
+        sum(u.seconds_observed) / 3600.0 AS viewer_hours,
+        sum(u.down_bytes_observed) / pow(1024, 3) AS egress_gb,
+        uniqCombinedState(if(s.host != '', s.host, concat(toString(u.node_id), '|', u.session_id))) AS unique_viewers_state
     FROM viewer_usage_5m_v u
     INNER JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
-    WHERE s.city != ''
-      AND u.latest_projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
-)
-GROUP BY hour, u.tenant_id, u.stream_id, s.country_code, s.city;
+    WHERE s.city != '' AND (toStartOfHour(u.window_start), u.tenant_id, u.stream_id, s.country_code, s.city) IN
+          (SELECT hour, tenant_id, stream_id, country_code, city FROM affected)
+    GROUP BY hour, u.tenant_id, u.stream_id, s.country_code, s.city
+) AS metrics USING (hour, tenant_id, stream_id, country_code, city);
 
 CREATE VIEW IF NOT EXISTS viewer_city_hourly AS
 SELECT
@@ -2843,24 +3112,29 @@ TTL hour + INTERVAL 365 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS stream_connection_hourly_mv
 REFRESH EVERY 5 MINUTE APPEND TO stream_connection_hourly_store AS
+WITH affected AS (
+    SELECT DISTINCT toStartOfHour(window_start) AS hour, tenant_id, stream_id
+    FROM viewer_usage_5m
+    WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
+      AND window_start >= toStartOfHour(now() - INTERVAL 89 DAY)
+)
 SELECT
-    toStartOfHour(u.window_start) AS hour,
-    u.tenant_id,
-    u.stream_id,
-    any(s.stream_name)                                         AS internal_name,
-    toUInt64(sum(u.up_bytes_observed + u.down_bytes_observed)) AS total_bytes,
-    toUInt64(uniqCombined(u.session_id))                       AS total_sessions,
-    uniqCombinedState(if(s.host != '', s.host, concat(toString(u.node_id), '|', u.session_id))) AS unique_viewers_state,
-    now64(3)                                                   AS refresh_version_ms
-FROM viewer_usage_5m_v u
-LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
-WHERE (hour, u.tenant_id, u.stream_id) IN (
-    SELECT DISTINCT toStartOfHour(u.window_start) AS hour, u.tenant_id, u.stream_id
+    affected.hour, affected.tenant_id, affected.stream_id,
+    metrics.internal_name, metrics.total_bytes, metrics.total_sessions, metrics.unique_viewers_state,
+    now64(3) AS refresh_version_ms
+FROM affected
+LEFT JOIN (
+    SELECT toStartOfHour(u.window_start) AS hour, u.tenant_id, u.stream_id,
+        any(s.stream_name) AS internal_name,
+        toUInt64(sum(u.up_bytes_observed + u.down_bytes_observed)) AS total_bytes,
+        toUInt64(uniqCombined(u.session_id)) AS total_sessions,
+        uniqCombinedState(if(s.host != '', s.host, concat(toString(u.node_id), '|', u.session_id))) AS unique_viewers_state
     FROM viewer_usage_5m_v u
     LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
-    WHERE u.latest_projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
-)
-GROUP BY hour, u.tenant_id, u.stream_id;
+    WHERE (toStartOfHour(u.window_start), u.tenant_id, u.stream_id) IN
+          (SELECT hour, tenant_id, stream_id FROM affected)
+    GROUP BY hour, u.tenant_id, u.stream_id
+) AS metrics USING (hour, tenant_id, stream_id);
 
 CREATE VIEW IF NOT EXISTS stream_connection_hourly AS
 SELECT
@@ -2888,21 +3162,25 @@ TTL hour + INTERVAL 365 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS stream_runtime_hourly_mv
 REFRESH EVERY 5 MINUTE APPEND TO stream_runtime_hourly_store AS
-SELECT
-    toStartOfHour(window_start) AS hour,
-    tenant_id,
-    cluster_id,
-    stream_id,
-    toUInt64(sum(active_seconds)) AS runtime_seconds,
-    toUInt32(max(peak_viewers))   AS peak_viewers,
-    now64(3)                      AS refresh_version_ms
-FROM stream_runtime_5m_v
-WHERE (hour, tenant_id, cluster_id, stream_id) IN (
+WITH affected AS (
     SELECT DISTINCT toStartOfHour(window_start) AS hour, tenant_id, cluster_id, stream_id
-    FROM stream_runtime_5m_v
-    WHERE latest_projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
+    FROM stream_runtime_5m
+    WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
+      AND window_start >= toStartOfHour(now() - INTERVAL 89 DAY)
 )
-GROUP BY hour, tenant_id, cluster_id, stream_id;
+SELECT
+    affected.hour, affected.tenant_id, affected.cluster_id, affected.stream_id,
+    metrics.runtime_seconds, metrics.peak_viewers, now64(3) AS refresh_version_ms
+FROM affected
+LEFT JOIN (
+    SELECT toStartOfHour(window_start) AS hour, tenant_id, cluster_id, stream_id,
+        toUInt64(sum(active_seconds)) AS runtime_seconds,
+        toUInt32(max(peak_viewers)) AS peak_viewers
+    FROM stream_runtime_5m_v
+    WHERE (toStartOfHour(window_start), tenant_id, cluster_id, stream_id) IN
+          (SELECT hour, tenant_id, cluster_id, stream_id FROM affected)
+    GROUP BY hour, tenant_id, cluster_id, stream_id
+) AS metrics USING (hour, tenant_id, cluster_id, stream_id);
 
 CREATE VIEW IF NOT EXISTS stream_runtime_hourly AS
 SELECT
@@ -2935,23 +3213,26 @@ TTL hour + INTERVAL 730 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS processing_hourly_mv
 REFRESH EVERY 5 MINUTE APPEND TO processing_hourly_store AS
-SELECT
-    toStartOfHour(window_start) AS hour,
-    tenant_id,
-    cluster_id,
-    process_type,
-    output_codec,
-    track_type,
-    sum(p5.media_seconds)                    AS media_seconds,
-    toUInt64(uniqCombined(p5.source_event_id)) AS segment_count,
-    now64(3)                                 AS refresh_version_ms
-FROM processing_5m_v AS p5
-WHERE (hour, tenant_id, cluster_id, process_type, output_codec, track_type) IN (
+WITH affected AS (
     SELECT DISTINCT toStartOfHour(window_start) AS hour, tenant_id, cluster_id, process_type, output_codec, track_type
-    FROM processing_5m_v
-    WHERE latest_projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
+    FROM processing_5m
+    WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
+      AND window_start >= toStartOfHour(now() - INTERVAL 89 DAY)
 )
-GROUP BY hour, tenant_id, cluster_id, process_type, output_codec, track_type;
+SELECT
+    affected.hour, affected.tenant_id, affected.cluster_id, affected.process_type, affected.output_codec, affected.track_type,
+    metrics.media_seconds, metrics.segment_count, now64(3) AS refresh_version_ms
+FROM affected
+LEFT JOIN (
+    SELECT toStartOfHour(window_start) AS hour, tenant_id, cluster_id, process_type, output_codec, track_type,
+        sum(p5.media_seconds) AS media_seconds,
+        toUInt64(uniqCombined(p5.source_event_id)) AS segment_count
+    FROM processing_5m_v
+    AS p5
+    WHERE (toStartOfHour(window_start), tenant_id, cluster_id, process_type, output_codec, track_type) IN
+          (SELECT hour, tenant_id, cluster_id, process_type, output_codec, track_type FROM affected)
+    GROUP BY hour, tenant_id, cluster_id, process_type, output_codec, track_type
+) AS metrics USING (hour, tenant_id, cluster_id, process_type, output_codec, track_type);
 
 CREATE VIEW IF NOT EXISTS processing_hourly AS
 SELECT
@@ -3026,26 +3307,30 @@ TTL hour + INTERVAL 365 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS api_usage_hourly_mv
 REFRESH EVERY 5 MINUTE APPEND TO api_usage_hourly_store AS
-SELECT
-    toStartOfHour(window_start) AS hour,
-    tenant_id,
-    auth_type,
-    operation_type,
-    operation_name,
-    sum(api5.requests)    AS requests,
-    sum(api5.errors)      AS errors,
-    sum(api5.duration_ms) AS duration_ms,
-    sum(api5.complexity)  AS complexity,
-    uniqCombinedMergeState(api5.unique_users_state)  AS unique_users_state,
-    uniqCombinedMergeState(api5.unique_tokens_state) AS unique_tokens_state,
-    now64(3)                                    AS refresh_version_ms
-FROM api_usage_5m_v AS api5
-WHERE (hour, tenant_id, auth_type, operation_type, operation_name) IN (
+WITH affected AS (
     SELECT DISTINCT toStartOfHour(window_start) AS hour, tenant_id, auth_type, operation_type, operation_name
-    FROM api_usage_5m_v
-    WHERE latest_projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
+    FROM api_usage_5m
+    WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
+      AND window_start >= toStartOfHour(now() - INTERVAL 364 DAY)
 )
-GROUP BY hour, tenant_id, auth_type, operation_type, operation_name;
+SELECT
+    affected.hour, affected.tenant_id, affected.auth_type, affected.operation_type, affected.operation_name,
+    metrics.requests, metrics.errors, metrics.duration_ms, metrics.complexity,
+    metrics.unique_users_state, metrics.unique_tokens_state, now64(3) AS refresh_version_ms
+FROM affected
+LEFT JOIN (
+    SELECT toStartOfHour(window_start) AS hour, tenant_id, auth_type, operation_type, operation_name,
+        sum(api5.requests) AS requests,
+        sum(api5.errors) AS errors,
+        sum(api5.duration_ms) AS duration_ms,
+        sum(api5.complexity) AS complexity,
+        uniqCombinedMergeState(api5.unique_users_state) AS unique_users_state,
+        uniqCombinedMergeState(api5.unique_tokens_state) AS unique_tokens_state
+    FROM api_usage_5m_v AS api5
+    WHERE (toStartOfHour(window_start), tenant_id, auth_type, operation_type, operation_name) IN
+          (SELECT hour, tenant_id, auth_type, operation_type, operation_name FROM affected)
+    GROUP BY hour, tenant_id, auth_type, operation_type, operation_name
+) AS metrics USING (hour, tenant_id, auth_type, operation_type, operation_name);
 
 CREATE VIEW IF NOT EXISTS api_usage_hourly AS
 SELECT
@@ -3098,12 +3383,16 @@ SELECT
     uniqCombinedMergeState(tuh.unique_streams_state)  AS unique_streams_state,
     now64(3)                                      AS refresh_version_ms
 FROM tenant_usage_hourly AS tuh
-WHERE (day, tenant_id, cluster_id) IN (
+WHERE toDate(tuh.hour) >= toDate(now() - INTERVAL 364 DAY)
+  AND (day, tenant_id, cluster_id) IN (
     SELECT DISTINCT toDate(hour) AS day, tenant_id, cluster_id
     FROM tenant_usage_hourly
     WHERE latest_refresh_version_ms >= now64(3) - INTERVAL 7 DAY
+      AND toDate(hour) >= toDate(now() - INTERVAL 364 DAY)
 )
-GROUP BY day, tenant_id, cluster_id;
+GROUP BY day, tenant_id, cluster_id
+SETTINGS max_bytes_before_external_group_by = 268435456,
+         max_bytes_before_external_sort = 268435456;
 
 CREATE VIEW IF NOT EXISTS tenant_usage_daily AS
 SELECT
@@ -3133,23 +3422,70 @@ TTL day + INTERVAL 1825 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS tenant_viewer_daily_mv
 REFRESH EVERY 1 HOUR APPEND TO tenant_viewer_daily_store AS
-SELECT
-    toDate(u.window_start) AS day,
-    u.tenant_id,
-    u.cluster_id,
-    sum(u.seconds_observed) / 3600.0 AS viewer_hours,
-    sum(u.down_bytes_observed) / pow(1024, 3) AS egress_gb,
-    uniqCombinedState(if(s.host != '', s.host, concat(toString(u.node_id), '|', u.session_id))) AS unique_viewers_state,
-    toUInt64(uniqCombined(u.session_id)) AS total_sessions,
-    now64(3) AS refresh_version_ms
-FROM viewer_usage_5m_v u
-LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
-WHERE (toDate(u.window_start), u.tenant_id, u.cluster_id) IN (
+WITH affected AS (
     SELECT DISTINCT toDate(window_start) AS day, tenant_id, cluster_id
-    FROM viewer_usage_5m_v
-    WHERE latest_projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
+    FROM viewer_usage_5m
+    WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
+      AND window_start >= toStartOfDay(now() - INTERVAL 89 DAY)
+    UNION DISTINCT
+    SELECT DISTINCT toDate(toDateTime(intDiv(old.source_ended_at_ms, 1000))) AS day, old.tenant_id, old.cluster_id
+    FROM viewer_sessions_final AS old
+    INNER JOIN (
+        SELECT DISTINCT tenant_id, node_id, session_id
+        FROM viewer_sessions_final
+        WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
+    ) AS changed USING (tenant_id, node_id, session_id)
+    WHERE old.tenant_id IN (
+        SELECT tenant_id FROM viewer_sessions_final
+        WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
+    )
+      AND old.source_ended_at_ms >= toInt64(toUnixTimestamp(toStartOfDay(now() - INTERVAL 89 DAY))) * 1000
+    UNION DISTINCT
+    SELECT toDate(bucket) AS day, tenant_id, cluster_id
+    FROM rollup_backfill_markers
+    WHERE scope = 'tenant_viewer_daily'
+      AND seed_version_ms >= now64(3) - INTERVAL 1 DAY
+      AND bucket >= toStartOfDay(now() - INTERVAL 89 DAY)
 )
-GROUP BY day, u.tenant_id, u.cluster_id;
+SELECT
+    affected.day AS day,
+    affected.tenant_id AS tenant_id,
+    affected.cluster_id AS cluster_id,
+    usage.viewer_hours AS viewer_hours,
+    usage.egress_gb AS egress_gb,
+    audience.unique_viewers_state AS unique_viewers_state,
+    audience.total_sessions AS total_sessions,
+    now64(3) AS refresh_version_ms
+FROM affected
+LEFT JOIN (
+    SELECT toDate(window_start) AS day, tenant_id, cluster_id,
+        sum(seconds_observed) / 3600.0 AS viewer_hours,
+        sum(down_bytes_observed) / pow(1024, 3) AS egress_gb
+    FROM viewer_usage_5m_v
+    WHERE (toDate(window_start), tenant_id, cluster_id) IN
+          (SELECT day, tenant_id, cluster_id FROM affected)
+    GROUP BY day, tenant_id, cluster_id
+) AS usage USING (day, tenant_id, cluster_id)
+LEFT JOIN (
+    SELECT day, tenant_id, cluster_id,
+        uniqCombinedStateIf(viewer_key, included = 1) AS unique_viewers_state,
+        toUInt64(uniqCombinedIf(tuple(node_id, session_id), included = 1)) AS total_sessions
+    FROM (
+        SELECT day, tenant_id, cluster_id, '' AS viewer_key, '' AS node_id, '' AS session_id, toUInt8(0) AS included
+        FROM affected
+        UNION ALL
+        SELECT toDate(toDateTime(intDiv(source_ended_at_ms, 1000))) AS day, tenant_id, cluster_id,
+            if(host != '', host, concat(toString(node_id), '|', session_id)) AS viewer_key,
+            node_id, session_id, toUInt8(1) AS included
+        FROM viewer_sessions_final_v
+        WHERE (toDate(toDateTime(intDiv(source_ended_at_ms, 1000))), tenant_id, cluster_id) IN
+              (SELECT day, tenant_id, cluster_id FROM affected)
+          AND closed_reason = 'final'
+    )
+    GROUP BY day, tenant_id, cluster_id
+) AS audience USING (day, tenant_id, cluster_id)
+SETTINGS max_bytes_before_external_group_by = 268435456,
+         max_bytes_before_external_sort = 268435456;
 
 CREATE VIEW IF NOT EXISTS tenant_viewer_daily AS
 SELECT
@@ -3183,26 +3519,101 @@ CREATE TABLE IF NOT EXISTS tenant_analytics_daily_store (
 ) ENGINE = ReplicatedReplacingMergeTree(refresh_version_ms)
 PARTITION BY toYYYYMM(day)
 ORDER BY (tenant_id, day)
-TTL day + INTERVAL 1825 DAY;
+TTL day + INTERVAL 730 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS tenant_analytics_daily_mv
 REFRESH EVERY 1 HOUR APPEND TO tenant_analytics_daily_store AS
-SELECT
-    toDate(u.window_start) AS day,
-    u.tenant_id,
-    toUInt64(uniqCombined(u.stream_id)) AS total_streams,
-    toUInt64(uniqCombined(u.session_id)) AS total_views,
-    uniqCombinedState(if(s.host != '', s.host, concat(toString(u.node_id), '|', u.session_id))) AS unique_viewers_state,
-    toUInt64(sum(u.down_bytes_observed)) AS egress_bytes,
-    now64(3) AS refresh_version_ms
-FROM viewer_usage_5m_v u
-LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
-WHERE (toDate(u.window_start), u.tenant_id) IN (
+WITH affected AS (
     SELECT DISTINCT toDate(window_start) AS day, tenant_id
-    FROM viewer_usage_5m_v
-    WHERE latest_projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
+    FROM delivery_usage_5m
+    WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
+      AND window_start >= toStartOfDay(now() - INTERVAL 89 DAY)
+    UNION DISTINCT
+    SELECT DISTINCT toDate(window_start) AS day, tenant_id
+    FROM viewer_usage_5m
+    WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
+      AND window_start >= toStartOfDay(now() - INTERVAL 89 DAY)
+    UNION DISTINCT
+    SELECT DISTINCT toDate(toDateTime(intDiv(old.source_ended_at_ms, 1000))) AS day, old.tenant_id
+    FROM viewer_sessions_final AS old
+    INNER JOIN (
+        SELECT DISTINCT tenant_id, node_id, session_id
+        FROM viewer_sessions_final
+        WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
+    ) AS changed USING (tenant_id, node_id, session_id)
+    WHERE old.tenant_id IN (
+        SELECT tenant_id FROM viewer_sessions_final
+        WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
+    )
+      AND old.source_ended_at_ms >= toInt64(toUnixTimestamp(toStartOfDay(now() - INTERVAL 729 DAY))) * 1000
+    UNION DISTINCT
+    SELECT DISTINCT toDate(toDateTime(intDiv(old.source_ended_at_ms, 1000))) AS day, old.tenant_id
+    FROM restream_sessions_final AS old
+    INNER JOIN (
+        SELECT DISTINCT tenant_id, node_id, source_event_id
+        FROM restream_sessions_final
+        WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
+    ) AS changed USING (tenant_id, node_id, source_event_id)
+    WHERE old.tenant_id IN (
+        SELECT tenant_id FROM restream_sessions_final
+        WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
+    )
+      AND old.source_ended_at_ms >= toInt64(toUnixTimestamp(toStartOfDay(now() - INTERVAL 729 DAY))) * 1000
+    UNION DISTINCT
+    SELECT toDate(bucket) AS day, tenant_id
+    FROM rollup_backfill_markers
+    WHERE scope = 'tenant_analytics_daily'
+      AND seed_version_ms >= now64(3) - INTERVAL 1 DAY
+      AND bucket >= toStartOfDay(now() - INTERVAL 729 DAY)
 )
-GROUP BY day, u.tenant_id;
+SELECT
+    affected.day AS day,
+    affected.tenant_id AS tenant_id,
+    delivery.total_streams AS total_streams,
+    audience.total_views AS total_views,
+    audience.unique_viewers_state AS unique_viewers_state,
+    delivery.egress_bytes AS egress_bytes,
+    now64(3) AS refresh_version_ms
+FROM affected
+LEFT JOIN (
+    SELECT day, tenant_id,
+        toUInt64(uniqCombined(stream_id)) AS total_streams,
+        toUInt64(sum(bytes)) AS egress_bytes
+    FROM (
+        SELECT toDate(toDateTime(intDiv(source_ended_at_ms, 1000))) AS day, tenant_id, stream_id,
+            downloaded_bytes AS bytes
+        FROM viewer_sessions_final_v
+        WHERE (toDate(toDateTime(intDiv(source_ended_at_ms, 1000))), tenant_id) IN (SELECT day, tenant_id FROM affected)
+          AND closed_reason = 'final'
+        UNION ALL
+        SELECT toDate(toDateTime(intDiv(source_ended_at_ms, 1000))) AS day, tenant_id, stream_id,
+            bytes_sent AS bytes
+        FROM restream_sessions_final_v
+        WHERE (toDate(toDateTime(intDiv(source_ended_at_ms, 1000))), tenant_id) IN (SELECT day, tenant_id FROM affected)
+          AND state IN ('idle', 'failed')
+          AND source_started_at_ms > 0 AND source_ended_at_ms > source_started_at_ms
+    )
+    GROUP BY day, tenant_id
+) AS delivery USING (day, tenant_id)
+LEFT JOIN (
+    SELECT day, tenant_id,
+        toUInt64(uniqCombinedIf(tuple(node_id, session_id), included = 1)) AS total_views,
+        uniqCombinedStateIf(viewer_key, included = 1) AS unique_viewers_state
+    FROM (
+        SELECT day, tenant_id, '' AS viewer_key, '' AS node_id, '' AS session_id, toUInt8(0) AS included
+        FROM affected
+        UNION ALL
+        SELECT toDate(toDateTime(intDiv(source_ended_at_ms, 1000))) AS day, tenant_id,
+            if(host != '', host, concat(toString(node_id), '|', session_id)) AS viewer_key,
+            node_id, session_id, toUInt8(1) AS included
+        FROM viewer_sessions_final_v
+        WHERE (toDate(toDateTime(intDiv(source_ended_at_ms, 1000))), tenant_id) IN (SELECT day, tenant_id FROM affected)
+          AND closed_reason = 'final'
+    )
+    GROUP BY day, tenant_id
+) AS audience USING (day, tenant_id)
+SETTINGS max_bytes_before_external_group_by = 268435456,
+         max_bytes_before_external_sort = 268435456;
 
 CREATE VIEW IF NOT EXISTS tenant_analytics_daily AS
 SELECT
@@ -3239,30 +3650,106 @@ CREATE TABLE IF NOT EXISTS stream_analytics_daily_store (
 ) ENGINE = ReplicatedReplacingMergeTree(refresh_version_ms)
 PARTITION BY toYYYYMM(day)
 ORDER BY (tenant_id, day, stream_id)
-TTL day + INTERVAL 1825 DAY;
+TTL day + INTERVAL 730 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS stream_analytics_daily_mv
 REFRESH EVERY 1 HOUR APPEND TO stream_analytics_daily_store AS
-SELECT
-    toDate(u.window_start) AS day,
-    u.tenant_id,
-    u.stream_id,
-    any(s.stream_name)                                         AS internal_name,
-    toUInt64(uniqCombined(u.session_id))                       AS total_views,
-    uniqCombinedState(if(s.host != '', s.host, concat(toString(u.node_id), '|', u.session_id))) AS unique_viewers_state,
-    toUInt32(uniqCombined(s.country_code))                     AS unique_countries,
-    toUInt32(uniqCombined(s.city))                             AS unique_cities,
-    toUInt64(sum(u.down_bytes_observed)) AS egress_bytes,
-    now64(3)                                                   AS refresh_version_ms
-FROM viewer_usage_5m_v u
-LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
-WHERE (day, u.tenant_id, u.stream_id) IN (
-    SELECT DISTINCT toDate(u.window_start) AS day, u.tenant_id, u.stream_id
-    FROM viewer_usage_5m_v u
-    LEFT JOIN viewer_sessions_final_v s USING (tenant_id, node_id, session_id)
-    WHERE u.latest_projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
+WITH affected AS (
+    SELECT DISTINCT toDate(window_start) AS day, tenant_id, stream_id
+    FROM delivery_usage_5m
+    WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
+      AND window_start >= toStartOfDay(now() - INTERVAL 89 DAY)
+    UNION DISTINCT
+    SELECT DISTINCT toDate(window_start) AS day, tenant_id, stream_id
+    FROM viewer_usage_5m
+    WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
+      AND window_start >= toStartOfDay(now() - INTERVAL 89 DAY)
+    UNION DISTINCT
+    SELECT DISTINCT toDate(toDateTime(intDiv(old.source_ended_at_ms, 1000))) AS day, old.tenant_id, old.stream_id
+    FROM viewer_sessions_final AS old
+    INNER JOIN (
+        SELECT DISTINCT tenant_id, node_id, session_id
+        FROM viewer_sessions_final
+        WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
+    ) AS changed USING (tenant_id, node_id, session_id)
+    WHERE old.tenant_id IN (
+        SELECT tenant_id FROM viewer_sessions_final
+        WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
+    )
+      AND old.source_ended_at_ms >= toInt64(toUnixTimestamp(toStartOfDay(now() - INTERVAL 729 DAY))) * 1000
+    UNION DISTINCT
+    SELECT DISTINCT toDate(toDateTime(intDiv(old.source_ended_at_ms, 1000))) AS day, old.tenant_id, old.stream_id
+    FROM restream_sessions_final AS old
+    INNER JOIN (
+        SELECT DISTINCT tenant_id, node_id, source_event_id
+        FROM restream_sessions_final
+        WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
+    ) AS changed USING (tenant_id, node_id, source_event_id)
+    WHERE old.tenant_id IN (
+        SELECT tenant_id FROM restream_sessions_final
+        WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
+    )
+      AND old.source_ended_at_ms >= toInt64(toUnixTimestamp(toStartOfDay(now() - INTERVAL 729 DAY))) * 1000
+    UNION DISTINCT
+    SELECT toDate(bucket) AS day, tenant_id, stream_id
+    FROM rollup_backfill_markers
+    WHERE scope = 'stream_analytics_daily'
+      AND seed_version_ms >= now64(3) - INTERVAL 1 DAY
+      AND bucket >= toStartOfDay(now() - INTERVAL 729 DAY)
 )
-GROUP BY day, u.tenant_id, u.stream_id;
+SELECT
+    affected.day AS day,
+    affected.tenant_id AS tenant_id,
+    affected.stream_id AS stream_id,
+    audience.internal_name AS internal_name,
+    audience.total_views AS total_views,
+    audience.unique_viewers_state AS unique_viewers_state,
+    audience.unique_countries AS unique_countries,
+    audience.unique_cities AS unique_cities,
+    delivery.egress_bytes AS egress_bytes,
+    now64(3) AS refresh_version_ms
+FROM affected
+LEFT JOIN (
+    SELECT day, tenant_id, stream_id, toUInt64(sum(bytes)) AS egress_bytes
+    FROM (
+        SELECT toDate(toDateTime(intDiv(source_ended_at_ms, 1000))) AS day, tenant_id, stream_id,
+            downloaded_bytes AS bytes
+        FROM viewer_sessions_final_v
+        WHERE (toDate(toDateTime(intDiv(source_ended_at_ms, 1000))), tenant_id, stream_id) IN (SELECT day, tenant_id, stream_id FROM affected)
+          AND closed_reason = 'final'
+        UNION ALL
+        SELECT toDate(toDateTime(intDiv(source_ended_at_ms, 1000))) AS day, tenant_id, stream_id,
+            bytes_sent AS bytes
+        FROM restream_sessions_final_v
+        WHERE (toDate(toDateTime(intDiv(source_ended_at_ms, 1000))), tenant_id, stream_id) IN (SELECT day, tenant_id, stream_id FROM affected)
+          AND state IN ('idle', 'failed')
+          AND source_started_at_ms > 0 AND source_ended_at_ms > source_started_at_ms
+    )
+    GROUP BY day, tenant_id, stream_id
+) AS delivery USING (day, tenant_id, stream_id)
+LEFT JOIN (
+    SELECT day, tenant_id, stream_id,
+        anyIf(stream_name, included = 1) AS internal_name,
+        toUInt64(uniqCombinedIf(tuple(node_id, session_id), included = 1)) AS total_views,
+        uniqCombinedStateIf(viewer_key, included = 1) AS unique_viewers_state,
+        toUInt32(uniqCombinedIf(country_code, included = 1 AND country_code != '')) AS unique_countries,
+        toUInt32(uniqCombinedIf(city, included = 1 AND city != '')) AS unique_cities
+    FROM (
+        SELECT day, tenant_id, stream_id, '' AS stream_name, '' AS viewer_key,
+            '' AS node_id, '' AS session_id, '' AS country_code, '' AS city, toUInt8(0) AS included
+        FROM affected
+        UNION ALL
+        SELECT toDate(toDateTime(intDiv(source_ended_at_ms, 1000))) AS day, tenant_id, stream_id,
+            stream_name, if(host != '', host, concat(toString(node_id), '|', session_id)) AS viewer_key,
+            node_id, session_id, country_code, city, toUInt8(1) AS included
+        FROM viewer_sessions_final_v
+        WHERE (toDate(toDateTime(intDiv(source_ended_at_ms, 1000))), tenant_id, stream_id) IN (SELECT day, tenant_id, stream_id FROM affected)
+          AND closed_reason = 'final'
+    )
+    GROUP BY day, tenant_id, stream_id
+) AS audience USING (day, tenant_id, stream_id)
+SETTINGS max_bytes_before_external_group_by = 268435456,
+         max_bytes_before_external_sort = 268435456;
 
 CREATE VIEW IF NOT EXISTS stream_analytics_daily AS
 SELECT
@@ -3511,25 +3998,29 @@ TTL hour + INTERVAL 365 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS storage_usage_hourly_mv
 REFRESH EVERY 5 MINUTE APPEND TO storage_usage_hourly_store AS
-SELECT
-    toStartOfHour(window_start) AS hour,
-    tenant_id,
-    cluster_id,
-    storage_scope,
-    storage_provider_tenant_id,
-    storage_provider_cluster_id,
-    storage_backend,
-    sum(sg5.gb_seconds)        AS gb_seconds,
-    sum(sg5.gb_seconds) / 3600.0 AS gb_hours,
-    sum(sg5.gb_seconds) / 3600.0 AS avg_gb,
-    now64(3)                   AS refresh_version_ms
-FROM storage_gb_seconds_5m_v AS sg5
-WHERE (hour, tenant_id, cluster_id, storage_scope, storage_provider_tenant_id, storage_provider_cluster_id, storage_backend) IN (
-    SELECT DISTINCT toStartOfHour(window_start) AS hour, tenant_id, cluster_id, storage_scope, storage_provider_tenant_id, storage_provider_cluster_id, storage_backend
-    FROM storage_gb_seconds_5m_v
-    WHERE latest_projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
+WITH affected AS (
+    SELECT DISTINCT toStartOfHour(window_start) AS hour, tenant_id, cluster_id, storage_scope,
+        storage_provider_tenant_id, storage_provider_cluster_id, storage_backend
+    FROM storage_gb_seconds_5m
+    WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 2 DAY)
+      AND window_start >= toStartOfHour(now() - INTERVAL 89 DAY)
 )
-GROUP BY hour, tenant_id, cluster_id, storage_scope, storage_provider_tenant_id, storage_provider_cluster_id, storage_backend;
+SELECT
+    affected.hour, affected.tenant_id, affected.cluster_id, affected.storage_scope,
+    affected.storage_provider_tenant_id, affected.storage_provider_cluster_id, affected.storage_backend,
+    metrics.gb_seconds, metrics.gb_hours, metrics.avg_gb, now64(3) AS refresh_version_ms
+FROM affected
+LEFT JOIN (
+    SELECT toStartOfHour(window_start) AS hour, tenant_id, cluster_id, storage_scope,
+        storage_provider_tenant_id, storage_provider_cluster_id, storage_backend,
+        sum(sg5.gb_seconds) AS gb_seconds,
+        sum(sg5.gb_seconds) / 3600.0 AS gb_hours,
+        sum(sg5.gb_seconds) / 3600.0 AS avg_gb
+    FROM storage_gb_seconds_5m_v AS sg5
+    WHERE (toStartOfHour(window_start), tenant_id, cluster_id, storage_scope, storage_provider_tenant_id, storage_provider_cluster_id, storage_backend) IN
+          (SELECT hour, tenant_id, cluster_id, storage_scope, storage_provider_tenant_id, storage_provider_cluster_id, storage_backend FROM affected)
+    GROUP BY hour, tenant_id, cluster_id, storage_scope, storage_provider_tenant_id, storage_provider_cluster_id, storage_backend
+) AS metrics USING (hour, tenant_id, cluster_id, storage_scope, storage_provider_tenant_id, storage_provider_cluster_id, storage_backend);
 
 CREATE VIEW IF NOT EXISTS storage_usage_hourly AS
 SELECT

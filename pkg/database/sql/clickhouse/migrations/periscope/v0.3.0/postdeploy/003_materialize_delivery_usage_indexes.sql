@@ -1,0 +1,6 @@
+ALTER TABLE periscope.delivery_usage_5m MATERIALIZE INDEX delivery_usage_id_bf;
+ALTER TABLE periscope.delivery_usage_5m MATERIALIZE INDEX delivery_usage_window_minmax;
+ALTER TABLE periscope.viewer_usage_5m MATERIALIZE INDEX viewer_usage_session_bf;
+ALTER TABLE periscope.viewer_usage_5m MATERIALIZE INDEX viewer_usage_window_minmax;
+ALTER TABLE periscope.viewer_sessions_final MATERIALIZE INDEX viewer_final_source_end_minmax;
+ALTER TABLE periscope.restream_sessions_final MATERIALIZE INDEX restream_final_source_end_minmax;

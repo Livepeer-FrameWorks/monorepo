@@ -34,6 +34,7 @@ func StartCurrent(t testing.TB, repositoryRoot, namePrefix string) Harness {
 	config := filepath.Join(repositoryRoot, "infrastructure", "clickhouse", "config.xml")
 	if _, err := run(t, 3*time.Minute, "", "run", "-d", "--name", name,
 		"-e", "CLICKHOUSE_SKIP_USER_SETUP=1", "-p", "127.0.0.1::9000",
+		"--tmpfs", "/var/lib/clickhouse",
 		"-v", config+":/etc/clickhouse-server/config.d/zz-keeper.xml:ro", image); err != nil {
 		t.Fatalf("start ClickHouse: %v", err)
 	}

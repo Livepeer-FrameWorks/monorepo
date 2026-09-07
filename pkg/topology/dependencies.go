@@ -129,12 +129,19 @@ var serviceDependencies = map[string][]ServiceDependency{
 }
 
 var infraDependencies = map[string][]InfraDependency{
-	"commodore":        {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "control-plane state"}},
-	"decklog":          {{Kind: InfraKafka, Provider: InfraProviderRegional, Purpose: "analytics and service event bus"}},
-	"foghorn":          {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "media control state"}, {Kind: InfraRedis, Provider: InfraProviderNamed, Name: "foghorn", Optional: true, Purpose: "HA relay and federation state"}},
-	"navigator":        {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "DNS and certificate state"}},
-	"periscope-ingest": {{Kind: InfraClickHouse, Provider: InfraProviderPrimary, Purpose: "analytics writes"}, {Kind: InfraKafka, Provider: InfraProviderAggregator, Purpose: "analytics and service event ingestion"}},
-	"periscope-query":  {{Kind: InfraClickHouse, Provider: InfraProviderPrimary, Purpose: "analytics reads"}},
+	"commodore": {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "control-plane state"}},
+	"decklog":   {{Kind: InfraKafka, Provider: InfraProviderRegional, Purpose: "analytics and service event bus"}},
+	"foghorn":   {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "media control state"}, {Kind: InfraRedis, Provider: InfraProviderNamed, Name: "foghorn", Optional: true, Purpose: "HA relay and federation state"}},
+	"navigator": {{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "DNS and certificate state"}},
+	"periscope-ingest": {
+		{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "distributed ledger-worker leases"},
+		{Kind: InfraClickHouse, Provider: InfraProviderPrimary, Purpose: "analytics writes"},
+		{Kind: InfraKafka, Provider: InfraProviderAggregator, Purpose: "analytics and service event ingestion"},
+	},
+	"periscope-query": {
+		{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "delegated-token replay fencing"},
+		{Kind: InfraClickHouse, Provider: InfraProviderPrimary, Purpose: "analytics reads"},
+	},
 	"periscope-metering": {
 		{Kind: InfraDatabase, Provider: InfraProviderPrimary, Purpose: "metering leases and billing cursors"},
 		{Kind: InfraClickHouse, Provider: InfraProviderPrimary, Purpose: "analytics metering reads"},
