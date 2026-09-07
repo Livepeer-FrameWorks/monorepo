@@ -25,6 +25,11 @@ import (
 
 const sweepCeremonyAcknowledgementPrefix = "I_UNDERSTAND:"
 
+const (
+	cryptoSweepRPCTimeout     = 60 * time.Second
+	cryptoSweepLongRPCTimeout = 90 * time.Second
+)
+
 func newCryptoCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "crypto", Short: "Crypto custody operations"}
 	cmd.AddCommand(newCryptoReadinessCmd(), newCryptoSmokeCmd(), newCryptoWalletCmd(), newCryptoSweepCmd(), newCryptoMutationCmd())
@@ -63,7 +68,7 @@ func newCryptoMutationResolveCmd() *cobra.Command {
 				return err
 			}
 			defer cleanup()
-			ctx, cancel := adminRPCContextTimeout(cmd.Context(), ctxCfg.Auth.JWT, 60*time.Second)
+			ctx, cancel := adminRPCContextTimeout(cmd.Context(), ctxCfg.Auth.JWT, cryptoSweepRPCTimeout)
 			defer cancel()
 			response, err := client.ResolveX402MutationResult(ctx, &purserpb.ResolveX402MutationResultRequest{
 				TenantId: tenantID, IdempotencyKey: key, Result: payload, ContentType: contentType,
@@ -117,7 +122,7 @@ func newCryptoWalletRotateCmd() *cobra.Command {
 				return err
 			}
 			defer cleanup()
-			ctx, cancel := adminRPCContextTimeout(cmd.Context(), ctxCfg.Auth.JWT, 60*time.Second)
+			ctx, cancel := adminRPCContextTimeout(cmd.Context(), ctxCfg.Auth.JWT, cryptoSweepRPCTimeout)
 			defer cancel()
 			response, err := client.RotateCryptoDepositKey(ctx, &purserpb.RotateCryptoDepositKeyRequest{Xpub: xpub, Network: network})
 			if err != nil {
@@ -140,7 +145,7 @@ func newCryptoReadinessCmd() *cobra.Command {
 				return err
 			}
 			defer cleanup()
-			ctx, cancel := adminRPCContextTimeout(cmd.Context(), ctxCfg.Auth.JWT, 60*time.Second)
+			ctx, cancel := adminRPCContextTimeout(cmd.Context(), ctxCfg.Auth.JWT, cryptoSweepRPCTimeout)
 			defer cancel()
 			response, err := client.GetCryptoReadiness(ctx)
 			if err != nil {
@@ -174,7 +179,7 @@ func newCryptoSweepPlanCmd() *cobra.Command {
 				return err
 			}
 			defer cleanup()
-			ctx, cancel := adminRPCContextTimeout(cmd.Context(), ctxCfg.Auth.JWT, 60*time.Second)
+			ctx, cancel := adminRPCContextTimeout(cmd.Context(), ctxCfg.Auth.JWT, cryptoSweepRPCTimeout)
 			defer cancel()
 			response, err := client.PlanCryptoSweep(ctx, &purserpb.PlanCryptoSweepRequest{Network: network, DryRun: !persist})
 			if err != nil {
@@ -394,7 +399,7 @@ func newCryptoSweepBroadcastCmd() *cobra.Command {
 				return err
 			}
 			defer cleanup()
-			ctx, cancel := adminRPCContextTimeout(cmd.Context(), ctxCfg.Auth.JWT, 90*time.Second)
+			ctx, cancel := adminRPCContextTimeout(cmd.Context(), ctxCfg.Auth.JWT, cryptoSweepLongRPCTimeout)
 			defer cancel()
 			response, err := client.BroadcastCryptoSweep(ctx, &purserpb.BroadcastCryptoSweepRequest{
 				SignedBundleJson: payload, DryRun: !execute,
@@ -424,7 +429,7 @@ func newCryptoSweepReconcileCmd() *cobra.Command {
 				return err
 			}
 			defer cleanup()
-			ctx, cancel := adminRPCContextTimeout(cmd.Context(), ctxCfg.Auth.JWT, 60*time.Second)
+			ctx, cancel := adminRPCContextTimeout(cmd.Context(), ctxCfg.Auth.JWT, cryptoSweepRPCTimeout)
 			defer cancel()
 			response, err := client.ReconcileCryptoSweep(ctx, &purserpb.ReconcileCryptoSweepRequest{BatchId: batchID, DryRun: !apply})
 			if err != nil {
@@ -458,7 +463,7 @@ func newCryptoSweepReleaseCmd() *cobra.Command {
 				return err
 			}
 			defer cleanup()
-			ctx, cancel := adminRPCContextTimeout(cmd.Context(), ctxCfg.Auth.JWT, 90*time.Second)
+			ctx, cancel := adminRPCContextTimeout(cmd.Context(), ctxCfg.Auth.JWT, cryptoSweepLongRPCTimeout)
 			defer cancel()
 			response, err := client.ReleaseCryptoSweep(ctx, request)
 			if err != nil {

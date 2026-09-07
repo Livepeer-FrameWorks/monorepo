@@ -737,7 +737,7 @@ func main() {
 			if token == "" {
 				return nil
 			}
-			claims, err := auth.ValidateJWT(token, jwtSecretBytes)
+			claims, err := auth.ValidateInteractiveJWT(token, jwtSecretBytes)
 			if err != nil || claims.TenantID == "" {
 				return nil
 			}

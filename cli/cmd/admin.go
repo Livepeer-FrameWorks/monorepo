@@ -38,6 +38,16 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+const (
+	// Client timeouts are transport ceilings. Individual admin commands apply
+	// the narrower operation deadline through adminRPCContextTimeout.
+	adminQuartermasterClientTimeout = 30 * time.Second
+	adminPurserClientTimeout        = 90 * time.Second
+	adminFoghornClientTimeout       = 60 * time.Second
+	enableSelfHostingRPCTimeout     = 30 * time.Second
+	artifactMigrationRPCTimeout     = 60 * time.Second
+)
+
 // uuidRegex validates UUID format (with or without hyphens)
 var uuidRegex = regexp.MustCompile(`^[0-9a-fA-F]{8}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{4}-?[0-9a-fA-F]{12}$`)
 
@@ -358,7 +368,7 @@ type adminTokensClient interface {
 
 // runTokensCreate builds the create request, calls Commodore, and renders the
 // result. Inputs are assumed already validated/normalized by the caller.
-func runTokensCreate(ctx context.Context, w io.Writer, cli adminTokensClient, name, normalizedExpires, perms string, outputJSON bool) error {
+func runTokensCreate(ctx context.Context, w io.Writer, cli adminTokensClient, jwt, name, normalizedExpires, perms string, outputJSON bool) error {
 	req := &commodorepb.CreateAPITokenRequest{TokenName: name}
 	if strings.TrimSpace(perms) != "" {
 		req.Permissions = strings.Split(perms, ",")
@@ -371,7 +381,7 @@ func runTokensCreate(ctx context.Context, w io.Writer, cli adminTokensClient, na
 		req.ExpiresAt = timestamppb.New(time.Now().Add(d))
 	}
 
-	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	cctx, cancel := adminRPCContextTimeout(ctx, jwt, 15*time.Second)
 	defer cancel()
 	resp, err := cli.CreateAPIToken(cctx, req)
 	if err != nil {
@@ -389,8 +399,8 @@ func runTokensCreate(ctx context.Context, w io.Writer, cli adminTokensClient, na
 	return nil
 }
 
-func runTokensList(ctx context.Context, w io.Writer, cli adminTokensClient, outputJSON bool) error {
-	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+func runTokensList(ctx context.Context, w io.Writer, cli adminTokensClient, jwt string, outputJSON bool) error {
+	cctx, cancel := adminRPCContextTimeout(ctx, jwt, 15*time.Second)
 	defer cancel()
 	resp, err := cli.ListAPITokens(cctx, nil)
 	if err != nil {
@@ -412,8 +422,8 @@ func runTokensList(ctx context.Context, w io.Writer, cli adminTokensClient, outp
 // to confirm, and revokes. confirm receives the display name and returns
 // whether to proceed — the interactive prompt lives in the thin RunE closure so
 // this logic stays testable.
-func runTokensRevoke(ctx context.Context, w io.Writer, cli adminTokensClient, idArg, name string, confirm func(displayName string) bool) error {
-	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+func runTokensRevoke(ctx context.Context, w io.Writer, cli adminTokensClient, jwt, idArg, name string, confirm func(displayName string) bool) error {
+	cctx, cancel := adminRPCContextTimeout(ctx, jwt, 15*time.Second)
 	defer cancel()
 
 	var tokenID string
@@ -472,14 +482,14 @@ func newAdminTokensCreateCmd() *cobra.Command {
 			return fmt.Errorf("--expires: %w", err)
 		}
 
-		cli, _, cleanup, err := commodoreGRPCClientFromContext(cmd.Context())
+		cli, ctxCfg, cleanup, err := commodoreGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
 		defer cleanup()
 		defer func() { _ = cli.Close() }()
 
-		return runTokensCreate(cmd.Context(), cmd.OutOrStdout(), cli, name, normalizedExpires, perms, output == "json")
+		return runTokensCreate(cmd.Context(), cmd.OutOrStdout(), cli, ctxCfg.Auth.JWT, name, normalizedExpires, perms, output == "json")
 	}}
 	cmd.Flags().StringVar(&name, "name", "", "token name (label)")
 	cmd.Flags().StringVar(&expires, "expires", "", "expiry duration (e.g., 24h, 7d, 720h)")
@@ -489,14 +499,14 @@ func newAdminTokensCreateCmd() *cobra.Command {
 
 func newAdminTokensListCmd() *cobra.Command {
 	return &cobra.Command{Use: "list", Short: "List developer API tokens", RunE: func(cmd *cobra.Command, args []string) error {
-		cli, _, cleanup, err := commodoreGRPCClientFromContext(cmd.Context())
+		cli, ctxCfg, cleanup, err := commodoreGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
 		defer cleanup()
 		defer func() { _ = cli.Close() }()
 
-		return runTokensList(cmd.Context(), cmd.OutOrStdout(), cli, output == "json")
+		return runTokensList(cmd.Context(), cmd.OutOrStdout(), cli, ctxCfg.Auth.JWT, output == "json")
 	}}
 }
 
@@ -504,7 +514,7 @@ func newAdminTokensRevokeCmd() *cobra.Command {
 	var name string
 	var yes bool
 	cmd := &cobra.Command{Use: "revoke [id]", Short: "Revoke developer API token by ID or name", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		cli, _, cleanup, err := commodoreGRPCClientFromContext(cmd.Context())
+		cli, ctxCfg, cleanup, err := commodoreGRPCClientFromContext(cmd.Context())
 		if err != nil {
 			return err
 		}
@@ -518,7 +528,7 @@ func newAdminTokensRevokeCmd() *cobra.Command {
 		confirm := func(displayName string) bool {
 			return promptConfirm(fmt.Sprintf("Revoke API token %s? This cannot be undone", displayName), yes)
 		}
-		return runTokensRevoke(cmd.Context(), cmd.OutOrStdout(), cli, idArg, name, confirm)
+		return runTokensRevoke(cmd.Context(), cmd.OutOrStdout(), cli, ctxCfg.Auth.JWT, idArg, name, confirm)
 	}}
 	cmd.Flags().StringVar(&name, "name", "", "revoke token by name instead of ID")
 	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "skip confirmation prompt")
@@ -546,21 +556,25 @@ func qmGRPCClientFromContext(ctx context.Context) (*qmclient.GRPCClient, fwcfg.C
 		return nil, fwcfg.Context{}, nil, err
 	}
 
-	qm, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
+	qm, err := qmclient.NewGRPCClient(adminQuartermasterGRPCConfig(ep, ctxCfg))
+	if err != nil {
+		ep.Cleanup()
+		return nil, fwcfg.Context{}, nil, fmt.Errorf("failed to connect to Quartermaster gRPC: %w", err)
+	}
+	return qm, ctxCfg, ep.Cleanup, nil
+}
+
+func adminQuartermasterGRPCConfig(ep controlplane.Endpoint, ctxCfg fwcfg.Context) qmclient.GRPCConfig {
+	return qmclient.GRPCConfig{
 		GRPCAddr:      ep.Address,
-		Timeout:       15 * time.Second,
+		Timeout:       adminQuartermasterClientTimeout,
 		Logger:        logging.NewLogger(),
 		ServiceToken:  ctxCfg.Auth.ServiceToken,
 		AllowInsecure: ep.AllowInsecure,
 		CACertFile:    ep.CACertFile,
 		CACertPEM:     ep.CACertPEM,
 		ServerName:    ep.ServerName,
-	})
-	if err != nil {
-		ep.Cleanup()
-		return nil, fwcfg.Context{}, nil, fmt.Errorf("failed to connect to Quartermaster gRPC: %w", err)
 	}
-	return qm, ctxCfg, ep.Cleanup, nil
 }
 
 func foghornGRPCClientFromContext(ctx context.Context) (*fhclient.GRPCClient, fwcfg.Context, func(), error) {
@@ -574,9 +588,18 @@ func foghornGRPCClientFromContext(ctx context.Context) (*fhclient.GRPCClient, fw
 		return nil, fwcfg.Context{}, nil, err
 	}
 
-	fh, err := fhclient.NewGRPCClient(fhclient.GRPCConfig{
+	fh, err := fhclient.NewGRPCClient(adminFoghornGRPCConfig(ep, ctxCfg))
+	if err != nil {
+		ep.Cleanup()
+		return nil, fwcfg.Context{}, nil, fmt.Errorf("failed to connect to Foghorn gRPC: %w", err)
+	}
+	return fh, ctxCfg, ep.Cleanup, nil
+}
+
+func adminFoghornGRPCConfig(ep controlplane.Endpoint, ctxCfg fwcfg.Context) fhclient.GRPCConfig {
+	return fhclient.GRPCConfig{
 		GRPCAddr:      ep.Address,
-		Timeout:       30 * time.Second,
+		Timeout:       adminFoghornClientTimeout,
 		Logger:        logging.NewLogger(),
 		ServiceToken:  ctxCfg.Auth.ServiceToken,
 		UseTLS:        !ep.AllowInsecure,
@@ -584,12 +607,7 @@ func foghornGRPCClientFromContext(ctx context.Context) (*fhclient.GRPCClient, fw
 		CACertPEM:     ep.CACertPEM,
 		ServerName:    ep.ServerName,
 		AllowInsecure: ep.AllowInsecure,
-	})
-	if err != nil {
-		ep.Cleanup()
-		return nil, fwcfg.Context{}, nil, fmt.Errorf("failed to connect to Foghorn gRPC: %w", err)
 	}
-	return fh, ctxCfg, ep.Cleanup, nil
 }
 
 func purserGRPCClientFromContext(ctx context.Context) (*purserclient.GRPCClient, fwcfg.Context, func(), error) {
@@ -603,21 +621,25 @@ func purserGRPCClientFromContext(ctx context.Context) (*purserclient.GRPCClient,
 		return nil, fwcfg.Context{}, nil, err
 	}
 
-	p, err := purserclient.NewGRPCClient(purserclient.GRPCConfig{
+	p, err := purserclient.NewGRPCClient(adminPurserGRPCConfig(ep, ctxCfg))
+	if err != nil {
+		ep.Cleanup()
+		return nil, fwcfg.Context{}, nil, fmt.Errorf("failed to connect to Purser gRPC: %w", err)
+	}
+	return p, ctxCfg, ep.Cleanup, nil
+}
+
+func adminPurserGRPCConfig(ep controlplane.Endpoint, ctxCfg fwcfg.Context) purserclient.GRPCConfig {
+	return purserclient.GRPCConfig{
 		GRPCAddr:      ep.Address,
-		Timeout:       15 * time.Second,
+		Timeout:       adminPurserClientTimeout,
 		Logger:        logging.NewLogger(),
 		ServiceToken:  ctxCfg.Auth.ServiceToken,
 		AllowInsecure: ep.AllowInsecure,
 		CACertFile:    ep.CACertFile,
 		CACertPEM:     ep.CACertPEM,
 		ServerName:    ep.ServerName,
-	})
-	if err != nil {
-		ep.Cleanup()
-		return nil, fwcfg.Context{}, nil, fmt.Errorf("failed to connect to Purser gRPC: %w", err)
 	}
-	return p, ctxCfg, ep.Cleanup, nil
 }
 
 // adminRPCContext applies the standard 15s admin RPC deadline and threads the
@@ -1292,7 +1314,7 @@ func runClusterCertStatus(ctx context.Context, w io.Writer, qm adminClusterOpsCl
 }
 
 func runClusterCreateEdge(ctx context.Context, w io.Writer, qm adminClusterOpsClient, jwt string, req *quartermasterpb.EnableSelfHostingRequest, outputJSON bool) error {
-	cctx, cancel := adminRPCContextTimeout(ctx, jwt, 30*time.Second)
+	cctx, cancel := adminRPCContextTimeout(ctx, jwt, enableSelfHostingRPCTimeout)
 	defer cancel()
 	resp, err := qm.EnableSelfHosting(cctx, req)
 	if err != nil {
@@ -2764,7 +2786,7 @@ type adminArtifactMigrator interface {
 }
 
 func runMigrateArtifacts(ctx context.Context, w io.Writer, fed adminArtifactMigrator, jwt string, req *foghornfederationpb.MigrateArtifactMetadataRequest, outputJSON bool) error {
-	cctx, cancel := adminRPCContextTimeout(ctx, jwt, 60*time.Second)
+	cctx, cancel := adminRPCContextTimeout(ctx, jwt, artifactMigrationRPCTimeout)
 	defer cancel()
 	resp, err := fed.MigrateArtifactMetadata(cctx, req)
 	if err != nil {

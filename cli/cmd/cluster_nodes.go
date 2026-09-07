@@ -37,6 +37,11 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+const (
+	clusterNodesQuartermasterClientTimeout = 60 * time.Second
+	clusterNodesFoghornClientTimeout       = 30 * time.Second
+)
+
 const defaultClusterNodeDrainDeadline = 4 * time.Hour
 
 type edgeProbeAction string
@@ -1218,21 +1223,25 @@ func clusterNodesQMClientFromContext(ctx context.Context) (*qmclient.GRPCClient,
 	if err != nil {
 		return nil, fwcfg.Context{}, nil, err
 	}
-	qm, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
+	qm, err := qmclient.NewGRPCClient(clusterNodesQuartermasterGRPCConfig(ep, ctxCfg))
+	if err != nil {
+		ep.Cleanup()
+		return nil, fwcfg.Context{}, nil, fmt.Errorf("failed to connect to Quartermaster gRPC: %w", err)
+	}
+	return qm, ctxCfg, ep.Cleanup, nil
+}
+
+func clusterNodesQuartermasterGRPCConfig(ep controlplane.Endpoint, ctxCfg fwcfg.Context) qmclient.GRPCConfig {
+	return qmclient.GRPCConfig{
 		GRPCAddr:      ep.Address,
-		Timeout:       15 * time.Second,
+		Timeout:       clusterNodesQuartermasterClientTimeout,
 		Logger:        logging.NewLogger(),
 		ServiceToken:  ctxCfg.Auth.ServiceToken,
 		AllowInsecure: ep.AllowInsecure,
 		CACertFile:    ep.CACertFile,
 		CACertPEM:     ep.CACertPEM,
 		ServerName:    ep.ServerName,
-	})
-	if err != nil {
-		ep.Cleanup()
-		return nil, fwcfg.Context{}, nil, fmt.Errorf("failed to connect to Quartermaster gRPC: %w", err)
 	}
-	return qm, ctxCfg, ep.Cleanup, nil
 }
 
 func clusterNodesFoghornClientFromContext(ctx context.Context) (*fhclient.GRPCClient, fwcfg.Context, func(), error) {
@@ -1244,9 +1253,18 @@ func clusterNodesFoghornClientFromContext(ctx context.Context) (*fhclient.GRPCCl
 	if err != nil {
 		return nil, fwcfg.Context{}, nil, err
 	}
-	fh, err := fhclient.NewGRPCClient(fhclient.GRPCConfig{
+	fh, err := fhclient.NewGRPCClient(clusterNodesFoghornGRPCConfig(ep, ctxCfg))
+	if err != nil {
+		ep.Cleanup()
+		return nil, fwcfg.Context{}, nil, fmt.Errorf("failed to connect to Foghorn gRPC: %w", err)
+	}
+	return fh, ctxCfg, ep.Cleanup, nil
+}
+
+func clusterNodesFoghornGRPCConfig(ep controlplane.Endpoint, ctxCfg fwcfg.Context) fhclient.GRPCConfig {
+	return fhclient.GRPCConfig{
 		GRPCAddr:      ep.Address,
-		Timeout:       30 * time.Second,
+		Timeout:       clusterNodesFoghornClientTimeout,
 		Logger:        logging.NewLogger(),
 		ServiceToken:  ctxCfg.Auth.ServiceToken,
 		UseTLS:        !ep.AllowInsecure,
@@ -1254,12 +1272,7 @@ func clusterNodesFoghornClientFromContext(ctx context.Context) (*fhclient.GRPCCl
 		CACertPEM:     ep.CACertPEM,
 		ServerName:    ep.ServerName,
 		AllowInsecure: ep.AllowInsecure,
-	})
-	if err != nil {
-		ep.Cleanup()
-		return nil, fwcfg.Context{}, nil, fmt.Errorf("failed to connect to Foghorn gRPC: %w", err)
 	}
-	return fh, ctxCfg, ep.Cleanup, nil
 }
 
 func clusterNodesRPCContext(parent context.Context, ctxCfg fwcfg.Context, timeout time.Duration) (context.Context, context.CancelFunc) {

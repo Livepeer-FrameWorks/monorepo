@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 )
@@ -28,27 +29,34 @@ type fakeAdminTokensClient struct {
 	revokedID   string
 	revokeCalls int
 	revokeErr   error
+
+	createJWT string
+	listJWT   string
+	revokeJWT string
 }
 
-func (f *fakeAdminTokensClient) CreateAPIToken(_ context.Context, req *commodorepb.CreateAPITokenRequest) (*commodorepb.CreateAPITokenResponse, error) {
+func (f *fakeAdminTokensClient) CreateAPIToken(ctx context.Context, req *commodorepb.CreateAPITokenRequest) (*commodorepb.CreateAPITokenResponse, error) {
 	f.createReq = req
+	f.createJWT = ctxkeys.GetJWTToken(ctx)
 	if f.createErr != nil {
 		return nil, f.createErr
 	}
 	return f.createResp, nil
 }
 
-func (f *fakeAdminTokensClient) ListAPITokens(_ context.Context, _ *commonpb.CursorPaginationRequest) (*commodorepb.ListAPITokensResponse, error) {
+func (f *fakeAdminTokensClient) ListAPITokens(ctx context.Context, _ *commonpb.CursorPaginationRequest) (*commodorepb.ListAPITokensResponse, error) {
 	f.listCalls++
+	f.listJWT = ctxkeys.GetJWTToken(ctx)
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
 	return f.listResp, nil
 }
 
-func (f *fakeAdminTokensClient) RevokeAPIToken(_ context.Context, tokenID string) (*commodorepb.RevokeAPITokenResponse, error) {
+func (f *fakeAdminTokensClient) RevokeAPIToken(ctx context.Context, tokenID string) (*commodorepb.RevokeAPITokenResponse, error) {
 	f.revokeCalls++
 	f.revokedID = tokenID
+	f.revokeJWT = ctxkeys.GetJWTToken(ctx)
 	if f.revokeErr != nil {
 		return nil, f.revokeErr
 	}
@@ -60,7 +68,7 @@ func TestRunTokensCreate_BuildsRequestAndRenders(t *testing.T) {
 		createResp: &commodorepb.CreateAPITokenResponse{Id: "id-1", TokenName: "ci", TokenValue: "secret-value"},
 	}
 	var buf bytes.Buffer
-	err := runTokensCreate(context.Background(), &buf, fake, "ci", "24h", "read,write", false)
+	err := runTokensCreate(context.Background(), &buf, fake, "", "ci", "24h", "read,write", false)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -84,7 +92,7 @@ func TestRunTokensCreate_BuildsRequestAndRenders(t *testing.T) {
 func TestRunTokensCreate_NoExpiryNoPerms(t *testing.T) {
 	fake := &fakeAdminTokensClient{createResp: &commodorepb.CreateAPITokenResponse{Id: "id-1", TokenName: "ci"}}
 	var buf bytes.Buffer
-	if err := runTokensCreate(context.Background(), &buf, fake, "ci", "", "", false); err != nil {
+	if err := runTokensCreate(context.Background(), &buf, fake, "", "ci", "", "", false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if fake.createReq.Permissions != nil {
@@ -98,7 +106,7 @@ func TestRunTokensCreate_NoExpiryNoPerms(t *testing.T) {
 func TestRunTokensCreate_JSON(t *testing.T) {
 	fake := &fakeAdminTokensClient{createResp: &commodorepb.CreateAPITokenResponse{Id: "id-1", TokenName: "ci", TokenValue: "v"}}
 	var buf bytes.Buffer
-	if err := runTokensCreate(context.Background(), &buf, fake, "ci", "", "", true); err != nil {
+	if err := runTokensCreate(context.Background(), &buf, fake, "", "ci", "", "", true); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	var decoded map[string]any
@@ -113,7 +121,7 @@ func TestRunTokensCreate_JSON(t *testing.T) {
 func TestRunTokensCreate_Error(t *testing.T) {
 	fake := &fakeAdminTokensClient{createErr: errors.New("boom")}
 	var buf bytes.Buffer
-	if err := runTokensCreate(context.Background(), &buf, fake, "ci", "", "", false); err == nil {
+	if err := runTokensCreate(context.Background(), &buf, fake, "", "ci", "", "", false); err == nil {
 		t.Fatal("expected error to propagate")
 	}
 }
@@ -126,7 +134,7 @@ func TestRunTokensList_Renders(t *testing.T) {
 		},
 	}}
 	var buf bytes.Buffer
-	if err := runTokensList(context.Background(), &buf, fake, false); err != nil {
+	if err := runTokensList(context.Background(), &buf, fake, "", false); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	out := buf.String()
@@ -142,7 +150,7 @@ func TestRunTokensList_JSON(t *testing.T) {
 		Tokens: []*commodorepb.APITokenInfo{{Id: "a", TokenName: "first", Status: "active"}},
 	}}
 	var buf bytes.Buffer
-	if err := runTokensList(context.Background(), &buf, fake, true); err != nil {
+	if err := runTokensList(context.Background(), &buf, fake, "", true); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	var decoded map[string]any
@@ -157,7 +165,7 @@ func TestRunTokensList_JSON(t *testing.T) {
 func TestRunTokensList_Error(t *testing.T) {
 	fake := &fakeAdminTokensClient{listErr: errors.New("rpc down")}
 	var buf bytes.Buffer
-	if err := runTokensList(context.Background(), &buf, fake, false); err == nil {
+	if err := runTokensList(context.Background(), &buf, fake, "", false); err == nil {
 		t.Fatal("expected list error to propagate")
 	}
 }
@@ -170,7 +178,7 @@ func confirmNo(string) bool  { return false }
 func TestRunTokensRevoke_ByID(t *testing.T) {
 	fake := &fakeAdminTokensClient{}
 	var buf bytes.Buffer
-	if err := runTokensRevoke(context.Background(), &buf, fake, validTokenUUID, "", confirmYes); err != nil {
+	if err := runTokensRevoke(context.Background(), &buf, fake, "", validTokenUUID, "", confirmYes); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if fake.revokeCalls != 1 || fake.revokedID != validTokenUUID {
@@ -187,7 +195,7 @@ func TestRunTokensRevoke_ByID(t *testing.T) {
 func TestRunTokensRevoke_ByID_InvalidUUID(t *testing.T) {
 	fake := &fakeAdminTokensClient{}
 	var buf bytes.Buffer
-	if err := runTokensRevoke(context.Background(), &buf, fake, "not-a-uuid", "", confirmYes); err == nil {
+	if err := runTokensRevoke(context.Background(), &buf, fake, "", "not-a-uuid", "", confirmYes); err == nil {
 		t.Fatal("expected error for malformed token ID")
 	}
 	if fake.revokeCalls != 0 {
@@ -203,7 +211,7 @@ func TestRunTokensRevoke_ByName(t *testing.T) {
 		},
 	}}
 	var buf bytes.Buffer
-	if err := runTokensRevoke(context.Background(), &buf, fake, "", "ci", confirmYes); err != nil {
+	if err := runTokensRevoke(context.Background(), &buf, fake, "", "", "ci", confirmYes); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if fake.revokedID != "target" {
@@ -216,7 +224,7 @@ func TestRunTokensRevoke_ByName_NotFound(t *testing.T) {
 		Tokens: []*commodorepb.APITokenInfo{{Id: "x", TokenName: "other"}},
 	}}
 	var buf bytes.Buffer
-	if err := runTokensRevoke(context.Background(), &buf, fake, "", "ci", confirmYes); err == nil {
+	if err := runTokensRevoke(context.Background(), &buf, fake, "", "", "ci", confirmYes); err == nil {
 		t.Fatal("expected not-found error")
 	}
 	if fake.revokeCalls != 0 {
@@ -227,7 +235,7 @@ func TestRunTokensRevoke_ByName_NotFound(t *testing.T) {
 func TestRunTokensRevoke_NoArgs(t *testing.T) {
 	fake := &fakeAdminTokensClient{}
 	var buf bytes.Buffer
-	if err := runTokensRevoke(context.Background(), &buf, fake, "", "", confirmYes); err == nil {
+	if err := runTokensRevoke(context.Background(), &buf, fake, "", "", "", confirmYes); err == nil {
 		t.Fatal("expected error when neither ID nor --name supplied")
 	}
 }
@@ -235,7 +243,7 @@ func TestRunTokensRevoke_NoArgs(t *testing.T) {
 func TestRunTokensRevoke_ConfirmFalse(t *testing.T) {
 	fake := &fakeAdminTokensClient{}
 	var buf bytes.Buffer
-	if err := runTokensRevoke(context.Background(), &buf, fake, validTokenUUID, "", confirmNo); err != nil {
+	if err := runTokensRevoke(context.Background(), &buf, fake, "", validTokenUUID, "", confirmNo); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if fake.revokeCalls != 0 {
@@ -249,7 +257,28 @@ func TestRunTokensRevoke_ConfirmFalse(t *testing.T) {
 func TestRunTokensRevoke_RevokeError(t *testing.T) {
 	fake := &fakeAdminTokensClient{revokeErr: errors.New("rpc rejected")}
 	var buf bytes.Buffer
-	if err := runTokensRevoke(context.Background(), &buf, fake, validTokenUUID, "", confirmYes); err == nil {
+	if err := runTokensRevoke(context.Background(), &buf, fake, "", validTokenUUID, "", confirmYes); err == nil {
 		t.Fatal("expected revoke error to propagate")
+	}
+}
+
+func TestRunTokensCommandsCarryOperatorJWT(t *testing.T) {
+	const operatorJWT = "operator-session-jwt"
+	fake := &fakeAdminTokensClient{
+		createResp: &commodorepb.CreateAPITokenResponse{Id: "id-1", TokenName: "ci"},
+		listResp:   &commodorepb.ListAPITokensResponse{},
+	}
+	var buf bytes.Buffer
+	if err := runTokensCreate(context.Background(), &buf, fake, operatorJWT, "ci", "", "", false); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := runTokensList(context.Background(), &buf, fake, operatorJWT, false); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if err := runTokensRevoke(context.Background(), &buf, fake, operatorJWT, validTokenUUID, "", confirmYes); err != nil {
+		t.Fatalf("revoke: %v", err)
+	}
+	if fake.createJWT != operatorJWT || fake.listJWT != operatorJWT || fake.revokeJWT != operatorJWT {
+		t.Fatalf("operator JWT propagation create=%q list=%q revoke=%q", fake.createJWT, fake.listJWT, fake.revokeJWT)
 	}
 }
