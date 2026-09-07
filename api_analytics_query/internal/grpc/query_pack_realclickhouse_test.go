@@ -257,7 +257,7 @@ func startQueryPackClickHouse(t *testing.T) *sql.DB {
 		"-v", config+":/etc/clickhouse-server/config.d/zz-keeper.xml:ro", image); runErr != nil {
 		t.Fatalf("start ClickHouse: %v\n%s", runErr, output)
 	}
-	t.Cleanup(func() { _, _ = queryPackDocker(t, "", "rm", "-f", name) })
+	t.Cleanup(func() { _, _ = queryPackDocker(t, "", "rm", "-fv", name) })
 	deadline := time.Now().Add(90 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, execErr := queryPackDocker(t, "", "exec", name, "clickhouse-client", "--query", "SELECT 1"); execErr == nil {

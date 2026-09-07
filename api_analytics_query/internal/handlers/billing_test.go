@@ -3,14 +3,18 @@ package handlers
 import (
 	"context"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
 	"frameworks/api_analytics_query/internal/database/meteringdb"
+	"frameworks/api_analytics_query/internal/database/periscopequerydb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 func TestSanitizeFloat(t *testing.T) {
@@ -61,7 +65,7 @@ func TestEarliestCanonicalBillingFactCastsAPIWindowStartFromDateTime(t *testing.
 	bs := &BillingSummarizer{clickhouse: db, logger: logging.NewLogger()}
 	first := time.Date(2026, 5, 27, 10, 15, 0, 0, time.UTC)
 	mock.ExpectQuery(`SELECT min\(first_ms\).*toInt64\(toUnixTimestamp\(min\(window_start\)\) \* 1000\) AS first_ms`).
-		WithArgs("tenant-1", "tenant-1", "tenant-1", "tenant-1", "tenant-1").
+		WithArgs("tenant-1", "tenant-1", "tenant-1", "tenant-1", "tenant-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"first_ms"}).AddRow(first.UnixMilli()))
 
 	got, found, err := bs.earliestCanonicalBillingFact(context.Background(), "tenant-1")
@@ -116,6 +120,182 @@ func TestQueryTenantViewerMetricsCanonical(t *testing.T) {
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestAggregateTenantViewerMetricsSkipsAndMetersMissingCluster(t *testing.T) {
+	skipped := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_billing_malformed_facts_skipped_total"}, []string{"fact_kind", "reason"})
+	bs := &BillingSummarizer{
+		logger:  logging.NewLogger(),
+		metrics: &BillingMetrics{MalformedFactsSkipped: skipped},
+	}
+	clusters, egress, hours, viewers := bs.aggregateTenantViewerMetrics("tenant-1", []tenantViewerMetricRow{
+		{ClusterID: "", EgressGB: 99, ViewerHours: 99, UniqueViewers: 99},
+		{ClusterID: " cluster-a ", EgressGB: 2, ViewerHours: 3, UniqueViewers: 4},
+	})
+	if len(clusters) != 1 || clusters["cluster-a"] == nil || egress != 2 || hours != 3 || viewers != 4 {
+		t.Fatalf("malformed viewer fact was not isolated: clusters=%#v totals=%v/%v/%d", clusters, egress, hours, viewers)
+	}
+	if got := testutil.ToFloat64(skipped.WithLabelValues("viewer", "missing_cluster_id")); got != 1 {
+		t.Fatalf("viewer skip metric = %v, want 1", got)
+	}
+}
+
+func TestAggregateTenantRestreamMetricsSkipsAndMetersMissingCluster(t *testing.T) {
+	skipped := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_billing_malformed_restream_facts_skipped_total"}, []string{"fact_kind", "reason"})
+	bs := &BillingSummarizer{
+		logger:  logging.NewLogger(),
+		metrics: &BillingMetrics{MalformedFactsSkipped: skipped},
+	}
+	clusters, egress, minutes := bs.aggregateTenantRestreamMetrics("tenant-1", []tenantRestreamMetricRow{
+		{ClusterID: "", EgressGB: 99, DeliveredMinutes: 99},
+		{ClusterID: " cluster-a ", Platform: "youtube", EgressGB: 2, DeliveredMinutes: 3},
+	})
+	if len(clusters) != 1 || len(clusters["cluster-a"]) != 1 || egress != 2 || minutes != 3 {
+		t.Fatalf("malformed restream fact was not isolated: clusters=%#v totals=%v/%v", clusters, egress, minutes)
+	}
+	if got := testutil.ToFloat64(skipped.WithLabelValues("restream", "missing_cluster_id")); got != 1 {
+		t.Fatalf("restream skip metric = %v, want 1", got)
+	}
+}
+
+func TestQueryTenantRestreamMetricsCanonical(t *testing.T) {
+	if query := periscopequerydb.TenantRestreamMetrics.SQL(); !strings.Contains(query, "argMax(state") || !strings.Contains(query, "c.state IN ('idle', 'failed')") {
+		t.Fatalf("restream billing query does not enforce terminal facts:\n%s", query)
+	}
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	bs := &BillingSummarizer{clickhouse: db, logger: logging.NewLogger()}
+	start := time.Unix(1700000000, 0).UTC()
+	end := start.Add(time.Hour)
+	mock.ExpectQuery(`FROM periscope\.restream_sessions_final`).
+		WithArgs("tenant-1", start.UnixMilli(), end.UnixMilli(), "tenant-1", start.UnixMilli()).
+		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "platform", "egress_gb", "delivered_minutes"}).
+			AddRow("cluster-a", " YouTube ", 2.5, 30.0).
+			AddRow("cluster-a", "future-network", 1.0, 10.0))
+
+	got, err := bs.queryTenantRestreamMetrics(context.Background(), "tenant-1", start, end)
+	if err != nil {
+		t.Fatalf("queryTenantRestreamMetrics: %v", err)
+	}
+	if len(got) != 2 || got[0].ClusterID != "cluster-a" || got[0].Platform != "youtube" || got[0].EgressGB != 2.5 || got[0].DeliveredMinutes != 30 || got[1].Platform != "custom" {
+		t.Fatalf("unexpected restream metrics: %#v", got)
+	}
+}
+
+func TestQueryTenantRestreamMetricsHonorsBillingCutover(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	start := time.Date(2026, 9, 3, 23, 55, 0, 0, time.UTC)
+	cutover := time.Date(2026, 9, 4, 0, 0, 0, 0, time.UTC)
+	end := cutover.Add(5 * time.Minute)
+	bs := &BillingSummarizer{clickhouse: db, logger: logging.NewLogger(), restreamBillingEffectiveMS: cutover.UnixMilli()}
+	mock.ExpectQuery(`FROM periscope\.restream_sessions_final`).
+		WithArgs("tenant-1", cutover.UnixMilli(), end.UnixMilli(), "tenant-1", cutover.UnixMilli()).
+		WillReturnRows(sqlmock.NewRows([]string{"cluster_id", "platform", "egress_gb", "delivered_minutes"}))
+
+	if _, err := bs.queryTenantRestreamMetrics(context.Background(), "tenant-1", start, end); err != nil {
+		t.Fatalf("queryTenantRestreamMetrics: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+	if rows, err := bs.queryTenantRestreamMetrics(context.Background(), "tenant-1", start, cutover); err != nil || len(rows) != 0 {
+		t.Fatalf("pre-cutover window must be empty without querying: rows=%#v err=%v", rows, err)
+	}
+}
+
+func TestRestreamBillingCutoverMatchesPublishedContract(t *testing.T) {
+	want := time.Date(2026, time.September, 4, 0, 0, 0, 0, time.UTC).UnixMilli()
+	if restreamBillingEffectiveAtUnixMS != want {
+		t.Fatalf("restream billing cutover = %d, want documented %d", restreamBillingEffectiveAtUnixMS, want)
+	}
+}
+
+func TestQueryUsageAdjustmentsDeduplicatesReplayedDivergence(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	start := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+	end := start.Add(time.Hour)
+	naturalKey := `{"tenant_id":"tenant-1","node_id":"node-1","session_id":"session-1","cluster_id":"cluster-a"}`
+	rows := sqlmock.NewRows([]string{"observed_at_ms", "table_name", "meter", "field", "natural_key_json", "prior_value_json", "new_value_json", "source_event_id", "occurrence_id"}).
+		AddRow(start.Add(time.Minute).UnixMilli(), "viewer_sessions_final", "delivered_minutes", "duration_seconds", naturalKey, `600`, `720`, "event-1", "").
+		AddRow(start.Add(2*time.Minute).UnixMilli(), "viewer_sessions_final", "delivered_minutes", "duration_seconds", naturalKey, `600`, `720`, "event-1", "")
+	mock.ExpectQuery(`FROM periscope\.projection_divergences`).WithArgs(start.UnixMilli(), end.UnixMilli(), "tenant-1").WillReturnRows(rows)
+	for range 2 {
+		mock.ExpectQuery(`FROM periscope\.viewer_sessions_final`).WithArgs("tenant-1", "node-1", "session-1").
+			WillReturnRows(sqlmock.NewRows([]string{"first_projection_ms"}).AddRow(start.Add(-time.Hour).UnixMilli()))
+	}
+
+	adjustments, err := (&BillingSummarizer{clickhouse: db, logger: logging.NewLogger()}).queryUsageAdjustments(context.Background(), "tenant-1", start, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(adjustments["cluster-a"]); got != 1 {
+		t.Fatalf("replayed divergence produced %d adjustments, want 1", got)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestQueryUsageAdjustmentsSkipsOrphanedDivergence(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	start := time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+	end := start.Add(time.Hour)
+	naturalKey := `{"tenant_id":"tenant-1","node_id":"node-1","session_id":"missing","cluster_id":"cluster-a"}`
+	mock.ExpectQuery(`FROM periscope\.projection_divergences`).WithArgs(start.UnixMilli(), end.UnixMilli(), "tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"observed_at_ms", "table_name", "meter", "field", "natural_key_json", "prior_value_json", "new_value_json", "source_event_id", "occurrence_id"}).
+			AddRow(start.Add(time.Minute).UnixMilli(), "viewer_sessions_final", "delivered_minutes", "duration_seconds", naturalKey, `600`, `720`, "event-1", ""))
+	mock.ExpectQuery(`FROM periscope\.viewer_sessions_final`).WithArgs("tenant-1", "node-1", "missing").
+		WillReturnRows(sqlmock.NewRows([]string{"first_projection_ms"}).AddRow(int64(0)))
+
+	adjustments, err := (&BillingSummarizer{clickhouse: db, logger: logging.NewLogger()}).queryUsageAdjustments(context.Background(), "tenant-1", start, end)
+	if err != nil {
+		t.Fatalf("orphaned divergence wedged the billing slice: %v", err)
+	}
+	if len(adjustments) != 0 {
+		t.Fatalf("orphaned divergence produced adjustments: %#v", adjustments)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestQueryUsageAdjustmentsSkipsMissingClusterWithoutQueryingSource(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	start := time.Date(2026, 9, 7, 12, 0, 0, 0, time.UTC)
+	end := start.Add(time.Hour)
+	mock.ExpectQuery(`FROM periscope\.projection_divergences`).WithArgs(start.UnixMilli(), end.UnixMilli(), "tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"observed_at_ms", "table_name", "meter", "field", "natural_key_json", "prior_value_json", "new_value_json", "source_event_id", "occurrence_id"}).
+			AddRow(start.Add(time.Minute).UnixMilli(), "restream_sessions_final", "egress_gb", "bytes_sent", `{"tenant_id":"tenant-1","cluster_id":""}`, `0`, `100`, "bad-event", ""))
+
+	adjustments, err := (&BillingSummarizer{clickhouse: db, logger: logging.NewLogger()}).queryUsageAdjustments(context.Background(), "tenant-1", start, end)
+	if err != nil {
+		t.Fatalf("missing-cluster divergence wedged the billing slice: %v", err)
+	}
+	if len(adjustments) != 0 {
+		t.Fatalf("missing-cluster divergence produced adjustments: %#v", adjustments)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 

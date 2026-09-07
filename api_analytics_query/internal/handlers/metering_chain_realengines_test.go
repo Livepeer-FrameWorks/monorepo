@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -57,6 +58,7 @@ func TestCrossEngineMeteringReplayLateCorrectionAndFencing_RealEngines(t *testin
 	tenantID, streamID := uuid.NewString(), uuid.NewString()
 	windowStart := time.Now().UTC().Add(-15 * time.Minute).Truncate(5 * time.Minute)
 	windowEnd := windowStart.Add(5 * time.Minute)
+	bs.restreamBillingEffectiveMS = windowStart.UnixMilli()
 	projectionMS := windowStart.Add(time.Minute).UnixMilli()
 	lateEndedMS := windowStart.Add(-2 * time.Hour).UnixMilli()
 
@@ -71,6 +73,15 @@ func TestCrossEngineMeteringReplayLateCorrectionAndFencing_RealEngines(t *testin
 	viewerArgs[12] = projectionMS + 10_000
 	if _, err := ch.ExecContext(ctx, viewerInsert, viewerArgs...); err != nil {
 		t.Fatalf("duplicate viewer projection: %v", err)
+	}
+	restreamInsert := `INSERT INTO periscope.restream_sessions_final
+		(tenant_id,node_id,source_event_id,cluster_id,stream_id,stream_name,source_generation,target_id,target_revision,mist_push_id,platform,state,reason,duration_ms,bytes_sent,source_started_at_ms,source_ended_at_ms,edge_received_at_ms,projection_version_ms,payload_raw)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+	if _, err := ch.ExecContext(ctx, restreamInsert,
+		tenantID, "edge-chain-1", "restream-source-1", "cluster-chain-1", streamID, "live+chain",
+		uuid.NewString(), uuid.NewString(), int64(2), int64(41), "youtube", "idle", "completed",
+		uint64(300_000), uint64(3<<30), lateEndedMS-300_000, lateEndedMS, lateEndedMS, projectionMS+15_000, "{}"); err != nil {
+		t.Fatal(err)
 	}
 
 	streamInsert := `INSERT INTO periscope.stream_sessions_final
@@ -132,11 +143,17 @@ func TestCrossEngineMeteringReplayLateCorrectionAndFencing_RealEngines(t *testin
 	first := producer.reports[0]
 	assertMeter(t, first, "delivered_minutes", 10)
 	assertMeter(t, first, "egress_gb", 2)
+	assertMeterWithDimensions(t, first, "delivered_minutes", 5, models.JSONB{"delivery_kind": "restream", "platform": "youtube"})
+	assertMeterWithDimensions(t, first, "egress_gb", 3, models.JSONB{"delivery_kind": "restream", "platform": "youtube"})
 	assertMeter(t, first, "stream_runtime_seconds", 900)
-	assertMeter(t, first, "api_requests", 3)
-	assertMeter(t, first, "api_errors", 1)
+	apiDimensions := models.JSONB{"auth_type": "service", "operation_type": "skipper_search_query", "service": "skipper"}
+	assertMeterWithDimensions(t, first, "api_requests", 3, apiDimensions)
+	assertMeterWithDimensions(t, first, "api_errors", 1, apiDimensions)
 	if len(first.UsageAdjustments) != 1 || first.UsageAdjustments[0].DeltaValue != 2 {
 		t.Fatalf("correction adjustments=%#v, want +2 delivered minutes", first.UsageAdjustments)
+	}
+	if first.UsageAdjustments[0].Dimensions != nil {
+		t.Fatalf("correction dimensions=%#v, want legacy dimension-free playback identity", first.UsageAdjustments[0].Dimensions)
 	}
 
 	if _, err := pg.ExecContext(ctx, `UPDATE periscope.billing_cursors SET last_processed_at = $1 WHERE source_id = $2 AND tenant_id = $3`, windowStart, bs.sourceID, tenantID); err != nil {
@@ -148,9 +165,12 @@ func TestCrossEngineMeteringReplayLateCorrectionAndFencing_RealEngines(t *testin
 	if len(producer.reports) != 2 || producer.reports[1].ReportID != first.ReportID {
 		t.Fatalf("replay report identity changed: %#v", producer.reports)
 	}
+	if len(producer.reports[1].UsageAdjustments) != 1 || producer.reports[1].UsageAdjustments[0].SourceID != first.UsageAdjustments[0].SourceID {
+		t.Fatalf("playback correction replay identity changed: first=%#v replay=%#v", first.UsageAdjustments, producer.reports[1].UsageAdjustments)
+	}
 	assertMeter(t, producer.reports[1], "delivered_minutes", 10)
 	assertMeter(t, producer.reports[1], "stream_runtime_seconds", 900)
-	assertMeter(t, producer.reports[1], "api_requests", 3)
+	assertMeterWithDimensions(t, producer.reports[1], "api_requests", 3, apiDimensions)
 
 	testReservationLifecycle(t, ctx, ch, queries, bs, producer, tenantID, streamID)
 }
@@ -198,14 +218,27 @@ func assertMeteringCursor(t *testing.T, queries *meteringdb.Queries, sourceID, t
 func assertMeter(t *testing.T, report models.UsageSummary, meter string, want float64) {
 	t.Helper()
 	for _, quantity := range report.Meters {
-		if quantity.Meter == meter {
+		if quantity.Meter == meter && len(quantity.Dimensions) == 0 {
 			if quantity.Quantity != want {
 				t.Fatalf("meter %s=%v, want %v", meter, quantity.Quantity, want)
 			}
 			return
 		}
 	}
-	t.Fatalf("meter %s absent from %#v", meter, report.Meters)
+	t.Fatalf("dimension-free meter %s absent from %#v", meter, report.Meters)
+}
+
+func assertMeterWithDimensions(t *testing.T, report models.UsageSummary, meter string, want float64, dimensions models.JSONB) {
+	t.Helper()
+	for _, quantity := range report.Meters {
+		if quantity.Meter == meter && reflect.DeepEqual(quantity.Dimensions, dimensions) {
+			if quantity.Quantity != want {
+				t.Fatalf("meter %s dimensions=%v quantity=%v, want %v", meter, dimensions, quantity.Quantity, want)
+			}
+			return
+		}
+	}
+	t.Fatalf("meter %s dimensions=%v absent from %#v", meter, dimensions, report.Meters)
 }
 
 func startMeteringChainPostgres(t *testing.T) *sql.DB {

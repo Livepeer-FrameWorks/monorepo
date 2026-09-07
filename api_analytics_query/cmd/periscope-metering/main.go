@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"frameworks/api_analytics_query/internal/database/periscopequerydb"
+	"frameworks/api_analytics_query/internal/handlers"
 	"frameworks/api_analytics_query/internal/scheduler"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
@@ -65,7 +66,19 @@ func main() {
 		"METERING_SOURCE_REGION": sourceRegion,
 	}))
 
-	tasks := scheduler.NewScheduler(postgres, clickhouse, logger, sourceID, sourceRegion)
+	billingMetrics := &handlers.BillingMetrics{
+		ProjectionDivergences: metrics.NewCounter(
+			"projection_divergence_billing_total",
+			"Projection divergence rows skipped safely by billing outcome and source table",
+			[]string{"outcome", "table"},
+		),
+		MalformedFactsSkipped: metrics.NewCounter(
+			"billing_malformed_facts_skipped_total",
+			"Malformed finalized facts skipped without blocking the tenant billing cursor",
+			[]string{"fact_kind", "reason"},
+		),
+	}
+	tasks := scheduler.NewScheduler(postgres, clickhouse, logger, sourceID, sourceRegion, billingMetrics)
 	validationCtx, cancelValidation := context.WithTimeout(context.Background(), 30*time.Second)
 	if err := tasks.ValidateSource(validationCtx); err != nil {
 		cancelValidation()

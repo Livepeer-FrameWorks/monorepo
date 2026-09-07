@@ -40,6 +40,7 @@ func main() {
 	clickhouseDB := config.RequireEnv("CLICKHOUSE_DB")
 	clickhouseUser := config.RequireEnv("CLICKHOUSE_USER")
 	clickhousePassword := config.RequireEnv("CLICKHOUSE_PASSWORD")
+	dbURL := config.RequireEnv("DATABASE_URL")
 	jwtSecret := config.RequireEnv("JWT_SECRET")
 	serviceToken := config.RequireEnv("SERVICE_TOKEN")
 	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
@@ -53,6 +54,11 @@ func main() {
 	chConfig.Password = clickhousePassword
 	clickhouse := database.MustConnectClickHouse(chConfig, logger)
 	defer func() { _ = clickhouse.Close() }()
+	dbConfig := database.DefaultConfig()
+	dbConfig.ServiceName = "periscope-query"
+	dbConfig.URL = dbURL
+	replayDB := database.MustConnect(dbConfig, logger)
+	defer func() { _ = replayDB.Close() }()
 
 	// Setup monitoring
 	healthChecker := monitoring.NewHealthChecker("periscope-query", version.Version)
@@ -60,9 +66,11 @@ func main() {
 
 	// Add health checks
 	healthChecker.AddCheck("clickhouse", monitoring.DatabaseHealthCheck(clickhouse))
+	healthChecker.AddCheck("postgres", monitoring.DatabaseHealthCheck(replayDB))
 	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
 		"CLICKHOUSE_ADDR": clickhouseAddr,
 		"CLICKHOUSE_DB":   clickhouseDB,
+		"DATABASE_URL":    dbURL,
 		"JWT_SECRET":      jwtSecret,
 	}))
 
@@ -92,6 +100,7 @@ func main() {
 
 		grpcServer := periscopegrpc.NewGRPCServer(periscopegrpc.GRPCServerConfig{
 			ClickHouse:    clickhouse,
+			ReplayDB:      replayDB,
 			Logger:        logger,
 			ServiceToken:  serviceToken,
 			JWTSecret:     []byte(jwtSecret),

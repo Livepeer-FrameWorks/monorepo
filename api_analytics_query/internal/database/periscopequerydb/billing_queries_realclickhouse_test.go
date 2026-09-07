@@ -47,11 +47,13 @@ func billingQueryContracts() []queryContract {
 		{ClusterStorageProviderUsage, []any{contractTenantID, endMS, startMS, endMS}},
 		{UsageAdjustments, []any{startMS, endMS, contractTenantID}},
 		{FirstViewerSessionProjection, []any{contractTenantID, "edge-node-1", "session-1"}},
+		{FirstRestreamSessionProjection, []any{contractTenantID, "edge-node-1", "source-1"}},
 		{FirstProcessingSegmentProjection, []any{contractTenantID, "edge-node-1", contractStreamID, "source-1"}},
 		{FirstStreamSessionProjection, []any{contractTenantID, "edge-node-1", contractStreamID, "source-1"}},
 		{FirstStorageProjection, []any{contractTenantID, "central-primary", "cold", contractTenantID, "central-primary", "s3", start.Format(time.RFC3339)}},
 		{TenantViewerMetrics, []any{contractTenantID, startMS, endMS, contractTenantID, startMS}},
-		{EarliestCanonicalBillingFact, []any{contractTenantID, contractTenantID, contractTenantID, contractTenantID, contractTenantID}},
+		{TenantRestreamMetrics, []any{contractTenantID, startMS, endMS, contractTenantID, startMS}},
+		{EarliestCanonicalBillingFact, []any{contractTenantID, contractTenantID, contractTenantID, contractTenantID, contractTenantID, contractTenantID}},
 	}
 }
 
@@ -133,7 +135,7 @@ func startContractClickHouse(t *testing.T) *sql.DB {
 		"-v", config+":/etc/clickhouse-server/config.d/zz-keeper.xml:ro", image); err != nil {
 		t.Fatalf("start ClickHouse: %v\n%s", err, output)
 	}
-	t.Cleanup(func() { _, _ = contractDocker(t, "", "rm", "-f", name) })
+	t.Cleanup(func() { _, _ = contractDocker(t, "", "rm", "-fv", name) })
 	waitForContractClickHouse(t, name)
 	for _, path := range []string{"clickhouse/periscope.sql", "seeds/demo/clickhouse_demo_data.sql"} {
 		content, err := dbsql.Content.ReadFile(path)

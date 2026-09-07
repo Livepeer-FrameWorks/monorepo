@@ -42,3 +42,10 @@ deployment topology does—and production must set both values explicitly.
 - Metering worker HTTP health/metrics: 18021
 
 Configuration is managed centrally via `config/env`. Generate `.env` with `make env` or `frameworks config env generate`, and keep secrets in `config/env/secrets.env`. Do not commit secrets.
+
+Both binaries require `DATABASE_URL` for their PostgreSQL control state. For
+`periscope` it stores delegated-assertion replay protection; for
+`periscope-metering` it additionally stores leases, cursors, and reservation
+keys. This is separate from the ClickHouse connection configured by the
+`CLICKHOUSE_*` settings and must remain available even when analytics reads are
+otherwise healthy.

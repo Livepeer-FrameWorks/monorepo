@@ -9,6 +9,9 @@ var ActiveTenants = statement("billing.active_tenants", `
 		SELECT toString(tenant_id) AS tenant_id FROM periscope.viewer_sessions_final
 		WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
 		UNION ALL
+		SELECT toString(tenant_id) AS tenant_id FROM periscope.restream_sessions_final
+		WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
+		UNION ALL
 		SELECT toString(tenant_id) AS tenant_id FROM periscope.processing_segments_final
 		WHERE projection_version_ms >= toUnixTimestamp64Milli(now64(3) - INTERVAL 7 DAY)
 		UNION ALL
@@ -184,10 +187,10 @@ var ClusterStorageProviderUsage = statement("billing.cluster_storage_provider_us
 
 var UsageAdjustments = statement("billing.usage_adjustments", `
 	SELECT observed_at_ms, table_name, meter, field,
-		natural_key_json, prior_value_json, new_value_json, source_event_id
+		natural_key_json, prior_value_json, new_value_json, source_event_id, occurrence_id
 	FROM periscope.projection_divergences
 	WHERE observed_at_ms >= ? AND observed_at_ms < ?
-	  AND table_name IN ('storage_gb_seconds_5m', 'viewer_sessions_final', 'stream_sessions_final', 'processing_segments_final')
+	  AND table_name IN ('storage_gb_seconds_5m', 'viewer_sessions_final', 'restream_sessions_final', 'stream_sessions_final', 'processing_segments_final')
 	  AND JSONExtractString(natural_key_json, 'tenant_id') = ?
 `)
 
@@ -195,6 +198,12 @@ var FirstViewerSessionProjection = statement("billing.first_viewer_session_proje
 	SELECT if(count() = 0, 0, min(projection_version_ms))
 	FROM periscope.viewer_sessions_final
 	WHERE tenant_id = toUUID(?) AND node_id = ? AND session_id = ?
+`)
+
+var FirstRestreamSessionProjection = statement("billing.first_restream_session_projection", `
+	SELECT if(count() = 0, 0, min(projection_version_ms))
+	FROM periscope.restream_sessions_final
+	WHERE tenant_id = toUUID(?) AND node_id = ? AND source_event_id = ?
 `)
 
 var FirstProcessingSegmentProjection = statement("billing.first_processing_segment_projection", `
@@ -248,10 +257,40 @@ var TenantViewerMetrics = statement("billing.tenant_viewer_metrics", `
 	GROUP BY c.cluster_id
 `)
 
+var TenantRestreamMetrics = statement("billing.tenant_restream_metrics", `
+	WITH window_candidates AS (
+		SELECT tenant_id, node_id, source_event_id,
+			argMax(cluster_id, projection_version_ms) AS cluster_id,
+			argMax(platform, projection_version_ms) AS platform,
+			argMax(state, projection_version_ms) AS state,
+			argMax(duration_ms, projection_version_ms) AS duration_ms,
+			argMax(bytes_sent, projection_version_ms) AS bytes_sent
+		FROM periscope.restream_sessions_final
+		WHERE tenant_id = ? AND projection_version_ms >= ? AND projection_version_ms < ?
+		GROUP BY tenant_id, node_id, source_event_id
+	)
+	SELECT c.cluster_id, c.platform,
+		sum(c.bytes_sent) / pow(1024, 3) AS egress_gb,
+		sum(c.duration_ms) / 60000.0 AS delivered_minutes
+	FROM window_candidates c
+	LEFT ANTI JOIN (
+		SELECT DISTINCT tenant_id, node_id, source_event_id
+		FROM periscope.restream_sessions_final
+		WHERE tenant_id = ? AND projection_version_ms < ?
+		  AND (tenant_id, node_id, source_event_id) IN (
+			SELECT tenant_id, node_id, source_event_id FROM window_candidates
+		  )
+	) prior USING (tenant_id, node_id, source_event_id)
+	WHERE c.state IN ('idle', 'failed')
+	GROUP BY c.cluster_id, c.platform
+`)
+
 var EarliestCanonicalBillingFact = statement("billing.earliest_canonical_fact", `
 	SELECT min(first_ms)
 	FROM (
 		SELECT toInt64(min(projection_version_ms)) AS first_ms FROM periscope.viewer_sessions_final WHERE tenant_id = ?
+		UNION ALL
+		SELECT toInt64(min(projection_version_ms)) AS first_ms FROM periscope.restream_sessions_final WHERE tenant_id = ?
 		UNION ALL
 		SELECT toInt64(min(projection_version_ms)) AS first_ms FROM periscope.stream_sessions_final WHERE tenant_id = ?
 		UNION ALL

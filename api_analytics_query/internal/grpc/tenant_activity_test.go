@@ -55,17 +55,22 @@ func TestListTenantActivity_MergesRollupsAndSortsByViewerHours(t *testing.T) {
 			AddRow("tenant-quiet", 1.5, day).
 			AddRow("tenant-busy", 40.0, day))
 
-	// Q2: viewer rollup from tenant_viewer_daily; only the busy tenant has viewers.
+	// Q2: human-audience rollup; delivery egress is sourced separately.
 	mock.ExpectQuery("FROM tenant_viewer_daily").
-		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "viewer_hours", "egress_gb", "unique_viewers", "total_sessions"}).
-			AddRow("tenant-busy", 123.5, 42.25, int64(77), int64(900)))
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "viewer_hours", "unique_viewers", "total_sessions"}).
+			AddRow("tenant-busy", 123.5, int64(77), int64(900)))
 
-	// Q3: API usage; only the quiet tenant called the API.
+	// Q3: playback + restream delivery egress.
+	mock.ExpectQuery("FROM tenant_analytics_daily").
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "egress_gb"}).
+			AddRow("tenant-busy", 42.25))
+
+	// Q4: API usage; only the quiet tenant called the API.
 	mock.ExpectQuery("FROM api_usage_daily").
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "requests", "errors"}).
 			AddRow("tenant-quiet", int64(321), int64(4)))
 
-	// Q4: live snapshot.
+	// Q5: live snapshot.
 	mock.ExpectQuery("FROM stream_state_current FINAL").
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "live_streams", "current_viewers"}).
 			AddRow("tenant-busy", int32(2), int32(15)))
@@ -119,7 +124,9 @@ func TestListTenantActivity_FiltersToRequestedTenants(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "ingest_hours", "last_stream_day"}).
 			AddRow("tenant-small", 0.5, day))
 	mock.ExpectQuery(`(?s)FROM tenant_viewer_daily.*` + filtered).
-		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "viewer_hours", "egress_gb", "unique_viewers", "total_sessions"}))
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "viewer_hours", "unique_viewers", "total_sessions"}))
+	mock.ExpectQuery(`(?s)FROM tenant_analytics_daily.*` + filtered).
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "egress_gb"}))
 	mock.ExpectQuery(`(?s)FROM api_usage_daily.*` + filtered).
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "requests", "errors"}))
 	mock.ExpectQuery(`(?s)FROM stream_state_current FINAL.*` + filtered).
@@ -149,7 +156,9 @@ func TestListTenantActivity_AppliesLimit(t *testing.T) {
 			AddRow("tenant-a", 5.0, day).
 			AddRow("tenant-b", 9.0, day))
 	mock.ExpectQuery("FROM tenant_viewer_daily").
-		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "viewer_hours", "egress_gb", "unique_viewers", "total_sessions"}))
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "viewer_hours", "unique_viewers", "total_sessions"}))
+	mock.ExpectQuery("FROM tenant_analytics_daily").
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "egress_gb"}))
 	mock.ExpectQuery("FROM api_usage_daily").
 		WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "requests", "errors"}))
 	mock.ExpectQuery("FROM stream_state_current FINAL").

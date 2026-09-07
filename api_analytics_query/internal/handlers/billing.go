@@ -22,15 +22,18 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/kafka"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/restream"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/tenants"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/sirupsen/logrus"
 )
 
 const (
-	gibibyte               = 1024 * 1024 * 1024
-	billingCursorAlignment = 5 * time.Minute
-	billingSettlementLag   = 2 * time.Minute
+	gibibyte                         = 1024 * 1024 * 1024
+	billingCursorAlignment           = 5 * time.Minute
+	billingSettlementLag             = 2 * time.Minute
+	restreamBillingEffectiveAtUnixMS = int64(1788480000000) // 2026-09-04T00:00:00Z
 )
 
 // sanitizeFloat returns 0.0 if f is NaN or Inf, otherwise returns f
@@ -65,15 +68,23 @@ func appendMeter(existing []models.MeterQuantity, meter, unit string, quantity f
 
 // BillingSummarizer handles usage summarization for billing
 type BillingSummarizer struct {
-	postgresQueries       meteringdb.Querier
-	clickhouse            database.ClickHouseConn
-	logger                logging.Logger
-	usageProducer         usageProducer
-	resolvePrimaryCluster func(string) (string, error)
-	billingTopic          string
-	sourceID              string
-	sourceRegion          string
-	systemTenantID        string
+	postgresQueries            meteringdb.Querier
+	clickhouse                 database.ClickHouseConn
+	logger                     logging.Logger
+	usageProducer              usageProducer
+	resolvePrimaryCluster      func(string) (string, error)
+	billingTopic               string
+	sourceID                   string
+	sourceRegion               string
+	systemTenantID             string
+	restreamBillingEffectiveMS int64
+	metrics                    *BillingMetrics
+}
+
+// BillingMetrics contains bounded-cardinality metering pipeline outcomes.
+type BillingMetrics struct {
+	ProjectionDivergences *prometheus.CounterVec
+	MalformedFactsSkipped *prometheus.CounterVec
 }
 
 type usageProducer interface {
@@ -81,7 +92,7 @@ type usageProducer interface {
 }
 
 // NewBillingSummarizer creates a new billing summarizer instance
-func NewBillingSummarizer(yugaDB database.PostgresConn, clickhouse database.ClickHouseConn, logger logging.Logger, sourceID, sourceRegion string) *BillingSummarizer {
+func NewBillingSummarizer(yugaDB database.PostgresConn, clickhouse database.ClickHouseConn, logger logging.Logger, sourceID, sourceRegion string, optionalMetrics ...*BillingMetrics) *BillingSummarizer {
 	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
 	serviceToken := config.RequireEnv("SERVICE_TOKEN")
 
@@ -111,16 +122,21 @@ func NewBillingSummarizer(yugaDB database.PostgresConn, clickhouse database.Clic
 	if err != nil {
 		logger.WithError(err).Fatal("Invalid system tenant identity")
 	}
-
+	var billingMetrics *BillingMetrics
+	if len(optionalMetrics) > 0 {
+		billingMetrics = optionalMetrics[0]
+	}
 	bs := &BillingSummarizer{
-		postgresQueries: meteringdb.New(yugaDB),
-		clickhouse:      clickhouse,
-		logger:          logger,
-		usageProducer:   kafkaProducer,
-		billingTopic:    billingTopic,
-		sourceID:        sourceID,
-		sourceRegion:    sourceRegion,
-		systemTenantID:  systemTenantID.String(),
+		postgresQueries:            meteringdb.New(yugaDB),
+		clickhouse:                 clickhouse,
+		logger:                     logger,
+		usageProducer:              kafkaProducer,
+		billingTopic:               billingTopic,
+		sourceID:                   sourceID,
+		sourceRegion:               sourceRegion,
+		systemTenantID:             systemTenantID.String(),
+		restreamBillingEffectiveMS: restreamBillingEffectiveAtUnixMS,
+		metrics:                    billingMetrics,
 	}
 	bs.resolvePrimaryCluster = func(tenantID string) (string, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -297,34 +313,13 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 	if err != nil {
 		return nil, fmt.Errorf("failed to query finalized viewer metrics from ClickHouse: %w", err)
 	}
-
-	clusterMetrics := map[string]*clusterViewerMetrics{}
-	totalEgressGB := 0.0
-	totalViewerHours := 0.0
-	totalUniqueViewers := 0
-	for _, m := range tenantMetrics {
-		cid := m.BillableClusterID()
-		if cid == "" {
-			return nil, fmt.Errorf("viewer metric row missing billable cluster for tenant %s", tenantID)
-		}
-		cm := clusterViewerMetrics{
-			IngressGB:     m.IngressGB,
-			EgressGB:      m.EgressGB,
-			ViewerHours:   m.ViewerHours,
-			UniqueViewers: m.UniqueViewers,
-		}
-		if existing, ok := clusterMetrics[cid]; ok {
-			existing.IngressGB += cm.IngressGB
-			existing.EgressGB += cm.EgressGB
-			existing.ViewerHours += cm.ViewerHours
-			existing.UniqueViewers += cm.UniqueViewers
-		} else {
-			clusterMetrics[cid] = &cm
-		}
-		totalEgressGB += cm.EgressGB
-		totalViewerHours += cm.ViewerHours
-		totalUniqueViewers += cm.UniqueViewers
+	restreamMetrics, err := bs.queryTenantRestreamMetrics(ctx, tenantID, startTime, endTime)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query finalized restream metrics from ClickHouse: %w", err)
 	}
+	clusterMetrics, totalEgressGB, totalViewerHours, totalUniqueViewers := bs.aggregateTenantViewerMetrics(tenantID, tenantMetrics)
+	restreamByCluster, restreamEgressGB, totalRestreamMinutes := bs.aggregateTenantRestreamMetrics(tenantID, restreamMetrics)
+	totalEgressGB += restreamEgressGB
 
 	// Derive peak bandwidth from client_qoe_5m (avg_bw_out is in bytes/sec)
 	var peakBandwidth float64
@@ -426,6 +421,7 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 	hasUsage := totalStreamHours != 0 ||
 		totalEgressGB != 0 ||
 		totalViewerHours != 0 ||
+		totalRestreamMinutes != 0 ||
 		totalStorageGB != 0 ||
 		len(clusterStorageProviderUsage) != 0 ||
 		len(usageAdjustments) != 0 ||
@@ -479,6 +475,11 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 			clusterMetrics[cid] = &clusterViewerMetrics{}
 		}
 	}
+	for cid := range restreamByCluster {
+		if _, ok := clusterMetrics[cid]; !ok {
+			clusterMetrics[cid] = &clusterViewerMetrics{}
+		}
+	}
 
 	for cid, vm := range clusterMetrics {
 		sm := clusterStorageGB[cid]
@@ -497,9 +498,19 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 		}
 		summary.ReportID = bs.reportID(tenantID, cid, summary.PeriodStart, summary.PeriodEnd, summary.ReportKind)
 		summary.Meters = appendMeter(summary.Meters, "ingress_gb", "gibibyte", sanitizeFloat(vm.IngressGB), nil)
+		// Playback's dimension-free identity is a rolling-version compatibility
+		// contract: adding delivery_kind bypasses existing Purser replay keys.
 		summary.Meters = appendMeter(summary.Meters, "egress_gb", "gibibyte", sanitizeFloat(vm.EgressGB), nil)
 		summary.Meters = appendMeter(summary.Meters, "delivered_minutes", "minute", sanitizeFloat(vm.ViewerHours)*60, nil)
 		summary.Meters = appendMeter(summary.Meters, "total_viewers", "viewer", float64(vm.UniqueViewers), nil)
+		for _, delivery := range restreamByCluster[cid] {
+			dimensions := models.JSONB{"delivery_kind": "restream"}
+			if platform := strings.TrimSpace(delivery.Platform); platform != "" {
+				dimensions["platform"] = platform
+			}
+			summary.Meters = appendMeter(summary.Meters, "egress_gb", "gibibyte", sanitizeFloat(delivery.EgressGB), dimensions)
+			summary.Meters = appendMeter(summary.Meters, "delivered_minutes", "minute", sanitizeFloat(delivery.DeliveredMinutes), dimensions)
+		}
 		summary.Meters = appendMeter(summary.Meters, "storage_gb_seconds_hot", "gibibyte_second", sm.GBSecondsHot, nil)
 		summary.Meters = appendMeter(summary.Meters, "storage_gb_seconds_cold", "gibibyte_second", sm.GBSecondsCold, nil)
 
@@ -553,12 +564,13 @@ func (bs *BillingSummarizer) generateTenantUsageSummary(tenantID string, startTi
 	}
 
 	bs.logger.WithFields(logging.Fields{
-		"tenant_id":       tenantID,
-		"cluster_count":   len(summaries),
-		"stream_hours":    totalStreamHours,
-		"total_egress_gb": totalEgressGB,
-		"viewer_hours":    totalViewerHours,
-		"total_streams":   totalStreamCount,
+		"tenant_id":        tenantID,
+		"cluster_count":    len(summaries),
+		"stream_hours":     totalStreamHours,
+		"total_egress_gb":  totalEgressGB,
+		"viewer_hours":     totalViewerHours,
+		"restream_minutes": totalRestreamMinutes,
+		"total_streams":    totalStreamCount,
 	}).Debug("Generated usage summaries for tenant")
 
 	return summaries, nil
@@ -569,6 +581,13 @@ type clusterViewerMetrics struct {
 	EgressGB      float64
 	ViewerHours   float64
 	UniqueViewers int
+}
+
+type tenantRestreamMetricRow struct {
+	ClusterID        string
+	Platform         string
+	EgressGB         float64
+	DeliveredMinutes float64
 }
 
 type clusterStreamRuntimeMetrics struct {
@@ -794,6 +813,7 @@ func storageMetricsFromProviderUsage(providerUsage map[string][]models.ProviderU
 
 func (bs *BillingSummarizer) queryUsageAdjustments(ctx context.Context, tenantID string, startTime, endTime time.Time) (map[string][]models.UsageAdjustment, error) {
 	out := map[string][]models.UsageAdjustment{}
+	seen := map[string]struct{}{}
 	rows, err := periscopequerydb.UsageAdjustments.Query(ctx, bs.clickhouse,
 		startTime.UnixMilli(), endTime.UnixMilli(), tenantID)
 	if err != nil {
@@ -803,9 +823,20 @@ func (bs *BillingSummarizer) queryUsageAdjustments(ctx context.Context, tenantID
 
 	for rows.Next() {
 		var observedAtMS int64
-		var tableName, meter, field, naturalKeyJSON, priorValueJSON, newValueJSON, sourceEventID string
-		if scanErr := rows.Scan(&observedAtMS, &tableName, &meter, &field, &naturalKeyJSON, &priorValueJSON, &newValueJSON, &sourceEventID); scanErr != nil {
+		var tableName, meter, field, naturalKeyJSON, priorValueJSON, newValueJSON, sourceEventID, occurrenceID string
+		if scanErr := rows.Scan(&observedAtMS, &tableName, &meter, &field, &naturalKeyJSON, &priorValueJSON, &newValueJSON, &sourceEventID, &occurrenceID); scanErr != nil {
 			return nil, fmt.Errorf("scan projection divergence: %w", scanErr)
+		}
+		var naturalKey map[string]any
+		if parseErr := json.Unmarshal([]byte(naturalKeyJSON), &naturalKey); parseErr != nil {
+			return nil, fmt.Errorf("parse projection divergence natural key: %w", parseErr)
+		}
+		if strings.TrimSpace(stringFromJSONMap(naturalKey, "cluster_id")) == "" {
+			bs.observeProjectionDivergence("malformed_skipped", tableName)
+			bs.logger.WithFields(logging.Fields{
+				"tenant_id": tenantID, "table_name": tableName, "source_event_id": sourceEventID,
+			}).Error("Skipping projection divergence without a billable cluster")
+			continue
 		}
 		alreadyBilled, billableErr := bs.divergenceAlreadyCursored(ctx, tableName, naturalKeyJSON, startTime)
 		if billableErr != nil {
@@ -815,7 +846,7 @@ func (bs *BillingSummarizer) queryUsageAdjustments(ctx context.Context, tenantID
 			continue
 		}
 		adjustments, buildErr := usageAdjustmentsFromProjectionDivergence(
-			tableName, meter, field, naturalKeyJSON, priorValueJSON, newValueJSON, sourceEventID, observedAtMS, startTime, endTime,
+			tableName, meter, field, naturalKeyJSON, priorValueJSON, newValueJSON, sourceEventID, occurrenceID, observedAtMS, startTime, endTime,
 		)
 		if buildErr != nil {
 			return nil, buildErr
@@ -824,6 +855,12 @@ func (bs *BillingSummarizer) queryUsageAdjustments(ctx context.Context, tenantID
 			if adjustment.DeltaValue == 0 {
 				continue
 			}
+			identity := adjustment.SourceSystem + "\x00" + adjustment.SourceID
+			if _, duplicate := seen[identity]; duplicate {
+				bs.observeProjectionDivergence("duplicate_skipped", tableName)
+				continue
+			}
+			seen[identity] = struct{}{}
 			out[adjustment.ClusterID] = append(out[adjustment.ClusterID], adjustment)
 		}
 	}
@@ -839,29 +876,36 @@ func (bs *BillingSummarizer) divergenceAlreadyCursored(ctx context.Context, tabl
 		return false, fmt.Errorf("parse projection divergence natural key: %w", err)
 	}
 
-	queryFirstProjection := func(query periscopequerydb.Statement, args ...any) (bool, error) {
+	queryFirstProjection := func(minBillableMS int64, query periscopequerydb.Statement, args ...any) (bool, error) {
 		var firstProjectionMS int64
 		if err := query.QueryRow(ctx, bs.clickhouse, args...).Scan(&firstProjectionMS); err != nil {
 			return false, err
 		}
 		if firstProjectionMS == 0 {
-			return false, fmt.Errorf("projection divergence references %s key with no source projection: %s", tableName, naturalKeyJSON)
+			bs.observeProjectionDivergence("orphan_skipped", tableName)
+			bs.logger.WithFields(logging.Fields{
+				"table": tableName,
+			}).Warn("Skipping projection divergence whose source projection is unavailable")
+			return false, nil
 		}
-		return firstProjectionMS < sliceStart.UnixMilli(), nil
+		return firstProjectionMS >= minBillableMS && firstProjectionMS < sliceStart.UnixMilli(), nil
 	}
 
 	switch tableName {
 	case "viewer_sessions_final":
-		return queryFirstProjection(periscopequerydb.FirstViewerSessionProjection,
+		return queryFirstProjection(0, periscopequerydb.FirstViewerSessionProjection,
 			stringFromJSONMap(naturalKey, "tenant_id"), stringFromJSONMap(naturalKey, "node_id"), stringFromJSONMap(naturalKey, "session_id"))
+	case "restream_sessions_final":
+		return queryFirstProjection(bs.restreamBillingEffectiveMS, periscopequerydb.FirstRestreamSessionProjection,
+			stringFromJSONMap(naturalKey, "tenant_id"), stringFromJSONMap(naturalKey, "node_id"), stringFromJSONMap(naturalKey, "source_event_id"))
 	case "processing_segments_final":
-		return queryFirstProjection(periscopequerydb.FirstProcessingSegmentProjection,
+		return queryFirstProjection(0, periscopequerydb.FirstProcessingSegmentProjection,
 			stringFromJSONMap(naturalKey, "tenant_id"), stringFromJSONMap(naturalKey, "node_id"), stringFromJSONMap(naturalKey, "stream_id"), stringFromJSONMap(naturalKey, "source_event_id"))
 	case "stream_sessions_final":
-		return queryFirstProjection(periscopequerydb.FirstStreamSessionProjection,
+		return queryFirstProjection(0, periscopequerydb.FirstStreamSessionProjection,
 			stringFromJSONMap(naturalKey, "tenant_id"), stringFromJSONMap(naturalKey, "node_id"), stringFromJSONMap(naturalKey, "stream_id"), stringFromJSONMap(naturalKey, "source_event_id"))
 	case "storage_gb_seconds_5m":
-		return queryFirstProjection(periscopequerydb.FirstStorageProjection,
+		return queryFirstProjection(0, periscopequerydb.FirstStorageProjection,
 			stringFromJSONMap(naturalKey, "tenant_id"),
 			stringFromJSONMap(naturalKey, "cluster_id"),
 			stringFromJSONMap(naturalKey, "storage_scope"),
@@ -875,6 +919,12 @@ func (bs *BillingSummarizer) divergenceAlreadyCursored(ctx context.Context, tabl
 	}
 }
 
+func (bs *BillingSummarizer) observeProjectionDivergence(outcome, tableName string) {
+	if bs != nil && bs.metrics != nil && bs.metrics.ProjectionDivergences != nil {
+		bs.metrics.ProjectionDivergences.WithLabelValues(outcome, tableName).Inc()
+	}
+}
+
 type projectionAdjustmentDelta struct {
 	usageType         string
 	clusterID         string
@@ -885,7 +935,7 @@ type projectionAdjustmentDelta struct {
 	sourcePeriodEnd   time.Time
 }
 
-func usageAdjustmentsFromProjectionDivergence(tableName, meter, field, naturalKeyJSON, priorValueJSON, newValueJSON, sourceEventID string, observedAtMS int64, adjustmentPeriodStart, adjustmentPeriodEnd time.Time) ([]models.UsageAdjustment, error) {
+func usageAdjustmentsFromProjectionDivergence(tableName, meter, field, naturalKeyJSON, priorValueJSON, newValueJSON, sourceEventID, occurrenceID string, observedAtMS int64, adjustmentPeriodStart, adjustmentPeriodEnd time.Time) ([]models.UsageAdjustment, error) {
 	var naturalKey map[string]any
 	if err := json.Unmarshal([]byte(naturalKeyJSON), &naturalKey); err != nil {
 		return nil, fmt.Errorf("parse projection divergence natural key: %w", err)
@@ -911,10 +961,20 @@ func usageAdjustmentsFromProjectionDivergence(tableName, meter, field, naturalKe
 
 	out := make([]models.UsageAdjustment, 0, len(deltas))
 	for _, delta := range deltas {
-		if delta.clusterID == "" {
-			return nil, fmt.Errorf("projection divergence %s produced adjustment without cluster_id", sourceEventID)
+		// A cluster move can expose a legacy pre-projection value that had no
+		// cluster identity. There is no billable owner for that negative arm;
+		// retain the positive arm for the now-attributed cluster instead of
+		// wedging every later slice behind malformed historical data.
+		if strings.TrimSpace(delta.clusterID) == "" {
+			continue
 		}
+		dimensions, dimensionIdentity := projectionAdjustmentDimensions(tableName, delta.usageType, naturalKey)
+		// Dimension-free adjustments retain their compatibility hash material
+		// byte-for-byte. Even an empty extra field defeats Purser replay collision.
 		sourceMaterial := fmt.Sprintf("%s|%s|%s|%s|%s|%f|%s|%s|%s|%s|%s|%s", tableName, meter, field, delta.usageType, delta.clusterID, delta.deltaValue, delta.processType, delta.outputCodec, naturalKeyJSON, priorValueJSON, newValueJSON, sourceEventID)
+		if dimensionIdentity != "" {
+			sourceMaterial = fmt.Sprintf("%s|%s|%s|%s|%s|%f|%s|%s|%s|%s|%s|%s|%s", tableName, meter, field, delta.usageType, delta.clusterID, delta.deltaValue, delta.processType, delta.outputCodec, dimensionIdentity, naturalKeyJSON, priorValueJSON, newValueJSON, sourceEventID)
+		}
 		sourceHash := sha1.Sum([]byte(sourceMaterial))
 		details := models.JSONB{
 			"table_name":       tableName,
@@ -933,6 +993,9 @@ func usageAdjustmentsFromProjectionDivergence(tableName, meter, field, naturalKe
 		if delta.outputCodec != "" {
 			details["output_codec"] = delta.outputCodec
 		}
+		if occurrenceID != "" {
+			details["occurrence_id"] = occurrenceID
+		}
 		if !delta.sourcePeriodStart.IsZero() && !delta.sourcePeriodEnd.IsZero() {
 			details["source_period"] = map[string]string{"start": delta.sourcePeriodStart.Format(time.RFC3339), "end": delta.sourcePeriodEnd.Format(time.RFC3339)}
 		}
@@ -940,6 +1003,7 @@ func usageAdjustmentsFromProjectionDivergence(tableName, meter, field, naturalKe
 			SourceSystem: "periscope.projection_divergences",
 			SourceID:     fmt.Sprintf("%x", sourceHash),
 			UsageType:    delta.usageType,
+			Dimensions:   dimensions,
 			ClusterID:    delta.clusterID,
 			DeltaValue:   sanitizeFloat(delta.deltaValue),
 			PeriodStart:  adjustmentPeriodStart,
@@ -949,6 +1013,23 @@ func usageAdjustmentsFromProjectionDivergence(tableName, meter, field, naturalKe
 		})
 	}
 	return out, nil
+}
+
+func projectionAdjustmentDimensions(tableName, usageType string, naturalKey map[string]any) (models.JSONB, string) {
+	if usageType != "delivered_minutes" && usageType != "egress_gb" {
+		return nil, ""
+	}
+	switch tableName {
+	case "viewer_sessions_final":
+		// Absence of delivery_kind is the canonical playback adjustment identity
+		// and preserves cross-version source IDs during rolling replay.
+		return nil, ""
+	case "restream_sessions_final":
+		platform, _ := restream.NormalizePlatform(stringFromJSONMap(naturalKey, "platform"))
+		return models.JSONB{"delivery_kind": "restream", "platform": platform}, "delivery_kind=restream;platform=" + platform
+	default:
+		return nil, ""
+	}
 }
 
 func adjustmentDeltasFromProjectionDivergence(tableName, field string, naturalKey map[string]any, priorValue, newValue any, clusterID string) ([]projectionAdjustmentDelta, error) {
@@ -1041,6 +1122,51 @@ func adjustmentDeltasFromProjectionDivergence(tableName, field string, naturalKe
 			}, nil
 		default:
 			return nil, fmt.Errorf("unsupported viewer divergence field %q", field)
+		}
+	case "restream_sessions_final":
+		switch field {
+		case "duration_ms":
+			prior, next, err := floatDeltaValues(priorValue, newValue)
+			if err != nil {
+				return nil, err
+			}
+			return []projectionAdjustmentDelta{{usageType: "delivered_minutes", clusterID: clusterID, deltaValue: (next - prior) / 60000.0}}, nil
+		case "bytes_sent":
+			prior, next, err := floatDeltaValues(priorValue, newValue)
+			if err != nil {
+				return nil, err
+			}
+			return []projectionAdjustmentDelta{{usageType: "egress_gb", clusterID: clusterID, deltaValue: (next - prior) / gibibyte}}, nil
+		case "cluster_id":
+			priorMap, priorOK := priorValue.(map[string]any)
+			newMap, newOK := newValue.(map[string]any)
+			if !priorOK || !newOK {
+				return nil, fmt.Errorf("restream cluster divergence values must be JSON objects")
+			}
+			priorDuration, err := floatFromJSONMap(priorMap, "duration_ms")
+			if err != nil {
+				return nil, err
+			}
+			newDuration, err := floatFromJSONMap(newMap, "duration_ms")
+			if err != nil {
+				return nil, err
+			}
+			priorBytes, err := floatFromJSONMap(priorMap, "bytes_sent")
+			if err != nil {
+				return nil, err
+			}
+			newBytes, err := floatFromJSONMap(newMap, "bytes_sent")
+			if err != nil {
+				return nil, err
+			}
+			return []projectionAdjustmentDelta{
+				{usageType: "delivered_minutes", clusterID: stringFromJSONMap(priorMap, "cluster_id"), deltaValue: -priorDuration / 60000.0},
+				{usageType: "egress_gb", clusterID: stringFromJSONMap(priorMap, "cluster_id"), deltaValue: -priorBytes / gibibyte},
+				{usageType: "delivered_minutes", clusterID: stringFromJSONMap(newMap, "cluster_id"), deltaValue: newDuration / 60000.0},
+				{usageType: "egress_gb", clusterID: stringFromJSONMap(newMap, "cluster_id"), deltaValue: newBytes / gibibyte},
+			}, nil
+		default:
+			return nil, fmt.Errorf("unsupported restream divergence field %q", field)
 		}
 	case "stream_sessions_final":
 		switch field {
@@ -1221,6 +1347,58 @@ func (r tenantViewerMetricRow) BillableClusterID() string {
 	return strings.TrimSpace(r.ClusterID)
 }
 
+func (bs *BillingSummarizer) aggregateTenantViewerMetrics(tenantID string, rows []tenantViewerMetricRow) (map[string]*clusterViewerMetrics, float64, float64, int) {
+	clusterMetrics := make(map[string]*clusterViewerMetrics)
+	var totalEgressGB, totalViewerHours float64
+	var totalUniqueViewers int
+	for _, row := range rows {
+		clusterID := row.BillableClusterID()
+		if clusterID == "" {
+			if bs.metrics != nil && bs.metrics.MalformedFactsSkipped != nil {
+				bs.metrics.MalformedFactsSkipped.WithLabelValues("viewer", "missing_cluster_id").Inc()
+			}
+			bs.logger.WithField("tenant_id", tenantID).Error("Skipping malformed viewer billing fact without a billable cluster")
+			continue
+		}
+		metrics := clusterViewerMetrics{
+			IngressGB: row.IngressGB, EgressGB: row.EgressGB,
+			ViewerHours: row.ViewerHours, UniqueViewers: row.UniqueViewers,
+		}
+		if existing, ok := clusterMetrics[clusterID]; ok {
+			existing.IngressGB += metrics.IngressGB
+			existing.EgressGB += metrics.EgressGB
+			existing.ViewerHours += metrics.ViewerHours
+			existing.UniqueViewers += metrics.UniqueViewers
+		} else {
+			clusterMetrics[clusterID] = &metrics
+		}
+		totalEgressGB += metrics.EgressGB
+		totalViewerHours += metrics.ViewerHours
+		totalUniqueViewers += metrics.UniqueViewers
+	}
+	return clusterMetrics, totalEgressGB, totalViewerHours, totalUniqueViewers
+}
+
+func (bs *BillingSummarizer) aggregateTenantRestreamMetrics(tenantID string, rows []tenantRestreamMetricRow) (map[string][]tenantRestreamMetricRow, float64, float64) {
+	byCluster := make(map[string][]tenantRestreamMetricRow)
+	var totalEgressGB, totalRestreamMinutes float64
+	for _, row := range rows {
+		clusterID := strings.TrimSpace(row.ClusterID)
+		if clusterID == "" {
+			if bs.metrics != nil && bs.metrics.MalformedFactsSkipped != nil {
+				bs.metrics.MalformedFactsSkipped.WithLabelValues("restream", "missing_cluster_id").Inc()
+			}
+			bs.logger.WithField("tenant_id", tenantID).Error("Skipping malformed restream billing fact without a billable cluster")
+			continue
+		}
+		row.ClusterID = clusterID
+		byCluster[clusterID] = append(byCluster[clusterID], row)
+		totalEgressGB += row.EgressGB
+		totalRestreamMinutes += row.DeliveredMinutes
+	}
+	return byCluster, totalEgressGB, totalRestreamMinutes
+}
+
 func (bs *BillingSummarizer) queryTenantViewerMetrics(ctx context.Context, tenantID string, startTime, endTime time.Time) ([]tenantViewerMetricRow, error) {
 	// Walks billable_at_ms over viewer_sessions_final using the two-step
 	// CTE + LEFT ANTI JOIN pattern from docs/architecture/meter-contracts.md:
@@ -1245,6 +1423,36 @@ func (bs *BillingSummarizer) queryTenantViewerMetrics(ctx context.Context, tenan
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate viewer metric rows: %w", err)
+	}
+	return out, nil
+}
+
+func (bs *BillingSummarizer) queryTenantRestreamMetrics(ctx context.Context, tenantID string, startTime, endTime time.Time) ([]tenantRestreamMetricRow, error) {
+	startMS := startTime.UnixMilli()
+	if bs.restreamBillingEffectiveMS > startMS {
+		startMS = bs.restreamBillingEffectiveMS
+	}
+	if startMS >= endTime.UnixMilli() {
+		return nil, nil
+	}
+	rows, err := periscopequerydb.TenantRestreamMetrics.Query(ctx, bs.clickhouse,
+		tenantID, startMS, endTime.UnixMilli(), tenantID, startMS)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []tenantRestreamMetricRow
+	for rows.Next() {
+		var row tenantRestreamMetricRow
+		if err := rows.Scan(&row.ClusterID, &row.Platform, &row.EgressGB, &row.DeliveredMinutes); err != nil {
+			return nil, fmt.Errorf("scan restream metric row: %w", err)
+		}
+		row.Platform, _ = restream.NormalizePlatform(row.Platform)
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate restream metric rows: %w", err)
 	}
 	return out, nil
 }
@@ -1384,7 +1592,7 @@ func (bs *BillingSummarizer) ValidateSource(ctx context.Context) error {
 func (bs *BillingSummarizer) earliestCanonicalBillingFact(ctx context.Context, tenantID string) (time.Time, bool, error) {
 	var firstMS sql.NullInt64
 	err := periscopequerydb.EarliestCanonicalBillingFact.QueryRow(ctx, bs.clickhouse,
-		tenantID, tenantID, tenantID, tenantID, tenantID).Scan(&firstMS)
+		tenantID, tenantID, tenantID, tenantID, tenantID, tenantID).Scan(&firstMS)
 	if err != nil {
 		return time.Time{}, false, err
 	}

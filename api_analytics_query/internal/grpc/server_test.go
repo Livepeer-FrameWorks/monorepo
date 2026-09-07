@@ -455,6 +455,7 @@ func newLiveUsageSummaryServer(t *testing.T) (*sql.DB, *PeriscopeServer, sqlmock
 const (
 	liveRuntimeSummaryPattern = `sum\(active_seconds\)[\s\S]*FROM periscope\.stream_runtime_5m_v`
 	liveViewerUsagePattern    = `FROM viewer_usage_5m_v[\s\S]*UNION ALL[\s\S]*FROM viewer_sessions_current FINAL`
+	liveDeliveryUsagePattern  = `FROM delivery_usage_5m_v`
 	liveGeoSummaryPattern     = `uniqExactIf\(country_code[\s\S]*FROM viewer_sessions_current FINAL`
 	liveGeoBreakdownPattern   = `SELECT[\s\S]*country_code[\s\S]*viewer_count[\s\S]*FROM viewer_sessions_current FINAL`
 	liveSyncedArtifactPattern = `ifNull\(sumIf\(size_bytes, is_synced = true\), toUInt64\(0\)\)[\s\S]*FROM artifact_state_current FINAL`
@@ -477,7 +478,8 @@ func setupLiveUsageSummaryMocks(t *testing.T, mock sqlmock.Sqlmock, overrides ma
 	}
 
 	expectQuery(liveRuntimeSummaryPattern, []string{"stream_hours", "peak_concurrent", "total_streams"}, []any{float64(0), int32(0), int32(0)})
-	expectQuery(liveViewerUsagePattern, []string{"total_session_seconds", "egress_bytes", "total_viewers", "unique_viewers"}, []any{uint64(0), uint64(0), uint32(0), uint32(0)})
+	expectQuery(liveViewerUsagePattern, []string{"total_session_seconds", "total_viewers", "unique_viewers"}, []any{uint64(0), uint32(0), uint32(0)})
+	expectQuery(liveDeliveryUsagePattern, []string{"egress_bytes"}, []any{uint64(0)})
 	expectQuery("FROM client_qoe_5m", []string{"peak_bandwidth"}, []any{float64(0)})
 	expectQuery("FROM storage_gb_seconds_5m_v", []string{"gb_seconds"}, []any{float64(0)})
 	expectQuery("FROM processing_5m_v", []string{
@@ -629,8 +631,12 @@ func TestGetPlatformOverviewUsesCanonicalLedgers(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows([]string{"peak_bandwidth"}).AddRow(float64(123)))
 	mock.ExpectQuery(`(?s)FROM periscope\.viewer_usage_5m_v AS u.*WHERE u\.tenant_id = \?.*u\.window_start >= \?.*u\.window_start <\s+\?`).
 		WithArgs("tenant-1", start, end).
-		WillReturnRows(sqlmock.NewRows([]string{"egress_gb", "viewer_hours", "unique_viewers", "total_views", "peak_viewers"}).
-			AddRow(float64(1.5), float64(2.0), int64(3), int64(4), int64(6)))
+		WillReturnRows(sqlmock.NewRows([]string{"viewer_hours", "unique_viewers", "total_views", "peak_viewers"}).
+			AddRow(float64(2.0), int64(3), int64(4), int64(6)))
+	mock.ExpectQuery(`(?s)sum\(down_bytes_observed\).*sum\(seconds_observed\).*FROM periscope\.delivery_usage_5m_v`).
+		WithArgs("tenant-1", start, end).
+		WillReturnRows(sqlmock.NewRows([]string{"delivery_bytes", "delivery_seconds"}).
+			AddRow(uint64(1610612736), uint64(180)))
 	mock.ExpectQuery(`(?s)sum\(active_seconds\).*FROM periscope\.stream_runtime_5m_v.*UNION ALL.*FROM periscope\.stream_state_current AS s FINAL`).
 		WithArgs("tenant-1", start, end, start, end, "tenant-1", "tenant-1", end, start).
 		WillReturnRows(sqlmock.NewRows([]string{"stream_hours", "peak_concurrent", "total_streams"}).AddRow(float64(9), int32(8), int32(2)))
@@ -648,7 +654,7 @@ func TestGetPlatformOverviewUsesCanonicalLedgers(t *testing.T) {
 	if resp.TotalViews != 4 || resp.UniqueViewers != 3 || resp.PeakViewers != 6 || resp.PeakConcurrentViewers != 8 {
 		t.Fatalf("unexpected overview viewer metrics: %+v", resp)
 	}
-	if resp.StreamHours != 9 || resp.IngestHours != 9 || resp.ViewerHours != 2 || resp.EgressGb != 1.5 {
+	if resp.StreamHours != 9 || resp.IngestHours != 9 || resp.ViewerHours != 2 || resp.EgressGb != 1.5 || resp.DeliveredMinutes != 3 {
 		t.Fatalf("unexpected overview usage metrics: %+v", resp)
 	}
 	if mockErr := mock.ExpectationsWereMet(); mockErr != nil {
@@ -656,7 +662,7 @@ func TestGetPlatformOverviewUsesCanonicalLedgers(t *testing.T) {
 	}
 }
 
-func TestGetStreamAnalyticsSummariesUsesViewerUsageLedger(t *testing.T) {
+func TestGetStreamAnalyticsSummariesUsesAudienceAndDeliveryLedgers(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
@@ -671,14 +677,14 @@ func TestGetStreamAnalyticsSummariesUsesViewerUsageLedger(t *testing.T) {
 	start := time.Date(2026, 5, 25, 12, 0, 0, 0, time.UTC)
 	end := start.Add(time.Hour)
 
-	mock.ExpectQuery(`(?s)WITH stream_totals AS.*FROM periscope\.viewer_usage_5m_v.*WHERE tenant_id = \? AND window_start >= \? AND window_start < \?.*ORDER BY egress_bytes DESC`).
-		WithArgs("tenant-1", start, end, 2).
+	mock.ExpectQuery(`(?s)WITH usage_rows AS.*FROM periscope\.viewer_usage_5m_v.*UNION ALL.*FROM periscope\.delivery_usage_5m_v.*ORDER BY egress_bytes DESC`).
+		WithArgs("tenant-1", start, end, "tenant-1", start, end, 2).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"stream_id", "total_views", "unique_viewers", "egress_bytes", "viewer_seconds",
 			"egress_gb", "viewer_hours", "views_share_pct", "viewers_share_pct", "egress_share_pct", "viewer_hours_share_pct",
 		}).AddRow("stream-a", int64(4), int64(3), int64(1073741824), int64(7200), float64(1), float64(2), float64(100), float64(100), float64(100), float64(100)))
-	mock.ExpectQuery(`(?s)SELECT count\(DISTINCT stream_id\)\s+FROM periscope\.viewer_usage_5m_v\s+WHERE tenant_id = \? AND window_start >= \? AND window_start < \?`).
-		WithArgs("tenant-1", start, end).
+	mock.ExpectQuery(`(?s)SELECT count\(DISTINCT stream_id\) FROM \(.*FROM periscope\.viewer_usage_5m_v.*UNION ALL.*FROM periscope\.delivery_usage_5m_v`).
+		WithArgs("tenant-1", start, end, "tenant-1", start, end).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(int64(1)))
 
 	resp, err := server.GetStreamAnalyticsSummaries(context.Background(), &periscopepb.GetStreamAnalyticsSummariesRequest{

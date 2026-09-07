@@ -50,8 +50,8 @@ type Scheduler struct {
 }
 
 // NewScheduler creates a new scheduler instance
-func NewScheduler(yugaDB database.PostgresConn, clickhouse database.ClickHouseConn, logger logging.Logger, sourceID, sourceRegion string) *Scheduler {
-	billingSummarizer := handlers.NewBillingSummarizer(yugaDB, clickhouse, logger, sourceID, sourceRegion)
+func NewScheduler(yugaDB database.PostgresConn, clickhouse database.ClickHouseConn, logger logging.Logger, sourceID, sourceRegion string, optionalMetrics ...*handlers.BillingMetrics) *Scheduler {
+	billingSummarizer := handlers.NewBillingSummarizer(yugaDB, clickhouse, logger, sourceID, sourceRegion, optionalMetrics...)
 	hostname, hostnameErr := os.Hostname()
 	if hostnameErr != nil || hostname == "" {
 		hostname = "periscope-metering"
