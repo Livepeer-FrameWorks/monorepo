@@ -36,6 +36,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/restream"
 )
 
 type canonicalUsageDelta struct {
@@ -172,8 +173,20 @@ func (jm *JobManager) validateUsageSummaryMeters(ctx context.Context, summary mo
 			if _, ok := definition.allowedDimensions[key]; !ok {
 				return fmt.Errorf("dimension_not_allowed:%s:%s", meter, key)
 			}
-			if _, ok := value.(string); !ok {
+			stringValue, ok := value.(string)
+			if !ok {
 				return fmt.Errorf("dimension_not_string:%s:%s", meter, key)
+			}
+			switch key {
+			case "delivery_kind":
+				if stringValue != "playback" && stringValue != "restream" {
+					return fmt.Errorf("dimension_value_not_allowed:%s:%s", meter, key)
+				}
+			case "platform":
+				normalized, supported := restream.NormalizePlatform(stringValue)
+				if !supported || normalized != stringValue {
+					return fmt.Errorf("dimension_value_not_allowed:%s:%s", meter, key)
+				}
 			}
 		}
 		return nil
@@ -379,6 +392,7 @@ type JobManager struct {
 // JobManager tests can stub it without pulling in the Quartermaster client.
 type TierReconciler interface {
 	Reconcile(ctx context.Context, tenantID string, tierLevel int32, tierName string) ([]string, string, error)
+	RevokeDNSEntitlements(ctx context.Context, tenantID string) error
 	SweepDeploymentTiers(ctx context.Context) (int, error)
 }
 
@@ -420,7 +434,7 @@ func NewJobManager(database *sql.DB, log logging.Logger, commodoreClient Commodo
 		billingTopic:      billingTopic,
 		commodoreClient:   commodoreClient,
 		periscopeClient:   periscopeSvc,
-		thresholdEnforcer: NewThresholdEnforcer(database, log, commodoreClient, emailSvc, billing),
+		thresholdEnforcer: NewThresholdEnforcer(database, log, commodoreClient, emailSvc, billing, tierReconciler),
 		tierReconciler:    tierReconciler,
 		billing:           billing,
 	}
@@ -1431,6 +1445,11 @@ func (jm *JobManager) suspendTenantForBalance(ctx context.Context, tenantID stri
 	rowsAffected, err := purserdb.New(jm.db).SuspendActiveTenantSubscription(ctx, tenantID)
 	if err != nil {
 		return err
+	}
+	if jm.tierReconciler != nil {
+		if err := jm.tierReconciler.RevokeDNSEntitlements(ctx, tenantID); err != nil {
+			return fmt.Errorf("revoke DNS entitlements after suspension: %w", err)
+		}
 	}
 
 	if rowsAffected > 0 {

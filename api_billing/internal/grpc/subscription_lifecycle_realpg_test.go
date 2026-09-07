@@ -102,7 +102,7 @@ func TestSubscriptionLifecycleRepository_RealPG(t *testing.T) { //nolint:funlen 
 	}
 
 	invalidEmail := "must-rollback@example.com"
-	_, err = server.UpdateSubscription(ctx, &purserpb.UpdateSubscriptionRequest{
+	_, err = server.UpdateSubscription(serviceTestContext(), &purserpb.UpdateSubscriptionRequest{
 		TenantId: tenantID, BillingEmail: &invalidEmail,
 		ClearEntitlementOverrides: true,
 		EntitlementOverrides:      map[string]string{"broken": "{"},
@@ -125,7 +125,7 @@ func TestSubscriptionLifecycleRepository_RealPG(t *testing.T) { //nolint:funlen 
 
 	updatedEmail := "updated@example.com"
 	updatedMethod := "bank_transfer"
-	updated, err := server.UpdateSubscription(ctx, &purserpb.UpdateSubscriptionRequest{
+	updated, err := server.UpdateSubscription(serviceTestContext(), &purserpb.UpdateSubscriptionRequest{
 		TenantId: tenantID, BillingEmail: &updatedEmail, PaymentMethod: &updatedMethod,
 		PricingOverrides: []*purserpb.PricingRule{{
 			Meter: "delivered_minutes", Model: "tiered_graduated", Currency: "eur",

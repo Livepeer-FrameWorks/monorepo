@@ -877,6 +877,14 @@ func (s *Service) handlePrepaidCheckoutCompleted(ctx context.Context, sessionID,
 			"topup_id": topupID,
 			"status":   topup.Status,
 		}).Info("Top-up already processed, skipping")
+		if rollbackErr := tx.Rollback(); rollbackErr != nil {
+			return fmt.Errorf("release completed top-up lock: %w", rollbackErr)
+		}
+		if topup.Status == "completed" && s.convergeTenantEntitlements != nil {
+			if convergeErr := s.convergeTenantEntitlements(ctx, tenantID); convergeErr != nil {
+				return fmt.Errorf("converge tenant entitlements after completed top-up: %w", convergeErr)
+			}
+		}
 		return nil
 	}
 
@@ -974,6 +982,11 @@ func (s *Service) handlePrepaidCheckoutCompleted(ctx context.Context, sessionID,
 		Provider: string(provider),
 		Status:   "credited",
 	})
+	if s.convergeTenantEntitlements != nil {
+		if err := s.convergeTenantEntitlements(ctx, tenantID); err != nil {
+			return fmt.Errorf("converge tenant entitlements after top-up: %w", err)
+		}
+	}
 
 	return nil
 }

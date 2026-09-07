@@ -6,12 +6,14 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
+	"google.golang.org/protobuf/proto"
 )
 
 type tierReconcileResult struct {
@@ -22,6 +24,7 @@ type tierReconcileResult struct {
 type recordingTierReconciler struct {
 	results []tierReconcileResult
 	calls   []string
+	revoked []string
 }
 
 func (r *recordingTierReconciler) OfficialClusterIDs(context.Context) (map[string]bool, error) {
@@ -32,6 +35,11 @@ func (r *recordingTierReconciler) Reconcile(_ context.Context, _ string, _ int32
 	r.calls = append(r.calls, tierName)
 	result := r.results[len(r.calls)-1]
 	return result.eligible, result.primary, nil
+}
+
+func (r *recordingTierReconciler) RevokeDNSEntitlements(_ context.Context, tenantID string) error {
+	r.revoked = append(r.revoked, tenantID)
+	return nil
 }
 
 type recordingCommodoreCache struct {
@@ -62,6 +70,8 @@ func (r *recordingCommodoreCache) GetTenantPrimaryUser(context.Context, string) 
 // downstream notification must commit atomically.
 func TestCancelSubscriptionHappyPathEnqueuesOutbox(t *testing.T) {
 	s, mock := newReadServer(t, true)
+	reconciler := &recordingTierReconciler{}
+	s.tierReconciler = reconciler
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`SELECT id\s+FROM purser\.tenant_subscriptions\s+WHERE tenant_id = \$1::text::uuid AND status != 'cancelled'`).
@@ -86,6 +96,9 @@ func TestCancelSubscriptionHappyPathEnqueuesOutbox(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet: %v", err)
+	}
+	if len(reconciler.revoked) != 1 || reconciler.revoked[0] != "tenant-1" {
+		t.Fatalf("DNS entitlement revocations = %v", reconciler.revoked)
 	}
 }
 
@@ -536,7 +549,7 @@ func TestUpdateSubscriptionTierGuards(t *testing.T) {
 			WithArgs("tenant-1").
 			WillReturnRows(sqlmock.NewRows([]string{"tier_id"}).AddRow("92000000-0000-4000-8000-000000000001"))
 		other := "92000000-0000-4000-8000-000000000002"
-		_, err := s.UpdateSubscription(context.Background(), &purserpb.UpdateSubscriptionRequest{TenantId: "tenant-1", TierId: &other})
+		_, err := s.UpdateSubscription(serviceTestContext(), &purserpb.UpdateSubscriptionRequest{TenantId: "tenant-1", TierId: &other})
 		if status.Code(err) != codes.FailedPrecondition {
 			t.Fatalf("err = %v, want FailedPrecondition", err)
 		}
@@ -547,7 +560,7 @@ func TestUpdateSubscriptionTierGuards(t *testing.T) {
 			WithArgs("tenant-x").
 			WillReturnError(sqlmockNoRows())
 		tid := "tier-any"
-		_, err := s.UpdateSubscription(context.Background(), &purserpb.UpdateSubscriptionRequest{TenantId: "tenant-x", TierId: &tid})
+		_, err := s.UpdateSubscription(serviceTestContext(), &purserpb.UpdateSubscriptionRequest{TenantId: "tenant-x", TierId: &tid})
 		if status.Code(err) != codes.NotFound {
 			t.Fatalf("err = %v, want NotFound", err)
 		}
@@ -559,4 +572,28 @@ func TestUpdateSubscriptionTierGuards(t *testing.T) {
 			t.Fatalf("err = %v, want InvalidArgument", err)
 		}
 	})
+}
+
+func TestUpdateSubscriptionBindsTenantAndProtectsCustomTerms(t *testing.T) {
+	s := newGuardServer(t)
+	tenantCtx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "jwt")
+	tenantCtx = context.WithValue(tenantCtx, ctxkeys.KeyTenantID, "tenant-1")
+	if _, err := s.UpdateSubscription(tenantCtx, &purserpb.UpdateSubscriptionRequest{
+		TenantId: "tenant-2", BillingEmail: proto.String("attacker@example.com"),
+	}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("cross-tenant update error = %v, want PermissionDenied", err)
+	}
+	if _, err := s.UpdateSubscription(tenantCtx, &purserpb.UpdateSubscriptionRequest{
+		TenantId: "tenant-1", CustomFeatures: &purserpb.BillingFeatures{Recording: true},
+	}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("custom terms error = %v, want PermissionDenied", err)
+	}
+	operatorCtx := context.WithValue(tenantCtx, ctxkeys.KeyPlatformOperator, true)
+	// An operator passes the authorization checks; the guard server has no
+	// storage, so reaching the repository proves it was not denied here.
+	if _, err := s.UpdateSubscription(operatorCtx, &purserpb.UpdateSubscriptionRequest{
+		TenantId: "tenant-2", CustomFeatures: &purserpb.BillingFeatures{Recording: true},
+	}); status.Code(err) == codes.PermissionDenied {
+		t.Fatalf("platform operator was denied: %v", err)
+	}
 }

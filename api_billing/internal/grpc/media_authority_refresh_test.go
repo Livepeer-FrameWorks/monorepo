@@ -2,13 +2,36 @@ package grpc
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
+	"frameworks/api_billing/internal/database/purserdb"
 	"github.com/DATA-DOG/go-sqlmock"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	"github.com/google/uuid"
 )
+
+type failingRefreshTierReconciler struct{}
+
+func (failingRefreshTierReconciler) OfficialClusterIDs(context.Context) (map[string]bool, error) {
+	return nil, nil
+}
+
+func (failingRefreshTierReconciler) Reconcile(context.Context, string, int32, string) ([]string, string, error) {
+	return nil, "", errors.New("quartermaster unavailable")
+}
+
+func (failingRefreshTierReconciler) RevokeDNSEntitlements(context.Context, string) error {
+	return nil
+}
+
+type recordingRefreshClient struct{ calls int }
+
+func (c *recordingRefreshClient) RequestMediaAuthorityRefresh(context.Context, string, string, string, string) (*commodorepb.RequestMediaAuthorityRefreshResponse, error) {
+	c.calls++
+	return &commodorepb.RequestMediaAuthorityRefreshResponse{Accepted: true}, nil
+}
 
 type blockingPurserRefreshClient struct {
 	arrived chan<- struct{}
@@ -57,5 +80,96 @@ func TestPurserMediaAuthorityRefreshBatchDeliversConcurrently(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPurserMediaAuthorityRefreshRetainsRowWhenEntitlementReconcileFails(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	id := uuid.MustParse("10000000-0000-0000-0000-000000000003")
+	mock.ExpectQuery(`SELECT ts\.tier_id::text AS tier_id, COALESCE\(bt\.tier_level, 0\)::integer AS tier_level, bt\.tier_name`).
+		WithArgs("tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"tier_id", "tier_level", "tier_name"}).AddRow("tier-paid", int32(2), "supporter"))
+	mock.ExpectExec(`UPDATE purser\.media_authority_refresh_outbox`).
+		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), id, int64(4)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	client := &recordingRefreshClient{}
+	s := &PurserServer{db: db, tierReconciler: failingRefreshTierReconciler{}}
+	err = s.deliverMediaAuthorityRefreshRow(context.Background(), client, purserdb.ClaimMediaAuthorityRefreshBatchRow{
+		ID: id.String(), TenantID: "tenant-1", SourceEventID: "event-3", Reason: "subscription_authority_changed", Attempts: 2, Revision: 4,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.calls != 0 {
+		t.Fatalf("Commodore refresh calls = %d, want 0 before entitlement convergence", client.calls)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUsageRefreshDoesNotDependOnQuartermasterEntitlementReconcile(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	id := uuid.MustParse("10000000-0000-0000-0000-000000000004")
+	mock.ExpectExec(`UPDATE purser\.media_authority_refresh_outbox`).
+		WithArgs(id, int64(1)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	client := &recordingRefreshClient{}
+	s := &PurserServer{db: db, tierReconciler: failingRefreshTierReconciler{}}
+	if err := s.deliverMediaAuthorityRefreshRow(context.Background(), client, purserdb.ClaimMediaAuthorityRefreshBatchRow{
+		ID: id.String(), TenantID: "tenant-1", SourceEventID: "event-4", Reason: "allowance_usage_changed", Attempts: 1, Revision: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if client.calls != 1 {
+		t.Fatalf("Commodore refresh calls = %d, want 1 without Quartermaster dependency", client.calls)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMediaAuthorityRefreshReleasesSupersededCompletionFence(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	id := uuid.MustParse("10000000-0000-0000-0000-000000000005")
+	mock.ExpectExec(`UPDATE purser\.media_authority_refresh_outbox`).WithArgs(id, int64(2)).WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec(`UPDATE purser\.media_authority_refresh_outbox`).WithArgs(id, int64(2)).WillReturnResult(sqlmock.NewResult(0, 1))
+	client := &recordingRefreshClient{}
+	if err := (&PurserServer{db: db}).deliverMediaAuthorityRefreshRow(context.Background(), client, purserdb.ClaimMediaAuthorityRefreshBatchRow{
+		ID: id.String(), TenantID: "tenant-1", SourceEventID: "event-5", Reason: "allowance_usage_changed", Attempts: 1, Revision: 2,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if client.calls != 1 {
+		t.Fatalf("Commodore refresh calls = %d, want 1", client.calls)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMediaAuthorityRefreshEntitlementDependencyReasons(t *testing.T) {
+	for _, reason := range []string{"subscription_authority_changed", "subscription_entitlement_changed", "tier_entitlement_changed", "billing_tier_authority_changed"} {
+		if !mediaAuthorityRefreshRequiresEntitlementReconcile(reason) {
+			t.Fatalf("%q must reconcile entitlements", reason)
+		}
+	}
+	for _, reason := range []string{"allowance_usage_changed", "prepaid_admission_gate_changed", "tier_allowance_changed"} {
+		if mediaAuthorityRefreshRequiresEntitlementReconcile(reason) {
+			t.Fatalf("%q must not depend on entitlement reconciliation", reason)
+		}
 	}
 }

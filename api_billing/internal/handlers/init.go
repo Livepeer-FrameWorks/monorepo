@@ -43,14 +43,22 @@ type PurserMetrics struct {
 // flows. It replaces the package-level globals so the webhook handlers can be
 // constructed and tested in isolation (no global mutation, parallel-safe).
 type Service struct {
-	db            *sql.DB
-	logger        logging.Logger
-	metrics       *PurserMetrics
-	emailService  *EmailService
-	qmClient      quartermasterCommercialClient
-	mollieClient  *mollie.Client
-	stripeClient  *billingstripe.Client
-	decklogClient *decklogclient.BatchedClient
+	db                         *sql.DB
+	logger                     logging.Logger
+	metrics                    *PurserMetrics
+	emailService               *EmailService
+	qmClient                   quartermasterCommercialClient
+	mollieClient               *mollie.Client
+	stripeClient               *billingstripe.Client
+	decklogClient              *decklogclient.BatchedClient
+	convergeTenantEntitlements func(context.Context, string) error
+}
+
+// SetTenantEntitlementConverger wires the post-commit repair used by webhook
+// top-ups. The callback is set during startup before payment webhooks are
+// served and remains stable for the process lifetime.
+func (s *Service) SetTenantEntitlementConverger(converger func(context.Context, string) error) {
+	s.convergeTenantEntitlements = converger
 }
 
 type quartermasterCommercialClient interface {

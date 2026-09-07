@@ -165,6 +165,52 @@ func TestValidateUsageSummaryMetersCoversProviderAndAdjustments(t *testing.T) {
 			WillReturnRows(sqlmock.NewRows([]string{"unit", "allowed_dimensions"}).
 				AddRow("gibibyte_second", "{storage_backend,storage_scope}"))
 	}
+	expectDeliveryDefinition := func(mock sqlmock.Sqlmock, meter, unit string) {
+		mock.ExpectQuery("SELECT unit, allowed_dimensions").
+			WithArgs(meter).
+			WillReturnRows(sqlmock.NewRows([]string{"unit", "allowed_dimensions"}).
+				AddRow(unit, "{delivery_kind,platform}"))
+	}
+
+	t.Run("accepts bounded playback and restream delivery dimensions", func(t *testing.T) {
+		jm, mock := newManager(t)
+		expectDeliveryDefinition(mock, "egress_gb", "gibibyte")
+		expectDeliveryDefinition(mock, "delivered_minutes", "minute")
+		summary := models.UsageSummary{Meters: []models.MeterQuantity{
+			{Meter: "egress_gb", Unit: "gibibyte", Quantity: 1, Dimensions: models.JSONB{"delivery_kind": "playback"}},
+			{Meter: "egress_gb", Unit: "gibibyte", Quantity: 2, Dimensions: models.JSONB{"delivery_kind": "restream", "platform": "youtube"}},
+			{Meter: "delivered_minutes", Unit: "minute", Quantity: 3, Dimensions: models.JSONB{"delivery_kind": "restream", "platform": "youtube"}},
+		}}
+		if err := jm.validateUsageSummaryMeters(context.Background(), summary); err != nil {
+			t.Fatalf("valid delivery dimensions rejected: %v", err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	for _, tc := range []struct {
+		name       string
+		dimensions models.JSONB
+	}{
+		{name: "rejects unknown delivery kind", dimensions: models.JSONB{"delivery_kind": "multicast"}},
+		{name: "rejects noncanonical platform", dimensions: models.JSONB{"delivery_kind": "restream", "platform": "YouTube"}},
+		{name: "rejects unknown platform", dimensions: models.JSONB{"delivery_kind": "restream", "platform": "unbounded-provider"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			jm, mock := newManager(t)
+			expectDeliveryDefinition(mock, "egress_gb", "gibibyte")
+			summary := models.UsageSummary{Meters: []models.MeterQuantity{{
+				Meter: "egress_gb", Unit: "gibibyte", Quantity: 1, Dimensions: tc.dimensions,
+			}}}
+			if err := jm.validateUsageSummaryMeters(context.Background(), summary); err == nil || !strings.HasPrefix(err.Error(), "dimension_value_not_allowed:egress_gb:") {
+				t.Fatalf("invalid delivery dimension was accepted: dimensions=%v err=%v", tc.dimensions, err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
 
 	t.Run("rejects non-finite provider quantity before persistence", func(t *testing.T) {
 		jm, mock := newManager(t)

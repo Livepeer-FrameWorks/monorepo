@@ -42,7 +42,7 @@ func TestEnforcePrepaidThresholds_ZeroCrossingInvalidatesCache(t *testing.T) {
 	defer mockDB.Close()
 
 	commodore := &mockCommodoreClient{}
-	enforcer := NewThresholdEnforcer(mockDB, logging.NewLogger(), commodore, nil, nil)
+	enforcer := NewThresholdEnforcer(mockDB, logging.NewLogger(), commodore, nil, nil, nil)
 	tenantID := "tenant-123"
 
 	mock.ExpectQuery(`SELECT COALESCE\(billing_model, 'postpaid'\)`).
@@ -72,7 +72,7 @@ func TestEnforcePrepaidThresholds_SuspendsBelowThreshold(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	enforcer := NewThresholdEnforcer(mockDB, logging.NewLogger(), nil, nil, nil)
+	enforcer := NewThresholdEnforcer(mockDB, logging.NewLogger(), nil, nil, nil, nil)
 	tenantID := "tenant-456"
 
 	mock.ExpectQuery(`SELECT COALESCE\(billing_model, 'postpaid'\)`).
@@ -99,7 +99,7 @@ func TestEnforcePrepaidThresholds_DoesNotSuspendAtThreshold(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	enforcer := NewThresholdEnforcer(mockDB, logging.NewLogger(), nil, nil, nil)
+	enforcer := NewThresholdEnforcer(mockDB, logging.NewLogger(), nil, nil, nil, nil)
 	tenantID := "tenant-789"
 
 	mock.ExpectQuery(`SELECT COALESCE\(billing_model, 'postpaid'\)`).

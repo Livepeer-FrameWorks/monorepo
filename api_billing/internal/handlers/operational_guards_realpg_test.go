@@ -272,7 +272,7 @@ func TestOperationalDatabaseGuards_RealPG(t *testing.T) { //nolint:funlen // One
 		`, uuid.NewString(), tenantID, tierID); err != nil {
 			t.Fatal(err)
 		}
-		enforcer := NewThresholdEnforcer(db, logging.NewLogger(), nil, nil, nil)
+		enforcer := NewThresholdEnforcer(db, logging.NewLogger(), nil, nil, nil, nil)
 		if err := enforcer.EnforcePrepaidThresholds(ctx, tenantID, 10, suspensionThresholdCents-1); err != nil {
 			t.Fatal(err)
 		}

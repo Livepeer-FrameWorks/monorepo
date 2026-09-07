@@ -21,11 +21,13 @@ import (
 	"frameworks/api_billing/internal/stripe"
 	"frameworks/api_billing/internal/tieraccess"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/authz"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/countries"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	fwdb "github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -222,8 +224,14 @@ func mapToProtoStruct(m map[string]any) *structpb.Struct {
 // counters were removed because their {operation} label maps 1:1 to the
 // gRPC method already exposed on {method}.
 type ServerMetrics struct {
-	GRPCRequests *prometheus.CounterVec
-	GRPCDuration *prometheus.HistogramVec
+	GRPCRequests                     *prometheus.CounterVec
+	GRPCDuration                     *prometheus.HistogramVec
+	TierAccessReconciliationFailures *prometheus.CounterVec
+	MediaAuthorityRefreshFailures    *prometheus.CounterVec
+	MediaAuthorityRefreshCompletions *prometheus.CounterVec
+	MediaAuthorityRefreshPending     *prometheus.GaugeVec
+	MediaAuthorityRefreshOldest      *prometheus.GaugeVec
+	MediaAuthorityRefreshWorkerReady *prometheus.GaugeVec
 }
 
 type stripeBillingClient interface {
@@ -285,6 +293,7 @@ type invoiceCardCheckoutFunc func(ctx context.Context, paymentID, invoiceID, ten
 
 type commercialQuartermasterClient interface {
 	GetCluster(ctx context.Context, clusterID string) (*quartermasterpb.ClusterResponse, error)
+	GetClusterAsService(ctx context.Context, clusterID string) (*quartermasterpb.ClusterResponse, error)
 	ListClustersByOwner(ctx context.Context, ownerTenantID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListClustersResponse, error)
 	BootstrapClusterAccess(ctx context.Context, tenantID, clusterID string, resourceLimits *tenantlimitspb.TenantResourceLimits) error
 	MaterializeClusterAccess(ctx context.Context, req *quartermasterpb.MaterializeClusterAccessRequest) error
@@ -294,6 +303,7 @@ type commercialQuartermasterClient interface {
 type tierAccessReconciler interface {
 	OfficialClusterIDs(ctx context.Context) (map[string]bool, error)
 	Reconcile(ctx context.Context, tenantID string, tierLevel int32, tierName string) ([]string, string, error)
+	RevokeDNSEntitlements(ctx context.Context, tenantID string) error
 }
 
 type serviceEventSender interface {
@@ -314,6 +324,12 @@ func NewPurserServer(db *sql.DB, logger logging.Logger, metrics *ServerMetrics, 
 	if decklogClient != nil {
 		eventSender = decklogClient
 	}
+	tierReconciler := tieraccess.NewReconciler(db, qmClient, logger, func() *prometheus.CounterVec {
+		if metrics == nil {
+			return nil
+		}
+		return metrics.TierAccessReconciliationFailures
+	}())
 	return &PurserServer{
 		db:                  db,
 		logger:              logger,
@@ -327,8 +343,8 @@ func NewPurserServer(db *sql.DB, logger logging.Logger, metrics *ServerMetrics, 
 		priceFeed:           priceFeed,
 		x402handler:         handlers.NewX402Handler(db, logger, hdwallet, rpcClient, commodoreClient),
 		decklogClient:       eventSender,
-		thresholdEnforcer:   handlers.NewThresholdEnforcer(db, logger, commodoreClient, nil, billing),
-		tierReconciler:      tieraccess.NewReconciler(db, qmClient, logger),
+		thresholdEnforcer:   handlers.NewThresholdEnforcer(db, logger, commodoreClient, nil, billing, tierReconciler),
+		tierReconciler:      tierReconciler,
 		billing:             billing,
 	}
 }
@@ -1396,6 +1412,16 @@ func (s *PurserServer) UpdateSubscription(ctx context.Context, req *purserpb.Upd
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
+	if !middleware.IsServiceCall(ctx) && !ctxkeys.IsPlatformOperator(ctx) {
+		callerTenant := strings.TrimSpace(ctxkeys.GetTenantID(ctx))
+		if callerTenant == "" || callerTenant != tenantID {
+			return nil, status.Error(codes.PermissionDenied, "subscription tenant does not match authenticated tenant")
+		}
+		if req.GetCustomFeatures() != nil || len(req.GetPricingOverrides()) != 0 ||
+			len(req.GetEntitlementOverrides()) != 0 || req.GetClearPricingOverrides() || req.GetClearEntitlementOverrides() {
+			return nil, status.Error(codes.PermissionDenied, "custom subscription terms require platform operator access")
+		}
+	}
 
 	userID := middleware.GetUserID(ctx)
 
@@ -1695,6 +1721,12 @@ func (s *PurserServer) CancelSubscription(ctx context.Context, req *purserpb.Can
 
 	if err := tx.Commit(); err != nil {
 		return nil, status.Errorf(codes.Internal, "commit subscription cancel: %v", err)
+	}
+	if s.tierReconciler != nil {
+		if revokeErr := s.tierReconciler.RevokeDNSEntitlements(ctx, tenantID); revokeErr != nil {
+			s.logger.WithError(revokeErr).WithField("tenant_id", tenantID).
+				Warn("Subscription cancelled but DNS entitlement revocation will require sweep retry")
+		}
 	}
 
 	return &emptypb.Empty{}, nil
@@ -3519,12 +3551,14 @@ func (s *PurserServer) SetClusterPricing(ctx context.Context, req *purserpb.SetC
 	if clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
 	}
-
 	pricingModel := req.GetPricingModel()
 	pricingModelProvided := pricingModel != ""
 	validModels := []string{"free_unmetered", "metered", "monthly", "tier_inherit", "custom"}
 	if pricingModelProvided && !slices.Contains(validModels, pricingModel) {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid pricing_model: %s", pricingModel)
+	}
+	if err := s.authorizeClusterPricingMutation(ctx, clusterID); err != nil {
+		return nil, err
 	}
 
 	existingPricing := false
@@ -3622,6 +3656,28 @@ func (s *PurserServer) SetClusterPricing(ctx context.Context, req *purserpb.SetC
 
 	// Return the updated pricing
 	return s.GetClusterPricing(ctx, &purserpb.GetClusterPricingRequest{ClusterId: clusterID})
+}
+
+func (s *PurserServer) authorizeClusterPricingMutation(ctx context.Context, clusterID string) error {
+	if middleware.IsServiceCall(ctx) || ctxkeys.IsPlatformOperator(ctx) {
+		return nil
+	}
+	tenantID := strings.TrimSpace(ctxkeys.GetTenantID(ctx))
+	identity := authz.Identity{
+		UserID: ctxkeys.GetUserID(ctx), TenantID: tenantID, Role: ctxkeys.GetRole(ctx),
+		Permissions: ctxkeys.GetPermissions(ctx), PlatformOperator: ctxkeys.IsPlatformOperator(ctx),
+	}
+	if decision := authz.Default.Can(ctx, identity, authz.ActionManageEdgeCluster, authz.Resource{OwnerTenantID: tenantID}); !decision.Allow {
+		return status.Error(codes.PermissionDenied, "cluster pricing mutation requires cluster owner/admin or platform operator")
+	}
+	if s.quartermasterClient == nil {
+		return status.Error(codes.Unavailable, "cluster ownership authority unavailable")
+	}
+	resp, err := s.quartermasterClient.GetClusterAsService(ctx, clusterID)
+	if err != nil || resp == nil || resp.GetCluster() == nil || strings.TrimSpace(resp.GetCluster().GetOwnerTenantId()) != tenantID {
+		return status.Error(codes.PermissionDenied, "cluster pricing mutation requires cluster owner/admin or platform operator")
+	}
+	return nil
 }
 
 // ListClusterPricings returns pricing configs for clusters owned by a tenant
@@ -4243,27 +4299,60 @@ type GRPCServerConfig struct {
 	AllowInsecure       bool
 }
 
-// NewGRPCServer creates a new gRPC server for Purser
-func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
-	// Chain auth interceptor with logging interceptor
-	authInterceptor := middleware.GRPCAuthInterceptor(middleware.GRPCAuthConfig{
-		ServiceToken: cfg.ServiceToken,
-		JWTSecret:    cfg.JWTSecret,
-		Logger:       cfg.Logger,
+func purserServiceOnlyMethods() []string {
+	return []string{
+		purserpb.WebhookService_ProcessWebhook_FullMethodName,
+		purserpb.X402Service_GetPaymentRequirements_FullMethodName,
+		purserpb.X402Service_VerifyX402Payment_FullMethodName,
+		purserpb.X402Service_SettleX402Payment_FullMethodName,
+		purserpb.X402Service_GetTenantX402Address_FullMethodName,
+		purserpb.X402Service_ClaimX402MutationResult_FullMethodName,
+		purserpb.X402Service_CompleteX402MutationResult_FullMethodName,
+	}
+}
+
+func purserAuthConfig(cfg GRPCServerConfig) middleware.GRPCAuthConfig {
+	return middleware.GRPCAuthConfig{
+		ServiceToken:         cfg.ServiceToken,
+		JWTSecret:            cfg.JWTSecret,
+		DelegatedJWTAudience: "purser",
+		Logger:               cfg.Logger,
 		SkipMethods: []string{
 			"/grpc.health.v1.Health/Check",
 			"/grpc.health.v1.Health/Watch",
 		},
-	})
+		ServiceOnlyMethods: purserServiceOnlyMethods(),
+	}
+}
 
+func purserUnaryInterceptors(cfg GRPCServerConfig) []grpc.UnaryServerInterceptor {
+	authInterceptor := middleware.GRPCAuthInterceptor(purserAuthConfig(cfg))
+	var requests *prometheus.CounterVec
+	var duration *prometheus.HistogramVec
+	if cfg.Metrics != nil {
+		requests = cfg.Metrics.GRPCRequests
+		duration = cfg.Metrics.GRPCDuration
+	}
+	return []grpc.UnaryServerInterceptor{
+		middleware.GRPCMetricsInterceptor(requests, duration),
+		unaryInterceptor(cfg.Logger),
+		authInterceptor,
+		apiTokenAuthorizationInterceptor(),
+		billingMutationAuthorizationInterceptor(),
+		middleware.DelegatedJWTReplayInterceptor(cfg.DB, "purser"),
+	}
+}
+
+// NewGRPCServer creates a new gRPC server for Purser
+func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 	// GRPCMetricsInterceptor sits outermost so Unauthenticated / PermissionDenied
 	// rejections from the auth interceptor still show up in
 	// purser_grpc_requests_total.
 	opts := []grpc.ServerOption{
-		grpc.ChainUnaryInterceptor(
-			middleware.GRPCMetricsInterceptor(cfg.Metrics.GRPCRequests, cfg.Metrics.GRPCDuration),
-			unaryInterceptor(cfg.Logger),
-			authInterceptor,
+		grpc.ChainUnaryInterceptor(purserUnaryInterceptors(cfg)...),
+		grpc.ChainStreamInterceptor(
+			middleware.GRPCStreamAuthInterceptor(purserAuthConfig(cfg)),
+			middleware.DelegatedJWTStreamReplayInterceptor(cfg.DB, "purser"),
 		),
 	}
 	tlsCfg := grpcutil.ServerTLSConfig{
@@ -4895,6 +4984,9 @@ func (s *PurserServer) recordBalanceTransaction(
 					}
 				}()
 			}
+		}
+		if _, _, reconcileErr := s.reconcileCanonicalTierClusterAccess(ctx, tenantID); reconcileErr != nil {
+			s.logger.WithError(reconcileErr).WithField("tenant_id", tenantID).Warn("Failed to restore DNS entitlements after balance reactivation")
 		}
 	}
 
@@ -7068,6 +7160,9 @@ func (s *PurserServer) SettleX402Payment(ctx context.Context, req *purserpb.Sett
 					}
 				}()
 			}
+		}
+		if _, _, reconcileErr := s.reconcileCanonicalTierClusterAccess(ctx, tenantID); reconcileErr != nil {
+			s.logger.WithError(reconcileErr).WithField("tenant_id", tenantID).Warn("Failed to restore DNS entitlements after x402 reactivation")
 		}
 	}
 

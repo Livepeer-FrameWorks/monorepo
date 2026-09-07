@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 
 	"frameworks/api_billing/internal/database/purserdb"
@@ -20,15 +21,21 @@ type ThresholdEnforcer struct {
 	commodoreClient CommodoreClient
 	emailService    *EmailService
 	billing         *Service
+	dnsRevoker      DNSEntitlementRevoker
 }
 
-func NewThresholdEnforcer(db *sql.DB, logger logging.Logger, commodoreClient CommodoreClient, emailService *EmailService, billing *Service) *ThresholdEnforcer {
+type DNSEntitlementRevoker interface {
+	RevokeDNSEntitlements(ctx context.Context, tenantID string) error
+}
+
+func NewThresholdEnforcer(db *sql.DB, logger logging.Logger, commodoreClient CommodoreClient, emailService *EmailService, billing *Service, dnsRevoker DNSEntitlementRevoker) *ThresholdEnforcer {
 	return &ThresholdEnforcer{
 		db:              db,
 		logger:          logger,
 		commodoreClient: commodoreClient,
 		emailService:    emailService,
 		billing:         billing,
+		dnsRevoker:      dnsRevoker,
 	}
 }
 
@@ -94,6 +101,15 @@ func (e *ThresholdEnforcer) suspendTenantForBalance(ctx context.Context, tenantI
 	rowsAffected, err := purserdb.New(e.db).SuspendActiveTenantSubscriptions(ctx, tenantID)
 	if err != nil {
 		return err
+	}
+
+	// Revoke on every observation, even when the subscription was already
+	// suspended. That makes a retry repair a prior Quartermaster outage instead
+	// of waiting for the hourly sweep.
+	if e.dnsRevoker != nil {
+		if err := e.dnsRevoker.RevokeDNSEntitlements(ctx, tenantID); err != nil {
+			return fmt.Errorf("revoke DNS entitlements after suspension: %w", err)
+		}
 	}
 
 	if rowsAffected == 0 {

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"flag"
 	"fmt"
@@ -11,11 +12,13 @@ import (
 	"time"
 
 	"frameworks/api_billing/internal/bootstrap"
+	"frameworks/api_billing/internal/database/purserdb"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"gopkg.in/yaml.v3"
 )
@@ -150,7 +153,7 @@ func runBootstrapApply(args []string) int {
 		}
 		failures := 0
 		for _, op := range out.PostCommit {
-			if applyErr := applyPostCommitOp(ctx, qm.client, op); applyErr != nil {
+			if applyErr := applyPostCommitOp(ctx, db, qm.client, op); applyErr != nil {
 				failures++
 				fmt.Fprintf(os.Stderr, "purser bootstrap post-commit %s tenant=%s cluster=%s: %v\n",
 					op.Kind, op.Alias, op.ClusterID, applyErr)
@@ -164,7 +167,7 @@ func runBootstrapApply(args []string) int {
 	return 0
 }
 
-func applyPostCommitOp(ctx context.Context, client *qmclient.GRPCClient, op bootstrap.PostCommitOp) error {
+func applyPostCommitOp(ctx context.Context, db *sql.DB, client *qmclient.GRPCClient, op bootstrap.PostCommitOp) error {
 	switch op.Kind {
 	case bootstrap.PostCommitGrantClusterAccess:
 		// Bootstrap CLI runs admin/system-tenant grants; per-tenant runtime
@@ -174,14 +177,21 @@ func applyPostCommitOp(ctx context.Context, client *qmclient.GRPCClient, op boot
 		return client.BootstrapClusterAccess(ctx, op.TenantID, op.ClusterID, nil)
 	case bootstrap.PostCommitSetPrimaryCluster:
 		clusterID := op.ClusterID
-		_, err := client.UpdateTenant(ctx, &quartermasterpb.UpdateTenantRequest{
+		return client.UpdateTenantCluster(ctx, &quartermasterpb.UpdateTenantClusterRequest{
 			TenantId: op.TenantID, PrimaryClusterId: &clusterID,
 		})
-		return err
 	case bootstrap.PostCommitSetDeploymentTier:
-		tier := op.Tier
-		_, err := client.UpdateTenant(ctx, &quartermasterpb.UpdateTenantRequest{
-			TenantId: op.TenantID, DeploymentTier: &tier,
+		observedAt := time.Now().UTC()
+		dnsEntitlements, err := purserdb.New(db).LoadEffectiveDNSEntitlements(ctx, op.TenantID)
+		if err != nil {
+			return fmt.Errorf("load effective DNS entitlements: %w", err)
+		}
+		_, err = client.ApplyTenantBillingEntitlements(ctx, &quartermasterpb.ApplyTenantBillingEntitlementsRequest{
+			TenantId:               op.TenantID,
+			DeploymentTier:         dnsEntitlements.TierName,
+			CustomSubdomainEnabled: dnsEntitlements.CustomSubdomainEnabled,
+			CustomDomainEnabled:    dnsEntitlements.CustomDomainEnabled,
+			ObservedAt:             timestamppb.New(observedAt),
 		})
 		return err
 	default:

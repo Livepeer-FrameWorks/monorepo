@@ -90,7 +90,18 @@ func TestHandlePrepaidCheckoutCompletedSkipsAlreadyProcessed(t *testing.T) {
 	}
 	defer mockDB.Close()
 
-	s := &Service{db: mockDB, logger: logrus.New()}
+	converged := 0
+	s := &Service{
+		db:     mockDB,
+		logger: logrus.New(),
+		convergeTenantEntitlements: func(_ context.Context, tenantID string) error {
+			if tenantID != "tenant-a" {
+				t.Fatalf("converged tenant = %q", tenantID)
+			}
+			converged++
+			return nil
+		},
+	}
 
 	mock.ExpectBegin()
 	mock.ExpectQuery(`(?s)SELECT status, tenant_id::text AS tenant_id.*FROM purser.pending_topups.*FOR UPDATE`).
@@ -100,6 +111,9 @@ func TestHandlePrepaidCheckoutCompletedSkipsAlreadyProcessed(t *testing.T) {
 
 	if err := s.handlePrepaidCheckoutCompleted(context.Background(), "sess-2", "pi-2", "tenant-a", "topup-456", 1500, "USD", ProviderStripe, true); err != nil {
 		t.Fatalf("expected nil error, got %v", err)
+	}
+	if converged != 1 {
+		t.Fatalf("entitlement convergence calls = %d, want 1", converged)
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {

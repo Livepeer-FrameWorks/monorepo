@@ -120,8 +120,14 @@ func main() {
 	// (billing/usage/subscription/invoice) where the operation label maps 1:1
 	// to a gRPC method would only rename the same axis.
 	serverMetrics := &pursergrpc.ServerMetrics{
-		GRPCRequests: metricsCollector.NewCounter("grpc_requests_total", "Total gRPC requests", []string{"method", "status"}),
-		GRPCDuration: metricsCollector.NewHistogram("grpc_request_duration_seconds", "gRPC request duration", []string{"method"}, nil),
+		GRPCRequests:                     metricsCollector.NewCounter("grpc_requests_total", "Total gRPC requests", []string{"method", "status"}),
+		GRPCDuration:                     metricsCollector.NewHistogram("grpc_request_duration_seconds", "gRPC request duration", []string{"method"}, nil),
+		TierAccessReconciliationFailures: metricsCollector.NewCounter("tier_access_reconciliation_failures_total", "Tier access and DNS entitlement reconciliation failures", []string{"operation"}),
+		MediaAuthorityRefreshFailures:    metricsCollector.NewCounter("media_authority_refresh_failures_total", "Media-authority refresh failures", []string{"stage"}),
+		MediaAuthorityRefreshCompletions: metricsCollector.NewCounter("media_authority_refresh_completions_total", "Media-authority refresh completion outcomes", []string{"outcome"}),
+		MediaAuthorityRefreshPending:     metricsCollector.NewGauge("media_authority_refresh_pending", "Pending media-authority refresh obligations", nil),
+		MediaAuthorityRefreshOldest:      metricsCollector.NewGauge("media_authority_refresh_oldest_pending_seconds", "Age of the oldest pending media-authority refresh obligation", nil),
+		MediaAuthorityRefreshWorkerReady: metricsCollector.NewGauge("media_authority_refresh_worker_ready", "Whether the media-authority refresh worker has its required dependencies", nil),
 	}
 
 	// Create Quartermaster gRPC client for tenant lookups (used by webhooks)
@@ -235,7 +241,11 @@ func main() {
 	// Shared tier reconciler — used by PurserServer.ChangeBillingTier and
 	// by JobManager's downgrade applier so both apply the same grant/suspend
 	// logic against tenant_cluster_access.
-	tierReconciler := tieraccess.NewReconciler(db, qmGRPCClient, logger)
+	tierReconciler := tieraccess.NewReconciler(db, qmGRPCClient, logger, serverMetrics.TierAccessReconciliationFailures)
+	billingSvc.SetTenantEntitlementConverger(func(ctx context.Context, tenantID string) error {
+		_, _, err := tierReconciler.ReconcileCanonical(ctx, tenantID)
+		return err
+	})
 
 	// Initialize and start JobManager for background billing tasks
 	jobManager := handlers.NewJobManager(db, logger, commodoreClient, decklogClient, periscopeClient, tierReconciler, billingSvc)

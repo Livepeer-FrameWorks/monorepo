@@ -33,6 +33,10 @@ func (s *commercialQuartermasterStub) GetCluster(context.Context, string) (*quar
 	return &quartermasterpb.ClusterResponse{Cluster: s.cluster}, nil
 }
 
+func (s *commercialQuartermasterStub) GetClusterAsService(context.Context, string) (*quartermasterpb.ClusterResponse, error) {
+	return &quartermasterpb.ClusterResponse{Cluster: s.cluster}, nil
+}
+
 func (*commercialQuartermasterStub) ListClustersByOwner(context.Context, string, *commonpb.CursorPaginationRequest) (*quartermasterpb.ListClustersResponse, error) {
 	return &quartermasterpb.ListClustersResponse{}, nil
 }

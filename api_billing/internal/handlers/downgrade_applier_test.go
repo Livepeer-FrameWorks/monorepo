@@ -32,6 +32,10 @@ func (s *stubTierReconciler) SweepDeploymentTiers(_ context.Context) (int, error
 	return 0, nil
 }
 
+func (s *stubTierReconciler) RevokeDNSEntitlements(_ context.Context, _ string) error {
+	return nil
+}
+
 func TestApplyPendingDowngrade_NotDue_NoOp(t *testing.T) {
 	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {

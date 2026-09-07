@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -36,7 +37,8 @@ func TestSetClusterPricingUpsertsAndRereads(t *testing.T) {
 		}).AddRow("cp-1", "cluster-a", "free_unmetered", nil, nil, nil, "", "EUR", []byte(`{}`),
 			int32(0), true, []byte(`{}`), now, now))
 
-	resp, err := s.SetClusterPricing(context.Background(), &purserpb.SetClusterPricingRequest{
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "service")
+	resp, err := s.SetClusterPricing(ctx, &purserpb.SetClusterPricingRequest{
 		ClusterId:    "cluster-a",
 		PricingModel: "free_unmetered",
 	})
