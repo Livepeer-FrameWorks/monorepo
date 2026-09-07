@@ -1,0 +1,101 @@
+---
+title: "Self-hosted edge hardening rollout"
+description: "Release order, evidence gates, and recovery actions for the v0.3.0 edge enrollment, authorization, inventory, and DNS entitlement changes."
+sidebar:
+  order: 14
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+This runbook applies to the supported customer edge boundary: the customer operates MistServer, Helmsman, Caddy, and the edge host; FrameWorks operates Foghorn, federation, Livepeer, Chandler, object storage, DNS/TLS, analytics, billing, and the control plane. It does not authorize or describe customer-operated Foghorn.
+
+<Aside type="caution">
+  Foghorn, Quartermaster/Navigator, and Purser changes in this rollout are security and
+  desired-state transitions. Use a forward fix. Do not restore fingerprint TOFU, tier-name DNS
+  authorization, unscoped inventory, or unsigned source disclosure as a rollback mechanism.
+</Aside>
+
+## Rollout order and gates
+
+1. **Prepare signed source authority before Foghorn.** Generate/import the media-authority signing key tuple, then deploy and health-check Commodore before any Foghorn replacement. A non-development Commodore refuses to start without `MEDIA_AUTHORITY_SIGNING_KEY_ID` and `MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64`. Confirm signed tenant authority is compiling and delivery lag is healthy. During rolling skew, new Foghorn accepts an old Commodore's legacy origin/peer envelope only when the new `serve_policy_resolved` field is absent; an upgraded Commodore's explicit false remains fail-closed.
+2. **Contain source disclosure.** Deploy Foghorn source authorization only after step 1. Verify `foghorn_source_authorization_rejected_total` remains quiet for valid edges and that a two-tenant negative request increments `cluster_not_authorized` without federation, replication, or source-success effects. Deploy Gateway owner/admin action checks and Purser's `ApplyTenantBillingEntitlements` client before Quartermaster rejects legacy direct writes.
+3. **Apply the DNS-safe expand set.** The Quartermaster expand migration adds the entitlement columns with an unobserved epoch fence; its backstop ignores those rows, so it cannot tear down existing aliases or custom domains before authoritative billing state arrives. The Purser expand migration inserts both entitlement keys for every built-in tier. The Quartermaster data migration does not infer entitlement from legacy tier names and runs only after Purser's complete tenant sweep proves that every existing Quartermaster tenant has an observed entitlement stamp. Subscription-less lifecycle rows are explicitly stamped fail-closed instead of blocking the handoff. Never deploy the new workers against only one side of this expand set.
+4. **Census legacy identities and schedule interruption.** Before replacing Quartermaster, run the following read-only query against the existing Quartermaster database. `QUARTERMASTER_DATABASE_URL` must be the exact admin DSN from the deployment's secret inventory, including its database name; the command is the same for supported PostgreSQL and YugabyteDB endpoints and does not assume a Docker Compose layout. Run it from a trusted admin host with `psql` installed. It does not depend on the new binary or an install-time adoption marker. Retain the affected node IDs. There is no report-only identity mode: the new binary rejects every keyless or malformed stored identity, so schedule recovery credentials and the per-node reconnect window in advance.
+
+   ```bash
+   psql --dbname "$QUARTERMASTER_DATABASE_URL" --no-psqlrc --tuples-only --no-align --command "SELECT node.node_id FROM quartermaster.node_fingerprints fingerprint JOIN quartermaster.infrastructure_nodes node ON node.node_id = fingerprint.node_id JOIN quartermaster.infrastructure_clusters cluster ON cluster.cluster_id = node.cluster_id WHERE node.status = 'active' AND cluster.is_active = true AND (fingerprint.node_identity_public_key_ed25519 IS NULL OR octet_length(fingerprint.node_identity_public_key_ed25519) <> 32) ORDER BY node.node_id"
+   ```
+
+5. **Deploy strict Quartermaster and recover identity keys.** For each affected node, issue a fresh tenant/cluster-scoped `edge_node` token and follow [Legacy Keyless Node recovery](/hybrid/connecting#recover-a-legacy-keyless-node). The token alone is insufficient: the reconnect must explicitly request rotation. Re-run the census until it verifies zero; postdeploy remains blocked if a keyless active row reappears. Never bind a presented key from fingerprint knowledge alone.
+6. **Preflight subscriptionless DNS teardown, then verify convergence.** Before starting upgraded Purser, export the legacy Quartermaster tenants that currently have a requested DNS name or grant and compare them with Purser's subscription owners. These are read-only queries against the two service databases:
+
+   ```bash
+   psql --dbname "$QUARTERMASTER_DATABASE_URL" --no-psqlrc --tuples-only --no-align --command "SELECT id FROM quartermaster.tenants WHERE billing_entitlements_observed_at = 'epoch'::timestamptz AND (subdomain IS NOT NULL OR custom_domain IS NOT NULL OR custom_subdomain_enabled OR custom_domain_enabled) ORDER BY id" | sort -u > quartermaster-dns-tenants.txt
+   psql --dbname "$PURSER_DATABASE_URL" --no-psqlrc --tuples-only --no-align --command "SELECT tenant_id FROM purser.tenant_subscriptions ORDER BY tenant_id" | sort -u > purser-subscription-tenants.txt
+   comm -23 quartermaster-dns-tenants.txt purser-subscription-tenants.txt
+   ```
+
+   Any printed tenant will be stamped `free` with both DNS grants disabled and its live alias/custom-domain desired state will be removed. The list is intentionally broad: Quartermaster generates a requested subdomain for ordinary tenants, so an installation with many subscriptionless tenants can print most of its tenant census even when only a smaller subset currently has an enabled grant. Confirm that teardown is intended or create the missing subscription through the supported operator billing workflow before starting Purser. Do not insert subscription rows manually. Retain the two census files with the upgrade evidence, then delete them according to the deployment's tenant-data handling policy.
+
+   Start upgraded Purser and wait at least one minute for its first tier-access sweep before running `quartermaster_tenant_dns_entitlements_v0_3_0`; later repair attempts run hourly. A fully successful sweep records `purser_dns_entitlements_v0_3_0` in `quartermaster.billing_entitlement_handoffs`; a partial page, failed apply, or Purser subscription row with no matching Quartermaster tenant records nothing. A fence rejection means Quartermaster atomically accepted a newer entitlement observation and does not block the sweep. Serialization failures are retried three times, with 100 ms and 200 ms delays before the second and third attempts. Subscription-less Quartermaster tenants are legitimate during signup, deletion, and system bootstrap, so the sweep stamps them `free` with both DNS grants disabled. The receipt's historically named `subscription_count` is Quartermaster's serializable tenant census at first completion; subsequent completion calls return from the immutable receipt without repeating that census. A tenant created above the sweep's descending cursor starts observed and fail-closed, so it neither invalidates nor delays the receipt. An in-band deactivation after a tenant's page was visited can remain visible until the next hourly sweep, which then closes both DNS grants. The migration requires the receipt but does not compare it to a changing live count. Never insert or rewrite the receipt manually. The sweep stamps even value-matching subscriptions and resolves explicit per-subscription overrides. New tenant creation and bootstrap both write an observed, fail-closed DNS state and do not create new epoch rows. The first sweep emits bounded per-tenant Navigator and media-authority work; size both drains for the tenant census before rollout. A demo bootstrap tenant has no implied commercial subscription and is closed unless its billing state is explicitly provisioned. Verify upgrades preserve existing entitled names and downgrades/suspensions remove served state while retaining requested names; reactivation immediately reapplies the authoritative grants. Subscription/entitlement changes retain a durable retry obligation until both Quartermaster entitlement reconciliation and Commodore authority refresh succeed; balance/usage-only rows go directly to Commodore and do not depend on Quartermaster availability.
+
+7. **Verify delegated API-token enforcement.** Exercise an owner token with `infrastructure:write` and `billing:write`, then repeat with a member role, `billing:read`, and each scope removed. Gateway, Quartermaster, and Purser must independently deny the disallowed calls without a write or outbox row. Replay one captured delegated RPC assertion and confirm the second use is rejected.
+8. **Census and replace coarse or unsupported API tokens.** Before relying on delegated API-token access, run this read-only census against Commodore. The historical `read` and `write` values never authorized namespaced Gateway operations and are rejected for new tokens; they are not migrated or widened automatically.
+
+   ```bash
+   psql --dbname "$COMMODORE_DATABASE_URL" --no-psqlrc --tuples-only --no-align --command "SELECT tenant_id, user_id, id, token_name, permissions FROM commodore.api_tokens WHERE is_active = true AND (expires_at IS NULL OR expires_at > NOW()) AND EXISTS (SELECT 1 FROM unnest(permissions) AS permission WHERE permission NOT IN ('account:read','analytics:read','billing:read','billing:write','consultant:use','developer:read','developer:write','infrastructure:read','infrastructure:write','mcp:high-risk','security:read','security:write','settings:write','streams:read','streams:write','support:read')) ORDER BY tenant_id, user_id, id"
+   ```
+
+   For each row, have the creating user or a tenant owner/admin create a replacement with `frameworks admin tokens create --name <name> --perms <exact,scopes>`, update the consuming secret, and verify the replacement. These commands use the authenticated operator session from the active CLI context. A tenant owner/admin can enumerate the tenant's tokens with `frameworks admin tokens list` and revoke any one by ID with `frameworks admin tokens revoke <token-id> --yes`, including a token whose creating user has departed. Ordinary members list and revoke only their own tokens. There is no in-place re-scope operation because token grants are immutable. Re-run the census until it returns no rows and retain the redacted count—not token identifiers or secret values—with the upgrade evidence. The database default is changed to `streams:read` for omitted permissions, but existing rows remain unchanged. Retention mutations require `billing:write`; `set_preferred_cluster` and `update_tenant_settings` require `settings:write`.
+
+9. **Tighten inventory.** Deploy owner-scoped full cluster/node reads after Gateway and Quartermaster policy are both live. Confirm expired, suspended, unknown-provenance, and inactive-cluster grants reveal no full inventory.
+
+## Required evidence
+
+Before postdeploy, retain the output of:
+
+```bash
+make proto-check
+make sqlc-check
+make validate-migrations
+make verify-schema-migrations
+make test-foghorn
+make test-quartermaster
+make test-purser
+make test-navigator
+make test-bridge
+make test-helmsman
+make test-privateer
+make test-pkg
+make test-accesspolicy
+```
+
+Also run the two-tenant scenario: enroll distinct keyed edges, deny tenant A's request for tenant B's origin with no side effect, allow B's request, deny member/foreign/under-scoped lifecycle calls at both Gateway and direct gRPC, require token-authorized key recovery, and exercise DNS entitlement plus final-cluster loss/recovery.
+
+## Operational signals
+
+| Signal                                                                                              | Interpretation                                                             | Owner/action                                                                                                                                                 |
+| --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `foghorn_source_authorization_rejected_total{reason="authority_unavailable"}`                       | Stream ownership could not be proven                                       | Foghorn/control-plane owner restores authority; lookup remains fail-closed                                                                                   |
+| `quartermaster_grpc_requests_total{status="PermissionDenied"}`                                      | Caller or resource scope rejected                                          | Identity/API owner corrects claims, role, or service credential                                                                                              |
+| `quartermaster_node_identity_rejections_total{reason=~"keyless\|invalid_stored_key\|key_mismatch"}` | Strict enforcement rejected a missing, malformed, or impersonated node key | Edge operator verifies the node and rotates it with a fresh tenant/cluster-scoped token                                                                      |
+| `quartermaster_billing_entitlement_stale_total`                                                     | Older Purser observation was fenced                                        | Billing owner inspects webhook/bootstrap/sweep ordering                                                                                                      |
+| `purser_tier_access_reconciliation_failures_total{operation}`                                       | Access or DNS entitlement reconciliation failed                            | Billing owner inspects the bounded reconcile/revoke/sweep path and Quartermaster availability                                                                |
+| `purser_media_authority_refresh_worker_ready`                                                       | `0` means the durable refresh worker lacks a required dependency           | Billing owner restores Purser database or Commodore refresh connectivity                                                                                     |
+| `purser_media_authority_refresh_pending` and `_oldest_pending_seconds`                              | Billing-owned authority refresh work is accumulating or aging              | Billing/control owners inspect the failing delivery stage before authority becomes stale                                                                     |
+| `purser_media_authority_refresh_failures_total{stage}`                                              | Claim, reconcile, delivery, completion, or observation failed              | Follow the stage label; the durable row remains retryable                                                                                                    |
+| `purser_media_authority_refresh_completions_total{outcome="superseded"}`                            | A newer revision replaced an in-flight refresh                             | Expected during churn; investigate only if pending age also rises                                                                                            |
+| `quartermaster_dns_backstop_repairs_total`                                                          | Desired/applied DNS drift was found                                        | Quartermaster/Navigator owner verifies the repair lands                                                                                                      |
+| `quartermaster_navigator_outbox_pending` and `_failures_total`                                      | DNS hand-off is delayed or failing                                         | Navigator/DNS owner restores delivery; do not delete the obligation                                                                                          |
+| `helmsman_credential_cleanup_pending`, `_pending_seconds`, and `_last_success_timestamp_seconds`    | A readable cleanup request is not draining                                 | Edge operator checks the Helmsman error log for the preserved direct-scrub cause, repairs the credential scrubber, and never reuses the consumed token       |
+| `helmsman_credential_cleanup_observation_error`                                                     | Helmsman cannot safely read or trust cleanup state                         | Edge operator checks the state mount, ownership, permissions, unexpected symlinks, and the Helmsman error log; a disappeared mount retains known pending age |
+
+Tenant, stream, cluster, node, hostname, fingerprint, and token values belong only in access-controlled logs/traces, never metric labels.
+
+## Forward-fix boundaries
+
+- **Foghorn:** repair tenant/cluster authority resolution; never bypass the signed caller check.
+- **Quartermaster:** repair caller propagation or canonical ownership data; never weaken owner/admin or service-only fields.
+- **Enrollment:** reissue and consume a scoped token; never mutate fingerprint keys directly.
+- **Purser:** replay the authoritative entitlement reconciliation with a fresh observation; never infer current access from a tier-name allowlist.
+- **Navigator:** leave failed outbox rows pending and restore idempotent delivery; never manually publish DNS that contradicts Quartermaster desired state.

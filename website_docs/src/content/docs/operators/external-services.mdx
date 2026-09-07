@@ -7,7 +7,7 @@ sidebar:
 
 import { Aside } from "@astrojs/starlight/components";
 
-External service credentials required by the platform today. The sovereignty roadmap is to reduce this surface for core infrastructure, especially native Ceph-backed storage and self-hosted/Anycast DNS.
+External service credentials required by the provider-operated platform today. Architecture work may reduce this surface with native Ceph-backed storage and provider-operated Anycast DNS; it is not a customer whole-stack hosting roadmap.
 
 ## Credential Delivery
 
@@ -48,6 +48,12 @@ This ensures runtime services can connect with the same credentials the CLI prov
 1. Create `gitops/config/production.env` for non-secret operator config
 2. Copy the secret template: `cp config/env/secrets.env.example gitops/secrets/production.env`
 3. Set at minimum in `gitops/secrets/production.env`: distinct `DATABASE_PASSWORD` and `DATABASE_RUNTIME_PASSWORD` values, `CLICKHOUSE_PASSWORD`, `SERVICE_TOKEN`, `JWT_SECRET`, `PASSWORD_RESET_SECRET`, `FIELD_ENCRYPTION_KEY`, `USAGE_HASH_SECRET`, and a shared 64-hex-character `TELEMETRY_TOKEN_SECRET`
+
+   When rotating `JWT_SECRET` before the v0.3.0 field migration has completed,
+   first add the outgoing value to the JSON array
+   `FIELD_ENCRYPTION_LEGACY_SECRETS`. It is read-only and may contain a legacy
+   secret shorter than current field keys.
+
 4. Set your public URLs and other non-secret operator inputs in `gitops/config/production.env`
 5. Reference both files in your cluster manifest:
    ```yaml

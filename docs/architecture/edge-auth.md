@@ -62,8 +62,12 @@ with:
 - Machine ID SHA256 hash
 - GeoIP data (country, city, latitude, longitude)
 
-If Quartermaster finds a matching fingerprint, it returns the canonical `node_id`
-and `tenant_id`. The edge is registered immediately.
+If Quartermaster finds a matching fingerprint, it also requires the stored
+Ed25519 identity key to be well formed and equal to the key whose registration
+proof Foghorn verified. Only then does it return the canonical `node_id` and
+`tenant_id`. A keyless or malformed legacy row fails with
+`enrollment_token_required` and must use token-authorized rotation; fingerprint
+or previously seen IP knowledge alone never authenticates a node.
 
 **Implementation:** `api_balancing/internal/control`
 
@@ -150,8 +154,9 @@ api_gateway resolver (DoOpenMistAdminSession)
   ▼
 api_control (Commodore)
   │ ← second wall: same policy on trusted gRPC metadata identity
-  │ 3. signs JWT { purpose: edge_mist_admin, node_id, cluster_id,
-  │              tenant_id, user_id, role, jti, exp ~5min }
+  │ 3. signs JWT { aud: edge-mist-admin, purpose: edge_mist_admin,
+  │              node_id, cluster_id, tenant_id, user_id, role, jti,
+  │              exp ~5min }
   │ returns { token, expires_at, edge_domain }
   ▼
 resolver returns MistAdminSession { postUrl, sessionToken, expiresAt }
@@ -188,7 +193,7 @@ MistServer controller LSP UI
 2. **Cookie is path-scoped to `/_mist`** so it can't be sent on `/view/*` or any other origin path; never `Path=/`.
 3. **Authorization / Cookie scrubbed on the upstream** request so the operator's platform JWT and session never reach Mist.
 4. **Set-Cookie scrubbed on the downstream** response so Mist's controller session doesn't collide with platform cookies on the same eTLD+1.
-5. **The session token is bound to a single `node_id`** in its JWT claims — Foghorn always injects the connected Helmsman's nodeID as `expected_node_id`, so replay against any other edge fails inside Commodore.
+5. **The session token has the dedicated `edge-mist-admin` audience, a required expiry, and is bound to a single `node_id`.** Validation permits only the platform JWT clock-skew allowance around `iat` and `exp`. Normal Gateway ingress rejects every JWT carrying an audience, while Foghorn always injects the connected Helmsman's nodeID as `expected_node_id`, so the credential is neither a browser session nor replayable against another edge.
 6. **Developer API tokens are not accepted by the proxy.** API-token validation is not node-bound, so the only way into `/_mist/*` is a Mist-admin session minted by the GraphQL ownership flow.
 7. **Minting is audited** through the `mist_admin_session_minted` service event; the event records user, tenant, node, and cluster metadata, never the session token.
 8. **Caddy uses `handle`, not `handle_path`** for `/_mist` so the prefix survives to Helmsman, which is the only place that strips it. The LSP frontend derives its API base from `location.pathname`, so a mid-route strip breaks the UI's relative paths.
@@ -196,17 +201,17 @@ MistServer controller LSP UI
 
 ### Files
 
-| File                                                                       | Purpose                                                                       |
-| -------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `pkg/auth/mist_admin_session.go`                                           | JWT mint/validate primitives with node-binding enforcement                    |
-| `pkg/proto/commodore.proto`                                                | `Mint`/`ValidateMistAdminSession` RPCs                                        |
-| `pkg/proto/ipc.proto`                                                      | `EdgeMistAdminSession{Request,Response}` over the Helmsman control stream     |
-| `api_control/internal/grpc/server.go` (`MintMistAdminSession`)             | Second-wall ownership enforcement; trusted-context identity                   |
-| `api_balancing/internal/control/server.go` (`processEdgeMistAdminSession`) | Relay; injects connected node's `expected_node_id`                            |
-| `api_sidecar/internal/handlers/mist_admin_proxy.go`                        | Reverse proxy + `RequireMistAdmin` + `/_mist-session`                         |
-| `api_sidecar/internal/config/caddyfile.go`                                 | Host-matched `@mist_admin` matcher in the production Caddy snippet            |
-| `api_gateway/internal/resolvers/mist_admin_session.go`                     | First-wall resolver; mirrors the Commodore policy via `mistAdminCanAdminNode` |
-| `website_application/src/lib/components/nodes/OpenMistAdminButton.svelte`  | Hidden-POST-form bridge to `/_mist-session`                                   |
+| File                                                                       | Purpose                                                                           |
+| -------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| `pkg/auth/mist_admin_session.go`                                           | JWT mint/validate primitives with node-binding enforcement                        |
+| `pkg/proto/commodore.proto`                                                | `Mint`/`ValidateMistAdminSession` RPCs                                            |
+| `pkg/proto/ipc.proto`                                                      | `EdgeMistAdminSession{Request,Response}` over the Helmsman control stream         |
+| `api_control/internal/grpc/server.go` (`MintMistAdminSession`)             | Second-wall ownership enforcement; trusted-context identity                       |
+| `api_balancing/internal/control/server.go` (`processEdgeMistAdminSession`) | Relay; injects connected node's `expected_node_id`                                |
+| `api_sidecar/internal/handlers/mist_admin_proxy.go`                        | Reverse proxy + `RequireMistAdmin` + `/_mist-session`                             |
+| `api_sidecar/internal/config/caddyfile.go`                                 | Host-matched `@mist_admin` matcher in the production Caddy snippet                |
+| `api_gateway/internal/resolvers/mist_admin_session.go`                     | First-wall role/scope gate; Commodore performs the authoritative node-owner check |
+| `website_application/src/lib/components/nodes/OpenMistAdminButton.svelte`  | Hidden-POST-form bridge to `/_mist-session`                                       |
 
 ## Key Files
 

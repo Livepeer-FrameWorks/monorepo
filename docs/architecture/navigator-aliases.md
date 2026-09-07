@@ -68,12 +68,15 @@ from stored fields to Navigator's `EnsureTenantAlias` / `RemoveTenantAliasSubdom
 ### Backstop reconciler
 
 `runTenantAliasBackstop` (every 5 minutes) recomputes each tenant's intended alias
-state — active on an alias-eligible monthly tier AND at least one active cluster
-subscription, the same predicate the primary paths use — and compares it against
-Navigator's applied state (`GetTenantAliasStatus`). Missing or drifted transitions
-are enqueued into the same per-tenant-ordered outbox. It is a repair loop, not the
-primary path; tenants with a pending outbox row are skipped so it never fights an
-in-flight or operator-blocked queue.
+state from Purser-materialized billing entitlement AND at least one active cluster
+subscription, the same predicate the primary paths use, and compares it against
+Navigator's applied state (`GetTenantAliasStatus`). Rows whose billing entitlement
+has not yet been observed are fenced: the compatibility read path may preserve
+paid aliases during an upgrade, but neither ensure nor removal intent is emitted
+until Purser has materialized the exact subscription/override result. Missing or
+drifted transitions are enqueued into the same per-tenant-ordered outbox. It is a
+repair loop, not the primary path; tenants with a pending outbox row are skipped
+so it never fights an in-flight or operator-blocked queue.
 
 ## Navigator side: alias lifecycle
 

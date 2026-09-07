@@ -406,6 +406,10 @@ If Foghorn receives an artifact command for an artifact not in its local DB:
 4. First peer that returns `handled=true` wins
 5. If no peer handles → return NotFound to caller
 
+Each peer attempt receives a fresh 10-second child deadline. A slow or failed
+peer therefore does not consume the next peer's budget, while an earlier caller
+deadline still caps the whole operation.
+
 #### Tenant Operations Fan-Out
 
 `TerminateTenantStreams` and the legacy `InvalidateTenantCache` compatibility
@@ -432,6 +436,10 @@ Tenant moves preferred cluster from B to A:
 4. Foghorn A: INSERT ... ON CONFLICT DO NOTHING with origin_cluster_id = B
 5. Playback requests for migrated artifacts use PrepareArtifact to fetch from B's S3
 ```
+
+The bulk `ListTenantArtifacts` census has a 60-second wrapper deadline, and the
+production federation connection pool uses the same transport ceiling. The
+pool must never impose a shorter default that silently truncates the census.
 
 ## HA Model
 

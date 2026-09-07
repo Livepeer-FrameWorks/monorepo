@@ -69,6 +69,75 @@ Full GitOps key authority (`adopted_local → gitops_seed`) is a deliberate two-
    would claim GitOps authority before the running node converged. If QM's key
    hasn't converged, promote fails with a retry-after-SyncMesh message.
 
+## Legacy keyless fingerprint recovery
+
+Fingerprint lookup is identification, not key enrollment. A keyless or
+malformed stored key always returns `FailedPrecondition` with
+`enrollment_token_required`; there is no compatibility mode that treats a
+request-supplied key as authority.
+
+The `quartermaster_node_identity_keys_v0_3_0` data migration is a read-only
+census and release gate. Before the strict binary is installed, operators run
+the equivalent `SELECT` from the self-hosted edge rollout runbook directly
+against the existing Postgres service; that pre-deploy census does not depend
+on the replacement Quartermaster binary or an adoption marker. Inventory
+affected node IDs, schedule their brief disconnect, and block postdeploy until
+each one has been recovered. Operators recover an edge node by issuing a fresh
+`edge_node` token for its existing tenant and cluster, preserving its hostname
+and stable fingerprint, and reconnecting once with
+`HELMSMAN_ROTATE_NODE_IDENTITY=true`. `BootstrapEdgeNode` locks and validates
+the token and existing binding, rotates the key, consumes token usage, and
+commits those changes atomically. When Foghorn returns the first accepted
+`ConfigSeed`, Helmsman persists a non-secret enrollment receipt and stops
+sending the consumed token on reconnects. Rotation completion is persisted
+before cleanup is requested. Native installs scrub the managed enrollment file
+and `HELMSMAN_ROTATE_NODE_IDENTITY` directly. The edge container instead asks a
+narrow root helper to scrub the root-owned bind mounts, so the non-root
+Helmsman process never needs host-file ownership changes. Cleanup retries until
+both value-only rewrites and the request removal are durable; neither rewrite
+truncates its surrounding environment file. The helper has no feature knob: it
+runs in every managed edge container, accepts only the fixed `/data/state`,
+`/run/frameworks/.edge-enroll.env`, and `/run/frameworks/.edge.env` paths,
+walks enrollment state through no-follow directory descriptors, refuses
+symlinks and non-regular targets, verifies that the request and node receipt
+belong to Helmsman's runtime UID, and rejects credential files owned by that
+UID. Repeated attempts for the same accepted enrollment retain the
+request's original age. A later accepted rotation atomically replaces an
+obsolete request so stale native or interrupted cleanup state cannot block the
+new credential generation. Helmsman exports pending/age/outcome metrics plus a distinct
+observation-error gauge. Platform alerts distinguish a readable request that is
+not draining from cleanup state that cannot be safely read or trusted. Once a
+pending request has been observed, a disappearing state mount is an observation
+failure and retains the last known pending age. The managed container also treats
+a missing state directory as an observation failure after a process restart in
+both container and native modes, because completion cannot be proven without
+the configured state mount. A direct scrub
+failure is returned to the control loop as expected pending cleanup and logged at
+warning level with its underlying filesystem/configuration cause after the
+durable retry request is created. Supplying
+an enrollment credential without both managed credential-file paths creates
+visible, retryable cleanup work instead of reporting a successful no-op. The
+request is a cleanup trigger, not an authentication
+proof: a compromised Helmsman can already withhold registration and sees the
+same token in its process environment. The helper therefore grants it no wider
+root capability—its only possible mutation is blanking those two fixed fields
+after the node-specific local acceptance receipt exists. A fresh explicit
+rotation still uses its fresh token. Operators should verify the managed token
+file is empty after a successful reconnect; unmanaged deployments must remove
+the bearer secret themselves.
+During a Quartermaster outage, Foghorn may restore only a previously persisted,
+unexpired admission whose stable fingerprint digest and Ed25519 public key both
+match; a stale configured enrollment token does not disable that local recovery.
+An ambiguous fingerprint blocks the current authority lookup but is not a
+revocation signal: Foghorn preserves the existing local pin without using it
+while Quartermaster is reachable, so cloned-image ambiguity cannot erase an
+otherwise valid outage fallback.
+The release gate clears once the census reports zero.
+
+Never repair this condition with a direct database update or by deleting the
+fingerprint. A replacement host whose stable fingerprint does not match needs a
+new enrollment identity; knowing the old node ID or observed IP is insufficient.
+
 `frameworks mesh wg audit` cross-checks manifest identity, QM state, and each
 agent's reported `applied_mesh_revision` (see `privateer-mesh.md`).
 
@@ -92,3 +161,6 @@ agent's reported `applied_mesh_revision` (see `privateer-mesh.md`).
 - `SERVICE_TOKEN` delivery differs by origin: Ansible for seed nodes, `mesh join`
   for runtime-enrolled ones — enrollment state on disk carries no bearer
   credentials.
+- A legacy keyless edge is offline after the strict Quartermaster rollout until
+  token-authorized recovery completes. Plan that interruption from the census;
+  the release gate prevents silently carrying a keyless active row forward.

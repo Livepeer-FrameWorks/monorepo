@@ -141,9 +141,9 @@ Certificates are issued via ACME DNS-01 challenges through the provider authorit
 
 Once issued, certificates are distributed to edge nodes via **ConfigSeed** — Foghorn pushes TLS bundles to Helmsman over the existing gRPC control stream. Edges do not need direct access to the ACME provider.
 
-### Tier-Based URL Surface
+### Tenant URL Surface
 
-FrameWorks exposes three URL tiers per service. The webapp and SDKs pick
+FrameWorks exposes three URL forms per service. The webapp and SDKs pick
 the right one for each tenant; operators see all three in the dashboard.
 
 **1. Global root entrypoints — default UX for free / platform-official tenants**
@@ -176,9 +176,9 @@ Per-cluster names as documented in "Media Cluster DNS" above:
 tier. Used by self-hosted operators on free tier, by operators
 wanting to pin traffic to a specific cluster, and by diagnostics.
 
-**3. Tenant aliases — paid-tier branded URLs that span subscribed clusters**
+**3. Tenant aliases — entitled branded URLs that span subscribed clusters**
 
-Paying tenants get a per-tenant alias under the shared Bunny zone
+Tenants with the explicit `custom_subdomain_enabled` billing entitlement get a per-tenant alias under the shared Bunny zone
 `cdn.{base}`:
 
 | Pattern                                                                   | Purpose                                                               |
@@ -212,7 +212,7 @@ service identity and certificate distribution tenant-scoped.
 
 | Status         | Meaning                                                                                                                                                            |
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `cert_issuing` | Quartermaster signaled intent on paid-tier activation; Navigator is running ACME (LE primary, GTS fallback).                                                       |
+| `cert_issuing` | Quartermaster signaled entitled intent; Navigator is running ACME (LE primary, GTS fallback).                                                                      |
 | `cert_issued`  | Cert exists; tenant URLs become visible once Navigator has at least one ACK-gated DNS member.                                                                      |
 | `cert_failed`  | ACME error; check `last_error`. The worker retries on the next reconciliation pass.                                                                                |
 | `tearing_down` | Tenant downgraded / cancelled; Navigator clears DNS, per-edge distribution, the tenant TLS bundle, and tenant certificates without active custom-domain authority. |
@@ -284,13 +284,31 @@ Helmsman must ACK the exact current revision for promotion or readiness.
   Third-party / marketplace / tenant-private edges cannot impersonate
   the global names.
 
-#### Tier mapping
+#### Billing entitlement and teardown rules
+
+Purser owns the effective values of `custom_subdomain_enabled` and
+`custom_domain_enabled`. A subscription override wins over the tier default;
+a missing or non-boolean catalog value is a bootstrap error, and an absent
+effective grant is treated as `false`. Purser sends a timestamped observation
+through Quartermaster's service-only entitlement RPC. Quartermaster rejects
+older observations, so webhook, bootstrap, and sweep races converge to the
+newest billing state.
+
+A platform tenant alias is desired only while the tenant is active, has
+`custom_subdomain_enabled=true`, and has at least one usable cluster grant. A
+BYO custom domain additionally requires `custom_domain_enabled=true`. Usable
+means active, subscribed, known provenance, unexpired, and attached to an
+active cluster. Entitlement loss, tenant deactivation, or loss of the final
+usable cluster enqueues removal. The requested subdomain/custom-domain value is
+preserved so re-entitlement can restore service without re-entering the name.
+Quartermaster's repair loop compares desired state with Navigator and restores
+missing ensure/remove work after transient failures.
 
 | Tenant state                  | Primary URL      | Diagnostic / fallback              |
 | ----------------------------- | ---------------- | ---------------------------------- |
 | Free + platform-official only | Global root      | Cluster-concrete                   |
 | Free + self-hosted            | Cluster-concrete | —                                  |
-| Paid (any sub mix)            | Tenant alias     | Global root, then cluster-concrete |
+| Alias-entitled (any sub mix)  | Tenant alias     | Global root, then cluster-concrete |
 
 The Commodore `CreateStreamResponse` and GraphQL `StreamingConfig`
 surface all three tiers (`{service}_domain`, `global_{service}_domain`,

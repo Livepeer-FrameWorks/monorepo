@@ -102,7 +102,7 @@ This:
 3. Helmsman connects to Foghorn (gRPC) and sends the enrollment token
 4. Foghorn asks Quartermaster to register the node and starts including healthy heartbeats in routing decisions
 
-The enrollment token carries `tenant_id` and `cluster_id`, so your node is enrolled into the correct cluster automatically. After enrollment, your node appears in the dashboard under **Infrastructure → Network**.
+The enrollment token carries `tenant_id` and `cluster_id`, so your node is enrolled into the correct cluster automatically. After Foghorn accepts the registration and returns its first configuration seed, Helmsman durably completes any requested identity rotation and writes a non-secret local receipt. Native installs then overwrite the token value in `.edge-enroll.env` directly and remove any obsolete cleanup request. In the managed container, Helmsman submits a durable cleanup request and a narrow root supervisor service scrubs the two root-owned bind mounts in place; this expected deferral is logged as a warning, and the host files are never chowned to the container's numeric service group. A later accepted rotation replaces a stale request atomically. Verify the value is empty after enrollment; if an unmanaged deployment does not expose a writable token file, remove the bearer secret yourself. A previously admitted node can then reconnect from its pinned local admission during a temporary Quartermaster outage. After enrollment, your node appears in the dashboard under **Infrastructure → Network**.
 
 ### Bootstrap (Token-Based Provisioning)
 
@@ -115,6 +115,20 @@ If you used `--enrollment-token` during `frameworks edge init`, the CLI sent the
 - **Internal CA bundle** — staged locally so Helmsman can trust internal gRPC before the first control stream connects
 
 The operator only ever needs the token. Bridge is the rendezvous; the cluster's Foghorn is resolved server-side. After bootstrap, the edge talks directly to its assigned Foghorn — it does not join the internal WireGuard mesh.
+
+### Recover a Legacy Keyless Node
+
+Older enrolled nodes may have a stored fingerprint but no Ed25519 node identity key. FrameWorks never accepts or persists a request-supplied key from fingerprint knowledge alone. After the strict control-plane upgrade, the control stream fails with `enrollment_token_required` until recovery completes; plan this as a brief, per-node maintenance interruption.
+
+Recover the existing node through the enrollment path:
+
+1. Confirm the node ID, tenant, cluster, and stable hostname/fingerprint match the existing record.
+2. As a tenant owner/admin (or platform operator), issue a new `edge_node` enrollment token scoped to that tenant and cluster.
+3. Put the token in `.edge-enroll.env` and set `HELMSMAN_ROTATE_NODE_IDENTITY=true` for this recovery boot. If the flag is missing, Foghorn returns `IDENTITY_ROTATION_REQUIRED`; it does not mislabel the accepted token as invalid.
+4. Restart the edge stack. Helmsman generates/loads its local identity key and Foghorn asks Quartermaster to rotate the existing binding under the token transaction.
+5. Verify the node reconnects, then remove the consumed token and unset `HELMSMAN_ROTATE_NODE_IDENTITY`.
+
+Do not delete the fingerprint row, manually write a public key, or retry without a token. Those shortcuts bypass the ownership proof and are intentionally rejected.
 
 ### Certificate Renewal (ConfigSeed)
 
