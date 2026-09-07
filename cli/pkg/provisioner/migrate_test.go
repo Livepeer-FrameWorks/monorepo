@@ -141,6 +141,28 @@ func TestValidateMigrationSetAcceptsSafeExpandSQL(t *testing.T) {
 	}
 }
 
+func TestValidateMigrationSetAcceptsPushTargetURITextWidening(t *testing.T) {
+	migration := Migration{
+		Database: "commodore", Version: "v0.3.0", Phase: "expand", Sequence: 1,
+		Path: "migrations/commodore/v0.3.0/expand/001_widen.sql", Transactional: true,
+		content: "ALTER TABLE commodore.push_targets ALTER COLUMN target_uri TYPE TEXT;",
+	}
+	if err := validatePostgresMigrationSet([]Migration{migration}); err != nil {
+		t.Fatalf("metadata-only push target URI widening rejected: %v", err)
+	}
+}
+
+func TestValidateMigrationSetRejectsOtherExpandTypeChanges(t *testing.T) {
+	migration := Migration{
+		Database: "commodore", Version: "v0.3.0", Phase: "expand", Sequence: 1,
+		Path: "migrations/commodore/v0.3.0/expand/001_rewrite.sql", Transactional: true,
+		content: "ALTER TABLE commodore.push_targets ALTER COLUMN status TYPE TEXT;",
+	}
+	if err := validatePostgresMigrationSet([]Migration{migration}); err == nil || !strings.Contains(err.Error(), "column type rewrites") {
+		t.Fatalf("unsafe type change error = %v, want expand compatibility rejection", err)
+	}
+}
+
 func TestValidateEmbeddedPostgresMigrations(t *testing.T) {
 	if err := ValidateEmbeddedPostgresMigrations(); err != nil {
 		t.Fatalf("ValidateEmbeddedPostgresMigrations returned error: %v", err)
@@ -421,8 +443,96 @@ func TestValidateMigrationSet_PostdeployValidationRequiresMatchingExpandConstrai
 		content: `ALTER TABLE purser.a VALIDATE CONSTRAINT typo_fk;`,
 	}}
 	err := validatePostgresMigrationSet(migrations)
-	if err == nil || !strings.Contains(err.Error(), `VALIDATE CONSTRAINT "typo_fk" has no same-release expand`) {
+	if err == nil || !strings.Contains(err.Error(), `VALIDATE CONSTRAINT "typo_fk" has no same-release`) {
 		t.Fatalf("validation error = %v, want orphan validation rejection", err)
+	}
+}
+
+func TestValidateMigrationSet_PostdeployCanInstallThenValidateConstraint(t *testing.T) {
+	migrations := []Migration{
+		{
+			Database: "commodore", Version: "v0.3.0", Phase: "postdeploy", Sequence: 1,
+			Path: "migrations/commodore/v0.3.0/postdeploy/001_install.sql", Transactional: true,
+			content: `ALTER TABLE commodore.push_targets ADD CONSTRAINT platform_check CHECK (platform = lower(platform)) NOT VALID;`,
+		},
+		{
+			Database: "commodore", Version: "v0.3.0", Phase: "postdeploy", Sequence: 2,
+			Path: "migrations/commodore/v0.3.0/postdeploy/002_validate.sql", Transactional: true,
+			content: `ALTER TABLE commodore.push_targets VALIDATE CONSTRAINT platform_check;`,
+		},
+	}
+	if err := validatePostgresMigrationSet(migrations); err != nil {
+		t.Fatalf("postdeploy install/validate split was rejected: %v", err)
+	}
+}
+
+func TestValidateMigrationSet_PostdeployConstraintCannotPrecedeNormalization(t *testing.T) {
+	migrations := []Migration{
+		{
+			Database: "commodore", Version: "v0.3.0", Phase: "postdeploy", Sequence: 1,
+			Path: "migrations/commodore/v0.3.0/postdeploy/001_install.sql", Transactional: true,
+			content: `ALTER TABLE commodore.push_targets ADD CONSTRAINT platform_check CHECK (platform = lower(platform)) NOT VALID;`,
+		},
+		{
+			Database: "commodore", Version: "v0.3.0", Phase: "postdeploy", Sequence: 2,
+			Path: "migrations/commodore/v0.3.0/postdeploy/002_normalize.sql", Transactional: true,
+			content: `UPDATE commodore.push_targets SET platform = lower(platform); ALTER TABLE commodore.push_targets VALIDATE CONSTRAINT platform_check;`,
+		},
+	}
+	err := validatePostgresMigrationSet(migrations)
+	if err == nil || !strings.Contains(err.Error(), "precedes normalization") {
+		t.Fatalf("validation error=%v, want install-before-normalization rejection", err)
+	}
+}
+
+func TestValidateMigrationSet_PostdeployAliasNormalizationIsDetected(t *testing.T) {
+	migrations := []Migration{
+		{
+			Database: "commodore", Version: "v0.3.0", Phase: "postdeploy", Sequence: 1,
+			Path: "migrations/commodore/v0.3.0/postdeploy/001_install.sql", Transactional: true,
+			content: `ALTER TABLE commodore.push_targets ADD CONSTRAINT platform_check CHECK (platform = lower(platform)) NOT VALID;`,
+		},
+		{
+			Database: "commodore", Version: "v0.3.0", Phase: "postdeploy", Sequence: 2,
+			Path: "migrations/commodore/v0.3.0/postdeploy/002_normalize.sql", Transactional: true,
+			content: `UPDATE commodore.push_targets AS target SET platform = lower(target.platform); ALTER TABLE commodore.push_targets VALIDATE CONSTRAINT platform_check;`,
+		},
+	}
+	err := validatePostgresMigrationSet(migrations)
+	if err == nil || !strings.Contains(err.Error(), "precedes normalization") {
+		t.Fatalf("validation error=%v, want aliased normalization ordering rejection", err)
+	}
+}
+
+func TestValidateMigrationSet_PostdeployValidationCannotPrecedeInstall(t *testing.T) {
+	migrations := []Migration{
+		{
+			Database: "commodore", Version: "v0.3.0", Phase: "postdeploy", Sequence: 1,
+			Path: "migrations/commodore/v0.3.0/postdeploy/001_validate.sql", Transactional: true,
+			content: `ALTER TABLE commodore.push_targets VALIDATE CONSTRAINT platform_check;`,
+		},
+		{
+			Database: "commodore", Version: "v0.3.0", Phase: "postdeploy", Sequence: 2,
+			Path: "migrations/commodore/v0.3.0/postdeploy/002_install.sql", Transactional: true,
+			content: `ALTER TABLE commodore.push_targets ADD CONSTRAINT platform_check CHECK (platform = lower(platform)) NOT VALID;`,
+		},
+	}
+	err := validatePostgresMigrationSet(migrations)
+	if err == nil || !strings.Contains(err.Error(), "precedes its ADD CONSTRAINT") {
+		t.Fatalf("validation error=%v, want reversed postdeploy ordering rejection", err)
+	}
+}
+
+func TestValidateMigrationSet_SameFileValidationCannotPrecedeInstall(t *testing.T) {
+	migrations := []Migration{{
+		Database: "commodore", Version: "v0.3.0", Phase: "postdeploy", Sequence: 1,
+		Path: "migrations/commodore/v0.3.0/postdeploy/001_constraint.sql", Transactional: true,
+		content: `ALTER TABLE commodore.push_targets VALIDATE CONSTRAINT platform_check;
+			ALTER TABLE commodore.push_targets ADD CONSTRAINT platform_check CHECK (platform = lower(platform)) NOT VALID;`,
+	}}
+	err := validatePostgresMigrationSet(migrations)
+	if err == nil || !strings.Contains(err.Error(), "precedes its ADD CONSTRAINT") {
+		t.Fatalf("validation error=%v, want same-file ordering rejection", err)
 	}
 }
 

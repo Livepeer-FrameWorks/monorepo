@@ -80,11 +80,23 @@ releases:
         service: quartermaster
         introduced_in: v0.3.0
         required_before_phase: postdeploy
+      - id: quartermaster_node_identity_keys_v0_3_0
+        service: quartermaster
+        introduced_in: v0.3.0
+        required_before_phase: postdeploy
+      - id: quartermaster_tenant_dns_entitlements_v0_3_0
+        service: quartermaster
+        introduced_in: v0.3.0
+        required_before_phase: postdeploy
       - id: commodore_dvr_playback_authority_v0_3_0
         service: commodore
         introduced_in: v0.3.0
         required_before_phase: postdeploy
       - id: commodore_chapter_playback_authority_v0_3_0
+        service: commodore
+        introduced_in: v0.3.0
+        required_before_phase: postdeploy
+      - id: commodore_field_encryption_v0_3_0
         service: commodore
         introduced_in: v0.3.0
         required_before_phase: postdeploy

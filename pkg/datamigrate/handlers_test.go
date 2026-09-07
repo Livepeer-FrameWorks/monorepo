@@ -104,3 +104,68 @@ func TestRunScopeDoesNotCompleteWhenVerificationFails(t *testing.T) {
 		t.Fatalf("unexpected database operation: %v", err)
 	}
 }
+
+func TestRunScopePersistsCumulativeProgressAcrossBatchesAndResume(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	now := time.Now()
+	mock.ExpectQuery("FROM _data_migration_runs").WithArgs("cumulative", "", "").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "scope_kind", "scope_value", "status", "checkpoint", "lease_owner", "lease_expires_at",
+			"attempt_count", "scanned_count", "changed_count", "skipped_count", "error_count",
+			"last_error", "started_at", "updated_at", "completed_at",
+		}).AddRow("cumulative", "", "", string(StatusRunning), []byte(`{"page":1}`), nil, nil,
+			1, 10, 4, 1, 2, "", now, now, nil))
+	mock.ExpectExec("UPDATE _data_migration_runs").
+		WithArgs("cumulative", "", "", sqlmock.AnyArg(), float64(120), string(StatusRunning), string(StatusCompleted), string(StatusPaused)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE _data_migration_runs").
+		WithArgs("cumulative", "", "", string(StatusRunning), []byte(`{"page":2}`), int64(13), int64(6), int64(2), int64(3)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE _data_migration_runs").
+		WithArgs("cumulative", "", "", float64(120), sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE _data_migration_runs").
+		WithArgs("cumulative", "", "", string(StatusRunning), []byte(`{"page":3}`), int64(15), int64(7), int64(2), int64(5)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE _data_migration_runs").
+		WithArgs("cumulative", "", "", string(StatusCompleted)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("UPDATE _data_migration_runs").
+		WithArgs("cumulative", "", "", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	calls := 0
+	migration := &Migration{ID: "cumulative", Service: "test", Run: func(_ context.Context, _ DB, opts RunOptions) (Progress, error) {
+		calls++
+		switch calls {
+		case 1:
+			if string(opts.Checkpoint) != `{"page":1}` {
+				t.Fatalf("first checkpoint=%s", opts.Checkpoint)
+			}
+			return Progress{Scanned: 3, Changed: 2, Skipped: 1, Errors: 1, Checkpoint: []byte(`{"page":2}`)}, nil
+		case 2:
+			if string(opts.Checkpoint) != `{"page":2}` {
+				t.Fatalf("second checkpoint=%s", opts.Checkpoint)
+			}
+			return Progress{Scanned: 2, Changed: 1, Errors: 2, Checkpoint: []byte(`{"page":3}`), Done: true}, nil
+		default:
+			t.Fatalf("unexpected batch %d", calls)
+			return Progress{}, nil
+		}
+	}}
+	var out bytes.Buffer
+	if err := runScope(context.Background(), db, &out, migration, migration.ID, ScopeKey{}, 100, false, true); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(out.Bytes(), []byte("scanned=15 changed=7 errors=5")) {
+		t.Fatalf("completion did not report cumulative totals: %q", out.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}

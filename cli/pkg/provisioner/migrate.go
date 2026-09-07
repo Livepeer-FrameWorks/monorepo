@@ -93,7 +93,6 @@ var expandUnsafeSQLPatterns = []struct {
 }{
 	{regexp.MustCompile(`(?is)\bDROP\s+(TABLE|COLUMN|SCHEMA|TYPE|INDEX)\b`), "drop operations belong in contract migrations"},
 	{regexp.MustCompile(`(?is)\bALTER\s+TABLE\b.*\bRENAME\b`), "renames are not expand-compatible with old binaries"},
-	{regexp.MustCompile(`(?is)\bALTER\s+TABLE\b.*\bALTER\s+COLUMN\b.*\bTYPE\b`), "column type rewrites are not expand-compatible"},
 	{regexp.MustCompile(`(?is)\bALTER\s+TABLE\b.*\bSET\s+NOT\s+NULL\b`), "SET NOT NULL requires a completed data migration and postdeploy/contract gating"},
 	// Match a real data-rewrite UPDATE (UPDATE <table> ... SET), bounded to a single statement
 	// so it does NOT false-positive on the trigger event clause "BEFORE/AFTER UPDATE ON" (valid
@@ -114,6 +113,9 @@ var (
 	addAnonymousConstraint             = regexp.MustCompile(`(?is)\bADD\s+(?:CHECK\s*\(|FOREIGN\s+KEY\s*\()`)
 	validateConstraintName             = regexp.MustCompile(`(?is)\bVALIDATE\s+CONSTRAINT\s+"?([A-Za-z_][A-Za-z0-9_]*)"?`)
 	dropConstraintName                 = regexp.MustCompile(`(?is)\bDROP\s+CONSTRAINT(?:\s+IF\s+EXISTS)?\s+"?([A-Za-z_][A-Za-z0-9_]*)"?`)
+	updateTableName                    = regexp.MustCompile(`(?is)\bUPDATE\s+([A-Za-z_][A-Za-z0-9_.]*)(?:\s+(?:AS\s+)?[A-Za-z_][A-Za-z0-9_]*)?\s+SET\b`)
+	alterColumnType                    = regexp.MustCompile(`(?is)\bALTER\s+TABLE\b.*\bALTER\s+COLUMN\b.*\bTYPE\b`)
+	compatiblePushTargetURIWidening    = regexp.MustCompile(`(?is)^\s*ALTER\s+TABLE\s+commodore\.push_targets\s+ALTER\s+COLUMN\s+target_uri\s+TYPE\s+TEXT\s*;?\s*$`)
 )
 
 // discoverMigrations walks the embedded FS under root looking for migrations
@@ -281,9 +283,14 @@ func validatePostgresMigrationSet(migrations []Migration) error {
 	issues := validateSequenceCollisions(migrations)
 	postdeployGuards := make(map[string][]string)
 	expandConstraints := make(map[string]map[string]string)
+	postdeployConstraints := make(map[string]map[string]string)
 	postdeployValidations := make(map[string]map[string]string)
+	postdeployConstraintTables := make(map[string]map[string]string)
+	postdeployUpdates := make(map[string]map[string][]string)
 	contractDrops := make(map[string]map[string]struct{})
+	migrationSequenceByPath := make(map[string]int, len(migrations))
 	for _, migration := range migrations {
+		migrationSequenceByPath[migration.Path] = migration.Sequence
 		key := migration.Database + "\x00" + migration.Version
 		code := stripSQLSingleQuotedLiterals(stripSQLComments(migration.content))
 		if !enforcesMigrationPhaseSafety(migration) {
@@ -298,6 +305,52 @@ func validatePostgresMigrationSet(migrations []Migration) error {
 					postdeployValidations[key] = make(map[string]string)
 				}
 				postdeployValidations[key][name] = migration.Path
+			}
+			statements := splitSQLStatements(code)
+			validateAt := make(map[string]int)
+			addAt := make(map[string]int)
+			for statementIndex, statement := range statements {
+				for _, name := range constraintNames(validateConstraintName, statement) {
+					if _, exists := validateAt[name]; !exists {
+						validateAt[name] = statementIndex
+					}
+				}
+				if match := updateTableName.FindStringSubmatch(statement); len(match) == 2 {
+					if postdeployUpdates[key] == nil {
+						postdeployUpdates[key] = make(map[string][]string)
+					}
+					table := strings.ToLower(match[1])
+					postdeployUpdates[key][table] = append(postdeployUpdates[key][table], migration.Path)
+				}
+				table := ""
+				if match := regexp.MustCompile(`(?is)^\s*ALTER\s+TABLE\s+([A-Za-z_][A-Za-z0-9_.]*)\b`).FindStringSubmatch(statement); len(match) == 2 {
+					table = strings.ToLower(match[1])
+				}
+				for _, constraint := range addedConstraints(statement) {
+					if !constraint.notValid {
+						continue
+					}
+					if postdeployConstraints[key] == nil {
+						postdeployConstraints[key] = make(map[string]string)
+					}
+					postdeployConstraints[key][constraint.name] = migration.Path
+					if _, exists := addAt[constraint.name]; !exists {
+						addAt[constraint.name] = statementIndex
+					}
+					if table != "" {
+						if postdeployConstraintTables[key] == nil {
+							postdeployConstraintTables[key] = make(map[string]string)
+						}
+						postdeployConstraintTables[key][constraint.name] = table
+					}
+				}
+			}
+			for name, validationIndex := range validateAt {
+				if addIndex, ok := addAt[name]; ok && validationIndex < addIndex {
+					issues = append(issues, MigrationValidationIssue{
+						Path: migration.Path, Message: fmt.Sprintf("postdeploy VALIDATE CONSTRAINT %q precedes its ADD CONSTRAINT ... NOT VALID", name),
+					})
+				}
 			}
 		}
 		if migration.Phase == "expand" && enforcesMigrationPhaseSafety(migration) {
@@ -341,6 +394,12 @@ func validatePostgresMigrationSet(migrations []Migration) error {
 				}
 			}
 			for _, stmt := range splitSQLStatements(structuralContent) {
+				if alterColumnType.MatchString(stmt) && !compatiblePushTargetURIWidening.MatchString(stmt) {
+					issues = append(issues, MigrationValidationIssue{
+						Path:    migration.Path,
+						Message: "column type rewrites are not expand-compatible; only the metadata-only commodore.push_targets.target_uri varchar-to-text widening is permitted",
+					})
+				}
 				if addAnonymousConstraint.MatchString(stmt) {
 					issues = append(issues, MigrationValidationIssue{
 						Path:    migration.Path,
@@ -412,14 +471,49 @@ func validatePostgresMigrationSet(migrations []Migration) error {
 			}
 		}
 	}
+	for key, constraints := range postdeployConstraints {
+		for name, constraintPath := range constraints {
+			table := postdeployConstraintTables[key][name]
+			for _, updatePath := range postdeployUpdates[key][table] {
+				if migrationSequenceByPath[updatePath] < migrationSequenceByPath[constraintPath] {
+					continue
+				}
+				issues = append(issues, MigrationValidationIssue{
+					Path:    constraintPath,
+					Message: fmt.Sprintf("postdeploy ADD CONSTRAINT %q precedes normalization of %s", name, table),
+				})
+			}
+		}
+	}
 	for key, validations := range postdeployValidations {
 		for name, validationPath := range validations {
 			if _, ok := expandConstraints[key][name]; ok {
 				continue
 			}
+			if constraintPath, ok := postdeployConstraints[key][name]; ok {
+				if migrationSequenceByPath[constraintPath] <= migrationSequenceByPath[validationPath] {
+					continue
+				}
+				issues = append(issues, MigrationValidationIssue{
+					Path:    validationPath,
+					Message: fmt.Sprintf("postdeploy VALIDATE CONSTRAINT %q precedes its ADD CONSTRAINT ... NOT VALID", name),
+				})
+				continue
+			}
 			issues = append(issues, MigrationValidationIssue{
 				Path:    validationPath,
-				Message: fmt.Sprintf("postdeploy VALIDATE CONSTRAINT %q has no same-release expand ADD CONSTRAINT ... NOT VALID", name),
+				Message: fmt.Sprintf("postdeploy VALIDATE CONSTRAINT %q has no same-release ADD CONSTRAINT ... NOT VALID", name),
+			})
+		}
+	}
+	for key, constraints := range postdeployConstraints {
+		for name, constraintPath := range constraints {
+			if _, ok := postdeployValidations[key][name]; ok {
+				continue
+			}
+			issues = append(issues, MigrationValidationIssue{
+				Path:    constraintPath,
+				Message: fmt.Sprintf("postdeploy NOT VALID constraint %q requires a same-release postdeploy VALIDATE CONSTRAINT", name),
 			})
 		}
 	}

@@ -292,6 +292,10 @@ func runScope(ctx context.Context, db *sql.DB, out io.Writer, m *Migration, id s
 	}()
 
 	checkpoint := runState.Checkpoint
+	cumulative := Progress{
+		Scanned: runState.Scanned, Changed: runState.Changed,
+		Skipped: runState.Skipped, Errors: runState.Errors,
+	}
 	for {
 		prog, runErr := m.Run(ctx, db, RunOptions{BatchSize: batchSize, DryRun: dryRun, Scope: scope, Checkpoint: checkpoint})
 		if runErr != nil {
@@ -299,7 +303,13 @@ func runScope(ctx context.Context, db *sql.DB, out io.Writer, m *Migration, id s
 			_ = MarkJobFailed(context.Background(), db, id, runErr)        //nolint:errcheck // best-effort failure record
 			return runErr
 		}
-		if cpErr := Checkpoint(ctx, db, id, scope, prog); cpErr != nil {
+		cumulative.Scanned += prog.Scanned
+		cumulative.Changed += prog.Changed
+		cumulative.Skipped += prog.Skipped
+		cumulative.Errors += prog.Errors
+		cumulative.Checkpoint = prog.Checkpoint
+		cumulative.Done = prog.Done
+		if cpErr := Checkpoint(ctx, db, id, scope, cumulative); cpErr != nil {
 			return cpErr
 		}
 		checkpoint = prog.Checkpoint
@@ -319,7 +329,7 @@ func runScope(ctx context.Context, db *sql.DB, out io.Writer, m *Migration, id s
 				return err
 			}
 			fmt.Fprintf(out, "%s/%s completed: scanned=%d changed=%d errors=%d\n",
-				id, scope, prog.Scanned, prog.Changed, prog.Errors)
+				id, scope, cumulative.Scanned, cumulative.Changed, cumulative.Errors)
 			return nil
 		}
 		if _, hbErr := Heartbeat(ctx, db, id, scope, owner, ttl); hbErr != nil {
