@@ -3122,6 +3122,7 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 		DeployMode:        firstNonEmptyString(os.Getenv("DEPLOY_MODE"), "native"),
 		Os:                runtime.GOOS,
 		Arch:              runtime.GOARCH,
+		OnnxProfile:       firstNonEmptyString(os.Getenv("MIST_ONNX_PROFILE"), "cpu"),
 		// artifacts_report_revision is assigned atomically WITH the artifact snapshot in
 		// enrichNodeLifecycleTrigger (captureArtifactSnapshot), not here — pairing them here would
 		// let a concurrent report attach a newer snapshot to this older revision.

@@ -169,9 +169,8 @@ func TestNonBlockingDurableTriggersRefuseOnWalFailure(t *testing.T) {
 }
 
 // A malformed payload is still durably recorded as a raw webhook (parse-failure
-// envelope) so Foghorn can observe that Mist fired something we couldn't parse,
-// rather than dropping it. The handler returns 200 once that raw record is on
-// the WAL.
+// envelope) when its trigger contract cannot contain destination credentials.
+// PUSH_END is covered separately because its body may contain a restream URI.
 func TestNonBlockingDurableTriggersDurablyEnqueueParseFailure(t *testing.T) {
 	setupTriggerTest(t, "tenant-life")
 
@@ -182,7 +181,6 @@ func TestNonBlockingDurableTriggersDurablyEnqueueParseFailure(t *testing.T) {
 		wantType string
 	}{
 		{"stream_end", "", HandleStreamEnd, "STREAM_END"},
-		{"push_end", "1\nlive+stream-1", HandlePushEnd, "PUSH_END"},
 		{"push_input_close", "live+stream-1\nhost", HandlePushInputClose, "PUSH_INPUT_CLOSE"},
 		{"recording_end", "live+stream-1\n/tmp/out.mkv", HandleRecordingEnd, "RECORDING_END"},
 		{"recording_segment", "live+stream-1\n/var/dvr/seg.ts", HandleRecordingSegment, "RECORDING_SEGMENT"},
@@ -218,20 +216,25 @@ func TestNonBlockingDurableTriggersDurablyEnqueueParseFailure(t *testing.T) {
 	}
 }
 
-// When the WAL itself rejects the parse-failure record, the handler likewise
-// returns 503 for diagnostics. The event never entered the durable boundary.
-func TestNonBlockingDurableTriggersParseFailureWalRefusal(t *testing.T) {
+// A malformed PUSH_END is rejected without crossing the WAL boundary because
+// the unparsed body may contain a credential-bearing restream destination.
+func TestPushEndParseFailureDoesNotPersistRawPayload(t *testing.T) {
 	setupTriggerTest(t, "tenant-life")
 
+	called := false
 	stubSendMistTrigger(t, func(trigger *ipcpb.MistTrigger) (*control.MistTriggerResult, error) {
-		return nil, errors.New("wal unavailable")
+		called = true
+		return &control.MistTriggerResult{}, nil
 	})
 
-	ctx, rec := newWebhookContext("1\nlive+stream-1") // too few params for PUSH_END
+	ctx, rec := newWebhookContext("1\nlive+stream-1\nrtmp://user:canary@example.test/live/key")
 	HandlePushEnd(ctx)
 
-	if rec.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503 when parse-failure record cannot be persisted", rec.Code)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for an unsafe parse failure", rec.Code)
+	}
+	if called {
+		t.Fatal("malformed PUSH_END body crossed the durable forwarding boundary")
 	}
 }
 

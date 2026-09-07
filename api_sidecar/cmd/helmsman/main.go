@@ -20,6 +20,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/restream"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
@@ -30,6 +31,13 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "seed-edge" {
 		if err := edgeseed.Run(); err != nil {
 			fmt.Fprintln(os.Stderr, "seed-edge:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "scrub-edge-credentials" {
+		if err := control.RunCredentialCleanupWorker(context.Background(), os.Getenv("HELMSMAN_STATE_DIR"), os.Getenv("NODE_ID"), os.Getenv("HELMSMAN_ENROLLMENT_TOKEN_FILE"), os.Getenv("HELMSMAN_RUNTIME_ENV_FILE")); err != nil {
+			fmt.Fprintln(os.Stderr, "scrub-edge-credentials:", err)
 			os.Exit(1)
 		}
 		return
@@ -48,6 +56,10 @@ func main() {
 	cfg := sidecarconfig.LoadHelmsmanConfig()
 	if strings.TrimSpace(cfg.StateDir) == "" {
 		logger.Fatal("HELMSMAN_STATE_DIR is required for durable node identity and media-control state")
+	}
+	go control.ObserveCredentialCleanup(context.Background(), cfg.StateDir, cfg.EnrollmentTokenFile, cfg.RuntimeEnvFile)
+	if _, err := restream.DestinationPolicyFromEnvironment(); err != nil {
+		logger.WithError(err).Fatal("invalid restream destination policy")
 	}
 
 	logger.Info("Starting FrameWorks Helmsman (Edge Sidecar)")

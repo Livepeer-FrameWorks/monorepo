@@ -1369,13 +1369,10 @@ func HandlePushEnd(c *gin.Context) {
 		logger.WithFields(logging.Fields{
 			"error": err,
 		}).Error("Failed to parse PUSH_END trigger")
-		sourceEventID, walErr := forwardDurableParseFailure(string(mist.TriggerPushEnd), body, c.Request.Header, err)
-		if walErr != nil {
-			respondDurableEnqueueError(c, logger, "PUSH_END", sourceEventID, walErr)
-			return
-		}
-		incMistWebhook("PUSH_END", "durably_enqueued_parse_error")
-		c.String(http.StatusOK, "OK")
+		// PUSH_END can carry a credential-bearing destination URI. If parsing fails we
+		// cannot prove that it is a non-restream processing event, so never copy the raw
+		// body into the generic parse-failure WAL.
+		c.String(http.StatusBadRequest, "invalid push end")
 		return
 	}
 
@@ -1390,6 +1387,51 @@ func HandlePushEnd(c *gin.Context) {
 				LogMessages:  pushEnd.GetLogMessages(),
 				PushStatus:   pushEnd.GetPushStatus(),
 			})
+		}
+		if report, managed := control.ResolveRestreamTarget(pushEnd.GetStreamName(), pushEnd.GetPushId(), pushEnd.GetTargetUriBefore(), pushEnd.GetTargetUriAfter()); managed {
+			parsed := mist.ParsePushEndStatus(pushEnd.GetPushStatus())
+			report.MistPushId = pushEnd.GetPushId()
+			report.EndedAtMs = time.Now().UnixMilli()
+			report.DurationMs = parsed.DurationMS
+			report.BytesSent = parsed.BytesSent
+			report.BytesObserved = parsed.BytesObserved
+			if parsed.DurationMS > 0 {
+				report.StartedAtMs = report.EndedAtMs - parsed.DurationMS
+			}
+			if parsed.Succeeded {
+				report.State = ipcpb.RestreamState_RESTREAM_STATE_IDLE
+				report.Reason = ipcpb.RestreamReason_RESTREAM_REASON_COMPLETED
+			} else {
+				report.State = ipcpb.RestreamState_RESTREAM_STATE_FAILED
+				report.Reason = ipcpb.RestreamReason_RESTREAM_REASON_PROCESS_ERROR
+				report.SanitizedMessage = "restream push failed"
+			}
+			tenantID := report.GetTenantId()
+			sanitized := &ipcpb.MistTrigger{
+				TriggerType: string(mist.TriggerRestreamStatusFinal), NodeId: getNodeID(), Timestamp: report.EndedAtMs,
+				TenantId: &tenantID, StreamId: &report.StreamId,
+				TriggerPayload: &ipcpb.MistTrigger_RestreamStatus{RestreamStatus: report},
+			}
+			sourceEventID, identityErr := stampDurableIdentity(string(mist.TriggerRestreamStatusFinal), body, sanitized)
+			if identityErr != nil {
+				respondDurableEnqueueError(c, logger, string(mist.TriggerRestreamStatusFinal), sourceEventID, identityErr)
+				return
+			}
+			report.SourceEventId = sourceEventID
+			if durableErr := sendDurableMistTrigger(sanitized); durableErr != nil {
+				respondDurableEnqueueError(c, logger, string(mist.TriggerRestreamStatusFinal), sourceEventID, durableErr)
+				return
+			}
+			incMistWebhook("PUSH_END", "durably_enqueued_sanitized")
+			c.String(http.StatusOK, "OK")
+			return
+		}
+		if control.IsExternalRestreamURI(pushEnd.GetTargetUriBefore()) || control.IsExternalRestreamURI(pushEnd.GetTargetUriAfter()) {
+			incMistWebhook("PUSH_END", "unmapped_restream")
+			logger.WithFields(logging.Fields{"stream_name": pushEnd.GetStreamName(), "push_id": pushEnd.GetPushId()}).
+				Error("Refusing to persist an unmapped restream PUSH_END")
+			c.String(http.StatusServiceUnavailable, "restream identity unavailable")
+			return
 		}
 	}
 
@@ -1501,6 +1543,31 @@ func HandlePushOutStart(c *gin.Context) {
 
 	// Forward trigger to Foghorn via gRPC and get response
 	applyTenantContext(mistTrigger)
+	if pushStart := mistTrigger.GetPushOutStart(); pushStart != nil {
+		if report, managed := control.ResolveRestreamTarget(pushStart.GetStreamName(), 0, pushStart.GetPushTarget(), ""); managed {
+			report.State = ipcpb.RestreamState_RESTREAM_STATE_PUSHING
+			report.Reason = ipcpb.RestreamReason_RESTREAM_REASON_CONNECTED
+			report.StartedAtMs = time.Now().UnixMilli()
+			if sendErr := control.SendRestreamStatus(c.Request.Context(), report, logger); sendErr != nil {
+				// The desired-set reconciliation already authorized this exact output.
+				// A transient status-channel failure must not deny the media push; the
+				// activation result and durable final report repair operational state.
+				incMistWebhook("PUSH_OUT_START", "status_forward_error")
+				logger.WithError(sendErr).WithFields(logging.Fields{
+					"stream_name": pushStart.GetStreamName(), "target_id": report.GetTargetId(),
+				}).Warn("Failed to report restream start status")
+			}
+			incMistWebhook("PUSH_OUT_START", "success")
+			respondMistAction(c, http.StatusOK, ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_KEEP, "", "")
+			return
+		}
+		if control.IsExternalRestreamURI(pushStart.GetPushTarget()) {
+			incMistWebhook("PUSH_OUT_START", "unmapped_restream")
+			logger.WithField("stream_name", pushStart.GetStreamName()).Error("Refusing an unmapped external PUSH_OUT_START")
+			respondMistAction(c, http.StatusOK, ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_DENY, "", "")
+			return
+		}
+	}
 	result, err := sendMistTrigger(mistTriggerForwardContext(c.Request.Context(), mistTrigger), mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("PUSH_OUT_START", "forward_error")
@@ -1515,16 +1582,13 @@ func HandlePushOutStart(c *gin.Context) {
 	if result.Abort {
 		incMistWebhook("PUSH_OUT_START", "aborted")
 		logger.WithFields(logging.Fields{
-			"response":   result.Response,
 			"error_code": result.ErrorCode.String(),
 		}).Info("PUSH_OUT_START aborted by Foghorn")
 		respondMistResult(c, result, ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_DENY)
 		return
 	}
 
-	logger.WithFields(logging.Fields{
-		"response": result.Response,
-	}).Info("PUSH_OUT_START approved by Foghorn")
+	logger.Info("PUSH_OUT_START approved by Foghorn")
 	incMistWebhook("PUSH_OUT_START", "success")
 
 	// Return Foghorn's response to MistServer

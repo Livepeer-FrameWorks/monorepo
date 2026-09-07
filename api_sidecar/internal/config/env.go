@@ -52,9 +52,11 @@ type HelmsmanConfig struct {
 	MaxTranscodes int
 
 	// Edge node configuration
-	EdgePublicURL      string // Full URL like http://localhost:18090/view
-	EnrollmentToken    string
-	RotateNodeIdentity bool
+	EdgePublicURL       string // Full URL like http://localhost:18090/view
+	EnrollmentToken     string
+	RotateNodeIdentity  bool
+	EnrollmentTokenFile string
+	RuntimeEnvFile      string
 
 	// Webhook URL for MistServer triggers
 	WebhookURL string
@@ -121,9 +123,11 @@ func LoadHelmsmanConfig() *HelmsmanConfig {
 		MaxTranscodes: config.GetEnvInt("HELMSMAN_MAX_TRANSCODES", 0),
 
 		// Edge node
-		EdgePublicURL:      config.RequireEnv("EDGE_PUBLIC_URL"),
-		EnrollmentToken:    config.GetEnv("EDGE_ENROLLMENT_TOKEN", ""),
-		RotateNodeIdentity: config.GetEnvBool("HELMSMAN_ROTATE_NODE_IDENTITY", false),
+		EdgePublicURL:       config.RequireEnv("EDGE_PUBLIC_URL"),
+		EnrollmentToken:     config.GetEnv("EDGE_ENROLLMENT_TOKEN", ""),
+		RotateNodeIdentity:  config.GetEnvBool("HELMSMAN_ROTATE_NODE_IDENTITY", false),
+		EnrollmentTokenFile: config.GetEnv("HELMSMAN_ENROLLMENT_TOKEN_FILE", ""),
+		RuntimeEnvFile:      config.GetEnv("HELMSMAN_RUNTIME_ENV_FILE", ""),
 
 		// Webhook URL (defaults handled at usage site if empty)
 		WebhookURL: config.GetEnv("HELMSMAN_WEBHOOK_URL", ""),

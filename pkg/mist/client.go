@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -146,24 +147,24 @@ func (c *Client) callAPIContext(ctx context.Context, command map[string]interfac
 		req.AddCookie(c.authCookie)
 	}
 
-	c.Logger.WithFields(logging.Fields{
-		"url":     u,
-		"command": string(commandJSON),
-	}).Debug("Calling MistServer API")
+	c.Logger.WithField("operation", mistCommandName(command)).Debug("Calling MistServer API")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		// The request may have reached Mist and been processed before the
 		// transport error (e.g. a read timeout). Ambiguous — do not assume it was
-		// rejected.
-		return nil, fmt.Errorf("failed to make request: %w: %w", err, ErrMistAmbiguous)
+		// rejected. Do not wrap net/http's error: url.Error contains the full
+		// command query, including a restream destination secret.
+		return nil, fmt.Errorf("MistServer transport failed (%T): %w", err, ErrMistAmbiguous)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		// Mist answered and rejected — the command was NOT accepted (not ambiguous).
-		b, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(b))
+		if _, copyErr := io.Copy(io.Discard, resp.Body); copyErr != nil {
+			c.Logger.WithError(copyErr).Debug("Failed to drain rejected MistServer response")
+		}
+		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(resp.Body)
@@ -178,7 +179,8 @@ func (c *Client) callAPIContext(ctx context.Context, command map[string]interfac
 	}
 
 	c.Logger.WithFields(logging.Fields{
-		"response": string(body)[:min(200, len(body))],
+		"operation":      mistCommandName(command),
+		"response_bytes": len(body),
 	}).Debug("MistServer API response")
 
 	return result, nil
@@ -198,15 +200,21 @@ func (c *Client) PushStart(streamName, targetURI string) error {
 		return fmt.Errorf("push_start failed: %w", err)
 	}
 
-	fields := logging.Fields{
-		"stream": streamName,
-	}
-	if u, parseErr := url.Parse(targetURI); parseErr == nil && u.Host != "" {
-		fields["target_host"] = u.Host
-	}
-	c.Logger.WithFields(fields).Info("Started MistServer push")
+	c.Logger.WithField("stream", streamName).Info("Started MistServer push")
 
 	return nil
+}
+
+func mistCommandName(command map[string]interface{}) string {
+	if len(command) == 0 {
+		return "unknown"
+	}
+	names := make([]string, 0, len(command))
+	for name := range command {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names[0]
 }
 
 // PushList returns list of currently active pushes

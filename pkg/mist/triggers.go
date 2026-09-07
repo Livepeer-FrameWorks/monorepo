@@ -41,6 +41,10 @@ const (
 	TriggerStreamLifecycle TriggerType = "STREAM_LIFECYCLE_UPDATE"
 	TriggerClientLifecycle TriggerType = "CLIENT_LIFECYCLE_UPDATE"
 	TriggerNodeLifecycle   TriggerType = "NODE_LIFECYCLE_UPDATE"
+	// Sanitized, target-ID-correlated final restream lifecycle fact. It is
+	// produced by Helmsman after consuming a raw PUSH_END locally.
+	TriggerRestreamStatus      TriggerType = "RESTREAM_STATUS"
+	TriggerRestreamStatusFinal TriggerType = "RESTREAM_STATUS_FINAL"
 )
 
 var durableTriggerTypes = map[TriggerType]struct{}{
@@ -52,6 +56,7 @@ var durableTriggerTypes = map[TriggerType]struct{}{
 	TriggerRecordingSegment:         {},
 	TriggerLivepeerSegmentComplete:  {},
 	TriggerProcessAVSegmentComplete: {},
+	TriggerRestreamStatusFinal:      {},
 }
 
 // IsDurableTriggerType reports whether Helmsman must persist this trigger

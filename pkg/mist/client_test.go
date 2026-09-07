@@ -13,6 +13,10 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 )
 
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
 func TestGetActiveStreamsFilteredContextCancelsInFlightRequest(t *testing.T) {
 	requestStarted := make(chan struct{}, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -123,6 +127,36 @@ func TestPushStartAmbiguityClassification(t *testing.T) {
 			t.Fatalf("a failed command send after successful auth must stay ambiguous, got: %v", err)
 		}
 	})
+}
+
+func TestPushStartTransportErrorDoesNotExposeDestinationSecret(t *testing.T) {
+	const canary = "super-secret-stream-key"
+	c := NewClient(logging.NewLogger())
+	c.BaseURL = "http://mist.invalid"
+	c.authenticated = true
+	c.httpClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return nil, errors.New("transport refused " + req.URL.String())
+	})}
+
+	err := c.PushStart("live+x", "rtmps://example.com/live/"+canary)
+	if err == nil || !errors.Is(err, ErrMistAmbiguous) {
+		t.Fatalf("expected a sanitized ambiguous transport error, got %v", err)
+	}
+	if strings.Contains(err.Error(), canary) {
+		t.Fatalf("destination secret leaked through transport error: %v", err)
+	}
+}
+
+func TestMistCommandNameIsDeterministic(t *testing.T) {
+	command := map[string]interface{}{"zeta": true, "alpha": true, "middle": true}
+	for range 20 {
+		if got := mistCommandName(command); got != "alpha" {
+			t.Fatalf("mistCommandName=%q, want alpha", got)
+		}
+	}
+	if got := mistCommandName(nil); got != "unknown" {
+		t.Fatalf("empty command name=%q, want unknown", got)
+	}
 }
 
 func TestParsePushList_NullMeansEmpty(t *testing.T) {

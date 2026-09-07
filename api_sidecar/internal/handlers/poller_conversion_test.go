@@ -947,6 +947,7 @@ func TestConvertNodeAPI_FullPayload(t *testing.T) {
 }
 
 func TestConvertNodeAPI_MissingFields(t *testing.T) {
+	t.Setenv("MIST_ONNX_PROFILE", "cuda")
 	pm := &PrometheusMonitor{
 		baseURL: "http://mist:4242",
 	}
@@ -974,6 +975,9 @@ func TestConvertNodeAPI_MissingFields(t *testing.T) {
 	}
 	if nlu.UpSpeed != 0 {
 		t.Fatalf("expected 0 up speed on first poll, got %d", nlu.UpSpeed)
+	}
+	if nlu.OnnxProfile != "cuda" {
+		t.Fatalf("expected reported ONNX profile cuda, got %q", nlu.OnnxProfile)
 	}
 }
 

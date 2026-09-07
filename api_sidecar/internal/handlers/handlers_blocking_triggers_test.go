@@ -62,7 +62,22 @@ func registerPendingJob(t *testing.T, streamName string) {
 // push; a non-empty response is the (possibly rewritten) target Mist will use.
 func TestHandlePushOutStart(t *testing.T) {
 	setupTriggerTest(t, "tenant-blk")
-	const body = "live+stream-1\nrtmp://target.example/app"
+	const body = "live+stream-1\n/data/local-output.ts"
+
+	t.Run("unmapped external destination is denied locally", func(t *testing.T) {
+		called := false
+		stubSendMistTrigger(t, func(trigger *ipcpb.MistTrigger) (*control.MistTriggerResult, error) {
+			called = true
+			return &control.MistTriggerResult{}, nil
+		})
+		ctx, rec := newWebhookContext("live+stream-1\nrtmp://target.example/app/secret")
+		HandlePushOutStart(ctx)
+		assertOK(t, rec, "")
+		assertAction(t, rec, "deny")
+		if called {
+			t.Fatal("unmapped external PUSH_OUT_START crossed the control boundary")
+		}
+	})
 
 	t.Run("success returns foghorn response", func(t *testing.T) {
 		var got *ipcpb.MistTrigger

@@ -101,6 +101,47 @@ var (
 		[]string{"reason"},
 	)
 
+	CredentialCleanupPending = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "helmsman",
+			Name:      "credential_cleanup_pending",
+			Help:      "Whether an accepted enrollment is waiting for its root credential scrub",
+		},
+	)
+
+	CredentialCleanupPendingSeconds = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "helmsman",
+			Name:      "credential_cleanup_pending_seconds",
+			Help:      "Age in seconds of the oldest known pending enrollment credential scrub request",
+		},
+	)
+
+	CredentialCleanupObservationError = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "helmsman",
+			Name:      "credential_cleanup_observation_error",
+			Help:      "Whether enrollment credential cleanup state could not be read or trusted",
+		},
+	)
+
+	CredentialCleanupLastSuccessTimestamp = promauto.NewGauge(
+		prometheus.GaugeOpts{
+			Namespace: "helmsman",
+			Name:      "credential_cleanup_last_success_timestamp_seconds",
+			Help:      "Unix timestamp of the last enrollment credential scrub observed by the metrics-serving process",
+		},
+	)
+
+	CredentialCleanupOutcomes = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "helmsman",
+			Name:      "credential_cleanup_outcomes_total",
+			Help:      "Enrollment credential cleanup outcomes",
+		},
+		[]string{"outcome"},
+	)
+
 	ControlOutboxScanErrors = promauto.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "helmsman",

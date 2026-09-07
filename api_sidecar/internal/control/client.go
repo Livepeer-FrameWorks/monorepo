@@ -12,6 +12,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -29,6 +30,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/nodeidentity"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/restream"
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
@@ -50,7 +52,9 @@ const foghornInternalServerName = "foghorn.internal"
 //   - Version 3 = durably records admitted ingest generations and rejects stale drain/push-target
 //     commands whose exact source generation no longer owns the local runtime.
 //   - Version 4 = signs every registration with the node's persisted Ed25519 identity.
-const controlProtocolVersion int32 = 4
+//   - Version 5 = echoes the exact desired push-target revision in activation
+//     and deactivation results.
+const controlProtocolVersion int32 = 6
 
 // DeleteClipFunc is the function type for clip deletion
 type DeleteClipFunc func(clipHash string) (uint64, error)
@@ -1755,7 +1759,6 @@ func runClient(addr string, logger logging.Logger) error {
 		StorageLocal:             cfg.StorageLocalPath,
 		StorageBucket:            cfg.StorageS3Bucket,
 		StoragePrefix:            cfg.StorageS3Prefix,
-		EnrollmentToken:          cfg.EnrollmentToken,
 		Fingerprint:              collectNodeFingerprint(),
 		CpuCores:                 &hwSpecs.CPUCores,
 		MemoryGb:                 &hwSpecs.MemoryGB,
@@ -1774,8 +1777,11 @@ func runClient(addr string, logger logging.Logger) error {
 	}
 	rotationRequested := identityStatus == nodeidentity.LoadStatusRotated || identityStatus == nodeidentity.LoadStatusRotationPending
 	if rotationRequested && strings.TrimSpace(cfg.EnrollmentToken) == "" {
-		return errors.New("node identity rotation requires a fresh enrollment token")
+		return errors.New("node identity rotation requires a fresh enrollment token; set EDGE_ENROLLMENT_TOKEN and HELMSMAN_ROTATE_NODE_IDENTITY=true together")
 	}
+	registration.EnrollmentToken = enrollmentTokenForRegistration(
+		cfg.StateDir, cfg.NodeID, cfg.EnrollmentToken, rotationRequested,
+	)
 	registration.NodeIdentityRotationRequested = rotationRequested
 	logger.WithFields(logging.Fields{"node_id": cfg.NodeID, "identity_state": identityStatus, "state_dir": cfg.StateDir}).Info("Node identity ready")
 	if signErr := nodeidentity.SignRegistration(registration, identityKey, time.Now()); signErr != nil {
@@ -1872,8 +1878,7 @@ func runClient(addr string, logger logging.Logger) error {
 						"code":    code,
 						"message": message,
 					}).Error("Received control error from Foghorn")
-					switch code {
-					case "ENROLLMENT_REQUIRED", "ENROLLMENT_FAILED", "ENROLLMENT_UNAVAILABLE":
+					if terminalEnrollmentControlError(code) {
 						errCh <- fmt.Errorf("control error %s: %s", code, message)
 						return
 					}
@@ -1893,9 +1898,12 @@ func runClient(addr string, logger logging.Logger) error {
 				// existing bidi stream after TLS bundles are applied and
 				// Caddy is reloaded; Foghorn gates DNS publishing on this.
 				if x.ConfigSeed != nil {
-					if rotationRequested {
-						if completeErr := nodeidentity.CompleteRotation(cfg.StateDir, cfg.NodeID); completeErr != nil {
-							logger.WithError(completeErr).Error("Failed to durably complete accepted node identity rotation")
+					if finalizeErr := finalizeAcceptedEnrollment(cfg.StateDir, cfg.NodeID, cfg.EnrollmentTokenFile, cfg.RuntimeEnvFile, rotationRequested, registration.GetEnrollmentToken()); finalizeErr != nil {
+						var deferred *credentialCleanupDeferredError
+						if errors.As(finalizeErr, &deferred) {
+							logger.WithError(deferred.cause).Warn("Enrollment accepted; credential cleanup is pending")
+						} else {
+							logger.WithError(finalizeErr).Error("Enrollment finalization failed")
 						}
 					}
 					ackSender := func(m *ipcpb.ControlMessage) error {
@@ -1996,16 +2004,18 @@ func runClient(addr string, logger logging.Logger) error {
 					logger.WithField("stream_name", x.ActivatePushTargets.GetStreamName()).Warn("Refusing stale push-target activation command")
 					if err := stream.Send(&ipcpb.ControlMessage{Payload: &ipcpb.ControlMessage_ActivatePushTargetsResult{
 						ActivatePushTargetsResult: &ipcpb.ActivatePushTargetsResult{
-							StreamName:       x.ActivatePushTargets.GetStreamName(),
-							Error:            "activation command expired in transit",
-							SourceGeneration: x.ActivatePushTargets.GetSourceGeneration(),
+							StreamName:        x.ActivatePushTargets.GetStreamName(),
+							Error:             "activation command expired in transit",
+							SourceGeneration:  x.ActivatePushTargets.GetSourceGeneration(),
+							TargetRevision:    x.ActivatePushTargets.GetTargetRevision(),
+							ActivationAttempt: x.ActivatePushTargets.GetActivationAttempt(),
 						},
 					}}); err != nil {
 						logger.WithError(err).Warn("Failed to send stale-activation refusal")
 					}
 					continue
 				}
-				go handleActivatePushTargets(logger, x.ActivatePushTargets, func(m *ipcpb.ControlMessage) {
+				dispatchActivatePushTargets(logger, x.ActivatePushTargets, connection, func(m *ipcpb.ControlMessage) {
 					if err := stream.Send(m); err != nil {
 						logger.WithError(err).Warn("Failed to send ActivatePushTargetsResult")
 					}
@@ -2013,9 +2023,21 @@ func runClient(addr string, logger logging.Logger) error {
 			case *ipcpb.ControlMessage_DeactivatePushTargets:
 				if sentAt := msg.GetSentAt(); sentAt == nil || time.Since(sentAt.AsTime()) > 15*time.Second {
 					logger.WithField("stream_name", x.DeactivatePushTargets.GetStreamName()).Warn("Refusing stale push-target deactivation command")
+					if err := stream.Send(&ipcpb.ControlMessage{Payload: &ipcpb.ControlMessage_DeactivatePushTargetsResult{
+						DeactivatePushTargetsResult: &ipcpb.DeactivatePushTargetsResult{
+							StreamName: x.DeactivatePushTargets.GetStreamName(), SourceGeneration: x.DeactivatePushTargets.GetSourceGeneration(),
+							TargetRevision: x.DeactivatePushTargets.GetTargetRevision(), Error: "deactivation command expired in transit",
+						},
+					}}); err != nil {
+						logger.WithError(err).Warn("Failed to send stale-deactivation refusal")
+					}
 					continue
 				}
-				go handleDeactivatePushTargets(logger, x.DeactivatePushTargets)
+				go handleDeactivatePushTargets(logger, x.DeactivatePushTargets, func(m *ipcpb.ControlMessage) {
+					if err := stream.Send(m); err != nil {
+						logger.WithError(err).Warn("Failed to send DeactivatePushTargetsResult")
+					}
+				})
 			case *ipcpb.ControlMessage_ApplyManagedStream:
 				go handleApplyManagedStream(logger, x.ApplyManagedStream)
 			case *ipcpb.ControlMessage_RetractManagedStream:
@@ -2074,6 +2096,15 @@ func runClient(addr string, logger logging.Logger) error {
 		case e := <-errCh:
 			return e
 		}
+	}
+}
+
+func terminalEnrollmentControlError(code string) bool {
+	switch code {
+	case "ENROLLMENT_REQUIRED", "ENROLLMENT_FAILED", "ENROLLMENT_UNAVAILABLE", "IDENTITY_ROTATION_REQUIRED":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -3485,25 +3516,59 @@ func handleDrainStream(logger logging.Logger, req *ipcpb.DrainStreamRequest, sen
 	}
 }
 
-func handleActivatePushTargets(logger logging.Logger, req *ipcpb.ActivatePushTargets, respond func(*ipcpb.ControlMessage)) {
-	if req == nil || len(req.Targets) == 0 {
+var restreamDestinationPolicyFromEnvironment = restream.DestinationPolicyFromEnvironment
+
+const restreamReconcileLaneCount = 256
+
+var restreamReconcileLanes [restreamReconcileLaneCount]sync.Mutex
+var restreamActivationDispatchSequence atomic.Uint64
+
+func lockRestreamReconcileLane(streamName string) func() {
+	hash := uint32(2166136261)
+	for i := 0; i < len(streamName); i++ {
+		hash ^= uint32(streamName[i])
+		hash *= 16777619
+	}
+	lane := &restreamReconcileLanes[hash%restreamReconcileLaneCount]
+	lane.Lock()
+	return lane.Unlock
+}
+
+func dispatchActivatePushTargets(logger logging.Logger, req *ipcpb.ActivatePushTargets, connection *streamConn, respond func(*ipcpb.ControlMessage)) {
+	controlEpoch := ""
+	if connection != nil {
+		controlEpoch = connection.epoch
+	}
+	dispatchSequence := restreamActivationDispatchSequence.Add(1)
+	go handleActivatePushTargets(logger, req, controlEpoch, dispatchSequence, respond)
+}
+
+func handleActivatePushTargets(logger logging.Logger, req *ipcpb.ActivatePushTargets, controlEpoch string, dispatchSequence uint64, respond func(*ipcpb.ControlMessage)) {
+	if req == nil {
 		return
 	}
 	// report sends the correlated outcome back to Foghorn. converged=true is the ONLY completion
 	// signal for the durable activation obligation — a delivery-only model would silently lose the
 	// command to a crash, list failure, or PushStart failure.
-	report := func(converged bool, cause string) {
+	report := func(converged bool, cause string, outcomes ...*ipcpb.PushTargetConvergence) {
 		if respond == nil {
 			return
 		}
 		respond(&ipcpb.ControlMessage{Payload: &ipcpb.ControlMessage_ActivatePushTargetsResult{
 			ActivatePushTargetsResult: &ipcpb.ActivatePushTargetsResult{
-				StreamName:       req.StreamName,
-				Converged:        converged,
-				Error:            cause,
-				SourceGeneration: req.GetSourceGeneration(),
+				StreamName:        req.StreamName,
+				Converged:         converged,
+				Error:             cause,
+				SourceGeneration:  req.GetSourceGeneration(),
+				TargetRevision:    req.GetTargetRevision(),
+				ActivationAttempt: req.GetActivationAttempt(),
+				Targets:           outcomes,
 			},
 		}})
+	}
+	if strings.TrimSpace(req.GetStreamName()) == "" {
+		report(false, "stream name is required")
+		return
 	}
 	requestedGeneration := strings.TrimSpace(req.GetSourceGeneration())
 	generationFence, generationKnown := lockIngestFence(req.GetStreamName(), false)
@@ -3525,12 +3590,114 @@ func handleActivatePushTargets(logger logging.Logger, req *ipcpb.ActivatePushTar
 		report(false, "activation generation is not current")
 		return
 	}
+	generationFence.Unlock()
 
 	cfg := currentConfig
 	if cfg == nil {
-		generationFence.Unlock()
 		logger.Warn("config not initialized; cannot activate push targets")
 		report(false, "config not initialized")
+		return
+	}
+	policy, policyErr := restreamDestinationPolicyFromEnvironment()
+	if policyErr != nil {
+		outcomes := make([]*ipcpb.PushTargetConvergence, 0, len(req.GetTargets()))
+		for _, target := range req.GetTargets() {
+			outcomes = append(outcomes, activationFailureOutcome(target, ipcpb.RestreamReason_RESTREAM_REASON_PROCESS_ERROR, "destination policy configuration is unavailable"))
+			sendActivationRetryStatus(logger, req, target, ipcpb.RestreamReason_RESTREAM_REASON_PROCESS_ERROR, "destination policy configuration is unavailable")
+		}
+		report(false, "destination policy configuration is unavailable", outcomes...)
+		return
+	}
+	validationCtx, cancelValidation := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelValidation()
+	validTargets := make([]*ipcpb.PushTargetSpec, 0, len(req.GetTargets()))
+	rejectedTargets := make([]*ipcpb.PushTargetSpec, 0)
+	rejectedOutcomes := make([]*ipcpb.PushTargetConvergence, 0)
+	configurationTargets := make([]*ipcpb.PushTargetSpec, 0)
+	configurationOutcomes := make([]*ipcpb.PushTargetConvergence, 0)
+	retryableTargets := make([]*ipcpb.PushTargetSpec, 0)
+	retryableOutcomes := make([]*ipcpb.PushTargetConvergence, 0)
+	retryableTargetIDs := make(map[string]struct{})
+	seenTargetIDs := make(map[string]struct{}, len(req.GetTargets()))
+	seenTargetURIs := make(map[string]struct{}, len(req.GetTargets()))
+	for _, target := range req.GetTargets() {
+		targetID := strings.TrimSpace(target.GetTargetId())
+		if _, duplicate := seenTargetIDs[targetID]; duplicate {
+			configurationTargets = append(configurationTargets, target)
+			configurationOutcomes = append(configurationOutcomes, activationFailureOutcome(target, ipcpb.RestreamReason_RESTREAM_REASON_CONFIGURATION_ERROR, "duplicate target identity"))
+			continue
+		}
+		seenTargetIDs[targetID] = struct{}{}
+		targetURI := strings.TrimSpace(target.GetTargetUri())
+		if _, duplicate := seenTargetURIs[targetURI]; duplicate {
+			configurationTargets = append(configurationTargets, target)
+			configurationOutcomes = append(configurationOutcomes, activationFailureOutcome(target, ipcpb.RestreamReason_RESTREAM_REASON_CONFIGURATION_ERROR, "duplicate destination URI"))
+			continue
+		}
+		seenTargetURIs[targetURI] = struct{}{}
+		parsed, parseErr := url.Parse(targetURI)
+		if parseErr != nil {
+			logger.WithFields(logging.Fields{
+				"stream_name": req.GetStreamName(), "target_id": target.GetTargetId(),
+			}).Warn("Refusing restream target rejected by destination policy")
+			rejectedTargets = append(rejectedTargets, target)
+			rejectedOutcomes = append(rejectedOutcomes, activationFailureOutcome(target, ipcpb.RestreamReason_RESTREAM_REASON_DESTINATION_REJECTED, "destination rejected by operator policy"))
+			continue
+		}
+		validationErr := policy.ValidateURI(validationCtx, parsed)
+		if errors.Is(validationErr, restream.ErrDestinationResolution) {
+			retryableTargets = append(retryableTargets, target)
+			retryableOutcomes = append(retryableOutcomes, activationFailureOutcome(target, ipcpb.RestreamReason_RESTREAM_REASON_NETWORK_ERROR, "destination DNS resolution unavailable"))
+			retryableTargetIDs[target.GetTargetId()] = struct{}{}
+			continue
+		}
+		if validationErr != nil {
+			logger.WithFields(logging.Fields{
+				"stream_name": req.GetStreamName(), "target_id": target.GetTargetId(),
+			}).Warn("Refusing restream target rejected by destination policy")
+			rejectedTargets = append(rejectedTargets, target)
+			rejectedOutcomes = append(rejectedOutcomes, activationFailureOutcome(target, ipcpb.RestreamReason_RESTREAM_REASON_DESTINATION_REJECTED, "destination rejected by operator policy"))
+			continue
+		}
+		validTargets = append(validTargets, target)
+	}
+	runtimeReq := proto.CloneOf(req)
+	// Retryable DNS targets stay in desired state so an existing healthy push is
+	// retained, but they are skipped for starts and must-be-live confirmation.
+	// Healthy siblings can still converge while the unresolved target retries.
+	runtimeReq.Targets = append(validTargets, retryableTargets...)
+	unlockReconcile := lockRestreamReconcileLane(req.GetStreamName())
+	defer unlockReconcile()
+	generationFence, generationKnown = lockIngestFence(req.GetStreamName(), false)
+	currentGeneration = ""
+	activeGeneration = false
+	if generationKnown {
+		currentGeneration = generationFence.generation
+		activeGeneration = generationFence.active
+	}
+	if requestedGeneration == "" || currentGeneration != requestedGeneration || !activeGeneration {
+		if generationFence != nil {
+			generationFence.Unlock()
+		}
+		report(false, "activation generation is no longer current")
+		return
+	}
+	desired, installResult := installRestreamDesiredStateForControlEpoch(runtimeReq, controlEpoch, dispatchSequence)
+	generationFence.Unlock()
+	if installResult == restreamInstallSuperseded {
+		// A newer revision is already authoritative on this runtime. Treat the
+		// older command as superseded without emitting FAILED statuses that could
+		// overwrite the current revision in Commodore.
+		report(true, "")
+		return
+	}
+	if installResult != restreamInstallApplied {
+		outcomes := make([]*ipcpb.PushTargetConvergence, 0, len(req.GetTargets()))
+		for _, target := range req.GetTargets() {
+			outcomes = append(outcomes, activationFailureOutcome(target, ipcpb.RestreamReason_RESTREAM_REASON_CONFIGURATION_ERROR, "invalid or stale desired target set"))
+			sendActivationFailureStatus(logger, req, target, ipcpb.RestreamReason_RESTREAM_REASON_CONFIGURATION_ERROR, "invalid or stale desired target set")
+		}
+		report(false, "invalid or stale desired target set", outcomes...)
 		return
 	}
 
@@ -3540,58 +3707,248 @@ func handleActivatePushTargets(logger logging.Logger, req *ipcpb.ActivatePushTar
 	}
 
 	logger.WithFields(logging.Fields{
-		"stream_name":  req.StreamName,
-		"target_count": len(req.Targets),
-	}).Info("Activating multistream push targets")
+		"stream_name":     req.StreamName,
+		"target_count":    len(runtimeReq.Targets),
+		"target_revision": req.GetTargetRevision(),
+	}).Info("Reconciling multistream push targets")
 
-	// Request start, then confirm presence. Mist's controller serializes startPush and internally
-	// dedupes an already-active (stream, target) pair, so re-dispatched activations (the durable
-	// obligation retries until the converged acknowledgement) cannot create duplicate writers — no
-	// Helmsman-side locking or pre-listing is needed for that.
 	firstFailure := ""
-	started := false
-	for _, target := range req.Targets {
-		err := mistClient.PushStart(req.StreamName, target.TargetUri)
+	if len(configurationOutcomes) > 0 {
+		firstFailure = "one or more destinations have duplicate identities or URIs"
+	} else if len(retryableTargets) > 0 {
+		firstFailure = "destination DNS resolution unavailable"
+	}
+	pushes, err := mistClient.PushList()
+	if err != nil {
+		for _, target := range rejectedTargets {
+			sendActivationFailureStatus(logger, req, target, ipcpb.RestreamReason_RESTREAM_REASON_DESTINATION_REJECTED, "destination rejected by operator policy")
+		}
+		for _, target := range retryableTargets {
+			sendActivationRetryStatus(logger, req, target, ipcpb.RestreamReason_RESTREAM_REASON_NETWORK_ERROR, "destination DNS resolution unavailable")
+		}
+		for _, target := range configurationTargets {
+			sendActivationFailureStatus(logger, req, target, ipcpb.RestreamReason_RESTREAM_REASON_CONFIGURATION_ERROR, "duplicate target identity or destination URI")
+		}
+		outcomes := append(append(append([]*ipcpb.PushTargetConvergence{}, rejectedOutcomes...), configurationOutcomes...), retryableOutcomes...)
+		for _, target := range validTargets {
+			outcomes = append(outcomes, activationFailureOutcome(target, ipcpb.RestreamReason_RESTREAM_REASON_PROCESS_ERROR, "push inventory unavailable"))
+			sendActivationRetryStatus(logger, req, target, ipcpb.RestreamReason_RESTREAM_REASON_PROCESS_ERROR, "push inventory unavailable")
+		}
+		report(false, "push inventory unavailable", outcomes...)
+		return
+	}
+	live := livePushTargetURIs(pushes, req.GetStreamName())
+	for _, push := range pushes {
+		if push.StreamName != req.GetStreamName() || !IsExternalRestreamURI(push.TargetURI) {
+			continue
+		}
+		if _, keep := desired.uriToID[push.TargetURI]; keep {
+			continue
+		}
+		if stopErr := mistClient.PushStop(push.ID); stopErr != nil && firstFailure == "" {
+			firstFailure = "obsolete push could not be stopped"
+		}
+	}
+	for _, target := range desired.byID {
+		if _, retryable := retryableTargetIDs[target.targetID]; retryable {
+			continue
+		}
+		targetURI := target.targetURI
+		if live[targetURI] {
+			continue
+		}
+		err := mistClient.PushStart(runtimeReq.StreamName, targetURI)
 		if err != nil {
 			logger.WithFields(logging.Fields{
 				"stream_name": req.StreamName,
-				"target_id":   target.TargetId,
-				"target_name": target.Name,
-				"error":       err,
+				"target_id":   target.targetID,
 			}).Error("Failed to start push to target")
 			if firstFailure == "" {
-				firstFailure = err.Error()
+				firstFailure = "target push could not be started"
 			}
 			continue
 		}
-		started = true
-
 		logger.WithFields(logging.Fields{
 			"stream_name": req.StreamName,
-			"target_id":   target.TargetId,
-			"target_name": target.Name,
+			"target_id":   target.targetID,
 		}).Info("Started push to multistream target")
 	}
-	// Confirm PROCESS CREATION, not just command parsing: Mist's push_start API succeeds even when
-	// the push process could not be spawned, so re-list and require every requested target to be
-	// present before reporting converged. Anything beyond creation is Mist's contract — a one-shot
-	// push that later dies emits PUSH_END (and only configured auto_push entries restart), so
-	// continuing health is deliberately NOT this acknowledgement's business.
-	if firstFailure == "" && started {
-		if confirm, confirmErr := mistClient.PushList(); confirmErr != nil {
-			firstFailure = "post-start push list unavailable: " + confirmErr.Error()
-		} else {
-			nowLive := livePushTargetURIs(confirm, req.StreamName)
-			for _, target := range req.Targets {
-				if !nowLive[target.TargetUri] {
-					firstFailure = "push process not created for " + target.TargetId
-					break
+	confirm, confirmErr := mistClient.PushList()
+	if confirmErr != nil {
+		firstFailure = "post-reconcile push inventory unavailable"
+	} else {
+		nowLive := livePushTargetURIs(confirm, req.StreamName)
+		for _, target := range desired.byID {
+			if _, retryable := retryableTargetIDs[target.targetID]; retryable {
+				continue
+			}
+			uri := target.targetURI
+			if !nowLive[uri] {
+				firstFailure = "push process not created for " + target.targetID
+				break
+			}
+		}
+		if firstFailure == "" {
+			for _, push := range confirm {
+				if push.StreamName == req.GetStreamName() && IsExternalRestreamURI(push.TargetURI) {
+					if _, wanted := desired.uriToID[push.TargetURI]; !wanted {
+						firstFailure = "obsolete push remains active"
+						break
+					}
 				}
 			}
 		}
 	}
-	generationFence.Unlock()
-	report(firstFailure == "", firstFailure)
+	// The publisher generation can change while Mist is responding. Revalidate
+	// immediately before binding runtime state; if authority moved, remove every
+	// external push this stale activation could have left behind while still
+	// holding the stream reconciliation lane.
+	finalFence, finalKnown := lockIngestFence(req.GetStreamName(), false)
+	finalGeneration := ""
+	finalActive := false
+	if finalKnown {
+		finalGeneration = finalFence.generation
+		finalActive = finalFence.active
+	}
+	if !finalKnown || finalGeneration != requestedGeneration || !finalActive {
+		if finalFence != nil {
+			finalFence.Unlock()
+		}
+		if confirmErr == nil {
+			// Bind before retiring the stale generation. PUSH_END can arrive as
+			// soon as PushStop runs; the retired registry entry must already know
+			// each Mist push id so that final usage is still attributable.
+			bindRestreamPushIDs(runtimeReq.GetStreamName(), runtimeReq.GetSourceGeneration(), runtimeReq.GetTargetRevision(), confirm)
+			clearRestreamDesiredState(req.GetStreamName(), requestedGeneration)
+			for _, push := range confirm {
+				if push.StreamName == req.GetStreamName() && IsExternalRestreamURI(push.TargetURI) {
+					if stopErr := mistClient.PushStop(push.ID); stopErr != nil {
+						logger.WithError(stopErr).WithField("stream_name", req.GetStreamName()).Warn("Failed to remove stale-generation restream push")
+					}
+				}
+			}
+		} else {
+			clearRestreamDesiredState(req.GetStreamName(), requestedGeneration)
+		}
+		report(false, "activation generation changed during reconciliation")
+		return
+	}
+	if confirmErr == nil {
+		bindRestreamPushIDs(runtimeReq.GetStreamName(), runtimeReq.GetSourceGeneration(), runtimeReq.GetTargetRevision(), confirm)
+	}
+	if finalFence != nil {
+		finalFence.Unlock()
+	}
+	outcomes := make([]*ipcpb.PushTargetConvergence, 0, len(desired.byID)+len(rejectedOutcomes)+len(configurationOutcomes)+len(retryableOutcomes))
+	outcomes = append(outcomes, rejectedOutcomes...)
+	outcomes = append(outcomes, configurationOutcomes...)
+	outcomes = append(outcomes, retryableOutcomes...)
+	failedReports := make([]restreamTarget, 0, len(desired.byID))
+	retryReports := make([]restreamTarget, 0, len(desired.byID))
+	if confirmErr != nil {
+		for _, target := range desired.byID {
+			if _, retryable := retryableTargetIDs[target.targetID]; retryable {
+				continue
+			}
+			outcomes = append(outcomes, &ipcpb.PushTargetConvergence{
+				TargetId: target.targetID, Active: false,
+				Reason:           ipcpb.RestreamReason_RESTREAM_REASON_PROCESS_ERROR,
+				SanitizedMessage: "post-reconcile push inventory unavailable",
+			})
+			retryReports = append(retryReports, target)
+		}
+	} else {
+		nowLive := livePushTargetURIs(confirm, req.GetStreamName())
+		for _, target := range desired.byID {
+			if _, retryable := retryableTargetIDs[target.targetID]; retryable {
+				continue
+			}
+			uri := target.targetURI
+			if nowLive[uri] {
+				mistPushID := int64(0)
+				for _, push := range confirm {
+					if push.StreamName == req.GetStreamName() && strings.TrimSpace(push.TargetURI) == uri {
+						mistPushID = int64(push.ID)
+						break
+					}
+				}
+				outcomes = append(outcomes, &ipcpb.PushTargetConvergence{
+					TargetId: target.targetID, MistPushId: mistPushID, Active: true,
+					Reason: ipcpb.RestreamReason_RESTREAM_REASON_CONNECTED,
+				})
+				continue
+			}
+			outcomes = append(outcomes, &ipcpb.PushTargetConvergence{
+				TargetId: target.targetID, Active: false,
+				Reason:           ipcpb.RestreamReason_RESTREAM_REASON_PROCESS_ERROR,
+				SanitizedMessage: "target push did not become active",
+			})
+			failedReports = append(failedReports, target)
+		}
+	}
+	for _, target := range rejectedTargets {
+		sendActivationFailureStatus(logger, req, target, ipcpb.RestreamReason_RESTREAM_REASON_DESTINATION_REJECTED, "destination rejected by operator policy")
+	}
+	for _, target := range retryableTargets {
+		sendActivationRetryStatus(logger, req, target, ipcpb.RestreamReason_RESTREAM_REASON_NETWORK_ERROR, "destination DNS resolution unavailable")
+	}
+	for _, target := range configurationTargets {
+		sendActivationFailureStatus(logger, req, target, ipcpb.RestreamReason_RESTREAM_REASON_CONFIGURATION_ERROR, "duplicate target identity or destination URI")
+	}
+	for _, target := range retryReports {
+		sendActivationRetryStatus(logger, req, &ipcpb.PushTargetSpec{TargetId: target.targetID, Platform: target.platform}, ipcpb.RestreamReason_RESTREAM_REASON_PROCESS_ERROR, "post-reconcile push inventory unavailable")
+	}
+	for _, target := range failedReports {
+		sendActivationFailureStatus(logger, req, &ipcpb.PushTargetSpec{TargetId: target.targetID, Platform: target.platform}, ipcpb.RestreamReason_RESTREAM_REASON_PROCESS_ERROR, "target push did not become active")
+	}
+	report(firstFailure == "", firstFailure, outcomes...)
+}
+
+func activationFailureOutcome(target *ipcpb.PushTargetSpec, reason ipcpb.RestreamReason, message string) *ipcpb.PushTargetConvergence {
+	return &ipcpb.PushTargetConvergence{
+		TargetId: target.GetTargetId(), Active: false, Reason: reason, SanitizedMessage: message,
+	}
+}
+
+func sendActivationFailureStatus(logger logging.Logger, req *ipcpb.ActivatePushTargets, target *ipcpb.PushTargetSpec, reason ipcpb.RestreamReason, message string) {
+	if target == nil || strings.TrimSpace(target.GetTargetId()) == "" {
+		return
+	}
+	report := &ipcpb.PushTargetStatusReport{
+		TargetId: target.GetTargetId(), TenantId: req.GetTenantId(), StreamId: req.GetStreamId(),
+		StreamName: req.GetStreamName(), SourceGeneration: req.GetSourceGeneration(), TargetRevision: req.GetTargetRevision(),
+		ActivationAttempt: req.GetActivationAttempt(),
+		Platform:          target.GetPlatform(), State: ipcpb.RestreamState_RESTREAM_STATE_FAILED,
+		Reason: reason, SanitizedMessage: message,
+	}
+	if err := SendRestreamStatus(context.Background(), report, logger); err != nil {
+		logger.WithFields(logging.Fields{
+			"stream_name": req.GetStreamName(), "target_id": target.GetTargetId(), "reason": reason.String(),
+		}).Warn("Failed to report push-target activation failure")
+	}
+}
+
+func sendActivationRetryStatus(logger logging.Logger, req *ipcpb.ActivatePushTargets, target *ipcpb.PushTargetSpec, reason ipcpb.RestreamReason, message string) {
+	if target == nil || strings.TrimSpace(target.GetTargetId()) == "" {
+		return
+	}
+	report := &ipcpb.PushTargetStatusReport{
+		TargetId: target.GetTargetId(), TenantId: req.GetTenantId(), StreamId: req.GetStreamId(),
+		StreamName: req.GetStreamName(), SourceGeneration: req.GetSourceGeneration(), TargetRevision: req.GetTargetRevision(),
+		ActivationAttempt: req.GetActivationAttempt(),
+		Platform:          target.GetPlatform(), State: ipcpb.RestreamState_RESTREAM_STATE_RETRYING,
+		Reason: reason, SanitizedMessage: message,
+	}
+	if err := SendRestreamStatus(context.Background(), report, logger); err != nil {
+		logger.WithFields(logging.Fields{
+			"stream_name": req.GetStreamName(), "target_id": target.GetTargetId(),
+		}).Warn("Failed to report retryable push-target activation failure")
+	}
+}
+
+func IsExternalRestreamURI(value string) bool {
+	lower := strings.ToLower(strings.TrimSpace(value))
+	return strings.HasPrefix(lower, "rtmp://") || strings.HasPrefix(lower, "rtmps://") || strings.HasPrefix(lower, "srt://")
 }
 
 // livePushTargetURIs maps the target URIs that currently have a live Mist push for the stream. Used
@@ -3600,16 +3957,31 @@ func handleActivatePushTargets(logger logging.Logger, req *ipcpb.ActivatePushTar
 func livePushTargetURIs(pushes []mist.PushInfo, streamName string) map[string]bool {
 	live := make(map[string]bool, len(pushes))
 	for _, push := range pushes {
-		if push.StreamName == streamName && push.TargetURI != "" {
+		if push.StreamName == streamName && IsExternalRestreamURI(push.TargetURI) {
 			live[push.TargetURI] = true
 		}
 	}
 	return live
 }
 
-func handleDeactivatePushTargets(logger logging.Logger, req *ipcpb.DeactivatePushTargets) {
+func handleDeactivatePushTargets(logger logging.Logger, req *ipcpb.DeactivatePushTargets, responders ...func(*ipcpb.ControlMessage)) {
 	if req == nil || req.StreamName == "" {
 		return
+	}
+	var respond func(*ipcpb.ControlMessage)
+	if len(responders) > 0 {
+		respond = responders[0]
+	}
+	reportResult := func(converged bool, cause string) {
+		if respond == nil {
+			return
+		}
+		respond(&ipcpb.ControlMessage{Payload: &ipcpb.ControlMessage_DeactivatePushTargetsResult{
+			DeactivatePushTargetsResult: &ipcpb.DeactivatePushTargetsResult{
+				StreamName: req.GetStreamName(), SourceGeneration: req.GetSourceGeneration(),
+				TargetRevision: req.GetTargetRevision(), Converged: converged, Error: cause,
+			},
+		}})
 	}
 	requestedGeneration := strings.TrimSpace(req.GetSourceGeneration())
 	generationFence, generationKnown := lockIngestFence(req.GetStreamName(), false)
@@ -3617,7 +3989,7 @@ func handleDeactivatePushTargets(logger logging.Logger, req *ipcpb.DeactivatePus
 	if generationKnown {
 		currentGeneration = generationFence.generation
 	}
-	if requestedGeneration == "" || currentGeneration == "" || currentGeneration != requestedGeneration {
+	if requestedGeneration == "" || (currentGeneration != "" && currentGeneration != requestedGeneration) {
 		if generationFence != nil {
 			generationFence.Unlock()
 		}
@@ -3626,34 +3998,91 @@ func handleDeactivatePushTargets(logger logging.Logger, req *ipcpb.DeactivatePus
 			"command_generation": requestedGeneration,
 			"current_generation": currentGeneration,
 		}).Warn("Refusing push-target deactivation for a superseded ingest generation")
+		reportResult(false, "deactivation generation is not current")
 		return
 	}
 
 	cfg := currentConfig
 	if cfg == nil {
-		generationFence.Unlock()
+		if generationFence != nil {
+			generationFence.Unlock()
+		}
+		reportResult(false, "config not initialized")
 		return
+	}
+	if generationFence != nil {
+		generationFence.Unlock()
+	}
+
+	// All Mist inventory/start/stop operations for a runtime stream share one
+	// lane. Publisher generation recording remains independent so a replacement
+	// can be admitted while slow Mist I/O is in progress.
+	unlockReconcile := lockRestreamReconcileLane(req.GetStreamName())
+	defer unlockReconcile()
+	generationFence, generationKnown = lockIngestFence(req.GetStreamName(), false)
+	currentGeneration = ""
+	if generationKnown {
+		currentGeneration = generationFence.generation
+	}
+	if requestedGeneration == "" || (currentGeneration != "" && currentGeneration != requestedGeneration) {
+		if generationFence != nil {
+			generationFence.Unlock()
+		}
+		reportResult(false, "deactivation generation is no longer current")
+		return
+	}
+	if generationFence != nil {
+		generationFence.Unlock()
 	}
 
 	mistClient := mist.NewClient(logger)
 	if cfg.MistServerURL != "" {
 		mistClient.BaseURL = cfg.MistServerURL
 	}
+	if currentGeneration == "" {
+		pushes, err := mistClient.PushList()
+		if err != nil {
+			reportResult(false, "push inventory unavailable")
+			return
+		}
+		for _, push := range pushes {
+			if push.StreamName == req.GetStreamName() && IsExternalRestreamURI(push.TargetURI) {
+				logger.WithField("stream_name", req.GetStreamName()).Warn("Cannot prove unknown-generation restream teardown safe while pushes remain")
+				reportResult(false, "unknown generation still has active restream pushes")
+				return
+			}
+		}
+		// A lost/pruned generation fence with an empty runtime inventory is an
+		// idempotent teardown success. This lets the durable offline obligation
+		// settle instead of replaying forever after Helmsman restart.
+		reportResult(true, "")
+		return
+	}
 
-	// List active pushes and stop any matching this stream
+	reports := restreamTargetReports(req.GetStreamName(), req.GetSourceGeneration())
+	for _, statusReport := range reports {
+		statusReport.State = ipcpb.RestreamState_RESTREAM_STATE_STOPPING
+		statusReport.Reason = ipcpb.RestreamReason_RESTREAM_REASON_STOPPED
+		if statusErr := SendRestreamStatus(context.Background(), statusReport, logger); statusErr != nil {
+			logger.WithError(statusErr).Warn("Failed to report stopping restream target")
+		}
+	}
+
+	// Stop only external restream pushes. DVR/processing pushes can share the
+	// runtime stream and must never be caught by restream teardown.
 	pushes, err := mistClient.PushList()
 	if err != nil {
-		generationFence.Unlock()
 		logger.WithFields(logging.Fields{
 			"stream_name": req.StreamName,
 			"error":       err,
 		}).Warn("Failed to list pushes for deactivation")
+		reportResult(false, "push inventory unavailable")
 		return
 	}
 
 	stopped := 0
 	for _, push := range pushes {
-		if push.StreamName == req.StreamName {
+		if push.StreamName == req.StreamName && IsExternalRestreamURI(push.TargetURI) {
 			if stopErr := mistClient.PushStop(push.ID); stopErr != nil {
 				logger.WithFields(logging.Fields{
 					"stream_name": req.StreamName,
@@ -3665,7 +4094,45 @@ func handleDeactivatePushTargets(logger logging.Logger, req *ipcpb.DeactivatePus
 			}
 		}
 	}
-	generationFence.Unlock()
+	confirm, confirmErr := mistClient.PushList()
+	if confirmErr != nil {
+		reportResult(false, "post-deactivation push inventory unavailable")
+		return
+	}
+	for _, push := range confirm {
+		if push.StreamName == req.GetStreamName() && IsExternalRestreamURI(push.TargetURI) {
+			reportResult(false, "restream push remains active")
+			return
+		}
+	}
+	// Re-read authority after I/O before mutating registry/status state. A
+	// successor generation may have been recorded while Mist was responding;
+	// generation-specific cleanup below must never clear that successor.
+	latestFence, latestKnown := lockIngestFence(req.GetStreamName(), false)
+	latestGeneration := ""
+	if latestKnown {
+		latestGeneration = latestFence.generation
+	}
+	if latestFence != nil {
+		latestFence.Unlock()
+	}
+	if latestGeneration != "" && latestGeneration != requestedGeneration {
+		logger.WithFields(logging.Fields{
+			"stream_name": req.GetStreamName(), "command_generation": requestedGeneration,
+			"current_generation": latestGeneration,
+		}).Info("Restream teardown completed after publisher generation replacement")
+	}
+	now := time.Now().UnixMilli()
+	for _, statusReport := range reports {
+		statusReport.State = ipcpb.RestreamState_RESTREAM_STATE_IDLE
+		statusReport.Reason = ipcpb.RestreamReason_RESTREAM_REASON_STOPPED
+		statusReport.EndedAtMs = now
+		if statusErr := SendRestreamStatus(context.Background(), statusReport, logger); statusErr != nil {
+			logger.WithError(statusErr).Warn("Failed to report stopped restream target")
+		}
+	}
+	clearRestreamDesiredState(req.GetStreamName(), req.GetSourceGeneration())
+	reportResult(true, "")
 
 	if stopped > 0 {
 		logger.WithFields(logging.Fields{
