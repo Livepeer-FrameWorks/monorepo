@@ -640,7 +640,7 @@ func TestDoGetMarketplaceCluster_EnrichesPricing(t *testing.T) {
 
 // ---- DoGetStreamingConfig: cluster routing -> per-cluster domains ----
 
-func TestDoGetStreamingConfig_BuildsDomainsAndNilFallbacks(t *testing.T) {
+func TestDoGetStreamingConfig_BuildsDomainsAndSurfacesRoutingFailure(t *testing.T) {
 	slug := "uswest"
 	qm := &clientstest.FakeQuartermaster{
 		GetClusterRoutingFn: func(_ context.Context, req *quartermasterpb.GetClusterRoutingRequest) (*quartermasterpb.ClusterRoutingResponse, error) {
@@ -672,15 +672,16 @@ func TestDoGetStreamingConfig_BuildsDomainsAndNilFallbacks(t *testing.T) {
 		t.Fatalf("preferred label = %v, want US West", cfg.PreferredClusterLabel)
 	}
 
-	// Routing error returns nil cfg + nil error (frontend falls back to env).
+	// An authenticated routing error must be visible; falling back to global
+	// build-time domains could route this tenant to the wrong media cluster.
 	failing := &clientstest.FakeQuartermaster{
 		GetClusterRoutingFn: func(context.Context, *quartermasterpb.GetClusterRoutingRequest) (*quartermasterpb.ClusterRoutingResponse, error) {
 			return nil, errors.New("boom")
 		},
 	}
 	fcfg, ferr := qmR(failing).DoGetStreamingConfig(clientstest.AuthedCtx("t1"))
-	if ferr != nil || fcfg != nil {
-		t.Fatalf("routing error should yield (nil,nil), got (%v,%v)", fcfg, ferr)
+	if ferr == nil || fcfg != nil {
+		t.Fatalf("routing error should yield (nil,error), got (%v,%v)", fcfg, ferr)
 	}
 
 	// No tenant: nil cfg, nil error, no backend call.

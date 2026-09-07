@@ -8,6 +8,8 @@ import (
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/middleware"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/authz"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	"google.golang.org/grpc/codes"
@@ -42,7 +44,7 @@ func (r *Resolver) DoMediaRetentionPolicy(ctx context.Context) (*model.MediaRete
 // must target a single asset class (VOD, DVR, or CLIP). clear=true NULLs
 // the column so the tenant inherits the system default.
 func (r *Resolver) DoSetMediaRetentionPolicy(ctx context.Context, input model.SetMediaRetentionPolicyInput) (model.SetMediaRetentionPolicyResult, error) {
-	if err := middleware.RequirePermission(ctx, "billing:write"); err != nil {
+	if err := middleware.RequireTenantAction(ctx, "billing:write", authz.ActionManageBilling, ctxkeys.GetTenantID(ctx)); err != nil {
 		return nil, err
 	}
 
@@ -101,7 +103,7 @@ func (r *Resolver) DoSetMediaRetentionPolicy(ctx context.Context, input model.Se
 // value on that class. 0 = keep forever (clamped to the tier cap on
 // Free); >0 = days.
 func (r *Resolver) DoSetStreamRetentionOverrides(ctx context.Context, input model.SetStreamRetentionOverridesInput) (model.SetStreamRetentionOverridesResult, error) {
-	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
+	if err := middleware.RequireTenantAction(ctx, "billing:write", authz.ActionManageBilling, ctxkeys.GetTenantID(ctx)); err != nil {
 		return nil, err
 	}
 	if input.StreamID == "" {
@@ -175,7 +177,7 @@ func (r *Resolver) DoSetStreamRetentionOverrides(ctx context.Context, input mode
 // retentionDays = 0 means "keep forever" (Commodore writes NULL
 // retention_until; Foghorn's RetentionJob skips the artifact).
 func (r *Resolver) DoUpdateMediaRetention(ctx context.Context, input model.UpdateMediaRetentionInput) (model.UpdateMediaRetentionResult, error) {
-	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
+	if err := middleware.RequireTenantAction(ctx, "billing:write", authz.ActionManageBilling, ctxkeys.GetTenantID(ctx)); err != nil {
 		return nil, err
 	}
 	if input.TargetID == "" {
@@ -239,7 +241,7 @@ func (r *Resolver) DoUpdateMediaRetention(ctx context.Context, input model.Updat
 // recomputes the horizon from the per-class cascade (which itself
 // consults per-stream and tenant default).
 func (r *Resolver) DoResetMediaRetentionOverride(ctx context.Context, input model.ResetMediaRetentionOverrideInput) (model.UpdateMediaRetentionResult, error) {
-	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
+	if err := middleware.RequireTenantAction(ctx, "billing:write", authz.ActionManageBilling, ctxkeys.GetTenantID(ctx)); err != nil {
 		return nil, err
 	}
 	if input.TargetID == "" {

@@ -7,10 +7,8 @@ import (
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/clients/clientstest"
-	"frameworks/api_gateway/internal/middleware"
 
 	periscope "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
@@ -728,8 +726,7 @@ func TestDoListVodRetentionAssets_TenantGuard(t *testing.T) {
 // --- DoGetLiveNodeState (owned-node Periscope state) ---
 
 func liveNodeCtx(tenantID string) context.Context {
-	ctx := clientstest.AuthedCtx(tenantID)
-	return context.WithValue(ctx, ctxkeys.KeyUser, &middleware.UserContext{TenantID: tenantID})
+	return qmUserCtx(tenantID)
 }
 
 func ownedNodeQuartermaster(t *testing.T, nodeID, tenantID string) *clientstest.FakeQuartermaster {

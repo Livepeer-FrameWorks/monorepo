@@ -2,16 +2,21 @@ package resolvers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/middleware"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/authz"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // Bridge exposes a GraphQL enum while the control plane stores node mode as a
@@ -22,7 +27,7 @@ import (
 // union-result error mapping. Reason defaults to the calling user when
 // omitted so audit rows are never anonymous.
 func (r *Resolver) DoSetNodeMode(ctx context.Context, input model.SetNodeModeInput) (model.SetNodeModeResult, error) {
-	if err := middleware.RequirePermission(ctx, "infrastructure:write"); err != nil {
+	if err := middleware.RequireTenantAction(ctx, "infrastructure:write", authz.ActionManageEdgeCluster, tenantIDFromContext(ctx)); err != nil {
 		return nil, err
 	}
 	if middleware.IsDemoMode(ctx) {
@@ -80,6 +85,9 @@ func (r *Resolver) DoNodeEffectiveMode(ctx context.Context, obj *quartermasterpb
 	}
 	health, err := r.nodeHealthFor(ctx, obj.GetNodeId())
 	if err != nil {
+		if code := status.Code(err); code == codes.PermissionDenied || code == codes.Unauthenticated {
+			return "", err
+		}
 		r.Logger.WithError(err).WithField("node_id", obj.GetNodeId()).Warn("Node health unavailable; defaulting effective mode")
 		return model.NodeOperationalModeNormal, nil
 	}
@@ -103,6 +111,9 @@ func (r *Resolver) DoNodeRoutingImpactPreview(ctx context.Context, obj *quarterm
 	}
 	health, err := r.nodeHealthFor(ctx, obj.GetNodeId())
 	if err != nil {
+		if code := status.Code(err); code == codes.PermissionDenied || code == codes.Unauthenticated {
+			return nil, err
+		}
 		r.Logger.WithError(err).WithField("node_id", obj.GetNodeId()).Warn("Node health unavailable; defaulting routing impact preview")
 		return &model.RoutingImpactPreview{}, nil
 	}
@@ -126,6 +137,12 @@ func nodeSkipsOperationalMode(obj *quartermasterpb.InfrastructureNode) bool {
 func (r *Resolver) nodeHealthFor(ctx context.Context, nodeID string) (*foghorncontrolpb.GetNodeHealthResponse, error) {
 	if nodeID == "" {
 		return nil, fmt.Errorf("node id is required")
+	}
+	if err := middleware.RequireTenantAction(ctx, "infrastructure:read", authz.ActionReadPrivateInfrastructure, tenantIDFromContext(ctx)); err != nil {
+		if errors.Is(err, auth.ErrUnauthenticated) {
+			return nil, status.Error(codes.Unauthenticated, "authentication required")
+		}
+		return nil, status.Error(codes.PermissionDenied, "insufficient permissions")
 	}
 	if r == nil || r.Clients == nil || r.Clients.Commodore == nil {
 		return nil, fmt.Errorf("commodore client unavailable")

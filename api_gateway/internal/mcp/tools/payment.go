@@ -212,6 +212,9 @@ func handleSubmitPayment(ctx context.Context, args SubmitPaymentInput, clients *
 		Commodore:              clients.Commodore,
 		AllowUnresolvedCreator: false,
 		Logger:                 logger,
+		AuthorizeTarget: func(authCtx context.Context, resourceKind, targetTenantID string) error {
+			return middleware.RequireX402Target(authCtx, resourceKind, targetTenantID, false)
+		},
 	})
 	if settleErr != nil {
 		if settleErr.Code == x402.ErrSettlementPending {

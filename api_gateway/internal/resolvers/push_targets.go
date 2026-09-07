@@ -12,6 +12,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/restream"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -47,7 +48,7 @@ func (r *Resolver) DoCreatePushTarget(ctx context.Context, streamID string, inpu
 			StreamId:  streamID,
 			Platform:  platform,
 			Name:      input.Name,
-			TargetUri: input.TargetURI,
+			TargetUri: restream.MaskTargetURI(input.TargetURI),
 			IsEnabled: true,
 			Status:    "idle",
 			CreatedAt: now,
@@ -110,7 +111,7 @@ func (r *Resolver) DoUpdatePushTarget(ctx context.Context, id string, input mode
 			StreamId:  demo.DemoStreamID,
 			Platform:  "custom",
 			Name:      name,
-			TargetUri: targetURI,
+			TargetUri: restream.MaskTargetURI(targetURI),
 			IsEnabled: enabled,
 			Status:    "idle",
 			CreatedAt: now,

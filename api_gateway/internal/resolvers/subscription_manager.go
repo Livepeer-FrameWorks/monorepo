@@ -1572,6 +1572,8 @@ func getStreamIDFromProtoEvent(event *signalmanpb.SignalmanEvent) string {
 		raw = buf.GetStreamId()
 	} else if sl := event.Data.GetStreamLifecycle(); sl != nil {
 		raw = sl.GetStreamId()
+	} else if change := event.Data.GetStreamChange(); change != nil {
+		raw = change.GetStreamId()
 	} else if st := event.Data.GetStorageLifecycle(); st != nil {
 		raw = st.GetStreamId()
 	} else if pbill := event.Data.GetProcessBilling(); pbill != nil {

@@ -3,10 +3,21 @@ package resolvers
 import (
 	"context"
 	"fmt"
+
+	"frameworks/api_gateway/internal/middleware"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/authz"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"strings"
 )
+
+func requirePrivateInfrastructureRead(ctx context.Context, tenantID string) error {
+	return middleware.RequireTenantAction(ctx, "infrastructure:read", authz.ActionReadPrivateInfrastructure, tenantID)
+}
+
+func requireEdgeLifecycleMutation(ctx context.Context, tenantID string) error {
+	return middleware.RequireTenantAction(ctx, "infrastructure:write", authz.ActionManageEdgeCluster, tenantID)
+}
 
 func (r *Resolver) ownedClusterIDs(ctx context.Context) (map[string]struct{}, error) {
 	tenantID := tenantIDFromContext(ctx)
@@ -36,6 +47,9 @@ func (r *Resolver) requireClusterOperatorTenant(ctx context.Context) (string, ma
 	if tenantID == "" {
 		return "", nil, fmt.Errorf("tenant context required")
 	}
+	if err := requirePrivateInfrastructureRead(ctx, tenantID); err != nil {
+		return "", nil, err
+	}
 
 	owned, err := r.ownedClusterIDs(ctx)
 	if err != nil {
@@ -53,6 +67,13 @@ func (r *Resolver) RequireClusterOperatorTenant(ctx context.Context) error {
 }
 
 func (r *Resolver) requireOwnedCluster(ctx context.Context, clusterID string) error {
+	tenantID := tenantIDFromContext(ctx)
+	if tenantID == "" {
+		return fmt.Errorf("tenant context required")
+	}
+	if err := requirePrivateInfrastructureRead(ctx, tenantID); err != nil {
+		return err
+	}
 	clusterID = strings.TrimSpace(clusterID)
 	if clusterID == "" {
 		_, _, err := r.requireClusterOperatorTenant(ctx)
@@ -70,6 +91,13 @@ func (r *Resolver) requireOwnedCluster(ctx context.Context, clusterID string) er
 }
 
 func (r *Resolver) requireOwnedNode(ctx context.Context, nodeID string) (*quartermasterpb.InfrastructureNode, error) {
+	tenantID := tenantIDFromContext(ctx)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+	if err := requirePrivateInfrastructureRead(ctx, tenantID); err != nil {
+		return nil, err
+	}
 	nodeID = strings.TrimSpace(nodeID)
 	if nodeID == "" {
 		return nil, fmt.Errorf("node_id required")

@@ -408,11 +408,37 @@ func TestPlatformAuditLogging(t *testing.T) {
 	}
 }
 
-// Demo mode must short-circuit before the gate and never touch clients —
-// the schema sweep runs with empty ServiceClients.
+// Demo mode still requires an operator, then returns generated data without
+// touching clients — the schema sweep runs with empty ServiceClients.
 func TestPlatformDemoModeShortCircuits(t *testing.T) {
 	r := platformResolverWith() // no fakes: any client call panics
-	ctx := context.WithValue(context.Background(), ctxkeys.KeyDemoMode, true)
+	unauthorized := context.WithValue(context.Background(), ctxkeys.KeyDemoMode, true)
+	unauthorizedCalls := []struct {
+		name string
+		call func() error
+	}{
+		{name: "tenants", call: func() error { _, err := r.DoPlatformTenants(unauthorized, nil, nil); return err }},
+		{name: "tenant overview", call: func() error { _, err := r.DoPlatformTenantOverview(unauthorized, "anything", nil); return err }},
+		{name: "invoices", call: func() error {
+			_, err := r.DoPlatformTenantInvoices(unauthorized, "anything", nil, nil, nil, nil)
+			return err
+		}},
+		{name: "prepaid balance", call: func() error { _, err := r.DoPlatformTenantPrepaidBalance(unauthorized, "anything", nil); return err }},
+		{name: "balance transactions", call: func() error {
+			_, err := r.DoPlatformTenantBalanceTransactions(unauthorized, "anything", nil, nil, nil)
+			return err
+		}},
+		{name: "usage records", call: func() error {
+			_, err := r.DoPlatformTenantUsageRecords(unauthorized, "anything", nil, nil, nil, nil, nil)
+			return err
+		}},
+	}
+	for _, check := range unauthorizedCalls {
+		if err := check.call(); err == nil {
+			t.Fatalf("demo header opened platform admin %s to a non-operator", check.name)
+		}
+	}
+	ctx := context.WithValue(operatorCtx(), ctxkeys.KeyDemoMode, true)
 
 	idx, err := r.DoPlatformTenants(ctx, nil, nil)
 	if err != nil || len(idx.Rows) == 0 {
@@ -437,5 +463,42 @@ func TestPlatformDemoModeShortCircuits(t *testing.T) {
 	activity, err := r.DoPlatformTenantActivity(ctx, "anything", nil)
 	if err != nil || activity == nil {
 		t.Fatalf("demo activity = (%+v, %v)", activity, err)
+	}
+	identity, err := r.DoPlatformTenantIdentity(ctx, "anything")
+	if err != nil || identity == nil {
+		t.Fatalf("demo identity = (%+v, %v)", identity, err)
+	}
+	overview, err := r.DoPlatformTenantOverview(ctx, "anything", nil)
+	if err != nil || overview == nil {
+		t.Fatalf("demo overview = (%+v, %v)", overview, err)
+	}
+	invoices, err := r.DoPlatformTenantInvoices(ctx, "anything", nil, nil, nil, nil)
+	if err != nil || invoices == nil {
+		t.Fatalf("demo invoices = (%+v, %v)", invoices, err)
+	}
+	balance, err := r.DoPlatformTenantPrepaidBalance(ctx, "anything", nil)
+	if err != nil || balance == nil {
+		t.Fatalf("demo prepaid balance = (%+v, %v)", balance, err)
+	}
+	transactions, err := r.DoPlatformTenantBalanceTransactions(ctx, "anything", nil, nil, nil)
+	if err != nil || transactions == nil {
+		t.Fatalf("demo balance transactions = (%+v, %v)", transactions, err)
+	}
+	usage, err := r.DoPlatformTenantUsageRecords(ctx, "anything", nil, nil, nil, nil, nil)
+	if err != nil || usage == nil {
+		t.Fatalf("demo usage = (%+v, %v)", usage, err)
+	}
+}
+
+func TestPlatformServiceContextStripsDelegationIdentity(t *testing.T) {
+	base := context.WithValue(context.Background(), ctxkeys.KeyAPITokenID, "token-1")
+	base = context.WithValue(base, ctxkeys.KeyDelegatedJWTs, map[string]string{"purser": "assertion"})
+	base = context.WithValue(base, ctxkeys.KeyJWTID, "delegated-jti")
+	base = context.WithValue(base, ctxkeys.KeyJWTExpiresAt, time.Now().Add(time.Minute))
+	ctx := platformServiceCtx(base)
+	for _, key := range []ctxkeys.Key{ctxkeys.KeyAPITokenID, ctxkeys.KeyDelegatedJWTs, ctxkeys.KeyJWTID, ctxkeys.KeyJWTExpiresAt} {
+		if got := ctx.Value(key); got != nil {
+			t.Fatalf("identity key %q survived service-context stripping: %v", key, got)
+		}
 	}
 }

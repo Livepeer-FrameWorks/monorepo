@@ -9,6 +9,7 @@ import (
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/middleware"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
@@ -19,6 +20,9 @@ import (
 
 // DoCreateDeveloperToken creates a new developer token
 func (r *Resolver) DoCreateDeveloperToken(ctx context.Context, input model.CreateDeveloperTokenInput) (*commodorepb.APITokenInfo, error) {
+	if ctxkeys.GetAuthType(ctx) == "api_token" {
+		return nil, fmt.Errorf("API tokens cannot manage API tokens")
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo developer token creation")
 		// Return a demo token creation response
@@ -99,6 +103,9 @@ func (r *Resolver) DoCreateDeveloperToken(ctx context.Context, input model.Creat
 
 // DoRevokeDeveloperToken revokes a developer token
 func (r *Resolver) DoRevokeDeveloperToken(ctx context.Context, id string) (model.RevokeDeveloperTokenResult, error) {
+	if ctxkeys.GetAuthType(ctx) == "api_token" {
+		return nil, fmt.Errorf("API tokens cannot manage API tokens")
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo developer token revocation")
 		return &model.DeleteSuccess{Success: true, DeletedID: id}, nil
@@ -140,6 +147,9 @@ func (r *Resolver) DoRevokeDeveloperToken(ctx context.Context, id string) (model
 
 // DoGetDeveloperTokens retrieves all developer tokens for the authenticated user
 func (r *Resolver) DoGetDeveloperTokens(ctx context.Context) ([]*commodorepb.APITokenInfo, error) {
+	if ctxkeys.GetAuthType(ctx) == "api_token" {
+		return nil, fmt.Errorf("API tokens cannot manage API tokens")
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo developer tokens")
 		return demo.GenerateDeveloperTokens(), nil
@@ -157,6 +167,9 @@ func (r *Resolver) DoGetDeveloperTokens(ctx context.Context) ([]*commodorepb.API
 
 // DoGetDeveloperTokensConnection returns a Relay-style connection for developer tokens
 func (r *Resolver) DoGetDeveloperTokensConnection(ctx context.Context, first *int, after *string, last *int, before *string) (*model.DeveloperTokensConnection, error) {
+	if ctxkeys.GetAuthType(ctx) == "api_token" {
+		return nil, fmt.Errorf("API tokens cannot manage API tokens")
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo developer tokens connection")
 		tokens := demo.GenerateDeveloperTokens()

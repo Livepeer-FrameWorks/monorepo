@@ -10,6 +10,7 @@ import (
 
 	"frameworks/api_gateway/internal/clients"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/authz"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 
 	"github.com/gin-gonic/gin"
@@ -221,6 +222,63 @@ func TestCtxkeysStringCastConsistency(t *testing.T) {
 		if string(tt.key) != tt.want {
 			t.Errorf("ctxkeys.%v = %q, want %q", tt.key, string(tt.key), tt.want)
 		}
+	}
+}
+
+func tenantActionContext(authType, tenantID, role string, permissions []string, platformOperator bool) context.Context {
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, authType)
+	ctx = context.WithValue(ctx, ctxkeys.KeyUserID, "user-1")
+	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, tenantID)
+	ctx = context.WithValue(ctx, ctxkeys.KeyRole, role)
+	ctx = context.WithValue(ctx, ctxkeys.KeyPermissions, permissions)
+	ctx = context.WithValue(ctx, ctxkeys.KeyPlatformOperator, platformOperator)
+	return context.WithValue(ctx, ctxkeys.KeyUser, &UserContext{
+		UserID: "user-1", TenantID: tenantID, Role: role,
+		Permissions: permissions, PlatformOperator: platformOperator,
+	})
+}
+
+func TestRequireTenantActionCombinesScopeAndResourcePolicy(t *testing.T) {
+	tests := []struct {
+		name string
+		ctx  context.Context
+		want bool
+	}{
+		{"owner jwt", tenantActionContext("jwt", "tenant-a", "owner", nil, false), true},
+		{"admin wallet", tenantActionContext("wallet", "tenant-a", "admin", nil, false), true},
+		{"member jwt", tenantActionContext("jwt", "tenant-a", "member", nil, false), false},
+		{"foreign owner", tenantActionContext("jwt", "tenant-b", "owner", nil, false), false},
+		{"scoped owner api token", tenantActionContext("api_token", "tenant-a", "owner", []string{"infrastructure:write"}, false), true},
+		{"coarse write owner api token", tenantActionContext("api_token", "tenant-a", "owner", []string{"write"}, false), false},
+		{"under-scoped owner api token", tenantActionContext("api_token", "tenant-a", "owner", []string{"infrastructure:read"}, false), false},
+		{"scoped member api token", tenantActionContext("api_token", "tenant-a", "member", []string{"infrastructure:write"}, false), false},
+		{"platform operator", tenantActionContext("jwt", "operator-tenant", "member", nil, true), true},
+		{"unauthenticated", context.Background(), false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := RequireTenantAction(tc.ctx, "infrastructure:write", authz.ActionManageEdgeCluster, "tenant-a")
+			if (err == nil) != tc.want {
+				t.Fatalf("RequireTenantAction error = %v, allowed=%v want=%v", err, err == nil, tc.want)
+			}
+		})
+	}
+}
+
+func TestRequireX402TargetLetsMembersFundOnlyViewerDelivery(t *testing.T) {
+	member := tenantActionContext("jwt", "tenant-a", "member", nil, false)
+	if err := RequireX402Target(member, "viewer", "tenant-a", false); err != nil {
+		t.Fatalf("tenant member could not fund viewer delivery: %v", err)
+	}
+	if err := RequireX402Target(member, "stream", "tenant-a", false); err == nil {
+		t.Fatal("tenant member funded a private stream target without ManageBilling")
+	}
+	owner := tenantActionContext("jwt", "tenant-a", "owner", nil, false)
+	if err := RequireX402Target(owner, "stream", "tenant-a", false); err != nil {
+		t.Fatalf("tenant owner could not fund owned stream target: %v", err)
+	}
+	if err := RequireX402Target(owner, "stream", "tenant-b", false); err == nil {
+		t.Fatal("tenant owner funded another tenant's private target")
 	}
 }
 

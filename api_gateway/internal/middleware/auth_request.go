@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -106,7 +107,7 @@ func AuthenticateRequest(ctx context.Context, r *http.Request, clients *clients.
 		return nil, nil
 	}
 
-	claims, err := auth.ValidateJWT(token, jwtSecret)
+	claims, err := auth.ValidateInteractiveJWT(token, jwtSecret)
 	if err == nil {
 		return &AuthResult{
 			UserID:           claims.UserID,
@@ -117,6 +118,9 @@ func AuthenticateRequest(ctx context.Context, r *http.Request, clients *clients.
 			JWTToken:         token,
 			PlatformOperator: claims.HasRole(auth.RolePlatformOperator),
 		}, nil
+	}
+	if errors.Is(err, auth.ErrDelegatedJWT) {
+		return nil, fmt.Errorf("internal delegated token is not an ingress credential")
 	}
 
 	resp, err := clients.Commodore.ValidateAPIToken(ctx, token)
@@ -164,6 +168,9 @@ func ApplyAuthToContext(ctx context.Context, auth *AuthResult) context.Context {
 	}
 	if auth.APIToken != "" {
 		ctx = context.WithValue(ctx, ctxkeys.KeyAPIToken, auth.APIToken)
+	}
+	if auth.TokenID != "" {
+		ctx = context.WithValue(ctx, ctxkeys.KeyAPITokenID, auth.TokenID)
 	}
 	if auth.WalletAddress != "" {
 		ctx = context.WithValue(ctx, ctxkeys.KeyWalletAddr, auth.WalletAddress)

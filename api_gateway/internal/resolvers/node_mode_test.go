@@ -5,9 +5,13 @@ import (
 	"testing"
 
 	"frameworks/api_gateway/graph/model"
+	"frameworks/api_gateway/internal/clients/clientstest"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestNodeModeFieldsSkipNonEdgeNodes(t *testing.T) {
@@ -41,7 +45,8 @@ func TestNodeModeFieldsDefaultWhenControlPlaneUnavailable(t *testing.T) {
 		NodeType: "edge",
 	}
 
-	mode, err := resolver.DoNodeEffectiveMode(context.Background(), node)
+	ctx := clientstest.AuthedCtx("tenant-1")
+	mode, err := resolver.DoNodeEffectiveMode(ctx, node)
 	if err != nil {
 		t.Fatalf("DoNodeEffectiveMode returned error: %v", err)
 	}
@@ -49,12 +54,26 @@ func TestNodeModeFieldsDefaultWhenControlPlaneUnavailable(t *testing.T) {
 		t.Fatalf("DoNodeEffectiveMode = %s, want %s", mode, model.NodeOperationalModeNormal)
 	}
 
-	impact, err := resolver.DoNodeRoutingImpactPreview(context.Background(), node)
+	impact, err := resolver.DoNodeRoutingImpactPreview(ctx, node)
 	if err != nil {
 		t.Fatalf("DoNodeRoutingImpactPreview returned error: %v", err)
 	}
 	if impact == nil || impact.ActiveStreams != 0 || impact.ActiveViewers != 0 {
 		t.Fatalf("DoNodeRoutingImpactPreview = %#v, want zero-value impact", impact)
+	}
+}
+
+func TestNodeModeFieldsPropagateAuthorizationDenial(t *testing.T) {
+	resolver := &Resolver{Logger: logging.NewLogger()}
+	node := &quartermasterpb.InfrastructureNode{NodeId: "regional-eu-1", NodeType: "edge"}
+	ctx := context.WithValue(clientstest.AuthedCtx("tenant-1"), ctxkeys.KeyAuthType, "api_token")
+	ctx = context.WithValue(ctx, ctxkeys.KeyPermissions, []string{"streams:read"})
+
+	if _, err := resolver.DoNodeEffectiveMode(ctx, node); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("effective mode denial status = %v, want PermissionDenied", status.Code(err))
+	}
+	if _, err := resolver.DoNodeRoutingImpactPreview(ctx, node); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("routing impact denial status = %v, want PermissionDenied", status.Code(err))
 	}
 }
 

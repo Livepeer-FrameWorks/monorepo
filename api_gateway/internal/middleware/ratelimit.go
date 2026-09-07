@@ -219,6 +219,9 @@ type AccessRequest struct {
 	OperationType     string
 	XPayment          string
 	PublicAllowlisted bool
+	// AllowAnonymousViewerPayment preserves the public viewer-pay authorization
+	// boundary when billing is attributed to the resolved content owner.
+	AllowAnonymousViewerPayment bool
 
 	// RateLimitTenantID, when non-nil, is the CALLER's own identity used solely for
 	// the rate-limit bucket, decoupled from TenantID (which drives billing/owner
@@ -334,6 +337,46 @@ type graphqlAccess struct {
 	Variables     map[string]interface{}
 }
 
+// graphQLX402HeaderPolicy classifies the selected root fields themselves. The
+// client-declared operation keyword is not an authorization boundary: a query
+// document can name a mutation-root field and must not reach resource
+// resolution before GraphQL rejects the malformed document.
+func graphQLX402HeaderPolicy(access graphqlAccess) (stripPayment, reject bool) {
+	names := access.Fields
+	if len(names) == 0 && access.OperationName != "" {
+		names = []string{access.OperationName}
+	}
+	var paymentRecovery, otherMutation bool
+	for _, name := range names {
+		class, isMutation := accesspolicy.GraphQLMutationClass(name)
+		if !isMutation {
+			continue
+		}
+		if class == accesspolicy.PaymentRecovery {
+			paymentRecovery = true
+			continue
+		}
+		otherMutation = true
+		strategy, registered := accesspolicy.GraphQLX402MutationStrategy(name)
+		if !registered || strategy != accesspolicy.X402OwnerIdempotency {
+			return false, true
+		}
+	}
+	if paymentRecovery && otherMutation {
+		return false, true
+	}
+	if paymentRecovery {
+		// Payment-recovery resolvers consume their explicit payment input. The
+		// transport header must not settle that payment a second time first.
+		return true, false
+	}
+	if access.OperationType == "mutation" && !otherMutation {
+		// Unknown mutations fail closed until they are classified.
+		return false, true
+	}
+	return false, false
+}
+
 // rateLimitMiddlewareInternal is the internal implementation with optional x402 support
 func rateLimitMiddlewareInternal(rl *RateLimiter, getLimits func(tenantID string) (limit, burst int), billingChecker BillingChecker, x402Provider X402Provider, x402Settler X402Settler, x402Resolver x402.CommodoreClient, tp *TrustedProxies) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -347,23 +390,45 @@ func rateLimitMiddlewareInternal(rl *RateLimiter, getLimits func(tenantID string
 		}
 		access := extractGraphQLAccess(c)
 		opName, variables := access.OperationName, access.Variables
+		resourceOperation := ""
 		if len(access.Fields) == 1 {
 			opName = access.Fields[0]
+			resourceOperation = access.Fields[0]
 		}
 		resourcePath := c.Request.URL.Path
-		if opName != "" && strings.Contains(strings.ToLower(resourcePath), "graphql") {
-			if resource := graphqlResourcePath(opName, variables); resource != "" {
+		if strings.Contains(strings.ToLower(resourcePath), "graphql") {
+			if resource := graphqlResourcePath(resourceOperation, variables); resource != "" {
 				resourcePath = resource
+			} else if resourceOperation != "" {
+				resourcePath = "graphql://" + resourceOperation
 			} else {
-				resourcePath = "graphql://" + opName
+				resourcePath = "graphql://document"
 			}
 		}
-		if GetX402PaymentHeader(c.Request) != "" && access.OperationType == "mutation" {
-			strategy, registered := accesspolicy.GraphQLX402MutationStrategy(opName)
-			if !registered || strategy != accesspolicy.X402OwnerIdempotency {
+		xPayment := GetX402PaymentHeader(c.Request)
+		stripPayment := false
+		// ViewerX402Middleware resolves the playback owner and settles after this
+		// middleware has consumed the caller's rate-limit token. Leave the header
+		// on the request, but do not settle it against an unresolved public tenant.
+		viewerPaymentHandledDownstream := resourceOperation == "resolveViewerEndpoint"
+		if xPayment != "" && viewerPaymentHandledDownstream {
+			xPayment = ""
+		} else if xPayment != "" {
+			var reject bool
+			stripPayment, reject = graphQLX402HeaderPolicy(access)
+			if reject {
 				c.AbortWithStatusJSON(http.StatusConflict, gin.H{
 					"error": "x402_mutation_requires_topup", "code": "X402_MUTATION_DIRECT_EXECUTION_UNSUPPORTED",
 					"message": "this mutation does not yet have owner-level idempotency; use x402 to top up, then retry without the payment header",
+				})
+				return
+			}
+			if stripPayment {
+				xPayment = ""
+			} else if len(access.Fields) != 1 {
+				c.AbortWithStatusJSON(http.StatusConflict, gin.H{
+					"error": "x402_payment_resource_ambiguous", "code": "X402_PAYMENT_RESOURCE_AMBIGUOUS",
+					"message": "a payment header requires exactly one selected GraphQL root field",
 				})
 				return
 			}
@@ -385,7 +450,7 @@ func rateLimitMiddlewareInternal(rl *RateLimiter, getLimits func(tenantID string
 			OperationName:     opName,
 			OperationNames:    access.Fields,
 			OperationType:     access.OperationType,
-			XPayment:          GetX402PaymentHeader(c.Request),
+			XPayment:          xPayment,
 			PublicAllowlisted: publicAllowlisted,
 		}, rl, getLimits, billingChecker, x402Provider, x402Settler, x402Resolver, rl.config.Logger)
 
@@ -403,7 +468,7 @@ func rateLimitMiddlewareInternal(rl *RateLimiter, getLimits func(tenantID string
 		// request to any resolver. A retry either replays that exact result or
 		// stops at an in-progress/unknown claim; it never invokes the mutation a
 		// second time.
-		if decision.X402Settled && access.OperationType == "mutation" {
+		if decision.X402Settled && access.OperationType == "mutation" && !stripPayment {
 			if handled := handlePaidHTTPMutationIdempotency(c, x402Settler, tenantIDStr, decision.X402QuoteID, opName, rl.config.Logger); handled {
 				return
 			}
@@ -445,8 +510,49 @@ func EvaluateAccess(ctx context.Context, req AccessRequest, rl *RateLimiter, get
 		}
 	}
 	rlIsPublic := isPublicTenant(rlTenant)
+	rateLimitChecked := false
+	applyRateLimit := func() *AccessDecision {
+		rateLimitChecked = true
+		if rl == nil {
+			return nil
+		}
+		limit, burst := 0, 0
+		if rlIsPublic {
+			limit, burst = publicRateLimits()
+		} else if getLimits != nil {
+			limit, burst = getLimits(rlTenant)
+		}
+		allowed, remaining, resetSeconds := rl.Allow(rlTenant, limit, burst)
+		headers["X-RateLimit-Limit"] = strconv.Itoa(limit)
+		headers["X-RateLimit-Remaining"] = strconv.Itoa(remaining)
+		headers["X-RateLimit-Reset"] = strconv.Itoa(resetSeconds)
+		if allowed {
+			return nil
+		}
+		if logger != nil {
+			fields := logging.Fields{
+				"limit": limit, "reset_seconds": resetSeconds, "path": req.Path,
+			}
+			if rlIsPublic {
+				fields["client_ip"] = req.ClientIP
+			} else {
+				fields["tenant_id"] = rlTenant
+			}
+			logger.WithFields(fields).Warn("Rate limit exceeded")
+		}
+		decision := rateLimitExceededDecision(limit, resetSeconds, headers)
+		return &decision
+	}
 
 	if req.XPayment != "" && x402Settler != nil {
+		// Consume the abuse-control token before quote resolution, verification,
+		// or settlement can spend time in upstream services.
+		if denied := applyRateLimit(); denied != nil {
+			return *denied
+		}
+		authorizeTarget := func(authCtx context.Context, resourceKind, targetTenantID string) error {
+			return RequireX402Target(authCtx, resourceKind, targetTenantID, isPublic || req.AllowAnonymousViewerPayment)
+		}
 		settleResult, settleErr := x402.SettleX402Payment(ctx, x402.SettlementOptions{
 			PaymentHeader:          req.XPayment,
 			Resource:               req.Path,
@@ -456,6 +562,7 @@ func EvaluateAccess(ctx context.Context, req AccessRequest, rl *RateLimiter, get
 			Commodore:              x402Resolver,
 			AllowUnresolvedCreator: true,
 			Logger:                 logger,
+			AuthorizeTarget:        authorizeTarget,
 		})
 		if settleErr != nil {
 			if settleErr.Code == x402.ErrSettlementPending {
@@ -618,56 +725,12 @@ func EvaluateAccess(ctx context.Context, req AccessRequest, rl *RateLimiter, get
 		}
 	}
 
-	// Public (unauthenticated) callers are still rate-limited, keyed per client IP
-	// via the "public:<ip>" bucket. This bounds abuse of the anonymous allowlisted
-	// endpoints (resolveIngestEndpoint, resolveViewerEndpoint, networkStatus, the
-	// public orchestrator topology fields, and the walletLogin/bootstrapEdge
-	// mutations) that would otherwise be unmetered. Limits are fixed, not
-	// tenant-derived. A payment never bypasses abuse controls; settlement and
-	// request-rate accounting are separate concerns.
-	if rlIsPublic {
-		if rl == nil {
-			return AccessDecision{Allowed: true, Headers: headers, X402Settled: x402Settled, X402QuoteID: x402QuoteID}
+	// Requests without a payment are charged here. Paid requests already spent
+	// their token before any x402 upstream call and must not be charged twice.
+	if !rateLimitChecked {
+		if denied := applyRateLimit(); denied != nil {
+			return *denied
 		}
-		limit, burst := publicRateLimits()
-		allowed, remaining, resetSeconds := rl.Allow(rlTenant, limit, burst)
-		headers["X-RateLimit-Limit"] = strconv.Itoa(limit)
-		headers["X-RateLimit-Remaining"] = strconv.Itoa(remaining)
-		headers["X-RateLimit-Reset"] = strconv.Itoa(resetSeconds)
-		if !allowed {
-			if logger != nil {
-				logger.WithFields(logging.Fields{
-					"client_ip":     req.ClientIP,
-					"limit":         limit,
-					"reset_seconds": resetSeconds,
-					"path":          req.Path,
-				}).Warn("Public rate limit exceeded")
-			}
-			return rateLimitExceededDecision(limit, resetSeconds, headers)
-		}
-		return AccessDecision{Allowed: true, Headers: headers, X402Settled: x402Settled, X402QuoteID: x402QuoteID}
-	}
-
-	limit, burst := 0, 0
-	if getLimits != nil {
-		limit, burst = getLimits(rlTenant)
-	}
-
-	allowed, remaining, resetSeconds := rl.Allow(rlTenant, limit, burst)
-	headers["X-RateLimit-Limit"] = strconv.Itoa(limit)
-	headers["X-RateLimit-Remaining"] = strconv.Itoa(remaining)
-	headers["X-RateLimit-Reset"] = strconv.Itoa(resetSeconds)
-
-	if !allowed {
-		if logger != nil {
-			logger.WithFields(logging.Fields{
-				"tenant_id":     rlTenant,
-				"reset_seconds": resetSeconds,
-				"limit":         limit,
-				"path":          req.Path,
-			}).Warn("Rate limit exceeded")
-		}
-		return rateLimitExceededDecision(limit, resetSeconds, headers)
 	}
 
 	return AccessDecision{

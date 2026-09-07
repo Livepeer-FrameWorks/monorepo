@@ -32,32 +32,41 @@ type ToolPolicy struct {
 
 var toolPolicies = buildToolPolicies()
 
+func addToolPolicies(policies map[string]ToolPolicy, scope string, risk ToolRisk, names ...string) {
+	for _, name := range names {
+		if _, exists := policies[name]; exists {
+			panic(fmt.Sprintf("MCP tool %q has duplicate security policies", name))
+		}
+		accessClass, ok := accesspolicy.MCPToolClass(name)
+		if !ok {
+			panic(fmt.Sprintf("MCP tool %q has no access policy", name))
+		}
+		policies[name] = ToolPolicy{Scope: scope, Risk: risk, AccessClass: accessClass, Idempotent: risk == ToolRiskRead}
+	}
+}
+
 func buildToolPolicies() map[string]ToolPolicy {
 	policies := make(map[string]ToolPolicy)
 	add := func(scope string, risk ToolRisk, names ...string) {
-		for _, name := range names {
-			accessClass, ok := accesspolicy.MCPToolClass(name)
-			if !ok {
-				panic(fmt.Sprintf("MCP tool %q has no access policy", name))
-			}
-			policies[name] = ToolPolicy{Scope: scope, Risk: risk, AccessClass: accessClass, Idempotent: risk == ToolRiskRead}
-		}
+		addToolPolicies(policies, scope, risk, names...)
 	}
 
 	add("account:read", ToolRiskRead, "get_tenant_settings")
-	add("account:write", ToolRiskWrite, "update_tenant_settings")
-	add("billing:read", ToolRiskRead, "check_topup", "get_payment_options")
+	add("settings:write", ToolRiskWrite, "update_tenant_settings")
+	add("billing:read", ToolRiskRead, "check_topup", "get_payment_options", "get_retention_policy")
 	add("billing:write", ToolRiskHigh, "complete_mollie_postpaid_setup", "pay_invoice", "start_postpaid_setup", "submit_payment", "topup_balance", "update_billing_details")
+	add("billing:write", ToolRiskWrite, "set_retention_policy", "set_stream_retention_overrides", "update_asset_retention")
+	add("billing:write", ToolRiskHigh, "reset_asset_retention")
 	add("streams:read", ToolRiskRead,
-		"get_retention_policy", "get_vod_upload_status", "list_push_targets", "list_signing_keys",
+		"get_vod_upload_status", "list_push_targets", "list_signing_keys",
 		"list_stream_keys", "resolve_playback_endpoint", "test_playback_access", "validate_stream_key")
 	add("streams:write", ToolRiskWrite,
 		"complete_vod_upload", "create_clip", "create_push_target", "create_stream", "create_vod_upload",
-		"set_retention_policy", "set_stream_retention_overrides", "start_dvr", "stop_dvr", "update_asset_retention", "update_push_target", "update_stream")
+		"start_dvr", "stop_dvr", "update_push_target", "update_stream")
 	add("streams:write", ToolRiskHigh,
 		"abort_vod_upload", "clear_playback_policy", "create_signing_key", "create_stream_key", "delete_clip",
 		"delete_dvr", "delete_push_target", "delete_stream", "delete_stream_key", "delete_vod_asset",
-		"refresh_stream_key", "reset_asset_retention", "revoke_signing_key", "set_playback_policy")
+		"refresh_stream_key", "revoke_signing_key", "set_playback_policy")
 	add("analytics:read", ToolRiskRead,
 		"diagnose_buffer_health", "diagnose_packet_loss", "diagnose_rebuffering", "diagnose_routing",
 		"get_anomaly_report", "get_stream_health_summary")
@@ -65,7 +74,8 @@ func buildToolPolicies() map[string]ToolPolicy {
 	add("infrastructure:read", ToolRiskRead, "browse_marketplace", "get_node_health", "get_node_info")
 	add("infrastructure:write", ToolRiskWrite,
 		"accept_cluster_invite", "approve_subscription_request", "create_cluster_invite", "create_edge_cluster",
-		"create_enrollment_token", "request_cluster_subscription", "set_node_mode", "set_preferred_cluster", "subscribe_to_cluster")
+		"create_enrollment_token", "request_cluster_subscription", "set_node_mode", "subscribe_to_cluster")
+	add("settings:write", ToolRiskWrite, "set_preferred_cluster")
 	add("infrastructure:write", ToolRiskHigh,
 		"manage_node", "reject_subscription_request", "revoke_cluster_invite", "unsubscribe_from_cluster", "update_cluster_marketplace")
 	add("developer:read", ToolRiskRead, "generate_query", "introspect_schema")

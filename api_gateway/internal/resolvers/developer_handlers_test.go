@@ -8,6 +8,7 @@ import (
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/clients/clientstest"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -64,6 +65,24 @@ func TestDoCreateDeveloperToken(t *testing.T) {
 	})
 	if _, err := fail.DoCreateDeveloperToken(clientstest.AuthedCtx("t1"), model.CreateDeveloperTokenInput{Name: "x"}); err == nil {
 		t.Fatal("backend error should propagate")
+	}
+}
+
+func TestDeveloperTokenManagementRejectsAPITokenSessions(t *testing.T) {
+	called := false
+	c := &clientstest.FakeCommodore{
+		CreateAPITokenFn: func(context.Context, *commodorepb.CreateAPITokenRequest) (*commodorepb.CreateAPITokenResponse, error) {
+			called = true
+			return nil, nil
+		},
+	}
+	ctx := context.WithValue(clientstest.AuthedCtx("t1"), ctxkeys.KeyAuthType, "api_token")
+	ctx = context.WithValue(ctx, ctxkeys.KeyPermissions, []string{"streams:read"})
+	if _, err := commoW2(c).DoCreateDeveloperToken(ctx, model.CreateDeveloperTokenInput{Name: "escalate"}); err == nil {
+		t.Fatal("API-token session should be rejected")
+	}
+	if called {
+		t.Fatal("backend was called for rejected API-token session")
 	}
 }
 

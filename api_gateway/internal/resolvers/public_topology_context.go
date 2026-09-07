@@ -19,6 +19,7 @@ func (c publicTopologyContext) Value(key any) any {
 		ctxkeys.KeyJWTToken,
 		ctxkeys.KeyAPIToken,
 		ctxkeys.KeyAPITokenHash,
+		ctxkeys.KeyDelegatedJWTs,
 		ctxkeys.KeyAuthType,
 		ctxkeys.KeySessionToken,
 		ctxkeys.KeyWalletAddr,

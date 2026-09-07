@@ -8,6 +8,7 @@ import (
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/clients/clientstest"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -125,6 +126,75 @@ func TestDoSetMediaRetentionPolicy(t *testing.T) {
 	}
 	if _, ok := res.(*model.ValidationError); !ok {
 		t.Fatalf("expected ValidationError from InvalidArgument, got %T", res)
+	}
+}
+
+func TestRetentionOverrideResolversRequireBillingManagementBeforeBackend(t *testing.T) {
+	memberCtx := context.WithValue(clientstest.AuthedCtx("t1"), ctxkeys.KeyRole, "member")
+	ownerTokenCtx := context.WithValue(clientstest.AuthedCtx("t1"), ctxkeys.KeyAuthType, "api_token")
+	ownerTokenCtx = context.WithValue(ownerTokenCtx, ctxkeys.KeyPermissions, []string{"streams:write"})
+
+	tests := []struct {
+		name string
+		call func(*Resolver, context.Context) error
+	}{
+		{
+			name: "stream overrides",
+			call: func(r *Resolver, ctx context.Context) error {
+				days := 7
+				_, err := r.DoSetStreamRetentionOverrides(ctx, model.SetStreamRetentionOverridesInput{StreamID: "stream-1", DvrRetentionDaysOverride: &days})
+				return err
+			},
+		},
+		{
+			name: "asset override",
+			call: func(r *Resolver, ctx context.Context) error {
+				days := 7
+				_, err := r.DoUpdateMediaRetention(ctx, model.UpdateMediaRetentionInput{TargetType: model.MediaRetentionTargetDvr, TargetID: "dvr-1", RetentionDays: &days})
+				return err
+			},
+		},
+		{
+			name: "asset reset",
+			call: func(r *Resolver, ctx context.Context) error {
+				_, err := r.DoResetMediaRetentionOverride(ctx, model.ResetMediaRetentionOverrideInput{TargetType: model.MediaRetentionTargetDvr, TargetID: "dvr-1"})
+				return err
+			},
+		},
+	}
+	for _, actor := range []struct {
+		name string
+		ctx  context.Context
+	}{{"member", memberCtx}, {"owner token without billing write", ownerTokenCtx}} {
+		for _, tt := range tests {
+			t.Run(actor.name+"/"+tt.name, func(t *testing.T) {
+				client := &clientstest.FakeCommodore{}
+				if err := tt.call(commoW2(client), actor.ctx); err == nil {
+					t.Fatal("unauthorized retention write succeeded")
+				}
+				if client.Calls != 0 {
+					t.Fatalf("authorization denial reached backend: %d calls", client.Calls)
+				}
+			})
+		}
+	}
+}
+
+func TestDoSetMediaRetentionPolicyRejectsTenantMember(t *testing.T) {
+	c := &clientstest.FakeCommodore{}
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "jwt")
+	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, "t1")
+	ctx = context.WithValue(ctx, ctxkeys.KeyRole, "member")
+	days := 14
+
+	if _, err := commoW2(c).DoSetMediaRetentionPolicy(ctx, model.SetMediaRetentionPolicyInput{
+		TargetType: model.MediaRetentionTargetDvr,
+		Days:       &days,
+	}); err == nil {
+		t.Fatal("tenant member was allowed to change retention billing policy")
+	}
+	if c.Calls != 0 {
+		t.Fatalf("authorization denial reached Commodore, Calls=%d", c.Calls)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/loaders"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/authz"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 
 	"github.com/gin-gonic/gin"
@@ -164,7 +165,7 @@ func RequirePermission(ctx context.Context, permission string) error {
 		return nil
 	case "api_token":
 		for _, perm := range ctxkeys.GetPermissions(ctx) {
-			if perm == permission {
+			if strings.TrimSpace(perm) == permission {
 				return nil
 			}
 		}
@@ -177,6 +178,56 @@ func RequirePermission(ctx context.Context, permission string) error {
 // HasPermission returns true if the current context has the permission.
 func HasPermission(ctx context.Context, permission string) bool {
 	return RequirePermission(ctx, permission) == nil
+}
+
+// RequireTenantAction combines API-token scope enforcement with the
+// resource-aware owner/admin policy used by JWT, wallet, and API-token actors.
+// RequirePermission alone intentionally treats session JWTs as fully scoped,
+// so it is not sufficient for private infrastructure lifecycle operations.
+func RequireTenantAction(ctx context.Context, permission string, action authz.Action, ownerTenantID string) error {
+	if HasServiceToken(ctx) || ctxkeys.GetAuthType(ctx) == "service" {
+		return nil
+	}
+	if err := RequirePermission(ctx, permission); err != nil {
+		return err
+	}
+	id := authz.Identity{
+		UserID:           ctxkeys.GetUserID(ctx),
+		TenantID:         ctxkeys.GetTenantID(ctx),
+		Role:             ctxkeys.GetRole(ctx),
+		Permissions:      ctxkeys.GetPermissions(ctx),
+		PlatformOperator: ctxkeys.IsPlatformOperator(ctx),
+	}
+	if user := GetUserFromContext(ctx); user != nil {
+		id.UserID = user.UserID
+		id.TenantID = user.TenantID
+		id.Role = user.Role
+		id.Permissions = user.Permissions
+		id.PlatformOperator = user.PlatformOperator
+	}
+	if strings.TrimSpace(id.TenantID) == "" && !id.PlatformOperator {
+		return auth.ErrUnauthenticated
+	}
+	decision := authz.Default.Can(ctx, id, action, authz.Resource{OwnerTenantID: ownerTenantID})
+	if !decision.Allow {
+		return fmt.Errorf("%w: %s", ErrForbidden, decision.Reason)
+	}
+	return nil
+}
+
+// RequireX402Target applies the viewer-pays boundary consistently across API
+// entry points. Viewer resources may be funded by any authenticated caller
+// holding the billing scope; private resources still require authority over
+// the tenant that owns the resolved target. Public playback middleware may
+// explicitly admit an anonymous viewer payment.
+func RequireX402Target(ctx context.Context, resourceKind, targetTenantID string, allowAnonymousViewer bool) error {
+	if strings.EqualFold(strings.TrimSpace(resourceKind), "viewer") {
+		if allowAnonymousViewer && strings.TrimSpace(ctxkeys.GetAuthType(ctx)) == "" {
+			return nil
+		}
+		return RequirePermission(ctx, "billing:write")
+	}
+	return RequireTenantAction(ctx, "billing:write", authz.ActionManageBilling, targetTenantID)
 }
 
 // HasServiceToken checks if the current context has a service token

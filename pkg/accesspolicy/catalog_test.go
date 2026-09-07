@@ -41,6 +41,7 @@ func TestRepresentativeParity(t *testing.T) {
 		{graphql: "startDVR", mcp: "start_dvr", want: Rated},
 		{graphql: "deleteStream", mcp: "delete_stream", want: Control},
 		{graphql: "updateBillingDetails", mcp: "update_billing_details", want: PaymentRecovery},
+		{graphql: "linkEmail", mcp: "link_email", want: PaymentRecovery},
 	}
 	for _, tt := range tests {
 		graphqlClass, graphqlOK := GraphQLMutationClass(tt.graphql)

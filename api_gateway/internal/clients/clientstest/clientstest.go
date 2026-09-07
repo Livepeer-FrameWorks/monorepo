@@ -59,7 +59,7 @@ func Clients(opts ...func(*clients.ServiceClients)) *clients.ServiceClients {
 func AuthedCtx(tenantID string) context.Context {
 	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "jwt")
 	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, tenantID)
-	return ctx
+	return context.WithValue(ctx, ctxkeys.KeyRole, "owner")
 }
 
 // WithCommodore wires a FakeCommodore into the ServiceClients.
@@ -391,6 +391,10 @@ func (f *FakeCommodore) ValidateStreamKey(ctx context.Context, streamKey string)
 		panic("FakeCommodore.ValidateStreamKey not stubbed")
 	}
 	return f.ValidateStreamKeyFn(ctx, streamKey)
+}
+
+func (f *FakeCommodore) ValidateStreamKeyAsService(ctx context.Context, streamKey string) (*commodorepb.ValidateStreamKeyResponse, error) {
+	return f.ValidateStreamKey(ctx, streamKey)
 }
 
 // ValidateStreamKeyForClaim is the claiming variant; the gateway never claims,

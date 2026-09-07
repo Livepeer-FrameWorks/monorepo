@@ -92,6 +92,26 @@ func TestMapSignalmanStreamEventNilData(t *testing.T) {
 	}
 }
 
+func TestMapSignalmanStreamChangeEvent(t *testing.T) {
+	event := &signalmanpb.SignalmanEvent{
+		EventType: signalmanpb.EventType_EVENT_TYPE_STREAM_LIFECYCLE_UPDATE,
+		Timestamp: timestamppb.New(time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC)),
+		Data: &signalmanpb.EventData{Payload: &signalmanpb.EventData_StreamChange{
+			StreamChange: &ipcpb.StreamChangeEvent{StreamId: "stream-1", ChangedFields: []string{"push_target_status"}},
+		}},
+	}
+	got := mapSignalmanStreamEvent(event)
+	if got == nil || got.StreamId != "stream-1" || got.Type != model.StreamEventTypeStreamLifecycleUpdate || got.Payload == nil {
+		t.Fatalf("unexpected mapped stream change: %+v", got)
+	}
+	if !strings.Contains(*got.Payload, "push_target_status") {
+		t.Fatalf("changed fields missing from payload: %s", *got.Payload)
+	}
+	if streamID := getStreamIDFromProtoEvent(event); streamID != "stream-1" {
+		t.Fatalf("subscription stream filter extracted %q, want stream-1", streamID)
+	}
+}
+
 func TestMapSignalmanStreamEventMappingRules(t *testing.T) {
 	// Intent: each Signalman proto event type must project to the correct
 	// GraphQL StreamEvent Type/Status, always with Source=LIVE. These are the
@@ -378,7 +398,10 @@ func TestCanViewSensitiveTenantDataContexts(t *testing.T) {
 
 func TestDoUpdateTenantRejectsMalformedSettings(t *testing.T) {
 	resolver := &Resolver{Logger: logging.NewLogger()}
-	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-1")
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "jwt")
+	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, "tenant-1")
+	ctx = context.WithValue(ctx, ctxkeys.KeyRole, "owner")
+	ctx = context.WithValue(ctx, ctxkeys.KeyUser, &middleware.UserContext{TenantID: "tenant-1", Role: "owner"})
 
 	input := model.UpdateTenantInput{Settings: ptrString("{bad-json")}
 	_, err := resolver.DoUpdateTenant(ctx, input)

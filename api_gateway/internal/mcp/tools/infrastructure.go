@@ -98,7 +98,7 @@ The token is shown once — save it securely. Each provisioned edge automaticall
 Requires an active subscription to the target cluster. Use create_edge_cluster first if you don't have a cluster yet.`,
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args CreateEnrollmentTokenInput) (*mcp.CallToolResult, any, error) {
-			return handleCreateEnrollmentToken(ctx, args, serviceClients, logger)
+			return handleCreateEnrollmentToken(ctx, args, resolver, logger)
 		},
 	)
 
@@ -114,7 +114,7 @@ Returns the node's cluster, type, region, and hardware specs as stored in Quarte
 If you provisioned the edge, you're already local — no --ssh needed. Use --ssh user@host only when operating a remote node you didn't provision yourself.`,
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args GetNodeInfoInput) (*mcp.CallToolResult, any, error) {
-			return handleGetNodeInfo(ctx, args, serviceClients, logger)
+			return handleGetNodeInfo(ctx, args, resolver, logger)
 		},
 	)
 
@@ -597,31 +597,30 @@ func handleCreateEdgeCluster(ctx context.Context, args CreateEdgeClusterInput, r
 	}
 }
 
-func handleCreateEnrollmentToken(ctx context.Context, args CreateEnrollmentTokenInput, serviceClients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
+func handleCreateEnrollmentToken(ctx context.Context, args CreateEnrollmentTokenInput, resolver *resolvers.Resolver, logger logging.Logger) (*mcp.CallToolResult, any, error) {
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return toolError("Authentication required")
 	}
 
-	req := &quartermasterpb.CreateEnrollmentTokenRequest{
-		ClusterId: args.ClusterID,
-		TenantId:  &tenantID,
-	}
-	if args.Name != nil {
-		req.Name = args.Name
-	}
-	if args.TTL != nil {
-		req.Ttl = args.TTL
-	}
-
-	resp, err := serviceClients.Quartermaster.CreateEnrollmentToken(ctx, req)
+	result, err := resolver.DoCreateEnrollmentToken(ctx, args.ClusterID, args.Name, args.TTL)
 	if err != nil {
 		return toolError(fmt.Sprintf("Failed to create enrollment token: %v", err))
 	}
-
+	resp, ok := result.(*model.CreateEnrollmentTokenResponse)
+	if !ok {
+		switch value := result.(type) {
+		case *model.AuthError:
+			return toolError(value.Message)
+		case *model.ValidationError:
+			return toolError(value.Message)
+		default:
+			return toolError("Unexpected response")
+		}
+	}
 	token := ""
-	if resp.Token != nil {
-		token = resp.Token.Token
+	if resp.BootstrapToken != nil {
+		token = resp.BootstrapToken.Token
 	}
 
 	return infraToolSuccessJSON(EnrollmentTokenResult{
@@ -631,18 +630,16 @@ func handleCreateEnrollmentToken(ctx context.Context, args CreateEnrollmentToken
 	})
 }
 
-func handleGetNodeInfo(ctx context.Context, args GetNodeInfoInput, serviceClients *clients.ServiceClients, logger logging.Logger) (*mcp.CallToolResult, any, error) {
+func handleGetNodeInfo(ctx context.Context, args GetNodeInfoInput, resolver *resolvers.Resolver, logger logging.Logger) (*mcp.CallToolResult, any, error) {
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return toolError("Authentication required")
 	}
 
-	resp, err := serviceClients.Quartermaster.GetNode(ctx, args.NodeID)
+	node, err := resolver.DoGetNode(ctx, args.NodeID)
 	if err != nil {
 		return toolError(fmt.Sprintf("Node not found: %v", err))
 	}
-
-	node := resp.GetNode()
 	if node == nil {
 		return toolError("Node not found")
 	}

@@ -99,7 +99,7 @@ var graphqlMutationClasses = map[string]Class{
 	"walletLogin":                   Authentication,
 	"linkWallet":                    Control,
 	"unlinkWallet":                  Control,
-	"linkEmail":                     Control,
+	"linkEmail":                     PaymentRecovery,
 	"promoteToPaid":                 PaymentRecovery,
 	"changeBillingTier":             PaymentRecovery,
 	"deleteSkipperConversation":     Control,

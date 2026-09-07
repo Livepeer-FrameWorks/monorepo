@@ -7,11 +7,28 @@ import (
 	"testing"
 
 	"frameworks/api_gateway/internal/clients/clientstest"
+	"frameworks/api_gateway/internal/middleware"
+	"frameworks/api_gateway/internal/resolvers"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 )
 
 func strptr(s string) *string { return &s }
+
+func infrastructureOwnerCtx(tenantID string) context.Context {
+	ctx := clientstest.AuthedCtx(tenantID)
+	ctx = context.WithValue(ctx, ctxkeys.KeyRole, "owner")
+	return context.WithValue(ctx, ctxkeys.KeyUser, &middleware.UserContext{TenantID: tenantID, Role: "owner"})
+}
+
+func infrastructureResolver(qm *clientstest.FakeQuartermaster) *resolvers.Resolver {
+	return &resolvers.Resolver{
+		Clients: clientstest.Clients(clientstest.WithQuartermaster(qm)),
+		Logger:  clientstest.DiscardLogger(),
+	}
+}
 
 // ----- get_node_info -----
 
@@ -23,10 +40,13 @@ func TestHandleGetNodeInfo(t *testing.T) {
 				Region: strptr("eu"), ExternalIp: strptr("1.2.3.4"),
 			}}, nil
 		},
+		ListClustersByOwnerFn: func(_ context.Context, ownerTenantID string, _ *commonpb.CursorPaginationRequest) (*quartermasterpb.ListClustersResponse, error) {
+			return &quartermasterpb.ListClustersResponse{Clusters: []*quartermasterpb.InfrastructureCluster{{ClusterId: "c1", OwnerTenantId: &ownerTenantID}}}, nil
+		},
 	}
-	sc := clientstest.Clients(clientstest.WithQuartermaster(qm))
+	resolver := infrastructureResolver(qm)
 
-	res, out, err := handleGetNodeInfo(clientstest.AuthedCtx("t1"), GetNodeInfoInput{NodeID: "n1"}, sc, clientstest.DiscardLogger())
+	res, out, err := handleGetNodeInfo(infrastructureOwnerCtx("t1"), GetNodeInfoInput{NodeID: "n1"}, resolver, clientstest.DiscardLogger())
 	if err != nil || res.IsError {
 		t.Fatalf("get_node_info should succeed: err=%v text=%s", err, extractToolText(res))
 	}
@@ -38,8 +58,8 @@ func TestHandleGetNodeInfo(t *testing.T) {
 
 func TestHandleGetNodeInfo_RequiresAuth(t *testing.T) {
 	qm := &clientstest.FakeQuartermaster{} // GetNode unstubbed → panics if reached
-	sc := clientstest.Clients(clientstest.WithQuartermaster(qm))
-	res, _, err := handleGetNodeInfo(context.Background(), GetNodeInfoInput{NodeID: "n1"}, sc, clientstest.DiscardLogger())
+	resolver := infrastructureResolver(qm)
+	res, _, err := handleGetNodeInfo(context.Background(), GetNodeInfoInput{NodeID: "n1"}, resolver, clientstest.DiscardLogger())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,13 +77,36 @@ func TestHandleGetNodeInfo_NotFound(t *testing.T) {
 			return nil, errors.New("no such node")
 		},
 	}
-	sc := clientstest.Clients(clientstest.WithQuartermaster(qm))
-	res, _, err := handleGetNodeInfo(clientstest.AuthedCtx("t1"), GetNodeInfoInput{NodeID: "ghost"}, sc, clientstest.DiscardLogger())
+	resolver := infrastructureResolver(qm)
+	res, _, err := handleGetNodeInfo(infrastructureOwnerCtx("t1"), GetNodeInfoInput{NodeID: "ghost"}, resolver, clientstest.DiscardLogger())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !res.IsError {
 		t.Fatal("backend error should surface as a tool error")
+	}
+}
+
+func TestHandleGetNodeInfo_RejectsForeignOwnedNode(t *testing.T) {
+	qm := &clientstest.FakeQuartermaster{
+		GetNodeFn: func(context.Context, string) (*quartermasterpb.NodeResponse, error) {
+			return &quartermasterpb.NodeResponse{Node: &quartermasterpb.InfrastructureNode{
+				NodeId: "foreign-node", ClusterId: "foreign-cluster", ExternalIp: strptr("203.0.113.9"),
+			}}, nil
+		},
+		ListClustersByOwnerFn: func(context.Context, string, *commonpb.CursorPaginationRequest) (*quartermasterpb.ListClustersResponse, error) {
+			return &quartermasterpb.ListClustersResponse{Clusters: []*quartermasterpb.InfrastructureCluster{{ClusterId: "owned-cluster"}}}, nil
+		},
+	}
+	res, out, err := handleGetNodeInfo(infrastructureOwnerCtx("tenant-1"), GetNodeInfoInput{NodeID: "foreign-node"}, infrastructureResolver(qm), clientstest.DiscardLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.IsError || out != nil {
+		t.Fatalf("foreign node disclosed through MCP: result=%+v out=%+v", res, out)
+	}
+	if strings.Contains(extractToolText(res), "203.0.113.9") {
+		t.Fatalf("foreign node address leaked: %s", extractToolText(res))
 	}
 }
 
@@ -177,10 +220,10 @@ func TestHandleCreateEnrollmentToken(t *testing.T) {
 			}, nil
 		},
 	}
-	sc := clientstest.Clients(clientstest.WithQuartermaster(qm))
+	resolver := infrastructureResolver(qm)
 
-	res, out, err := handleCreateEnrollmentToken(clientstest.AuthedCtx("t1"),
-		CreateEnrollmentTokenInput{ClusterID: "c1"}, sc, clientstest.DiscardLogger())
+	res, out, err := handleCreateEnrollmentToken(infrastructureOwnerCtx("t1"),
+		CreateEnrollmentTokenInput{ClusterID: "c1"}, resolver, clientstest.DiscardLogger())
 	if err != nil || res.IsError {
 		t.Fatalf("create_enrollment_token should succeed: err=%v text=%s", err, extractToolText(res))
 	}
@@ -197,8 +240,8 @@ func TestHandleCreateEnrollmentToken(t *testing.T) {
 
 func TestHandleCreateEnrollmentToken_RequiresAuth(t *testing.T) {
 	qm := &clientstest.FakeQuartermaster{}
-	sc := clientstest.Clients(clientstest.WithQuartermaster(qm))
-	res, _, err := handleCreateEnrollmentToken(context.Background(), CreateEnrollmentTokenInput{ClusterID: "c1"}, sc, clientstest.DiscardLogger())
+	resolver := infrastructureResolver(qm)
+	res, _, err := handleCreateEnrollmentToken(context.Background(), CreateEnrollmentTokenInput{ClusterID: "c1"}, resolver, clientstest.DiscardLogger())
 	if err != nil {
 		t.Fatal(err)
 	}

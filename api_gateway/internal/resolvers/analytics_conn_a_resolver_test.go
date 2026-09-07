@@ -896,7 +896,7 @@ func TestDoGetClusterWorkload_OwnershipScope(t *testing.T) {
 	r := &Resolver{Clients: clientstest.Clients(clientstest.WithPeriscope(p), clientstest.WithQuartermaster(qm)), Logger: clientstest.DiscardLogger()}
 
 	foreign := "cluster-foreign"
-	if _, err := r.DoGetClusterWorkload(clientstest.AuthedCtx("tenant-1"), &foreign, nil, nil); err == nil {
+	if _, err := r.DoGetClusterWorkload(qmUserCtx("tenant-1"), &foreign, nil, nil); err == nil {
 		t.Fatal("expected foreign cluster to be rejected")
 	}
 	if p.Calls != 0 {
@@ -904,7 +904,7 @@ func TestDoGetClusterWorkload_OwnershipScope(t *testing.T) {
 	}
 
 	owned := "cluster-owned"
-	rows, err := r.DoGetClusterWorkload(clientstest.AuthedCtx("tenant-1"), &owned, nil, nil)
+	rows, err := r.DoGetClusterWorkload(qmUserCtx("tenant-1"), &owned, nil, nil)
 	if err != nil {
 		t.Fatalf("owned workload: %v", err)
 	}
@@ -922,7 +922,7 @@ func TestDoGetClusterWorkload_RejectsTenantWithoutOwnedClusters(t *testing.T) {
 	p := &clientstest.FakePeriscope{}
 	r := &Resolver{Clients: clientstest.Clients(clientstest.WithPeriscope(p), clientstest.WithQuartermaster(qm)), Logger: clientstest.DiscardLogger()}
 
-	_, err := r.DoGetClusterWorkload(clientstest.AuthedCtx("tenant-subscriber"), nil, nil, nil)
+	_, err := r.DoGetClusterWorkload(qmUserCtx("tenant-subscriber"), nil, nil, nil)
 	if err == nil || !strings.Contains(err.Error(), "cluster owner access required") {
 		t.Fatalf("error = %v, want cluster owner denial", err)
 	}

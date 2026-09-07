@@ -2,17 +2,22 @@ package resolvers
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"testing"
 	"time"
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/clients/clientstest"
+	"frameworks/api_gateway/internal/middleware"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
+	x402pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/x402"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -354,6 +359,60 @@ func TestDoSubmitX402Payment_Validation(t *testing.T) {
 	}
 	if _, ok := res.(*model.ValidationError); !ok {
 		t.Fatalf("invalid header should be a ValidationError, got %T", res)
+	}
+}
+
+func TestDoSubmitX402PaymentValidatesBeforeTargetAuthorization(t *testing.T) {
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "jwt")
+	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, "t1")
+	ctx = context.WithValue(ctx, ctxkeys.KeyRole, "member")
+	result, err := purserResolver(&clientstest.FakePurser{}).DoSubmitX402Payment(ctx, "not-base64-json", nil)
+	if err != nil {
+		t.Fatalf("unexpected resolver error: %v", err)
+	}
+	if _, ok := result.(*model.ValidationError); !ok {
+		t.Fatalf("invalid payment should be a ValidationError before target authorization, got %T", result)
+	}
+}
+
+func TestDoSubmitX402PaymentDemoModeStillValidatesPayment(t *testing.T) {
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "jwt")
+	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, "t1")
+	ctx = context.WithValue(ctx, ctxkeys.KeyRole, "member")
+	ctx = context.WithValue(ctx, ctxkeys.KeyDemoMode, true)
+	result, err := purserResolver(&clientstest.FakePurser{}).DoSubmitX402Payment(ctx, "not-base64-json", nil)
+	if err != nil {
+		t.Fatalf("unexpected resolver error: %v", err)
+	}
+	if _, ok := result.(*model.ValidationError); !ok {
+		t.Fatalf("demo mode must not bypass payment validation, got %T", result)
+	}
+}
+
+func TestDoSubmitX402PaymentMemberMayFundViewerResource(t *testing.T) {
+	verified := false
+	p := &clientstest.FakePurser{VerifyX402PaymentFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+		verified = true
+		return &purserpb.VerifyX402PaymentResponse{Valid: true}, nil
+	}, SettleX402PaymentFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
+		return &purserpb.SettleX402PaymentResponse{Success: true}, nil
+	}}
+	commodore := &clientstest.FakeCommodore{ResolveArtifactPlaybackIDFn: func(_ context.Context, _ string) (*commodorepb.ResolveArtifactPlaybackIDResponse, error) {
+		return &commodorepb.ResolveArtifactPlaybackIDResponse{Found: true, TenantId: "t1"}, nil
+	}}
+	r := &Resolver{Clients: clientstest.Clients(clientstest.WithPurser(p), clientstest.WithCommodore(commodore)), Logger: clientstest.DiscardLogger()}
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "jwt")
+	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, "t1")
+	ctx = context.WithValue(ctx, ctxkeys.KeyRole, "member")
+	ctx = context.WithValue(ctx, ctxkeys.KeyUser, &middleware.UserContext{UserID: "member", TenantID: "t1", Role: "member"})
+	payment := base64.StdEncoding.EncodeToString([]byte(`{"x402Version":2,"accepted":{"scheme":"exact","network":"eip155:8453","asset":"0xAsset","amount":"5000000","payTo":"0xToAddress","maxTimeoutSeconds":60},"payload":{"signature":"0xabc123","authorization":{"from":"0xFromAddress","to":"0xToAddress","value":"5000000","validAfter":"0","validBefore":"9999999999","nonce":"0x01"}}}`))
+	resource := "viewer://playback-id"
+	result, err := r.DoSubmitX402Payment(ctx, payment, &resource)
+	if err != nil {
+		t.Fatalf("unexpected resolver error: %v", err)
+	}
+	if _, ok := result.(*model.X402PaymentResult); !ok || !verified {
+		t.Fatalf("member viewer payment was not settled: verified=%v result=%T", verified, result)
 	}
 }
 
@@ -954,7 +1013,7 @@ func TestDoUpdateSubscriptionCustomTerms(t *testing.T) {
 	rec := true
 	support := "priority"
 	cfg := `{"k":"v"}`
-	got, err := r.DoUpdateSubscriptionCustomTerms(clientstest.AuthedCtx("admin"), "tenant-9", model.UpdateSubscriptionCustomTermsInput{
+	got, err := r.DoUpdateSubscriptionCustomTerms(operatorCtx(), "tenant-9", model.UpdateSubscriptionCustomTermsInput{
 		CustomFeatures: &model.BillingFeaturesInput{Recording: &rec, SupportLevel: &support},
 		PricingOverrides: []*model.PricingRuleInput{
 			{Meter: "egress_gb", Model: "per_unit", Currency: "EUR", IncludedQuantity: "0", UnitPrice: "0.01", ConfigJSON: &cfg},
@@ -988,7 +1047,7 @@ func TestDoUpdateSubscriptionCustomTerms(t *testing.T) {
 			return &purserpb.TenantSubscription{Id: "sub_2"}, nil
 		},
 	})
-	if _, err := rClear.DoUpdateSubscriptionCustomTerms(clientstest.AuthedCtx("admin"), "tenant-9", model.UpdateSubscriptionCustomTermsInput{
+	if _, err := rClear.DoUpdateSubscriptionCustomTerms(operatorCtx(), "tenant-9", model.UpdateSubscriptionCustomTermsInput{
 		PricingOverrides:     []*model.PricingRuleInput{},
 		EntitlementOverrides: []*model.EntitlementEntryInput{},
 	}); err != nil {
@@ -1003,8 +1062,22 @@ func TestDoUpdateSubscriptionCustomTerms(t *testing.T) {
 			return nil, errors.New("boom")
 		},
 	})
-	if _, err := failing.DoUpdateSubscriptionCustomTerms(clientstest.AuthedCtx("admin"), "tenant-9", model.UpdateSubscriptionCustomTermsInput{}); err == nil {
+	if _, err := failing.DoUpdateSubscriptionCustomTerms(operatorCtx(), "tenant-9", model.UpdateSubscriptionCustomTermsInput{}); err == nil {
 		t.Fatal("backend error should propagate")
+	}
+
+	nonOperatorCalled := false
+	nonOperator := purserResolver(&clientstest.FakePurser{
+		UpdateSubscriptionFn: func(context.Context, *purserpb.UpdateSubscriptionRequest) (*purserpb.TenantSubscription, error) {
+			nonOperatorCalled = true
+			return nil, nil
+		},
+	})
+	if _, err := nonOperator.DoUpdateSubscriptionCustomTerms(clientstest.AuthedCtx("tenant-9"), "tenant-9", model.UpdateSubscriptionCustomTermsInput{}); err == nil {
+		t.Fatal("ordinary tenant session updated custom terms")
+	}
+	if nonOperatorCalled {
+		t.Fatal("Purser was called before platform-operator authorization")
 	}
 }
 

@@ -13,6 +13,8 @@ import (
 
 	"frameworks/api_gateway/internal/clients"
 	"frameworks/api_gateway/internal/clients/clientstest"
+	"frameworks/api_gateway/internal/mcp/tools"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/accesspolicy"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -45,6 +47,18 @@ func TestPublicMCPWalletBootstrapDoesNotOpenAccountOrPaymentTools(t *testing.T) 
 		if isPublicMCPOperation(operation) {
 			t.Errorf("%s must require authentication", operation)
 		}
+	}
+}
+
+func TestMCPX402HeaderPolicyUsesTheOperationClass(t *testing.T) {
+	for toolName, class := range accesspolicy.MCPToolClasses() {
+		strip, reject := mcpX402HeaderPolicy(toolName)
+		if class == accesspolicy.PaymentRecovery && (!strip || reject) {
+			t.Errorf("payment-recovery tool %q policy=(strip=%v reject=%v), want strip", toolName, strip, reject)
+		}
+	}
+	if strip, reject := mcpX402HeaderPolicy("create_clip"); strip || !reject {
+		t.Fatalf("unsupported rated mutation policy=(strip=%v reject=%v), want reject", strip, reject)
 	}
 }
 
@@ -86,6 +100,137 @@ func TestAuthorizeMCPHighRiskToolRequiresExplicitAgentGrant(t *testing.T) {
 	}
 	if err := authorizeMCPTool(withGrant, "delete_stream"); err != nil {
 		t.Fatalf("pre-authorized high-risk API-token call denied: %v", err)
+	}
+}
+
+func TestAuthorizeMCPBillingWritesApplyTargetAwareSettlementGate(t *testing.T) {
+	member := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "jwt")
+	member = context.WithValue(member, ctxkeys.KeyTenantID, "tenant-1")
+	member = context.WithValue(member, ctxkeys.KeyRole, "member")
+	owner := context.WithValue(member, ctxkeys.KeyRole, "owner")
+
+	for _, tool := range []string{"submit_payment", "set_retention_policy"} {
+		memberAllowed := tool == "submit_payment"
+		if err := authorizeMCPTool(member, tool); (err == nil) != memberAllowed {
+			t.Fatalf("member authorization for %s = %v, want allowed=%v", tool, err, memberAllowed)
+		}
+		if err := authorizeMCPTool(owner, tool); err != nil {
+			t.Fatalf("owner denied for %s: %v", tool, err)
+		}
+		policy, ok := tools.ToolPolicyForName(tool)
+		if !ok {
+			t.Fatalf("policy missing for %s", tool)
+		}
+		if got := canUseMCPTool(member, tool, policy); got != memberAllowed {
+			t.Fatalf("member advertisement for %s = %v, want %v", tool, got, memberAllowed)
+		}
+		if !canUseMCPTool(owner, tool, policy) {
+			t.Fatalf("owner was not advertised %s", tool)
+		}
+	}
+}
+
+func TestAuthorizeMCPSubmitPaymentAPITokenNeedsScopeAndDefersTargetRole(t *testing.T) {
+	base := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "api_token")
+	base = context.WithValue(base, ctxkeys.KeyTenantID, "tenant-1")
+	base = context.WithValue(base, ctxkeys.KeyPermissions, []string{"billing:write", "mcp:high-risk"})
+	member := context.WithValue(base, ctxkeys.KeyRole, "member")
+	owner := context.WithValue(base, ctxkeys.KeyRole, "owner")
+
+	if err := authorizeMCPTool(member, "submit_payment"); err != nil {
+		t.Fatalf("member API token with explicit settlement scopes denied before target authorization: %v", err)
+	}
+	if err := authorizeMCPTool(owner, "submit_payment"); err != nil {
+		t.Fatalf("owner API token denied settlement: %v", err)
+	}
+}
+
+func TestAuthorizeMCPPrivateInfrastructureRequiresTenantOwnerOrAdmin(t *testing.T) {
+	member := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "jwt")
+	member = context.WithValue(member, ctxkeys.KeyTenantID, "tenant-1")
+	member = context.WithValue(member, ctxkeys.KeyRole, "member")
+	owner := context.WithValue(member, ctxkeys.KeyRole, "owner")
+
+	for _, tool := range []string{"get_node_health", "get_node_info", "set_node_mode", "create_edge_cluster"} {
+		if err := authorizeMCPTool(member, tool); err == nil {
+			t.Fatalf("member authorized for %s", tool)
+		}
+		if err := authorizeMCPTool(owner, tool); err != nil {
+			t.Fatalf("owner denied for %s: %v", tool, err)
+		}
+		policy, ok := tools.ToolPolicyForName(tool)
+		if !ok {
+			t.Fatalf("policy missing for %s", tool)
+		}
+		if canUseMCPTool(member, tool, policy) {
+			t.Fatalf("member was advertised %s", tool)
+		}
+		if !canUseMCPTool(owner, tool, policy) {
+			t.Fatalf("owner was not advertised %s", tool)
+		}
+	}
+
+	// Public marketplace discovery remains available to tenant members.
+	if err := authorizeMCPTool(member, "browse_marketplace"); err != nil {
+		t.Fatalf("public marketplace denied: %v", err)
+	}
+}
+
+func TestAuthorizeMCPSettingsWritesUseCanonicalScopeAndPrivilegedRole(t *testing.T) {
+	base := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "api_token")
+	base = context.WithValue(base, ctxkeys.KeyTenantID, "tenant-1")
+	base = context.WithValue(base, ctxkeys.KeyPermissions, []string{"settings:write"})
+	member := context.WithValue(base, ctxkeys.KeyRole, "member")
+	owner := context.WithValue(base, ctxkeys.KeyRole, "owner")
+
+	for _, tool := range []string{"update_tenant_settings", "set_preferred_cluster"} {
+		policy, ok := tools.ToolPolicyForName(tool)
+		if !ok {
+			t.Fatalf("policy missing for %s", tool)
+		}
+		if policy.Scope != "settings:write" {
+			t.Fatalf("%s scope = %q, want settings:write", tool, policy.Scope)
+		}
+		if err := authorizeMCPTool(member, tool); err == nil {
+			t.Fatalf("member authorized for %s", tool)
+		}
+		if err := authorizeMCPTool(owner, tool); err != nil {
+			t.Fatalf("owner settings token denied for %s: %v", tool, err)
+		}
+	}
+}
+
+func TestAuthorizeMCPRetentionOverridesUseBillingManagement(t *testing.T) {
+	base := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "api_token")
+	base = context.WithValue(base, ctxkeys.KeyTenantID, "tenant-1")
+	base = context.WithValue(base, ctxkeys.KeyPermissions, []string{"billing:write", "mcp:high-risk"})
+	member := context.WithValue(base, ctxkeys.KeyRole, "member")
+	owner := context.WithValue(base, ctxkeys.KeyRole, "owner")
+
+	for _, tool := range []string{"set_stream_retention_overrides", "update_asset_retention", "reset_asset_retention"} {
+		policy, ok := tools.ToolPolicyForName(tool)
+		if !ok {
+			t.Fatalf("policy missing for %s", tool)
+		}
+		if policy.Scope != "billing:write" {
+			t.Fatalf("%s scope = %q, want billing:write", tool, policy.Scope)
+		}
+		if err := authorizeMCPTool(member, tool); err == nil {
+			t.Fatalf("member authorized for %s", tool)
+		}
+		if err := authorizeMCPTool(owner, tool); err != nil {
+			t.Fatalf("owner billing token denied for %s: %v", tool, err)
+		}
+	}
+}
+
+func TestMCPRetentionReadUsesBillingReadScope(t *testing.T) {
+	policy, ok := tools.ToolPolicyForName("get_retention_policy")
+	if !ok {
+		t.Fatal("get_retention_policy policy missing")
+	}
+	if policy.Scope != "billing:read" {
+		t.Fatalf("get_retention_policy scope = %q, want billing:read", policy.Scope)
 	}
 }
 
@@ -379,6 +524,23 @@ func TestMCPAccessIdentity(t *testing.T) {
 	// No owner resolved: caller stays the billing tenant, no decoupling.
 	if billing, rl := mcpAccessIdentity("tenant-c", ""); billing != "tenant-c" || rl != nil {
 		t.Errorf("no owner: got billing=%q rl=%v, want billing=tenant-c rl=nil", billing, ptrStr(rl))
+	}
+}
+
+func TestMCPAnonymousViewerPaymentAuthorizationSurvivesOwnerBillingAttribution(t *testing.T) {
+	if !mcpAllowsAnonymousViewerPayment("", "viewer://playback-id") {
+		t.Fatal("anonymous viewer payment must remain public after billing switches to the content owner")
+	}
+	for _, tc := range []struct {
+		caller, resource string
+	}{
+		{caller: "tenant-b", resource: "viewer://playback-id"},
+		{caller: "", resource: "stream://private-key"},
+		{caller: "", resource: "mcp://create_stream"},
+	} {
+		if mcpAllowsAnonymousViewerPayment(tc.caller, tc.resource) {
+			t.Fatalf("caller=%q resource=%q unexpectedly admitted as anonymous viewer-pay", tc.caller, tc.resource)
+		}
 	}
 }
 

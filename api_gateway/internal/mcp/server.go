@@ -22,6 +22,7 @@ import (
 	"frameworks/api_gateway/internal/middleware"
 	"frameworks/api_gateway/internal/resolvers"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/accesspolicy"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/authz"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
@@ -358,6 +359,7 @@ func (s *Server) registerAccessMiddleware() {
 
 			resourcePath := mcpOperationResourcePath(opName, req.GetParams())
 			tenantID := ctxkeys.GetTenantID(ctx)
+			callerTenantID := tenantID
 			// rateLimitTenantID decouples the rate-limit bucket from the billing
 			// tenant when they differ (playback resolves to the stream OWNER for
 			// billing, but must be throttled on the CALLER's identity).
@@ -409,25 +411,29 @@ func (s *Server) registerAccessMiddleware() {
 					return nil, err
 				}
 			}
-			if xPayment != "" && method == "tools/call" && isSideEffectingMCPCall(opName) {
-				toolName := strings.TrimPrefix(opName, "mcp:tools/call:")
-				strategy, registered := accesspolicy.MCPX402MutationStrategy(toolName)
-				if registered && strategy != accesspolicy.X402OwnerIdempotency {
+			if xPayment != "" && method == "tools/call" {
+				stripPayment, reject := mcpX402HeaderPolicy(strings.TrimPrefix(opName, "mcp:tools/call:"))
+				if reject {
 					return nil, &jsonrpc.Error{
 						Code: -32015, Message: "x402 direct mutation execution unsupported",
 						Data: json.RawMessage(`{"code":"X402_MUTATION_DIRECT_EXECUTION_UNSUPPORTED","message":"use submit_payment to top up, then retry without the payment header"}`),
 					}
 				}
+				if stripPayment {
+					xPayment = ""
+					ctx = context.WithValue(ctx, ctxkeys.KeyXPayment, "")
+				}
 			}
 
 			decision := middleware.EvaluateAccess(ctx, middleware.AccessRequest{
-				TenantID:          tenantID,
-				RateLimitTenantID: rateLimitTenantID,
-				ClientIP:          clientIP,
-				Path:              resourcePath,
-				OperationName:     opName,
-				XPayment:          xPayment,
-				PublicAllowlisted: publicAllowlisted,
+				TenantID:                    tenantID,
+				RateLimitTenantID:           rateLimitTenantID,
+				ClientIP:                    clientIP,
+				Path:                        resourcePath,
+				OperationName:               opName,
+				XPayment:                    xPayment,
+				PublicAllowlisted:           publicAllowlisted,
+				AllowAnonymousViewerPayment: mcpAllowsAnonymousViewerPayment(callerTenantID, resourcePath),
 			}, s.rateLimiter, s.tenantCache.GetLimitsFunc(), s.tenantCache, s.serviceClients.Purser, s.serviceClients.Purser, s.serviceClients.Commodore, s.logger)
 
 			if !decision.Allowed {
@@ -526,7 +532,19 @@ func isSideEffectingMCPCall(opName string) bool {
 			return false
 		}
 	}
-	return tool != "" && tool != opName && tool != "submit_payment"
+	return tool != "" && tool != opName
+}
+
+func mcpX402HeaderPolicy(toolName string) (stripPayment, reject bool) {
+	class, registered := accesspolicy.MCPToolClass(toolName)
+	if registered && class == accesspolicy.PaymentRecovery {
+		return true, false
+	}
+	if !isSideEffectingMCPCall("mcp:tools/call:" + toolName) {
+		return false, false
+	}
+	strategy, supported := accesspolicy.MCPX402MutationStrategy(toolName)
+	return false, !supported || strategy != accesspolicy.X402OwnerIdempotency
 }
 
 func mcpMutationIdempotencyKey(req mcp.Request) string {
@@ -818,7 +836,7 @@ func filterToolsByPolicy(ctx context.Context, result mcp.Result) mcp.Result {
 		if !exists {
 			continue
 		}
-		if canUseMCPTool(ctx, policy) {
+		if canUseMCPTool(ctx, tool.Name, policy) {
 			filtered = append(filtered, tool)
 		}
 	}
@@ -843,10 +861,19 @@ func authorizeMCPTool(ctx context.Context, toolName string) error {
 			return &jsonrpc.Error{Code: -32003, Message: "insufficient permissions", Data: data}
 		}
 	}
+	if action, required := tenantActionForMCPTool(toolName, policy); required {
+		if err := middleware.RequireTenantAction(ctx, policy.Scope, action, ctxkeys.GetTenantID(ctx)); err != nil {
+			data, marshalErr := json.Marshal(map[string]any{"code": "INSUFFICIENT_ROLE", "required_role": "owner_or_admin"})
+			if marshalErr != nil {
+				return &jsonrpc.Error{Code: -32003, Message: "insufficient permissions"}
+			}
+			return &jsonrpc.Error{Code: -32003, Message: "insufficient permissions", Data: data}
+		}
+	}
 	return nil
 }
 
-func canUseMCPTool(ctx context.Context, policy tools.ToolPolicy) bool {
+func canUseMCPTool(ctx context.Context, toolName string, policy tools.ToolPolicy) bool {
 	if policy.Public && ctxkeys.GetAuthType(ctx) != "api_token" {
 		return true
 	}
@@ -855,7 +882,34 @@ func canUseMCPTool(ctx context.Context, policy tools.ToolPolicy) bool {
 			return false
 		}
 	}
+	if action, required := tenantActionForMCPTool(toolName, policy); required {
+		return middleware.RequireTenantAction(ctx, policy.Scope, action, ctxkeys.GetTenantID(ctx)) == nil
+	}
 	return true
+}
+
+func tenantActionForMCPTool(toolName string, policy tools.ToolPolicy) (authz.Action, bool) {
+	if policy.Public {
+		return "", false
+	}
+	// submit_payment is target-authorized after resource resolution: members may
+	// fund viewer delivery, while every non-viewer target still requires the
+	// owner/admin ManageBilling action in the shared x402 authorizer.
+	if toolName == "submit_payment" {
+		return "", false
+	}
+	switch policy.Scope {
+	case "billing:write":
+		return authz.ActionManageBilling, true
+	case "settings:write":
+		return authz.ActionManageTenantSettings, true
+	case "infrastructure:write":
+		return authz.ActionManageEdgeCluster, true
+	case "infrastructure:read":
+		return authz.ActionReadPrivateInfrastructure, true
+	default:
+		return "", false
+	}
 }
 
 func requiredMCPScopes(ctx context.Context, policy tools.ToolPolicy) []string {
@@ -1134,4 +1188,8 @@ func mcpAccessIdentity(callerTenantID, ownerTenantID string) (billingTenantID st
 	}
 	caller := callerTenantID
 	return ownerTenantID, &caller
+}
+
+func mcpAllowsAnonymousViewerPayment(callerTenantID, resourcePath string) bool {
+	return strings.TrimSpace(callerTenantID) == "" && strings.HasPrefix(strings.ToLower(strings.TrimSpace(resourcePath)), "viewer://")
 }

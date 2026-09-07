@@ -99,6 +99,7 @@ func TestAuthenticateRequestAPIToken(t *testing.T) {
 	commodoreClient, err := commodore.NewGRPCClient(commodore.GRPCConfig{
 		GRPCAddr:      addr,
 		Timeout:       5 * time.Second,
+		ServiceToken:  "service-token",
 		AllowInsecure: true,
 	})
 	if err != nil {
@@ -126,6 +127,20 @@ func TestAuthenticateRequestAPIToken(t *testing.T) {
 	}
 	if len(result.Permissions) != 1 || result.Permissions[0] != "streams:read" {
 		t.Fatalf("unexpected permissions: %#v", result.Permissions)
+	}
+}
+
+func TestAuthenticateRequestRejectsInternalAPITokenDelegationAtIngress(t *testing.T) {
+	secret := []byte("secret")
+	token, err := auth.GenerateDelegatedAPITokenJWT("user-1", "tenant-1", "", "owner", "token-1", []string{"infrastructure:write"}, "quartermaster", secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	if _, err := AuthenticateRequest(context.Background(), req, &clients.ServiceClients{}, secret, AuthOptions{}, nil); err == nil {
+		t.Fatal("internal delegation was accepted as an external session")
 	}
 }
 
@@ -191,9 +206,15 @@ func TestApplyAuthToContextAPIToken(t *testing.T) {
 	if ctx.Value(ctxkeys.KeyAPITokenHash) == nil {
 		t.Fatal("expected api token hash in context")
 	}
+	if got := ctxkeys.GetAPITokenID(ctx); got != "token-id" {
+		t.Fatalf("API token ID = %q", got)
+	}
 	perms, ok := ctx.Value(ctxkeys.KeyPermissions).([]string)
 	if !ok || len(perms) != 1 || perms[0] != "streams:read" {
 		t.Fatalf("unexpected permissions: %#v", ctx.Value(ctxkeys.KeyPermissions))
+	}
+	if got := ctxkeys.GetDelegatedJWT(ctx, "quartermaster"); got != "" {
+		t.Fatalf("authentication pre-minted delegated token %q", got)
 	}
 }
 

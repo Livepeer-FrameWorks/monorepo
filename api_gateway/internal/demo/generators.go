@@ -21,6 +21,7 @@ import (
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/restream"
 
 	"google.golang.org/protobuf/types/known/structpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -4850,9 +4851,29 @@ func GenerateStreamingConfig() *model.StreamingConfig {
 	}
 }
 
-// GeneratePushTargets returns no external push targets in demo mode.
+// GeneratePushTargets shows the same masked, asynchronous runtime states as
+// the real API without retaining a credential-bearing URI.
 func GeneratePushTargets(streamID string) []*commodorepb.PushTarget {
-	return []*commodorepb.PushTarget{}
+	if streamID != DemoStreamID {
+		return nil
+	}
+	now := time.Now()
+	return []*commodorepb.PushTarget{
+		{
+			Id: "5eed0000-0000-0000-0000-000000000001", StreamId: streamID,
+			Platform: "youtube", Name: "YouTube mirror",
+			TargetUri: restream.MaskTargetURI("rtmps://youtube.example.test/live/demo-secret"),
+			IsEnabled: true, Status: "pushing",
+			CreatedAt: timestamppb.New(now.Add(-time.Hour)), UpdatedAt: timestamppb.New(now.Add(-2 * time.Minute)),
+		},
+		{
+			Id: "5eed0000-0000-0000-0000-000000000002", StreamId: streamID,
+			Platform: "custom", Name: "Backup destination",
+			TargetUri: restream.MaskTargetURI("srt://backup.example.test:9000?streamid=demo-secret"),
+			IsEnabled: true, Status: "retrying", LastError: "restream delivery interrupted",
+			CreatedAt: timestamppb.New(now.Add(-30 * time.Minute)), UpdatedAt: timestamppb.New(now.Add(-15 * time.Second)),
+		},
+	}
 }
 
 func int32Ptr(v int32) *int32                                  { return &v }

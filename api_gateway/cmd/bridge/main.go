@@ -64,6 +64,7 @@ func main() {
 	jwtSecret := config.RequireEnv("JWT_SECRET")
 	serviceClients, err := clients.NewServiceClients(clients.Config{
 		ServiceToken: serviceToken,
+		JWTSecret:    []byte(jwtSecret),
 		Logger:       logger,
 	})
 	if err != nil {
@@ -362,7 +363,7 @@ func main() {
 
 			if token != "" {
 				// Try JWT validation
-				claims, claimsErr := pkgauth.ValidateJWT(token, []byte(jwtSecret))
+				claims, claimsErr := pkgauth.ValidateInteractiveJWT(token, []byte(jwtSecret))
 				if claimsErr == nil {
 					ctx = context.WithValue(ctx, ctxkeys.KeyUserID, claims.UserID)
 					ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, claims.TenantID)
@@ -393,6 +394,7 @@ func main() {
 						ctx = context.WithValue(ctx, ctxkeys.KeyRole, resp.Role)
 						ctx = context.WithValue(ctx, ctxkeys.KeyAuthType, "api_token")
 						ctx = context.WithValue(ctx, ctxkeys.KeyAPIToken, token)
+						ctx = context.WithValue(ctx, ctxkeys.KeyAPITokenID, resp.TokenId)
 						if resp.TokenId != "" {
 							ctx = context.WithValue(ctx, ctxkeys.KeyAPITokenHash, middleware.HashIdentifier(resp.TokenId))
 						} else {
@@ -633,12 +635,12 @@ func main() {
 	graphqlGroup := app.Group("/graphql")
 	graphqlGroup.Use(middleware.PublicOrJWTAuth([]byte(jwtSecret), serviceClients)) // Allowlist public queries or require auth
 	graphqlGroup.Use(middleware.DemoModePostAuth(logger))                           // Demo mode detection (after auth)
-	graphqlGroup.Use(middleware.ViewerX402Middleware(serviceClients, logger))       // Resolve viewer x402 before GraphQL executes
 
 	// IMPORTANT: WebSocket upgrades may authenticate in the GraphQL WS InitFunc (connectionParams),
 	// so rate limiting must not run before that auth has a chance to set tenant context.
 	graphqlHTTPMiddleware := []gin.HandlerFunc{
 		middleware.RateLimitMiddlewareWithX402(rateLimiter, tenantCache.GetLimitsFunc(), tenantCache, serviceClients.Purser, serviceClients.Purser, serviceClients.Commodore, trustedProxies),
+		middleware.ViewerX402Middleware(serviceClients, logger), // Resolve and settle viewer x402 only after abuse throttling.
 		middleware.GraphQLContextMiddleware(serviceToken),
 		middleware.GraphQLAttachLoaders(serviceClients),
 		middleware.UsageTrackerMiddleware(usageTracker),

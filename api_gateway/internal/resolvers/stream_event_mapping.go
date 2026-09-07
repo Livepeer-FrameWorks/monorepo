@@ -121,6 +121,15 @@ func mapSignalmanStreamEvent(event *signalmanpb.SignalmanEvent) *model.StreamEve
 		})
 
 	case signalmanpb.EventType_EVENT_TYPE_STREAM_LIFECYCLE_UPDATE:
+		if change := event.Data.GetStreamChange(); change != nil {
+			streamID := change.GetStreamId()
+			eventID := buildLiveEventID(streamID, model.StreamEventTypeStreamLifecycleUpdate, timestamp, nil)
+			return withPlacement(&model.StreamEvent{
+				Id:      globalid.Encode(globalid.TypeStreamEvent, fmt.Sprintf("%s|%s|%d", streamID, eventID, timestamp.UnixNano())),
+				EventId: eventID, StreamId: streamID, Type: model.StreamEventTypeStreamLifecycleUpdate,
+				Timestamp: timestamp, Payload: protoPayloadJSON(change), Source: model.StreamEventSourceLive,
+			})
+		}
 		data := event.Data.GetStreamLifecycle()
 		if data == nil {
 			return nil

@@ -25,3 +25,14 @@ func TestToolSecurityAndAccessPolicyCatalogsMatch(t *testing.T) {
 		}
 	}
 }
+
+func TestAddToolPoliciesRejectsDuplicateTool(t *testing.T) {
+	policies := make(map[string]ToolPolicy)
+	addToolPolicies(policies, "streams:read", ToolRiskRead, "list_stream_keys")
+	defer func() {
+		if recover() == nil {
+			t.Fatal("duplicate MCP tool policy did not panic")
+		}
+	}()
+	addToolPolicies(policies, "streams:write", ToolRiskWrite, "list_stream_keys")
+}

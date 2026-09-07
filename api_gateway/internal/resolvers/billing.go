@@ -12,6 +12,7 @@ import (
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/middleware"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/authz"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/billing"
 	periscope "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/periscope"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
@@ -33,8 +34,27 @@ import (
 // CONNECTION RESOLVERS (Relay-style pagination)
 // ============================================================================
 
+func requireBillingScope(ctx context.Context, scope string) error {
+	authType := ctxkeys.GetAuthType(ctx)
+	if scope == "billing:write" {
+		// Preserve each mutation's typed unauthenticated result; once a tenant
+		// identity exists, the owner/admin policy runs before any backend call.
+		if strings.TrimSpace(ctxkeys.GetTenantID(ctx)) == "" && authType != "service" {
+			return nil
+		}
+		return middleware.RequireTenantAction(ctx, scope, authz.ActionManageBilling, ctxkeys.GetTenantID(ctx))
+	}
+	if authType != "api_token" {
+		return nil
+	}
+	return middleware.RequirePermission(ctx, scope)
+}
+
 // DoGetInvoicesConnection returns a Relay-style connection for invoices
 func (r *Resolver) DoGetInvoicesConnection(ctx context.Context, first *int, after *string, last *int, before *string) (*model.InvoicesConnection, error) {
+	if err := requireBillingScope(ctx, "billing:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic invoices connection")
 		invoices := demo.GenerateInvoices()
@@ -98,6 +118,9 @@ func (r *Resolver) DoGetInvoicesConnection(ctx context.Context, first *int, afte
 
 // DoGetPayment returns one payment owned by the authenticated tenant.
 func (r *Resolver) DoGetPayment(ctx context.Context, id string) (*purserpb.Payment, error) {
+	if err := requireBillingScope(ctx, "billing:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		for _, payment := range demo.GenerateBillingStatus().GetRecentPayments() {
 			if payment.GetId() == id {
@@ -120,6 +143,9 @@ func (r *Resolver) DoGetPayment(ctx context.Context, id string) (*purserpb.Payme
 // DoGetPaymentsConnection returns tenant-owned payments using Purser's keyset
 // pagination. Filters never replace the authenticated tenant constraint.
 func (r *Resolver) DoGetPaymentsConnection(ctx context.Context, first *int, after *string, last *int, before *string, invoiceID, paymentStatus, method *string) (*model.InvoicePaymentsConnection, error) {
+	if err := requireBillingScope(ctx, "billing:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		payments := demo.GenerateBillingStatus().GetRecentPayments()
 		edges := make([]*model.InvoicePaymentEdge, 0, len(payments))
@@ -183,6 +209,9 @@ func (r *Resolver) DoGetPaymentsConnection(ctx context.Context, first *int, afte
 
 // DoGetUsageRecordsConnection returns a Relay-style connection for usage records
 func (r *Resolver) DoGetUsageRecordsConnection(ctx context.Context, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string) (*model.UsageRecordsConnection, error) {
+	if err := requireBillingScope(ctx, "billing:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic usage records connection")
 		records := demo.GenerateUsageRecords()
@@ -372,6 +401,9 @@ func (r *Resolver) buildUsageRecordsConnection(records []*purserpb.UsageRecord, 
 
 // DoGetBillingTiers returns available billing tiers
 func (r *Resolver) DoGetBillingTiers(ctx context.Context) ([]*purserpb.BillingTier, error) {
+	if err := requireBillingScope(ctx, "billing:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic billing tiers")
 		return demo.GenerateBillingTiers(), nil
@@ -393,6 +425,9 @@ func (r *Resolver) DoGetBillingTiers(ctx context.Context) ([]*purserpb.BillingTi
 
 // DoGetInvoices returns tenant invoices
 func (r *Resolver) DoGetInvoices(ctx context.Context) ([]*purserpb.Invoice, error) {
+	if err := requireBillingScope(ctx, "billing:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic invoices")
 		return demo.GenerateInvoices(), nil
@@ -419,6 +454,9 @@ func (r *Resolver) DoGetInvoices(ctx context.Context) ([]*purserpb.Invoice, erro
 
 // DoGetInvoice returns a specific invoice by ID
 func (r *Resolver) DoGetInvoice(ctx context.Context, id string) (*purserpb.Invoice, error) {
+	if err := requireBillingScope(ctx, "billing:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		if invoices := demo.GenerateInvoices(); len(invoices) > 0 {
 			return invoices[0], nil
@@ -448,6 +486,9 @@ func (r *Resolver) DoGetInvoice(ctx context.Context, id string) (*purserpb.Invoi
 
 // DoGetBillingStatus returns current billing status for tenant
 func (r *Resolver) DoGetBillingStatus(ctx context.Context) (*purserpb.BillingStatusResponse, error) {
+	if err := requireBillingScope(ctx, "billing:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic billing status")
 		return demo.GenerateBillingStatus(), nil
@@ -488,6 +529,9 @@ func (r *Resolver) DoGetBillingStatus(ctx context.Context) (*purserpb.BillingSta
 
 // DoGetInvoicePreview returns the current draft invoice for the tenant (authoritative preview)
 func (r *Resolver) DoGetInvoicePreview(ctx context.Context) (*purserpb.Invoice, error) {
+	if err := requireBillingScope(ctx, "billing:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic invoice preview")
 		return demo.GenerateInvoicePreview(), nil
@@ -514,6 +558,9 @@ func (r *Resolver) DoGetInvoicePreview(ctx context.Context) (*purserpb.Invoice, 
 
 // DoGetLiveUsageSummary returns near-real-time usage summary for the current period.
 func (r *Resolver) DoGetLiveUsageSummary(ctx context.Context, periodStart, periodEnd *time.Time) (*periscopepb.LiveUsageSummary, error) {
+	if err := requireBillingScope(ctx, "billing:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic live usage summary")
 		return demo.GenerateLiveUsageSummary(), nil
@@ -549,6 +596,9 @@ func (r *Resolver) DoGetLiveUsageSummary(ctx context.Context, periodStart, perio
 
 // DoGetTenantUsage returns full tenant usage with maps converted to arrays
 func (r *Resolver) DoGetTenantUsage(ctx context.Context, timeRange *model.TimeRangeInput) (*model.TenantUsage, error) {
+	if err := requireBillingScope(ctx, "billing:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic tenant usage")
 		return demoTenantUsageFromInvoicePreview(demo.GenerateInvoicePreview())
@@ -655,6 +705,9 @@ func demoTenantUsageFromInvoicePreview(preview *purserpb.Invoice) (*model.Tenant
 
 // DoGetUsageRecords returns usage records for tenant
 func (r *Resolver) DoGetUsageRecords(ctx context.Context, timeRange *model.TimeRangeInput) ([]*purserpb.UsageRecord, error) {
+	if err := requireBillingScope(ctx, "billing:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic usage records")
 		return demo.GenerateUsageRecords(), nil
@@ -681,6 +734,9 @@ func (r *Resolver) DoGetUsageRecords(ctx context.Context, timeRange *model.TimeR
 
 // DoGetUsageAggregates returns rollup-backed aggregates for usage charts
 func (r *Resolver) DoGetUsageAggregates(ctx context.Context, timeRange *model.TimeRangeInput, granularity string, usageTypes []string) ([]*purserpb.UsageAggregate, error) {
+	if err := requireBillingScope(ctx, "billing:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic usage aggregates")
 		records := demo.GenerateUsageRecords()
@@ -804,6 +860,9 @@ func bucketForGranularity(ts time.Time, granularity string) (time.Time, time.Tim
 
 // DoCreatePayment processes a payment
 func (r *Resolver) DoCreatePayment(ctx context.Context, input model.CreatePaymentInput) (*purserpb.PaymentResponse, error) {
+	if err := requireBillingScope(ctx, "billing:write"); err != nil {
+		return nil, err
+	}
 	purserMethod, methodErr := purserPaymentMethod(input.Method)
 	if methodErr != nil {
 		return nil, methodErr
@@ -989,6 +1048,9 @@ func (r *Resolver) DoSubmitX402Payment(ctx context.Context, payment string, reso
 		Commodore:              r.Clients.Commodore,
 		AllowUnresolvedCreator: false,
 		Logger:                 r.Logger,
+		AuthorizeTarget: func(authCtx context.Context, resourceKind, targetTenantID string) error {
+			return middleware.RequireX402Target(authCtx, resourceKind, targetTenantID, false)
+		},
 	})
 	if settleErr != nil {
 		switch settleErr.Code {
@@ -1041,6 +1103,12 @@ func (r *Resolver) DoSubmitX402Payment(ctx context.Context, payment string, reso
 
 // DoUpdateSubscriptionCustomTerms updates custom billing terms for a tenant subscription
 func (r *Resolver) DoUpdateSubscriptionCustomTerms(ctx context.Context, tenantID string, input model.UpdateSubscriptionCustomTermsInput) (*purserpb.TenantSubscription, error) {
+	// Per-tenant prices and entitlement overrides are platform policy, not a
+	// tenant billing preference. API-token billing scopes deliberately do not
+	// imply the platform-operator grant.
+	if err := r.RequirePlatformOperator(ctx); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic subscription update")
 		return demo.GenerateBillingStatus().Subscription, nil
@@ -1147,6 +1215,9 @@ func (r *Resolver) DoUpdateSubscriptionCustomTerms(ctx context.Context, tenantID
 
 // DoGetPrepaidBalance returns the current prepaid balance for the tenant
 func (r *Resolver) DoGetPrepaidBalance(ctx context.Context, currency *string) (*model.PrepaidBalance, error) {
+	if err := requireBillingScope(ctx, "billing:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic prepaid balance")
 		return &model.PrepaidBalance{
@@ -1201,6 +1272,9 @@ func (r *Resolver) DoGetPrepaidBalance(ctx context.Context, currency *string) (*
 
 // DoGetBalanceTransactionsConnection returns paginated balance transactions for the tenant
 func (r *Resolver) DoGetBalanceTransactionsConnection(ctx context.Context, page *model.ConnectionInput, transactionType *string, timeRange *model.TimeRangeInput) (*model.BalanceTransactionsConnection, error) {
+	if err := requireBillingScope(ctx, "billing:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic balance transactions")
 		now := time.Now()
@@ -1317,6 +1391,9 @@ func (r *Resolver) DoGetBalanceTransactionsConnection(ctx context.Context, page 
 
 // DoCreateStripeCheckout creates a Stripe Checkout Session for subscription setup
 func (r *Resolver) DoCreateStripeCheckout(ctx context.Context, tierID, billingPeriod, successURL, cancelURL string) (model.StripeCheckoutResult, error) {
+	if err := requireBillingScope(ctx, "billing:write"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic Stripe checkout")
 		return &model.StripeCheckoutSession{
@@ -1346,6 +1423,9 @@ func (r *Resolver) DoCreateStripeCheckout(ctx context.Context, tierID, billingPe
 
 // DoCreateStripeBillingPortal creates a Stripe Billing Portal session
 func (r *Resolver) DoCreateStripeBillingPortal(ctx context.Context, returnURL string) (model.StripeBillingPortalResult, error) {
+	if err := requireBillingScope(ctx, "billing:write"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic Stripe billing portal")
 		return &model.StripeBillingPortalSession{
@@ -1377,6 +1457,9 @@ func (r *Resolver) DoCreateStripeBillingPortal(ctx context.Context, returnURL st
 
 // DoCreateMollieFirstPayment creates a Mollie first payment to establish a mandate
 func (r *Resolver) DoCreateMollieFirstPayment(ctx context.Context, tierID, method, redirectURL string) (model.MollieFirstPaymentResult, error) {
+	if err := requireBillingScope(ctx, "billing:write"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic Mollie first payment")
 		ts := time.Now().Format("20060102150405")
@@ -1424,6 +1507,9 @@ func (r *Resolver) DoCreateMollieFirstPayment(ctx context.Context, tierID, metho
 
 // DoCreateMollieSubscription creates a Mollie subscription after mandate is valid
 func (r *Resolver) DoCreateMollieSubscription(ctx context.Context, tierID, mandateID string, description *string) (model.MollieSubscriptionResult, error) {
+	if err := requireBillingScope(ctx, "billing:write"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic Mollie subscription")
 		ts := time.Now().Format("20060102150405")
@@ -1482,6 +1568,9 @@ func (r *Resolver) DoCreateMollieSubscription(ctx context.Context, tierID, manda
 
 // DoListMollieMandates lists Mollie mandates for the current tenant
 func (r *Resolver) DoListMollieMandates(ctx context.Context) ([]*purserpb.MollieMandate, error) {
+	if err := requireBillingScope(ctx, "billing:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		ts := time.Now().AddDate(0, -1, 0)
 		details := map[string]interface{}{
@@ -1525,6 +1614,9 @@ func (r *Resolver) DoListMollieMandates(ctx context.Context) ([]*purserpb.Mollie
 
 // DoCreateCardTopup creates a card-based top-up checkout session for prepaid balance
 func (r *Resolver) DoCreateCardTopup(ctx context.Context, input model.CreateCardTopupInput) (*model.CardTopupResult, error) {
+	if err := requireBillingScope(ctx, "billing:write"); err != nil {
+		return nil, err
+	}
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("authentication required")
@@ -1661,6 +1753,9 @@ func demoCryptoTopup(input model.CreateCryptoTopupInput) *model.CryptoTopupResul
 
 // DoCreateCryptoTopup creates a crypto deposit address for prepaid balance top-up
 func (r *Resolver) DoCreateCryptoTopup(ctx context.Context, input model.CreateCryptoTopupInput) (*model.CryptoTopupResult, error) {
+	if err := requireBillingScope(ctx, "billing:write"); err != nil {
+		return nil, err
+	}
 	tenantID := ctxkeys.GetTenantID(ctx)
 	if tenantID == "" {
 		return nil, fmt.Errorf("authentication required")
@@ -1751,6 +1846,9 @@ func (r *Resolver) DoCreateCryptoTopup(ctx context.Context, input model.CreateCr
 
 // DoGetCryptoTopupStatus returns the status of a crypto top-up for polling
 func (r *Resolver) DoGetCryptoTopupStatus(ctx context.Context, topupID string) (*model.CryptoTopupStatus, error) {
+	if err := requireBillingScope(ctx, "billing:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic crypto top-up status")
 		expiresAt := time.Now().Add(23 * time.Hour)
@@ -1825,6 +1923,9 @@ func (r *Resolver) DoGetCryptoTopupStatus(ctx context.Context, topupID string) (
 // DoPromoteToPaid switches a verified wallet account from prepaid to a selected
 // postpaid tier. The Free tier does not require a collection provider.
 func (r *Resolver) DoPromoteToPaid(ctx context.Context, tierID string) (model.PromoteToPaidResult, error) {
+	if err := requireBillingScope(ctx, "billing:write"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic promotion result")
 		return &model.PromoteToPaidPayload{
@@ -1886,6 +1987,9 @@ func (r *Resolver) DoPromoteToPaid(ctx context.Context, tierID string) (model.Pr
 // DoChangeBillingTier changes a postpaid tenant's billing tier. Purser owns
 // the immediate-vs-scheduled semantics and cluster-access reconciliation.
 func (r *Resolver) DoChangeBillingTier(ctx context.Context, tierID string) (model.ChangeBillingTierResult, error) {
+	if err := requireBillingScope(ctx, "billing:write"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		now := time.Now()
 		return &model.ChangeBillingTierPayload{
@@ -1954,6 +2058,9 @@ func (r *Resolver) DoChangeBillingTier(ctx context.Context, tierID string) (mode
 
 // DoGetBillingDetails returns billing details for the current tenant
 func (r *Resolver) DoGetBillingDetails(ctx context.Context) (*purserpb.BillingDetails, error) {
+	if err := requireBillingScope(ctx, "billing:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic billing details")
 		now := time.Now()
@@ -1990,6 +2097,9 @@ func (r *Resolver) DoGetBillingDetails(ctx context.Context) (*purserpb.BillingDe
 
 // DoUpdateBillingDetails updates billing details for the current tenant
 func (r *Resolver) DoUpdateBillingDetails(ctx context.Context, input model.UpdateBillingDetailsInput) (*purserpb.BillingDetails, error) {
+	if err := requireBillingScope(ctx, "billing:write"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic billing details after update")
 		now := time.Now()

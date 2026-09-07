@@ -780,6 +780,9 @@ func (r *Resolver) loadStreamHealthMetrics(ctx context.Context, stream *string, 
 
 // DoGetTenantDailyStats returns daily tenant statistics for PlatformOverview.dailyStats.
 func (r *Resolver) DoGetTenantDailyStats(ctx context.Context, days *int) ([]*periscopepb.TenantDailyStat, error) {
+	if err := middleware.RequirePermission(ctx, "analytics:read"); err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Demo mode: returning synthetic tenant daily stats")
 		return demo.GenerateTenantDailyStats(days), nil

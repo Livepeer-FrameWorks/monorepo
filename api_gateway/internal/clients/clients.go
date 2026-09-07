@@ -36,6 +36,7 @@ type ServiceClients struct {
 // Config represents the configuration for all service clients
 type Config struct {
 	ServiceToken string
+	JWTSecret    []byte
 	Timeout      time.Duration
 	Logger       logging.Logger
 }
@@ -57,14 +58,15 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 
 	// Initialize Commodore gRPC client
 	commodoreClient, err := commodore.NewGRPCClient(commodore.GRPCConfig{
-		GRPCAddr:      config.RequireEnv("COMMODORE_GRPC_ADDR"),
-		Timeout:       cfg.Timeout,
-		Logger:        cfg.Logger,
-		Cache:         qmCache,
-		ServiceToken:  cfg.ServiceToken,
-		AllowInsecure: grpcAllowInsecure,
-		CACertFile:    grpcCACertFile,
-		ServerName:    config.GetServiceGRPCTLSServerName("commodore"),
+		GRPCAddr:           config.RequireEnv("COMMODORE_GRPC_ADDR"),
+		Timeout:            cfg.Timeout,
+		Logger:             cfg.Logger,
+		Cache:              qmCache,
+		ServiceToken:       cfg.ServiceToken,
+		DelegatedJWTSecret: cfg.JWTSecret,
+		AllowInsecure:      grpcAllowInsecure,
+		CACertFile:         grpcCACertFile,
+		ServerName:         config.GetServiceGRPCTLSServerName("commodore"),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Commodore gRPC client: %w", err)
@@ -72,13 +74,14 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 
 	// Initialize Periscope gRPC client
 	periscopeClient, err := periscope.NewGRPCClient(periscope.GRPCConfig{
-		GRPCAddr:      config.RequireEnv("PERISCOPE_GRPC_ADDR"),
-		Timeout:       cfg.Timeout,
-		Logger:        cfg.Logger,
-		ServiceToken:  cfg.ServiceToken,
-		AllowInsecure: grpcAllowInsecure,
-		CACertFile:    grpcCACertFile,
-		ServerName:    config.GetServiceGRPCTLSServerName("periscope"),
+		GRPCAddr:           config.RequireEnv("PERISCOPE_GRPC_ADDR"),
+		Timeout:            cfg.Timeout,
+		Logger:             cfg.Logger,
+		ServiceToken:       cfg.ServiceToken,
+		DelegatedJWTSecret: cfg.JWTSecret,
+		AllowInsecure:      grpcAllowInsecure,
+		CACertFile:         grpcCACertFile,
+		ServerName:         config.GetServiceGRPCTLSServerName("periscope"),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Periscope gRPC client: %w", err)
@@ -86,13 +89,14 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 
 	// Initialize Purser gRPC client
 	purserClient, err := purser.NewGRPCClient(purser.GRPCConfig{
-		GRPCAddr:      config.RequireEnv("PURSER_GRPC_ADDR"),
-		Timeout:       cfg.Timeout,
-		Logger:        cfg.Logger,
-		ServiceToken:  cfg.ServiceToken,
-		AllowInsecure: grpcAllowInsecure,
-		CACertFile:    grpcCACertFile,
-		ServerName:    config.GetServiceGRPCTLSServerName("purser"),
+		GRPCAddr:           config.RequireEnv("PURSER_GRPC_ADDR"),
+		Timeout:            cfg.Timeout,
+		Logger:             cfg.Logger,
+		ServiceToken:       cfg.ServiceToken,
+		DelegatedJWTSecret: cfg.JWTSecret,
+		AllowInsecure:      grpcAllowInsecure,
+		CACertFile:         grpcCACertFile,
+		ServerName:         config.GetServiceGRPCTLSServerName("purser"),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Purser gRPC client: %w", err)
@@ -100,13 +104,14 @@ func NewServiceClients(cfg Config) (*ServiceClients, error) {
 
 	// Initialize Quartermaster gRPC client
 	quartermasterClient, err := quartermaster.NewGRPCClient(quartermaster.GRPCConfig{
-		GRPCAddr:      config.RequireEnv("QUARTERMASTER_GRPC_ADDR"),
-		Timeout:       cfg.Timeout,
-		Logger:        cfg.Logger,
-		ServiceToken:  cfg.ServiceToken,
-		AllowInsecure: grpcAllowInsecure,
-		CACertFile:    grpcCACertFile,
-		ServerName:    config.GetServiceGRPCTLSServerName("quartermaster"),
+		GRPCAddr:           config.RequireEnv("QUARTERMASTER_GRPC_ADDR"),
+		Timeout:            cfg.Timeout,
+		Logger:             cfg.Logger,
+		ServiceToken:       cfg.ServiceToken,
+		DelegatedJWTSecret: cfg.JWTSecret,
+		AllowInsecure:      grpcAllowInsecure,
+		CACertFile:         grpcCACertFile,
+		ServerName:         config.GetServiceGRPCTLSServerName("quartermaster"),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Quartermaster gRPC client: %w", err)

@@ -13,12 +13,12 @@ import (
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/demo"
 	"frameworks/api_gateway/internal/middleware"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/authz"
 	fhclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	pkgdns "github.com/Livepeer-FrameWorks/monorepo/pkg/dns"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
@@ -182,6 +182,13 @@ func (r *Resolver) DoGetCluster(ctx context.Context, id string) (*quartermasterp
 			}
 		}
 		return nil, fmt.Errorf("demo cluster not found")
+	}
+	tenantID := tenantIDFromContext(ctx)
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+	if err := requirePrivateInfrastructureRead(ctx, tenantID); err != nil {
+		return nil, err
 	}
 
 	r.Logger.WithField("cluster_id", id).Info("Getting cluster")
@@ -620,6 +627,9 @@ func (r *Resolver) DoUpdateTenant(ctx context.Context, input model.UpdateTenantI
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
+	if err := middleware.RequireTenantAction(ctx, "settings:write", authz.ActionManageTenantSettings, tenantID); err != nil {
+		return nil, err
+	}
 
 	r.Logger.WithField("tenant_id", tenantID).Info("Updating tenant")
 
@@ -645,13 +655,8 @@ func (r *Resolver) DoUpdateTenant(ctx context.Context, input model.UpdateTenantI
 			return nil, fmt.Errorf("invalid settings JSON: expected an object")
 		}
 
-		if v := raw["primaryClusterId"]; v != nil {
-			if val, ok := v.(string); ok && strings.TrimSpace(val) != "" {
-				clusterID := strings.TrimSpace(val)
-				updateReq.PrimaryClusterId = &clusterID
-				updates++
-				changedFields = append(changedFields, "primary_cluster_id")
-			}
+		if _, present := raw["primaryClusterId"]; present {
+			return nil, fmt.Errorf("primaryClusterId must be changed through setPreferredCluster")
 		}
 
 		if v, present := raw["subdomain"]; present {
@@ -676,13 +681,8 @@ func (r *Resolver) DoUpdateTenant(ctx context.Context, input model.UpdateTenantI
 			changedFields = append(changedFields, "custom_domain")
 		}
 
-		if v := raw["deploymentModel"]; v != nil {
-			if val, ok := v.(string); ok && strings.TrimSpace(val) != "" {
-				deployModel := strings.TrimSpace(val)
-				updateReq.DeploymentModel = &deployModel
-				updates++
-				changedFields = append(changedFields, "deployment_model")
-			}
+		if _, present := raw["deploymentModel"]; present {
+			return nil, fmt.Errorf("deploymentModel is managed by the infrastructure control plane")
 		}
 	}
 
@@ -1148,6 +1148,9 @@ func (r *Resolver) DoCreateClusterSubscription(ctx context.Context, clusterID st
 	if tenantID == "" {
 		return nil, fmt.Errorf("tenant context required")
 	}
+	if err := requireEdgeLifecycleMutation(ctx, tenantID); err != nil {
+		return nil, err
+	}
 
 	resp, err := r.Clients.Purser.CreateClusterSubscription(ctx, tenantID, clusterID, "")
 	if err != nil {
@@ -1200,6 +1203,9 @@ func (r *Resolver) DoUnsubscribeFromCluster(ctx context.Context, clusterID strin
 	}
 	if tenantID == "" {
 		return false, fmt.Errorf("tenant context required")
+	}
+	if err := requireEdgeLifecycleMutation(ctx, tenantID); err != nil {
+		return false, err
 	}
 
 	_, err := r.Clients.Quartermaster.UnsubscribeFromCluster(ctx, &quartermasterpb.UnsubscribeFromClusterRequest{
@@ -1398,6 +1404,9 @@ func (r *Resolver) DoCreateEdgeCluster(ctx context.Context, input model.CreateEd
 	if tenantID == "" {
 		return &model.AuthError{Message: "Authentication required"}, nil
 	}
+	if err := middleware.RequireTenantAction(ctx, "infrastructure:write", authz.ActionManageEdgeCluster, tenantID); err != nil {
+		return &model.AuthError{Message: "Insufficient permissions"}, nil //nolint:nilerr // authorization failure is encoded in the GraphQL result union
+	}
 
 	req := &quartermasterpb.EnableSelfHostingRequest{
 		TenantId:         tenantID,
@@ -1506,6 +1515,9 @@ func (r *Resolver) DoCreateEnrollmentToken(ctx context.Context, clusterID string
 	}
 	if tenantID == "" {
 		return &model.AuthError{Message: "Authentication required"}, nil
+	}
+	if err := middleware.RequireTenantAction(ctx, "infrastructure:write", authz.ActionManageEdgeCluster, tenantID); err != nil {
+		return &model.AuthError{Message: "Insufficient permissions"}, nil //nolint:nilerr // authorization failure is encoded in the GraphQL result union
 	}
 
 	req := &quartermasterpb.CreateEnrollmentTokenRequest{
@@ -1640,6 +1652,9 @@ func (r *Resolver) DoUpdateClusterMarketplace(ctx context.Context, clusterID str
 	if tenantID == "" {
 		return &model.AuthError{Message: "Authentication required"}, nil
 	}
+	if err := middleware.RequireTenantAction(ctx, "infrastructure:write", authz.ActionManageEdgeCluster, tenantID); err != nil {
+		return &model.AuthError{Message: "Insufficient permissions"}, nil //nolint:nilerr // authorization failure is encoded in the GraphQL result union
+	}
 
 	// Update pricing in Purser if any pricing fields are set
 	hasPricingUpdate := input.PricingModel != nil || input.MonthlyPriceCents != nil
@@ -1732,6 +1747,9 @@ func (r *Resolver) DoCreateClusterInvite(ctx context.Context, input model.Create
 	if tenantID == "" {
 		return &model.AuthError{Message: "Authentication required"}, nil
 	}
+	if err := requireEdgeLifecycleMutation(ctx, tenantID); err != nil {
+		return &model.AuthError{Message: err.Error()}, nil //nolint:nilerr // GraphQL union carries authorization failures as data.
+	}
 
 	req := &quartermasterpb.CreateClusterInviteRequest{
 		ClusterId:       input.ClusterID,
@@ -1786,6 +1804,9 @@ func (r *Resolver) DoRevokeClusterInvite(ctx context.Context, inviteID string) (
 	if tenantID == "" {
 		return &model.AuthError{Message: "Authentication required"}, nil
 	}
+	if err := requireEdgeLifecycleMutation(ctx, tenantID); err != nil {
+		return &model.AuthError{Message: err.Error()}, nil //nolint:nilerr // GraphQL union carries authorization failures as data.
+	}
 
 	err := r.Clients.Quartermaster.RevokeClusterInvite(ctx, &quartermasterpb.RevokeClusterInviteRequest{
 		InviteId:      inviteID,
@@ -1823,6 +1844,12 @@ func (r *Resolver) DoListClusterInvites(ctx context.Context, clusterID string) (
 	tenantID := ""
 	if user := middleware.GetUserFromContext(ctx); user != nil {
 		tenantID = user.TenantID
+	}
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+	if err := requirePrivateInfrastructureRead(ctx, tenantID); err != nil {
+		return nil, err
 	}
 
 	resp, err := r.Clients.Quartermaster.ListClusterInvites(ctx, &quartermasterpb.ListClusterInvitesRequest{
@@ -1883,6 +1910,9 @@ func (r *Resolver) DoRequestClusterSubscription(ctx context.Context, clusterID s
 	if tenantID == "" {
 		return &model.AuthError{Message: "Authentication required"}, nil
 	}
+	if err := requireEdgeLifecycleMutation(ctx, tenantID); err != nil {
+		return &model.AuthError{Message: err.Error()}, nil //nolint:nilerr // GraphQL union carries authorization failures as data.
+	}
 
 	if gate := r.requireCommercialAccessAllowed(ctx, tenantID, clusterID); gate != nil {
 		return gate, nil
@@ -1935,6 +1965,9 @@ func (r *Resolver) DoAcceptClusterInvite(ctx context.Context, inviteToken string
 	if tenantID == "" {
 		return &model.AuthError{Message: "Authentication required"}, nil
 	}
+	if err := requireEdgeLifecycleMutation(ctx, tenantID); err != nil {
+		return &model.AuthError{Message: err.Error()}, nil //nolint:nilerr // GraphQL union carries authorization failures as data.
+	}
 
 	clusterID, lookupFailure := r.clusterIDForInviteToken(ctx, tenantID, inviteToken)
 	if lookupFailure != "" {
@@ -1984,6 +2017,12 @@ func (r *Resolver) DoListPendingSubscriptions(ctx context.Context, clusterID str
 	if user := middleware.GetUserFromContext(ctx); user != nil {
 		tenantID = user.TenantID
 	}
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+	if err := requirePrivateInfrastructureRead(ctx, tenantID); err != nil {
+		return nil, err
+	}
 
 	resp, err := r.Clients.Quartermaster.ListPendingSubscriptions(ctx, &quartermasterpb.ListPendingSubscriptionsRequest{
 		ClusterId:     clusterID,
@@ -2011,6 +2050,9 @@ func (r *Resolver) DoApproveClusterSubscription(ctx context.Context, subscriptio
 	}
 	if tenantID == "" {
 		return &model.AuthError{Message: "Authentication required"}, nil
+	}
+	if err := requireEdgeLifecycleMutation(ctx, tenantID); err != nil {
+		return &model.AuthError{Message: err.Error()}, nil //nolint:nilerr // GraphQL union carries authorization failures as data.
 	}
 
 	sub, err := r.Clients.Quartermaster.ApproveClusterSubscription(ctx, &quartermasterpb.ApproveClusterSubscriptionRequest{
@@ -2097,6 +2139,9 @@ func (r *Resolver) DoRejectClusterSubscription(ctx context.Context, subscription
 	}
 	if tenantID == "" {
 		return &model.AuthError{Message: "Authentication required"}, nil
+	}
+	if err := requireEdgeLifecycleMutation(ctx, tenantID); err != nil {
+		return &model.AuthError{Message: err.Error()}, nil //nolint:nilerr // GraphQL union carries authorization failures as data.
 	}
 
 	req := &quartermasterpb.RejectClusterSubscriptionRequest{
@@ -2524,6 +2569,12 @@ func (r *Resolver) DoGetPendingSubscriptionsConnection(ctx context.Context, clus
 	if user := middleware.GetUserFromContext(ctx); user != nil {
 		tenantID = user.TenantID
 	}
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+	if err := requirePrivateInfrastructureRead(ctx, tenantID); err != nil {
+		return nil, err
+	}
 
 	resp, err := r.Clients.Quartermaster.ListPendingSubscriptions(ctx, &quartermasterpb.ListPendingSubscriptionsRequest{
 		ClusterId:     clusterID,
@@ -2611,6 +2662,12 @@ func (r *Resolver) DoGetClusterInvitesConnection(ctx context.Context, clusterID 
 	tenantID := ""
 	if user := middleware.GetUserFromContext(ctx); user != nil {
 		tenantID = user.TenantID
+	}
+	if tenantID == "" {
+		return nil, fmt.Errorf("tenant context required")
+	}
+	if err := requirePrivateInfrastructureRead(ctx, tenantID); err != nil {
+		return nil, err
 	}
 
 	resp, err := r.Clients.Quartermaster.ListClusterInvites(ctx, &quartermasterpb.ListClusterInvitesRequest{
@@ -2706,6 +2763,9 @@ func (r *Resolver) DoSetPreferredCluster(ctx context.Context, clusterID string) 
 	if tenantID == "" {
 		return &model.AuthError{Message: "Authentication required"}, nil
 	}
+	if err := middleware.RequireTenantAction(ctx, "settings:write", authz.ActionManageTenantSettings, tenantID); err != nil {
+		return &model.AuthError{Message: "Insufficient permissions"}, nil //nolint:nilerr // authorization failure is encoded in the GraphQL result union
+	}
 
 	err := r.Clients.Quartermaster.UpdateTenantCluster(ctx, &quartermasterpb.UpdateTenantClusterRequest{
 		TenantId:         tenantID,
@@ -2767,8 +2827,9 @@ func (r *Resolver) DoGetMyClusterInvitesConnection(ctx context.Context, first *i
 }
 
 // DoGetStreamingConfig returns cluster-aware streaming domains for the
-// authenticated tenant. Returns nil (not error) when unavailable so the
-// frontend falls back to VITE_* env vars.
+// authenticated tenant. An authenticated control-plane failure is surfaced;
+// silently falling back to global build-time domains can send a tenant to the
+// wrong ingest or playback endpoints.
 func (r *Resolver) DoGetStreamingConfig(ctx context.Context) (*model.StreamingConfig, error) {
 	if middleware.IsDemoMode(ctx) {
 		return demo.GenerateStreamingConfig(), nil
@@ -2781,8 +2842,8 @@ func (r *Resolver) DoGetStreamingConfig(ctx context.Context) (*model.StreamingCo
 
 	resp, err := r.Clients.Quartermaster.GetClusterRouting(ctx, &quartermasterpb.GetClusterRoutingRequest{TenantId: tenantID})
 	if err != nil {
-		r.Logger.WithError(err).Debug("streamingConfig: cluster routing unavailable, returning nil")
-		return nil, nil
+		r.Logger.WithError(err).Error("streamingConfig: cluster routing unavailable")
+		return nil, fmt.Errorf("streaming configuration unavailable: %w", err)
 	}
 
 	slug := resp.GetClusterSlug()
@@ -2867,7 +2928,15 @@ func tenantAliasEligibleForStreaming(tenant *quartermasterpb.Tenant) bool {
 	if tenant == nil || !tenant.GetIsActive() {
 		return false
 	}
-	return models.DeploymentTierAliasEligible(tenant.GetDeploymentTier())
+	if !tenant.GetBillingEntitlementsObserved() {
+		switch strings.ToLower(strings.TrimSpace(tenant.GetDeploymentTier())) {
+		case "supporter", "developer", "production", "enterprise":
+			return true
+		default:
+			return false
+		}
+	}
+	return tenant.GetCustomSubdomainEnabled()
 }
 
 func streamingConfigDomain(prefix, slug, baseURL string) string {

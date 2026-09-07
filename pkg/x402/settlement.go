@@ -101,7 +101,7 @@ type CommodoreClient interface {
 	ResolveDVRHash(ctx context.Context, dvrHash string) (*commodorepb.ResolveDVRHashResponse, error)
 	ResolveIdentifier(ctx context.Context, identifier string) (*commodorepb.ResolveIdentifierResponse, error)
 	ResolveVodID(ctx context.Context, vodID string) (*commodorepb.ResolveVodIDResponse, error)
-	ValidateStreamKey(ctx context.Context, streamKey string) (*commodorepb.ValidateStreamKeyResponse, error)
+	ValidateStreamKeyAsService(ctx context.Context, streamKey string) (*commodorepb.ValidateStreamKeyResponse, error)
 }
 
 type ResourceResolution struct {
@@ -122,6 +122,7 @@ type SettlementOptions struct {
 	AllowUnresolvedCreator bool
 	Logger                 logging.Logger
 	Resolution             *ResourceResolution
+	AuthorizeTarget        func(context.Context, string, string) error
 }
 
 type SettlementResult struct {
@@ -173,12 +174,13 @@ func SettleX402Payment(ctx context.Context, opts SettlementOptions) (*Settlement
 	}
 
 	resource := strings.TrimSpace(opts.Resource)
+	allowUnresolvedCreator := opts.AllowUnresolvedCreator && unresolvedCreatorResource(resource)
 	resolution := opts.Resolution
 	if resolution == nil && resource != "" {
 		var err *SettlementError
 		resolution, err = ResolveResource(ctx, resource, opts.Commodore)
 		if err != nil {
-			if opts.AllowUnresolvedCreator && opts.AuthTenantID != "" && err.Code == ErrResourceNotFound {
+			if allowUnresolvedCreator && opts.AuthTenantID != "" && err.Code == ErrResourceNotFound {
 				resolution = &ResourceResolution{
 					Resource: resource,
 					Kind:     ResourceKindGraphQL,
@@ -186,7 +188,7 @@ func SettleX402Payment(ctx context.Context, opts SettlementOptions) (*Settlement
 					Resolved: false,
 				}
 			} else {
-				return nil, err
+				return nil, canonicalResourceResolutionError(resource, err)
 			}
 		}
 	}
@@ -212,12 +214,20 @@ func SettleX402Payment(ctx context.Context, opts SettlementOptions) (*Settlement
 			return nil, &SettlementError{Code: ErrAuthRequired, Message: "authentication required for non-viewer payments"}
 		}
 		if resolution != nil && resolution.Resolved && resolution.TenantID != "" && resolution.TenantID != opts.AuthTenantID {
-			return nil, &SettlementError{Code: ErrTargetMismatch, Message: "billable tenant does not match authenticated tenant"}
+			// Stream keys and other private identifiers are resolved with service
+			// authority. Collapse cross-tenant hits into the same public result as
+			// a miss so settlement cannot be used as a validity oracle.
+			return nil, canonicalPrivateResourceMiss()
 		}
-		if resolution != nil && !resolution.Resolved && !opts.AllowUnresolvedCreator {
-			return nil, &SettlementError{Code: ErrResourceNotFound, Message: "resource not found", ResourceType: resolutionKindLabel(kind), ResourceID: resource}
+		if resolution != nil && !resolution.Resolved && !allowUnresolvedCreator {
+			return nil, canonicalPrivateResourceMiss()
 		}
 		targetTenantID = opts.AuthTenantID
+	}
+	if opts.AuthorizeTarget != nil {
+		if err := opts.AuthorizeTarget(ctx, kind, targetTenantID); err != nil {
+			return nil, &SettlementError{Code: ErrAuthRequired, Message: err.Error()}
+		}
 	}
 
 	verifyCtx, cancelVerify := context.WithTimeout(ctx, 10*time.Second)
@@ -244,7 +254,9 @@ func SettleX402Payment(ctx context.Context, opts SettlementOptions) (*Settlement
 		return nil, &SettlementError{Code: ErrAuthOnly, Message: "auth-only payments cannot be used for settlement"}
 	}
 
-	settleCtx, cancelSettle := context.WithTimeout(ctx, 30*time.Second)
+	// Purser's facilitator may consume its full 30-second provider budget.
+	// Leave transport and durable-result handling headroom outside that call.
+	settleCtx, cancelSettle := context.WithTimeout(ctx, 45*time.Second)
 	defer cancelSettle()
 
 	settleResp, err := opts.Purser.SettleX402Payment(settleCtx, targetTenantID, payload, opts.ClientIP)
@@ -291,6 +303,15 @@ func SettleX402Payment(ctx context.Context, opts SettlementOptions) (*Settlement
 		Network:        payload.GetNetwork(),
 		QuoteID:        payload.GetQuoteId(),
 	}, nil
+}
+
+// unresolvedCreatorResource is deliberately limited to operation identifiers.
+// Private media identifiers must resolve to an owner before settlement; treating
+// a missing stream, clip, DVR, or VOD as a creator operation exposes whether the
+// identifier exists in another tenant.
+func unresolvedCreatorResource(resource string) bool {
+	resource = strings.ToLower(strings.TrimSpace(resource))
+	return strings.HasPrefix(resource, "graphql://") || strings.HasPrefix(resource, "mcp://")
 }
 
 func ResolveResource(ctx context.Context, resource string, commodore CommodoreClient) (*ResourceResolution, *SettlementError) {
@@ -342,12 +363,12 @@ func ResolveResource(ctx context.Context, resource string, commodore CommodoreCl
 		}
 		ctxTimeout, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
-		resp, err := commodore.ValidateStreamKey(ctxTimeout, key)
+		resp, err := commodore.ValidateStreamKeyAsService(ctxTimeout, key)
 		if err != nil {
-			return nil, &SettlementError{Code: ErrResourceNotFound, Message: fmt.Sprintf("invalid stream key: %v", err), ResourceType: "Stream", ResourceID: key}
+			return nil, &SettlementError{Code: ErrResourceNotFound, Message: "invalid stream key", ResourceType: "Stream"}
 		}
 		if resp == nil || !resp.Valid {
-			return nil, &SettlementError{Code: ErrResourceNotFound, Message: "invalid stream key", ResourceType: "Stream", ResourceID: key}
+			return nil, &SettlementError{Code: ErrResourceNotFound, Message: "invalid stream key", ResourceType: "Stream"}
 		}
 		return &ResourceResolution{
 			Resource: "stream://" + strings.TrimSpace(resp.StreamId),
@@ -541,7 +562,7 @@ func ResolveResource(ctx context.Context, resource string, commodore CommodoreCl
 	defer cancel()
 	resp, err := commodore.ResolveIdentifier(ctxTimeout, raw)
 	if err != nil {
-		return nil, &SettlementError{Code: ErrResourceNotFound, Message: fmt.Sprintf("failed to resolve resource: %v", err), ResourceType: "Resource", ResourceID: raw}
+		return nil, &SettlementError{Code: ErrResourceNotFound, Message: "failed to resolve resource", ResourceType: "Resource"}
 	}
 	if resp != nil && resp.Found {
 		if resp.IdentifierType == "stream" || strings.Contains(resp.IdentifierType, "internal_name") {
@@ -555,7 +576,7 @@ func ResolveResource(ctx context.Context, resource string, commodore CommodoreCl
 		}, nil
 	}
 
-	streamResp, err := commodore.ValidateStreamKey(ctxTimeout, raw)
+	streamResp, err := commodore.ValidateStreamKeyAsService(ctxTimeout, raw)
 	if err == nil && streamResp != nil && streamResp.Valid {
 		return &ResourceResolution{
 			Resource: "stream://" + strings.TrimSpace(streamResp.StreamId),
@@ -565,7 +586,9 @@ func ResolveResource(ctx context.Context, resource string, commodore CommodoreCl
 		}, nil
 	}
 
-	return nil, &SettlementError{Code: ErrResourceNotFound, Message: "resource not found", ResourceType: "Resource", ResourceID: raw}
+	// The fallback probes a bare value as a stream key. Do not echo that value
+	// through a public settlement error even when identifier resolution failed.
+	return nil, &SettlementError{Code: ErrResourceNotFound, Message: "resource not found", ResourceType: "Resource"}
 }
 
 func resolutionKindLabel(kind string) string {
@@ -583,4 +606,27 @@ func resolutionKindLabel(kind string) string {
 	default:
 		return "Resource"
 	}
+}
+
+func canonicalResourceResolutionError(resource string, err *SettlementError) *SettlementError {
+	if err == nil || isViewerResource(resource) {
+		return err
+	}
+	switch err.Code {
+	case ErrResourceNotFound, ErrInvalidResource:
+		return canonicalPrivateResourceMiss()
+	default:
+		return err
+	}
+}
+
+func canonicalPrivateResourceMiss() *SettlementError {
+	return &SettlementError{
+		Code: ErrResourceNotFound, Message: "resource not found", ResourceType: "Resource",
+	}
+}
+
+func isViewerResource(resource string) bool {
+	lower := strings.ToLower(strings.TrimSpace(resource))
+	return strings.HasPrefix(lower, "viewer://") || strings.HasPrefix(lower, "playback:")
 }

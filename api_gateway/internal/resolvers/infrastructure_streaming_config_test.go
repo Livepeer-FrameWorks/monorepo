@@ -51,13 +51,14 @@ func TestTenantAliasEligibleForStreaming(t *testing.T) {
 		want   bool
 	}{
 		{name: "nil", tenant: nil, want: false},
-		{name: "inactive paid", tenant: &quartermasterpb.Tenant{IsActive: false, DeploymentTier: "supporter"}, want: false},
+		{name: "inactive entitled", tenant: &quartermasterpb.Tenant{IsActive: false, CustomSubdomainEnabled: true, BillingEntitlementsObserved: true}, want: false},
 		{name: "active free", tenant: &quartermasterpb.Tenant{IsActive: true, DeploymentTier: "free"}, want: false},
 		{name: "active payg", tenant: &quartermasterpb.Tenant{IsActive: true, DeploymentTier: "payg"}, want: false},
 		{name: "active missing tier", tenant: &quartermasterpb.Tenant{IsActive: true}, want: false},
 		{name: "active unknown tier fails closed", tenant: &quartermasterpb.Tenant{IsActive: true, DeploymentTier: "creator"}, want: false},
-		{name: "active paid", tenant: &quartermasterpb.Tenant{IsActive: true, DeploymentTier: "supporter"}, want: true},
-		{name: "active paid with spaces", tenant: &quartermasterpb.Tenant{IsActive: true, DeploymentTier: " Production "}, want: true},
+		{name: "active entitled", tenant: &quartermasterpb.Tenant{IsActive: true, CustomSubdomainEnabled: true, BillingEntitlementsObserved: true}, want: true},
+		{name: "observed tier name is not authority", tenant: &quartermasterpb.Tenant{IsActive: true, DeploymentTier: "production", BillingEntitlementsObserved: true}, want: false},
+		{name: "epoch paid tier preserves rollout compatibility", tenant: &quartermasterpb.Tenant{IsActive: true, DeploymentTier: "production"}, want: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

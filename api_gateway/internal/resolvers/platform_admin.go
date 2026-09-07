@@ -56,10 +56,9 @@ func (r *Resolver) RequirePlatformOperator(ctx context.Context) error {
 	return nil
 }
 
-// platformGate is the single entry check for every platform admin read: demo mode
-// is handled by the callers BEFORE this (the demo sweep runs with empty
-// clients), then the operator check runs and the outcome — allowed or
-// denied — is audit-logged with the surface and target tenant.
+// platformGate is the single entry check for every platform admin read. It
+// always runs before demo generation or downstream calls so a client-selected
+// demo flag cannot open the operator surface.
 func (r *Resolver) platformGate(ctx context.Context, surface, targetTenant string) error {
 	err := r.RequirePlatformOperator(ctx)
 	r.auditPlatformRead(ctx, surface, targetTenant, err == nil)
@@ -122,8 +121,10 @@ func (c strippedIdentityCtx) Value(key any) any {
 	// backend call — stripping them turns an authorized operator into
 	// "unauthenticated" at the gateway layer.
 	case ctxkeys.KeyUserID, ctxkeys.KeyEmail, ctxkeys.KeyRole, ctxkeys.KeyJWTToken,
-		ctxkeys.KeyAPIToken, ctxkeys.KeyAPITokenHash, ctxkeys.KeyUser,
-		ctxkeys.KeySessionToken, ctxkeys.KeyWalletAddr, ctxkeys.KeyPlatformOperator:
+		ctxkeys.KeyJWTID, ctxkeys.KeyJWTExpiresAt, ctxkeys.KeyAPIToken,
+		ctxkeys.KeyAPITokenHash, ctxkeys.KeyAPITokenID, ctxkeys.KeyDelegatedJWTs,
+		ctxkeys.KeyUser, ctxkeys.KeySessionToken, ctxkeys.KeyWalletAddr,
+		ctxkeys.KeyPlatformOperator:
 		return nil
 	}
 	return c.Context.Value(key)
@@ -143,11 +144,11 @@ func platformTenantCtx(ctx context.Context, tenantID string) context.Context {
 }
 
 func (r *Resolver) DoPlatformTenants(ctx context.Context, timeRange *model.TimeRangeInput, limit *int) (*model.PlatformTenantIndex, error) {
-	if middleware.IsDemoMode(ctx) {
-		return demo.GeneratePlatformTenantIndex(), nil
-	}
 	if err := r.platformGate(ctx, "platform.tenants", ""); err != nil {
 		return nil, err
+	}
+	if middleware.IsDemoMode(ctx) {
+		return demo.GeneratePlatformTenantIndex(), nil
 	}
 
 	max := platformDefaultTenantLimit
@@ -247,11 +248,11 @@ func (r *Resolver) DoPlatformTenants(ctx context.Context, timeRange *model.TimeR
 }
 
 func (r *Resolver) DoPlatformTenant(ctx context.Context, id string) (*markers.TenantAdminDetail, error) {
-	if middleware.IsDemoMode(ctx) {
-		return &markers.TenantAdminDetail{TenantID: demo.DemoTenantID}, nil
-	}
 	if err := r.platformGate(ctx, "platform.tenant", id); err != nil {
 		return nil, err
+	}
+	if middleware.IsDemoMode(ctx) {
+		return &markers.TenantAdminDetail{TenantID: demo.DemoTenantID}, nil
 	}
 	if id == "" {
 		return nil, fmt.Errorf("tenant id is required")
@@ -265,11 +266,11 @@ func (r *Resolver) DoPlatformTenant(ctx context.Context, id string) (*markers.Te
 // actually read, not just the entry point.
 
 func (r *Resolver) DoPlatformTenantIdentity(ctx context.Context, tenantID string) (*quartermasterpb.Tenant, error) {
-	if middleware.IsDemoMode(ctx) {
-		return demo.GenerateTenant(), nil
-	}
 	if err := r.platformGate(ctx, "platform.tenant.identity", tenantID); err != nil {
 		return nil, err
+	}
+	if middleware.IsDemoMode(ctx) {
+		return demo.GenerateTenant(), nil
 	}
 	resp, err := r.Clients.Quartermaster.GetTenant(platformServiceCtx(ctx), tenantID)
 	if err != nil {
@@ -280,11 +281,11 @@ func (r *Resolver) DoPlatformTenantIdentity(ctx context.Context, tenantID string
 }
 
 func (r *Resolver) DoPlatformTenantActivity(ctx context.Context, tenantID string, timeRange *model.TimeRangeInput) (*model.TenantActivitySummary, error) {
-	if middleware.IsDemoMode(ctx) {
-		return demo.GenerateTenantActivitySummary(), nil
-	}
 	if err := r.platformGate(ctx, "platform.tenant.activity", tenantID); err != nil {
 		return nil, err
+	}
+	if middleware.IsDemoMode(ctx) {
+		return demo.GenerateTenantActivitySummary(), nil
 	}
 	resp, err := r.Clients.Periscope.ListTenantActivity(platformServiceCtx(ctx), toTimeRangeOpts(timeRange), []string{tenantID}, 1)
 	if err != nil {
@@ -301,21 +302,19 @@ func (r *Resolver) DoPlatformTenantActivity(ctx context.Context, tenantID string
 // DoPlatformTenantOverview reuses the tenant-facing analytics overview by
 // impersonating the target tenant at the data layer.
 func (r *Resolver) DoPlatformTenantOverview(ctx context.Context, tenantID string, timeRange *model.TimeRangeInput) (*periscopepb.GetPlatformOverviewResponse, error) {
-	if !middleware.IsDemoMode(ctx) {
-		if err := r.platformGate(ctx, "platform.tenant.overview", tenantID); err != nil {
-			return nil, err
-		}
+	if err := r.platformGate(ctx, "platform.tenant.overview", tenantID); err != nil {
+		return nil, err
 	}
 	// Demo mode short-circuits inside DoGetPlatformOverview.
 	return r.DoGetPlatformOverview(platformTenantCtx(ctx, tenantID), timeRange)
 }
 
 func (r *Resolver) DoPlatformTenantBillingSnapshot(ctx context.Context, tenantID string) (*purserpb.TenantBillingSnapshot, error) {
-	if middleware.IsDemoMode(ctx) {
-		return demo.GenerateTenantBillingSnapshot(demo.DemoTenantID), nil
-	}
 	if err := r.platformGate(ctx, "platform.tenant.billing.snapshot", tenantID); err != nil {
 		return nil, err
+	}
+	if middleware.IsDemoMode(ctx) {
+		return demo.GenerateTenantBillingSnapshot(demo.DemoTenantID), nil
 	}
 	resp, err := r.Clients.Purser.ListTenantBillingSnapshots(platformServiceCtx(ctx), []string{tenantID}, 1)
 	if err != nil {
@@ -332,47 +331,39 @@ func (r *Resolver) DoPlatformTenantBillingSnapshot(ctx context.Context, tenantID
 // also keep the demo sweep green.
 
 func (r *Resolver) DoPlatformTenantInvoices(ctx context.Context, tenantID string, first *int, after *string, last *int, before *string) (*model.InvoicesConnection, error) {
-	if !middleware.IsDemoMode(ctx) {
-		if err := r.platformGate(ctx, "platform.tenant.billing.invoices", tenantID); err != nil {
-			return nil, err
-		}
+	if err := r.platformGate(ctx, "platform.tenant.billing.invoices", tenantID); err != nil {
+		return nil, err
 	}
 	return r.DoGetInvoicesConnection(platformTenantCtx(ctx, tenantID), first, after, last, before)
 }
 
 func (r *Resolver) DoPlatformTenantPrepaidBalance(ctx context.Context, tenantID string, currency *string) (*model.PrepaidBalance, error) {
-	if !middleware.IsDemoMode(ctx) {
-		if err := r.platformGate(ctx, "platform.tenant.billing.prepaidBalance", tenantID); err != nil {
-			return nil, err
-		}
+	if err := r.platformGate(ctx, "platform.tenant.billing.prepaidBalance", tenantID); err != nil {
+		return nil, err
 	}
 	return r.DoGetPrepaidBalance(platformTenantCtx(ctx, tenantID), currency)
 }
 
 func (r *Resolver) DoPlatformTenantBalanceTransactions(ctx context.Context, tenantID string, page *model.ConnectionInput, transactionType *string, timeRange *model.TimeRangeInput) (*model.BalanceTransactionsConnection, error) {
-	if !middleware.IsDemoMode(ctx) {
-		if err := r.platformGate(ctx, "platform.tenant.billing.balanceTransactions", tenantID); err != nil {
-			return nil, err
-		}
+	if err := r.platformGate(ctx, "platform.tenant.billing.balanceTransactions", tenantID); err != nil {
+		return nil, err
 	}
 	return r.DoGetBalanceTransactionsConnection(platformTenantCtx(ctx, tenantID), page, transactionType, timeRange)
 }
 
 func (r *Resolver) DoPlatformTenantUsageRecords(ctx context.Context, tenantID string, timeRange *model.TimeRangeInput, first *int, after *string, last *int, before *string) (*model.UsageRecordsConnection, error) {
-	if !middleware.IsDemoMode(ctx) {
-		if err := r.platformGate(ctx, "platform.tenant.billing.usageRecords", tenantID); err != nil {
-			return nil, err
-		}
+	if err := r.platformGate(ctx, "platform.tenant.billing.usageRecords", tenantID); err != nil {
+		return nil, err
 	}
 	return r.DoGetUsageRecordsConnection(platformTenantCtx(ctx, tenantID), timeRange, first, after, last, before)
 }
 
 func (r *Resolver) DoPlatformTenantContent(ctx context.Context, tenantID string) (*model.TenantAdminContent, error) {
-	if middleware.IsDemoMode(ctx) {
-		return demo.GenerateTenantAdminContent(), nil
-	}
 	if err := r.platformGate(ctx, "platform.tenant.content", tenantID); err != nil {
 		return nil, err
+	}
+	if middleware.IsDemoMode(ctx) {
+		return demo.GenerateTenantAdminContent(), nil
 	}
 	sctx := platformServiceCtx(ctx)
 	content := &model.TenantAdminContent{}
@@ -420,11 +411,11 @@ const platformClusterTenantPageSize = 10
 const platformClusterFanout = 8
 
 func (r *Resolver) DoPlatformClusters(ctx context.Context) ([]*model.ClusterPivotRow, error) {
-	if middleware.IsDemoMode(ctx) {
-		return demo.GenerateClusterPivotRows(), nil
-	}
 	if err := r.platformGate(ctx, "platform.clusters", ""); err != nil {
 		return nil, err
+	}
+	if middleware.IsDemoMode(ctx) {
+		return demo.GenerateClusterPivotRows(), nil
 	}
 	sctx := platformServiceCtx(ctx)
 

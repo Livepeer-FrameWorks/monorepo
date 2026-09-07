@@ -98,6 +98,9 @@ func ViewerX402Middleware(serviceClients *clients.ServiceClients, logger logging
 				Commodore:     serviceClients.Commodore,
 				Logger:        logger,
 				Resolution:    resolution,
+				AuthorizeTarget: func(authCtx context.Context, resourceKind, targetTenantID string) error {
+					return RequireX402Target(authCtx, resourceKind, targetTenantID, true)
+				},
 			})
 			if settleErr != nil {
 				if settleErr.Code == x402.ErrSettlementPending {

@@ -22,6 +22,28 @@ func (errReader) Read(_ []byte) (int, error) {
 	return 0, errors.New("read failed")
 }
 
+func TestInteractiveJWTPathsRejectDelegatedAPIToken(t *testing.T) {
+	secret := []byte("secret")
+	token, err := auth.GenerateDelegatedAPITokenJWT("user-1", "tenant-1", "", "owner", "token-1", []string{"streams:read"}, "quartermaster", secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	if got := optionalJWTAuthResult(req, secret); got != nil {
+		t.Fatalf("optional JWT path accepted delegation: %+v", got)
+	}
+
+	r := gin.New()
+	r.Use(RequireJWTAuth(secret))
+	r.GET("/", func(c *gin.Context) { c.Status(http.StatusOK) })
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("RequireJWTAuth status = %d, want 401", w.Code)
+	}
+}
+
 func TestPublicOrJWTAuthAllowlistedQuery(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

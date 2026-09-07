@@ -7,6 +7,7 @@ import (
 
 	"frameworks/api_gateway/graph/model"
 	"frameworks/api_gateway/internal/clients/clientstest"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 )
@@ -50,6 +51,13 @@ func TestDoSetNodeMode(t *testing.T) {
 	}
 	if denied.Calls != 0 {
 		t.Fatalf("guard must not reach backend, Calls=%d", denied.Calls)
+	}
+	memberCtx := context.WithValue(clientstest.AuthedCtx("t1"), ctxkeys.KeyRole, "member")
+	if _, memberErr := commoW2(denied).DoSetNodeMode(memberCtx, model.SetNodeModeInput{NodeID: "node-1", Mode: model.NodeOperationalModeDraining}); memberErr == nil {
+		t.Fatal("tenant member was allowed to change node mode")
+	}
+	if denied.Calls != 0 {
+		t.Fatalf("member denial reached backend, Calls=%d", denied.Calls)
 	}
 
 	// Invalid (empty) node ID → ValidationError, no backend call.

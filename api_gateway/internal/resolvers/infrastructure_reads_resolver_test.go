@@ -27,7 +27,14 @@ func qmR(qm *clientstest.FakeQuartermaster) *Resolver {
 // empty; this seam drives their real path.
 func qmUserCtx(tenantID string) context.Context {
 	ctx := clientstest.AuthedCtx(tenantID)
-	return context.WithValue(ctx, ctxkeys.KeyUser, &middleware.UserContext{TenantID: tenantID})
+	ctx = context.WithValue(ctx, ctxkeys.KeyRole, "owner")
+	return context.WithValue(ctx, ctxkeys.KeyUser, &middleware.UserContext{TenantID: tenantID, Role: "owner"})
+}
+
+func qmMemberCtx(tenantID string) context.Context {
+	ctx := clientstest.AuthedCtx(tenantID)
+	ctx = context.WithValue(ctx, ctxkeys.KeyRole, "member")
+	return context.WithValue(ctx, ctxkeys.KeyUser, &middleware.UserContext{TenantID: tenantID, Role: "member"})
 }
 
 // ---- DoGetTenant: ctxkeys tenant guard, unwraps resp.Tenant ----
@@ -42,7 +49,7 @@ func TestDoGetTenant_HappyAndGuards(t *testing.T) {
 	}
 	r := qmR(qm)
 
-	got, err := r.DoGetTenant(clientstest.AuthedCtx("t1"))
+	got, err := r.DoGetTenant(qmUserCtx("t1"))
 	if err != nil {
 		t.Fatalf("DoGetTenant: %v", err)
 	}
@@ -71,7 +78,7 @@ func TestDoGetTenant_NotFoundAndError(t *testing.T) {
 			return &quartermasterpb.GetTenantResponse{}, nil
 		},
 	}
-	if _, err := qmR(nilTenant).DoGetTenant(clientstest.AuthedCtx("t1")); err == nil {
+	if _, err := qmR(nilTenant).DoGetTenant(qmUserCtx("t1")); err == nil {
 		t.Fatal("expected not-found error for nil Tenant")
 	}
 
@@ -80,8 +87,29 @@ func TestDoGetTenant_NotFoundAndError(t *testing.T) {
 			return nil, errors.New("boom")
 		},
 	}
-	if _, err := qmR(failing).DoGetTenant(clientstest.AuthedCtx("t1")); err == nil {
+	if _, err := qmR(failing).DoGetTenant(qmUserCtx("t1")); err == nil {
 		t.Fatal("expected backend error to propagate")
+	}
+}
+
+func TestTenantReadAllowsMemberButPrivateInventoryStillRejects(t *testing.T) {
+	ctx := clientstest.AuthedCtx("t1")
+	ctx = context.WithValue(ctx, ctxkeys.KeyRole, "member")
+	ctx = context.WithValue(ctx, ctxkeys.KeyUser, &middleware.UserContext{TenantID: "t1", Role: "member"})
+	qm := &clientstest.FakeQuartermaster{
+		GetTenantFn: func(context.Context, string) (*quartermasterpb.GetTenantResponse, error) {
+			return &quartermasterpb.GetTenantResponse{Tenant: &quartermasterpb.Tenant{Id: "t1"}}, nil
+		},
+	}
+
+	if _, err := qmR(qm).DoGetTenant(ctx); err != nil {
+		t.Fatalf("member tenant read rejected: %v", err)
+	}
+	if _, err := qmR(qm).DoGetClusters(ctx, nil, nil); err == nil {
+		t.Fatal("member cluster inventory unexpectedly allowed")
+	}
+	if qm.Calls != 1 {
+		t.Fatalf("private inventory denial leaked a backend call: %d total calls", qm.Calls)
 	}
 }
 
@@ -100,7 +128,7 @@ func TestDoGetClusters_HappyAndGuard(t *testing.T) {
 		},
 	}
 	first := 5
-	got, err := qmR(qm).DoGetClusters(clientstest.AuthedCtx("t1"), &first, nil)
+	got, err := qmR(qm).DoGetClusters(qmUserCtx("t1"), &first, nil)
 	if err != nil {
 		t.Fatalf("DoGetClusters: %v", err)
 	}
@@ -122,7 +150,7 @@ func TestDoGetClusters_HappyAndGuard(t *testing.T) {
 			return &quartermasterpb.ListClustersResponse{}, nil
 		},
 	}
-	if _, err := qmR(empty).DoGetClusters(clientstest.AuthedCtx("t1"), nil, nil); err == nil {
+	if _, err := qmR(empty).DoGetClusters(qmUserCtx("t1"), nil, nil); err == nil {
 		t.Fatal("expected cluster-owner-required error")
 	}
 
@@ -491,6 +519,54 @@ func TestDoListPendingSubscriptions_PassesClusterAndOwner(t *testing.T) {
 	}
 	if _, err := qmR(failing).DoListPendingSubscriptions(qmUserCtx("t1"), "c1"); err == nil {
 		t.Fatal("expected error to propagate")
+	}
+}
+
+func TestOwnerOnlyInviteAndSubscriptionReadsRejectMemberBeforeBackend(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(*Resolver) error
+	}{
+		{
+			name: "cluster invites",
+			call: func(r *Resolver) error {
+				_, err := r.DoListClusterInvites(qmMemberCtx("t1"), "c1")
+				return err
+			},
+		},
+		{
+			name: "pending subscriptions",
+			call: func(r *Resolver) error {
+				_, err := r.DoListPendingSubscriptions(qmMemberCtx("t1"), "c1")
+				return err
+			},
+		},
+		{
+			name: "cluster invite connection",
+			call: func(r *Resolver) error {
+				_, err := r.DoGetClusterInvitesConnection(qmMemberCtx("t1"), "c1", nil, nil, nil, nil)
+				return err
+			},
+		},
+		{
+			name: "pending subscription connection",
+			call: func(r *Resolver) error {
+				_, err := r.DoGetPendingSubscriptionsConnection(qmMemberCtx("t1"), "c1", nil, nil, nil, nil)
+				return err
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			qm := &clientstest.FakeQuartermaster{}
+			if err := test.call(qmR(qm)); err == nil {
+				t.Fatal("expected member authorization error")
+			}
+			if qm.Calls != 0 {
+				t.Fatalf("authorization guard leaked a backend call: Calls=%d", qm.Calls)
+			}
+		})
 	}
 }
 

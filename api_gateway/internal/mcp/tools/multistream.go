@@ -16,31 +16,29 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// RegisterMultistreamTools registers push-target management. Cost-affecting:
-// each enabled push target multiplies the egress bill while the source
-// stream is live.
+// RegisterMultistreamTools registers push-target management.
 func RegisterMultistreamTools(server *mcp.Server, serviceClients *clients.ServiceClients, _ *resolvers.Resolver, checker *preflight.Checker, logger logging.Logger) {
 	addTool(server, &mcp.Tool{
 		Name:        "list_push_targets",
-		Description: "List multistream push targets attached to a stream. target_uri values are masked in the response (rtmp://...****xxxx).",
+		Description: "List multistream push targets attached to a stream. target_uri values retain only the scheme and destination host; credential-bearing paths and parameters are redacted.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args ListPushTargetsInput) (*mcp.CallToolResult, any, error) {
 		return handleListPushTargets(ctx, args, serviceClients, logger)
 	})
 	addTool(server, &mcp.Tool{
 		Name:        "create_push_target",
-		Description: "Add a multistream push target. Platform must be one of twitch, youtube, facebook, kick, x, or custom. When the source stream is live, FrameWorks pushes to every enabled target. Cost-affecting: each enabled target multiplies egress.",
+		Description: "Add a multistream push target. Platform must be one of twitch, youtube, facebook, kick, x, or custom. Each enabled live destination consumes one viewer-capacity slot and contributes delivered minutes and egress with delivery_kind=restream; it is not counted as a human viewer.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args CreatePushTargetInput) (*mcp.CallToolResult, any, error) {
 		return handleCreatePushTarget(ctx, args, serviceClients, checker, logger)
 	})
 	addTool(server, &mcp.Tool{
 		Name:        "update_push_target",
-		Description: "Update a push target's name / target URI / enabled flag. Disable instead of delete to keep history.",
+		Description: "Update a push target's name, target URI, or enabled flag. Live changes are reconciled asynchronously; list_push_targets exposes pending, pushing, retrying, stopping, idle, or failed state.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args UpdatePushTargetInput) (*mcp.CallToolResult, any, error) {
 		return handleUpdatePushTarget(ctx, args, serviceClients, checker, logger)
 	})
 	addTool(server, &mcp.Tool{
 		Name:        "delete_push_target",
-		Description: "Delete a push target. Live pushes already in flight to this target are stopped.",
+		Description: "Delete a push target. If the stream is live, the runtime converges asynchronously; use list_push_targets to observe completion.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args DeletePushTargetInput) (*mcp.CallToolResult, any, error) {
 		return handleDeletePushTarget(ctx, args, serviceClients, logger)
 	})
@@ -80,6 +78,7 @@ type PushTargetResult struct {
 	TargetURI    string `json:"target_uri"` // masked on read
 	IsEnabled    bool   `json:"is_enabled"`
 	Status       string `json:"status"`
+	ReasonCode   string `json:"reason_code,omitempty"`
 	LastError    string `json:"last_error,omitempty"`
 	LastPushedAt string `json:"last_pushed_at,omitempty"`
 }
@@ -173,14 +172,15 @@ func pushTargetToResult(t *commodorepb.PushTarget) PushTargetResult {
 		return PushTargetResult{}
 	}
 	out := PushTargetResult{
-		ID:        t.GetId(),
-		StreamID:  t.GetStreamId(),
-		Platform:  t.GetPlatform(),
-		Name:      t.GetName(),
-		TargetURI: t.GetTargetUri(),
-		IsEnabled: t.GetIsEnabled(),
-		Status:    t.GetStatus(),
-		LastError: t.GetLastError(),
+		ID:         t.GetId(),
+		StreamID:   t.GetStreamId(),
+		Platform:   t.GetPlatform(),
+		Name:       t.GetName(),
+		TargetURI:  t.GetTargetUri(),
+		IsEnabled:  t.GetIsEnabled(),
+		Status:     t.GetStatus(),
+		ReasonCode: t.GetReasonCode(),
+		LastError:  t.GetLastError(),
 	}
 	if ts := t.GetLastPushedAt(); ts != nil {
 		out.LastPushedAt = ts.AsTime().Format("2006-01-02T15:04:05Z07:00")

@@ -9,8 +9,10 @@ import (
 
 	"frameworks/api_gateway/internal/clients/clientstest"
 	"frameworks/api_gateway/internal/mcp/preflight"
+	"frameworks/api_gateway/internal/middleware"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	x402pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/x402"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -23,6 +25,17 @@ func v2PaymentSignature() string {
 
 func toolsCtx(tenant string) context.Context {
 	return context.WithValue(context.Background(), ctxkeys.KeyTenantID, tenant)
+}
+
+func billingOwnerToolsCtx(tenant string) context.Context {
+	ctx := toolsCtx(tenant)
+	ctx = context.WithValue(ctx, ctxkeys.KeyAuthType, "jwt")
+	ctx = context.WithValue(ctx, ctxkeys.KeyUserID, "billing-owner")
+	ctx = context.WithValue(ctx, ctxkeys.KeyRole, "owner")
+	ctx = context.WithValue(ctx, ctxkeys.KeyUser, &middleware.UserContext{
+		UserID: "billing-owner", TenantID: tenant, Role: "owner",
+	})
+	return ctx
 }
 
 func purserTools(p *clientstest.FakePurser) (*clientstest.FakePurser, *preflight.Checker) {
@@ -281,7 +294,7 @@ func TestHandleSubmitPayment_PreservesStableTerminalCode(t *testing.T) {
 		},
 	}
 	sc := clientstest.Clients(clientstest.WithPurser(p))
-	res, out, err := handleSubmitPayment(toolsCtx("t1"), SubmitPaymentInput{Payment: v2PaymentSignature()}, sc, clientstest.DiscardLogger())
+	res, out, err := handleSubmitPayment(billingOwnerToolsCtx("t1"), SubmitPaymentInput{Payment: v2PaymentSignature()}, sc, clientstest.DiscardLogger())
 	if err != nil || res == nil || res.IsError {
 		t.Fatalf("terminal settlement must be a machine-readable tool result: err=%v result=%v", err, res)
 	}
@@ -310,7 +323,7 @@ func TestHandleSubmitPayment_ReturnsStructuredSettlementPending(t *testing.T) {
 		},
 	}
 	sc := clientstest.Clients(clientstest.WithPurser(p))
-	res, out, err := handleSubmitPayment(toolsCtx("t1"), SubmitPaymentInput{Payment: v2PaymentSignature()}, sc, clientstest.DiscardLogger())
+	res, out, err := handleSubmitPayment(billingOwnerToolsCtx("t1"), SubmitPaymentInput{Payment: v2PaymentSignature()}, sc, clientstest.DiscardLogger())
 	if err != nil || res == nil || res.IsError {
 		t.Fatalf("pending settlement must be a machine-readable tool result: err=%v result=%v", err, res)
 	}
@@ -318,6 +331,34 @@ func TestHandleSubmitPayment_ReturnsStructuredSettlementPending(t *testing.T) {
 	if !ok || result.Success || result.SettlementStatus != "pending" || result.ErrorCode != "SETTLEMENT_PENDING" ||
 		result.TxHash != "0xabc" || result.Network != "eip155:8453" {
 		t.Fatalf("unexpected pending settlement result: %T %+v", out, out)
+	}
+}
+
+func TestHandleSubmitPaymentMemberMayFundViewerResource(t *testing.T) {
+	verified := false
+	p := &clientstest.FakePurser{VerifyX402PaymentFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.VerifyX402PaymentResponse, error) {
+		verified = true
+		return &purserpb.VerifyX402PaymentResponse{Valid: true}, nil
+	}, SettleX402PaymentFn: func(_ context.Context, _ string, _ *x402pb.X402PaymentPayload, _ string) (*purserpb.SettleX402PaymentResponse, error) {
+		return &purserpb.SettleX402PaymentResponse{Success: true}, nil
+	}}
+	commodore := &clientstest.FakeCommodore{ResolveArtifactPlaybackIDFn: func(_ context.Context, _ string) (*commodorepb.ResolveArtifactPlaybackIDResponse, error) {
+		return &commodorepb.ResolveArtifactPlaybackIDResponse{Found: true, TenantId: "t1"}, nil
+	}}
+	sc := clientstest.Clients(clientstest.WithPurser(p), clientstest.WithCommodore(commodore))
+	ctx := toolsCtx("t1")
+	ctx = context.WithValue(ctx, ctxkeys.KeyAuthType, "jwt")
+	ctx = context.WithValue(ctx, ctxkeys.KeyRole, "member")
+	ctx = context.WithValue(ctx, ctxkeys.KeyUser, &middleware.UserContext{UserID: "member", TenantID: "t1", Role: "member"})
+	res, out, err := handleSubmitPayment(ctx, SubmitPaymentInput{
+		Payment: v2PaymentSignature(), Resource: "viewer://playback-id",
+	}, sc, clientstest.DiscardLogger())
+	if err != nil || res == nil || res.IsError {
+		t.Fatalf("authorization denial must be a structured result: err=%v result=%v", err, res)
+	}
+	result, ok := out.(SubmitPaymentResult)
+	if !ok || !result.Success || !verified {
+		t.Fatalf("member viewer payment was not settled: verified=%v result=%T %+v", verified, out, out)
 	}
 }
 

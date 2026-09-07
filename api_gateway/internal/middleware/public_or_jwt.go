@@ -43,7 +43,7 @@ func RequireJWTAuth(secret []byte) gin.HandlerFunc {
 		}
 
 		// Validate JWT
-		claims, err := auth.ValidateJWT(token, secret)
+		claims, err := auth.ValidateInteractiveJWT(token, secret)
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
 			c.Abort()
@@ -232,7 +232,7 @@ func optionalJWTAuthResult(r *http.Request, secret []byte) *AuthResult {
 	if token == "" {
 		return nil
 	}
-	claims, err := auth.ValidateJWT(token, secret)
+	claims, err := auth.ValidateInteractiveJWT(token, secret)
 	if err != nil {
 		return nil
 	}
