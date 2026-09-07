@@ -2,7 +2,7 @@
 # Parity with the native unit's ExecStartPre: stale shared-memory pages from
 # a previous MistController would wedge the new one.
 rm -f /dev/shm/Mst* /dev/shm/sem.MstSemStat 2>/dev/null || true
-export LD_LIBRARY_PATH=/opt/frameworks/mistserver/lib
+export LD_LIBRARY_PATH=/opt/frameworks/mistserver/opt/mist-onnx/lib:/opt/frameworks/mistserver/lib:/opt/frameworks/mistserver/lib/x86_64-linux-gnu:/opt/frameworks/mistserver/lib/aarch64-linux-gnu:/opt/mist-onnx/lib
 MIST_API_USERNAME="${MIST_API_USERNAME:-frameworks}"
 if [ -n "${MIST_API_PASSWORD}" ]; then
   exec s6-setuidgid frameworks /opt/frameworks/mistserver/bin/MistController \

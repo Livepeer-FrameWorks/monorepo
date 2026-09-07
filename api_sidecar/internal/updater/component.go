@@ -344,6 +344,7 @@ func writeMistManagedMetadata(root string, component *ipcpb.DesiredComponent) er
 		Version          string `json:"version"`
 		ArtifactURL      string `json:"artifact_url"`
 		ArtifactChecksum string `json:"artifact_checksum"`
+		ONNXProfile      string `json:"onnx_profile"`
 		InstallDir       string `json:"install_dir"`
 		ControllerBinary string `json:"controller_binary"`
 	}{
@@ -351,6 +352,7 @@ func writeMistManagedMetadata(root string, component *ipcpb.DesiredComponent) er
 		Version:          strings.TrimSpace(component.GetVersion()),
 		ArtifactURL:      strings.TrimSpace(component.GetArtifactUrl()),
 		ArtifactChecksum: strings.TrimSpace(component.GetChecksum()),
+		ONNXProfile:      strings.TrimSpace(component.GetOnnxProfile()),
 		InstallDir:       root,
 		ControllerBinary: filepath.Join(root, "bin", "MistController"),
 	}
@@ -422,7 +424,12 @@ func mistPayloadReplacement(staging, root string) (dirReplacement, error) {
 		return cleanup(statErr)
 	}
 
-	payloadDirs := []string{"bin", "lib"}
+	// Replace the complete release-owned payload. Accelerator bundles keep
+	// their provider runtime below opt/mist-onnx so it participates in the
+	// same atomic root swap as the binaries that link against it. Optional
+	// directories absent from the new artifact are removed rather than carried
+	// forward (notably when moving back to a CPU bundle).
+	payloadDirs := []string{"bin", "lib", "share", "opt"}
 	replaced := false
 	for _, dir := range payloadDirs {
 		src := filepath.Join(staging, dir)
@@ -433,6 +440,11 @@ func mistPayloadReplacement(staging, root string) (dirReplacement, error) {
 					return cleanup(fmt.Errorf("MistServer artifact missing %s directory required by current install", dir))
 				} else if !errors.Is(oldErr, os.ErrNotExist) {
 					return cleanup(oldErr)
+				}
+			}
+			if dir == "share" || dir == "opt" {
+				if removeErr := os.RemoveAll(filepath.Join(replacementRoot, dir)); removeErr != nil {
+					return cleanup(removeErr)
 				}
 			}
 			continue

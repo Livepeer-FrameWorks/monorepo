@@ -9,10 +9,12 @@
 # volume; the init-seed oneshot installs/upgrades them from
 # /usr/share/frameworks/dist (see api_sidecar/internal/edgeseed).
 
-FROM debian:bookworm-slim
+ARG EDGE_BASE_IMAGE=debian:bookworm-slim
+FROM ${EDGE_BASE_IMAGE}
 
 ARG S6_OVERLAY_VERSION=3.2.3.0
 ARG TARGETARCH
+ARG MIST_ONNX_PROFILE=cpu
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -46,7 +48,14 @@ RUN groupadd --gid 1001 frameworks \
 COPY dist/ /usr/share/frameworks/dist/
 COPY rootfs/ /
 
+# The release-owned provider runtime is seeded into the persistent Mist root.
+# Keep the conventional absolute path pointed at that root so in-place Mist
+# updates atomically advance binaries and provider libraries together.
+RUN rm -rf /opt/mist-onnx \
+ && ln -s /opt/frameworks/mistserver/opt/mist-onnx /opt/mist-onnx
+
 ENV DEPLOY_MODE=container \
+    MIST_ONNX_PROFILE=${MIST_ONNX_PROFILE} \
     HELMSMAN_SUPERVISOR=s6 \
     CADDY_ADMIN_SOCKET=/run/caddy/admin.sock \
     CADDY_CONFIG_PATH=/etc/caddy/Caddyfile \

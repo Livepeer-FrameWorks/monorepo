@@ -34,6 +34,7 @@ func newEdgeDeployCmd() *cobra.Command {
 		applyTuning      bool
 		skipPreflight    bool
 		version          string
+		onnxProfile      string
 		timeout          time.Duration
 		tokenTTL         string
 		capabilities     []string
@@ -107,6 +108,7 @@ Mode B — Pre-existing token (no login needed):
 				applyTuning:        applyTuning,
 				skipPreflight:      skipPreflight,
 				version:            version,
+				onnxProfile:        onnxProfile,
 				timeout:            timeout,
 				enrollmentTokenTTL: tokenTTL,
 				capabilities:       capabilities,
@@ -161,6 +163,7 @@ Mode B — Pre-existing token (no login needed):
 	cmd.Flags().BoolVar(&applyTuning, "tune", true, "apply sysctl/limits tuning")
 	cmd.Flags().BoolVar(&skipPreflight, "skip-preflight", false, "skip preflight checks")
 	cmd.Flags().StringVar(&version, "version", "", "platform version for binary resolution")
+	cmd.Flags().StringVar(&onnxProfile, "onnx-profile", "auto", "MistServer ONNX profile: auto, cpu, coreml, cuda, tensorrt, or openvino")
 	cmd.Flags().DurationVar(&timeout, "timeout", 3*time.Minute, "HTTPS verification timeout")
 	cmd.Flags().StringVar(&tokenTTL, "token-ttl", "", "enrollment token TTL when --cluster-id mints a token")
 	cmd.Flags().StringSliceVar(&capabilities, "capability", nil, "Edge capability to enable (repeatable: ingest, edge, storage, processing)")
@@ -185,6 +188,7 @@ type deployConfig struct {
 	applyTuning        bool
 	skipPreflight      bool
 	version            string
+	onnxProfile        string
 	timeout            time.Duration
 	enrollmentTokenTTL string
 	capabilities       []string
@@ -413,6 +417,7 @@ func deployViaSSH(ctx context.Context, cmd *cobra.Command, cfg deployConfig, res
 		ApplyTuning:     cfg.applyTuning,
 		Timeout:         cfg.timeout,
 		Version:         cfg.version,
+		ONNXProfile:     cfg.onnxProfile,
 	}
 	if err := applyEdgeDeployTelemetryConfig(&epConfig, resp); err != nil {
 		return err
@@ -469,6 +474,7 @@ func deployLocal(ctx context.Context, cmd *cobra.Command, cfg deployConfig, resp
 		ApplyTuning:     cfg.applyTuning,
 		Timeout:         cfg.timeout,
 		Version:         cfg.version,
+		ONNXProfile:     cfg.onnxProfile,
 		DarwinDomain:    provisioner.DomainUser,
 	}
 	if err := applyEdgeDeployTelemetryConfig(&epConfig, resp); err != nil {

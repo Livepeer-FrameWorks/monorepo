@@ -726,6 +726,7 @@ services:
       LOG_LEVEL: ${LOG_LEVEL}
       ENABLE_HEALTH_ENDPOINT: ${PERISCOPE_INGEST_ENABLE_HEALTH_ENDPOINT}
       HEALTH_PORT: ${PERISCOPE_INGEST_PORT}
+      DATABASE_URL: postgresql://periscope:${POSTGRES_PASSWORD}@postgres:5432/periscope?sslmode=disable
       CLICKHOUSE_ADDR: ${CLICKHOUSE_ADDR}
       CLICKHOUSE_DB: ${CLICKHOUSE_DB}
       CLICKHOUSE_USER: ${CLICKHOUSE_USER}
@@ -735,6 +736,8 @@ services:
       CLUSTER_ID: ${CLUSTER_ID}
       NODE_ID: central-node-1
     depends_on:
+      postgres:
+        condition: service_healthy
       kafka:
         condition: service_healthy
       kafka-init:
@@ -777,6 +780,7 @@ services:
       GIN_MODE: ${GIN_MODE}
       JWT_SECRET: ${JWT_SECRET}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
+      DATABASE_URL: postgresql://periscope:${POSTGRES_PASSWORD}@postgres:5432/periscope?sslmode=disable
       QUARTERMASTER_GRPC_ADDR: ${QUARTERMASTER_GRPC_ADDR}
       CLICKHOUSE_ADDR: ${CLICKHOUSE_ADDR}
       CLICKHOUSE_DB: ${CLICKHOUSE_DB}
@@ -785,6 +789,8 @@ services:
       CLUSTER_ID: ${CLUSTER_ID}
       NODE_ID: central-node-1
     depends_on:
+      postgres:
+        condition: service_healthy
       clickhouse:
         condition: service_healthy
       quartermaster:

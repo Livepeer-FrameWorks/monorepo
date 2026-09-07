@@ -128,8 +128,12 @@ func TestMistPayloadReplacementSwapsSingleRootAndPreservesWrapper(t *testing.T) 
 	for _, dir := range []string{
 		filepath.Join(root, "bin"),
 		filepath.Join(root, "lib"),
+		filepath.Join(root, "share"),
+		filepath.Join(root, "opt", "mist-onnx", "lib"),
 		filepath.Join(staging, "bin"),
 		filepath.Join(staging, "lib"),
+		filepath.Join(staging, "share"),
+		filepath.Join(staging, "opt", "mist-onnx", "lib"),
 	} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", dir, err)
@@ -149,6 +153,18 @@ func TestMistPayloadReplacementSwapsSingleRootAndPreservesWrapper(t *testing.T) 
 	}
 	if err := os.WriteFile(filepath.Join(staging, "lib", "libmist.so"), []byte("new-lib"), 0o644); err != nil {
 		t.Fatalf("write new lib: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "share", "contract.json"), []byte("old-share"), 0o644); err != nil {
+		t.Fatalf("write old share: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(staging, "share", "contract.json"), []byte("new-share"), 0o644); err != nil {
+		t.Fatalf("write new share: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "opt", "mist-onnx", "lib", "provider.so"), []byte("old-provider"), 0o644); err != nil {
+		t.Fatalf("write old provider: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(staging, "opt", "mist-onnx", "lib", "provider.so"), []byte("new-provider"), 0o644); err != nil {
+		t.Fatalf("write new provider: %v", err)
 	}
 
 	replacement, err := mistPayloadReplacement(staging, root)
@@ -183,6 +199,50 @@ func TestMistPayloadReplacementSwapsSingleRootAndPreservesWrapper(t *testing.T) 
 	if string(lib) != "new-lib" {
 		t.Fatalf("lib = %q, want new-lib", string(lib))
 	}
+	provider, err := os.ReadFile(filepath.Join(replacement.src, "opt", "mist-onnx", "lib", "provider.so"))
+	if err != nil {
+		t.Fatalf("read staged provider: %v", err)
+	}
+	if string(provider) != "new-provider" {
+		t.Fatalf("provider = %q, want new-provider", string(provider))
+	}
+	share, err := os.ReadFile(filepath.Join(replacement.src, "share", "contract.json"))
+	if err != nil {
+		t.Fatalf("read staged share: %v", err)
+	}
+	if string(share) != "new-share" {
+		t.Fatalf("share = %q, want new-share", string(share))
+	}
+}
+
+func TestMistPayloadReplacementRemovesAbsentOptionalPayload(t *testing.T) {
+	t.Parallel()
+
+	parent := t.TempDir()
+	root := filepath.Join(parent, "mistserver")
+	staging := t.TempDir()
+	for _, dir := range []string{filepath.Join(root, "bin"), filepath.Join(root, "opt", "mist-onnx"), filepath.Join(staging, "bin")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, path := range []string{filepath.Join(root, "bin", "MistController"), filepath.Join(staging, "bin", "MistController")} {
+		if err := os.WriteFile(path, []byte("bin"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(root, "opt", "mist-onnx", "provider.so"), []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	replacement, err := mistPayloadReplacement(staging, root)
+	if err != nil {
+		t.Fatalf("mistPayloadReplacement: %v", err)
+	}
+	defer os.RemoveAll(replacement.src)
+	if _, err := os.Stat(filepath.Join(replacement.src, "opt")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale optional provider payload survived CPU replacement: %v", err)
+	}
 }
 
 func TestWriteMistManagedMetadataStampsProvisionSentinel(t *testing.T) {
@@ -194,6 +254,7 @@ func TestWriteMistManagedMetadataStampsProvisionSentinel(t *testing.T) {
 		Version:     "v1.2.3",
 		ArtifactUrl: "https://example.test/mistserver-linux-amd64.tar.gz",
 		Checksum:    "sha256:" + strings.Repeat("a", 64),
+		OnnxProfile: "cuda",
 	}
 
 	if err := writeMistManagedMetadata(root, component); err != nil {
@@ -211,6 +272,7 @@ func TestWriteMistManagedMetadataStampsProvisionSentinel(t *testing.T) {
 		`"version": "v1.2.3"`,
 		`"artifact_url": "https://example.test/mistserver-linux-amd64.tar.gz"`,
 		`"artifact_checksum": "sha256:` + strings.Repeat("a", 64) + `"`,
+		`"onnx_profile": "cuda"`,
 	} {
 		if !strings.Contains(string(manifest), want) {
 			t.Fatalf("manifest missing %s:\n%s", want, manifest)

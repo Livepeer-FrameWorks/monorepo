@@ -1,0 +1,2 @@
+#!/command/with-contenv sh
+exec /usr/share/frameworks/dist/helmsman/helmsman scrub-edge-credentials

@@ -133,6 +133,7 @@
     mistserver_artifact_url: "{{ edge_mistserver_artifact_url }}"
     mistserver_artifact_checksum: "{{ edge_mistserver_artifact_checksum }}"
     mistserver_version: "{{ edge_mistserver_version }}"
+    mistserver_onnx_profile: "{{ edge_mistserver_onnx_profile }}"
     mistserver_component_versions_file: "{{ edge_darwin_conf_dir }}/component-versions.env"
     mistserver_api_password: "{{ edge_effective_mist_api_password }}"
     mistserver_darwin_domain: "{{ edge_darwin_domain }}"
@@ -144,6 +145,7 @@
   vars:
     mistserver_artifact_url: "{{ edge_mistserver_artifact_url }}"
     mistserver_artifact_checksum: "{{ edge_mistserver_artifact_checksum }}"
+    mistserver_onnx_profile: "{{ edge_mistserver_onnx_profile }}"
     mistserver_api_password: "{{ edge_effective_mist_api_password }}"
     mistserver_darwin_domain: "{{ edge_darwin_domain }}"
 
@@ -157,6 +159,7 @@
   vars:
     mistserver_artifact_url: "{{ edge_mistserver_artifact_url }}"
     mistserver_artifact_checksum: "{{ edge_mistserver_artifact_checksum }}"
+    mistserver_onnx_profile: "{{ edge_mistserver_onnx_profile }}"
     mistserver_api_password: "{{ edge_effective_mist_api_password }}"
     mistserver_darwin_domain: "{{ edge_darwin_domain }}"
 
@@ -170,6 +173,7 @@
   vars:
     mistserver_artifact_url: "{{ edge_mistserver_artifact_url }}"
     mistserver_artifact_checksum: "{{ edge_mistserver_artifact_checksum }}"
+    mistserver_onnx_profile: "{{ edge_mistserver_onnx_profile }}"
     mistserver_api_password: "{{ edge_effective_mist_api_password }}"
     mistserver_darwin_domain: "{{ edge_darwin_domain }}"
 
@@ -199,6 +203,10 @@
     helmsman_grpc_tls_ca_path: "{{ edge_darwin_conf_dir }}/pki/ca.crt"
     helmsman_extra_env:
       CLUSTER_ID: "{{ edge_cluster_id }}"
+      MIST_ONNX_PROFILE: "{{ edge_mistserver_onnx_profile }}"
+      RESTREAM_ALLOW_PRIVATE_DESTINATIONS: "{{ 'true' if edge_restream_allow_private_destinations | default(false) | bool else 'false' }}"
+      RESTREAM_ALLOWED_PRIVATE_CIDRS: "{{ edge_restream_allowed_private_cidrs | default('') }}"
+      RESTREAM_DENIED_CIDRS: "{{ edge_restream_denied_cidrs | default('') }}"
       HELMSMAN_BW_LIMIT_BYTES_PER_SEC: "{{ edge_bandwidth_limit_bytes_per_sec }}"
       HELMSMAN_MAX_TRANSCODES: "{{ edge_max_transcodes }}"
       HELMSMAN_STORAGE_CAPACITY_BYTES: "{{ edge_storage_capacity_bytes }}"
@@ -233,6 +241,10 @@
     helmsman_grpc_tls_ca_path: "{{ edge_darwin_conf_dir }}/pki/ca.crt"
     helmsman_extra_env:
       CLUSTER_ID: "{{ edge_cluster_id }}"
+      MIST_ONNX_PROFILE: "{{ edge_mistserver_onnx_profile }}"
+      RESTREAM_ALLOW_PRIVATE_DESTINATIONS: "{{ 'true' if edge_restream_allow_private_destinations | default(false) | bool else 'false' }}"
+      RESTREAM_ALLOWED_PRIVATE_CIDRS: "{{ edge_restream_allowed_private_cidrs | default('') }}"
+      RESTREAM_DENIED_CIDRS: "{{ edge_restream_denied_cidrs | default('') }}"
       HELMSMAN_BW_LIMIT_BYTES_PER_SEC: "{{ edge_bandwidth_limit_bytes_per_sec }}"
       HELMSMAN_MAX_TRANSCODES: "{{ edge_max_transcodes }}"
       HELMSMAN_STORAGE_CAPACITY_BYTES: "{{ edge_storage_capacity_bytes }}"
@@ -269,6 +281,10 @@
     helmsman_grpc_tls_ca_path: "{{ edge_darwin_conf_dir }}/pki/ca.crt"
     helmsman_extra_env:
       CLUSTER_ID: "{{ edge_cluster_id }}"
+      MIST_ONNX_PROFILE: "{{ edge_mistserver_onnx_profile }}"
+      RESTREAM_ALLOW_PRIVATE_DESTINATIONS: "{{ 'true' if edge_restream_allow_private_destinations | default(false) | bool else 'false' }}"
+      RESTREAM_ALLOWED_PRIVATE_CIDRS: "{{ edge_restream_allowed_private_cidrs | default('') }}"
+      RESTREAM_DENIED_CIDRS: "{{ edge_restream_denied_cidrs | default('') }}"
       HELMSMAN_BW_LIMIT_BYTES_PER_SEC: "{{ edge_bandwidth_limit_bytes_per_sec }}"
       HELMSMAN_MAX_TRANSCODES: "{{ edge_max_transcodes }}"
       HELMSMAN_STORAGE_CAPACITY_BYTES: "{{ edge_storage_capacity_bytes }}"
@@ -331,6 +347,10 @@
     helmsman_grpc_tls_ca_path: "{{ edge_darwin_conf_dir }}/pki/ca.crt"
     helmsman_extra_env:
       CLUSTER_ID: "{{ edge_cluster_id }}"
+      MIST_ONNX_PROFILE: "{{ edge_mistserver_onnx_profile }}"
+      RESTREAM_ALLOW_PRIVATE_DESTINATIONS: "{{ 'true' if edge_restream_allow_private_destinations | default(false) | bool else 'false' }}"
+      RESTREAM_ALLOWED_PRIVATE_CIDRS: "{{ edge_restream_allowed_private_cidrs | default('') }}"
+      RESTREAM_DENIED_CIDRS: "{{ edge_restream_denied_cidrs | default('') }}"
       HELMSMAN_BW_LIMIT_BYTES_PER_SEC: "{{ edge_bandwidth_limit_bytes_per_sec }}"
       HELMSMAN_MAX_TRANSCODES: "{{ edge_max_transcodes }}"
       HELMSMAN_STORAGE_CAPACITY_BYTES: "{{ edge_storage_capacity_bytes }}"

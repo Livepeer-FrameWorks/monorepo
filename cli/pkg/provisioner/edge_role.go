@@ -135,6 +135,7 @@ func runEdgeRole(ctx context.Context, pool *ssh.Pool, host inventory.Host, confi
 // digest.
 func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map[string]any, error) {
 	mode := config.resolvedMode()
+	profile := resolvedEdgeONNXProfile(config.ONNXProfile, mode, remoteOS, remoteArch)
 	// Provision defaults an empty Version to the stable channel; this guard
 	// only trips for direct callers that bypass that.
 	if strings.TrimSpace(config.Version) == "" {
@@ -161,16 +162,18 @@ func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map
 		"edge_enrollment_token":  config.EnrollmentToken,
 		// Write-once bootstrap files (enrollment token env, bootstrap
 		// Caddyfile) are only re-rendered on an explicit re-enroll.
-		"edge_force_reenroll":            config.ForceReenroll,
-		"edge_force_bootstrap_caddyfile": config.ForceReenroll,
-		"edge_telemetry_url":             config.TelemetryURL,
-		"edge_telemetry_token":           config.TelemetryToken,
-		"edge_cert_pem":                  config.CertPEM,
-		"edge_key_pem":                   config.KeyPEM,
-		"edge_ca_bundle_pem":             config.CABundlePEM,
-		"edge_mist_api_password":         mistPass,
-		"edge_image":                     "livepeerframeworks/frameworks-edge:latest",
-		"edge_darwin_domain":             darwinDomain,
+		"edge_force_reenroll":             config.ForceReenroll,
+		"edge_force_bootstrap_caddyfile":  config.ForceReenroll,
+		"edge_telemetry_url":              config.TelemetryURL,
+		"edge_telemetry_token":            config.TelemetryToken,
+		"edge_cert_pem":                   config.CertPEM,
+		"edge_key_pem":                    config.KeyPEM,
+		"edge_ca_bundle_pem":              config.CABundlePEM,
+		"edge_mist_api_password":          mistPass,
+		"edge_image":                      "livepeerframeworks/frameworks-edge:latest",
+		"edge_darwin_domain":              darwinDomain,
+		"edge_mistserver_onnx_profile":    profile,
+		"edge_mistserver_onnx_dri_device": config.onnxDRIDevice,
 	}
 	if config.BandwidthMbps < 0 {
 		return nil, fmt.Errorf("edge: bandwidth_mbps must be non-negative")
@@ -217,7 +220,7 @@ func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map
 		// single-image container mode; native installs must keep working
 		// against older manifests without it.
 		if mode != "native" {
-			edgeImage, edgeImageErr := edgeServiceImage(manifest, "edge")
+			edgeImage, edgeImageErr := edgeServiceVariantImage(manifest, "edge", profile)
 			if edgeImageErr != nil {
 				return nil, edgeImageErr
 			}
@@ -249,18 +252,23 @@ func edgeRoleVars(config *EdgeProvisionConfig, remoteOS, remoteArch string) (map
 
 	arch := remoteOS + "-" + remoteArch
 
-	mistURL, mistSum, err := edgeExternalBinary(manifest, "mistserver", arch)
+	mistURL, mistSum, runtimePackages, err := edgeExternalVariantBinary(manifest, "mistserver", arch, profile)
 	if err != nil {
 		return nil, err
 	}
 	vars["edge_mistserver_artifact_url"] = mistURL
 	vars["edge_mistserver_artifact_checksum"] = mistSum
-	mistDebugURL, mistDebugSum, err := edgeExternalDebugBinary(manifest, "mistserver", arch)
-	if err != nil {
-		return nil, err
+	if len(runtimePackages) > 0 {
+		vars["edge_mistserver_runtime_packages"] = runtimePackages
 	}
-	vars["edge_mistserver_debug_artifact_url"] = mistDebugURL
-	vars["edge_mistserver_debug_artifact_checksum"] = mistDebugSum
+	if profile == "cpu" {
+		mistDebugURL, mistDebugSum, debugErr := edgeExternalDebugBinary(manifest, "mistserver", arch)
+		if debugErr != nil {
+			return nil, debugErr
+		}
+		vars["edge_mistserver_debug_artifact_url"] = mistDebugURL
+		vars["edge_mistserver_debug_artifact_checksum"] = mistDebugSum
+	}
 
 	helmURL, helmSum, err := edgeServiceBinary(manifest, "helmsman", remoteOS, remoteArch)
 	if err != nil {
@@ -350,6 +358,24 @@ func edgeExternalImage(manifest *gitops.Manifest, name string) (string, error) {
 	return dep.Image + "@" + dep.Digest, nil
 }
 
+func edgeServiceVariantImage(manifest *gitops.Manifest, name, profile string) (string, error) {
+	info, err := manifest.GetServiceInfo(name)
+	if err != nil {
+		return "", fmt.Errorf("release manifest has no service image for %s: %w", name, err)
+	}
+	profile = strings.ToLower(strings.TrimSpace(profile))
+	if variant, ok := info.Variants[profile]; ok {
+		if variant.Image == "" || variant.Digest == "" {
+			return "", fmt.Errorf("release manifest service %s variant %s is not digest-pinned", name, profile)
+		}
+		return variant.Image + "@" + variant.Digest, nil
+	}
+	if profile != "cpu" {
+		return "", fmt.Errorf("release manifest service %s has no %s variant", name, profile)
+	}
+	return edgeServiceImage(manifest, name)
+}
+
 // edgeServiceImage returns image@digest for a first-party service entry.
 func edgeServiceImage(manifest *gitops.Manifest, name string) (string, error) {
 	svc, err := manifest.GetServiceInfo(name)
@@ -419,6 +445,36 @@ func edgeExternalBinary(manifest *gitops.Manifest, name, arch string) (string, s
 		return bin.URL, bin.Checksum, nil
 	}
 	return "", "", fmt.Errorf("edge: release manifest %s entry has no binary URL for arch %q", name, arch)
+}
+
+func edgeExternalVariantBinary(manifest *gitops.Manifest, name, platform, profile string) (string, string, []string, error) {
+	dep := manifest.GetExternalDependency(name)
+	if dep == nil {
+		return "", "", nil, fmt.Errorf("edge: release manifest has no external_dependency entry for %q", name)
+	}
+	profile = strings.ToLower(strings.TrimSpace(profile))
+	if dep.ReleaseIndex != nil {
+		if dep.ReleaseIndex.Schema != "mistserver.release/v1" {
+			return "", "", nil, fmt.Errorf("edge: release manifest %s has unsupported release index schema %q", name, dep.ReleaseIndex.Schema)
+		}
+		if dep.ReleaseTag != "" && dep.ReleaseIndex.ReleaseTag != dep.ReleaseTag {
+			return "", "", nil, fmt.Errorf("edge: release manifest %s index tag %q does not match dependency tag %q", name, dep.ReleaseIndex.ReleaseTag, dep.ReleaseTag)
+		}
+	}
+	if variant := dep.RuntimeVariantForPlatform(profile, strings.Replace(platform, "-", "/", 1)); variant != nil {
+		if variant.Artifact == nil || strings.TrimSpace(variant.Artifact.URL) == "" {
+			return "", "", nil, fmt.Errorf("edge: release manifest %s %s variant has no artifact URL for %q", name, profile, platform)
+		}
+		if strings.TrimSpace(variant.Artifact.Checksum) == "" {
+			return "", "", nil, fmt.Errorf("edge: release manifest %s %s artifact for %q carries no checksum", name, profile, platform)
+		}
+		return variant.Artifact.URL, variant.Artifact.Checksum, variant.Host.SystemPackages, nil
+	}
+	if dep.ReleaseIndex != nil || profile != "cpu" {
+		return "", "", nil, fmt.Errorf("edge: release manifest %s has no %s variant for %q", name, profile, platform)
+	}
+	url, checksum, err := edgeExternalBinary(manifest, name, platform)
+	return url, checksum, nil, err
 }
 
 func edgeExternalDebugBinary(manifest *gitops.Manifest, name, arch string) (string, string, error) {

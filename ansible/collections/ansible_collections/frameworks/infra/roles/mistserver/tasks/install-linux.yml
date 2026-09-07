@@ -96,20 +96,70 @@
     - not ansible_check_mode
     - mistserver_reinstall_required | bool
 
-- name: Ensure MistServer binary is executable and mark install sentinel
+- name: Ensure MistServer binary is executable
   ansible.builtin.shell: |
     set -e
     test -x "{{ mistserver_install_dir }}/bin/MistController"
     find "{{ mistserver_install_dir }}/bin" -maxdepth 1 -type f -name 'Mist*' -exec chmod 0755 {} \;
     chown -R {{ mistserver_user }}:{{ mistserver_group }} "{{ mistserver_install_dir }}/bin"
     [ ! -d "{{ mistserver_install_dir }}/lib" ] || chown -R {{ mistserver_user }}:{{ mistserver_group }} "{{ mistserver_install_dir }}/lib"
-    touch "{{ mistserver_install_sentinel }}"
-    chown {{ mistserver_user }}:{{ mistserver_group }} "{{ mistserver_install_sentinel }}"
-  args:
-    creates: "{{ mistserver_install_sentinel }}"
+  changed_when: true
   when:
     - not ansible_check_mode
     - mistserver_reinstall_required | bool
+
+- name: Remove stale MistServer ONNX provider runtime
+  ansible.builtin.file:
+    path: /opt/mist-onnx
+    state: absent
+  when:
+    - not ansible_check_mode
+    - mistserver_reinstall_required | bool
+
+- name: Remove stale MistServer ONNX loader configuration
+  ansible.builtin.file:
+    path: /etc/ld.so.conf.d/mist-onnx.conf
+    state: absent
+  register: mistserver_onnx_loader_removed
+  when:
+    - mistserver_onnx_profile == 'cpu'
+
+- name: Link MistServer ONNX provider runtime to managed release
+  ansible.builtin.file:
+    src: "{{ mistserver_install_dir }}/opt/mist-onnx"
+    dest: /opt/mist-onnx
+    state: link
+    force: true
+  when:
+    - not ansible_check_mode
+    - mistserver_reinstall_required | bool
+    - mistserver_onnx_profile in ['cuda', 'tensorrt', 'openvino']
+
+- name: Register MistServer ONNX provider library path
+  ansible.builtin.copy:
+    dest: /etc/ld.so.conf.d/mist-onnx.conf
+    owner: root
+    group: root
+    mode: "0644"
+    content: |
+      /opt/mist-onnx/lib
+  register: mistserver_onnx_loader_config
+  when: mistserver_onnx_profile in ['cuda', 'tensorrt', 'openvino']
+
+- name: Refresh shared library cache for MistServer ONNX provider
+  ansible.builtin.command: ldconfig
+  changed_when: true
+  when:
+    - not ansible_check_mode
+    - mistserver_onnx_profile in ['cuda', 'tensorrt', 'openvino']
+    - (mistserver_reinstall_required | bool) or (mistserver_onnx_loader_config.changed | default(false))
+
+- name: Refresh shared library cache after removing MistServer ONNX provider
+  ansible.builtin.command: ldconfig
+  changed_when: true
+  when:
+    - not ansible_check_mode
+    - mistserver_onnx_loader_removed.changed | default(false)
 
 - name: Preflight MistServer native binary shared libraries
   ansible.builtin.shell: |
@@ -120,6 +170,15 @@
   args:
     executable: /bin/bash
   register: mistserver_ldd_missing
+  environment:
+    LD_LIBRARY_PATH: >-
+      {{ [
+          mistserver_install_dir ~ '/opt/mist-onnx/lib',
+          mistserver_install_dir ~ '/lib',
+          mistserver_install_dir ~ '/lib/x86_64-linux-gnu',
+          mistserver_install_dir ~ '/lib/aarch64-linux-gnu',
+          '/opt/mist-onnx/lib'
+        ] | join(':') }}
   changed_when: false
   failed_when: false
   when: not ansible_check_mode
@@ -133,6 +192,17 @@
     - not ansible_check_mode
     - mistserver_ldd_missing.stdout | trim | length > 0
 
+- name: Mark successful MistServer install
+  ansible.builtin.file:
+    path: "{{ mistserver_install_sentinel }}"
+    state: touch
+    owner: "{{ mistserver_user }}"
+    group: "{{ mistserver_group }}"
+    mode: "0644"
+  when:
+    - not ansible_check_mode
+    - mistserver_reinstall_required | bool
+
 - name: Write MistServer artifact manifest
   ansible.builtin.copy:
     dest: "{{ mistserver_manifest_file }}"
@@ -144,6 +214,7 @@
         {
           "component": "mistserver",
           "version": mistserver_version,
+          "onnx_profile": mistserver_onnx_profile,
           "artifact_url": mistserver_artifact_url,
           "artifact_checksum": mistserver_artifact_checksum,
           "debug_artifact_url": mistserver_debug_artifact_url,

@@ -36,13 +36,14 @@ type Manifest struct {
 
 // ExternalDependency represents an external dependency (e.g. MistServer)
 type ExternalDependency struct {
-	Name       string           `yaml:"name"`
-	Image      string           `yaml:"image,omitempty"`
-	Digest     string           `yaml:"digest,omitempty"`
-	ReleaseURL string           `yaml:"release_url,omitempty"`
-	ReleaseTag string           `yaml:"release_tag,omitempty"`
-	Binaries   []ExternalBinary `yaml:"binaries,omitempty"`
-	Raw        map[string]any   `yaml:",inline"` // Preserve dependency fields this CLI does not consume.
+	Name         string                `yaml:"name"`
+	Image        string                `yaml:"image,omitempty"`
+	Digest       string                `yaml:"digest,omitempty"`
+	ReleaseURL   string                `yaml:"release_url,omitempty"`
+	ReleaseTag   string                `yaml:"release_tag,omitempty"`
+	Binaries     []ExternalBinary      `yaml:"binaries,omitempty"`
+	ReleaseIndex *ExternalReleaseIndex `yaml:"release_index,omitempty"`
+	Raw          map[string]any        `yaml:",inline"` // Preserve dependency fields this CLI does not consume.
 }
 
 // ExternalBinary represents a binary artifact for an external dependency.
@@ -54,15 +55,71 @@ type ExternalBinary struct {
 	SizeBytes int64  `yaml:"size_bytes,omitempty"`
 }
 
+// ExternalReleaseIndex is the immutable variant contract published by an
+// external dependency and embedded into a platform release.
+type ExternalReleaseIndex struct {
+	Schema         string                     `yaml:"schema"`
+	ReleaseTag     string                     `yaml:"release_tag"`
+	RuntimeTag     string                     `yaml:"runtime_tag"`
+	SourceRevision string                     `yaml:"source_revision"`
+	DefaultProfile string                     `yaml:"default_profile"`
+	Profiles       map[string]ExternalProfile `yaml:"profiles"`
+}
+
+// ExternalProfile describes one runtime implementation and its supported
+// target platforms.
+type ExternalProfile struct {
+	Family              string                      `yaml:"family"`
+	Version             string                      `yaml:"version,omitempty"`
+	CUDAVersion         string                      `yaml:"cuda_version,omitempty"`
+	Installation        string                      `yaml:"installation,omitempty"`
+	CPUFallback         bool                        `yaml:"cpu_fallback,omitempty"`
+	ProbeCommands       []string                    `yaml:"probe_commands,omitempty"`
+	DevicePaths         []string                    `yaml:"device_paths,omitempty"`
+	OptionalDevicePaths []string                    `yaml:"optional_device_paths,omitempty"`
+	DriverLibraries     []string                    `yaml:"driver_libraries,omitempty"`
+	Platforms           map[string]ExternalPlatform `yaml:"platforms"`
+}
+
+// ExternalPlatform carries the exact image and native artifact for one
+// profile/platform pair.
+type ExternalPlatform struct {
+	Host                  ExternalHost    `yaml:"host"`
+	ReferenceRuntimeImage string          `yaml:"reference_runtime_image,omitempty"`
+	Image                 *RegistryImage  `yaml:"image,omitempty"`
+	Artifact              *ExternalBinary `yaml:"artifact,omitempty"`
+}
+
+// ExternalHost is the installation contract needed by native deployment.
+type ExternalHost struct {
+	OS             string   `yaml:"os,omitempty"`
+	Distribution   string   `yaml:"distribution,omitempty"`
+	Release        string   `yaml:"release,omitempty"`
+	MinimumRelease string   `yaml:"minimum_release,omitempty"`
+	LibC           string   `yaml:"libc,omitempty"`
+	Architecture   string   `yaml:"architecture,omitempty"`
+	PackageManager string   `yaml:"package_manager,omitempty"`
+	SystemPackages []string `yaml:"system_packages,omitempty"`
+	LoaderPaths    []string `yaml:"loader_paths,omitempty"`
+}
+
 // ServiceEntry represents a single service in the manifest
 type ServiceEntry struct {
-	Name           string                   `yaml:"name"`
-	ServiceVersion string                   `yaml:"service_version"`
-	Image          string                   `yaml:"image"`
-	Digest         string                   `yaml:"digest"`
-	Images         map[string]RegistryImage `yaml:"images,omitempty"`
-	SourceHash     string                   `yaml:"source_hash,omitempty"`
-	CarriedFrom    string                   `yaml:"carried_from,omitempty"`
+	Name           string                    `yaml:"name"`
+	ServiceVersion string                    `yaml:"service_version"`
+	Image          string                    `yaml:"image"`
+	Digest         string                    `yaml:"digest"`
+	Images         map[string]RegistryImage  `yaml:"images,omitempty"`
+	Variants       map[string]ServiceVariant `yaml:"variants,omitempty"`
+	SourceHash     string                    `yaml:"source_hash,omitempty"`
+	CarriedFrom    string                    `yaml:"carried_from,omitempty"`
+}
+
+// ServiceVariant is a profile-specific image for a first-party service.
+type ServiceVariant struct {
+	Image  string                   `yaml:"image"`
+	Digest string                   `yaml:"digest"`
+	Images map[string]RegistryImage `yaml:"images,omitempty"`
 }
 
 // RegistryImage is an alternate registry location for the same release image.
@@ -151,6 +208,7 @@ type ServiceInfo struct {
 	Image     string
 	Digest    string
 	Images    map[string]RegistryImage
+	Variants  map[string]ServiceVariant
 	Binaries  map[string]Artifact
 	FullImage string
 }
@@ -261,7 +319,7 @@ func (d *ExternalDependency) RuntimeBinaryForPlatform(platform string) *External
 	for i := range d.Binaries {
 		bin := &d.Binaries[i]
 		name := strings.ToLower(strings.TrimSpace(bin.Name))
-		if bin.URL == "" || IsDebugAssetName(name) {
+		if bin.URL == "" || IsDebugAssetName(name) || strings.Contains(name, "-onnx-") {
 			continue
 		}
 		if name == platform {
@@ -272,6 +330,24 @@ func (d *ExternalDependency) RuntimeBinaryForPlatform(platform string) *External
 		}
 	}
 	return nil
+}
+
+// RuntimeVariantForPlatform returns the exact indexed profile/platform pair.
+func (d *ExternalDependency) RuntimeVariantForPlatform(profile, platform string) *ExternalPlatform {
+	if d.ReleaseIndex == nil {
+		return nil
+	}
+	profile = strings.ToLower(strings.TrimSpace(profile))
+	platform = strings.ToLower(strings.TrimSpace(platform))
+	entry, ok := d.ReleaseIndex.Profiles[profile]
+	if !ok {
+		return nil
+	}
+	variant, ok := entry.Platforms[platform]
+	if !ok {
+		return nil
+	}
+	return &variant
 }
 
 // IsDebugAssetName reports whether a release asset name is a debug-symbol

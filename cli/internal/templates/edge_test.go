@@ -65,6 +65,30 @@ func TestRenderEdgeTemplates_containerModeFullSet(t *testing.T) {
 	}
 }
 
+func TestRenderEdgeTemplatesAcceleratorDevices(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		profile string
+		dri     bool
+		want    string
+	}{
+		{name: "cuda", profile: "cuda", want: "    gpus: all\n"},
+		{name: "tensorrt", profile: "tensorrt", want: "    gpus: all\n"},
+		{name: "openvino gpu", profile: "openvino", dri: true, want: "      - /dev/dri:/dev/dri\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			files, err := RenderEdgeTemplates(EdgeVars{Mode: "container", ONNXProfile: test.profile, ONNXDRIDevice: test.dri})
+			if err != nil {
+				t.Fatal(err)
+			}
+			compose, ok := fileByPath(files, "docker-compose.edge.yml")
+			if !ok || !strings.Contains(string(compose.Content), test.want) {
+				t.Fatalf("compose missing accelerator device block %q:\n%s", test.want, compose.Content)
+			}
+		})
+	}
+}
+
 func TestRenderEdgeTemplates_dockerAliasMapsToContainer(t *testing.T) {
 	t.Parallel()
 	vars := fixedEdgeVars()

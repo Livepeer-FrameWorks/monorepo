@@ -90,6 +90,56 @@ func TestParseManifest_PreservesExternalDependencyUnknownFields(t *testing.T) {
 	}
 }
 
+func TestParseManifest_PreservesTypedExternalReleaseIndex(t *testing.T) {
+	yamlText := `platform_version: v1.0.0
+external_dependencies:
+  - name: mistserver
+    release_index:
+      schema: mistserver.release/v1
+      release_tag: mist-v1
+      runtime_tag: mist-v1
+      source_revision: deadbeef
+      default_profile: cpu
+      profiles:
+        cuda:
+          family: nvidia-cuda
+          version: "12.8"
+          installation: external
+          cpu_fallback: true
+          probe_commands: [nvidia-smi]
+          device_paths: [/dev/nvidiactl]
+          driver_libraries: [libcuda.so.1]
+          platforms:
+            linux/amd64:
+              host:
+                os: linux
+                architecture: amd64
+                system_packages: [ffmpeg]
+                loader_paths: [/opt/mist-onnx/lib]
+              reference_runtime_image: nvidia/cuda:runtime
+              image:
+                image: ghcr.io/example/mist:cuda
+                digest: sha256:abc
+              artifact:
+                name: mistserver-linux-amd64-onnx-cuda-mist-v1.tar.gz
+                url: https://example.test/mist.tar.gz
+                checksum: sha256:def
+                size_bytes: 42
+`
+	m, err := parseManifest([]byte(yamlText))
+	if err != nil {
+		t.Fatalf("typed release index must parse: %v", err)
+	}
+	dep := m.GetExternalDependency("mistserver")
+	variant := dep.RuntimeVariantForPlatform("cuda", "linux/amd64")
+	if variant == nil || variant.Artifact == nil || variant.Artifact.Checksum != "sha256:def" {
+		t.Fatalf("typed variant lost: %+v", dep)
+	}
+	if got := variant.Host.SystemPackages; len(got) != 1 || got[0] != "ffmpeg" {
+		t.Fatalf("host package contract lost: %+v", got)
+	}
+}
+
 func toString(v any) string {
 	if s, ok := v.(string); ok {
 		return s

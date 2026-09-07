@@ -50,6 +50,8 @@ type EdgeVars struct {
 	SiteAddress      string // Caddy site address: "*.cluster.root" (wildcard) or "edge.cluster.root" (single)
 	MistAPIPassword  string // MistServer API auth password (used for -a flag and helmsman config sync)
 	EdgeImage        string // Single edge image (helmsman+Mist+Caddy); manifest-pinned (image@digest) when a release is selected.
+	ONNXProfile      string // Profile baked into EdgeImage; NVIDIA profiles need GPU device access.
+	ONNXDRIDevice    bool   // Pass an available Intel DRM device into an OpenVINO container.
 	ChandlerUpstream string // localhost:18020 in both modes
 	TelemetryURL     string
 	TelemetryToken   string
@@ -104,6 +106,9 @@ func (v *EdgeVars) SetModeDefaults() {
 	if v.EdgeImage == "" {
 		v.EdgeImage = "livepeerframeworks/frameworks-edge:latest"
 	}
+	if v.ONNXProfile == "" {
+		v.ONNXProfile = "cpu"
+	}
 }
 
 // edgeNetworkBlock renders the compose network settings for the edge
@@ -129,6 +134,18 @@ func edgeNetworkBlock(edgeOS string) string {
     depends_on:
       edge-tuning:
         condition: service_completed_successfully`
+}
+
+func edgeAcceleratorBlock(profile string, driDevice bool) string {
+	switch strings.ToLower(strings.TrimSpace(profile)) {
+	case "cuda", "tensorrt":
+		return "    gpus: all\n"
+	case "openvino":
+		if driDevice {
+			return "    devices:\n      - /dev/dri:/dev/dri\n"
+		}
+	}
+	return ""
 }
 
 // edgeTuningService renders the privileged oneshot that applies the
@@ -363,9 +380,11 @@ scrape_configs:
 		content = strings.ReplaceAll(content, "{{CADDY_ADMIN_ADDR}}", vars.CaddyAdminAddr)
 		content = strings.ReplaceAll(content, "{{SITE_ADDRESS}}", vars.SiteAddress)
 		content = strings.ReplaceAll(content, "{{DEPLOY_MODE}}", vars.Mode)
+		content = strings.ReplaceAll(content, "{{MIST_ONNX_PROFILE}}", vars.ONNXProfile)
 		content = strings.ReplaceAll(content, "{{RELAY_TRUSTED_CIDR}}", vars.RelayTrustedCIDR)
 		content = strings.ReplaceAll(content, "{{MIST_API_PASSWORD}}", vars.MistAPIPassword)
 		content = strings.ReplaceAll(content, "{{EDGE_IMAGE}}", vars.EdgeImage)
+		content = strings.ReplaceAll(content, "{{EDGE_ACCELERATOR_BLOCK}}", edgeAcceleratorBlock(vars.ONNXProfile, vars.ONNXDRIDevice))
 		content = strings.ReplaceAll(content, "{{EDGE_NETWORK_BLOCK}}", edgeNetworkBlock(vars.EdgeOS))
 		content = strings.ReplaceAll(content, "{{EDGE_TUNING_SERVICE}}", edgeTuningService(vars.EdgeOS))
 		content = strings.ReplaceAll(content, "{{CHANDLER_UPSTREAM}}", vars.ChandlerUpstream)

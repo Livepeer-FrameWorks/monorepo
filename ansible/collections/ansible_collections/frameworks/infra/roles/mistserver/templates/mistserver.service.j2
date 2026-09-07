@@ -10,7 +10,7 @@ Group={{ mistserver_group }}
 WorkingDirectory={{ mistserver_install_dir }}/bin
 EnvironmentFile={{ mistserver_env_file }}
 Environment=MIST_LOG_SYSTEMD=1
-Environment=LD_LIBRARY_PATH={{ mistserver_install_dir }}/lib:{{ mistserver_install_dir }}/lib/x86_64-linux-gnu:{{ mistserver_install_dir }}/lib/aarch64-linux-gnu
+Environment=LD_LIBRARY_PATH={{ mistserver_install_dir }}/opt/mist-onnx/lib:{{ mistserver_install_dir }}/lib:{{ mistserver_install_dir }}/lib/x86_64-linux-gnu:{{ mistserver_install_dir }}/lib/aarch64-linux-gnu:/opt/mist-onnx/lib
 ExecStartPre=+/bin/bash -c "rm -f /dev/shm/Mst* /dev/shm/sem.MstSemStat"
 ExecStart={{ mistserver_install_dir }}/bin/MistController -c {{ mistserver_config_file }} -a ${MIST_API_USERNAME}:${MIST_API_PASSWORD}
 ExecStopPost=+/bin/bash -c "rm -f /dev/shm/Mst* /dev/shm/sem.MstSemStat"

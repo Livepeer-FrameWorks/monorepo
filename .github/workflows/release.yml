@@ -490,6 +490,28 @@ jobs:
             > dist/mistserver-release.json
           jq -re '.tag_name' dist/mistserver-release.json
 
+          INDEX_URL=$(jq -re '.assets[] | select(.name == "mistserver-release-index.json") | .url' dist/mistserver-release.json)
+          curl -fsSL \
+            -H "Accept: application/octet-stream" \
+            -H "Authorization: Bearer ${GH_APP_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "$INDEX_URL" > dist/mistserver-release-index.json
+
+          TAG=$(jq -re '.tag_name' dist/mistserver-release.json)
+          jq -e --arg tag "$TAG" '
+            .schema == "mistserver.release/v1"
+            and .release_tag == $tag
+            and .default_profile == "cpu"
+            and (.source_revision | type == "string" and length > 0)
+          ' dist/mistserver-release-index.json >/dev/null
+
+          jq -e --slurpfile release dist/mistserver-release.json '
+            [.profiles[].platforms[].artifact]
+            | all(. as $artifact
+                | $release[0].assets
+                | any(.name == $artifact.name and .digest == $artifact.checksum))
+          ' dist/mistserver-release-index.json >/dev/null
+
       # Publicly downloadable asset URLs are a platform contract, not a CI
       # convenience: edge nodes fetch these SAME browser_download_urls
       # without credentials (ansible get_url on native installs, helmsman's
@@ -522,10 +544,12 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: mistserver-release
-          path: dist/mistserver-release.json
+          path: |
+            dist/mistserver-release.json
+            dist/mistserver-release-index.json
 
   build-edge-image:
-    name: Build Edge Image (${{ matrix.arch }})
+    name: Build Edge Image (${{ matrix.profile }} / ${{ matrix.arch }})
     needs:
       [release-plan, resolve-mistserver, build-service-binaries-amd64, build-service-binaries-arm64]
     permissions:
@@ -535,10 +559,26 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - arch: amd64
+          - profile: cpu
+            arch: amd64
             runner: ubuntu-latest
-          - arch: arm64
+            tag_suffix: ""
+          - profile: cpu
+            arch: arm64
             runner: ubuntu-24.04-arm
+            tag_suffix: ""
+          - profile: cuda
+            arch: amd64
+            runner: ubuntu-latest
+            tag_suffix: -onnx-cuda
+          - profile: tensorrt
+            arch: amd64
+            runner: ubuntu-latest
+            tag_suffix: -onnx-tensorrt
+          - profile: openvino
+            arch: amd64
+            runner: ubuntu-latest
+            tag_suffix: -onnx-openvino
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout
@@ -597,14 +637,25 @@ jobs:
         id: mist
         run: |
           set -euo pipefail
-          TAG=$(jq -re '.tag_name' dist/mistserver-release.json)
-          ASSET=$(jq -ce --arg arch "linux-${{ matrix.arch }}" \
-            '[.assets[] | select((.name | startswith("mistserver-" + $arch + "-")) and (.name | contains("-debug-") | not) and (.name | endswith(".tar.gz")))][0]' \
-            dist/mistserver-release.json)
+          TAG=$(jq -re '.release_tag' dist/mistserver-release-index.json)
+          PLATFORM='linux/${{ matrix.arch }}'
+          PROFILE='${{ matrix.profile }}'
+          ASSET_NAME=$(jq -re --arg profile "$PROFILE" --arg platform "$PLATFORM" \
+            '.profiles[$profile].platforms[$platform].artifact.name' dist/mistserver-release-index.json)
+          ASSET=$(jq -ce --arg name "$ASSET_NAME" '.assets[] | select(.name == $name)' dist/mistserver-release.json)
+          BASE_IMAGE=debian:bookworm-slim
+          if [[ "$PROFILE" != cpu ]]; then
+            IMAGE=$(jq -re --arg profile "$PROFILE" --arg platform "$PLATFORM" \
+              '.profiles[$profile].platforms[$platform].image.ref' dist/mistserver-release-index.json)
+            DIGEST=$(jq -re --arg profile "$PROFILE" --arg platform "$PLATFORM" \
+              '.profiles[$profile].platforms[$platform].image.digest' dist/mistserver-release-index.json)
+            BASE_IMAGE="${IMAGE}@${DIGEST}"
+          fi
           echo "url=$(echo "$ASSET" | jq -re .browser_download_url)" >> "$GITHUB_OUTPUT"
           echo "checksum=$(echo "$ASSET" | jq -r '.digest // ""')" >> "$GITHUB_OUTPUT"
           echo "version=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "Resolved MistServer ${TAG}: $(echo "$ASSET" | jq -r .name)"
+          echo "base_image=${BASE_IMAGE}" >> "$GITHUB_OUTPUT"
+          echo "Resolved MistServer ${TAG} ${PROFILE}: ${ASSET_NAME}"
 
       - name: Resolve pinned Caddy tarball
         id: caddy
@@ -632,6 +683,7 @@ jobs:
             --mist-url "${{ steps.mist.outputs.url }}" \
             --mist-sha256 "${{ steps.mist.outputs.checksum }}" \
             --mist-version "${{ steps.mist.outputs.version }}" \
+            --mist-profile "${{ matrix.profile }}" \
             --caddy-url "${{ steps.caddy.outputs.url }}" \
             --caddy-sha256 "${{ steps.caddy.outputs.checksum }}" \
             --caddy-version "${{ steps.caddy.outputs.version }}" \
@@ -662,11 +714,14 @@ jobs:
           push: true
           provenance: true
           sbom: true
+          build-args: |
+            EDGE_BASE_IMAGE=${{ steps.mist.outputs.base_image }}
+            MIST_ONNX_PROFILE=${{ matrix.profile }}
           tags: |
-            ${{ env.REGISTRY }}/frameworks-edge:${{ github.ref_name }}-${{ matrix.arch }}
-            livepeerframeworks/frameworks-edge:${{ github.ref_name }}-${{ matrix.arch }}
-          cache-from: type=gha,scope=edge-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,ignore-error=true,scope=edge-${{ matrix.arch }}
+            ${{ env.REGISTRY }}/frameworks-edge:${{ github.ref_name }}${{ matrix.tag_suffix }}-${{ matrix.arch }}
+            livepeerframeworks/frameworks-edge:${{ github.ref_name }}${{ matrix.tag_suffix }}-${{ matrix.arch }}
+          cache-from: type=gha,scope=edge-${{ matrix.profile }}-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,ignore-error=true,scope=edge-${{ matrix.profile }}-${{ matrix.arch }}
 
   merge-edge-image:
     name: Merge Edge Image Manifest
@@ -723,8 +778,46 @@ jobs:
             "${DH}:${TAG}-amd64" \
             "${DH}:${TAG}-arm64"
 
+          for PROFILE in cuda tensorrt openvino; do
+            docker buildx imagetools create \
+              --tag "${GHCR}:${TAG}-onnx-${PROFILE}" \
+              "${GHCR}:${TAG}-onnx-${PROFILE}-amd64"
+            docker buildx imagetools create \
+              --tag "${DH}:${TAG}-onnx-${PROFILE}" \
+              "${DH}:${TAG}-onnx-${PROFILE}-amd64"
+          done
+
           GHCR_DIGEST="sha256:$(docker buildx imagetools inspect "${GHCR}:${TAG}" --raw | sha256sum | cut -d' ' -f1)"
           DH_DIGEST="sha256:$(docker buildx imagetools inspect "${DH}:${TAG}" --raw | sha256sum | cut -d' ' -f1)"
+
+          printf '{}' > /tmp/edge-variants.json
+          for PROFILE in cpu cuda tensorrt openvino; do
+            SUFFIX=""
+            if [[ "$PROFILE" != cpu ]]; then
+              SUFFIX="-onnx-${PROFILE}"
+            fi
+            PROFILE_GHCR="${GHCR}:${TAG}${SUFFIX}"
+            PROFILE_DH="${DH}:${TAG}${SUFFIX}"
+            PROFILE_GHCR_DIGEST="sha256:$(docker buildx imagetools inspect "$PROFILE_GHCR" --raw | sha256sum | cut -d' ' -f1)"
+            PROFILE_DH_DIGEST="sha256:$(docker buildx imagetools inspect "$PROFILE_DH" --raw | sha256sum | cut -d' ' -f1)"
+            jq \
+              --arg profile "$PROFILE" \
+              --arg image "$PROFILE_DH" \
+              --arg digest "$PROFILE_DH_DIGEST" \
+              --arg dh_image "$PROFILE_DH" \
+              --arg dh_digest "$PROFILE_DH_DIGEST" \
+              --arg ghcr_image "$PROFILE_GHCR" \
+              --arg ghcr_digest "$PROFILE_GHCR_DIGEST" \
+              '. + {($profile): {
+                image: $image,
+                digest: $digest,
+                images: {
+                  dockerhub: {image: $dh_image, digest: $dh_digest},
+                  ghcr: {image: $ghcr_image, digest: $ghcr_digest}
+                }
+              }}' /tmp/edge-variants.json > /tmp/edge-variants.next.json
+            mv /tmp/edge-variants.next.json /tmp/edge-variants.json
+          done
 
           mkdir -p final
           cat > "final/image-edge.json" <<JSON
@@ -737,7 +830,8 @@ jobs:
             "ghcr_image": "${GHCR}:${TAG}",
             "ghcr_digest": "${GHCR_DIGEST}",
             "service_version": "${TAG}",
-            "git_commit": "${{ github.sha }}"
+            "git_commit": "${{ github.sha }}",
+            "variants": $(cat /tmp/edge-variants.json)
           }
           JSON
 
@@ -1939,13 +2033,13 @@ jobs:
           set -euo pipefail
 
           RELEASE="$(cat dist/mistserver-release.json)"
+          INDEX="$(cat dist/mistserver-release-index.json)"
 
           TAG=$(echo "$RELEASE" | jq -re '.tag_name')
-          TAG_URL=$(echo "$RELEASE" | jq -re '.assets[] | select(.name=="docker-tag.txt") | .browser_download_url')
           RELEASE_URL=$(echo "$RELEASE" | jq -re '.html_url')
-          ASSETS=$(echo "$RELEASE" | jq -c '[.assets[] | {name:.name, url:.browser_download_url, size:.size, checksum:(.digest // "")}]')
+          ASSETS=$(echo "$RELEASE" | jq -c '[.assets[] | select(.name | endswith(".tar.gz")) | {name:.name, url:.browser_download_url, size:.size, checksum:(.digest // "")}]')
 
-          DOCKER_TAG=$(curl -fsSL "$TAG_URL")
+          DOCKER_TAG=$(echo "$INDEX" | jq -re --arg tag "$TAG" 'select(.schema == "mistserver.release/v1" and .release_tag == $tag) | .runtime_tag')
           DIGEST="sha256:$(docker buildx imagetools inspect "ghcr.io/livepeer-frameworks/mistserver:${DOCKER_TAG}" --raw | sha256sum | cut -d' ' -f1)"
 
           echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
@@ -2002,6 +2096,7 @@ jobs:
             dockerhub_digest=$(jq -r '.dockerhub_digest // empty' "$f")
             ghcr_image=$(jq -r '.ghcr_image // empty' "$f")
             ghcr_digest=$(jq -r '.ghcr_digest // empty' "$f")
+            variants=$(jq -c '.variants // {}' "$f")
 
             # Source-hash from the pre-build release-plan decision; lets the
             # next release decide carry-forward against this manifest.
@@ -2031,6 +2126,11 @@ jobs:
                   image: ${ghcr_image}
                   digest: ${ghcr_digest}
           YAML
+              fi
+            if [[ "$variants" != "{}" ]]; then
+              cat >> dist/manifest.yaml <<YAML
+              variants: ${variants}
+          YAML
             fi
           done
 
@@ -2047,6 +2147,7 @@ jobs:
               c_image=$(echo "$svc" | jq -r .image)
               c_digest=$(echo "$svc" | jq -r .digest)
               c_svcver=$(echo "$svc" | jq -r .service_version)
+              c_variants=$(echo "$svc" | jq -c '.variants // {}')
               cat >> dist/manifest.yaml <<YAML
             - name: ${name}
               service_version: ${c_svcver}
@@ -2068,6 +2169,11 @@ jobs:
                 ghcr:
                   image: ${c_ghcr_image}
                   digest: ${c_ghcr_digest}
+          YAML
+              fi
+              if [[ "$c_variants" != "{}" ]]; then
+                cat >> dist/manifest.yaml <<YAML
+              variants: ${c_variants}
           YAML
               fi
             done
@@ -2310,6 +2416,23 @@ jobs:
             echo "    binaries:" >> dist/manifest.yaml
             echo "$mist_assets" | jq -r '.[] | "      - name: \(.name)\n        url: \(.url)" + (if (.checksum // "") != "" then "\n        checksum: \(.checksum)" else "" end) + (if .size then "\n        size_bytes: \(.size)" else "" end)' >> dist/manifest.yaml
           fi
+
+          mist_index=$(jq -c --argjson assets "$mist_assets" '
+            .profiles |= with_entries(
+              .value.platforms |= with_entries(
+                if .value.image then
+                  .value.image |= {image: .ref, digest: .digest}
+                else . end
+                | if .value.artifact then
+                    .value.artifact as $artifact
+                    | .value.artifact += {
+                        url: (first($assets[] | select(.name == $artifact.name)) | .url)
+                      }
+                  else . end
+              )
+            )
+          ' dist/mistserver-release-index.json)
+          printf '      release_index: %s\n' "$mist_index" >> dist/manifest.yaml
 
           cat >> dist/manifest.yaml <<YAML
             - name: go-livepeer

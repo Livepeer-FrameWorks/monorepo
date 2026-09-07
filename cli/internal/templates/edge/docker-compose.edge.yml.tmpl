@@ -2,7 +2,7 @@ services:
   edge:
     image: {{EDGE_IMAGE}}
     container_name: frameworks-edge
-{{EDGE_NETWORK_BLOCK}}
+{{EDGE_ACCELERATOR_BLOCK}}{{EDGE_NETWORK_BLOCK}}
     shm_size: "1g"
     ulimits:
       nofile:
@@ -26,6 +26,8 @@ services:
       - caddy_data:/var/lib/caddy
       - edge_storage:/data/storage
       - edge_state:/data/state
+      - ./.edge-enroll.env:/run/frameworks/.edge-enroll.env
+      - ./.edge.env:/run/frameworks/.edge.env
     restart: unless-stopped
 
 {{EDGE_TUNING_SERVICE}}{{VMAGENT_EDGE_SERVICE}}

@@ -48,6 +48,12 @@ edge_cap_edge: ""
 edge_cap_storage: ""
 edge_cap_processing: ""
 
+# Outbound restream destination policy. Public unicast is allowed by default;
+# private ranges require an explicit opt-in or allowlisted CIDR. Denies win.
+edge_restream_allow_private_destinations: false
+edge_restream_allowed_private_cidrs: ""
+edge_restream_denied_cidrs: ""
+
 # Generated upstream (Go caller passes a random 32-char hex). Shared between
 # mistserver (-a frameworks:<pw>) and helmsman (MIST_API_PASSWORD env).
 edge_mist_api_password: ""
@@ -61,6 +67,10 @@ edge_image: livepeerframeworks/frameworks-edge:latest
 edge_mistserver_artifact_url: ""
 edge_mistserver_artifact_checksum: ""
 edge_mistserver_version: ""
+edge_mistserver_onnx_profile: cpu
+edge_mistserver_onnx_dri_device: false
+edge_mistserver_runtime_packages:
+  - ffmpeg
 edge_mistserver_debug_artifact_url: ""
 edge_mistserver_debug_artifact_checksum: ""
 edge_mistserver_install_debug_symbols: false

@@ -28,6 +28,8 @@
         'FRAMEWORKS_TRIGGER_WAL_DIR': helmsman_effective_trigger_wal_dir,
         'HELMSMAN_STATE_DIR': helmsman_state_dir,
         'HELMSMAN_ROTATE_NODE_IDENTITY': helmsman_rotate_node_identity | bool | ternary('true', 'false'),
+        'HELMSMAN_ENROLLMENT_TOKEN_FILE': (helmsman_darwin_conf_dir ~ '/helmsman-enroll.env') if ansible_facts.os_family == 'Darwin' else helmsman_enroll_env_file,
+        'HELMSMAN_RUNTIME_ENV_FILE': (helmsman_darwin_conf_dir ~ '/helmsman.env') if ansible_facts.os_family == 'Darwin' else helmsman_env_file,
         'CADDY_ADMIN_URL': helmsman_caddy_admin_url,
         'CADDY_CONFIG_PATH': helmsman_caddy_config_path,
         'HELMSMAN_BIND_ADDR': helmsman_bind_addr,

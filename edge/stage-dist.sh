@@ -5,7 +5,7 @@
 # (sha256) and lays out:
 #   dist/versions.env            HELMSMAN_VERSION / MIST_VERSION / CADDY_VERSION [/ CONFIG_SCHEMA_VERSION]
 #   dist/helmsman/helmsman       helmsman binary
-#   dist/mistserver/{bin,lib}    MistServer native tree
+#   dist/mistserver/             Complete MistServer native tree (bin/lib/share/opt)
 #   dist/caddy/caddy             caddy binary
 #
 # CI passes pre-downloaded tarballs with --*-tar; local dev can build
@@ -19,9 +19,10 @@ Usage: stage-dist.sh [options]
   --helmsman-tar <file>             helmsman release tarball
   --helmsman-from-source            build helmsman from the monorepo working tree
   --helmsman-version <v>            required with --helmsman-tar (derived for from-source)
-  --mist-tar <file>                 MistServer native tarball (bin/ lib/)
+  --mist-tar <file>                 MistServer native tarball
   --mist-url <url> --mist-sha256 <hex>
   --mist-version <v>
+  --mist-profile <profile>          cpu, cuda, tensorrt, or openvino (default: cpu)
   --caddy-tar <file>                caddy release tarball
   --caddy-url <url> --caddy-sha256 <hex>
   --caddy-version <v>
@@ -42,7 +43,7 @@ case "${ARCH}" in
 esac
 
 HELMSMAN_TAR="" HELMSMAN_FROM_SOURCE=0 HELMSMAN_VERSION=""
-MIST_TAR="" MIST_URL="" MIST_SHA256="" MIST_VERSION=""
+MIST_TAR="" MIST_URL="" MIST_SHA256="" MIST_VERSION="" MIST_PROFILE=cpu
 CADDY_TAR="" CADDY_URL="" CADDY_SHA256="" CADDY_VERSION=""
 CONFIG_SCHEMA_VERSION=""
 ALLOW_UNVERIFIED=0
@@ -57,6 +58,7 @@ while [[ $# -gt 0 ]]; do
     --mist-url) MIST_URL="$2"; shift 2 ;;
     --mist-sha256) MIST_SHA256="$2"; shift 2 ;;
     --mist-version) MIST_VERSION="$2"; shift 2 ;;
+    --mist-profile) MIST_PROFILE="$2"; shift 2 ;;
     --caddy-tar) CADDY_TAR="$2"; shift 2 ;;
     --caddy-url) CADDY_URL="$2"; shift 2 ;;
     --caddy-sha256) CADDY_SHA256="$2"; shift 2 ;;
@@ -127,6 +129,20 @@ if [[ ! -x "${DIST}/mistserver/bin/MistController" ]]; then
   WRAPPER_DIR="$(dirname "$(dirname "${WRAPPER}")")"
   mv "${WRAPPER_DIR}"/* "${DIST}/mistserver/"
   find "${DIST}/mistserver" -maxdepth 1 -type d -empty -delete
+fi
+case "${MIST_PROFILE}" in
+  cpu | cuda | tensorrt | openvino) ;;
+  *) echo "unsupported --mist-profile ${MIST_PROFILE}" >&2; exit 1 ;;
+esac
+if [[ "${MIST_PROFILE}" != cpu ]]; then
+  [[ -d "${DIST}/mistserver/opt/mist-onnx/lib" ]] || {
+    echo "ONNX provider runtime missing from ${MIST_TAR}" >&2
+    exit 1
+  }
+  [[ -f "${DIST}/mistserver/share/mistserver/onnx/deployment-contract.json" ]] || {
+    echo "ONNX deployment contract missing from ${MIST_TAR}" >&2
+    exit 1
+  }
 fi
 
 # --- caddy ---------------------------------------------------------------

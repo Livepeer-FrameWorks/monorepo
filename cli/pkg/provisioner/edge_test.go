@@ -553,6 +553,7 @@ func TestEdgeExternalBinaryMatchesMistServerReleaseAssetName(t *testing.T) {
 				{Name: "docker-tag.txt", URL: "https://example.test/docker-tag.txt"},
 				{Name: "mistserver-darwin-arm64-development-c97caf1.tar.gz", URL: "https://example.test/darwin.tar.gz"},
 				{Name: "mistserver-linux-amd64-debug-development-c97caf1.tar.gz", URL: "https://example.test/linux-amd64-debug.tar.gz", Checksum: "sha256:def"},
+				{Name: "mistserver-linux-amd64-onnx-cuda-development-c97caf1.tar.gz", URL: "https://example.test/linux-amd64-cuda.tar.gz", Checksum: "sha256:cuda"},
 				{Name: "mistserver-linux-amd64-development-c97caf1.tar.gz", URL: "https://example.test/linux-amd64.tar.gz", Checksum: "sha256:abc"},
 				{Name: "mistserver-linux-arm64-development-c97caf1.tar.gz", URL: "https://example.test/linux-arm64.tar.gz"},
 			},
@@ -568,6 +569,53 @@ func TestEdgeExternalBinaryMatchesMistServerReleaseAssetName(t *testing.T) {
 	}
 	if checksum != "sha256:abc" {
 		t.Fatalf("checksum = %q", checksum)
+	}
+}
+
+func TestEdgeVariantResolversUseExactProfilePins(t *testing.T) {
+	manifest := &gitops.Manifest{
+		Services: []gitops.ServiceEntry{{
+			Name: "edge",
+			Variants: map[string]gitops.ServiceVariant{
+				"cuda": {Image: "ghcr.io/example/edge:v1-onnx-cuda", Digest: "sha256:edgecuda"},
+			},
+		}},
+		ExternalDependencies: []gitops.ExternalDependency{{
+			Name:       "mistserver",
+			ReleaseTag: "mist-v1",
+			ReleaseIndex: &gitops.ExternalReleaseIndex{
+				Schema:     "mistserver.release/v1",
+				ReleaseTag: "mist-v1",
+				Profiles: map[string]gitops.ExternalProfile{
+					"cuda": {
+						Platforms: map[string]gitops.ExternalPlatform{
+							"linux/amd64": {
+								Host:     gitops.ExternalHost{SystemPackages: []string{"ffmpeg", "libcjson1"}},
+								Artifact: &gitops.ExternalBinary{Name: "mist-cuda.tar.gz", URL: "https://example.test/mist-cuda.tar.gz", Checksum: "sha256:mistcuda"},
+							},
+						},
+					},
+				},
+			},
+		}},
+	}
+
+	image, err := edgeServiceVariantImage(manifest, "edge", "cuda")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if image != "ghcr.io/example/edge:v1-onnx-cuda@sha256:edgecuda" {
+		t.Fatalf("image = %q", image)
+	}
+	url, checksum, packages, err := edgeExternalVariantBinary(manifest, "mistserver", "linux-amd64", "cuda")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if url != "https://example.test/mist-cuda.tar.gz" || checksum != "sha256:mistcuda" {
+		t.Fatalf("artifact = %q %q", url, checksum)
+	}
+	if len(packages) != 2 || packages[1] != "libcjson1" {
+		t.Fatalf("packages = %#v", packages)
 	}
 }
 

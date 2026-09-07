@@ -81,13 +81,15 @@ type EdgeProvisionConfig struct {
 	Timeout       time.Duration
 	Force         bool
 	Version       string
+	ONNXProfile   string // auto | cpu | coreml | cuda | tensorrt | openvino
 	DarwinDomain  DarwinDomain
 	BeforeInstall func(context.Context, *EdgeProvisionConfig) error
 
 	// mistPassword is lazily populated by mistAPIPassword() so a single
 	// Provision invocation sees one consistent MIST_API_PASSWORD across
 	// mistserver (-a) and helmsman (env var).
-	mistPassword string
+	mistPassword  string
+	onnxDRIDevice bool
 }
 
 // generateEdgePassword returns a random 32-char hex string used as the
@@ -166,6 +168,17 @@ func (e *EdgeProvisioner) Provision(ctx context.Context, host inventory.Host, co
 		return fmt.Errorf("failed to detect remote OS: %w", err)
 	}
 	fmt.Printf("  platform: %s/%s\n", remoteOS, remoteArch)
+	profile, err := e.resolveONNXProfile(ctx, host, mode, remoteOS, remoteArch, config.ONNXProfile)
+	if err != nil {
+		return err
+	}
+	config.ONNXProfile = profile
+	if profile == "openvino" && mode == "container" {
+		if result, probeErr := e.RunCommand(ctx, host, "test -d /dev/dri"); probeErr == nil && result.ExitCode == 0 {
+			config.onnxDRIDevice = true
+		}
+	}
+	fmt.Printf("  ONNX profile: %s\n", profile)
 
 	fmt.Println("  ensuring Python for Ansible")
 	if err := ensureRemoteAnsiblePython(ctx, e.sshPool, host, config.DryRun); err != nil {

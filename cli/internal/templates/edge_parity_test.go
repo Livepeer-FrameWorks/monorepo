@@ -41,6 +41,8 @@ func TestEdgeTemplateParity(t *testing.T) {
 	// source so renames/deletions on either side fail the test.
 	jinjaCompose := readFile(t, ansibleTemplatePath(t, "compose.yml.j2"))
 	jinjaEdgeEnv := readFile(t, ansibleTemplatePath(t, "edge.env.j2"))
+	nativeLinux := readFile(t, ansibleEdgeRolePath(t, "tasks/install-native-linux.yml"))
+	nativeDarwin := readFile(t, ansibleEdgeRolePath(t, "tasks/install-native-darwin.yml"))
 
 	// One edge service on both surfaces, host networking, same container
 	// name, same persistent volumes.
@@ -51,6 +53,8 @@ func TestEdgeTemplateParity(t *testing.T) {
 		"frameworks_opt:/opt/frameworks",
 		"frameworks_etc:/etc/frameworks",
 		"./pki:/etc/frameworks/pki",
+		"./.edge-enroll.env:/run/frameworks/.edge-enroll.env",
+		"./.edge.env:/run/frameworks/.edge.env",
 		"caddy_etc:/etc/caddy",
 		"caddy_data:/var/lib/caddy",
 		"shm_size",
@@ -91,13 +95,26 @@ func TestEdgeTemplateParity(t *testing.T) {
 		}
 	}
 
-	wantEnvKeys := []string{"NODE_ID", "EDGE_DOMAIN", "FOGHORN_CONTROL_ADDR", "DEPLOY_MODE", "TELEMETRY_URL", "HELMSMAN_ROTATE_NODE_IDENTITY"}
+	wantEnvKeys := []string{
+		"NODE_ID", "EDGE_DOMAIN", "FOGHORN_CONTROL_ADDR", "DEPLOY_MODE", "TELEMETRY_URL", "HELMSMAN_ROTATE_NODE_IDENTITY",
+		"RESTREAM_ALLOW_PRIVATE_DESTINATIONS", "RESTREAM_ALLOWED_PRIVATE_CIDRS", "RESTREAM_DENIED_CIDRS",
+	}
 	for _, key := range wantEnvKeys {
 		if !strings.Contains(goEnv, key+"=") {
 			t.Errorf("go .edge.env missing key %q", key)
 		}
 		if !strings.Contains(jinjaEdgeEnv, key+"=") {
 			t.Errorf("jinja edge.env missing key %q", key)
+		}
+		if strings.HasPrefix(key, "RESTREAM_") {
+			for _, surface := range []struct{ name, content string }{
+				{"native linux", nativeLinux},
+				{"native darwin", nativeDarwin},
+			} {
+				if got := strings.Count(surface.content, key+":"); got != 4 {
+					t.Errorf("%s must pass %q through all four native Helmsman lifecycle paths; got %d occurrences", surface.name, key, got)
+				}
+			}
 		}
 	}
 	if !strings.Contains(goEnv, "DEPLOY_MODE=container") {
@@ -163,6 +180,37 @@ func TestEdgeTemplateParity(t *testing.T) {
 	}
 }
 
+func TestContainerCredentialScrubberRunsAsNarrowRootHelper(t *testing.T) {
+	t.Parallel()
+	runPath := repositoryPath(t, "edge/rootfs/etc/s6-overlay/s6-rc.d/credential-scrubber/run")
+	run := readFile(t, runPath)
+	if !strings.Contains(run, "helmsman scrub-edge-credentials") {
+		t.Fatalf("credential scrubber must invoke the narrow Helmsman command:\n%s", run)
+	}
+	if strings.Contains(run, "s6-setuidgid") {
+		t.Fatalf("credential scrubber must retain root for root-owned bind mounts:\n%s", run)
+	}
+	info, err := os.Stat(runPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o111 == 0 {
+		t.Fatalf("credential scrubber run script is not executable: %v", info.Mode())
+	}
+	for _, path := range []string{
+		"edge/rootfs/etc/s6-overlay/s6-rc.d/credential-scrubber/dependencies.d/init-seed",
+		"edge/rootfs/etc/s6-overlay/s6-rc.d/user/contents.d/credential-scrubber",
+	} {
+		if _, err := os.Stat(repositoryPath(t, path)); err != nil {
+			t.Fatalf("credential scrubber service wiring %s: %v", path, err)
+		}
+	}
+	seed := readFile(t, repositoryPath(t, "api_sidecar/internal/edgeseed/seed.go"))
+	if strings.Contains(seed, ".edge-enroll.env") || strings.Contains(seed, "HELMSMAN_ENROLLMENT_TOKEN_FILE") {
+		t.Fatal("root init-seed must not change ownership or mode of the host credential bind mount")
+	}
+}
+
 func readFile(t *testing.T, path string) string {
 	t.Helper()
 	b, err := os.ReadFile(path)
@@ -187,4 +235,28 @@ func ansibleTemplatePath(t *testing.T, name string) string {
 		t.Fatalf("missing jinja template %s: %v", p, err)
 	}
 	return p
+}
+
+func ansibleEdgeRolePath(t *testing.T, name string) string {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(thisFile))))
+	p := filepath.Join(repoRoot, "ansible/collections/ansible_collections/frameworks/infra/roles/edge", name)
+	if _, err := os.Stat(p); err != nil {
+		t.Fatalf("missing edge role file %s: %v", p, err)
+	}
+	return p
+}
+
+func repositoryPath(t *testing.T, name string) string {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	repoRoot := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(thisFile))))
+	return filepath.Join(repoRoot, name)
 }

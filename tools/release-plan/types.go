@@ -60,13 +60,20 @@ type Manifest struct {
 
 // ServiceEntry — pruned from pkg/gitops; SourceHash is the tool's own field.
 type ServiceEntry struct {
-	Name           string                   `yaml:"name" json:"name"`
-	ServiceVersion string                   `yaml:"service_version" json:"service_version"`
-	Image          string                   `yaml:"image" json:"image"`
-	Digest         string                   `yaml:"digest" json:"digest"`
-	Images         map[string]RegistryImage `yaml:"images,omitempty" json:"images,omitempty"`
-	SourceHash     string                   `yaml:"source_hash,omitempty" json:"source_hash,omitempty"`
-	CarriedFrom    string                   `yaml:"carried_from,omitempty" json:"carried_from,omitempty"`
+	Name           string                    `yaml:"name" json:"name"`
+	ServiceVersion string                    `yaml:"service_version" json:"service_version"`
+	Image          string                    `yaml:"image" json:"image"`
+	Digest         string                    `yaml:"digest" json:"digest"`
+	Images         map[string]RegistryImage  `yaml:"images,omitempty" json:"images,omitempty"`
+	Variants       map[string]ServiceVariant `yaml:"variants,omitempty" json:"variants,omitempty"`
+	SourceHash     string                    `yaml:"source_hash,omitempty" json:"source_hash,omitempty"`
+	CarriedFrom    string                    `yaml:"carried_from,omitempty" json:"carried_from,omitempty"`
+}
+
+type ServiceVariant struct {
+	Image  string                   `yaml:"image" json:"image"`
+	Digest string                   `yaml:"digest" json:"digest"`
+	Images map[string]RegistryImage `yaml:"images,omitempty" json:"images,omitempty"`
 }
 
 type RegistryImage struct {

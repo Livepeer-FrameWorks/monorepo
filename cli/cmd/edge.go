@@ -768,6 +768,7 @@ func newEdgeProvisionCmd() *cobra.Command {
 	var parallel int
 	var mode string
 	var version string
+	var onnxProfile string
 	var local bool
 	var ageKeyFile string
 	var dryRun bool
@@ -816,7 +817,7 @@ Multi-node manifest example:
 
 			// Check if using manifest mode
 			if manifestPath != "" {
-				return runEdgeProvisionFromManifest(cmd, cliCtx, manifestPath, clusterManifestPath, sshKey, enrollmentToken, parallel, timeout, mode, version, ageKeyFile, dryRun, skipPreflight, forceReenroll)
+				return runEdgeProvisionFromManifest(cmd, cliCtx, manifestPath, clusterManifestPath, sshKey, enrollmentToken, parallel, timeout, mode, version, onnxProfile, ageKeyFile, dryRun, skipPreflight, forceReenroll)
 			}
 
 			// Default --cluster-id from context. --foghorn-addr is intentionally
@@ -1026,6 +1027,7 @@ Multi-node manifest example:
 				ApplyTuning:     applyTuning,
 				Timeout:         timeout,
 				Version:         version,
+				ONNXProfile:     onnxProfile,
 				DarwinDomain:    darwinDomain,
 				AlreadyEnrolled: enrollment != nil,
 				ForceReenroll:   forceReenroll,
@@ -1103,6 +1105,7 @@ Multi-node manifest example:
 	cmd.Flags().IntVar(&parallel, "parallel", 1, "Number of nodes to provision in parallel (for manifest mode)")
 	cmd.Flags().StringVar(&mode, "mode", "container", "Deployment mode: container (single edge image) or native (systemd/launchd); 'docker' is a deprecated alias for container")
 	cmd.Flags().StringVar(&version, "version", "", "Platform version for binary resolution (e.g., stable, v1.2.3)")
+	cmd.Flags().StringVar(&onnxProfile, "onnx-profile", "auto", "MistServer ONNX profile: auto, cpu, coreml, cuda, tensorrt, or openvino")
 	cmd.Flags().BoolVar(&local, "local", false, "Provision this machine as a user LaunchAgent (no admin required, macOS only)")
 	cmd.Flags().StringVar(&ageKeyFile, "age-key", "", "Path to age private key for SOPS-encrypted host files (default: $SOPS_AGE_KEY_FILE)")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Load and validate manifest, show provision plan, but do not execute")
@@ -1123,7 +1126,7 @@ type EdgeProvisionResult struct {
 }
 
 // runEdgeProvisionFromManifest provisions multiple edge nodes from a manifest file
-func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, manifestPath, clusterManifestOverride, defaultSSHKey, enrollmentToken string, parallel int, timeout time.Duration, cliMode, cliVersion, ageKeyFile string, dryRun, skipPreflight, forceReenroll bool) error {
+func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, manifestPath, clusterManifestOverride, defaultSSHKey, enrollmentToken string, parallel int, timeout time.Duration, cliMode, cliVersion, cliONNXProfile, ageKeyFile string, dryRun, skipPreflight, forceReenroll bool) error {
 	// Load manifest (with host inventory merge if hosts_file is set)
 	manifest, err := inventory.LoadEdgeWithHosts(manifestPath, ageKeyFile)
 	if err != nil {
@@ -1257,7 +1260,7 @@ func runEdgeProvisionFromManifest(cmd *cobra.Command, cliCtx fwcfg.Context, mani
 				nodeVersion = cliVersion
 			}
 			nodeTelemetryURL := edgeManifestTelemetryWriteURL(manifest, clusterManifest, clusterID)
-			err := provisionSingleEdgeNode(cmd, controlCtx, n.SSH, sshKey, n.Name, nodeDomain, poolDomain, clusterID, n.Region, manifest.Email, token, n.ExternalIP, false, n.ApplyTune, n.RegisterQM, skipPreflight, timeout, nodeMode, nodeVersion, edgeManifestFoghornGRPCAddr(manifest.RootDomain, clusterID), controlCABundlePEM, nodeTelemetryURL, "", n.ResolvedCapabilities(manifest.Capabilities), n.ResolvedBandwidthMbps(manifest.BandwidthMbps), n.ResolvedMaxTranscodes(manifest.MaxTranscodes), n.ResolvedStorageBytes(manifest.StorageBytes), dryRun, forceReenroll)
+			err := provisionSingleEdgeNode(cmd, controlCtx, n.SSH, sshKey, n.Name, nodeDomain, poolDomain, clusterID, n.Region, manifest.Email, token, n.ExternalIP, false, n.ApplyTune, n.RegisterQM, skipPreflight, timeout, nodeMode, nodeVersion, cliONNXProfile, edgeManifestFoghornGRPCAddr(manifest.RootDomain, clusterID), controlCABundlePEM, nodeTelemetryURL, "", n.ResolvedCapabilities(manifest.Capabilities), n.ResolvedBandwidthMbps(manifest.BandwidthMbps), n.ResolvedMaxTranscodes(manifest.MaxTranscodes), n.ResolvedStorageBytes(manifest.StorageBytes), dryRun, forceReenroll)
 			if err != nil {
 				result.Error = err
 				result.Success = false
@@ -1584,9 +1587,7 @@ func populateEdgePreRegistration(ctx context.Context, cmd *cobra.Command, cliCtx
 		} else {
 			fmt.Fprintln(cmd.OutOrStdout(), "    Pre-registering edge via Foghorn")
 		}
-		foghornCtx, foghornCancel := context.WithTimeout(ctx, 45*time.Second)
-		resp, err = preRegisterEdge(foghornCtx, cfg.FoghornGRPCAddr, cfg.EnrollmentToken, sshTarget, sshKey, preferredNodeID, knownExternalIP)
-		foghornCancel()
+		resp, err = preRegisterEdge(ctx, cfg.FoghornGRPCAddr, cfg.EnrollmentToken, sshTarget, sshKey, preferredNodeID, knownExternalIP)
 	}
 	if err != nil {
 		return fmt.Errorf("pre-registration failed: %w", err)
@@ -1602,7 +1603,7 @@ func populateEdgePreRegistration(ctx context.Context, cmd *cobra.Command, cliCtx
 // knownExternalIP, when non-empty, is the canonical IP from the manifest's
 // hosts inventory; it bypasses the remote ifconfig.me probe in both the
 // preregistration and Quartermaster registration paths.
-func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget, sshKey, nodeName, nodeDomain, poolDomain, clusterID, region, email, enrollmentToken, knownExternalIP string, fetchCert, applyTuning, registerNode, skipPreflight bool, timeout time.Duration, mode, version, foghornGRPCAddr, caBundlePEM, telemetryURL, telemetryToken string, capabilities []string, bandwidthMbps, maxTranscodes int, storageCapacityBytes uint64, dryRun, forceReenroll bool) error {
+func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget, sshKey, nodeName, nodeDomain, poolDomain, clusterID, region, email, enrollmentToken, knownExternalIP string, fetchCert, applyTuning, registerNode, skipPreflight bool, timeout time.Duration, mode, version, onnxProfile, foghornGRPCAddr, caBundlePEM, telemetryURL, telemetryToken string, capabilities []string, bandwidthMbps, maxTranscodes int, storageCapacityBytes uint64, dryRun, forceReenroll bool) error {
 	// Already-enrolled detection: reuse the identity a completed install
 	// left on the host instead of re-running PreRegisterEdge (Foghorn
 	// resolves enrolled nodes by fingerprint; a re-presented token only
@@ -1718,6 +1719,7 @@ func provisionSingleEdgeNode(cmd *cobra.Command, cliCtx fwcfg.Context, sshTarget
 		ApplyTuning:     applyTuning,
 		Timeout:         timeout,
 		Version:         version,
+		ONNXProfile:     onnxProfile,
 		DryRun:          dryRun,
 		AlreadyEnrolled: enrollment != nil,
 		ForceReenroll:   forceReenroll,
@@ -1816,23 +1818,36 @@ func preRegisterEdgeLocal(ctx context.Context, foghornAddr, enrollmentToken, pre
 	return preRegisterEdge(ctx, foghornAddr, enrollmentToken, "", "", preferredNodeID, "")
 }
 
+const (
+	edgeExternalIPDiscoveryTimeout = 15 * time.Second
+	edgePreRegisterClientTimeout   = 45 * time.Second
+)
+
+func edgePreRegisterGRPCConfig(foghornAddr string, logger *logrus.Logger) foghorn.GRPCConfig {
+	return foghorn.GRPCConfig{
+		GRPCAddr: foghornAddr,
+		Timeout:  edgePreRegisterClientTimeout,
+		Logger:   logger,
+		UseTLS:   true,
+	}
+}
+
 func preRegisterEdge(ctx context.Context, foghornAddr, enrollmentToken, sshTarget, sshKey, preferredNodeID, knownExternalIP string) (*foghornpb.PreRegisterEdgeResponse, error) {
-	externalIP := resolveEdgeExternalIP(ctx, sshTarget, sshKey, knownExternalIP)
+	discoveryCtx, discoveryCancel := context.WithTimeout(ctx, edgeExternalIPDiscoveryTimeout)
+	externalIP := resolveEdgeExternalIP(discoveryCtx, sshTarget, sshKey, knownExternalIP)
+	discoveryCancel()
 
 	logger := logrus.New()
 	logger.SetLevel(logrus.WarnLevel)
-	client, err := foghorn.NewGRPCClient(foghorn.GRPCConfig{
-		GRPCAddr: foghornAddr,
-		Timeout:  15 * time.Second,
-		Logger:   logger,
-		UseTLS:   true,
-	})
+	client, err := foghorn.NewGRPCClient(edgePreRegisterGRPCConfig(foghornAddr, logger))
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Foghorn at %s: %w", foghornAddr, err)
 	}
 	defer client.Close()
 
-	return runEdgePreRegister(ctx, client, &foghornpb.PreRegisterEdgeRequest{
+	rpcCtx, rpcCancel := context.WithTimeout(ctx, edgePreRegisterClientTimeout)
+	defer rpcCancel()
+	return runEdgePreRegister(rpcCtx, client, &foghornpb.PreRegisterEdgeRequest{
 		EnrollmentToken: enrollmentToken,
 		ExternalIp:      externalIP,
 		PreferredNodeId: preferredNodeID,

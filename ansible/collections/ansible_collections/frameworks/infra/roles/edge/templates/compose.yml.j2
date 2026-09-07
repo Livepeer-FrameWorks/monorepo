@@ -15,6 +15,13 @@ services:
   edge:
     image: "{{ edge_image }}"
     container_name: frameworks-edge
+{% if edge_mistserver_onnx_profile in ['cuda', 'tensorrt'] %}
+    gpus: all
+{% endif %}
+{% if edge_mistserver_onnx_profile == 'openvino' and edge_mistserver_onnx_dri_device %}
+    devices:
+      - /dev/dri:/dev/dri
+{% endif %}
 {% if edge_container_flavor | default('linux') == 'darwin' %}
     ports:
       - "80:80"
@@ -63,6 +70,8 @@ services:
 {# Durable Helmsman authority/config/fence state is separate from reclaimable
    media. Keep a stable host bind across container replacement. #}
       - ./state:/data/state
+      - ./.edge-enroll.env:/run/frameworks/.edge-enroll.env
+      - ./.edge.env:/run/frameworks/.edge.env
     restart: unless-stopped
 {% if edge_container_flavor | default('linux') == 'darwin' %}
 

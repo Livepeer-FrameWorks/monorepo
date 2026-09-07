@@ -537,6 +537,7 @@ func (m *Manifest) GetServiceInfo(serviceName string) (*ServiceInfo, error) {
 				Image:     svc.Image,
 				Digest:    svc.Digest,
 				Images:    svc.Images,
+				Variants:  svc.Variants,
 				FullImage: fmt.Sprintf("%s@%s", svc.Image, svc.Digest),
 				Binaries:  make(map[string]Artifact),
 			}
