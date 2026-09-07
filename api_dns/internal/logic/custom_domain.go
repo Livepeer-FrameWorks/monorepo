@@ -51,6 +51,13 @@ func (m *CertManager) GetTenantCustomDomain(ctx context.Context, tenantID, domai
 	return m.store.GetTenantCustomDomain(ctx, tenantID, domain)
 }
 
+// ListTenantCustomDomains exposes tenant-scoped lifecycle rows to Navigator's
+// status RPC. It is used when the desired domain was cleared and the repair
+// caller no longer knows which stale applied domain needs teardown.
+func (m *CertManager) ListTenantCustomDomains(ctx context.Context, tenantID string) ([]store.TenantCustomDomain, error) {
+	return m.store.ListTenantCustomDomains(ctx, tenantID)
+}
+
 // RemoveCustomDomain marks a custom domain for teardown. The worker refreshes
 // any ready tenant SAN bundle, then atomically removes the domain certificate,
 // unused tenant ACME account, and lifecycle row. Idempotent on absent rows.

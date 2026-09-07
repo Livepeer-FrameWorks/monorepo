@@ -31,6 +31,17 @@ func TestLookupAbsenceOnlyTreatsNotFoundAsAuthoritative(t *testing.T) {
 	}
 }
 
+func TestSelectCustomDomainStatusRowChoosesDeterministicActiveRow(t *testing.T) {
+	rows := []store.TenantCustomDomain{
+		{TenantID: "tenant-1", Domain: "a.example", Status: "tearing_down"},
+		{TenantID: "tenant-1", Domain: "b.example"},
+	}
+	row, err := selectCustomDomainStatusRow(rows)
+	if err != nil || row == nil || row.Domain != "b.example" {
+		t.Fatalf("row=%+v err=%v, want active deterministic row", row, err)
+	}
+}
+
 // TestTenantAckAuthorityErrorCodeTerminalOnMissingCluster pins the retry
 // contract: a missing cluster identity is a permanent request defect Foghorn
 // must quarantine, while any other authority failure stays retryable.

@@ -1104,16 +1104,32 @@ func (s *NavigatorServer) RemoveCustomDomain(ctx context.Context, req *dnspb.Rem
 	return &dnspb.RemoveCustomDomainResponse{Accepted: true}, nil
 }
 
-// GetCustomDomainStatus returns lifecycle state for a single (tenant_id,
-// domain) pair plus the canonical CNAMEs to display in the dashboard.
+// GetCustomDomainStatus returns lifecycle state plus the canonical CNAMEs to
+// display in the dashboard. A non-empty domain addresses that exact pair; an
+// empty domain returns one tenant-owned lifecycle row so Quartermaster can
+// discover and remove stale applied state after desired intent was cleared.
 func (s *NavigatorServer) GetCustomDomainStatus(ctx context.Context, req *dnspb.GetCustomDomainStatusRequest) (*dnspb.GetCustomDomainStatusResponse, error) {
-	row, err := s.CertManager.GetTenantCustomDomain(ctx, req.GetTenantId(), req.GetDomain())
+	tenantID := strings.TrimSpace(req.GetTenantId())
+	if tenantID == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
+	var row *store.TenantCustomDomain
+	var err error
+	if domain := strings.TrimSpace(req.GetDomain()); domain != "" {
+		row, err = s.CertManager.GetTenantCustomDomain(ctx, tenantID, domain)
+	} else {
+		var rows []store.TenantCustomDomain
+		rows, err = s.CertManager.ListTenantCustomDomains(ctx, tenantID)
+		if err == nil {
+			row, err = selectCustomDomainStatusRow(rows)
+		}
+	}
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return &dnspb.GetCustomDomainStatusResponse{Found: false}, nil
 		}
 		s.Logger.WithError(err).WithFields(logging.Fields{
-			"tenant_id": req.GetTenantId(),
+			"tenant_id": tenantID,
 			"domain":    req.GetDomain(),
 		}).Warn("GetCustomDomainStatus lookup failed")
 		return nil, status.Errorf(codes.Internal, "lookup failed: %v", err)
@@ -1124,7 +1140,7 @@ func (s *NavigatorServer) GetCustomDomainStatus(ctx context.Context, req *dnspb.
 		Domain:   row.Domain,
 		Status:   row.Status,
 	}
-	if alias, aliasErr := s.CertManager.GetTenantAlias(ctx, req.GetTenantId()); aliasErr == nil && alias != nil && alias.Subdomain != "" {
+	if alias, aliasErr := s.CertManager.GetTenantAlias(ctx, tenantID); aliasErr == nil && alias != nil && alias.Subdomain != "" {
 		resp.RequiredTrafficCname = alias.Subdomain + "." + logic.TenantAliasZoneLabel + "." + s.RootDomain + "."
 	}
 	resp.RequiredAcmeChallengeCname = row.AcmeDNSSubdomain + "." + logic.AcmeDNSZoneLabel + "." + s.RootDomain + "."
@@ -1141,6 +1157,21 @@ func (s *NavigatorServer) GetCustomDomainStatus(ctx context.Context, req *dnspb.
 		resp.LastError = row.LastError.String
 	}
 	return resp, nil
+}
+
+func selectCustomDomainStatusRow(rows []store.TenantCustomDomain) (*store.TenantCustomDomain, error) {
+	if len(rows) == 0 {
+		return nil, store.ErrNotFound
+	}
+	// The store returns domain-sorted rows. Exposing one deterministic active
+	// row lets Quartermaster retire legacy duplicates one at a time; the former
+	// ambiguity error made those tenants impossible to converge.
+	for i := range rows {
+		if rows[i].Status != "tearing_down" {
+			return &rows[i], nil
+		}
+	}
+	return &rows[0], nil
 }
 
 func (s *NavigatorServer) IssueInternalCert(ctx context.Context, req *dnspb.IssueInternalCertRequest) (*dnspb.IssueInternalCertResponse, error) {
