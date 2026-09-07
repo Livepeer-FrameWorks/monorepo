@@ -108,6 +108,7 @@ message EventData {
     helmsmancontrol.StreamSourceTrigger stream_source = 21;
     helmsmancontrol.StorageSnapshot storage_snapshot = 22;
     helmsmancontrol.MessageLifecycleData message_lifecycle = 23;
+    helmsmancontrol.StreamChangeEvent stream_change = 24;
   }
 
   reserved 13;

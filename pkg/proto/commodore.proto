@@ -30,6 +30,11 @@ service InternalService {
   // Source: pkg/api/commodore/types.go:ValidateStreamKeyResponse
   rpc ValidateStreamKey(ValidateStreamKeyRequest) returns (ValidateStreamKeyResponse);
 
+  // JWT-safe identity check used by Gateway and x402. It never claims ingest
+  // placement and never returns pull sources, push targets, process config, or
+  // other sealed admission material.
+  rpc CheckStreamKey(ValidateStreamKeyRequest) returns (ValidateStreamKeyResponse);
+
   // Stream-key-less admission/materialization authority. Returns the same
   // fact set as ValidateStreamKey (tenant, user, stream IDs, processes JSON,
   // DVR policy, is_recording_enabled, billing flags) but keyed by stream_id
@@ -416,6 +421,9 @@ message ValidateStreamKeyResponse {
   // Enabled push targets for this stream (loaded during validation).
   // Foghorn sends these to Helmsman as ActivatePushTargets when the stream goes live.
   repeated PushTargetInternal push_targets = 15;
+  // Presence distinguishes an old producer (absent means a complete legacy
+  // response) from an explicitly incomplete target section.
+  optional bool push_targets_complete = 34;
 
   // ===== PROCESSING CONFIG =====
   // MistServer process config JSON array for live STREAM_PROCESS.
@@ -816,6 +824,12 @@ message ResolveInternalNameResponse {
   repeated cluster_peer.TenantClusterPeer cluster_peers = 6;
   string origin_cluster_id = 7;           // cluster that owns the stream (for federation source lookup)
   bool requires_auth = 8;
+  string official_cluster_id = 9;
+  bool allow_platform_shared_playback = 10;
+  // Presence is the rolling-upgrade fence. An absent value means the serving
+  // Commodore predates signed media-authority policy; false is an explicit
+  // fail-closed response from an upgraded Commodore.
+  optional bool serve_policy_resolved = 11;
 }
 
 // ============================================================================
@@ -1891,11 +1905,12 @@ message PushTarget {
   string name = 4;
   string target_uri = 5;                   // Masked in read responses (rtmp://...live_****xxxx)
   bool is_enabled = 6;
-  string status = 7;                       // idle, pushing, failed
+  string status = 7;                       // pending, pushing, retrying, stopping, idle, failed
   string last_error = 8;
   optional google.protobuf.Timestamp last_pushed_at = 9;
   google.protobuf.Timestamp created_at = 10;
   google.protobuf.Timestamp updated_at = 11;
+  string reason_code = 12;                    // Stable machine-readable lifecycle reason
 }
 
 message CreatePushTargetRequest {
@@ -1938,6 +1953,7 @@ message GetStreamPushTargetsRequest {
 
 message GetStreamPushTargetsResponse {
   repeated PushTargetInternal push_targets = 1;
+  optional bool push_targets_complete = 2;
 }
 
 // Internal: unmasked target URI for Helmsman to use
@@ -1952,8 +1968,22 @@ message PushTargetInternal {
 message UpdatePushTargetStatusRequest {
   string id = 1;
   string tenant_id = 2;
-  string status = 3;                       // idle, pushing, failed
+  string status = 3;                       // pending, pushing, retrying, stopping, idle, failed
   optional string last_error = 4;
+  PushTargetStatusReason reason = 5;
+}
+
+enum PushTargetStatusReason {
+  PUSH_TARGET_STATUS_REASON_UNSPECIFIED = 0;
+  PUSH_TARGET_STATUS_REASON_CONNECTED = 1;
+  PUSH_TARGET_STATUS_REASON_COMPLETED = 2;
+  PUSH_TARGET_STATUS_REASON_DESTINATION_REJECTED = 3;
+  PUSH_TARGET_STATUS_REASON_NETWORK_ERROR = 4;
+  PUSH_TARGET_STATUS_REASON_PROCESS_ERROR = 5;
+  PUSH_TARGET_STATUS_REASON_CAPACITY_EXHAUSTED = 6;
+  PUSH_TARGET_STATUS_REASON_CONFIGURATION_ERROR = 7;
+  PUSH_TARGET_STATUS_REASON_STOPPED = 8;
+  PUSH_TARGET_STATUS_REASON_EDGE_UPGRADE_REQUIRED = 9;
 }
 
 // ============================================================================

@@ -2121,6 +2121,7 @@ type ComplexityRoot struct {
 		LastPushedAt func(childComplexity int) int
 		Name         func(childComplexity int) int
 		Platform     func(childComplexity int) int
+		ReasonCode   func(childComplexity int) int
 		Status       func(childComplexity int) int
 		StreamID     func(childComplexity int) int
 		TargetUri    func(childComplexity int) int
@@ -14077,6 +14078,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.PushTarget.Platform(childComplexity), true
+	case "PushTarget.reasonCode":
+		if e.ComplexityRoot.PushTarget.ReasonCode == nil {
+			break
+		}
+
+		return e.ComplexityRoot.PushTarget.ReasonCode(childComplexity), true
 	case "PushTarget.status":
 		if e.ComplexityRoot.PushTarget.Status == nil {
 			break
@@ -22770,6 +22777,8 @@ type Mutation {
 
   """
   Submit an x402 payment payload to settle a 402 response or top up balance.
+  Authenticated members may settle viewer resources; direct top-ups and
+  non-viewer resources require billing management authority on the target tenant.
   """
   submitX402Payment(
     """
@@ -22777,7 +22786,8 @@ type Mutation {
     """
     payment: String!
     """
-    Optional resource being paid for (defaults to authenticated tenant when omitted).
+    Optional resource being paid for. Viewer resources credit their resolved
+    owner tenant; omission defaults to the authenticated tenant.
     """
     resource: String
   ): SubmitX402PaymentResult!
@@ -28165,10 +28175,12 @@ type PushTarget {
   targetUri: String!
   "Whether this target is enabled for automatic push on stream start."
   isEnabled: Boolean!
-  "Current push status: idle, pushing, or failed."
+  "Current push status: pending, pushing, retrying, stopping, idle, or failed."
   status: String!
   "Last error message if push failed."
   lastError: String
+  "Stable machine-readable lifecycle reason code."
+  reasonCode: String
   "When this target last successfully pushed."
   lastPushedAt: Time
   createdAt: Time!
@@ -65205,6 +65217,8 @@ func (ec *executionContext) fieldContext_Mutation_createPushTarget(ctx context.C
 				return ec.fieldContext_PushTarget_status(ctx, field)
 			case "lastError":
 				return ec.fieldContext_PushTarget_lastError(ctx, field)
+			case "reasonCode":
+				return ec.fieldContext_PushTarget_reasonCode(ctx, field)
 			case "lastPushedAt":
 				return ec.fieldContext_PushTarget_lastPushedAt(ctx, field)
 			case "createdAt":
@@ -65268,6 +65282,8 @@ func (ec *executionContext) fieldContext_Mutation_updatePushTarget(ctx context.C
 				return ec.fieldContext_PushTarget_status(ctx, field)
 			case "lastError":
 				return ec.fieldContext_PushTarget_lastError(ctx, field)
+			case "reasonCode":
+				return ec.fieldContext_PushTarget_reasonCode(ctx, field)
 			case "lastPushedAt":
 				return ec.fieldContext_PushTarget_lastPushedAt(ctx, field)
 			case "createdAt":
@@ -79760,6 +79776,35 @@ func (ec *executionContext) fieldContext_PushTarget_lastError(_ context.Context,
 	return fc, nil
 }
 
+func (ec *executionContext) _PushTarget_reasonCode(ctx context.Context, field graphql.CollectedField, obj *commodorepb.PushTarget) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_PushTarget_reasonCode,
+		func(ctx context.Context) (any, error) {
+			return obj.ReasonCode, nil
+		},
+		nil,
+		ec.marshalOString2string,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_PushTarget_reasonCode(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "PushTarget",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _PushTarget_lastPushedAt(ctx context.Context, field graphql.CollectedField, obj *commodorepb.PushTarget) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -93999,6 +94044,8 @@ func (ec *executionContext) fieldContext_Stream_pushTargets(_ context.Context, f
 				return ec.fieldContext_PushTarget_status(ctx, field)
 			case "lastError":
 				return ec.fieldContext_PushTarget_lastError(ctx, field)
+			case "reasonCode":
+				return ec.fieldContext_PushTarget_reasonCode(ctx, field)
 			case "lastPushedAt":
 				return ec.fieldContext_PushTarget_lastPushedAt(ctx, field)
 			case "createdAt":
@@ -148520,6 +148567,8 @@ func (ec *executionContext) _PushTarget(ctx context.Context, sel ast.SelectionSe
 			}
 		case "lastError":
 			out.Values[i] = ec._PushTarget_lastError(ctx, field, obj)
+		case "reasonCode":
+			out.Values[i] = ec._PushTarget_reasonCode(ctx, field, obj)
 		case "lastPushedAt":
 			field := field
 

@@ -20,21 +20,23 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	TenantService_GetTenant_FullMethodName                    = "/quartermaster.TenantService/GetTenant"
-	TenantService_ValidateTenant_FullMethodName               = "/quartermaster.TenantService/ValidateTenant"
-	TenantService_ResolveTenant_FullMethodName                = "/quartermaster.TenantService/ResolveTenant"
-	TenantService_ResolveTenantAliases_FullMethodName         = "/quartermaster.TenantService/ResolveTenantAliases"
-	TenantService_GetClusterRouting_FullMethodName            = "/quartermaster.TenantService/GetClusterRouting"
-	TenantService_ListTenants_FullMethodName                  = "/quartermaster.TenantService/ListTenants"
-	TenantService_CreateTenant_FullMethodName                 = "/quartermaster.TenantService/CreateTenant"
-	TenantService_UpdateTenant_FullMethodName                 = "/quartermaster.TenantService/UpdateTenant"
-	TenantService_DeleteTenant_FullMethodName                 = "/quartermaster.TenantService/DeleteTenant"
-	TenantService_GetTenantCluster_FullMethodName             = "/quartermaster.TenantService/GetTenantCluster"
-	TenantService_UpdateTenantCluster_FullMethodName          = "/quartermaster.TenantService/UpdateTenantCluster"
-	TenantService_GetTenantsBatch_FullMethodName              = "/quartermaster.TenantService/GetTenantsBatch"
-	TenantService_GetTenantsByCluster_FullMethodName          = "/quartermaster.TenantService/GetTenantsByCluster"
-	TenantService_ListAliasedTenantsForCluster_FullMethodName = "/quartermaster.TenantService/ListAliasedTenantsForCluster"
-	TenantService_ListActiveTenants_FullMethodName            = "/quartermaster.TenantService/ListActiveTenants"
+	TenantService_GetTenant_FullMethodName                           = "/quartermaster.TenantService/GetTenant"
+	TenantService_ValidateTenant_FullMethodName                      = "/quartermaster.TenantService/ValidateTenant"
+	TenantService_ResolveTenant_FullMethodName                       = "/quartermaster.TenantService/ResolveTenant"
+	TenantService_ResolveTenantAliases_FullMethodName                = "/quartermaster.TenantService/ResolveTenantAliases"
+	TenantService_GetClusterRouting_FullMethodName                   = "/quartermaster.TenantService/GetClusterRouting"
+	TenantService_ListTenants_FullMethodName                         = "/quartermaster.TenantService/ListTenants"
+	TenantService_CreateTenant_FullMethodName                        = "/quartermaster.TenantService/CreateTenant"
+	TenantService_UpdateTenant_FullMethodName                        = "/quartermaster.TenantService/UpdateTenant"
+	TenantService_ApplyTenantBillingEntitlements_FullMethodName      = "/quartermaster.TenantService/ApplyTenantBillingEntitlements"
+	TenantService_CompleteTenantDNSEntitlementHandoff_FullMethodName = "/quartermaster.TenantService/CompleteTenantDNSEntitlementHandoff"
+	TenantService_DeleteTenant_FullMethodName                        = "/quartermaster.TenantService/DeleteTenant"
+	TenantService_GetTenantCluster_FullMethodName                    = "/quartermaster.TenantService/GetTenantCluster"
+	TenantService_UpdateTenantCluster_FullMethodName                 = "/quartermaster.TenantService/UpdateTenantCluster"
+	TenantService_GetTenantsBatch_FullMethodName                     = "/quartermaster.TenantService/GetTenantsBatch"
+	TenantService_GetTenantsByCluster_FullMethodName                 = "/quartermaster.TenantService/GetTenantsByCluster"
+	TenantService_ListAliasedTenantsForCluster_FullMethodName        = "/quartermaster.TenantService/ListAliasedTenantsForCluster"
+	TenantService_ListActiveTenants_FullMethodName                   = "/quartermaster.TenantService/ListActiveTenants"
 )
 
 // TenantServiceClient is the client API for TenantService service.
@@ -66,6 +68,12 @@ type TenantServiceClient interface {
 	CreateTenant(ctx context.Context, in *CreateTenantRequest, opts ...grpc.CallOption) (*CreateTenantResponse, error)
 	// Update tenant
 	UpdateTenant(ctx context.Context, in *UpdateTenantRequest, opts ...grpc.CallOption) (*Tenant, error)
+	// Materialize Purser-owned billing entitlements used by the DNS control
+	// plane. Service-token only; observed_at fences stale concurrent applies.
+	ApplyTenantBillingEntitlements(ctx context.Context, in *ApplyTenantBillingEntitlementsRequest, opts ...grpc.CallOption) (*ApplyTenantBillingEntitlementsResponse, error)
+	// CompleteTenantDNSEntitlementHandoff records Purser's durable proof that a
+	// full subscription sweep materialized authoritative DNS entitlements.
+	CompleteTenantDNSEntitlementHandoff(ctx context.Context, in *CompleteTenantDNSEntitlementHandoffRequest, opts ...grpc.CallOption) (*CompleteTenantDNSEntitlementHandoffResponse, error)
 	// Delete (soft delete) tenant
 	DeleteTenant(ctx context.Context, in *DeleteTenantRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// Get tenant cluster/deployment info
@@ -176,6 +184,26 @@ func (c *tenantServiceClient) UpdateTenant(ctx context.Context, in *UpdateTenant
 	return out, nil
 }
 
+func (c *tenantServiceClient) ApplyTenantBillingEntitlements(ctx context.Context, in *ApplyTenantBillingEntitlementsRequest, opts ...grpc.CallOption) (*ApplyTenantBillingEntitlementsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ApplyTenantBillingEntitlementsResponse)
+	err := c.cc.Invoke(ctx, TenantService_ApplyTenantBillingEntitlements_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *tenantServiceClient) CompleteTenantDNSEntitlementHandoff(ctx context.Context, in *CompleteTenantDNSEntitlementHandoffRequest, opts ...grpc.CallOption) (*CompleteTenantDNSEntitlementHandoffResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CompleteTenantDNSEntitlementHandoffResponse)
+	err := c.cc.Invoke(ctx, TenantService_CompleteTenantDNSEntitlementHandoff_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *tenantServiceClient) DeleteTenant(ctx context.Context, in *DeleteTenantRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(emptypb.Empty)
@@ -275,6 +303,12 @@ type TenantServiceServer interface {
 	CreateTenant(context.Context, *CreateTenantRequest) (*CreateTenantResponse, error)
 	// Update tenant
 	UpdateTenant(context.Context, *UpdateTenantRequest) (*Tenant, error)
+	// Materialize Purser-owned billing entitlements used by the DNS control
+	// plane. Service-token only; observed_at fences stale concurrent applies.
+	ApplyTenantBillingEntitlements(context.Context, *ApplyTenantBillingEntitlementsRequest) (*ApplyTenantBillingEntitlementsResponse, error)
+	// CompleteTenantDNSEntitlementHandoff records Purser's durable proof that a
+	// full subscription sweep materialized authoritative DNS entitlements.
+	CompleteTenantDNSEntitlementHandoff(context.Context, *CompleteTenantDNSEntitlementHandoffRequest) (*CompleteTenantDNSEntitlementHandoffResponse, error)
 	// Delete (soft delete) tenant
 	DeleteTenant(context.Context, *DeleteTenantRequest) (*emptypb.Empty, error)
 	// Get tenant cluster/deployment info
@@ -328,6 +362,12 @@ func (UnimplementedTenantServiceServer) CreateTenant(context.Context, *CreateTen
 }
 func (UnimplementedTenantServiceServer) UpdateTenant(context.Context, *UpdateTenantRequest) (*Tenant, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpdateTenant not implemented")
+}
+func (UnimplementedTenantServiceServer) ApplyTenantBillingEntitlements(context.Context, *ApplyTenantBillingEntitlementsRequest) (*ApplyTenantBillingEntitlementsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplyTenantBillingEntitlements not implemented")
+}
+func (UnimplementedTenantServiceServer) CompleteTenantDNSEntitlementHandoff(context.Context, *CompleteTenantDNSEntitlementHandoffRequest) (*CompleteTenantDNSEntitlementHandoffResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CompleteTenantDNSEntitlementHandoff not implemented")
 }
 func (UnimplementedTenantServiceServer) DeleteTenant(context.Context, *DeleteTenantRequest) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteTenant not implemented")
@@ -515,6 +555,42 @@ func _TenantService_UpdateTenant_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TenantService_ApplyTenantBillingEntitlements_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ApplyTenantBillingEntitlementsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TenantServiceServer).ApplyTenantBillingEntitlements(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TenantService_ApplyTenantBillingEntitlements_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TenantServiceServer).ApplyTenantBillingEntitlements(ctx, req.(*ApplyTenantBillingEntitlementsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TenantService_CompleteTenantDNSEntitlementHandoff_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CompleteTenantDNSEntitlementHandoffRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TenantServiceServer).CompleteTenantDNSEntitlementHandoff(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TenantService_CompleteTenantDNSEntitlementHandoff_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TenantServiceServer).CompleteTenantDNSEntitlementHandoff(ctx, req.(*CompleteTenantDNSEntitlementHandoffRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _TenantService_DeleteTenant_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(DeleteTenantRequest)
 	if err := dec(in); err != nil {
@@ -679,6 +755,14 @@ var TenantService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "UpdateTenant",
 			Handler:    _TenantService_UpdateTenant_Handler,
+		},
+		{
+			MethodName: "ApplyTenantBillingEntitlements",
+			Handler:    _TenantService_ApplyTenantBillingEntitlements_Handler,
+		},
+		{
+			MethodName: "CompleteTenantDNSEntitlementHandoff",
+			Handler:    _TenantService_CompleteTenantDNSEntitlementHandoff_Handler,
 		},
 		{
 			MethodName: "DeleteTenant",

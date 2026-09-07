@@ -23,6 +23,7 @@ const _ = grpc.SupportPackageIsVersion9
 
 const (
 	InternalService_ValidateStreamKey_FullMethodName                  = "/commodore.InternalService/ValidateStreamKey"
+	InternalService_CheckStreamKey_FullMethodName                     = "/commodore.InternalService/CheckStreamKey"
 	InternalService_ResolveStreamContext_FullMethodName               = "/commodore.InternalService/ResolveStreamContext"
 	InternalService_ListManagedStreams_FullMethodName                 = "/commodore.InternalService/ListManagedStreams"
 	InternalService_ListStreamMonitoring_FullMethodName               = "/commodore.InternalService/ListStreamMonitoring"
@@ -83,6 +84,10 @@ type InternalServiceClient interface {
 	// Called by Foghorn on PUSH_REWRITE to validate stream key
 	// Source: pkg/api/commodore/types.go:ValidateStreamKeyResponse
 	ValidateStreamKey(ctx context.Context, in *ValidateStreamKeyRequest, opts ...grpc.CallOption) (*ValidateStreamKeyResponse, error)
+	// JWT-safe identity check used by Gateway and x402. It never claims ingest
+	// placement and never returns pull sources, push targets, process config, or
+	// other sealed admission material.
+	CheckStreamKey(ctx context.Context, in *ValidateStreamKeyRequest, opts ...grpc.CallOption) (*ValidateStreamKeyResponse, error)
 	// Stream-key-less admission/materialization authority. Returns the same
 	// fact set as ValidateStreamKey (tenant, user, stream IDs, processes JSON,
 	// DVR policy, is_recording_enabled, billing flags) but keyed by stream_id
@@ -310,6 +315,16 @@ func (c *internalServiceClient) ValidateStreamKey(ctx context.Context, in *Valid
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ValidateStreamKeyResponse)
 	err := c.cc.Invoke(ctx, InternalService_ValidateStreamKey_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) CheckStreamKey(ctx context.Context, in *ValidateStreamKeyRequest, opts ...grpc.CallOption) (*ValidateStreamKeyResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ValidateStreamKeyResponse)
+	err := c.cc.Invoke(ctx, InternalService_CheckStreamKey_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -815,6 +830,10 @@ type InternalServiceServer interface {
 	// Called by Foghorn on PUSH_REWRITE to validate stream key
 	// Source: pkg/api/commodore/types.go:ValidateStreamKeyResponse
 	ValidateStreamKey(context.Context, *ValidateStreamKeyRequest) (*ValidateStreamKeyResponse, error)
+	// JWT-safe identity check used by Gateway and x402. It never claims ingest
+	// placement and never returns pull sources, push targets, process config, or
+	// other sealed admission material.
+	CheckStreamKey(context.Context, *ValidateStreamKeyRequest) (*ValidateStreamKeyResponse, error)
 	// Stream-key-less admission/materialization authority. Returns the same
 	// fact set as ValidateStreamKey (tenant, user, stream IDs, processes JSON,
 	// DVR policy, is_recording_enabled, billing flags) but keyed by stream_id
@@ -1041,6 +1060,9 @@ type UnimplementedInternalServiceServer struct{}
 func (UnimplementedInternalServiceServer) ValidateStreamKey(context.Context, *ValidateStreamKeyRequest) (*ValidateStreamKeyResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ValidateStreamKey not implemented")
 }
+func (UnimplementedInternalServiceServer) CheckStreamKey(context.Context, *ValidateStreamKeyRequest) (*ValidateStreamKeyResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CheckStreamKey not implemented")
+}
 func (UnimplementedInternalServiceServer) ResolveStreamContext(context.Context, *ResolveStreamContextRequest) (*ResolveStreamContextResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResolveStreamContext not implemented")
 }
@@ -1223,6 +1245,24 @@ func _InternalService_ValidateStreamKey_Handler(srv interface{}, ctx context.Con
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(InternalServiceServer).ValidateStreamKey(ctx, req.(*ValidateStreamKeyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_CheckStreamKey_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ValidateStreamKeyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).CheckStreamKey(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_CheckStreamKey_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).CheckStreamKey(ctx, req.(*ValidateStreamKeyRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2119,6 +2159,10 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ValidateStreamKey",
 			Handler:    _InternalService_ValidateStreamKey_Handler,
+		},
+		{
+			MethodName: "CheckStreamKey",
+			Handler:    _InternalService_CheckStreamKey_Handler,
 		},
 		{
 			MethodName: "ResolveStreamContext",

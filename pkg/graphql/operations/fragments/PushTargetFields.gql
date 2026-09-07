@@ -6,6 +6,7 @@ fragment PushTargetFields on PushTarget {
   targetUri
   isEnabled
   status
+  reasonCode
   lastError
   lastPushedAt
   createdAt

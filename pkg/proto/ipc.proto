@@ -355,6 +355,10 @@ message ControlMessage {
     // Mist push-list failure, or a failed PushStart is re-driven by the
     // obligation's next retry instead of being silently lost.
     ActivatePushTargetsResult activate_push_targets_result = 168;
+    // Helmsman reports teardown convergence after re-listing Mist. Foghorn's
+    // durable offline obligation remains pending until this acknowledgement is
+    // recorded, so a delivered command is never mistaken for a completed stop.
+    DeactivatePushTargetsResult deactivate_push_targets_result = 170;
   }
 }
 
@@ -437,6 +441,9 @@ message DesiredComponent {
   string checksum = 4;
   bool drain_required = 5;
   string swap_strategy = 6;
+  // Runtime implementation selected for this node (cpu, coreml, cuda,
+  // tensorrt, openvino). Empty means the legacy/default CPU profile.
+  string onnx_profile = 7;
 }
 
 message DesiredStateUpdate {
@@ -488,6 +495,15 @@ message ActivatePushTargets {
   // Obligation identity: the admitting ingest generation. Echoed in ActivatePushTargetsResult so
   // the acknowledgement completes exactly that obligation.
   string source_generation = 3;
+  string tenant_id = 4;
+  string stream_id = 5;
+  // Monotonic media-authority version for the complete desired target set.
+  int64 target_revision = 6;
+  int32 max_viewers = 7;                    // existing tenant delivery-capacity limit; 0 means unlimited
+  // Runtime-attempt fence. Rotated whenever Foghorn re-arms the same desired
+  // revision after a terminal push. Helmsman echoes it on results and status
+  // reports so a delayed final cannot retire the replacement attempt.
+  string activation_attempt = 8;
 }
 
 // PushTargetSpec is a single push destination for Helmsman to activate.
@@ -495,6 +511,7 @@ message PushTargetSpec {
   string target_id = 1;                    // Commodore push_targets.id (for status reporting)
   string target_uri = 2;                   // Full RTMP/SRT URI
   string name = 3;                         // User-friendly label (for logging)
+  string platform = 4;
 }
 
 // DeactivatePushTargets tells Helmsman to stop all pushes for a stream.
@@ -502,6 +519,16 @@ message PushTargetSpec {
 message DeactivatePushTargets {
   string stream_name = 1;                  // MistServer stream name
   string source_generation = 2;            // ended generation; ignored after a successor is admitted
+  int64 target_revision = 3;
+}
+
+message DeactivatePushTargetsResult {
+  string stream_name = 1;
+  string source_generation = 2;
+  int64 target_revision = 3;
+  bool converged = 4;
+  string error = 5;
+  repeated PushTargetConvergence targets = 6;
 }
 
 // ActivatePushTargetsResult reports an ActivatePushTargets command's outcome back to Foghorn.
@@ -513,6 +540,39 @@ message ActivatePushTargetsResult {
   bool   converged = 2;
   string error = 3;                        // empty when converged; first failure otherwise
   string source_generation = 4;            // echoed from the request for exact obligation correlation
+  int64 target_revision = 5;
+  repeated PushTargetConvergence targets = 6;
+  string activation_attempt = 7;            // echoed from ActivatePushTargets
+}
+
+message PushTargetConvergence {
+  string target_id = 1;
+  int64 mist_push_id = 2;
+  bool active = 3;
+  RestreamReason reason = 4;
+  string sanitized_message = 5;
+}
+
+enum RestreamState {
+  RESTREAM_STATE_UNSPECIFIED = 0;
+  RESTREAM_STATE_PENDING = 1;
+  RESTREAM_STATE_PUSHING = 2;
+  RESTREAM_STATE_RETRYING = 3;
+  RESTREAM_STATE_STOPPING = 4;
+  RESTREAM_STATE_IDLE = 5;
+  RESTREAM_STATE_FAILED = 6;
+}
+
+enum RestreamReason {
+  RESTREAM_REASON_UNSPECIFIED = 0;
+  RESTREAM_REASON_CONNECTED = 1;
+  RESTREAM_REASON_COMPLETED = 2;
+  RESTREAM_REASON_DESTINATION_REJECTED = 3;
+  RESTREAM_REASON_NETWORK_ERROR = 4;
+  RESTREAM_REASON_PROCESS_ERROR = 5;
+  RESTREAM_REASON_CAPACITY_EXHAUSTED = 6;
+  RESTREAM_REASON_CONFIGURATION_ERROR = 7;
+  RESTREAM_REASON_STOPPED = 8;
 }
 
 // PushTargetStatusReport is sent by Helmsman to Foghorn to report push lifecycle events.
@@ -520,9 +580,25 @@ message ActivatePushTargetsResult {
 message PushTargetStatusReport {
   string target_id = 1;                    // Commodore push_targets.id
   string stream_name = 2;
-  string status = 3;                       // pushing, idle, failed
-  string error = 4;                        // Error message if failed
+  string status = 3 [deprecated = true];   // legacy: use state
+  string error = 4 [deprecated = true];    // legacy: use sanitized_message
   int64 mist_push_id = 5;                 // MistServer's internal push ID (for PushStop)
+  string tenant_id = 6;
+  string stream_id = 7;
+  string source_generation = 8;
+  int64 target_revision = 9;
+  RestreamState state = 10;
+  RestreamReason reason = 11;
+  string sanitized_message = 12;
+  int64 started_at_ms = 13;
+  int64 ended_at_ms = 14;
+  int64 duration_ms = 15;
+  uint64 bytes_sent = 16;
+  string source_event_id = 17;
+  string platform = 18;
+  bool bytes_observed = 19;               // true only when Mist supplied an explicit byte counter
+  string node_id = 20;                    // Foghorn-authenticated emitting node; stamped before analytics
+  string activation_attempt = 21;         // runtime-attempt fence from ActivatePushTargets
 }
 
 message ArtifactDeleted {
@@ -757,6 +833,10 @@ message MistTrigger {
     PlaybackBootTrace playback_boot_trace = 42;
     PlaybackSessionQoe playback_session_qoe = 43;
     IngestRuntimeAbsent ingest_runtime_absent = 44;
+    // Sanitized restream lifecycle fact. Unlike raw PUSH_OUT_START/PUSH_END,
+    // this carries stable target identity and never carries a destination URI
+    // or Mist log text, so it is safe for the durable trigger WAL and analytics.
+    PushTargetStatusReport restream_status = 45;
   }
 
   optional string cluster_id = 33; // Emitting cluster identifier (source_cluster_id in envelope v2 terms)
@@ -2131,6 +2211,9 @@ message NodeLifecycleUpdate {
   // higher fence and supersedes, and a delayed report from a superseded connection loses. This is
   // an ownership fence, not wall-clock or first-arrival ordering.
   int64 artifacts_connection_fence = 49;
+  // MistServer runtime implementation installed on this node. Foghorn uses
+  // this with os/arch to select the matching immutable update artifact.
+  string onnx_profile = 53;
   // artifacts_snapshot_incomplete is set by the sidecar when the `artifacts` snapshot cannot be
   // trusted as the node's COMPLETE inventory — i.e. no complete filesystem scan has succeeded yet
   // (cold start with a directory-read error). Foghorn must NOT apply an incomplete snapshot as an

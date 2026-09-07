@@ -1384,6 +1384,8 @@ type Mutation {
 
   """
   Submit an x402 payment payload to settle a 402 response or top up balance.
+  Authenticated members may settle viewer resources; direct top-ups and
+  non-viewer resources require billing management authority on the target tenant.
   """
   submitX402Payment(
     """
@@ -1391,7 +1393,8 @@ type Mutation {
     """
     payment: String!
     """
-    Optional resource being paid for (defaults to authenticated tenant when omitted).
+    Optional resource being paid for. Viewer resources credit their resolved
+    owner tenant; omission defaults to the authenticated tenant.
     """
     resource: String
   ): SubmitX402PaymentResult!
@@ -6779,10 +6782,12 @@ type PushTarget {
   targetUri: String!
   "Whether this target is enabled for automatic push on stream start."
   isEnabled: Boolean!
-  "Current push status: idle, pushing, or failed."
+  "Current push status: pending, pushing, retrying, stopping, idle, or failed."
   status: String!
   "Last error message if push failed."
   lastError: String
+  "Stable machine-readable lifecycle reason code."
+  reasonCode: String
   "When this target last successfully pushed."
   lastPushedAt: Time
   createdAt: Time!

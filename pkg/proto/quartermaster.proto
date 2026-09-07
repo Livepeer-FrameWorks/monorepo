@@ -55,6 +55,13 @@ service TenantService {
   // Update tenant
   rpc UpdateTenant(UpdateTenantRequest) returns (Tenant);
 
+  // Materialize Purser-owned billing entitlements used by the DNS control
+  // plane. Service-token only; observed_at fences stale concurrent applies.
+  rpc ApplyTenantBillingEntitlements(ApplyTenantBillingEntitlementsRequest) returns (ApplyTenantBillingEntitlementsResponse);
+  // CompleteTenantDNSEntitlementHandoff records Purser's durable proof that a
+  // full subscription sweep materialized authoritative DNS entitlements.
+  rpc CompleteTenantDNSEntitlementHandoff(CompleteTenantDNSEntitlementHandoffRequest) returns (CompleteTenantDNSEntitlementHandoffResponse);
+
   // Delete (soft delete) tenant
   rpc DeleteTenant(DeleteTenantRequest) returns (google.protobuf.Empty);
 
@@ -396,6 +403,11 @@ message Tenant {
   // Tenant-wide master switch for Skipper AI monitoring/notifications.
   // Default true; when false Skipper skips the tenant entirely.
   bool monitoring_enabled = 28;         // json:"monitoring_enabled"
+  bool custom_subdomain_enabled = 29;   // Purser-owned platform alias entitlement
+  bool custom_domain_enabled = 30;      // Purser-owned BYO domain entitlement
+  // False only for rows still inside the v0.3.0 rolling-upgrade compatibility
+  // window. Consumers use deployment_tier compatibility only while false.
+  bool billing_entitlements_observed = 31;
 }
 
 message ListTenantsRequest {
@@ -443,6 +455,30 @@ message UpdateTenantRequest {
   optional string primary_cluster_id = 12; // json:"primary_cluster_id,omitempty"
   optional bool is_active = 13;         // json:"is_active,omitempty"
   optional bool monitoring_enabled = 14; // json:"monitoring_enabled,omitempty"
+}
+
+message ApplyTenantBillingEntitlementsRequest {
+  string tenant_id = 1;
+  string deployment_tier = 2;
+  bool custom_subdomain_enabled = 3;
+  bool custom_domain_enabled = 4;
+  google.protobuf.Timestamp observed_at = 5;
+}
+
+message ApplyTenantBillingEntitlementsResponse {
+  bool applied = 1;
+}
+
+message CompleteTenantDNSEntitlementHandoffRequest {
+  // Compatibility telemetry: tenants the caller observed while paging. The
+  // server records its own serializable census and gates only on unobserved
+  // legacy entitlement rows, so concurrent fail-closed signup cannot wedge the
+  // handoff.
+  int64 subscription_count = 1;
+}
+
+message CompleteTenantDNSEntitlementHandoffResponse {
+  bool recorded = 1;
 }
 
 message DeleteTenantRequest {
