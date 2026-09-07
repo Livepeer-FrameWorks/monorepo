@@ -7,6 +7,14 @@
 
 CREATE SCHEMA IF NOT EXISTS commodore;
 
+CREATE TABLE IF NOT EXISTS commodore.delegated_jwt_replays (
+    jti TEXT PRIMARY KEY,
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_commodore_delegated_jwt_replays_expires_at
+    ON commodore.delegated_jwt_replays (expires_at);
+
 -- ============================================================================
 -- EXTENSIONS
 -- ============================================================================
@@ -80,7 +88,7 @@ CREATE TABLE IF NOT EXISTS commodore.api_tokens (
     token_name VARCHAR(255) NOT NULL,
 
     -- ===== AUTHORIZATION =====
-    permissions TEXT[] DEFAULT ARRAY['read'],
+    permissions TEXT[] DEFAULT ARRAY['streams:read'],
 
     -- ===== STATUS =====
     is_active BOOLEAN DEFAULT TRUE,
@@ -454,12 +462,13 @@ CREATE TABLE IF NOT EXISTS commodore.push_targets (
     -- ===== TARGET CONFIG =====
     platform VARCHAR(50),                         -- 'twitch', 'youtube', 'facebook', 'kick', 'x', 'custom'
     name VARCHAR(255) NOT NULL,                   -- User-friendly label ("My Twitch")
-    target_uri VARCHAR(512) NOT NULL,             -- encrypted rtmp://live.twitch.tv/app/{stream_key}
+    target_uri TEXT NOT NULL,                     -- versioned encrypted rtmp://live.twitch.tv/app/{stream_key}
     is_enabled BOOLEAN DEFAULT TRUE,
 
     -- ===== RUNTIME STATE =====
     -- Updated by Foghorn when PUSH_OUT_START / PUSH_END triggers fire
-    status VARCHAR(50) DEFAULT 'idle',            -- idle | pushing | failed
+    status VARCHAR(50) DEFAULT 'idle',            -- pending | pushing | retrying | stopping | idle | failed
+    reason_code VARCHAR(50) NOT NULL DEFAULT 'unspecified',
     last_error TEXT,
     last_pushed_at TIMESTAMP,
 
@@ -470,6 +479,42 @@ CREATE TABLE IF NOT EXISTS commodore.push_targets (
 
 CREATE INDEX IF NOT EXISTS idx_commodore_push_targets_tenant ON commodore.push_targets(tenant_id);
 CREATE INDEX IF NOT EXISTS idx_commodore_push_targets_stream ON commodore.push_targets(tenant_id, stream_id);
+
+ALTER TABLE commodore.push_targets
+    DROP CONSTRAINT IF EXISTS ck_commodore_push_targets_platform;
+ALTER TABLE commodore.push_targets
+    ADD CONSTRAINT ck_commodore_push_targets_platform
+    CHECK (platform IN ('twitch', 'youtube', 'facebook', 'kick', 'x', 'custom'));
+ALTER TABLE commodore.push_targets
+    DROP CONSTRAINT IF EXISTS ck_commodore_push_targets_status;
+ALTER TABLE commodore.push_targets
+    ADD CONSTRAINT ck_commodore_push_targets_status
+    CHECK (status IN ('pending', 'pushing', 'retrying', 'stopping', 'idle', 'failed'));
+ALTER TABLE commodore.push_targets
+    DROP CONSTRAINT IF EXISTS ck_commodore_push_targets_reason_code;
+ALTER TABLE commodore.push_targets
+    ADD CONSTRAINT ck_commodore_push_targets_reason_code
+    CHECK (reason_code IN (
+        'unspecified', 'connected', 'completed', 'destination_rejected',
+        'network_error', 'process_error', 'capacity_exhausted',
+        'configuration_error', 'edge_upgrade_required', 'stopped'
+    ));
+
+-- Rows whose ciphertext cannot be decrypted are isolated by exact ciphertext
+-- fingerprint so one corrupt secret cannot block migration of healthy rows.
+-- No ciphertext, plaintext, or customer-provided error text is stored here.
+CREATE TABLE IF NOT EXISTS commodore.field_encryption_quarantine (
+    table_name TEXT NOT NULL,
+    column_name TEXT NOT NULL,
+    row_id TEXT NOT NULL,
+    ciphertext_fingerprint TEXT NOT NULL,
+    purpose TEXT NOT NULL,
+    error_code TEXT NOT NULL DEFAULT 'decrypt_failed',
+    attempts BIGINT NOT NULL DEFAULT 1,
+    first_observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (table_name, column_name, row_id, ciphertext_fingerprint)
+);
 
 -- ============================================================================
 -- UTILITY FUNCTIONS
@@ -1486,6 +1531,10 @@ DECLARE
     stream_id UUID;
     tenant_id UUID;
 BEGIN
+    IF current_setting('frameworks.suppress_media_authority_refresh', true) = 'on' THEN
+        RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+    END IF;
+
     IF TG_OP = 'UPDATE'
        AND OLD.tenant_id IS NOT DISTINCT FROM NEW.tenant_id
        AND OLD.user_id IS NOT DISTINCT FROM NEW.user_id
@@ -1524,6 +1573,10 @@ DECLARE
     affected_stream UUID;
     affected_tenant UUID;
 BEGIN
+    IF current_setting('frameworks.suppress_media_authority_refresh', true) = 'on' THEN
+        RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+    END IF;
+
     affected_stream := CASE WHEN TG_OP = 'DELETE' THEN OLD.stream_id ELSE NEW.stream_id END;
     SELECT tenant_id INTO affected_tenant FROM commodore.streams WHERE id = affected_stream;
     PERFORM commodore.enqueue_live_stream_media_authority_refresh(affected_stream, affected_tenant, TG_ARGV[0]);
@@ -1624,6 +1677,10 @@ DECLARE
     old_authority JSONB;
     new_authority JSONB;
 BEGIN
+    IF current_setting('frameworks.suppress_media_authority_refresh', true) = 'on' THEN
+        RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+    END IF;
+
     IF TG_OP = 'UPDATE' THEN
         old_authority := jsonb_build_object(
             'tenant_id', to_jsonb(OLD)->'tenant_id', 'user_id', to_jsonb(OLD)->'user_id',

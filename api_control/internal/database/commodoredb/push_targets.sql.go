@@ -11,21 +11,54 @@ import (
 )
 
 const deletePushTarget = `-- name: DeletePushTarget :one
-DELETE FROM commodore.push_targets
-WHERE id = $1 AND tenant_id = $2
+DELETE FROM commodore.push_targets pt
+WHERE pt.id = $1 AND pt.tenant_id = $2
+  AND EXISTS (
+      SELECT 1 FROM commodore.streams s
+      WHERE s.id = pt.stream_id
+        AND s.tenant_id = $2
+        AND (s.user_id = $3 OR $4::boolean)
+        AND s.deleted_at IS NULL
+  )
 RETURNING stream_id
 `
 
 type DeletePushTargetParams struct {
-	ID       string `db:"id" json:"id"`
-	TenantID string `db:"tenant_id" json:"tenant_id"`
+	ID            string `db:"id" json:"id"`
+	TenantID      string `db:"tenant_id" json:"tenant_id"`
+	UserID        string `db:"user_id" json:"user_id"`
+	TenantManager bool   `db:"tenant_manager" json:"tenant_manager"`
 }
 
 func (q *Queries) DeletePushTarget(ctx context.Context, arg DeletePushTargetParams) (string, error) {
-	row := q.db.QueryRowContext(ctx, deletePushTarget, arg.ID, arg.TenantID)
+	row := q.db.QueryRowContext(ctx, deletePushTarget,
+		arg.ID,
+		arg.TenantID,
+		arg.UserID,
+		arg.TenantManager,
+	)
 	var stream_id string
 	err := row.Scan(&stream_id)
 	return stream_id, err
+}
+
+const getPushTargetStreamOwner = `-- name: GetPushTargetStreamOwner :one
+SELECT s.user_id
+FROM commodore.streams s
+WHERE s.id = $1 AND s.tenant_id = $2
+  AND s.deleted_at IS NULL
+`
+
+type GetPushTargetStreamOwnerParams struct {
+	StreamID string `db:"stream_id" json:"stream_id"`
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+}
+
+func (q *Queries) GetPushTargetStreamOwner(ctx context.Context, arg GetPushTargetStreamOwnerParams) (string, error) {
+	row := q.db.QueryRowContext(ctx, getPushTargetStreamOwner, arg.StreamID, arg.TenantID)
+	var user_id string
+	err := row.Scan(&user_id)
+	return user_id, err
 }
 
 const insertPushTarget = `-- name: InsertPushTarget :exec
@@ -105,17 +138,83 @@ func (q *Queries) ListEnabledPushTargets(ctx context.Context, arg ListEnabledPus
 	return items, nil
 }
 
+const listPushTargetSiblingsForOwner = `-- name: ListPushTargetSiblingsForOwner :many
+SELECT sibling.id, sibling.stream_id, sibling.target_uri
+FROM commodore.push_targets selected
+JOIN commodore.streams stream
+  ON stream.id = selected.stream_id
+ AND stream.tenant_id = selected.tenant_id
+ AND stream.deleted_at IS NULL
+JOIN commodore.push_targets sibling
+  ON sibling.stream_id = selected.stream_id
+ AND sibling.tenant_id = selected.tenant_id
+WHERE selected.id = $1
+  AND selected.tenant_id = $2
+  AND (stream.user_id = $3 OR $4::boolean)
+ORDER BY sibling.id
+`
+
+type ListPushTargetSiblingsForOwnerParams struct {
+	ID            string `db:"id" json:"id"`
+	TenantID      string `db:"tenant_id" json:"tenant_id"`
+	UserID        string `db:"user_id" json:"user_id"`
+	TenantManager bool   `db:"tenant_manager" json:"tenant_manager"`
+}
+
+type ListPushTargetSiblingsForOwnerRow struct {
+	ID        string `db:"id" json:"id"`
+	StreamID  string `db:"stream_id" json:"stream_id"`
+	TargetUri string `db:"target_uri" json:"target_uri"`
+}
+
+func (q *Queries) ListPushTargetSiblingsForOwner(ctx context.Context, arg ListPushTargetSiblingsForOwnerParams) ([]ListPushTargetSiblingsForOwnerRow, error) {
+	rows, err := q.db.QueryContext(ctx, listPushTargetSiblingsForOwner,
+		arg.ID,
+		arg.TenantID,
+		arg.UserID,
+		arg.TenantManager,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListPushTargetSiblingsForOwnerRow{}
+	for rows.Next() {
+		var i ListPushTargetSiblingsForOwnerRow
+		if err := rows.Scan(&i.ID, &i.StreamID, &i.TargetUri); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPushTargets = `-- name: ListPushTargets :many
 SELECT id, stream_id, platform, name, target_uri, is_enabled, status,
-       last_error, last_pushed_at, created_at, updated_at
-FROM commodore.push_targets
-WHERE stream_id = $1 AND tenant_id = $2
+       reason_code, last_error, last_pushed_at, created_at, updated_at
+FROM commodore.push_targets pt
+WHERE pt.stream_id = $1 AND pt.tenant_id = $2
+  AND EXISTS (
+      SELECT 1 FROM commodore.streams s
+      WHERE s.id = pt.stream_id
+        AND s.tenant_id = $2
+        AND (s.user_id = $3 OR $4::boolean)
+        AND s.deleted_at IS NULL
+  )
 ORDER BY created_at ASC
 `
 
 type ListPushTargetsParams struct {
-	StreamID string `db:"stream_id" json:"stream_id"`
-	TenantID string `db:"tenant_id" json:"tenant_id"`
+	StreamID      string `db:"stream_id" json:"stream_id"`
+	TenantID      string `db:"tenant_id" json:"tenant_id"`
+	UserID        string `db:"user_id" json:"user_id"`
+	TenantManager bool   `db:"tenant_manager" json:"tenant_manager"`
 }
 
 type ListPushTargetsRow struct {
@@ -126,6 +225,7 @@ type ListPushTargetsRow struct {
 	TargetUri    string         `db:"target_uri" json:"target_uri"`
 	IsEnabled    sql.NullBool   `db:"is_enabled" json:"is_enabled"`
 	Status       sql.NullString `db:"status" json:"status"`
+	ReasonCode   string         `db:"reason_code" json:"reason_code"`
 	LastError    sql.NullString `db:"last_error" json:"last_error"`
 	LastPushedAt sql.NullTime   `db:"last_pushed_at" json:"last_pushed_at"`
 	CreatedAt    sql.NullTime   `db:"created_at" json:"created_at"`
@@ -133,7 +233,12 @@ type ListPushTargetsRow struct {
 }
 
 func (q *Queries) ListPushTargets(ctx context.Context, arg ListPushTargetsParams) ([]ListPushTargetsRow, error) {
-	rows, err := q.db.QueryContext(ctx, listPushTargets, arg.StreamID, arg.TenantID)
+	rows, err := q.db.QueryContext(ctx, listPushTargets,
+		arg.StreamID,
+		arg.TenantID,
+		arg.UserID,
+		arg.TenantManager,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -149,6 +254,7 @@ func (q *Queries) ListPushTargets(ctx context.Context, arg ListPushTargetsParams
 			&i.TargetUri,
 			&i.IsEnabled,
 			&i.Status,
+			&i.ReasonCode,
 			&i.LastError,
 			&i.LastPushedAt,
 			&i.CreatedAt,
@@ -167,15 +273,51 @@ func (q *Queries) ListPushTargets(ctx context.Context, arg ListPushTargetsParams
 	return items, nil
 }
 
+const streamExistsForPushTargetManager = `-- name: StreamExistsForPushTargetManager :one
+SELECT EXISTS (
+    SELECT 1 FROM commodore.streams s
+    WHERE s.id = $1
+      AND s.tenant_id = $2
+      AND (s.user_id = $3 OR $4::boolean)
+      AND s.deleted_at IS NULL
+) AS stream_exists
+`
+
+type StreamExistsForPushTargetManagerParams struct {
+	StreamID      string `db:"stream_id" json:"stream_id"`
+	TenantID      string `db:"tenant_id" json:"tenant_id"`
+	UserID        string `db:"user_id" json:"user_id"`
+	TenantManager bool   `db:"tenant_manager" json:"tenant_manager"`
+}
+
+func (q *Queries) StreamExistsForPushTargetManager(ctx context.Context, arg StreamExistsForPushTargetManagerParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, streamExistsForPushTargetManager,
+		arg.StreamID,
+		arg.TenantID,
+		arg.UserID,
+		arg.TenantManager,
+	)
+	var stream_exists bool
+	err := row.Scan(&stream_exists)
+	return stream_exists, err
+}
+
 const updatePushTargetFields = `-- name: UpdatePushTargetFields :one
-UPDATE commodore.push_targets
+UPDATE commodore.push_targets pt
 SET name = CASE WHEN $1::boolean THEN $2 ELSE name END,
     target_uri = CASE WHEN $3::boolean THEN $4 ELSE target_uri END,
     is_enabled = CASE WHEN $5::boolean THEN $6::boolean ELSE is_enabled END,
     updated_at = NOW()
-WHERE id = $7 AND tenant_id = $8
+WHERE pt.id = $7 AND pt.tenant_id = $8
+  AND EXISTS (
+      SELECT 1 FROM commodore.streams s
+      WHERE s.id = pt.stream_id
+        AND s.tenant_id = $8
+        AND (s.user_id = $9 OR $10::boolean)
+        AND s.deleted_at IS NULL
+  )
 RETURNING id, stream_id, platform, name, target_uri, is_enabled, status,
-          last_error, last_pushed_at, created_at, updated_at
+          reason_code, last_error, last_pushed_at, created_at, updated_at
 `
 
 type UpdatePushTargetFieldsParams struct {
@@ -187,6 +329,8 @@ type UpdatePushTargetFieldsParams struct {
 	IsEnabled      bool   `db:"is_enabled" json:"is_enabled"`
 	ID             string `db:"id" json:"id"`
 	TenantID       string `db:"tenant_id" json:"tenant_id"`
+	UserID         string `db:"user_id" json:"user_id"`
+	TenantManager  bool   `db:"tenant_manager" json:"tenant_manager"`
 }
 
 type UpdatePushTargetFieldsRow struct {
@@ -197,6 +341,7 @@ type UpdatePushTargetFieldsRow struct {
 	TargetUri    string         `db:"target_uri" json:"target_uri"`
 	IsEnabled    sql.NullBool   `db:"is_enabled" json:"is_enabled"`
 	Status       sql.NullString `db:"status" json:"status"`
+	ReasonCode   string         `db:"reason_code" json:"reason_code"`
 	LastError    sql.NullString `db:"last_error" json:"last_error"`
 	LastPushedAt sql.NullTime   `db:"last_pushed_at" json:"last_pushed_at"`
 	CreatedAt    sql.NullTime   `db:"created_at" json:"created_at"`
@@ -213,6 +358,8 @@ func (q *Queries) UpdatePushTargetFields(ctx context.Context, arg UpdatePushTarg
 		arg.IsEnabled,
 		arg.ID,
 		arg.TenantID,
+		arg.UserID,
+		arg.TenantManager,
 	)
 	var i UpdatePushTargetFieldsRow
 	err := row.Scan(
@@ -223,6 +370,7 @@ func (q *Queries) UpdatePushTargetFields(ctx context.Context, arg UpdatePushTarg
 		&i.TargetUri,
 		&i.IsEnabled,
 		&i.Status,
+		&i.ReasonCode,
 		&i.LastError,
 		&i.LastPushedAt,
 		&i.CreatedAt,
@@ -234,22 +382,24 @@ func (q *Queries) UpdatePushTargetFields(ctx context.Context, arg UpdatePushTarg
 const updatePushTargetStatus = `-- name: UpdatePushTargetStatus :one
 UPDATE commodore.push_targets
 SET status = $1,
+    reason_code = $2,
     last_error = CASE
-        WHEN $2::boolean THEN $3
+        WHEN $3::boolean THEN $4
         ELSE last_error
     END,
     last_pushed_at = CASE
-        WHEN $4::boolean THEN NOW()
+        WHEN $5::boolean THEN NOW()
         ELSE last_pushed_at
     END,
     updated_at = NOW()
-WHERE id = $5 AND tenant_id = $6
+WHERE id = $6 AND tenant_id = $7
 RETURNING id, stream_id, platform, name, target_uri, is_enabled, status,
-          last_error, last_pushed_at, created_at, updated_at
+          reason_code, last_error, last_pushed_at, created_at, updated_at
 `
 
 type UpdatePushTargetStatusParams struct {
 	Status         sql.NullString `db:"status" json:"status"`
+	ReasonCode     string         `db:"reason_code" json:"reason_code"`
 	ApplyLastError bool           `db:"apply_last_error" json:"apply_last_error"`
 	LastError      sql.NullString `db:"last_error" json:"last_error"`
 	MarkPushed     bool           `db:"mark_pushed" json:"mark_pushed"`
@@ -265,6 +415,7 @@ type UpdatePushTargetStatusRow struct {
 	TargetUri    string         `db:"target_uri" json:"target_uri"`
 	IsEnabled    sql.NullBool   `db:"is_enabled" json:"is_enabled"`
 	Status       sql.NullString `db:"status" json:"status"`
+	ReasonCode   string         `db:"reason_code" json:"reason_code"`
 	LastError    sql.NullString `db:"last_error" json:"last_error"`
 	LastPushedAt sql.NullTime   `db:"last_pushed_at" json:"last_pushed_at"`
 	CreatedAt    sql.NullTime   `db:"created_at" json:"created_at"`
@@ -274,6 +425,7 @@ type UpdatePushTargetStatusRow struct {
 func (q *Queries) UpdatePushTargetStatus(ctx context.Context, arg UpdatePushTargetStatusParams) (UpdatePushTargetStatusRow, error) {
 	row := q.db.QueryRowContext(ctx, updatePushTargetStatus,
 		arg.Status,
+		arg.ReasonCode,
 		arg.ApplyLastError,
 		arg.LastError,
 		arg.MarkPushed,
@@ -289,6 +441,7 @@ func (q *Queries) UpdatePushTargetStatus(ctx context.Context, arg UpdatePushTarg
 		&i.TargetUri,
 		&i.IsEnabled,
 		&i.Status,
+		&i.ReasonCode,
 		&i.LastError,
 		&i.LastPushedAt,
 		&i.CreatedAt,

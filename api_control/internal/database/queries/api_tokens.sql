@@ -16,7 +16,8 @@ SELECT COALESCE(email::text, ''::text)::text AS email,
        platform_operator
 FROM commodore.users
 WHERE id = sqlc.arg(user_id)::uuid
-  AND tenant_id = sqlc.arg(tenant_id)::uuid;
+  AND tenant_id = sqlc.arg(tenant_id)::uuid
+  AND is_active = true;
 
 -- name: InsertAPIToken :exec
 INSERT INTO commodore.api_tokens
@@ -34,7 +35,7 @@ VALUES
 -- name: CountAPITokensForUser :one
 SELECT COUNT(*)::integer
 FROM commodore.api_tokens
-WHERE user_id = sqlc.arg(user_id)::uuid
+WHERE (user_id = sqlc.arg(user_id)::uuid OR sqlc.arg(tenant_manager)::boolean)
   AND tenant_id = sqlc.arg(tenant_id)::uuid;
 
 -- name: ListAPITokensForward :many
@@ -42,7 +43,7 @@ SELECT id::text, token_name, permissions,
        CASE WHEN is_active AND (expires_at IS NULL OR expires_at > NOW()) THEN 'active' ELSE 'inactive' END::text AS status,
        last_used_at, expires_at, created_at
 FROM commodore.api_tokens
-WHERE user_id = sqlc.arg(user_id)::uuid
+WHERE (user_id = sqlc.arg(user_id)::uuid OR sqlc.arg(tenant_manager)::boolean)
   AND tenant_id = sqlc.arg(tenant_id)::uuid
 ORDER BY created_at DESC, id DESC
 LIMIT sqlc.arg(row_limit);
@@ -52,7 +53,7 @@ SELECT id::text, token_name, permissions,
        CASE WHEN is_active AND (expires_at IS NULL OR expires_at > NOW()) THEN 'active' ELSE 'inactive' END::text AS status,
        last_used_at, expires_at, created_at
 FROM commodore.api_tokens
-WHERE user_id = sqlc.arg(user_id)::uuid
+WHERE (user_id = sqlc.arg(user_id)::uuid OR sqlc.arg(tenant_manager)::boolean)
   AND tenant_id = sqlc.arg(tenant_id)::uuid
   AND (created_at, id) < (sqlc.arg(cursor_time)::timestamp, sqlc.arg(cursor_id)::uuid)
 ORDER BY created_at DESC, id DESC
@@ -63,7 +64,7 @@ SELECT id::text, token_name, permissions,
        CASE WHEN is_active AND (expires_at IS NULL OR expires_at > NOW()) THEN 'active' ELSE 'inactive' END::text AS status,
        last_used_at, expires_at, created_at
 FROM commodore.api_tokens
-WHERE user_id = sqlc.arg(user_id)::uuid
+WHERE (user_id = sqlc.arg(user_id)::uuid OR sqlc.arg(tenant_manager)::boolean)
   AND tenant_id = sqlc.arg(tenant_id)::uuid
 ORDER BY created_at ASC, id ASC
 LIMIT sqlc.arg(row_limit);
@@ -73,7 +74,7 @@ SELECT id::text, token_name, permissions,
        CASE WHEN is_active AND (expires_at IS NULL OR expires_at > NOW()) THEN 'active' ELSE 'inactive' END::text AS status,
        last_used_at, expires_at, created_at
 FROM commodore.api_tokens
-WHERE user_id = sqlc.arg(user_id)::uuid
+WHERE (user_id = sqlc.arg(user_id)::uuid OR sqlc.arg(tenant_manager)::boolean)
   AND tenant_id = sqlc.arg(tenant_id)::uuid
   AND (created_at, id) > (sqlc.arg(cursor_time)::timestamp, sqlc.arg(cursor_id)::uuid)
 ORDER BY created_at ASC, id ASC
@@ -83,6 +84,6 @@ LIMIT sqlc.arg(row_limit);
 UPDATE commodore.api_tokens
 SET is_active = false, updated_at = NOW()
 WHERE id = sqlc.arg(token_id)::uuid
-  AND user_id = sqlc.arg(user_id)::uuid
+  AND (user_id = sqlc.arg(user_id)::uuid OR sqlc.arg(tenant_manager)::boolean)
   AND tenant_id = sqlc.arg(tenant_id)::uuid
 RETURNING token_name;

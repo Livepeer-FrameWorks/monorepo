@@ -1,6 +1,7 @@
 package crypto
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -78,6 +79,71 @@ func TestEncryptProducesUniqueOutput(t *testing.T) {
 	enc2, _ := fe.Encrypt("same-input")
 	if enc1 == enc2 {
 		t.Fatal("two encryptions of same plaintext should produce different ciphertext (random nonce)")
+	}
+}
+
+func TestFieldKeyringRotationAndLegacyRead(t *testing.T) {
+	oldSecret := []byte("old-field-secret-at-least-16")
+	newSecret := []byte("new-field-secret-at-least-16")
+	legacy, err := DeriveFieldEncryptor(oldSecret, "push-target-uri")
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyCiphertext, err := legacy.Encrypt("rtmp://legacy.example/app/key")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ring, err := NewFieldKeyring("current", newSecret, map[string][]byte{"previous": oldSecret}, [][]byte{oldSecret}, "push-target-uri")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, decryptErr := ring.Decrypt(legacyCiphertext); decryptErr != nil || got != "rtmp://legacy.example/app/key" {
+		t.Fatalf("legacy decrypt = %q, %v", got, decryptErr)
+	}
+	stored, err := ring.Encrypt("rtmp://new.example/app/key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if CiphertextFormat(stored) != FieldCiphertextV3 || !strings.HasPrefix(stored, "enc:v3:current:") {
+		t.Fatalf("unexpected keyring envelope %q", stored)
+	}
+	rotated, err := NewFieldKeyring("next", []byte("next-field-secret-at-least-16"), map[string][]byte{"current": newSecret}, nil, "push-target-uri")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := rotated.Decrypt(stored); err != nil || got != "rtmp://new.example/app/key" {
+		t.Fatalf("previous-key decrypt = %q, %v", got, err)
+	}
+}
+
+func TestFieldKeyringRejectsUnknownAndTamperedKeyIDs(t *testing.T) {
+	ring, err := NewFieldKeyring("current", []byte("new-field-secret-at-least-16"), nil, nil, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := ring.Encrypt("secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ring.Decrypt(strings.Replace(stored, "current", "unknown", 1)); err == nil {
+		t.Fatal("unknown key ID was accepted")
+	}
+	if _, err := ring.Decrypt(strings.Replace(stored, "current", "bad/key", 1)); err == nil {
+		t.Fatal("invalid key ID was accepted")
+	}
+}
+
+func TestParseLegacyFieldSecretsAllowsHistoricalShortJWT(t *testing.T) {
+	secrets, err := ParseLegacyFieldSecrets(`["short","historical-jwt-secret"]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(secrets) != 2 || string(secrets[0]) != "short" || string(secrets[1]) != "historical-jwt-secret" {
+		t.Fatalf("unexpected legacy secrets: %#v", secrets)
+	}
+	if _, err := ParseLegacyFieldSecrets(`["ok",""]`); err == nil {
+		t.Fatal("expected empty legacy secret to be rejected")
 	}
 }
 

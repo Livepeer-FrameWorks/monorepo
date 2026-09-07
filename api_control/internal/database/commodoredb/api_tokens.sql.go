@@ -16,17 +16,18 @@ import (
 const countAPITokensForUser = `-- name: CountAPITokensForUser :one
 SELECT COUNT(*)::integer
 FROM commodore.api_tokens
-WHERE user_id = $1::uuid
-  AND tenant_id = $2::uuid
+WHERE (user_id = $1::uuid OR $2::boolean)
+  AND tenant_id = $3::uuid
 `
 
 type CountAPITokensForUserParams struct {
-	UserID   string `db:"user_id" json:"user_id"`
-	TenantID string `db:"tenant_id" json:"tenant_id"`
+	UserID        string `db:"user_id" json:"user_id"`
+	TenantManager bool   `db:"tenant_manager" json:"tenant_manager"`
+	TenantID      string `db:"tenant_id" json:"tenant_id"`
 }
 
 func (q *Queries) CountAPITokensForUser(ctx context.Context, arg CountAPITokensForUserParams) (int32, error) {
-	row := q.db.QueryRowContext(ctx, countAPITokensForUser, arg.UserID, arg.TenantID)
+	row := q.db.QueryRowContext(ctx, countAPITokensForUser, arg.UserID, arg.TenantManager, arg.TenantID)
 	var column_1 int32
 	err := row.Scan(&column_1)
 	return column_1, err
@@ -39,6 +40,7 @@ SELECT COALESCE(email::text, ''::text)::text AS email,
 FROM commodore.users
 WHERE id = $1::uuid
   AND tenant_id = $2::uuid
+  AND is_active = true
 `
 
 type GetAPITokenUserContextParams struct {
@@ -101,16 +103,17 @@ SELECT id::text, token_name, permissions,
        CASE WHEN is_active AND (expires_at IS NULL OR expires_at > NOW()) THEN 'active' ELSE 'inactive' END::text AS status,
        last_used_at, expires_at, created_at
 FROM commodore.api_tokens
-WHERE user_id = $1::uuid
-  AND tenant_id = $2::uuid
+WHERE (user_id = $1::uuid OR $2::boolean)
+  AND tenant_id = $3::uuid
 ORDER BY created_at ASC, id ASC
-LIMIT $3
+LIMIT $4
 `
 
 type ListAPITokensBackwardParams struct {
-	UserID   string `db:"user_id" json:"user_id"`
-	TenantID string `db:"tenant_id" json:"tenant_id"`
-	RowLimit int32  `db:"row_limit" json:"row_limit"`
+	UserID        string `db:"user_id" json:"user_id"`
+	TenantManager bool   `db:"tenant_manager" json:"tenant_manager"`
+	TenantID      string `db:"tenant_id" json:"tenant_id"`
+	RowLimit      int32  `db:"row_limit" json:"row_limit"`
 }
 
 type ListAPITokensBackwardRow struct {
@@ -124,7 +127,12 @@ type ListAPITokensBackwardRow struct {
 }
 
 func (q *Queries) ListAPITokensBackward(ctx context.Context, arg ListAPITokensBackwardParams) ([]ListAPITokensBackwardRow, error) {
-	rows, err := q.db.QueryContext(ctx, listAPITokensBackward, arg.UserID, arg.TenantID, arg.RowLimit)
+	rows, err := q.db.QueryContext(ctx, listAPITokensBackward,
+		arg.UserID,
+		arg.TenantManager,
+		arg.TenantID,
+		arg.RowLimit,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -159,19 +167,20 @@ SELECT id::text, token_name, permissions,
        CASE WHEN is_active AND (expires_at IS NULL OR expires_at > NOW()) THEN 'active' ELSE 'inactive' END::text AS status,
        last_used_at, expires_at, created_at
 FROM commodore.api_tokens
-WHERE user_id = $1::uuid
-  AND tenant_id = $2::uuid
-  AND (created_at, id) > ($3::timestamp, $4::uuid)
+WHERE (user_id = $1::uuid OR $2::boolean)
+  AND tenant_id = $3::uuid
+  AND (created_at, id) > ($4::timestamp, $5::uuid)
 ORDER BY created_at ASC, id ASC
-LIMIT $5
+LIMIT $6
 `
 
 type ListAPITokensBackwardBeforeParams struct {
-	UserID     string    `db:"user_id" json:"user_id"`
-	TenantID   string    `db:"tenant_id" json:"tenant_id"`
-	CursorTime time.Time `db:"cursor_time" json:"cursor_time"`
-	CursorID   string    `db:"cursor_id" json:"cursor_id"`
-	RowLimit   int32     `db:"row_limit" json:"row_limit"`
+	UserID        string    `db:"user_id" json:"user_id"`
+	TenantManager bool      `db:"tenant_manager" json:"tenant_manager"`
+	TenantID      string    `db:"tenant_id" json:"tenant_id"`
+	CursorTime    time.Time `db:"cursor_time" json:"cursor_time"`
+	CursorID      string    `db:"cursor_id" json:"cursor_id"`
+	RowLimit      int32     `db:"row_limit" json:"row_limit"`
 }
 
 type ListAPITokensBackwardBeforeRow struct {
@@ -187,6 +196,7 @@ type ListAPITokensBackwardBeforeRow struct {
 func (q *Queries) ListAPITokensBackwardBefore(ctx context.Context, arg ListAPITokensBackwardBeforeParams) ([]ListAPITokensBackwardBeforeRow, error) {
 	rows, err := q.db.QueryContext(ctx, listAPITokensBackwardBefore,
 		arg.UserID,
+		arg.TenantManager,
 		arg.TenantID,
 		arg.CursorTime,
 		arg.CursorID,
@@ -226,16 +236,17 @@ SELECT id::text, token_name, permissions,
        CASE WHEN is_active AND (expires_at IS NULL OR expires_at > NOW()) THEN 'active' ELSE 'inactive' END::text AS status,
        last_used_at, expires_at, created_at
 FROM commodore.api_tokens
-WHERE user_id = $1::uuid
-  AND tenant_id = $2::uuid
+WHERE (user_id = $1::uuid OR $2::boolean)
+  AND tenant_id = $3::uuid
 ORDER BY created_at DESC, id DESC
-LIMIT $3
+LIMIT $4
 `
 
 type ListAPITokensForwardParams struct {
-	UserID   string `db:"user_id" json:"user_id"`
-	TenantID string `db:"tenant_id" json:"tenant_id"`
-	RowLimit int32  `db:"row_limit" json:"row_limit"`
+	UserID        string `db:"user_id" json:"user_id"`
+	TenantManager bool   `db:"tenant_manager" json:"tenant_manager"`
+	TenantID      string `db:"tenant_id" json:"tenant_id"`
+	RowLimit      int32  `db:"row_limit" json:"row_limit"`
 }
 
 type ListAPITokensForwardRow struct {
@@ -249,7 +260,12 @@ type ListAPITokensForwardRow struct {
 }
 
 func (q *Queries) ListAPITokensForward(ctx context.Context, arg ListAPITokensForwardParams) ([]ListAPITokensForwardRow, error) {
-	rows, err := q.db.QueryContext(ctx, listAPITokensForward, arg.UserID, arg.TenantID, arg.RowLimit)
+	rows, err := q.db.QueryContext(ctx, listAPITokensForward,
+		arg.UserID,
+		arg.TenantManager,
+		arg.TenantID,
+		arg.RowLimit,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -284,19 +300,20 @@ SELECT id::text, token_name, permissions,
        CASE WHEN is_active AND (expires_at IS NULL OR expires_at > NOW()) THEN 'active' ELSE 'inactive' END::text AS status,
        last_used_at, expires_at, created_at
 FROM commodore.api_tokens
-WHERE user_id = $1::uuid
-  AND tenant_id = $2::uuid
-  AND (created_at, id) < ($3::timestamp, $4::uuid)
+WHERE (user_id = $1::uuid OR $2::boolean)
+  AND tenant_id = $3::uuid
+  AND (created_at, id) < ($4::timestamp, $5::uuid)
 ORDER BY created_at DESC, id DESC
-LIMIT $5
+LIMIT $6
 `
 
 type ListAPITokensForwardAfterParams struct {
-	UserID     string    `db:"user_id" json:"user_id"`
-	TenantID   string    `db:"tenant_id" json:"tenant_id"`
-	CursorTime time.Time `db:"cursor_time" json:"cursor_time"`
-	CursorID   string    `db:"cursor_id" json:"cursor_id"`
-	RowLimit   int32     `db:"row_limit" json:"row_limit"`
+	UserID        string    `db:"user_id" json:"user_id"`
+	TenantManager bool      `db:"tenant_manager" json:"tenant_manager"`
+	TenantID      string    `db:"tenant_id" json:"tenant_id"`
+	CursorTime    time.Time `db:"cursor_time" json:"cursor_time"`
+	CursorID      string    `db:"cursor_id" json:"cursor_id"`
+	RowLimit      int32     `db:"row_limit" json:"row_limit"`
 }
 
 type ListAPITokensForwardAfterRow struct {
@@ -312,6 +329,7 @@ type ListAPITokensForwardAfterRow struct {
 func (q *Queries) ListAPITokensForwardAfter(ctx context.Context, arg ListAPITokensForwardAfterParams) ([]ListAPITokensForwardAfterRow, error) {
 	rows, err := q.db.QueryContext(ctx, listAPITokensForwardAfter,
 		arg.UserID,
+		arg.TenantManager,
 		arg.TenantID,
 		arg.CursorTime,
 		arg.CursorID,
@@ -350,19 +368,25 @@ const revokeAPIToken = `-- name: RevokeAPIToken :one
 UPDATE commodore.api_tokens
 SET is_active = false, updated_at = NOW()
 WHERE id = $1::uuid
-  AND user_id = $2::uuid
-  AND tenant_id = $3::uuid
+  AND (user_id = $2::uuid OR $3::boolean)
+  AND tenant_id = $4::uuid
 RETURNING token_name
 `
 
 type RevokeAPITokenParams struct {
-	TokenID  string `db:"token_id" json:"token_id"`
-	UserID   string `db:"user_id" json:"user_id"`
-	TenantID string `db:"tenant_id" json:"tenant_id"`
+	TokenID       string `db:"token_id" json:"token_id"`
+	UserID        string `db:"user_id" json:"user_id"`
+	TenantManager bool   `db:"tenant_manager" json:"tenant_manager"`
+	TenantID      string `db:"tenant_id" json:"tenant_id"`
 }
 
 func (q *Queries) RevokeAPIToken(ctx context.Context, arg RevokeAPITokenParams) (string, error) {
-	row := q.db.QueryRowContext(ctx, revokeAPIToken, arg.TokenID, arg.UserID, arg.TenantID)
+	row := q.db.QueryRowContext(ctx, revokeAPIToken,
+		arg.TokenID,
+		arg.UserID,
+		arg.TenantManager,
+		arg.TenantID,
+	)
 	var token_name string
 	err := row.Scan(&token_name)
 	return token_name, err

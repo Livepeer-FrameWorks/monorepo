@@ -111,6 +111,7 @@ type Querier interface {
 	GetNewsletterUser(ctx context.Context, arg GetNewsletterUserParams) (GetNewsletterUserRow, error)
 	GetOwnedPullSourceState(ctx context.Context, arg GetOwnedPullSourceStateParams) (GetOwnedPullSourceStateRow, error)
 	GetPullMediaAuthoritySecret(ctx context.Context, streamID string) (GetPullMediaAuthoritySecretRow, error)
+	GetPushTargetStreamOwner(ctx context.Context, arg GetPushTargetStreamOwnerParams) (string, error)
 	GetRefreshTokenSuccessorState(ctx context.Context, id string) (bool, error)
 	GetRefreshUser(ctx context.Context, arg GetRefreshUserParams) (GetRefreshUserRow, error)
 	GetSigningKey(ctx context.Context, arg GetSigningKeyParams) (GetSigningKeyRow, error)
@@ -194,6 +195,7 @@ type Querier interface {
 	ListMediaAuthorityPriorCells(ctx context.Context, arg ListMediaAuthorityPriorCellsParams) ([]string, error)
 	ListPullSourceEventsByInternalName(ctx context.Context, arg ListPullSourceEventsByInternalNameParams) ([]ListPullSourceEventsByInternalNameRow, error)
 	ListPullSourceEventsByStream(ctx context.Context, arg ListPullSourceEventsByStreamParams) ([]ListPullSourceEventsByStreamRow, error)
+	ListPushTargetSiblingsForOwner(ctx context.Context, arg ListPushTargetSiblingsForOwnerParams) ([]ListPushTargetSiblingsForOwnerRow, error)
 	ListPushTargets(ctx context.Context, arg ListPushTargetsParams) ([]ListPushTargetsRow, error)
 	ListSigningKeys(ctx context.Context, arg ListSigningKeysParams) ([]ListSigningKeysRow, error)
 	ListSigningKeysAfter(ctx context.Context, arg ListSigningKeysAfterParams) ([]ListSigningKeysAfterRow, error)
@@ -279,6 +281,7 @@ type Querier interface {
 	SettleStreamCleanupForFinalization(ctx context.Context, arg SettleStreamCleanupForFinalizationParams) (string, error)
 	SoftDeleteStream(ctx context.Context, arg SoftDeleteStreamParams) error
 	StampResolvedPullStreamPlacement(ctx context.Context, arg StampResolvedPullStreamPlacementParams) error
+	StreamExistsForPushTargetManager(ctx context.Context, arg StreamExistsForPushTargetManagerParams) (bool, error)
 	StreamExistsForUser(ctx context.Context, arg StreamExistsForUserParams) (bool, error)
 	SupersedeOlderMediaAuthorityDeliveries(ctx context.Context, arg SupersedeOlderMediaAuthorityDeliveriesParams) (int64, error)
 	TerminalizeArtifactCreationIntent(ctx context.Context, arg TerminalizeArtifactCreationIntentParams) (int64, error)

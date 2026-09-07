@@ -27,6 +27,144 @@ func TestGeneratedQueryCatalogPrepares_RealPG(t *testing.T) {
 	prepareCommodoreQueryCatalog(t, startCommodoreQueryCatalogRealPG(t))
 }
 
+func TestPushTargetOwnershipQueriesEnforceOwnerOrTenantManager_RealPG(t *testing.T) {
+	db := startCommodoreQueryCatalogRealPG(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	const tenantID = "11000000-0000-0000-0000-000000000011"
+	const ownerID = "22000000-0000-0000-0000-000000000011"
+	const otherUserID = "22000000-0000-0000-0000-000000000012"
+	const streamID = "33000000-0000-0000-0000-000000000011"
+	const targetID = "44000000-0000-0000-0000-000000000011"
+	const siblingTargetID = "44000000-0000-0000-0000-000000000012"
+	const otherTenantID = "11000000-0000-0000-0000-000000000012"
+	const otherTenantUserID = "22000000-0000-0000-0000-000000000013"
+	const otherStreamID = "33000000-0000-0000-0000-000000000012"
+	const otherTargetID = "44000000-0000-0000-0000-000000000013"
+	const deletedStreamID = "33000000-0000-0000-0000-000000000013"
+	const deletedTargetID = "44000000-0000-0000-0000-000000000014"
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, seed := range []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO commodore.users (id, tenant_id, email, password_hash, is_active)
+VALUES ($1, $2, 'push-owner@example.test', 'x', TRUE),
+       ($3, $2, 'push-member@example.test', 'x', TRUE),
+       ($4, $5, 'push-other-tenant@example.test', 'x', TRUE)`,
+			[]any{ownerID, tenantID, otherUserID, otherTenantUserID, otherTenantID}},
+		{`INSERT INTO commodore.streams (id, tenant_id, user_id, stream_key, playback_id, internal_name, title)
+VALUES ($1, $2, $3, 'push-owner-key', 'push-owner-playback', 'push-owner-stream', 'Push owner'),
+       ($4, $5, $6, 'push-other-key', 'push-other-playback', 'push-other-stream', 'Other tenant'),
+       ($7, $2, $3, 'push-deleted-key', 'push-deleted-playback', 'push-deleted-stream', 'Deleted owner')`,
+			[]any{streamID, tenantID, ownerID, otherStreamID, otherTenantID, otherTenantUserID, deletedStreamID}},
+		{`INSERT INTO commodore.push_targets (id, tenant_id, stream_id, platform, name, target_uri)
+VALUES ($1, $2, $3, 'custom', 'Original', 'enc:v3:test:target'),
+       ($4, $2, $3, 'custom', 'Sibling', 'enc:v3:test:sibling'),
+       ($5, $6, $7, 'custom', 'Other', 'enc:v3:test:other'),
+       ($8, $2, $9, 'custom', 'Deleted', 'enc:v3:test:deleted')`,
+			[]any{targetID, tenantID, streamID, siblingTargetID, otherTargetID, otherTenantID, otherStreamID, deletedTargetID, deletedStreamID}},
+		{`UPDATE commodore.streams SET deleted_at = NOW() WHERE id = $1`, []any{deletedStreamID}},
+	} {
+		if _, execErr := tx.ExecContext(ctx, seed.query, seed.args...); execErr != nil {
+			_ = tx.Rollback()
+			t.Fatal(execErr)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	queries := New(db)
+	denied := UpdatePushTargetFieldsParams{
+		ApplyName: true, Name: "Denied", ID: targetID, TenantID: tenantID,
+		UserID: otherUserID, TenantManager: false,
+	}
+	if _, err := queries.UpdatePushTargetFields(ctx, denied); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("non-owner update error = %v, want sql.ErrNoRows", err)
+	}
+	deniedDelete := DeletePushTargetParams{ID: targetID, TenantID: tenantID, UserID: otherUserID, TenantManager: false}
+	if _, err := queries.DeletePushTarget(ctx, deniedDelete); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("non-owner delete error = %v, want sql.ErrNoRows", err)
+	}
+	crossTenant := denied
+	crossTenant.ID = otherTargetID
+	if _, err := queries.UpdatePushTargetFields(ctx, crossTenant); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("cross-tenant update error = %v, want sql.ErrNoRows", err)
+	}
+	crossTenantDelete := deniedDelete
+	crossTenantDelete.ID = otherTargetID
+	if _, err := queries.DeletePushTarget(ctx, crossTenantDelete); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("cross-tenant delete error = %v, want sql.ErrNoRows", err)
+	}
+
+	ownerList, err := queries.ListPushTargets(ctx, ListPushTargetsParams{StreamID: streamID, TenantID: tenantID, UserID: ownerID})
+	if err != nil || len(ownerList) != 2 {
+		t.Fatalf("owner list rows=%d err=%v, want two siblings", len(ownerList), err)
+	}
+	deniedList, err := queries.ListPushTargets(ctx, ListPushTargetsParams{StreamID: streamID, TenantID: tenantID, UserID: otherUserID})
+	if err != nil || len(deniedList) != 0 {
+		t.Fatalf("non-owner list rows=%d err=%v, want none", len(deniedList), err)
+	}
+	managerList, err := queries.ListPushTargets(ctx, ListPushTargetsParams{StreamID: streamID, TenantID: tenantID, UserID: otherUserID, TenantManager: true})
+	if err != nil || len(managerList) != 2 {
+		t.Fatalf("tenant-manager list rows=%d err=%v, want two", len(managerList), err)
+	}
+	siblings, err := queries.ListPushTargetSiblingsForOwner(ctx, ListPushTargetSiblingsForOwnerParams{ID: targetID, TenantID: tenantID, UserID: ownerID})
+	if err != nil || len(siblings) != 2 {
+		t.Fatalf("owner siblings rows=%d err=%v, want two", len(siblings), err)
+	}
+	crossSiblings, err := queries.ListPushTargetSiblingsForOwner(ctx, ListPushTargetSiblingsForOwnerParams{ID: otherTargetID, TenantID: tenantID, UserID: ownerID, TenantManager: true})
+	if err != nil || len(crossSiblings) != 0 {
+		t.Fatalf("cross-tenant siblings rows=%d err=%v, want none", len(crossSiblings), err)
+	}
+
+	for name, params := range map[string]StreamExistsForPushTargetManagerParams{
+		"owner":          {StreamID: streamID, TenantID: tenantID, UserID: ownerID},
+		"tenant manager": {StreamID: streamID, TenantID: tenantID, UserID: otherUserID, TenantManager: true},
+	} {
+		exists, err := queries.StreamExistsForPushTargetManager(ctx, params)
+		if err != nil || !exists {
+			t.Fatalf("%s stream existence=%v err=%v, want true", name, exists, err)
+		}
+	}
+	for name, params := range map[string]StreamExistsForPushTargetManagerParams{
+		"non-owner":    {StreamID: streamID, TenantID: tenantID, UserID: otherUserID},
+		"cross-tenant": {StreamID: otherStreamID, TenantID: tenantID, UserID: ownerID, TenantManager: true},
+		"soft-deleted": {StreamID: deletedStreamID, TenantID: tenantID, UserID: ownerID, TenantManager: true},
+	} {
+		exists, err := queries.StreamExistsForPushTargetManager(ctx, params)
+		if err != nil || exists {
+			t.Fatalf("%s stream existence=%v err=%v, want false", name, exists, err)
+		}
+	}
+	deletedList, err := queries.ListPushTargets(ctx, ListPushTargetsParams{StreamID: deletedStreamID, TenantID: tenantID, UserID: ownerID, TenantManager: true})
+	if err != nil || len(deletedList) != 0 {
+		t.Fatalf("soft-deleted stream list rows=%d err=%v, want none", len(deletedList), err)
+	}
+	deletedUpdate := denied
+	deletedUpdate.ID = deletedTargetID
+	deletedUpdate.UserID = ownerID
+	if _, err := queries.UpdatePushTargetFields(ctx, deletedUpdate); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("soft-deleted stream update error = %v, want sql.ErrNoRows", err)
+	}
+
+	allowed := denied
+	allowed.Name = "Managed"
+	allowed.TenantManager = true
+	if row, err := queries.UpdatePushTargetFields(ctx, allowed); err != nil || row.Name != "Managed" {
+		t.Fatalf("tenant-manager update row=%+v err=%v", row, err)
+	}
+	allowedDelete := deniedDelete
+	allowedDelete.TenantManager = true
+	if gotStreamID, err := queries.DeletePushTarget(ctx, allowedDelete); err != nil || gotStreamID != streamID {
+		t.Fatalf("tenant-manager delete stream=%q err=%v", gotStreamID, err)
+	}
+}
+
 func TestDVRRegistrationSnapshotsReadyWebhookAuthority_RealPG(t *testing.T) {
 	db := startCommodoreQueryCatalogRealPG(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -436,8 +574,8 @@ func TestGeneratedQueryCatalogPrepares_RealYugabyte(t *testing.T) {
 func prepareCommodoreQueryCatalog(t *testing.T, db *sql.DB) {
 	t.Helper()
 	queries := commodoreGeneratedQueries(t)
-	if len(queries) != 305 {
-		t.Fatalf("found %d generated Commodore queries, want 305", len(queries))
+	if len(queries) != 308 {
+		t.Fatalf("found %d generated Commodore queries, want 308", len(queries))
 	}
 	ctx := context.Background()
 	conn, err := db.Conn(ctx)
