@@ -946,7 +946,7 @@ ${Object.entries(variables)
       case "CreateDeveloperTokenInput":
         return {
           name: "example-api-token",
-          permissions: "read,write",
+          permissions: "streams:read,streams:write,analytics:read",
           expiresIn: null,
         };
 

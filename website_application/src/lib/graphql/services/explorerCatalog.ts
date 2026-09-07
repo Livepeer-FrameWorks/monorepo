@@ -715,7 +715,7 @@ export const EXPLORER_CATALOG: ExplorerSection[] = [
         variables: {
           input: {
             name: "ci-token",
-            permissions: "read",
+            permissions: "streams:read",
             expiresIn: null,
           },
         },

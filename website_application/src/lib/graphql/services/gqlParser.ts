@@ -365,7 +365,7 @@ function getDefaultForInputType(typeName: string): unknown {
     case "CreateDeveloperTokenInput":
       return {
         name: "example-api-token",
-        permissions: "read,write",
+        permissions: "streams:read,streams:write,analytics:read",
         expiresIn: null,
       };
 

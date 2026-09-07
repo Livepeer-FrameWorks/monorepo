@@ -23,6 +23,26 @@
   let showCreateTokenModal = $state(false);
   let newTokenName = $state("");
   let newTokenExpiry = $state("0");
+  const defaultTokenPermissions = ["streams:read", "streams:write", "analytics:read"];
+  const tokenPermissionOptions = [
+    { value: "account:read", label: "Account read" },
+    { value: "analytics:read", label: "Analytics read" },
+    { value: "billing:read", label: "Billing read" },
+    { value: "billing:write", label: "Billing and retention write" },
+    { value: "infrastructure:read", label: "Infrastructure read" },
+    { value: "infrastructure:write", label: "Infrastructure write" },
+    { value: "security:read", label: "Security read" },
+    { value: "security:write", label: "Security write" },
+    { value: "settings:write", label: "Settings write" },
+    { value: "streams:read", label: "Streams read" },
+    { value: "streams:write", label: "Streams write" },
+    { value: "developer:read", label: "Developer tools read" },
+    { value: "developer:write", label: "Developer tools write" },
+    { value: "support:read", label: "Support read" },
+    { value: "consultant:use", label: "Consultant access" },
+    { value: "mcp:high-risk", label: "MCP high-risk operations" },
+  ];
+  let newTokenPermissions = $state([...defaultTokenPermissions]);
   const tokenExpiryLabels: Record<string, string> = {
     "0": "Never expires",
     "30": "30 days",
@@ -76,7 +96,7 @@
       const result = await createTokenMutation.mutate({
         input: {
           name: newTokenName.trim(),
-          permissions: "read,write",
+          permissions: newTokenPermissions.join(","),
           expiresIn: Number(newTokenExpiry) || null,
         },
       });
@@ -94,6 +114,7 @@
         };
         newTokenName = "";
         newTokenExpiry = "0";
+        newTokenPermissions = [...defaultTokenPermissions];
       } else if (data) {
         const errorResult = data as { message?: string };
         toast.error(errorResult.message || "Failed to create token");
@@ -415,6 +436,36 @@
             </Select>
           </div>
 
+          <fieldset>
+            <legend class="block text-sm font-medium text-muted-foreground mb-2">Permissions</legend
+            >
+            <div
+              class="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-48 overflow-y-auto rounded-md border border-border p-3"
+            >
+              {#each tokenPermissionOptions as permission (permission.value)}
+                <label class="flex items-center gap-2 text-sm text-foreground">
+                  <input
+                    type="checkbox"
+                    value={permission.value}
+                    checked={newTokenPermissions.includes(permission.value)}
+                    disabled={creatingToken}
+                    onchange={(event) => {
+                      const checked = event.currentTarget.checked;
+                      newTokenPermissions = checked
+                        ? [...newTokenPermissions, permission.value]
+                        : newTokenPermissions.filter((value) => value !== permission.value);
+                    }}
+                    class="h-4 w-4 rounded border-border"
+                  />
+                  {permission.label}
+                </label>
+              {/each}
+            </div>
+            <p class="mt-2 text-xs text-muted-foreground">
+              Retention tools require billing write; tenant settings require settings write.
+            </p>
+          </fieldset>
+
           <Alert variant="info">
             <AlertDescription>
               <strong>Tip:</strong> Create separate tokens for different applications or environments
@@ -430,12 +481,16 @@
               showCreateTokenModal = false;
               newTokenName = "";
               newTokenExpiry = "0";
+              newTokenPermissions = [...defaultTokenPermissions];
             }}
             disabled={creatingToken}
           >
             Cancel
           </Button>
-          <Button onclick={createAPIToken} disabled={creatingToken || !newTokenName.trim()}>
+          <Button
+            onclick={createAPIToken}
+            disabled={creatingToken || !newTokenName.trim() || newTokenPermissions.length === 0}
+          >
             {creatingToken ? "Creating..." : "Create Token"}
           </Button>
         </div>
