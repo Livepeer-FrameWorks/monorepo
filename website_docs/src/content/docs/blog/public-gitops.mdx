@@ -13,7 +13,7 @@ tags:
 
 Last week we merged our private gitops repo into the public one. The commit message is one line: "merge gitops-private for deployment transparency." Since then, the [FrameWorks gitops repo](https://github.com/Livepeer-FrameWorks/gitops) has contained our actual production deployment — every service, database, message broker, cache, and host-to-role mapping, in plaintext, for anyone to read.
 
-The position follows from the product. FrameWorks sells sovereignty: run the platform on our infrastructure, on a dedicated cluster, or entirely on your own hardware. A platform that pitches "you can see and control the whole stack" while hiding how its own production stack is wired would be making an argument against itself. So the cluster manifest that drives our deployment is the same kind of artifact we document for operators, published as-is. Each cluster in it carries an explicit `public_topology: true` flag.
+The position follows from how we operate the product. FrameWorks publishes the topology of its managed provider plane rather than hiding how production is wired. The cluster manifest that drives our deployment is published as-is, and each cluster in it carries an explicit `public_topology: true` flag. This transparency does not turn provider GitOps tooling into a supported customer whole-stack distribution; the customer self-hosted product remains MistServer/Helmsman edge capacity.
 
 ## The boundary
 
@@ -39,4 +39,4 @@ Secret edits go through a small wrapper script that decrypts to a temp file, app
 
 The downside: our infrastructure is easier to case. An attacker can read which services exist, where the trust boundaries are, and what a valuable target would be. We accepted that because most of it is discoverable anyway — port scans, DNS, TLS certificates, and job postings reconstruct a topology diagram slowly but reliably — while the part that gives an attacker traction (addresses, credentials, keys) stays encrypted. What we got in return is a deployment reference that can't go stale, since the deploy tooling reads the same file you do.
 
-If you're deploying FrameWorks yourself, start from the [deployment guide](/operators/deployment) — the public manifest is the worked example.
+FrameWorks infrastructure operators start from the [deployment guide](/operators/deployment); customer edge operators should use the [hybrid edge guide](/hybrid/overview).

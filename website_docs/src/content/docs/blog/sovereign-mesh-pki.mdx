@@ -11,7 +11,7 @@ tags:
   - security
 ---
 
-A platform that can be self-hosted, including air-gapped, has a constraint most SaaS never faces: nothing in the trust chain is allowed to depend on someone else's control plane. Certificates, mesh coordination, service identity — if any of it phones home to a vendor, the "sovereign" deployment model is fiction. That constraint shaped how FrameWorks does transport security, and this post walks through the result.
+A provider plane spanning owned and leased infrastructure needs a portable trust root rather than a cloud-vendor identity dependency. Certificates, mesh coordination, and service identity must remain under FrameWorks operator control. That constraint shaped transport security, and this post walks through the result. Customer edges do not receive this provider trust root.
 
 ## Two certificate systems
 
@@ -35,7 +35,7 @@ The invariant that matters: the external listener must never serve the internal 
 
 Privateer is the mesh agent that runs on every backend node. It assembles the WireGuard mesh from three layers of configuration: static identity from the gitops manifest (each host's mesh address and public key), seed peers for bootstrap, and the managed layer — peers, mesh DNS, and PKI material — synced continuously from Quartermaster and cached locally so a node that reboots during a control-plane outage comes back with its last known mesh. Privateer composes the WireGuard config itself; hand-written tunnel configs aren't a supported input. It also serves local DNS for mesh hostnames, so services find each other by name inside the overlay.
 
-We looked at the obvious alternative. Tailscale is excellent, and its coordination plane is a SaaS — topology visible to a third party, per-device pricing, and nothing works air-gapped. Headscale trades that for a dependency on an external project at the center of our trust model. For a platform whose deepest deployment model is "customer premises, no outbound dependencies," mesh coordination had to be a first-party service. That's Privateer and Quartermaster.
+We looked at the obvious alternative. Tailscale is excellent, and its coordination plane is a SaaS — topology visible to a third party and per-device pricing. Headscale trades that for a dependency on an external project at the center of our trust model. Provider mesh coordination therefore remains a first-party service: Privateer and Quartermaster.
 
 ## How an edge node joins
 
@@ -49,6 +49,6 @@ Everything after enrollment goes through the authenticated listeners with per-re
 
 ## Why bother
 
-Because the deployment models demand it. Shared SaaS, dedicated clusters, and full self-hosting all run the same stack, and the self-hosted case only works if the trust root travels with the deployment. "Sovereign" here means control of the video path, routing, analytics, mesh, and platform services — we still use S3-compatible object storage and public DNS providers today, and native alternatives are roadmap, so we won't claim every primitive is first-party. But a customer who runs FrameWorks on their own metal holds their own CA, their own mesh coordination, and their own certificate lifecycle, and no part of stream delivery asks our infrastructure for permission.
+Because the provider deployment models demand it. Shared and dedicated provider capacity use the same trust architecture. Customer-operated MistServer/Helmsman edges authenticate to the public Foghorn boundary and do not join the backend mesh, receive federation credentials, or operate their own FrameWorks CA. Customer-operated Foghorn and the coupled Livepeer, Chandler, object-storage, DNS, analytics, and control-plane services are outside the supported edge product.
 
 The operator-facing details live in [mesh networking](/operators/mesh-bootstrap), [DNS and cluster routing](/operators/dns), and the [architecture overview](/operators/architecture).
