@@ -22,8 +22,9 @@ stream resolution, but it is lineage/audit metadata rather than the work
 attribution key.
 
 **Metering path:** `generateTenantUsageSummary` reads finalized facts and canonical
-5-minute sources. Viewer minutes and network bytes come from
-`viewer_sessions_final`; processing comes from `processing_segments_final`; storage
+5-minute sources. Playback minutes and network bytes come from
+`viewer_sessions_final`; restream delivery comes from `restream_sessions_final`;
+processing comes from `processing_segments_final`; storage
 is integrated directly from canonical `storage_snapshots`; API usage comes from
 `api_usage_5m_v`.
 Cluster-scoped meters are emitted as one usage report per work cluster:
@@ -36,6 +37,8 @@ cluster. Tenant-level API/AI meters attach to the tenant's primary cluster.
 | ---------------------------- | ------------------------------------------------ | ------------------------------------------------- |
 | `viewer_sessions_final`      | `cluster_id`, breakdown arrays from `USER_END`   | Append-only finalized facts                       |
 | `viewer_usage_5m`            | `cluster_id`                                     | Canonical 5-minute ledger                         |
+| `restream_sessions_final`    | `cluster_id`, bounded `platform`                 | Append-only finalized delivery facts              |
+| `delivery_usage_5m`          | `cluster_id`, `delivery_kind`, `platform`        | Playback + restream dashboard ledger              |
 | `storage_gb_seconds_5m`      | `cluster_id`, storage provider attribution       | Dashboard ledger; billing integrates snapshots    |
 | `processing_segments_final`  | `cluster_id`, `process_type`, `output_codec`     | Append-only finalized processing facts            |
 | `*_hourly` / `*_daily` views | cluster columns matching their canonical sources | Refreshable rollup stores with public dedup views |

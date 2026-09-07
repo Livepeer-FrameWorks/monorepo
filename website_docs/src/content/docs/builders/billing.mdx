@@ -246,13 +246,13 @@ balance is recomputed before delivery so a paid statement has no payment CTA.
 
 FrameWorks supports multiple deployment models with different billing characteristics:
 
-| Tier                   | Description                                                                                                                    | Billing                                                                                              |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------- |
-| **Shared (Community)** | Free access to a shared cluster with API abuse limits and no current tier-based stream/viewer caps.                            | Zero-priced metering with fair-use.                                                                  |
-| **Shared (Premium)**   | Paid tiers on shared infrastructure with higher limits.                                                                        | Per-resource metering (delivered minutes + cold storage today; more meters can be enabled per tier). |
-| **Dedicated**          | Isolated cluster with dedicated Foghorn and edges — operated by FrameWorks or self-hosted on-premise.                          | Custom pricing via `cluster_pricing`.                                                                |
-| **Hybrid**             | Self-hosted edges that fall back to the primary shared cluster. Edges federate via Foghorn; control/data plane remains shared. | Per-cluster usage attribution.                                                                       |
-| **Marketplace**        | Third-party operators publish clusters with custom pricing. Tenants subscribe via the marketplace.                             | Operator-set pricing via `cluster_subscriptions`.                                                    |
+| Tier                   | Description                                                                                                | Billing                                                                                              |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| **Shared (Community)** | Free access to a shared cluster with API abuse limits and no current tier-based stream/viewer caps.        | Zero-priced metering with fair-use.                                                                  |
+| **Shared (Premium)**   | Paid tiers on shared infrastructure with higher limits.                                                    | Per-resource metering (delivered minutes + cold storage today; more meters can be enabled per tier). |
+| **Dedicated**          | Isolated provider-operated capacity and routing for one tenant. Customer-operated Foghorn is out of scope. | Custom pricing via `cluster_pricing`.                                                                |
+| **Hybrid**             | Self-hosted MistServer/Helmsman edges connect to provider Foghorn and can fall back to managed capacity.   | Per-cluster usage attribution.                                                                       |
+| **Marketplace**        | Third-party operators publish clusters with custom pricing. Tenants subscribe via the marketplace.         | Operator-set pricing via `cluster_subscriptions`.                                                    |
 
 Usage is attributed per cluster: the analytics pipeline tags every event with `cluster_id` (serving cluster) and `origin_cluster_id` (where the stream was ingested). Billing summaries are generated per cluster for settlement.
 

@@ -47,7 +47,7 @@ The derivation contract lives in [trigger-durability.md](trigger-durability.md);
 
 ## Raw-trigger audit republish
 
-For seven accounting trigger types (`USER_END`, `STREAM_END`, `PUSH_END`, `RECORDING_END`, `RECORDING_SEGMENT`, `LIVEPEER_SEGMENT_COMPLETE`, `PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE` — a proper subset of Foghorn's eight-trigger durable-ack set; `PUSH_INPUT_CLOSE` is durable but not journaled), `SendEvent` additionally republishes the **original marshaled `MistTrigger` protobuf** to the audit topic `analytics.raw_mist_triggers` (`DECKLOG_RAW_TRIGGERS_TOPIC`; `-` disables). Periscope consumes it into the `raw_mist_triggers` journal for incident recovery and reparse.
+For the accounting event set (`USER_END`, `STREAM_END`, `RESTREAM_STATUS_FINAL`, `RECORDING_END`, `RECORDING_SEGMENT`, `LIVEPEER_SEGMENT_COMPLETE`, `PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE`; `PUSH_END` and `PUSH_INPUT_CLOSE` are durable but not raw-journaled), `SendEvent` also publishes the received `MistTrigger` protobuf to `analytics.raw_mist_triggers` (`DECKLOG_RAW_TRIGGERS_TOPIC`; `-` disables). A managed live-restream final reaches Decklog only as `RESTREAM_STATUS_FINAL`, whose protobuf has target identity and bounded outcome/usage fields but no URI or raw Mist logs. Periscope consumes these records into `raw_mist_triggers` for incident recovery and deterministic reparse.
 
 - Records are keyed by `source_event_id` with `trigger_type` / `node_id` / `source_event_id` / `tenant_id` headers.
 - A final trigger without a `source_event_id` **fails the RPC** — an unkeyed accounting fact cannot be deduped downstream, so Decklog refuses to ack it.

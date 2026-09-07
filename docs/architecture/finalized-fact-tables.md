@@ -45,9 +45,9 @@ The cost is read overhead: every read of a `*_final` row scans all projection ro
 
 ## Anomaly tables
 
-`viewer_sessions_anomalous` and `stream_sessions_anomalous` are physically separate tables. They are written by the stale-close worker in `api_analytics_ingest/internal/handlers/stale_close.go` (the original plan put it in `api_sidecar` but the live-state source `viewer_sessions_current` already lives in Periscope's ClickHouse — duplicating that state in Helmsman would be a step backward).
+`viewer_sessions_anomalous`, `stream_sessions_anomalous`, and `restream_sessions_anomalous` are physically separate tables. They are written by the stale-close worker in `api_analytics_ingest/internal/handlers/stale_close.go`.
 
-The worker scans `viewer_sessions_current` for sessions whose `last_updated` is older than `stale_close_timeout` (default 4h) and that have no row in `viewer_sessions_final`. Each hit becomes one anomaly row with `closed_reason='stale'`. Same shape for streams from `stream_state_current`.
+The worker scans `viewer_sessions_current` for sessions whose `last_updated` is older than `stale_close_timeout` (default 4h) and that have no row in `viewer_sessions_final`. Each hit becomes one anomaly row with `closed_reason='stale'`. The stream arm reads `stream_state_current`; the restream arm reads sanitized non-terminal observations from `restream_sessions_current` and excludes identities already present in either `restream_sessions_final` or `restream_sessions_anomalous`.
 
 **The rated billing read path never touches these tables.** That's the entire purpose of the physical separation: an operator who joins the wrong tables cannot accidentally bill anomalous minutes. The operational meter `stale_session_minutes` exists for visibility, but it lives on a separate dashboard query.
 
@@ -56,7 +56,7 @@ The worker scans `viewer_sessions_current` for sessions whose `last_updated` is 
 `projection_divergences` is an append-only audit table written when the parser detects that a new projection of an already-seen logical fact carries a different rated-field value beyond a per-meter epsilon. The divergence row is written **before** the new projection is appended to the `*_final` table; if the divergence row cannot be written, the projection insert is refused and the Kafka message retries (see [meter-contracts.md](meter-contracts.md)). Once recorded, the new projection row is still appended, and the divergence is surfaced with:
 
 - a Prometheus counter `periscope_projection_divergence_total{table, meter, field}`,
-- an audit row in `projection_divergences` with the prior value, new value, and `source_event_id` for replay.
+- an audit row in `projection_divergences` with the prior value, new value, `source_event_id`, and a stable per-divergence `occurrence_id` for replay-safe correction identity.
 
 This makes "silent corrections" impossible: every divergence is observable on a dashboard, and operators have a queryable backlog for explicit credit/debit adjustments.
 
@@ -72,11 +72,15 @@ The implementation lives in `api_analytics_ingest/internal/handlers/final_fact_p
 Finalized-fact and canonical-ledger tables live in one section, following this layout — table, view (where applicable), in natural reading order:
 
 - `viewer_sessions_final` + `viewer_sessions_final_v`
+- `restream_sessions_current`
+- `restream_sessions_final` + `restream_sessions_final_v`
 - `stream_sessions_final` + `stream_sessions_final_v`
 - `processing_segments_final` + `processing_segments_final_v`
 - `viewer_sessions_anomalous`
 - `stream_sessions_anomalous`
-- `ledger_rebuild_cursors`
+- `restream_sessions_anomalous` + `restream_sessions_anomalous_v`
+- `ledger_rebuild_cursors` + `ledger_rebuild_cursors_v2`
+- `delivery_usage_5m` + `delivery_usage_5m_v`
 - `viewer_usage_5m` + `viewer_usage_5m_v`
 - `stream_runtime_5m` + `stream_runtime_5m_v`
 - `storage_gb_seconds_5m` + `storage_gb_seconds_5m_v`
