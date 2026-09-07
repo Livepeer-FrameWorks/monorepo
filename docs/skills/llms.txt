@@ -1,10 +1,10 @@
 # FrameWorks
 
-> Sovereign live video platform. MCP-native with wallet auth and x402 payments.
+> Open live video platform with managed hybrid edges. MCP-native with wallet auth and x402 payments.
 
 ## Product
 
-- [FrameWorks](https://frameworks.network/): Live streaming platform for sovereign video operations across SaaS, hybrid edge, and self-hosted deployments. S3-compatible storage and public DNS are external integrations today; native storage and DNS are on the roadmap.
+- [FrameWorks](https://frameworks.network/): Live streaming SaaS with customer-operated MistServer/Helmsman edge capacity attached to the FrameWorks-operated Foghorn, federation, storage, DNS/TLS, billing, analytics, and control plane.
 - [Pricing](https://frameworks.network/pricing): Beta pricing for free, supporter, production, pay-as-you-go, and enterprise streaming workloads.
 - [About](https://frameworks.network/about): Mission, architecture direction, and operating principles behind FrameWorks sovereign streaming infrastructure.
 - [Contact](https://frameworks.network/contact): Sales, deployment, community, and support entry points for operators evaluating FrameWorks.
@@ -19,7 +19,7 @@
 
 ## Migrating
 
-FrameWorks is an alternative to managed video APIs like Mux, Bunny Stream, and Livepeer Studio — the same stack runs hosted, hybrid, or fully self-hosted.
+FrameWorks is an alternative to managed video APIs like Mux, Bunny Stream, and Livepeer Studio. It runs as hosted SaaS or with customer-operated hybrid edge capacity; customer-operated Foghorn and whole-platform self-hosting are outside the supported product.
 
 - [Migration overview](https://logbook.frameworks.network/migrate): Pick your starting point
 - [Migrate from Mux](https://logbook.frameworks.network/migrate/mux): REST → GraphQL, signed playback, simulcast, recordings
@@ -41,7 +41,7 @@ FrameWorks is an alternative to managed video APIs like Mux, Bunny Stream, and L
 - Wallet signature (EIP-191 personal_sign)
 - x402 (gasless USDC on Base/Arbitrum)
 
-## Self-Hosted Infrastructure
+## Self-Hosted Edge Infrastructure
 
 - Cluster marketplace: discover and subscribe to regional clusters via MCP (browse_marketplace, subscribe_to_cluster)
 - Edge clusters: create_edge_cluster returns enrollment token and Foghorn address for edge provisioning

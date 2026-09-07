@@ -1684,7 +1684,7 @@
       "area": "infrastructure",
       "kind": "foundation",
       "audience": "product",
-      "description": "Tenant-owned edge clusters with bootstrap and node enrollment.",
+      "description": "Tenant-owned MistServer/Helmsman edge capacity with bootstrap and node enrollment; virtual private clusters are logical tenant-private slices on provider-operated Foghorn.",
       "status": "shipped",
       "required_surfaces": {
         "docs": {
@@ -2325,9 +2325,9 @@
       "area": "infrastructure",
       "kind": "product",
       "audience": "product",
-      "description": "The deployment ownership spectrum — from bring-your-own edge nodes to fully sovereign self-hosting.",
+      "description": "The supported ownership boundary for bring-your-own edge capacity and adjacent unsupported control-plane models.",
       "status": "partial",
-      "gap_reason": "The first level ships today as edge clusters: bring your own MistServer edge nodes and FrameWorks runs DNS, TLS,\ngeo-balanced routing, federation, tenant subdomains, analytics, playback access control, and billing around them.\nThe deeper levels — private media clusters, hosted private clusters, and fully sovereign self-hosting — are roadmap\nsubitems.\n",
+      "gap_reason": "Edge-only self-hosting ships today: customers operate MistServer and Helmsman while FrameWorks operates Foghorn,\nfederation, Livepeer, Chandler, object storage, DNS/TLS, analytics, billing, and the control plane. A virtual private\ncluster is a tenant-private provider-Foghorn routing slice, not a customer Foghorn. Customer-operated Foghorn and\nsovereign media/control planes are not supported product scope.\n",
       "required_surfaces": {
         "docs": {
           "required": true
@@ -2356,13 +2356,13 @@
       "subitems": [
         {
           "slug": "byo-media-cluster",
-          "name": "Private media cluster (BYOC)",
+          "name": "Customer-operated media control plane",
           "area": "",
           "kind": "product",
           "audience": "product",
-          "description": "Run the media and data plane on your own cloud while using the FrameWorks control plane for tenancy, routing, billing, and access control.",
-          "status": "roadmap",
-          "gap_reason": "Not shipped as a public workflow. Edge enrollment and cross-cluster federation exist, but running a full media and data cluster on customer-controlled infrastructure needs federation-trust hardening (scoped per-cluster credentials or mutual TLS) and a media-cluster provisioning preset.",
+          "description": "Operate Foghorn and its coupled media/data services outside the FrameWorks provider plane.",
+          "status": "gap",
+          "gap_reason": "Not a supported extension of self-hosted edge. Operating Foghorn also requires a separate federation trust root plus compatible Livepeer, Chandler, object storage, DNS, analytics, and control-plane services.",
           "required_surfaces": {
             "docs": {
               "required": true
@@ -2439,13 +2439,13 @@
         },
         {
           "slug": "sovereign-self-host",
-          "name": "Fully sovereign self-hosting (BYOC)",
+          "name": "Customer-operated full platform",
           "area": "",
           "kind": "product",
           "audience": "product",
-          "description": "Run the entire FrameWorks stack with no runtime dependency on FrameWorks, including your own object storage, analytics store, DNS, and an isolated control plane and identity root.",
-          "status": "roadmap",
-          "gap_reason": "Not shipped as turnkey. Self-hosting the stack is possible today, but full sovereignty needs dedicated-database and identity decoupling from the shared control plane, self-hosted DNS (PowerDNS is planned, not built), and a bring-your-own object-storage and analytics-store path. Today FrameWorks runs ClickHouse and S3-compatible storage for hosted tenants.",
+          "description": "A separate, unsupported trust model in which a customer would operate Foghorn, federation, media dependencies, durable services, and an isolated control plane.",
+          "status": "gap",
+          "gap_reason": "Not supported product scope. Full sovereignty requires an independent identity/control plane plus customer-operated Foghorn federation, Livepeer, Chandler, DNS, object storage, analytics stores, and databases. FrameWorks operates those services for the edge product.",
           "required_surfaces": {
             "docs": {
               "required": true

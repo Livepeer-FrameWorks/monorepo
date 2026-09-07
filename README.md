@@ -6,7 +6,7 @@
 
 > Warning: This stack is in active beta. Interfaces and schemas change frequently. If deploying in a production environment, be careful with data migrations when updating major versions. Plan ahead for stuff to break.
 
-**Sovereign live video platform.** Run the video and control-plane stack on your infrastructure, ours, or both. S3-compatible storage and public DNS are external integrations today; native storage and DNS are on the roadmap.
+**Open live video platform with managed hybrid edges.** Run MistServer and Helmsman edge capacity on your infrastructure while FrameWorks operates Foghorn, federation, Livepeer, Chandler, object storage, DNS/TLS, analytics, billing, and the control plane. Customer-operated Foghorn or whole-stack hosting is not part of the supported edge product.
 
 An open streaming stack for live video: apps, real‑time APIs, and analytics. Services are narrowly scoped. Frontend uses GraphQL; service-to-service uses HTTP/gRPC APIs; analytics and realtime use Kafka events. Each service owns its data (no cross‑DB access).
 
