@@ -58,28 +58,28 @@ Helmsman's 30-second `PLAY_REWRITE` recovery cache covers a different failure: a
 
 Mist sends `sync:false` triggers and returns after writing the request body. It does not read the HTTP status or body, so a Helmsman `503` is diagnostic and cannot make Mist retry.
 
-| Trigger                               | Role                                | FrameWorks delivery after acceptance                                                                              |
-| ------------------------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `PUSH_END`                            | Final outbound-push facts           | Durable Helmsman WAL                                                                                              |
-| `PUSH_INPUT_CLOSE`                    | Final ingest-connector facts        | Durable Helmsman WAL                                                                                              |
-| `USER_END`                            | Final viewer-session facts          | Durable Helmsman WAL                                                                                              |
-| `STREAM_END`                          | Final stream-session facts          | Durable Helmsman WAL                                                                                              |
-| `RECORDING_END`                       | Final recording facts               | Durable Helmsman WAL                                                                                              |
-| `RECORDING_SEGMENT`                   | Final recording-segment facts       | Durable Helmsman WAL                                                                                              |
-| `LIVEPEER_SEGMENT_COMPLETE`           | Livepeer processing usage           | Durable Helmsman WAL                                                                                              |
-| `PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE` | AV processing usage                 | Durable Helmsman WAL                                                                                              |
-| `STREAM_BUFFER`                       | Stream health/state                 | Best effort                                                                                                       |
-| `LIVE_TRACK_LIST`                     | Track inventory                     | Best effort                                                                                                       |
-| `THUMBNAIL_UPDATED`                   | Thumbnail update                    | Best effort                                                                                                       |
-| `PROCESS_EXIT`                        | Local `processing+` job exit signal | Best effort; configured with `streams: ["processing+"]`; missing listeners and full queues are logged and counted |
+| Trigger                               | Role                                | FrameWorks delivery after acceptance                                                                                  |
+| ------------------------------------- | ----------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `PUSH_END`                            | Final outbound-push facts           | Managed live restreams become a URI-free `RESTREAM_STATUS_FINAL` WAL record; other pushes use the generic durable WAL |
+| `PUSH_INPUT_CLOSE`                    | Final ingest-connector facts        | Durable Helmsman WAL                                                                                                  |
+| `USER_END`                            | Final viewer-session facts          | Durable Helmsman WAL                                                                                                  |
+| `STREAM_END`                          | Final stream-session facts          | Durable Helmsman WAL                                                                                                  |
+| `RECORDING_END`                       | Final recording facts               | Durable Helmsman WAL                                                                                                  |
+| `RECORDING_SEGMENT`                   | Final recording-segment facts       | Durable Helmsman WAL                                                                                                  |
+| `LIVEPEER_SEGMENT_COMPLETE`           | Livepeer processing usage           | Durable Helmsman WAL                                                                                                  |
+| `PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE` | AV processing usage                 | Durable Helmsman WAL                                                                                                  |
+| `STREAM_BUFFER`                       | Stream health/state                 | Best effort                                                                                                           |
+| `LIVE_TRACK_LIST`                     | Track inventory                     | Best effort                                                                                                           |
+| `THUMBNAIL_UPDATED`                   | Thumbnail update                    | Best effort                                                                                                           |
+| `PROCESS_EXIT`                        | Local `processing+` job exit signal | Best effort; configured with `streams: ["processing+"]`; missing listeners and full queues are logged and counted     |
 
-For the eight durable entries, durability begins only after Helmsman fsyncs the local WAL row. Foghorn acknowledges after Decklog's Kafka publish commits; Helmsman retains and replays the row until that acknowledgement. See [Trigger durability](trigger-durability.md).
+For the eight durable trigger classes, durability begins only after Helmsman fsyncs the local WAL row. Managed live-restream `PUSH_END` is parsed and replaced with a sanitized `RESTREAM_STATUS_FINAL` before that write; malformed or unmapped live-restream bodies are never copied into the WAL. Foghorn acknowledges after Decklog's Kafka publish commits; Helmsman retains and replays the row until that acknowledgement. See [Trigger durability](trigger-durability.md).
 
 `PROCESS_EXIT` is the only asynchronous entry in this table with a stream
 filter. FrameWorks does not install it globally: only local processing runtime
 names beginning with `processing+` are routed to the in-memory job listener.
 
-Outbound push status uses `X-Trigger-UnixMillis` as event time when Mist supplies it: older observations cannot overwrite newer ones, and terminal status wins a known-time tie. A legacy request without that header has unknown event time and is applied in arrival order, so a later `PUSH_OUT_START` can recover a target from an earlier failure.
+Managed outbound status is correlated locally to target ID and the source-generation/target-revision fence before it leaves Helmsman. Final facts contain bounded state/reason fields, duration, and an explicitly observed byte total, never target URI or Mist log text. Malformed `PUSH_END` is rejected without retaining its raw body because an unparsed body may contain destination credentials.
 
 ## Tenant authority and outages
 

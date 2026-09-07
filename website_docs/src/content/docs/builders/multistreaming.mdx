@@ -9,6 +9,8 @@ import { Aside, LinkCard, CardGrid } from "@astrojs/starlight/components";
 
 Multistreaming lets you push a single live broadcast to multiple external platforms at once. When your stream goes live, FrameWorks automatically pushes to every enabled target — no third-party restreaming service required.
 
+Each enabled live destination uses one slot from your existing viewer-capacity limit. There is no separate restream quota. Restream runtime and bytes are reported as delivered minutes and egress, while audience analytics continue to count human playback sessions only.
+
 That keeps the operational source of truth in one place: one ingest, one set of playback policies,
 one DVR archive, one analytics surface, and multiple distribution endpoints.
 
@@ -25,7 +27,10 @@ one DVR archive, one analytics surface, and multiple distribution endpoints.
 3. **Automatic push** — FrameWorks detects the stream going live and pushes to all enabled targets
 4. **Automatic stop** — When your stream ends, all pushes stop automatically
 
-Each push target has a live status indicator: **idle**, **pushing**, or **failed**.
+Each push target has a live status indicator: **pending**, **pushing**, **retrying**,
+**stopping**, **idle**, or **failed**.
+The control plane stores a bounded machine reason separately from the sanitized
+operator-facing error detail.
 
 ## Supported Platforms
 
@@ -73,6 +78,7 @@ mutation {
     targetUri
     isEnabled
     status
+    reasonCode
   }
 }
 ```
@@ -93,6 +99,7 @@ query {
       targetUri
       isEnabled
       status
+      reasonCode
       lastError
       lastPushedAt
     }
@@ -102,9 +109,16 @@ query {
 
 <Aside type="note">
   The `targetUri` field is masked in API responses: credentials, query params, and fragments are
-  removed, and the final path segment is partially redacted. Full URIs are stored encrypted and only
-  decrypted for internal push activation.
+  removed, and the complete path is replaced with `/redacted`. Full URIs are stored encrypted and
+  only decrypted for internal push activation. FrameWorks checks resolved destination addresses
+  immediately before activation, but MistServer performs the final connection lookup; use an egress
+  firewall when you need a hard boundary against DNS rebinding.
 </Aside>
+
+Use `reasonCode` for automation and `lastError` for sanitized operator-facing detail. The
+stable reason values are `unspecified`, `connected`, `completed`, `destination_rejected`,
+`network_error`, `process_error`, `capacity_exhausted`, `configuration_error`,
+`edge_upgrade_required`, and `stopped`.
 
 ### Update a Push Target
 

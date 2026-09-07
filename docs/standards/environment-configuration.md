@@ -131,6 +131,25 @@ Recommendation:
   relying on outage mode. Do not rotate while bundles encrypted only to the old key must remain
   usable through an outage.
 
+### Restream destination and encryption-migration controls
+
+- `RESTREAM_ALLOW_PRIVATE_DESTINATIONS`, `RESTREAM_ALLOWED_PRIVATE_CIDRS`, and
+  `RESTREAM_DENIED_CIDRS` define Helmsman's outbound destination policy. Denials
+  win over allowances, and metadata, loopback, link-local, unspecified, and
+  multicast destinations remain blocked. These are non-secret deployment
+  settings and belong in `base.env`.
+- `FIELD_ENCRYPTION_KEY_ID` is the non-secret label embedded in new ciphertext
+  envelopes. The key itself and all prior/legacy key material remain in the
+  secret layer.
+- `FIELD_ENCRYPTION_REQUEUE_QUARANTINE` is a new operator token for each repair
+  retry. Set it before `FIELD_ENCRYPTION_ALLOW_QUARANTINE`; a migration already
+  completed under the break-glass allowance does not reopen merely because a
+  requeue token appears later.
+- `FIELD_ENCRYPTION_ALLOW_QUARANTINE` acknowledges reviewed data loss, while
+  `FIELD_ENCRYPTION_ACK_UNVERIFIED_LEGACY_KEY` must equal
+  `I_ACCEPT_UNVERIFIED_LEGACY_KEY` only when every sampled legacy row is known
+  to be corrupt. Neither setting supplies decryption material.
+
 ### Frontend/public URL mirrors
 
 `configgen` already derives many browser-facing variables:
@@ -218,7 +237,7 @@ These should remain the human-edited source of truth:
 - Billing routing: `PAYMENT_CARD_PROVIDER` (`stripe` or `mollie`) when both providers are fully configured; omit it when only one is ready
 - Service placement: `*_HOST`, `*_PORT`, `*_GRPC_PORT`
 - Shared runtime: `BUILD_ENV`, `GIN_MODE`, `LOG_LEVEL`, `ALLOWED_ORIGINS`, `TRUSTED_PROXY_CIDRS`
-- Shared secrets: `JWT_SECRET`, `PASSWORD_RESET_SECRET`, `SERVICE_TOKEN`, `FIELD_ENCRYPTION_KEY`, `USAGE_HASH_SECRET`, `TELEMETRY_TOKEN_SECRET`
+- Shared secrets: `JWT_SECRET`, `PASSWORD_RESET_SECRET`, `SERVICE_TOKEN`, `FIELD_ENCRYPTION_KEY`, `FIELD_ENCRYPTION_PREVIOUS_KEYS`, the migration-only read channel `FIELD_ENCRYPTION_LEGACY_SECRETS`, `USAGE_HASH_SECRET`, `TELEMETRY_TOKEN_SECRET`
 - Shared TLS: `GRPC_ALLOW_INSECURE`, `GRPC_TLS_CA_PATH`, `GRPC_TLS_CERT_PATH`, `GRPC_TLS_KEY_PATH`
 - Per-client TLS authority overrides: `<SERVICE>_GRPC_TLS_SERVER_NAME`
 

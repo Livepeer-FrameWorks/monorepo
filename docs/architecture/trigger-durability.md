@@ -1,6 +1,6 @@
 # Trigger durability
 
-Final/accounting Mist triggers (USER_END, STREAM_END, PUSH_END, PUSH_INPUT_CLOSE, RECORDING_END, RECORDING_SEGMENT, LIVEPEER_SEGMENT_COMPLETE, PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE) carry the ground-truth facts billing reads from. This page describes the durable delivery contract after Helmsman has accepted one of those HTTP posts. Mist's asynchronous trigger transport does not read the HTTP response, so the guarantee does not cover a connection failure or Helmsman failure before the local WAL append.
+Final/accounting Mist triggers (USER_END, STREAM_END, PUSH_END, PUSH_INPUT_CLOSE, RECORDING_END, RECORDING_SEGMENT, LIVEPEER_SEGMENT_COMPLETE, PROCESS_AV_VIRTUAL_SEGMENT_COMPLETE) carry ground-truth lifecycle facts. This page describes the durable delivery contract after Helmsman has accepted one of those HTTP posts. Managed live-restream `PUSH_END` is converted to a URI-free `RESTREAM_STATUS_FINAL` before persistence; its raw body is not a durable record. Mist's asynchronous trigger transport does not read the HTTP response, so the guarantee does not cover a connection failure or Helmsman failure before the local WAL append.
 
 ## Why it exists
 
@@ -12,7 +12,7 @@ The durability layer closes the gap with three changes:
 2. Foghorn emits a `MistTriggerAck` only after Decklog's `SendEvent` returns success (Decklog returns success only after its Kafka publish commits — so a positive ack means the trigger is durably ingested).
 3. Helmsman waits for the positive ack before truncating the WAL row. On disconnect, restart, or negative-but-retryable ack, the entry stays on disk and replays.
 
-The scope is intentionally narrow: only the eight final/accounting triggers above are wrapped. Best-effort triggers (`STREAM_BUFFER`, `LIVE_TRACK_LIST`, `THUMBNAIL_UPDATED`, and `PROCESS_EXIT`) stay on the fire-and-forget path. Blocking policy triggers have their own synchronous outcome contract; see [Mist trigger contract](mist-trigger-contract.md).
+The scope is intentionally narrow: only the eight final/accounting trigger classes above are wrapped. For managed live restreams, a valid locally correlated final is wrapped as `RESTREAM_STATUS_FINAL`; an unmapped or malformed live `PUSH_END` is rejected without copying a possibly credential-bearing raw body to disk. Best-effort triggers (`STREAM_BUFFER`, `LIVE_TRACK_LIST`, `THUMBNAIL_UPDATED`, and `PROCESS_EXIT`) stay on the fire-and-forget path. Blocking policy triggers have their own synchronous outcome contract; see [Mist trigger contract](mist-trigger-contract.md).
 
 ## Separate media-control completion outbox
 
