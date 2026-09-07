@@ -34,9 +34,22 @@ SET status = 'completed', completed_at = NOW(), lease_expires_at = NULL,
 WHERE id = sqlc.arg(id)::uuid AND status = 'delivering'
   AND revision = sqlc.arg(revision);
 
+-- name: ReleaseSupersededMediaAuthorityRefresh :execrows
+UPDATE purser.media_authority_refresh_outbox
+SET status = 'pending', next_attempt_at = NOW(), lease_expires_at = NULL,
+    updated_at = NOW()
+WHERE id = sqlc.arg(id)::uuid AND status = 'pending'
+  AND revision > sqlc.arg(revision);
+
 -- name: FailMediaAuthorityRefresh :execrows
 UPDATE purser.media_authority_refresh_outbox
 SET status = 'pending', next_attempt_at = sqlc.arg(next_attempt_at),
     lease_expires_at = NULL, last_error = sqlc.arg(last_error), updated_at = NOW()
 WHERE id = sqlc.arg(id)::uuid AND status = 'delivering'
   AND revision = sqlc.arg(revision);
+
+-- name: GetMediaAuthorityRefreshOutboxStats :one
+SELECT COUNT(*)::bigint AS pending_count,
+	   COALESCE(EXTRACT(EPOCH FROM (NOW() - MIN(LEAST(pending_since, created_at)))), 0)::double precision AS oldest_pending_seconds
+FROM purser.media_authority_refresh_outbox
+WHERE status <> 'completed';

@@ -13,23 +13,35 @@ import (
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	tenantlimitspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/tenant_limits"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // fakeQM records the order of mutating Quartermaster calls so tests can assert
 // the grant → set-primary → suspend → stamp sequence. Reads are programmed via
 // the official / accessRows / primary / deploymentTier / tenantPages fields.
 type fakeQM struct {
-	official       []string
-	accessRows     []*quartermasterpb.TenantClusterAccessRow
-	primary        string
-	deploymentTier string
-	tenantPages    [][]*quartermasterpb.Tenant
+	official               []string
+	accessRows             []*quartermasterpb.TenantClusterAccessRow
+	primary                string
+	deploymentTier         string
+	customSubdomainEnabled bool
+	customDomainEnabled    bool
+	entitlementsUnobserved bool
+	tenantPages            [][]*quartermasterpb.Tenant
 
 	calls         []string
+	lastDNS       *quartermasterpb.ApplyTenantBillingEntitlementsRequest
 	listTenantsAt int
 	bootstrapErr  error
 	updateErr     error
+	applyReject   bool
+	getTenantErr  error
 	deactivateErr error
+	handoffErr    error
+	handoffErrs   []error
+	handoffReject bool
+	handoffCount  int64
 }
 
 func (f *fakeQM) ListOfficialClusters(ctx context.Context) (*quartermasterpb.ListClustersResponse, error) {
@@ -45,7 +57,16 @@ func (f *fakeQM) ListTenantClusterAccess(ctx context.Context, tenantID string) (
 }
 
 func (f *fakeQM) GetTenant(ctx context.Context, tenantID string) (*quartermasterpb.GetTenantResponse, error) {
-	tenant := &quartermasterpb.Tenant{DeploymentTier: f.deploymentTier}
+	if f.getTenantErr != nil {
+		return nil, f.getTenantErr
+	}
+	tenant := &quartermasterpb.Tenant{
+		Id:                          tenantID,
+		DeploymentTier:              f.deploymentTier,
+		CustomSubdomainEnabled:      f.customSubdomainEnabled,
+		CustomDomainEnabled:         f.customDomainEnabled,
+		BillingEntitlementsObserved: !f.entitlementsUnobserved,
+	}
 	if f.primary != "" {
 		p := f.primary
 		tenant.PrimaryClusterId = &p
@@ -71,17 +92,54 @@ func (f *fakeQM) ListTenants(ctx context.Context, _ *commonpb.CursorPaginationRe
 	return resp, nil
 }
 
-func (f *fakeQM) UpdateTenant(ctx context.Context, req *quartermasterpb.UpdateTenantRequest) (*quartermasterpb.Tenant, error) {
-	switch {
-	case req.DeploymentTier != nil:
-		f.calls = append(f.calls, "tier:"+req.GetTenantId()+"="+req.GetDeploymentTier())
-	default:
-		f.calls = append(f.calls, "primary:"+req.GetPrimaryClusterId())
+func (f *fakeQM) UpdateTenantCluster(ctx context.Context, req *quartermasterpb.UpdateTenantClusterRequest) error {
+	f.calls = append(f.calls, "primary:"+req.GetPrimaryClusterId())
+	if f.updateErr != nil {
+		return f.updateErr
 	}
+	return nil
+}
+
+func (f *fakeQM) ApplyTenantBillingEntitlements(ctx context.Context, req *quartermasterpb.ApplyTenantBillingEntitlementsRequest) (*quartermasterpb.ApplyTenantBillingEntitlementsResponse, error) {
+	f.calls = append(f.calls, "dns:"+req.GetTenantId()+"="+req.GetDeploymentTier())
+	f.lastDNS = req
 	if f.updateErr != nil {
 		return nil, f.updateErr
 	}
-	return &quartermasterpb.Tenant{}, nil
+	return &quartermasterpb.ApplyTenantBillingEntitlementsResponse{Applied: !f.applyReject}, nil
+}
+
+func (f *fakeQM) CompleteTenantDNSEntitlementHandoff(_ context.Context, subscriptionCount int64) (*quartermasterpb.CompleteTenantDNSEntitlementHandoffResponse, error) {
+	f.calls = append(f.calls, "dns-handoff")
+	f.handoffCount = subscriptionCount
+	if len(f.handoffErrs) != 0 {
+		err := f.handoffErrs[0]
+		f.handoffErrs = f.handoffErrs[1:]
+		if err != nil {
+			return nil, err
+		}
+	}
+	if f.handoffErr != nil {
+		return nil, f.handoffErr
+	}
+	return &quartermasterpb.CompleteTenantDNSEntitlementHandoffResponse{Recorded: !f.handoffReject}, nil
+}
+
+func TestRevokeDNSEntitlementsAdvancesFalseObservation(t *testing.T) {
+	qm := &fakeQM{deploymentTier: "production", customSubdomainEnabled: true, customDomainEnabled: true}
+	r, mock := newReconcilerWithMock(t, qm)
+	if err := r.RevokeDNSEntitlements(context.Background(), "tenant-1"); err != nil {
+		t.Fatalf("RevokeDNSEntitlements: %v", err)
+	}
+	if qm.lastDNS == nil || qm.lastDNS.GetCustomSubdomainEnabled() || qm.lastDNS.GetCustomDomainEnabled() {
+		t.Fatalf("revocation request = %+v, want both grants false", qm.lastDNS)
+	}
+	if qm.lastDNS.GetObservedAt() == nil || qm.lastDNS.GetDeploymentTier() != "production" {
+		t.Fatalf("revocation did not preserve tier/advance observation: %+v", qm.lastDNS)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (f *fakeQM) BootstrapClusterAccess(ctx context.Context, tenantID, clusterID string, _ *tenantlimitspb.TenantResourceLimits) error {
@@ -112,6 +170,13 @@ func pricingRows(rows ...[2]any) *sqlmock.Rows {
 	return r
 }
 
+func expectDNSEntitlements(mock sqlmock.Sqlmock, tier string, customSubdomain, customDomain bool) {
+	mock.ExpectQuery(`FROM purser\.tenant_subscriptions ts`).
+		WithArgs("tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"tier_name", "custom_subdomain_enabled", "custom_domain_enabled"}).
+			AddRow(tier, customSubdomain, customDomain))
+}
+
 func newReconcilerWithMock(t *testing.T, qm quartermasterAPI) (*Reconciler, sqlmock.Sqlmock) {
 	t.Helper()
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
@@ -122,26 +187,44 @@ func newReconcilerWithMock(t *testing.T, qm quartermasterAPI) (*Reconciler, sqlm
 	return &Reconciler{db: db, qm: qm, logger: logging.NewLogger()}, mock
 }
 
-// Empty official set is a hard no-op: no DB query, no mutations. This guards
-// the "Quartermaster has no official clusters yet" startup window from wiping
-// access.
-func TestReconcile_NoOfficialClustersIsNoOp(t *testing.T) {
-	qm := &fakeQM{official: nil}
+// Empty official inventory cannot wipe access, but independent DNS entitlement
+// state still converges from Purser.
+func TestReconcile_NoOfficialClustersPreservesAccessAndChecksDNSEntitlements(t *testing.T) {
+	qm := &fakeQM{official: nil, deploymentTier: "supporter", customSubdomainEnabled: true, customDomainEnabled: true}
 	r, mock := newReconcilerWithMock(t, qm)
+	expectDNSEntitlements(mock, "supporter", true, true)
 
 	eligible, primary, err := r.Reconcile(context.Background(), "tenant-1", 2, "supporter")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if eligible != nil || primary != "" {
+	if len(eligible) != 0 || primary != "" {
 		t.Errorf("expected empty result, got eligible=%v primary=%q", eligible, primary)
 	}
 	if len(qm.calls) != 0 {
 		t.Errorf("expected no mutations, got %v", qm.calls)
 	}
-	// No query was expected; ExpectationsWereMet passes only if none fired.
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Errorf("unexpected DB activity: %v", err)
+	}
+}
+
+func TestReconcile_NoOfficialClustersStillMaterializesUnobservedDNSEntitlements(t *testing.T) {
+	qm := &fakeQM{official: nil, deploymentTier: "supporter", entitlementsUnobserved: true}
+	r, mock := newReconcilerWithMock(t, qm)
+	expectDNSEntitlements(mock, "supporter", true, false)
+
+	if _, _, err := r.Reconcile(context.Background(), "tenant-1", 2, "supporter"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(qm.calls) != 1 || qm.calls[0] != "dns:tenant-1=supporter" {
+		t.Fatalf("DNS convergence calls = %v", qm.calls)
+	}
+	if qm.lastDNS == nil || !qm.lastDNS.GetCustomSubdomainEnabled() || qm.lastDNS.GetCustomDomainEnabled() {
+		t.Fatalf("DNS materialization = %+v", qm.lastDNS)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -165,6 +248,7 @@ func TestReconcile_OrderingGrantThenPrimaryThenSuspendThenStamp(t *testing.T) {
 	mock.ExpectQuery(`SELECT cluster_id, required_tier_level`).
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(pricingRows([2]any{"c1", 2}, [2]any{"c2", 1}, [2]any{"c3", 0}))
+	expectDNSEntitlements(mock, "supporter", true, true)
 
 	eligible, primary, err := r.Reconcile(context.Background(), "tenant-1", 2, "supporter")
 	if err != nil {
@@ -177,7 +261,7 @@ func TestReconcile_OrderingGrantThenPrimaryThenSuspendThenStamp(t *testing.T) {
 		t.Errorf("eligible = %q, want %q", got, want)
 	}
 
-	want := []string{"grant:c1", "grant:c3", "primary:c1", "suspend:c4(tier_downgrade)", "tier:tenant-1=supporter"}
+	want := []string{"grant:c1", "grant:c3", "primary:c1", "suspend:c4(tier_downgrade)", "dns:tenant-1=supporter"}
 	if strings.Join(qm.calls, "|") != strings.Join(want, "|") {
 		t.Errorf("call order = %v, want %v", qm.calls, want)
 	}
@@ -191,15 +275,18 @@ func TestReconcile_OrderingGrantThenPrimaryThenSuspendThenStamp(t *testing.T) {
 // would churn the alias outbox on every reconcile.
 func TestReconcile_StampSkippedWhenTierMatches(t *testing.T) {
 	qm := &fakeQM{
-		official:       []string{"c1"},
-		accessRows:     []*quartermasterpb.TenantClusterAccessRow{activeOfficialRow("c1")},
-		primary:        "c1",
-		deploymentTier: "supporter",
+		official:               []string{"c1"},
+		accessRows:             []*quartermasterpb.TenantClusterAccessRow{activeOfficialRow("c1")},
+		primary:                "c1",
+		deploymentTier:         "supporter",
+		customSubdomainEnabled: true,
+		customDomainEnabled:    true,
 	}
 	r, mock := newReconcilerWithMock(t, qm)
 	mock.ExpectQuery(`SELECT cluster_id, required_tier_level`).
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(pricingRows([2]any{"c1", 2}))
+	expectDNSEntitlements(mock, "supporter", true, true)
 
 	if _, _, err := r.Reconcile(context.Background(), "tenant-1", 2, "supporter"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -220,13 +307,18 @@ func TestReconcile_StampErrorIsWrapped(t *testing.T) {
 		updateErr:      errors.New("qm down"),
 	}
 	r, mock := newReconcilerWithMock(t, qm)
+	r.reconciliationFailures = prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_reconciliation_failures_total"}, []string{"operation"})
 	mock.ExpectQuery(`SELECT cluster_id, required_tier_level`).
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(pricingRows([2]any{"c1", 2}))
+	expectDNSEntitlements(mock, "supporter", true, true)
 
 	_, _, err := r.Reconcile(context.Background(), "tenant-1", 2, "supporter")
-	if err == nil || !strings.Contains(err.Error(), "stamp deployment tier") {
+	if err == nil || !strings.Contains(err.Error(), "apply DNS entitlements") {
 		t.Fatalf("expected wrapped stamp error, got %v", err)
+	}
+	if got := testutil.ToFloat64(r.reconciliationFailures.WithLabelValues("reconcile")); got != 1 {
+		t.Fatalf("reconcile failure metric = %v, want 1", got)
 	}
 }
 
@@ -239,13 +331,15 @@ func TestReconcile_PrimaryTieBreakKeepsExistingPrimary(t *testing.T) {
 			activeOfficialRow("c1"),
 			activeOfficialRow("c2"),
 		},
-		primary: "c2", // already a top-level candidate
+		primary:        "c2", // already a top-level candidate
+		deploymentTier: "free",
 	}
 	r, mock := newReconcilerWithMock(t, qm)
 	// Both clusters at the same required_tier_level → topLevelCandidates = [c1, c2].
 	mock.ExpectQuery(`SELECT cluster_id, required_tier_level`).
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnRows(pricingRows([2]any{"c1", 2}, [2]any{"c2", 2}))
+	expectDNSEntitlements(mock, "free", false, false)
 
 	_, primary, err := r.Reconcile(context.Background(), "tenant-1", 2, "")
 	if err != nil {
@@ -278,6 +372,7 @@ func TestReconcile_TierLevelForwardedToQuery(t *testing.T) {
 	mock.ExpectQuery(`FROM purser\.cluster_pricing`).
 		WithArgs(sqlmock.AnyArg(), tierArg).
 		WillReturnRows(pricingRows([2]any{"c1", 0}))
+	expectDNSEntitlements(mock, "free", false, false)
 
 	if _, _, err := r.Reconcile(context.Background(), "tenant-1", 0, ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)

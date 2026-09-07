@@ -22,7 +22,7 @@ import "fmt"
 // whole merge rather than silently coercing to 0.
 func MergeBillingTierOverlay(embedded []CatalogTier, overlay []BillingTier) ([]CatalogTier, error) {
 	if len(overlay) == 0 {
-		return embedded, nil
+		return embedded, validateCatalogDNSEntitlements(embedded)
 	}
 	byName := make(map[string]int, len(embedded))
 	for i, t := range embedded {
@@ -53,6 +53,9 @@ func MergeBillingTierOverlay(embedded []CatalogTier, overlay []BillingTier) ([]C
 		}
 		out = append(out, fresh)
 		byName[o.ID] = len(out) - 1
+	}
+	if err := validateCatalogDNSEntitlements(out); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

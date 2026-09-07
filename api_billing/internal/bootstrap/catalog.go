@@ -77,7 +77,25 @@ func EmbeddedTiers() ([]CatalogTier, error) {
 			return nil, fmt.Errorf("embedded catalog tier[%d] missing tier_name", i)
 		}
 	}
+	if err := validateCatalogDNSEntitlements(c.Tiers); err != nil {
+		return nil, fmt.Errorf("embedded catalog: %w", err)
+	}
 	return c.Tiers, nil
+}
+
+func validateCatalogDNSEntitlements(tiers []CatalogTier) error {
+	for _, tier := range tiers {
+		for _, key := range []string{"custom_subdomain_enabled", "custom_domain_enabled"} {
+			value, ok := tier.Entitlements[key]
+			if !ok {
+				return fmt.Errorf("tier %q missing required %s entitlement", tier.TierName, key)
+			}
+			if _, ok := value.(bool); !ok {
+				return fmt.Errorf("tier %q entitlement %s must be boolean", tier.TierName, key)
+			}
+		}
+	}
+	return nil
 }
 
 // jsonBytes marshals an any-typed JSONB value into `[]byte` for jsonEq

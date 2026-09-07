@@ -55,6 +55,8 @@ tiers:
     metering_enabled: true
     entitlements:
       recording_retention_days: 0
+      custom_subdomain_enabled: false
+      custom_domain_enabled: false
     pricing_rules:
       - meter: delivered_minutes
         model: tiered_graduated
@@ -94,6 +96,8 @@ tiers:
     metering_enabled: true
     entitlements:
       recording_retention_days: 30
+      custom_subdomain_enabled: false
+      custom_domain_enabled: false
       dvr_default_window_seconds: 1800 # 30m
       dvr_max_window_seconds: 3600 # 1h
       dvr_default_segment_duration_seconds: 6
@@ -148,6 +152,8 @@ tiers:
     metering_enabled: true
     entitlements:
       recording_retention_days: 0
+      custom_subdomain_enabled: true
+      custom_domain_enabled: true
       dvr_default_window_seconds: 7200 # 2h
       dvr_max_window_seconds: 21600 # 6h
       dvr_default_segment_duration_seconds: 6
@@ -187,6 +193,8 @@ tiers:
     metering_enabled: true
     entitlements:
       recording_retention_days: 0
+      custom_subdomain_enabled: true
+      custom_domain_enabled: true
       dvr_default_window_seconds: 14400 # 4h
       dvr_max_window_seconds: 43200 # 12h
       dvr_default_segment_duration_seconds: 6
@@ -228,6 +236,8 @@ tiers:
     metering_enabled: true
     entitlements:
       recording_retention_days: 0
+      custom_subdomain_enabled: true
+      custom_domain_enabled: true
       dvr_default_window_seconds: 14400 # 4h
       dvr_max_window_seconds: 86400 # 1d
       dvr_default_segment_duration_seconds: 12
@@ -270,6 +280,8 @@ tiers:
     metering_enabled: true
     entitlements:
       recording_retention_days: 0
+      custom_subdomain_enabled: true
+      custom_domain_enabled: true
       dvr_default_window_seconds: 14400 # 4h
       dvr_max_window_seconds: 86400 # 1d, cluster opt-in extends up to 72h
       dvr_default_segment_duration_seconds: 24

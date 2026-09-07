@@ -20,6 +20,7 @@ import (
 
 	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/testutil/dockerpg"
+	"github.com/google/uuid"
 	_ "github.com/lib/pq"
 )
 
@@ -34,6 +35,7 @@ func TestGeneratedQueryCatalogPrepares_RealPG(t *testing.T) {
 	preparePurserQueryCatalog(t, db)
 	assertTenantAdmissionQueryExecution(t, db)
 	assertTenantAdmissionQueryPlan(t, db)
+	assertMediaAuthorityRefreshTriggers(t, db)
 
 	ctx := context.Background()
 	t.Run("x402 intent replay is explicit", func(t *testing.T) {
@@ -63,6 +65,132 @@ func TestGeneratedQueryCatalogPrepares_RealPG(t *testing.T) {
 			t.Fatalf("existing settlement = %#v, inserted = %#v", existing, inserted)
 		}
 	})
+}
+
+func assertMediaAuthorityRefreshTriggers(t *testing.T, db *sql.DB) {
+	t.Helper()
+	ctx := context.Background()
+	const (
+		tierID   = "92000000-0000-0000-0000-000000000001"
+		tenantID = "92000000-0000-0000-0000-000000000002"
+	)
+	if _, err := db.ExecContext(ctx, `DELETE FROM purser.media_authority_refresh_outbox`); err != nil {
+		t.Fatalf("isolate media-authority refresh test: %v", err)
+	}
+	statements := []struct {
+		query string
+		args  []any
+	}{
+		{`INSERT INTO purser.billing_tiers (id, tier_name, display_name, tier_level)
+		  VALUES ($1, 'authority-trigger-realpg', 'Authority trigger', 2)`, []any{tierID}},
+		{`INSERT INTO purser.tenant_subscriptions (tenant_id, tier_id, status, billing_model)
+		  VALUES ($1, $2, 'active', 'prepaid')`, []any{tenantID, tierID}},
+		{`INSERT INTO purser.prepaid_balances (tenant_id, balance_cents, currency)
+		  VALUES ($1, 100, 'EUR')`, []any{tenantID}},
+		{`INSERT INTO purser.tier_entitlements (tier_id, key, value)
+		  VALUES ($1, 'custom_subdomain_enabled', 'true'::jsonb)`, []any{tierID}},
+		{`INSERT INTO purser.subscription_entitlement_overrides (subscription_id, key, value)
+		  SELECT id, 'custom_domain_enabled', 'true'::jsonb
+		  FROM purser.tenant_subscriptions WHERE tenant_id = $1`, []any{tenantID}},
+		{`INSERT INTO purser.tier_pricing_rules (tier_id, meter, model, currency, included_quantity, unit_price)
+		  VALUES ($1, 'delivered_minutes', 'all_usage', 'EUR', 0, 0.01)`, []any{tierID}},
+		{`UPDATE purser.billing_tiers SET features = '{"recording":true}'::jsonb WHERE id = $1`, []any{tierID}},
+		{`INSERT INTO purser.usage_records (
+		     tenant_id, cluster_id, usage_type, unit, dimension_key, source_id,
+		     report_id, usage_value, value_kind, period_start, period_end
+		  ) VALUES (
+		     $1, 'cluster-1', 'delivered_minutes', 'minutes', repeat('0', 64),
+		     'trigger-test', 'report-1', 1, 'delta', NOW() - INTERVAL '5 minutes', NOW()
+		  )`, []any{tenantID}},
+	}
+	for _, statement := range statements {
+		if _, err := db.ExecContext(ctx, statement.query, statement.args...); err != nil {
+			t.Fatalf("seed media-authority triggers: %v", err)
+		}
+	}
+	rows, err := db.QueryContext(ctx, `
+		SELECT reason FROM purser.media_authority_refresh_outbox
+		WHERE tenant_id = $1 ORDER BY reason
+	`, tenantID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	reasons := map[string]bool{}
+	for rows.Next() {
+		var reason string
+		if err := rows.Scan(&reason); err != nil {
+			t.Fatal(err)
+		}
+		reasons[reason] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	for _, reason := range []string{
+		"subscription_authority_changed",
+		"prepaid_admission_gate_changed",
+		"tier_entitlement_changed",
+		"subscription_entitlement_changed",
+		"tier_allowance_changed",
+		"billing_tier_authority_changed",
+		"allowance_usage_changed",
+	} {
+		if !reasons[reason] {
+			t.Fatalf("real PostgreSQL trigger did not enqueue %q; got %v", reason, reasons)
+		}
+	}
+
+	if _, err := db.ExecContext(ctx, `
+		UPDATE purser.media_authority_refresh_outbox
+		SET pending_since = NOW() - INTERVAL '2 hours'
+		WHERE tenant_id = $1 AND status <> 'completed'
+	`, tenantID); err != nil {
+		t.Fatalf("age refresh obligations: %v", err)
+	}
+	queries := New(db)
+	claimed, err := queries.ClaimMediaAuthorityRefreshBatch(ctx, ClaimMediaAuthorityRefreshBatchParams{
+		LeaseMs: int64(time.Minute / time.Millisecond), BatchSize: 1,
+	})
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claim aged refresh obligation: rows=%d err=%v", len(claimed), err)
+	}
+	claimedID, err := uuid.Parse(claimed[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := queries.FailMediaAuthorityRefresh(ctx, FailMediaAuthorityRefreshParams{
+		NextAttemptAt: time.Now().Add(time.Minute),
+		LastError:     sql.NullString{String: "permanent test failure", Valid: true},
+		ID:            claimedID,
+		Revision:      claimed[0].Revision,
+	})
+	if err != nil || changed != 1 {
+		t.Fatalf("fail aged refresh obligation: changed=%d err=%v", changed, err)
+	}
+	if _, err := db.ExecContext(ctx, `SELECT purser.enqueue_media_authority_refresh($1::uuid, $2)`, tenantID, claimed[0].Reason); err != nil {
+		t.Fatalf("supersede aged refresh obligation: %v", err)
+	}
+	var pendingSince time.Time
+	var revision int64
+	if err := db.QueryRowContext(ctx, `
+		SELECT pending_since, revision FROM purser.media_authority_refresh_outbox WHERE id = $1
+	`, claimedID).Scan(&pendingSince, &revision); err != nil {
+		t.Fatalf("read retried obligation age origin: %v", err)
+	}
+	if revision != claimed[0].Revision+1 {
+		t.Fatalf("superseding enqueue revision = %d, want %d", revision, claimed[0].Revision+1)
+	}
+	if time.Since(pendingSince) < 119*time.Minute {
+		t.Fatalf("superseding enqueue reset pending_since: %s", pendingSince)
+	}
+	stats, err := queries.GetMediaAuthorityRefreshOutboxStats(ctx)
+	if err != nil {
+		t.Fatalf("read refresh outbox stats: %v", err)
+	}
+	if stats.OldestPendingSeconds < 119*time.Minute.Seconds() {
+		t.Fatalf("oldest pending age reset by retry: got %.0fs", stats.OldestPendingSeconds)
+	}
 }
 
 func TestGeneratedQueryCatalogPrepares_RealYugabyte(t *testing.T) {

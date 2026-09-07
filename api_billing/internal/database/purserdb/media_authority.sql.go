@@ -150,3 +150,43 @@ func (q *Queries) FailMediaAuthorityRefresh(ctx context.Context, arg FailMediaAu
 	}
 	return result.RowsAffected()
 }
+
+const getMediaAuthorityRefreshOutboxStats = `-- name: GetMediaAuthorityRefreshOutboxStats :one
+SELECT COUNT(*)::bigint AS pending_count,
+	   COALESCE(EXTRACT(EPOCH FROM (NOW() - MIN(LEAST(pending_since, created_at)))), 0)::double precision AS oldest_pending_seconds
+FROM purser.media_authority_refresh_outbox
+WHERE status <> 'completed'
+`
+
+type GetMediaAuthorityRefreshOutboxStatsRow struct {
+	PendingCount         int64   `db:"pending_count" json:"pending_count"`
+	OldestPendingSeconds float64 `db:"oldest_pending_seconds" json:"oldest_pending_seconds"`
+}
+
+func (q *Queries) GetMediaAuthorityRefreshOutboxStats(ctx context.Context) (GetMediaAuthorityRefreshOutboxStatsRow, error) {
+	row := q.db.QueryRowContext(ctx, getMediaAuthorityRefreshOutboxStats)
+	var i GetMediaAuthorityRefreshOutboxStatsRow
+	err := row.Scan(&i.PendingCount, &i.OldestPendingSeconds)
+	return i, err
+}
+
+const releaseSupersededMediaAuthorityRefresh = `-- name: ReleaseSupersededMediaAuthorityRefresh :execrows
+UPDATE purser.media_authority_refresh_outbox
+SET status = 'pending', next_attempt_at = NOW(), lease_expires_at = NULL,
+    updated_at = NOW()
+WHERE id = $1::uuid AND status = 'pending'
+  AND revision > $2
+`
+
+type ReleaseSupersededMediaAuthorityRefreshParams struct {
+	ID       uuid.UUID `db:"id" json:"id"`
+	Revision int64     `db:"revision" json:"revision"`
+}
+
+func (q *Queries) ReleaseSupersededMediaAuthorityRefresh(ctx context.Context, arg ReleaseSupersededMediaAuthorityRefreshParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, releaseSupersededMediaAuthorityRefresh, arg.ID, arg.Revision)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}

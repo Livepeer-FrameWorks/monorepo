@@ -191,6 +191,7 @@ type Querier interface {
 	GetLatestProviderPaymentAttempt(ctx context.Context, arg GetLatestProviderPaymentAttemptParams) (GetLatestProviderPaymentAttemptRow, error)
 	GetMarketplaceOwnerApproval(ctx context.Context, ownerID string) (GetMarketplaceOwnerApprovalRow, error)
 	GetMarketplacePlatformFeeBps(ctx context.Context, arg GetMarketplacePlatformFeeBpsParams) (int32, error)
+	GetMediaAuthorityRefreshOutboxStats(ctx context.Context) (GetMediaAuthorityRefreshOutboxStatsRow, error)
 	GetMeterUnitForAdjustment(ctx context.Context, meter string) (string, error)
 	GetMollieAppliedReversalCents(ctx context.Context, arg GetMollieAppliedReversalCentsParams) (int64, error)
 	GetMollieCustomerID(ctx context.Context, tenantID string) (string, error)
@@ -356,6 +357,7 @@ type Querier interface {
 	ListX402QuoteMetrics(ctx context.Context) ([]ListX402QuoteMetricsRow, error)
 	LoadActiveEffectiveTier(ctx context.Context, tenantID string) (LoadActiveEffectiveTierRow, error)
 	LoadClusterPricingHistory(ctx context.Context, arg LoadClusterPricingHistoryParams) (LoadClusterPricingHistoryRow, error)
+	LoadEffectiveDNSEntitlements(ctx context.Context, tenantID string) (LoadEffectiveDNSEntitlementsRow, error)
 	LockAllocatedDepositReversal(ctx context.Context, eventID string) (LockAllocatedDepositReversalRow, error)
 	LockBillingCollectionBalance(ctx context.Context, arg LockBillingCollectionBalanceParams) (int64, error)
 	LockConfirmedCryptoInvoicePayment(ctx context.Context, arg LockConfirmedCryptoInvoicePaymentParams) (LockConfirmedCryptoInvoicePaymentRow, error)
@@ -434,6 +436,7 @@ type Querier interface {
 	RecordX402EmbeddedBroadcastOutcome(ctx context.Context, arg RecordX402EmbeddedBroadcastOutcomeParams) error
 	RegisterDirectDepositCustodyAddress(ctx context.Context, arg RegisterDirectDepositCustodyAddressParams) error
 	ReleaseCryptoSweepSources(ctx context.Context, arg ReleaseCryptoSweepSourcesParams) (int64, error)
+	ReleaseSupersededMediaAuthorityRefresh(ctx context.Context, arg ReleaseSupersededMediaAuthorityRefreshParams) (int64, error)
 	ReopenUnderpaidBillingInvoice(ctx context.Context, arg ReopenUnderpaidBillingInvoiceParams) (int64, error)
 	ReserveCryptoSweepRelayerNonce(ctx context.Context, arg ReserveCryptoSweepRelayerNonceParams) (int32, error)
 	ResetClaimingX402Quote(ctx context.Context, quoteID string) error

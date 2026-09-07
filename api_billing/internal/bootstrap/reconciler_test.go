@@ -11,6 +11,13 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
+func requiredDNSEntitlements(subdomain, customDomain bool) map[string]any {
+	return map[string]any{
+		"custom_subdomain_enabled": subdomain,
+		"custom_domain_enabled":    customDomain,
+	}
+}
+
 // twoTierFixture is a minimal catalog for tests — full enough to exercise both
 // entitlements and pricing rules without dragging the full production catalog
 // into every fixture.
@@ -27,7 +34,7 @@ func twoTierFixture() []CatalogTier {
 			SupportLevel:    "community",
 			SLALevel:        "none",
 			MeteringEnabled: true,
-			Entitlements:    map[string]any{},
+			Entitlements:    requiredDNSEntitlements(false, false),
 			PricingRules: []CatalogPricingRule{
 				{Meter: "delivered_minutes", Model: "tiered_graduated", UnitPrice: "0.00055"},
 			},
@@ -50,7 +57,11 @@ func twoTierFixture() []CatalogTier {
 			SupportLevel:    "community",
 			SLALevel:        "none",
 			MeteringEnabled: true,
-			Entitlements:    map[string]any{"recording_retention_days": 30},
+			Entitlements: map[string]any{
+				"recording_retention_days": 30,
+				"custom_subdomain_enabled": false,
+				"custom_domain_enabled":    false,
+			},
 			PricingRules: []CatalogPricingRule{
 				{Meter: "delivered_minutes", Model: "tiered_graduated", UnitPrice: "0"},
 				{Meter: "storage_gb_seconds_hot", Model: "tiered_graduated", UnitPrice: "0"},
@@ -89,6 +100,29 @@ func TestEmbeddedCatalogParses(t *testing.T) {
 		if tier.ProcessesLive == "" || tier.ProcessesDVR == "" || tier.ProcessesClip == "" || tier.ProcessesDVRFinalize == "" || tier.ProcessesVOD == "" {
 			t.Errorf("tier %q missing MistServer process json", tier.TierName)
 		}
+	}
+}
+
+func TestValidateCatalogDNSEntitlements(t *testing.T) {
+	tests := []struct {
+		name         string
+		entitlements map[string]any
+		wantError    bool
+	}{
+		{name: "both explicit", entitlements: requiredDNSEntitlements(true, false)},
+		{name: "missing custom subdomain", entitlements: map[string]any{"custom_domain_enabled": true}, wantError: true},
+		{name: "missing custom domain", entitlements: map[string]any{"custom_subdomain_enabled": true}, wantError: true},
+		{name: "string is not boolean", entitlements: map[string]any{"custom_subdomain_enabled": "true", "custom_domain_enabled": false}, wantError: true},
+		{name: "number is not boolean", entitlements: map[string]any{"custom_subdomain_enabled": true, "custom_domain_enabled": 1}, wantError: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateCatalogDNSEntitlements([]CatalogTier{{TierName: "test", Entitlements: tt.entitlements}})
+			if (err != nil) != tt.wantError {
+				t.Fatalf("error = %v, wantError = %v", err, tt.wantError)
+			}
+		})
 	}
 }
 

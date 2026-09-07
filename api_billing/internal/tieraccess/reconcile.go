@@ -11,6 +11,7 @@ import (
 	"database/sql"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +21,8 @@ import (
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	tenantlimitspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/tenant_limits"
+	"github.com/prometheus/client_golang/prometheus"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // quartermasterAPI is the subset of the Quartermaster gRPC client that the
@@ -31,7 +34,9 @@ type quartermasterAPI interface {
 	ListTenantClusterAccess(ctx context.Context, tenantID string) (*quartermasterpb.ListTenantClusterAccessResponse, error)
 	ListTenants(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListTenantsResponse, error)
 	GetTenant(ctx context.Context, tenantID string) (*quartermasterpb.GetTenantResponse, error)
-	UpdateTenant(ctx context.Context, req *quartermasterpb.UpdateTenantRequest) (*quartermasterpb.Tenant, error)
+	UpdateTenantCluster(ctx context.Context, req *quartermasterpb.UpdateTenantClusterRequest) error
+	ApplyTenantBillingEntitlements(ctx context.Context, req *quartermasterpb.ApplyTenantBillingEntitlementsRequest) (*quartermasterpb.ApplyTenantBillingEntitlementsResponse, error)
+	CompleteTenantDNSEntitlementHandoff(ctx context.Context, subscriptionCount int64) (*quartermasterpb.CompleteTenantDNSEntitlementHandoffResponse, error)
 	BootstrapClusterAccess(ctx context.Context, tenantID, clusterID string, resourceLimits *tenantlimitspb.TenantResourceLimits) error
 	DeactivateClusterAccess(ctx context.Context, tenantID, clusterID, reason string) error
 }
@@ -44,18 +49,54 @@ type quartermasterAPI interface {
 // touches quartermaster.tenant_cluster_access directly — current state comes
 // from Quartermaster.ListTenantClusterAccess.
 type Reconciler struct {
-	db     *sql.DB
-	qm     quartermasterAPI
-	logger logging.Logger
+	db                     *sql.DB
+	qm                     quartermasterAPI
+	logger                 logging.Logger
+	reconciliationFailures *prometheus.CounterVec
 
 	mu       sync.RWMutex
 	cache    map[string]bool
 	cacheExp time.Time
 }
 
+// ReconcileCanonical applies the tenant's current committed subscription tier
+// and retries if a concurrent billing change supersedes that tier while the
+// cross-service reconcile is in flight.
+func (r *Reconciler) ReconcileCanonical(ctx context.Context, tenantID string) ([]string, string, error) {
+	queries := purserdb.New(r.db)
+	for attempt := 0; attempt < 4; attempt++ {
+		canonical, err := queries.GetCanonicalSubscriptionTier(ctx, tenantID)
+		if err != nil {
+			return nil, "", fmt.Errorf("load canonical tier: %w", err)
+		}
+		eligible, primary, err := r.Reconcile(ctx, tenantID, canonical.TierLevel, canonical.TierName)
+		if err != nil {
+			return nil, "", err
+		}
+		currentTierID, err := queries.GetTenantSubscriptionTierID(ctx, tenantID)
+		if err != nil {
+			return nil, "", fmt.Errorf("verify canonical tier after reconcile: %w", err)
+		}
+		if currentTierID == canonical.TierID {
+			return eligible, primary, nil
+		}
+	}
+	return nil, "", fmt.Errorf("subscription tier kept changing during cluster reconciliation")
+}
+
 // NewReconciler constructs a Reconciler shared by PurserServer and JobManager.
-func NewReconciler(db *sql.DB, qm *qmclient.GRPCClient, logger logging.Logger) *Reconciler {
-	return &Reconciler{db: db, qm: qm, logger: logger}
+func NewReconciler(db *sql.DB, qm *qmclient.GRPCClient, logger logging.Logger, failureMetrics ...*prometheus.CounterVec) *Reconciler {
+	var failures *prometheus.CounterVec
+	if len(failureMetrics) > 0 {
+		failures = failureMetrics[0]
+	}
+	return &Reconciler{db: db, qm: qm, logger: logger, reconciliationFailures: failures}
+}
+
+func (r *Reconciler) recordFailure(operation string) {
+	if r.reconciliationFailures != nil {
+		r.reconciliationFailures.WithLabelValues(operation).Inc()
+	}
 }
 
 // OfficialClusterIDs returns the set of platform-official cluster IDs from
@@ -98,12 +139,31 @@ func (r *Reconciler) OfficialClusterIDs(ctx context.Context) (map[string]bool, e
 // Quartermaster (UpdateTenant enqueues alias ensure/remove on tier change)
 // see the final cluster-access state.
 func (r *Reconciler) Reconcile(ctx context.Context, tenantID string, tierLevel int32, tierName string) (eligibleClusterIDs []string, primaryClusterID string, err error) {
+	defer func() {
+		if err != nil {
+			r.recordFailure("reconcile")
+		}
+	}()
+	observedAt := time.Now().UTC()
 	officialIDs, err := r.OfficialClusterIDs(ctx)
 	if err != nil {
 		return nil, "", err
 	}
 	if len(officialIDs) == 0 {
-		return nil, "", nil
+		// An empty official inventory must not revoke cluster access, but DNS
+		// entitlement materialization is independent of cluster discovery and
+		// still has to converge (especially for fresh and suspended tenants).
+		if r.qm == nil {
+			return []string{}, "", nil
+		}
+		tenantResp, tenantErr := r.qm.GetTenant(ctx, tenantID)
+		if tenantErr != nil {
+			return nil, "", fmt.Errorf("get tenant for DNS entitlements: %w", tenantErr)
+		}
+		if applyErr := r.applyDNSEntitlements(ctx, tenantID, tierName, tenantResp.GetTenant(), observedAt); applyErr != nil {
+			return nil, "", applyErr
+		}
+		return []string{}, "", nil
 	}
 
 	idSlice := make([]string, 0, len(officialIDs))
@@ -177,7 +237,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, tenantID string, tierLevel i
 			primaryClusterID = currentPrimary
 		}
 		if primaryClusterID != currentPrimary {
-			if _, err := r.qm.UpdateTenant(ctx, &quartermasterpb.UpdateTenantRequest{
+			if err := r.qm.UpdateTenantCluster(ctx, &quartermasterpb.UpdateTenantClusterRequest{
 				TenantId:         tenantID,
 				PrimaryClusterId: &primaryClusterID,
 			}); err != nil {
@@ -196,18 +256,67 @@ func (r *Reconciler) Reconcile(ctx context.Context, tenantID string, tierLevel i
 		}
 	}
 
-	// (d) Stamp deployment_tier. Mismatch-only: Quartermaster enqueues an
-	// alias action on every tier write, so unconditional writes would churn
-	// the alias outbox. Failures here leave the stamp stale until the
-	// deployment-tier sweep converges it.
-	if tierName != "" && tenantResp.GetTenant().GetDeploymentTier() != tierName {
-		if _, stampErr := r.qm.UpdateTenant(ctx, &quartermasterpb.UpdateTenantRequest{
-			TenantId:       tenantID,
-			DeploymentTier: &tierName,
-		}); stampErr != nil {
-			return eligibleClusterIDs, primaryClusterID, fmt.Errorf("stamp deployment tier %s: %w", tierName, stampErr)
-		}
+	// (d) Materialize the canonical, Purser-owned DNS entitlements.
+	if applyErr := r.applyDNSEntitlements(ctx, tenantID, tierName, tenantResp.GetTenant(), observedAt); applyErr != nil {
+		return eligibleClusterIDs, primaryClusterID, applyErr
 	}
 
 	return eligibleClusterIDs, primaryClusterID, nil
+}
+
+func (r *Reconciler) applyDNSEntitlements(ctx context.Context, tenantID, tierName string, currentTenant *quartermasterpb.Tenant, observedAt time.Time) error {
+	// Unknown or missing keys resolve false in SQL. observedAt was captured
+	// before the read/reconcile so Quartermaster can reject a late stale writer.
+	dns, dnsErr := purserdb.New(r.db).LoadEffectiveDNSEntitlements(ctx, tenantID)
+	if dnsErr != nil {
+		return fmt.Errorf("load DNS entitlements: %w", dnsErr)
+	}
+	if tierName != "" && dns.TierName != tierName {
+		return fmt.Errorf("effective tier changed during reconcile: got %s, expected %s", dns.TierName, tierName)
+	}
+	if currentTenant == nil || !currentTenant.GetBillingEntitlementsObserved() ||
+		currentTenant.GetDeploymentTier() != dns.TierName ||
+		currentTenant.GetCustomSubdomainEnabled() != dns.CustomSubdomainEnabled ||
+		currentTenant.GetCustomDomainEnabled() != dns.CustomDomainEnabled {
+		if _, applyErr := r.qm.ApplyTenantBillingEntitlements(ctx, &quartermasterpb.ApplyTenantBillingEntitlementsRequest{
+			TenantId:               tenantID,
+			DeploymentTier:         dns.TierName,
+			CustomSubdomainEnabled: dns.CustomSubdomainEnabled,
+			CustomDomainEnabled:    dns.CustomDomainEnabled,
+			ObservedAt:             timestamppb.New(observedAt),
+		}); applyErr != nil {
+			return fmt.Errorf("apply DNS entitlements: %w", applyErr)
+		}
+	}
+	return nil
+}
+
+// RevokeDNSEntitlements advances Quartermaster's billing-observation fence and
+// tears down both served DNS forms after a subscription cancellation. The
+// requested names remain in Quartermaster; only the effective grants change.
+func (r *Reconciler) RevokeDNSEntitlements(ctx context.Context, tenantID string) (err error) {
+	defer func() {
+		if err != nil {
+			r.recordFailure("revoke")
+		}
+	}()
+	if r.qm == nil {
+		return nil
+	}
+	observedAt := time.Now().UTC()
+	resp, err := r.qm.GetTenant(ctx, tenantID)
+	if err != nil {
+		return fmt.Errorf("get tenant for DNS entitlement revocation: %w", err)
+	}
+	tenant := resp.GetTenant()
+	if tenant == nil || strings.TrimSpace(tenant.GetDeploymentTier()) == "" {
+		return fmt.Errorf("tenant has no materialized deployment tier")
+	}
+	_, err = r.qm.ApplyTenantBillingEntitlements(ctx, &quartermasterpb.ApplyTenantBillingEntitlementsRequest{
+		TenantId: tenantID, DeploymentTier: tenant.GetDeploymentTier(), ObservedAt: timestamppb.New(observedAt),
+	})
+	if err != nil {
+		return fmt.Errorf("apply DNS entitlement revocation: %w", err)
+	}
+	return nil
 }

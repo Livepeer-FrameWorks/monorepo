@@ -14,7 +14,11 @@ func TestBootstrapTierCatalogRepository_RealPG(t *testing.T) { //nolint:funlen /
 	tier := CatalogTier{
 		TierName: "tier-contract", DisplayName: "Tier contract", Currency: "EUR",
 		SupportLevel: "community", SLALevel: "none",
-		Entitlements: map[string]any{"recording_retention_days": 30},
+		Entitlements: map[string]any{
+			"recording_retention_days": 30,
+			"custom_subdomain_enabled": false,
+			"custom_domain_enabled":    false,
+		},
 		PricingRules: []CatalogPricingRule{{
 			Meter: "delivered_minutes", Model: "tiered_graduated", IncludedQuantity: 100,
 			UnitPrice: "0.000550000", Config: map[string]any{"rounding": "exact"},
@@ -69,7 +73,11 @@ func TestBootstrapTierCatalogRepository_RealPG(t *testing.T) { //nolint:funlen /
 	}
 
 	tier.DisplayName = "Tier contract updated"
-	tier.Entitlements = map[string]any{"max_concurrent_streams": 8}
+	tier.Entitlements = map[string]any{
+		"max_concurrent_streams":   8,
+		"custom_subdomain_enabled": true,
+		"custom_domain_enabled":    true,
+	}
 	tier.PricingRules[0].IncludedQuantity = 250
 	tier.PricingRules[0].UnitPrice = "0.000700000"
 	tier.PricingRules[0].Config = map[string]any{"rounding": "up"}
@@ -91,7 +99,8 @@ func TestBootstrapTierCatalogRepository_RealPG(t *testing.T) { //nolint:funlen /
 
 	var entitlementKey, entitlementValue string
 	if err := db.QueryRowContext(ctx, `
-		SELECT key, value::text FROM purser.tier_entitlements WHERE tier_id = $1
+		SELECT key, value::text FROM purser.tier_entitlements
+		WHERE tier_id = $1 AND key = 'max_concurrent_streams'
 	`, tierID).Scan(&entitlementKey, &entitlementValue); err != nil {
 		t.Fatal(err)
 	}

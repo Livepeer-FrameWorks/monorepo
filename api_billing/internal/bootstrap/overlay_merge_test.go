@@ -6,11 +6,12 @@ import "testing"
 // any non-zero overlay field replaces the baseline; zero/empty fields fall back.
 func TestMergeTier(t *testing.T) {
 	base := CatalogTier{
-		TierName:    "pro",
-		DisplayName: "Pro",
-		BasePrice:   10,
-		Currency:    "EUR",
-		TierLevel:   2,
+		TierName:     "pro",
+		DisplayName:  "Pro",
+		BasePrice:    10,
+		Currency:     "EUR",
+		TierLevel:    2,
+		Entitlements: requiredDNSEntitlements(true, true),
 	}
 
 	t.Run("empty overlay is identity", func(t *testing.T) {
@@ -64,8 +65,8 @@ func TestMergeTier(t *testing.T) {
 // than silent passthrough; and an empty overlay ID is rejected.
 func TestMergeBillingTierOverlay(t *testing.T) {
 	embedded := []CatalogTier{
-		{TierName: "free", DisplayName: "Free", TierLevel: 1},
-		{TierName: "pro", DisplayName: "Pro", BasePrice: 10, Currency: "EUR", TierLevel: 2},
+		{TierName: "free", DisplayName: "Free", TierLevel: 1, Entitlements: requiredDNSEntitlements(false, false)},
+		{TierName: "pro", DisplayName: "Pro", BasePrice: 10, Currency: "EUR", TierLevel: 2, Entitlements: requiredDNSEntitlements(true, true)},
 	}
 
 	t.Run("empty overlay returns embedded unchanged", func(t *testing.T) {
@@ -86,6 +87,7 @@ func TestMergeBillingTierOverlay(t *testing.T) {
 			BasePriceMonthly: "199.00",
 			Currency:         "EUR",
 			Features:         []string{"sso", "priority_support"},
+			Entitlements:     requiredDNSEntitlements(true, true),
 			PricingRules: []OverlayPricingRule{
 				{Meter: "egress_gb", Model: "per_unit", UnitPrice: "0.02"},
 			},
@@ -116,7 +118,9 @@ func TestMergeBillingTierOverlay(t *testing.T) {
 	})
 
 	t.Run("addition without features/rules yields nil maps", func(t *testing.T) {
-		got, err := MergeBillingTierOverlay(embedded, []BillingTier{{ID: "lite", BasePriceMonthly: "5.00"}})
+		got, err := MergeBillingTierOverlay(embedded, []BillingTier{{
+			ID: "lite", BasePriceMonthly: "5.00", Entitlements: requiredDNSEntitlements(false, false),
+		}})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}

@@ -7,6 +7,14 @@
 
 CREATE SCHEMA IF NOT EXISTS purser;
 
+CREATE TABLE IF NOT EXISTS purser.delegated_jwt_replays (
+    jti TEXT PRIMARY KEY,
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_purser_delegated_jwt_replays_expires_at
+    ON purser.delegated_jwt_replays (expires_at);
+
 -- ============================================================================
 -- EXTENSIONS
 -- ============================================================================
@@ -539,9 +547,9 @@ CREATE TABLE IF NOT EXISTS purser.meter_definitions (
 INSERT INTO purser.meter_definitions
     (meter, unit, aggregation, display_name, allowed_dimensions, default_priceable)
 VALUES
-    ('delivered_minutes', 'minute', 'sum', 'Delivered minutes', '{}', TRUE),
+    ('delivered_minutes', 'minute', 'sum', 'Delivered minutes', '{delivery_kind,platform}', TRUE),
     ('ingress_gb', 'gibibyte', 'sum', 'Ingress bandwidth', '{}', FALSE),
-    ('egress_gb', 'gibibyte', 'sum', 'Egress bandwidth', '{}', TRUE),
+    ('egress_gb', 'gibibyte', 'sum', 'Egress bandwidth', '{delivery_kind,platform}', TRUE),
     ('stream_runtime_seconds', 'second', 'sum', 'Stream runtime', '{}', FALSE),
     ('storage_gb_seconds_hot', 'gibibyte_second', 'sum', 'Hot storage', '{storage_backend,storage_scope}', FALSE),
     ('storage_gb_seconds_cold', 'gibibyte_second', 'sum', 'Cold storage', '{storage_backend,storage_scope}', TRUE),
@@ -2640,6 +2648,7 @@ CREATE TABLE IF NOT EXISTS purser.media_authority_refresh_outbox (
     lease_expires_at TIMESTAMPTZ,
     completed_at TIMESTAMPTZ,
     last_error TEXT,
+    pending_since TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT chk_purser_media_authority_refresh_status
@@ -2678,6 +2687,13 @@ BEGIN
         next_attempt_at = NOW(),
         completed_at = NULL,
         last_error = NULL,
+        -- This is the age of the oldest still-unfinished obligation, not the
+        -- latest enqueue. Superseding revisions must not make a stuck queue look
+        -- young again.
+        pending_since = LEAST(
+            purser.media_authority_refresh_outbox.pending_since,
+            EXCLUDED.pending_since
+        ),
         -- Keep an active delivery lease as a short serialization fence. The
         -- claimed revision can no longer complete this row, and the replacement
         -- revision becomes claimable as soon as that lease ends.
