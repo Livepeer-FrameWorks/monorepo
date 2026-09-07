@@ -18,7 +18,7 @@ We co-maintain MistServer, so this guide starts with the uncomfortable but usefu
 | Self-managed MistServer, full control, custom triggers, exec inputs, SCTE-35, multiview, wildcard streams, or raw JSON config | Stay on raw MistServer                                     | [mistserver.com](https://mistserver.com/) - [MistServer manual](https://docs.mistserver.org/) - [GitHub](https://github.com/DDVTech/mistserver) |
 | Your Mist or MistLoadBalancer footprint handles the media, but spike capacity is becoming operational work                    | FrameWorks edge or hybrid path for burst capacity          | [Run a FrameWorks edge](#run-a-frameworks-edge)                                                                                                 |
 | You already know how to do multi-region Mist, but want managed federation, telemetry, and routing controls                    | FrameWorks edge or hybrid path for geo coverage            | [Run a FrameWorks edge](#run-a-frameworks-edge)                                                                                                 |
-| You want the full FrameWorks control plane, dashboard, analytics, and media stack, but on your own hardware                   | Sovereign FrameWorks install                               | [Run full sovereign FrameWorks](#run-full-sovereign-frameworks)                                                                                 |
+| You need a customer-operated Foghorn, federation identity, or whole control plane                                             | Outside the supported FrameWorks edge product              | [Understand the product boundary](#customer-operated-control-plane-is-out-of-scope)                                                             |
 | You want to stop running the media engine and control plane                                                                   | Fully managed FrameWorks SaaS                              | [Move to managed FrameWorks](#move-to-managed-frameworks)                                                                                       |
 | You want to keep on-prem capture and add managed reach                                                                        | Hybrid: keep Mist where it works, pull or federate outward | [Run a FrameWorks edge](#run-a-frameworks-edge)                                                                                                 |
 
@@ -32,7 +32,7 @@ We co-maintain MistServer, so this guide starts with the uncomfortable but usefu
 
 - **What stays:** RTMP/RTMPS, E-RTMP, SRT, and WHIP ingest; HLS, LL-HLS, DASH, WebRTC/WHEP, MP4, WebM/MKV, and WebSocket playback; MistServer as the media edge.
 - **What changes:** Mist JSON config and HTTP API calls become GraphQL mutations; Mist triggers become GraphQL subscriptions or platform-managed webhook policies; per-node Prometheus becomes FrameWorks telemetry; `pushStart` and automatic pushes become stream-scoped push targets.
-- **What you gain:** cross-cluster routing, federation, managed GraphQL, sprite-sheet seek previews, `?jwt=` playback auth across protocols, Skipper diagnostics, managed registration for Mist pull sources, wallet auth, MCP, x402, a sovereign GitOps/CLI path for the full platform, and a future marketplace path for operator-owned capacity.
+- **What you gain:** provider-operated cross-cluster routing and federation, managed GraphQL, sprite-sheet seek previews, `?jwt=` playback auth across protocols, Skipper diagnostics, managed registration for Mist pull sources, wallet auth, MCP, x402, and a future marketplace path for operator-owned edge capacity.
 - **What you give up:** raw config portability, custom HTTP/exec triggers, exec inputs, FLV workflows, multiview compositor management, SCTE-35 insertion, JWT-on-ingest, wildcard stream inheritance, custom variables in recording paths, and direct Mist analyser workflows.
 
 ## Why a Mist operator might use FrameWorks
@@ -276,58 +276,13 @@ The `cluster nodes add` path requires a platform context with Quartermaster/Fogh
 
 For hybrid edge nodes, the practical shape is MistServer plus Helmsman on your host, connected back to the FrameWorks network. You manage the edge box; FrameWorks manages the control plane. See [Selfhosters](/hybrid/overview), [Connecting a node](/hybrid/connecting), and [Edge nodes](/hybrid/edge-nodes).
 
-## Run full sovereign FrameWorks
+## Customer-operated control plane is out of scope
 
-Use this path when you want the full FrameWorks experience on your own hardware, not just an attached edge. This is closer to operating a SaaS platform than operating MistServer: you run the control plane, media plane, data plane, dashboard, databases, Kafka, ClickHouse, and the backend Privateer mesh yourself.
+The supported self-hosted product stops at MistServer, Helmsman, Caddy, and the customer edge host. FrameWorks operates Foghorn, federation identity, Livepeer, Chandler, object storage, DNS/TLS, analytics stores, billing, and the control plane.
 
-Sovereign does not mean every subsystem is swappable today. The current stack is opinionated: crypto rails, wallet/x402 surfaces, Purser billing, and the Livepeer integration are part of the platform shape even when you run it yourself. Production deployments also still use S3-compatible object storage and managed DNS integrations; native Ceph-backed storage and self-hosted/Anycast DNS are on the roadmap. If you want FrameWorks without crypto, want to bring your own invoicing/billing system, or want to disable whole product areas instead of leaving them unused, talk to us first. Those are valid sovereign requirements, but the knobs are not all first-class yet.
+Running Foghorn on customer infrastructure is not an advanced edge-install option. It requires a separate federation trust root and compatible deployments of the coupled media and durable services. The repository contains operator tooling for FrameWorks' own environments, but that tooling is not a supported customer whole-stack distribution or runbook.
 
-The maintained workflow is GitOps plus the FrameWorks CLI:
-
-1. **Check out or fork the GitOps repo.** Your cluster manifests, host inventory, environment files, SOPS-encrypted secrets, release targets, and bootstrap overlays live there.
-2. **Define the cluster manifest.** Model central services, media clusters, hosts, domains, mesh identity, external services, and any bootstrap desired state.
-3. **Validate the hosts.** Run `frameworks cluster detect` against the manifest or GitOps checkout before provisioning.
-4. **Provision with the CLI.** The CLI reads GitOps, decrypts SOPS files when given an age key, applies schemas and migrations, provisions infrastructure, deploys services, seeds desired state, and verifies health.
-5. **Operate through GitOps.** Config changes become pull requests; `frameworks cluster provision` converges the approved state.
-
-Local GitOps checkout:
-
-```bash
-frameworks cluster detect --gitops-dir gitops --cluster production
-frameworks cluster provision --gitops-dir gitops --cluster production
-```
-
-GitHub-backed GitOps repo:
-
-```bash
-frameworks cluster provision \
-  --github-repo org/gitops \
-  --cluster production \
-  --age-key ~/.config/sops/age/keys.txt
-```
-
-See [Deployment Overview](/operators/deployment), [Cluster Manifest](/operators/cluster-manifest), [External Services](/operators/external-services), [Mesh Bootstrap](/operators/mesh-bootstrap), and [Operations](/operators/operations).
-
-The cost of admission is real: this is materially heavier than a standalone Mist binary. You run the platform stack: Postgres, Kafka, ClickHouse, Redis where required, Quartermaster, Foghorn, Commodore, Decklog, Periscope, the dashboard, and the Privateer mesh for backend nodes. The direct manifest path is:
-
-```bash
-frameworks cluster provision --manifest cluster.yaml
-```
-
-Use [Manual Deployment](/operators/deployment-manual) as the break-glass explainer for what the CLI configures, not as the preferred install path.
-
-What you keep:
-
-- Your hardware, IP position, and data-egress policy.
-- Direct control over exposed edge ports.
-- The ability to place edges near venues, cameras, or private origins.
-
-What you add:
-
-- Foghorn routing and federation.
-- GraphQL stream, playback, recording, and push-target management.
-- Cross-cluster artifact access for clips, DVR, and VOD.
-- FrameWorks player, access-control, thumbnail, analytics, and Skipper surfaces.
+If that provider boundary does not meet your requirements, remain on raw MistServer or evaluate a separately scoped platform rather than treating edge enrollment as authority to deploy the FrameWorks control plane.
 
 ## Move to managed FrameWorks
 
@@ -374,11 +329,9 @@ Use this path when you want to stop running the media engine and accept the mana
 
 ## Beta and tricky bits
 
-- **Hybrid and self-hosted production cutovers need operator validation.** Test DNS, TLS,
+- **Hybrid-edge production cutovers need operator validation.** Test DNS, TLS,
   firewall policy, capacity, node enrollment, and upgrade runbooks before moving production
   traffic.
-- **Full self-hosting is materially heavier than one Mist binary.** If you want sovereignty plus FrameWorks, budget for the platform services and operational footprint.
-- **Sovereign installs are still opinionated.** Purser does not yet act as a generic adapter for external billing/invoicing, crypto-oriented surfaces such as wallet auth and x402 are not fully removable product modules today, and native storage/DNS primitives are still roadmap work.
 - **Marketplace primitives ship; the vetted public marketplace program is on the [roadmap](/roadmap).**
   Validate operator vetting, pricing, approval flow, and support boundaries before relying on
   third-party clusters for production traffic.

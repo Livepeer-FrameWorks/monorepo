@@ -1,6 +1,6 @@
 ---
 title: "Migrate to FrameWorks"
-description: "FrameWorks is an alternative to video APIs like Mux, Bunny Stream, and Livepeer Studio — run it hosted, hybrid, or fully self-hosted. Moving from another platform? Pick your starting point."
+description: "FrameWorks is an alternative to video APIs like Mux, Bunny Stream, and Livepeer Studio, with managed and hybrid-edge deployment options."
 sidebar:
   order: 1
 ---
@@ -97,12 +97,12 @@ A few things differ from most peers, so we surface them once here instead of rep
   today. Outbound HTTP callbacks are on the roadmap, but subscriptions are the supported event
   surface for current migrations.
 - **Wallet auth + x402 for agents.** Autonomous callers don't need an account. Sign with an EVM wallet (EIP-191) or attach a gasless USDC payment (EIP-3009) and go. See [Agent Access](/agents/overview).
-- **Sovereign and hybrid hosting.** You can run the video and control-plane stack on your own hardware, or mix BYO edge nodes with our managed control plane. S3-compatible storage and managed DNS are external integrations today; native storage and DNS are on the roadmap.
+- **Managed hybrid edges.** You can run MistServer and Helmsman edge nodes on your hardware while FrameWorks operates Foghorn, federation, Livepeer, Chandler, object storage, DNS/TLS, analytics, billing, and the control plane.
 - **Skipper.** The in-product AI consultant runs diagnostics (rebuffering, packet loss, routing), explains the API, and is reachable from the dashboard, the docs (`⌘J`), or via MCP. Treat it as a first-line support channel.
 
 <Aside type="caution" title="Before you plan a production cutover">
-  Items still in motion across the platform: published billing rates, full self-hosting runbooks,
-  the vetted public marketplace program, DRM, and provider-specific migration gaps. Each per-source
+  Items still in motion across the platform: published billing rates, hybrid-edge runbooks, the
+  vetted public marketplace program, DRM, and provider-specific migration gaps. Each per-source
   guide flags the ones relevant to that migration.
 </Aside>
 

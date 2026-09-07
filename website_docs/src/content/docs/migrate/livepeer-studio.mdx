@@ -23,8 +23,8 @@ Livepeer Studio is the canonical Livepeer gateway: steward of the public transco
   [the gap list](#whats-not-yet-at-parity-and-whats-coming) before planning a production cutover.
 
 <Aside type="caution" title="Read before cutting over production traffic">
-  Production-grade items still in motion: published billing rates, full self-hosting runbooks, DRM,
-  and provider-specific migration gaps. See [Beta and tricky bits](#beta-and-tricky-bits) below.
+  Production-grade items still in motion: published billing rates, hybrid-edge runbooks, DRM, and
+  provider-specific migration gaps. See [Beta and tricky bits](#beta-and-tricky-bits) below.
 </Aside>
 
 ## Translation table
@@ -270,7 +270,7 @@ Run a low-traffic test stream through both platforms in parallel for a day. Watc
   WebRTC.
 - **AV1** in the codec list where the selected cluster and process configuration support it.
 - **Sprite-sheet seek previews** — a 10×10 grid plus a WebVTT cue file, generated for every recording, ready for hover-scrub UIs.
-- **Self-hosting and hybrid hosting.** Run the whole stack on your hardware, or mix BYO edge with our managed control plane. Production rollouts need the same capacity, DNS, TLS, and monitoring validation as any operator-owned infrastructure.
+- **Managed hybrid edges.** Run MistServer and Helmsman edge capacity on your hardware while FrameWorks operates Foghorn, federation, Livepeer, Chandler, storage, DNS/TLS, and the control plane.
 - **Cross-cluster federation** — one viewer pool routed across clusters; the closer edge wins automatically.
 - **Agent-first surface.** MCP server at [`/.well-known/mcp.json`](%GATEWAY_URL%/.well-known/mcp.json), wallet auth (EIP-191), and gasless USDC payments via x402 (EIP-3009). See [Agent Access](/agents/overview).
 - **Skipper** — an in-product AI consultant for API discovery and diagnostics. Reach it from the dashboard, the docs (`⌘J`), or MCP.

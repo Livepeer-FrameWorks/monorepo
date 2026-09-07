@@ -17,13 +17,13 @@ FrameWorks centers on **live streaming** — RTMP/RTMPS, E-RTMP, SRT, WHIP, and 
 
 - **What stays:** HLS and MPEG-DASH delivery · MP4 progressive download · resumable / direct-to-S3 uploads · token-style playback access control · custom player branding · webhook-style callbacks for access decisions.
 - **What changes:** REST → GraphQL · API key → developer token (or wallet/x402 for agents) · iframe embed → `<fw-player>` Web Component or framework packages · processing-status webhooks → GraphQL subscriptions or polling · Bunny signed URL tokens → ES256 JWT signing keys delivered via `?jwt=` · per-region replication knob → cluster placement.
-- **What you gain:** RTMP/RTMPS, E-RTMP, SRT, WHIP push ingest · pull-input from RTSP, SRT, RIST, HLS, DTSC, MPEG-TS · DVR with time-shift · clip API · multistream to Twitch, YouTube, Facebook, Kick, X, custom RTMP/SRT · LL-HLS, DASH, WHEP/WebRTC, MP4, WebSocket playback · sprite-sheet seek previews · cross-cluster federation · sovereign and hybrid hosting · agent-first surface (MCP, wallet auth, x402) · Skipper.
+- **What you gain:** RTMP/RTMPS, E-RTMP, SRT, WHIP push ingest · pull-input from RTSP, SRT, RIST, HLS, DTSC, MPEG-TS · DVR with time-shift · clip API · multistream to Twitch, YouTube, Facebook, Kick, X, custom RTMP/SRT · LL-HLS, DASH, WHEP/WebRTC, MP4, WebSocket playback · sprite-sheet seek previews · provider-operated cross-cluster federation · managed hybrid edges · agent-first surface (MCP, wallet auth, x402) · Skipper.
 - **What's not yet at parity:** DRM (FairPlay/Widevine/PlayReady in development) · automatic chapter generation and transcription/caption auto-generation · view-level QoE across third-party players (per-asset retention/heatmaps ship for the FrameWorks player) · per-region replication knob · iframe-embed-as-a-product · first-class Python/PHP/C#/Java/Go SDKs · outbound HTTP webhooks · VOD URL-pull import · watermarking as a managed feature.
 - **What FrameWorks does not replace:** Bunny CDN (general HTTP CDN), Bunny Edge Storage (general object / block storage), Bunny DNS, Bunny Optimizer (image), Magic Containers (edge compute), Bunny Shield (DDoS / WAF). Those are Bunny's broader edge platform — keep them. FrameWorks has adjacent infrastructure work on the [roadmap](/roadmap), but this migration guide is about moving the video workload.
 
 <Aside type="caution" title="Read before cutting over production traffic">
-  Production-grade items still in motion: published billing rates, full self-hosting runbooks, DRM,
-  and provider-specific migration gaps. See [Beta and tricky bits](#beta-and-tricky-bits) below.
+  Production-grade items still in motion: published billing rates, hybrid-edge runbooks, DRM, and
+  provider-specific migration gaps. See [Beta and tricky bits](#beta-and-tricky-bits) below.
 </Aside>
 
 <Aside type="tip">
@@ -298,7 +298,7 @@ Run a low-traffic test through both platforms in parallel for a day. Watch the F
 - **Sprite-sheet seek previews** — a 10×10 grid plus a WebVTT cue file generated for every recording, ready for hover-scrub UIs.
 - **Multistream targets** — Twitch, YouTube, Facebook, Kick, X, and custom RTMP/RTMPS/SRT — see [Multistreaming](/builders/multistreaming).
 - **Cross-cluster federation** — one viewer pool routed across clusters; the closer edge wins automatically.
-- **Self-hosting and hybrid hosting** — run the whole stack on your hardware, or mix BYO edge with our managed control plane. Production rollouts need the same capacity, DNS, TLS, and monitoring validation as any operator-owned infrastructure.
+- **Managed hybrid edges** — run MistServer and Helmsman edge capacity on your hardware while FrameWorks operates Foghorn, federation, Livepeer, Chandler, storage, DNS/TLS, and the control plane.
 - **Agent-first surface** — MCP server at [`/.well-known/mcp.json`](%GATEWAY_URL%/.well-known/mcp.json), wallet auth (EIP-191), gasless USDC payments via x402 (EIP-3009). See [Agent Access](/agents/overview).
 - **Skipper** — an in-product AI consultant for API discovery and diagnostics. Reach it from the dashboard, the docs (`⌘J`), or MCP.
 - **Player on Svelte and as Web Components**, not just React.

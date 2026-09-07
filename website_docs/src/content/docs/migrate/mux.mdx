@@ -40,8 +40,8 @@ worth keeping during the cut-over.
   cutting over production traffic.
 
 <Aside type="caution" title="Read before cutting over production traffic">
-  Production-grade items still in motion: published billing rates, full self-hosting runbooks, DRM,
-  and provider-specific migration gaps. See [Beta and tricky bits](#beta-and-tricky-bits) below.
+  Production-grade items still in motion: published billing rates, hybrid-edge runbooks, DRM, and
+  provider-specific migration gaps. See [Beta and tricky bits](#beta-and-tricky-bits) below.
 </Aside>
 
 ## Translation table
@@ -341,9 +341,10 @@ over once you trust the numbers.
   is tracked on the [roadmap](/roadmap#device-discovery-and-contribution-inputs).
 - **Sprite-sheet seek previews** (Mux's storyboard analogue) — a 10×10 grid plus a WebVTT
   cue file, generated for every recording, ready for hover-scrub UIs.
-- **Self-hosting and hybrid hosting.** Run the whole stack on your own hardware, or mix BYO
-  edge with our managed control plane. Production rollouts need the same capacity, DNS, TLS,
-  and monitoring validation as any operator-owned infrastructure.
+- **Self-hosted edge and hybrid hosting.** Run MistServer and Helmsman edge capacity on your
+  own hardware while FrameWorks operates Foghorn, federation, DNS/TLS, storage, analytics,
+  and the control plane. Customer-operated Foghorn/full-stack self-hosting is not part of the
+  edge product.
 - **Cross-cluster federation** — one viewer pool routed across clusters; the closer edge
   wins automatically.
 - **Agent-first surface.** MCP server at
@@ -372,9 +373,10 @@ your stack about which of these you depend on before cutting over.
   DRM today.
 - **Live auto-captions / transcription** — on the roadmap, not shipping. Mux ships live
   auto-captions today.
-- **Productized custom-domain SKU.** Mux offers productized custom-domain delivery.
-  FrameWorks doesn't gate custom domains as a separate per-tenant SKU today; self-hosted
-  operators can run their own domain however they like.
+- **Custom-domain availability depends on billing entitlement.** Mux offers productized
+  custom-domain delivery. FrameWorks materializes explicit platform-subdomain and BYO-domain
+  entitlements from the active subscription; downgrade tears down served DNS/TLS state while
+  retaining the requested name for later re-entitlement.
 - **Outbound HTTP webhooks** — FrameWorks uses GraphQL subscriptions today. HTTP-callback
   delivery is on the roadmap.
 - **Breadth of first-class server-side SDKs.** Mux ships official SDKs for Node, Python,
