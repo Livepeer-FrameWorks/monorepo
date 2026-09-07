@@ -31,6 +31,7 @@ import (
 	"frameworks/cli/internal/internalpki"
 	meshutil "frameworks/cli/internal/mesh"
 	"frameworks/cli/internal/readiness"
+	"frameworks/cli/internal/releases"
 	"frameworks/cli/internal/ux"
 	"frameworks/cli/pkg/credentials"
 	"frameworks/cli/pkg/detect"
@@ -853,10 +854,10 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedClust
 			// Pull system_tenant_id from QM via gRPC; the readiness report and
 			// downstream bootstrap-admin user creation need it. Alias→UUID is
 			// QM-owned data and never read directly from the CLI.
-			resolveCtx, resolveCancel := context.WithTimeout(ctx, provisionInitializeTimeout)
-			systemTenantID, idErr := resolveSystemTenantIDViaQM(resolveCtx, manifest, runtimeData, raSession)
+			systemTenantCtx, systemTenantCancel := context.WithTimeout(ctx, provisionInitializeTimeout)
+			systemTenantID, idErr := resolveSystemTenantIDViaQM(systemTenantCtx, manifest, runtimeData, raSession)
+			systemTenantCancel()
 			if idErr != nil {
-				resolveCancel()
 				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Resolve system tenant: %v", idErr))
 				reportAutomaticRollbackSkipped(cmd.OutOrStdout(), "control-plane data resolution failed")
 				return fmt.Errorf("resolve system tenant: %w", idErr)
@@ -865,13 +866,15 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedClust
 			if qmAddr, addrErr := resolveServiceGRPCAddr(manifest, "quartermaster", defaultGRPCPort("quartermaster")); addrErr == nil {
 				runtimeData["quartermaster_grpc_addr"] = qmAddr
 			}
-			if err := verifyQuartermasterMeshReachability(ctx, cmd, manifest, sshPool); err != nil {
-				resolveCancel()
-				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Quartermaster mesh reachability failed: %v", err))
+			meshVerifyCtx, meshVerifyCancel := context.WithTimeout(ctx, provisionInitializeTimeout)
+			meshVerifyErr := verifyQuartermasterMeshReachability(meshVerifyCtx, cmd, manifest, sshPool)
+			meshVerifyCancel()
+			if meshVerifyErr != nil {
+				ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Quartermaster mesh reachability failed: %v", meshVerifyErr))
 				fmt.Fprintln(cmd.OutOrStdout(), "  Services depend on quartermaster.internal for bootstrap and runtime discovery.")
 				fmt.Fprintln(cmd.OutOrStdout(), "  Fix mesh reachability and re-run provisioning.")
 				reportAutomaticRollbackSkipped(cmd.OutOrStdout(), "Quartermaster mesh reachability validation failed")
-				return fmt.Errorf("quartermaster mesh reachability failed: %w", err)
+				return fmt.Errorf("quartermaster mesh reachability failed: %w", meshVerifyErr)
 			}
 			// Pre-resolve every cluster's owner_tenant alias to its UUID so the
 			// per-cluster gateway env injection can populate
@@ -884,8 +887,9 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedClust
 			// entirely (Decklog rejects events with no tenant), so a silent
 			// warning would turn a configuration error into invisible data
 			// loss. Clusters without livepeer-gateway can degrade gracefully.
-			ownerMap, ownerErr := resolveClusterOwnerTenantIDs(resolveCtx, manifest, runtimeData, raSession)
-			resolveCancel()
+			ownerResolveCtx, ownerResolveCancel := context.WithTimeout(ctx, provisionInitializeTimeout)
+			ownerMap, ownerErr := resolveClusterOwnerTenantIDs(ownerResolveCtx, manifest, runtimeData, raSession)
+			ownerResolveCancel()
 			if ownerErr != nil {
 				if anyClusterRunsLivepeerGateway(manifest) {
 					ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Resolve cluster owner tenants: %v", ownerErr))
@@ -5785,8 +5789,10 @@ const (
 	provisionApplyTimeout      = 10 * time.Minute
 	provisionValidateTimeout   = 75 * time.Second
 	provisionInitializeTimeout = 2 * time.Minute
-	quartermasterRPCTimeout    = 5 * time.Second
-	nodeBaselineConcurrency    = 8
+	// Quartermaster clients use WaitForReady. Allow a newly established
+	// port-forward to become ready without consuming the two-minute phase.
+	quartermasterRPCTimeout = 30 * time.Second
+	nodeBaselineConcurrency = 8
 )
 
 func runProvisionPhase(parent context.Context, timeout time.Duration, phase string, fn func(context.Context) error) error {
@@ -6925,7 +6931,7 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 	if manifest.RootDomain != "" && env["BRAND_DOMAIN"] == "" {
 		env["BRAND_DOMAIN"] = manifest.RootDomain
 	}
-	applySharedPostgresDatabaseDefaults(baseName, env)
+	applyCatalogPostgresDatabaseDefaults(task, env)
 	if env["DATABASE_USER"] == "" {
 		env["DATABASE_USER"] = strings.ReplaceAll(task.Type, "-", "_")
 	}
@@ -7358,15 +7364,26 @@ func buildDatabaseURL(manifest *inventory.Manifest, primaryHost, port, user, pas
 	return u.String()
 }
 
-func applySharedPostgresDatabaseDefaults(serviceID string, env map[string]string) {
-	switch serviceID {
-	case "periscope-metering":
-		if env["DATABASE_USER"] == "" {
-			env["DATABASE_USER"] = "periscope"
-		}
-		if env["DATABASE_NAME"] == "" {
-			env["DATABASE_NAME"] = "periscope"
-		}
+func applyCatalogPostgresDatabaseDefaults(task *orchestrator.Task, env map[string]string) {
+	if task == nil {
+		return
+	}
+	databaseName, ok := releases.ServiceDatabaseLookup(task.Type)
+	if !ok || strings.TrimSpace(databaseName) == "" {
+		return
+	}
+	// A deploy whose logical service owns a same-named database may be expanded
+	// into a physical per-cell alias (for example foghorn-eu). Shared-database
+	// consumers such as periscope-query and periscope-ingest instead retain the
+	// catalogued `periscope` database even when their deployment is aliased.
+	if task.ServiceID != task.Type && databaseName == task.Type {
+		return
+	}
+	if env["DATABASE_USER"] == "" {
+		env["DATABASE_USER"] = databaseName
+	}
+	if env["DATABASE_NAME"] == "" {
+		env["DATABASE_NAME"] = databaseName
 	}
 }
 
@@ -8616,14 +8633,20 @@ func verifyQuartermasterMeshReachability(ctx context.Context, cmd *cobra.Command
 	fmt.Fprintf(cmd.OutOrStdout(), "  Verifying Quartermaster mesh reachability on %d privateer host(s)...\n", len(orchestrator.EffectivePrivateerHostsForManifest(privateerSvc, manifest)))
 	base := provisioner.NewBaseProvisioner("quartermaster-mesh-verify", pool)
 	var failures []string
-	for _, hostName := range orchestrator.EffectivePrivateerHostsForManifest(privateerSvc, manifest) {
+	hosts := orchestrator.EffectivePrivateerHostsForManifest(privateerSvc, manifest)
+	for index, hostName := range hosts {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("quartermaster mesh reachability timed out after checking %d of %d privateer hosts: %w", index, len(hosts), err)
+		}
 		hostInfo, ok := manifest.Hosts[hostName]
 		if !ok {
 			failures = append(failures, fmt.Sprintf("%s: not found in manifest", hostName))
 			continue
 		}
 		cmdText := fmt.Sprintf("if command -v nc >/dev/null 2>&1; then nc -vz -w 3 %[1]s %[2]d; elif command -v timeout >/dev/null 2>&1 && command -v bash >/dev/null 2>&1; then timeout 4 bash -c 'cat < /dev/null > /dev/tcp/%[1]s/%[2]d'; else echo 'missing TCP probe tool: install nc or provide bash+timeout'; exit 127; fi", qmIP, qmPort)
-		result, err := base.RunCommand(ctx, hostInfo, cmdText)
+		hostCtx, hostCancel := context.WithTimeout(ctx, 10*time.Second)
+		result, err := base.RunCommand(hostCtx, hostInfo, cmdText)
+		hostCancel()
 		if err != nil {
 			detail := strings.TrimSpace(routeResultOutput(result))
 			if detail == "" {

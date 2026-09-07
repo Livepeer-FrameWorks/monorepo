@@ -180,12 +180,10 @@ func TestServiceDependsOnClickHouse(t *testing.T) {
 	}
 }
 
-// TestUpgradeGate_ClickHouseCheckedWhenPostgresDisabled exercises the gate's engine ROUTING through the real
-// runUpgradePreDeployGate (not just the topology classifier): for a ClickHouse-only service (periscope-ingest) it must
-// run the ClickHouse branch even with Postgres disabled, and it must NOT run the Postgres branch — the engine gates are
-// independent topology-driven branches, so a disabled Postgres never suppresses the ClickHouse check. The SSH-backed
-// engine checks are stubbed via their seams so the routing is observable with no live cluster.
-func TestUpgradeGate_ClickHouseCheckedWhenPostgresDisabled(t *testing.T) {
+// TestUpgradeGate_PeriscopeIngestChecksBothStores exercises the gate's engine routing through the real
+// runUpgradePreDeployGate. Periscope ingest writes ClickHouse and uses Postgres advisory locks, so both independent
+// branches must run. The SSH-backed engine checks are stubbed so routing is observable with no live cluster.
+func TestUpgradeGate_PeriscopeIngestChecksBothStores(t *testing.T) {
 	// This test exercises the migration-gate routing, not the CLI version floor; give it a concrete version at/above
 	// the catalog's min_cli_version so the shared floor check (checkCLIVersionFloor) passes.
 	origVer := fwv.Version
@@ -210,19 +208,19 @@ func TestUpgradeGate_ClickHouseCheckedWhenPostgresDisabled(t *testing.T) {
 		return nil
 	}
 
-	// periscope-ingest is ClickHouse-only (topology: InfraClickHouse, no InfraDatabase). Postgres is NOT enabled.
+	// The stubbed engine checks make the topology routing observable without requiring either engine in this fixture.
 	manifest := &inventory.Manifest{}
 	rc := &resolvedCluster{Manifest: manifest}
 	err := runUpgradePreDeployGate(context.Background(), &cobra.Command{}, rc, nil, manifest,
 		"v0.3.0", "periscope-ingest", "periscope-ingest", false, true /* skipDataMigrationCheck */)
 	if err != nil {
-		t.Fatalf("gate must not error for a ClickHouse-only service with stubbed checks: %v", err)
+		t.Fatalf("gate must not error for a dual-store service with stubbed checks: %v", err)
 	}
 	if !chCalled {
 		t.Error("ClickHouse migration check must run for a ClickHouse-dependent service even with Postgres disabled")
 	}
-	if pgCalled {
-		t.Error("Postgres check must not run for a ClickHouse-only service")
+	if !pgCalled {
+		t.Error("Postgres migration check must run for Periscope ingest's lease store")
 	}
 	if !floorCalled {
 		t.Error("baseline-floor guard must run")

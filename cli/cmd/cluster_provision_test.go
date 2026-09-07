@@ -298,12 +298,15 @@ func TestQuartermasterBootstrapUsesFreshContextForAliasResolution(t *testing.T) 
 	}
 
 	bootstrapCall := strings.Index(src, "runServiceBootstrap(bootstrapCtx")
-	resolveCtx := strings.Index(src, "resolveCtx, resolveCancel := context.WithTimeout(ctx, provisionInitializeTimeout)")
-	resolveCall := strings.Index(src, "resolveSystemTenantIDViaQM(resolveCtx")
-	if bootstrapCall < 0 || resolveCtx < 0 || resolveCall < 0 {
+	systemCtx := strings.Index(src, "systemTenantCtx, systemTenantCancel := context.WithTimeout(ctx, provisionInitializeTimeout)")
+	resolveCall := strings.Index(src, "resolveSystemTenantIDViaQM(systemTenantCtx")
+	meshCtx := strings.Index(src, "meshVerifyCtx, meshVerifyCancel := context.WithTimeout(ctx, provisionInitializeTimeout)")
+	ownerCtx := strings.Index(src, "ownerResolveCtx, ownerResolveCancel := context.WithTimeout(ctx, provisionInitializeTimeout)")
+	ownerCall := strings.Index(src, "resolveClusterOwnerTenantIDs(ownerResolveCtx")
+	if bootstrapCall < 0 || systemCtx < 0 || resolveCall < 0 || meshCtx < 0 || ownerCtx < 0 || ownerCall < 0 {
 		t.Fatalf("expected bootstrap call, fresh resolve context, and resolve call in cluster_provision.go")
 	}
-	if bootstrapCall >= resolveCtx || resolveCtx >= resolveCall {
+	if bootstrapCall >= systemCtx || systemCtx >= resolveCall || resolveCall >= meshCtx || meshCtx >= ownerCtx || ownerCtx >= ownerCall {
 		t.Fatalf("fresh resolve context must be created after Quartermaster bootstrap and before alias resolution")
 	}
 }
@@ -3083,7 +3086,7 @@ func TestBuildServiceEnvVarsCoversRuntimeEnvDependencies(t *testing.T) {
 		{
 			serviceID: "periscope-ingest",
 			want:      map[string]string{"QUARTERMASTER_GRPC_ADDR": "quartermaster.internal:19002"},
-			keys:      []string{"CLICKHOUSE_ADDR", "CLICKHOUSE_DB", "CLICKHOUSE_USER", "CLICKHOUSE_PASSWORD", "KAFKA_BROKERS", "KAFKA_CLUSTER_ID", "SERVICE_TOKEN"},
+			keys:      []string{"DATABASE_URL", "CLICKHOUSE_ADDR", "CLICKHOUSE_DB", "CLICKHOUSE_USER", "CLICKHOUSE_PASSWORD", "KAFKA_BROKERS", "KAFKA_CLUSTER_ID", "SERVICE_TOKEN"},
 		},
 		{
 			serviceID: "periscope-metering",
@@ -3243,7 +3246,7 @@ func TestBuildServiceEnvVarsEscapesDatabaseURLPassword(t *testing.T) {
 	}
 }
 
-func TestBuildServiceEnvVarsUsesSharedPeriscopeMeteringDatabaseRole(t *testing.T) {
+func TestBuildServiceEnvVarsUsesCatalogDeclaredSharedPeriscopeDatabase(t *testing.T) {
 	envFile := writeTestEnvFile(t, testSharedSecrets+"DATABASE_PASSWORD=periscope-pass\n")
 	manifest := &inventory.Manifest{
 		Profile:  "dev",
@@ -3259,27 +3262,27 @@ func TestBuildServiceEnvVarsUsesSharedPeriscopeMeteringDatabaseRole(t *testing.T
 			},
 		},
 	}
-	task := &orchestrator.Task{
-		Name:      "periscope-metering",
-		Type:      "periscope-metering",
-		ServiceID: "periscope-metering",
-		Host:      "central-eu-1",
-		Phase:     orchestrator.PhaseApplications,
-	}
-
-	env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
-	if err != nil {
-		t.Fatalf("buildServiceEnvVars returned error: %v", err)
-	}
-	parsed, err := url.Parse(env["DATABASE_URL"])
-	if err != nil {
-		t.Fatalf("DATABASE_URL should parse: %v", err)
-	}
-	if got := parsed.User.Username(); got != "periscope" {
-		t.Fatalf("expected periscope database user, got %q", got)
-	}
-	if got := strings.TrimPrefix(parsed.Path, "/"); got != "periscope" {
-		t.Fatalf("expected periscope database name, got %q", got)
+	for _, serviceID := range []string{"periscope-ingest", "periscope-query", "periscope-metering"} {
+		t.Run(serviceID, func(t *testing.T) {
+			task := &orchestrator.Task{
+				Name: serviceID, Type: serviceID, ServiceID: serviceID,
+				Host: "central-eu-1", Phase: orchestrator.PhaseApplications,
+			}
+			env, err := buildServiceEnvVars(task, manifest, map[string]any{}, "", "", testLoadSharedEnv(t, manifest), nil, "native")
+			if err != nil {
+				t.Fatalf("buildServiceEnvVars returned error: %v", err)
+			}
+			parsed, err := url.Parse(env["DATABASE_URL"])
+			if err != nil {
+				t.Fatalf("DATABASE_URL should parse: %v", err)
+			}
+			if got := parsed.User.Username(); got != "periscope" {
+				t.Fatalf("expected catalog database user periscope, got %q", got)
+			}
+			if got := strings.TrimPrefix(parsed.Path, "/"); got != "periscope" {
+				t.Fatalf("expected catalog database name periscope, got %q", got)
+			}
+		})
 	}
 }
 

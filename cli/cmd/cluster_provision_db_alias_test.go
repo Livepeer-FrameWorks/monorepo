@@ -8,19 +8,25 @@ import (
 	"frameworks/cli/pkg/orchestrator"
 )
 
-func TestApplySharedPostgresDatabaseDefaultsOnlyTargetsMetering(t *testing.T) {
-	for _, serviceID := range []string{"periscope-query", "periscope-ingest"} {
+func TestApplyCatalogPostgresDatabaseDefaultsUsesSharedPeriscopeDatabase(t *testing.T) {
+	for _, serviceID := range []string{"periscope-query", "periscope-ingest", "periscope-metering"} {
 		env := map[string]string{}
-		applySharedPostgresDatabaseDefaults(serviceID, env)
-		if env["DATABASE_NAME"] != "" || env["DATABASE_USER"] != "" {
-			t.Errorf("%s received PostgreSQL defaults despite not opening PostgreSQL: %#v", serviceID, env)
+		applyCatalogPostgresDatabaseDefaults(&orchestrator.Task{Type: serviceID, ServiceID: serviceID}, env)
+		if env["DATABASE_NAME"] != "periscope" || env["DATABASE_USER"] != "periscope" {
+			t.Errorf("%s defaults = %#v, want catalog database and user periscope", serviceID, env)
 		}
 	}
 
 	env := map[string]string{}
-	applySharedPostgresDatabaseDefaults("periscope-metering", env)
+	applyCatalogPostgresDatabaseDefaults(&orchestrator.Task{Type: "foghorn", ServiceID: "foghorn-eu"}, env)
+	if env["DATABASE_NAME"] != "" || env["DATABASE_USER"] != "" {
+		t.Fatalf("aliased foghorn received logical database defaults: %#v", env)
+	}
+
+	env = map[string]string{}
+	applyCatalogPostgresDatabaseDefaults(&orchestrator.Task{Type: "periscope-query", ServiceID: "periscope-query-eu"}, env)
 	if env["DATABASE_NAME"] != "periscope" || env["DATABASE_USER"] != "periscope" {
-		t.Fatalf("periscope-metering defaults = %#v, want periscope database and user", env)
+		t.Fatalf("aliased periscope query defaults = %#v, want shared catalog database", env)
 	}
 }
 
