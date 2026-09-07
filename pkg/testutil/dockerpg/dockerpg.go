@@ -221,7 +221,35 @@ const (
 
 // Run executes `docker run` (and any other image-pulling command) under RunTimeout and returns its combined output.
 func Run(args ...string) (string, error) {
+	args = withEphemeralPostgresData(args)
 	return runDocker(context.Background(), RunTimeout, args...)
+}
+
+// withEphemeralPostgresData keeps throwaway PostgreSQL fixtures out of Docker's
+// persistent volume store. The official image declares its data directory as a
+// volume, so an otherwise unmounted test container leaves an anonymous volume
+// behind even when the container is removed.
+func withEphemeralPostgresData(args []string) []string {
+	if len(args) == 0 || args[0] != "run" {
+		return args
+	}
+	postgresFixture := false
+	hasEphemeralData := false
+	for i, arg := range args {
+		if strings.HasPrefix(arg, "POSTGRES_PASSWORD=") {
+			postgresFixture = true
+		}
+		if strings.HasPrefix(arg, "--tmpfs=/var/lib/postgresql") ||
+			(arg == "--tmpfs" && i+1 < len(args) && args[i+1] == "/var/lib/postgresql") {
+			hasEphemeralData = true
+		}
+	}
+	if !postgresFixture || hasEphemeralData {
+		return args
+	}
+	out := make([]string, 0, len(args)+2)
+	out = append(out, args[0], "--tmpfs", "/var/lib/postgresql")
+	return append(out, args[1:]...)
 }
 
 // CLI runs a short-lived docker command (inspect/logs/rm) under cliTimeout. A timeout surfaces as a non-nil error (the

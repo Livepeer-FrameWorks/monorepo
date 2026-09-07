@@ -1,6 +1,50 @@
 package dockerpg
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
+
+func TestWithEphemeralPostgresData(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{
+			name: "postgres fixture",
+			args: []string{"run", "-d", "-e", "POSTGRES_PASSWORD=harness", "postgres:18"},
+			want: []string{"run", "--tmpfs", "/var/lib/postgresql", "-d", "-e", "POSTGRES_PASSWORD=harness", "postgres:18"},
+		},
+		{
+			name: "existing split tmpfs",
+			args: []string{"run", "--tmpfs", "/var/lib/postgresql", "-e", "POSTGRES_PASSWORD=harness", "postgres:18"},
+			want: []string{"run", "--tmpfs", "/var/lib/postgresql", "-e", "POSTGRES_PASSWORD=harness", "postgres:18"},
+		},
+		{
+			name: "existing joined tmpfs",
+			args: []string{"run", "--tmpfs=/var/lib/postgresql:rw", "-e", "POSTGRES_PASSWORD=harness", "postgres:18"},
+			want: []string{"run", "--tmpfs=/var/lib/postgresql:rw", "-e", "POSTGRES_PASSWORD=harness", "postgres:18"},
+		},
+		{
+			name: "yugabyte fixture",
+			args: []string{"run", "yugabytedb/yugabyte:2025"},
+			want: []string{"run", "yugabytedb/yugabyte:2025"},
+		},
+		{
+			name: "non run command",
+			args: []string{"inspect", "fixture"},
+			want: []string{"inspect", "fixture"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := withEphemeralPostgresData(tt.args); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("withEphemeralPostgresData() = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
 
 func TestInfrastructureImageRequiresPinnedPair(t *testing.T) {
 	image, digest, err := infrastructureImage(`
