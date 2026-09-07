@@ -300,6 +300,13 @@ production.
    Gateway/Foghorn reload canonical billing status and run the normal
    suspension/balance policy before releasing work.
 
+Settlement authorization is resolved after the resource owner is known. Any
+authenticated tenant member may pay a `viewer://` playback requirement, and the
+credit goes to the resolved stream/artifact tenant rather than the caller's
+tenant. Direct top-ups and every non-viewer resource require `billing:write`
+plus tenant owner/admin authority for the resolved target tenant. Demo mode does
+not bypass either rule.
+
 Direct x402 execution of a side-effecting GraphQL/MCP mutation is rejected
 before settlement until that mutation's owning service has registered durable
 idempotency. Use `submit_payment` (or the payment-recovery API) to top up, then
@@ -407,8 +414,13 @@ deployment.
 x402 is payment, not login. Zero-value authorizations are rejected and payment
 headers are not authentication credentials. Agents authenticate with the
 wallet challenge flow or another normal credential, then use x402 to top up the
-resolved tenant. Anonymous viewer payments may only target the stream owner's
-resolved tenant-specific address.
+resolved tenant. Anonymous viewer payments are limited to the playback payment
+middleware and may only target the stream owner's resolved tenant-specific
+address. Authenticated GraphQL, MCP, and payment-header settlement allows any
+tenant member with billing scope to fund a `viewer://` playback requirement.
+Every non-viewer resource and direct tenant top-up requires `ManageBilling` for
+the resolved tenant. A private resource owned by another tenant is reported as
+not found so its identifier is never disclosed through authorization errors.
 
 ### Key Files
 
@@ -462,13 +474,38 @@ annotations.
 
 JWT and wallet sessions use the represented interactive user's existing role.
 API tokens are fail-closed and require the tool's exact domain scope:
-`account:*`, `billing:*`, `streams:*`, `analytics:read`, `support:read`,
-`infrastructure:*`, `developer:*`, `consultant:use`, or `security:*`. A
+`account:read`, `settings:write`, `billing:*`, `streams:*`, `analytics:read`,
+`support:read`, `infrastructure:*`, `developer:*`, `consultant:use`, or
+`security:*`. A
 high-risk tool called with an API token additionally requires
 `mcp:high-risk`. Granting that scope is the owner's explicit pre-authorization
 for unattended destructive, credential-changing, financially costly, or
 arbitrary-query operations; per-tool confirmation fields and downstream
 authorization checks still apply.
+
+`billing:write`, `settings:write`, and non-public `infrastructure:read` /
+`infrastructure:write` tools additionally require a tenant owner or admin
+identity. Tokens and wallets linked to member users do not receive those tools
+in `tools/list`; granting the scope alone never elevates the user's tenant role.
+Public marketplace discovery remains available without that privileged role.
+
+API-token permissions are exact matches. Coarse `read` and `write` values were
+historically mintable but never matched the namespaced authorization gates, so
+new tokens reject them rather than silently widening their authority. Rotate an
+existing coarse token with the narrow domain scopes its automation actually
+uses; omitted permissions default to `streams:read`. Retention mutations use
+`billing:write`; `set_preferred_cluster` and `update_tenant_settings` use
+`settings:write`.
+
+For Quartermaster, Commodore, and Purser calls, Gateway turns a successfully
+validated API token into a fresh one-minute, audience-bound JWT for each RPC
+attempt. It carries the token ID, tenant role, and exact permissions. The
+destination validates the audience, consumes the unique JTI in its own
+database, and repeats its scope and tenant/resource decision; a captured
+assertion therefore cannot be replayed. Assertions remain separate from the
+interactive session JWT, never cross audiences, and are rejected by
+service-only methods. Purser additionally defaults unknown API-token RPCs to
+deny and binds any request `tenant_id` to the delegated tenant.
 
 Public operations remain available without credentials. When an API token is
 present, its scopes still apply to public operations so an authenticated,

@@ -66,7 +66,7 @@ Any MCP-compatible client can connect using the endpoint URL and authentication 
 ### Scoped access and risk controls
 
 Interactive JWT and wallet sessions use the signed-in user's platform role. API tokens are narrower:
-each tool requires its published domain permission, such as `streams:read`, `streams:write`,
+each tool requires its exact published domain permission, such as `streams:read`, `streams:write`,
 `billing:read`, `billing:write`, `analytics:read`, or `infrastructure:write`. Account, support,
 developer, consultant, and wallet-management tools use the corresponding `account:*`,
 `support:read`, `developer:*`, `consultant:use`, and `security:*` scopes.
@@ -83,6 +83,13 @@ The server filters tool and resource discovery to data callable by the current c
 reads require their matching domain read scope and unknown resources fail closed. Tool annotations
 describe read-only, destructive, idempotent, and open-world behavior for clients, but the Gateway's
 server-side policy is authoritative.
+
+The historical coarse values `read` and `write` are not wildcards and new tokens
+reject them. Rotate tokens to exact scopes. In particular, retention tools now use
+`billing:read` or `billing:write`, and both `set_preferred_cluster` and
+`update_tenant_settings` use `settings:write`; tokens created with their former stream or infrastructure scopes
+must be rotated. Omitting permissions creates a read-only token with
+`streams:read`.
 
 Input objects reject unknown fields and publish constrained values as machine-readable enums.
 Requests are capped at 256 KiB, stateful sessions expire after 30 minutes, and tool results or
@@ -185,87 +192,87 @@ email, and operator settlement.
 
 Actions the agent can perform.
 
-| Tool                             | Description                                       | Requires       |
-| -------------------------------- | ------------------------------------------------- | -------------- |
-| `request_wallet_challenge`       | Request a single-use EIP-191 login/link challenge | None           |
-| `list_linked_wallets`            | List wallets linked to the authenticated user     | Auth           |
-| `link_wallet`                    | Link a wallet using a fresh signed challenge      | Auth           |
-| `unlink_wallet`                  | Unlink a wallet while retaining a sign-in method  | Auth           |
-| `link_email`                     | Add email/password and send verification          | Auth           |
-| `activate_free_tier`             | Activate Free after email verification            | Auth           |
-| `get_tenant_settings`            | Read tenant identity and routing settings         | Auth           |
-| `update_tenant_settings`         | Update tenant name, primary cluster, or model     | Auth           |
-| `update_billing_details`         | Set billing address                               | Auth           |
-| `get_payment_options`            | Get tenant-bound x402 payment options             | Auth           |
-| `submit_payment`                 | Submit an x402 top-up payment                     | Auth           |
-| `topup_balance`                  | Request ETH or USDC deposit address (locked rate) | Auth           |
-| `check_topup`                    | Check crypto payment status                       | Auth           |
-| `pay_invoice`                    | Create or resume an invoice payment               | Auth + Billing |
-| `start_postpaid_setup`           | Start Stripe or Mollie hosted postpaid setup      | Auth + Billing |
-| `complete_mollie_postpaid_setup` | Verify mandate and activate Mollie postpaid       | Auth + Billing |
-| `create_stream`                  | Create a push or pull stream                      | Auth           |
-| `update_stream`                  | Update stream settings or pull-source config      | Auth           |
-| `delete_stream`                  | Delete a stream                                   | Auth + Confirm |
-| `list_stream_keys`               | List stream ingest keys                           | Auth           |
-| `create_stream_key`              | Create an additional ingest key                   | Auth + Confirm |
-| `delete_stream_key`              | Deactivate an ingest key                          | Auth + Confirm |
-| `refresh_stream_key`             | Rotate the primary stream key                     | Auth + Confirm |
-| `validate_stream_key`            | Validate an ingest key                            | Auth           |
-| `list_push_targets`              | List masked multistream destinations              | Auth           |
-| `create_push_target`             | Add a multistream destination                     | Auth           |
-| `update_push_target`             | Update or enable a multistream destination        | Auth           |
-| `delete_push_target`             | Delete a multistream destination                  | Auth           |
-| `create_clip`                    | Create clip from stream                           | Auth + Balance |
-| `delete_clip`                    | Delete a clip                                     | Auth           |
-| `start_dvr`                      | Start DVR recording                               | Auth + Balance |
-| `stop_dvr`                       | Stop DVR recording                                | Auth           |
-| `delete_dvr`                     | Delete a DVR recording and stored media           | Auth + Confirm |
-| `get_retention_policy`           | Read tenant media-retention defaults and bounds   | Auth           |
-| `set_retention_policy`           | Set tenant media-retention defaults               | Auth           |
-| `set_stream_retention_overrides` | Set DVR/clip retention overrides for a stream     | Auth           |
-| `update_asset_retention`         | Override retention for DVR, clip, or VOD          | Auth + Balance |
-| `reset_asset_retention`          | Reset asset retention to the cascade default      | Auth + Confirm |
-| `create_vod_upload`              | Start a VOD upload                                | Auth + Balance |
-| `get_vod_upload_status`          | Inspect uploaded and missing VOD parts            | Auth           |
-| `complete_vod_upload`            | Finalize a VOD upload                             | Auth + Balance |
-| `abort_vod_upload`               | Cancel an upload                                  | Auth           |
-| `delete_vod_asset`               | Delete a VOD asset                                | Auth + Confirm |
-| `resolve_playback_endpoint`      | Get viewer playback URLs                          | None           |
-| `list_signing_keys`              | List playback signing keys                        | Auth           |
-| `create_signing_key`             | Create a one-shot ES256 private key               | Auth + Confirm |
-| `revoke_signing_key`             | Revoke a playback signing key                     | Auth + Confirm |
-| `set_playback_policy`            | Set JWT or webhook playback policy                | Auth + Confirm |
-| `clear_playback_policy`          | Clear playback policy                             | Auth + Confirm |
-| `test_playback_access`           | Test JWT/webhook playback policy behavior         | Auth           |
-| `diagnose_rebuffering`           | Analyze rebuffering events                        | Auth           |
-| `diagnose_buffer_health`         | Analyze buffer health and dry events              | Auth           |
-| `diagnose_packet_loss`           | Analyze packet loss (protocol-aware)              | Auth           |
-| `diagnose_routing`               | Analyze CDN routing decisions                     | Auth           |
-| `get_stream_health_summary`      | Aggregated stream health metrics                  | Auth           |
-| `get_anomaly_report`             | Detect anomalies vs baseline                      | Auth           |
-| `list_support_conversations`     | List recent support conversations                 | Auth           |
-| `search_support_history`         | Search support conversations                      | Auth           |
-| `introspect_schema`              | Explore the GraphQL schema                        | Auth           |
-| `generate_query`                 | Generate a GraphQL query from templates           | Auth           |
-| `execute_query`                  | Execute a GraphQL query                           | Auth + Balance |
-| `ask_consultant`                 | Full Skipper pipeline with confidence tagging     | Auth + Balance |
-| `browse_marketplace`             | Browse available infrastructure clusters          | None           |
-| `subscribe_to_cluster`           | Subscribe to a cluster                            | Auth           |
-| `unsubscribe_from_cluster`       | Remove a cluster subscription                     | Auth + Confirm |
-| `create_cluster_invite`          | Invite a tenant to subscribe to an owned cluster  | Auth           |
-| `revoke_cluster_invite`          | Revoke an outstanding cluster invite              | Auth           |
-| `accept_cluster_invite`          | Redeem a cluster invite                           | Auth           |
-| `request_cluster_subscription`   | Request access to a cluster                       | Auth           |
-| `approve_subscription_request`   | Approve a pending cluster subscription            | Auth           |
-| `reject_subscription_request`    | Reject a pending cluster subscription             | Auth           |
-| `set_preferred_cluster`          | Set preferred cluster for DNS steering            | Auth           |
-| `update_cluster_marketplace`     | Update cluster visibility, approval, or pricing   | Auth + Confirm |
-| `create_enrollment_token`        | Create an enrollment token for edge bootstrap     | Auth           |
-| `get_node_info`                  | Fetch node details                                | Auth           |
-| `manage_node`                    | Activate/deactivate/drain/restart a node          | Auth           |
-| `set_node_mode`                  | Set node mode (normal/draining/maintenance)       | Auth           |
-| `get_node_health`                | Node health and metrics summary                   | Auth           |
-| `create_edge_cluster`            | Create edge cluster (returns token and Foghorn)   | Auth           |
+| Tool                             | Description                                       | Requires                               |
+| -------------------------------- | ------------------------------------------------- | -------------------------------------- |
+| `request_wallet_challenge`       | Request a single-use EIP-191 login/link challenge | None                                   |
+| `list_linked_wallets`            | List wallets linked to the authenticated user     | Auth                                   |
+| `link_wallet`                    | Link a wallet using a fresh signed challenge      | Auth                                   |
+| `unlink_wallet`                  | Unlink a wallet while retaining a sign-in method  | Auth                                   |
+| `link_email`                     | Add email/password and send verification          | Auth                                   |
+| `activate_free_tier`             | Activate Free after email verification            | Auth                                   |
+| `get_tenant_settings`            | Read tenant identity and routing settings         | Auth                                   |
+| `update_tenant_settings`         | Update tenant name, primary cluster, or model     | Owner/Admin                            |
+| `update_billing_details`         | Set billing address                               | Auth                                   |
+| `get_payment_options`            | Get tenant-bound x402 payment options             | Auth                                   |
+| `submit_payment`                 | Submit an x402 top-up payment                     | Auth                                   |
+| `topup_balance`                  | Request ETH or USDC deposit address (locked rate) | Auth                                   |
+| `check_topup`                    | Check crypto payment status                       | Auth                                   |
+| `pay_invoice`                    | Create or resume an invoice payment               | Auth + Billing                         |
+| `start_postpaid_setup`           | Start Stripe or Mollie hosted postpaid setup      | Auth + Billing                         |
+| `complete_mollie_postpaid_setup` | Verify mandate and activate Mollie postpaid       | Auth + Billing                         |
+| `create_stream`                  | Create a push or pull stream                      | Auth                                   |
+| `update_stream`                  | Update stream settings or pull-source config      | Auth                                   |
+| `delete_stream`                  | Delete a stream                                   | Auth + Confirm                         |
+| `list_stream_keys`               | List stream ingest keys                           | Auth                                   |
+| `create_stream_key`              | Create an additional ingest key                   | Auth + Confirm                         |
+| `delete_stream_key`              | Deactivate an ingest key                          | Auth + Confirm                         |
+| `refresh_stream_key`             | Rotate the primary stream key                     | Auth + Confirm                         |
+| `validate_stream_key`            | Validate an ingest key                            | Auth                                   |
+| `list_push_targets`              | List masked multistream destinations              | Auth                                   |
+| `create_push_target`             | Add a multistream destination                     | Auth                                   |
+| `update_push_target`             | Update or enable a multistream destination        | Auth                                   |
+| `delete_push_target`             | Delete a multistream destination                  | Auth                                   |
+| `create_clip`                    | Create clip from stream                           | Auth + Balance                         |
+| `delete_clip`                    | Delete a clip                                     | Auth                                   |
+| `start_dvr`                      | Start DVR recording                               | Auth + Balance                         |
+| `stop_dvr`                       | Stop DVR recording                                | Auth                                   |
+| `delete_dvr`                     | Delete a DVR recording and stored media           | Auth + Confirm                         |
+| `get_retention_policy`           | Read tenant media-retention defaults and bounds   | Auth                                   |
+| `set_retention_policy`           | Set tenant media-retention defaults               | Owner/Admin + Billing                  |
+| `set_stream_retention_overrides` | Set DVR/clip retention overrides for a stream     | Owner/Admin + Billing                  |
+| `update_asset_retention`         | Override retention for DVR, clip, or VOD          | Owner/Admin + Billing                  |
+| `reset_asset_retention`          | Reset asset retention to the cascade default      | Owner/Admin + Billing + Confirm        |
+| `create_vod_upload`              | Start a VOD upload                                | Auth + Balance                         |
+| `get_vod_upload_status`          | Inspect uploaded and missing VOD parts            | Auth                                   |
+| `complete_vod_upload`            | Finalize a VOD upload                             | Auth + Balance                         |
+| `abort_vod_upload`               | Cancel an upload                                  | Auth                                   |
+| `delete_vod_asset`               | Delete a VOD asset                                | Auth + Confirm                         |
+| `resolve_playback_endpoint`      | Get viewer playback URLs                          | None                                   |
+| `list_signing_keys`              | List playback signing keys                        | Auth                                   |
+| `create_signing_key`             | Create a one-shot ES256 private key               | Auth + Confirm                         |
+| `revoke_signing_key`             | Revoke a playback signing key                     | Auth + Confirm                         |
+| `set_playback_policy`            | Set JWT or webhook playback policy                | Auth + Confirm                         |
+| `clear_playback_policy`          | Clear playback policy                             | Auth + Confirm                         |
+| `test_playback_access`           | Test JWT/webhook playback policy behavior         | Auth                                   |
+| `diagnose_rebuffering`           | Analyze rebuffering events                        | Auth                                   |
+| `diagnose_buffer_health`         | Analyze buffer health and dry events              | Auth                                   |
+| `diagnose_packet_loss`           | Analyze packet loss (protocol-aware)              | Auth                                   |
+| `diagnose_routing`               | Analyze CDN routing decisions                     | Auth                                   |
+| `get_stream_health_summary`      | Aggregated stream health metrics                  | Auth                                   |
+| `get_anomaly_report`             | Detect anomalies vs baseline                      | Auth                                   |
+| `list_support_conversations`     | List recent support conversations                 | Auth                                   |
+| `search_support_history`         | Search support conversations                      | Auth                                   |
+| `introspect_schema`              | Explore the GraphQL schema                        | Auth                                   |
+| `generate_query`                 | Generate a GraphQL query from templates           | Auth                                   |
+| `execute_query`                  | Execute a GraphQL query                           | Auth + Balance                         |
+| `ask_consultant`                 | Full Skipper pipeline with confidence tagging     | Auth + Balance                         |
+| `browse_marketplace`             | Browse available infrastructure clusters          | None                                   |
+| `subscribe_to_cluster`           | Subscribe to a cluster                            | Owner/Admin + Infrastructure           |
+| `unsubscribe_from_cluster`       | Remove a cluster subscription                     | Owner/Admin + Infrastructure + Confirm |
+| `create_cluster_invite`          | Invite a tenant to subscribe to an owned cluster  | Owner/Admin + Infrastructure           |
+| `revoke_cluster_invite`          | Revoke an outstanding cluster invite              | Owner/Admin + Infrastructure           |
+| `accept_cluster_invite`          | Redeem a cluster invite                           | Owner/Admin + Infrastructure           |
+| `request_cluster_subscription`   | Request access to a cluster                       | Owner/Admin + Infrastructure           |
+| `approve_subscription_request`   | Approve a pending cluster subscription            | Owner/Admin + Infrastructure           |
+| `reject_subscription_request`    | Reject a pending cluster subscription             | Owner/Admin + Infrastructure           |
+| `set_preferred_cluster`          | Set preferred cluster for DNS steering            | Owner/Admin + Settings                 |
+| `update_cluster_marketplace`     | Update cluster visibility, approval, or pricing   | Owner/Admin + Infrastructure + Confirm |
+| `create_enrollment_token`        | Create an enrollment token for edge bootstrap     | Owner/Admin + Infrastructure           |
+| `get_node_info`                  | Fetch node details                                | Owner/Admin + Infrastructure           |
+| `manage_node`                    | Activate/deactivate/drain/restart a node          | Owner/Admin + Infrastructure           |
+| `set_node_mode`                  | Set node mode (normal/draining/maintenance)       | Owner/Admin + Infrastructure           |
+| `get_node_health`                | Node health and metrics summary                   | Owner/Admin + Infrastructure           |
+| `create_edge_cluster`            | Create edge cluster (returns token and Foghorn)   | Owner/Admin + Infrastructure           |
 
 <Aside type="tip" title="CLI Alternative">
   For operators who prefer the CLI over MCP, `frameworks edge deploy` combines `create_edge_cluster`

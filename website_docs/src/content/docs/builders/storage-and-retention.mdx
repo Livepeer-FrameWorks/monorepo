@@ -218,6 +218,9 @@ query DVRRetention($id: ID!) {
 
 Agents manage retention via five MCP tools (cost-affecting; destructive-adjacent for `update_asset_retention`):
 
+Retention writes require a tenant owner or admin with `billing:write`; reading
+the effective policy remains available with the retention read permission.
+
 | Tool                             | Effect                                                                                                   |
 | -------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | `get_retention_policy`           | Reads tenant per-class defaults + tier cap + effective values.                                           |

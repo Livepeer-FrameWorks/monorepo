@@ -1389,7 +1389,7 @@ Manage developer API tokens.
 
 ```bash
 # Create a token
-frameworks admin tokens create --name "my-app" --expires 720h --perms "read:streams,write:streams"
+frameworks admin tokens create --name "my-app" --expires 720h --perms "streams:read,streams:write"
 
 # List tokens (shows name and ID)
 frameworks admin tokens list
@@ -1401,13 +1401,20 @@ frameworks admin tokens revoke --name "my-app"
 frameworks admin tokens revoke <token-id>
 ```
 
+Token listings contain only the current user's tokens. A tenant owner or admin
+may revoke another user's token by its tenant-scoped ID; ordinary members may
+revoke only their own tokens.
+
 **Flags for create:**
 
 - `--name` - Token name/label (required)
 - `--expires` - Expiry duration (e.g., `720h`, `30d`)
 - `--perms` - Comma-separated permissions
 
-Note: Permissions are accepted but not enforced yet. API tokens currently grant full access until RBAC lands.
+Permissions are enforced as exact scopes. The coarse historical values `read` and
+`write` are not wildcards and are rejected for new tokens. If `--perms` is omitted,
+the token receives only `streams:read`. Use `mcp:high-risk` in addition to the
+domain scope when an API token must call a high-risk MCP tool.
 
 ---
 
