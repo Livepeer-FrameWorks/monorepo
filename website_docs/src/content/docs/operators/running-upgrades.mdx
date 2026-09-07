@@ -161,6 +161,16 @@ repository's supported secret-editing command, verify `frameworks cluster doctor
 securely remove the fragment. Do not paste the private key or roots into the manifest or command
 arguments.
 
+Deploy and health-check the keyed Commodore before replacing Bridge or any Foghorn. The upgraded
+Bridge uses Commodore's service-authenticated playback-policy resolver and must not lead that
+server change. An upgraded Foghorn
+understands both the legacy response from an older Commodore (the policy-presence field is absent)
+and the explicit signed-policy result from the upgraded service; an upgraded Commodore always sends
+the presence field, including explicit false when authority is unavailable. After Quartermaster's
+DNS expand, start upgraded Purser and let its startup entitlement sweep finish before running the
+closing Quartermaster DNS-entitlement data migration. This ordering is mandatory: the closing job
+fails unowned rows closed and never guesses entitlement from a legacy tier name.
+
 Before the Quartermaster expand phase, detect cloned or re-provisioned node identities:
 
 ```sql
@@ -200,7 +210,8 @@ watch `foghorn_admission_payload_crypto_total{format,result}`; plaintext/v1 open
 should fall to zero while `result="migrated"` accounts for the backlog.
 
 The shipped Prometheus rules alert on `commodore_media_authority_oldest_pending_seconds`,
-`commodore_media_authority_max_version_lag`, Foghorn authority apply/verification rejection,
+`commodore_media_authority_max_version_lag`, Purser authority-refresh worker readiness,
+queue age and delivery failures, Foghorn authority apply/verification rejection,
 hard-expired local reads, durable node-admission failures/saturation, and admission-payload decrypt
 errors, plus Helmsman's trigger-WAL depth and retryable `STREAM_END` acknowledgements. A
 tenantless acknowledged `STREAM_END` is deliberately retried without a fixed attempt cap because
@@ -236,14 +247,104 @@ service alias or one HA replica is not evidence for the other cells.
 
 The required order is:
 
+Before the tenant-DNS command below, upgraded Purser must have completed one
+error-free full subscription sweep. Verify its durable receipt directly:
+
+First run the subscriptionless DNS preflight in [Self-hosted edge hardening
+rollout](/operators/selfhosted-edge-rollout#rollout-order-and-gates). Do not
+start upgraded Purser until every printed tenant is either approved for DNS
+teardown or has a subscription created through the supported billing workflow.
+
+```sql
+SELECT handoff_key, subscription_count, completed_at
+FROM quartermaster.billing_entitlement_handoffs
+WHERE handoff_key = 'purser_dns_entitlements_v0_3_0';
+```
+
+No row means the migration is intentionally blocked; inspect
+`purser_tier_access_reconciliation_failures_total{operation="sweep"}` and the
+Purser error. A failed tenant apply reports
+`materialize DNS entitlements for N tenants (first failure: ...)`. A surplus
+Purser subscription reports
+`DNS entitlement handoff census mismatch: subscriptions=N matched_subscriptions=N tenants=N`;
+repair the missing tenant or subscription through its owning service. An
+unobserved Quartermaster census reports
+`DNS entitlement handoff census incomplete: observed_by_sweep=N tenants=N unobserved=N`;
+let the entitlement sweep stamp those rows. Restore Purser-to-Quartermaster
+reconciliation and wait for a complete sweep. Until that sweep writes the
+receipt, the postdeploy tenant-DNS migration remains blocked. The historical
+`subscription_count` column records the Quartermaster tenant census validated
+by that sweep, including fail-closed tenants without a subscription. It is an
+audit value, not a permanent equality constraint: a tenant created after the
+immutable receipt starts with observed, disabled DNS entitlements and does not
+invalidate the handoff. Do not insert or rewrite the receipt manually.
+
 ```bash
 frameworks cluster data-migrate run quartermaster.quartermaster_cluster_access_provenance_v0_3_0
 frameworks cluster data-migrate verify quartermaster.quartermaster_cluster_access_provenance_v0_3_0
+frameworks cluster data-migrate run quartermaster.quartermaster_node_identity_keys_v0_3_0
+frameworks cluster data-migrate verify quartermaster.quartermaster_node_identity_keys_v0_3_0
+frameworks cluster data-migrate run quartermaster.quartermaster_tenant_dns_entitlements_v0_3_0
+frameworks cluster data-migrate verify quartermaster.quartermaster_tenant_dns_entitlements_v0_3_0
 frameworks cluster data-migrate run commodore.commodore_dvr_playback_authority_v0_3_0
 frameworks cluster data-migrate verify commodore.commodore_dvr_playback_authority_v0_3_0
 frameworks cluster data-migrate run commodore.commodore_chapter_playback_authority_v0_3_0
 frameworks cluster data-migrate verify commodore.commodore_chapter_playback_authority_v0_3_0
+frameworks cluster data-migrate run commodore.commodore_field_encryption_v0_3_0
+frameworks cluster data-migrate verify commodore.commodore_field_encryption_v0_3_0
 ```
+
+The field-encryption job keyset-pages every encrypted column and reports cumulative
+`scanned`, `changed`, `skipped`, and `errors` counts across batches and retries. Inspect
+`commodore.field_encryption_quarantine` before verification. Any row there blocks the
+release by default. If `JWT_SECRET` must rotate before this job completes, first add
+the exact outgoing secret to the JSON `FIELD_ENCRYPTION_LEGACY_SECRETS` key set. This is
+the read-only legacy JWT-secret channel; `FIELD_ENCRYPTION_PREVIOUS_KEYS` is only for
+previous modern field-encryption keys. The migration persists the active key identity
+before scanning, and the checkpoint rejects an unpreserved mid-run JWT rotation. If
+repaired keys should be tried against quarantined rows, set
+`FIELD_ENCRYPTION_REQUEUE_QUARANTINE` to a new operator-chosen token such as
+`repair-2026-09-06-a` for one retry run and then remove it. Reusing the same token does
+not requeue rows; choose a new token for each later repair attempt. The checkpointed
+token and retry epoch make each pre-existing quarantine entry eligible once per explicit
+attempt. A migration already marked complete ignores a later requeue token, so repair and
+requeue before the final successful verification. Rows that still fail remain quarantined
+and continue to block verification. Only after repair/requeue is exhausted may
+`FIELD_ENCRYPTION_ALLOW_QUARANTINE=true` be used as a break-glass acknowledgement of
+known unreadable customer data; it is not a repair, and the affected rows must be documented.
+The initial legacy-key probe samples up to 32 rows per encrypted column. If every sampled
+legacy row is known to be corrupt, the break-glass value
+`FIELD_ENCRYPTION_ACK_UNVERIFIED_LEGACY_KEY=I_ACCEPT_UNVERIFIED_LEGACY_KEY` arms the
+migration without a successful sample; use it only after recording the affected rows.
+
+Periscope expand seeds the v2 cursor table from the established v1 watermarks. Only the new
+delivery ledger starts a 90-day bootstrap; existing ledgers resume at their migrated
+watermarks. Each rebuild chunk takes a session-scoped PostgreSQL advisory lock, so failover
+overlap is bounded to one idempotent chunk while connection or process loss hands
+ownership to another replica. The worker catches up in one-hour chunks and checkpoints
+every successful chunk. The leader gauge reports the replica's latest lease-election result, and
+the delivery cursor-lag gauge must stay below the alert threshold before contract rollout.
+Postdeploy refuses to proceed until the delivery cursor is within fifteen minutes of the
+settled frontier. When contract is eventually applied, its refresh file first seeds the
+upgrade-only discovery keys for retained playback and delivery identities in separate,
+spillable per-scope statements. Each completed scope writes a receipt, and the same file
+refuses the destructive refresh unless all six receipts were written by that attempt. It
+keeps keys and receipts available for two days so an overlapping scheduled refresh cannot
+lose discovery state, after which table TTL removes them. A delayed run or an unledgered
+retry after a partial failure therefore starts by reseeding; no manual
+receipt insertion or postdeploy reapplication is supported or required. Source ledger
+projection versions and TTLs are never rewritten. If the gate fails, leave the contract
+phase unapplied and retry the contract command; dashboards keep their pre-cutover
+definitions instead of exposing partial delivery history.
+Direct ledger-backed rollups discover keys from raw tombstone rows,
+compute values from canonical views, and stop one day inside source retention so a late
+partial source set cannot erase retained historical aggregates.
+The contract seed supplies the initial retained key set used to rewrite per-stream daily analytics from
+deduplicated playback and restream facts. Both audience and egress then use session-end
+day semantics. The bounded tenant-daily API request re-aggregates current finalized facts for
+at most 90 calendar days; stored tenant and stream daily projections retain the same
+730-day session-end-day horizon. The hourly refresh resolves affected historical keys
+against retained finalized facts and carries explicit external group/sort spill limits.
 
 The chapter migration depends on the DVR migration and intentionally refuses to run first. During
 the DVR backfill, rows not yet snapshotted use their parent stream only as a rollout-compatibility
@@ -471,6 +572,13 @@ concurrent build.
 PostgreSQL/YugabyteDB migrations are compared with `_migrations` in each
 configured database so pending required migrations and checksum drift show up
 during normal diagnostics.
+
+Pre-release v0.3.0 builds briefly exposed the Commodore restream postdeploy files
+under the opposite sequence numbers. A development database that applied those
+unreleased files will correctly report checksum drift against the final ordering.
+Do not edit `_migrations` to silence it: recreate that pre-release database from the
+current baseline, or restore its pre-v0.3.0 snapshot and rerun the upgrade. Released
+environments are unaffected because v0.3.0 had not shipped under the earlier layout.
 
 `frameworks cluster upgrade plan` shows the target rollout order and embedded
 SQL migrations by phase. The CLI embeds a release catalog for service database
