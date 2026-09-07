@@ -564,7 +564,7 @@ FrameWorks Gateway.
 | -------- | ------------ | --------------------------------------------------- | -------------------------------------------------------------------------- |
 | 1        | `endpoints`  | None — uses the endpoints as-is                     | You already have resolved edge node URLs from your own orchestration layer |
 | 2        | `mistUrl`    | Fetches Mist JSON metadata directly from MistServer | Standalone setups pointing at a known MistServer node                      |
-| 3        | `gatewayUrl` | Queries the FrameWorks Gateway GraphQL API          | Fully self-hosted control planes or local Gateway previews                 |
+| 3        | `gatewayUrl` | Queries the FrameWorks Gateway GraphQL API          | Provider-managed private Gateways or local development previews            |
 
 ### Gateway Resolution (default)
 
@@ -573,14 +573,14 @@ endpoints, and handles failover across clusters. Resolve through Gateway from th
 or playback device. If your backend calls Gateway, Foghorn routes using the backend or proxy IP, not
 the final viewer's location.
 
-Override `gatewayUrl` only when you run a fully self-hosted FrameWorks control plane or a local
+Override `gatewayUrl` only when FrameWorks provides a private Gateway endpoint or for a local
 Gateway preview:
 
 ```ts
 createPlayer({
   target: "#player",
   contentId: "pk_abc123",
-  gatewayUrl: "https://bridge.selfhost.example/graphql",
+  gatewayUrl: "https://gateway.private.example/graphql",
 });
 ```
 
