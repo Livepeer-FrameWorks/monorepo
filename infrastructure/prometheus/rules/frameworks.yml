@@ -80,6 +80,32 @@ groups:
           summary: "Media authority versions are lagging"
           description: "At least one target cell is more than one {{ $labels.authority_kind }} version behind."
 
+      - alert: PurserMediaAuthorityRefreshWorkerDisabled
+        expr: purser_media_authority_refresh_worker_ready == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Purser media-authority refresh worker is disabled"
+          description: "Purser cannot drain durable authority-refresh obligations because a required database or Commodore dependency is unavailable."
+
+      - alert: PurserMediaAuthorityRefreshStuck
+        expr: purser_media_authority_refresh_oldest_pending_seconds > 300
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Purser media-authority refresh queue is not converging"
+          description: "The oldest billing-owned authority refresh was first enqueued more than five minutes ago and still has not completed."
+
+      - alert: PurserMediaAuthorityRefreshFailures
+        expr: increase(purser_media_authority_refresh_failures_total[5m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Purser media-authority refresh delivery failed"
+          description: "Purser failed during authority refresh stage {{ $labels.stage }}."
+
       - alert: FoghornAuthorityHardExpired
         expr: increase(foghorn_media_authority_local_reads_total{outcome="hard_expired"}[5m]) > 0
         labels:
@@ -104,6 +130,14 @@ groups:
           summary: "Foghorn node admission is failing"
           description: "Durable node admission operation {{ $labels.operation }} returned {{ $labels.result }}. Outage enrollment may be unavailable for affected nodes."
 
+      - alert: QuartermasterNodeIdentityRejected
+        expr: increase(quartermaster_node_identity_rejections_total{reason=~"keyless|invalid_stored_key|key_mismatch"}[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Quartermaster rejected an enrolled node identity"
+          description: "Strict node identity validation rejected a request as {{ $labels.reason }}. Use the scoped enrollment-token rotation procedure; do not restore fingerprint-only admission."
+
       - alert: FoghornAdmissionPayloadDecryptError
         expr: increase(foghorn_admission_payload_crypto_total{result="error"}[5m]) > 0
         labels:
@@ -111,6 +145,203 @@ groups:
         annotations:
           summary: "Foghorn could not decrypt a durable admission obligation"
           description: "Admission side effects may be blocked by missing or inconsistent cell encryption material."
+
+      - alert: FoghornRestreamReconciliationFailing
+        expr: increase(foghorn_restream_reconcile_total{outcome=~"retryable_failure|terminal_failure|cleanup_unavailable|cleanup_failed|persist_failed|dispatch_failed|missing_revision|legacy_revision_lookup_failed|stale_attempt|batch_failed"}[10m]) > 3
+        labels:
+          severity: warning
+        annotations:
+          summary: "Restream desired state is not converging"
+          description: "Repeated {{ $labels.operation }} outcomes ended as {{ $labels.outcome }}. Inspect the durable obligation and media-node destination policy."
+
+      - alert: FoghornRestreamProtocolIncompatible
+        expr: increase(foghorn_restream_reconcile_total{outcome=~"attempt_protocol_unsupported|missing_attempt"}[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "An edge cannot satisfy the restream attempt-fence protocol"
+          description: "Restream activation was diagnosed as {{ $labels.outcome }}. Upgrade the affected edge sidecar; its durable target set will re-arm after reconnect."
+
+      - alert: FoghornOfflineEffectDeadLetter
+        expr: increase(foghorn_offline_effect_dead_letters_total{outcome="retained"}[10m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "A durable ingest-offline obligation exhausted retries"
+          description: "A teardown or offline side effect is retained for diagnosis. A late generation-correlated teardown acknowledgement can still revive it."
+
+      - alert: FoghornPushTargetStatusOutboxFailing
+        expr: increase(foghorn_push_target_status_outbox_outcomes_total{outcome=~"claim_error|retry_error|settle_error"}[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Restream status delivery is failing"
+          description: "The durable push-target status outbox cannot claim, reschedule, or settle an obligation."
+
+      - alert: FoghornRestreamAttemptFenceRejecting
+        expr: increase(foghorn_restream_final_fence_total{outcome=~"bind_failed|mist_id_mismatch|missing_reported_id"}[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Restream final reports are failing the runtime identity fence"
+          description: "A final report could not be safely matched to the current activation attempt. Inspect control-protocol parity and Mist push identity reporting."
+
+      - alert: FoghornRestreamReconcileSettlementFailing
+        expr: increase(foghorn_restream_reconcile_total{outcome=~"legacy_settle_failed|stale_result"}[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Restream convergence results are stale or cannot settle"
+          description: "Foghorn received a stale result or failed the rolling-upgrade settlement path. Verify Foghorn and Helmsman protocol versions."
+
+      - alert: CommodoreFieldDecryptFailure
+        expr: increase(commodore_field_decrypt_failures_total[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Commodore cannot decrypt application fields"
+          description: "A {{ $labels.purpose }} value in {{ $labels.format }} format failed closed. Check field-key deployment and migration state."
+
+      - alert: PeriscopeRestreamFactQuarantined
+        expr: increase(periscope_ingest_clickhouse_inserts_total{table="restream_sessions_anomalous",status=~"invalid_identity|non_terminal_state|invalid_time_range"}[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Restream usage fact was quarantined"
+          description: "A final restream event lacked a trustworthy identity, terminal state, or bounded time range and was excluded from billing."
+
+      - alert: PeriscopeRestreamBytesUnobserved
+        expr: increase(periscope_ingest_clickhouse_inserts_total{table="restream_sessions_anomalous",status="bytes_unobserved"}[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Restream byte usage was not observed"
+          description: "A final restream event retained billable duration but lacked a trustworthy byte counter, so byte usage was recorded as zero."
+
+      - alert: PeriscopeDeliveryLedgerRebuildLagging
+        expr: min by (ledger) (periscope_ingest_ledger_rebuild_cursor_lag_seconds{ledger="delivery_usage_5m"}) > 900
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The delivery ledger rebuild is behind"
+          description: "The elected Periscope worker has not advanced the delivery ledger cursor to within the 15-minute rollout gate."
+
+      - alert: PeriscopeDeliveryLedgerRebuildMissing
+        expr: absent(periscope_ingest_ledger_rebuild_cursor_lag_seconds{ledger="delivery_usage_5m"})
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The delivery ledger rebuild is not reporting"
+          description: "No Periscope ingest replica is exporting the delivery-ledger cursor age; check crash loops and Postgres/ClickHouse connectivity."
+
+      - alert: PeriscopeMalformedBillingFactSkipped
+        expr: increase(periscope_metering_billing_malformed_facts_skipped_total[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Metering skipped a malformed canonical fact"
+          description: "A canonical {{ $labels.fact_kind }} fact was skipped for {{ $labels.reason }} so the remaining billing slice could advance."
+
+      - alert: PeriscopeProjectionDivergenceOrphanSkipped
+        expr: increase(periscope_metering_projection_divergence_billing_total{outcome=~"orphan_skipped|malformed_skipped"}[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Metering skipped an orphan projection divergence"
+          description: "A divergence row no longer has a canonical source fact. The slice advanced, but the orphan should be investigated and cleaned up."
+
+      - alert: FoghornSourceAuthorityUnavailable
+        expr: increase(foghorn_source_authorization_rejected_total{reason="authority_unavailable"}[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Foghorn cannot authorize source-origin lookups"
+          description: "Stream tenant authority was unavailable, so source disclosure failed closed before federation or replication work."
+
+      - alert: FoghornCrossClusterSourceDenied
+        expr: increase(foghorn_source_authorization_rejected_total{reason="cluster_not_authorized"}[10m]) > 5
+        labels:
+          severity: warning
+        annotations:
+          summary: "Foghorn is rejecting cross-cluster source requests"
+          description: "Signed edge callers repeatedly requested source origins outside their tenant-authorized cluster grants."
+
+      - alert: QuartermasterLifecycleAuthorizationDenied
+        expr: increase(quartermaster_grpc_requests_total{status="PermissionDenied",method=~".*(Cluster|EnrollmentToken|Node|Tenant).*"}[10m]) > 10
+        labels:
+          severity: warning
+        annotations:
+          summary: "Quartermaster lifecycle authorization denials increased"
+          description: "Owner/admin, service identity, or tenant/resource binding checks are rejecting edge lifecycle calls."
+
+      - alert: QuartermasterKeylessNodeReconnectRejected
+        expr: increase(quartermaster_node_identity_rejections_total{reason=~"keyless|invalid_stored_key"}[5m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "An enrolled node requires identity-key recovery"
+          description: "Strict no-TOFU enforcement rejected an active fingerprint; issue a fresh scoped token and use the documented rotation flow."
+
+      - alert: QuartermasterDNSDesiredStateDrift
+        expr: increase(quartermaster_dns_backstop_repairs_total[15m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "DNS desired/applied state drift required repair"
+          description: "Quartermaster's backstop found missing or stale {{ $labels.resource }} state and enqueued {{ $labels.action }}."
+
+      - alert: QuartermasterNavigatorOutboxFailing
+        expr: increase(quartermaster_navigator_outbox_failures_total[10m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Navigator DNS hand-off is not converging"
+          description: "A {{ $labels.resource }} outbox delivery failed and remains queued for retry."
+
+      - alert: QuartermasterNavigatorOutboxBacklog
+        expr: quartermaster_navigator_outbox_pending > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Navigator DNS hand-off backlog is not draining"
+          description: "Incomplete {{ $labels.resource }} outbox rows have remained pending for fifteen minutes."
+
+      - alert: QuartermasterStaleBillingEntitlement
+        expr: increase(quartermaster_billing_entitlement_stale_total[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "A stale billing entitlement observation was fenced"
+          description: "Purser attempted an older entitlement materialization; inspect concurrent webhook/bootstrap/sweep reconciliation."
+
+      - alert: PurserTierAccessReconciliationFailing
+        expr: increase(purser_tier_access_reconciliation_failures_total[10m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Purser tier access reconciliation is failing"
+          description: "The bounded {{ $labels.operation }} reconciliation path failed; inspect Purser logs and Quartermaster availability before DNS or access state drifts further. An operation=sweep failure blocks the tenant-DNS postdeploy migration until a complete sweep writes its receipt."
+
+      - alert: FoghornConfigSeedAckOutboxStuck
+        expr: foghorn_config_seed_apply_ack_outbox_pending > 0 and foghorn_config_seed_apply_ack_outbox_oldest_pending_seconds > 600
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Foghorn ConfigSeed acknowledgements are not reaching Navigator"
+          description: "At least one durable ConfigSeed apply acknowledgement has remained pending for more than ten minutes; inspect Navigator reachability and Foghorn delivery logs."
+
+      - alert: FoghornConfigSeedAckQuarantined
+        expr: foghorn_config_seed_apply_ack_outbox_quarantined > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Foghorn quarantined an invalid ConfigSeed acknowledgement"
+          description: "A durable ConfigSeed apply acknowledgement failed identity or signature validation and requires operator inspection."
 
       - alert: HelmsmanTriggerWALStuck
         expr: helmsman_trigger_wal_pending > 0
@@ -120,6 +351,24 @@ groups:
         annotations:
           summary: "Helmsman durable trigger WAL is not draining"
           description: "One or more Mist lifecycle triggers have awaited a positive Foghorn acknowledgement for ten minutes."
+
+      - alert: HelmsmanCredentialCleanupStuck
+        expr: helmsman_credential_cleanup_pending > 0 and helmsman_credential_cleanup_pending_seconds > 300 and helmsman_credential_cleanup_observation_error == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Consumed edge enrollment credentials remain on disk"
+          description: "The root credential scrubber has not completed an accepted enrollment request for more than five minutes; inspect the credential-scrubber service and its fixed env-file mounts."
+
+      - alert: HelmsmanCredentialCleanupObservationFailed
+        expr: helmsman_credential_cleanup_observation_error > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Helmsman cannot verify enrollment credential cleanup state"
+          description: "The cleanup observer cannot safely read or trust the enrollment state directory; inspect its mount, ownership, permissions, and any unexpected symlinks."
 
       - alert: HelmsmanStreamEndRetrying
         expr: increase(helmsman_trigger_ack_outcomes_total{trigger_type="STREAM_END",outcome="retryable"}[10m]) > 0

@@ -44,7 +44,7 @@ This document defines the authoritative units and semantics for all metrics in t
 
 ### 2. Viewer Session Metrics (Billing Source)
 
-**Source:** MistServer `USER_END` trigger → `raw_mist_triggers` → `viewer_sessions_final` (append-only projection) → `viewer_usage_5m` ledger → billing cursor + dashboard rollups. See [meter-contracts.md](../architecture/meter-contracts.md).
+**Source:** MistServer `USER_END` trigger → `raw_mist_triggers` → `viewer_sessions_final` (append-only projection). Billing cursors read the finalized fact; `viewer_usage_5m` is the source-time dashboard ledger. See [meter-contracts.md](../architecture/meter-contracts.md).
 
 | Field               | Unit    | Type      | Description                                                       |
 | ------------------- | ------- | --------- | ----------------------------------------------------------------- |
@@ -60,10 +60,59 @@ This document defines the authoritative units and semantics for all metrics in t
 USER_END trigger (uploaded/downloaded bytes total)
   → raw_mist_triggers
   → viewer_sessions_final
-  → viewer_usage_5m canonical ledger
-  → billing.usage_reports (Kafka, rated path)
-  → dashboard rollups (analytics path)
+     ├→ billing.usage_reports (Kafka, rated path)
+     └→ viewer_usage_5m canonical ledger → dashboard rollups
 ```
+
+### 2a. Restream Delivery Metrics (Billing Source, Not Audience)
+
+**Source:** Helmsman sanitized `RESTREAM_STATUS_FINAL` → `raw_mist_triggers` →
+`restream_sessions_final`; the billing cursor reads that finalized fact while
+`delivery_usage_5m` feeds source-time delivery dashboards. A restream is
+viewer-like for outbound capacity and delivery usage, but it is not a human
+viewer and never contributes to viewer counts, unique viewers, audience
+geography, viewer hours, or playback QoE.
+
+| Field               | Unit    | Type      | Description                                                                   |
+| ------------------- | ------- | --------- | ----------------------------------------------------------------------------- |
+| `bytes_sent`        | bytes   | Counter   | Explicit per-attempt Mist byte total; missing observations are quarantined    |
+| `duration_ms`       | ms      | Counter   | Final attempt duration                                                        |
+| `egress_gb`         | GiB     | Aggregate | Restream bytes sent / 1024³ with `delivery_kind=restream`                     |
+| `delivered_minutes` | minutes | Aggregate | Restream duration / 60,000 with `delivery_kind=restream` and bounded platform |
+
+There is no restream-specific quota. Every active destination reserves one slot
+from the tenant's existing `max_viewers` delivery-capacity pool. Playback usage
+retains its legacy dimension-free identity; an absent `delivery_kind` means
+playback. Only restream usage adds the bounded delivery dimensions, without
+changing audience semantics.
+
+Restream billing is effective at the release-defined
+**2026-09-04T00:00:00Z** cutover. Eligibility is based on the first sanitized
+final-fact projection timestamp, which is the replay-stable billing cursor.
+Historical raw `PUSH_END` records are never backfilled or rated: they can contain
+credentials and lack the fenced structured byte-observation contract. Corrections
+to facts first projected before the cutover are also excluded.
+
+Operational convergence is exposed through bounded labels only:
+
+| Metric                                                                           | Labels                 | Meaning                                                                                           |
+| -------------------------------------------------------------------------------- | ---------------------- | ------------------------------------------------------------------------------------------------- |
+| `foghorn_restream_reconcile_total`                                               | `operation`, `outcome` | Activation/deactivation dispatch and correlated convergence results                               |
+| `foghorn_restream_final_fence_total`                                             | `outcome`              | Final-fact Mist-ID bind, accepted-unbound compatibility, mismatch, or missing-ID fence outcomes   |
+| `foghorn_offline_effect_dead_letters_total`                                      | `outcome`              | Exhausted offline obligations retained for diagnosis and late acknowledgements that revive them   |
+| `foghorn_rolling_upgrade_fallbacks_total`                                        | `contract`             | Optional-field compatibility branches still used by mixed-version control-plane calls             |
+| `foghorn_push_target_status_outbox_outcomes_total`                               | `outcome`              | Durable status delivery, retry, deleted-target tombstone, supersession, and storage errors        |
+| `periscope_ingest_clickhouse_inserts_total{table="restream_sessions_anomalous"}` | `table`, `status`      | Final restream facts quarantined because required trustworthy usage fields were absent or invalid |
+| `periscope_metering_projection_divergence_billing_total`                         | `outcome`, `table`     | Billing-reader duplicate, orphan, and malformed divergence rows skipped without wedging a slice   |
+| `periscope_ingest_clickhouse_inserts_total{status="quarantined_span"}`           | `table`, `status`      | A finalized fact exceeded the bounded ledger projection span and was not expanded                 |
+| `periscope_ingest_ledger_rebuild_leader`                                         | `ledger`               | One only while this replica holds the named rebuild lease; zero after release or a lost election  |
+| `periscope_ingest_ledger_rebuild_cursor_lag_seconds`                             | `ledger`               | Age of the rebuild cursor relative to the settled frontier                                        |
+| `periscope_metering_billing_malformed_facts_skipped_total`                       | `fact_kind`, `reason`  | Malformed canonical facts skipped without wedging an otherwise billable slice                     |
+| `commodore_field_decrypt_failures_total`                                         | `purpose`, `format`    | Fail-closed application-field opens grouped by bounded field purpose and envelope version         |
+
+The labels never contain tenant, stream, node, target, platform, destination, or
+error text. Target and stream identifiers belong in sanitized logs, not metric
+labels.
 
 ### 3. Stream Health Metrics (QoE)
 
@@ -261,18 +310,28 @@ MistServer's per-stream counters (`streams[x].bw`, `streams[x].tot`) reset when 
 
 ### Helmsman durability metrics
 
-| Metric                                      | Type    | Meaning                                                                    |
-| ------------------------------------------- | ------- | -------------------------------------------------------------------------- |
-| `helmsman_control_outbox_pending`           | Gauge   | Durable media-control rows pending or awaiting same-epoch confirmation     |
-| `helmsman_control_outbox_bytes`             | Gauge   | Current bytes occupied by pending and unconfirmed control rows             |
-| `helmsman_control_outbox_quarantined`       | Gauge   | Rows quarantined after decode or repeated read failure                     |
-| `helmsman_control_outbox_quarantined_bytes` | Gauge   | Current bytes occupied by quarantined rows                                 |
-| `helmsman_control_delivery_outcomes_total`  | Counter | Delivery outcomes by durability class, including persisted/sent/confirmed  |
-| `helmsman_control_response_drops_total`     | Counter | Late or duplicate inbound replies discarded without blocking receive       |
-| `helmsman_control_outbox_scan_errors_total` | Counter | Read, decode, metric, and quarantine errors by phase                       |
-| `helmsman_trigger_wal_pending`              | Gauge   | Final/accounting Mist triggers awaiting a positive Foghorn acknowledgement |
-| `helmsman_trigger_wal_appends_total`        | Counter | Trigger-WAL append, duplicate, and error outcomes                          |
-| `helmsman_trigger_ack_outcomes_total`       | Counter | Foghorn trigger acknowledgement outcomes                                   |
+| Metric                                                       | Type    | Meaning                                                                                                    |
+| ------------------------------------------------------------ | ------- | ---------------------------------------------------------------------------------------------------------- |
+| `helmsman_control_outbox_pending`                            | Gauge   | Durable media-control rows pending or awaiting same-epoch confirmation                                     |
+| `helmsman_control_outbox_bytes`                              | Gauge   | Current bytes occupied by pending and unconfirmed control rows                                             |
+| `helmsman_control_outbox_quarantined`                        | Gauge   | Rows quarantined after decode or repeated read failure                                                     |
+| `helmsman_control_outbox_quarantined_bytes`                  | Gauge   | Current bytes occupied by quarantined rows                                                                 |
+| `helmsman_control_delivery_outcomes_total`                   | Counter | Delivery outcomes by durability class, including persisted/sent/confirmed                                  |
+| `helmsman_control_response_drops_total`                      | Counter | Late or duplicate inbound replies discarded without blocking receive                                       |
+| `helmsman_control_outbox_scan_errors_total`                  | Counter | Read, decode, metric, and quarantine errors by phase                                                       |
+| `helmsman_trigger_wal_pending`                               | Gauge   | Final/accounting Mist triggers awaiting a positive Foghorn acknowledgement                                 |
+| `helmsman_trigger_wal_appends_total`                         | Counter | Trigger-WAL append, duplicate, and error outcomes                                                          |
+| `helmsman_trigger_ack_outcomes_total`                        | Counter | Foghorn trigger acknowledgement outcomes                                                                   |
+| `helmsman_credential_cleanup_pending`                        | Gauge   | `1` while an accepted enrollment is waiting for the root-owned env scrub                                   |
+| `helmsman_credential_cleanup_pending_seconds`                | Gauge   | Age of the oldest known pending credential scrub request; retries and observation failures do not reset it |
+| `helmsman_credential_cleanup_observation_error`              | Gauge   | `1` when Helmsman cannot safely read or trust the cleanup state directory                                  |
+| `helmsman_credential_cleanup_last_success_timestamp_seconds` | Gauge   | Timestamp of the last scrub seen by this process or restored from a trusted durable completion record      |
+| `helmsman_credential_cleanup_outcomes_total`                 | Counter | Cleanup outcomes emitted within the current Helmsman process                                               |
+
+`HelmsmanCredentialCleanupStuck` reports a readable request that has not drained.
+`HelmsmanCredentialCleanupObservationFailed` separately reports an unreadable,
+untrusted, or incorrectly mounted state directory; it must not be diagnosed as a
+slow scrubber. Both conditions are fail-closed and require operator attention.
 
 ### Helmsman stream WebSocket metrics
 
@@ -441,6 +500,38 @@ Standard names:
 | `<service>_db_wait_duration_seconds_total` | CounterFunc | `db.Stats().WaitDuration.Seconds()` |
 
 ### gRPC metrics interceptor placement
+
+Public node-bound source lookups expose
+`foghorn_source_authorization_rejected_total{reason}`. The bounded reasons are
+`authority_unavailable` (stream ownership could not be resolved within the
+lookup budget) and `cluster_not_authorized` (the signed caller cluster is not
+usable for the resolved stream tenant). The metric is incremented before local
+origin selection, federation, replication scheduling, or source-success event
+emission and never labels tenant, stream, node, or cluster IDs. Quartermaster's
+method-level lifecycle/read denials use the existing
+`quartermaster_grpc_requests_total{method,status}` counter; alert on sustained
+`PermissionDenied` or `Unauthenticated` changes by bounded method name.
+
+The remaining edge-hardening signals are likewise bounded:
+
+| Metric                                                  | Labels               | Meaning                                                                                           |
+| ------------------------------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------- |
+| `quartermaster_node_identity_rejections_total`          | `reason`             | Strict fingerprint proof rejection (`keyless`, `invalid_stored_key`, or `key_mismatch`)           |
+| `quartermaster_billing_entitlement_stale_total`         | none                 | Purser observation rejected by Quartermaster's timestamp fence                                    |
+| `quartermaster_dns_backstop_repairs_total`              | `resource`, `action` | Desired/applied alias or custom-domain drift repaired                                             |
+| `quartermaster_navigator_outbox_failures_total`         | `resource`           | Alias/custom-domain delivery failed and remains retryable                                         |
+| `quartermaster_navigator_outbox_pending`                | `resource`           | Incomplete alias/custom-domain hand-offs awaiting convergence                                     |
+| `purser_tier_access_reconciliation_failures_total`      | `operation`          | Tier access or DNS entitlement reconcile failed (`reconcile`, `revoke`, `sweep`, or `sweep_item`) |
+| `purser_media_authority_refresh_pending`                | none                 | Current incomplete media-authority refresh obligations                                            |
+| `purser_media_authority_refresh_oldest_pending_seconds` | none                 | Seconds since the oldest incomplete obligation was first enqueued, unaffected by delivery retries |
+| `purser_media_authority_refresh_failures_total`         | `stage`              | Refresh delivery, reconciliation, completion-fence, or queue-observation failure                  |
+| `purser_media_authority_refresh_completions_total`      | `outcome`            | Completed refresh attempts (`delivered` or safely `superseded`)                                   |
+| `purser_media_authority_refresh_worker_ready`           | none                 | `1` only while the durable worker has both database and Commodore dependencies                    |
+
+The node-identity census itself is the secret-free scanned/skipped count emitted
+by the required `quartermaster_node_identity_keys_v0_3_0` data migration. Node,
+tenant, cluster, hostname, fingerprint, and token values never appear as metric
+labels.
 
 When a service exposes `<svc>_grpc_requests_total{method,status}` + `<svc>_grpc_request_duration_seconds`, wire it as a `grpc.UnaryServerInterceptor` placed **outermost** in the interceptor chain. Sitting after the auth interceptor hides every `Unauthenticated` / `PermissionDenied` rejection, which is precisely the failure-rate signal we want to see.
 
