@@ -11,6 +11,58 @@ import (
 	"time"
 )
 
+const applyTenantBillingEntitlements = `-- name: ApplyTenantBillingEntitlements :execrows
+UPDATE quartermaster.tenants
+SET deployment_tier = $1,
+    custom_subdomain_enabled = $2,
+    custom_domain_enabled = $3,
+    billing_entitlements_observed_at = $4,
+    updated_at = NOW()
+WHERE id = $5::uuid
+  AND billing_entitlements_observed_at <= $4
+`
+
+type ApplyTenantBillingEntitlementsParams struct {
+	DeploymentTier         sql.NullString `db:"deployment_tier" json:"deployment_tier"`
+	CustomSubdomainEnabled bool           `db:"custom_subdomain_enabled" json:"custom_subdomain_enabled"`
+	CustomDomainEnabled    bool           `db:"custom_domain_enabled" json:"custom_domain_enabled"`
+	ObservedAt             time.Time      `db:"observed_at" json:"observed_at"`
+	TenantID               string         `db:"tenant_id" json:"tenant_id"`
+}
+
+func (q *Queries) ApplyTenantBillingEntitlements(ctx context.Context, arg ApplyTenantBillingEntitlementsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, applyTenantBillingEntitlements,
+		arg.DeploymentTier,
+		arg.CustomSubdomainEnabled,
+		arg.CustomDomainEnabled,
+		arg.ObservedAt,
+		arg.TenantID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const completeBillingEntitlementHandoff = `-- name: CompleteBillingEntitlementHandoff :execrows
+INSERT INTO quartermaster.billing_entitlement_handoffs (handoff_key, subscription_count)
+VALUES ($1, $2)
+ON CONFLICT (handoff_key) DO NOTHING
+`
+
+type CompleteBillingEntitlementHandoffParams struct {
+	HandoffKey        string `db:"handoff_key" json:"handoff_key"`
+	SubscriptionCount int64  `db:"subscription_count" json:"subscription_count"`
+}
+
+func (q *Queries) CompleteBillingEntitlementHandoff(ctx context.Context, arg CompleteBillingEntitlementHandoffParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, completeBillingEntitlementHandoff, arg.HandoffKey, arg.SubscriptionCount)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const createTenantAttribution = `-- name: CreateTenantAttribution :exec
 INSERT INTO quartermaster.tenant_attribution
     (tenant_id, signup_channel, signup_method, utm_source, utm_medium,
@@ -62,11 +114,11 @@ func (q *Queries) CreateTenantAttribution(ctx context.Context, arg CreateTenantA
 const createTenantRecord = `-- name: CreateTenantRecord :exec
 INSERT INTO quartermaster.tenants
     (id, name, subdomain, custom_domain, logo_url, primary_color, secondary_color,
-     deployment_tier, deployment_model, is_active, created_at, updated_at)
+     deployment_tier, deployment_model, is_active, billing_entitlements_observed_at, created_at, updated_at)
 VALUES ($1::uuid, $2, $3, $4,
         $5, $6, $7,
-        $8, $9, true,
-        $10::timestamp, $10::timestamp)
+        $8, $9, true, $10::timestamptz,
+        $10::timestamptz, $10::timestamptz)
 `
 
 type CreateTenantRecordParams struct {
@@ -101,11 +153,11 @@ func (q *Queries) CreateTenantRecord(ctx context.Context, arg CreateTenantRecord
 const createTenantRecordWithProvisioningKey = `-- name: CreateTenantRecordWithProvisioningKey :exec
 INSERT INTO quartermaster.tenants
     (id, name, subdomain, custom_domain, logo_url, primary_color, secondary_color,
-     deployment_tier, deployment_model, is_active, created_at, updated_at, provisioning_key)
+     deployment_tier, deployment_model, is_active, billing_entitlements_observed_at, created_at, updated_at, provisioning_key)
 VALUES ($1::uuid, $2, $3, $4,
         $5, $6, $7,
-        $8, $9, true,
-        $10::timestamp, $10::timestamp, $11)
+        $8, $9, true, $10::timestamptz,
+        $10::timestamptz, $10::timestamptz, $11)
 `
 
 type CreateTenantRecordWithProvisioningKeyParams struct {
@@ -193,21 +245,59 @@ func (q *Queries) GetInfrastructureClusterType(ctx context.Context, clusterID st
 	return cluster_type, err
 }
 
-const getTenantCustomDomainEligibility = `-- name: GetTenantCustomDomainEligibility :one
-SELECT deployment_tier, is_active
+const getTenantBillingEntitlementCensus = `-- name: GetTenantBillingEntitlementCensus :one
+SELECT COUNT(*)::bigint AS tenant_count,
+       COUNT(*) FILTER (WHERE billing_entitlements_observed_at = 'epoch'::timestamptz)::bigint AS unobserved_count
 FROM quartermaster.tenants
-WHERE id = $1::uuid
+`
+
+type GetTenantBillingEntitlementCensusRow struct {
+	TenantCount     int64 `db:"tenant_count" json:"tenant_count"`
+	UnobservedCount int64 `db:"unobserved_count" json:"unobserved_count"`
+}
+
+func (q *Queries) GetTenantBillingEntitlementCensus(ctx context.Context) (GetTenantBillingEntitlementCensusRow, error) {
+	row := q.db.QueryRowContext(ctx, getTenantBillingEntitlementCensus)
+	var i GetTenantBillingEntitlementCensusRow
+	err := row.Scan(&i.TenantCount, &i.UnobservedCount)
+	return i, err
+}
+
+const getTenantCustomDomainEligibility = `-- name: GetTenantCustomDomainEligibility :one
+SELECT t.custom_domain, t.custom_subdomain_enabled, t.custom_domain_enabled, t.is_active,
+	   t.billing_entitlements_observed_at,
+	   EXISTS (SELECT 1 FROM quartermaster.tenant_cluster_access tca
+	           JOIN quartermaster.infrastructure_clusters cluster ON cluster.cluster_id = tca.cluster_id
+               WHERE tca.tenant_id = t.id
+                 AND tca.is_active = true
+                 AND tca.subscription_status = 'active'
+                 AND tca.access_source <> 'unknown'
+	             AND (tca.expires_at IS NULL OR tca.expires_at > NOW())
+	             AND cluster.is_active = true) AS has_cluster
+FROM quartermaster.tenants t
+WHERE t.id = $1::uuid
 `
 
 type GetTenantCustomDomainEligibilityRow struct {
-	DeploymentTier sql.NullString `db:"deployment_tier" json:"deployment_tier"`
-	IsActive       sql.NullBool   `db:"is_active" json:"is_active"`
+	CustomDomain                  sql.NullString `db:"custom_domain" json:"custom_domain"`
+	CustomSubdomainEnabled        bool           `db:"custom_subdomain_enabled" json:"custom_subdomain_enabled"`
+	CustomDomainEnabled           bool           `db:"custom_domain_enabled" json:"custom_domain_enabled"`
+	IsActive                      sql.NullBool   `db:"is_active" json:"is_active"`
+	BillingEntitlementsObservedAt time.Time      `db:"billing_entitlements_observed_at" json:"billing_entitlements_observed_at"`
+	HasCluster                    bool           `db:"has_cluster" json:"has_cluster"`
 }
 
 func (q *Queries) GetTenantCustomDomainEligibility(ctx context.Context, tenantID string) (GetTenantCustomDomainEligibilityRow, error) {
 	row := q.db.QueryRowContext(ctx, getTenantCustomDomainEligibility, tenantID)
 	var i GetTenantCustomDomainEligibilityRow
-	err := row.Scan(&i.DeploymentTier, &i.IsActive)
+	err := row.Scan(
+		&i.CustomDomain,
+		&i.CustomSubdomainEnabled,
+		&i.CustomDomainEnabled,
+		&i.IsActive,
+		&i.BillingEntitlementsObservedAt,
+		&i.HasCluster,
+	)
 	return i, err
 }
 
@@ -228,7 +318,7 @@ const grantDefaultClusterAccess = `-- name: GrantDefaultClusterAccess :exec
 INSERT INTO quartermaster.tenant_cluster_access
     (tenant_id, cluster_id, access_level, access_source, subscription_status, is_active, created_at, updated_at)
 VALUES ($1::uuid, $2, 'subscriber', 'platform_tier', 'active', true,
-        $3::timestamp, $3::timestamp)
+        $3::timestamptz, $3::timestamptz)
 ON CONFLICT (tenant_id, cluster_id) DO NOTHING
 `
 
@@ -241,6 +331,21 @@ type GrantDefaultClusterAccessParams struct {
 func (q *Queries) GrantDefaultClusterAccess(ctx context.Context, arg GrantDefaultClusterAccessParams) error {
 	_, err := q.db.ExecContext(ctx, grantDefaultClusterAccess, arg.TenantID, arg.ClusterID, arg.CreatedAt)
 	return err
+}
+
+const hasBillingEntitlementHandoff = `-- name: HasBillingEntitlementHandoff :one
+SELECT EXISTS (
+    SELECT 1
+    FROM quartermaster.billing_entitlement_handoffs
+    WHERE handoff_key = $1
+)
+`
+
+func (q *Queries) HasBillingEntitlementHandoff(ctx context.Context, handoffKey string) (bool, error) {
+	row := q.db.QueryRowContext(ctx, hasBillingEntitlementHandoff, handoffKey)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
 const incrementReferralCodeUsage = `-- name: IncrementReferralCodeUsage :exec
@@ -274,24 +379,28 @@ func (q *Queries) LockActiveTenantDomains(ctx context.Context, tenantID string) 
 }
 
 const lockTenantAliasEligibility = `-- name: LockTenantAliasEligibility :one
-SELECT t.name, t.subdomain, t.deployment_tier, t.is_active,
-       EXISTS (SELECT 1 FROM quartermaster.tenant_cluster_access tca
+SELECT t.name, t.subdomain, t.custom_subdomain_enabled, t.is_active,
+	   t.billing_entitlements_observed_at,
+	   EXISTS (SELECT 1 FROM quartermaster.tenant_cluster_access tca
+	           JOIN quartermaster.infrastructure_clusters cluster ON cluster.cluster_id = tca.cluster_id
                WHERE tca.tenant_id = t.id
                  AND tca.is_active = true
                  AND tca.subscription_status = 'active'
                  AND tca.access_source <> 'unknown'
-                 AND (tca.expires_at IS NULL OR tca.expires_at > NOW())) AS has_cluster
+	             AND (tca.expires_at IS NULL OR tca.expires_at > NOW())
+	             AND cluster.is_active = true) AS has_cluster
 FROM quartermaster.tenants t
 WHERE t.id = $1::uuid
 FOR UPDATE
 `
 
 type LockTenantAliasEligibilityRow struct {
-	Name           string         `db:"name" json:"name"`
-	Subdomain      sql.NullString `db:"subdomain" json:"subdomain"`
-	DeploymentTier sql.NullString `db:"deployment_tier" json:"deployment_tier"`
-	IsActive       sql.NullBool   `db:"is_active" json:"is_active"`
-	HasCluster     bool           `db:"has_cluster" json:"has_cluster"`
+	Name                          string         `db:"name" json:"name"`
+	Subdomain                     sql.NullString `db:"subdomain" json:"subdomain"`
+	CustomSubdomainEnabled        bool           `db:"custom_subdomain_enabled" json:"custom_subdomain_enabled"`
+	IsActive                      sql.NullBool   `db:"is_active" json:"is_active"`
+	BillingEntitlementsObservedAt time.Time      `db:"billing_entitlements_observed_at" json:"billing_entitlements_observed_at"`
+	HasCluster                    bool           `db:"has_cluster" json:"has_cluster"`
 }
 
 func (q *Queries) LockTenantAliasEligibility(ctx context.Context, tenantID string) (LockTenantAliasEligibilityRow, error) {
@@ -300,9 +409,37 @@ func (q *Queries) LockTenantAliasEligibility(ctx context.Context, tenantID strin
 	err := row.Scan(
 		&i.Name,
 		&i.Subdomain,
-		&i.DeploymentTier,
+		&i.CustomSubdomainEnabled,
 		&i.IsActive,
+		&i.BillingEntitlementsObservedAt,
 		&i.HasCluster,
+	)
+	return i, err
+}
+
+const lockTenantBillingEntitlements = `-- name: LockTenantBillingEntitlements :one
+SELECT deployment_tier, custom_subdomain_enabled, custom_domain_enabled,
+       billing_entitlements_observed_at
+FROM quartermaster.tenants
+WHERE id = $1::uuid
+FOR UPDATE
+`
+
+type LockTenantBillingEntitlementsRow struct {
+	DeploymentTier                sql.NullString `db:"deployment_tier" json:"deployment_tier"`
+	CustomSubdomainEnabled        bool           `db:"custom_subdomain_enabled" json:"custom_subdomain_enabled"`
+	CustomDomainEnabled           bool           `db:"custom_domain_enabled" json:"custom_domain_enabled"`
+	BillingEntitlementsObservedAt time.Time      `db:"billing_entitlements_observed_at" json:"billing_entitlements_observed_at"`
+}
+
+func (q *Queries) LockTenantBillingEntitlements(ctx context.Context, tenantID string) (LockTenantBillingEntitlementsRow, error) {
+	row := q.db.QueryRowContext(ctx, lockTenantBillingEntitlements, tenantID)
+	var i LockTenantBillingEntitlementsRow
+	err := row.Scan(
+		&i.DeploymentTier,
+		&i.CustomSubdomainEnabled,
+		&i.CustomDomainEnabled,
+		&i.BillingEntitlementsObservedAt,
 	)
 	return i, err
 }
@@ -407,13 +544,15 @@ func (q *Queries) SetTenantOfficialCluster(ctx context.Context, arg SetTenantOff
 
 const tenantHasActiveClusterAccess = `-- name: TenantHasActiveClusterAccess :one
 SELECT EXISTS (
-    SELECT 1 FROM quartermaster.tenant_cluster_access
-    WHERE tenant_id = $1::uuid
-      AND cluster_id = $2
-      AND is_active = true
-      AND subscription_status = 'active'
-      AND access_source <> 'unknown'
-      AND (expires_at IS NULL OR expires_at > NOW())
+	SELECT 1 FROM quartermaster.tenant_cluster_access access
+	JOIN quartermaster.infrastructure_clusters cluster ON cluster.cluster_id = access.cluster_id
+	WHERE access.tenant_id = $1::uuid
+	  AND access.cluster_id = $2
+	  AND access.is_active = true
+	  AND access.subscription_status = 'active'
+	  AND access.access_source <> 'unknown'
+	  AND (access.expires_at IS NULL OR access.expires_at > NOW())
+	  AND cluster.is_active = true
 )
 `
 
@@ -430,25 +569,34 @@ func (q *Queries) TenantHasActiveClusterAccess(ctx context.Context, arg TenantHa
 }
 
 const tenantHasPaidClusterAccess = `-- name: TenantHasPaidClusterAccess :one
-SELECT EXISTS (
+SELECT t.billing_entitlements_observed_at <> 'epoch'::timestamptz AS entitlements_observed,
+	EXISTS (
     SELECT 1
     FROM quartermaster.tenant_cluster_access tca
-    JOIN quartermaster.tenants t ON t.id = tca.tenant_id
+	JOIN quartermaster.infrastructure_clusters cluster ON cluster.cluster_id = tca.cluster_id
     WHERE tca.tenant_id = $1::uuid
       AND tca.is_active = true
       AND tca.subscription_status = 'active'
       AND tca.access_source <> 'unknown'
       AND (tca.expires_at IS NULL OR tca.expires_at > NOW())
-      AND t.is_active = true
-      AND t.deployment_tier IN ('supporter', 'developer', 'production', 'enterprise')
-)
+	      AND t.is_active = true
+      AND t.custom_subdomain_enabled = true
+	      AND cluster.is_active = true
+	) AS has_paid_cluster_access
+FROM quartermaster.tenants t
+WHERE t.id = $1::uuid
 `
 
-func (q *Queries) TenantHasPaidClusterAccess(ctx context.Context, tenantID string) (bool, error) {
+type TenantHasPaidClusterAccessRow struct {
+	EntitlementsObserved bool `db:"entitlements_observed" json:"entitlements_observed"`
+	HasPaidClusterAccess bool `db:"has_paid_cluster_access" json:"has_paid_cluster_access"`
+}
+
+func (q *Queries) TenantHasPaidClusterAccess(ctx context.Context, tenantID string) (TenantHasPaidClusterAccessRow, error) {
 	row := q.db.QueryRowContext(ctx, tenantHasPaidClusterAccess, tenantID)
-	var exists bool
-	err := row.Scan(&exists)
-	return exists, err
+	var i TenantHasPaidClusterAccessRow
+	err := row.Scan(&i.EntitlementsObserved, &i.HasPaidClusterAccess)
+	return i, err
 }
 
 const updateTenantClusterAndDeploymentModel = `-- name: UpdateTenantClusterAndDeploymentModel :execrows

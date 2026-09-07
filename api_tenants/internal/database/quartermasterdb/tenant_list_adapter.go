@@ -19,6 +19,8 @@ type TenantListRow struct {
 	ID, Name                                                      string
 	Subdomain, CustomDomain, LogoURL                              sql.NullString
 	PrimaryColor, SecondaryColor, DeploymentTier, DeploymentModel string
+	CustomSubdomainEnabled, CustomDomainEnabled                   bool
+	BillingEntitlementsObserved                                   bool
 	PrimaryClusterID, OfficialClusterID, KafkaTopicPrefix         sql.NullString
 	KafkaBrokers                                                  []string
 	DatabaseURL                                                   sql.NullString
@@ -41,7 +43,9 @@ func (q *Queries) ListTenantsPage(ctx context.Context, filter TenantListFilter) 
 	}
 	query := fmt.Sprintf(`
 		SELECT id, name, subdomain, custom_domain, logo_url, primary_color, secondary_color,
-		       deployment_tier, deployment_model, primary_cluster_id, official_cluster_id,
+		       deployment_tier, custom_subdomain_enabled, custom_domain_enabled,
+		       billing_entitlements_observed_at <> 'epoch'::timestamptz AS billing_entitlements_observed,
+		       deployment_model, primary_cluster_id, official_cluster_id,
 		       kafka_topic_prefix, kafka_brokers, database_url, is_active, monitoring_enabled, created_at, updated_at
 		FROM quartermaster.tenants %s ORDER BY created_at %s, id %s LIMIT $%d
 	`, where, direction, direction, len(args)+1)
@@ -55,7 +59,8 @@ func (q *Queries) ListTenantsPage(ctx context.Context, filter TenantListFilter) 
 	for rows.Next() {
 		var row TenantListRow
 		if err := rows.Scan(&row.ID, &row.Name, &row.Subdomain, &row.CustomDomain, &row.LogoURL,
-			&row.PrimaryColor, &row.SecondaryColor, &row.DeploymentTier, &row.DeploymentModel,
+			&row.PrimaryColor, &row.SecondaryColor, &row.DeploymentTier, &row.CustomSubdomainEnabled,
+			&row.CustomDomainEnabled, &row.BillingEntitlementsObserved, &row.DeploymentModel,
 			&row.PrimaryClusterID, &row.OfficialClusterID, &row.KafkaTopicPrefix, database.ArrayScan(&row.KafkaBrokers),
 			&row.DatabaseURL, &row.IsActive, &row.MonitoringEnabled, &row.CreatedAt, &row.UpdatedAt); err != nil {
 			return nil, err

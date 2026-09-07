@@ -14,7 +14,8 @@ import (
 
 const getActiveTenantClusterRecord = `-- name: GetActiveTenantClusterRecord :one
 SELECT id::text AS id, name, subdomain, custom_domain, logo_url, primary_color, secondary_color,
-       deployment_tier, deployment_model, primary_cluster_id, official_cluster_id,
+       deployment_tier, custom_subdomain_enabled, custom_domain_enabled,
+       deployment_model, primary_cluster_id, official_cluster_id,
        kafka_topic_prefix, kafka_brokers, database_url, is_active, monitoring_enabled,
        created_at, updated_at
 FROM quartermaster.tenants
@@ -22,24 +23,26 @@ WHERE id = $1::uuid AND is_active = true
 `
 
 type GetActiveTenantClusterRecordRow struct {
-	ID                string         `db:"id" json:"id"`
-	Name              string         `db:"name" json:"name"`
-	Subdomain         sql.NullString `db:"subdomain" json:"subdomain"`
-	CustomDomain      sql.NullString `db:"custom_domain" json:"custom_domain"`
-	LogoUrl           sql.NullString `db:"logo_url" json:"logo_url"`
-	PrimaryColor      sql.NullString `db:"primary_color" json:"primary_color"`
-	SecondaryColor    sql.NullString `db:"secondary_color" json:"secondary_color"`
-	DeploymentTier    sql.NullString `db:"deployment_tier" json:"deployment_tier"`
-	DeploymentModel   sql.NullString `db:"deployment_model" json:"deployment_model"`
-	PrimaryClusterID  sql.NullString `db:"primary_cluster_id" json:"primary_cluster_id"`
-	OfficialClusterID sql.NullString `db:"official_cluster_id" json:"official_cluster_id"`
-	KafkaTopicPrefix  sql.NullString `db:"kafka_topic_prefix" json:"kafka_topic_prefix"`
-	KafkaBrokers      []string       `db:"kafka_brokers" json:"kafka_brokers"`
-	DatabaseUrl       sql.NullString `db:"database_url" json:"database_url"`
-	IsActive          sql.NullBool   `db:"is_active" json:"is_active"`
-	MonitoringEnabled bool           `db:"monitoring_enabled" json:"monitoring_enabled"`
-	CreatedAt         sql.NullTime   `db:"created_at" json:"created_at"`
-	UpdatedAt         sql.NullTime   `db:"updated_at" json:"updated_at"`
+	ID                     string         `db:"id" json:"id"`
+	Name                   string         `db:"name" json:"name"`
+	Subdomain              sql.NullString `db:"subdomain" json:"subdomain"`
+	CustomDomain           sql.NullString `db:"custom_domain" json:"custom_domain"`
+	LogoUrl                sql.NullString `db:"logo_url" json:"logo_url"`
+	PrimaryColor           sql.NullString `db:"primary_color" json:"primary_color"`
+	SecondaryColor         sql.NullString `db:"secondary_color" json:"secondary_color"`
+	DeploymentTier         sql.NullString `db:"deployment_tier" json:"deployment_tier"`
+	CustomSubdomainEnabled bool           `db:"custom_subdomain_enabled" json:"custom_subdomain_enabled"`
+	CustomDomainEnabled    bool           `db:"custom_domain_enabled" json:"custom_domain_enabled"`
+	DeploymentModel        sql.NullString `db:"deployment_model" json:"deployment_model"`
+	PrimaryClusterID       sql.NullString `db:"primary_cluster_id" json:"primary_cluster_id"`
+	OfficialClusterID      sql.NullString `db:"official_cluster_id" json:"official_cluster_id"`
+	KafkaTopicPrefix       sql.NullString `db:"kafka_topic_prefix" json:"kafka_topic_prefix"`
+	KafkaBrokers           []string       `db:"kafka_brokers" json:"kafka_brokers"`
+	DatabaseUrl            sql.NullString `db:"database_url" json:"database_url"`
+	IsActive               sql.NullBool   `db:"is_active" json:"is_active"`
+	MonitoringEnabled      bool           `db:"monitoring_enabled" json:"monitoring_enabled"`
+	CreatedAt              sql.NullTime   `db:"created_at" json:"created_at"`
+	UpdatedAt              sql.NullTime   `db:"updated_at" json:"updated_at"`
 }
 
 func (q *Queries) GetActiveTenantClusterRecord(ctx context.Context, tenantID string) (GetActiveTenantClusterRecordRow, error) {
@@ -54,6 +57,8 @@ func (q *Queries) GetActiveTenantClusterRecord(ctx context.Context, tenantID str
 		&i.PrimaryColor,
 		&i.SecondaryColor,
 		&i.DeploymentTier,
+		&i.CustomSubdomainEnabled,
+		&i.CustomDomainEnabled,
 		&i.DeploymentModel,
 		&i.PrimaryClusterID,
 		&i.OfficialClusterID,
@@ -133,10 +138,11 @@ func (q *Queries) ListActiveTenantRecords(ctx context.Context) ([]ListActiveTena
 }
 
 const listActiveTenantsByCluster = `-- name: ListActiveTenantsByCluster :many
-SELECT sub.id, sub.name, sub.subdomain, sub.custom_domain, sub.logo_url, sub.primary_color, sub.secondary_color, sub.deployment_tier, sub.deployment_model, sub.primary_cluster_id, sub.official_cluster_id, sub.kafka_topic_prefix, sub.kafka_brokers, sub.database_url, sub.is_active, sub.monitoring_enabled, sub.created_at, sub.updated_at, count(*) OVER() AS total_count
+SELECT sub.id, sub.name, sub.subdomain, sub.custom_domain, sub.logo_url, sub.primary_color, sub.secondary_color, sub.deployment_tier, sub.custom_subdomain_enabled, sub.custom_domain_enabled, sub.deployment_model, sub.primary_cluster_id, sub.official_cluster_id, sub.kafka_topic_prefix, sub.kafka_brokers, sub.database_url, sub.is_active, sub.monitoring_enabled, sub.created_at, sub.updated_at, count(*) OVER() AS total_count
 FROM (
     SELECT DISTINCT t.id::text AS id, t.name, t.subdomain, t.custom_domain, t.logo_url,
-           t.primary_color, t.secondary_color, t.deployment_tier, t.deployment_model,
+           t.primary_color, t.secondary_color, t.deployment_tier,
+           t.custom_subdomain_enabled, t.custom_domain_enabled, t.deployment_model,
            t.primary_cluster_id, t.official_cluster_id, t.kafka_topic_prefix,
            t.kafka_brokers, t.database_url, t.is_active, t.monitoring_enabled,
            t.created_at, t.updated_at
@@ -155,25 +161,27 @@ type ListActiveTenantsByClusterParams struct {
 }
 
 type ListActiveTenantsByClusterRow struct {
-	ID                string         `db:"id" json:"id"`
-	Name              string         `db:"name" json:"name"`
-	Subdomain         sql.NullString `db:"subdomain" json:"subdomain"`
-	CustomDomain      sql.NullString `db:"custom_domain" json:"custom_domain"`
-	LogoUrl           sql.NullString `db:"logo_url" json:"logo_url"`
-	PrimaryColor      sql.NullString `db:"primary_color" json:"primary_color"`
-	SecondaryColor    sql.NullString `db:"secondary_color" json:"secondary_color"`
-	DeploymentTier    sql.NullString `db:"deployment_tier" json:"deployment_tier"`
-	DeploymentModel   sql.NullString `db:"deployment_model" json:"deployment_model"`
-	PrimaryClusterID  sql.NullString `db:"primary_cluster_id" json:"primary_cluster_id"`
-	OfficialClusterID sql.NullString `db:"official_cluster_id" json:"official_cluster_id"`
-	KafkaTopicPrefix  sql.NullString `db:"kafka_topic_prefix" json:"kafka_topic_prefix"`
-	KafkaBrokers      []string       `db:"kafka_brokers" json:"kafka_brokers"`
-	DatabaseUrl       sql.NullString `db:"database_url" json:"database_url"`
-	IsActive          sql.NullBool   `db:"is_active" json:"is_active"`
-	MonitoringEnabled bool           `db:"monitoring_enabled" json:"monitoring_enabled"`
-	CreatedAt         sql.NullTime   `db:"created_at" json:"created_at"`
-	UpdatedAt         sql.NullTime   `db:"updated_at" json:"updated_at"`
-	TotalCount        int64          `db:"total_count" json:"total_count"`
+	ID                     string         `db:"id" json:"id"`
+	Name                   string         `db:"name" json:"name"`
+	Subdomain              sql.NullString `db:"subdomain" json:"subdomain"`
+	CustomDomain           sql.NullString `db:"custom_domain" json:"custom_domain"`
+	LogoUrl                sql.NullString `db:"logo_url" json:"logo_url"`
+	PrimaryColor           sql.NullString `db:"primary_color" json:"primary_color"`
+	SecondaryColor         sql.NullString `db:"secondary_color" json:"secondary_color"`
+	DeploymentTier         sql.NullString `db:"deployment_tier" json:"deployment_tier"`
+	CustomSubdomainEnabled bool           `db:"custom_subdomain_enabled" json:"custom_subdomain_enabled"`
+	CustomDomainEnabled    bool           `db:"custom_domain_enabled" json:"custom_domain_enabled"`
+	DeploymentModel        sql.NullString `db:"deployment_model" json:"deployment_model"`
+	PrimaryClusterID       sql.NullString `db:"primary_cluster_id" json:"primary_cluster_id"`
+	OfficialClusterID      sql.NullString `db:"official_cluster_id" json:"official_cluster_id"`
+	KafkaTopicPrefix       sql.NullString `db:"kafka_topic_prefix" json:"kafka_topic_prefix"`
+	KafkaBrokers           []string       `db:"kafka_brokers" json:"kafka_brokers"`
+	DatabaseUrl            sql.NullString `db:"database_url" json:"database_url"`
+	IsActive               sql.NullBool   `db:"is_active" json:"is_active"`
+	MonitoringEnabled      bool           `db:"monitoring_enabled" json:"monitoring_enabled"`
+	CreatedAt              sql.NullTime   `db:"created_at" json:"created_at"`
+	UpdatedAt              sql.NullTime   `db:"updated_at" json:"updated_at"`
+	TotalCount             int64          `db:"total_count" json:"total_count"`
 }
 
 func (q *Queries) ListActiveTenantsByCluster(ctx context.Context, arg ListActiveTenantsByClusterParams) ([]ListActiveTenantsByClusterRow, error) {
@@ -194,6 +202,8 @@ func (q *Queries) ListActiveTenantsByCluster(ctx context.Context, arg ListActive
 			&i.PrimaryColor,
 			&i.SecondaryColor,
 			&i.DeploymentTier,
+			&i.CustomSubdomainEnabled,
+			&i.CustomDomainEnabled,
 			&i.DeploymentModel,
 			&i.PrimaryClusterID,
 			&i.OfficialClusterID,
@@ -221,7 +231,8 @@ func (q *Queries) ListActiveTenantsByCluster(ctx context.Context, arg ListActive
 
 const listActiveTenantsByIDs = `-- name: ListActiveTenantsByIDs :many
 SELECT id::text AS id, name, subdomain, custom_domain, logo_url, primary_color, secondary_color,
-       deployment_tier, deployment_model, primary_cluster_id, official_cluster_id,
+       deployment_tier, custom_subdomain_enabled, custom_domain_enabled,
+       deployment_model, primary_cluster_id, official_cluster_id,
        kafka_topic_prefix, kafka_brokers, database_url, is_active, monitoring_enabled,
        created_at, updated_at
 FROM quartermaster.tenants
@@ -229,24 +240,26 @@ WHERE id = ANY($1::uuid[]) AND is_active = true
 `
 
 type ListActiveTenantsByIDsRow struct {
-	ID                string         `db:"id" json:"id"`
-	Name              string         `db:"name" json:"name"`
-	Subdomain         sql.NullString `db:"subdomain" json:"subdomain"`
-	CustomDomain      sql.NullString `db:"custom_domain" json:"custom_domain"`
-	LogoUrl           sql.NullString `db:"logo_url" json:"logo_url"`
-	PrimaryColor      sql.NullString `db:"primary_color" json:"primary_color"`
-	SecondaryColor    sql.NullString `db:"secondary_color" json:"secondary_color"`
-	DeploymentTier    sql.NullString `db:"deployment_tier" json:"deployment_tier"`
-	DeploymentModel   sql.NullString `db:"deployment_model" json:"deployment_model"`
-	PrimaryClusterID  sql.NullString `db:"primary_cluster_id" json:"primary_cluster_id"`
-	OfficialClusterID sql.NullString `db:"official_cluster_id" json:"official_cluster_id"`
-	KafkaTopicPrefix  sql.NullString `db:"kafka_topic_prefix" json:"kafka_topic_prefix"`
-	KafkaBrokers      []string       `db:"kafka_brokers" json:"kafka_brokers"`
-	DatabaseUrl       sql.NullString `db:"database_url" json:"database_url"`
-	IsActive          sql.NullBool   `db:"is_active" json:"is_active"`
-	MonitoringEnabled bool           `db:"monitoring_enabled" json:"monitoring_enabled"`
-	CreatedAt         sql.NullTime   `db:"created_at" json:"created_at"`
-	UpdatedAt         sql.NullTime   `db:"updated_at" json:"updated_at"`
+	ID                     string         `db:"id" json:"id"`
+	Name                   string         `db:"name" json:"name"`
+	Subdomain              sql.NullString `db:"subdomain" json:"subdomain"`
+	CustomDomain           sql.NullString `db:"custom_domain" json:"custom_domain"`
+	LogoUrl                sql.NullString `db:"logo_url" json:"logo_url"`
+	PrimaryColor           sql.NullString `db:"primary_color" json:"primary_color"`
+	SecondaryColor         sql.NullString `db:"secondary_color" json:"secondary_color"`
+	DeploymentTier         sql.NullString `db:"deployment_tier" json:"deployment_tier"`
+	CustomSubdomainEnabled bool           `db:"custom_subdomain_enabled" json:"custom_subdomain_enabled"`
+	CustomDomainEnabled    bool           `db:"custom_domain_enabled" json:"custom_domain_enabled"`
+	DeploymentModel        sql.NullString `db:"deployment_model" json:"deployment_model"`
+	PrimaryClusterID       sql.NullString `db:"primary_cluster_id" json:"primary_cluster_id"`
+	OfficialClusterID      sql.NullString `db:"official_cluster_id" json:"official_cluster_id"`
+	KafkaTopicPrefix       sql.NullString `db:"kafka_topic_prefix" json:"kafka_topic_prefix"`
+	KafkaBrokers           []string       `db:"kafka_brokers" json:"kafka_brokers"`
+	DatabaseUrl            sql.NullString `db:"database_url" json:"database_url"`
+	IsActive               sql.NullBool   `db:"is_active" json:"is_active"`
+	MonitoringEnabled      bool           `db:"monitoring_enabled" json:"monitoring_enabled"`
+	CreatedAt              sql.NullTime   `db:"created_at" json:"created_at"`
+	UpdatedAt              sql.NullTime   `db:"updated_at" json:"updated_at"`
 }
 
 func (q *Queries) ListActiveTenantsByIDs(ctx context.Context, tenantIds []string) ([]ListActiveTenantsByIDsRow, error) {
@@ -267,6 +280,8 @@ func (q *Queries) ListActiveTenantsByIDs(ctx context.Context, tenantIds []string
 			&i.PrimaryColor,
 			&i.SecondaryColor,
 			&i.DeploymentTier,
+			&i.CustomSubdomainEnabled,
+			&i.CustomDomainEnabled,
 			&i.DeploymentModel,
 			&i.PrimaryClusterID,
 			&i.OfficialClusterID,
@@ -295,15 +310,23 @@ const listAliasedTenantsForCluster = `-- name: ListAliasedTenantsForCluster :man
 SELECT t.id::text AS tenant_id, t.subdomain
 FROM quartermaster.tenants t
 JOIN quartermaster.tenant_cluster_access tca ON tca.tenant_id = t.id
+JOIN quartermaster.infrastructure_clusters cluster ON cluster.cluster_id = tca.cluster_id
 WHERE tca.cluster_id = $1
   AND tca.is_active = true
   AND tca.subscription_status = 'active'
   AND tca.access_source <> 'unknown'
   AND (tca.expires_at IS NULL OR tca.expires_at > NOW())
   AND t.is_active = true
-  AND t.deployment_tier IN ('supporter', 'developer', 'production', 'enterprise')
+  AND (
+    t.custom_subdomain_enabled = true
+    OR (
+      t.billing_entitlements_observed_at = 'epoch'::timestamptz
+      AND t.deployment_tier IN ('supporter', 'developer', 'production', 'enterprise')
+    )
+  )
   AND t.subdomain IS NOT NULL
   AND t.subdomain <> ''
+  AND cluster.is_active = true
 ORDER BY t.id
 `
 

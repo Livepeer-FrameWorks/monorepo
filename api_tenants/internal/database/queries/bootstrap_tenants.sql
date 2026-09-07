@@ -4,13 +4,15 @@ FROM quartermaster.bootstrap_tenant_aliases;
 
 -- name: InsertBootstrapTenant :one
 INSERT INTO quartermaster.tenants (
-    name, deployment_tier, primary_color, secondary_color, created_at, updated_at
+    name, deployment_tier, primary_color, secondary_color,
+    custom_subdomain_enabled, custom_domain_enabled,
+    billing_entitlements_observed_at, created_at, updated_at
 ) VALUES (
     sqlc.arg(name)::text,
     sqlc.arg(deployment_tier)::text,
     sqlc.arg(primary_color)::text,
     sqlc.arg(secondary_color)::text,
-    NOW(), NOW()
+    false, false, NOW(), NOW(), NOW()
 )
 RETURNING id::text;
 

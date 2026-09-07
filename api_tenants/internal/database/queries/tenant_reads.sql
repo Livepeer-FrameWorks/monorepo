@@ -21,7 +21,8 @@ ORDER BY id;
 
 -- name: GetActiveTenantClusterRecord :one
 SELECT id::text AS id, name, subdomain, custom_domain, logo_url, primary_color, secondary_color,
-       deployment_tier, deployment_model, primary_cluster_id, official_cluster_id,
+       deployment_tier, custom_subdomain_enabled, custom_domain_enabled,
+       deployment_model, primary_cluster_id, official_cluster_id,
        kafka_topic_prefix, kafka_brokers, database_url, is_active, monitoring_enabled,
        created_at, updated_at
 FROM quartermaster.tenants
@@ -29,7 +30,8 @@ WHERE id = sqlc.arg(tenant_id)::uuid AND is_active = true;
 
 -- name: ListActiveTenantsByIDs :many
 SELECT id::text AS id, name, subdomain, custom_domain, logo_url, primary_color, secondary_color,
-       deployment_tier, deployment_model, primary_cluster_id, official_cluster_id,
+       deployment_tier, custom_subdomain_enabled, custom_domain_enabled,
+       deployment_model, primary_cluster_id, official_cluster_id,
        kafka_topic_prefix, kafka_brokers, database_url, is_active, monitoring_enabled,
        created_at, updated_at
 FROM quartermaster.tenants
@@ -39,7 +41,8 @@ WHERE id = ANY(sqlc.arg(tenant_ids)::uuid[]) AND is_active = true;
 SELECT sub.*, count(*) OVER() AS total_count
 FROM (
     SELECT DISTINCT t.id::text AS id, t.name, t.subdomain, t.custom_domain, t.logo_url,
-           t.primary_color, t.secondary_color, t.deployment_tier, t.deployment_model,
+           t.primary_color, t.secondary_color, t.deployment_tier,
+           t.custom_subdomain_enabled, t.custom_domain_enabled, t.deployment_model,
            t.primary_cluster_id, t.official_cluster_id, t.kafka_topic_prefix,
            t.kafka_brokers, t.database_url, t.is_active, t.monitoring_enabled,
            t.created_at, t.updated_at
@@ -65,13 +68,21 @@ SELECT EXISTS (
 SELECT t.id::text AS tenant_id, t.subdomain
 FROM quartermaster.tenants t
 JOIN quartermaster.tenant_cluster_access tca ON tca.tenant_id = t.id
+JOIN quartermaster.infrastructure_clusters cluster ON cluster.cluster_id = tca.cluster_id
 WHERE tca.cluster_id = sqlc.arg(cluster_id)
   AND tca.is_active = true
   AND tca.subscription_status = 'active'
   AND tca.access_source <> 'unknown'
   AND (tca.expires_at IS NULL OR tca.expires_at > NOW())
   AND t.is_active = true
-  AND t.deployment_tier IN ('supporter', 'developer', 'production', 'enterprise')
+  AND (
+    t.custom_subdomain_enabled = true
+    OR (
+      t.billing_entitlements_observed_at = 'epoch'::timestamptz
+      AND t.deployment_tier IN ('supporter', 'developer', 'production', 'enterprise')
+    )
+  )
   AND t.subdomain IS NOT NULL
   AND t.subdomain <> ''
+  AND cluster.is_active = true
 ORDER BY t.id;

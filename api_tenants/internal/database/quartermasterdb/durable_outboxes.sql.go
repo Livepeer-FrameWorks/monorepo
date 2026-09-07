@@ -234,6 +234,32 @@ func (q *Queries) CompleteServiceEventOutbox(ctx context.Context, id string) err
 	return err
 }
 
+const countPendingNavigatorCustomDomainOutbox = `-- name: CountPendingNavigatorCustomDomainOutbox :one
+SELECT COUNT(*)::bigint
+FROM quartermaster.navigator_custom_domain_outbox
+WHERE completed_at IS NULL
+`
+
+func (q *Queries) CountPendingNavigatorCustomDomainOutbox(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countPendingNavigatorCustomDomainOutbox)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const countPendingNavigatorTenantAliasOutbox = `-- name: CountPendingNavigatorTenantAliasOutbox :one
+SELECT COUNT(*)::bigint
+FROM quartermaster.navigator_tenant_alias_outbox
+WHERE completed_at IS NULL
+`
+
+func (q *Queries) CountPendingNavigatorTenantAliasOutbox(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countPendingNavigatorTenantAliasOutbox)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const enqueueNavigatorCustomDomain = `-- name: EnqueueNavigatorCustomDomain :one
 INSERT INTO quartermaster.navigator_custom_domain_outbox (
     tenant_id, domain, action

@@ -141,10 +141,10 @@ type SimplePageFilter struct {
 
 func (q *Queries) ListTenantClusterAccessPage(ctx context.Context, filter SimplePageFilter) ([]TenantClusterAccessRow, int32, error) {
 	var total int32
-	if err := q.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM quartermaster.infrastructure_clusters c JOIN quartermaster.tenant_cluster_access a ON c.cluster_id = a.cluster_id WHERE a.tenant_id = $1 AND c.is_active = true`, filter.ScopeID).Scan(&total); err != nil {
+	if err := q.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM quartermaster.infrastructure_clusters c JOIN quartermaster.tenant_cluster_access a ON c.cluster_id = a.cluster_id WHERE a.tenant_id = $1 AND a.is_active = true AND c.is_active = true`, filter.ScopeID).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	where, args, direction := "WHERE a.tenant_id = $1 AND c.is_active = true", []any{filter.ScopeID}, "DESC"
+	where, args, direction := "WHERE a.tenant_id = $1 AND a.is_active = true AND c.is_active = true", []any{filter.ScopeID}, "DESC"
 	if filter.Backward {
 		direction = "ASC"
 	}

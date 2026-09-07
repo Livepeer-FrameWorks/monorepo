@@ -71,6 +71,11 @@ ORDER BY created_at
 FOR UPDATE SKIP LOCKED
 LIMIT sqlc.arg(batch_size)::integer;
 
+-- name: CountPendingNavigatorCustomDomainOutbox :one
+SELECT COUNT(*)::bigint
+FROM quartermaster.navigator_custom_domain_outbox
+WHERE completed_at IS NULL;
+
 -- name: MarkNavigatorCustomDomainOutboxClaimed :exec
 UPDATE quartermaster.navigator_custom_domain_outbox
 SET claimed_at = NOW()
@@ -130,6 +135,11 @@ WHERE o.completed_at IS NULL
 ORDER BY o.seq
 FOR UPDATE SKIP LOCKED
 LIMIT sqlc.arg(batch_size)::integer;
+
+-- name: CountPendingNavigatorTenantAliasOutbox :one
+SELECT COUNT(*)::bigint
+FROM quartermaster.navigator_tenant_alias_outbox
+WHERE completed_at IS NULL;
 
 -- name: MarkNavigatorTenantAliasOutboxClaimed :exec
 UPDATE quartermaster.navigator_tenant_alias_outbox

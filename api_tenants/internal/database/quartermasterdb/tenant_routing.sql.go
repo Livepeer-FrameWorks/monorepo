@@ -169,6 +169,9 @@ SELECT id::text AS id,
        primary_color,
        secondary_color,
        deployment_tier,
+       custom_subdomain_enabled,
+       custom_domain_enabled,
+       billing_entitlements_observed_at <> 'epoch'::timestamptz AS billing_entitlements_observed,
        deployment_model,
        primary_cluster_id,
        official_cluster_id,
@@ -186,26 +189,29 @@ WHERE id = $1::uuid
 `
 
 type GetTenantRecordRow struct {
-	ID                 string         `db:"id" json:"id"`
-	Name               string         `db:"name" json:"name"`
-	Subdomain          sql.NullString `db:"subdomain" json:"subdomain"`
-	CustomDomain       sql.NullString `db:"custom_domain" json:"custom_domain"`
-	LogoUrl            sql.NullString `db:"logo_url" json:"logo_url"`
-	PrimaryColor       sql.NullString `db:"primary_color" json:"primary_color"`
-	SecondaryColor     sql.NullString `db:"secondary_color" json:"secondary_color"`
-	DeploymentTier     sql.NullString `db:"deployment_tier" json:"deployment_tier"`
-	DeploymentModel    sql.NullString `db:"deployment_model" json:"deployment_model"`
-	PrimaryClusterID   sql.NullString `db:"primary_cluster_id" json:"primary_cluster_id"`
-	OfficialClusterID  sql.NullString `db:"official_cluster_id" json:"official_cluster_id"`
-	KafkaTopicPrefix   sql.NullString `db:"kafka_topic_prefix" json:"kafka_topic_prefix"`
-	KafkaBrokers       []string       `db:"kafka_brokers" json:"kafka_brokers"`
-	DatabaseUrl        sql.NullString `db:"database_url" json:"database_url"`
-	IsActive           sql.NullBool   `db:"is_active" json:"is_active"`
-	MonitoringEnabled  bool           `db:"monitoring_enabled" json:"monitoring_enabled"`
-	CreatedAt          sql.NullTime   `db:"created_at" json:"created_at"`
-	UpdatedAt          sql.NullTime   `db:"updated_at" json:"updated_at"`
-	RateLimitPerMinute int32          `db:"rate_limit_per_minute" json:"rate_limit_per_minute"`
-	RateLimitBurst     int32          `db:"rate_limit_burst" json:"rate_limit_burst"`
+	ID                          string         `db:"id" json:"id"`
+	Name                        string         `db:"name" json:"name"`
+	Subdomain                   sql.NullString `db:"subdomain" json:"subdomain"`
+	CustomDomain                sql.NullString `db:"custom_domain" json:"custom_domain"`
+	LogoUrl                     sql.NullString `db:"logo_url" json:"logo_url"`
+	PrimaryColor                sql.NullString `db:"primary_color" json:"primary_color"`
+	SecondaryColor              sql.NullString `db:"secondary_color" json:"secondary_color"`
+	DeploymentTier              sql.NullString `db:"deployment_tier" json:"deployment_tier"`
+	CustomSubdomainEnabled      bool           `db:"custom_subdomain_enabled" json:"custom_subdomain_enabled"`
+	CustomDomainEnabled         bool           `db:"custom_domain_enabled" json:"custom_domain_enabled"`
+	BillingEntitlementsObserved bool           `db:"billing_entitlements_observed" json:"billing_entitlements_observed"`
+	DeploymentModel             sql.NullString `db:"deployment_model" json:"deployment_model"`
+	PrimaryClusterID            sql.NullString `db:"primary_cluster_id" json:"primary_cluster_id"`
+	OfficialClusterID           sql.NullString `db:"official_cluster_id" json:"official_cluster_id"`
+	KafkaTopicPrefix            sql.NullString `db:"kafka_topic_prefix" json:"kafka_topic_prefix"`
+	KafkaBrokers                []string       `db:"kafka_brokers" json:"kafka_brokers"`
+	DatabaseUrl                 sql.NullString `db:"database_url" json:"database_url"`
+	IsActive                    sql.NullBool   `db:"is_active" json:"is_active"`
+	MonitoringEnabled           bool           `db:"monitoring_enabled" json:"monitoring_enabled"`
+	CreatedAt                   sql.NullTime   `db:"created_at" json:"created_at"`
+	UpdatedAt                   sql.NullTime   `db:"updated_at" json:"updated_at"`
+	RateLimitPerMinute          int32          `db:"rate_limit_per_minute" json:"rate_limit_per_minute"`
+	RateLimitBurst              int32          `db:"rate_limit_burst" json:"rate_limit_burst"`
 }
 
 func (q *Queries) GetTenantRecord(ctx context.Context, tenantID string) (GetTenantRecordRow, error) {
@@ -220,6 +226,9 @@ func (q *Queries) GetTenantRecord(ctx context.Context, tenantID string) (GetTena
 		&i.PrimaryColor,
 		&i.SecondaryColor,
 		&i.DeploymentTier,
+		&i.CustomSubdomainEnabled,
+		&i.CustomDomainEnabled,
+		&i.BillingEntitlementsObserved,
 		&i.DeploymentModel,
 		&i.PrimaryClusterID,
 		&i.OfficialClusterID,

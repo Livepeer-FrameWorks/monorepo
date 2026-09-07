@@ -30,11 +30,186 @@ func TestGeneratedQueryCatalogPrepares_RealYugabyte(t *testing.T) {
 	prepareQuartermasterQueryCatalog(t, startQuartermasterQueryCatalogRealYugabyte(t))
 }
 
+func TestCreateTenantRecordStartsWithObservedFailClosedDNSEntitlements_RealPG(t *testing.T) {
+	db := startQuartermasterQueryCatalogRealPG(t)
+	ctx := context.Background()
+	createdAt := time.Now().UTC().Truncate(time.Microsecond)
+	const tenantID = "11111111-1111-4111-8111-111111111121"
+	if err := New(db).CreateTenantRecord(ctx, CreateTenantRecordParams{
+		ID: tenantID, Name: "New tenant", Subdomain: sql.NullString{String: "new-tenant", Valid: true},
+		DeploymentTier: sql.NullString{String: "free", Valid: true}, CreatedAt: createdAt,
+	}); err != nil {
+		t.Fatalf("create tenant: %v", err)
+	}
+	var subdomainEnabled, domainEnabled bool
+	var observedAt time.Time
+	if err := db.QueryRowContext(ctx, `SELECT custom_subdomain_enabled, custom_domain_enabled, billing_entitlements_observed_at FROM quartermaster.tenants WHERE id = $1::uuid`, tenantID).
+		Scan(&subdomainEnabled, &domainEnabled, &observedAt); err != nil {
+		t.Fatal(err)
+	}
+	if subdomainEnabled || domainEnabled || observedAt.Equal(time.Unix(0, 0).UTC()) {
+		t.Fatalf("new tenant DNS state = subdomain:%v domain:%v observed:%s", subdomainEnabled, domainEnabled, observedAt)
+	}
+}
+
+func TestDNSEntitlementExpandPreservesPaidAliasesUntilObservation_RealPG(t *testing.T) {
+	db := startQuartermasterQueryCatalogRealPG(t)
+	ctx := context.Background()
+	const tenantID = "11111111-1111-4111-8111-111111111119"
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO quartermaster.tenants
+			(id, name, deployment_tier, custom_subdomain_enabled, custom_domain_enabled,
+			 billing_entitlements_observed_at, subdomain, custom_domain)
+		VALUES ($1::uuid, 'Upgrade paid tenant', 'production', false, false, 'epoch',
+		        'upgrade-paid', 'video.example.com')
+	`, tenantID); err != nil {
+		t.Fatalf("seed pre-upgrade tenant: %v", err)
+	}
+	migration, err := dbsql.Content.ReadFile("migrations/quartermaster/v0.3.0/expand/008_tenant_dns_entitlements.sql")
+	if err != nil {
+		t.Fatalf("read migration: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, string(migration)); err != nil {
+		t.Fatalf("apply migration: %v", err)
+	}
+	var subdomainEnabled, domainEnabled bool
+	var observedAt time.Time
+	if err := db.QueryRowContext(ctx, `
+		SELECT custom_subdomain_enabled, custom_domain_enabled, billing_entitlements_observed_at
+		FROM quartermaster.tenants WHERE id = $1::uuid
+	`, tenantID).Scan(&subdomainEnabled, &domainEnabled, &observedAt); err != nil {
+		t.Fatalf("read upgraded tenant: %v", err)
+	}
+	if subdomainEnabled || domainEnabled || !observedAt.Equal(time.Unix(0, 0).UTC()) {
+		t.Fatalf("upgrade compatibility state subdomain=%v domain=%v observed=%s", subdomainEnabled, domainEnabled, observedAt)
+	}
+	const freeTenantID = "11111111-1111-4111-8111-111111111120"
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO quartermaster.tenants
+			(id, name, deployment_tier, billing_entitlements_observed_at, subdomain)
+		VALUES ($1::uuid, 'Upgrade free tenant', 'free', 'epoch', 'upgrade-free')
+	`, freeTenantID); err != nil {
+		t.Fatalf("seed free DNS compatibility tenant: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO quartermaster.infrastructure_clusters
+			(cluster_id, cluster_name, cluster_type, base_url, cluster_class)
+		VALUES ('dns-upgrade-cluster', 'DNS upgrade cluster', 'edge', 'https://dns-upgrade.example.com', 'platform_official')
+	`); err != nil {
+		t.Fatalf("seed DNS compatibility cluster: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO quartermaster.tenant_cluster_access
+			(tenant_id, cluster_id, access_source, subscription_status, is_active)
+		VALUES ($2::uuid, 'dns-upgrade-cluster', 'platform_tier', 'active', true),
+		       ($1::uuid, 'dns-upgrade-cluster', 'platform_tier', 'active', true)
+	`, freeTenantID, tenantID); err != nil {
+		t.Fatalf("seed DNS compatibility access: %v", err)
+	}
+	aliased, err := New(db).ListAliasedTenantsForCluster(ctx, "dns-upgrade-cluster")
+	if err != nil {
+		t.Fatalf("list aliased tenants during epoch window: %v", err)
+	}
+	if len(aliased) != 1 || aliased[0].TenantID != tenantID {
+		t.Fatalf("epoch TLS candidates = %+v, want paid tenant only", aliased)
+	}
+	rows, err := New(db).ListDesiredTenantAliases(ctx)
+	if err != nil {
+		t.Fatalf("list desired aliases: %v", err)
+	}
+	for _, row := range rows {
+		if row.TenantID == tenantID {
+			t.Fatal("never-observed upgrade row must not enter destructive alias backstop")
+		}
+	}
+	if _, err := db.ExecContext(ctx, `
+		UPDATE quartermaster.tenants
+		SET custom_subdomain_enabled = true, billing_entitlements_observed_at = NOW()
+		WHERE id = $1::uuid
+	`, tenantID); err != nil {
+		t.Fatalf("observe paid DNS entitlement: %v", err)
+	}
+	rows, err = New(db).ListDesiredTenantAliases(ctx)
+	if err != nil {
+		t.Fatalf("list desired aliases after observation: %v", err)
+	}
+	foundDesired := false
+	for _, row := range rows {
+		if row.TenantID == tenantID && row.Want && len(row.ClusterIds) == 1 && row.ClusterIds[0] == "dns-upgrade-cluster" {
+			foundDesired = true
+		}
+	}
+	if !foundDesired {
+		t.Fatal("real PostgreSQL backstop query did not expose observed paid alias intent")
+	}
+}
+
+func TestListTenantEffectiveAccessUsesCanonicalActiveGrantPredicate_RealPG(t *testing.T) {
+	db := startQuartermasterQueryCatalogRealPG(t)
+	ctx := context.Background()
+	const tenantID = "11111111-1111-4111-8111-111111111122"
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO quartermaster.tenants (id, name, subdomain)
+		VALUES ($1::uuid, 'Effective access tenant', 'effective-access')
+	`, tenantID); err != nil {
+		t.Fatalf("seed effective access tenant: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO quartermaster.infrastructure_clusters
+			(cluster_id, cluster_name, cluster_type, base_url, owner_tenant_id, cluster_class, is_active, allow_private_pull_sources)
+		VALUES
+			('access-eligible', 'Eligible', 'edge', 'https://eligible.example.com', NULL, 'third_party_marketplace', true, true),
+			('access-owner', 'Owner', 'edge', 'https://owner.example.com', $1::uuid, 'tenant_private', true, true),
+			('access-pending', 'Pending', 'edge', 'https://pending.example.com', NULL, 'third_party_marketplace', true, true),
+			('access-expired', 'Expired', 'edge', 'https://expired.example.com', NULL, 'third_party_marketplace', true, true),
+			('access-unknown', 'Unknown', 'edge', 'https://unknown.example.com', NULL, 'third_party_marketplace', true, true),
+			('access-inactive-grant', 'Inactive grant', 'edge', 'https://inactive-grant.example.com', NULL, 'third_party_marketplace', true, true),
+			('access-inactive-cluster', 'Inactive cluster', 'edge', 'https://inactive-cluster.example.com', NULL, 'third_party_marketplace', false, true)
+	`, tenantID); err != nil {
+		t.Fatalf("seed effective access clusters: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `
+		INSERT INTO quartermaster.tenant_cluster_access
+			(tenant_id, cluster_id, access_source, subscription_status, is_active, expires_at)
+		VALUES
+			($1::uuid, 'access-eligible', 'marketplace_subscription', 'active', true, NULL),
+			($1::uuid, 'access-owner', 'owner', 'active', true, NULL),
+			($1::uuid, 'access-pending', 'marketplace_subscription', 'pending_approval', true, NULL),
+			($1::uuid, 'access-expired', 'operator_override', 'active', true, NOW() - INTERVAL '1 minute'),
+			($1::uuid, 'access-unknown', 'unknown', 'active', true, NULL),
+			($1::uuid, 'access-inactive-grant', 'private_invite', 'active', false, NULL),
+			($1::uuid, 'access-inactive-cluster', 'private_invite', 'active', true, NULL)
+	`, tenantID); err != nil {
+		t.Fatalf("seed effective access grants: %v", err)
+	}
+
+	rows, err := New(db).ListTenantEffectiveAccess(ctx, tenantID)
+	if err != nil {
+		t.Fatalf("list effective access: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("effective access rows = %+v, want eligible and owner only", rows)
+	}
+	want := map[string]bool{"access-eligible": true, "access-owner": true}
+	for _, row := range rows {
+		if !want[row.ClusterID] {
+			t.Fatalf("ineligible cluster %q passed the effective-access predicate", row.ClusterID)
+		}
+		if !row.AllowPrivatePullSources {
+			t.Fatalf("cluster %q lost pull-source capability metadata", row.ClusterID)
+		}
+		delete(want, row.ClusterID)
+	}
+	if len(want) != 0 {
+		t.Fatalf("eligible clusters omitted: %v", want)
+	}
+}
+
 func prepareQuartermasterQueryCatalog(t *testing.T, db *sql.DB) {
 	t.Helper()
 	queries := quartermasterGeneratedQueries(t)
-	if len(queries) != 163 {
-		t.Fatalf("found %d generated Quartermaster queries, want 163", len(queries))
+	if len(queries) != 173 {
+		t.Fatalf("found %d generated Quartermaster queries, want 173", len(queries))
 	}
 	ctx := context.Background()
 	conn, err := db.Conn(ctx)
@@ -379,9 +554,6 @@ func runConvertedRuntimeWriteAdapters(t *testing.T, ctx context.Context, db *sql
 		MachineIDSHA: "contract-machine", MACsSHA: "contract-macs", AttrsJSON: `{"contract":true}`, IPs: []string{"192.0.2.20"},
 		PublicKeyEd25519: nodeIdentityKey}); err != nil {
 		t.Fatalf("upsert edge fingerprint: %v", err)
-	}
-	if _, err := queries.BindNodeFingerprintPublicKey(ctx, "contract-runtime-node", nodeIdentityKey); err != nil {
-		t.Fatalf("bind edge fingerprint public key: %v", err)
 	}
 	if _, err := queries.GetEdgeNodeFingerprintBindingForUpdate(ctx, "contract-runtime-node"); err != nil {
 		t.Fatalf("get edge fingerprint binding: %v", err)

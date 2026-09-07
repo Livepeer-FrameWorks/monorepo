@@ -50,6 +50,12 @@ SET wg_mesh_cidr = sqlc.arg(mesh_cidr)::cidr,
     updated_at = NOW()
 WHERE cluster_id = sqlc.arg(cluster_id);
 
+-- name: ListTenantIDsForCluster :many
+SELECT DISTINCT tenant_id::text
+FROM quartermaster.tenant_cluster_access
+WHERE cluster_id = sqlc.arg(cluster_id)
+ORDER BY tenant_id::text;
+
 -- name: GetTenantClusterOwnershipLimit :one
 SELECT max_owned_clusters, is_provider,
        (SELECT COUNT(*) FROM quartermaster.infrastructure_clusters WHERE owner_tenant_id = sqlc.arg(tenant_id)::uuid)::bigint AS current_owned_clusters

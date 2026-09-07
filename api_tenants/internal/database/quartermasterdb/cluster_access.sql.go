@@ -37,7 +37,7 @@ func (q *Queries) BootstrapTenantClusterAccess(ctx context.Context, arg Bootstra
 	return err
 }
 
-const deactivateTenantClusterAccess = `-- name: DeactivateTenantClusterAccess :exec
+const deactivateTenantClusterAccess = `-- name: DeactivateTenantClusterAccess :execrows
 UPDATE quartermaster.tenant_cluster_access
 SET is_active = false, subscription_status = 'suspended', updated_at = NOW()
 WHERE tenant_id = $1::uuid
@@ -50,9 +50,12 @@ type DeactivateTenantClusterAccessParams struct {
 	ClusterID string `db:"cluster_id" json:"cluster_id"`
 }
 
-func (q *Queries) DeactivateTenantClusterAccess(ctx context.Context, arg DeactivateTenantClusterAccessParams) error {
-	_, err := q.db.ExecContext(ctx, deactivateTenantClusterAccess, arg.TenantID, arg.ClusterID)
-	return err
+func (q *Queries) DeactivateTenantClusterAccess(ctx context.Context, arg DeactivateTenantClusterAccessParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deactivateTenantClusterAccess, arg.TenantID, arg.ClusterID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const getClusterAccessMaterializationPolicy = `-- name: GetClusterAccessMaterializationPolicy :one
@@ -507,10 +510,11 @@ func (q *Queries) SubscribeTenantToCluster(ctx context.Context, arg SubscribeTen
 	return err
 }
 
-const unsubscribeTenantFromCluster = `-- name: UnsubscribeTenantFromCluster :exec
+const unsubscribeTenantFromCluster = `-- name: UnsubscribeTenantFromCluster :execrows
 UPDATE quartermaster.tenant_cluster_access
 SET is_active = false, updated_at = NOW()
 WHERE tenant_id = $1::uuid AND cluster_id = $2
+  AND is_active = true
 `
 
 type UnsubscribeTenantFromClusterParams struct {
@@ -518,7 +522,10 @@ type UnsubscribeTenantFromClusterParams struct {
 	ClusterID string `db:"cluster_id" json:"cluster_id"`
 }
 
-func (q *Queries) UnsubscribeTenantFromCluster(ctx context.Context, arg UnsubscribeTenantFromClusterParams) error {
-	_, err := q.db.ExecContext(ctx, unsubscribeTenantFromCluster, arg.TenantID, arg.ClusterID)
-	return err
+func (q *Queries) UnsubscribeTenantFromCluster(ctx context.Context, arg UnsubscribeTenantFromClusterParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, unsubscribeTenantFromCluster, arg.TenantID, arg.ClusterID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }

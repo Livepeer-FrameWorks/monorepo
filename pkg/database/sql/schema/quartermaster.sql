@@ -7,6 +7,23 @@
 
 CREATE SCHEMA IF NOT EXISTS quartermaster;
 
+CREATE TABLE IF NOT EXISTS quartermaster.delegated_jwt_replays (
+    jti TEXT PRIMARY KEY,
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_quartermaster_delegated_jwt_replays_expires_at
+    ON quartermaster.delegated_jwt_replays (expires_at);
+
+-- Durable cross-service release handoffs. Purser records the DNS entitlement
+-- sweep only after every reachable subscription tenant has been materialized;
+-- Quartermaster's destructive compatibility migration requires that receipt.
+CREATE TABLE IF NOT EXISTS quartermaster.billing_entitlement_handoffs (
+    handoff_key TEXT PRIMARY KEY,
+    subscription_count BIGINT NOT NULL CHECK (subscription_count >= 0),
+    completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- ============================================================================
 -- EXTENSIONS & TYPES
 -- ============================================================================
@@ -35,6 +52,9 @@ CREATE TABLE IF NOT EXISTS quartermaster.tenants (
 
     -- ===== DEPLOYMENT CONFIGURATION =====
     deployment_tier VARCHAR(50) DEFAULT 'free',  -- billing-derived; Purser stamps billing_tiers.tier_name
+    custom_subdomain_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    custom_domain_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    billing_entitlements_observed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     deployment_model VARCHAR(50) DEFAULT 'shared',
     primary_cluster_id VARCHAR(100),
     official_cluster_id VARCHAR(100),  -- billing-tier cluster providing geographic coverage

@@ -150,6 +150,36 @@ func (q *Queries) GetTenantPreferredClusterRegion(ctx context.Context, tenantID 
 	return region_id, err
 }
 
+const listTenantIDsForCluster = `-- name: ListTenantIDsForCluster :many
+SELECT DISTINCT tenant_id::text
+FROM quartermaster.tenant_cluster_access
+WHERE cluster_id = $1
+ORDER BY tenant_id::text
+`
+
+func (q *Queries) ListTenantIDsForCluster(ctx context.Context, clusterID string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listTenantIDsForCluster, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var tenant_id string
+		if err := rows.Scan(&tenant_id); err != nil {
+			return nil, err
+		}
+		items = append(items, tenant_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markClusterProvisioning = `-- name: MarkClusterProvisioning :exec
 UPDATE quartermaster.infrastructure_clusters
 SET health_status = 'provisioning'

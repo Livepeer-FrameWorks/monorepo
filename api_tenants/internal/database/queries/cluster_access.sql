@@ -16,7 +16,7 @@ ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
     resource_limits = COALESCE(NULLIF(quartermaster.tenant_cluster_access.resource_limits, '{}'::jsonb), EXCLUDED.resource_limits),
     updated_at = NOW();
 
--- name: DeactivateTenantClusterAccess :exec
+-- name: DeactivateTenantClusterAccess :execrows
 UPDATE quartermaster.tenant_cluster_access
 SET is_active = false, subscription_status = 'suspended', updated_at = NOW()
 WHERE tenant_id = sqlc.arg(tenant_id)::uuid
@@ -161,10 +161,11 @@ ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
     is_active = true,
     updated_at = NOW();
 
--- name: UnsubscribeTenantFromCluster :exec
+-- name: UnsubscribeTenantFromCluster :execrows
 UPDATE quartermaster.tenant_cluster_access
 SET is_active = false, updated_at = NOW()
-WHERE tenant_id = sqlc.arg(tenant_id)::uuid AND cluster_id = sqlc.arg(cluster_id);
+WHERE tenant_id = sqlc.arg(tenant_id)::uuid AND cluster_id = sqlc.arg(cluster_id)
+  AND is_active = true;
 
 -- name: GrantTenantClusterAccess :exec
 INSERT INTO quartermaster.tenant_cluster_access

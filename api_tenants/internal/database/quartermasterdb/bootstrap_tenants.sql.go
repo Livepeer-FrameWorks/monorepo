@@ -77,13 +77,15 @@ func (q *Queries) GetBootstrapTenantClusterAccess(ctx context.Context, arg GetBo
 
 const insertBootstrapTenant = `-- name: InsertBootstrapTenant :one
 INSERT INTO quartermaster.tenants (
-    name, deployment_tier, primary_color, secondary_color, created_at, updated_at
+    name, deployment_tier, primary_color, secondary_color,
+    custom_subdomain_enabled, custom_domain_enabled,
+    billing_entitlements_observed_at, created_at, updated_at
 ) VALUES (
     $1::text,
     $2::text,
     $3::text,
     $4::text,
-    NOW(), NOW()
+    false, false, NOW(), NOW(), NOW()
 )
 RETURNING id::text
 `

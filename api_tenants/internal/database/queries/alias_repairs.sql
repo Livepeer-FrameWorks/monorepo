@@ -4,31 +4,67 @@ SELECT t.id::text AS tenant_id,
        COALESCE((
            SELECT array_agg(tca.cluster_id ORDER BY tca.cluster_id)
            FROM quartermaster.tenant_cluster_access tca
+	       JOIN quartermaster.infrastructure_clusters cluster ON cluster.cluster_id = tca.cluster_id
            WHERE tca.tenant_id = t.id
              AND tca.is_active = true
              AND tca.subscription_status = 'active'
              AND tca.access_source <> 'unknown'
              AND (tca.expires_at IS NULL OR tca.expires_at > NOW())
+	         AND cluster.is_active = true
        ), ARRAY[]::text[])::text[] AS cluster_ids,
        (
            t.is_active
-           AND t.deployment_tier IN ('supporter', 'developer', 'production', 'enterprise')
+           AND t.custom_subdomain_enabled = true
            AND EXISTS (
                SELECT 1
                FROM quartermaster.tenant_cluster_access tca
+	           JOIN quartermaster.infrastructure_clusters cluster ON cluster.cluster_id = tca.cluster_id
                WHERE tca.tenant_id = t.id
                  AND tca.is_active = true
                  AND tca.subscription_status = 'active'
                  AND tca.access_source <> 'unknown'
                  AND (tca.expires_at IS NULL OR tca.expires_at > NOW())
+	             AND cluster.is_active = true
            )
        )::boolean AS want
-FROM quartermaster.tenants t;
+FROM quartermaster.tenants t
+WHERE t.billing_entitlements_observed_at <> 'epoch'::timestamptz;
+
+-- name: ListDesiredTenantCustomDomains :many
+SELECT t.id::text AS tenant_id,
+       COALESCE(t.custom_domain, '')::text AS custom_domain,
+       (
+           t.is_active
+           AND t.custom_subdomain_enabled
+           AND t.custom_domain_enabled
+           AND NULLIF(btrim(t.custom_domain), '') IS NOT NULL
+           AND EXISTS (
+               SELECT 1
+               FROM quartermaster.tenant_cluster_access tca
+	           JOIN quartermaster.infrastructure_clusters cluster ON cluster.cluster_id = tca.cluster_id
+               WHERE tca.tenant_id = t.id
+                 AND tca.is_active = true
+                 AND tca.subscription_status = 'active'
+                 AND tca.access_source <> 'unknown'
+                 AND (tca.expires_at IS NULL OR tca.expires_at > NOW())
+	             AND cluster.is_active = true
+           )
+       )::boolean AS want
+FROM quartermaster.tenants t
+WHERE t.billing_entitlements_observed_at <> 'epoch'::timestamptz;
 
 -- name: TenantAliasOutboxHasPending :one
 SELECT EXISTS (
     SELECT 1
     FROM quartermaster.navigator_tenant_alias_outbox
+    WHERE tenant_id = sqlc.arg(tenant_id)::uuid
+      AND completed_at IS NULL
+)::boolean;
+
+-- name: TenantCustomDomainOutboxHasPending :one
+SELECT EXISTS (
+    SELECT 1
+    FROM quartermaster.navigator_custom_domain_outbox
     WHERE tenant_id = sqlc.arg(tenant_id)::uuid
       AND completed_at IS NULL
 )::boolean;

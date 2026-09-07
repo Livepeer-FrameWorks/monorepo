@@ -90,6 +90,8 @@ func Register() {
 		Run:                 runClusterAccessProvenance,
 		Verify:              verifyClusterAccessProvenance,
 	})
+	registerNodeIdentityKeysMigration()
+	registerTenantDNSEntitlementsMigration()
 }
 
 func runClusterAccessProvenance(ctx context.Context, db datamigrate.DB, opts datamigrate.RunOptions) (datamigrate.Progress, error) {

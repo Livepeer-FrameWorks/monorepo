@@ -135,19 +135,6 @@ func (q *Queries) ResolveNodeFingerprint(ctx context.Context, kind NodeFingerpri
 	return out, nil
 }
 
-func (q *Queries) BindNodeFingerprintPublicKey(ctx context.Context, nodeID string, publicKey []byte) ([]byte, error) {
-	row := q.db.QueryRowContext(ctx, `
-		UPDATE quartermaster.node_fingerprints
-		SET node_identity_public_key_ed25519 = COALESCE(node_identity_public_key_ed25519, $2),
-		    last_seen = NOW()
-		WHERE node_id = $1
-		RETURNING node_identity_public_key_ed25519
-	`, nodeID, publicKey)
-	var bound []byte
-	err := row.Scan(&bound)
-	return bound, err
-}
-
 func (q *Queries) UpsertFingerprintSeenIP(ctx context.Context, nodeID, peerIP string) error {
 	_, err := q.db.ExecContext(ctx, `
 		UPDATE quartermaster.node_fingerprints

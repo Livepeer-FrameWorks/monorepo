@@ -28,7 +28,7 @@ func (q *Queries) ListInfrastructureNodesPage(ctx context.Context, filter NodeLi
 	switch filter.Scope {
 	case NodeScopeTenant:
 		args = append(args, filter.TenantID)
-		where = "WHERE n.cluster_id IN (SELECT c.cluster_id FROM quartermaster.infrastructure_clusters c WHERE c.owner_tenant_id = $1 UNION SELECT tca.cluster_id FROM quartermaster.tenant_cluster_access tca WHERE tca.tenant_id = $1 AND tca.is_active = true)"
+		where = "WHERE n.cluster_id IN (SELECT c.cluster_id FROM quartermaster.infrastructure_clusters c WHERE c.owner_tenant_id = $1 AND c.is_active = true)"
 	case NodeScopeService:
 		where = "WHERE n.cluster_id IN (SELECT c.cluster_id FROM quartermaster.infrastructure_clusters c WHERE c.is_active = true)"
 	}
@@ -106,7 +106,7 @@ func (q *Queries) ListHealthyServiceNodes(ctx context.Context, filter HealthyNod
 	switch filter.Scope {
 	case NodeScopeTenant:
 		args = append(args, filter.TenantID)
-		where = fmt.Sprintf("WHERE %s IN (SELECT c.cluster_id FROM quartermaster.infrastructure_clusters c WHERE c.owner_tenant_id = $1 UNION SELECT tca.cluster_id FROM quartermaster.tenant_cluster_access tca WHERE tca.tenant_id = $1 AND tca.is_active = true)", clusterColumn)
+		where = fmt.Sprintf("WHERE %s IN (SELECT c.cluster_id FROM quartermaster.infrastructure_clusters c WHERE c.owner_tenant_id = $1 AND c.is_active = true)", clusterColumn)
 	case NodeScopeService:
 		where = fmt.Sprintf("WHERE %s IN (SELECT c.cluster_id FROM quartermaster.infrastructure_clusters c WHERE c.is_active = true)", clusterColumn)
 	}

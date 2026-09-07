@@ -86,4 +86,8 @@ func TestRegisterClusterAccessProvenance(t *testing.T) {
 	if migration.Service != "quartermaster" || migration.RequiredBeforePhase != "postdeploy" {
 		t.Fatalf("unexpected migration metadata: %+v", migration)
 	}
+	dnsMigration := datamigrate.Lookup(TenantDNSEntitlementsID)
+	if dnsMigration == nil || dnsMigration.Service != "quartermaster" || dnsMigration.RequiredBeforePhase != "postdeploy" {
+		t.Fatalf("unexpected DNS entitlement migration metadata: %+v", dnsMigration)
+	}
 }

@@ -13,6 +13,7 @@ import (
 type Querier interface {
 	AcceptClusterInviteRecord(ctx context.Context, inviteID string) error
 	ActivateBootstrapTenantClusterAccess(ctx context.Context, arg ActivateBootstrapTenantClusterAccessParams) error
+	ApplyTenantBillingEntitlements(ctx context.Context, arg ApplyTenantBillingEntitlementsParams) (int64, error)
 	ApproveClusterSubscriptionRecord(ctx context.Context, arg ApproveClusterSubscriptionRecordParams) error
 	BootstrapTenantClusterAccess(ctx context.Context, arg BootstrapTenantClusterAccessParams) error
 	ClaimIdleFoghornsForCluster(ctx context.Context, arg ClaimIdleFoghornsForClusterParams) (int64, error)
@@ -22,11 +23,14 @@ type Querier interface {
 	ClaimServiceEventOutboxBatch(ctx context.Context, arg ClaimServiceEventOutboxBatchParams) ([]ClaimServiceEventOutboxBatchRow, error)
 	ClearBootstrapDefaultCluster(ctx context.Context) error
 	ClearDefaultCluster(ctx context.Context) error
+	CompleteBillingEntitlementHandoff(ctx context.Context, arg CompleteBillingEntitlementHandoffParams) (int64, error)
 	CompleteMediaAuthorityRefresh(ctx context.Context, id string) (int64, error)
 	CompleteNavigatorCustomDomainOutbox(ctx context.Context, id string) error
 	CompleteNavigatorTenantAliasOutbox(ctx context.Context, id string) error
 	CompleteServiceEventOutbox(ctx context.Context, id string) error
 	ConsumeServiceBootstrapToken(ctx context.Context, tokenHash string) (int64, error)
+	CountPendingNavigatorCustomDomainOutbox(ctx context.Context) (int64, error)
+	CountPendingNavigatorTenantAliasOutbox(ctx context.Context) (int64, error)
 	CreateClusterInviteRecord(ctx context.Context, arg CreateClusterInviteRecordParams) error
 	CreateInfrastructureCluster(ctx context.Context, arg CreateInfrastructureClusterParams) error
 	CreateServiceCatalogEntry(ctx context.Context, arg CreateServiceCatalogEntryParams) error
@@ -34,7 +38,7 @@ type Querier interface {
 	CreateTenantRecord(ctx context.Context, arg CreateTenantRecordParams) error
 	CreateTenantRecordWithProvisioningKey(ctx context.Context, arg CreateTenantRecordWithProvisioningKeyParams) error
 	DeactivateTenant(ctx context.Context, tenantID string) (int64, error)
-	DeactivateTenantClusterAccess(ctx context.Context, arg DeactivateTenantClusterAccessParams) error
+	DeactivateTenantClusterAccess(ctx context.Context, arg DeactivateTenantClusterAccessParams) (int64, error)
 	EnqueueMediaAuthorityRefresh(ctx context.Context, arg EnqueueMediaAuthorityRefreshParams) (int64, error)
 	EnqueueNavigatorCustomDomain(ctx context.Context, arg EnqueueNavigatorCustomDomainParams) (string, error)
 	EnqueueNavigatorTenantAlias(ctx context.Context, arg EnqueueNavigatorTenantAliasParams) (string, error)
@@ -81,6 +85,7 @@ type Querier interface {
 	GetPendingInviteWithClusterPolicy(ctx context.Context, inviteToken string) (GetPendingInviteWithClusterPolicyRow, error)
 	GetSubscriptionOwner(ctx context.Context, subscriptionID string) (GetSubscriptionOwnerRow, error)
 	GetSubscriptionOwnerPolicy(ctx context.Context, subscriptionID string) (GetSubscriptionOwnerPolicyRow, error)
+	GetTenantBillingEntitlementCensus(ctx context.Context) (GetTenantBillingEntitlementCensusRow, error)
 	GetTenantClusterAccessState(ctx context.Context, arg GetTenantClusterAccessStateParams) (string, error)
 	GetTenantClusterOwnershipLimit(ctx context.Context, tenantID string) (GetTenantClusterOwnershipLimitRow, error)
 	GetTenantClusterResourceLimits(ctx context.Context, arg GetTenantClusterResourceLimitsParams) (json.RawMessage, error)
@@ -94,6 +99,7 @@ type Querier interface {
 	GetTenantRoutingSelection(ctx context.Context, tenantID string) (GetTenantRoutingSelectionRow, error)
 	GrantDefaultClusterAccess(ctx context.Context, arg GrantDefaultClusterAccessParams) error
 	GrantTenantClusterAccess(ctx context.Context, arg GrantTenantClusterAccessParams) error
+	HasBillingEntitlementHandoff(ctx context.Context, handoffKey string) (bool, error)
 	IncrementReferralCodeUsage(ctx context.Context, code string) error
 	InsertBootstrapCluster(ctx context.Context, arg InsertBootstrapClusterParams) error
 	InsertBootstrapIngressSite(ctx context.Context, arg InsertBootstrapIngressSiteParams) error
@@ -114,6 +120,7 @@ type Querier interface {
 	ListBootstrapOfficialAccessClusters(ctx context.Context) ([]string, error)
 	ListBootstrapTenantAliases(ctx context.Context) ([]ListBootstrapTenantAliasesRow, error)
 	ListDesiredTenantAliases(ctx context.Context) ([]ListDesiredTenantAliasesRow, error)
+	ListDesiredTenantCustomDomains(ctx context.Context) ([]ListDesiredTenantCustomDomainsRow, error)
 	ListGRPCHealthWatchCandidates(ctx context.Context) ([]ListGRPCHealthWatchCandidatesRow, error)
 	ListHealthPollCandidates(ctx context.Context, arg ListHealthPollCandidatesParams) ([]ListHealthPollCandidatesRow, error)
 	ListIngressSitesForNode(ctx context.Context, nodeID string) ([]ListIngressSitesForNodeRow, error)
@@ -125,10 +132,12 @@ type Querier interface {
 	ListTenantClusterRoutingPeers(ctx context.Context, tenantID string) ([]ListTenantClusterRoutingPeersRow, error)
 	ListTenantEffectiveAccess(ctx context.Context, tenantID string) ([]ListTenantEffectiveAccessRow, error)
 	ListTenantEntitledClusterIDs(ctx context.Context, tenantID string) ([]string, error)
+	ListTenantIDsForCluster(ctx context.Context, clusterID string) ([]string, error)
 	LockActiveTenantDomains(ctx context.Context, tenantID string) (LockActiveTenantDomainsRow, error)
 	LockServiceBootstrapToken(ctx context.Context, tokenHash string) (LockServiceBootstrapTokenRow, error)
 	LockServiceType(ctx context.Context, serviceType string) error
 	LockTenantAliasEligibility(ctx context.Context, tenantID string) (LockTenantAliasEligibilityRow, error)
+	LockTenantBillingEntitlements(ctx context.Context, tenantID string) (LockTenantBillingEntitlementsRow, error)
 	LockTenantPreviousValues(ctx context.Context, tenantID string) (LockTenantPreviousValuesRow, error)
 	LockTenantProvisioningKey(ctx context.Context, provisioningKey string) error
 	MarkClusterProvisioning(ctx context.Context, clusterID string) error
@@ -154,11 +163,12 @@ type Querier interface {
 	SetTenantOfficialCluster(ctx context.Context, arg SetTenantOfficialClusterParams) error
 	SubscribeTenantToCluster(ctx context.Context, arg SubscribeTenantToClusterParams) error
 	TenantAliasOutboxHasPending(ctx context.Context, tenantID string) (bool, error)
+	TenantCustomDomainOutboxHasPending(ctx context.Context, tenantID string) (bool, error)
 	TenantExists(ctx context.Context, tenantID string) (bool, error)
 	TenantHasActiveClusterAccess(ctx context.Context, arg TenantHasActiveClusterAccessParams) (bool, error)
-	TenantHasPaidClusterAccess(ctx context.Context, tenantID string) (bool, error)
+	TenantHasPaidClusterAccess(ctx context.Context, tenantID string) (TenantHasPaidClusterAccessRow, error)
 	TenantSubdomainExists(ctx context.Context, subdomain sql.NullString) (bool, error)
-	UnsubscribeTenantFromCluster(ctx context.Context, arg UnsubscribeTenantFromClusterParams) error
+	UnsubscribeTenantFromCluster(ctx context.Context, arg UnsubscribeTenantFromClusterParams) (int64, error)
 	UpdateBootstrapCluster(ctx context.Context, arg UpdateBootstrapClusterParams) error
 	UpdateBootstrapIngressSite(ctx context.Context, arg UpdateBootstrapIngressSiteParams) error
 	UpdateBootstrapNodeMutableFields(ctx context.Context, arg UpdateBootstrapNodeMutableFieldsParams) error

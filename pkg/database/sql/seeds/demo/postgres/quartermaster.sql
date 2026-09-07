@@ -49,9 +49,20 @@ ON CONFLICT (cluster_id) DO UPDATE SET
     short_description = COALESCE(EXCLUDED.short_description, quartermaster.infrastructure_clusters.short_description);
 
 -- Demo tenant (must exist before any cluster references it via owner_tenant_id FK)
-INSERT INTO quartermaster.tenants (id, name, subdomain, deployment_tier, primary_cluster_id, official_cluster_id)
-VALUES ('5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'Demo Organization', 'demo', 'pro', 'demo-media', 'demo-media')
+INSERT INTO quartermaster.tenants (
+    id, name, subdomain, deployment_tier, custom_subdomain_enabled,
+    custom_domain_enabled, billing_entitlements_observed_at,
+    primary_cluster_id, official_cluster_id
+)
+VALUES (
+    '5eed517e-ba5e-da7a-517e-ba5eda7a0001', 'Demo Organization', 'demo', 'developer',
+    TRUE, TRUE, NOW(), 'demo-media', 'demo-media'
+)
 ON CONFLICT (id) DO UPDATE SET
+    deployment_tier = EXCLUDED.deployment_tier,
+    custom_subdomain_enabled = EXCLUDED.custom_subdomain_enabled,
+    custom_domain_enabled = EXCLUDED.custom_domain_enabled,
+    billing_entitlements_observed_at = EXCLUDED.billing_entitlements_observed_at,
     primary_cluster_id = EXCLUDED.primary_cluster_id,
     official_cluster_id = EXCLUDED.official_cluster_id;
 
