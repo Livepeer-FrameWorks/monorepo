@@ -17,6 +17,7 @@
   import { Badge } from "$lib/components/ui/badge";
   import { getIconComponent } from "$lib/iconUtils";
   import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
+  import { hasInfrastructureOperatorRole } from "$lib/utils/infrastructure-access";
   import { Select, SelectContent, SelectItem, SelectTrigger } from "$lib/components/ui/select";
   import { Tooltip, TooltipContent, TooltipTrigger } from "$lib/components/ui/tooltip";
 
@@ -32,11 +33,14 @@
   const serviceInstancesHealthStore = new GetServiceInstancesHealthStore();
 
   let isAuthenticated = false;
+  let hasOperatorRole = $state(false);
   let operatorAccessChecked = $state(false);
 
   let hasInfrastructureData = $derived(!!$infrastructureStore.data);
   let accessList = $derived($accessStore.data?.clustersAccess ?? []);
-  let hasOperatorAccess = $derived(accessList.some((entry) => entry.accessLevel === "owner"));
+  let hasOperatorAccess = $derived(
+    hasOperatorRole && accessList.some((entry) => entry.accessLevel === "owner")
+  );
   let loading = $derived(
     !operatorAccessChecked ||
       (hasOperatorAccess && $infrastructureStore.fetching && !hasInfrastructureData)
@@ -121,6 +125,7 @@
 
   const unsubscribeAuth = auth.subscribe((authState) => {
     isAuthenticated = authState.isAuthenticated;
+    hasOperatorRole = hasInfrastructureOperatorRole(authState.user);
   });
 
   onDestroy(() => {
@@ -142,8 +147,9 @@
       await accessStore.fetch();
       operatorAccessChecked = true;
       const ownsCluster =
-        get(accessStore).data?.clustersAccess?.some((entry) => entry.accessLevel === "owner") ??
-        false;
+        hasOperatorRole &&
+        (get(accessStore).data?.clustersAccess?.some((entry) => entry.accessLevel === "owner") ??
+          false);
       if (!ownsCluster) {
         return;
       }

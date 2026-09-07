@@ -27,6 +27,7 @@
   import { Button } from "$lib/components/ui/button";
   import { getIconComponent } from "$lib/iconUtils";
   import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
+  import { hasInfrastructureOperatorRole } from "$lib/utils/infrastructure-access";
   import {
     serviceInstanceRenderKey,
     sortServiceInstancesForRender,
@@ -56,6 +57,7 @@
   const bootstrapTokenStore = new BootstrapTokenFieldsStore();
 
   let isAuthenticated = false;
+  let hasOperatorRole = $state(false);
   let accessDenied = $state(false);
   let systemHealthListening = false;
   let loadSequence = 0;
@@ -228,6 +230,7 @@
 
   const unsubscribeAuth = auth.subscribe((authState) => {
     isAuthenticated = authState.isAuthenticated;
+    hasOperatorRole = hasInfrastructureOperatorRole(authState.user);
   });
 
   onMount(async () => {
@@ -247,6 +250,10 @@
     const requestId = ++loadSequence;
     accessDenied = false;
     try {
+      if (!hasOperatorRole) {
+        accessDenied = true;
+        return;
+      }
       await accessStore.fetch();
       const ownsCluster =
         $accessStore.data?.clustersAccess?.some(

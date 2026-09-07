@@ -35,6 +35,7 @@
   import { Select, SelectTrigger, SelectContent, SelectItem } from "$lib/components/ui/select";
   import { Tooltip, TooltipContent, TooltipTrigger } from "$lib/components/ui/tooltip";
   import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
+  import { hasInfrastructureOperatorRole } from "$lib/utils/infrastructure-access";
   import { formatBytes, formatTimestamp, formatPercentage } from "$lib/utils/formatters.js";
 
   // Icons
@@ -67,6 +68,7 @@
   }
 
   let isAuthenticated = false;
+  let hasOperatorRole = $state(false);
   let systemHealthListening = false;
   let operatorAccessChecked = $state(false);
 
@@ -87,7 +89,9 @@
   let hasMoreNodes = $derived(pageInfo?.hasNextPage ?? false);
   let totalNodeCount = $derived($nodesStore.data?.nodesConnection?.totalCount ?? 0);
   let accessList = $derived($accessStore.data?.clustersAccess ?? []);
-  let hasOperatorAccess = $derived(accessList.some((entry) => entry.accessLevel === "owner"));
+  let hasOperatorAccess = $derived(
+    hasOperatorRole && accessList.some((entry) => entry.accessLevel === "owner")
+  );
   let loading = $derived(
     !operatorAccessChecked ||
       (hasOperatorAccess &&
@@ -222,6 +226,7 @@
   // Subscribe to auth store
   const unsubscribeAuth = auth.subscribe((authState) => {
     isAuthenticated = authState.isAuthenticated;
+    hasOperatorRole = hasInfrastructureOperatorRole(authState.user);
   });
 
   onMount(async () => {
@@ -248,8 +253,9 @@
       await accessStore.fetch();
       operatorAccessChecked = true;
       const ownsCluster =
-        get(accessStore).data?.clustersAccess?.some((entry) => entry.accessLevel === "owner") ??
-        false;
+        hasOperatorRole &&
+        (get(accessStore).data?.clustersAccess?.some((entry) => entry.accessLevel === "owner") ??
+          false);
       if (!ownsCluster) {
         if (systemHealthListening) {
           systemHealthSub.unlisten();

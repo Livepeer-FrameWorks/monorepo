@@ -26,6 +26,7 @@
   } from "$lib/utils/infrastructure-data";
   import { Select, SelectContent, SelectItem, SelectTrigger } from "$lib/components/ui/select";
   import { formatBytes } from "$lib/utils/formatters.js";
+  import { hasInfrastructureOperatorRole } from "$lib/utils/infrastructure-access";
   import NodeModePanel from "$lib/components/nodes/NodeModePanel.svelte";
   import OpenMistAdminButton from "$lib/components/nodes/OpenMistAdminButton.svelte";
 
@@ -44,6 +45,7 @@
   const systemHealthSub = new SystemHealthStore();
 
   let isAuthenticated = false;
+  let hasOperatorRole = $state(false);
   let systemHealthListening = false;
 
   let hasData = $derived(!!$nodeStore.data);
@@ -197,6 +199,7 @@
 
   const unsubscribeAuth = auth.subscribe((authState) => {
     isAuthenticated = authState.isAuthenticated;
+    hasOperatorRole = hasInfrastructureOperatorRole(authState.user);
   });
 
   onMount(async () => {
@@ -215,6 +218,7 @@
   async function loadNodeData() {
     const requestID = ++loadSequence;
     currentHealth = null;
+    if (!hasOperatorRole) return;
     try {
       await nodeStore.fetch({ variables: { id: nodeRelayId } });
       if (requestID !== loadSequence) return;
