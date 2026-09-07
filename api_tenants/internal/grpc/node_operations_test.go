@@ -1,7 +1,6 @@
 package grpc
 
 import (
-	"context"
 	"database/sql"
 	"database/sql/driver"
 	"testing"
@@ -38,7 +37,7 @@ func TestGetNode_Success(t *testing.T) {
 			nil, nil, nil, nil, nil, nil, nil,
 		}...))
 
-	resp, err := server.GetNode(context.Background(), &quartermasterpb.GetNodeRequest{NodeId: "node-1"})
+	resp, err := server.GetNode(serviceCtx(), &quartermasterpb.GetNodeRequest{NodeId: "node-1"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -70,7 +69,7 @@ func TestGetNode_MissingNodeID(t *testing.T) {
 
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 
-	_, err = server.GetNode(context.Background(), &quartermasterpb.GetNodeRequest{})
+	_, err = server.GetNode(serviceCtx(), &quartermasterpb.GetNodeRequest{})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected InvalidArgument, got %v", err)
 	}
@@ -89,7 +88,7 @@ func TestGetNode_NotFound(t *testing.T) {
 		WithArgs("nonexistent").
 		WillReturnError(sql.ErrNoRows)
 
-	_, err = server.GetNode(context.Background(), &quartermasterpb.GetNodeRequest{NodeId: "nonexistent"})
+	_, err = server.GetNode(serviceCtx(), &quartermasterpb.GetNodeRequest{NodeId: "nonexistent"})
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("expected NotFound, got %v", err)
 	}
@@ -116,7 +115,7 @@ func TestUpdateNodeHardware_Success(t *testing.T) {
 		WithArgs("node-1", &cores, &mem, &disk).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	_, err = server.UpdateNodeHardware(context.Background(), &quartermasterpb.UpdateNodeHardwareRequest{
+	_, err = server.UpdateNodeHardware(serviceCtx(), &quartermasterpb.UpdateNodeHardwareRequest{
 		NodeId:   "node-1",
 		CpuCores: &cores,
 		MemoryGb: &mem,
@@ -140,7 +139,7 @@ func TestUpdateNodeHardware_MissingNodeID(t *testing.T) {
 
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 
-	_, err = server.UpdateNodeHardware(context.Background(), &quartermasterpb.UpdateNodeHardwareRequest{})
+	_, err = server.UpdateNodeHardware(serviceCtx(), &quartermasterpb.UpdateNodeHardwareRequest{})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected InvalidArgument, got %v", err)
 	}
@@ -159,7 +158,7 @@ func TestUpdateNodeHardware_NodeNotFoundIsOK(t *testing.T) {
 		WithArgs("unknown-node", nil, nil, nil).
 		WillReturnResult(sqlmock.NewResult(0, 0)) // 0 rows affected
 
-	_, err = server.UpdateNodeHardware(context.Background(), &quartermasterpb.UpdateNodeHardwareRequest{
+	_, err = server.UpdateNodeHardware(serviceCtx(), &quartermasterpb.UpdateNodeHardwareRequest{
 		NodeId: "unknown-node",
 	})
 	if err != nil {
@@ -191,7 +190,7 @@ func TestGetNodeByLogicalName_Success(t *testing.T) {
 			nil, nil, nil, nil, nil, nil, nil,
 		}...))
 
-	resp, err := server.GetNodeByLogicalName(context.Background(), &quartermasterpb.GetNodeByLogicalNameRequest{NodeId: "edge-node-1"})
+	resp, err := server.GetNodeByLogicalName(serviceCtx(), &quartermasterpb.GetNodeByLogicalNameRequest{NodeId: "edge-node-1"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -213,7 +212,7 @@ func TestGetNodeByLogicalName_MissingNodeID(t *testing.T) {
 
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 
-	_, err = server.GetNodeByLogicalName(context.Background(), &quartermasterpb.GetNodeByLogicalNameRequest{})
+	_, err = server.GetNodeByLogicalName(serviceCtx(), &quartermasterpb.GetNodeByLogicalNameRequest{})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected InvalidArgument, got %v", err)
 	}

@@ -155,6 +155,11 @@ func (s *QuartermasterServer) claimNavOutboxBatch(ctx context.Context) ([]navOut
 		out = batch
 		return nil
 	})
+	if err == nil && s.metrics != nil && s.metrics.NavigatorOutboxPending != nil {
+		if pending, countErr := quartermasterdb.New(s.db).CountPendingNavigatorCustomDomainOutbox(ctx); countErr == nil {
+			s.metrics.NavigatorOutboxPending.WithLabelValues("custom_domain").Set(float64(pending))
+		}
+	}
 	return out, err
 }
 
@@ -166,6 +171,9 @@ func (s *QuartermasterServer) markNavOutboxCompleted(ctx context.Context, id str
 }
 
 func (s *QuartermasterServer) recordNavOutboxFailure(ctx context.Context, id string, attempts int, cause error) {
+	if s.metrics != nil && s.metrics.NavigatorOutboxFailures != nil {
+		s.metrics.NavigatorOutboxFailures.WithLabelValues("custom_domain").Inc()
+	}
 	msg := ""
 	if cause != nil {
 		msg = cause.Error()

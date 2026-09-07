@@ -16,7 +16,8 @@ import (
 )
 
 func tenantCtx(tenantID, role string) context.Context {
-	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, tenantID)
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "jwt")
+	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, tenantID)
 	if role != "" {
 		ctx = context.WithValue(ctx, ctxkeys.KeyRole, role)
 	}
@@ -35,7 +36,7 @@ func TestUpdateNodeStatus_RejectsTenantWithAccessButNotOwnership(t *testing.T) {
 		WithArgs("edge-1", "retired", "00000000-0000-0000-0000-000000000001").
 		WillReturnError(sql.ErrNoRows)
 
-	_, err = server.UpdateNodeStatus(tenantCtx("00000000-0000-0000-0000-000000000001", ""), &quartermasterpb.UpdateNodeStatusRequest{
+	_, err = server.UpdateNodeStatus(tenantCtx("00000000-0000-0000-0000-000000000001", "owner"), &quartermasterpb.UpdateNodeStatusRequest{
 		NodeId: "edge-1",
 		Status: "retired",
 	})
@@ -44,6 +45,25 @@ func TestUpdateNodeStatus_RejectsTenantWithAccessButNotOwnership(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestUpdateNodeStatus_RejectsMemberBeforeStorage(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+
+	_, err = server.UpdateNodeStatus(tenantCtx("00000000-0000-0000-0000-000000000001", "member"), &quartermasterpb.UpdateNodeStatusRequest{
+		NodeId: "edge-1", Status: "retired",
+	})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("status code = %v, want PermissionDenied", status.Code(err))
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("authorization touched storage: %v", err)
 	}
 }
 

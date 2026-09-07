@@ -65,7 +65,7 @@ func TestGetTenantEntitlement_ReturnsEffectiveAccess(t *testing.T) {
 
 	const tenantID = "11111111-1111-1111-1111-111111111111"
 	// Pin every load-bearing entitlement predicate and the bound tenant arg.
-	mock.ExpectQuery(`(?s)tenant_cluster_access.*tenant_id = \$1::uuid.*is_active = true.*subscription_status = 'active'.*expires_at IS NULL OR tca\.expires_at > NOW\(\).*ic\.is_active = true`).
+	mock.ExpectQuery(`(?s)tenant_cluster_access.*tenant_id = \$1::uuid.*is_active = true.*subscription_status = 'active'.*access_source <> 'unknown'.*expires_at IS NULL OR tca\.expires_at > NOW\(\).*ic\.is_active = true`).
 		WithArgs(tenantID).
 		WillReturnRows(sqlmock.NewRows(effectiveAccessColumns).
 			AddRow("cluster-a", "A", "edge", "a.example", "platform_managed", "", "standard", "healthy", "cell-a", pq.StringArray{"cell-a"}, "shared", "platform_tier", true, "active", nil, `{}`, false).

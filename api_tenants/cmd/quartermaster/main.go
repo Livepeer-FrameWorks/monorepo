@@ -61,6 +61,19 @@ func servedClustersForInstanceName(ctx context.Context, db database.PostgresConn
 	return out
 }
 
+func quartermasterPurserClientConfig(grpcAddr, serviceToken string, logger logging.Logger) purserclient.GRPCConfig {
+	return purserclient.GRPCConfig{
+		GRPCAddr:           grpcAddr,
+		Timeout:            5 * time.Second,
+		Logger:             logger,
+		ServiceToken:       serviceToken,
+		PreferServiceToken: true,
+		AllowInsecure:      config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
+		CACertFile:         config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:         config.GetServiceGRPCTLSServerName("purser"),
+	}
+}
+
 func main() {
 	if version.HandleCLI() {
 		return
@@ -126,9 +139,14 @@ func main() {
 	// on the GRPCRequests / GRPCDuration vectors; separate tenant_/cluster_/
 	// node_/service_operations counters would only rename the same axis.
 	serverMetrics := &qmgrpc.ServerMetrics{
-		GRPCRequests:          metricsCollector.NewCounter("grpc_requests_total", "Total gRPC requests", []string{"method", "status"}),
-		GRPCDuration:          metricsCollector.NewHistogram("grpc_request_duration_seconds", "gRPC request duration", []string{"method"}, nil),
-		SyncMeshPhaseDuration: metricsCollector.NewHistogram("sync_mesh_phase_duration_seconds", "SyncMesh phase duration", []string{"phase"}, nil),
+		GRPCRequests:            metricsCollector.NewCounter("grpc_requests_total", "Total gRPC requests", []string{"method", "status"}),
+		GRPCDuration:            metricsCollector.NewHistogram("grpc_request_duration_seconds", "gRPC request duration", []string{"method"}, nil),
+		SyncMeshPhaseDuration:   metricsCollector.NewHistogram("sync_mesh_phase_duration_seconds", "SyncMesh phase duration", []string{"phase"}, nil),
+		NodeIdentityRejections:  metricsCollector.NewCounter("node_identity_rejections_total", "Node fingerprint identity proof rejections", []string{"reason"}),
+		BillingEntitlementStale: metricsCollector.NewCounter("billing_entitlement_stale_total", "Stale Purser billing entitlement observations rejected", nil),
+		DNSBackstopRepairs:      metricsCollector.NewCounter("dns_backstop_repairs_total", "DNS desired/applied drift repairs enqueued", []string{"resource", "action"}),
+		NavigatorOutboxFailures: metricsCollector.NewCounter("navigator_outbox_failures_total", "Navigator outbox delivery failures", []string{"resource"}),
+		NavigatorOutboxPending:  metricsCollector.NewGauge("navigator_outbox_pending", "Incomplete Navigator outbox rows", []string{"resource"}),
 	}
 
 	// Initialize Navigator client
@@ -178,15 +196,7 @@ func main() {
 	// Create Purser gRPC client for billing status lookups (cross-service via gRPC, not DB)
 	purserGRPCAddr := config.GetEnv("PURSER_GRPC_ADDR", "purser:19003")
 	var purserClient *purserclient.GRPCClient
-	purserClient, err = purserclient.NewGRPCClient(purserclient.GRPCConfig{
-		GRPCAddr:      purserGRPCAddr,
-		Timeout:       5 * time.Second,
-		Logger:        logger,
-		ServiceToken:  serviceToken,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetServiceGRPCTLSServerName("purser"),
-	})
+	purserClient, err = purserclient.NewGRPCClient(quartermasterPurserClientConfig(purserGRPCAddr, serviceToken, logger))
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Purser gRPC client - billing status lookups will use defaults")
 		purserClient = nil

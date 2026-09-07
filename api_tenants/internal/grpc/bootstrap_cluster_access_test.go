@@ -144,13 +144,17 @@ func TestBootstrapClusterAccess_UpsertsOnHappyPath(t *testing.T) {
 		WithArgs("00000000-0000-0000-0000-000000000001", "core-1", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	// Alias ensure helper: a free-tier tenant gets no alias, so no outbox insert.
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT t.name, t.subdomain, t.deployment_tier, t.is_active")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT t.name, t.subdomain, t.custom_subdomain_enabled, t.is_active")).
 		WithArgs("00000000-0000-0000-0000-000000000001").
-		WillReturnRows(sqlmock.NewRows([]string{"name", "subdomain", "deployment_tier", "is_active", "has_cluster"}).
-			AddRow("Acme", nil, "free", true, false))
+		WillReturnRows(sqlmock.NewRows([]string{"name", "subdomain", "custom_subdomain_enabled", "is_active", "billing_entitlements_observed_at", "has_cluster"}).
+			AddRow("Acme", nil, false, true, observedBillingEntitlementsAt, false))
 	mock.ExpectQuery(`INSERT INTO quartermaster\.navigator_tenant_alias_outbox`).
 		WithArgs("00000000-0000-0000-0000-000000000001", "", "core-1", "cluster_access_active", "ensure_cluster").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("cluster-ensure-1"))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT t.custom_domain, t.custom_subdomain_enabled, t.custom_domain_enabled, t.is_active")).
+		WithArgs("00000000-0000-0000-0000-000000000001").
+		WillReturnRows(sqlmock.NewRows([]string{"custom_domain", "custom_subdomain_enabled", "custom_domain_enabled", "is_active", "billing_entitlements_observed_at", "has_cluster"}).
+			AddRow(nil, false, false, true, observedBillingEntitlementsAt, true))
 	mock.ExpectCommit()
 
 	if _, err := server.BootstrapClusterAccess(serviceCtx(), &quartermasterpb.BootstrapClusterAccessRequest{

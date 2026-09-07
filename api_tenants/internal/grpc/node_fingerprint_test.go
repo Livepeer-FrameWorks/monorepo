@@ -1,7 +1,6 @@
 package grpc
 
 import (
-	"context"
 	"database/sql"
 	"testing"
 
@@ -27,20 +26,20 @@ func TestResolveNodeFingerprint(t *testing.T) {
 				AddRow("tenant-1", "node-1", testNodeIdentityPublicKey()).
 				AddRow("tenant-1", "node-2", testNodeIdentityPublicKey()))
 
-		_, err = server.ResolveNodeFingerprint(context.Background(), &quartermasterpb.ResolveNodeFingerprintRequest{
+		_, err = server.ResolveNodeFingerprint(serviceCtx(), &quartermasterpb.ResolveNodeFingerprintRequest{
 			PeerIp:          "203.0.113.10",
 			MachineIdSha256: strPtr("machine-clone"),
 			MacsSha256:      strPtr("macs-must-not-be-used"),
 		})
-		if status.Code(err) != codes.PermissionDenied {
-			t.Fatalf("ambiguous fingerprint code = %s, want PermissionDenied", status.Code(err))
+		if status.Code(err) != codes.Aborted {
+			t.Fatalf("ambiguous fingerprint code = %s, want Aborted", status.Code(err))
 		}
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Fatalf("unmet expectations: %v", err)
 		}
 	})
 
-	t.Run("atomically binds the first proved key to an existing stable fingerprint", func(t *testing.T) {
+	t.Run("requires token-authorized enrollment for an existing keyless fingerprint", func(t *testing.T) {
 		db, mock, err := sqlmock.New()
 		if err != nil {
 			t.Fatalf("failed to create sqlmock: %v", err)
@@ -52,25 +51,40 @@ func TestResolveNodeFingerprint(t *testing.T) {
 		mock.ExpectQuery("FROM quartermaster.node_fingerprints nf").
 			WithArgs("machine-hash").
 			WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "node_id", "public_key"}).AddRow("tenant-1", "node-1", nil))
-		mock.ExpectQuery("UPDATE quartermaster.node_fingerprints").
-			WithArgs("node-1", publicKey).
-			WillReturnRows(sqlmock.NewRows([]string{"node_identity_public_key_ed25519"}).AddRow(publicKey))
-		mock.ExpectExec("UPDATE quartermaster.node_fingerprints").
-			WithArgs("203.0.113.10", "node-1").
-			WillReturnResult(sqlmock.NewResult(0, 1))
-
-		resp, err := server.ResolveNodeFingerprint(context.Background(), &quartermasterpb.ResolveNodeFingerprintRequest{
+		_, err = server.ResolveNodeFingerprint(serviceCtx(), &quartermasterpb.ResolveNodeFingerprintRequest{
 			PeerIp: "203.0.113.10", MachineIdSha256: strPtr("machine-hash"),
 			NodeIdentityPublicKeyEd25519: publicKey,
 		})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if string(resp.GetNodeIdentityPublicKeyEd25519()) != string(publicKey) {
-			t.Fatal("response did not return the atomically bound node key")
+		if status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("keyless fingerprint code = %s, want FailedPrecondition", status.Code(err))
 		}
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Fatalf("unmet expectations: %v", err)
+		}
+	})
+
+	t.Run("peer IP knowledge cannot authenticate a keyless node", func(t *testing.T) {
+		db, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatalf("failed to create sqlmock: %v", err)
+		}
+		defer db.Close()
+
+		publicKey := testNodeIdentityPublicKey()
+		server := &QuartermasterServer{db: db, logger: logrus.New()}
+		mock.ExpectQuery("FROM quartermaster.node_fingerprints nf").
+			WithArgs("203.0.113.10").
+			WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "node_id", "public_key"}).AddRow("tenant-1", "node-1", nil))
+
+		_, err = server.ResolveNodeFingerprint(serviceCtx(), &quartermasterpb.ResolveNodeFingerprintRequest{
+			PeerIp:                       "203.0.113.10",
+			NodeIdentityPublicKeyEd25519: publicKey,
+		})
+		if status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("keyless seen-IP fingerprint code = %s, want FailedPrecondition", status.Code(err))
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("unexpected write or unmet expectation: %v", err)
 		}
 	})
 
@@ -88,11 +102,7 @@ func TestResolveNodeFingerprint(t *testing.T) {
 		mock.ExpectQuery("FROM quartermaster.node_fingerprints nf").
 			WithArgs("machine-hash").
 			WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "node_id", "public_key"}).AddRow("tenant-1", "node-1", existing))
-		mock.ExpectQuery("UPDATE quartermaster.node_fingerprints").
-			WithArgs("node-1", presented).
-			WillReturnRows(sqlmock.NewRows([]string{"node_identity_public_key_ed25519"}).AddRow(existing))
-
-		_, err = server.ResolveNodeFingerprint(context.Background(), &quartermasterpb.ResolveNodeFingerprintRequest{
+		_, err = server.ResolveNodeFingerprint(serviceCtx(), &quartermasterpb.ResolveNodeFingerprintRequest{
 			PeerIp: "203.0.113.10", MachineIdSha256: strPtr("machine-hash"),
 			NodeIdentityPublicKeyEd25519: presented,
 		})
@@ -119,7 +129,7 @@ func TestResolveNodeFingerprint(t *testing.T) {
 			WithArgs("203.0.113.10", "node-1").
 			WillReturnResult(sqlmock.NewResult(0, 1))
 
-		resp, err := server.ResolveNodeFingerprint(context.Background(), &quartermasterpb.ResolveNodeFingerprintRequest{
+		resp, err := server.ResolveNodeFingerprint(serviceCtx(), &quartermasterpb.ResolveNodeFingerprintRequest{
 			PeerIp:          "203.0.113.10",
 			MachineIdSha256: strPtr("machine-hash"),
 		})
@@ -153,7 +163,7 @@ func TestResolveNodeFingerprint(t *testing.T) {
 			WithArgs("203.0.113.11", "node-1").
 			WillReturnResult(sqlmock.NewResult(0, 1))
 
-		resp, err := server.ResolveNodeFingerprint(context.Background(), &quartermasterpb.ResolveNodeFingerprintRequest{PeerIp: "203.0.113.11"})
+		resp, err := server.ResolveNodeFingerprint(serviceCtx(), &quartermasterpb.ResolveNodeFingerprintRequest{PeerIp: "203.0.113.11"})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -181,7 +191,7 @@ func TestResolveNodeFingerprint(t *testing.T) {
 			WithArgs("198.51.100.4").
 			WillReturnError(sql.ErrNoRows)
 
-		_, err = server.ResolveNodeFingerprint(context.Background(), &quartermasterpb.ResolveNodeFingerprintRequest{
+		_, err = server.ResolveNodeFingerprint(serviceCtx(), &quartermasterpb.ResolveNodeFingerprintRequest{
 			PeerIp:          "198.51.100.4",
 			MachineIdSha256: strPtr("machine-stale"),
 		})

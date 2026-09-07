@@ -21,6 +21,35 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+func TestCustomDomainTransitionDoesNotRemovePreviousDomainDuringEpochWindow(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT t\.custom_domain, t\.custom_subdomain_enabled`).
+		WithArgs("tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"custom_domain", "custom_subdomain_enabled", "custom_domain_enabled", "is_active", "billing_entitlements_observed_at", "has_cluster",
+		}).AddRow("new.example.com", false, false, true, time.Unix(0, 0).UTC(), true))
+	mock.ExpectRollback()
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.enqueueCustomDomainTransition(context.Background(), tx, "tenant-1", "old.example.com", "new.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("epoch transition emitted a destructive outbox action: %v", err)
+	}
+}
+
 func TestTenantAliasBackstopReconcilesClusterAuthorityAsASet(t *testing.T) {
 	actions := tenantAliasBackstopActions(tenantAliasDesired{
 		tenantID: "tenant-1", subdomain: "acme", want: true, clusterIDs: []string{"cluster-1", "cluster-2"},
@@ -33,6 +62,47 @@ func TestTenantAliasBackstopReconcilesClusterAuthorityAsASet(t *testing.T) {
 	}
 	if got["ensure_cluster"] != "cluster-1" || got["remove_cluster"] != "cluster-removed" || len(actions) != 2 {
 		t.Fatalf("cluster repair actions = %#v", actions)
+	}
+}
+
+func TestTenantCustomDomainBackstopAction(t *testing.T) {
+	cases := []struct {
+		name    string
+		desired tenantCustomDomainDesired
+		current *dnspb.GetCustomDomainStatusResponse
+		want    string
+	}{
+		{name: "missing ensure", desired: tenantCustomDomainDesired{want: true}, current: &dnspb.GetCustomDomainStatusResponse{}, want: "ensure"},
+		{name: "teardown interrupted by entitlement", desired: tenantCustomDomainDesired{want: true}, current: &dnspb.GetCustomDomainStatusResponse{Found: true, Status: "tearing_down"}, want: "ensure"},
+		{name: "undesired active domain", desired: tenantCustomDomainDesired{want: false}, current: &dnspb.GetCustomDomainStatusResponse{Found: true, Status: "cert_issued"}, want: "remove"},
+		{name: "already removed", desired: tenantCustomDomainDesired{want: false}, current: &dnspb.GetCustomDomainStatusResponse{}, want: ""},
+		{name: "already converged", desired: tenantCustomDomainDesired{want: true}, current: &dnspb.GetCustomDomainStatusResponse{Found: true, Status: "cert_issued"}, want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tenantCustomDomainBackstopAction(tc.desired, tc.current); got != tc.want {
+				t.Fatalf("action = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTenantCustomDomainBackstopUndesiredLookupEnumeratesAllRows(t *testing.T) {
+	if got := tenantCustomDomainLookupDomain(tenantCustomDomainDesired{domain: "configured.example", want: false}); got != "" {
+		t.Fatalf("undesired lookup domain = %q, want tenant-wide deterministic enumeration", got)
+	}
+	if got := tenantCustomDomainLookupDomain(tenantCustomDomainDesired{domain: "configured.example", want: true}); got != "configured.example" {
+		t.Fatalf("desired lookup domain = %q", got)
+	}
+}
+
+func TestTenantCustomDomainBackstopUsesAppliedDomainAfterDesiredNameCleared(t *testing.T) {
+	action, domain := tenantCustomDomainBackstopTarget(
+		tenantCustomDomainDesired{tenantID: "tenant-1", want: false},
+		&dnspb.GetCustomDomainStatusResponse{Found: true, Domain: "stale.example.com", Status: "cert_issued"},
+	)
+	if action != "remove" || domain != "stale.example.com" {
+		t.Fatalf("target = (%q,%q), want remove stale.example.com", action, domain)
 	}
 }
 
@@ -53,10 +123,10 @@ func TestEnqueueTenantAliasForSubdomainChangeRetiresBeforeEnsure(t *testing.T) {
 	mock.ExpectQuery(`INSERT INTO quartermaster\.navigator_tenant_alias_outbox`).
 		WithArgs("tenant-1", "old", "", "", "retire").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("retire-1"))
-	mock.ExpectQuery(`SELECT t\.name, t\.subdomain, t\.deployment_tier, t\.is_active.*FOR UPDATE`).
+	mock.ExpectQuery(`SELECT t\.name, t\.subdomain, t\.custom_subdomain_enabled, t\.is_active.*FOR UPDATE`).
 		WithArgs("tenant-1").
-		WillReturnRows(sqlmock.NewRows([]string{"name", "subdomain", "deployment_tier", "is_active", "has_cluster"}).
-			AddRow("Acme", "new", "supporter", true, true))
+		WillReturnRows(sqlmock.NewRows([]string{"name", "subdomain", "custom_subdomain_enabled", "is_active", "billing_entitlements_observed_at", "has_cluster"}).
+			AddRow("Acme", "new", true, true, observedBillingEntitlementsAt, true))
 	mock.ExpectQuery(`INSERT INTO quartermaster\.navigator_tenant_alias_outbox`).
 		WithArgs("tenant-1", "new", "", "", "ensure").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("ensure-1"))
@@ -110,9 +180,9 @@ func TestEnqueueTenantAliasForSubdomainUpdateRemovesWhenIneligible(t *testing.T)
 	ctx := context.Background()
 
 	mock.ExpectBegin()
-	mock.ExpectQuery(`SELECT EXISTS`).
+	mock.ExpectQuery(`SELECT t\.billing_entitlements_observed_at`).
 		WithArgs("tenant-1").
-		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+		WillReturnRows(sqlmock.NewRows([]string{"entitlements_observed", "has_paid_cluster_access"}).AddRow(true, false))
 	mock.ExpectQuery(`INSERT INTO quartermaster\.navigator_tenant_alias_outbox`).
 		WithArgs("tenant-1", "old", "", "", "remove").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("remove-1"))
@@ -129,6 +199,31 @@ func TestEnqueueTenantAliasForSubdomainUpdateRemovesWhenIneligible(t *testing.T)
 	}
 }
 
+func TestEnqueueTenantAliasForSubdomainUpdateDoesNothingWhileEntitlementsUnobserved(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+	ctx := context.Background()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT t\.billing_entitlements_observed_at`).
+		WithArgs("tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"entitlements_observed", "has_paid_cluster_access"}).AddRow(false, false))
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if err := server.enqueueTenantAliasForSubdomainUpdate(ctx, tx, "tenant-1", "old", "new"); err != nil {
+		t.Fatalf("enqueueTenantAliasForSubdomainUpdate: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unobserved entitlement emitted an outbox write: %v", err)
+	}
+}
+
 func TestEnqueueTenantAliasForTierChangeDowngrade(t *testing.T) {
 	t.Run("removes when no paid access remains", func(t *testing.T) {
 		db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
@@ -140,9 +235,9 @@ func TestEnqueueTenantAliasForTierChangeDowngrade(t *testing.T) {
 		ctx := context.Background()
 
 		mock.ExpectBegin()
-		mock.ExpectQuery(`SELECT EXISTS`).
+		mock.ExpectQuery(`SELECT t\.billing_entitlements_observed_at`).
 			WithArgs("tenant-1").
-			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+			WillReturnRows(sqlmock.NewRows([]string{"entitlements_observed", "has_paid_cluster_access"}).AddRow(true, false))
 		mock.ExpectQuery(`INSERT INTO quartermaster\.navigator_tenant_alias_outbox`).
 			WithArgs("tenant-1", "", "", "", "remove").
 			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("remove-1"))
@@ -169,9 +264,9 @@ func TestEnqueueTenantAliasForTierChangeDowngrade(t *testing.T) {
 		ctx := context.Background()
 
 		mock.ExpectBegin()
-		mock.ExpectQuery(`SELECT EXISTS`).
+		mock.ExpectQuery(`SELECT t\.billing_entitlements_observed_at`).
 			WithArgs("tenant-1").
-			WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+			WillReturnRows(sqlmock.NewRows([]string{"entitlements_observed", "has_paid_cluster_access"}).AddRow(true, true))
 		// No teardown enqueued.
 
 		tx, err := db.BeginTx(ctx, nil)
@@ -187,6 +282,71 @@ func TestEnqueueTenantAliasForTierChangeDowngrade(t *testing.T) {
 	})
 }
 
+func TestEnqueueTenantAliasDesiredStateRemovesAfterClusterLoss(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+	ctx := context.Background()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT t\.name, t\.subdomain, t\.custom_subdomain_enabled, t\.is_active,[\s\S]*FOR UPDATE`).
+		WithArgs("tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"name", "subdomain", "custom_subdomain_enabled", "is_active", "billing_entitlements_observed_at", "has_cluster"}).
+			AddRow("Acme", "acme", true, true, observedBillingEntitlementsAt, false))
+	mock.ExpectQuery(`INSERT INTO quartermaster\.navigator_tenant_alias_outbox`).
+		WithArgs("tenant-1", "acme", "", "", "remove").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("remove-1"))
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	if err := server.enqueueTenantAliasDesiredStateTx(ctx, tx, "tenant-1"); err != nil {
+		t.Fatalf("enqueueTenantAliasDesiredStateTx: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("expectations: %v", err)
+	}
+}
+
+func TestEpochBillingStateCannotEnqueueDNSRemoval(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+	ctx := context.Background()
+	epoch := time.Unix(0, 0).UTC()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT t\.name, t\.subdomain, t\.custom_subdomain_enabled, t\.is_active,[\s\S]*FOR UPDATE`).
+		WithArgs("tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"name", "subdomain", "custom_subdomain_enabled", "is_active", "billing_entitlements_observed_at", "has_cluster"}).
+			AddRow("Acme", "acme", false, true, epoch, false))
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := server.enqueueTenantAliasDesiredStateTx(ctx, tx, "tenant-1"); err != nil {
+		t.Fatalf("alias desired state: %v", err)
+	}
+
+	mock.ExpectQuery(`SELECT t\.custom_domain, t\.custom_subdomain_enabled, t\.custom_domain_enabled, t\.is_active`).
+		WithArgs("tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"custom_domain", "custom_subdomain_enabled", "custom_domain_enabled", "is_active", "billing_entitlements_observed_at", "has_cluster"}).
+			AddRow("stream.acme.example", false, false, true, epoch, false))
+	if err := server.enqueueCustomDomainDesiredStateTx(ctx, tx, "tenant-1"); err != nil {
+		t.Fatalf("custom-domain desired state: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("epoch state emitted an unexpected outbox write: %v", err)
+	}
+}
+
 func TestSubscribeToClusterRejectsDirectWriterWithoutSideEffects(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
@@ -196,12 +356,92 @@ func TestSubscribeToClusterRejectsDirectWriterWithoutSideEffects(t *testing.T) {
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-1")
 	ctx = context.WithValue(ctx, ctxkeys.KeyAuthType, "jwt")
+	ctx = context.WithValue(ctx, ctxkeys.KeyRole, "owner")
 	_, subscribeErr := server.SubscribeToCluster(ctx, &quartermasterpb.SubscribeToClusterRequest{ClusterId: "core-1"})
 	if status.Code(subscribeErr) != codes.FailedPrecondition {
 		t.Fatalf("SubscribeToCluster error = %v, want FailedPrecondition", subscribeErr)
 	}
 	if mErr := mock.ExpectationsWereMet(); mErr != nil {
 		t.Fatalf("expectations: %v", mErr)
+	}
+}
+
+func TestDeactivateClusterAccessDoesNotRemoveDNSMembershipBeforeBillingObservation(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`UPDATE quartermaster\.tenant_cluster_access`).WithArgs("tenant-1", "core-1").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE quartermaster\.tenants AS tenant`).WithArgs("tenant-1", "core-1").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT t\.billing_entitlements_observed_at`).WithArgs("tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"entitlements_observed", "has_paid_cluster_access"}).AddRow(false, false))
+	mock.ExpectQuery(`SELECT t\.custom_domain, t\.custom_subdomain_enabled, t\.custom_domain_enabled, t\.is_active`).WithArgs("tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"custom_domain", "custom_subdomain_enabled", "custom_domain_enabled", "is_active", "billing_entitlements_observed_at", "has_cluster"}).
+			AddRow("legacy.example", true, true, true, time.Unix(0, 0).UTC(), false))
+	mock.ExpectCommit()
+
+	if _, err := server.DeactivateClusterAccess(serviceCtx(), &quartermasterpb.DeactivateClusterAccessRequest{TenantId: "tenant-1", ClusterId: "core-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("epoch deactivation emitted an unexpected DNS removal: %v", err)
+	}
+}
+
+func TestRevokeMaterializedClusterAccessDoesNotRemoveDNSMembershipBeforeBillingObservation(t *testing.T) {
+	const secret = "materialization-test-secret"
+	t.Setenv("CLUSTER_ACCESS_MATERIALIZATION_SECRET", secret)
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+	authorizedAt := time.Now().UTC().Truncate(time.Second)
+	proof, err := auth.MintClusterAccessRevocationProof(
+		secret, "tenant-1", "core-1",
+		int32(clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_MARKETPLACE_SUBSCRIPTION),
+		"stripe:sub-1", authorizedAt,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`UPDATE quartermaster\.tenant_cluster_access`).
+		WithArgs("tenant-1", "core-1", "marketplace_subscription").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE quartermaster\.tenants AS tenant`).
+		WithArgs("tenant-1", "core-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT t\.billing_entitlements_observed_at`).
+		WithArgs("tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"entitlements_observed", "has_paid_cluster_access"}).AddRow(false, false))
+	mock.ExpectQuery(`SELECT t\.custom_domain, t\.custom_subdomain_enabled, t\.custom_domain_enabled, t\.is_active`).
+		WithArgs("tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"custom_domain", "custom_subdomain_enabled", "custom_domain_enabled", "is_active", "billing_entitlements_observed_at", "has_cluster"}).
+			AddRow("legacy.example", true, true, true, time.Unix(0, 0).UTC(), false))
+	mock.ExpectQuery(`INSERT INTO quartermaster\.service_event_outbox`).
+		WithArgs(eventClusterAccessRevoked, "tenant-1", "", "cluster_access", "tenant-1:core-1", sqlmock.AnyArg()).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("audit-1"))
+	mock.ExpectCommit()
+
+	_, err = server.RevokeMaterializedClusterAccess(serviceCtx(), &quartermasterpb.RevokeMaterializedClusterAccessRequest{
+		TenantId: "tenant-1", ClusterId: "core-1",
+		AccessSource:           clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_MARKETPLACE_SUBSCRIPTION,
+		AuthorizationReference: "stripe:sub-1",
+		AuthorizedAt:           timestamppb.New(authorizedAt),
+		AuthorizationProof:     proof,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("epoch revocation emitted an unexpected DNS removal: %v", err)
 	}
 }
 
@@ -214,24 +454,28 @@ func TestUnsubscribeFromClusterEnqueuesRemoveClusterThenTeardown(t *testing.T) {
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-1")
 	ctx = context.WithValue(ctx, ctxkeys.KeyAuthType, "jwt")
+	ctx = context.WithValue(ctx, ctxkeys.KeyRole, "owner")
 
 	mock.ExpectBegin()
-	// remove_cluster first (lower seq), then deactivate, then full teardown.
-	mock.ExpectQuery(`INSERT INTO quartermaster\.navigator_tenant_alias_outbox`).
-		WithArgs("tenant-1", "", "core-1", "cluster_unsubscribed", "remove_cluster").
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("rc-1"))
 	mock.ExpectExec(`UPDATE quartermaster\.tenant_cluster_access`).
 		WithArgs("tenant-1", "core-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE quartermaster\.tenants AS tenant`).
 		WithArgs("tenant-1", "core-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(`SELECT EXISTS`).
+	mock.ExpectQuery(`SELECT t\.billing_entitlements_observed_at`).
 		WithArgs("tenant-1").
-		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+		WillReturnRows(sqlmock.NewRows([]string{"entitlements_observed", "has_paid_cluster_access"}).AddRow(true, false))
+	mock.ExpectQuery(`INSERT INTO quartermaster\.navigator_tenant_alias_outbox`).
+		WithArgs("tenant-1", "", "core-1", "cluster_unsubscribed", "remove_cluster").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("rc-1"))
 	mock.ExpectQuery(`INSERT INTO quartermaster\.navigator_tenant_alias_outbox`).
 		WithArgs("tenant-1", "", "", "", "remove").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("rm-1"))
+	mock.ExpectQuery(`SELECT t\.custom_domain, t\.custom_subdomain_enabled, t\.custom_domain_enabled, t\.is_active`).
+		WithArgs("tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"custom_domain", "custom_subdomain_enabled", "custom_domain_enabled", "is_active", "billing_entitlements_observed_at", "has_cluster"}).
+			AddRow(nil, false, false, true, observedBillingEntitlementsAt, false))
 	mock.ExpectCommit()
 
 	if _, err := server.UnsubscribeFromCluster(ctx, &quartermasterpb.UnsubscribeFromClusterRequest{ClusterId: "core-1"}); err != nil {
@@ -239,6 +483,60 @@ func TestUnsubscribeFromClusterEnqueuesRemoveClusterThenTeardown(t *testing.T) {
 	}
 	if mErr := mock.ExpectationsWereMet(); mErr != nil {
 		t.Fatalf("expectations: %v", mErr)
+	}
+}
+
+func TestUnsubscribeFromClusterDoesNotRemoveDNSMembershipBeforeBillingObservation(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-1")
+	ctx = context.WithValue(ctx, ctxkeys.KeyAuthType, "jwt")
+	ctx = context.WithValue(ctx, ctxkeys.KeyRole, "owner")
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`UPDATE quartermaster\.tenant_cluster_access`).WithArgs("tenant-1", "core-1").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(`UPDATE quartermaster\.tenants AS tenant`).WithArgs("tenant-1", "core-1").WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(`SELECT t\.billing_entitlements_observed_at`).WithArgs("tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"entitlements_observed", "has_paid_cluster_access"}).AddRow(false, false))
+	mock.ExpectQuery(`SELECT t\.custom_domain, t\.custom_subdomain_enabled, t\.custom_domain_enabled, t\.is_active`).WithArgs("tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"custom_domain", "custom_subdomain_enabled", "custom_domain_enabled", "is_active", "billing_entitlements_observed_at", "has_cluster"}).
+			AddRow("legacy.example", true, true, true, time.Unix(0, 0).UTC(), false))
+	mock.ExpectCommit()
+
+	if _, err := server.UnsubscribeFromCluster(ctx, &quartermasterpb.UnsubscribeFromClusterRequest{ClusterId: "core-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("epoch unsubscribe emitted an unexpected DNS removal: %v", err)
+	}
+}
+
+func TestUnsubscribeFromClusterDoesNotEnqueueWhenAccessWasNotActive(t *testing.T) {
+	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-1")
+	ctx = context.WithValue(ctx, ctxkeys.KeyAuthType, "jwt")
+	ctx = context.WithValue(ctx, ctxkeys.KeyRole, "owner")
+
+	mock.ExpectBegin()
+	mock.ExpectExec(`UPDATE quartermaster\.tenant_cluster_access`).
+		WithArgs("tenant-1", "core-1").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectCommit()
+
+	if _, err := server.UnsubscribeFromCluster(ctx, &quartermasterpb.UnsubscribeFromClusterRequest{ClusterId: "core-1"}); err != nil {
+		t.Fatalf("UnsubscribeFromCluster: %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unchanged unsubscribe emitted cleanup: %v", err)
 	}
 }
 
@@ -263,16 +561,20 @@ func TestGrantClusterAccessEnqueuesEnsure(t *testing.T) {
 	mock.ExpectExec(`INSERT INTO quartermaster\.tenant_cluster_access`).
 		WithArgs("tenant-1", "core-1", "read", "{}", sqlmock.AnyArg()).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(`SELECT t\.name, t\.subdomain, t\.deployment_tier, t\.is_active.*FOR UPDATE`).
+	mock.ExpectQuery(`SELECT t\.name, t\.subdomain, t\.custom_subdomain_enabled, t\.is_active.*FOR UPDATE`).
 		WithArgs("tenant-1").
-		WillReturnRows(sqlmock.NewRows([]string{"name", "subdomain", "deployment_tier", "is_active", "has_cluster"}).
-			AddRow("Acme", "acme", "supporter", true, true))
+		WillReturnRows(sqlmock.NewRows([]string{"name", "subdomain", "custom_subdomain_enabled", "is_active", "billing_entitlements_observed_at", "has_cluster"}).
+			AddRow("Acme", "acme", true, true, observedBillingEntitlementsAt, true))
 	mock.ExpectQuery(`INSERT INTO quartermaster\.navigator_tenant_alias_outbox`).
 		WithArgs("tenant-1", "acme", "", "", "ensure").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("ensure-1"))
 	mock.ExpectQuery(`INSERT INTO quartermaster\.navigator_tenant_alias_outbox`).
 		WithArgs("tenant-1", "", "core-1", "cluster_access_active", "ensure_cluster").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("cluster-ensure-1"))
+	mock.ExpectQuery(`SELECT t\.custom_domain, t\.custom_subdomain_enabled, t\.custom_domain_enabled, t\.is_active`).
+		WithArgs("tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"custom_domain", "custom_subdomain_enabled", "custom_domain_enabled", "is_active", "billing_entitlements_observed_at", "has_cluster"}).
+			AddRow(nil, false, false, true, observedBillingEntitlementsAt, true))
 	mock.ExpectQuery(`SELECT jsonb_build_object`).
 		WithArgs("tenant-1", "core-1").
 		WillReturnRows(sqlmock.NewRows([]string{"state"}).AddRow(`{"access_level":"read","access_source":"operator_override","expires_at":null}`))
@@ -391,14 +693,16 @@ func TestMaterializeClusterAccessOwnerGrantIsAuditedAtomically(t *testing.T) {
 	mock.ExpectBegin()
 	mock.ExpectExec(`INSERT INTO quartermaster\.tenant_cluster_access`).WithArgs("tenant-1", "byo-1", "owner", "active").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(`SELECT t\.name, t\.subdomain, t\.deployment_tier, t\.is_active.*FOR UPDATE`).WithArgs("tenant-1").
-		WillReturnRows(sqlmock.NewRows([]string{"name", "subdomain", "deployment_tier", "is_active", "has_cluster"}).AddRow("Acme", "acme", "supporter", true, true))
+	mock.ExpectQuery(`SELECT t\.name, t\.subdomain, t\.custom_subdomain_enabled, t\.is_active.*FOR UPDATE`).WithArgs("tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"name", "subdomain", "custom_subdomain_enabled", "is_active", "billing_entitlements_observed_at", "has_cluster"}).AddRow("Acme", "acme", true, true, observedBillingEntitlementsAt, true))
 	mock.ExpectQuery(`INSERT INTO quartermaster\.navigator_tenant_alias_outbox`).
 		WithArgs("tenant-1", "acme", "", "", "ensure").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("ensure-1"))
 	mock.ExpectQuery(`INSERT INTO quartermaster\.navigator_tenant_alias_outbox`).
 		WithArgs("tenant-1", "", "byo-1", "cluster_access_active", "ensure_cluster").
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("cluster-ensure-1"))
+	mock.ExpectQuery(`SELECT t\.custom_domain, t\.custom_subdomain_enabled, t\.custom_domain_enabled, t\.is_active`).WithArgs("tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"custom_domain", "custom_subdomain_enabled", "custom_domain_enabled", "is_active", "billing_entitlements_observed_at", "has_cluster"}).AddRow(nil, false, false, true, observedBillingEntitlementsAt, true))
 	mock.ExpectQuery(`INSERT INTO quartermaster\.service_event_outbox`).
 		WithArgs(eventClusterAccessMaterialized, "tenant-1", "", "cluster_access", "tenant-1:byo-1", sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow("audit-1"))

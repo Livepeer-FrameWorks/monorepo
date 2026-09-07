@@ -1,7 +1,6 @@
 package grpc
 
 import (
-	"context"
 	"database/sql"
 	"errors"
 	"testing"
@@ -63,7 +62,7 @@ func TestAssignServiceToClusterCountFailsWhenNoRunningFoghornAvailable(t *testin
 		WithArgs("cluster-a", int32(1), "foghorn").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	_, err = server.AssignServiceToCluster(context.Background(), &quartermasterpb.AssignServiceToClusterRequest{
+	_, err = server.AssignServiceToCluster(serviceCtx(), &quartermasterpb.AssignServiceToClusterRequest{
 		ClusterId:   "cluster-a",
 		Count:       1,
 		ServiceType: "foghorn",
@@ -86,7 +85,7 @@ func TestAssignServiceToClusterRequiresServiceType(t *testing.T) {
 
 	server := NewQuartermasterServer(db, logrus.New(), nil, nil, nil, nil, nil)
 
-	_, err = server.AssignServiceToCluster(context.Background(), &quartermasterpb.AssignServiceToClusterRequest{
+	_, err = server.AssignServiceToCluster(serviceCtx(), &quartermasterpb.AssignServiceToClusterRequest{
 		ClusterId: "cluster-a",
 		Count:     1,
 	})
@@ -111,7 +110,7 @@ func TestAssignServiceToClusterInstanceIDFailsWhenInstanceMissing(t *testing.T) 
 		WithArgs("cluster-a", "11111111-1111-1111-1111-111111111111", "foghorn").
 		WillReturnResult(sqlmock.NewResult(0, 0))
 
-	_, err = server.AssignServiceToCluster(context.Background(), &quartermasterpb.AssignServiceToClusterRequest{
+	_, err = server.AssignServiceToCluster(serviceCtx(), &quartermasterpb.AssignServiceToClusterRequest{
 		ClusterId:   "cluster-a",
 		InstanceIds: []string{"11111111-1111-1111-1111-111111111111"},
 		ServiceType: "foghorn",
@@ -141,7 +140,7 @@ func TestAssignServiceToClusterInstanceIDWritesRuntimeSourceAndPreservesOnConfli
 		WithArgs("cluster-a", "11111111-1111-1111-1111-111111111111", "foghorn").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
-	_, err = server.AssignServiceToCluster(context.Background(), &quartermasterpb.AssignServiceToClusterRequest{
+	_, err = server.AssignServiceToCluster(serviceCtx(), &quartermasterpb.AssignServiceToClusterRequest{
 		ClusterId:   "cluster-a",
 		InstanceIds: []string{"11111111-1111-1111-1111-111111111111"},
 		ServiceType: "foghorn",
@@ -185,7 +184,7 @@ func TestEnableSelfHostingAssignmentWritesRuntimeSource(t *testing.T) {
 		WillReturnError(errors.New("assignment failed"))
 	mock.ExpectRollback()
 
-	_, err = server.EnableSelfHosting(context.Background(), &quartermasterpb.EnableSelfHostingRequest{
+	_, err = server.EnableSelfHosting(tenantCtx("tenant-1", "owner"), &quartermasterpb.EnableSelfHostingRequest{
 		TenantId:    "tenant-1",
 		ClusterName: "Tenant Edge",
 	})
@@ -219,7 +218,7 @@ func TestCreatePrivateClusterUsesUnlimitedCapacityDefaults(t *testing.T) {
 		WillReturnError(errors.New("stop after cluster insert"))
 	mock.ExpectRollback()
 
-	_, err = server.CreatePrivateCluster(context.Background(), &quartermasterpb.CreatePrivateClusterRequest{
+	_, err = server.CreatePrivateCluster(tenantCtx("tenant-1", "owner"), &quartermasterpb.CreatePrivateClusterRequest{
 		TenantId:    "tenant-1",
 		ClusterName: "Tenant Edge",
 	})

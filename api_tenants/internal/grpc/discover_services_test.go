@@ -418,7 +418,7 @@ func TestListIngressSites_FailsClosedOnMalformedDomains(t *testing.T) {
 		WillReturnRows(sqlmock.NewRows(cols).
 			AddRow("id1", "site1", "cl1", "node1", []byte(`{"not":"an array"}`), "bundle1", "physical", "127.0.0.1:8935", []byte(`{}`), now, now))
 
-	_, err = s.ListIngressSites(context.Background(), &quartermasterpb.ListIngressSitesRequest{NodeId: "node1"})
+	_, err = s.ListIngressSites(serviceCtx(), &quartermasterpb.ListIngressSitesRequest{NodeId: "node1"})
 	if status.Code(err) != codes.Internal {
 		t.Fatalf("expected Internal on malformed ingress domains, got %v", err)
 	}

@@ -1,7 +1,6 @@
 package grpc
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -27,12 +26,12 @@ func TestGetTenantsByClusterScansAllColumns(t *testing.T) {
 	now := time.Now()
 	rows := sqlmock.NewRows([]string{
 		"id", "name", "subdomain", "custom_domain", "logo_url", "primary_color", "secondary_color",
-		"deployment_tier", "deployment_model",
+		"deployment_tier", "custom_subdomain_enabled", "custom_domain_enabled", "deployment_model",
 		"primary_cluster_id", "official_cluster_id", "kafka_topic_prefix", "kafka_brokers", "database_url",
 		"is_active", "monitoring_enabled", "created_at", "updated_at", "total_count",
 	}).AddRow(
 		"tenant-1", "Acme", "acme", nil, nil, "#111111", "#222222",
-		"pro", "shared",
+		"pro", true, false, "shared",
 		"cluster-eu", "cluster-official", nil, pq.Array([]string{}), nil,
 		true, true, now, now, int32(7),
 	)
@@ -41,7 +40,7 @@ func TestGetTenantsByClusterScansAllColumns(t *testing.T) {
 		WithArgs("cluster-eu", int32(2)).
 		WillReturnRows(rows)
 
-	resp, err := server.GetTenantsByCluster(context.Background(), &quartermasterpb.GetTenantsByClusterRequest{
+	resp, err := server.GetTenantsByCluster(serviceCtx(), &quartermasterpb.GetTenantsByClusterRequest{
 		ClusterId:  "cluster-eu",
 		Pagination: &commonpb.CursorPaginationRequest{First: 2},
 	})
@@ -72,7 +71,7 @@ func TestGetTenantsByClusterRejectsCursorPagination(t *testing.T) {
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 
 	after := "cursor"
-	if _, err := server.GetTenantsByCluster(context.Background(), &quartermasterpb.GetTenantsByClusterRequest{
+	if _, err := server.GetTenantsByCluster(serviceCtx(), &quartermasterpb.GetTenantsByClusterRequest{
 		ClusterId:  "cluster-eu",
 		Pagination: &commonpb.CursorPaginationRequest{After: &after},
 	}); err == nil {
@@ -93,7 +92,7 @@ func TestGetTenantsByClusterFailsOnScanMismatch(t *testing.T) {
 	mock.ExpectQuery("FROM quartermaster.tenants t").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "name"}).AddRow("tenant-1", "Acme"))
 
-	if _, err := server.GetTenantsByCluster(context.Background(), &quartermasterpb.GetTenantsByClusterRequest{
+	if _, err := server.GetTenantsByCluster(serviceCtx(), &quartermasterpb.GetTenantsByClusterRequest{
 		ClusterId: "cluster-eu",
 	}); err == nil {
 		t.Fatal("scan mismatch must be a hard error")
@@ -108,7 +107,7 @@ func TestGetTenantsByClusterRequiresClusterID(t *testing.T) {
 	defer func() { _ = db.Close() }()
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 
-	if _, err := server.GetTenantsByCluster(context.Background(), &quartermasterpb.GetTenantsByClusterRequest{}); err == nil {
+	if _, err := server.GetTenantsByCluster(serviceCtx(), &quartermasterpb.GetTenantsByClusterRequest{}); err == nil {
 		t.Fatal("expected InvalidArgument for missing cluster_id")
 	}
 }
@@ -124,12 +123,12 @@ func TestGetTenantsBatchScansAllColumns(t *testing.T) {
 	now := time.Now()
 	rows := sqlmock.NewRows([]string{
 		"id", "name", "subdomain", "custom_domain", "logo_url", "primary_color", "secondary_color",
-		"deployment_tier", "deployment_model",
+		"deployment_tier", "custom_subdomain_enabled", "custom_domain_enabled", "deployment_model",
 		"primary_cluster_id", "official_cluster_id", "kafka_topic_prefix", "kafka_brokers", "database_url",
 		"is_active", "monitoring_enabled", "created_at", "updated_at",
 	}).AddRow(
 		"tenant-1", "Acme", "acme", nil, nil, "#111111", "#222222",
-		"pro", "shared",
+		"pro", true, false, "shared",
 		"cluster-eu", "cluster-official", nil, pq.Array([]string{}), nil,
 		true, false, now, now,
 	)
@@ -138,7 +137,7 @@ func TestGetTenantsBatchScansAllColumns(t *testing.T) {
 		WithArgs(pq.Array([]string{"tenant-1"})).
 		WillReturnRows(rows)
 
-	resp, err := server.GetTenantsBatch(context.Background(), &quartermasterpb.GetTenantsBatchRequest{
+	resp, err := server.GetTenantsBatch(serviceCtx(), &quartermasterpb.GetTenantsBatchRequest{
 		TenantIds: []string{"tenant-1"},
 	})
 	if err != nil {
@@ -170,7 +169,7 @@ func TestGetTenantsBatchFailsOnScanMismatch(t *testing.T) {
 	mock.ExpectQuery("FROM quartermaster.tenants").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "name"}).AddRow("tenant-1", "Acme"))
 
-	if _, err := server.GetTenantsBatch(context.Background(), &quartermasterpb.GetTenantsBatchRequest{
+	if _, err := server.GetTenantsBatch(serviceCtx(), &quartermasterpb.GetTenantsBatchRequest{
 		TenantIds: []string{"tenant-1"},
 	}); err == nil {
 		t.Fatal("scan mismatch must be a hard error")
@@ -190,7 +189,7 @@ func TestListActiveTenantsReturnsMonitoringRows(t *testing.T) {
 			AddRow("tenant-a", true).
 			AddRow("tenant-b", false))
 
-	resp, err := server.ListActiveTenants(context.Background(), &quartermasterpb.ListActiveTenantsRequest{})
+	resp, err := server.ListActiveTenants(serviceCtx(), &quartermasterpb.ListActiveTenantsRequest{})
 	if err != nil {
 		t.Fatalf("ListActiveTenants: %v", err)
 	}

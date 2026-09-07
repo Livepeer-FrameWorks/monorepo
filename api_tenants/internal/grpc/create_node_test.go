@@ -1,7 +1,6 @@
 package grpc
 
 import (
-	"context"
 	"database/sql/driver"
 	"fmt"
 	"regexp"
@@ -84,7 +83,7 @@ func TestCreateNode_Success(t *testing.T) {
 			nil, nil, nil, nil, nil, nil, nil,
 		}...))
 
-	resp, err := server.CreateNode(context.Background(), &quartermasterpb.CreateNodeRequest{
+	resp, err := server.CreateNode(serviceCtx(), &quartermasterpb.CreateNodeRequest{
 		NodeId:    "node-1",
 		ClusterId: "cluster-1",
 		NodeName:  "my-node",
@@ -114,7 +113,7 @@ func TestCreateNode_MissingNodeID(t *testing.T) {
 
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 
-	_, err = server.CreateNode(context.Background(), &quartermasterpb.CreateNodeRequest{
+	_, err = server.CreateNode(serviceCtx(), &quartermasterpb.CreateNodeRequest{
 		ClusterId: "cluster-1",
 		NodeName:  "my-node",
 		NodeType:  "core",
@@ -133,7 +132,7 @@ func TestCreateNode_MissingClusterID(t *testing.T) {
 
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 
-	_, err = server.CreateNode(context.Background(), &quartermasterpb.CreateNodeRequest{
+	_, err = server.CreateNode(serviceCtx(), &quartermasterpb.CreateNodeRequest{
 		NodeId:   "node-1",
 		NodeName: "my-node",
 		NodeType: "core",
@@ -189,7 +188,7 @@ func TestCreateNode_Idempotent(t *testing.T) {
 				nil, nil, nil, nil, nil, nil, nil,
 			}...))
 
-		resp, callErr := server.CreateNode(context.Background(), req)
+		resp, callErr := server.CreateNode(serviceCtx(), req)
 		if callErr != nil {
 			t.Fatalf("call %d: unexpected error: %v", i+1, callErr)
 		}
@@ -244,7 +243,7 @@ func TestCreateNode_StampsRuntimeEnrolled(t *testing.T) {
 			nil, nil, nil, nil, nil, nil, nil,
 		}...))
 
-	resp, err := server.CreateNode(context.Background(), &quartermasterpb.CreateNodeRequest{
+	resp, err := server.CreateNode(serviceCtx(), &quartermasterpb.CreateNodeRequest{
 		NodeId:    "node-1",
 		ClusterId: "cluster-1",
 		NodeName:  "my-node",
@@ -305,7 +304,7 @@ func TestCreateNode_PreservesExistingOrigin(t *testing.T) {
 					nil, nil, nil, nil, nil, nil, nil,
 				}...))
 
-			resp, err := server.CreateNode(context.Background(), &quartermasterpb.CreateNodeRequest{
+			resp, err := server.CreateNode(serviceCtx(), &quartermasterpb.CreateNodeRequest{
 				NodeId:    "node-1",
 				ClusterId: "cluster-1",
 				NodeName:  "my-node",
@@ -338,7 +337,7 @@ func TestCreateNode_ClusterNotFound(t *testing.T) {
 		WithArgs("nonexistent-cluster").
 		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
 
-	_, err = server.CreateNode(context.Background(), &quartermasterpb.CreateNodeRequest{
+	_, err = server.CreateNode(serviceCtx(), &quartermasterpb.CreateNodeRequest{
 		NodeId:    "node-1",
 		ClusterId: "nonexistent-cluster",
 		NodeName:  "my-node",

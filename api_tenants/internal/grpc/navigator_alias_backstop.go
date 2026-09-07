@@ -49,6 +49,7 @@ type tenantAliasBackstopAction struct {
 }
 
 func (s *QuartermasterServer) reconcileTenantAliasesOnce(ctx context.Context) {
+	defer s.reconcileTenantCustomDomainsOnce(ctx)
 	desired, err := s.listDesiredTenantAliases(ctx)
 	if err != nil {
 		s.logger.WithError(err).Warn("tenant-alias backstop: list tenants failed")
@@ -67,9 +68,10 @@ func (s *QuartermasterServer) reconcileTenantAliasesOnce(ctx context.Context) {
 }
 
 // listDesiredTenantAliases computes each tenant's intended alias state. A
-// tenant wants an alias iff it is active on an alias-eligible monthly tier
-// AND holds at least one active cluster subscription — the same condition the
-// primary ensure/remove paths converge to, so the backstop never fights them.
+// tenant wants an alias iff Purser has explicitly observed an enabled
+// custom-subdomain entitlement, the tenant is active, and it holds at least
+// one active cluster subscription. This is the same condition the primary
+// ensure/remove paths converge to, so the backstop never fights them.
 func (s *QuartermasterServer) listDesiredTenantAliases(ctx context.Context) ([]tenantAliasDesired, error) {
 	rows, err := quartermasterdb.New(s.db).ListDesiredTenantAliases(ctx)
 	if err != nil {
@@ -130,6 +132,11 @@ func (s *QuartermasterServer) reconcileOneTenantAlias(ctx context.Context, d ten
 		s.logger.WithError(commitErr).WithField("tenant_id", d.tenantID).Warn("tenant-alias backstop: commit failed")
 		return false
 	}
+	if s.metrics != nil && s.metrics.DNSBackstopRepairs != nil {
+		for _, action := range acts {
+			s.metrics.DNSBackstopRepairs.WithLabelValues("tenant_alias", action.action).Inc()
+		}
+	}
 	return true
 }
 
@@ -176,4 +183,90 @@ func tenantAliasBackstopActions(d tenantAliasDesired, statusResp *dnspb.GetTenan
 
 func (s *QuartermasterServer) tenantAliasOutboxHasPending(ctx context.Context, tenantID string) (bool, error) {
 	return quartermasterdb.New(s.db).TenantAliasOutboxHasPending(ctx, tenantID)
+}
+
+type tenantCustomDomainDesired struct {
+	tenantID string
+	domain   string
+	want     bool
+}
+
+func (s *QuartermasterServer) reconcileTenantCustomDomainsOnce(ctx context.Context) {
+	rows, err := quartermasterdb.New(s.db).ListDesiredTenantCustomDomains(ctx)
+	if err != nil {
+		s.logger.WithError(err).Warn("custom-domain backstop: list tenants failed")
+		return
+	}
+	repaired := 0
+	for _, row := range rows {
+		desired := tenantCustomDomainDesired{tenantID: row.TenantID, domain: row.CustomDomain, want: row.Want}
+		pending, pendingErr := quartermasterdb.New(s.db).TenantCustomDomainOutboxHasPending(ctx, desired.tenantID)
+		if pendingErr != nil || pending {
+			continue
+		}
+		lookupDomain := tenantCustomDomainLookupDomain(desired)
+		current, statusErr := s.navigatorClient.GetCustomDomainStatus(ctx, &dnspb.GetCustomDomainStatusRequest{
+			TenantId: desired.tenantID,
+			Domain:   lookupDomain,
+		})
+		if statusErr != nil {
+			s.logger.WithError(statusErr).WithField("tenant_id", desired.tenantID).Warn("custom-domain backstop: status lookup failed")
+			continue
+		}
+		action, domain := tenantCustomDomainBackstopTarget(desired, current)
+		if action == "" {
+			continue
+		}
+		tx, beginErr := s.db.BeginTx(ctx, nil)
+		if beginErr != nil {
+			continue
+		}
+		if _, enqueueErr := s.EnqueueNavigatorCustomDomainTx(ctx, tx, desired.tenantID, domain, action); enqueueErr != nil {
+			if rollbackErr := tx.Rollback(); rollbackErr != nil {
+				s.logger.WithError(rollbackErr).Warn("custom-domain backstop rollback failed")
+			}
+			continue
+		}
+		if commitErr := tx.Commit(); commitErr != nil {
+			continue
+		}
+		if s.metrics != nil && s.metrics.DNSBackstopRepairs != nil {
+			s.metrics.DNSBackstopRepairs.WithLabelValues("custom_domain", action).Inc()
+		}
+		repaired++
+	}
+	if repaired > 0 {
+		s.logger.WithField("repaired", repaired).Info("custom-domain backstop enqueued repairs")
+	}
+}
+
+func tenantCustomDomainLookupDomain(desired tenantCustomDomainDesired) string {
+	if !desired.want {
+		// Empty means "return one deterministic row". This is required to
+		// drain every stale legacy row when the desired domain itself is empty
+		// or no longer names the extra Navigator rows.
+		return ""
+	}
+	return desired.domain
+}
+
+func tenantCustomDomainBackstopAction(desired tenantCustomDomainDesired, current *dnspb.GetCustomDomainStatusResponse) string {
+	action, _ := tenantCustomDomainBackstopTarget(desired, current)
+	return action
+}
+
+func tenantCustomDomainBackstopTarget(desired tenantCustomDomainDesired, current *dnspb.GetCustomDomainStatusResponse) (string, string) {
+	found := current != nil && current.GetFound()
+	status := ""
+	if current != nil {
+		status = current.GetStatus()
+	}
+	switch {
+	case desired.want && (!found || status == "tearing_down"):
+		return "ensure", desired.domain
+	case !desired.want && found && status != "tearing_down":
+		return "remove", current.GetDomain()
+	default:
+		return "", ""
+	}
 }

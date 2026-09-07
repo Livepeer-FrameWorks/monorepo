@@ -197,7 +197,7 @@ func TestSyncMeshRequiresStoredWireGuardIdentity(t *testing.T) {
 		WithArgs("node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"wireguard_ip", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_listen_port", "cluster_id"}).AddRow("10.200.0.5", "pub-key-1", "1.2.3.4", "10.0.0.5", nil, "cluster-1"))
 
-	_, err = server.SyncMesh(t.Context(), &quartermasterpb.InfrastructureSyncRequest{NodeId: "node-1", PublicKey: "pub-key-1", ListenPort: 51820})
+	_, err = server.SyncMesh(serviceCtx(), &quartermasterpb.InfrastructureSyncRequest{NodeId: "node-1", PublicKey: "pub-key-1", ListenPort: 51820})
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("expected FailedPrecondition when stored listen port is missing, got %v", err)
 	}
@@ -220,7 +220,7 @@ func TestSyncMeshRejectsPublicKeyMismatch(t *testing.T) {
 		WithArgs("node-1").
 		WillReturnRows(sqlmock.NewRows([]string{"wireguard_ip", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_listen_port", "cluster_id"}).AddRow("10.200.0.5", "stored-pub", "1.2.3.4", "10.0.0.5", int32(51820), "cluster-1"))
 
-	_, err = server.SyncMesh(t.Context(), &quartermasterpb.InfrastructureSyncRequest{
+	_, err = server.SyncMesh(serviceCtx(), &quartermasterpb.InfrastructureSyncRequest{
 		NodeId:     "node-1",
 		PublicKey:  "different-pub",
 		ListenPort: 51820,
@@ -254,7 +254,7 @@ func TestSyncMeshFailsClosedWhenTopologyQueryFails(t *testing.T) {
 		WithArgs("node-1").
 		WillReturnError(errors.New("db unavailable"))
 
-	_, err = server.SyncMesh(t.Context(), &quartermasterpb.InfrastructureSyncRequest{
+	_, err = server.SyncMesh(serviceCtx(), &quartermasterpb.InfrastructureSyncRequest{
 		NodeId:     "node-1",
 		PublicKey:  "pub-key-1",
 		ListenPort: 51820,
@@ -300,7 +300,7 @@ func TestSyncMeshServiceEndpointsKeyedByType(t *testing.T) {
 	expectMeshPeers(mock, "node-1", "cluster-1", sqlmock.NewRows([]string{"node_name", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_ip", "wireguard_listen_port"}))
 	expectMeshConfigStore(mock, "node-1", "cluster-1", "10.200.0.5", 51820, meshTopologySourceHash(1))
 
-	resp, err := server.SyncMesh(t.Context(), &quartermasterpb.InfrastructureSyncRequest{
+	resp, err := server.SyncMesh(serviceCtx(), &quartermasterpb.InfrastructureSyncRequest{
 		NodeId:     "node-1",
 		PublicKey:  "pub-key-1",
 		ListenPort: 51820,
@@ -350,7 +350,7 @@ func TestSyncMeshReturnsStoredPortOverRequestEcho(t *testing.T) {
 	expectMeshPeers(mock, "node-1", "cluster-1", sqlmock.NewRows([]string{"node_name", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_ip", "wireguard_listen_port"}))
 	expectMeshConfigStore(mock, "node-1", "cluster-1", "10.200.0.5", 51900, meshTopologySourceHash(1))
 
-	resp, err := server.SyncMesh(t.Context(), &quartermasterpb.InfrastructureSyncRequest{NodeId: "node-1", PublicKey: "pub", ListenPort: 51900})
+	resp, err := server.SyncMesh(serviceCtx(), &quartermasterpb.InfrastructureSyncRequest{NodeId: "node-1", PublicKey: "pub", ListenPort: 51900})
 	if err != nil {
 		t.Fatalf("sync mesh: %v", err)
 	}
@@ -403,7 +403,7 @@ func TestSyncMeshCacheHitSkipsTopologyQueries(t *testing.T) {
 			int64(7),
 		))
 
-	resp, err := server.SyncMesh(t.Context(), &quartermasterpb.InfrastructureSyncRequest{NodeId: "node-1", PublicKey: "pub", ListenPort: 51820})
+	resp, err := server.SyncMesh(serviceCtx(), &quartermasterpb.InfrastructureSyncRequest{NodeId: "node-1", PublicKey: "pub", ListenPort: 51820})
 	if err != nil {
 		t.Fatalf("sync mesh: %v", err)
 	}
@@ -459,7 +459,7 @@ func TestSyncMeshStaleCacheServesStoredConfig(t *testing.T) {
 			int64(7),
 		))
 
-	resp, err := server.SyncMesh(t.Context(), &quartermasterpb.InfrastructureSyncRequest{NodeId: "node-1", PublicKey: "pub", ListenPort: 51820})
+	resp, err := server.SyncMesh(serviceCtx(), &quartermasterpb.InfrastructureSyncRequest{NodeId: "node-1", PublicKey: "pub", ListenPort: 51820})
 	if err != nil {
 		t.Fatalf("sync mesh: %v", err)
 	}
@@ -549,7 +549,7 @@ func TestSyncMeshReturnsComputedConfigWhenCacheWriteFails(t *testing.T) {
 		WithArgs("node-1", "cluster-1", sqlmock.AnyArg(), meshTopologySourceHash(1), "10.200.0.5", int32(51820), sqlmock.AnyArg(), sqlmock.AnyArg()).
 		WillReturnError(errors.New("cache write unavailable"))
 
-	resp, err := server.SyncMesh(t.Context(), &quartermasterpb.InfrastructureSyncRequest{NodeId: "node-1", PublicKey: "pub", ListenPort: 51820})
+	resp, err := server.SyncMesh(serviceCtx(), &quartermasterpb.InfrastructureSyncRequest{NodeId: "node-1", PublicKey: "pub", ListenPort: 51820})
 	if err != nil {
 		t.Fatalf("sync mesh should return computed config despite cache write failure: %v", err)
 	}
@@ -588,7 +588,7 @@ func TestSyncMeshReturnsCrossClusterPeersAndQuartermasterEndpoint(t *testing.T) 
 		AddRow("central-1", "central-pub", "203.0.113.10", nil, "10.88.0.10", int32(51820)))
 	expectMeshConfigStore(mock, "regional-1", "regional", "10.88.1.20", 51820, meshTopologySourceHash(1))
 
-	resp, err := server.SyncMesh(t.Context(), &quartermasterpb.InfrastructureSyncRequest{
+	resp, err := server.SyncMesh(serviceCtx(), &quartermasterpb.InfrastructureSyncRequest{
 		NodeId:     "regional-1",
 		PublicKey:  "regional-pub",
 		ListenPort: 51820,
@@ -639,7 +639,7 @@ func TestSyncMeshIncludesInfraDependencyPeersWithoutDNSAliases(t *testing.T) {
 		AddRow("qm-1", "qm-pub", "203.0.113.10", nil, "10.88.0.10", int32(51820)))
 	expectMeshConfigStore(mock, "regional-1", "regional", "10.88.1.20", 51820, meshTopologySourceHash(1))
 
-	resp, err := server.SyncMesh(t.Context(), &quartermasterpb.InfrastructureSyncRequest{
+	resp, err := server.SyncMesh(serviceCtx(), &quartermasterpb.InfrastructureSyncRequest{
 		NodeId:     "regional-1",
 		PublicKey:  "regional-pub",
 		ListenPort: 51820,
@@ -718,7 +718,7 @@ func TestSyncMeshIncludesReciprocalServiceConsumers(t *testing.T) {
 		AddRow("regional-1", "regional-pub", "203.0.113.20", nil, "10.88.1.20", int32(51820)))
 	expectMeshConfigStore(mock, "central-1", "core", "10.88.0.10", 51820, meshTopologySourceHash(1))
 
-	resp, err := server.SyncMesh(t.Context(), &quartermasterpb.InfrastructureSyncRequest{
+	resp, err := server.SyncMesh(serviceCtx(), &quartermasterpb.InfrastructureSyncRequest{
 		NodeId:     "central-1",
 		PublicKey:  "central-pub",
 		ListenPort: 51820,
@@ -784,7 +784,7 @@ func TestSyncMeshMarksNodeActive(t *testing.T) {
 	expectMeshPeers(mock, "node-1", "cluster-1", sqlmock.NewRows([]string{"node_name", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_ip", "wireguard_listen_port"}))
 	expectMeshConfigStore(mock, "node-1", "cluster-1", "10.200.0.5", 51820, meshTopologySourceHash(1))
 
-	if _, err := server.SyncMesh(t.Context(), &quartermasterpb.InfrastructureSyncRequest{NodeId: "node-1", PublicKey: "pub", ListenPort: 51820}); err != nil {
+	if _, err := server.SyncMesh(serviceCtx(), &quartermasterpb.InfrastructureSyncRequest{NodeId: "node-1", PublicKey: "pub", ListenPort: 51820}); err != nil {
 		t.Fatalf("sync mesh: %v", err)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
@@ -816,7 +816,7 @@ func TestSyncMeshIgnoresIncompleteResourceSnapshot(t *testing.T) {
 	expectMeshPeers(mock, "node-1", "cluster-1", sqlmock.NewRows([]string{"node_name", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_ip", "wireguard_listen_port"}))
 	expectMeshConfigStore(mock, "node-1", "cluster-1", "10.200.0.5", 51820, meshTopologySourceHash(1))
 
-	_, err = server.SyncMesh(t.Context(), &quartermasterpb.InfrastructureSyncRequest{
+	_, err = server.SyncMesh(serviceCtx(), &quartermasterpb.InfrastructureSyncRequest{
 		NodeId:     "node-1",
 		PublicKey:  "pub",
 		ListenPort: 51820,
@@ -869,7 +869,7 @@ func TestSyncMeshStoresSnapshotAtReceiptTime(t *testing.T) {
 	expectMeshPeers(mock, "node-1", "cluster-1", sqlmock.NewRows([]string{"node_name", "wireguard_public_key", "external_ip", "internal_ip", "wireguard_ip", "wireguard_listen_port"}))
 	expectMeshConfigStore(mock, "node-1", "cluster-1", "10.200.0.5", 51820, meshTopologySourceHash(1))
 
-	_, err = server.SyncMesh(t.Context(), &quartermasterpb.InfrastructureSyncRequest{
+	_, err = server.SyncMesh(serviceCtx(), &quartermasterpb.InfrastructureSyncRequest{
 		NodeId:     "node-1",
 		PublicKey:  "pub",
 		ListenPort: 51820,
@@ -954,7 +954,7 @@ func TestSyncMeshExcludesPeerWithMissingEndpoint(t *testing.T) {
 		AddRow("peer-orphan", "peer-pub", nil, nil, "10.200.0.6", int32(51820)))
 	expectMeshConfigStore(mock, "node-1", "cluster-1", "10.200.0.5", 51820, meshTopologySourceHash(1))
 
-	resp, err := server.SyncMesh(t.Context(), &quartermasterpb.InfrastructureSyncRequest{
+	resp, err := server.SyncMesh(serviceCtx(), &quartermasterpb.InfrastructureSyncRequest{
 		NodeId:     "node-1",
 		PublicKey:  "pub",
 		ListenPort: 51820,
@@ -1008,7 +1008,7 @@ func TestSyncMeshExcludesPeerWithScanError(t *testing.T) {
 	expectMeshPeers(mock, "node-1", "cluster-1", sqlmock.NewRows([]string{"node_name"}).AddRow("peer-broken"))
 	expectMeshConfigStore(mock, "node-1", "cluster-1", "10.200.0.5", 51820, meshTopologySourceHash(1))
 
-	resp, err := server.SyncMesh(t.Context(), &quartermasterpb.InfrastructureSyncRequest{
+	resp, err := server.SyncMesh(serviceCtx(), &quartermasterpb.InfrastructureSyncRequest{
 		NodeId:     "node-1",
 		PublicKey:  "pub",
 		ListenPort: 51820,

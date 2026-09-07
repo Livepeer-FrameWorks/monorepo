@@ -16,6 +16,7 @@ import (
 func subscriptionJWTContext(tenantID string, operator bool) context.Context {
 	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "jwt")
 	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, tenantID)
+	ctx = context.WithValue(ctx, ctxkeys.KeyRole, "owner")
 	if operator {
 		ctx = context.WithValue(ctx, ctxkeys.KeyPlatformOperator, true)
 	}
@@ -32,7 +33,8 @@ func TestRequireTenantSubscriptionActor(t *testing.T) {
 		{"same tenant", subscriptionJWTContext("tenant-a", false), "tenant-a", codes.OK},
 		{"other tenant", subscriptionJWTContext("tenant-a", false), "tenant-b", codes.PermissionDenied},
 		{"operator override", subscriptionJWTContext("operator-tenant", true), "tenant-b", codes.OK},
-		{"service credential", context.WithValue(context.Background(), ctxkeys.KeyAuthType, "service"), "tenant-a", codes.PermissionDenied},
+		{"service credential", context.WithValue(context.Background(), ctxkeys.KeyAuthType, "service"), "tenant-a", codes.OK},
+		{"same-tenant member", tenantCtx("tenant-a", "member"), "tenant-a", codes.PermissionDenied},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

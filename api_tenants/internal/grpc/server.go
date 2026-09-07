@@ -27,6 +27,8 @@ import (
 	geobucket "frameworks/api_tenants/internal/geo"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/authz"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/billingentitlements"
 	decklogclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/decklog"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/navigator"
 	purserclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/purser"
@@ -107,6 +109,7 @@ const (
 	foghornInternalGRPCPort        = 18019
 	foghornExternalGRPCPort        = 18029
 	navigatorDNSSyncTimeout        = 30 * time.Second
+	tenantDNSEntitlementHandoffKey = billingentitlements.TenantDNSHandoffKey
 	navigatorDNSSyncConcurrency    = 4
 	syncMeshSlowLogThreshold       = time.Second
 	meshTopologyWarmInterval       = 15 * time.Second
@@ -314,6 +317,9 @@ func (s *QuartermasterServer) ValidateTenant(ctx context.Context, req *quarterma
 			Error: "tenant_id required",
 		}, nil
 	}
+	if _, err := authorizeTenantReadActor(ctx, tenantID); err != nil {
+		return nil, err
+	}
 
 	// Query ONLY quartermaster.tenants (no cross-service DB access)
 	queries := quartermasterdb.New(s.db)
@@ -390,6 +396,10 @@ func (s *QuartermasterServer) GetTenant(ctx context.Context, req *quartermasterp
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
+	privateInfrastructure, err := authorizeTenantReadActor(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
 
 	row, err := quartermasterdb.New(s.db).GetTenantRecord(ctx, tenantID)
 
@@ -410,19 +420,22 @@ func (s *QuartermasterServer) GetTenant(ctx context.Context, req *quartermasterp
 	}
 
 	tenant := quartermasterpb.Tenant{
-		Id:                 row.ID,
-		Name:               row.Name,
-		PrimaryColor:       row.PrimaryColor.String,
-		SecondaryColor:     row.SecondaryColor.String,
-		DeploymentTier:     row.DeploymentTier.String,
-		DeploymentModel:    row.DeploymentModel.String,
-		KafkaBrokers:       row.KafkaBrokers,
-		IsActive:           row.IsActive.Bool,
-		MonitoringEnabled:  row.MonitoringEnabled,
-		CreatedAt:          timestamppb.New(row.CreatedAt.Time),
-		UpdatedAt:          timestamppb.New(row.UpdatedAt.Time),
-		RateLimitPerMinute: row.RateLimitPerMinute,
-		RateLimitBurst:     row.RateLimitBurst,
+		Id:                          row.ID,
+		Name:                        row.Name,
+		PrimaryColor:                row.PrimaryColor.String,
+		SecondaryColor:              row.SecondaryColor.String,
+		DeploymentTier:              row.DeploymentTier.String,
+		CustomSubdomainEnabled:      row.CustomSubdomainEnabled,
+		CustomDomainEnabled:         row.CustomDomainEnabled,
+		BillingEntitlementsObserved: row.BillingEntitlementsObserved,
+		DeploymentModel:             row.DeploymentModel.String,
+		KafkaBrokers:                row.KafkaBrokers,
+		IsActive:                    row.IsActive.Bool,
+		MonitoringEnabled:           row.MonitoringEnabled,
+		CreatedAt:                   timestamppb.New(row.CreatedAt.Time),
+		UpdatedAt:                   timestamppb.New(row.UpdatedAt.Time),
+		RateLimitPerMinute:          row.RateLimitPerMinute,
+		RateLimitBurst:              row.RateLimitBurst,
 	}
 
 	// Set optional fields
@@ -447,6 +460,13 @@ func (s *QuartermasterServer) GetTenant(ctx context.Context, req *quartermasterp
 	if row.DatabaseUrl.Valid {
 		tenant.DatabaseUrl = &row.DatabaseUrl.String
 	}
+	if !privateInfrastructure {
+		tenant.PrimaryClusterId = nil
+		tenant.OfficialClusterId = nil
+		tenant.KafkaBrokers = nil
+		tenant.KafkaTopicPrefix = nil
+		tenant.DatabaseUrl = nil
+	}
 
 	return &quartermasterpb.GetTenantResponse{Tenant: &tenant}, nil
 }
@@ -458,11 +478,15 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *quarte
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
+	privateInfrastructure, err := authorizeTenantReadActor(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
 
 	// Get tenant's primary (preferred) cluster, official cluster, and deployment tier
 	queries := quartermasterdb.New(s.db)
 	var routingSelection quartermasterdb.GetTenantRoutingSelectionRow
-	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
+	err = database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
 		var queryErr error
 		routingSelection, queryErr = queries.GetTenantRoutingSelection(ctx, tenantID)
 		return queryErr
@@ -546,39 +570,41 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *quarte
 		resp.PeriscopeUrl = &cluster.PeriscopeUrl.String
 	}
 
-	// Surface access-specific runtime cap overrides so Foghorn can enforce
-	// them at trigger time. Plan-level Free caps come from Purser tier
-	// entitlements; an empty tenant_cluster_access.resource_limits column
-	// means "no cluster override". Bandwidth caps (max_bandwidth_mbps) are
-	// not enforced runtime today and intentionally not surfaced on the typed
-	// response — they live in the JSONB column as a future hook.
-	tenantResourceLimits, limitsErr := queries.GetTenantClusterResourceLimits(ctx, quartermasterdb.GetTenantClusterResourceLimitsParams{
-		TenantID: tenantID, ClusterID: primaryClusterID,
-	})
-	if limitsErr == nil && len(tenantResourceLimits) > 0 {
-		var limits map[string]any
-		if json.Unmarshal(tenantResourceLimits, &limits) == nil {
-			caps := &tenantlimitspb.TenantResourceLimits{}
-			if v, ok := limits["max_streams"].(float64); ok && v > 0 {
-				caps.MaxStreams = int32(v)
-			}
-			if v, ok := limits["max_viewers"].(float64); ok && v > 0 {
-				caps.MaxViewers = int32(v)
-			}
-			if caps.MaxStreams > 0 || caps.MaxViewers > 0 {
-				resp.TenantResourceLimits = caps
+	if privateInfrastructure {
+		// Surface access-specific runtime cap overrides so Foghorn can enforce
+		// them at trigger time. Plan-level Free caps come from Purser tier
+		// entitlements; an empty tenant_cluster_access.resource_limits column
+		// means "no cluster override". Bandwidth caps (max_bandwidth_mbps) are
+		// not enforced runtime today and intentionally not surfaced on the typed
+		// response — they live in the JSONB column as a future hook.
+		tenantResourceLimits, limitsErr := queries.GetTenantClusterResourceLimits(ctx, quartermasterdb.GetTenantClusterResourceLimitsParams{
+			TenantID: tenantID, ClusterID: primaryClusterID,
+		})
+		if limitsErr == nil && len(tenantResourceLimits) > 0 {
+			var limits map[string]any
+			if json.Unmarshal(tenantResourceLimits, &limits) == nil {
+				caps := &tenantlimitspb.TenantResourceLimits{}
+				if v, ok := limits["max_streams"].(float64); ok && v > 0 {
+					caps.MaxStreams = int32(v)
+				}
+				if v, ok := limits["max_viewers"].(float64); ok && v > 0 {
+					caps.MaxViewers = int32(v)
+				}
+				if caps.MaxStreams > 0 || caps.MaxViewers > 0 {
+					resp.TenantResourceLimits = caps
+				}
 			}
 		}
-	}
 
-	// Resolve Foghorn gRPC address via service_cluster_assignments (best-effort)
-	foghorn, foghornErr := queries.GetHealthyFoghornAddressForCluster(ctx, primaryClusterID)
-	if foghornErr == nil {
-		if addr, ok := buildAdvertiseAddr(foghorn.AdvertiseHost, foghorn.Port); ok {
-			resp.FoghornGrpcAddr = &addr
+		// Resolve Foghorn gRPC address via service_cluster_assignments (best-effort)
+		foghorn, foghornErr := queries.GetHealthyFoghornAddressForCluster(ctx, primaryClusterID)
+		if foghornErr == nil {
+			if addr, ok := buildAdvertiseAddr(foghorn.AdvertiseHost, foghorn.Port); ok {
+				resp.FoghornGrpcAddr = &addr
+			}
+		} else if !errors.Is(foghornErr, sql.ErrNoRows) {
+			s.logger.WithError(foghornErr).WithField("cluster_id", primaryClusterID).Warn("Failed to resolve primary Foghorn address")
 		}
-	} else if !errors.Is(foghornErr, sql.ErrNoRows) {
-		s.logger.WithError(foghornErr).WithField("cluster_id", primaryClusterID).Warn("Failed to resolve primary Foghorn address")
 	}
 
 	slug := dns.SanitizeLabel(resp.ClusterId)
@@ -620,17 +646,38 @@ func (s *QuartermasterServer) GetClusterRouting(ctx context.Context, req *quarte
 				resp.OfficialBaseUrl = &officialCluster.BaseUrl
 				resp.OfficialClusterName = &officialCluster.ClusterName
 
-				// Resolve official cluster's Foghorn address via assignments
-				offFoghorn, offFoghornErr := queries.GetHealthyFoghornAddressForCluster(ctx, officialClusterID)
-				if offFoghornErr == nil {
-					if addr, ok := buildAdvertiseAddr(offFoghorn.AdvertiseHost, offFoghorn.Port); ok {
-						resp.OfficialFoghornGrpcAddr = &addr
+				if privateInfrastructure {
+					// Resolve official cluster's Foghorn address via assignments
+					offFoghorn, offFoghornErr := queries.GetHealthyFoghornAddressForCluster(ctx, officialClusterID)
+					if offFoghornErr == nil {
+						if addr, ok := buildAdvertiseAddr(offFoghorn.AdvertiseHost, offFoghorn.Port); ok {
+							resp.OfficialFoghornGrpcAddr = &addr
+						}
+					} else if !errors.Is(offFoghornErr, sql.ErrNoRows) {
+						s.logger.WithError(offFoghornErr).WithField("cluster_id", officialClusterID).Warn("Failed to resolve official Foghorn address")
 					}
-				} else if !errors.Is(offFoghornErr, sql.ErrNoRows) {
-					s.logger.WithError(offFoghornErr).WithField("cluster_id", officialClusterID).Warn("Failed to resolve official Foghorn address")
 				}
 			}
 		}
+	}
+
+	// Member-facing callers need only public DNS routing facts. Returning before
+	// the peer query both redacts control-plane topology and prevents a transient
+	// private-inventory failure from breaking the dashboard's streaming config.
+	if !privateInfrastructure {
+		resp.ClusterId = ""
+		resp.OfficialClusterId = nil
+		resp.PeriscopeUrl = nil
+		resp.DatabaseUrl = nil
+		resp.KafkaBrokers = nil
+		resp.TopicPrefix = ""
+		resp.MaxStreams = 0
+		resp.CurrentStreams = 0
+		resp.HealthStatus = ""
+		resp.FoghornGrpcAddr = nil
+		resp.OfficialFoghornGrpcAddr = nil
+		resp.TenantResourceLimits = nil
+		return &resp, nil
 	}
 
 	// Build cluster_peers: all clusters this tenant has access to. This list is
@@ -745,6 +792,9 @@ func (s *QuartermasterServer) ensureServiceExists(ctx context.Context, serviceTy
 
 // BootstrapService handles service registration with idempotent instance management
 func (s *QuartermasterServer) BootstrapService(ctx context.Context, req *quartermasterpb.BootstrapServiceRequest) (*quartermasterpb.BootstrapServiceResponse, error) {
+	if err := requireServiceOrPlatformOperator(ctx, "BootstrapService"); err != nil {
+		return nil, err
+	}
 	serviceType := req.GetType()
 	if serviceType == "" {
 		return nil, status.Error(codes.InvalidArgument, "type required")
@@ -1114,6 +1164,9 @@ func (s *QuartermasterServer) GetNodeOwner(ctx context.Context, req *quartermast
 	row, err := quartermasterdb.New(s.db).GetNodeOwnerRecord(ctx, nodeID)
 
 	if errors.Is(err, sql.ErrNoRows) {
+		if ctxkeys.GetAuthType(ctx) != "service" && !ctxkeys.IsPlatformOperator(ctx) {
+			return nil, status.Error(codes.PermissionDenied, privateInfrastructureDenied)
+		}
 		return nil, status.Error(codes.NotFound, "Node not found")
 	}
 
@@ -1123,6 +1176,9 @@ func (s *QuartermasterServer) GetNodeOwner(ctx context.Context, req *quartermast
 			"error":   err,
 		}).Error("Database error getting node owner")
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	if authErr := requireOwnedResourceActor(ctx, row.OwnerTenantID, authz.ActionReadPrivateInfrastructure); authErr != nil {
+		return nil, authErr
 	}
 	resp := quartermasterpb.NodeOwnerResponse{
 		NodeId: row.NodeID, ClusterId: row.ClusterID, ClusterName: row.ClusterName,
@@ -1300,6 +1356,9 @@ func (s *QuartermasterServer) DiscoverServices(ctx context.Context, req *quarter
 // ============================================================================
 
 func (s *QuartermasterServer) GetServicePoolStatus(ctx context.Context, req *quartermasterpb.GetServicePoolStatusRequest) (*quartermasterpb.GetServicePoolStatusResponse, error) {
+	if err := requireServiceOrPlatformOperator(ctx, "GetServicePoolStatus"); err != nil {
+		return nil, err
+	}
 	serviceType, err := resolveAssignmentServiceType(req.GetServiceType())
 	if err != nil {
 		return nil, err
@@ -1386,6 +1445,9 @@ func resolveAssignmentServiceType(svcType string) (string, error) {
 }
 
 func (s *QuartermasterServer) AddToServicePool(ctx context.Context, req *quartermasterpb.AddToServicePoolRequest) (*quartermasterpb.AddToServicePoolResponse, error) {
+	if err := requireServiceOrPlatformOperator(ctx, "AddToServicePool"); err != nil {
+		return nil, err
+	}
 	serviceType, err := resolveAssignmentServiceType(req.GetServiceType())
 	if err != nil {
 		return nil, err
@@ -1422,6 +1484,9 @@ func (s *QuartermasterServer) AddToServicePool(ctx context.Context, req *quarter
 }
 
 func (s *QuartermasterServer) DrainServiceInstance(ctx context.Context, req *quartermasterpb.DrainServiceInstanceRequest) (*quartermasterpb.DrainServiceInstanceResponse, error) {
+	if err := requireServiceOrPlatformOperator(ctx, "DrainServiceInstance"); err != nil {
+		return nil, err
+	}
 	instanceID := req.GetInstanceId()
 	if instanceID == "" {
 		return nil, status.Error(codes.InvalidArgument, "instance_id required")
@@ -1449,6 +1514,9 @@ func (s *QuartermasterServer) DrainServiceInstance(ctx context.Context, req *qua
 }
 
 func (s *QuartermasterServer) AssignServiceToCluster(ctx context.Context, req *quartermasterpb.AssignServiceToClusterRequest) (*emptypb.Empty, error) {
+	if err := requireServiceOrPlatformOperator(ctx, "AssignServiceToCluster"); err != nil {
+		return nil, err
+	}
 	clusterID := req.GetClusterId()
 	if clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
@@ -1504,6 +1572,9 @@ func (s *QuartermasterServer) AssignServiceToCluster(ctx context.Context, req *q
 }
 
 func (s *QuartermasterServer) UnassignServiceFromCluster(ctx context.Context, req *quartermasterpb.UnassignServiceFromClusterRequest) (*emptypb.Empty, error) {
+	if err := requireServiceOrPlatformOperator(ctx, "UnassignServiceFromCluster"); err != nil {
+		return nil, err
+	}
 	clusterID := req.GetClusterId()
 	if clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
@@ -1539,6 +1610,9 @@ func (s *QuartermasterServer) EnableSelfHosting(ctx context.Context, req *quarte
 	}
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
+	if err := requireTenantResourceActor(ctx, tenantID, authz.ActionManageEdgeCluster); err != nil {
+		return nil, err
 	}
 
 	clusterName := req.GetClusterName()
@@ -1692,6 +1766,9 @@ func (s *QuartermasterServer) CreateEnrollmentToken(ctx context.Context, req *qu
 	if clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
 	}
+	if err := requireDelegatedAPITokenPermission(ctx, authz.ActionManageEdgeCluster); err != nil {
+		return nil, err
+	}
 
 	callerTenantID := middleware.GetTenantID(ctx)
 	serviceAuth := ctxkeys.GetAuthType(ctx) == "service"
@@ -1709,6 +1786,11 @@ func (s *QuartermasterServer) CreateEnrollmentToken(ctx context.Context, req *qu
 	lifecycleActor := serviceAuth || providerActor
 	if callerTenantID != "" && tenantID != callerTenantID && !lifecycleActor {
 		return nil, status.Error(codes.PermissionDenied, "tenant_id does not match caller tenant")
+	}
+	if !lifecycleActor {
+		if actorErr := requireTenantResourceActor(ctx, tenantID, authz.ActionManageEdgeCluster); actorErr != nil {
+			return nil, actorErr
+		}
 	}
 
 	var authorized bool
@@ -1788,6 +1870,9 @@ func (s *QuartermasterServer) CreateEnrollmentToken(ctx context.Context, req *qu
 
 // ResolveTenant resolves a tenant by subdomain or platform-managed domain (no BYO)
 func (s *QuartermasterServer) ResolveTenant(ctx context.Context, req *quartermasterpb.ResolveTenantRequest) (*quartermasterpb.ResolveTenantResponse, error) {
+	if ctxkeys.GetAuthType(ctx) != "service" {
+		return nil, status.Error(codes.PermissionDenied, "ResolveTenant requires service token auth")
+	}
 	subdomain := req.GetSubdomain()
 	domain := req.GetDomain()
 
@@ -1861,6 +1946,9 @@ func (s *QuartermasterServer) ResolveTenantAliases(ctx context.Context, req *qua
 
 // ListTenants lists all tenants with pagination
 func (s *QuartermasterServer) ListTenants(ctx context.Context, req *quartermasterpb.ListTenantsRequest) (*quartermasterpb.ListTenantsResponse, error) {
+	if err := requireServiceOrPlatformOperator(ctx, "ListTenants"); err != nil {
+		return nil, err
+	}
 	// Parse bidirectional pagination
 	params, err := pagination.Parse(req.GetPagination())
 	if err != nil {
@@ -1879,7 +1967,9 @@ func (s *QuartermasterServer) ListTenants(ctx context.Context, req *quartermaste
 	for _, row := range rows {
 		tenant := &quartermasterpb.Tenant{Id: row.ID, Name: row.Name, PrimaryColor: row.PrimaryColor,
 			SecondaryColor: row.SecondaryColor, DeploymentTier: row.DeploymentTier, DeploymentModel: row.DeploymentModel,
-			KafkaBrokers: row.KafkaBrokers, IsActive: row.IsActive, MonitoringEnabled: row.MonitoringEnabled,
+			CustomSubdomainEnabled: row.CustomSubdomainEnabled, CustomDomainEnabled: row.CustomDomainEnabled,
+			BillingEntitlementsObserved: row.BillingEntitlementsObserved,
+			KafkaBrokers:                row.KafkaBrokers, IsActive: row.IsActive, MonitoringEnabled: row.MonitoringEnabled,
 			CreatedAt: timestamppb.New(row.CreatedAt), UpdatedAt: timestamppb.New(row.UpdatedAt)}
 		if row.Subdomain.Valid {
 			tenant.Subdomain = &row.Subdomain.String
@@ -1940,6 +2030,9 @@ func (s *QuartermasterServer) ListTenants(ctx context.Context, req *quartermaste
 // ListActiveTenants returns active tenants for cross-service batch processing.
 // Purser consumes tenant_ids; Skipper consumes tenants for monitoring policy.
 func (s *QuartermasterServer) ListActiveTenants(ctx context.Context, req *quartermasterpb.ListActiveTenantsRequest) (*quartermasterpb.ListActiveTenantsResponse, error) {
+	if err := requireServiceOrPlatformOperator(ctx, "ListActiveTenants"); err != nil {
+		return nil, err
+	}
 	rows, err := quartermasterdb.New(s.db).ListActiveTenantRecords(ctx)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
@@ -1962,6 +2055,9 @@ func (s *QuartermasterServer) ListActiveTenants(ctx context.Context, req *quarte
 
 // CreateTenant creates a new tenant
 func (s *QuartermasterServer) CreateTenant(ctx context.Context, req *quartermasterpb.CreateTenantRequest) (*quartermasterpb.CreateTenantResponse, error) { //nolint:govet // Provisioning transaction branches use local error scopes.
+	if err := requireServiceOrPlatformOperator(ctx, "CreateTenant"); err != nil {
+		return nil, err
+	}
 	name := req.GetName()
 	if name == "" {
 		return nil, status.Error(codes.InvalidArgument, "name required")
@@ -2192,11 +2288,22 @@ func (s *QuartermasterServer) UpdateTenant(ctx context.Context, req *quartermast
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
+	if req.DeploymentTier != nil {
+		return nil, status.Error(codes.InvalidArgument, "deployment_tier must be changed through ApplyTenantBillingEntitlements")
+	}
+	if req.PrimaryClusterId != nil {
+		return nil, status.Error(codes.InvalidArgument, "primary_cluster_id must be changed through UpdateTenantCluster")
+	}
+	if err := requireTenantResourceActor(ctx, tenantID, authz.ActionManageTenantSettings); err != nil {
+		return nil, err
+	}
+	if ctxkeys.GetAuthType(ctx) != "service" && (req.DeploymentModel != nil || req.IsActive != nil) {
+		return nil, status.Error(codes.PermissionDenied, "deployment, billing, activity, and primary cluster fields are service managed")
+	}
 
 	userID := middleware.GetUserID(ctx)
 	var tenantUpdate quartermasterdb.TenantUpdate
 	changedFields := []string{}
-	var previousClusterID sql.NullString
 	var previousCustomDomain sql.NullString
 	var previousSubdomain sql.NullString
 
@@ -2233,19 +2340,10 @@ func (s *QuartermasterServer) UpdateTenant(ctx context.Context, req *quartermast
 		tenantUpdate.SecondaryColor = req.SecondaryColor
 		changedFields = append(changedFields, "secondary_color")
 	}
-	if req.DeploymentTier != nil {
-		deploymentTier := strings.TrimSpace(*req.DeploymentTier)
-		tenantUpdate.DeploymentTier = &deploymentTier
-		changedFields = append(changedFields, "deployment_tier")
-	}
 	if req.DeploymentModel != nil {
 		deploymentModel := strings.TrimSpace(*req.DeploymentModel)
 		tenantUpdate.DeploymentModel = &deploymentModel
 		changedFields = append(changedFields, "deployment_model")
-	}
-	if req.PrimaryClusterId != nil {
-		tenantUpdate.PrimaryClusterID = req.PrimaryClusterId
-		changedFields = append(changedFields, "primary_cluster_id")
 	}
 	if req.IsActive != nil {
 		tenantUpdate.IsActive = req.IsActive
@@ -2275,10 +2373,10 @@ func (s *QuartermasterServer) UpdateTenant(ctx context.Context, req *quartermast
 	// transaction (and without a lock) would let a concurrent a->b and a->c
 	// race both observe "a", enqueuing a retire only for "a" and orphaning
 	// the intermediate label.
-	if req.PrimaryClusterId != nil || req.CustomDomain != nil || req.Subdomain != nil {
+	if req.CustomDomain != nil || req.Subdomain != nil {
 		previous, scanErr := queries.LockTenantPreviousValues(ctx, tenantID)
 		if scanErr == nil {
-			previousClusterID, previousCustomDomain, previousSubdomain = previous.PrimaryClusterID, previous.CustomDomain, previous.Subdomain
+			previousCustomDomain, previousSubdomain = previous.CustomDomain, previous.Subdomain
 		}
 		if scanErr != nil && !errors.Is(scanErr, sql.ErrNoRows) {
 			return nil, status.Errorf(codes.Internal, "previous-value lookup: %v", scanErr)
@@ -2299,18 +2397,6 @@ func (s *QuartermasterServer) UpdateTenant(ctx context.Context, req *quartermast
 			return nil, status.Errorf(codes.Internal, "enqueue tenant_updated: %v", enqErr)
 		}
 	}
-	if req.PrimaryClusterId != nil {
-		newCluster := strings.TrimSpace(*req.PrimaryClusterId)
-		if newCluster != "" && (!previousClusterID.Valid || previousClusterID.String != newCluster) {
-			if enqErr := s.emitClusterEventTx(ctx, tx, eventTenantClusterAssigned, tenantID, userID, newCluster, "cluster", newCluster, "", "", ""); enqErr != nil {
-				return nil, status.Errorf(codes.Internal, "enqueue tenant_cluster_assigned: %v", enqErr)
-			}
-		} else if newCluster == "" && previousClusterID.Valid {
-			if enqErr := s.emitClusterEventTx(ctx, tx, eventTenantClusterUnassigned, tenantID, userID, previousClusterID.String, "cluster", previousClusterID.String, "", "", ""); enqErr != nil {
-				return nil, status.Errorf(codes.Internal, "enqueue tenant_cluster_unassigned: %v", enqErr)
-			}
-		}
-	}
 	// Custom-domain lifecycle hand-off is durable: enqueue the desired
 	// Navigator action inside the same tx as the tenants UPDATE so a
 	// Navigator outage cannot leave QM saying the tenant has a custom
@@ -2322,6 +2408,10 @@ func (s *QuartermasterServer) UpdateTenant(ctx context.Context, req *quartermast
 		if enqErr := s.enqueueCustomDomainTransition(ctx, tx, tenantID, previousCustomDomain.String, strings.TrimSpace(*req.CustomDomain)); enqErr != nil {
 			return nil, status.Errorf(codes.Internal, "enqueue navigator custom-domain transition: %v", enqErr)
 		}
+	} else if req.IsActive != nil {
+		if enqErr := s.enqueueCustomDomainDesiredStateTx(ctx, tx, tenantID); enqErr != nil {
+			return nil, status.Errorf(codes.Internal, "enqueue navigator custom-domain desired state: %v", enqErr)
+		}
 	}
 
 	// Enqueue the desired Navigator alias action(s) in the same tx so a
@@ -2332,9 +2422,8 @@ func (s *QuartermasterServer) UpdateTenant(ctx context.Context, req *quartermast
 		if enqErr := s.enqueueTenantAliasForSubdomainUpdate(ctx, tx, tenantID, previousSubdomain.String, *req.Subdomain); enqErr != nil {
 			return nil, status.Errorf(codes.Internal, "enqueue tenant-alias subdomain change: %v", enqErr)
 		}
-	} else if req.DeploymentTier != nil || req.IsActive != nil {
-		downgrade := (req.DeploymentTier != nil && !models.DeploymentTierAliasEligible(*req.DeploymentTier)) ||
-			(req.IsActive != nil && !*req.IsActive)
+	} else if req.IsActive != nil {
+		downgrade := req.IsActive != nil && !*req.IsActive
 		if enqErr := s.enqueueTenantAliasForTierChange(ctx, tx, tenantID, downgrade); enqErr != nil {
 			return nil, status.Errorf(codes.Internal, "enqueue tenant-alias tier change: %v", enqErr)
 		}
@@ -2352,14 +2441,159 @@ func (s *QuartermasterServer) UpdateTenant(ctx context.Context, req *quartermast
 	return resp.Tenant, nil
 }
 
+// ApplyTenantBillingEntitlements materializes Purser's effective DNS grants.
+// The observed timestamp is captured by Purser before reading its authority
+// tables; an older concurrent apply therefore cannot overwrite newer state.
+func (s *QuartermasterServer) ApplyTenantBillingEntitlements(ctx context.Context, req *quartermasterpb.ApplyTenantBillingEntitlementsRequest) (*quartermasterpb.ApplyTenantBillingEntitlementsResponse, error) {
+	if ctxkeys.GetAuthType(ctx) != "service" {
+		return nil, status.Error(codes.PermissionDenied, "ApplyTenantBillingEntitlements requires service token auth")
+	}
+	tenantID := strings.TrimSpace(req.GetTenantId())
+	tier := strings.TrimSpace(req.GetDeploymentTier())
+	if tenantID == "" || tier == "" {
+		return nil, status.Error(codes.InvalidArgument, "tenant_id and deployment_tier required")
+	}
+	if req.GetObservedAt() == nil || req.GetObservedAt().CheckValid() != nil {
+		return nil, status.Error(codes.InvalidArgument, "valid observed_at required")
+	}
+	observedAt := req.GetObservedAt().AsTime().UTC()
+	if observedAt.After(time.Now().UTC().Add(5 * time.Minute)) {
+		return nil, status.Error(codes.InvalidArgument, "observed_at is too far in the future")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "begin billing entitlement transaction: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+	queries := quartermasterdb.New(tx)
+	previous, err := queries.LockTenantBillingEntitlements(ctx, tenantID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, status.Error(codes.NotFound, "tenant not found")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "lock tenant billing entitlements: %v", err)
+	}
+	if observedAt.Before(previous.BillingEntitlementsObservedAt) {
+		if s.metrics != nil && s.metrics.BillingEntitlementStale != nil {
+			s.metrics.BillingEntitlementStale.WithLabelValues().Inc()
+		}
+		return &quartermasterpb.ApplyTenantBillingEntitlementsResponse{Applied: false}, nil
+	}
+
+	changed := !previous.DeploymentTier.Valid || previous.DeploymentTier.String != tier ||
+		previous.CustomSubdomainEnabled != req.GetCustomSubdomainEnabled() ||
+		previous.CustomDomainEnabled != req.GetCustomDomainEnabled()
+	rows, err := queries.ApplyTenantBillingEntitlements(ctx, quartermasterdb.ApplyTenantBillingEntitlementsParams{
+		TenantID:               tenantID,
+		DeploymentTier:         validString(tier),
+		CustomSubdomainEnabled: req.GetCustomSubdomainEnabled(),
+		CustomDomainEnabled:    req.GetCustomDomainEnabled(),
+		ObservedAt:             observedAt,
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "apply tenant billing entitlements: %v", err)
+	}
+	if rows == 0 {
+		return nil, status.Error(codes.Internal, "apply tenant billing entitlements: locked tenant row was not updated")
+	}
+	if changed {
+		if req.GetCustomSubdomainEnabled() {
+			if err := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true); err != nil {
+				return nil, status.Errorf(codes.Internal, "enqueue entitled tenant alias: %v", err)
+			}
+		} else if err := s.enqueueTenantAliasRemoveTx(ctx, tx, tenantID, ""); err != nil {
+			return nil, status.Errorf(codes.Internal, "enqueue tenant alias removal: %v", err)
+		}
+		if err := s.enqueueCustomDomainDesiredStateTx(ctx, tx, tenantID); err != nil {
+			return nil, status.Errorf(codes.Internal, "enqueue custom-domain desired state: %v", err)
+		}
+		fields := []string{"deployment_tier", "custom_subdomain_enabled", "custom_domain_enabled"}
+		if err := s.emitTenantEventTx(ctx, tx, eventTenantUpdated, tenantID, middleware.GetUserID(ctx), fields, nil); err != nil {
+			return nil, status.Errorf(codes.Internal, "enqueue billing entitlement update: %v", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, status.Errorf(codes.Internal, "commit billing entitlements: %v", err)
+	}
+	return &quartermasterpb.ApplyTenantBillingEntitlementsResponse{Applied: true}, nil
+}
+
+// CompleteTenantDNSEntitlementHandoff records an immutable receipt after
+// Purser completes an error-free full subscription sweep. The v0.3.0
+// compatibility migration refuses to close legacy DNS grants without it.
+func (s *QuartermasterServer) CompleteTenantDNSEntitlementHandoff(ctx context.Context, req *quartermasterpb.CompleteTenantDNSEntitlementHandoffRequest) (*quartermasterpb.CompleteTenantDNSEntitlementHandoffResponse, error) {
+	if ctxkeys.GetAuthType(ctx) != "service" {
+		return nil, status.Error(codes.PermissionDenied, "CompleteTenantDNSEntitlementHandoff requires service token auth")
+	}
+	if req.GetSubscriptionCount() < 0 {
+		return nil, status.Error(codes.InvalidArgument, "subscription_count cannot be negative")
+	}
+	recorded, err := quartermasterdb.New(s.db).HasBillingEntitlementHandoff(ctx, tenantDNSEntitlementHandoffKey)
+	if err != nil {
+		return nil, tenantDNSEntitlementHandoffDatabaseError("read DNS entitlement handoff", err)
+	}
+	if recorded {
+		return &quartermasterpb.CompleteTenantDNSEntitlementHandoffResponse{Recorded: true}, nil
+	}
+	// A serializable snapshot proves there are no legacy unobserved tenants. The
+	// caller's paged count is deliberately not an equality fence: a tenant created
+	// above its descending cursor is already observed and fail-closed, and must not
+	// prevent the immutable handoff from completing.
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "begin DNS entitlement handoff: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+	queries := quartermasterdb.New(tx)
+	census, err := queries.GetTenantBillingEntitlementCensus(ctx)
+	if err != nil {
+		return nil, tenantDNSEntitlementHandoffDatabaseError("read tenant entitlement census", err)
+	}
+	if census.UnobservedCount != 0 {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"DNS entitlement handoff census incomplete: observed_by_sweep=%d tenants=%d unobserved=%d",
+			req.GetSubscriptionCount(), census.TenantCount, census.UnobservedCount)
+	}
+	rows, err := queries.CompleteBillingEntitlementHandoff(ctx, quartermasterdb.CompleteBillingEntitlementHandoffParams{
+		HandoffKey: tenantDNSEntitlementHandoffKey, SubscriptionCount: census.TenantCount,
+	})
+	if err != nil {
+		return nil, tenantDNSEntitlementHandoffDatabaseError("record DNS entitlement handoff", err)
+	}
+	if rows < 0 || rows > 1 {
+		return nil, status.Errorf(codes.Internal, "record DNS entitlement handoff: unexpected rows=%d", rows)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, tenantDNSEntitlementHandoffDatabaseError("commit DNS entitlement handoff", err)
+	}
+	// A zero row count means this immutable receipt already exists. Successful
+	// commit confirms both first-write and idempotent replay.
+	return &quartermasterpb.CompleteTenantDNSEntitlementHandoffResponse{Recorded: true}, nil
+}
+
+func tenantDNSEntitlementHandoffDatabaseError(operation string, err error) error {
+	if database.IsRetryablePostgresError(err) {
+		return status.Errorf(codes.Aborted, "%s: retry transaction", operation)
+	}
+	return status.Errorf(codes.Internal, "%s: %v", operation, err)
+}
+
 // enqueueCustomDomainTransition writes the desired Navigator action(s) into
 // quartermaster.navigator_custom_domain_outbox inside the caller's
 // transaction. Tear-down of the previous domain runs whenever the value
 // changes, independent of plan tier (so an expired-to-free tenant still
 // gets the old Navigator state unwound). Ensure runs only when the new
-// domain is non-empty AND the tenant is active on an alias-eligible monthly
-// tier (models.DeploymentTierAliasEligible).
+// domain is non-empty and current explicit entitlement/tenant/access state
+// says it should be served.
 func (s *QuartermasterServer) enqueueCustomDomainTransition(ctx context.Context, tx *sql.Tx, tenantID, previousDomain, newDomain string) error {
+	eligibility, err := quartermasterdb.New(tx).GetTenantCustomDomainEligibility(ctx, tenantID)
+	if err != nil {
+		return fmt.Errorf("lookup custom-domain transition eligibility: %w", err)
+	}
+	if !billingEntitlementsObserved(eligibility.BillingEntitlementsObservedAt) {
+		return nil
+	}
 	previousDomain = strings.TrimSpace(previousDomain)
 	newDomain = strings.TrimSpace(newDomain)
 	if previousDomain != "" && previousDomain != newDomain {
@@ -2370,26 +2604,35 @@ func (s *QuartermasterServer) enqueueCustomDomainTransition(ctx context.Context,
 	if newDomain == "" {
 		return nil
 	}
+	return s.enqueueCustomDomainDesiredStateTx(ctx, tx, tenantID)
+}
+
+func (s *QuartermasterServer) enqueueCustomDomainDesiredStateTx(ctx context.Context, tx *sql.Tx, tenantID string) error {
 	row, err := quartermasterdb.New(tx).GetTenantCustomDomainEligibility(ctx, tenantID)
 	if err != nil {
-		return fmt.Errorf("lookup tier: %w", err)
+		return fmt.Errorf("lookup custom-domain eligibility: %w", err)
 	}
-	if !row.DeploymentTier.Valid || !row.IsActive.Valid {
-		return fmt.Errorf("lookup tier: tenant eligibility fields are NULL")
-	}
-	if !row.IsActive.Bool || !models.DeploymentTierAliasEligible(row.DeploymentTier.String) {
+	if !billingEntitlementsObserved(row.BillingEntitlementsObservedAt) {
 		return nil
 	}
-	if _, err := s.EnqueueNavigatorCustomDomainTx(ctx, tx, tenantID, newDomain, "ensure"); err != nil {
-		return fmt.Errorf("enqueue ensure: %w", err)
+	domain := strings.TrimSpace(row.CustomDomain.String)
+	if domain == "" {
+		return nil
+	}
+	action := "remove"
+	if row.CustomSubdomainEnabled && row.CustomDomainEnabled && row.IsActive.Valid && row.IsActive.Bool && row.HasCluster {
+		action = "ensure"
+	}
+	if _, err := s.EnqueueNavigatorCustomDomainTx(ctx, tx, tenantID, domain, action); err != nil {
+		return fmt.Errorf("enqueue %s: %w", action, err)
 	}
 	return nil
 }
 
 // enqueueTenantAliasEnsureTx enqueues a durable Navigator ensure for the
-// tenant's subdomain alias inside the caller's tx — but only when the tenant
-// warrants one: active, on an alias-eligible monthly tier, and holding at
-// least one active cluster subscription. This is the same condition the
+// tenant's subdomain alias inside the caller's tx — but only when Purser has
+// observed an enabled custom-subdomain entitlement, the tenant is active, and
+// it holds at least one active cluster subscription. This is the same condition the
 // backstop reconciler uses, so
 // ensure never creates an alias the backstop would then reap. The resolved
 // decision rides the row, so the drain worker never re-derives it. When
@@ -2402,10 +2645,13 @@ func (s *QuartermasterServer) enqueueTenantAliasEnsureTx(ctx context.Context, tx
 	if err != nil {
 		return fmt.Errorf("lookup tenant for alias ensure: %w", err)
 	}
-	if !row.DeploymentTier.Valid || !row.IsActive.Valid {
+	if !row.IsActive.Valid {
 		return fmt.Errorf("lookup tenant for alias ensure: eligibility fields are NULL")
 	}
-	if !row.IsActive.Bool || !models.DeploymentTierAliasEligible(row.DeploymentTier.String) || !row.HasCluster {
+	if !billingEntitlementsObserved(row.BillingEntitlementsObservedAt) {
+		return nil
+	}
+	if !row.IsActive.Bool || !row.CustomSubdomainEnabled || !row.HasCluster {
 		return nil // not eligible for an alias (matches the backstop's "want")
 	}
 	label := strings.TrimSpace(row.Subdomain.String)
@@ -2430,6 +2676,27 @@ func (s *QuartermasterServer) enqueueTenantAliasEnsureTx(ctx context.Context, tx
 	return nil
 }
 
+// enqueueTenantAliasDesiredStateTx converts current tenant entitlement and
+// active-cluster state into one durable ensure/remove decision. Cluster
+// lifecycle transitions use it so losing the final active cluster removes an
+// existing alias rather than merely skipping a new ensure.
+func (s *QuartermasterServer) enqueueTenantAliasDesiredStateTx(ctx context.Context, tx *sql.Tx, tenantID string) error {
+	row, err := quartermasterdb.New(tx).LockTenantAliasEligibility(ctx, tenantID)
+	if err != nil {
+		return fmt.Errorf("lookup tenant alias desired state: %w", err)
+	}
+	if !row.IsActive.Valid {
+		return errors.New("lookup tenant alias desired state: eligibility fields are NULL")
+	}
+	if !billingEntitlementsObserved(row.BillingEntitlementsObservedAt) {
+		return nil
+	}
+	if !row.IsActive.Bool || !row.CustomSubdomainEnabled || !row.HasCluster {
+		return s.enqueueTenantAliasRemoveTx(ctx, tx, tenantID, strings.TrimSpace(row.Subdomain.String))
+	}
+	return s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, true)
+}
+
 // enqueueTenantAliasClusterEnsureTx records one ordered positive cluster
 // authority decision beside the access mutation that created it. Navigator
 // fences it against remove_cluster using this outbox row's sequence.
@@ -2440,7 +2707,7 @@ func (s *QuartermasterServer) enqueueTenantAliasClusterEnsureTx(ctx context.Cont
 	if _, err := s.EnqueueNavigatorTenantAliasTx(ctx, tx, tenantID, "", "ensure_cluster", clusterID, "cluster_access_active"); err != nil {
 		return fmt.Errorf("enqueue cluster ensure: %w", err)
 	}
-	return nil
+	return s.enqueueCustomDomainDesiredStateTx(ctx, tx, tenantID)
 }
 
 // enqueueTenantAliasRemoveTx enqueues a durable full alias teardown (current
@@ -2468,14 +2735,19 @@ func (s *QuartermasterServer) enqueueTenantAliasRetireTx(ctx context.Context, tx
 }
 
 // tenantHasPaidClusterAccessTx reports whether the tenant still warrants an
-// alias: it is active, on an alias-eligible monthly tier, and holds at least
-// one active cluster subscription. A downgrade/deactivation only tears the
+// alias: its billing entitlement is observed and enabled, it is active, and it
+// holds at least one active cluster subscription. A downgrade/deactivation only tears the
 // alias down when this is false — a tenant can keep the alias via another
 // paid cluster. The tenant's own is_active is part of the gate so
 // deactivating a tenant tears the alias down even while paid cluster-access
 // rows linger.
-func (s *QuartermasterServer) tenantHasPaidClusterAccessTx(ctx context.Context, tx *sql.Tx, tenantID string) (bool, error) {
-	return quartermasterdb.New(tx).TenantHasPaidClusterAccess(ctx, tenantID)
+func (s *QuartermasterServer) tenantHasPaidClusterAccessTx(ctx context.Context, tx *sql.Tx, tenantID string) (bool, bool, error) {
+	row, err := quartermasterdb.New(tx).TenantHasPaidClusterAccess(ctx, tenantID)
+	return row.HasPaidClusterAccess, row.EntitlementsObserved, err
+}
+
+func billingEntitlementsObserved(observedAt time.Time) bool {
+	return !observedAt.Equal(time.Unix(0, 0).UTC())
 }
 
 // enqueueTenantAliasForSubdomainChange enqueues the durable Navigator alias
@@ -2503,9 +2775,12 @@ func (s *QuartermasterServer) enqueueTenantAliasForSubdomainChange(ctx context.C
 // made the tenant ineligible for aliases, enqueue a full remove instead of a
 // rename; otherwise Navigator would keep its active alias row.
 func (s *QuartermasterServer) enqueueTenantAliasForSubdomainUpdate(ctx context.Context, tx *sql.Tx, tenantID, prevSubdomain, newSubdomain string) error {
-	hasPaid, err := s.tenantHasPaidClusterAccessTx(ctx, tx, tenantID)
+	hasPaid, observed, err := s.tenantHasPaidClusterAccessTx(ctx, tx, tenantID)
 	if err != nil {
 		return fmt.Errorf("check paid cluster access: %w", err)
+	}
+	if !observed {
+		return nil
 	}
 	if !hasPaid {
 		return s.enqueueTenantAliasRemoveTx(ctx, tx, tenantID, prevSubdomain)
@@ -2518,9 +2793,12 @@ func (s *QuartermasterServer) enqueueTenantAliasForSubdomainUpdate(ctx context.C
 // no paid cluster access remains; otherwise it (re-)ensures the current label.
 func (s *QuartermasterServer) enqueueTenantAliasForTierChange(ctx context.Context, tx *sql.Tx, tenantID string, downgrade bool) error {
 	if downgrade {
-		hasPaid, err := s.tenantHasPaidClusterAccessTx(ctx, tx, tenantID)
+		hasPaid, observed, err := s.tenantHasPaidClusterAccessTx(ctx, tx, tenantID)
 		if err != nil {
 			return fmt.Errorf("check paid cluster access: %w", err)
+		}
+		if !observed {
+			return nil
 		}
 		if !hasPaid {
 			return s.enqueueTenantAliasRemoveTx(ctx, tx, tenantID, "")
@@ -2535,6 +2813,9 @@ func (s *QuartermasterServer) DeleteTenant(ctx context.Context, req *quartermast
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
+	if err := requireTenantResourceActor(ctx, tenantID, authz.ActionManageTenantSettings); err != nil {
+		return nil, err
 	}
 
 	userID := middleware.GetUserID(ctx)
@@ -2597,6 +2878,9 @@ func (s *QuartermasterServer) GetTenantCluster(ctx context.Context, req *quarter
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
+	if err := requireTenantResourceActor(ctx, tenantID, authz.ActionReadPrivateInfrastructure); err != nil {
+		return nil, err
+	}
 
 	row, err := quartermasterdb.New(s.db).GetActiveTenantClusterRecord(ctx, tenantID)
 
@@ -2613,6 +2897,7 @@ func (s *QuartermasterServer) GetTenantCluster(ctx context.Context, req *quarter
 	tenant := quartermasterpb.Tenant{
 		Id: row.ID, Name: row.Name, PrimaryColor: row.PrimaryColor.String,
 		SecondaryColor: row.SecondaryColor.String, DeploymentTier: row.DeploymentTier.String,
+		CustomSubdomainEnabled: row.CustomSubdomainEnabled, CustomDomainEnabled: row.CustomDomainEnabled,
 		DeploymentModel: row.DeploymentModel.String, KafkaBrokers: row.KafkaBrokers,
 		IsActive: row.IsActive.Bool, MonitoringEnabled: row.MonitoringEnabled,
 		CreatedAt: timestamppb.New(row.CreatedAt.Time), UpdatedAt: timestamppb.New(row.UpdatedAt.Time),
@@ -2648,6 +2933,12 @@ func (s *QuartermasterServer) UpdateTenantCluster(ctx context.Context, req *quar
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
+	if err := requireTenantResourceActor(ctx, tenantID, authz.ActionManageTenantSettings); err != nil {
+		return nil, err
+	}
+	if ctxkeys.GetAuthType(ctx) != "service" && req.DeploymentModel != nil {
+		return nil, status.Error(codes.PermissionDenied, "deployment_model is service managed")
 	}
 
 	userID := middleware.GetUserID(ctx)
@@ -2744,6 +3035,14 @@ func (s *QuartermasterServer) UpdateTenantCluster(ctx context.Context, req *quar
 			}
 		}
 	}
+	if req.PrimaryClusterId != nil {
+		if err := s.enqueueTenantAliasEnsureTx(ctx, tx, tenantID, false); err != nil {
+			return nil, status.Errorf(codes.Internal, "enqueue tenant alias after routing change: %v", err)
+		}
+		if err := s.enqueueCustomDomainDesiredStateTx(ctx, tx, tenantID); err != nil {
+			return nil, status.Errorf(codes.Internal, "enqueue custom domain after routing change: %v", err)
+		}
+	}
 	if commitErr := tx.Commit(); commitErr != nil {
 		return nil, status.Errorf(codes.Internal, "commit tenant cluster update: %v", commitErr)
 	}
@@ -2754,6 +3053,9 @@ func (s *QuartermasterServer) UpdateTenantCluster(ctx context.Context, req *quar
 
 // GetTenantsBatch retrieves multiple tenants by IDs
 func (s *QuartermasterServer) GetTenantsBatch(ctx context.Context, req *quartermasterpb.GetTenantsBatchRequest) (*quartermasterpb.ListTenantsResponse, error) {
+	if err := requireServiceOrPlatformOperator(ctx, "GetTenantsBatch"); err != nil {
+		return nil, err
+	}
 	tenantIDs := req.GetTenantIds()
 	if len(tenantIDs) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "tenant_ids required")
@@ -2772,6 +3074,7 @@ func (s *QuartermasterServer) GetTenantsBatch(ctx context.Context, req *quarterm
 		tenant := quartermasterpb.Tenant{
 			Id: row.ID, Name: row.Name, PrimaryColor: row.PrimaryColor.String, SecondaryColor: row.SecondaryColor.String,
 			DeploymentTier: row.DeploymentTier.String, DeploymentModel: row.DeploymentModel.String,
+			CustomSubdomainEnabled: row.CustomSubdomainEnabled, CustomDomainEnabled: row.CustomDomainEnabled,
 			KafkaBrokers: row.KafkaBrokers, IsActive: row.IsActive.Bool, MonitoringEnabled: row.MonitoringEnabled,
 			CreatedAt: timestamppb.New(row.CreatedAt.Time), UpdatedAt: timestamppb.New(row.UpdatedAt.Time),
 		}
@@ -2804,6 +3107,9 @@ func (s *QuartermasterServer) GetTenantsBatch(ctx context.Context, req *quarterm
 
 // GetTenantsByCluster retrieves all tenants assigned to a specific cluster
 func (s *QuartermasterServer) GetTenantsByCluster(ctx context.Context, req *quartermasterpb.GetTenantsByClusterRequest) (*quartermasterpb.GetTenantsByClusterResponse, error) {
+	if err := requireServiceOrPlatformOperator(ctx, "GetTenantsByCluster"); err != nil {
+		return nil, err
+	}
 	clusterID := req.GetClusterId()
 	if clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
@@ -2840,6 +3146,7 @@ func (s *QuartermasterServer) GetTenantsByCluster(ctx context.Context, req *quar
 		tenant := quartermasterpb.Tenant{
 			Id: row.ID, Name: row.Name, PrimaryColor: row.PrimaryColor.String, SecondaryColor: row.SecondaryColor.String,
 			DeploymentTier: row.DeploymentTier.String, DeploymentModel: row.DeploymentModel.String,
+			CustomSubdomainEnabled: row.CustomSubdomainEnabled, CustomDomainEnabled: row.CustomDomainEnabled,
 			KafkaBrokers: row.KafkaBrokers, IsActive: row.IsActive.Bool, MonitoringEnabled: row.MonitoringEnabled,
 			CreatedAt: timestamppb.New(row.CreatedAt.Time), UpdatedAt: timestamppb.New(row.UpdatedAt.Time),
 		}
@@ -2945,18 +3252,21 @@ func (s *QuartermasterServer) tenantSubdomainAvailable(ctx context.Context, cand
 	return !exists, nil
 }
 
-// ListAliasedTenantsForCluster returns tenants on an alias-eligible monthly
-// tier with active access to the cluster. Used by Foghorn cert refresh to
+// ListAliasedTenantsForCluster returns explicitly entitled tenants with active
+// access to the cluster. Used by Foghorn cert refresh to
 // know which per-tenant TLS bundles to include in ConfigSeed for edges in
 // this cluster. Filters:
 //   - tenant_cluster_access.is_active = TRUE
-//   - tenants.deployment_tier alias-eligible (sqlAliasTierEligible)
+//   - tenants.custom_subdomain_enabled = TRUE
 //   - tenants.is_active = TRUE
 //   - tenants.subdomain IS NOT NULL and is not the empty string
 //
 // Cert readiness happens at the caller via Navigator; this method
 // returns candidates without crossing service boundaries.
 func (s *QuartermasterServer) ListAliasedTenantsForCluster(ctx context.Context, req *quartermasterpb.ListAliasedTenantsForClusterRequest) (*quartermasterpb.ListAliasedTenantsForClusterResponse, error) {
+	if ctxkeys.GetAuthType(ctx) != "service" {
+		return nil, status.Error(codes.PermissionDenied, "ListAliasedTenantsForCluster requires service token auth")
+	}
 	clusterID := req.GetClusterId()
 	if clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
@@ -2992,6 +3302,19 @@ func (s *QuartermasterServer) GetCluster(ctx context.Context, req *quartermaster
 	if clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
 	}
+	owner, err := quartermasterdb.New(s.db).GetClusterOwnerAndName(ctx, clusterID)
+	if errors.Is(err, sql.ErrNoRows) {
+		if ctxkeys.GetAuthType(ctx) != "service" && !ctxkeys.IsPlatformOperator(ctx) {
+			return nil, status.Error(codes.PermissionDenied, privateInfrastructureDenied)
+		}
+		return nil, status.Error(codes.NotFound, "cluster not found")
+	}
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	if authErr := requireOwnedResourceActor(ctx, owner.OwnerTenantID, authz.ActionReadPrivateInfrastructure); authErr != nil {
+		return nil, authErr
+	}
 
 	cluster, err := s.queryCluster(ctx, clusterID)
 	if err != nil {
@@ -3013,6 +3336,19 @@ func (s *QuartermasterServer) ListClusters(ctx context.Context, req *quartermast
 	ownerTenantID := strings.TrimSpace(req.GetOwnerTenantId())
 	publicPlatformOfficialScope := ownerTenantID == "" && req.IsPlatformOfficial != nil && req.GetIsPlatformOfficial()
 	publicTopologyScope := ownerTenantID == "" && req.PublicTopology != nil && req.GetPublicTopology()
+	if ctxkeys.GetAuthType(ctx) != "service" && tenantID == "" && ownerTenantID == "" && !publicPlatformOfficialScope && !publicTopologyScope {
+		return nil, status.Error(codes.Unauthenticated, "tenant identity required")
+	}
+	if ownerTenantID != "" && ctxkeys.GetAuthType(ctx) != "service" {
+		if err := requireTenantResourceActor(ctx, ownerTenantID, authz.ActionReadPrivateInfrastructure); err != nil {
+			return nil, err
+		}
+	}
+	if tenantID != "" && ownerTenantID == "" && !publicPlatformOfficialScope && !publicTopologyScope && ctxkeys.GetAuthType(ctx) != "service" {
+		if err := requireTenantResourceActor(ctx, tenantID, authz.ActionReadPrivateInfrastructure); err != nil {
+			return nil, err
+		}
+	}
 	scope, scopeID := quartermasterdb.ClusterScopeDefault, ""
 	switch {
 	case ownerTenantID != "":
@@ -3050,7 +3386,11 @@ func (s *QuartermasterServer) ListClusters(ctx context.Context, req *quartermast
 
 	var clusters []*quartermasterpb.InfrastructureCluster
 	for _, row := range rows {
-		clusters = append(clusters, clusterFromListRow(row))
+		cluster := clusterFromListRow(row)
+		cluster.DatabaseUrl = nil
+		cluster.PeriscopeUrl = nil
+		cluster.KafkaBrokers = nil
+		clusters = append(clusters, cluster)
 	}
 
 	// Detect hasMore and trim results
@@ -3105,6 +3445,9 @@ func (s *QuartermasterServer) CreateCluster(ctx context.Context, req *quartermas
 	if clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
 	}
+	if err := requireServiceOrPlatformOperator(ctx, "CreateCluster"); err != nil {
+		return nil, err
+	}
 	clusterType := strings.TrimSpace(req.GetClusterType())
 	if clusterType == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_type required")
@@ -3114,7 +3457,6 @@ func (s *QuartermasterServer) CreateCluster(ctx context.Context, req *quartermas
 	}
 
 	userID := middleware.GetUserID(ctx)
-	queries := quartermasterdb.New(s.db)
 	// Determine deployment model (default to 'managed')
 	deploymentModel := req.GetDeploymentModel()
 	if deploymentModel == "" {
@@ -3124,6 +3466,11 @@ func (s *QuartermasterServer) CreateCluster(ctx context.Context, req *quartermas
 	// Validate owner_tenant_id if provided
 	ownerTenantID := ""
 	if req.OwnerTenantId != nil && *req.OwnerTenantId != "" {
+		ownerTenantID = strings.TrimSpace(*req.OwnerTenantId)
+	}
+
+	queries := quartermasterdb.New(s.db)
+	if ownerTenantID != "" {
 		exists, err := queries.TenantExists(ctx, *req.OwnerTenantId)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "failed to validate owner_tenant_id: %v", err)
@@ -3131,7 +3478,6 @@ func (s *QuartermasterServer) CreateCluster(ctx context.Context, req *quartermas
 		if !exists {
 			return nil, status.Error(codes.InvalidArgument, "owner_tenant_id does not exist")
 		}
-		ownerTenantID = *req.OwnerTenantId
 	}
 
 	id := uuid.New().String()
@@ -3232,6 +3578,15 @@ func (s *QuartermasterServer) UpdateCluster(ctx context.Context, req *quartermas
 
 	userID := middleware.GetUserID(ctx)
 	queries := quartermasterdb.New(s.db)
+	ownerTenantID, authErr := s.requireClusterLifecycleActor(ctx, clusterID, authz.ActionManageEdgeCluster)
+	if authErr != nil {
+		return nil, authErr
+	}
+	if ctxkeys.GetAuthType(ctx) != "service" && !ctxkeys.IsPlatformOperator(ctx) &&
+		(req.OwnerTenantId != nil || req.DeploymentModel != nil || req.IsPlatformOfficial != nil ||
+			req.IsDefaultCluster != nil || req.PublicTopology != nil || req.HealthStatus != nil) {
+		return nil, status.Error(codes.PermissionDenied, "cluster ownership and platform fields are control-plane managed")
+	}
 	var clusterUpdate quartermasterdb.ClusterUpdate
 	hasUpdates := false
 
@@ -3277,12 +3632,6 @@ func (s *QuartermasterServer) UpdateCluster(ctx context.Context, req *quartermas
 		hasUpdates = true
 	}
 	if req.IsDefaultCluster != nil {
-		if *req.IsDefaultCluster {
-			// At most one cluster can be the default — clear existing before setting.
-			if err := queries.ClearDefaultCluster(ctx); err != nil {
-				return nil, status.Errorf(codes.Internal, "failed to clear existing default cluster: %v", err)
-			}
-		}
 		clusterUpdate.IsDefaultCluster = req.IsDefaultCluster
 		hasUpdates = true
 	}
@@ -3299,7 +3648,18 @@ func (s *QuartermasterServer) UpdateCluster(ctx context.Context, req *quartermas
 		return nil, status.Error(codes.InvalidArgument, "no fields to update")
 	}
 
-	rows, err := queries.UpdateClusterFields(ctx, clusterID, clusterUpdate)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "begin cluster update: %v", err)
+	}
+	defer tx.Rollback() //nolint:errcheck
+	txQueries := quartermasterdb.New(tx)
+	if req.IsDefaultCluster != nil && *req.IsDefaultCluster {
+		if clearErr := txQueries.ClearDefaultCluster(ctx); clearErr != nil {
+			return nil, status.Errorf(codes.Internal, "failed to clear existing default cluster: %v", clearErr)
+		}
+	}
+	rows, err := txQueries.UpdateClusterFields(ctx, clusterID, clusterUpdate)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to update cluster: %v", err)
 	}
@@ -3307,17 +3667,34 @@ func (s *QuartermasterServer) UpdateCluster(ctx context.Context, req *quartermas
 	if rows == 0 {
 		return nil, status.Error(codes.NotFound, "cluster not found")
 	}
+	if req.IsActive != nil {
+		tenantIDs, listErr := txQueries.ListTenantIDsForCluster(ctx, clusterID)
+		if listErr != nil {
+			return nil, status.Errorf(codes.Internal, "list cluster tenants for DNS convergence: %v", listErr)
+		}
+		for _, tenantID := range tenantIDs {
+			if enqErr := s.enqueueTenantAliasDesiredStateTx(ctx, tx, tenantID); enqErr != nil {
+				return nil, status.Errorf(codes.Internal, "enqueue tenant alias desired state: %v", enqErr)
+			}
+			if enqErr := s.enqueueCustomDomainDesiredStateTx(ctx, tx, tenantID); enqErr != nil {
+				return nil, status.Errorf(codes.Internal, "enqueue custom-domain desired state: %v", enqErr)
+			}
+		}
+	}
+	if commitErr := tx.Commit(); commitErr != nil {
+		return nil, status.Errorf(codes.Internal, "commit cluster update: %v", commitErr)
+	}
 
 	cluster, err := s.queryCluster(ctx, clusterID)
 	if err != nil {
 		return nil, err
 	}
 
-	tenantID := ""
+	eventTenantID := ownerTenantID.String
 	if cluster.OwnerTenantId != nil && *cluster.OwnerTenantId != "" {
-		tenantID = *cluster.OwnerTenantId
+		eventTenantID = *cluster.OwnerTenantId
 	}
-	s.emitClusterEvent(ctx, eventClusterUpdated, tenantID, userID, clusterID, "cluster", clusterID, "", "", "")
+	s.emitClusterEvent(ctx, eventClusterUpdated, eventTenantID, userID, clusterID, "cluster", clusterID, "", "", "")
 
 	return &quartermasterpb.ClusterResponse{Cluster: cluster}, nil
 }
@@ -3327,12 +3704,14 @@ func (s *QuartermasterServer) UpdateCluster(ctx context.Context, req *quartermas
 // Sourced from the manifest's wireguard.* block during cluster provision.
 func (s *QuartermasterServer) UpdateClusterMeshConfig(ctx context.Context, req *quartermasterpb.UpdateClusterMeshConfigRequest) (*quartermasterpb.UpdateClusterMeshConfigResponse, error) {
 	clusterID := req.GetClusterId()
-	meshCIDR := strings.TrimSpace(req.GetMeshCidr())
-	port := req.GetWgListenPort()
-
 	if clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
 	}
+	if _, err := s.requireClusterLifecycleActor(ctx, clusterID, authz.ActionManageEdgeCluster); err != nil {
+		return nil, err
+	}
+	meshCIDR := strings.TrimSpace(req.GetMeshCidr())
+	port := req.GetWgListenPort()
 	if meshCIDR == "" {
 		return nil, status.Error(codes.InvalidArgument, "mesh_cidr required")
 	}
@@ -3365,6 +3744,11 @@ func (s *QuartermasterServer) ListClustersForTenant(ctx context.Context, req *qu
 	tenantID := req.GetTenantId()
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
+	if ctxkeys.GetAuthType(ctx) != "service" && !ctxkeys.IsPlatformOperator(ctx) {
+		if err := requireTenantSubscriptionActor(ctx, tenantID); err != nil {
+			return nil, err
+		}
 	}
 
 	// Parse bidirectional pagination
@@ -3870,17 +4254,22 @@ func (s *QuartermasterServer) RevokeMaterializedClusterAccess(ctx context.Contex
 		if err := s.repointTenantPrimaryAfterAccessLoss(ctx, txQueries, tenantID, clusterID); err != nil {
 			return nil, status.Errorf(codes.Internal, "repoint tenant primary cluster: %v", err)
 		}
-		if _, err := s.EnqueueNavigatorTenantAliasTx(ctx, tx, tenantID, "", "remove_cluster", clusterID, "marketplace_subscription_revoked"); err != nil {
-			return nil, status.Errorf(codes.Internal, "enqueue tenant-alias remove_cluster: %v", err)
-		}
-		hasPaid, accessErr := s.tenantHasPaidClusterAccessTx(ctx, tx, tenantID)
+		hasPaid, observed, accessErr := s.tenantHasPaidClusterAccessTx(ctx, tx, tenantID)
 		if accessErr != nil {
 			return nil, status.Errorf(codes.Internal, "check paid cluster access: %v", accessErr)
 		}
-		if !hasPaid {
+		if observed {
+			if _, err := s.EnqueueNavigatorTenantAliasTx(ctx, tx, tenantID, "", "remove_cluster", clusterID, "marketplace_subscription_revoked"); err != nil {
+				return nil, status.Errorf(codes.Internal, "enqueue tenant-alias remove_cluster: %v", err)
+			}
+		}
+		if observed && !hasPaid {
 			if err := s.enqueueTenantAliasRemoveTx(ctx, tx, tenantID, ""); err != nil {
 				return nil, status.Errorf(codes.Internal, "enqueue tenant-alias remove: %v", err)
 			}
+		}
+		if err := s.enqueueCustomDomainDesiredStateTx(ctx, tx, tenantID); err != nil {
+			return nil, status.Errorf(codes.Internal, "enqueue custom-domain desired state: %v", err)
 		}
 		if err := s.emitClusterEventTx(ctx, tx, eventClusterAccessRevoked, tenantID, middleware.GetUserID(ctx), clusterID, "cluster_access", tenantID+":"+clusterID, "", reference, "marketplace_subscription"); err != nil {
 			return nil, status.Errorf(codes.Internal, "enqueue access revocation audit: %v", err)
@@ -3906,42 +4295,47 @@ func (s *QuartermasterServer) DeactivateClusterAccess(ctx context.Context, req *
 	if tenantID == "" || clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id and cluster_id required")
 	}
-	// All Navigator hand-offs are durable and ride one tx with the access
-	// flip. remove_cluster is enqueued first so it gets the lower seq and is
-	// dispatched before any full teardown below. The removal is durable, not
-	// synchronous: Navigator drops the cluster's DNS membership when the
-	// worker drains, which may land after the access row flips inactive — we
-	// accept async durable removal here.
+	// All Navigator hand-offs are durable and ride one tx with the access flip.
+	// Legacy epoch tenants are not destructively changed until Purser's billing
+	// observation crosses the handoff fence; the DNS backstop removes stale
+	// cluster membership after that observation lands.
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	if _, err := s.EnqueueNavigatorTenantAliasTx(ctx, tx, tenantID, "", "remove_cluster", clusterID, "cluster_access_deactivated"); err != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias remove_cluster: %v", err)
-	}
-
 	txQueries := quartermasterdb.New(tx)
-	if err := txQueries.DeactivateTenantClusterAccess(ctx, quartermasterdb.DeactivateTenantClusterAccessParams{
+	changed, err := txQueries.DeactivateTenantClusterAccess(ctx, quartermasterdb.DeactivateTenantClusterAccessParams{
 		TenantID: tenantID, ClusterID: clusterID,
-	}); err != nil {
+	})
+	if err != nil {
 		return nil, status.Errorf(codes.Internal, "deactivate tenant_cluster_access: %v", err)
 	}
-	if err := s.repointTenantPrimaryAfterAccessLoss(ctx, txQueries, tenantID, clusterID); err != nil {
-		return nil, status.Errorf(codes.Internal, "repoint tenant primary cluster: %v", err)
+	if changed > 0 {
+		if err := s.repointTenantPrimaryAfterAccessLoss(ctx, txQueries, tenantID, clusterID); err != nil {
+			return nil, status.Errorf(codes.Internal, "repoint tenant primary cluster: %v", err)
+		}
 	}
 
 	// If the tenant now has zero active paid cluster access rows, tear the
 	// full alias down too (enqueued after remove_cluster, so higher seq).
-	hasPaid, accErr := s.tenantHasPaidClusterAccessTx(ctx, tx, tenantID)
+	hasPaid, observed, accErr := s.tenantHasPaidClusterAccessTx(ctx, tx, tenantID)
 	if accErr != nil {
 		return nil, status.Errorf(codes.Internal, "check paid cluster access: %v", accErr)
 	}
-	if !hasPaid {
+	if changed > 0 && observed {
+		if _, err := s.EnqueueNavigatorTenantAliasTx(ctx, tx, tenantID, "", "remove_cluster", clusterID, "cluster_access_deactivated"); err != nil {
+			return nil, status.Errorf(codes.Internal, "enqueue tenant-alias remove_cluster: %v", err)
+		}
+	}
+	if observed && !hasPaid {
 		if enqErr := s.enqueueTenantAliasRemoveTx(ctx, tx, tenantID, ""); enqErr != nil {
 			return nil, status.Errorf(codes.Internal, "enqueue tenant-alias remove: %v", enqErr)
 		}
+	}
+	if enqErr := s.enqueueCustomDomainDesiredStateTx(ctx, tx, tenantID); enqErr != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue custom-domain desired state: %v", enqErr)
 	}
 
 	if commitErr := tx.Commit(); commitErr != nil {
@@ -4110,37 +4504,48 @@ func (s *QuartermasterServer) UnsubscribeFromCluster(ctx context.Context, req *q
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
 	}
 
-	// Deactivation + durable alias hand-off in one tx. remove_cluster is
-	// enqueued first (lower seq, dispatched first); a full teardown follows
-	// only when no paid cluster access remains.
+	// Deactivation + durable alias hand-off in one tx. Destructive work is
+	// emitted only after the access row proves an active subscription was
+	// actually observed and changed.
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "begin tx: %v", err)
 	}
 	defer tx.Rollback() //nolint:errcheck
 
-	if _, err := s.EnqueueNavigatorTenantAliasTx(ctx, tx, tenantID, "", "remove_cluster", clusterID, "cluster_unsubscribed"); err != nil {
-		return nil, status.Errorf(codes.Internal, "enqueue tenant-alias remove_cluster: %v", err)
-	}
-
 	txQueries := quartermasterdb.New(tx)
-	if err := txQueries.UnsubscribeTenantFromCluster(ctx, quartermasterdb.UnsubscribeTenantFromClusterParams{
+	changed, err := txQueries.UnsubscribeTenantFromCluster(ctx, quartermasterdb.UnsubscribeTenantFromClusterParams{
 		TenantID: tenantID, ClusterID: clusterID,
-	}); err != nil {
+	})
+	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to unsubscribe: %v", err)
+	}
+	if changed == 0 {
+		if commitErr := tx.Commit(); commitErr != nil {
+			return nil, status.Errorf(codes.Internal, "commit unchanged unsubscribe: %v", commitErr)
+		}
+		return &emptypb.Empty{}, nil
 	}
 	if err := s.repointTenantPrimaryAfterAccessLoss(ctx, txQueries, tenantID, clusterID); err != nil {
 		return nil, status.Errorf(codes.Internal, "repoint tenant primary cluster: %v", err)
 	}
 
-	hasPaid, accErr := s.tenantHasPaidClusterAccessTx(ctx, tx, tenantID)
+	hasPaid, observed, accErr := s.tenantHasPaidClusterAccessTx(ctx, tx, tenantID)
 	if accErr != nil {
 		return nil, status.Errorf(codes.Internal, "check paid cluster access: %v", accErr)
 	}
-	if !hasPaid {
+	if observed {
+		if _, err := s.EnqueueNavigatorTenantAliasTx(ctx, tx, tenantID, "", "remove_cluster", clusterID, "cluster_unsubscribed"); err != nil {
+			return nil, status.Errorf(codes.Internal, "enqueue tenant-alias remove_cluster: %v", err)
+		}
+	}
+	if observed && !hasPaid {
 		if enqErr := s.enqueueTenantAliasRemoveTx(ctx, tx, tenantID, ""); enqErr != nil {
 			return nil, status.Errorf(codes.Internal, "enqueue tenant-alias remove: %v", enqErr)
 		}
+	}
+	if enqErr := s.enqueueCustomDomainDesiredStateTx(ctx, tx, tenantID); enqErr != nil {
+		return nil, status.Errorf(codes.Internal, "enqueue custom-domain desired state: %v", enqErr)
 	}
 
 	if commitErr := tx.Commit(); commitErr != nil {
@@ -4157,6 +4562,9 @@ func (s *QuartermasterServer) ListMySubscriptions(ctx context.Context, req *quar
 	if tenantID == "" {
 		s.logger.Warn("ListMySubscriptions: tenant_id is empty - rejecting")
 		return nil, status.Error(codes.Unauthenticated, "tenant_id required")
+	}
+	if _, err := authorizeTenantReadActor(ctx, tenantID); err != nil {
+		return nil, err
 	}
 
 	// Parse bidirectional pagination
@@ -4181,7 +4589,11 @@ func (s *QuartermasterServer) ListMySubscriptions(ctx context.Context, req *quar
 
 	var clusters []*quartermasterpb.InfrastructureCluster
 	for _, row := range rows {
-		clusters = append(clusters, clusterFromListRow(row))
+		cluster := clusterFromListRow(row)
+		cluster.DatabaseUrl = nil
+		cluster.PeriscopeUrl = nil
+		cluster.KafkaBrokers = nil
+		clusters = append(clusters, cluster)
 	}
 
 	// Determine pagination info
@@ -4216,6 +4628,9 @@ func (s *QuartermasterServer) GetNode(ctx context.Context, req *quartermasterpb.
 	if nodeID == "" {
 		return nil, status.Error(codes.InvalidArgument, "node_id required")
 	}
+	if err := s.requireOwnedNodeActor(ctx, nodeID); err != nil {
+		return nil, err
+	}
 
 	node, err := s.queryNode(ctx, nodeID)
 	if err != nil {
@@ -4231,6 +4646,9 @@ func (s *QuartermasterServer) GetNodeByLogicalName(ctx context.Context, req *qua
 	nodeID := req.GetNodeId()
 	if nodeID == "" {
 		return nil, status.Error(codes.InvalidArgument, "node_id required")
+	}
+	if err := s.requireOwnedNodeActor(ctx, nodeID); err != nil {
+		return nil, err
 	}
 
 	node, err := s.queryNode(ctx, nodeID)
@@ -4259,6 +4677,9 @@ func (s *QuartermasterServer) UpdateNodeStatus(ctx context.Context, req *quarter
 	if tenantID == "" && authType != "service" {
 		return nil, status.Error(codes.Unauthenticated, "authentication required")
 	}
+	if err := requireDelegatedAPITokenPermission(ctx, authz.ActionManageEdgeCluster); err != nil {
+		return nil, err
+	}
 
 	statusScope := quartermasterdb.NodeStatusScopeActiveClusters
 	if tenantID != "" {
@@ -4267,6 +4688,9 @@ func (s *QuartermasterServer) UpdateNodeStatus(ctx context.Context, req *quarter
 			return nil, err
 		}
 		if !providerActor {
+			if err := requireTenantResourceActor(ctx, tenantID, authz.ActionManageEdgeCluster); err != nil {
+				return nil, err
+			}
 			statusScope = quartermasterdb.NodeStatusScopeTenantOwner
 		}
 	}
@@ -4320,6 +4744,9 @@ func (s *QuartermasterServer) UpdateNodeStatus(ctx context.Context, req *quarter
 
 func (s *QuartermasterServer) hasProviderLifecycleAuthority(ctx context.Context, tenantID string) (bool, error) {
 	if ctxkeys.GetAuthType(ctx) == "service" {
+		return true, nil
+	}
+	if ctxkeys.IsPlatformOperator(ctx) {
 		return true, nil
 	}
 	if ctxkeys.GetRole(ctx) != "provider" || strings.TrimSpace(tenantID) == "" {
@@ -4385,6 +4812,9 @@ func (s *QuartermasterServer) listEdgeReleasesNoRetry(ctx context.Context, filte
 }
 
 func (s *QuartermasterServer) UpsertEdgeRelease(ctx context.Context, req *quartermasterpb.UpsertEdgeReleaseRequest) (*quartermasterpb.EdgeReleaseResponse, error) {
+	if err := requireDelegatedAPITokenPermission(ctx, authz.ActionManageEdgeCluster); err != nil {
+		return nil, err
+	}
 	tenantID := middleware.GetTenantID(ctx)
 	ok, err := s.hasProviderLifecycleAuthority(ctx, tenantID)
 	if err != nil {
@@ -4538,7 +4968,7 @@ func (s *QuartermasterServer) GetClusterReleaseTarget(ctx context.Context, req *
 	if clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
 	}
-	if err := s.authorizeClusterReleaseTarget(ctx, clusterID); err != nil {
+	if err := s.authorizeClusterReleaseTarget(ctx, clusterID, authz.ActionReadPrivateInfrastructure); err != nil {
 		return nil, err
 	}
 	target, err := s.queryClusterReleaseTarget(ctx, clusterID)
@@ -4551,11 +4981,14 @@ func (s *QuartermasterServer) GetClusterReleaseTarget(ctx context.Context, req *
 func (s *QuartermasterServer) ListClusterReleaseTargets(ctx context.Context, req *quartermasterpb.ListClusterReleaseTargetsRequest) (*quartermasterpb.ListClusterReleaseTargetsResponse, error) {
 	filter := quartermasterdb.ClusterReleaseTargetFilter{}
 	if clusterID := strings.TrimSpace(req.GetClusterId()); clusterID != "" {
-		if err := s.authorizeClusterReleaseTarget(ctx, clusterID); err != nil {
+		if err := s.authorizeClusterReleaseTarget(ctx, clusterID, authz.ActionReadPrivateInfrastructure); err != nil {
 			return nil, err
 		}
 		filter.ClusterID = &clusterID
 	} else {
+		if err := requireDelegatedAPITokenPermission(ctx, authz.ActionReadPrivateInfrastructure); err != nil {
+			return nil, err
+		}
 		tenantID := middleware.GetTenantID(ctx)
 		ok, err := s.hasProviderLifecycleAuthority(ctx, tenantID)
 		if err != nil {
@@ -4597,7 +5030,7 @@ func (s *QuartermasterServer) SetClusterReleaseTarget(ctx context.Context, req *
 		return nil, status.Error(codes.InvalidArgument, "cluster target required")
 	}
 	clusterID := strings.TrimSpace(target.GetClusterId())
-	if err := s.authorizeClusterReleaseTarget(ctx, clusterID); err != nil {
+	if err := s.authorizeClusterReleaseTarget(ctx, clusterID, authz.ActionManageEdgeCluster); err != nil {
 		return nil, err
 	}
 	rolloutPlan, err := normalizeJSONObject(firstNonEmptyString(target.GetRolloutPlanJson(), "{}"), "rollout_plan_json")
@@ -4655,7 +5088,10 @@ func (s *QuartermasterServer) ensureEdgeReleaseTargetExists(ctx context.Context,
 	return status.Errorf(codes.InvalidArgument, "edge release %s:%s is not published", channel, version)
 }
 
-func (s *QuartermasterServer) authorizeClusterReleaseTarget(ctx context.Context, clusterID string) error {
+func (s *QuartermasterServer) authorizeClusterReleaseTarget(ctx context.Context, clusterID string, action authz.Action) error {
+	if err := requireDelegatedAPITokenPermission(ctx, action); err != nil {
+		return err
+	}
 	tenantID := middleware.GetTenantID(ctx)
 	ok, err := s.hasProviderLifecycleAuthority(ctx, tenantID)
 	if err != nil {
@@ -4666,6 +5102,9 @@ func (s *QuartermasterServer) authorizeClusterReleaseTarget(ctx context.Context,
 	}
 	if tenantID == "" {
 		return status.Error(codes.Unauthenticated, "authentication required")
+	}
+	if actorErr := requireTenantResourceActor(ctx, tenantID, action); actorErr != nil {
+		return actorErr
 	}
 	authorized, err := quartermasterdb.New(s.db).TenantHasClusterLifecycleAccess(ctx, quartermasterdb.TenantHasClusterLifecycleAccessParams{
 		ClusterID: clusterID, TenantID: tenantID,
@@ -4779,6 +5218,9 @@ func firstNonEmptyString(values ...string) string {
 // UpdateNodeHardware updates the hardware specs for a node (detected at startup by Helmsman)
 // Called by Foghorn when processing Register message with hardware info
 func (s *QuartermasterServer) UpdateNodeHardware(ctx context.Context, req *quartermasterpb.UpdateNodeHardwareRequest) (*emptypb.Empty, error) {
+	if err := requireServiceOrPlatformOperator(ctx, "UpdateNodeHardware"); err != nil {
+		return nil, err
+	}
 	nodeID := req.GetNodeId()
 	if nodeID == "" {
 		return nil, status.Error(codes.InvalidArgument, "node_id required")
@@ -4851,6 +5293,9 @@ type instBefore struct {
 }
 
 func (s *QuartermasterServer) ReportAliveNodes(ctx context.Context, req *quartermasterpb.ReportAliveNodesRequest) (*emptypb.Empty, error) {
+	if err := requireServiceOrPlatformOperator(ctx, "ReportAliveNodes"); err != nil {
+		return nil, err
+	}
 	nodes := req.GetNodes()
 	if len(nodes) == 0 {
 		return &emptypb.Empty{}, nil
@@ -5356,6 +5801,11 @@ func (s *QuartermasterServer) ListNodes(ctx context.Context, req *quartermasterp
 	}
 
 	tenantID := middleware.GetTenantID(ctx)
+	if ctxkeys.GetAuthType(ctx) != "service" {
+		if err := requireTenantResourceActor(ctx, tenantID, authz.ActionReadPrivateInfrastructure); err != nil {
+			return nil, err
+		}
+	}
 
 	scope := quartermasterdb.NodeScopePublic
 	if tenantID != "" {
@@ -5435,6 +5885,9 @@ func (s *QuartermasterServer) ListNodes(ctx context.Context, req *quartermasterp
 //
 // All paths require: accessible cluster, non-empty external_ip.
 func (s *QuartermasterServer) ListHealthyNodesForDNS(ctx context.Context, req *quartermasterpb.ListHealthyNodesForDNSRequest) (*quartermasterpb.ListHealthyNodesForDNSResponse, error) {
+	if err := requireServiceOrPlatformOperator(ctx, "ListHealthyNodesForDNS"); err != nil {
+		return nil, err
+	}
 	tenantID := middleware.GetTenantID(ctx)
 	scope := quartermasterdb.NodeScopePublic
 	if tenantID != "" {
@@ -5557,6 +6010,9 @@ func (s *QuartermasterServer) listHealthyNodes(ctx context.Context, scope quarte
 
 // CreateNode creates a new node
 func (s *QuartermasterServer) CreateNode(ctx context.Context, req *quartermasterpb.CreateNodeRequest) (*quartermasterpb.NodeResponse, error) {
+	if err := requireServiceOrPlatformOperator(ctx, "CreateNode"); err != nil {
+		return nil, err
+	}
 	nodeID := req.GetNodeId()
 	clusterID := req.GetClusterId()
 	if nodeID == "" || clusterID == "" {
@@ -5721,6 +6177,9 @@ func geoDistanceKm(lat, lon float64, candidateLat, candidateLon sql.NullFloat64)
 // On match, updates seen_ips with current peer_ip.
 // Returns NotFound if no match - does not create new mappings to avoid bypassing enrollment.
 func (s *QuartermasterServer) ResolveNodeFingerprint(ctx context.Context, req *quartermasterpb.ResolveNodeFingerprintRequest) (*quartermasterpb.ResolveNodeFingerprintResponse, error) {
+	if err := requireServiceOrPlatformOperator(ctx, "ResolveNodeFingerprint"); err != nil {
+		return nil, err
+	}
 	peerIP := req.GetPeerIp()
 	if peerIP == "" {
 		return nil, status.Error(codes.InvalidArgument, "peer_ip required")
@@ -5735,7 +6194,7 @@ func (s *QuartermasterServer) ResolveNodeFingerprint(ctx context.Context, req *q
 		var err error
 		resolved, err = queries.ResolveNodeFingerprint(ctx, quartermasterdb.NodeFingerprintByMachineID, machineIDSHA)
 		if err == nil {
-			resolved, err = bindResolvedNodeIdentityKey(ctx, queries, resolved, req.GetNodeIdentityPublicKeyEd25519())
+			resolved, err = s.bindResolvedNodeIdentityKey(ctx, queries, resolved, req.GetNodeIdentityPublicKeyEd25519())
 			if err != nil {
 				return nil, err
 			}
@@ -5760,7 +6219,7 @@ func (s *QuartermasterServer) ResolveNodeFingerprint(ctx context.Context, req *q
 		var err error
 		resolved, err = queries.ResolveNodeFingerprint(ctx, quartermasterdb.NodeFingerprintByMACs, macsSHA)
 		if err == nil {
-			resolved, err = bindResolvedNodeIdentityKey(ctx, queries, resolved, req.GetNodeIdentityPublicKeyEd25519())
+			resolved, err = s.bindResolvedNodeIdentityKey(ctx, queries, resolved, req.GetNodeIdentityPublicKeyEd25519())
 			if err != nil {
 				return nil, err
 			}
@@ -5782,6 +6241,10 @@ func (s *QuartermasterServer) ResolveNodeFingerprint(ctx context.Context, req *q
 	// 3) Match by peer_ip in seen_ips array
 	resolved, err := queries.ResolveNodeFingerprint(ctx, quartermasterdb.NodeFingerprintBySeenIP, peerIP)
 	if err == nil {
+		resolved, err = s.bindResolvedNodeIdentityKey(ctx, queries, resolved, req.GetNodeIdentityPublicKeyEd25519())
+		if err != nil {
+			return nil, err
+		}
 		if upsertErr := s.upsertSeenIP(ctx, resolved.NodeID, peerIP); upsertErr != nil {
 			s.logger.WithError(upsertErr).WithField("node_id", resolved.NodeID).Warn("Failed to update fingerprint seen IP")
 		}
@@ -5803,26 +6266,36 @@ func (s *QuartermasterServer) ResolveNodeFingerprint(ctx context.Context, req *q
 
 func nodeFingerprintLookupError(err error) error {
 	if errors.Is(err, quartermasterdb.ErrAmbiguousNodeFingerprint) {
-		return status.Error(codes.PermissionDenied, "fingerprint matches multiple enrolled nodes")
+		return status.Error(codes.Aborted, "fingerprint matches multiple enrolled nodes")
 	}
 	return status.Errorf(codes.Internal, "resolve node fingerprint: %v", err)
 }
 
-func bindResolvedNodeIdentityKey(ctx context.Context, queries *quartermasterdb.Queries, resolved quartermasterdb.NodeFingerprintRow, presented []byte) (quartermasterdb.NodeFingerprintRow, error) {
+func (s *QuartermasterServer) bindResolvedNodeIdentityKey(_ context.Context, _ *quartermasterdb.Queries, resolved quartermasterdb.NodeFingerprintRow, presented []byte) (quartermasterdb.NodeFingerprintRow, error) {
+	if len(resolved.PublicKeyEd25519) == 0 {
+		if s.metrics != nil && s.metrics.NodeIdentityRejections != nil {
+			s.metrics.NodeIdentityRejections.WithLabelValues("keyless").Inc()
+		}
+		return resolved, status.Error(codes.FailedPrecondition, "enrollment_token_required: enrolled fingerprint has no node identity key")
+	}
+	if len(resolved.PublicKeyEd25519) != ed25519.PublicKeySize {
+		if s.metrics != nil && s.metrics.NodeIdentityRejections != nil {
+			s.metrics.NodeIdentityRejections.WithLabelValues("invalid_stored_key").Inc()
+		}
+		return resolved, status.Error(codes.FailedPrecondition, "enrolled fingerprint has an invalid node identity key")
+	}
 	if len(presented) == 0 {
 		return resolved, nil
 	}
 	if len(presented) != ed25519.PublicKeySize {
 		return resolved, status.Error(codes.InvalidArgument, "node identity Ed25519 public key has invalid length")
 	}
-	bound, err := queries.BindNodeFingerprintPublicKey(ctx, resolved.NodeID, presented)
-	if err != nil {
-		return resolved, status.Errorf(codes.Internal, "bind node identity public key: %v", err)
-	}
-	if !bytes.Equal(bound, presented) {
+	if !bytes.Equal(resolved.PublicKeyEd25519, presented) {
+		if s.metrics != nil && s.metrics.NodeIdentityRejections != nil {
+			s.metrics.NodeIdentityRejections.WithLabelValues("key_mismatch").Inc()
+		}
 		return resolved, status.Error(codes.PermissionDenied, "node identity key does not match enrolled fingerprint")
 	}
-	resolved.PublicKeyEd25519 = bound
 	return resolved, nil
 }
 
@@ -5995,6 +6468,9 @@ func (s *QuartermasterServer) bootstrapEdgeNodeOnce(ctx context.Context, req *qu
 		if binding.TenantID != tokenRow.TenantID.String || stableMismatch || (!machineMatches && !macsMatch) {
 			return nil, status.Errorf(codes.PermissionDenied, "node %s identity binding does not match enrollment", nodeID)
 		}
+		if len(req.GetNodeIdentityPublicKeyEd25519()) != ed25519.PublicKeySize {
+			return nil, status.Error(codes.InvalidArgument, "node identity Ed25519 public key has invalid length")
+		}
 		keyMatches := bytes.Equal(binding.PublicKeyEd25519, req.GetNodeIdentityPublicKeyEd25519())
 		if !keyMatches && !req.GetRotateNodeIdentity() {
 			return nil, status.Errorf(codes.PermissionDenied, "node %s identity key does not match enrollment; explicit rotation is required", nodeID)
@@ -6027,6 +6503,9 @@ func (s *QuartermasterServer) bootstrapEdgeNodeOnce(ctx context.Context, req *qu
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	if len(req.GetNodeIdentityPublicKeyEd25519()) != ed25519.PublicKeySize {
+		return nil, status.Error(codes.InvalidArgument, "node identity Ed25519 public key has invalid length")
 	}
 
 	// Create node
@@ -6387,6 +6866,9 @@ func upsertEdgeNodeFingerprint(ctx context.Context, tx *sql.Tx, tenantID, nodeID
 // nodes to adopted_local, and by the rotate-on-promotion flow to finalize
 // adopted_local → gitops_seed.
 func (s *QuartermasterServer) SetNodeEnrollmentOrigin(ctx context.Context, req *quartermasterpb.SetNodeEnrollmentOriginRequest) (*quartermasterpb.SetNodeEnrollmentOriginResponse, error) {
+	if err := requireServiceOrPlatformOperator(ctx, "SetNodeEnrollmentOrigin"); err != nil {
+		return nil, err
+	}
 	nodeID := strings.TrimSpace(req.GetNodeId())
 	newOrigin := strings.TrimSpace(req.GetEnrollmentOrigin())
 	if nodeID == "" {
@@ -6856,6 +7338,9 @@ func sortedStringKeys(m map[string]struct{}) []string {
 
 // CreateBootstrapToken creates a new bootstrap token
 func (s *QuartermasterServer) CreateBootstrapToken(ctx context.Context, req *quartermasterpb.CreateBootstrapTokenRequest) (*quartermasterpb.CreateBootstrapTokenResponse, error) {
+	if err := requireServiceOrPlatformOperator(ctx, "CreateBootstrapToken"); err != nil {
+		return nil, err
+	}
 	name := req.GetName()
 	kind := req.GetKind()
 	if name == "" || kind == "" {
@@ -6929,6 +7414,9 @@ func (s *QuartermasterServer) CreateBootstrapToken(ctx context.Context, req *qua
 
 // ListBootstrapTokens returns bootstrap tokens with optional filters
 func (s *QuartermasterServer) ListBootstrapTokens(ctx context.Context, req *quartermasterpb.ListBootstrapTokensRequest) (*quartermasterpb.ListBootstrapTokensResponse, error) {
+	if err := requireServiceOrPlatformOperator(ctx, "ListBootstrapTokens"); err != nil {
+		return nil, err
+	}
 	// Parse bidirectional pagination
 	params, err := pagination.Parse(req.GetPagination())
 	if err != nil {
@@ -7005,6 +7493,9 @@ func (s *QuartermasterServer) ListBootstrapTokens(ctx context.Context, req *quar
 
 // RevokeBootstrapToken revokes a bootstrap token
 func (s *QuartermasterServer) RevokeBootstrapToken(ctx context.Context, req *quartermasterpb.RevokeBootstrapTokenRequest) (*emptypb.Empty, error) {
+	if err := requireServiceOrPlatformOperator(ctx, "RevokeBootstrapToken"); err != nil {
+		return nil, err
+	}
 	tokenID := req.GetTokenId()
 	if tokenID == "" {
 		return nil, status.Error(codes.InvalidArgument, "token_id required")
@@ -7026,6 +7517,9 @@ func (s *QuartermasterServer) RevokeBootstrapToken(ctx context.Context, req *qua
 // When client_ip is set, validates against the token's expected_ip.
 // When consume is true, increments usage_count (used by PreRegisterEdge).
 func (s *QuartermasterServer) ValidateBootstrapToken(ctx context.Context, req *quartermasterpb.ValidateBootstrapTokenRequest) (*quartermasterpb.ValidateBootstrapTokenResponse, error) {
+	if err := requireServiceOrPlatformOperator(ctx, "ValidateBootstrapToken"); err != nil {
+		return nil, err
+	}
 	token := strings.TrimSpace(req.GetToken())
 	if token == "" {
 		return nil, status.Error(codes.InvalidArgument, "token required")
@@ -7164,6 +7658,9 @@ func (s *QuartermasterServer) lookupClusterFoghornGRPC(ctx context.Context, clus
 
 // SyncMesh handles WireGuard mesh synchronization
 func (s *QuartermasterServer) SyncMesh(ctx context.Context, req *quartermasterpb.InfrastructureSyncRequest) (*quartermasterpb.InfrastructureSyncResponse, error) {
+	if err := requireServiceOrPlatformOperator(ctx, "SyncMesh"); err != nil {
+		return nil, err
+	}
 	nodeID := req.GetNodeId()
 	publicKey := req.GetPublicKey()
 	if nodeID == "" {
@@ -7708,6 +8205,9 @@ func computeMeshRevision(peers []*quartermasterpb.InfrastructurePeer, serviceEnd
 // binary-marshaled helmsmancontrol.ServiceEvent. Returns InvalidArgument when
 // those bytes are empty, fail to decode, or carry an empty tenant_id.
 func (s *QuartermasterServer) EnqueueServiceEvent(ctx context.Context, req *quartermasterpb.EnqueueServiceEventRequest) (*quartermasterpb.EnqueueServiceEventResponse, error) {
+	if err := requireServiceOrPlatformOperator(ctx, "EnqueueServiceEvent"); err != nil {
+		return nil, err
+	}
 	raw := req.GetEvent()
 	if len(raw) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "event is required")
@@ -7730,6 +8230,9 @@ func (s *QuartermasterServer) EnqueueServiceEvent(ctx context.Context, req *quar
 
 // ListServices returns all services in the catalog
 func (s *QuartermasterServer) ListServices(ctx context.Context, req *quartermasterpb.ListServicesRequest) (*quartermasterpb.ListServicesResponse, error) {
+	if err := requireServiceOrPlatformOperator(ctx, "ListServices"); err != nil {
+		return nil, err
+	}
 	rows, err := quartermasterdb.New(s.db).ListServiceCatalog(ctx)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
@@ -7791,6 +8294,9 @@ func (s *QuartermasterServer) ListClusterServices(ctx context.Context, req *quar
 	if clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
 	}
+	if _, err := s.requireClusterLifecycleActor(ctx, clusterID, authz.ActionReadPrivateInfrastructure); err != nil {
+		return nil, err
+	}
 
 	rows, err := quartermasterdb.New(s.db).ListClusterServiceAssignments(ctx, clusterID)
 	if err != nil {
@@ -7846,6 +8352,9 @@ func (s *QuartermasterServer) ListClusterServices(ctx context.Context, req *quar
 
 // ListServiceInstances returns running service instances
 func (s *QuartermasterServer) ListServiceInstances(ctx context.Context, req *quartermasterpb.ListServiceInstancesRequest) (*quartermasterpb.ListServiceInstancesResponse, error) {
+	if err := s.authorizeServiceInstanceRead(ctx, req.GetClusterId(), req.GetNodeId()); err != nil {
+		return nil, err
+	}
 	// Parse bidirectional pagination
 	params, err := pagination.Parse(req.GetPagination())
 	if err != nil {
@@ -8000,15 +8509,24 @@ func (s *QuartermasterServer) ListServiceInstancesByType(ctx context.Context, re
 
 // ListServicesHealth returns health of all service instances
 func (s *QuartermasterServer) ListServicesHealth(ctx context.Context, req *quartermasterpb.ListServicesHealthRequest) (*quartermasterpb.ListServicesHealthResponse, error) {
+	if err := requireServiceOrPlatformOperator(ctx, "ListServicesHealth"); err != nil {
+		return nil, err
+	}
 	return s.getServicesHealth(ctx, "")
 }
 
 // GetServiceHealth returns health of specific service instances
 func (s *QuartermasterServer) GetServiceHealth(ctx context.Context, req *quartermasterpb.GetServiceHealthRequest) (*quartermasterpb.ListServicesHealthResponse, error) {
+	if err := requireServiceOrPlatformOperator(ctx, "GetServiceHealth"); err != nil {
+		return nil, err
+	}
 	return s.getServicesHealth(ctx, req.GetServiceId())
 }
 
 func (s *QuartermasterServer) UpsertTLSBundle(ctx context.Context, req *quartermasterpb.UpsertTLSBundleRequest) (*quartermasterpb.TLSBundleResponse, error) {
+	if err := requireServiceOrPlatformOperator(ctx, "UpsertTLSBundle"); err != nil {
+		return nil, err
+	}
 	if req.GetBundle() == nil {
 		return nil, status.Error(codes.InvalidArgument, "bundle is required")
 	}
@@ -8058,6 +8576,9 @@ func (s *QuartermasterServer) UpsertTLSBundle(ctx context.Context, req *quarterm
 }
 
 func (s *QuartermasterServer) ListTLSBundles(ctx context.Context, req *quartermasterpb.ListTLSBundlesRequest) (*quartermasterpb.ListTLSBundlesResponse, error) {
+	if err := requireServiceOrPlatformOperator(ctx, "ListTLSBundles"); err != nil {
+		return nil, err
+	}
 	params, err := pagination.Parse(req.GetPagination())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
@@ -8130,6 +8651,9 @@ func (s *QuartermasterServer) ListTLSBundles(ctx context.Context, req *quarterma
 }
 
 func (s *QuartermasterServer) UpsertIngressSite(ctx context.Context, req *quartermasterpb.UpsertIngressSiteRequest) (*quartermasterpb.IngressSiteResponse, error) {
+	if err := requireServiceOrPlatformOperator(ctx, "UpsertIngressSite"); err != nil {
+		return nil, err
+	}
 	if req.GetSite() == nil {
 		return nil, status.Error(codes.InvalidArgument, "site is required")
 	}
@@ -8181,6 +8705,9 @@ func (s *QuartermasterServer) UpsertIngressSite(ctx context.Context, req *quarte
 }
 
 func (s *QuartermasterServer) ListIngressSites(ctx context.Context, req *quartermasterpb.ListIngressSitesRequest) (*quartermasterpb.ListIngressSitesResponse, error) {
+	if err := requireServiceOrPlatformOperator(ctx, "ListIngressSites"); err != nil {
+		return nil, err
+	}
 	params, err := pagination.Parse(req.GetPagination())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid pagination: %v", err)
@@ -8533,9 +9060,9 @@ func tokenPrefix(token string) string {
 
 // ListMarketplaceClusters returns clusters visible to the requesting tenant
 func (s *QuartermasterServer) ListMarketplaceClusters(ctx context.Context, req *quartermasterpb.ListMarketplaceClustersRequest) (*quartermasterpb.ListMarketplaceClustersResponse, error) {
-	tenantID := req.GetTenantId()
-	if tenantID == "" {
-		tenantID = middleware.GetTenantID(ctx)
+	tenantID, err := authorizeMarketplaceReadActor(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 	// Parse bidirectional pagination
 	params, err := pagination.Parse(req.GetPagination())
@@ -8611,9 +9138,9 @@ func (s *QuartermasterServer) GetMarketplaceCluster(ctx context.Context, req *qu
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
 	}
 
-	tenantID := req.GetTenantId()
-	if tenantID == "" {
-		tenantID = middleware.GetTenantID(ctx)
+	tenantID, err := authorizeMarketplaceReadActor(ctx, req.GetTenantId())
+	if err != nil {
+		return nil, err
 	}
 	row, err := quartermasterdb.New(s.db).GetMarketplaceCluster(ctx, clusterID, tenantID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -8654,12 +9181,15 @@ func (s *QuartermasterServer) UpdateClusterMarketplace(ctx context.Context, req 
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
 	}
+	if err := requireTenantResourceActor(ctx, tenantID, authz.ActionManageEdgeCluster); err != nil {
+		return nil, err
+	}
 	userID := middleware.GetUserID(ctx)
 
 	// Verify ownership
 	owner, err := quartermasterdb.New(s.db).GetMarketplaceOwner(ctx, clusterID, tenantID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.NotFound, "cluster not found")
+		return nil, status.Error(codes.PermissionDenied, privateInfrastructureDenied)
 	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
@@ -8667,7 +9197,7 @@ func (s *QuartermasterServer) UpdateClusterMarketplace(ctx context.Context, req 
 
 	// Only owner can update marketplace settings (unless admin/provider with platform cluster)
 	if !owner.OwnerTenantID.Valid || owner.OwnerTenantID.String != tenantID {
-		return nil, status.Error(codes.PermissionDenied, "only cluster owner can update marketplace settings")
+		return nil, status.Error(codes.PermissionDenied, privateInfrastructureDenied)
 	}
 
 	// Build update query
@@ -8743,6 +9273,9 @@ func (s *QuartermasterServer) UpdateClusterMarketplace(ctx context.Context, req 
 // GetClusterMetadataBatch returns metadata for multiple clusters (for Gateway enrichment).
 // Used by Gateway to enrich Purser's marketplace pricing data with cluster operational info.
 func (s *QuartermasterServer) GetClusterMetadataBatch(ctx context.Context, req *quartermasterpb.GetClusterMetadataBatchRequest) (*quartermasterpb.GetClusterMetadataBatchResponse, error) {
+	if err := requireServiceOrPlatformOperator(ctx, "GetClusterMetadataBatch"); err != nil {
+		return nil, err
+	}
 	clusterIDs := req.GetClusterIds()
 	if len(clusterIDs) == 0 {
 		return &quartermasterpb.GetClusterMetadataBatchResponse{Clusters: map[string]*quartermasterpb.ClusterMetadata{}}, nil
@@ -8780,6 +9313,9 @@ func (s *QuartermasterServer) CreatePrivateCluster(ctx context.Context, req *qua
 	}
 	if tenantID == "" {
 		return nil, status.Error(codes.InvalidArgument, "tenant_id required")
+	}
+	if err := requireTenantResourceActor(ctx, tenantID, authz.ActionManageEdgeCluster); err != nil {
+		return nil, err
 	}
 
 	userID := middleware.GetUserID(ctx)
@@ -8935,13 +9471,13 @@ func (s *QuartermasterServer) CreateClusterInvite(ctx context.Context, req *quar
 	queries := quartermasterdb.New(s.db)
 	clusterRow, err := queries.GetClusterOwnerAndName(ctx, clusterID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.NotFound, "cluster not found")
+		return nil, status.Error(codes.PermissionDenied, privateInfrastructureDenied)
 	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 	if !clusterRow.OwnerTenantID.Valid || clusterRow.OwnerTenantID.String != ownerTenantID {
-		return nil, status.Error(codes.PermissionDenied, "only cluster owner can create invites")
+		return nil, status.Error(codes.PermissionDenied, privateInfrastructureDenied)
 	}
 	if !clusterRow.IsPlatformOfficial.Valid {
 		return nil, status.Error(codes.Internal, "database error: cluster official state is NULL")
@@ -8956,7 +9492,7 @@ func (s *QuartermasterServer) CreateClusterInvite(ctx context.Context, req *quar
 	// Verify invited tenant exists
 	invitedTenantName, err := queries.GetTenantName(ctx, invitedTenantID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.NotFound, "invited tenant not found")
+		return nil, status.Error(codes.PermissionDenied, privateInfrastructureDenied)
 	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
@@ -9045,13 +9581,13 @@ func (s *QuartermasterServer) RevokeClusterInvite(ctx context.Context, req *quar
 	queries := quartermasterdb.New(s.db)
 	inviteOwner, err := queries.GetClusterInviteOwner(ctx, inviteID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.NotFound, "invite not found")
+		return nil, status.Error(codes.PermissionDenied, privateInfrastructureDenied)
 	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 	if !inviteOwner.OwnerTenantID.Valid || inviteOwner.OwnerTenantID.String != ownerTenantID {
-		return nil, status.Error(codes.PermissionDenied, "only cluster owner can revoke invites")
+		return nil, status.Error(codes.PermissionDenied, privateInfrastructureDenied)
 	}
 
 	err = queries.RevokeClusterInviteRecord(ctx, inviteID)
@@ -9079,13 +9615,13 @@ func (s *QuartermasterServer) ListClusterInvites(ctx context.Context, req *quart
 	// Verify ownership
 	dbOwnerID, err := quartermasterdb.New(s.db).GetClusterOwner(ctx, clusterID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.NotFound, "cluster not found")
+		return nil, status.Error(codes.PermissionDenied, privateInfrastructureDenied)
 	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 	if !dbOwnerID.Valid || dbOwnerID.String != ownerTenantID {
-		return nil, status.Error(codes.PermissionDenied, "only cluster owner can list invites")
+		return nil, status.Error(codes.PermissionDenied, privateInfrastructureDenied)
 	}
 
 	// Parse bidirectional pagination
@@ -9225,21 +9761,201 @@ func validatePrivateInviteCluster(isPlatformOfficial bool, ownerTenantID sql.Nul
 	return nil
 }
 
-func requireTenantSubscriptionActor(ctx context.Context, tenantID string) error {
-	if ctxkeys.GetAuthType(ctx) != "jwt" {
-		return status.Error(codes.PermissionDenied, "tenant JWT or platform operator authorization required")
+// requireTenantResourceActor is Quartermaster's independent authorization
+// boundary for tenant-owned settings and private infrastructure. Gateway
+// performs the user-facing scope check, but direct gRPC callers must still
+// prove an owner/admin relationship to the request tenant. Service identity is
+// allowed because internal reconcilers do not carry an end-user role.
+const privateInfrastructureDenied = "private infrastructure access denied"
+
+func requireDelegatedAPITokenPermission(ctx context.Context, action authz.Action) error {
+	if ctxkeys.GetAuthType(ctx) == "api_token" && !hasTenantActionPermission(ctxkeys.GetPermissions(ctx), action) {
+		return status.Error(codes.PermissionDenied, privateInfrastructureDenied)
+	}
+	return nil
+}
+
+func requireTenantResourceActor(ctx context.Context, tenantID string, action authz.Action) error {
+	if ctxkeys.GetAuthType(ctx) == "service" {
+		return nil
 	}
 	if ctxkeys.IsPlatformOperator(ctx) {
 		return nil
 	}
-	authenticatedTenant := strings.TrimSpace(middleware.GetTenantID(ctx))
-	if authenticatedTenant == "" {
+	authType := ctxkeys.GetAuthType(ctx)
+	if authType != "jwt" && authType != "api_token" {
+		return status.Error(codes.Unauthenticated, "tenant JWT required")
+	}
+	if err := requireDelegatedAPITokenPermission(ctx, action); err != nil {
+		return err
+	}
+	authenticatedTenantID := strings.TrimSpace(middleware.GetTenantID(ctx))
+	if authenticatedTenantID == "" {
 		return status.Error(codes.Unauthenticated, "tenant identity required")
 	}
-	if authenticatedTenant != strings.TrimSpace(tenantID) {
-		return status.Error(codes.PermissionDenied, "cannot mutate another tenant's cluster subscription")
+	decision := authz.Default.Can(ctx, authz.Identity{
+		UserID:           middleware.GetUserID(ctx),
+		TenantID:         authenticatedTenantID,
+		Role:             ctxkeys.GetRole(ctx),
+		PlatformOperator: ctxkeys.IsPlatformOperator(ctx),
+	}, action, authz.Resource{OwnerTenantID: strings.TrimSpace(tenantID)})
+	if !decision.Allow {
+		return status.Error(codes.PermissionDenied, privateInfrastructureDenied)
 	}
 	return nil
+}
+
+func hasTenantActionPermission(permissions []string, action authz.Action) bool {
+	required := ""
+	switch action {
+	case authz.ActionManageEdgeCluster:
+		required = "infrastructure:write"
+	case authz.ActionManageTenantSettings:
+		required = "settings:write"
+	case authz.ActionReadPrivateInfrastructure:
+		required = "infrastructure:read"
+	default:
+		return false
+	}
+	for _, permission := range permissions {
+		if strings.TrimSpace(permission) == required {
+			return true
+		}
+	}
+	return false
+}
+
+// authorizeTenantReadActor allows every same-tenant session to read the
+// redacted tenant/routing contract. API tokens additionally need the read
+// scope; private fields remain owner/admin, platform-operator, or service-only.
+func authorizeTenantReadActor(ctx context.Context, tenantID string) (bool, error) {
+	if ctxkeys.GetAuthType(ctx) == "service" || ctxkeys.IsPlatformOperator(ctx) {
+		return true, nil
+	}
+	authType := ctxkeys.GetAuthType(ctx)
+	if authType != "jwt" && authType != "api_token" {
+		return false, status.Error(codes.Unauthenticated, "tenant JWT required")
+	}
+	apiTokenCanReadPrivate := true
+	if authType == "api_token" {
+		apiTokenCanReadPrivate = hasTenantActionPermission(ctxkeys.GetPermissions(ctx), authz.ActionReadPrivateInfrastructure)
+		if !apiTokenCanReadPrivate && !hasAPITokenPermission(ctxkeys.GetPermissions(ctx), "streams:read") {
+			return false, status.Error(codes.PermissionDenied, privateInfrastructureDenied)
+		}
+	}
+	authenticatedTenantID := strings.TrimSpace(middleware.GetTenantID(ctx))
+	if authenticatedTenantID == "" {
+		return false, status.Error(codes.Unauthenticated, "tenant identity required")
+	}
+	if authenticatedTenantID != strings.TrimSpace(tenantID) {
+		return false, status.Error(codes.PermissionDenied, "tenant access denied")
+	}
+	decision := authz.Default.Can(ctx, authz.Identity{
+		UserID:           middleware.GetUserID(ctx),
+		TenantID:         authenticatedTenantID,
+		Role:             ctxkeys.GetRole(ctx),
+		PlatformOperator: ctxkeys.IsPlatformOperator(ctx),
+	}, authz.ActionReadPrivateInfrastructure, authz.Resource{OwnerTenantID: authenticatedTenantID})
+	return decision.Allow && apiTokenCanReadPrivate, nil
+}
+
+func hasAPITokenPermission(permissions []string, required string) bool {
+	for _, permission := range permissions {
+		if strings.TrimSpace(permission) == required {
+			return true
+		}
+	}
+	return false
+}
+
+func requireOwnedResourceActor(ctx context.Context, ownerTenantID sql.NullString, action authz.Action) error {
+	if ctxkeys.GetAuthType(ctx) == "service" || ctxkeys.IsPlatformOperator(ctx) {
+		return nil
+	}
+	if !ownerTenantID.Valid || strings.TrimSpace(ownerTenantID.String) == "" {
+		return status.Error(codes.PermissionDenied, privateInfrastructureDenied)
+	}
+	return requireTenantResourceActor(ctx, ownerTenantID.String, action)
+}
+
+func (s *QuartermasterServer) requireClusterLifecycleActor(ctx context.Context, clusterID string, action authz.Action) (sql.NullString, error) {
+	ownerTenantID, err := quartermasterdb.New(s.db).GetClusterOwnerTenantID(ctx, clusterID)
+	if errors.Is(err, sql.ErrNoRows) {
+		if ctxkeys.GetAuthType(ctx) != "service" && !ctxkeys.IsPlatformOperator(ctx) {
+			return sql.NullString{}, status.Error(codes.PermissionDenied, privateInfrastructureDenied)
+		}
+		return sql.NullString{}, status.Error(codes.NotFound, "cluster not found")
+	}
+	if err != nil {
+		return sql.NullString{}, status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	if err := requireOwnedResourceActor(ctx, ownerTenantID, action); err != nil {
+		return sql.NullString{}, err
+	}
+	return ownerTenantID, nil
+}
+
+func (s *QuartermasterServer) requireOwnedNodeActor(ctx context.Context, nodeID string) error {
+	if ctxkeys.GetAuthType(ctx) == "service" || ctxkeys.IsPlatformOperator(ctx) {
+		return nil
+	}
+	row, err := quartermasterdb.New(s.db).GetNodeOwnerRecord(ctx, nodeID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return status.Error(codes.PermissionDenied, privateInfrastructureDenied)
+	}
+	if err != nil {
+		return status.Errorf(codes.Internal, "database error: %v", err)
+	}
+	return requireOwnedResourceActor(ctx, row.OwnerTenantID, authz.ActionReadPrivateInfrastructure)
+}
+
+func (s *QuartermasterServer) authorizeServiceInstanceRead(ctx context.Context, clusterID, nodeID string) error {
+	if ctxkeys.GetAuthType(ctx) == "service" || ctxkeys.IsPlatformOperator(ctx) {
+		return nil
+	}
+	clusterID = strings.TrimSpace(clusterID)
+	if clusterID != "" {
+		_, err := s.requireClusterLifecycleActor(ctx, clusterID, authz.ActionReadPrivateInfrastructure)
+		return err
+	}
+	nodeID = strings.TrimSpace(nodeID)
+	if nodeID != "" {
+		return s.requireOwnedNodeActor(ctx, nodeID)
+	}
+	return status.Error(codes.PermissionDenied, privateInfrastructureDenied)
+}
+
+func requireServiceOrPlatformOperator(ctx context.Context, operation string) error {
+	if ctxkeys.GetAuthType(ctx) == "service" || ctxkeys.IsPlatformOperator(ctx) {
+		return nil
+	}
+	return status.Errorf(codes.PermissionDenied, "%s requires control-plane authorization", operation)
+}
+
+func requireTenantSubscriptionActor(ctx context.Context, tenantID string) error {
+	return requireTenantResourceActor(ctx, tenantID, authz.ActionManageEdgeCluster)
+}
+
+func authorizeMarketplaceReadActor(ctx context.Context, requestedTenantID string) (string, error) {
+	requestedTenantID = strings.TrimSpace(requestedTenantID)
+	if ctxkeys.GetAuthType(ctx) == "service" || ctxkeys.IsPlatformOperator(ctx) {
+		return requestedTenantID, nil
+	}
+	authType := ctxkeys.GetAuthType(ctx)
+	if authType != "jwt" && authType != "api_token" {
+		return "", status.Error(codes.Unauthenticated, "tenant authentication required")
+	}
+	if err := requireDelegatedAPITokenPermission(ctx, authz.ActionReadPrivateInfrastructure); err != nil {
+		return "", err
+	}
+	authenticatedTenantID := strings.TrimSpace(middleware.GetTenantID(ctx))
+	if authenticatedTenantID == "" {
+		return "", status.Error(codes.Unauthenticated, "tenant identity required")
+	}
+	if requestedTenantID != "" && requestedTenantID != authenticatedTenantID {
+		return "", status.Error(codes.PermissionDenied, privateInfrastructureDenied)
+	}
+	return authenticatedTenantID, nil
 }
 
 // RequestClusterSubscription requests access to a cluster
@@ -9265,7 +9981,7 @@ func (s *QuartermasterServer) RequestClusterSubscription(ctx context.Context, re
 	queries := quartermasterdb.New(s.db)
 	policy, err := queries.GetActiveClusterSubscriptionPolicy(ctx, clusterID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.NotFound, "cluster not found")
+		return nil, status.Error(codes.PermissionDenied, privateInfrastructureDenied)
 	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
@@ -9295,7 +10011,7 @@ func (s *QuartermasterServer) RequestClusterSubscription(ctx context.Context, re
 	if inviteToken != nil && *inviteToken != "" {
 		inviteRow, inviteErr := queries.GetPendingInviteByToken(ctx, *inviteToken)
 		if errors.Is(inviteErr, sql.ErrNoRows) {
-			return nil, status.Error(codes.NotFound, "invalid or expired invite token")
+			return nil, status.Error(codes.PermissionDenied, privateInfrastructureDenied)
 		}
 		if inviteErr != nil {
 			return nil, status.Errorf(codes.Internal, "database error: %v", inviteErr)
@@ -9306,10 +10022,10 @@ func (s *QuartermasterServer) RequestClusterSubscription(ctx context.Context, re
 			inviteResourceLimits = validString(string(inviteRow.ResourceLimits))
 		}
 		if inviteRow.ClusterID != clusterID {
-			return nil, status.Error(codes.InvalidArgument, "invite token is for a different cluster")
+			return nil, status.Error(codes.PermissionDenied, privateInfrastructureDenied)
 		}
 		if inviteRow.InvitedTenantID != tenantID {
-			return nil, status.Error(codes.PermissionDenied, "invite token is for a different tenant")
+			return nil, status.Error(codes.PermissionDenied, privateInfrastructureDenied)
 		}
 	}
 	// A private invite is an authority source only for tenant-private capacity.
@@ -9426,7 +10142,7 @@ func (s *QuartermasterServer) AcceptClusterInvite(ctx context.Context, req *quar
 	// Look up the invite
 	inviteRow, err := quartermasterdb.New(s.db).GetPendingInviteWithClusterPolicy(ctx, inviteToken)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.NotFound, "invalid or expired invite token")
+		return nil, status.Error(codes.PermissionDenied, privateInfrastructureDenied)
 	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
@@ -9435,7 +10151,7 @@ func (s *QuartermasterServer) AcceptClusterInvite(ctx context.Context, req *quar
 		return nil, status.Error(codes.Internal, "database error: required invite field is NULL")
 	}
 	if inviteRow.InvitedTenantID != tenantID {
-		return nil, status.Error(codes.PermissionDenied, "invite is for a different tenant")
+		return nil, status.Error(codes.PermissionDenied, privateInfrastructureDenied)
 	}
 	if inviteErr := validatePrivateInviteCluster(inviteRow.IsPlatformOfficial.Bool, inviteRow.OwnerTenantID, inviteRow.ClusterClass, inviteRow.Visibility.String, "accepted"); inviteErr != nil {
 		return nil, inviteErr
@@ -9508,13 +10224,13 @@ func (s *QuartermasterServer) ListPendingSubscriptions(ctx context.Context, req 
 	// Verify ownership
 	dbOwnerID, err := quartermasterdb.New(s.db).GetClusterOwner(ctx, clusterID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.NotFound, "cluster not found")
+		return nil, status.Error(codes.PermissionDenied, privateInfrastructureDenied)
 	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 	if !dbOwnerID.Valid || dbOwnerID.String != ownerTenantID {
-		return nil, status.Error(codes.PermissionDenied, "only cluster owner can view pending subscriptions")
+		return nil, status.Error(codes.PermissionDenied, privateInfrastructureDenied)
 	}
 
 	// Parse bidirectional pagination
@@ -9589,13 +10305,13 @@ func (s *QuartermasterServer) ApproveClusterSubscription(ctx context.Context, re
 	txQueries := quartermasterdb.New(tx)
 	subscriptionRow, err := txQueries.GetSubscriptionOwnerPolicy(ctx, subscriptionID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.NotFound, "subscription not found")
+		return nil, status.Error(codes.PermissionDenied, privateInfrastructureDenied)
 	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 	if !subscriptionRow.OwnerTenantID.Valid || subscriptionRow.OwnerTenantID.String != ownerTenantID {
-		return nil, status.Error(codes.PermissionDenied, "only cluster owner can approve subscriptions")
+		return nil, status.Error(codes.PermissionDenied, privateInfrastructureDenied)
 	}
 	if !subscriptionRow.SubscriptionStatus.Valid || !subscriptionRow.PricingModel.Valid || !subscriptionRow.IsPlatformOfficial.Valid {
 		return nil, status.Error(codes.Internal, "database error: required subscription policy field is NULL")
@@ -9676,13 +10392,13 @@ func (s *QuartermasterServer) RejectClusterSubscription(ctx context.Context, req
 	txQueries := quartermasterdb.New(tx)
 	subscriptionRow, err := txQueries.GetSubscriptionOwnerPolicy(ctx, subscriptionID)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, status.Error(codes.NotFound, "subscription not found")
+		return nil, status.Error(codes.PermissionDenied, privateInfrastructureDenied)
 	}
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "database error: %v", err)
 	}
 	if !subscriptionRow.OwnerTenantID.Valid || subscriptionRow.OwnerTenantID.String != ownerTenantID {
-		return nil, status.Error(codes.PermissionDenied, "only cluster owner can reject subscriptions")
+		return nil, status.Error(codes.PermissionDenied, privateInfrastructureDenied)
 	}
 	if !subscriptionRow.SubscriptionStatus.Valid || subscriptionRow.SubscriptionStatus.String != "pending_approval" {
 		return nil, status.Error(codes.FailedPrecondition, "subscription is not pending approval")
@@ -9720,6 +10436,9 @@ func (s *QuartermasterServer) RejectClusterSubscription(ctx context.Context, req
 // cluster ID is routing attribution within that trust boundary; third-party callers require cluster-bound
 // identity from the service-identity RFC.
 func (s *QuartermasterServer) ListPeers(ctx context.Context, req *quartermasterpb.ListPeersRequest) (*quartermasterpb.ListPeersResponse, error) {
+	if err := requireServiceOrPlatformOperator(ctx, "ListPeers"); err != nil {
+		return nil, err
+	}
 	clusterID := req.GetClusterId()
 	if clusterID == "" {
 		return nil, status.Error(codes.InvalidArgument, "cluster_id required")
@@ -9877,18 +10596,39 @@ type GRPCServerConfig struct {
 // ServerMetrics holds Prometheus metrics for the gRPC server. Per-method
 // counts + duration come from GRPCMetricsInterceptor.
 type ServerMetrics struct {
-	GRPCRequests          *prometheus.CounterVec
-	GRPCDuration          *prometheus.HistogramVec
-	SyncMeshPhaseDuration *prometheus.HistogramVec
+	GRPCRequests            *prometheus.CounterVec
+	GRPCDuration            *prometheus.HistogramVec
+	SyncMeshPhaseDuration   *prometheus.HistogramVec
+	NodeIdentityRejections  *prometheus.CounterVec
+	BillingEntitlementStale *prometheus.CounterVec
+	DNSBackstopRepairs      *prometheus.CounterVec
+	NavigatorOutboxFailures *prometheus.CounterVec
+	NavigatorOutboxPending  *prometheus.GaugeVec
 }
 
 // NewGRPCServer creates a new gRPC server for Quartermaster
 func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 	// Chain auth interceptor with logging interceptor
-	authInterceptor := middleware.GRPCAuthInterceptor(middleware.GRPCAuthConfig{
-		ServiceToken: cfg.ServiceToken,
-		JWTSecret:    cfg.JWTSecret,
-		Logger:       cfg.Logger,
+	grpcAuthCfg := middleware.GRPCAuthConfig{
+		ServiceToken:         cfg.ServiceToken,
+		JWTSecret:            cfg.JWTSecret,
+		Logger:               cfg.Logger,
+		DelegatedJWTAudience: "quartermaster",
+		ServiceOnlyMethods: []string{
+			quartermasterpb.TenantService_ResolveTenant_FullMethodName,
+			quartermasterpb.TenantService_ResolveTenantAliases_FullMethodName,
+			quartermasterpb.TenantService_ListAliasedTenantsForCluster_FullMethodName,
+			quartermasterpb.TenantService_ApplyTenantBillingEntitlements_FullMethodName,
+			quartermasterpb.TenantService_CompleteTenantDNSEntitlementHandoff_FullMethodName,
+			quartermasterpb.ClusterService_BootstrapClusterAccess_FullMethodName,
+			quartermasterpb.ClusterService_MaterializeClusterAccess_FullMethodName,
+			quartermasterpb.ClusterService_RevokeMaterializedClusterAccess_FullMethodName,
+			quartermasterpb.ClusterService_DeactivateClusterAccess_FullMethodName,
+			quartermasterpb.ClusterService_ListTenantClusterAccess_FullMethodName,
+			quartermasterpb.ClusterService_GetTenantEntitlement_FullMethodName,
+			quartermasterpb.ServiceRegistryService_ListServiceInstancesByType_FullMethodName,
+			quartermasterpb.ServiceRegistryService_ListServiceClusterAssignments_FullMethodName,
+		},
 		SkipMethods: []string{
 			"/grpc.health.v1.Health/Check",
 			"/grpc.health.v1.Health/Watch",
@@ -9896,7 +10636,9 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 			"/quartermaster.BootstrapService/BootstrapEdgeNode",
 			"/quartermaster.BootstrapService/BootstrapInfrastructureNode",
 		},
-	})
+	}
+	authInterceptor := middleware.GRPCAuthInterceptor(grpcAuthCfg)
+	streamAuthInterceptor := middleware.GRPCStreamAuthInterceptor(grpcAuthCfg)
 
 	// GRPCMetricsInterceptor sits outermost so Unauthenticated / PermissionDenied
 	// rejections from the auth interceptor still show up in
@@ -9905,7 +10647,12 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 		grpc.ChainUnaryInterceptor(
 			middleware.GRPCMetricsInterceptor(cfg.Metrics.GRPCRequests, cfg.Metrics.GRPCDuration),
 			authInterceptor,
+			middleware.DelegatedJWTReplayInterceptor(cfg.DB, "quartermaster"),
 			unaryInterceptor(cfg.Logger),
+		),
+		grpc.ChainStreamInterceptor(
+			streamAuthInterceptor,
+			middleware.DelegatedJWTStreamReplayInterceptor(cfg.DB, "quartermaster"),
 		),
 	}
 	tlsCfg := grpcutil.ServerTLSConfig{

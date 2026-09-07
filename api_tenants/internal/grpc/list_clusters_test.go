@@ -12,6 +12,8 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/lib/pq"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 var clusterColumns = []string{
@@ -86,6 +88,15 @@ func TestListClusters_PlatformOfficialFilterIgnoresTenantVisibility(t *testing.T
 	}
 }
 
+func TestListClustersRejectsTenantlessJWTOutsidePublicScope(t *testing.T) {
+	server := &QuartermasterServer{logger: logging.NewLogger()}
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "jwt")
+	_, err := server.ListClusters(ctx, &quartermasterpb.ListClustersRequest{})
+	if status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("status = %v, want Unauthenticated", status.Code(err))
+	}
+}
+
 func TestListMySubscriptionsMarksPrimaryClusterPreferred(t *testing.T) {
 	db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
@@ -95,17 +106,21 @@ func TestListMySubscriptionsMarksPrimaryClusterPreferred(t *testing.T) {
 
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 	const tenantID = "tenant-1"
-	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, tenantID)
+	ctx := tenantCtx(tenantID, "member")
 
 	mock.ExpectQuery(`(?s)SELECT COUNT\(\*\) FROM quartermaster\.infrastructure_clusters c\s+WHERE c\.cluster_id IN`).
 		WithArgs(tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(2))
 
+	secretRow := newClusterRow("uuid-2", "cluster-preferred", "Tenant Preferred", "edge", true, true)
+	secretRow[7] = "postgres://private"
+	secretRow[8] = "https://periscope.private"
+	secretRow[9] = pq.StringArray{"broker.private:9092"}
 	mock.ExpectQuery(`(?s)AS is_default_cluster.*LEFT JOIN quartermaster\.tenants t ON t\.id = \$1`).
 		WithArgs(tenantID, 51).
 		WillReturnRows(sqlmock.NewRows(clusterColumns).
 			AddRow(newClusterRow("uuid-1", "cluster-default", "Platform Default", "edge", false, true)...).
-			AddRow(newClusterRow("uuid-2", "cluster-preferred", "Tenant Preferred", "edge", true, true)...))
+			AddRow(secretRow...))
 
 	resp, err := server.ListMySubscriptions(ctx, &quartermasterpb.ListMySubscriptionsRequest{TenantId: tenantID})
 	if err != nil {
@@ -120,8 +135,24 @@ func TestListMySubscriptionsMarksPrimaryClusterPreferred(t *testing.T) {
 	if !resp.GetClusters()[1].GetIsDefaultCluster() {
 		t.Fatalf("expected tenant primary row to be marked preferred")
 	}
+	for _, cluster := range resp.GetClusters() {
+		if cluster.DatabaseUrl != nil || cluster.PeriscopeUrl != nil || len(cluster.KafkaBrokers) != 0 {
+			t.Fatalf("subscription leaked private endpoints: %+v", cluster)
+		}
+	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet sql expectations: %v", err)
+	}
+}
+
+func TestListMySubscriptionsRejectsUnderScopedAPITokenBeforeStorage(t *testing.T) {
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "api_token")
+	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, "tenant-1")
+	ctx = context.WithValue(ctx, ctxkeys.KeyRole, "owner")
+	server := &QuartermasterServer{logger: logging.NewLogger()}
+	_, err := server.ListMySubscriptions(ctx, &quartermasterpb.ListMySubscriptionsRequest{})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("status = %v, want PermissionDenied", status.Code(err))
 	}
 }

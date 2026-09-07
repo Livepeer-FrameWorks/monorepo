@@ -1,7 +1,6 @@
 package grpc
 
 import (
-	"context"
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -32,7 +31,7 @@ func TestValidateTenantRetriesRetryablePostgresErrors(t *testing.T) {
 		}).AddRow("Tenant", true, int32(60), int32(120)))
 
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
-	resp, err := server.ValidateTenant(context.Background(), &quartermasterpb.ValidateTenantRequest{TenantId: tenantID})
+	resp, err := server.ValidateTenant(serviceCtx(), &quartermasterpb.ValidateTenantRequest{TenantId: tenantID})
 	if err != nil {
 		t.Fatalf("ValidateTenant: %v", err)
 	}

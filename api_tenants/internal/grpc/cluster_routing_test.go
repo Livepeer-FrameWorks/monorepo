@@ -18,7 +18,6 @@ import (
 func strPtr(s string) *string { return &s }
 
 func TestUpdateTenantCluster(t *testing.T) {
-	ctx := context.Background()
 	tests := []struct {
 		name      string
 		req       *quartermasterpb.UpdateTenantClusterRequest
@@ -58,6 +57,14 @@ func TestUpdateTenantCluster(t *testing.T) {
 					WillReturnResult(sqlmock.NewResult(0, 1))
 				expectServiceEventOutbox(mock, "tenant_updated", "tenant-1")
 				expectServiceEventOutbox(mock, "tenant_cluster_assigned", "tenant-1")
+				mock.ExpectQuery(`SELECT t\.name, t\.subdomain, t\.custom_subdomain_enabled, t\.is_active`).
+					WithArgs("tenant-1").
+					WillReturnRows(sqlmock.NewRows([]string{"name", "subdomain", "custom_subdomain_enabled", "is_active", "billing_entitlements_observed_at", "has_cluster"}).
+						AddRow("Tenant", nil, false, true, observedBillingEntitlementsAt, true))
+				mock.ExpectQuery(`SELECT t\.custom_domain, t\.custom_subdomain_enabled, t\.custom_domain_enabled, t\.is_active`).
+					WithArgs("tenant-1").
+					WillReturnRows(sqlmock.NewRows([]string{"custom_domain", "custom_subdomain_enabled", "custom_domain_enabled", "is_active", "billing_entitlements_observed_at", "has_cluster"}).
+						AddRow(nil, false, false, true, observedBillingEntitlementsAt, true))
 				mock.ExpectCommit()
 			},
 			assert: func(t *testing.T, err error) {
@@ -163,6 +170,13 @@ func TestUpdateTenantCluster(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			if test.req.GetTenantId() != "" {
+				ctx = tenantCtx(test.req.GetTenantId(), "owner")
+			}
+			if test.req.DeploymentModel != nil {
+				ctx = serviceCtx()
+			}
 			var db *sql.DB
 			var mock sqlmock.Sqlmock
 			if test.setupMock != nil {
@@ -189,7 +203,7 @@ func TestUpdateTenantCluster(t *testing.T) {
 }
 
 func TestGetClusterRouting(t *testing.T) {
-	ctx := context.Background()
+	ctx := serviceCtx()
 
 	// Reusable row builders for the multi-query flow
 	clusterCols := []string{
@@ -568,6 +582,42 @@ func TestGetClusterRouting(t *testing.T) {
 	}
 }
 
+func TestGetClusterRoutingMemberReturnsOnlyPublicStreamingFacts(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectQuery("FROM quartermaster.tenants").WithArgs("tenant-1").WillReturnRows(
+		sqlmock.NewRows([]string{"primary_cluster_id", "official_cluster_id", "deployment_tier"}).
+			AddRow("cluster-1", "cluster-1", "production"),
+	)
+	mock.ExpectQuery("FROM quartermaster.infrastructure_clusters").WithArgs("cluster-1", "tenant-1").WillReturnRows(
+		sqlmock.NewRows([]string{
+			"cluster_id", "cluster_name", "cluster_type", "base_url", "kafka_brokers", "database_url",
+			"periscope_url", "topic_prefix", "max_concurrent_streams", "health_status",
+		}).AddRow("cluster-1", "Edge Europe", "edge", "frameworks.example", pq.Array([]string{"kafka.internal:9092"}),
+			"postgres://secret", "http://periscope.internal", "tenant_1", 100, "healthy"),
+	)
+
+	resp, err := (&QuartermasterServer{db: db, logger: logrus.New()}).GetClusterRouting(
+		tenantCtx("tenant-1", "member"), &quartermasterpb.GetClusterRoutingRequest{TenantId: "tenant-1"},
+	)
+	if err != nil {
+		t.Fatalf("member routing read failed: %v", err)
+	}
+	if resp.GetClusterSlug() != "cluster-1" || resp.GetBaseUrl() != "frameworks.example" || resp.GetClusterName() != "Edge Europe" {
+		t.Fatalf("public streaming facts missing: %+v", resp)
+	}
+	if resp.GetClusterId() != "" || resp.DatabaseUrl != nil || resp.PeriscopeUrl != nil || len(resp.GetKafkaBrokers()) != 0 ||
+		resp.GetFoghornGrpcAddr() != "" || len(resp.GetClusterPeers()) != 0 {
+		t.Fatalf("private routing facts leaked to member: %+v", resp)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("member path queried private topology: %v", err)
+	}
+}
+
 func TestGetClusterRoutingReturnsFoghornControlListener(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -612,7 +662,7 @@ func TestGetClusterRoutingReturnsFoghornControlListener(t *testing.T) {
 			AddRow("cluster-1", "Primary Cluster", "shared-community", "frameworks.cloud", "", "", "", "", true, "", "", "", "cluster-1", pq.StringArray{"cluster-1"}, "", "platform_managed", "", "shared", "platform_tier", nil, "{}", false, "10.88.158.227", int32(18019)))
 
 	server := &QuartermasterServer{db: db, logger: logrus.New()}
-	resp, err := server.GetClusterRouting(context.Background(), &quartermasterpb.GetClusterRoutingRequest{TenantId: "tenant-1"})
+	resp, err := server.GetClusterRouting(serviceCtx(), &quartermasterpb.GetClusterRoutingRequest{TenantId: "tenant-1"})
 	if err != nil {
 		t.Fatalf("GetClusterRouting returned error: %v", err)
 	}
@@ -659,7 +709,7 @@ func TestListPeers_UsesFoghornClusterAssignments(t *testing.T) {
 		WillReturnRows(rows)
 
 	server := &QuartermasterServer{db: db, logger: logrus.New()}
-	resp, err := server.ListPeers(context.Background(), &quartermasterpb.ListPeersRequest{ClusterId: "local-cluster"})
+	resp, err := server.ListPeers(serviceCtx(), &quartermasterpb.ListPeersRequest{ClusterId: "local-cluster"})
 	if err != nil {
 		t.Fatalf("ListPeers returned error: %v", err)
 	}
@@ -716,7 +766,7 @@ func TestGetClusterRouting_FormatsIPv6FoghornAddresses(t *testing.T) {
 			AddRow("cluster-v6", "IPv6 Cluster", "shared-community", "v6.frameworks.cloud", "", "", "", "", true, "", "", "", "cluster-v6", pq.StringArray{"cluster-v6"}, "", "platform_managed", "", "shared", "platform_tier", nil, "{}", false, "2001:db8::10", int32(50051)))
 
 	server := &QuartermasterServer{db: db, logger: logrus.New()}
-	resp, err := server.GetClusterRouting(context.Background(), &quartermasterpb.GetClusterRoutingRequest{TenantId: "tenant-1"})
+	resp, err := server.GetClusterRouting(serviceCtx(), &quartermasterpb.GetClusterRoutingRequest{TenantId: "tenant-1"})
 	if err != nil {
 		t.Fatalf("GetClusterRouting returned error: %v", err)
 	}

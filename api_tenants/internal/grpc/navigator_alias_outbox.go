@@ -180,6 +180,11 @@ func (s *QuartermasterServer) claimAliasOutboxBatch(ctx context.Context) ([]alia
 		out = batch
 		return nil
 	})
+	if err == nil && s.metrics != nil && s.metrics.NavigatorOutboxPending != nil {
+		if pending, countErr := quartermasterdb.New(s.db).CountPendingNavigatorTenantAliasOutbox(ctx); countErr == nil {
+			s.metrics.NavigatorOutboxPending.WithLabelValues("tenant_alias").Set(float64(pending))
+		}
+	}
 	return out, err
 }
 
@@ -197,6 +202,9 @@ func (s *QuartermasterServer) markAliasOutboxCompleted(ctx context.Context, id s
 // that would silently drop the intent (e.g. an ensure that never lands); a poison
 // row deliberately blocks its tenant's queue, and the alert surfaces it.
 func (s *QuartermasterServer) recordAliasOutboxFailure(ctx context.Context, id string, attempts int, cause error, backoff time.Duration) error {
+	if s.metrics != nil && s.metrics.NavigatorOutboxFailures != nil {
+		s.metrics.NavigatorOutboxFailures.WithLabelValues("tenant_alias").Inc()
+	}
 	msg := ""
 	if cause != nil {
 		msg = cause.Error()
