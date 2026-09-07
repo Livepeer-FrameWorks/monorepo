@@ -452,7 +452,8 @@ func main() {
 // mapEventTypeToChannel maps Kafka event types to gRPC channels
 func mapEventTypeToChannel(eventType string) signalmanpb.Channel {
 	switch eventType {
-	case "stream_lifecycle_update", "stream_track_list", "stream_buffer", "stream_end", "stream_source", "play_rewrite", "push_rewrite":
+	case "stream_lifecycle_update", "stream_track_list", "stream_buffer", "stream_end", "stream_source", "play_rewrite", "push_rewrite",
+		"stream_created", "stream_updated", "stream_deleted":
 		return signalmanpb.Channel_CHANNEL_STREAMS
 	case "node_lifecycle_update", "load_balancing":
 		return signalmanpb.Channel_CHANNEL_SYSTEM
@@ -472,6 +473,8 @@ func mapEventTypeToProto(eventType string) signalmanpb.EventType {
 	switch eventType {
 	// Stream events
 	case "stream_lifecycle_update":
+		return signalmanpb.EventType_EVENT_TYPE_STREAM_LIFECYCLE_UPDATE
+	case "stream_created", "stream_updated", "stream_deleted":
 		return signalmanpb.EventType_EVENT_TYPE_STREAM_LIFECYCLE_UPDATE
 	case "stream_track_list":
 		return signalmanpb.EventType_EVENT_TYPE_STREAM_TRACK_LIST
@@ -651,6 +654,15 @@ func serviceEventToProtoData(event kafka.ServiceEvent, logger logging.Logger) *s
 		SchemaVersion:         event.SchemaVersion,
 	}
 	switch event.EventType {
+	case "stream_created", "stream_updated", "stream_deleted":
+		streamID := getString(event.Data, "stream_id")
+		if streamID == "" {
+			return nil
+		}
+		eventData.Payload = &signalmanpb.EventData_StreamChange{StreamChange: &ipcpb.StreamChangeEvent{
+			StreamId: streamID, ChangedFields: getStringSlice(event.Data, "changed_fields"),
+		}}
+		return eventData
 	case "message_received", "message_updated", "conversation_created", "conversation_updated":
 		ml := &ipcpb.MessageLifecycleData{}
 		switch event.EventType {
@@ -718,6 +730,30 @@ func getString(data map[string]interface{}, key string) string {
 		}
 	}
 	return ""
+}
+
+func getStringSlice(data map[string]interface{}, key string) []string {
+	if data == nil {
+		return nil
+	}
+	value, ok := data[key]
+	if !ok {
+		return nil
+	}
+	switch items := value.(type) {
+	case []string:
+		return append([]string(nil), items...)
+	case []interface{}:
+		out := make([]string, 0, len(items))
+		for _, item := range items {
+			if text, ok := item.(string); ok && strings.TrimSpace(text) != "" {
+				out = append(out, text)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 func getInt64(data map[string]interface{}, key string) (int64, bool) {

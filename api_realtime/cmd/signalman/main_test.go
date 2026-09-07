@@ -134,6 +134,27 @@ func TestServiceEventToProtoDataPreservesTopologyEnvelope(t *testing.T) {
 	}
 }
 
+func TestStreamChangeServiceEventMapsToStreamsChannel(t *testing.T) {
+	if got := mapEventTypeToChannel("stream_updated"); got != signalmanpb.Channel_CHANNEL_STREAMS {
+		t.Fatalf("stream_updated channel=%s, want streams", got)
+	}
+	if got := mapEventTypeToProto("stream_updated"); got != signalmanpb.EventType_EVENT_TYPE_STREAM_LIFECYCLE_UPDATE {
+		t.Fatalf("stream_updated event type=%s, want stream lifecycle update", got)
+	}
+	data := serviceEventToProtoData(kafka.ServiceEvent{
+		EventType: "stream_updated", TenantID: "tenant-1",
+		Data: map[string]interface{}{
+			"stream_id": "stream-1", "changed_fields": []interface{}{"push_target_status", "title"},
+		},
+	}, logging.NewLogger())
+	if data == nil || data.GetStreamChange() == nil {
+		t.Fatalf("stream change was not mapped: %+v", data)
+	}
+	if got := data.GetStreamChange(); got.GetStreamId() != "stream-1" || len(got.GetChangedFields()) != 2 || got.GetChangedFields()[0] != "push_target_status" {
+		t.Fatalf("unexpected stream change payload: %+v", got)
+	}
+}
+
 func stringPtr(value string) *string {
 	return &value
 }
