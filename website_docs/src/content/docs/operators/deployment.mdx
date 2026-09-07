@@ -47,6 +47,12 @@ file. The complete input contains `DATABASE_RUNTIME_PASSWORD`, `SERVICE_TOKEN`,
 the per-cell variables; operators do not add derived recipients or private cell keys to the shared
 input.
 
+During the v0.3.0 application-field migration, preserve an outgoing
+`JWT_SECRET` in the JSON array `FIELD_ENCRYPTION_LEGACY_SECRETS` before rotating
+it. This read-only compatibility channel accepts historical short JWT secrets;
+do not place JWT secrets in `FIELD_ENCRYPTION_PREVIOUS_KEYS`, which is reserved
+for versioned field keys and enforces the current field-key length floor.
+
 After authority has converged, an existing media cell can continue playback,
 ingest under its signed outage owner, source resolution, outputs, and already
 dispatched work while Commodore, Quartermaster, or Purser is unavailable. This
@@ -276,7 +282,7 @@ For detailed architecture documentation including service tables, ports, deploym
 ### Access Control
 
 - Multi-tenant isolation at application layer
-- User roles exist, but API tokens are currently full-access; RBAC and finer permissions are planned.
+- User roles and exact API-token scopes are enforced at the Gateway and service boundaries. Coarse `read` and `write` values are not wildcards; issue least-privilege namespaced scopes and add `mcp:high-risk` only for unattended high-risk MCP actions.
 - The Gateway has tenant-aware rate-limit middleware. Free-tier product limits are enforced at Foghorn admission with a three-tier cluster-load policy: under 50% load all free traffic admitted; 50–95% load rejects new ingest from over-allowance free streams; at the 95% redline all new free ingest is rejected. Viewer admission follows the same shape with a higher first threshold (80% / 95%). Free tenants are also capped at 3 concurrent live streams and 200 concurrent viewers. Active sessions are never killed mid-stream. Recordings, VOD uploads, and clip exports are rejected at the per-tenant 10 GB storage cap.
 - SSH key-based authentication for deployments
 

@@ -61,7 +61,7 @@ This page lists the **complete** capability inventory: everything in the [produc
 | Capability | Availability | Surfaces | Description |
 | --- | --- | --- | --- |
 | **Geo-balanced viewer routing** *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Foghorn resolves each viewer to the optimal edge by geography, load, and node health across federated clusters. |
-| **Edge clusters** *(foundation)* | Available | API, Agents (MCP), CLI, Dashboard, Docs | Tenant-owned edge clusters with bootstrap and node enrollment. |
+| **Edge clusters** *(foundation)* | Available | API, Agents (MCP), CLI, Dashboard, Docs | Tenant-owned MistServer/Helmsman edge capacity with bootstrap and node enrollment; virtual private clusters are logical tenant-private slices on provider-operated Foghorn. |
 | ↳ Enrollment / bootstrap tokens *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | One-shot tokens used to enroll new edge nodes into a cluster. |
 | ↳ Nodes (edge / ingest / playback) *(foundation)* | Available | API, Agents (MCP), CLI, Dashboard, Docs | Per-node health, info, and discovery. |
 | ↳ Node mode (drain / maintenance) *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Operator controls to drain a node, put it in maintenance, or restore it to active service. |
@@ -71,10 +71,10 @@ This page lists the **complete** capability inventory: everything in the [produc
 | **Cluster marketplace** | Expanding | API, Agents (MCP), Dashboard, Docs | Browse listed clusters and manage subscriptions. A vetted public marketplace program for third-party capacity is on the roadmap. |
 | ↳ Cluster invites *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Direct invites granting another tenant access to a cluster. |
 | ↳ Cluster subscription requests *(foundation)* | Available | API, Agents (MCP), Dashboard, Docs | Tenant-requested subscription to a cluster, requiring operator approval. |
-| **BYOC ownership levels** | Expanding | Docs | The deployment ownership spectrum — from bring-your-own edge nodes to fully sovereign self-hosting. |
-| ↳ Private media cluster (BYOC) | Planned | — | Run the media and data plane on your own cloud while using the FrameWorks control plane for tenancy, routing, billing, and access control. |
+| **BYOC ownership levels** | Expanding | Docs | The supported ownership boundary for bring-your-own edge capacity and adjacent unsupported control-plane models. |
+| ↳ Customer-operated media control plane | Expanding | — | Operate Foghorn and its coupled media/data services outside the FrameWorks provider plane. |
 | ↳ Hosted private clusters (BYOC) | Planned | — | FrameWorks-provisioned dedicated, isolated clusters for a single tenant, with reserved capacity and fixed-rate pricing. |
-| ↳ Fully sovereign self-hosting (BYOC) | Planned | — | Run the entire FrameWorks stack with no runtime dependency on FrameWorks, including your own object storage, analytics store, DNS, and an isolated control plane and identity root. |
+| ↳ Customer-operated full platform | Expanding | — | A separate, unsupported trust model in which a customer would operate Foghorn, federation, media dependencies, durable services, and an isolated control plane. |
 | **Adjacent infrastructure services** | Expanding | API, Docs | Infrastructure products adjacent to video delivery — managed DNS, generic proxying/CDN, and standalone storage. |
 | ↳ Managed DNS and cluster domains | Expanding | API, Docs | Platform-managed DNS, TLS certificates, media-cluster domains, and tenant streaming domain discovery. |
 | ↳ Generic proxying and CDN services | Planned | — | Customer-configured proxy/CDN front doors for non-video services and adjacent workloads. |

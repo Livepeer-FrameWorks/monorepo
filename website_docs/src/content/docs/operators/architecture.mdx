@@ -137,12 +137,12 @@ addresses.
 
 **Deployment models:**
 
-| Model                | Description                                                                                                                                                                                                                                                |
-| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Shared**           | Free shared capacity is currently unmetered; premium shared tiers are seeded for later enforcement. All tenants share the same cluster, edges, and services.                                                                                               |
-| **Dedicated**        | Enterprise tier. Isolated cluster with dedicated Foghorn, edges, and capacity — operated by FrameWorks or self-hosted on-premise via the [CLI](/operators/cli-reference), with [Manual Deployment](/operators/deployment-manual) as an advanced reference. |
-| **Hybrid**           | Tenant runs self-hosted edges that fall back to the primary shared cluster. Edges federate via Foghorn; control/data plane remains shared.                                                                                                                 |
-| **Open Marketplace** | Operators publish listed clusters with access controls, invites, subscription requests, and pricing metadata. Tenants browse listings and subscribe through the dashboard or API.                                                                          |
+| Model                | Description                                                                                                                                                                       |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Shared**           | Free shared capacity is currently unmetered; premium shared tiers are seeded for later enforcement. All tenants share the same cluster, edges, and services.                      |
+| **Dedicated**        | Enterprise tier. Isolated provider-operated capacity and routing for one tenant. Customer-operated Foghorn is not part of this model.                                             |
+| **Hybrid**           | Tenant runs self-hosted MistServer/Helmsman edges that connect to provider Foghorn and can fall back to managed capacity; the control/data plane remains provider-operated.       |
+| **Open Marketplace** | Operators publish listed clusters with access controls, invites, subscription requests, and pricing metadata. Tenants browse listings and subscribe through the dashboard or API. |
 
 ---
 

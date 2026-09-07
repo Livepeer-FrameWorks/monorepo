@@ -19,7 +19,7 @@ import { Aside } from "@astrojs/starlight/components";
   infrastructure nodes.
 </Aside>
 
-Run your own edge nodes for ingest and delivery while the FrameWorks network handles the control plane, analytics, and orchestration.
+Run your own edge nodes for ingest and delivery while FrameWorks operates the media control plane, analytics, routing, and durable services.
 
 ## How It Works
 
@@ -72,15 +72,20 @@ Hardware minimums:
   - 100 GB storage (more if you're doing recordings)
   - 1 Gbps network
 
-## What's Different from Full Self-Hosting
+## Supported Ownership Boundary
 
-Hybrid gives you edge nodes. Full self-hosting gives you the FrameWorks control plane, databases, Kafka, dashboard, and media stack while external storage and DNS integrations remain part of the production footprint today.
+The supported self-hosted product is edge-only. You operate MistServer, Helmsman, Caddy, and the host they run on. FrameWorks operates Foghorn and its federation identity, Commodore, Livepeer integration, Chandler, object storage, DNS/TLS automation, billing, analytics stores, and the rest of the control plane.
 
-| Aspect     | Hybrid            | Full Self-Host  |
-| ---------- | ----------------- | --------------- |
-| You manage | Edge nodes only   | Platform stack  |
-| Analytics  | FrameWorks-hosted | Your ClickHouse |
-| Dashboard  | Hosted dashboard  | Your deployment |
-| Complexity | Low               | High            |
+A **virtual private cluster** is a tenant-private placement and routing slice in the FrameWorks-operated Foghorn plane. It isolates authority and capacity for your tenant; it is not a customer-operated Foghorn.
 
-If you want total independence, see the [Infrastructure Operators](/operators/deployment) guide.
+| Responsibility                                   | Customer edge | FrameWorks            |
+| ------------------------------------------------ | ------------- | --------------------- |
+| MistServer and Helmsman host                     | Operates      | —                     |
+| Ingest and viewer capacity on that host          | Operates      | Routes and authorizes |
+| Foghorn and cross-cluster federation             | —             | Operates              |
+| Livepeer, Chandler, and durable object storage   | —             | Operates              |
+| DNS, certificates, billing, and analytics stores | —             | Operates              |
+
+Running Foghorn yourself is not a supported extension of edge self-hosting. It would also require a customer-operated federation trust root and compatible Livepeer, Chandler, storage, DNS, and control-plane services; those are outside this product boundary.
+
+FrameWorks infrastructure operators should use the [edge hardening rollout runbook](/operators/selfhosted-edge-rollout) when deploying the v0.3.0 authorization, enrollment, inventory, and DNS entitlement transitions.
