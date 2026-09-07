@@ -60,27 +60,21 @@ type GRPCConfig struct {
 	AllowInsecure bool
 }
 
-// authInterceptor propagates service authentication to Foghorn.
-// Foghorn is a control-plane backend; callers that already validated a user
-// send SERVICE_TOKEN as the credential and carry user/tenant IDs as metadata.
+// authInterceptor propagates service authentication to Foghorn. Commodore has
+// already authorized and tenant-bound these calls, so caller identity metadata
+// must not cross this service boundary beside the service bearer.
 func authInterceptor(serviceToken string) grpc.UnaryClientInterceptor {
 	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 		md := metadata.MD{}
-
-		if userID := ctxkeys.GetUserID(ctx); userID != "" {
-			md.Set("x-user-id", userID)
+		if existingMD, ok := metadata.FromOutgoingContext(ctx); ok {
+			md = existingMD.Copy()
 		}
-		if tenantID := ctxkeys.GetTenantID(ctx); tenantID != "" {
-			md.Set("x-tenant-id", tenantID)
-		}
+		md.Delete("authorization")
+		md.Delete("x-user-id")
+		md.Delete("x-tenant-id")
 
 		if token := outgoingAuthToken(ctx, serviceToken); token != "" {
 			md.Set("authorization", "Bearer "+token)
-		}
-
-		// Merge with existing outgoing metadata if any
-		if existingMD, ok := metadata.FromOutgoingContext(ctx); ok {
-			md = metadata.Join(existingMD, md)
 		}
 
 		ctx = metadata.NewOutgoingContext(ctx, md)
@@ -91,24 +85,35 @@ func authInterceptor(serviceToken string) grpc.UnaryClientInterceptor {
 func streamAuthInterceptor(serviceToken string) grpc.StreamClientInterceptor {
 	return func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
 		md := metadata.MD{}
-
-		if userID := ctxkeys.GetUserID(ctx); userID != "" {
-			md.Set("x-user-id", userID)
+		if existingMD, ok := metadata.FromOutgoingContext(ctx); ok {
+			md = existingMD.Copy()
 		}
-		if tenantID := ctxkeys.GetTenantID(ctx); tenantID != "" {
-			md.Set("x-tenant-id", tenantID)
-		}
+		md.Delete("authorization")
+		md.Delete("x-user-id")
+		md.Delete("x-tenant-id")
 
 		if token := outgoingAuthToken(ctx, serviceToken); token != "" {
 			md.Set("authorization", "Bearer "+token)
 		}
 
-		if existingMD, ok := metadata.FromOutgoingContext(ctx); ok {
-			md = metadata.Join(existingMD, md)
-		}
-
 		ctx = metadata.NewOutgoingContext(ctx, md)
 		return streamer(ctx, desc, cc, method, opts...)
+	}
+}
+
+// timeoutInterceptor bounds calls made through Conn or Relay at the configured
+// transport ceiling while preserving a caller's shorter operation deadline.
+func timeoutInterceptor(timeout time.Duration) grpc.UnaryClientInterceptor {
+	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		if timeout <= 0 {
+			return invoker(ctx, method, req, reply, cc, opts...)
+		}
+		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= timeout {
+			return invoker(ctx, method, req, reply, cc, opts...)
+		}
+		ctx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		return invoker(ctx, method, req, reply, cc, opts...)
 	}
 }
 
@@ -119,7 +124,7 @@ func outgoingAuthToken(ctx context.Context, configuredServiceToken string) strin
 	if contextServiceToken := ctxkeys.GetServiceToken(ctx); contextServiceToken != "" {
 		return contextServiceToken
 	}
-	return ctxkeys.GetJWTToken(ctx)
+	return ""
 }
 
 // NewGRPCClient creates a new gRPC client for Foghorn
@@ -144,6 +149,7 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		transport,
 		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
 		grpc.WithChainUnaryInterceptor(
+			timeoutInterceptor(config.Timeout),
 			authInterceptor(config.ServiceToken),
 			clients.FailsafeUnaryInterceptorWithMethodIsolation(
 				breakerName,

@@ -2,6 +2,7 @@ package commodore
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -17,7 +18,9 @@ import (
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -54,11 +57,19 @@ type GRPCConfig struct {
 	Cache *cache.Cache
 	// ServiceToken for service-to-service authentication (fallback when no user JWT)
 	ServiceToken string
+	// DelegatedJWTSecret mints a fresh API-token assertion for each RPC attempt.
+	DelegatedJWTSecret []byte
 	// TLS configuration for the gRPC connection.
 	AllowInsecure bool
 	CACertFile    string
 	CACertPEM     string
 	ServerName    string
+}
+
+type serviceAuthContextKey struct{}
+
+func withServiceAuth(ctx context.Context) context.Context {
+	return context.WithValue(ctx, serviceAuthContextKey{}, struct{}{})
 }
 
 // timeoutInterceptor bounds every call at the configured timeout.
@@ -88,36 +99,60 @@ func timeoutInterceptor(timeout time.Duration) grpc.UnaryClientInterceptor {
 // This reads user_id, tenant_id, and jwt_token from the Go context (set by Gateway middleware)
 // and adds them to outgoing gRPC metadata for downstream services.
 // If no user JWT is available, it falls back to the service token for service-to-service calls.
-func authInterceptor(serviceToken string) grpc.UnaryClientInterceptor {
+func authInterceptor(serviceToken string, delegatedJWTSecret ...[]byte) grpc.UnaryClientInterceptor {
 	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
-		// Extract user context from Go context and add to gRPC metadata
+		forceServiceAuth := ctx.Value(serviceAuthContextKey{}) != nil
+		if forceServiceAuth && serviceToken == "" {
+			return status.Error(codes.Unauthenticated, "service token not configured")
+		}
+		// Preserve unrelated outgoing metadata, then replace authentication fields
+		// from the validated Go context. Joining would retain a stale credential
+		// alongside the delegated assertion and make server-side selection depend
+		// on metadata ordering.
 		md := metadata.MD{}
+		if existingMD, ok := metadata.FromOutgoingContext(ctx); ok {
+			md = existingMD.Copy()
+		}
+		md.Delete("authorization")
+		md.Delete("x-user-id")
+		md.Delete("x-tenant-id")
 
-		if userID := ctxkeys.GetUserID(ctx); userID != "" {
+		if userID := ctxkeys.GetUserID(ctx); userID != "" && !forceServiceAuth {
 			md.Set("x-user-id", userID)
 		}
-		if tenantID := ctxkeys.GetTenantID(ctx); tenantID != "" {
+		if tenantID := ctxkeys.GetTenantID(ctx); tenantID != "" && !forceServiceAuth {
 			md.Set("x-tenant-id", tenantID)
 		}
 		if ctxkeys.IsDemoMode(ctx) {
 			md.Set("x-demo-mode", "true")
 		}
 
-		// Use user's JWT from context if available, otherwise fall back to service token
-		if jwtToken := ctxkeys.GetJWTToken(ctx); jwtToken != "" {
-			md.Set("authorization", "Bearer "+jwtToken)
-		} else if serviceToken != "" {
+		// API-token calls use an audience-bound assertion minted by Gateway. This
+		// keeps delegated credentials distinguishable from interactive sessions
+		// at Commodore's authorization boundary.
+		var signingSecret []byte
+		if len(delegatedJWTSecret) != 0 {
+			signingSecret = delegatedJWTSecret[0]
+		}
+		if forceServiceAuth {
 			md.Set("authorization", "Bearer "+serviceToken)
+		} else {
+			delegatedToken, err := clients.DelegatedJWTForRPC(ctx, "commodore", signingSecret)
+			if err != nil {
+				return fmt.Errorf("mint Commodore API-token delegation: %w", err)
+			}
+			if delegatedToken != "" {
+				md.Set("authorization", "Bearer "+delegatedToken)
+			} else if jwtToken := ctxkeys.GetJWTToken(ctx); jwtToken != "" {
+				md.Set("authorization", "Bearer "+jwtToken)
+			} else if serviceToken != "" {
+				md.Set("authorization", "Bearer "+serviceToken)
+			}
 		}
 
 		// Forward X-PAYMENT header for x402 settlement (viewer-pays flows)
 		if xPayment, ok := ctx.Value(ctxkeys.KeyXPayment).(string); ok && xPayment != "" {
 			md.Set("x-payment", xPayment)
-		}
-
-		// Merge with existing outgoing metadata if any
-		if existingMD, ok := metadata.FromOutgoingContext(ctx); ok {
-			md = metadata.Join(existingMD, md)
 		}
 
 		ctx = metadata.NewOutgoingContext(ctx, md)
@@ -151,8 +186,8 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		grpc.WithChainUnaryInterceptor(
 			clients.MediaRequestObserverInterceptor("commodore"),
 			timeoutInterceptor(config.Timeout),
-			authInterceptor(config.ServiceToken),
 			clients.FailsafeUnaryInterceptor("commodore", config.Logger),
+			authInterceptor(config.ServiceToken, config.DelegatedJWTSecret),
 		),
 	)
 	if err != nil {
@@ -192,7 +227,19 @@ func (c *GRPCClient) InvalidateTenantCacheKeys(tenantID string) {
 		return
 	}
 	for _, entry := range c.cache.Snapshot() {
-		if strings.HasPrefix(entry.Key, tenantID+":") {
+		// Globally keyed negative internal-name entries carry no response tenant
+		// to match. Any tenant authority change may make one newly resolvable, so
+		// evict these bounded negatives conservatively.
+		matchesGlobalNegative := entry.Negative && strings.HasPrefix(entry.Key, "commodore:internal:")
+		matchesResolvedInternalName := false
+		if resolved, ok := entry.Value.(*commodorepb.ResolveInternalNameResponse); ok {
+			matchesResolvedInternalName = resolved.GetTenantId() == tenantID
+		}
+		matchesValidatedStreamKey := false
+		if validated, ok := entry.Value.(*commodorepb.ValidateStreamKeyResponse); ok {
+			matchesValidatedStreamKey = validated.GetTenantId() == tenantID
+		}
+		if strings.HasPrefix(entry.Key, tenantID+":") || matchesGlobalNegative || matchesResolvedInternalName || matchesValidatedStreamKey {
 			c.cache.Delete(entry.Key)
 		}
 	}
@@ -206,6 +253,13 @@ func buildValidateStreamKeyCacheKey(streamKey, clusterID string) string {
 	return cacheKey + ":cluster:" + clusterID
 }
 
+func buildCheckStreamKeyCacheKey(streamKey, tenantID string) string {
+	if tenantID = strings.TrimSpace(tenantID); tenantID != "" {
+		return tenantID + ":commodore:check-stream-key:" + streamKey
+	}
+	return buildValidateStreamKeyCacheKey(streamKey, "")
+}
+
 // ============================================================================
 // INTERNAL SERVICE OPERATIONS (Foghorn, Sidecar → Commodore)
 // ============================================================================
@@ -213,7 +267,7 @@ func buildValidateStreamKeyCacheKey(streamKey, clusterID string) string {
 // RequestMediaAuthorityRefresh hands one durable source outbox event to
 // Commodore. Accepted=false is an idempotent duplicate and remains success.
 func (c *GRPCClient) RequestMediaAuthorityRefresh(ctx context.Context, sourceService, sourceEventID, tenantID, reason string) (*commodorepb.RequestMediaAuthorityRefreshResponse, error) {
-	return c.internal.RequestMediaAuthorityRefresh(ctx, &commodorepb.RequestMediaAuthorityRefreshRequest{
+	return c.internal.RequestMediaAuthorityRefresh(withServiceAuth(ctx), &commodorepb.RequestMediaAuthorityRefreshRequest{
 		SourceService: sourceService,
 		SourceEventId: sourceEventID,
 		TenantId:      tenantID,
@@ -236,7 +290,71 @@ func (c *GRPCClient) RequestMediaAuthorityReplay(ctx context.Context, controlCel
 // call: naming a cluster is what claims, and a claim needs an owner, so the two
 // arguments are not independently optional.
 func (c *GRPCClient) ValidateStreamKey(ctx context.Context, streamKey string) (*commodorepb.ValidateStreamKeyResponse, error) {
-	return c.ValidateStreamKeyForClaim(ctx, streamKey, "", "")
+	tenantID := strings.TrimSpace(ctxkeys.GetTenantID(ctx))
+	if tenantID == "" {
+		return nil, status.Error(codes.Unauthenticated, "tenant-scoped stream-key validation requires tenant identity")
+	}
+	cacheKey := buildCheckStreamKeyCacheKey(streamKey, tenantID)
+	req := &commodorepb.ValidateStreamKeyRequest{StreamKey: streamKey}
+	resp, err := c.internal.CheckStreamKey(ctx, req)
+	if status.Code(err) == codes.Unimplemented {
+		// An older Commodore has no tenant-scoped key-check surface. Retrying its
+		// tenant-unaware RPC with a service credential would turn this user request
+		// into a cross-tenant stream-key oracle during a rolling upgrade.
+		if c.logger != nil {
+			c.logger.WithField("rpc", "CheckStreamKey").Warn("Commodore is too old for tenant-scoped stream-key validation")
+		}
+		if c.cache != nil {
+			c.cache.Delete(cacheKey)
+		}
+		return nil, status.Error(codes.Unavailable, "tenant-scoped stream-key validation unavailable during rolling upgrade")
+	}
+	if err == nil && c.cache != nil && resp != nil && resp.GetValid() {
+		c.cache.SetDefault(cacheKey, proto.CloneOf(resp))
+		return resp, nil
+	}
+	if isStreamKeyCacheFallbackError(err) && c.cache != nil {
+		if cached, ok := c.cache.Peek(cacheKey); ok {
+			if cachedResp, ok := cached.(*commodorepb.ValidateStreamKeyResponse); ok && cachedResp.GetValid() {
+				return cachedResp, nil
+			}
+		}
+	}
+	return resp, err
+}
+
+// ValidateStreamKeyAsService is the explicit cross-tenant discovery surface
+// used only by trusted ingest and settlement paths before a tenant is known.
+func (c *GRPCClient) ValidateStreamKeyAsService(ctx context.Context, streamKey string) (*commodorepb.ValidateStreamKeyResponse, error) {
+	cacheKey := buildValidateStreamKeyCacheKey(streamKey, "")
+	resp, err := c.internal.ValidateStreamKey(withServiceAuth(ctx), &commodorepb.ValidateStreamKeyRequest{StreamKey: streamKey})
+	if err == nil && c.cache != nil && resp != nil && resp.GetValid() {
+		c.cache.SetDefault(cacheKey, proto.CloneOf(resp))
+		return resp, nil
+	}
+	if isStreamKeyCacheFallbackError(err) && c.cache != nil {
+		if cached, ok := c.cache.Peek(cacheKey); ok {
+			if cachedResp, ok := cached.(*commodorepb.ValidateStreamKeyResponse); ok && cachedResp.GetValid() {
+				return cachedResp, nil
+			}
+		}
+	}
+	return resp, err
+}
+
+func isStreamKeyCacheFallbackError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return true
+	}
+	switch status.Code(err) {
+	case codes.Unavailable, codes.DeadlineExceeded, codes.Canceled:
+		return true
+	default:
+		return false
+	}
 }
 
 // ValidateStreamKeyForClaim validates and claims ingest placement in cid for the
@@ -244,7 +362,7 @@ func (c *GRPCClient) ValidateStreamKey(ctx context.Context, streamKey string) (*
 // is what a later release must prove (see ValidateStreamKeyRequest.claim_token).
 func (c *GRPCClient) ValidateStreamKeyForClaim(ctx context.Context, streamKey, cid, claimToken string) (*commodorepb.ValidateStreamKeyResponse, error) {
 	cacheKey := buildValidateStreamKeyCacheKey(streamKey, cid)
-	resp, err := c.internal.ValidateStreamKey(ctx, &commodorepb.ValidateStreamKeyRequest{
+	resp, err := c.internal.ValidateStreamKey(withServiceAuth(ctx), &commodorepb.ValidateStreamKeyRequest{
 		StreamKey:  streamKey,
 		ClusterId:  cid,
 		ClaimToken: claimToken,
@@ -281,7 +399,7 @@ func (c *GRPCClient) ValidateStreamKeyForClaim(ctx context.Context, streamKey, c
 // this each tick to build desired state; per-stream admission + cache writes
 // then go through ResolveStreamContext below.
 func (c *GRPCClient) ListManagedStreams(ctx context.Context, clusterID string) (*commodorepb.ListManagedStreamsResponse, error) {
-	return c.internal.ListManagedStreams(ctx, &commodorepb.ListManagedStreamsRequest{ClusterId: clusterID})
+	return c.internal.ListManagedStreams(withServiceAuth(ctx), &commodorepb.ListManagedStreamsRequest{ClusterId: clusterID})
 }
 
 // ListStreamMonitoring returns a tenant's streams with their per-stream Skipper
@@ -289,7 +407,7 @@ func (c *GRPCClient) ListManagedStreams(ctx context.Context, clusterID string) (
 // monitored set and scoped Periscope reads on the public stream_id UUID;
 // internal_name is for logging only.
 func (c *GRPCClient) ListStreamMonitoring(ctx context.Context, tenantID string) (*commodorepb.ListStreamMonitoringResponse, error) {
-	return c.internal.ListStreamMonitoring(ctx, &commodorepb.ListStreamMonitoringRequest{TenantId: tenantID})
+	return c.internal.ListStreamMonitoring(withServiceAuth(ctx), &commodorepb.ListStreamMonitoringRequest{TenantId: tenantID})
 }
 
 // RecordStreamActiveCluster pins the cluster currently serving a managed
@@ -369,7 +487,7 @@ func (c *GRPCClient) ResolveStreamContext(ctx context.Context, streamID, playbac
 	default:
 		return nil, fmt.Errorf("ResolveStreamContext requires exactly one of stream_id / playback_id / internal_name")
 	}
-	return c.internal.ResolveStreamContext(ctx, req)
+	return c.internal.ResolveStreamContext(withServiceAuth(ctx), req)
 }
 
 // ResolveStreamContextByStreamKey resolves the same fact set as
@@ -382,7 +500,7 @@ func (c *GRPCClient) ResolveStreamContextByStreamKey(ctx context.Context, stream
 	if streamKey == "" {
 		return nil, fmt.Errorf("ResolveStreamContextByStreamKey requires a stream key")
 	}
-	return c.internal.ResolveStreamContext(ctx, &commodorepb.ResolveStreamContextRequest{
+	return c.internal.ResolveStreamContext(withServiceAuth(ctx), &commodorepb.ResolveStreamContextRequest{
 		ClusterId:  clusterID,
 		Identifier: &commodorepb.ResolveStreamContextRequest_StreamKey{StreamKey: streamKey},
 	})
@@ -416,30 +534,35 @@ func (c *GRPCClient) ResolvePlaybackID(ctx context.Context, playbackID string) (
 // ResolveInternalName resolves an internal name to tenant context
 func (c *GRPCClient) ResolveInternalName(ctx context.Context, internalName string) (*commodorepb.ResolveInternalNameResponse, error) {
 	if c.cache != nil {
+		cacheKey := "commodore:internal:" + internalName
 		if tenantID := ctxkeys.GetTenantID(ctx); tenantID != "" {
-			cacheKey := tenantID + ":commodore:internal:" + internalName
-			if v, ok, _ := c.cache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
-				resp, err := c.internal.ResolveInternalName(ctx, &commodorepb.ResolveInternalNameRequest{
-					InternalName: internalName,
-				})
-				if err != nil {
-					return nil, false, err
-				}
-				return resp, true, nil
-			}); ok {
-				if v == nil {
-					return nil, fmt.Errorf("cached ResolveInternalName response is nil")
-				}
-				resp, ok := v.(*commodorepb.ResolveInternalNameResponse)
-				if !ok {
-					return nil, fmt.Errorf("cached ResolveInternalName response has unexpected type %T", v)
-				}
-				return resp, nil
+			cacheKey = tenantID + ":" + cacheKey
+		}
+		v, ok, cacheErr := c.cache.Get(ctx, cacheKey, func(ctx context.Context, _ string) (interface{}, bool, error) {
+			resp, err := c.internal.ResolveInternalName(withServiceAuth(ctx), &commodorepb.ResolveInternalNameRequest{
+				InternalName: internalName,
+			})
+			if err != nil {
+				return nil, false, err
 			}
+			return resp, true, nil
+		})
+		if cacheErr != nil {
+			return nil, cacheErr
+		}
+		if ok {
+			if v == nil {
+				return nil, fmt.Errorf("cached ResolveInternalName response is nil")
+			}
+			resp, ok := v.(*commodorepb.ResolveInternalNameResponse)
+			if !ok {
+				return nil, fmt.Errorf("cached ResolveInternalName response has unexpected type %T", v)
+			}
+			return resp, nil
 		}
 	}
 
-	return c.internal.ResolveInternalName(ctx, &commodorepb.ResolveInternalNameRequest{
+	return c.internal.ResolveInternalName(withServiceAuth(ctx), &commodorepb.ResolveInternalNameRequest{
 		InternalName: internalName,
 	})
 }
@@ -497,14 +620,14 @@ func (c *GRPCClient) ResolveArtifactInternalName(ctx context.Context, internalNa
 // selection. No tenant-scoped caching here — the value is tenant-attributed in
 // the response and Foghorn caches per process if needed.
 func (c *GRPCClient) ResolvePullSourceByInternalName(ctx context.Context, internalName string) (*commodorepb.ResolvePullSourceByInternalNameResponse, error) {
-	return c.internal.ResolvePullSourceByInternalName(ctx, &commodorepb.ResolvePullSourceByInternalNameRequest{
+	return c.internal.ResolvePullSourceByInternalName(withServiceAuth(ctx), &commodorepb.ResolvePullSourceByInternalNameRequest{
 		InternalName: internalName,
 	})
 }
 
 // ValidateAPIToken validates a developer API token
 func (c *GRPCClient) ValidateAPIToken(ctx context.Context, token string) (*commodorepb.ValidateAPITokenResponse, error) {
-	return c.internal.ValidateAPIToken(ctx, &commodorepb.ValidateAPITokenRequest{
+	return c.internal.ValidateAPIToken(withServiceAuth(ctx), &commodorepb.ValidateAPITokenRequest{
 		Token: token,
 	})
 }
@@ -519,7 +642,7 @@ func (c *GRPCClient) MintMistAdminSession(ctx context.Context, req *commodorepb.
 // ValidateMistAdminSession verifies a session token; expected_node_id MUST
 // be set to the connected Helmsman's nodeID by the relay (Foghorn).
 func (c *GRPCClient) ValidateMistAdminSession(ctx context.Context, req *commodorepb.ValidateMistAdminSessionRequest) (*commodorepb.ValidateMistAdminSessionResponse, error) {
-	return c.internal.ValidateMistAdminSession(ctx, req)
+	return c.internal.ValidateMistAdminSession(withServiceAuth(ctx), req)
 }
 
 // StartDVR initiates DVR recording for a stream (internal, called by Foghorn)
@@ -536,14 +659,14 @@ func (c *GRPCClient) StartDVR(ctx context.Context, req *sharedpb.StartDVRRequest
 // RegisterDVR registers a new DVR recording in the business registry
 // Called by Foghorn during the StartDVR flow
 func (c *GRPCClient) RegisterDVR(ctx context.Context, req *commodorepb.RegisterDVRRequest) (*commodorepb.RegisterDVRResponse, error) {
-	return c.internal.RegisterDVR(ctx, req)
+	return c.internal.RegisterDVR(withServiceAuth(ctx), req)
 }
 
 // UpdateArtifactCatalogSnapshot applies a whole authoritative catalog snapshot in one
 // revision-guarded write (the reconciler's single-writer projection path). This is the only
 // artifact-catalog projection RPC; the former per-field update RPCs were removed.
 func (c *GRPCClient) UpdateArtifactCatalogSnapshot(ctx context.Context, req *commodorepb.UpdateArtifactCatalogSnapshotRequest) (*commodorepb.UpdateArtifactCatalogSnapshotResponse, error) {
-	return c.internal.UpdateArtifactCatalogSnapshot(ctx, req)
+	return c.internal.UpdateArtifactCatalogSnapshot(withServiceAuth(ctx), req)
 }
 
 // UpdateDVRRetention back-fills retention_until on a finalized DVR.
@@ -552,7 +675,7 @@ func (c *GRPCClient) UpdateArtifactCatalogSnapshot(ctx context.Context, req *com
 // here so commodore.dvr_recordings.retention_until reflects post-end
 // retention. Active recordings carry NULL until they finalize.
 func (c *GRPCClient) UpdateDVRRetention(ctx context.Context, req *commodorepb.UpdateDVRRetentionRequest) (*commodorepb.UpdateDVRRetentionResponse, error) {
-	return c.internal.UpdateDVRRetention(ctx, req)
+	return c.internal.UpdateDVRRetention(withServiceAuth(ctx), req)
 }
 
 // ============================================================================
@@ -713,7 +836,7 @@ func (c *GRPCClient) ResolveVodID(ctx context.Context, vodID string) (*commodore
 // public playback_id for a hidden chapter artifact. Idempotent on
 // chapter_id.
 func (c *GRPCClient) MintChapterPlaybackID(ctx context.Context, chapterID, tenantID, artifactHash, userID, filename, originClusterID, storageClusterID, streamID, dvrHash string) (*commodorepb.MintChapterPlaybackIDResponse, error) {
-	return c.internal.MintChapterPlaybackID(ctx, &commodorepb.MintChapterPlaybackIDRequest{
+	return c.internal.MintChapterPlaybackID(withServiceAuth(ctx), &commodorepb.MintChapterPlaybackIDRequest{
 		ChapterId:        chapterID,
 		TenantId:         tenantID,
 		ArtifactHash:     artifactHash,
@@ -742,7 +865,7 @@ func (c *GRPCClient) GetTenantProcessesJSONForStream(ctx context.Context, tenant
 // process config JSON for a lifecycle ("live", "dvr", "clip",
 // "dvr_finalize", or "vod").
 func (c *GRPCClient) GetTenantProcessesJSONForLifecycle(ctx context.Context, tenantID, lifecycle, clusterID, streamID string) (*commodorepb.GetTenantProcessesJSONResponse, error) {
-	return c.internal.GetTenantProcessesJSON(ctx, &commodorepb.GetTenantProcessesJSONRequest{
+	return c.internal.GetTenantProcessesJSON(withServiceAuth(ctx), &commodorepb.GetTenantProcessesJSONRequest{
 		TenantId:   tenantID,
 		StreamType: lifecycle,
 		ClusterId:  clusterID,
@@ -782,7 +905,7 @@ func (c *GRPCClient) ResolveChapterPlaybackID(ctx context.Context, playbackID st
 // This is called by x402 middleware after verifying the ERC-3009 payment signature.
 // If the wallet is unknown, Commodore creates: tenant (prepaid) + user (email=NULL) + wallet_identity.
 func (c *GRPCClient) GetOrCreateWalletUser(ctx context.Context, chainType, walletAddress string) (*commodorepb.GetOrCreateWalletUserResponse, error) {
-	return c.internal.GetOrCreateWalletUser(ctx, &commodorepb.GetOrCreateWalletUserRequest{
+	return c.internal.GetOrCreateWalletUser(withServiceAuth(ctx), &commodorepb.GetOrCreateWalletUserRequest{
 		ChainType:     chainType,
 		WalletAddress: walletAddress,
 	})
@@ -1197,7 +1320,7 @@ func (c *GRPCClient) DeleteVodAsset(ctx context.Context, tenantID, artifactHash 
 // TerminateTenantStreams stops all active streams for a suspended tenant.
 // Called by Purser when prepaid balance drops below threshold.
 func (c *GRPCClient) TerminateTenantStreams(ctx context.Context, tenantID, reason string) (*foghorncontrolpb.TerminateTenantStreamsResponse, error) {
-	return c.internal.TerminateTenantStreams(ctx, &foghorncontrolpb.TerminateTenantStreamsRequest{
+	return c.internal.TerminateTenantStreams(withServiceAuth(ctx), &foghorncontrolpb.TerminateTenantStreamsRequest{
 		TenantId: tenantID,
 		Reason:   reason,
 	})
@@ -1206,7 +1329,7 @@ func (c *GRPCClient) TerminateTenantStreams(ctx context.Context, tenantID, reaso
 // InvalidateTenantCache clears cached suspension status for a tenant.
 // Called by Purser when a tenant is reactivated after payment.
 func (c *GRPCClient) InvalidateTenantCache(ctx context.Context, tenantID, reason string) (*foghorncontrolpb.InvalidateTenantCacheResponse, error) {
-	return c.internal.InvalidateTenantCache(ctx, &foghorncontrolpb.InvalidateTenantCacheRequest{
+	return c.internal.InvalidateTenantCache(withServiceAuth(ctx), &foghorncontrolpb.InvalidateTenantCacheRequest{
 		TenantId: tenantID,
 		Reason:   reason,
 	})
@@ -1220,7 +1343,7 @@ func (c *GRPCClient) InvalidateTenantCache(ctx context.Context, tenantID, reason
 // GetTenantUserCount returns active and total user counts for a tenant.
 // Called by Purser billing job for user-based billing calculations.
 func (c *GRPCClient) GetTenantUserCount(ctx context.Context, tenantID string) (*commodorepb.GetTenantUserCountResponse, error) {
-	return c.internal.GetTenantUserCount(ctx, &commodorepb.GetTenantUserCountRequest{
+	return c.internal.GetTenantUserCount(withServiceAuth(ctx), &commodorepb.GetTenantUserCountRequest{
 		TenantId: tenantID,
 	})
 }
@@ -1228,7 +1351,7 @@ func (c *GRPCClient) GetTenantUserCount(ctx context.Context, tenantID string) (*
 // GetTenantPrimaryUser returns the primary user info for a tenant.
 // Called by Purser billing job for billing notifications and invoices.
 func (c *GRPCClient) GetTenantPrimaryUser(ctx context.Context, tenantID string) (*commodorepb.GetTenantPrimaryUserResponse, error) {
-	return c.internal.GetTenantPrimaryUser(ctx, &commodorepb.GetTenantPrimaryUserRequest{
+	return c.internal.GetTenantPrimaryUser(withServiceAuth(ctx), &commodorepb.GetTenantPrimaryUserRequest{
 		TenantId: tenantID,
 	})
 }
@@ -1259,28 +1382,57 @@ func (c *GRPCClient) GetNodeHealth(ctx context.Context, req *foghorncontrolpb.Ge
 
 // GetStreamPushTargets fetches enabled push targets for a stream (internal, used by Foghorn).
 func (c *GRPCClient) GetStreamPushTargets(ctx context.Context, streamID, tenantID string) ([]*commodorepb.PushTargetInternal, error) {
-	resp, err := c.pushTarget.GetStreamPushTargets(ctx, &commodorepb.GetStreamPushTargetsRequest{
+	resp, err := c.pushTarget.GetStreamPushTargets(withServiceAuth(ctx), &commodorepb.GetStreamPushTargetsRequest{
 		StreamId: streamID,
 		TenantId: tenantID,
 	})
 	if err != nil {
 		return nil, err
 	}
+	if resp.PushTargetsComplete != nil && !resp.GetPushTargetsComplete() {
+		return nil, fmt.Errorf("commodore returned an incomplete push-target set")
+	}
 	return resp.GetPushTargets(), nil
 }
 
 // UpdatePushTargetStatus updates the status of a push target (internal, used by Foghorn).
-func (c *GRPCClient) UpdatePushTargetStatus(ctx context.Context, id, tenantID, status string, lastError *string) error {
+func (c *GRPCClient) UpdatePushTargetStatus(ctx context.Context, id, tenantID, status, reasonCode string, lastError *string) error {
 	req := &commodorepb.UpdatePushTargetStatusRequest{
 		Id:       id,
 		TenantId: tenantID,
 		Status:   status,
+		Reason:   pushTargetStatusReason(reasonCode),
 	}
 	if lastError != nil {
 		req.LastError = lastError
 	}
-	_, err := c.pushTarget.UpdatePushTargetStatus(ctx, req)
+	_, err := c.pushTarget.UpdatePushTargetStatus(withServiceAuth(ctx), req)
 	return err
+}
+
+func pushTargetStatusReason(reasonCode string) commodorepb.PushTargetStatusReason {
+	switch reasonCode {
+	case "connected":
+		return commodorepb.PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_CONNECTED
+	case "completed":
+		return commodorepb.PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_COMPLETED
+	case "destination_rejected":
+		return commodorepb.PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_DESTINATION_REJECTED
+	case "network_error":
+		return commodorepb.PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_NETWORK_ERROR
+	case "process_error":
+		return commodorepb.PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_PROCESS_ERROR
+	case "capacity_exhausted":
+		return commodorepb.PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_CAPACITY_EXHAUSTED
+	case "configuration_error":
+		return commodorepb.PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_CONFIGURATION_ERROR
+	case "edge_upgrade_required":
+		return commodorepb.PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_EDGE_UPGRADE_REQUIRED
+	case "stopped":
+		return commodorepb.PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_STOPPED
+	default:
+		return commodorepb.PushTargetStatusReason_PUSH_TARGET_STATUS_REASON_UNSPECIFIED
+	}
 }
 
 // CreatePushTarget creates a new push target (Gateway → Commodore).
@@ -1344,7 +1496,7 @@ func (c *GRPCClient) ResolvePlaybackPolicy(ctx context.Context, playbackID strin
 // ResolvePlaybackPolicyForEnforcement returns policy data needed to make an
 // allow/deny decision, including the decrypted webhook secret.
 func (c *GRPCClient) ResolvePlaybackPolicyForEnforcement(ctx context.Context, playbackID string) (*commodorepb.ResolvePlaybackPolicyResponse, error) {
-	return c.internal.ResolvePlaybackPolicy(ctx, &commodorepb.ResolvePlaybackPolicyRequest{
+	return c.internal.ResolvePlaybackPolicy(withServiceAuth(ctx), &commodorepb.ResolvePlaybackPolicyRequest{
 		PlaybackId:           playbackID,
 		IncludeWebhookSecret: true,
 	})
@@ -1354,7 +1506,7 @@ func (c *GRPCClient) ResolvePlaybackPolicyForEnforcement(ctx context.Context, pl
 // internal stream name — used by Foghorn's USER_NEW handler, which has the
 // internal_name from the trigger payload but not the public playback_id.
 func (c *GRPCClient) ResolvePlaybackPolicyByInternalName(ctx context.Context, internalName string) (*commodorepb.ResolvePlaybackPolicyResponse, error) {
-	return c.internal.ResolvePlaybackPolicy(ctx, &commodorepb.ResolvePlaybackPolicyRequest{
+	return c.internal.ResolvePlaybackPolicy(withServiceAuth(ctx), &commodorepb.ResolvePlaybackPolicyRequest{
 		InternalName:         internalName,
 		IncludeWebhookSecret: true,
 	})
@@ -1362,7 +1514,7 @@ func (c *GRPCClient) ResolvePlaybackPolicyByInternalName(ctx context.Context, in
 
 // RecordSigningKeyUse records successful JWT use for rotation/audit metadata.
 func (c *GRPCClient) RecordSigningKeyUse(ctx context.Context, tenantID, kid string) error {
-	_, err := c.internal.RecordSigningKeyUse(ctx, &commodorepb.RecordSigningKeyUseRequest{
+	_, err := c.internal.RecordSigningKeyUse(withServiceAuth(ctx), &commodorepb.RecordSigningKeyUseRequest{
 		TenantId: tenantID,
 		Kid:      kid,
 	})

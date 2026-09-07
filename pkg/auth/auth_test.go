@@ -78,6 +78,36 @@ func TestJWTGenerateValidate(t *testing.T) {
 	}
 }
 
+func TestValidateInteractiveJWTRejectsDelegatedAPIToken(t *testing.T) {
+	secret := []byte("s3cr3t")
+	session, err := GenerateJWT("user1", "tenant1", "u@example.com", "admin", secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, validateErr := ValidateInteractiveJWT(session, secret); validateErr != nil {
+		t.Fatalf("interactive session rejected: %v", validateErr)
+	}
+
+	delegated, err := GenerateDelegatedAPITokenJWT("user1", "tenant1", "u@example.com", "admin", "token1", []string{"streams:read"}, "quartermaster", secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, validateErr := ValidateInteractiveJWT(delegated, secret); !errors.Is(validateErr, ErrDelegatedJWT) {
+		t.Fatalf("delegated token error = %v, want ErrDelegatedJWT", validateErr)
+	}
+}
+
+func TestValidateInteractiveJWTRejectsMistAdminSession(t *testing.T) {
+	secret := []byte("s3cr3t")
+	token, _, err := GenerateMistAdminSessionJWT("user1", "tenant1", "owner", "edge-1", "cluster-1", 0, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, validateErr := ValidateInteractiveJWT(token, secret); !errors.Is(validateErr, ErrDelegatedJWT) {
+		t.Fatalf("Mist admin credential error = %v, want ErrDelegatedJWT", validateErr)
+	}
+}
+
 func TestJWTValidationEdgeCases(t *testing.T) {
 	tests := []struct {
 		name        string

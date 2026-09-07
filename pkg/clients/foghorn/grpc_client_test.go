@@ -3,6 +3,7 @@ package foghorn
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
@@ -102,7 +103,14 @@ func TestOutgoingAuthTokenPrefersConfiguredServiceToken(t *testing.T) {
 	}
 }
 
-func TestAuthInterceptorSendsServiceTokenWithUserMetadata(t *testing.T) {
+func TestOutgoingAuthTokenDoesNotForwardCallerJWT(t *testing.T) {
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyJWTToken, "user-jwt")
+	if got := outgoingAuthToken(ctx, ""); got != "" {
+		t.Fatalf("outgoingAuthToken() = %q, want no caller credential", got)
+	}
+}
+
+func TestAuthInterceptorSendsPureServiceCredential(t *testing.T) {
 	ctx := context.WithValue(context.Background(), ctxkeys.KeyJWTToken, "user-jwt")
 	ctx = context.WithValue(ctx, ctxkeys.KeyUserID, "user-1")
 	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, "tenant-1")
@@ -116,17 +124,64 @@ func TestAuthInterceptorSendsServiceTokenWithUserMetadata(t *testing.T) {
 			if got := first(md.Get("authorization")); got != "Bearer service-token" {
 				t.Fatalf("authorization = %q, want service token", got)
 			}
-			if got := first(md.Get("x-user-id")); got != "user-1" {
-				t.Fatalf("x-user-id = %q, want user metadata", got)
+			if got := first(md.Get("x-user-id")); got != "" {
+				t.Fatalf("x-user-id leaked onto service request: %q", got)
 			}
-			if got := first(md.Get("x-tenant-id")); got != "tenant-1" {
-				t.Fatalf("x-tenant-id = %q, want tenant metadata", got)
+			if got := first(md.Get("x-tenant-id")); got != "" {
+				t.Fatalf("x-tenant-id leaked onto service request: %q", got)
 			}
 			return nil
 		})
 	if err != nil {
 		t.Fatalf("authInterceptor() error = %v", err)
 	}
+}
+
+func TestTimeoutInterceptorAppliesConfiguredCeiling(t *testing.T) {
+	interceptor := timeoutInterceptor(5 * time.Second)
+	t.Run("adds default", func(t *testing.T) {
+		err := interceptor(context.Background(), "/foghorn.Test/Method", nil, nil, nil,
+			func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, opts ...grpc.CallOption) error {
+				deadline, ok := ctx.Deadline()
+				if !ok || time.Until(deadline) > 5*time.Second || time.Until(deadline) < 4*time.Second {
+					t.Fatalf("default deadline = %v, ok=%t", deadline, ok)
+				}
+				return nil
+			})
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("caps longer explicit deadline", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		err := interceptor(ctx, "/foghorn.Test/Method", nil, nil, nil,
+			func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, opts ...grpc.CallOption) error {
+				deadline, ok := ctx.Deadline()
+				if !ok || time.Until(deadline) > 5*time.Second || time.Until(deadline) < 4*time.Second {
+					t.Fatalf("configured ceiling was not applied: %v, ok=%t", deadline, ok)
+				}
+				return nil
+			})
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("preserves shorter explicit deadline", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		err := interceptor(ctx, "/foghorn.Test/Method", nil, nil, nil,
+			func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, opts ...grpc.CallOption) error {
+				deadline, ok := ctx.Deadline()
+				if !ok || time.Until(deadline) > time.Second {
+					t.Fatalf("shorter caller deadline was extended: %v, ok=%t", deadline, ok)
+				}
+				return nil
+			})
+		if err != nil {
+			t.Fatal(err)
+		}
+	})
 }
 
 func first(values []string) string {

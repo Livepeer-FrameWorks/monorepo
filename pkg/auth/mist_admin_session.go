@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/authz"
@@ -16,6 +17,10 @@ import (
 // JWT minted for the /_mist admin proxy. Carried so the same JWT secret
 // cannot be reused as a normal login session if the token leaks.
 const MistAdminSessionPurpose = "edge_mist_admin"
+
+// MistAdminSessionAudience prevents a node-bound Mist credential from being
+// accepted by an HTTP ingress that expects an interactive browser session.
+const MistAdminSessionAudience = "edge-mist-admin"
 
 // DefaultMistAdminSessionTTL is the lifetime of a freshly-minted session
 // token. Short by design — the operator exchanges the token at
@@ -38,10 +43,11 @@ type MistAdminSessionClaims struct {
 }
 
 var (
-	ErrInvalidMistAdminSession      = errors.New("invalid mist admin session token")
-	ErrExpiredMistAdminSession      = errors.New("mist admin session token expired")
-	ErrWrongMistAdminSessionNode    = errors.New("mist admin session token is for a different node")
-	ErrWrongMistAdminSessionPurpose = errors.New("token has wrong purpose for mist admin session")
+	ErrInvalidMistAdminSession       = errors.New("invalid mist admin session token")
+	ErrExpiredMistAdminSession       = errors.New("mist admin session token expired")
+	ErrWrongMistAdminSessionNode     = errors.New("mist admin session token is for a different node")
+	ErrWrongMistAdminSessionPurpose  = errors.New("token has wrong purpose for mist admin session")
+	ErrWrongMistAdminSessionAudience = errors.New("token has wrong audience for mist admin session")
 )
 
 // CanAdminMistNode is the owner check for Mist LSP access, delegated to the
@@ -80,6 +86,7 @@ func GenerateMistAdminSessionJWT(userID, tenantID, role, nodeID, clusterID strin
 		TenantID:  tenantID,
 		Role:      role,
 		RegisteredClaims: jwt.RegisteredClaims{
+			Audience:  jwt.ClaimStrings{MistAdminSessionAudience},
 			ID:        jti,
 			ExpiresAt: jwt.NewNumericDate(exp),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -107,7 +114,12 @@ func ValidateMistAdminSessionJWT(tokenString string, secret []byte, expectedNode
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
 		return secret, nil
-	})
+	},
+		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
+		jwt.WithIssuedAt(),
+		jwt.WithExpirationRequired(),
+		jwt.WithLeeway(JWTClockSkewLeeway),
+	)
 	if err != nil {
 		if errors.Is(err, jwt.ErrTokenExpired) {
 			return nil, ErrExpiredMistAdminSession
@@ -115,11 +127,14 @@ func ValidateMistAdminSessionJWT(tokenString string, secret []byte, expectedNode
 		return nil, ErrInvalidMistAdminSession
 	}
 	claims, ok := parsed.Claims.(*MistAdminSessionClaims)
-	if !ok || !parsed.Valid {
+	if !ok || !parsed.Valid || claims.ExpiresAt == nil {
 		return nil, ErrInvalidMistAdminSession
 	}
 	if claims.Purpose != MistAdminSessionPurpose {
 		return nil, ErrWrongMistAdminSessionPurpose
+	}
+	if !slices.Contains([]string(claims.Audience), MistAdminSessionAudience) {
+		return nil, ErrWrongMistAdminSessionAudience
 	}
 	if claims.NodeID != expectedNodeID {
 		return nil, ErrWrongMistAdminSessionNode

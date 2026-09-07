@@ -22,6 +22,20 @@ const (
 	// ActionAdminMistNode gates break-glass Mist admin access on an edge node;
 	// Resource.OwnerTenantID is the tenant that owns the node's cluster.
 	ActionAdminMistNode Action = "mist.node.admin"
+	// ActionManageTenantSettings gates tenant DNS and routing settings.
+	ActionManageTenantSettings Action = "tenant.settings.manage"
+	// ActionManageEdgeCluster gates private edge-cluster lifecycle and
+	// enrollment-secret issuance.
+	ActionManageEdgeCluster Action = "edge.cluster.manage"
+	// ActionManageBilling gates tenant payment, subscription, and billing-profile mutations.
+	ActionManageBilling Action = "billing.manage"
+	// ActionManageStreams gates tenant-wide stream and push-target administration.
+	ActionManageStreams Action = "streams.manage"
+	// ActionManageDeveloperTokens gates revocation of credentials created by
+	// another user in the same tenant.
+	ActionManageDeveloperTokens Action = "developer.tokens.manage"
+	// ActionReadPrivateInfrastructure gates full node and cluster inventory.
+	ActionReadPrivateInfrastructure Action = "infrastructure.private.read"
 )
 
 // Identity is the authenticated principal, distilled from the access token or
@@ -77,21 +91,27 @@ func (DefaultAuthorizer) Can(_ context.Context, id Identity, action Action, reso
 			return allow()
 		}
 		return deny("platform operator access required")
-	case ActionAdminMistNode:
-		// A platform operator may break-glass onto any node. Otherwise the
-		// caller must be an owner/admin of the tenant that owns the node.
+	case ActionAdminMistNode, ActionManageTenantSettings, ActionManageEdgeCluster, ActionManageBilling, ActionManageStreams, ActionManageDeveloperTokens, ActionReadPrivateInfrastructure:
+		// A platform operator may perform privileged cross-tenant work. Otherwise
+		// the caller must be an owner/admin of the tenant that owns the resource.
 		if id.PlatformOperator {
 			return allow()
 		}
 		owner := strings.TrimSpace(resource.OwnerTenantID)
 		caller := strings.TrimSpace(id.TenantID)
-		if privilegedTenantRole(id.Role) && owner != "" && caller == owner {
+		if identityHasPrivilegedTenantRole(id) && owner != "" && caller == owner {
 			return allow()
 		}
-		return deny("node-owner admin or platform operator required")
+		return deny("tenant owner/admin or platform operator required")
 	default:
 		return deny("unknown action")
 	}
+}
+
+func identityHasPrivilegedTenantRole(id Identity) bool {
+	// Tenant membership has one canonical role claim. RFC 9068 Roles carries
+	// platform authorization attributes and must not widen tenant membership.
+	return privilegedTenantRole(id.Role)
 }
 
 // privilegedTenantRole is the tenant-scoped role predicate (owner/admin) used

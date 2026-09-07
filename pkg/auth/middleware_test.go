@@ -92,6 +92,24 @@ func TestJWTAuthMiddleware(t *testing.T) {
 
 }
 
+func TestJWTAuthMiddlewareRejectsDelegatedAPITokenJWT(t *testing.T) {
+	secret := []byte("secret")
+	token, err := GenerateDelegatedAPITokenJWT("u1", "t1", "u@example.com", "admin", "token1", []string{"streams:read"}, "quartermaster", secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := gin.New()
+	r.Use(JWTAuthMiddleware(secret))
+	r.GET("/ok", func(c *gin.Context) { c.Status(http.StatusOK) })
+	w := httptest.NewRecorder()
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/ok", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", w.Code)
+	}
+}
+
 func TestJWTAuthMiddleware_WithAPIKeyIdentity(t *testing.T) {
 	secret := []byte("secret")
 	apiKey := "skipper-api-key"

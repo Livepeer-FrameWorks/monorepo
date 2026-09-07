@@ -3,8 +3,12 @@ package middleware
 import (
 	"context"
 	"crypto/subtle"
+	"database/sql"
+	"fmt"
 	"os"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
@@ -28,6 +32,12 @@ type GRPCAuthConfig struct {
 	Logger logging.Logger
 	// SkipMethods is a list of method names to skip auth (e.g., health checks)
 	SkipMethods []string
+	// ServiceOnlyMethods are rejected for JWT callers at the transport boundary.
+	// Handler-level guards remain defense in depth.
+	ServiceOnlyMethods []string
+	// DelegatedJWTAudience, when set, is required on API-token delegation
+	// assertions. Interactive session JWTs do not carry this claim.
+	DelegatedJWTAudience string
 	// MetadataPolicy controls how service-token metadata is handled.
 	MetadataPolicy ServiceTokenMetadataPolicy
 }
@@ -53,6 +63,10 @@ func GRPCAuthInterceptor(cfg GRPCAuthConfig) grpc.UnaryServerInterceptor {
 	skipMap := make(map[string]bool)
 	for _, m := range cfg.SkipMethods {
 		skipMap[m] = true
+	}
+	serviceOnlyMap := make(map[string]bool)
+	for _, m := range cfg.ServiceOnlyMethods {
+		serviceOnlyMap[m] = true
 	}
 
 	policy := cfg.MetadataPolicy
@@ -106,6 +120,12 @@ func GRPCAuthInterceptor(cfg GRPCAuthConfig) grpc.UnaryServerInterceptor {
 		if len(cfg.JWTSecret) > 0 {
 			claims, err := auth.ValidateJWT(token, cfg.JWTSecret)
 			if err == nil {
+				if err := validateDelegatedJWT(claims, cfg.DelegatedJWTAudience); err != nil {
+					return nil, err
+				}
+				if serviceOnlyMap[info.FullMethod] {
+					return nil, status.Error(codes.PermissionDenied, "method requires service authentication")
+				}
 				// JWT is valid - add claims to context
 				ctx = context.WithValue(ctx, ctxkeys.KeyUserID, claims.UserID)
 				ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, claims.TenantID)
@@ -114,7 +134,21 @@ func GRPCAuthInterceptor(cfg GRPCAuthConfig) grpc.UnaryServerInterceptor {
 					ctx = context.WithValue(ctx, ctxkeys.KeyPlatformOperator, true)
 				}
 				ctx = context.WithValue(ctx, ctxkeys.KeyJWTToken, token)
-				ctx = context.WithValue(ctx, ctxkeys.KeyAuthType, "jwt")
+				ctx = context.WithValue(ctx, ctxkeys.KeyJWTID, claims.ID)
+				if claims.ExpiresAt != nil {
+					ctx = context.WithValue(ctx, ctxkeys.KeyJWTExpiresAt, claims.ExpiresAt.Time)
+				}
+				authType := claims.AuthType
+				if authType == "" {
+					authType = "jwt"
+				}
+				ctx = context.WithValue(ctx, ctxkeys.KeyAuthType, authType)
+				if authType == "api_token" {
+					ctx = context.WithValue(ctx, ctxkeys.KeyAPITokenID, claims.TokenID)
+				}
+				if len(claims.Permissions) > 0 {
+					ctx = context.WithValue(ctx, ctxkeys.KeyPermissions, claims.Permissions)
+				}
 
 				if cfg.Logger != nil {
 					cfg.Logger.WithFields(logging.Fields{
@@ -153,6 +187,10 @@ func GRPCStreamAuthInterceptor(cfg GRPCAuthConfig) grpc.StreamServerInterceptor 
 	skipMap := make(map[string]bool)
 	for _, m := range cfg.SkipMethods {
 		skipMap[m] = true
+	}
+	serviceOnlyMap := make(map[string]bool)
+	for _, m := range cfg.ServiceOnlyMethods {
+		serviceOnlyMap[m] = true
 	}
 
 	policy := cfg.MetadataPolicy
@@ -200,6 +238,12 @@ func GRPCStreamAuthInterceptor(cfg GRPCAuthConfig) grpc.StreamServerInterceptor 
 		if len(cfg.JWTSecret) > 0 {
 			claims, err := auth.ValidateJWT(token, cfg.JWTSecret)
 			if err == nil {
+				if err := validateDelegatedJWT(claims, cfg.DelegatedJWTAudience); err != nil {
+					return err
+				}
+				if serviceOnlyMap[info.FullMethod] {
+					return status.Error(codes.PermissionDenied, "method requires service authentication")
+				}
 				ctx = context.WithValue(ctx, ctxkeys.KeyUserID, claims.UserID)
 				ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, claims.TenantID)
 				ctx = context.WithValue(ctx, ctxkeys.KeyRole, claims.Role)
@@ -207,7 +251,21 @@ func GRPCStreamAuthInterceptor(cfg GRPCAuthConfig) grpc.StreamServerInterceptor 
 					ctx = context.WithValue(ctx, ctxkeys.KeyPlatformOperator, true)
 				}
 				ctx = context.WithValue(ctx, ctxkeys.KeyJWTToken, token)
-				ctx = context.WithValue(ctx, ctxkeys.KeyAuthType, "jwt")
+				ctx = context.WithValue(ctx, ctxkeys.KeyJWTID, claims.ID)
+				if claims.ExpiresAt != nil {
+					ctx = context.WithValue(ctx, ctxkeys.KeyJWTExpiresAt, claims.ExpiresAt.Time)
+				}
+				authType := claims.AuthType
+				if authType == "" {
+					authType = "jwt"
+				}
+				ctx = context.WithValue(ctx, ctxkeys.KeyAuthType, authType)
+				if authType == "api_token" {
+					ctx = context.WithValue(ctx, ctxkeys.KeyAPITokenID, claims.TokenID)
+				}
+				if len(claims.Permissions) > 0 {
+					ctx = context.WithValue(ctx, ctxkeys.KeyPermissions, claims.Permissions)
+				}
 
 				if cfg.Logger != nil {
 					cfg.Logger.WithFields(logging.Fields{
@@ -224,6 +282,109 @@ func GRPCStreamAuthInterceptor(cfg GRPCAuthConfig) grpc.StreamServerInterceptor 
 
 		return status.Error(codes.Unauthenticated, "invalid token")
 	}
+}
+
+type delegatedJWTReplayGuard struct {
+	db            *sql.DB
+	query         string
+	pruneQuery    string
+	nextPruneUnix atomic.Int64
+}
+
+func newDelegatedJWTReplayGuard(db *sql.DB, schema string) *delegatedJWTReplayGuard {
+	var table string
+	switch schema {
+	case "commodore", "quartermaster", "purser", "periscope":
+		table = schema + ".delegated_jwt_replays"
+	default:
+		panic("unsupported delegated JWT replay schema: " + schema)
+	}
+	guard := &delegatedJWTReplayGuard{
+		db: db,
+		query: fmt.Sprintf(`
+WITH claimed AS (
+	INSERT INTO %s (jti, expires_at)
+	VALUES ($1, $2)
+	ON CONFLICT (jti) DO NOTHING
+	RETURNING 1
+)
+SELECT EXISTS (SELECT 1 FROM claimed)`, table),
+		pruneQuery: fmt.Sprintf("DELETE FROM %s WHERE expires_at < NOW()", table),
+	}
+	guard.nextPruneUnix.Store(time.Now().Add(time.Minute).Unix())
+	return guard
+}
+
+func (g *delegatedJWTReplayGuard) consume(ctx context.Context) error {
+	if ctxkeys.GetAuthType(ctx) != "api_token" {
+		return nil
+	}
+	jti := ctxkeys.GetJWTID(ctx)
+	expiresAt, ok := ctxkeys.GetJWTExpiresAt(ctx)
+	if g.db == nil || jti == "" || !ok {
+		return status.Error(codes.Unauthenticated, "delegated token replay state unavailable")
+	}
+	nowUnix := time.Now().Unix()
+	pruneAfter := g.nextPruneUnix.Load()
+	if nowUnix >= pruneAfter && g.nextPruneUnix.CompareAndSwap(pruneAfter, nowUnix+60) {
+		// Expiry cleanup is maintenance, not part of authentication. A cleanup
+		// failure must not turn every otherwise valid API-token request into an
+		// outage; the indexed rows can be reclaimed on a later interval.
+		if _, pruneErr := g.db.ExecContext(ctx, g.pruneQuery); pruneErr != nil {
+			g.nextPruneUnix.Store(nowUnix + 10)
+		}
+	}
+	var claimed bool
+	if err := g.db.QueryRowContext(ctx, g.query, jti, expiresAt).Scan(&claimed); err != nil {
+		return status.Error(codes.Unavailable, "delegated token replay check unavailable")
+	}
+	if !claimed {
+		return status.Error(codes.Unauthenticated, "delegated token replay rejected")
+	}
+	return nil
+}
+
+// DelegatedJWTReplayInterceptor atomically consumes each delegated API-token
+// JTI. Callers mint one assertion per RPC attempt, so a conflict is an actual
+// replay rather than another call made by the same Gateway request.
+func DelegatedJWTReplayInterceptor(db *sql.DB, schema string) grpc.UnaryServerInterceptor {
+	guard := newDelegatedJWTReplayGuard(db, schema)
+
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		if err := guard.consume(ctx); err != nil {
+			return nil, err
+		}
+		return handler(ctx, req)
+	}
+}
+
+// DelegatedJWTStreamReplayInterceptor applies the same one-use assertion
+// contract to streaming RPCs after GRPCStreamAuthInterceptor has populated the
+// authenticated stream context.
+func DelegatedJWTStreamReplayInterceptor(db *sql.DB, schema string) grpc.StreamServerInterceptor {
+	guard := newDelegatedJWTReplayGuard(db, schema)
+	return func(srv any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		if err := guard.consume(stream.Context()); err != nil {
+			return err
+		}
+		return handler(srv, stream)
+	}
+}
+
+func validateDelegatedJWT(claims *auth.Claims, audience string) error {
+	if claims.AuthType == "" && len(claims.Audience) == 0 {
+		return nil
+	}
+	if claims.AuthType != "api_token" || audience == "" || !slices.Contains([]string(claims.Audience), audience) {
+		return status.Error(codes.Unauthenticated, "invalid delegated token audience")
+	}
+	if claims.TokenID == "" || claims.Subject != claims.TokenID || claims.ID == "" || claims.IssuedAt == nil || claims.ExpiresAt == nil {
+		return status.Error(codes.Unauthenticated, "invalid delegated token claims")
+	}
+	if claims.ExpiresAt.Sub(claims.IssuedAt.Time) > auth.DelegatedAPITokenTTL+auth.JWTClockSkewLeeway {
+		return status.Error(codes.Unauthenticated, "invalid delegated token lifetime")
+	}
+	return nil
 }
 
 // extractMetadataToContext extracts tenant_id and user_id from gRPC metadata

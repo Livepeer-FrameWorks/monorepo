@@ -144,6 +144,7 @@ func TestValidateStreamKeyCachesValidResponse(t *testing.T) {
 		GRPCAddr:      listener.Addr().String(),
 		Logger:        logging.NewLogger(),
 		Cache:         c,
+		ServiceToken:  "service-token",
 		AllowInsecure: true,
 	})
 	if err != nil {
@@ -155,8 +156,8 @@ func TestValidateStreamKeyCachesValidResponse(t *testing.T) {
 	if _, ok := c.Peek(key); ok {
 		t.Fatal("cache should be empty before call")
 	}
-	if _, err := client.ValidateStreamKey(context.Background(), "sk_live_xyz"); err != nil {
-		t.Fatalf("ValidateStreamKey: %v", err)
+	if _, err := client.ValidateStreamKeyAsService(context.Background(), "sk_live_xyz"); err != nil {
+		t.Fatalf("ValidateStreamKeyAsService: %v", err)
 	}
 	cached, ok := c.Peek(key)
 	if !ok {
@@ -192,6 +193,7 @@ func TestValidateStreamKeyDoesNotCacheInvalidResponse(t *testing.T) {
 		GRPCAddr:      listener.Addr().String(),
 		Logger:        logging.NewLogger(),
 		Cache:         c,
+		ServiceToken:  "service-token",
 		AllowInsecure: true,
 	})
 	if err != nil {
@@ -199,8 +201,8 @@ func TestValidateStreamKeyDoesNotCacheInvalidResponse(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = client.Close() })
 
-	if _, err := client.ValidateStreamKey(context.Background(), "sk_invalid"); err != nil {
-		t.Fatalf("ValidateStreamKey: %v", err)
+	if _, err := client.ValidateStreamKeyAsService(context.Background(), "sk_invalid"); err != nil {
+		t.Fatalf("ValidateStreamKeyAsService: %v", err)
 	}
 	if _, ok := c.Peek(buildValidateStreamKeyCacheKey("sk_invalid", "")); ok {
 		t.Fatal("invalid response must not be cached")

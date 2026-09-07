@@ -89,6 +89,130 @@ func TestGRPCAuthInterceptor_SetsAuthTypeForJWT(t *testing.T) {
 	}
 }
 
+func TestGRPCAuthInterceptorValidatesDelegatedAPITokenAudienceAndScopes(t *testing.T) {
+	secret := []byte("secret")
+	token, err := auth.GenerateDelegatedAPITokenJWT("user-a", "tenant-a", "", "owner", "token-a", []string{"infrastructure:write"}, "quartermaster", secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	interceptor := GRPCAuthInterceptor(GRPCAuthConfig{JWTSecret: secret, DelegatedJWTAudience: "quartermaster"})
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.New(map[string]string{"authorization": "Bearer " + token}))
+	_, err = interceptor(ctx, struct{}{}, &grpc.UnaryServerInfo{FullMethod: "/quartermaster.ClusterService/UpdateCluster"}, func(ctx context.Context, _ any) (any, error) {
+		if got := ctxkeys.GetAuthType(ctx); got != "api_token" {
+			t.Fatalf("auth type = %q", got)
+		}
+		if got := ctxkeys.GetPermissions(ctx); len(got) != 1 || got[0] != "infrastructure:write" {
+			t.Fatalf("permissions = %#v", got)
+		}
+		if got := ctxkeys.GetAPITokenID(ctx); got != "token-a" {
+			t.Fatalf("API token ID = %q, want token-a", got)
+		}
+		if ctxkeys.GetJWTID(ctx) == "" {
+			t.Fatal("delegated JTI was not retained for replay protection")
+		}
+		if _, ok := ctxkeys.GetJWTExpiresAt(ctx); !ok {
+			t.Fatal("delegated expiry was not retained for replay protection")
+		}
+		return struct{}{}, nil
+	})
+	if err != nil {
+		t.Fatalf("delegated token rejected: %v", err)
+	}
+
+	wrongAudience := GRPCAuthInterceptor(GRPCAuthConfig{JWTSecret: secret, DelegatedJWTAudience: "commodore"})
+	if _, err := wrongAudience(ctx, struct{}{}, &grpc.UnaryServerInfo{FullMethod: "/quartermaster.ClusterService/UpdateCluster"}, func(context.Context, any) (any, error) {
+		return struct{}{}, nil
+	}); status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("wrong audience status = %v", status.Code(err))
+	}
+
+	ordinaryService := GRPCAuthInterceptor(GRPCAuthConfig{JWTSecret: secret})
+	if _, err := ordinaryService(ctx, struct{}{}, &grpc.UnaryServerInfo{FullMethod: "/other.Service/Read"}, func(context.Context, any) (any, error) {
+		return struct{}{}, nil
+	}); status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("delegated token without configured audience status = %v", status.Code(err))
+	}
+}
+
+func TestGRPCAuthInterceptorRejectsJWTForServiceOnlyMethod(t *testing.T) {
+	secret := []byte("secret")
+	token, err := auth.GenerateJWT("user-a", "tenant-a", "user@example.com", "member", secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const method = "/commodore.InternalService/ResolvePullSourceByInternalName"
+	interceptor := GRPCAuthInterceptor(GRPCAuthConfig{
+		ServiceToken: "service-token", JWTSecret: secret, ServiceOnlyMethods: []string{method},
+	})
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.New(map[string]string{
+		"authorization": "Bearer " + token,
+	}))
+	called := false
+	_, err = interceptor(ctx, struct{}{}, &grpc.UnaryServerInfo{FullMethod: method}, func(context.Context, any) (any, error) {
+		called = true
+		return struct{}{}, nil
+	})
+	if status.Code(err) != codes.PermissionDenied || called {
+		t.Fatalf("service-only JWT result err=%v called=%v", err, called)
+	}
+
+	serviceCtx := metadata.NewIncomingContext(context.Background(), metadata.New(map[string]string{
+		"authorization": "Bearer service-token",
+	}))
+	_, err = interceptor(serviceCtx, struct{}{}, &grpc.UnaryServerInfo{FullMethod: method}, func(context.Context, any) (any, error) {
+		called = true
+		return struct{}{}, nil
+	})
+	if err != nil || !called {
+		t.Fatalf("service caller rejected err=%v called=%v", err, called)
+	}
+}
+
+func TestGRPCAuthInterceptorRejectsAudienceWithoutAPITokenType(t *testing.T) {
+	secret := []byte("secret")
+	token, _, err := auth.GenerateMistAdminSessionJWT("user-a", "tenant-a", "owner", "edge-a", "cluster-a", 0, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	interceptor := GRPCAuthInterceptor(GRPCAuthConfig{
+		JWTSecret: secret, DelegatedJWTAudience: "commodore",
+	})
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.New(map[string]string{
+		"authorization": "Bearer " + token,
+	}))
+	called := false
+	_, err = interceptor(ctx, struct{}{}, &grpc.UnaryServerInfo{FullMethod: "/commodore.DeveloperService/ListAPITokens"}, func(context.Context, any) (any, error) {
+		called = true
+		return struct{}{}, nil
+	})
+	if status.Code(err) != codes.Unauthenticated || called {
+		t.Fatalf("audience-only JWT result err=%v called=%v", err, called)
+	}
+}
+
+func TestGRPCStreamAuthInterceptorRejectsJWTForServiceOnlyMethod(t *testing.T) {
+	secret := []byte("secret")
+	token, err := auth.GenerateJWT("user-a", "tenant-a", "user@example.com", "member", secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const method = "/foghorn.HelmsmanControl/Connect"
+	interceptor := GRPCStreamAuthInterceptor(GRPCAuthConfig{
+		ServiceToken: "service-token", JWTSecret: secret, ServiceOnlyMethods: []string{method},
+	})
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.New(map[string]string{
+		"authorization": "Bearer " + token,
+	}))
+	called := false
+	err = interceptor(nil, &fakeServerStream{ctx: ctx}, &grpc.StreamServerInfo{FullMethod: method}, func(any, grpc.ServerStream) error {
+		called = true
+		return nil
+	})
+	if status.Code(err) != codes.PermissionDenied || called {
+		t.Fatalf("service-only stream JWT result err=%v called=%v", err, called)
+	}
+}
+
 func newMetricsTestVecs() (*prometheus.CounterVec, *prometheus.HistogramVec) {
 	requests := prometheus.NewCounterVec(prometheus.CounterOpts{Name: "test_grpc_requests_total"}, []string{"method", "status"})
 	duration := prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "test_grpc_request_duration_seconds"}, []string{"method"})

@@ -78,6 +78,12 @@ func streamAuthInterceptor(serviceToken string) grpc.StreamClientInterceptor {
 
 func attachAuthMetadata(ctx context.Context, serviceToken string) context.Context {
 	md := metadata.MD{}
+	if existingMD, ok := metadata.FromOutgoingContext(ctx); ok {
+		md = existingMD.Copy()
+	}
+	md.Delete("authorization")
+	md.Delete("x-user-id")
+	md.Delete("x-tenant-id")
 
 	if userID := ctxkeys.GetUserID(ctx); userID != "" {
 		md.Set("x-user-id", userID)
@@ -91,10 +97,6 @@ func attachAuthMetadata(ctx context.Context, serviceToken string) context.Contex
 		md.Set("authorization", "Bearer "+jwtToken)
 	} else if serviceToken != "" {
 		md.Set("authorization", "Bearer "+serviceToken)
-	}
-
-	if existingMD, ok := metadata.FromOutgoingContext(ctx); ok {
-		md = metadata.Join(existingMD, md)
 	}
 
 	return metadata.NewOutgoingContext(ctx, md)

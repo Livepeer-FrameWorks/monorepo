@@ -44,6 +44,12 @@ type GRPCConfig struct {
 func authInterceptor(serviceToken string) grpc.UnaryClientInterceptor {
 	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 		md := metadata.MD{}
+		if existingMD, ok := metadata.FromOutgoingContext(ctx); ok {
+			md = existingMD.Copy()
+		}
+		md.Delete("authorization")
+		md.Delete("x-user-id")
+		md.Delete("x-tenant-id")
 
 		if userID := ctxkeys.GetUserID(ctx); userID != "" {
 			md.Set("x-user-id", userID)
@@ -57,11 +63,6 @@ func authInterceptor(serviceToken string) grpc.UnaryClientInterceptor {
 			md.Set("authorization", "Bearer "+jwtToken)
 		} else if serviceToken != "" {
 			md.Set("authorization", "Bearer "+serviceToken)
-		}
-
-		// Merge with existing outgoing metadata if any
-		if existingMD, ok := metadata.FromOutgoingContext(ctx); ok {
-			md = metadata.Join(existingMD, md)
 		}
 
 		ctx = metadata.NewOutgoingContext(ctx, md)

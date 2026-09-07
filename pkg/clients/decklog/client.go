@@ -216,7 +216,10 @@ func (c *BatchedClient) authContextFrom(ctx context.Context) context.Context {
 		ctx = context.Background()
 	}
 	if c.serviceToken != "" {
-		ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+c.serviceToken)
+		md, _ := metadata.FromOutgoingContext(ctx)
+		md = md.Copy()
+		md.Set("authorization", "Bearer "+c.serviceToken)
+		ctx = metadata.NewOutgoingContext(ctx, md)
 	}
 	return ctx
 }

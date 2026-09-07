@@ -15,6 +15,7 @@ type Interface interface {
 	Close() error
 	InvalidateTenantCacheKeys(tenantID string)
 	ValidateStreamKey(ctx context.Context, streamKey string) (*commodorepb.ValidateStreamKeyResponse, error)
+	ValidateStreamKeyAsService(ctx context.Context, streamKey string) (*commodorepb.ValidateStreamKeyResponse, error)
 	ValidateStreamKeyForClaim(ctx context.Context, streamKey, clusterID, claimToken string) (*commodorepb.ValidateStreamKeyResponse, error)
 	ListManagedStreams(ctx context.Context, clusterID string) (*commodorepb.ListManagedStreamsResponse, error)
 	ListStreamMonitoring(ctx context.Context, tenantID string) (*commodorepb.ListStreamMonitoringResponse, error)
@@ -113,7 +114,7 @@ type Interface interface {
 	SetNodeMode(ctx context.Context, req *foghorncontrolpb.SetNodeModeRequest) (*foghorncontrolpb.SetNodeModeResponse, error)
 	GetNodeHealth(ctx context.Context, req *foghorncontrolpb.GetNodeHealthRequest) (*foghorncontrolpb.GetNodeHealthResponse, error)
 	GetStreamPushTargets(ctx context.Context, streamID, tenantID string) ([]*commodorepb.PushTargetInternal, error)
-	UpdatePushTargetStatus(ctx context.Context, id, tenantID, status string, lastError *string) error
+	UpdatePushTargetStatus(ctx context.Context, id, tenantID, status, reasonCode string, lastError *string) error
 	CreatePushTarget(ctx context.Context, req *commodorepb.CreatePushTargetRequest) (*commodorepb.PushTarget, error)
 	ListPushTargets(ctx context.Context, streamID string) (*commodorepb.ListPushTargetsResponse, error)
 	UpdatePushTarget(ctx context.Context, req *commodorepb.UpdatePushTargetRequest) (*commodorepb.PushTarget, error)

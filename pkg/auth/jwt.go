@@ -7,12 +7,14 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 )
 
 var (
 	ErrInvalidJWT      = errors.New("invalid JWT token")
 	ErrExpiredJWT      = errors.New("JWT token expired")
 	ErrUnauthenticated = errors.New("authentication required")
+	ErrDelegatedJWT    = errors.New("delegated JWT is not an interactive session")
 )
 
 // RolePlatformOperator is the authorization role granting access to
@@ -23,6 +25,14 @@ const RolePlatformOperator = "platform_operator"
 // SessionTokenTTL is the access-token lifetime. Short by design; grant/role
 // changes propagate at the next refresh.
 const SessionTokenTTL = 15 * time.Minute
+
+// DelegatedAPITokenTTL bounds how long an internal service may rely on a
+// Gateway-validated API token before the original credential is checked again.
+const DelegatedAPITokenTTL = time.Minute
+
+// JWTClockSkewLeeway tolerates small host clock differences while preserving
+// the deliberately short delegated-token lifetime.
+const JWTClockSkewLeeway = 5 * time.Second
 
 // Claims represents JWT claims with tenant context.
 type Claims struct {
@@ -37,6 +47,11 @@ type Claims struct {
 	// AuthTime is the Unix time of the authentication event (OIDC `auth_time`).
 	// Set at mint; no authorization check reads it today.
 	AuthTime int64 `json:"auth_time,omitempty"`
+	// AuthType distinguishes short-lived API-token delegations from interactive
+	// sessions. Empty means an interactive session for backwards compatibility.
+	AuthType    string   `json:"auth_type,omitempty"`
+	TokenID     string   `json:"token_id,omitempty"`
+	Permissions []string `json:"permissions,omitempty"`
 	jwt.RegisteredClaims
 }
 
@@ -76,6 +91,31 @@ func GenerateJWT(userID, tenantID, email, role string, secret []byte) (string, e
 	return GenerateSessionJWT(userID, tenantID, email, role, nil, time.Time{}, secret)
 }
 
+// GenerateDelegatedAPITokenJWT mints the short-lived assertion Gateway sends
+// to a named downstream service after Commodore validates an API token.
+func GenerateDelegatedAPITokenJWT(userID, tenantID, email, role, tokenID string, permissions []string, audience string, secret []byte) (string, error) {
+	now := time.Now()
+	claims := &Claims{
+		UserID:      userID,
+		TenantID:    tenantID,
+		Email:       email,
+		Role:        role,
+		AuthType:    "api_token",
+		TokenID:     tokenID,
+		Permissions: slices.Clone(permissions),
+		RegisteredClaims: jwt.RegisteredClaims{
+			Audience:  jwt.ClaimStrings{audience},
+			Subject:   tokenID,
+			ID:        uuid.NewString(),
+			ExpiresAt: jwt.NewNumericDate(now.Add(DelegatedAPITokenTTL)),
+			IssuedAt:  jwt.NewNumericDate(now),
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(secret)
+}
+
 // ValidateJWT validates a JWT token and returns its claims
 func ValidateJWT(tokenString string, secret []byte) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (any, error) {
@@ -84,7 +124,7 @@ func ValidateJWT(tokenString string, secret []byte) (*Claims, error) {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
 		return secret, nil
-	})
+	}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}), jwt.WithIssuedAt(), jwt.WithLeeway(JWTClockSkewLeeway))
 
 	if err != nil {
 		if errors.Is(err, jwt.ErrTokenExpired) {
@@ -98,4 +138,18 @@ func ValidateJWT(tokenString string, secret []byte) (*Claims, error) {
 	}
 
 	return nil, ErrInvalidJWT
+}
+
+// ValidateInteractiveJWT validates a browser/session JWT and rejects internal
+// API-token assertions. Delegated assertions share the signing key so every
+// non-gRPC ingress must make this distinction explicitly.
+func ValidateInteractiveJWT(tokenString string, secret []byte) (*Claims, error) {
+	claims, err := ValidateJWT(tokenString, secret)
+	if err != nil {
+		return nil, err
+	}
+	if claims.AuthType == "api_token" || len(claims.Audience) > 0 {
+		return nil, ErrDelegatedJWT
+	}
+	return claims, nil
 }

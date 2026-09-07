@@ -43,11 +43,11 @@ func authInterceptor(serviceToken string) grpc.UnaryClientInterceptor {
 		}
 
 		md := metadata.MD{}
-		md.Set("authorization", "Bearer "+serviceToken)
-
 		if existingMD, ok := metadata.FromOutgoingContext(ctx); ok {
-			md = metadata.Join(existingMD, md)
+			md = existingMD.Copy()
 		}
+		md.Delete("authorization")
+		md.Set("authorization", "Bearer "+serviceToken)
 
 		ctx = metadata.NewOutgoingContext(ctx, md)
 		return invoker(ctx, method, req, reply, cc, opts...)

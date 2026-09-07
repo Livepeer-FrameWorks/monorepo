@@ -15,7 +15,9 @@ import (
 	x402pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/x402"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -48,42 +50,86 @@ type GRPCConfig struct {
 	// Logger for the client
 	Logger logging.Logger
 	// ServiceToken for service-to-service authentication (fallback when no user JWT)
-	ServiceToken  string
-	AllowInsecure bool
-	CACertFile    string
-	CACertPEM     string
-	ServerName    string
+	ServiceToken string
+	// DelegatedJWTSecret mints a fresh API-token assertion for each RPC attempt.
+	DelegatedJWTSecret []byte
+	// PreferServiceToken sends a pure service identity, without caller identity
+	// metadata, even when the context carries a user or delegated API token.
+	PreferServiceToken bool
+	AllowInsecure      bool
+	CACertFile         string
+	CACertPEM          string
+	ServerName         string
+}
+
+type serviceAuthContextKey struct{}
+
+func withServiceAuth(ctx context.Context) context.Context {
+	return context.WithValue(ctx, serviceAuthContextKey{}, struct{}{})
+}
+
+// timeoutInterceptor bounds every call at the configured timeout while
+// preserving a caller's shorter deadline.
+func timeoutInterceptor(timeout time.Duration) grpc.UnaryClientInterceptor {
+	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		if timeout <= 0 {
+			return invoker(ctx, method, req, reply, cc, opts...)
+		}
+		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= timeout {
+			return invoker(ctx, method, req, reply, cc, opts...)
+		}
+		ctx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		return invoker(ctx, method, req, reply, cc, opts...)
+	}
 }
 
 // authInterceptor propagates authentication to gRPC metadata.
 // This reads user_id, tenant_id, and jwt_token from the Go context (set by Gateway middleware)
 // and adds them to outgoing gRPC metadata for downstream services.
 // If no user JWT is available, it falls back to the service token for service-to-service calls.
-func authInterceptor(serviceToken string) grpc.UnaryClientInterceptor {
+func authInterceptor(serviceToken string, preferServiceToken bool, delegatedJWTSecret ...[]byte) grpc.UnaryClientInterceptor {
 	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
-		// Extract user context from Go context and add to gRPC metadata
+		forceServiceAuth := ctx.Value(serviceAuthContextKey{}) != nil || preferServiceToken
+		if forceServiceAuth && serviceToken == "" {
+			return status.Error(codes.Unauthenticated, "service token not configured")
+		}
 		md := metadata.MD{}
+		if existingMD, ok := metadata.FromOutgoingContext(ctx); ok {
+			md = existingMD.Copy()
+		}
+		md.Delete("authorization")
+		md.Delete("x-user-id")
+		md.Delete("x-tenant-id")
 
-		if userID := ctxkeys.GetUserID(ctx); userID != "" {
+		if userID := ctxkeys.GetUserID(ctx); userID != "" && !forceServiceAuth {
 			md.Set("x-user-id", userID)
 		}
-		if tenantID := ctxkeys.GetTenantID(ctx); tenantID != "" {
+		if tenantID := ctxkeys.GetTenantID(ctx); tenantID != "" && !forceServiceAuth {
 			md.Set("x-tenant-id", tenantID)
 		}
 		if ctxkeys.IsDemoMode(ctx) {
 			md.Set("x-demo-mode", "true")
 		}
 
-		// Use user's JWT from context if available, otherwise fall back to service token
-		if jwtToken := ctxkeys.GetJWTToken(ctx); jwtToken != "" {
-			md.Set("authorization", "Bearer "+jwtToken)
-		} else if serviceToken != "" {
-			md.Set("authorization", "Bearer "+serviceToken)
+		var signingSecret []byte
+		if len(delegatedJWTSecret) != 0 {
+			signingSecret = delegatedJWTSecret[0]
 		}
-
-		// Merge with existing outgoing metadata if any
-		if existingMD, ok := metadata.FromOutgoingContext(ctx); ok {
-			md = metadata.Join(existingMD, md)
+		if forceServiceAuth {
+			md.Set("authorization", "Bearer "+serviceToken)
+		} else {
+			delegatedToken, err := clients.DelegatedJWTForRPC(ctx, "purser", signingSecret)
+			if err != nil {
+				return status.Errorf(codes.Unauthenticated, "mint Purser API-token delegation: %v", err)
+			}
+			if delegatedToken != "" {
+				md.Set("authorization", "Bearer "+delegatedToken)
+			} else if jwtToken := ctxkeys.GetJWTToken(ctx); jwtToken != "" {
+				md.Set("authorization", "Bearer "+jwtToken)
+			} else if serviceToken != "" {
+				md.Set("authorization", "Bearer "+serviceToken)
+			}
 		}
 
 		ctx = metadata.NewOutgoingContext(ctx, md)
@@ -116,8 +162,9 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
 		grpc.WithChainUnaryInterceptor(
 			clients.MediaRequestObserverInterceptor("purser"),
-			authInterceptor(config.ServiceToken),
+			timeoutInterceptor(config.Timeout),
 			clients.FailsafeUnaryInterceptor("purser", config.Logger),
+			authInterceptor(config.ServiceToken, config.PreferServiceToken, config.DelegatedJWTSecret),
 		),
 	)
 	if err != nil {
@@ -558,7 +605,7 @@ func (c *GRPCClient) ChangeBillingTier(ctx context.Context, tenantID, tierID str
 // This is called by the Gateway's webhook router - signature verification
 // happens in Purser (secrets stay there).
 func (c *GRPCClient) ProcessWebhook(ctx context.Context, req *sharedpb.WebhookRequest) (*sharedpb.WebhookResponse, error) {
-	return c.webhook.ProcessWebhook(ctx, req)
+	return c.webhook.ProcessWebhook(withServiceAuth(ctx), req)
 }
 
 // ============================================================================
@@ -655,7 +702,7 @@ func (c *GRPCClient) UpdateBillingDetails(ctx context.Context, req *purserpb.Upd
 // GetPaymentRequirements returns x402 payment requirements for a 402 response.
 // Called by Gateway when returning HTTP 402 to include payment options.
 func (c *GRPCClient) GetPaymentRequirements(ctx context.Context, tenantID, resource string) (*purserpb.PaymentRequirements, error) {
-	return c.x402.GetPaymentRequirements(ctx, &purserpb.GetPaymentRequirementsRequest{
+	return c.x402.GetPaymentRequirements(withServiceAuth(ctx), &purserpb.GetPaymentRequirementsRequest{
 		TenantId: tenantID,
 		Resource: resource,
 		ClientIp: ctxkeys.GetClientIP(ctx),
@@ -665,7 +712,7 @@ func (c *GRPCClient) GetPaymentRequirements(ctx context.Context, tenantID, resou
 // VerifyX402Payment verifies an x402 payment payload without settling.
 // Returns validity status, payer address, amount, and whether billing details are required.
 func (c *GRPCClient) VerifyX402Payment(ctx context.Context, tenantID string, payment *x402pb.X402PaymentPayload, clientIP string) (*purserpb.VerifyX402PaymentResponse, error) {
-	return c.x402.VerifyX402Payment(ctx, &purserpb.VerifyX402PaymentRequest{
+	return c.x402.VerifyX402Payment(withServiceAuth(ctx), &purserpb.VerifyX402PaymentRequest{
 		TenantId: tenantID,
 		Payment:  payment,
 		ClientIp: clientIP,
@@ -675,7 +722,7 @@ func (c *GRPCClient) VerifyX402Payment(ctx context.Context, tenantID string, pay
 // SettleX402Payment settles an x402 payment on-chain and credits the tenant's balance.
 // Returns transaction hash, credited amount, and new balance.
 func (c *GRPCClient) SettleX402Payment(ctx context.Context, tenantID string, payment *x402pb.X402PaymentPayload, clientIP string) (*purserpb.SettleX402PaymentResponse, error) {
-	return c.x402.SettleX402Payment(ctx, &purserpb.SettleX402PaymentRequest{
+	return c.x402.SettleX402Payment(withServiceAuth(ctx), &purserpb.SettleX402PaymentRequest{
 		TenantId: tenantID,
 		Payment:  payment,
 		ClientIp: clientIP,
@@ -685,17 +732,17 @@ func (c *GRPCClient) SettleX402Payment(ctx context.Context, tenantID string, pay
 // GetTenantX402Address returns the per-tenant x402 deposit address.
 // Creates a new address on first call for a tenant.
 func (c *GRPCClient) GetTenantX402Address(ctx context.Context, tenantID string) (*purserpb.GetTenantX402AddressResponse, error) {
-	return c.x402.GetTenantX402Address(ctx, &purserpb.GetTenantX402AddressRequest{
+	return c.x402.GetTenantX402Address(withServiceAuth(ctx), &purserpb.GetTenantX402AddressRequest{
 		TenantId: tenantID,
 	})
 }
 
 func (c *GRPCClient) ClaimX402MutationResult(ctx context.Context, req *purserpb.ClaimX402MutationResultRequest) (*purserpb.ClaimX402MutationResultResponse, error) {
-	return c.x402.ClaimX402MutationResult(ctx, req)
+	return c.x402.ClaimX402MutationResult(withServiceAuth(ctx), req)
 }
 
 func (c *GRPCClient) CompleteX402MutationResult(ctx context.Context, req *purserpb.CompleteX402MutationResultRequest) (*purserpb.CompleteX402MutationResultResponse, error) {
-	return c.x402.CompleteX402MutationResult(ctx, req)
+	return c.x402.CompleteX402MutationResult(withServiceAuth(ctx), req)
 }
 
 func (c *GRPCClient) GetCryptoReadiness(ctx context.Context) (*purserpb.CryptoReadinessResponse, error) {

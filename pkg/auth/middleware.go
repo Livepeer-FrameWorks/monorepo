@@ -124,7 +124,7 @@ func JWTAuthMiddleware(secret []byte, opts ...JWTOption) gin.HandlerFunc {
 		}
 
 		// Try JWT validation
-		claims, err := ValidateJWT(token, secret)
+		claims, err := ValidateInteractiveJWT(token, secret)
 		if err == nil {
 			c.Set(string(ctxkeys.KeyUserID), claims.UserID)
 			c.Set(string(ctxkeys.KeyTenantID), claims.TenantID)

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/golang-jwt/jwt/v5"
 )
 
 var testSecret = []byte("test-secret-please-do-not-use-in-prod")
@@ -34,6 +36,12 @@ func TestMistAdminSessionRoundTrip(t *testing.T) {
 	if claims.Purpose != MistAdminSessionPurpose {
 		t.Errorf("purpose: %q", claims.Purpose)
 	}
+	if len(claims.Audience) != 1 || claims.Audience[0] != MistAdminSessionAudience {
+		t.Errorf("audience: %v", claims.Audience)
+	}
+	if _, err := ValidateInteractiveJWT(tok, testSecret); !errors.Is(err, ErrDelegatedJWT) {
+		t.Fatalf("Mist credential authenticated as an interactive session: %v", err)
+	}
 }
 
 func TestMistAdminSessionRejectsWrongNode(t *testing.T) {
@@ -56,9 +64,21 @@ func TestMistAdminSessionRejectsEmptyExpectedNode(t *testing.T) {
 }
 
 func TestMistAdminSessionRejectsExpired(t *testing.T) {
-	tok, _, _ := GenerateMistAdminSessionJWT("u1", "t1", "owner", "edge-us-1", "c1", 1*time.Nanosecond, testSecret)
-	time.Sleep(5 * time.Millisecond)
-	_, err := ValidateMistAdminSessionJWT(tok, testSecret, "edge-us-1")
+	now := time.Now()
+	claims := &MistAdminSessionClaims{
+		Purpose: MistAdminSessionPurpose,
+		NodeID:  "edge-us-1",
+		RegisteredClaims: jwt.RegisteredClaims{
+			Audience:  jwt.ClaimStrings{MistAdminSessionAudience},
+			IssuedAt:  jwt.NewNumericDate(now.Add(-2 * JWTClockSkewLeeway)),
+			ExpiresAt: jwt.NewNumericDate(now.Add(-JWTClockSkewLeeway - time.Second)),
+		},
+	}
+	tok, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(testSecret)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	_, err = ValidateMistAdminSessionJWT(tok, testSecret, "edge-us-1")
 	if !errors.Is(err, ErrExpiredMistAdminSession) {
 		t.Errorf("expected ErrExpiredMistAdminSession; got %v", err)
 	}
@@ -69,6 +89,69 @@ func TestMistAdminSessionRejectsWrongSecret(t *testing.T) {
 	_, err := ValidateMistAdminSessionJWT(tok, []byte("other-secret"), "edge-us-1")
 	if !errors.Is(err, ErrInvalidMistAdminSession) {
 		t.Errorf("expected ErrInvalidMistAdminSession; got %v", err)
+	}
+}
+
+func TestMistAdminSessionRejectsWrongAudience(t *testing.T) {
+	now := time.Now()
+	claims := &MistAdminSessionClaims{
+		Purpose: MistAdminSessionPurpose,
+		NodeID:  "edge-us-1",
+		RegisteredClaims: jwt.RegisteredClaims{
+			Audience:  jwt.ClaimStrings{"gateway"},
+			IssuedAt:  jwt.NewNumericDate(now),
+			ExpiresAt: jwt.NewNumericDate(now.Add(time.Minute)),
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, err := token.SignedString(testSecret)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	_, err = ValidateMistAdminSessionJWT(signed, testSecret, "edge-us-1")
+	if !errors.Is(err, ErrWrongMistAdminSessionAudience) {
+		t.Fatalf("wrong audience error = %v, want ErrWrongMistAdminSessionAudience", err)
+	}
+}
+
+func TestMistAdminSessionRequiresExpiration(t *testing.T) {
+	now := time.Now()
+	claims := &MistAdminSessionClaims{
+		Purpose: MistAdminSessionPurpose,
+		NodeID:  "edge-us-1",
+		RegisteredClaims: jwt.RegisteredClaims{
+			Audience: jwt.ClaimStrings{MistAdminSessionAudience},
+			IssuedAt: jwt.NewNumericDate(now),
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, err := token.SignedString(testSecret)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	if _, err = ValidateMistAdminSessionJWT(signed, testSecret, "edge-us-1"); !errors.Is(err, ErrInvalidMistAdminSession) {
+		t.Fatalf("missing expiry error = %v, want ErrInvalidMistAdminSession", err)
+	}
+}
+
+func TestMistAdminSessionAllowsClockSkew(t *testing.T) {
+	now := time.Now()
+	claims := &MistAdminSessionClaims{
+		Purpose: MistAdminSessionPurpose,
+		NodeID:  "edge-us-1",
+		RegisteredClaims: jwt.RegisteredClaims{
+			Audience:  jwt.ClaimStrings{MistAdminSessionAudience},
+			IssuedAt:  jwt.NewNumericDate(now.Add(JWTClockSkewLeeway - time.Second)),
+			ExpiresAt: jwt.NewNumericDate(now.Add(time.Minute)),
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signed, err := token.SignedString(testSecret)
+	if err != nil {
+		t.Fatalf("sign: %v", err)
+	}
+	if _, err = ValidateMistAdminSessionJWT(signed, testSecret, "edge-us-1"); err != nil {
+		t.Fatalf("within-leeway token rejected: %v", err)
 	}
 }
 

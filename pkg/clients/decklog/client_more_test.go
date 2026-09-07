@@ -73,6 +73,21 @@ func TestAuthContextFromAttachesToken(t *testing.T) {
 	}
 }
 
+func TestAuthContextFromReplacesCallerAuthorization(t *testing.T) {
+	c := &BatchedClient{serviceToken: "service-token"}
+	ctx := metadata.NewOutgoingContext(context.Background(), metadata.Pairs("authorization", "Bearer caller-token", "x-correlation-id", "correlation-1"))
+	md, ok := metadata.FromOutgoingContext(c.authContextFrom(ctx))
+	if !ok {
+		t.Fatal("expected outgoing metadata")
+	}
+	if got := md.Get("authorization"); len(got) != 1 || got[0] != "Bearer service-token" {
+		t.Fatalf("authorization = %v", got)
+	}
+	if got := md.Get("x-correlation-id"); len(got) != 1 || got[0] != "correlation-1" {
+		t.Fatalf("correlation metadata = %v", got)
+	}
+}
+
 func TestAuthContextFromNoTokenLeavesMetadataEmpty(t *testing.T) {
 	c := &BatchedClient{}
 	ctx := c.authContextFrom(context.Background())

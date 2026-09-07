@@ -49,11 +49,13 @@ type GRPCConfig struct {
 	// Logger for the client
 	Logger logging.Logger
 	// ServiceToken for service-to-service authentication (fallback when no user JWT)
-	ServiceToken  string
-	AllowInsecure bool
-	CACertFile    string
-	CACertPEM     string
-	ServerName    string
+	ServiceToken string
+	// DelegatedJWTSecret mints a fresh API-token assertion for each RPC attempt.
+	DelegatedJWTSecret []byte
+	AllowInsecure      bool
+	CACertFile         string
+	CACertPEM          string
+	ServerName         string
 }
 
 // periscopeTimeoutInterceptor bounds WaitForReady calls even when a shared
@@ -96,7 +98,7 @@ func withServiceAuth(ctx context.Context) context.Context {
 // This reads user_id, tenant_id, and jwt_token from the Go context (set by Gateway middleware)
 // and adds them to outgoing gRPC metadata for downstream services.
 // If no user JWT is available, it falls back to the service token for service-to-service calls.
-func authInterceptor(serviceToken string) grpc.UnaryClientInterceptor {
+func authInterceptor(serviceToken string, delegatedJWTSecret ...[]byte) grpc.UnaryClientInterceptor {
 	return func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
 		forceServiceAuth := ctx.Value(serviceAuthContextKey{}) != nil
 		if forceServiceAuth && serviceToken == "" {
@@ -105,6 +107,12 @@ func authInterceptor(serviceToken string) grpc.UnaryClientInterceptor {
 
 		// Extract user context from Go context and add to gRPC metadata
 		md := metadata.MD{}
+		if existingMD, ok := metadata.FromOutgoingContext(ctx); ok {
+			md = existingMD.Copy()
+		}
+		md.Delete("authorization")
+		md.Delete("x-user-id")
+		md.Delete("x-tenant-id")
 
 		if !forceServiceAuth {
 			if userID := ctxkeys.GetUserID(ctx); userID != "" {
@@ -116,15 +124,23 @@ func authInterceptor(serviceToken string) grpc.UnaryClientInterceptor {
 		}
 
 		// Use user's JWT from context if available, otherwise fall back to service token
-		if jwtToken := ctxkeys.GetJWTToken(ctx); jwtToken != "" && !forceServiceAuth {
+		var delegatedSecret []byte
+		if len(delegatedJWTSecret) > 0 {
+			delegatedSecret = delegatedJWTSecret[0]
+		}
+		if ctxkeys.GetAuthType(ctx) == "api_token" && !forceServiceAuth {
+			assertion, err := clients.DelegatedJWTForRPC(ctx, "periscope", delegatedSecret)
+			if err != nil {
+				return status.Errorf(codes.Unauthenticated, "mint Periscope delegation: %v", err)
+			}
+			if assertion == "" {
+				return status.Error(codes.Unauthenticated, "Periscope API-token delegation is not configured")
+			}
+			md.Set("authorization", "Bearer "+assertion)
+		} else if jwtToken := ctxkeys.GetJWTToken(ctx); jwtToken != "" && !forceServiceAuth {
 			md.Set("authorization", "Bearer "+jwtToken)
 		} else if serviceToken != "" {
 			md.Set("authorization", "Bearer "+serviceToken)
-		}
-
-		// Merge with existing outgoing metadata if any
-		if existingMD, ok := metadata.FromOutgoingContext(ctx); ok {
-			md = metadata.Join(existingMD, md)
 		}
 
 		ctx = metadata.NewOutgoingContext(ctx, md)
@@ -157,8 +173,8 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
 		grpc.WithChainUnaryInterceptor(
 			periscopeTimeoutInterceptor(config.Timeout),
-			authInterceptor(config.ServiceToken),
 			clients.FailsafeUnaryInterceptor("periscope", config.Logger),
+			authInterceptor(config.ServiceToken, config.DelegatedJWTSecret),
 		),
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
 			Time:                5 * time.Minute,  // Ping interval (must be >= server MinTime, default 5m)
@@ -541,7 +557,7 @@ func (c *GRPCClient) ListTenantActivity(ctx context.Context, timeRange *TimeRang
 
 // GetNetworkLiveStats returns platform-wide per-cluster live stats (no tenant filter).
 func (c *GRPCClient) GetNetworkLiveStats(ctx context.Context) (*periscopepb.GetNetworkLiveStatsResponse, error) {
-	return c.platform.GetNetworkLiveStats(ctx, &periscopepb.GetNetworkLiveStatsRequest{})
+	return c.platform.GetNetworkLiveStats(withServiceAuth(ctx), &periscopepb.GetNetworkLiveStatsRequest{})
 }
 
 // ============================================================================

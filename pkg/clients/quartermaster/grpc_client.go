@@ -17,8 +17,10 @@ import (
 	tenantlimitspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/tenant_limits"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -48,7 +50,10 @@ type GRPCConfig struct {
 	Logger logging.Logger
 	// ServiceToken for service-to-service authentication (fallback when no user JWT)
 	ServiceToken string
-	// PreferServiceToken sends ServiceToken even when the context carries a user JWT.
+	// DelegatedJWTSecret mints a fresh API-token assertion for each RPC attempt.
+	DelegatedJWTSecret []byte
+	// PreferServiceToken sends a pure service identity, without caller identity
+	// metadata, even when the context carries a user JWT.
 	PreferServiceToken bool
 	AllowInsecure      bool
 	CACertFile         string
@@ -56,32 +61,77 @@ type GRPCConfig struct {
 	ServerName         string
 }
 
+type serviceAuthContextKey struct{}
+
+func withServiceAuth(ctx context.Context) context.Context {
+	return context.WithValue(ctx, serviceAuthContextKey{}, struct{}{})
+}
+
+// timeoutInterceptor bounds every call at the configured timeout while
+// preserving a caller's shorter deadline.
+func timeoutInterceptor(timeout time.Duration) grpc.UnaryClientInterceptor {
+	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		if timeout <= 0 {
+			return invoker(ctx, method, req, reply, cc, opts...)
+		}
+		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= timeout {
+			return invoker(ctx, method, req, reply, cc, opts...)
+		}
+		ctx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		return invoker(ctx, method, req, reply, cc, opts...)
+	}
+}
+
 // authInterceptor propagates authentication to gRPC metadata.
 // This reads user_id, tenant_id, and jwt_token from the Go context (set by Gateway middleware)
 // and adds them to outgoing gRPC metadata for downstream services.
 // If no user JWT is available, it falls back to the service token for service-to-service calls.
-func authInterceptor(serviceToken string, preferServiceToken bool) grpc.UnaryClientInterceptor {
+func authInterceptor(serviceToken string, preferServiceToken bool, delegatedJWTSecret ...[]byte) grpc.UnaryClientInterceptor {
 	return func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
-		// Extract user context from Go context and add to gRPC metadata
-		md := metadata.MD{}
-
-		if userID := ctxkeys.GetUserID(ctx); userID != "" {
-			md.Set("x-user-id", userID)
+		forceServiceAuth := ctx.Value(serviceAuthContextKey{}) != nil || preferServiceToken
+		if forceServiceAuth && serviceToken == "" {
+			return status.Error(codes.Unauthenticated, "service token not configured")
 		}
-		if tenantID := ctxkeys.GetTenantID(ctx); tenantID != "" {
-			md.Set("x-tenant-id", tenantID)
+		// Preserve unrelated outgoing metadata, then replace authentication fields
+		// from the validated Go context. Joining would leave duplicate authorization
+		// values and let an older value win at the server.
+		md := metadata.MD{}
+		if existingMD, ok := metadata.FromOutgoingContext(ctx); ok {
+			md = existingMD.Copy()
+		}
+		md.Delete("authorization")
+		md.Delete("x-user-id")
+		md.Delete("x-tenant-id")
+
+		if !forceServiceAuth {
+			if userID := ctxkeys.GetUserID(ctx); userID != "" {
+				md.Set("x-user-id", userID)
+			}
+			if tenantID := ctxkeys.GetTenantID(ctx); tenantID != "" {
+				md.Set("x-tenant-id", tenantID)
+			}
 		}
 		if ctxkeys.IsDemoMode(ctx) {
 			md.Set("x-demo-mode", "true")
 		}
 
-		if token := outgoingAuthToken(ctx, serviceToken, preferServiceToken); token != "" {
-			md.Set("authorization", "Bearer "+token)
+		authToken := ""
+		if forceServiceAuth {
+			authToken = serviceToken
+		} else {
+			var signingSecret []byte
+			if len(delegatedJWTSecret) != 0 {
+				signingSecret = delegatedJWTSecret[0]
+			}
+			var err error
+			authToken, err = outgoingAuthTokenForRPC(ctx, serviceToken, signingSecret)
+			if err != nil {
+				return err
+			}
 		}
-
-		// Merge with existing outgoing metadata if any
-		if existingMD, ok := metadata.FromOutgoingContext(ctx); ok {
-			md = metadata.Join(existingMD, md)
+		if authToken != "" {
+			md.Set("authorization", "Bearer "+authToken)
 		}
 
 		ctx = metadata.NewOutgoingContext(ctx, md)
@@ -89,17 +139,21 @@ func authInterceptor(serviceToken string, preferServiceToken bool) grpc.UnaryCli
 	}
 }
 
-func outgoingAuthToken(ctx context.Context, configuredServiceToken string, preferServiceToken bool) string {
-	if preferServiceToken && configuredServiceToken != "" {
-		return configuredServiceToken
+func outgoingAuthTokenForRPC(ctx context.Context, configuredServiceToken string, delegatedJWTSecret []byte) (string, error) {
+	delegatedToken, err := clients.DelegatedJWTForRPC(ctx, "quartermaster", delegatedJWTSecret)
+	if err != nil {
+		return "", status.Errorf(codes.Unauthenticated, "mint Quartermaster API-token delegation: %v", err)
+	}
+	if delegatedToken != "" {
+		return delegatedToken, nil
 	}
 	if jwtToken := ctxkeys.GetJWTToken(ctx); jwtToken != "" {
-		return jwtToken
+		return jwtToken, nil
 	}
 	if contextServiceToken := ctxkeys.GetServiceToken(ctx); contextServiceToken != "" {
-		return contextServiceToken
+		return contextServiceToken, nil
 	}
-	return configuredServiceToken
+	return configuredServiceToken, nil
 }
 
 // NewGRPCClient creates a new gRPC client for Quartermaster
@@ -127,8 +181,9 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		grpc.WithDefaultCallOptions(grpc.WaitForReady(true)),
 		grpc.WithChainUnaryInterceptor(
 			clients.MediaRequestObserverInterceptor("quartermaster"),
-			authInterceptor(config.ServiceToken, config.PreferServiceToken),
+			timeoutInterceptor(config.Timeout),
 			clients.FailsafeUnaryInterceptor("quartermaster", config.Logger),
+			authInterceptor(config.ServiceToken, config.PreferServiceToken, config.DelegatedJWTSecret),
 		),
 	)
 	if err != nil {
@@ -280,6 +335,18 @@ func (c *GRPCClient) UpdateTenant(ctx context.Context, req *quartermasterpb.Upda
 	return c.tenant.UpdateTenant(ctx, req)
 }
 
+// ApplyTenantBillingEntitlements materializes Purser-owned DNS entitlement
+// state through Quartermaster's service-only, stale-write-fenced RPC.
+func (c *GRPCClient) ApplyTenantBillingEntitlements(ctx context.Context, req *quartermasterpb.ApplyTenantBillingEntitlementsRequest) (*quartermasterpb.ApplyTenantBillingEntitlementsResponse, error) {
+	return c.tenant.ApplyTenantBillingEntitlements(ctx, req)
+}
+
+// CompleteTenantDNSEntitlementHandoff publishes the durable release handoff
+// only after Purser has completed an error-free full subscription sweep.
+func (c *GRPCClient) CompleteTenantDNSEntitlementHandoff(ctx context.Context, subscriptionCount int64) (*quartermasterpb.CompleteTenantDNSEntitlementHandoffResponse, error) {
+	return c.tenant.CompleteTenantDNSEntitlementHandoff(ctx, &quartermasterpb.CompleteTenantDNSEntitlementHandoffRequest{SubscriptionCount: subscriptionCount})
+}
+
 // ResolveTenant resolves tenant context from various identifiers
 func (c *GRPCClient) ResolveTenant(ctx context.Context, req *quartermasterpb.ResolveTenantRequest) (*quartermasterpb.ResolveTenantResponse, error) {
 	return c.tenant.ResolveTenant(ctx, req)
@@ -316,6 +383,15 @@ func (c *GRPCClient) ListActiveTenantsWithMonitoring(ctx context.Context) ([]*qu
 // GetCluster gets a cluster by ID
 func (c *GRPCClient) GetCluster(ctx context.Context, clusterID string) (*quartermasterpb.ClusterResponse, error) {
 	return c.cluster.GetCluster(ctx, &quartermasterpb.GetClusterRequest{
+		ClusterId: clusterID,
+	})
+}
+
+// GetClusterAsService is for downstream services that must authorize a
+// caller-owned mutation against Quartermaster's authoritative ownership row.
+// It must not be used to return private cluster data directly to the caller.
+func (c *GRPCClient) GetClusterAsService(ctx context.Context, clusterID string) (*quartermasterpb.ClusterResponse, error) {
+	return c.cluster.GetCluster(withServiceAuth(ctx), &quartermasterpb.GetClusterRequest{
 		ClusterId: clusterID,
 	})
 }
@@ -774,7 +850,7 @@ func (c *GRPCClient) ValidateBootstrapTokenEx(ctx context.Context, req *quarterm
 // ============================================================================
 
 func (c *GRPCClient) GetServicePoolStatus(ctx context.Context, serviceType string) (*quartermasterpb.GetServicePoolStatusResponse, error) {
-	return c.bootstrap.GetServicePoolStatus(ctx, &quartermasterpb.GetServicePoolStatusRequest{ServiceType: serviceType})
+	return c.bootstrap.GetServicePoolStatus(withServiceAuth(ctx), &quartermasterpb.GetServicePoolStatusRequest{ServiceType: serviceType})
 }
 
 func (c *GRPCClient) AddToServicePool(ctx context.Context, req *quartermasterpb.AddToServicePoolRequest) (*quartermasterpb.AddToServicePoolResponse, error) {
@@ -885,14 +961,14 @@ func (c *GRPCClient) ListServiceClusterAssignments(ctx context.Context, instance
 
 // ListServicesHealth lists health status for all services
 func (c *GRPCClient) ListServicesHealth(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListServicesHealthResponse, error) {
-	return c.serviceRegistry.ListServicesHealth(ctx, &quartermasterpb.ListServicesHealthRequest{
+	return c.serviceRegistry.ListServicesHealth(withServiceAuth(ctx), &quartermasterpb.ListServicesHealthRequest{
 		Pagination: pagination,
 	})
 }
 
 // GetServiceHealth gets health status for a specific service
 func (c *GRPCClient) GetServiceHealth(ctx context.Context, serviceID string) (*quartermasterpb.ListServicesHealthResponse, error) {
-	return c.serviceRegistry.GetServiceHealth(ctx, &quartermasterpb.GetServiceHealthRequest{
+	return c.serviceRegistry.GetServiceHealth(withServiceAuth(ctx), &quartermasterpb.GetServiceHealthRequest{
 		ServiceId: serviceID,
 	})
 }

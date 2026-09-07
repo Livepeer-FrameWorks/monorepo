@@ -18,12 +18,17 @@ const (
 	KeyRole         Key = "role"
 	KeyJWTToken     Key = "jwt_token"
 	KeyAPIToken     Key = "api_token"
+	KeyAPITokenID   Key = "api_token_id"
 	KeyAPITokenHash Key = "api_token_hash"
 	KeyUser         Key = "user"
 	KeyAuthType     Key = "auth_type"
 	KeySessionToken Key = "session_token"
 	KeyWalletAddr   Key = "wallet_address"
 	KeyPermissions  Key = "permissions"
+	// KeyDelegatedJWTs carries short-lived, audience-bound internal assertions
+	// keyed by destination service. It is distinct from the interactive JWT so
+	// one service's assertion is never propagated to another service.
+	KeyDelegatedJWTs Key = "delegated_jwts"
 	// KeyPlatformOperator marks the authenticated principal as platform staff
 	// (the RFC 9068 platform_operator role). Set only from a verified token /
 	// validated credential, never trusted across the service boundary.
@@ -37,6 +42,7 @@ const KeyXPayment Key = "x_payment"
 const (
 	KeyServiceToken Key = "service_token"
 	KeyJWTExpiresAt Key = "jwt_expires_at"
+	KeyJWTID        Key = "jwt_id"
 	KeyClientIP     Key = "client_ip"
 	KeyRequestPath  Key = "request_path"
 	KeyRequestStart Key = "request_start"
@@ -174,6 +180,22 @@ func GetAPIToken(ctx context.Context) string {
 	return ""
 }
 
+// GetAPITokenID extracts the validated API-token record identifier.
+func GetAPITokenID(ctx context.Context) string {
+	if v, ok := ctx.Value(KeyAPITokenID).(string); ok {
+		return v
+	}
+	return ""
+}
+
+// GetJWTID extracts the validated JWT ID used for delegated-token replay checks.
+func GetJWTID(ctx context.Context) string {
+	if v, ok := ctx.Value(KeyJWTID).(string); ok {
+		return v
+	}
+	return ""
+}
+
 // GetAuthType extracts auth_type from context.
 func GetAuthType(ctx context.Context) string {
 	if v, ok := ctx.Value(KeyAuthType).(string); ok {
@@ -274,6 +296,15 @@ func GetPermissions(ctx context.Context) []string {
 		return v
 	}
 	return nil
+}
+
+// GetDelegatedJWT extracts the internal assertion minted for one downstream
+// service. Missing maps and audiences fail closed with an empty token.
+func GetDelegatedJWT(ctx context.Context, audience string) string {
+	if values, ok := ctx.Value(KeyDelegatedJWTs).(map[string]string); ok {
+		return values[audience]
+	}
+	return ""
 }
 
 // IsPlatformOperator reports whether the context carries the platform operator
