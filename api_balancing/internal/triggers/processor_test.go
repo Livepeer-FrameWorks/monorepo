@@ -43,6 +43,15 @@ func counterValue(t *testing.T, c prometheus.Counter) float64 {
 	return m.GetCounter().GetValue()
 }
 
+func TestPushTargetActivationRevisionIsAlwaysPositive(t *testing.T) {
+	if got := pushTargetActivationRevision(0); got != 1 {
+		t.Fatalf("connected fallback revision=%d, want 1", got)
+	}
+	if got := pushTargetActivationRevision(17); got != 17 {
+		t.Fatalf("local authority revision=%d, want 17", got)
+	}
+}
+
 // TestPayloadTypeAssertions verifies that handlers return errors for wrong payload types
 // instead of panicking on nil pointer dereference.
 func TestPayloadTypeAssertions(t *testing.T) {
@@ -1115,6 +1124,10 @@ func (s *stubCommodoreInternalService) ValidateStreamKey(ctx context.Context, re
 	return s.validateResponse, s.validateErr
 }
 
+func (s *stubCommodoreInternalService) CheckStreamKey(ctx context.Context, req *commodorepb.ValidateStreamKeyRequest) (*commodorepb.ValidateStreamKeyResponse, error) {
+	return s.ValidateStreamKey(ctx, req)
+}
+
 func (s *stubCommodoreInternalService) SetValidateResponseQueue(responses ...*commodorepb.ValidateStreamKeyResponse) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1670,6 +1683,7 @@ func setupCommodoreClientWithStub(t *testing.T, response *commodorepb.ValidateSt
 		GRPCAddr:      listener.Addr().String(),
 		Logger:        logging.Logger(logrus.New()),
 		AllowInsecure: true,
+		ServiceToken:  "test-commodore-service-token",
 	})
 	if err != nil {
 		server.Stop()
@@ -1708,6 +1722,7 @@ func setupCommodoreResolveIdentifierClient(t *testing.T, response *commodorepb.R
 		GRPCAddr:      listener.Addr().String(),
 		Logger:        logging.Logger(logrus.New()),
 		AllowInsecure: true,
+		ServiceToken:  "test-commodore-service-token",
 	})
 	if err != nil {
 		server.Stop()

@@ -245,3 +245,18 @@ func nodeIdentityAuthorityUnavailable(err error, resolverConfigured bool) bool {
 		return false
 	}
 }
+
+func shouldAttemptDurableNodeAdmission(fingerprintResolved bool, err error, resolverConfigured bool, _ string) bool {
+	// Enrollment tokens are one-time bootstrap credentials, not a reason to
+	// bypass an already pinned local admission during an authority outage.
+	return !fingerprintResolved && nodeIdentityAuthorityUnavailable(err, resolverConfigured)
+}
+
+func nodeIdentityAuthorityRejected(err error) bool {
+	switch status.Code(err) {
+	case codes.NotFound, codes.PermissionDenied, codes.FailedPrecondition, codes.InvalidArgument, codes.Unauthenticated:
+		return true
+	default:
+		return false
+	}
+}

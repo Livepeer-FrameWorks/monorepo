@@ -79,6 +79,17 @@ type cacheMetricVectors struct {
 	errors *prometheus.CounterVec
 }
 
+func federationFoghornPoolConfig(serviceToken string, logger logging.Logger, allowInsecure bool, caCertFile, serverName string) foghornpool.PoolConfig {
+	return foghornpool.PoolConfig{
+		ServiceToken:  serviceToken,
+		Timeout:       federation.BulkListTimeout,
+		Logger:        logger,
+		AllowInsecure: allowInsecure,
+		CACertFile:    caCertFile,
+		ServerName:    serverName,
+	}
+}
+
 // newServiceCache binds cache activity to a fixed namespace. Cache hooks
 // receive the full lookup key, which can be a publishing credential or client
 // address and must never become a Prometheus label.
@@ -461,6 +472,11 @@ func main() {
 	})
 
 	// Create custom load balancing metrics
+	rollingUpgradeFallbacks := metricsCollector.NewCounter(
+		"rolling_upgrade_fallbacks_total",
+		"Compatibility fallbacks used for absent optional fields during a rolling control-plane upgrade",
+		[]string{"contract"},
+	)
 	metrics := &handlers.FoghornMetrics{
 		// Distribution across nodes is derived from
 		// rate(foghorn_routing_decisions_total{selected_node=...}[5m]) at query
@@ -468,6 +484,12 @@ func main() {
 		// being selected.
 		RoutingDecisions:      metricsCollector.NewCounter("routing_decisions_total", "Routing decisions made", []string{"algorithm", "selected_node"}),
 		NodeSelectionDuration: metricsCollector.NewHistogram("node_selection_duration_seconds", "Node selection latency", []string{}, nil),
+		SourceAuthorizationRejected: metricsCollector.NewCounter(
+			"source_authorization_rejected_total",
+			"Public node-bound source lookups rejected before origin disclosure, by reason",
+			[]string{"reason"},
+		),
+		RollingUpgradeFallbacks: rollingUpgradeFallbacks,
 		LivepeerAuthRejected: metricsCollector.NewCounter(
 			"livepeer_auth_rejected_total",
 			"Livepeer gateway auth-webhook rejections by reason",
@@ -532,6 +554,16 @@ func main() {
 			[]string{"operation", "result"},
 		),
 		AdmissionPayloadCrypto: admissionPayloadCrypto,
+		RestreamReconcile: metricsCollector.NewCounter(
+			"restream_reconcile_total",
+			"Restream desired-state command delivery and correlated acknowledgement outcomes",
+			[]string{"operation", "outcome"},
+		),
+		OfflineEffectDeadLetters: metricsCollector.NewCounter(
+			"offline_effect_dead_letters_total",
+			"Durable ingest-offline obligations retained after exhaustion or revived by a late acknowledgement",
+			[]string{"outcome"},
+		),
 	})
 	go control.RunAdmissionEffectEncryptionMigration(context.Background(), logger)
 
@@ -746,8 +778,10 @@ func main() {
 	// Purser (gRPC) - x402 settlement + billing checks
 	purserGRPCURL := config.GetEnv("PURSER_GRPC_ADDR", "purser:19003")
 	purserClient, err := purserclient.NewGRPCClient(purserclient.GRPCConfig{
-		GRPCAddr:      purserGRPCURL,
-		Timeout:       30 * time.Second,
+		GRPCAddr: purserGRPCURL,
+		// Settlement may legitimately consume the facilitator's full 30-second
+		// budget; leave headroom for Purser's surrounding persistence work.
+		Timeout:       45 * time.Second,
 		Logger:        logger,
 		ServiceToken:  serviceToken,
 		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
@@ -1062,13 +1096,13 @@ func main() {
 			IsServedCluster:   control.IsServedCluster,
 		})
 
-		fedPool := foghornpool.NewPool(foghornpool.PoolConfig{
-			ServiceToken:  serviceToken,
-			Logger:        logger,
-			AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-			CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-			ServerName:    config.GetServiceGRPCTLSServerName("foghorn"),
-		})
+		fedPool := foghornpool.NewPool(federationFoghornPoolConfig(
+			serviceToken,
+			logger,
+			config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
+			config.GetEnv("GRPC_TLS_CA_PATH", ""),
+			config.GetServiceGRPCTLSServerName("foghorn"),
+		))
 		defer fedPool.Close()
 
 		peerManager = federation.NewPeerManager(federation.PeerManagerConfig{
@@ -1115,6 +1149,12 @@ func main() {
 		[]string{"reason", "service"},
 	)
 	triggerProcessor := triggers.NewProcessor(logger, commodoreClient, decklogClient, lb, geoipReader)
+	control.SetTerminalPushTargetActivationHandler(triggerProcessor.HandleTerminalPushTargetActivation)
+	control.SetPushTargetActivationResultHandler(triggerProcessor.HandlePushTargetActivationResult)
+	control.SetPushTargetDeactivationHandler(triggerProcessor.HandlePushTargetDeactivation)
+	restreamRenewalCtx, cancelRestreamRenewal := context.WithCancel(context.Background())
+	defer cancelRestreamRenewal()
+	go triggerProcessor.RunRestreamCapacityRenewal(restreamRenewalCtx)
 	control.SetManagedStreamPlacementWriter(managedplacementoutbox.NewWriter(db))
 	signingKeyUseWriter := signingkeyuseoutbox.NewWriter(db)
 	signingKeyUseRecorder := signingkeyuseoutbox.NewAsyncRecorder(signingKeyUseWriter, logger)
@@ -1178,6 +1218,12 @@ func main() {
 		),
 		MediaAuthorityLocalReads: mediaAuthorityLocalReads,
 		MediaAuthorityShadow:     mediaAuthorityShadow,
+		RollingUpgradeFallbacks:  rollingUpgradeFallbacks,
+		RestreamFinalFences: metricsCollector.NewCounter(
+			"restream_final_fence_total",
+			"Restream final-fact decisions at the durable Mist push identity fence",
+			[]string{"outcome"},
+		),
 	})
 	if geoipReader != nil && geoipCache != nil {
 		triggerProcessor.SetGeoIPCache(geoipCache)
@@ -1502,11 +1548,20 @@ func main() {
 		}
 		foghornServer.SetMediaAuthorityStore(authorityStore)
 		triggerProcessor.SetMediaAuthorityStore(authorityStore)
+		authorityStore.SetApplyObserver(triggerProcessor.HandleMediaAuthorityApply)
 		control.SetLocalMediaAuthorityStore(authorityStore)
 		go authorityStore.RunAuditRetention(context.Background(), logger)
 		logger.WithFields(logging.Fields{"trusted_signers": len(trust), "control_cell_id": mediaAuthorityCellID}).Info("Signed media authority apply enabled")
 	} else {
 		logger.Warn("MEDIA_AUTHORITY_TRUST_SET is not configured; signed media authority apply is disabled")
+	}
+	pushStatusMetrics := &pushstatusoutbox.Metrics{Outcomes: metricsCollector.NewCounter(
+		"push_target_status_outbox_outcomes_total",
+		"Durable push-target status delivery outcomes",
+		[]string{"outcome"},
+	)}
+	for _, outcome := range []string{"claim_error", "delivered", "retry", "retry_error", "settle_error", "superseded", "terminal_not_found"} {
+		pushStatusMetrics.Outcomes.WithLabelValues(outcome).Add(0)
 	}
 	var commodoreDependentWorkers sync.Once
 	onCommodoreConnected := func(client *commodore.GRPCClient) {
@@ -1523,7 +1578,7 @@ func main() {
 			})
 		}
 		commodoreDependentWorkers.Do(func() {
-			go pushstatusoutbox.NewWorker(db, client, logger).Run(context.Background())
+			go pushstatusoutbox.NewWorker(db, client, logger, pushStatusMetrics).Run(context.Background())
 			go managedplacementoutbox.NewWorker(db, client, logger).Run(context.Background())
 			go signingkeyuseoutbox.NewWorker(db, client, logger).Run(context.Background())
 		})

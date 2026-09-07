@@ -103,7 +103,7 @@ func installMockDBOrch(t *testing.T) sqlmock.Sqlmock {
 // state manager is reset by the caller via state.ResetDefaultManagerForTests().
 func seedNativeNodeOrch(sm *state.StreamStateManager, nodeID, clusterID string) {
 	sm.TouchNode(nodeID, true)
-	sm.SetNodeRuntimeInfo(nodeID, "native", "linux", "amd64")
+	sm.SetNodeRuntimeInfo(nodeID, "native", "linux", "amd64", "cpu")
 	sm.SetNodeConnectionInfo(context.Background(), nodeID, "", "", clusterID, nil)
 }
 
@@ -262,7 +262,7 @@ func TestReconcileTarget_NoEligibleNodesIsNoopOrch(t *testing.T) {
 	// A legacy multi-container docker node in the target cluster is present
 	// but NOT eligible (native and single-image container nodes are).
 	sm.TouchNode("docker-node", true)
-	sm.SetNodeRuntimeInfo("docker-node", "docker", "linux", "amd64")
+	sm.SetNodeRuntimeInfo("docker-node", "docker", "linux", "amd64", "cpu")
 	sm.SetNodeConnectionInfo(context.Background(), "docker-node", "", "", "cluster-a", nil)
 
 	qm := startQMFakeOrch(t, &clusterReleaseFakeOrch{

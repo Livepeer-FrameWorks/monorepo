@@ -396,6 +396,7 @@ type NodeState struct {
 	DeployMode           string              `json:"deploy_mode,omitempty"`
 	OS                   string              `json:"os,omitempty"`
 	Arch                 string              `json:"arch,omitempty"`
+	ONNXProfile          string              `json:"onnx_profile,omitempty"`
 	Latitude             *float64            `json:"latitude,omitempty"`
 	Longitude            *float64            `json:"longitude,omitempty"`
 	Location             string              `json:"location,omitempty"`
@@ -3917,7 +3918,7 @@ func (sm *StreamStateManager) ApplyNodeLifecycle(ctx context.Context, update *ip
 	}
 	sm.TouchNode(update.GetNodeId(), update.GetIsHealthy())
 	sm.SetNodeInfo(update.GetNodeId(), update.GetBaseUrl(), update.GetIsHealthy(), latPtr, lonPtr, update.GetLocation(), update.GetOutputsJson(), nil)
-	sm.SetNodeRuntimeInfo(update.GetNodeId(), update.GetDeployMode(), update.GetOs(), update.GetArch())
+	sm.SetNodeRuntimeInfo(update.GetNodeId(), update.GetDeployMode(), update.GetOs(), update.GetArch(), update.GetOnnxProfile())
 	sm.setNodeDiskUsageForLifecycle(update.GetNodeId(), update.GetDiskTotalBytes(), update.GetDiskUsedBytes())
 	sm.UpdateNodeMetrics(update.GetNodeId(), struct {
 		CPU                  float64
@@ -3991,7 +3992,7 @@ func (sm *StreamStateManager) ApplyNodeLifecycle(ctx context.Context, update *ip
 	return nil
 }
 
-func (sm *StreamStateManager) SetNodeRuntimeInfo(nodeID, deployMode, osName, arch string) {
+func (sm *StreamStateManager) SetNodeRuntimeInfo(nodeID, deployMode, osName, arch, onnxProfile string) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 	n := sm.nodes[nodeID]
@@ -4007,6 +4008,9 @@ func (sm *StreamStateManager) SetNodeRuntimeInfo(nodeID, deployMode, osName, arc
 	}
 	if arch = strings.TrimSpace(arch); arch != "" {
 		n.Arch = arch
+	}
+	if onnxProfile = strings.TrimSpace(onnxProfile); onnxProfile != "" {
+		n.ONNXProfile = onnxProfile
 	}
 }
 

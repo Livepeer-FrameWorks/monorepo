@@ -49,6 +49,10 @@ func (c *placementCapturingCommodore) ValidateStreamKey(_ context.Context, _ *co
 	}, nil
 }
 
+func (c *placementCapturingCommodore) CheckStreamKey(ctx context.Context, req *commodorepb.ValidateStreamKeyRequest) (*commodorepb.ValidateStreamKeyResponse, error) {
+	return c.ValidateStreamKey(ctx, req)
+}
+
 func (c *placementCapturingCommodore) SyncActiveIngestPlacement(_ context.Context, req *commodorepb.SyncActiveIngestPlacementRequest) (*commodorepb.SyncActiveIngestPlacementResponse, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -78,6 +82,7 @@ func processorWithPlacementCommodore(t *testing.T) (*Processor, *placementCaptur
 		GRPCAddr:      listener.Addr().String(),
 		Logger:        logging.Logger(logrus.New()),
 		AllowInsecure: true,
+		ServiceToken:  "test-commodore-service-token",
 	})
 	if err != nil {
 		server.Stop()

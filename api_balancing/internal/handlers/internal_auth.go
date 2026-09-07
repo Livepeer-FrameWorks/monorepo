@@ -58,7 +58,7 @@ func requireInternalIdentity(mutation bool) gin.HandlerFunc {
 			}
 		}
 
-		claims, err := auth.ValidateJWT(token, []byte(os.Getenv("JWT_SECRET")))
+		claims, err := auth.ValidateInteractiveJWT(token, []byte(os.Getenv("JWT_SECRET")))
 		if err != nil || !claims.HasRole(auth.RolePlatformOperator) {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "platform operator authorization required"})
 			return

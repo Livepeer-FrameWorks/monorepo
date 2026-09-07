@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"frameworks/api_balancing/internal/database/foghorndb"
@@ -22,17 +23,56 @@ type OfflineEffectIntent struct {
 
 // OfflineEffect is one leased durable offline transition.
 type OfflineEffect struct {
-	ID               int64
-	TenantID         string
-	InternalName     string
-	NodeID           string
-	SourceGeneration string
-	SourceRevision   int64
-	SetNodeOffline   bool
-	TeardownStream   bool
-	BroadcastOffline bool
-	DecklogTrigger   []byte
-	LeaseToken       string
+	ID                   int64
+	TenantID             string
+	InternalName         string
+	NodeID               string
+	SourceGeneration     string
+	SourceRevision       int64
+	SetNodeOffline       bool
+	SetNodeOfflineDone   bool
+	TeardownStream       bool
+	TeardownDone         bool
+	BroadcastOffline     bool
+	BroadcastOfflineDone bool
+	DecklogTrigger       []byte
+	DecklogDone          bool
+	LeaseToken           string
+}
+
+// OfflineEffectLegResults records the locally completed legs from one unlocked
+// dispatch pass. Teardown completion is intentionally absent: only Helmsman's
+// generation-correlated post-stop inventory acknowledgement can settle it.
+type OfflineEffectLegResults struct {
+	SetNodeOfflineDone   bool
+	BroadcastOfflineDone bool
+	DecklogDone          bool
+}
+
+type OfflineEffectDeadLetter struct {
+	ID             int64
+	TenantID       string
+	InternalName   string
+	SourceRevision int64
+	LastError      string
+}
+
+func FailExhaustedOfflineEffects(ctx context.Context) ([]OfflineEffectDeadLetter, error) {
+	if db == nil {
+		return nil, nil
+	}
+	rows, err := foghorndb.New(db).FailExhaustedOfflineEffects(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("dead-letter exhausted offline effects: %w", err)
+	}
+	out := make([]OfflineEffectDeadLetter, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, OfflineEffectDeadLetter{
+			ID: row.ID, TenantID: row.TenantID, InternalName: row.StreamInternalName,
+			SourceRevision: row.SourceRevision, LastError: row.LastError.String,
+		})
+	}
+	return out, nil
 }
 
 // ErrOfflineEffectSuperseded means a newer source transition already won the shared revision CAS.
@@ -62,6 +102,12 @@ func ReleaseOfflineEffectNotOwner(ctx context.Context, effect OfflineEffect, aut
 func enqueueOfflineEffectTx(ctx context.Context, tx *sql.Tx, tenantID, internalName, nodeID, generation string, revision int64, intent OfflineEffectIntent) error {
 	if revision <= 0 {
 		return fmt.Errorf("enqueue offline effect requires positive source revision")
+	}
+	if strings.TrimSpace(generation) == "" {
+		// There is no correlation key an acknowledgement could safely echo.
+		// Other offline legs still apply; runtime teardown is left to Mist's
+		// already-empty inventory/restart reconciliation.
+		intent.TeardownStream = false
 	}
 	err := foghorndb.New(tx).EnqueueOfflineEffect(ctx, foghorndb.EnqueueOfflineEffectParams{
 		TenantID: tenantID, StreamInternalName: internalName, SourceNodeID: nodeID,
@@ -97,18 +143,54 @@ func ClaimOfflineEffects(ctx context.Context, limit int, lease time.Duration, in
 		out = append(out, OfflineEffect{
 			ID: row.ID, TenantID: row.TenantID, InternalName: row.StreamInternalName, NodeID: row.SourceNodeID,
 			SourceGeneration: row.SourceGeneration, SourceRevision: row.SourceRevision,
-			SetNodeOffline: row.SetNodeOffline, TeardownStream: row.TeardownStream, BroadcastOffline: row.BroadcastOffline,
-			DecklogTrigger: row.DecklogTrigger, LeaseToken: row.LeaseToken,
+			SetNodeOffline: row.SetNodeOffline, SetNodeOfflineDone: row.SetNodeOfflineDone,
+			TeardownStream: row.TeardownStream, TeardownDone: row.TeardownDone,
+			BroadcastOffline: row.BroadcastOffline, BroadcastOfflineDone: row.BroadcastOfflineDone,
+			DecklogTrigger: row.DecklogTrigger, DecklogDone: row.DecklogDone, LeaseToken: row.LeaseToken,
 		})
 	}
 	return out, nil
 }
 
-// ApplyClaimedOfflineEffect serializes the final no-active-session check and every external effect
-// against admission with the shared stream advisory lock. The callback runs while the lock is held;
-// a reconnect therefore either commits first and supersedes the row, or waits until the complete
-// idempotent teardown finishes and then re-establishes live state.
-func ApplyClaimedOfflineEffect(ctx context.Context, effect OfflineEffect, apply func(context.Context, OfflineEffect) error) (bool, error) {
+type offlineLegFlags struct {
+	nodeOffline, teardown, broadcast, decklog bool
+}
+
+func (f offlineLegFlags) allDone(effect OfflineEffect) bool {
+	return (!effect.SetNodeOffline || f.nodeOffline) &&
+		(!effect.TeardownStream || f.teardown) &&
+		(!effect.BroadcastOffline || f.broadcast) &&
+		(len(effect.DecklogTrigger) == 0 || f.decklog)
+}
+
+func readOfflineLegsLocked(ctx context.Context, tx *sql.Tx, effect OfflineEffect) (offlineLegFlags, error) {
+	row, err := foghorndb.New(tx).ReadOfflineEffectLegsLocked(ctx, foghorndb.ReadOfflineEffectLegsLockedParams{
+		EffectID: effect.ID, LeaseToken: effect.LeaseToken,
+	})
+	return offlineLegFlags{
+		nodeOffline: row.SetNodeOfflineDone, teardown: row.TeardownDone,
+		broadcast: row.BroadcastOfflineDone, decklog: row.DecklogDone,
+	}, err
+}
+
+func settleOfflineEffectLocked(ctx context.Context, tx *sql.Tx, effect OfflineEffect, flags offlineLegFlags, releaseLease bool) (bool, error) {
+	n, err := foghorndb.New(tx).SettleOfflineEffect(ctx, foghorndb.SettleOfflineEffectParams{
+		SetNodeOfflineDone: flags.nodeOffline, TeardownDone: flags.teardown,
+		BroadcastOfflineDone: flags.broadcast, DecklogDone: flags.decklog,
+		ReleaseLease: releaseLease, EffectID: effect.ID, LeaseToken: effect.LeaseToken,
+	})
+	if err != nil {
+		return false, fmt.Errorf("settle offline effect legs: %w", err)
+	}
+	return flags.allDone(effect) && n == 1, nil
+}
+
+// ApplyClaimedOfflineEffect uses the same three-phase pattern as admission
+// effects: verify authority under the stream lock, perform network I/O without
+// locks, then merge acknowledgements and completed local legs under the lock.
+// This prevents a slow Helmsman call from blocking a reconnect and ensures an
+// acknowledgement wait re-dispatches only teardown, never Decklog or federation.
+func ApplyClaimedOfflineEffect(ctx context.Context, effect OfflineEffect, apply func(context.Context, OfflineEffect) (OfflineEffectLegResults, error)) (bool, error) {
 	if db == nil {
 		return false, fmt.Errorf("apply offline effect: no database configured")
 	}
@@ -124,13 +206,17 @@ func ApplyClaimedOfflineEffect(ctx context.Context, effect OfflineEffect, apply 
 	if lockErr := qtx.AcquireDVRStartLock(ctx, ingestStreamAdvisoryLockKey(effect.TenantID, effect.InternalName)); lockErr != nil {
 		return false, fmt.Errorf("lock offline effect stream: %w", lockErr)
 	}
-	_, err = qtx.LockOfflineEffectLease(ctx, foghorndb.LockOfflineEffectLeaseParams{EffectID: effect.ID, LeaseToken: effect.LeaseToken})
+	flags, err := readOfflineLegsLocked(ctx, tx, effect)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, tx.Commit()
 	}
 	if err != nil {
 		return false, fmt.Errorf("lock offline effect lease: %w", err)
 	}
+	effect.SetNodeOfflineDone = flags.nodeOffline
+	effect.TeardownDone = flags.teardown
+	effect.BroadcastOfflineDone = flags.broadcast
+	effect.DecklogDone = flags.decklog
 	active, probeErr := qtx.HasActiveIngestSession(ctx, foghorndb.HasActiveIngestSessionParams{TenantID: effect.TenantID, StreamInternalName: effect.InternalName})
 	if probeErr != nil {
 		return false, fmt.Errorf("recheck offline effect authority: %w", probeErr)
@@ -145,30 +231,88 @@ func ApplyClaimedOfflineEffect(ctx context.Context, effect OfflineEffect, apply 
 		}
 		return n == 1, nil
 	}
+	if commitErr := tx.Commit(); commitErr != nil {
+		return false, fmt.Errorf("commit offline effect authority phase: %w", commitErr)
+	}
 	if apply == nil {
 		return false, errors.New("apply offline effect callback is nil")
 	}
-	if applyErr := apply(ctx, effect); applyErr != nil {
-		if errors.Is(applyErr, ErrOfflineEffectSuperseded) {
-			n, updateErr := qtx.SupersedeOfflineEffect(ctx, foghorndb.SupersedeOfflineEffectParams{EffectID: effect.ID, LeaseToken: effect.LeaseToken})
-			if updateErr != nil {
-				return false, fmt.Errorf("supersede offline effect after revision CAS: %w", updateErr)
-			}
-			if commitErr := tx.Commit(); commitErr != nil {
-				return false, fmt.Errorf("commit superseded offline effect after revision CAS: %w", commitErr)
-			}
-			return n == 1, nil
+
+	legs, applyErr := apply(ctx, effect)
+
+	tx3, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, errors.Join(applyErr, fmt.Errorf("begin offline effect settle tx: %w", err))
+	}
+	defer rollbackQuiet(tx3)
+	qtx3 := foghorndb.New(tx3)
+	if lockErr := qtx3.AcquireDVRStartLock(ctx, ingestStreamAdvisoryLockKey(effect.TenantID, effect.InternalName)); lockErr != nil {
+		return false, errors.Join(applyErr, fmt.Errorf("lock offline effect stream for settle: %w", lockErr))
+	}
+	current, err := readOfflineLegsLocked(ctx, tx3, effect)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, errors.Join(applyErr, tx3.Commit())
+	}
+	if err != nil {
+		return false, errors.Join(applyErr, fmt.Errorf("re-read offline effect legs: %w", err))
+	}
+	active, err = qtx3.HasActiveIngestSession(ctx, foghorndb.HasActiveIngestSessionParams{TenantID: effect.TenantID, StreamInternalName: effect.InternalName})
+	if err != nil {
+		return false, errors.Join(applyErr, fmt.Errorf("recheck offline effect authority for settle: %w", err))
+	}
+	if active || errors.Is(applyErr, ErrOfflineEffectSuperseded) {
+		n, updateErr := qtx3.SupersedeOfflineEffect(ctx, foghorndb.SupersedeOfflineEffectParams{EffectID: effect.ID, LeaseToken: effect.LeaseToken})
+		if updateErr != nil {
+			return false, errors.Join(applyErr, fmt.Errorf("supersede offline effect after dispatch: %w", updateErr))
 		}
+		if commitErr := tx3.Commit(); commitErr != nil {
+			return false, errors.Join(applyErr, fmt.Errorf("commit superseded offline effect after dispatch: %w", commitErr))
+		}
+		return n == 1, nil
+	}
+	current.nodeOffline = current.nodeOffline || legs.SetNodeOfflineDone
+	current.broadcast = current.broadcast || legs.BroadcastOfflineDone
+	current.decklog = current.decklog || legs.DecklogDone
+	completed, err := settleOfflineEffectLocked(ctx, tx3, effect, current, applyErr == nil)
+	if err != nil {
+		return false, errors.Join(applyErr, err)
+	}
+	if commitErr := tx3.Commit(); commitErr != nil {
+		return false, errors.Join(applyErr, fmt.Errorf("commit offline effect settle: %w", commitErr))
+	}
+	if applyErr != nil {
 		return false, applyErr
 	}
-	n, err := qtx.CompleteOfflineEffect(ctx, foghorndb.CompleteOfflineEffectParams{EffectID: effect.ID, LeaseToken: effect.LeaseToken})
+	return completed, nil
+}
+
+// MarkOfflineTeardownDone records Helmsman's post-stop PushList convergence
+// proof. The authenticated node identity and exact source generation prevent a
+// stale or cross-node acknowledgement from completing another teardown.
+func MarkOfflineTeardownDone(ctx context.Context, nodeID, sourceGeneration string) error {
+	if db == nil {
+		return nil
+	}
+	if strings.TrimSpace(nodeID) == "" || strings.TrimSpace(sourceGeneration) == "" {
+		return errors.New("mark offline teardown requires node and source generation")
+	}
+	queries := foghorndb.New(db)
+	revived, err := queries.ReviveFailedOfflineTeardownDone(ctx, foghorndb.ReviveFailedOfflineTeardownDoneParams{
+		SourceNodeID: nodeID, SourceGeneration: sourceGeneration,
+	})
 	if err != nil {
-		return false, fmt.Errorf("complete offline effect: %w", err)
+		return fmt.Errorf("revive failed offline teardown: %w", err)
 	}
-	if commitErr := tx.Commit(); commitErr != nil {
-		return false, fmt.Errorf("commit offline effect: %w", commitErr)
+	if revived > 0 {
+		ObserveOfflineEffectDeadLetter("revived")
 	}
-	return n == 1, nil
+	_, err = queries.MarkOfflineTeardownDone(ctx, foghorndb.MarkOfflineTeardownDoneParams{
+		SourceNodeID: nodeID, SourceGeneration: sourceGeneration,
+	})
+	if err != nil {
+		return fmt.Errorf("mark offline teardown done: %w", err)
+	}
+	return nil
 }
 
 // FailOfflineEffect releases a failed lease with bounded exponential backoff.

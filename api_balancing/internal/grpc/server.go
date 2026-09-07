@@ -359,6 +359,8 @@ func (s *FoghornGRPCServer) SetPeerManager(pm *federation.PeerManager) {
 
 // forwardArtifactToFederation fans out a ForwardArtifactCommand to all known peers.
 // Returns (handled, error). If any peer reports handled=true, stops immediately.
+const artifactForwardPeerTimeout = 10 * time.Second
+
 func (s *FoghornGRPCServer) forwardArtifactToFederation(ctx context.Context, command, artifactHash, tenantID, streamID string) (bool, error) {
 	if ctx.Value(ctxkeys.KeyNoForward) != nil {
 		return false, nil
@@ -378,9 +380,6 @@ func (s *FoghornGRPCServer) forwardArtifactToFederation(ctx context.Context, com
 		return false, nil
 	}
 
-	fwdCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-
 	clusterIDs := make([]string, 0, len(peers))
 	for clusterID := range peers {
 		clusterIDs = append(clusterIDs, clusterID)
@@ -399,7 +398,9 @@ func (s *FoghornGRPCServer) forwardArtifactToFederation(ctx context.Context, com
 		if clusterID == s.clusterID {
 			continue
 		}
-		resp, err := s.federationClient.ForwardArtifactCommand(fwdCtx, clusterID, addr, req)
+		peerCtx, cancel := context.WithTimeout(ctx, artifactForwardPeerTimeout)
+		resp, err := s.federationClient.ForwardArtifactCommand(peerCtx, clusterID, addr, req)
+		cancel()
 		if err != nil {
 			s.logger.WithError(err).WithFields(logging.Fields{
 				"peer_cluster":  clusterID,

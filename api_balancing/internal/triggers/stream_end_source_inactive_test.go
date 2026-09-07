@@ -102,7 +102,7 @@ func TestApplyOfflineEffect_RetriesFailedNodeDispatchAfterLocalCleanup(t *testin
 	dispatchErr := errors.New("control stream unavailable")
 	p := minimalProcessorForStreamEnd(t)
 	p.sendDeactivatePushTargets = func(context.Context, string, *ipcpb.DeactivatePushTargets) error { return dispatchErr }
-	err := p.ApplyOfflineEffect(context.Background(), control.OfflineEffect{
+	_, err := p.ApplyOfflineEffect(context.Background(), control.OfflineEffect{
 		TenantID: tenant, InternalName: internal, NodeID: node,
 		SourceGeneration: "generation-retry", SourceRevision: 2,
 		SetNodeOffline: true, TeardownStream: true, BroadcastOffline: true,
@@ -110,8 +110,8 @@ func TestApplyOfflineEffect_RetriesFailedNodeDispatchAfterLocalCleanup(t *testin
 	if !errors.Is(err, dispatchErr) {
 		t.Fatalf("ApplyOfflineEffect error = %v, want node dispatch failure", err)
 	}
-	if _, found := lookupPushTarget("live+"+internal, "rtmp://example/retry"); found {
-		t.Fatal("local push-target tracking must be cleared before the node dispatch retry")
+	if tracked, found := lookupPushTarget("live+"+internal, "rtmp://example/retry"); !found || !tracked.Current {
+		t.Fatal("target must remain current until Helmsman reports its terminal state")
 	}
 }
 
@@ -128,7 +128,7 @@ func TestApplyOfflineEffect_ThreadsCanceledContextToNodeDispatch(t *testing.T) {
 		observed = dispatchCtx.Err()
 		return observed
 	}
-	err := p.ApplyOfflineEffect(ctx, control.OfflineEffect{
+	_, err := p.ApplyOfflineEffect(ctx, control.OfflineEffect{
 		TenantID:         "tenant-context",
 		InternalName:     internal,
 		NodeID:           "node-context",
@@ -392,15 +392,15 @@ func TestOwnerVanishRunsStreamEndFinalization(t *testing.T) {
 	if err != nil {
 		t.Fatalf("owner vanish handleStreamLifecycleUpdate: %v", err)
 	}
-	if err := p.ApplyOfflineEffect(context.Background(), control.OfflineEffect{
+	if _, err := p.ApplyOfflineEffect(context.Background(), control.OfflineEffect{
 		TenantID: tenantID, InternalName: internal, NodeID: "node-ingest", SourceRevision: 2,
 		SetNodeOffline: true, TeardownStream: true, BroadcastOffline: true,
 	}); err != nil {
 		t.Fatalf("apply durable offline effect: %v", err)
 	}
 
-	if _, found := lookupPushTarget(streamName, "rtmp://example/push"); found {
-		t.Fatal("owner vanish must drop push-target tracking")
+	if tracked, found := lookupPushTarget(streamName, "rtmp://example/push"); !found || !tracked.Current {
+		t.Fatal("owner vanish must keep target current until terminal runtime status arrives")
 	}
 	// SourceActive cleared with ownership retained → a same-node reconnect resumes.
 	if _, active, ok := reg.SourceGenerationSnapshot(internal, "node-ingest"); !ok || active {
@@ -516,14 +516,14 @@ func TestHandleStreamEnd_StreamWideEffectsAreOwnerGated(t *testing.T) {
 	if _, _, err := p.handleStreamEnd(endTrigger("node-ingest")); err != nil {
 		t.Fatalf("owner handleStreamEnd: %v", err)
 	}
-	if err := p.ApplyOfflineEffect(context.Background(), control.OfflineEffect{
+	if _, err := p.ApplyOfflineEffect(context.Background(), control.OfflineEffect{
 		TenantID: tenantID, InternalName: internal, NodeID: "node-ingest", SourceRevision: 2,
 		SetNodeOffline: true, TeardownStream: true, BroadcastOffline: true,
 	}); err != nil {
 		t.Fatalf("apply durable offline effect: %v", err)
 	}
-	if _, found := lookupPushTarget(streamName, "rtmp://example/push"); found {
-		t.Fatal("owner STREAM_END must drop push-target tracking")
+	if tracked, found := lookupPushTarget(streamName, "rtmp://example/push"); !found || !tracked.Current {
+		t.Fatal("owner STREAM_END must keep target current until terminal runtime status arrives")
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet SQL expectations: %v", err)

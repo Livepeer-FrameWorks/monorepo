@@ -24,6 +24,12 @@ type releaseComponent struct {
 	ArtifactURL string                     `json:"artifact_url"`
 	Checksum    string                     `json:"checksum"`
 	Artifacts   map[string]releaseArtifact `json:"artifacts"`
+	Variants    map[string]releaseVariant  `json:"variants,omitempty"`
+	ONNXProfile string                     `json:"onnx_profile,omitempty"`
+}
+
+type releaseVariant struct {
+	Artifacts map[string]releaseArtifact `json:"artifacts"`
 }
 
 type releaseArtifact struct {
@@ -256,7 +262,7 @@ func buildComponentsForNode(ctx context.Context, components map[string]releaseCo
 		if current != nil && current[component] == desired.Version {
 			continue
 		}
-		selected, ok := releaseComponentForNode(desired, node)
+		selected, ok := releaseComponentForNode(component, desired, node)
 		if !ok {
 			if err := persistPhase(ctx, node.NodeID, targetRelease, "failed", fmt.Sprintf("release artifact for %s is not available for %s", component, nodePlatformKey(node)), time.Now()); err != nil {
 				return nil, false, err
@@ -345,6 +351,7 @@ func desiredComponentMessage(component string, desired releaseComponent) *ipcpb.
 		Version:     desired.Version,
 		ArtifactUrl: desired.ArtifactURL,
 		Checksum:    desired.Checksum,
+		OnnxProfile: desired.ONNXProfile,
 	}
 }
 
@@ -388,15 +395,35 @@ func nodeAllowsAutomaticReleaseUpdate(node *state.NodeState) bool {
 	return node.OperationalMode == "" || node.OperationalMode == state.NodeModeNormal
 }
 
-func releaseComponentForNode(component releaseComponent, node *state.NodeState) (releaseComponent, bool) {
+func releaseComponentForNode(componentName string, component releaseComponent, node *state.NodeState) (releaseComponent, bool) {
 	platform := nodePlatformKey(node)
 	if platform == "" {
+		return releaseComponent{}, false
+	}
+	profile := strings.ToLower(strings.TrimSpace(node.ONNXProfile))
+	if profile == "" {
+		profile = "cpu"
+	}
+	if profile != "cpu" && (componentName == "mist" || len(component.Variants) > 0) {
+		variant, ok := component.Variants[profile]
+		if !ok {
+			return releaseComponent{}, false
+		}
+		for _, key := range platformAliases(platform) {
+			if artifact, ok := variant.Artifacts[key]; ok {
+				component.ArtifactURL = artifact.ArtifactURL
+				component.Checksum = artifact.Checksum
+				component.ONNXProfile = profile
+				return component, true
+			}
+		}
 		return releaseComponent{}, false
 	}
 	for _, key := range platformAliases(platform) {
 		if artifact, ok := component.Artifacts[key]; ok {
 			component.ArtifactURL = artifact.ArtifactURL
 			component.Checksum = artifact.Checksum
+			component.ONNXProfile = profile
 			return component, true
 		}
 	}

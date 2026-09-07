@@ -39,11 +39,14 @@ const (
 )
 
 type ApplyResult struct {
-	Status    ApplyStatus
-	Kind      string
-	ID        string
-	Version   uint64
-	Refreshed bool
+	Status       ApplyStatus
+	Kind         string
+	ID           string
+	Version      uint64
+	Refreshed    bool
+	TenantID     string
+	StreamID     string
+	InternalName string
 }
 
 type Store struct {
@@ -56,6 +59,16 @@ type Store struct {
 	refresh        *refreshCoordinator
 	runtimePeers   RuntimePeerResolver
 	applyOutcomes  *prometheus.CounterVec
+	applyObserver  func(context.Context, ApplyResult) error
+}
+
+// SetApplyObserver installs a post-commit observer. Returning an error makes
+// authority delivery retry; duplicate delivery invokes the observer again, so
+// a transient reconciliation failure cannot lose a live target mutation.
+func (s *Store) SetApplyObserver(observer func(context.Context, ApplyResult) error) {
+	if s != nil {
+		s.applyObserver = observer
+	}
 }
 
 // RuntimePeerResolver supplies cell-local liveness and addresses. Those
@@ -139,6 +152,14 @@ func (s *Store) Apply(ctx context.Context, encoded []byte) (result ApplyResult, 
 	envelope := verified.Envelope
 	kind := authorityKind(envelope.GetKind())
 	result = ApplyResult{Kind: kind, ID: envelope.GetAuthorityId(), Version: envelope.GetAuthorityVersion(), Refreshed: verified.NeedsRefresh}
+	if tenant := verified.Tenant; tenant != nil {
+		result.TenantID = tenant.GetTenantId()
+	}
+	if object := verified.MediaObject; object != nil {
+		result.TenantID = object.GetTenantId()
+		result.InternalName = object.GetInternalName()
+		result.StreamID = object.GetLiveStream().GetStreamId()
+	}
 
 	tx, beginErr := s.db.BeginTx(ctx, nil)
 	if beginErr != nil {
@@ -205,6 +226,9 @@ func (s *Store) Apply(ctx context.Context, encoded []byte) (result ApplyResult, 
 			return ApplyResult{}, fmt.Errorf("commit duplicate media authority audit: %w", err)
 		}
 		result.Status = ApplyStatusDuplicate
+		if s.applyObserver != nil {
+			return result, s.applyObserver(ctx, result)
+		}
 		return result, nil
 	case currentErr != nil && !errors.Is(currentErr, sql.ErrNoRows):
 		return ApplyResult{}, fmt.Errorf("load current media authority: %w", currentErr)
@@ -245,6 +269,9 @@ func (s *Store) Apply(ctx context.Context, encoded []byte) (result ApplyResult, 
 		return ApplyResult{}, fmt.Errorf("commit media authority apply: %w", err)
 	}
 	result.Status = ApplyStatusApplied
+	if s.applyObserver != nil {
+		return result, s.applyObserver(ctx, result)
+	}
 	return result, nil
 }
 

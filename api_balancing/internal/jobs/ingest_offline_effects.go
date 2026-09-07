@@ -11,11 +11,11 @@ import (
 )
 
 // IngestOfflineEffectsJob drains the durable, revision-fenced stream-offline ledger. The control
-// layer holds the stream advisory lock across the final authority check and Apply callback, so a
-// reconnect cannot interleave with a partial teardown.
+// layer verifies authority and settles completed legs under the stream advisory lock, but releases
+// that lock while external effects run so a reconnect cannot be blocked by node or federation I/O.
 type IngestOfflineEffectsJob struct {
 	logger         logging.Logger
-	apply          func(context.Context, control.OfflineEffect) error
+	apply          func(context.Context, control.OfflineEffect) (control.OfflineEffectLegResults, error)
 	leaderInstance func() string
 	interval       time.Duration
 	stopCh         chan struct{}
@@ -25,7 +25,7 @@ type IngestOfflineEffectsJob struct {
 
 type IngestOfflineEffectsConfig struct {
 	Logger   logging.Logger
-	Apply    func(context.Context, control.OfflineEffect) error
+	Apply    func(context.Context, control.OfflineEffect) (control.OfflineEffectLegResults, error)
 	Interval time.Duration
 	// LeaderInstance resolves the federation leader's instance id for leader-affine deferrals.
 	LeaderInstance func() string
@@ -87,6 +87,19 @@ func (j *IngestOfflineEffectsJob) RunOnce(parent context.Context) {
 		}
 	}
 	instanceID := control.GetInstanceID()
+	deadLetters, deadLetterErr := control.FailExhaustedOfflineEffects(ctx)
+	if deadLetterErr != nil {
+		j.logger.WithError(deadLetterErr).Warn("Failed to transition exhausted offline effects")
+	} else {
+		for _, deadLetter := range deadLetters {
+			control.ObserveOfflineEffectDeadLetter("retained")
+			j.logger.WithFields(logging.Fields{
+				"effect_id": deadLetter.ID, "tenant_id": deadLetter.TenantID,
+				"stream": deadLetter.InternalName, "revision": deadLetter.SourceRevision,
+				"last_error": deadLetter.LastError,
+			}).Error("Ingest offline effect exhausted its retry budget; retaining dead letter")
+		}
+	}
 	claimedAt := time.Now()
 	const lease = 30 * time.Second
 	const leaseMargin = 15 * time.Second

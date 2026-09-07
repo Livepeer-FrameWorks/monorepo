@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"net/http/httptest"
 	"net/url"
 	"strings"
@@ -9,8 +10,12 @@ import (
 
 	"frameworks/api_balancing/internal/control"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	"github.com/gin-gonic/gin"
+	"google.golang.org/protobuf/proto"
 )
 
 // withLoggerGetSource installs a real package-global logger for the duration of
@@ -125,6 +130,209 @@ func TestHandleGetSourceRedirectMode(t *testing.T) {
 	}
 	if loc := w.Header().Get("Location"); loc != "dtsc://origin.example:4200" {
 		t.Fatalf("redirect Location = %q, want dtsc://origin.example:4200", loc)
+	}
+}
+
+func withSourceAuthorizationGetSource(t *testing.T, tenantID string, allowed bool) {
+	t.Helper()
+	previousResolver := resolveSourceAuthorityFn
+	previousAccess := sourceClusterAccessibleForScope
+	resolveSourceAuthorityFn = func(context.Context, string) (ctxkeys.ClusterServeScope, bool) {
+		return control.NewClusterServeScope(tenantID, "cluster-1", nil), tenantID != ""
+	}
+	sourceClusterAccessibleForScope = func(clusterID string, scope ctxkeys.ClusterServeScope) bool {
+		if clusterID != "cluster-edge-a" || scope.TenantID != tenantID {
+			t.Fatalf("source authority evaluated cluster=%q tenant=%q", clusterID, scope.TenantID)
+		}
+		return allowed
+	}
+	t.Cleanup(func() {
+		resolveSourceAuthorityFn = previousResolver
+		sourceClusterAccessibleForScope = previousAccess
+	})
+}
+
+// A signed public /source capability authenticates an edge cluster, not the
+// queried stream. Reject a stream owned by another tenant before local origin
+// selection can disclose its DTSC address.
+func TestHandleGetSourceRejectsUnauthorizedSignedCallerBeforeOriginDisclosure(t *testing.T) {
+	sm := withSeededBalancer(t)
+	withLoggerGetSource(t)
+	withSourceAuthorizationGetSource(t, "tenant-b", false)
+	seedNodeWithStream(t, sm, seedNode{
+		nodeID: "origin-b", host: "origin-b.example", active: true,
+		ramMax: 100, ramCur: 10, cpu: 50,
+	}, "live+tenantb", 0, 0, 0)
+
+	q := url.Values{}
+	c, w := newSourceRequestGetSource("/", q)
+	c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), ctxkeys.KeyAuthenticatedNodeCluster, "cluster-edge-a"))
+	handleGetSource(c, "live+tenantb", q)
+
+	if w.Code != 200 {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	if got := w.Body.String(); got != "push://" {
+		t.Fatalf("unauthorized live source body = %q, want push://", got)
+	}
+	if strings.Contains(w.Body.String(), "dtsc://") {
+		t.Fatalf("unauthorized response disclosed origin: %q", w.Body.String())
+	}
+}
+
+func TestHandleGetSourceAllowsAuthorizedSignedCaller(t *testing.T) {
+	sm := withSeededBalancer(t)
+	withLoggerGetSource(t)
+	withSourceAuthorizationGetSource(t, "tenant-a", true)
+	lb.SetClusterServeAuthorizer(control.ClusterServeAccessibleForScope)
+	seedNodeWithStream(t, sm, seedNode{
+		nodeID: "origin-a", host: "origin-a.example", active: true,
+		tags: []string{"edge"}, ramMax: 100, ramCur: 10, cpu: 50,
+	}, "live+tenanta", 0, 0, 0)
+
+	q := url.Values{}
+	c, w := newSourceRequestGetSource("/", q)
+	c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), ctxkeys.KeyAuthenticatedNodeCluster, "cluster-edge-a"))
+	handleGetSource(c, "live+tenanta", q)
+
+	if got := w.Body.String(); got != "dtsc://origin-a.example:4200" {
+		t.Fatalf("authorized source body = %q, want origin DTSC", got)
+	}
+}
+
+func TestHandleGetSourceRejectsSignedCallerWhenTenantAuthorityUnavailable(t *testing.T) {
+	withSeededBalancer(t)
+	withLoggerGetSource(t)
+	previousResolver := resolveSourceAuthorityFn
+	previousAccess := sourceClusterAccessibleForScope
+	resolveSourceAuthorityFn = func(context.Context, string) (ctxkeys.ClusterServeScope, bool) {
+		return ctxkeys.ClusterServeScope{}, false
+	}
+	sourceClusterAccessibleForScope = func(string, ctxkeys.ClusterServeScope) bool {
+		t.Fatal("cluster access must not run without resolved tenant authority")
+		return false
+	}
+	t.Cleanup(func() {
+		resolveSourceAuthorityFn = previousResolver
+		sourceClusterAccessibleForScope = previousAccess
+	})
+
+	q := url.Values{}
+	c, w := newSourceRequestGetSource("/", q)
+	c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), ctxkeys.KeyAuthenticatedNodeCluster, "cluster-edge-a"))
+	handleGetSource(c, "live+unknown", q)
+
+	if got := w.Body.String(); got != "push://" {
+		t.Fatalf("unresolved live authority body = %q, want push://", got)
+	}
+}
+
+func TestResolveSourceAuthorityFallsThroughTransientLocalErrorToExactCommodorePolicy(t *testing.T) {
+	startBalancingCommodoreFake(t, &commodoreBalancingFake{
+		internalName: func(context.Context, *commodorepb.ResolveInternalNameRequest) (*commodorepb.ResolveInternalNameResponse, error) {
+			return &commodorepb.ResolveInternalNameResponse{
+				TenantId: "tenant-1", OfficialClusterId: "official-1",
+				AllowPlatformSharedPlayback: false, ServePolicyResolved: proto.Bool(true),
+			}, nil
+		},
+	})
+	previousLocal := resolveLocalSourceContent
+	resolveLocalSourceContent = func(context.Context, string) (*control.ContentResolution, bool, error) {
+		return nil, true, errors.New("transient local database error")
+	}
+	t.Cleanup(func() { resolveLocalSourceContent = previousLocal })
+
+	scope, ok := resolveSourceAuthority(context.Background(), "live+demo")
+	if !ok || scope.TenantID != "tenant-1" || scope.OfficialClusterID != "official-1" {
+		t.Fatalf("fallback scope = (%+v, %v), want exact Commodore tenant policy", scope, ok)
+	}
+	if scope.AllowPlatformSharedPlayback {
+		t.Fatal("Commodore opt-out was widened to platform-shared access")
+	}
+}
+
+func TestResolveSourceAuthorityPrefersExactLocalServePolicy(t *testing.T) {
+	previousLocal := resolveLocalSourceContent
+	resolveLocalSourceContent = func(context.Context, string) (*control.ContentResolution, bool, error) {
+		return &control.ContentResolution{
+			TenantId:                    "tenant-local",
+			OfficialClusterID:           "official-local",
+			AuthorityClusterPeers:       []*clusterpeerpb.TenantClusterPeer{{ClusterId: "peer-local"}},
+			AllowPlatformSharedPlayback: false,
+		}, true, nil
+	}
+	t.Cleanup(func() { resolveLocalSourceContent = previousLocal })
+
+	scope, ok := resolveSourceAuthority(context.Background(), "live+local")
+	if !ok || scope.TenantID != "tenant-local" || scope.OfficialClusterID != "official-local" {
+		t.Fatalf("local scope = (%+v, %v)", scope, ok)
+	}
+	if scope.AllowPlatformSharedPlayback || len(scope.PeerClusterIDs) != 1 || scope.PeerClusterIDs[0] != "peer-local" {
+		t.Fatalf("local policy was widened or lost: %+v", scope)
+	}
+}
+
+func TestResolveSourceAuthorityUsesLegacyEnvelopeOnlyWhenPolicyPresenceIsAbsent(t *testing.T) {
+	startBalancingCommodoreFake(t, &commodoreBalancingFake{
+		internalName: func(context.Context, *commodorepb.ResolveInternalNameRequest) (*commodorepb.ResolveInternalNameResponse, error) {
+			return &commodorepb.ResolveInternalNameResponse{
+				TenantId: "tenant-legacy", OriginClusterId: "origin-legacy",
+				ClusterPeers: []*clusterpeerpb.TenantClusterPeer{{ClusterId: "peer-legacy"}},
+			}, nil
+		},
+	})
+	previousLocal := resolveLocalSourceContent
+	resolveLocalSourceContent = func(context.Context, string) (*control.ContentResolution, bool, error) {
+		return nil, false, nil
+	}
+	t.Cleanup(func() { resolveLocalSourceContent = previousLocal })
+
+	scope, ok := resolveSourceAuthority(context.Background(), "live+legacy")
+	if !ok || scope.TenantID != "tenant-legacy" || scope.OfficialClusterID != "origin-legacy" {
+		t.Fatalf("legacy fallback scope = (%+v, %v)", scope, ok)
+	}
+	if !scope.AllowPlatformSharedPlayback || len(scope.PeerClusterIDs) != 1 || scope.PeerClusterIDs[0] != "peer-legacy" {
+		t.Fatalf("legacy fallback did not preserve pre-policy envelope: %+v", scope)
+	}
+}
+
+func TestResolveSourceAuthorityExplicitUnresolvedPolicyFailsClosed(t *testing.T) {
+	startBalancingCommodoreFake(t, &commodoreBalancingFake{
+		internalName: func(context.Context, *commodorepb.ResolveInternalNameRequest) (*commodorepb.ResolveInternalNameResponse, error) {
+			return &commodorepb.ResolveInternalNameResponse{
+				TenantId: "tenant-1", OriginClusterId: "origin-1",
+				ServePolicyResolved: proto.Bool(false),
+			}, nil
+		},
+	})
+	previousLocal := resolveLocalSourceContent
+	resolveLocalSourceContent = func(context.Context, string) (*control.ContentResolution, bool, error) {
+		return nil, false, nil
+	}
+	t.Cleanup(func() { resolveLocalSourceContent = previousLocal })
+
+	if scope, ok := resolveSourceAuthority(context.Background(), "live+denied"); ok {
+		t.Fatalf("explicit unresolved policy widened to legacy scope: %+v", scope)
+	}
+}
+
+func TestAuthorizeSourceCallerUsesPureServeScopeForPlatformSharedCell(t *testing.T) {
+	previousResolver := resolveSourceAuthorityFn
+	previousAccess := sourceClusterAccessibleForScope
+	resolveSourceAuthorityFn = func(context.Context, string) (ctxkeys.ClusterServeScope, bool) {
+		return control.NewClusterServeScope("tenant-free", "official-other", nil, true), true
+	}
+	sourceClusterAccessibleForScope = control.ClusterServeAccessibleForScope
+	t.Cleanup(func() {
+		resolveSourceAuthorityFn = previousResolver
+		sourceClusterAccessibleForScope = previousAccess
+	})
+	control.AddPlatformSharedCluster("platform-shared-source-auth-test")
+
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthenticatedNodeCluster, "platform-shared-source-auth-test")
+	scope, reason := authorizeSourceCaller(ctx, "live+tenant-free")
+	if reason != "" || scope.TenantID != "tenant-free" {
+		t.Fatalf("authorizeSourceCaller = (%+v, %q), want tenant-free allowed", scope, reason)
 	}
 }
 

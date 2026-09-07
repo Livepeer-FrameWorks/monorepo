@@ -5,6 +5,7 @@ package control
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"reflect"
 	"testing"
@@ -13,6 +14,8 @@ import (
 	"frameworks/api_balancing/internal/database/foghorndb"
 	fieldcrypto "github.com/Livepeer-FrameWorks/monorepo/pkg/crypto"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"google.golang.org/protobuf/proto"
 )
 
 const sourceProjectionCounterBase = int64(4503599627370496)
@@ -42,6 +45,165 @@ func TestSourceProjectionRepairAllocatorKeyScoped_RealPG(t *testing.T) {
 	}
 	if !(first < repaired && repaired < next) {
 		t.Fatalf("source revisions first=%d repaired=%d next=%d, want strict order", first, repaired, next)
+	}
+}
+
+func TestCapacityPendingRestreamRearmUsesBoundedStableRunCycle_RealPG(t *testing.T) {
+	previousEncryptor := admissionEffectEncryptor
+	t.Cleanup(func() { admissionEffectEncryptor = previousEncryptor })
+	if err := ConfigureAdmissionEffectEncryption("test-foghorn-state-key"); err != nil {
+		t.Fatal(err)
+	}
+	conn := startRealPG(t)
+	prev := db
+	SetDB(conn)
+	t.Cleanup(func() { SetDB(prev) })
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	const (
+		nodeID       = "node-capacity-rearm"
+		internalName = "live+capacity-rearm"
+		oldAttempt   = "11111111-2222-4333-8444-555555555555"
+	)
+	generation := seedOpenIngestSession(t, ingA, nodeID, internalName, "capacity-rearm", 777, time.Now().UnixMilli())
+	activation := &ipcpb.ActivatePushTargets{
+		StreamName: internalName, SourceGeneration: generation, TargetRevision: 9, ActivationAttempt: oldAttempt,
+		Targets: []*ipcpb.PushTargetSpec{{TargetId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", TargetUri: "rtmp://example.test/live/key"}},
+	}
+	raw, err := proto.Marshal(activation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	protected, err := protectAdmissionPushTargets(raw, ingA, internalName, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.ExecContext(ctx, `
+		INSERT INTO foghorn.ingest_admission_effects
+			(tenant_id, stream_internal_name, node_id, source_generation, source_revision,
+			 push_targets, target_revision, capacity_pending, drain_done, activation_done,
+			 broadcast_done, decklog_done, state, attempts, next_attempt_at)
+		VALUES ($1::uuid, $2, $3, $4::uuid, 777, $5, 9, TRUE,
+			TRUE, TRUE, TRUE, TRUE, 'applied_v2', 11, NOW() - INTERVAL '1 second')
+	`, ingA, internalName, nodeID, generation, protected); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.ExecContext(ctx, `
+		INSERT INTO foghorn.admission_push_target_revisions
+			(tenant_id, stream_internal_name, node_id, source_generation, target_revision, activation_attempt, push_targets, mist_push_ids)
+		VALUES ($1::uuid, $2, $3, $4::uuid, 9, $5::uuid, $6, '{"aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee":91}'::jsonb)
+	`, ingA, internalName, nodeID, generation, oldAttempt, protected); err != nil {
+		t.Fatal(err)
+	}
+
+	rearmed, err := RearmCapacityPendingPushTargetEffects(ctx)
+	if err != nil || rearmed != 1 {
+		t.Fatalf("first rearm count=%d err=%v", rearmed, err)
+	}
+	var state string
+	var attempts int
+	var nextAttempt time.Time
+	if err := conn.QueryRowContext(ctx, `
+		SELECT state, attempts, next_attempt_at
+		FROM foghorn.ingest_admission_effects WHERE source_generation = $1::uuid
+	`, generation).Scan(&state, &attempts, &nextAttempt); err != nil {
+		t.Fatal(err)
+	}
+	if state != "pending_v2" || attempts != 11 || !nextAttempt.After(time.Now()) {
+		t.Fatalf("rearm did not preserve the active cycle budget: state=%q attempts=%d next=%s", state, attempts, nextAttempt)
+	}
+	var rotatedAttempt string
+	var mistIDs []byte
+	if err := conn.QueryRowContext(ctx, `
+		SELECT activation_attempt::text, mist_push_ids
+		FROM foghorn.admission_push_target_revisions WHERE source_generation = $1::uuid
+	`, generation).Scan(&rotatedAttempt, &mistIDs); err != nil {
+		t.Fatal(err)
+	}
+	if rotatedAttempt == oldAttempt || string(mistIDs) != "{}" {
+		t.Fatalf("capacity rearm did not rotate attempt and clear Mist IDs: attempt=%q ids=%s", rotatedAttempt, mistIDs)
+	}
+	if err := MarkAdmissionActivationDone(ctx, nodeID, generation, oldAttempt, 1, 9); err == nil {
+		t.Fatal("stale activation attempt settled the freshly re-armed capacity obligation")
+	}
+	if _, err := conn.ExecContext(ctx, `
+		UPDATE foghorn.ingest_admission_effects SET state='applied_v2', activation_done=TRUE
+		WHERE source_generation=$1::uuid
+	`, generation); err != nil {
+		t.Fatal(err)
+	}
+	if immediate, err := RearmCapacityPendingPushTargetEffects(ctx); err != nil || immediate != 0 {
+		t.Fatalf("backoff did not suppress immediate rearm: count=%d err=%v", immediate, err)
+	}
+
+	if _, err := conn.ExecContext(ctx, `
+		UPDATE foghorn.ingest_admission_effects
+		SET state='applied_v2', activation_done=TRUE, attempts=12, next_attempt_at=NOW()-INTERVAL '1 second'
+		WHERE source_generation=$1::uuid
+	`, generation); err != nil {
+		t.Fatal(err)
+	}
+	if restarted, err := RearmCapacityPendingPushTargetEffects(ctx); err != nil || restarted != 0 {
+		t.Fatalf("exhausted short-run cycle rearmed: count=%d err=%v", restarted, err)
+	}
+	if _, err := conn.ExecContext(ctx, `
+		UPDATE foghorn.ingest_admission_effects
+		SET state='applied_v2', activation_done=TRUE, attempts=12,
+			updated_at=NOW()-INTERVAL '6 minutes', next_attempt_at=NOW()-INTERVAL '1 second'
+		WHERE source_generation=$1::uuid
+	`, generation); err != nil {
+		t.Fatal(err)
+	}
+	if restarted, err := RearmCapacityPendingPushTargetEffects(ctx); err != nil || restarted != 1 {
+		t.Fatalf("stable run did not open a fresh cycle: count=%d err=%v", restarted, err)
+	}
+	if err := conn.QueryRowContext(ctx, `
+		SELECT attempts FROM foghorn.ingest_admission_effects WHERE source_generation = $1::uuid
+	`, generation).Scan(&attempts); err != nil {
+		t.Fatal(err)
+	}
+	if attempts != 0 {
+		t.Fatalf("stable-run restart inherited attempts=%d, want 0", attempts)
+	}
+}
+
+func TestAdmissionMistIDBindRequiresCurrentActivationAttempt_RealPG(t *testing.T) {
+	conn := startRealPG(t)
+	prev := db
+	SetDB(conn)
+	t.Cleanup(func() { SetDB(prev) })
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	const (
+		generation = "22222222-3333-4444-8555-666666666666"
+		attemptOld = "33333333-4444-4555-8666-777777777777"
+		attemptNew = "44444444-5555-4666-8777-888888888888"
+		targetID   = "55555555-6666-4777-8888-999999999999"
+	)
+	if _, err := conn.ExecContext(ctx, `
+		INSERT INTO foghorn.admission_push_target_revisions
+			(tenant_id, stream_internal_name, node_id, source_generation, target_revision, activation_attempt, push_targets)
+		VALUES ($1::uuid, 'live+bind-race', 'node-bind-race', $2::uuid, 4, $3::uuid, '\x01'::bytea)
+	`, ingA, generation, attemptNew); err != nil {
+		t.Fatal(err)
+	}
+	if err := BindAdmissionPushTargetMistID(ctx, "node-bind-race", generation, 4, attemptOld, targetID, 91); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("stale attempt bind error=%v, want sql.ErrNoRows", err)
+	}
+	bound, err := BindAdmissionPushTargetMistIDIfAbsent(ctx, "node-bind-race", generation, 4, attemptNew, targetID, 92)
+	if err != nil || !bound {
+		t.Fatalf("current attempt bind=(%v,%v), want true,nil", bound, err)
+	}
+	var mistID int64
+	if err := conn.QueryRowContext(ctx, `
+		SELECT COALESCE(NULLIF(mist_push_ids ->> $2, '')::bigint, 0)
+		FROM foghorn.admission_push_target_revisions WHERE source_generation = $1::uuid
+	`, generation, targetID).Scan(&mistID); err != nil {
+		t.Fatal(err)
+	}
+	if mistID != 92 {
+		t.Fatalf("durable Mist ID=%d, want current-attempt value 92", mistID)
 	}
 }
 
@@ -101,10 +263,10 @@ func TestFenceOfflineBackstop_RealPG(t *testing.T) {
 	}
 }
 
-// TestOfflineEffectSerializesWithAdmission_RealPG proves the durable worker holds the same stream
-// lock as admission across the complete external-effect callback. A reconnect cannot commit between
-// the final no-active-session check and teardown; it waits, then becomes the later source transition.
-func TestOfflineEffectSerializesWithAdmission_RealPG(t *testing.T) {
+// TestOfflineEffectDoesNotLockAdmissionAcrossIO_RealPG proves the durable worker
+// releases the stream lock before external effect dispatch. Receiver-side
+// generation fences keep a delayed teardown safe while reconnect remains live.
+func TestOfflineEffectDoesNotLockAdmissionAcrossIO_RealPG(t *testing.T) {
 	conn := startRealPG(t)
 	prev := db
 	SetDB(conn)
@@ -131,16 +293,23 @@ func TestOfflineEffectSerializesWithAdmission_RealPG(t *testing.T) {
 
 	callbackEntered := make(chan struct{})
 	releaseCallback := make(chan struct{})
-	applyDone := make(chan error, 1)
+	type applyResult struct {
+		completed bool
+		err       error
+	}
+	applyDone := make(chan applyResult, 1)
 	go func() {
-		_, err := ApplyClaimedOfflineEffect(ctx, effects[0], func(context.Context, OfflineEffect) error {
+		completed, err := ApplyClaimedOfflineEffect(ctx, effects[0], func(context.Context, OfflineEffect) (OfflineEffectLegResults, error) {
 			close(callbackEntered)
 			<-releaseCallback
-			return nil
+			return OfflineEffectLegResults{}, nil
 		})
-		applyDone <- err
+		applyDone <- applyResult{completed: completed, err: err}
 	}()
 	<-callbackEntered
+	if err := MarkOfflineTeardownDone(ctx, node, sessionID); err != nil {
+		t.Fatalf("ack teardown during dispatch: %v", err)
+	}
 
 	createDone := make(chan error, 1)
 	go func() {
@@ -152,15 +321,16 @@ func TestOfflineEffectSerializesWithAdmission_RealPG(t *testing.T) {
 	}()
 	select {
 	case err := <-createDone:
-		t.Fatalf("admission completed while offline effects held the stream lock: %v", err)
-	case <-time.After(100 * time.Millisecond):
+		if err != nil {
+			t.Fatalf("admission during offline external I/O: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("admission remained blocked across offline external I/O")
 	}
 	close(releaseCallback)
-	if err := <-applyDone; err != nil {
-		t.Fatalf("apply offline effect: %v", err)
-	}
-	if err := <-createDone; err != nil {
-		t.Fatalf("reconnect after offline effect: %v", err)
+	result := <-applyDone
+	if result.err != nil || !result.completed {
+		t.Fatalf("apply offline effect: completed=%v err=%v", result.completed, result.err)
 	}
 }
 
@@ -190,9 +360,9 @@ func TestOfflineEffectSupersededByReconnect_RealPG(t *testing.T) {
 
 	seedOpenIngestSession(t, ingA, "node-reconnected", stream, "effect-superseded-new", 302, 2000)
 	called := false
-	completed, err := ApplyClaimedOfflineEffect(ctx, effects[0], func(context.Context, OfflineEffect) error {
+	completed, err := ApplyClaimedOfflineEffect(ctx, effects[0], func(context.Context, OfflineEffect) (OfflineEffectLegResults, error) {
 		called = true
-		return nil
+		return OfflineEffectLegResults{}, nil
 	})
 	if err != nil || !completed {
 		t.Fatalf("supersede offline effect: completed=%v err=%v", completed, err)
@@ -206,6 +376,104 @@ func TestOfflineEffectSupersededByReconnect_RealPG(t *testing.T) {
 	}
 	if state != "superseded" {
 		t.Fatalf("offline effect state = %q, want superseded", state)
+	}
+}
+
+func TestOfflineEffectExhaustsRetryBudget_RealPG(t *testing.T) {
+	conn := startRealPG(t)
+	prev := db
+	SetDB(conn)
+	t.Cleanup(func() { SetDB(prev) })
+	ctx := context.Background()
+	const node, stream = "node-retry-budget", "live+effect-retry-budget"
+
+	sessionID := seedOpenIngestSession(t, ingA, node, stream, "effect-retry-budget", 351, 1000)
+	registry := NewStreamRegistry(nil, "cluster-A", time.Minute)
+	if applied, _, err := ProjectSourceIfCurrent(ctx, registry, ingA, node, stream, 351, "effect-retry-budget", sessionID, AdmissionEffectIntent{}); err != nil || !applied {
+		t.Fatalf("project session: applied=%v err=%v", applied, err)
+	}
+	if _, err := conn.Exec(`UPDATE foghorn.ingest_sessions SET ended_at=NOW() WHERE id=$1::uuid`, sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _, err := FenceOfflineBackstop(ctx, registry, ingA, node, stream, OfflineEffectIntent{TeardownStream: true}); err != nil || !ok {
+		t.Fatalf("enqueue offline effect: ok=%v err=%v", ok, err)
+	}
+	if _, err := conn.Exec(`UPDATE foghorn.ingest_offline_effects SET attempts=11 WHERE stream_internal_name=$1`, stream); err != nil {
+		t.Fatal(err)
+	}
+	effects, err := ClaimOfflineEffects(ctx, 1, time.Minute, "test-instance")
+	if err != nil || len(effects) != 1 {
+		t.Fatalf("claim final attempt: count=%d err=%v", len(effects), err)
+	}
+	if err := FailOfflineEffect(ctx, effects[0], errors.New("node remained unavailable")); err != nil {
+		t.Fatal(err)
+	}
+	var state string
+	var attempts int
+	if err := conn.QueryRow(`SELECT state, attempts FROM foghorn.ingest_offline_effects WHERE id=$1`, effects[0].ID).Scan(&state, &attempts); err != nil {
+		t.Fatal(err)
+	}
+	if state != "failed" || attempts != 12 {
+		t.Fatalf("exhausted effect state=%q attempts=%d, want failed/12", state, attempts)
+	}
+	claimed, err := ClaimOfflineEffects(ctx, 1, time.Minute, "test-instance")
+	if err != nil || len(claimed) != 0 {
+		t.Fatalf("failed effect was reclaimed: count=%d err=%v", len(claimed), err)
+	}
+}
+
+func TestOfflineAckWaitHasIndependentBackoffAndDeadLetters_RealPG(t *testing.T) {
+	conn := startRealPG(t)
+	prev := db
+	SetDB(conn)
+	t.Cleanup(func() { SetDB(prev) })
+	ctx := context.Background()
+	const node, stream = "node-ack-wait", "live+offline-ack-wait"
+
+	sessionID := seedOpenIngestSession(t, ingA, node, stream, "offline-ack-wait", 352, 1000)
+	registry := NewStreamRegistry(nil, "cluster-A", time.Minute)
+	if applied, _, err := ProjectSourceIfCurrent(ctx, registry, ingA, node, stream, 352, "offline-ack-wait", sessionID, AdmissionEffectIntent{}); err != nil || !applied {
+		t.Fatalf("project session: applied=%v err=%v", applied, err)
+	}
+	if _, err := conn.Exec(`UPDATE foghorn.ingest_sessions SET ended_at=NOW() WHERE id=$1::uuid`, sessionID); err != nil {
+		t.Fatal(err)
+	}
+	if ok, _, err := FenceOfflineBackstop(ctx, registry, ingA, node, stream, OfflineEffectIntent{TeardownStream: true}); err != nil || !ok {
+		t.Fatalf("enqueue offline effect: ok=%v err=%v", ok, err)
+	}
+
+	queries := foghorndb.New(conn)
+	var effectID int64
+	for attempt := 1; attempt <= 12; attempt++ {
+		if _, err := conn.Exec(`UPDATE foghorn.ingest_offline_effects SET next_attempt_at=NOW()-INTERVAL '1 second' WHERE stream_internal_name=$1`, stream); err != nil {
+			t.Fatal(err)
+		}
+		effects, err := ClaimOfflineEffects(ctx, 1, time.Minute, "ack-wait-test")
+		if err != nil || len(effects) != 1 {
+			t.Fatalf("claim ack wait %d: count=%d err=%v", attempt, len(effects), err)
+		}
+		effect := effects[0]
+		effectID = effect.ID
+		if _, err := queries.SettleOfflineEffect(ctx, foghorndb.SettleOfflineEffectParams{
+			SetNodeOfflineDone: effect.SetNodeOfflineDone, TeardownDone: false,
+			BroadcastOfflineDone: effect.BroadcastOfflineDone, DecklogDone: effect.DecklogDone,
+			ReleaseLease: true, EffectID: effect.ID, LeaseToken: effect.LeaseToken,
+		}); err != nil {
+			t.Fatalf("settle ack wait %d: %v", attempt, err)
+		}
+	}
+	var state string
+	var attempts, ackWaitAttempts int
+	var nextAttemptAt time.Time
+	if err := conn.QueryRow(`SELECT state, attempts, ack_wait_attempts, next_attempt_at FROM foghorn.ingest_offline_effects WHERE id=$1`, effectID).
+		Scan(&state, &attempts, &ackWaitAttempts, &nextAttemptAt); err != nil {
+		t.Fatal(err)
+	}
+	if state != "failed" || attempts != 0 || ackWaitAttempts != 12 {
+		t.Fatalf("ack wait state=%q attempts=%d ack_wait_attempts=%d, want failed/0/12", state, attempts, ackWaitAttempts)
+	}
+	if !nextAttemptAt.After(time.Now().Add(3 * time.Minute)) {
+		t.Fatalf("ack wait backoff did not grow toward the cap: %s", nextAttemptAt)
 	}
 }
 
@@ -714,12 +982,23 @@ func TestActivePushTargetsRearmAcrossNodeReconnect_RealPG(t *testing.T) {
 	logger := logging.NewLogger()
 	const node, stream, triggerUUID = "node-output-restart", "live+output-restart", "output-restart-trigger"
 	const initialFence, reconnectFence int64 = 10, 11
-	exactTargets := []byte("exact-admitted-target-set")
+	const targetRevision int64 = 42
+	const initialAttempt = "8eedfeed-11fe-4a57-8eed-11feca570010"
 
 	registry := NewStreamRegistry(nil, "cluster-A", time.Minute)
 	sid, outcome, err := CreateIngestSession(ctx, ingA, node, stream, 901, triggerUUID, 1000, nil, "cluster-A", logger)
 	if err != nil || outcome != IngestSessionActive {
 		t.Fatalf("mint: outcome=%v err=%v", outcome, err)
+	}
+	exactTargets, err := proto.Marshal(&ipcpb.ActivatePushTargets{
+		StreamName: stream, SourceGeneration: sid, TenantId: ingA, StreamId: "8eedfeed-11fe-4a57-8eed-11feca570011",
+		TargetRevision: targetRevision, ActivationAttempt: initialAttempt,
+		Targets: []*ipcpb.PushTargetSpec{{
+			TargetId: "8eedfeed-11fe-4a57-8eed-11feca570012", TargetUri: "rtmp://example.test/live/key", Platform: "custom",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("marshal exact target set: %v", err)
 	}
 	if applied, _, projectErr := ProjectSourceIfCurrent(ctx, registry, ingA, node, stream, 901, triggerUUID, sid, AdmissionEffectIntent{PushTargets: exactTargets}); projectErr != nil || !applied {
 		t.Fatalf("project: applied=%v err=%v", applied, projectErr)
@@ -729,7 +1008,7 @@ func TestActivePushTargetsRearmAcrossNodeReconnect_RealPG(t *testing.T) {
 	if err != nil || len(effects) != 1 {
 		t.Fatalf("claim initial activation: count=%d err=%v", len(effects), err)
 	}
-	if err := MarkAdmissionActivationDone(ctx, node, sid, initialFence); err != nil {
+	if err := MarkAdmissionActivationDone(ctx, node, sid, initialAttempt, initialFence, targetRevision); err != nil {
 		t.Fatalf("ack initial activation: %v", err)
 	}
 	completed, err := ApplyClaimedAdmissionEffect(ctx, effects[0], func(context.Context, AdmissionEffect) (AdmissionEffectLegResults, error) {
@@ -757,8 +1036,16 @@ func TestActivePushTargetsRearmAcrossNodeReconnect_RealPG(t *testing.T) {
 	if err != nil || rearmed != 1 {
 		t.Fatalf("rearm on reconnect: rows=%d err=%v", rearmed, err)
 	}
-	if err := MarkAdmissionActivationDone(ctx, node, sid, initialFence); err != nil {
-		t.Fatalf("record delayed retired-connection ACK: %v", err)
+	var reconnectAttempt string
+	if err := db.QueryRow(`SELECT activation_attempt::text FROM foghorn.admission_push_target_revisions
+		WHERE source_generation=$1::uuid AND target_revision=$2`, sid, targetRevision).Scan(&reconnectAttempt); err != nil {
+		t.Fatalf("read reconnect activation attempt: %v", err)
+	}
+	if reconnectAttempt == initialAttempt || reconnectAttempt == "" {
+		t.Fatalf("reconnect attempt was not rotated: %q", reconnectAttempt)
+	}
+	if err := MarkAdmissionActivationDone(ctx, node, sid, initialAttempt, reconnectFence, targetRevision); err == nil {
+		t.Fatal("delayed prior-attempt ACK unexpectedly settled the re-armed activation")
 	}
 	if err := db.QueryRow(`SELECT state, activation_done, activation_connection_fence
 		FROM foghorn.ingest_admission_effects WHERE source_generation=$1::uuid`, sid).
@@ -768,7 +1055,7 @@ func TestActivePushTargetsRearmAcrossNodeReconnect_RealPG(t *testing.T) {
 	if state != admissionStatePendingV2 || activationDone || connectionFence != reconnectFence {
 		t.Fatalf("retired ACK crossed reconnect fence: state=%q done=%v fence=%d", state, activationDone, connectionFence)
 	}
-	if err := MarkAdmissionActivationDone(ctx, node, sid, reconnectFence); err != nil {
+	if err := MarkAdmissionActivationDone(ctx, node, sid, reconnectAttempt, reconnectFence, targetRevision); err != nil {
 		t.Fatalf("ack replay on current connection: %v", err)
 	}
 	replayed, err := ClaimAdmissionEffects(ctx, 1, time.Minute, "test-instance")

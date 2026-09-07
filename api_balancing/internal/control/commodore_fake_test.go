@@ -124,6 +124,7 @@ func startFakeCommodoreServer(t *testing.T, fake *fakeCommodoreInternal) {
 		AllowInsecure: true,
 		Logger:        logging.NewLogger(),
 		Timeout:       5 * time.Second,
+		ServiceToken:  "test-commodore-service-token",
 	})
 	if err != nil {
 		srv.Stop()

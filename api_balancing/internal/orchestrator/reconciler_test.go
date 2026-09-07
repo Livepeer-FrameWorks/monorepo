@@ -132,11 +132,44 @@ func TestReleaseComponentForNodeSelectsPlatformArtifact(t *testing.T) {
 			"darwin/arm64": {ArtifactURL: "https://example.test/darwin.tgz", Checksum: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
 		},
 	}
-	selected, ok := releaseComponentForNode(component, &state.NodeState{OS: "darwin", Arch: "arm64"})
+	selected, ok := releaseComponentForNode("mist", component, &state.NodeState{OS: "darwin", Arch: "arm64"})
 	if !ok {
 		t.Fatal("releaseComponentForNode returned ok=false")
 	}
 	if selected.ArtifactURL != "https://example.test/darwin.tgz" {
 		t.Fatalf("artifact_url = %q, want darwin artifact", selected.ArtifactURL)
+	}
+}
+
+func TestReleaseComponentForNodeSelectsExactONNXVariant(t *testing.T) {
+	t.Parallel()
+
+	component := releaseComponent{
+		Version: "v1.2.3",
+		Artifacts: map[string]releaseArtifact{
+			"linux/amd64": {ArtifactURL: "https://example.test/cpu.tgz", Checksum: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		},
+		Variants: map[string]releaseVariant{
+			"cuda": {Artifacts: map[string]releaseArtifact{
+				"linux/amd64": {ArtifactURL: "https://example.test/cuda.tgz", Checksum: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+			}},
+		},
+	}
+	selected, ok := releaseComponentForNode("mist", component, &state.NodeState{OS: "linux", Arch: "amd64", ONNXProfile: "cuda"})
+	if !ok {
+		t.Fatal("releaseComponentForNode returned ok=false")
+	}
+	if selected.ArtifactURL != "https://example.test/cuda.tgz" || selected.ONNXProfile != "cuda" {
+		t.Fatalf("selected = %#v, want exact CUDA variant", selected)
+	}
+	if _, ok := releaseComponentForNode("mist", component, &state.NodeState{OS: "linux", Arch: "amd64", ONNXProfile: "tensorrt"}); ok {
+		t.Fatal("missing TensorRT variant must not silently fall back to CPU")
+	}
+	helm := releaseComponent{Version: "v1.2.3", Artifacts: component.Artifacts}
+	if _, ok := releaseComponentForNode("mist", helm, &state.NodeState{OS: "linux", Arch: "amd64", ONNXProfile: "cuda"}); ok {
+		t.Fatal("legacy Mist component must not downgrade an accelerator node to CPU")
+	}
+	if _, ok := releaseComponentForNode("helmsman", helm, &state.NodeState{OS: "linux", Arch: "amd64", ONNXProfile: "cuda"}); !ok {
+		t.Fatal("profile-independent components must still select their platform artifact")
 	}
 }

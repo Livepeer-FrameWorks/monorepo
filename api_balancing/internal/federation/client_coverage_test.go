@@ -24,6 +24,7 @@ type recordingStub struct {
 
 	gotJWT         string
 	gotHasDeadline bool
+	gotDeadline    time.Time
 
 	queryResp   *foghornfederationpb.QueryStreamResponse
 	originResp  *foghornfederationpb.OriginPullAck
@@ -40,7 +41,7 @@ type recordingStub struct {
 // is propagated as gRPC metadata by the client interceptor; here we only need
 // to confirm the deadline (timeout) survived the wrapper.
 func (s *recordingStub) record(ctx context.Context) {
-	_, s.gotHasDeadline = ctx.Deadline()
+	s.gotDeadline, s.gotHasDeadline = ctx.Deadline()
 }
 
 func (s *recordingStub) QueryStream(ctx context.Context, _ *foghornfederationpb.QueryStreamRequest) (*foghornfederationpb.QueryStreamResponse, error) {
@@ -124,6 +125,7 @@ func startStubServer(t *testing.T, stub *recordingStub) *foghorn.GRPCClient {
 	log := logging.Logger(logrus.New())
 	client, err := foghorn.NewGRPCClient(foghorn.GRPCConfig{
 		GRPCAddr:      listener.Addr().String(),
+		Timeout:       2 * time.Minute,
 		Logger:        log,
 		AllowInsecure: true,
 	})
@@ -136,6 +138,23 @@ func startStubServer(t *testing.T, stub *recordingStub) *foghorn.GRPCClient {
 		_ = listener.Close()
 	})
 	return client
+}
+
+func TestListTenantArtifactsUsesBulkBudget(t *testing.T) {
+	stub := &recordingStub{listResp: &foghornfederationpb.ListTenantArtifactsResponse{}}
+	client := startStubServer(t, stub)
+	c := newTestFedClient(&fakePool{client: client})
+
+	if _, err := c.ListTenantArtifacts(context.Background(), "cl", "addr", &foghornfederationpb.ListTenantArtifactsRequest{}); err != nil {
+		t.Fatalf("ListTenantArtifacts: %v", err)
+	}
+	if !stub.gotHasDeadline {
+		t.Fatal("bulk listing reached the peer without a deadline")
+	}
+	remaining := time.Until(stub.gotDeadline)
+	if remaining < BulkListTimeout-5*time.Second {
+		t.Fatalf("bulk listing deadline remaining = %v, want approximately %v", remaining, BulkListTimeout)
+	}
 }
 
 func newTestFedClient(pool foghornPool) *FederationClient {

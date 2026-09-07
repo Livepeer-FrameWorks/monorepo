@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -45,7 +46,10 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/streamident"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/tenants"
+	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
@@ -185,6 +189,8 @@ type Processor struct {
 	nodeOwnedLocally func(nodeID string) bool
 	// sendActivateLocal overrides the local-only activation dispatch (tests; production nil).
 	sendActivateLocal func(ctx context.Context, nodeID string, req *ipcpb.ActivatePushTargets) error
+	// restreamAttemptSupport overrides sidecar capability lookup (tests; production nil).
+	restreamAttemptSupport func(nodeID string) error
 	// marshalAdmissionEffect is the serialization boundary for the durable admission obligation.
 	// Tests inject failures here to prove a post-mint denial releases its pending generation.
 	marshalAdmissionEffect func(proto.Message) ([]byte, error)
@@ -197,6 +203,80 @@ func (p *Processor) SetMediaAuthorityStore(store *localauthority.Store) {
 	if p != nil {
 		p.mediaAuthorityStore = store
 	}
+}
+
+// HandleMediaAuthorityApply turns a committed live-stream authority version
+// into an updated durable desired-state obligation for every active publisher.
+func (p *Processor) HandleMediaAuthorityApply(ctx context.Context, result localauthority.ApplyResult) error {
+	if p == nil {
+		return nil
+	}
+	// ResolveInternalName responses include tenant serve policy. Evict them as
+	// soon as either a tenant or media-object authority commits so a policy
+	// change cannot remain widened or denied until the generic cache TTL.
+	if p.commodoreClient != nil && strings.TrimSpace(result.TenantID) != "" {
+		p.commodoreClient.InvalidateTenantCacheKeys(result.TenantID)
+	}
+	if p.mediaAuthorityStore == nil || result.Kind != "media_object" ||
+		strings.TrimSpace(result.InternalName) == "" || result.Version == 0 {
+		return nil
+	}
+	snapshot, err := p.mediaAuthorityStore.MediaObjectByInternalName(ctx, result.InternalName)
+	if err != nil {
+		return fmt.Errorf("load applied live-stream authority: %w", err)
+	}
+	if snapshot.Authority.GetLiveStream() == nil {
+		return nil
+	}
+	streamID := strings.TrimSpace(result.StreamID)
+	if streamID == "" {
+		streamID = snapshot.Authority.GetLiveStream().GetStreamId()
+	}
+	desired := &ipcpb.ActivatePushTargets{
+		StreamName: "live+" + result.InternalName, TenantId: result.TenantID,
+		StreamId: streamID, TargetRevision: snapshot.Version, ActivationAttempt: uuid.NewString(),
+	}
+	// Tombstones and suspended/inactive stream authorities intentionally carry
+	// no sealed target set. Reconcile that authenticated revocation to an empty
+	// desired set so a publisher that remains connected after stream deletion
+	// cannot keep an external push alive.
+	if snapshot.Authority.GetLifecycle() != mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE {
+		_, err = control.ReconcileActivePushTargetAuthority(ctx, result.TenantID, result.InternalName, desired)
+		return err
+	}
+	tenant, err := p.mediaAuthorityStore.Tenant(ctx, result.TenantID)
+	if err != nil {
+		return fmt.Errorf("load tenant authority for live restream reconciliation: %w", err)
+	}
+	if tenant.Authority == nil || tenant.Freshness == localauthority.FreshnessHardExpired {
+		return errors.New("tenant authority unavailable for live restream reconciliation")
+	}
+	if tenant.Authority.GetLifecycle() != mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE {
+		_, err = control.ReconcileActivePushTargetAuthority(ctx, result.TenantID, result.InternalName, desired)
+		return err
+	}
+	limits := localTenantResourceLimits(tenant.Authority, snapshot.Authority.GetOriginClusterId())
+	desired.MaxViewers = limits.GetMaxViewers()
+	secret, secretErr := p.mediaAuthorityStore.OpenLiveStreamSecret(snapshot)
+	if secretErr != nil {
+		// A cell without a local seal key/grant is not an authority recipient.
+		// Preserve its existing desired state and acknowledge delivery. A matching
+		// box that fails authentication/decoding returns a different error and must
+		// remain retryable rather than being mistaken for an empty target set.
+		if errors.Is(secretErr, localauthority.ErrSecretUnavailable) {
+			return nil
+		}
+		return fmt.Errorf("open applied push-target authority: %w", secretErr)
+	} else {
+		for _, target := range secret.GetPushTargets() {
+			desired.Targets = append(desired.Targets, &ipcpb.PushTargetSpec{
+				TargetId: target.GetTargetId(), TargetUri: target.GetTargetUri(),
+				Name: target.GetName(), Platform: target.GetPlatform(),
+			})
+		}
+	}
+	_, err = control.ReconcileActivePushTargetAuthority(ctx, result.TenantID, result.InternalName, desired)
+	return err
 }
 
 func (p *Processor) SetSigningKeyUseRecorder(recorder SigningKeyUseRecorder) {
@@ -1076,6 +1156,11 @@ func (p *Processor) ensureTriggerTenantID(trigger *ipcpb.MistTrigger) string {
 			trigger.TenantId = &tid
 			return tid
 		}
+	case *ipcpb.MistTrigger_RestreamStatus:
+		if tid := strings.TrimSpace(tp.RestreamStatus.GetTenantId()); tid != "" {
+			trigger.TenantId = &tid
+			return tid
+		}
 	}
 
 	return ""
@@ -1147,6 +1232,7 @@ func shouldSurfaceDecklogError(trigger *ipcpb.MistTrigger) bool {
 	case string(mist.TriggerUserEnd),
 		string(mist.TriggerStreamEnd),
 		string(mist.TriggerPushEnd),
+		string(mist.TriggerRestreamStatusFinal),
 		string(mist.TriggerRecordingEnd),
 		string(mist.TriggerRecordingSegment),
 		string(mist.TriggerLivepeerSegmentComplete),
@@ -1175,6 +1261,8 @@ func (p *Processor) ProcessTypedTrigger(trigger *ipcpb.MistTrigger) (string, boo
 		return p.handlePushOutStart(trigger)
 	case *ipcpb.MistTrigger_PushEnd:
 		return p.handlePushEnd(trigger)
+	case *ipcpb.MistTrigger_RestreamStatus:
+		return p.handleRestreamStatus(trigger)
 	case *ipcpb.MistTrigger_PushInputClose:
 		return p.handlePushInputClose(trigger)
 	case *ipcpb.MistTrigger_ViewerConnect:
@@ -1560,7 +1648,7 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 		identity = localValidation
 		usedLocalIdentity = true
 	} else if p.commodoreClient != nil {
-		identity, err = p.commodoreClient.ValidateStreamKey(admissionCtx, pushRewrite.GetStreamName())
+		identity, err = p.commodoreClient.ValidateStreamKeyAsService(admissionCtx, pushRewrite.GetStreamName())
 	}
 	if err != nil || identity == nil {
 		if localValidation != nil && localValidation.GetValid() {
@@ -2036,14 +2124,39 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 				} else {
 					intent.DecklogTrigger = raw
 				}
-				if targets := streamValidation.GetPushTargets(); len(targets) > 0 {
+				pushTargetsComplete := streamValidation.PushTargetsComplete == nil || streamValidation.GetPushTargetsComplete()
+				if streamValidation.PushTargetsComplete == nil && p.metrics != nil && p.metrics.RollingUpgradeFallbacks != nil {
+					p.metrics.RollingUpgradeFallbacks.WithLabelValues("push_targets_complete_absent").Inc()
+				}
+				if !pushTargetsComplete {
+					// Publisher admission is independent from restream credential
+					// health. An incomplete set must never become a shorter desired
+					// set, though, because that would tear down healthy destinations.
+					p.logger.WithFields(logging.Fields{
+						"tenant_id": streamValidation.GetTenantId(), "stream_id": streamValidation.GetStreamId(),
+					}).Error("Admitting publisher without restream convergence because push-target credentials are incomplete")
+					for _, target := range streamValidation.GetPushTargets() {
+						if target.GetId() == "" || target.GetTargetUri() != "" {
+							continue
+						}
+						message := "push-target credentials could not be decrypted"
+						if statusErr := p.updatePushTargetStatusByID(target.GetId(), streamValidation.GetTenantId(), "live+"+streamValidation.GetInternalName(), "failed", pushstatusoutbox.ReasonConfigurationError, &message, time.Now().UnixMilli()); statusErr != nil {
+							p.logger.WithError(statusErr).WithField("target_id", target.GetId()).Error("Failed to persist incomplete push-target status")
+						}
+					}
+				} else if targets := streamValidation.GetPushTargets(); len(targets) > 0 {
 					specs := make([]*ipcpb.PushTargetSpec, 0, len(targets))
 					for _, t := range targets {
-						specs = append(specs, &ipcpb.PushTargetSpec{TargetId: t.GetId(), TargetUri: t.GetTargetUri(), Name: t.GetName()})
+						specs = append(specs, &ipcpb.PushTargetSpec{
+							TargetId: t.GetId(), TargetUri: t.GetTargetUri(), Name: t.GetName(), Platform: t.GetPlatform(),
+						})
 					}
+					targetRevision := pushTargetActivationRevision(localAuthority.object.Version)
 					if raw, marshalErr := p.marshalAdmissionEffectMessage(&ipcpb.ActivatePushTargets{
-						StreamName: "live+" + streamValidation.GetInternalName(),
-						Targets:    specs,
+						StreamName: "live+" + streamValidation.GetInternalName(), Targets: specs,
+						TenantId: streamValidation.GetTenantId(), StreamId: streamValidation.GetStreamId(),
+						TargetRevision: targetRevision, MaxViewers: streamValidation.GetTenantResourceLimits().GetMaxViewers(),
+						ActivationAttempt: uuid.NewString(),
 					}); marshalErr != nil {
 						// Fail closed: admitting without the persisted activation intent would
 						// silently drop multistreaming for this session.
@@ -2238,6 +2351,16 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 	// Return wildcard stream name for MistServer routing (live+ format)
 	admitted = true
 	return fmt.Sprintf("live+%s", streamValidation.InternalName), false, nil
+}
+
+func pushTargetActivationRevision(localAuthorityVersion int64) int64 {
+	if localAuthorityVersion > 0 {
+		return localAuthorityVersion
+	}
+	// Connected admission can run before the local authority projection is
+	// available. Revision 1 is the initial fence; later monotonic authority
+	// versions can supersede it.
+	return 1
 }
 
 // handlePlayRewrite processes PLAY_REWRITE trigger (blocking)
@@ -3541,8 +3664,9 @@ func (p *Processor) handlePushEnd(trigger *ipcpb.MistTrigger) (string, bool, err
 
 	var decklogErr error
 
-	// Send enriched trigger to Decklog
-	if err := p.sendTriggerToDecklog(trigger); err != nil {
+	// Raw PUSH_END fields contain destination credentials and Mist log text.
+	// Preserve the operational event without exporting those secrets.
+	if err := p.sendTriggerToDecklog(sanitizeRestreamTriggerForDecklog(trigger)); err != nil {
 		p.logger.WithFields(logging.Fields{
 			"internal_name": internalName,
 			"push_id":       pushEnd.GetPushId(),
@@ -3562,10 +3686,8 @@ func (p *Processor) handlePushEnd(trigger *ipcpb.MistTrigger) (string, bool, err
 		var lastErr *string
 		if pushEnd.GetPushStatus() != "" && pushEnd.GetPushStatus() != "0" {
 			status = "failed"
-			logMsg := pushEnd.GetLogMessages()
-			if logMsg != "" {
-				lastErr = &logMsg
-			}
+			message := "restream push failed"
+			lastErr = &message
 		}
 		p.updatePushTargetStatus(pushEnd.GetStreamName(), targetURI, status, lastErr, trigger.GetTriggerUnixMillis())
 	}
@@ -3574,6 +3696,212 @@ func (p *Processor) handlePushEnd(trigger *ipcpb.MistTrigger) (string, bool, err
 		return "", false, decklogErr
 	}
 	return "", false, nil
+}
+
+func (p *Processor) handleRestreamStatus(trigger *ipcpb.MistTrigger) (string, bool, error) {
+	report := trigger.GetRestreamStatus()
+	if report == nil || strings.TrimSpace(report.GetTargetId()) == "" || strings.TrimSpace(report.GetStreamName()) == "" {
+		return "", false, errors.New("restream status is missing target identity")
+	}
+	tracked, found := lookupPushTargetID(
+		report.GetStreamName(), report.GetTargetId(), report.GetSourceGeneration(), report.GetTargetRevision(), report.GetActivationAttempt(),
+	)
+	durablySuperseded := false
+	if !found {
+		lookupCtx, cancel := context.WithTimeout(context.Background(), MediaAdmissionTimeout)
+		durable, err := control.ResolveAdmissionPushTargetIdentity(
+			lookupCtx, report.GetTenantId(), report.GetSourceGeneration(), report.GetTargetRevision(), report.GetActivationAttempt(), report.GetTargetId(),
+		)
+		cancel()
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", false, ingesterrors.NewTerminal(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "restream status target identity is unavailable")
+		}
+		if err != nil {
+			return "", false, fmt.Errorf("restore restream target identity: %w", err)
+		}
+		if durable.InternalName != mist.ExtractInternalName(report.GetStreamName()) {
+			return "", false, ingesterrors.NewTerminal(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "restream status stream identity does not match the durable obligation")
+		}
+		reportedAttempt := strings.TrimSpace(report.GetActivationAttempt())
+		durableAttempt := strings.TrimSpace(durable.ActivationAttempt)
+		attemptConflicts := reportedAttempt != "" && durableAttempt != "" && durableAttempt != reportedAttempt
+		durablySuperseded = durable.LatestRevision > durable.TargetRevision || attemptConflicts
+		tracked = pushTargetInfo{
+			TargetID: durable.TargetID, TenantID: durable.TenantID, StreamID: durable.StreamID,
+			SourceGeneration: durable.SourceGeneration, TargetRevision: durable.TargetRevision,
+			ActivationAttempt: durable.ActivationAttempt,
+			Platform:          durable.Platform, NodeID: durable.NodeID, MistPushID: durable.MistPushID, MaxViewers: durable.MaxViewers,
+			Current: durable.SourceLive && !durablySuperseded,
+		}
+	}
+	if tracked.TenantID != report.GetTenantId() ||
+		(tracked.StreamID != "" && tracked.StreamID != report.GetStreamId()) ||
+		(tracked.SourceGeneration != "" && tracked.SourceGeneration != report.GetSourceGeneration()) ||
+		(tracked.TargetRevision > 0 && tracked.TargetRevision != report.GetTargetRevision()) ||
+		(tracked.NodeID != "" && tracked.NodeID != trigger.GetNodeId()) {
+		return "", false, ingesterrors.NewTerminal(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "restream status does not match the desired-set fence")
+	}
+	report.NodeId = trigger.GetNodeId()
+	statusValue := ""
+	var lastError *string
+	switch report.GetState() {
+	case ipcpb.RestreamState_RESTREAM_STATE_PUSHING:
+		statusValue = "pushing"
+	case ipcpb.RestreamState_RESTREAM_STATE_IDLE:
+		statusValue = "idle"
+	case ipcpb.RestreamState_RESTREAM_STATE_FAILED:
+		statusValue = "failed"
+		message := "restream push failed"
+		lastError = &message
+	case ipcpb.RestreamState_RESTREAM_STATE_PENDING:
+		statusValue = "pending"
+	case ipcpb.RestreamState_RESTREAM_STATE_RETRYING:
+		statusValue = "retrying"
+	case ipcpb.RestreamState_RESTREAM_STATE_STOPPING:
+		statusValue = "stopping"
+	default:
+		return "", false, ingesterrors.NewTerminal(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "restream status has an unsupported state")
+	}
+	finalReport := trigger.GetTriggerType() == string(mist.TriggerRestreamStatusFinal)
+	terminalRuntimeState := report.GetState() == ipcpb.RestreamState_RESTREAM_STATE_IDLE || report.GetState() == ipcpb.RestreamState_RESTREAM_STATE_FAILED
+	if finalReport && !terminalRuntimeState {
+		return "", false, ingesterrors.NewTerminal(ipcpb.IngestErrorCode_INGEST_ERROR_INTERNAL, "final restream status must carry a terminal runtime state")
+	}
+	reportedAttempt := strings.TrimSpace(report.GetActivationAttempt())
+	trackedAttempt := strings.TrimSpace(tracked.ActivationAttempt)
+	attemptIdentityMatches := trackedAttempt == reportedAttempt
+	// A pre-attempt-fence sidecar can still prove the runtime identity with an
+	// already-bound positive Mist ID. Never adopt its first reported ID: after a
+	// same-revision re-arm that report could be a replay from the prior runtime.
+	legacyBoundIdentityMatches := reportedAttempt == "" && trackedAttempt != "" &&
+		tracked.MistPushID > 0 && tracked.MistPushID == report.GetMistPushId()
+	runtimeIdentityMatches := attemptIdentityMatches || legacyBoundIdentityMatches
+	if finalReport && tracked.Current && attemptIdentityMatches && tracked.MistPushID <= 0 && report.GetMistPushId() > 0 {
+		bindCtx, cancel := context.WithTimeout(context.Background(), MediaAdmissionTimeout)
+		bound, bindErr := control.BindAdmissionPushTargetMistIDIfAbsent(
+			bindCtx, trigger.GetNodeId(), report.GetSourceGeneration(), report.GetTargetRevision(), report.GetActivationAttempt(), report.GetTargetId(), report.GetMistPushId(),
+		)
+		cancel()
+		if bindErr != nil {
+			p.observeRestreamFinalFence("bind_failed")
+			return "", false, fmt.Errorf("bind Mist push identity from restream final: %w", bindErr)
+		}
+		if !bound {
+			lookupCtx, lookupCancel := context.WithTimeout(context.Background(), MediaAdmissionTimeout)
+			durable, durableErr := control.ResolveAdmissionPushTargetIdentity(
+				lookupCtx, report.GetTenantId(), report.GetSourceGeneration(), report.GetTargetRevision(), report.GetActivationAttempt(), report.GetTargetId(),
+			)
+			lookupCancel()
+			if durableErr != nil {
+				p.observeRestreamFinalFence("bind_failed")
+				return "", false, fmt.Errorf("verify raced Mist push identity from restream final: %w", durableErr)
+			}
+			tracked.MistPushID = durable.MistPushID
+			if strings.TrimSpace(durable.ActivationAttempt) == reportedAttempt &&
+				durable.MistPushID == report.GetMistPushId() {
+				bindCurrentPushTargetMistID(report.GetStreamName(), tracked, report.GetMistPushId())
+			}
+		} else {
+			tracked.MistPushID = report.GetMistPushId()
+			if !bindCurrentPushTargetMistID(report.GetStreamName(), tracked, report.GetMistPushId()) {
+				if current, currentFound := lookupPushTargetID(report.GetStreamName(), report.GetTargetId(), report.GetSourceGeneration(), report.GetTargetRevision()); currentFound {
+					tracked = current
+				}
+			}
+			if tracked.MistPushID == report.GetMistPushId() {
+				p.observeRestreamFinalFence("bound_from_final")
+			}
+		}
+	}
+	if finalReport && tracked.Current && tracked.MistPushID > 0 && tracked.MistPushID != report.GetMistPushId() {
+		outcome := "mist_id_mismatch"
+		if report.GetMistPushId() <= 0 {
+			outcome = "missing_reported_id"
+		}
+		p.observeRestreamFinalFence(outcome)
+		p.logger.WithFields(logging.Fields{
+			"stream_name": report.GetStreamName(), "target_id": report.GetTargetId(),
+			"reported_mist_push_id": report.GetMistPushId(), "current_mist_push_id": tracked.MistPushID,
+		}).Warn("Publishing restream final without applying current-runtime side effects")
+		runtimeIdentityMatches = false
+	}
+	if finalReport && tracked.Current && attemptIdentityMatches && tracked.MistPushID <= 0 && report.GetMistPushId() <= 0 {
+		// The activation-attempt fence uniquely owns this final even though
+		// neither side learned Mist's process ID.
+		p.observeRestreamFinalFence("accepted_unbound")
+	}
+	supersededRuntimeIdentity := durablySuperseded || (!tracked.Current && hasNewerCurrentPushTargetRevision(
+		report.GetStreamName(), report.GetTargetId(), report.GetSourceGeneration(), report.GetTargetRevision(), report.GetActivationAttempt(),
+	))
+	applyTerminalSideEffects := runtimeIdentityMatches && !supersededRuntimeIdentity &&
+		(finalReport || restreamReasonIsTerminal(report.GetReason())) && terminalRuntimeState
+	if applyTerminalSideEffects {
+		if !supersededRuntimeIdentity {
+			if err := p.releaseRestreamCapacity(tracked); err != nil {
+				return "", false, fmt.Errorf("release restream delivery capacity: %w", err)
+			}
+		}
+		retirePushTargetID(report.GetStreamName(), report.GetTargetId(), report.GetSourceGeneration(), report.GetTargetRevision(), report.GetActivationAttempt())
+	}
+	rearmIdentityMatches := runtimeIdentityMatches || (attemptIdentityMatches && report.GetMistPushId() <= 0)
+	if finalReport && tracked.Current && rearmIdentityMatches && !supersededRuntimeIdentity {
+		switch report.GetReason() {
+		case ipcpb.RestreamReason_RESTREAM_REASON_COMPLETED,
+			ipcpb.RestreamReason_RESTREAM_REASON_NETWORK_ERROR,
+			ipcpb.RestreamReason_RESTREAM_REASON_PROCESS_ERROR:
+			rearmed, err := control.RearmAdmissionPushTargetsAfterRuntimeEnd(
+				context.Background(), report.GetTenantId(), mist.ExtractInternalName(report.GetStreamName()),
+				report.GetSourceGeneration(), report.GetTargetRevision(),
+			)
+			if err != nil {
+				return "", false, err
+			}
+			if rearmed {
+				statusValue = "retrying"
+				if report.GetState() == ipcpb.RestreamState_RESTREAM_STATE_FAILED {
+					message := "restream delivery interrupted"
+					lastError = &message
+				} else {
+					lastError = nil
+				}
+			}
+		}
+	}
+	// Operational status ordering uses one Foghorn clock domain. Node times
+	// remain part of the immutable final fact for metering, but must not make a
+	// skewed edge update older or newer than server-originated capacity states.
+	eventTime := time.Now().UnixMilli()
+	// A status from the latest retired identity may finish teardown truthfully,
+	// but no retired generation or revision may overwrite a current successor.
+	statusIdentityMatches := runtimeIdentityMatches || (attemptIdentityMatches && report.GetMistPushId() <= 0)
+	statusSuperseded := supersededRuntimeIdentity || !statusIdentityMatches
+	if !statusSuperseded {
+		if statusErr := p.updatePushTargetStatusByID(report.GetTargetId(), report.GetTenantId(), report.GetStreamName(), statusValue, restreamReasonCode(report.GetReason()), lastError, eventTime); statusErr != nil {
+			return "", false, statusErr
+		}
+	}
+	if finalReport {
+		// The payload is already URI/log-free and carries a stable source event ID,
+		// so it is safe to publish as the canonical final restream fact.
+		if err := p.sendTriggerToDecklog(trigger); err != nil {
+			return "", false, err
+		}
+	} else if err := p.sendTriggerToDecklog(trigger); err != nil {
+		// Non-final status is an operational live-state observation. The next
+		// edge report repairs a dropped observation, so do not make this
+		// non-durable trigger retry or interfere with runtime reconciliation.
+		p.logger.WithFields(logging.Fields{
+			"stream_name": report.GetStreamName(), "target_id": report.GetTargetId(),
+			"state": report.GetState().String(), "error": err,
+		}).Warn("Failed to send restream live-state observation to Decklog")
+	}
+	return "", false, nil
+}
+
+func (p *Processor) observeRestreamFinalFence(outcome string) {
+	if p != nil && p.metrics != nil && p.metrics.RestreamFinalFences != nil {
+		p.metrics.RestreamFinalFences.WithLabelValues(outcome).Inc()
+	}
 }
 
 // handlePushInputClose processes PUSH_INPUT_CLOSE (publisher source
@@ -3695,11 +4023,11 @@ func (p *Processor) handlePushOutStart(trigger *ipcpb.MistTrigger) (string, bool
 
 	// Control-plane stream lifecycle is derived from Decklog events.
 
-	// Send enriched trigger to Decklog (Data Plane)
-	if err := p.sendTriggerToDecklog(trigger); err != nil {
+	// PUSH_OUT_START's target is the full credential-bearing URI. Export a
+	// sanitized clone so logs, Kafka, DLQ, and ClickHouse never receive it.
+	if err := p.sendTriggerToDecklog(sanitizeRestreamTriggerForDecklog(trigger)); err != nil {
 		p.logger.WithFields(logging.Fields{
 			"internal_name": internalName,
-			"push_target":   pushOutStart.GetPushTarget(),
 			"trigger_type":  trigger.GetTriggerType(),
 			"error":         err,
 		}).Error("Failed to send push out start trigger to Decklog")
@@ -3711,6 +4039,25 @@ func (p *Processor) handlePushOutStart(trigger *ipcpb.MistTrigger) (string, bool
 	go p.updatePushTargetStatus(pushOutStart.GetStreamName(), pushOutStart.GetPushTarget(), "pushing", nil, trigger.GetTriggerUnixMillis())
 
 	return pushOutStart.GetPushTarget(), false, nil
+}
+
+func sanitizeRestreamTriggerForDecklog(trigger *ipcpb.MistTrigger) *ipcpb.MistTrigger {
+	if trigger == nil {
+		return nil
+	}
+	clean, ok := proto.Clone(trigger).(*ipcpb.MistTrigger)
+	if !ok {
+		return nil
+	}
+	if pushStart := clean.GetPushOutStart(); pushStart != nil {
+		pushStart.PushTarget = ""
+	}
+	if pushEnd := clean.GetPushEnd(); pushEnd != nil {
+		pushEnd.TargetUriBefore = ""
+		pushEnd.TargetUriAfter = ""
+		pushEnd.LogMessages = ""
+	}
+	return clean
 }
 
 // handleUserNew processes USER_NEW trigger (blocking)
@@ -4108,16 +4455,15 @@ func (p *Processor) handleStreamEnd(trigger *ipcpb.MistTrigger) (string, bool, e
 // for would leave push targets, federation and DVR state
 // stale. Every effect is idempotent, so a late real STREAM_END re-running
 // them is a no-op.
-func (p *Processor) finalizeStreamWideOffline(ctx context.Context, internalName, nodeID, tenantID, sourceGeneration string, sourceRevision int64) error {
-	// Deactivate multistream push targets. Stream-wide despite the
-	// node-scoped RPC: the tracking map is process-global keyed by
-	// activatePushTargets' own "live+<internal>" construction, and pushes
-	// run on the owner. Untrack synchronously; only the Helmsman RPC is
-	// async.
+func (p *Processor) finalizeStreamWideOffline(ctx context.Context, internalName, nodeID, _ string, sourceGeneration string, _ int64) error {
+	// Deactivate multistream push targets. Keep the identities current until
+	// Helmsman's STOPPING/IDLE reports arrive; retiring before dispatch drops
+	// the only truthful terminal status transition.
 	pushStreamName := "live+" + internalName
-	untrackPushTargets(pushStreamName)
-	deactivateErr := p.deactivatePushTargets(ctx, nodeID, pushStreamName, sourceGeneration)
+	return p.deactivatePushTargets(ctx, nodeID, pushStreamName, sourceGeneration)
+}
 
+func (p *Processor) broadcastStreamOffline(ctx context.Context, internalName, tenantID, sourceGeneration string, sourceRevision int64) error {
 	// Tenant capacity is claim-owned and is released by the precise
 	// PUSH_INPUT_CLOSE/session finalizer. STREAM_END carries no claim token, so
 	// deleting by stream name here would let a delayed loser free a replacement
@@ -4131,60 +4477,74 @@ func (p *Processor) finalizeStreamWideOffline(ctx context.Context, internalName,
 	if p.peerNotifier != nil {
 		if strings.TrimSpace(tenantID) != "" {
 			broadcastErr := p.peerNotifier.BroadcastStreamLifecycle(ctx, internalName, tenantID, sourceRevision, false)
-			deactivateErr = errors.Join(deactivateErr, broadcastErr)
 			if broadcastErr == nil {
-				deactivateErr = errors.Join(deactivateErr, p.peerNotifier.UntrackStream(ctx, internalName, tenantID, sourceGeneration, sourceRevision))
+				broadcastErr = p.peerNotifier.UntrackStream(ctx, internalName, tenantID, sourceGeneration, sourceRevision)
 			}
+			return broadcastErr
 		} else {
-			deactivateErr = errors.Join(deactivateErr, p.peerNotifier.UntrackStream(ctx, internalName, tenantID, sourceGeneration, sourceRevision))
+			return p.peerNotifier.UntrackStream(ctx, internalName, tenantID, sourceGeneration, sourceRevision)
 		}
 	}
 	// No DVR stop here: the precise per-generation finalizer is the publisher's
 	// PUSH_INPUT_CLOSE (FinalizeIngestSessionClose); the STREAM_END / vanish
 	// control.StopDVRForEndedSource path is a node-keyed backstop, not a stream-wide effect.
-	return deactivateErr
+	return nil
 }
 
 // ApplyOfflineEffect applies one durable transition while the control layer holds the stream
 // advisory lock. Every operation is idempotent; an error leaves the outbox row pending for retry.
-func (p *Processor) ApplyOfflineEffect(ctx context.Context, effect control.OfflineEffect) error {
+func (p *Processor) ApplyOfflineEffect(ctx context.Context, effect control.OfflineEffect) (control.OfflineEffectLegResults, error) {
+	var legs control.OfflineEffectLegResults
 	registry := control.StreamRegistryInstance
 	if registry == nil {
-		return errors.New("stream registry unavailable")
+		return legs, errors.New("stream registry unavailable")
 	}
 	// The peer-facing parts (federation offline broadcast, stream-scoped peer untrack inside the
 	// teardown) are LEADER-owned: only the PeerManager leader holds open peer channels, so a
 	// non-leader would broadcast to zero peers while consuming the row. Defer the whole effect to
 	// the leader when peer-facing work is owed — the remaining state mutations (registry publish,
 	// SetOffline, capacity) are Redis-synced and equally correct on the leader.
-	if p.peerNotifier != nil && (effect.TeardownStream || effect.BroadcastOffline) && !p.peerNotifier.IsLeader() {
-		return control.ErrOfflineEffectDeferred
+	if p.peerNotifier != nil && effect.BroadcastOffline && !effect.BroadcastOfflineDone && !p.peerNotifier.IsLeader() {
+		return legs, control.ErrOfflineEffectDeferred
 	}
 	applied, err := registry.PublishSourceInactiveContext(ctx, effect.InternalName, effect.NodeID, effect.SourceGeneration, effect.SourceRevision)
 	if err != nil {
-		return fmt.Errorf("publish inactive source revision: %w", err)
+		return legs, fmt.Errorf("publish inactive source revision: %w", err)
 	}
 	if !applied {
-		return control.ErrOfflineEffectSuperseded
+		return legs, control.ErrOfflineEffectSuperseded
 	}
 	var effectErr error
-	if len(effect.DecklogTrigger) > 0 {
+	if !effect.DecklogDone && len(effect.DecklogTrigger) > 0 {
 		var trigger ipcpb.MistTrigger
 		if err := proto.Unmarshal(effect.DecklogTrigger, &trigger); err != nil {
-			effectErr = errors.Join(effectErr, fmt.Errorf("decode offline Decklog trigger: %w", err))
+			p.logger.WithError(err).WithField("internal_name", effect.InternalName).
+				Error("Offline obligation: Decklog event undecodable; leg abandoned")
+			legs.DecklogDone = true
 		} else if err := p.sendTriggerToDecklogContext(ctx, &trigger); err != nil {
 			effectErr = errors.Join(effectErr, fmt.Errorf("forward offline trigger to Decklog: %w", err))
+		} else {
+			legs.DecklogDone = true
 		}
 	}
-	if effect.SetNodeOffline {
-		effectErr = errors.Join(effectErr, state.DefaultManager().SetOfflineContext(ctx, effect.InternalName, effect.NodeID))
+	if effect.SetNodeOffline && !effect.SetNodeOfflineDone {
+		if err := state.DefaultManager().SetOfflineContext(ctx, effect.InternalName, effect.NodeID); err != nil {
+			effectErr = errors.Join(effectErr, err)
+		} else {
+			legs.SetNodeOfflineDone = true
+		}
 	}
-	if effect.TeardownStream {
+	if effect.TeardownStream && !effect.TeardownDone {
 		effectErr = errors.Join(effectErr, p.finalizeStreamWideOffline(ctx, effect.InternalName, effect.NodeID, effect.TenantID, effect.SourceGeneration, effect.SourceRevision))
-	} else if effect.BroadcastOffline && p.peerNotifier != nil {
-		effectErr = errors.Join(effectErr, p.peerNotifier.BroadcastStreamLifecycle(ctx, effect.InternalName, effect.TenantID, effect.SourceRevision, false))
 	}
-	return effectErr
+	if effect.BroadcastOffline && !effect.BroadcastOfflineDone {
+		if err := p.broadcastStreamOffline(ctx, effect.InternalName, effect.TenantID, effect.SourceGeneration, effect.SourceRevision); err != nil {
+			effectErr = errors.Join(effectErr, err)
+		} else {
+			legs.BroadcastOfflineDone = true
+		}
+	}
+	return legs, effectErr
 }
 
 // ApplyAdmissionEffect drives the owed legs of a confirmed generation's obligation one step, each
@@ -4275,14 +4635,71 @@ func (p *Processor) ApplyAdmissionEffect(ctx context.Context, effect control.Adm
 				legs.ActivationPoisoned = true
 				legs.PoisonNote = appendPoisonNote(legs.PoisonNote, "push-target payload undecodable: "+err.Error())
 			} else {
-				targets := make([]*commodorepb.PushTargetInternal, 0, len(activation.GetTargets()))
-				for _, spec := range activation.GetTargets() {
-					targets = append(targets, &commodorepb.PushTargetInternal{Id: spec.GetTargetId(), TargetUri: spec.GetTargetUri(), Name: spec.GetName()})
-				}
-				trackPushTargets(activation.GetStreamName(), effect.TenantID, targets)
 				activation.SourceGeneration = effect.SourceGeneration
-				if err := p.sendActivatePushTargetsLocal(ctx, effect.NodeID, &activation); err != nil {
-					effectErr = errors.Join(effectErr, fmt.Errorf("dispatch push-target activation: %w", err))
+				checkAttemptSupport := control.CheckLocalRestreamAttemptSupport
+				if p.restreamAttemptSupport != nil {
+					checkAttemptSupport = p.restreamAttemptSupport
+				}
+				supportErr := checkAttemptSupport(effect.NodeID)
+				if status.Code(supportErr) == codes.FailedPrecondition {
+					message := "edge sidecar upgrade required for restream activation"
+					var releaseErr error
+					for _, target := range activation.GetTargets() {
+						releaseErr = errors.Join(releaseErr, p.releaseRestreamCapacity(pushTargetInfo{
+							TargetID: target.GetTargetId(), TenantID: effect.TenantID, NodeID: effect.NodeID,
+							SourceGeneration: effect.SourceGeneration, TargetRevision: activation.GetTargetRevision(),
+							MaxViewers: activation.GetMaxViewers(),
+						}))
+					}
+					if releaseErr != nil {
+						effectErr = errors.Join(effectErr, fmt.Errorf("release unsupported-protocol restream capacity: %w", releaseErr))
+					} else {
+						var statusErr error
+						for _, target := range activation.GetTargets() {
+							statusErr = errors.Join(statusErr, p.updatePushTargetStatusByID(
+								target.GetTargetId(), effect.TenantID, activation.GetStreamName(), "failed",
+								pushstatusoutbox.ReasonEdgeUpgradeRequired, &message, time.Now().UnixMilli(),
+							))
+						}
+						if statusErr != nil {
+							effectErr = errors.Join(effectErr, fmt.Errorf("persist unsupported restream protocol status: %w", statusErr))
+						} else {
+							for _, target := range activation.GetTargets() {
+								retirePushTargetID(
+									activation.GetStreamName(), target.GetTargetId(), effect.SourceGeneration,
+									activation.GetTargetRevision(), activation.GetActivationAttempt(),
+								)
+							}
+							capacityPending := false
+							legs.CapacityPending = &capacityPending
+							legs.ActivationDone = true
+						}
+					}
+				} else if supportErr != nil {
+					effectErr = errors.Join(effectErr, supportErr)
+				} else {
+					capacityPending, err := p.reserveRestreamCapacity(ctx, effect, &activation, activation.GetMaxViewers())
+					if err != nil {
+						effectErr = errors.Join(effectErr, err)
+					} else if err := control.RecordAdmissionPushTargetDispatch(ctx, effect.TenantID, effect.InternalName, effect.SourceGeneration, &activation); err != nil {
+						effectErr = errors.Join(effectErr, err)
+					} else {
+						legs.CapacityPending = &capacityPending
+						targets := make([]*commodorepb.PushTargetInternal, 0, len(activation.GetTargets()))
+						for _, spec := range activation.GetTargets() {
+							targets = append(targets, &commodorepb.PushTargetInternal{
+								Id: spec.GetTargetId(), TargetUri: spec.GetTargetUri(), Name: spec.GetName(), Platform: spec.GetPlatform(),
+							})
+						}
+						trackPushTargetsForGeneration(
+							activation.GetStreamName(), effect.TenantID, activation.GetStreamId(),
+							effect.SourceGeneration, activation.GetTargetRevision(), effect.NodeID, activation.GetMaxViewers(), targets,
+							activation.GetActivationAttempt(),
+						)
+						if err := p.sendActivatePushTargetsLocal(ctx, effect.NodeID, &activation); err != nil {
+							effectErr = errors.Join(effectErr, fmt.Errorf("dispatch push-target activation: %w", err))
+						}
+					}
 				}
 			}
 		}
@@ -5955,24 +6372,99 @@ func (p *Processor) getNodeConfig(nodeID string) *NodeConfig {
 
 // pushTargetInfo stores metadata for a tracked multistream push target.
 type pushTargetInfo struct {
-	TargetID string
-	TenantID string
+	TargetID          string
+	TargetURI         string
+	TenantID          string
+	StreamID          string
+	SourceGeneration  string
+	TargetRevision    int64
+	ActivationAttempt string
+	Platform          string
+	NodeID            string
+	MaxViewers        int32
+	MistPushID        int64
+	Current           bool
+	RetiredAt         time.Time
 }
 
 // activePushTargetsMu protects activePushTargetMap.
 var (
-	activePushTargetsMu sync.Mutex
-	activePushTargetMap = map[string]map[string]pushTargetInfo{} // streamName -> targetURI -> info
+	activePushTargetsMu  sync.Mutex
+	activePushTargetMap  = map[string]map[string]pushTargetInfo{} // streamName -> targetID -> info
+	retiredPushTargetMap = map[string]pushTargetInfo{}            // fenced identity -> info
 )
+
+const pushTargetIdentityTTL = 15 * time.Minute
+
+func pushTargetIdentityKey(streamName string, info pushTargetInfo) string {
+	return strings.Join([]string{streamName, info.SourceGeneration, strconv.FormatInt(info.TargetRevision, 10), info.TargetID, info.ActivationAttempt}, "\x00")
+}
+
+func retainRetiredPushTarget(streamName string, info pushTargetInfo, now time.Time) {
+	info.Current = false
+	if info.RetiredAt.IsZero() {
+		info.RetiredAt = now
+	}
+	retiredPushTargetMap[pushTargetIdentityKey(streamName, info)] = info
+}
+
+func pruneRetiredPushTargets(now time.Time) {
+	for key, info := range retiredPushTargetMap {
+		if !info.RetiredAt.IsZero() && now.Sub(info.RetiredAt) >= pushTargetIdentityTTL {
+			delete(retiredPushTargetMap, key)
+		}
+	}
+}
 
 // trackPushTargets stores push target metadata so PUSH_OUT_START/PUSH_END
 // can map target URIs back to push target IDs for status updates.
 func trackPushTargets(streamName, tenantID string, targets []*commodorepb.PushTargetInternal) {
+	trackPushTargetsForGeneration(streamName, tenantID, "", "", 0, "", 0, targets)
+}
+
+func trackPushTargetsForGeneration(streamName, tenantID, streamID, sourceGeneration string, targetRevision int64, nodeID string, maxViewers int32, targets []*commodorepb.PushTargetInternal, attempt ...string) {
 	activePushTargetsMu.Lock()
 	defer activePushTargetsMu.Unlock()
-	m := make(map[string]pushTargetInfo, len(targets))
+	activationAttempt := ""
+	if len(attempt) > 0 {
+		activationAttempt = strings.TrimSpace(attempt[0])
+	}
+	m := activePushTargetMap[streamName]
+	now := time.Now()
+	pruneRetiredPushTargets(now)
+	replaceSet := false
+	for _, info := range m {
+		if info.SourceGeneration != sourceGeneration || info.TargetRevision != targetRevision || info.ActivationAttempt != activationAttempt {
+			replaceSet = true
+			break
+		}
+	}
+	if replaceSet {
+		for _, info := range m {
+			retainRetiredPushTarget(streamName, info, now)
+		}
+		m = nil
+	}
+	if m == nil {
+		m = make(map[string]pushTargetInfo, len(targets))
+	}
+	desiredIDs := make(map[string]struct{}, len(targets))
+	for _, target := range targets {
+		desiredIDs[target.GetId()] = struct{}{}
+	}
+	for targetID, info := range m {
+		if _, stillDesired := desiredIDs[targetID]; stillDesired {
+			continue
+		}
+		retainRetiredPushTarget(streamName, info, now)
+		delete(m, targetID)
+	}
 	for _, t := range targets {
-		m[t.GetTargetUri()] = pushTargetInfo{TargetID: t.GetId(), TenantID: tenantID}
+		m[t.GetId()] = pushTargetInfo{
+			TargetID: t.GetId(), TargetURI: t.GetTargetUri(), TenantID: tenantID, StreamID: streamID,
+			SourceGeneration: sourceGeneration, TargetRevision: targetRevision, ActivationAttempt: activationAttempt, Platform: t.GetPlatform(),
+			NodeID: nodeID, MaxViewers: maxViewers, Current: true,
+		}
 	}
 	activePushTargetMap[streamName] = m
 }
@@ -5981,7 +6473,30 @@ func trackPushTargets(streamName, tenantID string, targets []*commodorepb.PushTa
 func untrackPushTargets(streamName string) {
 	activePushTargetsMu.Lock()
 	defer activePushTargetsMu.Unlock()
+	now := time.Now()
+	for _, info := range activePushTargetMap[streamName] {
+		retainRetiredPushTarget(streamName, info, now)
+	}
 	delete(activePushTargetMap, streamName)
+}
+
+func retirePushTargetID(streamName, targetID, sourceGeneration string, targetRevision int64, attempt ...string) {
+	activePushTargetsMu.Lock()
+	defer activePushTargetsMu.Unlock()
+	now := time.Now()
+	for trackedTargetID, info := range activePushTargetMap[streamName] {
+		if info.TargetID != targetID || info.SourceGeneration != sourceGeneration || info.TargetRevision != targetRevision {
+			continue
+		}
+		if len(attempt) > 0 && strings.TrimSpace(attempt[0]) != "" && info.ActivationAttempt != strings.TrimSpace(attempt[0]) {
+			continue
+		}
+		retainRetiredPushTarget(streamName, info, now)
+		delete(activePushTargetMap[streamName], trackedTargetID)
+	}
+	if len(activePushTargetMap[streamName]) == 0 {
+		delete(activePushTargetMap, streamName)
+	}
 }
 
 // lookupPushTarget finds the push target info for a stream+URI pair.
@@ -5989,11 +6504,500 @@ func lookupPushTarget(streamName, targetURI string) (pushTargetInfo, bool) {
 	activePushTargetsMu.Lock()
 	defer activePushTargetsMu.Unlock()
 	if m, ok := activePushTargetMap[streamName]; ok {
-		if info, found := m[targetURI]; found {
+		for _, info := range m {
+			if info.TargetURI == targetURI {
+				return info, true
+			}
+		}
+	}
+	return pushTargetInfo{}, false
+}
+
+func lookupPushTargetID(streamName, targetID, sourceGeneration string, targetRevision int64, attempt ...string) (pushTargetInfo, bool) {
+	activePushTargetsMu.Lock()
+	defer activePushTargetsMu.Unlock()
+	pruneRetiredPushTargets(time.Now())
+	activationAttempt := ""
+	if len(attempt) > 0 {
+		activationAttempt = strings.TrimSpace(attempt[0])
+	}
+	for _, info := range activePushTargetMap[streamName] {
+		if info.TargetID == targetID &&
+			(sourceGeneration == "" || info.SourceGeneration == sourceGeneration) &&
+			(targetRevision == 0 || info.TargetRevision == targetRevision) &&
+			(activationAttempt == "" || info.ActivationAttempt == activationAttempt) {
+			return info, true
+		}
+	}
+	if sourceGeneration != "" && targetRevision != 0 {
+		key := pushTargetIdentityKey(streamName, pushTargetInfo{
+			TargetID: targetID, SourceGeneration: sourceGeneration, TargetRevision: targetRevision, ActivationAttempt: activationAttempt,
+		})
+		info, found := retiredPushTargetMap[key]
+		if found || activationAttempt != "" {
+			return info, found
+		}
+	}
+	streamPrefix := streamName + "\x00"
+	for key, info := range retiredPushTargetMap {
+		if !strings.HasPrefix(key, streamPrefix) {
+			continue
+		}
+		if info.TargetID == targetID &&
+			(sourceGeneration == "" || info.SourceGeneration == sourceGeneration) &&
+			(targetRevision == 0 || info.TargetRevision == targetRevision) &&
+			(activationAttempt == "" || info.ActivationAttempt == activationAttempt) {
 			return info, true
 		}
 	}
 	return pushTargetInfo{}, false
+}
+
+func hasNewerCurrentPushTargetRevision(streamName, targetID, sourceGeneration string, targetRevision int64, attempt ...string) bool {
+	activePushTargetsMu.Lock()
+	defer activePushTargetsMu.Unlock()
+	activationAttempt := ""
+	if len(attempt) > 0 {
+		activationAttempt = strings.TrimSpace(attempt[0])
+	}
+	for _, info := range activePushTargetMap[streamName] {
+		if info.Current && info.TargetID == targetID &&
+			(info.SourceGeneration != sourceGeneration || info.TargetRevision > targetRevision ||
+				(activationAttempt != "" && info.ActivationAttempt != activationAttempt)) {
+			return true
+		}
+	}
+	return false
+}
+
+func bindCurrentPushTargetMistID(streamName string, expected pushTargetInfo, mistPushID int64) bool {
+	if mistPushID <= 0 {
+		return false
+	}
+	activePushTargetsMu.Lock()
+	defer activePushTargetsMu.Unlock()
+	for targetID, info := range activePushTargetMap[streamName] {
+		if info.TargetID != expected.TargetID || info.SourceGeneration != expected.SourceGeneration || info.TargetRevision != expected.TargetRevision ||
+			info.ActivationAttempt != expected.ActivationAttempt || !info.Current {
+			continue
+		}
+		if info.MistPushID > 0 && info.MistPushID != mistPushID {
+			return false
+		}
+		info.MistPushID = mistPushID
+		activePushTargetMap[streamName][targetID] = info
+		return true
+	}
+	return false
+}
+
+func restreamCapacityID(sourceGeneration string, _ int64, targetID string) string {
+	// One target consumes one viewer-like slot for the life of an ingest
+	// generation. Revisions replace desired configuration in place; the
+	// explicit revision fences on terminal handlers prevent an old result from
+	// releasing the successor while avoiding a transient double reservation.
+	return "restream:" + strings.TrimSpace(sourceGeneration) + ":" + strings.TrimSpace(targetID)
+}
+
+func (p *Processor) reserveRestreamCapacity(ctx context.Context, effect control.AdmissionEffect, activation *ipcpb.ActivatePushTargets, maxViewers int32) (bool, error) {
+	if maxViewers <= 0 || activation == nil {
+		return false, nil
+	}
+	targets := append([]*ipcpb.PushTargetSpec(nil), activation.GetTargets()...)
+	sort.Slice(targets, func(i, j int) bool { return targets[i].GetTargetId() < targets[j].GetTargetId() })
+	newReservations := make([]string, 0, len(targets))
+	admitted := make([]*ipcpb.PushTargetSpec, 0, len(targets))
+	for _, target := range targets {
+		capacityID := restreamCapacityID(effect.SourceGeneration, activation.GetTargetRevision(), target.GetTargetId())
+		allowed, added, current, err := state.DefaultTenantCapacity().TryRegisterViewer(
+			effect.TenantID, effect.NodeID, capacityID, capacityID, maxViewers,
+		)
+		if err != nil {
+			for _, reservationID := range newReservations {
+				if _, _, _, releaseErr := state.DefaultTenantCapacity().ReleaseViewerSession(effect.TenantID, effect.NodeID, reservationID); releaseErr != nil {
+					p.logger.WithError(releaseErr).Warn("Failed to release restream capacity after reservation error")
+				}
+			}
+			return false, fmt.Errorf("reserve restream delivery capacity: %w", err)
+		}
+		if !allowed {
+			message := "delivery capacity exhausted"
+			if statusErr := p.updatePushTargetStatusByID(target.GetTargetId(), effect.TenantID, activation.GetStreamName(), "failed", pushstatusoutbox.ReasonCapacityExhausted, &message, time.Now().UnixMilli()); statusErr != nil {
+				p.logger.WithError(statusErr).Warn("Failed to persist restream capacity denial")
+			}
+			p.logger.WithFields(logging.Fields{
+				"tenant_id": effect.TenantID, "stream_name": activation.GetStreamName(),
+				"current": current, "max_viewers": maxViewers,
+			}).Warn("Skipping restream target: tenant delivery capacity exhausted")
+			continue
+		}
+		admitted = append(admitted, target)
+		if added {
+			newReservations = append(newReservations, capacityID)
+		}
+	}
+	activation.Targets = admitted
+	return len(admitted) != len(targets), nil
+}
+
+func (p *Processor) releaseRestreamCapacity(info pushTargetInfo) error {
+	if info.MaxViewers <= 0 || info.TenantID == "" || info.TargetID == "" || info.SourceGeneration == "" {
+		return nil
+	}
+	capacityID := restreamCapacityID(info.SourceGeneration, info.TargetRevision, info.TargetID)
+	_, _, _, err := state.DefaultTenantCapacity().ReleaseViewerSession(info.TenantID, info.NodeID, capacityID)
+	return err
+}
+
+// HandlePushTargetActivationResult binds the node-local Mist process identity
+// to Foghorn's current desired-set fence. A later replay of an older final for
+// the same generation/revision/target can then be rejected after a runtime
+// restart has created a replacement process.
+func (p *Processor) HandlePushTargetActivationResult(nodeID string, result *ipcpb.ActivatePushTargetsResult) error {
+	if result == nil {
+		return errors.New("activation result is nil")
+	}
+	for _, outcome := range result.GetTargets() {
+		tracked, found := lookupPushTargetID(
+			result.GetStreamName(), outcome.GetTargetId(), result.GetSourceGeneration(), result.GetTargetRevision(), result.GetActivationAttempt(),
+		)
+		if !found || !tracked.Current {
+			return fmt.Errorf("active restream target %q is outside the current activation attempt", outcome.GetTargetId())
+		}
+		if tracked.NodeID != "" && tracked.NodeID != nodeID {
+			return fmt.Errorf("active restream target %q belongs to node %q", outcome.GetTargetId(), tracked.NodeID)
+		}
+		// Validate every outcome, including inactive terminal failures. Otherwise a
+		// delayed failure from an older attempt could settle the replacement's
+		// same-generation/revision obligation and release its shared capacity slot.
+		if !outcome.GetActive() || outcome.GetMistPushId() <= 0 {
+			continue
+		}
+		bindCtx, cancel := context.WithTimeout(context.Background(), MediaAdmissionTimeout)
+		err := control.BindAdmissionPushTargetMistID(
+			bindCtx, nodeID, result.GetSourceGeneration(), result.GetTargetRevision(), result.GetActivationAttempt(), outcome.GetTargetId(), outcome.GetMistPushId(),
+		)
+		cancel()
+		if err != nil {
+			return err
+		}
+	}
+	activePushTargetsMu.Lock()
+	defer activePushTargetsMu.Unlock()
+	for _, outcome := range result.GetTargets() {
+		if !outcome.GetActive() || outcome.GetMistPushId() <= 0 {
+			continue
+		}
+		info, ok := activePushTargetMap[result.GetStreamName()][outcome.GetTargetId()]
+		if !ok || info.SourceGeneration != result.GetSourceGeneration() || info.TargetRevision != result.GetTargetRevision() ||
+			(result.GetActivationAttempt() != "" && info.ActivationAttempt != "" && info.ActivationAttempt != result.GetActivationAttempt()) {
+			return fmt.Errorf("active restream target %q is outside the current desired-set fence", outcome.GetTargetId())
+		}
+		if info.NodeID != "" && info.NodeID != nodeID {
+			return fmt.Errorf("active restream target %q belongs to node %q", outcome.GetTargetId(), info.NodeID)
+		}
+		info.MistPushID = outcome.GetMistPushId()
+		activePushTargetMap[result.GetStreamName()][outcome.GetTargetId()] = info
+	}
+	return nil
+}
+
+// HandleTerminalPushTargetActivation persists the failed runtime state and
+// releases viewer-like capacity before Foghorn settles a revision that cannot
+// succeed without a configuration change.
+func (p *Processor) HandleTerminalPushTargetActivation(nodeID string, result *ipcpb.ActivatePushTargetsResult) error {
+	if result == nil {
+		return errors.New("terminal activation result is nil")
+	}
+	durableByTarget := make(map[string]control.AdmissionPushTargetIdentity)
+	durableLoaded := false
+	loadDurable := func() error {
+		if durableLoaded {
+			return nil
+		}
+		durableLoaded = true
+		lookupCtx, cancel := context.WithTimeout(context.Background(), MediaAdmissionTimeout)
+		defer cancel()
+		durable, durableErr := control.ResolveAdmissionPushTargetsForTeardown(
+			lookupCtx, nodeID, result.GetSourceGeneration(), result.GetTargetRevision(), result.GetActivationAttempt(),
+		)
+		if durableErr != nil && !errors.Is(durableErr, sql.ErrNoRows) {
+			return fmt.Errorf("restore terminal push-target identities: %w", durableErr)
+		}
+		for _, identity := range durable {
+			durableByTarget[identity.TargetID] = identity
+		}
+		return nil
+	}
+	type terminalTarget struct {
+		outcome *ipcpb.PushTargetConvergence
+		tracked pushTargetInfo
+		message string
+		reason  string
+	}
+	// Terminal settlement is revision-wide. A short sidecar result must never
+	// retire only the reported subset and mark the entire durable obligation
+	// complete; require exactly one outcome for every dispatched target.
+	covered := make(map[string]struct{}, len(result.GetTargets()))
+	for _, outcome := range result.GetTargets() {
+		id := strings.TrimSpace(outcome.GetTargetId())
+		if id == "" {
+			return errors.New("terminal activation result contains an empty target identity")
+		}
+		if _, duplicate := covered[id]; duplicate {
+			return fmt.Errorf("terminal activation result repeats target %q", id)
+		}
+		covered[id] = struct{}{}
+	}
+	expected := make(map[string]struct{})
+	for _, info := range trackedPushTargetsForDeactivation(result.GetStreamName(), result.GetSourceGeneration(), result.GetTargetRevision(), result.GetActivationAttempt()) {
+		expected[info.TargetID] = struct{}{}
+	}
+	if len(expected) == 0 {
+		if err := loadDurable(); err != nil {
+			return err
+		}
+		for targetID := range durableByTarget {
+			expected[targetID] = struct{}{}
+		}
+	}
+	for targetID := range expected {
+		if _, ok := covered[targetID]; !ok {
+			return fmt.Errorf("terminal activation result omits dispatched target %q", targetID)
+		}
+	}
+	if len(covered) != len(expected) {
+		return errors.New("terminal activation result contains an unknown target")
+	}
+	targets := make([]terminalTarget, 0, len(result.GetTargets()))
+	for _, outcome := range result.GetTargets() {
+		var message string
+		switch outcome.GetReason() {
+		case ipcpb.RestreamReason_RESTREAM_REASON_DESTINATION_REJECTED:
+			message = "destination rejected by operator policy"
+		case ipcpb.RestreamReason_RESTREAM_REASON_CONFIGURATION_ERROR:
+			message = "restream target configuration is invalid"
+		default:
+			continue
+		}
+		tracked, found := lookupPushTargetID(result.GetStreamName(), outcome.GetTargetId(), result.GetSourceGeneration(), result.GetTargetRevision(), result.GetActivationAttempt())
+		if !found {
+			if err := loadDurable(); err != nil {
+				return err
+			}
+			if identity, durableFound := durableByTarget[outcome.GetTargetId()]; durableFound {
+				if result.GetActivationAttempt() != "" && identity.ActivationAttempt != "" && identity.ActivationAttempt != result.GetActivationAttempt() {
+					return fmt.Errorf("terminal restream target %q is outside the current activation attempt", outcome.GetTargetId())
+				}
+				tracked = pushTargetInfo{
+					TargetID: identity.TargetID, TenantID: identity.TenantID, StreamID: identity.StreamID,
+					SourceGeneration: identity.SourceGeneration, TargetRevision: identity.TargetRevision,
+					ActivationAttempt: identity.ActivationAttempt,
+					Platform:          identity.Platform, NodeID: identity.NodeID, MaxViewers: identity.MaxViewers,
+					Current: true,
+				}
+				found = true
+			}
+		}
+		if !found || (tracked.NodeID != "" && tracked.NodeID != nodeID) {
+			return fmt.Errorf("terminal restream target %q is not tracked on node %q", outcome.GetTargetId(), nodeID)
+		}
+		if !tracked.Current && hasNewerCurrentPushTargetRevision(result.GetStreamName(), outcome.GetTargetId(), result.GetSourceGeneration(), result.GetTargetRevision(), result.GetActivationAttempt()) {
+			continue
+		}
+		targets = append(targets, terminalTarget{outcome: outcome, tracked: tracked, message: message, reason: restreamReasonCode(outcome.GetReason())})
+	}
+	if len(targets) == 0 {
+		return nil
+	}
+	for _, target := range targets {
+		if err := p.updatePushTargetStatusByID(target.outcome.GetTargetId(), target.tracked.TenantID, result.GetStreamName(), "failed", target.reason, &target.message, time.Now().UnixMilli()); err != nil {
+			return err
+		}
+	}
+	for _, target := range targets {
+		if err := p.releaseRestreamCapacity(target.tracked); err != nil {
+			return fmt.Errorf("release terminal restream capacity: %w", err)
+		}
+	}
+	for _, target := range targets {
+		retirePushTargetID(result.GetStreamName(), target.outcome.GetTargetId(), result.GetSourceGeneration(), result.GetTargetRevision(), result.GetActivationAttempt())
+	}
+	return nil
+}
+
+func trackedPushTargetsForDeactivation(streamName, sourceGeneration string, targetRevision int64, attempt ...string) []pushTargetInfo {
+	activePushTargetsMu.Lock()
+	defer activePushTargetsMu.Unlock()
+	pruneRetiredPushTargets(time.Now())
+	byIdentity := make(map[string]pushTargetInfo)
+	activationAttempt := ""
+	if len(attempt) > 0 {
+		activationAttempt = strings.TrimSpace(attempt[0])
+	}
+	add := func(info pushTargetInfo) {
+		if info.SourceGeneration != sourceGeneration || (targetRevision != 0 && info.TargetRevision != targetRevision) {
+			return
+		}
+		if activationAttempt != "" && info.ActivationAttempt != activationAttempt {
+			return
+		}
+		byIdentity[pushTargetIdentityKey(streamName, info)] = info
+	}
+	for _, info := range activePushTargetMap[streamName] {
+		add(info)
+	}
+	streamPrefix := streamName + "\x00"
+	for key, info := range retiredPushTargetMap {
+		if !strings.HasPrefix(key, streamPrefix) {
+			continue
+		}
+		add(info)
+	}
+	out := make([]pushTargetInfo, 0, len(byIdentity))
+	for _, info := range byIdentity {
+		out = append(out, info)
+	}
+	return out
+}
+
+// HandlePushTargetDeactivation turns Helmsman's durable exact-generation
+// inventory acknowledgement into the terminal status/tracking/capacity
+// transition. RESTREAM_STATUS is useful for live UI feedback but is not needed
+// for correctness and may be lost during a sidecar restart.
+func (p *Processor) HandlePushTargetDeactivation(nodeID string, result *ipcpb.DeactivatePushTargetsResult) error {
+	if result == nil || strings.TrimSpace(result.GetStreamName()) == "" || strings.TrimSpace(result.GetSourceGeneration()) == "" {
+		return errors.New("push-target deactivation result is missing identity")
+	}
+	infos := trackedPushTargetsForDeactivation(result.GetStreamName(), result.GetSourceGeneration(), result.GetTargetRevision())
+	lookupCtx, cancel := context.WithTimeout(context.Background(), MediaAdmissionTimeout)
+	durable, durableErr := control.ResolveAdmissionPushTargetsForTeardown(
+		lookupCtx, nodeID, result.GetSourceGeneration(), result.GetTargetRevision(),
+	)
+	cancel()
+	if durableErr != nil && !errors.Is(durableErr, sql.ErrNoRows) && len(infos) == 0 {
+		return fmt.Errorf("restore deactivated push-target identities: %w", durableErr)
+	}
+	seen := make(map[string]struct{}, len(infos)+len(durable))
+	for _, info := range infos {
+		seen[pushTargetIdentityKey(result.GetStreamName(), info)] = struct{}{}
+	}
+	for _, identity := range durable {
+		info := pushTargetInfo{
+			TargetID: identity.TargetID, TenantID: identity.TenantID, StreamID: identity.StreamID,
+			SourceGeneration: identity.SourceGeneration, TargetRevision: identity.TargetRevision,
+			Platform: identity.Platform, NodeID: identity.NodeID, MaxViewers: identity.MaxViewers,
+		}
+		key := pushTargetIdentityKey(result.GetStreamName(), info)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		infos = append(infos, info)
+	}
+	nowMS := time.Now().UnixMilli()
+	for _, info := range infos {
+		if info.NodeID != "" && info.NodeID != nodeID {
+			return fmt.Errorf("deactivated restream target %q belongs to node %q, not %q", info.TargetID, info.NodeID, nodeID)
+		}
+		superseded := hasNewerCurrentPushTargetRevision(result.GetStreamName(), info.TargetID, info.SourceGeneration, info.TargetRevision)
+		if !superseded {
+			if err := p.releaseRestreamCapacity(info); err != nil {
+				return fmt.Errorf("release deactivated restream capacity: %w", err)
+			}
+		}
+		retirePushTargetID(result.GetStreamName(), info.TargetID, info.SourceGeneration, info.TargetRevision)
+		if superseded {
+			continue
+		}
+		if err := p.updatePushTargetStatusByID(info.TargetID, info.TenantID, result.GetStreamName(), "idle", pushstatusoutbox.ReasonStopped, nil, nowMS); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// RunRestreamCapacityRenewal keeps viewer-like delivery reservations alive
+// while their desired targets remain current. Reconnect-driven admission
+// replay rebuilds this inventory after a process restart.
+func (p *Processor) RunRestreamCapacityRenewal(ctx context.Context) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			p.renewRestreamCapacityOnce(ctx)
+		}
+	}
+}
+
+type restreamCapacityRenewal struct {
+	streamName string
+	info       pushTargetInfo
+}
+
+func (p *Processor) renewRestreamCapacityOnce(ctx context.Context) {
+	if rearmed, err := control.RearmCapacityPendingPushTargetEffects(ctx); err != nil {
+		p.logger.WithError(err).Warn("Failed to re-arm capacity-pending restream targets")
+	} else if rearmed > 0 {
+		p.logger.WithField("target_sets", rearmed).Info("Re-armed restream targets after delivery capacity became retryable")
+	}
+	if rearmed, err := control.RearmCooledDownRuntimePushTargetEffects(ctx); err != nil {
+		p.logger.WithError(err).Warn("Failed to re-arm cooled-down restream targets")
+	} else if rearmed > 0 {
+		p.logger.WithField("target_sets", rearmed).Info("Re-armed restream targets after retry-budget cooldown")
+	}
+	activePushTargetsMu.Lock()
+	pruneRetiredPushTargets(time.Now())
+	renewals := make([]restreamCapacityRenewal, 0)
+	for streamName, targets := range activePushTargetMap {
+		for _, info := range targets {
+			if info.Current {
+				renewals = append(renewals, restreamCapacityRenewal{streamName: streamName, info: info})
+			}
+		}
+	}
+	activePushTargetsMu.Unlock()
+	type generationLiveness struct {
+		live bool
+		err  error
+	}
+	liveness := make(map[string]generationLiveness)
+	for _, renewal := range renewals {
+		info := renewal.info
+		generationKey := strings.Join([]string{info.TenantID, renewal.streamName, info.SourceGeneration}, "\x00")
+		probe, found := liveness[generationKey]
+		if !found {
+			live, err := control.IsAdmissionGenerationLive(ctx, info.TenantID, mist.ExtractInternalName(renewal.streamName), info.SourceGeneration)
+			probe = generationLiveness{live: live, err: err}
+			liveness[generationKey] = probe
+		}
+		if probe.err != nil {
+			// Preserve the slot on an ambiguous control-plane outage. The next
+			// minute retries; only an authoritative ended row can evict a live
+			// delivery.
+			p.logger.WithError(probe.err).WithField("source_generation", info.SourceGeneration).Warn("Failed to verify restream capacity liveness")
+		} else if !probe.live {
+			if err := p.releaseRestreamCapacity(info); err != nil {
+				p.logger.WithError(err).WithField("target_id", info.TargetID).Warn("Failed to release ended restream delivery capacity")
+				continue
+			}
+			retirePushTargetID(renewal.streamName, info.TargetID, info.SourceGeneration, info.TargetRevision)
+			if err := p.updatePushTargetStatusByID(info.TargetID, info.TenantID, renewal.streamName, "idle", pushstatusoutbox.ReasonStopped, nil, time.Now().UnixMilli()); err != nil {
+				p.logger.WithError(err).WithField("target_id", info.TargetID).Warn("Failed to persist ended restream delivery status")
+			}
+			continue
+		}
+		if info.MaxViewers <= 0 {
+			continue
+		}
+		capacityID := restreamCapacityID(info.SourceGeneration, info.TargetRevision, info.TargetID)
+		if err := state.DefaultTenantCapacity().RenewViewerSession(info.TenantID, info.NodeID, capacityID, info.MaxViewers); err != nil {
+			p.logger.WithError(err).WithField("tenant_id", info.TenantID).Warn("Failed to renew restream delivery capacity")
+		}
+	}
 }
 
 // deactivatePushTargets tells Helmsman to stop all pushes for a stream.
@@ -6006,6 +7010,7 @@ func (p *Processor) deactivatePushTargets(ctx context.Context, nodeID, streamNam
 	if err := p.sendDeactivatePushTargets(ctx, nodeID, &ipcpb.DeactivatePushTargets{
 		StreamName:       streamName,
 		SourceGeneration: sourceGeneration,
+		TargetRevision:   currentPushTargetRevision(streamName, sourceGeneration),
 	}); err != nil {
 		p.logger.WithFields(logging.Fields{
 			"node_id":     nodeID,
@@ -6017,6 +7022,18 @@ func (p *Processor) deactivatePushTargets(ctx context.Context, nodeID, streamNam
 	return nil
 }
 
+func currentPushTargetRevision(streamName, sourceGeneration string) int64 {
+	activePushTargetsMu.Lock()
+	defer activePushTargetsMu.Unlock()
+	var revision int64
+	for _, info := range activePushTargetMap[streamName] {
+		if info.SourceGeneration == sourceGeneration && info.TargetRevision > revision {
+			revision = info.TargetRevision
+		}
+	}
+	return revision
+}
+
 // updatePushTargetStatus durably records the latest status. The local outbox
 // worker delivers it when Commodore is available; media handling never waits
 // on that control-plane RPC.
@@ -6025,24 +7042,66 @@ func (p *Processor) updatePushTargetStatus(streamName, targetURI, status string,
 	if !found {
 		return
 	}
+	if err := p.updatePushTargetStatusByID(info.TargetID, info.TenantID, streamName, status, pushstatusoutbox.ReasonUnspecified, lastError, eventUnixMillis); err != nil {
+		p.logger.WithError(err).Warn("Failed to persist push-target status")
+	}
+}
 
+func (p *Processor) updatePushTargetStatusByID(targetID, tenantID, streamName, status, reasonCode string, lastError *string, eventUnixMillis int64) error {
 	db := control.GetDB()
 	if db == nil {
-		p.logger.WithField("target_id", info.TargetID).Error("Cannot persist push-target status obligation: database unavailable")
-		return
+		p.logger.WithField("target_id", targetID).Error("Cannot persist push-target status obligation: database unavailable")
+		return errors.New("cannot persist push-target status obligation: database unavailable")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), MediaAdmissionTimeout)
 	defer cancel()
 	if eventUnixMillis < 0 {
 		eventUnixMillis = 0
 	}
-	if err := pushstatusoutbox.Enqueue(ctx, db, info.TargetID, info.TenantID, status, lastError, eventUnixMillis); err != nil {
+	if err := pushstatusoutbox.Enqueue(ctx, db, targetID, tenantID, status, reasonCode, lastError, eventUnixMillis); err != nil {
 		p.logger.WithFields(logging.Fields{
-			"target_id":   info.TargetID,
+			"target_id":   targetID,
 			"stream_name": streamName,
 			"status":      status,
 			"error":       err,
 		}).Error("Failed to persist push-target status obligation")
+		return fmt.Errorf("persist push-target status obligation: %w", err)
+	}
+	return nil
+}
+
+func restreamReasonCode(reason ipcpb.RestreamReason) string {
+	switch reason {
+	case ipcpb.RestreamReason_RESTREAM_REASON_CONNECTED:
+		return pushstatusoutbox.ReasonConnected
+	case ipcpb.RestreamReason_RESTREAM_REASON_COMPLETED:
+		return pushstatusoutbox.ReasonCompleted
+	case ipcpb.RestreamReason_RESTREAM_REASON_DESTINATION_REJECTED:
+		return pushstatusoutbox.ReasonDestinationRejected
+	case ipcpb.RestreamReason_RESTREAM_REASON_NETWORK_ERROR:
+		return pushstatusoutbox.ReasonNetworkError
+	case ipcpb.RestreamReason_RESTREAM_REASON_PROCESS_ERROR:
+		return pushstatusoutbox.ReasonProcessError
+	case ipcpb.RestreamReason_RESTREAM_REASON_CAPACITY_EXHAUSTED:
+		return pushstatusoutbox.ReasonCapacityExhausted
+	case ipcpb.RestreamReason_RESTREAM_REASON_CONFIGURATION_ERROR:
+		return pushstatusoutbox.ReasonConfigurationError
+	case ipcpb.RestreamReason_RESTREAM_REASON_STOPPED:
+		return pushstatusoutbox.ReasonStopped
+	default:
+		return pushstatusoutbox.ReasonUnspecified
+	}
+}
+
+func restreamReasonIsTerminal(reason ipcpb.RestreamReason) bool {
+	switch reason {
+	case ipcpb.RestreamReason_RESTREAM_REASON_DESTINATION_REJECTED,
+		ipcpb.RestreamReason_RESTREAM_REASON_CAPACITY_EXHAUSTED,
+		ipcpb.RestreamReason_RESTREAM_REASON_CONFIGURATION_ERROR,
+		ipcpb.RestreamReason_RESTREAM_REASON_STOPPED:
+		return true
+	default:
+		return false
 	}
 }
 

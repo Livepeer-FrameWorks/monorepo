@@ -53,15 +53,25 @@ func stubFingerprintResolves(t *testing.T, canonical, tenant string) {
 // EOF, enough to drive the Connect handler's registration prologue.
 type registerOnceStream struct {
 	ipcpb.HelmsmanControl_ConnectServer
-	msgs []*ipcpb.ControlMessage
-	idx  int
+	msgs          []*ipcpb.ControlMessage
+	sent          []*ipcpb.ControlMessage
+	idx           int
+	beforeRecv    func(int, *ipcpb.ControlMessage)
+	afterMessages <-chan struct{}
 }
 
 func (s *registerOnceStream) Recv() (*ipcpb.ControlMessage, error) {
 	if s.idx >= len(s.msgs) {
+		if s.afterMessages != nil {
+			<-s.afterMessages
+			s.afterMessages = nil
+		}
 		return nil, io.EOF
 	}
 	m := s.msgs[s.idx]
+	if s.beforeRecv != nil {
+		s.beforeRecv(s.idx, m)
+	}
 	s.idx++
 	if register := m.GetRegister(); register != nil && register.GetControlProtocolVersion() >= MinControlProtocolVersion && len(register.GetNodeIdentityProofEd25519()) == 0 {
 		if register.GetFingerprint() == nil {
@@ -75,8 +85,47 @@ func (s *registerOnceStream) Recv() (*ipcpb.ControlMessage, error) {
 	return m, nil
 }
 
-func (s *registerOnceStream) Send(*ipcpb.ControlMessage) error { return nil }
-func (s *registerOnceStream) Context() context.Context         { return context.Background() }
+func (s *registerOnceStream) Send(msg *ipcpb.ControlMessage) error {
+	s.sent = append(s.sent, msg)
+	return nil
+}
+func (s *registerOnceStream) Context() context.Context { return context.Background() }
+
+func TestConnectKeylessFingerprintUsesTokenAuthorizedRecoveryPath(t *testing.T) {
+	ensureRegistry(t)
+	previousResolve := resolveNodeFingerprintFn
+	previousBootstrap := bootstrapEdgeNodeFn
+	resolveNodeFingerprintFn = func(context.Context, *quartermasterpb.ResolveNodeFingerprintRequest) (*quartermasterpb.ResolveNodeFingerprintResponse, error) {
+		return nil, status.Error(codes.FailedPrecondition, "enrollment_token_required")
+	}
+	bootstrapCalled := false
+	bootstrapEdgeNodeFn = func(_ context.Context, req *quartermasterpb.BootstrapEdgeNodeRequest) (*quartermasterpb.BootstrapEdgeNodeResponse, error) {
+		bootstrapCalled = true
+		if req.GetToken() != "recovery-token" || req.GetHostname() != "edge-legacy" {
+			t.Fatalf("unexpected recovery request: %+v", req)
+		}
+		return nil, status.Error(codes.PermissionDenied, "node identity key does not match enrollment; explicit rotation is required")
+	}
+	t.Cleanup(func() {
+		resolveNodeFingerprintFn = previousResolve
+		bootstrapEdgeNodeFn = previousBootstrap
+	})
+
+	stream := &registerOnceStream{msgs: []*ipcpb.ControlMessage{
+		{Payload: &ipcpb.ControlMessage_Register{Register: &ipcpb.Register{
+			NodeId: "edge-legacy", EnrollmentToken: "recovery-token", ControlProtocolVersion: MinControlProtocolVersion,
+		}}},
+	}}
+	if err := (&Server{}).Connect(stream); err != nil {
+		t.Fatalf("Connect returned transport error: %v", err)
+	}
+	if !bootstrapCalled {
+		t.Fatal("keyless fingerprint did not reach token-authorized bootstrap")
+	}
+	if len(stream.sent) == 0 || stream.sent[len(stream.sent)-1].GetError().GetCode() != "IDENTITY_ROTATION_REQUIRED" {
+		t.Fatalf("control errors = %+v, want IDENTITY_ROTATION_REQUIRED", stream.sent)
+	}
+}
 
 // A registration that LOSES the fenced conn-owner CAS (a strictly-higher fence already owns the node on
 // a peer) must be rejected AND must never appear in the dispatchable registry: ownership is won before
@@ -394,6 +443,18 @@ func TestArtifactDeletedCallbackUsesAuthenticatedNodeID(t *testing.T) {
 		}
 	}
 	t.Cleanup(func() { artifactDeletedHandler = prevH })
+	rearmed := make(chan struct {
+		nodeID string
+		fence  int64
+	}, 1)
+	previousSchedule := scheduleReconnectPushTargetRearmFn
+	scheduleReconnectPushTargetRearmFn = func(nodeID string, fence int64, _ string, _ logging.Logger) {
+		rearmed <- struct {
+			nodeID string
+			fence  int64
+		}{nodeID: nodeID, fence: fence}
+	}
+	t.Cleanup(func() { scheduleReconnectPushTargetRearmFn = previousSchedule })
 
 	mockDB, mock, err := sqlmock.New()
 	if err != nil {
@@ -418,7 +479,7 @@ func TestArtifactDeletedCallbackUsesAuthenticatedNodeID(t *testing.T) {
 	mock.ExpectCommit()
 
 	stream := &registerOnceStream{msgs: []*ipcpb.ControlMessage{
-		{Payload: &ipcpb.ControlMessage_Register{Register: &ipcpb.Register{NodeId: "node-real", ControlProtocolVersion: MinControlProtocolVersion}}},
+		{Payload: &ipcpb.ControlMessage_Register{Register: &ipcpb.Register{NodeId: "node-real", ControlProtocolVersion: RestreamAttemptFenceProtocolMin}}},
 		// A FORGED payload node_id — the callback must ignore it in favor of the authenticated session id.
 		{SentAt: timestamppb.New(time.UnixMilli(1234)), Payload: &ipcpb.ControlMessage_ArtifactDeleted{ArtifactDeleted: &ipcpb.ArtifactDeleted{ArtifactHash: "h", NodeId: "victim-node", Reason: "evict"}}},
 	}}
@@ -436,8 +497,130 @@ func TestArtifactDeletedCallbackUsesAuthenticatedNodeID(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("artifact-deleted callback was not invoked")
 	}
+	select {
+	case call := <-rearmed:
+		if call.nodeID != "node-real" || call.fence != 3 {
+			t.Fatalf("reconnect re-arm call=%+v, want authenticated node and fence", call)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("attempt-capable registration did not schedule reconnect re-arm")
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestActivatePushTargetsResultThroughConnectFencesRetiredConnection(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		stale bool
+	}{
+		{name: "matching connection settles"},
+		{name: "retired connection is ignored", stale: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ensureRegistry(t)
+			nodeID := "node-activation-result-current"
+			if test.stale {
+				nodeID = "node-activation-result-stale"
+			}
+			stubFingerprintResolves(t, nodeID, "tenant-a")
+
+			store, _ := newTestStore(t)
+			setCommandRelay(t, buildRelay(t, store, "inst-self", "10.0.0.1:9090", &mockRelayPool{}))
+			sm := state.ResetDefaultManagerForTests()
+			if err := sm.EnableRedisSync(context.Background(), store, "inst-self", logging.NewLogger()); err != nil {
+				t.Fatalf("EnableRedisSync: %v", err)
+			}
+			t.Cleanup(func() { sm.Shutdown() })
+
+			mockDB, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatal(err)
+			}
+			previousDB := db
+			db = mockDB
+			t.Cleanup(func() { db = previousDB; mockDB.Close() })
+			mock.ExpectQuery(`INSERT INTO foghorn.node_control_fence_counter`).WithArgs(nodeID).
+				WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow(int64(3)))
+			mock.ExpectBegin()
+			mock.ExpectQuery(`INSERT INTO foghorn.node_config_seeds`).WithArgs(nodeID).
+				WillReturnRows(sqlmock.NewRows([]string{"version_counter"}).AddRow(int64(1)))
+			mock.ExpectQuery(`SELECT COALESCE\(seed_version, 0\)::bigint AS seed_version, seed_payload`).WithArgs(nodeID).
+				WillReturnRows(sqlmock.NewRows([]string{"seed_version", "seed_payload"}))
+			mock.ExpectExec(`UPDATE foghorn.node_config_seeds`).WithArgs(int64(1), sqlmock.AnyArg(), nodeID).
+				WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectCommit()
+			if !test.stale {
+				mock.ExpectExec(`UPDATE foghorn.ingest_admission_effects AS effect`).
+					WithArgs(int64(3), "generation-a", nodeID, int64(7), "").
+					WillReturnResult(sqlmock.NewResult(0, 1))
+			}
+
+			called := make(chan struct{}, 1)
+			previousHandler := pushTargetActivationResultHandler
+			pushTargetActivationResultHandler = func(gotNodeID string, result *ipcpb.ActivatePushTargetsResult) error {
+				if gotNodeID != nodeID || result.GetSourceGeneration() != "generation-a" || result.GetTargetRevision() != 7 {
+					t.Errorf("activation callback node=%q result=%+v", gotNodeID, result)
+				}
+				called <- struct{}{}
+				return nil
+			}
+			t.Cleanup(func() { pushTargetActivationResultHandler = previousHandler })
+
+			release := make(chan struct{})
+			stream := &registerOnceStream{
+				msgs: []*ipcpb.ControlMessage{
+					{Payload: &ipcpb.ControlMessage_Register{Register: &ipcpb.Register{NodeId: nodeID, ControlProtocolVersion: RestreamRevisionFenceProtocolMin}}},
+					{Payload: &ipcpb.ControlMessage_ActivatePushTargetsResult{ActivatePushTargetsResult: &ipcpb.ActivatePushTargetsResult{
+						StreamName: "live+activation-result", SourceGeneration: "generation-a", TargetRevision: 7, Converged: true,
+					}}},
+				},
+				afterMessages: release,
+			}
+			if test.stale {
+				stream.beforeRecv = func(index int, _ *ipcpb.ControlMessage) {
+					if index != 1 {
+						return
+					}
+					registry.mu.Lock()
+					registry.conns[nodeID].fence = 4
+					registry.mu.Unlock()
+				}
+			}
+			connectDone := make(chan error, 1)
+			go func() { connectDone <- (&Server{}).Connect(stream) }()
+
+			if test.stale {
+				select {
+				case <-called:
+					t.Fatal("retired connection reached the activation result handler")
+				case <-time.After(200 * time.Millisecond):
+				}
+			} else {
+				select {
+				case <-called:
+				case <-time.After(2 * time.Second):
+					t.Fatal("matching connection did not settle activation result")
+				}
+				deadline := time.Now().Add(2 * time.Second)
+				for mock.ExpectationsWereMet() != nil && time.Now().Before(deadline) {
+					time.Sleep(time.Millisecond)
+				}
+			}
+			close(release)
+			select {
+			case err := <-connectDone:
+				if err != nil {
+					t.Fatalf("Connect: %v", err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("Connect did not finish")
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 

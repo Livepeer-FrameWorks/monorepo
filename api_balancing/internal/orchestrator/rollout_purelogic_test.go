@@ -109,13 +109,13 @@ func TestReleaseComponentForNode_BareURLFallbackIsLinuxAmd64Only(t *testing.T) {
 		Checksum:    "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
 	}
 
-	if selected, ok := releaseComponentForNode(component, &state.NodeState{OS: "linux", Arch: "amd64"}); !ok || selected.ArtifactURL != component.ArtifactURL {
+	if selected, ok := releaseComponentForNode("mist", component, &state.NodeState{OS: "linux", Arch: "amd64"}); !ok || selected.ArtifactURL != component.ArtifactURL {
 		t.Errorf("linux/amd64 should accept the bare artifact; got ok=%v url=%q", ok, selected.ArtifactURL)
 	}
-	if _, ok := releaseComponentForNode(component, &state.NodeState{OS: "darwin", Arch: "arm64"}); ok {
+	if _, ok := releaseComponentForNode("mist", component, &state.NodeState{OS: "darwin", Arch: "arm64"}); ok {
 		t.Error("non-linux/amd64 node must not accept a bare (linux) artifact")
 	}
-	if _, ok := releaseComponentForNode(component, &state.NodeState{}); ok {
+	if _, ok := releaseComponentForNode("mist", component, &state.NodeState{}); ok {
 		t.Error("node with no derivable platform must return ok=false")
 	}
 }

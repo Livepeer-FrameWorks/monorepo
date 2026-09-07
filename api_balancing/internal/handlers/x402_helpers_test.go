@@ -49,6 +49,7 @@ func setupPurserClient(t *testing.T, service *stubX402Service) (*purserclient.GR
 	client, err := purserclient.NewGRPCClient(purserclient.GRPCConfig{
 		GRPCAddr:      listener.Addr().String(),
 		Logger:        logging.Logger(logrus.New()),
+		ServiceToken:  "test-service-token",
 		AllowInsecure: true,
 	})
 	if err != nil {

@@ -88,6 +88,7 @@ func startCommodoreFakeArms(t *testing.T, fake *commodoreArmsFake) {
 	client, clientErr := commodorecli.NewGRPCClient(commodorecli.GRPCConfig{
 		GRPCAddr:      lis.Addr().String(),
 		AllowInsecure: true,
+		ServiceToken:  "test-service-token",
 		Logger:        logging.NewLogger(),
 		Timeout:       5 * time.Second,
 	})

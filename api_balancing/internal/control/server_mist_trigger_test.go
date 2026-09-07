@@ -101,6 +101,72 @@ func TestProcessMistTrigger_ReplaysBlockingResultByMistTriggerUUID(t *testing.T)
 	}
 }
 
+func TestActivationResultTerminalClassificationUsesBoundedReasons(t *testing.T) {
+	tests := []struct {
+		name   string
+		result *ipcpb.ActivatePushTargetsResult
+		want   bool
+	}{
+		{name: "nil", result: nil},
+		{name: "partially converged still cleans terminal outcomes", want: true, result: &ipcpb.ActivatePushTargetsResult{
+			Converged: true,
+			Targets:   []*ipcpb.PushTargetConvergence{{Reason: ipcpb.RestreamReason_RESTREAM_REASON_CONFIGURATION_ERROR}},
+		}},
+		{name: "free form error is not trusted", result: &ipcpb.ActivatePushTargetsResult{Error: "configuration error"}},
+		{name: "network remains retryable", result: &ipcpb.ActivatePushTargetsResult{
+			Targets: []*ipcpb.PushTargetConvergence{{Reason: ipcpb.RestreamReason_RESTREAM_REASON_NETWORK_ERROR}},
+		}},
+		{name: "bounded terminal target ignores envelope text", want: true, result: &ipcpb.ActivatePushTargetsResult{
+			Error:   "push inventory unavailable",
+			Targets: []*ipcpb.PushTargetConvergence{{Reason: ipcpb.RestreamReason_RESTREAM_REASON_DESTINATION_REJECTED}},
+		}},
+		{name: "mixed terminal and retryable remains retryable", result: &ipcpb.ActivatePushTargetsResult{
+			Error: "one target failed",
+			Targets: []*ipcpb.PushTargetConvergence{
+				{Reason: ipcpb.RestreamReason_RESTREAM_REASON_DESTINATION_REJECTED},
+				{Reason: ipcpb.RestreamReason_RESTREAM_REASON_NETWORK_ERROR},
+			},
+		}},
+		{name: "destination rejection is terminal", want: true, result: &ipcpb.ActivatePushTargetsResult{
+			Targets: []*ipcpb.PushTargetConvergence{{Reason: ipcpb.RestreamReason_RESTREAM_REASON_DESTINATION_REJECTED}},
+		}},
+		{name: "configuration failure is terminal", want: true, result: &ipcpb.ActivatePushTargetsResult{
+			Targets: []*ipcpb.PushTargetConvergence{{Reason: ipcpb.RestreamReason_RESTREAM_REASON_CONFIGURATION_ERROR}},
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := activationResultHasTerminalConfigurationFailure(test.result); got != test.want {
+				t.Fatalf("terminal=%v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestTerminalActivationUsesDurableFallbackWhenRuntimeIdentityBindingFails(t *testing.T) {
+	previousBind := pushTargetActivationResultHandler
+	previousTerminal := terminalPushTargetActivationHandler
+	t.Cleanup(func() {
+		pushTargetActivationResultHandler = previousBind
+		terminalPushTargetActivationHandler = previousTerminal
+	})
+	pushTargetActivationResultHandler = func(string, *ipcpb.ActivatePushTargetsResult) error {
+		return errors.New("process-local identity missing after restart")
+	}
+	called := false
+	terminalPushTargetActivationHandler = func(nodeID string, result *ipcpb.ActivatePushTargetsResult) error {
+		called = nodeID == "node-a" && result.GetActivationAttempt() == "attempt-a"
+		return nil
+	}
+	result := &ipcpb.ActivatePushTargetsResult{ActivationAttempt: "attempt-a"}
+	if !processPushTargetActivationOutcome("node-a", result, true, logging.NewLogger()) {
+		t.Fatal("terminal result did not settle through the durable fallback")
+	}
+	if !called {
+		t.Fatal("production terminal fallback handler was not called")
+	}
+}
+
 func TestProcessMistTrigger_ReplayWaitStopsWithControlStream(t *testing.T) {
 	prevProcessor := mistTriggerProcessor
 	t.Cleanup(func() { mistTriggerProcessor = prevProcessor })

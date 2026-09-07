@@ -11,6 +11,11 @@ import (
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 )
 
+// BulkListTimeout is the end-to-end budget for tenant artifact census calls.
+// The backing pool must use a ceiling at least this large or its interceptor
+// would truncate the operation before this wrapper's deadline.
+const BulkListTimeout = 60 * time.Second
+
 // federationContext strips user JWT from the context so the client interceptor
 // falls through to the service token for service-to-service federation RPCs.
 func federationContext(ctx context.Context) context.Context {
@@ -156,7 +161,7 @@ func (c *FederationClient) ListTenantArtifacts(ctx context.Context, clusterID, a
 		return nil, err
 	}
 
-	ctx, cancel := context.WithTimeout(federationContext(ctx), 30*time.Second) // longer timeout for bulk listing
+	ctx, cancel := context.WithTimeout(federationContext(ctx), BulkListTimeout)
 	defer cancel()
 
 	return foghornfed.For(client).Federation().ListTenantArtifacts(ctx, req)

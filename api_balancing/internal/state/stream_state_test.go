@@ -485,6 +485,23 @@ func TestApplyNodeLifecycleKeepsDegradedHeartbeatFresh(t *testing.T) {
 	}
 }
 
+func TestApplyNodeLifecycleStoresONNXProfile(t *testing.T) {
+	sm := NewStreamStateManager()
+	defer sm.Shutdown()
+	if err := sm.ApplyNodeLifecycle(context.Background(), &ipcpb.NodeLifecycleUpdate{
+		NodeId:      "node-onnx",
+		DeployMode:  "native",
+		Os:          "linux",
+		Arch:        "amd64",
+		OnnxProfile: "cuda",
+	}); err != nil {
+		t.Fatalf("ApplyNodeLifecycle failed: %v", err)
+	}
+	if node := sm.GetNodeState("node-onnx"); node == nil || node.ONNXProfile != "cuda" {
+		t.Fatalf("node = %#v, want ONNX profile cuda", node)
+	}
+}
+
 func TestNewNodeStartsStaleUntilHeartbeat(t *testing.T) {
 	sm := NewStreamStateManager()
 	defer sm.Shutdown()

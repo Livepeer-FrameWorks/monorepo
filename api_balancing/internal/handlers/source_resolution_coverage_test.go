@@ -67,6 +67,7 @@ func startPullCommodoreSourceRes(t *testing.T, fake *pullSourceFakeSourceRes) {
 	client, err := commodorecli.NewGRPCClient(commodorecli.GRPCConfig{
 		GRPCAddr:      lis.Addr().String(),
 		AllowInsecure: true,
+		ServiceToken:  "test-service-token",
 		Logger:        logging.NewLogger(),
 		Timeout:       5 * time.Second,
 	})

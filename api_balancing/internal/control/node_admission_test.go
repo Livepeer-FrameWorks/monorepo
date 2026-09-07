@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"database/sql"
 	"errors"
 	"regexp"
 	"testing"
@@ -93,6 +94,70 @@ func TestNodeIdentityAuthorityUnavailableDoesNotMaskAuthoritativeRejection(t *te
 	}
 	if !nodeIdentityAuthorityUnavailable(nil, false) {
 		t.Fatal("an absent authority client did not permit a previously persisted admission")
+	}
+}
+
+func TestConsumedEnrollmentTokenDoesNotDisableDurableAdmissionFallback(t *testing.T) {
+	if !shouldAttemptDurableNodeAdmission(false, status.Error(codes.Unavailable, "down"), true, "consumed-token-left-in-env") {
+		t.Fatal("configured enrollment token disabled pinned local admission during authority outage")
+	}
+	if shouldAttemptDurableNodeAdmission(false, status.Error(codes.PermissionDenied, "revoked"), true, "token") {
+		t.Fatal("authoritative rejection was weakened by an enrollment token")
+	}
+}
+
+func TestNodeIdentityAuthorityRejectedRevokesEveryDefinitiveIdentityDenial(t *testing.T) {
+	for _, code := range []codes.Code{codes.NotFound, codes.PermissionDenied, codes.FailedPrecondition, codes.InvalidArgument, codes.Unauthenticated} {
+		if !nodeIdentityAuthorityRejected(status.Error(code, "rejected")) {
+			t.Fatalf("%s was not classified as authoritative rejection", code)
+		}
+	}
+	for _, code := range []codes.Code{codes.Unavailable, codes.DeadlineExceeded, codes.ResourceExhausted, codes.Internal} {
+		if nodeIdentityAuthorityRejected(status.Error(code, "transient")) {
+			t.Fatalf("%s was classified as authoritative rejection", code)
+		}
+	}
+	if nodeIdentityAuthorityRejected(status.Error(codes.Aborted, "ambiguous fingerprint")) {
+		t.Fatal("ambiguous fingerprint was classified as authoritative revocation")
+	}
+	if shouldAttemptDurableNodeAdmission(false, status.Error(codes.Aborted, "ambiguous fingerprint"), true, "") {
+		t.Fatal("ambiguous fingerprint used local admission while authority was reachable")
+	}
+}
+
+func TestAuthoritativeRejectionRevocationCannotBeReusedDuringLaterOutage(t *testing.T) {
+	mockDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousDB := db
+	db = mockDB
+	t.Cleanup(func() {
+		db = previousDB
+		_ = mockDB.Close()
+	})
+	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	register := &ipcpb.Register{
+		Fingerprint:                  &ipcpb.NodeFingerprint{MachineIdSha256: stringPointerForControlTest("abababababababababababababababababababababababababababababababab")},
+		NodeIdentityPublicKeyEd25519: publicKey,
+	}
+	mock.ExpectExec(regexp.QuoteMeta("DELETE FROM foghorn.node_admissions")).
+		WithArgs(sqlmock.AnyArg(), publicKey).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	if err := revokeDurableNodeAdmission(context.Background(), register); err != nil {
+		t.Fatal(err)
+	}
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT canonical_node_id, tenant_id, cluster_id, public_key_ed25519, validated_at, valid_until")).
+		WithArgs(sqlmock.AnyArg()).
+		WillReturnError(sql.ErrNoRows)
+	if _, err := loadDurableNodeAdmission(context.Background(), register); err == nil {
+		t.Fatal("revoked admission was reusable during a later authority outage")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 

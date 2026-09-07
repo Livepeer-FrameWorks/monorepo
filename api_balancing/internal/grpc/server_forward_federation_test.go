@@ -25,6 +25,7 @@ type forwardCall struct {
 	artifactHash string
 	tenantID     string
 	streamID     string
+	done         <-chan struct{}
 }
 
 func (m *mockFedRPC) QueryStream(context.Context, string, string, *foghornfederationpb.QueryStreamRequest) (*foghornfederationpb.QueryStreamResponse, error) {
@@ -36,7 +37,7 @@ func (m *mockFedRPC) NotifyOriginPull(context.Context, string, string, *foghornf
 func (m *mockFedRPC) PrepareArtifact(context.Context, string, string, *foghornfederationpb.PrepareArtifactRequest) (*foghornfederationpb.PrepareArtifactResponse, error) {
 	return nil, nil
 }
-func (m *mockFedRPC) ForwardArtifactCommand(_ context.Context, clusterID, addr string, req *foghornfederationpb.ForwardArtifactCommandRequest) (*foghornfederationpb.ForwardArtifactCommandResponse, error) {
+func (m *mockFedRPC) ForwardArtifactCommand(ctx context.Context, clusterID, addr string, req *foghornfederationpb.ForwardArtifactCommandRequest) (*foghornfederationpb.ForwardArtifactCommandResponse, error) {
 	m.calls = append(m.calls, forwardCall{
 		clusterID:    clusterID,
 		addr:         addr,
@@ -44,6 +45,7 @@ func (m *mockFedRPC) ForwardArtifactCommand(_ context.Context, clusterID, addr s
 		artifactHash: req.GetArtifactHash(),
 		tenantID:     req.GetTenantId(),
 		streamID:     req.GetStreamId(),
+		done:         ctx.Done(),
 	})
 	if err, ok := m.errors[clusterID]; ok && err != nil {
 		return nil, err
@@ -177,6 +179,9 @@ func TestForwardArtifact_NoPeerHandles(t *testing.T) {
 	}
 	if len(fed.calls) != 2 {
 		t.Fatalf("expected 2 RPC calls (both peers), got %d", len(fed.calls))
+	}
+	if fed.calls[0].done == fed.calls[1].done {
+		t.Fatal("expected each peer RPC to receive an independent timeout context")
 	}
 }
 

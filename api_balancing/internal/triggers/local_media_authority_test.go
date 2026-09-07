@@ -224,6 +224,101 @@ func localAuthorityFixture(t *testing.T) (*Processor, sqlmock.Sqlmock, func(), [
 	return p, mock, func() { _ = db.Close() }, tenantBytes, objectBytes
 }
 
+func TestHandleMediaAuthorityApplySkipsTombstoneAndMissingLocalGrant(t *testing.T) {
+	newFixture := func(t *testing.T, lifecycle mediaauthoritypb.AuthorityLifecycle) (*Processor, sqlmock.Sqlmock, func(), []byte, []byte) {
+		t.Helper()
+		p, mock, closeDB, tenantBytes, objectBytes := localAuthorityFixture(t)
+		object := &mediaauthoritypb.MediaObjectAuthority{}
+		if err := proto.Unmarshal(objectBytes, object); err != nil {
+			closeDB()
+			t.Fatal(err)
+		}
+		object.Lifecycle = lifecycle
+		if lifecycle != mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE {
+			object.GetLiveStream().SealedCellSecrets = nil
+		}
+		encoded, err := proto.MarshalOptions{Deterministic: true}.Marshal(object)
+		if err != nil {
+			closeDB()
+			t.Fatal(err)
+		}
+		tenant := &mediaauthoritypb.TenantAuthority{}
+		if unmarshalErr := proto.Unmarshal(tenantBytes, tenant); unmarshalErr != nil {
+			closeDB()
+			t.Fatal(unmarshalErr)
+		}
+		tenant.ResourceLimits = &tenantlimitspb.TenantResourceLimits{MaxViewers: 10}
+		tenantBytes, err = proto.MarshalOptions{Deterministic: true}.Marshal(tenant)
+		if err != nil {
+			closeDB()
+			t.Fatal(err)
+		}
+		return p, mock, closeDB, tenantBytes, encoded
+	}
+
+	t.Run("tombstone", func(t *testing.T) {
+		p, mock, closeDB, _, objectBytes := newFixture(t, mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_TOMBSTONE)
+		defer closeDB()
+		validUntil := time.Now().Add(time.Hour)
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,")).
+			WithArgs("stream-internal").
+			WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_id", "authority_version", "local_read_ready"}).
+				AddRow(objectBytes, localPayloadDigest(objectBytes), time.Now().Add(time.Minute), validUntil, sharedauthority.LiveStreamAuthorityID("30000000-0000-0000-0000-000000000001"), int64(9), false))
+		if err := p.HandleMediaAuthorityApply(context.Background(), localauthority.ApplyResult{
+			Kind: "media_object", InternalName: "stream-internal", TenantID: "10000000-0000-0000-0000-000000000001", Version: 9,
+		}); err != nil {
+			t.Fatalf("tombstone observer returned error: %v", err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("active authority without local sealed grant", func(t *testing.T) {
+		p, mock, closeDB, tenantBytes, objectBytes := newFixture(t, mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE)
+		defer closeDB()
+		validUntil := time.Now().Add(time.Hour)
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,")).
+			WithArgs("stream-internal").
+			WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_id", "authority_version", "local_read_ready"}).
+				AddRow(objectBytes, localPayloadDigest(objectBytes), time.Now().Add(time.Minute), validUntil, sharedauthority.LiveStreamAuthorityID("30000000-0000-0000-0000-000000000001"), int64(9), true))
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,")).
+			WithArgs("10000000-0000-0000-0000-000000000001").
+			WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_version", "local_read_ready", "local_ingest_ready", "local_source_ready"}).
+				AddRow(tenantBytes, localPayloadDigest(tenantBytes), time.Now().Add(time.Minute), validUntil, int64(8), true, true, true))
+		if err := p.HandleMediaAuthorityApply(context.Background(), localauthority.ApplyResult{
+			Kind: "media_object", InternalName: "stream-internal", TenantID: "10000000-0000-0000-0000-000000000001", Version: 9,
+		}); err != nil {
+			t.Fatalf("ungranted authority observer returned error: %v", err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("unlimited tenant without explicit resource limits", func(t *testing.T) {
+		p, mock, closeDB, tenantBytes, objectBytes := localAuthorityFixture(t)
+		defer closeDB()
+		validUntil := time.Now().Add(time.Hour)
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,")).
+			WithArgs("stream-internal").
+			WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_id", "authority_version", "local_read_ready"}).
+				AddRow(objectBytes, localPayloadDigest(objectBytes), time.Now().Add(time.Minute), validUntil, sharedauthority.LiveStreamAuthorityID("30000000-0000-0000-0000-000000000001"), int64(9), true))
+		mock.ExpectQuery(regexp.QuoteMeta("SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,")).
+			WithArgs("10000000-0000-0000-0000-000000000001").
+			WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_version", "local_read_ready", "local_ingest_ready", "local_source_ready"}).
+				AddRow(tenantBytes, localPayloadDigest(tenantBytes), time.Now().Add(time.Minute), validUntil, int64(8), true, true, true))
+		if err := p.HandleMediaAuthorityApply(context.Background(), localauthority.ApplyResult{
+			Kind: "media_object", InternalName: "stream-internal", TenantID: "10000000-0000-0000-0000-000000000001", Version: 9,
+		}); err != nil {
+			t.Fatalf("unlimited tenant observer returned error: %v", err)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
 func TestReadyLocalIngestAuthorityVerifiesCredentialAndFencesOwner(t *testing.T) {
 	p, mock, closeDB, tenantBytes, objectBytes := localAuthorityFixture(t)
 	defer closeDB()

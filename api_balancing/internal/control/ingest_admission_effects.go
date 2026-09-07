@@ -12,7 +12,9 @@ import (
 	"frameworks/api_balancing/internal/database/foghorndb"
 	fieldcrypto "github.com/Livepeer-FrameWorks/monorepo/pkg/crypto"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/google/uuid"
+	"google.golang.org/protobuf/proto"
 )
 
 var admissionEffectEncryptor *fieldcrypto.FieldEncryptor
@@ -126,6 +128,8 @@ type AdmissionEffect struct {
 	PriorOwnerNodeID           string
 	PriorOwnerSourceGeneration string
 	PushTargets                []byte
+	TargetRevision             int64
+	CapacityPending            bool
 	BroadcastLive              bool
 	DecklogTrigger             []byte
 	PeerHints                  []AdmissionPeerHint
@@ -149,6 +153,230 @@ type AdmissionEffect struct {
 	LeaseToken      string
 }
 
+// AdmissionPushTargetIdentity is the restart-safe attribution retained in the
+// encrypted admission obligation for a restream status report.
+type AdmissionPushTargetIdentity struct {
+	TenantID          string
+	InternalName      string
+	NodeID            string
+	StreamID          string
+	SourceGeneration  string
+	TargetRevision    int64
+	ActivationAttempt string
+	LatestRevision    int64
+	TargetID          string
+	Platform          string
+	MistPushID        int64
+	MaxViewers        int32
+	SourceLive        bool
+}
+
+const legacyAdmissionActivationAttempt = "00000000-0000-0000-0000-000000000000"
+
+func normalizeAdmissionActivationAttempt(value string) string {
+	value = strings.TrimSpace(value)
+	if value == legacyAdmissionActivationAttempt {
+		return ""
+	}
+	return value
+}
+
+func ResolveAdmissionPushTargetIdentity(ctx context.Context, tenantID, sourceGeneration string, targetRevision int64, activationAttempt, targetID string) (AdmissionPushTargetIdentity, error) {
+	if db == nil {
+		return AdmissionPushTargetIdentity{}, errors.New("admission database is unavailable")
+	}
+	row, err := foghorndb.New(db).GetAdmissionPushTargetsForStatus(ctx, foghorndb.GetAdmissionPushTargetsForStatusParams{
+		TenantID: tenantID, SourceGeneration: sourceGeneration, TargetRevision: targetRevision, ActivationAttempt: activationAttempt,
+	})
+	if err != nil {
+		return AdmissionPushTargetIdentity{}, err
+	}
+	opened, err := openAdmissionPushTargets(row.PushTargets, row.TenantID, row.StreamInternalName, sourceGeneration)
+	if err != nil {
+		return AdmissionPushTargetIdentity{}, fmt.Errorf("open admission push targets: %w", err)
+	}
+	var activation ipcpb.ActivatePushTargets
+	if err := proto.Unmarshal(opened, &activation); err != nil {
+		return AdmissionPushTargetIdentity{}, fmt.Errorf("decode admission push targets: %w", err)
+	}
+	rowAttempt := normalizeAdmissionActivationAttempt(row.ActivationAttempt)
+	if strings.TrimSpace(activation.GetActivationAttempt()) != rowAttempt {
+		return AdmissionPushTargetIdentity{}, errors.New("durable restream activation attempt does not match its protected payload")
+	}
+	mistPushIDs := map[string]int64{}
+	if len(row.MistPushIds) > 0 {
+		if err := json.Unmarshal(row.MistPushIds, &mistPushIDs); err != nil {
+			return AdmissionPushTargetIdentity{}, fmt.Errorf("decode admission Mist push identities: %w", err)
+		}
+	}
+	for _, target := range activation.GetTargets() {
+		if target.GetTargetId() != targetID {
+			continue
+		}
+		return AdmissionPushTargetIdentity{
+			TenantID: row.TenantID, InternalName: row.StreamInternalName, NodeID: row.NodeID,
+			StreamID: activation.GetStreamId(), SourceGeneration: sourceGeneration,
+			TargetRevision: row.TargetRevision, LatestRevision: row.LatestTargetRevision,
+			ActivationAttempt: rowAttempt,
+			TargetID:          target.GetTargetId(), Platform: target.GetPlatform(), MistPushID: mistPushIDs[target.GetTargetId()],
+			MaxViewers: activation.GetMaxViewers(), SourceLive: row.SourceLive,
+		}, nil
+	}
+	return AdmissionPushTargetIdentity{}, sql.ErrNoRows
+}
+
+// ResolveAdmissionPushTargetsForTeardown restores the exact desired-set
+// snapshot behind a deactivation acknowledgement. It is used when the
+// non-durable status message was lost or Helmsman restarted before teardown.
+func ResolveAdmissionPushTargetsForTeardown(ctx context.Context, nodeID, sourceGeneration string, targetRevision int64, attempt ...string) ([]AdmissionPushTargetIdentity, error) {
+	if db == nil {
+		return nil, errors.New("admission database is unavailable")
+	}
+	activationAttempt := ""
+	if len(attempt) > 0 {
+		activationAttempt = strings.TrimSpace(attempt[0])
+	}
+	row, err := foghorndb.New(db).GetAdmissionPushTargetsForTeardown(ctx, foghorndb.GetAdmissionPushTargetsForTeardownParams{
+		SourceGeneration: sourceGeneration, NodeID: nodeID, TargetRevision: targetRevision, ActivationAttempt: activationAttempt,
+	})
+	if err != nil {
+		return nil, err
+	}
+	opened, err := openAdmissionPushTargets(row.PushTargets, row.TenantID, row.StreamInternalName, sourceGeneration)
+	if err != nil {
+		return nil, fmt.Errorf("open teardown admission push targets: %w", err)
+	}
+	var activation ipcpb.ActivatePushTargets
+	if err := proto.Unmarshal(opened, &activation); err != nil {
+		return nil, fmt.Errorf("decode teardown admission push targets: %w", err)
+	}
+	rowAttempt := normalizeAdmissionActivationAttempt(row.ActivationAttempt)
+	if strings.TrimSpace(activation.GetActivationAttempt()) != rowAttempt {
+		return nil, errors.New("durable teardown activation attempt does not match its protected payload")
+	}
+	mistPushIDs := map[string]int64{}
+	if len(row.MistPushIds) > 0 {
+		if err := json.Unmarshal(row.MistPushIds, &mistPushIDs); err != nil {
+			return nil, fmt.Errorf("decode teardown Mist push identities: %w", err)
+		}
+	}
+	identities := make([]AdmissionPushTargetIdentity, 0, len(activation.GetTargets()))
+	for _, target := range activation.GetTargets() {
+		identities = append(identities, AdmissionPushTargetIdentity{
+			TenantID: row.TenantID, InternalName: row.StreamInternalName, NodeID: row.NodeID,
+			StreamID: activation.GetStreamId(), SourceGeneration: sourceGeneration,
+			TargetRevision: row.TargetRevision, ActivationAttempt: rowAttempt,
+			TargetID: target.GetTargetId(), Platform: target.GetPlatform(), MistPushID: mistPushIDs[target.GetTargetId()],
+			MaxViewers: activation.GetMaxViewers(), SourceLive: false,
+		})
+	}
+	return identities, nil
+}
+
+// BindAdmissionPushTargetMistID durably binds the node-local Mist process to
+// the immutable desired-set snapshot before an activation can settle.
+func BindAdmissionPushTargetMistID(ctx context.Context, nodeID, sourceGeneration string, targetRevision int64, activationAttempt, targetID string, mistPushID int64) error {
+	if db == nil || mistPushID <= 0 {
+		return nil
+	}
+	if strings.TrimSpace(nodeID) == "" || strings.TrimSpace(sourceGeneration) == "" || strings.TrimSpace(activationAttempt) == "" || strings.TrimSpace(targetID) == "" || targetRevision <= 0 {
+		return errors.New("bind admission Mist push identity requires node, generation, revision, attempt, target, and positive Mist id")
+	}
+	n, err := foghorndb.New(db).BindAdmissionPushTargetMistID(ctx, foghorndb.BindAdmissionPushTargetMistIDParams{
+		TargetID: targetID, MistPushID: mistPushID, NodeID: nodeID,
+		SourceGeneration: sourceGeneration, TargetRevision: targetRevision, ActivationAttempt: activationAttempt,
+	})
+	if err != nil {
+		return fmt.Errorf("bind admission Mist push identity: %w", err)
+	}
+	if n != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+// BindAdmissionPushTargetMistIDIfAbsent claims an unbound durable identity
+// without overwriting a replacement process that won the race. The bool is
+// true only when this call installed the supplied Mist ID.
+func BindAdmissionPushTargetMistIDIfAbsent(ctx context.Context, nodeID, sourceGeneration string, targetRevision int64, activationAttempt, targetID string, mistPushID int64) (bool, error) {
+	if db == nil {
+		return false, errors.New("admission database is unavailable")
+	}
+	if strings.TrimSpace(nodeID) == "" || strings.TrimSpace(sourceGeneration) == "" || strings.TrimSpace(activationAttempt) == "" || strings.TrimSpace(targetID) == "" || targetRevision <= 0 || mistPushID <= 0 {
+		return false, errors.New("bind absent admission Mist push identity requires node, generation, revision, attempt, target, and positive Mist id")
+	}
+	n, err := foghorndb.New(db).BindAdmissionPushTargetMistIDIfAbsent(ctx, foghorndb.BindAdmissionPushTargetMistIDIfAbsentParams{
+		TargetID: targetID, MistPushID: mistPushID, NodeID: nodeID,
+		SourceGeneration: sourceGeneration, TargetRevision: targetRevision, ActivationAttempt: activationAttempt,
+	})
+	if err != nil {
+		return false, fmt.Errorf("bind absent admission Mist push identity: %w", err)
+	}
+	return n == 1, nil
+}
+
+// RecordAdmissionPushTargetDispatch stores the exact capacity-admitted subset
+// for this attempt. The effect row retains the complete authority payload for a
+// later capacity re-arm; the revision snapshot is the restart-safe record of
+// what the node was actually asked to converge.
+func RecordAdmissionPushTargetDispatch(ctx context.Context, tenantID, internalName, sourceGeneration string, activation *ipcpb.ActivatePushTargets) error {
+	if db == nil {
+		return errors.New("admission database is unavailable")
+	}
+	if activation == nil || strings.TrimSpace(sourceGeneration) == "" || activation.GetTargetRevision() <= 0 || strings.TrimSpace(activation.GetActivationAttempt()) == "" {
+		return errors.New("record push-target dispatch requires generation, revision, and activation attempt")
+	}
+	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(activation)
+	if err != nil {
+		return fmt.Errorf("encode dispatched push-target subset: %w", err)
+	}
+	protected, err := protectAdmissionPushTargets(raw, tenantID, internalName, sourceGeneration)
+	if err != nil {
+		return fmt.Errorf("protect dispatched push-target subset: %w", err)
+	}
+	n, err := foghorndb.New(db).RecordAdmissionPushTargetDispatch(ctx, foghorndb.RecordAdmissionPushTargetDispatchParams{
+		PushTargets: protected, SourceGeneration: sourceGeneration, TargetRevision: activation.GetTargetRevision(), ActivationAttempt: activation.GetActivationAttempt(),
+	})
+	if err != nil {
+		return fmt.Errorf("record dispatched push-target subset: %w", err)
+	}
+	if n != 1 {
+		return errors.New("record dispatched push-target subset: activation attempt is no longer current")
+	}
+	return nil
+}
+
+// ResolveAdmissionTargetRevision maps a legacy revision-less acknowledgement
+// to the latest durable desired-set revision for its exact generation/node.
+func ResolveAdmissionTargetRevision(ctx context.Context, nodeID, sourceGeneration string) (int64, error) {
+	if db == nil {
+		return 0, errors.New("admission database is unavailable")
+	}
+	revision, err := foghorndb.New(db).GetAdmissionTargetRevision(ctx, foghorndb.GetAdmissionTargetRevisionParams{
+		SourceGeneration: sourceGeneration, NodeID: nodeID,
+	})
+	if err != nil {
+		return 0, err
+	}
+	return revision, nil
+}
+
+// IsAdmissionGenerationLive is the durable liveness check used by capacity
+// renewal. Process-local target tracking may outlive a missed teardown status,
+// but an ended ingest_sessions row is authoritative and must stop renewal.
+func IsAdmissionGenerationLive(ctx context.Context, tenantID, internalName, sourceGeneration string) (bool, error) {
+	if db == nil {
+		return false, errors.New("admission database is unavailable")
+	}
+	row, err := foghorndb.New(db).ProbeCurrentSourceProjection(ctx, foghorndb.ProbeCurrentSourceProjectionParams{
+		TenantID: tenantID, StreamInternalName: internalName, Generation: sourceGeneration,
+	})
+	if err != nil {
+		return false, err
+	}
+	return row.IsCurrent, nil
+}
+
 // AdmissionEffectFence identifies one ended federation membership watermark considered for
 // cleanup. A fence is purgeable only after every admission callback at or below its revision has
 // left the pending state.
@@ -166,8 +394,13 @@ type AdmissionEffectFence struct {
 // durable payload — no retry can succeed) are settled with diagnostics accumulated in PoisonNote,
 // leaving unrelated valid legs to converge.
 type AdmissionEffectLegResults struct {
-	BroadcastDone      bool
-	DecklogDone        bool
+	BroadcastDone bool
+	DecklogDone   bool
+	// ActivationDone settles a diagnosed, non-retryable dispatch block while
+	// retaining the encrypted target payload. A later capable node reconnect
+	// re-arms that exact set. ActivationPoisoned is reserved for payloads that
+	// can never be replayed and therefore must be cleared.
+	ActivationDone     bool
 	ActivationPoisoned bool
 	BroadcastPoisoned  bool
 	Deferred           bool
@@ -176,6 +409,9 @@ type AdmissionEffectLegResults struct {
 	// worker records it as the row's claim affinity. Empty when unresolvable — plain hand-back.
 	AuthorityInstance string
 	PoisonNote        string
+	// CapacityPending is set only when this pass evaluated target capacity.
+	// A nil value preserves the prior durable state after unrelated failures.
+	CapacityPending *bool
 }
 
 func enqueueAdmissionEffectTx(ctx context.Context, tx *sql.Tx, tenantID, internalName, nodeID, generation string, revision int64, priorOwnerNodeID, priorOwnerSourceGeneration string, intent AdmissionEffectIntent) error {
@@ -186,6 +422,15 @@ func enqueueAdmissionEffectTx(ctx context.Context, tx *sql.Tx, tenantID, interna
 	if err != nil {
 		return fmt.Errorf("protect admission push targets: %w", err)
 	}
+	var targetRevision int64
+	var activationAttempt string
+	if len(intent.PushTargets) > 0 {
+		var activation ipcpb.ActivatePushTargets
+		if unmarshalErr := proto.Unmarshal(intent.PushTargets, &activation); unmarshalErr == nil {
+			targetRevision = activation.GetTargetRevision()
+			activationAttempt = activation.GetActivationAttempt()
+		}
+	}
 	// Legs that do not apply to this obligation are born complete.
 	var peerClusters sql.NullString
 	if len(intent.PeerHints) > 0 {
@@ -195,16 +440,26 @@ func enqueueAdmissionEffectTx(ctx context.Context, tx *sql.Tx, tenantID, interna
 		}
 		peerClusters = sql.NullString{String: string(raw), Valid: true}
 	}
-	err = foghorndb.New(tx).EnqueueAdmissionEffect(ctx, foghorndb.EnqueueAdmissionEffectParams{
+	queries := foghorndb.New(tx)
+	err = queries.EnqueueAdmissionEffect(ctx, foghorndb.EnqueueAdmissionEffectParams{
 		TenantID: tenantID, StreamInternalName: internalName, NodeID: nodeID, SourceGeneration: generation,
 		SourceRevision: revision, PriorOwnerNodeID: priorOwnerNodeID, PriorOwnerSourceGeneration: priorOwnerSourceGeneration,
-		PushTargets: protectedPushTargets, BroadcastLive: intent.BroadcastLive, DecklogTrigger: intent.DecklogTrigger,
+		PushTargets: protectedPushTargets, TargetRevision: targetRevision,
+		BroadcastLive: intent.BroadcastLive, DecklogTrigger: intent.DecklogTrigger,
 		PeerClusters:   peerClusters,
 		DrainDone:      strings.TrimSpace(priorOwnerNodeID) == "" || strings.TrimSpace(priorOwnerNodeID) == nodeID || strings.TrimSpace(priorOwnerSourceGeneration) == "",
 		ActivationDone: len(intent.PushTargets) == 0, BroadcastDone: !intent.BroadcastLive, DecklogDone: len(intent.DecklogTrigger) == 0,
 	})
 	if err != nil {
 		return fmt.Errorf("enqueue admission effect: %w", err)
+	}
+	if len(protectedPushTargets) > 0 && targetRevision > 0 {
+		if err := queries.StoreAdmissionPushTargetRevision(ctx, foghorndb.StoreAdmissionPushTargetRevisionParams{
+			TenantID: tenantID, StreamInternalName: internalName, NodeID: nodeID,
+			SourceGeneration: generation, TargetRevision: targetRevision, ActivationAttempt: activationAttempt, PushTargets: protectedPushTargets,
+		}); err != nil {
+			return fmt.Errorf("store admission push-target revision: %w", err)
+		}
 	}
 	return nil
 }
@@ -233,7 +488,7 @@ func ClaimAdmissionEffects(ctx context.Context, limit int, lease time.Duration, 
 			ID: row.ID, TenantID: row.TenantID, InternalName: row.StreamInternalName, NodeID: row.NodeID,
 			SourceGeneration: row.SourceGeneration, SourceRevision: row.SourceRevision,
 			PriorOwnerNodeID: row.PriorOwnerNodeID, PriorOwnerSourceGeneration: row.PriorOwnerSourceGeneration,
-			BroadcastLive: row.BroadcastLive, DecklogTrigger: row.DecklogTrigger,
+			TargetRevision: row.TargetRevision, CapacityPending: row.CapacityPending, BroadcastLive: row.BroadcastLive, DecklogTrigger: row.DecklogTrigger,
 			DrainDone: row.DrainDone, ActivationDone: row.ActivationDone, BroadcastDone: row.BroadcastDone,
 			DecklogDone: row.DecklogDone, LeaseToken: row.LeaseToken, EncryptedState: row.State == admissionStatePendingV2,
 		}
@@ -284,6 +539,7 @@ func ClaimAdmissionEffects(ctx context.Context, limit int, lease time.Duration, 
 // admissionLegFlags is one obligation's per-leg completion snapshot.
 type admissionLegFlags struct {
 	drain, activation, broadcast, decklog bool
+	capacityPending                       bool
 }
 
 func (f admissionLegFlags) allDone() bool {
@@ -294,7 +550,7 @@ func (f admissionLegFlags) allDone() bool {
 // worker's lease. sql.ErrNoRows means the lease was lost or the row settled elsewhere.
 func readAdmissionLegsLocked(ctx context.Context, tx *sql.Tx, id int64, leaseToken string) (admissionLegFlags, error) {
 	row, err := foghorndb.New(tx).ReadAdmissionLegsLocked(ctx, foghorndb.ReadAdmissionLegsLockedParams{EffectID: id, LeaseToken: leaseToken})
-	return admissionLegFlags{drain: row.DrainDone, activation: row.ActivationDone, broadcast: row.BroadcastDone, decklog: row.DecklogDone}, err
+	return admissionLegFlags{drain: row.DrainDone, activation: row.ActivationDone, broadcast: row.BroadcastDone, decklog: row.DecklogDone, capacityPending: row.CapacityPending}, err
 }
 
 // settleAdmissionLegsLocked persists merged leg flags and, when every leg is done, the terminal
@@ -321,7 +577,8 @@ func settleAdmissionLegsLocked(ctx context.Context, tx *sql.Tx, effect Admission
 	}
 	n, err := foghorndb.New(tx).SettleAdmissionLegs(ctx, foghorndb.SettleAdmissionLegsParams{
 		DrainDone: f.drain, ActivationDone: f.activation, BroadcastDone: f.broadcast, DecklogDone: f.decklog,
-		NewState: newState, PoisonNote: poisonNote, ClearPushTargets: clearPushTargets,
+		CapacityPending: f.capacityPending,
+		NewState:        newState, PoisonNote: poisonNote, ClearPushTargets: clearPushTargets,
 		EffectID: effect.ID, LeaseToken: effect.LeaseToken,
 	})
 	if err != nil {
@@ -472,8 +729,9 @@ func ApplyClaimedAdmissionEffect(ctx context.Context, effect AdmissionEffect, ap
 		flags.activation, flags.broadcast, flags.drain = true, true, true
 	}
 	effect.DrainDone, effect.ActivationDone, effect.BroadcastDone, effect.DecklogDone = flags.drain, flags.activation, flags.broadcast, flags.decklog
+	effect.CapacityPending = flags.capacityPending
 	effect.GenerationEnded = generationEnded
-	terminal, err := settleAdmissionLegsLocked(ctx, tx, effect, flags, generationEnded, "", generationEnded)
+	terminal, err := settleAdmissionLegsLocked(ctx, tx, effect, flags, generationEnded, "", false)
 	if err != nil {
 		return false, err
 	}
@@ -508,7 +766,10 @@ func ApplyClaimedAdmissionEffect(ctx context.Context, effect AdmissionEffect, ap
 	}
 	current.broadcast = current.broadcast || legs.BroadcastDone || legs.BroadcastPoisoned
 	current.decklog = current.decklog || legs.DecklogDone
-	current.activation = current.activation || legs.ActivationPoisoned
+	current.activation = current.activation || legs.ActivationDone || legs.ActivationPoisoned
+	if legs.CapacityPending != nil {
+		current.capacityPending = *legs.CapacityPending
+	}
 	generationEnded, err = probeAdmissionGeneration(ctx, tx3, effect)
 	if err != nil {
 		return false, errors.Join(applyErr, err)
@@ -516,7 +777,7 @@ func ApplyClaimedAdmissionEffect(ctx context.Context, effect AdmissionEffect, ap
 	if generationEnded {
 		current.activation, current.broadcast, current.drain = true, true, true
 	}
-	terminal, err = settleAdmissionLegsLocked(ctx, tx3, effect, current, generationEnded, legs.PoisonNote, generationEnded || legs.ActivationPoisoned)
+	terminal, err = settleAdmissionLegsLocked(ctx, tx3, effect, current, generationEnded, legs.PoisonNote, legs.ActivationPoisoned)
 	if err != nil {
 		return false, errors.Join(applyErr, err)
 	}
@@ -556,13 +817,6 @@ func markAdmissionLeg(ctx context.Context, legColumn, nodeColumn, nodeID, source
 	switch legColumn {
 	case "drain_done":
 		err = q.MarkAdmissionDrainDone(ctx, foghorndb.MarkAdmissionDrainDoneParams{SourceGeneration: sourceGeneration, NodeID: nodeID})
-	case "activation_done":
-		if connectionFence <= 0 {
-			return errors.New("mark admission activation requires a positive authenticated connection fence")
-		}
-		err = q.MarkAdmissionActivationDone(ctx, foghorndb.MarkAdmissionActivationDoneParams{
-			SourceGeneration: sourceGeneration, NodeID: nodeID, ConnectionFence: connectionFence,
-		})
 	default:
 		return fmt.Errorf("mark admission: unsupported leg %q/%q", legColumn, nodeColumn)
 	}
@@ -582,8 +836,44 @@ func MarkAdmissionDrainDone(ctx context.Context, priorOwnerNodeID, sourceGenerat
 // node, for the exact obligation whose generation the result echoes. connectionFence is the
 // authenticated control-session fence that delivered the acknowledgement; a retired connection
 // cannot complete output recovery armed by a newer registration.
-func MarkAdmissionActivationDone(ctx context.Context, nodeID, sourceGeneration string, connectionFence int64) error {
-	return markAdmissionLeg(ctx, "activation_done", "node_id", nodeID, sourceGeneration, connectionFence)
+func MarkAdmissionActivationDone(ctx context.Context, nodeID, sourceGeneration, activationAttempt string, connectionFence, targetRevision int64) error {
+	if db == nil {
+		return nil
+	}
+	if strings.TrimSpace(sourceGeneration) == "" || strings.TrimSpace(nodeID) == "" || connectionFence <= 0 || targetRevision < 0 {
+		return errors.New("mark admission activation requires generation, node, connection fence, and target revision")
+	}
+	n, err := foghorndb.New(db).MarkAdmissionActivationDone(ctx, foghorndb.MarkAdmissionActivationDoneParams{
+		SourceGeneration: sourceGeneration, NodeID: nodeID, ActivationAttempt: activationAttempt,
+		ConnectionFence: connectionFence, TargetRevision: targetRevision,
+	})
+	if err != nil {
+		return fmt.Errorf("mark admission activation: %w", err)
+	}
+	if n != 1 {
+		return errors.New("mark admission activation: acknowledgement is outside the current durable activation attempt")
+	}
+	return nil
+}
+
+// AdmissionPushTargetAttemptCurrent checks the durable attempt before any
+// result-side runtime mutation. MarkAdmissionActivationDone repeats this fence
+// in its CAS so a rotation between validation and settlement cannot complete
+// the replacement obligation.
+func AdmissionPushTargetAttemptCurrent(ctx context.Context, nodeID, sourceGeneration string, targetRevision int64, activationAttempt string) (bool, error) {
+	if db == nil {
+		return false, errors.New("admission database is unavailable")
+	}
+	if strings.TrimSpace(nodeID) == "" || strings.TrimSpace(sourceGeneration) == "" || targetRevision <= 0 || strings.TrimSpace(activationAttempt) == "" {
+		return false, errors.New("activation-attempt check requires node, generation, revision, and attempt")
+	}
+	current, err := foghorndb.New(db).AdmissionPushTargetAttemptCurrent(ctx, foghorndb.AdmissionPushTargetAttemptCurrentParams{
+		SourceGeneration: sourceGeneration, NodeID: nodeID, TargetRevision: targetRevision, ActivationAttempt: activationAttempt,
+	})
+	if err != nil {
+		return false, fmt.Errorf("check durable activation attempt: %w", err)
+	}
+	return current, nil
 }
 
 // RequeueActivePushTargetActivationsForNode re-arms every exact target set belonging to a still-open
@@ -591,17 +881,360 @@ func MarkAdmissionActivationDone(ctx context.Context, nodeID, sourceGeneration s
 // only the activation leg; already-completed analytics, federation, and prior-owner work remain
 // complete. The exact admission payload is retained rather than resolving current central policy.
 func RequeueActivePushTargetActivationsForNode(ctx context.Context, nodeID string, connectionFence int64, instanceID string) (int64, error) {
+	var total int64
+	for {
+		rearmed, examined, err := requeueActivePushTargetActivationsForNodeBatch(ctx, nodeID, connectionFence, instanceID)
+		total += rearmed
+		if err != nil || examined < reconnectPushTargetRearmBatchSize {
+			return total, err
+		}
+	}
+}
+
+const reconnectPushTargetRearmBatchSize = 100
+
+func requeueActivePushTargetActivationsForNodeBatch(ctx context.Context, nodeID string, connectionFence int64, instanceID string) (int64, int, error) {
 	if db == nil {
-		return 0, errors.New("requeue active push targets requires the durable session store")
+		return 0, 0, errors.New("requeue active push targets requires the durable session store")
 	}
 	if strings.TrimSpace(nodeID) == "" || connectionFence <= 0 {
-		return 0, errors.New("requeue active push targets requires node identity and positive connection fence")
+		return 0, 0, errors.New("requeue active push targets requires node identity and positive connection fence")
 	}
-	n, err := foghorndb.New(db).RequeueActivePushTargetActivationsForNode(ctx, foghorndb.RequeueActivePushTargetActivationsForNodeParams{
-		NodeID: nodeID, ConnectionFence: connectionFence, InstanceID: instanceID,
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, 0, fmt.Errorf("begin reconnect push-target requeue: %w", err)
+	}
+	defer rollbackQuiet(tx)
+	q := foghorndb.New(tx)
+	rows, err := q.ListActivePushTargetActivationsForNodeRequeue(ctx, foghorndb.ListActivePushTargetActivationsForNodeRequeueParams{
+		NodeID: nodeID, ConnectionFence: connectionFence,
 	})
 	if err != nil {
-		return 0, fmt.Errorf("requeue active push-target activations: %w", err)
+		return 0, 0, fmt.Errorf("list reconnect push-target activations: %w", err)
+	}
+	examined := len(rows)
+	var requeued int64
+	for _, row := range rows {
+		protected, _, rotateErr := rotateAdmissionPushTargetAttempt(ctx, q, row.TenantID, row.StreamInternalName, row.SourceGeneration, row.TargetRevision, row.PushTargets)
+		if rotateErr != nil {
+			logging.NewLogger().WithError(rotateErr).WithFields(logging.Fields{
+				"effect_id": row.ID, "tenant_id": row.TenantID, "generation": row.SourceGeneration,
+			}).Error("Skipping malformed reconnect restream obligation")
+			incRestreamReconcile("reconnect", "poison_skipped")
+			skipped, skipErr := q.SkipReconnectPushTargetActivationByID(ctx, foghorndb.SkipReconnectPushTargetActivationByIDParams{
+				ConnectionFence: connectionFence, ErrorMessage: "reconnect re-arm skipped: " + rotateErr.Error(), EffectID: row.ID,
+			})
+			if skipErr != nil {
+				return 0, examined, fmt.Errorf("record skipped reconnect push-target activation: %w", skipErr)
+			}
+			if skipped != 1 {
+				return 0, examined, fmt.Errorf("record skipped reconnect push-target activation: expected one effect row, updated %d", skipped)
+			}
+			continue
+		}
+		updated, updateErr := q.RequeueActivePushTargetActivationByID(ctx, foghorndb.RequeueActivePushTargetActivationByIDParams{
+			PushTargets: protected, ConnectionFence: connectionFence, InstanceID: instanceID, EffectID: row.ID,
+		})
+		if updateErr != nil {
+			return 0, examined, fmt.Errorf("requeue reconnect push-target activation: %w", updateErr)
+		}
+		if updated != 1 {
+			return 0, examined, fmt.Errorf("requeue reconnect push-target activation: expected one effect row, updated %d", updated)
+		}
+		requeued += updated
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, examined, fmt.Errorf("commit reconnect push-target requeue: %w", err)
+	}
+	return requeued, examined, nil
+}
+
+// ReconcileActivePushTargetAuthority replaces the durable desired target set
+// for every live ingest generation of one stream. The media-authority version
+// is the monotonic fence: duplicate/stale envelopes cannot re-arm older state.
+func ReconcileActivePushTargetAuthority(ctx context.Context, tenantID, internalName string, desired *ipcpb.ActivatePushTargets) (int64, error) {
+	if db == nil || desired == nil {
+		return 0, nil
+	}
+	if strings.TrimSpace(tenantID) == "" || strings.TrimSpace(internalName) == "" || desired.GetTargetRevision() <= 0 {
+		return 0, errors.New("push-target authority reconciliation requires tenant, stream, and positive revision")
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin push-target authority reconciliation: %w", err)
+	}
+	defer rollbackQuiet(tx)
+	queries := foghorndb.New(tx)
+	if lockErr := queries.AcquireDVRStartLock(ctx, ingestStreamAdvisoryLockKey(tenantID, internalName)); lockErr != nil {
+		return 0, fmt.Errorf("lock push-target authority reconciliation: %w", lockErr)
+	}
+	rows, err := queries.ListActiveAdmissionPushTargetEffectsForUpdate(ctx, foghorndb.ListActiveAdmissionPushTargetEffectsForUpdateParams{
+		TenantID: tenantID, StreamInternalName: internalName,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("list active push-target obligations: %w", err)
+	}
+	var updated int64
+	for _, row := range rows {
+		currentRevision := row.TargetRevision
+		var current ipcpb.ActivatePushTargets
+		currentReadable := true
+		if len(row.PushTargets) > 0 {
+			opened, openErr := openAdmissionPushTargets(row.PushTargets, tenantID, internalName, row.SourceGeneration)
+			if openErr != nil {
+				currentReadable = false
+				logging.NewLogger().WithError(openErr).WithFields(logging.Fields{
+					"tenant_id": tenantID, "stream": internalName, "generation": row.SourceGeneration,
+				}).Error("Replacing unreadable durable push-target obligation from signed authority")
+			} else if decodeErr := proto.Unmarshal(opened, &current); decodeErr != nil {
+				currentReadable = false
+				logging.NewLogger().WithError(decodeErr).WithFields(logging.Fields{
+					"tenant_id": tenantID, "stream": internalName, "generation": row.SourceGeneration,
+				}).Error("Replacing undecodable durable push-target obligation from signed authority")
+			} else {
+				currentRevision = current.GetTargetRevision()
+			}
+		}
+		if currentRevision > desired.GetTargetRevision() {
+			continue
+		}
+		next := proto.CloneOf(desired)
+		next.SourceGeneration = row.SourceGeneration
+		if strings.TrimSpace(next.GetActivationAttempt()) == "" {
+			next.ActivationAttempt = uuid.NewString()
+		}
+		if currentReadable && samePushTargetSet(&current, next) {
+			continue
+		}
+		raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(next)
+		if err != nil {
+			return 0, fmt.Errorf("encode desired push-target obligation: %w", err)
+		}
+		protected, err := protectAdmissionPushTargets(raw, tenantID, internalName, row.SourceGeneration)
+		if err != nil {
+			return 0, fmt.Errorf("protect desired push-target obligation: %w", err)
+		}
+		if row.TargetRevision == desired.GetTargetRevision() {
+			n, repairErr := queries.RepairAdmissionPushTargetRevision(ctx, foghorndb.RepairAdmissionPushTargetRevisionParams{
+				PushTargets: protected, SourceGeneration: row.SourceGeneration, TargetRevision: desired.GetTargetRevision(), ActivationAttempt: next.GetActivationAttempt(),
+			})
+			if repairErr != nil {
+				return 0, fmt.Errorf("repair desired push-target revision: %w", repairErr)
+			}
+			if n != 1 {
+				return 0, fmt.Errorf("repair desired push-target revision: expected one history row, updated %d", n)
+			}
+		} else if storeErr := queries.StoreAdmissionPushTargetRevision(ctx, foghorndb.StoreAdmissionPushTargetRevisionParams{
+			TenantID: tenantID, StreamInternalName: internalName, NodeID: row.NodeID,
+			SourceGeneration: row.SourceGeneration, TargetRevision: desired.GetTargetRevision(), PushTargets: protected,
+			ActivationAttempt: next.GetActivationAttempt(),
+		}); storeErr != nil {
+			return 0, fmt.Errorf("store desired push-target revision: %w", storeErr)
+		}
+		n, rearmErr := queries.RearmAdmissionPushTargetEffect(ctx, foghorndb.RearmAdmissionPushTargetEffectParams{
+			PushTargets: protected, TargetRevision: desired.GetTargetRevision(), EffectID: row.ID,
+		})
+		if rearmErr != nil {
+			return 0, fmt.Errorf("re-arm push-target obligation: %w", rearmErr)
+		}
+		updated += n
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit push-target authority reconciliation: %w", err)
+	}
+	return updated, nil
+}
+
+func samePushTargetSet(left, right *ipcpb.ActivatePushTargets) bool {
+	if left == nil || right == nil || left.GetMaxViewers() != right.GetMaxViewers() || len(left.GetTargets()) != len(right.GetTargets()) {
+		return false
+	}
+	byID := make(map[string]*ipcpb.PushTargetSpec, len(left.GetTargets()))
+	for _, target := range left.GetTargets() {
+		byID[target.GetTargetId()] = target
+	}
+	for _, target := range right.GetTargets() {
+		other, ok := byID[target.GetTargetId()]
+		if !ok || other.GetTargetUri() != target.GetTargetUri() || other.GetName() != target.GetName() || other.GetPlatform() != target.GetPlatform() {
+			return false
+		}
+	}
+	return true
+}
+
+// RearmAdmissionPushTargetsAfterRuntimeEnd schedules exact-state convergence
+// after a managed output exits while its publisher generation is still live.
+// Configuration failures are intentionally not passed here; they remain
+// failed until the next authority revision.
+func RearmAdmissionPushTargetsAfterRuntimeEnd(ctx context.Context, tenantID, internalName, sourceGeneration string, targetRevision int64) (bool, error) {
+	if db == nil {
+		return false, nil
+	}
+	if strings.TrimSpace(tenantID) == "" || strings.TrimSpace(internalName) == "" || strings.TrimSpace(sourceGeneration) == "" || targetRevision <= 0 {
+		return false, errors.New("runtime restream rearm requires tenant, stream, generation, and target revision")
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin runtime restream re-arm: %w", err)
+	}
+	defer rollbackQuiet(tx)
+	q := foghorndb.New(tx)
+	row, err := q.GetAdmissionPushTargetRuntimeRearmForUpdate(ctx, foghorndb.GetAdmissionPushTargetRuntimeRearmForUpdateParams{
+		TenantID: tenantID, StreamInternalName: internalName, SourceGeneration: sourceGeneration, TargetRevision: targetRevision,
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("lock runtime restream re-arm: %w", err)
+	}
+	protected, _, err := rotateAdmissionPushTargetAttempt(ctx, q, tenantID, internalName, sourceGeneration, targetRevision, row.PushTargets)
+	if err != nil {
+		return false, err
+	}
+	n, err := q.RearmAdmissionPushTargetsAfterRuntimeEnd(ctx, foghorndb.RearmAdmissionPushTargetsAfterRuntimeEndParams{
+		PushTargets: protected, TenantID: tenantID, StreamInternalName: internalName,
+		SourceGeneration: sourceGeneration, TargetRevision: targetRevision,
+	})
+	if err != nil {
+		return false, fmt.Errorf("re-arm restream after runtime end: %w", err)
+	}
+	if n != 1 {
+		return false, fmt.Errorf("re-arm restream after runtime end: expected one effect row, updated %d", n)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit runtime restream re-arm: %w", err)
+	}
+	return true, nil
+}
+
+func rotateAdmissionPushTargetAttempt(ctx context.Context, q *foghorndb.Queries, tenantID, internalName, sourceGeneration string, targetRevision int64, protectedPayload []byte) ([]byte, string, error) {
+	opened, err := openAdmissionPushTargets(protectedPayload, tenantID, internalName, sourceGeneration)
+	if err != nil {
+		return nil, "", fmt.Errorf("open runtime restream re-arm payload: %w", err)
+	}
+	var activation ipcpb.ActivatePushTargets
+	if decodeErr := proto.Unmarshal(opened, &activation); decodeErr != nil {
+		return nil, "", fmt.Errorf("decode runtime restream re-arm payload: %w", decodeErr)
+	}
+	if activation.GetTargetRevision() != targetRevision {
+		return nil, "", fmt.Errorf("runtime restream re-arm payload revision %d does not match durable revision %d", activation.GetTargetRevision(), targetRevision)
+	}
+	activation.ActivationAttempt = uuid.NewString()
+	raw, err := proto.MarshalOptions{Deterministic: true}.Marshal(&activation)
+	if err != nil {
+		return nil, "", fmt.Errorf("encode runtime restream re-arm payload: %w", err)
+	}
+	protected, err := protectAdmissionPushTargets(raw, tenantID, internalName, sourceGeneration)
+	if err != nil {
+		return nil, "", fmt.Errorf("protect runtime restream re-arm payload: %w", err)
+	}
+	historyRows, err := q.RotateAdmissionPushTargetRuntimeAttempt(ctx, foghorndb.RotateAdmissionPushTargetRuntimeAttemptParams{
+		PushTargets: protected, ActivationAttempt: activation.GetActivationAttempt(),
+		SourceGeneration: sourceGeneration, TargetRevision: targetRevision,
+	})
+	if err != nil {
+		return nil, "", fmt.Errorf("rotate durable restream runtime attempt: %w", err)
+	}
+	if historyRows != 1 {
+		return nil, "", fmt.Errorf("rotate durable restream runtime attempt: expected one history row, updated %d", historyRows)
+	}
+	return protected, activation.GetActivationAttempt(), nil
+}
+
+// RearmCapacityPendingPushTargetEffects retries durable target sets whose last
+// convergence admitted only a capacity-available subset. Existing revision-
+// scoped reservations are idempotently retained while newly available slots
+// are added on the next activation pass.
+func RearmCapacityPendingPushTargetEffects(ctx context.Context) (int64, error) {
+	if db == nil {
+		return 0, nil
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin capacity-pending restream re-arm: %w", err)
+	}
+	defer rollbackQuiet(tx)
+	q := foghorndb.New(tx)
+	acquired, err := q.TryAcquireRestreamCapacityRearmLock(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("acquire capacity-pending restream re-arm lock: %w", err)
+	}
+	if !acquired {
+		return 0, nil
+	}
+	rows, err := q.ListCapacityPendingPushTargetEffectsForRearm(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("list capacity-pending restream targets: %w", err)
+	}
+	var n int64
+	for _, row := range rows {
+		protected, _, rotateErr := rotateAdmissionPushTargetAttempt(ctx, q, row.TenantID, row.StreamInternalName, row.SourceGeneration, row.TargetRevision, row.PushTargets)
+		if rotateErr != nil {
+			logging.NewLogger().WithError(rotateErr).WithFields(logging.Fields{
+				"effect_id": row.ID, "tenant_id": row.TenantID, "generation": row.SourceGeneration,
+			}).Error("Skipping malformed capacity-pending restream obligation")
+			continue
+		}
+		updated, updateErr := q.RearmCapacityPendingPushTargetEffectByID(ctx, foghorndb.RearmCapacityPendingPushTargetEffectByIDParams{PushTargets: protected, EffectID: row.ID})
+		if updateErr != nil {
+			return 0, fmt.Errorf("re-arm capacity-pending restream target: %w", updateErr)
+		}
+		if updated != 1 {
+			return 0, fmt.Errorf("re-arm capacity-pending restream target: expected one effect row, updated %d", updated)
+		}
+		n += updated
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit capacity-pending restream re-arm: %w", err)
+	}
+	return n, nil
+}
+
+// RearmCooledDownRuntimePushTargetEffects starts a fresh bounded retry cycle
+// after an unstable destination exhausted its per-generation budget and then
+// remained quiet for the cooldown window.
+func RearmCooledDownRuntimePushTargetEffects(ctx context.Context) (int64, error) {
+	if db == nil {
+		return 0, nil
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("begin cooled-down restream re-arm: %w", err)
+	}
+	defer rollbackQuiet(tx)
+	q := foghorndb.New(tx)
+	acquired, err := q.TryAcquireRestreamCapacityRearmLock(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("acquire cooled-down restream re-arm lock: %w", err)
+	}
+	if !acquired {
+		return 0, nil
+	}
+	rows, err := q.ListCooledDownRuntimePushTargetEffectsForRearm(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("list cooled-down restream targets: %w", err)
+	}
+	var n int64
+	for _, row := range rows {
+		protected, _, rotateErr := rotateAdmissionPushTargetAttempt(ctx, q, row.TenantID, row.StreamInternalName, row.SourceGeneration, row.TargetRevision, row.PushTargets)
+		if rotateErr != nil {
+			logging.NewLogger().WithError(rotateErr).WithFields(logging.Fields{
+				"effect_id": row.ID, "tenant_id": row.TenantID, "generation": row.SourceGeneration,
+			}).Error("Skipping malformed cooled-down restream obligation")
+			continue
+		}
+		updated, updateErr := q.RearmCooledDownRuntimePushTargetEffectByID(ctx, foghorndb.RearmCooledDownRuntimePushTargetEffectByIDParams{PushTargets: protected, EffectID: row.ID})
+		if updateErr != nil {
+			return 0, fmt.Errorf("re-arm cooled-down restream target: %w", updateErr)
+		}
+		if updated != 1 {
+			return 0, fmt.Errorf("re-arm cooled-down restream target: expected one effect row, updated %d", updated)
+		}
+		n += updated
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit cooled-down restream re-arm: %w", err)
 	}
 	return n, nil
 }
@@ -680,11 +1313,16 @@ func PurgeTerminalAdmissionEffects(ctx context.Context, olderThan time.Duration)
 	if olderThan <= 0 {
 		olderThan = 24 * time.Hour
 	}
-	n, err := foghorndb.New(db).PurgeTerminalAdmissionEffects(ctx, olderThan.Milliseconds())
+	queries := foghorndb.New(db)
+	n, err := queries.PurgeTerminalAdmissionEffects(ctx, olderThan.Milliseconds())
 	if err != nil {
 		return 0, fmt.Errorf("purge terminal admission effects: %w", err)
 	}
-	return n, nil
+	history, err := queries.PurgeAdmissionPushTargetRevisions(ctx, olderThan.Milliseconds())
+	if err != nil {
+		return n, fmt.Errorf("purge admission push-target revisions: %w", err)
+	}
+	return n + history, nil
 }
 
 // PurgeableAdmissionEffectFences checks a bounded cross-tenant maintenance batch against the

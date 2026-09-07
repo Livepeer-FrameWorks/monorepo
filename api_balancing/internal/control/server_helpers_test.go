@@ -31,6 +31,15 @@ func TestCategorizeEnrollmentError(t *testing.T) {
 	}
 }
 
+func TestEnrollmentRotationRequired(t *testing.T) {
+	if !enrollmentRotationRequired(status.Error(codes.PermissionDenied, "node identity key does not match enrollment; explicit rotation is required")) {
+		t.Fatal("expected explicit rotation error to be recognized")
+	}
+	if enrollmentRotationRequired(status.Error(codes.PermissionDenied, "invalid token")) {
+		t.Fatal("invalid token must not be reported as a rotation request")
+	}
+}
+
 func TestStreamCtx(t *testing.T) {
 	ctx := streamCtx()
 	if ctx == nil {

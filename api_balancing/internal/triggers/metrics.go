@@ -51,4 +51,14 @@ type ProcessorMetrics struct {
 	// MediaAuthorityShadow records why a connected decision did or did not
 	// promote an exact signed authority version. Labels: outcome.
 	MediaAuthorityShadow *prometheus.CounterVec
+
+	// RollingUpgradeFallbacks counts optional-field compatibility branches.
+	// Labels: contract (push_targets_complete_absent).
+	RollingUpgradeFallbacks *prometheus.CounterVec
+
+	// RestreamFinalFences records final-fact Mist identity decisions. Labels:
+	// outcome (bound_from_final, accepted_unbound, missing_reported_id,
+	// mist_id_mismatch, bind_failed). Values never contain tenant, stream, or
+	// target identity.
+	RestreamFinalFences *prometheus.CounterVec
 }

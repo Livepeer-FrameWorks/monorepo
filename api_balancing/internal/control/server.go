@@ -86,6 +86,11 @@ func categorizeEnrollmentError(err error) bool {
 	}
 }
 
+func enrollmentRotationRequired(err error) bool {
+	st, ok := status.FromError(err)
+	return ok && st.Code() == codes.PermissionDenied && strings.Contains(st.Message(), "explicit rotation is required")
+}
+
 var edgeIdentityPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,99}$`)
 
 func platformRootDomain() string {
@@ -257,6 +262,45 @@ func currentNodeSession(nodeID string) (NodeSession, bool) {
 	}
 	return c.session(), true
 }
+
+// scheduleReconnectPushTargetRearm drains restart recovery in bounded
+// transactions after registration has published the authenticated connection.
+// A transient database error is retried while this exact connection fence is
+// current; a newer reconnect supersedes the worker without shared state.
+func scheduleReconnectPushTargetRearm(nodeID string, connectionFence int64, instanceID string, logger logging.Logger) {
+	go func() {
+		backoff := time.Second
+		var total int64
+		for {
+			session, current := currentNodeSession(nodeID)
+			if !current || session.Fence != connectionFence {
+				return
+			}
+			batchCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			rearmed, examined, err := requeueActivePushTargetActivationsForNodeBatch(batchCtx, nodeID, connectionFence, instanceID)
+			cancel()
+			if err != nil {
+				incRestreamReconcile("reconnect", "batch_failed")
+				logger.WithError(err).WithField("node_id", nodeID).Warn("Active push-target restart recovery batch failed")
+				timer := time.NewTimer(backoff)
+				<-timer.C
+				backoff = min(backoff*2, 30*time.Second)
+				continue
+			}
+			total += rearmed
+			backoff = time.Second
+			if examined < reconnectPushTargetRearmBatchSize {
+				if total > 0 {
+					logger.WithFields(logging.Fields{"node_id": nodeID, "activations": total}).
+						Info("Re-armed active push-target outputs after Helmsman reconnect")
+				}
+				return
+			}
+		}
+	}()
+}
+
+var scheduleReconnectPushTargetRearmFn = scheduleReconnectPushTargetRearm
 
 func currentControlConn(nodeID string, stream ipcpb.HelmsmanControl_ConnectServer) (*conn, bool) {
 	if registry == nil {
@@ -824,11 +868,31 @@ type NodeOutputs struct {
 var artifactDeletedHandler func(context.Context, *ipcpb.ArtifactDeleted)
 var artifactMapUpdatedHandler func(nodeID string)
 var catalogDirtyHandler func()
+var terminalPushTargetActivationHandler func(nodeID string, result *ipcpb.ActivatePushTargetsResult) error
+var pushTargetActivationResultHandler func(nodeID string, result *ipcpb.ActivatePushTargetsResult) error
+var pushTargetDeactivationHandler func(nodeID string, result *ipcpb.DeactivatePushTargetsResult) error
 
 // SetArtifactDeletedHandler registers the callback for node-local
 // artifact deletion/eviction reconciliation + DELETED lifecycle emission.
 func SetArtifactDeletedHandler(onDeleted func(context.Context, *ipcpb.ArtifactDeleted)) {
 	artifactDeletedHandler = onDeleted
+}
+
+// SetTerminalPushTargetActivationHandler registers the durable status and
+// capacity cleanup that must complete before a non-retryable target revision
+// can be acknowledged.
+func SetTerminalPushTargetActivationHandler(handler func(nodeID string, result *ipcpb.ActivatePushTargetsResult) error) {
+	terminalPushTargetActivationHandler = handler
+}
+
+func SetPushTargetActivationResultHandler(handler func(nodeID string, result *ipcpb.ActivatePushTargetsResult) error) {
+	pushTargetActivationResultHandler = handler
+}
+
+// SetPushTargetDeactivationHandler registers the durable status, tracking, and
+// capacity cleanup that must precede settlement of an offline obligation.
+func SetPushTargetDeactivationHandler(handler func(nodeID string, result *ipcpb.DeactivatePushTargetsResult) error) {
+	pushTargetDeactivationHandler = handler
 }
 
 // SetOnArtifactMapUpdated registers a callback invoked when Helmsman reports a real artifact-map change.
@@ -1284,15 +1348,20 @@ func SetClipHashResolver(resolver func(string) (string, string, error)) {
 // resolveNodeFingerprintFn is the seam the Connect handler uses to resolve a node's canonical identity + tenant
 // from its fingerprint. Wired to the real Quartermaster client; overridable in tests so registration can reach
 // the post-resolution ownership acquisition with an authenticated identity.
-var resolveNodeFingerprintFn func(ctx context.Context, req *quartermasterpb.ResolveNodeFingerprintRequest) (*quartermasterpb.ResolveNodeFingerprintResponse, error)
+var (
+	resolveNodeFingerprintFn func(ctx context.Context, req *quartermasterpb.ResolveNodeFingerprintRequest) (*quartermasterpb.ResolveNodeFingerprintResponse, error)
+	bootstrapEdgeNodeFn      func(ctx context.Context, req *quartermasterpb.BootstrapEdgeNodeRequest) (*quartermasterpb.BootstrapEdgeNodeResponse, error)
+)
 
 func SetQuartermasterClient(c *qmclient.GRPCClient) {
 	quartermasterClient = c
 	servedClustersClient.Store(c)
 	if c != nil {
 		resolveNodeFingerprintFn = c.ResolveNodeFingerprint
+		bootstrapEdgeNodeFn = c.BootstrapEdgeNode
 	} else {
 		resolveNodeFingerprintFn = nil
+		bootstrapEdgeNodeFn = nil
 	}
 	clearResolvedChandlerBaseURL()
 }
@@ -1594,7 +1663,7 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 
 			fingerprintResolved := tenantID != ""
 			tok := strings.TrimSpace(x.Register.GetEnrollmentToken())
-			if !fingerprintResolved && (status.Code(fingerprintResolutionErr) == codes.NotFound || status.Code(fingerprintResolutionErr) == codes.PermissionDenied) {
+			if !fingerprintResolved && nodeIdentityAuthorityRejected(fingerprintResolutionErr) {
 				revokeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 				revokeErr := revokeDurableNodeAdmission(revokeCtx, x.Register)
 				cancel()
@@ -1605,7 +1674,7 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 					incNodeAdmissionEvent("revoke", "success")
 				}
 			}
-			if !fingerprintResolved && tok == "" && nodeIdentityAuthorityUnavailable(fingerprintResolutionErr, resolveNodeFingerprintFn != nil) {
+			if shouldAttemptDurableNodeAdmission(fingerprintResolved, fingerprintResolutionErr, resolveNodeFingerprintFn != nil, tok) {
 				lookupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 				admission, admissionErr := loadDurableNodeAdmission(lookupCtx, x.Register)
 				cancel()
@@ -1637,7 +1706,7 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 					registry.log.WithField("node_id", nodeID).Debug("Ignoring enrollment token for already-registered node")
 				}
 			} else if tok != "" {
-				if quartermasterClient == nil {
+				if bootstrapEdgeNodeFn == nil {
 					registry.log.WithField("node_id", nodeID).Error("Quartermaster client unavailable for enrollment")
 					_ = sendControlError(stream, "ENROLLMENT_UNAVAILABLE", "enrollment service temporarily unavailable")
 					cleanup()
@@ -1654,11 +1723,16 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 				}
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				req := buildBootstrapEdgeNodeRequest(stream.Context(), x.Register, nodeID, peerAddr, tok, localClusterID, ServedClustersSnapshot())
-				resp, err := quartermasterClient.BootstrapEdgeNode(ctx, req)
+				resp, err := bootstrapEdgeNodeFn(ctx, req)
 				cancel()
 				release()
 				if err != nil {
-					if categorizeEnrollmentError(err) {
+					if enrollmentRotationRequired(err) {
+						registry.log.WithError(err).WithField("node_id", nodeID).Warn("Edge enrollment requires explicit identity rotation")
+						if sendErr := sendControlError(stream, "IDENTITY_ROTATION_REQUIRED", "enrollment token accepted; set EDGE_ENROLLMENT_TOKEN and HELMSMAN_ROTATE_NODE_IDENTITY=true together, then retry"); sendErr != nil {
+							registry.log.WithError(sendErr).WithField("node_id", nodeID).Warn("Failed to send identity rotation requirement")
+						}
+					} else if categorizeEnrollmentError(err) {
 						registry.log.WithError(err).WithField("node_id", nodeID).Error("Edge enrollment failed: invalid token")
 						_ = sendControlError(stream, "ENROLLMENT_FAILED", "enrollment token invalid or expired")
 					} else {
@@ -1822,27 +1896,6 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 					Info("Node registered under its canonical id; the divergent asserted raw id is not aliased (unverified)")
 			}
 
-			// A completed activation proves only that the prior Helmsman/Mist process created the
-			// admitted generation's outputs. Before this new connection becomes dispatch-visible,
-			// re-arm those exact retained target sets under its higher authenticated fence. This is
-			// local durable recovery: it does not resolve current stream policy from Commodore, and it
-			// does not substitute targets from a newer authority version onto an older live publisher.
-			rearmCtx, rearmCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			rearmed, rearmErr := RequeueActivePushTargetActivationsForNode(rearmCtx, canonicalNodeID, connFence, GetInstanceID())
-			rearmCancel()
-			if rearmErr != nil {
-				// Registration still establishes the node's authenticated local control path. The
-				// durable Foghorn database is the only dependency here (never Commodore/QM/Purser);
-				// if it is unavailable, do not turn that into a control-plane-style edge outage or
-				// discard the existing process state. A later reconnect re-attempts the re-arm.
-				registry.log.WithError(rearmErr).WithField("node_id", canonicalNodeID).
-					Warn("Active push-target restart recovery could not be armed on this registration")
-			}
-			if rearmed > 0 {
-				registry.log.WithFields(logging.Fields{"node_id": canonicalNodeID, "activations": rearmed}).
-					Info("Re-armed active push-target outputs for Helmsman restart recovery")
-			}
-
 			registry.mu.Lock()
 			var retire *conn
 			if prevConn, ok := registry.conns[canonicalNodeID]; ok && prevConn != newConn {
@@ -1858,6 +1911,9 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 			}
 			registry.log.WithField("node_id", canonicalNodeID).Info("Helmsman registered")
 			state.DefaultManager().TouchNode(canonicalNodeID, true)
+			if newConn.features().RestreamAttemptFence {
+				scheduleReconnectPushTargetRearmFn(canonicalNodeID, connFence, GetInstanceID(), registry.log)
+			}
 
 			// Hydrate the managed-stream lastSent map from the sidecar's
 			// post-restart applied set so a Foghorn restart followed by a
@@ -2151,9 +2207,33 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 			// worker. Only converged=true from the connection that is STILL current completes the
 			// leg; a reconnect re-arms active outputs under its higher authenticated fence, so a
 			// delayed result from the retired connection must not settle the replay.
-			go func(result *ipcpb.ActivatePushTargetsResult, session NodeSession) {
+			go func(result *ipcpb.ActivatePushTargetsResult, session NodeSession, protocolVersion int32) {
 				activationNodeID := session.NodeID()
-				if !result.GetConverged() {
+				if protocolVersion >= RestreamAttemptFenceProtocolMin && strings.TrimSpace(result.GetActivationAttempt()) == "" {
+					incRestreamReconcile("activate", "missing_attempt")
+					registry.log.WithField("node_id", activationNodeID).Warn("Attempt-capable sidecar returned an attempt-less push-target acknowledgement")
+					return
+				}
+				if result.GetTargetRevision() == 0 {
+					if protocolVersion >= RestreamRevisionFenceProtocolMin {
+						incRestreamReconcile("activate", "missing_revision")
+						registry.log.WithField("node_id", activationNodeID).Warn("Revision-capable sidecar returned a revision-less push-target acknowledgement")
+						return
+					}
+					lookupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					revision, err := ResolveAdmissionTargetRevision(lookupCtx, activationNodeID, result.GetSourceGeneration())
+					cancel()
+					if err != nil {
+						incRestreamReconcile("activate", "legacy_revision_lookup_failed")
+						registry.log.WithError(err).WithField("node_id", activationNodeID).Warn("Failed to resolve legacy push-target acknowledgement revision")
+						return
+					}
+					result = proto.CloneOf(result)
+					result.TargetRevision = revision
+				}
+				terminalFailure := activationResultHasTerminalConfigurationFailure(result)
+				if !result.GetConverged() && !terminalFailure {
+					incRestreamReconcile("activate", "retryable_failure")
 					registry.log.WithFields(logging.Fields{
 						"node_id":     activationNodeID,
 						"stream_name": result.GetStreamName(),
@@ -2163,17 +2243,83 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 				}
 				current, ok := currentNodeSession(activationNodeID)
 				if !ok || current.Fence != session.Fence {
+					incRestreamReconcile("activate", "stale_result")
 					registry.log.WithFields(logging.Fields{
 						"node_id": activationNodeID, "connection_fence": session.Fence,
 					}).Warn("Ignoring push-target activation acknowledgement from a retired control connection")
 					return
 				}
+				if strings.TrimSpace(result.GetActivationAttempt()) != "" {
+					attemptCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					attemptCurrent, err := AdmissionPushTargetAttemptCurrent(
+						attemptCtx, activationNodeID, result.GetSourceGeneration(), result.GetTargetRevision(), result.GetActivationAttempt(),
+					)
+					cancel()
+					if err != nil || !attemptCurrent {
+						incRestreamReconcile("activate", "stale_attempt")
+						registry.log.WithError(err).WithFields(logging.Fields{
+							"node_id": activationNodeID, "target_revision": result.GetTargetRevision(),
+						}).Warn("Ignoring push-target acknowledgement outside the current durable activation attempt")
+						return
+					}
+				}
+				if !processPushTargetActivationOutcome(activationNodeID, result, terminalFailure, registry.log) {
+					return
+				}
 				ackCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
-				if err := MarkAdmissionActivationDone(ackCtx, activationNodeID, result.GetSourceGeneration(), session.Fence); err != nil {
+				if err := MarkAdmissionActivationDone(
+					ackCtx, activationNodeID, result.GetSourceGeneration(), result.GetActivationAttempt(), session.Fence, result.GetTargetRevision(),
+				); err != nil {
+					incRestreamReconcile("activate", "persist_failed")
 					registry.log.WithError(err).WithField("node_id", activationNodeID).Warn("Failed to record activation acknowledgement")
+				} else if terminalFailure {
+					incRestreamReconcile("activate", "terminal_failure")
+					registry.log.WithFields(logging.Fields{
+						"node_id": activationNodeID, "stream_name": result.GetStreamName(),
+						"target_revision": result.GetTargetRevision(),
+					}).Warn("Push-target activation revision settled with a terminal configuration failure")
+				} else {
+					incRestreamReconcile("activate", "converged")
 				}
-			}(x.ActivatePushTargetsResult, connSession)
+			}(x.ActivatePushTargetsResult, connSession, connProtocolVersion)
+		case *ipcpb.ControlMessage_DeactivatePushTargetsResult:
+			go func(result *ipcpb.DeactivatePushTargetsResult, session NodeSession) {
+				reportingNodeID := session.NodeID()
+				if !result.GetConverged() {
+					incRestreamReconcile("deactivate", "retryable_failure")
+					registry.log.WithFields(logging.Fields{
+						"node_id": reportingNodeID, "stream_name": result.GetStreamName(), "error": result.GetError(),
+					}).Warn("Push-target deactivation did not converge; offline obligation stays pending")
+					return
+				}
+				current, ok := currentNodeSession(reportingNodeID)
+				if !ok || current.Fence != session.Fence {
+					incRestreamReconcile("deactivate", "stale_result")
+					registry.log.WithFields(logging.Fields{
+						"node_id": reportingNodeID, "connection_fence": session.Fence,
+					}).Warn("Ignoring push-target deactivation acknowledgement from a retired control connection")
+					return
+				}
+				ackCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				if pushTargetDeactivationHandler == nil {
+					incRestreamReconcile("deactivate", "cleanup_unavailable")
+					registry.log.WithField("node_id", reportingNodeID).Error("Push-target deactivation cleanup is unavailable; offline obligation stays pending")
+					return
+				}
+				if err := pushTargetDeactivationHandler(reportingNodeID, result); err != nil {
+					incRestreamReconcile("deactivate", "cleanup_failed")
+					registry.log.WithError(err).WithField("node_id", reportingNodeID).Warn("Push-target deactivation cleanup failed; offline obligation stays pending")
+					return
+				}
+				if err := MarkOfflineTeardownDone(ackCtx, reportingNodeID, result.GetSourceGeneration()); err != nil {
+					incRestreamReconcile("deactivate", "persist_failed")
+					registry.log.WithError(err).WithField("node_id", reportingNodeID).Warn("Failed to record deactivation acknowledgement")
+				} else {
+					incRestreamReconcile("deactivate", "converged")
+				}
+			}(x.DeactivatePushTargetsResult, connSession)
 		case *ipcpb.ControlMessage_SyncComplete:
 			// Handle sync completion from Helmsman (dual-storage architecture)
 			var nodeClockCompletedAtMs int64
@@ -2237,6 +2383,62 @@ func (s *Server) Connect(stream ipcpb.HelmsmanControl_ConnectServer) error {
 		registry.log.WithField("node_id", nodeID).Info("Helmsman disconnected")
 	}
 	return nil
+}
+
+// activationResultHasTerminalConfigurationFailure distinguishes failures that
+// can only be repaired by changing the desired target revision from runtime
+// failures that the durable admission worker must retry. Bounded reason enums
+// identify terminal targets. Free-form envelope text is never classification
+// input: settle only when every inactive target has a bounded terminal reason.
+func processPushTargetActivationOutcome(nodeID string, result *ipcpb.ActivatePushTargetsResult, terminalFailure bool, logger logging.Logger) bool {
+	if pushTargetActivationResultHandler != nil {
+		if err := pushTargetActivationResultHandler(nodeID, result); err != nil {
+			if !terminalFailure {
+				incRestreamReconcile("activate", "identity_bind_failed")
+				logger.WithError(err).WithField("node_id", nodeID).Warn("Failed to bind push-target runtime identities; obligation leg stays pending")
+				return false
+			}
+			// Terminal cleanup reconstructs its exact dispatched set from the
+			// attempt-scoped durable snapshot when process-local identity was lost.
+			incRestreamReconcile("activate", "identity_fallback")
+			logger.WithError(err).WithField("node_id", nodeID).
+				Info("Using durable push-target identities for terminal activation cleanup")
+		}
+	}
+	if !terminalFailure {
+		return true
+	}
+	if terminalPushTargetActivationHandler == nil {
+		incRestreamReconcile("activate", "cleanup_unavailable")
+		logger.WithField("node_id", nodeID).Error("Terminal push-target activation cleanup is unavailable; obligation leg stays pending")
+		return false
+	}
+	if err := terminalPushTargetActivationHandler(nodeID, result); err != nil {
+		incRestreamReconcile("activate", "cleanup_failed")
+		logger.WithError(err).WithField("node_id", nodeID).Warn("Terminal push-target activation cleanup failed; obligation leg stays pending")
+		return false
+	}
+	return true
+}
+
+func activationResultHasTerminalConfigurationFailure(result *ipcpb.ActivatePushTargetsResult) bool {
+	if result == nil {
+		return false
+	}
+	foundTerminal := false
+	for _, target := range result.GetTargets() {
+		if target.GetActive() {
+			continue
+		}
+		switch target.GetReason() {
+		case ipcpb.RestreamReason_RESTREAM_REASON_DESTINATION_REJECTED,
+			ipcpb.RestreamReason_RESTREAM_REASON_CONFIGURATION_ERROR:
+			foundTerminal = true
+		default:
+			return false
+		}
+	}
+	return foundTerminal
 }
 
 func processDrainStreamResponse(resp *ipcpb.DrainStreamResponse, session NodeSession, logger logging.Logger) bool {
@@ -3351,24 +3553,30 @@ func ProjectSourceIfCurrent(ctx context.Context, registry *StreamRegistry, tenan
 		return false, false, errors.Join(cause, abortPendingSourceProjection(ctx, tenantID, internalName, generation))
 	}
 	defer rollbackQuiet(confirmTx)
+	abortConfirmation := func(cause error) (bool, bool, error) {
+		// Release the confirmation row lock before cleanup tries to retire the same pending
+		// generation in a new transaction. Keeping this transaction open would self-deadlock.
+		rollbackQuiet(confirmTx)
+		return false, false, errors.Join(cause, abortPendingSourceProjection(ctx, tenantID, internalName, generation))
+	}
 	marked, markErr := foghorndb.New(confirmTx).ConfirmSourceProjection(ctx, foghorndb.ConfirmSourceProjectionParams{
 		Generation: generation, TenantID: tenantID, StreamInternalName: internalName, SourceRevision: sql.NullInt64{Int64: rev, Valid: true},
 	})
 	if markErr != nil {
 		cause := fmt.Errorf("confirm source projection: %w", markErr)
-		return false, false, errors.Join(cause, abortPendingSourceProjection(ctx, tenantID, internalName, generation))
+		return abortConfirmation(cause)
 	}
 	if marked != 1 {
 		cause := fmt.Errorf("source session ended before projection confirmation")
-		return false, false, errors.Join(cause, abortPendingSourceProjection(ctx, tenantID, internalName, generation))
+		return abortConfirmation(cause)
 	}
 	if enqueueErr := enqueueAdmissionEffectTx(ctx, confirmTx, tenantID, internalName, nodeID, generation, rev, prior, priorGeneration, intent); enqueueErr != nil {
 		cause := fmt.Errorf("enqueue admission effects: %w", enqueueErr)
-		return false, false, errors.Join(cause, abortPendingSourceProjection(ctx, tenantID, internalName, generation))
+		return abortConfirmation(cause)
 	}
 	if commitErr := confirmTx.Commit(); commitErr != nil {
 		cause := fmt.Errorf("commit projection confirmation: %w", commitErr)
-		return false, false, errors.Join(cause, abortPendingSourceProjection(ctx, tenantID, internalName, generation))
+		return abortConfirmation(cause)
 	}
 	return true, false, nil
 }
@@ -4058,6 +4266,19 @@ const IngestGenerationFencingProtocolMin int32 = 3
 // registration with a persisted node identity and a one-time nonce.
 const NodeIdentityProofProtocolMin int32 = 4
 
+// RestreamRevisionFenceProtocolMin is the first protocol that echoes the
+// desired target revision in restream reconciliation acknowledgements. Version
+// 4 remains connectable during rolling upgrades and is mapped to the durable
+// revision server-side when it returns the legacy zero value.
+const RestreamRevisionFenceProtocolMin int32 = 5
+
+// RestreamAttemptFenceProtocolMin is the first protocol that echoes a
+// per-dispatch activation attempt on activation results and every restream
+// status report. Foghorn does not dispatch restream work to an older session:
+// silently accepting a missing echo would reopen the replay race this fence
+// closes.
+const RestreamAttemptFenceProtocolMin int32 = 6
+
 // MinControlProtocolVersion is the HARD minimum a sidecar must declare in Register to connect at all. A registration
 // below this is REJECTED (FailedPrecondition), not admitted under a compatibility path. This is what makes inventory
 // authority session-owned rather than payload-selected: a sub-min sidecar cannot connect, so every report the
@@ -4075,6 +4296,8 @@ type ControlFeatures struct {
 	StagedFreeze           bool // server-minted staged freeze (>= FreezeStagedProtocolMin)
 	StagedThumbnail        bool // server-minted staged thumbnail publication (>= ThumbnailStagedProtocolMin)
 	AuthoritativeInventory bool // versioned whole-node artifact inventory (>= AuthoritativeInventoryProtocolMin)
+	RestreamRevisionFence  bool // exact desired-set revision acknowledgements (>= RestreamRevisionFenceProtocolMin)
+	RestreamAttemptFence   bool // per-dispatch activation attempt echoes (>= RestreamAttemptFenceProtocolMin)
 }
 
 // ControlFeaturesForProtocol derives the capability set a declared control-protocol version supports.
@@ -4083,6 +4306,8 @@ func ControlFeaturesForProtocol(v int32) ControlFeatures {
 		StagedFreeze:           v >= FreezeStagedProtocolMin,
 		StagedThumbnail:        v >= ThumbnailStagedProtocolMin,
 		AuthoritativeInventory: v >= AuthoritativeInventoryProtocolMin,
+		RestreamRevisionFence:  v >= RestreamRevisionFenceProtocolMin,
+		RestreamAttemptFence:   v >= RestreamAttemptFenceProtocolMin,
 	}
 }
 
@@ -6985,17 +7210,54 @@ func SendInvalidateSessions(nodeID string, req *ipcpb.InvalidateSessionsRequest)
 // ownership check and this send fails the dispatch (the obligation retries on the new owner, which
 // re-tracks) instead of transmitting over a retired stream.
 func SendLocalActivatePushTargets(ctx context.Context, nodeID string, req *ipcpb.ActivatePushTargets) error {
+	if err := CheckLocalRestreamAttemptSupport(nodeID); err != nil {
+		return err
+	}
 	registry.mu.RLock()
 	c := registry.conns[nodeID]
 	registry.mu.RUnlock()
 	if c == nil {
 		return ErrNotConnected
 	}
+	if req == nil || strings.TrimSpace(req.GetActivationAttempt()) == "" {
+		incRestreamReconcile("activate", "missing_attempt")
+		return status.Error(codes.FailedPrecondition, "restream activation attempt is required")
+	}
 	msg := &ipcpb.ControlMessage{
 		Payload: &ipcpb.ControlMessage_ActivatePushTargets{ActivatePushTargets: req},
 		SentAt:  timestamppb.Now(),
 	}
-	return sendOnConnBounded(ctx, nodeID, c, msg, 5*time.Second)
+	err := sendOnConnBounded(ctx, nodeID, c, msg, 5*time.Second)
+	if err != nil {
+		incRestreamReconcile("activate", "dispatch_failed")
+	} else {
+		incRestreamReconcile("activate", "dispatched")
+	}
+	return err
+}
+
+// CheckLocalRestreamAttemptSupport reports whether this replica's current
+// authenticated control connection can echo the attempt fence required by a
+// restream dispatch. Callers use the typed FailedPrecondition result to settle
+// the current activation as a diagnosed configuration block while retaining
+// its durable payload for replay after the node upgrades and reconnects.
+func CheckLocalRestreamAttemptSupport(nodeID string) error {
+	if registry == nil {
+		incRestreamReconcile("activate", "not_connected")
+		return ErrNotConnected
+	}
+	registry.mu.RLock()
+	c := registry.conns[nodeID]
+	registry.mu.RUnlock()
+	if c == nil {
+		incRestreamReconcile("activate", "not_connected")
+		return ErrNotConnected
+	}
+	if !c.features().RestreamAttemptFence {
+		incRestreamReconcile("activate", "attempt_protocol_unsupported")
+		return status.Error(codes.FailedPrecondition, "sidecar control-protocol version does not support restream activation attempts")
+	}
+	return nil
 }
 
 // SendLocalDeactivatePushTargets sends a DeactivatePushTargets message to a local Helmsman.
@@ -7004,6 +7266,7 @@ func SendLocalDeactivatePushTargets(ctx context.Context, nodeID string, req *ipc
 	c := registry.conns[nodeID]
 	registry.mu.RUnlock()
 	if c == nil {
+		incRestreamReconcile("deactivate", "not_connected")
 		return ErrNotConnected
 	}
 	msg := &ipcpb.ControlMessage{
@@ -7013,7 +7276,24 @@ func SendLocalDeactivatePushTargets(ctx context.Context, nodeID string, req *ipc
 	// Caller-bounded like the other worker-driven dispatches. Retirement bounds the callback and
 	// prevents queue growth; Helmsman's exact ended-generation fence protects a successor if the
 	// already-running transport write surfaces late.
-	return sendOnConnBounded(ctx, nodeID, c, msg, 5*time.Second)
+	err := sendOnConnBounded(ctx, nodeID, c, msg, 5*time.Second)
+	if err != nil {
+		incRestreamReconcile("deactivate", "dispatch_failed")
+	} else {
+		incRestreamReconcile("deactivate", "dispatched")
+		if legacyRestreamTeardownCompletesOnDispatch(c.protocolVersion) {
+			if settleErr := MarkOfflineTeardownDone(ctx, c.session().NodeID(), req.GetSourceGeneration()); settleErr != nil {
+				incRestreamReconcile("deactivate", "legacy_settle_failed")
+				return settleErr
+			}
+			incRestreamReconcile("deactivate", "legacy_dispatched")
+		}
+	}
+	return err
+}
+
+func legacyRestreamTeardownCompletesOnDispatch(protocolVersion int32) bool {
+	return protocolVersion < RestreamRevisionFenceProtocolMin
 }
 
 // SendDeactivatePushTargets sends DeactivatePushTargets to the given node, relaying via HA if needed.

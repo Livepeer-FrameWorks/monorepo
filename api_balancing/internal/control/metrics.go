@@ -37,6 +37,14 @@ type ControlMetrics struct {
 	// outcomes for durable push-target activation payloads.
 	// Labels: format (plaintext|v1|v2), result (opened|migrated|error).
 	AdmissionPayloadCrypto *prometheus.CounterVec
+	// RestreamReconcile records desired-state command delivery and correlated
+	// acknowledgements. Labels are bounded operation/outcome enums and never
+	// contain tenant, stream, node, or target identifiers.
+	RestreamReconcile *prometheus.CounterVec
+	// OfflineEffectDeadLetters records terminal offline obligations and late
+	// correlated acknowledgements that revive them. Labels: outcome
+	// (retained|revived).
+	OfflineEffectDeadLetters *prometheus.CounterVec
 }
 
 // MediaRequestContext tags a bounded request-path name. The shared service
@@ -94,6 +102,22 @@ func incAdmissionPayloadCrypto(format, result string) {
 		return
 	}
 	controlMetrics.AdmissionPayloadCrypto.WithLabelValues(format, result).Inc()
+}
+
+func incRestreamReconcile(operation, outcome string) {
+	if controlMetrics == nil || controlMetrics.RestreamReconcile == nil {
+		return
+	}
+	controlMetrics.RestreamReconcile.WithLabelValues(operation, outcome).Inc()
+}
+
+// ObserveOfflineEffectDeadLetter records a bounded operational outcome for a
+// durable offline obligation. It is exported for the background drain job.
+func ObserveOfflineEffectDeadLetter(outcome string) {
+	if controlMetrics == nil || controlMetrics.OfflineEffectDeadLetters == nil {
+		return
+	}
+	controlMetrics.OfflineEffectDeadLetters.WithLabelValues(outcome).Inc()
 }
 
 func incNodeAdmissionEvent(operation, result string) {

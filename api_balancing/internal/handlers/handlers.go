@@ -38,6 +38,7 @@ import (
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	mediaauthoritypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
@@ -148,6 +149,15 @@ func ApplyBootstrapMetadata(resp *quartermasterpb.BootstrapServiceResponse) {
 type FoghornMetrics struct {
 	RoutingDecisions      *prometheus.CounterVec
 	NodeSelectionDuration *prometheus.HistogramVec
+	// SourceAuthorizationRejected counts public node-bound source lookups
+	// rejected before origin disclosure or federation. The reason label is a
+	// bounded policy outcome and never contains tenant, stream, node, or cluster
+	// identifiers.
+	SourceAuthorizationRejected *prometheus.CounterVec
+	// RollingUpgradeFallbacks counts optional-field compatibility branches.
+	// Labels are bounded contract names; absence should fall to zero after the
+	// control-plane rollout completes.
+	RollingUpgradeFallbacks *prometheus.CounterVec
 
 	// LivepeerAuthRejected counts Livepeer gateway auth-webhook rejections by reason.
 	// Reasons: stream_not_found, stream_not_live, peer_context_missing,
@@ -1333,6 +1343,147 @@ func sourceCallerClusterID(ctx context.Context, nodeID string) string {
 	return ""
 }
 
+const sourceAuthorityLookupBudget = 500 * time.Millisecond
+
+var (
+	resolveSourceAuthorityFn        = resolveSourceAuthority
+	sourceClusterAccessibleForScope = control.ClusterServeAccessibleForScope
+	resolveLocalSourceContent       = func(ctx context.Context, internalName string) (*control.ContentResolution, bool, error) {
+		if triggerProcessor == nil {
+			return nil, false, nil
+		}
+		return triggerProcessor.ResolveLocalContent(ctx, internalName)
+	}
+)
+
+// resolveSourceAuthority prefers the signed, cell-local tenant projection. A
+// promoted projection remains usable through a control-plane outage until its
+// signed hard-validity bound; only a cold/unpromoted cell consults Commodore.
+// This keeps /source authorization on the same serve policy as viewer routing
+// without turning every Mist source lookup into a Quartermaster dependency.
+func resolveSourceAuthority(ctx context.Context, streamName string) (ctxkeys.ClusterServeScope, bool) {
+	internalName := strings.TrimSpace(mist.ExtractInternalName(streamName))
+	if internalName == "" {
+		return ctxkeys.ClusterServeScope{}, false
+	}
+
+	resolution, handled, err := resolveLocalSourceContent(ctx, internalName)
+	if handled && err == nil {
+		if resolution == nil || strings.TrimSpace(resolution.TenantId) == "" {
+			return ctxkeys.ClusterServeScope{}, false
+		}
+		peers := resolution.AuthorityClusterPeers
+		if peers == nil {
+			peers = resolution.ClusterPeers
+		}
+		return control.NewClusterServeScope(
+			resolution.TenantId,
+			resolution.OfficialClusterID,
+			peers,
+			resolution.AllowPlatformSharedPlayback,
+		), true
+	}
+
+	tenantID := strings.TrimSpace(getStreamTenantID(streamName))
+	if tenantID != "" {
+		if store := control.LocalMediaAuthorityStore(); store != nil {
+			snapshot, snapshotErr := store.TenantSource(ctx, tenantID)
+			if snapshotErr == nil && snapshot.SourceReady {
+				tenant := snapshot.Authority
+				if snapshot.Freshness == localauthority.FreshnessHardExpired || tenant == nil ||
+					tenant.GetLifecycle() != mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE ||
+					tenant.GetBillingDecision() != mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_ALLOW {
+					return ctxkeys.ClusterServeScope{}, false
+				}
+				return control.NewClusterServeScope(
+					tenantID,
+					tenant.GetOfficialClusterId(),
+					localauthority.TenantClusterPeers(tenant),
+					tenant.GetAllowPlatformSharedPlayback(),
+				), true
+			}
+		}
+	}
+
+	if commodoreClient == nil {
+		return ctxkeys.ClusterServeScope{}, false
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, sourceAuthorityLookupBudget)
+	defer cancel()
+	resp, err := commodoreClient.ResolveInternalName(lookupCtx, internalName)
+	if err != nil || resp == nil {
+		return ctxkeys.ClusterServeScope{}, false
+	}
+	tenantID = strings.TrimSpace(resp.GetTenantId())
+	if tenantID == "" {
+		return ctxkeys.ClusterServeScope{}, false
+	}
+	if resp.ServePolicyResolved == nil {
+		if metrics != nil && metrics.RollingUpgradeFallbacks != nil {
+			metrics.RollingUpgradeFallbacks.WithLabelValues("serve_policy_absent").Inc()
+		}
+		// Rolling-upgrade compatibility for an older Commodore. Its response
+		// predates the signed serve-policy fields but its origin + peer envelope
+		// is still the authoritative legacy policy. Once field 11 is present,
+		// explicit false must fail closed and must never enter this branch.
+		return control.NewClusterServeScope(
+			tenantID,
+			resp.GetOriginClusterId(),
+			resp.GetClusterPeers(),
+		), true
+	}
+	if !resp.GetServePolicyResolved() {
+		return ctxkeys.ClusterServeScope{}, false
+	}
+	return control.NewClusterServeScope(
+		tenantID,
+		resp.GetOfficialClusterId(),
+		resp.GetClusterPeers(),
+		resp.GetAllowPlatformSharedPlayback(),
+	), true
+}
+
+// authorizeSourceCaller applies only to the public capability surface. The
+// signed capability establishes the requesting cluster, but the stream query
+// is intentionally not signed because Mist replaces its query parameters.
+// Every query must therefore resolve the stream tenant and independently prove
+// that the requesting cluster belongs to that tenant before any source branch
+// runs.
+func authorizeSourceCaller(ctx context.Context, streamName string) (ctxkeys.ClusterServeScope, string) {
+	callerClusterID, signed := ctx.Value(ctxkeys.KeyAuthenticatedNodeCluster).(string)
+	callerClusterID = strings.TrimSpace(callerClusterID)
+	if !signed || callerClusterID == "" {
+		return ctxkeys.ClusterServeScope{}, ""
+	}
+	scope, ok := resolveSourceAuthorityFn(ctx, streamName)
+	if !ok || strings.TrimSpace(scope.TenantID) == "" {
+		return ctxkeys.ClusterServeScope{}, "authority_unavailable"
+	}
+	if !sourceClusterAccessibleForScope(callerClusterID, scope) {
+		return scope, "cluster_not_authorized"
+	}
+	return scope, ""
+}
+
+func rejectSourceAuthorization(c *gin.Context, streamName, reason string) {
+	if metrics != nil && metrics.SourceAuthorizationRejected != nil {
+		metrics.SourceAuthorizationRejected.WithLabelValues(reason).Inc()
+	}
+	logger.WithFields(logging.Fields{
+		"stream": streamName,
+		"reason": reason,
+	}).Warn("Source lookup: requesting cluster is not authorized for stream tenant")
+	// A live publisher must receive the same terminal answer whether authority
+	// is unavailable or the signed edge is outside the tenant's serve policy.
+	// Returning a distinct denial here would disclose that the queried live
+	// stream resolved to another tenant before any origin was selected.
+	if strings.HasPrefix(streamName, "live+") {
+		c.String(http.StatusOK, "push://")
+		return
+	}
+	c.String(http.StatusOK, control.OfflineNotAuthorized)
+}
+
 // handleGetSource implements /?source=<stream> (EXACT C++ implementation)
 func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 	start := time.Now()
@@ -1356,7 +1507,15 @@ func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 	if requireCap != "" {
 		ctx = context.WithValue(ctx, ctxkeys.KeyCapability, requireCap)
 	}
-	if streamTenantID := getStreamTenantID(streamName); streamTenantID != "" {
+	streamTenantID := getStreamTenantID(streamName)
+	if authorizedScope, reason := authorizeSourceCaller(ctx, streamName); reason != "" {
+		rejectSourceAuthorization(c, streamName, reason)
+		return
+	} else if authorizedScope.TenantID != "" {
+		streamTenantID = authorizedScope.TenantID
+		ctx = context.WithValue(ctx, ctxkeys.KeyClusterServeScope, authorizedScope)
+	}
+	if streamTenantID != "" {
 		ctx = context.WithValue(ctx, ctxkeys.KeyClusterScope, streamTenantID)
 	}
 	// Active origin-pull check first — this covers every runtime name

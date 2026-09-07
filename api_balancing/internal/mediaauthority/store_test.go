@@ -352,7 +352,7 @@ func TestStoreApplyPersistsTenantAtomically(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
-	if result.Status != ApplyStatusApplied || result.Version != 7 || result.ID == "" {
+	if result.Status != ApplyStatusApplied || result.Version != 7 || result.ID == "" || result.TenantID != "10000000-0000-0000-0000-000000000001" {
 		t.Fatalf("result = %+v", result)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {

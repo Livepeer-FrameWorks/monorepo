@@ -69,6 +69,7 @@ func startCommodoreIngestFake(t *testing.T, fake *commodoreIngestFake) {
 	client, err := commodorecli.NewGRPCClient(commodorecli.GRPCConfig{
 		GRPCAddr:      lis.Addr().String(),
 		AllowInsecure: true,
+		ServiceToken:  "test-service-token",
 		Logger:        logging.NewLogger(),
 		Timeout:       5 * time.Second,
 	})
