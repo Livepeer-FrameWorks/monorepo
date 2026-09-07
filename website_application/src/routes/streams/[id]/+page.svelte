@@ -51,6 +51,7 @@
   } from "$lib/components/stream-details";
   import { SectionDivider } from "$lib/components/layout";
   import { resolveOperationalStreamId } from "$lib/route-ids";
+  import { shouldRefreshPushTargets } from "$lib/utils/push-target-events";
   import {
     DropdownMenu,
     DropdownMenuContent,
@@ -164,6 +165,7 @@
       targetUri: t.targetUri,
       isEnabled: t.isEnabled,
       status: t.status,
+      reasonCode: t.reasonCode ?? null,
       lastError: t.lastError ?? null,
       lastPushedAt: t.lastPushedAt ?? null,
       createdAt: t.createdAt,
@@ -286,6 +288,7 @@
 
   // Auto-refresh interval for live data (fallback)
   let refreshInterval: ReturnType<typeof setInterval> | null = null;
+  let pushTargetRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Current track info from subscription
   let currentTracks = $state<TrackInfo | null>(null);
@@ -376,6 +379,7 @@
 
   onDestroy(() => {
     if (refreshInterval) clearInterval(refreshInterval);
+    if (pushTargetRefreshTimer) clearTimeout(pushTargetRefreshTimer);
     streamEventsSub.unlisten();
     trackListSub.unlisten();
   });
@@ -392,6 +396,9 @@
   }
 
   function handleStreamEvent(event: NonNullable<StreamEvents$result["liveStreamEvents"]>) {
+    if (shouldRefreshPushTargets(event)) {
+      schedulePushTargetRefresh();
+    }
     if (event.type === "STREAM_START") {
       toast.success("Stream is now live!");
       return;
@@ -400,6 +407,14 @@
     if (event.type === "STREAM_END") {
       toast.info("Stream ended");
     }
+  }
+
+  function schedulePushTargetRefresh() {
+    if (pushTargetRefreshTimer) clearTimeout(pushTargetRefreshTimer);
+    pushTargetRefreshTimer = setTimeout(() => {
+      pushTargetRefreshTimer = null;
+      void pushTargetsStore.fetch({ policy: "NetworkOnly", variables: { streamId } });
+    }, 300);
   }
 
   async function loadStreamData() {
@@ -460,7 +475,10 @@
         routeParamId: streamId,
         streamUuid: stream?.streamId,
       });
-      await streamStore.fetch({ variables: { id: streamId, streamId: analyticsStreamId } });
+      await Promise.all([
+        streamStore.fetch({ variables: { id: streamId, streamId: analyticsStreamId } }),
+        pushTargetsStore.fetch({ policy: "NetworkOnly", variables: { streamId } }),
+      ]);
     } catch (err) {
       console.error("Failed to refresh live data:", err);
     }
@@ -690,7 +708,7 @@
         input: formData,
       });
       showCreatePushTargetModal = false;
-      toast.success("Push target added");
+      toast.success("Push target saved. It will start when delivery capacity is available.");
       await pushTargetsStore.fetch({ variables: { streamId } });
     } catch (err) {
       console.error("Failed to create push target:", err);
@@ -714,7 +732,7 @@
       });
       showEditPushTargetModal = false;
       editingPushTarget = null;
-      toast.success("Push target updated");
+      toast.success("Push target saved. Live changes are being reconciled.");
       await pushTargetsStore.fetch({ variables: { streamId } });
     } catch (err) {
       console.error("Failed to update push target:", err);
@@ -731,7 +749,11 @@
         id: target.id,
         input: { isEnabled: !target.isEnabled },
       });
-      toast.success(target.isEnabled ? "Push target disabled" : "Push target enabled");
+      toast.success(
+        target.isEnabled
+          ? "Push target disabled. Any live delivery is stopping."
+          : "Push target enabled. It will start when delivery capacity is available."
+      );
       await pushTargetsStore.fetch({ variables: { streamId } });
     } catch (err) {
       console.error("Failed to toggle push target:", err);

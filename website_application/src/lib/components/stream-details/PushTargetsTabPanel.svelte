@@ -13,6 +13,7 @@
     targetUri: string;
     isEnabled: boolean;
     status: string;
+    reasonCode: string | null;
     lastError: string | null;
     lastPushedAt: string | null;
     createdAt: string;
@@ -60,16 +61,42 @@
     return PLATFORM_LABELS[platform ?? ""] ?? "Custom";
   }
 
-  function getStatusTone(status: string): "green" | "default" | "red" {
+  function getStatusTone(
+    status: string
+  ): "green" | "blue" | "yellow" | "orange" | "neutral" | "red" {
     if (status === "pushing") return "green";
     if (status === "failed") return "red";
-    return "default";
+    if (status === "pending") return "blue";
+    if (status === "retrying") return "orange";
+    if (status === "stopping") return "yellow";
+    if (status === "idle") return "neutral";
+    return "yellow";
   }
 
   function getStatusLabel(status: string): string {
-    if (status === "pushing") return "Pushing";
-    if (status === "failed") return "Failed";
-    return "Idle";
+    const labels: Record<string, string> = {
+      pushing: "Pushing",
+      failed: "Failed",
+      pending: "Pending",
+      retrying: "Retrying",
+      stopping: "Stopping",
+      idle: "Idle",
+    };
+    return labels[status] ?? "Unknown";
+  }
+
+  function getReasonLabel(reasonCode?: string | null): string | null {
+    const labels: Record<string, string> = {
+      completed: "Delivery completed",
+      destination_rejected: "Destination rejected",
+      network_error: "Network interruption",
+      process_error: "Delivery process error",
+      capacity_exhausted: "Viewer capacity exhausted",
+      configuration_error: "Configuration error",
+      edge_upgrade_required: "Edge upgrade required",
+      stopped: "Delivery stopped",
+    };
+    return labels[reasonCode ?? ""] ?? null;
   }
 
   const PlusIcon = getIconComponent("Plus");
@@ -88,7 +115,8 @@
           Multistream Targets
         </h3>
         <p class="text-xs text-muted-foreground/70 mt-1">
-          Push your stream to external platforms automatically when you go live
+          Each enabled destination uses one viewer-capacity slot and counts toward delivered minutes
+          and egress
         </p>
       </div>
       {#if onAdd}
@@ -120,6 +148,9 @@
                     {#if !target.isEnabled}
                       Disabled
                     {:else}
+                      {#if ["pending", "retrying", "stopping"].includes(target.status)}
+                        <LoaderIcon class="mr-1 h-3 w-3 animate-spin" />
+                      {/if}
                       {getStatusLabel(target.status)}
                     {/if}
                   </Badge>
@@ -135,9 +166,15 @@
                     <span>•</span>
                     <span>Last push {formatDate(target.lastPushedAt)}</span>
                   {/if}
-                  {#if target.status === "failed" && target.lastError}
+                  {#if target.isEnabled && target.lastError}
                     <span>•</span>
-                    <span class="text-error">{target.lastError}</span>
+                    <span class={target.status === "failed" ? "text-error" : "text-warning"}
+                      >{target.lastError}</span
+                    >
+                  {/if}
+                  {#if target.isEnabled && getReasonLabel(target.reasonCode)}
+                    <span>•</span>
+                    <span>{getReasonLabel(target.reasonCode)}</span>
                   {/if}
                 </div>
               </div>
