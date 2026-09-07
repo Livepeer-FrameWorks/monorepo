@@ -71,7 +71,7 @@ func TestTerminateTenantStreams_FailsWhenAllDialAttemptsFail(t *testing.T) {
 		resolvedAt:   time.Now(),
 	})
 
-	_, err := server.TerminateTenantStreams(context.Background(), &foghorncontrolpb.TerminateTenantStreamsRequest{TenantId: "tenant-1", Reason: "suspended"})
+	_, err := server.TerminateTenantStreams(serviceCtx(), &foghorncontrolpb.TerminateTenantStreamsRequest{TenantId: "tenant-1", Reason: "suspended"})
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -94,7 +94,7 @@ func TestTerminateTenantStreams_SucceedsWithPartialResults(t *testing.T) {
 		resolvedAt: time.Now(),
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	ctx, cancel := context.WithTimeout(serviceCtx(), 150*time.Millisecond)
 	defer cancel()
 
 	resp, err := server.TerminateTenantStreams(ctx, &foghorncontrolpb.TerminateTenantStreamsRequest{TenantId: "tenant-1", Reason: "suspended"})
@@ -121,7 +121,7 @@ func TestInvalidateTenantCache_DeduplicatesTargets(t *testing.T) {
 		resolvedAt: time.Now(),
 	})
 
-	resp, err := server.InvalidateTenantCache(context.Background(), &foghorncontrolpb.InvalidateTenantCacheRequest{TenantId: "tenant-1", Reason: "reactivated"})
+	resp, err := server.InvalidateTenantCache(serviceCtx(), &foghorncontrolpb.InvalidateTenantCacheRequest{TenantId: "tenant-1", Reason: "reactivated"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -143,7 +143,7 @@ func TestTerminateTenantStreams_DeduplicatesByAddrWhenClusterIDMissing(t *testin
 		resolvedAt: time.Now(),
 	})
 
-	resp, err := server.TerminateTenantStreams(context.Background(), &foghorncontrolpb.TerminateTenantStreamsRequest{TenantId: "tenant-1", Reason: "suspended"})
+	resp, err := server.TerminateTenantStreams(serviceCtx(), &foghorncontrolpb.TerminateTenantStreamsRequest{TenantId: "tenant-1", Reason: "suspended"})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

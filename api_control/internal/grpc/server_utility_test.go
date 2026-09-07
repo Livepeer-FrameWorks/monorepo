@@ -2,12 +2,14 @@ package grpc
 
 import (
 	"database/sql"
+	"net"
 	"testing"
 	"time"
 
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/restream"
 )
 
 func TestValidateBehavior_AllValid(t *testing.T) {
@@ -137,15 +139,14 @@ func TestMaskTargetURI_RTMPWithKey(t *testing.T) {
 	if masked == "rtmp://live.twitch.tv/app/live_abc123def456" {
 		t.Fatal("key should be masked")
 	}
-	// Should contain partial mask
-	if masked != "rtmp://live.twitch.tv/app/livexxxx456" {
+	if masked != "rtmp://live.twitch.tv/redacted" {
 		t.Fatalf("unexpected mask: %q", masked)
 	}
 }
 
 func TestMaskTargetURI_ShortLastSegment(t *testing.T) {
 	masked := maskTargetURI("rtmp://host/app/key")
-	if masked != "rtmp://host/app/xxxx" {
+	if masked != "rtmp://host/redacted" {
 		t.Fatalf("short key should be fully masked, got %q", masked)
 	}
 }
@@ -209,6 +210,27 @@ func TestValidatePushTargetURI_InvalidScheme(t *testing.T) {
 func TestValidatePushTargetURI_NoHost(t *testing.T) {
 	if err := validatePushTargetURI("rtmp:///app/key"); err == nil {
 		t.Fatal("expected error for missing host")
+	}
+}
+
+func TestValidatePushTargetURI_RedactsOperatorPolicyDetails(t *testing.T) {
+	_, denied, err := net.ParseCIDR("203.0.113.0/24")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = validatePushTargetURIWithPolicy("rtmp://203.0.113.7/live/key", restream.DestinationPolicy{DeniedCIDRs: []*net.IPNet{denied}})
+	if err == nil {
+		t.Fatal("expected operator-policy rejection")
+	}
+	if got := err.Error(); got != "destination is not allowed by operator policy" {
+		t.Fatalf("unexpected tenant-facing policy error: %q", got)
+	}
+}
+
+func TestValidatePushTargetURI_UsesStartupSnapshotInsteadOfEnvironment(t *testing.T) {
+	t.Setenv("RESTREAM_DENIED_CIDRS", "operator-secret-not-a-cidr")
+	if err := validatePushTargetURIWithPolicy("rtmp://public.example.test/live/key", restream.DestinationPolicy{}); err != nil {
+		t.Fatalf("request validation re-read operator environment: %v", err)
 	}
 }
 

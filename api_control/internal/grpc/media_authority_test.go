@@ -12,6 +12,7 @@ import (
 	"frameworks/api_control/internal/database/commodoredb"
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	mediaauthoritypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
@@ -22,6 +23,118 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+func TestCompileLiveStreamSecretPreservesAuthenticatedEmptyTargetSet(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectQuery("FROM commodore.push_targets").WithArgs("stream-1", "tenant-1").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "platform", "name", "target_uri"}))
+	s := &CommodoreServer{
+		db: db,
+		mediaAuthorityRecipients: sharedauthority.SealRecipientSet{
+			"cell-1": {},
+		},
+	}
+	secret, err := s.compileLiveStreamSecret(context.Background(), "live:stream-1", "stream-1", "tenant-1", "push")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if secret == nil || secret.GetAuthorityId() != "live:stream-1" || secret.GetTenantId() != "tenant-1" || len(secret.GetPushTargets()) != 0 {
+		t.Fatalf("empty desired target set was not authenticated: %+v", secret)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type unusedMediaAuthorityTenantSource struct{}
+
+func (unusedMediaAuthorityTenantSource) GetTenant(context.Context, string) (*quartermasterpb.GetTenantResponse, error) {
+	panic("unused")
+}
+func (unusedMediaAuthorityTenantSource) GetTenantEntitlement(context.Context, string) (*quartermasterpb.GetTenantEntitlementResponse, error) {
+	panic("unused")
+}
+func (unusedMediaAuthorityTenantSource) ListActiveTenants(context.Context) ([]string, error) {
+	panic("unused")
+}
+
+type unusedMediaAuthorityBillingSource struct{}
+
+func (unusedMediaAuthorityBillingSource) GetTenantBillingStatus(context.Context, string) (*purserpb.GetTenantBillingStatusResponse, error) {
+	panic("unused")
+}
+func (unusedMediaAuthorityBillingSource) GetTenantAdmissionStatus(context.Context, string) (*purserpb.GetTenantAdmissionStatusResponse, error) {
+	panic("unused")
+}
+
+func TestCurrentTenantServePolicyUsesCurrentSignedDecision(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		authority *mediaauthoritypb.TenantAuthority
+		wantIDs   []string
+		wantAllow bool
+	}{
+		{
+			name: "active exact grants",
+			authority: &mediaauthoritypb.TenantAuthority{
+				TenantId: "tenant-1", Lifecycle: mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE,
+				BillingDecision:   mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_ALLOW,
+				OfficialClusterId: "official-1", AllowPlatformSharedPlayback: false,
+				EffectiveClusterGrants: []*mediaauthoritypb.TenantClusterGrant{{ClusterId: "private-1"}, {ClusterId: "official-1"}},
+			},
+			wantIDs: []string{"private-1", "official-1"},
+		},
+		{
+			name: "suspended resolves explicit deny",
+			authority: &mediaauthoritypb.TenantAuthority{
+				TenantId: "tenant-1", Lifecycle: mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE,
+				BillingDecision:   mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_SUSPENDED,
+				OfficialClusterId: "official-1", AllowPlatformSharedPlayback: true,
+				EffectiveClusterGrants: []*mediaauthoritypb.TenantClusterGrant{{ClusterId: "private-1"}},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			payload, err := proto.Marshal(tc.authority)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mock.ExpectQuery(`SELECT versions\.payload, versions\.valid_until`).
+				WithArgs("tenant", "tenant-1").
+				WillReturnRows(sqlmock.NewRows([]string{"payload", "valid_until"}).AddRow(payload, time.Now().Add(time.Hour)))
+			s := &CommodoreServer{
+				db: db, authorityTenantSource: unusedMediaAuthorityTenantSource{}, authorityBillingSource: unusedMediaAuthorityBillingSource{},
+				mediaAuthorityKeyID: "key-1", mediaAuthorityPrivateKey: make(ed25519.PrivateKey, ed25519.PrivateKeySize),
+			}
+			official, allow, peers, ok := s.currentTenantServePolicy(context.Background(), "tenant-1")
+			if !ok {
+				t.Fatal("current authority was not resolved")
+			}
+			ids := make([]string, 0, len(peers))
+			for _, peer := range peers {
+				ids = append(ids, peer.GetClusterId())
+			}
+			if !equalStrings(ids, tc.wantIDs) || allow != tc.wantAllow {
+				t.Fatalf("policy = official %q allow %v peers %v", official, allow, ids)
+			}
+			if len(tc.wantIDs) == 0 && official != "" {
+				t.Fatalf("denied authority retained official cluster %q", official)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
 
 func TestMediaAuthorityRefreshRunsWhileDeliveryIsBlocked(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

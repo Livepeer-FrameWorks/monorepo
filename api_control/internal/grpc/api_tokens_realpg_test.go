@@ -10,6 +10,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	"github.com/lib/pq"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -24,26 +25,46 @@ func TestAPITokenRepository_RealPG(t *testing.T) {
 		tenantID = "10000000-0000-4000-8000-000000000031"
 		otherID  = "10000000-0000-4000-8000-000000000032"
 		userID   = "20000000-0000-4000-8000-000000000031"
+		memberID = "20000000-0000-4000-8000-000000000032"
 	)
 	if _, err := db.ExecContext(ctx, `
 		INSERT INTO commodore.users (id, tenant_id, email, role, platform_operator)
-		VALUES ($1::uuid, $2::uuid, 'api-token@example.com', 'admin', true)
-	`, userID, tenantID); err != nil {
+		VALUES ($1::uuid, $2::uuid, 'api-token@example.com', 'admin', true),
+		       ($3::uuid, $2::uuid, 'api-token-member@example.com', 'member', false)
+	`, userID, tenantID, memberID); err != nil {
 		t.Fatalf("seed user: %v", err)
+	}
+	var defaultPermissions pq.StringArray
+	if err := db.QueryRowContext(ctx, `
+		INSERT INTO commodore.api_tokens (tenant_id, user_id, token_value, token_name)
+		VALUES ($1::uuid, $2::uuid, 'default-scope-token-hash', 'default-scope')
+		RETURNING permissions
+	`, tenantID, userID).Scan(&defaultPermissions); err != nil {
+		t.Fatalf("insert token with database default: %v", err)
+	}
+	if len(defaultPermissions) != 1 || defaultPermissions[0] != "streams:read" {
+		t.Fatalf("database API-token default = %#v, want [streams:read]", defaultPermissions)
+	}
+	if _, err := db.ExecContext(ctx, `DELETE FROM commodore.api_tokens WHERE token_value = 'default-scope-token-hash'`); err != nil {
+		t.Fatalf("remove database-default fixture: %v", err)
 	}
 	userCtx := context.WithValue(context.Background(), ctxkeys.KeyUserID, userID)
 	userCtx = context.WithValue(userCtx, ctxkeys.KeyTenantID, tenantID)
 	otherCtx := context.WithValue(context.Background(), ctxkeys.KeyUserID, userID)
 	otherCtx = context.WithValue(otherCtx, ctxkeys.KeyTenantID, otherID)
+	memberCtx := context.WithValue(context.Background(), ctxkeys.KeyUserID, memberID)
+	memberCtx = context.WithValue(memberCtx, ctxkeys.KeyTenantID, tenantID)
+	memberCtx = context.WithValue(memberCtx, ctxkeys.KeyRole, "member")
+	ownerCtx := context.WithValue(userCtx, ctxkeys.KeyRole, "owner")
 
 	first, err := server.CreateAPIToken(userCtx, &commodorepb.CreateAPITokenRequest{
-		TokenName: "first", Permissions: []string{"read"},
+		TokenName: "first", Permissions: []string{"streams:read"},
 	})
 	if err != nil {
 		t.Fatalf("create first: %v", err)
 	}
 	second, err := server.CreateAPIToken(userCtx, &commodorepb.CreateAPITokenRequest{
-		TokenName: "second", Permissions: []string{"read", "write"},
+		TokenName: "second", Permissions: []string{"streams:read", "streams:write"},
 	})
 	if err != nil {
 		t.Fatalf("create second: %v", err)
@@ -110,6 +131,33 @@ func TestAPITokenRepository_RealPG(t *testing.T) {
 	}
 	if _, err := server.RevokeAPIToken(userCtx, &commodorepb.RevokeAPITokenRequest{TokenId: first.GetId()}); err != nil {
 		t.Fatalf("revoke own token: %v", err)
+	}
+	memberToken, err := server.CreateAPIToken(memberCtx, &commodorepb.CreateAPITokenRequest{
+		TokenName: "member-token", Permissions: []string{"streams:read"},
+	})
+	if err != nil {
+		t.Fatalf("create member token: %v", err)
+	}
+	memberList, err := server.ListAPITokens(memberCtx, &commodorepb.ListAPITokensRequest{})
+	if err != nil || len(memberList.GetTokens()) != 1 || memberList.GetTokens()[0].GetId() != memberToken.GetId() {
+		t.Fatalf("member list crossed creator boundary: ids=%v err=%v", apiTokenIDs(memberList), err)
+	}
+	ownerList, err := server.ListAPITokens(ownerCtx, &commodorepb.ListAPITokensRequest{})
+	if err != nil {
+		t.Fatalf("owner list tenant tokens: %v", err)
+	}
+	foundMemberToken := false
+	for _, token := range ownerList.GetTokens() {
+		if token.GetId() == memberToken.GetId() {
+			foundMemberToken = true
+			break
+		}
+	}
+	if !foundMemberToken {
+		t.Fatalf("tenant owner list omitted member token: ids=%v", apiTokenIDs(ownerList))
+	}
+	if _, err := server.RevokeAPIToken(ownerCtx, &commodorepb.RevokeAPITokenRequest{TokenId: memberToken.GetId()}); err != nil {
+		t.Fatalf("tenant owner revoke member token: %v", err)
 	}
 	invalid, err := server.ValidateAPIToken(ctx, &commodorepb.ValidateAPITokenRequest{Token: first.GetTokenValue()})
 	if err != nil || invalid.GetValid() {

@@ -14,6 +14,7 @@ import (
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // A SetPlaybackPolicy against a deleted asset (business row present-but-tombstoned or already removed)
@@ -549,7 +550,7 @@ func TestResolvePlaybackPolicyPublicReadOmitsWebhookSecret(t *testing.T) {
 			AddRow(policyJSON, "ciphertext", "tenant-1"))
 
 	server := &CommodoreServer{db: db, logger: logrus.New()}
-	resp, err := server.ResolvePlaybackPolicy(context.Background(), &commodorepb.ResolvePlaybackPolicyRequest{PlaybackId: "playback-1"})
+	resp, err := server.ResolvePlaybackPolicy(ctxAs("user-1", "tenant-1", "member"), &commodorepb.ResolvePlaybackPolicyRequest{PlaybackId: "playback-1"})
 	if err != nil {
 		t.Fatalf("ResolvePlaybackPolicy: %v", err)
 	}
@@ -558,5 +559,37 @@ func TestResolvePlaybackPolicyPublicReadOmitsWebhookSecret(t *testing.T) {
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestResolvePlaybackPolicyHidesCrossTenantPolicy(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	mock.ExpectQuery("FROM commodore.streams WHERE lower\\(playback_id::text\\) = lower\\(\\$1::text\\)").
+		WithArgs("playback-1").
+		WillReturnRows(sqlmock.NewRows([]string{"playback_policy", "playback_webhook_secret_enc", "tenant_id"}).
+			AddRow([]byte(`{"type":"public"}`), nil, "tenant-owner"))
+
+	server := &CommodoreServer{db: db, logger: logrus.New()}
+	_, err = server.ResolvePlaybackPolicy(ctxAs("attacker", "tenant-other", "member"), &commodorepb.ResolvePlaybackPolicyRequest{PlaybackId: "playback-1"})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("cross-tenant resolution error = %v, want NotFound", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestResolvePlaybackPolicyWebhookSecretRequiresServiceAuth(t *testing.T) {
+	server := &CommodoreServer{logger: logrus.New()}
+	_, err := server.ResolvePlaybackPolicy(ctxAs("user-1", "tenant-1", "owner"), &commodorepb.ResolvePlaybackPolicyRequest{
+		PlaybackId: "playback-1", IncludeWebhookSecret: true,
+	})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("interactive secret resolution error = %v, want PermissionDenied", err)
 	}
 }

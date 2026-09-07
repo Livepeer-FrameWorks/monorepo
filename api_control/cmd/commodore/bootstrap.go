@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"time"
 
 	"frameworks/api_control/internal/bootstrap"
@@ -23,12 +24,34 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// newSourceURIEncrypter derives the same FieldEncryptor the runtime Commodore
-// service uses for pull-input source URIs. Purpose string "pull-source-uri"
-// MUST match grpc/server.go; HKDF isolation depends on it.
-func newSourceURIEncrypter() (*fieldcrypt.FieldEncryptor, error) {
+// newSourceURIEncrypter constructs the same rotating keyring the runtime
+// Commodore service uses for pull-input source URIs.
+func newSourceURIEncrypter() (fieldcrypt.FieldCipher, error) {
 	jwtSecret := config.RequireEnv("JWT_SECRET")
-	return fieldcrypt.DeriveFieldEncryptor([]byte(jwtSecret), "pull-source-uri")
+	fieldKey := config.RequireEnv("FIELD_ENCRYPTION_KEY")
+	previous, err := fieldcrypt.ParseFieldKeySet(config.GetEnv("FIELD_ENCRYPTION_PREVIOUS_KEYS", ""))
+	if err != nil {
+		return nil, err
+	}
+	explicitLegacy, err := fieldcrypt.ParseLegacyFieldSecrets(config.GetEnv("FIELD_ENCRYPTION_LEGACY_SECRETS", ""))
+	if err != nil {
+		return nil, err
+	}
+	legacy := make([][]byte, 0, len(previous)+len(explicitLegacy)+1)
+	legacy = append(legacy, []byte(jwtSecret))
+	legacy = append(legacy, explicitLegacy...)
+	keyIDs := make([]string, 0, len(previous))
+	for keyID := range previous {
+		keyIDs = append(keyIDs, keyID)
+	}
+	sort.Strings(keyIDs)
+	for _, keyID := range keyIDs {
+		legacy = append(legacy, previous[keyID])
+	}
+	return fieldcrypt.NewFieldKeyring(
+		config.GetEnv("FIELD_ENCRYPTION_KEY_ID", "primary"),
+		[]byte(fieldKey), previous, legacy, "pull-source-uri",
+	)
 }
 
 // runBootstrapCommand handles `commodore bootstrap …` invocations. main()
@@ -219,7 +242,10 @@ func (r *grpcTenantResolver) Close() {
 }
 
 // grpcClusterResolver lists media-capable clusters from Quartermaster's
-// ClusterService. Implements bootstrap.ClusterCapabilityResolver.
+// operator-only fleet catalog. This is intentionally broader than runtime
+// tenant entitlement: bootstrap pull streams are platform-authored desired
+// state for the system tenant, while Foghorn still checks signed tenant and
+// cluster authority before placement. Implements bootstrap.ClusterCapabilityResolver.
 type grpcClusterResolver struct {
 	client *qmclient.GRPCClient
 }

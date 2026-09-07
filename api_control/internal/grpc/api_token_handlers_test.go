@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	"google.golang.org/grpc/codes"
 )
@@ -68,14 +69,58 @@ func TestCreateAPIToken(t *testing.T) {
 		if storedToken != hashToken(resp.GetTokenValue()) {
 			t.Errorf("stored value %q is not hashToken(tokenValue)", storedToken)
 		}
-		// Default permission is read-only.
-		if len(resp.GetPermissions()) != 1 || resp.GetPermissions()[0] != "read" {
-			t.Errorf("default permissions = %v, want [read]", resp.GetPermissions())
+		// Default permission is useful and least-privilege.
+		if len(resp.GetPermissions()) != 1 || resp.GetPermissions()[0] != "streams:read" {
+			t.Errorf("default permissions = %v, want [streams:read]", resp.GetPermissions())
 		}
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Fatalf("expectations: %v", err)
 		}
 	})
+
+	t.Run("delegated_api_token_cannot_mint_credentials", func(t *testing.T) {
+		s, _, done := newMockServer(t)
+		defer done()
+		ctx := context.WithValue(ctxAs("u1", "t1", "owner"), ctxkeys.KeyAuthType, "api_token")
+		_, err := s.CreateAPIToken(ctx, &commodorepb.CreateAPITokenRequest{Permissions: []string{"streams:write"}})
+		wantCode(t, err, codes.PermissionDenied)
+	})
+
+	t.Run("wildcard_and_unknown_permissions_are_rejected", func(t *testing.T) {
+		for _, permission := range []string{"*", "root:all"} {
+			t.Run(permission, func(t *testing.T) {
+				s, _, done := newMockServer(t)
+				defer done()
+				_, err := s.CreateAPIToken(ctxAs("u1", "t1", "owner"), &commodorepb.CreateAPITokenRequest{Permissions: []string{permission}})
+				wantCode(t, err, codes.InvalidArgument)
+			})
+		}
+	})
+}
+
+func TestNormalizeAPITokenPermissionsIncludesEveryMCPGrant(t *testing.T) {
+	permissions := []string{
+		"account:read", "analytics:read", "billing:read", "billing:write",
+		"consultant:use", "developer:read", "developer:write",
+		"infrastructure:read", "infrastructure:write", "mcp:high-risk",
+		"security:read", "security:write", "settings:write",
+		"streams:read", "streams:write", "support:read",
+	}
+	got, err := normalizeAPITokenPermissions(permissions)
+	if err != nil {
+		t.Fatalf("documented MCP grants rejected: %v", err)
+	}
+	if len(got) != len(permissions) {
+		t.Fatalf("normalized grants = %v", got)
+	}
+}
+
+func TestNormalizeAPITokenPermissionsRejectsCoarseScopes(t *testing.T) {
+	for _, permission := range []string{"read", "write"} {
+		if _, err := normalizeAPITokenPermissions([]string{permission}); err == nil {
+			t.Fatalf("coarse permission %q was accepted", permission)
+		}
+	}
 }
 
 func TestListAPITokens(t *testing.T) {
@@ -91,10 +136,10 @@ func TestListAPITokens(t *testing.T) {
 		defer done()
 		now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 		mock.ExpectQuery("SELECT COUNT").
-			WithArgs("u1", "t1").
+			WithArgs("u1", true, "t1").
 			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
 		mock.ExpectQuery("FROM commodore.api_tokens").
-			WithArgs("u1", "t1", int32(51)).
+			WithArgs("u1", true, "t1", int32(51)).
 			WillReturnRows(sqlmock.NewRows([]string{
 				"id", "token_name", "permissions", "status", "last_used_at", "expires_at", "created_at",
 			}).AddRow("tok1", "ci", "{read,write}", "active", nil, nil, now))
@@ -134,9 +179,9 @@ func TestRevokeAPIToken(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
 		mock.ExpectQuery("UPDATE commodore.api_tokens").
-			WithArgs("tok1", "u1", "t1").
+			WithArgs("tok1", "u1", false, "t1").
 			WillReturnError(sql.ErrNoRows)
-		_, err := s.RevokeAPIToken(ctxAs("u1", "t1", "owner"), &commodorepb.RevokeAPITokenRequest{TokenId: "tok1"})
+		_, err := s.RevokeAPIToken(ctxAs("u1", "t1", "member"), &commodorepb.RevokeAPITokenRequest{TokenId: "tok1"})
 		wantCode(t, err, codes.NotFound)
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Fatalf("expectations: %v", err)
@@ -147,16 +192,36 @@ func TestRevokeAPIToken(t *testing.T) {
 		s, mock, done := newMockServer(t)
 		defer done()
 		mock.ExpectQuery("UPDATE commodore.api_tokens").
-			WithArgs("tok1", "u1", "t1").
+			WithArgs("tok1", "u1", false, "t1").
 			WillReturnRows(sqlmock.NewRows([]string{"token_name"}).AddRow("ci"))
 		expectOutboxInsert(mock)
 
-		resp, err := s.RevokeAPIToken(ctxAs("u1", "t1", "owner"), &commodorepb.RevokeAPITokenRequest{TokenId: "tok1"})
+		resp, err := s.RevokeAPIToken(ctxAs("u1", "t1", "member"), &commodorepb.RevokeAPITokenRequest{TokenId: "tok1"})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if resp.GetTokenName() != "ci" || resp.GetTokenId() != "tok1" {
 			t.Errorf("unexpected response: %+v", resp)
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatalf("expectations: %v", err)
+		}
+	})
+
+	t.Run("tenant_manager_can_revoke_another_users_token", func(t *testing.T) {
+		s, mock, done := newMockServer(t)
+		defer done()
+		mock.ExpectQuery("UPDATE commodore.api_tokens").
+			WithArgs("tok2", "owner1", true, "t1").
+			WillReturnRows(sqlmock.NewRows([]string{"token_name"}).AddRow("departed-user-token"))
+		expectOutboxInsert(mock)
+
+		resp, err := s.RevokeAPIToken(ctxAs("owner1", "t1", "owner"), &commodorepb.RevokeAPITokenRequest{TokenId: "tok2"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resp.GetTokenName() != "departed-user-token" {
+			t.Fatalf("token name = %q", resp.GetTokenName())
 		}
 		if err := mock.ExpectationsWereMet(); err != nil {
 			t.Fatalf("expectations: %v", err)

@@ -371,6 +371,7 @@ func TestValidateStreamKey_ReportsClaimAcquisition(t *testing.T) {
 	rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
 		AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk", "push")
 	mock.ExpectQuery("FROM commodore.streams").WithArgs("good-key").WillReturnRows(rows)
+	expectNoEnabledPushTargets(mock, "stream-id", "tenant-id")
 	mock.ExpectQuery("UPDATE commodore.streams").
 		WithArgs("cluster-us", "trigger-uuid-1", int64(activeIngestLease.Seconds()), "good-key").
 		WillReturnRows(claimReserved())
@@ -382,7 +383,7 @@ func TestValidateStreamKey_ReportsClaimAcquisition(t *testing.T) {
 		routeCacheTTL: 5 * time.Minute,
 	}
 
-	resp, err := server.ValidateStreamKey(context.Background(), &commodorepb.ValidateStreamKeyRequest{
+	resp, err := server.ValidateStreamKey(serviceCtx(), &commodorepb.ValidateStreamKeyRequest{
 		StreamKey:  "good-key",
 		ClusterId:  "cluster-us",
 		ClaimToken: "trigger-uuid-1",
@@ -410,7 +411,7 @@ func TestValidateStreamKey_ClusterClaimRequiresAnOwner(t *testing.T) {
 	defer db.Close()
 
 	server := &CommodoreServer{db: db, logger: logrus.New()}
-	_, err = server.ValidateStreamKey(context.Background(), &commodorepb.ValidateStreamKeyRequest{
+	_, err = server.ValidateStreamKey(serviceCtx(), &commodorepb.ValidateStreamKeyRequest{
 		StreamKey: "good-key",
 		ClusterId: "cluster-us",
 	})
@@ -434,7 +435,7 @@ func TestValidateStreamKey_NoClusterNeedsNoOwner(t *testing.T) {
 	mock.ExpectQuery("FROM commodore.streams").WithArgs("good-key").WillReturnError(sql.ErrNoRows)
 
 	server := &CommodoreServer{db: db, logger: logrus.New()}
-	resp, err := server.ValidateStreamKey(context.Background(), &commodorepb.ValidateStreamKeyRequest{
+	resp, err := server.ValidateStreamKey(serviceCtx(), &commodorepb.ValidateStreamKeyRequest{
 		StreamKey: "good-key",
 	})
 	if err != nil {
@@ -457,6 +458,7 @@ func TestValidateStreamKey_ContendedClaimIsNotAcquired(t *testing.T) {
 	rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
 		AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk", "push")
 	mock.ExpectQuery("FROM commodore.streams").WithArgs("good-key").WillReturnRows(rows)
+	expectNoEnabledPushTargets(mock, "stream-id", "tenant-id")
 	// The guard matched nothing: someone else owns the live claim.
 	mock.ExpectQuery("UPDATE commodore.streams").WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("SELECT active_ingest_cluster_id").
@@ -469,7 +471,7 @@ func TestValidateStreamKey_ContendedClaimIsNotAcquired(t *testing.T) {
 		routeCacheTTL: 5 * time.Minute,
 	}
 
-	resp, err := server.ValidateStreamKey(context.Background(), &commodorepb.ValidateStreamKeyRequest{
+	resp, err := server.ValidateStreamKey(serviceCtx(), &commodorepb.ValidateStreamKeyRequest{
 		StreamKey:  "good-key",
 		ClusterId:  "cluster-us",
 		ClaimToken: "trigger-uuid-2",
@@ -495,13 +497,14 @@ func TestValidateStreamKey_ContendedClaimReadFailureDenies(t *testing.T) {
 	rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
 		AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk", "push")
 	mock.ExpectQuery("FROM commodore.streams").WithArgs("good-key").WillReturnRows(rows)
+	expectNoEnabledPushTargets(mock, "stream-id", "tenant-id")
 	mock.ExpectQuery("UPDATE commodore.streams").WillReturnError(sql.ErrNoRows)
 	mock.ExpectQuery("SELECT active_ingest_cluster_id").WithArgs("good-key").WillReturnError(context.DeadlineExceeded)
 
 	server := &CommodoreServer{
 		db: db, logger: logrus.New(), routeCache: map[string]*clusterRoute{"tenant-id": admittingRoute("cluster-us")}, routeCacheTTL: 5 * time.Minute,
 	}
-	resp, err := server.ValidateStreamKey(context.Background(), &commodorepb.ValidateStreamKeyRequest{
+	resp, err := server.ValidateStreamKey(serviceCtx(), &commodorepb.ValidateStreamKeyRequest{
 		StreamKey: "good-key", ClusterId: "cluster-us", ClaimToken: "trigger-uuid-2",
 	})
 	if err != nil {

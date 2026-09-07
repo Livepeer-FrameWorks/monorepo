@@ -36,6 +36,9 @@ type purserEntitlementFake struct {
 }
 
 func (f *purserEntitlementFake) GetTenantBillingStatus(ctx context.Context, req *purserpb.GetTenantBillingStatusRequest) (*purserpb.GetTenantBillingStatusResponse, error) {
+	if err := requireCommodoreServiceCredential(ctx); err != nil {
+		return nil, err
+	}
 	if f.billingStatus != nil {
 		return f.billingStatus(ctx, req)
 	}
@@ -43,6 +46,9 @@ func (f *purserEntitlementFake) GetTenantBillingStatus(ctx context.Context, req 
 }
 
 func (f *purserEntitlementFake) GetSubscription(ctx context.Context, req *purserpb.GetSubscriptionRequest) (*purserpb.GetSubscriptionResponse, error) {
+	if err := requireCommodoreServiceCredential(ctx); err != nil {
+		return nil, err
+	}
 	f.subscriptionCalls.Add(1)
 	if f.subscription != nil {
 		return f.subscription(ctx, req)
@@ -51,6 +57,9 @@ func (f *purserEntitlementFake) GetSubscription(ctx context.Context, req *purser
 }
 
 func (f *purserEntitlementFake) GetBillingTier(ctx context.Context, req *purserpb.GetBillingTierRequest) (*purserpb.BillingTier, error) {
+	if err := requireCommodoreServiceCredential(ctx); err != nil {
+		return nil, err
+	}
 	f.tierCalls.Add(1)
 	if f.tier != nil {
 		return f.tier(ctx, req)
@@ -59,6 +68,9 @@ func (f *purserEntitlementFake) GetBillingTier(ctx context.Context, req *purserp
 }
 
 func (f *purserEntitlementFake) GetTenantAdmissionStatus(ctx context.Context, req *purserpb.GetTenantAdmissionStatusRequest) (*purserpb.GetTenantAdmissionStatusResponse, error) {
+	if err := requireCommodoreServiceCredential(ctx); err != nil {
+		return nil, err
+	}
 	f.admissionCalls.Add(1)
 	if f.admission != nil {
 		return f.admission(ctx, req)
@@ -79,10 +91,12 @@ func startPurserEntitlementFake(t *testing.T, fake *purserEntitlementFake) *purs
 	go func() { _ = srv.Serve(lis) }()
 
 	client, err := purserclient.NewGRPCClient(purserclient.GRPCConfig{
-		GRPCAddr:      lis.Addr().String(),
-		AllowInsecure: true,
-		Logger:        logging.NewLogger(),
-		Timeout:       5 * time.Second,
+		GRPCAddr:           lis.Addr().String(),
+		AllowInsecure:      true,
+		Logger:             logging.NewLogger(),
+		Timeout:            5 * time.Second,
+		ServiceToken:       "commodore-service-token",
+		PreferServiceToken: true,
 	})
 	if err != nil {
 		srv.Stop()

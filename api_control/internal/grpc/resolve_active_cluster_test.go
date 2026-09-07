@@ -17,11 +17,14 @@ import (
 func preCachedRoute(s *CommodoreServer, tenantID, routeClusterID string) {
 	s.routeCacheTTL = time.Hour
 	s.routeCache[tenantID] = &clusterRoute{
-		clusterID: routeClusterID,
+		clusterID:         routeClusterID,
+		officialClusterID: "official-1",
 		clusterPeers: []*clusterpeerpb.TenantClusterPeer{
 			{ClusterId: routeClusterID, RegionId: "eu-west"},
 		},
-		resolvedAt: time.Now(),
+		allowPlatformShared: true,
+		servePolicyResolved: true,
+		resolvedAt:          time.Now(),
 	}
 }
 
@@ -119,6 +122,9 @@ func TestResolveInternalName_ActiveIngestClusterOverridesOriginCluster(t *testin
 	}
 	if got := resp.GetOriginClusterId(); got != "media-us-1" {
 		t.Fatalf("active_ingest_cluster_id must override route default; got origin=%q want media-us-1", got)
+	}
+	if resp.ServePolicyResolved == nil || resp.GetServePolicyResolved() {
+		t.Fatalf("missing signed media authority must be an explicit unresolved policy: %+v", resp.ServePolicyResolved)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet: %v", err)

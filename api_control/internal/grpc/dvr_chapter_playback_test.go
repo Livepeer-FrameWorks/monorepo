@@ -38,7 +38,7 @@ func TestMintChapterPlaybackID_IdempotentOnChapterID(t *testing.T) {
 	mock.ExpectCommit()
 
 	server := &CommodoreServer{db: db, logger: logrus.New()}
-	resp, err := server.MintChapterPlaybackID(context.Background(), &commodorepb.MintChapterPlaybackIDRequest{
+	resp, err := server.MintChapterPlaybackID(serviceCtx(), &commodorepb.MintChapterPlaybackIDRequest{
 		ChapterId:       "chap-1",
 		TenantId:        "tenant-1",
 		ArtifactHash:    "artifact-aaa",
@@ -74,7 +74,7 @@ func TestMintChapterPlaybackID_RejectsMissingArgs(t *testing.T) {
 		{ChapterId: "c", TenantId: "t", ArtifactHash: "a"},
 	}
 	for _, req := range cases {
-		if _, err := server.MintChapterPlaybackID(context.Background(), req); err == nil {
+		if _, err := server.MintChapterPlaybackID(serviceCtx(), req); err == nil {
 			t.Fatalf("expected error for %+v", req)
 		}
 	}

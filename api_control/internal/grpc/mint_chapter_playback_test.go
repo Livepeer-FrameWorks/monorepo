@@ -1,7 +1,6 @@
 package grpc
 
 import (
-	"context"
 	"database/sql"
 	"testing"
 
@@ -27,7 +26,7 @@ func TestMintChapterPlaybackID_TombstonedChapterRefused(t *testing.T) {
 	// No INSERTs must follow: a tombstoned chapter cannot be resurrected.
 	mock.ExpectRollback()
 
-	_, err := s.MintChapterPlaybackID(context.Background(), &commodorepb.MintChapterPlaybackIDRequest{
+	_, err := s.MintChapterPlaybackID(serviceCtx(), &commodorepb.MintChapterPlaybackIDRequest{
 		ChapterId: "c1", TenantId: "t1", ArtifactHash: "chap-hash", UserId: "u1", DvrHash: "dvr-1",
 	})
 	wantCode(t, err, codes.FailedPrecondition)
@@ -53,7 +52,7 @@ func TestMintChapterPlaybackID_FreshChapterRegisters(t *testing.T) {
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
-	resp, err := s.MintChapterPlaybackID(context.Background(), &commodorepb.MintChapterPlaybackIDRequest{
+	resp, err := s.MintChapterPlaybackID(serviceCtx(), &commodorepb.MintChapterPlaybackIDRequest{
 		ChapterId: "c1", TenantId: "t1", ArtifactHash: "chap-hash", UserId: "u1", DvrHash: "dvr-1",
 	})
 	if err != nil {
@@ -83,7 +82,7 @@ func TestMintChapterPlaybackID_CrossTenantChapterCollisionRefused(t *testing.T) 
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectRollback()
 
-	_, err := s.MintChapterPlaybackID(context.Background(), &commodorepb.MintChapterPlaybackIDRequest{
+	_, err := s.MintChapterPlaybackID(serviceCtx(), &commodorepb.MintChapterPlaybackIDRequest{
 		ChapterId: "shared-chapter-id", TenantId: "tenant-b", ArtifactHash: "chap-hash-b", UserId: "user-b", DvrHash: "dvr-b",
 	})
 	wantCode(t, err, codes.FailedPrecondition)

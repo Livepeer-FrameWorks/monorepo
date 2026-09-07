@@ -21,6 +21,7 @@ import (
 	purserclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/purser"
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	fieldcrypt "github.com/Livepeer-FrameWorks/monorepo/pkg/crypto"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/datamigrate"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
@@ -28,6 +29,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/monitoring"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/qmbootstrap"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/restream"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/server"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/version"
 	"time"
@@ -70,6 +72,20 @@ func main() {
 
 	dbURL := config.RequireEnv("DATABASE_URL")
 	jwtSecret := config.RequireEnv("JWT_SECRET")
+	fieldEncryptionKey := config.RequireEnv("FIELD_ENCRYPTION_KEY")
+	fieldEncryptionKeyID := config.GetEnv("FIELD_ENCRYPTION_KEY_ID", "primary")
+	fieldEncryptionPrevious, fieldKeysErr := fieldcrypt.ParseFieldKeySet(config.GetEnv("FIELD_ENCRYPTION_PREVIOUS_KEYS", ""))
+	if fieldKeysErr != nil {
+		logger.WithError(fieldKeysErr).Fatal("Invalid FIELD_ENCRYPTION_PREVIOUS_KEYS")
+	}
+	fieldEncryptionLegacy, legacyKeysErr := fieldcrypt.ParseLegacyFieldSecrets(config.GetEnv("FIELD_ENCRYPTION_LEGACY_SECRETS", ""))
+	if legacyKeysErr != nil {
+		logger.WithError(legacyKeysErr).Fatal("Invalid FIELD_ENCRYPTION_LEGACY_SECRETS")
+	}
+	destinationPolicy, destinationPolicyErr := restream.DestinationPolicyFromEnvironment()
+	if destinationPolicyErr != nil {
+		logger.WithError(destinationPolicyErr).Fatal("Invalid restream destination policy")
+	}
 	serviceToken := config.RequireEnv("SERVICE_TOKEN")
 	mediaAuthorityKeyID := strings.TrimSpace(os.Getenv("MEDIA_AUTHORITY_SIGNING_KEY_ID"))
 	mediaAuthorityPrivateEncoded := strings.TrimSpace(os.Getenv("MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64"))
@@ -85,7 +101,10 @@ func main() {
 		}
 		logger.WithField("signer_key_id", mediaAuthorityKeyID).Info("Signed media authority compiler enabled")
 	} else {
-		logger.Warn("Media authority signing key is not configured; authority compilation is disabled")
+		if !config.IsDevelopment() {
+			logger.Fatal("MEDIA_AUTHORITY_SIGNING_KEY_ID and MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64 are required outside development")
+		}
+		logger.Warn("Media authority signing key is not configured in development; authority compilation is disabled")
 	}
 	var mediaAuthoritySealRecipients sharedauthority.SealRecipientSet
 	if encodedRecipients := strings.TrimSpace(os.Getenv("MEDIA_AUTHORITY_SEAL_RECIPIENTS")); encodedRecipients != "" {
@@ -110,8 +129,9 @@ func main() {
 	// Add health checks
 	healthChecker.AddCheck("database", monitoring.DatabaseHealthCheck(db))
 	healthChecker.AddCheck("config", monitoring.ConfigurationHealthCheck(map[string]string{
-		"DATABASE_URL": dbURL,
-		"JWT_SECRET":   jwtSecret,
+		"DATABASE_URL":         dbURL,
+		"JWT_SECRET":           jwtSecret,
+		"FIELD_ENCRYPTION_KEY": fieldEncryptionKey,
 	}))
 
 	// Per-method counters live on commodore_grpc_requests_total{method,status}
@@ -141,6 +161,11 @@ func main() {
 			"Age in seconds of the oldest unacknowledged current authority delivery",
 			[]string{"authority_kind"},
 		),
+		FieldDecryptFailures: metricsCollector.NewCounter(
+			"field_decrypt_failures_total",
+			"Application-field decryption failures by bounded purpose and ciphertext format",
+			[]string{"purpose", "format"},
+		),
 	}
 
 	foghornPool := foghornclient.NewPool(foghornclient.PoolConfig{
@@ -157,13 +182,14 @@ func main() {
 	// Create Quartermaster gRPC client for tenant creation during registration
 	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
 	quartermasterGRPCClient, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-		GRPCAddr:      quartermasterGRPCAddr,
-		Timeout:       30 * time.Second,
-		Logger:        logger,
-		ServiceToken:  serviceToken,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetServiceGRPCTLSServerName("quartermaster"),
+		GRPCAddr:           quartermasterGRPCAddr,
+		Timeout:            30 * time.Second,
+		Logger:             logger,
+		ServiceToken:       serviceToken,
+		PreferServiceToken: true,
+		AllowInsecure:      config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
+		CACertFile:         config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:         config.GetServiceGRPCTLSServerName("quartermaster"),
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Quartermaster gRPC client - tenant creation will use fallback")
@@ -201,13 +227,14 @@ func main() {
 	// Create Purser gRPC client for user limit checking during registration
 	purserGRPCAddr := config.GetEnv("PURSER_GRPC_ADDR", "purser:19003")
 	purserGRPCClient, err := purserclient.NewGRPCClient(purserclient.GRPCConfig{
-		GRPCAddr:      purserGRPCAddr,
-		Timeout:       30 * time.Second,
-		Logger:        logger,
-		ServiceToken:  serviceToken,
-		AllowInsecure: config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
-		CACertFile:    config.GetEnv("GRPC_TLS_CA_PATH", ""),
-		ServerName:    config.GetServiceGRPCTLSServerName("purser"),
+		GRPCAddr:           purserGRPCAddr,
+		Timeout:            30 * time.Second,
+		Logger:             logger,
+		ServiceToken:       serviceToken,
+		PreferServiceToken: true,
+		AllowInsecure:      config.GetEnvBool("GRPC_ALLOW_INSECURE", false),
+		CACertFile:         config.GetEnv("GRPC_TLS_CA_PATH", ""),
+		ServerName:         config.GetServiceGRPCTLSServerName("purser"),
 	})
 	if err != nil {
 		logger.WithError(err).Warn("Failed to create Purser gRPC client - user limit checks will be skipped")
@@ -287,6 +314,11 @@ func main() {
 			Metrics:                         serverMetrics,
 			ServiceToken:                    serviceToken,
 			JWTSecret:                       []byte(jwtSecret),
+			FieldEncryptionKeyID:            fieldEncryptionKeyID,
+			FieldEncryptionKey:              []byte(fieldEncryptionKey),
+			FieldEncryptionPrevious:         fieldEncryptionPrevious,
+			FieldEncryptionLegacy:           fieldEncryptionLegacy,
+			DestinationPolicy:               destinationPolicy,
 			TurnstileSecretKey:              config.GetEnv("TURNSTILE_AUTH_SECRET_KEY", ""),
 			TurnstileFailOpen:               config.GetEnvBool("TURNSTILE_FAIL_OPEN", false),
 			PasswordResetSecret:             []byte(config.GetEnv("PASSWORD_RESET_SECRET", "")),

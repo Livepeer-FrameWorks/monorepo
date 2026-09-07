@@ -1,7 +1,6 @@
 package grpc
 
 import (
-	"context"
 	"database/sql"
 	"testing"
 
@@ -28,7 +27,7 @@ func TestRegisterDVR(t *testing.T) {
 		s, _, done := newMockServer(t)
 		defer done()
 		// stream_internal_name (not playback_id) is the required source key.
-		_, err := s.RegisterDVR(context.Background(), &commodorepb.RegisterDVRRequest{TenantId: "t1", UserId: "u1"})
+		_, err := s.RegisterDVR(serviceCtx(), &commodorepb.RegisterDVRRequest{TenantId: "t1", UserId: "u1"})
 		wantCode(t, err, codes.InvalidArgument)
 	})
 
@@ -42,7 +41,7 @@ func TestRegisterDVR(t *testing.T) {
 		mock.ExpectQuery("WHERE internal_name = \\$1 AND tenant_id = \\$2").
 			WithArgs("live+stream1", "t1").
 			WillReturnError(sql.ErrNoRows)
-		_, err := s.RegisterDVR(context.Background(), &commodorepb.RegisterDVRRequest{
+		_, err := s.RegisterDVR(serviceCtx(), &commodorepb.RegisterDVRRequest{
 			TenantId: "t1", UserId: "u1", StreamInternalName: "live+stream1",
 		})
 		wantCode(t, err, codes.NotFound)
@@ -72,7 +71,7 @@ func TestRegisterDVR(t *testing.T) {
 		mock.ExpectCommit()
 		expectOutboxInsert(mock)
 
-		resp, err := s.RegisterDVR(context.Background(), &commodorepb.RegisterDVRRequest{
+		resp, err := s.RegisterDVR(serviceCtx(), &commodorepb.RegisterDVRRequest{
 			TenantId: "t1", UserId: "u1", StreamInternalName: "live+stream1",
 			OriginClusterId: "cluster-a",
 		})
@@ -109,7 +108,7 @@ func TestRegisterDVR(t *testing.T) {
 			WillReturnRows(sqlmock.NewRows([]string{"live"}).AddRow(false))
 		mock.ExpectRollback()
 
-		_, err := s.RegisterDVR(context.Background(), &commodorepb.RegisterDVRRequest{
+		_, err := s.RegisterDVR(serviceCtx(), &commodorepb.RegisterDVRRequest{
 			TenantId: "t1", UserId: "u1", StreamInternalName: "live+stream1", OriginClusterId: "cluster-a",
 		})
 		wantCode(t, err, codes.FailedPrecondition)

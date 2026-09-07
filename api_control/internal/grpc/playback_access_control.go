@@ -14,7 +14,9 @@ import (
 
 	"frameworks/api_control/internal/database/commodoredb"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/auth"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"google.golang.org/grpc/codes"
@@ -402,6 +404,10 @@ func (s *CommodoreServer) SetPlaybackPolicy(ctx context.Context, req *commodorep
 //   - GraphQL field resolvers have playback_id (public identifier).
 //   - Foghorn USER_NEW handler has the MistServer internal_name only.
 func (s *CommodoreServer) ResolvePlaybackPolicy(ctx context.Context, req *commodorepb.ResolvePlaybackPolicyRequest) (*commodorepb.ResolvePlaybackPolicyResponse, error) {
+	serviceCall := middleware.IsServiceCall(ctx)
+	if req.GetIncludeWebhookSecret() && !serviceCall {
+		return nil, status.Error(codes.PermissionDenied, "webhook policy secrets require service authentication")
+	}
 	playbackID := strings.TrimSpace(req.GetPlaybackId())
 	internalName := strings.TrimSpace(req.GetInternalName())
 	if (playbackID == "") == (internalName == "") {
@@ -421,6 +427,15 @@ func (s *CommodoreServer) ResolvePlaybackPolicy(ctx context.Context, req *commod
 	}
 	if err != nil {
 		return nil, err
+	}
+	if !serviceCall {
+		callerTenantID := strings.TrimSpace(ctxkeys.GetTenantID(ctx))
+		if callerTenantID == "" {
+			return nil, status.Error(codes.Unauthenticated, "playback policy requires tenant authentication")
+		}
+		if callerTenantID != tenantID {
+			return nil, status.Error(codes.NotFound, "playback policy not found")
+		}
 	}
 
 	resp := &commodorepb.ResolvePlaybackPolicyResponse{TenantId: tenantID}
@@ -464,6 +479,7 @@ func (s *CommodoreServer) ResolvePlaybackPolicy(ctx context.Context, req *commod
 			}
 			decrypted, err := s.playbackWebhookEncryptor.Decrypt(secretEnc.String)
 			if err != nil {
+				s.observeFieldDecryptFailure("playback_webhook_secret", secretEnc.String)
 				s.logger.WithError(err).Error("decrypt webhook secret failed")
 				return nil, status.Errorf(codes.Internal, "secret decrypt error")
 			}

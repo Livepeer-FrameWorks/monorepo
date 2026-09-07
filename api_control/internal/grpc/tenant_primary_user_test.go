@@ -1,7 +1,6 @@
 package grpc
 
 import (
-	"context"
 	"regexp"
 	"testing"
 
@@ -31,7 +30,7 @@ func TestGetTenantPrimaryUserPrioritizesOwner(t *testing.T) {
 			AddRow("user-owner", "info@frameworks.network", "FrameWorks", "Operator"))
 
 	server := &CommodoreServer{db: db, logger: logging.NewLogger()}
-	resp, err := server.GetTenantPrimaryUser(context.Background(), &commodorepb.GetTenantPrimaryUserRequest{TenantId: "tenant-1"})
+	resp, err := server.GetTenantPrimaryUser(serviceCtx(), &commodorepb.GetTenantPrimaryUserRequest{TenantId: "tenant-1"})
 	if err != nil {
 		t.Fatalf("GetTenantPrimaryUser: %v", err)
 	}

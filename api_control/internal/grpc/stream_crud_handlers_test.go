@@ -388,7 +388,7 @@ func TestListStreamMonitoringMapsNullableToggle(t *testing.T) {
 			AddRow("s2", "live+b", true).
 			AddRow("s3", "live+c", false))
 
-	resp, err := s.ListStreamMonitoring(context.Background(), &commodorepb.ListStreamMonitoringRequest{TenantId: "t1"})
+	resp, err := s.ListStreamMonitoring(serviceCtx(), &commodorepb.ListStreamMonitoringRequest{TenantId: "t1"})
 	if err != nil {
 		t.Fatalf("ListStreamMonitoring: %v", err)
 	}

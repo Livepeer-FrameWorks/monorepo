@@ -173,6 +173,32 @@ func TestMintMistAdminSession_TenantPrivateAllowsOwnerTenantAdmin(t *testing.T) 
 	}
 }
 
+func TestMintMistAdminSession_RejectsReadScopedAPITokenBeforeOwnershipLookup(t *testing.T) {
+	srv := newMistAdminTestServer(t)
+	ctx := context.WithValue(ctxAs("acme-user", "tenant-acme", "owner"), ctxkeys.KeyAuthType, "api_token")
+	ctx = context.WithValue(ctx, ctxkeys.KeyPermissions, []string{"infrastructure:read"})
+
+	_, err := srv.MintMistAdminSession(ctx, &commodorepb.MintMistAdminSessionRequest{NodeId: "edge-acme-1"})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("read-scoped token status = %v, want PermissionDenied", status.Code(err))
+	}
+}
+
+func TestMintMistAdminSession_AllowsWriteScopedOwnerAPIToken(t *testing.T) {
+	srv := newMistAdminTestServer(t)
+	stubOwnership(t,
+		tenantOwnedOwner("edge-acme-1", "acme-private", "tenant-acme"), nil,
+		clusterResp("acme-private", false), nil,
+	)
+	ctx := context.WithValue(ctxAs("acme-user", "tenant-acme", "owner"), ctxkeys.KeyAuthType, "api_token")
+	ctx = context.WithValue(ctx, ctxkeys.KeyPermissions, []string{"infrastructure:write"})
+
+	resp, err := srv.MintMistAdminSession(ctx, &commodorepb.MintMistAdminSessionRequest{NodeId: "edge-acme-1"})
+	if err != nil || resp.GetToken() == "" {
+		t.Fatalf("write-scoped owner token mint: resp=%v err=%v", resp, err)
+	}
+}
+
 // --- deny paths (the security-critical ones) ---
 
 func TestMintMistAdminSession_DeniesMemberOnPlatformOfficial(t *testing.T) {
@@ -245,6 +271,31 @@ func TestMintMistAdminSession_DeniesOtherTenantOnPrivateCluster(t *testing.T) {
 	}
 }
 
+func TestMintMistAdminSession_DeniesForeignTenantBeforeClusterLookup(t *testing.T) {
+	srv := newMistAdminTestServer(t)
+	previousOwner, previousCluster := mistAdminGetNodeOwner, mistAdminGetCluster
+	t.Cleanup(func() {
+		mistAdminGetNodeOwner = previousOwner
+		mistAdminGetCluster = previousCluster
+	})
+	mistAdminGetNodeOwner = func(*CommodoreServer, context.Context, string) (*quartermasterpb.NodeOwnerResponse, error) {
+		return tenantOwnedOwner("edge-acme-1", "acme-private", "tenant-acme"), nil
+	}
+	clusterCalls := 0
+	mistAdminGetCluster = func(*CommodoreServer, context.Context, string) (*quartermasterpb.ClusterResponse, error) {
+		clusterCalls++
+		return nil, status.Error(codes.Unavailable, "quartermaster unavailable")
+	}
+
+	_, err := srv.MintMistAdminSession(ctxAs("foreign-owner", "tenant-foreign", "owner"), &commodorepb.MintMistAdminSessionRequest{NodeId: "edge-acme-1"})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("foreign tenant status = %v, want PermissionDenied", status.Code(err))
+	}
+	if clusterCalls != 0 {
+		t.Fatalf("foreign tenant reached cluster lookup %d time(s)", clusterCalls)
+	}
+}
+
 func TestMintMistAdminSession_DeniesPrivateClusterWithoutOwner(t *testing.T) {
 	// Defensive: a tenant-private cluster row that somehow lacks
 	// owner_tenant_id (data anomaly) must fail closed, not match-any.
@@ -269,6 +320,16 @@ func TestMintMistAdminSession_RejectsMissingTrustedIdentity(t *testing.T) {
 	}
 }
 
+func TestMintMistAdminSession_MasksUnclusteredNodeFromTenantCaller(t *testing.T) {
+	srv := newMistAdminTestServer(t)
+	stubOwnership(t, &quartermasterpb.NodeOwnerResponse{NodeId: "edge-unclustered"}, nil, nil, nil)
+
+	_, err := srv.MintMistAdminSession(ctxAs("tenant-owner", "tenant-acme", "owner"), &commodorepb.MintMistAdminSessionRequest{NodeId: "edge-unclustered"})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("unclustered node status = %v, want PermissionDenied", status.Code(err))
+	}
+}
+
 func TestMintMistAdminSession_RejectsEmptyNode(t *testing.T) {
 	srv := newMistAdminTestServer(t)
 	ctx := ctxAs("u", tenants.SystemTenantID.String(), "owner")
@@ -285,6 +346,26 @@ func TestMintMistAdminSession_PropagatesNodeOwnerErrors(t *testing.T) {
 	_, err := srv.MintMistAdminSession(ctx, &commodorepb.MintMistAdminSessionRequest{NodeId: "edge-x"})
 	if status.Code(err) != codes.Internal {
 		t.Errorf("quartermaster failure must be Internal; got %v", err)
+	}
+}
+
+func TestMintMistAdminSession_HidesMissingNodeFromTenantCaller(t *testing.T) {
+	srv := newMistAdminTestServer(t)
+	stubOwnership(t, nil, status.Error(codes.NotFound, "Node not found"), nil, nil)
+	ctx := ctxAs("u", tenants.SystemTenantID.String(), "owner")
+	_, err := srv.MintMistAdminSession(ctx, &commodorepb.MintMistAdminSessionRequest{NodeId: "edge-missing"})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Errorf("missing node must be hidden from tenant caller; got %v", err)
+	}
+}
+
+func TestMintMistAdminSession_PreservesMissingNodeForPlatformOperator(t *testing.T) {
+	srv := newMistAdminTestServer(t)
+	stubOwnership(t, nil, status.Error(codes.NotFound, "Node not found"), nil, nil)
+	ctx := ctxAsOperator("u", tenants.SystemTenantID.String(), "owner")
+	_, err := srv.MintMistAdminSession(ctx, &commodorepb.MintMistAdminSessionRequest{NodeId: "edge-missing"})
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("missing node must be NotFound for platform operator; got %v", err)
 	}
 }
 

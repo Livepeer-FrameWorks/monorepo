@@ -51,7 +51,7 @@ func TestResolvePlaybackPolicyPublicWhenNoPolicy(t *testing.T) {
 			AddRow("", nil, "tenant-1"))
 
 	s := &CommodoreServer{db: db, logger: logrus.New()}
-	resp, err := s.ResolvePlaybackPolicy(context.Background(), &commodorepb.ResolvePlaybackPolicyRequest{PlaybackId: "p1"})
+	resp, err := s.ResolvePlaybackPolicy(ctxAs("user-1", "tenant-1", "member"), &commodorepb.ResolvePlaybackPolicyRequest{PlaybackId: "p1"})
 	if err != nil {
 		t.Fatalf("ResolvePlaybackPolicy: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestResolvePlaybackPolicyDecodeError(t *testing.T) {
 			AddRow([]byte("{not-json"), nil, "tenant-1"))
 
 	s := &CommodoreServer{db: db, logger: logrus.New()}
-	_, err = s.ResolvePlaybackPolicy(context.Background(), &commodorepb.ResolvePlaybackPolicyRequest{PlaybackId: "p1"})
+	_, err = s.ResolvePlaybackPolicy(ctxAs("user-1", "tenant-1", "member"), &commodorepb.ResolvePlaybackPolicyRequest{PlaybackId: "p1"})
 	if status.Code(err) != codes.Internal {
 		t.Fatalf("err = %v, want Internal", err)
 	}

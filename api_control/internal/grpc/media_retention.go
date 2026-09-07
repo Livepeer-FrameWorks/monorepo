@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"frameworks/api_control/internal/database/commodoredb"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/authz"
 	foghornclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
@@ -49,6 +51,26 @@ const (
 	eventRetentionOverrideApplied = "media.retention.override_applied"
 	eventRetentionOverrideReset   = "media.retention.override_reset"
 )
+
+func requireRetentionManagement(ctx context.Context, tenantID string) error {
+	if ctxkeys.GetAuthType(ctx) == "service" || ctxkeys.IsPlatformOperator(ctx) {
+		return nil
+	}
+	if ctxkeys.GetAuthType(ctx) == "api_token" && !hasDelegatedPermission(ctxkeys.GetPermissions(ctx), "billing:write") {
+		return status.Error(codes.PermissionDenied, "billing management access denied")
+	}
+	decision := authz.Default.Can(ctx, authz.Identity{
+		UserID:           ctxkeys.GetUserID(ctx),
+		TenantID:         ctxkeys.GetTenantID(ctx),
+		Role:             ctxkeys.GetRole(ctx),
+		Permissions:      ctxkeys.GetPermissions(ctx),
+		PlatformOperator: ctxkeys.IsPlatformOperator(ctx),
+	}, authz.ActionManageBilling, authz.Resource{OwnerTenantID: tenantID})
+	if !decision.Allow {
+		return status.Error(codes.PermissionDenied, "billing management access denied")
+	}
+	return nil
+}
 
 // fetchEntitlementBound returns the tenant's tier cap from Purser. 0 means
 // "no cap" (paid-tier baseline). Falls back to safeFallbackRetentionDays when
@@ -279,7 +301,6 @@ func (s *CommodoreServer) GetMediaRetentionPolicy(ctx context.Context, req *comm
 	if t := req.GetTenantId(); t != "" && t != tenantID {
 		return nil, status.Error(codes.PermissionDenied, "tenant mismatch")
 	}
-
 	bound, bErr := s.fetchEntitlementBound(ctx, tenantID)
 	if bErr != nil {
 		s.logger.WithError(bErr).Warn("Purser bound lookup failed; serving with fallback cap")
@@ -334,6 +355,9 @@ func (s *CommodoreServer) SetMediaRetentionPolicy(ctx context.Context, req *comm
 	}
 	if t := req.GetTenantId(); t != "" && t != tenantID {
 		return nil, status.Error(codes.PermissionDenied, "tenant mismatch")
+	}
+	if authErr := requireRetentionManagement(ctx, tenantID); authErr != nil {
+		return nil, authErr
 	}
 
 	target := req.GetTargetType()
@@ -415,6 +439,9 @@ func (s *CommodoreServer) SetStreamRetentionOverrides(ctx context.Context, req *
 	}
 	if t := req.GetTenantId(); t != "" && t != tenantID {
 		return nil, status.Error(codes.PermissionDenied, "tenant mismatch")
+	}
+	if authErr := requireRetentionManagement(ctx, tenantID); authErr != nil {
+		return nil, authErr
 	}
 	streamID := req.GetStreamId()
 	if streamID == "" {
@@ -670,6 +697,9 @@ func (s *CommodoreServer) UpdateAssetRetention(ctx context.Context, req *commodo
 	if t := req.GetTenantId(); t != "" && t != tenantID {
 		return nil, status.Error(codes.PermissionDenied, "tenant mismatch")
 	}
+	if authErr := requireRetentionManagement(ctx, tenantID); authErr != nil {
+		return nil, authErr
+	}
 
 	target, err := s.resolveAssetTarget(ctx, req.GetTargetType(), req.GetTargetId(), tenantID)
 	if err != nil {
@@ -796,6 +826,9 @@ func (s *CommodoreServer) ResetAssetRetention(ctx context.Context, req *commodor
 	}
 	if t := req.GetTenantId(); t != "" && t != tenantID {
 		return nil, status.Error(codes.PermissionDenied, "tenant mismatch")
+	}
+	if authErr := requireRetentionManagement(ctx, tenantID); authErr != nil {
+		return nil, authErr
 	}
 
 	target, err := s.resolveAssetTarget(ctx, req.GetTargetType(), req.GetTargetId(), tenantID)

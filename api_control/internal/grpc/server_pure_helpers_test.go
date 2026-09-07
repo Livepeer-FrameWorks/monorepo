@@ -198,13 +198,13 @@ func TestFormatRuntimePlacementRejects(t *testing.T) {
 	}
 	got := formatRuntimePlacementRejects(rejects, redacted)
 
-	// Each reason renders a distinct, human-readable clause.
+	// Private-without-pins remains actionable, while cluster-specific denials
+	// deliberately collapse existence and capability to one message.
 	for _, want := range []string{
 		"is private/multicast",
 		"c-unknown",
-		"not a registered media (edge) cluster",
+		"not eligible for pull source placement",
 		"c-nopriv",
-		"allow_private_pull_sources=true",
 	} {
 		if !contains(got, want) {
 			t.Errorf("formatRuntimePlacementRejects output %q missing %q", got, want)
@@ -213,6 +213,9 @@ func TestFormatRuntimePlacementRejects(t *testing.T) {
 	// Three rejects joined with "; ".
 	if strings.Count(got, "; ") != 2 {
 		t.Errorf("expected 2 separators in %q", got)
+	}
+	if strings.Contains(got, "registered media") || strings.Contains(got, "allow_private_pull_sources") {
+		t.Errorf("placement denial leaks fleet existence or capability: %q", got)
 	}
 }
 

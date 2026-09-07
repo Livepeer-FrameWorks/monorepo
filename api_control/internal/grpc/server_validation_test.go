@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	fieldcrypt "github.com/Livepeer-FrameWorks/monorepo/pkg/crypto"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
@@ -17,14 +19,78 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+func TestCredentialBearingInternalRPCsRejectJWTBeforeDatabaseAccess(t *testing.T) {
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "jwt")
+	server := &CommodoreServer{logger: logrus.New()}
+
+	_, err := server.ResolvePullSourceByInternalName(ctx, &commodorepb.ResolvePullSourceByInternalNameRequest{InternalName: "private-stream"})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("ResolvePullSourceByInternalName error=%v, want PermissionDenied", err)
+	}
+}
+
+func TestCommodoreServiceOnlyMethodsIncludePrivilegedCredentialRPCs(t *testing.T) {
+	methods := make(map[string]bool)
+	for _, method := range commodoreServiceOnlyMethods() {
+		methods[method] = true
+	}
+	for _, method := range []string{
+		commodorepb.InternalService_ValidateAPIToken_FullMethodName,
+		commodorepb.InternalService_GetOrCreateWalletUser_FullMethodName,
+		commodorepb.InternalService_ValidateMistAdminSession_FullMethodName,
+		commodorepb.InternalService_UpdateArtifactCatalogSnapshot_FullMethodName,
+		commodorepb.InternalService_ResolveStreamContext_FullMethodName,
+		commodorepb.InternalService_ListManagedStreams_FullMethodName,
+		commodorepb.InternalService_ResolveInternalName_FullMethodName,
+		commodorepb.InternalService_RecordSigningKeyUse_FullMethodName,
+		commodorepb.InternalService_RecordStreamActiveCluster_FullMethodName,
+		commodorepb.InternalService_RegisterStreamThumbnailServingCell_FullMethodName,
+		commodorepb.InternalService_ClearStreamActiveCluster_FullMethodName,
+		commodorepb.InternalService_SyncActiveIngestPlacement_FullMethodName,
+		commodorepb.InternalService_CreateUserInTenant_FullMethodName,
+		commodorepb.InternalService_RecordPullSourceEvent_FullMethodName,
+		commodorepb.InternalService_RequestMediaAuthorityReplay_FullMethodName,
+	} {
+		if !methods[method] {
+			t.Fatalf("privileged method %s is not service-only", method)
+		}
+	}
+}
+
+func TestRuntimeKeyringReadsHistoricalShortJWTFromLegacyOnlyChannel(t *testing.T) {
+	const outgoing = "short-jwt"
+	legacyCipher, err := fieldcrypt.DeriveFieldEncryptor([]byte(outgoing), "push-target-uri")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := legacyCipher.Encrypt("rtmp://example.test/live/key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := map[string][]byte(nil)
+	ring, err := fieldcrypt.NewFieldKeyring(
+		"current", []byte("current-field-key-material-32-bytes"), previous,
+		legacyFieldEncryptionSecrets([]byte("current-jwt-secret-material-32-bytes"), previous, [][]byte{[]byte(outgoing)}), "push-target-uri",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plain, err := ring.Decrypt(stored)
+	if err != nil || plain != "rtmp://example.test/live/key" {
+		t.Fatalf("historical short JWT was not retained for legacy reads: plain=%q err=%v", plain, err)
+	}
+}
+
 type countingStreamAdmissionBilling struct {
 	calls int
 }
 
 func TestNewCommodoreServerKeepsOptionalClientInterfacesNil(t *testing.T) {
 	server := NewCommodoreServer(CommodoreServerConfig{
-		Logger:    logrus.New(),
-		JWTSecret: []byte("test-only-commodore-field-encryption-secret"),
+		Logger:               logrus.New(),
+		JWTSecret:            []byte("test-only-jwt-legacy-secret"),
+		FieldEncryptionKeyID: "test",
+		FieldEncryptionKey:   []byte("test-only-field-encryption-secret"),
 	})
 	if server.streamAdmissionBilling != nil || server.authorityBillingSource != nil || server.authorityTenantSource != nil {
 		t.Fatalf("optional interfaces must remain nil: admission=%T billing=%T tenant=%T",
@@ -38,7 +104,7 @@ func (c *countingStreamAdmissionBilling) GetTenantBillingStatus(context.Context,
 }
 
 func TestValidateStreamKey(t *testing.T) {
-	ctx := context.Background()
+	ctx := serviceCtx()
 	tests := []struct {
 		name      string
 		req       *commodorepb.ValidateStreamKeyRequest
@@ -125,6 +191,7 @@ func TestValidateStreamKey(t *testing.T) {
 				rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
 					AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123", "push")
 				mock.ExpectQuery("FROM commodore.streams").WithArgs("good-key").WillReturnRows(rows)
+				expectNoEnabledPushTargets(mock, "stream-id", "tenant-id")
 				mock.ExpectQuery("UPDATE commodore.streams").WithArgs("cluster-us", "conn-1", int64(activeIngestLease.Seconds()), "good-key").
 					WillReturnRows(claimReserved())
 			},
@@ -150,6 +217,7 @@ func TestValidateStreamKey(t *testing.T) {
 				rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
 					AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123", "push")
 				mock.ExpectQuery("FROM commodore.streams").WithArgs("contended-key").WillReturnRows(rows)
+				expectNoEnabledPushTargets(mock, "stream-id", "tenant-id")
 				mock.ExpectQuery("UPDATE commodore.streams").WithArgs("cluster-eu", "conn-2", int64(activeIngestLease.Seconds()), "contended-key").
 					WillReturnError(sql.ErrNoRows)
 				mock.ExpectQuery("SELECT active_ingest_cluster_id").WithArgs("contended-key").
@@ -211,6 +279,9 @@ func TestValidateStreamKeyIdentityOnlySkipsFullAdmissionDependencies(t *testing.
 	rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
 		AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123", "push")
 	mock.ExpectQuery("FROM commodore.streams").WithArgs("identity-key").WillReturnRows(rows)
+	validationRows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
+		AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123", "push")
+	mock.ExpectQuery("FROM commodore.streams").WithArgs("identity-key").WillReturnRows(validationRows)
 	billing := &countingStreamAdmissionBilling{}
 	server := &CommodoreServer{
 		db:                     db,
@@ -218,7 +289,11 @@ func TestValidateStreamKeyIdentityOnlySkipsFullAdmissionDependencies(t *testing.
 		streamAdmissionBilling: billing,
 	}
 
-	resp, err := server.ValidateStreamKey(context.Background(), &commodorepb.ValidateStreamKeyRequest{StreamKey: "identity-key"})
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "jwt")
+	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, "tenant-id")
+	resp, err := server.ValidateStreamKey(ctx, &commodorepb.ValidateStreamKeyRequest{
+		StreamKey: "identity-key", ClusterId: "must-be-cleared", ClaimToken: "must-be-cleared",
+	})
 	if err != nil {
 		t.Fatalf("ValidateStreamKey: %v", err)
 	}
@@ -233,6 +308,50 @@ func TestValidateStreamKeyIdentityOnlySkipsFullAdmissionDependencies(t *testing.
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("unmet expectations: %v", err)
+	}
+}
+
+func TestCheckStreamKeyMasksCrossTenantIdentity(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectQuery("FROM commodore.streams").WithArgs("foreign-key").WillReturnRows(
+		sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
+			AddRow("foreign-stream", "foreign-user", "tenant-b", "foreign", true, false, "pk_foreign", "push"),
+	)
+	server := &CommodoreServer{db: db, logger: logrus.New()}
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "jwt")
+	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, "tenant-a")
+	resp, err := server.CheckStreamKey(ctx, &commodorepb.ValidateStreamKeyRequest{StreamKey: "foreign-key"})
+	if err != nil {
+		t.Fatalf("CheckStreamKey: %v", err)
+	}
+	if resp.GetValid() || resp.GetTenantId() != "" || resp.GetStreamId() != "" {
+		t.Fatalf("cross-tenant key leaked identity: %+v", resp)
+	}
+}
+
+func TestCheckStreamKeyMasksCrossTenantIdentityForAPITokenServiceHop(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mock.ExpectQuery("FROM commodore.streams").WithArgs("foreign-api-key").WillReturnRows(
+		sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
+			AddRow("foreign-stream", "foreign-user", "tenant-b", "foreign", false, false, "pk_foreign", "push"),
+	)
+	server := &CommodoreServer{db: db, logger: logrus.New()}
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "service")
+	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, "tenant-a")
+	resp, err := server.CheckStreamKey(ctx, &commodorepb.ValidateStreamKeyRequest{StreamKey: "foreign-api-key"})
+	if err != nil {
+		t.Fatalf("CheckStreamKey: %v", err)
+	}
+	if resp.GetValid() || resp.GetTenantId() != "" || resp.GetStreamId() != "" || resp.GetRejectionReason() != commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_INVALID_KEY {
+		t.Fatalf("API-token service hop leaked cross-tenant validity details: %+v", resp)
 	}
 }
 
@@ -551,6 +670,25 @@ func TestValidateAPIToken(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "removed_user_invalidates_token",
+			req:  &commodorepb.ValidateAPITokenRequest{Token: "orphaned-token"},
+			setupMock: func(mock sqlmock.Sqlmock) {
+				rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "permissions"}).
+					AddRow("token-id", "removed-user", "tenant-id", "{read}")
+				mock.ExpectQuery("FROM commodore.api_tokens").WithArgs(hashToken("orphaned-token")).WillReturnRows(rows)
+				mock.ExpectExec("UPDATE commodore.api_tokens SET last_used_at").WithArgs("token-id").WillReturnResult(sqlmock.NewResult(1, 1))
+				mock.ExpectQuery("FROM commodore.users").WithArgs("removed-user", "tenant-id").WillReturnError(sql.ErrNoRows)
+			},
+			assert: func(t *testing.T, resp *commodorepb.ValidateAPITokenResponse, err error) {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if resp.GetValid() {
+					t.Fatal("token owned by a removed user must be invalid")
+				}
+			},
+		},
 	}
 
 	for _, test := range tests {
@@ -633,6 +771,7 @@ func TestValidateStreamKey_OriginClusterUsesIngestClusterWhenProvided(t *testing
 	rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
 		AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123", "push")
 	mock.ExpectQuery("FROM commodore.streams").WithArgs("good-key").WillReturnRows(rows)
+	expectNoEnabledPushTargets(mock, "stream-id", "tenant-id")
 	mock.ExpectQuery("SET active_ingest_cluster_id").WithArgs("cluster-ingest", "conn-ingest", int64(activeIngestLease.Seconds()), "good-key").
 		WillReturnRows(claimReserved())
 
@@ -657,7 +796,7 @@ func TestValidateStreamKey_OriginClusterUsesIngestClusterWhenProvided(t *testing
 		routeCacheTTL: 5 * time.Minute,
 	}
 
-	resp, err := server.ValidateStreamKey(context.Background(), &commodorepb.ValidateStreamKeyRequest{
+	resp, err := server.ValidateStreamKey(serviceCtx(), &commodorepb.ValidateStreamKeyRequest{
 		StreamKey:  "good-key",
 		ClusterId:  "cluster-ingest",
 		ClaimToken: "conn-ingest",
@@ -711,7 +850,7 @@ func TestValidateStreamKey_WithoutClusterDoesNotClaimPlacement(t *testing.T) {
 		routeCacheTTL: 5 * time.Minute,
 	}
 
-	resp, err := server.ValidateStreamKey(context.Background(), &commodorepb.ValidateStreamKeyRequest{
+	resp, err := server.ValidateStreamKey(serviceCtx(), &commodorepb.ValidateStreamKeyRequest{
 		StreamKey: "good-key",
 	})
 	if err != nil {
@@ -760,7 +899,7 @@ func TestValidateStreamKey_RejectsControlPlaneClusterForLiveIngest(t *testing.T)
 		routeCacheTTL: 5 * time.Minute,
 	}
 
-	resp, err := server.ValidateStreamKey(context.Background(), &commodorepb.ValidateStreamKeyRequest{
+	resp, err := server.ValidateStreamKey(serviceCtx(), &commodorepb.ValidateStreamKeyRequest{
 		StreamKey:  "good-key",
 		ClusterId:  "central-primary",
 		ClaimToken: "conn-media",
@@ -872,7 +1011,7 @@ func TestValidateStreamKey_RouteFailureIsTransientAndWritesNoPlacement(t *testin
 		routeCacheTTL: 5 * time.Minute,
 	}
 
-	_, err = server.ValidateStreamKey(context.Background(), &commodorepb.ValidateStreamKeyRequest{
+	_, err = server.ValidateStreamKey(serviceCtx(), &commodorepb.ValidateStreamKeyRequest{
 		StreamKey:  "good-key",
 		ClusterId:  "cluster-us",
 		ClaimToken: "conn-route-fail",
@@ -882,5 +1021,30 @@ func TestValidateStreamKey_RouteFailureIsTransientAndWritesNoPlacement(t *testin
 	}
 	if mock.ExpectationsWereMet() == nil {
 		t.Fatal("placement was written despite an unresolved entitlement route")
+	}
+}
+
+func TestValidateStreamKey_PushTargetLoadFailureIsTransientAndWritesNoPlacement(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	rows := sqlmock.NewRows([]string{"id", "user_id", "tenant_id", "internal_name", "is_active", "is_recording_enabled", "playback_id", "ingest_mode"}).
+		AddRow("stream-id", "user-id", "tenant-id", "internal", true, true, "pk_test123", "push")
+	mock.ExpectQuery("FROM commodore.streams").WithArgs("good-key").WillReturnRows(rows)
+	mock.ExpectQuery("FROM commodore.push_targets").WithArgs("stream-id", "tenant-id").WillReturnError(context.DeadlineExceeded)
+	server := &CommodoreServer{
+		db: db, logger: logrus.New(),
+		routeCache: map[string]*clusterRoute{"tenant-id": admittingRoute("cluster-us")}, routeCacheTTL: 5 * time.Minute,
+	}
+	_, err = server.ValidateStreamKey(serviceCtx(), &commodorepb.ValidateStreamKeyRequest{
+		StreamKey: "good-key", ClusterId: "cluster-us", ClaimToken: "conn-target-load-fail",
+	})
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("err=%v, want Unavailable", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }

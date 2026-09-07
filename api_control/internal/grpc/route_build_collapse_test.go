@@ -9,6 +9,7 @@ import (
 	"time"
 
 	qmclient "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
@@ -30,6 +31,9 @@ type quartermasterRoutingFake struct {
 }
 
 func (f *quartermasterRoutingFake) GetClusterRouting(ctx context.Context, _ *quartermasterpb.GetClusterRoutingRequest) (*quartermasterpb.ClusterRoutingResponse, error) {
+	if err := requireCommodoreServiceCredential(ctx); err != nil {
+		return nil, err
+	}
 	f.routingCalls.Add(1)
 	if f.gate != nil {
 		select {
@@ -119,7 +123,10 @@ func TestAdmissionRefreshStopsBothAuthoritiesAtMediaBudget(t *testing.T) {
 	}
 }
 
-func (f *quartermasterRoutingFake) DiscoverServices(context.Context, *quartermasterpb.ServiceDiscoveryRequest) (*quartermasterpb.ServiceDiscoveryResponse, error) {
+func (f *quartermasterRoutingFake) DiscoverServices(ctx context.Context, _ *quartermasterpb.ServiceDiscoveryRequest) (*quartermasterpb.ServiceDiscoveryResponse, error) {
+	if err := requireCommodoreServiceCredential(ctx); err != nil {
+		return nil, err
+	}
 	return &quartermasterpb.ServiceDiscoveryResponse{}, nil
 }
 
@@ -136,10 +143,12 @@ func startQuartermasterRoutingFake(t *testing.T, fake *quartermasterRoutingFake)
 	go func() { _ = srv.Serve(lis) }()
 
 	client, err := qmclient.NewGRPCClient(qmclient.GRPCConfig{
-		GRPCAddr:      lis.Addr().String(),
-		AllowInsecure: true,
-		Logger:        logging.NewLogger(),
-		Timeout:       5 * time.Second,
+		GRPCAddr:           lis.Addr().String(),
+		AllowInsecure:      true,
+		Logger:             logging.NewLogger(),
+		Timeout:            5 * time.Second,
+		ServiceToken:       "commodore-service-token",
+		PreferServiceToken: true,
 	})
 	if err != nil {
 		srv.Stop()
@@ -152,6 +161,31 @@ func startQuartermasterRoutingFake(t *testing.T, fake *quartermasterRoutingFake)
 		_ = lis.Close()
 	})
 	return client
+}
+
+func TestClusterRouteBuildUsesPureServiceCredentialsForAPITokenCaller(t *testing.T) {
+	qmFake := &quartermasterRoutingFake{}
+	purserFake := &purserEntitlementFake{}
+	s := &CommodoreServer{
+		logger:              logrus.New(),
+		routeCache:          make(map[string]*clusterRoute),
+		routeCacheTTL:       5 * time.Minute,
+		quartermasterClient: startQuartermasterRoutingFake(t, qmFake),
+		purserClient:        startPurserEntitlementFake(t, purserFake),
+	}
+
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "api_token")
+	ctx = context.WithValue(ctx, ctxkeys.KeyAPITokenID, "api-token-1")
+	ctx = context.WithValue(ctx, ctxkeys.KeyJWTToken, "delegated-commodore-token")
+	ctx = context.WithValue(ctx, ctxkeys.KeyUserID, "user-1")
+	ctx = context.WithValue(ctx, ctxkeys.KeyTenantID, "tenant-1")
+
+	if _, err := s.resolveClusterRouteForTenant(ctx, "tenant-1"); err != nil {
+		t.Fatalf("API-token cold route failed: %v", err)
+	}
+	if qmFake.routingCalls.Load() != 1 || purserFake.admissionCalls.Load() != 1 {
+		t.Fatalf("authority calls quartermaster/purser = %d/%d, want 1/1", qmFake.routingCalls.Load(), purserFake.admissionCalls.Load())
+	}
 }
 
 // A full route build fans out to Quartermaster, Purser, and one Foghorn

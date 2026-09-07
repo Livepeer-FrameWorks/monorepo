@@ -25,7 +25,7 @@ const (
 
 func seedClaimStream(t *testing.T, conn *sql.DB, streamKey string) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := serviceCtx()
 	// Tenants live in Quartermaster's schema; commodore.users carries the
 	// tenant id it was provisioned under, and ValidateStreamKey joins it for the
 	// is_active gate.
@@ -82,7 +82,7 @@ func TestValidateStreamKey_SameClusterCannotStealLiveClaim_RealPG(t *testing.T) 
 	conn := startCommodoreRealPG(t)
 	seedClaimStream(t, conn, "sk-steal")
 	server := claimServer(conn)
-	ctx := context.Background()
+	ctx := serviceCtx()
 
 	first, err := server.ValidateStreamKey(ctx, &commodorepb.ValidateStreamKeyRequest{
 		StreamKey: "sk-steal", ClusterId: "media-eu", ClaimToken: "connection-A",
@@ -127,7 +127,7 @@ func TestValidateStreamKey_OwnerRefreshIsNotAReservation_RealPG(t *testing.T) {
 	conn := startCommodoreRealPG(t)
 	seedClaimStream(t, conn, "sk-refresh")
 	server := claimServer(conn)
-	ctx := context.Background()
+	ctx := serviceCtx()
 
 	if _, err := server.ValidateStreamKey(ctx, &commodorepb.ValidateStreamKeyRequest{
 		StreamKey: "sk-refresh", ClusterId: "media-eu", ClaimToken: "connection-A",
@@ -159,7 +159,7 @@ func TestValidateStreamKey_LapsedClaimIsReservable_RealPG(t *testing.T) {
 	conn := startCommodoreRealPG(t)
 	seedClaimStream(t, conn, "sk-lapsed")
 	server := claimServer(conn)
-	ctx := context.Background()
+	ctx := serviceCtx()
 
 	if _, err := server.ValidateStreamKey(ctx, &commodorepb.ValidateStreamKeyRequest{
 		StreamKey: "sk-lapsed", ClusterId: "media-eu", ClaimToken: "connection-A",

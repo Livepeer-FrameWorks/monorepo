@@ -347,6 +347,7 @@ func (s *CommodoreServer) compileLiveStreamSecret(ctx context.Context, authority
 		}
 		uri, err := s.pullSourceEncryptor.Decrypt(row.SourceUriEnc)
 		if err != nil {
+			s.observeFieldDecryptFailure("pull_source_uri", row.SourceUriEnc)
 			return nil, fmt.Errorf("decrypt pull source for media authority: %w", err)
 		}
 		secret.SourceUri = uri
@@ -370,14 +371,15 @@ func (s *CommodoreServer) compileLiveStreamSecret(ctx context.Context, authority
 	for _, row := range rows {
 		uri, err := s.fieldEncryptor.Decrypt(row.TargetUri)
 		if err != nil {
+			s.observeFieldDecryptFailure("push_target_uri", row.TargetUri)
 			return nil, fmt.Errorf("decrypt push target %q for media authority: %w", row.ID, err)
 		}
 		secret.PushTargets = append(secret.PushTargets, &mediaauthoritypb.PushTargetSecret{TargetId: row.ID, TargetUri: uri, Name: row.Name, Platform: row.Platform.String})
 	}
 	sort.Slice(secret.PushTargets, func(i, j int) bool { return secret.PushTargets[i].GetTargetId() < secret.PushTargets[j].GetTargetId() })
-	if secret.GetSourceUri() == "" && secret.GetNativeSourceSpec() == "" && len(secret.GetPushTargets()) == 0 {
-		return nil, nil
-	}
+	// An authenticated empty secret is meaningful for push ingest: it proves
+	// the complete desired target set is empty. Omitting it would make a cell
+	// unable to distinguish target removal from unavailable sealing authority.
 	return secret, nil
 }
 
@@ -496,6 +498,7 @@ func (s *CommodoreServer) compilePlaybackWebhookSecret(authorityID, tenantID, en
 	}
 	secret, err := s.playbackWebhookEncryptor.Decrypt(encryptedSecret)
 	if err != nil {
+		s.observeFieldDecryptFailure("playback_webhook_secret", encryptedSecret)
 		return nil, fmt.Errorf("decrypt playback webhook secret: %w", err)
 	}
 	return &mediaauthoritypb.MediaObjectSecret{
@@ -615,6 +618,33 @@ func (s *CommodoreServer) currentTenantAuthorityContext(ctx context.Context, ten
 	}
 	secretTargets := activeTenantAuthorityCells(tenant)
 	return tenant, targets, secretTargets, current.ValidUntil.UTC(), nil
+}
+
+func (s *CommodoreServer) currentTenantServePolicy(ctx context.Context, tenantID string) (string, bool, []*clusterpeerpb.TenantClusterPeer, bool) {
+	if !s.mediaAuthorityEnabled() {
+		return "", false, nil, false
+	}
+	current, err := commodoredb.New(s.db).GetCurrentMediaAuthorityPayload(ctx, commodoredb.GetCurrentMediaAuthorityPayloadParams{
+		AuthorityKind: "tenant", AuthorityID: tenantID,
+	})
+	if err != nil || !current.ValidUntil.After(time.Now().UTC()) {
+		return "", false, nil, false
+	}
+	tenant := &mediaauthoritypb.TenantAuthority{}
+	if err := proto.Unmarshal(current.Payload, tenant); err != nil || tenant.GetTenantId() != tenantID {
+		return "", false, nil, false
+	}
+	if tenant.GetLifecycle() != mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE ||
+		tenant.GetBillingDecision() != mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_ALLOW {
+		return "", false, nil, true
+	}
+	peers := make([]*clusterpeerpb.TenantClusterPeer, 0, len(tenant.GetEffectiveClusterGrants()))
+	for _, grant := range tenant.GetEffectiveClusterGrants() {
+		if grant != nil && strings.TrimSpace(grant.GetClusterId()) != "" {
+			peers = append(peers, &clusterpeerpb.TenantClusterPeer{ClusterId: grant.GetClusterId()})
+		}
+	}
+	return tenant.GetOfficialClusterId(), tenant.GetAllowPlatformSharedPlayback(), peers, true
 }
 
 func tenantCanServeMediaObjects(tenant *mediaauthoritypb.TenantAuthority, secretTargets []string) bool {
