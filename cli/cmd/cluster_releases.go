@@ -6,6 +6,7 @@ import (
 	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"path/filepath"
@@ -29,6 +30,7 @@ import (
 
 const (
 	edgeReleaseSyncRPCTimeout = 60 * time.Second
+	edgeReleaseSyncTimeout    = 10 * time.Minute
 	edgeReleaseSyncAttempts   = 6
 	edgeReleaseSyncBaseDelay  = 250 * time.Millisecond
 )
@@ -278,9 +280,13 @@ func normalizeReleaseTargetChannel(channel string) (string, error) {
 }
 
 func ensureReleaseTargetExists(cmd *cobra.Command, qm *qmclient.GRPCClient, ctxCfg fwcfg.Context, channel, version string) error {
+	return ensureReleaseTargetExistsContext(cmd.Context(), qm, ctxCfg, channel, version)
+}
+
+func ensureReleaseTargetExistsContext(ctx context.Context, qm *qmclient.GRPCClient, ctxCfg fwcfg.Context, channel, version string) error {
 	var resp *quartermasterpb.ListEdgeReleasesResponse
-	err := retryEdgeReleaseSyncRPC(cmd.Context(), func() error {
-		cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, edgeReleaseSyncRPCTimeout)
+	err := retryEdgeReleaseSyncRPC(ctx, func() error {
+		cctx, cancel := clusterNodesRPCContext(ctx, ctxCfg, edgeReleaseSyncRPCTimeout)
 		defer cancel()
 		var rpcErr error
 		resp, rpcErr = qm.ListEdgeReleases(cctx, &quartermasterpb.ListEdgeReleasesRequest{
@@ -310,6 +316,10 @@ func publishEdgeReleaseFromGitOpsResolvedRepos(cmd *cobra.Command, qm *qmclient.
 }
 
 func upsertEdgeReleaseManifest(cmd *cobra.Command, qm *qmclient.GRPCClient, ctxCfg fwcfg.Context, manifest *gitops.Manifest, channel, remoteOS, remoteArch string) (*quartermasterpb.EdgeReleaseResponse, error) {
+	return upsertEdgeReleaseManifestContext(cmd.Context(), qm, ctxCfg, manifest, channel, remoteOS, remoteArch)
+}
+
+func upsertEdgeReleaseManifestContext(ctx context.Context, qm *qmclient.GRPCClient, ctxCfg fwcfg.Context, manifest *gitops.Manifest, channel, remoteOS, remoteArch string) (*quartermasterpb.EdgeReleaseResponse, error) {
 	components, err := edgeReleaseComponentsFromManifest(manifest, remoteOS, remoteArch)
 	if err != nil {
 		return nil, err
@@ -319,8 +329,8 @@ func upsertEdgeReleaseManifest(cmd *cobra.Command, qm *qmclient.GRPCClient, ctxC
 		return nil, err
 	}
 	var resp *quartermasterpb.EdgeReleaseResponse
-	err = retryEdgeReleaseSyncRPC(cmd.Context(), func() error {
-		cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, edgeReleaseSyncRPCTimeout)
+	err = retryEdgeReleaseSyncRPC(ctx, func() error {
+		cctx, cancel := clusterNodesRPCContext(ctx, ctxCfg, edgeReleaseSyncRPCTimeout)
 		defer cancel()
 		var rpcErr error
 		resp, rpcErr = qm.UpsertEdgeRelease(cctx, &quartermasterpb.UpsertEdgeReleaseRequest{Release: &quartermasterpb.EdgeRelease{
@@ -358,12 +368,16 @@ func syncClusterEdgeReleaseTargetPinned(cmd *cobra.Command, rc *resolvedCluster,
 }
 
 func syncEdgeReleaseTargetResolved(cmd *cobra.Command, rc *resolvedCluster, channel, fetchVersion, targetSelector string, sharedEnv map[string]string) error {
+	operationCtx, operationCancel := context.WithTimeout(cmd.Context(), edgeReleaseSyncTimeout)
+	defer operationCancel()
+	originalContext := cmd.Context()
+	cmd.SetContext(operationCtx)
+	defer cmd.SetContext(originalContext)
 	releaseManifest, err := gitops.FetchFromRepositories(gitops.FetchOptions{}, rc.ReleaseRepos, channel, fetchVersion)
 	if err != nil {
 		return fmt.Errorf("fetch edge release manifest for target sync: %w", err)
 	}
 	targetVersion := releaseTargetVersionForSelector(targetSelector, releaseManifest.PlatformVersion)
-
 	qm, ctxCfg, cleanup, err := edgeReleaseQMClientForGitOpsSync(cmd, rc, sharedEnv)
 	if err != nil {
 		return fmt.Errorf("connect Quartermaster for edge release target sync: %w", err)
@@ -372,21 +386,21 @@ func syncEdgeReleaseTargetResolved(cmd *cobra.Command, rc *resolvedCluster, chan
 	defer func() { _ = qm.Close() }()
 
 	if shouldPublishReleaseForTarget(ctxCfg) {
-		if _, err := upsertEdgeReleaseManifest(cmd, qm, ctxCfg, releaseManifest, channel, "", ""); err != nil {
+		if _, err := upsertEdgeReleaseManifestContext(operationCtx, qm, ctxCfg, releaseManifest, channel, "", ""); err != nil {
 			return fmt.Errorf("publish edge release from GitOps manifest: %w", err)
 		}
-	} else if err := ensureReleaseTargetExists(cmd, qm, ctxCfg, channel, targetVersion); err != nil {
+	} else if err := ensureReleaseTargetExistsContext(operationCtx, qm, ctxCfg, channel, targetVersion); err != nil {
 		return err
 	}
 
 	clusterIDs := rc.Manifest.AllClusterIDs()
 	for _, clusterID := range clusterIDs {
-		rolloutPlan, paused, err := existingReleaseTargetControlsWithRetry(cmd, qm, ctxCfg, clusterID)
+		rolloutPlan, paused, err := existingReleaseTargetControlsWithRetry(operationCtx, qm, ctxCfg, clusterID)
 		if err != nil {
 			return err
 		}
-		err = retryEdgeReleaseSyncRPC(cmd.Context(), func() error {
-			cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, edgeReleaseSyncRPCTimeout)
+		err = retryEdgeReleaseSyncRPC(operationCtx, func() error {
+			cctx, cancel := clusterNodesRPCContext(operationCtx, ctxCfg, edgeReleaseSyncRPCTimeout)
 			defer cancel()
 			_, rpcErr := qm.SetClusterReleaseTarget(cctx, &quartermasterpb.SetClusterReleaseTargetRequest{Target: &quartermasterpb.ClusterReleaseTarget{
 				ClusterId:       clusterID,
@@ -423,8 +437,11 @@ func retryEdgeReleaseSyncRPCWithBackoff(ctx context.Context, attempts int, baseD
 	}
 	var err error
 	for attempt := 0; attempt < attempts; attempt++ {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		err = fn()
-		if !database.IsRetryablePostgresError(err) || attempt == attempts-1 {
+		if !isRetryableEdgeReleaseSyncError(err) || attempt == attempts-1 {
 			return err
 		}
 		timer := time.NewTimer(baseDelay << attempt)
@@ -438,11 +455,23 @@ func retryEdgeReleaseSyncRPCWithBackoff(ctx context.Context, attempts int, baseD
 	return err
 }
 
-func existingReleaseTargetControlsWithRetry(cmd *cobra.Command, qm *qmclient.GRPCClient, ctxCfg fwcfg.Context, clusterID string) (string, bool, error) {
+func isRetryableEdgeReleaseSyncError(err error) bool {
+	if database.IsRetryablePostgresError(err) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	switch status.Code(err) {
+	case codes.Aborted, codes.DeadlineExceeded, codes.ResourceExhausted, codes.Unavailable:
+		return true
+	default:
+		return false
+	}
+}
+
+func existingReleaseTargetControlsWithRetry(ctx context.Context, qm *qmclient.GRPCClient, ctxCfg fwcfg.Context, clusterID string) (string, bool, error) {
 	var rolloutPlan string
 	var paused bool
-	err := retryEdgeReleaseSyncRPC(cmd.Context(), func() error {
-		cctx, cancel := clusterNodesRPCContext(cmd.Context(), ctxCfg, edgeReleaseSyncRPCTimeout)
+	err := retryEdgeReleaseSyncRPC(ctx, func() error {
+		cctx, cancel := clusterNodesRPCContext(ctx, ctxCfg, edgeReleaseSyncRPCTimeout)
 		defer cancel()
 		var rpcErr error
 		rolloutPlan, paused, rpcErr = existingReleaseTargetControls(cctx, qm, clusterID)
@@ -626,6 +655,11 @@ type edgeReleaseArtifactSpec struct {
 type edgeReleaseComponentSpec struct {
 	Version   string                             `json:"version"`
 	Artifacts map[string]edgeReleaseArtifactSpec `json:"artifacts,omitempty"`
+	Variants  map[string]edgeReleaseVariantSpec  `json:"variants,omitempty"`
+}
+
+type edgeReleaseVariantSpec struct {
+	Artifacts map[string]edgeReleaseArtifactSpec `json:"artifacts"`
 }
 
 func edgeReleaseComponentsFromManifest(manifest *gitops.Manifest, remoteOS, remoteArch string) (map[string]edgeReleaseComponentSpec, error) {
@@ -654,6 +688,7 @@ func edgeReleaseComponentsFromManifest(manifest *gitops.Manifest, remoteOS, remo
 		components["mist"] = edgeReleaseComponentSpec{
 			Version:   firstNonEmpty(strings.TrimSpace(dep.ReleaseTag), strings.TrimSpace(dep.Digest), strings.TrimSpace(dep.ReleaseURL), strings.TrimSpace(dep.Image)),
 			Artifacts: artifacts,
+			Variants:  edgeExternalVariants(dep, remoteOS, remoteArch),
 		}
 		if err := validateEdgeReleaseComponent("mist", components["mist"]); err != nil {
 			return nil, err
@@ -793,6 +828,37 @@ func edgeExternalArtifacts(dep *gitops.ExternalDependency, remoteOS, remoteArch 
 	return artifacts, nil
 }
 
+func edgeExternalVariants(dep *gitops.ExternalDependency, remoteOS, remoteArch string) map[string]edgeReleaseVariantSpec {
+	variants := map[string]edgeReleaseVariantSpec{}
+	if dep == nil || dep.ReleaseIndex == nil {
+		return variants
+	}
+	for profile, indexed := range dep.ReleaseIndex.Profiles {
+		profile = strings.ToLower(strings.TrimSpace(profile))
+		if profile == "" || profile == "cpu" {
+			continue
+		}
+		artifacts := map[string]edgeReleaseArtifactSpec{}
+		for platform, selected := range indexed.Platforms {
+			key, ok := platformKeyFromArtifactName(platform)
+			if !ok || selected.Artifact == nil {
+				continue
+			}
+			if platformFilterSet(remoteOS, remoteArch) && key != platformKey(remoteOS, remoteArch) {
+				continue
+			}
+			artifacts[key] = edgeReleaseArtifactSpec{
+				ArtifactURL: selected.Artifact.URL,
+				Checksum:    selected.Artifact.Checksum,
+			}
+		}
+		if len(artifacts) > 0 {
+			variants[profile] = edgeReleaseVariantSpec{Artifacts: artifacts}
+		}
+	}
+	return variants
+}
+
 func edgeInfraArtifacts(infra *gitops.InfrastructureEntry, remoteOS, remoteArch string) (map[string]edgeReleaseArtifactSpec, error) {
 	if infra == nil {
 		return nil, fmt.Errorf("infrastructure dependency missing")
@@ -883,6 +949,22 @@ func validateEdgeReleaseComponent(component string, values edgeReleaseComponentS
 		}
 		if err := validateEdgeReleaseChecksum(artifact.Checksum); err != nil {
 			return fmt.Errorf("%s checksum invalid for %s: %w", component, platform, err)
+		}
+	}
+	for profile, variant := range values.Variants {
+		if strings.TrimSpace(profile) == "" || len(variant.Artifacts) == 0 {
+			return fmt.Errorf("%s variant %q artifacts required", component, profile)
+		}
+		for platform, artifact := range variant.Artifacts {
+			if _, ok := platformKeyFromArtifactName(platform); !ok {
+				return fmt.Errorf("%s variant %q artifact platform %q invalid", component, profile, platform)
+			}
+			if strings.TrimSpace(artifact.ArtifactURL) == "" {
+				return fmt.Errorf("%s variant %q artifact_url required for %s", component, profile, platform)
+			}
+			if err := validateEdgeReleaseChecksum(artifact.Checksum); err != nil {
+				return fmt.Errorf("%s variant %q checksum invalid for %s: %w", component, profile, platform, err)
+			}
 		}
 	}
 	return nil

@@ -3,10 +3,13 @@ package cmd
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"frameworks/cli/pkg/gitops"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestNormalizeReleaseTargetVersion(t *testing.T) {
@@ -128,6 +131,30 @@ func TestEdgeExternalArtifactsParsesRealMistAssetNames(t *testing.T) {
 	}
 }
 
+func TestEdgeExternalVariantsPublishesExactIndexedArtifacts(t *testing.T) {
+	t.Parallel()
+
+	dep := &gitops.ExternalDependency{ReleaseIndex: &gitops.ExternalReleaseIndex{
+		Profiles: map[string]gitops.ExternalProfile{
+			"cpu": {Platforms: map[string]gitops.ExternalPlatform{
+				"linux-amd64": {Artifact: &gitops.ExternalBinary{Name: "cpu.tgz", URL: "https://example.test/cpu.tgz", Checksum: "sha256:" + strings.Repeat("a", 64)}},
+			}},
+			"cuda": {Platforms: map[string]gitops.ExternalPlatform{
+				"linux-amd64": {Artifact: &gitops.ExternalBinary{Name: "cuda.tgz", URL: "https://example.test/cuda.tgz", Checksum: "sha256:" + strings.Repeat("b", 64)}},
+			}},
+		},
+	}}
+
+	variants := edgeExternalVariants(dep, "", "")
+	if len(variants) != 1 || variants["cuda"].Artifacts["linux/amd64"].ArtifactURL != "https://example.test/cuda.tgz" {
+		t.Fatalf("variants = %#v, want only exact CUDA artifact", variants)
+	}
+	filtered := edgeExternalVariants(dep, "linux", "arm64")
+	if len(filtered) != 0 {
+		t.Fatalf("filtered variants = %#v, want none for unsupported platform", filtered)
+	}
+}
+
 func TestPlatformKeyFromArtifactName(t *testing.T) {
 	t.Parallel()
 
@@ -179,5 +206,42 @@ func TestRetryEdgeReleaseSyncRPCDoesNotRetryPermanentError(t *testing.T) {
 	}
 	if attempts != 1 {
 		t.Fatalf("attempts = %d, want 1", attempts)
+	}
+}
+
+func TestRetryEdgeReleaseSyncRPCRetriesTransientGRPCDeadline(t *testing.T) {
+	t.Parallel()
+
+	attempts := 0
+	err := retryEdgeReleaseSyncRPCWithBackoff(context.Background(), 3, time.Nanosecond, func() error {
+		attempts++
+		if attempts == 1 {
+			return status.Error(codes.DeadlineExceeded, "cold control-plane connection")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("retryEdgeReleaseSyncRPCWithBackoff returned error: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+}
+
+func TestRetryEdgeReleaseSyncRPCDoesNotStartAfterOperationDeadline(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	attempts := 0
+	err := retryEdgeReleaseSyncRPCWithBackoff(ctx, 3, time.Nanosecond, func() error {
+		attempts++
+		return status.Error(codes.Unavailable, "down")
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("retry error = %v, want context cancellation", err)
+	}
+	if attempts != 0 {
+		t.Fatalf("attempts after operation deadline = %d, want 0", attempts)
 	}
 }
