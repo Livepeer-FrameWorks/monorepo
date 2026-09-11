@@ -140,8 +140,16 @@ func (r *Resolver) Shutdown() error {
 
 // DoResolveViewerEndpoint calls Commodore to resolve viewer endpoints (which then calls Foghorn)
 func (r *Resolver) DoResolveViewerEndpoint(ctx context.Context, contentID string, viewerIP *string) (*sharedpb.ViewerEndpointResponse, error) {
+	return r.DoResolveViewerEndpointForProtocol(ctx, contentID, viewerIP, "")
+}
+
+func (r *Resolver) DoResolveViewerEndpointForProtocol(ctx context.Context, contentID string, viewerIP *string, requestedProtocol string) (*sharedpb.ViewerEndpointResponse, error) {
+	protocol, err := viewerProtocolRequirement(requestedProtocol)
+	if err != nil {
+		return nil, err
+	}
 	if middleware.IsDemoMode(ctx) {
-		return demo.GenerateViewerEndpointResponse(contentID), nil
+		return viewerDemoForProtocol(demo.GenerateViewerEndpointResponse(contentID), protocol)
 	}
 
 	// Diagnostic checks for panic root cause
@@ -177,7 +185,12 @@ func (r *Resolver) DoResolveViewerEndpoint(ctx context.Context, contentID string
 		ip = *viewerIP
 	}
 	viewerToken := playbackViewerTokenFromRequest(httpReq)
-	resp, err := r.Clients.Commodore.ResolveViewerEndpoint(ctx, contentID, ip, viewerToken)
+	var resp *sharedpb.ViewerEndpointResponse
+	if protocol == "" {
+		resp, err = r.Clients.Commodore.ResolveViewerEndpoint(ctx, contentID, ip, viewerToken)
+	} else {
+		resp, err = r.Clients.Commodore.ResolveViewerEndpointWithProtocol(ctx, contentID, ip, viewerToken, protocol)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve viewer endpoints: %w", err)
 	}
@@ -238,6 +251,23 @@ func playbackViewerTokenFromRequest(req *http.Request) string {
 }
 
 func (r *Resolver) DoResolveIngestEndpoint(ctx context.Context, streamKey string, viewerIP *string) (*sharedpb.IngestEndpointResponse, error) {
+	return r.DoResolveIngestEndpointForProtocol(ctx, streamKey, viewerIP, "")
+}
+
+func (r *Resolver) DoResolveIngestEndpointForProtocol(ctx context.Context, streamKey string, viewerIP *string, protocol string) (*sharedpb.IngestEndpointResponse, error) {
+	var requested sharedpb.IngestProtocol
+	switch protocol {
+	case "":
+		requested = sharedpb.IngestProtocol_INGEST_PROTOCOL_UNSPECIFIED
+	case "WHIP":
+		requested = sharedpb.IngestProtocol_INGEST_PROTOCOL_WHIP
+	case "RTMP":
+		requested = sharedpb.IngestProtocol_INGEST_PROTOCOL_RTMP
+	case "SRT":
+		requested = sharedpb.IngestProtocol_INGEST_PROTOCOL_SRT
+	default:
+		return nil, fmt.Errorf("unsupported ingest protocol")
+	}
 	if r == nil {
 		return nil, fmt.Errorf("CRITICAL: Resolver (r) is nil")
 	}
@@ -256,7 +286,7 @@ func (r *Resolver) DoResolveIngestEndpoint(ctx context.Context, streamKey string
 	if viewerIP != nil {
 		ip = *viewerIP
 	}
-	resp, err := r.Clients.Commodore.ResolveIngestEndpoint(ctx, streamKey, ip)
+	resp, err := r.Clients.Commodore.ResolveIngestEndpoint(ctx, streamKey, ip, requested)
 	if err != nil {
 		return nil, fmt.Errorf("failed to resolve ingest endpoints: %w", err)
 	}

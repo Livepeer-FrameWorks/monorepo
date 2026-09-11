@@ -15,7 +15,6 @@ import (
 	"frameworks/api_gateway/internal/loaders"
 	"frameworks/api_gateway/internal/middleware"
 	"frameworks/api_gateway/internal/resolvers"
-	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -31,7 +30,6 @@ import (
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	skipperpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/skipper"
-	"github.com/gin-gonic/gin"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -2506,6 +2504,16 @@ func (r *mutationResolver) SetMediaRetentionPolicy(ctx context.Context, input mo
 	return r.DoSetMediaRetentionPolicy(ctx, input)
 }
 
+// ApplyMediaPlacementChange is the resolver for the applyMediaPlacementChange field.
+func (r *mutationResolver) ApplyMediaPlacementChange(ctx context.Context, input model.ApplyMediaPlacementChangeInput) (model.MediaPlacementChangeResult, error) {
+	return r.DoApplyMediaPlacementChange(ctx, input)
+}
+
+// ApplyClusterMediaConsentChange is the resolver for the applyClusterMediaConsentChange field.
+func (r *mutationResolver) ApplyClusterMediaConsentChange(ctx context.Context, input model.ApplyMediaCapacityConsentInput) (model.MediaCapacityConsentChangeResult, error) {
+	return r.DoApplyClusterMediaConsentChange(ctx, input)
+}
+
 // UpdateMediaRetention is the resolver for the updateMediaRetention field.
 func (r *mutationResolver) UpdateMediaRetention(ctx context.Context, input model.UpdateMediaRetentionInput) (model.UpdateMediaRetentionResult, error) {
 	return r.DoUpdateMediaRetention(ctx, input)
@@ -4293,76 +4301,21 @@ func (r *queryResolver) VodUploadStatus(ctx context.Context, uploadID string) (m
 }
 
 // ResolveViewerEndpoint is the resolver for the resolveViewerEndpoint field.
-func (r *queryResolver) ResolveViewerEndpoint(ctx context.Context, contentID string) (*sharedpb.ViewerEndpointResponse, error) {
-	// Extract viewer IP from request context
-	var viewerIP *string
-
-	// Extract IP from GraphQL request context
-	if ginCtx := ctx.Value(ctxkeys.KeyGinContext); ginCtx != nil {
-		if c, ok := ginCtx.(*gin.Context); ok {
-			clientIP := c.ClientIP() // Gin's built-in method handles X-Forwarded-For, etc.
-			viewerIP = &clientIP
-		}
+func (r *queryResolver) ResolveViewerEndpoint(ctx context.Context, contentID string, protocol *model.MediaViewerProtocol) (*sharedpb.ViewerEndpointResponse, error) {
+	requested := ""
+	if protocol != nil {
+		requested = string(*protocol)
 	}
-
-	// Fallback: try to get from raw HTTP request
-	if viewerIP == nil {
-		if req := ctx.Value(ctxkeys.KeyHTTPRequest); req != nil {
-			if httpReq, ok := req.(*http.Request); ok && httpReq != nil {
-				clientIP := httpReq.Header.Get("X-Forwarded-For")
-				if clientIP == "" {
-					clientIP = httpReq.Header.Get("X-Real-IP")
-				}
-				if clientIP == "" {
-					clientIP = httpReq.RemoteAddr
-				}
-				// Extract IP from potential "ip:port" format
-				if idx := strings.LastIndex(clientIP, ":"); idx != -1 {
-					clientIP = clientIP[:idx]
-				}
-				// Use first IP if comma-separated list
-				if strings.Contains(clientIP, ",") {
-					clientIP = strings.TrimSpace(strings.Split(clientIP, ",")[0])
-				}
-				viewerIP = &clientIP
-			}
-		}
-	}
-
-	// If we still don't have an IP, this is an error
-	if viewerIP == nil {
-		return nil, fmt.Errorf("unable to determine viewer IP address for GeoIP routing")
-	}
-
-	// Call Commodore's viewer endpoint resolution (which then calls Foghorn)
-	return r.DoResolveViewerEndpoint(ctx, contentID, viewerIP)
+	return r.DoResolveViewerEndpointForProtocol(ctx, contentID, resolvers.RoutingClientIP(ctx), requested)
 }
 
 // ResolveIngestEndpoint is the resolver for the resolveIngestEndpoint field.
-func (r *queryResolver) ResolveIngestEndpoint(ctx context.Context, streamKey string) (*sharedpb.IngestEndpointResponse, error) {
-	// Geo-routing address. Prefer the trusted client IP the rate-limit
-	// middleware already resolved: gin's ClientIP() honours X-Forwarded-For
-	// from any peer, which would let a publisher be limited as themselves
-	// while being routed as somewhere else.
-	var viewerIP *string
-
-	if trusted := ctxkeys.GetClientIP(ctx); trusted != "" {
-		viewerIP = &trusted
+func (r *queryResolver) ResolveIngestEndpoint(ctx context.Context, streamKey string, protocol *model.MediaIngestProtocol) (*sharedpb.IngestEndpointResponse, error) {
+	requested := ""
+	if protocol != nil {
+		requested = string(*protocol)
 	}
-
-	if viewerIP == nil {
-		if ginCtx := ctx.Value(ctxkeys.KeyGinContext); ginCtx != nil {
-			if c, ok := ginCtx.(*gin.Context); ok {
-				if trusted, ok := c.Get(string(ctxkeys.KeyClientIP)); ok {
-					if ip, ok := trusted.(string); ok && ip != "" {
-						viewerIP = &ip
-					}
-				}
-			}
-		}
-	}
-
-	return r.DoResolveIngestEndpoint(ctx, streamKey, viewerIP)
+	return r.DoResolveIngestEndpointForProtocol(ctx, streamKey, resolvers.RoutingClientIP(ctx), requested)
 }
 
 // SkipperConversations is the resolver for the skipperConversations field.
@@ -4420,6 +4373,51 @@ func (r *queryResolver) MessagesConnection(ctx context.Context, conversationID s
 // MediaRetentionPolicy is the resolver for the mediaRetentionPolicy field.
 func (r *queryResolver) MediaRetentionPolicy(ctx context.Context) (*model.MediaRetentionPolicy, error) {
 	return r.DoMediaRetentionPolicy(ctx)
+}
+
+// MediaPlacementPolicy is the resolver for the mediaPlacementPolicy field.
+func (r *queryResolver) MediaPlacementPolicy(ctx context.Context, scope model.MediaPlacementScopeInput) (model.MediaPlacementPolicyResult, error) {
+	return r.DoMediaPlacementPolicy(ctx, scope)
+}
+
+// MediaPlacementOptions is the resolver for the mediaPlacementOptions field.
+func (r *queryResolver) MediaPlacementOptions(ctx context.Context, scope model.MediaPlacementScopeInput, filter *model.MediaPlacementOptionsFilter, after *string, first *int) (model.MediaPlacementOptionsResult, error) {
+	return r.DoMediaPlacementOptions(ctx, scope, filter, after, first)
+}
+
+// PreviewMediaPlacement is the resolver for the previewMediaPlacement field.
+func (r *queryResolver) PreviewMediaPlacement(ctx context.Context, input model.PreviewMediaPlacementInput) (model.MediaPlacementPreviewResult, error) {
+	return r.DoPreviewMediaPlacement(ctx, input)
+}
+
+// ReviewMediaPlacementChange is the resolver for the reviewMediaPlacementChange field.
+func (r *queryResolver) ReviewMediaPlacementChange(ctx context.Context, input model.ReviewMediaPlacementChangeInput) (model.MediaPlacementReviewResult, error) {
+	return r.DoReviewMediaPlacementChange(ctx, input)
+}
+
+// MediaPlacementChange is the resolver for the mediaPlacementChange field.
+func (r *queryResolver) MediaPlacementChange(ctx context.Context, scope model.MediaPlacementScopeInput, idempotencyKey string) (model.MediaPlacementChangeResult, error) {
+	return r.DoMediaPlacementChange(ctx, scope, idempotencyKey)
+}
+
+// MediaPlacementLegacyPins is the resolver for the mediaPlacementLegacyPins field.
+func (r *queryResolver) MediaPlacementLegacyPins(ctx context.Context, streamID string) (model.MediaPlacementLegacyPinsResult, error) {
+	return r.DoMediaPlacementLegacyPins(ctx, streamID)
+}
+
+// ClusterMediaConsent is the resolver for the clusterMediaConsent field.
+func (r *queryResolver) ClusterMediaConsent(ctx context.Context, clusterID string) (model.MediaCapacityConsentResult, error) {
+	return r.DoClusterMediaConsent(ctx, clusterID)
+}
+
+// ReviewClusterMediaConsentChange is the resolver for the reviewClusterMediaConsentChange field.
+func (r *queryResolver) ReviewClusterMediaConsentChange(ctx context.Context, input model.ReviewMediaCapacityConsentInput) (model.MediaPlacementReviewResult, error) {
+	return r.DoReviewClusterMediaConsentChange(ctx, input)
+}
+
+// ClusterMediaConsentChange is the resolver for the clusterMediaConsentChange field.
+func (r *queryResolver) ClusterMediaConsentChange(ctx context.Context, clusterID string, idempotencyKey string) (model.MediaCapacityConsentChangeResult, error) {
+	return r.DoClusterMediaConsentChange(ctx, clusterID, idempotencyKey)
 }
 
 // Timestamp is the resolver for the timestamp field.

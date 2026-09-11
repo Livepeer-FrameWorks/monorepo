@@ -27,6 +27,7 @@ import (
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
+	placementpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	periscopepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/periscope"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
@@ -106,8 +107,14 @@ func SolventPurser() *FakePurser {
 // the backend" assertions).
 type FakeCommodore struct {
 	commodore.Interface
-	mu    sync.Mutex
-	Calls int
+	mu                           sync.Mutex
+	Calls                        int
+	GetMediaPlacementPolicyFn    func(context.Context, *placementpb.GetPolicyRequest) (*placementpb.PolicyState, error)
+	GetMediaPlacementOptionsFn   func(context.Context, *placementpb.GetOptionsRequest) (*placementpb.Options, error)
+	PreviewMediaPlacementFn      func(context.Context, *placementpb.PreviewRequest) (*placementpb.Preview, error)
+	ReviewMediaPlacementChangeFn func(context.Context, *placementpb.ReviewChangeRequest) (*placementpb.Review, error)
+	ApplyMediaPlacementChangeFn  func(context.Context, *placementpb.ApplyChangeRequest) (*placementpb.Change, error)
+	GetMediaPlacementChangeFn    func(context.Context, *placementpb.GetChangeRequest) (*placementpb.Change, error)
 
 	GetStreamFn       func(ctx context.Context, streamID string) (*commodorepb.Stream, error)
 	GetStreamsBatchFn func(ctx context.Context, streamIDs []string) (*commodorepb.GetStreamsBatchResponse, error)
@@ -143,46 +150,47 @@ type FakeCommodore struct {
 	GetVodUploadStatusFn func(ctx context.Context, tenantID, uploadID string) (*sharedpb.GetVodUploadStatusResponse, error)
 	DeleteVodAssetFn     func(ctx context.Context, tenantID, artifactHash string) (*sharedpb.DeleteVodAssetResponse, error)
 
-	GetSigningKeyFn               func(ctx context.Context, id string) (*commodorepb.SigningKey, error)
-	GetMeFn                       func(ctx context.Context) (*commodorepb.User, error)
-	LinkEmailFn                   func(ctx context.Context, email, password string) (*commodorepb.LinkEmailResponse, error)
-	LinkWalletFn                  func(ctx context.Context, address, message, signature string) (*commodorepb.WalletIdentity, error)
-	ListWalletsFn                 func(ctx context.Context) (*commodorepb.ListWalletsResponse, error)
-	ListPullSourceEventsFn        func(ctx context.Context, req *commodorepb.ListPullSourceEventsRequest) (*commodorepb.ListPullSourceEventsResponse, error)
-	ListStorageArtifactsFn        func(ctx context.Context, req *commodorepb.ListStorageArtifactsRequest) (*commodorepb.ListStorageArtifactsResponse, error)
-	GetTenantUserCountFn          func(ctx context.Context, tenantID string) (*commodorepb.GetTenantUserCountResponse, error)
-	LoginFn                       func(ctx context.Context, req *commodorepb.LoginRequest) (*commodorepb.AuthResponse, error)
-	RefreshTokenFn                func(ctx context.Context, refreshToken string) (*commodorepb.AuthResponse, error)
-	MintMistAdminSessionFn        func(ctx context.Context, req *commodorepb.MintMistAdminSessionRequest) (*commodorepb.MintMistAdminSessionResponse, error)
-	RegisterFn                    func(ctx context.Context, req *commodorepb.RegisterRequest) (*commodorepb.RegisterResponse, error)
-	ResolveIngestEndpointFn       func(ctx context.Context, streamKey, viewerIP string) (*sharedpb.IngestEndpointResponse, error)
-	ResolveViewerEndpointFn       func(ctx context.Context, contentID, viewerIP, viewerToken string) (*sharedpb.ViewerEndpointResponse, error)
-	ResolveVodIDFn                func(ctx context.Context, vodID string) (*commodorepb.ResolveVodIDResponse, error)
-	ResolveClipHashFn             func(ctx context.Context, clipHash string) (*commodorepb.ResolveClipHashResponse, error)
-	ResolveDVRHashFn              func(ctx context.Context, dvrHash string) (*commodorepb.ResolveDVRHashResponse, error)
-	ResolveVodHashFn              func(ctx context.Context, vodHash string) (*commodorepb.ResolveVodHashResponse, error)
-	ResolveArtifactPlaybackIDFn   func(ctx context.Context, playbackID string) (*commodorepb.ResolveArtifactPlaybackIDResponse, error)
-	ResolvePlaybackIDFn           func(ctx context.Context, playbackID string) (*commodorepb.ResolvePlaybackIDResponse, error)
-	ResolveChapterPlaybackIDFn    func(ctx context.Context, playbackID string) (*commodorepb.ResolveChapterPlaybackIDResponse, error)
-	UnlinkWalletFn                func(ctx context.Context, walletID string) (*commodorepb.UnlinkWalletResponse, error)
-	WalletLoginFn                 func(ctx context.Context, address, message, signature string, attribution *commonpb.SignupAttribution) (*commodorepb.AuthResponse, error)
-	IssueWalletChallengeFn        func(ctx context.Context, address string, chainID uint64) (*commodorepb.IssueWalletChallengeResponse, error)
-	GetMediaRetentionPolicyFn     func(ctx context.Context, req *commodorepb.GetMediaRetentionPolicyRequest) (*commodorepb.GetMediaRetentionPolicyResponse, error)
-	SetMediaRetentionPolicyFn     func(ctx context.Context, req *commodorepb.SetMediaRetentionPolicyRequest) (*commodorepb.SetMediaRetentionPolicyResponse, error)
-	UpdateAssetRetentionFn        func(ctx context.Context, req *commodorepb.UpdateAssetRetentionRequest) (*commodorepb.UpdateAssetRetentionResponse, error)
-	ResetAssetRetentionFn         func(ctx context.Context, req *commodorepb.ResetAssetRetentionRequest) (*commodorepb.UpdateAssetRetentionResponse, error)
-	SetStreamRetentionOverridesFn func(ctx context.Context, req *commodorepb.SetStreamRetentionOverridesRequest) (*commodorepb.SetStreamRetentionOverridesResponse, error)
-	TestPlaybackAccessFn          func(ctx context.Context, req *foghorncontrolpb.TestPlaybackAccessRequest) (*foghorncontrolpb.TestPlaybackAccessResponse, error)
-	CreateAPITokenFn              func(ctx context.Context, req *commodorepb.CreateAPITokenRequest) (*commodorepb.CreateAPITokenResponse, error)
-	ListAPITokensFn               func(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*commodorepb.ListAPITokensResponse, error)
-	RevokeAPITokenFn              func(ctx context.Context, tokenID string) (*commodorepb.RevokeAPITokenResponse, error)
-	RetrieveDVRChapterFn          func(ctx context.Context, req *foghorncontrolpb.RetrieveDVRChapterRequest) (*foghorncontrolpb.RetrieveDVRChapterResponse, error)
-	ListDVRChaptersFn             func(ctx context.Context, req *foghorncontrolpb.ListDVRChaptersRequest) (*foghorncontrolpb.ListDVRChaptersResponse, error)
-	CreatePushTargetFn            func(ctx context.Context, req *commodorepb.CreatePushTargetRequest) (*commodorepb.PushTarget, error)
-	ListPushTargetsFn             func(ctx context.Context, streamID string) (*commodorepb.ListPushTargetsResponse, error)
-	UpdatePushTargetFn            func(ctx context.Context, req *commodorepb.UpdatePushTargetRequest) (*commodorepb.PushTarget, error)
-	DeletePushTargetFn            func(ctx context.Context, id string) (*commodorepb.DeletePushTargetResponse, error)
-	ResolvePlaybackPolicyFn       func(ctx context.Context, playbackID string) (*commodorepb.ResolvePlaybackPolicyResponse, error)
+	GetSigningKeyFn                     func(ctx context.Context, id string) (*commodorepb.SigningKey, error)
+	GetMeFn                             func(ctx context.Context) (*commodorepb.User, error)
+	LinkEmailFn                         func(ctx context.Context, email, password string) (*commodorepb.LinkEmailResponse, error)
+	LinkWalletFn                        func(ctx context.Context, address, message, signature string) (*commodorepb.WalletIdentity, error)
+	ListWalletsFn                       func(ctx context.Context) (*commodorepb.ListWalletsResponse, error)
+	ListPullSourceEventsFn              func(ctx context.Context, req *commodorepb.ListPullSourceEventsRequest) (*commodorepb.ListPullSourceEventsResponse, error)
+	ListStorageArtifactsFn              func(ctx context.Context, req *commodorepb.ListStorageArtifactsRequest) (*commodorepb.ListStorageArtifactsResponse, error)
+	GetTenantUserCountFn                func(ctx context.Context, tenantID string) (*commodorepb.GetTenantUserCountResponse, error)
+	LoginFn                             func(ctx context.Context, req *commodorepb.LoginRequest) (*commodorepb.AuthResponse, error)
+	RefreshTokenFn                      func(ctx context.Context, refreshToken string) (*commodorepb.AuthResponse, error)
+	MintMistAdminSessionFn              func(ctx context.Context, req *commodorepb.MintMistAdminSessionRequest) (*commodorepb.MintMistAdminSessionResponse, error)
+	RegisterFn                          func(ctx context.Context, req *commodorepb.RegisterRequest) (*commodorepb.RegisterResponse, error)
+	ResolveIngestEndpointFn             func(ctx context.Context, streamKey, viewerIP string, protocol sharedpb.IngestProtocol) (*sharedpb.IngestEndpointResponse, error)
+	ResolveViewerEndpointFn             func(ctx context.Context, contentID, viewerIP, viewerToken string) (*sharedpb.ViewerEndpointResponse, error)
+	ResolveViewerEndpointWithProtocolFn func(ctx context.Context, contentID, viewerIP, viewerToken, protocol string) (*sharedpb.ViewerEndpointResponse, error)
+	ResolveVodIDFn                      func(ctx context.Context, vodID string) (*commodorepb.ResolveVodIDResponse, error)
+	ResolveClipHashFn                   func(ctx context.Context, clipHash string) (*commodorepb.ResolveClipHashResponse, error)
+	ResolveDVRHashFn                    func(ctx context.Context, dvrHash string) (*commodorepb.ResolveDVRHashResponse, error)
+	ResolveVodHashFn                    func(ctx context.Context, vodHash string) (*commodorepb.ResolveVodHashResponse, error)
+	ResolveArtifactPlaybackIDFn         func(ctx context.Context, playbackID string) (*commodorepb.ResolveArtifactPlaybackIDResponse, error)
+	ResolvePlaybackIDFn                 func(ctx context.Context, playbackID string) (*commodorepb.ResolvePlaybackIDResponse, error)
+	ResolveChapterPlaybackIDFn          func(ctx context.Context, playbackID string) (*commodorepb.ResolveChapterPlaybackIDResponse, error)
+	UnlinkWalletFn                      func(ctx context.Context, walletID string) (*commodorepb.UnlinkWalletResponse, error)
+	WalletLoginFn                       func(ctx context.Context, address, message, signature string, attribution *commonpb.SignupAttribution) (*commodorepb.AuthResponse, error)
+	IssueWalletChallengeFn              func(ctx context.Context, address string, chainID uint64) (*commodorepb.IssueWalletChallengeResponse, error)
+	GetMediaRetentionPolicyFn           func(ctx context.Context, req *commodorepb.GetMediaRetentionPolicyRequest) (*commodorepb.GetMediaRetentionPolicyResponse, error)
+	SetMediaRetentionPolicyFn           func(ctx context.Context, req *commodorepb.SetMediaRetentionPolicyRequest) (*commodorepb.SetMediaRetentionPolicyResponse, error)
+	UpdateAssetRetentionFn              func(ctx context.Context, req *commodorepb.UpdateAssetRetentionRequest) (*commodorepb.UpdateAssetRetentionResponse, error)
+	ResetAssetRetentionFn               func(ctx context.Context, req *commodorepb.ResetAssetRetentionRequest) (*commodorepb.UpdateAssetRetentionResponse, error)
+	SetStreamRetentionOverridesFn       func(ctx context.Context, req *commodorepb.SetStreamRetentionOverridesRequest) (*commodorepb.SetStreamRetentionOverridesResponse, error)
+	TestPlaybackAccessFn                func(ctx context.Context, req *foghorncontrolpb.TestPlaybackAccessRequest) (*foghorncontrolpb.TestPlaybackAccessResponse, error)
+	CreateAPITokenFn                    func(ctx context.Context, req *commodorepb.CreateAPITokenRequest) (*commodorepb.CreateAPITokenResponse, error)
+	ListAPITokensFn                     func(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*commodorepb.ListAPITokensResponse, error)
+	RevokeAPITokenFn                    func(ctx context.Context, tokenID string) (*commodorepb.RevokeAPITokenResponse, error)
+	RetrieveDVRChapterFn                func(ctx context.Context, req *foghorncontrolpb.RetrieveDVRChapterRequest) (*foghorncontrolpb.RetrieveDVRChapterResponse, error)
+	ListDVRChaptersFn                   func(ctx context.Context, req *foghorncontrolpb.ListDVRChaptersRequest) (*foghorncontrolpb.ListDVRChaptersResponse, error)
+	CreatePushTargetFn                  func(ctx context.Context, req *commodorepb.CreatePushTargetRequest) (*commodorepb.PushTarget, error)
+	ListPushTargetsFn                   func(ctx context.Context, streamID string) (*commodorepb.ListPushTargetsResponse, error)
+	UpdatePushTargetFn                  func(ctx context.Context, req *commodorepb.UpdatePushTargetRequest) (*commodorepb.PushTarget, error)
+	DeletePushTargetFn                  func(ctx context.Context, id string) (*commodorepb.DeletePushTargetResponse, error)
+	ResolvePlaybackPolicyFn             func(ctx context.Context, playbackID string) (*commodorepb.ResolvePlaybackPolicyResponse, error)
 }
 
 func (f *FakeCommodore) GetStream(ctx context.Context, streamID string) (*commodorepb.Stream, error) {

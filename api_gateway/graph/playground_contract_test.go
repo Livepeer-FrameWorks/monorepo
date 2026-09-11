@@ -398,6 +398,11 @@ func defaultVariables(op *ast.OperationDefinition) map[string]any {
 func defaultVariableValue(opName string, name string, typ *ast.Type) any {
 	typeName := typeName(typ)
 	switch name {
+	case "scope":
+		if typeName == "MediaPlacementScopeInput" {
+			return map[string]any{"kind": "TENANT"}
+		}
+		return defaultValueForType(typ)
 	case "id":
 		return defaultIDForOperation(opName)
 	case "streamId":
@@ -505,6 +510,12 @@ func defaultIDForOperation(opName string) string {
 }
 
 func defaultInputValue(typeName string) any {
+	if typeName == "PreviewMediaPlacementInput" {
+		return map[string]any{"scope": map[string]any{"kind": "TENANT"}, "verb": "SERVE", "streamId": demo.DemoStreamID, "coordinates": map[string]any{"latitude": 37.77, "longitude": -122.42}}
+	}
+	if typeName == "ReviewMediaPlacementChangeInput" {
+		return map[string]any{"scope": map[string]any{"kind": "TENANT"}, "expectedRevision": "0", "expectedParentRevision": "0", "updates": []any{map[string]any{"verb": "SERVE", "kind": "CLEAR"}}}
+	}
 	switch typeName {
 	case "CreateStreamInput":
 		return map[string]any{

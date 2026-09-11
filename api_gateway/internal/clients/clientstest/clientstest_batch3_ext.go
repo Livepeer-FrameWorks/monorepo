@@ -95,12 +95,12 @@ func (f *FakeCommodore) Register(ctx context.Context, req *commodorepb.RegisterR
 	return f.RegisterFn(ctx, req)
 }
 
-func (f *FakeCommodore) ResolveIngestEndpoint(ctx context.Context, streamKey, viewerIP string) (*sharedpb.IngestEndpointResponse, error) {
+func (f *FakeCommodore) ResolveIngestEndpoint(ctx context.Context, streamKey, viewerIP string, protocol sharedpb.IngestProtocol) (*sharedpb.IngestEndpointResponse, error) {
 	f.Calls++
 	if f.ResolveIngestEndpointFn == nil {
 		panic("FakeCommodore.ResolveIngestEndpoint not stubbed")
 	}
-	return f.ResolveIngestEndpointFn(ctx, streamKey, viewerIP)
+	return f.ResolveIngestEndpointFn(ctx, streamKey, viewerIP, protocol)
 }
 
 func (f *FakeCommodore) ResolveViewerEndpoint(ctx context.Context, contentID, viewerIP, viewerToken string) (*sharedpb.ViewerEndpointResponse, error) {
@@ -109,6 +109,14 @@ func (f *FakeCommodore) ResolveViewerEndpoint(ctx context.Context, contentID, vi
 		panic("FakeCommodore.ResolveViewerEndpoint not stubbed")
 	}
 	return f.ResolveViewerEndpointFn(ctx, contentID, viewerIP, viewerToken)
+}
+
+func (f *FakeCommodore) ResolveViewerEndpointWithProtocol(ctx context.Context, contentID, viewerIP, viewerToken, protocol string) (*sharedpb.ViewerEndpointResponse, error) {
+	f.Calls++
+	if f.ResolveViewerEndpointWithProtocolFn == nil {
+		panic("FakeCommodore.ResolveViewerEndpointWithProtocol not stubbed")
+	}
+	return f.ResolveViewerEndpointWithProtocolFn(ctx, contentID, viewerIP, viewerToken, protocol)
 }
 
 func (f *FakeCommodore) UnlinkWallet(ctx context.Context, walletID string) (*commodorepb.UnlinkWalletResponse, error) {
