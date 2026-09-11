@@ -1,6 +1,7 @@
 package mist
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 
@@ -8,6 +9,29 @@ import (
 
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
+
+func TestStreamBufferPreservesEmitterPID(t *testing.T) {
+	for _, pid := range []string{"123", "", "0", "-1", "bad", "9223372036854775808"} {
+		t.Run(pid, func(t *testing.T) {
+			headers := http.Header{"X-Pid": []string{pid}, "X-Trigger-Uuid": []string{"event-1"}, "X-Trigger-Unixmillis": []string{"1788835900000"}}
+			trigger, err := ParseTriggerToProtobufWithHeaders(TriggerStreamBuffer, joinPayload("live+x", "FULL", "{}"), headers, "node-1", logging.NewLogger())
+			if err != nil {
+				t.Fatal(err)
+			}
+			buffer := trigger.GetStreamBuffer()
+			if pid == "123" {
+				if buffer.GetBufferPid() != 123 {
+					t.Fatalf("lost buffer PID: %v", buffer)
+				}
+			} else if buffer.BufferPid != nil {
+				t.Fatalf("invalid buffer PID retained: %v", buffer)
+			}
+			if trigger.GetTriggerUuid() != "event-1" || trigger.GetTriggerUnixMillis() != 1788835900000 {
+				t.Fatal("lost event identity")
+			}
+		})
+	}
+}
 
 func joinPayload(lines ...string) []byte {
 	return []byte(strings.Join(lines, "\n"))
@@ -120,6 +144,12 @@ func TestIsPlaybackViewerRequest(t *testing.T) {
 		{name: "subtitle vtt request", connector: "HTTP", requestURL: "http://edge/view/live+stream/subtitles.vtt", expected: true},
 		{name: "subtitle webvtt request", connector: "HTTP", requestURL: "http://edge/view/live+stream/captions.webvtt", expected: true},
 		{name: "subtitle srt request", connector: "HTTP", requestURL: "http://edge/view/live+stream/captions.srt", expected: true},
+		{name: "metadata query cannot hide HLS", connector: "HLS", requestURL: "https://edge/hls/stream/index.m3u8?poster=.jpg&metaeverywhere=1", expected: true},
+		{name: "metadata query cannot hide HTTP media", connector: "HTTP", requestURL: "https://edge/hls/stream/index.m3u8?x=.json&sprite=1", expected: true},
+		{name: "metadata hostname cannot hide media", connector: "HTTP", requestURL: "https://poster.example/hls/sprite-stream/index.m3u8", expected: true},
+		{name: "metadata stream substring is media", connector: "HLS", requestURL: "https://edge/hls/json_stream.jpg/index.m3u8", expected: true},
+		{name: "query cannot invent media", connector: "HTTP", requestURL: "https://edge/asset?next=/hls/stream/index.m3u8", expected: false},
+		{name: "native metadata query is playback", connector: "SRT", requestURL: "srt://edge?streamid=stream&poster=1", expected: true},
 	}
 
 	for _, tc := range cases {

@@ -2,11 +2,15 @@ package mist
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"path"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -26,6 +30,7 @@ const (
 	TriggerStreamBuffer     TriggerType = "STREAM_BUFFER"
 	TriggerStreamEnd        TriggerType = "STREAM_END"
 	TriggerUserNew          TriggerType = "USER_NEW"
+	TriggerConnPlay         TriggerType = "CONN_PLAY"
 	TriggerUserEnd          TriggerType = "USER_END"
 	TriggerLiveTrackList    TriggerType = "LIVE_TRACK_LIST"
 	TriggerRecordingEnd     TriggerType = "RECORDING_END"
@@ -114,23 +119,31 @@ func IsPlaybackViewerConnector(connector string) bool {
 // IsPlaybackViewerRequest filters Mist viewer/session triggers down to actual playback media.
 func IsPlaybackViewerRequest(connector, requestURL string) bool {
 	playbackConnector := IsPlaybackViewerConnector(connector)
-	req := strings.ToLower(strings.TrimSpace(requestURL))
-	if req == "" {
+	if strings.TrimSpace(requestURL) == "" {
 		return playbackConnector
 	}
-	for _, marker := range []string{
-		"/json_", ".json", "info_json", "metaeverywhere=",
-		".jpg", ".jpeg", ".png", "poster", "sprite", ".thumbvtt",
-	} {
-		if strings.Contains(req, marker) {
-			return false
-		}
+	u, err := url.Parse(strings.TrimSpace(requestURL))
+	if err != nil {
+		return playbackConnector
+	}
+	// Query strings, hostnames and stream-name substrings cannot turn a media
+	// session into an asset and bypass USER_NEW authentication/admission.
+	req := strings.ToLower(u.Path)
+	base := path.Base(req)
+	metadataJSON := strings.HasPrefix(base, "json_") && (strings.HasSuffix(base, ".js") || strings.HasSuffix(base, ".json"))
+	if metadataJSON && (!playbackConnector || strings.EqualFold(strings.TrimSpace(connector), "Raw/WS")) {
+		return false
 	}
 	if playbackConnector {
 		return true
 	}
 	if isNonPlaybackAssetConnector(connector) {
 		return false
+	}
+	for _, suffix := range []string{".jpg", ".jpeg", ".png", ".thumbvtt", ".json"} {
+		if strings.HasSuffix(base, suffix) {
+			return false
+		}
 	}
 	return hasPlaybackRequestMarker(req)
 }
@@ -197,13 +210,22 @@ func ParseTriggerToProtobufWithHeaders(triggerType TriggerType, rawPayload []byt
 		if len(params) < 3 {
 			return nil, fmt.Errorf("PUSH_REWRITE requires 3 parameters, got %d", len(params))
 		}
-		mistTrigger.TriggerPayload = &ipcpb.MistTrigger_PushRewrite{
-			PushRewrite: &ipcpb.PushRewriteTrigger{
-				PushUrl:    params[0],
-				Hostname:   params[1],
-				StreamName: params[2],
-			},
+		pushRewrite := &ipcpb.PushRewriteTrigger{
+			PushUrl:    params[0],
+			Hostname:   params[1],
+			StreamName: params[2],
 		}
+		// The 4th line is Mist's own connector name (capa["name"]); older Mist
+		// releases send three lines and leave it empty. It is bounded here so a
+		// forged oversized line cannot reach admission as a protocol claim.
+		if len(params) >= 4 {
+			connector := strings.TrimSpace(params[3])
+			if len(connector) > 64 || strings.IndexFunc(connector, unicode.IsControl) >= 0 {
+				return nil, errors.New("PUSH_REWRITE contains an invalid connector name")
+			}
+			pushRewrite.ObservedConnector = connector
+		}
+		mistTrigger.TriggerPayload = &ipcpb.MistTrigger_PushRewrite{PushRewrite: pushRewrite}
 
 	case TriggerPlayRewrite:
 		if len(params) < 4 {
@@ -292,6 +314,19 @@ func ParseTriggerToProtobufWithHeaders(triggerType TriggerType, rawPayload []byt
 		mistTrigger.TriggerPayload = &ipcpb.MistTrigger_PushInputClose{
 			PushInputClose: trigger,
 		}
+
+	case TriggerConnPlay:
+		if len(params) != 4 || len(rawPayload) > 16<<10 {
+			return nil, fmt.Errorf("CONN_PLAY requires four bounded parameters")
+		}
+		for _, param := range params {
+			if param == "" || strings.ContainsAny(param, "\x00\r") {
+				return nil, fmt.Errorf("CONN_PLAY contains an invalid parameter")
+			}
+		}
+		mistTrigger.TriggerPayload = &ipcpb.MistTrigger_ConnectionPlay{ConnectionPlay: &ipcpb.ConnectionPlayTrigger{
+			StreamName: params[0], Host: params[1], Connector: params[2], RequestUrl: params[3],
+		}}
 
 	case TriggerUserNew:
 		if len(params) < 6 {
@@ -589,6 +624,11 @@ func ParseTriggerToProtobufWithHeaders(triggerType TriggerType, rawPayload []byt
 			}
 		}
 	}
+	if buffer := mistTrigger.GetStreamBuffer(); buffer != nil {
+		if pid, parseErr := strconv.ParseInt(strings.TrimSpace(headers.Get("X-PID")), 10, 64); parseErr == nil && pid > 0 {
+			buffer.BufferPid = &pid
+		}
+	}
 	if closeTrigger := mistTrigger.GetPushInputClose(); closeTrigger != nil {
 		closeTrigger.TriggerUuid = mistTrigger.GetTriggerUuid()
 		closeTrigger.TriggerUnixMillis = mistTrigger.GetTriggerUnixMillis()
@@ -652,7 +692,7 @@ func pairSessionShares(namesCSV, secondsCSV string) []*ipcpb.SessionTimeShare {
 // IsBlocking returns whether the trigger type requires a blocking response
 func (t TriggerType) IsBlocking() bool {
 	switch t {
-	case TriggerPushRewrite, TriggerPlayRewrite, TriggerStreamSource, TriggerStreamProcess, TriggerPushOutStart, TriggerUserNew:
+	case TriggerPushRewrite, TriggerPlayRewrite, TriggerStreamSource, TriggerStreamProcess, TriggerPushOutStart, TriggerUserNew, TriggerConnPlay:
 		return true
 	default:
 		return false

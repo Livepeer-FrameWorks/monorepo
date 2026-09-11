@@ -1,0 +1,26 @@
+{
+  "config": {
+    "device_discovery": false,
+    "protocols": [
+      { "connector": "HTTP", "port": 18080 },
+      { "connector": "HLS" },
+      { "connector": "DTSC", "port": 14200 }
+    ],
+    "triggers": {
+      "CONN_PLAY": [
+        {
+          "handler": "/tmp/source-admission-hook.sh",
+          "sync": true,
+          "onfail": "deny",
+          "streams": ["allowed-origin", "denied-origin"]
+        }
+      ]
+    }
+  },
+  "streams": {
+    "allowed-origin": { "source": "/tmp/source.mp4" },
+    "denied-origin": { "source": "/tmp/source.mp4" },
+    "allowed-replica": { "source": "dtsc://127.0.0.1:14200/allowed-origin" },
+    "denied-replica": { "source": "dtsc://127.0.0.1:14200/denied-origin" }
+  }
+}

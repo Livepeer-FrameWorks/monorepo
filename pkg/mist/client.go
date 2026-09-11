@@ -757,6 +757,10 @@ func (c *Client) SetTriggers(triggers map[string]interface{}) error {
 
 // AddStreams adds or updates streams without deleting others
 func (c *Client) AddStreams(streams map[string]map[string]interface{}) error {
+	return c.AddStreamsContext(context.Background(), streams)
+}
+
+func (c *Client) AddStreamsContext(ctx context.Context, streams map[string]map[string]interface{}) error {
 	if len(streams) == 0 {
 		return nil
 	}
@@ -768,19 +772,23 @@ func (c *Client) AddStreams(streams map[string]map[string]interface{}) error {
 	command := map[string]interface{}{
 		"addstream": generic,
 	}
-	_, err := c.makeAPIRequest(command)
+	_, err := c.makeAPIRequestContext(ctx, command)
 	return err
 }
 
 // DeleteStream deletes a single stream by name
 func (c *Client) DeleteStream(name string) error {
+	return c.DeleteStreamContext(context.Background(), name)
+}
+
+func (c *Client) DeleteStreamContext(ctx context.Context, name string) error {
 	if strings.TrimSpace(name) == "" {
 		return nil
 	}
 	command := map[string]interface{}{
 		"deletestream": name,
 	}
-	_, err := c.makeAPIRequest(command)
+	_, err := c.makeAPIRequestContext(ctx, command)
 	return err
 }
 
@@ -810,10 +818,14 @@ func (c *Client) DeleteStreams(names []string) error {
 
 // Save persists configuration changes to disk immediately
 func (c *Client) Save() error {
+	return c.SaveContext(context.Background())
+}
+
+func (c *Client) SaveContext(ctx context.Context) error {
 	command := map[string]interface{}{
 		"save": true,
 	}
-	_, err := c.makeAPIRequest(command)
+	_, err := c.makeAPIRequestContext(ctx, command)
 	return err
 }
 

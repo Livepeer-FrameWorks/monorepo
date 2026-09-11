@@ -1,0 +1,16 @@
+{
+  "account": { "test": { "password": "098f6bcd4621d373cade4e832627b4f6" } },
+  "config": {
+    "device_discovery": false,
+    "prometheus": "placement-contract",
+    "protocols": [
+      { "connector": "HTTP", "port": 18080, "pubaddr": ["https://media.example/view/"] },
+      { "connector": "HLS" },
+      { "connector": "CMAF" },
+      { "connector": "MP4" },
+      { "connector": "RTMP", "port": 11935 },
+      { "connector": "TSSRT", "port": 18889 },
+      { "connector": "WebRTC", "port": 18203 }
+    ]
+  }
+}

@@ -1,0 +1,16 @@
+ARG MIST_CONTRACT_BUILD_IMAGE=scratch
+FROM ${MIST_CONTRACT_BUILD_IMAGE}
+
+ARG MIST_SOURCE_REVISION
+ARG MIST_BUILD_ID
+COPY source/ /contract-source/
+RUN meson setup /contract-build /contract-source --wrap-mode=nofallback \
+      --buildtype=debug -DNOUPDATE=true -DDOCKERRUN=true -DDEBUG=3 \
+      -DWITH_AV=false -DONNX=disabled -DVERSION=${MIST_SOURCE_REVISION} \
+      -DRELEASE=FrameWorks_source_contract \
+    && meson compile -C /contract-build -j 4 \
+    && meson install -C /contract-build --no-rebuild
+
+LABEL org.frameworks.mist.source-revision=${MIST_SOURCE_REVISION}
+LABEL org.frameworks.mist.builder-image=${MIST_BUILD_ID}
+LABEL org.frameworks.mist.purpose="source-contract-not-release"

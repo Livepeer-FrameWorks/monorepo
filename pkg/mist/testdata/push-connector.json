@@ -1,0 +1,17 @@
+{
+  "config": {
+    "device_discovery": false,
+    "protocols": [
+      { "connector": "HTTP", "port": 18080 },
+      { "connector": "RTMP", "port": 1935 },
+      { "connector": "TSSRT", "port": 8889 },
+      { "connector": "HLS" }
+    ],
+    "triggers": {
+      "PUSH_REWRITE": [{ "handler": "/tmp/push-connector-hook.sh", "sync": true, "onfail": "deny" }]
+    }
+  },
+  "streams": {
+    "pushed": { "source": "push://" }
+  }
+}
