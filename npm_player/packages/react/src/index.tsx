@@ -62,6 +62,7 @@ export { useTranslate } from "./context/i18n";
 export { useStreamState } from "./hooks/useStreamState";
 export { usePlaybackQuality } from "./hooks/usePlaybackQuality";
 export { useViewerEndpoints } from "./hooks/useViewerEndpoints";
+export type { ViewerEndpointsParams } from "./hooks/useViewerEndpoints";
 export { useMetaTrack } from "./hooks/useMetaTrack";
 export { useTelemetry } from "./hooks/useTelemetry";
 export { usePlayerSelection } from "./hooks/usePlayerSelection";

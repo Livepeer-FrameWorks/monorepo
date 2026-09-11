@@ -121,6 +121,8 @@ export interface PlayerControllerState {
 export interface PlayerControllerStore extends Readable<PlayerControllerState> {
   /** Get controller instance */
   getController: () => PlayerController | null;
+  /** Update non-routing options without replacing the prepared destination. */
+  updateConfig: PlayerController["updateConfig"];
   /** Attach to a container element */
   attach: (container: HTMLElement) => Promise<void>;
   /** Detach from container */
@@ -772,9 +774,20 @@ export function createPlayerControllerStore(
     return controller;
   }
 
+  const updateConfig: PlayerController["updateConfig"] = (options) => {
+    for (const key of ["debug", "autoplay", "muted"] as const) {
+      if (options[key] !== undefined) controllerConfig[key] = options[key];
+    }
+    controller?.updateConfig(options);
+    if (!controller && options.muted !== undefined) {
+      store.update((state) => ({ ...state, isMuted: options.muted! }));
+    }
+  };
+
   return {
     subscribe: store.subscribe,
     getController,
+    updateConfig,
     attach,
     detach,
     destroy,

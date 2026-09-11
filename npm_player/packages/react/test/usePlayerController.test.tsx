@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, act } from "@testing-library/react";
-import { usePlayerController } from "../src/hooks/usePlayerController";
+import {
+  usePlayerController,
+  type UsePlayerControllerConfig,
+} from "../src/hooks/usePlayerController";
 import {
   WRAPPER_PARITY_ACTION_METHODS,
   WRAPPER_PARITY_EVENT_NAMES,
@@ -15,6 +18,7 @@ let eventHandlers: Map<string, Function[]>;
 
 const mockAttach = vi.fn().mockResolvedValue(undefined);
 const mockDestroy = vi.fn();
+const mockUpdateConfig = vi.fn();
 const mockPlay = vi.fn().mockResolvedValue(undefined);
 const mockPause = vi.fn();
 const mockTogglePlay = vi.fn();
@@ -75,6 +79,7 @@ vi.mock("@livepeer-frameworks/player-core", () => ({
     Object.assign(this, {
       attach: mockAttach,
       destroy: mockDestroy,
+      updateConfig: mockUpdateConfig,
       play: mockPlay,
       pause: mockPause,
       togglePlay: mockTogglePlay,
@@ -249,6 +254,7 @@ describe("usePlayerController", () => {
           contentId,
           contentType: "live",
           playbackMode: "quality",
+          viewerProtocol: "HLS",
           forcePlayer: "hlsjs",
           forceType: "html5/application/vnd.apple.mpegurl",
           forceSource: 4,
@@ -263,11 +269,72 @@ describe("usePlayerController", () => {
     expect(PlayerController).toHaveBeenCalledWith(
       expect.objectContaining({
         playbackMode: "quality",
+        viewerProtocol: "HLS",
         forcePlayer: "hlsjs",
         forceType: "html5/application/vnd.apple.mpegurl",
         forceSource: 4,
       })
     );
+  });
+
+  it.each([
+    { viewerProtocol: "DASH" },
+    { gatewayUrl: "https://new-gateway.example/graphql" },
+    { mistUrl: "https://new-mist.example" },
+    { authToken: "replacement-account" },
+    { playbackAuth: { token: "replacement-viewer" } },
+    { playbackAuth: { token: "same", transport: "header" } },
+    {
+      endpoints: {
+        primary: { nodeId: "new-edge", protocol: "hls", url: "https://new-edge.example/live.m3u8" },
+        fallbacks: [],
+      },
+    },
+  ] as Partial<UsePlayerControllerConfig>[])(
+    "recreates playback when request fields change: %j",
+    async (changes) => {
+      const { PlayerController } = await import("@livepeer-frameworks/player-core");
+      const base: UsePlayerControllerConfig = {
+        contentId: "playback",
+        viewerProtocol: "HLS",
+        playbackAuth: { token: "same" },
+      };
+      const hook = renderHook((config: UsePlayerControllerConfig) => usePlayerController(config), {
+        initialProps: { ...base, enabled: false },
+      });
+      (hook.result.current.containerRef as React.MutableRefObject<HTMLDivElement>).current =
+        document.createElement("div");
+      hook.rerender({ ...base, enabled: true });
+      const before = vi.mocked(PlayerController).mock.calls.length;
+      hook.rerender({ ...base, enabled: true, ...changes });
+      expect(vi.mocked(PlayerController).mock.calls.length).toBe(before + 1);
+      expect(PlayerController).toHaveBeenLastCalledWith(expect.objectContaining(changes));
+      hook.unmount();
+    }
+  );
+
+  it("applies only changed runtime options without replacing placement", async () => {
+    const { PlayerController } = await import("@livepeer-frameworks/player-core");
+    const base: UsePlayerControllerConfig = { contentId: "playback", viewerProtocol: "HLS" };
+    const hook = renderHook((config: UsePlayerControllerConfig) => usePlayerController(config), {
+      initialProps: { ...base, enabled: false },
+    });
+    (hook.result.current.containerRef as React.MutableRefObject<HTMLDivElement>).current =
+      document.createElement("div");
+    hook.rerender({ ...base, enabled: true });
+    const before = vi.mocked(PlayerController).mock.calls.length;
+    hook.rerender({ ...base, enabled: true, muted: true, autoplay: false });
+    expect(mockUpdateConfig).toHaveBeenLastCalledWith({ muted: true, autoplay: false });
+    hook.rerender({ ...base, enabled: true, muted: true, autoplay: false, debug: true });
+    expect(mockUpdateConfig).toHaveBeenLastCalledWith({ debug: true });
+    hook.rerender({ ...base, enabled: true });
+    expect(mockUpdateConfig).toHaveBeenLastCalledWith({
+      muted: false,
+      autoplay: true,
+      debug: false,
+    });
+    expect(vi.mocked(PlayerController).mock.calls.length).toBe(before);
+    hook.unmount();
   });
 
   it("dismissToast clears toast from state", () => {

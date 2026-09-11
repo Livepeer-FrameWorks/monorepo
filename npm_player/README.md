@@ -286,6 +286,32 @@ The official FrameWorks Gateway resolves the best edge node for the viewer, retu
 endpoints, and handles failover across clusters. Override `gatewayUrl` only when you run a fully
 self-hosted control plane or local Gateway preview.
 
+Gateway/provided playback URLs remain authoritative during Mist metadata hydration, polling and
+cold recovery. Mist can enrich tracks and capabilities but cannot introduce another playback
+destination or format. When compatible players on the selected URL are exhausted, Gateway mode
+requests a fresh, format-specific destination (at most three per initialization). Resolution failure
+stops that attempt rather than borrowing a URL from Mist. Set `viewerProtocol: "HLS"` to require
+that format without automatic changes; React/Svelte accept it in `options`, and the web component
+accepts `viewer-protocol="HLS"`. Direct-Mist and supplied-endpoint modes do not use this resolver.
+
+For standalone endpoint discovery, React's `useViewerEndpoints` and Svelte's
+`createEndpointResolver` accept `protocol: "HLS"` and `playbackAuth` alongside Gateway credentials.
+Both use the same resolver as the player, clear superseded destinations, and cancel pending work
+on teardown. The Svelte store also supports `update({ protocol: "DASH" })`, `refetch()` and
+`destroy()`; React resolves again when its request fields change.
+
+React, Svelte and web-component players also replace active playback when their content,
+Gateway/Mist entry, credentials or required format changes. Supply a new `endpoints` object when
+changing pre-resolved destinations; in-place mutation is not a configuration update. Equivalent
+request values do not reconnect playback. A disconnected web component waits until reconnection
+before resolving its latest configuration.
+
+React, Svelte and web-component players apply runtime `debug`, `autoplay` and `muted` changes
+without re-resolving placement or replacing the controller. Removing these options restores their
+defaults (debug/muted false, autoplay true); unchanged props do not override the viewer's own mute
+control. Autoplay updates affect subsequent attempts, not immediate play/pause. Svelte's controller
+store also accepts `updateConfig({ debug, autoplay, muted })` before or after attachment.
+
 ```ts
 createPlayer({
   target: "#player",
@@ -308,7 +334,7 @@ createPlayer({
 
 **`endpoints` (pre-resolved)**
 
-Bypasses all resolution. You provide the endpoint structure directly. The player builds a synthetic source list from the `outputs` map. Use this only when you have your own service discovery and don't want the player to contact MistServer or Gateway at all.
+Bypasses Gateway resolution. You provide the endpoint structure directly. The player builds its playback source list from the `outputs` map (or the primary URL if no outputs are supplied). It may contact the selected Mist edge for tracks and live status, but those responses cannot add or replace playback URLs. Use this when your application owns endpoint discovery.
 
 ```ts
 createPlayer({

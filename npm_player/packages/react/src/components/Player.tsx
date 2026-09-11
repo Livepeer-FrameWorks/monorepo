@@ -84,6 +84,7 @@ const PlayerInner: React.FC<PlayerProps> = ({
     contentType,
     endpoints: propsEndpoints,
     gatewayUrl: options?.gatewayUrl,
+    viewerProtocol: options?.viewerProtocol,
     mistUrl: options?.mistUrl,
     authToken: options?.authToken,
     playbackAuth: options?.playbackAuth,

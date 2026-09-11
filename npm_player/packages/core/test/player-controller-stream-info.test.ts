@@ -105,7 +105,7 @@ describe("normalizeMistSourceUrls", () => {
 });
 
 describe("PlayerController Mist edge hydration", () => {
-  it("uses gateway metadata only to pick the Mist edge stream name and base URL", async () => {
+  it("uses Mist track metadata without expanding or rewriting Gateway sources", async () => {
     const controller = new PlayerController({
       contentId: "pb_demo_live_001",
       contentType: "live",
@@ -121,7 +121,7 @@ describe("PlayerController Mist edge hydration", () => {
         outputs: {
           MP4: {
             protocol: "MP4",
-            url: "http://localhost/view/live%2Bdemo_live_stream_001.mp4?tkn=1",
+            url: "http://localhost:18090/view/live%2Bdemo_live_stream_001.mp4?tkn=1",
           },
         },
       },
@@ -169,9 +169,8 @@ describe("PlayerController Mist edge hydration", () => {
     expect(requested).toEqual(["live+demo_live_stream_001"]);
     expect((controller as any).streamInfo.source.map((s: { type: string }) => s.type)).toEqual([
       "html5/video/mp4",
-      "html5/application/vnd.apple.mpegurl",
-      "whep",
     ]);
+    expect((controller as any).streamInfo.source[0].mistDatachannels).toBe(true);
     expect((controller as any).streamInfo.source[0].url).toBe(
       "http://localhost:18090/view/live%2Bdemo_live_stream_001.mp4?tkn=1"
     );

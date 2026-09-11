@@ -6,7 +6,8 @@
  */
 
 import { TypedEventEmitter } from "./EventEmitter";
-import type { ContentEndpoints, ContentType, PlaybackAuth } from "../types";
+import type { ContentEndpoints, ContentType, PlaybackAuth, EndpointInfo } from "../types";
+import { requireViewerProtocol, viewerProtocols, type ViewerProtocol } from "./ViewerProtocol";
 
 // ============================================================================
 // Types
@@ -25,6 +26,8 @@ export interface GatewayClientConfig {
   authToken?: string;
   /** Viewer playback auth token forwarded to resolve-time access control. */
   playbackAuth?: PlaybackAuth;
+  /** Required format for destination selection; never downgraded to an unqualified query. */
+  protocol?: ViewerProtocol;
   /** Maximum retry attempts (default: 3) */
   maxRetries?: number;
   /** Initial retry delay in ms (default: 500) */
@@ -70,6 +73,14 @@ const RESOLVE_VIEWER_QUERY = `
   }
 `;
 
+const RESOLVE_VIEWER_PROTOCOL_QUERY = RESOLVE_VIEWER_QUERY.replace(
+  "$contentId: String!",
+  "$contentId: String!, $protocol: MediaViewerProtocol!"
+).replace(
+  "resolveViewerEndpoint(contentId: $contentId)",
+  "resolveViewerEndpoint(contentId: $contentId, protocol: $protocol)"
+);
+
 // ============================================================================
 // Helper Functions
 // ============================================================================
@@ -82,16 +93,47 @@ async function waitBeforeRetry(
   logPrefix: string,
   attempt: number,
   maxRetries: number,
-  initialDelay: number
+  initialDelay: number,
+  signal?: AbortSignal | null
 ): Promise<void> {
   const delay = getRetryDelay(initialDelay, attempt);
   console.warn(`[${logPrefix}] Retry ${attempt + 1}/${maxRetries - 1} after ${delay}ms`);
-  await new Promise((resolve) => setTimeout(resolve, delay));
+  await new Promise<void>((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error("Request aborted"));
+      return;
+    }
+    const cleanup = () => signal?.removeEventListener("abort", abort);
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, delay);
+    const abort = () => {
+      clearTimeout(timer);
+      cleanup();
+      reject(new Error("Request aborted"));
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+  });
 }
 
 function getFirstGraphQLError(payload: unknown): GraphQLErrorPayload | null {
   const errors = (payload as { errors?: GraphQLErrorPayload[] })?.errors;
   return Array.isArray(errors) && errors.length > 0 ? errors[0] : null;
+}
+
+function decodeEndpointOutputs(endpoint: EndpointInfo): EndpointInfo {
+  if (typeof endpoint.outputs !== "string") return endpoint;
+  let outputs: unknown;
+  try {
+    outputs = JSON.parse(endpoint.outputs);
+  } catch {
+    throw new Error("Gateway returned invalid playback outputs JSON");
+  }
+  if (!outputs || typeof outputs !== "object" || Array.isArray(outputs)) {
+    throw new Error("Gateway returned invalid playback outputs object");
+  }
+  return { ...endpoint, outputs: outputs as EndpointInfo["outputs"] };
 }
 
 function isRetryableGraphQLError(error: GraphQLErrorPayload): boolean {
@@ -127,7 +169,7 @@ async function fetchResolvePayloadWithRetry(
       }
 
       if (attempt < maxRetries - 1) {
-        await waitBeforeRetry("GatewayClient", attempt, maxRetries, initialDelay);
+        await waitBeforeRetry("GatewayClient", attempt, maxRetries, initialDelay, options.signal);
         continue;
       }
     }
@@ -140,7 +182,7 @@ async function fetchResolvePayloadWithRetry(
       lastError = new Error(`Gateway GQL error ${response.status}`);
 
       if (RETRYABLE_HTTP_STATUSES.has(response.status) && attempt < maxRetries - 1) {
-        await waitBeforeRetry("GatewayClient", attempt, maxRetries, initialDelay);
+        await waitBeforeRetry("GatewayClient", attempt, maxRetries, initialDelay, options.signal);
         continue;
       }
 
@@ -154,7 +196,7 @@ async function fetchResolvePayloadWithRetry(
       lastError = new Error(gqlError.message || "GraphQL error");
 
       if (isRetryableGraphQLError(gqlError) && attempt < maxRetries - 1) {
-        await waitBeforeRetry("GatewayClient", attempt, maxRetries, initialDelay);
+        await waitBeforeRetry("GatewayClient", attempt, maxRetries, initialDelay, options.signal);
         continue;
       }
 
@@ -192,6 +234,8 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
   private endpoints: ContentEndpoints | null = null;
   private error: string | null = null;
   private abortController: AbortController | null = null;
+  private generation = 0;
+  private destroyed = false;
 
   // F2: Request deduplication - in-flight request tracking
   private inFlightRequest: Promise<ContentEndpoints> | null = null;
@@ -219,6 +263,7 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
    * @throws Error if resolution fails after retries or circuit is open
    */
   async resolve(forceRefresh = false): Promise<ContentEndpoints> {
+    if (this.destroyed) throw new Error("Gateway client is destroyed");
     // F2: Return cached result if still valid
     if (!forceRefresh && this.endpoints && this.isCacheValid()) {
       return this.endpoints;
@@ -235,19 +280,21 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
     }
 
     // Create a new request and track it
-    this.inFlightRequest = this.doResolve();
+    const request = this.doResolve();
+    this.inFlightRequest = request;
+    const generation = this.generation;
 
     try {
-      const result = await this.inFlightRequest;
+      const result = await request;
       // F3: Success - close circuit
-      this.onSuccess();
+      if (generation === this.generation) this.onSuccess();
       return result;
     } catch (e) {
       // F3: Failure - record for circuit breaker
-      this.onFailure();
+      if (generation === this.generation) this.onFailure();
       throw e;
     } finally {
-      this.inFlightRequest = null;
+      if (this.inFlightRequest === request) this.inFlightRequest = null;
     }
   }
 
@@ -359,6 +406,7 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
       contentId,
       authToken,
       playbackAuth,
+      protocol,
       maxRetries = DEFAULT_MAX_RETRIES,
       initialDelayMs = DEFAULT_INITIAL_DELAY_MS,
     } = this.config;
@@ -370,6 +418,12 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
       const error = "Missing required parameter: contentId";
       this.setStatus("error", error);
       throw new Error(error);
+    }
+    if (
+      protocol !== undefined &&
+      !Object.prototype.hasOwnProperty.call(viewerProtocols, protocol)
+    ) {
+      throw new Error("Unsupported viewer protocol");
     }
 
     this.setStatus("loading");
@@ -390,14 +444,15 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
             ...(playbackAuth?.token ? { "X-Frameworks-Playback-JWT": playbackAuth.token } : {}),
           },
           body: JSON.stringify({
-            query: RESOLVE_VIEWER_QUERY,
-            variables: { contentId },
+            query: protocol ? RESOLVE_VIEWER_PROTOCOL_QUERY : RESOLVE_VIEWER_QUERY,
+            variables: protocol ? { contentId, protocol } : { contentId },
           }),
           signal: ac.signal,
         },
         maxRetries,
         initialDelayMs
       );
+      if (ac.signal.aborted) throw new Error("Request aborted");
 
       const resp = (payload as { data?: { resolveViewerEndpoint?: unknown } }).data
         ?.resolveViewerEndpoint as
@@ -414,11 +469,12 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
         throw new Error("No endpoints available");
       }
 
-      const endpoints: ContentEndpoints = {
-        primary,
-        fallbacks,
+      let endpoints: ContentEndpoints = {
+        primary: decodeEndpointOutputs(primary),
+        fallbacks: fallbacks.map(decodeEndpointOutputs),
         metadata: resp?.metadata,
       };
+      if (protocol) endpoints = requireViewerProtocol(endpoints, protocol);
 
       this.endpoints = endpoints;
       // F2: Update cache timestamp
@@ -444,6 +500,7 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
    * Abort any in-flight request.
    */
   abort(): void {
+    this.generation++;
     if (this.abortController) {
       this.abortController.abort();
       this.abortController = null;
@@ -493,6 +550,7 @@ export class GatewayClient extends TypedEventEmitter<GatewayClientEvents> {
    * Clean up resources.
    */
   destroy(): void {
+    this.destroyed = true;
     this.abort();
     this.removeAllListeners();
   }

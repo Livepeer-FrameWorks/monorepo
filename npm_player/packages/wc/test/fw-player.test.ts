@@ -1,7 +1,30 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { FwPlayer } from "../src/components/fw-player.js";
 
 describe("FwPlayer", () => {
+  it("restores document interaction handlers when the element reconnects", async () => {
+    const add = vi.spyOn(document, "addEventListener");
+    const remove = vi.spyOn(document, "removeEventListener");
+    const player = new FwPlayer() as any;
+    vi.spyOn(player.pc, "attach").mockResolvedValue(undefined);
+    document.body.appendChild(player);
+    await player.updateComplete;
+    player.remove();
+    document.body.appendChild(player);
+    await player.updateComplete;
+    for (const [event, handler] of [
+      ["pointerdown", player._handleDocumentPointerDown],
+      ["contextmenu", player._handleDocumentContextMenu],
+      ["keydown", player._handleDocumentKeyDown],
+    ]) {
+      expect(
+        add.mock.calls.filter((call) => call[0] === event && call[1] === handler)
+      ).toHaveLength(2);
+      expect(remove).toHaveBeenCalledWith(event, handler);
+    }
+    player.remove();
+  });
+
   it("is a class that extends HTMLElement", () => {
     expect(FwPlayer).toBeDefined();
     expect(FwPlayer.prototype instanceof HTMLElement).toBe(true);

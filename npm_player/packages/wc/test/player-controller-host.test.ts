@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ReactiveControllerHost } from "lit";
 import { PlayerControllerHost } from "../src/controllers/player-controller-host.js";
+import { PlayerController } from "@livepeer-frameworks/player-core";
 import {
   WRAPPER_PARITY_ACTION_METHODS,
   WRAPPER_PARITY_INITIAL_STATE,
@@ -27,6 +28,24 @@ describe("PlayerControllerHost", () => {
 
   it("registers itself with the host on construction", () => {
     expect((host as any).addController).toHaveBeenCalledWith(pc);
+  });
+
+  it("updates only changed runtime options without replacing placement", async () => {
+    const attach = vi.spyOn(PlayerController.prototype, "attach").mockResolvedValue(undefined);
+    const update = vi.spyOn(PlayerController.prototype, "updateConfig");
+    const base = { contentId: "playback", viewerProtocol: "HLS" as const };
+    pc.configure(base);
+    await pc.attach(document.createElement("div"));
+    pc.configure({ ...base, muted: true, autoplay: false });
+    expect(update).toHaveBeenLastCalledWith({ muted: true, autoplay: false });
+    expect(pc.s.isMuted).toBe(true);
+    pc.configure({ ...base, muted: true, autoplay: false, debug: true });
+    expect(update).toHaveBeenLastCalledWith({ debug: true });
+    pc.configure(base);
+    expect(update).toHaveBeenLastCalledWith({ muted: false, autoplay: true, debug: false });
+    expect(pc.s.isMuted).toBe(false);
+    expect(attach).toHaveBeenCalledOnce();
+    pc.hostDisconnected();
   });
 
   it("has correct initial state", () => {
@@ -108,5 +127,64 @@ describe("PlayerControllerHost", () => {
       controls: true,
     });
     expect((pc as any).currentConfig).not.toBeNull();
+  });
+
+  it("replaces a pending controller and clears stale state when placement inputs change", async () => {
+    const attach = vi
+      .spyOn(PlayerController.prototype, "attach")
+      .mockImplementation(() => new Promise(() => {}));
+    pc.configure({ contentId: "playback", viewerProtocol: "HLS", playbackAuth: { token: "old" } });
+    void pc.attach(document.createElement("div"));
+    const previous = (pc as any).controller;
+    pc.s.error = "old error";
+    pc.configure({ contentId: "playback", viewerProtocol: "DASH", playbackAuth: { token: "new" } });
+    expect(attach).toHaveBeenCalledTimes(2);
+    expect(previous.isDestroyed).toBe(true);
+    expect((pc as any).controller.config).toMatchObject({
+      viewerProtocol: "DASH",
+      playbackAuth: { token: "new" },
+    });
+    expect(pc.s.error).toBeNull();
+    pc.hostDisconnected();
+  });
+
+  it("updates display settings without reconnecting an equivalent request", async () => {
+    const attach = vi.spyOn(PlayerController.prototype, "attach").mockResolvedValue(undefined);
+    const update = vi.spyOn(PlayerController.prototype, "updateConfig");
+    pc.configure({ contentId: "playback", viewerProtocol: "HLS", playbackAuth: { token: "same" } });
+    await pc.attach(document.createElement("div"));
+    pc.configure({
+      contentId: "playback",
+      viewerProtocol: "HLS",
+      playbackAuth: { token: "same" },
+      debug: true,
+    });
+    expect(attach).toHaveBeenCalledTimes(1);
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ debug: true }));
+    pc.hostDisconnected();
+  });
+
+  it("does not reconnect while disconnected and resumes with the latest request", async () => {
+    const attach = vi.spyOn(PlayerController.prototype, "attach").mockResolvedValue(undefined);
+    pc.configure({ contentId: "old", viewerProtocol: "HLS" });
+    await pc.attach(document.createElement("div"));
+    pc.hostDisconnected();
+    pc.configure({ contentId: "new", viewerProtocol: "DASH" });
+    expect(attach).toHaveBeenCalledTimes(1);
+    pc.hostConnected();
+    expect(attach).toHaveBeenCalledTimes(2);
+    expect((pc as any).controller.config).toMatchObject({
+      contentId: "new",
+      viewerProtocol: "DASH",
+    });
+    pc.hostDisconnected();
+  });
+
+  it("forwards the required viewer format when constructing the controller", async () => {
+    vi.spyOn(PlayerController.prototype, "attach").mockResolvedValue(undefined);
+    pc.configure({ contentId: "test", viewerProtocol: "HLS" });
+    await pc.attach(document.createElement("div"));
+    expect((pc as any).controller.config.viewerProtocol).toBe("HLS");
+    pc.hostDisconnected();
   });
 });

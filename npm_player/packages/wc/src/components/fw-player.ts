@@ -17,6 +17,7 @@ import {
 } from "../icons/index.js";
 import type {
   ContentEndpoints,
+  ViewerProtocol,
   PlaybackMode,
   FwThemePreset,
   FwThemeOverrides,
@@ -31,6 +32,7 @@ export class FwPlayer extends LitElement {
   @property({ attribute: "content-id" }) contentId = "";
   @property({ attribute: "content-type" }) contentType?: "live" | "dvr" | "clip" | "vod";
   @property({ attribute: "gateway-url" }) gatewayUrl?: string;
+  @property({ attribute: "viewer-protocol" }) viewerProtocol?: ViewerProtocol;
   @property({ attribute: "mist-url" }) mistUrl?: string;
   @property({ attribute: "auth-token" }) authToken?: string;
   @property({ attribute: "playback-token" }) playbackToken?: string;
@@ -144,6 +146,7 @@ export class FwPlayer extends LitElement {
       changed.has("contentId") ||
       changed.has("contentType") ||
       changed.has("gatewayUrl") ||
+      changed.has("viewerProtocol") ||
       changed.has("mistUrl") ||
       changed.has("authToken") ||
       changed.has("playbackToken") ||
@@ -169,6 +172,7 @@ export class FwPlayer extends LitElement {
         contentType: this.contentType,
         endpoints: this.endpoints,
         gatewayUrl: this.gatewayUrl,
+        viewerProtocol: this.viewerProtocol,
         mistUrl: this.mistUrl,
         authToken: this.authToken,
         playbackAuth: this.playbackToken
@@ -192,8 +196,10 @@ export class FwPlayer extends LitElement {
 
   protected firstUpdated() {
     this.pc.attach(this._containerEl);
+  }
 
-    // Close context menu on outside click
+  connectedCallback() {
+    super.connectedCallback();
     document.addEventListener("pointerdown", this._handleDocumentPointerDown);
     document.addEventListener("contextmenu", this._handleDocumentContextMenu);
     document.addEventListener("keydown", this._handleDocumentKeyDown);

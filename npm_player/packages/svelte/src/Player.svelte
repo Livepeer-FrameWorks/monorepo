@@ -3,7 +3,7 @@
   Thin wrapper over PlayerController from @livepeer-frameworks/player-core
 -->
 <script lang="ts">
-  import { onMount, setContext, type Snippet } from "svelte";
+  import { onDestroy, untrack, setContext, type Snippet } from "svelte";
   import IdleScreen from "./IdleScreen.svelte";
   import LoadingPoster from "./LoadingPoster.svelte";
   import SubtitleRenderer from "./SubtitleRenderer.svelte";
@@ -56,6 +56,7 @@
     endpoints?: ContentEndpoints;
     options?: {
       gatewayUrl?: string;
+      viewerProtocol?: import("@livepeer-frameworks/player-core").ViewerProtocol;
       mistUrl?: string;
       authToken?: string;
       playbackAuth?: import("@livepeer-frameworks/player-core").PlaybackAuth;
@@ -205,7 +206,7 @@
   // ============================================================================
   // PlayerController Store - ALL business logic
   // ============================================================================
-  let playerStore: PlayerControllerStore | null = $state(null);
+  let playerStore: PlayerControllerStore | null = $state.raw(null);
   let storeState = $state({
     state: "booting" as PlayerState,
     streamState: null as any,
@@ -249,9 +250,6 @@
     shouldShowLoadingPoster: false,
   });
 
-  // Track if we've already attached to prevent double-attach race
-  let hasAttached = false;
-
   // Debug helper
   const debug = (msg: string) => {
     if (options?.debug) {
@@ -259,80 +257,112 @@
     }
   };
 
-  // Create store on mount
-  onMount(() => {
-    debug(`onMount - contentId: ${contentId}, contentType: ${contentType}`);
-    debug(`onMount - gatewayUrl: ${options?.gatewayUrl}, mistUrl: ${options?.mistUrl}`);
-    debug(`onMount - endpoints: ${endpoints ? "provided" : "not provided"}`);
+  let activeRequest: Record<string, unknown> | null = null;
+  let activeContainer: HTMLElement | null = null;
+  let cleanupPlayer: (() => void) | undefined;
+  let appliedRuntimeOptions: { debug: boolean; autoplay: boolean; muted: boolean } | null = null;
+  onDestroy(() => cleanupPlayer?.());
 
-    playerStore = createPlayerControllerStore({
+  $effect(() => {
+    const container = containerRef;
+    const request = {
       contentId,
       contentType,
       endpoints,
+      poster: thumbnailUrl || undefined,
       gatewayUrl: options?.gatewayUrl,
       mistUrl: options?.mistUrl,
+      viewerProtocol: options?.viewerProtocol,
       authToken: options?.authToken,
-      playbackAuth: options?.playbackAuth,
-      telemetry: options?.telemetry,
-      telemetryUrl: options?.telemetryUrl,
-      locale: options?.locale,
-      translations: options?.translations,
-      autoplay: options?.autoplay !== false,
-      muted: options?.muted === true,
-      controls: options?.stockControls === true,
-      poster: thumbnailUrl || undefined,
-      animatePreroll: options?.animatePreroll,
-      debug: options?.debug,
-      forcePlayer: options?.forcePlayer,
-      forceType: options?.forceType,
-      forceSource: options?.forceSource,
-      playbackMode: options?.playbackMode,
-    });
-
-    debug("playerStore created");
-
-    // Subscribe to store state
-    let prevMetadata: PlayerMetadata | null = null;
-    const unsubscribe = playerStore.subscribe((state) => {
-      storeState = state;
-      // Forward state changes to prop callback
-      if (onStateChange && state.state) {
-        onStateChange(state.state);
-      }
-      // Forward metadata changes to prop callback
-      if (onMetadata && state.metadata && state.metadata !== prevMetadata) {
-        prevMetadata = state.metadata;
-        onMetadata(state.metadata);
-      }
-    });
-
-    return () => {
-      debug("cleanup - destroying playerStore");
-      unsubscribe();
-      playerStore?.destroy();
-      playerStore = null;
-      hasAttached = false;
+      playbackToken: options?.playbackAuth?.token,
+      playbackTransport: options?.playbackAuth?.transport,
     };
+    if (!container) return;
+    untrack(() => {
+      if (
+        activeContainer === container &&
+        activeRequest &&
+        Object.entries(request).every(([key, value]) => activeRequest![key] === value)
+      )
+        return;
+      cleanupPlayer?.();
+      activeRequest = request;
+      activeContainer = container;
+      const { playbackToken, playbackTransport, ...requestConfig } = request;
+      debug(`resolve - contentId: ${contentId}, contentType: ${contentType}`);
+      debug(`resolve - gatewayUrl: ${options?.gatewayUrl}, mistUrl: ${options?.mistUrl}`);
+      debug(`resolve - endpoints: ${endpoints ? "provided" : "not provided"}`);
+
+      const nextStore = createPlayerControllerStore({
+        ...requestConfig,
+        playbackAuth: playbackToken
+          ? { token: playbackToken, transport: playbackTransport }
+          : undefined,
+        telemetry: options?.telemetry,
+        telemetryUrl: options?.telemetryUrl,
+        locale: options?.locale,
+        translations: options?.translations,
+        autoplay: options?.autoplay !== false,
+        muted: options?.muted === true,
+        controls: options?.stockControls === true,
+        animatePreroll: options?.animatePreroll,
+        debug: options?.debug,
+        forcePlayer: options?.forcePlayer,
+        forceType: options?.forceType,
+        forceSource: options?.forceSource,
+        playbackMode: options?.playbackMode,
+      });
+      appliedRuntimeOptions = {
+        debug: options?.debug === true,
+        autoplay: options?.autoplay !== false,
+        muted: options?.muted === true,
+      };
+      playerStore = nextStore;
+
+      debug("playerStore created");
+
+      // Subscribe to store state
+      let prevMetadata: PlayerMetadata | null = null;
+      const unsubscribe = nextStore.subscribe((state) => {
+        storeState = state;
+        // Forward state changes to prop callback
+        if (onStateChange && state.state) {
+          onStateChange(state.state);
+        }
+        // Forward metadata changes to prop callback
+        if (onMetadata && state.metadata && state.metadata !== prevMetadata) {
+          prevMetadata = state.metadata;
+          onMetadata(state.metadata);
+        }
+      });
+      void nextStore.attach(container).catch((err) => {
+        if (playerStore === nextStore) console.error("[Player.svelte] attach failed:", err);
+      });
+
+      cleanupPlayer = () => {
+        debug("cleanup - destroying playerStore");
+        unsubscribe();
+        nextStore.destroy();
+        if (playerStore === nextStore) playerStore = null;
+      };
+    });
   });
 
-  // Attach when container becomes available (only once)
   $effect(() => {
-    debug(
-      `$effect - containerRef: ${!!containerRef}, playerStore: ${!!playerStore}, hasAttached: ${hasAttached}`
-    );
-    if (containerRef && playerStore && !hasAttached) {
-      hasAttached = true;
-      debug("attaching to container");
-      playerStore
-        .attach(containerRef)
-        .then(() => {
-          debug("attach completed");
-        })
-        .catch((err) => {
-          debug(`attach failed: ${err}`);
-          console.error("[Player.svelte] attach failed:", err);
-        });
+    const store = playerStore;
+    const next = {
+      debug: options?.debug === true,
+      autoplay: options?.autoplay !== false,
+      muted: options?.muted === true,
+    };
+    if (!store || !appliedRuntimeOptions) return;
+    const changed: Partial<typeof next> = {};
+    for (const key of ["debug", "autoplay", "muted"] as const) {
+      if (next[key] !== appliedRuntimeOptions[key]) changed[key] = next[key];
     }
+    appliedRuntimeOptions = next;
+    // Unchanged props must not undo a viewer's own mute control.
+    if (Object.keys(changed).length) untrack(() => store.updateConfig(changed));
   });
 
   // Auto-dismiss toast after 3 seconds

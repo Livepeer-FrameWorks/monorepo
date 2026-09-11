@@ -10,6 +10,7 @@
 
 import { TypedEventEmitter } from "./EventEmitter";
 import { DEFAULT_GATEWAY_URL, GatewayClient } from "./GatewayClient";
+import { canonicalViewerProtocol, type ViewerProtocol } from "./ViewerProtocol";
 import { StreamStateClient } from "./StreamStateClient";
 import type { PlayerManager, PlayerManagerEvents } from "./PlayerManager";
 import { globalPlayerManager, ensurePlayersRegistered } from "./PlayerRegistry";
@@ -137,6 +138,8 @@ export interface PlayerControllerConfig {
 
   /** Gateway URL (for FrameWorks Gateway resolution). Defaults to the official FrameWorks Gateway. */
   gatewayUrl?: string;
+  /** Require one Gateway playback format; automatic fallback cannot change this requirement. */
+  viewerProtocol?: ViewerProtocol;
   /** Direct MistServer base URL (bypasses Gateway, fetches json_{contentId}.js directly) */
   mistUrl?: string;
   /** Auth token for Gateway GraphQL resolution (NOT viewer playback auth) */
@@ -587,7 +590,7 @@ export function buildStreamInfoFromEndpoints(
     // Fallback: single primary URL
     sources.push({
       url: primary.url,
-      type: primary.protocol || "mist/html",
+      type: getMimeTypeForProtocol(primary.protocol || "MIST_HTML"),
       streamName: contentId,
     } as StreamSource);
   }
@@ -674,6 +677,9 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private suppressPlayPauseEventsUntil = 0;
 
   private gatewayClient: GatewayClient | null = null;
+  private endpointSourceAuthority = false;
+  private endpointResolutionEpoch = 0;
+  private attemptedViewerProtocols = new Set<string>();
   private streamStateClient: StreamStateClient | null = null;
   private playerManager: PlayerManager;
 
@@ -908,15 +914,18 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
     this.setState("booting");
 
+    let resolutionEpoch = this.endpointResolutionEpoch;
     try {
       // Ensure players are registered
       ensurePlayersRegistered();
 
       // Resolve playback endpoints before creating the stream client.
-      await this.resolveEndpoints();
+      const resolution = this.resolveEndpoints();
+      resolutionEpoch = this.endpointResolutionEpoch;
+      await resolution;
 
       // Guard against zombie operations (React Strict Mode cleanup)
-      if (this.isDestroyed || !this.container) {
+      if (this.isDestroyed || !this.container || this.endpointResolutionEpoch !== resolutionEpoch) {
         this.log("[attach] Aborted - controller destroyed during endpoint resolution");
         return;
       }
@@ -951,6 +960,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
       await this.initializePlayer();
     } catch (error) {
+      if (this.isDestroyed || this.endpointResolutionEpoch !== resolutionEpoch) return;
       const message = error instanceof Error ? error.message : "Unknown error";
       // Don't emit error for offline streams — the idle screen handles that UX.
       // Emitting here creates stale _displayedError that resurfaces when stream comes online.
@@ -988,6 +998,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
    * The controller can be re-attached to a new container.
    */
   detach(): void {
+    this.endpointResolutionEpoch++;
     // Close any open boot trace before state is torn down. No-op if a first
     // frame already finalized it; otherwise reports abandoned/error.
     this.bootTracer?.abandon();
@@ -3027,9 +3038,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     }
     if (partialConfig.muted !== undefined) {
       this.config.muted = partialConfig.muted;
-      if (this.videoElement) {
-        this.videoElement.muted = partialConfig.muted;
-      }
+      this.setMuted(partialConfig.muted);
+      this.emit("muteChange", { muted: partialConfig.muted });
     }
   }
 
@@ -3163,6 +3173,10 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
 
   private async resolveEndpoints(): Promise<void> {
     const { endpoints, gatewayUrl, mistUrl, contentId, authToken } = this.config;
+    this.endpointResolutionEpoch++;
+    const epoch = this.endpointResolutionEpoch;
+    this.attemptedViewerProtocols.clear();
+    this.endpointSourceAuthority = Boolean(endpoints?.primary) || !mistUrl;
 
     // Priority 1: Use pre-resolved endpoints if provided
     if (endpoints?.primary) {
@@ -3172,6 +3186,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       this.detectThumbnailVttUrl();
       this.detectPreviewUrl();
       await this.hydrateFromSelectedMistEdge(contentId);
+      if (this.isDestroyed || this.endpointResolutionEpoch !== epoch) return;
       this.setState("gateway_ready", { gatewayStatus: "ready" });
       return;
     }
@@ -3183,7 +3198,12 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     }
 
     // Priority 3: Gateway resolution
-    await this.resolveFromGateway(gatewayUrl?.trim() || DEFAULT_GATEWAY_URL, contentId, authToken);
+    await this.resolveFromGateway(
+      gatewayUrl?.trim() || DEFAULT_GATEWAY_URL,
+      contentId,
+      authToken,
+      this.config.viewerProtocol ?? (this.playbackAuthHeaders() ? "HLS" : undefined)
+    );
   }
 
   /**
@@ -3191,10 +3211,13 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
    * Fetches json_{contentId}.js and builds ContentEndpoints from source array
    */
   private async resolveFromMistServer(mistUrl: string, contentId: string): Promise<void> {
+    this.endpointSourceAuthority = false;
+    const epoch = this.endpointResolutionEpoch;
     this.setState("gateway_loading", { gatewayStatus: "loading" });
 
     try {
       const data = await this.fetchMistStreamInfo(mistUrl, contentId, "resolveFromMistServer");
+      if (this.isDestroyed || this.endpointResolutionEpoch !== epoch) return;
 
       if (data.error) {
         throw new Error(data.error);
@@ -3231,6 +3254,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       this.setState("gateway_ready", { gatewayStatus: "ready" });
       this.log(`[resolveFromMistServer] ${sources.length} sources, ${tracks.length} tracks`);
     } catch (error) {
+      if (this.isDestroyed || this.endpointResolutionEpoch !== epoch) return;
       const message = error instanceof Error ? error.message : "MistServer resolution failed";
       this.setState("gateway_error", { gatewayStatus: "error", error: message });
       throw error;
@@ -3279,7 +3303,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     this.log(
       `[${logScope}] capa.datachannels=${String(mistDatachannelsRaw)} normalized=${String(mistDatachannels)}`
     );
-    const sources: StreamSource[] = Array.isArray(data.source)
+    const observedSources: StreamSource[] = Array.isArray(data.source)
       ? (normalizeMistSourceUrls(
           (data.source as MistStreamSource[]).map((s) => ({
             ...s,
@@ -3288,6 +3312,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
           mistBaseUrl
         ) ?? [])
       : [];
+    const sources = this.selectPlaybackSources(observedSources);
     if (sources.length === 0) {
       throw new Error("No sources available from MistServer");
     }
@@ -3309,6 +3334,21 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     });
 
     return { sources, tracks };
+  }
+
+  // Mist supplies live metadata, not authority to add destinations to a
+  // Gateway/provided endpoint set. Only direct-Mist mode discovers source URLs.
+  private selectPlaybackSources(observed: StreamSource[]): StreamSource[] {
+    if (!this.endpointSourceAuthority) return observed;
+    const selected = this.endpoints ? (this.buildStreamInfo(this.endpoints)?.source ?? []) : [];
+    return selected.map((source) => {
+      const metadata = observed.find((item) => item.type === source.type);
+      const previous = this.streamInfo?.source.find(
+        (item) => item.type === source.type && item.url === source.url
+      );
+      const mistDatachannels = metadata?.mistDatachannels ?? previous?.mistDatachannels;
+      return mistDatachannels === undefined ? source : { ...source, mistDatachannels };
+    });
   }
 
   /**
@@ -3365,28 +3405,49 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private async resolveFromGateway(
     gatewayUrl: string,
     contentId: string,
-    authToken?: string
+    authToken?: string,
+    protocol?: ViewerProtocol
   ): Promise<void> {
+    this.endpointSourceAuthority = true;
+    const epoch = this.endpointResolutionEpoch;
     this.setState("gateway_loading", { gatewayStatus: "loading" });
 
-    this.gatewayClient = new GatewayClient({
+    const gatewayClient = new GatewayClient({
       gatewayUrl,
       contentId,
       authToken,
       playbackAuth: this.config.playbackAuth,
+      protocol,
     });
+    this.gatewayClient = gatewayClient;
+    const isCurrent = () =>
+      !this.isDestroyed &&
+      this.endpointResolutionEpoch === epoch &&
+      this.gatewayClient === gatewayClient;
 
     // Subscribe to status changes
-    const unsub = this.gatewayClient.on("statusChange", ({ status, error }) => {
+    const unsub = gatewayClient.on("statusChange", ({ status, error }) => {
+      if (!isCurrent()) return;
       if (status === "error") {
         this.setState("gateway_error", { gatewayStatus: status, error });
       }
     });
     this.cleanupFns.push(unsub);
-    this.cleanupFns.push(() => this.gatewayClient?.destroy());
+    this.cleanupFns.push(() => {
+      gatewayClient.destroy();
+      if (this.gatewayClient === gatewayClient) this.gatewayClient = null;
+    });
 
     try {
-      this.endpoints = await this.gatewayClient.resolve();
+      const endpoints = await gatewayClient.resolve();
+      if (!isCurrent()) return;
+      this.endpoints = endpoints;
+      const selectedProtocol = canonicalViewerProtocol(endpoints.primary.protocol);
+      if (selectedProtocol) this.attemptedViewerProtocols.add(selectedProtocol);
+      this.streamStateClient?.destroy();
+      this.streamStateClient = null;
+      this.streamInfo = null;
+      this.mistTracks = null;
       // Split the GraphQL resolve from Mist hydration in the boot waterfall.
       this.bootTracer?.mark("gateway_resolved");
       this.applyPlaybackAuthToEndpoints();
@@ -3396,8 +3457,10 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       this.detectThumbnailVttUrl();
       this.detectPreviewUrl();
       await this.hydrateFromSelectedMistEdge(contentId);
+      if (!isCurrent()) return;
       this.setState("gateway_ready", { gatewayStatus: "ready" });
     } catch (error) {
+      if (!isCurrent()) return;
       const message = error instanceof Error ? error.message : "Gateway resolution failed";
       this.setState("gateway_error", { gatewayStatus: "error", error: message });
       throw error;
@@ -3418,11 +3481,53 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     }
   }
 
+  private async resolveNextViewerFormat(): Promise<StreamInfo | null> {
+    if (
+      this.isDestroyed ||
+      !this.container ||
+      !this.gatewayClient ||
+      this.config.endpoints?.primary ||
+      this.config.mistUrl ||
+      this.config.viewerProtocol
+    )
+      return null;
+    const order: ViewerProtocol[] =
+      this.config.playbackMode === "vod" || this.config.playbackMode === "quality"
+        ? ["HLS", "DASH", "MP4", "WEBRTC", "MEWS", "WHEP"]
+        : ["HLS", "DASH", "MEWS", "WHEP", "WEBRTC", "RAW_WS"];
+    const supported = new Set(
+      this.playerManager.getRegisteredPlayers().flatMap((player) => player.capability.mimes)
+    );
+    const next = order.find((protocol) => {
+      const canonical = canonicalViewerProtocol(protocol)!;
+      if (this.attemptedViewerProtocols.has(canonical)) return false;
+      const mime = getMimeTypeForProtocol(protocol === "WEBRTC" ? "MIST_WEBRTC" : protocol);
+      if (!supported.has(mime)) return false;
+      return !this.playbackAuthHeaders() || sourceCanCarryPlaybackHeaders({ type: mime, url: "" });
+    });
+    if (!next) return null;
+    this.attemptedViewerProtocols.add(canonicalViewerProtocol(next)!);
+    const epoch = this.endpointResolutionEpoch;
+    await this.resolveFromGateway(
+      this.config.gatewayUrl?.trim() || DEFAULT_GATEWAY_URL,
+      this.config.contentId,
+      this.config.authToken,
+      next
+    );
+    if (this.isDestroyed || this.endpointResolutionEpoch !== epoch || !this.endpoints) return null;
+    this.streamInfo = this.streamInfo ?? this.buildStreamInfo(this.endpoints);
+    this.startStreamStatePolling();
+    return this.streamInfo;
+  }
+
   private getMistStreamName(fallbackContentId: string = this.config.contentId): string {
     return this.getMetadata()?.contentId || fallbackContentId;
   }
 
   private async hydrateFromSelectedMistEdge(contentId: string): Promise<void> {
+    this.endpointSourceAuthority = true;
+    const selectedEndpoints = this.endpoints;
+    const epoch = this.endpointResolutionEpoch;
     const mistBaseUrl = this.getSelectedMistBaseUrl();
     if (!mistBaseUrl) return;
 
@@ -3434,6 +3539,12 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       for (const candidate of candidates) {
         try {
           const data = await this.fetchMistStreamInfo(mistBaseUrl, candidate, "resolveFromGateway");
+          if (
+            this.isDestroyed ||
+            this.endpointResolutionEpoch !== epoch ||
+            this.endpoints !== selectedEndpoints
+          )
+            return;
           if (data.error) {
             throw new Error(data.error);
           }
@@ -3449,6 +3560,12 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
           );
           return;
         } catch (error) {
+          if (
+            this.isDestroyed ||
+            this.endpointResolutionEpoch !== epoch ||
+            this.endpoints !== selectedEndpoints
+          )
+            return;
           lastError = error;
         }
       }
@@ -3498,9 +3615,17 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       sessionParam: () =>
         this.clientSessionId ? { name: "fwsid", value: this.clientSessionId } : null,
     });
+    const pollingClient = this.streamStateClient;
+    const epoch = this.endpointResolutionEpoch;
 
     // Subscribe to state changes
     const unsubState = this.streamStateClient.on("stateChange", ({ state }) => {
+      if (
+        this.isDestroyed ||
+        this.endpointResolutionEpoch !== epoch ||
+        this.streamStateClient !== pollingClient
+      )
+        return;
       const wasOnline = this._prevStreamIsOnline;
       const isNowOnline = state.isOnline;
 
@@ -3514,7 +3639,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
         ) as StreamSource[];
         this.streamInfo.source = this.applyPlaybackAuthToStreamInfo({
           ...this.streamInfo,
-          source: normalizedSources,
+          source: this.selectPlaybackSources(normalizedSources),
         })!.source;
       }
 
@@ -3523,6 +3648,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       if (state.streamInfo?.meta?.tracks && this.streamInfo) {
         const mistTracks = this.parseMistTracks(state.streamInfo.meta.tracks);
         if (mistTracks.length > 0) {
+          this.mistTracks = mistTracks;
           this.streamInfo.meta.tracks = mistTracks;
           this.log(`[stateChange] Updated ${mistTracks.length} tracks from MistServer`);
 
@@ -3569,8 +3695,8 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     });
     this.cleanupFns.push(unsubState);
     this.cleanupFns.push(() => {
-      this.streamStateClient?.destroy();
-      this.streamStateClient = null;
+      pollingClient.destroy();
+      if (this.streamStateClient === pollingClient) this.streamStateClient = null;
     });
 
     this.streamStateClient.start();
@@ -3580,6 +3706,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     streamInfo: MistStreamInfo | undefined
   ): Promise<void> {
     if (!this.container) return;
+    const epoch = this.endpointResolutionEpoch;
 
     // Stream came online. If the viewer never reached first frame, this is the
     // real boot — re-anchor a fresh trace at wake so the offline wait doesn't
@@ -3597,7 +3724,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       try {
         await this._initializePlayerInFlight;
       } catch {}
-      if (!this.container || this.isDestroyed) return;
+      if (!this.container || this.isDestroyed || this.endpointResolutionEpoch !== epoch) return;
       if (this.currentPlayer && this.videoElement && this.state !== "error") {
         this.bootTracer?.attachVideo(this.videoElement);
         await this.attemptConfiguredAutoplay(this.videoElement, "online transition", 0);
@@ -3622,7 +3749,11 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
           ? "Stream came online after media element error, refreshing player attach"
           : "Stream came online, refreshing player attach from Mist state"
       );
-      if (streamInfo?.source && Array.isArray(streamInfo.source) && streamInfo.source.length > 0) {
+      if (
+        streamInfo &&
+        ((this.endpointSourceAuthority && this.endpoints?.primary) ||
+          (Array.isArray(streamInfo.source) && streamInfo.source.length > 0))
+      ) {
         await this.initializeLateFromStreamState(streamInfo);
         return;
       }
@@ -3856,11 +3987,12 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   private async initializeLateFromStreamState(
     streamInfo: MistStreamInfo | undefined
   ): Promise<void> {
-    if (
-      !streamInfo?.source ||
-      !Array.isArray(streamInfo.source) ||
-      streamInfo.source.length === 0
-    ) {
+    const epoch = this.endpointResolutionEpoch;
+    const endpoints = this.endpoints;
+    const isCurrent = () =>
+      !this.isDestroyed && this.endpointResolutionEpoch === epoch && this.endpoints === endpoints;
+    const observed = Array.isArray(streamInfo?.source) ? streamInfo.source : [];
+    if (!streamInfo || (observed.length === 0 && !this.endpointSourceAuthority)) {
       this.log("[initializeLateFromStreamState] No sources in stream info");
       return;
     }
@@ -3878,15 +4010,15 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       } catch {
         // Ignore stale player cleanup failures during cold-start recovery.
       }
-      if (this.container) {
-        this.container.innerHTML = "";
-      }
+      if (!isCurrent() || !this.container) return;
+      this.container.innerHTML = "";
       this.videoElement = null;
       this.currentPlayer = null;
 
-      const sources =
-        normalizeMistSourceUrls(streamInfo.source as StreamSource[], mistUrl) ??
-        (streamInfo.source as StreamSource[]);
+      const observedSources =
+        normalizeMistSourceUrls(observed as StreamSource[], mistUrl) ??
+        (observed as StreamSource[]);
+      const sources = this.selectPlaybackSources(observedSources);
       const contentId = this.config.contentId;
 
       let tracks: StreamTrack[] = [];
@@ -3905,22 +4037,23 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
         type: streamInfo.type === "vod" ? "vod" : "live",
       });
 
-      const httpSources = sources.filter((s) => !s.url.startsWith("ws://"));
-      const primarySource =
-        httpSources.length > 0 ? this.selectBestSource(httpSources) : sources[0];
-
-      this.endpoints = {
-        primary: {
-          nodeId: `mist-${contentId}`,
-          protocol: this.mapMistTypeToProtocol(primarySource.type),
-          url: primarySource.url,
-          baseUrl: mistUrl,
-          outputs: {},
-        },
-        fallbacks: [],
-      };
+      if (!this.endpointSourceAuthority && sources.length > 0) {
+        const httpSources = sources.filter((s) => !s.url.startsWith("ws://"));
+        const primarySource =
+          httpSources.length > 0 ? this.selectBestSource(httpSources) : sources[0];
+        this.endpoints = {
+          primary: {
+            nodeId: `mist-${contentId}`,
+            protocol: this.mapMistTypeToProtocol(primarySource.type),
+            url: primarySource.url,
+            baseUrl: mistUrl,
+            outputs: {},
+          },
+          fallbacks: [],
+        };
+      }
       this.applyPlaybackAuthToEndpoints();
-      this.setMetadataSeed(this.endpoints.metadata ?? null);
+      this.setMetadataSeed(this.endpoints?.metadata ?? null);
       this.detectThumbnailVttUrl();
       this.detectPreviewUrl();
 
@@ -3938,6 +4071,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       await this.initializePlayer();
       this.log("[initializeLateFromStreamState] Player initialized successfully");
     } catch (error) {
+      if (this.isDestroyed || this.endpointResolutionEpoch !== epoch) return;
       const message = error instanceof Error ? error.message : "Late initialization failed";
       this.log(`[initializeLateFromStreamState] Failed: ${message}`);
       this.setState("error", { error: message });
@@ -4322,6 +4456,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
   }
 
   private async initializePlayer(): Promise<void> {
+    const epoch = this.endpointResolutionEpoch;
     const container = this.container;
     const streamInfo = this.streamInfo;
 
@@ -4365,7 +4500,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       playbackHeaders: this.playbackAuthHeaders(),
       onReady: (el) => {
         // Guard against zombie callbacks after destroy
-        if (this.isDestroyed || !this.container) {
+        if (this.isDestroyed || !this.container || this.endpointResolutionEpoch !== epoch) {
           this.log("[initializePlayer] onReady callback aborted - controller destroyed");
           return;
         }
@@ -4416,7 +4551,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
         }
       },
       onTimeUpdate: (_t) => {
-        if (this.isDestroyed) return;
+        if (this.isDestroyed || this.endpointResolutionEpoch !== epoch) return;
         // Defensive: keep video element attached even if some other lifecycle cleared the container.
         // (Playback can continue even when detached, which looks like "audio only".)
         try {
@@ -4434,7 +4569,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
         });
       },
       onError: (err) => {
-        if (this.isDestroyed) return;
+        if (this.isDestroyed || this.endpointResolutionEpoch !== epoch) return;
         const message = typeof err === "string" ? err : String(err);
         // Use setPassiveError for smart error handling with fallback support. QoE
         // fatal is recorded only there, on the terminal (fallback-exhausted) path —
@@ -4455,6 +4590,13 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       forceSource: pendingForce?.forceSource ?? this.config.forceSource,
       // Playback mode is a persistent preference
       playbackMode: this.config.playbackMode,
+      resolveFallback:
+        this.gatewayClient && !this.config.viewerProtocol
+          ? async () => {
+              if (this.isDestroyed || this.endpointResolutionEpoch !== epoch) return null;
+              return this.resolveNextViewerFormat();
+            }
+          : undefined,
     };
 
     this.log(`[initializePlayer] Calling playerManager.initializePlayer...`);
@@ -4471,6 +4613,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       );
       this._initializePlayerInFlight = initializePromise;
       const initializedElement = await initializePromise;
+      if (this.isDestroyed || this.endpointResolutionEpoch !== epoch) return;
       if (!this.videoElement && initializedElement) {
         this.videoElement = initializedElement;
       }

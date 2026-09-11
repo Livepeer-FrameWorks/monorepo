@@ -115,6 +115,8 @@ export class PlayerControllerHost implements ReactiveController {
   private controller: PlayerController | null = null;
   private unsubs: Array<() => void> = [];
   private currentConfig: PlayerControllerConfig | null = null;
+  private container: HTMLDivElement | null = null;
+  private connected = true;
 
   s: PlayerControllerHostState = { ...initialState };
 
@@ -135,18 +137,53 @@ export class PlayerControllerHost implements ReactiveController {
   // ---- Configuration & Lifecycle ----
 
   configure(config: PlayerControllerConfig) {
+    const previous = this.currentConfig;
+    const requestChanged =
+      previous &&
+      (previous.contentId !== config.contentId ||
+        previous.contentType !== config.contentType ||
+        previous.gatewayUrl !== config.gatewayUrl ||
+        previous.mistUrl !== config.mistUrl ||
+        previous.viewerProtocol !== config.viewerProtocol ||
+        previous.authToken !== config.authToken ||
+        previous.playbackAuth?.token !== config.playbackAuth?.token ||
+        previous.playbackAuth?.transport !== config.playbackAuth?.transport ||
+        previous.endpoints !== config.endpoints ||
+        previous.poster !== config.poster);
     this.currentConfig = config;
+    if (requestChanged && this.controller && this.container && this.connected) {
+      void this.attach(this.container);
+    } else if (previous && this.controller) {
+      const before = {
+        debug: previous.debug === true,
+        autoplay: previous.autoplay !== false,
+        muted: previous.muted === true,
+      };
+      const next = {
+        debug: config.debug === true,
+        autoplay: config.autoplay !== false,
+        muted: config.muted === true,
+      };
+      const changed: Partial<typeof next> = {};
+      for (const key of ["debug", "autoplay", "muted"] as const) {
+        if (before[key] !== next[key]) changed[key] = next[key];
+      }
+      if (Object.keys(changed).length) this.controller.updateConfig(changed);
+    }
   }
 
   async attach(container: HTMLDivElement) {
     if (!this.currentConfig) return;
     this.teardown();
+    this.container = container;
+    this.s = { ...initialState };
 
     const controller = new PlayerController({
       contentId: this.currentConfig.contentId,
       contentType: this.currentConfig.contentType,
       endpoints: this.currentConfig.endpoints,
       gatewayUrl: this.currentConfig.gatewayUrl,
+      viewerProtocol: this.currentConfig.viewerProtocol,
       mistUrl: this.currentConfig.mistUrl,
       authToken: this.currentConfig.authToken,
       playbackAuth: this.currentConfig.playbackAuth,
@@ -179,15 +216,18 @@ export class PlayerControllerHost implements ReactiveController {
     try {
       await controller.attach(container);
     } catch (err) {
-      console.warn("[PlayerControllerHost] Attach failed:", err);
+      if (this.controller === controller)
+        console.warn("[PlayerControllerHost] Attach failed:", err);
     }
   }
 
   hostConnected() {
-    // Controller attachment happens in firstUpdated of the host element
+    this.connected = true;
+    if (this.container && this.currentConfig && !this.controller) void this.attach(this.container);
   }
 
   hostDisconnected() {
+    this.connected = false;
     this.teardown();
     this.s = { ...initialState };
   }
@@ -356,6 +396,12 @@ export class PlayerControllerHost implements ReactiveController {
       controller.on("volumeChange", ({ volume, muted }) => {
         this.update({ volume, isMuted: muted });
         this.dispatchEvent("fw-volume-change", { volume, muted });
+      })
+    );
+
+    u.push(
+      controller.on("muteChange", ({ muted }) => {
+        this.update({ isMuted: muted, volume: controller.getVolume() });
       })
     );
 

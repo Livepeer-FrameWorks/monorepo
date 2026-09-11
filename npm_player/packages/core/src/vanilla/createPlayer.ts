@@ -80,6 +80,7 @@ export interface CreatePlayerConfig {
 
   /** Gateway GraphQL endpoint override. Defaults to the official FrameWorks Gateway. */
   gatewayUrl?: string;
+  viewerProtocol?: PlayerControllerConfig["viewerProtocol"];
   /** Direct MistServer base URL */
   mistUrl?: string;
   /** Auth token for Gateway GraphQL resolution */
@@ -354,6 +355,7 @@ export function createPlayer(config: CreatePlayerConfig): PlayerInstance {
     contentType: config.contentType,
     endpoints: config.endpoints,
     gatewayUrl: config.gatewayUrl,
+    viewerProtocol: config.viewerProtocol,
     mistUrl: config.mistUrl,
     authToken: config.authToken,
     playbackAuth: config.playbackAuth,

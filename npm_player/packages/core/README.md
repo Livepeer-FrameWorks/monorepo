@@ -2,6 +2,29 @@
 
 Headless player engine for FrameWorks. Provides `PlayerController`, protocol selection, transport implementations (HLS, DASH, WebRTC, WebCodecs, etc.), and CSS.
 
+## Protocol-specific destination resolution
+
+For custom headless integrations, `GatewayClient` accepts an explicit typed format:
+
+```ts
+import { GatewayClient } from "@livepeer-frameworks/player-core";
+
+const gateway = new GatewayClient({ contentId: playbackId, protocol: "HLS" });
+const endpoints = await gateway.resolve();
+// Changing format invalidates the prior destination and cancels pending work.
+gateway.updateConfig({ protocol: "WHEP" });
+const whepEndpoints = await gateway.resolve();
+gateway.destroy();
+```
+
+`ViewerProtocol` matches the GraphQL `MediaViewerProtocol` enum. Explicit requests require a
+matching server and never fall back to an unqualified query. Results contain only the matching
+primary output; another format requires another resolution. Omitting `protocol` retains automatic
+server negotiation. The controller can request a fresh format after exhausting players on the
+selected URL, bounded to three new resolutions per initialization. Controller and wrapper
+`viewerProtocol` pins a format and disables those automatic format changes. Full placement
+activation and actual media proof remain required; SDK support is not an end-to-end rollout guarantee.
+
 > **Most users should install a wrapper instead of core directly:**
 >
 > | Package                                                                                                  | Use case                                                      |

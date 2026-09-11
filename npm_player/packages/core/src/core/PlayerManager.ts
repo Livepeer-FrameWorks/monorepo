@@ -52,6 +52,8 @@ export interface PlayerManagerOptions {
   maxFallbackAttempts?: number;
   /** Playback mode for protocol selection */
   playbackMode?: PlaybackMode;
+  /** Obtain newly authorized sources after the current player/source combinations are exhausted. */
+  resolveFallback?: (failed: StreamInfo) => Promise<StreamInfo | null>;
   /** Upstream-parity: preferred ordering for player/source selection */
   forcePriority?: {
     source?: string[];
@@ -141,6 +143,7 @@ export class PlayerManager {
   private lastPlayerOptions: PlayerOptions = {};
   private lastManagerOptions: PlayerManagerOptions = {};
   private excludedCombos: Set<string> = new Set();
+  private sourceResolutionAttempts = 0;
 
   // Serializes lifecycle operations to prevent race conditions
   private opQueue: Promise<void> = Promise.resolve();
@@ -298,7 +301,8 @@ export class PlayerManager {
    */
   selectBestPlayer(
     streamInfo: StreamInfo,
-    options?: PlayerManagerOptions
+    options?: PlayerManagerOptions,
+    excludeCombos: Set<string> = new Set()
   ): PlayerSelection | false {
     // Merge options
     const mergedOptions = { ...this.options, ...options };
@@ -320,6 +324,7 @@ export class PlayerManager {
           source: legacySource,
           source_index: 0,
         };
+        if (excludeCombos.has(this.getComboKey(result.player, result.source))) return false;
         this.emit("playerSelected", {
           player: result.player,
           source: result.source,
@@ -332,7 +337,9 @@ export class PlayerManager {
     // Get combinations (will use cache if available)
     const combinations = this.getAllCombinations(streamInfo, mergedOptions.playbackMode);
 
-    const compatible = combinations.filter((c) => c.compatible);
+    const compatible = combinations.filter(
+      (c) => c.compatible && !excludeCombos.has(this.getComboKey(c.player, c.source))
+    );
     let filtered = compatible;
 
     if (
@@ -733,6 +740,7 @@ export class PlayerManager {
     return this.enqueueOp(async () => {
       this.log("Inside enqueueOp - starting");
       this.fallbackAttempts = 0;
+      this.sourceResolutionAttempts = 0;
       this.excludedCombos.clear();
       this.errorClassifier.reset();
 
@@ -746,6 +754,7 @@ export class PlayerManager {
         debug: managerOptions?.debug,
         autoFallback: managerOptions?.autoFallback,
         maxFallbackAttempts: managerOptions?.maxFallbackAttempts,
+        resolveFallback: managerOptions?.resolveFallback,
         // forcePlayer, forceType, forceSource are intentionally NOT saved
         // They are one-shot selections that shouldn't persist through fallback
       };
@@ -776,19 +785,32 @@ export class PlayerManager {
     const compatibleCombos = allCombinations.filter(
       (c) => c.compatible && !excludeCombos.has(this.getComboKey(c.player, c.source))
     );
-    this.errorClassifier.setAlternativesRemaining(Math.max(0, compatibleCombos.length - 1));
+    this.errorClassifier.setAlternativesRemaining(
+      Math.max(0, compatibleCombos.length - 1) + (managerOptions?.resolveFallback ? 1 : 0)
+    );
 
     // Filter excluded combinations
     const availableSources = streamInfo.source.filter((_, index) => {
       if (excludeCombos.size === 0) return true;
       const selection = this.selectBestPlayer(
         { ...streamInfo, source: [streamInfo.source[index]] },
-        managerOptions
+        managerOptions,
+        excludeCombos
       );
       return selection && !excludeCombos.has(this.getComboKey(selection.player, selection.source));
     });
 
     if (availableSources.length === 0) {
+      const replacement = await this.resolveReplacementSources(streamInfo, managerOptions);
+      if (replacement) {
+        return this.tryInitializePlayer(
+          container,
+          replacement,
+          playerOptions,
+          managerOptions,
+          excludeCombos
+        );
+      }
       this.log("No available sources after filtering");
       const diagnostic = this.diagnoseNoPlayersAvailable(streamInfo, allCombinations);
       const action = this.errorClassifier.classifyWithDetails(
@@ -804,9 +826,19 @@ export class PlayerManager {
 
     this.log(`Available sources: ${availableSources.length}`);
     const modifiedStreamInfo = { ...streamInfo, source: availableSources };
-    const selection = this.selectBestPlayer(modifiedStreamInfo, managerOptions);
+    const selection = this.selectBestPlayer(modifiedStreamInfo, managerOptions, excludeCombos);
 
     if (!selection) {
+      const replacement = await this.resolveReplacementSources(streamInfo, managerOptions);
+      if (replacement) {
+        return this.tryInitializePlayer(
+          container,
+          replacement,
+          playerOptions,
+          managerOptions,
+          excludeCombos
+        );
+      }
       this.log("No suitable player selected");
       const selectionCombinations = this.getAllCombinations(
         modifiedStreamInfo,
@@ -953,6 +985,26 @@ export class PlayerManager {
 
   private delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private async resolveReplacementSources(
+    failed: StreamInfo,
+    options?: PlayerManagerOptions
+  ): Promise<StreamInfo | null> {
+    if (!options?.resolveFallback || !this.options.autoFallback) return null;
+    if (this.sourceResolutionAttempts >= Math.min(3, this.options.maxFallbackAttempts ?? 3))
+      return null;
+    this.sourceResolutionAttempts++;
+    const replacement = await options.resolveFallback(failed);
+    if (!replacement?.source.length) return null;
+    if (
+      replacement.source.every((source) =>
+        failed.source.some((old) => old.type === source.type && old.url === source.url)
+      )
+    )
+      return null;
+    this.lastStreamInfo = replacement;
+    return replacement;
   }
 
   // ==========================================================================

@@ -51,6 +51,7 @@ export interface FrameWorksPlayerOptions {
 
   /** Gateway GraphQL endpoint override. Defaults to the official FrameWorks Gateway. */
   gatewayUrl?: string;
+  viewerProtocol?: PlayerControllerConfig["viewerProtocol"];
   /** Auth token for Gateway GraphQL resolution */
   authToken?: string;
   /** Viewer-side playback auth (customer-minted JWT). See PlaybackAuth in types.ts. */
@@ -97,6 +98,7 @@ interface LegacyConfig {
   thumbnailUrl?: string | null;
   options?: {
     gatewayUrl?: string;
+    viewerProtocol?: PlayerControllerConfig["viewerProtocol"];
     autoplay?: boolean;
     muted?: boolean;
     controls?: boolean;
@@ -157,6 +159,7 @@ export class FrameWorksPlayer {
       contentType: normalizedOptions.contentType,
       endpoints: normalizedOptions.endpoints,
       gatewayUrl: normalizedOptions.gatewayUrl,
+      viewerProtocol: normalizedOptions.viewerProtocol,
       authToken: normalizedOptions.authToken,
       playbackAuth: normalizedOptions.playbackAuth,
       autoplay: normalizedOptions.autoplay ?? true,
@@ -374,6 +377,7 @@ export class FrameWorksPlayer {
         contentType: legacy.contentType,
         poster: legacy.thumbnailUrl || undefined,
         gatewayUrl: legacy.options?.gatewayUrl,
+        viewerProtocol: legacy.options?.viewerProtocol,
         authToken: legacy.options?.authToken,
         autoplay: legacy.options?.autoplay,
         muted: legacy.options?.muted,

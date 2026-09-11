@@ -5,7 +5,7 @@ import path from "path";
 export default defineConfig({
   plugins: [svelte({ hot: false })],
   resolve: {
-    conditions: ["source"],
+    conditions: ["browser", "source"],
     alias: {
       "@livepeer-frameworks/player-core": path.resolve(__dirname, "../core/src/index.ts"),
     },

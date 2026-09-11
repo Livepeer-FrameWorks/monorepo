@@ -38,6 +38,7 @@ export {
   getAvailablePlayerCapabilities,
 } from "./core/PlayerRegistry";
 export { GatewayClient } from "./core/GatewayClient";
+export type { ViewerProtocol } from "./core/ViewerProtocol";
 
 export { StreamStateClient } from "./core/StreamStateClient";
 export { QualityMonitor } from "./core/QualityMonitor";

@@ -272,6 +272,11 @@ export function usePlayerController(config: UsePlayerControllerConfig): UsePlaye
 
   const containerRef = useRef<HTMLDivElement>(null);
   const controllerRef = useRef<PlayerController | null>(null);
+  const runtimeOptionsRef = useRef({
+    debug: config.debug === true,
+    autoplay: config.autoplay !== false,
+    muted: config.muted === true,
+  });
   const [state, setState] = useState<PlayerControllerState>(() =>
     createInitialState(controllerConfig)
   );
@@ -293,6 +298,7 @@ export function usePlayerController(config: UsePlayerControllerConfig): UsePlaye
       contentType: configRef.current.contentType,
       endpoints: configRef.current.endpoints,
       gatewayUrl: configRef.current.gatewayUrl,
+      viewerProtocol: configRef.current.viewerProtocol,
       mistUrl: configRef.current.mistUrl,
       authToken: configRef.current.authToken,
       playbackAuth: configRef.current.playbackAuth,
@@ -313,6 +319,11 @@ export function usePlayerController(config: UsePlayerControllerConfig): UsePlaye
     });
 
     controllerRef.current = controller;
+    runtimeOptionsRef.current = {
+      debug: configRef.current.debug === true,
+      autoplay: configRef.current.autoplay !== false,
+      muted: configRef.current.muted === true,
+    };
 
     // Subscribe to events
     const unsubs: Array<() => void> = [];
@@ -631,7 +642,34 @@ export function usePlayerController(config: UsePlayerControllerConfig): UsePlaye
       controllerRef.current = null;
       setState(createInitialState(configRef.current));
     };
-  }, [enabled, config.contentId, config.contentType, config.poster]); // Re-create on content/poster change
+  }, [
+    enabled,
+    config.contentId,
+    config.contentType,
+    config.poster,
+    config.viewerProtocol,
+    config.gatewayUrl,
+    config.mistUrl,
+    config.endpoints,
+    config.authToken,
+    config.playbackAuth?.token,
+    config.playbackAuth?.transport,
+  ]);
+
+  useEffect(() => {
+    const next = {
+      debug: config.debug === true,
+      autoplay: config.autoplay !== false,
+      muted: config.muted === true,
+    };
+    const changed: Partial<typeof next> = {};
+    for (const key of ["debug", "autoplay", "muted"] as const) {
+      if (next[key] !== runtimeOptionsRef.current[key]) changed[key] = next[key];
+    }
+    runtimeOptionsRef.current = next;
+    // Unchanged props must not undo a viewer's own mute control.
+    if (Object.keys(changed).length) controllerRef.current?.updateConfig(changed);
+  }, [config.debug, config.autoplay, config.muted]);
 
   // Stable action callbacks
   const play = useCallback(async () => {
