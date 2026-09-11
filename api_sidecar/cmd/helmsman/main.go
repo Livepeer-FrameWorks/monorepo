@@ -233,6 +233,7 @@ func main() {
 		webhooks.POST("/mist/stream_buffer", handlers.HandleStreamBuffer)
 		webhooks.POST("/mist/stream_end", handlers.HandleStreamEnd)
 		webhooks.POST("/mist/user_new", handlers.HandleUserNew)
+		webhooks.POST("/mist/conn_play", handlers.HandleConnPlay)
 		webhooks.POST("/mist/user_end", handlers.HandleUserEnd)
 		webhooks.POST("/mist/live_track_list", handlers.HandleLiveTrackList)
 		webhooks.POST("/mist/recording_segment", handlers.HandleRecordingSegment)

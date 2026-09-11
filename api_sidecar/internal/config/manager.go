@@ -1743,7 +1743,9 @@ func (m *Manager) ensureProtocols(current map[string]any) error {
 func managedProtocolDefinitions(httpPubURL, webrtcPubHost string) []map[string]any {
 	http := map[string]any{"connector": "HTTP", "default_track_sorting": "id_lth"}
 	if httpPubURL != "" {
-		http["pubaddr"] = []string{httpPubURL}
+		// Mist's metrics reporter consumes a scalar public address; an array
+		// is serialized into its URL despite working for HTTP playback.
+		http["pubaddr"] = httpPubURL
 	}
 
 	webrtc := map[string]any{

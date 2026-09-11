@@ -296,6 +296,15 @@ func TestHandleRetractManagedStream_UnknownNameIsNoop(t *testing.T) {
 	}
 }
 
+func TestHandleRetractManagedStream_WrongStreamIdentityIsNoop(t *testing.T) {
+	mock := withMockMistAndCleanState(t)
+	handleApplyManagedStream(logging.NewLogger(), &ipcpb.ApplyManagedStream{Name: "internal", StreamId: "correct", Source: "file:/input.ts", IngestMode: "mist_native"})
+	handleRetractManagedStream(logging.NewLogger(), &ipcpb.RetractManagedStream{Name: "internal", StreamId: "another"})
+	if len(mock.callsContainingKey("deletestream")) != 0 {
+		t.Fatal("name-only cleanup crossed stream identity")
+	}
+}
+
 // TestHydrateAppliedManagedStreams_RejectsOwnerTagWithoutStreamID asserts
 // the hydration footgun guard: a Mist stream config with the owner tag but
 // no fw:stream:<id> is NOT adopted as managed. Owner tag alone would let an
@@ -396,7 +405,7 @@ func TestHydrateAppliedManagedStreams_RecoversAfterRestart(t *testing.T) {
 	// Now Retract: must call deletestream because the map contains the entry.
 	handleRetractManagedStream(logger, &ipcpb.RetractManagedStream{
 		Name:     "frameworks-demo",
-		StreamId: "stream-uuid",
+		StreamId: "stream-uuid-from-mist",
 	})
 	if len(mock.callsContainingKey("deletestream")) != 1 {
 		t.Fatalf("post-hydrate retract must call deletestream once; got: %+v", mock.requests)
@@ -409,6 +418,7 @@ func TestHandleRetractManagedStream_KnownNameDeletes(t *testing.T) {
 
 	apply := &ipcpb.ApplyManagedStream{
 		Name:       "frameworks-demo",
+		StreamId:   "stream-uuid",
 		Source:     "ts-exec:cat /dev/null",
 		AlwaysOn:   true,
 		Tags:       []string{"ingest:mist_native"},

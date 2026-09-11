@@ -1,13 +1,17 @@
 package control
 
 import (
+	"context"
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"google.golang.org/protobuf/proto"
 )
 
 // Reserved FrameWorks Mist stream tags. MistServer treats `tags` on a stream
@@ -32,6 +36,8 @@ const managedStreamOwnerTag = "fw:managed:foghorn"
 // reconciler keys by stream_id — see AppliedManagedStream in ipc.proto.
 const managedStreamIDTagPrefix = "fw:stream:"
 
+const managedStreamPlacementTag = "fw:placement:bound"
+
 // appliedManagedStreams tracks every concrete Mist stream this sidecar has
 // Applied via the managed-stream channel. Keyed by Mist stream name (==
 // bare internal name); value is the last Applied snapshot used for
@@ -51,6 +57,9 @@ type managedStreamLocalSnapshot struct {
 	tags         []string
 	ingestMode   string
 	streamID     string
+	admission    *ipcpb.ManagedStreamAdmission
+	tenantID     string
+	retired      bool
 }
 
 func (s managedStreamLocalSnapshot) equals(o managedStreamLocalSnapshot) bool {
@@ -106,6 +115,15 @@ func HydrateAppliedManagedStreamsFromMist(logger logging.Logger) {
 		// unrelated stream arrives. Require both tags; log + skip otherwise.
 		if snap.streamID == "" {
 			logger.WithField("name", name).Warn("HydrateAppliedManagedStreams: skipping stream with owner tag but missing fw:stream:<id>; not adopting as managed")
+			continue
+		}
+		nodeID := getNodeID()
+		if nodeID == "" {
+			nodeID = cfg.NodeID
+		}
+		snap, err = recoverManagedPlacement(cfg.StateDir, nodeID, name, snap)
+		if err != nil {
+			logger.WithField("name", name).Warn("Managed placement recovery refused")
 			continue
 		}
 		appliedManagedStreams.Lock()
@@ -195,11 +213,14 @@ func snapshotAppliedManagedStreamsForRegister() []*ipcpb.AppliedManagedStream {
 	out := make([]*ipcpb.AppliedManagedStream, 0, len(appliedManagedStreams.m))
 	for name, snap := range appliedManagedStreams.m {
 		out = append(out, &ipcpb.AppliedManagedStream{
-			Name:       name,
-			Source:     snap.source,
-			AlwaysOn:   snap.alwaysOn,
-			IngestMode: snap.ingestMode,
-			StreamId:   snap.streamID,
+			Name:               name,
+			Source:             snap.source,
+			AlwaysOn:           snap.alwaysOn,
+			IngestMode:         snap.ingestMode,
+			StreamId:           snap.streamID,
+			PlacementAdmission: proto.CloneOf(snap.admission),
+			TenantId:           snap.tenantID,
+			PlacementRetired:   snap.retired,
 		})
 	}
 	return out
@@ -218,27 +239,37 @@ func handleApplyManagedStream(logger logging.Logger, req *ipcpb.ApplyManagedStre
 		logger.Warn("config not initialized; cannot apply managed stream")
 		return
 	}
+	nodeID := getNodeID()
+	if nodeID == "" {
+		nodeID = cfg.NodeID
+	}
+	release, placementErr := acquireManagedPlacement(cfg.StateDir, nodeID, req, time.Now())
+	if placementErr != nil {
+		logger.WithField("stream_id", req.GetStreamId()).Warn("Managed placement admission refused")
+		return
+	}
+	defer release()
+	ctx := context.Background()
+	if admission := req.GetPlacementAdmission(); admission != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, admission.GetExpiresAt().AsTime())
+		defer cancel()
+		if placement.ValidateManagedCommand(req, nodeID, time.Now()) != nil {
+			return
+		}
+	}
 
 	// Tags carry both the owner marker and the stream_id. The stream_id
 	// tag lets post-restart hydration from Mist config recover the same
 	// stream_id Foghorn used at Apply time so Foghorn's lastSent map
 	// (keyed by stream_id) stays aligned with sidecar's applied map
 	// (keyed by Mist stream name).
-	tags := normalizeTags(req.GetTags(), req.GetStreamId())
-
-	snapshot := managedStreamLocalSnapshot{
-		source:       req.GetSource(),
-		alwaysOn:     req.GetAlwaysOn(),
-		realtime:     req.GetRealtime(),
-		stopSessions: req.GetStopSessions(),
-		tags:         tags,
-		ingestMode:   req.GetIngestMode(),
-		streamID:     req.GetStreamId(),
-	}
+	snapshot := managedSnapshotFromCommand(req)
 
 	appliedManagedStreams.Lock()
 	prev, hadPrev := appliedManagedStreams.m[req.GetName()]
 	if hadPrev && prev.equals(snapshot) {
+		appliedManagedStreams.m[req.GetName()] = snapshot
 		appliedManagedStreams.Unlock()
 		return
 	}
@@ -255,10 +286,10 @@ func handleApplyManagedStream(logger logging.Logger, req *ipcpb.ApplyManagedStre
 		"always_on":     req.GetAlwaysOn(),
 		"realtime":      req.GetRealtime(),
 		"stop_sessions": req.GetStopSessions(),
-		"tags":          tags,
+		"tags":          snapshot.tags,
 	}
 
-	if err := mistClient.AddStreams(map[string]map[string]interface{}{
+	if err := mistClient.AddStreamsContext(ctx, map[string]map[string]interface{}{
 		req.GetName(): entry,
 	}); err != nil {
 		logger.WithFields(logging.Fields{
@@ -268,7 +299,7 @@ func handleApplyManagedStream(logger logging.Logger, req *ipcpb.ApplyManagedStre
 		}).Error("Failed to apply managed stream to Mist")
 		return
 	}
-	if err := mistClient.Save(); err != nil {
+	if err := mistClient.SaveContext(ctx); err != nil {
 		logger.WithFields(logging.Fields{
 			"stream_name": req.GetName(),
 			"stream_id":   req.GetStreamId(),
@@ -298,26 +329,44 @@ func handleRetractManagedStream(logger logging.Logger, req *ipcpb.RetractManaged
 	if req == nil || req.GetName() == "" {
 		return
 	}
-	appliedManagedStreams.Lock()
-	_, owned := appliedManagedStreams.m[req.GetName()]
-	appliedManagedStreams.Unlock()
-	if !owned {
-		logger.WithFields(logging.Fields{
-			"stream_name": req.GetName(),
-			"stream_id":   req.GetStreamId(),
-		}).Debug("Retract ignored: stream not in managed set")
-		return
-	}
-
 	cfg := currentConfig
 	if cfg == nil {
 		return
+	}
+	nodeID := getNodeID()
+	if nodeID == "" {
+		nodeID = cfg.NodeID
+	}
+	release, retireErr := acquireManagedRetraction(cfg.StateDir, nodeID, req, time.Now())
+	if retireErr != nil {
+		logger.WithField("stream_id", req.GetStreamId()).Warn("Managed retraction admission refused")
+		return
+	}
+	defer release()
+	appliedManagedStreams.Lock()
+	snapshot, owned := appliedManagedStreams.m[req.GetName()]
+	if owned && snapshot.streamID == req.GetStreamId() && req.GetPlacementRetraction() != nil {
+		snapshot.retired = true
+		appliedManagedStreams.m[req.GetName()] = snapshot
+	}
+	appliedManagedStreams.Unlock()
+	if !owned || snapshot.streamID != req.GetStreamId() {
+		return
+	}
+	ctx := context.Background()
+	if retirement := req.GetPlacementRetraction(); retirement != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, retirement.GetExpiresAt().AsTime())
+		defer cancel()
+		if placement.ValidateManagedRetraction(req, nodeID, time.Now()) != nil {
+			return
+		}
 	}
 	mistClient := mist.NewClient(logger)
 	if cfg.MistServerURL != "" {
 		mistClient.BaseURL = cfg.MistServerURL
 	}
-	if err := mistClient.DeleteStream(req.GetName()); err != nil {
+	if err := mistClient.DeleteStreamContext(ctx, req.GetName()); err != nil {
 		logger.WithFields(logging.Fields{
 			"stream_name": req.GetName(),
 			"stream_id":   req.GetStreamId(),
@@ -325,7 +374,7 @@ func handleRetractManagedStream(logger logging.Logger, req *ipcpb.RetractManaged
 		}).Error("Failed to retract managed stream from Mist")
 		return
 	}
-	if err := mistClient.Save(); err != nil {
+	if err := mistClient.SaveContext(ctx); err != nil {
 		logger.WithFields(logging.Fields{
 			"stream_name": req.GetName(),
 			"stream_id":   req.GetStreamId(),
@@ -342,6 +391,18 @@ func handleRetractManagedStream(logger logging.Logger, req *ipcpb.RetractManaged
 		"stream_name": req.GetName(),
 		"stream_id":   req.GetStreamId(),
 	}).Info("Retracted managed stream from Mist")
+}
+
+func managedSnapshotFromCommand(req *ipcpb.ApplyManagedStream) managedStreamLocalSnapshot {
+	tags := append([]string(nil), req.GetTags()...)
+	if req.GetPlacementAdmission() != nil {
+		tags = append(tags, managedStreamPlacementTag, "ingest:"+req.GetIngestMode())
+	}
+	return managedStreamLocalSnapshot{
+		source: req.GetSource(), alwaysOn: req.GetAlwaysOn(), realtime: req.GetRealtime(), stopSessions: req.GetStopSessions(),
+		tags: normalizeTags(tags, req.GetStreamId()), ingestMode: req.GetIngestMode(), streamID: req.GetStreamId(),
+		admission: proto.CloneOf(req.GetPlacementAdmission()), tenantID: req.GetTenantId(),
+	}
 }
 
 // normalizeTags dedups input tags, guarantees the owner marker is

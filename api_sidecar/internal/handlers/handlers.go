@@ -824,7 +824,6 @@ func HandlePlayRewrite(c *gin.Context) {
 	logger.WithFields(logging.Fields{
 		"trigger_type": "PLAY_REWRITE",
 		"payload_size": len(body),
-		"payload_raw":  string(body),
 	}).Debug("Forwarding PLAY_REWRITE trigger to Foghorn via gRPC")
 
 	// Parse raw webhook data directly
@@ -832,8 +831,7 @@ func HandlePlayRewrite(c *gin.Context) {
 	if err != nil {
 		incMistWebhook("PLAY_REWRITE", "parse_error")
 		logger.WithFields(logging.Fields{
-			"error":       err,
-			"payload_raw": string(body),
+			"error": err,
 		}).Error("Failed to parse PLAY_REWRITE trigger")
 
 		if metrics != nil {
@@ -858,11 +856,8 @@ func HandlePlayRewrite(c *gin.Context) {
 			c.String(http.StatusOK, requested)
 			return
 		}
-		// No local-cache short-circuit here: PLAY_REWRITE on Foghorn runs
-		// per-viewer billing enforcement, viewer accounting, and Decklog
-		// analytics, so every reachable request must reach Foghorn. The local
-		// cache is consulted only as a last-resort recovery when Foghorn is
-		// unreachable (see the forward-error branch below).
+		// A stream-name mapping does not authorize this viewer, destination or
+		// policy revision. Every public rewrite requires a Foghorn decision.
 	}
 
 	// Forward trigger to Foghorn via gRPC and get response
@@ -870,28 +865,17 @@ func HandlePlayRewrite(c *gin.Context) {
 	result, err := sendMistTrigger(mistTriggerForwardContext(c.Request.Context(), mistTrigger), mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("PLAY_REWRITE", "forward_error")
-		logger.WithFields(logging.Fields{
-			"error":      err,
-			"error_code": result.ErrorCode.String(),
-		}).Error("Failed to forward PLAY_REWRITE to Foghorn")
+		logger.WithError(err).Error("Failed to forward PLAY_REWRITE to Foghorn")
 
 		if metrics != nil {
 			metrics.NodeOperations.WithLabelValues("play_rewrite", "forwarding_error").Inc()
 		}
 
-		if play := mistTrigger.GetPlayRewrite(); play != nil {
-			requested := play.GetRequestedStream()
-			if cached, ok := cachedPlayRewrite(requested); ok {
-				logger.WithFields(logging.Fields{
-					"requested_stream": requested,
-					"response":         cached,
-				}).Warn("PLAY_REWRITE using cached response after Foghorn forward error")
-				incMistWebhook("PLAY_REWRITE", "cache_recovery")
-				c.String(http.StatusOK, cached)
-				return
-			}
-		}
-
+		c.String(http.StatusServiceUnavailable, "trigger handler unavailable")
+		return
+	}
+	if result == nil {
+		incMistWebhook("PLAY_REWRITE", "missing_result")
 		c.String(http.StatusServiceUnavailable, "trigger handler unavailable")
 		return
 	}
@@ -922,9 +906,6 @@ func HandlePlayRewrite(c *gin.Context) {
 		"response": result.Response,
 	}).Info("PLAY_REWRITE resolved by Foghorn")
 	incMistWebhook("PLAY_REWRITE", "success")
-	if play := mistTrigger.GetPlayRewrite(); play != nil {
-		rememberPlayRewrite(play.GetRequestedStream(), result.Response)
-	}
 
 	// Track successful operation
 	if metrics != nil {
@@ -1757,10 +1738,12 @@ func HandleUserNew(c *gin.Context) {
 	result, err := sendMistTrigger(mistTriggerForwardContext(c.Request.Context(), mistTrigger), mistTrigger, logger)
 	if err != nil {
 		incMistWebhook("USER_NEW", "forward_error")
-		logger.WithFields(logging.Fields{
-			"error":      err,
-			"error_code": result.ErrorCode.String(),
-		}).Error("Failed to forward USER_NEW to Foghorn")
+		logger.WithError(err).Error("Failed to forward USER_NEW to Foghorn")
+		c.String(http.StatusServiceUnavailable, "trigger handler unavailable")
+		return
+	}
+	if result == nil {
+		incMistWebhook("USER_NEW", "missing_result")
 		c.String(http.StatusServiceUnavailable, "trigger handler unavailable")
 		return
 	}

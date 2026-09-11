@@ -655,7 +655,9 @@ func TestStreamObservationRejectsOlderFullPollResponse(t *testing.T) {
 	pm.nodeRuntime = runtime
 	pm.nodeRuntimeMu.Unlock()
 	updates := make(chan uint32, 2)
+	processObservations := make(chan *ipcpb.MistStreamProcessObservation, 2)
 	pm.sendControlTrigger = func(trigger *ipcpb.MistTrigger, _ logging.Logger) (*control.MistTriggerResult, error) {
+		processObservations <- trigger.GetStreamLifecycleUpdate().GetProcessObservation()
 		updates <- trigger.GetStreamLifecycleUpdate().GetTotalInputs()
 		return &control.MistTriggerResult{}, nil
 	}
@@ -683,6 +685,10 @@ func TestStreamObservationRejectsOlderFullPollResponse(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("targeted refresh did not emit")
+	}
+	processObservation := <-processObservations
+	if processObservation.GetRuntimeName() != "live+alpha" || processObservation.GetReadStartedUnixMillis() <= 0 || processObservation.GetReadCompletedUnixMillis() < processObservation.GetReadStartedUnixMillis() {
+		t.Fatalf("targeted refresh lost its read window: %v", processObservation)
 	}
 	close(releaseFull)
 	select {

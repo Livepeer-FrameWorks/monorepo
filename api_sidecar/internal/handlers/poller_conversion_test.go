@@ -815,6 +815,14 @@ func TestConvertClientAPI_ZeroValues(t *testing.T) {
 
 // --- convertNodeAPIToMistTrigger ---
 
+func TestConvertNodeAPIAbsentListenersWithdrawPreviousReport(t *testing.T) {
+	pm := &PrometheusMonitor{edgePublicURL: "https://edge.example"}
+	trigger := pm.convertNodeAPIToMistTrigger("node", map[string]any{"cpu": float64(1)}, logging.NewLogger())
+	if got := trigger.GetNodeLifecycleUpdate().GetOutputsJson(); got != "{}" {
+		t.Fatalf("successful empty listener report did not withdraw previous URLs: %q", got)
+	}
+}
+
 func TestConvertNodeAPI_FullPayload(t *testing.T) {
 	pm := &PrometheusMonitor{
 		edgePublicURL: "https://edge.example.com",
@@ -1843,5 +1851,41 @@ func TestStreamAPIToMistTrigger_TrackDetailsJSON(t *testing.T) {
 	}
 	if len(decoded) != 1 {
 		t.Fatalf("expected 1 track in JSON, got %d", len(decoded))
+	}
+}
+
+// The periodic report carries Mist's buffer classification as a level so Foghorn
+// can recover readiness without a STREAM_BUFFER transition; the mapping mirrors
+// input_buffer.cpp (Online = booted, Mist "issues" = DRY, anything else EMPTY).
+func TestMistBufferStateFromAPIMirrorsTriggerClassification(t *testing.T) {
+	cases := []struct {
+		name   string
+		stream map[string]any
+		health map[string]any
+		want   string
+	}{
+		{"online without issues", map[string]any{"status": "Online"}, map[string]any{"buffer": 120000.0}, "FULL"},
+		{"online with mist issues", map[string]any{"status": "Online"}, map[string]any{"issues": "unstable connection (671629ms JSON frame)! "}, "DRY"},
+		{"online with blank issues", map[string]any{"status": "Online"}, map[string]any{"issues": "  "}, "FULL"},
+		{"waiting for data", map[string]any{"status": "Waiting for data"}, map[string]any{}, "EMPTY"},
+		{"missing status", map[string]any{}, map[string]any{"issues": "x"}, "EMPTY"},
+	}
+	for _, tc := range cases {
+		if got := mistBufferStateFromAPI(tc.stream, tc.health); got != tc.want {
+			t.Fatalf("%s: got %q want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestConvertStreamAPIToMistTriggerReportsBufferLevel(t *testing.T) {
+	before := time.Now().UnixMilli()
+	trigger := convertStreamAPIToMistTrigger("edge-1", "live+abc", "abc",
+		map[string]any{"status": "Online", "inputs": 1.0, "viewers": 0.0}, map[string]any{"buffer": 120000.0}, nil, 2, logging.NewLogger())
+	slu := trigger.GetStreamLifecycleUpdate()
+	if slu == nil || slu.GetBufferState() != "FULL" {
+		t.Fatalf("expected FULL buffer level on the report, got %+v", slu)
+	}
+	if sampled := slu.GetBufferSampledUnixMillis(); sampled < before || sampled > time.Now().UnixMilli() {
+		t.Fatalf("buffer sample time %d outside the poll window", sampled)
 	}
 }

@@ -248,8 +248,8 @@ func TestMistAdminProxy_PreservesWebSocketUpgrade(t *testing.T) {
 
 func TestMistAdminProxy_NonLoopbackUpstreamReturns501(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	logger := logging.NewLogger()
-	handler := MistAdminProxy("http://mistserver:4242", logger)
+	testLogger := logging.NewLogger()
+	handler := MistAdminProxy("http://mistserver:4242", testLogger)
 
 	r := gin.New()
 	r.Any("/_mist/*proxy", handler)
@@ -266,8 +266,8 @@ func TestMistAdminProxy_NonLoopbackUpstreamReturns501(t *testing.T) {
 
 func TestMistAdminProxy_InvalidUpstreamReturns500(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	logger := logging.NewLogger()
-	handler := MistAdminProxy("not-a-valid-url", logger)
+	testLogger := logging.NewLogger()
+	handler := MistAdminProxy("not-a-valid-url", testLogger)
 
 	r := gin.New()
 	r.Any("/_mist/*proxy", handler)

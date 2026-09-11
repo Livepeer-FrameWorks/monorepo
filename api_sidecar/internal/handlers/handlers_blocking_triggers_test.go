@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -156,7 +157,6 @@ func TestHandlePushRewriteDenialBranches(t *testing.T) {
 // PLAY_REWRITE distinguishes authoritative denial from handler unavailability.
 func TestHandlePlayRewriteBranches(t *testing.T) {
 	setupTriggerTest(t, "tenant-blk")
-	clearPlayRewriteCache()
 	const body = "stream-name\n192.0.2.10\nHLS\nhttp://example.com/view"
 
 	t.Run("abort returns deny action", func(t *testing.T) {
@@ -169,7 +169,7 @@ func TestHandlePlayRewriteBranches(t *testing.T) {
 		assertAction(t, rec, "deny")
 	})
 
-	t.Run("forward error without cache returns unavailable", func(t *testing.T) {
+	t.Run("forward error returns unavailable", func(t *testing.T) {
 		stubSendMistTrigger(t, func(trigger *ipcpb.MistTrigger) (*control.MistTriggerResult, error) {
 			return &control.MistTriggerResult{}, errors.New("foghorn down")
 		})
@@ -205,7 +205,6 @@ func TestHandlePlayRewriteBranches(t *testing.T) {
 // must not short-circuit a repeat from local cache while Foghorn is up.
 func TestHandlePlayRewriteAlwaysConsultsReachableFoghorn(t *testing.T) {
 	setupTriggerTest(t, "tenant-blk")
-	clearPlayRewriteCache()
 	const body = "frameworks-demo\n192.0.2.10\nHLS\nhttp://example.com/view"
 
 	calls := 0
@@ -226,26 +225,49 @@ func TestHandlePlayRewriteAlwaysConsultsReachableFoghorn(t *testing.T) {
 	}
 }
 
-// When Foghorn is UNREACHABLE, the handler replays the last Foghorn-approved
-// resolution from the recovery cache rather than failing the handler — the
-// only case where the local cache answers.
-func TestHandlePlayRewriteRecoversFromForwardErrorWithCache(t *testing.T) {
-	setupTriggerTest(t, "tenant-blk")
-	clearPlayRewriteCache()
-	const body = "frameworks-demo\n192.0.2.10\nHLS\nhttp://example.com/view"
-	rememberPlayRewrite("frameworks-demo", "60546679b497415db2338cd5cae54992")
-
-	calls := 0
-	stubSendMistTrigger(t, func(trigger *ipcpb.MistTrigger) (*control.MistTriggerResult, error) {
-		calls++
-		return &control.MistTriggerResult{ErrorCode: ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT}, errors.New("foghorn down")
-	})
-
-	ctx, rec := newWebhookContext(body)
-	HandlePlayRewrite(ctx)
-	assertOK(t, rec, "60546679b497415db2338cd5cae54992")
-	if calls != 1 {
-		t.Fatalf("Foghorn calls = %d, want 1", calls)
+func TestHandlePlayRewriteNeverReplaysPreviousAdmission(t *testing.T) {
+	for _, scenario := range []string{"same request", "new viewer", "new format", "nil failure", "nil success", "denied then unavailable"} {
+		t.Run(scenario, func(t *testing.T) {
+			setupTriggerTest(t, "tenant-blk")
+			body := "frameworks-demo\n192.0.2.10\nHLS\nhttp://example.com/view"
+			calls := 0
+			stubSendMistTrigger(t, func(trigger *ipcpb.MistTrigger) (*control.MistTriggerResult, error) {
+				calls++
+				if calls == 1 {
+					return &control.MistTriggerResult{Response: "live+resolved"}, nil
+				}
+				if scenario == "denied then unavailable" && calls == 2 {
+					return &control.MistTriggerResult{Abort: true}, nil
+				}
+				if scenario == "nil success" {
+					return nil, nil
+				}
+				if scenario == "nil failure" {
+					return nil, errors.New("foghorn down")
+				}
+				return &control.MistTriggerResult{ErrorCode: ipcpb.IngestErrorCode_INGEST_ERROR_TIMEOUT}, errors.New("foghorn down")
+			})
+			ctx, rec := newWebhookContext(body)
+			HandlePlayRewrite(ctx)
+			assertOK(t, rec, "live+resolved")
+			if scenario == "new viewer" {
+				body = "frameworks-demo\n203.0.113.10\nHLS\nhttp://example.com/view"
+			}
+			if scenario == "new format" {
+				body = "frameworks-demo\n192.0.2.10\nWebRTC\nhttp://example.com/view"
+			}
+			if scenario == "denied then unavailable" {
+				ctx, rec = newWebhookContext(body)
+				HandlePlayRewrite(ctx)
+				assertAction(t, rec, "deny")
+			}
+			ctx, rec = newWebhookContext(body)
+			HandlePlayRewrite(ctx)
+			assertStatus(t, rec, http.StatusServiceUnavailable)
+			if strings.Contains(rec.Body.String(), "live+resolved") {
+				t.Fatal("previous admission replayed during outage")
+			}
+		})
 	}
 }
 

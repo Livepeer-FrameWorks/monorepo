@@ -798,7 +798,9 @@ func (pm *PrometheusMonitor) refreshStreams(
 		return streamRefreshResult{}
 	}
 	runtime.acceleratorMu.Lock()
+	readStartedAt := time.Now()
 	response, err := runtime.acceleratorClient.GetActiveStreamsFilteredContext(ctx, filtered)
+	readCompletedAt := time.Now()
 	runtime.acceleratorMu.Unlock()
 	if err != nil {
 		if ctx.Err() != nil {
@@ -869,7 +871,7 @@ func (pm *PrometheusMonitor) refreshStreams(
 		applied := pm.applyStreamObservation(stream.name, observation, func() {
 			if pm.streamWSRuntimeCurrent(generation, runtime) {
 				pm.recordTargetedStreamPresence(stream.name, observation)
-				pm.processActiveStreamDataContext(ctx, runtime.nodeID, stream.name, stream.data)
+				pm.processObservedStreamDataContext(ctx, runtime.nodeID, stream.name, stream.data, readStartedAt, readCompletedAt)
 			}
 		})
 		if applied {

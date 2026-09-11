@@ -95,7 +95,14 @@ type DVRJob struct {
 
 	// Dual-storage: Incremental sync tracking
 	SyncedSegments map[string]bool // Track which segments already synced to S3
-	syncMutex      sync.Mutex      // Protects SyncedSegments
+	// UnmarkedSegments holds segments whose bytes reached S3 but whose ledger
+	// row Foghorn never acknowledged, by size. Upload state and ledger state are
+	// tracked apart because they fail apart: collapsing them meant a failed mark
+	// still counted as synced, the periodic sync skipped the segment, and the row
+	// stayed 'pending' — never eviction-eligible, so the local file was pinned
+	// until the recording ended, which for a 24/7 stream is never.
+	UnmarkedSegments map[string]uint64
+	syncMutex        sync.Mutex // Protects SyncedSegments and UnmarkedSegments
 
 	// pushGeneration is bumped under DVRManager.mutex on every change to push
 	// identity (PushID / StreamName / TargetURI) or terminal status. A push
@@ -517,8 +524,10 @@ func (dm *DVRManager) EvictUploadedSegments(dvrHash string, candidates []string,
 			logger.WithError(dropErr).WithField("segment", name).Debug("Failed to report segment eviction")
 		}
 		if jobActive {
+			// The file is gone, so there is nothing left to re-report.
 			job.syncMutex.Lock()
 			delete(job.SyncedSegments, name)
+			delete(job.UnmarkedSegments, name)
 			job.syncMutex.Unlock()
 		}
 		if idx != nil {
@@ -620,6 +629,7 @@ func (dm *DVRManager) DropUnsyncedSegment(dvrHash, segmentName, reason string) e
 	}
 	job.syncMutex.Lock()
 	delete(job.SyncedSegments, segmentName)
+	delete(job.UnmarkedSegments, segmentName)
 	job.syncMutex.Unlock()
 	return SendDVRSegmentDropped(dvrHash, segmentName, reason, segPath, 0, 0, 0, sizeBytes, false)
 }
@@ -753,14 +763,22 @@ func (dm *DVRManager) syncSpecificSegment(job *DVRJob, filePath string, mediaSta
 		return
 	}
 
-	if err := SendMarkDVRSegmentUploaded(job.DVRHash, segName, uint64(info.Size())); err != nil {
-		job.Logger.WithError(err).WithField("segment", segName).Warn("Failed to mark DVR segment uploaded with Foghorn")
-		// Don't return — local cache below still records success; Foghorn
-		// will eventually reconcile via the finalize-time retry path.
+	markErr := SendMarkDVRSegmentUploaded(job.DVRHash, segName, uint64(info.Size()))
+	if markErr != nil {
+		job.Logger.WithError(markErr).WithField("segment", segName).Warn("Failed to mark DVR segment uploaded with Foghorn")
 	}
 
+	// The bytes are in S3 either way, so the segment is synced and must not be
+	// re-uploaded. An unacknowledged ledger row is recorded separately for the
+	// periodic sync to retry; without that the row stays 'pending' forever and
+	// pins the local file.
 	job.syncMutex.Lock()
 	job.SyncedSegments[segName] = true
+	if markErr != nil {
+		job.UnmarkedSegments[segName] = uint64(info.Size())
+	} else {
+		delete(job.UnmarkedSegments, segName)
+	}
 	job.syncMutex.Unlock()
 
 	// Update the per-segment local index. Eviction consults this index
@@ -938,6 +956,7 @@ func (dm *DVRManager) StartRecording(dvrHash, streamID, internalName, sourceRunt
 		MaxRetries:        MaxDVRRetries,
 		RetryCount:        0,
 		SyncedSegments:    make(map[string]bool), // Initialize sync tracking
+		UnmarkedSegments:  make(map[string]uint64),
 	}
 
 	// Start the recording process via MistServer push. startDVRPush's state
@@ -1225,14 +1244,15 @@ func (dm *DVRManager) adoptExistingDVRJobLocked(dvrHash, internalName, outputDir
 				dm.logger.WithError(serr).WithField("dvr_hash", dvrHash).Warn("Adopted DVR report was not delivered immediately")
 			}
 		},
-		Logger:         dm.logger,
-		SegmentCount:   dvrManifestSegmentCount(manifestPath),
-		TotalSizeBytes: dvrDirectorySize(outputDir),
-		Status:         "recording",
-		TargetURI:      push.TargetURI,
-		StreamName:     push.StreamName,
-		MaxRetries:     MaxDVRRetries,
-		SyncedSegments: make(map[string]bool),
+		Logger:           dm.logger,
+		SegmentCount:     dvrManifestSegmentCount(manifestPath),
+		TotalSizeBytes:   dvrDirectorySize(outputDir),
+		Status:           "recording",
+		TargetURI:        push.TargetURI,
+		StreamName:       push.StreamName,
+		MaxRetries:       MaxDVRRetries,
+		SyncedSegments:   make(map[string]bool),
+		UnmarkedSegments: make(map[string]uint64),
 	}
 	// Fold the authoritative start descriptor into the Mist/disk-derived job and
 	// re-register the source override BEFORE it is discoverable/monitored.
@@ -1355,12 +1375,13 @@ func (dm *DVRManager) recoverOneDVRDir(dir localDVRDirectory, pushes []mist.Push
 				logger.WithError(err).WithField("dvr_hash", dir.dvrHash).Warn("Recovered DVR report was not delivered immediately")
 			}
 		},
-		Logger:         dm.logger,
-		SegmentCount:   dvrManifestSegmentCount(dir.manifestPath),
-		TotalSizeBytes: dvrDirectorySize(dir.outputDir),
-		Status:         "recording",
-		MaxRetries:     MaxDVRRetries,
-		SyncedSegments: make(map[string]bool),
+		Logger:           dm.logger,
+		SegmentCount:     dvrManifestSegmentCount(dir.manifestPath),
+		TotalSizeBytes:   dvrDirectorySize(dir.outputDir),
+		Status:           "recording",
+		MaxRetries:       MaxDVRRetries,
+		SyncedSegments:   make(map[string]bool),
+		UnmarkedSegments: make(map[string]uint64),
 	}
 	// Re-pin the source override so a later push recreation keeps the remote source.
 	if meta.SourceURL != "" {
@@ -1637,16 +1658,17 @@ func (dm *DVRManager) stopRecoveredRecording(dvrHash string, sendFunc func(*ipcp
 	}
 
 	job := &DVRJob{
-		DVRHash:        dvrHash,
-		InternalName:   streamID,
-		StartTime:      startTime,
-		OutputDir:      outputDir,
-		ManifestPath:   manifestPath,
-		SendFunc:       sendFunc,
-		Logger:         dm.logger,
-		TotalSizeBytes: dvrDirectorySize(outputDir),
-		Status:         "finalizing",
-		SyncedSegments: make(map[string]bool),
+		DVRHash:          dvrHash,
+		InternalName:     streamID,
+		StartTime:        startTime,
+		OutputDir:        outputDir,
+		ManifestPath:     manifestPath,
+		SendFunc:         sendFunc,
+		Logger:           dm.logger,
+		TotalSizeBytes:   dvrDirectorySize(outputDir),
+		Status:           "finalizing",
+		SyncedSegments:   make(map[string]bool),
+		UnmarkedSegments: make(map[string]uint64),
 	}
 
 	dm.logger.WithFields(logging.Fields{
@@ -2605,6 +2627,7 @@ func (dm *DVRManager) syncNewSegments(job *DVRJob) {
 	if !IsConnected() {
 		return
 	}
+	dm.retryUnmarkedSegments(job)
 
 	manifestBody, err := os.ReadFile(job.ManifestPath)
 	if err != nil {
@@ -2687,11 +2710,17 @@ func (dm *DVRManager) syncNewSegments(job *DVRJob) {
 			continue
 		}
 		cancel()
-		if markErr := SendMarkDVRSegmentUploaded(job.DVRHash, seg.Name, uint64(info.Size())); markErr != nil {
+		markErr := SendMarkDVRSegmentUploaded(job.DVRHash, seg.Name, uint64(info.Size()))
+		if markErr != nil {
 			job.Logger.WithError(markErr).WithField("segment", seg.Name).Warn("Reconciliation: MarkDVRSegmentUploaded failed")
 		}
 		job.syncMutex.Lock()
 		job.SyncedSegments[seg.Name] = true
+		if markErr != nil {
+			job.UnmarkedSegments[seg.Name] = uint64(info.Size())
+		} else {
+			delete(job.UnmarkedSegments, seg.Name)
+		}
 		job.syncMutex.Unlock()
 		if idx := localSegmentIndex; idx != nil {
 			idx.MarkUploaded(job.DVRHash, seg.Name, segPath, info.Size())
@@ -2827,3 +2856,34 @@ func (dm *DVRManager) uploadSegmentToS3(ctx context.Context, filePath, presigned
 
 // Rolling manifest is local-only. Archive playback uses chapter VOD
 // artifacts produced by the chapter finalization job.
+
+// retryUnmarkedSegments re-reports segments whose bytes reached S3 but whose
+// ledger row Foghorn never acknowledged.
+//
+// Foghorn's ledger is what makes a segment eviction-eligible, so a row left
+// 'pending' pins the local file. Nothing else retries it during the recording:
+// the segment counts as synced, so the sweep below skips it, and the only other
+// retry runs at finalize — which for a stream that never ends never arrives. The
+// bytes are already uploaded, so this re-marks rather than re-uploading.
+func (dm *DVRManager) retryUnmarkedSegments(job *DVRJob) {
+	job.syncMutex.Lock()
+	pending := make(map[string]uint64, len(job.UnmarkedSegments))
+	for name, size := range job.UnmarkedSegments {
+		pending[name] = size
+	}
+	job.syncMutex.Unlock()
+	if len(pending) == 0 {
+		return
+	}
+
+	for name, size := range pending {
+		if err := SendMarkDVRSegmentUploaded(job.DVRHash, name, size); err != nil {
+			job.Logger.WithError(err).WithField("segment", name).Debug("Retry: MarkDVRSegmentUploaded still failing")
+			continue
+		}
+		job.syncMutex.Lock()
+		delete(job.UnmarkedSegments, name)
+		job.syncMutex.Unlock()
+		job.Logger.WithField("segment", name).Info("Retry: DVR segment ledger row marked uploaded")
+	}
+}

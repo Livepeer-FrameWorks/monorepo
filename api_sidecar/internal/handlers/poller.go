@@ -979,15 +979,6 @@ func (pm *PrometheusMonitor) emitNodeLifecycleRuntime(runtime *mistNodeRuntime) 
 	}
 }
 
-// emitStreamLifecycle fetches data from MistServer's TCP API directly
-func (pm *PrometheusMonitor) emitStreamLifecycle(nodeID, baseURL string) {
-	runtime := pm.currentNodeRuntime()
-	if runtime == nil || runtime.nodeID != nodeID || runtime.baseURL != baseURL {
-		return
-	}
-	pm.emitStreamLifecycleRuntime(runtime)
-}
-
 func (pm *PrometheusMonitor) emitStreamLifecycleRuntime(runtime *mistNodeRuntime) {
 	pm.emitStreamLifecycleWithClient(
 		runtime.ctx,
@@ -1033,6 +1024,7 @@ func (pm *PrometheusMonitor) emitStreamLifecycleWithClient(
 	pollStartedAt := time.Now()
 	clientMu.Lock()
 	apiResponse, err := client.GetActiveStreamsContext(ctx)
+	pollCompletedAt := time.Now()
 	clientMu.Unlock()
 	if err != nil {
 		if ctx.Err() != nil || !current() {
@@ -1078,7 +1070,7 @@ func (pm *PrometheusMonitor) emitStreamLifecycleWithClient(
 					mistSourcePIDObservations.WithLabelValues("missing").Inc()
 				}
 				pm.applyStreamObservation(streamName, observation, func() {
-					pm.processActiveStreamDataContext(ctx, nodeID, streamName, streamInfo)
+					pm.processObservedStreamDataContext(ctx, nodeID, streamName, streamInfo, pollStartedAt, pollCompletedAt)
 				})
 			}
 		}
@@ -1187,8 +1179,8 @@ func sourcePIDsFromStreamData(streamData map[string]any) (map[int64]struct{}, bo
 	}
 	pids := make(map[int64]struct{}, len(values))
 	for _, value := range values {
-		number, ok := value.(float64)
-		if !ok || number <= 0 || number != float64(int64(number)) {
+		number, ok := exactMistUnsigned(value)
+		if !ok || number == 0 {
 			return nil, false
 		}
 		pids[int64(number)] = struct{}{}
@@ -1553,12 +1545,7 @@ func rebuildSourceLeasesFromMist(tracker *leases.Tracker, present map[string]str
 	}
 }
 
-// processActiveStreamData processes individual stream data from MistServer API
-func (pm *PrometheusMonitor) processActiveStreamData(nodeID, streamName string, streamData map[string]any) {
-	pm.processActiveStreamDataContext(context.Background(), nodeID, streamName, streamData)
-}
-
-func (pm *PrometheusMonitor) processActiveStreamDataContext(ctx context.Context, nodeID, streamName string, streamData map[string]any) {
+func (pm *PrometheusMonitor) processObservedStreamDataContext(ctx context.Context, nodeID, streamName string, streamData map[string]any, readStartedAt, readCompletedAt time.Time) {
 	// Extract internal name from wildcard stream
 	var internalName string
 	if _, after, ok := strings.Cut(streamName, "+"); ok {
@@ -1776,6 +1763,10 @@ func (pm *PrometheusMonitor) processActiveStreamDataContext(ctx context.Context,
 
 	// Convert API response to MistTrigger using converter
 	mistTrigger := convertStreamAPIToMistTrigger(nodeID, streamName, internalName, streamData, healthData, trackDetails, trackCount, monitorLogger)
+	if observation := mistTrigger.GetStreamLifecycleUpdate().GetProcessObservation(); observation != nil && !readStartedAt.IsZero() && !readCompletedAt.Before(readStartedAt) {
+		observation.ReadStartedUnixMillis = readStartedAt.UnixMilli()
+		observation.ReadCompletedUnixMillis = readCompletedAt.UnixMilli()
+	}
 
 	if _, err := pm.sendMistTriggerContext(ctx, mistTrigger); err != nil {
 		monitorLogger.WithFields(logging.Fields{
@@ -3129,6 +3120,9 @@ func (pm *PrometheusMonitor) convertNodeAPIToMistTrigger(nodeID string, jsonData
 	}
 
 	if jsonData != nil {
+		// An absent outputs member in a successful metrics response means no
+		// listener was advertised. Send an empty snapshot to withdraw old URLs.
+		nodeUpdate.OutputsJson = "{}"
 		// Extract CPU usage (Mist provides integer percentage 0-100 or more)
 		if cpu, ok := jsonData["cpu"].(float64); ok {
 			nodeUpdate.CpuTenths = uint32(normalizeMistCPUPercent(cpu) * 10) // Convert % to tenths (e.g. 14% -> 140)
@@ -3535,15 +3529,16 @@ func interpretCapabilityFlag(value string, def bool) bool {
 }
 
 // convertStreamAPIToMistTrigger converts stream API response data to a MistTrigger protobuf
-func convertStreamAPIToMistTrigger(nodeID, _streamName, internalName string, streamData, healthData map[string]any, trackDetails []map[string]any, trackCount int, _logger logging.Logger) *ipcpb.MistTrigger {
+func convertStreamAPIToMistTrigger(nodeID, streamName, internalName string, streamData, healthData map[string]any, trackDetails []map[string]any, trackCount int, _logger logging.Logger) *ipcpb.MistTrigger {
 	status := "waiting"
 	if streamAPIHasLiveMedia(streamData, trackDetails, trackCount) {
 		status = "live"
 	}
 	streamLifecycleUpdate := &ipcpb.StreamLifecycleUpdate{
-		NodeId:       nodeID,
-		InternalName: internalName,
-		Status:       status,
+		NodeId:             nodeID,
+		InternalName:       internalName,
+		Status:             status,
+		ProcessObservation: streamProcessObservation(streamName, streamData),
 	}
 
 	// Extract basic metrics from stream data
@@ -3567,6 +3562,15 @@ func convertStreamAPIToMistTrigger(nodeID, _streamName, internalName string, str
 	if replicated, ok := mistStreamReplicatedValue(streamData); ok {
 		streamLifecycleUpdate.Replicated = &replicated
 	}
+	// Mist classifies its STREAM_BUFFER trigger from the same facts this poll
+	// returns: FULL once the buffer has booted (stream status Online), DRY while
+	// the health JSON carries "issues", EMPTY otherwise. Reporting that level
+	// every poll lets Foghorn recover readiness after a restart or a publisher
+	// that returned inside Mist's resume window, where no transition fires.
+	bufferState := mistBufferStateFromAPI(streamData, healthData)
+	sampledAt := time.Now().UnixMilli()
+	streamLifecycleUpdate.BufferState = &bufferState
+	streamLifecycleUpdate.BufferSampledUnixMillis = &sampledAt
 
 	// Add health data as stream details
 	if len(healthData) > 0 {
@@ -3802,6 +3806,23 @@ func convertStreamAPIToMistTrigger(nodeID, _streamName, internalName string, str
 			StreamLifecycleUpdate: streamLifecycleUpdate,
 		},
 	}
+}
+
+// mistBufferStateFromAPI derives the STREAM_BUFFER state Mist would report right
+// now from its active_streams row: the buffer emits FULL when it has booted
+// (status Online), DRY whenever its health JSON carries "issues", RECOVER when
+// they clear (a level cannot distinguish RECOVER from FULL, and Foghorn treats
+// both as ready), and EMPTY when it is torn down. Only Mist's own "issues" field
+// counts; Helmsman's derived warnings do not change buffer classification.
+func mistBufferStateFromAPI(streamData, healthData map[string]any) string {
+	status, ok := streamData["status"].(string)
+	if !ok || status != "Online" {
+		return "EMPTY"
+	}
+	if issues, ok := healthData["issues"].(string); ok && strings.TrimSpace(issues) != "" {
+		return "DRY"
+	}
+	return "FULL"
 }
 
 func streamAPIHasLiveMedia(streamData map[string]any, trackDetails []map[string]any, trackCount int) bool {

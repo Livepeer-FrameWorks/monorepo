@@ -87,7 +87,7 @@ func TestEnsureProtocolsAddsRTMP(t *testing.T) {
 	}
 
 	http := findAddedProtocol(t, mist.addedProtocols, "HTTP")
-	if got := http["pubaddr"]; !stringSlicesEqual(got, []string{"https://edge.example/view/"}) {
+	if got := http["pubaddr"]; got != "https://edge.example/view/" {
 		t.Fatalf("HTTP pubaddr = %v, want https://edge.example/view/", got)
 	}
 	if got := http["default_track_sorting"]; got != "id_lth" {
@@ -201,29 +201,19 @@ func findProtocolUpdate(t *testing.T, updates []protocolUpdate, connector string
 	return protocolUpdate{}
 }
 
-func stringSlicesEqual(got any, want []string) bool {
-	switch typed := got.(type) {
-	case []string:
-		if len(typed) != len(want) {
-			return false
-		}
-		for i := range typed {
-			if typed[i] != want[i] {
-				return false
-			}
-		}
-		return true
-	case []any:
-		if len(typed) != len(want) {
-			return false
-		}
-		for i := range typed {
-			if typed[i] != want[i] {
-				return false
-			}
-		}
-		return true
-	default:
-		return false
+func TestEnsureProtocolsRepairsArrayPublicAddressWithoutLosingListenerOptions(t *testing.T) {
+	t.Setenv("EDGE_PUBLIC_URL", "https://edge.example/view")
+	mist := &recordingMistAPI{}
+	manager := &Manager{mistClient: mist, logger: logging.NewLogger()}
+	existing := map[string]any{"connector": "HTTP", "port": float64(18080), "pubaddr": []any{"https://edge.example/view/"}, "interface": "0.0.0.0"}
+	if err := manager.ensureProtocols(map[string]any{"config": map[string]any{"protocols": []any{existing}}}); err != nil {
+		t.Fatal(err)
+	}
+	update := findProtocolUpdate(t, mist.protocolUpdates, "HTTP")
+	if update.new["pubaddr"] != "https://edge.example/view/" || update.new["port"] != float64(18080) || update.new["interface"] != "0.0.0.0" {
+		t.Fatalf("public-address repair changed listener options: %+v", update.new)
+	}
+	if _, original := existing["pubaddr"].([]any); !original {
+		t.Fatal("protocol repair mutated the observed configuration")
 	}
 }
