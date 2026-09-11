@@ -103,6 +103,35 @@ func TestAuthorizeMCPHighRiskToolRequiresExplicitAgentGrant(t *testing.T) {
 	}
 }
 
+func TestAuthorizeMCPPlacementScopesRolesAndApplyGrant(t *testing.T) {
+	for _, role := range []string{"owner", "admin", "member", "viewer"} {
+		for _, scope := range []string{"placement:read", "placement:write", "infrastructure:write"} {
+			for _, highRisk := range []bool{false, true} {
+				ctx := context.WithValue(clientstest.AuthedCtx("tenant"), ctxkeys.KeyUserID, "user")
+				ctx = context.WithValue(ctx, ctxkeys.KeyRole, role)
+				ctx = context.WithValue(ctx, ctxkeys.KeyAuthType, "api_token")
+				permissions := []string{scope}
+				if highRisk {
+					permissions = append(permissions, "mcp:high-risk")
+				}
+				ctx = context.WithValue(ctx, ctxkeys.KeyPermissions, permissions)
+				for name, policy := range tools.ToolPolicies() {
+					if !strings.HasPrefix(policy.Scope, "placement:") {
+						continue
+					}
+					want := scope == policy.Scope && (scope == "placement:read" || role == "owner" || role == "admin") && (policy.Risk != tools.ToolRiskHigh || highRisk)
+					if err := authorizeMCPTool(ctx, name); (err == nil) != want {
+						t.Fatalf("tool=%s role=%s scope=%s grant=%v allowed=%v want=%v: %v", name, role, scope, highRisk, err == nil, want, err)
+					}
+					if mcpToolGraphQLOp(name) == "" {
+						t.Fatalf("placement tool has no operation identity: %s", name)
+					}
+				}
+			}
+		}
+	}
+}
+
 func TestAuthorizeMCPBillingWritesApplyTargetAwareSettlementGate(t *testing.T) {
 	member := context.WithValue(context.Background(), ctxkeys.KeyAuthType, "jwt")
 	member = context.WithValue(member, ctxkeys.KeyTenantID, "tenant-1")

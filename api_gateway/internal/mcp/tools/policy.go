@@ -52,6 +52,15 @@ func buildToolPolicies() map[string]ToolPolicy {
 	}
 
 	add("account:read", ToolRiskRead, "get_tenant_settings")
+	add("placement:read", ToolRiskRead, "get_media_placement_policy", "get_media_placement_options", "preview_media_placement", "get_media_placement_change", "get_media_placement_legacy_pins", "get_cluster_media_consent", "get_cluster_media_consent_change")
+	add("placement:write", ToolRiskRead, "review_media_placement_change", "review_cluster_media_consent_change")
+	add("placement:write", ToolRiskHigh, "apply_media_placement_change", "apply_cluster_media_consent_change")
+	for _, name := range []string{"apply_media_placement_change", "apply_cluster_media_consent_change"} {
+		policy := policies[name]
+		policy.Idempotent = true
+		policy.Destructive = true
+		policies[name] = policy
+	}
 	add("settings:write", ToolRiskWrite, "update_tenant_settings")
 	add("billing:read", ToolRiskRead, "check_topup", "get_payment_options", "get_retention_policy")
 	add("billing:write", ToolRiskHigh, "complete_mollie_postpaid_setup", "pay_invoice", "start_postpaid_setup", "submit_payment", "topup_balance", "update_billing_details")
@@ -145,6 +154,9 @@ func addTool[In, Out any](server *mcp.Server, tool *mcp.Tool, handler mcp.ToolHa
 	}
 	closeStructSchemas(inputSchema)
 	requireNonEmptyStrings(inputSchema)
+	if strings.HasPrefix(policy.Scope, "placement:") {
+		describePlacementSchema(inputSchema)
+	}
 	for property, values := range toolEnums[tool.Name] {
 		if schema, exists := inputSchema.Properties[property]; exists {
 			schema.Enum = values

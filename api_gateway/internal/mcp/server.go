@@ -154,6 +154,8 @@ func (s *Server) registerResources() {
 
 // registerTools registers all MCP tools.
 func (s *Server) registerTools() {
+	tools.RegisterMediaPlacementTools(s.mcpServer, s.resolver)
+
 	// Account tools (always allowed)
 	tools.RegisterAccountTools(s.mcpServer, s.serviceClients, s.resolver, s.preflightCheck, s.logger)
 
@@ -899,6 +901,10 @@ func tenantActionForMCPTool(toolName string, policy tools.ToolPolicy) (authz.Act
 		return "", false
 	}
 	switch policy.Scope {
+	case "placement:read":
+		return authz.ActionReadMediaPlacement, true
+	case "placement:write":
+		return authz.ActionManageMediaPlacement, true
 	case "billing:write":
 		return authz.ActionManageBilling, true
 	case "settings:write":
@@ -1005,6 +1011,28 @@ func mcpOperationResourcePath(opName string, params mcp.Params) string {
 
 func mcpToolGraphQLOp(toolName string) string {
 	switch toolName {
+	case "get_media_placement_policy":
+		return "mediaPlacementPolicy"
+	case "get_media_placement_options":
+		return "mediaPlacementOptions"
+	case "preview_media_placement":
+		return "previewMediaPlacement"
+	case "review_media_placement_change":
+		return "reviewMediaPlacementChange"
+	case "apply_media_placement_change":
+		return "applyMediaPlacementChange"
+	case "get_media_placement_change":
+		return "mediaPlacementChange"
+	case "get_media_placement_legacy_pins":
+		return "mediaPlacementLegacyPins"
+	case "get_cluster_media_consent":
+		return "clusterMediaConsent"
+	case "review_cluster_media_consent_change":
+		return "reviewClusterMediaConsentChange"
+	case "apply_cluster_media_consent_change":
+		return "applyClusterMediaConsentChange"
+	case "get_cluster_media_consent_change":
+		return "clusterMediaConsentChange"
 	case "create_stream":
 		return "createStream"
 	case "update_stream":
