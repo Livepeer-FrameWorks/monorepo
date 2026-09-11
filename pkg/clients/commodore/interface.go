@@ -5,6 +5,7 @@ import (
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	foghorncontrolpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
+	placementpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 )
 
@@ -36,6 +37,12 @@ type Interface interface {
 	RegisterDVR(ctx context.Context, req *commodorepb.RegisterDVRRequest) (*commodorepb.RegisterDVRResponse, error)
 	UpdateDVRRetention(ctx context.Context, req *commodorepb.UpdateDVRRetentionRequest) (*commodorepb.UpdateDVRRetentionResponse, error)
 	GetMediaRetentionPolicy(ctx context.Context, req *commodorepb.GetMediaRetentionPolicyRequest) (*commodorepb.GetMediaRetentionPolicyResponse, error)
+	GetMediaPlacementPolicy(ctx context.Context, req *placementpb.GetPolicyRequest) (*placementpb.PolicyState, error)
+	GetMediaPlacementOptions(ctx context.Context, req *placementpb.GetOptionsRequest) (*placementpb.Options, error)
+	PreviewMediaPlacement(ctx context.Context, req *placementpb.PreviewRequest) (*placementpb.Preview, error)
+	ReviewMediaPlacementChange(ctx context.Context, req *placementpb.ReviewChangeRequest) (*placementpb.Review, error)
+	ApplyMediaPlacementChange(ctx context.Context, req *placementpb.ApplyChangeRequest) (*placementpb.Change, error)
+	GetMediaPlacementChange(ctx context.Context, req *placementpb.GetChangeRequest) (*placementpb.Change, error)
 	SetMediaRetentionPolicy(ctx context.Context, req *commodorepb.SetMediaRetentionPolicyRequest) (*commodorepb.SetMediaRetentionPolicyResponse, error)
 	UpdateAssetRetention(ctx context.Context, req *commodorepb.UpdateAssetRetentionRequest) (*commodorepb.UpdateAssetRetentionResponse, error)
 	ResetAssetRetention(ctx context.Context, req *commodorepb.ResetAssetRetentionRequest) (*commodorepb.UpdateAssetRetentionResponse, error)
@@ -100,7 +107,8 @@ type Interface interface {
 	ListDVRChapters(ctx context.Context, req *foghorncontrolpb.ListDVRChaptersRequest) (*foghorncontrolpb.ListDVRChaptersResponse, error)
 	ListStorageArtifacts(ctx context.Context, req *commodorepb.ListStorageArtifactsRequest) (*commodorepb.ListStorageArtifactsResponse, error)
 	ResolveViewerEndpoint(ctx context.Context, contentID, viewerIP, viewerToken string) (*sharedpb.ViewerEndpointResponse, error)
-	ResolveIngestEndpoint(ctx context.Context, streamKey, viewerIP string) (*sharedpb.IngestEndpointResponse, error)
+	ResolveViewerEndpointWithProtocol(ctx context.Context, contentID, viewerIP, viewerToken, protocol string) (*sharedpb.ViewerEndpointResponse, error)
+	ResolveIngestEndpoint(ctx context.Context, streamKey, viewerIP string, protocol sharedpb.IngestProtocol) (*sharedpb.IngestEndpointResponse, error)
 	CreateVodUpload(ctx context.Context, req *sharedpb.CreateVodUploadRequest) (*sharedpb.CreateVodUploadResponse, error)
 	CompleteVodUpload(ctx context.Context, req *sharedpb.CompleteVodUploadRequest) (*sharedpb.CompleteVodUploadResponse, error)
 	AbortVodUpload(ctx context.Context, tenantID, uploadID string) (*sharedpb.AbortVodUploadResponse, error)

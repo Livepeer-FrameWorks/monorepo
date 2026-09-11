@@ -9,7 +9,9 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	placementpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	x402pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/x402"
@@ -422,6 +424,21 @@ func (c *GRPCClient) GetClustersPricingBatch(ctx context.Context, tenantID strin
 		return nil, err
 	}
 	return resp.Pricings, nil
+}
+
+func (c *GRPCClient) GetMediaPlacementQuote(ctx context.Context, request *placementpb.CommercialQuoteRequest) (*placementpb.CommercialQuoteResponse, error) {
+	scope, _, err := placement.CanonicalCommercialQuoteRequest(request)
+	if err != nil {
+		return nil, err
+	}
+	response, err := c.clusterPricing.GetMediaPlacementQuote(withServiceAuth(ctx), scope, grpc.MaxCallRecvMsgSize(16<<20))
+	if err != nil {
+		return nil, err
+	}
+	if err := placement.ValidateCommercialQuoteResponse(scope, response, time.Now()); err != nil {
+		return nil, err
+	}
+	return response, nil
 }
 
 // SetClusterPricing creates or updates pricing config for a cluster

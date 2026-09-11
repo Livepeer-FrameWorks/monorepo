@@ -17,6 +17,7 @@ import (
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 )
 
@@ -31,6 +32,7 @@ type GRPCClient struct {
 	vod       foghornpb.VodControlServiceClient
 	tenant    foghornpb.TenantControlServiceClient
 	authority foghornpb.MediaAuthorityControlServiceClient
+	placement foghornpb.MediaPlacementControlServiceClient
 	edge      foghornpb.EdgeProvisioningServiceClient
 	nodeMgmt  foghornpb.NodeControlServiceClient
 	relay     foghornrelaypb.FoghornRelayClient
@@ -163,6 +165,13 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 			streamAuthInterceptor(config.ServiceToken),
 			clients.FailsafeStreamInterceptor(breakerName, config.Logger),
 		),
+		// PeerChannel is open for the life of a federation peering and carries no
+		// frames at all on a cluster with no live streams. Without pings a path
+		// black-holed by a NAT or firewall idle reap is never noticed: the receive
+		// side blocks forever, the peer still reads as connected, and the first
+		// lifecycle broadcast after that is enqueued into a mailbox whose Send is
+		// already doomed. PermitWithoutStream is off; the stream is always open.
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{Time: 30 * time.Second, Timeout: 10 * time.Second}),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Foghorn gRPC: %w", err)
@@ -176,6 +185,7 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 		vod:       foghornpb.NewVodControlServiceClient(conn),
 		tenant:    foghornpb.NewTenantControlServiceClient(conn),
 		authority: foghornpb.NewMediaAuthorityControlServiceClient(conn),
+		placement: foghornpb.NewMediaPlacementControlServiceClient(conn),
 		edge:      foghornpb.NewEdgeProvisioningServiceClient(conn),
 		nodeMgmt:  foghornpb.NewNodeControlServiceClient(conn),
 		relay:     foghornrelaypb.NewFoghornRelayClient(conn),
@@ -380,6 +390,10 @@ func (c *GRPCClient) DeleteDVR(ctx context.Context, dvrHash string, tenantID *st
 // ResolveViewerEndpoint resolves the best endpoint(s) for a viewer.
 // Returns any trailers emitted by the downstream service.
 func (c *GRPCClient) ResolveViewerEndpoint(ctx context.Context, contentID string, viewerIP, viewerToken *string) (*sharedpb.ViewerEndpointResponse, metadata.MD, error) {
+	return c.ResolveViewerEndpointWithProtocol(ctx, contentID, viewerIP, viewerToken, "")
+}
+
+func (c *GRPCClient) ResolveViewerEndpointWithProtocol(ctx context.Context, contentID string, viewerIP, viewerToken *string, protocol string) (*sharedpb.ViewerEndpointResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
@@ -387,6 +401,7 @@ func (c *GRPCClient) ResolveViewerEndpoint(ctx context.Context, contentID string
 		ContentId:   contentID,
 		ViewerIp:    viewerIP,
 		ViewerToken: viewerToken,
+		Protocol:    protocol,
 	}
 	var trailers metadata.MD
 	resp, err := c.viewer.ResolveViewerEndpoint(ctx, req, grpc.Trailer(&trailers))
@@ -395,13 +410,14 @@ func (c *GRPCClient) ResolveViewerEndpoint(ctx context.Context, contentID string
 
 // ResolveIngestEndpoint resolves the best ingest endpoint(s) for StreamCrafter.
 // Returns any trailers emitted by the downstream service.
-func (c *GRPCClient) ResolveIngestEndpoint(ctx context.Context, streamKey string, viewerIP *string) (*sharedpb.IngestEndpointResponse, metadata.MD, error) {
+func (c *GRPCClient) ResolveIngestEndpoint(ctx context.Context, streamKey string, viewerIP *string, protocol sharedpb.IngestProtocol) (*sharedpb.IngestEndpointResponse, metadata.MD, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 
 	req := &sharedpb.IngestEndpointRequest{
 		StreamKey: streamKey,
 		ViewerIp:  viewerIP,
+		Protocol:  protocol,
 	}
 	var trailers metadata.MD
 	resp, err := c.viewer.ResolveIngestEndpoint(ctx, req, grpc.Trailer(&trailers))

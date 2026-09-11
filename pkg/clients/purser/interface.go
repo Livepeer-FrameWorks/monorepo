@@ -3,6 +3,7 @@ package purser
 import (
 	"context"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	placementpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	x402pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/x402"
@@ -12,6 +13,7 @@ import (
 // that api_gateway can inject fakes for resolver real-path tests. The concrete
 // client satisfies it (asserted below).
 type Interface interface {
+	GetMediaPlacementQuote(ctx context.Context, request *placementpb.CommercialQuoteRequest) (*placementpb.CommercialQuoteResponse, error)
 	Close() error
 	GetTenantAdmissionStatus(ctx context.Context, tenantID string) (*purserpb.GetTenantAdmissionStatusResponse, error)
 	GetTenantBillingStatus(ctx context.Context, tenantID string) (*purserpb.GetTenantBillingStatusResponse, error)

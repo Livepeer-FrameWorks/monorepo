@@ -3,6 +3,7 @@ package quartermaster
 import (
 	"context"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	placementpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	tenantlimitspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/tenant_limits"
 	"google.golang.org/grpc"
@@ -24,6 +25,10 @@ type Interface interface {
 	DeactivateClusterAccess(ctx context.Context, tenantID, clusterID, reason string) error
 	ListTenantClusterAccess(ctx context.Context, tenantID string) (*quartermasterpb.ListTenantClusterAccessResponse, error)
 	GetTenantEntitlement(ctx context.Context, tenantID string) (*quartermasterpb.GetTenantEntitlementResponse, error)
+	GetClusterMediaConsent(ctx context.Context, req *quartermasterpb.GetClusterMediaConsentRequest) (*quartermasterpb.ClusterMediaConsentState, error)
+	ReviewClusterMediaConsentChange(ctx context.Context, req *quartermasterpb.ReviewClusterMediaConsentRequest) (*placementpb.Review, error)
+	ApplyClusterMediaConsentChange(ctx context.Context, req *quartermasterpb.ApplyClusterMediaConsentRequest) (*quartermasterpb.ClusterMediaConsentChange, error)
+	GetClusterMediaConsentChange(ctx context.Context, req *quartermasterpb.GetClusterMediaConsentChangeRequest) (*quartermasterpb.ClusterMediaConsentChange, error)
 	ListTenants(ctx context.Context, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListTenantsResponse, error)
 	GetTenantsByCluster(ctx context.Context, clusterID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.GetTenantsByClusterResponse, error)
 	CreateTenant(ctx context.Context, req *quartermasterpb.CreateTenantRequest) (*quartermasterpb.CreateTenantResponse, error)

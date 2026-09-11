@@ -7,6 +7,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	"github.com/google/uuid"
 
@@ -296,6 +297,7 @@ func (c *BatchedClient) SendTrigger(trigger *ipcpb.MistTrigger) error {
 // stall their drain loop indefinitely.
 func (c *BatchedClient) SendTriggerContext(ctx context.Context, trigger *ipcpb.MistTrigger) error {
 	c.stampTriggerEnvelope(trigger)
+	trigger = mist.SanitizeViewerTelemetry(trigger)
 	ctx = c.authContextFrom(ctx)
 	_, err := c.client.SendEvent(ctx, trigger)
 	if err != nil {

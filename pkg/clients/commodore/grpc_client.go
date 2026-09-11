@@ -1243,6 +1243,10 @@ func (c *GRPCClient) ListStorageArtifacts(ctx context.Context, req *commodorepb.
 
 // ResolveViewerEndpoint resolves the best endpoint for a viewer
 func (c *GRPCClient) ResolveViewerEndpoint(ctx context.Context, contentID, viewerIP, viewerToken string) (*sharedpb.ViewerEndpointResponse, error) {
+	return c.ResolveViewerEndpointWithProtocol(ctx, contentID, viewerIP, viewerToken, "")
+}
+
+func (c *GRPCClient) ResolveViewerEndpointWithProtocol(ctx context.Context, contentID, viewerIP, viewerToken, protocol string) (*sharedpb.ViewerEndpointResponse, error) {
 	if c == nil {
 		return nil, fmt.Errorf("CRITICAL: Commodore GRPCClient is nil")
 	}
@@ -1251,6 +1255,7 @@ func (c *GRPCClient) ResolveViewerEndpoint(ctx context.Context, contentID, viewe
 	}
 	req := &sharedpb.ViewerEndpointRequest{
 		ContentId: contentID,
+		Protocol:  protocol,
 	}
 	if viewerIP != "" {
 		req.ViewerIp = &viewerIP
@@ -1262,7 +1267,7 @@ func (c *GRPCClient) ResolveViewerEndpoint(ctx context.Context, contentID, viewe
 }
 
 // ResolveIngestEndpoint resolves the best ingest endpoint for StreamCrafter
-func (c *GRPCClient) ResolveIngestEndpoint(ctx context.Context, streamKey, viewerIP string) (*sharedpb.IngestEndpointResponse, error) {
+func (c *GRPCClient) ResolveIngestEndpoint(ctx context.Context, streamKey, viewerIP string, protocol sharedpb.IngestProtocol) (*sharedpb.IngestEndpointResponse, error) {
 	if c == nil {
 		return nil, fmt.Errorf("CRITICAL: Commodore GRPCClient is nil")
 	}
@@ -1271,6 +1276,7 @@ func (c *GRPCClient) ResolveIngestEndpoint(ctx context.Context, streamKey, viewe
 	}
 	req := &sharedpb.IngestEndpointRequest{
 		StreamKey: streamKey,
+		Protocol:  protocol,
 	}
 	if viewerIP != "" {
 		req.ViewerIp = &viewerIP

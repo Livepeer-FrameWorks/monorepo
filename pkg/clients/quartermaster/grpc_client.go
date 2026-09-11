@@ -13,12 +13,14 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/grpcutil"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
+	placementpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	tenantlimitspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/tenant_limits"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -139,6 +141,27 @@ func authInterceptor(serviceToken string, preferServiceToken bool, delegatedJWTS
 	}
 }
 
+// streamAuthInterceptor carries the service identity onto long-lived streams.
+// Unary interceptors never run for a stream, so without this a subscription
+// would reach Quartermaster unauthenticated and be refused. Streams here are
+// control-plane subscriptions, so they always present the service token rather
+// than a caller's delegated identity, and they carry no per-call timeout: a
+// subscription's lifetime is its context's.
+func streamAuthInterceptor(serviceToken string) grpc.StreamClientInterceptor {
+	return func(ctx context.Context, desc *grpc.StreamDesc, cc *grpc.ClientConn, method string, streamer grpc.Streamer, opts ...grpc.CallOption) (grpc.ClientStream, error) {
+		if serviceToken == "" {
+			return nil, status.Error(codes.Unauthenticated, "service token not configured")
+		}
+		md := metadata.MD{}
+		if existing, ok := metadata.FromOutgoingContext(ctx); ok {
+			md = existing.Copy()
+		}
+		md.Delete("authorization")
+		md.Set("authorization", "Bearer "+serviceToken)
+		return streamer(metadata.NewOutgoingContext(ctx, md), desc, cc, method, opts...)
+	}
+}
+
 func outgoingAuthTokenForRPC(ctx context.Context, configuredServiceToken string, delegatedJWTSecret []byte) (string, error) {
 	delegatedToken, err := clients.DelegatedJWTForRPC(ctx, "quartermaster", delegatedJWTSecret)
 	if err != nil {
@@ -185,6 +208,12 @@ func NewGRPCClient(config GRPCConfig) (*GRPCClient, error) {
 			clients.FailsafeUnaryInterceptor("quartermaster", config.Logger),
 			authInterceptor(config.ServiceToken, config.PreferServiceToken, config.DelegatedJWTSecret),
 		),
+		grpc.WithChainStreamInterceptor(streamAuthInterceptor(config.ServiceToken)),
+		// WatchPeers is idle for as long as the peer census is unchanged, which
+		// is most of the time. Without pings a connection black-holed by a NAT
+		// or load balancer is never noticed, the stream context never cancels,
+		// and the server-side subscription is never released.
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{Time: 30 * time.Second, Timeout: 10 * time.Second}),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to Quartermaster gRPC: %w", err)
@@ -308,6 +337,26 @@ func (c *GRPCClient) GetTenantEntitlement(ctx context.Context, tenantID string) 
 	return c.cluster.GetTenantEntitlement(ctx, &quartermasterpb.GetTenantEntitlementRequest{
 		TenantId: tenantID,
 	})
+}
+
+func (c *GRPCClient) GetMediaPlacementInventory(ctx context.Context, req *quartermasterpb.GetMediaPlacementInventoryRequest) (*quartermasterpb.MediaPlacementInventory, error) {
+	return c.cluster.GetMediaPlacementInventory(ctx, req)
+}
+
+func (c *GRPCClient) GetClusterMediaConsent(ctx context.Context, req *quartermasterpb.GetClusterMediaConsentRequest) (*quartermasterpb.ClusterMediaConsentState, error) {
+	return c.cluster.GetClusterMediaConsent(ctx, req)
+}
+
+func (c *GRPCClient) ReviewClusterMediaConsentChange(ctx context.Context, req *quartermasterpb.ReviewClusterMediaConsentRequest) (*placementpb.Review, error) {
+	return c.cluster.ReviewClusterMediaConsentChange(ctx, req)
+}
+
+func (c *GRPCClient) ApplyClusterMediaConsentChange(ctx context.Context, req *quartermasterpb.ApplyClusterMediaConsentRequest) (*quartermasterpb.ClusterMediaConsentChange, error) {
+	return c.cluster.ApplyClusterMediaConsentChange(ctx, req)
+}
+
+func (c *GRPCClient) GetClusterMediaConsentChange(ctx context.Context, req *quartermasterpb.GetClusterMediaConsentChangeRequest) (*quartermasterpb.ClusterMediaConsentChange, error) {
+	return c.cluster.GetClusterMediaConsentChange(ctx, req)
 }
 
 // ListTenants lists tenants with cursor pagination
@@ -681,6 +730,16 @@ func (c *GRPCClient) UpdateTenantCluster(ctx context.Context, req *quartermaster
 // ListPeers returns clusters that share tenants with the given cluster.
 func (c *GRPCClient) ListPeers(ctx context.Context, clusterID string) (*quartermasterpb.ListPeersResponse, error) {
 	return c.cluster.ListPeers(ctx, &quartermasterpb.ListPeersRequest{
+		ClusterId: clusterID,
+	})
+}
+
+// WatchPeers subscribes to this cluster's peer set. The first message is the
+// current set; later messages arrive only when it changes. The caller owns the
+// context and must keep its own periodic reconciliation, because a broken
+// stream has to degrade to the slower path rather than to a stale peer set.
+func (c *GRPCClient) WatchPeers(ctx context.Context, clusterID string) (quartermasterpb.ClusterService_WatchPeersClient, error) {
+	return c.cluster.WatchPeers(ctx, &quartermasterpb.ListPeersRequest{
 		ClusterId: clusterID,
 	})
 }
