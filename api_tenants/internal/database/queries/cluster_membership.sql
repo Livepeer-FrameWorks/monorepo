@@ -171,7 +171,24 @@ SELECT pc.cluster_id, pc.shared_tenant_ids, ic.cluster_name, ic.cluster_type,
              AND svc.type = 'foghorn' AND si.status = 'running'
              AND si.health_status = 'healthy' AND si.protocol = 'grpc'
            ORDER BY si.updated_at DESC, si.id ASC LIMIT 1
-       ), '')::text AS foghorn_addr
+       ), '')::text AS foghorn_addr,
+       COALESCE(NULLIF(ic.control_cell_id, ''), NULLIF(ic.cell_id, ''), ic.cluster_id)::text AS control_cell_id
 FROM peer_clusters pc
 JOIN quartermaster.infrastructure_clusters ic ON ic.cluster_id = pc.cluster_id
 WHERE ic.is_active = TRUE;
+
+-- name: PeerCensusFingerprint :one
+-- Summarizes every input ListPeerClusters reads: tenant reach, cluster identity
+-- and control cell, and which Foghorn instances are assigned and healthy enough
+-- to be addressable. Counts pair with the newest timestamp because a delete
+-- moves no timestamp forward. Detecting change here keeps peer subscriptions
+-- correct no matter which handler performed the mutation.
+SELECT
+    (SELECT count(*) FROM quartermaster.tenant_cluster_access)::bigint AS access_count,
+    (SELECT max(updated_at) FROM quartermaster.tenant_cluster_access)::timestamp AS access_updated_at,
+    (SELECT count(*) FROM quartermaster.infrastructure_clusters)::bigint AS cluster_count,
+    (SELECT max(updated_at) FROM quartermaster.infrastructure_clusters)::timestamp AS cluster_updated_at,
+    (SELECT count(*) FROM quartermaster.service_instances)::bigint AS instance_count,
+    (SELECT max(updated_at) FROM quartermaster.service_instances)::timestamp AS instance_updated_at,
+    (SELECT count(*) FROM quartermaster.service_cluster_assignments)::bigint AS assignment_count,
+    (SELECT max(updated_at) FROM quartermaster.service_cluster_assignments)::timestamp AS assignment_updated_at;

@@ -208,8 +208,8 @@ func TestListTenantEffectiveAccessUsesCanonicalActiveGrantPredicate_RealPG(t *te
 func prepareQuartermasterQueryCatalog(t *testing.T, db *sql.DB) {
 	t.Helper()
 	queries := quartermasterGeneratedQueries(t)
-	if len(queries) != 173 {
-		t.Fatalf("found %d generated Quartermaster queries, want 173", len(queries))
+	if len(queries) != 179 {
+		t.Fatalf("found %d generated Quartermaster queries, want 179", len(queries))
 	}
 	ctx := context.Background()
 	conn, err := db.Conn(ctx)
@@ -694,6 +694,16 @@ func runConvertedRuntimeWriteAdapters(t *testing.T, ctx context.Context, db *sql
 	if err := queries.CreateEdgeNode(ctx, CreateEdgeNodeParams{ID: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", NodeID: "contract-edge-node",
 		ClusterID: "demo-media", Hostname: "contract-edge-node", ExternalIP: "192.0.2.30", Latitude: 52.2, Longitude: 4.4}); err != nil {
 		t.Fatalf("create edge node: %v", err)
+	}
+	// A token-enrolled edge never receives a mesh heartbeat, so enrollment itself
+	// must leave it admitted; the column defaults ('offline', 'gitops_seed') would
+	// keep it out of edge DNS and placement inventory forever.
+	var edgeStatus, edgeOrigin string
+	if err := tx.QueryRowContext(ctx, `SELECT status, enrollment_origin FROM quartermaster.infrastructure_nodes WHERE node_id = 'contract-edge-node'`).Scan(&edgeStatus, &edgeOrigin); err != nil {
+		t.Fatalf("read enrolled edge node: %v", err)
+	}
+	if edgeStatus != "active" || edgeOrigin != "runtime_enrolled" {
+		t.Fatalf("enrolled edge node status/origin = %q/%q, want active/runtime_enrolled", edgeStatus, edgeOrigin)
 	}
 	if err := queries.CreateInfrastructureNode(ctx, CreateInfrastructureNodeParams{ID: "ffffffff-ffff-4fff-8fff-ffffffffffff",
 		NodeID: "contract-infra-node", ClusterID: "central-primary", Hostname: "contract-infra-node", NodeType: "core",

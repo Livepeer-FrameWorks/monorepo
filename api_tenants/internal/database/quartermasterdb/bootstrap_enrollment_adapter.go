@@ -69,10 +69,15 @@ type CreateEdgeNodeParams struct {
 	ExternalIP, Latitude, Longitude any
 }
 
+// CreateEdgeNode records a token-enrolled edge as active and runtime_enrolled.
+// Such an edge never joins the WireGuard mesh, so no SyncMesh heartbeat will
+// promote it out of the column default 'offline'; the owner's enrollment token
+// is the admission act. Later operator transitions (drain, remove, evict) still
+// win because reconnects never touch status.
 func (q *Queries) CreateEdgeNode(ctx context.Context, arg CreateEdgeNodeParams) error {
 	_, err := q.db.ExecContext(ctx, `
-		INSERT INTO quartermaster.infrastructure_nodes (id, node_id, cluster_id, node_name, node_type, external_ip, latitude, longitude, tags, metadata, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, 'edge', $5::inet, $6, $7, '{}', '{}', NOW(), NOW())
+		INSERT INTO quartermaster.infrastructure_nodes (id, node_id, cluster_id, node_name, node_type, external_ip, latitude, longitude, tags, metadata, status, enrollment_origin, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, 'edge', $5::inet, $6, $7, '{}', '{}', 'active', 'runtime_enrolled', NOW(), NOW())
 	`, arg.ID, arg.NodeID, arg.ClusterID, arg.Hostname, arg.ExternalIP, arg.Latitude, arg.Longitude)
 	return err
 }

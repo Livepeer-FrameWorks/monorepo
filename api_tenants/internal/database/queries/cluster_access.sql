@@ -121,7 +121,9 @@ SELECT ic.cluster_id,
        tca.subscription_status,
        tca.expires_at AS access_expires_at,
        tca.resource_limits::text AS resource_limits,
-       ic.allow_private_pull_sources
+       ic.allow_private_pull_sources,
+       ic.media_consent_revision, ic.media_allow_ingest, ic.media_allow_serve, ic.media_allow_external_source,
+       COALESCE(ic.region_id, '')::text AS region_id
 FROM quartermaster.tenant_cluster_access tca
 JOIN quartermaster.infrastructure_clusters ic ON ic.cluster_id = tca.cluster_id
 WHERE tca.tenant_id = sqlc.arg(tenant_id)::uuid
