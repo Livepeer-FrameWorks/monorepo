@@ -20,6 +20,7 @@ var valueProtos = map[string]bool{
 	"tenant_limits":     true,
 	"metering_contract": true,
 	"media_authority":   true,
+	"media_placement":   true,
 	"x402":              true,
 	"foghorn_control":   true,
 }

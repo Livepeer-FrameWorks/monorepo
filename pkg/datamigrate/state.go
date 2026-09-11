@@ -9,6 +9,7 @@ import (
 	"time"
 
 	fwdb "github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	"github.com/lib/pq"
 )
 
 // Status is the lifecycle state of a job or run.
@@ -211,28 +212,6 @@ func MarkJobCompleted(ctx context.Context, db *sql.DB, id string) error {
 	return nil
 }
 
-// MarkJobCompletedIfAllRunsCompleted completes the job only when every known
-// scope row is completed. It returns true when the job moved to completed.
-func MarkJobCompletedIfAllRunsCompleted(ctx context.Context, db *sql.DB, id string) (bool, error) {
-	res, err := db.ExecContext(ctx, `
-		UPDATE _data_migrations
-		SET status = $2, completed_at = NOW(), updated_at = NOW(), last_error = NULL
-		WHERE id = $1
-		  AND EXISTS (SELECT 1 FROM _data_migration_runs WHERE id = $1)
-		  AND NOT EXISTS (
-		      SELECT 1 FROM _data_migration_runs
-		      WHERE id = $1 AND status <> $2
-		  )`, id, string(StatusCompleted))
-	if err != nil {
-		return false, fmt.Errorf("complete job when all runs done %q: %w", id, err)
-	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-	return n > 0, nil
-}
-
 // MarkJobFailed moves the job row to failed and records the error.
 func MarkJobFailed(ctx context.Context, db *sql.DB, id string, runErr error) error {
 	msg := ""
@@ -394,4 +373,54 @@ func (s ScopeKey) String() string {
 		return "<whole-job>"
 	}
 	return s.Kind + "=" + s.Value
+}
+
+// MarkJobCompletedIfScopesCompleted completes the job only when every scope in
+// the supplied set has a completed run row, and only when that set is the full
+// discovered set for the migration.
+//
+// The older whole-table form was wrong in both directions. A run row for a scope
+// discovery no longer returns could never complete, so the job stayed running
+// forever with no way to clear it but manual SQL — and because the release
+// preflight is fail-closed on anything not completed, that refused every future
+// deploy. In the other direction, a first invocation narrowed to one scope
+// seeded exactly one run row, the aggregate passed on it alone, and the job was
+// marked completed with every other scope unmigrated: a safety gate reporting
+// green on work that never ran.
+//
+// Scoping the aggregate to the discovered set fixes the first; refusing to
+// complete on anything but a full run fixes the second.
+func MarkJobCompletedIfScopesCompleted(ctx context.Context, db *sql.DB, id string, scopes []ScopeKey) (bool, error) {
+	if len(scopes) == 0 {
+		return false, nil
+	}
+	kinds := make([]string, 0, len(scopes))
+	values := make([]string, 0, len(scopes))
+	for _, s := range scopes {
+		kinds = append(kinds, s.Kind)
+		values = append(values, s.Value)
+	}
+	res, err := db.ExecContext(ctx, `
+		UPDATE _data_migrations
+		SET status = $2, completed_at = NOW(), updated_at = NOW(), last_error = NULL
+		WHERE id = $1
+		  AND NOT EXISTS (
+		      SELECT 1
+		      FROM unnest($3::text[], $4::text[]) AS want(scope_kind, scope_value)
+		      WHERE NOT EXISTS (
+		          SELECT 1 FROM _data_migration_runs run
+		          WHERE run.id = $1
+		            AND run.scope_kind = want.scope_kind
+		            AND run.scope_value = want.scope_value
+		            AND run.status = $2
+		      )
+		  )`, id, string(StatusCompleted), pq.Array(kinds), pq.Array(values))
+	if err != nil {
+		return false, fmt.Errorf("complete job when scopes done %q: %w", id, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }

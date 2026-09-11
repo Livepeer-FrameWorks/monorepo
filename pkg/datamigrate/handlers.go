@@ -181,7 +181,12 @@ func HandleRun(ctx context.Context, openDB func() (*sql.DB, error), out io.Write
 		return fmt.Errorf("--scope-kind is required when --scope-value is set")
 	}
 
+	// A run narrowed to one scope covers only that scope, so it must never be
+	// allowed to settle the whole job: doing so marked the migration completed
+	// with every other scope unmigrated, and the release preflight trusts that
+	// status.
 	scopes := []ScopeKey{scope}
+	fullRun := scope.IsZero()
 	if scope.IsZero() && m.Scopes != nil {
 		var discovered []ScopeKey
 		if *dryRun {
@@ -252,7 +257,11 @@ func HandleRun(ctx context.Context, openDB func() (*sql.DB, error), out io.Write
 			return verifyErr
 		}
 	}
-	completed, err := MarkJobCompletedIfAllRunsCompleted(ctx, db, id)
+	if !fullRun {
+		fmt.Fprintf(out, "%s scope %s=%s completed; run without --scope-value to complete the job\n", id, scope.Kind, scope.Value)
+		return nil
+	}
+	completed, err := MarkJobCompletedIfScopesCompleted(ctx, db, id, scopes)
 	if err != nil {
 		return err
 	}
