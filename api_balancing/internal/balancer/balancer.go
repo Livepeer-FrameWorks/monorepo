@@ -158,20 +158,6 @@ type NodeWithScore struct {
 	GeoLongitude float64
 	LocationName string
 	ClusterID    string
-	Remote       bool // true only for a federation redirect candidate
-}
-
-// RemoteEdgeCandidate represents a remote edge from a peer cluster's EdgeSummary.
-type RemoteEdgeCandidate struct {
-	ClusterID   string
-	NodeID      string
-	BaseURL     string
-	GeoLat      float64
-	GeoLon      float64
-	BWAvailable uint64
-	CPUPercent  float64
-	RAMUsed     uint64
-	RAMMax      uint64
 }
 
 type nodeRejectionReason string
@@ -549,75 +535,6 @@ func (lb *LoadBalancer) geoDist(lat1, long1, lat2, long2 float64) float64 {
 		dist = -1
 	}
 	return 0.31830988618379067153 * math.Acos(dist) // Exact C++ constants
-}
-
-// remoteBWRefCapacity is the reference bandwidth for scoring remote edges (10 Gbps in bytes/s).
-// Remote edges report BWAvailable as absolute bytes/s; we normalize against this reference.
-const remoteBWRefCapacity = uint64(1250000000)
-
-// crossClusterPenalty is subtracted from remote edge scores so that local edges win
-// unless the remote edge is meaningfully better on GEO, BW, or capacity.
-// Equivalent to giving local edges a LocalPreference(200) bonus.
-const crossClusterPenalty = uint64(200)
-
-// ScoreRemoteEdges scores remote edge candidates using the same weight system as local
-// edges but applies a CrossClusterPenalty. Remote edges only win when significantly
-// better on GEO or BW than local edges.
-func (lb *LoadBalancer) ScoreRemoteEdges(candidates []RemoteEdgeCandidate, viewerLat, viewerLon float64) []NodeWithScore {
-	weights := state.DefaultManager().GetWeights()
-	var results []NodeWithScore
-
-	for _, c := range candidates {
-		if c.RAMMax == 0 || c.BWAvailable == 0 {
-			continue
-		}
-
-		// CPU score: same formula as local edges
-		cpuFraction := c.CPUPercent / 100.0
-		if cpuFraction > 1 {
-			cpuFraction = 1
-		}
-		cpuScore := uint64(float64(weights["cpu"]) * (1 - cpuFraction))
-
-		// RAM score: same formula as local edges
-		ramFraction := float64(c.RAMUsed) / float64(c.RAMMax)
-		if ramFraction > 1 {
-			ramFraction = 1
-		}
-		ramScore := uint64(float64(weights["ram"]) * (1 - ramFraction))
-
-		// BW score: normalize BWAvailable against reference capacity
-		avail := c.BWAvailable
-		if avail > remoteBWRefCapacity {
-			avail = remoteBWRefCapacity
-		}
-		bwScore := (avail * weights["bw"]) / remoteBWRefCapacity
-
-		// GEO score: same formula as local edges
-		var geoScore uint64
-		if geo.IsValidLatLon(c.GeoLat, c.GeoLon) && geo.IsValidLatLon(viewerLat, viewerLon) {
-			distance := lb.geoDist(c.GeoLat, c.GeoLon, viewerLat, viewerLon)
-			geoScore = weights["geo"] - uint64(float64(weights["geo"])*distance)
-		}
-
-		score := cpuScore + ramScore + bwScore + geoScore
-		if score <= crossClusterPenalty {
-			continue
-		}
-		score -= crossClusterPenalty
-
-		results = append(results, NodeWithScore{
-			Host:         c.BaseURL,
-			NodeID:       c.NodeID,
-			Score:        score,
-			GeoLatitude:  c.GeoLat,
-			GeoLongitude: c.GeoLon,
-			ClusterID:    c.ClusterID,
-			Remote:       true,
-		})
-	}
-
-	return results
 }
 
 // applyAdjustment implements EXACT C++ applyAdjustment function

@@ -403,58 +403,6 @@ func TestGetBestNode(t *testing.T) {
 	}
 }
 
-func TestScoreRemoteEdges(t *testing.T) {
-	sm := setupTestManager(t)
-	sm.SetWeights(100, 100, 100, 100, 0)
-
-	lb := NewLoadBalancer(logging.NewLoggerWithService("test"))
-	scored := lb.ScoreRemoteEdges([]RemoteEdgeCandidate{
-		{
-			ClusterID:   "remote-a",
-			NodeID:      "node-a",
-			BaseURL:     "edge-a.example.com",
-			GeoLat:      10,
-			GeoLon:      20,
-			BWAvailable: remoteBWRefCapacity,
-			CPUPercent:  0,
-			RAMUsed:     0,
-			RAMMax:      100,
-		},
-		{
-			ClusterID:   "remote-b",
-			NodeID:      "node-b",
-			BaseURL:     "edge-b.example.com",
-			GeoLat:      10,
-			GeoLon:      20,
-			BWAvailable: 1,
-			CPUPercent:  100,
-			RAMUsed:     100,
-			RAMMax:      100,
-		},
-		{
-			ClusterID:   "remote-c",
-			NodeID:      "node-c",
-			BaseURL:     "edge-c.example.com",
-			GeoLat:      10,
-			GeoLon:      20,
-			BWAvailable: remoteBWRefCapacity,
-			CPUPercent:  0,
-			RAMUsed:     0,
-			RAMMax:      0,
-		},
-	}, 10, 20)
-
-	if len(scored) != 1 {
-		t.Fatalf("expected only one viable remote edge, got %d", len(scored))
-	}
-	if scored[0].ClusterID != "remote-a" || scored[0].NodeID != "node-a" {
-		t.Fatalf("unexpected scored node: %+v", scored[0])
-	}
-	if scored[0].Score == 0 {
-		t.Fatal("expected positive remote score after penalty")
-	}
-}
-
 func TestApplyAdjustment(t *testing.T) {
 	lb := NewLoadBalancer(logging.NewLoggerWithService("test"))
 	tags := []string{"edge", "premium"}
