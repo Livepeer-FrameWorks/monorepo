@@ -69,7 +69,7 @@ Interactive JWT and wallet sessions use the signed-in user's platform role. API 
 each tool requires its exact published domain permission, such as `streams:read`, `streams:write`,
 `billing:read`, `billing:write`, `analytics:read`, or `infrastructure:write`. Account, support,
 developer, consultant, and wallet-management tools use the corresponding `account:*`,
-`support:read`, `developer:*`, `consultant:use`, and `security:*` scopes.
+`support:read`, `developer:*`, `consultant:use`, `security:*`, and `placement:read`/`placement:write` scopes.
 
 High-risk tools require API tokens to carry both their domain scope and `mcp:high-risk`. Grant this
 only to autonomous agents that are intentionally allowed to perform destructive,
@@ -192,87 +192,98 @@ email, and operator settlement.
 
 Actions the agent can perform.
 
-| Tool                             | Description                                       | Requires                        |
-| -------------------------------- | ------------------------------------------------- | ------------------------------- |
-| `request_wallet_challenge`       | Request a single-use EIP-191 login/link challenge | None                            |
-| `list_linked_wallets`            | List wallets linked to the authenticated user     | Auth                            |
-| `link_wallet`                    | Link a wallet using a fresh signed challenge      | Auth                            |
-| `unlink_wallet`                  | Unlink a wallet while retaining a sign-in method  | Auth                            |
-| `link_email`                     | Add email/password and send verification          | Auth                            |
-| `activate_free_tier`             | Activate Free after email verification            | Auth                            |
-| `get_tenant_settings`            | Read tenant identity and routing settings         | Auth                            |
-| `update_tenant_settings`         | Update tenant name, primary cluster, or model     | Owner/Admin                     |
-| `update_billing_details`         | Set billing address                               | Auth                            |
-| `get_payment_options`            | Get tenant-bound x402 payment options             | Auth                            |
-| `submit_payment`                 | Submit an x402 top-up payment                     | Auth                            |
-| `topup_balance`                  | Request ETH or USDC deposit address (locked rate) | Auth                            |
-| `check_topup`                    | Check crypto payment status                       | Auth                            |
-| `pay_invoice`                    | Create or resume an invoice payment               | Auth + Billing                  |
-| `start_postpaid_setup`           | Start Stripe or Mollie hosted postpaid setup      | Auth + Billing                  |
-| `complete_mollie_postpaid_setup` | Verify mandate and activate Mollie postpaid       | Auth + Billing                  |
-| `create_stream`                  | Create a push or pull stream                      | Auth                            |
-| `update_stream`                  | Update stream settings or pull-source config      | Auth                            |
-| `delete_stream`                  | Delete a stream                                   | Auth + Confirm                  |
-| `list_stream_keys`               | List stream ingest keys                           | Auth                            |
-| `create_stream_key`              | Create an additional ingest key                   | Auth + Confirm                  |
-| `delete_stream_key`              | Deactivate an ingest key                          | Auth + Confirm                  |
-| `refresh_stream_key`             | Rotate the primary stream key                     | Auth + Confirm                  |
-| `validate_stream_key`            | Validate an ingest key                            | Auth                            |
-| `list_push_targets`              | List masked multistream destinations              | Auth                            |
-| `create_push_target`             | Add a multistream destination                     | Auth                            |
-| `update_push_target`             | Update or enable a multistream destination        | Auth                            |
-| `delete_push_target`             | Delete a multistream destination                  | Auth                            |
-| `create_clip`                    | Create clip from stream                           | Auth + Balance                  |
-| `delete_clip`                    | Delete a clip                                     | Auth                            |
-| `start_dvr`                      | Start DVR recording                               | Auth + Balance                  |
-| `stop_dvr`                       | Stop DVR recording                                | Auth                            |
-| `delete_dvr`                     | Delete a DVR recording and stored media           | Auth + Confirm                  |
-| `get_retention_policy`           | Read tenant media-retention defaults and bounds   | Auth                            |
-| `set_retention_policy`           | Set tenant media-retention defaults               | Owner/Admin + Billing           |
-| `set_stream_retention_overrides` | Set DVR/clip retention overrides for a stream     | Owner/Admin + Billing           |
-| `update_asset_retention`         | Override retention for DVR, clip, or VOD          | Owner/Admin + Billing           |
-| `reset_asset_retention`          | Reset asset retention to the cascade default      | Owner/Admin + Billing + Confirm |
-| `create_vod_upload`              | Start a VOD upload                                | Auth + Balance                  |
-| `get_vod_upload_status`          | Inspect uploaded and missing VOD parts            | Auth                            |
-| `complete_vod_upload`            | Finalize a VOD upload                             | Auth + Balance                  |
-| `abort_vod_upload`               | Cancel an upload                                  | Auth                            |
-| `delete_vod_asset`               | Delete a VOD asset                                | Auth + Confirm                  |
-| `resolve_playback_endpoint`      | Get viewer playback URLs                          | None                            |
-| `list_signing_keys`              | List playback signing keys                        | Auth                            |
-| `create_signing_key`             | Create a one-shot ES256 private key               | Auth + Confirm                  |
-| `revoke_signing_key`             | Revoke a playback signing key                     | Auth + Confirm                  |
-| `set_playback_policy`            | Set JWT or webhook playback policy                | Auth + Confirm                  |
-| `clear_playback_policy`          | Clear playback policy                             | Auth + Confirm                  |
-| `test_playback_access`           | Test JWT/webhook playback policy behavior         | Auth                            |
-| `diagnose_rebuffering`           | Analyze rebuffering events                        | Auth                            |
-| `diagnose_buffer_health`         | Analyze buffer health and dry events              | Auth                            |
-| `diagnose_packet_loss`           | Analyze packet loss (protocol-aware)              | Auth                            |
-| `diagnose_routing`               | Analyze CDN routing decisions                     | Auth                            |
-| `get_stream_health_summary`      | Aggregated stream health metrics                  | Auth                            |
-| `get_anomaly_report`             | Detect anomalies vs baseline                      | Auth                            |
-| `list_support_conversations`     | List recent support conversations                 | Auth                            |
-| `search_support_history`         | Search support conversations                      | Auth                            |
-| `introspect_schema`              | Explore the GraphQL schema                        | Auth                            |
-| `generate_query`                 | Generate a GraphQL query from templates           | Auth                            |
-| `execute_query`                  | Execute a GraphQL query                           | Auth + Balance                  |
-| `ask_consultant`                 | Full Skipper pipeline with confidence tagging     | Auth + Balance                  |
-| `browse_marketplace`             | Browse available infrastructure clusters          | None                            |
-| `subscribe_to_cluster`           | Subscribe to a cluster                            | Owner/Admin + Infrastructure    |
+| Tool                             | Description                                       | Requires                               |
+| -------------------------------- | ------------------------------------------------- | -------------------------------------- |
+| `get_media_placement_policy` | Read saved/effective policy and rollout | Auth + placement:read |
+| `get_media_placement_options` | Page through authorized placement selectors | Auth + placement:read |
+| `preview_media_placement` | Preview saved or draft routing; not a reservation | Auth + placement:read |
+| `review_media_placement_change` | Review exact policy updates without applying | Owner/Admin + placement:write |
+| `apply_media_placement_change` | Apply a reviewed, idempotent policy change | Owner/Admin + placement:write; API tokens also need mcp:high-risk |
+| `get_media_placement_change` | Recover a change with its original idempotency key | Auth + placement:read |
+| `get_media_placement_legacy_pins` | Read stream pin migration restrictions | Auth + placement:read |
+| `get_cluster_media_consent` | Read cluster-owner media consent | Auth + placement:read + cluster ownership |
+| `review_cluster_media_consent_change` | Review owner consent without applying | Owner/Admin + placement:write + cluster ownership |
+| `apply_cluster_media_consent_change` | Apply reviewed, idempotent owner consent | Owner/Admin + placement:write + cluster ownership; API tokens also need mcp:high-risk |
+| `get_cluster_media_consent_change` | Recover an owner-consent change | Auth + placement:read + cluster ownership |
+| `request_wallet_challenge`       | Request a single-use EIP-191 login/link challenge | None                                   |
+| `list_linked_wallets`            | List wallets linked to the authenticated user     | Auth                                   |
+| `link_wallet`                    | Link a wallet using a fresh signed challenge      | Auth                                   |
+| `unlink_wallet`                  | Unlink a wallet while retaining a sign-in method  | Auth                                   |
+| `link_email`                     | Add email/password and send verification          | Auth                                   |
+| `activate_free_tier`             | Activate Free after email verification            | Auth                                   |
+| `get_tenant_settings`            | Read tenant identity and routing settings         | Auth                                   |
+| `update_tenant_settings`         | Update tenant name, primary cluster, or model     | Owner/Admin                            |
+| `update_billing_details`         | Set billing address                               | Auth                                   |
+| `get_payment_options`            | Get tenant-bound x402 payment options             | Auth                                   |
+| `submit_payment`                 | Submit an x402 top-up payment                     | Auth                                   |
+| `topup_balance`                  | Request ETH or USDC deposit address (locked rate) | Auth                                   |
+| `check_topup`                    | Check crypto payment status                       | Auth                                   |
+| `pay_invoice`                    | Create or resume an invoice payment               | Auth + Billing                         |
+| `start_postpaid_setup`           | Start Stripe or Mollie hosted postpaid setup      | Auth + Billing                         |
+| `complete_mollie_postpaid_setup` | Verify mandate and activate Mollie postpaid       | Auth + Billing                         |
+| `create_stream`                  | Create a push or pull stream                      | Auth                                   |
+| `update_stream`                  | Update stream settings or pull-source config      | Auth                                   |
+| `delete_stream`                  | Delete a stream                                   | Auth + Confirm                         |
+| `list_stream_keys`               | List stream ingest keys                           | Auth                                   |
+| `create_stream_key`              | Create an additional ingest key                   | Auth + Confirm                         |
+| `delete_stream_key`              | Deactivate an ingest key                          | Auth + Confirm                         |
+| `refresh_stream_key`             | Rotate the primary stream key                     | Auth + Confirm                         |
+| `validate_stream_key`            | Validate an ingest key                            | Auth                                   |
+| `list_push_targets`              | List masked multistream destinations              | Auth                                   |
+| `create_push_target`             | Add a multistream destination                     | Auth                                   |
+| `update_push_target`             | Update or enable a multistream destination        | Auth                                   |
+| `delete_push_target`             | Delete a multistream destination                  | Auth                                   |
+| `create_clip`                    | Create clip from stream                           | Auth + Balance                         |
+| `delete_clip`                    | Delete a clip                                     | Auth                                   |
+| `start_dvr`                      | Start DVR recording                               | Auth + Balance                         |
+| `stop_dvr`                       | Stop DVR recording                                | Auth                                   |
+| `delete_dvr`                     | Delete a DVR recording and stored media           | Auth + Confirm                         |
+| `get_retention_policy`           | Read tenant media-retention defaults and bounds   | Auth                                   |
+| `set_retention_policy`           | Set tenant media-retention defaults               | Owner/Admin + Billing                  |
+| `set_stream_retention_overrides` | Set DVR/clip retention overrides for a stream     | Owner/Admin + Billing                  |
+| `update_asset_retention`         | Override retention for DVR, clip, or VOD          | Owner/Admin + Billing                  |
+| `reset_asset_retention`          | Reset asset retention to the cascade default      | Owner/Admin + Billing + Confirm        |
+| `create_vod_upload`              | Start a VOD upload                                | Auth + Balance                         |
+| `get_vod_upload_status`          | Inspect uploaded and missing VOD parts            | Auth                                   |
+| `complete_vod_upload`            | Finalize a VOD upload                             | Auth + Balance                         |
+| `abort_vod_upload`               | Cancel an upload                                  | Auth                                   |
+| `delete_vod_asset`               | Delete a VOD asset                                | Auth + Confirm                         |
+| `resolve_playback_endpoint`      | Get viewer playback URLs                          | None                                   |
+| `list_signing_keys`              | List playback signing keys                        | Auth                                   |
+| `create_signing_key`             | Create a one-shot ES256 private key               | Auth + Confirm                         |
+| `revoke_signing_key`             | Revoke a playback signing key                     | Auth + Confirm                         |
+| `set_playback_policy`            | Set JWT or webhook playback policy                | Auth + Confirm                         |
+| `clear_playback_policy`          | Clear playback policy                             | Auth + Confirm                         |
+| `test_playback_access`           | Test JWT/webhook playback policy behavior         | Auth                                   |
+| `diagnose_rebuffering`           | Analyze rebuffering events                        | Auth                                   |
+| `diagnose_buffer_health`         | Analyze buffer health and dry events              | Auth                                   |
+| `diagnose_packet_loss`           | Analyze packet loss (protocol-aware)              | Auth                                   |
+| `diagnose_routing`               | Analyze CDN routing decisions                     | Auth                                   |
+| `get_stream_health_summary`      | Aggregated stream health metrics                  | Auth                                   |
+| `get_anomaly_report`             | Detect anomalies vs baseline                      | Auth                                   |
+| `list_support_conversations`     | List recent support conversations                 | Auth                                   |
+| `search_support_history`         | Search support conversations                      | Auth                                   |
+| `introspect_schema`              | Explore the GraphQL schema                        | Auth                                   |
+| `generate_query`                 | Generate a GraphQL query from templates           | Auth                                   |
+| `execute_query`                  | Execute a GraphQL query                           | Auth + Balance                         |
+| `ask_consultant`                 | Full Skipper pipeline with confidence tagging     | Auth + Balance                         |
+| `browse_marketplace`             | Browse available infrastructure clusters          | None                                   |
+| `subscribe_to_cluster`           | Subscribe to a cluster                            | Owner/Admin + Infrastructure           |
 | `unsubscribe_from_cluster`       | Remove a cluster subscription                     | Owner/Admin + Infrastructure + Confirm |
-| `create_cluster_invite`          | Invite a tenant to subscribe to an owned cluster  | Owner/Admin + Infrastructure    |
-| `revoke_cluster_invite`          | Revoke an outstanding cluster invite              | Owner/Admin + Infrastructure    |
-| `accept_cluster_invite`          | Redeem a cluster invite                           | Owner/Admin + Infrastructure    |
-| `request_cluster_subscription`   | Request access to a cluster                       | Owner/Admin + Infrastructure    |
-| `approve_subscription_request`   | Approve a pending cluster subscription            | Owner/Admin + Infrastructure    |
-| `reject_subscription_request`    | Reject a pending cluster subscription             | Owner/Admin + Infrastructure    |
-| `set_preferred_cluster`          | Set preferred cluster for DNS steering            | Owner/Admin + Settings          |
+| `create_cluster_invite`          | Invite a tenant to subscribe to an owned cluster  | Owner/Admin + Infrastructure           |
+| `revoke_cluster_invite`          | Revoke an outstanding cluster invite              | Owner/Admin + Infrastructure           |
+| `accept_cluster_invite`          | Redeem a cluster invite                           | Owner/Admin + Infrastructure           |
+| `request_cluster_subscription`   | Request access to a cluster                       | Owner/Admin + Infrastructure           |
+| `approve_subscription_request`   | Approve a pending cluster subscription            | Owner/Admin + Infrastructure           |
+| `reject_subscription_request`    | Reject a pending cluster subscription             | Owner/Admin + Infrastructure           |
+| `set_preferred_cluster`          | Set preferred cluster for DNS steering            | Owner/Admin + Settings                 |
 | `update_cluster_marketplace`     | Update cluster visibility, approval, or pricing   | Owner/Admin + Infrastructure + Confirm |
-| `create_enrollment_token`        | Create an enrollment token for edge bootstrap     | Owner/Admin + Infrastructure    |
-| `get_node_info`                  | Fetch node details                                | Owner/Admin + Infrastructure    |
-| `manage_node`                    | Activate/deactivate/drain/restart a node          | Owner/Admin + Infrastructure    |
-| `set_node_mode`                  | Set node mode (normal/draining/maintenance)       | Owner/Admin + Infrastructure    |
-| `get_node_health`                | Node health and metrics summary                   | Owner/Admin + Infrastructure    |
-| `create_edge_cluster`            | Create edge cluster (returns token and Foghorn)   | Owner/Admin + Infrastructure    |
+| `create_enrollment_token`        | Create an enrollment token for edge bootstrap     | Owner/Admin + Infrastructure           |
+| `get_node_info`                  | Fetch node details                                | Owner/Admin + Infrastructure           |
+| `manage_node`                    | Activate/deactivate/drain/restart a node          | Owner/Admin + Infrastructure           |
+| `set_node_mode`                  | Set node mode (normal/draining/maintenance)       | Owner/Admin + Infrastructure           |
+| `get_node_health`                | Node health and metrics summary                   | Owner/Admin + Infrastructure           |
+| `create_edge_cluster`            | Create edge cluster (returns token and Foghorn)   | Owner/Admin + Infrastructure           |
 
 <Aside type="tip" title="CLI Alternative">
   For operators who prefer the CLI over MCP, `frameworks edge deploy` combines `create_edge_cluster`
@@ -1355,6 +1366,8 @@ Analytics is also moving out of the "internal-only" bucket. Playback QoE, tenant
 
 Edge playback is getting stricter about partial failure. Foghorn and Helmsman now have better behavior when the stream is healthy but the control plane is having a short bad moment: registry stale-serving for transient resolve failures, bounded Helmsman recovery for previously approved play rewrites, HA state sync through Redis changelogs, federation advertisements for resilient playback, and native edge install improvements across Linux and macOS.
 
+Media placement is the other routing change in this tag. Where a request is answered, where a stream originates, and where a viewer receives it are three different places, and 0.3.0 stops treating a cluster boundary as a distance penalty. On top of that sits a typed placement policy per account and per stream: prefer your own capacity, spill over only on capacity or a defined geographic hole, never touch platform-official capacity, or rank marketplace capacity by effective price. Policies reach final admission through signed authority, and a cell only receives policy-bearing authority once its Foghorn replicas have attested that they enforce it. The full account is in [Your stream, your edge](/blog/your-stream-your-edge). Storage and processing placement are deliberately not in this tag.
+
 Skipper and MCP are part of 0.3.0 because agents are becoming an operations surface. The useful work is diagnostics from real stream state, schema-aware API help, billing preflight before expensive actions, confirmation gates around mutations, and source labels that say whether an answer came from docs, schema, metrics, or model inference. Billing mutations and private-infrastructure tools now require an owner/admin identity as well as the matching API-token scope, so member-linked agents no longer receive those tools in discovery.
 
 Chat and conferencing are next because FrameWorks already has pieces of the real-time stack: support conversations, message lifecycle events, Signalman subscriptions, and Skipper conversations. Conferencing needs room state, participant identity, moderation, recording rules, pricing, and media routing built around active participants. 0.3.0 sets up that direction by tightening the real-time and operator foundations first.
@@ -1445,15 +1458,15 @@ The FrameWorks Mist fork now accepts an explicit trigger action. `PLAY_REWRITE` 
 
 But "no answer" is still a bad viewer experience when the media cell already has a valid, durable answer.
 
-FrameWorks handles that in two places.
+FrameWorks keeps that durable answer in the media cell.
 
-First, Commodore distributes signed, versioned tenant and media-object authority to every eligible Foghorn cell. Foghorn verifies and commits it before acknowledging. A soft-expired decision keeps serving while Foghorn requests a refresh; hard expiry, a signed denial/tombstone, or a verification failure never becomes an allow. Because the projection is in the cell database, a Foghorn restart does not create a control-plane cold start.
+Commodore distributes signed, versioned tenant and media-object authority to every eligible Foghorn cell. Foghorn verifies and commits it before acknowledging. A soft-expired decision keeps serving while Foghorn requests a refresh; hard expiry, a signed denial/tombstone, or a verification failure never becomes an allow. Because the projection is in the cell database, a Foghorn restart does not create a control-plane cold start.
 
-Second, Helmsman keeps a tiny recovery cache for successful play rewrites. It records the last Foghorn-approved response for a requested stream and will replay it only when forwarding the trigger to Foghorn fails. The cache is small in both time and size: 30 seconds, capped at 4096 entries. Reachable Foghorn requests always go back to Foghorn. The cache is not an edge authority and it is not a billing bypass strategy. It is a bridge for restarts, dropped control streams, and short network stalls.
+Helmsman asks Foghorn for each new public play rewrite. It does not replay a previous viewer's successful stream-name mapping when Foghorn is unreachable: that mapping says nothing about the new viewer's location, the selected destination's current permission, or a changed tenant policy.
 
-The two mechanisms cover different failures. Signed Foghorn authority protects the media cell from a Commodore, Quartermaster, or Purser outage; Helmsman recovery protects one node from a short Foghorn/control-stream interruption. An authoritative rejection wins. If no valid local answer exists, Mist applies the trigger's explicit denial rather than interpreting an arbitrary fallback string.
+Signed Foghorn authority protects the media cell from upstream control-plane outages. Losing every reachable Foghorn is a different failure: new requests need reconnect or failover before they can obtain a decision. If no valid answer exists, Mist applies the trigger's explicit denial rather than interpreting an arbitrary fallback string.
 
-The trade-off is explicit. During a Helmsman recovery hit, the viewer path reuses a response that was approved moments earlier, so it can briefly miss fresh billing/account changes. That is why the recovery window is 30 seconds, not minutes. The goal is to survive a blip, not move policy enforcement to the edge.
+This changes admission for new requests, not a command to terminate established playback. The goal is to survive control-plane interruptions using verified authority, without turning a cached stream name into permission.
 
 The same authority now covers ingest ownership, pull/native sources, processing policy, multistream targets, and restart configuration. Owner-service changes create durable refresh outboxes; signed replacements and revocations converge independently to each cell. New management operations and new x402 settlement still require the control plane, but already-authorized media does not.
 
@@ -1649,6 +1662,69 @@ We think that's backwards. If you're trusting a platform with your live video, y
 This blog is where we write about that. Expect architecture deep-dives into how subsystems are designed and the trade-offs behind them, technical explanations of what shipped and how it works under the hood, and notes on how we test, audit, and operate a multi-tenant streaming platform.
 
 No release cadence, no filler. We publish when there's something worth reading.
+
+
+---
+# Your Stream, Your Edge: Media Placement Policy
+https://logbook.frameworks.network/blog/your-stream-your-edge
+
+A broadcaster goes live in Europe. Someone opens the stream in the United States. Where should that viewer connect?
+
+Usually, to a healthy US edge. The stream may start in Europe, but the viewer does not live at the ingest point. And the Foghorn instance that answers the routing request should not decide what "nearby" means simply by being the one that picked up the phone.
+
+That distinction is at the heart of media placement: where a request is answered, where a stream originates, and where a viewer receives it are three different places.
+
+## From federation to a placement decision
+
+[Federation](/blog/federation-went-live) gave clusters a way to find streams and source them from one another. Placement decides where that capability should be used.
+
+The routing path now compares eligible edges using the same facts everywhere: health, usable capacity, distance, and whether the stream is already available there or needs a source connection. A cluster boundary is not a distance penalty. An edge in Virginia does not become less attractive to a viewer in Virginia because the request happened to reach an EU coordinator.
+
+When the chosen edge needs the stream, its owning Foghorn arranges the source path. The destination stays the destination. The first viewer may pay some setup latency; later viewers reuse the stream there. If the edge cannot accept the work, the resolver moves to the next permitted candidate rather than quietly substituting a node local to whichever coordinator answered. DNS can make reaching the platform faster, but a sensible answer no longer depends on the viewer arriving at the "right" Foghorn first.
+
+## Nearby is only part of the answer
+
+There is another perfectly reasonable answer to the same routing question: "Use my servers."
+
+Perhaps you have already paid for capacity in your own rack. You want it used first, with spillover only when it is full or too far from the audience. Perhaps you never want platform-official media capacity used. Or perhaps a marketplace operator offers a better price within the regions you care about.
+
+Placement policies make those choices explicit. Ingest and serving have separate rules, because the best place for a broadcaster to publish is not necessarily the best place for every viewer to watch. Account defaults cover the ordinary case; stream-specific rules can narrow them.
+
+"Prefer" and "never" mean different things. A preference can have a fallback. A prohibition cannot be outscored by a closer edge. If a private-only policy has no available private capacity, the answer is unavailable, not a surprise move onto paid capacity. A geographic hole is a configured distance threshold, not a guess based on a continent label.
+
+## Decisions you can inspect
+
+The choice is two-sided. You can prefer a cluster without being allowed to use it, and a cluster owner can offer viewer capacity without accepting publishers. Owner controls separate ingest, viewer serving, and receiving sources from other clusters. Review shows the intended change; rollout shows whether the required recipients have applied it. A saved rule is not a claim that every connection already follows it.
+
+A preview shows which capacity groups qualify, why a candidate was excluded, and which condition would permit spillover. The runtime decision records the policy revision and the chosen destination separately from the origin and the coordinator.
+
+Price comparisons use your effective pricing, not a number copied from a marketplace card. Unknown prices stay unknown. An estimated placement cost is not a promise about the final bill; billing still follows the work that actually happened.
+
+## Enforced where media actually starts
+
+A policy that only lives in the resolver is advice. Placement is enforced at the two points where media actually begins.
+
+For publishers, MistServer now reports which connector accepted the connection as part of the push trigger itself. Foghorn evaluates ingest policy against that observed protocol, never against the URL the encoder sent, because the encoder controls that URL and RTMP lets a client label a connection however it likes. A publisher that lands on a node the policy forbids is refused after the claim is taken and the claim is released, so nothing is held for a session that never starts.
+
+For viewers, the same policy gate that prepared the destination admits the connection at the edge. A denied HLS request now gets a complete refusal and a closed connection instead of a response that never finishes, so players fail over instead of stalling.
+
+The same restrictions reach final admission through signed authority. A control-plane outage does not turn a deny into an allow, and it does not make distributed ownership disappear: an active publisher keeps its claim, and outage ingest has a single authorized owner. These are deliberate availability limits, not reasons to silently widen policy.
+
+## Turning it on without a flag
+
+Signed authority carries the policy. That raises the obvious question: what happens to an edge cell that has not been updated yet?
+
+The answer is an attestation chain rather than a configuration knob. Every Foghorn replica records, in a shared ledger, whether it has installed placement enforcement. When a cell acknowledges a signed authority delivery, the acknowledging replica reports whether every live replica in that cell enforces the policy schema. The control plane issues the first policy-bearing authority to an account only when every cell that serves it has attested. Until then the account keeps its previous authority, and each newly ready cell queues the accounts it still holds on the old schema. Once issued, policy never rolls back; a later grant on a cell that cannot enforce it is refused instead.
+
+## Next: where media rests, and where work runs
+
+This release's placement work concerns ingest and delivery. Durable storage and processing placement are separate engines on the roadmap.
+
+They build on the same idea, state the constraints, compare eligible capacity, explain the choice, but have different responsibilities. Storage must track copies, durability, retention and safe removal. Processing must match a job to compatible hardware, capacity and execution cost.
+
+Together, those future pieces can enable regional recording policies, hot and cold storage tiers, and choosing suitable processing capacity by location or cost. A viewer-serving rule does not already control those things. They are what comes next.
+
+The direction is straightforward: your infrastructure choices should be actual rules the platform follows, not assumptions hidden inside a load-balancing score.
 
 
 ---
@@ -4306,6 +4382,26 @@ for encoder setup scripts:
 curl https://foghorn.{base}/ingest/{streamKey}
 ```
 
+Require your encoder's protocol with `?protocol=whip`, `?protocol=rtmp`, or `?protocol=srt`:
+
+```bash
+curl 'https://foghorn.{base}/ingest/{streamKey}?protocol=srt'
+```
+
+This filters candidates before ranking and limiting the response. If no eligible node advertises
+that protocol, the response is unavailable; it does not substitute a different protocol. Omit the
+parameter to discover any advertised ingest protocols. WHIP `POST` always requires WHIP, and an
+explicit conflicting protocol or duplicate protocol parameter returns `400`.
+
+The URLs below illustrate one node's listeners, not fixed platform-wide ports. A node that does
+not advertise a protocol omits its URL. Resolution is advisory, not a reservation or confirmation
+that publishing has started.
+
+Use the returned URL for the selected protocol unchanged. `baseUrl` identifies the node's public
+HTTP(S) endpoint; its scheme and port are not the RTMP or SRT listener's scheme and port. Do not
+reconstruct publishing URLs from it or assume every returned node supports every protocol.
+Resolve with an explicit protocol when your encoder requires one.
+
 ```json
 {
   "primary": {
@@ -4661,6 +4757,276 @@ function LiveDashboard() {
 
 
 ---
+# Media placement preview
+https://logbook.frameworks.network/builders/media-placement
+
+## Availability
+
+The placement feature is under development for 0.3.0. Read-only capacity preview and source-aware
+preview for owned push streams are implemented; end-to-end live enforcement is not yet complete.
+Saving placement intent must not be treated as proof that every media path enforces it.
+
+Placement separates ingest from serving viewers. A viewer's distance is measured from the
+viewer location, not from the coordinator receiving the request. An account rule can prefer
+self-hosted capacity, prohibit a cluster class, or compare explicitly priced capacity.
+Stream-level hard constraints remain in effect when previewing an account draft against that stream.
+
+## Request a playback format
+
+The viewer resolver accepts `protocol: MediaViewerProtocol`. For example:
+
+```graphql
+query ResolveViewerDestination($contentId: String!) {
+  resolveViewerEndpoint(contentId: $contentId, protocol: HLS) {
+    primary {
+      nodeId
+      protocol
+      url
+      outputs
+    }
+    metadata {
+      contentId
+      contentType
+      status
+    }
+  }
+}
+```
+
+This is a requirement before selection, not a preference to apply after choosing a node. `WHEP`
+and `WEBRTC` are distinct; `HLS_CMAF` requests an HLS manifest, while `DASH` requests MPD. Omit
+the argument for automatic negotiation. The low-level player `GatewayClient` also accepts
+`protocol: "HLS"` (typed as `ViewerProtocol`). It rejects a mismatched result and does not retry
+without the requirement when an older GraphQL endpoint rejects the argument.
+
+Standalone integrations use the same resolver contract:
+
+```ts
+import { useViewerEndpoints } from "@livepeer-frameworks/player-react";
+
+// React: rerendering with new request fields cancels the old resolution.
+const { endpoints, status, error } = useViewerEndpoints({
+  contentId: playbackId,
+  protocol: "HLS",
+  playbackAuth: { token: viewerJwt },
+});
+```
+
+```ts
+import { onDestroy } from "svelte";
+import { createEndpointResolver } from "@livepeer-frameworks/player-svelte";
+
+// Inside a Svelte component's script; subscribe with $resolver.
+const resolver = createEndpointResolver({ contentId: playbackId, protocol: "HLS" });
+onDestroy(() => resolver.destroy());
+```
+
+The Svelte store supports `resolver.update({ protocol: "DASH" })` to replace the request and
+`resolver.refetch()` to request a fresh destination. Both wrappers expose only the current result and clear the
+previous destination while loading a replacement. `authToken` authenticates the Gateway request;
+`playbackAuth` forwards the viewer JWT separately. Cancellation includes pending retries.
+
+For direct live HTTP resolution, an explicit `?jwt=...` viewer credential is preserved on returned
+playback URLs. Treat those URLs as credentials: do not publish or log them. Header/cookie credentials
+are not converted into query parameters; your client must attach them to requests to the selected
+edge. Do not assume a browser forwards authorization across an edge redirect. This live-URL behavior
+does not apply to object-storage signed URLs.
+
+The player keeps Gateway/provided playback URLs authoritative while using the selected Mist edge
+for tracks and status. Metadata hydration, polling and cold recovery cannot silently add a different
+edge or an unprepared format. Direct-Mist mode still discovers its playback sources from Mist.
+
+The player requests a new format-specific destination after exhausting compatible players on the
+selected URL, with at most three fresh resolutions per initialization. `viewerProtocol: "HLS"`
+pins the requirement and prevents automatic format changes; React/Svelte expose it through
+`options`, and the web component uses `viewer-protocol="HLS"`.
+
+Changing those player request fields replaces the active controller, including when its previous
+resolution is still pending. Update supplied destinations by replacing the `endpoints` object,
+not by mutating it in place. Equivalent request values do not trigger reconnection.
+
+React, Svelte and web-component players apply `debug`, `autoplay` and `muted` updates without
+reconnecting, even while resolution is pending. Removing these options restores their defaults:
+debug/muted false and autoplay true. An unrelated option change does not reset the viewer's mute
+control. Changing autoplay affects subsequent autoplay attempts; it does not immediately play or
+pause the current session.
+
+Explicit live routing requires the matching placement-enabled Foghorn path. A cell's control
+replicas attest placement enforcement to the control plane before any policy-bearing authority is
+issued to it; until every cell serving your account has attested, routing follows the legacy
+path and the placement status surface reports no confirmed enforcement. Actual media proof across
+cells remains under development; schema/player support alone does not establish end-to-end
+enforcement. The read-only API demo supports only formats in its synthetic fixture.
+
+## Preview saved rules
+
+The MCP tools expose the same typed inputs and resolver checks as GraphQL. Nested fields use
+the GraphQL camelCase names, and revisions remain decimal strings. For example,
+`preview_media_placement` accepts:
+
+```json
+{
+  "scope": { "kind": "TENANT" },
+  "verb": "SERVE",
+  "protocol": "hls",
+  "coordinates": { "latitude": 39, "longitude": -77 }
+}
+```
+
+MCP results contain `{ "type": "MediaPlacementPreview", "value": { ... } }` in both structured
+content and the JSON text fallback. Typed failures set `isError` and retain the error code and
+recovery fields in `value`. A no-destination preview is a decision, not a transport failure.
+
+For edits, call `review_media_placement_change`, inspect its warnings, then use
+`apply_media_placement_change` with the **same updates and revisions**, returned `reviewToken`,
+explicit `acknowledgedWarningIds`, and a stable `idempotencyKey`. If the apply response is uncertain,
+call `get_media_placement_change` with its original scope and key before retrying; do not invent a
+new key. Cluster consent has matching `review_cluster_media_consent_change`,
+`apply_cluster_media_consent_change`, and `get_cluster_media_consent_change` tools.
+
+Treat null `activeRevision` and `activeParentRevision` as unconfirmed enforcement, not active
+revision zero. A stream without its own rules can still inherit an account policy: compare
+`parentRevision` with `activeParentRevision` and inspect rollout status. An explicitly activated
+inherited-only policy may report active stream revision `"0"` together with a positive active
+account revision. `NOT_CONFIGURED` describes the absence of custom rules at the requested scope;
+it does not prove that inherited rules are absent or enforced.
+
+Reads and previews require `placement:read`. Review and apply require owner/admin authority and
+`placement:write`; API tokens also need `mcp:high-risk` for apply. Policy management and change
+recovery do not require a funded balance. They do not reserve or authorize billable media capacity.
+
+Use a tenant-authenticated GraphQL request. API tokens require `placement:read`.
+The coordinates below are hypothetical viewer coordinates; preview does not change the account's
+location or open a media connection.
+
+```graphql
+query PreviewViewerPlacement {
+  previewMediaPlacement(
+    input: {
+      scope: { kind: TENANT }
+      verb: SERVE
+      protocol: "hls"
+      coordinates: { latitude: 39, longitude: -77 }
+    }
+  ) {
+    __typename
+    ... on MediaPlacementPreview {
+      revision
+      parentRevision
+      digest
+      reason
+      complete
+      sourceEvaluated
+      observedAt
+      expiresAt
+      activeIngestClusterId
+      selected {
+        clusterId
+        clusterName
+        region
+        distanceKm
+        requiresSourcePull
+        price {
+          amountMicros
+          currency
+          unit
+          revision
+          expiresAt
+        }
+      }
+      transitions {
+        fromGroup
+        reason
+      }
+    }
+    ... on MediaPlacementError {
+      code
+      message
+    }
+    ... on AuthError {
+      message
+    }
+    ... on NotFoundError {
+      message
+    }
+  }
+}
+```
+
+For an owned stream, use `scope: { kind: STREAM, streamId: "<stream-id>" }`.
+Alternatively, keep tenant scope and provide `streamId` to test account rules against that stream's
+constraints. A stream from another account cannot be inspected.
+
+To preview an unsaved change, provide `draftUpdate` for the same verb plus `expectedRevision` and
+`expectedParentRevision` from the policy read. Revisions are decimal strings, not JavaScript
+numbers. `CLEAR` previews inheritance; it does not mean deny all. A revision conflict means reload
+the policy and preview again. The request does not save rules or require a write-recovery key.
+
+## Interpret the result
+
+A selected cluster is an observed, policy-ranked destination—not a reservation or a guarantee of
+playback. Streamless previews have `sourceEvaluated: false`: source availability was not evaluated.
+For an owned push stream, serving preview checks its current publisher and the permissions needed
+to pull into the destination cluster. `sourceEvaluated: true` means those source observations were
+available; `requiresSourcePull: true` means the destination still needs a pull. Preview never starts
+that pull or proves first-frame delivery. Managed non-push source preview is currently unsupported.
+
+If the publisher cannot be verified, an owned-stream serving preview returns an incomplete result
+with no selected destination. It does not substitute a capacity-only answer for a playback route.
+
+`complete: false` means relevant evidence is missing. An unreachable self-hosted cluster is not
+proof that it is full, so it cannot unlock a capacity-only fallback. Missing cost evidence is not
+treated as free. Price comparisons include their currency, unit and expiry; amounts are integer
+micro-units represented as strings.
+
+An active push publisher remains pinned to its existing ingest cluster. Previewing a nearer location
+does not migrate that publisher. Candidate node IDs are private infrastructure details and may be
+omitted even when a cluster is visible. Discard expired results and preview again after changing
+rules, stream, verb, protocol or coordinates.
+
+## Try the read-only demo
+
+In API Explorer, enable **Demo** and open **Media Placement**. The examples include a US viewer
+with an EU publisher, self-hosted-first preferences with geographic fallback, and a review of a
+"never official" restriction. Draft preview and review use the shared policy evaluator and diff
+logic against synthetic fixtures, without observing real capacity or preparing media.
+
+Demo results are explicitly marked simulated. Account and stream policies remain at revision `0`,
+there is no active-policy claim, and every Apply returns `UNSUPPORTED` rather than pretending to
+save. Change recovery returns no saved receipt. Review tokens beginning `demo-preview-only:` are
+not live apply credentials. Demo requests never use real service clients, even when sent with a
+signed-in account. This is API Demo Mode, not database seed data or proof of live routing.
+
+## Cluster-owner capacity permissions
+
+On an owned media cluster's detail page, **Capacity permissions** controls whether the cluster
+accepts publishers, serves viewers, and pulls media from other clusters. Same-cluster source pulls
+do not require the external-source permission. Consumer placement rules can narrow these
+permissions but cannot override them. Enabling capacity does not grant another account access,
+subscribe it to a marketplace offering, or change prices and credentials.
+
+Edit the switches, select **Review changes**, read the impact and required warnings, then select
+**Apply permissions**. Incomplete impact counts are not a complete inventory. A saved revision is
+not proof of active enforcement: check its rollout status separately. Already admitted sessions
+retain their admission; the changes govern new decisions once enforced.
+
+If someone else changes the revision, reload current permissions and review again. You can retain
+your draft when reloading. If a save times out, keep the page open and use **Check save status** or
+**Retry same change**. These retain the original reviewed request; do not submit a new change to
+resolve an uncertain save. Closing the page loses its in-memory recovery command.
+
+For integrations, the owner API fields are `clusterMediaConsent`,
+`reviewClusterMediaConsentChange`, `applyClusterMediaConsentChange`, and
+`clusterMediaConsentChange`. Read/recovery require `placement:read` for API tokens; review/apply
+require `placement:write` plus the owning tenant's authorized role. Platform-operator status does
+not bypass ownership. Preserve decimal revision strings, review tokens, warning IDs and the
+idempotency key exactly. Query recovery with the same cluster and key after an ambiguous write.
+
+Storage and processing placement are separate planned engines. This preview does not choose durable
+copy locations, schedule processing jobs, or proactively replicate a stream.
+
+
+---
 # Multistreaming
 https://logbook.frameworks.network/builders/multistreaming
 
@@ -4771,6 +5137,11 @@ query {
   immediately before activation, but MistServer performs the final connection lookup; use an egress
   firewall when you need a hard boundary against DNS rebinding.
 </Aside>
+
+Use `reasonCode` for automation and `lastError` for sanitized operator-facing detail. The
+stable reason values are `unspecified`, `connected`, `completed`, `destination_rejected`,
+`network_error`, `process_error`, `capacity_exhausted`, `configuration_error`,
+`edge_upgrade_required`, and `stopped`.
 
 ### Update a Push Target
 
@@ -12915,6 +13286,35 @@ graph LR
     H --> F[Foghorn]
 ```
 
+### Ingest Endpoint Resolution
+
+Node-specific ingest recommendations include only protocols currently advertised by that
+node. RTMP/SRT URLs retain its listener ports; changing a Foghorn-wide default port does not
+override them. A healthy node with no ingest protocol report is not a valid recommendation.
+WHIP redirects select a WHIP-capable node before limiting the candidate list.
+The ingest gRPC request can also require WHIP, RTMP or SRT. Unsupported enum values are
+rejected, and no available node for the requested protocol means unavailable—not a
+recommendation for a different protocol. Omitting the protocol lists any advertised ingest
+protocols.
+
+Listener reports expire after 30 seconds independently of heartbeats. Helmsman sends an empty
+snapshot when Mist stops advertising listeners, withdrawing their URLs. For WHIP, Foghorn
+uses the reported HTTP signalling endpoint, not WebRTC's UDP listener port, and retains the
+public proxy path. Helmsman reconciles the managed HTTP public address into the scalar form
+needed by Mist's listener report while preserving the node's port and other listener options.
+Repository hydration does not renew listener evidence, and changing a node's public address
+without a new report invalidates its old evidence.
+
+Generic DNS ingest names remain manual entry points, not proof of a policy-selected node.
+These endpoint checks do not by themselves activate the federation placement policy engine.
+
+The placement editor's authorized cluster, operator and region options are a management catalogue,
+not a live routing result. “Connected” does not guarantee available capacity or permission for both
+ingest and delivery, and selecting marketplace capacity never subscribes to it. A changed catalogue
+requires a fresh search; the editor retains draft selections. Saving requested rules and observing
+them enforced at media destinations remain separate steps. The placement engine is not yet
+activated end to end.
+
 ### Viewer Routing
 
 Foghorn selects optimal edge nodes for viewers based on geography, load, and stream availability.
@@ -12946,6 +13346,17 @@ graph LR
 | `GET /{viewkey}`                     | Best node host or 307   | MistServer compatibility |
 
 For URI patterns and player integration, see [Playback & Embedding](/builders/playback).
+
+**Client location behind a proxy:** configure `TRUSTED_PROXY_CIDRS` on Bridge and
+Foghorn to name their immediate reverse proxies as narrowly as your topology permits.
+Forwarding headers from other peers are ignored. Keep `GEOIP_MMDB_PATH` configured on
+Foghorn for geographic lookup; public coordinate/country headers and `lat`/`lon` query
+parameters are not a substitute for GeoIP. Missing location means unknown geography.
+Authenticated node-to-node source routing has separate coordinate hints.
+
+Call viewer resolution from the viewer's browser/device where possible. A backend
+resolving on behalf of a viewer supplies its own network identity, not the viewer's;
+setting arbitrary forwarding headers does not change that trust boundary.
 
 ---
 
@@ -13645,6 +14056,30 @@ frameworks cluster init postgres --manifest production.yaml
 ```
 
 ---
+
+### Capacity-owner consent review keys
+
+Generate a dedicated Quartermaster review signer for an existing deployment:
+
+```bash
+frameworks cluster secrets generate-capacity-consent --out /secure/path/capacity-consent.env
+```
+
+The command writes a new mode-0600 fragment and refuses to overwrite an existing file. Import
+`CAPACITY_CONSENT_REVIEW_KEY_ID` and `CAPACITY_CONSENT_REVIEW_PRIVATE_KEY_PEM_B64` into your
+operator-owned secret store. Do not distribute this private key to other services. The production
+renderer passes the tuple only to Quartermaster; `generate-shared` includes a separate signer
+for fresh installations. Importing or generating keys does not deploy services.
+
+Without the tuple, consent reads and committed-change recovery remain available, but new reviews
+and writes are unavailable. Configure both values together; partial or malformed configuration
+prevents Quartermaster startup. Rotating the signer requires reviewing unapplied changes again;
+an already committed command remains recoverable by its currently authorized owner.
+
+Consent management is not yet activated end to end. Its gRPC API records requested owner
+permissions and reports changes as pending, not enforced. Public web/API integration and
+policy-bearing edge admission remain release gates. Configuring this signer does not activate
+viewer or ingest placement enforcement.
 
 ### Additional Cluster Provisioning Commands
 
@@ -18981,6 +19416,133 @@ console access.
 
 
 ---
+# Media placement controls
+https://logbook.frameworks.network/operators/media-placement
+
+## Availability
+
+Media placement is under development for 0.3.0. Account/stream policy management, cluster-owner
+capacity permissions, and read-only previews are implemented. End-to-end live routing and final
+admission enforcement are not yet complete. Do not enable a production restriction on the
+assumption that saving it proves every connection path enforces it.
+
+There are two independent sides to a placement decision:
+
+- The consuming account chooses which entitled capacity it may use and in what order.
+- The capacity owner chooses which media operations its cluster may accept.
+
+Both must permit the operation. Neither side creates a subscription or changes the other side's
+permissions. Being a platform operator does not bypass tenant ownership when editing consent.
+
+## Configure owned capacity
+
+Open an owned media cluster under **Infrastructure**. Its detail page contains **Capacity
+permissions**:
+
+| Control                        | Permission                                                                           |
+| ------------------------------ | ------------------------------------------------------------------------------------ |
+| Accept publishers              | New ingest placement on this cluster.                                                |
+| Serve viewers                  | New viewer placement on this cluster.                                                |
+| Pull media from other clusters | Receiving a source from a different cluster; same-cluster sources do not require it. |
+
+The switches are independent. For example, disabling new publisher placement does not express a
+viewer-delivery preference, and allowing an external source does not itself allow viewers.
+These controls do not modify publishing credentials, subscription access, or prices.
+
+1. Edit the switches and choose **Review changes**.
+2. Read the differences, impact coverage, and warnings. Incomplete counts are not a full inventory.
+3. Acknowledge every required warning before choosing **Apply permissions**.
+4. Inspect the requested revision and rollout status separately from the save confirmation.
+
+Already admitted sessions retain their admission. Once enforced, updated rules govern new
+placement decisions; saving is not an immediate drain operation.
+
+## Handle concurrent changes and uncertain saves
+
+A revision conflict means another writer changed the rules. Choose **Reload and keep draft** to
+rebase your choices on the current saved revision, or **Reload saved permissions** to discard your
+draft. Review again before applying. An expired review also requires a fresh review.
+
+If a save has no confirmed outcome, keep the page open. **Check save status** looks up the original
+request. **Retry same change** checks for its receipt before resubmitting that exact reviewed
+command and idempotency key. Controls stay locked while the outcome is uncertain. Do not resolve
+an ambiguous write by creating a new request with a different key.
+
+Recovery state is held in the open page, not persisted across a closed tab. Navigation warns before
+discarding it; logout or changing identity clears the local draft and pending command.
+
+## Interpret status and preview
+
+**Saved · waiting for enforcement** is not an effective-policy claim. A zero required-recipient
+count means coverage has not been confirmed, not that there is nothing left to enforce. A delivery
+acknowledgement by itself is not proof that routing and every final admission path enforce a rule.
+Likewise, matching legacy connected and local admission results is not placement-readiness proof:
+those responses do not describe a placement decision. Placement requires its own activation checks,
+including when its saved rules are empty or inherit defaults.
+
+**No custom rules at this scope** means there is no scope-specific policy, not that a stream is
+unrestricted. Streams can inherit requested account rules without having their own override.
+Check the active account revision separately; **not confirmed** is not active revision zero.
+The editor refreshes pending, blocked and inherited-unconfirmed status while idle and visible,
+without replacing an edited draft or an uncertain save.
+
+Use [media placement preview](/builders/media-placement/) to inspect authorized capacity and
+source observations without reserving a node or starting media. Missing observations are not
+proof that a preferred cluster is full. A successful source-aware preview does not prove first-frame
+delivery. Managed non-push source preview is currently unsupported.
+
+DNS helps clients reach an entry point; it must not define which destination is considered local
+to a publisher or viewer. The new coordinator-independent live path remains an integration gate;
+the management and preview interfaces do not switch it on. HTTP and gRPC adapters share exact-node
+preparation for live push streams, but executable activation is not installed yet. They return only
+the prepared destination and protocol, not a catalog of unprepared alternatives. Explicit protocol
+requests cannot silently switch formats. This contract and its unit tests are not two-cell playback
+proof; release verification still needs actual playback, pull reuse, reconnect and failure behavior.
+Cold/warm first-frame timings are optional diagnostics, not an additional release gate.
+
+Signing in must not move playback resolution to the viewer's own tenant cluster. Commodore uses
+the content owner's routing identity for anonymous and authenticated viewers alike; the resolving
+Foghorn then chooses the media destination. On the prepared HTTP path, WHEP remains WHEP and a
+CMAF `index.mpd` request selects DASH. Conflicting manifest formats fail rather than returning HLS.
+The older hostname-returning Mist balancer route is removed. The remaining Mist compatibility
+surface is an authorized, node-bound source lookup and read-only diagnostics; it never returns a
+viewer playback destination.
+
+Federation discovery distinguishes a virtual media cluster from the Foghorn control cell that
+manages it. Quartermaster advertises the control-cell identity with its endpoint, and shared peer
+discovery makes that mapping available to each replica. Placement and prepared source pulls use
+this identity; a similarly named cluster is not a substitute. Older peer records without cell
+metadata remain unavailable to placement, so discovery compatibility is part of rollout readiness.
+This metadata does not require a Mist configuration step or a new per-viewer callback.
+
+The prepared-source integration binds authorization to the destination's current control
+connection. A node reconnect cannot reuse an earlier connection's receipt; fresh preparation
+can still reuse the existing media pull. Missing connection ownership rejects preparation rather
+than assuming the node is available. The source adapter supports fresh preparation after expiry
+using retained viewer geography and protocol, with current policy and capacity checks. That request
+context is not permission and is cleared with the pull. Missing context or failed checks cannot
+renew a source. Startup installs this check for placement-marked pulls using the destination's
+shared receipt store. The marker is durable before a new or adopted pull URL is returned; missing
+receipts or an unavailable adapter return an explicit offline source. Unmarked legacy pulls are
+not globally switched by this wiring. Fleet capability checks, complete public/final admission
+activation and actual-media reconnect verification remain requirements, not completed rollout
+guarantees. Do not treat the registry marker as permission or as evidence that an older replica
+can enforce placement.
+
+Storage and processing placement are separate planned engines. These media controls do not select
+durable-copy locations or processing workers.
+
+## Keep credentials out of diagnostics
+
+Viewer JWTs authorize playback; they are not diagnostic identifiers. New viewer events are
+redacted before the telemetry RPC and again before Kafka publishing. Diagnostic request URLs
+retain only a validated browser-session `fwsid`; other query parameters, URL credentials and
+fragments are removed. Tenant, serving/origin cluster, control-cell and session attribution remain
+available for troubleshooting. Use those identifiers rather than sharing a token-bearing URL.
+This does not remove records already retained by older deployments.
+
+
+---
 # Media Storage & Playback Paths
 https://logbook.frameworks.network/operators/media-storage
 
@@ -20758,8 +21320,9 @@ settled frontier. When contract is eventually applied, its refresh file first se
 upgrade-only discovery keys for retained playback and delivery identities in separate,
 spillable per-scope statements. Each completed scope writes a receipt, and the same file
 refuses the destructive refresh unless all six receipts were written by that attempt. It
-consumes the keys and receipts only after every dependent refresh succeeds. A delayed run
-or an unledgered retry after a partial failure therefore starts by reseeding; no manual
+keeps keys and receipts available for two days so an overlapping scheduled refresh cannot
+lose discovery state, after which table TTL removes them. A delayed run or an unledgered
+retry after a partial failure therefore starts by reseeding; no manual
 receipt insertion or postdeploy reapplication is supported or required. Source ledger
 projection versions and TTLs are never rewritten. If the gate fails, leave the contract
 phase unapplied and retry the contract command; dashboards keep their pre-cutover
@@ -20770,8 +21333,9 @@ partial source set cannot erase retained historical aggregates.
 The contract seed supplies the initial retained key set used to rewrite per-stream daily analytics from
 deduplicated playback and restream facts. Both audience and egress then use session-end
 day semantics. The bounded tenant-daily API request re-aggregates current finalized facts for
-at most 90 calendar days; stored daily projections serve the longer-lived dashboards. The hourly refresh still resolves
-affected historical keys against retained finalized facts.
+at most 90 calendar days; stored tenant and stream daily projections retain the same
+730-day session-end-day horizon. The hourly refresh resolves affected historical keys
+against retained finalized facts and carries explicit external group/sort spill limits.
 
 The chapter migration depends on the DVR migration and intentionally refuses to run first. During
 the DVR backfill, rows not yet snapshotted use their parent stream only as a rollout-compatibility
@@ -21148,7 +21712,7 @@ This runbook applies to the supported customer edge boundary: the customer opera
    psql --dbname "$COMMODORE_DATABASE_URL" --no-psqlrc --tuples-only --no-align --command "SELECT tenant_id, user_id, id, token_name, permissions FROM commodore.api_tokens WHERE is_active = true AND (expires_at IS NULL OR expires_at > NOW()) AND EXISTS (SELECT 1 FROM unnest(permissions) AS permission WHERE permission NOT IN ('account:read','analytics:read','billing:read','billing:write','consultant:use','developer:read','developer:write','infrastructure:read','infrastructure:write','mcp:high-risk','security:read','security:write','settings:write','streams:read','streams:write','support:read')) ORDER BY tenant_id, user_id, id"
    ```
 
-   For each row, have the creating user or a tenant owner/admin create a replacement with `frameworks admin tokens create --name <name> --perms <exact,scopes>`, update the consuming secret, and verify the replacement. A tenant owner/admin can then revoke any token in that tenant by census ID with `frameworks admin tokens revoke <token-id> --yes`, including a token whose creating user has departed. Ordinary members can revoke only their own tokens. There is no in-place re-scope operation because token grants are immutable. Re-run the census until it returns no rows and retain the redacted count—not token identifiers or secret values—with the upgrade evidence. The database default is changed to `streams:read` for omitted permissions, but existing rows remain unchanged. Retention mutations require `billing:write`; `set_preferred_cluster` and `update_tenant_settings` require `settings:write`.
+   For each row, have the creating user or a tenant owner/admin create a replacement with `frameworks admin tokens create --name <name> --perms <exact,scopes>`, update the consuming secret, and verify the replacement. These commands use the authenticated operator session from the active CLI context. A tenant owner/admin can enumerate the tenant's tokens with `frameworks admin tokens list` and revoke any one by ID with `frameworks admin tokens revoke <token-id> --yes`, including a token whose creating user has departed. Ordinary members list and revoke only their own tokens. There is no in-place re-scope operation because token grants are immutable. Re-run the census until it returns no rows and retain the redacted count—not token identifiers or secret values—with the upgrade evidence. The database default is changed to `streams:read` for omitted permissions, but existing rows remain unchanged. Retention mutations require `billing:write`; `set_preferred_cluster` and `update_tenant_settings` require `settings:write`.
 
 9. **Tighten inventory.** Deploy owner-scoped full cluster/node reads after Gateway and Quartermaster policy are both live. Confirm expired, suspended, unknown-provenance, and inactive-cluster grants reveal no full inventory.
 
@@ -22150,6 +22714,7 @@ Planned items in this area are detailed on the [Roadmap](/roadmap#infrastructure
 | **NAT-aware routing and traversal** | Planned | — | NAT-type classification as a first-class routing and placement signal, platform-coordinated hole punching, and platform-managed measurement of inter-server network performance (latency, throughput) feeding routing and capacity decisions — so self-hosted nodes behind NAT participate fully in the federated network. |
 | **Federation state synchronization** | Planned | — | Decentral distribution of configuration and state changes across a dynamic federation — clusters and servers join, leave, or drop offline at will — with automatic conflict resolution between concurrent changes and reconvergence after network partitions, without a central coordination point. |
 | **Stream replication orchestration** | Planned | — | Pre-emptive stream distribution — spread a stream to a cell or region ahead of demand, explicit hop topology, and per-stream replication policy (max replicas, allowed regions). |
+| **Ingest and viewer placement policy** | Expanding | API, Agents (MCP), Dashboard, Docs | In-development ingest and viewer policy controls with cluster-owner permissions, authorized selectors, read-only previews, reviewed changes, and save recovery. End-to-end live enforcement is not yet complete. |
 | **Placement policy and storage tiering** | Planned | — | Two-sided placement policy — cluster-owner and content-owner constraints (data residency, minimum durable copies) compiled into signed enforcement bundles evaluated at serve/ingest/process/store/replicate/peer decision points — over a cold-to-hot storage tier ladder with a backend-keyed placement ledger. |
 
 ### Commerce & Billing
@@ -22286,6 +22851,7 @@ This page lists the **complete** capability inventory: everything in the [produc
 | **NAT-aware routing and traversal** | Planned | — | NAT-type classification as a first-class routing and placement signal, platform-coordinated hole punching, and platform-managed measurement of inter-server network performance (latency, throughput) feeding routing and capacity decisions — so self-hosted nodes behind NAT participate fully in the federated network. |
 | **Federation state synchronization** | Planned | — | Decentral distribution of configuration and state changes across a dynamic federation — clusters and servers join, leave, or drop offline at will — with automatic conflict resolution between concurrent changes and reconvergence after network partitions, without a central coordination point. |
 | **Stream replication orchestration** | Planned | — | Pre-emptive stream distribution — spread a stream to a cell or region ahead of demand, explicit hop topology, and per-stream replication policy (max replicas, allowed regions). |
+| **Ingest and viewer placement policy** | Expanding | API, Agents (MCP), Dashboard, Docs | In-development ingest and viewer policy controls with cluster-owner permissions, authorized selectors, read-only previews, reviewed changes, and save recovery. End-to-end live enforcement is not yet complete. |
 | **Placement policy and storage tiering** | Planned | — | Two-sided placement policy — cluster-owner and content-owner constraints (data residency, minimum durable copies) compiled into signed enforcement bundles evaluated at serve/ingest/process/store/replicate/peer decision points — over a cold-to-hot storage tier ladder with a backend-keyed placement ledger. |
 | **Drain-integrated OS updates** *(foundation)* *(platform)* | Planned | — | Operator-driven host OS updates that drain each role safely before restart — media sessions run out or hand over, database replicas gate on recovery state, brokers transfer leadership — while cluster capacity floors hold. |
 | **Dynamic mesh routing** *(foundation)* *(platform)* | Planned | — | Dynamic route propagation over the encrypted WireGuard mesh so the topology adapts to link failure and growth without quadratic static peer configuration. |
