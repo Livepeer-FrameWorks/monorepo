@@ -377,6 +377,42 @@ test-cli:
 test-pkg:
 	$(call run-go-tests,pkg,$(SERVICE_DIR_pkg))
 
+.PHONY: verify-mist-protocols
+.PHONY: verify-mist-source-admission
+.PHONY: verify-mist-source-credential
+.PHONY: verify-mist-viewer-credentials
+.PHONY: verify-mist-current-source
+verify-mist-current-source:
+	@bash $(CURDIR)/scripts/verify-mist-current-source.sh
+
+verify-mist-viewer-credentials:
+	@$(MAKE) --no-print-directory test-pkg GO_TAG_FLAGS=-tags=media_verify GO_TEST_PACKAGES=./mist GO_TEST_FLAGS='-run TestViewerCredentials_RealMist -v -timeout 150s'
+
+verify-mist-source-admission:
+	@$(MAKE) --no-print-directory test-pkg GO_TAG_FLAGS=-tags=media_verify GO_TEST_PACKAGES=./mist GO_TEST_FLAGS='-run TestSourceAdmission_RealMist -v -timeout 150s'
+
+# An accepted source pull is authorized by a per-attempt credential carried on
+# the DTSC source URL. The origin only sees it if Mist forwards that query
+# argument into the play command, so the image under test has to prove it.
+verify-mist-source-credential:
+	@$(MAKE) --no-print-directory test-pkg GO_TAG_FLAGS=-tags=media_verify GO_TEST_PACKAGES=./mist GO_TEST_FLAGS='-run TestSourcePullCredential_RealMist -v -timeout 180s'
+
+verify-mist-protocols:
+	@$(MAKE) --no-print-directory test-pkg GO_TAG_FLAGS=-tags=media_verify GO_TEST_PACKAGES=./mist GO_TEST_FLAGS='-run TestIngestProtocolReport_RealMist -v -timeout 120s'
+
+# Real RTMP/SRT publishers against the image under test: Mist must append its own
+# connector name as the 4th PUSH_REWRITE line (placement ingest admission input).
+verify-mist-push-connector:
+	@$(MAKE) --no-print-directory test-pkg GO_TAG_FLAGS=-tags=media_verify GO_TEST_PACKAGES=./mist GO_TEST_FLAGS='-run TestPushRewriteConnector_RealMist -v -timeout 180s'
+
+# Two real cells on the dev compose stack (profile two-cell): publish into cell A,
+# resolve viewers through cell B, assert media at B, then private-only refusal,
+# capacity fallback, publisher reconnect and a control-plane outage. Needs Docker,
+# a fresh dev volume (foghorn_b is created on first boot) and MIST_IMAGE set to a
+# Mist build that emits the PUSH_REWRITE connector line. Minutes, not a CI gate.
+verify-two-cell-media:
+	@bash $(CURDIR)/scripts/verify-two-cell-media.sh
+
 test-topology:
 	@echo "Running infrastructure topology contract tests..."
 	@(cd $(SERVICE_DIR_pkg) && go test $(GO_TAG_FLAGS) ./topology -race -count=1)
@@ -680,19 +716,29 @@ FOGHORN_FEDERATION_REALPG_TESTS := TestMembershipTombstoneCleanup_PostgresProofT
 FOGHORN_QUERY_CATALOG_REALPG_TESTS := TestFoghornGeneratedQueryCatalogPrepares_RealPG|TestConfigSeedApplyAckOutboxSameVersionReplacement_RealPG|TestSourceProjectionRevisionMigrationSeedsDurableHighWater_RealPG|TestSourceProjectionAllocatorKeyScoped_RealPG|TestKeyScopedOrderingAllocators_RealPG|TestLegacyOrderingSequencesRemainBelowCounters_RealPG|TestFederatedArtifactLifecycleDataMigration_RealPG|TestFederatedPointerPurgeEligibilityDataMigrationPreservesAge_RealPG|TestFederatedPointerPurgeEligibilityUsesSessionTimezone_RealPG|TestPurgeableArtifactsIncludeOwnedChaptersAndExcludeFederatedPointers_RealPG|TestFederatedPointerPurgeRetainsSignedTombstoneFence_RealPG|TestTombstoneDuringFederatedPointerPurgePreservesRecoveryClock_RealPG|TestFederatedPointerEligibilityIgnoresOrdinaryMetadataWriters_RealPG|TestFederatedPointerFenceSerializesWithAuthorityProjection_RealPG|TestFailedFederatedPointerCleanupRemainsFencedAndReclaimable_RealPG|TestActiveAuthorityRestoresOnlyInterruptedStalePointerFence_RealPG|TestFederatedPointersAreCacheOnlyForCapacityAndStalePurge_RealPG|TestFederatedPointersCannotEnterOwnerDeletionPaths_RealPG|TestMintArtifactShellRemainsRemoteParentPointer_RealPG|TestArtifactNodePlacementSerializesAbsentRows_RealPG|TestArtifactDeletionRejectsReplayOlderThanPlacement_RealPG|TestMediaAuthorityLookupIndexes_RealPG|TestPushTargetStatusRejectsOlderEvent_RealPG|TestPushTargetStatusUnknownEventTimeUsesArrivalOrder_RealPG
 FOGHORN_QUERY_CATALOG_REALYB_TESTS_A := TestFoghornGeneratedQueryCatalogPrepares_RealYugabyte|TestConfigSeedApplyAckOutboxSameVersionReplacement_RealYugabyte|TestSourceProjectionRevisionMigrationSeedsDurableHighWater_RealYugabyte|TestSourceProjectionRepairAllocator_RealYugabyte|TestSourceProjectionAllocatorKeyScoped_RealYugabyte
 FOGHORN_QUERY_CATALOG_REALYB_TESTS_B := TestKeyScopedOrderingAllocators_RealYugabyte|TestLegacyOrderingSequencesRemainBelowCounters_RealYugabyte|TestArtifactNodePlacementSerializesAbsentRows_RealYugabyte|TestArtifactDeletionRejectsReplayOlderThanPlacement_RealYugabyte
+FOGHORN_QUERY_CATALOG_REALPG_TESTS := $(FOGHORN_QUERY_CATALOG_REALPG_TESTS)|TestPlacementAuthorityPairTenantAndVersionFences_RealPG|TestControlReplicaCapabilityLedger_RealPG
+FOGHORN_QUERY_CATALOG_REALYB_TESTS_B := $(FOGHORN_QUERY_CATALOG_REALYB_TESTS_B)|TestPlacementAuthorityPairTenantAndVersionFences_RealYugabyte|TestControlReplicaCapabilityLedger_RealYugabyte
 FOGHORN_QUERY_CATALOG_REALYB_TESTS := $(FOGHORN_QUERY_CATALOG_REALYB_TESTS_A)|$(FOGHORN_QUERY_CATALOG_REALYB_TESTS_B)
 COMMODORE_QUERY_CATALOG_REALYB_TESTS := TestGeneratedQueryCatalogPrepares_RealYugabyte|TestArtifactCreationCommandAckLease_RealYugabyte
+COMMODORE_PLACEMENT_REALYB_TESTS_A := TestMediaPlacementRepository_RealYugabyte|TestMediaPlacementManagement_RealYugabyte|TestMediaPlacementOptions_RealYugabyte|TestMediaPlacementPreview_RealYugabyte
+COMMODORE_PLACEMENT_REALYB_TESTS_B := TestMediaPlacementObjectPolicy_RealYugabyte|TestMediaPlacementObjectPolicyRetainedDefault_RealYugabyte|TestMediaPlacementDeliveryClaims_RealYugabyte|TestMediaPlacementDeadlineDelivery_RealYugabyte
 YUGABYTE_HA_TESTS := TestYugabyteSmartDriverThreeNodeHA
 NAVIGATOR_QUERY_CATALOG_REALPG_TESTS := TestGeneratedQueryCatalogPrepares_RealPG|TestTenantEdgeApplyAckDeliveryFence_RealPG|TestTenantEdgeApplyAckTeardownSerialization_RealPG|TestTenantEdgeApplyAckClusterRevocationSerialization_RealPG|TestTenantAliasReactivationTeardownSerialization_RealPG|TestTenantBundleAuthoritySerialization_RealPG|TestTenantEdgeApplyAliasFKMigrationCleansOrphans_RealPG|TestNavigatorAutomaticMigrationPhasesConverge_RealPG|TestTenantTLSBundleRevisionExpandReadsLegacyRows_RealPG
 NAVIGATOR_QUERY_CATALOG_REALYB_TESTS := TestGeneratedQueryCatalogPrepares_RealYugabyte|TestTenantEdgeApplyAckDeliveryFence_RealYugabyte|TestTenantEdgeApplyAckTeardownSerialization_RealYugabyte|TestTenantEdgeApplyAckClusterRevocationSerialization_RealYugabyte|TestTenantAliasReactivationTeardownSerialization_RealYugabyte|TestTenantBundleAuthoritySerialization_RealYugabyte|TestTenantEdgeApplyAliasFKMigrationCleansOrphans_RealYugabyte|TestNavigatorAutomaticMigrationPhasesConverge_RealYugabyte|TestTenantTLSBundleRevisionExpandReadsLegacyRows_RealYugabyte
 NAVIGATOR_STORE_REALPG_TESTS := TestNavigatorStoreQueryPack_RealPG
 NAVIGATOR_STORE_REALYB_TESTS := TestNavigatorStoreQueryPack_RealYugabyte
-FOGHORN_STATE_REALVALKEY_TESTS := TestRedisStateContracts_RealValkey|TestTenantCapacityContracts_RealValkey|TestTenantCapacityRenewRespectsCap_RealValkey|TestTenantCapacityBoundedCleanupCannotEraseReactivatedViewer_RealValkey|TestTenantCapacityTargetReconciledBeyondBoundedCleanup_RealValkey
+FOGHORN_STATE_REALVALKEY_TESTS := TestRedisStateContracts_RealValkey|TestTenantCapacityContracts_RealValkey|TestTenantCapacityPlacementDeadline_RealValkey|TestTenantCapacityRenewRespectsCap_RealValkey|TestTenantCapacityBoundedCleanupCannotEraseReactivatedViewer_RealValkey|TestTenantCapacityTargetReconciledBeyondBoundedCleanup_RealValkey
 FOGHORN_CONTROL_REALVALKEY_TESTS := TestStreamRegistryContracts_RealValkey|TestRelayGrantContracts_RealValkey
+FOGHORN_FEDERATION_REALVALKEY_TESTS := TestFederationCacheContracts_RealValkey|TestPlacementReceipts_RealValkey
 
-verify-foghorn-test-selection:
+.PHONY: verify-commodore-placement-test-selection
+verify-commodore-placement-test-selection:
+	@./scripts/check-go-test-selection.sh api_control ./internal/grpc '$(COMMODORE_PLACEMENT_REALYB_TESTS_A)|$(COMMODORE_PLACEMENT_REALYB_TESTS_B)' '^TestMediaPlacement.*_RealYugabyte$$'
+
+verify-foghorn-test-selection: verify-commodore-placement-test-selection
 	@./scripts/check-go-test-selection.sh cli ./pkg/provisioner '$(SCHEMA_VERIFY_TESTS)' '^Test' schema_verify
 	@./scripts/check-go-test-selection.sh api_control ./internal/grpc '$(COMMODORE_INGEST_CLAIM_REALPG_TESTS)' '^(TestValidateStreamKey_|TestSyncActiveIngestPlacement_|TestClearStreamActiveCluster_).*RealPG$$'
+	@./scripts/check-go-test-selection.sh api_control ./internal/grpc '$(COMMODORE_PLACEMENT_ACTIVATION_REALPG_TESTS)' '^TestPlacementActivation.*_RealPG$$'
 	@./scripts/check-go-test-selection.sh api_control ./internal/database/commodoredb '$(COMMODORE_QUERY_CATALOG_REALPG_TESTS)' 'RealPG$$'
 	@./scripts/check-go-test-selection.sh api_balancing ./internal/control '$(FOGHORN_CONTROL_REALPG_TESTS)' 'RealPG$$'
 	@./scripts/check-go-test-selection.sh api_balancing ./internal/jobs '$(FOGHORN_JOBS_REALPG_TESTS)' 'RealPG$$'
@@ -707,6 +753,7 @@ verify-foghorn-test-selection:
 	@./scripts/check-go-test-selection.sh api_dns ./internal/store '$(NAVIGATOR_STORE_REALYB_TESTS)' 'RealYugabyte$$'
 	@./scripts/check-go-test-selection.sh api_balancing ./internal/state '$(FOGHORN_STATE_REALVALKEY_TESTS)' 'RealValkey$$'
 	@./scripts/check-go-test-selection.sh api_balancing ./internal/control '$(FOGHORN_CONTROL_REALVALKEY_TESTS)' 'RealValkey$$'
+	@./scripts/check-go-test-selection.sh api_balancing ./internal/federation '$(FOGHORN_FEDERATION_REALVALKEY_TESTS)' 'RealValkey$$'
 
 verify-schema: verify-foghorn-test-selection
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-schema requires a running Docker daemon (real-engine tests must run, not skip)"; exit 1; }
@@ -739,7 +786,7 @@ verify-schema-migrations-core: verify-foghorn-test-selection
 	@$(CONTRACT_GO_TEST) api_analytics_query clickhouse/periscope-query -tags schema_verify -run 'TestBillingCatalogExecutesAgainstCurrentClickHouse' -count=1 -timeout 600s ./internal/database/periscopequerydb/
 	@$(CONTRACT_GO_TEST) api_analytics_query clickhouse/periscope-query-rpc -tags schema_verify -run 'TestEveryRPCQuerySiteExecutesAgainstCurrentClickHouse|TestClusterWorkloadSeparatesStorageFlowStockAndScope_RealClickHouse|TestFederationSummaryPreservesOperatorHistoryWithoutDualRollupDuplicates_RealClickHouse|TestTenantDailyStatsIncludesRestreamEgressWithoutInventingViewers_RealClickHouse|TestStreamDailyAudienceUsesSessionEndDayAndExcludesEmptyGeo_RealClickHouse|TestDashboardRefreshPreservesBothPlanesAcrossOneSidedCorrections_RealClickHouse' -count=1 -timeout 1200s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_analytics_query clickhouse/periscope-metering-chain -tags schema_verify -run 'TestCrossEngineMeteringReplayLateCorrectionAndFencing_RealEngines' -count=1 -timeout 600s ./internal/handlers/
-	@$(CONTRACT_GO_TEST) api_billing postgres/purser-handlers -tags schema_verify -run 'TestProcessUsageSummaryAbsentDimensions_RealPG|TestV3UsageRowsRemainImmutableOnConflictingReplay_RealPG|TestV2UsageEnvelopePersistsIdempotentlyOnV3Schema_RealPG|TestMeteringSourceRegionRemainsAuthoritative_RealPG|TestPrepaidUsageSettlementMatchesAppliedBalanceTransactions_RealPG|TestProviderWebhookInboxRepository_RealPG|TestCryptoTaxDocuments_RealPG|TestCryptoTaxDocumentAnomalyReopensAndResolves_RealPG|TestEmbeddedFacilitatorSerializesRelayerNoncesAcrossReplicas_RealPG|TestInvoiceEmailOutboxLifecycleAndReads_RealPG|TestInvoiceEmailOverdueBalanceRead_RealPG|TestOperationalDatabaseGuards_RealPG|TestInvoiceCollectionMinimumSerializesAndPersists_RealPG|TestInvoiceRatingRepository_RealPG' -count=1 -timeout 600s ./internal/handlers/
+	@$(CONTRACT_GO_TEST) api_billing postgres/purser-handlers -tags schema_verify -run 'TestProcessUsageSummaryAbsentDimensions_RealPG|TestV3UsageRowsRemainImmutableOnConflictingReplay_RealPG|TestV2UsageEnvelopePersistsIdempotentlyOnV3Schema_RealPG|TestMeteringSourceRegionRemainsAuthoritative_RealPG|TestPrepaidUsageSettlementMatchesAppliedBalanceTransactions_RealPG|TestProviderWebhookInboxRepository_RealPG|TestCryptoTaxDocuments_RealPG|TestCryptoTaxDocumentAnomalyReopensAndResolves_RealPG|TestEmbeddedFacilitatorSerializesRelayerNoncesAcrossReplicas_RealPG|TestInvoiceEmailOutboxLifecycleAndReads_RealPG|TestInvoiceEmailOverdueBalanceRead_RealPG|TestOperationalDatabaseGuards_RealPG|TestInvoiceCollectionMinimumSerializesAndPersists_RealPG|TestInvoiceRatingRepository_RealPG|TestInvoiceSettlementSurvivesConcurrentConfirmations_RealPG|TestInvoiceSettlementWaitsForFullCoverage_RealPG|TestInvoiceSettlementRecomputesOnAlreadyConfirmedReplay_RealPG' -count=1 -timeout 600s ./internal/handlers/
 	@$(CONTRACT_GO_TEST) api_billing postgres/purser-grpc -tags schema_verify -run 'TestBillingTransitionsSerializeAndPreserveCredit_RealPG|TestBillingEventOutboxLifecycle_RealPG|TestTierCatalogReads_RealPG|TestSubscriptionLifecycleRepository_RealPG|TestAccountOnboardingConvergence_RealPG|TestPrepaidBalanceRepository_RealPG|TestGRPCQueryPack_RealPG|TestTenantAdmissionStatus_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_billing postgres/purser-query-catalog -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG' -count=1 -timeout 600s ./internal/database/purserdb/
 	@$(CONTRACT_GO_TEST) api_dns postgres/navigator-query-catalog -tags schema_verify -run '$(NAVIGATOR_QUERY_CATALOG_REALPG_TESTS)' -count=1 -timeout 600s ./internal/database/navigatordb/
@@ -751,7 +798,7 @@ verify-schema-migrations-core: verify-foghorn-test-selection
 	@$(CONTRACT_GO_TEST) api_consultant postgres/skipper-social -tags schema_verify -run 'TestSocialPostRepository_RealPG' -count=1 -timeout 600s ./internal/social/
 	@$(CONTRACT_GO_TEST) api_consultant postgres/skipper-baselines -tags schema_verify -run 'TestBaselineRepository_RealPG' -count=1 -timeout 600s ./internal/diagnostics/
 	@$(CONTRACT_GO_TEST) api_consultant postgres/skipper-pagecache -tags schema_verify -run 'TestPageCacheRepository_RealPG' -count=1 -timeout 600s ./internal/knowledge/
-	@$(CONTRACT_GO_TEST) api_consultant postgres/skipper-knowledge -tags schema_verify -run 'TestKnowledgeRepository_RealPG' -count=1 -timeout 600s ./internal/knowledge/
+	@$(CONTRACT_GO_TEST) api_consultant postgres/skipper-knowledge -tags schema_verify -run 'TestKnowledgeRepository_RealPG|TestReapAbandonedCrawlJobsUnblocksTheSitemap_RealPG|TestReapAbandonedCrawlJobsLeavesLiveCrawlsAlone_RealPG|TestReapAbandonedCrawlJobsLeavesSettledJobsAlone_RealPG' -count=1 -timeout 600s ./internal/knowledge/
 	@$(CONTRACT_GO_TEST) api_analytics_query postgres/periscope-metering -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG|TestMeteringStateTransitions_RealPG' -count=1 -timeout 600s ./internal/database/meteringdb/
 	@$(CONTRACT_GO_TEST) api_control postgres/commodore-bootstrap -tags schema_verify -run 'TestBootstrapAccountsRepository_RealPG|TestBootstrapPullStreamsRepository_RealPG|TestBootstrapMistNativeRepository_RealPG' -count=1 -timeout 600s ./internal/bootstrap/
 	@$(CONTRACT_GO_TEST) api_control postgres/commodore-query-catalog -tags schema_verify -run '$(COMMODORE_QUERY_CATALOG_REALPG_TESTS)' -count=1 -timeout 600s ./internal/database/commodoredb/
@@ -767,15 +814,15 @@ verify-schema-migrations-core: verify-foghorn-test-selection
 	@$(CONTRACT_GO_TEST) api_control postgres/commodore-api-tokens -tags schema_verify -run 'TestAPITokenRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_control postgres/commodore-native-auth -tags schema_verify -run 'TestNativeAuthorizationRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-bootstrap -tags schema_verify -run 'TestBootstrapRepositoryReplay_RealPG' -count=1 -timeout 600s ./internal/bootstrap/
-	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-query-catalog -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG|TestManualQueryAdapters_RealPG|TestConvertedRuntimeAdapters_RealPG|TestDNSEntitlementExpandPreservesPaidAliasesUntilObservation_RealPG|TestListTenantEffectiveAccessUsesCanonicalActiveGrantPredicate_RealPG' -count=1 -timeout 600s ./internal/database/quartermasterdb/
+	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-query-catalog -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG|TestPeerDiscoveryCanonicalControlCells_RealPG|TestManualQueryAdapters_RealPG|TestConvertedRuntimeAdapters_RealPG|TestDNSEntitlementExpandPreservesPaidAliasesUntilObservation_RealPG|TestListTenantEffectiveAccessUsesCanonicalActiveGrantPredicate_RealPG|TestMediaPlacementInventory_RealPG|TestMediaCapacityConsent_RealPG' -count=1 -timeout 600s ./internal/database/quartermasterdb/
 	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-dns-entitlement-migration -tags schema_verify -run 'TestTenantDNSEntitlementsRunAndVerifyRealPG' -count=1 -timeout 600s ./internal/datamigrations/
-	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-dns-entitlement-handoff -tags schema_verify -run 'TestCompleteTenantDNSEntitlementHandoffRealPG' -count=1 -timeout 600s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-dns-entitlement-handoff -tags schema_verify -run 'TestCompleteTenantDNSEntitlementHandoffRealPG|TestCapacityConsentManagement_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@$(CONTRACT_GO_TEST) api_balancing postgres/foghorn-query-catalog -tags schema_verify -run '$(FOGHORN_QUERY_CATALOG_REALPG_TESTS)' -count=1 -timeout 600s ./internal/database/foghorndb/
 	@$(CONTRACT_GO_TEST) api_balancing postgres/foghorn-control -tags schema_verify -run '$(FOGHORN_CONTROL_REALPG_TESTS)' -count=1 -timeout 600s ./internal/control/
 	@$(CONTRACT_GO_TEST) api_balancing postgres/foghorn-jobs -tags schema_verify -run '$(FOGHORN_JOBS_REALPG_TESTS)' -count=1 -timeout 600s ./internal/jobs/
 	@$(CONTRACT_GO_TEST) api_balancing postgres/foghorn-federation -tags schema_verify -run '$(FOGHORN_FEDERATION_REALPG_TESTS)' -count=1 -timeout 600s ./internal/federation/
 	@$(CONTRACT_GO_TEST) api_billing postgres/purser-stripe -tags schema_verify -run 'TestStripeMeterEventRepository_RealPG' -count=1 -timeout 600s ./internal/stripe/
-	@$(CONTRACT_GO_TEST) api_billing postgres/purser-billing -tags schema_verify -run 'TestLoadEffectiveTierPartialOverrides_RealPG' -count=1 -timeout 600s ./internal/billing/
+	@$(CONTRACT_GO_TEST) api_billing postgres/purser-billing -tags schema_verify -run 'TestLoadEffectiveTierPartialOverrides_RealPG|TestPlacementTariffSnapshot_RealPG|TestPlacementPriceBoundaries_RealPG|TestPlacementAllowanceUsage_RealPG' -count=1 -timeout 600s ./internal/billing/ ./internal/pricing/
 	@$(CONTRACT_GO_TEST) api_billing postgres/purser-tieraccess -tags schema_verify -run 'TestTierAccessEligibilityQuery_RealPG|TestDNSEntitlementUpgradeCatalogAndSuspendedLookup_RealPG' -count=1 -timeout 600s ./internal/tieraccess/
 	@$(CONTRACT_GO_TEST) api_billing postgres/purser-bootstrap -tags schema_verify -run 'TestBootstrapPricingRepositories_RealPG|TestBootstrapCustomerBillingRepository_RealPG|TestBootstrapTierCatalogRepository_RealPG|TestTierStripeSyncRepository_RealPG' -count=1 -timeout 600s ./internal/bootstrap/
 
@@ -797,7 +844,7 @@ verify-skipper-db:
 	@$(CONTRACT_GO_TEST) api_consultant postgres/skipper-social -tags schema_verify -run 'TestSocialPostRepository_RealPG' -count=1 -timeout 600s ./internal/social/
 	@$(CONTRACT_GO_TEST) api_consultant postgres/skipper-baselines -tags schema_verify -run 'TestBaselineRepository_RealPG' -count=1 -timeout 600s ./internal/diagnostics/
 	@$(CONTRACT_GO_TEST) api_consultant postgres/skipper-pagecache -tags schema_verify -run 'TestPageCacheRepository_RealPG' -count=1 -timeout 600s ./internal/knowledge/
-	@$(CONTRACT_GO_TEST) api_consultant postgres/skipper-knowledge -tags schema_verify -run 'TestKnowledgeRepository_RealPG' -count=1 -timeout 600s ./internal/knowledge/
+	@$(CONTRACT_GO_TEST) api_consultant postgres/skipper-knowledge -tags schema_verify -run 'TestKnowledgeRepository_RealPG|TestReapAbandonedCrawlJobsUnblocksTheSitemap_RealPG|TestReapAbandonedCrawlJobsLeavesLiveCrawlsAlone_RealPG|TestReapAbandonedCrawlJobsLeavesSettledJobsAlone_RealPG' -count=1 -timeout 600s ./internal/knowledge/
 
 verify-periscope-metering-db:
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-periscope-metering-db requires a running Docker daemon"; exit 1; }
@@ -825,6 +872,7 @@ verify-periscope-metering-chain:
 verify-commodore-db:
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-commodore-db requires a running Docker daemon"; exit 1; }
 	@echo "Verifying Commodore's converted repositories on PostgreSQL (Docker)..."
+	@$(MAKE) --no-print-directory verify-placement-db
 	@$(CONTRACT_GO_TEST) api_control postgres/commodore-bootstrap -tags schema_verify -run 'TestBootstrapAccountsRepository_RealPG|TestBootstrapPullStreamsRepository_RealPG|TestBootstrapMistNativeRepository_RealPG' -count=1 -timeout 600s ./internal/bootstrap/
 	@$(CONTRACT_GO_TEST) api_control postgres/commodore-query-catalog -tags schema_verify -run '$(COMMODORE_QUERY_CATALOG_REALPG_TESTS)' -count=1 -timeout 600s ./internal/database/commodoredb/
 	@$(CONTRACT_GO_TEST) api_control postgres/commodore-field-encryption -tags schema_verify -run 'TestFieldEncryptionKeysetSweepAndVerify_RealPG' -count=1 -timeout 600s ./internal/datamigrations/
@@ -843,9 +891,9 @@ verify-quartermaster-db:
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-quartermaster-db requires a running Docker daemon"; exit 1; }
 	@echo "Verifying Quartermaster's converted repositories on PostgreSQL (Docker)..."
 	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-bootstrap -tags schema_verify -run 'TestBootstrapRepositoryReplay_RealPG' -count=1 -timeout 600s ./internal/bootstrap/
-	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-query-catalog -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG|TestManualQueryAdapters_RealPG|TestConvertedRuntimeAdapters_RealPG|TestDNSEntitlementExpandPreservesPaidAliasesUntilObservation_RealPG|TestListTenantEffectiveAccessUsesCanonicalActiveGrantPredicate_RealPG' -count=1 -timeout 600s ./internal/database/quartermasterdb/
+	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-query-catalog -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG|TestPeerDiscoveryCanonicalControlCells_RealPG|TestManualQueryAdapters_RealPG|TestConvertedRuntimeAdapters_RealPG|TestDNSEntitlementExpandPreservesPaidAliasesUntilObservation_RealPG|TestListTenantEffectiveAccessUsesCanonicalActiveGrantPredicate_RealPG|TestMediaPlacementInventory_RealPG|TestMediaCapacityConsent_RealPG' -count=1 -timeout 600s ./internal/database/quartermasterdb/
 	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-dns-entitlement-migration -tags schema_verify -run 'TestTenantDNSEntitlementsRunAndVerifyRealPG' -count=1 -timeout 600s ./internal/datamigrations/
-	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-dns-entitlement-handoff -tags schema_verify -run 'TestCompleteTenantDNSEntitlementHandoffRealPG' -count=1 -timeout 600s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_tenants postgres/quartermaster-dns-entitlement-handoff -tags schema_verify -run 'TestCompleteTenantDNSEntitlementHandoffRealPG|TestCapacityConsentManagement_RealPG' -count=1 -timeout 600s ./internal/grpc/
 
 verify-quartermaster-yugabyte-db:
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-quartermaster-yugabyte-db requires a running Docker daemon"; exit 1; }
@@ -868,13 +916,13 @@ verify-foghorn-valkey: verify-foghorn-test-selection
 	@$(CONTRACT_GO_TEST) pkg valkey/redis-client -tags schema_verify -run 'TestNewUniversalClientSingle_RealValkey|TestSentinelFailover_RealValkey|TestChangelogReplayAndGap_RealValkey|TestClusterRouting_RealValkey' -count=1 -timeout 600s ./redis/
 	@$(CONTRACT_GO_TEST) api_balancing valkey/foghorn-state -tags schema_verify -run '$(FOGHORN_STATE_REALVALKEY_TESTS)' -count=1 -timeout 600s ./internal/state/
 	@$(CONTRACT_GO_TEST) api_balancing valkey/foghorn-control -tags schema_verify -run '$(FOGHORN_CONTROL_REALVALKEY_TESTS)' -count=1 -timeout 600s ./internal/control/
-	@$(CONTRACT_GO_TEST) api_balancing valkey/foghorn-federation -tags schema_verify -run 'TestFederationCacheContracts_RealValkey' -count=1 -timeout 600s ./internal/federation/
+	@$(CONTRACT_GO_TEST) api_balancing valkey/foghorn-federation -tags schema_verify -run '$(FOGHORN_FEDERATION_REALVALKEY_TESTS)' -count=1 -timeout 600s ./internal/federation/
 
 verify-schema-postgres: verify-foghorn-test-selection
 	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-schema-postgres requires a running Docker daemon"; exit 1; }
 	@echo "Verifying Postgres current baseline and tagged-release upgrade convergence (Docker)..."
 	@FRAMEWORKS_SCHEMA_VERIFY_FROM_TAG='$(SCHEMA_VERIFY_FROM_TAG)' $(CONTRACT_GO_TEST) cli postgres/schema -tags schema_verify -run '$(SCHEMA_VERIFY_COMMON_TESTS)|$(SCHEMA_VERIFY_POSTGRES_TESTS)' -count=1 -timeout 1200s ./pkg/provisioner/
-	@cd api_billing && go test -tags schema_verify -run 'TestProcessUsageSummaryAbsentDimensions_RealPG|TestV3UsageRowsRemainImmutableOnConflictingReplay_RealPG|TestV2UsageEnvelopePersistsIdempotentlyOnV3Schema_RealPG|TestMeteringSourceRegionRemainsAuthoritative_RealPG|TestPrepaidUsageSettlementMatchesAppliedBalanceTransactions_RealPG|TestProviderWebhookInboxRepository_RealPG|TestCryptoTaxDocuments_RealPG|TestCryptoTaxDocumentAnomalyReopensAndResolves_RealPG|TestEmbeddedFacilitatorSerializesRelayerNoncesAcrossReplicas_RealPG|TestInvoiceEmailOutboxLifecycleAndReads_RealPG|TestInvoiceEmailOverdueBalanceRead_RealPG|TestOperationalDatabaseGuards_RealPG|TestInvoiceCollectionMinimumSerializesAndPersists_RealPG|TestInvoiceRatingRepository_RealPG' -count=1 -timeout 600s ./internal/handlers/
+	@cd api_billing && go test -tags schema_verify -run 'TestProcessUsageSummaryAbsentDimensions_RealPG|TestV3UsageRowsRemainImmutableOnConflictingReplay_RealPG|TestV2UsageEnvelopePersistsIdempotentlyOnV3Schema_RealPG|TestMeteringSourceRegionRemainsAuthoritative_RealPG|TestPrepaidUsageSettlementMatchesAppliedBalanceTransactions_RealPG|TestProviderWebhookInboxRepository_RealPG|TestCryptoTaxDocuments_RealPG|TestCryptoTaxDocumentAnomalyReopensAndResolves_RealPG|TestEmbeddedFacilitatorSerializesRelayerNoncesAcrossReplicas_RealPG|TestInvoiceEmailOutboxLifecycleAndReads_RealPG|TestInvoiceEmailOverdueBalanceRead_RealPG|TestOperationalDatabaseGuards_RealPG|TestInvoiceCollectionMinimumSerializesAndPersists_RealPG|TestInvoiceRatingRepository_RealPG|TestInvoiceSettlementSurvivesConcurrentConfirmations_RealPG|TestInvoiceSettlementWaitsForFullCoverage_RealPG|TestInvoiceSettlementRecomputesOnAlreadyConfirmedReplay_RealPG' -count=1 -timeout 600s ./internal/handlers/
 	@cd api_billing && go test -tags schema_verify -run 'TestBillingTransitionsSerializeAndPreserveCredit_RealPG|TestBillingEventOutboxLifecycle_RealPG|TestTierCatalogReads_RealPG|TestSubscriptionLifecycleRepository_RealPG|TestAccountOnboardingConvergence_RealPG|TestPrepaidBalanceRepository_RealPG|TestGRPCQueryPack_RealPG|TestTenantAdmissionStatus_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@cd api_billing && go test -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG' -count=1 -timeout 600s ./internal/database/purserdb/
 	@cd api_dns && go test -tags schema_verify -run '$(NAVIGATOR_QUERY_CATALOG_REALPG_TESTS)' -count=1 -timeout 600s ./internal/database/navigatordb/
@@ -886,7 +934,7 @@ verify-schema-postgres: verify-foghorn-test-selection
 	@cd api_consultant && go test -tags schema_verify -run 'TestSocialPostRepository_RealPG' -count=1 -timeout 600s ./internal/social/
 	@cd api_consultant && go test -tags schema_verify -run 'TestBaselineRepository_RealPG' -count=1 -timeout 600s ./internal/diagnostics/
 	@cd api_consultant && go test -tags schema_verify -run 'TestPageCacheRepository_RealPG' -count=1 -timeout 600s ./internal/knowledge/
-	@cd api_consultant && go test -tags schema_verify -run 'TestKnowledgeRepository_RealPG' -count=1 -timeout 600s ./internal/knowledge/
+	@cd api_consultant && go test -tags schema_verify -run 'TestKnowledgeRepository_RealPG|TestReapAbandonedCrawlJobsUnblocksTheSitemap_RealPG|TestReapAbandonedCrawlJobsLeavesLiveCrawlsAlone_RealPG|TestReapAbandonedCrawlJobsLeavesSettledJobsAlone_RealPG' -count=1 -timeout 600s ./internal/knowledge/
 	@cd api_analytics_query && go test -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG|TestMeteringStateTransitions_RealPG' -count=1 -timeout 600s ./internal/database/meteringdb/
 	@cd api_control && go test -tags schema_verify -run 'TestBootstrapAccountsRepository_RealPG|TestBootstrapPullStreamsRepository_RealPG|TestBootstrapMistNativeRepository_RealPG' -count=1 -timeout 600s ./internal/bootstrap/
 	@cd api_control && go test -tags schema_verify -run '$(COMMODORE_QUERY_CATALOG_REALPG_TESTS)' -count=1 -timeout 600s ./internal/database/commodoredb/
@@ -901,9 +949,9 @@ verify-schema-postgres: verify-foghorn-test-selection
 	@cd api_control && go test -tags schema_verify -run 'TestAPITokenRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@cd api_control && go test -tags schema_verify -run 'TestNativeAuthorizationRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@cd api_tenants && go test -tags schema_verify -run 'TestBootstrapRepositoryReplay_RealPG' -count=1 -timeout 600s ./internal/bootstrap/
-	@cd api_tenants && go test -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG|TestManualQueryAdapters_RealPG|TestConvertedRuntimeAdapters_RealPG|TestListTenantEffectiveAccessUsesCanonicalActiveGrantPredicate_RealPG' -count=1 -timeout 600s ./internal/database/quartermasterdb/
+	@cd api_tenants && go test -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealPG|TestManualQueryAdapters_RealPG|TestConvertedRuntimeAdapters_RealPG|TestListTenantEffectiveAccessUsesCanonicalActiveGrantPredicate_RealPG|TestMediaPlacementInventory_RealPG|TestMediaCapacityConsent_RealPG' -count=1 -timeout 600s ./internal/database/quartermasterdb/
 	@cd api_billing && go test -tags schema_verify -run 'TestStripeMeterEventRepository_RealPG' -count=1 -timeout 600s ./internal/stripe/
-	@cd api_billing && go test -tags schema_verify -run 'TestLoadEffectiveTierPartialOverrides_RealPG' -count=1 -timeout 600s ./internal/billing/
+	@cd api_billing && go test -tags schema_verify -run 'TestLoadEffectiveTierPartialOverrides_RealPG|TestPlacementTariffSnapshot_RealPG|TestPlacementPriceBoundaries_RealPG|TestPlacementAllowanceUsage_RealPG' -count=1 -timeout 600s ./internal/billing/ ./internal/pricing/
 	@cd api_billing && go test -tags schema_verify -run 'TestTierAccessEligibilityQuery_RealPG' -count=1 -timeout 600s ./internal/tieraccess/
 	@cd api_billing && go test -tags schema_verify -run 'TestBootstrapPricingRepositories_RealPG|TestBootstrapCustomerBillingRepository_RealPG|TestBootstrapTierCatalogRepository_RealPG|TestTierStripeSyncRepository_RealPG' -count=1 -timeout 600s ./internal/bootstrap/
 	@echo "Verifying the real PostgreSQL admission-ledger proof drives exact Redis membership cleanup..."
@@ -923,7 +971,7 @@ verify-yugabyte-services: verify-foghorn-test-selection
 	@$(MAKE) --no-print-directory verify-yugabyte-services-isolated
 
 verify-yugabyte-services-isolated:
-	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-yugabyte-commodore-contracts
+	@$(MAKE) --no-print-directory verify-yugabyte-commodore-contracts
 	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-yugabyte-purser-contracts
 	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-yugabyte-navigator-contracts
 	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-yugabyte-skipper-contracts
@@ -940,8 +988,45 @@ verify-schema-yugabyte-schema-contracts:
 verify-yugabyte-shared-fixture:
 	@test -n "$$FRAMEWORKS_YUGABYTE_TEST_DSN" -a -n "$$FRAMEWORKS_YUGABYTE_TEST_CONTAINER" || { echo "ERROR: invoke Yugabyte contracts through their public Make target"; exit 1; }
 
-verify-yugabyte-commodore-contracts: verify-yugabyte-shared-fixture
+.PHONY: verify-yugabyte-commodore-contracts-a verify-yugabyte-commodore-contracts-b
+# Retained test databases consume tablets until the fixture exits. Keep each
+# group in its own engine rather than increasing Yugabyte's replica safety cap.
+verify-yugabyte-commodore-contracts: verify-commodore-placement-test-selection
+	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-yugabyte-commodore-contracts-a
+	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-yugabyte-commodore-contracts-b
+
+verify-yugabyte-commodore-contracts-a: verify-yugabyte-shared-fixture
 	@$(CONTRACT_GO_TEST) api_control yugabyte/commodore-query-catalog -tags schema_verify -run '$(COMMODORE_QUERY_CATALOG_REALYB_TESTS)' -count=1 -timeout 1200s ./internal/database/commodoredb/
+	@$(CONTRACT_GO_TEST) api_control yugabyte/commodore-placement-a -tags schema_verify -run '^($(COMMODORE_PLACEMENT_REALYB_TESTS_A))$$' -count=1 -timeout 600s ./internal/grpc/
+
+verify-yugabyte-commodore-contracts-b: verify-yugabyte-shared-fixture
+	@$(CONTRACT_GO_TEST) api_control yugabyte/commodore-placement-b -tags schema_verify -run '^($(COMMODORE_PLACEMENT_REALYB_TESTS_B))$$' -count=1 -timeout 600s ./internal/grpc/
+
+.PHONY: verify-placement-yugabyte-db verify-placement-yugabyte-contracts verify-placement-yugabyte-control-contracts verify-placement-yugabyte-authority-contracts
+verify-placement-yugabyte-db: verify-placement-yugabyte-contracts
+
+verify-placement-yugabyte-contracts: verify-commodore-placement-test-selection
+	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-placement-yugabyte-control-contracts
+	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-yugabyte-commodore-contracts-b
+	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-placement-yugabyte-authority-contracts
+
+verify-placement-yugabyte-control-contracts: verify-yugabyte-shared-fixture
+	@$(CONTRACT_GO_TEST) api_control yugabyte/placement-query-catalog -tags schema_verify -run '^TestGeneratedQueryCatalogPrepares_RealYugabyte$$' -count=1 -timeout 600s ./internal/database/commodoredb/
+	@$(CONTRACT_GO_TEST) api_control yugabyte/placement-control -tags schema_verify -run '^TestMediaPlacement(Options|Preview)_RealYugabyte$$' -count=1 -timeout 600s ./internal/grpc/
+
+verify-placement-yugabyte-authority-contracts: verify-yugabyte-shared-fixture
+	@$(CONTRACT_GO_TEST) api_balancing yugabyte/placement-authority -tags schema_verify -run '^Test(FoghornGeneratedQueryCatalogPrepares|PlacementAuthorityPairTenantAndVersionFences)_RealYugabyte$$' -count=1 -timeout 600s ./internal/database/foghorndb/
+
+COMMODORE_PLACEMENT_REALPG_TESTS := ^TestMediaPlacement(Repository|Management|Options|Preview|CommercialPublication|CommercialParentLock|DeadlineRenewal|ObjectPolicy|ObjectPolicyRetainedDefault|TenantRefresh|TenantDeadline|DeadlineDelivery|DeliveryClaims|DeliveryBacklog|CellAttestation|FirstIssuance)_RealPG$$
+# Flat list, not a compressed alternation: check-go-test-selection.sh splits a
+# selector on | and compares literal test names, so the drift guard can only
+# cover a family that is spelled out.
+COMMODORE_PLACEMENT_ACTIVATION_REALPG_TESTS := TestPlacementActivationSurvivesConcurrentAcknowledgements_RealPG|TestPlacementActivationWaitsForEveryCell_RealPG|TestPlacementActivationSerializesConcurrentDerivation_RealPG|TestPlacementActivationBacklogConvergesStrandedChange_RealPG|TestPlacementActivationBacklogRespectsOutstandingCells_RealPG|TestPlacementActivationBacklogPagesPastBlockedScopes_RealPG
+
+.PHONY: verify-placement-db
+verify-placement-db:
+	@docker info >/dev/null 2>&1 || { echo "ERROR: verify-placement-db requires a running Docker daemon"; exit 1; }
+	@$(CONTRACT_GO_TEST) api_control postgres/commodore-placement -tags schema_verify -run '$(COMMODORE_PLACEMENT_REALPG_TESTS)|$(COMMODORE_PLACEMENT_ACTIVATION_REALPG_TESTS)' -count=1 -timeout 600s ./internal/grpc/
 
 verify-yugabyte-purser-contracts: verify-yugabyte-shared-fixture
 	@$(CONTRACT_GO_TEST) api_billing yugabyte/purser-query-catalog -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealYugabyte' -count=1 -timeout 1200s ./internal/database/purserdb/
@@ -954,7 +1039,8 @@ verify-yugabyte-skipper-contracts: verify-yugabyte-shared-fixture
 	@$(CONTRACT_GO_TEST) api_consultant yugabyte/skipper-query-catalog -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealYugabyte' -count=1 -timeout 1200s ./internal/database/skipperdb/
 
 verify-yugabyte-quartermaster-contracts: verify-yugabyte-shared-fixture
-	@$(CONTRACT_GO_TEST) api_tenants yugabyte/quartermaster-query-catalog -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealYugabyte|TestConvertedRuntimeAdapters_RealYugabyte' -count=1 -timeout 1200s ./internal/database/quartermasterdb/
+	@$(CONTRACT_GO_TEST) api_tenants yugabyte/quartermaster-consent-management -tags schema_verify -run 'TestCapacityConsentManagement_RealYugabyte' -count=1 -timeout 600s ./internal/grpc/
+	@$(CONTRACT_GO_TEST) api_tenants yugabyte/quartermaster-query-catalog -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealYugabyte|TestConvertedRuntimeAdapters_RealYugabyte|TestMediaPlacementInventory_RealYugabyte|TestMediaCapacityConsent_RealYugabyte' -count=1 -timeout 1200s ./internal/database/quartermasterdb/
 
 verify-yugabyte-periscope-metering-contracts: verify-yugabyte-shared-fixture
 	@$(CONTRACT_GO_TEST) api_analytics_query yugabyte/periscope-metering -tags schema_verify -run 'TestGeneratedQueryCatalogPrepares_RealYugabyte|TestMeteringStateTransitions_RealYugabyte' -count=1 -timeout 1200s ./internal/database/meteringdb/
@@ -970,6 +1056,8 @@ verify-yugabyte-service: verify-foghorn-test-selection
 ifeq ($(SERVICE),foghorn)
 	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-yugabyte-foghorn-contracts-a
 	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-yugabyte-foghorn-contracts-b
+else ifeq ($(SERVICE),commodore)
+	@$(MAKE) --no-print-directory verify-yugabyte-commodore-contracts
 else
 	@$(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-yugabyte-$(SERVICE)-contracts
 endif
@@ -979,6 +1067,9 @@ verify-yugabyte-database: verify-foghorn-test-selection
 ifeq ($(DATABASE),foghorn)
 	@FRAMEWORKS_YUGABYTE_DATABASES=foghorn $(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-schema-yugabyte-schema-contracts verify-yugabyte-foghorn-contracts-a
 	@FRAMEWORKS_YUGABYTE_DATABASES=foghorn $(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-yugabyte-foghorn-contracts-b
+else ifeq ($(DATABASE),commodore)
+	@FRAMEWORKS_YUGABYTE_DATABASES=commodore $(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-schema-yugabyte-schema-contracts
+	@$(MAKE) --no-print-directory verify-yugabyte-commodore-contracts
 else
 	@service="$(DATABASE)"; if [ "$$service" = periscope ]; then service=periscope-metering; fi; FRAMEWORKS_YUGABYTE_DATABASES="$(DATABASE)" $(CURDIR)/scripts/run-yugabyte-contract-fixture.sh $(MAKE) --no-print-directory verify-schema-yugabyte-schema-contracts verify-yugabyte-$$service-contracts
 endif

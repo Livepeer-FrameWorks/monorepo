@@ -14,6 +14,11 @@ volumes:
   kafka_data:
   clickhouse_data:
   platform_redis_data:
+  # Second media cell (profile: two-cell); see scripts/verify-two-cell-media.sh.
+  foghorn_redis_b_data:
+  mistserver_b_data:
+  mist_thumbs_b:
+  helmsman_b_state:
 
 x-default-env: &default-env
   env_file:
@@ -133,7 +138,9 @@ services:
   # MistServer with AV libs.
   # Note: MistServer requires significant shared memory for holding stream buffers.
   mistserver:
-    image: livepeerframeworks/mistserver:latest
+    # MIST_IMAGE overrides the published image with a locally built one (for
+    # example the source-contract image scripts/verify-mist-current-source.sh builds).
+    image: ${MIST_IMAGE:-livepeerframeworks/mistserver:latest}
     # build:
     #   context: ../mistserver
     #   dockerfile: Dockerfile.mistserver
@@ -142,14 +149,16 @@ services:
     #   - DEBUG=4
     container_name: frameworks-mistserver
     shm_size: "2gb" # Allocate 2GB of shared memory for MistServer
+    # Host ports are overridable so the stack can coexist with a Mist running
+    # natively on the host (scripts/verify-two-cell-media.sh sets alternates).
     ports:
-      - "4242:4242" # Controller
-      - "8080:8080" # HTTP
-      - "1935:1935" # RTMP
-      - "5554:5554" # RTSP
-      - "4200:4200" # DTSC (Mist internal format; used for stream replication)
-      - "8889:8889/udp" # TS-SRT
-      - "18203:18203/udp" # WebRTC
+      - "${MIST_CONTROLLER_HOST_PORT:-4242}:4242" # Controller
+      - "${MIST_HTTP_HOST_PORT:-8080}:8080" # HTTP
+      - "${MIST_RTMP_HOST_PORT:-1935}:1935" # RTMP
+      - "${MIST_RTSP_HOST_PORT:-5554}:5554" # RTSP
+      - "${MIST_DTSC_HOST_PORT:-4200}:4200" # DTSC (Mist internal format; used for stream replication)
+      - "${MIST_SRT_HOST_PORT:-8889}:8889/udp" # TS-SRT
+      - "${MIST_WEBRTC_HOST_PORT:-18203}:18203/udp" # WebRTC
     volumes:
       - ./infrastructure/mistserver.conf:/etc/mistserver.conf
       - mistserver_data:/var/lib/mistserver
@@ -250,6 +259,9 @@ services:
       NODE_ID: central-node-1
       REDIS_URL: ${FOGHORN_REDIS_URL}
       FOGHORN_INSTANCE_ID: foghorn-1
+      # Off by default (.env); the two-cell proof exports both as true.
+      FEDERATION_ENABLED: ${FEDERATION_ENABLED:-false}
+      FEDERATION_ALLOW_INSECURE_DEV: ${FEDERATION_ALLOW_INSECURE_DEV:-false}
     ports:
       - "18008:18008"
       - "18019:18019"
@@ -332,6 +344,8 @@ services:
       REDIS_URL: ${FOGHORN_REDIS_URL}
       FOGHORN_INSTANCE_ID: foghorn-2
       FOGHORN_HOST: foghorn-2
+      FEDERATION_ENABLED: ${FEDERATION_ENABLED:-false}
+      FEDERATION_ALLOW_INSECURE_DEV: ${FEDERATION_ALLOW_INSECURE_DEV:-false}
     ports:
       - "18028:18018"
       - "18039:18029"
@@ -471,6 +485,8 @@ services:
       JWT_SECRET: ${JWT_SECRET}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       CLUSTER_ACCESS_MATERIALIZATION_SECRET: ${CLUSTER_ACCESS_MATERIALIZATION_SECRET:-dev-cluster-access-materialization-secret}
+      CAPACITY_CONSENT_REVIEW_KEY_ID: ${CAPACITY_CONSENT_REVIEW_KEY_ID:-}
+      CAPACITY_CONSENT_REVIEW_PRIVATE_KEY_PEM_B64: ${CAPACITY_CONSENT_REVIEW_PRIVATE_KEY_PEM_B64:-}
       CLUSTER_ID: central-primary
       GEOIP_MMDB_PATH: ${GEOIP_MMDB_PATH}
       GEOIP_CACHE_TTL: ${GEOIP_CACHE_TTL}
@@ -614,7 +630,9 @@ services:
       SERVICE_TOKEN: ${SERVICE_TOKEN}
       MEDIA_AUTHORITY_SIGNING_KEY_ID: ${MEDIA_AUTHORITY_SIGNING_KEY_ID:-dev-media-authority-1}
       MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64: ${MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64:-LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1DNENBUUF3QlFZREsyVndCQ0lFSUoxaHNaM3YvVnBndW9SSzlKTHNMTVJFU2NWcGV6SnBHWEE3ckFNY3JuOWcKLS0tLS1FTkQgUFJJVkFURSBLRVktLS0tLQo=}
-      MEDIA_AUTHORITY_SEAL_RECIPIENTS: '${MEDIA_AUTHORITY_SEAL_RECIPIENTS:-{"central-primary":{"key_id":"media-seal-94db25f9b9bdae44","public_key":"JaEasgpxyPIW4/xA1JhymdXICyyvyF/iOvIudl7z70Y="}}}'
+      # The two-cell profile's us-primary cell reuses the dev seal key; its
+      # key id is SealRecipientKeyID("us-primary", key) for that same key.
+      MEDIA_AUTHORITY_SEAL_RECIPIENTS: '${MEDIA_AUTHORITY_SEAL_RECIPIENTS:-{"central-primary":{"key_id":"media-seal-94db25f9b9bdae44","public_key":"JaEasgpxyPIW4/xA1JhymdXICyyvyF/iOvIudl7z70Y="},"us-primary":{"key_id":"media-seal-fe22e8cc7aa21780","public_key":"JaEasgpxyPIW4/xA1JhymdXICyyvyF/iOvIudl7z70Y="}}}'
       TURNSTILE_AUTH_SECRET_KEY: ${TURNSTILE_AUTH_SECRET_KEY}
       LISTMONK_URL: http://listmonk:9000
       LISTMONK_API_USERNAME: ${LISTMONK_API_USERNAME}
@@ -664,6 +682,9 @@ services:
       MIST_API_USERNAME: ${MIST_API_USERNAME}
       MIST_API_PASSWORD: ${MIST_API_PASSWORD}
       NODE_ID: ${HELMSMAN_NODE_ID}
+      # The demo seed does not pre-provision edge-node-1; Helmsman enrolls it with
+      # the demo bootstrap token from .env on first boot, the way every edge does.
+      EDGE_ENROLLMENT_TOKEN: ${EDGE_ENROLLMENT_TOKEN:-}
       PORT: ${HELMSMAN_PORT}
       LOG_LEVEL: ${LOG_LEVEL}
       SERVICE_TOKEN: ${SERVICE_TOKEN}
@@ -1692,6 +1713,203 @@ services:
     healthcheck:
       test:
         ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18015/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Second media cell (profile: two-cell). foghorn-b is a platform Foghorn whose
+  # identity is the platform-official us-primary cluster; it serves the tenant's
+  # virtual private cluster (demo-selfhosted) the way the central pair serves
+  # demo-media. Own Redis, MistServer and Helmsman, shared control plane, both
+  # cells federating. Driven by scripts/verify-two-cell-media.sh; needs a fresh
+  # postgres volume because foghorn_b is created on first boot.
+  # ---------------------------------------------------------------------------
+  foghorn-redis-b:
+    image: valkey/valkey:9.0-alpine@sha256:d1cc70645bbcef743615463a2fa4616e841407545e18f560aed0c49671a90147
+    container_name: frameworks-foghorn-redis-b
+    hostname: foghorn-redis-b
+    profiles: ["two-cell"]
+    command: valkey-server --appendonly yes
+    volumes:
+      - foghorn_redis_b_data:/data
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - frameworks
+
+  foghorn-b:
+    <<: *default-env
+    container_name: frameworks-foghorn-b
+    profiles: ["two-cell"]
+    build:
+      context: .
+      dockerfile: api_balancing/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://foghorn_b:${POSTGRES_PASSWORD}@postgres:5432/foghorn_b?sslmode=disable
+      PORT: 18008
+      FOGHORN_PUBLIC_HTTP_BIND_ADDR: 0.0.0.0
+      FOGHORN_INTERNAL_HTTP_PORT: 18027
+      FOGHORN_INTERNAL_HTTP_BIND_ADDR: 0.0.0.0
+      FOGHORN_INTERNAL_GRPC_PORT: 18019
+      FOGHORN_INTERNAL_GRPC_BIND_ADDR: 0.0.0.0:18019
+      FOGHORN_EXTERNAL_GRPC_BIND_ADDR: 0.0.0.0:18029
+      FOGHORN_EXTERNAL_GRPC_PORT: 18029
+      FOGHORN_RELAY_ADVERTISE_ADDR: foghorn-b:18019
+      LOG_LEVEL: ${LOG_LEVEL}
+      GIN_MODE: ${GIN_MODE}
+      COMMODORE_GRPC_ADDR: ${COMMODORE_GRPC_ADDR}
+      QUARTERMASTER_GRPC_ADDR: ${QUARTERMASTER_GRPC_ADDR}
+      COMMODORE_CACHE_TTL: ${COMMODORE_CACHE_TTL}
+      COMMODORE_CACHE_SWR: ${COMMODORE_CACHE_SWR}
+      COMMODORE_CACHE_NEG_TTL: ${COMMODORE_CACHE_NEG_TTL}
+      COMMODORE_CACHE_MAX: ${COMMODORE_CACHE_MAX}
+      GEOIP_MMDB_PATH: ${GEOIP_MMDB_PATH}
+      GEOIP_CACHE_TTL: ${GEOIP_CACHE_TTL}
+      GEOIP_CACHE_SWR: ${GEOIP_CACHE_SWR}
+      GEOIP_CACHE_NEG_TTL: ${GEOIP_CACHE_NEG_TTL}
+      GEOIP_CACHE_MAX: ${GEOIP_CACHE_MAX}
+      DECKLOG_GRPC_ADDR: ${DECKLOG_GRPC_ADDR}
+      CHANDLER_INTERNAL_URL: ${CHANDLER_INTERNAL_URL:-http://chandler:18020}
+      CHANDLER_BASE_URL: ${CHANDLER_BASE_URL:-http://localhost:18090}
+      STORAGE_S3_ENDPOINT: ""
+      STORAGE_S3_BUCKET: ""
+      STORAGE_S3_REGION: us-east-1
+      STORAGE_S3_ACCESS_KEY: ""
+      STORAGE_S3_SECRET_KEY: ""
+      STORAGE_S3_PREFIX: ""
+      CPU_WEIGHT: ${CPU_WEIGHT}
+      RAM_WEIGHT: ${RAM_WEIGHT}
+      BANDWIDTH_WEIGHT: ${BANDWIDTH_WEIGHT}
+      GEO_WEIGHT: ${GEO_WEIGHT}
+      STREAM_BONUS: ${STREAM_BONUS}
+      JWT_SECRET: ${JWT_SECRET}
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
+      FOGHORN_BALANCER_CAPABILITY_SECRET: ${FOGHORN_BALANCER_CAPABILITY_SECRET:-dev-foghorn-balancer-capability-secret}
+      FOGHORN_STATE_ENCRYPTION_KEY: ${FOGHORN_STATE_ENCRYPTION_KEY:-dev-foghorn-state-encryption-key}
+      MEDIA_AUTHORITY_TRUST_SET: '${MEDIA_AUTHORITY_TRUST_SET:-{"dev-media-authority-1":"11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="}}'
+      MEDIA_AUTHORITY_CELL_ID: us-primary
+      # Same dev seal key as cell A; the id is SealRecipientKeyID("us-primary", key).
+      MEDIA_AUTHORITY_SEAL_KEY_ID: media-seal-fe22e8cc7aa21780
+      # Cross-cell placement discovery and origin pull run over federation.
+      FEDERATION_ENABLED: "true"
+      FEDERATION_ALLOW_INSECURE_DEV: "true"
+      MEDIA_AUTHORITY_SEAL_PRIVATE_KEY_PEM_B64: ${MEDIA_AUTHORITY_SEAL_PRIVATE_KEY_PEM_B64:-LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1DNENBUUF3QlFZREsyVnVCQ0lFSUFoTVd3ZXZPY1Q3TUZGL2NXYXRHcGhndW9Ha0tMaUpxQTJsZ3h0ZDVpaCsKLS0tLS1FTkQgUFJJVkFURSBLRVktLS0tLQo=}
+      GRPC_METADATA_POLICY: deny
+      CLUSTER_ID: us-primary
+      NODE_ID: us-node-1
+      REDIS_URL: redis://foghorn-redis-b:6379
+      FOGHORN_INSTANCE_ID: foghorn-b
+      FOGHORN_HOST: foghorn-b
+    ports:
+      - "18058:18008"
+      - "18069:18029"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      quartermaster:
+        condition: service_healthy
+      foghorn-redis-b:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - frameworks
+    mem_limit: 512m
+    mem_reservation: 256m
+    cpus: 1.0
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+    healthcheck:
+      test:
+        ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18008/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  mistserver-b:
+    image: ${MIST_IMAGE:-livepeerframeworks/mistserver:latest}
+    container_name: frameworks-mistserver-b
+    profiles: ["two-cell"]
+    shm_size: "1gb"
+    ports:
+      - "8081:8080"   # HTTP (viewer path for cell B)
+      - "1936:1935"   # RTMP
+      - "4201:4200"   # DTSC
+      - "8890:8889/udp"
+    volumes:
+      - ./infrastructure/two-cell/mistserver-b.conf:/etc/mistserver.conf
+      - mistserver_b_data:/var/lib/mistserver
+      - mist_thumbs_b:/tmp/mist_thumbs
+    restart: unless-stopped
+    command: ["MistController", "-c", "/etc/mistserver.conf"]
+    depends_on:
+      helmsman-b:
+        condition: service_started
+    networks:
+      - frameworks
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    mem_limit: 1g
+    cpus: 1.0
+
+  helmsman-b:
+    <<: *default-env
+    container_name: frameworks-helmsman-b
+    profiles: ["two-cell"]
+    build:
+      context: .
+      dockerfile: api_sidecar/Dockerfile
+    environment:
+      HELMSMAN_WEBHOOK_URL: http://helmsman-b:18007
+      FOGHORN_CONTROL_ADDR: foghorn-b:18029
+      # In-network address: peers pull DTSC from the host this URL names, and
+      # the two-cell proof fetches media from inside the compose network.
+      EDGE_PUBLIC_URL: http://mistserver-b:8080
+      MISTSERVER_URL: http://mistserver-b:4242
+      MISTSERVER_HTTP_URL: http://mistserver-b:8080
+      MIST_API_USERNAME: ${MIST_API_USERNAME}
+      MIST_API_PASSWORD: ${MIST_API_PASSWORD}
+      NODE_ID: edge-node-b
+      PORT: 18007
+      LOG_LEVEL: ${LOG_LEVEL}
+      SERVICE_TOKEN: ${SERVICE_TOKEN}
+      HELMSMAN_STORAGE_LOCAL_PATH: /var/lib/mistserver/recordings
+      HELMSMAN_STATE_DIR: /var/lib/frameworks/helmsman
+      HELMSMAN_RELAY_BASE_URL: http://helmsman-b:18007
+      HELMSMAN_RELAY_TRUSTED_CIDR: ${HELMSMAN_RELAY_TRUSTED_CIDR:-172.16.0.0/12}
+      # Bound to demo-selfhosted by the two-cell seed.
+      EDGE_ENROLLMENT_TOKEN: demo_bootstrap_token_for_local_two_cell_testing_only
+    volumes:
+      - ./infrastructure/two-cell/machine-id:/etc/machine-id:ro
+      - helmsman_b_state:/var/lib/frameworks/helmsman
+      - mist_thumbs_b:/tmp/mist_thumbs
+    depends_on:
+      commodore:
+        condition: service_started
+      foghorn-b:
+        condition: service_started
+      decklog:
+        condition: service_started
+    ports:
+      - "18017:18007"
+    networks:
+      - frameworks
+    mem_limit: 512m
+    cpus: 1.0
+    healthcheck:
+      test:
+        ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:18007/health"]
       interval: 10s
       timeout: 5s
       retries: 3

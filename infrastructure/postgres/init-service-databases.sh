@@ -4,9 +4,15 @@ set -eu
 # Local development mirrors production's logical database ownership while
 # intentionally reusing one local-only password. These names are controlled
 # repository data; no user-provided value is interpreted as an identifier.
-service_databases="quartermaster purser foghorn commodore periscope navigator skipper"
+# foghorn_b is the second media cell's Foghorn database (docker compose profile
+# two-cell); it reuses the foghorn schema under its own role.
+service_databases="quartermaster purser foghorn foghorn_b commodore periscope navigator skipper"
 
 for service in $service_databases; do
+  schema_file="$service"
+  case "$service" in
+    foghorn_*) schema_file="foghorn" ;;
+  esac
   psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
     --set=service="$service" --set=runtime_password="$POSTGRES_PASSWORD" \
     --set=ON_ERROR_STOP=1 <<'SQL'
@@ -47,25 +53,25 @@ SQL
   esac
 
   psql --username "$service" --dbname "$service" --set=ON_ERROR_STOP=1 \
-    --file="/frameworks-schema/$service.sql"
+    --file="/frameworks-schema/$schema_file.sql"
 
   psql --username "$POSTGRES_USER" --dbname "$service" \
-    --set=service="$service" --set=ON_ERROR_STOP=1 <<'SQL'
-SELECT format('GRANT USAGE ON SCHEMA %I TO %I', :'service', :'service' || '_runtime')
+    --set=service="$service" --set=schema="$schema_file" --set=ON_ERROR_STOP=1 <<'SQL'
+SELECT format('GRANT USAGE ON SCHEMA %I TO %I', :'schema', :'service' || '_runtime')
 \gexec
-SELECT format('REVOKE CREATE ON SCHEMA %I FROM %I', :'service', :'service' || '_runtime')
+SELECT format('REVOKE CREATE ON SCHEMA %I FROM %I', :'schema', :'service' || '_runtime')
 \gexec
-SELECT format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %I TO %I', :'service', :'service' || '_runtime')
+SELECT format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %I TO %I', :'schema', :'service' || '_runtime')
 \gexec
-SELECT format('GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA %I TO %I', :'service', :'service' || '_runtime')
+SELECT format('GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA %I TO %I', :'schema', :'service' || '_runtime')
 \gexec
-SELECT format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA %I TO %I', :'service', :'service' || '_runtime')
+SELECT format('GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA %I TO %I', :'schema', :'service' || '_runtime')
 \gexec
-SELECT format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %I', :'service', :'service', :'service' || '_runtime')
+SELECT format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %I', :'service', :'schema', :'service' || '_runtime')
 \gexec
-SELECT format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO %I', :'service', :'service', :'service' || '_runtime')
+SELECT format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO %I', :'service', :'schema', :'service' || '_runtime')
 \gexec
-SELECT format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT EXECUTE ON FUNCTIONS TO %I', :'service', :'service', :'service' || '_runtime')
+SELECT format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA %I GRANT EXECUTE ON FUNCTIONS TO %I', :'service', :'schema', :'service' || '_runtime')
 \gexec
 SQL
 done
