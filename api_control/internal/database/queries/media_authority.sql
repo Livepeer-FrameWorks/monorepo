@@ -80,8 +80,16 @@ WHERE authority_kind = sqlc.arg(authority_kind)
 -- name: ClaimMediaAuthorityDeliveries :many
 WITH candidates AS (
     SELECT authority_kind, authority_id, authority_version, cell_id
-    FROM commodore.media_authority_deliveries
+    FROM commodore.media_authority_deliveries AS queued
     WHERE status IN ('pending', 'delivering')
+      AND NOT EXISTS (
+          SELECT 1 FROM commodore.media_authority_versions AS version
+          WHERE version.authority_kind = queued.authority_kind
+            AND version.authority_id = queued.authority_id
+            AND version.authority_version = queued.authority_version
+            AND version.payload_schema_version = 2
+            AND version.valid_until <= version.issued_at + INTERVAL '1 minute'
+      )
       AND next_attempt_at <= NOW()
       AND (lease_expires_at IS NULL OR lease_expires_at <= NOW())
     ORDER BY next_attempt_at, created_at
@@ -91,6 +99,60 @@ WITH candidates AS (
 UPDATE commodore.media_authority_deliveries AS delivery
 SET status = 'delivering',
     attempts = delivery.attempts + 1,
+    lease_expires_at = NOW() + sqlc.arg(lease_ms)::bigint * INTERVAL '1 millisecond',
+    updated_at = NOW()
+FROM candidates
+WHERE delivery.authority_kind = candidates.authority_kind
+  AND delivery.authority_id = candidates.authority_id
+  AND delivery.authority_version = candidates.authority_version
+  AND delivery.cell_id = candidates.cell_id
+RETURNING delivery.authority_kind, delivery.authority_id, delivery.authority_version,
+          delivery.cell_id, delivery.signed_envelope, delivery.attempts;
+
+-- name: ClaimMediaAuthorityDeadlineDelivery :many
+WITH heads AS (
+    SELECT DISTINCT ON (queued.cell_id)
+           queued.authority_kind, queued.authority_id, queued.authority_version,
+           queued.cell_id, queued.next_attempt_at, queued.created_at
+    FROM commodore.media_authority_deliveries AS queued
+    JOIN commodore.media_authority_versions AS version
+      ON version.authority_kind = queued.authority_kind
+     AND version.authority_id = queued.authority_id
+     AND version.authority_version = queued.authority_version
+    WHERE queued.status IN ('pending', 'delivering')
+      AND queued.next_attempt_at <= NOW()
+      AND (queued.lease_expires_at IS NULL OR queued.lease_expires_at <= NOW())
+      AND version.payload_schema_version = 2
+      AND version.valid_until <= version.issued_at + INTERVAL '1 minute'
+      AND NOT EXISTS (
+          SELECT 1 FROM commodore.media_authority_deliveries AS inflight
+          JOIN commodore.media_authority_versions AS active_version
+            ON active_version.authority_kind = inflight.authority_kind
+           AND active_version.authority_id = inflight.authority_id
+           AND active_version.authority_version = inflight.authority_version
+          WHERE inflight.cell_id = queued.cell_id
+            AND inflight.status = 'delivering' AND inflight.lease_expires_at > NOW()
+            AND active_version.payload_schema_version = 2
+            AND active_version.valid_until <= active_version.issued_at + INTERVAL '1 minute'
+      )
+    ORDER BY queued.cell_id, queued.next_attempt_at, queued.created_at,
+             queued.authority_kind, queued.authority_id, queued.authority_version
+), candidates AS (
+    SELECT queued.authority_kind, queued.authority_id, queued.authority_version, queued.cell_id
+    FROM commodore.media_authority_deliveries AS queued
+    JOIN heads ON heads.authority_kind = queued.authority_kind
+              AND heads.authority_id = queued.authority_id
+              AND heads.authority_version = queued.authority_version
+              AND heads.cell_id = queued.cell_id
+    WHERE queued.status IN ('pending', 'delivering')
+      AND queued.next_attempt_at <= NOW()
+      AND (queued.lease_expires_at IS NULL OR queued.lease_expires_at <= NOW())
+    ORDER BY heads.next_attempt_at, heads.created_at, heads.cell_id
+    LIMIT sqlc.arg(batch_size)
+    FOR UPDATE OF queued SKIP LOCKED
+)
+UPDATE commodore.media_authority_deliveries AS delivery
+SET status = 'delivering', attempts = delivery.attempts + 1,
     lease_expires_at = NOW() + sqlc.arg(lease_ms)::bigint * INTERVAL '1 millisecond',
     updated_at = NOW()
 FROM candidates
@@ -195,6 +257,7 @@ WITH candidates AS (
     SELECT source_service, source_event_id
     FROM commodore.media_authority_refresh_inbox
     WHERE status <> 'completed'
+      AND NOT (source_service = 'commodore' AND source_event_id LIKE 'authority-deadline:%')
       AND next_attempt_at <= NOW()
       AND (lease_expires_at IS NULL OR lease_expires_at <= NOW())
     ORDER BY next_attempt_at, created_at
@@ -210,6 +273,83 @@ WHERE inbox.source_service = candidates.source_service
   AND inbox.source_event_id = candidates.source_event_id
 RETURNING inbox.source_service, inbox.source_event_id, inbox.tenant_id::text AS tenant_id,
           inbox.reason, inbox.attempts;
+
+-- name: ScheduleMediaAuthorityRefresh :execrows
+INSERT INTO commodore.media_authority_refresh_inbox
+    (source_service, source_event_id, tenant_id, reason, next_attempt_at)
+VALUES ('commodore', sqlc.arg(source_event_id), sqlc.arg(tenant_id)::uuid,
+        sqlc.arg(reason), sqlc.arg(next_attempt_at))
+ON CONFLICT (source_service, source_event_id) DO NOTHING;
+
+-- name: ClaimMediaAuthorityDeadlineRefresh :many
+WITH candidates AS (
+    SELECT source_service, source_event_id
+    FROM commodore.media_authority_refresh_inbox
+    WHERE status <> 'completed'
+      AND source_service = 'commodore'
+      AND source_event_id LIKE 'authority-deadline:%'
+      AND reason <> 'tenant_authority:deadline_refresh'
+      AND next_attempt_at <= NOW()
+      AND (lease_expires_at IS NULL OR lease_expires_at <= NOW())
+    ORDER BY next_attempt_at, created_at
+    LIMIT sqlc.arg(batch_size)
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE commodore.media_authority_refresh_inbox AS inbox
+SET status = 'processing', attempts = inbox.attempts + 1,
+    lease_expires_at = NOW() + sqlc.arg(lease_ms)::bigint * INTERVAL '1 millisecond',
+    updated_at = NOW()
+FROM candidates
+WHERE inbox.source_service = candidates.source_service
+  AND inbox.source_event_id = candidates.source_event_id
+RETURNING inbox.source_service, inbox.source_event_id, inbox.tenant_id::text AS tenant_id,
+          inbox.reason, inbox.attempts;
+
+-- name: ClaimTenantMediaAuthorityDeadlineRefresh :many
+WITH candidates AS (
+    SELECT source_service, source_event_id
+    FROM commodore.media_authority_refresh_inbox
+    WHERE status <> 'completed'
+      AND source_service = 'commodore'
+      AND source_event_id LIKE 'authority-deadline:%'
+      AND reason = 'tenant_authority:deadline_refresh'
+      AND next_attempt_at <= NOW()
+      AND (lease_expires_at IS NULL OR lease_expires_at <= NOW())
+    ORDER BY next_attempt_at, created_at
+    LIMIT sqlc.arg(batch_size)
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE commodore.media_authority_refresh_inbox AS inbox
+SET status = 'processing', attempts = inbox.attempts + 1,
+    lease_expires_at = NOW() + sqlc.arg(lease_ms)::bigint * INTERVAL '1 millisecond',
+    updated_at = NOW()
+FROM candidates
+WHERE inbox.source_service = candidates.source_service
+  AND inbox.source_event_id = candidates.source_event_id
+RETURNING inbox.source_service, inbox.source_event_id, inbox.tenant_id::text AS tenant_id,
+          inbox.reason, inbox.attempts;
+
+-- name: GetScheduledMediaAuthorityVersion :one
+WITH scoped AS (
+    SELECT 'tenant'::text AS kind, sqlc.arg(tenant_id)::text AS id
+    UNION ALL
+    SELECT 'media_object', 'live_stream:' || id::text FROM commodore.streams
+    WHERE tenant_id = sqlc.arg(tenant_id)::uuid
+    UNION ALL
+    SELECT 'media_object', 'artifact:' || id::text FROM commodore.clips
+    WHERE tenant_id = sqlc.arg(tenant_id)::uuid
+    UNION ALL
+    SELECT 'media_object', 'artifact:' || id::text FROM commodore.dvr_recordings
+    WHERE tenant_id = sqlc.arg(tenant_id)::uuid
+    UNION ALL
+    SELECT 'media_object', 'artifact:' || id::text FROM commodore.vod_assets
+    WHERE tenant_id = sqlc.arg(tenant_id)::uuid
+)
+SELECT current.authority_version
+FROM commodore.media_authority_current AS current
+JOIN scoped ON scoped.kind = current.authority_kind AND scoped.id = current.authority_id
+WHERE current.authority_kind = sqlc.arg(authority_kind)
+  AND current.authority_id = sqlc.arg(authority_id);
 
 -- name: CompleteMediaAuthorityRefreshInbox :execrows
 UPDATE commodore.media_authority_refresh_inbox
@@ -242,6 +382,17 @@ SELECT authority_id
 FROM commodore.media_authority_current
 WHERE authority_kind = 'tenant'
 ORDER BY authority_id;
+
+-- name: LockCurrentTenantMediaAuthority :one
+SELECT versions.payload, versions.valid_until
+FROM commodore.media_authority_current AS current
+JOIN commodore.media_authority_versions AS versions
+  ON versions.authority_kind = current.authority_kind
+ AND versions.authority_id = current.authority_id
+ AND versions.authority_version = current.authority_version
+WHERE current.authority_kind = 'tenant'
+  AND current.authority_id = sqlc.arg(tenant_id)::text
+FOR SHARE OF current;
 
 -- name: ListCurrentMediaAuthorityDeliveryCells :many
 SELECT delivery.cell_id
@@ -351,3 +502,111 @@ SELECT id::text, tenant_id::text,
        CASE WHEN origin_type = 'dvr_chapter' THEN 'chapter'::text ELSE 'vod'::text END
 FROM commodore.vod_assets WHERE tenant_id = sqlc.arg(tenant_id)::uuid
 ORDER BY authority_id;
+
+-- name: UpsertMediaCellPlacementCapability :one
+INSERT INTO commodore.media_cell_placement_capabilities (
+    cell_id, max_schema_version, enforcement_ready, live_replicas, first_ready_at, attested_at, updated_at
+) VALUES (
+    sqlc.arg(cell_id), sqlc.arg(max_schema_version), sqlc.arg(enforcement_ready), sqlc.arg(live_replicas),
+    CASE WHEN sqlc.arg(enforcement_ready)::boolean THEN NOW() ELSE NULL END, NOW(), NOW()
+)
+ON CONFLICT (cell_id) DO UPDATE
+SET max_schema_version = EXCLUDED.max_schema_version,
+    enforcement_ready = EXCLUDED.enforcement_ready,
+    live_replicas = EXCLUDED.live_replicas,
+    first_ready_at = CASE
+        WHEN EXCLUDED.enforcement_ready AND commodore.media_cell_placement_capabilities.first_ready_at IS NULL THEN NOW()
+        WHEN EXCLUDED.enforcement_ready THEN commodore.media_cell_placement_capabilities.first_ready_at
+        ELSE NULL END,
+    attested_at = NOW(),
+    updated_at = NOW()
+RETURNING enforcement_ready, first_ready_at;
+
+-- name: GetMediaCellPlacementCapability :one
+SELECT cell_id, max_schema_version, enforcement_ready, live_replicas, first_ready_at, attested_at
+FROM commodore.media_cell_placement_capabilities
+WHERE cell_id = sqlc.arg(cell_id);
+
+-- name: ListMediaCellPlacementCapabilities :many
+SELECT cell_id, max_schema_version, enforcement_ready, live_replicas, attested_at
+FROM commodore.media_cell_placement_capabilities
+WHERE cell_id = ANY(sqlc.arg(cell_ids)::text[])
+ORDER BY cell_id;
+
+-- name: ListLegacySchemaTenantsTargetingCell :many
+SELECT DISTINCT target.authority_id AS tenant_id
+FROM commodore.media_authority_targets AS target
+JOIN commodore.media_authority_current AS current
+  ON current.authority_kind = target.authority_kind
+ AND current.authority_id = target.authority_id
+JOIN commodore.media_authority_versions AS version
+  ON version.authority_kind = current.authority_kind
+ AND version.authority_id = current.authority_id
+ AND version.authority_version = current.authority_version
+WHERE target.authority_kind = 'tenant'
+  AND target.cell_id = sqlc.arg(cell_id)
+  AND version.payload_schema_version < sqlc.arg(schema_version)::integer
+ORDER BY tenant_id;
+
+-- name: ListCurrentMediaAuthorityRollout :many
+SELECT current.authority_version,
+       versions.payload, versions.payload_schema_version, versions.valid_until,
+       delivery.cell_id, delivery.status AS delivery_status, delivery.acknowledged_at,
+       COALESCE(capability.enforcement_ready, FALSE)::boolean AS cell_ready,
+       COALESCE(capability.max_schema_version, 0)::integer AS cell_schema_version
+FROM commodore.media_authority_current AS current
+JOIN commodore.media_authority_versions AS versions
+  ON versions.authority_kind = current.authority_kind
+ AND versions.authority_id = current.authority_id
+ AND versions.authority_version = current.authority_version
+JOIN commodore.media_authority_deliveries AS delivery
+  ON delivery.authority_kind = current.authority_kind
+ AND delivery.authority_id = current.authority_id
+ AND delivery.authority_version = current.authority_version
+LEFT JOIN commodore.media_cell_placement_capabilities AS capability
+  ON capability.cell_id = delivery.cell_id
+WHERE current.authority_kind = sqlc.arg(authority_kind)
+  AND current.authority_id = sqlc.arg(authority_id)
+ORDER BY delivery.cell_id;
+
+-- name: LockMediaAuthorityActivation :exec
+-- Serializes activation derivation for one authority. Acknowledgements for the
+-- same authority version are delivered concurrently, each in its own READ
+-- COMMITTED transaction, so without this every one of them can read the others'
+-- pre-acknowledgement state, conclude the rollout is incomplete, and leave a
+-- fully delivered change pending forever.
+--
+-- The key is namespaced: hashtext resolves to the single-bigint overload, which
+-- Commodore's artifact-catalog and creation-identity locks also use, and an
+-- unnamespaced authority id could collide with one of those.
+SELECT pg_advisory_xact_lock(
+  hashtext('media_authority_activation:' || sqlc.arg(authority_kind)::text || ':' || sqlc.arg(authority_id)::text)
+);
+
+-- name: ListAuthoritiesAwaitingActivation :many
+-- One page of placement scopes whose change is still unresolved. Activation is
+-- otherwise only ever derived as a side effect of an acknowledgement, so
+-- anything that interrupts the acknowledgement that would have activated a
+-- change -- a crashed process, a delivery that failed and succeeded on retry --
+-- leaves it stranded with no retry path. This is the backstop that converges
+-- those.
+--
+-- Paged by (tenant_id, created_at) rather than filtered by age alone, because a
+-- legitimately blocked change never leaves this set: re-writing the same
+-- rollout status is a no-op that does not bump updated_at. A fixed ordering plus
+-- LIMIT would then let a bounded prefix of permanently blocked scopes hide every
+-- scope behind them forever -- starving exactly the stranded change this exists
+-- to rescue. The caller walks the cursor and wraps, so every scope is visited.
+--
+-- The ordering matches idx_media_placement_changes_pending, so paging is an
+-- index scan rather than a sort of every pending row once a second.
+SELECT changes.tenant_id::text AS tenant_id,
+       changes.scope_kind,
+       changes.scope_id::text AS scope_id,
+       changes.created_at
+FROM commodore.media_placement_changes AS changes
+WHERE changes.rollout_status IN ('pending', 'blocked')
+  AND changes.updated_at < NOW() - sqlc.arg(min_age_ms)::bigint * INTERVAL '1 millisecond'
+  AND (changes.tenant_id, changes.created_at) > (sqlc.arg(after_tenant_id)::uuid, sqlc.arg(after_created_at)::timestamptz)
+ORDER BY changes.tenant_id, changes.created_at
+LIMIT sqlc.arg(max_rows)::integer;

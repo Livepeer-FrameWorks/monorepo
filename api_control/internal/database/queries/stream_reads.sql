@@ -3,6 +3,13 @@ SELECT COUNT(*)::integer
 FROM commodore.streams
 WHERE user_id = $1 AND tenant_id = $2 AND deleted_at IS NULL;
 
+-- name: GetPlacementPreviewStream :one
+SELECT id, internal_name, ingest_mode, active_ingest_cluster_id,
+       active_ingest_cluster_updated_at, NOW()::timestamptz AS observed_at
+FROM commodore.streams
+WHERE id = sqlc.arg(stream_id)::uuid AND tenant_id = sqlc.arg(tenant_id)::uuid
+  AND deleted_at IS NULL;
+
 -- name: CountStreamsForUserSearch :one
 SELECT COUNT(*)::integer
 FROM commodore.streams
