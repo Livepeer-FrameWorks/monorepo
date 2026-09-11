@@ -1,0 +1,17 @@
+mutation ApplyClusterMediaConsentChange($input: ApplyMediaCapacityConsentInput!) {
+  applyClusterMediaConsentChange(input: $input) {
+    __typename
+    ... on MediaCapacityConsentChange {
+      ...MediaCapacityConsentChangeFields @mask_disable
+    }
+    ... on MediaPlacementError {
+      ...MediaPlacementErrorFields @mask_disable
+    }
+    ... on AuthError {
+      message
+    }
+    ... on NotFoundError {
+      message
+    }
+  }
+}

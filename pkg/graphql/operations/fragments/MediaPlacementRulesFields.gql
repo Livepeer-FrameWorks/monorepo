@@ -1,0 +1,18 @@
+fragment MediaPlacementRulesFields on MediaPlacementRules {
+  schemaVersion
+  constraints {
+    allow {
+      any {
+        ...MediaPlacementSelectorFields @mask_disable
+      }
+    }
+    deny {
+      ...MediaPlacementSelectorFields @mask_disable
+    }
+  }
+  preferences {
+    groups {
+      ...MediaPlacementGroupFields @mask_disable
+    }
+  }
+}

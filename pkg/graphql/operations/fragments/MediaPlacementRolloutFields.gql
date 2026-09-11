@@ -1,0 +1,14 @@
+fragment MediaPlacementRolloutFields on MediaPlacementRollout {
+  status
+  requiredRecipients
+  appliedRecipients
+  existingSessionsRetained
+  updatedAt
+  pendingRecipients {
+    id
+    name
+    status
+    reason
+    authorityExpiresAt
+  }
+}

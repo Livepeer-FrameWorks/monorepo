@@ -1,0 +1,25 @@
+query GetClusterMediaConsent($clusterId: ID!) {
+  clusterMediaConsent(clusterId: $clusterId) {
+    __typename
+    ... on MediaCapacityConsent {
+      clusterId
+      revision
+      allowIngest
+      allowServe
+      allowExternalSource
+      canManage
+      rollout {
+        ...MediaPlacementRolloutFields @mask_disable
+      }
+    }
+    ... on MediaPlacementError {
+      ...MediaPlacementErrorFields @mask_disable
+    }
+    ... on AuthError {
+      message
+    }
+    ... on NotFoundError {
+      message
+    }
+  }
+}

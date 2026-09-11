@@ -1,0 +1,17 @@
+mutation ApplyMediaPlacementChange($input: ApplyMediaPlacementChangeInput!) {
+  applyMediaPlacementChange(input: $input) {
+    __typename
+    ... on MediaPlacementChange {
+      ...MediaPlacementChangeFields @mask_disable
+    }
+    ... on MediaPlacementError {
+      ...MediaPlacementErrorFields @mask_disable
+    }
+    ... on AuthError {
+      message
+    }
+    ... on NotFoundError {
+      message
+    }
+  }
+}

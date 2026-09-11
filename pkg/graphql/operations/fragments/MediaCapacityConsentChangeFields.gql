@@ -1,0 +1,10 @@
+fragment MediaCapacityConsentChangeFields on MediaCapacityConsentChange {
+  clusterId
+  idempotencyKey
+  revision
+  digest
+  createdAt
+  rollout {
+    ...MediaPlacementRolloutFields @mask_disable
+  }
+}

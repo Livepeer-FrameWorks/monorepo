@@ -1,0 +1,17 @@
+query GetMediaPlacementChange($scope: MediaPlacementScopeInput!, $idempotencyKey: String!) {
+  mediaPlacementChange(scope: $scope, idempotencyKey: $idempotencyKey) {
+    __typename
+    ... on MediaPlacementChange {
+      ...MediaPlacementChangeFields @mask_disable
+    }
+    ... on MediaPlacementError {
+      ...MediaPlacementErrorFields @mask_disable
+    }
+    ... on AuthError {
+      message
+    }
+    ... on NotFoundError {
+      message
+    }
+  }
+}

@@ -1,0 +1,17 @@
+query ResolveIngestDestination($streamKey: String!, $protocol: MediaIngestProtocol) {
+  resolveIngestEndpoint(streamKey: $streamKey, protocol: $protocol) {
+    primary {
+      nodeId
+      clusterId
+      kind
+      baseUrl
+      whipUrl
+      rtmpUrl
+      srtUrl
+      region
+    }
+    metadata {
+      streamId
+    }
+  }
+}

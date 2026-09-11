@@ -1,0 +1,12 @@
+fragment MediaPlacementErrorFields on MediaPlacementError {
+  code
+  message
+  fields {
+    path
+    groupId
+    message
+  }
+  currentRevision
+  conflictParentRevision: parentRevision
+  retryAfterSeconds
+}

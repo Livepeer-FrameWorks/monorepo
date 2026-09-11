@@ -1,0 +1,14 @@
+fragment MediaPlacementChangeFields on MediaPlacementChange {
+  scope {
+    kind
+    streamId
+  }
+  idempotencyKey
+  revision
+  parentRevision
+  digest
+  createdAt
+  rollout {
+    ...MediaPlacementRolloutFields @mask_disable
+  }
+}

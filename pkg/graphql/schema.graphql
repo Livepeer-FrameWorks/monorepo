@@ -655,17 +655,21 @@ type Query {
     Playback ID for live streams or VOD uploads, or artifact playback ID for clips/DVR.
     """
     contentId: String!
+    "Required playback format. A different format is never substituted. Omit for automatic negotiation."
+    protocol: MediaViewerProtocol
   ): ViewerEndpointResponse
 
   """
   Resolve a stream key to ingest endpoints for StreamCrafter.
-  Returns RTMP/E-RTMP/SRT/WHIP endpoints for the stream.
+  Returns node-specific advertised protocols. A requested protocol filters candidates
+  before ranking; it is not permission to substitute a different protocol.
   """
   resolveIngestEndpoint(
     """
     The stream key.
     """
     streamKey: String!
+    protocol: MediaIngestProtocol
   ): IngestEndpointResponse
 
   # ==================== AI Consultant (Skipper) ====================
@@ -742,6 +746,38 @@ type Query {
   panel to size sliders and explain the allowed range.
   """
   mediaRetentionPolicy: MediaRetentionPolicy!
+
+  """
+  Tenant-bound placement intent and actual enforcement progress.
+  """
+  mediaPlacementPolicy(scope: MediaPlacementScopeInput!): MediaPlacementPolicyResult!
+  mediaPlacementOptions(
+    scope: MediaPlacementScopeInput!
+    filter: MediaPlacementOptionsFilter
+    after: String
+    first: Int = 50
+  ): MediaPlacementOptionsResult!
+  """
+  Read-only evaluation. Never claims ingest, reserves capacity, or starts a source pull.
+  """
+  previewMediaPlacement(input: PreviewMediaPlacementInput!): MediaPlacementPreviewResult!
+  reviewMediaPlacementChange(input: ReviewMediaPlacementChangeInput!): MediaPlacementReviewResult!
+  mediaPlacementChange(
+    scope: MediaPlacementScopeInput!
+    idempotencyKey: String!
+  ): MediaPlacementChangeResult!
+  """
+  Inactive legacy pins, available for an explicit reviewed import into stream rules.
+  """
+  mediaPlacementLegacyPins(streamId: ID!): MediaPlacementLegacyPinsResult!
+  clusterMediaConsent(clusterId: ID!): MediaCapacityConsentResult!
+  reviewClusterMediaConsentChange(
+    input: ReviewMediaCapacityConsentInput!
+  ): MediaPlacementReviewResult!
+  clusterMediaConsentChange(
+    clusterId: ID!
+    idempotencyKey: String!
+  ): MediaCapacityConsentChangeResult!
 }
 
 """
@@ -1955,6 +1991,14 @@ type Mutation {
   cap is exposed via `mediaRetentionPolicy.bounds.maxRecordingRetentionDays`.
   """
   setMediaRetentionPolicy(input: SetMediaRetentionPolicyInput!): SetMediaRetentionPolicyResult!
+
+  """
+  Atomically saves the requested verbs. Saved does not mean effective on every cell.
+  """
+  applyMediaPlacementChange(input: ApplyMediaPlacementChangeInput!): MediaPlacementChangeResult!
+  applyClusterMediaConsentChange(
+    input: ApplyMediaCapacityConsentInput!
+  ): MediaCapacityConsentChangeResult!
 
   """
   Apply a per-asset retention override on a finalized DVR recording, clip,
@@ -6822,6 +6866,41 @@ type IngestEndpointResponse {
   metadata: IngestMetadata
 }
 
+"Playback format required when selecting and preparing a viewer destination."
+enum MediaViewerProtocol {
+  WEBRTC
+  WHEP
+  HLS
+  DASH
+  HLS_CMAF
+  MEWS
+  MEWS_WEBM
+  MP4
+  WEBM
+  MKV
+  TS
+  AAC
+  H264
+  H264_WS
+  RAW_WS
+  JSON_WS
+  FLV
+  HDS
+  SMOOTHSTREAMING
+  SDP
+  MIST_HTML
+  RTMP
+  RTSP
+  SRT
+  DTSC
+}
+
+enum MediaIngestProtocol {
+  WHIP
+  RTMP
+  SRT
+}
+
 # Individual ingest endpoint with node and protocol info
 enum IngestEndpointKind {
   INGEST_ENDPOINT_KIND_UNSPECIFIED
@@ -7941,3 +8020,454 @@ type ClusterLiveStats {
   activeNodes: Int!
   egressCapacityBps: Float!
 }
+
+enum MediaPlacementVerb {
+  INGEST
+  SERVE
+}
+enum MediaPlacementScopeKind {
+  TENANT
+  STREAM
+}
+enum MediaPlacementClass {
+  PLATFORM_OFFICIAL
+  TENANT_PRIVATE
+  THIRD_PARTY_MARKETPLACE
+}
+enum MediaPlacementCharging {
+  RATED
+  PERMANENTLY_FREE
+}
+enum MediaPlacementOrder {
+  DISTANCE
+  PRICE
+}
+enum MediaPlacementSpillover {
+  NEVER
+  CAPACITY_ONLY
+  GEO_HOLE
+  CAPACITY_OR_GEO_HOLE
+}
+enum MediaPlacementUpdateKind {
+  SET
+  CLEAR
+}
+enum MediaPlacementRolloutStatus {
+  NOT_CONFIGURED
+  PENDING
+  EFFECTIVE
+  BLOCKED
+  SUPERSEDED
+}
+enum MediaPlacementErrorCode {
+  INVALID_INPUT
+  REVISION_CONFLICT
+  STALE_REVIEW
+  IDEMPOTENCY_CONFLICT
+  UNSUPPORTED
+  UNAVAILABLE
+  RATE_LIMITED
+}
+enum MediaPlacementWarningSeverity {
+  INFO
+  WARNING
+}
+enum MediaPlacementOptionKind {
+  CLUSTER
+  OPERATOR
+  REGION
+}
+
+input MediaPlacementScopeInput {
+  kind: MediaPlacementScopeKind!
+  streamId: ID
+}
+
+type MediaPlacementScope {
+  kind: MediaPlacementScopeKind!
+  streamId: ID
+}
+
+"Fields combine with AND; values within a field combine with OR. Empty matches all entitled capacity."
+input MediaPlacementSelectorInput {
+  clusterIds: [ID!]
+  ownerIds: [ID!]
+  regions: [String!]
+  classes: [MediaPlacementClass!]
+  charging: [MediaPlacementCharging!]
+}
+
+type MediaPlacementSelector {
+  clusterIds: [ID!]!
+  ownerIds: [ID!]!
+  regions: [String!]!
+  classes: [MediaPlacementClass!]!
+  charging: [MediaPlacementCharging!]!
+}
+
+input MediaPlacementAllowInput {
+  any: [MediaPlacementSelectorInput!]!
+}
+type MediaPlacementAllow {
+  any: [MediaPlacementSelector!]!
+}
+
+input MediaPlacementConstraintsInput {
+  "Omitted means no additional restriction; an explicit empty any list allows nothing."
+  allow: MediaPlacementAllowInput
+  deny: [MediaPlacementSelectorInput!]! = []
+}
+
+type MediaPlacementConstraints {
+  allow: MediaPlacementAllow
+  deny: [MediaPlacementSelector!]!
+}
+
+input MediaPlacementGroupInput {
+  id: String!
+  match: MediaPlacementSelectorInput!
+  order: MediaPlacementOrder! = DISTANCE
+  spillover: MediaPlacementSpillover! = NEVER
+  "Hard maximum distance in km. Zero means unbounded."
+  maxDistanceKm: Float! = 0
+  "Soft threshold for geographic spill; must be positive for GEO_HOLE modes."
+  geoHoleDistanceKm: Float! = 0
+  minImprovementKm: Float! = 0
+  priceCurrency: String
+  priceUnit: String
+}
+
+type MediaPlacementGroup {
+  id: String!
+  match: MediaPlacementSelector!
+  order: MediaPlacementOrder!
+  spillover: MediaPlacementSpillover!
+  maxDistanceKm: Float!
+  geoHoleDistanceKm: Float!
+  minImprovementKm: Float!
+  priceCurrency: String
+  priceUnit: String
+}
+
+input MediaPlacementPreferencesInput {
+  groups: [MediaPlacementGroupInput!]!
+}
+type MediaPlacementPreferences {
+  groups: [MediaPlacementGroup!]!
+}
+
+input MediaPlacementRulesInput {
+  schemaVersion: Int! = 1
+  constraints: MediaPlacementConstraintsInput!
+  "Omitted inherits preference order; an explicit empty groups list denies all destinations."
+  preferences: MediaPlacementPreferencesInput
+}
+
+type MediaPlacementRules {
+  schemaVersion: Int!
+  constraints: MediaPlacementConstraints!
+  preferences: MediaPlacementPreferences
+}
+
+type MediaPlacementEffectivePolicy {
+  schemaVersion: Int!
+  digest: String!
+  layers: [MediaPlacementConstraints!]!
+  groups: [MediaPlacementGroup!]!
+}
+
+type MediaPlacementVerbPolicy {
+  verb: MediaPlacementVerb!
+  ownRules: MediaPlacementRules
+  inheritedRules: MediaPlacementRules
+  "Compiled requested intent; enforcement progress is reported separately."
+  requestedEffective: MediaPlacementEffectivePolicy!
+}
+
+type MediaPlacementActions {
+  canRead: Boolean!
+  canPreview: Boolean!
+  canManage: Boolean!
+  canInspectPrivateCandidates: Boolean!
+}
+
+type MediaPlacementFeatures {
+  schemaVersion: Int!
+  geographicSpillover: Boolean!
+  priceOrdering: Boolean!
+  supportedPresets: [String!]!
+}
+
+type MediaPlacementRecipient {
+  id: ID!
+  name: String!
+  status: MediaPlacementRolloutStatus!
+  reason: String
+  authorityExpiresAt: Time
+}
+
+type MediaPlacementRollout {
+  status: MediaPlacementRolloutStatus!
+  requiredRecipients: Int!
+  appliedRecipients: Int!
+  pendingRecipients: [MediaPlacementRecipient!]!
+  existingSessionsRetained: Boolean!
+  updatedAt: Time
+}
+
+type MediaPlacementPolicyState {
+  scope: MediaPlacementScope!
+  revision: String!
+  parentRevision: String!
+  activeRevision: String
+  activeParentRevision: String
+  verbs: [MediaPlacementVerbPolicy!]!
+  rollout: MediaPlacementRollout!
+  actions: MediaPlacementActions!
+  features: MediaPlacementFeatures!
+}
+
+type MediaPlacementFieldError {
+  path: String!
+  groupId: String
+  message: String!
+}
+
+type MediaPlacementError {
+  code: MediaPlacementErrorCode!
+  message: String!
+  fields: [MediaPlacementFieldError!]!
+  currentRevision: String
+  parentRevision: String
+  retryAfterSeconds: Int
+}
+
+input MediaPlacementOptionsFilter {
+  query: String
+  kind: MediaPlacementOptionKind
+  classes: [MediaPlacementClass!]
+}
+
+type MediaPlacementOption {
+  id: ID!
+  name: String!
+  kind: MediaPlacementOptionKind!
+  clusterClass: MediaPlacementClass
+  region: String
+  ownerId: ID
+  eligible: Boolean!
+  reason: String
+}
+
+type MediaPlacementOptionsConnection {
+  nodes: [MediaPlacementOption!]!
+  pageInfo: PageInfo!
+}
+
+input MediaPlacementCoordinatesInput {
+  latitude: Float!
+  longitude: Float!
+}
+
+input MediaPlacementVerbUpdateInput {
+  verb: MediaPlacementVerb!
+  kind: MediaPlacementUpdateKind!
+  rules: MediaPlacementRulesInput
+}
+
+input PreviewMediaPlacementInput {
+  scope: MediaPlacementScopeInput!
+  verb: MediaPlacementVerb!
+  streamId: ID
+  protocol: String
+  coordinates: MediaPlacementCoordinatesInput
+  "Omitted evaluates saved rules; CLEAR previews inheritance for this verb."
+  draftUpdate: MediaPlacementVerbUpdateInput
+  expectedRevision: String
+  expectedParentRevision: String
+}
+
+type MediaPlacementPrice {
+  amountMicros: String!
+  currency: String!
+  unit: String!
+  revision: String!
+  expiresAt: Time!
+}
+
+type MediaPlacementCandidateExplanation {
+  clusterId: ID!
+  clusterName: String!
+  region: String
+  "Only returned when private candidate inspection is authorized."
+  nodeId: ID
+  groupId: String
+  reason: String!
+  distanceKm: Float
+  requiresSourcePull: Boolean!
+  price: MediaPlacementPrice
+}
+
+type MediaPlacementTransition {
+  fromGroup: String!
+  reason: String!
+}
+
+type MediaPlacementPreview {
+  scope: MediaPlacementScope!
+  verb: MediaPlacementVerb!
+  revision: String!
+  parentRevision: String!
+  digest: String!
+  reason: String!
+  selected: MediaPlacementCandidateExplanation
+  candidates: [MediaPlacementCandidateExplanation!]!
+  transitions: [MediaPlacementTransition!]!
+  observedAt: Time!
+  expiresAt: Time!
+  complete: Boolean!
+  sourceEvaluated: Boolean!
+  activeIngestClusterId: ID
+}
+
+input ReviewMediaPlacementChangeInput {
+  scope: MediaPlacementScopeInput!
+  expectedRevision: String!
+  expectedParentRevision: String!
+  updates: [MediaPlacementVerbUpdateInput!]!
+}
+
+type MediaPlacementDifference {
+  path: String!
+  label: String!
+  before: String!
+  after: String!
+}
+
+type MediaPlacementWarning {
+  id: String!
+  severity: MediaPlacementWarningSeverity!
+  message: String!
+  acknowledgementRequired: Boolean!
+}
+
+type MediaPlacementImpact {
+  affectedStreams: Int!
+  activePublishers: Int!
+  complete: Boolean!
+  existingSessionsRetained: Boolean!
+}
+
+type MediaPlacementReview {
+  reviewToken: String!
+  digest: String!
+  expiresAt: Time!
+  differences: [MediaPlacementDifference!]!
+  warnings: [MediaPlacementWarning!]!
+  impact: MediaPlacementImpact!
+}
+
+input ApplyMediaPlacementChangeInput {
+  scope: MediaPlacementScopeInput!
+  expectedRevision: String!
+  expectedParentRevision: String!
+  updates: [MediaPlacementVerbUpdateInput!]!
+  reviewToken: String!
+  idempotencyKey: String!
+  acknowledgedWarningIds: [String!]! = []
+}
+
+type MediaPlacementChange {
+  scope: MediaPlacementScope!
+  idempotencyKey: String!
+  revision: String!
+  parentRevision: String!
+  digest: String!
+  rollout: MediaPlacementRollout!
+  createdAt: Time!
+}
+
+type MediaPlacementLegacyPins {
+  streamId: ID!
+  clusterIds: [ID!]!
+  currentlyEnforced: Boolean!
+}
+
+type MediaCapacityConsent {
+  clusterId: ID!
+  revision: String!
+  allowIngest: Boolean!
+  allowServe: Boolean!
+  allowExternalSource: Boolean!
+  canManage: Boolean!
+  rollout: MediaPlacementRollout!
+}
+
+input ReviewMediaCapacityConsentInput {
+  clusterId: ID!
+  expectedRevision: String!
+  allowIngest: Boolean!
+  allowServe: Boolean!
+  allowExternalSource: Boolean!
+}
+
+input ApplyMediaCapacityConsentInput {
+  clusterId: ID!
+  expectedRevision: String!
+  allowIngest: Boolean!
+  allowServe: Boolean!
+  allowExternalSource: Boolean!
+  reviewToken: String!
+  idempotencyKey: String!
+  acknowledgedWarningIds: [String!]! = []
+}
+
+type MediaCapacityConsentChange {
+  clusterId: ID!
+  idempotencyKey: String!
+  revision: String!
+  digest: String!
+  rollout: MediaPlacementRollout!
+  createdAt: Time!
+}
+
+union MediaPlacementPolicyResult =
+  | MediaPlacementPolicyState
+  | MediaPlacementError
+  | AuthError
+  | NotFoundError
+union MediaPlacementOptionsResult =
+  | MediaPlacementOptionsConnection
+  | MediaPlacementError
+  | AuthError
+  | NotFoundError
+union MediaPlacementPreviewResult =
+  | MediaPlacementPreview
+  | MediaPlacementError
+  | AuthError
+  | NotFoundError
+union MediaPlacementReviewResult =
+  | MediaPlacementReview
+  | MediaPlacementError
+  | AuthError
+  | NotFoundError
+union MediaPlacementChangeResult =
+  | MediaPlacementChange
+  | MediaPlacementError
+  | AuthError
+  | NotFoundError
+union MediaPlacementLegacyPinsResult =
+  | MediaPlacementLegacyPins
+  | MediaPlacementError
+  | AuthError
+  | NotFoundError
+union MediaCapacityConsentResult =
+  | MediaCapacityConsent
+  | MediaPlacementError
+  | AuthError
+  | NotFoundError
+union MediaCapacityConsentChangeResult =
+  | MediaCapacityConsentChange
+  | MediaPlacementError
+  | AuthError
+  | NotFoundError

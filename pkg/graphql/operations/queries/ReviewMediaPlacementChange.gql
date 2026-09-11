@@ -1,0 +1,37 @@
+query ReviewMediaPlacementChange($input: ReviewMediaPlacementChangeInput!) {
+  reviewMediaPlacementChange(input: $input) {
+    __typename
+    ... on MediaPlacementReview {
+      reviewToken
+      digest
+      expiresAt
+      differences {
+        path
+        label
+        before
+        after
+      }
+      warnings {
+        id
+        severity
+        message
+        acknowledgementRequired
+      }
+      impact {
+        affectedStreams
+        activePublishers
+        complete
+        existingSessionsRetained
+      }
+    }
+    ... on MediaPlacementError {
+      ...MediaPlacementErrorFields @mask_disable
+    }
+    ... on AuthError {
+      message
+    }
+    ... on NotFoundError {
+      message
+    }
+  }
+}

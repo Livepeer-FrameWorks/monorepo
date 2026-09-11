@@ -1,0 +1,40 @@
+query PreviewMediaPlacement($input: PreviewMediaPlacementInput!) {
+  previewMediaPlacement(input: $input) {
+    __typename
+    ... on MediaPlacementPreview {
+      scope {
+        kind
+        streamId
+      }
+      verb
+      revision
+      parentRevision
+      digest
+      reason
+      selected {
+        ...MediaPlacementCandidateFields @mask_disable
+      }
+      candidates {
+        ...MediaPlacementCandidateFields @mask_disable
+      }
+      transitions {
+        fromGroup
+        reason
+      }
+      observedAt
+      expiresAt
+      complete
+      sourceEvaluated
+      activeIngestClusterId
+    }
+    ... on MediaPlacementError {
+      ...MediaPlacementErrorFields @mask_disable
+    }
+    ... on AuthError {
+      message
+    }
+    ... on NotFoundError {
+      message
+    }
+  }
+}

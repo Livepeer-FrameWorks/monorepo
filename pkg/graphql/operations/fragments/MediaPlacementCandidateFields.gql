@@ -1,0 +1,17 @@
+fragment MediaPlacementCandidateFields on MediaPlacementCandidateExplanation {
+  clusterId
+  clusterName
+  region
+  nodeId
+  groupId
+  reason
+  distanceKm
+  requiresSourcePull
+  price {
+    amountMicros
+    currency
+    unit
+    revision
+    expiresAt
+  }
+}

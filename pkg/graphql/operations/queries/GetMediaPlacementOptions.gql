@@ -1,0 +1,35 @@
+query GetMediaPlacementOptions(
+  $scope: MediaPlacementScopeInput!
+  $filter: MediaPlacementOptionsFilter
+  $after: String
+  $first: Int
+) {
+  mediaPlacementOptions(scope: $scope, filter: $filter, after: $after, first: $first) {
+    __typename
+    ... on MediaPlacementOptionsConnection {
+      nodes {
+        id
+        name
+        kind
+        clusterClass
+        region
+        ownerId
+        eligible
+        reason
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+    ... on MediaPlacementError {
+      ...MediaPlacementErrorFields @mask_disable
+    }
+    ... on AuthError {
+      message
+    }
+    ... on NotFoundError {
+      message
+    }
+  }
+}

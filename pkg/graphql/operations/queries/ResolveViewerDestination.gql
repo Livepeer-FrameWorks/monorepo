@@ -1,0 +1,24 @@
+query ResolveViewerDestination($contentId: String!, $protocol: MediaViewerProtocol) {
+  resolveViewerEndpoint(contentId: $contentId, protocol: $protocol) {
+    primary {
+      nodeId
+      baseUrl
+      protocol
+      url
+      outputs
+    }
+    fallbacks {
+      nodeId
+      baseUrl
+      protocol
+      url
+      outputs
+    }
+    metadata {
+      contentId
+      contentType
+      status
+      isLive
+    }
+  }
+}

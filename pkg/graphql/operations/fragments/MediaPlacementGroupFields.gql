@@ -1,0 +1,13 @@
+fragment MediaPlacementGroupFields on MediaPlacementGroup {
+  id
+  match {
+    ...MediaPlacementSelectorFields @mask_disable
+  }
+  order
+  spillover
+  maxDistanceKm
+  geoHoleDistanceKm
+  minImprovementKm
+  priceCurrency
+  priceUnit
+}

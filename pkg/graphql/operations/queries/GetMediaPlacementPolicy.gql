@@ -1,0 +1,65 @@
+query GetMediaPlacementPolicy($scope: MediaPlacementScopeInput!) {
+  mediaPlacementPolicy(scope: $scope) {
+    __typename
+    ... on MediaPlacementPolicyState {
+      scope {
+        kind
+        streamId
+      }
+      revision
+      parentRevision
+      activeRevision
+      activeParentRevision
+      verbs {
+        verb
+        ownRules {
+          ...MediaPlacementRulesFields @mask_disable
+        }
+        inheritedRules {
+          ...MediaPlacementRulesFields @mask_disable
+        }
+        requestedEffective {
+          schemaVersion
+          digest
+          layers {
+            allow {
+              any {
+                ...MediaPlacementSelectorFields @mask_disable
+              }
+            }
+            deny {
+              ...MediaPlacementSelectorFields @mask_disable
+            }
+          }
+          groups {
+            ...MediaPlacementGroupFields @mask_disable
+          }
+        }
+      }
+      rollout {
+        ...MediaPlacementRolloutFields @mask_disable
+      }
+      actions {
+        canRead
+        canPreview
+        canManage
+        canInspectPrivateCandidates
+      }
+      features {
+        schemaVersion
+        geographicSpillover
+        priceOrdering
+        supportedPresets
+      }
+    }
+    ... on MediaPlacementError {
+      ...MediaPlacementErrorFields @mask_disable
+    }
+    ... on AuthError {
+      message
+    }
+    ... on NotFoundError {
+      message
+    }
+  }
+}

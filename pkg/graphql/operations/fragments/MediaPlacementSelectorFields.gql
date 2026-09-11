@@ -1,0 +1,7 @@
+fragment MediaPlacementSelectorFields on MediaPlacementSelector {
+  clusterIds
+  ownerIds
+  regions
+  classes
+  charging
+}
