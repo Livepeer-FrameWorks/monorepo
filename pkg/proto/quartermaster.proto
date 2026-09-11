@@ -10,6 +10,7 @@ import "google/protobuf/struct.proto";
 import "common.proto";
 import "cluster_peer.proto";
 import "tenant_limits.proto";
+import "media_placement.proto";
 
 // ============================================================================
 // QUARTERMASTER CONTROL PLANE - TENANT & INFRASTRUCTURE MANAGEMENT
@@ -144,6 +145,16 @@ service ClusterService {
   // media authority without reading quartermaster.* directly.
   rpc GetTenantEntitlement(GetTenantEntitlementRequest) returns (GetTenantEntitlementResponse);
 
+  // Complete, unranked node membership for one entitled control cell. Service-token only.
+  // Offline nodes and empty clusters remain visible; health cannot prove an empty pool.
+  rpc GetMediaPlacementInventory(GetMediaPlacementInventoryRequest) returns (MediaPlacementInventory);
+
+  // Tenant-owner consent management; these calls do not grant cluster access.
+  rpc GetClusterMediaConsent(GetClusterMediaConsentRequest) returns (ClusterMediaConsentState);
+  rpc ReviewClusterMediaConsentChange(ReviewClusterMediaConsentRequest) returns (media_placement.Review);
+  rpc ApplyClusterMediaConsentChange(ApplyClusterMediaConsentRequest) returns (ClusterMediaConsentChange);
+  rpc GetClusterMediaConsentChange(GetClusterMediaConsentChangeRequest) returns (ClusterMediaConsentChange);
+
   // Unsubscribe from a cluster
   rpc UnsubscribeFromCluster(UnsubscribeFromClusterRequest) returns (google.protobuf.Empty);
 
@@ -193,6 +204,13 @@ service ClusterService {
   // ListPeers returns clusters that share at least one tenant with the requesting cluster.
   // Used by Foghorn federation to discover peers for cross-cluster stream routing.
   rpc ListPeers(ListPeersRequest) returns (ListPeersResponse);
+
+  // WatchPeers streams the requesting cluster's peer set: the current set when the
+  // stream opens, then a new set only when that set changes. The media cell
+  // subscribes, so Quartermaster never dials a cell and needs no address for one.
+  // Callers keep their own periodic ListPeers reconciliation: a dropped stream
+  // must degrade to the slower path, never to a stale peer set.
+  rpc WatchPeers(ListPeersRequest) returns (stream ListPeersResponse);
 
   // ============================================================================
   // SERVICE-CLUSTER ASSIGNMENT RPCS
@@ -882,10 +900,72 @@ message GetTenantEntitlementRequest {
   string tenant_id = 1;
 }
 
+message GetClusterMediaConsentRequest {
+  string cluster_id = 1;
+}
+
+message ClusterMediaConsentState {
+  string cluster_id = 1;
+  media_placement.CapacityConsent consent = 2;
+  bool can_manage = 3;
+  media_placement.Rollout rollout = 4;
+}
+
+message ReviewClusterMediaConsentRequest {
+  string cluster_id = 1;
+  uint64 expected_revision = 2;
+  bool allow_ingest = 3;
+  bool allow_serve = 4;
+  bool allow_external_source = 5;
+}
+
+message ApplyClusterMediaConsentRequest {
+  ReviewClusterMediaConsentRequest change = 1;
+  string review_token = 2;
+  string idempotency_key = 3;
+  repeated string acknowledged_warning_ids = 4;
+}
+
+message GetClusterMediaConsentChangeRequest {
+  string cluster_id = 1;
+  string idempotency_key = 2;
+}
+
+message ClusterMediaConsentChange {
+  string cluster_id = 1;
+  string idempotency_key = 2;
+  uint64 revision = 3;
+  string digest = 4;
+  media_placement.Rollout rollout = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
 message GetTenantEntitlementResponse {
   repeated string allowed_cluster_ids = 1;  // active + subscribed cluster IDs
   string plan_class = 2 [deprecated = true]; // legacy field; never billing-tier authority
   repeated cluster_peer.TenantClusterPeer effective_access = 3;
+}
+
+message GetMediaPlacementInventoryRequest {
+  string tenant_id = 1;
+  string control_cell_id = 2;
+  repeated string cluster_ids = 3;
+}
+
+message MediaPlacementInventoryNode {
+  string cluster_id = 1;
+  string node_id = 2;
+  // Administrative registration state, never proof of runtime health or capacity.
+  bool admission_enabled = 3;
+}
+
+message MediaPlacementInventory {
+  string tenant_id = 1;
+  string control_cell_id = 2;
+  repeated string cluster_ids = 3;
+  repeated MediaPlacementInventoryNode nodes = 4;
+  google.protobuf.Timestamp observed_at = 5;
+  bool complete = 6;
 }
 
 message UnsubscribeFromClusterRequest {
@@ -2048,6 +2128,9 @@ message PeerCluster {
   repeated string shared_tenant_ids = 3;  // Tenant IDs shared between requester and this peer
   string cluster_name = 4;               // Human-readable cluster name
   string cluster_type = 5;               // shared-community, shared-lb, dedicated
+  // Authoritative Foghorn control cell behind foghorn_addr. Distinct from the
+  // virtual media cluster; absent on peers that cannot advertise cell identity.
+  string control_cell_id = 6;
 }
 
 message ListPeersResponse {

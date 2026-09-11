@@ -1,0 +1,582 @@
+syntax = "proto3";
+
+package media_placement;
+
+option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement;placementpb";
+
+import "google/protobuf/timestamp.proto";
+
+enum Verb {
+  VERB_UNSPECIFIED = 0;
+  VERB_INGEST = 1;
+  VERB_SERVE = 2;
+}
+
+// Caller verifies stream ownership; the cell reads publisher evidence and owner
+// permissions independently. No draft policy or source credential crosses this RPC.
+message PushSourcePreviewQuery {
+  string tenant_id = 1;
+  string control_cell_id = 2;
+  string cluster_id = 3;
+  string internal_name = 4;
+}
+
+message PushSourcePreviewObservation {
+  PushSourcePreviewQuery scope = 1;
+  string node_id = 2;
+  string generation = 3;
+  uint64 revision = 4;
+  bool pull_available = 5;
+  google.protobuf.Timestamp observed_at = 6;
+  google.protobuf.Timestamp expires_at = 7;
+  CapacityConsent consent = 8;
+}
+
+enum ClusterClass {
+  CLUSTER_CLASS_UNSPECIFIED = 0;
+  CLUSTER_CLASS_PLATFORM_OFFICIAL = 1;
+  CLUSTER_CLASS_TENANT_PRIVATE = 2;
+  CLUSTER_CLASS_THIRD_PARTY_MARKETPLACE = 3;
+}
+
+enum Charging {
+  CHARGING_UNSPECIFIED = 0;
+  CHARGING_RATED = 1;
+  CHARGING_PERMANENTLY_FREE = 2;
+}
+
+enum Order {
+  ORDER_UNSPECIFIED = 0;
+  ORDER_DISTANCE = 1;
+  ORDER_PRICE = 2;
+}
+
+enum Spillover {
+  SPILLOVER_UNSPECIFIED = 0;
+  SPILLOVER_NEVER = 1;
+  SPILLOVER_CAPACITY_ONLY = 2;
+  SPILLOVER_GEO_HOLE = 3;
+  SPILLOVER_CAPACITY_OR_GEO_HOLE = 4;
+}
+
+// Fields intersect; values within each field are alternatives. Empty matches all.
+message Selector {
+  repeated string cluster_ids = 1;
+  repeated string owner_ids = 2;
+  repeated string regions = 3;
+  repeated ClusterClass classes = 4;
+  repeated Charging charging = 5;
+}
+
+// Presence distinguishes an unrestricted allow list from an explicit deny-all.
+message SelectorSet {
+  repeated Selector any = 1;
+}
+
+message Constraints {
+  SelectorSet allow = 1;
+  repeated Selector deny = 2;
+}
+
+message Group {
+  string id = 1;
+  Selector match = 2;
+  Order order = 3;
+  Spillover spillover = 4;
+  double max_distance_km = 5;
+  double geo_hole_distance_km = 6;
+  double min_improvement_km = 7;
+  string price_currency = 8;
+  string price_unit = 9;
+}
+
+// An absent preferences message inherits; a present empty one permits no group.
+message Preferences {
+  repeated Group groups = 1;
+}
+
+message Rules {
+  uint32 schema_version = 1;
+  Constraints constraints = 2;
+  Preferences preferences = 3;
+}
+
+// Revision zero denotes the never-configured default; clearing retains a positive revision.
+message PolicySet {
+  uint64 revision = 1;
+  Rules ingest = 2;
+  Rules serve = 3;
+}
+
+// Owner consent restricts existing entitlement; it cannot grant access to a tenant.
+message CapacityConsent {
+  uint64 revision = 1;
+  bool allow_ingest = 2;
+  bool allow_serve = 3;
+  bool allow_external_source = 4;
+}
+
+// Service-only, source-free management observation. It carries neither draft
+// policy nor admission authority, and cannot prepare a media destination.
+message CapacityPreviewQuery {
+  string tenant_id = 1;
+  string control_cell_id = 2;
+  repeated string cluster_ids = 3;
+  Verb verb = 4;
+  string protocol = 5;
+  // Optional caller-verified owned stream identity, used only for node allowlists.
+  string internal_name = 6;
+}
+
+message CapacityPreviewObservation {
+  string tenant_id = 1;
+  string control_cell_id = 2;
+  repeated string cluster_ids = 3;
+  Verb verb = 4;
+  string protocol = 5;
+  string internal_name = 6;
+  repeated ObservedCandidate candidates = 7;
+  bool complete = 8;
+  google.protobuf.Timestamp observed_at = 9;
+  google.protobuf.Timestamp expires_at = 10;
+  map<string, CapacityConsent> cluster_consents = 11;
+}
+
+// Commercial facts are issued by the billing owner, not inferred from temporary allowances.
+message CommercialFacts {
+  Charging charging = 1;
+  google.protobuf.Timestamp expires_at = 2;
+  string revision = 3;
+  Price ingest_price = 4;
+  Price serve_price = 5;
+  // Additional distinct comparison bases; at most 16 prices per verb including
+  // its singular price. Currency/unit pairs must be unique within each verb.
+  repeated Price ingest_prices = 6;
+  repeated Price serve_prices = 7;
+}
+
+message Price {
+  uint64 amount_micros = 1;
+  string currency = 2;
+  string unit = 3;
+}
+
+message ComparisonBasis {
+  string currency = 1;
+  string unit = 2;
+}
+
+// Read-only quote scope supplied by the policy owner. It is not placement admission.
+message CommercialQuoteRequest {
+  string tenant_id = 1;
+  string object_id = 2;
+  Verb verb = 3;
+  uint64 policy_revision = 4;
+  uint64 parent_revision = 5;
+  string policy_digest = 6;
+  repeated string cluster_ids = 7;
+  repeated ComparisonBasis bases = 8;
+}
+
+enum QuoteUsageStatus {
+  QUOTE_USAGE_STATUS_UNSPECIFIED = 0;
+  QUOTE_USAGE_STATUS_NOT_REQUIRED = 1;
+  QUOTE_USAGE_STATUS_UNKNOWN_PERIOD = 2;
+  QUOTE_USAGE_STATUS_NO_CLOSED_WINDOW = 3;
+  QUOTE_USAGE_STATUS_MISSING_SOURCES = 4;
+  QUOTE_USAGE_STATUS_MISSING_WINDOWS = 5;
+  QUOTE_USAGE_STATUS_OPEN_ANOMALIES = 6;
+  QUOTE_USAGE_STATUS_UNATTRIBUTED = 7;
+  QUOTE_USAGE_STATUS_INVALID = 8;
+  QUOTE_USAGE_STATUS_COVERED_THROUGH_CUTOFF = 9;
+}
+
+message QuoteUsageEvidence {
+  QuoteUsageStatus status = 1;
+  google.protobuf.Timestamp period_start = 2;
+  google.protobuf.Timestamp period_end = 3;
+  // Recorded consumption is covered only through this cutoff, not after it.
+  google.protobuf.Timestamp through = 4;
+}
+
+enum QuoteUnavailableReason {
+  QUOTE_UNAVAILABLE_REASON_UNSPECIFIED = 0;
+  QUOTE_UNAVAILABLE_REASON_CURRENCY_MISMATCH = 1;
+  QUOTE_UNAVAILABLE_REASON_UNSUPPORTED_BASIS = 2;
+  QUOTE_UNAVAILABLE_REASON_USAGE_UNKNOWN = 3;
+  QUOTE_UNAVAILABLE_REASON_TARIFF_UNSUPPORTED = 4;
+}
+
+message UnavailableQuote {
+  ComparisonBasis basis = 1;
+  QuoteUnavailableReason reason = 2;
+}
+
+message ClusterCommercialQuote {
+  string cluster_id = 1;
+  CommercialFacts facts = 2;
+  repeated UnavailableQuote unavailable = 3;
+  repeated ComparisonBasis recorded_usage_bases = 4;
+}
+
+message CommercialQuoteResponse {
+  CommercialQuoteRequest scope = 1;
+  string request_digest = 2;
+  google.protobuf.Timestamp observed_at = 3;
+  google.protobuf.Timestamp expires_at = 4;
+  repeated ClusterCommercialQuote clusters = 5;
+  QuoteUsageEvidence usage = 6;
+  // Binds selected cluster ownership, access provenance, expiry and owner consent.
+  string entitlement_digest = 7;
+}
+
+enum ScopeKind {
+  SCOPE_KIND_UNSPECIFIED = 0;
+  SCOPE_KIND_TENANT = 1;
+  SCOPE_KIND_STREAM = 2;
+}
+
+enum UpdateKind {
+  UPDATE_KIND_UNSPECIFIED = 0;
+  UPDATE_KIND_SET = 1;
+  UPDATE_KIND_CLEAR = 2;
+}
+
+enum RolloutStatus {
+  ROLLOUT_STATUS_UNSPECIFIED = 0;
+  ROLLOUT_STATUS_NOT_CONFIGURED = 1;
+  ROLLOUT_STATUS_PENDING = 2;
+  ROLLOUT_STATUS_EFFECTIVE = 3;
+  ROLLOUT_STATUS_BLOCKED = 4;
+  ROLLOUT_STATUS_SUPERSEDED = 5;
+}
+
+message Scope {
+  ScopeKind kind = 1;
+  string stream_id = 2;
+}
+
+message VerbUpdate {
+  Verb verb = 1;
+  UpdateKind kind = 2;
+  Rules rules = 3;
+}
+
+message Actions {
+  bool can_read = 1;
+  bool can_preview = 2;
+  bool can_manage = 3;
+  bool can_inspect_private_candidates = 4;
+}
+
+message Features {
+  uint32 schema_version = 1;
+  bool geographic_spillover = 2;
+  bool price_ordering = 3;
+  repeated string supported_presets = 4;
+}
+
+message RolloutRecipient {
+  string id = 1;
+  string name = 2;
+  string status = 3;
+  string reason = 4;
+  google.protobuf.Timestamp authority_expires_at = 5;
+}
+
+message Rollout {
+  RolloutStatus status = 1;
+  uint32 required_recipients = 2;
+  uint32 applied_recipients = 3;
+  repeated RolloutRecipient pending_recipients = 4;
+  bool existing_sessions_retained = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+
+message GetPolicyRequest {
+  Scope scope = 1;
+}
+
+message PreviewRequest {
+  Scope scope = 1;
+  Verb verb = 2;
+  string stream_id = 3;
+  string protocol = 4;
+  Coordinates coordinates = 5;
+  VerbUpdate draft_update = 6;
+  optional uint64 expected_revision = 7;
+  optional uint64 expected_parent_revision = 8;
+}
+
+message PreviewPrice {
+  uint64 amount_micros = 1;
+  string currency = 2;
+  string unit = 3;
+  string revision = 4;
+  google.protobuf.Timestamp expires_at = 5;
+}
+
+message PreviewCandidate {
+  string cluster_id = 1;
+  string cluster_name = 2;
+  string region = 3;
+  // Omitted unless the caller is separately authorized to inspect private nodes.
+  string node_id = 4;
+  string group_id = 5;
+  string reason = 6;
+  optional double distance_km = 7;
+  bool requires_source_pull = 8;
+  PreviewPrice price = 9;
+}
+
+message PreviewTransition {
+  string from_group = 1;
+  string reason = 2;
+}
+
+// A read-only hypothetical decision, never a reservation or admission token.
+message Preview {
+  Scope scope = 1;
+  Verb verb = 2;
+  uint64 revision = 3;
+  uint64 parent_revision = 4;
+  string digest = 5;
+  string reason = 6;
+  PreviewCandidate selected = 7;
+  repeated PreviewCandidate candidates = 8;
+  repeated PreviewTransition transitions = 9;
+  google.protobuf.Timestamp observed_at = 10;
+  google.protobuf.Timestamp expires_at = 11;
+  bool complete = 12;
+  bool source_evaluated = 13;
+  string active_ingest_cluster_id = 14;
+}
+
+enum OptionKind {
+  OPTION_KIND_UNSPECIFIED = 0;
+  OPTION_KIND_CLUSTER = 1;
+  OPTION_KIND_OPERATOR = 2;
+  OPTION_KIND_REGION = 3;
+}
+
+message OptionsFilter {
+  string query = 1;
+  OptionKind kind = 2;
+  repeated ClusterClass classes = 3;
+}
+
+message GetOptionsRequest {
+  Scope scope = 1;
+  OptionsFilter filter = 2;
+  string after = 3;
+  int32 first = 4;
+}
+
+// Authorized selector targets, not node capacity or placement admission.
+message Option {
+  string id = 1;
+  string name = 2;
+  OptionKind kind = 3;
+  ClusterClass cluster_class = 4;
+  string region = 5;
+  string owner_id = 6;
+  bool eligible = 7;
+  string reason = 8;
+}
+
+message Options {
+  Scope scope = 1;
+  repeated Option nodes = 2;
+  bool has_next_page = 3;
+  bool has_previous_page = 4;
+  string start_cursor = 5;
+  string end_cursor = 6;
+}
+
+message PolicyState {
+  Scope scope = 1;
+  PolicySet own = 2;
+  PolicySet inherited = 3;
+  PolicySet active = 4;
+  uint64 active_parent_revision = 5;
+  Rollout rollout = 6;
+  Actions actions = 7;
+  Features features = 8;
+}
+
+message ReviewChangeRequest {
+  Scope scope = 1;
+  uint64 expected_revision = 2;
+  uint64 expected_parent_revision = 3;
+  repeated VerbUpdate updates = 4;
+}
+
+message Difference {
+  string path = 1;
+  string label = 2;
+  string before = 3;
+  string after = 4;
+}
+
+message Warning {
+  string id = 1;
+  string message = 2;
+  bool acknowledgement_required = 3;
+}
+
+message Impact {
+  uint32 affected_streams = 1;
+  uint32 active_publishers = 2;
+  bool complete = 3;
+  bool existing_sessions_retained = 4;
+}
+
+message Review {
+  string review_token = 1;
+  string digest = 2;
+  google.protobuf.Timestamp expires_at = 3;
+  repeated Difference differences = 4;
+  repeated Warning warnings = 5;
+  Impact impact = 6;
+}
+
+message ApplyChangeRequest {
+  ReviewChangeRequest change = 1;
+  string review_token = 2;
+  string idempotency_key = 3;
+  repeated string acknowledged_warning_ids = 4;
+}
+
+message GetChangeRequest {
+  Scope scope = 1;
+  string idempotency_key = 2;
+}
+
+message Change {
+  Scope scope = 1;
+  string idempotency_key = 2;
+  uint64 revision = 3;
+  uint64 parent_revision = 4;
+  string digest = 5;
+  Rollout rollout = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+enum Capacity {
+  CAPACITY_UNSPECIFIED = 0;
+  CAPACITY_AVAILABLE = 1;
+  CAPACITY_EXHAUSTED = 2;
+  CAPACITY_UNAVAILABLE = 3;
+  CAPACITY_UNKNOWN = 4;
+}
+
+enum Presence {
+  PRESENCE_UNSPECIFIED = 0;
+  PRESENCE_PRESENT = 1;
+  PRESENCE_MATERIALIZING = 2;
+  PRESENCE_ABSENT = 3;
+}
+
+message Coordinates {
+  double latitude = 1;
+  double longitude = 2;
+}
+
+// Unranked, tenant-authorized evidence. Missing facts are not zero-cost or
+// exhausted capacity. No coordinator-relative score or public tag adjustment.
+message ObservedCandidate {
+  string tenant_id = 1;
+  string cluster_id = 2;
+  string node_id = 3;
+  string owner_tenant_id = 4;
+  bool official = 5;
+  string region = 6;
+  repeated Verb allowed_verbs = 7;
+  CommercialFacts commercial_facts = 8;
+  Coordinates location = 9;
+  google.protobuf.Timestamp observed_at = 10;
+  google.protobuf.Timestamp expires_at = 11;
+  Capacity capacity = 12;
+  uint64 bw_available = 13;
+  uint64 bw_limit = 14;
+  double cpu_percent = 15;
+  uint64 ram_used = 16;
+  uint64 ram_max = 17;
+  Presence presence = 18;
+  bool source_feasible = 19;
+}
+
+message CandidateQuery {
+  string tenant_id = 1;
+  string object_id = 2;
+  string internal_name = 3;
+  Verb verb = 4;
+  string protocol = 5;
+  repeated string cluster_ids = 6;
+  uint64 policy_revision = 7;
+  uint64 parent_revision = 8;
+  string policy_digest = 9;
+  string source_generation = 10;
+  // Trusted caller location is used only for final policy revalidation, not
+  // discovery pruning. Public hints must be resolved through proxy trust first.
+  Coordinates client_location = 11;
+}
+
+message CandidateObservation {
+  repeated ObservedCandidate candidates = 1;
+  // True only when the complete requested inventory was observed. A partial
+  // scan, unreachable cluster, unsupported peer or timeout cannot certify it.
+  bool complete = 2;
+  string policy_digest = 3;
+  uint64 policy_revision = 4;
+  uint64 parent_revision = 5;
+  string source_generation = 6;
+  // Completeness has its own lifetime, including when candidates is empty.
+  google.protobuf.Timestamp observed_at = 7;
+  google.protobuf.Timestamp expires_at = 8;
+}
+
+message PreparePlacementRequest {
+  CandidateQuery query = 1;
+  string cluster_id = 2;
+  string node_id = 3;
+  // Canonical UUIDv7; its issuance millisecond bounds the attempt's replay window.
+  string attempt_id = 4;
+  // Upper bound from the decision evidence. Neither preparation nor replay may
+  // extend this deadline; destinations can shorten it using their current facts.
+  google.protobuf.Timestamp expires_at = 5;
+}
+
+enum PreparationOutcome {
+  PREPARATION_OUTCOME_UNSPECIFIED = 0;
+  PREPARATION_OUTCOME_ACCEPTED = 1;
+  PREPARATION_OUTCOME_CAPACITY_EXHAUSTED = 2;
+  PREPARATION_OUTCOME_NODE_UNAVAILABLE = 3;
+  PREPARATION_OUTCOME_SOURCE_UNAVAILABLE = 4;
+}
+
+message Preparation {
+  PreparationOutcome outcome = 1;
+  string tenant_id = 2;
+  string object_id = 3;
+  string source_generation = 4;
+  string cluster_id = 5;
+  string node_id = 6;
+  string protocol = 7;
+  uint64 policy_revision = 8;
+  uint64 parent_revision = 9;
+  string policy_digest = 10;
+  string attempt_id = 11;
+  google.protobuf.Timestamp expires_at = 12;
+  // SERVE: exact playback URL. INGEST: credential-free publishing template with
+  // one $ placeholder, bound to the stream key only by the requesting front door.
+  string endpoint = 13;
+  // Accepted can mean materializing; it does not assert that first media has arrived.
+  bool ready = 14;
+  // Signed authority snapshots used for admission, distinct from policy edits.
+  int64 tenant_authority_version = 15;
+  int64 object_authority_version = 16;
+  // INGEST: destination-advertised HTTP(S) origin for node identity/display.
+  // Separate from the protocol-specific listener; never inferred from its port.
+  string public_base_url = 17;
+}

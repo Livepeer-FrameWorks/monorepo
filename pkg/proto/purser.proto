@@ -11,6 +11,7 @@ import "common.proto";
 import "shared.proto";
 import "tenant_limits.proto";
 import "metering_contract.proto";
+import "media_placement.proto";
 import "x402.proto";
 
 // ============================================================================
@@ -118,6 +119,8 @@ service UsageService {
 // ClusterPricingService handles per-cluster pricing configuration
 // Source of truth for cluster billing - Quartermaster has display-only copy
 service ClusterPricingService {
+  // Service-only read of entitled, object/policy-bound comparison evidence.
+  rpc GetMediaPlacementQuote(media_placement.CommercialQuoteRequest) returns (media_placement.CommercialQuoteResponse);
   // Get pricing config for a cluster
   rpc GetClusterPricing(GetClusterPricingRequest) returns (ClusterPricing);
 

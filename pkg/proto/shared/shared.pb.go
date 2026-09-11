@@ -78,6 +78,58 @@ func (ClipMode) EnumDescriptor() ([]byte, []int) {
 	return file_shared_proto_rawDescGZIP(), []int{0}
 }
 
+type IngestProtocol int32
+
+const (
+	IngestProtocol_INGEST_PROTOCOL_UNSPECIFIED IngestProtocol = 0
+	IngestProtocol_INGEST_PROTOCOL_WHIP        IngestProtocol = 1
+	IngestProtocol_INGEST_PROTOCOL_RTMP        IngestProtocol = 2
+	IngestProtocol_INGEST_PROTOCOL_SRT         IngestProtocol = 3
+)
+
+// Enum value maps for IngestProtocol.
+var (
+	IngestProtocol_name = map[int32]string{
+		0: "INGEST_PROTOCOL_UNSPECIFIED",
+		1: "INGEST_PROTOCOL_WHIP",
+		2: "INGEST_PROTOCOL_RTMP",
+		3: "INGEST_PROTOCOL_SRT",
+	}
+	IngestProtocol_value = map[string]int32{
+		"INGEST_PROTOCOL_UNSPECIFIED": 0,
+		"INGEST_PROTOCOL_WHIP":        1,
+		"INGEST_PROTOCOL_RTMP":        2,
+		"INGEST_PROTOCOL_SRT":         3,
+	}
+)
+
+func (x IngestProtocol) Enum() *IngestProtocol {
+	p := new(IngestProtocol)
+	*p = x
+	return p
+}
+
+func (x IngestProtocol) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (IngestProtocol) Descriptor() protoreflect.EnumDescriptor {
+	return file_shared_proto_enumTypes[1].Descriptor()
+}
+
+func (IngestProtocol) Type() protoreflect.EnumType {
+	return &file_shared_proto_enumTypes[1]
+}
+
+func (x IngestProtocol) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use IngestProtocol.Descriptor instead.
+func (IngestProtocol) EnumDescriptor() ([]byte, []int) {
+	return file_shared_proto_rawDescGZIP(), []int{1}
+}
+
 // IngestEndpointKind classifies the surface a resolved endpoint exposes,
 // so SDKs/dashboards can pick the best per-tenant default and fall back to
 // cluster-specific endpoints when needed.
@@ -125,11 +177,11 @@ func (x IngestEndpointKind) String() string {
 }
 
 func (IngestEndpointKind) Descriptor() protoreflect.EnumDescriptor {
-	return file_shared_proto_enumTypes[1].Descriptor()
+	return file_shared_proto_enumTypes[2].Descriptor()
 }
 
 func (IngestEndpointKind) Type() protoreflect.EnumType {
-	return &file_shared_proto_enumTypes[1]
+	return &file_shared_proto_enumTypes[2]
 }
 
 func (x IngestEndpointKind) Number() protoreflect.EnumNumber {
@@ -138,7 +190,7 @@ func (x IngestEndpointKind) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use IngestEndpointKind.Descriptor instead.
 func (IngestEndpointKind) EnumDescriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{1}
+	return file_shared_proto_rawDescGZIP(), []int{2}
 }
 
 // VodStatus - status of a VOD upload (named differently from GraphQL VodAssetStatus to avoid autobind)
@@ -187,11 +239,11 @@ func (x VodStatus) String() string {
 }
 
 func (VodStatus) Descriptor() protoreflect.EnumDescriptor {
-	return file_shared_proto_enumTypes[2].Descriptor()
+	return file_shared_proto_enumTypes[3].Descriptor()
 }
 
 func (VodStatus) Type() protoreflect.EnumType {
-	return &file_shared_proto_enumTypes[2]
+	return &file_shared_proto_enumTypes[3]
 }
 
 func (x VodStatus) Number() protoreflect.EnumNumber {
@@ -200,7 +252,7 @@ func (x VodStatus) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use VodStatus.Descriptor instead.
 func (VodStatus) EnumDescriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{2}
+	return file_shared_proto_rawDescGZIP(), []int{3}
 }
 
 // ArtifactCreationOutcome is the explicit ledger outcome Foghorn reports for one
@@ -252,11 +304,11 @@ func (x ArtifactCreationOutcome) String() string {
 }
 
 func (ArtifactCreationOutcome) Descriptor() protoreflect.EnumDescriptor {
-	return file_shared_proto_enumTypes[3].Descriptor()
+	return file_shared_proto_enumTypes[4].Descriptor()
 }
 
 func (ArtifactCreationOutcome) Type() protoreflect.EnumType {
-	return &file_shared_proto_enumTypes[3]
+	return &file_shared_proto_enumTypes[4]
 }
 
 func (x ArtifactCreationOutcome) Number() protoreflect.EnumNumber {
@@ -265,7 +317,7 @@ func (x ArtifactCreationOutcome) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use ArtifactCreationOutcome.Descriptor instead.
 func (ArtifactCreationOutcome) EnumDescriptor() ([]byte, []int) {
-	return file_shared_proto_rawDescGZIP(), []int{3}
+	return file_shared_proto_rawDescGZIP(), []int{4}
 }
 
 // CreateClipRequest - request to create a clip from a stream
@@ -1957,10 +2009,13 @@ func (x *DVRInfo) GetIsFinalized() bool {
 
 // ViewerEndpointRequest - request to resolve viewer endpoint
 type ViewerEndpointRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	ContentId     string                 `protobuf:"bytes,2,opt,name=content_id,json=contentId,proto3" json:"content_id,omitempty"`
-	ViewerIp      *string                `protobuf:"bytes,3,opt,name=viewer_ip,json=viewerIp,proto3,oneof" json:"viewer_ip,omitempty"`
-	ViewerToken   *string                `protobuf:"bytes,4,opt,name=viewer_token,json=viewerToken,proto3,oneof" json:"viewer_token,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	ContentId   string                 `protobuf:"bytes,2,opt,name=content_id,json=contentId,proto3" json:"content_id,omitempty"`
+	ViewerIp    *string                `protobuf:"bytes,3,opt,name=viewer_ip,json=viewerIp,proto3,oneof" json:"viewer_ip,omitempty"`
+	ViewerToken *string                `protobuf:"bytes,4,opt,name=viewer_token,json=viewerToken,proto3,oneof" json:"viewer_token,omitempty"`
+	// Canonical playback protocol. Empty negotiates WebRTC then HLS; an explicit
+	// requirement must not fall back to a different protocol.
+	Protocol      string `protobuf:"bytes,5,opt,name=protocol,proto3" json:"protocol,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2012,6 +2067,13 @@ func (x *ViewerEndpointRequest) GetViewerIp() string {
 func (x *ViewerEndpointRequest) GetViewerToken() string {
 	if x != nil && x.ViewerToken != nil {
 		return *x.ViewerToken
+	}
+	return ""
+}
+
+func (x *ViewerEndpointRequest) GetProtocol() string {
+	if x != nil {
+		return x.Protocol
 	}
 	return ""
 }
@@ -2809,7 +2871,8 @@ func (x *ViewerEndpointResponse) GetMetadata() *PlaybackMetadata {
 type IngestEndpointRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	StreamKey     string                 `protobuf:"bytes,1,opt,name=stream_key,json=streamKey,proto3" json:"stream_key,omitempty"`
-	ViewerIp      *string                `protobuf:"bytes,2,opt,name=viewer_ip,json=viewerIp,proto3,oneof" json:"viewer_ip,omitempty"` // For geo-routing (client IP)
+	ViewerIp      *string                `protobuf:"bytes,2,opt,name=viewer_ip,json=viewerIp,proto3,oneof" json:"viewer_ip,omitempty"`       // For geo-routing (client IP)
+	Protocol      IngestProtocol         `protobuf:"varint,3,opt,name=protocol,proto3,enum=shared.IngestProtocol" json:"protocol,omitempty"` // Unspecified accepts any advertised ingest protocol.
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2856,6 +2919,13 @@ func (x *IngestEndpointRequest) GetViewerIp() string {
 		return *x.ViewerIp
 	}
 	return ""
+}
+
+func (x *IngestEndpointRequest) GetProtocol() IngestProtocol {
+	if x != nil {
+		return x.Protocol
+	}
+	return IngestProtocol_INGEST_PROTOCOL_UNSPECIFIED
 }
 
 // IngestEndpoint - resolved ingest endpoint for a stream
@@ -5075,12 +5145,13 @@ const file_shared_proto_rawDesc = "" +
 	"\x0f_has_local_copyB\f\n" +
 	"\n" +
 	"_is_syncedB\x0f\n" +
-	"\r_is_finalizedJ\x04\b\x1c\x10\x1d\"\xb3\x01\n" +
+	"\r_is_finalizedJ\x04\b\x1c\x10\x1d\"\xcf\x01\n" +
 	"\x15ViewerEndpointRequest\x12\x1d\n" +
 	"\n" +
 	"content_id\x18\x02 \x01(\tR\tcontentId\x12 \n" +
 	"\tviewer_ip\x18\x03 \x01(\tH\x00R\bviewerIp\x88\x01\x01\x12&\n" +
-	"\fviewer_token\x18\x04 \x01(\tH\x01R\vviewerToken\x88\x01\x01B\f\n" +
+	"\fviewer_token\x18\x04 \x01(\tH\x01R\vviewerToken\x88\x01\x01\x12\x1a\n" +
+	"\bprotocol\x18\x05 \x01(\tR\bprotocolB\f\n" +
 	"\n" +
 	"_viewer_ipB\x0f\n" +
 	"\r_viewer_tokenJ\x04\b\x01\x10\x02R\fcontent_type\"\xe2\x01\n" +
@@ -5179,11 +5250,12 @@ const file_shared_proto_rawDesc = "" +
 	"\aprimary\x18\x01 \x01(\v2\x16.shared.ViewerEndpointR\aprimary\x124\n" +
 	"\tfallbacks\x18\x02 \x03(\v2\x16.shared.ViewerEndpointR\tfallbacks\x129\n" +
 	"\bmetadata\x18\x03 \x01(\v2\x18.shared.PlaybackMetadataH\x00R\bmetadata\x88\x01\x01B\v\n" +
-	"\t_metadata\"f\n" +
+	"\t_metadata\"\x9a\x01\n" +
 	"\x15IngestEndpointRequest\x12\x1d\n" +
 	"\n" +
 	"stream_key\x18\x01 \x01(\tR\tstreamKey\x12 \n" +
-	"\tviewer_ip\x18\x02 \x01(\tH\x00R\bviewerIp\x88\x01\x01B\f\n" +
+	"\tviewer_ip\x18\x02 \x01(\tH\x00R\bviewerIp\x88\x01\x01\x122\n" +
+	"\bprotocol\x18\x03 \x01(\x0e2\x16.shared.IngestProtocolR\bprotocolB\f\n" +
 	"\n" +
 	"_viewer_ip\"\xf2\x02\n" +
 	"\x0eIngestEndpoint\x12\x17\n" +
@@ -5430,7 +5502,12 @@ const file_shared_proto_rawDesc = "" +
 	"\x12CLIP_MODE_ABSOLUTE\x10\x01\x12\x16\n" +
 	"\x12CLIP_MODE_RELATIVE\x10\x02\x12\x16\n" +
 	"\x12CLIP_MODE_DURATION\x10\x03\x12\x16\n" +
-	"\x12CLIP_MODE_CLIP_NOW\x10\x04*\xd4\x01\n" +
+	"\x12CLIP_MODE_CLIP_NOW\x10\x04*~\n" +
+	"\x0eIngestProtocol\x12\x1f\n" +
+	"\x1bINGEST_PROTOCOL_UNSPECIFIED\x10\x00\x12\x18\n" +
+	"\x14INGEST_PROTOCOL_WHIP\x10\x01\x12\x18\n" +
+	"\x14INGEST_PROTOCOL_RTMP\x10\x02\x12\x17\n" +
+	"\x13INGEST_PROTOCOL_SRT\x10\x03*\xd4\x01\n" +
 	"\x12IngestEndpointKind\x12$\n" +
 	" INGEST_ENDPOINT_KIND_UNSPECIFIED\x10\x00\x12%\n" +
 	"!INGEST_ENDPOINT_KIND_TENANT_ALIAS\x10\x01\x12\"\n" +
@@ -5468,121 +5545,123 @@ func file_shared_proto_rawDescGZIP() []byte {
 	return file_shared_proto_rawDescData
 }
 
-var file_shared_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
+var file_shared_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
 var file_shared_proto_msgTypes = make([]protoimpl.MessageInfo, 52)
 var file_shared_proto_goTypes = []any{
 	(ClipMode)(0),                              // 0: shared.ClipMode
-	(IngestEndpointKind)(0),                    // 1: shared.IngestEndpointKind
-	(VodStatus)(0),                             // 2: shared.VodStatus
-	(ArtifactCreationOutcome)(0),               // 3: shared.ArtifactCreationOutcome
-	(*CreateClipRequest)(nil),                  // 4: shared.CreateClipRequest
-	(*CreateClipResponse)(nil),                 // 5: shared.CreateClipResponse
-	(*ClipInfo)(nil),                           // 6: shared.ClipInfo
-	(*GetClipRequest)(nil),                     // 7: shared.GetClipRequest
-	(*DeleteClipRequest)(nil),                  // 8: shared.DeleteClipRequest
-	(*DeleteClipResponse)(nil),                 // 9: shared.DeleteClipResponse
-	(*DeleteStreamThumbnailsRequest)(nil),      // 10: shared.DeleteStreamThumbnailsRequest
-	(*DeleteStreamThumbnailsResponse)(nil),     // 11: shared.DeleteStreamThumbnailsResponse
-	(*DVRPolicy)(nil),                          // 12: shared.DVRPolicy
-	(*StartDVRRequest)(nil),                    // 13: shared.StartDVRRequest
-	(*StartDVRResponse)(nil),                   // 14: shared.StartDVRResponse
-	(*StopDVRRequest)(nil),                     // 15: shared.StopDVRRequest
-	(*StopDVRResponse)(nil),                    // 16: shared.StopDVRResponse
-	(*DeleteDVRRequest)(nil),                   // 17: shared.DeleteDVRRequest
-	(*DeleteDVRResponse)(nil),                  // 18: shared.DeleteDVRResponse
-	(*DVRInfo)(nil),                            // 19: shared.DVRInfo
-	(*ViewerEndpointRequest)(nil),              // 20: shared.ViewerEndpointRequest
-	(*OutputCapability)(nil),                   // 21: shared.OutputCapability
-	(*OutputEndpoint)(nil),                     // 22: shared.OutputEndpoint
-	(*ViewerEndpoint)(nil),                     // 23: shared.ViewerEndpoint
-	(*PlaybackTrack)(nil),                      // 24: shared.PlaybackTrack
-	(*PlaybackInstance)(nil),                   // 25: shared.PlaybackInstance
-	(*PlaybackMetadata)(nil),                   // 26: shared.PlaybackMetadata
-	(*ThumbnailAssets)(nil),                    // 27: shared.ThumbnailAssets
-	(*ViewerEndpointResponse)(nil),             // 28: shared.ViewerEndpointResponse
-	(*IngestEndpointRequest)(nil),              // 29: shared.IngestEndpointRequest
-	(*IngestEndpoint)(nil),                     // 30: shared.IngestEndpoint
-	(*IngestMetadata)(nil),                     // 31: shared.IngestMetadata
-	(*IngestEndpointResponse)(nil),             // 32: shared.IngestEndpointResponse
-	(*CreateVodUploadRequest)(nil),             // 33: shared.CreateVodUploadRequest
-	(*CreateVodUploadResponse)(nil),            // 34: shared.CreateVodUploadResponse
-	(*VodUploadPart)(nil),                      // 35: shared.VodUploadPart
-	(*CompleteVodUploadRequest)(nil),           // 36: shared.CompleteVodUploadRequest
-	(*VodCompletedPart)(nil),                   // 37: shared.VodCompletedPart
-	(*CompleteVodUploadResponse)(nil),          // 38: shared.CompleteVodUploadResponse
-	(*GetVodUploadStatusRequest)(nil),          // 39: shared.GetVodUploadStatusRequest
-	(*VodUploadedPart)(nil),                    // 40: shared.VodUploadedPart
-	(*GetVodUploadStatusResponse)(nil),         // 41: shared.GetVodUploadStatusResponse
-	(*AbortVodUploadRequest)(nil),              // 42: shared.AbortVodUploadRequest
-	(*AbortVodUploadResponse)(nil),             // 43: shared.AbortVodUploadResponse
-	(*DeleteVodAssetRequest)(nil),              // 44: shared.DeleteVodAssetRequest
-	(*DeleteVodAssetResponse)(nil),             // 45: shared.DeleteVodAssetResponse
-	(*VodAssetInfo)(nil),                       // 46: shared.VodAssetInfo
-	(*VodMetadata)(nil),                        // 47: shared.VodMetadata
-	(*WebhookRequest)(nil),                     // 48: shared.WebhookRequest
-	(*WebhookResponse)(nil),                    // 49: shared.WebhookResponse
-	(*GetArtifactCreationStatusRequest)(nil),   // 50: shared.GetArtifactCreationStatusRequest
-	(*GetArtifactCreationStatusResponse)(nil),  // 51: shared.GetArtifactCreationStatusResponse
-	(*AckArtifactCreationCommandRequest)(nil),  // 52: shared.AckArtifactCreationCommandRequest
-	(*AckArtifactCreationCommandResponse)(nil), // 53: shared.AckArtifactCreationCommandResponse
-	nil,                           // 54: shared.ViewerEndpoint.OutputsEntry
-	nil,                           // 55: shared.WebhookRequest.HeadersEntry
-	(*timestamppb.Timestamp)(nil), // 56: google.protobuf.Timestamp
+	(IngestProtocol)(0),                        // 1: shared.IngestProtocol
+	(IngestEndpointKind)(0),                    // 2: shared.IngestEndpointKind
+	(VodStatus)(0),                             // 3: shared.VodStatus
+	(ArtifactCreationOutcome)(0),               // 4: shared.ArtifactCreationOutcome
+	(*CreateClipRequest)(nil),                  // 5: shared.CreateClipRequest
+	(*CreateClipResponse)(nil),                 // 6: shared.CreateClipResponse
+	(*ClipInfo)(nil),                           // 7: shared.ClipInfo
+	(*GetClipRequest)(nil),                     // 8: shared.GetClipRequest
+	(*DeleteClipRequest)(nil),                  // 9: shared.DeleteClipRequest
+	(*DeleteClipResponse)(nil),                 // 10: shared.DeleteClipResponse
+	(*DeleteStreamThumbnailsRequest)(nil),      // 11: shared.DeleteStreamThumbnailsRequest
+	(*DeleteStreamThumbnailsResponse)(nil),     // 12: shared.DeleteStreamThumbnailsResponse
+	(*DVRPolicy)(nil),                          // 13: shared.DVRPolicy
+	(*StartDVRRequest)(nil),                    // 14: shared.StartDVRRequest
+	(*StartDVRResponse)(nil),                   // 15: shared.StartDVRResponse
+	(*StopDVRRequest)(nil),                     // 16: shared.StopDVRRequest
+	(*StopDVRResponse)(nil),                    // 17: shared.StopDVRResponse
+	(*DeleteDVRRequest)(nil),                   // 18: shared.DeleteDVRRequest
+	(*DeleteDVRResponse)(nil),                  // 19: shared.DeleteDVRResponse
+	(*DVRInfo)(nil),                            // 20: shared.DVRInfo
+	(*ViewerEndpointRequest)(nil),              // 21: shared.ViewerEndpointRequest
+	(*OutputCapability)(nil),                   // 22: shared.OutputCapability
+	(*OutputEndpoint)(nil),                     // 23: shared.OutputEndpoint
+	(*ViewerEndpoint)(nil),                     // 24: shared.ViewerEndpoint
+	(*PlaybackTrack)(nil),                      // 25: shared.PlaybackTrack
+	(*PlaybackInstance)(nil),                   // 26: shared.PlaybackInstance
+	(*PlaybackMetadata)(nil),                   // 27: shared.PlaybackMetadata
+	(*ThumbnailAssets)(nil),                    // 28: shared.ThumbnailAssets
+	(*ViewerEndpointResponse)(nil),             // 29: shared.ViewerEndpointResponse
+	(*IngestEndpointRequest)(nil),              // 30: shared.IngestEndpointRequest
+	(*IngestEndpoint)(nil),                     // 31: shared.IngestEndpoint
+	(*IngestMetadata)(nil),                     // 32: shared.IngestMetadata
+	(*IngestEndpointResponse)(nil),             // 33: shared.IngestEndpointResponse
+	(*CreateVodUploadRequest)(nil),             // 34: shared.CreateVodUploadRequest
+	(*CreateVodUploadResponse)(nil),            // 35: shared.CreateVodUploadResponse
+	(*VodUploadPart)(nil),                      // 36: shared.VodUploadPart
+	(*CompleteVodUploadRequest)(nil),           // 37: shared.CompleteVodUploadRequest
+	(*VodCompletedPart)(nil),                   // 38: shared.VodCompletedPart
+	(*CompleteVodUploadResponse)(nil),          // 39: shared.CompleteVodUploadResponse
+	(*GetVodUploadStatusRequest)(nil),          // 40: shared.GetVodUploadStatusRequest
+	(*VodUploadedPart)(nil),                    // 41: shared.VodUploadedPart
+	(*GetVodUploadStatusResponse)(nil),         // 42: shared.GetVodUploadStatusResponse
+	(*AbortVodUploadRequest)(nil),              // 43: shared.AbortVodUploadRequest
+	(*AbortVodUploadResponse)(nil),             // 44: shared.AbortVodUploadResponse
+	(*DeleteVodAssetRequest)(nil),              // 45: shared.DeleteVodAssetRequest
+	(*DeleteVodAssetResponse)(nil),             // 46: shared.DeleteVodAssetResponse
+	(*VodAssetInfo)(nil),                       // 47: shared.VodAssetInfo
+	(*VodMetadata)(nil),                        // 48: shared.VodMetadata
+	(*WebhookRequest)(nil),                     // 49: shared.WebhookRequest
+	(*WebhookResponse)(nil),                    // 50: shared.WebhookResponse
+	(*GetArtifactCreationStatusRequest)(nil),   // 51: shared.GetArtifactCreationStatusRequest
+	(*GetArtifactCreationStatusResponse)(nil),  // 52: shared.GetArtifactCreationStatusResponse
+	(*AckArtifactCreationCommandRequest)(nil),  // 53: shared.AckArtifactCreationCommandRequest
+	(*AckArtifactCreationCommandResponse)(nil), // 54: shared.AckArtifactCreationCommandResponse
+	nil,                           // 55: shared.ViewerEndpoint.OutputsEntry
+	nil,                           // 56: shared.WebhookRequest.HeadersEntry
+	(*timestamppb.Timestamp)(nil), // 57: google.protobuf.Timestamp
 }
 var file_shared_proto_depIdxs = []int32{
 	0,  // 0: shared.CreateClipRequest.mode:type_name -> shared.ClipMode
-	56, // 1: shared.ClipInfo.created_at:type_name -> google.protobuf.Timestamp
-	56, // 2: shared.ClipInfo.updated_at:type_name -> google.protobuf.Timestamp
-	56, // 3: shared.ClipInfo.expires_at:type_name -> google.protobuf.Timestamp
-	27, // 4: shared.ClipInfo.thumbnail_assets:type_name -> shared.ThumbnailAssets
-	12, // 5: shared.StartDVRRequest.dvr_policy:type_name -> shared.DVRPolicy
-	56, // 6: shared.DVRInfo.started_at:type_name -> google.protobuf.Timestamp
-	56, // 7: shared.DVRInfo.ended_at:type_name -> google.protobuf.Timestamp
-	56, // 8: shared.DVRInfo.created_at:type_name -> google.protobuf.Timestamp
-	56, // 9: shared.DVRInfo.updated_at:type_name -> google.protobuf.Timestamp
-	56, // 10: shared.DVRInfo.frozen_at:type_name -> google.protobuf.Timestamp
-	56, // 11: shared.DVRInfo.expires_at:type_name -> google.protobuf.Timestamp
-	27, // 12: shared.DVRInfo.thumbnail_assets:type_name -> shared.ThumbnailAssets
-	21, // 13: shared.OutputEndpoint.capabilities:type_name -> shared.OutputCapability
-	54, // 14: shared.ViewerEndpoint.outputs:type_name -> shared.ViewerEndpoint.OutputsEntry
-	56, // 15: shared.PlaybackInstance.last_update:type_name -> google.protobuf.Timestamp
-	24, // 16: shared.PlaybackMetadata.tracks:type_name -> shared.PlaybackTrack
-	25, // 17: shared.PlaybackMetadata.instances:type_name -> shared.PlaybackInstance
-	56, // 18: shared.PlaybackMetadata.created_at:type_name -> google.protobuf.Timestamp
-	27, // 19: shared.PlaybackMetadata.thumbnail_assets:type_name -> shared.ThumbnailAssets
-	23, // 20: shared.ViewerEndpointResponse.primary:type_name -> shared.ViewerEndpoint
-	23, // 21: shared.ViewerEndpointResponse.fallbacks:type_name -> shared.ViewerEndpoint
-	26, // 22: shared.ViewerEndpointResponse.metadata:type_name -> shared.PlaybackMetadata
-	1,  // 23: shared.IngestEndpoint.kind:type_name -> shared.IngestEndpointKind
-	30, // 24: shared.IngestEndpointResponse.primary:type_name -> shared.IngestEndpoint
-	30, // 25: shared.IngestEndpointResponse.fallbacks:type_name -> shared.IngestEndpoint
-	31, // 26: shared.IngestEndpointResponse.metadata:type_name -> shared.IngestMetadata
-	35, // 27: shared.CreateVodUploadResponse.parts:type_name -> shared.VodUploadPart
-	56, // 28: shared.CreateVodUploadResponse.expires_at:type_name -> google.protobuf.Timestamp
-	37, // 29: shared.CompleteVodUploadRequest.parts:type_name -> shared.VodCompletedPart
-	46, // 30: shared.CompleteVodUploadResponse.asset:type_name -> shared.VodAssetInfo
-	2,  // 31: shared.GetVodUploadStatusResponse.state:type_name -> shared.VodStatus
-	56, // 32: shared.GetVodUploadStatusResponse.expires_at:type_name -> google.protobuf.Timestamp
-	56, // 33: shared.GetVodUploadStatusResponse.retention_until:type_name -> google.protobuf.Timestamp
-	40, // 34: shared.GetVodUploadStatusResponse.uploaded_parts:type_name -> shared.VodUploadedPart
-	2,  // 35: shared.VodAssetInfo.status:type_name -> shared.VodStatus
-	56, // 36: shared.VodAssetInfo.created_at:type_name -> google.protobuf.Timestamp
-	56, // 37: shared.VodAssetInfo.updated_at:type_name -> google.protobuf.Timestamp
-	56, // 38: shared.VodAssetInfo.expires_at:type_name -> google.protobuf.Timestamp
-	27, // 39: shared.VodAssetInfo.thumbnail_assets:type_name -> shared.ThumbnailAssets
-	55, // 40: shared.WebhookRequest.headers:type_name -> shared.WebhookRequest.HeadersEntry
-	3,  // 41: shared.GetArtifactCreationStatusResponse.outcome:type_name -> shared.ArtifactCreationOutcome
-	3,  // 42: shared.AckArtifactCreationCommandResponse.outcome:type_name -> shared.ArtifactCreationOutcome
-	22, // 43: shared.ViewerEndpoint.OutputsEntry.value:type_name -> shared.OutputEndpoint
-	50, // 44: shared.ArtifactCreationStatusService.GetArtifactCreationStatus:input_type -> shared.GetArtifactCreationStatusRequest
-	52, // 45: shared.ArtifactCreationStatusService.AckArtifactCreationCommand:input_type -> shared.AckArtifactCreationCommandRequest
-	51, // 46: shared.ArtifactCreationStatusService.GetArtifactCreationStatus:output_type -> shared.GetArtifactCreationStatusResponse
-	53, // 47: shared.ArtifactCreationStatusService.AckArtifactCreationCommand:output_type -> shared.AckArtifactCreationCommandResponse
-	46, // [46:48] is the sub-list for method output_type
-	44, // [44:46] is the sub-list for method input_type
-	44, // [44:44] is the sub-list for extension type_name
-	44, // [44:44] is the sub-list for extension extendee
-	0,  // [0:44] is the sub-list for field type_name
+	57, // 1: shared.ClipInfo.created_at:type_name -> google.protobuf.Timestamp
+	57, // 2: shared.ClipInfo.updated_at:type_name -> google.protobuf.Timestamp
+	57, // 3: shared.ClipInfo.expires_at:type_name -> google.protobuf.Timestamp
+	28, // 4: shared.ClipInfo.thumbnail_assets:type_name -> shared.ThumbnailAssets
+	13, // 5: shared.StartDVRRequest.dvr_policy:type_name -> shared.DVRPolicy
+	57, // 6: shared.DVRInfo.started_at:type_name -> google.protobuf.Timestamp
+	57, // 7: shared.DVRInfo.ended_at:type_name -> google.protobuf.Timestamp
+	57, // 8: shared.DVRInfo.created_at:type_name -> google.protobuf.Timestamp
+	57, // 9: shared.DVRInfo.updated_at:type_name -> google.protobuf.Timestamp
+	57, // 10: shared.DVRInfo.frozen_at:type_name -> google.protobuf.Timestamp
+	57, // 11: shared.DVRInfo.expires_at:type_name -> google.protobuf.Timestamp
+	28, // 12: shared.DVRInfo.thumbnail_assets:type_name -> shared.ThumbnailAssets
+	22, // 13: shared.OutputEndpoint.capabilities:type_name -> shared.OutputCapability
+	55, // 14: shared.ViewerEndpoint.outputs:type_name -> shared.ViewerEndpoint.OutputsEntry
+	57, // 15: shared.PlaybackInstance.last_update:type_name -> google.protobuf.Timestamp
+	25, // 16: shared.PlaybackMetadata.tracks:type_name -> shared.PlaybackTrack
+	26, // 17: shared.PlaybackMetadata.instances:type_name -> shared.PlaybackInstance
+	57, // 18: shared.PlaybackMetadata.created_at:type_name -> google.protobuf.Timestamp
+	28, // 19: shared.PlaybackMetadata.thumbnail_assets:type_name -> shared.ThumbnailAssets
+	24, // 20: shared.ViewerEndpointResponse.primary:type_name -> shared.ViewerEndpoint
+	24, // 21: shared.ViewerEndpointResponse.fallbacks:type_name -> shared.ViewerEndpoint
+	27, // 22: shared.ViewerEndpointResponse.metadata:type_name -> shared.PlaybackMetadata
+	1,  // 23: shared.IngestEndpointRequest.protocol:type_name -> shared.IngestProtocol
+	2,  // 24: shared.IngestEndpoint.kind:type_name -> shared.IngestEndpointKind
+	31, // 25: shared.IngestEndpointResponse.primary:type_name -> shared.IngestEndpoint
+	31, // 26: shared.IngestEndpointResponse.fallbacks:type_name -> shared.IngestEndpoint
+	32, // 27: shared.IngestEndpointResponse.metadata:type_name -> shared.IngestMetadata
+	36, // 28: shared.CreateVodUploadResponse.parts:type_name -> shared.VodUploadPart
+	57, // 29: shared.CreateVodUploadResponse.expires_at:type_name -> google.protobuf.Timestamp
+	38, // 30: shared.CompleteVodUploadRequest.parts:type_name -> shared.VodCompletedPart
+	47, // 31: shared.CompleteVodUploadResponse.asset:type_name -> shared.VodAssetInfo
+	3,  // 32: shared.GetVodUploadStatusResponse.state:type_name -> shared.VodStatus
+	57, // 33: shared.GetVodUploadStatusResponse.expires_at:type_name -> google.protobuf.Timestamp
+	57, // 34: shared.GetVodUploadStatusResponse.retention_until:type_name -> google.protobuf.Timestamp
+	41, // 35: shared.GetVodUploadStatusResponse.uploaded_parts:type_name -> shared.VodUploadedPart
+	3,  // 36: shared.VodAssetInfo.status:type_name -> shared.VodStatus
+	57, // 37: shared.VodAssetInfo.created_at:type_name -> google.protobuf.Timestamp
+	57, // 38: shared.VodAssetInfo.updated_at:type_name -> google.protobuf.Timestamp
+	57, // 39: shared.VodAssetInfo.expires_at:type_name -> google.protobuf.Timestamp
+	28, // 40: shared.VodAssetInfo.thumbnail_assets:type_name -> shared.ThumbnailAssets
+	56, // 41: shared.WebhookRequest.headers:type_name -> shared.WebhookRequest.HeadersEntry
+	4,  // 42: shared.GetArtifactCreationStatusResponse.outcome:type_name -> shared.ArtifactCreationOutcome
+	4,  // 43: shared.AckArtifactCreationCommandResponse.outcome:type_name -> shared.ArtifactCreationOutcome
+	23, // 44: shared.ViewerEndpoint.OutputsEntry.value:type_name -> shared.OutputEndpoint
+	51, // 45: shared.ArtifactCreationStatusService.GetArtifactCreationStatus:input_type -> shared.GetArtifactCreationStatusRequest
+	53, // 46: shared.ArtifactCreationStatusService.AckArtifactCreationCommand:input_type -> shared.AckArtifactCreationCommandRequest
+	52, // 47: shared.ArtifactCreationStatusService.GetArtifactCreationStatus:output_type -> shared.GetArtifactCreationStatusResponse
+	54, // 48: shared.ArtifactCreationStatusService.AckArtifactCreationCommand:output_type -> shared.AckArtifactCreationCommandResponse
+	47, // [47:49] is the sub-list for method output_type
+	45, // [45:47] is the sub-list for method input_type
+	45, // [45:45] is the sub-list for extension type_name
+	45, // [45:45] is the sub-list for extension extendee
+	0,  // [0:45] is the sub-list for field type_name
 }
 
 func init() { file_shared_proto_init() }
@@ -5611,7 +5690,7 @@ func file_shared_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_shared_proto_rawDesc), len(file_shared_proto_rawDesc)),
-			NumEnums:      4,
+			NumEnums:      5,
 			NumMessages:   52,
 			NumExtensions: 0,
 			NumServices:   1,

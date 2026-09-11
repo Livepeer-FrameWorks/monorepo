@@ -7,6 +7,7 @@ option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_aut
 import "cluster_peer.proto";
 import "google/protobuf/timestamp.proto";
 import "metering_contract.proto";
+import "media_placement.proto";
 import "shared.proto";
 import "tenant_limits.proto";
 
@@ -117,6 +118,11 @@ message TenantClusterGrant {
   // Stable infrastructure class used by offline media-plane admission. Runtime health and
   // addresses are overlaid locally; the signed grant still has to prove ingest capability.
   string cluster_type = 13;
+  // Placement facts require an envelope/payload schema of at least 2.
+  string region_id = 14;
+  media_placement.CapacityConsent media_consent = 15;
+  // Classification only; comparison prices require the media object's scoped quote.
+  media_placement.CommercialFacts commercial_facts = 16;
 }
 
 // TenantAuthority contains only media-plane decisions. Raw balances, invoices,
@@ -140,6 +146,7 @@ message TenantAuthority {
   // to label a healthy runtime peer as preferred; liveness and addresses are
   // still supplied locally by the media cell.
   string preferred_cluster_id = 14;
+  media_placement.PolicySet media_placement = 15;
 }
 
 message PlaybackSigningKey {
@@ -237,9 +244,8 @@ message ArtifactAuthority {
   string parent_stream_internal_name = 5;
 }
 
-// MediaObjectAuthority v1 freezes identity and public/JWT playback authority.
-// Ingest credentials, pull/native sources, processing, and outputs are added by
-// later schema versions rather than smuggled into the playback cut.
+// MediaObjectAuthority freezes media identity, admission, and sealed credentials.
+// Placement fields require schema 2 so older readers reject rather than ignore them.
 message MediaObjectAuthority {
   uint32 schema_version = 1;
   MediaObjectKind object_kind = 2;
@@ -251,6 +257,12 @@ message MediaObjectAuthority {
   string origin_cluster_id = 8;
   PlaybackPolicy playback_policy = 9;
   repeated SealedCellSecret sealed_playback_secrets = 10;
+  media_placement.PolicySet media_placement = 11;
+  // Exact parent revision prevents combining an overlay with unrelated tenant intent.
+  uint64 placement_tenant_revision = 12;
+  // At most one quote per verb. Each binds this object, its effective policy and
+  // the complete tenant grant census; embedded usage evidence retains its cutoff.
+  repeated media_placement.CommercialQuoteResponse commercial_quotes = 13;
 
   oneof object {
     LiveStreamAuthority live_stream = 20;

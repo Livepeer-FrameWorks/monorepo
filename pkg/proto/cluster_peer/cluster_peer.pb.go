@@ -7,6 +7,7 @@
 package clusterpeerpb
 
 import (
+	media_placement "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	tenant_limits "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/tenant_limits"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
@@ -126,8 +127,11 @@ type TenantClusterPeer struct {
 	// Access-specific runtime cap override for this tenant/cluster pair.
 	ResourceLimits          *tenant_limits.TenantResourceLimits `protobuf:"bytes,43,opt,name=resource_limits,json=resourceLimits,proto3" json:"resource_limits,omitempty"`
 	AllowPrivatePullSources bool                                `protobuf:"varint,44,opt,name=allow_private_pull_sources,json=allowPrivatePullSources,proto3" json:"allow_private_pull_sources,omitempty"`
-	unknownFields           protoimpl.UnknownFields
-	sizeCache               protoimpl.SizeCache
+	// Absent means the owner consent was not observed; it must not imply permission.
+	// Revision zero is an explicitly observed, unconfigured owner default.
+	MediaConsent  *media_placement.CapacityConsent `protobuf:"bytes,45,opt,name=media_consent,json=mediaConsent,proto3" json:"media_consent,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TenantClusterPeer) Reset() {
@@ -349,11 +353,18 @@ func (x *TenantClusterPeer) GetAllowPrivatePullSources() bool {
 	return false
 }
 
+func (x *TenantClusterPeer) GetMediaConsent() *media_placement.CapacityConsent {
+	if x != nil {
+		return x.MediaConsent
+	}
+	return nil
+}
+
 var File_cluster_peer_proto protoreflect.FileDescriptor
 
 const file_cluster_peer_proto_rawDesc = "" +
 	"\n" +
-	"\x12cluster_peer.proto\x12\fcluster_peer\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x13tenant_limits.proto\"\x85\t\n" +
+	"\x12cluster_peer.proto\x12\fcluster_peer\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x13tenant_limits.proto\x1a\x15media_placement.proto\"\xcc\t\n" +
 	"\x11TenantClusterPeer\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12!\n" +
@@ -383,7 +394,8 @@ const file_cluster_peer_proto_rawDesc = "" +
 	"\x0fcontrol_cell_id\x18) \x01(\tR\rcontrolCellId\x129\n" +
 	"\x19eligible_serving_cell_ids\x18* \x03(\tR\x16eligibleServingCellIds\x12L\n" +
 	"\x0fresource_limits\x18+ \x01(\v2#.tenant_limits.TenantResourceLimitsR\x0eresourceLimits\x12;\n" +
-	"\x1aallow_private_pull_sources\x18, \x01(\bR\x17allowPrivatePullSourcesB\x14\n" +
+	"\x1aallow_private_pull_sources\x18, \x01(\bR\x17allowPrivatePullSources\x12E\n" +
+	"\rmedia_consent\x18- \x01(\v2 .media_placement.CapacityConsentR\fmediaConsentB\x14\n" +
 	"\x12_access_expires_at*\xc1\x02\n" +
 	"\x19TenantClusterAccessSource\x12,\n" +
 	"(TENANT_CLUSTER_ACCESS_SOURCE_UNSPECIFIED\x10\x00\x12.\n" +
@@ -412,16 +424,18 @@ var file_cluster_peer_proto_goTypes = []any{
 	(*TenantClusterPeer)(nil),                  // 1: cluster_peer.TenantClusterPeer
 	(*timestamppb.Timestamp)(nil),              // 2: google.protobuf.Timestamp
 	(*tenant_limits.TenantResourceLimits)(nil), // 3: tenant_limits.TenantResourceLimits
+	(*media_placement.CapacityConsent)(nil),    // 4: media_placement.CapacityConsent
 }
 var file_cluster_peer_proto_depIdxs = []int32{
 	0, // 0: cluster_peer.TenantClusterPeer.access_source:type_name -> cluster_peer.TenantClusterAccessSource
 	2, // 1: cluster_peer.TenantClusterPeer.access_expires_at:type_name -> google.protobuf.Timestamp
 	3, // 2: cluster_peer.TenantClusterPeer.resource_limits:type_name -> tenant_limits.TenantResourceLimits
-	3, // [3:3] is the sub-list for method output_type
-	3, // [3:3] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	4, // 3: cluster_peer.TenantClusterPeer.media_consent:type_name -> media_placement.CapacityConsent
+	4, // [4:4] is the sub-list for method output_type
+	4, // [4:4] is the sub-list for method input_type
+	4, // [4:4] is the sub-list for extension type_name
+	4, // [4:4] is the sub-list for extension extendee
+	0, // [0:4] is the sub-list for field type_name
 }
 
 func init() { file_cluster_peer_proto_init() }

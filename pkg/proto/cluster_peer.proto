@@ -6,6 +6,7 @@ option go_package = "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_p
 
 import "google/protobuf/timestamp.proto";
 import "tenant_limits.proto";
+import "media_placement.proto";
 
 enum TenantClusterAccessSource {
   TENANT_CLUSTER_ACCESS_SOURCE_UNSPECIFIED = 0;
@@ -61,4 +62,7 @@ message TenantClusterPeer {
   // Access-specific runtime cap override for this tenant/cluster pair.
   tenant_limits.TenantResourceLimits resource_limits = 43;
   bool allow_private_pull_sources = 44;
+  // Absent means the owner consent was not observed; it must not imply permission.
+  // Revision zero is an explicitly observed, unconfigured owner default.
+  media_placement.CapacityConsent media_consent = 45;
 }

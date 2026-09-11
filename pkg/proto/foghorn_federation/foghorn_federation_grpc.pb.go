@@ -8,6 +8,7 @@ package foghornfederationpb
 
 import (
 	context "context"
+	media_placement "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
@@ -19,17 +20,19 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	FoghornFederation_QueryStream_FullMethodName             = "/foghorn_federation.FoghornFederation/QueryStream"
-	FoghornFederation_NotifyOriginPull_FullMethodName        = "/foghorn_federation.FoghornFederation/NotifyOriginPull"
-	FoghornFederation_PrepareArtifact_FullMethodName         = "/foghorn_federation.FoghornFederation/PrepareArtifact"
-	FoghornFederation_CreateRemoteClip_FullMethodName        = "/foghorn_federation.FoghornFederation/CreateRemoteClip"
-	FoghornFederation_CreateRemoteDVR_FullMethodName         = "/foghorn_federation.FoghornFederation/CreateRemoteDVR"
-	FoghornFederation_PeerChannel_FullMethodName             = "/foghorn_federation.FoghornFederation/PeerChannel"
-	FoghornFederation_ListTenantArtifacts_FullMethodName     = "/foghorn_federation.FoghornFederation/ListTenantArtifacts"
-	FoghornFederation_MigrateArtifactMetadata_FullMethodName = "/foghorn_federation.FoghornFederation/MigrateArtifactMetadata"
-	FoghornFederation_ForwardArtifactCommand_FullMethodName  = "/foghorn_federation.FoghornFederation/ForwardArtifactCommand"
-	FoghornFederation_MintStorageURLs_FullMethodName         = "/foghorn_federation.FoghornFederation/MintStorageURLs"
-	FoghornFederation_DeleteStorageObjects_FullMethodName    = "/foghorn_federation.FoghornFederation/DeleteStorageObjects"
+	FoghornFederation_QueryPlacementCandidates_FullMethodName = "/foghorn_federation.FoghornFederation/QueryPlacementCandidates"
+	FoghornFederation_PreparePlacement_FullMethodName         = "/foghorn_federation.FoghornFederation/PreparePlacement"
+	FoghornFederation_QueryStream_FullMethodName              = "/foghorn_federation.FoghornFederation/QueryStream"
+	FoghornFederation_NotifyOriginPull_FullMethodName         = "/foghorn_federation.FoghornFederation/NotifyOriginPull"
+	FoghornFederation_PrepareArtifact_FullMethodName          = "/foghorn_federation.FoghornFederation/PrepareArtifact"
+	FoghornFederation_CreateRemoteClip_FullMethodName         = "/foghorn_federation.FoghornFederation/CreateRemoteClip"
+	FoghornFederation_CreateRemoteDVR_FullMethodName          = "/foghorn_federation.FoghornFederation/CreateRemoteDVR"
+	FoghornFederation_PeerChannel_FullMethodName              = "/foghorn_federation.FoghornFederation/PeerChannel"
+	FoghornFederation_ListTenantArtifacts_FullMethodName      = "/foghorn_federation.FoghornFederation/ListTenantArtifacts"
+	FoghornFederation_MigrateArtifactMetadata_FullMethodName  = "/foghorn_federation.FoghornFederation/MigrateArtifactMetadata"
+	FoghornFederation_ForwardArtifactCommand_FullMethodName   = "/foghorn_federation.FoghornFederation/ForwardArtifactCommand"
+	FoghornFederation_MintStorageURLs_FullMethodName          = "/foghorn_federation.FoghornFederation/MintStorageURLs"
+	FoghornFederation_DeleteStorageObjects_FullMethodName     = "/foghorn_federation.FoghornFederation/DeleteStorageObjects"
 )
 
 // FoghornFederationClient is the client API for FoghornFederation service.
@@ -41,6 +44,10 @@ const (
 // load-balanced across all Foghorn instances via shared Redis state.
 // PeerChannel is a sticky bidirectional stream for real-time telemetry exchange.
 type FoghornFederationClient interface {
+	// Tenant-scoped discovery returns all relevant node facts without geo/top-K pruning.
+	QueryPlacementCandidates(ctx context.Context, in *media_placement.CandidateQuery, opts ...grpc.CallOption) (*media_placement.CandidateObservation, error)
+	// Revalidate and prepare precisely the selected node in the destination cell.
+	PreparePlacement(ctx context.Context, in *media_placement.PreparePlacementRequest, opts ...grpc.CallOption) (*media_placement.Preparation, error)
 	// QueryStream asks a peer cluster whether it has a stream and returns scored edge candidates.
 	QueryStream(ctx context.Context, in *QueryStreamRequest, opts ...grpc.CallOption) (*QueryStreamResponse, error)
 	// NotifyOriginPull tells the origin cluster that a peer intends to pull a stream via DTSC.
@@ -54,9 +61,11 @@ type FoghornFederationClient interface {
 	CreateRemoteClip(ctx context.Context, in *RemoteClipRequest, opts ...grpc.CallOption) (*RemoteClipResponse, error)
 	// CreateRemoteDVR requests the origin cluster to start a DVR recording on behalf of a remote cluster.
 	CreateRemoteDVR(ctx context.Context, in *RemoteDVRRequest, opts ...grpc.CallOption) (*RemoteDVRResponse, error)
-	// PeerChannel is a bidirectional stream for real-time telemetry and replication events.
-	// One PeerChannel per peer pair handles all replications between two clusters.
-	// The receiving instance writes telemetry to Redis; all instances read it for scoring.
+	// PeerChannel carries stream advertisements, lifecycle events, replication
+	// events and artifact advertisements. One PeerChannel per peer pair.
+	// Declared bidirectional but used in one direction: the dialing side sends,
+	// the receiving side never does. Peer identity on it is self-asserted, so
+	// each handler binds what it stores to the channel, not to the payload.
 	PeerChannel(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[PeerMessage, PeerMessage], error)
 	// ListTenantArtifacts returns all artifact metadata for a tenant on this cluster.
 	// Used by MigrateArtifactMetadata on the destination to bulk-copy cold storage records.
@@ -106,6 +115,26 @@ type foghornFederationClient struct {
 
 func NewFoghornFederationClient(cc grpc.ClientConnInterface) FoghornFederationClient {
 	return &foghornFederationClient{cc}
+}
+
+func (c *foghornFederationClient) QueryPlacementCandidates(ctx context.Context, in *media_placement.CandidateQuery, opts ...grpc.CallOption) (*media_placement.CandidateObservation, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(media_placement.CandidateObservation)
+	err := c.cc.Invoke(ctx, FoghornFederation_QueryPlacementCandidates_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *foghornFederationClient) PreparePlacement(ctx context.Context, in *media_placement.PreparePlacementRequest, opts ...grpc.CallOption) (*media_placement.Preparation, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(media_placement.Preparation)
+	err := c.cc.Invoke(ctx, FoghornFederation_PreparePlacement_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *foghornFederationClient) QueryStream(ctx context.Context, in *QueryStreamRequest, opts ...grpc.CallOption) (*QueryStreamResponse, error) {
@@ -230,6 +259,10 @@ func (c *foghornFederationClient) DeleteStorageObjects(ctx context.Context, in *
 // load-balanced across all Foghorn instances via shared Redis state.
 // PeerChannel is a sticky bidirectional stream for real-time telemetry exchange.
 type FoghornFederationServer interface {
+	// Tenant-scoped discovery returns all relevant node facts without geo/top-K pruning.
+	QueryPlacementCandidates(context.Context, *media_placement.CandidateQuery) (*media_placement.CandidateObservation, error)
+	// Revalidate and prepare precisely the selected node in the destination cell.
+	PreparePlacement(context.Context, *media_placement.PreparePlacementRequest) (*media_placement.Preparation, error)
 	// QueryStream asks a peer cluster whether it has a stream and returns scored edge candidates.
 	QueryStream(context.Context, *QueryStreamRequest) (*QueryStreamResponse, error)
 	// NotifyOriginPull tells the origin cluster that a peer intends to pull a stream via DTSC.
@@ -243,9 +276,11 @@ type FoghornFederationServer interface {
 	CreateRemoteClip(context.Context, *RemoteClipRequest) (*RemoteClipResponse, error)
 	// CreateRemoteDVR requests the origin cluster to start a DVR recording on behalf of a remote cluster.
 	CreateRemoteDVR(context.Context, *RemoteDVRRequest) (*RemoteDVRResponse, error)
-	// PeerChannel is a bidirectional stream for real-time telemetry and replication events.
-	// One PeerChannel per peer pair handles all replications between two clusters.
-	// The receiving instance writes telemetry to Redis; all instances read it for scoring.
+	// PeerChannel carries stream advertisements, lifecycle events, replication
+	// events and artifact advertisements. One PeerChannel per peer pair.
+	// Declared bidirectional but used in one direction: the dialing side sends,
+	// the receiving side never does. Peer identity on it is self-asserted, so
+	// each handler binds what it stores to the channel, not to the payload.
 	PeerChannel(grpc.BidiStreamingServer[PeerMessage, PeerMessage]) error
 	// ListTenantArtifacts returns all artifact metadata for a tenant on this cluster.
 	// Used by MigrateArtifactMetadata on the destination to bulk-copy cold storage records.
@@ -297,6 +332,12 @@ type FoghornFederationServer interface {
 // pointer dereference when methods are called.
 type UnimplementedFoghornFederationServer struct{}
 
+func (UnimplementedFoghornFederationServer) QueryPlacementCandidates(context.Context, *media_placement.CandidateQuery) (*media_placement.CandidateObservation, error) {
+	return nil, status.Error(codes.Unimplemented, "method QueryPlacementCandidates not implemented")
+}
+func (UnimplementedFoghornFederationServer) PreparePlacement(context.Context, *media_placement.PreparePlacementRequest) (*media_placement.Preparation, error) {
+	return nil, status.Error(codes.Unimplemented, "method PreparePlacement not implemented")
+}
 func (UnimplementedFoghornFederationServer) QueryStream(context.Context, *QueryStreamRequest) (*QueryStreamResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method QueryStream not implemented")
 }
@@ -349,6 +390,42 @@ func RegisterFoghornFederationServer(s grpc.ServiceRegistrar, srv FoghornFederat
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&FoghornFederation_ServiceDesc, srv)
+}
+
+func _FoghornFederation_QueryPlacementCandidates_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(media_placement.CandidateQuery)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FoghornFederationServer).QueryPlacementCandidates(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FoghornFederation_QueryPlacementCandidates_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FoghornFederationServer).QueryPlacementCandidates(ctx, req.(*media_placement.CandidateQuery))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FoghornFederation_PreparePlacement_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(media_placement.PreparePlacementRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FoghornFederationServer).PreparePlacement(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FoghornFederation_PreparePlacement_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FoghornFederationServer).PreparePlacement(ctx, req.(*media_placement.PreparePlacementRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _FoghornFederation_QueryStream_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -545,6 +622,14 @@ var FoghornFederation_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "foghorn_federation.FoghornFederation",
 	HandlerType: (*FoghornFederationServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "QueryPlacementCandidates",
+			Handler:    _FoghornFederation_QueryPlacementCandidates_Handler,
+		},
+		{
+			MethodName: "PreparePlacement",
+			Handler:    _FoghornFederation_PreparePlacement_Handler,
+		},
 		{
 			MethodName: "QueryStream",
 			Handler:    _FoghornFederation_QueryStream_Handler,

@@ -12,6 +12,7 @@ import "foghorn_control.proto";
 import "cluster_peer.proto";
 import "tenant_limits.proto";
 import "metering_contract.proto";
+import "media_placement.proto";
 
 // ============================================================================
 // COMMODORE CONTROL PLANE - INTERNAL SERVICE APIs
@@ -296,6 +297,14 @@ service InternalService {
   // stream-bound). NULL on a field clears the override and falls back to
   // the tenant default.
   rpc SetStreamRetentionOverrides(SetStreamRetentionOverridesRequest) returns (SetStreamRetentionOverridesResponse);
+
+  // Placement changes are tenant-scoped control operations, not rated media work.
+  rpc GetMediaPlacementPolicy(media_placement.GetPolicyRequest) returns (media_placement.PolicyState);
+  rpc GetMediaPlacementOptions(media_placement.GetOptionsRequest) returns (media_placement.Options);
+  rpc PreviewMediaPlacement(media_placement.PreviewRequest) returns (media_placement.Preview);
+  rpc ReviewMediaPlacementChange(media_placement.ReviewChangeRequest) returns (media_placement.Review);
+  rpc ApplyMediaPlacementChange(media_placement.ApplyChangeRequest) returns (media_placement.Change);
+  rpc GetMediaPlacementChange(media_placement.GetChangeRequest) returns (media_placement.Change);
 
   // Dry-run policy evaluation against a caller-supplied JWT or webhook test.
   // Commodore validates tenant ownership of the playback target and forwards

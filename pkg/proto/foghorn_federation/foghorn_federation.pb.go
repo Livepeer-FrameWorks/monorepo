@@ -7,6 +7,7 @@
 package foghornfederationpb
 
 import (
+	media_placement "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
@@ -204,21 +205,26 @@ func (x *QueryStreamResponse) GetOriginClusterId() string {
 }
 
 type EdgeCandidate struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	NodeId        string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
-	BaseUrl       string                 `protobuf:"bytes,2,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`             // Public HTTPS URL of the edge node
-	DtscUrl       string                 `protobuf:"bytes,3,opt,name=dtsc_url,json=dtscUrl,proto3" json:"dtsc_url,omitempty"`             // DTSC pull URL for origin-pull replication
-	BwScore       uint64                 `protobuf:"varint,4,opt,name=bw_score,json=bwScore,proto3" json:"bw_score,omitempty"`            // Pre-computed bandwidth score
-	GeoScore      uint64                 `protobuf:"varint,5,opt,name=geo_score,json=geoScore,proto3" json:"geo_score,omitempty"`         // Pre-computed geo score relative to viewer
-	IsOrigin      bool                   `protobuf:"varint,6,opt,name=is_origin,json=isOrigin,proto3" json:"is_origin,omitempty"`         // True if this node has the original ingest
-	BufferState   string                 `protobuf:"bytes,7,opt,name=buffer_state,json=bufferState,proto3" json:"buffer_state,omitempty"` // FULL, DRY, RECOVER, etc.
-	GeoLat        float64                `protobuf:"fixed64,8,opt,name=geo_lat,json=geoLat,proto3" json:"geo_lat,omitempty"`
-	GeoLon        float64                `protobuf:"fixed64,9,opt,name=geo_lon,json=geoLon,proto3" json:"geo_lon,omitempty"`
-	ViewerCount   uint32                 `protobuf:"varint,10,opt,name=viewer_count,json=viewerCount,proto3" json:"viewer_count,omitempty"`
-	CpuPercent    float64                `protobuf:"fixed64,11,opt,name=cpu_percent,json=cpuPercent,proto3" json:"cpu_percent,omitempty"`
-	BwAvailable   uint64                 `protobuf:"varint,12,opt,name=bw_available,json=bwAvailable,proto3" json:"bw_available,omitempty"` // Available bandwidth in bytes/sec
-	RamUsed       uint64                 `protobuf:"varint,13,opt,name=ram_used,json=ramUsed,proto3" json:"ram_used,omitempty"`
-	RamMax        uint64                 `protobuf:"varint,14,opt,name=ram_max,json=ramMax,proto3" json:"ram_max,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	NodeId      string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	BaseUrl     string                 `protobuf:"bytes,2,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`             // Public HTTPS URL of the edge node
+	DtscUrl     string                 `protobuf:"bytes,3,opt,name=dtsc_url,json=dtscUrl,proto3" json:"dtsc_url,omitempty"`             // DTSC pull URL for origin-pull replication
+	BwScore     uint64                 `protobuf:"varint,4,opt,name=bw_score,json=bwScore,proto3" json:"bw_score,omitempty"`            // Pre-computed bandwidth score
+	GeoScore    uint64                 `protobuf:"varint,5,opt,name=geo_score,json=geoScore,proto3" json:"geo_score,omitempty"`         // Pre-computed geo score relative to viewer
+	IsOrigin    bool                   `protobuf:"varint,6,opt,name=is_origin,json=isOrigin,proto3" json:"is_origin,omitempty"`         // True if this node has the original ingest
+	BufferState string                 `protobuf:"bytes,7,opt,name=buffer_state,json=bufferState,proto3" json:"buffer_state,omitempty"` // FULL, DRY, RECOVER, etc.
+	GeoLat      float64                `protobuf:"fixed64,8,opt,name=geo_lat,json=geoLat,proto3" json:"geo_lat,omitempty"`
+	GeoLon      float64                `protobuf:"fixed64,9,opt,name=geo_lon,json=geoLon,proto3" json:"geo_lon,omitempty"`
+	ViewerCount uint32                 `protobuf:"varint,10,opt,name=viewer_count,json=viewerCount,proto3" json:"viewer_count,omitempty"`
+	CpuPercent  float64                `protobuf:"fixed64,11,opt,name=cpu_percent,json=cpuPercent,proto3" json:"cpu_percent,omitempty"`
+	BwAvailable uint64                 `protobuf:"varint,12,opt,name=bw_available,json=bwAvailable,proto3" json:"bw_available,omitempty"` // Available bandwidth in bytes/sec
+	RamUsed     uint64                 `protobuf:"varint,13,opt,name=ram_used,json=ramUsed,proto3" json:"ram_used,omitempty"`
+	RamMax      uint64                 `protobuf:"varint,14,opt,name=ram_max,json=ramMax,proto3" json:"ram_max,omitempty"`
+	// Present only for a confirmed active publisher on this exact source node.
+	SourceGeneration string `protobuf:"bytes,15,opt,name=source_generation,json=sourceGeneration,proto3" json:"source_generation,omitempty"`
+	SourceRevision   int64  `protobuf:"varint,16,opt,name=source_revision,json=sourceRevision,proto3" json:"source_revision,omitempty"`
+	// Virtual media cluster of this node, distinct from the responding cell.
+	ClusterId     string `protobuf:"bytes,17,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -351,6 +357,27 @@ func (x *EdgeCandidate) GetRamMax() uint64 {
 	return 0
 }
 
+func (x *EdgeCandidate) GetSourceGeneration() string {
+	if x != nil {
+		return x.SourceGeneration
+	}
+	return ""
+}
+
+func (x *EdgeCandidate) GetSourceRevision() int64 {
+	if x != nil {
+		return x.SourceRevision
+	}
+	return 0
+}
+
+func (x *EdgeCandidate) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
 type OriginPullNotification struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	StreamName    string                 `protobuf:"bytes,1,opt,name=stream_name,json=streamName,proto3" json:"stream_name,omitempty"`
@@ -359,8 +386,16 @@ type OriginPullNotification struct {
 	DestNodeId    string                 `protobuf:"bytes,4,opt,name=dest_node_id,json=destNodeId,proto3" json:"dest_node_id,omitempty"`          // Edge node in dest cluster that will pull
 	EstViewers    uint32                 `protobuf:"varint,5,opt,name=est_viewers,json=estViewers,proto3" json:"est_viewers,omitempty"`           // Estimated viewer count driving this pull
 	TenantId      string                 `protobuf:"bytes,6,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`                  // Stream owner tenant
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	// A generation-bound request cannot auto-select a different source node.
+	SourceGeneration string `protobuf:"bytes,7,opt,name=source_generation,json=sourceGeneration,proto3" json:"source_generation,omitempty"`
+	SourceRevision   int64  `protobuf:"varint,8,opt,name=source_revision,json=sourceRevision,proto3" json:"source_revision,omitempty"`
+	AttemptId        string `protobuf:"bytes,9,opt,name=attempt_id,json=attemptId,proto3" json:"attempt_id,omitempty"`
+	// Both fields are required together for exact virtual-cluster source binding.
+	// Such requests must name the source node and cannot auto-select another one.
+	SourceCellId    string `protobuf:"bytes,10,opt,name=source_cell_id,json=sourceCellId,proto3" json:"source_cell_id,omitempty"`
+	SourceClusterId string `protobuf:"bytes,11,opt,name=source_cluster_id,json=sourceClusterId,proto3" json:"source_cluster_id,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *OriginPullNotification) Reset() {
@@ -435,13 +470,57 @@ func (x *OriginPullNotification) GetTenantId() string {
 	return ""
 }
 
+func (x *OriginPullNotification) GetSourceGeneration() string {
+	if x != nil {
+		return x.SourceGeneration
+	}
+	return ""
+}
+
+func (x *OriginPullNotification) GetSourceRevision() int64 {
+	if x != nil {
+		return x.SourceRevision
+	}
+	return 0
+}
+
+func (x *OriginPullNotification) GetAttemptId() string {
+	if x != nil {
+		return x.AttemptId
+	}
+	return ""
+}
+
+func (x *OriginPullNotification) GetSourceCellId() string {
+	if x != nil {
+		return x.SourceCellId
+	}
+	return ""
+}
+
+func (x *OriginPullNotification) GetSourceClusterId() string {
+	if x != nil {
+		return x.SourceClusterId
+	}
+	return ""
+}
+
 type OriginPullAck struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Accepted      bool                   `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
-	Reason        string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`                  // Rejection reason or informational message
-	DtscUrl       string                 `protobuf:"bytes,3,opt,name=dtsc_url,json=dtscUrl,proto3" json:"dtsc_url,omitempty"` // DTSC URL to pull from (set when accepted)
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Accepted         bool                   `protobuf:"varint,1,opt,name=accepted,proto3" json:"accepted,omitempty"`
+	Reason           string                 `protobuf:"bytes,2,opt,name=reason,proto3" json:"reason,omitempty"`                  // Rejection reason or informational message
+	DtscUrl          string                 `protobuf:"bytes,3,opt,name=dtsc_url,json=dtscUrl,proto3" json:"dtsc_url,omitempty"` // DTSC URL to pull from (set when accepted)
+	SourceGeneration string                 `protobuf:"bytes,4,opt,name=source_generation,json=sourceGeneration,proto3" json:"source_generation,omitempty"`
+	SourceRevision   int64                  `protobuf:"varint,5,opt,name=source_revision,json=sourceRevision,proto3" json:"source_revision,omitempty"`
+	AttemptId        string                 `protobuf:"bytes,6,opt,name=attempt_id,json=attemptId,proto3" json:"attempt_id,omitempty"`
+	SourceNodeId     string                 `protobuf:"bytes,7,opt,name=source_node_id,json=sourceNodeId,proto3" json:"source_node_id,omitempty"`
+	TenantId         string                 `protobuf:"bytes,8,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	DestClusterId    string                 `protobuf:"bytes,9,opt,name=dest_cluster_id,json=destClusterId,proto3" json:"dest_cluster_id,omitempty"`
+	DestNodeId       string                 `protobuf:"bytes,10,opt,name=dest_node_id,json=destNodeId,proto3" json:"dest_node_id,omitempty"`
+	SourceCellId     string                 `protobuf:"bytes,11,opt,name=source_cell_id,json=sourceCellId,proto3" json:"source_cell_id,omitempty"`
+	SourceClusterId  string                 `protobuf:"bytes,12,opt,name=source_cluster_id,json=sourceClusterId,proto3" json:"source_cluster_id,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *OriginPullAck) Reset() {
@@ -491,6 +570,69 @@ func (x *OriginPullAck) GetReason() string {
 func (x *OriginPullAck) GetDtscUrl() string {
 	if x != nil {
 		return x.DtscUrl
+	}
+	return ""
+}
+
+func (x *OriginPullAck) GetSourceGeneration() string {
+	if x != nil {
+		return x.SourceGeneration
+	}
+	return ""
+}
+
+func (x *OriginPullAck) GetSourceRevision() int64 {
+	if x != nil {
+		return x.SourceRevision
+	}
+	return 0
+}
+
+func (x *OriginPullAck) GetAttemptId() string {
+	if x != nil {
+		return x.AttemptId
+	}
+	return ""
+}
+
+func (x *OriginPullAck) GetSourceNodeId() string {
+	if x != nil {
+		return x.SourceNodeId
+	}
+	return ""
+}
+
+func (x *OriginPullAck) GetTenantId() string {
+	if x != nil {
+		return x.TenantId
+	}
+	return ""
+}
+
+func (x *OriginPullAck) GetDestClusterId() string {
+	if x != nil {
+		return x.DestClusterId
+	}
+	return ""
+}
+
+func (x *OriginPullAck) GetDestNodeId() string {
+	if x != nil {
+		return x.DestNodeId
+	}
+	return ""
+}
+
+func (x *OriginPullAck) GetSourceCellId() string {
+	if x != nil {
+		return x.SourceCellId
+	}
+	return ""
+}
+
+func (x *OriginPullAck) GetSourceClusterId() string {
+	if x != nil {
+		return x.SourceClusterId
 	}
 	return ""
 }
@@ -1362,8 +1504,10 @@ func (x *StreamLifecycleEvent) GetSourceRevision() int64 {
 	return 0
 }
 
-// EdgeTelemetry is pushed every 5s for edges involved in active replications.
-// The receiving cluster writes this to Redis for cross-cluster scoring.
+// EdgeTelemetry fed the retired remote-edge scoring path. Nothing sends it and
+// the receiver consumes it without storing it; the arm stays so a peer on older
+// code is not answered with an unknown-payload warning. Cross-cell routing asks
+// the peer's placement service directly.
 type EdgeTelemetry struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	StreamName    string                 `protobuf:"bytes,1,opt,name=stream_name,json=streamName,proto3" json:"stream_name,omitempty"`
@@ -1481,16 +1625,23 @@ func (x *EdgeTelemetry) GetGeoLon() float64 {
 }
 
 // ReplicationEvent signals that a stream replication has started or stopped.
-// Used to fix redirect loops: once cluster A has a stream via origin-pull,
-// cluster B learns about it and can redirect viewers to A.
+// Its only consumer is loop prevention: it stops cluster B arranging a pull
+// from A while A is already pulling the same stream from B. It feeds no viewer
+// decision. cluster_id is the MEDIA cluster the replica lands in, distinct from
+// control_cell_id and from the PeerChannel identity the frame arrives under.
 type ReplicationEvent struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	StreamName    string                 `protobuf:"bytes,1,opt,name=stream_name,json=streamName,proto3" json:"stream_name,omitempty"`
-	NodeId        string                 `protobuf:"bytes,2,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`          // Edge node hosting the replication
-	ClusterId     string                 `protobuf:"bytes,3,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"` // Cluster hosting the replication
-	BaseUrl       string                 `protobuf:"bytes,4,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`       // Public URL of the edge
-	DtscUrl       string                 `protobuf:"bytes,5,opt,name=dtsc_url,json=dtscUrl,proto3" json:"dtsc_url,omitempty"`       // DTSC URL of the replicated stream
-	Available     bool                   `protobuf:"varint,6,opt,name=available,proto3" json:"available,omitempty"`                 // True = replication active, false = stopped
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	StreamName string                 `protobuf:"bytes,1,opt,name=stream_name,json=streamName,proto3" json:"stream_name,omitempty"`
+	NodeId     string                 `protobuf:"bytes,2,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`          // Edge node hosting the replication
+	ClusterId  string                 `protobuf:"bytes,3,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"` // Cluster hosting the replication
+	BaseUrl    string                 `protobuf:"bytes,4,opt,name=base_url,json=baseUrl,proto3" json:"base_url,omitempty"`       // Public URL of the edge
+	DtscUrl    string                 `protobuf:"bytes,5,opt,name=dtsc_url,json=dtscUrl,proto3" json:"dtsc_url,omitempty"`       // DTSC URL of the replicated stream
+	Available  bool                   `protobuf:"varint,6,opt,name=available,proto3" json:"available,omitempty"`                 // True = replication active, false = stopped
+	// control_cell_id is the sending Foghorn's control cell. Loop prevention
+	// compares this record against the cell an arrangement names, so both sides
+	// must speak the same namespace; cluster_id above is the media cluster
+	// hosting the replication and answers a different question.
+	ControlCellId string `protobuf:"bytes,7,opt,name=control_cell_id,json=controlCellId,proto3" json:"control_cell_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1567,10 +1718,16 @@ func (x *ReplicationEvent) GetAvailable() bool {
 	return false
 }
 
-// ClusterEdgeSummary provides smoothed (30s moving average) edge telemetry
-// for an entire cluster. Sent by the official coverage cluster to a tenant's
-// preferred cluster via PeerChannel every 30s. Enables the preferred Foghorn
-// to score official-cluster edges alongside local edges without per-viewer RPCs.
+func (x *ReplicationEvent) GetControlCellId() string {
+	if x != nil {
+		return x.ControlCellId
+	}
+	return ""
+}
+
+// ClusterEdgeSummary carried smoothed per-cluster edge telemetry for the retired
+// remote-edge scoring path. Retained on the wire under the same terms as
+// EdgeTelemetry: nothing sends it, and the receiver consumes it without storing it.
 type ClusterEdgeSummary struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Edges         []*EdgeSnapshot        `protobuf:"bytes,1,rep,name=edges,proto3" json:"edges,omitempty"`
@@ -1933,8 +2090,17 @@ type StreamAdvertisement struct {
 	// cross-cluster STREAM_SOURCE dvr+<hash> can arrange an origin-pull
 	// to dtsc://<recording_node>/dvr+<hash>.
 	DvrRecordingNodeId string `protobuf:"bytes,8,opt,name=dvr_recording_node_id,json=dvrRecordingNodeId,proto3" json:"dvr_recording_node_id,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// control_cell_id is the advertising Foghorn's control cell. Receivers key the
+	// federated location by it, because every consumer of that key compares it
+	// against a control cell: the placement readers against a grant's cell, and
+	// peer addressing against the control-cell address map. The sender's
+	// CLUSTER_ID is a physical cluster and may differ from its control cell, and
+	// the virtual clusters it serves differ from both, so keying by anything else
+	// silently strands cross-cell serving. Required: an advertisement without it
+	// is dropped rather than filed under a guessed namespace.
+	ControlCellId string `protobuf:"bytes,9,opt,name=control_cell_id,json=controlCellId,proto3" json:"control_cell_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *StreamAdvertisement) Reset() {
@@ -2023,6 +2189,13 @@ func (x *StreamAdvertisement) GetDvrRecordingNodeId() string {
 	return ""
 }
 
+func (x *StreamAdvertisement) GetControlCellId() string {
+	if x != nil {
+		return x.ControlCellId
+	}
+	return ""
+}
+
 // PeerStreamEdge describes a single edge node serving a specific stream.
 type PeerStreamEdge struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
@@ -2039,10 +2212,18 @@ type PeerStreamEdge struct {
 	// RAM utilization, same units as the node snapshot. Remote-edge scoring
 	// rejects candidates with ram_max == 0, so ads from peers that predate
 	// these fields gracefully fall through to the QueryStream fan-out.
-	RamUsed       uint64 `protobuf:"varint,11,opt,name=ram_used,json=ramUsed,proto3" json:"ram_used,omitempty"`
-	RamMax        uint64 `protobuf:"varint,12,opt,name=ram_max,json=ramMax,proto3" json:"ram_max,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	RamUsed uint64 `protobuf:"varint,11,opt,name=ram_used,json=ramUsed,proto3" json:"ram_used,omitempty"`
+	RamMax  uint64 `protobuf:"varint,12,opt,name=ram_max,json=ramMax,proto3" json:"ram_max,omitempty"`
+	// Only a confirmed active publisher on this node carries a generation.
+	SourceGeneration string `protobuf:"bytes,13,opt,name=source_generation,json=sourceGeneration,proto3" json:"source_generation,omitempty"`
+	SourceRevision   int64  `protobuf:"varint,14,opt,name=source_revision,json=sourceRevision,proto3" json:"source_revision,omitempty"`
+	ClusterId        string `protobuf:"bytes,15,opt,name=cluster_id,json=clusterId,proto3" json:"cluster_id,omitempty"`
+	// Independent Unix-second evidence clocks; repeating an advertisement does
+	// not refresh the source buffer or the DTSC listener. Zero means unknown.
+	DtscObservedAt   int64 `protobuf:"varint,16,opt,name=dtsc_observed_at,json=dtscObservedAt,proto3" json:"dtsc_observed_at,omitempty"`
+	SourceObservedAt int64 `protobuf:"varint,17,opt,name=source_observed_at,json=sourceObservedAt,proto3" json:"source_observed_at,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *PeerStreamEdge) Reset() {
@@ -2159,8 +2340,46 @@ func (x *PeerStreamEdge) GetRamMax() uint64 {
 	return 0
 }
 
-// PeerHeartbeat provides session liveness and capability exchange.
-// Sent every 10s. Missing 3 consecutive heartbeats = peer considered dead.
+func (x *PeerStreamEdge) GetSourceGeneration() string {
+	if x != nil {
+		return x.SourceGeneration
+	}
+	return ""
+}
+
+func (x *PeerStreamEdge) GetSourceRevision() int64 {
+	if x != nil {
+		return x.SourceRevision
+	}
+	return 0
+}
+
+func (x *PeerStreamEdge) GetClusterId() string {
+	if x != nil {
+		return x.ClusterId
+	}
+	return ""
+}
+
+func (x *PeerStreamEdge) GetDtscObservedAt() int64 {
+	if x != nil {
+		return x.DtscObservedAt
+	}
+	return 0
+}
+
+func (x *PeerStreamEdge) GetSourceObservedAt() int64 {
+	if x != nil {
+		return x.SourceObservedAt
+	}
+	return 0
+}
+
+// PeerHeartbeat carried session liveness and capability exchange. Peer liveness
+// is now the gRPC keepalive on the PeerChannel itself, so nothing sends this and
+// the receiver consumes it without storing it; the arm stays for peers on older
+// code. Its geo fields never reach a consumer — federation events leave remote
+// coordinates NULL rather than stamping an unknown position.
 type PeerHeartbeat struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	ProtocolVersion  uint32                 `protobuf:"varint,1,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
@@ -2278,9 +2497,9 @@ func (x *PeerHeartbeat) GetFoghornRegion() string {
 	return ""
 }
 
-// CapacitySummary advertises cluster-wide aggregate capacity for dCDN
-// capacity trading and marketplace bidding. Not on the per-viewer hot path;
-// used for cluster-level routing decisions (which cluster should a tenant use?).
+// CapacitySummary advertises cluster-wide aggregate capacity for dCDN capacity
+// trading and marketplace bidding. No sender or consumer exists yet; the arm is
+// consumed silently alongside the retired telemetry payloads.
 type CapacitySummary struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	TotalBandwidth     uint64                 `protobuf:"varint,1,opt,name=total_bandwidth,json=totalBandwidth,proto3" json:"total_bandwidth,omitempty"`             // Total cluster bandwidth (bytes/sec)
@@ -3265,7 +3484,7 @@ var File_foghorn_federation_proto protoreflect.FileDescriptor
 
 const file_foghorn_federation_proto_rawDesc = "" +
 	"\n" +
-	"\x18foghorn_federation.proto\x12\x12foghorn_federation\"\xef\x01\n" +
+	"\x18foghorn_federation.proto\x12\x12foghorn_federation\x1a\x15media_placement.proto\"\xef\x01\n" +
 	"\x12QueryStreamRequest\x12\x1f\n" +
 	"\vstream_name\x18\x01 \x01(\tR\n" +
 	"streamName\x12\x1d\n" +
@@ -3280,7 +3499,7 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\n" +
 	"candidates\x18\x01 \x03(\v2!.foghorn_federation.EdgeCandidateR\n" +
 	"candidates\x12*\n" +
-	"\x11origin_cluster_id\x18\x02 \x01(\tR\x0foriginClusterId\"\xa3\x03\n" +
+	"\x11origin_cluster_id\x18\x02 \x01(\tR\x0foriginClusterId\"\x98\x04\n" +
 	"\rEdgeCandidate\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x19\n" +
 	"\bbase_url\x18\x02 \x01(\tR\abaseUrl\x12\x19\n" +
@@ -3297,7 +3516,11 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"cpuPercent\x12!\n" +
 	"\fbw_available\x18\f \x01(\x04R\vbwAvailable\x12\x19\n" +
 	"\bram_used\x18\r \x01(\x04R\aramUsed\x12\x17\n" +
-	"\aram_max\x18\x0e \x01(\x04R\x06ramMax\"\xe7\x01\n" +
+	"\aram_max\x18\x0e \x01(\x04R\x06ramMax\x12+\n" +
+	"\x11source_generation\x18\x0f \x01(\tR\x10sourceGeneration\x12'\n" +
+	"\x0fsource_revision\x18\x10 \x01(\x03R\x0esourceRevision\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x11 \x01(\tR\tclusterId\"\xae\x03\n" +
 	"\x16OriginPullNotification\x12\x1f\n" +
 	"\vstream_name\x18\x01 \x01(\tR\n" +
 	"streamName\x12$\n" +
@@ -3307,11 +3530,30 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"destNodeId\x12\x1f\n" +
 	"\vest_viewers\x18\x05 \x01(\rR\n" +
 	"estViewers\x12\x1b\n" +
-	"\ttenant_id\x18\x06 \x01(\tR\btenantId\"^\n" +
+	"\ttenant_id\x18\x06 \x01(\tR\btenantId\x12+\n" +
+	"\x11source_generation\x18\a \x01(\tR\x10sourceGeneration\x12'\n" +
+	"\x0fsource_revision\x18\b \x01(\x03R\x0esourceRevision\x12\x1d\n" +
+	"\n" +
+	"attempt_id\x18\t \x01(\tR\tattemptId\x12$\n" +
+	"\x0esource_cell_id\x18\n" +
+	" \x01(\tR\fsourceCellId\x12*\n" +
+	"\x11source_cluster_id\x18\v \x01(\tR\x0fsourceClusterId\"\xb2\x03\n" +
 	"\rOriginPullAck\x12\x1a\n" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\x12\x16\n" +
 	"\x06reason\x18\x02 \x01(\tR\x06reason\x12\x19\n" +
-	"\bdtsc_url\x18\x03 \x01(\tR\adtscUrl\"\xed\x01\n" +
+	"\bdtsc_url\x18\x03 \x01(\tR\adtscUrl\x12+\n" +
+	"\x11source_generation\x18\x04 \x01(\tR\x10sourceGeneration\x12'\n" +
+	"\x0fsource_revision\x18\x05 \x01(\x03R\x0esourceRevision\x12\x1d\n" +
+	"\n" +
+	"attempt_id\x18\x06 \x01(\tR\tattemptId\x12$\n" +
+	"\x0esource_node_id\x18\a \x01(\tR\fsourceNodeId\x12\x1b\n" +
+	"\ttenant_id\x18\b \x01(\tR\btenantId\x12&\n" +
+	"\x0fdest_cluster_id\x18\t \x01(\tR\rdestClusterId\x12 \n" +
+	"\fdest_node_id\x18\n" +
+	" \x01(\tR\n" +
+	"destNodeId\x12$\n" +
+	"\x0esource_cell_id\x18\v \x01(\tR\fsourceCellId\x12*\n" +
+	"\x11source_cluster_id\x18\f \x01(\tR\x0fsourceClusterId\"\xed\x01\n" +
 	"\x16PrepareArtifactRequest\x12\x1f\n" +
 	"\vartifact_id\x18\x01 \x01(\tR\n" +
 	"artifactId\x12\x1b\n" +
@@ -3407,7 +3649,7 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\aram_max\x18\b \x01(\x04R\x06ramMax\x12\x17\n" +
 	"\ageo_lat\x18\t \x01(\x01R\x06geoLat\x12\x17\n" +
 	"\ageo_lon\x18\n" +
-	" \x01(\x01R\x06geoLon\"\xbf\x01\n" +
+	" \x01(\x01R\x06geoLon\"\xe7\x01\n" +
 	"\x10ReplicationEvent\x12\x1f\n" +
 	"\vstream_name\x18\x01 \x01(\tR\n" +
 	"streamName\x12\x17\n" +
@@ -3416,7 +3658,8 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"cluster_id\x18\x03 \x01(\tR\tclusterId\x12\x19\n" +
 	"\bbase_url\x18\x04 \x01(\tR\abaseUrl\x12\x19\n" +
 	"\bdtsc_url\x18\x05 \x01(\tR\adtscUrl\x12\x1c\n" +
-	"\tavailable\x18\x06 \x01(\bR\tavailable\"j\n" +
+	"\tavailable\x18\x06 \x01(\bR\tavailable\x12&\n" +
+	"\x0fcontrol_cell_id\x18\a \x01(\tR\rcontrolCellId\"j\n" +
 	"\x12ClusterEdgeSummary\x126\n" +
 	"\x05edges\x18\x01 \x03(\v2 .foghorn_federation.EdgeSnapshotR\x05edges\x12\x1c\n" +
 	"\ttimestamp\x18\x02 \x01(\x03R\ttimestamp\"\xb5\x02\n" +
@@ -3447,7 +3690,7 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\ageo_lat\x18\b \x01(\x01R\x06geoLat\x12\x17\n" +
 	"\ageo_lon\x18\t \x01(\x01R\x06geoLon\x12\x1b\n" +
 	"\ttenant_id\x18\n" +
-	" \x01(\tR\btenantId\"\xc8\x02\n" +
+	" \x01(\tR\btenantId\"\xf0\x02\n" +
 	"\x13StreamAdvertisement\x12#\n" +
 	"\rinternal_name\x18\x01 \x01(\tR\finternalName\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x1f\n" +
@@ -3457,7 +3700,8 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\ais_live\x18\x05 \x01(\bR\x06isLive\x128\n" +
 	"\x05edges\x18\x06 \x03(\v2\".foghorn_federation.PeerStreamEdgeR\x05edges\x12\x1c\n" +
 	"\ttimestamp\x18\a \x01(\x03R\ttimestamp\x121\n" +
-	"\x15dvr_recording_node_id\x18\b \x01(\tR\x12dvrRecordingNodeId\"\xec\x02\n" +
+	"\x15dvr_recording_node_id\x18\b \x01(\tR\x12dvrRecordingNodeId\x12&\n" +
+	"\x0fcontrol_cell_id\x18\t \x01(\tR\rcontrolCellId\"\xb9\x04\n" +
 	"\x0ePeerStreamEdge\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x19\n" +
 	"\bbase_url\x18\x02 \x01(\tR\abaseUrl\x12\x19\n" +
@@ -3472,7 +3716,13 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\fbuffer_state\x18\n" +
 	" \x01(\tR\vbufferState\x12\x19\n" +
 	"\bram_used\x18\v \x01(\x04R\aramUsed\x12\x17\n" +
-	"\aram_max\x18\f \x01(\x04R\x06ramMax\"\x89\x03\n" +
+	"\aram_max\x18\f \x01(\x04R\x06ramMax\x12+\n" +
+	"\x11source_generation\x18\r \x01(\tR\x10sourceGeneration\x12'\n" +
+	"\x0fsource_revision\x18\x0e \x01(\x03R\x0esourceRevision\x12\x1d\n" +
+	"\n" +
+	"cluster_id\x18\x0f \x01(\tR\tclusterId\x12(\n" +
+	"\x10dtsc_observed_at\x18\x10 \x01(\x03R\x0edtscObservedAt\x12,\n" +
+	"\x12source_observed_at\x18\x11 \x01(\x03R\x10sourceObservedAt\"\x89\x03\n" +
 	"\rPeerHeartbeat\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12!\n" +
 	"\fstream_count\x18\x02 \x01(\rR\vstreamCount\x12,\n" +
@@ -3564,8 +3814,11 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\x06target\"R\n" +
 	"\x1cDeleteStorageObjectsResponse\x12\x1a\n" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\x12\x16\n" +
-	"\x06reason\x18\x02 \x01(\tR\x06reason2\xbf\t\n" +
-	"\x11FoghornFederation\x12^\n" +
+	"\x06reason\x18\x02 \x01(\tR\x06reason2\xff\n" +
+	"\n" +
+	"\x11FoghornFederation\x12b\n" +
+	"\x18QueryPlacementCandidates\x12\x1f.media_placement.CandidateQuery\x1a%.media_placement.CandidateObservation\x12Z\n" +
+	"\x10PreparePlacement\x12(.media_placement.PreparePlacementRequest\x1a\x1c.media_placement.Preparation\x12^\n" +
 	"\vQueryStream\x12&.foghorn_federation.QueryStreamRequest\x1a'.foghorn_federation.QueryStreamResponse\x12a\n" +
 	"\x10NotifyOriginPull\x12*.foghorn_federation.OriginPullNotification\x1a!.foghorn_federation.OriginPullAck\x12j\n" +
 	"\x0fPrepareArtifact\x12*.foghorn_federation.PrepareArtifactRequest\x1a+.foghorn_federation.PrepareArtifactResponse\x12a\n" +
@@ -3593,42 +3846,46 @@ func file_foghorn_federation_proto_rawDescGZIP() []byte {
 var file_foghorn_federation_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
 var file_foghorn_federation_proto_msgTypes = make([]protoimpl.MessageInfo, 35)
 var file_foghorn_federation_proto_goTypes = []any{
-	(MintStorageURLsRequest_Operation)(0),   // 0: foghorn_federation.MintStorageURLsRequest.Operation
-	(*QueryStreamRequest)(nil),              // 1: foghorn_federation.QueryStreamRequest
-	(*QueryStreamResponse)(nil),             // 2: foghorn_federation.QueryStreamResponse
-	(*EdgeCandidate)(nil),                   // 3: foghorn_federation.EdgeCandidate
-	(*OriginPullNotification)(nil),          // 4: foghorn_federation.OriginPullNotification
-	(*OriginPullAck)(nil),                   // 5: foghorn_federation.OriginPullAck
-	(*PrepareArtifactRequest)(nil),          // 6: foghorn_federation.PrepareArtifactRequest
-	(*PrepareArtifactResponse)(nil),         // 7: foghorn_federation.PrepareArtifactResponse
-	(*RemoteClipRequest)(nil),               // 8: foghorn_federation.RemoteClipRequest
-	(*RemoteClipResponse)(nil),              // 9: foghorn_federation.RemoteClipResponse
-	(*RemoteDVRRequest)(nil),                // 10: foghorn_federation.RemoteDVRRequest
-	(*RemoteDVRResponse)(nil),               // 11: foghorn_federation.RemoteDVRResponse
-	(*PeerMessage)(nil),                     // 12: foghorn_federation.PeerMessage
-	(*StreamLifecycleEvent)(nil),            // 13: foghorn_federation.StreamLifecycleEvent
-	(*EdgeTelemetry)(nil),                   // 14: foghorn_federation.EdgeTelemetry
-	(*ReplicationEvent)(nil),                // 15: foghorn_federation.ReplicationEvent
-	(*ClusterEdgeSummary)(nil),              // 16: foghorn_federation.ClusterEdgeSummary
-	(*EdgeSnapshot)(nil),                    // 17: foghorn_federation.EdgeSnapshot
-	(*ArtifactAdvertisement)(nil),           // 18: foghorn_federation.ArtifactAdvertisement
-	(*ArtifactLocation)(nil),                // 19: foghorn_federation.ArtifactLocation
-	(*StreamAdvertisement)(nil),             // 20: foghorn_federation.StreamAdvertisement
-	(*PeerStreamEdge)(nil),                  // 21: foghorn_federation.PeerStreamEdge
-	(*PeerHeartbeat)(nil),                   // 22: foghorn_federation.PeerHeartbeat
-	(*CapacitySummary)(nil),                 // 23: foghorn_federation.CapacitySummary
-	(*ListTenantArtifactsRequest)(nil),      // 24: foghorn_federation.ListTenantArtifactsRequest
-	(*ListTenantArtifactsResponse)(nil),     // 25: foghorn_federation.ListTenantArtifactsResponse
-	(*ArtifactMetadata)(nil),                // 26: foghorn_federation.ArtifactMetadata
-	(*MigrateArtifactMetadataRequest)(nil),  // 27: foghorn_federation.MigrateArtifactMetadataRequest
-	(*MigrateArtifactMetadataResponse)(nil), // 28: foghorn_federation.MigrateArtifactMetadataResponse
-	(*ForwardArtifactCommandRequest)(nil),   // 29: foghorn_federation.ForwardArtifactCommandRequest
-	(*ForwardArtifactCommandResponse)(nil),  // 30: foghorn_federation.ForwardArtifactCommandResponse
-	(*MintStorageURLsRequest)(nil),          // 31: foghorn_federation.MintStorageURLsRequest
-	(*MintStorageURLsResponse)(nil),         // 32: foghorn_federation.MintStorageURLsResponse
-	(*DeleteStorageObjectsRequest)(nil),     // 33: foghorn_federation.DeleteStorageObjectsRequest
-	(*DeleteStorageObjectsResponse)(nil),    // 34: foghorn_federation.DeleteStorageObjectsResponse
-	nil,                                     // 35: foghorn_federation.PrepareArtifactResponse.SegmentUrlsEntry
+	(MintStorageURLsRequest_Operation)(0),           // 0: foghorn_federation.MintStorageURLsRequest.Operation
+	(*QueryStreamRequest)(nil),                      // 1: foghorn_federation.QueryStreamRequest
+	(*QueryStreamResponse)(nil),                     // 2: foghorn_federation.QueryStreamResponse
+	(*EdgeCandidate)(nil),                           // 3: foghorn_federation.EdgeCandidate
+	(*OriginPullNotification)(nil),                  // 4: foghorn_federation.OriginPullNotification
+	(*OriginPullAck)(nil),                           // 5: foghorn_federation.OriginPullAck
+	(*PrepareArtifactRequest)(nil),                  // 6: foghorn_federation.PrepareArtifactRequest
+	(*PrepareArtifactResponse)(nil),                 // 7: foghorn_federation.PrepareArtifactResponse
+	(*RemoteClipRequest)(nil),                       // 8: foghorn_federation.RemoteClipRequest
+	(*RemoteClipResponse)(nil),                      // 9: foghorn_federation.RemoteClipResponse
+	(*RemoteDVRRequest)(nil),                        // 10: foghorn_federation.RemoteDVRRequest
+	(*RemoteDVRResponse)(nil),                       // 11: foghorn_federation.RemoteDVRResponse
+	(*PeerMessage)(nil),                             // 12: foghorn_federation.PeerMessage
+	(*StreamLifecycleEvent)(nil),                    // 13: foghorn_federation.StreamLifecycleEvent
+	(*EdgeTelemetry)(nil),                           // 14: foghorn_federation.EdgeTelemetry
+	(*ReplicationEvent)(nil),                        // 15: foghorn_federation.ReplicationEvent
+	(*ClusterEdgeSummary)(nil),                      // 16: foghorn_federation.ClusterEdgeSummary
+	(*EdgeSnapshot)(nil),                            // 17: foghorn_federation.EdgeSnapshot
+	(*ArtifactAdvertisement)(nil),                   // 18: foghorn_federation.ArtifactAdvertisement
+	(*ArtifactLocation)(nil),                        // 19: foghorn_federation.ArtifactLocation
+	(*StreamAdvertisement)(nil),                     // 20: foghorn_federation.StreamAdvertisement
+	(*PeerStreamEdge)(nil),                          // 21: foghorn_federation.PeerStreamEdge
+	(*PeerHeartbeat)(nil),                           // 22: foghorn_federation.PeerHeartbeat
+	(*CapacitySummary)(nil),                         // 23: foghorn_federation.CapacitySummary
+	(*ListTenantArtifactsRequest)(nil),              // 24: foghorn_federation.ListTenantArtifactsRequest
+	(*ListTenantArtifactsResponse)(nil),             // 25: foghorn_federation.ListTenantArtifactsResponse
+	(*ArtifactMetadata)(nil),                        // 26: foghorn_federation.ArtifactMetadata
+	(*MigrateArtifactMetadataRequest)(nil),          // 27: foghorn_federation.MigrateArtifactMetadataRequest
+	(*MigrateArtifactMetadataResponse)(nil),         // 28: foghorn_federation.MigrateArtifactMetadataResponse
+	(*ForwardArtifactCommandRequest)(nil),           // 29: foghorn_federation.ForwardArtifactCommandRequest
+	(*ForwardArtifactCommandResponse)(nil),          // 30: foghorn_federation.ForwardArtifactCommandResponse
+	(*MintStorageURLsRequest)(nil),                  // 31: foghorn_federation.MintStorageURLsRequest
+	(*MintStorageURLsResponse)(nil),                 // 32: foghorn_federation.MintStorageURLsResponse
+	(*DeleteStorageObjectsRequest)(nil),             // 33: foghorn_federation.DeleteStorageObjectsRequest
+	(*DeleteStorageObjectsResponse)(nil),            // 34: foghorn_federation.DeleteStorageObjectsResponse
+	nil,                                             // 35: foghorn_federation.PrepareArtifactResponse.SegmentUrlsEntry
+	(*media_placement.CandidateQuery)(nil),          // 36: media_placement.CandidateQuery
+	(*media_placement.PreparePlacementRequest)(nil), // 37: media_placement.PreparePlacementRequest
+	(*media_placement.CandidateObservation)(nil),    // 38: media_placement.CandidateObservation
+	(*media_placement.Preparation)(nil),             // 39: media_placement.Preparation
 }
 var file_foghorn_federation_proto_depIdxs = []int32{
 	3,  // 0: foghorn_federation.QueryStreamResponse.candidates:type_name -> foghorn_federation.EdgeCandidate
@@ -3646,30 +3903,34 @@ var file_foghorn_federation_proto_depIdxs = []int32{
 	21, // 12: foghorn_federation.StreamAdvertisement.edges:type_name -> foghorn_federation.PeerStreamEdge
 	26, // 13: foghorn_federation.ListTenantArtifactsResponse.artifacts:type_name -> foghorn_federation.ArtifactMetadata
 	0,  // 14: foghorn_federation.MintStorageURLsRequest.op:type_name -> foghorn_federation.MintStorageURLsRequest.Operation
-	1,  // 15: foghorn_federation.FoghornFederation.QueryStream:input_type -> foghorn_federation.QueryStreamRequest
-	4,  // 16: foghorn_federation.FoghornFederation.NotifyOriginPull:input_type -> foghorn_federation.OriginPullNotification
-	6,  // 17: foghorn_federation.FoghornFederation.PrepareArtifact:input_type -> foghorn_federation.PrepareArtifactRequest
-	8,  // 18: foghorn_federation.FoghornFederation.CreateRemoteClip:input_type -> foghorn_federation.RemoteClipRequest
-	10, // 19: foghorn_federation.FoghornFederation.CreateRemoteDVR:input_type -> foghorn_federation.RemoteDVRRequest
-	12, // 20: foghorn_federation.FoghornFederation.PeerChannel:input_type -> foghorn_federation.PeerMessage
-	24, // 21: foghorn_federation.FoghornFederation.ListTenantArtifacts:input_type -> foghorn_federation.ListTenantArtifactsRequest
-	27, // 22: foghorn_federation.FoghornFederation.MigrateArtifactMetadata:input_type -> foghorn_federation.MigrateArtifactMetadataRequest
-	29, // 23: foghorn_federation.FoghornFederation.ForwardArtifactCommand:input_type -> foghorn_federation.ForwardArtifactCommandRequest
-	31, // 24: foghorn_federation.FoghornFederation.MintStorageURLs:input_type -> foghorn_federation.MintStorageURLsRequest
-	33, // 25: foghorn_federation.FoghornFederation.DeleteStorageObjects:input_type -> foghorn_federation.DeleteStorageObjectsRequest
-	2,  // 26: foghorn_federation.FoghornFederation.QueryStream:output_type -> foghorn_federation.QueryStreamResponse
-	5,  // 27: foghorn_federation.FoghornFederation.NotifyOriginPull:output_type -> foghorn_federation.OriginPullAck
-	7,  // 28: foghorn_federation.FoghornFederation.PrepareArtifact:output_type -> foghorn_federation.PrepareArtifactResponse
-	9,  // 29: foghorn_federation.FoghornFederation.CreateRemoteClip:output_type -> foghorn_federation.RemoteClipResponse
-	11, // 30: foghorn_federation.FoghornFederation.CreateRemoteDVR:output_type -> foghorn_federation.RemoteDVRResponse
-	12, // 31: foghorn_federation.FoghornFederation.PeerChannel:output_type -> foghorn_federation.PeerMessage
-	25, // 32: foghorn_federation.FoghornFederation.ListTenantArtifacts:output_type -> foghorn_federation.ListTenantArtifactsResponse
-	28, // 33: foghorn_federation.FoghornFederation.MigrateArtifactMetadata:output_type -> foghorn_federation.MigrateArtifactMetadataResponse
-	30, // 34: foghorn_federation.FoghornFederation.ForwardArtifactCommand:output_type -> foghorn_federation.ForwardArtifactCommandResponse
-	32, // 35: foghorn_federation.FoghornFederation.MintStorageURLs:output_type -> foghorn_federation.MintStorageURLsResponse
-	34, // 36: foghorn_federation.FoghornFederation.DeleteStorageObjects:output_type -> foghorn_federation.DeleteStorageObjectsResponse
-	26, // [26:37] is the sub-list for method output_type
-	15, // [15:26] is the sub-list for method input_type
+	36, // 15: foghorn_federation.FoghornFederation.QueryPlacementCandidates:input_type -> media_placement.CandidateQuery
+	37, // 16: foghorn_federation.FoghornFederation.PreparePlacement:input_type -> media_placement.PreparePlacementRequest
+	1,  // 17: foghorn_federation.FoghornFederation.QueryStream:input_type -> foghorn_federation.QueryStreamRequest
+	4,  // 18: foghorn_federation.FoghornFederation.NotifyOriginPull:input_type -> foghorn_federation.OriginPullNotification
+	6,  // 19: foghorn_federation.FoghornFederation.PrepareArtifact:input_type -> foghorn_federation.PrepareArtifactRequest
+	8,  // 20: foghorn_federation.FoghornFederation.CreateRemoteClip:input_type -> foghorn_federation.RemoteClipRequest
+	10, // 21: foghorn_federation.FoghornFederation.CreateRemoteDVR:input_type -> foghorn_federation.RemoteDVRRequest
+	12, // 22: foghorn_federation.FoghornFederation.PeerChannel:input_type -> foghorn_federation.PeerMessage
+	24, // 23: foghorn_federation.FoghornFederation.ListTenantArtifacts:input_type -> foghorn_federation.ListTenantArtifactsRequest
+	27, // 24: foghorn_federation.FoghornFederation.MigrateArtifactMetadata:input_type -> foghorn_federation.MigrateArtifactMetadataRequest
+	29, // 25: foghorn_federation.FoghornFederation.ForwardArtifactCommand:input_type -> foghorn_federation.ForwardArtifactCommandRequest
+	31, // 26: foghorn_federation.FoghornFederation.MintStorageURLs:input_type -> foghorn_federation.MintStorageURLsRequest
+	33, // 27: foghorn_federation.FoghornFederation.DeleteStorageObjects:input_type -> foghorn_federation.DeleteStorageObjectsRequest
+	38, // 28: foghorn_federation.FoghornFederation.QueryPlacementCandidates:output_type -> media_placement.CandidateObservation
+	39, // 29: foghorn_federation.FoghornFederation.PreparePlacement:output_type -> media_placement.Preparation
+	2,  // 30: foghorn_federation.FoghornFederation.QueryStream:output_type -> foghorn_federation.QueryStreamResponse
+	5,  // 31: foghorn_federation.FoghornFederation.NotifyOriginPull:output_type -> foghorn_federation.OriginPullAck
+	7,  // 32: foghorn_federation.FoghornFederation.PrepareArtifact:output_type -> foghorn_federation.PrepareArtifactResponse
+	9,  // 33: foghorn_federation.FoghornFederation.CreateRemoteClip:output_type -> foghorn_federation.RemoteClipResponse
+	11, // 34: foghorn_federation.FoghornFederation.CreateRemoteDVR:output_type -> foghorn_federation.RemoteDVRResponse
+	12, // 35: foghorn_federation.FoghornFederation.PeerChannel:output_type -> foghorn_federation.PeerMessage
+	25, // 36: foghorn_federation.FoghornFederation.ListTenantArtifacts:output_type -> foghorn_federation.ListTenantArtifactsResponse
+	28, // 37: foghorn_federation.FoghornFederation.MigrateArtifactMetadata:output_type -> foghorn_federation.MigrateArtifactMetadataResponse
+	30, // 38: foghorn_federation.FoghornFederation.ForwardArtifactCommand:output_type -> foghorn_federation.ForwardArtifactCommandResponse
+	32, // 39: foghorn_federation.FoghornFederation.MintStorageURLs:output_type -> foghorn_federation.MintStorageURLsResponse
+	34, // 40: foghorn_federation.FoghornFederation.DeleteStorageObjects:output_type -> foghorn_federation.DeleteStorageObjectsResponse
+	28, // [28:41] is the sub-list for method output_type
+	15, // [15:28] is the sub-list for method input_type
 	15, // [15:15] is the sub-list for extension type_name
 	15, // [15:15] is the sub-list for extension extendee
 	0,  // [0:15] is the sub-list for field type_name

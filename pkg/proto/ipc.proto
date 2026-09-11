@@ -380,6 +380,25 @@ message ApplyManagedStream {
   string ingest_mode = 7;         // "mist_native" today
   string stream_id = 8;           // commodore.streams.id; for logging/correlation
   string tenant_id = 9;
+  // Required for placement-enabled sources; authenticated control-channel
+  // attestation, not permission for an unauthenticated caller to start media.
+  ManagedStreamAdmission placement_admission = 10;
+}
+
+message ManagedStreamAdmission {
+  uint32 schema_version = 1;
+  string target_node_id = 2;
+  string target_cluster_id = 3;
+  int64 object_authority_version = 4;
+  int64 tenant_authority_version = 5;
+  uint64 policy_revision = 6;
+  uint64 parent_revision = 7;
+  string policy_digest = 8;
+  // SHA-256 of domain-separated deterministic ApplyManagedStream bytes with
+  // placement_admission cleared. Binds source, identity, flags and tags.
+  bytes command_sha256 = 9;
+  google.protobuf.Timestamp issued_at = 10;
+  google.protobuf.Timestamp expires_at = 11;
 }
 
 // RetractManagedStream is sent by Foghorn to instruct Helmsman to remove a
@@ -390,6 +409,22 @@ message ApplyManagedStream {
 message RetractManagedStream {
   string name = 1;                // bare Mist stream name
   string stream_id = 2;           // commodore.streams.id; for logging/correlation
+  // Retires only the exact admitted command; cannot delete a newer source.
+  ManagedStreamRetraction placement_retraction = 3;
+}
+
+message ManagedStreamRetraction {
+  string target_node_id = 1;
+  string target_cluster_id = 2;
+  string tenant_id = 3;
+  int64 object_authority_version = 4;
+  int64 tenant_authority_version = 5;
+  bytes command_sha256 = 6;
+  google.protobuf.Timestamp issued_at = 7;
+  google.protobuf.Timestamp expires_at = 8;
+  uint64 policy_revision = 9;
+  uint64 parent_revision = 10;
+  string policy_digest = 11;
 }
 
 // DrainStreamRequest is sent by Foghorn when a new publisher session replaces
@@ -695,6 +730,11 @@ message AppliedManagedStream {
   bool   always_on = 3;
   string ingest_mode = 4;
   string stream_id = 5;     // commodore.streams.id; required when known
+  // Admission whose exact configuration was applied. Does not attest first media.
+  ManagedStreamAdmission placement_admission = 6;
+  string tenant_id = 7;
+  // Retained configuration needs cleanup and must not verify an active Apply.
+  bool placement_retired = 8;
 }
 
 // NodeFingerprint carries stable identity hints from Helmsman.
@@ -837,6 +877,7 @@ message MistTrigger {
     // this carries stable target identity and never carries a destination URI
     // or Mist log text, so it is safe for the durable trigger WAL and analytics.
     PushTargetStatusReport restream_status = 45;
+    ConnectionPlayTrigger connection_play = 46;
   }
 
   optional string cluster_id = 33; // Emitting cluster identifier (source_cluster_id in envelope v2 terms)
@@ -1553,6 +1594,21 @@ message PushRewriteTrigger {
   int64 pid = 18;
   string trigger_uuid = 19;
   int64 trigger_unix_millis = 20;
+
+  // Connector name Mist itself reports as the 4th PUSH_REWRITE payload line
+  // (RTMP, TSSRT, WebRTC, DTSC, ...). Unlike push_url, the publisher cannot
+  // choose it; placement ingest admission derives the protocol from this and
+  // never from the URL scheme. Empty when an older Mist sent three lines.
+  string observed_connector = 21;
+}
+
+// ConnectionPlayTrigger is Mist's per-connection CONN_PLAY admission hook.
+// It carries observations, not an authenticated identity for the remote peer.
+message ConnectionPlayTrigger {
+  string stream_name = 1;
+  string host = 2;
+  string connector = 3;
+  string request_url = 4;
 }
 
 // ViewerResolveTrigger represents a viewer-side resolve of a playback request.
@@ -1741,6 +1797,8 @@ message StreamBufferTrigger {
   optional string mist_issues = 11;         // health.issues (Mist's issue string, e.g. "HLSnoaudio!")
   optional int32 max_keepaway_ms = 12;      // health.maxkeepaway (max viewer distance from live)
   optional string stream_id = 13;          // Enriched by Foghorn (UUID)
+  // X-PID identifies the emitting buffer process, not a publisher connector.
+  optional int64 buffer_pid = 14;
 }
 
 message StreamEndTrigger {
@@ -1883,6 +1941,7 @@ message StreamLifecycleUpdate {
   // reconciliation. Ordinary lifecycle telemetry leaves these unset.
   optional string ingest_generation = 39;
   optional int64 ingest_connector_pid = 40;
+  MistStreamProcessObservation process_observation = 41;
 
   // Buffer health metrics (from health blob - top level fields)
   optional uint32 buffer_ms = 28;          // health.buffer - available buffer in ms
@@ -1902,6 +1961,11 @@ message StreamLifecycleUpdate {
   optional uint32 video_buffer_ms = 36;
   optional uint32 video_jitter_ms = 37;
   optional string stream_id = 38;          // Enriched by Foghorn (UUID); REQUIRED for analytics joins
+  // When Helmsman sampled Mist's API for buffer_state. A periodic report is a
+  // level observation; STREAM_BUFFER triggers are edges. Foghorn keeps whichever
+  // is newer, so a report cannot regress a fresher transition and a missed
+  // transition heals on the next report.
+  optional int64 buffer_sampled_unix_millis = 42;
 }
 
 // Exact local-runtime liveness result. This is a separate oneof payload so an
@@ -1911,6 +1975,22 @@ message IngestRuntimeAbsent {
   StreamLifecycleUpdate lifecycle = 1;
   string ingest_generation = 2;
   int64 ingest_connector_pid = 3;
+}
+
+// Raw active_streams observations, not an admission or first-media attestation.
+// The API read window belongs to the reporting node's clock. PID reuse and
+// retained buffer contents prevent these fields alone from proving a generation.
+message MistStreamProcessObservation {
+  string runtime_name = 1;
+  optional int64 buffer_pid = 2;
+  // False means missing or malformed, not an authoritative empty inventory.
+  bool source_pids_known = 3;
+  repeated int64 source_pids = 4;
+  optional uint64 first_media_ms = 5;
+  optional uint64 last_media_ms = 6;
+  // Zero means the read window was not captured; never substitute send time.
+  int64 read_started_unix_millis = 7;
+  int64 read_completed_unix_millis = 8;
 }
 
 message ClientLifecycleUpdate {
@@ -2463,7 +2543,7 @@ enum FederationEventType {
   ORIGIN_PULL_ARRANGED = 1;         // arrangeOriginPull() succeeded; DTSC pull initiated
   ORIGIN_PULL_COMPLETED = 2;        // Replicated stream detected as live on local edge
   ORIGIN_PULL_FAILED = 3;           // arrangeOriginPull() failed (RPC error, rejected, no capacity)
-  FEDERATION_QUERY = 4;             // queryStreamFanOut() completed
+  FEDERATION_QUERY = 4;             // a cross-cluster QueryStream fan-out completed
   PEER_CONNECTED = 5;               // PeerChannel established to remote cluster
   PEER_DISCONNECTED = 6;            // PeerChannel lost (error or missed heartbeats)
   LEADER_ACQUIRED = 7;              // Redis leader lease acquired for PeerManager

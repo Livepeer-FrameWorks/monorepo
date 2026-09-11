@@ -8,11 +8,18 @@ import "common.proto";
 import "shared.proto";
 import "foghorn_control.proto";
 import "media_authority.proto";
+import "media_placement.proto";
 import "google/protobuf/timestamp.proto";
 
 // FOGHORN CONTROL PLANE SERVICES
 // These are control-plane operations exposed by Foghorn for Commodore to call.
 // Media-plane operations (MistServer control, stream state) remain in ipc.proto.
+
+// Read-only management observations, separate from media admission and preparation.
+service MediaPlacementControlService {
+  rpc ObserveMediaPlacementCapacity(media_placement.CapacityPreviewQuery) returns (media_placement.CapacityPreviewObservation);
+  rpc ObserveMediaPlacementPushSource(media_placement.PushSourcePreviewQuery) returns (media_placement.PushSourcePreviewObservation);
+}
 
 // ClipService handles clip creation and management
 service ClipControlService {
@@ -164,6 +171,19 @@ message ApplyMediaAuthorityResponse {
   string authority_id = 3;
   uint64 authority_version = 4;
   bool refresh_due = 5;
+  // Cell-level placement capability observed by the acknowledging replica at
+  // acknowledgement time. Absent means the cell does not attest capability.
+  MediaCellPlacementCapability placement_capability = 6;
+}
+
+// MediaCellPlacementCapability is a Foghorn cell's attestation that every live
+// control replica in the cell reads the listed authority schemas and enforces
+// placement policy. Commodore gates the first policy-bearing (schema 2) tenant
+// authority on every target cell attesting; it is never permission by itself.
+message MediaCellPlacementCapability {
+  repeated uint32 supported_schema_versions = 1;
+  bool enforcement_ready = 2;
+  uint32 live_replicas = 3;
 }
 
 message InvalidatePlaybackAuthRequest {

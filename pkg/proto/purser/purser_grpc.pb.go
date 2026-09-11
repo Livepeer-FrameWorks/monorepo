@@ -8,6 +8,7 @@ package purserpb
 
 import (
 	context "context"
+	media_placement "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	shared "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
@@ -1620,6 +1621,7 @@ var UsageService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
+	ClusterPricingService_GetMediaPlacementQuote_FullMethodName         = "/purser.ClusterPricingService/GetMediaPlacementQuote"
 	ClusterPricingService_GetClusterPricing_FullMethodName              = "/purser.ClusterPricingService/GetClusterPricing"
 	ClusterPricingService_GetClustersPricingBatch_FullMethodName        = "/purser.ClusterPricingService/GetClustersPricingBatch"
 	ClusterPricingService_SetClusterPricing_FullMethodName              = "/purser.ClusterPricingService/SetClusterPricing"
@@ -1637,6 +1639,8 @@ const (
 // ClusterPricingService handles per-cluster pricing configuration
 // Source of truth for cluster billing - Quartermaster has display-only copy
 type ClusterPricingServiceClient interface {
+	// Service-only read of entitled, object/policy-bound comparison evidence.
+	GetMediaPlacementQuote(ctx context.Context, in *media_placement.CommercialQuoteRequest, opts ...grpc.CallOption) (*media_placement.CommercialQuoteResponse, error)
 	// Get pricing config for a cluster
 	GetClusterPricing(ctx context.Context, in *GetClusterPricingRequest, opts ...grpc.CallOption) (*ClusterPricing, error)
 	// Get pricing configs for multiple clusters (batch)
@@ -1662,6 +1666,16 @@ type clusterPricingServiceClient struct {
 
 func NewClusterPricingServiceClient(cc grpc.ClientConnInterface) ClusterPricingServiceClient {
 	return &clusterPricingServiceClient{cc}
+}
+
+func (c *clusterPricingServiceClient) GetMediaPlacementQuote(ctx context.Context, in *media_placement.CommercialQuoteRequest, opts ...grpc.CallOption) (*media_placement.CommercialQuoteResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(media_placement.CommercialQuoteResponse)
+	err := c.cc.Invoke(ctx, ClusterPricingService_GetMediaPlacementQuote_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *clusterPricingServiceClient) GetClusterPricing(ctx context.Context, in *GetClusterPricingRequest, opts ...grpc.CallOption) (*ClusterPricing, error) {
@@ -1751,6 +1765,8 @@ func (c *clusterPricingServiceClient) ListMarketplaceClusterPricings(ctx context
 // ClusterPricingService handles per-cluster pricing configuration
 // Source of truth for cluster billing - Quartermaster has display-only copy
 type ClusterPricingServiceServer interface {
+	// Service-only read of entitled, object/policy-bound comparison evidence.
+	GetMediaPlacementQuote(context.Context, *media_placement.CommercialQuoteRequest) (*media_placement.CommercialQuoteResponse, error)
 	// Get pricing config for a cluster
 	GetClusterPricing(context.Context, *GetClusterPricingRequest) (*ClusterPricing, error)
 	// Get pricing configs for multiple clusters (batch)
@@ -1778,6 +1794,9 @@ type ClusterPricingServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedClusterPricingServiceServer struct{}
 
+func (UnimplementedClusterPricingServiceServer) GetMediaPlacementQuote(context.Context, *media_placement.CommercialQuoteRequest) (*media_placement.CommercialQuoteResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetMediaPlacementQuote not implemented")
+}
 func (UnimplementedClusterPricingServiceServer) GetClusterPricing(context.Context, *GetClusterPricingRequest) (*ClusterPricing, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetClusterPricing not implemented")
 }
@@ -1821,6 +1840,24 @@ func RegisterClusterPricingServiceServer(s grpc.ServiceRegistrar, srv ClusterPri
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&ClusterPricingService_ServiceDesc, srv)
+}
+
+func _ClusterPricingService_GetMediaPlacementQuote_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(media_placement.CommercialQuoteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClusterPricingServiceServer).GetMediaPlacementQuote(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClusterPricingService_GetMediaPlacementQuote_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClusterPricingServiceServer).GetMediaPlacementQuote(ctx, req.(*media_placement.CommercialQuoteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _ClusterPricingService_GetClusterPricing_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -1974,6 +2011,10 @@ var ClusterPricingService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "purser.ClusterPricingService",
 	HandlerType: (*ClusterPricingServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "GetMediaPlacementQuote",
+			Handler:    _ClusterPricingService_GetMediaPlacementQuote_Handler,
+		},
 		{
 			MethodName: "GetClusterPricing",
 			Handler:    _ClusterPricingService_GetClusterPricing_Handler,

@@ -9,6 +9,7 @@ package commodorepb
 import (
 	context "context"
 	foghorn_control "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
+	media_placement "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	shared "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
@@ -68,6 +69,12 @@ const (
 	InternalService_UpdateAssetRetention_FullMethodName               = "/commodore.InternalService/UpdateAssetRetention"
 	InternalService_ResetAssetRetention_FullMethodName                = "/commodore.InternalService/ResetAssetRetention"
 	InternalService_SetStreamRetentionOverrides_FullMethodName        = "/commodore.InternalService/SetStreamRetentionOverrides"
+	InternalService_GetMediaPlacementPolicy_FullMethodName            = "/commodore.InternalService/GetMediaPlacementPolicy"
+	InternalService_GetMediaPlacementOptions_FullMethodName           = "/commodore.InternalService/GetMediaPlacementOptions"
+	InternalService_PreviewMediaPlacement_FullMethodName              = "/commodore.InternalService/PreviewMediaPlacement"
+	InternalService_ReviewMediaPlacementChange_FullMethodName         = "/commodore.InternalService/ReviewMediaPlacementChange"
+	InternalService_ApplyMediaPlacementChange_FullMethodName          = "/commodore.InternalService/ApplyMediaPlacementChange"
+	InternalService_GetMediaPlacementChange_FullMethodName            = "/commodore.InternalService/GetMediaPlacementChange"
 	InternalService_TestPlaybackAccess_FullMethodName                 = "/commodore.InternalService/TestPlaybackAccess"
 	InternalService_RecordPullSourceEvent_FullMethodName              = "/commodore.InternalService/RecordPullSourceEvent"
 	InternalService_ListPullSourceEvents_FullMethodName               = "/commodore.InternalService/ListPullSourceEvents"
@@ -283,6 +290,13 @@ type InternalServiceClient interface {
 	// stream-bound). NULL on a field clears the override and falls back to
 	// the tenant default.
 	SetStreamRetentionOverrides(ctx context.Context, in *SetStreamRetentionOverridesRequest, opts ...grpc.CallOption) (*SetStreamRetentionOverridesResponse, error)
+	// Placement changes are tenant-scoped control operations, not rated media work.
+	GetMediaPlacementPolicy(ctx context.Context, in *media_placement.GetPolicyRequest, opts ...grpc.CallOption) (*media_placement.PolicyState, error)
+	GetMediaPlacementOptions(ctx context.Context, in *media_placement.GetOptionsRequest, opts ...grpc.CallOption) (*media_placement.Options, error)
+	PreviewMediaPlacement(ctx context.Context, in *media_placement.PreviewRequest, opts ...grpc.CallOption) (*media_placement.Preview, error)
+	ReviewMediaPlacementChange(ctx context.Context, in *media_placement.ReviewChangeRequest, opts ...grpc.CallOption) (*media_placement.Review, error)
+	ApplyMediaPlacementChange(ctx context.Context, in *media_placement.ApplyChangeRequest, opts ...grpc.CallOption) (*media_placement.Change, error)
+	GetMediaPlacementChange(ctx context.Context, in *media_placement.GetChangeRequest, opts ...grpc.CallOption) (*media_placement.Change, error)
 	// Dry-run policy evaluation against a caller-supplied JWT or webhook test.
 	// Commodore validates tenant ownership of the playback target and forwards
 	// to the owning Foghorn — auth logic is NOT reimplemented here.
@@ -771,6 +785,66 @@ func (c *internalServiceClient) SetStreamRetentionOverrides(ctx context.Context,
 	return out, nil
 }
 
+func (c *internalServiceClient) GetMediaPlacementPolicy(ctx context.Context, in *media_placement.GetPolicyRequest, opts ...grpc.CallOption) (*media_placement.PolicyState, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(media_placement.PolicyState)
+	err := c.cc.Invoke(ctx, InternalService_GetMediaPlacementPolicy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) GetMediaPlacementOptions(ctx context.Context, in *media_placement.GetOptionsRequest, opts ...grpc.CallOption) (*media_placement.Options, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(media_placement.Options)
+	err := c.cc.Invoke(ctx, InternalService_GetMediaPlacementOptions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) PreviewMediaPlacement(ctx context.Context, in *media_placement.PreviewRequest, opts ...grpc.CallOption) (*media_placement.Preview, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(media_placement.Preview)
+	err := c.cc.Invoke(ctx, InternalService_PreviewMediaPlacement_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) ReviewMediaPlacementChange(ctx context.Context, in *media_placement.ReviewChangeRequest, opts ...grpc.CallOption) (*media_placement.Review, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(media_placement.Review)
+	err := c.cc.Invoke(ctx, InternalService_ReviewMediaPlacementChange_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) ApplyMediaPlacementChange(ctx context.Context, in *media_placement.ApplyChangeRequest, opts ...grpc.CallOption) (*media_placement.Change, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(media_placement.Change)
+	err := c.cc.Invoke(ctx, InternalService_ApplyMediaPlacementChange_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *internalServiceClient) GetMediaPlacementChange(ctx context.Context, in *media_placement.GetChangeRequest, opts ...grpc.CallOption) (*media_placement.Change, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(media_placement.Change)
+	err := c.cc.Invoke(ctx, InternalService_GetMediaPlacementChange_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *internalServiceClient) TestPlaybackAccess(ctx context.Context, in *foghorn_control.TestPlaybackAccessRequest, opts ...grpc.CallOption) (*foghorn_control.TestPlaybackAccessResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(foghorn_control.TestPlaybackAccessResponse)
@@ -1029,6 +1103,13 @@ type InternalServiceServer interface {
 	// stream-bound). NULL on a field clears the override and falls back to
 	// the tenant default.
 	SetStreamRetentionOverrides(context.Context, *SetStreamRetentionOverridesRequest) (*SetStreamRetentionOverridesResponse, error)
+	// Placement changes are tenant-scoped control operations, not rated media work.
+	GetMediaPlacementPolicy(context.Context, *media_placement.GetPolicyRequest) (*media_placement.PolicyState, error)
+	GetMediaPlacementOptions(context.Context, *media_placement.GetOptionsRequest) (*media_placement.Options, error)
+	PreviewMediaPlacement(context.Context, *media_placement.PreviewRequest) (*media_placement.Preview, error)
+	ReviewMediaPlacementChange(context.Context, *media_placement.ReviewChangeRequest) (*media_placement.Review, error)
+	ApplyMediaPlacementChange(context.Context, *media_placement.ApplyChangeRequest) (*media_placement.Change, error)
+	GetMediaPlacementChange(context.Context, *media_placement.GetChangeRequest) (*media_placement.Change, error)
 	// Dry-run policy evaluation against a caller-supplied JWT or webhook test.
 	// Commodore validates tenant ownership of the playback target and forwards
 	// to the owning Foghorn — auth logic is NOT reimplemented here.
@@ -1194,6 +1275,24 @@ func (UnimplementedInternalServiceServer) ResetAssetRetention(context.Context, *
 }
 func (UnimplementedInternalServiceServer) SetStreamRetentionOverrides(context.Context, *SetStreamRetentionOverridesRequest) (*SetStreamRetentionOverridesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SetStreamRetentionOverrides not implemented")
+}
+func (UnimplementedInternalServiceServer) GetMediaPlacementPolicy(context.Context, *media_placement.GetPolicyRequest) (*media_placement.PolicyState, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetMediaPlacementPolicy not implemented")
+}
+func (UnimplementedInternalServiceServer) GetMediaPlacementOptions(context.Context, *media_placement.GetOptionsRequest) (*media_placement.Options, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetMediaPlacementOptions not implemented")
+}
+func (UnimplementedInternalServiceServer) PreviewMediaPlacement(context.Context, *media_placement.PreviewRequest) (*media_placement.Preview, error) {
+	return nil, status.Error(codes.Unimplemented, "method PreviewMediaPlacement not implemented")
+}
+func (UnimplementedInternalServiceServer) ReviewMediaPlacementChange(context.Context, *media_placement.ReviewChangeRequest) (*media_placement.Review, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReviewMediaPlacementChange not implemented")
+}
+func (UnimplementedInternalServiceServer) ApplyMediaPlacementChange(context.Context, *media_placement.ApplyChangeRequest) (*media_placement.Change, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplyMediaPlacementChange not implemented")
+}
+func (UnimplementedInternalServiceServer) GetMediaPlacementChange(context.Context, *media_placement.GetChangeRequest) (*media_placement.Change, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetMediaPlacementChange not implemented")
 }
 func (UnimplementedInternalServiceServer) TestPlaybackAccess(context.Context, *foghorn_control.TestPlaybackAccessRequest) (*foghorn_control.TestPlaybackAccessResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method TestPlaybackAccess not implemented")
@@ -2059,6 +2158,114 @@ func _InternalService_SetStreamRetentionOverrides_Handler(srv interface{}, ctx c
 	return interceptor(ctx, in, info, handler)
 }
 
+func _InternalService_GetMediaPlacementPolicy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(media_placement.GetPolicyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).GetMediaPlacementPolicy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_GetMediaPlacementPolicy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).GetMediaPlacementPolicy(ctx, req.(*media_placement.GetPolicyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_GetMediaPlacementOptions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(media_placement.GetOptionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).GetMediaPlacementOptions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_GetMediaPlacementOptions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).GetMediaPlacementOptions(ctx, req.(*media_placement.GetOptionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_PreviewMediaPlacement_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(media_placement.PreviewRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).PreviewMediaPlacement(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_PreviewMediaPlacement_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).PreviewMediaPlacement(ctx, req.(*media_placement.PreviewRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_ReviewMediaPlacementChange_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(media_placement.ReviewChangeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).ReviewMediaPlacementChange(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_ReviewMediaPlacementChange_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).ReviewMediaPlacementChange(ctx, req.(*media_placement.ReviewChangeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_ApplyMediaPlacementChange_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(media_placement.ApplyChangeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).ApplyMediaPlacementChange(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_ApplyMediaPlacementChange_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).ApplyMediaPlacementChange(ctx, req.(*media_placement.ApplyChangeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _InternalService_GetMediaPlacementChange_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(media_placement.GetChangeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InternalServiceServer).GetMediaPlacementChange(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: InternalService_GetMediaPlacementChange_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InternalServiceServer).GetMediaPlacementChange(ctx, req.(*media_placement.GetChangeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _InternalService_TestPlaybackAccess_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(foghorn_control.TestPlaybackAccessRequest)
 	if err := dec(in); err != nil {
@@ -2339,6 +2546,30 @@ var InternalService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetStreamRetentionOverrides",
 			Handler:    _InternalService_SetStreamRetentionOverrides_Handler,
+		},
+		{
+			MethodName: "GetMediaPlacementPolicy",
+			Handler:    _InternalService_GetMediaPlacementPolicy_Handler,
+		},
+		{
+			MethodName: "GetMediaPlacementOptions",
+			Handler:    _InternalService_GetMediaPlacementOptions_Handler,
+		},
+		{
+			MethodName: "PreviewMediaPlacement",
+			Handler:    _InternalService_PreviewMediaPlacement_Handler,
+		},
+		{
+			MethodName: "ReviewMediaPlacementChange",
+			Handler:    _InternalService_ReviewMediaPlacementChange_Handler,
+		},
+		{
+			MethodName: "ApplyMediaPlacementChange",
+			Handler:    _InternalService_ApplyMediaPlacementChange_Handler,
+		},
+		{
+			MethodName: "GetMediaPlacementChange",
+			Handler:    _InternalService_GetMediaPlacementChange_Handler,
 		},
 		{
 			MethodName: "TestPlaybackAccess",

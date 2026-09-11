@@ -8,6 +8,7 @@ package quartermasterpb
 
 import (
 	context "context"
+	media_placement "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
@@ -813,6 +814,11 @@ const (
 	ClusterService_DeactivateClusterAccess_FullMethodName         = "/quartermaster.ClusterService/DeactivateClusterAccess"
 	ClusterService_ListTenantClusterAccess_FullMethodName         = "/quartermaster.ClusterService/ListTenantClusterAccess"
 	ClusterService_GetTenantEntitlement_FullMethodName            = "/quartermaster.ClusterService/GetTenantEntitlement"
+	ClusterService_GetMediaPlacementInventory_FullMethodName      = "/quartermaster.ClusterService/GetMediaPlacementInventory"
+	ClusterService_GetClusterMediaConsent_FullMethodName          = "/quartermaster.ClusterService/GetClusterMediaConsent"
+	ClusterService_ReviewClusterMediaConsentChange_FullMethodName = "/quartermaster.ClusterService/ReviewClusterMediaConsentChange"
+	ClusterService_ApplyClusterMediaConsentChange_FullMethodName  = "/quartermaster.ClusterService/ApplyClusterMediaConsentChange"
+	ClusterService_GetClusterMediaConsentChange_FullMethodName    = "/quartermaster.ClusterService/GetClusterMediaConsentChange"
 	ClusterService_UnsubscribeFromCluster_FullMethodName          = "/quartermaster.ClusterService/UnsubscribeFromCluster"
 	ClusterService_ListMySubscriptions_FullMethodName             = "/quartermaster.ClusterService/ListMySubscriptions"
 	ClusterService_ListMarketplaceClusters_FullMethodName         = "/quartermaster.ClusterService/ListMarketplaceClusters"
@@ -830,6 +836,7 @@ const (
 	ClusterService_RejectClusterSubscription_FullMethodName       = "/quartermaster.ClusterService/RejectClusterSubscription"
 	ClusterService_GetClusterMetadataBatch_FullMethodName         = "/quartermaster.ClusterService/GetClusterMetadataBatch"
 	ClusterService_ListPeers_FullMethodName                       = "/quartermaster.ClusterService/ListPeers"
+	ClusterService_WatchPeers_FullMethodName                      = "/quartermaster.ClusterService/WatchPeers"
 	ClusterService_AssignServiceToCluster_FullMethodName          = "/quartermaster.ClusterService/AssignServiceToCluster"
 	ClusterService_UnassignServiceFromCluster_FullMethodName      = "/quartermaster.ClusterService/UnassignServiceFromCluster"
 	ClusterService_EnableSelfHosting_FullMethodName               = "/quartermaster.ClusterService/EnableSelfHosting"
@@ -889,6 +896,14 @@ type ClusterServiceClient interface {
 	// entitlement predicates on Quartermaster's side so Commodore can compile
 	// media authority without reading quartermaster.* directly.
 	GetTenantEntitlement(ctx context.Context, in *GetTenantEntitlementRequest, opts ...grpc.CallOption) (*GetTenantEntitlementResponse, error)
+	// Complete, unranked node membership for one entitled control cell. Service-token only.
+	// Offline nodes and empty clusters remain visible; health cannot prove an empty pool.
+	GetMediaPlacementInventory(ctx context.Context, in *GetMediaPlacementInventoryRequest, opts ...grpc.CallOption) (*MediaPlacementInventory, error)
+	// Tenant-owner consent management; these calls do not grant cluster access.
+	GetClusterMediaConsent(ctx context.Context, in *GetClusterMediaConsentRequest, opts ...grpc.CallOption) (*ClusterMediaConsentState, error)
+	ReviewClusterMediaConsentChange(ctx context.Context, in *ReviewClusterMediaConsentRequest, opts ...grpc.CallOption) (*media_placement.Review, error)
+	ApplyClusterMediaConsentChange(ctx context.Context, in *ApplyClusterMediaConsentRequest, opts ...grpc.CallOption) (*ClusterMediaConsentChange, error)
+	GetClusterMediaConsentChange(ctx context.Context, in *GetClusterMediaConsentChangeRequest, opts ...grpc.CallOption) (*ClusterMediaConsentChange, error)
 	// Unsubscribe from a cluster
 	UnsubscribeFromCluster(ctx context.Context, in *UnsubscribeFromClusterRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// List clusters the tenant is subscribed to
@@ -919,6 +934,12 @@ type ClusterServiceClient interface {
 	// ListPeers returns clusters that share at least one tenant with the requesting cluster.
 	// Used by Foghorn federation to discover peers for cross-cluster stream routing.
 	ListPeers(ctx context.Context, in *ListPeersRequest, opts ...grpc.CallOption) (*ListPeersResponse, error)
+	// WatchPeers streams the requesting cluster's peer set: the current set when the
+	// stream opens, then a new set only when that set changes. The media cell
+	// subscribes, so Quartermaster never dials a cell and needs no address for one.
+	// Callers keep their own periodic ListPeers reconciliation: a dropped stream
+	// must degrade to the slower path, never to a stale peer set.
+	WatchPeers(ctx context.Context, in *ListPeersRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ListPeersResponse], error)
 	// Assign pool-managed service instance(s) to a logical cluster.
 	AssignServiceToCluster(ctx context.Context, in *AssignServiceToClusterRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// Remove pool-managed service instance(s) from a logical cluster.
@@ -1095,6 +1116,56 @@ func (c *clusterServiceClient) GetTenantEntitlement(ctx context.Context, in *Get
 	return out, nil
 }
 
+func (c *clusterServiceClient) GetMediaPlacementInventory(ctx context.Context, in *GetMediaPlacementInventoryRequest, opts ...grpc.CallOption) (*MediaPlacementInventory, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MediaPlacementInventory)
+	err := c.cc.Invoke(ctx, ClusterService_GetMediaPlacementInventory_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clusterServiceClient) GetClusterMediaConsent(ctx context.Context, in *GetClusterMediaConsentRequest, opts ...grpc.CallOption) (*ClusterMediaConsentState, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ClusterMediaConsentState)
+	err := c.cc.Invoke(ctx, ClusterService_GetClusterMediaConsent_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clusterServiceClient) ReviewClusterMediaConsentChange(ctx context.Context, in *ReviewClusterMediaConsentRequest, opts ...grpc.CallOption) (*media_placement.Review, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(media_placement.Review)
+	err := c.cc.Invoke(ctx, ClusterService_ReviewClusterMediaConsentChange_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clusterServiceClient) ApplyClusterMediaConsentChange(ctx context.Context, in *ApplyClusterMediaConsentRequest, opts ...grpc.CallOption) (*ClusterMediaConsentChange, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ClusterMediaConsentChange)
+	err := c.cc.Invoke(ctx, ClusterService_ApplyClusterMediaConsentChange_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *clusterServiceClient) GetClusterMediaConsentChange(ctx context.Context, in *GetClusterMediaConsentChangeRequest, opts ...grpc.CallOption) (*ClusterMediaConsentChange, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ClusterMediaConsentChange)
+	err := c.cc.Invoke(ctx, ClusterService_GetClusterMediaConsentChange_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *clusterServiceClient) UnsubscribeFromCluster(ctx context.Context, in *UnsubscribeFromClusterRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(emptypb.Empty)
@@ -1265,6 +1336,25 @@ func (c *clusterServiceClient) ListPeers(ctx context.Context, in *ListPeersReque
 	return out, nil
 }
 
+func (c *clusterServiceClient) WatchPeers(ctx context.Context, in *ListPeersRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ListPeersResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ClusterService_ServiceDesc.Streams[0], ClusterService_WatchPeers_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ListPeersRequest, ListPeersResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ClusterService_WatchPeersClient = grpc.ServerStreamingClient[ListPeersResponse]
+
 func (c *clusterServiceClient) AssignServiceToCluster(ctx context.Context, in *AssignServiceToClusterRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(emptypb.Empty)
@@ -1403,6 +1493,14 @@ type ClusterServiceServer interface {
 	// entitlement predicates on Quartermaster's side so Commodore can compile
 	// media authority without reading quartermaster.* directly.
 	GetTenantEntitlement(context.Context, *GetTenantEntitlementRequest) (*GetTenantEntitlementResponse, error)
+	// Complete, unranked node membership for one entitled control cell. Service-token only.
+	// Offline nodes and empty clusters remain visible; health cannot prove an empty pool.
+	GetMediaPlacementInventory(context.Context, *GetMediaPlacementInventoryRequest) (*MediaPlacementInventory, error)
+	// Tenant-owner consent management; these calls do not grant cluster access.
+	GetClusterMediaConsent(context.Context, *GetClusterMediaConsentRequest) (*ClusterMediaConsentState, error)
+	ReviewClusterMediaConsentChange(context.Context, *ReviewClusterMediaConsentRequest) (*media_placement.Review, error)
+	ApplyClusterMediaConsentChange(context.Context, *ApplyClusterMediaConsentRequest) (*ClusterMediaConsentChange, error)
+	GetClusterMediaConsentChange(context.Context, *GetClusterMediaConsentChangeRequest) (*ClusterMediaConsentChange, error)
 	// Unsubscribe from a cluster
 	UnsubscribeFromCluster(context.Context, *UnsubscribeFromClusterRequest) (*emptypb.Empty, error)
 	// List clusters the tenant is subscribed to
@@ -1433,6 +1531,12 @@ type ClusterServiceServer interface {
 	// ListPeers returns clusters that share at least one tenant with the requesting cluster.
 	// Used by Foghorn federation to discover peers for cross-cluster stream routing.
 	ListPeers(context.Context, *ListPeersRequest) (*ListPeersResponse, error)
+	// WatchPeers streams the requesting cluster's peer set: the current set when the
+	// stream opens, then a new set only when that set changes. The media cell
+	// subscribes, so Quartermaster never dials a cell and needs no address for one.
+	// Callers keep their own periodic ListPeers reconciliation: a dropped stream
+	// must degrade to the slower path, never to a stale peer set.
+	WatchPeers(*ListPeersRequest, grpc.ServerStreamingServer[ListPeersResponse]) error
 	// Assign pool-managed service instance(s) to a logical cluster.
 	AssignServiceToCluster(context.Context, *AssignServiceToClusterRequest) (*emptypb.Empty, error)
 	// Remove pool-managed service instance(s) from a logical cluster.
@@ -1504,6 +1608,21 @@ func (UnimplementedClusterServiceServer) ListTenantClusterAccess(context.Context
 func (UnimplementedClusterServiceServer) GetTenantEntitlement(context.Context, *GetTenantEntitlementRequest) (*GetTenantEntitlementResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetTenantEntitlement not implemented")
 }
+func (UnimplementedClusterServiceServer) GetMediaPlacementInventory(context.Context, *GetMediaPlacementInventoryRequest) (*MediaPlacementInventory, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetMediaPlacementInventory not implemented")
+}
+func (UnimplementedClusterServiceServer) GetClusterMediaConsent(context.Context, *GetClusterMediaConsentRequest) (*ClusterMediaConsentState, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetClusterMediaConsent not implemented")
+}
+func (UnimplementedClusterServiceServer) ReviewClusterMediaConsentChange(context.Context, *ReviewClusterMediaConsentRequest) (*media_placement.Review, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReviewClusterMediaConsentChange not implemented")
+}
+func (UnimplementedClusterServiceServer) ApplyClusterMediaConsentChange(context.Context, *ApplyClusterMediaConsentRequest) (*ClusterMediaConsentChange, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplyClusterMediaConsentChange not implemented")
+}
+func (UnimplementedClusterServiceServer) GetClusterMediaConsentChange(context.Context, *GetClusterMediaConsentChangeRequest) (*ClusterMediaConsentChange, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetClusterMediaConsentChange not implemented")
+}
 func (UnimplementedClusterServiceServer) UnsubscribeFromCluster(context.Context, *UnsubscribeFromClusterRequest) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method UnsubscribeFromCluster not implemented")
 }
@@ -1554,6 +1673,9 @@ func (UnimplementedClusterServiceServer) GetClusterMetadataBatch(context.Context
 }
 func (UnimplementedClusterServiceServer) ListPeers(context.Context, *ListPeersRequest) (*ListPeersResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListPeers not implemented")
+}
+func (UnimplementedClusterServiceServer) WatchPeers(*ListPeersRequest, grpc.ServerStreamingServer[ListPeersResponse]) error {
+	return status.Error(codes.Unimplemented, "method WatchPeers not implemented")
 }
 func (UnimplementedClusterServiceServer) AssignServiceToCluster(context.Context, *AssignServiceToClusterRequest) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method AssignServiceToCluster not implemented")
@@ -1873,6 +1995,96 @@ func _ClusterService_GetTenantEntitlement_Handler(srv interface{}, ctx context.C
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ClusterService_GetMediaPlacementInventory_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetMediaPlacementInventoryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClusterServiceServer).GetMediaPlacementInventory(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClusterService_GetMediaPlacementInventory_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClusterServiceServer).GetMediaPlacementInventory(ctx, req.(*GetMediaPlacementInventoryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClusterService_GetClusterMediaConsent_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetClusterMediaConsentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClusterServiceServer).GetClusterMediaConsent(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClusterService_GetClusterMediaConsent_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClusterServiceServer).GetClusterMediaConsent(ctx, req.(*GetClusterMediaConsentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClusterService_ReviewClusterMediaConsentChange_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReviewClusterMediaConsentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClusterServiceServer).ReviewClusterMediaConsentChange(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClusterService_ReviewClusterMediaConsentChange_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClusterServiceServer).ReviewClusterMediaConsentChange(ctx, req.(*ReviewClusterMediaConsentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClusterService_ApplyClusterMediaConsentChange_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ApplyClusterMediaConsentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClusterServiceServer).ApplyClusterMediaConsentChange(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClusterService_ApplyClusterMediaConsentChange_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClusterServiceServer).ApplyClusterMediaConsentChange(ctx, req.(*ApplyClusterMediaConsentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _ClusterService_GetClusterMediaConsentChange_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetClusterMediaConsentChangeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ClusterServiceServer).GetClusterMediaConsentChange(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ClusterService_GetClusterMediaConsentChange_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ClusterServiceServer).GetClusterMediaConsentChange(ctx, req.(*GetClusterMediaConsentChangeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _ClusterService_UnsubscribeFromCluster_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(UnsubscribeFromClusterRequest)
 	if err := dec(in); err != nil {
@@ -2179,6 +2391,17 @@ func _ClusterService_ListPeers_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ClusterService_WatchPeers_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ListPeersRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(ClusterServiceServer).WatchPeers(m, &grpc.GenericServerStream[ListPeersRequest, ListPeersResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ClusterService_WatchPeersServer = grpc.ServerStreamingServer[ListPeersResponse]
+
 func _ClusterService_AssignServiceToCluster_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(AssignServiceToClusterRequest)
 	if err := dec(in); err != nil {
@@ -2409,6 +2632,26 @@ var ClusterService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _ClusterService_GetTenantEntitlement_Handler,
 		},
 		{
+			MethodName: "GetMediaPlacementInventory",
+			Handler:    _ClusterService_GetMediaPlacementInventory_Handler,
+		},
+		{
+			MethodName: "GetClusterMediaConsent",
+			Handler:    _ClusterService_GetClusterMediaConsent_Handler,
+		},
+		{
+			MethodName: "ReviewClusterMediaConsentChange",
+			Handler:    _ClusterService_ReviewClusterMediaConsentChange_Handler,
+		},
+		{
+			MethodName: "ApplyClusterMediaConsentChange",
+			Handler:    _ClusterService_ApplyClusterMediaConsentChange_Handler,
+		},
+		{
+			MethodName: "GetClusterMediaConsentChange",
+			Handler:    _ClusterService_GetClusterMediaConsentChange_Handler,
+		},
+		{
 			MethodName: "UnsubscribeFromCluster",
 			Handler:    _ClusterService_UnsubscribeFromCluster_Handler,
 		},
@@ -2513,7 +2756,13 @@ var ClusterService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _ClusterService_SetClusterReleaseTarget_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "WatchPeers",
+			Handler:       _ClusterService_WatchPeers_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "quartermaster.proto",
 }
 

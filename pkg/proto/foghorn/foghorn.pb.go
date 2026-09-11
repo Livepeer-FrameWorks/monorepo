@@ -10,6 +10,7 @@ import (
 	common "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	foghorn_control "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
 	media_authority "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
+	media_placement "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	shared "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
@@ -306,8 +307,11 @@ type ApplyMediaAuthorityResponse struct {
 	AuthorityId      string                        `protobuf:"bytes,3,opt,name=authority_id,json=authorityId,proto3" json:"authority_id,omitempty"`
 	AuthorityVersion uint64                        `protobuf:"varint,4,opt,name=authority_version,json=authorityVersion,proto3" json:"authority_version,omitempty"`
 	RefreshDue       bool                          `protobuf:"varint,5,opt,name=refresh_due,json=refreshDue,proto3" json:"refresh_due,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Cell-level placement capability observed by the acknowledging replica at
+	// acknowledgement time. Absent means the cell does not attest capability.
+	PlacementCapability *MediaCellPlacementCapability `protobuf:"bytes,6,opt,name=placement_capability,json=placementCapability,proto3" json:"placement_capability,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *ApplyMediaAuthorityResponse) Reset() {
@@ -375,6 +379,77 @@ func (x *ApplyMediaAuthorityResponse) GetRefreshDue() bool {
 	return false
 }
 
+func (x *ApplyMediaAuthorityResponse) GetPlacementCapability() *MediaCellPlacementCapability {
+	if x != nil {
+		return x.PlacementCapability
+	}
+	return nil
+}
+
+// MediaCellPlacementCapability is a Foghorn cell's attestation that every live
+// control replica in the cell reads the listed authority schemas and enforces
+// placement policy. Commodore gates the first policy-bearing (schema 2) tenant
+// authority on every target cell attesting; it is never permission by itself.
+type MediaCellPlacementCapability struct {
+	state                   protoimpl.MessageState `protogen:"open.v1"`
+	SupportedSchemaVersions []uint32               `protobuf:"varint,1,rep,packed,name=supported_schema_versions,json=supportedSchemaVersions,proto3" json:"supported_schema_versions,omitempty"`
+	EnforcementReady        bool                   `protobuf:"varint,2,opt,name=enforcement_ready,json=enforcementReady,proto3" json:"enforcement_ready,omitempty"`
+	LiveReplicas            uint32                 `protobuf:"varint,3,opt,name=live_replicas,json=liveReplicas,proto3" json:"live_replicas,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
+}
+
+func (x *MediaCellPlacementCapability) Reset() {
+	*x = MediaCellPlacementCapability{}
+	mi := &file_foghorn_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MediaCellPlacementCapability) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MediaCellPlacementCapability) ProtoMessage() {}
+
+func (x *MediaCellPlacementCapability) ProtoReflect() protoreflect.Message {
+	mi := &file_foghorn_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MediaCellPlacementCapability.ProtoReflect.Descriptor instead.
+func (*MediaCellPlacementCapability) Descriptor() ([]byte, []int) {
+	return file_foghorn_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *MediaCellPlacementCapability) GetSupportedSchemaVersions() []uint32 {
+	if x != nil {
+		return x.SupportedSchemaVersions
+	}
+	return nil
+}
+
+func (x *MediaCellPlacementCapability) GetEnforcementReady() bool {
+	if x != nil {
+		return x.EnforcementReady
+	}
+	return false
+}
+
+func (x *MediaCellPlacementCapability) GetLiveReplicas() uint32 {
+	if x != nil {
+		return x.LiveReplicas
+	}
+	return 0
+}
+
 type InvalidatePlaybackAuthRequest struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	TenantId string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
@@ -395,7 +470,7 @@ type InvalidatePlaybackAuthRequest struct {
 
 func (x *InvalidatePlaybackAuthRequest) Reset() {
 	*x = InvalidatePlaybackAuthRequest{}
-	mi := &file_foghorn_proto_msgTypes[4]
+	mi := &file_foghorn_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -407,7 +482,7 @@ func (x *InvalidatePlaybackAuthRequest) String() string {
 func (*InvalidatePlaybackAuthRequest) ProtoMessage() {}
 
 func (x *InvalidatePlaybackAuthRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_proto_msgTypes[4]
+	mi := &file_foghorn_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -420,7 +495,7 @@ func (x *InvalidatePlaybackAuthRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvalidatePlaybackAuthRequest.ProtoReflect.Descriptor instead.
 func (*InvalidatePlaybackAuthRequest) Descriptor() ([]byte, []int) {
-	return file_foghorn_proto_rawDescGZIP(), []int{4}
+	return file_foghorn_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *InvalidatePlaybackAuthRequest) GetTenantId() string {
@@ -471,7 +546,7 @@ type InvalidatePlaybackAuthResponse struct {
 
 func (x *InvalidatePlaybackAuthResponse) Reset() {
 	*x = InvalidatePlaybackAuthResponse{}
-	mi := &file_foghorn_proto_msgTypes[5]
+	mi := &file_foghorn_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -483,7 +558,7 @@ func (x *InvalidatePlaybackAuthResponse) String() string {
 func (*InvalidatePlaybackAuthResponse) ProtoMessage() {}
 
 func (x *InvalidatePlaybackAuthResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_proto_msgTypes[5]
+	mi := &file_foghorn_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -496,7 +571,7 @@ func (x *InvalidatePlaybackAuthResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InvalidatePlaybackAuthResponse.ProtoReflect.Descriptor instead.
 func (*InvalidatePlaybackAuthResponse) Descriptor() ([]byte, []int) {
-	return file_foghorn_proto_rawDescGZIP(), []int{5}
+	return file_foghorn_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *InvalidatePlaybackAuthResponse) GetStreamsInvalidated() int32 {
@@ -555,7 +630,7 @@ type OverrideArtifactRetentionRequest struct {
 
 func (x *OverrideArtifactRetentionRequest) Reset() {
 	*x = OverrideArtifactRetentionRequest{}
-	mi := &file_foghorn_proto_msgTypes[6]
+	mi := &file_foghorn_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -567,7 +642,7 @@ func (x *OverrideArtifactRetentionRequest) String() string {
 func (*OverrideArtifactRetentionRequest) ProtoMessage() {}
 
 func (x *OverrideArtifactRetentionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_proto_msgTypes[6]
+	mi := &file_foghorn_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -580,7 +655,7 @@ func (x *OverrideArtifactRetentionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OverrideArtifactRetentionRequest.ProtoReflect.Descriptor instead.
 func (*OverrideArtifactRetentionRequest) Descriptor() ([]byte, []int) {
-	return file_foghorn_proto_rawDescGZIP(), []int{6}
+	return file_foghorn_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *OverrideArtifactRetentionRequest) GetTenantId() string {
@@ -642,7 +717,7 @@ type OverrideArtifactRetentionResponse struct {
 
 func (x *OverrideArtifactRetentionResponse) Reset() {
 	*x = OverrideArtifactRetentionResponse{}
-	mi := &file_foghorn_proto_msgTypes[7]
+	mi := &file_foghorn_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -654,7 +729,7 @@ func (x *OverrideArtifactRetentionResponse) String() string {
 func (*OverrideArtifactRetentionResponse) ProtoMessage() {}
 
 func (x *OverrideArtifactRetentionResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_foghorn_proto_msgTypes[7]
+	mi := &file_foghorn_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -667,7 +742,7 @@ func (x *OverrideArtifactRetentionResponse) ProtoReflect() protoreflect.Message 
 
 // Deprecated: Use OverrideArtifactRetentionResponse.ProtoReflect.Descriptor instead.
 func (*OverrideArtifactRetentionResponse) Descriptor() ([]byte, []int) {
-	return file_foghorn_proto_rawDescGZIP(), []int{7}
+	return file_foghorn_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *OverrideArtifactRetentionResponse) GetApplied() bool {
@@ -688,7 +763,7 @@ var File_foghorn_proto protoreflect.FileDescriptor
 
 const file_foghorn_proto_rawDesc = "" +
 	"\n" +
-	"\rfoghorn.proto\x12\afoghorn\x1a\fcommon.proto\x1a\fshared.proto\x1a\x15foghorn_control.proto\x1a\x15media_authority.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\x90\x01\n" +
+	"\rfoghorn.proto\x12\afoghorn\x1a\fcommon.proto\x1a\fshared.proto\x1a\x15foghorn_control.proto\x1a\x15media_authority.proto\x1a\x15media_placement.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\x90\x01\n" +
 	"\x16PreRegisterEdgeRequest\x12)\n" +
 	"\x10enrollment_token\x18\x01 \x01(\tR\x0fenrollmentToken\x12\x1f\n" +
 	"\vexternal_ip\x18\x02 \x01(\tR\n" +
@@ -710,14 +785,19 @@ const file_foghorn_proto_rawDesc = "" +
 	"\ttelemetry\x18\n" +
 	" \x01(\v2\x1b.common.EdgeTelemetryConfigR\ttelemetry\"d\n" +
 	"\x1aApplyMediaAuthorityRequest\x12F\n" +
-	"\tauthority\x18\x01 \x01(\v2(.media_authority.SignedAuthorityEnvelopeR\tauthority\"\x94\x02\n" +
+	"\tauthority\x18\x01 \x01(\v2(.media_authority.SignedAuthorityEnvelopeR\tauthority\"\xee\x02\n" +
 	"\x1bApplyMediaAuthorityResponse\x12=\n" +
 	"\aoutcome\x18\x01 \x01(\x0e2#.foghorn.MediaAuthorityApplyOutcomeR\aoutcome\x12E\n" +
 	"\x0eauthority_kind\x18\x02 \x01(\x0e2\x1e.media_authority.AuthorityKindR\rauthorityKind\x12!\n" +
 	"\fauthority_id\x18\x03 \x01(\tR\vauthorityId\x12+\n" +
 	"\x11authority_version\x18\x04 \x01(\x04R\x10authorityVersion\x12\x1f\n" +
 	"\vrefresh_due\x18\x05 \x01(\bR\n" +
-	"refreshDue\"\xc6\x01\n" +
+	"refreshDue\x12X\n" +
+	"\x14placement_capability\x18\x06 \x01(\v2%.foghorn.MediaCellPlacementCapabilityR\x13placementCapability\"\xac\x01\n" +
+	"\x1cMediaCellPlacementCapability\x12:\n" +
+	"\x19supported_schema_versions\x18\x01 \x03(\rR\x17supportedSchemaVersions\x12+\n" +
+	"\x11enforcement_ready\x18\x02 \x01(\bR\x10enforcementReady\x12#\n" +
+	"\rlive_replicas\x18\x03 \x01(\rR\fliveReplicas\"\xc6\x01\n" +
 	"\x1dInvalidatePlaybackAuthRequest\x12\x1b\n" +
 	"\ttenant_id\x18\x01 \x01(\tR\btenantId\x12%\n" +
 	"\x0einternal_names\x18\x02 \x03(\tR\rinternalNames\x12\x16\n" +
@@ -744,7 +824,10 @@ const file_foghorn_proto_rawDesc = "" +
 	"\x1aMediaAuthorityApplyOutcome\x12-\n" +
 	")MEDIA_AUTHORITY_APPLY_OUTCOME_UNSPECIFIED\x10\x00\x12)\n" +
 	"%MEDIA_AUTHORITY_APPLY_OUTCOME_APPLIED\x10\x01\x12+\n" +
-	"'MEDIA_AUTHORITY_APPLY_OUTCOME_DUPLICATE\x10\x022\x87\x02\n" +
+	"'MEDIA_AUTHORITY_APPLY_OUTCOME_DUPLICATE\x10\x022\x8e\x02\n" +
+	"\x1cMediaPlacementControlService\x12s\n" +
+	"\x1dObserveMediaPlacementCapacity\x12%.media_placement.CapacityPreviewQuery\x1a+.media_placement.CapacityPreviewObservation\x12y\n" +
+	"\x1fObserveMediaPlacementPushSource\x12'.media_placement.PushSourcePreviewQuery\x1a-.media_placement.PushSourcePreviewObservation2\x87\x02\n" +
 	"\x12ClipControlService\x12C\n" +
 	"\n" +
 	"CreateClip\x12\x19.shared.CreateClipRequest\x1a\x1a.shared.CreateClipResponse\x12C\n" +
@@ -793,122 +876,132 @@ func file_foghorn_proto_rawDescGZIP() []byte {
 }
 
 var file_foghorn_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_foghorn_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_foghorn_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
 var file_foghorn_proto_goTypes = []any{
 	(MediaAuthorityApplyOutcome)(0),                        // 0: foghorn.MediaAuthorityApplyOutcome
 	(*PreRegisterEdgeRequest)(nil),                         // 1: foghorn.PreRegisterEdgeRequest
 	(*PreRegisterEdgeResponse)(nil),                        // 2: foghorn.PreRegisterEdgeResponse
 	(*ApplyMediaAuthorityRequest)(nil),                     // 3: foghorn.ApplyMediaAuthorityRequest
 	(*ApplyMediaAuthorityResponse)(nil),                    // 4: foghorn.ApplyMediaAuthorityResponse
-	(*InvalidatePlaybackAuthRequest)(nil),                  // 5: foghorn.InvalidatePlaybackAuthRequest
-	(*InvalidatePlaybackAuthResponse)(nil),                 // 6: foghorn.InvalidatePlaybackAuthResponse
-	(*OverrideArtifactRetentionRequest)(nil),               // 7: foghorn.OverrideArtifactRetentionRequest
-	(*OverrideArtifactRetentionResponse)(nil),              // 8: foghorn.OverrideArtifactRetentionResponse
-	(*common.EdgeTelemetryConfig)(nil),                     // 9: common.EdgeTelemetryConfig
-	(*media_authority.SignedAuthorityEnvelope)(nil),        // 10: media_authority.SignedAuthorityEnvelope
-	(media_authority.AuthorityKind)(0),                     // 11: media_authority.AuthorityKind
-	(*timestamppb.Timestamp)(nil),                          // 12: google.protobuf.Timestamp
-	(*shared.CreateClipRequest)(nil),                       // 13: shared.CreateClipRequest
-	(*shared.DeleteClipRequest)(nil),                       // 14: shared.DeleteClipRequest
-	(*shared.DeleteStreamThumbnailsRequest)(nil),           // 15: shared.DeleteStreamThumbnailsRequest
-	(*shared.StartDVRRequest)(nil),                         // 16: shared.StartDVRRequest
-	(*shared.StopDVRRequest)(nil),                          // 17: shared.StopDVRRequest
-	(*shared.DeleteDVRRequest)(nil),                        // 18: shared.DeleteDVRRequest
-	(*foghorn_control.RetrieveDVRChapterRequest)(nil),      // 19: foghorn_control.RetrieveDVRChapterRequest
-	(*foghorn_control.ListDVRChaptersRequest)(nil),         // 20: foghorn_control.ListDVRChaptersRequest
-	(*foghorn_control.TestPlaybackAccessRequest)(nil),      // 21: foghorn_control.TestPlaybackAccessRequest
-	(*shared.ViewerEndpointRequest)(nil),                   // 22: shared.ViewerEndpointRequest
-	(*shared.IngestEndpointRequest)(nil),                   // 23: shared.IngestEndpointRequest
-	(*shared.CreateVodUploadRequest)(nil),                  // 24: shared.CreateVodUploadRequest
-	(*shared.CompleteVodUploadRequest)(nil),                // 25: shared.CompleteVodUploadRequest
-	(*shared.AbortVodUploadRequest)(nil),                   // 26: shared.AbortVodUploadRequest
-	(*shared.GetVodUploadStatusRequest)(nil),               // 27: shared.GetVodUploadStatusRequest
-	(*shared.DeleteVodAssetRequest)(nil),                   // 28: shared.DeleteVodAssetRequest
-	(*foghorn_control.SetNodeModeRequest)(nil),             // 29: foghorn_control.SetNodeModeRequest
-	(*foghorn_control.GetNodeHealthRequest)(nil),           // 30: foghorn_control.GetNodeHealthRequest
-	(*foghorn_control.TerminateTenantStreamsRequest)(nil),  // 31: foghorn_control.TerminateTenantStreamsRequest
-	(*foghorn_control.InvalidateTenantCacheRequest)(nil),   // 32: foghorn_control.InvalidateTenantCacheRequest
-	(*shared.CreateClipResponse)(nil),                      // 33: shared.CreateClipResponse
-	(*shared.DeleteClipResponse)(nil),                      // 34: shared.DeleteClipResponse
-	(*shared.DeleteStreamThumbnailsResponse)(nil),          // 35: shared.DeleteStreamThumbnailsResponse
-	(*shared.StartDVRResponse)(nil),                        // 36: shared.StartDVRResponse
-	(*shared.StopDVRResponse)(nil),                         // 37: shared.StopDVRResponse
-	(*shared.DeleteDVRResponse)(nil),                       // 38: shared.DeleteDVRResponse
-	(*foghorn_control.RetrieveDVRChapterResponse)(nil),     // 39: foghorn_control.RetrieveDVRChapterResponse
-	(*foghorn_control.ListDVRChaptersResponse)(nil),        // 40: foghorn_control.ListDVRChaptersResponse
-	(*foghorn_control.TestPlaybackAccessResponse)(nil),     // 41: foghorn_control.TestPlaybackAccessResponse
-	(*shared.ViewerEndpointResponse)(nil),                  // 42: shared.ViewerEndpointResponse
-	(*shared.IngestEndpointResponse)(nil),                  // 43: shared.IngestEndpointResponse
-	(*shared.CreateVodUploadResponse)(nil),                 // 44: shared.CreateVodUploadResponse
-	(*shared.CompleteVodUploadResponse)(nil),               // 45: shared.CompleteVodUploadResponse
-	(*shared.AbortVodUploadResponse)(nil),                  // 46: shared.AbortVodUploadResponse
-	(*shared.GetVodUploadStatusResponse)(nil),              // 47: shared.GetVodUploadStatusResponse
-	(*shared.DeleteVodAssetResponse)(nil),                  // 48: shared.DeleteVodAssetResponse
-	(*foghorn_control.SetNodeModeResponse)(nil),            // 49: foghorn_control.SetNodeModeResponse
-	(*foghorn_control.GetNodeHealthResponse)(nil),          // 50: foghorn_control.GetNodeHealthResponse
-	(*foghorn_control.TerminateTenantStreamsResponse)(nil), // 51: foghorn_control.TerminateTenantStreamsResponse
-	(*foghorn_control.InvalidateTenantCacheResponse)(nil),  // 52: foghorn_control.InvalidateTenantCacheResponse
+	(*MediaCellPlacementCapability)(nil),                   // 5: foghorn.MediaCellPlacementCapability
+	(*InvalidatePlaybackAuthRequest)(nil),                  // 6: foghorn.InvalidatePlaybackAuthRequest
+	(*InvalidatePlaybackAuthResponse)(nil),                 // 7: foghorn.InvalidatePlaybackAuthResponse
+	(*OverrideArtifactRetentionRequest)(nil),               // 8: foghorn.OverrideArtifactRetentionRequest
+	(*OverrideArtifactRetentionResponse)(nil),              // 9: foghorn.OverrideArtifactRetentionResponse
+	(*common.EdgeTelemetryConfig)(nil),                     // 10: common.EdgeTelemetryConfig
+	(*media_authority.SignedAuthorityEnvelope)(nil),        // 11: media_authority.SignedAuthorityEnvelope
+	(media_authority.AuthorityKind)(0),                     // 12: media_authority.AuthorityKind
+	(*timestamppb.Timestamp)(nil),                          // 13: google.protobuf.Timestamp
+	(*media_placement.CapacityPreviewQuery)(nil),           // 14: media_placement.CapacityPreviewQuery
+	(*media_placement.PushSourcePreviewQuery)(nil),         // 15: media_placement.PushSourcePreviewQuery
+	(*shared.CreateClipRequest)(nil),                       // 16: shared.CreateClipRequest
+	(*shared.DeleteClipRequest)(nil),                       // 17: shared.DeleteClipRequest
+	(*shared.DeleteStreamThumbnailsRequest)(nil),           // 18: shared.DeleteStreamThumbnailsRequest
+	(*shared.StartDVRRequest)(nil),                         // 19: shared.StartDVRRequest
+	(*shared.StopDVRRequest)(nil),                          // 20: shared.StopDVRRequest
+	(*shared.DeleteDVRRequest)(nil),                        // 21: shared.DeleteDVRRequest
+	(*foghorn_control.RetrieveDVRChapterRequest)(nil),      // 22: foghorn_control.RetrieveDVRChapterRequest
+	(*foghorn_control.ListDVRChaptersRequest)(nil),         // 23: foghorn_control.ListDVRChaptersRequest
+	(*foghorn_control.TestPlaybackAccessRequest)(nil),      // 24: foghorn_control.TestPlaybackAccessRequest
+	(*shared.ViewerEndpointRequest)(nil),                   // 25: shared.ViewerEndpointRequest
+	(*shared.IngestEndpointRequest)(nil),                   // 26: shared.IngestEndpointRequest
+	(*shared.CreateVodUploadRequest)(nil),                  // 27: shared.CreateVodUploadRequest
+	(*shared.CompleteVodUploadRequest)(nil),                // 28: shared.CompleteVodUploadRequest
+	(*shared.AbortVodUploadRequest)(nil),                   // 29: shared.AbortVodUploadRequest
+	(*shared.GetVodUploadStatusRequest)(nil),               // 30: shared.GetVodUploadStatusRequest
+	(*shared.DeleteVodAssetRequest)(nil),                   // 31: shared.DeleteVodAssetRequest
+	(*foghorn_control.SetNodeModeRequest)(nil),             // 32: foghorn_control.SetNodeModeRequest
+	(*foghorn_control.GetNodeHealthRequest)(nil),           // 33: foghorn_control.GetNodeHealthRequest
+	(*foghorn_control.TerminateTenantStreamsRequest)(nil),  // 34: foghorn_control.TerminateTenantStreamsRequest
+	(*foghorn_control.InvalidateTenantCacheRequest)(nil),   // 35: foghorn_control.InvalidateTenantCacheRequest
+	(*media_placement.CapacityPreviewObservation)(nil),     // 36: media_placement.CapacityPreviewObservation
+	(*media_placement.PushSourcePreviewObservation)(nil),   // 37: media_placement.PushSourcePreviewObservation
+	(*shared.CreateClipResponse)(nil),                      // 38: shared.CreateClipResponse
+	(*shared.DeleteClipResponse)(nil),                      // 39: shared.DeleteClipResponse
+	(*shared.DeleteStreamThumbnailsResponse)(nil),          // 40: shared.DeleteStreamThumbnailsResponse
+	(*shared.StartDVRResponse)(nil),                        // 41: shared.StartDVRResponse
+	(*shared.StopDVRResponse)(nil),                         // 42: shared.StopDVRResponse
+	(*shared.DeleteDVRResponse)(nil),                       // 43: shared.DeleteDVRResponse
+	(*foghorn_control.RetrieveDVRChapterResponse)(nil),     // 44: foghorn_control.RetrieveDVRChapterResponse
+	(*foghorn_control.ListDVRChaptersResponse)(nil),        // 45: foghorn_control.ListDVRChaptersResponse
+	(*foghorn_control.TestPlaybackAccessResponse)(nil),     // 46: foghorn_control.TestPlaybackAccessResponse
+	(*shared.ViewerEndpointResponse)(nil),                  // 47: shared.ViewerEndpointResponse
+	(*shared.IngestEndpointResponse)(nil),                  // 48: shared.IngestEndpointResponse
+	(*shared.CreateVodUploadResponse)(nil),                 // 49: shared.CreateVodUploadResponse
+	(*shared.CompleteVodUploadResponse)(nil),               // 50: shared.CompleteVodUploadResponse
+	(*shared.AbortVodUploadResponse)(nil),                  // 51: shared.AbortVodUploadResponse
+	(*shared.GetVodUploadStatusResponse)(nil),              // 52: shared.GetVodUploadStatusResponse
+	(*shared.DeleteVodAssetResponse)(nil),                  // 53: shared.DeleteVodAssetResponse
+	(*foghorn_control.SetNodeModeResponse)(nil),            // 54: foghorn_control.SetNodeModeResponse
+	(*foghorn_control.GetNodeHealthResponse)(nil),          // 55: foghorn_control.GetNodeHealthResponse
+	(*foghorn_control.TerminateTenantStreamsResponse)(nil), // 56: foghorn_control.TerminateTenantStreamsResponse
+	(*foghorn_control.InvalidateTenantCacheResponse)(nil),  // 57: foghorn_control.InvalidateTenantCacheResponse
 }
 var file_foghorn_proto_depIdxs = []int32{
-	9,  // 0: foghorn.PreRegisterEdgeResponse.telemetry:type_name -> common.EdgeTelemetryConfig
-	10, // 1: foghorn.ApplyMediaAuthorityRequest.authority:type_name -> media_authority.SignedAuthorityEnvelope
+	10, // 0: foghorn.PreRegisterEdgeResponse.telemetry:type_name -> common.EdgeTelemetryConfig
+	11, // 1: foghorn.ApplyMediaAuthorityRequest.authority:type_name -> media_authority.SignedAuthorityEnvelope
 	0,  // 2: foghorn.ApplyMediaAuthorityResponse.outcome:type_name -> foghorn.MediaAuthorityApplyOutcome
-	11, // 3: foghorn.ApplyMediaAuthorityResponse.authority_kind:type_name -> media_authority.AuthorityKind
-	12, // 4: foghorn.OverrideArtifactRetentionRequest.retention_until:type_name -> google.protobuf.Timestamp
-	12, // 5: foghorn.OverrideArtifactRetentionResponse.retention_until:type_name -> google.protobuf.Timestamp
-	13, // 6: foghorn.ClipControlService.CreateClip:input_type -> shared.CreateClipRequest
-	14, // 7: foghorn.ClipControlService.DeleteClip:input_type -> shared.DeleteClipRequest
-	15, // 8: foghorn.ClipControlService.DeleteStreamThumbnails:input_type -> shared.DeleteStreamThumbnailsRequest
-	16, // 9: foghorn.DVRControlService.StartDVR:input_type -> shared.StartDVRRequest
-	17, // 10: foghorn.DVRControlService.StopDVR:input_type -> shared.StopDVRRequest
-	18, // 11: foghorn.DVRControlService.DeleteDVR:input_type -> shared.DeleteDVRRequest
-	19, // 12: foghorn.DVRControlService.RetrieveDVRChapter:input_type -> foghorn_control.RetrieveDVRChapterRequest
-	20, // 13: foghorn.DVRControlService.ListDVRChapters:input_type -> foghorn_control.ListDVRChaptersRequest
-	7,  // 14: foghorn.DVRControlService.OverrideArtifactRetention:input_type -> foghorn.OverrideArtifactRetentionRequest
-	21, // 15: foghorn.DVRControlService.TestPlaybackAccess:input_type -> foghorn_control.TestPlaybackAccessRequest
-	22, // 16: foghorn.ViewerControlService.ResolveViewerEndpoint:input_type -> shared.ViewerEndpointRequest
-	23, // 17: foghorn.ViewerControlService.ResolveIngestEndpoint:input_type -> shared.IngestEndpointRequest
-	24, // 18: foghorn.VodControlService.CreateVodUpload:input_type -> shared.CreateVodUploadRequest
-	25, // 19: foghorn.VodControlService.CompleteVodUpload:input_type -> shared.CompleteVodUploadRequest
-	26, // 20: foghorn.VodControlService.AbortVodUpload:input_type -> shared.AbortVodUploadRequest
-	27, // 21: foghorn.VodControlService.GetVodUploadStatus:input_type -> shared.GetVodUploadStatusRequest
-	28, // 22: foghorn.VodControlService.DeleteVodAsset:input_type -> shared.DeleteVodAssetRequest
-	1,  // 23: foghorn.EdgeProvisioningService.PreRegisterEdge:input_type -> foghorn.PreRegisterEdgeRequest
-	29, // 24: foghorn.NodeControlService.SetNodeOperationalMode:input_type -> foghorn_control.SetNodeModeRequest
-	30, // 25: foghorn.NodeControlService.GetNodeHealth:input_type -> foghorn_control.GetNodeHealthRequest
-	31, // 26: foghorn.TenantControlService.TerminateTenantStreams:input_type -> foghorn_control.TerminateTenantStreamsRequest
-	32, // 27: foghorn.TenantControlService.InvalidateTenantCache:input_type -> foghorn_control.InvalidateTenantCacheRequest
-	5,  // 28: foghorn.TenantControlService.InvalidatePlaybackAuth:input_type -> foghorn.InvalidatePlaybackAuthRequest
-	3,  // 29: foghorn.MediaAuthorityControlService.ApplyMediaAuthority:input_type -> foghorn.ApplyMediaAuthorityRequest
-	33, // 30: foghorn.ClipControlService.CreateClip:output_type -> shared.CreateClipResponse
-	34, // 31: foghorn.ClipControlService.DeleteClip:output_type -> shared.DeleteClipResponse
-	35, // 32: foghorn.ClipControlService.DeleteStreamThumbnails:output_type -> shared.DeleteStreamThumbnailsResponse
-	36, // 33: foghorn.DVRControlService.StartDVR:output_type -> shared.StartDVRResponse
-	37, // 34: foghorn.DVRControlService.StopDVR:output_type -> shared.StopDVRResponse
-	38, // 35: foghorn.DVRControlService.DeleteDVR:output_type -> shared.DeleteDVRResponse
-	39, // 36: foghorn.DVRControlService.RetrieveDVRChapter:output_type -> foghorn_control.RetrieveDVRChapterResponse
-	40, // 37: foghorn.DVRControlService.ListDVRChapters:output_type -> foghorn_control.ListDVRChaptersResponse
-	8,  // 38: foghorn.DVRControlService.OverrideArtifactRetention:output_type -> foghorn.OverrideArtifactRetentionResponse
-	41, // 39: foghorn.DVRControlService.TestPlaybackAccess:output_type -> foghorn_control.TestPlaybackAccessResponse
-	42, // 40: foghorn.ViewerControlService.ResolveViewerEndpoint:output_type -> shared.ViewerEndpointResponse
-	43, // 41: foghorn.ViewerControlService.ResolveIngestEndpoint:output_type -> shared.IngestEndpointResponse
-	44, // 42: foghorn.VodControlService.CreateVodUpload:output_type -> shared.CreateVodUploadResponse
-	45, // 43: foghorn.VodControlService.CompleteVodUpload:output_type -> shared.CompleteVodUploadResponse
-	46, // 44: foghorn.VodControlService.AbortVodUpload:output_type -> shared.AbortVodUploadResponse
-	47, // 45: foghorn.VodControlService.GetVodUploadStatus:output_type -> shared.GetVodUploadStatusResponse
-	48, // 46: foghorn.VodControlService.DeleteVodAsset:output_type -> shared.DeleteVodAssetResponse
-	2,  // 47: foghorn.EdgeProvisioningService.PreRegisterEdge:output_type -> foghorn.PreRegisterEdgeResponse
-	49, // 48: foghorn.NodeControlService.SetNodeOperationalMode:output_type -> foghorn_control.SetNodeModeResponse
-	50, // 49: foghorn.NodeControlService.GetNodeHealth:output_type -> foghorn_control.GetNodeHealthResponse
-	51, // 50: foghorn.TenantControlService.TerminateTenantStreams:output_type -> foghorn_control.TerminateTenantStreamsResponse
-	52, // 51: foghorn.TenantControlService.InvalidateTenantCache:output_type -> foghorn_control.InvalidateTenantCacheResponse
-	6,  // 52: foghorn.TenantControlService.InvalidatePlaybackAuth:output_type -> foghorn.InvalidatePlaybackAuthResponse
-	4,  // 53: foghorn.MediaAuthorityControlService.ApplyMediaAuthority:output_type -> foghorn.ApplyMediaAuthorityResponse
-	30, // [30:54] is the sub-list for method output_type
-	6,  // [6:30] is the sub-list for method input_type
-	6,  // [6:6] is the sub-list for extension type_name
-	6,  // [6:6] is the sub-list for extension extendee
-	0,  // [0:6] is the sub-list for field type_name
+	12, // 3: foghorn.ApplyMediaAuthorityResponse.authority_kind:type_name -> media_authority.AuthorityKind
+	5,  // 4: foghorn.ApplyMediaAuthorityResponse.placement_capability:type_name -> foghorn.MediaCellPlacementCapability
+	13, // 5: foghorn.OverrideArtifactRetentionRequest.retention_until:type_name -> google.protobuf.Timestamp
+	13, // 6: foghorn.OverrideArtifactRetentionResponse.retention_until:type_name -> google.protobuf.Timestamp
+	14, // 7: foghorn.MediaPlacementControlService.ObserveMediaPlacementCapacity:input_type -> media_placement.CapacityPreviewQuery
+	15, // 8: foghorn.MediaPlacementControlService.ObserveMediaPlacementPushSource:input_type -> media_placement.PushSourcePreviewQuery
+	16, // 9: foghorn.ClipControlService.CreateClip:input_type -> shared.CreateClipRequest
+	17, // 10: foghorn.ClipControlService.DeleteClip:input_type -> shared.DeleteClipRequest
+	18, // 11: foghorn.ClipControlService.DeleteStreamThumbnails:input_type -> shared.DeleteStreamThumbnailsRequest
+	19, // 12: foghorn.DVRControlService.StartDVR:input_type -> shared.StartDVRRequest
+	20, // 13: foghorn.DVRControlService.StopDVR:input_type -> shared.StopDVRRequest
+	21, // 14: foghorn.DVRControlService.DeleteDVR:input_type -> shared.DeleteDVRRequest
+	22, // 15: foghorn.DVRControlService.RetrieveDVRChapter:input_type -> foghorn_control.RetrieveDVRChapterRequest
+	23, // 16: foghorn.DVRControlService.ListDVRChapters:input_type -> foghorn_control.ListDVRChaptersRequest
+	8,  // 17: foghorn.DVRControlService.OverrideArtifactRetention:input_type -> foghorn.OverrideArtifactRetentionRequest
+	24, // 18: foghorn.DVRControlService.TestPlaybackAccess:input_type -> foghorn_control.TestPlaybackAccessRequest
+	25, // 19: foghorn.ViewerControlService.ResolveViewerEndpoint:input_type -> shared.ViewerEndpointRequest
+	26, // 20: foghorn.ViewerControlService.ResolveIngestEndpoint:input_type -> shared.IngestEndpointRequest
+	27, // 21: foghorn.VodControlService.CreateVodUpload:input_type -> shared.CreateVodUploadRequest
+	28, // 22: foghorn.VodControlService.CompleteVodUpload:input_type -> shared.CompleteVodUploadRequest
+	29, // 23: foghorn.VodControlService.AbortVodUpload:input_type -> shared.AbortVodUploadRequest
+	30, // 24: foghorn.VodControlService.GetVodUploadStatus:input_type -> shared.GetVodUploadStatusRequest
+	31, // 25: foghorn.VodControlService.DeleteVodAsset:input_type -> shared.DeleteVodAssetRequest
+	1,  // 26: foghorn.EdgeProvisioningService.PreRegisterEdge:input_type -> foghorn.PreRegisterEdgeRequest
+	32, // 27: foghorn.NodeControlService.SetNodeOperationalMode:input_type -> foghorn_control.SetNodeModeRequest
+	33, // 28: foghorn.NodeControlService.GetNodeHealth:input_type -> foghorn_control.GetNodeHealthRequest
+	34, // 29: foghorn.TenantControlService.TerminateTenantStreams:input_type -> foghorn_control.TerminateTenantStreamsRequest
+	35, // 30: foghorn.TenantControlService.InvalidateTenantCache:input_type -> foghorn_control.InvalidateTenantCacheRequest
+	6,  // 31: foghorn.TenantControlService.InvalidatePlaybackAuth:input_type -> foghorn.InvalidatePlaybackAuthRequest
+	3,  // 32: foghorn.MediaAuthorityControlService.ApplyMediaAuthority:input_type -> foghorn.ApplyMediaAuthorityRequest
+	36, // 33: foghorn.MediaPlacementControlService.ObserveMediaPlacementCapacity:output_type -> media_placement.CapacityPreviewObservation
+	37, // 34: foghorn.MediaPlacementControlService.ObserveMediaPlacementPushSource:output_type -> media_placement.PushSourcePreviewObservation
+	38, // 35: foghorn.ClipControlService.CreateClip:output_type -> shared.CreateClipResponse
+	39, // 36: foghorn.ClipControlService.DeleteClip:output_type -> shared.DeleteClipResponse
+	40, // 37: foghorn.ClipControlService.DeleteStreamThumbnails:output_type -> shared.DeleteStreamThumbnailsResponse
+	41, // 38: foghorn.DVRControlService.StartDVR:output_type -> shared.StartDVRResponse
+	42, // 39: foghorn.DVRControlService.StopDVR:output_type -> shared.StopDVRResponse
+	43, // 40: foghorn.DVRControlService.DeleteDVR:output_type -> shared.DeleteDVRResponse
+	44, // 41: foghorn.DVRControlService.RetrieveDVRChapter:output_type -> foghorn_control.RetrieveDVRChapterResponse
+	45, // 42: foghorn.DVRControlService.ListDVRChapters:output_type -> foghorn_control.ListDVRChaptersResponse
+	9,  // 43: foghorn.DVRControlService.OverrideArtifactRetention:output_type -> foghorn.OverrideArtifactRetentionResponse
+	46, // 44: foghorn.DVRControlService.TestPlaybackAccess:output_type -> foghorn_control.TestPlaybackAccessResponse
+	47, // 45: foghorn.ViewerControlService.ResolveViewerEndpoint:output_type -> shared.ViewerEndpointResponse
+	48, // 46: foghorn.ViewerControlService.ResolveIngestEndpoint:output_type -> shared.IngestEndpointResponse
+	49, // 47: foghorn.VodControlService.CreateVodUpload:output_type -> shared.CreateVodUploadResponse
+	50, // 48: foghorn.VodControlService.CompleteVodUpload:output_type -> shared.CompleteVodUploadResponse
+	51, // 49: foghorn.VodControlService.AbortVodUpload:output_type -> shared.AbortVodUploadResponse
+	52, // 50: foghorn.VodControlService.GetVodUploadStatus:output_type -> shared.GetVodUploadStatusResponse
+	53, // 51: foghorn.VodControlService.DeleteVodAsset:output_type -> shared.DeleteVodAssetResponse
+	2,  // 52: foghorn.EdgeProvisioningService.PreRegisterEdge:output_type -> foghorn.PreRegisterEdgeResponse
+	54, // 53: foghorn.NodeControlService.SetNodeOperationalMode:output_type -> foghorn_control.SetNodeModeResponse
+	55, // 54: foghorn.NodeControlService.GetNodeHealth:output_type -> foghorn_control.GetNodeHealthResponse
+	56, // 55: foghorn.TenantControlService.TerminateTenantStreams:output_type -> foghorn_control.TerminateTenantStreamsResponse
+	57, // 56: foghorn.TenantControlService.InvalidateTenantCache:output_type -> foghorn_control.InvalidateTenantCacheResponse
+	7,  // 57: foghorn.TenantControlService.InvalidatePlaybackAuth:output_type -> foghorn.InvalidatePlaybackAuthResponse
+	4,  // 58: foghorn.MediaAuthorityControlService.ApplyMediaAuthority:output_type -> foghorn.ApplyMediaAuthorityResponse
+	33, // [33:59] is the sub-list for method output_type
+	7,  // [7:33] is the sub-list for method input_type
+	7,  // [7:7] is the sub-list for extension type_name
+	7,  // [7:7] is the sub-list for extension extendee
+	0,  // [0:7] is the sub-list for field type_name
 }
 
 func init() { file_foghorn_proto_init() }
@@ -922,9 +1015,9 @@ func file_foghorn_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_foghorn_proto_rawDesc), len(file_foghorn_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   8,
+			NumMessages:   9,
 			NumExtensions: 0,
-			NumServices:   8,
+			NumServices:   9,
 		},
 		GoTypes:           file_foghorn_proto_goTypes,
 		DependencyIndexes: file_foghorn_proto_depIdxs,

@@ -9,6 +9,7 @@ package foghornpb
 import (
 	context "context"
 	foghorn_control "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_control"
+	media_placement "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	shared "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
@@ -19,6 +20,151 @@ import (
 // is compatible with the grpc package it is being compiled against.
 // Requires gRPC-Go v1.64.0 or later.
 const _ = grpc.SupportPackageIsVersion9
+
+const (
+	MediaPlacementControlService_ObserveMediaPlacementCapacity_FullMethodName   = "/foghorn.MediaPlacementControlService/ObserveMediaPlacementCapacity"
+	MediaPlacementControlService_ObserveMediaPlacementPushSource_FullMethodName = "/foghorn.MediaPlacementControlService/ObserveMediaPlacementPushSource"
+)
+
+// MediaPlacementControlServiceClient is the client API for MediaPlacementControlService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// Read-only management observations, separate from media admission and preparation.
+type MediaPlacementControlServiceClient interface {
+	ObserveMediaPlacementCapacity(ctx context.Context, in *media_placement.CapacityPreviewQuery, opts ...grpc.CallOption) (*media_placement.CapacityPreviewObservation, error)
+	ObserveMediaPlacementPushSource(ctx context.Context, in *media_placement.PushSourcePreviewQuery, opts ...grpc.CallOption) (*media_placement.PushSourcePreviewObservation, error)
+}
+
+type mediaPlacementControlServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewMediaPlacementControlServiceClient(cc grpc.ClientConnInterface) MediaPlacementControlServiceClient {
+	return &mediaPlacementControlServiceClient{cc}
+}
+
+func (c *mediaPlacementControlServiceClient) ObserveMediaPlacementCapacity(ctx context.Context, in *media_placement.CapacityPreviewQuery, opts ...grpc.CallOption) (*media_placement.CapacityPreviewObservation, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(media_placement.CapacityPreviewObservation)
+	err := c.cc.Invoke(ctx, MediaPlacementControlService_ObserveMediaPlacementCapacity_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *mediaPlacementControlServiceClient) ObserveMediaPlacementPushSource(ctx context.Context, in *media_placement.PushSourcePreviewQuery, opts ...grpc.CallOption) (*media_placement.PushSourcePreviewObservation, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(media_placement.PushSourcePreviewObservation)
+	err := c.cc.Invoke(ctx, MediaPlacementControlService_ObserveMediaPlacementPushSource_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// MediaPlacementControlServiceServer is the server API for MediaPlacementControlService service.
+// All implementations must embed UnimplementedMediaPlacementControlServiceServer
+// for forward compatibility.
+//
+// Read-only management observations, separate from media admission and preparation.
+type MediaPlacementControlServiceServer interface {
+	ObserveMediaPlacementCapacity(context.Context, *media_placement.CapacityPreviewQuery) (*media_placement.CapacityPreviewObservation, error)
+	ObserveMediaPlacementPushSource(context.Context, *media_placement.PushSourcePreviewQuery) (*media_placement.PushSourcePreviewObservation, error)
+	mustEmbedUnimplementedMediaPlacementControlServiceServer()
+}
+
+// UnimplementedMediaPlacementControlServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedMediaPlacementControlServiceServer struct{}
+
+func (UnimplementedMediaPlacementControlServiceServer) ObserveMediaPlacementCapacity(context.Context, *media_placement.CapacityPreviewQuery) (*media_placement.CapacityPreviewObservation, error) {
+	return nil, status.Error(codes.Unimplemented, "method ObserveMediaPlacementCapacity not implemented")
+}
+func (UnimplementedMediaPlacementControlServiceServer) ObserveMediaPlacementPushSource(context.Context, *media_placement.PushSourcePreviewQuery) (*media_placement.PushSourcePreviewObservation, error) {
+	return nil, status.Error(codes.Unimplemented, "method ObserveMediaPlacementPushSource not implemented")
+}
+func (UnimplementedMediaPlacementControlServiceServer) mustEmbedUnimplementedMediaPlacementControlServiceServer() {
+}
+func (UnimplementedMediaPlacementControlServiceServer) testEmbeddedByValue() {}
+
+// UnsafeMediaPlacementControlServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to MediaPlacementControlServiceServer will
+// result in compilation errors.
+type UnsafeMediaPlacementControlServiceServer interface {
+	mustEmbedUnimplementedMediaPlacementControlServiceServer()
+}
+
+func RegisterMediaPlacementControlServiceServer(s grpc.ServiceRegistrar, srv MediaPlacementControlServiceServer) {
+	// If the following call panics, it indicates UnimplementedMediaPlacementControlServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&MediaPlacementControlService_ServiceDesc, srv)
+}
+
+func _MediaPlacementControlService_ObserveMediaPlacementCapacity_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(media_placement.CapacityPreviewQuery)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MediaPlacementControlServiceServer).ObserveMediaPlacementCapacity(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MediaPlacementControlService_ObserveMediaPlacementCapacity_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MediaPlacementControlServiceServer).ObserveMediaPlacementCapacity(ctx, req.(*media_placement.CapacityPreviewQuery))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _MediaPlacementControlService_ObserveMediaPlacementPushSource_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(media_placement.PushSourcePreviewQuery)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MediaPlacementControlServiceServer).ObserveMediaPlacementPushSource(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MediaPlacementControlService_ObserveMediaPlacementPushSource_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MediaPlacementControlServiceServer).ObserveMediaPlacementPushSource(ctx, req.(*media_placement.PushSourcePreviewQuery))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// MediaPlacementControlService_ServiceDesc is the grpc.ServiceDesc for MediaPlacementControlService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var MediaPlacementControlService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "foghorn.MediaPlacementControlService",
+	HandlerType: (*MediaPlacementControlServiceServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ObserveMediaPlacementCapacity",
+			Handler:    _MediaPlacementControlService_ObserveMediaPlacementCapacity_Handler,
+		},
+		{
+			MethodName: "ObserveMediaPlacementPushSource",
+			Handler:    _MediaPlacementControlService_ObserveMediaPlacementPushSource_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "foghorn.proto",
+}
 
 const (
 	ClipControlService_CreateClip_FullMethodName             = "/foghorn.ClipControlService/CreateClip"

@@ -8,6 +8,7 @@ package mediaauthoritypb
 
 import (
 	cluster_peer "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
+	media_placement "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	metering_contract "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/metering_contract"
 	shared "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	tenant_limits "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/tenant_limits"
@@ -659,9 +660,14 @@ type TenantClusterGrant struct {
 	EligibleServingCellIds []string `protobuf:"bytes,12,rep,name=eligible_serving_cell_ids,json=eligibleServingCellIds,proto3" json:"eligible_serving_cell_ids,omitempty"`
 	// Stable infrastructure class used by offline media-plane admission. Runtime health and
 	// addresses are overlaid locally; the signed grant still has to prove ingest capability.
-	ClusterType   string `protobuf:"bytes,13,opt,name=cluster_type,json=clusterType,proto3" json:"cluster_type,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	ClusterType string `protobuf:"bytes,13,opt,name=cluster_type,json=clusterType,proto3" json:"cluster_type,omitempty"`
+	// Placement facts require an envelope/payload schema of at least 2.
+	RegionId     string                           `protobuf:"bytes,14,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
+	MediaConsent *media_placement.CapacityConsent `protobuf:"bytes,15,opt,name=media_consent,json=mediaConsent,proto3" json:"media_consent,omitempty"`
+	// Classification only; comparison prices require the media object's scoped quote.
+	CommercialFacts *media_placement.CommercialFacts `protobuf:"bytes,16,opt,name=commercial_facts,json=commercialFacts,proto3" json:"commercial_facts,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *TenantClusterGrant) Reset() {
@@ -785,6 +791,27 @@ func (x *TenantClusterGrant) GetClusterType() string {
 	return ""
 }
 
+func (x *TenantClusterGrant) GetRegionId() string {
+	if x != nil {
+		return x.RegionId
+	}
+	return ""
+}
+
+func (x *TenantClusterGrant) GetMediaConsent() *media_placement.CapacityConsent {
+	if x != nil {
+		return x.MediaConsent
+	}
+	return nil
+}
+
+func (x *TenantClusterGrant) GetCommercialFacts() *media_placement.CommercialFacts {
+	if x != nil {
+		return x.CommercialFacts
+	}
+	return nil
+}
+
 // TenantAuthority contains only media-plane decisions. Raw balances, invoices,
 // payment credentials, and mutable control-plane presentation data are excluded.
 type TenantAuthority struct {
@@ -806,7 +833,8 @@ type TenantAuthority struct {
 	// Tenant-selected steady-state route. This is stable authority used only
 	// to label a healthy runtime peer as preferred; liveness and addresses are
 	// still supplied locally by the media cell.
-	PreferredClusterId string `protobuf:"bytes,14,opt,name=preferred_cluster_id,json=preferredClusterId,proto3" json:"preferred_cluster_id,omitempty"`
+	PreferredClusterId string                     `protobuf:"bytes,14,opt,name=preferred_cluster_id,json=preferredClusterId,proto3" json:"preferred_cluster_id,omitempty"`
+	MediaPlacement     *media_placement.PolicySet `protobuf:"bytes,15,opt,name=media_placement,json=mediaPlacement,proto3" json:"media_placement,omitempty"`
 	unknownFields      protoimpl.UnknownFields
 	sizeCache          protoimpl.SizeCache
 }
@@ -937,6 +965,13 @@ func (x *TenantAuthority) GetPreferredClusterId() string {
 		return x.PreferredClusterId
 	}
 	return ""
+}
+
+func (x *TenantAuthority) GetMediaPlacement() *media_placement.PolicySet {
+	if x != nil {
+		return x.MediaPlacement
+	}
+	return nil
 }
 
 type PlaybackSigningKey struct {
@@ -1707,21 +1742,26 @@ func (x *ArtifactAuthority) GetParentStreamInternalName() string {
 	return ""
 }
 
-// MediaObjectAuthority v1 freezes identity and public/JWT playback authority.
-// Ingest credentials, pull/native sources, processing, and outputs are added by
-// later schema versions rather than smuggled into the playback cut.
+// MediaObjectAuthority freezes media identity, admission, and sealed credentials.
+// Placement fields require schema 2 so older readers reject rather than ignore them.
 type MediaObjectAuthority struct {
-	state                 protoimpl.MessageState `protogen:"open.v1"`
-	SchemaVersion         uint32                 `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
-	ObjectKind            MediaObjectKind        `protobuf:"varint,2,opt,name=object_kind,json=objectKind,proto3,enum=media_authority.MediaObjectKind" json:"object_kind,omitempty"`
-	TenantId              string                 `protobuf:"bytes,3,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	UserId                string                 `protobuf:"bytes,4,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	InternalName          string                 `protobuf:"bytes,5,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`
-	PlaybackId            string                 `protobuf:"bytes,6,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`
-	Lifecycle             AuthorityLifecycle     `protobuf:"varint,7,opt,name=lifecycle,proto3,enum=media_authority.AuthorityLifecycle" json:"lifecycle,omitempty"`
-	OriginClusterId       string                 `protobuf:"bytes,8,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"`
-	PlaybackPolicy        *PlaybackPolicy        `protobuf:"bytes,9,opt,name=playback_policy,json=playbackPolicy,proto3" json:"playback_policy,omitempty"`
-	SealedPlaybackSecrets []*SealedCellSecret    `protobuf:"bytes,10,rep,name=sealed_playback_secrets,json=sealedPlaybackSecrets,proto3" json:"sealed_playback_secrets,omitempty"`
+	state                 protoimpl.MessageState     `protogen:"open.v1"`
+	SchemaVersion         uint32                     `protobuf:"varint,1,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	ObjectKind            MediaObjectKind            `protobuf:"varint,2,opt,name=object_kind,json=objectKind,proto3,enum=media_authority.MediaObjectKind" json:"object_kind,omitempty"`
+	TenantId              string                     `protobuf:"bytes,3,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	UserId                string                     `protobuf:"bytes,4,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	InternalName          string                     `protobuf:"bytes,5,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`
+	PlaybackId            string                     `protobuf:"bytes,6,opt,name=playback_id,json=playbackId,proto3" json:"playback_id,omitempty"`
+	Lifecycle             AuthorityLifecycle         `protobuf:"varint,7,opt,name=lifecycle,proto3,enum=media_authority.AuthorityLifecycle" json:"lifecycle,omitempty"`
+	OriginClusterId       string                     `protobuf:"bytes,8,opt,name=origin_cluster_id,json=originClusterId,proto3" json:"origin_cluster_id,omitempty"`
+	PlaybackPolicy        *PlaybackPolicy            `protobuf:"bytes,9,opt,name=playback_policy,json=playbackPolicy,proto3" json:"playback_policy,omitempty"`
+	SealedPlaybackSecrets []*SealedCellSecret        `protobuf:"bytes,10,rep,name=sealed_playback_secrets,json=sealedPlaybackSecrets,proto3" json:"sealed_playback_secrets,omitempty"`
+	MediaPlacement        *media_placement.PolicySet `protobuf:"bytes,11,opt,name=media_placement,json=mediaPlacement,proto3" json:"media_placement,omitempty"`
+	// Exact parent revision prevents combining an overlay with unrelated tenant intent.
+	PlacementTenantRevision uint64 `protobuf:"varint,12,opt,name=placement_tenant_revision,json=placementTenantRevision,proto3" json:"placement_tenant_revision,omitempty"`
+	// At most one quote per verb. Each binds this object, its effective policy and
+	// the complete tenant grant census; embedded usage evidence retains its cutoff.
+	CommercialQuotes []*media_placement.CommercialQuoteResponse `protobuf:"bytes,13,rep,name=commercial_quotes,json=commercialQuotes,proto3" json:"commercial_quotes,omitempty"`
 	// Types that are valid to be assigned to Object:
 	//
 	//	*MediaObjectAuthority_LiveStream
@@ -1831,6 +1871,27 @@ func (x *MediaObjectAuthority) GetSealedPlaybackSecrets() []*SealedCellSecret {
 	return nil
 }
 
+func (x *MediaObjectAuthority) GetMediaPlacement() *media_placement.PolicySet {
+	if x != nil {
+		return x.MediaPlacement
+	}
+	return nil
+}
+
+func (x *MediaObjectAuthority) GetPlacementTenantRevision() uint64 {
+	if x != nil {
+		return x.PlacementTenantRevision
+	}
+	return 0
+}
+
+func (x *MediaObjectAuthority) GetCommercialQuotes() []*media_placement.CommercialQuoteResponse {
+	if x != nil {
+		return x.CommercialQuotes
+	}
+	return nil
+}
+
 func (x *MediaObjectAuthority) GetObject() isMediaObjectAuthority_Object {
 	if x != nil {
 		return x.Object
@@ -1876,7 +1937,7 @@ var File_media_authority_proto protoreflect.FileDescriptor
 
 const file_media_authority_proto_rawDesc = "" +
 	"\n" +
-	"\x15media_authority.proto\x12\x0fmedia_authority\x1a\x12cluster_peer.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x17metering_contract.proto\x1a\fshared.proto\x1a\x13tenant_limits.proto\"O\n" +
+	"\x15media_authority.proto\x12\x0fmedia_authority\x1a\x12cluster_peer.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x17metering_contract.proto\x1a\x15media_placement.proto\x1a\fshared.proto\x1a\x13tenant_limits.proto\"O\n" +
 	"\x17AuthoritySourceRevision\x12\x18\n" +
 	"\aservice\x18\x01 \x01(\tR\aservice\x12\x1a\n" +
 	"\brevision\x18\x02 \x01(\tR\brevision\"\xd9\x04\n" +
@@ -1897,7 +1958,7 @@ const file_media_authority_proto_rawDesc = "" +
 	"\x10source_revisions\x18\f \x03(\v2(.media_authority.AuthoritySourceRevisionR\x0fsourceRevisions\"w\n" +
 	"\x17SignedAuthorityEnvelope\x12>\n" +
 	"\benvelope\x18\x01 \x01(\v2\".media_authority.AuthorityEnvelopeR\benvelope\x12\x1c\n" +
-	"\tsignature\x18\x02 \x01(\fR\tsignature\"\xad\x05\n" +
+	"\tsignature\x18\x02 \x01(\fR\tsignature\"\xde\x06\n" +
 	"\x12TenantClusterGrant\x12\x1d\n" +
 	"\n" +
 	"cluster_id\x18\x01 \x01(\tR\tclusterId\x12L\n" +
@@ -1914,8 +1975,11 @@ const file_media_authority_proto_rawDesc = "" +
 	" \x01(\bR\x17allowPrivatePullSources\x12&\n" +
 	"\x0fcontrol_cell_id\x18\v \x01(\tR\rcontrolCellId\x129\n" +
 	"\x19eligible_serving_cell_ids\x18\f \x03(\tR\x16eligibleServingCellIds\x12!\n" +
-	"\fcluster_type\x18\r \x01(\tR\vclusterTypeB\r\n" +
-	"\v_expires_at\"\xbd\x06\n" +
+	"\fcluster_type\x18\r \x01(\tR\vclusterType\x12\x1b\n" +
+	"\tregion_id\x18\x0e \x01(\tR\bregionId\x12E\n" +
+	"\rmedia_consent\x18\x0f \x01(\v2 .media_placement.CapacityConsentR\fmediaConsent\x12K\n" +
+	"\x10commercial_facts\x18\x10 \x01(\v2 .media_placement.CommercialFactsR\x0fcommercialFactsB\r\n" +
+	"\v_expires_at\"\x82\a\n" +
 	"\x0fTenantAuthority\x12%\n" +
 	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12A\n" +
@@ -1935,7 +1999,8 @@ const file_media_authority_proto_rawDesc = "" +
 	"dvr_policy\x18\f \x01(\v2\x11.shared.DVRPolicyR\tdvrPolicy\x12\x1d\n" +
 	"\n" +
 	"tier_level\x18\r \x01(\x05R\ttierLevel\x120\n" +
-	"\x14preferred_cluster_id\x18\x0e \x01(\tR\x12preferredClusterId\"o\n" +
+	"\x14preferred_cluster_id\x18\x0e \x01(\tR\x12preferredClusterId\x12C\n" +
+	"\x0fmedia_placement\x18\x0f \x01(\v2\x1a.media_placement.PolicySetR\x0emediaPlacement\"o\n" +
 	"\x12PlaybackSigningKey\x12\x15\n" +
 	"\x06key_id\x18\x01 \x01(\tR\x05keyId\x12\x1c\n" +
 	"\talgorithm\x18\x02 \x01(\tR\talgorithm\x12$\n" +
@@ -2006,7 +2071,7 @@ const file_media_authority_proto_rawDesc = "" +
 	"\rartifact_hash\x18\x02 \x01(\tR\fartifactHash\x12B\n" +
 	"\rartifact_kind\x18\x03 \x01(\x0e2\x1d.media_authority.ArtifactKindR\fartifactKind\x12(\n" +
 	"\x10parent_stream_id\x18\x04 \x01(\tR\x0eparentStreamId\x12=\n" +
-	"\x1bparent_stream_internal_name\x18\x05 \x01(\tR\x18parentStreamInternalName\"\xa5\x05\n" +
+	"\x1bparent_stream_internal_name\x18\x05 \x01(\tR\x18parentStreamInternalName\"\xfd\x06\n" +
 	"\x14MediaObjectAuthority\x12%\n" +
 	"\x0eschema_version\x18\x01 \x01(\rR\rschemaVersion\x12A\n" +
 	"\vobject_kind\x18\x02 \x01(\x0e2 .media_authority.MediaObjectKindR\n" +
@@ -2020,7 +2085,10 @@ const file_media_authority_proto_rawDesc = "" +
 	"\x11origin_cluster_id\x18\b \x01(\tR\x0foriginClusterId\x12H\n" +
 	"\x0fplayback_policy\x18\t \x01(\v2\x1f.media_authority.PlaybackPolicyR\x0eplaybackPolicy\x12Y\n" +
 	"\x17sealed_playback_secrets\x18\n" +
-	" \x03(\v2!.media_authority.SealedCellSecretR\x15sealedPlaybackSecrets\x12G\n" +
+	" \x03(\v2!.media_authority.SealedCellSecretR\x15sealedPlaybackSecrets\x12C\n" +
+	"\x0fmedia_placement\x18\v \x01(\v2\x1a.media_placement.PolicySetR\x0emediaPlacement\x12:\n" +
+	"\x19placement_tenant_revision\x18\f \x01(\x04R\x17placementTenantRevision\x12U\n" +
+	"\x11commercial_quotes\x18\r \x03(\v2(.media_placement.CommercialQuoteResponseR\x10commercialQuotes\x12G\n" +
 	"\vlive_stream\x18\x14 \x01(\v2$.media_authority.LiveStreamAuthorityH\x00R\n" +
 	"liveStream\x12@\n" +
 	"\bartifact\x18\x15 \x01(\v2\".media_authority.ArtifactAuthorityH\x00R\bartifactB\b\n" +
@@ -2076,35 +2144,39 @@ func file_media_authority_proto_rawDescGZIP() []byte {
 var file_media_authority_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
 var file_media_authority_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_media_authority_proto_goTypes = []any{
-	(AuthorityKind)(0),                          // 0: media_authority.AuthorityKind
-	(AuthorityLifecycle)(0),                     // 1: media_authority.AuthorityLifecycle
-	(TenantBillingDecision)(0),                  // 2: media_authority.TenantBillingDecision
-	(TenantBillingModel)(0),                     // 3: media_authority.TenantBillingModel
-	(MediaObjectKind)(0),                        // 4: media_authority.MediaObjectKind
-	(ArtifactKind)(0),                           // 5: media_authority.ArtifactKind
-	(PlaybackPolicyKind)(0),                     // 6: media_authority.PlaybackPolicyKind
-	(*AuthoritySourceRevision)(nil),             // 7: media_authority.AuthoritySourceRevision
-	(*AuthorityEnvelope)(nil),                   // 8: media_authority.AuthorityEnvelope
-	(*SignedAuthorityEnvelope)(nil),             // 9: media_authority.SignedAuthorityEnvelope
-	(*TenantClusterGrant)(nil),                  // 10: media_authority.TenantClusterGrant
-	(*TenantAuthority)(nil),                     // 11: media_authority.TenantAuthority
-	(*PlaybackSigningKey)(nil),                  // 12: media_authority.PlaybackSigningKey
-	(*PlaybackJwtPolicy)(nil),                   // 13: media_authority.PlaybackJwtPolicy
-	(*PlaybackPolicy)(nil),                      // 14: media_authority.PlaybackPolicy
-	(*SealedCellSecret)(nil),                    // 15: media_authority.SealedCellSecret
-	(*PushTargetSecret)(nil),                    // 16: media_authority.PushTargetSecret
-	(*LiveStreamSecret)(nil),                    // 17: media_authority.LiveStreamSecret
-	(*PlaybackWebhookSecret)(nil),               // 18: media_authority.PlaybackWebhookSecret
-	(*MediaObjectSecret)(nil),                   // 19: media_authority.MediaObjectSecret
-	(*LiveStreamAuthority)(nil),                 // 20: media_authority.LiveStreamAuthority
-	(*ArtifactAuthority)(nil),                   // 21: media_authority.ArtifactAuthority
-	(*MediaObjectAuthority)(nil),                // 22: media_authority.MediaObjectAuthority
-	nil,                                         // 23: media_authority.PlaybackJwtPolicy.RequiredClaimsJsonEntry
-	(*timestamppb.Timestamp)(nil),               // 24: google.protobuf.Timestamp
-	(cluster_peer.TenantClusterAccessSource)(0), // 25: cluster_peer.TenantClusterAccessSource
-	(*tenant_limits.TenantResourceLimits)(nil),  // 26: tenant_limits.TenantResourceLimits
-	(*metering_contract.MeterAllowance)(nil),    // 27: metering.MeterAllowance
-	(*shared.DVRPolicy)(nil),                    // 28: shared.DVRPolicy
+	(AuthorityKind)(0),                              // 0: media_authority.AuthorityKind
+	(AuthorityLifecycle)(0),                         // 1: media_authority.AuthorityLifecycle
+	(TenantBillingDecision)(0),                      // 2: media_authority.TenantBillingDecision
+	(TenantBillingModel)(0),                         // 3: media_authority.TenantBillingModel
+	(MediaObjectKind)(0),                            // 4: media_authority.MediaObjectKind
+	(ArtifactKind)(0),                               // 5: media_authority.ArtifactKind
+	(PlaybackPolicyKind)(0),                         // 6: media_authority.PlaybackPolicyKind
+	(*AuthoritySourceRevision)(nil),                 // 7: media_authority.AuthoritySourceRevision
+	(*AuthorityEnvelope)(nil),                       // 8: media_authority.AuthorityEnvelope
+	(*SignedAuthorityEnvelope)(nil),                 // 9: media_authority.SignedAuthorityEnvelope
+	(*TenantClusterGrant)(nil),                      // 10: media_authority.TenantClusterGrant
+	(*TenantAuthority)(nil),                         // 11: media_authority.TenantAuthority
+	(*PlaybackSigningKey)(nil),                      // 12: media_authority.PlaybackSigningKey
+	(*PlaybackJwtPolicy)(nil),                       // 13: media_authority.PlaybackJwtPolicy
+	(*PlaybackPolicy)(nil),                          // 14: media_authority.PlaybackPolicy
+	(*SealedCellSecret)(nil),                        // 15: media_authority.SealedCellSecret
+	(*PushTargetSecret)(nil),                        // 16: media_authority.PushTargetSecret
+	(*LiveStreamSecret)(nil),                        // 17: media_authority.LiveStreamSecret
+	(*PlaybackWebhookSecret)(nil),                   // 18: media_authority.PlaybackWebhookSecret
+	(*MediaObjectSecret)(nil),                       // 19: media_authority.MediaObjectSecret
+	(*LiveStreamAuthority)(nil),                     // 20: media_authority.LiveStreamAuthority
+	(*ArtifactAuthority)(nil),                       // 21: media_authority.ArtifactAuthority
+	(*MediaObjectAuthority)(nil),                    // 22: media_authority.MediaObjectAuthority
+	nil,                                             // 23: media_authority.PlaybackJwtPolicy.RequiredClaimsJsonEntry
+	(*timestamppb.Timestamp)(nil),                   // 24: google.protobuf.Timestamp
+	(cluster_peer.TenantClusterAccessSource)(0),     // 25: cluster_peer.TenantClusterAccessSource
+	(*tenant_limits.TenantResourceLimits)(nil),      // 26: tenant_limits.TenantResourceLimits
+	(*media_placement.CapacityConsent)(nil),         // 27: media_placement.CapacityConsent
+	(*media_placement.CommercialFacts)(nil),         // 28: media_placement.CommercialFacts
+	(*metering_contract.MeterAllowance)(nil),        // 29: metering.MeterAllowance
+	(*shared.DVRPolicy)(nil),                        // 30: shared.DVRPolicy
+	(*media_placement.PolicySet)(nil),               // 31: media_placement.PolicySet
+	(*media_placement.CommercialQuoteResponse)(nil), // 32: media_placement.CommercialQuoteResponse
 }
 var file_media_authority_proto_depIdxs = []int32{
 	0,  // 0: media_authority.AuthorityEnvelope.kind:type_name -> media_authority.AuthorityKind
@@ -2116,32 +2188,37 @@ var file_media_authority_proto_depIdxs = []int32{
 	25, // 6: media_authority.TenantClusterGrant.access_source:type_name -> cluster_peer.TenantClusterAccessSource
 	24, // 7: media_authority.TenantClusterGrant.expires_at:type_name -> google.protobuf.Timestamp
 	26, // 8: media_authority.TenantClusterGrant.resource_limits:type_name -> tenant_limits.TenantResourceLimits
-	1,  // 9: media_authority.TenantAuthority.lifecycle:type_name -> media_authority.AuthorityLifecycle
-	2,  // 10: media_authority.TenantAuthority.billing_decision:type_name -> media_authority.TenantBillingDecision
-	3,  // 11: media_authority.TenantAuthority.billing_model:type_name -> media_authority.TenantBillingModel
-	10, // 12: media_authority.TenantAuthority.effective_cluster_grants:type_name -> media_authority.TenantClusterGrant
-	26, // 13: media_authority.TenantAuthority.resource_limits:type_name -> tenant_limits.TenantResourceLimits
-	27, // 14: media_authority.TenantAuthority.allowances:type_name -> metering.MeterAllowance
-	28, // 15: media_authority.TenantAuthority.dvr_policy:type_name -> shared.DVRPolicy
-	23, // 16: media_authority.PlaybackJwtPolicy.required_claims_json:type_name -> media_authority.PlaybackJwtPolicy.RequiredClaimsJsonEntry
-	12, // 17: media_authority.PlaybackJwtPolicy.active_keys:type_name -> media_authority.PlaybackSigningKey
-	6,  // 18: media_authority.PlaybackPolicy.kind:type_name -> media_authority.PlaybackPolicyKind
-	13, // 19: media_authority.PlaybackPolicy.jwt:type_name -> media_authority.PlaybackJwtPolicy
-	16, // 20: media_authority.LiveStreamSecret.push_targets:type_name -> media_authority.PushTargetSecret
-	18, // 21: media_authority.MediaObjectSecret.playback_webhook:type_name -> media_authority.PlaybackWebhookSecret
-	15, // 22: media_authority.LiveStreamAuthority.sealed_cell_secrets:type_name -> media_authority.SealedCellSecret
-	5,  // 23: media_authority.ArtifactAuthority.artifact_kind:type_name -> media_authority.ArtifactKind
-	4,  // 24: media_authority.MediaObjectAuthority.object_kind:type_name -> media_authority.MediaObjectKind
-	1,  // 25: media_authority.MediaObjectAuthority.lifecycle:type_name -> media_authority.AuthorityLifecycle
-	14, // 26: media_authority.MediaObjectAuthority.playback_policy:type_name -> media_authority.PlaybackPolicy
-	15, // 27: media_authority.MediaObjectAuthority.sealed_playback_secrets:type_name -> media_authority.SealedCellSecret
-	20, // 28: media_authority.MediaObjectAuthority.live_stream:type_name -> media_authority.LiveStreamAuthority
-	21, // 29: media_authority.MediaObjectAuthority.artifact:type_name -> media_authority.ArtifactAuthority
-	30, // [30:30] is the sub-list for method output_type
-	30, // [30:30] is the sub-list for method input_type
-	30, // [30:30] is the sub-list for extension type_name
-	30, // [30:30] is the sub-list for extension extendee
-	0,  // [0:30] is the sub-list for field type_name
+	27, // 9: media_authority.TenantClusterGrant.media_consent:type_name -> media_placement.CapacityConsent
+	28, // 10: media_authority.TenantClusterGrant.commercial_facts:type_name -> media_placement.CommercialFacts
+	1,  // 11: media_authority.TenantAuthority.lifecycle:type_name -> media_authority.AuthorityLifecycle
+	2,  // 12: media_authority.TenantAuthority.billing_decision:type_name -> media_authority.TenantBillingDecision
+	3,  // 13: media_authority.TenantAuthority.billing_model:type_name -> media_authority.TenantBillingModel
+	10, // 14: media_authority.TenantAuthority.effective_cluster_grants:type_name -> media_authority.TenantClusterGrant
+	26, // 15: media_authority.TenantAuthority.resource_limits:type_name -> tenant_limits.TenantResourceLimits
+	29, // 16: media_authority.TenantAuthority.allowances:type_name -> metering.MeterAllowance
+	30, // 17: media_authority.TenantAuthority.dvr_policy:type_name -> shared.DVRPolicy
+	31, // 18: media_authority.TenantAuthority.media_placement:type_name -> media_placement.PolicySet
+	23, // 19: media_authority.PlaybackJwtPolicy.required_claims_json:type_name -> media_authority.PlaybackJwtPolicy.RequiredClaimsJsonEntry
+	12, // 20: media_authority.PlaybackJwtPolicy.active_keys:type_name -> media_authority.PlaybackSigningKey
+	6,  // 21: media_authority.PlaybackPolicy.kind:type_name -> media_authority.PlaybackPolicyKind
+	13, // 22: media_authority.PlaybackPolicy.jwt:type_name -> media_authority.PlaybackJwtPolicy
+	16, // 23: media_authority.LiveStreamSecret.push_targets:type_name -> media_authority.PushTargetSecret
+	18, // 24: media_authority.MediaObjectSecret.playback_webhook:type_name -> media_authority.PlaybackWebhookSecret
+	15, // 25: media_authority.LiveStreamAuthority.sealed_cell_secrets:type_name -> media_authority.SealedCellSecret
+	5,  // 26: media_authority.ArtifactAuthority.artifact_kind:type_name -> media_authority.ArtifactKind
+	4,  // 27: media_authority.MediaObjectAuthority.object_kind:type_name -> media_authority.MediaObjectKind
+	1,  // 28: media_authority.MediaObjectAuthority.lifecycle:type_name -> media_authority.AuthorityLifecycle
+	14, // 29: media_authority.MediaObjectAuthority.playback_policy:type_name -> media_authority.PlaybackPolicy
+	15, // 30: media_authority.MediaObjectAuthority.sealed_playback_secrets:type_name -> media_authority.SealedCellSecret
+	31, // 31: media_authority.MediaObjectAuthority.media_placement:type_name -> media_placement.PolicySet
+	32, // 32: media_authority.MediaObjectAuthority.commercial_quotes:type_name -> media_placement.CommercialQuoteResponse
+	20, // 33: media_authority.MediaObjectAuthority.live_stream:type_name -> media_authority.LiveStreamAuthority
+	21, // 34: media_authority.MediaObjectAuthority.artifact:type_name -> media_authority.ArtifactAuthority
+	35, // [35:35] is the sub-list for method output_type
+	35, // [35:35] is the sub-list for method input_type
+	35, // [35:35] is the sub-list for extension type_name
+	35, // [35:35] is the sub-list for extension extendee
+	0,  // [0:35] is the sub-list for field type_name
 }
 
 func init() { file_media_authority_proto_init() }

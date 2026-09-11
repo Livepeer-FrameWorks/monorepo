@@ -10,6 +10,7 @@ BUF := go run github.com/bufbuild/buf/cmd/buf@$(BUF_VERSION)
 # - tenant_limits.proto: TenantResourceLimits value type (admission caps)
 # - metering_contract.proto: MeterAllowance value type (billing allowance snapshot)
 # - media_authority.proto: Signed tenant/media-object authority envelope and payloads
+# - media_placement.proto: Scoped media routing intent and owner-issued placement facts
 # - x402.proto: x402 client payment payload (Gateway/Commodore/Purser shared contract)
 # - ipc.proto: Media plane (Helmsman ↔ Foghorn ↔ Decklog)
 # - dns.proto: DNS management (Navigator)
@@ -44,6 +45,7 @@ proto-check: proto
 clean:
 	rm -f *.pb.go *_grpc.pb.go
 	rm -f common/*.pb.go shared/*.pb.go cluster_peer/*.pb.go tenant_limits/*.pb.go metering_contract/*.pb.go media_authority/*.pb.go x402/*.pb.go ipc/*.pb.go dns/*.pb.go commodore/*.pb.go quartermaster/*.pb.go purser/*.pb.go periscope/*.pb.go signalman/*.pb.go foghorn_control/*.pb.go foghorn/*.pb.go foghorn_federation/*.pb.go foghorn_relay/*.pb.go deckhand/*.pb.go skipper/*.pb.go
+	rm -f media_placement/*.pb.go
 
 # Warm the pinned Buf binary in the Go build cache. Kept as part of the root
 # install-tools workflow for developers who want to prefetch all tooling.

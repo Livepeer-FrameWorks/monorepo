@@ -303,6 +303,9 @@ message ViewerEndpointRequest {
   string content_id = 2;
   optional string viewer_ip = 3;
   optional string viewer_token = 4;
+  // Canonical playback protocol. Empty negotiates WebRTC then HLS; an explicit
+  // requirement must not fall back to a different protocol.
+  string protocol = 5;
 }
 
 // OutputCapability - capabilities of an output protocol
@@ -411,6 +414,14 @@ message ViewerEndpointResponse {
 message IngestEndpointRequest {
   string stream_key = 1;
   optional string viewer_ip = 2;  // For geo-routing (client IP)
+  IngestProtocol protocol = 3; // Unspecified accepts any advertised ingest protocol.
+}
+
+enum IngestProtocol {
+  INGEST_PROTOCOL_UNSPECIFIED = 0;
+  INGEST_PROTOCOL_WHIP = 1;
+  INGEST_PROTOCOL_RTMP = 2;
+  INGEST_PROTOCOL_SRT = 3;
 }
 
 // IngestEndpointKind classifies the surface a resolved endpoint exposes,
