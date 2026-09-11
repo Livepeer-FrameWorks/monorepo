@@ -95,6 +95,10 @@ func (p *Processor) promoteLocalArtifactSourceIfMatching(ctx context.Context, co
 		snapshot.Object.Authority == nil || snapshot.Tenant.Authority == nil || snapshot.Object.SourceReady {
 		return
 	}
+	if !localauthority.ShadowComparable(snapshot.Tenant.Authority, snapshot.Object.Authority) {
+		p.observeMediaAuthorityShadow("artifact_source_mismatch")
+		return
+	}
 	readObject, objectErr := p.mediaAuthorityStore.MediaObjectByInternalName(ctx, snapshot.Object.Authority.GetInternalName())
 	readTenant, tenantErr := p.mediaAuthorityStore.Tenant(ctx, snapshot.Object.Authority.GetTenantId())
 	if objectErr != nil || tenantErr != nil || !readObject.Ready || !readTenant.Ready ||
@@ -108,7 +112,7 @@ func (p *Processor) promoteLocalArtifactSourceIfMatching(ctx context.Context, co
 	var marked bool
 	var err error
 	if snapshot.Tenant.SourceReady {
-		marked, err = p.mediaAuthorityStore.MarkMediaObjectLocalSourceReady(ctx, snapshot.Object.AuthorityID, snapshot.Object.Version)
+		marked, err = p.mediaAuthorityStore.MarkMediaObjectLocalSourceReady(ctx, snapshot.Object.Authority.GetTenantId(), snapshot.Object.AuthorityID, snapshot.Object.Version)
 	} else {
 		marked, err = p.mediaAuthorityStore.MarkSourcePairLocalReady(ctx, snapshot.Object.Authority.GetTenantId(), snapshot.Tenant.Version, snapshot.Object.AuthorityID, snapshot.Object.Version)
 	}

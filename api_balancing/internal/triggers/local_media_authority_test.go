@@ -5,27 +5,74 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"database/sql"
+	"fmt"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/federation"
 	localauthority "frameworks/api_balancing/internal/mediaauthority"
 	"frameworks/api_balancing/internal/state"
 	"github.com/DATA-DOG/go-sqlmock"
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	mediaauthoritypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
 	meteringpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/metering_contract"
 	tenantlimitspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/tenant_limits"
+	"github.com/sirupsen/logrus"
+	logrustest "github.com/sirupsen/logrus/hooks/test"
 	"google.golang.org/protobuf/proto"
 )
 
 func localPayloadDigest(payload []byte) []byte {
 	digest := sha256.Sum256(payload)
 	return digest[:]
+}
+
+// admitViewerPlacementForTest answers the viewer placement seam for fixtures whose
+// subject is resolution rather than policy. There is no unenforced viewer path, so
+// the decision still has to be bound to the connection it was asked about: it is
+// derived from that connection and from Mist's own connector, and a fixture whose
+// identity or protocol drifts is refused exactly as production would refuse it.
+func admitViewerPlacementForTest(t *testing.T, p *Processor) {
+	t.Helper()
+	p.SetViewerPlacementAdmission(func(_ context.Context, connection ViewerPlacementConnection) (federation.PlacementAdmissionDecision, error) {
+		protocol, err := mist.ViewerProtocol(connection.Connector)
+		if err != nil {
+			return federation.PlacementAdmissionDecision{}, err
+		}
+		decision := placementDecisionForTest(connection.TenantID, connection.InternalName, connection.ClusterID, connection.NodeID, protocol, placement.Serve)
+		decision.SourceGeneration = "source-generation"
+		return decision, nil
+	})
+}
+
+// admitIngestPlacementForTest is the publisher-side counterpart: the protocol comes
+// from Mist's observed connector, never from the push URL the publisher chose.
+func admitIngestPlacementForTest(t *testing.T, p *Processor) {
+	t.Helper()
+	p.SetIngestPlacementAdmission(func(_ context.Context, connection IngestPlacementConnection) (federation.PlacementAdmissionDecision, error) {
+		protocol, err := mist.IngestProtocol(connection.Connector)
+		if err != nil {
+			return federation.PlacementAdmissionDecision{}, err
+		}
+		return placementDecisionForTest(connection.TenantID, connection.InternalName, connection.ClusterID, connection.NodeID, protocol, placement.Ingest), nil
+	})
+}
+
+func placementDecisionForTest(tenantID, internalName, clusterID, nodeID, protocol string, verb placement.Verb) federation.PlacementAdmissionDecision {
+	return federation.PlacementAdmissionDecision{
+		TenantID: tenantID, ObjectID: sharedauthority.LiveStreamAuthorityID(internalName), InternalName: internalName,
+		ClusterID: clusterID, NodeID: nodeID, Protocol: protocol, Verb: verb,
+		PolicyDigest: strings.Repeat("ab", 32), PolicyRevision: 1, ParentRevision: 1,
+		TenantAuthorityVersion: 1, ObjectAuthorityVersion: 1, ExpiresAt: time.Now().Add(5 * time.Second),
+	}
 }
 
 func TestLocalTenantDecisionMismatchClassifiesBoundedReasons(t *testing.T) {
@@ -159,7 +206,7 @@ func TestShadowPlaybackComparisonScopesFullContextToLocalCluster(t *testing.T) {
 		WithArgs(object.GetTenantId(), int64(8)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE foghorn.media_object_authority_projection")).
-		WithArgs(sharedauthority.LiveStreamAuthorityID(object.GetLiveStream().GetStreamId()), int64(4)).
+		WithArgs(object.GetTenantId(), sharedauthority.LiveStreamAuthorityID(object.GetLiveStream().GetStreamId()), int64(4)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
@@ -449,8 +496,10 @@ func TestPushRewriteUsesReadyLocalAuthorityOnlyOnSignedOutageOwner(t *testing.T)
 		WillReturnRows(sqlmock.NewRows([]string{"payload", "payload_sha256", "refresh_after", "valid_until", "authority_version", "local_read_ready", "local_ingest_ready", "local_source_ready"}).
 			AddRow(tenantBytes, localPayloadDigest(tenantBytes), time.Now().Add(time.Minute), validUntil, int64(8), false, true, false))
 
+	admitIngestPlacementForTest(t, p)
 	trigger := &ipcpb.MistTrigger{NodeId: "edge-node-1", TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
-		PushRewrite: &ipcpb.PushRewriteTrigger{Pid: 4242, TriggerUuid: "outage-trigger", TriggerUnixMillis: 1, StreamName: "sk_local", PushUrl: "rtmp://example/live/sk_local"},
+		PushRewrite: &ipcpb.PushRewriteTrigger{Pid: 4242, TriggerUuid: "outage-trigger", TriggerUnixMillis: 1, StreamName: "sk_local",
+			PushUrl: "rtmp://example/live/sk_local", ObservedConnector: "RTMP"},
 	}}
 	streamName, blocking, err := p.handlePushRewrite(trigger)
 	if err != nil || blocking || streamName != "live+stream-internal" {
@@ -623,10 +672,16 @@ func TestPlayRewriteLocalDriverErrorUsesConnectedResolver(t *testing.T) {
 		TenantID: "tenant-id", StreamID: "stream-id", BillingModel: "postpaid",
 	}, time.Minute)
 
+	// Viewer admission identifies the destination by the node's authenticated
+	// control session, so the emitting node must be bound to its cluster.
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+	sm.SetNodeConnectionInfo(context.Background(), "edge-node-1", "edge-node-1:18090", "", "cluster-a", nil)
+	admitViewerPlacementForTest(t, p)
 	response, abort, err := p.handlePlayRewrite(&ipcpb.MistTrigger{
 		NodeId: "edge-node-1",
 		TriggerPayload: &ipcpb.MistTrigger_PlayRewrite{PlayRewrite: &ipcpb.ViewerResolveTrigger{
-			RequestedStream: "stream-internal", ViewerHost: "192.0.2.10", OutputType: "HTTP",
+			RequestedStream: "stream-internal", ViewerHost: "192.0.2.10", OutputType: "HLS",
 		}},
 	})
 	if err != nil || abort || response != "live+stream-internal" {
@@ -659,6 +714,8 @@ func TestPlayRewriteReadyLocalAuthoritySkipsConnectedEnrichment(t *testing.T) {
 	validUntil := time.Now().Add(time.Hour)
 	p, mock, closeDB, tenantBytes, objectBytes := localAuthorityFixture(t)
 	defer closeDB()
+	p.logger.SetLevel(logrus.DebugLevel)
+	logs := logrustest.NewLocal(p.logger)
 	expectLocalObject(mock, objectBytes, validUntil, true)
 	expectLocalTenant(mock, tenantBytes, validUntil, true)
 	expectLocalTenant(mock, tenantBytes, validUntil, true)
@@ -667,10 +724,15 @@ func TestPlayRewriteReadyLocalAuthoritySkipsConnectedEnrichment(t *testing.T) {
 	t.Cleanup(cleanup)
 	p.SetCommodoreClient(connected)
 
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+	sm.SetNodeConnectionInfo(context.Background(), "edge-node-1", "edge-node-1:18090", "", "cluster-a", nil)
+	admitViewerPlacementForTest(t, p)
 	trigger := &ipcpb.MistTrigger{
 		NodeId: "edge-node-1",
 		TriggerPayload: &ipcpb.MistTrigger_PlayRewrite{PlayRewrite: &ipcpb.ViewerResolveTrigger{
-			RequestedStream: "PlaybackKey", ViewerHost: "192.0.2.10", OutputType: "HTTP",
+			RequestedStream: "PlaybackKey", ViewerHost: "192.0.2.10", OutputType: "HLS",
+			RequestUrl: "https://edge/hls/PlaybackKey/index.m3u8?jwt=private-viewer-credential",
 		}},
 	}
 	response, abort, err := p.handlePlayRewrite(trigger)
@@ -683,8 +745,95 @@ func TestPlayRewriteReadyLocalAuthoritySkipsConnectedEnrichment(t *testing.T) {
 	if calls := stub.ResolveStreamContextKeys(); len(calls) != 0 {
 		t.Fatalf("ready local PLAY_REWRITE made connected enrichment calls: %v", calls)
 	}
+	for _, entry := range logs.AllEntries() {
+		if strings.Contains(entry.Message, "private-viewer-credential") || strings.Contains(fmt.Sprint(entry.Data), "private-viewer-credential") {
+			t.Fatal("PLAY_REWRITE logged a viewer credential")
+		}
+	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Mist asks PLAY_REWRITE with a runtime name, and a runtime name is an internal
+// name, never a playback id. The local projection therefore has to be consulted
+// through its internal-name index for these, or the only index tried is one that
+// cannot match and every prefixed name falls through to the control plane. That
+// is exactly the case the local projection exists for: an origin asked to serve
+// its own peer's prepared source pull while Commodore is unreachable.
+func TestPlayRewriteResolvesRuntimeNameFromLocalAuthorityWithoutControlPlane(t *testing.T) {
+	validUntil := time.Now().Add(time.Hour)
+	p, mock, closeDB, tenantBytes, objectBytes := localAuthorityFixture(t)
+	defer closeDB()
+	// The playback-id index cannot match a runtime name; the internal-name index
+	// strips the prefix and answers.
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,")).
+		WillReturnError(sql.ErrNoRows)
+	expectLocalObject(mock, objectBytes, validUntil, true)
+	expectLocalTenant(mock, tenantBytes, validUntil, true)
+	expectLocalTenant(mock, tenantBytes, validUntil, true)
+
+	connected, cleanup, stub := setupCommodoreClientWithStub(t, nil, nil)
+	t.Cleanup(cleanup)
+	p.SetCommodoreClient(connected)
+
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+	sm.SetNodeConnectionInfo(context.Background(), "edge-node-1", "edge-node-1:18090", "", "cluster-a", nil)
+	admitViewerPlacementForTest(t, p)
+	trigger := &ipcpb.MistTrigger{
+		NodeId: "edge-node-1",
+		TriggerPayload: &ipcpb.MistTrigger_PlayRewrite{PlayRewrite: &ipcpb.ViewerResolveTrigger{
+			RequestedStream: "live+stream-internal", ViewerHost: "192.0.2.10", OutputType: "HLS",
+			RequestUrl: "https://edge/hls/live+stream-internal/index.m3u8",
+		}},
+	}
+	response, abort, err := p.handlePlayRewrite(trigger)
+	if err != nil || abort || response != "live+stream-internal" {
+		t.Fatalf("runtime-name PLAY_REWRITE = response:%q abort:%v err:%v", response, abort, err)
+	}
+	if trigger.GetTenantId() == "" || trigger.GetStreamId() == "" || trigger.GetOriginClusterId() != "cluster-a" {
+		t.Fatalf("runtime-name PLAY_REWRITE context = %+v", trigger)
+	}
+	if calls := stub.ResolveStreamContextKeys(); len(calls) != 0 {
+		t.Fatalf("local authority answered but the control plane was still consulted: %v", calls)
+	}
+	// Fails if the internal-name lookup was never issued, which is the whole point.
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A hard-expired projection says this cell holds no current authority for the
+// object; it is not a decision about the object. Aborting on it would refuse a
+// stream the control plane can still resolve, including a peer's prepared DTSC
+// pull, so PLAY_REWRITE consults the control plane instead. A denial stays
+// terminal and is covered separately.
+func TestPlayRewriteExpiredLocalAuthorityConsultsControlPlaneInsteadOfAborting(t *testing.T) {
+	p, mock, closeDB, _, objectBytes := localAuthorityFixture(t)
+	defer closeDB()
+	// Ready, but past valid_until: the freshness gate reports hard expiry.
+	expectLocalObject(mock, objectBytes, time.Now().Add(-time.Minute), true)
+
+	connected, cleanup, stub := setupCommodoreClientWithStub(t, nil, nil)
+	t.Cleanup(cleanup)
+	p.SetCommodoreClient(connected)
+
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+	admitViewerPlacementForTest(t, p)
+	trigger := &ipcpb.MistTrigger{
+		NodeId: "edge-node-1",
+		TriggerPayload: &ipcpb.MistTrigger_PlayRewrite{PlayRewrite: &ipcpb.ViewerResolveTrigger{
+			RequestedStream: "PlaybackKey", ViewerHost: "192.0.2.10", OutputType: "HLS",
+		}},
+	}
+	_, abort, err := p.handlePlayRewrite(trigger)
+	if abort || err != nil {
+		t.Fatalf("expired local authority aborted PLAY_REWRITE: abort=%v err=%v", abort, err)
+	}
+	if calls := stub.ResolveStreamContextKeys(); len(calls) == 0 {
+		t.Fatal("expired local authority did not fall through to the control plane")
 	}
 }
 

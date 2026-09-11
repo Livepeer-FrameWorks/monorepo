@@ -127,22 +127,30 @@ const (
 
 // Processor implements the MistTriggerProcessor interface for handling MistServer triggers
 type Processor struct {
-	logger              logging.Logger
-	commodoreClient     *commodore.GRPCClient
-	quartermasterClient *qmclient.GRPCClient
-	tenantAdmission     tenantAdmissionClient
-	decklogClient       *decklog.BatchedClient
-	loadBalancer        *balancer.LoadBalancer
-	geoipClient         *geoip.Reader
-	geoipCache          *cache.Cache
-	dvrService          DVRStarter // Internal DVR orchestration (FoghornGRPCServer)
-	metrics             *ProcessorMetrics
-	nodeID              string
-	clusterID           string
-	ownerTenantID       string
-	viewerClusterAccess func(clusterID, tenantID, officialClusterID string, peers []*clusterpeerpb.TenantClusterPeer) bool
-	mediaAuthorityStore *localauthority.Store
-	signingKeyUse       SigningKeyUseRecorder
+	logger                    logging.Logger
+	commodoreClient           *commodore.GRPCClient
+	quartermasterClient       *qmclient.GRPCClient
+	tenantAdmission           tenantAdmissionClient
+	decklogClient             *decklog.BatchedClient
+	loadBalancer              *balancer.LoadBalancer
+	geoipClient               *geoip.Reader
+	geoipCache                *cache.Cache
+	dvrService                DVRStarter // Internal DVR orchestration (FoghornGRPCServer)
+	metrics                   *ProcessorMetrics
+	nodeID                    string
+	clusterID                 string
+	ownerTenantID             string
+	viewerClusterAccess       func(clusterID, tenantID, officialClusterID string, peers []*clusterpeerpb.TenantClusterPeer) bool
+	mediaAuthorityStore       *localauthority.Store
+	viewerPlacementRequired   bool
+	viewerPlacementAdmission  ViewerPlacementAdmission
+	ingestPlacementRequired   bool
+	ingestPlacementAdmission  IngestPlacementAdmission
+	sourceConnectionAdmission SourceConnectionAdmission
+	preparedSourceRequired    bool
+	preparedSourceRegistry    *control.StreamRegistry
+	preparedSourceAdmission   PreparedSourceAdmission
+	signingKeyUse             SigningKeyUseRecorder
 
 	streamCache        *cache.Cache // Cache stream context (tenant + user)
 	billingCache       *cache.Cache // Cache tenant billing authority independently of stream identity.
@@ -1267,6 +1275,8 @@ func (p *Processor) ProcessTypedTrigger(trigger *ipcpb.MistTrigger) (string, boo
 		return p.handlePushInputClose(trigger)
 	case *ipcpb.MistTrigger_ViewerConnect:
 		return p.handleUserNew(trigger)
+	case *ipcpb.MistTrigger_ConnectionPlay:
+		return p.handleConnPlay(trigger)
 	case *ipcpb.MistTrigger_ViewerDisconnect:
 		return p.handleUserEnd(trigger)
 	case *ipcpb.MistTrigger_StreamBuffer:
@@ -1766,6 +1776,14 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 	if !usedLocalAdmission {
 		p.promoteLocalIngestIfMatching(admissionCtx, pushRewrite.GetStreamName(), ingestClusterID, streamValidation)
 	}
+	// Final publisher admission runs after the claim so a policy denial releases
+	// it through the deferred release above. The protocol is Mist's observed
+	// connector, never the publisher-controlled push URL.
+	if _, placementErr := p.checkIngestPlacement(admissionCtx, streamValidation.GetTenantId(), streamValidation.GetInternalName(), ingestClusterID, trigger.GetNodeId(),
+		pushRewrite.GetObservedConnector(), pushRewrite.GetHostname()); placementErr != nil {
+		p.logger.WithError(placementErr).WithFields(logging.Fields{"node_id": trigger.GetNodeId(), "ingest_cluster_id": ingestClusterID}).Warn("PUSH_REWRITE denied by placement policy")
+		return "", true, ingesterrors.New(ipcpb.IngestErrorCode_INGEST_ERROR_INVALID_STREAM_KEY, "publisher is not permitted on this node by placement policy")
+	}
 	liveProcessesJSON := streamValidation.GetProcessesJson()
 	if liveProcessesJSON != "" {
 		liveProcessesJSON = p.ApplyLivepeerBroadcasters(liveProcessesJSON, []string{
@@ -2105,9 +2123,10 @@ func (p *Processor) handlePushRewrite(trigger *ipcpb.MistTrigger) (_ string, _ b
 					}
 					role := strings.TrimSpace(peer.GetRole())
 					intent.PeerHints = append(intent.PeerHints, control.AdmissionPeerHint{
-						ClusterID: clusterID,
-						Addr:      addr,
-						AlwaysOn:  role == "official" || role == "preferred",
+						ClusterID:     clusterID,
+						Addr:          addr,
+						AlwaysOn:      role == "official" || role == "preferred",
+						ControlCellID: strings.TrimSpace(peer.GetControlCellId()),
 					})
 				}
 				// The admission's Decklog ingest event, with its DETERMINISTIC event_id (the
@@ -2372,27 +2391,41 @@ func (p *Processor) handlePlayRewrite(trigger *ipcpb.MistTrigger) (string, bool,
 	playRewrite := payload.PlayRewrite
 	playbackID := playRewrite.GetRequestedStream() // This is the stream name / playback ID
 	requestCtx := control.MediaRequestContext(context.Background(), "mist_play_rewrite")
+	requestCtx, cancel := context.WithTimeout(requestCtx, 3*time.Second)
+	defer cancel()
 
 	p.logger.WithFields(logging.Fields{
 		"requested_stream": playRewrite.GetRequestedStream(), // playback ID
 		"viewer_host":      playRewrite.GetViewerHost(),
 		"output_type":      playRewrite.GetOutputType(),
-		"request_url":      playRewrite.GetRequestUrl(),
 		"node_id":          trigger.GetNodeId(),
 	}).Debug("Processing PLAY_REWRITE trigger")
 
 	// Resolve from durable signed local authority first. An unready projection
-	// remains shadow-only; a ready denial/expiry is never bypassed by a central
-	// fallback.
+	// remains shadow-only, and a ready denial is never bypassed by a central
+	// fallback. Expiry is different: it says this cell holds no current
+	// authority for the object, not that the object is refused, so the control
+	// plane answers instead of the request being aborted. Returning the expiry
+	// error here would abort, because a non-nil trigger error is a hard refusal
+	// to Mist regardless of the abort flag.
+	// Both indexes are tried for every name, as ResolveLocalContent does. Mist
+	// asks with a runtime name like "live+<internal>", which is an internal name
+	// and never a playback id, and MediaObjectByInternalName strips the runtime
+	// prefix; restricting the second lookup to bare names would leave the
+	// prefixed ones with only an index that cannot match, so the projection would
+	// report absent and resolution would fall through to the control plane. That
+	// is the one case where the local projection has to answer: with Commodore
+	// unreachable, this cell would otherwise refuse its own peer's prepared
+	// source pull rather than keep serving on the authority it already holds.
 	local, localFound, localErr := p.resolveReadyLocalPlayback(requestCtx, playbackID, true)
-	if !localFound && localErr == nil && !strings.Contains(playbackID, "+") {
+	if !localFound && localErr == nil {
 		local, localFound, localErr = p.resolveReadyLocalPlayback(requestCtx, playbackID, false)
 	}
 	if localErr != nil {
-		if IsLocalAuthorityDenied(localErr) || IsLocalAuthorityExpired(localErr) {
-			return "", errors.Is(localErr, errLocalAuthorityDenied), localErr
+		if IsLocalAuthorityDenied(localErr) {
+			return "", true, localErr
 		}
-		p.logger.WithError(localErr).WithField("playback_id", playbackID).Warn("Local playback projection unavailable; using connected resolver")
+		p.logger.WithError(localErr).WithField("playback_id", playbackID).Warn("Local playback projection unusable; using connected resolver")
 	}
 	var target *control.StreamTarget
 	var err error
@@ -2469,6 +2502,22 @@ func (p *Processor) handlePlayRewrite(trigger *ipcpb.MistTrigger) (string, bool,
 	if billing.State == BillingStatusDenied || billing.DeniedReason != "" {
 		return "", true, fmt.Errorf("stream unavailable: %s", billing.DeniedReason)
 	}
+	var placementValidUntil time.Time
+	acceptedPull := p.acceptedSourcePull(requestCtx, mist.ExtractInternalName(target.InternalName), trigger.GetNodeId(), playRewrite.GetOutputType(), playRewrite.GetRequestUrl())
+	if !acceptedPull {
+		// The emitting node is rebound to its authenticated control session. A
+		// public request URL cannot choose the protocol or destination identity.
+		viewerCluster := strings.TrimSpace(p.resolveNodeClusterIDWithContext(requestCtx, trigger.GetNodeId()))
+		if viewerCluster == "" {
+			viewerCluster = strings.TrimSpace(trigger.GetClusterId())
+		}
+		placementDecision, placementErr := p.checkViewerPlacement(requestCtx, target.TenantID, mist.ExtractInternalName(target.InternalName), viewerCluster, trigger.GetNodeId(),
+			&ipcpb.ViewerConnectTrigger{Connector: playRewrite.GetOutputType(), Host: playRewrite.GetViewerHost()})
+		if placementErr != nil {
+			return "", false, fmt.Errorf("playback placement admission failed: %w", placementErr)
+		}
+		placementValidUntil = placementDecision.ExpiresAt
+	}
 	if localFound && local.target == nil {
 		p.promoteLocalPlaybackIfMatching(requestCtx, playbackID, target, streamInfo, billing)
 	}
@@ -2480,7 +2529,7 @@ func (p *Processor) handlePlayRewrite(trigger *ipcpb.MistTrigger) (string, bool,
 
 	// Enrich the PlayRewriteTrigger (ViewerResolveTrigger) with viewer geographic data via GeoIP lookup.
 	if p.geoipClient != nil && playRewrite.GetViewerHost() != "" {
-		if geoData := geoip.LookupCached(context.Background(), p.geoipClient, p.geoipCache, playRewrite.GetViewerHost()); geoData != nil {
+		if geoData := geoip.LookupCached(requestCtx, p.geoipClient, p.geoipCache, playRewrite.GetViewerHost()); geoData != nil {
 			playRewrite.CountryCode = &geoData.CountryCode
 			playRewrite.City = &geoData.City
 			playRewrite.Latitude = &geoData.Latitude
@@ -2500,6 +2549,9 @@ func (p *Processor) handlePlayRewrite(trigger *ipcpb.MistTrigger) (string, bool,
 		if nodeConfig.Location != "" {
 			playRewrite.NodeLocation = &nodeConfig.Location
 		}
+	}
+	if !acceptedPull && (requestCtx.Err() != nil || !time.Now().Before(placementValidUntil)) {
+		return "", false, errors.New("playback placement expired before source resolution completed")
 	}
 
 	// Apply the resolved TenantID if available.
@@ -2582,47 +2634,70 @@ func (p *Processor) resolveBarePlayRewriteTarget(ctx context.Context, streamName
 	}, false, nil
 }
 
-// federationOriginPullDTSC checks whether an inbound origin-pull is
-// arranged on this cluster for the given runtime name. Returns
-// (dtscURL, handled):
-//
-//   - handled=true: caller should immediately return this result to Mist.
-//     dtscURL is the peer DTSC URL to pull from, or "" when the pull is
-//     pinned to another local edge (this edge must not start a duplicate
-//     untracked pull). In both cases Mist's fallback is appropriate.
-//   - handled=false: no origin-pull is arranged; caller continues with
-//     its normal source-resolution logic.
-//
-// This is the shared federation hook used by every STREAM_SOURCE branch
-// whose runtime name can participate in cross-cluster origin-pull
-// (live+, pull+, dvr+, bare mist-native).
+// federationOriginPullDTSC resolves current arrangement for the exact node.
+// Handled refusals use an explicit offline source: an empty response would let
+// Mist execute its configured upstream instead of respecting the pull fence.
 func (p *Processor) federationOriginPullDTSC(ctx context.Context, streamName, nodeID string) (string, bool) {
 	if strings.TrimSpace(streamName) == "" {
 		return "", false
 	}
-	registry := control.StreamRegistryInstance
+	registry := p.preparedSourceRegistry
+	if registry == nil {
+		registry = control.StreamRegistryInstance
+	}
 	if registry == nil {
 		return "", false
 	}
-	loc, found := registry.LocalReplication(ctx, streamName)
-	if !found || loc.PullDTSCURL == "" {
+	budget := time.Second
+	if p.preparedSourceRequired || p.preparedSourceAdmission != nil {
+		budget = 5 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	readCtx, stopRead := context.WithTimeout(ctx, time.Second)
+	location, err := registry.CurrentSourceLocation(readCtx, streamName)
+	readErr := readCtx.Err()
+	stopRead()
+	if readErr != nil {
+		return control.OfflineUnavailable, true
+	}
+	if err != nil {
+		return control.OfflineUnavailable, true
+	}
+	if strings.HasPrefix(streamName, "live+") && location.SourceActive && location.OwnerNodeID == nodeID && location.SourceGeneration != "" && location.SourceRevision > 0 {
 		return "", false
 	}
-	if loc.DestNodeID != "" && nodeID != "" && loc.DestNodeID != nodeID {
-		p.logger.WithFields(logging.Fields{
-			"stream_name": streamName,
-			"node_id":     nodeID,
-			"dest_node":   loc.DestNodeID,
-		}).Debug("STREAM_SOURCE: origin-pull pinned to another local edge")
-		return "", true
+	pulls := location.InboundPulls
+	pull, found := pulls[nodeID]
+	if pull.Cleared {
+		return control.OfflineNotPlaced, true
+	}
+	if !found || pull.DTSCURL == "" {
+		for _, other := range pulls {
+			if !other.Cleared && other.DTSCURL != "" {
+				if base := control.FoghornBalancerSourceForNode(p.resolveNodeClusterIDWithContext(ctx, nodeID), nodeID); base != "" {
+					return "balance:" + base, true
+				}
+				return control.OfflineNotPlaced, true
+			}
+		}
+		return "", false
+	}
+	if pull.DestClusterID != "" {
+		node := state.DefaultManager().GetNodeState(nodeID)
+		if node == nil || node.ClusterID != pull.DestClusterID {
+			return control.OfflineNotPlaced, true
+		}
+	}
+	if err = p.checkPreparedSource(ctx, streamName, nodeID, pull); err != nil {
+		return control.OfflineUnavailable, true
 	}
 	p.logger.WithFields(logging.Fields{
 		"stream_name":    streamName,
 		"node_id":        nodeID,
-		"source_cluster": loc.ReplicatingFrom,
-		"dtsc_url":       loc.PullDTSCURL,
+		"source_cluster": pull.SourceClusterID,
 	}).Info("STREAM_SOURCE: origin-pull returning peer DTSC URI")
-	return loc.PullDTSCURL, true
+	return pull.DTSCURL, true
 }
 
 // handleStreamSource processes STREAM_SOURCE trigger (blocking)
@@ -2656,8 +2731,11 @@ func (p *Processor) handleStreamSource(trigger *ipcpb.MistTrigger) (string, bool
 		// gRPC arranged the pull would never discover the remote origin
 		// (US-ingest / EU-playback). When no balancer base is resolvable we keep
 		// the "" push fallback — that's the legitimate publisher path, not an
-		// error.
-		base := control.FoghornBalancerBaseForNode(p.clusterID, trigger.GetNodeId())
+		// error. The capability is signed for the node's own virtual cluster:
+		// /source selects within the authenticated cluster, and one Foghorn
+		// serves several clusters, so p.clusterID is not the node's identity.
+		nodeClusterID := p.resolveNodeClusterIDWithContext(requestCtx, trigger.GetNodeId())
+		base := control.FoghornBalancerSourceForNode(nodeClusterID, trigger.GetNodeId())
 		if base == "" {
 			p.logger.WithFields(logging.Fields{
 				"stream_name": streamName,
@@ -2668,7 +2746,7 @@ func (p *Processor) handleStreamSource(trigger *ipcpb.MistTrigger) (string, bool
 		p.logger.WithFields(logging.Fields{
 			"stream_name": streamName,
 			"node_id":     trigger.GetNodeId(),
-			"cluster_id":  p.clusterID,
+			"cluster_id":  nodeClusterID,
 		}).Info("STREAM_SOURCE: live+ returning balance URI for unified /source resolution")
 		return "balance:" + base, false, nil
 	}
@@ -2707,7 +2785,7 @@ func (p *Processor) handleStreamSource(trigger *ipcpb.MistTrigger) (string, bool
 		// round-trip entirely for the always-on case.
 		if control.StreamRegistryInstance != nil {
 			if entry, err := control.StreamRegistryInstance.ResolveSourceByInternalName(requestCtx, streamName); err == nil && entry.IngestMode == control.IngestMistNative {
-				base := control.FoghornBalancerBaseForNode(nodeClusterID, trigger.GetNodeId())
+				base := control.FoghornBalancerSourceForNode(nodeClusterID, trigger.GetNodeId())
 				if base == "" {
 					p.logger.WithField("stream_name", streamName).Warn("STREAM_SOURCE: mist_native stream has no Foghorn balancer base")
 					return control.OfflineUnavailable, false, nil
@@ -2732,7 +2810,7 @@ func (p *Processor) handleStreamSource(trigger *ipcpb.MistTrigger) (string, bool
 					if row.GetInternalName() != streamName && !strings.EqualFold(row.GetPlaybackId(), streamName) {
 						continue
 					}
-					base := control.FoghornBalancerBaseForNode(nodeClusterID, trigger.GetNodeId())
+					base := control.FoghornBalancerSourceForNode(nodeClusterID, trigger.GetNodeId())
 					if base == "" {
 						return control.OfflineUnavailable, false, nil
 					}
@@ -2746,7 +2824,7 @@ func (p *Processor) handleStreamSource(trigger *ipcpb.MistTrigger) (string, bool
 		if p.commodoreClient != nil {
 			resp, lookupMode, err := p.resolveBareManagedStreamContext(requestCtx, streamName)
 			if err == nil && resp != nil && resp.GetAdmitted() && resp.GetIngestMode() == "mist_native" {
-				base := control.FoghornBalancerBaseForNode(nodeClusterID, trigger.GetNodeId())
+				base := control.FoghornBalancerSourceForNode(nodeClusterID, trigger.GetNodeId())
 				if base == "" {
 					p.logger.WithField("stream_name", streamName).Warn("STREAM_SOURCE: mist_native stream has no Foghorn balancer base")
 					return control.OfflineUnavailable, false, nil
@@ -3232,7 +3310,7 @@ func (p *Processor) resolvePullSource(requestCtx context.Context, streamName str
 		})
 	}
 
-	base := control.FoghornBalancerBaseForNode(triggerClusterID, trigger.GetNodeId())
+	base := control.FoghornBalancerSourceForNode(triggerClusterID, trigger.GetNodeId())
 	if base == "" {
 		p.logger.WithField("node_id", trigger.GetNodeId()).Error("Foghorn balancer base unresolved for pull source")
 		p.recordPullSourceEvent(resp, internalName, "foghorn_base_unresolved", trigger.GetNodeId())
@@ -4104,7 +4182,8 @@ func (p *Processor) handleUserNew(trigger *ipcpb.MistTrigger) (string, bool, err
 	if viewerCluster == "" {
 		viewerCluster = strings.TrimSpace(trigger.GetClusterId())
 	}
-	if info.TenantID == "" || viewerCluster == "" || p.viewerClusterAccess == nil || !p.viewerClusterAccess(viewerCluster, info.TenantID, info.OfficialClusterID, info.ClusterPeers) {
+	acceptedPull := p.acceptedSourcePull(requestCtx, internalName, trigger.GetNodeId(), userNew.GetConnector(), userNew.GetRequestUrl())
+	if info.TenantID == "" || viewerCluster == "" || (!acceptedPull && (p.viewerClusterAccess == nil || !p.viewerClusterAccess(viewerCluster, info.TenantID, info.OfficialClusterID, info.ClusterPeers))) {
 		p.logger.WithFields(logging.Fields{
 			"session_id":    userNew.GetSessionId(),
 			"internal_name": internalName,
@@ -4114,13 +4193,15 @@ func (p *Processor) handleUserNew(trigger *ipcpb.MistTrigger) (string, bool, err
 		return "false", false, nil
 	}
 
-	decision, err := p.enforcePlaybackPolicy(requestCtx, internalName, info, userNew)
-	if err != nil {
-		p.logger.WithError(err).WithField("internal_name", internalName).Error("playback policy enforcement errored; denying")
-		return "false", false, nil
-	}
-	if decision != "true" {
-		return decision, false, nil
+	if !acceptedPull {
+		decision, err := p.enforcePlaybackPolicy(requestCtx, internalName, info, userNew)
+		if err != nil {
+			p.logger.WithError(err).WithField("internal_name", internalName).Error("playback policy enforcement errored; denying")
+			return "false", false, nil
+		}
+		if decision != "true" {
+			return decision, false, nil
+		}
 	}
 
 	// Viewer-side load gate: when the broadcaster is on free tier and the
@@ -4145,6 +4226,18 @@ func (p *Processor) handleUserNew(trigger *ipcpb.MistTrigger) (string, bool, err
 		return "false", false, nil
 	}
 
+	// A peer's accepted origin pull arrives as a DTSC connection; it is the
+	// prepared source path, not a viewer, so it is not placed or fenced as one.
+	var placementDecision *federation.PlacementAdmissionDecision
+	if !acceptedPull {
+		var placementErr error
+		placementDecision, placementErr = p.checkViewerPlacement(requestCtx, info.TenantID, internalName, viewerCluster, trigger.GetNodeId(), userNew)
+		if placementErr != nil {
+			p.logger.WithError(placementErr).WithField("internal_name", internalName).Warn("Rejecting viewer: placement admission failed")
+			return "false", false, nil
+		}
+	}
+
 	capacityID := viewerCapacityID(userNew.GetRequestUrl(), userNew.GetSessionId())
 
 	// Per-tenant concurrent-viewer cap. Hard limit, independent of cluster
@@ -4152,9 +4245,16 @@ func (p *Processor) handleUserNew(trigger *ipcpb.MistTrigger) (string, bool, err
 	// the same playback redirect; direct playback without fwcid falls back to
 	// session_id. Cap value is the broadcaster's tenant max_viewers, cached in
 	// streamContext at PUSH_REWRITE.
-	if info.TenantID != "" && info.MaxViewers > 0 {
+	if !acceptedPull && info.TenantID != "" && info.MaxViewers > 0 {
 		tc := state.DefaultTenantCapacity()
-		allowed, _, current, capacityErr := tc.TryRegisterViewer(info.TenantID, trigger.GetNodeId(), userNew.GetSessionId(), capacityID, info.MaxViewers)
+		var allowed bool
+		var current int
+		var capacityErr error
+		if placementDecision != nil {
+			allowed, _, current, capacityErr = tc.TryRegisterViewerBefore(requestCtx, info.TenantID, trigger.GetNodeId(), userNew.GetSessionId(), capacityID, info.MaxViewers, placementDecision.ExpiresAt)
+		} else {
+			allowed, _, current, capacityErr = tc.TryRegisterViewer(info.TenantID, trigger.GetNodeId(), userNew.GetSessionId(), capacityID, info.MaxViewers)
+		}
 		if capacityErr != nil {
 			p.logger.WithError(capacityErr).WithField("tenant_id", info.TenantID).Warn("Tenant viewer capacity is unavailable; failing admission closed")
 			return "false", false, nil
@@ -4169,6 +4269,8 @@ func (p *Processor) handleUserNew(trigger *ipcpb.MistTrigger) (string, bool, err
 			}).Warn("Rejecting viewer: tenant concurrent-viewer cap reached")
 			return "false", false, nil
 		}
+	} else if placementDecision != nil && !time.Now().Before(placementDecision.ExpiresAt) {
+		return "false", false, nil
 	}
 
 	// Enrich ViewerConnect payload directly
@@ -4288,14 +4390,31 @@ func (p *Processor) handleStreamBuffer(trigger *ipcpb.MistTrigger) (string, bool
 	// CRITICAL: Extract internal name from stream name (e.g., "live+demo_stream" -> "demo_stream")
 	// to avoid creating duplicate state entries for the same logical stream
 	internalName := mist.ExtractInternalName(streamBuffer.GetStreamName())
-	_ = state.DefaultManager().UpdateStreamFromBuffer(
-		streamBuffer.GetStreamName(),
-		internalName,
-		trigger.GetNodeId(),
-		info.TenantID,
-		streamBuffer.GetBufferState(),
-		"",
-	)
+	// An edge that predates the last applied periodic level is stale: the level
+	// already reflects Mist's state after this transition.
+	if state.DefaultManager().BufferLevelNewerThan(internalName, trigger.GetNodeId(), trigger.GetTriggerUnixMillis()) {
+		p.logger.WithFields(logging.Fields{"internal_name": internalName, "node_id": trigger.GetNodeId(), "buffer_state": streamBuffer.GetBufferState()}).Debug("STREAM_BUFFER edge older than the applied buffer level; not applied")
+	} else {
+		if err := state.DefaultManager().UpdateStreamFromBuffer(
+			streamBuffer.GetStreamName(),
+			internalName,
+			trigger.GetNodeId(),
+			info.TenantID,
+			streamBuffer.GetBufferState(),
+			"",
+		); err != nil {
+			// The observation below still records this edge, so the buffer level
+			// stays current; only the union's write-through was lost.
+			p.logger.WithError(err).WithFields(logging.Fields{
+				"internal_name": internalName, "node_id": trigger.GetNodeId(),
+			}).Warn("STREAM_BUFFER state update failed")
+		}
+	}
+
+	state.DefaultManager().ObserveStreamBuffer(internalName, trigger.GetNodeId(), state.StreamBufferObservation{
+		RuntimeName: streamBuffer.GetStreamName(), BufferPID: streamBuffer.GetBufferPid(),
+		State: streamBuffer.GetBufferState(), EventID: trigger.GetTriggerUuid(), EventUnixMillis: trigger.GetTriggerUnixMillis(),
+	})
 
 	// Forward original StreamBufferTrigger to Decklog (preserves all track data and health metrics)
 	// Helmsman already enriched it with has_issues, issues_description, quality_tier, etc.
@@ -5255,6 +5374,21 @@ func (p *Processor) handleStreamLifecycleUpdate(trigger *ipcpb.MistTrigger) (str
 	down := int64(slu.GetDownloadedBytes())
 	replicated := slu.GetReplicated()
 	state.DefaultManager().UpdateNodeStats(internal, nodeID, total, inputs, up, down, replicated)
+	// A restarted Foghorn rebuilds this instance from reports that carry no verified
+	// identity; the resolved stream context (registry/Commodore, not the node's
+	// assertion) restores the owner tenant the publisher claim compares against.
+	if resolvedTenant := strings.TrimSpace(info.TenantID); resolvedTenant != "" {
+		state.DefaultManager().ApplyStreamInstanceIdentity(internal, nodeID, resolvedTenant)
+	}
+	state.DefaultManager().ObserveStreamProcesses(internal, nodeID, slu.GetProcessObservation())
+	// The report's buffer level is Mist's current classification; it restores
+	// readiness after a restart or a resumed publisher without a transition and
+	// is ordered against STREAM_BUFFER edges by sample time.
+	if bufferState := slu.GetBufferState(); bufferState != "" && slu.GetBufferSampledUnixMillis() > 0 {
+		if state.DefaultManager().ObserveStreamBufferLevel(internal, nodeID, bufferState, slu.GetBufferSampledUnixMillis()) {
+			p.logger.WithFields(logging.Fields{"internal_name": internal, "node_id": nodeID, "buffer_state": bufferState}).Debug("Applied buffer level from periodic report")
+		}
+	}
 	return "", false, nil
 }
 
@@ -5773,25 +5907,35 @@ func (p *Processor) tryArrangeDVRCrossCluster(ctx context.Context, runtimeName s
 	if callerClusterID == "" {
 		return "", false
 	}
-	var peerCluster, recordingNode string
-	for cid, loc := range entry.Locations {
-		if cid == callerClusterID {
-			continue
-		}
-		if loc.RecordingNodeID == "" {
+	// The map key is the advertising control cell, which is the namespace peer
+	// addressing needs. Entitlement is a different namespace: it is decided per
+	// media cluster, so it is checked against the clusters the location's own
+	// edges report, never against the key.
+	var peerCell, recordingNode string
+	for cellID, loc := range entry.Locations {
+		if loc.RecordingNodeID == "" || cellID == control.StreamRegistryInstance.LocalLocationKey() {
 			continue
 		}
 		// Gate the recording peer against the tenant's fresh cluster-peer
 		// envelope: registry state can outlive a peer revocation, so a stale
 		// RecordingNodeID must not arrange a pull from a cluster the tenant is
-		// no longer allowed to reach.
-		if !control.AuthoritativeClusterServableWithPolicy(cid, dispatch.TenantID, dispatch.ClusterPeers, dispatch.AllowPlatformSharedPlayback) {
+		// no longer allowed to reach. A location advertising no cluster it is
+		// entitled to serve is skipped rather than trusted.
+		entitled := false
+		for _, edge := range loc.EdgeCandidates {
+			if edge.ClusterID != "" && control.AuthoritativeClusterServableWithPolicy(edge.ClusterID, dispatch.TenantID, dispatch.ClusterPeers, dispatch.AllowPlatformSharedPlayback) {
+				entitled = true
+				break
+			}
+		}
+		if !entitled {
 			continue
 		}
-		peerCluster = cid
+		peerCell = cellID
 		recordingNode = loc.RecordingNodeID
 		break
 	}
+	peerCluster := peerCell
 	if peerCluster == "" || recordingNode == "" {
 		return "", false
 	}
@@ -5818,7 +5962,7 @@ func (p *Processor) tryArrangeDVRCrossCluster(ctx context.Context, runtimeName s
 		"stream_name":    runtimeName,
 		"peer_cluster":   peerCluster,
 		"recording_node": recordingNode,
-		"dtsc_url":       result.PullDTSCURL,
+		"dtsc_url":       control.SourcePullBaseURL(result.PullDTSCURL),
 	}).Info("STREAM_SOURCE dvr+: cross-cluster origin-pull arranged from recording node")
 	return result.PullDTSCURL, true
 }

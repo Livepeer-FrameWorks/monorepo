@@ -241,19 +241,25 @@ func (sm *StreamStateManager) BindStreamLivepeerAuth(internalName, processesJSON
 
 // StreamInstanceState represents per-node state for a specific stream
 type StreamInstanceState struct {
-	NodeID           string         `json:"node_id"`
-	TenantID         string         `json:"tenant_id"`
-	Status           string         `json:"status"`
-	BufferState      string         `json:"buffer_state"`
-	LastTrackList    string         `json:"last_track_list,omitempty"`
-	Viewers          int            `json:"viewers"`
-	BytesUp          int64          `json:"bytes_up,omitempty"`
-	BytesDown        int64          `json:"bytes_down,omitempty"`
-	TotalConnections int            `json:"total_connections,omitempty"`
-	Inputs           int            `json:"inputs,omitempty"`
-	Replicated       bool           `json:"replicated,omitempty"` // True if this is a replicated (pull) stream
-	LastUpdate       time.Time      `json:"last_update"`
-	RawDetails       map[string]any `json:"raw_details,omitempty"`
+	NodeID             string                              `json:"node_id"`
+	TenantID           string                              `json:"tenant_id"`
+	Status             string                              `json:"status"`
+	BufferState        string                              `json:"buffer_state"`
+	LastTrackList      string                              `json:"last_track_list,omitempty"`
+	Viewers            int                                 `json:"viewers"`
+	BytesUp            int64                               `json:"bytes_up,omitempty"`
+	BytesDown          int64                               `json:"bytes_down,omitempty"`
+	TotalConnections   int                                 `json:"total_connections,omitempty"`
+	Inputs             int                                 `json:"inputs,omitempty"`
+	Replicated         bool                                `json:"replicated,omitempty"` // True if this is a replicated (pull) stream
+	LastUpdate         time.Time                           `json:"last_update"`
+	RawDetails         map[string]any                      `json:"raw_details,omitempty"`
+	ProcessObservation *ipcpb.MistStreamProcessObservation `json:"-"`
+	BufferObservation  *StreamBufferObservation            `json:"-"`
+	// BufferLevelUnixMillis is when Helmsman last sampled Mist for the buffer
+	// state carried on a periodic report (a level). Edges (STREAM_BUFFER) and
+	// levels are ordered by these times so neither can regress the other.
+	BufferLevelUnixMillis int64 `json:"buffer_level_unix_millis,omitempty"`
 }
 
 // VirtualViewerState represents the lifecycle state of a virtual viewer
@@ -424,6 +430,10 @@ type NodeState struct {
 	DiskUsedBytes     uint64                   `json:"disk_used_bytes,omitempty"`
 	LastUpdate        time.Time                `json:"last_update"`
 	LastHeartbeat     time.Time                `json:"last_heartbeat"`
+	// MetricsObservedAt is advanced only by a complete metrics report, never
+	// by identity/configuration writes or replay of a node snapshot.
+	MetricsObservedAt time.Time `json:"metrics_observed_at"`
+	OutputsObservedAt time.Time `json:"outputs_observed_at"`
 
 	// GPU information
 	GPUVendor string `json:"gpu_vendor,omitempty"`
@@ -980,10 +990,21 @@ func warnMalformedDetail(where, key, wantType string, got any) {
 	}).Warn("Dropping malformed MistServer detail field")
 }
 
-// Default manager and extra mutation helpers
-var defaultManager *StreamStateManager
+// Default manager and extra mutation helpers.
+//
+// Startup happens to construct this on the main goroutine before any server
+// goroutine runs, so today every caller is ordered behind that. The lock does
+// not depend on that ordering holding: a future caller reached from a goroutine
+// spawned earlier would otherwise race the lazy construction, and the sibling
+// DefaultTenantCapacity is guarded the same way.
+var (
+	defaultManager   *StreamStateManager
+	defaultManagerMu sync.Mutex
+)
 
 func DefaultManager() *StreamStateManager {
+	defaultManagerMu.Lock()
+	defer defaultManagerMu.Unlock()
 	if defaultManager == nil {
 		defaultManager = NewStreamStateManager()
 	}
@@ -993,6 +1014,8 @@ func DefaultManager() *StreamStateManager {
 // ResetDefaultManagerForTests replaces the default manager with a fresh instance.
 // It is intended for unit tests to ensure isolation between cases.
 func ResetDefaultManagerForTests() *StreamStateManager {
+	defaultManagerMu.Lock()
+	defer defaultManagerMu.Unlock()
 	if defaultManager != nil {
 		defaultManager.Shutdown()
 	}
@@ -1354,6 +1377,8 @@ func (sm *StreamStateManager) SetOfflineContext(ctx context.Context, internalNam
 	now := time.Now()
 	inst.Status = "offline"
 	inst.BufferState = "EMPTY"
+	inst.ProcessObservation = nil
+	inst.BufferObservation = nil
 	// Zero presence counters: the balancer and union derivation read
 	// Inputs/connections straight off instances without checking Status,
 	// so a dead node with stale Inputs>0 would stay source-eligible.
@@ -1516,6 +1541,8 @@ func (sm *StreamStateManager) ReconcileNodeStreamPresence(nodeID string, observe
 		inst.TotalConnections = 0
 		inst.Status = "offline"
 		inst.BufferState = "EMPTY"
+		inst.ProcessObservation = nil
+		inst.BufferObservation = nil
 		inst.Replicated = false
 		inst.LastUpdate = now
 		if payload, err := json.Marshal(inst); err == nil {
@@ -1727,6 +1754,10 @@ func (sm *StreamStateManager) SetNodeInfo(nodeID, baseURL string, isHealthy bool
 		sm.nodes[nodeID] = n
 		isNew = true
 	}
+	if n.BaseURL != baseURL {
+		// HOST templates are evidence for the reported address, not a new host.
+		n.OutputsObservedAt = time.Time{}
+	}
 	n.BaseURL = baseURL
 	n.IsHealthy = isHealthy
 	if isNew && n.LastHeartbeat.IsZero() {
@@ -1738,12 +1769,14 @@ func (sm *StreamStateManager) SetNodeInfo(nodeID, baseURL string, isHealthy bool
 
 	// Handle outputs parsing
 	if outputs != nil {
-		n.Outputs = outputs
+		n.Outputs = cloneJSONMap(outputs)
+		n.OutputsObservedAt = time.Now()
 	} else if outputsRaw != "" {
 		// Try to parse raw JSON if map not provided (e.g. rehydration)
 		var parsed map[string]any
 		if err := json.Unmarshal([]byte(outputsRaw), &parsed); err == nil {
 			n.Outputs = parsed
+			n.OutputsObservedAt = time.Now()
 		}
 	}
 
@@ -1784,11 +1817,16 @@ func (sm *StreamStateManager) mergeRehydratedNode(record NodeRecord) {
 		sm.nodes[record.NodeID] = n
 	}
 	n.BaseURL = record.BaseURL
+	if baseURLChanged {
+		n.OutputsObservedAt = time.Time{}
+	}
 	if record.OutputsJSON != "" {
 		var outputs map[string]any
 		if err := json.Unmarshal([]byte(record.OutputsJSON), &outputs); err == nil {
 			n.Outputs = outputs
 			n.OutputsRaw = record.OutputsJSON
+			// Repository data carries no authenticated listener observation time.
+			n.OutputsObservedAt = time.Time{}
 		}
 	}
 	sm.mu.Unlock()
@@ -1839,6 +1877,7 @@ func (sm *StreamStateManager) UpdateNodeMetrics(nodeID string, metrics struct {
 	n.StorageUsedBytes = metrics.StorageUsedBytes
 	n.ProcessingClasses = metrics.ProcessingClasses
 	n.LastUpdate = time.Now()
+	n.MetricsObservedAt = n.LastUpdate
 
 	// Recompute cached scores
 	sm.recomputeNodeScoresLocked(n)
@@ -2070,13 +2109,17 @@ func (sm *StreamStateManager) SetNodeStoragePaths(nodeID string, storageLocal, s
 
 // BalancerStreamSummary provides per-stream metrics for balancer decisions
 type BalancerStreamSummary struct {
-	Total      uint64 `json:"total"`
-	Viewers    uint64 `json:"viewers"`
-	Inputs     uint32 `json:"inputs"`
-	Bandwidth  uint32 `json:"bandwidth"`
-	BytesUp    uint64 `json:"bytes_up"`
-	BytesDown  uint64 `json:"bytes_down"`
-	Replicated bool   `json:"replicated"`
+	TenantID    string    `json:"tenant_id"`
+	BufferState string    `json:"buffer_state"`
+	Status      string    `json:"status"`
+	ObservedAt  time.Time `json:"observed_at"`
+	Total       uint64    `json:"total"`
+	Viewers     uint64    `json:"viewers"`
+	Inputs      uint32    `json:"inputs"`
+	Bandwidth   uint32    `json:"bandwidth"`
+	BytesUp     uint64    `json:"bytes_up"`
+	BytesDown   uint64    `json:"bytes_down"`
+	Replicated  bool      `json:"replicated"`
 }
 
 // BalancerNodeSnapshot is a read-optimized view for the load balancer
@@ -2123,6 +2166,7 @@ func (sm *StreamStateManager) GetBalancerNodeSnapshots() []BalancerNodeSnapshot 
 				nodeStreams[nodeID] = m
 			}
 			m[internalName] = BalancerStreamSummary{
+				TenantID: inst.TenantID, BufferState: inst.BufferState, Status: inst.Status, ObservedAt: inst.LastUpdate,
 				Total:      uint64(inst.TotalConnections),
 				Viewers:    uint64(inst.Viewers),
 				Inputs:     uint32(inst.Inputs),
@@ -2186,6 +2230,8 @@ func (sm *StreamStateManager) GetStreamInstances(internalName string) map[string
 			continue
 		}
 		c := *inst
+		c.ProcessObservation = cloneProcessObservation(inst.ProcessObservation)
+		c.BufferObservation = cloneBufferObservation(inst.BufferObservation)
 		if inst.RawDetails != nil {
 			copied := make(map[string]any, len(inst.RawDetails))
 			maps.Copy(copied, inst.RawDetails)
@@ -2209,6 +2255,8 @@ func (sm *StreamStateManager) GetAllStreamInstances() map[string]map[string]Stre
 				continue
 			}
 			c := *inst
+			c.ProcessObservation = cloneProcessObservation(inst.ProcessObservation)
+			c.BufferObservation = cloneBufferObservation(inst.BufferObservation)
 			if inst.RawDetails != nil {
 				copied := make(map[string]any, len(inst.RawDetails))
 				maps.Copy(copied, inst.RawDetails)
@@ -3097,23 +3145,27 @@ func (sm *StreamStateManager) GetWeights() map[string]uint64 {
 // EnhancedBalancerNodeSnapshot includes pre-computed fields for fast scoring
 type EnhancedBalancerNodeSnapshot struct {
 	// Basic node info
-	Host            string              `json:"host"`
-	NodeID          string              `json:"node_id"`
-	GeoLatitude     float64             `json:"geo_latitude"`
-	GeoLongitude    float64             `json:"geo_longitude"`
-	LocationName    string              `json:"location_name"`
-	IsActive        bool                `json:"is_active"`
-	LastUpdate      time.Time           `json:"last_update"`
-	LastHeartbeat   time.Time           `json:"last_heartbeat"`
-	OperationalMode NodeOperationalMode `json:"operational_mode"`
+	Host              string              `json:"host"`
+	NodeID            string              `json:"node_id"`
+	GeoLatitude       float64             `json:"geo_latitude"`
+	GeoLongitude      float64             `json:"geo_longitude"`
+	HasCoordinates    bool                `json:"has_coordinates"`
+	LocationName      string              `json:"location_name"`
+	IsActive          bool                `json:"is_active"`
+	LastUpdate        time.Time           `json:"last_update"`
+	LastHeartbeat     time.Time           `json:"last_heartbeat"`
+	MetricsObservedAt time.Time           `json:"metrics_observed_at"`
+	OutputsObservedAt time.Time           `json:"outputs_observed_at"`
+	OperationalMode   NodeOperationalMode `json:"operational_mode"`
 
 	// Performance-critical fields
-	BinHost       [16]byte `json:"-"` // Binary IP for fast comparison
-	Port          int      `json:"port"`
-	DTSCPort      int      `json:"dtsc_port"`
-	Tags          []string `json:"tags"`
-	ConfigStreams []string `json:"config_streams"`
-	AddBandwidth  uint64   `json:"add_bandwidth"`
+	BinHost       [16]byte       `json:"-"` // Binary IP for fast comparison
+	Port          int            `json:"port"`
+	DTSCPort      int            `json:"dtsc_port"`
+	Tags          []string       `json:"tags"`
+	ConfigStreams []string       `json:"config_streams"`
+	Outputs       map[string]any `json:"outputs,omitempty"`
+	AddBandwidth  uint64         `json:"add_bandwidth"`
 
 	// Virtual Viewer Tracking
 	PendingRedirects    int    `json:"pending_redirects"`      // Redirects awaiting USER_NEW confirmation
@@ -3214,6 +3266,9 @@ func (sm *StreamStateManager) getBalancerSnapshotInternal(includeStale, includeU
 				nodeStreams[nodeID] = m
 			}
 			m[internalName] = BalancerStreamSummary{
+				TenantID: inst.TenantID, BufferState: inst.BufferState,
+				Status:     inst.Status,
+				ObservedAt: inst.LastUpdate,
 				Total:      uint64(inst.TotalConnections),
 				Viewers:    uint64(inst.Viewers),
 				Inputs:     uint32(inst.Inputs),
@@ -3259,11 +3314,16 @@ func (sm *StreamStateManager) getBalancerSnapshotInternal(includeStale, includeU
 				}
 				return 0
 			}(),
-			LocationName:    n.Location,
-			IsActive:        isActive,
-			LastUpdate:      n.LastUpdate,
-			LastHeartbeat:   n.LastHeartbeat,
-			OperationalMode: mode,
+			HasCoordinates: n.Latitude != nil && n.Longitude != nil &&
+				!math.IsNaN(*n.Latitude) && !math.IsNaN(*n.Longitude) &&
+				math.Abs(*n.Latitude) <= 90 && math.Abs(*n.Longitude) <= 180,
+			MetricsObservedAt: n.MetricsObservedAt,
+			OutputsObservedAt: n.OutputsObservedAt,
+			LocationName:      n.Location,
+			IsActive:          isActive,
+			LastUpdate:        n.LastUpdate,
+			LastHeartbeat:     n.LastHeartbeat,
+			OperationalMode:   mode,
 
 			// Performance-critical fields
 			BinHost:       n.BinHost,
@@ -3271,6 +3331,7 @@ func (sm *StreamStateManager) getBalancerSnapshotInternal(includeStale, includeU
 			DTSCPort:      n.DTSCPort,
 			Tags:          append([]string(nil), n.Tags...),
 			ConfigStreams: append([]string(nil), n.ConfigStreams...),
+			Outputs:       cloneJSONMap(n.Outputs),
 			AddBandwidth:  n.AddBandwidth,
 
 			// Virtual Viewer Tracking

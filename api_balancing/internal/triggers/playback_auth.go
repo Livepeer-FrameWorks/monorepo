@@ -357,10 +357,13 @@ func (p *Processor) enforceWebhookPolicy(ctx context.Context, internalName strin
 
 	// Build outbound payload. Customer signs against this exact body.
 	body, err := json.Marshal(map[string]any{
-		"streamName":  userNew.GetStreamName(),
-		"sessionId":   userNew.GetSessionId(),
-		"viewerIp":    userNew.GetHost(),
-		"requestUrl":  userNew.GetRequestUrl(),
+		"streamName": userNew.GetStreamName(),
+		"sessionId":  userNew.GetSessionId(),
+		"viewerIp":   userNew.GetHost(),
+		// The endpoint is tenant-controlled. A source pull that failed admission
+		// is evaluated here as a viewer, so its request URL can still carry the
+		// platform's per-attempt source credential; that never leaves with it.
+		"requestUrl":  control.RedactSourcePullCredential(userNew.GetRequestUrl()),
 		"viewerToken": userNew.GetViewerToken(),
 		"connector":   userNew.GetConnector(),
 		"timestamp":   time.Now().UTC().Format(time.RFC3339),

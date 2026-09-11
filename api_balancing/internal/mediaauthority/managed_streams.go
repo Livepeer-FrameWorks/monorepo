@@ -130,6 +130,9 @@ func (s *Store) PromoteManagedStreamIfMatching(ctx context.Context, clusterID st
 	if object.Freshness == FreshnessHardExpired || tenant.Freshness == FreshnessHardExpired {
 		return ManagedStreamPromotionMismatch, nil
 	}
+	if !ShadowComparable(tenant.Authority, object.Authority) {
+		return ManagedStreamPromotionMismatch, nil
+	}
 	secret, err := s.OpenLiveStreamSecret(object)
 	if err != nil {
 		return ManagedStreamPromotionNone, err
@@ -162,7 +165,7 @@ func (s *Store) PromoteManagedStreamIfMatching(ctx context.Context, clusterID st
 	}
 	var marked bool
 	if tenant.SourceReady {
-		marked, err = s.MarkMediaObjectLocalSourceReady(ctx, object.AuthorityID, object.Version)
+		marked, err = s.MarkMediaObjectLocalSourceReady(ctx, authority.GetTenantId(), object.AuthorityID, object.Version)
 	} else {
 		marked, err = s.MarkSourcePairLocalReady(ctx, authority.GetTenantId(), tenant.Version, object.AuthorityID, object.Version)
 	}

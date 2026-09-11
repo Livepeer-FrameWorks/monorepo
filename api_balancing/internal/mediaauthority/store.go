@@ -245,6 +245,22 @@ func (s *Store) Apply(ctx context.Context, encoded []byte) (result ApplyResult, 
 		}
 		return result, ErrTombstoneTerminal
 	}
+	if currentErr == nil {
+		rollback, revisionErr := rejectsPlacementRollback(current.Payload, verified)
+		if revisionErr != nil {
+			return ApplyResult{}, revisionErr
+		}
+		if rollback {
+			metricOutcome = "rollback_rejected"
+			if err := insertAudit(ctx, queries, signed, "rollback_rejected", ErrRollback.Error()); err != nil {
+				return ApplyResult{}, fmt.Errorf("record placement rollback: %w", err)
+			}
+			if err := tx.Commit(); err != nil {
+				return ApplyResult{}, fmt.Errorf("commit placement rollback audit: %w", err)
+			}
+			return result, ErrRollback
+		}
+	}
 
 	sourceRevisions, err := marshalSourceRevisions(envelope.GetSourceRevisions())
 	if err != nil {
@@ -261,6 +277,9 @@ func (s *Store) Apply(ctx context.Context, encoded []byte) (result ApplyResult, 
 	preserve := s.readinessPreservation(current, currentErr, verified)
 	if err := applyProjection(ctx, queries, verified, preserve); err != nil {
 		return ApplyResult{}, err
+	}
+	if err := promotePlacementReadiness(ctx, queries, verified); err != nil {
+		return ApplyResult{}, fmt.Errorf("promote schema-2 media authority readiness: %w", err)
 	}
 	if err := insertAudit(ctx, queries, signed, "applied", ""); err != nil {
 		return ApplyResult{}, fmt.Errorf("record applied media authority: %w", err)
@@ -384,15 +403,58 @@ func applyProjection(ctx context.Context, queries *foghorndb.Queries, verified *
 	return nil
 }
 
-func (s *Store) readinessPreservation(_ foghorndb.GetMediaAuthorityForUpdateRow, currentErr error, _ *sharedauthority.Verified) readinessPreservation {
+func (s *Store) readinessPreservation(current foghorndb.GetMediaAuthorityForUpdateRow, currentErr error, verified *sharedauthority.Verified) readinessPreservation {
 	if currentErr != nil {
+		return readinessPreservation{}
+	}
+	previousSchema, _, _, err := storedPlacementRevision(current.Payload, verified.Tenant != nil)
+	if err != nil || previousSchema != verifiedPlacementSchema(verified) {
 		return readinessPreservation{}
 	}
 	// Readiness is a one-time compatibility cutover for this verified schema,
 	// not approval of one payload version. A successfully verified higher
-	// version keeps whichever decision surfaces were already promoted; schema
-	// changes are rejected by verification until the consumer is upgraded.
+	// version keeps promoted surfaces only within the same schema. A new schema
+	// resets every surface and requires its own readiness proof before admission.
 	return readinessPreservation{read: true, ingest: true, source: true}
+}
+
+func verifiedPlacementSchema(verified *sharedauthority.Verified) uint32 {
+	if verified.Tenant != nil {
+		return verified.Tenant.GetSchemaVersion()
+	}
+	return verified.MediaObject.GetSchemaVersion()
+}
+
+func storedPlacementRevision(payload []byte, tenant bool) (schema uint32, revision, parent uint64, err error) {
+	if tenant {
+		value := &mediaauthoritypb.TenantAuthority{}
+		if err = proto.Unmarshal(payload, value); err == nil {
+			return value.GetSchemaVersion(), value.GetMediaPlacement().GetRevision(), 0, nil
+		}
+	} else {
+		value := &mediaauthoritypb.MediaObjectAuthority{}
+		if err = proto.Unmarshal(payload, value); err == nil {
+			return value.GetSchemaVersion(), value.GetMediaPlacement().GetRevision(), value.GetPlacementTenantRevision(), nil
+		}
+	}
+	return 0, 0, 0, fmt.Errorf("decode current placement revision: %w", err)
+}
+
+// Authority delivery versions and policy revisions are independent fences. A
+// restarted or rolled-back compiler cannot erase a policy by allocating a newer
+// delivery version around an older policy or a lossy legacy-schema payload.
+func rejectsPlacementRollback(payload []byte, verified *sharedauthority.Verified) (bool, error) {
+	schema, revision, parent, err := storedPlacementRevision(payload, verified.Tenant != nil)
+	if err != nil {
+		return false, err
+	}
+	if schema > verifiedPlacementSchema(verified) {
+		return true, nil
+	}
+	if verified.Tenant != nil {
+		return revision > verified.Tenant.GetMediaPlacement().GetRevision(), nil
+	}
+	return revision > verified.MediaObject.GetMediaPlacement().GetRevision() || parent > verified.MediaObject.GetPlacementTenantRevision(), nil
 }
 
 func (s *Store) recordVerificationFailure(ctx context.Context, signed *mediaauthoritypb.SignedAuthorityEnvelope, cause error) error {

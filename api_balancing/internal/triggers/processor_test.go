@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/url"
 	"slices"
@@ -14,11 +15,13 @@ import (
 	"time"
 
 	"frameworks/api_balancing/internal/control"
+	"frameworks/api_balancing/internal/federation"
 	"frameworks/api_balancing/internal/ingesterrors"
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/cache"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
@@ -771,8 +774,10 @@ func TestHandleStreamSource_MistNativePlaybackIDResolvesThroughContext(t *testin
 		t.Fatalf("parse STREAM_SOURCE capability: %v", parseErr)
 	}
 	nodeID, capabilityClusterID, compatibilityPath, valid := control.VerifyBalancerCapabilityPath(capabilityURL.EscapedPath(), time.Now())
+	// The public compatibility route grants a capability only /source/by-node/<node>;
+	// MistInBalancer appends nothing but ?source=, so the path must already be there.
 	if !strings.HasPrefix(resp, "balance:https://foghorn.media-eu-1.frameworks.network/") ||
-		strings.Contains(resp, "fh_sig=") || !valid || nodeID != "edge-eu-1" || capabilityClusterID != "media-eu-1" || compatibilityPath != "/" {
+		strings.Contains(resp, "fh_sig=") || !valid || nodeID != "edge-eu-1" || capabilityClusterID != "media-eu-1" || compatibilityPath != "/source/by-node/edge-eu-1" {
 		t.Fatalf("unexpected STREAM_SOURCE response: %q", resp)
 	}
 	keys := stub.ResolveStreamContextKeys()
@@ -782,22 +787,52 @@ func TestHandleStreamSource_MistNativePlaybackIDResolvesThroughContext(t *testin
 	}
 }
 
-func TestHandleStreamSource_LiveOriginPullReturnsDTSC(t *testing.T) {
-	prevRegistry := control.StreamRegistryInstance
-	registry := control.NewStreamRegistry(nil, "cluster-local", time.Minute)
+// admitPreparedSourceForTest installs the source admission completed placement
+// provides. It answers only for the connection the pull itself names and only with
+// that pull's own attempt and URL, so a fixture cannot serve a peer URL the
+// destination never had placement for.
+func admitPreparedSourceForTest(t *testing.T, processor *Processor, streamName string, pull control.InboundPull) {
+	t.Helper()
+	want := PreparedSourceConnection{TenantID: pull.TenantID, InternalName: mist.ExtractInternalName(streamName),
+		ClusterID: pull.DestClusterID, NodeID: pull.DestNodeID}
+	processor.SetPreparedSourceAdmission(func(_ context.Context, connection PreparedSourceConnection) (federation.PreparedPlacementSource, error) {
+		if connection != want {
+			return federation.PreparedPlacementSource{}, fmt.Errorf("source admission asked about %+v, want %+v", connection, want)
+		}
+		return federation.PreparedPlacementSource{DTSCURL: pull.DTSCURL, AttemptID: pull.AttemptID, ExpiresAt: time.Now().Add(time.Second)}, nil
+	})
+}
+
+// seedPreparedOriginPull records the placement-shaped inbound pull a destination
+// node may serve — tenant, destination cluster and node, source identity and the
+// DTSC URL — on a registry scoped to that destination cluster, and admits it.
+func seedPreparedOriginPull(t *testing.T, processor *Processor, streamName, destNodeID, dtscURL string) control.InboundPull {
+	t.Helper()
+	const tenantID, destClusterID = "tenant-1", "cluster-local"
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+	sm.SetNodeConnectionInfo(context.Background(), destNodeID, destNodeID+":18090", "", destClusterID, nil)
+
+	registry := control.NewStreamRegistry(nil, destClusterID, time.Minute)
+	previousRegistry := control.StreamRegistryInstance
 	control.SetStreamRegistry(registry)
-	t.Cleanup(func() { control.SetStreamRegistry(prevRegistry) })
+	t.Cleanup(func() { control.SetStreamRegistry(previousRegistry) })
 
-	registry.MarkReplicating(
-		"stream-1",
-		"cluster-origin",
-		"dtsc://edge-origin:4200/live+stream-1",
-		"edge-local-1",
-		"https://edge-local-1.example/view",
-		"edge-origin-1",
-	)
+	pull, err := registry.RecordInboundPull(context.Background(), streamName, control.InboundPull{
+		TenantID: tenantID, SourceClusterID: "cluster-origin", SourceMediaClusterID: "media-origin", SourceNodeID: "edge-origin-1",
+		DestClusterID: destClusterID, DestNodeID: destNodeID, DTSCURL: dtscURL, AttemptID: "attempt-" + destNodeID,
+	})
+	if err != nil {
+		t.Fatalf("record inbound pull: %v", err)
+	}
+	admitPreparedSourceForTest(t, processor, streamName, pull)
+	return pull
+}
 
+func TestHandleStreamSource_LiveOriginPullReturnsDTSC(t *testing.T) {
 	processor := newTestProcessor(t)
+	seedPreparedOriginPull(t, processor, "live+stream-1", "edge-local-1", "dtsc://edge-origin:4200/live+stream-1")
+
 	resp, abort, err := processor.handleStreamSource(&ipcpb.MistTrigger{
 		NodeId: "edge-local-1",
 		TriggerPayload: &ipcpb.MistTrigger_StreamSource{
@@ -829,8 +864,12 @@ func TestHandleStreamSource_LiveWithoutOriginPullDelegatesToSource(t *testing.T)
 	control.SetStreamRegistry(control.NewStreamRegistry(nil, "cluster-local", time.Minute))
 	t.Cleanup(func() { control.SetStreamRegistry(prevRegistry) })
 
+	// The Foghorn process runs in the control cell; the node belongs to a media
+	// cluster that Foghorn learned at control registration. The capability must
+	// be signed for the node's cluster, since /source selects nodes within it.
+	state.DefaultManager().SetNodeConnectionInfo(context.Background(), "edge-local-1", "edge-local-1:18090", "", "media-eu-1", nil)
 	processor := newTestProcessor(t)
-	processor.clusterID = "media-eu-1"
+	processor.clusterID = "control-cell"
 	resp, abort, err := processor.handleStreamSource(&ipcpb.MistTrigger{
 		NodeId: "edge-local-1",
 		TriggerPayload: &ipcpb.MistTrigger_StreamSource{
@@ -846,6 +885,14 @@ func TestHandleStreamSource_LiveWithoutOriginPullDelegatesToSource(t *testing.T)
 	if !strings.HasPrefix(resp, "balance:") {
 		t.Fatalf("STREAM_SOURCE response = %q, want balance:<base> delegation to /source", resp)
 	}
+	capabilityURL, parseErr := url.Parse(strings.TrimPrefix(resp, "balance:"))
+	if parseErr != nil {
+		t.Fatalf("parse STREAM_SOURCE capability: %v", parseErr)
+	}
+	nodeID, capabilityClusterID, compatibilityPath, valid := control.VerifyBalancerCapabilityPath(capabilityURL.EscapedPath(), time.Now())
+	if !valid || nodeID != "edge-local-1" || capabilityClusterID != "media-eu-1" || compatibilityPath != "/source/by-node/edge-local-1" {
+		t.Fatalf("STREAM_SOURCE capability = %q: node %q cluster %q path %q valid %v; want node cluster media-eu-1 and the by-node source path", resp, nodeID, capabilityClusterID, compatibilityPath, valid)
+	}
 }
 
 // TestHandleStreamSource_PullOriginPullReturnsDTSC covers the pull+
@@ -854,21 +901,9 @@ func TestHandleStreamSource_LiveWithoutOriginPullDelegatesToSource(t *testing.T)
 // Before the federation hook, pull+ unconditionally returned
 // balance:<foghorn> here and re-dialed upstream via /source.
 func TestHandleStreamSource_PullOriginPullReturnsDTSC(t *testing.T) {
-	prevRegistry := control.StreamRegistryInstance
-	registry := control.NewStreamRegistry(nil, "cluster-local", time.Minute)
-	control.SetStreamRegistry(registry)
-	t.Cleanup(func() { control.SetStreamRegistry(prevRegistry) })
-
-	registry.MarkReplicating(
-		"stream-pull-1",
-		"cluster-origin",
-		"dtsc://edge-origin:4200/pull+stream-pull-1",
-		"edge-local-1",
-		"https://edge-local-1.example/view",
-		"edge-origin-1",
-	)
-
 	processor := newTestProcessor(t)
+	seedPreparedOriginPull(t, processor, "pull+stream-pull-1", "edge-local-1", "dtsc://edge-origin:4200/pull+stream-pull-1")
+
 	resp, abort, err := processor.handleStreamSource(&ipcpb.MistTrigger{
 		NodeId: "edge-local-1",
 		TriggerPayload: &ipcpb.MistTrigger_StreamSource{
@@ -894,21 +929,9 @@ func TestHandleStreamSource_PullOriginPullReturnsDTSC(t *testing.T) {
 // Uses the dvr+ runtime name as-is for the registry key
 // (sourceInternalKey doesn't strip dvr+).
 func TestHandleStreamSource_DVRDefensiveOriginPullReturnsDTSC(t *testing.T) {
-	prevRegistry := control.StreamRegistryInstance
-	registry := control.NewStreamRegistry(nil, "cluster-local", time.Minute)
-	control.SetStreamRegistry(registry)
-	t.Cleanup(func() { control.SetStreamRegistry(prevRegistry) })
-
-	registry.MarkReplicating(
-		"dvr+abc123",
-		"cluster-origin",
-		"dtsc://edge-origin:4200/dvr+abc123",
-		"edge-local-1",
-		"https://edge-local-1.example/view",
-		"edge-origin-1",
-	)
-
 	processor := newTestProcessor(t)
+	seedPreparedOriginPull(t, processor, "dvr+abc123", "edge-local-1", "dtsc://edge-origin:4200/dvr+abc123")
+
 	resp, abort, err := processor.handleStreamSource(&ipcpb.MistTrigger{
 		NodeId: "edge-local-1",
 		TriggerPayload: &ipcpb.MistTrigger_StreamSource{
@@ -931,21 +954,11 @@ func TestHandleStreamSource_DVRDefensiveOriginPullReturnsDTSC(t *testing.T) {
 // goes through STREAM_SOURCE directly rather than the balance: +
 // /source round-trip. Saves an HTTP hop on the federated case.
 func TestHandleStreamSource_MistNativeOriginPullReturnsDTSC(t *testing.T) {
-	prevRegistry := control.StreamRegistryInstance
-	registry := control.NewStreamRegistry(nil, "cluster-local", time.Minute)
-	control.SetStreamRegistry(registry)
-	t.Cleanup(func() { control.SetStreamRegistry(prevRegistry) })
-
-	registry.MarkReplicating(
-		"frameworks-demo",
-		"cluster-origin",
-		"dtsc://edge-origin:4200/frameworks-demo",
-		"edge-local-1",
-		"https://edge-local-1.example/view",
-		"edge-origin-1",
-	)
-
 	processor := newTestProcessor(t)
+	// The bare name is the internal name: it must survive registry lookup and
+	// source admission unprefixed, all the way to the returned peer DTSC URL.
+	seedPreparedOriginPull(t, processor, "frameworks-demo", "edge-local-1", "dtsc://edge-origin:4200/frameworks-demo")
+
 	resp, abort, err := processor.handleStreamSource(&ipcpb.MistTrigger{
 		NodeId: "edge-local-1",
 		TriggerPayload: &ipcpb.MistTrigger_StreamSource{
@@ -1002,19 +1015,13 @@ func TestHandleStreamSource_OfflineReasonsLockedIn(t *testing.T) {
 	}
 }
 
-// TestHandleStreamSource_OriginPullPinnedToOtherEdgeReturnsEmpty
-// exercises the multi-edge guard shared by all four branches: when
-// origin-pull is arranged but pinned to a DIFFERENT local edge, this
-// edge must return "" so it doesn't start a duplicate untracked pull.
-// Mist's fallback (push:// for live, balance: for pull, etc.) handles
-// the not-this-edge case.
-func TestHandleStreamSource_OriginPullPinnedToOtherEdgeReturnsEmpty(t *testing.T) {
+func TestHandleStreamSource_OriginPullPinnedToOtherEdgeReturnsOffline(t *testing.T) {
 	prevRegistry := control.StreamRegistryInstance
 	registry := control.NewStreamRegistry(nil, "cluster-local", time.Minute)
 	control.SetStreamRegistry(registry)
 	t.Cleanup(func() { control.SetStreamRegistry(prevRegistry) })
 
-	registry.MarkReplicating(
+	markReplicatingForTest(t, registry,
 		"stream-pinned",
 		"cluster-origin",
 		"dtsc://edge-origin:4200/live+stream-pinned",
@@ -1035,10 +1042,10 @@ func TestHandleStreamSource_OriginPullPinnedToOtherEdgeReturnsEmpty(t *testing.T
 		t.Fatalf("handleStreamSource failed: %v", err)
 	}
 	if abort {
-		t.Fatal("expected non-abort (fallback) when pinned to another edge")
+		t.Fatal("expected explicit offline source when pinned to another edge")
 	}
-	if resp != "" {
-		t.Fatalf("STREAM_SOURCE response = %q, want empty (pinned-to-other-edge guard)", resp)
+	if resp != control.OfflineNotPlaced {
+		t.Fatalf("STREAM_SOURCE response = %q, want explicit offline source", resp)
 	}
 }
 
@@ -1068,13 +1075,14 @@ func TestHandlePlayRewriteBareMistNativeResolvesThroughInternalName(t *testing.T
 		BillingModel: "postpaid",
 	}, time.Minute)
 
+	admitViewerPlacementForTest(t, processor)
 	resp, abort, err := processor.handlePlayRewrite(&ipcpb.MistTrigger{
 		NodeId: "edge-eu-1",
 		TriggerPayload: &ipcpb.MistTrigger_PlayRewrite{
 			PlayRewrite: &ipcpb.ViewerResolveTrigger{
 				RequestedStream: "60546679b497415db2338cd5cae54992",
 				ViewerHost:      "192.0.2.10",
-				OutputType:      "HTTP",
+				OutputType:      "MKV",
 				RequestUrl:      "https://edge.example/view/60546679b497415db2338cd5cae54992.mkv?duration=30&startunix=-60",
 			},
 		},
@@ -1310,6 +1318,8 @@ func TestHandlePlayRewriteStartsCorrelatedPlaybackViewer(t *testing.T) {
 	nodeID := "node-1"
 	internalName := "stream-count"
 	clientIP := "192.0.2.10"
+	sm.SetNodeConnectionInfo(context.Background(), nodeID, nodeID+":18090", "", "test-cluster", nil)
+	admitViewerPlacementForTest(t, processor)
 	processor.streamCache.Set(tenantID+":"+internalName, streamContext{
 		TenantID:          tenantID,
 		BillingModel:      "postpaid",
@@ -1413,6 +1423,8 @@ func TestViewerCapUsesCorrelationIDInsteadOfMistSession(t *testing.T) {
 	nodeID := "node-viewer-cap"
 	internalName := "stream-viewer-cap"
 	clientIP := "192.0.2.50"
+	sm.SetNodeConnectionInfo(context.Background(), nodeID, nodeID+":18090", "", "test-cluster", nil)
+	admitViewerPlacementForTest(t, processor)
 	processor.streamCache.Set(tenantID+":"+internalName, streamContext{
 		TenantID:          tenantID,
 		BillingModel:      "postpaid",
@@ -1517,6 +1529,7 @@ func TestHandleUserNewDoesNotStartPlaybackViewer(t *testing.T) {
 	nodeID := "node-1"
 	internalName := "stream-user-new"
 	clientIP := "192.0.2.10"
+	admitViewerPlacementForTest(t, processor)
 	processor.streamCache.Set(tenantID+":"+internalName, streamContext{
 		TenantID:          tenantID,
 		RequiresAuth:      false,
@@ -1993,13 +2006,15 @@ func TestHandlePushRewrite_CachesBillingContext(t *testing.T) {
 
 	processor := newTestProcessor(t)
 	processor.commodoreClient = commodoreClient
+	admitIngestPlacementForTest(t, processor)
 
 	trigger := &ipcpb.MistTrigger{
 		NodeId: "edge-node-1",
 		TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
 			PushRewrite: &ipcpb.PushRewriteTrigger{Pid: 4242, TriggerUuid: "test-trigger-uuid", TriggerUnixMillis: 1,
-				StreamName: "push-stream",
-				PushUrl:    "rtmp://example.com/live",
+				StreamName:        "push-stream",
+				PushUrl:           "rtmp://example.com/live",
+				ObservedConnector: "RTMP",
 			},
 		},
 	}
@@ -2055,15 +2070,21 @@ func TestHandlePushRewrite_RejectsSuspendedTenant(t *testing.T) {
 	}
 	commodoreClient, cleanup := setupCommodoreClient(t, response, nil)
 	t.Cleanup(cleanup)
+	// The publishing node's authenticated media cluster is what the claim is
+	// evaluated in; without it the publish is refused before billing is read.
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+	sm.SetNodeConnectionInfo(context.Background(), "edge-node-1", "edge-node-1:18090", "", "demo-media", nil)
 
 	processor := newTestProcessor(t)
 	processor.commodoreClient = commodoreClient
+	admitIngestPlacementForTest(t, processor)
 
 	trigger := &ipcpb.MistTrigger{
 		NodeId: "edge-node-1",
 		TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
 			PushRewrite: &ipcpb.PushRewriteTrigger{Pid: 4242, TriggerUuid: "test-trigger-uuid", TriggerUnixMillis: 1,
-				StreamName: "suspended-stream",
+				StreamName: "suspended-stream", ObservedConnector: "RTMP",
 			},
 		},
 	}
@@ -2093,15 +2114,19 @@ func TestHandlePushRewrite_RejectsNegativeBalanceTenant(t *testing.T) {
 	}
 	commodoreClient, cleanup := setupCommodoreClient(t, response, nil)
 	t.Cleanup(cleanup)
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+	sm.SetNodeConnectionInfo(context.Background(), "edge-node-1", "edge-node-1:18090", "", "demo-media", nil)
 
 	processor := newTestProcessor(t)
 	processor.commodoreClient = commodoreClient
+	admitIngestPlacementForTest(t, processor)
 
 	trigger := &ipcpb.MistTrigger{
 		NodeId: "edge-node-1",
 		TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
 			PushRewrite: &ipcpb.PushRewriteTrigger{Pid: 4242, TriggerUuid: "test-trigger-uuid", TriggerUnixMillis: 1,
-				StreamName: "negative-balance-stream",
+				StreamName: "negative-balance-stream", ObservedConnector: "RTMP",
 			},
 		},
 	}
@@ -2232,6 +2257,9 @@ func TestApplyStreamContext_UsesTenantHintToAvoidCrossTenantMixups(t *testing.T)
 
 func TestHandlePushRewrite_PopulatesClusterContextFields(t *testing.T) {
 	installIngestSessionMintMock(t)
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+	sm.SetNodeConnectionInfo(context.Background(), "edge-node-1", "edge-node-1:18090", "", "cluster-origin", nil)
 	prevRegistry := control.StreamRegistryInstance
 	control.SetStreamRegistry(control.NewStreamRegistry(nil, "cluster-origin", time.Minute))
 	t.Cleanup(func() { control.SetStreamRegistry(prevRegistry) })
@@ -2250,11 +2278,13 @@ func TestHandlePushRewrite_PopulatesClusterContextFields(t *testing.T) {
 	processor := newTestProcessor(t)
 	processor.commodoreClient = commodoreClient
 	processor.clusterID = "cluster-local"
+	admitIngestPlacementForTest(t, processor)
 
 	trigger := &ipcpb.MistTrigger{
 		NodeId: "edge-node-1",
 		TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
-			PushRewrite: &ipcpb.PushRewriteTrigger{Pid: 4242, TriggerUuid: "test-trigger-uuid", TriggerUnixMillis: 1, StreamName: "stream-a", Hostname: "127.0.0.1"},
+			PushRewrite: &ipcpb.PushRewriteTrigger{Pid: 4242, TriggerUuid: "test-trigger-uuid", TriggerUnixMillis: 1, StreamName: "stream-a",
+				Hostname: "127.0.0.1", ObservedConnector: "RTMP"},
 		},
 	}
 
@@ -2345,11 +2375,13 @@ func TestHandlePushRewrite_ValidatesUsingPublishingNodeMediaCluster(t *testing.T
 	processor := newTestProcessor(t)
 	processor.commodoreClient = commodoreClient
 	processor.clusterID = "central-primary"
+	admitIngestPlacementForTest(t, processor)
 
 	trigger := &ipcpb.MistTrigger{
 		NodeId: "edge-node-1",
 		TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
-			PushRewrite: &ipcpb.PushRewriteTrigger{Pid: 4242, TriggerUuid: "test-trigger-uuid", TriggerUnixMillis: 1, StreamName: "stream-a", Hostname: "127.0.0.1"},
+			PushRewrite: &ipcpb.PushRewriteTrigger{Pid: 4242, TriggerUuid: "test-trigger-uuid", TriggerUnixMillis: 1, StreamName: "stream-a",
+				Hostname: "127.0.0.1", ObservedConnector: "RTMP"},
 		},
 	}
 

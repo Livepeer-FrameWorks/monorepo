@@ -297,7 +297,7 @@ func TestOfflineIsStreamWide_ReplicaNeverStreamWide(t *testing.T) {
 	const internal = "replicated-1"
 	// MarkReplicating creates the minimal entry itself — exactly what the
 	// dest cluster has before any resolver populates stream identity.
-	reg.MarkReplicating(internal, "peer-cluster-eu", "dtsc://origin-edge:4200", "node-replica", "https://replica.example/view", "origin-node")
+	markReplicatingForTest(t, reg, internal, "peer-cluster-eu", "dtsc://origin-edge:4200", "node-replica", "https://replica.example/view", "origin-node")
 	// The replica is the sole local carrier.
 	sm.UpdateNodeStats(internal, "node-replica", 3, 1, 100, 200, true)
 

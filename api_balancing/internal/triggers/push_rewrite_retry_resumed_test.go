@@ -97,14 +97,16 @@ func TestPushRewriteRetry_ResumedProjectionAcceptsIdentically(t *testing.T) {
 	p.decklogClient = client
 	p.clusterID = "cluster-local"
 	p.SetPeerNotifier(peer)
+	admitIngestPlacementForTest(t, p)
 
 	streamName, blocking, err := p.handlePushRewrite(&ipcpb.MistTrigger{
 		NodeId: "edge-node-1",
 		TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
 			PushRewrite: &ipcpb.PushRewriteTrigger{Pid: 4242, TriggerUuid: "retry-trigger-uuid", TriggerUnixMillis: 1,
-				StreamName: "sk_live_retry_key",
-				PushUrl:    "rtmp://edge-ingest.example.com:1935/live/sk_live_retry_key",
-				Hostname:   "203.0.113.9",
+				StreamName:        "sk_live_retry_key",
+				PushUrl:           "rtmp://edge-ingest.example.com:1935/live/sk_live_retry_key",
+				Hostname:          "203.0.113.9",
+				ObservedConnector: "RTMP",
 			},
 		},
 	})

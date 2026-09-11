@@ -247,6 +247,9 @@ func TestRehydrateNodeRepositoryDoesNotRefreshLivenessOrEraseIdentity(t *testing
 	if after.BaseURL != "https://durable.example" || after.OutputsRaw != `{"HLS":"new"}` {
 		t.Fatalf("repository fields were not refreshed: %+v", after)
 	}
+	if !after.OutputsObservedAt.IsZero() {
+		t.Fatal("repository overlay blessed unobserved listeners with the prior report timestamp")
+	}
 }
 
 func TestRehydrateNewNodeIsUnhealthyDNSHiddenAndEvictionIsProcessTerminal(t *testing.T) {

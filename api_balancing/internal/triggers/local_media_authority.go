@@ -426,7 +426,7 @@ func (p *Processor) promoteLocalPlaybackIfMatching(ctx context.Context, input st
 	if errors.Is(err, sql.ErrNoRows) && target.InternalName != "" {
 		object, err = p.mediaAuthorityStore.MediaObjectByInternalName(ctx, target.InternalName)
 	}
-	if err != nil || object.Ready || object.Freshness == localauthority.FreshnessHardExpired || !sameLocalObjectTarget(object, target) {
+	if err != nil || object.Ready || object.Freshness == localauthority.FreshnessHardExpired || object.Authority.GetSchemaVersion() != sharedauthority.SchemaVersion || !sameLocalObjectTarget(object, target) {
 		p.observeMediaAuthorityShadow("object_mismatch")
 		return
 	}
@@ -447,12 +447,16 @@ func (p *Processor) promoteLocalPlaybackIfMatching(ctx context.Context, input st
 		p.observeMediaAuthorityShadow("tenant_unavailable")
 		return
 	}
+	if !localauthority.ShadowComparable(tenant.Authority, object.Authority) {
+		p.observeMediaAuthorityShadow("policy_not_comparable")
+		return
+	}
 	if tenant.Ready {
 		if tenant.Authority.GetLifecycle() != mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE ||
 			tenant.Authority.GetBillingDecision() != mediaauthoritypb.TenantBillingDecision_TENANT_BILLING_DECISION_ALLOW {
 			return
 		}
-		marked, markErr := p.mediaAuthorityStore.MarkMediaObjectLocalReadReady(ctx, object.AuthorityID, object.Version)
+		marked, markErr := p.mediaAuthorityStore.MarkMediaObjectLocalReadReady(ctx, target.TenantID, object.AuthorityID, object.Version)
 		if markErr != nil {
 			p.logger.WithError(markErr).WithField("authority_id", object.AuthorityID).Warn("Failed to promote matching local media-object authority")
 		} else if marked {

@@ -260,12 +260,16 @@ func TestHandleStreamBuffer_PersistsLiveStateForInternalName(t *testing.T) {
 
 	const internal = "buf-stream"
 	const nodeID = "node-buf"
+	bufferPID := int64(90)
 	_, abort, err := p.handleStreamBuffer(&ipcpb.MistTrigger{
-		NodeId: nodeID,
+		NodeId:            nodeID,
+		TriggerUuid:       "buffer-event",
+		TriggerUnixMillis: 1788835900000,
 		TriggerPayload: &ipcpb.MistTrigger_StreamBuffer{
 			StreamBuffer: &ipcpb.StreamBufferTrigger{
 				StreamName:  "live+" + internal,
 				BufferState: "FULL",
+				BufferPid:   &bufferPID,
 			},
 		},
 	})
@@ -285,6 +289,10 @@ func TestHandleStreamBuffer_PersistsLiveStateForInternalName(t *testing.T) {
 	}
 	if got.NodeID != nodeID {
 		t.Errorf("state node mismatch: got %q want %q", got.NodeID, nodeID)
+	}
+	observation := sm.GetStreamInstances(internal)[nodeID].BufferObservation
+	if observation == nil || observation.BufferPID != bufferPID || observation.RuntimeName != "live+"+internal || observation.EventID != "buffer-event" || observation.EventUnixMillis != 1788835900000 {
+		t.Fatalf("buffer emitter observation lost: %v", observation)
 	}
 	// Wildcard name must NOT create a separate entry.
 	if dup := sm.GetStreamState("live+" + internal); dup != nil {
@@ -463,6 +471,8 @@ func TestHandleUserNew_AdmittedViewerRegistersUnderCap(t *testing.T) {
 	resetStateTrigHandlers(t)
 	p := minimalProcessorTrigHandlers(t)
 
+	admitViewerPlacementForTest(t, p)
+
 	const internal = "admit-stream"
 	const tenantID = "tenant-admit"
 	p.streamCache.Set(tenantID+":"+internal, streamContext{
@@ -540,6 +550,7 @@ func TestHandleUserNew_UsesResolvedEnvelopeWithoutCrossInstancePrewarm(t *testin
 	resetStateTrigHandlers(t)
 	p := minimalProcessorTrigHandlers(t)
 	p.viewerClusterAccess = control.ClusterServeAccessibleForTenantEnvelope
+	admitViewerPlacementForTest(t, p)
 
 	const (
 		internal = "ha-envelope-stream"

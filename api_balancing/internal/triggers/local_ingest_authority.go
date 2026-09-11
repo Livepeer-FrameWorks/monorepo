@@ -181,6 +181,10 @@ func (p *Processor) promoteLocalIngestIfMatching(ctx context.Context, credential
 	if err != nil || object.IngestReady || object.Freshness == localauthority.FreshnessHardExpired || object.Authority == nil {
 		return
 	}
+	if object.Authority.GetSchemaVersion() != sharedauthority.SchemaVersion {
+		p.observeMediaAuthorityShadow("ingest_object_mismatch")
+		return
+	}
 	live := object.Authority.GetLiveStream()
 	if live == nil || !sharedauthority.VerifyPublishingCredential(credential, live.GetPublishingCredentialSha256()) ||
 		object.Authority.GetTenantId() != connected.GetTenantId() || object.Authority.GetUserId() != connected.GetUserId() ||
@@ -204,13 +208,17 @@ func (p *Processor) promoteLocalIngestIfMatching(ctx context.Context, credential
 	if err != nil || tenant.Freshness == localauthority.FreshnessHardExpired || tenant.Authority == nil {
 		return
 	}
+	if !localauthority.ShadowComparable(tenant.Authority, object.Authority) {
+		p.observeMediaAuthorityShadow("ingest_tenant_mismatch")
+		return
+	}
 	if !sameLocalTenantIngestDecision(tenant.Authority, ingestClusterID, connected) {
 		p.observeMediaAuthorityShadow("ingest_tenant_mismatch")
 		return
 	}
 	var marked bool
 	if tenant.IngestReady {
-		marked, err = p.mediaAuthorityStore.MarkMediaObjectLocalIngestReady(ctx, object.AuthorityID, object.Version)
+		marked, err = p.mediaAuthorityStore.MarkMediaObjectLocalIngestReady(ctx, connected.GetTenantId(), object.AuthorityID, object.Version)
 	} else {
 		marked, err = p.mediaAuthorityStore.MarkIngestPairLocalReady(ctx, connected.GetTenantId(), tenant.Version, object.AuthorityID, object.Version)
 	}

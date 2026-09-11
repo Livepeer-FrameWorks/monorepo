@@ -2,6 +2,7 @@ package state
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -10,6 +11,8 @@ import (
 
 	goredis "github.com/redis/go-redis/v9"
 )
+
+var ErrViewerAdmissionExpired = errors.New("viewer placement admission expired")
 
 const (
 	// Helmsman emits Mist's current client inventory every ten seconds. Viewer
@@ -78,6 +81,11 @@ func redisCapacityCtx() (context.Context, context.CancelFunc) {
 // compared outside this script, and current epoch milliseconds remain exact in
 // Lua's IEEE-754 integer range.
 var reserveTenantViewer = goredis.NewScript(`
+if tonumber(ARGV[8] or '0') > 0 then
+  local clock = redis.call('TIME')
+  local admissionNow = tonumber(clock[1]) * 1000 + math.floor(tonumber(clock[2]) / 1000)
+  if admissionNow >= tonumber(ARGV[8]) then return {-1, 0, 0} end
+end
 local now = tonumber(ARGV[4])
 local function expireSession(field)
   local score = redis.call('ZSCORE', KEYS[2], field)
@@ -254,6 +262,26 @@ func (m *TenantCapacityManager) viewerKeys(tenantID string) []string {
 // TryRegisterViewer reserves one logical viewer while durably binding the Mist
 // session used by USER_END to the fwcid-preferred capacity ID used by USER_NEW.
 func (m *TenantCapacityManager) TryRegisterViewer(tenantID, nodeID, sessionID, capacityID string, maxViewers int32) (allowed, added bool, count int, err error) {
+	return m.tryRegisterViewer(context.Background(), tenantID, nodeID, sessionID, capacityID, maxViewers, time.Time{})
+}
+
+// TryRegisterViewerBefore consumes a checked placement decision at the capacity
+// reservation boundary. Redis checks its clock before any mutation, including
+// duplicate-session renewal. A successful reservation commits admission before
+// expiry; callers must not undo it by an unfenced session release on late replies.
+func (m *TenantCapacityManager) TryRegisterViewerBefore(ctx context.Context, tenantID, nodeID, sessionID, capacityID string, maxViewers int32, validUntil time.Time) (allowed, added bool, count int, err error) {
+	if validUntil.IsZero() || !m.now().Before(validUntil) {
+		return false, false, 0, ErrViewerAdmissionExpired
+	}
+	ctx, cancel := context.WithDeadline(ctx, validUntil)
+	defer cancel()
+	return m.tryRegisterViewer(ctx, tenantID, nodeID, sessionID, capacityID, maxViewers, validUntil)
+}
+
+func (m *TenantCapacityManager) tryRegisterViewer(parent context.Context, tenantID, nodeID, sessionID, capacityID string, maxViewers int32, validUntil time.Time) (allowed, added bool, count int, err error) {
+	if err := parent.Err(); err != nil {
+		return false, false, 0, err
+	}
 	tenantID, sessionID, capacityID = strings.TrimSpace(tenantID), strings.TrimSpace(sessionID), strings.TrimSpace(capacityID)
 	if tenantID == "" || sessionID == "" || capacityID == "" || maxViewers <= 0 {
 		return false, false, 0, nil
@@ -266,16 +294,23 @@ func (m *TenantCapacityManager) TryRegisterViewer(tenantID, nodeID, sessionID, c
 	r := m.redis
 	m.mu.RUnlock()
 	if r != nil {
-		ctx, cancel := redisCapacityCtx()
+		ctx, cancel := context.WithTimeout(parent, 250*time.Millisecond)
 		defer cancel()
 		keyTTL := tenantViewerCorrelationRetention + tenantViewerCapacityLease
-		result, runErr := reserveTenantViewer.Run(ctx, r, m.viewerKeys(tenantID), field, capacityID, maxViewers, now.UnixMilli(), expiresAt.UnixMilli(), retainTill.UnixMilli(), keyTTL.Milliseconds()).Result()
+		deadlineMS := int64(0)
+		if !validUntil.IsZero() {
+			deadlineMS = validUntil.UnixMilli()
+		}
+		result, runErr := reserveTenantViewer.Run(ctx, r, m.viewerKeys(tenantID), field, capacityID, maxViewers, now.UnixMilli(), expiresAt.UnixMilli(), retainTill.UnixMilli(), keyTTL.Milliseconds(), deadlineMS).Result()
 		if runErr != nil {
 			return false, false, 0, fmt.Errorf("reserve tenant viewer capacity: %w", runErr)
 		}
 		values, parseErr := redisInts(result, 3)
 		if parseErr != nil {
 			return false, false, 0, fmt.Errorf("reserve tenant viewer capacity: %w", parseErr)
+		}
+		if values[0] == -1 {
+			return false, false, 0, ErrViewerAdmissionExpired
 		}
 		allowed, added, count = values[0] == 1, values[1] == 1, int(values[2])
 		if allowed {
@@ -286,6 +321,12 @@ func (m *TenantCapacityManager) TryRegisterViewer(tenantID, nodeID, sessionID, c
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if err := parent.Err(); err != nil {
+		return false, false, 0, err
+	}
+	if !validUntil.IsZero() && !m.now().Before(validUntil) {
+		return false, false, 0, ErrViewerAdmissionExpired
+	}
 	m.pruneLocalLocked(now)
 	set := m.viewers[tenantID]
 	if set == nil {

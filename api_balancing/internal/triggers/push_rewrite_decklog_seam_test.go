@@ -121,15 +121,17 @@ func TestPushRewriteTriggerCarriesNoCredentialOnTheWire(t *testing.T) {
 	p.commodoreClient = commodoreClient
 	p.decklogClient = client
 	p.clusterID = "cluster-local"
+	admitIngestPlacementForTest(t, p)
 
 	trigger := &ipcpb.MistTrigger{
 		NodeId: "edge-node-1",
 		TriggerPayload: &ipcpb.MistTrigger_PushRewrite{
 			PushRewrite: &ipcpb.PushRewriteTrigger{Pid: 4242, TriggerUuid: "test-trigger-uuid", TriggerUnixMillis: 1,
 				// What Mist reports: the publishing credential as the name.
-				StreamName: rawKey,
-				PushUrl:    "rtmp://edge-ingest.example.com:1935/live/" + rawKey,
-				Hostname:   "203.0.113.9",
+				StreamName:        rawKey,
+				PushUrl:           "rtmp://edge-ingest.example.com:1935/live/" + rawKey,
+				Hostname:          "203.0.113.9",
+				ObservedConnector: "RTMP",
 			},
 		},
 	}

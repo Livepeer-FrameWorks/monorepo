@@ -25,12 +25,14 @@ const (
 )
 
 type TenantSnapshot struct {
-	Authority   *mediaauthoritypb.TenantAuthority
-	Version     int64
-	Ready       bool
-	IngestReady bool
-	SourceReady bool
-	Freshness   Freshness
+	Authority    *mediaauthoritypb.TenantAuthority
+	Version      int64
+	Ready        bool
+	IngestReady  bool
+	SourceReady  bool
+	Freshness    Freshness
+	RefreshAfter time.Time
+	ValidUntil   time.Time
 }
 
 func TenantClusterPeers(tenant *mediaauthoritypb.TenantAuthority) []*clusterpeerpb.TenantClusterPeer {
@@ -101,13 +103,15 @@ func (s *Store) RoutingClusterPeers(tenant *mediaauthoritypb.TenantAuthority, lo
 }
 
 type MediaObjectSnapshot struct {
-	Authority   *mediaauthoritypb.MediaObjectAuthority
-	AuthorityID string
-	Version     int64
-	Ready       bool
-	IngestReady bool
-	SourceReady bool
-	Freshness   Freshness
+	Authority    *mediaauthoritypb.MediaObjectAuthority
+	AuthorityID  string
+	Version      int64
+	Ready        bool
+	IngestReady  bool
+	SourceReady  bool
+	Freshness    Freshness
+	RefreshAfter time.Time
+	ValidUntil   time.Time
 }
 
 func (s *Store) MediaObjectByPublishingCredential(ctx context.Context, credential string) (MediaObjectSnapshot, error) {
@@ -136,6 +140,7 @@ func (s *Store) Tenant(ctx context.Context, tenantID string) (TenantSnapshot, er
 	snapshot := TenantSnapshot{
 		Version: row.AuthorityVersion, Ready: row.LocalReadReady, IngestReady: row.LocalIngestReady,
 		SourceReady: row.LocalSourceReady, Freshness: authorityFreshness(s.now().UTC(), row.RefreshAfter, row.ValidUntil),
+		RefreshAfter: row.RefreshAfter, ValidUntil: row.ValidUntil,
 	}
 	s.observeFreshness(snapshot.Freshness)
 	payload := &mediaauthoritypb.TenantAuthority{}
@@ -204,7 +209,7 @@ func (s *Store) TenantSource(ctx context.Context, tenantID string) (TenantSnapsh
 	if err != nil {
 		return TenantSnapshot{}, err
 	}
-	snapshot := TenantSnapshot{Version: row.AuthorityVersion, SourceReady: row.LocalSourceReady, Freshness: authorityFreshness(s.now().UTC(), row.RefreshAfter, row.ValidUntil)}
+	snapshot := TenantSnapshot{Version: row.AuthorityVersion, SourceReady: row.LocalSourceReady, Freshness: authorityFreshness(s.now().UTC(), row.RefreshAfter, row.ValidUntil), RefreshAfter: row.RefreshAfter, ValidUntil: row.ValidUntil}
 	s.observeFreshness(snapshot.Freshness)
 	payload := &mediaauthoritypb.TenantAuthority{}
 	if err := verifyStoredPayload(row.Payload, row.PayloadSha256); err != nil {
@@ -222,10 +227,12 @@ func (s *Store) TenantSource(ctx context.Context, tenantID string) (TenantSnapsh
 
 func decodeMediaObjectSnapshot(payloadBytes, payloadDigest []byte, authorityID string, version int64, ready bool, refreshAfter, validUntil, now time.Time) (MediaObjectSnapshot, error) {
 	snapshot := MediaObjectSnapshot{
-		AuthorityID: authorityID,
-		Version:     version,
-		Ready:       ready,
-		Freshness:   authorityFreshness(now, refreshAfter, validUntil),
+		AuthorityID:  authorityID,
+		Version:      version,
+		Ready:        ready,
+		Freshness:    authorityFreshness(now, refreshAfter, validUntil),
+		RefreshAfter: refreshAfter,
+		ValidUntil:   validUntil,
 	}
 	payload := &mediaauthoritypb.MediaObjectAuthority{}
 	if err := verifyStoredPayload(payloadBytes, payloadDigest); err != nil {
@@ -246,23 +253,23 @@ func verifyStoredPayload(payload, expectedDigest []byte) error {
 	return nil
 }
 
-func (s *Store) MarkMediaObjectLocalReadReady(ctx context.Context, authorityID string, version int64) (bool, error) {
+func (s *Store) MarkMediaObjectLocalReadReady(ctx context.Context, tenantID, authorityID string, version int64) (bool, error) {
 	rows, err := foghorndb.New(s.db).MarkMediaObjectAuthorityLocalReadReady(ctx, foghorndb.MarkMediaObjectAuthorityLocalReadReadyParams{
-		AuthorityID: strings.TrimSpace(authorityID), AuthorityVersion: version,
+		TenantID: strings.TrimSpace(tenantID), AuthorityID: strings.TrimSpace(authorityID), AuthorityVersion: version,
 	})
 	return rows == 1, err
 }
 
-func (s *Store) MarkMediaObjectLocalIngestReady(ctx context.Context, authorityID string, version int64) (bool, error) {
+func (s *Store) MarkMediaObjectLocalIngestReady(ctx context.Context, tenantID, authorityID string, version int64) (bool, error) {
 	rows, err := foghorndb.New(s.db).MarkMediaObjectAuthorityLocalIngestReady(ctx, foghorndb.MarkMediaObjectAuthorityLocalIngestReadyParams{
-		AuthorityID: strings.TrimSpace(authorityID), AuthorityVersion: version,
+		TenantID: strings.TrimSpace(tenantID), AuthorityID: strings.TrimSpace(authorityID), AuthorityVersion: version,
 	})
 	return rows == 1, err
 }
 
-func (s *Store) MarkMediaObjectLocalSourceReady(ctx context.Context, authorityID string, version int64) (bool, error) {
+func (s *Store) MarkMediaObjectLocalSourceReady(ctx context.Context, tenantID, authorityID string, version int64) (bool, error) {
 	rows, err := foghorndb.New(s.db).MarkMediaObjectAuthorityLocalSourceReady(ctx, foghorndb.MarkMediaObjectAuthorityLocalSourceReadyParams{
-		AuthorityID: strings.TrimSpace(authorityID), AuthorityVersion: version,
+		TenantID: strings.TrimSpace(tenantID), AuthorityID: strings.TrimSpace(authorityID), AuthorityVersion: version,
 	})
 	return rows == 1, err
 }
@@ -281,7 +288,7 @@ func (s *Store) MarkPlaybackPairLocalReadReady(ctx context.Context, tenantID str
 		return false, fmt.Errorf("promote tenant local read: rows=%d: %w", tenantRows, err)
 	}
 	objectRows, err := queries.MarkMediaObjectAuthorityLocalReadReady(ctx, foghorndb.MarkMediaObjectAuthorityLocalReadReadyParams{
-		AuthorityID: strings.TrimSpace(authorityID), AuthorityVersion: objectVersion,
+		TenantID: strings.TrimSpace(tenantID), AuthorityID: strings.TrimSpace(authorityID), AuthorityVersion: objectVersion,
 	})
 	if err != nil || objectRows != 1 {
 		return false, fmt.Errorf("promote media-object local read: rows=%d: %w", objectRows, err)
@@ -306,7 +313,7 @@ func (s *Store) MarkIngestPairLocalReady(ctx context.Context, tenantID string, t
 		return false, fmt.Errorf("promote tenant local ingest: rows=%d: %w", tenantRows, err)
 	}
 	objectRows, err := queries.MarkMediaObjectAuthorityLocalIngestReady(ctx, foghorndb.MarkMediaObjectAuthorityLocalIngestReadyParams{
-		AuthorityID: strings.TrimSpace(authorityID), AuthorityVersion: objectVersion,
+		TenantID: strings.TrimSpace(tenantID), AuthorityID: strings.TrimSpace(authorityID), AuthorityVersion: objectVersion,
 	})
 	if err != nil || objectRows != 1 {
 		return false, fmt.Errorf("promote media-object local ingest: rows=%d: %w", objectRows, err)
@@ -331,7 +338,7 @@ func (s *Store) MarkSourcePairLocalReady(ctx context.Context, tenantID string, t
 		return false, fmt.Errorf("promote tenant local source: rows=%d: %w", tenantRows, err)
 	}
 	objectRows, err := queries.MarkMediaObjectAuthorityLocalSourceReady(ctx, foghorndb.MarkMediaObjectAuthorityLocalSourceReadyParams{
-		AuthorityID: strings.TrimSpace(authorityID), AuthorityVersion: objectVersion,
+		TenantID: strings.TrimSpace(tenantID), AuthorityID: strings.TrimSpace(authorityID), AuthorityVersion: objectVersion,
 	})
 	if err != nil || objectRows != 1 {
 		return false, fmt.Errorf("promote media-object local source: rows=%d: %w", objectRows, err)
@@ -352,6 +359,12 @@ func authorityFreshness(now, refreshAfter, validUntil time.Time) Freshness {
 	return FreshnessValid
 }
 
+// stripRuntimePrefix is deliberately narrower than mist.ExtractInternalName: it
+// omits "processing+". A chapter artifact is registered with its internal name
+// equal to its artifact hash, and the remux job for that same chapter runs as
+// "processing+<artifact hash>", so the two namespaces collide on one token.
+// Adding the prefix here would let a processing job's input resolve through this
+// index to the chapter's own finished output. Do not align the two lists.
 func stripRuntimePrefix(value string) string {
 	value = strings.TrimSpace(value)
 	for _, prefix := range []string{"live+", "pull+", "vod+", "dvr+"} {

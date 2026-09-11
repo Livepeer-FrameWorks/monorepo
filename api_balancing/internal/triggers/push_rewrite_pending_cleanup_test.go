@@ -41,6 +41,7 @@ func TestPushRewritePostMintSerializationFailureAbortsPendingSession(t *testing.
 			p := newTestProcessor(t)
 			p.commodoreClient = commodoreClient
 			p.clusterID = "cluster-local"
+			admitIngestPlacementForTest(t, p)
 			p.marshalAdmissionEffect = func(message proto.Message) ([]byte, error) {
 				switch message.(type) {
 				case *ipcpb.MistTrigger:
@@ -59,7 +60,7 @@ func TestPushRewritePostMintSerializationFailureAbortsPendingSession(t *testing.
 				NodeId: "edge-node-1",
 				TriggerPayload: &ipcpb.MistTrigger_PushRewrite{PushRewrite: &ipcpb.PushRewriteTrigger{
 					Pid: 4242, TriggerUuid: "test-trigger-uuid", TriggerUnixMillis: 1,
-					StreamName: "sk_test", PushUrl: "rtmp://example/live/sk_test",
+					StreamName: "sk_test", PushUrl: "rtmp://example/live/sk_test", ObservedConnector: "RTMP",
 				}},
 			})
 			if err == nil || !blocking {

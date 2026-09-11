@@ -564,8 +564,8 @@ func TestStoreReadsMediaObjectCaseInsensitiveAndMarksExactVersion(t *testing.T) 
 		t.Fatalf("snapshot = %+v", snapshot)
 	}
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE foghorn.media_object_authority_projection")).
-		WithArgs(authorityID, int64(9)).WillReturnResult(sqlmock.NewResult(0, 1))
-	marked, err := store.MarkMediaObjectLocalReadReady(context.Background(), authorityID, 9)
+		WithArgs(payload.GetTenantId(), authorityID, int64(9)).WillReturnResult(sqlmock.NewResult(0, 1))
+	marked, err := store.MarkMediaObjectLocalReadReady(context.Background(), payload.GetTenantId(), authorityID, 9)
 	if err != nil || !marked {
 		t.Fatalf("MarkMediaObjectLocalReadReady = %v, %v", marked, err)
 	}

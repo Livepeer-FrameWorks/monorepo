@@ -144,6 +144,46 @@ func TestTenantCapacityContracts_RealValkey(t *testing.T) {
 	}
 }
 
+func TestTenantCapacityPlacementDeadline_RealValkey(t *testing.T) {
+	engine := dockervalkey.Start(t)
+	ctx := context.Background()
+	m := NewTenantCapacityManager()
+	m.EnableRedisSync(engine.Client, "placement-deadline")
+	if allowed, _, count, err := m.TryRegisterViewerBefore(ctx, "tenant", "node", "session", "viewer", 1, time.Now().Add(20*time.Second)); !allowed || count != 1 || err != nil {
+		t.Fatalf("valid placement reservation failed: %v %d %v", allowed, count, err)
+	}
+	keys := m.viewerKeys("tenant")
+	before := make([]string, len(keys))
+	for i, key := range keys {
+		var err error
+		before[i], err = engine.Client.Dump(ctx, key).Result()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, session := range []string{"session", "new-session"} {
+		now := time.Now()
+		// Execute the actual writer with already-expired authority to exercise
+		// the server clock guard independently of the Go preflight check.
+		result, err := reserveTenantViewer.Run(ctx, engine.Client, keys, viewerSessionField("node", session), "viewer", 1,
+			now.UnixMilli(), now.Add(tenantViewerCapacityLease).UnixMilli(), now.Add(tenantViewerCorrelationRetention).UnixMilli(),
+			(tenantViewerCapacityLease + tenantViewerCorrelationRetention).Milliseconds(), now.Add(-time.Second).UnixMilli()).Result()
+		if err != nil {
+			t.Fatal(err)
+		}
+		values, err := redisInts(result, 3)
+		if err != nil || values[0] != -1 {
+			t.Fatalf("expired server-side admission accepted: %v %v", values, err)
+		}
+		for i, key := range keys {
+			after, err := engine.Client.Dump(ctx, key).Result()
+			if err != nil || after != before[i] {
+				t.Fatalf("expired admission mutated %s: %v", key, err)
+			}
+		}
+	}
+}
+
 func TestTenantCapacityRenewRespectsCap_RealValkey(t *testing.T) {
 	engine := dockervalkey.Start(t)
 	m := NewTenantCapacityManager()
