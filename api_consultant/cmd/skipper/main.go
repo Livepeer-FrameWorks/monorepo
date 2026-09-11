@@ -670,6 +670,10 @@ func main() {
 				} else {
 					adminAPI.SetHealth(crawlHealth)
 					adminAPI.RegisterRoutes(router, []byte(jwtSecret), skipperContextBridge())
+					// A crawl settles only in the goroutine running it, so a
+					// restart mid-crawl strands the row and blocks every later
+					// crawl of that sitemap. Nothing else recovers it.
+					go adminAPI.ReapAbandonedCrawls(context.Background())
 				}
 			}
 		}

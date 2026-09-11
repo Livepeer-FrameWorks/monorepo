@@ -568,3 +568,56 @@ func (a *AdminAPI) handleHealth(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"sources": a.health.Snapshot()})
 }
+
+const (
+	// crawlReapInterval paces the abandoned-crawl sweep. A stuck row blocks
+	// every future crawl of its sitemap, but only ever appears after a process
+	// died, so checking a few times an hour is ample.
+	crawlReapInterval = 10 * time.Minute
+	// crawlReapGrace is added to the crawl deadline before a row counts as
+	// abandoned, so a job whose owner is alive and about to settle it is never
+	// reaped out from under that owner.
+	crawlReapGrace = 5 * time.Minute
+)
+
+// ReapAbandonedCrawls settles crawl rows whose owning process is gone.
+//
+// A crawl is finished only by the tail of the in-memory goroutine running it, so
+// a restart or OOM mid-crawl strands the row as 'running'. Nothing else settles
+// it: the retention cleanup only deletes rows that already have finished_at, and
+// CreateCrawlJob refuses while one is running — so the stuck row rejects every
+// later crawl of that sitemap with a 409, permanently, and the tenant's
+// knowledge base silently stops refreshing. The next crawl is exactly what is
+// blocked, so this cannot self-heal.
+//
+// Runs until ctx is cancelled.
+func (a *AdminAPI) ReapAbandonedCrawls(ctx context.Context) {
+	ticker := time.NewTicker(crawlReapInterval)
+	defer ticker.Stop()
+	a.reapAbandonedCrawlsOnce(ctx)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			a.reapAbandonedCrawlsOnce(ctx)
+		}
+	}
+}
+
+func (a *AdminAPI) reapAbandonedCrawlsOnce(ctx context.Context) {
+	now := a.now().UTC()
+	reaped, err := a.queries.ReapAbandonedCrawlJobs(ctx, skipperdb.ReapAbandonedCrawlJobsParams{
+		FinishedAt: sql.NullTime{Time: now, Valid: true},
+		Cutoff:     now.Add(-(maxCrawlDuration + crawlReapGrace)),
+	})
+	if err != nil {
+		if ctx.Err() == nil {
+			a.logger.WithError(err).Warn("Failed to reap abandoned crawl jobs")
+		}
+		return
+	}
+	if reaped > 0 {
+		a.logger.WithField("reaped", reaped).Info("Reaped abandoned crawl jobs whose owning process is gone")
+	}
+}

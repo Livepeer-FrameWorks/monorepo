@@ -52,3 +52,19 @@ WHERE tenant_id = sqlc.arg(tenant_id)
   AND source_url = sqlc.arg(source_url)
 ORDER BY chunk_index ASC
 LIMIT 1;
+
+-- name: ReapAbandonedCrawlJobs :execrows
+-- A crawl settles only in the tail of the in-memory goroutine that runs it, so a
+-- restart, deploy or OOM inside the crawl window leaves its row 'running'
+-- forever. CleanupFinishedCrawlJobs cannot reap it (finished_at IS NULL, and
+-- NULL < cutoff is NULL), and CreateCrawlJob refuses while one is running, so
+-- every later crawl of that sitemap is rejected with a conflict indefinitely.
+--
+-- The cutoff is past the crawl context's own deadline: a job still owned by a
+-- live process settles itself before that, so anything older has no owner.
+UPDATE skipper.skipper_crawl_jobs
+SET status = 'failed',
+    error = 'crawl abandoned: no owning process settled it before its deadline',
+    finished_at = sqlc.arg(finished_at)
+WHERE status = 'running'
+  AND started_at < sqlc.arg(cutoff);
