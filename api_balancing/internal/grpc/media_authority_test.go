@@ -56,3 +56,29 @@ func TestMediaAuthorityStatusClassification(t *testing.T) {
 		}
 	}
 }
+
+func TestAttestCellPlacementCapabilityOnlyFromLedgerReads(t *testing.T) {
+	server := NewFoghornGRPCServer(nil, nil, nil, nil, nil, nil, nil, nil)
+	if server.attestCellPlacementCapability(context.Background()) != nil {
+		t.Fatal("attested without a media authority store")
+	}
+	server.cellPlacementCapability = func(context.Context) (localauthority.CellPlacementCapability, error) {
+		return localauthority.CellPlacementCapability{}, errors.New("ledger unavailable")
+	}
+	if server.attestCellPlacementCapability(context.Background()) != nil {
+		t.Fatal("ledger failure produced an attestation")
+	}
+	server.cellPlacementCapability = func(context.Context) (localauthority.CellPlacementCapability, error) {
+		return localauthority.CellPlacementCapability{SupportedSchemaVersions: []uint32{1, 2}, EnforcementReady: true, LiveReplicas: 1 << 21}, nil
+	}
+	if server.attestCellPlacementCapability(context.Background()) != nil {
+		t.Fatal("implausible replica count produced an attestation")
+	}
+	server.cellPlacementCapability = func(context.Context) (localauthority.CellPlacementCapability, error) {
+		return localauthority.CellPlacementCapability{SupportedSchemaVersions: []uint32{1, 2}, EnforcementReady: true, LiveReplicas: 3}, nil
+	}
+	got := server.attestCellPlacementCapability(context.Background())
+	if got == nil || !got.GetEnforcementReady() || got.GetLiveReplicas() != 3 || len(got.GetSupportedSchemaVersions()) != 2 || got.GetSupportedSchemaVersions()[1] != sharedauthority.PlacementSchemaVersion {
+		t.Fatalf("attestation = %v", got)
+	}
+}

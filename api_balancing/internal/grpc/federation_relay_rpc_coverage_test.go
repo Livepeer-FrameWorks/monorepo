@@ -7,14 +7,13 @@ import (
 	"frameworks/api_balancing/internal/federation"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
-	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 
 	"github.com/alicebob/miniredis/v2"
 	goredis "github.com/redis/go-redis/v9"
 )
 
 // newRemoteEdgeCacheFedRelay stands up a real RemoteEdgeCache over miniredis so
-// the federation-forward read paths (remoteArtifactLookup, collectRemoteEdges)
+// the federation-forward read path (remoteArtifactLookup)
 // exercise the actual scan/unmarshal logic instead of a hand-rolled stub.
 func newRemoteEdgeCacheFedRelay(t *testing.T, clusterID string) *federation.RemoteEdgeCache {
 	t.Helper()
@@ -118,90 +117,5 @@ func TestRemoteArtifactLookup_TranslatesEntriesByHashFedRelay(t *testing.T) {
 	}
 	if len(other) != 0 {
 		t.Fatalf("hash-scoped scan leaked: expected 0 for vod-hash-B, got %d", len(other))
-	}
-}
-
-// Invariant: collectRemoteEdges only emits candidates for peers that are
-// (a) not self, not empty, not a locally-served cluster, AND (b) still alive
-// (heartbeat key present — the liveness gate that prevents a peer dead 30-60s
-// from attracting cross-cluster routing on its longer-lived edge summary).
-func TestCollectRemoteEdges_LivenessGateAndSkipsFedRelay(t *testing.T) {
-	ctx := context.Background()
-	cache := newRemoteEdgeCacheFedRelay(t, "self-cluster")
-
-	srv := &FoghornGRPCServer{
-		logger:          newTestFoghornLogger(),
-		remoteEdgeCache: cache,
-		clusterID:       "self-cluster",
-	}
-
-	// A live peer: heartbeat present + edge summary with one node.
-	if err := cache.SetPeerHeartbeat(ctx, "live-peer", &federation.PeerHeartbeatRecord{EdgeCount: 1}); err != nil {
-		t.Fatalf("seed heartbeat: %v", err)
-	}
-	if err := cache.SetEdgeSummary(ctx, "live-peer", &federation.EdgeSummaryRecord{
-		Edges: []*federation.EdgeSummaryEntry{{
-			NodeID:         "peer-edge-1",
-			BaseURL:        "https://peer-edge1.example",
-			GeoLat:         48.85,
-			GeoLon:         2.35,
-			BWAvailableAvg: 900000000,
-			CPUPercentAvg:  20.0,
-			RAMUsed:        1000,
-			RAMMax:         8000,
-		}},
-	}); err != nil {
-		t.Fatalf("seed edge summary: %v", err)
-	}
-
-	// A stale peer: edge summary present but NO heartbeat → must be gated out.
-	if err := cache.SetEdgeSummary(ctx, "stale-peer", &federation.EdgeSummaryRecord{
-		Edges: []*federation.EdgeSummaryEntry{{NodeID: "stale-edge", BaseURL: "https://stale.example"}},
-	}); err != nil {
-		t.Fatalf("seed stale summary: %v", err)
-	}
-
-	peers := []*clusterpeerpb.TenantClusterPeer{
-		{ClusterId: "self-cluster"}, // self → skipped
-		{ClusterId: ""},             // empty → skipped
-		{ClusterId: "stale-peer"},   // no heartbeat → liveness-gated out
-		{ClusterId: "live-peer"},    // live + summary → candidate
-	}
-
-	candidates := srv.collectRemoteEdges(ctx, peers)
-	if len(candidates) != 1 {
-		t.Fatalf("expected exactly 1 candidate (live-peer only), got %d: %+v", len(candidates), candidates)
-	}
-	c := candidates[0]
-	if c.ClusterID != "live-peer" {
-		t.Fatalf("candidate from wrong cluster: %q", c.ClusterID)
-	}
-	if c.NodeID != "peer-edge-1" || c.BaseURL != "https://peer-edge1.example" {
-		t.Fatalf("edge fields mistranslated: node=%q url=%q", c.NodeID, c.BaseURL)
-	}
-	if c.BWAvailable != 900000000 || c.CPUPercent != 20.0 || c.RAMMax != 8000 {
-		t.Fatalf("capacity fields mistranslated: %+v", c)
-	}
-}
-
-// Invariant: a peer whose heartbeat is present but whose edge summary is missing
-// contributes no candidates — collectRemoteEdges requires BOTH the liveness key
-// and the summary record before it routes viewers across the cluster boundary.
-func TestCollectRemoteEdges_LivePeerNoSummaryYieldsNothingFedRelay(t *testing.T) {
-	ctx := context.Background()
-	cache := newRemoteEdgeCacheFedRelay(t, "self-cluster")
-	srv := &FoghornGRPCServer{
-		logger:          newTestFoghornLogger(),
-		remoteEdgeCache: cache,
-		clusterID:       "self-cluster",
-	}
-
-	if err := cache.SetPeerHeartbeat(ctx, "live-but-bare", &federation.PeerHeartbeatRecord{EdgeCount: 0}); err != nil {
-		t.Fatalf("seed heartbeat: %v", err)
-	}
-
-	candidates := srv.collectRemoteEdges(ctx, []*clusterpeerpb.TenantClusterPeer{{ClusterId: "live-but-bare"}})
-	if len(candidates) != 0 {
-		t.Fatalf("expected 0 candidates with heartbeat but no summary, got %d", len(candidates))
 	}
 }

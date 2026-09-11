@@ -35,13 +35,39 @@ func (s *FoghornGRPCServer) ApplyMediaAuthority(ctx context.Context, req *foghor
 	if result.Status == localauthority.ApplyStatusDuplicate {
 		outcome = foghornpb.MediaAuthorityApplyOutcome_MEDIA_AUTHORITY_APPLY_OUTCOME_DUPLICATE
 	}
-	return &foghornpb.ApplyMediaAuthorityResponse{
+	response := &foghornpb.ApplyMediaAuthorityResponse{
 		Outcome:          outcome,
 		AuthorityKind:    req.GetAuthority().GetEnvelope().GetKind(),
 		AuthorityId:      result.ID,
 		AuthorityVersion: result.Version,
 		RefreshDue:       result.Refreshed,
-	}, nil
+	}
+	response.PlacementCapability = s.attestCellPlacementCapability(ctx)
+	return response, nil
+}
+
+// attestCellPlacementCapability rides on the acknowledgement so Commodore learns
+// cell capability from the same replica that durably applied the authority. A
+// failed ledger read acknowledges without attesting: absent means not ready.
+func (s *FoghornGRPCServer) attestCellPlacementCapability(ctx context.Context) *foghornpb.MediaCellPlacementCapability {
+	if s.cellPlacementCapability == nil {
+		return nil
+	}
+	capability, err := s.cellPlacementCapability(ctx)
+	if err != nil {
+		if s.logger != nil {
+			s.logger.WithError(err).Warn("Cell placement capability unavailable; acknowledging without attestation")
+		}
+		return nil
+	}
+	if capability.LiveReplicas < 0 || capability.LiveReplicas > 1<<20 {
+		return nil
+	}
+	return &foghornpb.MediaCellPlacementCapability{
+		SupportedSchemaVersions: capability.SupportedSchemaVersions,
+		EnforcementReady:        capability.EnforcementReady,
+		LiveReplicas:            uint32(capability.LiveReplicas),
+	}
 }
 
 func mediaAuthorityStatus(err error) error {

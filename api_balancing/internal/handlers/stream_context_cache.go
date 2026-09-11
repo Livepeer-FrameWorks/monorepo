@@ -23,7 +23,6 @@ var originPullInstanceID string
 // peerAddrResolver is satisfied by *federation.PeerManager.
 type peerAddrResolver interface {
 	GetPeerAddr(clusterID string) string
-	GetPeerGeo(clusterID string) (float64, float64)
 }
 
 var peerManager peerAddrResolver
@@ -40,7 +39,8 @@ func SetTriggerProcessor(p *triggers.Processor) {
 	}
 }
 
-// SetRemoteEdgeCache enables remote edge scoring for cross-cluster viewer routing in HTTP handlers.
+// SetRemoteEdgeCache enables cross-cluster artifact lookups and origin-pull
+// coordination for the HTTP handlers. It no longer feeds viewer routing.
 func SetRemoteEdgeCache(cache *federation.RemoteEdgeCache) {
 	remoteEdgeCache = cache
 }
@@ -49,28 +49,22 @@ func SetRemoteEdgeCache(cache *federation.RemoteEdgeCache) {
 // from the local registry. The bool return is tri-state via (url, handled):
 //
 //	("", false) — no active replication; caller falls through to other resolvers
-//	("", true)  — replication exists but pinned to a different edge; caller
-//	              must NOT fall through (would create a duplicate pull). Caller
-//	              should write an offline/empty response.
-//	(url, true) — replication exists and the caller is the pinned puller
-//	              (or no pin is set); return the URL to Mist.
+//	("", true)  — other destinations are preparing; this caller has no accepted
+//	              pull and must not borrow their source URL.
+//	(url, true) — this exact destination has an accepted source URL.
 //
 // callerNodeID is the dest-edge resolved from the HTTP /source client IP.
-// When empty (caller not registered) we cannot prove the caller IS the
-// pinned puller, so any pin gates the response.
+// An unidentified caller cannot reuse another node's prepared source.
 func activeReplicationSource(ctx context.Context, streamName, callerNodeID string) (string, bool) {
 	if control.StreamRegistryInstance == nil || strings.TrimSpace(streamName) == "" {
 		return "", false
 	}
-	loc, ok := control.StreamRegistryInstance.LocalReplication(ctx, streamName)
+	loc, ok := control.StreamRegistryInstance.LocalReplicationForNode(ctx, streamName, callerNodeID)
 	if !ok || strings.TrimSpace(loc.PullDTSCURL) == "" {
+		if _, pending := control.StreamRegistryInstance.LocalReplication(ctx, streamName); pending {
+			return "", true
+		}
 		return "", false
-	}
-	if loc.DestNodeID != "" && callerNodeID != loc.DestNodeID {
-		// Pinned to another local edge. Refuse rather than letting the
-		// caller fall through and arrange a parallel pull the registry
-		// can't track.
-		return "", true
 	}
 	return loc.PullDTSCURL, true
 }

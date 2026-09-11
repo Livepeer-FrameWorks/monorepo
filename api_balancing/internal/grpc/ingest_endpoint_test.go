@@ -93,7 +93,7 @@ func seedGRPCIngestNode(t *testing.T, sm *state.StreamStateManager, nodeID, host
 	t.Helper()
 	lat, lon := 52.0, 4.0
 	sm.SetNodeInfo(nodeID, "http://"+host, true, &lat, &lon, "loc-"+nodeID, "",
-		map[string]any{"HLS": "http://" + host + "/hls/$/index.m3u8"})
+		map[string]any{"HLS": "http://" + host + "/hls/$/index.m3u8", "WebRTC": "http://" + host + "/webrtc/$", "RTMP": "rtmp://HOST:1935/play/$", "TSSRT": "srt://HOST:8889?streamid=$"})
 	sm.UpdateNodeMetrics(nodeID, struct {
 		CPU                  float64
 		RAMMax               float64
@@ -125,12 +125,17 @@ func seedGRPCIngestNode(t *testing.T, sm *state.StreamStateManager, nodeID, host
 	sm.SetProbeVerified(nodeID, true)
 }
 
+// newIngestGRPCServer carries the state-backed placement preparer the prepared
+// ingest path requires: without one every resolve is an outage, so a fixture
+// that omits it would assert nothing about selection.
 func newIngestGRPCServer() *FoghornGRPCServer {
-	return &FoghornGRPCServer{
+	server := &FoghornGRPCServer{
 		logger:    logging.NewLogger(),
 		lb:        balancer.NewLoadBalancer(logging.NewLogger()),
 		clusterID: "cluster-1",
 	}
+	server.SetIngestPlacementPreparer(ingestPlacementFunc(prepareIngestFromNodeState))
+	return server
 }
 
 func TestResolveIngestEndpoint_RequiresStreamKey(t *testing.T) {
@@ -215,6 +220,46 @@ func TestResolveIngestEndpoint_InvalidKeyIsNotFound(t *testing.T) {
 	_, err := srv.ResolveIngestEndpoint(context.Background(), &sharedpb.IngestEndpointRequest{StreamKey: "bogus"})
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("want NotFound, got %v", err)
+	}
+}
+
+func TestResolveIngestEndpoint_RequestedProtocolFiltersBeforeSelection(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	seedGRPCIngestNode(t, sm, "a-rtmp", "rtmp.example:18090")
+	seedGRPCIngestNode(t, sm, "z-whip", "whip.example:18090")
+	sm.SetNodeInfo("a-rtmp", "http://rtmp.example:18090", true, nil, nil, "", "", map[string]any{"RTMP": "rtmp://HOST:2935/play/$"})
+	sm.SetNodeInfo("z-whip", "http://whip.example:18090", true, nil, nil, "", "", map[string]any{"WebRTC": "http://HOST:18090/webrtc/$"})
+	fake := &commodoreIngestFake{streamContext: func(context.Context, *commodorepb.ResolveStreamContextRequest) (*commodorepb.ResolveStreamContextResponse, error) {
+		return &commodorepb.ResolveStreamContextResponse{Admitted: true, StreamId: "stream", InternalName: "internal", TenantId: "tenant", IngestMode: "push", ClusterPeers: ingestTestPeers()}, nil
+	}}
+	startCommodoreIngestFake(t, fake)
+	srv := newIngestGRPCServer()
+	for _, tc := range []struct {
+		protocol sharedpb.IngestProtocol
+		node     string
+	}{
+		{sharedpb.IngestProtocol_INGEST_PROTOCOL_WHIP, "z-whip"},
+		{sharedpb.IngestProtocol_INGEST_PROTOCOL_RTMP, "a-rtmp"},
+	} {
+		resp, err := srv.ResolveIngestEndpoint(t.Context(), &sharedpb.IngestEndpointRequest{StreamKey: "key", Protocol: tc.protocol})
+		if err != nil || resp.GetPrimary().GetNodeId() != tc.node || len(resp.GetFallbacks()) != 0 {
+			t.Fatalf("protocol %v: response=%+v err=%v", tc.protocol, resp, err)
+		}
+	}
+	_, err := srv.ResolveIngestEndpoint(t.Context(), &sharedpb.IngestEndpointRequest{StreamKey: "key", Protocol: sharedpb.IngestProtocol_INGEST_PROTOCOL_SRT})
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("missing protocol must not substitute another: %v", err)
+	}
+	if fake.validateKeyHits.Load() != 0 {
+		t.Fatal("protocol resolution claimed an ingest lease")
+	}
+}
+
+func TestResolveIngestEndpoint_UnknownProtocolRejectedBeforeAuthority(t *testing.T) {
+	srv := newIngestGRPCServer()
+	_, err := srv.ResolveIngestEndpoint(t.Context(), &sharedpb.IngestEndpointRequest{StreamKey: "key", Protocol: sharedpb.IngestProtocol(99)})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("unsupported protocol = %v", err)
 	}
 }
 

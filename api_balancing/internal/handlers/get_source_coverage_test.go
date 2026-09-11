@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"errors"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
@@ -380,7 +381,7 @@ func TestSourceCallerNodeIDFromPath(t *testing.T) {
 	}
 }
 
-// MistServerCompatibilityHandler dispatch: the /source/by-node/<id>?source=
+// MistSourceHandler dispatch: the /source/by-node/<id>?source=
 // branch routes to handleGetSource. With no node carrying a live+ stream the
 // terminal answer is push://, proving the request reached source resolution
 // (not stream balancing or an admin handler).
@@ -393,7 +394,7 @@ func TestCompatDispatchSourceByNodeRoutesToGetSource(t *testing.T) {
 	c.Request = httptest.NewRequestWithContext(context.Background(), "GET",
 		sourceByNodePathPrefix+"edgeA?source=live%2Bnobody", nil)
 
-	MistServerCompatibilityHandler(c)
+	MistSourceHandler(c)
 
 	if w.Code != 200 {
 		t.Fatalf("status = %d, want 200", w.Code)
@@ -403,7 +404,7 @@ func TestCompatDispatchSourceByNodeRoutesToGetSource(t *testing.T) {
 	}
 }
 
-// MistServerCompatibilityHandler dispatch: a /source/by-node/ request with an
+// MistSourceHandler dispatch: a /source/by-node/ request with an
 // empty source query is rejected with 400 before any resolution — the
 // dispatcher guards the missing-source case rather than falling through.
 func TestCompatDispatchSourceByNodeMissingSource(t *testing.T) {
@@ -415,7 +416,7 @@ func TestCompatDispatchSourceByNodeMissingSource(t *testing.T) {
 	c.Request = httptest.NewRequestWithContext(context.Background(), "GET",
 		sourceByNodePathPrefix+"edgeA", nil)
 
-	MistServerCompatibilityHandler(c)
+	MistSourceHandler(c)
 
 	if w.Code != 400 {
 		t.Fatalf("status = %d, want 400 for missing source", w.Code)
@@ -425,7 +426,7 @@ func TestCompatDispatchSourceByNodeMissingSource(t *testing.T) {
 	}
 }
 
-// MistServerCompatibilityHandler dispatch: the HTTP/2 PRI preface and
+// MistSourceHandler dispatch: the HTTP/2 PRI preface and
 // /favicon.ico are short-circuited before any stream/source routing. These
 // guard the dispatcher's non-balancing branches.
 func TestCompatDispatchPRIAndFavicon(t *testing.T) {
@@ -437,7 +438,7 @@ func TestCompatDispatchPRIAndFavicon(t *testing.T) {
 	cPRI, _ := gin.CreateTestContext(wPRI)
 	cPRI.Request = httptest.NewRequestWithContext(context.Background(), "PRI", "/", nil)
 	cPRI.Request.RequestURI = "*"
-	MistServerCompatibilityHandler(cPRI)
+	MistSourceHandler(cPRI)
 	if wPRI.Code != 200 || wPRI.Body.String() != "" {
 		t.Fatalf("PRI preface = (%d,%q), want (200,\"\")", wPRI.Code, wPRI.Body.String())
 	}
@@ -446,15 +447,13 @@ func TestCompatDispatchPRIAndFavicon(t *testing.T) {
 	wFav := httptest.NewRecorder()
 	cFav, _ := gin.CreateTestContext(wFav)
 	cFav.Request = httptest.NewRequestWithContext(context.Background(), "GET", "/favicon.ico", nil)
-	MistServerCompatibilityHandler(cFav)
+	MistSourceHandler(cFav)
 	if wFav.Code != 404 {
 		t.Fatalf("favicon status = %d, want 404", wFav.Code)
 	}
 }
 
-// MistServerCompatibilityHandler dispatch: a /<stream> path whose name fails
-// StreamIDRegex is rejected with 400 ("Invalid stream name") — the dispatcher
-// validates the stream-balancing branch before invoking handleStreamBalancing.
+// Source lookup never treats an unknown path as a viewer routing request.
 func TestCompatDispatchInvalidStreamName(t *testing.T) {
 	withSeededBalancer(t)
 	withLoggerGetSource(t)
@@ -463,23 +462,14 @@ func TestCompatDispatchInvalidStreamName(t *testing.T) {
 	c, _ := gin.CreateTestContext(w)
 	// "ab" is too short for the {3,127} regex → invalid.
 	c.Request = httptest.NewRequestWithContext(context.Background(), "GET", "/ab", nil)
-	MistServerCompatibilityHandler(c)
+	MistSourceHandler(c)
 
-	if w.Code != 400 {
-		t.Fatalf("status = %d, want 400 for invalid stream name", w.Code)
-	}
-	if !strings.Contains(w.Body.String(), "Invalid stream name") {
-		t.Fatalf("body = %q, want Invalid stream name", w.Body.String())
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", w.Code)
 	}
 }
 
-// MistServerCompatibilityHandler dispatch: a valid /<stream> name routes to
-// stream balancing (handleStreamBalancing), NOT to source resolution. With no
-// Commodore and no carrying node, a live+ stream resolves to the live offline
-// fallback. The invariant under test is the route choice: /<stream> goes to
-// balancing, which is observable because the response is produced by that path
-// (200, non-error) rather than the dispatcher's 400 guards.
-func TestCompatDispatchValidStreamRoutesToBalancing(t *testing.T) {
+func TestSourceDispatchRejectsHostnameOnlyViewerRouting(t *testing.T) {
 	sm := withSeededBalancer(t)
 	withLoggerGetSource(t)
 	control.Init(logging.NewLogger(), nil, nil)
@@ -493,13 +483,9 @@ func TestCompatDispatchValidStreamRoutesToBalancing(t *testing.T) {
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequestWithContext(context.Background(), "GET", "/live+show", nil)
-	MistServerCompatibilityHandler(c)
+	MistSourceHandler(c)
 
-	// Not a dispatcher 400 guard; balancing produced the answer.
-	if w.Code == 400 {
-		t.Fatalf("valid stream was rejected by a dispatcher guard: %q", w.Body.String())
-	}
-	if w.Code != 200 && w.Code != 302 {
-		t.Fatalf("status = %d, want 200/302 from stream balancing", w.Code)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", w.Code)
 	}
 }

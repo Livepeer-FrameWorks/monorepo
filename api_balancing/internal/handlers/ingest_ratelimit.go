@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"container/list"
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	sharedmw "github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
 
 	"github.com/gin-gonic/gin"
@@ -243,7 +245,19 @@ func currentTrustedProxies() *sharedmw.TrustedProxies {
 // is fronted by a proxy and that variable is unset, every publisher is
 // attributed to the proxy: one shared bucket and proxy-located geo.
 func trustedClientIP(c *gin.Context) string {
-	return sharedmw.TrustedClientIP(c, currentTrustedProxies())
+	if c == nil || c.Request == nil {
+		return ""
+	}
+	if ip := ctxkeys.GetClientIP(c.Request.Context()); ip != "" {
+		c.Set(string(ctxkeys.KeyClientIP), ip)
+		return ip
+	}
+	ip := sharedmw.TrustedClientIP(c, currentTrustedProxies())
+	if ip != "" {
+		c.Set(string(ctxkeys.KeyClientIP), ip)
+		c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), ctxkeys.KeyClientIP, ip))
+	}
+	return ip
 }
 
 // enforceIngestRateLimit writes a 429 and reports false when the caller is over

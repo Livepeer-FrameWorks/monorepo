@@ -3,6 +3,7 @@ package handlers
 import (
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,7 +14,6 @@ import (
 
 type streamRegistryDebugLocation struct {
 	ClusterID        string   `json:"cluster_id"`
-	IsOrigin         bool     `json:"is_origin"`
 	IsLiveNow        bool     `json:"is_live_now"`
 	SourceNodes      []string `json:"source_nodes,omitempty"`
 	EdgeCount        int      `json:"edge_count,omitempty"`
@@ -64,13 +64,20 @@ type streamRegistryDebugArtifact struct {
 }
 
 type streamRegistryDebugReplication struct {
-	InternalName     string `json:"internal_name"`
-	ReplicatingFrom  string `json:"replicating_from"`
-	PullDTSCURL      string `json:"pull_dtsc_url"`
-	DestNodeID       string `json:"dest_node_id"`
-	DestNodeBaseURL  string `json:"dest_node_base_url"`
-	PullSourceNodeID string `json:"pull_source_node_id"`
-	UpdatedAt        string `json:"updated_at"`
+	TenantID             string `json:"tenant_id,omitempty"`
+	SourceCellID         string `json:"source_cell_id,omitempty"`
+	SourceMediaClusterID string `json:"source_media_cluster_id,omitempty"`
+	DestClusterID        string `json:"dest_cluster_id,omitempty"`
+	AttemptID            string `json:"attempt_id,omitempty"`
+	SourceGeneration     string `json:"source_generation,omitempty"`
+	SourceRevision       string `json:"source_revision,omitempty"`
+	InternalName         string `json:"internal_name"`
+	ReplicatingFrom      string `json:"replicating_from"`
+	PullDTSCURL          string `json:"pull_dtsc_url"`
+	DestNodeID           string `json:"dest_node_id"`
+	DestNodeBaseURL      string `json:"dest_node_base_url"`
+	PullSourceNodeID     string `json:"pull_source_node_id"`
+	UpdatedAt            string `json:"updated_at"`
 }
 
 type streamRegistryDebugResponse struct {
@@ -113,13 +120,12 @@ func HandleStreamRegistry(c *gin.Context) {
 			for cid, loc := range entry.Locations {
 				locs[cid] = streamRegistryDebugLocation{
 					ClusterID:        loc.ClusterID,
-					IsOrigin:         loc.IsOrigin,
 					IsLiveNow:        loc.IsLiveNow,
 					SourceNodes:      loc.SourceNodes,
 					EdgeCount:        len(loc.EdgeCandidates),
 					AdTimestamp:      loc.AdTimestamp,
 					ReplicatingFrom:  loc.ReplicatingFrom,
-					PullDTSCURL:      loc.PullDTSCURL,
+					PullDTSCURL:      control.SourcePullBaseURL(loc.PullDTSCURL),
 					DestNodeID:       loc.DestNodeID,
 					DestNodeBaseURL:  loc.DestNodeBaseURL,
 					PullSourceNodeID: loc.PullSourceNodeID,
@@ -156,21 +162,33 @@ func HandleStreamRegistry(c *gin.Context) {
 	}
 
 	if include("replications") {
-		for name, loc := range control.StreamRegistryInstance.AllLocalReplications() {
+		for name, locations := range control.StreamRegistryInstance.AllLocalReplications() {
 			if q != "" && !strings.Contains(strings.ToLower(name), q) {
 				continue
 			}
-			resp.LocalReplications = append(resp.LocalReplications, streamRegistryDebugReplication{
-				InternalName:     name,
-				ReplicatingFrom:  loc.ReplicatingFrom,
-				PullDTSCURL:      loc.PullDTSCURL,
-				DestNodeID:       loc.DestNodeID,
-				DestNodeBaseURL:  loc.DestNodeBaseURL,
-				PullSourceNodeID: loc.PullSourceNodeID,
-				UpdatedAt:        formatTime(loc.UpdatedAt),
-			})
+			for _, loc := range locations {
+				pull := loc.InboundPulls[loc.DestNodeID]
+				var sourceRevision string
+				if pull.SourceRevision > 0 {
+					sourceRevision = strconv.FormatInt(pull.SourceRevision, 10)
+				}
+				resp.LocalReplications = append(resp.LocalReplications, streamRegistryDebugReplication{
+					TenantID: pull.TenantID, SourceCellID: loc.ReplicatingFrom, SourceMediaClusterID: pull.SourceMediaClusterID,
+					DestClusterID: pull.DestClusterID, AttemptID: pull.AttemptID, SourceGeneration: pull.SourceGeneration, SourceRevision: sourceRevision,
+					InternalName:     name,
+					ReplicatingFrom:  loc.ReplicatingFrom,
+					PullDTSCURL:      control.SourcePullBaseURL(loc.PullDTSCURL),
+					DestNodeID:       loc.DestNodeID,
+					DestNodeBaseURL:  loc.DestNodeBaseURL,
+					PullSourceNodeID: loc.PullSourceNodeID,
+					UpdatedAt:        formatTime(loc.UpdatedAt),
+				})
+			}
 		}
 		sort.Slice(resp.LocalReplications, func(i, j int) bool {
+			if resp.LocalReplications[i].InternalName == resp.LocalReplications[j].InternalName {
+				return resp.LocalReplications[i].DestNodeID < resp.LocalReplications[j].DestNodeID
+			}
 			return resp.LocalReplications[i].InternalName < resp.LocalReplications[j].InternalName
 		})
 	}

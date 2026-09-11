@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"testing"
 
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 	"github.com/gin-gonic/gin"
 )
@@ -107,17 +108,15 @@ func ginCtxWithReq(req *http.Request) *gin.Context {
 	return c
 }
 
-// TestGetLatLon pins the geo-coordinate source precedence: CloudFlare edge
-// headers (most trustworthy, set by our CDN) win over a generic proxy header,
-// which wins over a caller-supplied query param; absent any of those the result
-// is NaN so downstream distance scoring can detect "no location" rather than
-// silently treating the viewer as sitting at (0,0) off the African coast.
+// Authenticated nodes can provide source-routing coordinates. Missing coordinates
+// remain unknown rather than silently locating the source at (0,0).
 func TestGetLatLon(t *testing.T) {
 	const cfHeader = "CF-IPLatitude"
 	const proxyHeader = "X-Geo-Lat"
+	ctx := context.WithValue(context.Background(), ctxkeys.KeyAuthenticatedNodeCluster, "source-cluster")
 
 	t.Run("cloudflare header wins for lat", func(t *testing.T) {
-		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/?lat=10", nil)
+		req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/?lat=10", nil)
 		req.Header.Set(cfHeader, "51.5")
 		req.Header.Set(proxyHeader, "20")
 		c := ginCtxWithReq(req)
@@ -127,7 +126,7 @@ func TestGetLatLon(t *testing.T) {
 	})
 
 	t.Run("proxy header wins over query when no CF header", func(t *testing.T) {
-		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/?lat=10", nil)
+		req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/?lat=10", nil)
 		req.Header.Set(proxyHeader, "20")
 		c := ginCtxWithReq(req)
 		if got := getLatLon(c, req.URL.Query(), "lat", proxyHeader); got != 20 {
@@ -136,7 +135,7 @@ func TestGetLatLon(t *testing.T) {
 	})
 
 	t.Run("cloudflare header wins for lon", func(t *testing.T) {
-		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/?lon=1", nil)
+		req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/?lon=1", nil)
 		req.Header.Set("CF-IPLongitude", "4.35")
 		c := ginCtxWithReq(req)
 		if got := getLatLon(c, req.URL.Query(), "lon", "X-Geo-Lon"); got != 4.35 {
@@ -145,7 +144,7 @@ func TestGetLatLon(t *testing.T) {
 	})
 
 	t.Run("query param used as last resort", func(t *testing.T) {
-		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/?lon=4.9", nil)
+		req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/?lon=4.9", nil)
 		c := ginCtxWithReq(req)
 		// queryKey "lon" so the CF-IPLongitude branch is exercised (absent here).
 		if got := getLatLon(c, req.URL.Query(), "lon", "X-Geo-Lon"); got != 4.9 {
@@ -154,7 +153,7 @@ func TestGetLatLon(t *testing.T) {
 	})
 
 	t.Run("nothing present yields NaN", func(t *testing.T) {
-		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/", nil)
+		req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/", nil)
 		c := ginCtxWithReq(req)
 		if got := getLatLon(c, req.URL.Query(), "lat", proxyHeader); !math.IsNaN(got) {
 			t.Fatalf("got %v, want NaN", got)
@@ -162,7 +161,7 @@ func TestGetLatLon(t *testing.T) {
 	})
 
 	t.Run("malformed value falls through to next source", func(t *testing.T) {
-		req := httptest.NewRequestWithContext(context.Background(), http.MethodGet, "/?lat=12.5", nil)
+		req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/?lat=12.5", nil)
 		req.Header.Set(cfHeader, "not-a-number")
 		c := ginCtxWithReq(req)
 		// CF header is present but unparseable -> skip it, fall to query.

@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -18,7 +19,10 @@ import (
 	commodorecli "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	sharedmiddleware "github.com/Livepeer-FrameWorks/monorepo/pkg/middleware"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 
@@ -97,7 +101,7 @@ func seedIngestTestNode(t *testing.T, sm *state.StreamStateManager, nodeID, host
 	t.Helper()
 	lat, lon := 52.0, 4.0
 	sm.SetNodeInfo(nodeID, "http://"+host, true, &lat, &lon, "loc-"+nodeID, "",
-		map[string]any{"HLS": "http://" + host + "/hls/$/index.m3u8"})
+		map[string]any{"HLS": "http://" + host + "/hls/$/index.m3u8", "WebRTC": "http://" + host + "/webrtc/$", "RTMP": "rtmp://HOST:1935/play/$", "TSSRT": "srt://HOST:8889?streamid=$"})
 	sm.UpdateNodeMetrics(nodeID, struct {
 		CPU                  float64
 		RAMMax               float64
@@ -129,8 +133,51 @@ func seedIngestTestNode(t *testing.T, sm *state.StreamStateManager, nodeID, host
 	sm.SetNodeConnectionInfo(context.Background(), nodeID, nodeID+":18090", "", ingestTestCluster, nil)
 }
 
+// prepareIngestFromNodeState stands in for the policy resolver: selection lives
+// behind the placement preparer now, so these tests express "which node may take
+// this publish" as the same listener evidence the real preparation runtime reads
+// — capability, liveness, and a fresh advertised listener for the exact protocol.
+// The lowest node ID wins so a fixture with several capable nodes is
+// deterministic.
+func prepareIngestFromNodeState(_ context.Context, request control.IngestPlacementRequest) (balancer.PlacementPreparationResult, error) {
+	snapshot := state.DefaultManager().GetBalancerSnapshotAtomic()
+	if snapshot == nil {
+		return balancer.PlacementPreparationResult{}, balancer.ErrPlacementUnavailable
+	}
+	nodes := append([]state.EnhancedBalancerNodeSnapshot(nil), snapshot.Nodes...)
+	sort.Slice(nodes, func(i, j int) bool { return nodes[i].NodeID < nodes[j].NodeID })
+	now := time.Now()
+	fresh := func(observed time.Time) bool {
+		return !observed.IsZero() && !now.Before(observed) && now.Before(observed.Add(30*time.Second))
+	}
+	for _, node := range nodes {
+		if !node.IsActive || !node.CapIngest || node.ClusterID == "" ||
+			!fresh(node.LastHeartbeat) || !fresh(node.OutputsObservedAt) {
+			continue
+		}
+		endpoint := mist.ResolveIngestEndpointTemplate(node.Outputs, node.Host, request.Protocol)
+		publicBase := mist.IngestPublicOrigin(node.Host)
+		if endpoint == "" || publicBase == "" {
+			continue
+		}
+		attempt, err := placement.NewPreparationAttemptID(now)
+		if err != nil {
+			return balancer.PlacementPreparationResult{}, err
+		}
+		return balancer.PlacementPreparationResult{
+			Outcome: balancer.PlacementAccepted, TenantID: request.TenantID,
+			ObjectID: sharedauthority.LiveStreamAuthorityID(request.StreamID),
+			NodeID:   node.NodeID, ClusterID: node.ClusterID, Protocol: request.Protocol,
+			PublicBaseURL: publicBase, Endpoint: endpoint, AttemptID: attempt,
+			ExpiresAt: now.Add(10 * time.Second),
+		}, nil
+	}
+	return balancer.PlacementPreparationResult{}, balancer.ErrPlacementUnavailable
+}
+
 // newIngestTestRouter wires the front door with a fresh rate limiter so a
-// previous test's bucket usage cannot leak into this one.
+// previous test's bucket usage cannot leak into this one, and with the
+// state-backed placement preparer the prepared path requires.
 func newIngestTestRouter(t *testing.T) *gin.Engine {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
@@ -139,15 +186,18 @@ func newIngestTestRouter(t *testing.T) *gin.Engine {
 	prevLB := lb
 	prevLogger := logger
 	prevClusterID := clusterID
+	prevPreparer := ingestPlacementPreparer
 	ingestLimiter = newIngestRateLimiter()
 	lb = balancer.NewLoadBalancer(logging.NewLogger())
 	logger = logging.NewLogger()
 	clusterID = "cluster-1"
+	SetIngestPlacementPreparer(frontDoorPlacementFunc(prepareIngestFromNodeState))
 	t.Cleanup(func() {
 		ingestLimiter = prevLimiter
 		lb = prevLB
 		logger = prevLogger
 		clusterID = prevClusterID
+		ingestPlacementPreparer = prevPreparer
 	})
 
 	router := gin.New()
@@ -172,6 +222,74 @@ func admittedStreamContext() *commodorepb.ResolveStreamContextResponse {
 
 // A browser/OBS WHIP publish gets a 307 to the chosen node's WHIP URL: 307
 // (not 302) is what preserves the POST method and the SDP offer body.
+func TestIngestFrontDoorPOSTSkipsRTMPOnlyNode(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	seedIngestTestNode(t, sm, "a-rtmp", "rtmp.example:18090")
+	seedIngestTestNode(t, sm, "b-whip", "whip.example:18090")
+	sm.SetNodeInfo("a-rtmp", "http://rtmp.example:18090", true, nil, nil, "", "", map[string]any{"RTMP": "rtmp://HOST:2935/play/$"})
+	fake := &ingestCommodoreFake{streamContext: func(context.Context, *commodorepb.ResolveStreamContextRequest) (*commodorepb.ResolveStreamContextResponse, error) {
+		return admittedStreamContext(), nil
+	}}
+	startIngestCommodoreFake(t, fake)
+	router := newIngestTestRouter(t)
+	recorder := httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/ingest/key", nil))
+	if recorder.Code != http.StatusTemporaryRedirect || recorder.Header().Get("Location") != "http://whip.example:18090/webrtc/key" {
+		t.Fatalf("WHIP selected unsupported node: %d %s", recorder.Code, recorder.Body.String())
+	}
+	sm.SetNodeInfo("b-whip", "http://whip.example:18090", true, nil, nil, "", "{}", nil)
+	recorder = httptest.NewRecorder()
+	router.ServeHTTP(recorder, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/ingest/key", nil))
+	if recorder.Code != http.StatusServiceUnavailable || recorder.Header().Get("Location") != "" {
+		t.Fatalf("withdrawn WHIP listener still redirects: %d %s", recorder.Code, recorder.Header().Get("Location"))
+	}
+}
+
+func TestIngestFrontDoorGETRequestedProtocol(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	seedIngestTestNode(t, sm, "a-rtmp", "rtmp.example:18090")
+	seedIngestTestNode(t, sm, "z-srt", "srt.example:18090")
+	sm.SetNodeInfo("a-rtmp", "http://rtmp.example:18090", true, nil, nil, "", "", map[string]any{"RTMP": "rtmp://HOST:2935/play/$"})
+	sm.SetNodeInfo("z-srt", "http://srt.example:18090", true, nil, nil, "", "", map[string]any{"TSSRT": "srt://HOST:18889/?streamid=$"})
+	fake := &ingestCommodoreFake{streamContext: func(context.Context, *commodorepb.ResolveStreamContextRequest) (*commodorepb.ResolveStreamContextResponse, error) {
+		return &commodorepb.ResolveStreamContextResponse{Admitted: true, StreamId: "stream", InternalName: "internal", TenantId: "tenant", IngestMode: "push", ClusterPeers: ingestTestPeers()}, nil
+	}}
+	startIngestCommodoreFake(t, fake)
+	router := newIngestTestRouter(t)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/ingest/key?protocol=srt", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"nodeId":"z-srt"`) || strings.Contains(response.Body.String(), `"a-rtmp"`) {
+		t.Fatalf("SRT response %d: %s", response.Code, response.Body.String())
+	}
+	if fake.validateKeyHits.Load() != 0 {
+		t.Fatal("resolution claimed publisher ownership")
+	}
+}
+
+func TestIngestFrontDoorRejectsAmbiguousOrConflictingProtocols(t *testing.T) {
+	fake := &ingestCommodoreFake{}
+	startIngestCommodoreFake(t, fake)
+	router := newIngestTestRouter(t)
+	for _, tc := range []struct{ method, query string }{
+		{http.MethodGet, "protocol="},
+		{http.MethodGet, "protocol=WHIP"},
+		{http.MethodGet, "protocol=whip&protocol=rtmp"},
+		{http.MethodGet, "protocol=ftp"},
+		{http.MethodGet, "protocol=%GG"},
+		{http.MethodGet, "protocol=srt;protocol=whip"},
+		{http.MethodPost, "protocol=rtmp"},
+	} {
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, httptest.NewRequestWithContext(t.Context(), tc.method, "/ingest/key?"+tc.query, nil))
+		if response.Code != http.StatusBadRequest || response.Header().Get("Location") != "" || response.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("%s %s returned %d: %s", tc.method, tc.query, response.Code, response.Body.String())
+		}
+	}
+	if fake.streamContextHits.Load() != 0 || fake.validateKeyHits.Load() != 0 {
+		t.Fatal("invalid protocol reached authority")
+	}
+}
+
 func TestIngestFrontDoor_POSTRedirectsToWHIP(t *testing.T) {
 	sm := state.ResetDefaultManagerForTests()
 	seedIngestTestNode(t, sm, "ingest-a", "ingest-a.example.com:18090")
@@ -321,8 +439,10 @@ func TestIngestFrontDoor_RoutingEventCarriesNoStreamKey(t *testing.T) {
 	}
 }
 
-// GET is the curl-able form: full candidate set, but owner-only metadata
-// stripped because the endpoint is anonymous.
+// GET is the curl-able form: every prepared protocol URL, but owner-only
+// metadata stripped because the endpoint is anonymous. A second capable node is
+// seeded to show it is not offered as a fallback — only independently prepared
+// destinations appear, so fallbacks exist solely when protocols prepare apart.
 func TestIngestFrontDoor_GETReturnsJSONWithoutOwnerMetadata(t *testing.T) {
 	sm := state.ResetDefaultManagerForTests()
 	seedIngestTestNode(t, sm, "ingest-a", "ingest-a.example.com:18090")
@@ -353,8 +473,11 @@ func TestIngestFrontDoor_GETReturnsJSONWithoutOwnerMetadata(t *testing.T) {
 	if payload.Primary["whipUrl"] == nil {
 		t.Errorf("primary missing whipUrl: %+v", payload.Primary)
 	}
-	if len(payload.Fallbacks) != 1 {
-		t.Errorf("fallbacks: got %d want 1", len(payload.Fallbacks))
+	if len(payload.Fallbacks) != 0 {
+		t.Errorf("fallbacks: got %d want 0; unprepared ranked alternatives must not be published", len(payload.Fallbacks))
+	}
+	if payload.Primary["rtmpUrl"] == nil || payload.Primary["srtUrl"] == nil {
+		t.Errorf("primary missing a prepared protocol URL: %+v", payload.Primary)
 	}
 	if _, ok := payload.Metadata["streamKey"]; ok {
 		t.Error("streamKey must not be exposed on the anonymous surface")

@@ -349,10 +349,10 @@ func TestApplyBootstrapMetadataNilAndEmptyAreNoops(t *testing.T) {
 	}
 }
 
-// MistServerCompatibilityHandler dispatches purely on method/path before any
+// MistSourceHandler dispatches purely on method/path before any
 // client call. These branches lock the URI routing contract: HTTP/2 PRI,
 // favicon, /source/by-node/ without a source param, and invalid stream names.
-func TestMistServerCompatibilityHandlerDispatch(t *testing.T) {
+func TestMistSourceHandlerDispatch(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	t.Run("PRI preface returns 200 empty", func(t *testing.T) {
@@ -360,7 +360,7 @@ func TestMistServerCompatibilityHandlerDispatch(t *testing.T) {
 		c, _ := gin.CreateTestContext(w)
 		c.Request = httptest.NewRequestWithContext(context.Background(), "PRI", "/", nil)
 		c.Request.RequestURI = "*"
-		MistServerCompatibilityHandler(c)
+		MistSourceHandler(c)
 		if w.Code != http.StatusOK || w.Body.String() != "" {
 			t.Fatalf("PRI dispatch = %d %q, want 200 empty", w.Code, w.Body.String())
 		}
@@ -370,7 +370,7 @@ func TestMistServerCompatibilityHandlerDispatch(t *testing.T) {
 		w := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(w)
 		c.Request = httptest.NewRequestWithContext(context.Background(), "GET", "/favicon.ico", nil)
-		MistServerCompatibilityHandler(c)
+		MistSourceHandler(c)
 		if w.Code != http.StatusNotFound {
 			t.Fatalf("favicon dispatch = %d, want 404", w.Code)
 		}
@@ -380,20 +380,20 @@ func TestMistServerCompatibilityHandlerDispatch(t *testing.T) {
 		w := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(w)
 		c.Request = httptest.NewRequestWithContext(context.Background(), "GET", sourceByNodePathPrefix, nil)
-		MistServerCompatibilityHandler(c)
+		MistSourceHandler(c)
 		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "Missing source") {
 			t.Fatalf("source-by-node dispatch = %d %q, want 400 Missing source", w.Code, w.Body.String())
 		}
 	})
 
-	t.Run("invalid stream name is 400", func(t *testing.T) {
+	t.Run("hostname-only viewer route is absent", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(w)
 		// A single-char name fails StreamIDRegex (min length 4).
 		c.Request = httptest.NewRequestWithContext(context.Background(), "GET", "/x", nil)
-		MistServerCompatibilityHandler(c)
-		if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "Invalid stream name") {
-			t.Fatalf("invalid stream dispatch = %d %q, want 400 Invalid stream name", w.Code, w.Body.String())
+		MistSourceHandler(c)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("unknown path = %d %q, want 404", w.Code, w.Body.String())
 		}
 	})
 }

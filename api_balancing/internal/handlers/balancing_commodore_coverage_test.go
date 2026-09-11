@@ -2,10 +2,7 @@ package handlers
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"net"
-	"net/http"
 	"testing"
 	"time"
 
@@ -21,87 +18,6 @@ import (
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	"google.golang.org/grpc"
 )
-
-func TestStreamBalancing_ResolutionFailureReturns503(t *testing.T) {
-	balancingTestEnv(t)
-	startBalancingCommodoreFake(t, &commodoreBalancingFake{
-		internalName: func(context.Context, *commodorepb.ResolveInternalNameRequest) (*commodorepb.ResolveInternalNameResponse, error) {
-			return nil, errors.New("commodore unavailable")
-		},
-	})
-
-	c, w := ginCtxFor(t, "")
-	handleStreamBalancing(c, "live+demo")
-
-	if w.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503 on resolution failure", w.Code)
-	}
-}
-
-func TestStreamBalancing_InactiveTenantReturns403(t *testing.T) {
-	balancingTestEnv(t)
-	startBalancingCommodoreFake(t, &commodoreBalancingFake{
-		internalName: func(context.Context, *commodorepb.ResolveInternalNameRequest) (*commodorepb.ResolveInternalNameResponse, error) {
-			return &commodorepb.ResolveInternalNameResponse{InternalName: "demo", TenantId: "tenant-inactive"}, nil
-		},
-	})
-	startQuartermasterFake(t, &fakeTenantService{
-		validate: func(context.Context, *quartermasterpb.ValidateTenantRequest) (*quartermasterpb.ValidateTenantResponse, error) {
-			return &quartermasterpb.ValidateTenantResponse{Valid: false, IsActive: false, TenantId: "tenant-inactive"}, nil
-		},
-	})
-
-	c, w := ginCtxFor(t, "")
-	handleStreamBalancing(c, "live+demo")
-
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("status = %d, want 403 for inactive tenant", w.Code)
-	}
-}
-
-func TestStreamBalancing_BillingAuthorityFailureReturns503(t *testing.T) {
-	balancingTestEnv(t)
-	startBalancingCommodoreFake(t, &commodoreBalancingFake{
-		internalName: func(context.Context, *commodorepb.ResolveInternalNameRequest) (*commodorepb.ResolveInternalNameResponse, error) {
-			return &commodorepb.ResolveInternalNameResponse{InternalName: "demo", TenantId: "tenant-1"}, nil
-		},
-	})
-	startQuartermasterFake(t, &fakeTenantService{
-		validate: func(context.Context, *quartermasterpb.ValidateTenantRequest) (*quartermasterpb.ValidateTenantResponse, error) {
-			return nil, errors.New("quartermaster unavailable")
-		},
-	})
-
-	c, w := ginCtxFor(t, "")
-	handleStreamBalancing(c, "live+demo")
-
-	if w.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503 when billing authority is unavailable", w.Code)
-	}
-}
-
-func TestStreamBalancing_UpstreamBillingUnavailableReturns503(t *testing.T) {
-	balancingTestEnv(t)
-	startBalancingCommodoreFake(t, &commodoreBalancingFake{
-		internalName: func(context.Context, *commodorepb.ResolveInternalNameRequest) (*commodorepb.ResolveInternalNameResponse, error) {
-			return &commodorepb.ResolveInternalNameResponse{InternalName: "demo", TenantId: "tenant-1"}, nil
-		},
-	})
-	startQuartermasterFake(t, &fakeTenantService{
-		validate: func(context.Context, *quartermasterpb.ValidateTenantRequest) (*quartermasterpb.ValidateTenantResponse, error) {
-			return &quartermasterpb.ValidateTenantResponse{
-				Valid: true, IsActive: true, TenantId: "tenant-1", BillingStatusUnavailable: true,
-			}, nil
-		},
-	})
-
-	c, w := ginCtxFor(t, "")
-	handleStreamBalancing(c, "live+demo")
-
-	if w.Code != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want 503 when Purser is unavailable behind Quartermaster", w.Code)
-	}
-}
 
 func TestRefreshBillingStatusAfterPaymentPreservesInactiveTenant(t *testing.T) {
 	balancingTestEnv(t)
@@ -134,6 +50,22 @@ type commodoreBalancingFake struct {
 
 	internalName     func(context.Context, *commodorepb.ResolveInternalNameRequest) (*commodorepb.ResolveInternalNameResponse, error)
 	artifactInternal func(context.Context, *commodorepb.ResolveArtifactInternalNameRequest) (*commodorepb.ResolveArtifactInternalNameResponse, error)
+	playbackID       func(context.Context, *commodorepb.ResolvePlaybackIDRequest) (*commodorepb.ResolvePlaybackIDResponse, error)
+	playbackPolicy   func(context.Context, *commodorepb.ResolvePlaybackPolicyRequest) (*commodorepb.ResolvePlaybackPolicyResponse, error)
+}
+
+func (f *commodoreBalancingFake) ResolvePlaybackPolicy(ctx context.Context, req *commodorepb.ResolvePlaybackPolicyRequest) (*commodorepb.ResolvePlaybackPolicyResponse, error) {
+	if f.playbackPolicy != nil {
+		return f.playbackPolicy(ctx, req)
+	}
+	return f.UnimplementedInternalServiceServer.ResolvePlaybackPolicy(ctx, req)
+}
+
+func (f *commodoreBalancingFake) ResolvePlaybackID(ctx context.Context, req *commodorepb.ResolvePlaybackIDRequest) (*commodorepb.ResolvePlaybackIDResponse, error) {
+	if f.playbackID != nil {
+		return f.playbackID(ctx, req)
+	}
+	return &commodorepb.ResolvePlaybackIDResponse{}, nil
 }
 
 func (f *commodoreBalancingFake) ResolveInternalName(ctx context.Context, req *commodorepb.ResolveInternalNameRequest) (*commodorepb.ResolveInternalNameResponse, error) {
@@ -256,169 +188,6 @@ func startHealthyQuartermasterFake(t *testing.T) {
 	})
 }
 
-// Invariant: a prepaid owner whose account is SUSPENDED, with no x402 payment
-// header presented, is blocked at /<stream> with HTTP 402 and the
-// insufficient-balance body — viewer playback is gated on the owner's billing
-// state, not just node availability. This is the access/payment gate that only
-// fires when Commodore resolves a non-empty TenantID for the live stream.
-func TestStreamBalancing_PrepaidSuspendedReturns402(t *testing.T) {
-	balancingTestEnv(t)
-
-	startBalancingCommodoreFake(t, &commodoreBalancingFake{
-		internalName: func(_ context.Context, req *commodorepb.ResolveInternalNameRequest) (*commodorepb.ResolveInternalNameResponse, error) {
-			// Resolution keys off the live+ internal name (prefix stripped).
-			if req.GetInternalName() != "demo" {
-				t.Errorf("ResolveInternalName got %q, want demo", req.GetInternalName())
-			}
-			return &commodorepb.ResolveInternalNameResponse{
-				InternalName: "demo",
-				TenantId:     "tenant-suspended",
-				StreamId:     "stream-1",
-			}, nil
-		},
-	})
-	startQuartermasterFake(t, &fakeTenantService{
-		validate: func(_ context.Context, req *quartermasterpb.ValidateTenantRequest) (*quartermasterpb.ValidateTenantResponse, error) {
-			if req.GetTenantId() != "tenant-suspended" {
-				t.Errorf("ValidateTenant got %q, want tenant-suspended", req.GetTenantId())
-			}
-			return &quartermasterpb.ValidateTenantResponse{
-				Valid:        true,
-				IsActive:     true,
-				TenantId:     "tenant-suspended",
-				BillingModel: "prepaid",
-				IsSuspended:  true,
-			}, nil
-		},
-	})
-
-	c, w := ginCtxFor(t, "")
-	handleStreamBalancing(c, "live+demo")
-
-	if w.Code != http.StatusPaymentRequired {
-		t.Fatalf("status = %d, want 402 (prepaid suspended)", w.Code)
-	}
-	var body map[string]any
-	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
-		t.Fatalf("unmarshal 402 body %q: %v", w.Body.String(), err)
-	}
-	if body["error"] != "insufficient_balance" {
-		t.Fatalf("error = %v, want insufficient_balance", body["error"])
-	}
-}
-
-// Invariant: a prepaid owner whose balance is NEGATIVE (not yet hard-suspended),
-// with no payment header, is likewise blocked with 402. Locks that the
-// is_balance_negative warning state alone gates new viewer playback.
-func TestStreamBalancing_PrepaidNegativeBalanceReturns402(t *testing.T) {
-	balancingTestEnv(t)
-
-	startBalancingCommodoreFake(t, &commodoreBalancingFake{
-		internalName: func(_ context.Context, _ *commodorepb.ResolveInternalNameRequest) (*commodorepb.ResolveInternalNameResponse, error) {
-			return &commodorepb.ResolveInternalNameResponse{
-				InternalName: "demo",
-				TenantId:     "tenant-neg",
-			}, nil
-		},
-	})
-	startQuartermasterFake(t, &fakeTenantService{
-		validate: func(_ context.Context, _ *quartermasterpb.ValidateTenantRequest) (*quartermasterpb.ValidateTenantResponse, error) {
-			return &quartermasterpb.ValidateTenantResponse{
-				Valid:             true,
-				IsActive:          true,
-				TenantId:          "tenant-neg",
-				BillingModel:      "prepaid",
-				IsBalanceNegative: true,
-			}, nil
-		},
-	})
-
-	c, w := ginCtxFor(t, "")
-	handleStreamBalancing(c, "live+demo")
-
-	if w.Code != http.StatusPaymentRequired {
-		t.Fatalf("status = %d, want 402 (prepaid negative balance)", w.Code)
-	}
-}
-
-// Invariant: a prepaid owner in GOOD standing (not suspended, balance positive)
-// does NOT trip the 402 gate — viewer playback proceeds to normal node
-// selection and the healthy local edge is returned. This is the negative
-// control that proves the 402 gate keys on the billing flags, not merely on
-// TenantID being populated.
-func TestStreamBalancing_PrepaidHealthyProceedsToSelection(t *testing.T) {
-	sm := balancingTestEnv(t)
-	seedOriginEdge(t, sm, "edge-ok", "edge-ok.example", "demo")
-
-	startBalancingCommodoreFake(t, &commodoreBalancingFake{
-		internalName: func(_ context.Context, _ *commodorepb.ResolveInternalNameRequest) (*commodorepb.ResolveInternalNameResponse, error) {
-			return &commodorepb.ResolveInternalNameResponse{
-				InternalName: "demo",
-				TenantId:     "tenant-ok",
-			}, nil
-		},
-	})
-	startQuartermasterFake(t, &fakeTenantService{
-		validate: func(_ context.Context, _ *quartermasterpb.ValidateTenantRequest) (*quartermasterpb.ValidateTenantResponse, error) {
-			return &quartermasterpb.ValidateTenantResponse{
-				Valid:        true,
-				IsActive:     true,
-				TenantId:     "tenant-ok",
-				BillingModel: "prepaid",
-			}, nil
-		},
-	})
-
-	c, w := ginCtxFor(t, "")
-	handleStreamBalancing(c, "live+demo")
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (healthy prepaid not gated)", w.Code)
-	}
-	if w.Body.String() != "edge-ok.example" {
-		t.Fatalf("selected node = %q, want edge-ok.example", w.Body.String())
-	}
-}
-
-// Invariant: a postpaid owner is NEVER gated by the prepaid 402 path even when
-// suspended/negative flags are set — only billing_model=="prepaid" reaches the
-// payment branch. Locks that the billing-model discriminator (not just the
-// suspension flag) controls the gate.
-func TestStreamBalancing_PostpaidIgnoresSuspensionFlags(t *testing.T) {
-	sm := balancingTestEnv(t)
-	seedOriginEdge(t, sm, "edge-pp", "edge-pp.example", "demo")
-
-	startBalancingCommodoreFake(t, &commodoreBalancingFake{
-		internalName: func(_ context.Context, _ *commodorepb.ResolveInternalNameRequest) (*commodorepb.ResolveInternalNameResponse, error) {
-			return &commodorepb.ResolveInternalNameResponse{
-				InternalName: "demo",
-				TenantId:     "tenant-pp",
-			}, nil
-		},
-	})
-	startQuartermasterFake(t, &fakeTenantService{
-		validate: func(_ context.Context, _ *quartermasterpb.ValidateTenantRequest) (*quartermasterpb.ValidateTenantResponse, error) {
-			return &quartermasterpb.ValidateTenantResponse{
-				Valid:        true,
-				IsActive:     true,
-				TenantId:     "tenant-pp",
-				BillingModel: "postpaid",
-				IsSuspended:  true, // would gate a prepaid owner; postpaid must ignore it
-			}, nil
-		},
-	})
-
-	c, w := ginCtxFor(t, "")
-	handleStreamBalancing(c, "live+demo")
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (postpaid not gated by suspension)", w.Code)
-	}
-	if w.Body.String() != "edge-pp.example" {
-		t.Fatalf("selected node = %q, want edge-pp.example", w.Body.String())
-	}
-}
-
 // seedArtifactNode makes nodeID/host an ACTIVE storage node that holds the
 // artifact identified by clipHash, so applyArtifactPlacement (called from
 // ResolveStream's vod+ branch) finds it via FindNodesByArtifactHash and pins
@@ -440,73 +209,4 @@ func seedArtifactNode(t *testing.T, sm *state.StreamStateManager, nodeID, host, 
 	sm.SetNodeArtifacts(nodeID, []*ipcpb.StoredArtifact{
 		{ClipHash: clipHash, FilePath: "/data/" + clipHash + ".mp4", StreamName: "vod+art"},
 	}, state.ArtifactReportOrder{Fence: 1, Seq: 1})
-}
-
-// Invariant: a VOD whose artifact is resolved by Commodore to a hash present on
-// a local storage node is pinned (FixedNode) and the viewer is sent to THAT
-// storage node — a plain 200 hostname when no proto is requested. This is the
-// fixed-node redirect decision that wave 2 could not reach without a successful
-// artifact resolution.
-func TestStreamBalancing_FixedNodeVodReturnsStorageHost(t *testing.T) {
-	sm := balancingTestEnv(t)
-	seedArtifactNode(t, sm, "store-1", "store-1.example", "arthash1")
-
-	startBalancingCommodoreFake(t, &commodoreBalancingFake{
-		artifactInternal: func(_ context.Context, req *commodorepb.ResolveArtifactInternalNameRequest) (*commodorepb.ResolveArtifactInternalNameResponse, error) {
-			if req.GetInternalName() != "art" {
-				t.Errorf("ResolveArtifactInternalName got %q, want art", req.GetInternalName())
-			}
-			return &commodorepb.ResolveArtifactInternalNameResponse{
-				Found:        true,
-				ArtifactHash: "arthash1",
-				InternalName: "art",
-				TenantId:     "tenant-vod",
-				ContentType:  "vod",
-			}, nil
-		},
-	})
-	startHealthyQuartermasterFake(t)
-
-	c, w := ginCtxFor(t, "")
-	handleStreamBalancing(c, "vod+art")
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (fixed-node VOD)", w.Code)
-	}
-	if w.Body.String() != "store-1.example" {
-		t.Fatalf("body = %q, want store-1.example (storage node pin)", w.Body.String())
-	}
-}
-
-// Invariant: with proto= the fixed-node VOD becomes a 307 redirect to
-// proto://<storageHost>/<originalStreamName>, preserving the original vod+ name
-// in the Location. Locks the redirect form of the fixed-node decision.
-func TestStreamBalancing_FixedNodeVodRedirectsWithProto(t *testing.T) {
-	sm := balancingTestEnv(t)
-	seedArtifactNode(t, sm, "store-2", "store-2.example", "arthash2")
-
-	startBalancingCommodoreFake(t, &commodoreBalancingFake{
-		artifactInternal: func(_ context.Context, _ *commodorepb.ResolveArtifactInternalNameRequest) (*commodorepb.ResolveArtifactInternalNameResponse, error) {
-			return &commodorepb.ResolveArtifactInternalNameResponse{
-				Found:        true,
-				ArtifactHash: "arthash2",
-				InternalName: "art2",
-				TenantId:     "tenant-vod",
-				ContentType:  "vod",
-			}, nil
-		},
-	})
-	startHealthyQuartermasterFake(t)
-
-	c, w := ginCtxFor(t, "proto=https")
-	handleStreamBalancing(c, "vod+art2")
-
-	if w.Code != http.StatusTemporaryRedirect {
-		t.Fatalf("status = %d, want 307 (fixed-node VOD redirect)", w.Code)
-	}
-	loc := w.Header().Get("Location")
-	want := "https://store-2.example/vod+art2"
-	if loc != want && loc[:len(want)] != want {
-		t.Fatalf("Location = %q, want prefix %q", loc, want)
-	}
 }

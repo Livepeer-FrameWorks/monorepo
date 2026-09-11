@@ -22,9 +22,14 @@ import (
 // package; those arms are exercised by the control-package resolver tests
 // instead. Here we pin the branches reachable without a live Commodore.
 
+// newViewerEndpointServer carries the state-backed viewer preparer, so a
+// rejection asserted below is the guard under test rather than a fixture with
+// no placement path at all.
 func newViewerEndpointServer(t *testing.T) *FoghornGRPCServer {
 	t.Helper()
-	return &FoghornGRPCServer{logger: logrus.New()}
+	server := &FoghornGRPCServer{logger: logrus.New()}
+	server.SetViewerPlacementPreparer(viewerPlacementFunc(prepareViewerFromNodeState))
+	return server
 }
 
 // ResolveViewerEndpoint must reject an empty content_id at the door with

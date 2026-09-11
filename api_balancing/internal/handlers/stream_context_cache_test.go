@@ -21,7 +21,7 @@ func TestActiveReplicationSource(t *testing.T) {
 
 	const streamName = "frameworks-demo"
 	const sourceURL = "dtsc://edge-eu-1.media-eu-1.frameworks.network:4200/frameworks-demo"
-	r.MarkReplicating(streamName, "media-eu-1", sourceURL, "edge-us-1", "edge-us-1.media-us-1.frameworks.network", "edge-eu-1")
+	markReplicatingForTest(t, r, streamName, "media-eu-1", sourceURL, "edge-us-1", "edge-us-1.media-us-1.frameworks.network", "edge-eu-1")
 
 	// Caller matches the pinned dest — returns the URL.
 	got, handled := activeReplicationSource(context.Background(), streamName, "edge-us-1")
@@ -72,5 +72,18 @@ func TestSourceCallerNodeIDTrimsTrailingPath(t *testing.T) {
 	got := sourceCallerNodeID(c, req.URL.Query(), "203.0.113.10")
 	if got != "edge-us-1" {
 		t.Fatalf("sourceCallerNodeID = %q, want edge-us-1", got)
+	}
+}
+
+// markReplicatingForTest builds the pre-placement replication record these
+// fixtures rely on: an inbound pull with no owner tenant and no destination
+// cluster, which prepared-source admission can never accept.
+func markReplicatingForTest(t *testing.T, r *control.StreamRegistry, internalName, peerClusterID, pullDTSCURL, destNodeID, destNodeBaseURL, pullSourceNodeID string) {
+	t.Helper()
+	if _, err := r.RecordInboundPull(context.Background(), internalName, control.InboundPull{
+		SourceClusterID: peerClusterID, SourceNodeID: pullSourceNodeID,
+		DestNodeID: destNodeID, DestNodeBaseURL: destNodeBaseURL, DTSCURL: pullDTSCURL,
+	}); err != nil {
+		t.Fatalf("record inbound pull for %s: %v", internalName, err)
 	}
 }

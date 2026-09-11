@@ -12,7 +12,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"frameworks/api_balancing/internal/artifactoutbox"
@@ -326,9 +325,8 @@ func Init(
 
 }
 
-// MistServerCompatibilityHandler handles ALL MistServer requests
-// This implements the exact same HTTP API as the C++ MistUtilLoad
-func MistServerCompatibilityHandler(c *gin.Context) {
+// MistSourceHandler serves node-bound source lookup and internal diagnostics.
+func MistSourceHandler(c *gin.Context) {
 	// Handle HTTP/2 protocol initialization
 	if c.Request.Method == "PRI" && c.Request.RequestURI == "*" {
 		c.String(http.StatusOK, "")
@@ -364,22 +362,16 @@ func MistServerCompatibilityHandler(c *gin.Context) {
 		return
 	}
 
-	// Handle stream balancing: /<stream>
-	streamName := strings.TrimPrefix(path, "/")
-
-	// Validate stream name format
-	if streamName == "" || !StreamIDRegex.MatchString(streamName) {
-		c.String(http.StatusBadRequest, "Invalid stream name")
-		return
-	}
-
-	handleStreamBalancing(c, streamName)
+	// No hostname-only viewer route exists: any other path is unknown here, and
+	// the status is committed rather than deferred so the refusal stands even
+	// when nothing writes a body afterwards.
+	c.AbortWithStatus(http.StatusNotFound)
 }
 
-// AuthorizedMistServerCompatibilityHandler is the public Mist compatibility
+// AuthorizedMistSourceHandler is the public Mist compatibility
 // surface. It accepts only node-bound source/balancing capabilities and never
 // exposes the legacy weights mutation, even to a valid edge capability.
-func AuthorizedMistServerCompatibilityHandler(c *gin.Context) {
+func AuthorizedMistSourceHandler(c *gin.Context) {
 	if c.Query("weights") != "" {
 		c.String(http.StatusForbidden, "weights mutation is internal")
 		return
@@ -415,7 +407,7 @@ func AuthorizedMistServerCompatibilityHandler(c *gin.Context) {
 	c.Request.URL.RawPath = compatibilityPath
 	c.Set("foghorn_authenticated_node_id", nodeID)
 	c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), ctxkeys.KeyAuthenticatedNodeCluster, authenticatedClusterID))
-	MistServerCompatibilityHandler(c)
+	MistSourceHandler(c)
 }
 
 // HandleNodesOverview receives a request for an overview of all nodes with capabilities, limits, and artifacts.
@@ -831,15 +823,8 @@ func handleRootQueries(c *gin.Context, query url.Values) {
 		return
 	}
 
-	// Get source: /?source=<stream> (EXACT C++ implementation)
-	if source := query.Get("source"); source != "" {
-		handleGetSource(c, source, query)
-		return
-	}
-
-	// Find ingest point: /?ingest=<cpu> (EXACT C++ implementation)
-	if ingest := query.Get("ingest"); ingest != "" {
-		handleFindIngest(c, ingest, query)
+	if query.Has("source") || query.Has("ingest") {
+		c.Status(http.StatusNotFound)
 		return
 	}
 
@@ -919,9 +904,8 @@ func handleListServers(c *gin.Context) {
 }
 
 // arrangeRemoteOriginPullFromSource is the /source HTTP entry's
-// cross-cluster path. Unlike arrangeOriginPull (which the gRPC viewer
-// router calls and which picks the puller via LB), the caller IS the
-// puller — a Mist edge that fired STREAM_SOURCE on cold load. The
+// cross-cluster path. The caller IS the puller — a Mist edge that fired
+// STREAM_SOURCE on cold load — rather than a destination the balancer picks. The
 // caller node ID comes from the Foghorn-issued balancer path where
 // available, with client IP matching only when the path identity is
 // absent. Fails closed (returns "") when the caller can't be identified
@@ -1155,8 +1139,8 @@ func resolvePullSourceForSource(ctx context.Context, streamName string) pullSour
 }
 
 // summarizePullPlacementRejects flattens FilterPlacementClusters rejections
-// into a single log line. Mirrors api_balancing/internal/control:
-// summarizePlacementRejects so logs and errors describe the same reasons.
+// into a single log line, using the same wording as the trigger-side summary so
+// an operator reads one vocabulary across /source and STREAM_SOURCE.
 func summarizePullPlacementRejects(rejects []pullsource.PlacementReject) string {
 	parts := make([]string, 0, len(rejects))
 	for _, r := range rejects {
@@ -1239,9 +1223,9 @@ func handleGetPullSource(c *gin.Context, streamName string, lat, lon float64, ta
 				"stream":         streamName,
 				"cluster_id":     localClusterID,
 				"remote_cluster": remoteCluster,
-				"dtsc_url":       remoteDTSC,
+				"dtsc_url":       control.SourcePullBaseURL(remoteDTSC),
 			}).Info("Source lookup: pull source federated from allowed cluster")
-			postBalancingEventEx(c, streamName, "remote", 0, lat, lon, "pull_federated", remoteDTSC, 0, 0, "", durationMs, remoteCluster)
+			postBalancingEventEx(c, streamName, "remote", 0, lat, lon, "pull_federated", control.SourcePullBaseURL(remoteDTSC), 0, 0, "", durationMs, remoteCluster)
 			c.String(http.StatusOK, remoteDTSC)
 			return
 		}
@@ -1492,7 +1476,7 @@ func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 	tagAdjust := getTagAdjustments(c, query)
 
 	// Get client IP for same-host detection (like C++)
-	clientIP := c.ClientIP()
+	clientIP := trustedClientIP(c)
 	callerNodeID := sourceCallerNodeID(c, query, clientIP)
 
 	// Optional capability filter
@@ -1544,9 +1528,9 @@ func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 		}
 		logger.WithFields(logging.Fields{
 			"stream":   streamName,
-			"dtsc_url": remoteDTSC,
+			"dtsc_url": control.SourcePullBaseURL(remoteDTSC),
 		}).Info("Source lookup: using active origin-pull source")
-		postBalancingEvent(c, streamName, "", 0, lat, lon, "active_replication", remoteDTSC, 0, 0, "", durationMs)
+		postBalancingEvent(c, streamName, "", 0, lat, lon, "active_replication", control.SourcePullBaseURL(remoteDTSC), 0, 0, "", durationMs)
 		c.String(http.StatusOK, remoteDTSC)
 		return
 	}
@@ -1571,9 +1555,9 @@ func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 			}
 			logger.WithFields(logging.Fields{
 				"stream":   streamName,
-				"dtsc_url": remoteDTSC,
+				"dtsc_url": control.SourcePullBaseURL(remoteDTSC),
 			}).Info("Source lookup: resolved via cross-cluster federation")
-			postBalancingEventEx(c, streamName, "remote", 0, lat, lon, "remote_source", remoteDTSC, 0, 0, "", durationMs, remoteCluster)
+			postBalancingEventEx(c, streamName, "remote", 0, lat, lon, "remote_source", control.SourcePullBaseURL(remoteDTSC), 0, 0, "", durationMs, remoteCluster)
 			c.String(http.StatusOK, remoteDTSC)
 			return
 		}
@@ -1634,63 +1618,6 @@ func handleGetSource(c *gin.Context, streamName string, query url.Values) {
 		postBalancingEvent(c, streamName, bestNode, score, lat, lon, "success", "", nodeLat, nodeLon, nodeName, durationMs)
 		c.String(http.StatusOK, dtscURL)
 	}
-}
-
-// handleFindIngest implements /?ingest=<cpu> (EXACT C++ implementation)
-func handleFindIngest(c *gin.Context, cpuUsage string, query url.Values) {
-	start := time.Now()
-	lat := getLatLon(c, query, "lat", "X-Latitude")
-	lon := getLatLon(c, query, "lon", "X-Longitude")
-	tagAdjust := getTagAdjustments(c, query)
-
-	// Convert CPU usage to uint32 (like C++ atof * 10), optional parameter
-	var minCpu uint32 = 0
-	if cpuUsage != "" {
-		if cpuUse, err := strconv.ParseFloat(cpuUsage, 64); err == nil {
-			minCpu = uint32(cpuUse * 10) // C++ multiplies by 10
-		}
-	}
-
-	// Optional capability filter (default to ingest for this endpoint)
-	requireCap := query.Get("cap")
-	if requireCap == "" {
-		requireCap = "ingest"
-	}
-
-	// Find best node for ingest (empty stream name means no same-host filtering)
-	ctx := context.WithValue(c.Request.Context(), ctxkeys.KeyCapability, requireCap)
-	// Ingest -> isSourceSelection=true (though less relevant without streamName)
-	bestNode, score, nodeLat, nodeLon, nodeName, err := lb.GetBestNodeWithScore(ctx, "", lat, lon, tagAdjust, "", true)
-	if err != nil {
-		durationMs := float32(time.Since(start).Milliseconds())
-		// Post failed ingest event
-		postBalancingEvent(c, "ingest", "", 0, lat, lon, "failed", err.Error(), 0, 0, "", durationMs)
-		c.String(http.StatusOK, "FULL") // C++ fallback for no ingest point
-		return
-	}
-
-	// If minCpu specified, verify the selected node can handle the additional load
-	// This implements the C++ logic: if (minCpu && cpu + minCpu >= 1000){return 0;}
-	if minCpu > 0 {
-		nodes := lb.GetAllNodes()
-		for _, node := range nodes {
-			if node.Host == bestNode {
-				if uint64(node.CPU*10)+uint64(minCpu) >= 1000 {
-					durationMs := float32(time.Since(start).Milliseconds())
-					// Node would be overloaded, return fallback (like C++ FAIL_MSG("No ingest point found!"))
-					postBalancingEvent(c, "ingest", "", 0, lat, lon, "failed", "CPU overload", 0, 0, "", durationMs)
-					c.String(http.StatusOK, "FULL") // C++ fallback for CPU overload
-					return
-				}
-				break
-			}
-		}
-	}
-
-	durationMs := float32(time.Since(start).Milliseconds())
-	// Post successful ingest event
-	postBalancingEvent(c, "ingest", bestNode, score, lat, lon, "success", "", nodeLat, nodeLon, nodeName, durationMs)
-	c.String(http.StatusOK, bestNode)
 }
 
 // handleStreamStats implements /?streamstats=<stream> (EXACT C++ implementation)
@@ -1781,275 +1708,6 @@ func handleHostStatus(c *gin.Context, hostname string) {
 	c.String(http.StatusOK, string(jsonBytes))
 }
 
-// handleStreamBalancing implements /<stream> (EXACT C++ implementation)
-func handleStreamBalancing(c *gin.Context, streamName string) {
-	c.Request = c.Request.WithContext(control.MediaRequestContext(c.Request.Context(), "mist_balancer"))
-	start := time.Now()
-	query := c.Request.URL.Query()
-	lat := getLatLon(c, query, "lat", "X-Latitude")
-	lon := getLatLon(c, query, "lon", "X-Longitude")
-	tagAdjust := getTagAdjustments(c, query)
-
-	logger.WithField("stream", streamName).Info("Balancing stream")
-
-	// Unified resolution: Determine if this is Live (Key) or VOD (Artifact)
-	var target *control.StreamTarget
-	var resolveErr error
-	if triggerProcessor != nil {
-		if resolution, handled, localErr := triggerProcessor.ResolveLocalContent(c.Request.Context(), streamName); handled {
-			if localErr != nil {
-				if triggers.IsLocalAuthorityDenied(localErr) {
-					c.String(http.StatusForbidden, "content owner is not active")
-					return
-				}
-				if triggers.IsLocalAuthorityExpired(localErr) {
-					c.String(http.StatusServiceUnavailable, "local stream authority expired")
-					return
-				}
-				logger.WithError(localErr).WithField("stream", streamName).Warn("Local media authority unavailable; using connected resolver")
-			} else {
-				target = &control.StreamTarget{
-					InternalName: resolution.RoutingInternalName(), StreamID: resolution.StreamId, TenantID: resolution.TenantId,
-					OriginClusterID: resolution.OriginClusterID,
-					ContentType:     resolution.ContentType, ClusterPeers: resolution.ClusterPeers,
-					OfficialClusterID: resolution.OfficialClusterID, AllowPlatformSharedPlayback: resolution.AllowPlatformSharedPlayback,
-					LocalAuthority: resolution.LocalAuthority,
-					RequiresAuth:   resolution.RequiresAuth, RequiresAuthKnown: true,
-				}
-			}
-		}
-	}
-	if target == nil {
-		target, resolveErr = control.ResolveStream(c.Request.Context(), streamName)
-	}
-	if resolveErr != nil || target == nil || target.InternalName == "" {
-		c.String(http.StatusServiceUnavailable, "stream authority unavailable")
-		return
-	}
-	eventIdentity := &routingEventIdentity{TenantID: target.TenantID, StreamID: target.StreamID, InternalName: target.InternalName, OriginClusterID: target.OriginClusterID}
-	internalName := mist.ExtractInternalName(target.InternalName)
-
-	// Prepaid billing check (402)
-	if target.TenantID != "" {
-		billing := getBillingStatus(c.Request.Context(), internalName, target.TenantID)
-		if billing == nil || billing.State == triggers.BillingStatusUnavailable {
-			c.String(http.StatusServiceUnavailable, "billing authority unavailable")
-			return
-		}
-		if billing.DeniedReason != "" {
-			c.String(http.StatusForbidden, "content owner is not active")
-			return
-		}
-		if billing != nil && billing.BillingModel == "prepaid" && (billing.IsSuspended || billing.IsBalanceNegative) {
-			paymentHeader := x402.GetPaymentHeaderFromRequest(c.Request)
-			resourcePath := c.Request.URL.Path
-			paid, decision := settleX402PaymentForPlayback(c.Request.Context(), target.TenantID, resourcePath, paymentHeader, c.ClientIP(), logger)
-			if decision != nil {
-				respondX402Decision(c, decision)
-				return
-			}
-			if !paid {
-				message := "payment required - stream owner needs to top up balance"
-				if billing.IsSuspended {
-					message = "payment required - owner account suspended"
-				}
-				respondX402Billing(c, c.Request.Context(), target.TenantID, resourcePath, message)
-				return
-			}
-			billing = refreshBillingStatusAfterPayment(c.Request.Context(), internalName, target.TenantID)
-			if billing == nil || billing.State == triggers.BillingStatusUnavailable {
-				c.String(http.StatusServiceUnavailable, "payment processed but updated billing status is unavailable; retry safely")
-				return
-			}
-			if billing.DeniedReason != "" {
-				c.String(http.StatusForbidden, "content owner is not active")
-				return
-			}
-			if billing.IsSuspended || (billing.BillingModel == "prepaid" && billing.IsBalanceNegative) {
-				c.String(http.StatusServiceUnavailable, "payment processed but updated billing status is still pending; retry safely")
-				return
-			}
-		}
-		if billing.State == triggers.BillingStatusDenied {
-			c.String(http.StatusForbidden, "content owner is not active")
-			return
-		}
-	}
-
-	// 1. Fixed Node (VOD)
-	if target.FixedNode != "" {
-		// Redirect to storage node with original stream name
-		// Edge node triggers will handle vod+ translation
-		bestNode := target.FixedNode
-
-		proto := query.Get("proto")
-		vars := c.Request.URL.RawQuery
-
-		if proto != "" && bestNode != "" {
-			redirectURL := fmt.Sprintf("%s://%s/%s", proto, bestNode, streamName)
-			if vars != "" {
-				redirectURL += "?" + vars
-			}
-			c.Header("Location", redirectURL)
-			c.String(http.StatusTemporaryRedirect, redirectURL)
-
-			durationMs := float32(time.Since(start).Milliseconds())
-			postBalancingEventWithIdentity(c, target.InternalName, bestNode, 0, lat, lon, "redirect", redirectURL, 0, 0, "", durationMs, eventIdentity)
-			return
-		}
-
-		durationMs := float32(time.Since(start).Milliseconds())
-		c.String(http.StatusOK, bestNode)
-		postBalancingEventWithIdentity(c, target.InternalName, bestNode, 0, lat, lon, "success", "", 0, 0, "", durationMs, eventIdentity)
-		return
-	}
-
-	// 2. Dynamic Balancing (Live)
-	// Use resolved internal name for finding nodes, but preserve original name for redirect
-	if internalName == "" {
-		internalName = target.InternalName
-	}
-
-	// Optional capability filter
-	requireCap := query.Get("cap")
-
-	var bestNode string
-	var score uint64
-	var nodeLat, nodeLon float64
-	var nodeName string
-	var err error
-	ctx := c.Request.Context()
-	if requireCap != "" {
-		ctx = context.WithValue(ctx, ctxkeys.KeyCapability, requireCap)
-	}
-	if target.TenantID != "" {
-		if target.LocalAuthority {
-			ctx = context.WithValue(ctx, ctxkeys.KeyClusterServeScope, control.NewClusterServeScope(target.TenantID, target.OfficialClusterID, target.ClusterPeers, target.AllowPlatformSharedPlayback))
-		} else {
-			ctx = context.WithValue(ctx, ctxkeys.KeyClusterServeScope, control.NewClusterServeScope(target.TenantID, target.OfficialClusterID, target.ClusterPeers))
-		}
-	}
-	// Viewer selection -> isSourceSelection=false (allow replicated)
-	bestNode, score, nodeLat, nodeLon, nodeName, err = lb.GetBestNodeWithScore(ctx, internalName, lat, lon, tagAdjust, "", false)
-
-	// Remote edge scoring: check if a remote cluster has a better edge
-	if remoteEdgeCache != nil && triggerProcessor != nil {
-		rawInternal := mist.ExtractInternalName(internalName)
-		if rawInternal == "" {
-			rawInternal = internalName
-		}
-		if peers := triggerProcessor.GetClusterPeers(rawInternal, target.TenantID); len(peers) > 0 {
-			remoteEdges := collectRemoteEdges(ctx, peers)
-			if len(remoteEdges) > 0 {
-				remoteNodes := lb.ScoreRemoteEdges(remoteEdges, lat, lon)
-				bestRemote := findBestRemoteNode(remoteNodes)
-				if bestRemote != nil {
-					localScore := score
-					if err != nil {
-						localScore = 0
-					}
-					if bestRemote.Score > localScore && confirmRemoteStream(ctx, bestRemote.ClusterID, internalName, target.TenantID, lat, lon) {
-						durationMs := float32(time.Since(start).Milliseconds())
-						if metrics != nil {
-							metrics.RoutingDecisions.WithLabelValues("load_balancer", "remote").Inc()
-							metrics.NodeSelectionDuration.WithLabelValues().Observe(time.Since(start).Seconds())
-						}
-						proto := query.Get("proto")
-						if proto != "" {
-							redirectURL := fmt.Sprintf("%s://%s/%s", proto, bestRemote.Host, streamName)
-							if vars := c.Request.URL.RawQuery; vars != "" {
-								redirectURL += "?" + vars
-							}
-							postBalancingEventExWithIdentity(c, internalName, bestRemote.Host, bestRemote.Score, lat, lon, "remote_redirect", redirectURL, bestRemote.GeoLatitude, bestRemote.GeoLongitude, "", durationMs, bestRemote.ClusterID, eventIdentity)
-							c.Header("Location", redirectURL)
-							c.String(http.StatusTemporaryRedirect, redirectURL)
-						} else {
-							postBalancingEventExWithIdentity(c, internalName, bestRemote.Host, bestRemote.Score, lat, lon, "remote_redirect", "", bestRemote.GeoLatitude, bestRemote.GeoLongitude, "", durationMs, bestRemote.ClusterID, eventIdentity)
-							c.String(http.StatusOK, bestRemote.Host)
-						}
-						return
-					}
-				}
-			}
-		}
-	}
-
-	if err != nil {
-		// Cross-cluster: check if an origin-pull was arranged for this stream
-		if control.StreamRegistryInstance != nil {
-			if loc, ok := control.StreamRegistryInstance.LocalReplication(ctx, internalName); ok && loc.PullDTSCURL != "" {
-				if u, parseErr := url.Parse(loc.PullDTSCURL); parseErr == nil && u.Host != "" {
-					logger.WithFields(logging.Fields{
-						"stream":         streamName,
-						"dtsc_host":      u.Host,
-						"source_cluster": loc.ReplicatingFrom,
-					}).Info("Cross-cluster balance: returning remote DTSC source")
-					c.String(http.StatusOK, u.Host)
-
-					durationMs := float32(time.Since(start).Milliseconds())
-					postBalancingEventExWithIdentity(c, internalName, u.Host, 0, lat, lon, "cross_cluster_dtsc", loc.PullDTSCURL, 0, 0, "", durationMs, loc.ReplicatingFrom, eventIdentity)
-					return
-				}
-			}
-		}
-
-		durationMs := float32(time.Since(start).Milliseconds())
-		logger.WithError(err).Error("Load balancer failed to select a node")
-		if metrics != nil {
-			metrics.RoutingDecisions.WithLabelValues("load_balancer", "failed").Inc()
-		}
-		c.String(http.StatusOK, "localhost") // fallback like C++
-
-		// Post failure event to Firehose
-		postBalancingEventWithIdentity(c, streamName, "", 0, lat, lon, "failed", err.Error(), 0, 0, "", durationMs, eventIdentity)
-		return
-	}
-
-	// Create virtual viewer to track this redirect
-	// This adds a bandwidth penalty immediately, before USER_NEW confirms the connection
-	viewerID := ""
-	if nodeID := lb.GetNodeIDByHost(bestNode); nodeID != "" {
-		clientIP := c.ClientIP()
-		viewerID = state.DefaultManager().CreateVirtualViewer(nodeID, internalName, clientIP)
-	}
-
-	// Check if redirect is requested (like C++)
-	proto := query.Get("proto")
-	vars := c.Request.URL.RawQuery
-	if proto != "" && bestNode != "" {
-		redirectURL := fmt.Sprintf("%s://%s/%s", proto, bestNode, streamName)
-		if vars != "" {
-			redirectURL += "?" + vars
-		}
-		if viewerID != "" {
-			redirectURL = appendCorrelationID(redirectURL, viewerID)
-		}
-		c.Header("Location", redirectURL)
-		c.String(http.StatusTemporaryRedirect, redirectURL)
-
-		durationMs := float32(time.Since(start).Milliseconds())
-		if metrics != nil {
-			metrics.RoutingDecisions.WithLabelValues("load_balancer", bestNode).Inc()
-			metrics.NodeSelectionDuration.WithLabelValues().Observe(time.Since(start).Seconds())
-		}
-
-		// Post redirect event to Firehose
-		postBalancingEventWithIdentity(c, internalName, bestNode, score, lat, lon, "redirect", redirectURL, nodeLat, nodeLon, nodeName, durationMs, eventIdentity)
-		return
-	}
-
-	durationMs := float32(time.Since(start).Milliseconds())
-	c.String(http.StatusOK, bestNode)
-
-	if metrics != nil {
-		metrics.RoutingDecisions.WithLabelValues("load_balancer", bestNode).Inc()
-		metrics.NodeSelectionDuration.WithLabelValues().Observe(time.Since(start).Seconds())
-	}
-
-	// Post successful balancing event to Firehose
-	postBalancingEventWithIdentity(c, internalName, bestNode, score, lat, lon, "success", "", nodeLat, nodeLon, nodeName, durationMs, eventIdentity)
-}
-
 // emitFederationEvent sends a federation lifecycle event to Decklog.
 // Automatically enriches with local/remote geo from cached self-geo and peer geo.
 func emitFederationEvent(data *ipcpb.FederationEventData) {
@@ -2079,13 +1737,8 @@ func emitFederationEvent(data *ipcpb.FederationEventData) {
 		data.LocalLat = &selfLat
 		data.LocalLon = &selfLon
 	}
-	if data.RemoteLat == nil && data.RemoteCluster != "" && peerManager != nil {
-		rLat, rLon := peerManager.GetPeerGeo(data.RemoteCluster)
-		if rLat != 0 || rLon != 0 {
-			data.RemoteLat = &rLat
-			data.RemoteLon = &rLon
-		}
-	}
+	// Remote geo is left unset: peers no longer exchange their coordinates, and
+	// there is no sentinel that reads as unknown once written to the column.
 	go func() {
 		if err := artifactoutbox.EnqueueFederationEvent(data); err != nil {
 			logger.WithError(err).Debug("Failed to emit federation event")
@@ -2122,23 +1775,7 @@ func postBalancingEventExWithIdentity(c *gin.Context, streamName, selectedNode s
 	if routingEventsDisabled {
 		return
 	}
-	// Extract client IP: CF-Connecting-IP > X-Forwarded-For > X-Real-IP > direct
-	clientIP := c.GetHeader("CF-Connecting-IP")
-	if clientIP == "" {
-		clientIP = c.GetHeader("X-Forwarded-For")
-	}
-	if clientIP == "" {
-		clientIP = c.GetHeader("X-Real-IP")
-	}
-	if clientIP == "" {
-		clientIP = c.ClientIP()
-	}
-
-	// Country: CF-IPCountry > X-Country-Code > GeoIP fallback
-	country := c.GetHeader("CF-IPCountry")
-	if country == "" {
-		country = c.GetHeader("X-Country-Code")
-	}
+	clientIP := trustedClientIP(c)
 	// Resolve node ID from load balancer
 	selectedNodeID := ""
 	if lb != nil {
@@ -2153,7 +1790,6 @@ func postBalancingEventExWithIdentity(c *gin.Context, streamName, selectedNode s
 		Score:           score,
 		StreamName:      streamName,
 		ClientIP:        clientIP,
-		ClientCountry:   country,
 		ClientLat:       lat,
 		ClientLon:       lon,
 		SelectedNode:    selectedNode,
@@ -2334,18 +1970,35 @@ func enforceHTTPResolvePlaybackPolicy(ctx context.Context, req *sharedpb.ViewerE
 }
 
 func getLatLon(c *gin.Context, query url.Values, queryKey, headerKey string) float64 {
-	// First check CloudFlare geographic headers (most accurate)
+	if c == nil || c.Request == nil || (queryKey != "lat" && queryKey != "lon") {
+		return math.NaN()
+	}
+	// Public callers cannot assert a geographic hole. Explicit coordinates are reserved
+	// for authenticated node-to-node source routing; viewers use the trusted client IP.
+	callerClusterID, signed := c.Request.Context().Value(ctxkeys.KeyAuthenticatedNodeCluster).(string)
+	if !signed || strings.TrimSpace(callerClusterID) == "" {
+		clientIP := trustedClientIP(c)
+		if geoipReader != nil && clientIP != "" {
+			if data := geoip.LookupCached(c.Request.Context(), geoipReader, geoipCache, clientIP); data != nil {
+				if queryKey == "lat" {
+					return validCoordinate(data.Latitude, queryKey)
+				}
+				return validCoordinate(data.Longitude, queryKey)
+			}
+		}
+		return math.NaN()
+	}
 	if queryKey == "lat" {
 		if val := c.GetHeader("CF-IPLatitude"); val != "" {
 			if f, err := strconv.ParseFloat(val, 64); err == nil {
-				return f
+				return validCoordinate(f, queryKey)
 			}
 		}
 	}
 	if queryKey == "lon" {
 		if val := c.GetHeader("CF-IPLongitude"); val != "" {
 			if f, err := strconv.ParseFloat(val, 64); err == nil {
-				return f
+				return validCoordinate(f, queryKey)
 			}
 		}
 	}
@@ -2353,17 +2006,28 @@ func getLatLon(c *gin.Context, query url.Values, queryKey, headerKey string) flo
 	// Then check standard headers (nginx with GeoIP, etc.)
 	if val := c.GetHeader(headerKey); val != "" {
 		if f, err := strconv.ParseFloat(val, 64); err == nil {
-			return f
+			return validCoordinate(f, queryKey)
 		}
 	}
 
 	// Finally check query parameter
 	if val := query.Get(queryKey); val != "" {
 		if f, err := strconv.ParseFloat(val, 64); err == nil {
-			return f
+			return validCoordinate(f, queryKey)
 		}
 	}
 	return math.NaN()
+}
+
+func validCoordinate(value float64, key string) float64 {
+	limit := 90.0
+	if key == "lon" {
+		limit = 180
+	}
+	if math.IsNaN(value) || math.IsInf(value, 0) || math.Abs(value) > limit {
+		return math.NaN()
+	}
+	return value
 }
 
 func getTagAdjustments(c *gin.Context, query url.Values) map[string]int {
@@ -2397,451 +2061,15 @@ func getTotalViewers(node state.EnhancedBalancerNodeSnapshot) uint64 {
 // resolveLiveViewerEndpoint uses load balancer to find optimal edge nodes with fallbacks
 func resolveLiveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest, lat, lon float64, internalName, streamTenantID, streamID, originClusterID string, clusterPeers []*clusterpeerpb.TenantClusterPeer, activeIngestClusterID, officialClusterID string, allowPlatformShared bool) (*sharedpb.ViewerEndpointResponse, error) {
 	start := time.Now()
-	// Delegate to consolidated control package function
-	deps := &control.PlaybackDependencies{
-		DB:                          db,
-		LB:                          lb,
-		GeoLat:                      lat,
-		GeoLon:                      lon,
-		LocalClusterID:              clusterID,
-		ClusterPeers:                clusterPeers,
-		OfficialClusterID:           officialClusterID,
-		AllowPlatformSharedPlayback: allowPlatformShared,
-		LocalAuthority:              true,
+	response, prepareErr := control.ResolvePreparedLiveViewerEndpoint(ctx, viewerPlacementPreparer, control.ViewerPlacementRequest{
+		TenantID: streamTenantID, StreamID: streamID, InternalName: internalName, PlaybackID: req.ContentId,
+		Protocol: req.GetProtocol(), Location: control.ViewerPlacementLocation(lat, lon),
+	}, activeIngestClusterID)
+	if prepareErr != nil {
+		return nil, prepareErr
 	}
-
-	if internalName == "" {
-		return nil, fmt.Errorf("stream not found")
-	}
-
-	// Loop prevention: if we're already pulling this stream via origin-pull, skip remote
-	// edge scoring entirely — let local scoring handle it (once DTSC pull completes, the
-	// stream appears locally and gets StreamBonus).
-	skipRemote := false
-	if control.StreamRegistryInstance != nil {
-		if _, ok := control.StreamRegistryInstance.LocalReplication(ctx, internalName); ok {
-			skipRemote = true
-		}
-	}
-
-	// Collect remote edge candidates from federation cache.
-	// Primary source: cluster peers from control-plane resolution (free with every Commodore call).
-	// Fallback: trigger processor cache (for streams ingesting locally).
-	allPeers := clusterPeers
-	if !skipRemote && remoteEdgeCache != nil && len(allPeers) > 0 {
-		deps.RemoteEdges = collectRemoteEdges(ctx, allPeers)
-	}
-	if !skipRemote && remoteEdgeCache != nil && len(deps.RemoteEdges) == 0 && triggerProcessor != nil {
-		if tpPeers := triggerProcessor.GetClusterPeers(internalName, streamTenantID); len(tpPeers) > 0 {
-			deps.RemoteEdges = collectRemoteEdges(ctx, tpPeers)
-			if len(allPeers) == 0 {
-				allPeers = tpPeers
-			}
-		}
-	}
-	// Pre-warmed path: the federation mesh re-advertises live streams every
-	// 5s with per-edge scoring data; consume that before paying a fan-out.
-	// Only replaces the COLD path; the EdgeSummary cache above stays the
-	// primary source when warm.
-	if !skipRemote && len(deps.RemoteEdges) == 0 {
-		deps.RemoteEdges = control.FederatedRemoteEdges(internalName)
-	}
-	// Cold start: EdgeSummary cache empty, no usable ads, but peers exist:
-	// fan out QueryStream (single-flighted + memoized across requests).
-	if !skipRemote && len(deps.RemoteEdges) == 0 && len(allPeers) > 0 {
-		deps.RemoteEdges = queryStreamFanOutShared(ctx, internalName, streamTenantID, lat, lon, allPeers)
-	}
-	deps.ClusterPeers = allPeers
-
-	response, err := control.ResolveLivePlayback(ctx, deps, req.ContentId, internalName, streamID, streamTenantID, activeIngestClusterID)
-	if err != nil {
-		return nil, err
-	}
-
-	// If a remote cluster won the summary-level comparison, confirm with QueryStream.
-	// The remote foghorn scores its own local nodes and returns actual play-ready
-	// endpoints. An infra-error from arrangement bubbles up as 5xx rather than
-	// silently degrading to the summary-level redirect.
-	if response.Primary != nil && response.Primary.ClusterId != "" {
-		confirmed, confirmErr := confirmRemoteEndpoint(ctx, response, req.ContentId, internalName, streamTenantID, lat, lon)
-		if confirmErr != nil {
-			return nil, confirmErr
-		}
-		if confirmed != nil {
-			response = confirmed
-		}
-		// If confirmation soft-failed (nil, nil), response keeps the summary-level redirect — usable as fallback
-	}
-
-	// Emit routing event for analytics
-	if response.Primary != nil {
-		durationMs := float32(time.Since(start).Milliseconds())
-		candidatesCount := int32(0)
-		if response.Primary != nil {
-			candidatesCount = int32(1 + len(response.Fallbacks))
-		}
-		emitViewerRoutingEvent(req, response.Primary, lat, lon, 0, 0, internalName, streamTenantID, streamID, originClusterID, durationMs, candidatesCount, "play_rewrite", "http")
-	}
-
+	emitViewerRoutingEvent(req, response.Primary, lat, lon, 0, 0, internalName, streamTenantID, streamID, originClusterID, float32(time.Since(start).Milliseconds()), 1, "play_rewrite", "http")
 	return response, nil
-}
-
-func collectRemoteEdges(ctx context.Context, peers []*clusterpeerpb.TenantClusterPeer) []balancer.RemoteEdgeCandidate {
-	var candidates []balancer.RemoteEdgeCandidate
-	for _, peer := range peers {
-		if peer.GetClusterId() == clusterID || peer.GetClusterId() == "" || control.IsServedCluster(peer.GetClusterId()) {
-			continue
-		}
-		// Liveness gate: a peer's EdgeSummary (60s TTL) outlives its heartbeat (30s TTL),
-		// so a peer dead 30–60s still has a cached summary. Skip it once the heartbeat key
-		// has expired, so stale telemetry can't attract cross-cluster routing.
-		if hb, hbErr := remoteEdgeCache.GetPeerHeartbeat(ctx, peer.GetClusterId()); hbErr != nil || hb == nil {
-			continue
-		}
-		record, err := remoteEdgeCache.GetEdgeSummary(ctx, peer.GetClusterId())
-		if err != nil || record == nil {
-			continue
-		}
-		for _, edge := range record.Edges {
-			candidates = append(candidates, balancer.RemoteEdgeCandidate{
-				ClusterID:   peer.GetClusterId(),
-				NodeID:      edge.NodeID,
-				BaseURL:     edge.BaseURL,
-				GeoLat:      edge.GeoLat,
-				GeoLon:      edge.GeoLon,
-				BWAvailable: edge.BWAvailableAvg,
-				CPUPercent:  edge.CPUPercentAvg,
-				RAMUsed:     edge.RAMUsed,
-				RAMMax:      edge.RAMMax,
-			})
-		}
-	}
-	return candidates
-}
-
-// findBestRemoteNode returns the highest-scored remote node, or nil if none.
-func findBestRemoteNode(nodes []balancer.NodeWithScore) *balancer.NodeWithScore {
-	if len(nodes) == 0 {
-		return nil
-	}
-	best := &nodes[0]
-	for i := 1; i < len(nodes); i++ {
-		if nodes[i].Score > best.Score {
-			best = &nodes[i]
-		}
-	}
-	return best
-}
-
-// confirmRemoteStream verifies that a remote cluster actually has the stream
-// by issuing a QueryStream RPC. Returns true only if the remote cluster responds
-// with at least one candidate. Uses a 3s timeout to avoid blocking the viewer.
-func confirmRemoteStream(ctx context.Context, remoteClusterID, internalName, tenantID string, lat, lon float64) bool {
-	if federationClient == nil || peerManager == nil {
-		return false
-	}
-	addr := peerManager.GetPeerAddr(remoteClusterID)
-	if addr == "" {
-		return false
-	}
-	qCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	resp, err := federationClient.QueryStream(qCtx, remoteClusterID, addr, &foghornfederationpb.QueryStreamRequest{
-		StreamName:        internalName,
-		ViewerLat:         lat,
-		ViewerLon:         lon,
-		RequestingCluster: clusterID,
-		TenantId:          tenantID,
-	})
-	return err == nil && resp != nil && len(resp.Candidates) > 0
-}
-
-// confirmRemoteEndpoint validates a summary-level remote win by calling
-// QueryStream on the winning cluster's foghorn. Three return shapes:
-//
-//	(non-nil, nil) — confirmed; caller swaps response for this richer one.
-//	(nil, nil)     — soft failure (peer unreachable, no candidates, no
-//	                  DTSC URL, LB miss); caller keeps the summary-level
-//	                  redirect.
-//	(nil, err)     — arrangement infra failure; caller surfaces 5xx to
-//	                  the viewer instead of silently degrading.
-func confirmRemoteEndpoint(ctx context.Context, response *sharedpb.ViewerEndpointResponse, viewKey, internalName, tenantID string, lat, lon float64) (*sharedpb.ViewerEndpointResponse, error) {
-	if federationClient == nil || peerManager == nil {
-		return nil, nil
-	}
-
-	// Collect unique remote clusters from response (primary + fallbacks with ClusterId)
-	type remoteHit struct {
-		clusterID string
-		score     float64
-	}
-	var remotes []remoteHit
-	seen := make(map[string]bool)
-
-	if response.Primary != nil && response.Primary.ClusterId != "" && !seen[response.Primary.ClusterId] {
-		seen[response.Primary.ClusterId] = true
-		remotes = append(remotes, remoteHit{clusterID: response.Primary.ClusterId, score: response.Primary.LoadScore})
-	}
-	for _, fb := range response.Fallbacks {
-		if fb.ClusterId != "" && !seen[fb.ClusterId] {
-			seen[fb.ClusterId] = true
-			remotes = append(remotes, remoteHit{clusterID: fb.ClusterId, score: fb.LoadScore})
-		}
-	}
-	if len(remotes) == 0 {
-		return nil, nil
-	}
-
-	// Fan out QueryStream to all candidate remote clusters in parallel
-	type queryResult struct {
-		clusterID string
-		resp      *foghornfederationpb.QueryStreamResponse
-	}
-	ch := make(chan queryResult, len(remotes))
-	var wg sync.WaitGroup
-
-	for _, r := range remotes {
-		addr := peerManager.GetPeerAddr(r.clusterID)
-		if addr == "" {
-			continue
-		}
-		wg.Add(1)
-		go func(cid, caddr string) {
-			defer wg.Done()
-			qCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-			defer cancel()
-			resp, err := federationClient.QueryStream(qCtx, cid, caddr, &foghornfederationpb.QueryStreamRequest{
-				StreamName:        internalName,
-				ViewerLat:         lat,
-				ViewerLon:         lon,
-				RequestingCluster: clusterID,
-				TenantId:          tenantID,
-			})
-			if err != nil || resp == nil || len(resp.Candidates) == 0 {
-				return
-			}
-			ch <- queryResult{clusterID: cid, resp: resp}
-		}(r.clusterID, addr)
-	}
-	go func() { wg.Wait(); close(ch) }()
-
-	// Pick the best candidate across all QueryStream responses
-	var bestCandidate *foghornfederationpb.EdgeCandidate
-	var bestCluster string
-	for qr := range ch {
-		for _, c := range qr.resp.Candidates {
-			if bestCandidate == nil || c.BwScore > bestCandidate.BwScore {
-				bestCandidate = c
-				bestCluster = qr.clusterID
-			}
-		}
-	}
-	if bestCandidate == nil {
-		return nil, nil
-	}
-
-	// Origin-pull arrangement: if we have local edge capacity, pull stream locally via DTSC
-	// so subsequent viewers are served from our cluster without cross-cluster hops.
-	// Infra-error propagates so the HTTP handler surfaces a 5xx instead of a
-	// silently-degraded redirect.
-	if remoteEdgeCache != nil && bestCandidate.DtscUrl != "" {
-		arranged, arrangeErr := arrangeOriginPull(ctx, bestCandidate, bestCluster, internalName, tenantID, viewKey, lat, lon, response.Metadata)
-		if arrangeErr != nil {
-			return nil, arrangeErr
-		}
-		if arranged != nil {
-			return arranged, nil
-		}
-	}
-
-	// No origin-pull possible — redirect viewer to the remote cluster
-	playURL := control.PlaybackEdgeRedirectURL(bestCandidate.BaseUrl, viewKey)
-	confirmed := &sharedpb.ViewerEndpointResponse{
-		Primary: &sharedpb.ViewerEndpoint{
-			NodeId:    bestCandidate.NodeId,
-			BaseUrl:   bestCandidate.BaseUrl,
-			Protocol:  "redirect",
-			Url:       playURL,
-			LoadScore: float64(bestCandidate.BwScore),
-			ClusterId: bestCluster,
-		},
-		Metadata: response.Metadata,
-	}
-
-	// Keep any local fallbacks from the original response
-	for _, fb := range response.Fallbacks {
-		if fb.ClusterId == "" {
-			confirmed.Fallbacks = append(confirmed.Fallbacks, fb)
-		}
-	}
-
-	logger.WithFields(logging.Fields{
-		"stream":         internalName,
-		"remote_cluster": bestCluster,
-		"remote_node":    bestCandidate.NodeId,
-		"remote_score":   bestCandidate.BwScore,
-	}).Info("Remote endpoint confirmed via QueryStream — redirecting (no local capacity)")
-
-	return confirmed, nil
-}
-
-// arrangeOriginPull attempts to set up a local DTSC pull from a remote
-// source. Three return shapes:
-//
-//	(non-nil, nil) — arrangement succeeded; viewer goes to local edge.
-//	(nil, nil)     — soft refusal (LB miss, contention, loop prevention);
-//	                  caller falls through to peer-redirect fallback.
-//	(nil, err)     — infra failure (registry/deps/peer/notify); caller
-//	                  surfaces 5xx via the HTTP handler. Use
-//	                  federation.IsArrangeInfraError to discriminate.
-//
-// Thin wrapper around federation.ArrangeOriginPull — supplies the LB
-// picker so the helper selects a local edge with capacity, then builds
-// the ViewerEndpoint from the resulting Location.
-func arrangeOriginPull(ctx context.Context, remote *foghornfederationpb.EdgeCandidate, remoteCluster, internalName, tenantID, viewKey string, lat, lon float64, metadata *sharedpb.PlaybackMetadata) (*sharedpb.ViewerEndpointResponse, error) {
-	deps := &federation.ArrangeOriginPullDeps{
-		Cache:        remoteEdgeCache,
-		PeerResolver: peerManager,
-		FedClient:    federationClient,
-		InstanceID:   originPullInstanceID,
-		Logger:       logger,
-		EventEmitter: emitFederationEvent,
-	}
-	result, err := deps.ArrangeOriginPull(ctx, federation.ArrangeOriginPullRequest{
-		InternalName:  internalName,
-		Remote:        remote,
-		RemoteCluster: remoteCluster,
-		TenantID:      tenantID,
-		Lat:           lat,
-		Lon:           lon,
-		LBPicker: func(pickCtx context.Context, pickLat, pickLon float64, pickTenant string) (string, string, string, error) {
-			lbCtx := context.WithValue(pickCtx, ctxkeys.KeyCapability, "edge")
-			if pickTenant != "" {
-				lbCtx = context.WithValue(lbCtx, ctxkeys.KeyClusterScope, pickTenant)
-			}
-			nodes, pickErr := lb.GetTopNodesWithScores(lbCtx, "", pickLat, pickLon, nil, "", 1, false)
-			if pickErr != nil {
-				return "", "", "", pickErr
-			}
-			if len(nodes) != 1 {
-				return "", "", "", federation.ErrOriginPullNoDest
-			}
-			return nodes[0].Host, nodes[0].NodeID, nodes[0].ClusterID, nil
-		},
-	})
-	if err != nil {
-		if federation.IsArrangeInfraError(err) {
-			logger.WithError(err).WithFields(logging.Fields{
-				"stream":         internalName,
-				"remote_cluster": remoteCluster,
-			}).Error("ArrangeOriginPull: infra failure; refusing to silently redirect")
-			return nil, err
-		}
-		return nil, nil
-	}
-	if result == nil {
-		return nil, nil
-	}
-	endpoint := buildLocalEndpointFromReplication(result.DestNodeID, viewKey)
-	if endpoint != nil {
-		return &sharedpb.ViewerEndpointResponse{Primary: endpoint, Metadata: metadata}, nil
-	}
-	return nil, nil
-}
-
-// buildLocalEndpointFromReplication constructs a ViewerEndpoint from a local node
-// that has an in-flight or completed origin-pull replication.
-func buildLocalEndpointFromReplication(destNodeID, viewKey string) *sharedpb.ViewerEndpoint {
-	nodeOutputs, exists := control.GetNodeOutputs(destNodeID)
-	if !exists || nodeOutputs.Outputs == nil {
-		return nil
-	}
-	return control.BuildViewerEndpointFromOutputs(destNodeID, nodeOutputs, viewKey, true)
-}
-
-// queryStreamFanOut performs cold-start QueryStream fan-out to peer clusters when
-// no EdgeSummary data is cached. Returns RemoteEdgeCandidates for scoring.
-func queryStreamFanOut(ctx context.Context, internalName, tenantID string, lat, lon float64, peers []*clusterpeerpb.TenantClusterPeer) []balancer.RemoteEdgeCandidate {
-	if federationClient == nil || peerManager == nil {
-		return nil
-	}
-
-	fanOutStart := time.Now()
-
-	type result struct {
-		candidates []balancer.RemoteEdgeCandidate
-	}
-	ch := make(chan result, len(peers))
-	var wg sync.WaitGroup
-	var queriedCount uint32
-
-	for _, peer := range peers {
-		if peer.GetClusterId() == clusterID || peer.GetClusterId() == "" || control.IsServedCluster(peer.GetClusterId()) {
-			continue
-		}
-		addr := peerManager.GetPeerAddr(peer.GetClusterId())
-		if addr == "" {
-			continue
-		}
-		queriedCount++
-		wg.Add(1)
-		go func(peerID, peerAddr string) {
-			defer wg.Done()
-			qCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-			defer cancel()
-			resp, err := federationClient.QueryStream(qCtx, peerID, peerAddr, &foghornfederationpb.QueryStreamRequest{
-				StreamName:        internalName,
-				ViewerLat:         lat,
-				ViewerLon:         lon,
-				RequestingCluster: clusterID,
-				TenantId:          tenantID,
-			})
-			if err != nil || resp == nil || len(resp.Candidates) == 0 {
-				ch <- result{}
-				return
-			}
-			var cands []balancer.RemoteEdgeCandidate
-			for _, c := range resp.Candidates {
-				cands = append(cands, balancer.RemoteEdgeCandidate{
-					ClusterID:   peerID,
-					NodeID:      c.NodeId,
-					BaseURL:     c.BaseUrl,
-					GeoLat:      c.GeoLat,
-					GeoLon:      c.GeoLon,
-					BWAvailable: c.BwAvailable,
-					CPUPercent:  c.CpuPercent,
-					RAMUsed:     c.RamUsed,
-					RAMMax:      c.RamMax,
-				})
-			}
-			ch <- result{candidates: cands}
-		}(peer.GetClusterId(), addr)
-	}
-	go func() { wg.Wait(); close(ch) }()
-
-	var all []balancer.RemoteEdgeCandidate
-	var respondingCount uint32
-	for r := range ch {
-		if len(r.candidates) > 0 {
-			respondingCount++
-		}
-		all = append(all, r.candidates...)
-	}
-
-	if queriedCount > 0 {
-		latMs := float32(time.Since(fanOutStart).Milliseconds())
-		totalCandidates := uint32(len(all))
-		emitFederationEvent(&ipcpb.FederationEventData{
-			EventType:          ipcpb.FederationEventType_FEDERATION_QUERY,
-			StreamName:         &internalName,
-			LatencyMs:          &latMs,
-			QueriedClusters:    &queriedCount,
-			RespondingClusters: &respondingCount,
-			TotalCandidates:    &totalCandidates,
-		})
-	}
-
-	return all
 }
 
 // resolveArtifactViewerEndpoint queries database for VOD/Clip/DVR storage nodes via a single resolver.
@@ -2917,8 +2145,10 @@ func resolveArtifactViewerEndpoint(req *sharedpb.ViewerEndpointRequest, lat, lon
 			}
 			return &httpRemoteArtifactAdapter{cache: remoteEdgeCache}
 		}(),
-		OfficialClusterID:           resolution.OfficialClusterID,
-		AllowPlatformSharedPlayback: resolution.AllowPlatformSharedPlayback,
+		OfficialClusterID:            resolution.OfficialClusterID,
+		AllowPlatformSharedPlayback:  resolution.AllowPlatformSharedPlayback,
+		StoredMediaPlacement:         storedMediaPlacementPermitter,
+		StoredMediaPlacementRequired: storedMediaPlacementRequired,
 	}
 
 	ctx := context.Background()
@@ -2980,6 +2210,8 @@ func respondX402Billing(c *gin.Context, ctx context.Context, tenantID, resourceP
 //   - Auto-detects protocol from extension (.m3u8 -> HLS, .webrtc -> WebRTC, etc.)
 //   - Supports view keys (live), clip hashes, and DVR hashes via unified resolution
 func HandleGenericViewerPlayback(c *gin.Context) {
+	c.Header("Cache-Control", "private, no-store")
+	c.Header("Referrer-Policy", "no-referrer")
 	c.Request = c.Request.WithContext(control.MediaRequestContext(c.Request.Context(), "viewer_http"))
 	// Extract the full path after /play or /resolve
 	fullPath := c.Param("path")
@@ -2989,6 +2221,7 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 	}
 
 	viewKey, protocol, manifestPath := parsePlaybackPath(fullPath)
+	requestedProtocol := protocol
 
 	// Validate view key format (should be non-empty)
 	if viewKey == "" {
@@ -3069,7 +2302,7 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 		if billing.BillingModel == "prepaid" && (billing.IsSuspended || billing.IsBalanceNegative) {
 			paymentHeader := x402.GetPaymentHeaderFromRequest(c.Request)
 			resourcePath := c.Request.URL.Path
-			paid, decision := settleX402PaymentForPlayback(c.Request.Context(), resolution.TenantId, resourcePath, paymentHeader, c.ClientIP(), logger)
+			paid, decision := settleX402PaymentForPlayback(c.Request.Context(), resolution.TenantId, resourcePath, paymentHeader, trustedClientIP(c), logger)
 			if decision != nil {
 				respondX402Decision(c, decision)
 				return
@@ -3109,10 +2342,20 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 	protocol = normalizeProtocol(protocol)
 
 	// Build viewer endpoint request (content type is derived, not supplied)
-	viewerIP := c.ClientIP()
+	viewerIP := trustedClientIP(c)
 	req := &sharedpb.ViewerEndpointRequest{
 		ContentId: contentID,
 		ViewerIp:  proto.String(viewerIP),
+	}
+	if contentType == "live" {
+		req.Protocol, err = requestedViewerManifestProtocol(requestedProtocol, manifestPath)
+		if err != nil {
+			respondPlaybackError(c, http.StatusBadRequest, "INVALID_PLAYBACK_PROTOCOL", "Unsupported playback protocol", nil)
+			return
+		}
+		if req.Protocol != "" {
+			protocol = req.Protocol
+		}
 	}
 	if token := viewerPlaybackTokenFromHTTPRequest(c.Request); token != "" {
 		req.ViewerToken = proto.String(token)
@@ -3125,7 +2368,7 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 	}
 
 	// Get geo location for viewer
-	var lat, lon float64
+	lat, lon := math.NaN(), math.NaN()
 	if geoipReader != nil {
 		if geoData := geoip.LookupCached(c.Request.Context(), geoipReader, geoipCache, viewerIP); geoData != nil {
 			lat = geoData.Latitude
@@ -3153,8 +2396,13 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 			// Fail-fast — peer origin hasn't pushed the artifact to S3
 			// yet. Surface as 503 (Service Unavailable) so callers retry
 			// at the app layer instead of us hiding a long polling loop
-			// behind a 202.
-			respondPlaybackError(c, http.StatusServiceUnavailable, "REMOTE_ARTIFACT_UNAVAILABLE", err.Error(), gin.H{
+			// behind a 202. The wrapped cause can be a database or peer-dial
+			// error and this responder answers unauthenticated viewers, so the
+			// cause is logged rather than returned.
+			logger.WithError(err).WithFields(logging.Fields{
+				"view_key": viewKey, "internal_name": contentID, "content_type": contentType,
+			}).Warn("Cross-cluster artifact is not yet retrievable")
+			respondPlaybackError(c, http.StatusServiceUnavailable, "REMOTE_ARTIFACT_UNAVAILABLE", "Remote artifact is not yet available; retry", gin.H{
 				"contentType": contentType,
 				"contentId":   contentID,
 			})
@@ -3166,8 +2414,27 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 			"internal_name": contentID,
 			"content_type":  contentType,
 		}).Error("Failed to resolve viewer endpoint")
+		// A policy refusal is not a resolution failure: stored media reports it
+		// with the same retryable placement code the live lane uses, so a client
+		// distinguishes "not permitted here" from "this content is broken".
+		if contentType == "live" || errors.Is(err, control.ErrStoredMediaPlacementUnavailable) {
+			respondPlaybackError(c, http.StatusServiceUnavailable, "PLAYBACK_PLACEMENT_UNAVAILABLE", "No permitted playback destination is available; retry safely", nil)
+			return
+		}
 		respondPlaybackError(c, http.StatusInternalServerError, "PLAYBACK_RESOLUTION_FAILED", "Failed to resolve playback endpoint", nil)
 		return
+	}
+
+	// Query credentials are explicitly URL-carried. Header/cookie credentials must
+	// remain out of URLs; clients using them attach credentials to the selected edge.
+	if contentType == "live" {
+		if token := strings.TrimSpace(c.Request.URL.Query().Get("jwt")); token != "" {
+			response, err = withViewerQueryCredential(response, token)
+			if err != nil {
+				respondPlaybackError(c, http.StatusServiceUnavailable, "INVALID_PLAYBACK_DESTINATION", "Playback destination is unavailable", nil)
+				return
+			}
+		}
 	}
 
 	// Create virtual viewer for live streams to track this redirect
@@ -3241,7 +2508,6 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 		"view_key":      viewKey,
 		"internal_name": contentID,
 		"protocol":      protocol,
-		"redirect_url":  redirectURL,
 		"node_id":       response.Primary.NodeId,
 	}).Info("Redirecting generic viewer to edge node")
 

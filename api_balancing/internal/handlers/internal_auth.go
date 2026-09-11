@@ -25,10 +25,10 @@ func RequireInternalMutation() gin.HandlerFunc {
 	return requireInternalIdentity(true)
 }
 
-// RequireInternalCompatibility preserves read-only Mist diagnostics for the
+// RequireInternalSourceAccess preserves read-only Mist diagnostics for the
 // service credential while ensuring the legacy root weights query always takes
 // the stronger operator-JWT path.
-func RequireInternalCompatibility() gin.HandlerFunc {
+func RequireInternalSourceAccess() gin.HandlerFunc {
 	read := requireInternalIdentity(false)
 	mutation := requireInternalIdentity(true)
 	return func(c *gin.Context) {

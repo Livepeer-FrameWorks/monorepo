@@ -15,7 +15,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -117,36 +116,43 @@ type FoghornGRPCServer struct {
 	foghornpb.UnimplementedVodControlServiceServer
 	foghornpb.UnimplementedTenantControlServiceServer
 	foghornpb.UnimplementedMediaAuthorityControlServiceServer
+	foghornpb.UnimplementedMediaPlacementControlServiceServer
 	foghornpb.UnimplementedNodeControlServiceServer
 	sharedpb.UnimplementedArtifactCreationStatusServiceServer
 
-	db                  *sql.DB
-	logger              logging.Logger
-	lb                  *balancer.LoadBalancer
-	geoipReader         *geoip.Reader
-	geoipCache          *cache.Cache
-	decklogClient       *decklog.BatchedClient
-	s3Client            S3ClientInterface
-	cacheInvalidator    CacheInvalidator
-	purserClient        *purserclient.GRPCClient
-	remoteEdgeCache     *federation.RemoteEdgeCache
-	federationClient    federationRPC
-	peerManager         peerAddrResolver
-	quartermasterClient quartermasterRoutingResolver
-	storageResolver     storageResolverFactory
-	clusterID           string
-	instanceID          string
-	redisStore          *state.RedisStateStore
-	// fanOutShared dedups + memoizes cold QueryStream fan-outs per
-	// (tenant, stream), same machinery as the HTTP /play path.
-	fanOutShared        *balancer.SharedFanOut
-	originPullMu        sync.Mutex
-	originPulling       map[string]struct{}
-	artifactCleaner     *artifacts.Cleaner
-	mediaAuthorityStore *localauthority.Store
-	signingKeyUse       triggers.SigningKeyUseRecorder
-	localIngestResolver localIngestResolver
-	localPlaybackPolicy localPlaybackPolicyEvaluator
+	db                      *sql.DB
+	logger                  logging.Logger
+	lb                      *balancer.LoadBalancer
+	geoipReader             *geoip.Reader
+	geoipCache              *cache.Cache
+	decklogClient           *decklog.BatchedClient
+	s3Client                S3ClientInterface
+	cacheInvalidator        CacheInvalidator
+	purserClient            *purserclient.GRPCClient
+	remoteEdgeCache         *federation.RemoteEdgeCache
+	federationClient        federationRPC
+	peerManager             peerAddrResolver
+	quartermasterClient     quartermasterRoutingResolver
+	storageResolver         storageResolverFactory
+	clusterID               string
+	instanceID              string
+	redisStore              *state.RedisStateStore
+	artifactCleaner         *artifacts.Cleaner
+	mediaAuthorityStore     *localauthority.Store
+	cellPlacementCapability func(context.Context) (localauthority.CellPlacementCapability, error)
+	signingKeyUse           triggers.SigningKeyUseRecorder
+	localIngestResolver     localIngestResolver
+	ingestPlacementPreparer control.IngestPlacementPreparer
+	ingestPlacementRequired bool
+	viewerPlacementPreparer control.ViewerPlacementPreparer
+	viewerPlacementRequired bool
+	storedMediaPlacement    control.ViewerPlacementPermitter
+	// storedMediaPlacementRequired latches once the permitter is installed, so a
+	// later clear refuses stored media instead of serving it unfiltered.
+	storedMediaPlacementRequired bool
+	localPlaybackPolicy          localPlaybackPolicyEvaluator
+	capacityObserver             *balancer.PlacementCapacityObserver
+	pushSourceObserver           *federation.PlacementPushSourceObserver
 }
 
 // quartermasterRoutingResolver is the narrow Quartermaster surface this
@@ -166,6 +172,10 @@ type storageResolverFactory func(ctx context.Context, tenantID string) *storage.
 // tenant and media-object authority.
 func (s *FoghornGRPCServer) SetMediaAuthorityStore(store *localauthority.Store) {
 	s.mediaAuthorityStore = store
+	s.cellPlacementCapability = nil
+	if store != nil {
+		s.cellPlacementCapability = store.CellPlacementCapability
+	}
 }
 
 func (s *FoghornGRPCServer) SetSigningKeyUseRecorder(recorder triggers.SigningKeyUseRecorder) {
@@ -174,6 +184,30 @@ func (s *FoghornGRPCServer) SetSigningKeyUseRecorder(recorder triggers.SigningKe
 
 func (s *FoghornGRPCServer) SetLocalIngestResolver(resolver localIngestResolver) {
 	s.localIngestResolver = resolver
+}
+
+// SetIngestPlacementPreparer installs the policy path before serving requests.
+// Once required, a missing adapter is unavailable, never legacy selection.
+func (s *FoghornGRPCServer) SetIngestPlacementPreparer(preparer control.IngestPlacementPreparer) {
+	s.ingestPlacementPreparer = preparer
+	s.ingestPlacementRequired = true
+}
+
+// SetViewerPlacementPreparer requires the shared prepared-destination path;
+// clearing the adapter cannot restore legacy routing.
+func (s *FoghornGRPCServer) SetViewerPlacementPreparer(preparer control.ViewerPlacementPreparer) {
+	s.viewerPlacementPreparer = preparer
+	s.viewerPlacementRequired = true
+}
+
+// SetStoredMediaPlacementPermitter installs serving-policy enforcement for
+// artifact playback. Stored media keeps its storage ranking; this only removes
+// destinations the tenant's policy refuses. Calling it requires placement from
+// then on; clearing the permitter refuses stored media rather than restoring
+// unfiltered storage candidates.
+func (s *FoghornGRPCServer) SetStoredMediaPlacementPermitter(permitter control.ViewerPlacementPermitter) {
+	s.storedMediaPlacementRequired = true
+	s.storedMediaPlacement = permitter
 }
 
 func (s *FoghornGRPCServer) SetLocalPlaybackPolicyEvaluator(evaluator localPlaybackPolicyEvaluator) {
@@ -200,8 +234,6 @@ func NewFoghornGRPCServer(
 		decklogClient: decklogClient,
 		s3Client:      s3Client,
 		purserClient:  purserClient,
-		fanOutShared:  balancer.NewSharedFanOut(5 * time.Second),
-		originPulling: make(map[string]struct{}),
 	}
 }
 
@@ -213,6 +245,7 @@ func (s *FoghornGRPCServer) RegisterServices(grpcServer *grpc.Server) {
 	foghornpb.RegisterVodControlServiceServer(grpcServer, s)
 	foghornpb.RegisterTenantControlServiceServer(grpcServer, s)
 	foghornpb.RegisterMediaAuthorityControlServiceServer(grpcServer, s)
+	foghornpb.RegisterMediaPlacementControlServiceServer(grpcServer, s)
 	foghornpb.RegisterNodeControlServiceServer(grpcServer, s)
 	sharedpb.RegisterArtifactCreationStatusServiceServer(grpcServer, s)
 }
@@ -282,7 +315,9 @@ func (s *FoghornGRPCServer) SetArtifactCleaner(c *artifacts.Cleaner) {
 	s.artifactCleaner = c
 }
 
-// SetRemoteEdgeCache enables remote edge scoring for cross-cluster viewer routing.
+// SetRemoteEdgeCache enables cross-cluster artifact lookups and origin-pull
+// coordination. It no longer feeds viewer routing: cross-cell destinations come
+// from the peer's placement service, not from cached peer telemetry.
 func (s *FoghornGRPCServer) SetRemoteEdgeCache(cache *federation.RemoteEdgeCache, clusterID, instanceID string) {
 	s.remoteEdgeCache = cache
 	s.clusterID = clusterID
@@ -2671,21 +2706,6 @@ func (s *FoghornGRPCServer) ResolveViewerEndpoint(ctx context.Context, req *shar
 		control.AppendViewerCorrelationID(response, viewerID)
 	}
 
-	// Enrich live metadata from unified state
-	if resolvedType == "live" && response.Metadata != nil {
-		stateKey := resolution.RoutingInternalName()
-		if stateKey == "" {
-			stateKey = req.ContentId
-		}
-		st := state.DefaultManager().GetStreamState(stateKey)
-		if st != nil {
-			response.Metadata.IsLive = st.Status == "live"
-			response.Metadata.Status = st.Status
-			response.Metadata.Viewers = int32(st.Viewers)
-			response.Metadata.BufferState = st.BufferState
-		}
-	}
-
 	return response, nil
 }
 
@@ -2759,442 +2779,24 @@ func (s *FoghornGRPCServer) enforceResolvePlaybackPolicy(ctx context.Context, re
 
 func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest, lat, lon float64, internalName, tenantID, streamID, originClusterID string, clusterPeers []*clusterpeerpb.TenantClusterPeer, activeIngestClusterID, officialClusterID string, allowPlatformShared bool) (*sharedpb.ViewerEndpointResponse, error) {
 	start := time.Now()
-	deps := &control.PlaybackDependencies{
-		DB:                          s.db,
-		LB:                          s.lb,
-		GeoLat:                      lat,
-		GeoLon:                      lon,
-		LocalClusterID:              s.clusterID,
-		ClusterPeers:                clusterPeers,
-		OfficialClusterID:           officialClusterID,
-		AllowPlatformSharedPlayback: allowPlatformShared,
-		LocalAuthority:              true,
-	}
-
-	if internalName == "" {
+	// A missing routing name is an identity failure, not a placement outage: no
+	// destination anywhere can serve a stream that has no Mist name, so the
+	// caller gets NotFound instead of a retryable Unavailable.
+	if mist.ExtractInternalName(internalName) == "" {
 		return nil, status.Error(codes.NotFound, "stream not found")
 	}
-
-	// Loop prevention: skip remote edges if we're already pulling this stream
-	skipRemote := false
-	if control.StreamRegistryInstance != nil {
-		if _, ok := control.StreamRegistryInstance.LocalReplication(ctx, internalName); ok {
-			skipRemote = true
+	response, prepareErr := control.ResolvePreparedLiveViewerEndpoint(ctx, s.viewerPlacementPreparer, control.ViewerPlacementRequest{
+		TenantID: tenantID, StreamID: streamID, InternalName: internalName, PlaybackID: req.ContentId,
+		Protocol: req.GetProtocol(), Location: control.ViewerPlacementLocation(lat, lon),
+	}, activeIngestClusterID)
+	if prepareErr != nil {
+		if errors.Is(prepareErr, control.ErrInvalidViewerProtocol) {
+			return nil, status.Error(codes.InvalidArgument, prepareErr.Error())
 		}
+		return nil, status.Errorf(codes.Unavailable, "viewer placement unavailable: %v", prepareErr)
 	}
-
-	// Collect remote edge candidates from federation cache.
-	// Primary source: cluster peers from resolution (free with every Commodore call).
-	// Fallback: trigger processor cache (for streams ingesting locally).
-	allPeers := clusterPeers
-	if !skipRemote && s.remoteEdgeCache != nil && len(allPeers) > 0 {
-		deps.RemoteEdges = s.collectRemoteEdges(ctx, allPeers)
-	}
-	if !skipRemote && s.remoteEdgeCache != nil && len(deps.RemoteEdges) == 0 && s.cacheInvalidator != nil {
-		if tpPeers := s.cacheInvalidator.GetClusterPeers(internalName, tenantID); len(tpPeers) > 0 {
-			deps.RemoteEdges = s.collectRemoteEdges(ctx, tpPeers)
-			if len(allPeers) == 0 {
-				allPeers = tpPeers
-			}
-		}
-	}
-	// Pre-warmed path: StreamAdvertisement-fed registry edges (5s cadence)
-	// before paying a fan-out; same ordering as the HTTP /play handler.
-	if !skipRemote && len(deps.RemoteEdges) == 0 {
-		deps.RemoteEdges = control.FederatedRemoteEdges(internalName)
-	}
-	// Cold start: EdgeSummary cache empty, no usable ads, but peers exist:
-	// fan out QueryStream (single-flighted + memoized; detached from this
-	// caller's cancellation so an abandoned request can't poison the shared
-	// memo window with an empty candidate set).
-	if !skipRemote && len(deps.RemoteEdges) == 0 && len(allPeers) > 0 && s.fanOutShared != nil {
-		deps.RemoteEdges = s.fanOutShared.Do(tenantID+"/"+internalName, func() []balancer.RemoteEdgeCandidate {
-			fanCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-			defer cancel()
-			return s.queryStreamFanOut(fanCtx, internalName, tenantID, lat, lon, allPeers)
-		})
-	}
-	deps.ClusterPeers = allPeers
-
-	response, err := control.ResolveLivePlayback(ctx, deps, req.ContentId, internalName, streamID, tenantID, activeIngestClusterID)
-	if err != nil {
-		return nil, status.Errorf(codes.Unavailable, "%v", err)
-	}
-
-	// If a remote cluster won the summary-level comparison, confirm with QueryStream.
-	// An infra-error from arrangement bubbles up as 5xx rather than silently
-	// degrading to a summary-level redirect.
-	if response.Primary != nil && response.Primary.ClusterId != "" {
-		confirmed, confirmErr := s.confirmRemoteEndpoint(ctx, response, req.ContentId, internalName, tenantID, lat, lon)
-		if confirmErr != nil {
-			return nil, status.Errorf(codes.Unavailable, "%v", confirmErr)
-		}
-		if confirmed != nil {
-			response = confirmed
-		}
-	}
-
-	// Emit routing event for analytics
-	if response.Primary != nil {
-		durationMs := float32(time.Since(start).Milliseconds())
-		candidatesCount := int32(0)
-		if response.Primary != nil {
-			candidatesCount = int32(1 + len(response.Fallbacks))
-		}
-		s.emitRoutingEvent(response.Primary, lat, lon, 0, 0, internalName, tenantID, streamID, originClusterID, durationMs, candidatesCount, "grpc_resolve", "grpc")
-	}
-
+	s.emitRoutingEvent(response.Primary, lat, lon, 0, 0, internalName, tenantID, streamID, originClusterID, float32(time.Since(start).Milliseconds()), 1, "grpc_resolve", "grpc")
 	return response, nil
-}
-
-// collectRemoteEdges queries the federation cache for each peer cluster's edge summary
-// and converts the results to RemoteEdgeCandidates for the load balancer.
-func (s *FoghornGRPCServer) collectRemoteEdges(ctx context.Context, peers []*clusterpeerpb.TenantClusterPeer) []balancer.RemoteEdgeCandidate {
-	var candidates []balancer.RemoteEdgeCandidate
-	for _, peer := range peers {
-		if peer.GetClusterId() == s.clusterID || peer.GetClusterId() == "" || control.IsServedCluster(peer.GetClusterId()) {
-			continue
-		}
-		// Liveness gate: a peer's EdgeSummary (60s TTL) outlives its heartbeat (30s TTL),
-		// so a peer dead 30–60s still has a cached summary. Skip it once the heartbeat key
-		// has expired, so stale telemetry can't attract cross-cluster routing.
-		if hb, hbErr := s.remoteEdgeCache.GetPeerHeartbeat(ctx, peer.GetClusterId()); hbErr != nil || hb == nil {
-			continue
-		}
-		record, err := s.remoteEdgeCache.GetEdgeSummary(ctx, peer.GetClusterId())
-		if err != nil || record == nil {
-			continue
-		}
-		for _, edge := range record.Edges {
-			candidates = append(candidates, balancer.RemoteEdgeCandidate{
-				ClusterID:   peer.GetClusterId(),
-				NodeID:      edge.NodeID,
-				BaseURL:     edge.BaseURL,
-				GeoLat:      edge.GeoLat,
-				GeoLon:      edge.GeoLon,
-				BWAvailable: edge.BWAvailableAvg,
-				CPUPercent:  edge.CPUPercentAvg,
-				RAMUsed:     edge.RAMUsed,
-				RAMMax:      edge.RAMMax,
-			})
-		}
-	}
-	return candidates
-}
-
-// confirmRemoteEndpoint validates a summary-level remote win by calling
-// QueryStream on the winning cluster(s). Returns:
-//
-//	(non-nil, nil) — confirmed; caller swaps the summary-level response
-//	                  for this richer one.
-//	(nil, nil)     — confirmation failed softly (LB miss, no peer reply,
-//	                  no DTSC URL); caller keeps the summary-level redirect.
-//	(nil, err)     — arrangement infra failure (registry/deps/peer/notify);
-//	                  caller surfaces 5xx instead of silently redirecting.
-func (s *FoghornGRPCServer) confirmRemoteEndpoint(ctx context.Context, response *sharedpb.ViewerEndpointResponse, viewKey, internalName, tenantID string, lat, lon float64) (*sharedpb.ViewerEndpointResponse, error) {
-	if s.federationClient == nil || s.peerManager == nil {
-		return nil, nil
-	}
-
-	type remoteHit struct {
-		clusterID string
-		score     float64
-	}
-	var remotes []remoteHit
-	seen := make(map[string]bool)
-
-	if response.Primary != nil && response.Primary.ClusterId != "" && !seen[response.Primary.ClusterId] {
-		seen[response.Primary.ClusterId] = true
-		remotes = append(remotes, remoteHit{clusterID: response.Primary.ClusterId, score: response.Primary.LoadScore})
-	}
-	for _, fb := range response.Fallbacks {
-		if fb.ClusterId != "" && !seen[fb.ClusterId] {
-			seen[fb.ClusterId] = true
-			remotes = append(remotes, remoteHit{clusterID: fb.ClusterId, score: fb.LoadScore})
-		}
-	}
-	if len(remotes) == 0 {
-		return nil, nil
-	}
-
-	type queryResult struct {
-		clusterID string
-		resp      *foghornfederationpb.QueryStreamResponse
-	}
-	ch := make(chan queryResult, len(remotes))
-	var wg sync.WaitGroup
-
-	for _, r := range remotes {
-		addr := s.peerManager.GetPeerAddr(r.clusterID)
-		if addr == "" {
-			continue
-		}
-		wg.Add(1)
-		go func(cid, caddr string) {
-			defer wg.Done()
-			qCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-			defer cancel()
-			resp, err := s.federationClient.QueryStream(qCtx, cid, caddr, &foghornfederationpb.QueryStreamRequest{
-				StreamName:        internalName,
-				ViewerLat:         lat,
-				ViewerLon:         lon,
-				RequestingCluster: s.clusterID,
-				TenantId:          tenantID,
-			})
-			if err != nil || resp == nil || len(resp.Candidates) == 0 {
-				return
-			}
-			ch <- queryResult{clusterID: cid, resp: resp}
-		}(r.clusterID, addr)
-	}
-	go func() { wg.Wait(); close(ch) }()
-
-	var bestCandidate *foghornfederationpb.EdgeCandidate
-	var bestCluster string
-	for qr := range ch {
-		for _, c := range qr.resp.Candidates {
-			if bestCandidate == nil || c.BwScore > bestCandidate.BwScore {
-				bestCandidate = c
-				bestCluster = qr.clusterID
-			}
-		}
-	}
-	if bestCandidate == nil {
-		return nil, nil
-	}
-
-	// Try origin-pull: pre-arrange local replication so MistServer can pull via DTSC.
-	// Infra-error propagates so the viewer sees 5xx instead of a silently-degraded redirect.
-	arranged, arrangeErr := s.arrangeOriginPull(ctx, bestCandidate, bestCluster, internalName, tenantID, viewKey, lat, lon, response)
-	if arrangeErr != nil {
-		return nil, arrangeErr
-	}
-	if arranged != nil {
-		return arranged, nil
-	}
-
-	// No origin-pull possible — redirect viewer to the remote cluster directly
-	playURL := control.PlaybackEdgeRedirectURL(bestCandidate.BaseUrl, viewKey)
-	confirmed := &sharedpb.ViewerEndpointResponse{
-		Primary: &sharedpb.ViewerEndpoint{
-			NodeId:    bestCandidate.NodeId,
-			BaseUrl:   bestCandidate.BaseUrl,
-			Protocol:  "redirect",
-			Url:       playURL,
-			LoadScore: float64(bestCandidate.BwScore),
-			ClusterId: bestCluster,
-		},
-		Metadata: response.Metadata,
-	}
-	for _, fb := range response.Fallbacks {
-		if fb.ClusterId == "" {
-			confirmed.Fallbacks = append(confirmed.Fallbacks, fb)
-		}
-	}
-
-	s.logger.WithFields(logging.Fields{
-		"stream":         internalName,
-		"remote_cluster": bestCluster,
-		"remote_node":    bestCandidate.NodeId,
-		"remote_score":   bestCandidate.BwScore,
-	}).Info("Remote endpoint confirmed via QueryStream — redirecting (no local capacity)")
-
-	return confirmed, nil
-}
-
-// arrangeOriginPull pre-arranges a local DTSC pull from a remote source.
-// Three return shapes:
-//
-//	(non-nil, nil) — arrangement succeeded; viewer goes to local edge
-//	(nil, nil)     — soft refusal (no DTSC URL, contention, no local
-//	                  capacity, loop prevention); caller falls through to
-//	                  peer-redirect fallback
-//	(nil, err)     — infra failure (registry/deps/peer/notify); caller
-//	                  surfaces a 5xx so operators see the underlying break
-//	                  instead of a silently-degraded redirect. Use
-//	                  federation.IsArrangeInfraError to discriminate.
-//
-// Thin wrapper around federation.ArrangeOriginPull — the in-process
-// tryBeginOriginPull guard sits in front of the shared helper to coalesce
-// concurrent gRPC arrangement requests on this instance before they all
-// line up on the Redis lock.
-func (s *FoghornGRPCServer) arrangeOriginPull(ctx context.Context, remote *foghornfederationpb.EdgeCandidate, remoteCluster, internalName, tenantID, viewKey string, lat, lon float64, original *sharedpb.ViewerEndpointResponse) (*sharedpb.ViewerEndpointResponse, error) {
-	if s.remoteEdgeCache == nil || remote.DtscUrl == "" {
-		return nil, nil
-	}
-
-	registry := control.StreamRegistryInstance
-	if !s.tryBeginOriginPull(internalName) {
-		if registry != nil {
-			if loc, ok := registry.LocalReplication(ctx, internalName); ok {
-				if endpoint := s.buildLocalEndpoint(loc.DestNodeID, loc.DestNodeBaseURL, viewKey); endpoint != nil {
-					return &sharedpb.ViewerEndpointResponse{Primary: endpoint, Metadata: original.Metadata}, nil
-				}
-			}
-		}
-		return nil, nil
-	}
-	defer s.finishOriginPull(internalName)
-
-	// Pre-clear a stale registry entry whose dest node disappeared so
-	// the shared helper re-runs NotifyOriginPull instead of reusing.
-	// This case is gRPC-specific (loop only invokes arrangeOriginPull
-	// when the registry didn't already resolve to a usable endpoint).
-	if registry != nil {
-		if loc, ok := registry.LocalReplication(ctx, internalName); ok {
-			if s.buildLocalEndpoint(loc.DestNodeID, loc.DestNodeBaseURL, viewKey) == nil {
-				registry.ClearReplicating(internalName)
-			}
-		}
-	}
-
-	deps := &federation.ArrangeOriginPullDeps{
-		Cache:        s.remoteEdgeCache,
-		PeerResolver: s.peerManager,
-		FedClient:    s.federationClient,
-		InstanceID:   s.instanceID,
-		Logger:       s.logger,
-	}
-	result, err := deps.ArrangeOriginPull(ctx, federation.ArrangeOriginPullRequest{
-		InternalName:  internalName,
-		Remote:        remote,
-		RemoteCluster: remoteCluster,
-		TenantID:      tenantID,
-		Lat:           lat,
-		Lon:           lon,
-		LBPicker: func(pickCtx context.Context, pickLat, pickLon float64, pickTenant string) (string, string, string, error) {
-			lbCtx := context.WithValue(pickCtx, ctxkeys.KeyCapability, "edge")
-			if pickTenant != "" {
-				lbCtx = context.WithValue(lbCtx, ctxkeys.KeyClusterScope, pickTenant)
-			}
-			nodes, pickErr := s.lb.GetTopNodesWithScores(lbCtx, "", pickLat, pickLon, nil, "", 1, false)
-			if pickErr != nil {
-				return "", "", "", pickErr
-			}
-			if len(nodes) != 1 {
-				return "", "", "", federation.ErrOriginPullNoDest
-			}
-			return nodes[0].Host, nodes[0].NodeID, nodes[0].ClusterID, nil
-		},
-	})
-	if err != nil {
-		if federation.IsArrangeInfraError(err) {
-			s.logger.WithError(err).WithFields(logging.Fields{
-				"stream":         internalName,
-				"remote_cluster": remoteCluster,
-			}).Error("ArrangeOriginPull: infra failure; refusing to silently redirect")
-			return nil, err
-		}
-		return nil, nil
-	}
-	if result == nil {
-		return nil, nil
-	}
-	endpoint := s.buildLocalEndpoint(result.DestNodeID, result.DestNodeBaseURL, viewKey)
-	if endpoint != nil {
-		return &sharedpb.ViewerEndpointResponse{Primary: endpoint, Metadata: original.Metadata}, nil
-	}
-	return nil, nil
-}
-
-func (s *FoghornGRPCServer) tryBeginOriginPull(streamName string) bool {
-	if streamName == "" {
-		return false
-	}
-	s.originPullMu.Lock()
-	defer s.originPullMu.Unlock()
-	if _, exists := s.originPulling[streamName]; exists {
-		return false
-	}
-	s.originPulling[streamName] = struct{}{}
-	return true
-}
-
-func (s *FoghornGRPCServer) finishOriginPull(streamName string) {
-	if streamName == "" {
-		return
-	}
-	s.originPullMu.Lock()
-	delete(s.originPulling, streamName)
-	s.originPullMu.Unlock()
-}
-
-// buildLocalEndpoint constructs a ViewerEndpoint from a local node serving
-// an active inbound replication. Takes the dest-node identity directly so
-// callers can pass it from either the registry's Location or any other
-// origin-pull bookkeeping without round-tripping through a record type.
-func (s *FoghornGRPCServer) buildLocalEndpoint(destNodeID, destNodeBaseURL, viewKey string) *sharedpb.ViewerEndpoint {
-	outputs, exists := control.GetNodeOutputs(destNodeID)
-	if !exists || outputs.Outputs == nil {
-		return nil
-	}
-	endpoint := control.BuildViewerEndpointFromOutputs(destNodeID, outputs, viewKey, true)
-	if endpoint != nil && destNodeBaseURL != "" {
-		endpoint.BaseUrl = destNodeBaseURL
-	}
-	return endpoint
-}
-
-// queryStreamFanOut performs cold-start QueryStream to peer clusters when EdgeSummary is empty.
-func (s *FoghornGRPCServer) queryStreamFanOut(ctx context.Context, internalName, tenantID string, lat, lon float64, peers []*clusterpeerpb.TenantClusterPeer) []balancer.RemoteEdgeCandidate {
-	if s.federationClient == nil || s.peerManager == nil {
-		return nil
-	}
-
-	type result struct {
-		candidates []balancer.RemoteEdgeCandidate
-	}
-	ch := make(chan result, len(peers))
-	var wg sync.WaitGroup
-
-	for _, peer := range peers {
-		if peer.GetClusterId() == s.clusterID || peer.GetClusterId() == "" || control.IsServedCluster(peer.GetClusterId()) {
-			continue
-		}
-		addr := s.peerManager.GetPeerAddr(peer.GetClusterId())
-		if addr == "" {
-			continue
-		}
-		wg.Add(1)
-		go func(peerID, peerAddr string) {
-			defer wg.Done()
-			qCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-			defer cancel()
-			resp, err := s.federationClient.QueryStream(qCtx, peerID, peerAddr, &foghornfederationpb.QueryStreamRequest{
-				StreamName:        internalName,
-				ViewerLat:         lat,
-				ViewerLon:         lon,
-				RequestingCluster: s.clusterID,
-				TenantId:          tenantID,
-			})
-			if err != nil || resp == nil || len(resp.Candidates) == 0 {
-				ch <- result{}
-				return
-			}
-			var cands []balancer.RemoteEdgeCandidate
-			for _, c := range resp.Candidates {
-				cands = append(cands, balancer.RemoteEdgeCandidate{
-					ClusterID:   peerID,
-					NodeID:      c.NodeId,
-					BaseURL:     c.BaseUrl,
-					GeoLat:      c.GeoLat,
-					GeoLon:      c.GeoLon,
-					BWAvailable: c.BwAvailable,
-					CPUPercent:  c.CpuPercent,
-					RAMUsed:     c.RamUsed,
-					RAMMax:      c.RamMax,
-				})
-			}
-			ch <- result{candidates: cands}
-		}(peer.GetClusterId(), addr)
-	}
-	go func() { wg.Wait(); close(ch) }()
-
-	var all []balancer.RemoteEdgeCandidate
-	for r := range ch {
-		all = append(all, r.candidates...)
-	}
-	return all
 }
 
 // resolveDVRViewerEndpoint routes DVR viewer requests by lifecycle:
@@ -3313,16 +2915,18 @@ func overrideActiveDVRMetadata(resp *sharedpb.ViewerEndpointResponse, dispatch *
 func (s *FoghornGRPCServer) resolveArtifactViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest, lat, lon float64, resolution *control.ContentResolution) (*sharedpb.ViewerEndpointResponse, error) {
 	start := time.Now()
 	deps := &control.PlaybackDependencies{
-		DB:                          s.db,
-		LB:                          s.lb,
-		GeoLat:                      lat,
-		GeoLon:                      lon,
-		FedClient:                   s.federationClient,
-		PeerResolver:                s.peerManager,
-		LocalClusterID:              s.clusterID,
-		RemoteArtifacts:             s.remoteArtifactLookup(),
-		OfficialClusterID:           resolution.OfficialClusterID,
-		AllowPlatformSharedPlayback: resolution.AllowPlatformSharedPlayback,
+		DB:                           s.db,
+		LB:                           s.lb,
+		GeoLat:                       lat,
+		GeoLon:                       lon,
+		FedClient:                    s.federationClient,
+		PeerResolver:                 s.peerManager,
+		LocalClusterID:               s.clusterID,
+		RemoteArtifacts:              s.remoteArtifactLookup(),
+		OfficialClusterID:            resolution.OfficialClusterID,
+		AllowPlatformSharedPlayback:  resolution.AllowPlatformSharedPlayback,
+		StoredMediaPlacement:         s.storedMediaPlacement,
+		StoredMediaPlacementRequired: s.storedMediaPlacementRequired,
 	}
 
 	var response *sharedpb.ViewerEndpointResponse
@@ -3336,6 +2940,10 @@ func (s *FoghornGRPCServer) resolveArtifactViewerEndpoint(ctx context.Context, r
 		if errors.Is(err, control.ErrCrossClusterArtifactUnavailable) {
 			// Fail-fast — peer origin hasn't pushed the artifact to S3
 			// yet. codes.Unavailable; caller retries at the app layer.
+			return nil, status.Error(codes.Unavailable, err.Error())
+		}
+		// A serving-policy refusal is retryable and is not a missing artifact.
+		if errors.Is(err, control.ErrStoredMediaPlacementUnavailable) {
 			return nil, status.Error(codes.Unavailable, err.Error())
 		}
 		if strings.Contains(err.Error(), "not found") {

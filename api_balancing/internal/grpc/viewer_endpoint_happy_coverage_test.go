@@ -31,10 +31,9 @@ import (
 // resolution and assert the type-dispatch DECISION (which sub-resolver fires) plus
 // the billing/payment GATE outcome.
 //
-// Federation/remote-peer arms (confirmRemoteEndpoint, arrangeOriginPull,
-// queryStreamFanOut, resolveRemoteArtifact) are deliberately skipped: they need a
-// live federationClient + peerManager channel to a peer cluster, which is out of
-// reach of an in-process fake. Reported in the structured output.
+// The remaining federation arm (resolveRemoteArtifact) is deliberately skipped:
+// it needs a live federationClient + peerManager channel to a peer cluster,
+// which is out of reach of an in-process fake. Reported in the structured output.
 
 // commodoreViewerHappyFake is an in-process Commodore InternalService double whose
 // resolution RPCs are settable funcs. Unset RPCs return an empty/not-found
@@ -156,11 +155,15 @@ func newViewerHappyManager(t *testing.T) (*state.StreamStateManager, *balancer.L
 // HLS outputs and marks the live stream present+active on it (the balancer's
 // presence requirement for a push/live+ stream — without an active input on some
 // node every candidate is rejected). Mirrors the control-package live-winner
-// recipe. The stream presence is keyed by the BARE internal name.
+// recipe. The stream presence is keyed by the BARE internal name. The HLS
+// listener is advertised the way Mist reports one — a template whose HOST is
+// filled from the node's public base — so a prepared endpoint can be resolved
+// from it; the node offers no WebRTC listener, so protocol negotiation must
+// fall through to HLS instead of inventing a WebRTC URL.
 func seedLiveEdgeViewerHappy(t *testing.T, sm *state.StreamStateManager, nodeID, baseURL, bareInternalName, tenantID string) {
 	t.Helper()
 	lat, lon := 52.0, 5.0
-	sm.SetNodeInfo(nodeID, baseURL, true, &lat, &lon, "loc-"+nodeID, "", map[string]any{"HLS": "/hls/$/index.m3u8"})
+	sm.SetNodeInfo(nodeID, baseURL, true, &lat, &lon, "loc-"+nodeID, "", map[string]any{"HLS": "http://HOST:8080/hls/$/index.m3u8"})
 	sm.UpdateNodeMetrics(nodeID, struct {
 		CPU                  float64
 		RAMMax               float64
@@ -257,8 +260,9 @@ func TestResolveViewerEndpoint_LiveDispatchesToLiveWinner(t *testing.T) {
 		},
 	})
 
-	s := &FoghornGRPCServer{logger: logrus.New(), lb: lb, originPulling: map[string]struct{}{},
+	s := &FoghornGRPCServer{logger: logrus.New(), lb: lb,
 		cacheInvalidator: &billingCacheViewerHappy{status: &triggers.BillingStatus{TenantID: "tenant-live", BillingModel: "postpaid"}}}
+	s.SetViewerPlacementPreparer(viewerPlacementFunc(prepareViewerFromNodeState))
 	resp, err := s.ResolveViewerEndpoint(context.Background(), &sharedpb.ViewerEndpointRequest{ContentId: "live-pid"})
 	if err != nil {
 		t.Fatalf("live resolve failed: %v", err)
@@ -318,7 +322,7 @@ func TestResolveViewerEndpoint_VodDispatchesToStorageNode(t *testing.T) {
 		},
 	})
 
-	s := &FoghornGRPCServer{logger: logrus.New(), lb: lb, db: db, originPulling: map[string]struct{}{},
+	s := &FoghornGRPCServer{logger: logrus.New(), lb: lb, db: db,
 		cacheInvalidator: &billingCacheViewerHappy{status: &triggers.BillingStatus{TenantID: "tenant-vod", BillingModel: "postpaid"}}}
 	resp, err := s.ResolveViewerEndpoint(context.Background(), &sharedpb.ViewerEndpointRequest{ContentId: "vod-pid"})
 	if err != nil {
@@ -367,7 +371,7 @@ func TestResolveViewerEndpoint_ChapterDispatchesToVODStorageNode(t *testing.T) {
 		},
 	})
 
-	s := &FoghornGRPCServer{logger: logrus.New(), lb: lb, db: db, originPulling: map[string]struct{}{},
+	s := &FoghornGRPCServer{logger: logrus.New(), lb: lb, db: db,
 		cacheInvalidator: &billingCacheViewerHappy{status: &triggers.BillingStatus{TenantID: "tenant-chapter", BillingModel: "postpaid"}}}
 	resp, err := s.ResolveViewerEndpoint(context.Background(), &sharedpb.ViewerEndpointRequest{ContentId: "chapter-pid"})
 	if err != nil {
@@ -393,9 +397,9 @@ func TestResolveViewerEndpoint_ChapterDispatchesToVODStorageNode(t *testing.T) {
 func TestResolveViewerEndpoint_ActiveDVRRelabelsLiveWinner(t *testing.T) {
 	t.Cleanup(control.SetupTestRegistry("", nil))
 	sm, lb := newViewerHappyManager(t)
-	// The active DVR routes via dvr+<name>; ResolveLivePlayback drops the dvr+
-	// prefix and (cold-start) selects any eligible edge, so seed a present edge
-	// under the bare name to give it a winner.
+	// The active DVR routes via dvr+<name>, and live resolution looks the stream
+	// up under its bare internal name, so seed a present edge under that name to
+	// give the dispatch a winner.
 	seedLiveEdgeViewerHappy(t, sm, "edge-dvr-1", "https://edgedvr.example.com", "dvrstream", "tenant-dvr")
 
 	db, mock, err := sqlmock.New()
@@ -425,6 +429,9 @@ func TestResolveViewerEndpoint_ActiveDVRRelabelsLiveWinner(t *testing.T) {
 				InternalName: "dvrstream",
 				TenantId:     "tenant-dvr",
 				ContentType:  "dvr",
+				// A DVR artifact is signed under its parent live stream, which
+				// is the identity the live lane places the viewer on.
+				StreamId: "stream-dvr",
 			}, nil
 		},
 		// ResolveDVRArtifactDispatch: internal-name -> dvr artifact, then hash -> dvr.
@@ -450,8 +457,9 @@ func TestResolveViewerEndpoint_ActiveDVRRelabelsLiveWinner(t *testing.T) {
 		},
 	})
 
-	s := &FoghornGRPCServer{logger: logrus.New(), lb: lb, db: db, originPulling: map[string]struct{}{},
+	s := &FoghornGRPCServer{logger: logrus.New(), lb: lb, db: db,
 		cacheInvalidator: &billingCacheViewerHappy{status: &triggers.BillingStatus{TenantID: "tenant-dvr", BillingModel: "postpaid"}}}
+	s.SetViewerPlacementPreparer(viewerPlacementFunc(prepareViewerFromNodeState))
 	resp, err := s.ResolveViewerEndpoint(context.Background(), &sharedpb.ViewerEndpointRequest{ContentId: "dvr-pid"})
 	if err != nil {
 		t.Fatalf("active DVR resolve failed: %v", err)
@@ -494,6 +502,7 @@ func TestResolveViewerEndpoint_SuspendedTenantBlocked(t *testing.T) {
 			return &commodorepb.ResolvePlaybackIDResponse{
 				InternalName: "live+suspstream",
 				TenantId:     "tenant-susp",
+				StreamId:     "stream-susp",
 			}, nil
 		},
 	})
@@ -502,9 +511,11 @@ func TestResolveViewerEndpoint_SuspendedTenantBlocked(t *testing.T) {
 	s := &FoghornGRPCServer{
 		logger:           logrus.New(),
 		lb:               lb,
-		originPulling:    map[string]struct{}{},
 		cacheInvalidator: billing,
 	}
+	// With the state-backed preparer installed a passing gate would resolve to
+	// the seeded edge, so the denial below can only come from the gate.
+	s.SetViewerPlacementPreparer(viewerPlacementFunc(prepareViewerFromNodeState))
 	_, err := s.ResolveViewerEndpoint(context.Background(), &sharedpb.ViewerEndpointRequest{ContentId: "live-pid"})
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("suspended owner: want FailedPrecondition (payment gate), got %v", err)
@@ -556,6 +567,7 @@ func TestResolveViewerEndpoint_PrepaidNegativeBalanceBlocked(t *testing.T) {
 			return &commodorepb.ResolvePlaybackIDResponse{
 				InternalName: "live+negstream",
 				TenantId:     "tenant-neg",
+				StreamId:     "stream-neg",
 			}, nil
 		},
 	})
@@ -563,9 +575,9 @@ func TestResolveViewerEndpoint_PrepaidNegativeBalanceBlocked(t *testing.T) {
 	s := &FoghornGRPCServer{
 		logger:           logrus.New(),
 		lb:               lb,
-		originPulling:    map[string]struct{}{},
 		cacheInvalidator: &billingCacheViewerHappy{status: &triggers.BillingStatus{TenantID: "tenant-neg", BillingModel: "prepaid", IsBalanceNegative: true}},
 	}
+	s.SetViewerPlacementPreparer(viewerPlacementFunc(prepareViewerFromNodeState))
 	_, err := s.ResolveViewerEndpoint(context.Background(), &sharedpb.ViewerEndpointRequest{ContentId: "live-pid"})
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("prepaid negative balance: want FailedPrecondition (payment gate), got %v", err)
@@ -589,6 +601,7 @@ func TestResolveViewerEndpoint_HealthyPrepaidProceeds(t *testing.T) {
 			return &commodorepb.ResolvePlaybackIDResponse{
 				InternalName: "live+okstream",
 				TenantId:     "tenant-ok",
+				StreamId:     "stream-ok",
 			}, nil
 		},
 	})
@@ -596,9 +609,9 @@ func TestResolveViewerEndpoint_HealthyPrepaidProceeds(t *testing.T) {
 	s := &FoghornGRPCServer{
 		logger:           logrus.New(),
 		lb:               lb,
-		originPulling:    map[string]struct{}{},
 		cacheInvalidator: &billingCacheViewerHappy{status: &triggers.BillingStatus{TenantID: "tenant-ok", BillingModel: "prepaid"}},
 	}
+	s.SetViewerPlacementPreparer(viewerPlacementFunc(prepareViewerFromNodeState))
 	resp, err := s.ResolveViewerEndpoint(context.Background(), &sharedpb.ViewerEndpointRequest{ContentId: "live-pid"})
 	if err != nil {
 		t.Fatalf("healthy prepaid must not be gated, got %v", err)

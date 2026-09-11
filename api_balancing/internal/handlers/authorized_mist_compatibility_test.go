@@ -42,7 +42,7 @@ func TestAuthorizedMistCompatibilityAcceptsInputBalancerRequestShape(t *testing.
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequestWithContext(t.Context(), http.MethodGet, base.RequestURI(), nil)
-	AuthorizedMistServerCompatibilityHandler(c)
+	AuthorizedMistSourceHandler(c)
 	if w.Code == http.StatusUnauthorized {
 		t.Fatalf("Mist-shaped source request lost capability: %s", w.Body.String())
 	}
@@ -69,7 +69,7 @@ func TestAuthorizedMistCompatibilityRejectsOperationsOutsideSourceLookup(t *test
 			w := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(w)
 			c.Request = httptest.NewRequestWithContext(t.Context(), http.MethodGet, base.RequestURI(), nil)
-			AuthorizedMistServerCompatibilityHandler(c)
+			AuthorizedMistSourceHandler(c)
 			if w.Code != http.StatusForbidden {
 				t.Fatalf("status = %d, want %d (body=%q)", w.Code, http.StatusForbidden, w.Body.String())
 			}

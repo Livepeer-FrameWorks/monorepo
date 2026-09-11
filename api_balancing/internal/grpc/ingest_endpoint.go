@@ -12,6 +12,7 @@ import (
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
@@ -37,6 +38,10 @@ func (s *FoghornGRPCServer) ResolveIngestEndpoint(ctx context.Context, req *shar
 	streamKey := req.GetStreamKey()
 	if streamKey == "" {
 		return nil, status.Error(codes.InvalidArgument, "stream_key is required")
+	}
+	protocol, protocolErr := placement.IngestProtocolName(req.GetProtocol())
+	if protocolErr != nil {
+		return nil, status.Error(codes.InvalidArgument, protocolErr.Error())
 	}
 	var localContext *commodorepb.ResolveStreamContextResponse
 	localHandled := false
@@ -97,9 +102,11 @@ func (s *FoghornGRPCServer) ResolveIngestEndpoint(ctx context.Context, req *shar
 	}
 
 	response, err := control.ResolveIngestEndpoints(ctx, &control.IngestDependencies{
-		LB:     s.lb,
-		GeoLat: lat,
-		GeoLon: lon,
+		LB:        s.lb,
+		GeoLat:    lat,
+		GeoLon:    lon,
+		Protocol:  protocol,
+		Placement: s.ingestPlacementPreparer, PlacementRequired: s.ingestPlacementRequired,
 	}, streamCtx, streamKey)
 	if err != nil {
 		s.logger.WithFields(logging.Fields{

@@ -1,16 +1,15 @@
 package handlers
 
 import (
-	"context"
 	"math"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/triggers"
 
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
@@ -19,9 +18,19 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
+var ingestPlacementPreparer control.IngestPlacementPreparer
+var ingestPlacementRequired bool
+
+// SetIngestPlacementPreparer installs the policy path before serving requests.
+// Once required, a missing adapter is unavailable, never legacy selection.
+func SetIngestPlacementPreparer(preparer control.IngestPlacementPreparer) {
+	ingestPlacementPreparer = preparer
+	ingestPlacementRequired = true
+}
+
 // HandleIngestFrontDoor resolves the best ingest node for a stream key.
 //
-// GET returns up to maxIngestEndpoints ranked candidates, with every protocol
+// GET returns one prepared destination per advertised protocol, with each protocol
 // URL, for encoders and scripts that cannot follow a redirect. POST 307s to the
 // chosen node's WHIP URL:
 // RFC 9725 has WHIP clients follow redirects on the initial POST, and 307
@@ -57,12 +66,28 @@ func HandleIngestFrontDoor(c *gin.Context) {
 	// address, which behind a proxy is the proxy — the request would be limited
 	// and routed as the publisher but logged as nginx.
 	clientIP := trustedClientIP(c)
-	if clientIP != "" {
-		c.Set(string(ctxkeys.KeyClientIP), clientIP)
-		c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), ctxkeys.KeyClientIP, clientIP))
-	}
 	if !enforceIngestRateLimit(c, clientIP) {
 		return
+	}
+	requiredProtocol := ""
+	query, queryErr := url.ParseQuery(c.Request.URL.RawQuery)
+	if queryErr != nil {
+		respondPlaybackError(c, http.StatusBadRequest, "INVALID_INGEST_PROTOCOL", "Invalid ingest query parameters", nil)
+		return
+	}
+	if values, present := query["protocol"]; present {
+		if len(values) != 1 || (values[0] != "whip" && values[0] != "rtmp" && values[0] != "srt") {
+			respondPlaybackError(c, http.StatusBadRequest, "INVALID_INGEST_PROTOCOL", "Use one protocol: whip, rtmp or srt", nil)
+			return
+		}
+		requiredProtocol = values[0]
+	}
+	if c.Request.Method == http.MethodPost {
+		if requiredProtocol != "" && requiredProtocol != "whip" {
+			respondPlaybackError(c, http.StatusBadRequest, "INVALID_INGEST_PROTOCOL", "POST requires WHIP", nil)
+			return
+		}
+		requiredProtocol = "whip"
 	}
 
 	var localContext *commodorepb.ResolveStreamContextResponse
@@ -159,9 +184,11 @@ func HandleIngestFrontDoor(c *gin.Context) {
 	}
 
 	response, err := control.ResolveIngestEndpoints(c.Request.Context(), &control.IngestDependencies{
-		LB:     lb,
-		GeoLat: lat,
-		GeoLon: lon,
+		LB:        lb,
+		GeoLat:    lat,
+		GeoLon:    lon,
+		Protocol:  requiredProtocol,
+		Placement: ingestPlacementPreparer, PlacementRequired: ingestPlacementRequired,
 	}, streamCtx, streamKey)
 	if err != nil {
 		logger.WithFields(logging.Fields{
