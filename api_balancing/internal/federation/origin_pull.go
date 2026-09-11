@@ -13,6 +13,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"github.com/google/uuid"
 )
 
 // defaultArrangeDeps holds a process-wide set of dependencies for
@@ -51,13 +52,15 @@ func DefaultArrange(ctx context.Context, req ArrangeOriginPullRequest) (*Arrange
 // must fail closed (no untracked pulls) and surface an offline/empty
 // response to the requesting Mist or HTTP client.
 var (
-	ErrOriginPullDepsMissing     = errors.New("origin-pull dependencies unavailable")
-	ErrOriginPullRegistryNil     = errors.New("origin-pull stream registry unavailable")
-	ErrOriginPullLockContention  = errors.New("origin-pull lock contention")
-	ErrOriginPullLoop            = errors.New("origin-pull replication loop prevented")
-	ErrOriginPullNoDest          = errors.New("origin-pull destination unidentified")
-	ErrOriginPullPeerUnreachable = errors.New("origin-pull peer address unknown")
-	ErrOriginPullNotifyFailed    = errors.New("origin-pull NotifyOriginPull rejected")
+	ErrOriginPullDepsMissing      = errors.New("origin-pull dependencies unavailable")
+	ErrOriginPullRegistryNil      = errors.New("origin-pull stream registry unavailable")
+	ErrOriginPullLockContention   = errors.New("origin-pull lock contention")
+	ErrOriginPullLoop             = errors.New("origin-pull replication loop prevented")
+	ErrOriginPullNoDest           = errors.New("origin-pull destination unidentified")
+	ErrOriginPullPeerUnreachable  = errors.New("origin-pull peer address unknown")
+	ErrOriginPullNotifyFailed     = errors.New("origin-pull NotifyOriginPull rejected")
+	ErrOriginPullStateUnavailable = errors.New("origin-pull coordination state unavailable")
+	ErrOriginPullSourceBinding    = errors.New("origin-pull source binding is inconsistent")
 )
 
 // IsArrangeInfraError classifies an ArrangeOriginPull error as an
@@ -74,7 +77,11 @@ func IsArrangeInfraError(err error) bool {
 	case err == nil:
 		return false
 	case errors.Is(err, ErrOriginPullDepsMissing),
+		errors.Is(err, context.Canceled),
+		errors.Is(err, context.DeadlineExceeded),
+		errors.Is(err, ErrOriginPullSourceBinding),
 		errors.Is(err, ErrOriginPullRegistryNil),
+		errors.Is(err, ErrOriginPullStateUnavailable),
 		errors.Is(err, ErrOriginPullPeerUnreachable),
 		errors.Is(err, ErrOriginPullNotifyFailed):
 		return true
@@ -107,23 +114,49 @@ type OriginPullLBPicker func(ctx context.Context, lat, lon float64, tenantID str
 // locking, FederationClient is goroutine-safe, peerManager has its own
 // mutex).
 type ArrangeOriginPullDeps struct {
-	Cache        *RemoteEdgeCache
+	Cache *RemoteEdgeCache
+	// Registry is mandatory for receipt-bound placement. Legacy callers may
+	// use the process registry when no explicit registry is supplied.
+	Registry     *control.StreamRegistry
 	PeerResolver OriginPullPeerResolver
-	FedClient    OriginPullFederationClient
-	InstanceID   string
-	Logger       logging.Logger
+	// CellAddress is required for receipt-bound placement pulls. Cluster-keyed
+	// addresses cannot establish a canonical source control-cell identity.
+	CellAddress func(string) string
+	FedClient   OriginPullFederationClient
+	LocalSource *FederationServer
+	InstanceID  string
+	Logger      logging.Logger
 	// EventEmitter receives federation lifecycle events. Optional —
 	// nil-safe. HTTP /source supplies it; gRPC /play arrangement runs
 	// without it.
 	EventEmitter func(*ipcpb.FederationEventData)
+	// Now stamps source acceptance. It must share the clock that reads the
+	// acceptance window, otherwise every source resolution looks overdue for
+	// renewal and re-notifies the origin.
+	Now func() time.Time
+}
+
+func (d *ArrangeOriginPullDeps) now() time.Time {
+	if d != nil && d.Now != nil {
+		return d.Now()
+	}
+	return time.Now()
 }
 
 // ArrangeOriginPullRequest is per-call state.
 type ArrangeOriginPullRequest struct {
-	InternalName  string
-	Remote        *foghornfederationpb.EdgeCandidate
-	RemoteCluster string
-	TenantID      string
+	InternalName      string
+	Remote            *foghornfederationpb.EdgeCandidate
+	RemoteCluster     string
+	TenantID          string
+	SourceGeneration  string
+	SourceRevision    int64
+	AttemptID         string
+	DestinationFence  int64
+	RefreshAcceptance bool
+	// BindPull records the physical attempt before source notification or reuse.
+	// A failure leaves preparation pending and cannot advertise a source URL.
+	BindPull func(*PlacementPullBinding) error
 	// DestClusterID is the authenticated virtual media cluster of the
 	// destination node. It must not be inferred from the Foghorn process:
 	// one control cell can serve nodes from multiple virtual clusters.
@@ -143,27 +176,59 @@ type ArrangeOriginPullRequest struct {
 // means the pull was already arranged by an earlier caller and the
 // returned fields come from the registry's existing Location.
 type ArrangeOriginPullResult struct {
-	DestNodeID      string
-	DestNodeBaseURL string
-	PullDTSCURL     string
-	Reused          bool
+	AttemptID            string
+	SourceCellID         string
+	SourceMediaClusterID string
+	SourceNodeID         string
+	SourceGeneration     string
+	SourceRevision       int64
+	DestNodeID           string
+	DestNodeBaseURL      string
+	PullDTSCURL          string
+	Reused               bool
 }
 
 // ArrangeOriginPull is the single source of truth for cross-cluster
-// origin-pull arrangement. Called from gRPC viewer routing
-// (arrangeOriginPull wrapper that picks the puller via LB), HTTP
-// /source (the caller is the puller via its clientIP), and DVR/native
-// federation paths. Result: a registry-tracked Location with
+// origin-pull arrangement. Called from the placement path, HTTP /source via
+// arrangeRemoteOriginPullFromSource (the caller is the puller, identified by
+// its clientIP), and the DVR path via tryArrangeDVRCrossCluster. Result: a registry-tracked Location with
 // ReplicatingFrom + PullDTSCURL + DestNodeID, and a source-cluster
 // OutboundPullers entry mirroring it. Loop prevention, single-flight
-// per stream, and NotifyOriginPull rejection are uniformly handled.
+// per destination, and NotifyOriginPull rejection are uniformly handled.
 func (d *ArrangeOriginPullDeps) ArrangeOriginPull(ctx context.Context, req ArrangeOriginPullRequest) (*ArrangeOriginPullResult, error) {
-	if d == nil || d.Cache == nil || d.PeerResolver == nil || d.FedClient == nil {
+	ctx, cancelArrange := context.WithTimeout(ctx, 5*time.Second)
+	defer cancelArrange()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if d == nil || d.Cache == nil {
+		return nil, ErrOriginPullDepsMissing
+	}
+	registry := d.Registry
+	if registry == nil && req.BindPull == nil {
+		registry = control.StreamRegistryInstance
+	}
+	if registry == nil {
+		return nil, ErrOriginPullRegistryNil
+	}
+	localSource := d.LocalSource != nil && d.LocalSource.matchesSourceCell(req.RemoteCluster)
+	if req.BindPull != nil {
+		localSource = d.LocalSource != nil && d.LocalSource.sourceControlCellID() == req.RemoteCluster
+	}
+	// A receipt-bound pull still requires the cell resolver, because its source
+	// identity is a control cell by construction. Every other caller needs at
+	// least one resolver: which one answers depends on the namespace it names,
+	// and that is decided at the call below rather than here.
+	if !localSource && (d.FedClient == nil || (req.BindPull != nil && d.CellAddress == nil) ||
+		(d.CellAddress == nil && d.PeerResolver == nil)) {
 		return nil, ErrOriginPullDepsMissing
 	}
 	if req.InternalName == "" || req.Remote == nil || req.RemoteCluster == "" {
 		return nil, fmt.Errorf("invalid arrange request: stream=%q remote=%v cluster=%q",
 			req.InternalName, req.Remote, req.RemoteCluster)
+	}
+	if err := bindOriginPullRequest(&req); err != nil {
+		return nil, err
 	}
 	emit := func(data *ipcpb.FederationEventData) {
 		if d.EventEmitter == nil {
@@ -173,85 +238,35 @@ func (d *ArrangeOriginPullDeps) ArrangeOriginPull(ctx context.Context, req Arran
 			data.StreamTenantId = &req.TenantID
 		}
 		if data.GetOriginClusterId() == "" {
-			originClusterID := ""
-			if control.StreamRegistryInstance != nil {
-				originClusterID, _ = control.StreamRegistryInstance.OriginCluster(req.InternalName)
-			}
-			if originClusterID == "" {
-				originClusterID = req.RemoteCluster
-			}
-			if originClusterID != "" {
+			// Only the registry answers this in the media-cluster namespace.
+			// RemoteCluster is a control cell on the placement and DVR paths, so
+			// falling back to it would file a cell id under an analytics dimension
+			// that means media cluster; an unset dimension is honest, a wrong one
+			// is not. RemoteCluster is already carried as remote_cluster.
+			if originClusterID, _ := registry.OriginCluster(req.InternalName); originClusterID != "" {
 				data.OriginClusterId = &originClusterID
 			}
 		}
 		d.EventEmitter(data)
 	}
-	// Refuse pre-NotifyOriginPull when we can't durably MarkReplicating
-	// locally. Mirrors the source-side guard in PrepareOriginPull
-	// (federation/server.go) so neither side records a half-committed
-	// replication when the registry is missing during bootstrap/reconnect.
-	if control.StreamRegistryInstance == nil {
-		return nil, ErrOriginPullRegistryNil
-	}
-
-	// Reuse existing replication if present — idempotent for repeat
-	// arrangement requests on the same stream.
-	if reused := lookupExistingReplication(ctx, req.InternalName); reused != nil {
-		return reused, nil
-	}
-
-	lockOwner := d.InstanceID
-	if lockOwner == "" {
-		lockOwner = "foghorn"
-	}
-	if !d.Cache.TryAcquireOriginPullLock(ctx, req.InternalName, lockOwner) {
-		// Another foghorn instance is arranging right now. Brief wait,
-		// then look for the resulting registry entry.
-		time.Sleep(50 * time.Millisecond)
-		if reused := lookupExistingReplication(ctx, req.InternalName); reused != nil {
-			return reused, nil
-		}
-		return nil, ErrOriginPullLockContention
-	}
-	defer d.Cache.ReleaseOriginPullLock(ctx, req.InternalName, lockOwner)
-
-	// Loop prevention: refuse to pull from a cluster that's already
-	// pulling THIS stream from us.
-	if replications, err := d.Cache.GetRemoteReplications(ctx, req.InternalName); err == nil && len(replications) > 0 {
-		for _, r := range replications {
-			if r.ClusterID == req.RemoteCluster {
-				if d.EventEmitter != nil {
-					emit(&ipcpb.FederationEventData{
-						EventType:                  ipcpb.FederationEventType_REPLICATION_LOOP_PREVENTED,
-						RemoteCluster:              req.RemoteCluster,
-						StreamName:                 &req.InternalName,
-						BlockedCluster:             &req.RemoteCluster,
-						ExistingReplicationCluster: &r.ClusterID,
-					})
-				}
-				return nil, ErrOriginPullLoop
-			}
-		}
-	}
-
-	// Resolve destination node — caller-supplied wins, else LB pick.
+	// Resolve the destination before reuse; another node's pull is never a
+	// substitute for the node selected for this viewer or source request.
 	destNodeID := req.DestNodeID
 	destNodeBaseURL := req.DestNodeBaseURL
 	if destNodeID == "" {
 		if req.LBPicker == nil {
 			return nil, ErrOriginPullNoDest
 		}
-		host, nodeID, clusterID, err := req.LBPicker(ctx, req.Lat, req.Lon, req.TenantID)
+		host, nodeID, pickedClusterID, err := req.LBPicker(ctx, req.Lat, req.Lon, req.TenantID)
 		if err != nil {
 			return nil, fmt.Errorf("LB pick: %w", err)
 		}
 		if nodeID == "" {
 			return nil, ErrOriginPullNoDest
 		}
-		destNodeID = nodeID
-		destNodeBaseURL = host
+		destNodeID, destNodeBaseURL = nodeID, host
 		if strings.TrimSpace(req.DestClusterID) == "" {
-			req.DestClusterID = clusterID
+			req.DestClusterID = pickedClusterID
 		}
 	}
 	destClusterID := strings.TrimSpace(req.DestClusterID)
@@ -265,34 +280,156 @@ func (d *ArrangeOriginPullDeps) ArrangeOriginPull(ctx context.Context, req Arran
 		}
 	}
 	if destClusterID == "" {
-		d.Logger.WithFields(logging.Fields{
-			"stream": req.InternalName, "dest_node": destNodeID, "remote_cluster": req.RemoteCluster,
-		}).Warn("Origin-pull refused because the selected node has no authenticated cluster identity")
-		if d.EventEmitter != nil {
-			reason := "destination node cluster unavailable"
-			emit(&ipcpb.FederationEventData{
-				EventType: ipcpb.FederationEventType_ORIGIN_PULL_FAILED, RemoteCluster: req.RemoteCluster,
-				StreamName: &req.InternalName, DestNode: &destNodeID, FailureReason: &reason,
-			})
-		}
 		return nil, fmt.Errorf("%w: destination node cluster unavailable", ErrOriginPullNoDest)
+	}
+	if localSource {
+		if err := d.LocalSource.validateLocalPullDestination(req.RemoteCluster, req.Remote.GetClusterId(), req.Remote.GetNodeId(), destClusterID, destNodeID); err != nil {
+			return nil, fmt.Errorf("%w: local destination: %w", ErrOriginPullSourceBinding, err)
+		}
+	}
+	if reused, reuseErr := lookupExistingReplication(ctx, registry, req, destNodeID, destClusterID); reused != nil || reuseErr != nil {
+		return reused, reuseErr
+	}
+
+	lockOwner := d.InstanceID + ":" + uuid.NewString()
+	lockKey := originPullDestinationKey(req.InternalName, destNodeID)
+	acquired, leaseErr := d.Cache.AcquireOriginPullLock(ctx, lockKey, lockOwner)
+	if leaseErr != nil {
+		return nil, fmt.Errorf("%w: acquire destination lease: %w", ErrOriginPullStateUnavailable, leaseErr)
+	}
+	if !acquired {
+		// Another foghorn instance is arranging right now. Brief wait,
+		// then look for the resulting registry entry.
+		timer := time.NewTimer(50 * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+		if reused, reuseErr := lookupExistingReplication(ctx, registry, req, destNodeID, destClusterID); reused != nil || reuseErr != nil {
+			return reused, reuseErr
+		}
+		return nil, ErrOriginPullLockContention
+	}
+	defer func() {
+		releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Second)
+		defer cancel()
+		d.Cache.ReleaseOriginPullLock(releaseCtx, lockKey, lockOwner)
+	}()
+	if reused, reuseErr := lookupExistingReplication(ctx, registry, req, destNodeID, destClusterID); reused != nil || reuseErr != nil {
+		return reused, reuseErr
+	}
+
+	// Loop prevention: refuse to pull from a cluster that's already
+	// pulling THIS stream from us.
+	replications, replicationErr := d.Cache.GetRemoteReplications(ctx, req.InternalName)
+	if replicationErr != nil {
+		return nil, fmt.Errorf("%w: read loop prevention: %w", ErrOriginPullStateUnavailable, replicationErr)
+	}
+	if len(replications) > 0 {
+		for _, r := range replications {
+			// RemoteCluster is not one namespace across callers: the placement
+			// and DVR paths name a cell, while the legacy /source path names the
+			// origin media cluster it got from Commodore. All three recorded
+			// identities are compared, so the guard holds on every arranging path
+			// rather than silently matching nothing on one of them. ClusterID
+			// alone would not cover the /source path, because it is the sender's
+			// PeerChannel identity rather than the media cluster it pulls into.
+			if (r.ControlCellID != "" && r.ControlCellID == req.RemoteCluster) ||
+				(r.MediaClusterID != "" && r.MediaClusterID == req.RemoteCluster) ||
+				(r.ClusterID != "" && r.ClusterID == req.RemoteCluster) {
+				if d.EventEmitter != nil {
+					emit(&ipcpb.FederationEventData{
+						EventType:                  ipcpb.FederationEventType_REPLICATION_LOOP_PREVENTED,
+						RemoteCluster:              req.RemoteCluster,
+						StreamName:                 &req.InternalName,
+						BlockedCluster:             &req.RemoteCluster,
+						ExistingReplicationCluster: &r.ClusterID,
+					})
+				}
+				return nil, ErrOriginPullLoop
+			}
+		}
+	}
+	revalidatedExisting := false
+	current, found, readErr := registry.CurrentInboundPull(ctx, req.InternalName, destNodeID)
+	if readErr != nil {
+		return nil, fmt.Errorf("%w: read current destination: %w", ErrOriginPullStateUnavailable, readErr)
+	}
+	if found &&
+		req.Remote.GetClusterId() != "" && originPullRecordMatches(req, destClusterID, current) {
+		if current.SourceMediaClusterID != "" && current.SourceMediaClusterID != req.Remote.GetClusterId() {
+			return nil, ErrOriginPullSourceBinding
+		}
+		if !canonicalPullAttempt(current.AttemptID) {
+			return nil, ErrOriginPullSourceBinding
+		}
+		// Revalidate missing metadata using the existing physical attempt so
+		// source and destination do not end up tracking different attempts.
+		req.AttemptID = current.AttemptID
+		revalidatedExisting = true
 	}
 
 	// NotifyOriginPull — tell the source cluster we're pulling.
-	peerAddr := d.PeerResolver.GetPeerAddr(req.RemoteCluster)
-	if peerAddr == "" {
-		return nil, ErrOriginPullPeerUnreachable
+	//
+	// RemoteCluster is not one namespace across callers: placement and the
+	// cross-cluster DVR path name a control cell, while the legacy /source path
+	// names the origin media cluster. The two resolvers are keyed accordingly —
+	// GetPeerAddr by media cluster, CellAddress by cell — so both are tried
+	// rather than choosing one from whether a placement binding is present.
+	// Selecting on BindPull left every cell-named caller without a binding
+	// resolving through the cluster-keyed map, which can only miss.
+	peerAddr := ""
+	if !localSource {
+		if d.CellAddress != nil {
+			peerAddr = d.CellAddress(req.RemoteCluster)
+		}
+		// A receipt-bound pull resolves through the cell and nowhere else: a
+		// cluster-keyed address cannot establish canonical source cell identity,
+		// so falling back would let it bind to an address it cannot vouch for.
+		// Every other caller may fall back, because whether RemoteCluster names
+		// a cell or a media cluster depends on which path built the request.
+		if peerAddr == "" && req.BindPull == nil && d.PeerResolver != nil {
+			peerAddr = d.PeerResolver.GetPeerAddr(req.RemoteCluster)
+		}
+		if peerAddr == "" {
+			return nil, ErrOriginPullPeerUnreachable
+		}
+	}
+	if err := bindArrangedPull(ctx, req, PlacementPullBinding{
+		DestinationFence: req.DestinationFence,
+		AttemptID:        req.AttemptID, SourceCellID: req.RemoteCluster, SourceClusterID: req.Remote.GetClusterId(),
+		SourceNodeID: req.Remote.GetNodeId(), SourceGeneration: req.SourceGeneration, SourceRevision: req.SourceRevision,
+	}); err != nil {
+		return nil, err
 	}
 	notifyCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	ack, err := d.FedClient.NotifyOriginPull(notifyCtx, req.RemoteCluster, peerAddr, &foghornfederationpb.OriginPullNotification{
-		StreamName:    req.InternalName,
-		SourceNodeId:  req.Remote.NodeId,
-		DestClusterId: destClusterID,
-		DestNodeId:    destNodeID,
-		TenantId:      req.TenantID,
-	})
-	if err != nil || ack == nil || !ack.GetAccepted() {
+	notification := &foghornfederationpb.OriginPullNotification{
+		StreamName:       req.InternalName,
+		SourceNodeId:     req.Remote.NodeId,
+		DestClusterId:    destClusterID,
+		DestNodeId:       destNodeID,
+		TenantId:         req.TenantID,
+		SourceGeneration: req.SourceGeneration,
+		SourceRevision:   req.SourceRevision,
+		AttemptId:        req.AttemptID,
+	}
+	if req.Remote.GetClusterId() != "" {
+		notification.SourceCellId, notification.SourceClusterId = req.RemoteCluster, req.Remote.GetClusterId()
+	}
+	var ack *foghornfederationpb.OriginPullAck
+	var err error
+	if localSource {
+		ack, err = d.LocalSource.prepareLocalOriginPull(notifyCtx, notification)
+	} else {
+		ack, err = d.FedClient.NotifyOriginPull(notifyCtx, req.RemoteCluster, peerAddr, notification)
+	}
+	if contextErr := notifyCtx.Err(); contextErr != nil {
+		return nil, fmt.Errorf("%w: source notification deadline: %w", ErrOriginPullNotifyFailed, contextErr)
+	}
+	if err != nil || ack == nil || !ack.GetAccepted() || strings.TrimSpace(ack.GetDtscUrl()) == "" {
 		reason := "rejected"
 		if err != nil {
 			reason = err.Error()
@@ -310,60 +447,121 @@ func (d *ArrangeOriginPullDeps) ArrangeOriginPull(ctx context.Context, req Arran
 		}
 		return nil, fmt.Errorf("%w: %s", ErrOriginPullNotifyFailed, reason)
 	}
+	if !originPullAckMatches(req, destClusterID, destNodeID, ack) {
+		return nil, ErrOriginPullSourceBinding
+	}
 
-	// MarkReplicating — registry entry that /source + /balance use to
-	// resolve viewers to the puller edge. Registry presence was checked
-	// at function entry; nil-guard removed so a missing registry can
-	// never silently succeed past this point.
-	control.StreamRegistryInstance.MarkReplicating(
-		req.InternalName,
-		req.RemoteCluster,
-		ack.DtscUrl,
-		destNodeID,
-		destNodeBaseURL,
-		req.Remote.NodeId,
-	)
-	state.DefaultManager().UpdateNodeStats(req.InternalName, destNodeID, 0, 1, 0, 0, true)
+	// Persist the exact destination before advertising a source URL or starting
+	// its pull. A durable-state failure cannot become an untracked success.
+	pull, err := registry.RecordInboundPull(ctx, req.InternalName, control.InboundPull{
+		TenantID: req.TenantID, AttemptID: req.AttemptID, SourceClusterID: req.RemoteCluster, SourceNodeID: req.Remote.NodeId,
+		SourceMediaClusterID: ack.GetSourceClusterId(),
+		SourceGeneration:     req.SourceGeneration, SourceRevision: req.SourceRevision, DestClusterID: destClusterID,
+		DestNodeID: destNodeID, DestNodeBaseURL: destNodeBaseURL, DTSCURL: ack.DtscUrl,
+		SourceAcceptedAt:  d.now(),
+		PlacementRequired: req.BindPull != nil,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("%w: persist destination: %w", ErrOriginPullRegistryNil, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if req.BindPull != nil && pull.AttemptID != req.AttemptID {
+		return nil, ErrOriginPullSourceBinding
+	}
 
 	d.Logger.WithFields(logging.Fields{
 		"stream":         req.InternalName,
 		"source_cluster": req.RemoteCluster,
 		"source_node":    req.Remote.NodeId,
 		"dest_node":      destNodeID,
-		"dtsc_url":       ack.DtscUrl,
+		"dtsc_url":       control.SourcePullBaseURL(ack.DtscUrl),
 	}).Info("Origin-pull arranged")
 
 	if d.EventEmitter != nil {
+		mediaURL := control.SourcePullBaseURL(ack.DtscUrl)
 		emit(&ipcpb.FederationEventData{
 			EventType:     ipcpb.FederationEventType_ORIGIN_PULL_ARRANGED,
 			RemoteCluster: req.RemoteCluster,
 			StreamName:    &req.InternalName,
 			SourceNode:    &req.Remote.NodeId,
 			DestNode:      &destNodeID,
-			DtscUrl:       &ack.DtscUrl,
+			DtscUrl:       &mediaURL,
 		})
 	}
 
 	return &ArrangeOriginPullResult{
+		AttemptID:    pull.AttemptID,
+		SourceCellID: pull.SourceClusterID, SourceMediaClusterID: pull.SourceMediaClusterID, SourceNodeID: pull.SourceNodeID,
+		SourceGeneration: pull.SourceGeneration, SourceRevision: pull.SourceRevision,
 		DestNodeID:      destNodeID,
 		DestNodeBaseURL: destNodeBaseURL,
 		PullDTSCURL:     ack.DtscUrl,
-		Reused:          false,
+		Reused:          revalidatedExisting,
 	}, nil
 }
 
-func lookupExistingReplication(ctx context.Context, internalName string) *ArrangeOriginPullResult {
-	if control.StreamRegistryInstance == nil {
-		return nil
+func originPullDestinationKey(internalName, nodeID string) string {
+	return fmt.Sprintf("%d:%s:%s", len(internalName), internalName, nodeID)
+}
+
+func lookupExistingReplication(ctx context.Context, registry *control.StreamRegistry, req ArrangeOriginPullRequest, nodeID, destClusterID string) (*ArrangeOriginPullResult, error) {
+	if registry == nil {
+		return nil, ErrOriginPullRegistryNil
 	}
-	loc, ok := control.StreamRegistryInstance.LocalReplication(ctx, internalName)
-	if !ok {
-		return nil
+	if req.RefreshAcceptance {
+		return nil, nil
+	}
+	pull, ok, err := registry.CurrentInboundPull(ctx, req.InternalName, nodeID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: read current destination: %w", ErrOriginPullStateUnavailable, err)
+	}
+	if !ok || !originPullRecordMatches(req, destClusterID, pull) ||
+		(req.Remote.GetClusterId() != "" && pull.SourceMediaClusterID != req.Remote.GetClusterId()) ||
+		(req.BindPull != nil && (pull.TenantID != req.TenantID || pull.DestClusterID != destClusterID)) {
+		return nil, nil
+	}
+	if err := bindArrangedPull(ctx, req, PlacementPullBinding{
+		DestinationFence: req.DestinationFence,
+		AttemptID:        pull.AttemptID, SourceCellID: pull.SourceClusterID, SourceClusterID: pull.SourceMediaClusterID,
+		SourceNodeID: pull.SourceNodeID, SourceGeneration: pull.SourceGeneration, SourceRevision: pull.SourceRevision,
+	}); err != nil {
+		return nil, err
+	}
+	if req.BindPull != nil && !pull.PlacementRequired {
+		if err := registry.RequireInboundPlacement(ctx, req.InternalName, pull); err != nil {
+			return nil, fmt.Errorf("%w: require placement for reused source: %w", ErrOriginPullStateUnavailable, err)
+		}
 	}
 	return &ArrangeOriginPullResult{
-		DestNodeID:      loc.DestNodeID,
-		DestNodeBaseURL: loc.DestNodeBaseURL,
-		PullDTSCURL:     loc.PullDTSCURL,
+		AttemptID:    pull.AttemptID,
+		SourceCellID: pull.SourceClusterID, SourceMediaClusterID: pull.SourceMediaClusterID, SourceNodeID: pull.SourceNodeID,
+		DestNodeID:       pull.DestNodeID,
+		SourceGeneration: pull.SourceGeneration, SourceRevision: pull.SourceRevision,
+		DestNodeBaseURL: pull.DestNodeBaseURL,
+		PullDTSCURL:     pull.DTSCURL,
 		Reused:          true,
+	}, nil
+}
+
+func bindArrangedPull(ctx context.Context, req ArrangeOriginPullRequest, pull PlacementPullBinding) error {
+	if err := ctx.Err(); err != nil {
+		return err
 	}
+	if req.BindPull != nil {
+		if pull.DestinationFence <= 0 || !canonicalPullAttempt(pull.AttemptID) || !validPullIdentity(pull.SourceCellID) || !validPullIdentity(pull.SourceClusterID) || !validPullIdentity(pull.SourceNodeID) {
+			return ErrOriginPullSourceBinding
+		}
+		if err := req.BindPull(&pull); err != nil {
+			return fmt.Errorf("%w: bind physical pull: %w", ErrOriginPullStateUnavailable, err)
+		}
+	}
+	return ctx.Err()
+}
+
+func originPullRecordMatches(req ArrangeOriginPullRequest, destClusterID string, pull control.InboundPull) bool {
+	return (pull.TenantID == "" || pull.TenantID == req.TenantID) && pull.SourceClusterID == req.RemoteCluster &&
+		pull.SourceNodeID == req.Remote.GetNodeId() && pull.SourceGeneration == req.SourceGeneration && pull.SourceRevision == req.SourceRevision &&
+		(pull.DestClusterID == "" || pull.DestClusterID == destClusterID)
 }

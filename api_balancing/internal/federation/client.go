@@ -9,6 +9,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
+	placementpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 )
 
 // BulkListTimeout is the end-to-end budget for tenant artifact census calls.
@@ -68,6 +69,26 @@ func (c *FederationClient) QueryStream(ctx context.Context, clusterID, addr stri
 	defer cancel()
 
 	return foghornfed.For(client).Federation().QueryStream(ctx, req)
+}
+
+func (c *FederationClient) QueryPlacementCandidates(ctx context.Context, cellID, addr string, req *placementpb.CandidateQuery) (*placementpb.CandidateObservation, error) {
+	client, err := c.pool.GetOrCreate(cellID, addr)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(federationContext(ctx), c.timeout)
+	defer cancel()
+	return foghornfed.For(client).Federation().QueryPlacementCandidates(ctx, req)
+}
+
+func (c *FederationClient) PreparePlacement(ctx context.Context, cellID, addr string, req *placementpb.PreparePlacementRequest) (*placementpb.Preparation, error) {
+	client, err := c.pool.GetOrCreate(cellID, addr)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(federationContext(ctx), c.timeout)
+	defer cancel()
+	return foghornfed.For(client).Federation().PreparePlacement(ctx, req)
 }
 
 // NotifyOriginPull tells the origin cluster that we intend to pull a stream.

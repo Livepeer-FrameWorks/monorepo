@@ -61,12 +61,13 @@ type FederationS3Client interface {
 
 // FederationServer implements the FoghornFederation gRPC service.
 // It handles cross-cluster stream queries, origin-pull notifications,
-// artifact preparation, and bidirectional telemetry via PeerChannel.
+// artifact preparation, and inbound peer frames via PeerChannel.
 type FederationServer struct {
 	foghornfederationpb.UnimplementedFoghornFederationServer
 	logger          logging.Logger
 	lb              *balancer.LoadBalancer
 	clusterID       string
+	controlCellID   string
 	cache           *RemoteEdgeCache
 	db              *sql.DB
 	s3Client        FederationS3Client
@@ -74,7 +75,10 @@ type FederationServer struct {
 	dvrCreator      DVRCreator
 	artifactHandler ArtifactCommandHandler
 	peerManager     PeerAddrResolver
+	droppedAdMu     sync.Mutex
+	droppedAdLog    map[string]time.Time
 	fedClient       *FederationClient
+	placement       PlacementRPC
 	// allowFederationMutations is the central gate for the entire inbound cross-cluster RPC surface. Production
 	// enables it only with FEDERATION_ENABLED, where the shared service token is restricted to provider-operated
 	// Foghorns. Self-hosted Helmsmans do not receive that credential or participate in federation. Cluster IDs are
@@ -83,7 +87,7 @@ type FederationServer struct {
 	//
 	//   GATED (all inbound RPCs): QueryStream, PrepareArtifact, NotifyOriginPull, PeerChannel, MintStorageURLs,
 	//   CreateRemoteClip, CreateRemoteDVR, DeleteStorageObjects, ForwardArtifactCommand, MigrateArtifactMetadata,
-	//   ListTenantArtifacts.
+	//   ListTenantArtifacts, QueryPlacementCandidates, PreparePlacement.
 	//
 	// The zero value remains fail-closed for disabled deployments and focused server construction in tests.
 	allowFederationMutations bool
@@ -156,11 +160,28 @@ type PeerAddrResolver interface {
 	GetPeerAddr(clusterID string) string
 }
 
+// PeerTenantAuthority is the optional half of peer identity: whether a peer is
+// known not to carry a tenant. It exists as a separate interface so a resolver
+// without it simply does not participate, and so the answer stays one-sided —
+// only positive exclusion is actionable, absence of knowledge never is.
+type PeerTenantAuthority interface {
+	PeerExcludesTenant(clusterID, tenantID string) bool
+}
+
+// PeerCellAuthority is the other half: which control cell a peer cluster belongs
+// to, per Quartermaster/Commodore peer records rather than per the peer's own
+// claim. A stream advertisement names the cell its records are filed under, so
+// without this the key is whatever the sender puts on the wire.
+type PeerCellAuthority interface {
+	PeerControlCell(clusterID string) (string, bool)
+}
+
 // FederationServerConfig holds dependencies for the federation server.
 type FederationServerConfig struct {
 	Logger          logging.Logger
 	LB              *balancer.LoadBalancer
 	ClusterID       string
+	ControlCellID   string
 	Cache           *RemoteEdgeCache
 	DB              *sql.DB
 	S3Client        FederationS3Client
@@ -169,6 +190,7 @@ type FederationServerConfig struct {
 	ArtifactHandler ArtifactCommandHandler
 	PeerManager     PeerAddrResolver
 	FedClient       *FederationClient
+	Placement       PlacementRPC
 
 	// Storage ownership inputs (optional; when unset, canLocallyMintFor
 	// returns false and PrepareArtifact emits redirect for any non-empty
@@ -188,6 +210,7 @@ func NewFederationServer(cfg FederationServerConfig) *FederationServer {
 		logger:            cfg.Logger,
 		lb:                cfg.LB,
 		clusterID:         cfg.ClusterID,
+		controlCellID:     cfg.ControlCellID,
 		cache:             cfg.Cache,
 		db:                cfg.DB,
 		s3Client:          cfg.S3Client,
@@ -196,6 +219,7 @@ func NewFederationServer(cfg FederationServerConfig) *FederationServer {
 		artifactHandler:   cfg.ArtifactHandler,
 		peerManager:       cfg.PeerManager,
 		fedClient:         cfg.FedClient,
+		placement:         cfg.Placement,
 		localS3Backing:    cfg.LocalS3Backing,
 		advertisedBacking: cfg.AdvertisedBacking,
 		isServedCluster:   cfg.IsServedCluster,
@@ -307,6 +331,19 @@ func (s *FederationServer) QueryStream(ctx context.Context, req *foghornfederati
 
 	candidates := make([]*foghornfederationpb.EdgeCandidate, 0, len(nodes))
 	sm = state.DefaultManager()
+	instances := sm.GetStreamInstances(req.StreamName)
+	sourceStreamName := req.StreamName
+	var sourceEntry control.StreamEntry
+	if control.StreamRegistryInstance != nil {
+		if entry, resolveErr := control.StreamRegistryInstance.ResolveSourceByInternalName(ctx, req.StreamName); resolveErr == nil {
+			sourceEntry = entry
+		}
+	}
+	if sourceEntry.IngestMode != 0 {
+		sourceStreamName = control.RuntimeNameFor(sourceEntry.IngestMode, sourceEntry.InternalName)
+	} else if ss := sm.GetStreamState(req.StreamName); ss != nil && strings.Contains(ss.StreamName, "+") {
+		sourceStreamName = control.MistSourceNameFromObservedStream(ss.StreamName)
+	}
 
 	for _, n := range nodes {
 		ns := sm.GetNodeState(n.NodeID)
@@ -314,22 +351,17 @@ func (s *FederationServer) QueryStream(ctx context.Context, req *foghornfederati
 			continue
 		}
 
-		ss := sm.GetStreamState(req.StreamName)
-		sourceStreamName := req.StreamName
-		if control.StreamRegistryInstance != nil {
-			if entry, err := control.StreamRegistryInstance.ResolveSourceByInternalName(ctx, req.StreamName); err == nil && entry.IngestMode != 0 {
-				sourceStreamName = control.RuntimeNameFor(entry.IngestMode, entry.InternalName)
-			} else if ss != nil && strings.Contains(ss.StreamName, "+") {
-				sourceStreamName = control.MistSourceNameFromObservedStream(ss.StreamName)
-			}
-		} else if ss != nil && strings.Contains(ss.StreamName, "+") {
-			sourceStreamName = control.MistSourceNameFromObservedStream(ss.StreamName)
+		instance := instances[n.NodeID]
+		var sourceGeneration string
+		var sourceRevision int64
+		if instance.TenantID == req.TenantId && instance.Status == "live" && !instance.Replicated && (instance.Inputs > 0 || instance.BufferState == "FULL") {
+			sourceGeneration, sourceRevision = confirmedPublisherBinding(sourceEntry, n.NodeID, req.TenantId, s.clusterID)
 		}
 		dtscURL := control.BuildDTSCURI(n.NodeID, sourceStreamName, s.logger)
 
 		var bufferState string
-		if ss != nil && ss.NodeID == n.NodeID {
-			bufferState = ss.BufferState
+		if instance.TenantID == req.TenantId {
+			bufferState = instance.BufferState
 		}
 
 		var viewerCount uint32
@@ -338,26 +370,26 @@ func (s *FederationServer) QueryStream(ctx context.Context, req *foghornfederati
 			viewerCount = uint32(viewers)
 		}
 
-		isOrigin := false
-		if ss != nil && ss.NodeID == n.NodeID {
-			isOrigin = ss.Status == "live" && ss.Inputs > 0
-		}
+		isOrigin := instance.TenantID == req.TenantId && instance.Status == "live" && instance.Inputs > 0 && !instance.Replicated
 
 		candidate := &foghornfederationpb.EdgeCandidate{
-			NodeId:      n.NodeID,
-			BaseUrl:     ns.BaseURL,
-			DtscUrl:     dtscURL,
-			BwScore:     n.Score,
-			GeoScore:    0, // geo is baked into the composite score
-			IsOrigin:    isOrigin,
-			BufferState: bufferState,
-			GeoLat:      n.GeoLatitude,
-			GeoLon:      n.GeoLongitude,
-			ViewerCount: viewerCount,
-			CpuPercent:  ns.CPU,
-			BwAvailable: AvailBandwidthFromNodeState(ns),
-			RamUsed:     uint64(ns.RAMCurrent),
-			RamMax:      uint64(ns.RAMMax),
+			NodeId:           n.NodeID,
+			BaseUrl:          ns.BaseURL,
+			DtscUrl:          dtscURL,
+			BwScore:          n.Score,
+			GeoScore:         0, // geo is baked into the composite score
+			IsOrigin:         isOrigin,
+			BufferState:      bufferState,
+			GeoLat:           n.GeoLatitude,
+			GeoLon:           n.GeoLongitude,
+			ViewerCount:      viewerCount,
+			CpuPercent:       ns.CPU,
+			BwAvailable:      AvailBandwidthFromNodeState(ns),
+			RamUsed:          uint64(ns.RAMCurrent),
+			RamMax:           uint64(ns.RAMMax),
+			SourceGeneration: sourceGeneration,
+			SourceRevision:   sourceRevision,
+			ClusterId:        ns.ClusterID,
 		}
 		candidates = append(candidates, candidate)
 	}
@@ -379,6 +411,58 @@ func (s *FederationServer) NotifyOriginPull(ctx context.Context, req *foghornfed
 	// Origin-pull routing changes are governed by the same all-or-nothing federation gate.
 	if s.federationMutationsDisabled() {
 		return &foghornfederationpb.OriginPullAck{Accepted: false, Reason: "federation_mutations_disabled"}, nil
+	}
+	return s.prepareOriginPull(ctx, req)
+}
+
+func (s *FederationServer) sourceControlCellID() string {
+	if s.controlCellID != "" {
+		return s.controlCellID
+	}
+	return s.clusterID
+}
+
+// Signed placement names this cell by its control-cell identity. The legacy
+// /source path instead names the origin media cluster it got from Commodore,
+// which for this Foghorn is its CLUSTER_ID. Both are accepted because both are
+// configured aliases of this same cell.
+func (s *FederationServer) matchesSourceCell(cellID string) bool {
+	return cellID != "" && (cellID == s.sourceControlCellID() || cellID == s.clusterID)
+}
+
+// prepareLocalOriginPull is an in-process path, not a federation RPC. Both
+// nodes must belong to this cell; remote callers still enter NotifyOriginPull.
+func (s *FederationServer) prepareLocalOriginPull(ctx context.Context, req *foghornfederationpb.OriginPullNotification) (*foghornfederationpb.OriginPullAck, error) {
+	if err := s.validateLocalPullDestination(req.GetSourceCellId(), req.GetSourceClusterId(), req.GetSourceNodeId(), req.GetDestClusterId(), req.GetDestNodeId()); err != nil {
+		return nil, err
+	}
+	return s.prepareOriginPull(ctx, req)
+}
+
+func (s *FederationServer) validateLocalPullDestination(sourceCell, sourceCluster, sourceNode, destCluster, destNode string) error {
+	if s == nil || s.isServedCluster == nil || !s.matchesSourceCell(sourceCell) ||
+		!s.isServedCluster(sourceCluster) || !s.isServedCluster(destCluster) || sourceNode == destNode {
+		return status.Error(codes.PermissionDenied, "local source preparation requires local source and destination")
+	}
+	node := state.DefaultManager().GetNodeState(destNode)
+	if node == nil || !node.IsHealthy || node.IsStale || !node.ProbeVerified || node.OperationalMode == state.NodeModeMaintenance ||
+		node.ClusterID != destCluster || !freshPlacementEvidence(node.LastHeartbeat, time.Now()) {
+		return status.Error(codes.FailedPrecondition, "local pull destination is not registered")
+	}
+	return nil
+}
+
+func (s *FederationServer) prepareOriginPull(ctx context.Context, req *foghornfederationpb.OriginPullNotification) (*foghornfederationpb.OriginPullAck, error) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return nil, status.FromContextError(err).Err()
+	}
+	if !validOriginPullNotification(req) {
+		return nil, status.Error(codes.InvalidArgument, "invalid origin-pull binding")
+	}
+	if req.GetSourceCellId() != "" && !s.matchesSourceCell(req.GetSourceCellId()) {
+		return &foghornfederationpb.OriginPullAck{Accepted: false, Reason: "source control cell mismatch"}, nil
 	}
 	if req.StreamName == "" {
 		return nil, status.Error(codes.InvalidArgument, "stream_name required")
@@ -430,6 +514,13 @@ func (s *FederationServer) NotifyOriginPull(ctx context.Context, req *foghornfed
 	// recording row instead — Mist on the recording node bootstraps
 	// dvr+ on demand when the DTSC pull arrives.
 	sm := state.DefaultManager()
+	sourceMediaClusterID := ""
+	if node := sm.GetNodeState(sourceNodeID); node != nil && s.clusterID != "" && validPullIdentity(node.ClusterID) {
+		sourceMediaClusterID = node.ClusterID
+	}
+	if req.GetSourceClusterId() != "" && req.GetSourceClusterId() != sourceMediaClusterID {
+		return &foghornfederationpb.OriginPullAck{Accepted: false, Reason: "source virtual cluster mismatch"}, nil
+	}
 	sourceStreamName := req.StreamName
 	if strings.HasPrefix(req.StreamName, "dvr+") {
 		tenantID, recording := s.dvrRecordingTenant(ctx, strings.TrimPrefix(req.StreamName, "dvr+"))
@@ -439,7 +530,7 @@ func (s *FederationServer) NotifyOriginPull(ctx context.Context, req *foghornfed
 				Reason:   "dvr not recording locally",
 			}, nil
 		}
-		if req.TenantId != "" && tenantID != "" && tenantID != req.TenantId {
+		if tenantID != req.TenantId {
 			return &foghornfederationpb.OriginPullAck{
 				Accepted: false,
 				Reason:   "stream tenant mismatch",
@@ -455,11 +546,22 @@ func (s *FederationServer) NotifyOriginPull(ctx context.Context, req *foghornfed
 				Reason:   "stream not found locally",
 			}, nil
 		}
-		if req.TenantId != "" && ss.TenantID != "" && ss.TenantID != req.TenantId {
+		if ss.TenantID != req.TenantId {
 			return &foghornfederationpb.OriginPullAck{
 				Accepted: false,
 				Reason:   "stream tenant mismatch",
 			}, nil
+		}
+		instance, exists := sm.GetStreamInstances(req.StreamName)[sourceNodeID]
+		if !exists || instance.TenantID != req.TenantId || instance.Status != "live" || (instance.Inputs == 0 && instance.BufferState != "FULL") {
+			return &foghornfederationpb.OriginPullAck{Accepted: false, Reason: "source node is not serving this stream"}, nil
+		}
+		// A relayed copy is never a relay source, whatever the notification
+		// carries. Conditioning this on a source generation would let a caller
+		// omit that field — which a configured pull legitimately does, since it
+		// has no publisher generation — and be handed a DTSC URL for a replica.
+		if instance.Replicated {
+			return &foghornfederationpb.OriginPullAck{Accepted: false, Reason: "source node is a relay"}, nil
 		}
 		if control.StreamRegistryInstance != nil {
 			if entry, err := control.StreamRegistryInstance.ResolveSourceByInternalName(ctx, req.StreamName); err == nil && entry.IngestMode != 0 {
@@ -490,22 +592,42 @@ func (s *FederationServer) NotifyOriginPull(ctx context.Context, req *foghornfed
 			Reason:   "origin-pull temporarily unavailable",
 		}, nil
 	}
-	control.StreamRegistryInstance.RecordOutboundPull(req.StreamName, control.OutboundPull{
+	recorded, err := control.StreamRegistryInstance.RecordOutboundPull(ctx, req.StreamName, control.OutboundPull{
+		TenantID:             req.TenantId,
+		SourceMediaClusterID: sourceMediaClusterID,
+		SourceGeneration:     req.GetSourceGeneration(), SourceRevision: req.GetSourceRevision(), AttemptID: req.GetAttemptId(),
 		DestClusterID: req.DestClusterId,
 		DestNodeID:    req.DestNodeId,
 		SourceNodeID:  sourceNodeID,
 		DTSCURL:       dtscURL,
 	})
+	if err != nil {
+		log.WithError(err).Warn("Cannot persist outbound pull")
+		return &foghornfederationpb.OriginPullAck{Accepted: false, Reason: "origin-pull temporarily unavailable"}, nil
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, status.FromContextError(ctxErr).Err()
+	}
 
 	log.WithFields(logging.Fields{
 		"source_node": sourceNodeID,
 		"dtsc_url":    dtscURL,
 	}).Info("Origin-pull accepted")
 
-	return &foghornfederationpb.OriginPullAck{
-		Accepted: true,
-		DtscUrl:  dtscURL,
-	}, nil
+	ack := &foghornfederationpb.OriginPullAck{
+		Accepted:         true,
+		DtscUrl:          dtscURL,
+		SourceGeneration: recorded.SourceGeneration, SourceRevision: recorded.SourceRevision, AttemptId: recorded.AttemptID,
+		SourceNodeId: recorded.SourceNodeID, TenantId: recorded.TenantID, DestClusterId: recorded.DestClusterID, DestNodeId: recorded.DestNodeID,
+	}
+	ack.DtscUrl, err = control.SourcePullURL(dtscURL, req.StreamName, recorded)
+	if err != nil {
+		return nil, status.Error(codes.Unavailable, "source pull credential is unavailable")
+	}
+	if req.GetSourceClusterId() != "" {
+		ack.SourceCellId, ack.SourceClusterId = req.GetSourceCellId(), recorded.SourceMediaClusterID
+	}
+	return ack, nil
 }
 
 // dvrRecordingTenant looks up an active DVR recording by its runtime
@@ -1379,9 +1501,12 @@ func (s *FederationServer) CreateRemoteDVR(ctx context.Context, req *foghornfede
 	}, nil
 }
 
-// PeerChannel is a bidirectional stream for real-time telemetry exchange.
-// The receiving side writes EdgeTelemetry and ReplicationEvents to Redis;
-// the sending side pushes telemetry for locally active replicated streams.
+// PeerChannel receives a peer's stream advertisements, lifecycle events,
+// replication events and artifact advertisements. Declared bidirectional, it is
+// used in one direction: this side never sends, and the dialing side's recvLoop
+// only drains. Peer identity is self-asserted here — the transport proves
+// service authentication and nothing about which cluster is calling — so each
+// handler binds what it stores to the channel rather than to the payload's claim.
 func (s *FederationServer) PeerChannel(stream foghornfederationpb.FoghornFederation_PeerChannelServer) error {
 	ctx := stream.Context()
 	if err := requireFederationServiceAuth(ctx); err != nil {
@@ -1394,6 +1519,8 @@ func (s *FederationServer) PeerChannel(stream foghornfederationpb.FoghornFederat
 
 	var peerClusterID string
 	var once sync.Once
+	// Pinned by the first advertisement that names a cell; see advertisedCellIsPeers.
+	channelCell := ""
 
 	log := s.logger.WithField("rpc", "PeerChannel")
 
@@ -1426,29 +1553,28 @@ func (s *FederationServer) PeerChannel(stream foghornfederationpb.FoghornFederat
 		}
 
 		switch payload := msg.Payload.(type) {
-		case *foghornfederationpb.PeerMessage_EdgeTelemetry:
-			s.handleEdgeTelemetry(ctx, peerClusterID, payload.EdgeTelemetry)
-
 		case *foghornfederationpb.PeerMessage_ReplicationEvent:
 			s.handleReplicationEvent(ctx, peerClusterID, payload.ReplicationEvent)
-
-		case *foghornfederationpb.PeerMessage_ClusterSummary:
-			s.handleClusterSummary(ctx, peerClusterID, payload.ClusterSummary)
 
 		case *foghornfederationpb.PeerMessage_StreamLifecycle:
 			s.handleStreamLifecycle(ctx, peerClusterID, payload.StreamLifecycle)
 
 		case *foghornfederationpb.PeerMessage_StreamAd:
-			s.handleStreamAdvertisement(ctx, peerClusterID, payload.StreamAd)
+			s.handleStreamAdvertisement(ctx, peerClusterID, payload.StreamAd, &channelCell)
 
 		case *foghornfederationpb.PeerMessage_ArtifactAd:
 			s.handleArtifactAdvertisement(ctx, peerClusterID, payload.ArtifactAd)
 
-		case *foghornfederationpb.PeerMessage_PeerHeartbeat:
-			s.handlePeerHeartbeat(ctx, peerClusterID, payload.PeerHeartbeat)
-
-		case *foghornfederationpb.PeerMessage_CapacitySummary:
-			// CapacitySummary is accepted on the wire but no consumer is wired.
+		case *foghornfederationpb.PeerMessage_EdgeTelemetry,
+			*foghornfederationpb.PeerMessage_ClusterSummary,
+			*foghornfederationpb.PeerMessage_PeerHeartbeat,
+			*foghornfederationpb.PeerMessage_CapacitySummary:
+			// Accepted on the wire and deliberately not stored. These fed the
+			// legacy remote-edge scoring path; cross-cell routing now asks the
+			// peer's placement service directly, so caching them served nothing
+			// and cost a Redis write per node per interval. A peer still on
+			// older code may send them, so they are consumed silently rather
+			// than logged as unknown.
 
 		default:
 			log.Warn("Unknown PeerMessage payload type, ignoring")
@@ -1456,37 +1582,20 @@ func (s *FederationServer) PeerChannel(stream foghornfederationpb.FoghornFederat
 	}
 }
 
-func (s *FederationServer) handleEdgeTelemetry(ctx context.Context, peerClusterID string, t *foghornfederationpb.EdgeTelemetry) {
-	entry := &RemoteEdgeEntry{
-		StreamName:  t.StreamName,
-		NodeID:      t.NodeId,
-		BaseURL:     t.BaseUrl,
-		BWAvailable: t.BwAvailable,
-		ViewerCount: t.ViewerCount,
-		CPUPercent:  t.CpuPercent,
-		RAMUsed:     t.RamUsed,
-		RAMMax:      t.RamMax,
-		GeoLat:      t.GeoLat,
-		GeoLon:      t.GeoLon,
-		UpdatedAt:   time.Now().Unix(),
-	}
-	if err := s.cache.SetRemoteEdge(ctx, peerClusterID, entry); err != nil {
-		s.logger.WithError(err).WithFields(logging.Fields{
-			"peer_cluster": peerClusterID,
-			"node_id":      t.NodeId,
-		}).Warn("Failed to cache remote edge telemetry")
-	}
-}
-
 func (s *FederationServer) handleReplicationEvent(ctx context.Context, peerClusterID string, r *foghornfederationpb.ReplicationEvent) {
+	if r == nil {
+		return
+	}
 	entry := &RemoteReplicationEntry{
-		StreamName: r.StreamName,
-		NodeID:     r.NodeId,
-		ClusterID:  peerClusterID,
-		BaseURL:    r.BaseUrl,
-		DTSCURL:    r.DtscUrl,
-		Available:  r.Available,
-		UpdatedAt:  time.Now().Unix(),
+		StreamName:     r.StreamName,
+		NodeID:         r.NodeId,
+		ClusterID:      peerClusterID,
+		ControlCellID:  strings.TrimSpace(r.GetControlCellId()),
+		MediaClusterID: strings.TrimSpace(r.GetClusterId()),
+		BaseURL:        r.BaseUrl,
+		DTSCURL:        r.DtscUrl,
+		Available:      r.Available,
+		UpdatedAt:      time.Now().Unix(),
 	}
 	if err := s.cache.SetRemoteReplication(ctx, peerClusterID, entry); err != nil {
 		s.logger.WithError(err).WithFields(logging.Fields{
@@ -1505,6 +1614,31 @@ func (s *FederationServer) handleStreamLifecycle(ctx context.Context, peerCluste
 		}).Warn("Rejected stream lifecycle with mismatched PeerChannel identity")
 		return
 	}
+	// An unattributable event must not deny ingest. This record is read back as
+	// "the stream is already live on a peer" and refuses the publisher, so a peer
+	// running stale code that omits the tenant would otherwise block ingest for
+	// whatever stream name it names. Pairs with the producer-side tenant filter
+	// in peer_manager, and mirrors the artifact advertisement guard below.
+	tenantID := strings.TrimSpace(ev.GetTenantId())
+	if tenantID == "" {
+		s.logger.WithFields(logging.Fields{
+			"peer_cluster":  peerClusterID,
+			"internal_name": ev.GetInternalName(),
+		}).Warn("Rejected stream lifecycle with no tenant attribution")
+		return
+	}
+	// Refuse only on positive knowledge that the peer does not carry the tenant.
+	// Not knowing a peer's scope is our own gap, and denying ingest over it would
+	// be worse than accepting an event we cannot corroborate.
+	if authority, ok := s.peerManager.(PeerTenantAuthority); ok && authority != nil &&
+		authority.PeerExcludesTenant(peerClusterID, tenantID) {
+		s.logger.WithFields(logging.Fields{
+			"peer_cluster":  peerClusterID,
+			"tenant_id":     tenantID,
+			"internal_name": ev.GetInternalName(),
+		}).Warn("Rejected stream lifecycle for a tenant the peer does not carry")
+		return
+	}
 	if _, err := s.cache.ApplyRemoteStreamLifecycle(ctx, ev.GetTenantId(), ev.GetInternalName(), &RemoteLiveStreamEntry{
 		ClusterID:      peerClusterID,
 		TenantID:       ev.GetTenantId(),
@@ -1515,34 +1649,6 @@ func (s *FederationServer) handleStreamLifecycle(ctx context.Context, peerCluste
 			"peer_cluster":  peerClusterID,
 			"internal_name": ev.GetInternalName(),
 		}).Warn("Failed to apply remote stream lifecycle")
-	}
-}
-
-func (s *FederationServer) handleClusterSummary(ctx context.Context, peerClusterID string, summary *foghornfederationpb.ClusterEdgeSummary) {
-	edges := make([]*EdgeSummaryEntry, 0, len(summary.Edges))
-	for _, e := range summary.Edges {
-		edges = append(edges, &EdgeSummaryEntry{
-			NodeID:         e.NodeId,
-			BaseURL:        e.BaseUrl,
-			GeoLat:         e.GeoLat,
-			GeoLon:         e.GeoLon,
-			BWAvailableAvg: e.BwAvailableAvg,
-			CPUPercentAvg:  e.CpuPercentAvg,
-			RAMUsed:        e.RamUsed,
-			RAMMax:         e.RamMax,
-			TotalViewers:   e.TotalViewers,
-			Roles:          e.Roles,
-		})
-	}
-	record := &EdgeSummaryRecord{
-		Edges:     edges,
-		Timestamp: summary.Timestamp,
-	}
-	if err := s.cache.SetEdgeSummary(ctx, peerClusterID, record); err != nil {
-		s.logger.WithError(err).WithFields(logging.Fields{
-			"peer_cluster": peerClusterID,
-			"edge_count":   len(edges),
-		}).Warn("Failed to cache cluster edge summary")
 	}
 }
 
@@ -1587,73 +1693,123 @@ func (s *FederationServer) handleArtifactAdvertisement(ctx context.Context, peer
 	}
 }
 
-func (s *FederationServer) handleStreamAdvertisement(_ context.Context, peerClusterID string, ad *foghornfederationpb.StreamAdvertisement) {
+func (s *FederationServer) handleStreamAdvertisement(_ context.Context, peerClusterID string, ad *foghornfederationpb.StreamAdvertisement, channelCell *string) {
 	if ad == nil {
 		return
 	}
-	// Mirror the ad into the unified stream registry so source-routing
-	// callers (clip, DVR, federation DTSC, playback) and diagnostics see
-	// peer-owned streams. The StreamAdvertisement protocol carries no
-	// ingest_mode, so the federated entry's IngestMode stays 0 and
-	// receivers route via the stored peer DTSC URL handed back by
-	// NotifyOriginPull, never via a reconstructed runtime name.
-	if control.StreamRegistryInstance != nil {
-		ecands := make([]control.EdgeCandidate, 0, len(ad.Edges))
-		for _, e := range ad.Edges {
-			ecands = append(ecands, control.EdgeCandidate{
-				NodeID:      e.NodeId,
-				BaseURL:     e.BaseUrl,
-				DTSCURL:     e.DtscUrl,
-				IsOrigin:    e.IsOrigin,
-				BWAvailable: int64(e.BwAvailable),
-				CPUPercent:  e.CpuPercent,
-				ViewerCount: int32(e.ViewerCount),
-				GeoLat:      e.GeoLat,
-				GeoLon:      e.GeoLon,
-				BufferState: e.BufferState,
-				RAMUsed:     e.RamUsed,
-				RAMMax:      e.RamMax,
-			})
-		}
-		originCluster := ad.OriginClusterId
-		if originCluster == "" {
-			originCluster = peerClusterID
-		}
-		control.StreamRegistryInstance.UpsertFederatedSource(
-			peerClusterID,
-			control.StreamEntry{
-				TenantID:        ad.TenantId,
-				PlaybackID:      ad.PlaybackId,
-				InternalName:    ad.InternalName,
-				OriginClusterID: originCluster,
-			},
-			control.Location{
-				IsLiveNow:       ad.IsLive,
-				AdTimestamp:     ad.Timestamp,
-				EdgeCandidates:  ecands,
-				RecordingNodeID: ad.DvrRecordingNodeId,
-			},
-		)
+	cellID := strings.TrimSpace(ad.GetControlCellId())
+	if cellID != "" && !s.advertisedCellIsPeers(peerClusterID, cellID, channelCell) {
+		return
+	}
+	if applyRegistryStreamAdvertisement(ad) {
+		return
+	}
+	// applyRegistryStreamAdvertisement also reports false before the registry is
+	// constructed. That is not the peer's fault, so only the missing-field case
+	// earns the warning below.
+	if cellID != "" {
+		return
+	}
+	// Loud rather than silent: a peer that does not name its control cell has
+	// its advertisements ignored, so cross-cell serving of that peer's streams
+	// stops until it ships the field. Reported once per peer per interval, not
+	// once per advertisement: a peer re-advertises every live stream every few
+	// seconds, so an unthrottled line here is thousands an hour for the whole
+	// rollout rather than a notice.
+	if s.reportDroppedAdvertisement(peerClusterID) {
+		s.logger.WithFields(logging.Fields{
+			"peer_cluster":  peerClusterID,
+			"internal_name": ad.GetInternalName(),
+		}).Warn("Dropping stream advertisements from a peer that does not name its control cell")
 	}
 }
 
-func (s *FederationServer) handlePeerHeartbeat(ctx context.Context, peerClusterID string, hb *foghornfederationpb.PeerHeartbeat) {
-	if hb == nil {
-		return
-	}
-	record := &PeerHeartbeatRecord{
-		ProtocolVersion:  hb.ProtocolVersion,
-		StreamCount:      hb.StreamCount,
-		TotalBWAvailable: hb.TotalBwAvailable,
-		EdgeCount:        hb.EdgeCount,
-		UptimeSeconds:    hb.UptimeSeconds,
-		Capabilities:     hb.Capabilities,
-	}
-	if err := s.cache.SetPeerHeartbeat(ctx, peerClusterID, record); err != nil {
-		s.logger.WithError(err).WithFields(logging.Fields{
+// advertisedCellIsPeers reports whether a peer may file records under the control
+// cell its advertisement names.
+//
+// The registry keys a federated Location on this cell, and withdrawing the last
+// location for a stream tombstones the whole registry entry, so the cell is an
+// authority claim and not a label. PeerChannel identity is self-asserted — the
+// transport only proves service authentication — which leaves two checks worth
+// making. Positive knowledge wins where it exists: a peer whose cluster maps to a
+// known cell may not name a different one. Where it does not exist the cell is
+// still pinned to the channel, so a single connection cannot file records under
+// one cell and then withdraw another's.
+//
+// Absence of knowledge is not refusal. Self-hosted Foghorns are not a day-one
+// deployment, and a peer with no active membership yet is the normal case during
+// discovery; refusing it would drop legitimate advertisements.
+func (s *FederationServer) advertisedCellIsPeers(peerClusterID, cellID string, channelCell *string) bool {
+	// Our own identity is never something a peer tells us. PeerChannel already
+	// refuses a caller claiming our cluster id; this is the same refusal for the
+	// cell an advertisement names, in both of the namespaces that identify us.
+	if cellID == s.clusterID || (s.controlCellID != "" && cellID == s.controlCellID) {
+		s.logger.WithFields(logging.Fields{
 			"peer_cluster": peerClusterID,
-		}).Warn("Failed to cache peer heartbeat")
+			"claimed_cell": cellID,
+		}).Warn("Refusing stream advertisement naming this Foghorn's own identity")
+		return false
 	}
+	if authority, ok := s.peerManager.(PeerCellAuthority); ok && authority != nil {
+		if known, ok := authority.PeerControlCell(peerClusterID); ok && known != cellID {
+			s.logger.WithFields(logging.Fields{
+				"peer_cluster": peerClusterID,
+				"claimed_cell": cellID,
+				"known_cell":   known,
+			}).Warn("Refusing stream advertisement naming a control cell the peer does not belong to")
+			return false
+		}
+	}
+	if channelCell == nil {
+		return true
+	}
+	if *channelCell == "" {
+		*channelCell = cellID
+		return true
+	}
+	if *channelCell != cellID {
+		s.logger.WithFields(logging.Fields{
+			"peer_cluster": peerClusterID,
+			"claimed_cell": cellID,
+			"channel_cell": *channelCell,
+		}).Warn("Refusing stream advertisement that changes the control cell mid-channel")
+		return false
+	}
+	return true
+}
+
+// droppedAdvertisementNotice bounds how often one peer's dropped advertisements
+// are reported.
+const droppedAdvertisementNotice = time.Minute
+
+// droppedAdLogCapacity bounds the throttle map against id rotation.
+const droppedAdLogCapacity = 1024
+
+func (s *FederationServer) reportDroppedAdvertisement(peerClusterID string) bool {
+	now := time.Now()
+	s.droppedAdMu.Lock()
+	defer s.droppedAdMu.Unlock()
+	if last, seen := s.droppedAdLog[peerClusterID]; seen && now.Sub(last) < droppedAdvertisementNotice {
+		return false
+	}
+	if s.droppedAdLog == nil {
+		s.droppedAdLog = make(map[string]time.Time)
+	}
+	// The key is a peer-supplied cluster id, so the map would otherwise grow with
+	// every distinct id ever seen. Expiry alone does not bound it: nothing is
+	// prunable inside the notice interval, which is exactly the window a caller
+	// rotating ids would use. So expire first, then refuse to grow past a size no
+	// real deployment reaches — a peer count in the thousands is already wrong.
+	for peer, last := range s.droppedAdLog {
+		if now.Sub(last) >= droppedAdvertisementNotice {
+			delete(s.droppedAdLog, peer)
+		}
+	}
+	if len(s.droppedAdLog) >= droppedAdLogCapacity {
+		return false
+	}
+	s.droppedAdLog[peerClusterID] = now
+	return true
 }
 
 // ListTenantArtifacts returns all artifact metadata for a tenant on this cluster.

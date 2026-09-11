@@ -23,6 +23,7 @@ import (
 	foghornfed "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/foghorn/federation"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/clients/quartermaster"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
@@ -55,26 +56,18 @@ type PeerManager struct {
 	trackedTenantRefs             map[string]map[string]int
 	trackedAddrRefs               map[string]map[string]map[int64]int
 	trackedAlwaysOnRefs           map[string]int
+	trackedCellRefs               map[string]map[string]int // cluster -> control cell -> active memberships naming it
 	quartermasterHints            map[string]PeerHint       // leader-owned authoritative refresh snapshot
 	quartermasterHintsRefreshedAt time.Time                 // bounds renewal when Quartermaster stops answering
-	metricHistory                 map[string][]metricSample // node_id -> recent BW/CPU samples for 30s averaging
 	nextPeerRunnerToken           uint64
 	done                          chan struct{}
 	isLeader                      bool
 	leaderReady                   bool
-	startTime                     time.Time
 	reconnectBackoff              time.Duration
 	tombstoneScanCursor           uint64
 
 	unresolvedAdMu     sync.Mutex
 	unresolvedAdLogged map[string]time.Time // artifact_hash -> last skip log, throttles the 30s ad loop
-}
-
-// metricSample stores a single BW/CPU observation for moving-average computation.
-type metricSample struct {
-	bwAvailable uint64
-	cpuPercent  float64
-	ts          time.Time
 }
 
 type peerLifecycleType int
@@ -85,20 +78,18 @@ const (
 )
 
 type peerState struct {
-	addr        string
-	tenantIDs   []string
-	tenantSet   map[string]struct{}
-	lifecycle   peerLifecycleType
-	cancel      context.CancelFunc
-	stream      foghornfederationpb.FoghornFederation_PeerChannelClient
-	sendCh      chan *foghornfederationpb.PeerMessage // owned by the per-peer writer goroutine; producers enqueue, never Send directly
-	dropped     atomic.Uint64                         // frames evicted (drop-oldest) because the mailbox was full (backpressured peer)
-	lastRefresh time.Time
-	connected   bool
-	runnerToken uint64
-	lat         float64
-	lon         float64
-	location    string
+	addr          string
+	controlCellID string
+	tenantIDs     []string
+	tenantSet     map[string]struct{}
+	lifecycle     peerLifecycleType
+	cancel        context.CancelFunc
+	stream        foghornfederationpb.FoghornFederation_PeerChannelClient
+	sendCh        chan *foghornfederationpb.PeerMessage // owned by the per-peer writer goroutine; producers enqueue, never Send directly
+	dropped       atomic.Uint64                         // frames evicted (drop-oldest) because the mailbox was full (backpressured peer)
+	lastRefresh   time.Time
+	connected     bool
+	runnerToken   uint64
 }
 
 type peerConnectRequest struct {
@@ -200,10 +191,9 @@ func NewPeerManager(cfg PeerManagerConfig) *PeerManager {
 		trackedTenantRefs:      make(map[string]map[string]int),
 		trackedAddrRefs:        make(map[string]map[string]map[int64]int),
 		trackedAlwaysOnRefs:    make(map[string]int),
+		trackedCellRefs:        make(map[string]map[string]int),
 		quartermasterHints:     make(map[string]PeerHint),
-		metricHistory:          make(map[string][]metricSample),
 		done:                   make(chan struct{}),
-		startTime:              time.Now(),
 		reconnectBackoff:       peerReconnectBackoff,
 		unresolvedAdLogged:     make(map[string]time.Time),
 	}
@@ -268,23 +258,11 @@ func (pm *PeerManager) enrichFederationEventGeo(data *ipcpb.FederationEventData)
 			data.LocalLon = &lon
 		}
 	}
-	if data.RemoteLat == nil && data.RemoteCluster != "" {
-		rLat, rLon := pm.GetPeerGeo(data.RemoteCluster)
-		if geo.IsValidLatLon(rLat, rLon) {
-			data.RemoteLat = &rLat
-			data.RemoteLon = &rLon
-		}
-	}
-}
-
-// GetPeerGeo returns the cached geo coordinates for a peer cluster's foghorn.
-func (pm *PeerManager) GetPeerGeo(clusterID string) (float64, float64) {
-	pm.mu.RLock()
-	defer pm.mu.RUnlock()
-	if ps, ok := pm.peers[clusterID]; ok {
-		return ps.lat, ps.lon
-	}
-	return 0, 0
+	// Remote geo is deliberately left unset. It used to come from a peer's
+	// heartbeat frame, which no cell sends any more, and the coordinate pair
+	// (0, 0) is a valid point off West Africa rather than a sentinel — stamping
+	// it would record every peer at Null Island and be indistinguishable from a
+	// real position. An unset column honestly reads as unknown.
 }
 
 // Close stops the peer manager and all PeerChannel streams.
@@ -329,6 +307,43 @@ func (pm *PeerManager) GetPeerAddr(clusterID string) string {
 		return ps.addr
 	}
 	return ""
+}
+
+// GetControlCellAddr resolves only explicitly advertised control-cell identities.
+// Several virtual clusters may share a cell and advertise different HA replicas;
+// choose deterministically without requiring an established telemetry channel.
+func (pm *PeerManager) GetControlCellAddr(cellID string) string {
+	if !validPullIdentity(cellID) {
+		return ""
+	}
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	address := ""
+	for _, peer := range pm.peers {
+		if peer.controlCellID == cellID && peer.addr != "" && (address == "" || peer.addr < address) {
+			address = peer.addr
+		}
+	}
+	return address
+}
+
+// PeerControlCell reports the control cell a peer cluster is known to belong to,
+// and whether that is known at all. Knowledge comes from stream memberships,
+// whose peer records are supplied by Quartermaster and Commodore, never by the
+// peer itself — so unlike a cell id read off the wire it can be used to refuse
+// an impersonated one. Conflicting cells across active memberships read as
+// unknown, matching how conflicting addresses are treated.
+func (pm *PeerManager) PeerControlCell(clusterID string) (string, bool) {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	cells := pm.trackedCellRefs[clusterID]
+	if len(cells) != 1 {
+		return "", false
+	}
+	for cellID := range cells {
+		return cellID, true
+	}
+	return "", false
 }
 
 // IsPeerConnected returns whether the PeerChannel to a given cluster is active.
@@ -388,6 +403,25 @@ func (pm *PeerManager) shouldSendStreamToPeer(peerID string, ps *peerState, stre
 	return true
 }
 
+// PeerExcludesTenant reports that this peer is known not to carry the tenant.
+// It answers only from positive knowledge: an unknown peer, or one whose tenant
+// scope has not been populated, returns false. We run the Foghorns, so a gap in
+// our own view of a peer is far likelier than a peer overstepping, and turning
+// that gap into a refusal would drop legitimate events. Mirrors the send-side
+// rule in shouldSendStreamToPeer, which also only refuses on a populated set.
+func (pm *PeerManager) PeerExcludesTenant(clusterID, tenantID string) bool {
+	if pm == nil || clusterID == "" || tenantID == "" {
+		return false
+	}
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	ps, ok := pm.peers[clusterID]
+	if !ok || ps == nil || (len(ps.tenantIDs) == 0 && len(ps.tenantSet) == 0) {
+		return false
+	}
+	return !peerHasTenant(ps, tenantID)
+}
+
 func peerHasTenant(ps *peerState, tenantID string) bool {
 	if ps == nil {
 		return false
@@ -437,8 +471,9 @@ func (pm *PeerManager) TrackStream(ctx context.Context, streamName, tenantID, so
 			}
 			continue
 		}
-		peerHints[clusterID] = PeerHint{Addr: addr, AlwaysOn: admissionHint.AlwaysOn, Tenants: []string{tenantID}}
-		membership.Peers = append(membership.Peers, StreamPeerTarget{ClusterID: clusterID, Addr: addr, AlwaysOn: admissionHint.AlwaysOn})
+		controlCellID := strings.TrimSpace(admissionHint.ControlCellID)
+		peerHints[clusterID] = PeerHint{Addr: addr, ControlCellID: controlCellID, AlwaysOn: admissionHint.AlwaysOn, Tenants: []string{tenantID}}
+		membership.Peers = append(membership.Peers, StreamPeerTarget{ClusterID: clusterID, Addr: addr, AlwaysOn: admissionHint.AlwaysOn, ControlCellID: controlCellID})
 	}
 	var err error
 	membership, err = normalizeStreamPeerMembership(membership)
@@ -602,6 +637,12 @@ func (pm *PeerManager) addStreamMembershipLocked(membership StreamPeerMembership
 		if peer.AlwaysOn {
 			pm.trackedAlwaysOnRefs[peer.ClusterID]++
 		}
+		if peer.ControlCellID != "" {
+			if pm.trackedCellRefs[peer.ClusterID] == nil {
+				pm.trackedCellRefs[peer.ClusterID] = make(map[string]int)
+			}
+			pm.trackedCellRefs[peer.ClusterID][peer.ControlCellID]++
+		}
 	}
 }
 
@@ -633,6 +674,12 @@ func (pm *PeerManager) removeStreamMembershipLocked(membership StreamPeerMembers
 			pm.trackedAlwaysOnRefs[peer.ClusterID]--
 			if pm.trackedAlwaysOnRefs[peer.ClusterID] <= 0 {
 				delete(pm.trackedAlwaysOnRefs, peer.ClusterID)
+			}
+		}
+		if peer.ControlCellID != "" {
+			decrementRef(pm.trackedCellRefs[peer.ClusterID], peer.ControlCellID)
+			if len(pm.trackedCellRefs[peer.ClusterID]) == 0 {
+				delete(pm.trackedCellRefs, peer.ClusterID)
 			}
 		}
 	}
@@ -678,6 +725,7 @@ func (pm *PeerManager) loadStreamPeerMembershipsFromRedis() error {
 	pm.trackedTenantRefs = make(map[string]map[string]int)
 	pm.trackedAddrRefs = make(map[string]map[string]map[int64]int)
 	pm.trackedAlwaysOnRefs = make(map[string]int)
+	pm.trackedCellRefs = make(map[string]map[string]int)
 	for _, membership := range all {
 		if !membership.Active {
 			continue
@@ -742,17 +790,18 @@ func (pm *PeerManager) cleanupStreamMembershipTombstones(ctx context.Context) er
 }
 
 const (
-	peerRefreshInterval          = 5 * time.Minute // reconciliation only; demand-driven path handles fast discovery
-	telemetryPushInterval        = 5 * time.Second
-	summaryPushInterval          = 15 * time.Second
+	peerRefreshInterval = 5 * time.Minute // reconciliation only; demand-driven path handles fast discovery
+	// streamAdPushInterval paces stream advertisements. Peers hold a peer's live
+	// streams for remoteLiveStreamTTL (30s), so six of these intervals fit inside
+	// the window a single missed push has to make up.
+	streamAdPushInterval         = 5 * time.Second
 	artifactPushInterval         = 30 * time.Second
 	peerReconnectBackoff         = 10 * time.Second
 	streamPeerTombstoneRetention = time.Hour
 	streamPeerTombstoneScanCount = int64(512)
-	heartbeatPushInterval        = 10 * time.Second
+	maintenanceInterval          = 10 * time.Second
 	leaderAcquireInterval        = 5 * time.Second
 	leaderRole                   = "peer_manager"
-	protocolVersion              = uint32(1)
 	// peerSendQueueSize bounds the per-peer writer mailbox. Every federation frame
 	// is best-effort with its own backstop (periodic re-push, or a TTL on the
 	// receiver's cache), so on overflow the oldest frame is evicted (latest-wins)
@@ -859,16 +908,35 @@ func (pm *PeerManager) runAsLeader() {
 	})
 	pm.refreshPeers()
 
+	// Subscribe for the duration of this leadership term: changes arrive when
+	// they happen, and the ticker below stays as the backstop.
+	watchCtx, stopWatch := context.WithCancel(context.Background())
+	watchDone := make(chan struct{})
+	// Leadership exit revokes this instance's peer-hint contribution, and that
+	// revoke has to be its last write. Cancelling alone would let a publish
+	// already past its leadership check land afterwards and restore the
+	// departed leader's hints until their TTL expired, so exit waits for the
+	// subscription goroutine to finish.
+	defer func() {
+		stopWatch()
+		<-watchDone
+	}()
+	go func() {
+		defer close(watchDone)
+		pm.watchPeers(watchCtx)
+	}()
+
+	// The stream-advertisement tick keeps the telemetry interval: advertisements
+	// are what peers actually consume, and this cadence is what their freshness
+	// gates are tuned against.
 	refreshTicker := time.NewTicker(peerRefreshInterval)
-	telemetryTicker := time.NewTicker(telemetryPushInterval)
-	summaryTicker := time.NewTicker(summaryPushInterval)
+	advertisementTicker := time.NewTicker(streamAdPushInterval)
 	artifactTicker := time.NewTicker(artifactPushInterval)
-	heartbeatTicker := time.NewTicker(heartbeatPushInterval)
+	maintenanceTicker := time.NewTicker(maintenanceInterval)
 	defer refreshTicker.Stop()
-	defer telemetryTicker.Stop()
-	defer summaryTicker.Stop()
+	defer advertisementTicker.Stop()
 	defer artifactTicker.Stop()
-	defer heartbeatTicker.Stop()
+	defer maintenanceTicker.Stop()
 
 	for {
 		select {
@@ -878,19 +946,16 @@ func (pm *PeerManager) runAsLeader() {
 			// Replace the leader's authoritative Quartermaster contribution; refreshPeers then
 			// reconciles it with independently leased demand discoveries.
 			pm.refreshPeers()
-		case <-telemetryTicker.C:
+		case <-advertisementTicker.C:
 			if !pm.renewLease() {
 				pm.logger.Warn("Lost PeerManager leader lease, stepping down")
 				return
 			}
-			pm.pushTelemetry()
 			pm.pushStreamAds()
 			pm.checkReplicationCompletion()
-		case <-summaryTicker.C:
-			pm.pushSummary()
 		case <-artifactTicker.C:
 			pm.pushArtifacts()
-		case <-heartbeatTicker.C:
+		case <-maintenanceTicker.C:
 			// Quartermaster remains leased. Active membership changes only through incremental
 			// track/untrack records; proven-safe ended fences are collected separately below.
 			pm.publishQuartermasterHints()
@@ -902,7 +967,6 @@ func (pm *PeerManager) runAsLeader() {
 				pm.logger.WithError(err).Warn("Failed to clean ended stream-peer membership fences")
 			}
 			cleanupCancel()
-			pm.pushHeartbeat()
 		}
 	}
 }
@@ -922,16 +986,24 @@ func (pm *PeerManager) refreshPeers() {
 		pm.logger.WithError(err).Warn("Failed to refresh federation peers")
 		return
 	}
+	pm.applyQuartermasterPeers(resp)
+}
 
-	hints := make(map[string]PeerHint, len(resp.Peers))
-	for _, peer := range resp.Peers {
+// applyQuartermasterPeers replaces this leader's authoritative contribution.
+// Reconciliation with independently leased demand discoveries happens in
+// loadPeerAddressesFromRedis, so a periodic refresh and a streamed change land
+// through exactly the same path.
+func (pm *PeerManager) applyQuartermasterPeers(resp *quartermasterpb.ListPeersResponse) {
+	hints := make(map[string]PeerHint, len(resp.GetPeers()))
+	for _, peer := range resp.GetPeers() {
 		if strings.TrimSpace(peer.FoghornAddr) == "" || strings.TrimSpace(peer.ClusterId) == "" || peer.ClusterId == pm.clusterID {
 			continue
 		}
 		hints[peer.ClusterId] = PeerHint{
-			Addr:     peer.FoghornAddr,
-			AlwaysOn: true,
-			Tenants:  append([]string(nil), peer.SharedTenantIds...),
+			Addr:          peer.FoghornAddr,
+			ControlCellID: peer.ControlCellId,
+			AlwaysOn:      true,
+			Tenants:       append([]string(nil), peer.SharedTenantIds...),
 		}
 	}
 	pm.mu.Lock()
@@ -974,10 +1046,19 @@ func (pm *PeerManager) trackedPeerHintsLocked() map[string]PeerHint {
 			tenantList = append(tenantList, tenantID)
 		}
 		slices.Sort(tenantList)
+		// A control cell is carried only when every active membership agrees on it;
+		// conflicting cells fail closed the same way conflicting addresses do.
+		controlCellID := ""
+		if cells := pm.trackedCellRefs[clusterID]; len(cells) == 1 {
+			for cellID := range cells {
+				controlCellID = cellID
+			}
+		}
 		hints[clusterID] = PeerHint{
-			Addr:     addr,
-			AlwaysOn: pm.trackedAlwaysOnRefs[clusterID] > 0,
-			Tenants:  tenantList,
+			Addr:          addr,
+			ControlCellID: controlCellID,
+			AlwaysOn:      pm.trackedAlwaysOnRefs[clusterID] > 0,
+			Tenants:       tenantList,
 		}
 	}
 	return hints
@@ -1086,6 +1167,7 @@ func (pm *PeerManager) reconcileLoadedPeerHints(membershipHints, external map[st
 func peerHintsFromMemberships(memberships map[string]StreamPeerMembership) map[string]PeerHint {
 	hints := make(map[string]PeerHint)
 	addresses := make(map[string]map[string]bool)
+	cells := make(map[string]map[string]bool)
 	tenants := make(map[string]map[string]bool)
 	for _, membership := range memberships {
 		if !membership.Active {
@@ -1098,6 +1180,12 @@ func peerHintsFromMemberships(memberships map[string]StreamPeerMembership) map[s
 				addresses[peer.ClusterID] = make(map[string]bool)
 			}
 			addresses[peer.ClusterID][peer.Addr] = true
+			if peer.ControlCellID != "" {
+				if cells[peer.ClusterID] == nil {
+					cells[peer.ClusterID] = make(map[string]bool)
+				}
+				cells[peer.ClusterID][peer.ControlCellID] = true
+			}
 			if tenants[peer.ClusterID] == nil {
 				tenants[peer.ClusterID] = make(map[string]bool)
 			}
@@ -1121,6 +1209,12 @@ func peerHintsFromMemberships(memberships map[string]StreamPeerMembership) map[s
 		for addr := range addresses[clusterID] {
 			hint.Addr = addr
 		}
+		// The control cell is carried only when the memberships agree on one.
+		if len(cells[clusterID]) == 1 {
+			for cellID := range cells[clusterID] {
+				hint.ControlCellID = cellID
+			}
+		}
 		hints[clusterID] = hint
 	}
 	return hints
@@ -1133,6 +1227,7 @@ func mergePeerHintMaps(target, incoming map[string]PeerHint) {
 		nextUnrestricted := next.AlwaysOn && len(next.Tenants) == 0
 		if !exists || next.AlwaysOn || !current.AlwaysOn {
 			current.Addr = next.Addr
+			current.ControlCellID = next.ControlCellID
 		}
 		current.AlwaysOn = current.AlwaysOn || next.AlwaysOn
 		if currentUnrestricted {
@@ -1172,6 +1267,7 @@ func (pm *PeerManager) reconcilePeerHintsLocked(hints map[string]PeerHint) []pee
 			lifecycle = peerAlwaysOn
 		}
 		if existing := pm.peers[clusterID]; existing != nil {
+			existing.controlCellID = hint.ControlCellID
 			if existing.addr != hint.Addr {
 				existing.addr = hint.Addr
 				if existing.cancel != nil {
@@ -1188,7 +1284,7 @@ func (pm *PeerManager) reconcilePeerHintsLocked(hints map[string]PeerHint) []pee
 			}
 			continue
 		}
-		ps := &peerState{addr: hint.Addr, lifecycle: lifecycle, lastRefresh: time.Now()}
+		ps := &peerState{addr: hint.Addr, controlCellID: hint.ControlCellID, lifecycle: lifecycle, lastRefresh: time.Now()}
 		replacePeerTenants(ps, hint.Tenants)
 		pm.peers[clusterID] = ps
 		if pm.isLeader {
@@ -1248,6 +1344,7 @@ func (pm *PeerManager) importAdmissionPeerHintsLocked(hints map[string]PeerHint)
 		}
 		if existing := pm.peers[clusterID]; existing != nil {
 			if existing.lifecycle != peerAlwaysOn || lifecycle == peerAlwaysOn {
+				existing.controlCellID = hint.ControlCellID
 				if existing.addr != hint.Addr {
 					existing.addr = hint.Addr
 					if existing.cancel != nil {
@@ -1277,7 +1374,7 @@ func (pm *PeerManager) importAdmissionPeerHintsLocked(hints map[string]PeerHint)
 			}
 			continue
 		}
-		state := &peerState{addr: hint.Addr, lifecycle: lifecycle, lastRefresh: time.Now()}
+		state := &peerState{addr: hint.Addr, controlCellID: hint.ControlCellID, lifecycle: lifecycle, lastRefresh: time.Now()}
 		replacePeerTenants(state, hint.Tenants)
 		pm.peers[clusterID] = state
 		if pm.isLeader {
@@ -1432,6 +1529,21 @@ func (pm *PeerManager) touchPool(clusterID string) {
 	}
 }
 
+// touchConnectedPeers keeps the pool from evicting a live PeerChannel for
+// inactivity. The pool ages entries by last use and cannot see that a stream is
+// still open on the connection, so a cluster with nothing to advertise would
+// have its channel closed under it and would then be disconnected for a
+// reconnect backoff at exactly the moment its first stream goes live.
+func (pm *PeerManager) touchConnectedPeers() {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	for peerID, ps := range pm.peers {
+		if ps.connected && ps.stream != nil {
+			pm.touchPool(peerID)
+		}
+	}
+}
+
 // enqueue offers a frame to a peer's writer goroutine without blocking. Callers
 // may hold pm.mu (R or W): the channel op never blocks. Producers must never call
 // stream.Send directly — the single-writer invariant is what keeps gRPC Sends
@@ -1440,8 +1552,8 @@ func (pm *PeerManager) touchPool(clusterID string) {
 // Backpressure policy is latest-wins (drop-oldest). Every federation frame is
 // best-effort with its own backstop, so evicting one under load is safe and
 // dropping the newest (letting a stale frame drain later) would be worse:
-//   - telemetry/summary/heartbeat/ads, live StreamAds, and live-lifecycle events
-//     re-push every periodic tick;
+//   - live StreamAds, artifact ads, and live-lifecycle events re-push every
+//     periodic tick;
 //   - an offline-lifecycle event is backstopped by the receiver's RemoteLiveStream
 //     30s TTL, which expires on its own once the live re-push stops;
 //   - a ReplicationEvent is an ephemeral loop-prevention hint (RemoteReplication
@@ -1498,408 +1610,24 @@ func (pm *PeerManager) peerWriteLoop(ctx context.Context, peerID string, sendCh 
 	}
 }
 
-// recvLoop reads PeerMessages from the stream and writes telemetry to Redis.
+// recvLoop drains the dialing side of PeerChannel. Nothing arrives on it:
+// FederationServer.PeerChannel only ever receives, so the stream is used in one
+// direction and every frame reaches the peer through the server handlers, which
+// bind records to the channel's identity rather than to the payload's claim.
+//
+// It deliberately does no payload handling. A second copy of the handlers here
+// would have to take the sending cluster from the payload rather than from the
+// connection, and would drift out of step with the server-side tenant and
+// attribution guards, as it already had. If a reply direction is ever added,
+// route it through those handlers instead of reviving a parallel switch.
 func (pm *PeerManager) recvLoop(peerClusterID string, stream foghornfederationpb.FoghornFederation_PeerChannelClient) {
 	for {
-		msg, err := stream.Recv()
-		if err != nil {
+		if _, err := stream.Recv(); err != nil {
 			if !errors.Is(err, io.EOF) {
 				pm.logger.WithError(err).WithField("peer_cluster", peerClusterID).Debug("PeerChannel recv error")
 			}
 			return
 		}
-
-		if pm.cache == nil {
-			continue
-		}
-
-		ctx := context.Background()
-
-		switch payload := msg.Payload.(type) {
-		case *foghornfederationpb.PeerMessage_EdgeTelemetry:
-			t := payload.EdgeTelemetry
-			entry := &RemoteEdgeEntry{
-				StreamName:  t.StreamName,
-				NodeID:      t.NodeId,
-				BaseURL:     t.BaseUrl,
-				BWAvailable: t.BwAvailable,
-				ViewerCount: t.ViewerCount,
-				CPUPercent:  t.CpuPercent,
-				RAMUsed:     t.RamUsed,
-				RAMMax:      t.RamMax,
-				GeoLat:      t.GeoLat,
-				GeoLon:      t.GeoLon,
-				UpdatedAt:   time.Now().Unix(),
-			}
-			if err := pm.cache.SetRemoteEdge(ctx, peerClusterID, entry); err != nil {
-				pm.logger.WithError(err).Debug("Failed to cache remote edge from PeerChannel")
-			}
-
-		case *foghornfederationpb.PeerMessage_ReplicationEvent:
-			r := payload.ReplicationEvent
-			entry := &RemoteReplicationEntry{
-				StreamName: r.StreamName,
-				NodeID:     r.NodeId,
-				ClusterID:  r.ClusterId,
-				BaseURL:    r.BaseUrl,
-				DTSCURL:    r.DtscUrl,
-				Available:  r.Available,
-				UpdatedAt:  time.Now().Unix(),
-			}
-			if err := pm.cache.SetRemoteReplication(ctx, peerClusterID, entry); err != nil {
-				pm.logger.WithError(err).Debug("Failed to cache remote replication from PeerChannel")
-			}
-
-		case *foghornfederationpb.PeerMessage_ClusterSummary:
-			summary := payload.ClusterSummary
-			edges := make([]*EdgeSummaryEntry, 0, len(summary.Edges))
-			for _, e := range summary.Edges {
-				edges = append(edges, &EdgeSummaryEntry{
-					NodeID:         e.NodeId,
-					BaseURL:        e.BaseUrl,
-					GeoLat:         e.GeoLat,
-					GeoLon:         e.GeoLon,
-					BWAvailableAvg: e.BwAvailableAvg,
-					CPUPercentAvg:  e.CpuPercentAvg,
-					RAMUsed:        e.RamUsed,
-					RAMMax:         e.RamMax,
-					TotalViewers:   e.TotalViewers,
-					Roles:          e.Roles,
-				})
-			}
-			record := &EdgeSummaryRecord{
-				Edges:     edges,
-				Timestamp: summary.Timestamp,
-			}
-			if err := pm.cache.SetEdgeSummary(ctx, peerClusterID, record); err != nil {
-				pm.logger.WithError(err).Debug("Failed to cache cluster summary from PeerChannel")
-			}
-
-		case *foghornfederationpb.PeerMessage_StreamLifecycle:
-			ev := payload.StreamLifecycle
-			if ev == nil || strings.TrimSpace(ev.GetClusterId()) != peerClusterID {
-				pm.logger.WithFields(logging.Fields{
-					"peer_cluster":    peerClusterID,
-					"claimed_cluster": ev.GetClusterId(),
-				}).Warn("Rejected stream lifecycle with mismatched PeerChannel identity")
-				continue
-			}
-			if _, err := pm.cache.ApplyRemoteStreamLifecycle(ctx, ev.GetTenantId(), ev.GetInternalName(), &RemoteLiveStreamEntry{
-				ClusterID:      peerClusterID,
-				TenantID:       ev.GetTenantId(),
-				SourceRevision: ev.GetSourceRevision(),
-				UpdatedAt:      time.Now().Unix(),
-			}, ev.GetIsLive()); err != nil {
-				pm.logger.WithError(err).Debug("Failed to apply remote stream lifecycle from PeerChannel")
-			}
-
-		case *foghornfederationpb.PeerMessage_StreamAd:
-			ad := payload.StreamAd
-			if ad != nil {
-				// Mirror PeerChannel-delivered ads into the unified stream
-				// registry so they land in the same inventory as
-				// gRPC-delivered ones (handleStreamAdvertisement does the
-				// same).
-				if control.StreamRegistryInstance != nil {
-					ecands := make([]control.EdgeCandidate, 0, len(ad.Edges))
-					for _, e := range ad.Edges {
-						ecands = append(ecands, control.EdgeCandidate{
-							NodeID:      e.NodeId,
-							BaseURL:     e.BaseUrl,
-							DTSCURL:     e.DtscUrl,
-							IsOrigin:    e.IsOrigin,
-							BWAvailable: int64(e.BwAvailable),
-							CPUPercent:  e.CpuPercent,
-							ViewerCount: int32(e.ViewerCount),
-							GeoLat:      e.GeoLat,
-							GeoLon:      e.GeoLon,
-							BufferState: e.BufferState,
-						})
-					}
-					originCluster := ad.OriginClusterId
-					if originCluster == "" {
-						originCluster = peerClusterID
-					}
-					control.StreamRegistryInstance.UpsertFederatedSource(
-						peerClusterID,
-						control.StreamEntry{
-							TenantID:        ad.TenantId,
-							PlaybackID:      ad.PlaybackId,
-							InternalName:    ad.InternalName,
-							OriginClusterID: originCluster,
-						},
-						control.Location{
-							IsLiveNow:       ad.IsLive,
-							AdTimestamp:     ad.Timestamp,
-							EdgeCandidates:  ecands,
-							RecordingNodeID: ad.DvrRecordingNodeId,
-						},
-					)
-				}
-			}
-
-		case *foghornfederationpb.PeerMessage_ArtifactAd:
-			ad := payload.ArtifactAd
-			if ad != nil {
-				for _, loc := range ad.Artifacts {
-					entry := &RemoteArtifactEntry{
-						ArtifactHash: loc.ArtifactHash,
-						ArtifactType: loc.ArtifactType,
-						NodeID:       loc.NodeId,
-						BaseURL:      loc.BaseUrl,
-						SizeBytes:    loc.SizeBytes,
-						AccessCount:  loc.AccessCount,
-						LastAccessed: loc.LastAccessed,
-						GeoLat:       loc.GeoLat,
-						GeoLon:       loc.GeoLon,
-						UpdatedAt:    time.Now().Unix(),
-						TenantID:     loc.TenantId,
-					}
-					if err := pm.cache.SetRemoteArtifact(ctx, peerClusterID, entry); err != nil {
-						pm.logger.WithError(err).Debug("Failed to cache remote artifact from PeerChannel")
-					}
-				}
-			}
-
-		case *foghornfederationpb.PeerMessage_PeerHeartbeat:
-			hb := payload.PeerHeartbeat
-			if hb != nil {
-				record := &PeerHeartbeatRecord{
-					ProtocolVersion:  hb.ProtocolVersion,
-					StreamCount:      hb.StreamCount,
-					TotalBWAvailable: hb.TotalBwAvailable,
-					EdgeCount:        hb.EdgeCount,
-					UptimeSeconds:    hb.UptimeSeconds,
-					Capabilities:     hb.Capabilities,
-					Lat:              hb.FoghornLat,
-					Lon:              hb.FoghornLon,
-					Location:         hb.FoghornLocation,
-				}
-				if err := pm.cache.SetPeerHeartbeat(ctx, peerClusterID, record); err != nil {
-					pm.logger.WithError(err).Debug("Failed to cache peer heartbeat from PeerChannel")
-				}
-				pm.mu.Lock()
-				if ps, ok := pm.peers[peerClusterID]; ok {
-					ps.lat = hb.FoghornLat
-					ps.lon = hb.FoghornLon
-					ps.location = hb.FoghornLocation
-				}
-				pm.mu.Unlock()
-			}
-
-		case *foghornfederationpb.PeerMessage_CapacitySummary:
-			// CapacitySummary received — stored when handler is implemented
-		}
-	}
-}
-
-// pushTelemetry sends EdgeTelemetry for locally active replicated streams
-// to all connected peers every 5s.
-func (pm *PeerManager) pushTelemetry() {
-	pm.mu.RLock()
-	defer pm.mu.RUnlock()
-
-	// Collect nodes with active replications from local state
-	sm := state.DefaultManager()
-	if sm == nil {
-		return
-	}
-
-	snapshot := sm.GetBalancerSnapshotAtomic()
-	if snapshot == nil {
-		return
-	}
-
-	// Build telemetry messages for nodes that have streams
-	var messages []*foghornfederationpb.PeerMessage
-	for _, snap := range snapshot.Nodes {
-		if !snap.IsActive || len(snap.Streams) == 0 {
-			continue
-		}
-
-		ns := sm.GetNodeState(snap.NodeID)
-		if ns == nil {
-			continue
-		}
-
-		for streamName := range snap.Streams {
-			msg := &foghornfederationpb.PeerMessage{
-				ClusterId: pm.clusterID,
-				Payload: &foghornfederationpb.PeerMessage_EdgeTelemetry{
-					EdgeTelemetry: &foghornfederationpb.EdgeTelemetry{
-						StreamName:  streamName,
-						NodeId:      snap.NodeID,
-						BaseUrl:     ns.BaseURL,
-						BwAvailable: snap.BWAvailable,
-						ViewerCount: uint32(sm.GetNodeActiveViewers(snap.NodeID)),
-						CpuPercent:  snap.CPU,
-						RamUsed:     uint64(snap.RAMCurrent),
-						RamMax:      uint64(snap.RAMMax),
-						GeoLat:      snap.GeoLatitude,
-						GeoLon:      snap.GeoLongitude,
-					},
-				},
-			}
-			messages = append(messages, msg)
-		}
-	}
-
-	if len(messages) == 0 {
-		return
-	}
-
-	// Send to all connected peers
-	for peerID, ps := range pm.peers {
-		if !ps.connected || ps.stream == nil {
-			continue
-		}
-		pm.touchPool(peerID)
-		for _, msg := range messages {
-			tel, ok := msg.GetPayload().(*foghornfederationpb.PeerMessage_EdgeTelemetry)
-			if !ok || tel.EdgeTelemetry == nil {
-				continue
-			}
-			ss := sm.GetStreamState(tel.EdgeTelemetry.StreamName)
-			tenantID := ""
-			if ss != nil {
-				tenantID = ss.TenantID
-			}
-			if !pm.shouldSendStreamToPeer(peerID, ps, tel.EdgeTelemetry.StreamName, tenantID) {
-				continue
-			}
-			pm.enqueue(peerID, ps, msg)
-		}
-	}
-
-	// Heartbeat: re-broadcast lifecycle events for all locally live streams.
-	// Refreshes the 30s TTL on peer clusters' Redis keys. Dedup by stream name
-	// since the same stream may be on multiple nodes.
-	seen := make(map[string]bool)
-	now := time.Now().Unix()
-	for _, ss := range sm.GetAllStreamStates() {
-		if ss.Status != "live" || seen[ss.InternalName] {
-			continue
-		}
-		membership, tracked := pm.streamMemberships[ss.InternalName]
-		if !tracked || !membership.Active || membership.SourceRevision <= 0 {
-			continue
-		}
-		seen[ss.InternalName] = true
-		lifecycleMsg := &foghornfederationpb.PeerMessage{
-			ClusterId: pm.clusterID,
-			Payload: &foghornfederationpb.PeerMessage_StreamLifecycle{
-				StreamLifecycle: &foghornfederationpb.StreamLifecycleEvent{
-					InternalName:   ss.InternalName,
-					TenantId:       ss.TenantID,
-					ClusterId:      pm.clusterID,
-					IsLive:         true,
-					TimestampUnix:  now,
-					SourceRevision: membership.SourceRevision,
-				},
-			},
-		}
-		for peerID, ps := range pm.peers {
-			if !ps.connected || ps.stream == nil {
-				continue
-			}
-			if !pm.shouldSendStreamToPeer(peerID, ps, ss.InternalName, ss.TenantID) {
-				continue
-			}
-			pm.enqueue(peerID, ps, lifecycleMsg)
-		}
-	}
-}
-
-const metricWindowDuration = 30 * time.Second
-
-// recordAndAverage records a BW/CPU sample for a node and returns the 30s moving average.
-func (pm *PeerManager) recordAndAverage(nodeID string, bw uint64, cpu float64) (uint64, float64) {
-	now := time.Now()
-	cutoff := now.Add(-metricWindowDuration)
-
-	samples := pm.metricHistory[nodeID]
-	// Prune expired samples
-	n := 0
-	for _, s := range samples {
-		if s.ts.After(cutoff) {
-			samples[n] = s
-			n++
-		}
-	}
-	samples = samples[:n]
-
-	samples = append(samples, metricSample{bwAvailable: bw, cpuPercent: cpu, ts: now})
-	pm.metricHistory[nodeID] = samples
-
-	var bwSum uint64
-	var cpuSum float64
-	for _, s := range samples {
-		bwSum += s.bwAvailable
-		cpuSum += s.cpuPercent
-	}
-	count := uint64(len(samples))
-	return bwSum / count, cpuSum / float64(count)
-}
-
-// pushSummary sends a ClusterEdgeSummary with 30s-averaged node metrics to all connected peers.
-func (pm *PeerManager) pushSummary() {
-	sm := state.DefaultManager()
-	if sm == nil {
-		return
-	}
-
-	snapshot := sm.GetBalancerSnapshotAtomic()
-	if snapshot == nil {
-		return
-	}
-
-	var edges []*foghornfederationpb.EdgeSnapshot
-	for _, snap := range snapshot.Nodes {
-		if !snap.IsActive || snap.BWAvailable == 0 {
-			continue
-		}
-		ns := sm.GetNodeState(snap.NodeID)
-		if ns == nil {
-			continue
-		}
-		bwAvg, cpuAvg := pm.recordAndAverage(snap.NodeID, snap.BWAvailable, snap.CPU)
-		edges = append(edges, &foghornfederationpb.EdgeSnapshot{
-			NodeId:         snap.NodeID,
-			BaseUrl:        ns.BaseURL,
-			GeoLat:         snap.GeoLatitude,
-			GeoLon:         snap.GeoLongitude,
-			BwAvailableAvg: bwAvg,
-			CpuPercentAvg:  cpuAvg,
-			RamUsed:        uint64(snap.RAMCurrent),
-			RamMax:         uint64(snap.RAMMax),
-			TotalViewers:   uint32(sm.GetNodeActiveViewers(snap.NodeID)),
-			Roles:          append([]string(nil), snap.Roles...),
-		})
-	}
-
-	if len(edges) == 0 {
-		return
-	}
-
-	msg := &foghornfederationpb.PeerMessage{
-		ClusterId: pm.clusterID,
-		Payload: &foghornfederationpb.PeerMessage_ClusterSummary{
-			ClusterSummary: &foghornfederationpb.ClusterEdgeSummary{
-				Edges:     edges,
-				Timestamp: time.Now().Unix(),
-			},
-		},
-	}
-
-	pm.mu.RLock()
-	defer pm.mu.RUnlock()
-
-	for peerID, ps := range pm.peers {
-		if !ps.connected || ps.stream == nil {
-			continue
-		}
-		pm.touchPool(peerID)
-		pm.enqueue(peerID, ps, msg)
 	}
 }
 
@@ -2156,8 +1884,15 @@ func (pm *PeerManager) pushStreamAds() {
 		ss              *state.StreamState
 		edges           []*foghornfederationpb.PeerStreamEdge
 		originClusterID string
+		instances       map[string]state.StreamInstanceState
 	}
 	streams := make(map[string]*streamInfo)
+	sources := make(map[string]control.StreamEntry)
+	if registry := control.StreamRegistryInstance; registry != nil {
+		for _, entry := range registry.Snapshot() {
+			sources[entry.InternalName] = entry
+		}
+	}
 
 	for _, snap := range snapshot.Nodes {
 		if !snap.IsActive || len(snap.Streams) == 0 {
@@ -2174,45 +1909,73 @@ func (pm *PeerManager) pushStreamAds() {
 				if ss == nil || ss.Status != "live" {
 					continue
 				}
-				si = &streamInfo{ss: ss, originClusterID: pm.clusterID}
+				si = &streamInfo{ss: ss, originClusterID: pm.clusterID, instances: sm.GetStreamInstances(streamName)}
 				streams[streamName] = si
 			}
-			isOrigin := si.ss.NodeID == snap.NodeID && si.ss.Inputs > 0
+			instance, known := si.instances[snap.NodeID]
+			if !known || instance.TenantID != si.ss.TenantID || instance.Status != "live" {
+				continue
+			}
+			isOrigin := instance.Inputs > 0 && !instance.Replicated
 			sourceStreamName := streamName
-			if control.StreamRegistryInstance != nil {
-				if entry, err := control.StreamRegistryInstance.ResolveSourceByInternalName(context.Background(), streamName); err == nil {
-					if entry.OriginClusterID != "" {
-						si.originClusterID = entry.OriginClusterID
-					}
-					if entry.IngestMode != 0 {
-						sourceStreamName = control.RuntimeNameFor(entry.IngestMode, entry.InternalName)
-					} else if strings.Contains(si.ss.StreamName, "+") {
-						sourceStreamName = control.MistSourceNameFromObservedStream(si.ss.StreamName)
-					}
-				} else if strings.Contains(si.ss.StreamName, "+") {
-					sourceStreamName = control.MistSourceNameFromObservedStream(si.ss.StreamName)
-				}
+			entry := sources[streamName]
+			if entry.TenantID == si.ss.TenantID && entry.IngestMode != 0 {
+				sourceStreamName = control.RuntimeNameFor(entry.IngestMode, entry.InternalName)
 			} else if strings.Contains(si.ss.StreamName, "+") {
 				sourceStreamName = control.MistSourceNameFromObservedStream(si.ss.StreamName)
 			}
+			if entry.TenantID == si.ss.TenantID && entry.OriginClusterID != "" {
+				si.originClusterID = entry.OriginClusterID
+			}
+			var generation string
+			var revision int64
+			if isOrigin {
+				generation, revision = confirmedPublisherBinding(entry, snap.NodeID, si.ss.TenantID, pm.clusterID)
+			}
+			var dtscURL string
+			var dtscObservedAt int64
+			if freshPlacementEvidence(snap.OutputsObservedAt, time.Now()) {
+				dtscURL = mist.ResolvePlaybackURL(snap.Outputs, snap.Host, "dtsc", sourceStreamName)
+				if dtscURL != "" {
+					dtscObservedAt = snap.OutputsObservedAt.Unix()
+				}
+			}
+			sourceObservedAt := minPlacementExpiry(snap.LastHeartbeat, instance.LastUpdate)
+			var sourceObservedSeconds int64
+			if !sourceObservedAt.IsZero() {
+				sourceObservedSeconds = sourceObservedAt.Unix()
+			}
 			si.edges = append(si.edges, &foghornfederationpb.PeerStreamEdge{
-				NodeId:      snap.NodeID,
-				BaseUrl:     ns.BaseURL,
-				DtscUrl:     control.BuildDTSCURI(snap.NodeID, sourceStreamName, pm.logger),
-				IsOrigin:    isOrigin,
-				BwAvailable: snap.BWAvailable,
-				CpuPercent:  snap.CPU,
-				ViewerCount: uint32(sm.GetNodeActiveViewers(snap.NodeID)),
-				GeoLat:      snap.GeoLatitude,
-				GeoLon:      snap.GeoLongitude,
-				BufferState: si.ss.BufferState,
-				RamUsed:     uint64(ns.RAMCurrent),
-				RamMax:      uint64(ns.RAMMax),
+				NodeId:           snap.NodeID,
+				BaseUrl:          ns.BaseURL,
+				DtscUrl:          dtscURL,
+				DtscObservedAt:   dtscObservedAt,
+				SourceObservedAt: sourceObservedSeconds,
+				IsOrigin:         isOrigin,
+				BwAvailable:      snap.BWAvailable,
+				CpuPercent:       snap.CPU,
+				ViewerCount:      uint32(sm.GetNodeActiveViewers(snap.NodeID)),
+				GeoLat:           snap.GeoLatitude,
+				GeoLon:           snap.GeoLongitude,
+				BufferState:      instance.BufferState,
+				RamUsed:          uint64(ns.RAMCurrent),
+				RamMax:           uint64(ns.RAMMax),
+				SourceGeneration: generation,
+				SourceRevision:   revision,
+				ClusterId:        snap.ClusterID,
 			})
 		}
 	}
 
 	if len(streams) == 0 {
+		// Two things still have to happen on a tick that advertises nothing.
+		// The live-lifecycle refresh reads stream state, not the balancer
+		// snapshot, so a stream whose node has dropped out of the snapshot is
+		// still live and still owes its peers a TTL refresh. And the connection
+		// pool evicts by idle time, so a cluster that advertises nothing for
+		// MaxIdleTime loses the PeerChannel underneath it.
+		pm.refreshRemoteLiveStreams(sm)
+		pm.touchConnectedPeers()
 		return
 	}
 
@@ -2231,6 +1994,9 @@ func (pm *PeerManager) pushStreamAds() {
 	now := time.Now().Unix()
 	var messages []*foghornfederationpb.PeerMessage
 	for _, si := range streams {
+		if len(si.edges) == 0 {
+			continue
+		}
 		messages = append(messages, &foghornfederationpb.PeerMessage{
 			ClusterId: pm.clusterID,
 			Payload: &foghornfederationpb.PeerMessage_StreamAd{
@@ -2239,6 +2005,7 @@ func (pm *PeerManager) pushStreamAds() {
 					TenantId:           si.ss.TenantID,
 					PlaybackId:         si.ss.PlaybackID,
 					OriginClusterId:    si.originClusterID,
+					ControlCellId:      pm.controlCellID,
 					IsLive:             true,
 					Edges:              si.edges,
 					Timestamp:          now,
@@ -2267,77 +2034,55 @@ func (pm *PeerManager) pushStreamAds() {
 			pm.enqueue(peerID, ps, msg)
 		}
 	}
+	pm.refreshRemoteLiveStreams(sm)
 }
 
-// pushHeartbeat sends a PeerHeartbeat with cluster-wide stats to all connected peers.
-func (pm *PeerManager) pushHeartbeat() {
-	sm := state.DefaultManager()
-	if sm == nil {
-		return
-	}
-
-	snapshot := sm.GetBalancerSnapshotAtomic()
-	if snapshot == nil {
-		return
-	}
-
-	var streamCount uint32
-	var totalBW uint64
-	var edgeCount uint32
-
+// refreshRemoteLiveStreams re-broadcasts a live lifecycle event for every
+// locally live tracked stream. A peer stores that record under a 30s TTL and
+// reads it back to refuse a second publisher for the same stream, so without a
+// periodic refresh the record expires and cross-cell duplicate-ingest dedup
+// silently stops holding after the first half-minute of every stream. Deduped
+// by internal name because the same stream may be live on several nodes.
+func (pm *PeerManager) refreshRemoteLiveStreams(sm *state.StreamStateManager) {
 	seen := make(map[string]bool)
+	now := time.Now().Unix()
 	for _, ss := range sm.GetAllStreamStates() {
-		if ss.Status == "live" && !seen[ss.InternalName] {
-			seen[ss.InternalName] = true
-			streamCount++
-		}
-	}
-
-	for _, snap := range snapshot.Nodes {
-		if !snap.IsActive {
+		if ss.Status != "live" || seen[ss.InternalName] {
 			continue
 		}
-		edgeCount++
-		totalBW += snap.BWAvailable
-	}
-
-	hb := &foghornfederationpb.PeerHeartbeat{
-		ProtocolVersion:  protocolVersion,
-		StreamCount:      streamCount,
-		TotalBwAvailable: totalBW,
-		EdgeCount:        edgeCount,
-		UptimeSeconds:    pm.uptimeSeconds(),
-		Capabilities:     []string{"stream_ad", "artifact_ad", "capacity_summary"},
-	}
-	if pm.selfGeoFunc != nil {
-		hb.FoghornLat, hb.FoghornLon, hb.FoghornLocation = pm.selfGeoFunc()
-	}
-	msg := &foghornfederationpb.PeerMessage{
-		ClusterId: pm.clusterID,
-		Payload:   &foghornfederationpb.PeerMessage_PeerHeartbeat{PeerHeartbeat: hb},
-	}
-
-	pm.mu.RLock()
-	defer pm.mu.RUnlock()
-
-	for peerID, ps := range pm.peers {
-		if !ps.connected || ps.stream == nil {
+		membership, tracked := pm.streamMemberships[ss.InternalName]
+		if !tracked || !membership.Active || membership.SourceRevision <= 0 {
 			continue
 		}
-		pm.enqueue(peerID, ps, msg)
+		seen[ss.InternalName] = true
+		lifecycle := &foghornfederationpb.PeerMessage{
+			ClusterId: pm.clusterID,
+			Payload: &foghornfederationpb.PeerMessage_StreamLifecycle{
+				StreamLifecycle: &foghornfederationpb.StreamLifecycleEvent{
+					InternalName:   ss.InternalName,
+					TenantId:       ss.TenantID,
+					ClusterId:      pm.clusterID,
+					IsLive:         true,
+					TimestampUnix:  now,
+					SourceRevision: membership.SourceRevision,
+				},
+			},
+		}
+		for peerID, ps := range pm.peers {
+			if !ps.connected || ps.stream == nil {
+				continue
+			}
+			if !pm.shouldSendStreamToPeer(peerID, ps, ss.InternalName, ss.TenantID) {
+				continue
+			}
+			pm.enqueue(peerID, ps, lifecycle)
+		}
 	}
 }
 
-func (pm *PeerManager) uptimeSeconds() int64 {
-	return int64(time.Since(pm.startTime).Seconds())
-}
-
-// checkReplicationCompletion detects when origin-pulled streams appear in
-// local state, clears the registry's replication mark, and broadcasts a
-// ReplicationEvent to peers. The "in-flight replication" state lives on
-// control.StreamRegistry; the local cluster's Location carries
-// ReplicatingFrom + PullDTSCURL + DestNodeID + DestNodeBaseURL +
-// PullSourceNodeID populated by MarkReplicating.
+// checkReplicationCompletion broadcasts a live-destination hint once per pull.
+// The source binding remains available for warm reuse and reconnect admission;
+// local live status alone is not generation-bound first-media evidence.
 func (pm *PeerManager) checkReplicationCompletion() {
 	if control.StreamRegistryInstance == nil {
 		return
@@ -2352,45 +2097,66 @@ func (pm *PeerManager) checkReplicationCompletion() {
 		return
 	}
 
-	for streamName, loc := range replications {
+	for streamName, locations := range replications {
 		st := sm.GetStreamState(streamName)
 		if st == nil || st.Status != "live" {
 			continue
 		}
 
 		instances := sm.GetStreamInstances(streamName)
-		destInstance, ok := instances[loc.DestNodeID]
-		if !ok || destInstance.Status != "live" {
-			continue
-		}
+		for _, loc := range locations {
+			destInstance, ok := instances[loc.DestNodeID]
+			if !ok || destInstance.Status != "live" {
+				continue
+			}
 
-		control.StreamRegistryInstance.ClearReplicating(streamName)
-		nameCopy := streamName
-		pm.broadcastToPeers(&foghornfederationpb.PeerMessage{
-			ClusterId: pm.clusterID,
-			Payload: &foghornfederationpb.PeerMessage_ReplicationEvent{
-				ReplicationEvent: &foghornfederationpb.ReplicationEvent{
-					StreamName: nameCopy,
-					NodeId:     loc.DestNodeID,
-					ClusterId:  pm.clusterID,
-					Available:  true,
-					BaseUrl:    loc.DestNodeBaseURL,
+			pull := loc.InboundPulls[loc.DestNodeID]
+			if pull.DestinationObserved {
+				continue
+			}
+			attemptID := pull.AttemptID
+			if attemptID == "" {
+				attemptID = "singleton:" + loc.DestNodeID
+			}
+			marked, err := control.StreamRegistryInstance.MarkInboundDestinationObserved(context.Background(), streamName, loc.DestNodeID, attemptID)
+			if err != nil || !marked {
+				continue
+			}
+			destinationClusterID := pull.DestClusterID
+			if destinationClusterID == "" {
+				destinationClusterID = pm.clusterID
+			}
+			nameCopy := streamName
+			pm.broadcastToPeers(&foghornfederationpb.PeerMessage{
+				ClusterId: pm.clusterID,
+				Payload: &foghornfederationpb.PeerMessage_ReplicationEvent{
+					ReplicationEvent: &foghornfederationpb.ReplicationEvent{
+						StreamName:    nameCopy,
+						NodeId:        loc.DestNodeID,
+						ClusterId:     destinationClusterID,
+						ControlCellId: pm.controlCellID,
+						Available:     true,
+						BaseUrl:       loc.DestNodeBaseURL,
+					},
 				},
-			},
-		})
-		pm.logger.WithField("stream", nameCopy).Info("Replication complete, registry mark cleared")
-		originClusterID := loc.ReplicatingFrom
-		if registryOrigin, ok := control.StreamRegistryInstance.OriginCluster(nameCopy); ok {
-			originClusterID = registryOrigin
+			})
+			pm.logger.WithField("stream", nameCopy).Info("Replication destination observed live")
+			originClusterID := loc.ReplicatingFrom
+			if registryOrigin, ok := control.StreamRegistryInstance.OriginCluster(nameCopy); ok {
+				originClusterID = registryOrigin
+			}
+			pm.emitFederationEvent(originPullCompletedEvent(nameCopy, loc, originClusterID, st.TenantID))
 		}
-		pm.emitFederationEvent(originPullCompletedEvent(nameCopy, loc, originClusterID, st.TenantID))
 	}
 }
 
 func originPullCompletedEvent(streamName string, loc control.Location, originClusterID, streamTenantID string) *ipcpb.FederationEventData {
 	destNode := loc.DestNodeID
 	sourceNode := loc.PullSourceNodeID
-	dtsc := loc.PullDTSCURL
+	// The stored pull URL carries this attempt's source credential. Federation
+	// events are persisted and read back by operators, so only the base media
+	// path travels with them, matching the sibling ORIGIN_PULL_ARRANGED emit.
+	dtsc := control.SourcePullBaseURL(loc.PullDTSCURL)
 	data := &ipcpb.FederationEventData{
 		EventType:       ipcpb.FederationEventType_ORIGIN_PULL_COMPLETED,
 		RemoteCluster:   loc.ReplicatingFrom,

@@ -36,15 +36,12 @@ func NewRemoteEdgeCache(client goredis.UniversalClient, clusterID string, logger
 // TTLs for remote state. Short TTLs ensure stale data expires quickly when
 // a PeerChannel drops or a replication ends.
 const (
-	remoteEdgeTTL         = 30 * time.Second
 	remoteReplicationTTL  = 5 * time.Minute
 	originPullLockTTL     = 15 * time.Second
-	edgeSummaryTTL        = 60 * time.Second
 	leaderLeaseTTL        = 15 * time.Second
 	peerAddrTTL           = 30 * time.Second
-	remoteLiveStreamTTL   = 30 * time.Second // refreshed every 5s by heartbeat
+	remoteLiveStreamTTL   = 30 * time.Second // refreshed by the periodic live-lifecycle re-broadcast
 	remoteOfflineFenceTTL = time.Hour
-	peerHeartbeatTTL      = 30 * time.Second // 3 missed 10s heartbeats = dead
 )
 
 // TryAcquireLeaderLease attempts to acquire a leader lease for the given role.
@@ -106,14 +103,6 @@ func (c *RemoteEdgeCache) ReleaseLeaderLease(ctx context.Context, role, instance
 
 // --- Key helpers ---
 
-func (c *RemoteEdgeCache) keyRemoteEdge(peerClusterID, nodeID string) string {
-	return fmt.Sprintf("{%s}:remote_edges:%s:%s", c.clusterID, peerClusterID, nodeID)
-}
-
-func (c *RemoteEdgeCache) keyRemoteEdgePattern(peerClusterID string) string {
-	return fmt.Sprintf("{%s}:remote_edges:%s:*", c.clusterID, peerClusterID)
-}
-
 func (c *RemoteEdgeCache) keyRemoteReplication(streamName, peerClusterID string) string {
 	return fmt.Sprintf("{%s}:remote_replications:%s:%s", c.clusterID, streamName, peerClusterID)
 }
@@ -124,10 +113,6 @@ func (c *RemoteEdgeCache) keyRemoteReplicationPattern(streamName string) string 
 
 func (c *RemoteEdgeCache) keyOriginPullLock(streamName string) string {
 	return fmt.Sprintf("{%s}:origin_pull_lock:%s", c.clusterID, streamName)
-}
-
-func (c *RemoteEdgeCache) keyEdgeSummary(peerClusterID string) string {
-	return fmt.Sprintf("{%s}:edge_summary:%s", c.clusterID, peerClusterID)
 }
 
 func (c *RemoteEdgeCache) keyPeerHintContribution(contributorID string) string {
@@ -146,45 +131,6 @@ func (c *RemoteEdgeCache) keyRemoteLiveStreamOrigins(tenantID, internalName stri
 	return fmt.Sprintf("{%s}:remote_live_streams:v3:origins:%s:%s", c.clusterID, tenantID, internalName)
 }
 
-// --- Remote Edge Telemetry (per-node, per-peer, TTL 30s) ---
-
-// RemoteEdgeEntry is the JSON representation stored in Redis for a single remote edge.
-type RemoteEdgeEntry struct {
-	StreamName  string  `json:"stream_name"`
-	NodeID      string  `json:"node_id"`
-	BaseURL     string  `json:"base_url"`
-	BWAvailable uint64  `json:"bw_available"`
-	ViewerCount uint32  `json:"viewer_count"`
-	CPUPercent  float64 `json:"cpu_percent"`
-	RAMUsed     uint64  `json:"ram_used"`
-	RAMMax      uint64  `json:"ram_max"`
-	GeoLat      float64 `json:"geo_lat"`
-	GeoLon      float64 `json:"geo_lon"`
-	UpdatedAt   int64   `json:"updated_at"`
-}
-
-// SetRemoteEdge writes a single remote edge's telemetry to Redis.
-func (c *RemoteEdgeCache) SetRemoteEdge(ctx context.Context, peerClusterID string, entry *RemoteEdgeEntry) error {
-	data, err := json.Marshal(entry)
-	if err != nil {
-		return fmt.Errorf("marshal remote edge: %w", err)
-	}
-	key := c.keyRemoteEdge(peerClusterID, entry.NodeID)
-	return c.client.Set(ctx, key, data, remoteEdgeTTL).Err()
-}
-
-// GetRemoteEdges returns all cached remote edges for a given peer cluster.
-func (c *RemoteEdgeCache) GetRemoteEdges(ctx context.Context, peerClusterID string) ([]*RemoteEdgeEntry, error) {
-	pattern := c.keyRemoteEdgePattern(peerClusterID)
-	return scanEntries[RemoteEdgeEntry](ctx, c.client, pattern)
-}
-
-// GetAllRemoteEdges returns all cached remote edges across all peer clusters.
-func (c *RemoteEdgeCache) GetAllRemoteEdges(ctx context.Context) ([]*RemoteEdgeEntry, error) {
-	pattern := fmt.Sprintf("{%s}:remote_edges:*", c.clusterID)
-	return scanEntries[RemoteEdgeEntry](ctx, c.client, pattern)
-}
-
 // --- Remote Replication Events (per-stream, per-peer, TTL 5m) ---
 
 // RemoteReplicationEntry records that a peer cluster has a stream available.
@@ -192,10 +138,20 @@ type RemoteReplicationEntry struct {
 	StreamName string `json:"stream_name"`
 	NodeID     string `json:"node_id"`
 	ClusterID  string `json:"cluster_id"`
-	BaseURL    string `json:"base_url"`
-	DTSCURL    string `json:"dtsc_url"`
-	Available  bool   `json:"available"`
-	UpdatedAt  int64  `json:"updated_at"`
+	// ControlCellID is the cell the sending Foghorn advertises itself as. ClusterID
+	// above is the PeerChannel identity the frame arrived under — the sender's own
+	// cluster. Neither is the media cluster hosting the replica, which the sender
+	// reports separately as MediaClusterID.
+	ControlCellID string `json:"control_cell_id,omitempty"`
+	// MediaClusterID is the media cluster the replica actually lands in, as the
+	// sender reported it. Loop prevention needs all three because callers name the
+	// remote in different namespaces: the placement and DVR paths name a cell,
+	// while the legacy /source path names the origin media cluster from Commodore.
+	MediaClusterID string `json:"media_cluster_id,omitempty"`
+	BaseURL        string `json:"base_url"`
+	DTSCURL        string `json:"dtsc_url"`
+	Available      bool   `json:"available"`
+	UpdatedAt      int64  `json:"updated_at"`
 }
 
 // SetRemoteReplication writes a replication event from a peer.
@@ -214,7 +170,7 @@ func (c *RemoteEdgeCache) SetRemoteReplication(ctx context.Context, peerClusterI
 // GetRemoteReplications returns all peer clusters replicating a given stream.
 func (c *RemoteEdgeCache) GetRemoteReplications(ctx context.Context, streamName string) ([]*RemoteReplicationEntry, error) {
 	pattern := c.keyRemoteReplicationPattern(streamName)
-	return scanEntries[RemoteReplicationEntry](ctx, c.client, pattern)
+	return scanEntriesMode[RemoteReplicationEntry](ctx, c.client, pattern, true)
 }
 
 // --- Origin Pull Locking (per-stream, short-lease) ---
@@ -224,11 +180,17 @@ func (c *RemoteEdgeCache) GetRemoteReplications(ctx context.Context, streamName 
 // concurrent arrange race; the durable replication mark lives on
 // control.StreamRegistry.
 func (c *RemoteEdgeCache) TryAcquireOriginPullLock(ctx context.Context, streamName, owner string) bool {
-	if streamName == "" || owner == "" {
-		return false
-	}
-	ok, err := c.client.SetNX(ctx, c.keyOriginPullLock(streamName), owner, originPullLockTTL).Result()
+	ok, err := c.AcquireOriginPullLock(ctx, streamName, owner)
 	return err == nil && ok
+}
+
+// AcquireOriginPullLock distinguishes a contended lease from unavailable state.
+// The caller supplies a key containing both stream and exact destination identity.
+func (c *RemoteEdgeCache) AcquireOriginPullLock(ctx context.Context, key, owner string) (bool, error) {
+	if key == "" || owner == "" {
+		return false, fmt.Errorf("origin-pull lease key and owner are required")
+	}
+	return c.client.SetNX(ctx, c.keyOriginPullLock(key), owner, originPullLockTTL).Result()
 }
 
 // ReleaseOriginPullLock releases the origin-pull lock only if this instance
@@ -240,67 +202,22 @@ func (c *RemoteEdgeCache) ReleaseOriginPullLock(ctx context.Context, streamName,
 	releaseLeaseScript.Run(ctx, c.client, []string{c.keyOriginPullLock(streamName)}, owner) //nolint:errcheck
 }
 
-// --- Edge Summary (3G: official coverage cluster, TTL 60s) ---
-
-// EdgeSummaryEntry is the per-node snapshot from a ClusterEdgeSummary.
-type EdgeSummaryEntry struct {
-	NodeID         string   `json:"node_id"`
-	BaseURL        string   `json:"base_url"`
-	GeoLat         float64  `json:"geo_lat"`
-	GeoLon         float64  `json:"geo_lon"`
-	BWAvailableAvg uint64   `json:"bw_available_avg"`
-	CPUPercentAvg  float64  `json:"cpu_percent_avg"`
-	RAMUsed        uint64   `json:"ram_used"`
-	RAMMax         uint64   `json:"ram_max"`
-	TotalViewers   uint32   `json:"total_viewers"`
-	Roles          []string `json:"roles"`
-}
-
-// EdgeSummaryRecord is the full cluster summary stored in Redis.
-type EdgeSummaryRecord struct {
-	Edges     []*EdgeSummaryEntry `json:"edges"`
-	Timestamp int64               `json:"timestamp"`
-}
-
-// SetEdgeSummary stores a smoothed edge summary from a peer's official coverage cluster.
-func (c *RemoteEdgeCache) SetEdgeSummary(ctx context.Context, peerClusterID string, record *EdgeSummaryRecord) error {
-	data, err := json.Marshal(record)
-	if err != nil {
-		return fmt.Errorf("marshal edge summary: %w", err)
-	}
-	key := c.keyEdgeSummary(peerClusterID)
-	return c.client.Set(ctx, key, data, edgeSummaryTTL).Err()
-}
-
-// GetEdgeSummary returns the latest edge summary from a peer cluster, or nil.
-func (c *RemoteEdgeCache) GetEdgeSummary(ctx context.Context, peerClusterID string) (*EdgeSummaryRecord, error) {
-	key := c.keyEdgeSummary(peerClusterID)
-	data, err := c.client.Get(ctx, key).Bytes()
-	if errors.Is(err, goredis.Nil) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("get edge summary: %w", err)
-	}
-	var record EdgeSummaryRecord
-	if err := json.Unmarshal(data, &record); err != nil {
-		return nil, fmt.Errorf("unmarshal edge summary: %w", err)
-	}
-	return &record, nil
-}
-
 // --- Versioned peer-hint contributions ---
 
 // PeerHint is the shared federation-discovery record: everything a LEADER needs to establish a
 // usable, tenant-authorized peer channel for a peer another replica discovered — address alone is
 // not enough (a Redis-created peer with no lifecycle/tenants filters every scoped broadcast).
 type PeerHint struct {
-	Addr     string   `json:"addr"`
-	AlwaysOn bool     `json:"always_on,omitempty"`
-	Tenants  []string `json:"tenants,omitempty"`
+	Addr          string   `json:"addr"`
+	ControlCellID string   `json:"control_cell_id,omitempty"`
+	AlwaysOn      bool     `json:"always_on,omitempty"`
+	Tenants       []string `json:"tenants,omitempty"`
 }
 
 func normalizePeerHint(h PeerHint) (PeerHint, error) {
+	if h.ControlCellID != "" && !validPullIdentity(h.ControlCellID) {
+		return PeerHint{}, errors.New("peer hint has invalid control-cell identity")
+	}
 	h.Addr = strings.TrimSpace(h.Addr)
 	if h.Addr == "" {
 		return PeerHint{}, errors.New("peer hint has empty address")
@@ -435,6 +352,7 @@ func (c *RemoteEdgeCache) GetPeerAddresses(ctx context.Context) (map[string]Peer
 				(record.PublishedAtUnixMilli == current.publishedAt && record.ContributorID > current.contributorID))
 			if incomingStronger || incomingNewer {
 				current.hint.Addr = incoming.Addr
+				current.hint.ControlCellID = incoming.ControlCellID
 				current.contributorID = record.ContributorID
 				current.publishedAt = record.PublishedAtUnixMilli
 			}
@@ -469,6 +387,10 @@ func (c *RemoteEdgeCache) scanKeys(ctx context.Context, pattern string) ([]strin
 
 // scanEntries scans Redis keys matching a pattern and unmarshals each value.
 func scanEntries[T any](ctx context.Context, client goredis.UniversalClient, pattern string) ([]*T, error) {
+	return scanEntriesMode[T](ctx, client, pattern, false)
+}
+
+func scanEntriesMode[T any](ctx context.Context, client goredis.UniversalClient, pattern string, strict bool) ([]*T, error) {
 	var entries []*T
 	var cursor uint64
 	for {
@@ -487,10 +409,16 @@ func scanEntries[T any](ctx context.Context, client goredis.UniversalClient, pat
 				}
 				s, ok := val.(string)
 				if !ok {
+					if strict {
+						return nil, errors.New("invalid replication cache value")
+					}
 					continue
 				}
 				var entry T
 				if err := json.Unmarshal([]byte(s), &entry); err != nil {
+					if strict {
+						return nil, fmt.Errorf("decode replication cache value: %w", err)
+					}
 					continue
 				}
 				entries = append(entries, &entry)
@@ -684,54 +612,6 @@ func (c *RemoteEdgeCache) GetAllRemoteArtifacts(ctx context.Context) ([]*RemoteA
 	return scanEntries[RemoteArtifactEntry](ctx, c.client, c.keyRemoteArtifactGlob())
 }
 
-// --- Peer Heartbeat (per-peer, TTL 30s) ---
-
-// PeerHeartbeatRecord stores the latest heartbeat from a peer cluster.
-type PeerHeartbeatRecord struct {
-	ProtocolVersion  uint32   `json:"protocol_version"`
-	StreamCount      uint32   `json:"stream_count"`
-	TotalBWAvailable uint64   `json:"total_bw_available"`
-	EdgeCount        uint32   `json:"edge_count"`
-	UptimeSeconds    int64    `json:"uptime_seconds"`
-	Capabilities     []string `json:"capabilities"`
-	Lat              float64  `json:"lat,omitempty"`
-	Lon              float64  `json:"lon,omitempty"`
-	Location         string   `json:"location,omitempty"`
-	ReceivedAt       int64    `json:"received_at"`
-}
-
-func (c *RemoteEdgeCache) keyPeerHeartbeat(peerClusterID string) string {
-	return fmt.Sprintf("{%s}:peer_heartbeat:%s", c.clusterID, peerClusterID)
-}
-
-// SetPeerHeartbeat stores a heartbeat from a peer cluster.
-func (c *RemoteEdgeCache) SetPeerHeartbeat(ctx context.Context, peerClusterID string, record *PeerHeartbeatRecord) error {
-	record.ReceivedAt = time.Now().Unix()
-	data, err := json.Marshal(record)
-	if err != nil {
-		return fmt.Errorf("marshal peer heartbeat: %w", err)
-	}
-	key := c.keyPeerHeartbeat(peerClusterID)
-	return c.client.Set(ctx, key, data, peerHeartbeatTTL).Err()
-}
-
-// GetPeerHeartbeat returns the latest heartbeat from a peer, or nil.
-func (c *RemoteEdgeCache) GetPeerHeartbeat(ctx context.Context, peerClusterID string) (*PeerHeartbeatRecord, error) {
-	key := c.keyPeerHeartbeat(peerClusterID)
-	data, err := c.client.Get(ctx, key).Bytes()
-	if errors.Is(err, goredis.Nil) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("get peer heartbeat: %w", err)
-	}
-	var record PeerHeartbeatRecord
-	if err := json.Unmarshal(data, &record); err != nil {
-		return nil, fmt.Errorf("unmarshal peer heartbeat: %w", err)
-	}
-	return &record, nil
-}
-
 // --- Active stream-to-peer membership ---
 
 const streamPeerMembershipVersion = uint32(2)
@@ -756,6 +636,9 @@ type StreamPeerTarget struct {
 	ClusterID string `json:"cluster_id"`
 	Addr      string `json:"addr"`
 	AlwaysOn  bool   `json:"always_on,omitempty"`
+	// ControlCellID lets every replica map a control cell to this address from
+	// stream-scoped membership, not only from the leader's Quartermaster snapshot.
+	ControlCellID string `json:"control_cell_id,omitempty"`
 }
 
 type StreamPeerMembership struct {
@@ -1044,19 +927,12 @@ func (c *RemoteEdgeCache) LoadAllStreamPeerMemberships(ctx context.Context) (map
 	return result, nil
 }
 
-// PeerClusterIDFromKey extracts the peer cluster ID from a remote_edges or
-// remote_replications key. Returns empty string if the key doesn't match.
+// PeerClusterIDFromKey extracts the peer cluster ID from a remote_replications
+// key. Returns empty string if the key doesn't match.
 func PeerClusterIDFromKey(key string) string {
 	parts := strings.Split(key, ":")
-	if len(parts) < 4 {
+	if len(parts) < 4 || parts[1] != "remote_replications" {
 		return ""
 	}
-	switch parts[1] {
-	case "remote_edges":
-		return parts[2] // {c}:remote_edges:{peer}:{node}
-	case "remote_replications":
-		return parts[3] // {c}:remote_replications:{stream}:{peer}
-	default:
-		return ""
-	}
+	return parts[3] // {c}:remote_replications:{stream}:{peer}
 }

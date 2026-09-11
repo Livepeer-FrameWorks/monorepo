@@ -8,6 +8,7 @@ import (
 	"frameworks/api_balancing/internal/state"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
+	placementpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 
 	"github.com/sirupsen/logrus"
 	"google.golang.org/grpc/codes"
@@ -185,6 +186,14 @@ func TestMigrateArtifactMetadata_RequiresServiceAuth(t *testing.T) {
 func TestFederationUnaryMethodPolicyComplete(t *testing.T) {
 	srv := NewFederationServer(FederationServerConfig{Logger: newFederationTestLogger(), ClusterID: "cluster-a", AllowFederationMutations: true})
 	tests := map[string]func(context.Context) error{
+		"QueryPlacementCandidates": func(ctx context.Context) error {
+			_, err := srv.QueryPlacementCandidates(ctx, &placementpb.CandidateQuery{})
+			return err
+		},
+		"PreparePlacement": func(ctx context.Context) error {
+			_, err := srv.PreparePlacement(ctx, &placementpb.PreparePlacementRequest{})
+			return err
+		},
 		"QueryStream": func(ctx context.Context) error {
 			_, err := srv.QueryStream(ctx, &foghornfederationpb.QueryStreamRequest{})
 			return err

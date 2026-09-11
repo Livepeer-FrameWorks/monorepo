@@ -23,97 +23,15 @@ import (
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 )
 
-func TestRecordAndAverage_SingleSample(t *testing.T) {
-	pm := &PeerManager{
-		metricHistory: make(map[string][]metricSample),
-	}
-
-	bw, cpu := pm.recordAndAverage("node-1", 1000, 50.0)
-	if bw != 1000 {
-		t.Errorf("bw = %d, want 1000", bw)
-	}
-	if cpu != 50.0 {
-		t.Errorf("cpu = %f, want 50.0", cpu)
-	}
-}
-
-func TestRecordAndAverage_MultipleSamples(t *testing.T) {
-	pm := &PeerManager{
-		metricHistory: make(map[string][]metricSample),
-	}
-
-	pm.recordAndAverage("node-1", 1000, 40.0)
-	pm.recordAndAverage("node-1", 2000, 60.0)
-	bw, cpu := pm.recordAndAverage("node-1", 3000, 80.0)
-
-	// Average of 1000, 2000, 3000 = 2000
-	if bw != 2000 {
-		t.Errorf("bw = %d, want 2000", bw)
-	}
-	// Average of 40, 60, 80 = 60
-	if cpu != 60.0 {
-		t.Errorf("cpu = %f, want 60.0", cpu)
-	}
-}
-
-func TestRecordAndAverage_ExpiredSamplesPruned(t *testing.T) {
-	pm := &PeerManager{
-		metricHistory: make(map[string][]metricSample),
-	}
-
-	// Manually inject an old sample beyond the 30s window
-	pm.metricHistory["node-1"] = []metricSample{
-		{bwAvailable: 100, cpuPercent: 10.0, ts: time.Now().Add(-40 * time.Second)},
-	}
-
-	// New sample should prune the old one
-	bw, cpu := pm.recordAndAverage("node-1", 500, 50.0)
-	if bw != 500 {
-		t.Errorf("bw = %d, want 500 (old sample should be pruned)", bw)
-	}
-	if cpu != 50.0 {
-		t.Errorf("cpu = %f, want 50.0", cpu)
-	}
-	if len(pm.metricHistory["node-1"]) != 1 {
-		t.Errorf("history len = %d, want 1", len(pm.metricHistory["node-1"]))
-	}
-}
-
-func TestRecordAndAverage_SeparateNodes(t *testing.T) {
-	pm := &PeerManager{
-		metricHistory: make(map[string][]metricSample),
-	}
-
-	pm.recordAndAverage("node-1", 1000, 20.0)
-	pm.recordAndAverage("node-2", 5000, 80.0)
-
-	bw1, cpu1 := pm.recordAndAverage("node-1", 3000, 40.0)
-	bw2, cpu2 := pm.recordAndAverage("node-2", 5000, 80.0)
-
-	if bw1 != 2000 { // avg(1000, 3000)
-		t.Errorf("node-1 bw = %d, want 2000", bw1)
-	}
-	if cpu1 != 30.0 { // avg(20, 40)
-		t.Errorf("node-1 cpu = %f, want 30.0", cpu1)
-	}
-	if bw2 != 5000 { // avg(5000, 5000)
-		t.Errorf("node-2 bw = %d, want 5000", bw2)
-	}
-	if cpu2 != 80.0 {
-		t.Errorf("node-2 cpu = %f, want 80.0", cpu2)
-	}
-}
-
-func TestEnrichFederationEventGeo_UsesPeerClusterForRemoteGeo(t *testing.T) {
+func TestEnrichFederationEventGeo_LeavesRemoteGeoUnset(t *testing.T) {
 	pm := &PeerManager{
 		clusterID:     "local-cluster",
 		controlCellID: "control-cell",
 		ownerTenantID: "tenant-a",
 		logger:        testLogger(),
-		peers:         map[string]*peerState{"peer-1": {lat: 37.7749, lon: -122.4194}},
+		peers:         map[string]*peerState{"peer-1": {}},
 		selfGeoFunc:   func() (float64, float64, string) { return 47.6062, -122.3321, "Seattle" },
 		streamPeers:   make(map[string]map[string]bool),
-		metricHistory: make(map[string][]metricSample),
 	}
 
 	peerCluster := "peer-1"
@@ -139,18 +57,19 @@ func TestEnrichFederationEventGeo_UsesPeerClusterForRemoteGeo(t *testing.T) {
 	if data.LocalLat == nil || data.LocalLon == nil {
 		t.Fatal("expected local geo to be enriched")
 	}
-	if data.RemoteLat == nil || data.RemoteLon == nil {
-		t.Fatal("expected remote geo to be enriched from peer cache")
+	// Peers never report their coordinates over the channel, so remote geo stays
+	// NULL rather than being stamped at (0,0), which IsValidLatLon accepts.
+	if data.RemoteLat != nil || data.RemoteLon != nil {
+		t.Fatalf("remote geo = (%v, %v), want unset", data.RemoteLat, data.RemoteLon)
 	}
 }
 
 func TestEnrichFederationEventGeo_LeavesTenantUnsetWithoutOwner(t *testing.T) {
 	pm := &PeerManager{
-		clusterID:     "local-cluster",
-		logger:        testLogger(),
-		peers:         map[string]*peerState{},
-		streamPeers:   make(map[string]map[string]bool),
-		metricHistory: make(map[string][]metricSample),
+		clusterID:   "local-cluster",
+		logger:      testLogger(),
+		peers:       map[string]*peerState{},
+		streamPeers: make(map[string]map[string]bool),
 	}
 
 	data := &ipcpb.FederationEventData{EventType: ipcpb.FederationEventType_LEADER_ACQUIRED}
@@ -163,11 +82,10 @@ func TestEnrichFederationEventGeo_LeavesTenantUnsetWithoutOwner(t *testing.T) {
 
 func TestSetOwnerTenantIDUpdatesFederationEventEnrichment(t *testing.T) {
 	pm := &PeerManager{
-		clusterID:     "local-cluster",
-		logger:        testLogger(),
-		peers:         map[string]*peerState{},
-		streamPeers:   make(map[string]map[string]bool),
-		metricHistory: make(map[string][]metricSample),
+		clusterID:   "local-cluster",
+		logger:      testLogger(),
+		peers:       map[string]*peerState{},
+		streamPeers: make(map[string]map[string]bool),
 	}
 	pm.SetOwnerTenantID("tenant-real")
 
@@ -195,7 +113,7 @@ func newTestPeerManager(t *testing.T, clusterID string, cache *RemoteEdgeCache, 
 		trackedTenantRefs:   make(map[string]map[string]int),
 		trackedAddrRefs:     make(map[string]map[string]map[int64]int),
 		trackedAlwaysOnRefs: make(map[string]int),
-		metricHistory:       make(map[string][]metricSample),
+		trackedCellRefs:     make(map[string]map[string]int),
 		done:                make(chan struct{}),
 		isLeader:            isLeader,
 		leaderReady:         isLeader,
@@ -693,49 +611,6 @@ func (s *testPeerChannelStream) SendMsg(any) error { return nil }
 
 func (s *testPeerChannelStream) RecvMsg(any) error { return io.EOF }
 
-func TestRecvLoop_RevisionFencesLifecycleAcrossChannelGenerations(t *testing.T) {
-	cache, _ := setupTestCache(t)
-	pm := newTestPeerManager(t, "cluster-a", cache, false)
-	event := func(stream string, revision int64, live bool) *foghornfederationpb.PeerMessage {
-		return &foghornfederationpb.PeerMessage{
-			ClusterId: "remote-1",
-			Payload: &foghornfederationpb.PeerMessage_StreamLifecycle{StreamLifecycle: &foghornfederationpb.StreamLifecycleEvent{
-				InternalName: stream, TenantId: "tenant-a", ClusterId: "remote-1",
-				IsLive: live, SourceRevision: revision,
-			}},
-		}
-	}
-
-	pm.recvLoop("remote-1", &testPeerChannelStream{messages: []*foghornfederationpb.PeerMessage{
-		event("new-live", 20, true), event("new-offline", 30, false),
-	}})
-	pm.recvLoop("remote-1", &testPeerChannelStream{messages: []*foghornfederationpb.PeerMessage{
-		event("new-live", 19, false), event("new-offline", 29, true),
-		{
-			ClusterId: "remote-1",
-			Payload: &foghornfederationpb.PeerMessage_StreamLifecycle{StreamLifecycle: &foghornfederationpb.StreamLifecycleEvent{
-				InternalName: "spoofed", TenantId: "tenant-a", ClusterId: "other-cluster",
-				IsLive: true, SourceRevision: 999,
-			}},
-		},
-	}})
-
-	if live, err := cache.GetRemoteLiveStream(context.Background(), "tenant-a", "new-live"); err != nil || live == nil || live.SourceRevision != 20 {
-		t.Fatalf("older channel removed newer live marker: live=%+v err=%v", live, err)
-	}
-	if live, err := cache.GetRemoteLiveStream(context.Background(), "tenant-a", "new-offline"); err != nil || live != nil {
-		t.Fatalf("older channel resurrected newer offline marker: live=%+v err=%v", live, err)
-	}
-	if live, err := cache.GetRemoteLiveStream(context.Background(), "tenant-a", "spoofed"); err != nil || live != nil {
-		t.Fatalf("mismatched payload identity was accepted: live=%+v err=%v", live, err)
-	}
-}
-
-// TestCheckReplicationCompletion_RequiresDestinationNodeLive preserves
-// the behavioural intent of the cache-backed predecessor: when the local
-// dest node hasn't gone live yet, the replication mark must NOT be
-// cleared by checkReplicationCompletion. The in-flight record now lives
-// on the unified stream registry.
 func TestCheckReplicationCompletion_RequiresDestinationNodeLive(t *testing.T) {
 	cache, _ := setupTestCache(t)
 	pm := newTestPeerManager(t, "cluster-a", cache, true)
@@ -746,7 +621,7 @@ func TestCheckReplicationCompletion_RequiresDestinationNodeLive(t *testing.T) {
 	t.Cleanup(func() { control.SetStreamRegistry(priorRegistry) })
 
 	const internalName = "tenant1+stream1"
-	registry.MarkReplicating(internalName, "cluster-b", "dtsc://src/"+internalName, "dest-node", "edge.dest.example.com", "source-node")
+	markReplicatingForTest(t, registry, internalName, "cluster-b", "dtsc://src/"+internalName, "dest-node", "edge.dest.example.com", "source-node")
 
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
@@ -764,10 +639,7 @@ func TestCheckReplicationCompletion_RequiresDestinationNodeLive(t *testing.T) {
 	}
 }
 
-// TestCheckReplicationCompletion_ClearsRecordWhenDestinationNodeLive
-// preserves the matching positive case: when the dest node has gone live,
-// the registry mark is cleared and the peer broadcast fires.
-func TestCheckReplicationCompletion_ClearsRecordWhenDestinationNodeLive(t *testing.T) {
+func TestCheckReplicationCompletion_PreservesSourceWhenDestinationNodeLive(t *testing.T) {
 	cache, _ := setupTestCache(t)
 	pm := newTestPeerManager(t, "cluster-a", cache, true)
 
@@ -778,7 +650,7 @@ func TestCheckReplicationCompletion_ClearsRecordWhenDestinationNodeLive(t *testi
 
 	const internalName = "tenant1+stream1"
 	const destNodeID = "dest-node"
-	registry.MarkReplicating(internalName, "cluster-b", "dtsc://src/"+internalName, destNodeID, "edge.dest.example.com", "source-node")
+	markReplicatingForTest(t, registry, internalName, "cluster-b", "dtsc://src/"+internalName, destNodeID, "edge.dest.example.com", "source-node")
 
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
@@ -789,8 +661,38 @@ func TestCheckReplicationCompletion_ClearsRecordWhenDestinationNodeLive(t *testi
 
 	pm.checkReplicationCompletion()
 
-	if _, ok := registry.LocalReplication(context.Background(), internalName); ok {
-		t.Fatal("expected replication mark to be cleared when destination node is live")
+	pull, found, err := registry.CurrentInboundPull(context.Background(), internalName, destNodeID)
+	if err != nil || !found || !pull.DestinationObserved || pull.DTSCURL != "dtsc://src/"+internalName {
+		t.Fatalf("live observation lost source binding: %+v, %v", pull, err)
+	}
+	pm.checkReplicationCompletion()
+	latest, found, err := registry.CurrentInboundPull(context.Background(), internalName, destNodeID)
+	if err != nil || !found || latest.Revision != pull.Revision || latest.AttemptID != pull.AttemptID {
+		t.Fatalf("repeat observation changed the physical pull: %+v, %v", latest, err)
+	}
+}
+
+func TestReplicationCompletionDoesNotClearOtherDestinations(t *testing.T) {
+	cache, _ := setupTestCache(t)
+	pm := newTestPeerManager(t, "cluster-a", cache, true)
+	priorRegistry := control.StreamRegistryInstance
+	registry := control.NewStreamRegistry(nil, "cluster-a", time.Minute)
+	control.SetStreamRegistry(registry)
+	t.Cleanup(func() { control.SetStreamRegistry(priorRegistry) })
+	markReplicatingForTest(t, registry, "stream", "cluster-b", "dtsc://src/stream", "ready", "https://ready", "source")
+	markReplicatingForTest(t, registry, "stream", "cluster-b", "dtsc://src/stream", "pending", "https://pending", "source")
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(func() { state.ResetDefaultManagerForTests() })
+	sm.SetNodeInfo("ready", "ready.example.com", true, nil, nil, "", "", nil)
+	if err := sm.UpdateStreamFromBuffer("stream-id", "stream", "ready", "tenant", "FULL", ""); err != nil {
+		t.Fatal(err)
+	}
+	pm.checkReplicationCompletion()
+	if pull, found := registry.InboundPullForNode("stream", "ready"); !found || !pull.DestinationObserved {
+		t.Fatal("ready destination lost its source binding or observation")
+	}
+	if _, ok := registry.LocalReplicationForNode(context.Background(), "stream", "pending"); !ok {
+		t.Fatal("ready destination cleared another destination's pending pull")
 	}
 }
 
@@ -1355,314 +1257,6 @@ func TestUntrackStream_RemainingStreamsPersisted(t *testing.T) {
 	}
 }
 
-func TestRecvLoop_CachesPeerPayloads(t *testing.T) {
-	cache, _ := setupTestCache(t)
-	// Stream-ad + playback-index storage now lives on the unified registry.
-	priorRegistry := control.StreamRegistryInstance
-	registry := control.NewStreamRegistry(nil, "cluster-a", time.Minute)
-	control.SetStreamRegistry(registry)
-	t.Cleanup(func() { control.SetStreamRegistry(priorRegistry) })
-	pm := newTestPeerManager(t, "cluster-a", cache, false)
-	ctx := context.Background()
-	peerID := "remote-1"
-
-	if applied, err := cache.ApplyRemoteStreamLifecycle(ctx, "tenant-a", "dead+stream", &RemoteLiveStreamEntry{
-		ClusterID: peerID, TenantID: "tenant-a", SourceRevision: 1, UpdatedAt: time.Now().Unix(),
-	}, true); err != nil || !applied {
-		t.Fatalf("seed remote live stream: applied=%v err=%v", applied, err)
-	}
-	// Pre-seed the registry as if a prior ad already placed the entry.
-	// The withdrawal message later in this test will clear it.
-	registry.UpsertFederatedSource(peerID, control.StreamEntry{
-		TenantID:     "tenant-a",
-		PlaybackID:   "play-del",
-		InternalName: "live+ad",
-	}, control.Location{IsLiveNow: true, AdTimestamp: time.Now().Unix()})
-
-	stream := &testPeerChannelStream{
-		messages: []*foghornfederationpb.PeerMessage{
-			{
-				ClusterId: peerID,
-				Payload: &foghornfederationpb.PeerMessage_EdgeTelemetry{EdgeTelemetry: &foghornfederationpb.EdgeTelemetry{
-					StreamName:  "live+edge",
-					NodeId:      "node-edge",
-					BaseUrl:     "edge.remote.example.com",
-					BwAvailable: 1234,
-					ViewerCount: 7,
-					CpuPercent:  12.5,
-					RamUsed:     100,
-					RamMax:      200,
-					GeoLat:      12.3,
-					GeoLon:      45.6,
-				}},
-			},
-			{
-				ClusterId: peerID,
-				Payload: &foghornfederationpb.PeerMessage_ReplicationEvent{ReplicationEvent: &foghornfederationpb.ReplicationEvent{
-					StreamName: "live+rep",
-					NodeId:     "node-rep",
-					ClusterId:  peerID,
-					BaseUrl:    "edge.remote.example.com",
-					DtscUrl:    "dtsc://edge.remote.example.com/live+rep",
-					Available:  true,
-				}},
-			},
-			{
-				ClusterId: peerID,
-				Payload: &foghornfederationpb.PeerMessage_ClusterSummary{ClusterSummary: &foghornfederationpb.ClusterEdgeSummary{
-					Edges: []*foghornfederationpb.EdgeSnapshot{{
-						NodeId:         "node-sum",
-						BaseUrl:        "edge.sum.example.com",
-						GeoLat:         1,
-						GeoLon:         2,
-						BwAvailableAvg: 3000,
-						CpuPercentAvg:  40,
-						RamUsed:        100,
-						RamMax:         1000,
-						TotalViewers:   12,
-					}},
-					Timestamp: time.Now().Unix(),
-				}},
-			},
-			{
-				ClusterId: peerID,
-				Payload: &foghornfederationpb.PeerMessage_StreamLifecycle{StreamLifecycle: &foghornfederationpb.StreamLifecycleEvent{
-					InternalName:   "live+stream",
-					TenantId:       "tenant-a",
-					ClusterId:      peerID,
-					IsLive:         true,
-					SourceRevision: 1,
-				}},
-			},
-			{
-				ClusterId: peerID,
-				Payload: &foghornfederationpb.PeerMessage_StreamLifecycle{StreamLifecycle: &foghornfederationpb.StreamLifecycleEvent{
-					InternalName:   "dead+stream",
-					TenantId:       "tenant-a",
-					ClusterId:      peerID,
-					IsLive:         false,
-					SourceRevision: 2,
-				}},
-			},
-			{
-				ClusterId: peerID,
-				Payload: &foghornfederationpb.PeerMessage_StreamAd{StreamAd: &foghornfederationpb.StreamAdvertisement{
-					InternalName:    "live+ad2",
-					TenantId:        "tenant-a",
-					PlaybackId:      "play-2",
-					OriginClusterId: peerID,
-					IsLive:          true,
-					Edges: []*foghornfederationpb.PeerStreamEdge{{
-						NodeId:      "node-ad",
-						BaseUrl:     "edge.ad.example.com",
-						DtscUrl:     "dtsc://edge.ad.example.com/live+ad2",
-						IsOrigin:    true,
-						BwAvailable: 4321,
-						CpuPercent:  15,
-						ViewerCount: 3,
-						GeoLat:      1,
-						GeoLon:      2,
-						BufferState: "FULL",
-					}},
-					Timestamp: time.Now().Unix(),
-				}},
-			},
-			{
-				ClusterId: peerID,
-				Payload: &foghornfederationpb.PeerMessage_StreamAd{StreamAd: &foghornfederationpb.StreamAdvertisement{
-					InternalName: "live+ad",
-					TenantId:     "tenant-a",
-					IsLive:       false,
-					Timestamp:    time.Now().Unix(),
-				}},
-			},
-			{
-				ClusterId: peerID,
-				Payload: &foghornfederationpb.PeerMessage_ArtifactAd{ArtifactAd: &foghornfederationpb.ArtifactAdvertisement{
-					Artifacts: []*foghornfederationpb.ArtifactLocation{{
-						ArtifactHash: "artifact-1",
-						ArtifactType: "clip",
-						NodeId:       "node-art",
-						BaseUrl:      "edge.art.example.com",
-						SizeBytes:    99,
-						AccessCount:  2,
-						LastAccessed: time.Now().Unix(),
-						GeoLat:       1,
-						GeoLon:       2,
-					}},
-					Timestamp: time.Now().Unix(),
-				}},
-			},
-			{
-				ClusterId: peerID,
-				Payload: &foghornfederationpb.PeerMessage_PeerHeartbeat{PeerHeartbeat: &foghornfederationpb.PeerHeartbeat{
-					ProtocolVersion:  protocolVersion,
-					StreamCount:      7,
-					TotalBwAvailable: 9999,
-					EdgeCount:        4,
-					UptimeSeconds:    123,
-					Capabilities:     []string{"stream_ad"},
-				}},
-			},
-			{
-				ClusterId: peerID,
-				Payload: &foghornfederationpb.PeerMessage_CapacitySummary{CapacitySummary: &foghornfederationpb.CapacitySummary{
-					TotalBandwidth:     1000,
-					AvailableBandwidth: 900,
-					TotalEdges:         2,
-					AvailableEdges:     1,
-					TotalStorage:       10000,
-					AvailableStorage:   8000,
-					Timestamp:          time.Now().Unix(),
-				}},
-			},
-		},
-	}
-
-	pm.recvLoop(peerID, stream)
-
-	edges, err := cache.GetRemoteEdges(ctx, peerID)
-	if err != nil || len(edges) == 0 {
-		t.Fatalf("expected cached remote edge telemetry, edges=%v err=%v", edges, err)
-	}
-
-	reps, err := cache.GetRemoteReplications(ctx, "live+rep")
-	if err != nil || len(reps) == 0 {
-		t.Fatalf("expected cached replication entry, reps=%v err=%v", reps, err)
-	}
-
-	summary, err := cache.GetEdgeSummary(ctx, peerID)
-	if err != nil || summary == nil || len(summary.Edges) != 1 {
-		t.Fatalf("expected cached edge summary, summary=%v err=%v", summary, err)
-	}
-
-	liveEntry, err := cache.GetRemoteLiveStream(ctx, "tenant-a", "live+stream")
-	if err != nil || liveEntry == nil {
-		t.Fatalf("expected live stream cached, entry=%v err=%v", liveEntry, err)
-	}
-
-	deadEntry, err := cache.GetRemoteLiveStream(ctx, "tenant-a", "dead+stream")
-	if err != nil {
-		t.Fatalf("GetRemoteLiveStream(dead+stream): %v", err)
-	}
-	if deadEntry != nil {
-		t.Fatalf("expected dead+stream to be deleted, got %+v", deadEntry)
-	}
-
-	// Stream ad + playback-id reverse index now resolve via the unified
-	// registry. The withdrawal ad for live+ad (IsLive=false) drops the
-	// entry and clears the play-del reverse index.
-	ad2Entry, ad2Err := registry.ResolveSourceByInternalName(ctx, "live+ad2")
-	if ad2Err != nil {
-		t.Fatalf("expected live+ad2 in registry: %v", ad2Err)
-	}
-	if _, ok := ad2Entry.Locations[peerID]; !ok {
-		t.Fatalf("expected Locations[%q] for live+ad2", peerID)
-	}
-	if byPlay, lookupErr := registry.ResolveSourceByPlaybackID(ctx, "play-2"); lookupErr != nil || byPlay.InternalName != "live+ad2" {
-		t.Fatalf("expected play-2 -> live+ad2, got %q err=%v", byPlay.InternalName, lookupErr)
-	}
-
-	// Withdrawn entries no longer answer from cache; with no Commodore
-	// client wired the fall-through hydrate reports transient
-	// ErrRegistryUnavailable (not ErrUnknownStream — nil client must never
-	// look like authoritative not-found).
-	if _, lookupErr := registry.ResolveSourceByInternalName(ctx, "live+ad"); !errors.Is(lookupErr, control.ErrRegistryUnavailable) {
-		t.Fatalf("expected live+ad withdrawn, got err=%v", lookupErr)
-	}
-	if _, lookupErr := registry.ResolveSourceByPlaybackID(ctx, "play-del"); !errors.Is(lookupErr, control.ErrRegistryUnavailable) {
-		t.Fatalf("expected play-del cleared, got err=%v", lookupErr)
-	}
-
-	arts, err := cache.GetRemoteArtifacts(ctx, "artifact-1")
-	if err != nil || len(arts) == 0 {
-		t.Fatalf("expected remote artifact cached, arts=%v err=%v", arts, err)
-	}
-
-	hb, err := cache.GetPeerHeartbeat(ctx, peerID)
-	if err != nil || hb == nil {
-		t.Fatalf("expected peer heartbeat cached, hb=%v err=%v", hb, err)
-	}
-	if hb.StreamCount != 7 || hb.EdgeCount != 4 {
-		t.Fatalf("unexpected heartbeat payload: %+v", hb)
-	}
-}
-
-func TestPushTelemetry_SendsTelemetryAndLifecycleToEligiblePeers(t *testing.T) {
-	sm := state.ResetDefaultManagerForTests()
-	t.Cleanup(sm.Shutdown)
-	seedFederationNodeAndStream(t, sm, "node-a", "stream-a", "tenant-a")
-
-	pm := newTestPeerManager(t, "cluster-a", nil, false)
-	pm.pool = newFoghornPoolAdapter(newNoopPool(t))
-
-	allowed := &capturePeerChannelStream{}
-	blocked := &capturePeerChannelStream{}
-
-	pm.mu.Lock()
-	pm.streamPeers["peer-allowed"] = map[string]bool{"stream-a": true}
-	pm.streamMemberships["stream-a"] = StreamPeerMembership{
-		StreamName: "stream-a", TenantID: "tenant-a", SourceGeneration: "generation-a", SourceRevision: 7, Active: true,
-	}
-	pm.peers["peer-allowed"] = &peerState{
-		connected: true,
-		stream:    allowed,
-		lifecycle: peerStreamScoped,
-		tenantIDs: []string{"tenant-a"},
-	}
-	pm.peers["peer-blocked"] = &peerState{
-		connected: true,
-		stream:    blocked,
-		lifecycle: peerStreamScoped,
-		tenantIDs: []string{"tenant-b"},
-	}
-	pm.mu.Unlock()
-
-	flush := pm.wireTestWriters()
-	pm.pushTelemetry()
-	flush()
-
-	if len(allowed.sent) != 2 {
-		t.Fatalf("expected allowed peer to receive telemetry+lifecycle (2 msgs), got %d", len(allowed.sent))
-	}
-	if lifecycle := allowed.sent[1].GetStreamLifecycle(); lifecycle == nil || lifecycle.GetSourceRevision() != 7 {
-		t.Fatalf("expected lifecycle heartbeat revision 7, got %+v", lifecycle)
-	}
-	if len(blocked.sent) != 0 {
-		t.Fatalf("expected blocked peer to receive 0 messages, got %d", len(blocked.sent))
-	}
-}
-
-func TestPushSummary_SendsClusterSummary(t *testing.T) {
-	sm := state.ResetDefaultManagerForTests()
-	t.Cleanup(sm.Shutdown)
-	seedFederationNodeAndStream(t, sm, "node-a", "stream-a", "tenant-a")
-
-	pm := newTestPeerManager(t, "cluster-a", nil, false)
-	pm.pool = newFoghornPoolAdapter(newNoopPool(t))
-
-	out := &capturePeerChannelStream{}
-	pm.mu.Lock()
-	pm.peers["peer-1"] = &peerState{connected: true, stream: out, lifecycle: peerAlwaysOn}
-	pm.mu.Unlock()
-
-	flush := pm.wireTestWriters()
-	pm.pushSummary()
-	flush()
-
-	if len(out.sent) != 1 {
-		t.Fatalf("expected 1 summary message, got %d", len(out.sent))
-	}
-	msg := out.sent[0]
-	payload, ok := msg.Payload.(*foghornfederationpb.PeerMessage_ClusterSummary)
-	if !ok || payload.ClusterSummary == nil {
-		t.Fatalf("expected cluster summary payload, got %#v", msg.Payload)
-	}
-	if len(payload.ClusterSummary.Edges) != 1 {
-		t.Fatalf("expected 1 edge snapshot, got %d", len(payload.ClusterSummary.Edges))
-	}
-}
-
 func TestPushArtifacts_SendsArtifactAdvertisement(t *testing.T) {
 	sm := state.ResetDefaultManagerForTests()
 	t.Cleanup(sm.Shutdown)
@@ -1750,45 +1344,7 @@ func TestPushStreamAds_SendsAndFiltersByPeerAuthorization(t *testing.T) {
 	}
 }
 
-func TestPushHeartbeat_SendsClusterHeartbeat(t *testing.T) {
-	sm := state.ResetDefaultManagerForTests()
-	t.Cleanup(sm.Shutdown)
-	seedFederationNodeAndStream(t, sm, "node-a", "stream-a", "tenant-a")
-
-	pm := newTestPeerManager(t, "cluster-a", nil, false)
-	pm.startTime = time.Now().Add(-3 * time.Second)
-
-	out := &capturePeerChannelStream{}
-	pm.mu.Lock()
-	pm.peers["peer-1"] = &peerState{connected: true, stream: out, lifecycle: peerAlwaysOn}
-	pm.mu.Unlock()
-
-	flush := pm.wireTestWriters()
-	pm.pushHeartbeat()
-	flush()
-
-	if len(out.sent) != 1 {
-		t.Fatalf("expected 1 heartbeat message, got %d", len(out.sent))
-	}
-	payload, ok := out.sent[0].Payload.(*foghornfederationpb.PeerMessage_PeerHeartbeat)
-	if !ok || payload.PeerHeartbeat == nil {
-		t.Fatalf("expected heartbeat payload, got %#v", out.sent[0].Payload)
-	}
-	hb := payload.PeerHeartbeat
-	if hb.StreamCount != 1 || hb.EdgeCount != 1 {
-		t.Fatalf("unexpected heartbeat counts: %+v", hb)
-	}
-	if hb.UptimeSeconds <= 0 {
-		t.Fatalf("expected positive uptime, got %d", hb.UptimeSeconds)
-	}
-}
-
-func TestUptimeSecondsAndStrPtr(t *testing.T) {
-	pm := newTestPeerManager(t, "cluster-a", nil, false)
-	pm.startTime = time.Now().Add(-2 * time.Second)
-	if got := pm.uptimeSeconds(); got <= 0 {
-		t.Fatalf("expected positive uptime seconds, got %d", got)
-	}
+func TestStrPtr(t *testing.T) {
 	if got := strPtr("abc"); got == nil || *got != "abc" {
 		t.Fatalf("unexpected strPtr result: %v", got)
 	}
@@ -2127,5 +1683,31 @@ func TestConnectPeer_ConnectsThenMarksDisconnectedOnEOF(t *testing.T) {
 	case <-done:
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("connectPeer did not exit after done closed")
+	}
+}
+
+// A demand-driven admission hint carries the peer's control cell, so a replica
+// can address a cell for cross-cell placement from stream-scoped membership
+// without waiting for the leader's periodic Quartermaster snapshot.
+func TestTrackedDemand_CarriesControlCellForPlacement(t *testing.T) {
+	cache, _ := setupTestCache(t)
+	pm := newTestPeerManager(t, "local-cluster", cache, true)
+	// No peer transport in this test: TrackStream persists the membership and
+	// records the peer before reporting that the channel is not connected.
+	_, _ = pm.TrackStream(context.Background(), "live+alpha", "tenant-a", "generation-a", 1, []control.AdmissionPeerHint{{
+		ClusterID: "demo-selfhosted", Addr: "10.88.1.10:18019", ControlCellID: "us-primary",
+	}})
+	if got := pm.GetControlCellAddr("us-primary"); got != "10.88.1.10:18019" {
+		t.Fatalf("leader control-cell address = %q, want the tracked hint's address", got)
+	}
+	replacement := newTestPeerManager(t, "local-cluster", cache, false)
+	if err := replacement.loadStreamPeerMembershipsFromRedis(); err != nil {
+		t.Fatalf("replacement membership reconstruction: %v", err)
+	}
+	if err := replacement.loadPeerAddressesFromRedis(); err != nil {
+		t.Fatalf("replacement address reconciliation: %v", err)
+	}
+	if got := replacement.GetControlCellAddr("us-primary"); got != "10.88.1.10:18019" {
+		t.Fatalf("replica control-cell address = %q, want the tracked hint's address", got)
 	}
 }

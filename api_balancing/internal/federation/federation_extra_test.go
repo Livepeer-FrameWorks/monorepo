@@ -3,38 +3,9 @@ package federation
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 )
-
-// GetAllRemoteEdges SCANs every cached peer edge under this cluster's namespace
-// (the 60s repair/debug sweep relies on it). Entries written for different peers
-// all surface.
-func TestGetAllRemoteEdges(t *testing.T) {
-	cache, _ := setupTestCache(t)
-	ctx := context.Background()
-
-	for _, peer := range []string{"cluster-b", "cluster-c"} {
-		entry := &RemoteEdgeEntry{
-			StreamName: "tenant1+stream" + peer,
-			NodeID:     "node-" + peer,
-			BaseURL:    "edge.example.com",
-			UpdatedAt:  time.Now().Unix(),
-		}
-		if err := cache.SetRemoteEdge(ctx, peer, entry); err != nil {
-			t.Fatalf("set edge %s: %v", peer, err)
-		}
-	}
-
-	all, err := cache.GetAllRemoteEdges(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(all) != 2 {
-		t.Fatalf("got %d edges, want 2", len(all))
-	}
-}
 
 // GetAllRemoteArtifacts SCANs every cached remote artifact across all peer
 // prefixes (covers keyRemoteArtifactGlob).

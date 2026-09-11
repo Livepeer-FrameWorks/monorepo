@@ -137,10 +137,11 @@ func TestPeerChannel_StoresIncomingPayloadsInCache(t *testing.T) {
 			{
 				ClusterId: peerCluster,
 				Payload: &foghornfederationpb.PeerMessage_StreamAd{StreamAd: &foghornfederationpb.StreamAdvertisement{
-					InternalName: "stream-ad",
-					TenantId:     "tenant-a",
-					PlaybackId:   "play-1",
-					IsLive:       true,
+					InternalName:  "stream-ad",
+					TenantId:      "tenant-a",
+					PlaybackId:    "play-1",
+					ControlCellId: peerCluster,
+					IsLive:        true,
 					Edges: []*foghornfederationpb.PeerStreamEdge{{
 						NodeId:      "node-ad",
 						BaseUrl:     "edge-ad.example.com",
@@ -206,19 +207,9 @@ func TestPeerChannel_StoresIncomingPayloadsInCache(t *testing.T) {
 
 	ctx := context.Background()
 
-	edges, err := cache.GetRemoteEdges(ctx, peerCluster)
-	if err != nil || len(edges) == 0 {
-		t.Fatalf("expected remote edge telemetry cached, edges=%v err=%v", edges, err)
-	}
-
 	reps, err := cache.GetRemoteReplications(ctx, "stream-rep")
 	if err != nil || len(reps) == 0 {
 		t.Fatalf("expected replication event cached, reps=%v err=%v", reps, err)
-	}
-
-	summary, err := cache.GetEdgeSummary(ctx, peerCluster)
-	if err != nil || summary == nil || len(summary.Edges) != 1 {
-		t.Fatalf("expected edge summary cached, summary=%v err=%v", summary, err)
 	}
 
 	live, err := cache.GetRemoteLiveStream(ctx, "tenant-a", "stream-live")
@@ -239,8 +230,8 @@ func TestPeerChannel_StoresIncomingPayloadsInCache(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected Locations[%q], got %v", peerCluster, entry.Locations)
 	}
-	if !peerLoc.IsOrigin {
-		t.Errorf("peer Location.IsOrigin = false")
+	if len(peerLoc.EdgeCandidates) == 0 {
+		t.Errorf("peer Location carried no edges: %+v", peerLoc)
 	}
 	if entry.PlaybackID != "play-1" {
 		t.Errorf("registry PlaybackID = %q, want play-1", entry.PlaybackID)
@@ -255,13 +246,6 @@ func TestPeerChannel_StoresIncomingPayloadsInCache(t *testing.T) {
 		t.Fatalf("expected artifact ad cached, artifacts=%v err=%v", artifacts, err)
 	}
 
-	hb, err := cache.GetPeerHeartbeat(ctx, peerCluster)
-	if err != nil || hb == nil {
-		t.Fatalf("expected peer heartbeat cached, hb=%v err=%v", hb, err)
-	}
-	if hb.StreamCount != 5 || hb.EdgeCount != 3 {
-		t.Fatalf("unexpected heartbeat payload: %+v", hb)
-	}
 }
 
 func TestPeerChannel_HandlerNilPayloadsNoop(t *testing.T) {
@@ -275,8 +259,10 @@ func TestPeerChannel_HandlerNilPayloadsNoop(t *testing.T) {
 
 	ctx := context.Background()
 	srv.handleArtifactAdvertisement(ctx, "cluster-b", nil)
-	srv.handleStreamAdvertisement(ctx, "cluster-b", nil)
-	srv.handlePeerHeartbeat(ctx, "cluster-b", nil)
+	channelCell := ""
+	srv.handleStreamAdvertisement(ctx, "cluster-b", nil, &channelCell)
+	srv.handleStreamLifecycle(ctx, "cluster-b", nil)
+	srv.handleReplicationEvent(ctx, "cluster-b", nil)
 }
 
 func TestFederationServer_SettersAndRegisterServices(t *testing.T) {

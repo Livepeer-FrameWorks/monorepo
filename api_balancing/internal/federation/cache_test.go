@@ -26,68 +26,6 @@ func setupTestCache(t *testing.T) (*RemoteEdgeCache, *miniredis.Miniredis) {
 	return cache, mr
 }
 
-func TestRemoteEdge_SetGet(t *testing.T) {
-	cache, _ := setupTestCache(t)
-	ctx := context.Background()
-
-	entry := &RemoteEdgeEntry{
-		StreamName:  "tenant1+stream1",
-		NodeID:      "node-1",
-		BaseURL:     "edge1.example.com",
-		BWAvailable: 500_000_000,
-		ViewerCount: 10,
-		CPUPercent:  25.5,
-		RAMUsed:     4_000_000_000,
-		RAMMax:      8_000_000_000,
-		GeoLat:      52.52,
-		GeoLon:      13.40,
-		UpdatedAt:   time.Now().Unix(),
-	}
-
-	if err := cache.SetRemoteEdge(ctx, "cluster-b", entry); err != nil {
-		t.Fatalf("SetRemoteEdge: %v", err)
-	}
-
-	edges, err := cache.GetRemoteEdges(ctx, "cluster-b")
-	if err != nil {
-		t.Fatalf("GetRemoteEdges: %v", err)
-	}
-	if len(edges) != 1 {
-		t.Fatalf("expected 1 edge, got %d", len(edges))
-	}
-	if edges[0].NodeID != "node-1" {
-		t.Errorf("NodeID = %q, want %q", edges[0].NodeID, "node-1")
-	}
-	if edges[0].BWAvailable != 500_000_000 {
-		t.Errorf("BWAvailable = %d, want %d", edges[0].BWAvailable, 500_000_000)
-	}
-}
-
-func TestRemoteEdge_TTLExpiry(t *testing.T) {
-	cache, mr := setupTestCache(t)
-	ctx := context.Background()
-
-	entry := &RemoteEdgeEntry{
-		NodeID:      "node-1",
-		BWAvailable: 100,
-		UpdatedAt:   time.Now().Unix(),
-	}
-	if err := cache.SetRemoteEdge(ctx, "cluster-b", entry); err != nil {
-		t.Fatalf("SetRemoteEdge: %v", err)
-	}
-
-	// Fast-forward past TTL
-	mr.FastForward(remoteEdgeTTL + time.Second)
-
-	edges, err := cache.GetRemoteEdges(ctx, "cluster-b")
-	if err != nil {
-		t.Fatalf("GetRemoteEdges after expiry: %v", err)
-	}
-	if len(edges) != 0 {
-		t.Fatalf("expected 0 edges after TTL, got %d", len(edges))
-	}
-}
-
 func TestRemoteReplication_SetGetDelete(t *testing.T) {
 	cache, _ := setupTestCache(t)
 	ctx := context.Background()
@@ -127,68 +65,6 @@ func TestRemoteReplication_SetGetDelete(t *testing.T) {
 	}
 	if len(reps) != 0 {
 		t.Fatalf("expected 0 replications after unavailable, got %d", len(reps))
-	}
-}
-
-func TestEdgeSummary_SetGet(t *testing.T) {
-	cache, _ := setupTestCache(t)
-	ctx := context.Background()
-
-	record := &EdgeSummaryRecord{
-		Edges: []*EdgeSummaryEntry{
-			{
-				NodeID:         "node-1",
-				BaseURL:        "edge1.peer.com",
-				GeoLat:         48.85,
-				GeoLon:         2.35,
-				BWAvailableAvg: 800_000_000,
-				CPUPercentAvg:  30.0,
-				RAMUsed:        2_000_000_000,
-				RAMMax:         8_000_000_000,
-				TotalViewers:   50,
-				Roles:          []string{"edge", "ingest"},
-			},
-			{
-				NodeID:         "node-2",
-				BaseURL:        "edge2.peer.com",
-				GeoLat:         48.86,
-				GeoLon:         2.36,
-				BWAvailableAvg: 600_000_000,
-				CPUPercentAvg:  45.0,
-				RAMUsed:        3_000_000_000,
-				RAMMax:         8_000_000_000,
-				TotalViewers:   80,
-				Roles:          []string{"edge"},
-			},
-		},
-		Timestamp: time.Now().Unix(),
-	}
-
-	if err := cache.SetEdgeSummary(ctx, "cluster-b", record); err != nil {
-		t.Fatalf("SetEdgeSummary: %v", err)
-	}
-
-	got, err := cache.GetEdgeSummary(ctx, "cluster-b")
-	if err != nil {
-		t.Fatalf("GetEdgeSummary: %v", err)
-	}
-	if got == nil {
-		t.Fatal("expected edge summary, got nil")
-	}
-	if len(got.Edges) != 2 {
-		t.Fatalf("expected 2 edges, got %d", len(got.Edges))
-	}
-	if got.Edges[0].NodeID != "node-1" {
-		t.Errorf("Edges[0].NodeID = %q, want %q", got.Edges[0].NodeID, "node-1")
-	}
-
-	// Non-existent peer returns nil
-	got, err = cache.GetEdgeSummary(ctx, "cluster-z")
-	if err != nil {
-		t.Fatalf("GetEdgeSummary for missing peer: %v", err)
-	}
-	if got != nil {
-		t.Fatal("expected nil for non-existent peer")
 	}
 }
 
@@ -431,12 +307,11 @@ func TestPeerClusterIDFromKey(t *testing.T) {
 		key  string
 		want string
 	}{
-		{"remote_edges", "{c1}:remote_edges:c2:node-1", "c2"},
 		{"remote_replications", "{c1}:remote_replications:stream1:c2", "c2"},
-		{"short key", "{c1}:remote_edges:c2", ""},
+		{"short key", "{c1}:remote_replications:stream1", ""},
 		{"empty string", "", ""},
 		{"unknown type", "{c1}:something:a:b", ""},
-		{"edge_summary", "{c1}:edge_summary:c2", ""},
+		{"retired remote_edges shape", "{c1}:remote_edges:c2:node-1", ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -748,56 +623,5 @@ func TestRemoteArtifact_MultiNodeSamePeerRetained(t *testing.T) {
 	}
 	if !nodes["node-1"] || !nodes["node-2"] {
 		t.Fatalf("expected both node-1 and node-2, got %v", nodes)
-	}
-}
-
-func TestPeerHeartbeat_SetGet(t *testing.T) {
-	cache, _ := setupTestCache(t)
-	ctx := context.Background()
-
-	record := &PeerHeartbeatRecord{
-		ProtocolVersion:  1,
-		StreamCount:      25,
-		TotalBWAvailable: 10_000_000_000,
-		EdgeCount:        5,
-		UptimeSeconds:    3600,
-		Capabilities:     []string{"stream_ad", "artifact_ad"},
-	}
-
-	if err := cache.SetPeerHeartbeat(ctx, "cluster-b", record); err != nil {
-		t.Fatalf("SetPeerHeartbeat: %v", err)
-	}
-
-	got, err := cache.GetPeerHeartbeat(ctx, "cluster-b")
-	if err != nil {
-		t.Fatalf("GetPeerHeartbeat: %v", err)
-	}
-	if got == nil {
-		t.Fatal("expected heartbeat, got nil")
-	}
-	if got.StreamCount != 25 {
-		t.Errorf("StreamCount = %d, want 25", got.StreamCount)
-	}
-	if got.EdgeCount != 5 {
-		t.Errorf("EdgeCount = %d, want 5", got.EdgeCount)
-	}
-	if got.ReceivedAt == 0 {
-		t.Error("expected ReceivedAt to be set")
-	}
-}
-
-func TestPeerHeartbeat_TTLExpiry(t *testing.T) {
-	cache, mr := setupTestCache(t)
-	ctx := context.Background()
-
-	cache.SetPeerHeartbeat(ctx, "cluster-b", &PeerHeartbeatRecord{StreamCount: 1})
-	mr.FastForward(peerHeartbeatTTL + time.Second)
-
-	got, err := cache.GetPeerHeartbeat(ctx, "cluster-b")
-	if err != nil {
-		t.Fatalf("GetPeerHeartbeat after expiry: %v", err)
-	}
-	if got != nil {
-		t.Fatal("expected nil after TTL expiry")
 	}
 }
