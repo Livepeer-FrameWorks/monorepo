@@ -96,9 +96,36 @@ describe("IngestClient", () => {
           headers: expect.objectContaining({
             "Content-Type": "application/json",
           }),
-          body: expect.stringContaining(MOCK_STREAM_KEY),
+          body: expect.stringContaining("protocol: WHIP"),
         })
       );
+      const request = JSON.parse(vi.mocked(globalThis.fetch).mock.calls[0][1]!.body as string);
+      expect(request.variables).toEqual({ streamKey: MOCK_STREAM_KEY });
+      client.destroy();
+    });
+
+    it.each([undefined, "", "javascript:alert(1)", "https://user:secret@node.example/whip/key"])(
+      "rejects invalid WHIP primary %s without retaining a prior endpoint",
+      async (whipUrl) => {
+        globalThis.fetch = mockFetchSuccess();
+        const client = createClient({ maxRetries: 0 });
+        await client.resolve();
+        const response = mockEndpointResponse();
+        response.primary.whipUrl = whipUrl as string;
+        globalThis.fetch = mockFetchSuccess(response);
+        await expect(client.resolve()).rejects.toThrow("No valid WHIP destination was confirmed");
+        expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+        expect(client.getWhipUrl()).toBeNull();
+        client.destroy();
+      }
+    );
+
+    it("does not expose wrong-protocol fallback nodes", async () => {
+      const response = mockEndpointResponse();
+      response.fallbacks[0].whipUrl = "";
+      globalThis.fetch = mockFetchSuccess(response);
+      const client = createClient();
+      expect((await client.resolve()).fallbacks).toEqual([]);
       client.destroy();
     });
 
@@ -250,11 +277,22 @@ describe("IngestClient", () => {
   // Abort handling
   // ===========================================================================
   describe("abort handling", () => {
-    it("aborts in-flight request on destroy", () => {
+    it("does not emit ready if a resolved-endpoint listener destroys the client", async () => {
+      globalThis.fetch = mockFetchSuccess();
+      const client = createClient();
+      const events = vi.fn();
+      client.on("statusChange", events);
+      client.on("endpointsResolved", () => client.destroy());
+      await expect(client.resolve()).rejects.toMatchObject({ name: "AbortError" });
+      expect(events).not.toHaveBeenCalledWith({ status: "ready" });
+      expect(client.getEndpoints()).toBeNull();
+    });
+    it("aborts in-flight request on destroy", async () => {
       globalThis.fetch = vi.fn(() => new Promise(() => {})); // never resolves
       const client = createClient();
 
       const resolvePromise = client.resolve();
+      const rejected = expect(resolvePromise).rejects.toMatchObject({ name: "AbortError" });
       client.destroy();
 
       // The fetch should have been called with an AbortSignal
@@ -264,6 +302,67 @@ describe("IngestClient", () => {
           signal: expect.any(AbortSignal),
         })
       );
+      await rejected;
+    });
+
+    it("settles a retry wait on destroy without another fetch", async () => {
+      globalThis.fetch = vi.fn().mockRejectedValue(new Error("offline"));
+      const client = createClient();
+      const pending = client.resolve();
+      const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+      await vi.advanceTimersByTimeAsync(1);
+      client.destroy();
+      await rejected;
+      await vi.runAllTimersAsync();
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("bounds fetch implementations that ignore AbortSignal", async () => {
+      globalThis.fetch = vi.fn(() => new Promise(() => {}));
+      const client = createClient();
+      const rejected = expect(client.resolve()).rejects.toThrow("resolution timed out");
+      await vi.advanceTimersByTimeAsync(5000);
+      await rejected;
+      expect(client.getEndpoints()).toBeNull();
+      client.destroy();
+    });
+
+    it("does not publish a superseded request's late response or idle state", async () => {
+      let finishOld!: (value: unknown) => void;
+      globalThis.fetch = vi
+        .fn()
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              finishOld = resolve;
+            })
+        )
+        .mockImplementationOnce(mockFetchSuccess());
+      const client = createClient();
+      const events = vi.fn();
+      client.on("statusChange", events);
+      const old = expect(client.resolve()).rejects.toMatchObject({ name: "AbortError" });
+      const latest = await client.resolve();
+      await old;
+      finishOld({ ok: true, json: async () => ({ data: { resolveIngestEndpoint: null } }) });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(client.getEndpoints()).toBe(latest);
+      expect(events).not.toHaveBeenCalledWith({ status: "idle" });
+      client.destroy();
+    });
+
+    it("does not expose gateway error details containing a stream key", async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ errors: [{ message: `denied ${MOCK_STREAM_KEY}` }] }),
+      });
+      const client = createClient({ maxRetries: 0 });
+      const events = vi.fn();
+      client.on("statusChange", events);
+      await expect(client.resolve()).rejects.not.toThrow(MOCK_STREAM_KEY);
+      expect(JSON.stringify(events.mock.calls)).not.toContain(MOCK_STREAM_KEY);
+      client.destroy();
     });
   });
 

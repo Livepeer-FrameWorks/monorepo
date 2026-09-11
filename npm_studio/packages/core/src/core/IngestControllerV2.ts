@@ -82,6 +82,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
   // Lifecycle: listener cleanup
   private eventForwardingUnsubs: Array<() => void> = [];
   private whipClientUnsubs: Array<() => void> = [];
+  private destinationResolution: AbortController | null = null;
 
   constructor(config: IngestControllerConfigV2) {
     super();
@@ -135,6 +136,45 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
       this.currentEndpointIndex = (this.currentEndpointIndex + 1) % this.whipEndpoints.length;
     }
     return this.getCurrentWhipUrl();
+  }
+
+  private async resolveWhipDestination(): Promise<string> {
+    this.destinationResolution?.abort();
+    const abort = new AbortController();
+    this.destinationResolution = abort;
+    const timeout = setTimeout(
+      () => abort.abort(new Error("Ingest destination resolution timed out")),
+      5000
+    );
+    let onAbort: () => void = () => {};
+    const cancelled = new Promise<never>((_, reject) => {
+      onAbort = () => reject(abort.signal.reason);
+      abort.signal.addEventListener("abort", onAbort, { once: true });
+    });
+    try {
+      const value = await Promise.race([this.config.resolveWhipUrl!(abort.signal), cancelled]);
+      if (abort.signal.aborted) throw abort.signal.reason;
+      let url: URL;
+      try {
+        url = new URL(value);
+      } catch {
+        throw new Error("Ingest resolver returned an invalid destination");
+      }
+      if (
+        !["http:", "https:"].includes(url.protocol) ||
+        !url.hostname ||
+        url.username ||
+        url.password ||
+        url.hash
+      ) {
+        throw new Error("Ingest resolver returned an invalid destination");
+      }
+      return value;
+    } finally {
+      clearTimeout(timeout);
+      abort.signal.removeEventListener("abort", onAbort);
+      if (this.destinationResolution === abort) this.destinationResolution = null;
+    }
   }
 
   /**
@@ -905,6 +945,9 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
    * Start streaming to WHIP endpoint
    */
   async startStreaming(): Promise<void> {
+    if (["connecting", "streaming", "reconnecting", "destroyed"].includes(this.state)) {
+      throw new Error("Cannot start a new connection in the current state");
+    }
     if (!this.outputStream) {
       throw new Error("No media source available. Add a camera or screen share first.");
     }
@@ -917,7 +960,9 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
     try {
       // Create WHIP client
       this.whipClient = new WhipClient({
-        whipUrl: this.getCurrentWhipUrl(),
+        whipUrl: this.config.resolveWhipUrl
+          ? await this.resolveWhipDestination()
+          : this.getCurrentWhipUrl(),
         iceServers: this.config.iceServers,
         debug: this.config.debug,
       });
@@ -989,6 +1034,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
       // The encoder transform will be attached after connection is established
       await this.whipClient.connect(this.outputStream);
     } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") throw error;
       // Clean up encoder if connection fails
       if (this.encoderManager) {
         this.encoderManager.destroy();
@@ -1038,7 +1084,9 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
 
     try {
       this.whipClient = new WhipClient({
-        whipUrl: this.getNextWhipUrl(),
+        whipUrl: this.config.resolveWhipUrl
+          ? await this.resolveWhipDestination()
+          : this.getNextWhipUrl(),
         iceServers: this.config.iceServers,
         debug: this.config.debug,
       });
@@ -1048,6 +1096,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
 
       await this.whipClient.connect(this.outputStream);
     } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") return;
       this.setState("error", {
         error: `Reconnection failed: ${error instanceof Error ? error.message : String(error)}`,
       });
@@ -1081,7 +1130,9 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
       }
 
       this.whipClient = new WhipClient({
-        whipUrl: this.getNextWhipUrl(),
+        whipUrl: this.config.resolveWhipUrl
+          ? await this.resolveWhipDestination()
+          : this.getNextWhipUrl(),
         iceServers: this.config.iceServers,
         debug: this.config.debug,
       });
@@ -1118,6 +1169,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
    * Stop streaming
    */
   async stopStreaming(): Promise<void> {
+    this.destinationResolution?.abort();
     this.log("Stopping streaming");
     this.isStoppingIntentionally = true;
 
@@ -1761,6 +1813,7 @@ export class IngestControllerV2 extends TypedEventEmitter<IngestControllerEvents
    * Destroy the controller
    */
   destroy(): void {
+    this.destinationResolution?.abort();
     this.log("Destroying IngestControllerV2");
     this.stopStatsPolling();
     this.disableDirectFrameOutput();

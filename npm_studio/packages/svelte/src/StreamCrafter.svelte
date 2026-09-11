@@ -58,6 +58,8 @@
   interface Props {
     /** Direct WHIP endpoint URL */
     whipUrl?: string;
+    /** Refresh authorization/placement immediately before each connection without rebuilding capture. */
+    resolveWhipUrl?: (signal: AbortSignal) => Promise<string>;
     /** Gateway URL for endpoint resolution (alternative to whipUrl) */
     gatewayUrl?: string;
     /** Stream key for gateway mode */
@@ -92,6 +94,7 @@
 
   let {
     whipUrl,
+    resolveWhipUrl,
     gatewayUrl,
     streamKey,
     initialProfile = "broadcast",
@@ -314,6 +317,7 @@
       if (lastInitKey !== currentInitKey) {
         crafter.initialize({
           whipUrl: resolvedWhipUrl,
+          resolveWhipUrl: resolveWhipUrl ? (signal) => resolveWhipUrl!(signal) : undefined,
           profile: initialProfile,
           debug,
           reconnection: { enabled: true, maxAttempts: 5 },

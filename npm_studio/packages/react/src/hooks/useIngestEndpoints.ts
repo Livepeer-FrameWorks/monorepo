@@ -82,6 +82,7 @@ export function useIngestEndpoints(
   // Resolve function
   const resolve = useCallback(async (): Promise<IngestEndpoints | null> => {
     if (!gatewayUrl || !streamKey) {
+      reset();
       return null;
     }
 
@@ -98,9 +99,12 @@ export function useIngestEndpoints(
     });
 
     clientRef.current = client;
+    setEndpoints(null);
+    setError(null);
 
     // Set up event listeners
     client.on("statusChange", ({ status: newStatus, error: newError }) => {
+      if (clientRef.current !== client) return;
       setStatus(newStatus);
       if (newError) {
         setError(newError);
@@ -108,19 +112,22 @@ export function useIngestEndpoints(
     });
 
     client.on("endpointsResolved", ({ endpoints: resolved }) => {
+      if (clientRef.current !== client) return;
       setEndpoints(resolved);
       setError(null);
     });
 
     try {
       const resolved = await client.resolve();
+      if (clientRef.current !== client) return null;
       return resolved;
     } catch (err) {
+      if (clientRef.current !== client) return null;
       const message = err instanceof Error ? err.message : "Unknown error";
       setError(message);
       return null;
     }
-  }, [gatewayUrl, streamKey, authToken, maxRetries, initialDelayMs, cleanup]);
+  }, [gatewayUrl, streamKey, authToken, maxRetries, initialDelayMs, cleanup, reset]);
 
   // Auto-resolve when options change
   useEffect(() => {
@@ -131,6 +138,9 @@ export function useIngestEndpoints(
       return;
     }
     lastOptionsRef.current = optionsKey;
+    setEndpoints(null);
+    setStatus("idle");
+    setError(null);
 
     // Only auto-resolve if we have required params
     if (autoResolve && gatewayUrl && streamKey) {

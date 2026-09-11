@@ -356,6 +356,8 @@ export interface ReconnectionEvents {
 // ============================================================================
 
 export interface IngestControllerConfigV2 extends IngestControllerConfig {
+  /** Resolve one authorized destination before each connection; failures never use static fallbacks. */
+  resolveWhipUrl?: (signal: AbortSignal) => Promise<string>;
   whipUrls?: string[];
   reconnection?: Partial<ReconnectionConfig>;
   audioMixing?: boolean;
@@ -669,7 +671,9 @@ export interface IngestClientConfig {
   gatewayUrl: string;
   streamKey: string;
   authToken?: string;
+  /** Retries within the five-second resolution deadline (default 3, maximum 8). */
   maxRetries?: number;
+  /** Initial backoff in milliseconds; retries cannot extend the resolution deadline. */
   initialDelayMs?: number;
 }
 

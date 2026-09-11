@@ -62,6 +62,14 @@ const crafter = new StreamCrafterV2({ whipUrl, profile: "broadcast" });
 Notes:
 
 - There is **no default gateway**; you must supply `whipUrl` or resolve it yourself.
+- `IngestClient` requests `protocol: WHIP` and requires a gateway schema that supports that
+  argument. It does not retry a query without the protocol requirement or invent a missing URL.
+- Resolution, response decoding and retry backoff share a five-second deadline. `maxRetries: 0`
+  disables retries; increasing retries cannot extend that deadline.
+- Starting another lookup cancels the previous one and clears its recommendation. `destroy()`
+  cancels outstanding work and permanently disposes the client; create a new client to resolve again.
+- A resolved endpoint is advisory, not a reservation or proof that publishing has started. Refresh
+  it before connecting and keep final admission errors visible to the publisher.
 
 ## Notes
 

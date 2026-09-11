@@ -73,6 +73,7 @@ export function createIngestEndpointsStore(): IngestEndpointsStore {
     const { gatewayUrl, streamKey, authToken, maxRetries = 3, initialDelayMs = 1000 } = options;
 
     if (!gatewayUrl || !streamKey) {
+      reset();
       return null;
     }
 
@@ -80,16 +81,19 @@ export function createIngestEndpointsStore(): IngestEndpointsStore {
     cleanup();
 
     // Create new client
-    client = new IngestClient({
+    const resolvingClient = new IngestClient({
       gatewayUrl,
       streamKey,
       authToken,
       maxRetries,
       initialDelayMs,
     });
+    client = resolvingClient;
+    set({ endpoints: null, status: "loading", error: null });
 
     // Set up event listeners
-    client.on("statusChange", ({ status, error }) => {
+    resolvingClient.on("statusChange", ({ status, error }) => {
+      if (client !== resolvingClient) return;
       update((state) => ({
         ...state,
         status,
@@ -97,7 +101,8 @@ export function createIngestEndpointsStore(): IngestEndpointsStore {
       }));
     });
 
-    client.on("endpointsResolved", ({ endpoints }) => {
+    resolvingClient.on("endpointsResolved", ({ endpoints }) => {
+      if (client !== resolvingClient) return;
       update((state) => ({
         ...state,
         endpoints,
@@ -106,9 +111,11 @@ export function createIngestEndpointsStore(): IngestEndpointsStore {
     });
 
     try {
-      const resolved = await client.resolve();
+      const resolved = await resolvingClient.resolve();
+      if (client !== resolvingClient) return null;
       return resolved;
     } catch (err) {
+      if (client !== resolvingClient) return null;
       const message = err instanceof Error ? err.message : "Unknown error";
       update((state) => ({
         ...state,
