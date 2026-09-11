@@ -41,6 +41,8 @@ func (e *CapabilityError) Unwrap() error { return e.Err }
 
 var capabilityCatalog = map[string][]Capability{
 	"commodore": {
+		{Name: "media placement revisions", Engine: EnginePostgres, Probe: "SELECT tenant_id, scope_kind, scope_id, revision, policy_payload, active_revision, active_policy_payload FROM commodore.media_placement_policies LIMIT 0"},
+		{Name: "media placement apply receipts", Engine: EnginePostgres, Probe: "SELECT tenant_id, idempotency_key, request_sha256, revision, parent_revision, rollout_status FROM commodore.media_placement_changes LIMIT 0"},
 		{Name: "wallet authentication", Engine: EnginePostgres, Probe: "SELECT wallet_address, chain_id, message_hash, expires_at, consumed_at FROM commodore.wallet_auth_challenges LIMIT 0"},
 		{Name: "stream cleanup outbox", Engine: EnginePostgres, Probe: "SELECT tenant_id, stream_id, status, next_attempt_at, lease_token FROM commodore.stream_cleanup_outbox LIMIT 0"},
 		{Name: "artifact creation acknowledgement leasing", Engine: EnginePostgres, Probe: "SELECT tenant_id, kind, artifact_hash, command_ack_pending, command_ack_next_at, command_ack_leased_until, command_ack_lease_token FROM commodore.artifact_creation_intents LIMIT 0"},
@@ -77,6 +79,8 @@ var capabilityCatalog = map[string][]Capability{
 		{Name: "provider webhook leasing", Engine: EnginePostgres, Probe: "SELECT provider, event_key, status, claimed_at, lease_token FROM purser.provider_webhook_inbox LIMIT 0"},
 	},
 	"quartermaster": {
+		{Name: "media capacity consent", Engine: EnginePostgres, Probe: "SELECT media_consent_revision, media_allow_ingest, media_allow_serve, media_allow_external_source FROM quartermaster.infrastructure_clusters LIMIT 0"},
+		{Name: "media capacity consent receipts", Engine: EnginePostgres, Probe: "SELECT tenant_id, cluster_record_id, cluster_id, revision, request_sha256, review_digest FROM quartermaster.media_capacity_consent_changes LIMIT 0"},
 		{Name: "service cluster assignments", Engine: EnginePostgres, Probe: "SELECT service_instance_id, cluster_id, source, is_active FROM quartermaster.service_cluster_assignments LIMIT 0"},
 		{Name: "tenant provisioning idempotency", Engine: EnginePostgres, Probe: "SELECT alias, tenant_id, updated_at FROM quartermaster.bootstrap_tenant_aliases LIMIT 0"},
 	},

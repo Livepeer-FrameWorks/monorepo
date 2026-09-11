@@ -118,20 +118,21 @@ UPDATE quartermaster.infrastructure_clusters
 SET owner_tenant_id = '5eed517e-ba5e-da7a-517e-ba5eda7a0001'
 WHERE cluster_id = 'demo-media';
 
--- Pre-provision a demo edge node that matches HELMSMAN_NODE_ID in docker-compose
--- Belongs to the media cluster; region matches MistServer config location
-INSERT INTO quartermaster.infrastructure_nodes (
-    node_id, cluster_id, node_name, node_type, status,
-    region, external_ip, internal_ip, latitude, longitude, tags, metadata
-) VALUES (
-    'edge-node-1', 'demo-media', 'edge-node-1', 'edge', 'active',
-    'Leiden', '127.0.0.1', '127.0.0.1', 52.1601, 4.4970, '{}', '{}'
-) ON CONFLICT (node_id) DO UPDATE SET
-    region = EXCLUDED.region,
-    external_ip = EXCLUDED.external_ip,
-    internal_ip = EXCLUDED.internal_ip,
-    latitude = EXCLUDED.latitude,
-    longitude = EXCLUDED.longitude;
+-- The dev Foghorn pair identifies as cell central-primary (MEDIA_AUTHORITY_CELL_ID)
+-- and serves every demo media cluster, so signed authority for those clusters
+-- must be addressed to that cell. The two-cell profile adds a second platform
+-- cell (us-primary, served by foghorn-b) and moves the virtual private cluster
+-- demo-selfhosted under it (pkg/database/sql/seeds/demo/postgres/two-cell/quartermaster.sql).
+UPDATE quartermaster.infrastructure_clusters
+SET cell_id = 'central-primary', control_cell_id = 'central-primary',
+    region_id = 'eu-west'
+WHERE cluster_id IN ('central-primary', 'demo-media', 'demo-selfhosted');
+
+-- The dev edge (HELMSMAN_NODE_ID edge-node-1) is NOT pre-provisioned: Helmsman
+-- enrolls it into demo-media with the demo bootstrap token below, the way every
+-- edge does. A seeded row without an identity key cannot register under strict
+-- Quartermaster on either path (keyless token-less resolution is refused, and
+-- the token path refuses a binding whose MACs differ from the container's).
 
 -- Platform node for Docker dev (all control + data plane services)
 INSERT INTO quartermaster.infrastructure_nodes (
@@ -173,32 +174,9 @@ ON CONFLICT (tenant_id, cluster_id) DO UPDATE SET
     subscription_status = EXCLUDED.subscription_status,
     is_active = TRUE;
 
--- Bind Helmsman demo node fingerprint (machine-id SHA-256) to demo tenant for immediate matching
--- machine-id contents: frameworks-demo-helmsman
--- sha256: 3d0800fc0eb588967e6c6e03228815bbb59559107890b4799cc563a69f2f9d03
-INSERT INTO quartermaster.node_fingerprints (
-    tenant_id,
-    node_id,
-    fingerprint_machine_sha256,
-    fingerprint_macs_sha256,
-    seen_ips,
-    attrs
-) VALUES (
-    '5eed517e-ba5e-da7a-517e-ba5eda7a0001',
-    'edge-node-1',
-    '3d0800fc0eb588967e6c6e03228815bbb59559107890b4799cc563a69f2f9d03',
-    NULL,
-    '{}',
-    '{}'
-) ON CONFLICT (node_id) DO UPDATE SET
-    tenant_id = EXCLUDED.tenant_id,
-    fingerprint_machine_sha256 = EXCLUDED.fingerprint_machine_sha256,
-    fingerprint_macs_sha256 = EXCLUDED.fingerprint_macs_sha256,
-    attrs = EXCLUDED.attrs,
-    last_seen = NOW();
-
--- Demo bootstrap token for node provisioning testing
--- This token was used to provision edge-node-1
+-- Demo bootstrap token for node provisioning: Helmsman enrolls edge-node-1 with it
+-- (EDGE_ENROLLMENT_TOKEN in .env); enrollment records the node's fingerprint and
+-- identity key itself.
 INSERT INTO quartermaster.bootstrap_tokens (
     id, token_hash, token_prefix, kind, name,
     tenant_id, cluster_id, expected_ip,
@@ -215,9 +193,9 @@ INSERT INTO quartermaster.bootstrap_tokens (
     NULL,                                     -- Allow docker bridge IPs in local dev
     '{"purpose": "demo", "environment": "development"}',
     10,    -- Max 10 uses
-    1,     -- Already used once for edge-node-1
+    0,     -- Unused until Helmsman enrolls edge-node-1 on first boot
     NOW() + INTERVAL '30 days',
-    NOW() - INTERVAL '1 day',                 -- Used yesterday
+    NULL,
     '5eedface-5e1f-da7a-face-5e1fda7a0001',  -- Created by demo user
     NOW() - INTERVAL '2 days'
 ) ON CONFLICT (token_hash) DO UPDATE SET

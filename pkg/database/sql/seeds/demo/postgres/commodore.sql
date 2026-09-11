@@ -27,7 +27,8 @@ INSERT INTO commodore.api_tokens (
     -- SHA-256 hash of: fw_0000000000000000000000000000000000000000000000000000000000demo01
     '807a534c30fd84d3544bd6ee5f8b1c4426596a9c8c360b92caf7b667c25db8d8',
     'Demo API Token',
-    ARRAY['streams:read', 'streams:write', 'analytics:read'],
+    -- placement scopes let the two-cell media proof drive policy through the public API
+    ARRAY['streams:read', 'streams:write', 'analytics:read', 'placement:read', 'placement:write'],
     TRUE,
     NOW() + INTERVAL '1 year',
     NOW() - INTERVAL '1 hour',
