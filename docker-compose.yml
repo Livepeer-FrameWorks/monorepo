@@ -1841,9 +1841,9 @@ services:
     profiles: ["two-cell"]
     shm_size: "1gb"
     ports:
-      - "8081:8080"   # HTTP (viewer path for cell B)
-      - "1936:1935"   # RTMP
-      - "4201:4200"   # DTSC
+      - "8081:8080" # HTTP (viewer path for cell B)
+      - "1936:1935" # RTMP
+      - "4201:4200" # DTSC
       - "8890:8889/udp"
     volumes:
       - ./infrastructure/two-cell/mistserver-b.conf:/etc/mistserver.conf
