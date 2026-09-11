@@ -13,6 +13,24 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// LegacyShadowComparable limits connected/local admission comparison to the
+// schema represented by legacy connected responses. Those responses carry no
+// placement decision, so matching their fields cannot certify schema-2 readiness.
+func LegacyShadowComparable(tenant *mediaauthoritypb.TenantAuthority, object *mediaauthoritypb.MediaObjectAuthority) bool {
+	return tenant.GetSchemaVersion() == SchemaVersion && object.GetSchemaVersion() == SchemaVersion &&
+		tenant.GetMediaPlacement() == nil && object.GetMediaPlacement() == nil && object.GetPlacementTenantRevision() == 0
+}
+
+// PlacementShadowComparable identifies a coherent schema-2 pair: both sides
+// carry policy and the object was compiled against the tenant's current policy
+// revision. It says nothing about whether the comparing replica enforces that
+// policy; callers combine it with their own enforcement state.
+func PlacementShadowComparable(tenant *mediaauthoritypb.TenantAuthority, object *mediaauthoritypb.MediaObjectAuthority) bool {
+	return tenant.GetSchemaVersion() == PlacementSchemaVersion && object.GetSchemaVersion() == PlacementSchemaVersion &&
+		tenant.GetMediaPlacement() != nil && object.GetMediaPlacement() != nil &&
+		tenant.GetMediaPlacement().GetRevision() == object.GetPlacementTenantRevision()
+}
+
 // SameResourceLimits compares the enforced values, treating an absent message
 // and a present all-zero message as the same unlimited decision.
 func SameResourceLimits(left, right *tenantlimitspb.TenantResourceLimits) bool {

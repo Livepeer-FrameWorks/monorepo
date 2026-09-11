@@ -36,6 +36,9 @@ const (
 	ActionManageDeveloperTokens Action = "developer.tokens.manage"
 	// ActionReadPrivateInfrastructure gates full node and cluster inventory.
 	ActionReadPrivateInfrastructure Action = "infrastructure.private.read"
+	// Placement changes can widen paid fallback independently of stream editing.
+	ActionReadMediaPlacement   Action = "media.placement.read"
+	ActionManageMediaPlacement Action = "media.placement.manage"
 )
 
 // Identity is the authenticated principal, distilled from the access token or
@@ -91,7 +94,15 @@ func (DefaultAuthorizer) Can(_ context.Context, id Identity, action Action, reso
 			return allow()
 		}
 		return deny("platform operator access required")
-	case ActionAdminMistNode, ActionManageTenantSettings, ActionManageEdgeCluster, ActionManageBilling, ActionManageStreams, ActionManageDeveloperTokens, ActionReadPrivateInfrastructure:
+	case ActionReadMediaPlacement:
+		if id.PlatformOperator {
+			return allow()
+		}
+		if id.UserID != "" && resource.OwnerTenantID != "" && id.TenantID == resource.OwnerTenantID && slices.Contains([]string{"owner", "admin", "member", "viewer"}, strings.ToLower(strings.TrimSpace(id.Role))) {
+			return allow()
+		}
+		return deny("authenticated tenant membership required")
+	case ActionAdminMistNode, ActionManageTenantSettings, ActionManageEdgeCluster, ActionManageBilling, ActionManageStreams, ActionManageDeveloperTokens, ActionReadPrivateInfrastructure, ActionManageMediaPlacement:
 		// A platform operator may perform privileged cross-tenant work. Otherwise
 		// the caller must be an owner/admin of the tenant that owns the resource.
 		if id.PlatformOperator {

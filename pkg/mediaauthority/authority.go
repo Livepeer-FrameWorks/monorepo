@@ -25,6 +25,7 @@ import (
 
 const (
 	SchemaVersion          = 1
+	PlacementSchemaVersion = 2
 	SignatureDomain        = "frameworks-media-authority-v1\x00"
 	maxClockSkewFuture     = 30 * time.Second
 	maxTenantValidity      = 24 * time.Hour
@@ -70,13 +71,17 @@ type Verified struct {
 // NewEnvelope deterministically encodes payload and constructs the exact bytes
 // that Sign authenticates. The caller owns authority-version allocation.
 func NewEnvelope(kind mediaauthoritypb.AuthorityKind, authorityID string, authorityVersion uint64, issuedAt, refreshAfter, validUntil time.Time, signerKeyID, audienceCellID string, payload proto.Message, revisions []*mediaauthoritypb.AuthoritySourceRevision) (*mediaauthoritypb.AuthorityEnvelope, error) {
+	versioned, ok := payload.(interface{ GetSchemaVersion() uint32 })
+	if !ok {
+		return nil, fmt.Errorf("%w: payload schema is required", ErrUnknownSchema)
+	}
 	payloadBytes, err := proto.MarshalOptions{Deterministic: true}.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("%w: encode payload: %w", ErrMalformed, err)
 	}
 	digest := sha256.Sum256(payloadBytes)
 	envelope := &mediaauthoritypb.AuthorityEnvelope{
-		SchemaVersion:    SchemaVersion,
+		SchemaVersion:    versioned.GetSchemaVersion(),
 		Kind:             kind,
 		AuthorityId:      strings.TrimSpace(authorityID),
 		AuthorityVersion: authorityVersion,
@@ -169,7 +174,7 @@ func validateEnvelope(envelope *mediaauthoritypb.AuthorityEnvelope, expectedCell
 	if err := rejectUnknownFields(envelope.ProtoReflect()); err != nil {
 		return false, err
 	}
-	if envelope.GetSchemaVersion() != SchemaVersion {
+	if !supportedSchema(envelope.GetSchemaVersion()) {
 		return false, fmt.Errorf("%w: envelope version %d", ErrUnknownSchema, envelope.GetSchemaVersion())
 	}
 	if envelope.GetKind() == mediaauthoritypb.AuthorityKind_AUTHORITY_KIND_UNSPECIFIED || strings.TrimSpace(envelope.GetAuthorityId()) == "" || envelope.GetAuthorityVersion() == 0 {
@@ -268,8 +273,11 @@ func validateTenant(envelope *mediaauthoritypb.AuthorityEnvelope, payload *media
 	if err := rejectUnknownFields(payload.ProtoReflect()); err != nil {
 		return err
 	}
-	if payload.GetSchemaVersion() != SchemaVersion {
+	if !supportedSchema(payload.GetSchemaVersion()) || payload.GetSchemaVersion() != envelope.GetSchemaVersion() {
 		return fmt.Errorf("%w: tenant payload version %d", ErrUnknownSchema, payload.GetSchemaVersion())
+	}
+	if err := validateTenantPlacement(envelope, payload); err != nil {
+		return err
 	}
 	if payload.GetTenantId() == "" || payload.GetTenantId() != envelope.GetAuthorityId() {
 		return fmt.Errorf("%w: tenant payload identity mismatch", ErrMalformed)
@@ -391,8 +399,11 @@ func validateMediaObject(envelope *mediaauthoritypb.AuthorityEnvelope, payload *
 	if err := rejectUnknownFields(payload.ProtoReflect()); err != nil {
 		return err
 	}
-	if payload.GetSchemaVersion() != SchemaVersion {
+	if !supportedSchema(payload.GetSchemaVersion()) || payload.GetSchemaVersion() != envelope.GetSchemaVersion() {
 		return fmt.Errorf("%w: media-object payload version %d", ErrUnknownSchema, payload.GetSchemaVersion())
+	}
+	if err := validateObjectPlacement(envelope, payload); err != nil {
+		return err
 	}
 	if payload.GetTenantId() == "" || payload.GetInternalName() == "" || payload.GetPlaybackId() == "" || payload.GetLifecycle() == 0 {
 		return fmt.Errorf("%w: media-object identity and lifecycle are required", ErrMalformed)
