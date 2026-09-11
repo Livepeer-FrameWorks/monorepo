@@ -47,10 +47,23 @@ func TestSentinelFailover_RealValkey(t *testing.T) {
 	startData(dataNames[1], true)
 	startData(dataNames[2], true)
 
+	// Monitor the primary by IP, not by container name.
+	//
+	// The failover this test exercises stops the primary's container, and Docker's
+	// embedded DNS drops a stopped container's name. With "resolve-hostnames yes"
+	// and a name in the monitor line, every Sentinel then fails to re-resolve the
+	// primary mid-failover ("Failed to resolve hostname ...-master") and the
+	// promotion never converges. Docker Desktop happens to keep resolving it, so
+	// the hostname form passes locally and fails on Linux CI. An IP cannot stop
+	// resolving, which leaves the container being down as the only variable —
+	// which is the condition under test.
+	primaryAddr := containerAddress(t, dataNames[0], "6379")
+	primaryIP := strings.TrimSuffix(primaryAddr, ":6379")
+
 	// Sentinel rewrites its configuration during failover. Create it inside a writable
 	// container tmpfs so the runtime UID owns the file on both Docker Desktop and Linux CI.
 	for index, name := range sentinelNames {
-		config := fmt.Sprintf("port 26379\ndir /sentinel\nsentinel resolve-hostnames yes\nsentinel monitor frameworks-master %s 6379 2\nsentinel down-after-milliseconds frameworks-master 1000\nsentinel failover-timeout frameworks-master 8000\nsentinel parallel-syncs frameworks-master 1\n", dataNames[0])
+		config := fmt.Sprintf("port 26379\ndir /sentinel\nsentinel monitor frameworks-master %s 6379 2\nsentinel down-after-milliseconds frameworks-master 1000\nsentinel failover-timeout frameworks-master 8000\nsentinel parallel-syncs frameworks-master 1\n", primaryIP)
 		configWriter := `printf '%s' "$1" > /sentinel/sentinel.conf && exec valkey-server /sentinel/sentinel.conf --sentinel`
 		if out, runErr := dockerpg.Run("run", "-d", "--name", name, "--network", networkName, "--expose", "26379", "-P",
 			"--tmpfs", "/sentinel:rw,mode=1777", image, "sh", "-c", configWriter, fmt.Sprintf("sentinel-%d", index), config); runErr != nil {
