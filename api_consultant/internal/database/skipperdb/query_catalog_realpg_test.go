@@ -33,8 +33,8 @@ func TestGeneratedQueryCatalogPrepares_RealYugabyte(t *testing.T) {
 func prepareSkipperQueryCatalog(t *testing.T, db *sql.DB) {
 	t.Helper()
 	queries := skipperGeneratedQueries(t)
-	if len(queries) != 62 {
-		t.Fatalf("found %d generated Skipper queries, want 62", len(queries))
+	if len(queries) != 63 {
+		t.Fatalf("found %d generated Skipper queries, want 63", len(queries))
 	}
 	ctx := context.Background()
 	conn, err := db.Conn(ctx)
