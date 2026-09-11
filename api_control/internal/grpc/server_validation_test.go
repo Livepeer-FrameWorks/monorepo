@@ -92,7 +92,7 @@ func TestNewCommodoreServerKeepsOptionalClientInterfacesNil(t *testing.T) {
 		FieldEncryptionKeyID: "test",
 		FieldEncryptionKey:   []byte("test-only-field-encryption-secret"),
 	})
-	if server.streamAdmissionBilling != nil || server.authorityBillingSource != nil || server.authorityTenantSource != nil {
+	if server.streamAdmissionBilling != nil || server.authorityBillingSource != nil || server.authorityTenantSource != nil || server.authorityCommercialSource != nil {
 		t.Fatalf("optional interfaces must remain nil: admission=%T billing=%T tenant=%T",
 			server.streamAdmissionBilling, server.authorityBillingSource, server.authorityTenantSource)
 	}

@@ -20,6 +20,7 @@ import (
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
 	mediaauthoritypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
 	meteringpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/metering_contract"
 	purserpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/purser"
@@ -191,6 +192,13 @@ func (s *CommodoreServer) compileTenantAuthority(ctx context.Context, tenantID s
 	if err != nil {
 		return err
 	}
+	if placementErr := s.compileTenantPlacement(ctx, payload, entitlement, targets); placementErr != nil {
+		return placementErr
+	}
+	revisions, err = tenantPlacementSourceRevisions(payload, revisions)
+	if err != nil {
+		return err
+	}
 	return s.persistTenantAuthority(ctx, payload, targets, revisions, issuedAt, validUntil)
 }
 
@@ -217,10 +225,15 @@ func (s *CommodoreServer) compileDeletedTenantAuthority(ctx context.Context, ten
 		return errors.New("deleted tenant authority identity mismatch")
 	}
 	payload := deletedTenantAuthorityPayload(tenantID)
+	if placementErr := s.inheritTenantPlacement(ctx, payload, nil, previous); placementErr != nil {
+		return placementErr
+	}
+	revisions, err := tenantPlacementSourceRevisions(payload, []*mediaauthoritypb.AuthoritySourceRevision{{Service: "quartermaster", Revision: "deleted"}})
+	if err != nil {
+		return err
+	}
 	issuedAt := time.Now().UTC()
-	return s.persistTenantAuthority(ctx, payload, nil,
-		[]*mediaauthoritypb.AuthoritySourceRevision{{Service: "quartermaster", Revision: "deleted"}},
-		issuedAt, issuedAt.Add(mediaAuthorityValidity))
+	return s.persistTenantAuthority(ctx, payload, nil, revisions, issuedAt, issuedAt.Add(mediaAuthorityValidity))
 }
 
 func deletedTenantAuthorityPayload(tenantID string) *mediaauthoritypb.TenantAuthority {
@@ -322,6 +335,9 @@ func (s *CommodoreServer) compileLiveStreamAuthority(ctx context.Context, stream
 	}
 	issuedAt := time.Now().UTC()
 	validUntil := issuedAt.Add(mediaAuthorityValidity)
+	if placementErr := s.compileObjectPlacement(ctx, tenant, payload); placementErr != nil {
+		return fmt.Errorf("compile live-stream placement: %w", placementErr)
+	}
 	if tenantValidUntil.Before(validUntil) {
 		validUntil = tenantValidUntil
 	}
@@ -463,6 +479,9 @@ func (s *CommodoreServer) compileArtifactAuthority(ctx context.Context, artifact
 		return err
 	}
 	payload.SealedPlaybackSecrets = sealedPlayback
+	if placementErr := s.compileObjectPlacement(ctx, tenant, payload); placementErr != nil {
+		return fmt.Errorf("compile artifact placement: %w", placementErr)
+	}
 	issuedAt := time.Now().UTC()
 	validUntil := issuedAt.Add(7 * 24 * time.Hour)
 	if tenantValidUntil.Before(validUntil) {
@@ -555,6 +574,7 @@ func (s *CommodoreServer) compileDeletedMediaObjectAuthority(ctx context.Context
 	payload.Lifecycle = mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_TOMBSTONE
 	payload.PlaybackPolicy = denyPlaybackPolicy()
 	payload.SealedPlaybackSecrets = nil
+	payload.CommercialQuotes = nil
 	if live := payload.GetLiveStream(); live != nil {
 		live.SealedCellSecrets = nil
 	}
@@ -933,6 +953,12 @@ func (s *CommodoreServer) persistTenantAuthority(ctx context.Context, payload *m
 	if !refreshAfter.Before(validUntil) {
 		refreshAfter = issuedAt
 	}
+	if payload.GetSchemaVersion() == sharedauthority.PlacementSchemaVersion {
+		refreshAfter = mediaAuthorityRefreshAfter(issuedAt, validUntil)
+		deadlineCtx, cancel := context.WithDeadline(ctx, validUntil)
+		defer cancel()
+		ctx = deadlineCtx
+	}
 	return database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
 		queries := commodoredb.New(tx)
 		if err := lockMediaAuthorityCompileFence(ctx, queries, "tenant:"+payload.GetTenantId()); err != nil {
@@ -955,6 +981,21 @@ func (s *CommodoreServer) persistTenantAuthority(ctx context.Context, payload *m
 		}
 		if version <= 0 {
 			return errors.New("allocated invalid tenant authority version")
+		}
+		if placementErr := guardTenantPlacementPublication(ctx, queries, payload); placementErr != nil {
+			return placementErr
+		}
+		// Schema 2 is monotonic once published, so a cell that cannot enforce it
+		// must be refused as a target here rather than rolled back later. Prior
+		// cells only receive the revocation they already hold state for.
+		if payload.GetSchemaVersion() == sharedauthority.PlacementSchemaVersion {
+			ready, readyErr := placementCellsReady(ctx, queries, targets)
+			if readyErr != nil {
+				return readyErr
+			}
+			if !ready {
+				return errors.New("tenant authority targets a cell without placement enforcement capability")
+			}
 		}
 		var firstEnvelope *mediaauthoritypb.AuthorityEnvelope
 		signedByCell := make(map[string][]byte, len(allTargets))
@@ -991,7 +1032,7 @@ func (s *CommodoreServer) persistTenantAuthority(ctx context.Context, payload *m
 		}
 		if insertErr := queries.InsertMediaAuthorityVersion(ctx, commodoredb.InsertMediaAuthorityVersionParams{
 			AuthorityKind: "tenant", AuthorityID: payload.GetTenantId(), AuthorityVersion: version,
-			PayloadSchemaVersion: sharedauthority.SchemaVersion, Payload: firstEnvelope.GetPayload(), PayloadSha256: firstEnvelope.GetPayloadSha256(),
+			PayloadSchemaVersion: int32(firstEnvelope.GetSchemaVersion()), Payload: firstEnvelope.GetPayload(), PayloadSha256: firstEnvelope.GetPayloadSha256(),
 			SourceRevisions: revisionsJSON, IssuedAt: issuedAt, RefreshAfter: refreshAfter, ValidUntil: validUntil,
 		}); insertErr != nil {
 			return fmt.Errorf("persist tenant authority version: %w", insertErr)
@@ -1018,11 +1059,30 @@ func (s *CommodoreServer) persistTenantAuthority(ctx context.Context, payload *m
 				return fmt.Errorf("enqueue tenant authority for cell %q: rows=%d: %w", cell, rows, err)
 			}
 		}
+		if payload.GetSchemaVersion() == sharedauthority.PlacementSchemaVersion {
+			return scheduleTenantMediaAuthorityRefresh(ctx, queries, payload, version, refreshAfter)
+		}
 		return nil
 	})
 }
 
 func (s *CommodoreServer) persistMediaObjectAuthority(ctx context.Context, authorityID string, payload *mediaauthoritypb.MediaObjectAuthority, targets []string, revisions []*mediaauthoritypb.AuthoritySourceRevision, issuedAt, validUntil time.Time) error {
+	var commercial *mediaObjectCommercialSnapshot
+	if payload.GetSchemaVersion() == sharedauthority.PlacementSchemaVersion && payload.GetLifecycle() == mediaauthoritypb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE {
+		var err error
+		commercial, err = s.prepareMediaObjectCommercial(ctx, payload, targets)
+		if err != nil {
+			return err
+		}
+		payload = commercial.payload
+		issuedAt = time.Now().UTC()
+		if commercial.validUntil.Before(validUntil) {
+			validUntil = commercial.validUntil
+		}
+		if commercial.revision != "" {
+			revisions = append(append([]*mediaauthoritypb.AuthoritySourceRevision(nil), revisions...), &mediaauthoritypb.AuthoritySourceRevision{Service: "purser", Revision: commercial.revision})
+		}
+	}
 	if !validUntil.After(issuedAt) {
 		return errors.New("media-object authority requires future validity")
 	}
@@ -1030,10 +1090,29 @@ func (s *CommodoreServer) persistMediaObjectAuthority(ctx context.Context, autho
 	if !refreshAfter.Before(validUntil) {
 		refreshAfter = issuedAt
 	}
+	if commercial != nil {
+		refreshAfter = mediaAuthorityRefreshAfter(issuedAt, validUntil)
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, validUntil)
+		defer cancel()
+	}
 	return database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
 		queries := commodoredb.New(tx)
 		if err := lockMediaAuthorityCompileFence(ctx, queries, "media_object:"+authorityID); err != nil {
 			return err
+		}
+		if commercial != nil {
+			current, err := queries.LockCurrentTenantMediaAuthority(ctx, payload.GetTenantId())
+			if err != nil {
+				return err
+			}
+			bound := &mediaauthoritypb.TenantAuthority{}
+			if err := proto.Unmarshal(current.Payload, bound); err != nil {
+				return err
+			}
+			if !proto.Equal(bound, commercial.tenant) || validUntil.After(current.ValidUntil) || !validUntil.After(time.Now()) {
+				return errors.New("commercial parent authority changed or expired before publication")
+			}
 		}
 		priorCells, err := queries.ListMediaAuthorityPriorCells(ctx, commodoredb.ListMediaAuthorityPriorCellsParams{AuthorityKind: "media_object", AuthorityID: authorityID})
 		if err != nil {
@@ -1085,7 +1164,7 @@ func (s *CommodoreServer) persistMediaObjectAuthority(ctx context.Context, autho
 		}
 		if insertErr := queries.InsertMediaAuthorityVersion(ctx, commodoredb.InsertMediaAuthorityVersionParams{
 			AuthorityKind: "media_object", AuthorityID: authorityID, AuthorityVersion: version,
-			PayloadSchemaVersion: sharedauthority.SchemaVersion, Payload: firstEnvelope.GetPayload(), PayloadSha256: firstEnvelope.GetPayloadSha256(),
+			PayloadSchemaVersion: int32(firstEnvelope.GetSchemaVersion()), Payload: firstEnvelope.GetPayload(), PayloadSha256: firstEnvelope.GetPayloadSha256(),
 			SourceRevisions: revisionsJSON, IssuedAt: issuedAt, RefreshAfter: refreshAfter, ValidUntil: validUntil,
 		}); insertErr != nil {
 			return fmt.Errorf("persist media-object authority version: %w", insertErr)
@@ -1112,25 +1191,30 @@ func (s *CommodoreServer) persistMediaObjectAuthority(ctx context.Context, autho
 				return fmt.Errorf("enqueue media-object authority for cell %q: rows=%d: %w", cell, rows, err)
 			}
 		}
+		if commercial != nil {
+			return scheduleMediaObjectAuthorityRefresh(ctx, queries, payload, authorityID, version, refreshAfter)
+		}
 		return nil
 	})
 }
 
 func (s *CommodoreServer) runMediaAuthorityWorkers(ctx context.Context) {
-	runMediaAuthorityWorkerPair(ctx, s.processMediaAuthorityRefreshBatch, s.processMediaAuthorityDeliveryBatch)
+	processes := []func(context.Context){s.processMediaAuthorityRefreshBatch, s.processMediaAuthorityDeliveryBatch, s.processMediaAuthorityDeadlineRefreshBatch, s.processTenantMediaAuthorityDeadlineRefreshBatch, s.processPlacementActivationBacklog}
+	for range mediaAuthorityDeliveryWorkers {
+		processes = append(processes, s.processMediaAuthorityDeadlineDeliveryWorker)
+	}
+	runMediaAuthorityWorkerGroup(ctx, processes...)
 }
 
-func runMediaAuthorityWorkerPair(ctx context.Context, refresh, deliver func(context.Context)) {
+func runMediaAuthorityWorkerGroup(ctx context.Context, processes ...func(context.Context)) {
 	var workers sync.WaitGroup
-	workers.Add(2)
-	go func() {
-		defer workers.Done()
-		runMediaAuthorityWorker(ctx, refresh)
-	}()
-	go func() {
-		defer workers.Done()
-		runMediaAuthorityWorker(ctx, deliver)
-	}()
+	workers.Add(len(processes))
+	for _, process := range processes {
+		go func() {
+			defer workers.Done()
+			runMediaAuthorityWorker(ctx, process)
+		}()
+	}
 	workers.Wait()
 }
 
@@ -1257,6 +1341,16 @@ func (s *CommodoreServer) processMediaAuthorityRefreshBatch(ctx context.Context)
 }
 
 func (s *CommodoreServer) processMediaAuthorityRefreshRow(ctx context.Context, row commodoredb.ClaimMediaAuthorityRefreshInboxRow) {
+	// Fanout does not publish tenant state and must not fence out a concurrent
+	// tenant compiler while it enumerates dependent objects.
+	if strings.HasPrefix(strings.TrimSpace(row.Reason), "tenant_media_objects:") {
+		if err := s.completeTenantAuthorityRefresh(ctx, row); err != nil {
+			settleCtx, cancel := context.WithTimeout(context.Background(), mediaAuthoritySettleTimeout)
+			s.failMediaAuthorityRefresh(settleCtx, row, err)
+			cancel()
+		}
+		return
+	}
 	tenantRefresh := false
 	objectKind, objectID, objectRefresh := parseMediaObjectRefreshReason(row.Reason)
 	scopeKey := mediaAuthorityCompileScope(row.TenantID, objectKind, objectID, objectRefresh)
@@ -1270,10 +1364,6 @@ func (s *CommodoreServer) processMediaAuthorityRefreshRow(ctx context.Context, r
 			default:
 				return fmt.Errorf("unsupported media-object refresh kind %q", objectKind)
 			}
-		}
-		if strings.HasPrefix(strings.TrimSpace(row.Reason), "tenant_media_objects:") {
-			tenantRefresh = true
-			return s.completeTenantAuthorityRefresh(compileCtx, row)
 		}
 		tenantRefresh = true
 		if err := s.compileTenantAuthority(compileCtx, row.TenantID); err != nil {
@@ -1441,28 +1531,32 @@ func (s *CommodoreServer) processMediaAuthorityDeliveryBatch(ctx context.Context
 	for _, row := range rows {
 		row := row
 		group.Go(func() error {
-			deliveryErr := runMediaAuthorityDelivery(groupCtx, mediaAuthorityDeliveryTimeout, func(deliveryCtx context.Context) error {
-				return s.deliverMediaAuthority(deliveryCtx, row)
-			})
-			if deliveryErr == nil {
-				ackCtx, ackCancel := context.WithTimeout(context.Background(), mediaAuthoritySettleTimeout)
-				deliveryErr = s.acknowledgeMediaAuthorityDelivery(ackCtx, row)
-				ackCancel()
-			}
-			if deliveryErr != nil {
-				s.observeMediaAuthorityDeliveryAttempt(row.AuthorityKind, "failed")
-				settleCtx, settleCancel := context.WithTimeout(context.Background(), mediaAuthoritySettleTimeout)
-				s.failMediaAuthorityDelivery(settleCtx, row, deliveryErr)
-				settleCancel()
-				return nil
-			}
-			s.observeMediaAuthorityDeliveryAttempt(row.AuthorityKind, "acknowledged")
+			s.processMediaAuthorityDeliveryRow(groupCtx, row, mediaAuthorityDeliveryTimeout)
 			return nil
 		})
 	}
 	if waitErr := group.Wait(); waitErr != nil && ctx.Err() == nil {
 		s.logger.WithError(waitErr).Warn("Media authority delivery batch ended early")
 	}
+}
+
+func (s *CommodoreServer) processMediaAuthorityDeliveryRow(ctx context.Context, row commodoredb.ClaimMediaAuthorityDeliveriesRow, timeout time.Duration) {
+	deliveryErr := runMediaAuthorityDelivery(ctx, timeout, func(deliveryCtx context.Context) error {
+		return s.deliverMediaAuthority(deliveryCtx, row)
+	})
+	if deliveryErr == nil {
+		ackCtx, ackCancel := context.WithTimeout(context.Background(), mediaAuthoritySettleTimeout)
+		deliveryErr = s.acknowledgeMediaAuthorityDelivery(ackCtx, row)
+		ackCancel()
+	}
+	if deliveryErr != nil {
+		s.observeMediaAuthorityDeliveryAttempt(row.AuthorityKind, "failed")
+		settleCtx, settleCancel := context.WithTimeout(context.Background(), mediaAuthoritySettleTimeout)
+		s.failMediaAuthorityDelivery(settleCtx, row, deliveryErr)
+		settleCancel()
+		return
+	}
+	s.observeMediaAuthorityDeliveryAttempt(row.AuthorityKind, "acknowledged")
 }
 
 func runMediaAuthorityDelivery(ctx context.Context, timeout time.Duration, deliver func(context.Context) error) error {
@@ -1504,29 +1598,79 @@ func (s *CommodoreServer) observeMediaAuthorityDeliveryStats(ctx context.Context
 }
 
 func (s *CommodoreServer) deliverMediaAuthority(ctx context.Context, row commodoredb.ClaimMediaAuthorityDeliveriesRow) error {
+	return runSignedMediaAuthorityDelivery(ctx, row, s.applyMediaAuthorityDelivery)
+}
+
+func runSignedMediaAuthorityDelivery(ctx context.Context, row commodoredb.ClaimMediaAuthorityDeliveriesRow, deliver func(context.Context, commodoredb.ClaimMediaAuthorityDeliveriesRow, *mediaauthoritypb.SignedAuthorityEnvelope) error) error {
 	signed := &mediaauthoritypb.SignedAuthorityEnvelope{}
 	if err := (proto.UnmarshalOptions{DiscardUnknown: false}).Unmarshal(row.SignedEnvelope, signed); err != nil {
 		return fmt.Errorf("decode queued media authority: %w", err)
 	}
+	expectedKind := mediaauthoritypb.AuthorityKind_AUTHORITY_KIND_UNSPECIFIED
+	switch row.AuthorityKind {
+	case "tenant":
+		expectedKind = mediaauthoritypb.AuthorityKind_AUTHORITY_KIND_TENANT
+	case "media_object":
+		expectedKind = mediaauthoritypb.AuthorityKind_AUTHORITY_KIND_MEDIA_OBJECT
+	}
+	envelope := signed.GetEnvelope()
+	if expectedKind == mediaauthoritypb.AuthorityKind_AUTHORITY_KIND_UNSPECIFIED || envelope == nil || row.AuthorityVersion <= 0 || envelope.GetKind() != expectedKind || envelope.GetAuthorityId() != row.AuthorityID || envelope.GetAuthorityVersion() != uint64(row.AuthorityVersion) || row.CellID == "" || envelope.GetAudienceCellId() != row.CellID {
+		return errors.New("queued media authority identity mismatch")
+	}
+	if envelope.GetValidUntil() == nil || envelope.GetValidUntil().CheckValid() != nil {
+		return errors.New("queued media authority has invalid expiry")
+	}
+	deliveryCtx, cancel := context.WithDeadline(ctx, envelope.GetValidUntil().AsTime())
+	defer cancel()
+	if err := deliveryCtx.Err(); err != nil {
+		return err
+	}
+	if err := deliver(deliveryCtx, row, signed); err != nil {
+		return err
+	}
+	return deliveryCtx.Err()
+}
+
+func (s *CommodoreServer) applyMediaAuthorityDelivery(ctx context.Context, row commodoredb.ClaimMediaAuthorityDeliveriesRow, signed *mediaauthoritypb.SignedAuthorityEnvelope) error {
 	client, err := s.resolveFoghornForClusterDirect(ctx, row.CellID)
 	if err != nil {
 		return fmt.Errorf("resolve Foghorn control cell %q: %w", row.CellID, err)
 	}
 	resp, err := client.ApplyMediaAuthority(ctx, signed)
 	if err != nil {
+		// A cell refuses a signed authority only when the envelope was not meant
+		// for it (wrong audience, unknown signer, bad signature). The pooled
+		// connection is keyed by cell, and a replaced replica can leave that
+		// connection attached to an address another cell's Foghorn now owns;
+		// drop it so the next attempt discovers and dials the cell afresh.
+		if status.Code(err) == codes.PermissionDenied && s.foghornPool != nil {
+			s.foghornPool.Remove(foghornPoolKey(row.CellID, ""))
+		}
 		return fmt.Errorf("apply media authority at cell %q: %w", row.CellID, err)
 	}
 	expectedKind := mediaauthoritypb.AuthorityKind_AUTHORITY_KIND_TENANT
 	if row.AuthorityKind == "media_object" {
 		expectedKind = mediaauthoritypb.AuthorityKind_AUTHORITY_KIND_MEDIA_OBJECT
 	}
-	if resp.GetAuthorityKind() != expectedKind || resp.GetAuthorityId() != row.AuthorityID || resp.GetAuthorityVersion() != uint64(row.AuthorityVersion) || resp.GetOutcome() == 0 {
+	validOutcome := resp.GetOutcome() == foghornpb.MediaAuthorityApplyOutcome_MEDIA_AUTHORITY_APPLY_OUTCOME_APPLIED || resp.GetOutcome() == foghornpb.MediaAuthorityApplyOutcome_MEDIA_AUTHORITY_APPLY_OUTCOME_DUPLICATE
+	if resp.GetAuthorityKind() != expectedKind || resp.GetAuthorityId() != row.AuthorityID || resp.GetAuthorityVersion() != uint64(row.AuthorityVersion) || !validOutcome {
 		return fmt.Errorf("cell %q acknowledged mismatched media authority", row.CellID)
+	}
+	// The attestation is recorded separately from the delivery acknowledgement:
+	// a lost attestation only delays activation until the next acknowledgement,
+	// while a lost acknowledgement would redeliver an already applied authority.
+	if recordErr := s.recordCellPlacementCapability(ctx, row.CellID, resp.GetPlacementCapability()); recordErr != nil && s.logger != nil {
+		s.logger.WithError(recordErr).WithField("cell_id", row.CellID).Warn("Failed to record cell placement capability attestation")
 	}
 	return nil
 }
 
 func (s *CommodoreServer) acknowledgeMediaAuthorityDelivery(ctx context.Context, row commodoredb.ClaimMediaAuthorityDeliveriesRow) error {
+	// nil options means READ COMMITTED, and reconcilePlacementActivation below
+	// depends on it: it serializes on an advisory lock and then re-reads the
+	// delivery rows, which only observes the previous holder's committed
+	// acknowledgement because a new snapshot is taken per statement. Raising the
+	// isolation here would restore the lost-update bug the lock exists to close.
 	return database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
 		queries := commodoredb.New(tx)
 		affected, err := queries.MarkMediaAuthorityDeliveryAcknowledged(ctx, commodoredb.MarkMediaAuthorityDeliveryAcknowledgedParams{
@@ -1535,9 +1679,17 @@ func (s *CommodoreServer) acknowledgeMediaAuthorityDelivery(ctx context.Context,
 		if err != nil || affected != 1 {
 			return fmt.Errorf("acknowledge media authority delivery: rows=%d: %w", affected, err)
 		}
-		return queries.UpsertMediaAuthorityDistribution(ctx, commodoredb.UpsertMediaAuthorityDistributionParams{
+		if err := queries.UpsertMediaAuthorityDistribution(ctx, commodoredb.UpsertMediaAuthorityDistributionParams{
 			AuthorityKind: row.AuthorityKind, AuthorityID: row.AuthorityID, CellID: row.CellID, AuthorityVersion: row.AuthorityVersion,
-		})
+		}); err != nil {
+			return err
+		}
+		// Activation evidence is derived from acknowledgements, in the same
+		// transaction, so an effective revision can never outrun its deliveries.
+		if err := s.reconcilePlacementActivation(ctx, queries, row.AuthorityKind, row.AuthorityID); err != nil {
+			return fmt.Errorf("reconcile placement activation: %w", err)
+		}
+		return nil
 	})
 }
 

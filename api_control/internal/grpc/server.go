@@ -49,6 +49,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/pagination"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
@@ -145,18 +146,26 @@ type CommodoreServer struct {
 	commodorepb.UnimplementedNodeManagementServiceServer
 	commodorepb.UnimplementedPushTargetServiceServer
 	commodorepb.UnimplementedPlaybackAccessControlServiceServer
-	db                       *sql.DB
-	dbMaxIdleConns           int
-	logger                   logging.Logger
-	foghornPool              *foghornclient.FoghornPool
-	quartermasterClient      *qmclient.GRPCClient
-	navigatorClient          *navigator.Client
-	purserClient             *purserclient.GRPCClient
-	streamAdmissionBilling   streamAdmissionBilling
-	authorityTenantSource    mediaAuthorityTenantSource
-	authorityBillingSource   mediaAuthorityBillingSource
-	mediaAuthorityKeyID      string
-	mediaAuthorityPrivateKey ed25519.PrivateKey
+	db                        *sql.DB
+	dbMaxIdleConns            int
+	logger                    logging.Logger
+	foghornPool               *foghornclient.FoghornPool
+	quartermasterClient       *qmclient.GRPCClient
+	navigatorClient           *navigator.Client
+	purserClient              *purserclient.GRPCClient
+	streamAdmissionBilling    streamAdmissionBilling
+	authorityTenantSource     mediaAuthorityTenantSource
+	authorityBillingSource    mediaAuthorityBillingSource
+	authorityCommercialSource mediaAuthorityCommercialSource
+	placementCapacitySource   mediaPlacementCapacityRead
+	placementPushSource       mediaPlacementPushSourceRead
+	mediaAuthorityKeyID       string
+	mediaAuthorityPrivateKey  ed25519.PrivateKey
+	// placementSweepCursor pages the activation backlog so a permanently
+	// blocked prefix cannot hide the scopes behind it. Guarded because the
+	// worker that advances it is not the only possible reader.
+	placementSweepMu         sync.Mutex
+	placementSweepCursor     placementSweepCursor
 	mediaAuthorityRecipients sharedauthority.SealRecipientSet
 	listmonkClient           *listmonk.Client
 	decklogClient            *decklogclient.BatchedClient
@@ -767,6 +776,7 @@ func NewCommodoreServer(cfg CommodoreServerConfig) *CommodoreServer {
 	if cfg.PurserClient != nil {
 		srv.streamAdmissionBilling = cfg.PurserClient
 		srv.authorityBillingSource = cfg.PurserClient
+		srv.authorityCommercialSource = cfg.PurserClient
 	}
 	return srv
 }
@@ -1476,6 +1486,9 @@ func resolveAddrFromRoute(route *clusterRoute, clusterID string) string {
 func (s *CommodoreServer) resolveFoghornForContent(ctx context.Context, contentID string) (*foghornclient.GRPCClient, *clusterRoute, error) {
 	if contentID == "" {
 		return nil, nil, status.Error(codes.InvalidArgument, "content_id required")
+	}
+	if s.db == nil {
+		return nil, nil, status.Error(codes.Unavailable, "content routing authority is unavailable")
 	}
 
 	queries := commodoredb.New(s.db)
@@ -2984,9 +2997,13 @@ func formatRuntimePlacementRejects(rejects []pullsource.PlacementReject, redacte
 // normalizeAllowedClusterIDs mirrors the bootstrap reconciler helper. Kept
 // local to the gRPC package so CreateStream / UpdateStream call sites use the
 // same canonical form (sorted, deduped, trimmed).
+// normalizeAllowedClusterIDs deduplicates a pull source's cluster pin. An absent
+// or empty pin is an empty list, never nil: "no pin" is a stored value on a
+// NOT NULL column, and a nil parameter would be written as SQL NULL rather than
+// falling back to the column default.
 func normalizeAllowedClusterIDs(in []string) []string {
 	if len(in) == 0 {
-		return nil
+		return []string{}
 	}
 	seen := make(map[string]bool, len(in))
 	out := make([]string, 0, len(in))
@@ -6973,6 +6990,9 @@ func (s *CommodoreServer) DeleteStream(ctx context.Context, req *commodorepb.Del
 	if err = txQueries.SoftDeleteStream(ctx, commodoredb.SoftDeleteStreamParams{ID: streamID, TenantID: tenantID}); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to soft-delete stream: %v", err)
 	}
+	if _, err = txQueries.RetainDeletedStreamMediaPlacementPolicy(ctx, commodoredb.RetainDeletedStreamMediaPlacementPolicyParams{TenantID: tenantID, StreamID: streamID}); err != nil {
+		return nil, status.Error(codes.Internal, "failed to retain stream placement policy")
+	}
 
 	// Enqueue the cleanup obligation ATOMICALLY with the soft-delete (idempotent on re-delete). The stream-cleanup
 	// outbox worker durably delivers it to Foghorn and finalizes the deletion on a positive ack.
@@ -7105,6 +7125,10 @@ func (s *CommodoreServer) finalizeStreamDeletion(ctx context.Context, streamID, 
 	})
 	if sErr != nil && !errors.Is(sErr, sql.ErrNoRows) {
 		return fmt.Errorf("read finalize attribution: %w", sErr)
+	}
+	// Finalization also covers deletion jobs created before retention was installed.
+	if _, retentionErr := queries.RetainDeletedStreamMediaPlacementPolicy(ctx, commodoredb.RetainDeletedStreamMediaPlacementPolicyParams{TenantID: tenantID, StreamID: streamID}); retentionErr != nil {
+		return fmt.Errorf("retain finalized stream placement policy: %w", retentionErr)
 	}
 	n, err := queries.HardDeleteFinalizedStream(ctx, commodoredb.HardDeleteFinalizedStreamParams{
 		StreamID: streamID,
@@ -8534,6 +8558,7 @@ var allowedAPITokenPermissions = map[string]struct{}{
 	"billing:read": {}, "billing:write": {},
 	"consultant:use": {}, "developer:read": {}, "developer:write": {},
 	"infrastructure:read": {}, "infrastructure:write": {},
+	"placement:read": {}, "placement:write": {},
 	"mcp:high-risk": {}, "security:read": {}, "security:write": {},
 	"settings:write": {}, "streams:read": {}, "streams:write": {},
 	"support:read": {},
@@ -9156,7 +9181,6 @@ func (s *CommodoreServer) DeleteDVR(ctx context.Context, req *sharedpb.DeleteDVR
 // ResolveViewerEndpoint proxies viewer endpoint resolution to Foghorn
 // and enriches the response with stream metadata from Commodore's database
 func (s *CommodoreServer) ResolveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest) (*sharedpb.ViewerEndpointResponse, error) {
-	tenantID := ctxkeys.GetTenantID(ctx)
 	contentID := req.GetContentId()
 	if normalized, ok, err := s.normalizeArtifactPlaybackID(ctx, contentID); err != nil {
 		return nil, err
@@ -9164,13 +9188,9 @@ func (s *CommodoreServer) ResolveViewerEndpoint(ctx context.Context, req *shared
 		contentID = normalized
 	}
 
-	var foghornClient *foghornclient.GRPCClient
-	var err error
-	if tenantID == "" {
-		foghornClient, _, err = s.resolveFoghornForContent(ctx, contentID)
-	} else {
-		foghornClient, _, err = s.resolveFoghornForTenant(ctx, tenantID)
-	}
+	// The content owner supplies routing authority. An authenticated viewer's
+	// own tenant must not select a coordinator lacking that content's policy.
+	foghornClient, _, err := s.resolveFoghornForContent(ctx, contentID)
 	if err != nil {
 		return nil, err
 	}
@@ -9191,7 +9211,7 @@ func (s *CommodoreServer) ResolveViewerEndpoint(ctx context.Context, req *shared
 		}
 	}
 
-	resp, trailers, err := foghornClient.ResolveViewerEndpoint(outCtx, contentID, req.ViewerIp, req.ViewerToken)
+	resp, trailers, err := foghornClient.ResolveViewerEndpointWithProtocol(outCtx, contentID, req.ViewerIp, req.ViewerToken, req.GetProtocol())
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to resolve viewer endpoint from Foghorn")
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
@@ -9245,6 +9265,9 @@ func (s *CommodoreServer) normalizeArtifactPlaybackID(ctx context.Context, conte
 // ResolveIngestEndpoint proxies ingest endpoint resolution to Foghorn
 // and enriches the response with stream metadata from Commodore's database
 func (s *CommodoreServer) ResolveIngestEndpoint(ctx context.Context, req *sharedpb.IngestEndpointRequest) (*sharedpb.IngestEndpointResponse, error) {
+	if _, err := placement.IngestProtocolName(req.GetProtocol()); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
 	tenantID := ctxkeys.GetTenantID(ctx)
 
 	// Routing always follows the stream key, never the caller.
@@ -9262,7 +9285,7 @@ func (s *CommodoreServer) ResolveIngestEndpoint(ctx context.Context, req *shared
 		return nil, err
 	}
 
-	resp, trailers, err := foghornClient.ResolveIngestEndpoint(ctx, req.StreamKey, req.ViewerIp)
+	resp, trailers, err := foghornClient.ResolveIngestEndpoint(ctx, req.StreamKey, req.ViewerIp, req.GetProtocol())
 	if err != nil {
 		s.logger.WithError(err).Error("Failed to resolve ingest endpoint from Foghorn")
 		return nil, grpcutil.PropagateError(ctx, err, trailers)

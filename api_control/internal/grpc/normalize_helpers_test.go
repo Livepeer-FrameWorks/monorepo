@@ -26,7 +26,10 @@ func TestNormalizeAllowedClusterIDs(t *testing.T) {
 		in   []string
 		want []string
 	}{
-		{"nil stays nil", nil, nil},
+		// An unpinned source persists as an empty pin, not NULL: the column is
+		// NOT NULL, and a nil parameter is written as SQL NULL instead of
+		// falling back to the column default.
+		{"nil becomes an empty pin", nil, []string{}},
 		{"all-empty input yields empty slice", []string{"", "  "}, []string{}},
 		{"trim dedup sort", []string{" b ", "a", "b", "a "}, []string{"a", "b"}},
 		{"already canonical", []string{"a", "b", "c"}, []string{"a", "b", "c"}},

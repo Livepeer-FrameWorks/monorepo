@@ -103,6 +103,7 @@ func TestNormalizeAPITokenPermissionsIncludesEveryMCPGrant(t *testing.T) {
 		"account:read", "analytics:read", "billing:read", "billing:write",
 		"consultant:use", "developer:read", "developer:write",
 		"infrastructure:read", "infrastructure:write", "mcp:high-risk",
+		"placement:read", "placement:write",
 		"security:read", "security:write", "settings:write",
 		"streams:read", "streams:write", "support:read",
 	}

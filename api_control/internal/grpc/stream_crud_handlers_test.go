@@ -295,6 +295,8 @@ func TestDeleteStream(t *testing.T) {
 			WithArgs("s1", "t1").WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectExec("UPDATE commodore.streams SET deleted_at").
 			WithArgs("s1", "t1").WillReturnResult(sqlmock.NewResult(0, 1))
+		mock.ExpectExec("INSERT INTO commodore.media_placement_policies").
+			WithArgs("t1", "s1").WillReturnResult(sqlmock.NewResult(0, 1))
 		mock.ExpectQuery("INSERT INTO commodore.stream_cleanup_outbox").
 			WithArgs("s1", "t1").
 			WillReturnRows(sqlmock.NewRows([]string{"stream_id"}).AddRow("s1"))

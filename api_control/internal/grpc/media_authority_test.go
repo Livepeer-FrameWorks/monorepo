@@ -144,7 +144,7 @@ func TestMediaAuthorityRefreshRunsWhileDeliveryIsBlocked(t *testing.T) {
 	var refreshes atomic.Int32
 	go func() {
 		defer close(done)
-		runMediaAuthorityWorkerPair(ctx,
+		runMediaAuthorityWorkerGroup(ctx,
 			func(context.Context) {
 				if refreshes.Add(1) == 2 {
 					close(refreshAdvanced)
@@ -400,6 +400,8 @@ func TestCompileDeletedTenantAuthorityDeliversTombstoneToPriorCells(t *testing.T
 	mock.ExpectQuery(`(?s)INSERT INTO commodore\.media_authority_counters.*RETURNING last_version`).
 		WithArgs("tenant", tenantID).
 		WillReturnRows(sqlmock.NewRows([]string{"last_version"}).AddRow(int64(2)))
+	mock.ExpectQuery("LockCurrentTenantMediaAuthority").WithArgs(tenantID).
+		WillReturnRows(sqlmock.NewRows([]string{"payload", "valid_until"}).AddRow(previous, time.Now().Add(time.Hour)))
 	mock.ExpectExec(`INSERT INTO commodore\.media_authority_versions`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`INSERT INTO commodore\.media_authority_current`).WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(`UPDATE commodore\.media_authority_deliveries`).WillReturnResult(sqlmock.NewResult(0, 0))

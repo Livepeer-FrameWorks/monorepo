@@ -32,6 +32,8 @@ func TestFinalizeStreamDeletion(t *testing.T) {
 	mock.ExpectQuery("SELECT COALESCE.user_id.*FROM commodore.streams WHERE id = .* AND tenant_id =").
 		WithArgs("stream-1", "tenant-1").
 		WillReturnRows(sqlmock.NewRows([]string{"user_id"}).AddRow("user-1"))
+	mock.ExpectExec("INSERT INTO commodore.media_placement_policies").
+		WithArgs("tenant-1", "stream-1").WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec("DELETE FROM commodore.streams WHERE id = .* AND tenant_id = .* AND deleted_at IS NOT NULL").
 		WithArgs("stream-1", "tenant-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/api_control/internal/placementpolicy"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	dbsql "github.com/Livepeer-FrameWorks/monorepo/pkg/database/sql"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/outbox"
@@ -223,6 +224,12 @@ func TestStreamCleanupOutboxLoop_DeliveryOutageConverges_RealPG(t *testing.T) {
 	}
 	if childCalls != 1 {
 		t.Fatalf("recovered cascade must delete the one child exactly once, got %d", childCalls)
+	}
+	retained, err := placementpolicy.NewStore(conn).ReadArtifactParent(ctx, placementpolicy.Scope{
+		TenantID: tenantID, Kind: "stream", ID: streamID,
+	})
+	if err != nil || retained.Own.GetRevision() != 0 || retained.Own.GetServe() != nil {
+		t.Fatalf("finalization lost explicit default placement for surviving artifacts: %v %v", retained.Own, err)
 	}
 
 	// --- Idempotent redelivery: a completed obligation re-driven (e.g. a duplicate tick) must be a no-op — no second

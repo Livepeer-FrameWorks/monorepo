@@ -54,7 +54,7 @@ func (s *CommodoreServer) TestPlaybackAccess(ctx context.Context, req *foghornco
 	}
 	policy, perr := s.ResolvePlaybackPolicy(ctx, policyReq)
 	if perr != nil {
-		return nil, status.Errorf(codes.NotFound, "playback target not found: %v", perr)
+		return nil, status.Error(codes.NotFound, "playback target not found")
 	}
 	if policy.GetTenantId() == "" {
 		return nil, status.Error(codes.NotFound, "playback target has no resolvable tenant")
@@ -90,8 +90,10 @@ func (s *CommodoreServer) TestPlaybackAccess(ctx context.Context, req *foghornco
 
 	resp, _, err := foghornClient.TestPlaybackAccess(ctx, req)
 	if err != nil {
+		// The dependency error is logged, not returned: this status text reaches
+		// the caller, including an MCP tool result read by a model.
 		s.logger.WithError(err).Error("Foghorn.TestPlaybackAccess failed")
-		return nil, status.Errorf(codes.Internal, "test playback access failed: %v", err)
+		return nil, status.Error(codes.Internal, "test playback access failed")
 	}
 	return resp, nil
 }
@@ -115,7 +117,7 @@ func (s *CommodoreServer) lookupInternalNameByPlaybackID(ctx context.Context, pl
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		s.logger.WithError(err).Error("lookup internal_name by playback_id failed")
-		return "", status.Errorf(codes.Internal, "internal name lookup failed: %v", err)
+		return "", status.Error(codes.Internal, "internal name lookup failed")
 	}
 	return "", status.Error(codes.NotFound, "playback target not found")
 }

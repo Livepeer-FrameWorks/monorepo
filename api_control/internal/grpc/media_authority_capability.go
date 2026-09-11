@@ -1,0 +1,119 @@
+package grpc
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"slices"
+	"strconv"
+	"strings"
+
+	"frameworks/api_control/internal/database/commodoredb"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
+	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
+	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
+)
+
+const cellPlacementCapabilityRefreshReason = "cell_placement_capability_ready"
+
+// cellPlacementCapabilityReady is the single predicate behind the activation
+// barrier: a cell counts as capable only when its own Foghorn attested schema-2
+// enforcement readiness. Stored rows never imply capability for other cells.
+func cellPlacementCapabilityReady(maxSchemaVersion int32, enforcementReady bool) bool {
+	return enforcementReady && maxSchemaVersion >= int32(sharedauthority.PlacementSchemaVersion)
+}
+
+// attestedCellPlacementCapability normalizes an acknowledgement's attestation.
+// Absent or malformed attestations are recorded as not ready, never ignored,
+// so a cell that stops attesting cannot keep an earlier readiness on file.
+func attestedCellPlacementCapability(capability *foghornpb.MediaCellPlacementCapability) (maxSchema int32, ready bool, replicas int32) {
+	if capability == nil {
+		return int32(sharedauthority.SchemaVersion), false, 0
+	}
+	versions := slices.Clone(capability.GetSupportedSchemaVersions())
+	slices.Sort(versions)
+	maxSchema = int32(sharedauthority.SchemaVersion)
+	for _, version := range versions {
+		if version == 0 || version > uint32(sharedauthority.PlacementSchemaVersion) {
+			return int32(sharedauthority.SchemaVersion), false, 0
+		}
+		maxSchema = int32(version)
+	}
+	if capability.GetLiveReplicas() > 1<<20 {
+		return int32(sharedauthority.SchemaVersion), false, 0
+	}
+	replicas = int32(capability.GetLiveReplicas())
+	ready = capability.GetEnforcementReady() && replicas > 0 && maxSchema >= int32(sharedauthority.PlacementSchemaVersion)
+	return maxSchema, ready, replicas
+}
+
+// recordCellPlacementCapability persists one cell's attestation and, whenever
+// the cell is ready, enqueues a refresh for every tenant that cell still holds
+// on a pre-placement schema. The inbox key includes the cell's first-ready
+// time, so repeated acknowledgements collapse into one compile per readiness.
+func (s *CommodoreServer) recordCellPlacementCapability(ctx context.Context, cellID string, capability *foghornpb.MediaCellPlacementCapability) error {
+	cellID = strings.TrimSpace(cellID)
+	if cellID == "" || s == nil || s.db == nil {
+		return errors.New("cell placement capability requires a cell and database")
+	}
+	maxSchema, ready, replicas := attestedCellPlacementCapability(capability)
+	return database.WithRetryablePostgresTx(ctx, s.db, nil, func(tx *sql.Tx) error {
+		queries := commodoredb.New(tx)
+		row, err := queries.UpsertMediaCellPlacementCapability(ctx, commodoredb.UpsertMediaCellPlacementCapabilityParams{
+			CellID: cellID, MaxSchemaVersion: maxSchema, EnforcementReady: ready, LiveReplicas: replicas,
+		})
+		if err != nil {
+			return fmt.Errorf("record cell placement capability: %w", err)
+		}
+		if !row.EnforcementReady || !row.FirstReadyAt.Valid {
+			return nil
+		}
+		tenants, err := queries.ListLegacySchemaTenantsTargetingCell(ctx, commodoredb.ListLegacySchemaTenantsTargetingCellParams{
+			CellID: cellID, SchemaVersion: int32(sharedauthority.PlacementSchemaVersion),
+		})
+		if err != nil {
+			return fmt.Errorf("list legacy-schema tenants for cell %q: %w", cellID, err)
+		}
+		readiness := strconv.FormatInt(row.FirstReadyAt.Time.UTC().Unix(), 10)
+		for _, tenantID := range tenants {
+			if _, err := queries.InsertMediaAuthorityRefreshInbox(ctx, commodoredb.InsertMediaAuthorityRefreshInboxParams{
+				SourceService: "commodore", SourceEventID: "cell-capability:" + cellID + ":" + tenantID + ":" + readiness,
+				TenantID: tenantID, Reason: cellPlacementCapabilityRefreshReason,
+			}); err != nil {
+				return fmt.Errorf("enqueue placement activation refresh for tenant %q: %w", tenantID, err)
+			}
+		}
+		return nil
+	})
+}
+
+// placementCellsReady reports whether every listed cell has attested schema-2
+// enforcement. An empty cell list is vacuously ready: a tenant with nobody to
+// notify has nobody who could reject the schema, and any later target is
+// checked again at publication.
+func placementCellsReady(ctx context.Context, queries *commodoredb.Queries, cells []string) (bool, error) {
+	wanted := make([]string, 0, len(cells))
+	for _, cell := range cells {
+		if cell = strings.TrimSpace(cell); cell != "" && !slices.Contains(wanted, cell) {
+			wanted = append(wanted, cell)
+		}
+	}
+	if len(wanted) == 0 {
+		return true, nil
+	}
+	rows, err := queries.ListMediaCellPlacementCapabilities(ctx, wanted)
+	if err != nil {
+		return false, fmt.Errorf("read cell placement capabilities: %w", err)
+	}
+	ready := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		ready[row.CellID] = cellPlacementCapabilityReady(row.MaxSchemaVersion, row.EnforcementReady)
+	}
+	for _, cell := range wanted {
+		if !ready[cell] {
+			return false, nil
+		}
+	}
+	return true, nil
+}

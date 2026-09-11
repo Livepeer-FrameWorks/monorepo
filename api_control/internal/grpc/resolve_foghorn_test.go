@@ -229,14 +229,22 @@ func TestFoghornPoolKey_FallsBackToAddrWhenClusterMissing(t *testing.T) {
 }
 
 func TestResolveViewerEndpoint_FailsClosedWhenQuartermasterUnavailable(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	mock.ExpectQuery("-- name: NormalizeArtifactPlaybackID").WithArgs("stream-1").WillReturnError(sql.ErrNoRows)
+	mock.ExpectQuery("-- name: GetStreamRouteByPlaybackID").WithArgs("stream-1").WillReturnRows(sqlmock.NewRows([]string{"tenant_id", "active_ingest_cluster_id"}).AddRow("owner", nil))
 	server := &CommodoreServer{
+		db:            db,
 		logger:        logrus.New(),
 		routeCache:    make(map[string]*clusterRoute),
 		routeCacheTTL: 5 * time.Minute,
 	}
 
 	ctx := context.WithValue(context.Background(), ctxkeys.KeyTenantID, "tenant-1")
-	_, err := server.ResolveViewerEndpoint(ctx, &sharedpb.ViewerEndpointRequest{ContentId: "stream-1"})
+	_, err = server.ResolveViewerEndpoint(ctx, &sharedpb.ViewerEndpointRequest{ContentId: "stream-1"})
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -249,6 +257,9 @@ func TestResolveViewerEndpoint_FailsClosedWhenQuartermasterUnavailable(t *testin
 	}
 	if st.Message() != "quartermaster not available for cluster routing" {
 		t.Fatalf("unexpected message: %q", st.Message())
+	}
+	if err = mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -623,6 +634,14 @@ func TestResolveIngestEndpoint_UnauthenticatedRequiresStreamKey(t *testing.T) {
 	}
 	if st.Message() != "stream_key required" {
 		t.Fatalf("unexpected message: %q", st.Message())
+	}
+}
+
+func TestResolveIngestEndpoint_UnknownProtocolDoesNotResolveAuthority(t *testing.T) {
+	server := &CommodoreServer{}
+	_, err := server.ResolveIngestEndpoint(t.Context(), &sharedpb.IngestEndpointRequest{StreamKey: "key", Protocol: sharedpb.IngestProtocol(99)})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("unsupported protocol = %v", err)
 	}
 }
 
