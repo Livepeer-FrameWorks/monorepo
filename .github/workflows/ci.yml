@@ -316,6 +316,11 @@ jobs:
       - uses: ./.github/actions/setup-node-pnpm
       - name: Generate SvelteKit types
         run: pnpm --filter frameworks-frontend exec svelte-kit sync
+      - name: Generate Houdini stores
+        # $houdini is gitignored and generated from the .gql operations, so a
+        # clean checkout has none. Component tests import it transitively through
+        # the placement editors; without this they fail to resolve the import.
+        run: pnpm --filter frameworks-frontend gql:codegen
       - run: pnpm test:coverage
       - name: Placement editor component interactions
         run: pnpm --filter frameworks-frontend test:components
