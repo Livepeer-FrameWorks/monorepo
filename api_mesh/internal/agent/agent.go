@@ -1461,7 +1461,9 @@ func (a *Agent) syncIngressCertificates() error {
 		return nil
 	}
 
-	changed := false
+	// bundleID -> marker for bundles written this pass, recorded only once the
+	// reload trigger has actually been touched.
+	written := make(map[string]string, len(bundleIDs))
 	for _, bundleID := range bundleIDs {
 		resp, err := a.navigatorClient.GetTLSBundle(ctx, &dnspb.GetTLSBundleRequest{BundleId: bundleID})
 		if err != nil {
@@ -1482,13 +1484,25 @@ func (a *Agent) syncIngressCertificates() error {
 		if err := a.writeIngressBundle(bundleID, resp.GetCertPem(), resp.GetKeyPem()); err != nil {
 			return fmt.Errorf("write ingress bundle %s: %w", bundleID, err)
 		}
-		a.recordIngressVersion(bundleID, marker)
-		changed = true
+		// Deliberately not recorded yet: see below.
+		written[bundleID] = marker
 	}
 
-	if changed {
+	if len(written) > 0 {
+		// The version memo is what makes a later pass skip a bundle, so it must
+		// not advance until the reload has actually been asked for. Recording
+		// first meant one failed touch -- an ownership drift on the
+		// Ansible-precreated trigger, a full disk -- left every later pass
+		// believing it was up to date, so the trigger was never touched again:
+		// new certificates on disk, ingress still serving the previous ones from
+		// memory, nothing reporting unhealthy, and no recovery short of a
+		// restart. Bundle writes are idempotent, so failing here simply leaves
+		// the next pass to redo them and retry.
 		if err := a.touchIngressReloadTrigger(); err != nil {
 			return fmt.Errorf("touch ingress reload trigger: %w", err)
+		}
+		for bundleID, marker := range written {
+			a.recordIngressVersion(bundleID, marker)
 		}
 	}
 

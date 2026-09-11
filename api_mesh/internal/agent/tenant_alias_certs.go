@@ -84,7 +84,9 @@ func (a *Agent) syncTenantAliasCertificates() error {
 	}
 	sort.Strings(subs)
 
-	changed := false
+	// sub -> marker for aliases written this pass, recorded only once the reload
+	// trigger has actually been touched.
+	written := make(map[string]string, len(subs))
 	for _, sub := range subs {
 		bundleID := "tenant:" + desired[sub]
 		resp, getErr := a.navigatorClient.GetTLSBundle(ctx, &dnspb.GetTLSBundleRequest{BundleId: bundleID})
@@ -108,19 +110,26 @@ func (a *Agent) syncTenantAliasCertificates() error {
 		if writeErr := a.writeTenantAliasBundle(sub, resp.GetCertPem(), resp.GetKeyPem()); writeErr != nil {
 			return fmt.Errorf("write tenant-alias bundle %s: %w", sub, writeErr)
 		}
-		a.recordTenantAliasVersion(sub, marker)
-		changed = true
+		// Recorded only after the reload trigger is touched; see below.
+		written[sub] = marker
 	}
 
 	pruned, pruneErr := a.pruneTenantAliasDirs(desired)
 	if pruneErr != nil {
 		return pruneErr
 	}
-	changed = changed || pruned
-
-	if changed {
+	if len(written) > 0 || pruned {
+		// The version memo is what makes a later pass skip an alias, so it must
+		// not advance until the reload has actually been asked for. Recording
+		// first meant one failed touch left every later pass believing it was up
+		// to date, so the trigger was never touched again: new certificates on
+		// disk, ingress still serving the previous ones. Bundle writes are
+		// idempotent, so failing here leaves the next pass to redo them.
 		if err := a.touchIngressReloadTrigger(); err != nil {
 			return fmt.Errorf("touch ingress reload trigger: %w", err)
+		}
+		for sub, marker := range written {
+			a.recordTenantAliasVersion(sub, marker)
 		}
 	}
 
