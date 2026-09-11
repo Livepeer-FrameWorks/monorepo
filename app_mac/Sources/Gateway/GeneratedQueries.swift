@@ -137,6 +137,15 @@ enum GQL {
   }
   """
 
+  static let DeleteSuccessFields = """
+  fragment DeleteSuccessFields on DeleteSuccess {
+    __typename
+    success
+    deletedId
+    pending
+  }
+  """
+
   static let DVRRequestFields = """
   # All fields available on DVRRequest type
   fragment DVRRequestFields on DVRRequest {
@@ -168,15 +177,6 @@ enum GQL {
       spriteJpgUrl
       assetKey
     }
-  }
-  """
-
-  static let DeleteSuccessFields = """
-  fragment DeleteSuccessFields on DeleteSuccess {
-    __typename
-    success
-    deletedId
-    pending
   }
   """
 
@@ -239,6 +239,135 @@ enum GQL {
     # Point-in-time artifacts currently synced to S3
     syncedArtifactCount
     syncedArtifactBytes
+  }
+  """
+
+  static let MediaCapacityConsentChangeFields = """
+  fragment MediaCapacityConsentChangeFields on MediaCapacityConsentChange {
+    clusterId
+    idempotencyKey
+    revision
+    digest
+    createdAt
+    rollout {
+      ...MediaPlacementRolloutFields
+    }
+  }
+  """
+
+  static let MediaPlacementCandidateFields = """
+  fragment MediaPlacementCandidateFields on MediaPlacementCandidateExplanation {
+    clusterId
+    clusterName
+    region
+    nodeId
+    groupId
+    reason
+    distanceKm
+    requiresSourcePull
+    price {
+      amountMicros
+      currency
+      unit
+      revision
+      expiresAt
+    }
+  }
+  """
+
+  static let MediaPlacementChangeFields = """
+  fragment MediaPlacementChangeFields on MediaPlacementChange {
+    scope {
+      kind
+      streamId
+    }
+    idempotencyKey
+    revision
+    parentRevision
+    digest
+    createdAt
+    rollout {
+      ...MediaPlacementRolloutFields
+    }
+  }
+  """
+
+  static let MediaPlacementErrorFields = """
+  fragment MediaPlacementErrorFields on MediaPlacementError {
+    code
+    message
+    fields {
+      path
+      groupId
+      message
+    }
+    currentRevision
+    conflictParentRevision: parentRevision
+    retryAfterSeconds
+  }
+  """
+
+  static let MediaPlacementGroupFields = """
+  fragment MediaPlacementGroupFields on MediaPlacementGroup {
+    id
+    match {
+      ...MediaPlacementSelectorFields
+    }
+    order
+    spillover
+    maxDistanceKm
+    geoHoleDistanceKm
+    minImprovementKm
+    priceCurrency
+    priceUnit
+  }
+  """
+
+  static let MediaPlacementRolloutFields = """
+  fragment MediaPlacementRolloutFields on MediaPlacementRollout {
+    status
+    requiredRecipients
+    appliedRecipients
+    existingSessionsRetained
+    updatedAt
+    pendingRecipients {
+      id
+      name
+      status
+      reason
+      authorityExpiresAt
+    }
+  }
+  """
+
+  static let MediaPlacementRulesFields = """
+  fragment MediaPlacementRulesFields on MediaPlacementRules {
+    schemaVersion
+    constraints {
+      allow {
+        any {
+          ...MediaPlacementSelectorFields
+        }
+      }
+      deny {
+        ...MediaPlacementSelectorFields
+      }
+    }
+    preferences {
+      groups {
+        ...MediaPlacementGroupFields
+      }
+    }
+  }
+  """
+
+  static let MediaPlacementSelectorFields = """
+  fragment MediaPlacementSelectorFields on MediaPlacementSelector {
+    clusterIds
+    ownerIds
+    regions
+    classes
+    charging
   }
   """
 
@@ -1140,6 +1269,54 @@ enum GQL {
   }
   """
 
+  static let GetClusterMediaConsent = """
+  query GetClusterMediaConsent($clusterId: ID!) {
+    clusterMediaConsent(clusterId: $clusterId) {
+      __typename
+      ... on MediaCapacityConsent {
+        clusterId
+        revision
+        allowIngest
+        allowServe
+        allowExternalSource
+        canManage
+        rollout {
+          ...MediaPlacementRolloutFields
+        }
+      }
+      ... on MediaPlacementError {
+        ...MediaPlacementErrorFields
+      }
+      ... on AuthError {
+        message
+      }
+      ... on NotFoundError {
+        message
+      }
+    }
+  }
+  """
+
+  static let GetClusterMediaConsentChange = """
+  query GetClusterMediaConsentChange($clusterId: ID!, $idempotencyKey: String!) {
+    clusterMediaConsentChange(clusterId: $clusterId, idempotencyKey: $idempotencyKey) {
+      __typename
+      ... on MediaCapacityConsentChange {
+        ...MediaCapacityConsentChangeFields
+      }
+      ... on MediaPlacementError {
+        ...MediaPlacementErrorFields
+      }
+      ... on AuthError {
+        message
+      }
+      ... on NotFoundError {
+        message
+      }
+    }
+  }
+  """
+
   static let GetClusterQoeOps = """
   # Cluster-ops viewer-QoE aggregate (operator view, token-attributed rows only).
   query GetClusterQoeOps($clusterId: ID, $timeRange: TimeRangeInput) {
@@ -1155,6 +1332,30 @@ enum GQL {
           avgBitrateBps
         }
       }
+    }
+  }
+  """
+
+  static let GetClustersAccess = """
+  # Fetch cluster access permissions and resource limits for the current tenant
+  query GetClustersAccess {
+    clustersAccess {
+      clusterId
+      clusterName
+      accessLevel
+      resourceLimits
+    }
+  }
+  """
+
+  static let GetClustersAvailable = """
+  # Fetch list of clusters available for tenant enrollment with tier requirements
+  query GetClustersAvailable {
+    clustersAvailable {
+      clusterId
+      clusterName
+      tiers
+      autoEnroll
     }
   }
   """
@@ -1199,30 +1400,6 @@ enum GQL {
           errorCount
         }
       }
-    }
-  }
-  """
-
-  static let GetClustersAccess = """
-  # Fetch cluster access permissions and resource limits for the current tenant
-  query GetClustersAccess {
-    clustersAccess {
-      clusterId
-      clusterName
-      accessLevel
-      resourceLimits
-    }
-  }
-  """
-
-  static let GetClustersAvailable = """
-  # Fetch list of clusters available for tenant enrollment with tier requirements
-  query GetClustersAvailable {
-    clustersAvailable {
-      clusterId
-      clusterName
-      tiers
-      autoEnroll
     }
   }
   """
@@ -1630,6 +1807,132 @@ enum GQL {
       currentUtilization
       maxConcurrentStreams
       maxConcurrentViewers
+    }
+  }
+  """
+
+  static let GetMediaPlacementChange = """
+  query GetMediaPlacementChange($scope: MediaPlacementScopeInput!, $idempotencyKey: String!) {
+    mediaPlacementChange(scope: $scope, idempotencyKey: $idempotencyKey) {
+      __typename
+      ... on MediaPlacementChange {
+        ...MediaPlacementChangeFields
+      }
+      ... on MediaPlacementError {
+        ...MediaPlacementErrorFields
+      }
+      ... on AuthError {
+        message
+      }
+      ... on NotFoundError {
+        message
+      }
+    }
+  }
+  """
+
+  static let GetMediaPlacementOptions = """
+  query GetMediaPlacementOptions(
+    $scope: MediaPlacementScopeInput!
+    $filter: MediaPlacementOptionsFilter
+    $after: String
+    $first: Int
+  ) {
+    mediaPlacementOptions(scope: $scope, filter: $filter, after: $after, first: $first) {
+      __typename
+      ... on MediaPlacementOptionsConnection {
+        nodes {
+          id
+          name
+          kind
+          clusterClass
+          region
+          ownerId
+          eligible
+          reason
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+      ... on MediaPlacementError {
+        ...MediaPlacementErrorFields
+      }
+      ... on AuthError {
+        message
+      }
+      ... on NotFoundError {
+        message
+      }
+    }
+  }
+  """
+
+  static let GetMediaPlacementPolicy = """
+  query GetMediaPlacementPolicy($scope: MediaPlacementScopeInput!) {
+    mediaPlacementPolicy(scope: $scope) {
+      __typename
+      ... on MediaPlacementPolicyState {
+        scope {
+          kind
+          streamId
+        }
+        revision
+        parentRevision
+        activeRevision
+        activeParentRevision
+        verbs {
+          verb
+          ownRules {
+            ...MediaPlacementRulesFields
+          }
+          inheritedRules {
+            ...MediaPlacementRulesFields
+          }
+          requestedEffective {
+            schemaVersion
+            digest
+            layers {
+              allow {
+                any {
+                  ...MediaPlacementSelectorFields
+                }
+              }
+              deny {
+                ...MediaPlacementSelectorFields
+              }
+            }
+            groups {
+              ...MediaPlacementGroupFields
+            }
+          }
+        }
+        rollout {
+          ...MediaPlacementRolloutFields
+        }
+        actions {
+          canRead
+          canPreview
+          canManage
+          canInspectPrivateCandidates
+        }
+        features {
+          schemaVersion
+          geographicSpillover
+          priceOrdering
+          supportedPresets
+        }
+      }
+      ... on MediaPlacementError {
+        ...MediaPlacementErrorFields
+      }
+      ... on AuthError {
+        message
+      }
+      ... on NotFoundError {
+        message
+      }
     }
   }
   """
@@ -2049,6 +2352,20 @@ enum GQL {
   }
   """
 
+  static let GetOrchestratorsConnection = """
+  # Fetch the orchestrator list for the federation map. Vantage-independent
+  # state only; the map merges this with `orchestratorVantages` to render
+  # multi-IP / multi-region observation.
+  query GetOrchestratorsConnection($orchAddr: String, $first: Int = 200, $after: String) {
+    orchestratorsConnection(orchAddr: $orchAddr, page: { first: $first, after: $after }) {
+      nodes {
+        ...OrchestratorListFields
+      }
+      totalCount
+    }
+  }
+  """
+
   static let GetOrchestratorVantages = """
   # Public per-vantage Livepeer observations for the federation map's pin toggle.
   # Filter by `orchAddr` from the side panel.
@@ -2070,20 +2387,6 @@ enum GQL {
       score
       dialedRecently
       lastSeen
-    }
-  }
-  """
-
-  static let GetOrchestratorsConnection = """
-  # Fetch the orchestrator list for the federation map. Vantage-independent
-  # state only; the map merges this with `orchestratorVantages` to render
-  # multi-IP / multi-region observation.
-  query GetOrchestratorsConnection($orchAddr: String, $first: Int = 200, $after: String) {
-    orchestratorsConnection(orchAddr: $orchAddr, page: { first: $first, after: $after }) {
-      nodes {
-        ...OrchestratorListFields
-      }
-      totalCount
     }
   }
   """
@@ -3625,6 +3928,35 @@ enum GQL {
   }
   """
 
+  static let GetStreamingConfig = """
+  query GetStreamingConfig {
+    streamingConfig {
+      preferredClusterLabel
+      ingestDomain
+      edgeDomain
+      playDomain
+      chandlerDomain
+      officialClusterLabel
+      officialIngestDomain
+      officialEdgeDomain
+      officialPlayDomain
+      officialChandlerDomain
+      globalIngestDomain
+      globalEdgeDomain
+      globalPlayDomain
+      globalChandlerDomain
+      globalLivepeerDomain
+      tenantIngestDomain
+      tenantEdgeDomain
+      tenantPlayDomain
+      tenantChandlerDomain
+      tenantLivepeerDomain
+      srtPort
+      rtmpPort
+    }
+  }
+  """
+
   static let GetStreamKeys = """
   # Fetch paginated list of stream keys for a specific stream
   # Returns active/inactive keys with usage timestamps for credential management
@@ -3762,6 +4094,27 @@ enum GQL {
   }
   """
 
+  static let GetStreamsConnection = """
+  # Fetch paginated list of streams with core fields and live status metrics
+  query GetStreamsConnection($first: Int = 50, $after: String, $search: String) {
+    streamsConnection(page: { first: $first, after: $after }, search: $search) {
+      edges {
+        cursor
+        node {
+          ...StreamCoreFields
+          metrics {
+            ...StreamMetricsListFields
+          }
+        }
+      }
+      pageInfo {
+        ...PageInfoFields
+      }
+      totalCount
+    }
+  }
+  """
+
   static let GetStreamSessions = """
   # Fetch paginated viewer sessions for a stream.
   # Use GetStreamAnalyticsSummary and GetClientQoeSummary for aggregate counters.
@@ -3797,56 +4150,6 @@ enum GQL {
           totalCount
         }
       }
-    }
-  }
-  """
-
-  static let GetStreamingConfig = """
-  query GetStreamingConfig {
-    streamingConfig {
-      preferredClusterLabel
-      ingestDomain
-      edgeDomain
-      playDomain
-      chandlerDomain
-      officialClusterLabel
-      officialIngestDomain
-      officialEdgeDomain
-      officialPlayDomain
-      officialChandlerDomain
-      globalIngestDomain
-      globalEdgeDomain
-      globalPlayDomain
-      globalChandlerDomain
-      globalLivepeerDomain
-      tenantIngestDomain
-      tenantEdgeDomain
-      tenantPlayDomain
-      tenantChandlerDomain
-      tenantLivepeerDomain
-      srtPort
-      rtmpPort
-    }
-  }
-  """
-
-  static let GetStreamsConnection = """
-  # Fetch paginated list of streams with core fields and live status metrics
-  query GetStreamsConnection($first: Int = 50, $after: String, $search: String) {
-    streamsConnection(page: { first: $first, after: $after }, search: $search) {
-      edges {
-        cursor
-        node {
-          ...StreamCoreFields
-          metrics {
-            ...StreamMetricsListFields
-          }
-        }
-      }
-      pageInfo {
-        ...PageInfoFields
-      }
-      totalCount
     }
   }
   """
@@ -4173,6 +4476,96 @@ enum GQL {
   }
   """
 
+  static let PreviewMediaPlacement = """
+  query PreviewMediaPlacement($input: PreviewMediaPlacementInput!) {
+    previewMediaPlacement(input: $input) {
+      __typename
+      ... on MediaPlacementPreview {
+        scope {
+          kind
+          streamId
+        }
+        verb
+        revision
+        parentRevision
+        digest
+        reason
+        selected {
+          ...MediaPlacementCandidateFields
+        }
+        candidates {
+          ...MediaPlacementCandidateFields
+        }
+        transitions {
+          fromGroup
+          reason
+        }
+        observedAt
+        expiresAt
+        complete
+        sourceEvaluated
+        activeIngestClusterId
+      }
+      ... on MediaPlacementError {
+        ...MediaPlacementErrorFields
+      }
+      ... on AuthError {
+        message
+      }
+      ... on NotFoundError {
+        message
+      }
+    }
+  }
+  """
+
+  static let ResolveIngestDestination = """
+  query ResolveIngestDestination($streamKey: String!, $protocol: MediaIngestProtocol) {
+    resolveIngestEndpoint(streamKey: $streamKey, protocol: $protocol) {
+      primary {
+        nodeId
+        clusterId
+        kind
+        baseUrl
+        whipUrl
+        rtmpUrl
+        srtUrl
+        region
+      }
+      metadata {
+        streamId
+      }
+    }
+  }
+  """
+
+  static let ResolveViewerDestination = """
+  query ResolveViewerDestination($contentId: String!, $protocol: MediaViewerProtocol) {
+    resolveViewerEndpoint(contentId: $contentId, protocol: $protocol) {
+      primary {
+        nodeId
+        baseUrl
+        protocol
+        url
+        outputs
+      }
+      fallbacks {
+        nodeId
+        baseUrl
+        protocol
+        url
+        outputs
+      }
+      metadata {
+        contentId
+        contentType
+        status
+        isLive
+      }
+    }
+  }
+  """
+
   static let ResolveViewerEndpoint = """
   # Resolve viewer endpoint for playback
   # Returns optimal node(s) for streaming content to the viewer
@@ -4186,6 +4579,86 @@ enum GQL {
       }
       metadata {
         ...PlaybackMetadataFields
+      }
+    }
+  }
+  """
+
+  static let ReviewClusterMediaConsentChange = """
+  query ReviewClusterMediaConsentChange($input: ReviewMediaCapacityConsentInput!) {
+    reviewClusterMediaConsentChange(input: $input) {
+      __typename
+      ... on MediaPlacementReview {
+        reviewToken
+        digest
+        expiresAt
+        differences {
+          path
+          label
+          before
+          after
+        }
+        warnings {
+          id
+          severity
+          message
+          acknowledgementRequired
+        }
+        impact {
+          affectedStreams
+          activePublishers
+          complete
+          existingSessionsRetained
+        }
+      }
+      ... on MediaPlacementError {
+        ...MediaPlacementErrorFields
+      }
+      ... on AuthError {
+        message
+      }
+      ... on NotFoundError {
+        message
+      }
+    }
+  }
+  """
+
+  static let ReviewMediaPlacementChange = """
+  query ReviewMediaPlacementChange($input: ReviewMediaPlacementChangeInput!) {
+    reviewMediaPlacementChange(input: $input) {
+      __typename
+      ... on MediaPlacementReview {
+        reviewToken
+        digest
+        expiresAt
+        differences {
+          path
+          label
+          before
+          after
+        }
+        warnings {
+          id
+          severity
+          message
+          acknowledgementRequired
+        }
+        impact {
+          affectedStreams
+          activePublishers
+          complete
+          existingSessionsRetained
+        }
+      }
+      ... on MediaPlacementError {
+        ...MediaPlacementErrorFields
+      }
+      ... on AuthError {
+        message
+      }
+      ... on NotFoundError {
+        message
       }
     }
   }
@@ -4237,6 +4710,46 @@ enum GQL {
       ... on AuthError {
         message
         code
+      }
+    }
+  }
+  """
+
+  static let ApplyClusterMediaConsentChange = """
+  mutation ApplyClusterMediaConsentChange($input: ApplyMediaCapacityConsentInput!) {
+    applyClusterMediaConsentChange(input: $input) {
+      __typename
+      ... on MediaCapacityConsentChange {
+        ...MediaCapacityConsentChangeFields
+      }
+      ... on MediaPlacementError {
+        ...MediaPlacementErrorFields
+      }
+      ... on AuthError {
+        message
+      }
+      ... on NotFoundError {
+        message
+      }
+    }
+  }
+  """
+
+  static let ApplyMediaPlacementChange = """
+  mutation ApplyMediaPlacementChange($input: ApplyMediaPlacementChangeInput!) {
+    applyMediaPlacementChange(input: $input) {
+      __typename
+      ... on MediaPlacementChange {
+        ...MediaPlacementChangeFields
+      }
+      ... on MediaPlacementError {
+        ...MediaPlacementErrorFields
+      }
+      ... on AuthError {
+        message
+      }
+      ... on NotFoundError {
+        message
       }
     }
   }

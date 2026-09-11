@@ -1400,6 +1400,245 @@ type ComplexityRoot struct {
 		Node   func(childComplexity int) int
 	}
 
+	MediaCapacityConsent struct {
+		AllowExternalSource func(childComplexity int) int
+		AllowIngest         func(childComplexity int) int
+		AllowServe          func(childComplexity int) int
+		CanManage           func(childComplexity int) int
+		ClusterID           func(childComplexity int) int
+		Revision            func(childComplexity int) int
+		Rollout             func(childComplexity int) int
+	}
+
+	MediaCapacityConsentChange struct {
+		ClusterID      func(childComplexity int) int
+		CreatedAt      func(childComplexity int) int
+		Digest         func(childComplexity int) int
+		IdempotencyKey func(childComplexity int) int
+		Revision       func(childComplexity int) int
+		Rollout        func(childComplexity int) int
+	}
+
+	MediaPlacementActions struct {
+		CanInspectPrivateCandidates func(childComplexity int) int
+		CanManage                   func(childComplexity int) int
+		CanPreview                  func(childComplexity int) int
+		CanRead                     func(childComplexity int) int
+	}
+
+	MediaPlacementAllow struct {
+		Any func(childComplexity int) int
+	}
+
+	MediaPlacementCandidateExplanation struct {
+		ClusterID          func(childComplexity int) int
+		ClusterName        func(childComplexity int) int
+		DistanceKm         func(childComplexity int) int
+		GroupID            func(childComplexity int) int
+		NodeID             func(childComplexity int) int
+		Price              func(childComplexity int) int
+		Reason             func(childComplexity int) int
+		Region             func(childComplexity int) int
+		RequiresSourcePull func(childComplexity int) int
+	}
+
+	MediaPlacementChange struct {
+		CreatedAt      func(childComplexity int) int
+		Digest         func(childComplexity int) int
+		IdempotencyKey func(childComplexity int) int
+		ParentRevision func(childComplexity int) int
+		Revision       func(childComplexity int) int
+		Rollout        func(childComplexity int) int
+		Scope          func(childComplexity int) int
+	}
+
+	MediaPlacementConstraints struct {
+		Allow func(childComplexity int) int
+		Deny  func(childComplexity int) int
+	}
+
+	MediaPlacementDifference struct {
+		After  func(childComplexity int) int
+		Before func(childComplexity int) int
+		Label  func(childComplexity int) int
+		Path   func(childComplexity int) int
+	}
+
+	MediaPlacementEffectivePolicy struct {
+		Digest        func(childComplexity int) int
+		Groups        func(childComplexity int) int
+		Layers        func(childComplexity int) int
+		SchemaVersion func(childComplexity int) int
+	}
+
+	MediaPlacementError struct {
+		Code              func(childComplexity int) int
+		CurrentRevision   func(childComplexity int) int
+		Fields            func(childComplexity int) int
+		Message           func(childComplexity int) int
+		ParentRevision    func(childComplexity int) int
+		RetryAfterSeconds func(childComplexity int) int
+	}
+
+	MediaPlacementFeatures struct {
+		GeographicSpillover func(childComplexity int) int
+		PriceOrdering       func(childComplexity int) int
+		SchemaVersion       func(childComplexity int) int
+		SupportedPresets    func(childComplexity int) int
+	}
+
+	MediaPlacementFieldError struct {
+		GroupID func(childComplexity int) int
+		Message func(childComplexity int) int
+		Path    func(childComplexity int) int
+	}
+
+	MediaPlacementGroup struct {
+		GeoHoleDistanceKm func(childComplexity int) int
+		ID                func(childComplexity int) int
+		Match             func(childComplexity int) int
+		MaxDistanceKm     func(childComplexity int) int
+		MinImprovementKm  func(childComplexity int) int
+		Order             func(childComplexity int) int
+		PriceCurrency     func(childComplexity int) int
+		PriceUnit         func(childComplexity int) int
+		Spillover         func(childComplexity int) int
+	}
+
+	MediaPlacementImpact struct {
+		ActivePublishers         func(childComplexity int) int
+		AffectedStreams          func(childComplexity int) int
+		Complete                 func(childComplexity int) int
+		ExistingSessionsRetained func(childComplexity int) int
+	}
+
+	MediaPlacementLegacyPins struct {
+		ClusterIds        func(childComplexity int) int
+		CurrentlyEnforced func(childComplexity int) int
+		StreamID          func(childComplexity int) int
+	}
+
+	MediaPlacementOption struct {
+		ClusterClass func(childComplexity int) int
+		Eligible     func(childComplexity int) int
+		ID           func(childComplexity int) int
+		Kind         func(childComplexity int) int
+		Name         func(childComplexity int) int
+		OwnerID      func(childComplexity int) int
+		Reason       func(childComplexity int) int
+		Region       func(childComplexity int) int
+	}
+
+	MediaPlacementOptionsConnection struct {
+		Nodes    func(childComplexity int) int
+		PageInfo func(childComplexity int) int
+	}
+
+	MediaPlacementPolicyState struct {
+		Actions              func(childComplexity int) int
+		ActiveParentRevision func(childComplexity int) int
+		ActiveRevision       func(childComplexity int) int
+		Features             func(childComplexity int) int
+		ParentRevision       func(childComplexity int) int
+		Revision             func(childComplexity int) int
+		Rollout              func(childComplexity int) int
+		Scope                func(childComplexity int) int
+		Verbs                func(childComplexity int) int
+	}
+
+	MediaPlacementPreferences struct {
+		Groups func(childComplexity int) int
+	}
+
+	MediaPlacementPreview struct {
+		ActiveIngestClusterID func(childComplexity int) int
+		Candidates            func(childComplexity int) int
+		Complete              func(childComplexity int) int
+		Digest                func(childComplexity int) int
+		ExpiresAt             func(childComplexity int) int
+		ObservedAt            func(childComplexity int) int
+		ParentRevision        func(childComplexity int) int
+		Reason                func(childComplexity int) int
+		Revision              func(childComplexity int) int
+		Scope                 func(childComplexity int) int
+		Selected              func(childComplexity int) int
+		SourceEvaluated       func(childComplexity int) int
+		Transitions           func(childComplexity int) int
+		Verb                  func(childComplexity int) int
+	}
+
+	MediaPlacementPrice struct {
+		AmountMicros func(childComplexity int) int
+		Currency     func(childComplexity int) int
+		ExpiresAt    func(childComplexity int) int
+		Revision     func(childComplexity int) int
+		Unit         func(childComplexity int) int
+	}
+
+	MediaPlacementRecipient struct {
+		AuthorityExpiresAt func(childComplexity int) int
+		ID                 func(childComplexity int) int
+		Name               func(childComplexity int) int
+		Reason             func(childComplexity int) int
+		Status             func(childComplexity int) int
+	}
+
+	MediaPlacementReview struct {
+		Differences func(childComplexity int) int
+		Digest      func(childComplexity int) int
+		ExpiresAt   func(childComplexity int) int
+		Impact      func(childComplexity int) int
+		ReviewToken func(childComplexity int) int
+		Warnings    func(childComplexity int) int
+	}
+
+	MediaPlacementRollout struct {
+		AppliedRecipients        func(childComplexity int) int
+		ExistingSessionsRetained func(childComplexity int) int
+		PendingRecipients        func(childComplexity int) int
+		RequiredRecipients       func(childComplexity int) int
+		Status                   func(childComplexity int) int
+		UpdatedAt                func(childComplexity int) int
+	}
+
+	MediaPlacementRules struct {
+		Constraints   func(childComplexity int) int
+		Preferences   func(childComplexity int) int
+		SchemaVersion func(childComplexity int) int
+	}
+
+	MediaPlacementScope struct {
+		Kind     func(childComplexity int) int
+		StreamID func(childComplexity int) int
+	}
+
+	MediaPlacementSelector struct {
+		Charging   func(childComplexity int) int
+		Classes    func(childComplexity int) int
+		ClusterIds func(childComplexity int) int
+		OwnerIds   func(childComplexity int) int
+		Regions    func(childComplexity int) int
+	}
+
+	MediaPlacementTransition struct {
+		FromGroup func(childComplexity int) int
+		Reason    func(childComplexity int) int
+	}
+
+	MediaPlacementVerbPolicy struct {
+		InheritedRules     func(childComplexity int) int
+		OwnRules           func(childComplexity int) int
+		RequestedEffective func(childComplexity int) int
+		Verb               func(childComplexity int) int
+	}
+
+	MediaPlacementWarning struct {
+		AcknowledgementRequired func(childComplexity int) int
+		ID                      func(childComplexity int) int
+		Message                 func(childComplexity int) int
+		Severity                func(childComplexity int) int
+	}
+
 	MediaRetentionBounds struct {
 		MaxRecordingRetentionDays func(childComplexity int) int
 	}
@@ -1463,74 +1702,76 @@ type ComplexityRoot struct {
 	}
 
 	Mutation struct {
-		AbortVodUpload                func(childComplexity int, uploadID string) int
-		AcceptClusterInvite           func(childComplexity int, inviteToken string) int
-		ApproveClusterSubscription    func(childComplexity int, subscriptionID string) int
-		BootstrapEdge                 func(childComplexity int, input model.BootstrapEdgeInput) int
-		ChangeBillingTier             func(childComplexity int, tierID string) int
-		CompleteVodUpload             func(childComplexity int, input model.CompleteVodUploadInput) int
-		CreateBootstrapToken          func(childComplexity int, input model.CreateBootstrapTokenInput) int
-		CreateCardTopup               func(childComplexity int, input model.CreateCardTopupInput) int
-		CreateClip                    func(childComplexity int, input model.CreateClipInput) int
-		CreateClusterInvite           func(childComplexity int, input model.CreateClusterInviteInput) int
-		CreateConversation            func(childComplexity int, input model.CreateConversationInput) int
-		CreateCryptoTopup             func(childComplexity int, input model.CreateCryptoTopupInput) int
-		CreateDeveloperToken          func(childComplexity int, input model.CreateDeveloperTokenInput) int
-		CreateEdgeCluster             func(childComplexity int, input model.CreateEdgeClusterInput) int
-		CreateEnrollmentToken         func(childComplexity int, clusterID string, name *string, ttl *string) int
-		CreateMollieFirstPayment      func(childComplexity int, tierID string, method string, redirectURL string) int
-		CreateMollieSubscription      func(childComplexity int, tierID string, mandateID string, description *string) int
-		CreatePayment                 func(childComplexity int, input model.CreatePaymentInput) int
-		CreatePushTarget              func(childComplexity int, streamID string, input model.CreatePushTargetInput) int
-		CreateSigningKey              func(childComplexity int, input model.CreateSigningKeyInput) int
-		CreateStream                  func(childComplexity int, input model.CreateStreamInput) int
-		CreateStreamKey               func(childComplexity int, streamID string, input model.CreateStreamKeyInput) int
-		CreateStripeBillingPortal     func(childComplexity int, returnURL string) int
-		CreateStripeCheckout          func(childComplexity int, tierID string, billingPeriod string, successURL string, cancelURL string) int
-		CreateVodUpload               func(childComplexity int, input model.CreateVodUploadInput) int
-		CryptoTopupStatus             func(childComplexity int, topupID string) int
-		DeleteClip                    func(childComplexity int, id string) int
-		DeleteDvr                     func(childComplexity int, dvrHash string) int
-		DeletePushTarget              func(childComplexity int, id string) int
-		DeleteSkipperConversation     func(childComplexity int, id string) int
-		DeleteStream                  func(childComplexity int, id string) int
-		DeleteStreamKey               func(childComplexity int, streamID string, keyID string) int
-		DeleteVodAsset                func(childComplexity int, id string) int
-		LinkEmail                     func(childComplexity int, input model.LinkEmailInput) int
-		LinkWallet                    func(childComplexity int, input model.WalletLoginInput) int
-		MarkSkipperReportsRead        func(childComplexity int, ids []string) int
-		OpenMistAdminSession          func(childComplexity int, input model.OpenMistAdminSessionInput) int
-		PromoteToPaid                 func(childComplexity int, tierID string) int
-		RefreshStreamKey              func(childComplexity int, id string) int
-		RejectClusterSubscription     func(childComplexity int, subscriptionID string, reason *string) int
-		RequestClusterSubscription    func(childComplexity int, clusterID string, inviteToken *string) int
-		ResetMediaRetentionOverride   func(childComplexity int, input model.ResetMediaRetentionOverrideInput) int
-		RevokeBootstrapToken          func(childComplexity int, id string) int
-		RevokeClusterInvite           func(childComplexity int, inviteID string) int
-		RevokeDeveloperToken          func(childComplexity int, id string) int
-		RevokeSigningKey              func(childComplexity int, id string) int
-		SendMessage                   func(childComplexity int, input model.SendMessageInput) int
-		SetMediaRetentionPolicy       func(childComplexity int, input model.SetMediaRetentionPolicyInput) int
-		SetNodeMode                   func(childComplexity int, input model.SetNodeModeInput) int
-		SetPlaybackPolicy             func(childComplexity int, input model.SetPlaybackPolicyInput) int
-		SetPreferredCluster           func(childComplexity int, clusterID string) int
-		SetStreamRetentionOverrides   func(childComplexity int, input model.SetStreamRetentionOverridesInput) int
-		StartDvr                      func(childComplexity int, streamID string) int
-		StopDvr                       func(childComplexity int, dvrHash string) int
-		SubmitX402Payment             func(childComplexity int, payment string, resource *string) int
-		SubscribeToCluster            func(childComplexity int, clusterID string) int
-		TestPlaybackAccess            func(childComplexity int, input model.TestPlaybackAccessInput) int
-		UnlinkWallet                  func(childComplexity int, walletID string) int
-		UnsubscribeFromCluster        func(childComplexity int, clusterID string) int
-		UpdateBillingDetails          func(childComplexity int, input model.UpdateBillingDetailsInput) int
-		UpdateClusterMarketplace      func(childComplexity int, clusterID string, input model.UpdateClusterMarketplaceInput) int
-		UpdateMediaRetention          func(childComplexity int, input model.UpdateMediaRetentionInput) int
-		UpdatePushTarget              func(childComplexity int, id string, input model.UpdatePushTargetInput) int
-		UpdateSkipperConversation     func(childComplexity int, id string, title string) int
-		UpdateStream                  func(childComplexity int, id string, input model.UpdateStreamInput) int
-		UpdateSubscriptionCustomTerms func(childComplexity int, tenantID string, input model.UpdateSubscriptionCustomTermsInput) int
-		UpdateTenant                  func(childComplexity int, input model.UpdateTenantInput) int
-		WalletLogin                   func(childComplexity int, input model.WalletLoginInput) int
+		AbortVodUpload                 func(childComplexity int, uploadID string) int
+		AcceptClusterInvite            func(childComplexity int, inviteToken string) int
+		ApplyClusterMediaConsentChange func(childComplexity int, input model.ApplyMediaCapacityConsentInput) int
+		ApplyMediaPlacementChange      func(childComplexity int, input model.ApplyMediaPlacementChangeInput) int
+		ApproveClusterSubscription     func(childComplexity int, subscriptionID string) int
+		BootstrapEdge                  func(childComplexity int, input model.BootstrapEdgeInput) int
+		ChangeBillingTier              func(childComplexity int, tierID string) int
+		CompleteVodUpload              func(childComplexity int, input model.CompleteVodUploadInput) int
+		CreateBootstrapToken           func(childComplexity int, input model.CreateBootstrapTokenInput) int
+		CreateCardTopup                func(childComplexity int, input model.CreateCardTopupInput) int
+		CreateClip                     func(childComplexity int, input model.CreateClipInput) int
+		CreateClusterInvite            func(childComplexity int, input model.CreateClusterInviteInput) int
+		CreateConversation             func(childComplexity int, input model.CreateConversationInput) int
+		CreateCryptoTopup              func(childComplexity int, input model.CreateCryptoTopupInput) int
+		CreateDeveloperToken           func(childComplexity int, input model.CreateDeveloperTokenInput) int
+		CreateEdgeCluster              func(childComplexity int, input model.CreateEdgeClusterInput) int
+		CreateEnrollmentToken          func(childComplexity int, clusterID string, name *string, ttl *string) int
+		CreateMollieFirstPayment       func(childComplexity int, tierID string, method string, redirectURL string) int
+		CreateMollieSubscription       func(childComplexity int, tierID string, mandateID string, description *string) int
+		CreatePayment                  func(childComplexity int, input model.CreatePaymentInput) int
+		CreatePushTarget               func(childComplexity int, streamID string, input model.CreatePushTargetInput) int
+		CreateSigningKey               func(childComplexity int, input model.CreateSigningKeyInput) int
+		CreateStream                   func(childComplexity int, input model.CreateStreamInput) int
+		CreateStreamKey                func(childComplexity int, streamID string, input model.CreateStreamKeyInput) int
+		CreateStripeBillingPortal      func(childComplexity int, returnURL string) int
+		CreateStripeCheckout           func(childComplexity int, tierID string, billingPeriod string, successURL string, cancelURL string) int
+		CreateVodUpload                func(childComplexity int, input model.CreateVodUploadInput) int
+		CryptoTopupStatus              func(childComplexity int, topupID string) int
+		DeleteClip                     func(childComplexity int, id string) int
+		DeleteDvr                      func(childComplexity int, dvrHash string) int
+		DeletePushTarget               func(childComplexity int, id string) int
+		DeleteSkipperConversation      func(childComplexity int, id string) int
+		DeleteStream                   func(childComplexity int, id string) int
+		DeleteStreamKey                func(childComplexity int, streamID string, keyID string) int
+		DeleteVodAsset                 func(childComplexity int, id string) int
+		LinkEmail                      func(childComplexity int, input model.LinkEmailInput) int
+		LinkWallet                     func(childComplexity int, input model.WalletLoginInput) int
+		MarkSkipperReportsRead         func(childComplexity int, ids []string) int
+		OpenMistAdminSession           func(childComplexity int, input model.OpenMistAdminSessionInput) int
+		PromoteToPaid                  func(childComplexity int, tierID string) int
+		RefreshStreamKey               func(childComplexity int, id string) int
+		RejectClusterSubscription      func(childComplexity int, subscriptionID string, reason *string) int
+		RequestClusterSubscription     func(childComplexity int, clusterID string, inviteToken *string) int
+		ResetMediaRetentionOverride    func(childComplexity int, input model.ResetMediaRetentionOverrideInput) int
+		RevokeBootstrapToken           func(childComplexity int, id string) int
+		RevokeClusterInvite            func(childComplexity int, inviteID string) int
+		RevokeDeveloperToken           func(childComplexity int, id string) int
+		RevokeSigningKey               func(childComplexity int, id string) int
+		SendMessage                    func(childComplexity int, input model.SendMessageInput) int
+		SetMediaRetentionPolicy        func(childComplexity int, input model.SetMediaRetentionPolicyInput) int
+		SetNodeMode                    func(childComplexity int, input model.SetNodeModeInput) int
+		SetPlaybackPolicy              func(childComplexity int, input model.SetPlaybackPolicyInput) int
+		SetPreferredCluster            func(childComplexity int, clusterID string) int
+		SetStreamRetentionOverrides    func(childComplexity int, input model.SetStreamRetentionOverridesInput) int
+		StartDvr                       func(childComplexity int, streamID string) int
+		StopDvr                        func(childComplexity int, dvrHash string) int
+		SubmitX402Payment              func(childComplexity int, payment string, resource *string) int
+		SubscribeToCluster             func(childComplexity int, clusterID string) int
+		TestPlaybackAccess             func(childComplexity int, input model.TestPlaybackAccessInput) int
+		UnlinkWallet                   func(childComplexity int, walletID string) int
+		UnsubscribeFromCluster         func(childComplexity int, clusterID string) int
+		UpdateBillingDetails           func(childComplexity int, input model.UpdateBillingDetailsInput) int
+		UpdateClusterMarketplace       func(childComplexity int, clusterID string, input model.UpdateClusterMarketplaceInput) int
+		UpdateMediaRetention           func(childComplexity int, input model.UpdateMediaRetentionInput) int
+		UpdatePushTarget               func(childComplexity int, id string, input model.UpdatePushTargetInput) int
+		UpdateSkipperConversation      func(childComplexity int, id string, title string) int
+		UpdateStream                   func(childComplexity int, id string, input model.UpdateStreamInput) int
+		UpdateSubscriptionCustomTerms  func(childComplexity int, tenantID string, input model.UpdateSubscriptionCustomTermsInput) int
+		UpdateTenant                   func(childComplexity int, input model.UpdateTenantInput) int
+		WalletLogin                    func(childComplexity int, input model.WalletLoginInput) int
 	}
 
 	MySubscriptionEdge struct {
@@ -2173,75 +2414,84 @@ type ComplexityRoot struct {
 	}
 
 	Query struct {
-		Analytics                      func(childComplexity int) int
-		BalanceTransactionsConnection  func(childComplexity int, page *model.ConnectionInput, transactionType *string, timeRange *model.TimeRangeInput) int
-		BillingDetails                 func(childComplexity int) int
-		BillingStatus                  func(childComplexity int) int
-		BillingTiers                   func(childComplexity int) int
-		BootstrapTokensConnection      func(childComplexity int, page *model.ConnectionInput, kind *string) int
-		Clip                           func(childComplexity int, id string) int
-		Cluster                        func(childComplexity int, id string) int
-		ClusterInvites                 func(childComplexity int, clusterID string) int
-		ClusterInvitesConnection       func(childComplexity int, page *model.ConnectionInput, clusterID string) int
-		ClustersAccess                 func(childComplexity int, first *int, after *string) int
-		ClustersAccessConnection       func(childComplexity int, page *model.ConnectionInput) int
-		ClustersAvailable              func(childComplexity int, first *int, after *string) int
-		ClustersAvailableConnection    func(childComplexity int, page *model.ConnectionInput) int
-		ClustersConnection             func(childComplexity int, page *model.ConnectionInput) int
-		Conversation                   func(childComplexity int, id string) int
-		ConversationsConnection        func(childComplexity int, page *model.ConnectionInput) int
-		DeveloperTokensConnection      func(childComplexity int, page *model.ConnectionInput) int
-		DiscoverServicesConnection     func(childComplexity int, page *model.ConnectionInput, typeArg string, clusterID *string) int
-		DvrChapter                     func(childComplexity int, dvrID string, mode *model.DVRChapterMode, intervalSeconds *int, startMs float64, endMs float64) int
-		DvrChapters                    func(childComplexity int, dvrID string, mode *model.DVRChapterMode, intervalSeconds *int, rangeStartMs *float64, rangeEndMs *float64, pageSize *int, pageToken *string) int
-		Invoice                        func(childComplexity int, id string) int
-		InvoicesConnection             func(childComplexity int, page *model.ConnectionInput) int
-		MarketplaceCluster             func(childComplexity int, clusterID string) int
-		MarketplaceClusters            func(childComplexity int, first *int, after *string) int
-		MarketplaceClustersConnection  func(childComplexity int, page *model.ConnectionInput) int
-		MediaRetentionPolicy           func(childComplexity int) int
-		MessagesConnection             func(childComplexity int, conversationID string, page *model.ConnectionInput) int
-		MollieMandates                 func(childComplexity int) int
-		MyClusterInvites               func(childComplexity int) int
-		MyClusterInvitesConnection     func(childComplexity int, page *model.ConnectionInput) int
-		MySubscriptions                func(childComplexity int, first *int, after *string) int
-		MySubscriptionsConnection      func(childComplexity int, page *model.ConnectionInput) int
-		NetworkStatus                  func(childComplexity int) int
-		Node                           func(childComplexity int, id string) int
-		NodesConnection                func(childComplexity int, page *model.ConnectionInput, clusterID *string, status *model.NodeStatus, typeArg *string) int
-		Orchestrator                   func(childComplexity int, orchAddr string) int
-		OrchestratorInstances          func(childComplexity int, orchAddr *string) int
-		OrchestratorPerformanceSeries  func(childComplexity int, orchAddr string, timeRange model.TimeRangeInput, interval *string, gatewayID *string, resolvedIP *string) int
-		OrchestratorVantages           func(childComplexity int, orchAddr *string) int
-		OrchestratorsConnection        func(childComplexity int, page *model.ConnectionInput, orchAddr *string) int
-		Payment                        func(childComplexity int, id string) int
-		PaymentsConnection             func(childComplexity int, page *model.ConnectionInput, invoiceID *string, status *string, method *string) int
-		PendingSubscriptions           func(childComplexity int, clusterID string) int
-		PendingSubscriptionsConnection func(childComplexity int, page *model.ConnectionInput, clusterID string) int
-		Platform                       func(childComplexity int) int
-		PrepaidBalance                 func(childComplexity int, currency *string) int
-		ResolveIngestEndpoint          func(childComplexity int, streamKey string) int
-		ResolveViewerEndpoint          func(childComplexity int, contentID string) int
-		ServiceInstancesHealth         func(childComplexity int, serviceID *string) int
-		SigningKey                     func(childComplexity int, id string) int
-		SigningKeysConnection          func(childComplexity int, status *string, page *model.ConnectionInput) int
-		SkipperConversation            func(childComplexity int, id string) int
-		SkipperConversations           func(childComplexity int, limit *int, offset *int) int
-		SkipperReport                  func(childComplexity int, id string) int
-		SkipperReports                 func(childComplexity int, limit *int, offset *int) int
-		SkipperUnreadReportCount       func(childComplexity int) int
-		StorageArtifactsConnection     func(childComplexity int, input *model.StorageArtifactsInput) int
-		Stream                         func(childComplexity int, id string) int
-		StreamKeysConnection           func(childComplexity int, page *model.ConnectionInput, streamID string) int
-		StreamingConfig                func(childComplexity int) int
-		StreamsConnection              func(childComplexity int, page *model.ConnectionInput, search *string) int
-		Tenant                         func(childComplexity int) int
-		TenantUsage                    func(childComplexity int, timeRange *model.TimeRangeInput) int
-		UsageAggregates                func(childComplexity int, timeRange model.TimeRangeInput, granularity *string, usageTypes []string) int
-		UsageRecordsConnection         func(childComplexity int, page *model.ConnectionInput, timeRange *model.TimeRangeInput) int
-		ValidateStreamKey              func(childComplexity int, streamKey string) int
-		VodAsset                       func(childComplexity int, id string) int
-		VodUploadStatus                func(childComplexity int, uploadID string) int
+		Analytics                       func(childComplexity int) int
+		BalanceTransactionsConnection   func(childComplexity int, page *model.ConnectionInput, transactionType *string, timeRange *model.TimeRangeInput) int
+		BillingDetails                  func(childComplexity int) int
+		BillingStatus                   func(childComplexity int) int
+		BillingTiers                    func(childComplexity int) int
+		BootstrapTokensConnection       func(childComplexity int, page *model.ConnectionInput, kind *string) int
+		Clip                            func(childComplexity int, id string) int
+		Cluster                         func(childComplexity int, id string) int
+		ClusterInvites                  func(childComplexity int, clusterID string) int
+		ClusterInvitesConnection        func(childComplexity int, page *model.ConnectionInput, clusterID string) int
+		ClusterMediaConsent             func(childComplexity int, clusterID string) int
+		ClusterMediaConsentChange       func(childComplexity int, clusterID string, idempotencyKey string) int
+		ClustersAccess                  func(childComplexity int, first *int, after *string) int
+		ClustersAccessConnection        func(childComplexity int, page *model.ConnectionInput) int
+		ClustersAvailable               func(childComplexity int, first *int, after *string) int
+		ClustersAvailableConnection     func(childComplexity int, page *model.ConnectionInput) int
+		ClustersConnection              func(childComplexity int, page *model.ConnectionInput) int
+		Conversation                    func(childComplexity int, id string) int
+		ConversationsConnection         func(childComplexity int, page *model.ConnectionInput) int
+		DeveloperTokensConnection       func(childComplexity int, page *model.ConnectionInput) int
+		DiscoverServicesConnection      func(childComplexity int, page *model.ConnectionInput, typeArg string, clusterID *string) int
+		DvrChapter                      func(childComplexity int, dvrID string, mode *model.DVRChapterMode, intervalSeconds *int, startMs float64, endMs float64) int
+		DvrChapters                     func(childComplexity int, dvrID string, mode *model.DVRChapterMode, intervalSeconds *int, rangeStartMs *float64, rangeEndMs *float64, pageSize *int, pageToken *string) int
+		Invoice                         func(childComplexity int, id string) int
+		InvoicesConnection              func(childComplexity int, page *model.ConnectionInput) int
+		MarketplaceCluster              func(childComplexity int, clusterID string) int
+		MarketplaceClusters             func(childComplexity int, first *int, after *string) int
+		MarketplaceClustersConnection   func(childComplexity int, page *model.ConnectionInput) int
+		MediaPlacementChange            func(childComplexity int, scope model.MediaPlacementScopeInput, idempotencyKey string) int
+		MediaPlacementLegacyPins        func(childComplexity int, streamID string) int
+		MediaPlacementOptions           func(childComplexity int, scope model.MediaPlacementScopeInput, filter *model.MediaPlacementOptionsFilter, after *string, first *int) int
+		MediaPlacementPolicy            func(childComplexity int, scope model.MediaPlacementScopeInput) int
+		MediaRetentionPolicy            func(childComplexity int) int
+		MessagesConnection              func(childComplexity int, conversationID string, page *model.ConnectionInput) int
+		MollieMandates                  func(childComplexity int) int
+		MyClusterInvites                func(childComplexity int) int
+		MyClusterInvitesConnection      func(childComplexity int, page *model.ConnectionInput) int
+		MySubscriptions                 func(childComplexity int, first *int, after *string) int
+		MySubscriptionsConnection       func(childComplexity int, page *model.ConnectionInput) int
+		NetworkStatus                   func(childComplexity int) int
+		Node                            func(childComplexity int, id string) int
+		NodesConnection                 func(childComplexity int, page *model.ConnectionInput, clusterID *string, status *model.NodeStatus, typeArg *string) int
+		Orchestrator                    func(childComplexity int, orchAddr string) int
+		OrchestratorInstances           func(childComplexity int, orchAddr *string) int
+		OrchestratorPerformanceSeries   func(childComplexity int, orchAddr string, timeRange model.TimeRangeInput, interval *string, gatewayID *string, resolvedIP *string) int
+		OrchestratorVantages            func(childComplexity int, orchAddr *string) int
+		OrchestratorsConnection         func(childComplexity int, page *model.ConnectionInput, orchAddr *string) int
+		Payment                         func(childComplexity int, id string) int
+		PaymentsConnection              func(childComplexity int, page *model.ConnectionInput, invoiceID *string, status *string, method *string) int
+		PendingSubscriptions            func(childComplexity int, clusterID string) int
+		PendingSubscriptionsConnection  func(childComplexity int, page *model.ConnectionInput, clusterID string) int
+		Platform                        func(childComplexity int) int
+		PrepaidBalance                  func(childComplexity int, currency *string) int
+		PreviewMediaPlacement           func(childComplexity int, input model.PreviewMediaPlacementInput) int
+		ResolveIngestEndpoint           func(childComplexity int, streamKey string, protocol *model.MediaIngestProtocol) int
+		ResolveViewerEndpoint           func(childComplexity int, contentID string, protocol *model.MediaViewerProtocol) int
+		ReviewClusterMediaConsentChange func(childComplexity int, input model.ReviewMediaCapacityConsentInput) int
+		ReviewMediaPlacementChange      func(childComplexity int, input model.ReviewMediaPlacementChangeInput) int
+		ServiceInstancesHealth          func(childComplexity int, serviceID *string) int
+		SigningKey                      func(childComplexity int, id string) int
+		SigningKeysConnection           func(childComplexity int, status *string, page *model.ConnectionInput) int
+		SkipperConversation             func(childComplexity int, id string) int
+		SkipperConversations            func(childComplexity int, limit *int, offset *int) int
+		SkipperReport                   func(childComplexity int, id string) int
+		SkipperReports                  func(childComplexity int, limit *int, offset *int) int
+		SkipperUnreadReportCount        func(childComplexity int) int
+		StorageArtifactsConnection      func(childComplexity int, input *model.StorageArtifactsInput) int
+		Stream                          func(childComplexity int, id string) int
+		StreamKeysConnection            func(childComplexity int, page *model.ConnectionInput, streamID string) int
+		StreamingConfig                 func(childComplexity int) int
+		StreamsConnection               func(childComplexity int, page *model.ConnectionInput, search *string) int
+		Tenant                          func(childComplexity int) int
+		TenantUsage                     func(childComplexity int, timeRange *model.TimeRangeInput) int
+		UsageAggregates                 func(childComplexity int, timeRange model.TimeRangeInput, granularity *string, usageTypes []string) int
+		UsageRecordsConnection          func(childComplexity int, page *model.ConnectionInput, timeRange *model.TimeRangeInput) int
+		ValidateStreamKey               func(childComplexity int, streamKey string) int
+		VodAsset                        func(childComplexity int, id string) int
+		VodUploadStatus                 func(childComplexity int, uploadID string) int
 	}
 
 	RateLimitError struct {
@@ -4128,6 +4378,8 @@ type MutationResolver interface {
 	OpenMistAdminSession(ctx context.Context, input model.OpenMistAdminSessionInput) (model.OpenMistAdminSessionResult, error)
 	TestPlaybackAccess(ctx context.Context, input model.TestPlaybackAccessInput) (model.TestPlaybackAccessResult, error)
 	SetMediaRetentionPolicy(ctx context.Context, input model.SetMediaRetentionPolicyInput) (model.SetMediaRetentionPolicyResult, error)
+	ApplyMediaPlacementChange(ctx context.Context, input model.ApplyMediaPlacementChangeInput) (model.MediaPlacementChangeResult, error)
+	ApplyClusterMediaConsentChange(ctx context.Context, input model.ApplyMediaCapacityConsentInput) (model.MediaCapacityConsentChangeResult, error)
 	UpdateMediaRetention(ctx context.Context, input model.UpdateMediaRetentionInput) (model.UpdateMediaRetentionResult, error)
 	ResetMediaRetentionOverride(ctx context.Context, input model.ResetMediaRetentionOverrideInput) (model.UpdateMediaRetentionResult, error)
 	SetStreamRetentionOverrides(ctx context.Context, input model.SetStreamRetentionOverridesInput) (model.SetStreamRetentionOverridesResult, error)
@@ -4394,8 +4646,8 @@ type QueryResolver interface {
 	VodAsset(ctx context.Context, id string) (*model.VodAsset, error)
 	StorageArtifactsConnection(ctx context.Context, input *model.StorageArtifactsInput) (*model.StorageArtifactsConnection, error)
 	VodUploadStatus(ctx context.Context, uploadID string) (model.VodUploadStatusResult, error)
-	ResolveViewerEndpoint(ctx context.Context, contentID string) (*sharedpb.ViewerEndpointResponse, error)
-	ResolveIngestEndpoint(ctx context.Context, streamKey string) (*sharedpb.IngestEndpointResponse, error)
+	ResolveViewerEndpoint(ctx context.Context, contentID string, protocol *model.MediaViewerProtocol) (*sharedpb.ViewerEndpointResponse, error)
+	ResolveIngestEndpoint(ctx context.Context, streamKey string, protocol *model.MediaIngestProtocol) (*sharedpb.IngestEndpointResponse, error)
 	SkipperConversations(ctx context.Context, limit *int, offset *int) ([]*model.SkipperConversationSummary, error)
 	SkipperConversation(ctx context.Context, id string) (*model.SkipperConversation, error)
 	SkipperReports(ctx context.Context, limit *int, offset *int) (*model.SkipperReportsConnection, error)
@@ -4405,6 +4657,15 @@ type QueryResolver interface {
 	Conversation(ctx context.Context, id string) (*model.Conversation, error)
 	MessagesConnection(ctx context.Context, conversationID string, page *model.ConnectionInput) (*model.MessagesConnection, error)
 	MediaRetentionPolicy(ctx context.Context) (*model.MediaRetentionPolicy, error)
+	MediaPlacementPolicy(ctx context.Context, scope model.MediaPlacementScopeInput) (model.MediaPlacementPolicyResult, error)
+	MediaPlacementOptions(ctx context.Context, scope model.MediaPlacementScopeInput, filter *model.MediaPlacementOptionsFilter, after *string, first *int) (model.MediaPlacementOptionsResult, error)
+	PreviewMediaPlacement(ctx context.Context, input model.PreviewMediaPlacementInput) (model.MediaPlacementPreviewResult, error)
+	ReviewMediaPlacementChange(ctx context.Context, input model.ReviewMediaPlacementChangeInput) (model.MediaPlacementReviewResult, error)
+	MediaPlacementChange(ctx context.Context, scope model.MediaPlacementScopeInput, idempotencyKey string) (model.MediaPlacementChangeResult, error)
+	MediaPlacementLegacyPins(ctx context.Context, streamID string) (model.MediaPlacementLegacyPinsResult, error)
+	ClusterMediaConsent(ctx context.Context, clusterID string) (model.MediaCapacityConsentResult, error)
+	ReviewClusterMediaConsentChange(ctx context.Context, input model.ReviewMediaCapacityConsentInput) (model.MediaPlacementReviewResult, error)
+	ClusterMediaConsentChange(ctx context.Context, clusterID string, idempotencyKey string) (model.MediaCapacityConsentChangeResult, error)
 }
 type RebufferingEventResolver interface {
 	Timestamp(ctx context.Context, obj *periscopepb.RebufferingEvent) (*time.Time, error)
@@ -10469,6 +10730,930 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 
 		return e.ComplexityRoot.MarketplaceClusterEdge.Node(childComplexity), true
 
+	case "MediaCapacityConsent.allowExternalSource":
+		if e.ComplexityRoot.MediaCapacityConsent.AllowExternalSource == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaCapacityConsent.AllowExternalSource(childComplexity), true
+	case "MediaCapacityConsent.allowIngest":
+		if e.ComplexityRoot.MediaCapacityConsent.AllowIngest == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaCapacityConsent.AllowIngest(childComplexity), true
+	case "MediaCapacityConsent.allowServe":
+		if e.ComplexityRoot.MediaCapacityConsent.AllowServe == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaCapacityConsent.AllowServe(childComplexity), true
+	case "MediaCapacityConsent.canManage":
+		if e.ComplexityRoot.MediaCapacityConsent.CanManage == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaCapacityConsent.CanManage(childComplexity), true
+	case "MediaCapacityConsent.clusterId":
+		if e.ComplexityRoot.MediaCapacityConsent.ClusterID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaCapacityConsent.ClusterID(childComplexity), true
+	case "MediaCapacityConsent.revision":
+		if e.ComplexityRoot.MediaCapacityConsent.Revision == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaCapacityConsent.Revision(childComplexity), true
+	case "MediaCapacityConsent.rollout":
+		if e.ComplexityRoot.MediaCapacityConsent.Rollout == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaCapacityConsent.Rollout(childComplexity), true
+
+	case "MediaCapacityConsentChange.clusterId":
+		if e.ComplexityRoot.MediaCapacityConsentChange.ClusterID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaCapacityConsentChange.ClusterID(childComplexity), true
+	case "MediaCapacityConsentChange.createdAt":
+		if e.ComplexityRoot.MediaCapacityConsentChange.CreatedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaCapacityConsentChange.CreatedAt(childComplexity), true
+	case "MediaCapacityConsentChange.digest":
+		if e.ComplexityRoot.MediaCapacityConsentChange.Digest == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaCapacityConsentChange.Digest(childComplexity), true
+	case "MediaCapacityConsentChange.idempotencyKey":
+		if e.ComplexityRoot.MediaCapacityConsentChange.IdempotencyKey == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaCapacityConsentChange.IdempotencyKey(childComplexity), true
+	case "MediaCapacityConsentChange.revision":
+		if e.ComplexityRoot.MediaCapacityConsentChange.Revision == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaCapacityConsentChange.Revision(childComplexity), true
+	case "MediaCapacityConsentChange.rollout":
+		if e.ComplexityRoot.MediaCapacityConsentChange.Rollout == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaCapacityConsentChange.Rollout(childComplexity), true
+
+	case "MediaPlacementActions.canInspectPrivateCandidates":
+		if e.ComplexityRoot.MediaPlacementActions.CanInspectPrivateCandidates == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementActions.CanInspectPrivateCandidates(childComplexity), true
+	case "MediaPlacementActions.canManage":
+		if e.ComplexityRoot.MediaPlacementActions.CanManage == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementActions.CanManage(childComplexity), true
+	case "MediaPlacementActions.canPreview":
+		if e.ComplexityRoot.MediaPlacementActions.CanPreview == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementActions.CanPreview(childComplexity), true
+	case "MediaPlacementActions.canRead":
+		if e.ComplexityRoot.MediaPlacementActions.CanRead == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementActions.CanRead(childComplexity), true
+
+	case "MediaPlacementAllow.any":
+		if e.ComplexityRoot.MediaPlacementAllow.Any == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementAllow.Any(childComplexity), true
+
+	case "MediaPlacementCandidateExplanation.clusterId":
+		if e.ComplexityRoot.MediaPlacementCandidateExplanation.ClusterID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementCandidateExplanation.ClusterID(childComplexity), true
+	case "MediaPlacementCandidateExplanation.clusterName":
+		if e.ComplexityRoot.MediaPlacementCandidateExplanation.ClusterName == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementCandidateExplanation.ClusterName(childComplexity), true
+	case "MediaPlacementCandidateExplanation.distanceKm":
+		if e.ComplexityRoot.MediaPlacementCandidateExplanation.DistanceKm == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementCandidateExplanation.DistanceKm(childComplexity), true
+	case "MediaPlacementCandidateExplanation.groupId":
+		if e.ComplexityRoot.MediaPlacementCandidateExplanation.GroupID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementCandidateExplanation.GroupID(childComplexity), true
+	case "MediaPlacementCandidateExplanation.nodeId":
+		if e.ComplexityRoot.MediaPlacementCandidateExplanation.NodeID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementCandidateExplanation.NodeID(childComplexity), true
+	case "MediaPlacementCandidateExplanation.price":
+		if e.ComplexityRoot.MediaPlacementCandidateExplanation.Price == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementCandidateExplanation.Price(childComplexity), true
+	case "MediaPlacementCandidateExplanation.reason":
+		if e.ComplexityRoot.MediaPlacementCandidateExplanation.Reason == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementCandidateExplanation.Reason(childComplexity), true
+	case "MediaPlacementCandidateExplanation.region":
+		if e.ComplexityRoot.MediaPlacementCandidateExplanation.Region == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementCandidateExplanation.Region(childComplexity), true
+	case "MediaPlacementCandidateExplanation.requiresSourcePull":
+		if e.ComplexityRoot.MediaPlacementCandidateExplanation.RequiresSourcePull == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementCandidateExplanation.RequiresSourcePull(childComplexity), true
+
+	case "MediaPlacementChange.createdAt":
+		if e.ComplexityRoot.MediaPlacementChange.CreatedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementChange.CreatedAt(childComplexity), true
+	case "MediaPlacementChange.digest":
+		if e.ComplexityRoot.MediaPlacementChange.Digest == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementChange.Digest(childComplexity), true
+	case "MediaPlacementChange.idempotencyKey":
+		if e.ComplexityRoot.MediaPlacementChange.IdempotencyKey == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementChange.IdempotencyKey(childComplexity), true
+	case "MediaPlacementChange.parentRevision":
+		if e.ComplexityRoot.MediaPlacementChange.ParentRevision == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementChange.ParentRevision(childComplexity), true
+	case "MediaPlacementChange.revision":
+		if e.ComplexityRoot.MediaPlacementChange.Revision == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementChange.Revision(childComplexity), true
+	case "MediaPlacementChange.rollout":
+		if e.ComplexityRoot.MediaPlacementChange.Rollout == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementChange.Rollout(childComplexity), true
+	case "MediaPlacementChange.scope":
+		if e.ComplexityRoot.MediaPlacementChange.Scope == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementChange.Scope(childComplexity), true
+
+	case "MediaPlacementConstraints.allow":
+		if e.ComplexityRoot.MediaPlacementConstraints.Allow == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementConstraints.Allow(childComplexity), true
+	case "MediaPlacementConstraints.deny":
+		if e.ComplexityRoot.MediaPlacementConstraints.Deny == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementConstraints.Deny(childComplexity), true
+
+	case "MediaPlacementDifference.after":
+		if e.ComplexityRoot.MediaPlacementDifference.After == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementDifference.After(childComplexity), true
+	case "MediaPlacementDifference.before":
+		if e.ComplexityRoot.MediaPlacementDifference.Before == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementDifference.Before(childComplexity), true
+	case "MediaPlacementDifference.label":
+		if e.ComplexityRoot.MediaPlacementDifference.Label == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementDifference.Label(childComplexity), true
+	case "MediaPlacementDifference.path":
+		if e.ComplexityRoot.MediaPlacementDifference.Path == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementDifference.Path(childComplexity), true
+
+	case "MediaPlacementEffectivePolicy.digest":
+		if e.ComplexityRoot.MediaPlacementEffectivePolicy.Digest == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementEffectivePolicy.Digest(childComplexity), true
+	case "MediaPlacementEffectivePolicy.groups":
+		if e.ComplexityRoot.MediaPlacementEffectivePolicy.Groups == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementEffectivePolicy.Groups(childComplexity), true
+	case "MediaPlacementEffectivePolicy.layers":
+		if e.ComplexityRoot.MediaPlacementEffectivePolicy.Layers == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementEffectivePolicy.Layers(childComplexity), true
+	case "MediaPlacementEffectivePolicy.schemaVersion":
+		if e.ComplexityRoot.MediaPlacementEffectivePolicy.SchemaVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementEffectivePolicy.SchemaVersion(childComplexity), true
+
+	case "MediaPlacementError.code":
+		if e.ComplexityRoot.MediaPlacementError.Code == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementError.Code(childComplexity), true
+	case "MediaPlacementError.currentRevision":
+		if e.ComplexityRoot.MediaPlacementError.CurrentRevision == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementError.CurrentRevision(childComplexity), true
+	case "MediaPlacementError.fields":
+		if e.ComplexityRoot.MediaPlacementError.Fields == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementError.Fields(childComplexity), true
+	case "MediaPlacementError.message":
+		if e.ComplexityRoot.MediaPlacementError.Message == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementError.Message(childComplexity), true
+	case "MediaPlacementError.parentRevision":
+		if e.ComplexityRoot.MediaPlacementError.ParentRevision == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementError.ParentRevision(childComplexity), true
+	case "MediaPlacementError.retryAfterSeconds":
+		if e.ComplexityRoot.MediaPlacementError.RetryAfterSeconds == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementError.RetryAfterSeconds(childComplexity), true
+
+	case "MediaPlacementFeatures.geographicSpillover":
+		if e.ComplexityRoot.MediaPlacementFeatures.GeographicSpillover == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementFeatures.GeographicSpillover(childComplexity), true
+	case "MediaPlacementFeatures.priceOrdering":
+		if e.ComplexityRoot.MediaPlacementFeatures.PriceOrdering == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementFeatures.PriceOrdering(childComplexity), true
+	case "MediaPlacementFeatures.schemaVersion":
+		if e.ComplexityRoot.MediaPlacementFeatures.SchemaVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementFeatures.SchemaVersion(childComplexity), true
+	case "MediaPlacementFeatures.supportedPresets":
+		if e.ComplexityRoot.MediaPlacementFeatures.SupportedPresets == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementFeatures.SupportedPresets(childComplexity), true
+
+	case "MediaPlacementFieldError.groupId":
+		if e.ComplexityRoot.MediaPlacementFieldError.GroupID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementFieldError.GroupID(childComplexity), true
+	case "MediaPlacementFieldError.message":
+		if e.ComplexityRoot.MediaPlacementFieldError.Message == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementFieldError.Message(childComplexity), true
+	case "MediaPlacementFieldError.path":
+		if e.ComplexityRoot.MediaPlacementFieldError.Path == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementFieldError.Path(childComplexity), true
+
+	case "MediaPlacementGroup.geoHoleDistanceKm":
+		if e.ComplexityRoot.MediaPlacementGroup.GeoHoleDistanceKm == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementGroup.GeoHoleDistanceKm(childComplexity), true
+	case "MediaPlacementGroup.id":
+		if e.ComplexityRoot.MediaPlacementGroup.ID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementGroup.ID(childComplexity), true
+	case "MediaPlacementGroup.match":
+		if e.ComplexityRoot.MediaPlacementGroup.Match == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementGroup.Match(childComplexity), true
+	case "MediaPlacementGroup.maxDistanceKm":
+		if e.ComplexityRoot.MediaPlacementGroup.MaxDistanceKm == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementGroup.MaxDistanceKm(childComplexity), true
+	case "MediaPlacementGroup.minImprovementKm":
+		if e.ComplexityRoot.MediaPlacementGroup.MinImprovementKm == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementGroup.MinImprovementKm(childComplexity), true
+	case "MediaPlacementGroup.order":
+		if e.ComplexityRoot.MediaPlacementGroup.Order == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementGroup.Order(childComplexity), true
+	case "MediaPlacementGroup.priceCurrency":
+		if e.ComplexityRoot.MediaPlacementGroup.PriceCurrency == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementGroup.PriceCurrency(childComplexity), true
+	case "MediaPlacementGroup.priceUnit":
+		if e.ComplexityRoot.MediaPlacementGroup.PriceUnit == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementGroup.PriceUnit(childComplexity), true
+	case "MediaPlacementGroup.spillover":
+		if e.ComplexityRoot.MediaPlacementGroup.Spillover == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementGroup.Spillover(childComplexity), true
+
+	case "MediaPlacementImpact.activePublishers":
+		if e.ComplexityRoot.MediaPlacementImpact.ActivePublishers == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementImpact.ActivePublishers(childComplexity), true
+	case "MediaPlacementImpact.affectedStreams":
+		if e.ComplexityRoot.MediaPlacementImpact.AffectedStreams == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementImpact.AffectedStreams(childComplexity), true
+	case "MediaPlacementImpact.complete":
+		if e.ComplexityRoot.MediaPlacementImpact.Complete == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementImpact.Complete(childComplexity), true
+	case "MediaPlacementImpact.existingSessionsRetained":
+		if e.ComplexityRoot.MediaPlacementImpact.ExistingSessionsRetained == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementImpact.ExistingSessionsRetained(childComplexity), true
+
+	case "MediaPlacementLegacyPins.clusterIds":
+		if e.ComplexityRoot.MediaPlacementLegacyPins.ClusterIds == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementLegacyPins.ClusterIds(childComplexity), true
+	case "MediaPlacementLegacyPins.currentlyEnforced":
+		if e.ComplexityRoot.MediaPlacementLegacyPins.CurrentlyEnforced == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementLegacyPins.CurrentlyEnforced(childComplexity), true
+	case "MediaPlacementLegacyPins.streamId":
+		if e.ComplexityRoot.MediaPlacementLegacyPins.StreamID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementLegacyPins.StreamID(childComplexity), true
+
+	case "MediaPlacementOption.clusterClass":
+		if e.ComplexityRoot.MediaPlacementOption.ClusterClass == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementOption.ClusterClass(childComplexity), true
+	case "MediaPlacementOption.eligible":
+		if e.ComplexityRoot.MediaPlacementOption.Eligible == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementOption.Eligible(childComplexity), true
+	case "MediaPlacementOption.id":
+		if e.ComplexityRoot.MediaPlacementOption.ID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementOption.ID(childComplexity), true
+	case "MediaPlacementOption.kind":
+		if e.ComplexityRoot.MediaPlacementOption.Kind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementOption.Kind(childComplexity), true
+	case "MediaPlacementOption.name":
+		if e.ComplexityRoot.MediaPlacementOption.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementOption.Name(childComplexity), true
+	case "MediaPlacementOption.ownerId":
+		if e.ComplexityRoot.MediaPlacementOption.OwnerID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementOption.OwnerID(childComplexity), true
+	case "MediaPlacementOption.reason":
+		if e.ComplexityRoot.MediaPlacementOption.Reason == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementOption.Reason(childComplexity), true
+	case "MediaPlacementOption.region":
+		if e.ComplexityRoot.MediaPlacementOption.Region == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementOption.Region(childComplexity), true
+
+	case "MediaPlacementOptionsConnection.nodes":
+		if e.ComplexityRoot.MediaPlacementOptionsConnection.Nodes == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementOptionsConnection.Nodes(childComplexity), true
+	case "MediaPlacementOptionsConnection.pageInfo":
+		if e.ComplexityRoot.MediaPlacementOptionsConnection.PageInfo == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementOptionsConnection.PageInfo(childComplexity), true
+
+	case "MediaPlacementPolicyState.actions":
+		if e.ComplexityRoot.MediaPlacementPolicyState.Actions == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementPolicyState.Actions(childComplexity), true
+	case "MediaPlacementPolicyState.activeParentRevision":
+		if e.ComplexityRoot.MediaPlacementPolicyState.ActiveParentRevision == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementPolicyState.ActiveParentRevision(childComplexity), true
+	case "MediaPlacementPolicyState.activeRevision":
+		if e.ComplexityRoot.MediaPlacementPolicyState.ActiveRevision == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementPolicyState.ActiveRevision(childComplexity), true
+	case "MediaPlacementPolicyState.features":
+		if e.ComplexityRoot.MediaPlacementPolicyState.Features == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementPolicyState.Features(childComplexity), true
+	case "MediaPlacementPolicyState.parentRevision":
+		if e.ComplexityRoot.MediaPlacementPolicyState.ParentRevision == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementPolicyState.ParentRevision(childComplexity), true
+	case "MediaPlacementPolicyState.revision":
+		if e.ComplexityRoot.MediaPlacementPolicyState.Revision == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementPolicyState.Revision(childComplexity), true
+	case "MediaPlacementPolicyState.rollout":
+		if e.ComplexityRoot.MediaPlacementPolicyState.Rollout == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementPolicyState.Rollout(childComplexity), true
+	case "MediaPlacementPolicyState.scope":
+		if e.ComplexityRoot.MediaPlacementPolicyState.Scope == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementPolicyState.Scope(childComplexity), true
+	case "MediaPlacementPolicyState.verbs":
+		if e.ComplexityRoot.MediaPlacementPolicyState.Verbs == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementPolicyState.Verbs(childComplexity), true
+
+	case "MediaPlacementPreferences.groups":
+		if e.ComplexityRoot.MediaPlacementPreferences.Groups == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementPreferences.Groups(childComplexity), true
+
+	case "MediaPlacementPreview.activeIngestClusterId":
+		if e.ComplexityRoot.MediaPlacementPreview.ActiveIngestClusterID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementPreview.ActiveIngestClusterID(childComplexity), true
+	case "MediaPlacementPreview.candidates":
+		if e.ComplexityRoot.MediaPlacementPreview.Candidates == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementPreview.Candidates(childComplexity), true
+	case "MediaPlacementPreview.complete":
+		if e.ComplexityRoot.MediaPlacementPreview.Complete == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementPreview.Complete(childComplexity), true
+	case "MediaPlacementPreview.digest":
+		if e.ComplexityRoot.MediaPlacementPreview.Digest == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementPreview.Digest(childComplexity), true
+	case "MediaPlacementPreview.expiresAt":
+		if e.ComplexityRoot.MediaPlacementPreview.ExpiresAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementPreview.ExpiresAt(childComplexity), true
+	case "MediaPlacementPreview.observedAt":
+		if e.ComplexityRoot.MediaPlacementPreview.ObservedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementPreview.ObservedAt(childComplexity), true
+	case "MediaPlacementPreview.parentRevision":
+		if e.ComplexityRoot.MediaPlacementPreview.ParentRevision == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementPreview.ParentRevision(childComplexity), true
+	case "MediaPlacementPreview.reason":
+		if e.ComplexityRoot.MediaPlacementPreview.Reason == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementPreview.Reason(childComplexity), true
+	case "MediaPlacementPreview.revision":
+		if e.ComplexityRoot.MediaPlacementPreview.Revision == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementPreview.Revision(childComplexity), true
+	case "MediaPlacementPreview.scope":
+		if e.ComplexityRoot.MediaPlacementPreview.Scope == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementPreview.Scope(childComplexity), true
+	case "MediaPlacementPreview.selected":
+		if e.ComplexityRoot.MediaPlacementPreview.Selected == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementPreview.Selected(childComplexity), true
+	case "MediaPlacementPreview.sourceEvaluated":
+		if e.ComplexityRoot.MediaPlacementPreview.SourceEvaluated == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementPreview.SourceEvaluated(childComplexity), true
+	case "MediaPlacementPreview.transitions":
+		if e.ComplexityRoot.MediaPlacementPreview.Transitions == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementPreview.Transitions(childComplexity), true
+	case "MediaPlacementPreview.verb":
+		if e.ComplexityRoot.MediaPlacementPreview.Verb == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementPreview.Verb(childComplexity), true
+
+	case "MediaPlacementPrice.amountMicros":
+		if e.ComplexityRoot.MediaPlacementPrice.AmountMicros == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementPrice.AmountMicros(childComplexity), true
+	case "MediaPlacementPrice.currency":
+		if e.ComplexityRoot.MediaPlacementPrice.Currency == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementPrice.Currency(childComplexity), true
+	case "MediaPlacementPrice.expiresAt":
+		if e.ComplexityRoot.MediaPlacementPrice.ExpiresAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementPrice.ExpiresAt(childComplexity), true
+	case "MediaPlacementPrice.revision":
+		if e.ComplexityRoot.MediaPlacementPrice.Revision == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementPrice.Revision(childComplexity), true
+	case "MediaPlacementPrice.unit":
+		if e.ComplexityRoot.MediaPlacementPrice.Unit == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementPrice.Unit(childComplexity), true
+
+	case "MediaPlacementRecipient.authorityExpiresAt":
+		if e.ComplexityRoot.MediaPlacementRecipient.AuthorityExpiresAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementRecipient.AuthorityExpiresAt(childComplexity), true
+	case "MediaPlacementRecipient.id":
+		if e.ComplexityRoot.MediaPlacementRecipient.ID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementRecipient.ID(childComplexity), true
+	case "MediaPlacementRecipient.name":
+		if e.ComplexityRoot.MediaPlacementRecipient.Name == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementRecipient.Name(childComplexity), true
+	case "MediaPlacementRecipient.reason":
+		if e.ComplexityRoot.MediaPlacementRecipient.Reason == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementRecipient.Reason(childComplexity), true
+	case "MediaPlacementRecipient.status":
+		if e.ComplexityRoot.MediaPlacementRecipient.Status == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementRecipient.Status(childComplexity), true
+
+	case "MediaPlacementReview.differences":
+		if e.ComplexityRoot.MediaPlacementReview.Differences == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementReview.Differences(childComplexity), true
+	case "MediaPlacementReview.digest":
+		if e.ComplexityRoot.MediaPlacementReview.Digest == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementReview.Digest(childComplexity), true
+	case "MediaPlacementReview.expiresAt":
+		if e.ComplexityRoot.MediaPlacementReview.ExpiresAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementReview.ExpiresAt(childComplexity), true
+	case "MediaPlacementReview.impact":
+		if e.ComplexityRoot.MediaPlacementReview.Impact == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementReview.Impact(childComplexity), true
+	case "MediaPlacementReview.reviewToken":
+		if e.ComplexityRoot.MediaPlacementReview.ReviewToken == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementReview.ReviewToken(childComplexity), true
+	case "MediaPlacementReview.warnings":
+		if e.ComplexityRoot.MediaPlacementReview.Warnings == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementReview.Warnings(childComplexity), true
+
+	case "MediaPlacementRollout.appliedRecipients":
+		if e.ComplexityRoot.MediaPlacementRollout.AppliedRecipients == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementRollout.AppliedRecipients(childComplexity), true
+	case "MediaPlacementRollout.existingSessionsRetained":
+		if e.ComplexityRoot.MediaPlacementRollout.ExistingSessionsRetained == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementRollout.ExistingSessionsRetained(childComplexity), true
+	case "MediaPlacementRollout.pendingRecipients":
+		if e.ComplexityRoot.MediaPlacementRollout.PendingRecipients == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementRollout.PendingRecipients(childComplexity), true
+	case "MediaPlacementRollout.requiredRecipients":
+		if e.ComplexityRoot.MediaPlacementRollout.RequiredRecipients == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementRollout.RequiredRecipients(childComplexity), true
+	case "MediaPlacementRollout.status":
+		if e.ComplexityRoot.MediaPlacementRollout.Status == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementRollout.Status(childComplexity), true
+	case "MediaPlacementRollout.updatedAt":
+		if e.ComplexityRoot.MediaPlacementRollout.UpdatedAt == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementRollout.UpdatedAt(childComplexity), true
+
+	case "MediaPlacementRules.constraints":
+		if e.ComplexityRoot.MediaPlacementRules.Constraints == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementRules.Constraints(childComplexity), true
+	case "MediaPlacementRules.preferences":
+		if e.ComplexityRoot.MediaPlacementRules.Preferences == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementRules.Preferences(childComplexity), true
+	case "MediaPlacementRules.schemaVersion":
+		if e.ComplexityRoot.MediaPlacementRules.SchemaVersion == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementRules.SchemaVersion(childComplexity), true
+
+	case "MediaPlacementScope.kind":
+		if e.ComplexityRoot.MediaPlacementScope.Kind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementScope.Kind(childComplexity), true
+	case "MediaPlacementScope.streamId":
+		if e.ComplexityRoot.MediaPlacementScope.StreamID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementScope.StreamID(childComplexity), true
+
+	case "MediaPlacementSelector.charging":
+		if e.ComplexityRoot.MediaPlacementSelector.Charging == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementSelector.Charging(childComplexity), true
+	case "MediaPlacementSelector.classes":
+		if e.ComplexityRoot.MediaPlacementSelector.Classes == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementSelector.Classes(childComplexity), true
+	case "MediaPlacementSelector.clusterIds":
+		if e.ComplexityRoot.MediaPlacementSelector.ClusterIds == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementSelector.ClusterIds(childComplexity), true
+	case "MediaPlacementSelector.ownerIds":
+		if e.ComplexityRoot.MediaPlacementSelector.OwnerIds == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementSelector.OwnerIds(childComplexity), true
+	case "MediaPlacementSelector.regions":
+		if e.ComplexityRoot.MediaPlacementSelector.Regions == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementSelector.Regions(childComplexity), true
+
+	case "MediaPlacementTransition.fromGroup":
+		if e.ComplexityRoot.MediaPlacementTransition.FromGroup == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementTransition.FromGroup(childComplexity), true
+	case "MediaPlacementTransition.reason":
+		if e.ComplexityRoot.MediaPlacementTransition.Reason == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementTransition.Reason(childComplexity), true
+
+	case "MediaPlacementVerbPolicy.inheritedRules":
+		if e.ComplexityRoot.MediaPlacementVerbPolicy.InheritedRules == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementVerbPolicy.InheritedRules(childComplexity), true
+	case "MediaPlacementVerbPolicy.ownRules":
+		if e.ComplexityRoot.MediaPlacementVerbPolicy.OwnRules == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementVerbPolicy.OwnRules(childComplexity), true
+	case "MediaPlacementVerbPolicy.requestedEffective":
+		if e.ComplexityRoot.MediaPlacementVerbPolicy.RequestedEffective == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementVerbPolicy.RequestedEffective(childComplexity), true
+	case "MediaPlacementVerbPolicy.verb":
+		if e.ComplexityRoot.MediaPlacementVerbPolicy.Verb == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementVerbPolicy.Verb(childComplexity), true
+
+	case "MediaPlacementWarning.acknowledgementRequired":
+		if e.ComplexityRoot.MediaPlacementWarning.AcknowledgementRequired == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementWarning.AcknowledgementRequired(childComplexity), true
+	case "MediaPlacementWarning.id":
+		if e.ComplexityRoot.MediaPlacementWarning.ID == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementWarning.ID(childComplexity), true
+	case "MediaPlacementWarning.message":
+		if e.ComplexityRoot.MediaPlacementWarning.Message == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementWarning.Message(childComplexity), true
+	case "MediaPlacementWarning.severity":
+		if e.ComplexityRoot.MediaPlacementWarning.Severity == nil {
+			break
+		}
+
+		return e.ComplexityRoot.MediaPlacementWarning.Severity(childComplexity), true
+
 	case "MediaRetentionBounds.maxRecordingRetentionDays":
 		if e.ComplexityRoot.MediaRetentionBounds.MaxRecordingRetentionDays == nil {
 			break
@@ -10710,6 +11895,28 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Mutation.AcceptClusterInvite(childComplexity, args["inviteToken"].(string)), true
+	case "Mutation.applyClusterMediaConsentChange":
+		if e.ComplexityRoot.Mutation.ApplyClusterMediaConsentChange == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_applyClusterMediaConsentChange_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.ApplyClusterMediaConsentChange(childComplexity, args["input"].(model.ApplyMediaCapacityConsentInput)), true
+	case "Mutation.applyMediaPlacementChange":
+		if e.ComplexityRoot.Mutation.ApplyMediaPlacementChange == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_applyMediaPlacementChange_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Mutation.ApplyMediaPlacementChange(childComplexity, args["input"].(model.ApplyMediaPlacementChangeInput)), true
 	case "Mutation.approveClusterSubscription":
 		if e.ComplexityRoot.Mutation.ApproveClusterSubscription == nil {
 			break
@@ -14395,6 +15602,28 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.ClusterInvitesConnection(childComplexity, args["page"].(*model.ConnectionInput), args["clusterId"].(string)), true
+	case "Query.clusterMediaConsent":
+		if e.ComplexityRoot.Query.ClusterMediaConsent == nil {
+			break
+		}
+
+		args, err := ec.field_Query_clusterMediaConsent_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.ClusterMediaConsent(childComplexity, args["clusterId"].(string)), true
+	case "Query.clusterMediaConsentChange":
+		if e.ComplexityRoot.Query.ClusterMediaConsentChange == nil {
+			break
+		}
+
+		args, err := ec.field_Query_clusterMediaConsentChange_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.ClusterMediaConsentChange(childComplexity, args["clusterId"].(string), args["idempotencyKey"].(string)), true
 	case "Query.clustersAccess":
 		if e.ComplexityRoot.Query.ClustersAccess == nil {
 			break
@@ -14572,6 +15801,50 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.MarketplaceClustersConnection(childComplexity, args["page"].(*model.ConnectionInput)), true
+	case "Query.mediaPlacementChange":
+		if e.ComplexityRoot.Query.MediaPlacementChange == nil {
+			break
+		}
+
+		args, err := ec.field_Query_mediaPlacementChange_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.MediaPlacementChange(childComplexity, args["scope"].(model.MediaPlacementScopeInput), args["idempotencyKey"].(string)), true
+	case "Query.mediaPlacementLegacyPins":
+		if e.ComplexityRoot.Query.MediaPlacementLegacyPins == nil {
+			break
+		}
+
+		args, err := ec.field_Query_mediaPlacementLegacyPins_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.MediaPlacementLegacyPins(childComplexity, args["streamId"].(string)), true
+	case "Query.mediaPlacementOptions":
+		if e.ComplexityRoot.Query.MediaPlacementOptions == nil {
+			break
+		}
+
+		args, err := ec.field_Query_mediaPlacementOptions_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.MediaPlacementOptions(childComplexity, args["scope"].(model.MediaPlacementScopeInput), args["filter"].(*model.MediaPlacementOptionsFilter), args["after"].(*string), args["first"].(*int)), true
+	case "Query.mediaPlacementPolicy":
+		if e.ComplexityRoot.Query.MediaPlacementPolicy == nil {
+			break
+		}
+
+		args, err := ec.field_Query_mediaPlacementPolicy_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.MediaPlacementPolicy(childComplexity, args["scope"].(model.MediaPlacementScopeInput)), true
 	case "Query.mediaRetentionPolicy":
 		if e.ComplexityRoot.Query.MediaRetentionPolicy == nil {
 			break
@@ -14778,6 +16051,17 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Query.PrepaidBalance(childComplexity, args["currency"].(*string)), true
+	case "Query.previewMediaPlacement":
+		if e.ComplexityRoot.Query.PreviewMediaPlacement == nil {
+			break
+		}
+
+		args, err := ec.field_Query_previewMediaPlacement_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.PreviewMediaPlacement(childComplexity, args["input"].(model.PreviewMediaPlacementInput)), true
 	case "Query.resolveIngestEndpoint":
 		if e.ComplexityRoot.Query.ResolveIngestEndpoint == nil {
 			break
@@ -14788,7 +16072,7 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Query.ResolveIngestEndpoint(childComplexity, args["streamKey"].(string)), true
+		return e.ComplexityRoot.Query.ResolveIngestEndpoint(childComplexity, args["streamKey"].(string), args["protocol"].(*model.MediaIngestProtocol)), true
 	case "Query.resolveViewerEndpoint":
 		if e.ComplexityRoot.Query.ResolveViewerEndpoint == nil {
 			break
@@ -14799,7 +16083,29 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 			return 0, false
 		}
 
-		return e.ComplexityRoot.Query.ResolveViewerEndpoint(childComplexity, args["contentId"].(string)), true
+		return e.ComplexityRoot.Query.ResolveViewerEndpoint(childComplexity, args["contentId"].(string), args["protocol"].(*model.MediaViewerProtocol)), true
+	case "Query.reviewClusterMediaConsentChange":
+		if e.ComplexityRoot.Query.ReviewClusterMediaConsentChange == nil {
+			break
+		}
+
+		args, err := ec.field_Query_reviewClusterMediaConsentChange_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.ReviewClusterMediaConsentChange(childComplexity, args["input"].(model.ReviewMediaCapacityConsentInput)), true
+	case "Query.reviewMediaPlacementChange":
+		if e.ComplexityRoot.Query.ReviewMediaPlacementChange == nil {
+			break
+		}
+
+		args, err := ec.field_Query_reviewMediaPlacementChange_args(ctx, rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.ComplexityRoot.Query.ReviewMediaPlacementChange(childComplexity, args["input"].(model.ReviewMediaPlacementChangeInput)), true
 	case "Query.serviceInstancesHealth":
 		if e.ComplexityRoot.Query.ServiceInstancesHealth == nil {
 			break
@@ -21251,6 +22557,8 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 	opCtx := graphql.GetOperationContext(ctx)
 	ec := newExecutionContext(opCtx, e, make(chan graphql.DeferredResult))
 	inputUnmarshalMap := graphql.BuildUnmarshalerMap(
+		ec.unmarshalInputApplyMediaCapacityConsentInput,
+		ec.unmarshalInputApplyMediaPlacementChangeInput,
 		ec.unmarshalInputBillingAddressInput,
 		ec.unmarshalInputBillingFeaturesInput,
 		ec.unmarshalInputBootstrapEdgeInput,
@@ -21272,15 +22580,28 @@ func (e *executableSchema) Exec(ctx context.Context) graphql.ResponseHandler {
 		ec.unmarshalInputCreateVodUploadInput,
 		ec.unmarshalInputEntitlementEntryInput,
 		ec.unmarshalInputLinkEmailInput,
+		ec.unmarshalInputMediaPlacementAllowInput,
+		ec.unmarshalInputMediaPlacementConstraintsInput,
+		ec.unmarshalInputMediaPlacementCoordinatesInput,
+		ec.unmarshalInputMediaPlacementGroupInput,
+		ec.unmarshalInputMediaPlacementOptionsFilter,
+		ec.unmarshalInputMediaPlacementPreferencesInput,
+		ec.unmarshalInputMediaPlacementRulesInput,
+		ec.unmarshalInputMediaPlacementScopeInput,
+		ec.unmarshalInputMediaPlacementSelectorInput,
+		ec.unmarshalInputMediaPlacementVerbUpdateInput,
 		ec.unmarshalInputOpenMistAdminSessionInput,
 		ec.unmarshalInputPlaybackJwtClaimRequirementInput,
 		ec.unmarshalInputPlaybackJwtPolicyInput,
 		ec.unmarshalInputPlaybackPolicyInput,
 		ec.unmarshalInputPlaybackWebhookPolicyInput,
+		ec.unmarshalInputPreviewMediaPlacementInput,
 		ec.unmarshalInputPricingRuleInput,
 		ec.unmarshalInputPullSourceAllowedClustersInput,
 		ec.unmarshalInputPullSourceInput,
 		ec.unmarshalInputResetMediaRetentionOverrideInput,
+		ec.unmarshalInputReviewMediaCapacityConsentInput,
+		ec.unmarshalInputReviewMediaPlacementChangeInput,
 		ec.unmarshalInputSendMessageInput,
 		ec.unmarshalInputSetMediaRetentionPolicyInput,
 		ec.unmarshalInputSetNodeModeInput,
@@ -22048,17 +23369,21 @@ type Query {
     Playback ID for live streams or VOD uploads, or artifact playback ID for clips/DVR.
     """
     contentId: String!
+    "Required playback format. A different format is never substituted. Omit for automatic negotiation."
+    protocol: MediaViewerProtocol
   ): ViewerEndpointResponse
 
   """
   Resolve a stream key to ingest endpoints for StreamCrafter.
-  Returns RTMP/E-RTMP/SRT/WHIP endpoints for the stream.
+  Returns node-specific advertised protocols. A requested protocol filters candidates
+  before ranking; it is not permission to substitute a different protocol.
   """
   resolveIngestEndpoint(
     """
     The stream key.
     """
     streamKey: String!
+    protocol: MediaIngestProtocol
   ): IngestEndpointResponse
 
   # ==================== AI Consultant (Skipper) ====================
@@ -22135,6 +23460,38 @@ type Query {
   panel to size sliders and explain the allowed range.
   """
   mediaRetentionPolicy: MediaRetentionPolicy!
+
+  """
+  Tenant-bound placement intent and actual enforcement progress.
+  """
+  mediaPlacementPolicy(scope: MediaPlacementScopeInput!): MediaPlacementPolicyResult!
+  mediaPlacementOptions(
+    scope: MediaPlacementScopeInput!
+    filter: MediaPlacementOptionsFilter
+    after: String
+    first: Int = 50
+  ): MediaPlacementOptionsResult!
+  """
+  Read-only evaluation. Never claims ingest, reserves capacity, or starts a source pull.
+  """
+  previewMediaPlacement(input: PreviewMediaPlacementInput!): MediaPlacementPreviewResult!
+  reviewMediaPlacementChange(input: ReviewMediaPlacementChangeInput!): MediaPlacementReviewResult!
+  mediaPlacementChange(
+    scope: MediaPlacementScopeInput!
+    idempotencyKey: String!
+  ): MediaPlacementChangeResult!
+  """
+  Inactive legacy pins, available for an explicit reviewed import into stream rules.
+  """
+  mediaPlacementLegacyPins(streamId: ID!): MediaPlacementLegacyPinsResult!
+  clusterMediaConsent(clusterId: ID!): MediaCapacityConsentResult!
+  reviewClusterMediaConsentChange(
+    input: ReviewMediaCapacityConsentInput!
+  ): MediaPlacementReviewResult!
+  clusterMediaConsentChange(
+    clusterId: ID!
+    idempotencyKey: String!
+  ): MediaCapacityConsentChangeResult!
 }
 
 """
@@ -23348,6 +24705,14 @@ type Mutation {
   cap is exposed via ` + "`" + `mediaRetentionPolicy.bounds.maxRecordingRetentionDays` + "`" + `.
   """
   setMediaRetentionPolicy(input: SetMediaRetentionPolicyInput!): SetMediaRetentionPolicyResult!
+
+  """
+  Atomically saves the requested verbs. Saved does not mean effective on every cell.
+  """
+  applyMediaPlacementChange(input: ApplyMediaPlacementChangeInput!): MediaPlacementChangeResult!
+  applyClusterMediaConsentChange(
+    input: ApplyMediaCapacityConsentInput!
+  ): MediaCapacityConsentChangeResult!
 
   """
   Apply a per-asset retention override on a finalized DVR recording, clip,
@@ -28215,6 +29580,41 @@ type IngestEndpointResponse {
   metadata: IngestMetadata
 }
 
+"Playback format required when selecting and preparing a viewer destination."
+enum MediaViewerProtocol {
+  WEBRTC
+  WHEP
+  HLS
+  DASH
+  HLS_CMAF
+  MEWS
+  MEWS_WEBM
+  MP4
+  WEBM
+  MKV
+  TS
+  AAC
+  H264
+  H264_WS
+  RAW_WS
+  JSON_WS
+  FLV
+  HDS
+  SMOOTHSTREAMING
+  SDP
+  MIST_HTML
+  RTMP
+  RTSP
+  SRT
+  DTSC
+}
+
+enum MediaIngestProtocol {
+  WHIP
+  RTMP
+  SRT
+}
+
 # Individual ingest endpoint with node and protocol info
 enum IngestEndpointKind {
   INGEST_ENDPOINT_KIND_UNSPECIFIED
@@ -29334,6 +30734,457 @@ type ClusterLiveStats {
   activeNodes: Int!
   egressCapacityBps: Float!
 }
+
+enum MediaPlacementVerb {
+  INGEST
+  SERVE
+}
+enum MediaPlacementScopeKind {
+  TENANT
+  STREAM
+}
+enum MediaPlacementClass {
+  PLATFORM_OFFICIAL
+  TENANT_PRIVATE
+  THIRD_PARTY_MARKETPLACE
+}
+enum MediaPlacementCharging {
+  RATED
+  PERMANENTLY_FREE
+}
+enum MediaPlacementOrder {
+  DISTANCE
+  PRICE
+}
+enum MediaPlacementSpillover {
+  NEVER
+  CAPACITY_ONLY
+  GEO_HOLE
+  CAPACITY_OR_GEO_HOLE
+}
+enum MediaPlacementUpdateKind {
+  SET
+  CLEAR
+}
+enum MediaPlacementRolloutStatus {
+  NOT_CONFIGURED
+  PENDING
+  EFFECTIVE
+  BLOCKED
+  SUPERSEDED
+}
+enum MediaPlacementErrorCode {
+  INVALID_INPUT
+  REVISION_CONFLICT
+  STALE_REVIEW
+  IDEMPOTENCY_CONFLICT
+  UNSUPPORTED
+  UNAVAILABLE
+  RATE_LIMITED
+}
+enum MediaPlacementWarningSeverity {
+  INFO
+  WARNING
+}
+enum MediaPlacementOptionKind {
+  CLUSTER
+  OPERATOR
+  REGION
+}
+
+input MediaPlacementScopeInput {
+  kind: MediaPlacementScopeKind!
+  streamId: ID
+}
+
+type MediaPlacementScope {
+  kind: MediaPlacementScopeKind!
+  streamId: ID
+}
+
+"Fields combine with AND; values within a field combine with OR. Empty matches all entitled capacity."
+input MediaPlacementSelectorInput {
+  clusterIds: [ID!]
+  ownerIds: [ID!]
+  regions: [String!]
+  classes: [MediaPlacementClass!]
+  charging: [MediaPlacementCharging!]
+}
+
+type MediaPlacementSelector {
+  clusterIds: [ID!]!
+  ownerIds: [ID!]!
+  regions: [String!]!
+  classes: [MediaPlacementClass!]!
+  charging: [MediaPlacementCharging!]!
+}
+
+input MediaPlacementAllowInput {
+  any: [MediaPlacementSelectorInput!]!
+}
+type MediaPlacementAllow {
+  any: [MediaPlacementSelector!]!
+}
+
+input MediaPlacementConstraintsInput {
+  "Omitted means no additional restriction; an explicit empty any list allows nothing."
+  allow: MediaPlacementAllowInput
+  deny: [MediaPlacementSelectorInput!]! = []
+}
+
+type MediaPlacementConstraints {
+  allow: MediaPlacementAllow
+  deny: [MediaPlacementSelector!]!
+}
+
+input MediaPlacementGroupInput {
+  id: String!
+  match: MediaPlacementSelectorInput!
+  order: MediaPlacementOrder! = DISTANCE
+  spillover: MediaPlacementSpillover! = NEVER
+  "Hard maximum distance in km. Zero means unbounded."
+  maxDistanceKm: Float! = 0
+  "Soft threshold for geographic spill; must be positive for GEO_HOLE modes."
+  geoHoleDistanceKm: Float! = 0
+  minImprovementKm: Float! = 0
+  priceCurrency: String
+  priceUnit: String
+}
+
+type MediaPlacementGroup {
+  id: String!
+  match: MediaPlacementSelector!
+  order: MediaPlacementOrder!
+  spillover: MediaPlacementSpillover!
+  maxDistanceKm: Float!
+  geoHoleDistanceKm: Float!
+  minImprovementKm: Float!
+  priceCurrency: String
+  priceUnit: String
+}
+
+input MediaPlacementPreferencesInput {
+  groups: [MediaPlacementGroupInput!]!
+}
+type MediaPlacementPreferences {
+  groups: [MediaPlacementGroup!]!
+}
+
+input MediaPlacementRulesInput {
+  schemaVersion: Int! = 1
+  constraints: MediaPlacementConstraintsInput!
+  "Omitted inherits preference order; an explicit empty groups list denies all destinations."
+  preferences: MediaPlacementPreferencesInput
+}
+
+type MediaPlacementRules {
+  schemaVersion: Int!
+  constraints: MediaPlacementConstraints!
+  preferences: MediaPlacementPreferences
+}
+
+type MediaPlacementEffectivePolicy {
+  schemaVersion: Int!
+  digest: String!
+  layers: [MediaPlacementConstraints!]!
+  groups: [MediaPlacementGroup!]!
+}
+
+type MediaPlacementVerbPolicy {
+  verb: MediaPlacementVerb!
+  ownRules: MediaPlacementRules
+  inheritedRules: MediaPlacementRules
+  "Compiled requested intent; enforcement progress is reported separately."
+  requestedEffective: MediaPlacementEffectivePolicy!
+}
+
+type MediaPlacementActions {
+  canRead: Boolean!
+  canPreview: Boolean!
+  canManage: Boolean!
+  canInspectPrivateCandidates: Boolean!
+}
+
+type MediaPlacementFeatures {
+  schemaVersion: Int!
+  geographicSpillover: Boolean!
+  priceOrdering: Boolean!
+  supportedPresets: [String!]!
+}
+
+type MediaPlacementRecipient {
+  id: ID!
+  name: String!
+  status: MediaPlacementRolloutStatus!
+  reason: String
+  authorityExpiresAt: Time
+}
+
+type MediaPlacementRollout {
+  status: MediaPlacementRolloutStatus!
+  requiredRecipients: Int!
+  appliedRecipients: Int!
+  pendingRecipients: [MediaPlacementRecipient!]!
+  existingSessionsRetained: Boolean!
+  updatedAt: Time
+}
+
+type MediaPlacementPolicyState {
+  scope: MediaPlacementScope!
+  revision: String!
+  parentRevision: String!
+  activeRevision: String
+  activeParentRevision: String
+  verbs: [MediaPlacementVerbPolicy!]!
+  rollout: MediaPlacementRollout!
+  actions: MediaPlacementActions!
+  features: MediaPlacementFeatures!
+}
+
+type MediaPlacementFieldError {
+  path: String!
+  groupId: String
+  message: String!
+}
+
+type MediaPlacementError {
+  code: MediaPlacementErrorCode!
+  message: String!
+  fields: [MediaPlacementFieldError!]!
+  currentRevision: String
+  parentRevision: String
+  retryAfterSeconds: Int
+}
+
+input MediaPlacementOptionsFilter {
+  query: String
+  kind: MediaPlacementOptionKind
+  classes: [MediaPlacementClass!]
+}
+
+type MediaPlacementOption {
+  id: ID!
+  name: String!
+  kind: MediaPlacementOptionKind!
+  clusterClass: MediaPlacementClass
+  region: String
+  ownerId: ID
+  eligible: Boolean!
+  reason: String
+}
+
+type MediaPlacementOptionsConnection {
+  nodes: [MediaPlacementOption!]!
+  pageInfo: PageInfo!
+}
+
+input MediaPlacementCoordinatesInput {
+  latitude: Float!
+  longitude: Float!
+}
+
+input MediaPlacementVerbUpdateInput {
+  verb: MediaPlacementVerb!
+  kind: MediaPlacementUpdateKind!
+  rules: MediaPlacementRulesInput
+}
+
+input PreviewMediaPlacementInput {
+  scope: MediaPlacementScopeInput!
+  verb: MediaPlacementVerb!
+  streamId: ID
+  protocol: String
+  coordinates: MediaPlacementCoordinatesInput
+  "Omitted evaluates saved rules; CLEAR previews inheritance for this verb."
+  draftUpdate: MediaPlacementVerbUpdateInput
+  expectedRevision: String
+  expectedParentRevision: String
+}
+
+type MediaPlacementPrice {
+  amountMicros: String!
+  currency: String!
+  unit: String!
+  revision: String!
+  expiresAt: Time!
+}
+
+type MediaPlacementCandidateExplanation {
+  clusterId: ID!
+  clusterName: String!
+  region: String
+  "Only returned when private candidate inspection is authorized."
+  nodeId: ID
+  groupId: String
+  reason: String!
+  distanceKm: Float
+  requiresSourcePull: Boolean!
+  price: MediaPlacementPrice
+}
+
+type MediaPlacementTransition {
+  fromGroup: String!
+  reason: String!
+}
+
+type MediaPlacementPreview {
+  scope: MediaPlacementScope!
+  verb: MediaPlacementVerb!
+  revision: String!
+  parentRevision: String!
+  digest: String!
+  reason: String!
+  selected: MediaPlacementCandidateExplanation
+  candidates: [MediaPlacementCandidateExplanation!]!
+  transitions: [MediaPlacementTransition!]!
+  observedAt: Time!
+  expiresAt: Time!
+  complete: Boolean!
+  sourceEvaluated: Boolean!
+  activeIngestClusterId: ID
+}
+
+input ReviewMediaPlacementChangeInput {
+  scope: MediaPlacementScopeInput!
+  expectedRevision: String!
+  expectedParentRevision: String!
+  updates: [MediaPlacementVerbUpdateInput!]!
+}
+
+type MediaPlacementDifference {
+  path: String!
+  label: String!
+  before: String!
+  after: String!
+}
+
+type MediaPlacementWarning {
+  id: String!
+  severity: MediaPlacementWarningSeverity!
+  message: String!
+  acknowledgementRequired: Boolean!
+}
+
+type MediaPlacementImpact {
+  affectedStreams: Int!
+  activePublishers: Int!
+  complete: Boolean!
+  existingSessionsRetained: Boolean!
+}
+
+type MediaPlacementReview {
+  reviewToken: String!
+  digest: String!
+  expiresAt: Time!
+  differences: [MediaPlacementDifference!]!
+  warnings: [MediaPlacementWarning!]!
+  impact: MediaPlacementImpact!
+}
+
+input ApplyMediaPlacementChangeInput {
+  scope: MediaPlacementScopeInput!
+  expectedRevision: String!
+  expectedParentRevision: String!
+  updates: [MediaPlacementVerbUpdateInput!]!
+  reviewToken: String!
+  idempotencyKey: String!
+  acknowledgedWarningIds: [String!]! = []
+}
+
+type MediaPlacementChange {
+  scope: MediaPlacementScope!
+  idempotencyKey: String!
+  revision: String!
+  parentRevision: String!
+  digest: String!
+  rollout: MediaPlacementRollout!
+  createdAt: Time!
+}
+
+type MediaPlacementLegacyPins {
+  streamId: ID!
+  clusterIds: [ID!]!
+  currentlyEnforced: Boolean!
+}
+
+type MediaCapacityConsent {
+  clusterId: ID!
+  revision: String!
+  allowIngest: Boolean!
+  allowServe: Boolean!
+  allowExternalSource: Boolean!
+  canManage: Boolean!
+  rollout: MediaPlacementRollout!
+}
+
+input ReviewMediaCapacityConsentInput {
+  clusterId: ID!
+  expectedRevision: String!
+  allowIngest: Boolean!
+  allowServe: Boolean!
+  allowExternalSource: Boolean!
+}
+
+input ApplyMediaCapacityConsentInput {
+  clusterId: ID!
+  expectedRevision: String!
+  allowIngest: Boolean!
+  allowServe: Boolean!
+  allowExternalSource: Boolean!
+  reviewToken: String!
+  idempotencyKey: String!
+  acknowledgedWarningIds: [String!]! = []
+}
+
+type MediaCapacityConsentChange {
+  clusterId: ID!
+  idempotencyKey: String!
+  revision: String!
+  digest: String!
+  rollout: MediaPlacementRollout!
+  createdAt: Time!
+}
+
+union MediaPlacementPolicyResult =
+  | MediaPlacementPolicyState
+  | MediaPlacementError
+  | AuthError
+  | NotFoundError
+union MediaPlacementOptionsResult =
+  | MediaPlacementOptionsConnection
+  | MediaPlacementError
+  | AuthError
+  | NotFoundError
+union MediaPlacementPreviewResult =
+  | MediaPlacementPreview
+  | MediaPlacementError
+  | AuthError
+  | NotFoundError
+union MediaPlacementReviewResult =
+  | MediaPlacementReview
+  | MediaPlacementError
+  | AuthError
+  | NotFoundError
+union MediaPlacementChangeResult =
+  | MediaPlacementChange
+  | MediaPlacementError
+  | AuthError
+  | NotFoundError
+union MediaPlacementLegacyPinsResult =
+  | MediaPlacementLegacyPins
+  | MediaPlacementError
+  | AuthError
+  | NotFoundError
+union MediaCapacityConsentResult =
+  | MediaCapacityConsent
+  | MediaPlacementError
+  | AuthError
+  | NotFoundError
+union MediaCapacityConsentChangeResult =
+  | MediaCapacityConsentChange
+  | MediaPlacementError
+  | AuthError
+  | NotFoundError
 `, BuiltIn: false},
 }
 var parsedSchema = gqlparser.MustLoadSchema(sources...)
@@ -30325,6 +32176,28 @@ func (ec *executionContext) field_Mutation_acceptClusterInvite_args(ctx context.
 	return args, nil
 }
 
+func (ec *executionContext) field_Mutation_applyClusterMediaConsentChange_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNApplyMediaCapacityConsentInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐApplyMediaCapacityConsentInput)
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_applyMediaPlacementChange_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNApplyMediaPlacementChangeInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐApplyMediaPlacementChangeInput)
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
+	return args, nil
+}
+
 func (ec *executionContext) field_Mutation_approveClusterSubscription_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -31306,6 +33179,33 @@ func (ec *executionContext) field_Query_clusterInvites_args(ctx context.Context,
 	return args, nil
 }
 
+func (ec *executionContext) field_Query_clusterMediaConsentChange_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "clusterId", ec.unmarshalNID2string)
+	if err != nil {
+		return nil, err
+	}
+	args["clusterId"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "idempotencyKey", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["idempotencyKey"] = arg1
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_clusterMediaConsent_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "clusterId", ec.unmarshalNID2string)
+	if err != nil {
+		return nil, err
+	}
+	args["clusterId"] = arg0
+	return args, nil
+}
+
 func (ec *executionContext) field_Query_cluster_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -31568,6 +33468,70 @@ func (ec *executionContext) field_Query_marketplaceClusters_args(ctx context.Con
 	return args, nil
 }
 
+func (ec *executionContext) field_Query_mediaPlacementChange_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "scope", ec.unmarshalNMediaPlacementScopeInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementScopeInput)
+	if err != nil {
+		return nil, err
+	}
+	args["scope"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "idempotencyKey", ec.unmarshalNString2string)
+	if err != nil {
+		return nil, err
+	}
+	args["idempotencyKey"] = arg1
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_mediaPlacementLegacyPins_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "streamId", ec.unmarshalNID2string)
+	if err != nil {
+		return nil, err
+	}
+	args["streamId"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_mediaPlacementOptions_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "scope", ec.unmarshalNMediaPlacementScopeInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementScopeInput)
+	if err != nil {
+		return nil, err
+	}
+	args["scope"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "filter", ec.unmarshalOMediaPlacementOptionsFilter2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementOptionsFilter)
+	if err != nil {
+		return nil, err
+	}
+	args["filter"] = arg1
+	arg2, err := graphql.ProcessArgField(ctx, rawArgs, "after", ec.unmarshalOString2ᚖstring)
+	if err != nil {
+		return nil, err
+	}
+	args["after"] = arg2
+	arg3, err := graphql.ProcessArgField(ctx, rawArgs, "first", ec.unmarshalOInt2ᚖint)
+	if err != nil {
+		return nil, err
+	}
+	args["first"] = arg3
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_mediaPlacementPolicy_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "scope", ec.unmarshalNMediaPlacementScopeInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementScopeInput)
+	if err != nil {
+		return nil, err
+	}
+	args["scope"] = arg0
+	return args, nil
+}
+
 func (ec *executionContext) field_Query_messagesConnection_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -31814,6 +33778,17 @@ func (ec *executionContext) field_Query_prepaidBalance_args(ctx context.Context,
 	return args, nil
 }
 
+func (ec *executionContext) field_Query_previewMediaPlacement_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNPreviewMediaPlacementInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐPreviewMediaPlacementInput)
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
+	return args, nil
+}
+
 func (ec *executionContext) field_Query_resolveIngestEndpoint_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
 	var err error
 	args := map[string]any{}
@@ -31822,6 +33797,11 @@ func (ec *executionContext) field_Query_resolveIngestEndpoint_args(ctx context.C
 		return nil, err
 	}
 	args["streamKey"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "protocol", ec.unmarshalOMediaIngestProtocol2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaIngestProtocol)
+	if err != nil {
+		return nil, err
+	}
+	args["protocol"] = arg1
 	return args, nil
 }
 
@@ -31833,6 +33813,33 @@ func (ec *executionContext) field_Query_resolveViewerEndpoint_args(ctx context.C
 		return nil, err
 	}
 	args["contentId"] = arg0
+	arg1, err := graphql.ProcessArgField(ctx, rawArgs, "protocol", ec.unmarshalOMediaViewerProtocol2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaViewerProtocol)
+	if err != nil {
+		return nil, err
+	}
+	args["protocol"] = arg1
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_reviewClusterMediaConsentChange_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNReviewMediaCapacityConsentInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐReviewMediaCapacityConsentInput)
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Query_reviewMediaPlacementChange_args(ctx context.Context, rawArgs map[string]any) (map[string]any, error) {
+	var err error
+	args := map[string]any{}
+	arg0, err := graphql.ProcessArgField(ctx, rawArgs, "input", ec.unmarshalNReviewMediaPlacementChangeInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐReviewMediaPlacementChangeInput)
+	if err != nil {
+		return nil, err
+	}
+	args["input"] = arg0
 	return args, nil
 }
 
@@ -62080,6 +64087,4689 @@ func (ec *executionContext) fieldContext_MarketplaceClusterEdge_node(_ context.C
 	return fc, nil
 }
 
+func (ec *executionContext) _MediaCapacityConsent_clusterId(ctx context.Context, field graphql.CollectedField, obj *model.MediaCapacityConsent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaCapacityConsent_clusterId,
+		func(ctx context.Context) (any, error) {
+			return obj.ClusterID, nil
+		},
+		nil,
+		ec.marshalNID2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaCapacityConsent_clusterId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaCapacityConsent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaCapacityConsent_revision(ctx context.Context, field graphql.CollectedField, obj *model.MediaCapacityConsent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaCapacityConsent_revision,
+		func(ctx context.Context) (any, error) {
+			return obj.Revision, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaCapacityConsent_revision(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaCapacityConsent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaCapacityConsent_allowIngest(ctx context.Context, field graphql.CollectedField, obj *model.MediaCapacityConsent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaCapacityConsent_allowIngest,
+		func(ctx context.Context) (any, error) {
+			return obj.AllowIngest, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaCapacityConsent_allowIngest(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaCapacityConsent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaCapacityConsent_allowServe(ctx context.Context, field graphql.CollectedField, obj *model.MediaCapacityConsent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaCapacityConsent_allowServe,
+		func(ctx context.Context) (any, error) {
+			return obj.AllowServe, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaCapacityConsent_allowServe(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaCapacityConsent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaCapacityConsent_allowExternalSource(ctx context.Context, field graphql.CollectedField, obj *model.MediaCapacityConsent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaCapacityConsent_allowExternalSource,
+		func(ctx context.Context) (any, error) {
+			return obj.AllowExternalSource, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaCapacityConsent_allowExternalSource(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaCapacityConsent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaCapacityConsent_canManage(ctx context.Context, field graphql.CollectedField, obj *model.MediaCapacityConsent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaCapacityConsent_canManage,
+		func(ctx context.Context) (any, error) {
+			return obj.CanManage, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaCapacityConsent_canManage(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaCapacityConsent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaCapacityConsent_rollout(ctx context.Context, field graphql.CollectedField, obj *model.MediaCapacityConsent) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaCapacityConsent_rollout,
+		func(ctx context.Context) (any, error) {
+			return obj.Rollout, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementRollout2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementRollout,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaCapacityConsent_rollout(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaCapacityConsent",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "status":
+				return ec.fieldContext_MediaPlacementRollout_status(ctx, field)
+			case "requiredRecipients":
+				return ec.fieldContext_MediaPlacementRollout_requiredRecipients(ctx, field)
+			case "appliedRecipients":
+				return ec.fieldContext_MediaPlacementRollout_appliedRecipients(ctx, field)
+			case "pendingRecipients":
+				return ec.fieldContext_MediaPlacementRollout_pendingRecipients(ctx, field)
+			case "existingSessionsRetained":
+				return ec.fieldContext_MediaPlacementRollout_existingSessionsRetained(ctx, field)
+			case "updatedAt":
+				return ec.fieldContext_MediaPlacementRollout_updatedAt(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type MediaPlacementRollout", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaCapacityConsentChange_clusterId(ctx context.Context, field graphql.CollectedField, obj *model.MediaCapacityConsentChange) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaCapacityConsentChange_clusterId,
+		func(ctx context.Context) (any, error) {
+			return obj.ClusterID, nil
+		},
+		nil,
+		ec.marshalNID2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaCapacityConsentChange_clusterId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaCapacityConsentChange",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaCapacityConsentChange_idempotencyKey(ctx context.Context, field graphql.CollectedField, obj *model.MediaCapacityConsentChange) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaCapacityConsentChange_idempotencyKey,
+		func(ctx context.Context) (any, error) {
+			return obj.IdempotencyKey, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaCapacityConsentChange_idempotencyKey(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaCapacityConsentChange",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaCapacityConsentChange_revision(ctx context.Context, field graphql.CollectedField, obj *model.MediaCapacityConsentChange) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaCapacityConsentChange_revision,
+		func(ctx context.Context) (any, error) {
+			return obj.Revision, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaCapacityConsentChange_revision(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaCapacityConsentChange",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaCapacityConsentChange_digest(ctx context.Context, field graphql.CollectedField, obj *model.MediaCapacityConsentChange) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaCapacityConsentChange_digest,
+		func(ctx context.Context) (any, error) {
+			return obj.Digest, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaCapacityConsentChange_digest(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaCapacityConsentChange",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaCapacityConsentChange_rollout(ctx context.Context, field graphql.CollectedField, obj *model.MediaCapacityConsentChange) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaCapacityConsentChange_rollout,
+		func(ctx context.Context) (any, error) {
+			return obj.Rollout, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementRollout2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementRollout,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaCapacityConsentChange_rollout(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaCapacityConsentChange",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "status":
+				return ec.fieldContext_MediaPlacementRollout_status(ctx, field)
+			case "requiredRecipients":
+				return ec.fieldContext_MediaPlacementRollout_requiredRecipients(ctx, field)
+			case "appliedRecipients":
+				return ec.fieldContext_MediaPlacementRollout_appliedRecipients(ctx, field)
+			case "pendingRecipients":
+				return ec.fieldContext_MediaPlacementRollout_pendingRecipients(ctx, field)
+			case "existingSessionsRetained":
+				return ec.fieldContext_MediaPlacementRollout_existingSessionsRetained(ctx, field)
+			case "updatedAt":
+				return ec.fieldContext_MediaPlacementRollout_updatedAt(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type MediaPlacementRollout", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaCapacityConsentChange_createdAt(ctx context.Context, field graphql.CollectedField, obj *model.MediaCapacityConsentChange) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaCapacityConsentChange_createdAt,
+		func(ctx context.Context) (any, error) {
+			return obj.CreatedAt, nil
+		},
+		nil,
+		ec.marshalNTime2timeᚐTime,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaCapacityConsentChange_createdAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaCapacityConsentChange",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementActions_canRead(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementActions) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementActions_canRead,
+		func(ctx context.Context) (any, error) {
+			return obj.CanRead, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementActions_canRead(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementActions",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementActions_canPreview(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementActions) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementActions_canPreview,
+		func(ctx context.Context) (any, error) {
+			return obj.CanPreview, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementActions_canPreview(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementActions",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementActions_canManage(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementActions) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementActions_canManage,
+		func(ctx context.Context) (any, error) {
+			return obj.CanManage, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementActions_canManage(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementActions",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementActions_canInspectPrivateCandidates(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementActions) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementActions_canInspectPrivateCandidates,
+		func(ctx context.Context) (any, error) {
+			return obj.CanInspectPrivateCandidates, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementActions_canInspectPrivateCandidates(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementActions",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementAllow_any(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementAllow) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementAllow_any,
+		func(ctx context.Context) (any, error) {
+			return obj.Any, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementSelector2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementSelectorᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementAllow_any(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementAllow",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "clusterIds":
+				return ec.fieldContext_MediaPlacementSelector_clusterIds(ctx, field)
+			case "ownerIds":
+				return ec.fieldContext_MediaPlacementSelector_ownerIds(ctx, field)
+			case "regions":
+				return ec.fieldContext_MediaPlacementSelector_regions(ctx, field)
+			case "classes":
+				return ec.fieldContext_MediaPlacementSelector_classes(ctx, field)
+			case "charging":
+				return ec.fieldContext_MediaPlacementSelector_charging(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type MediaPlacementSelector", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementCandidateExplanation_clusterId(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementCandidateExplanation) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementCandidateExplanation_clusterId,
+		func(ctx context.Context) (any, error) {
+			return obj.ClusterID, nil
+		},
+		nil,
+		ec.marshalNID2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementCandidateExplanation_clusterId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementCandidateExplanation",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementCandidateExplanation_clusterName(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementCandidateExplanation) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementCandidateExplanation_clusterName,
+		func(ctx context.Context) (any, error) {
+			return obj.ClusterName, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementCandidateExplanation_clusterName(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementCandidateExplanation",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementCandidateExplanation_region(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementCandidateExplanation) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementCandidateExplanation_region,
+		func(ctx context.Context) (any, error) {
+			return obj.Region, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementCandidateExplanation_region(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementCandidateExplanation",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementCandidateExplanation_nodeId(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementCandidateExplanation) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementCandidateExplanation_nodeId,
+		func(ctx context.Context) (any, error) {
+			return obj.NodeID, nil
+		},
+		nil,
+		ec.marshalOID2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementCandidateExplanation_nodeId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementCandidateExplanation",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementCandidateExplanation_groupId(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementCandidateExplanation) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementCandidateExplanation_groupId,
+		func(ctx context.Context) (any, error) {
+			return obj.GroupID, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementCandidateExplanation_groupId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementCandidateExplanation",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementCandidateExplanation_reason(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementCandidateExplanation) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementCandidateExplanation_reason,
+		func(ctx context.Context) (any, error) {
+			return obj.Reason, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementCandidateExplanation_reason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementCandidateExplanation",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementCandidateExplanation_distanceKm(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementCandidateExplanation) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementCandidateExplanation_distanceKm,
+		func(ctx context.Context) (any, error) {
+			return obj.DistanceKm, nil
+		},
+		nil,
+		ec.marshalOFloat2ᚖfloat64,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementCandidateExplanation_distanceKm(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementCandidateExplanation",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementCandidateExplanation_requiresSourcePull(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementCandidateExplanation) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementCandidateExplanation_requiresSourcePull,
+		func(ctx context.Context) (any, error) {
+			return obj.RequiresSourcePull, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementCandidateExplanation_requiresSourcePull(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementCandidateExplanation",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementCandidateExplanation_price(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementCandidateExplanation) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementCandidateExplanation_price,
+		func(ctx context.Context) (any, error) {
+			return obj.Price, nil
+		},
+		nil,
+		ec.marshalOMediaPlacementPrice2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementPrice,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementCandidateExplanation_price(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementCandidateExplanation",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "amountMicros":
+				return ec.fieldContext_MediaPlacementPrice_amountMicros(ctx, field)
+			case "currency":
+				return ec.fieldContext_MediaPlacementPrice_currency(ctx, field)
+			case "unit":
+				return ec.fieldContext_MediaPlacementPrice_unit(ctx, field)
+			case "revision":
+				return ec.fieldContext_MediaPlacementPrice_revision(ctx, field)
+			case "expiresAt":
+				return ec.fieldContext_MediaPlacementPrice_expiresAt(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type MediaPlacementPrice", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementChange_scope(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementChange) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementChange_scope,
+		func(ctx context.Context) (any, error) {
+			return obj.Scope, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementScope2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementScope,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementChange_scope(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementChange",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "kind":
+				return ec.fieldContext_MediaPlacementScope_kind(ctx, field)
+			case "streamId":
+				return ec.fieldContext_MediaPlacementScope_streamId(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type MediaPlacementScope", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementChange_idempotencyKey(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementChange) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementChange_idempotencyKey,
+		func(ctx context.Context) (any, error) {
+			return obj.IdempotencyKey, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementChange_idempotencyKey(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementChange",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementChange_revision(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementChange) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementChange_revision,
+		func(ctx context.Context) (any, error) {
+			return obj.Revision, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementChange_revision(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementChange",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementChange_parentRevision(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementChange) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementChange_parentRevision,
+		func(ctx context.Context) (any, error) {
+			return obj.ParentRevision, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementChange_parentRevision(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementChange",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementChange_digest(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementChange) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementChange_digest,
+		func(ctx context.Context) (any, error) {
+			return obj.Digest, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementChange_digest(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementChange",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementChange_rollout(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementChange) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementChange_rollout,
+		func(ctx context.Context) (any, error) {
+			return obj.Rollout, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementRollout2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementRollout,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementChange_rollout(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementChange",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "status":
+				return ec.fieldContext_MediaPlacementRollout_status(ctx, field)
+			case "requiredRecipients":
+				return ec.fieldContext_MediaPlacementRollout_requiredRecipients(ctx, field)
+			case "appliedRecipients":
+				return ec.fieldContext_MediaPlacementRollout_appliedRecipients(ctx, field)
+			case "pendingRecipients":
+				return ec.fieldContext_MediaPlacementRollout_pendingRecipients(ctx, field)
+			case "existingSessionsRetained":
+				return ec.fieldContext_MediaPlacementRollout_existingSessionsRetained(ctx, field)
+			case "updatedAt":
+				return ec.fieldContext_MediaPlacementRollout_updatedAt(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type MediaPlacementRollout", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementChange_createdAt(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementChange) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementChange_createdAt,
+		func(ctx context.Context) (any, error) {
+			return obj.CreatedAt, nil
+		},
+		nil,
+		ec.marshalNTime2timeᚐTime,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementChange_createdAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementChange",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementConstraints_allow(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementConstraints) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementConstraints_allow,
+		func(ctx context.Context) (any, error) {
+			return obj.Allow, nil
+		},
+		nil,
+		ec.marshalOMediaPlacementAllow2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementAllow,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementConstraints_allow(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementConstraints",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "any":
+				return ec.fieldContext_MediaPlacementAllow_any(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type MediaPlacementAllow", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementConstraints_deny(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementConstraints) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementConstraints_deny,
+		func(ctx context.Context) (any, error) {
+			return obj.Deny, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementSelector2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementSelectorᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementConstraints_deny(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementConstraints",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "clusterIds":
+				return ec.fieldContext_MediaPlacementSelector_clusterIds(ctx, field)
+			case "ownerIds":
+				return ec.fieldContext_MediaPlacementSelector_ownerIds(ctx, field)
+			case "regions":
+				return ec.fieldContext_MediaPlacementSelector_regions(ctx, field)
+			case "classes":
+				return ec.fieldContext_MediaPlacementSelector_classes(ctx, field)
+			case "charging":
+				return ec.fieldContext_MediaPlacementSelector_charging(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type MediaPlacementSelector", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementDifference_path(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementDifference) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementDifference_path,
+		func(ctx context.Context) (any, error) {
+			return obj.Path, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementDifference_path(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementDifference",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementDifference_label(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementDifference) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementDifference_label,
+		func(ctx context.Context) (any, error) {
+			return obj.Label, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementDifference_label(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementDifference",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementDifference_before(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementDifference) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementDifference_before,
+		func(ctx context.Context) (any, error) {
+			return obj.Before, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementDifference_before(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementDifference",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementDifference_after(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementDifference) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementDifference_after,
+		func(ctx context.Context) (any, error) {
+			return obj.After, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementDifference_after(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementDifference",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementEffectivePolicy_schemaVersion(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementEffectivePolicy) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementEffectivePolicy_schemaVersion,
+		func(ctx context.Context) (any, error) {
+			return obj.SchemaVersion, nil
+		},
+		nil,
+		ec.marshalNInt2int,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementEffectivePolicy_schemaVersion(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementEffectivePolicy",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementEffectivePolicy_digest(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementEffectivePolicy) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementEffectivePolicy_digest,
+		func(ctx context.Context) (any, error) {
+			return obj.Digest, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementEffectivePolicy_digest(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementEffectivePolicy",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementEffectivePolicy_layers(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementEffectivePolicy) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementEffectivePolicy_layers,
+		func(ctx context.Context) (any, error) {
+			return obj.Layers, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementConstraints2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementConstraintsᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementEffectivePolicy_layers(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementEffectivePolicy",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "allow":
+				return ec.fieldContext_MediaPlacementConstraints_allow(ctx, field)
+			case "deny":
+				return ec.fieldContext_MediaPlacementConstraints_deny(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type MediaPlacementConstraints", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementEffectivePolicy_groups(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementEffectivePolicy) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementEffectivePolicy_groups,
+		func(ctx context.Context) (any, error) {
+			return obj.Groups, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementGroup2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementGroupᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementEffectivePolicy_groups(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementEffectivePolicy",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_MediaPlacementGroup_id(ctx, field)
+			case "match":
+				return ec.fieldContext_MediaPlacementGroup_match(ctx, field)
+			case "order":
+				return ec.fieldContext_MediaPlacementGroup_order(ctx, field)
+			case "spillover":
+				return ec.fieldContext_MediaPlacementGroup_spillover(ctx, field)
+			case "maxDistanceKm":
+				return ec.fieldContext_MediaPlacementGroup_maxDistanceKm(ctx, field)
+			case "geoHoleDistanceKm":
+				return ec.fieldContext_MediaPlacementGroup_geoHoleDistanceKm(ctx, field)
+			case "minImprovementKm":
+				return ec.fieldContext_MediaPlacementGroup_minImprovementKm(ctx, field)
+			case "priceCurrency":
+				return ec.fieldContext_MediaPlacementGroup_priceCurrency(ctx, field)
+			case "priceUnit":
+				return ec.fieldContext_MediaPlacementGroup_priceUnit(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type MediaPlacementGroup", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementError_code(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementError) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementError_code,
+		func(ctx context.Context) (any, error) {
+			return obj.Code, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementErrorCode2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementErrorCode,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementError_code(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementError",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type MediaPlacementErrorCode does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementError_message(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementError) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementError_message,
+		func(ctx context.Context) (any, error) {
+			return obj.Message, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementError_message(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementError",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementError_fields(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementError) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementError_fields,
+		func(ctx context.Context) (any, error) {
+			return obj.Fields, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementFieldError2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementFieldErrorᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementError_fields(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementError",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "path":
+				return ec.fieldContext_MediaPlacementFieldError_path(ctx, field)
+			case "groupId":
+				return ec.fieldContext_MediaPlacementFieldError_groupId(ctx, field)
+			case "message":
+				return ec.fieldContext_MediaPlacementFieldError_message(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type MediaPlacementFieldError", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementError_currentRevision(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementError) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementError_currentRevision,
+		func(ctx context.Context) (any, error) {
+			return obj.CurrentRevision, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementError_currentRevision(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementError",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementError_parentRevision(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementError) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementError_parentRevision,
+		func(ctx context.Context) (any, error) {
+			return obj.ParentRevision, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementError_parentRevision(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementError",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementError_retryAfterSeconds(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementError) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementError_retryAfterSeconds,
+		func(ctx context.Context) (any, error) {
+			return obj.RetryAfterSeconds, nil
+		},
+		nil,
+		ec.marshalOInt2ᚖint,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementError_retryAfterSeconds(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementError",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementFeatures_schemaVersion(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementFeatures) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementFeatures_schemaVersion,
+		func(ctx context.Context) (any, error) {
+			return obj.SchemaVersion, nil
+		},
+		nil,
+		ec.marshalNInt2int,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementFeatures_schemaVersion(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementFeatures",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementFeatures_geographicSpillover(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementFeatures) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementFeatures_geographicSpillover,
+		func(ctx context.Context) (any, error) {
+			return obj.GeographicSpillover, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementFeatures_geographicSpillover(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementFeatures",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementFeatures_priceOrdering(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementFeatures) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementFeatures_priceOrdering,
+		func(ctx context.Context) (any, error) {
+			return obj.PriceOrdering, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementFeatures_priceOrdering(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementFeatures",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementFeatures_supportedPresets(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementFeatures) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementFeatures_supportedPresets,
+		func(ctx context.Context) (any, error) {
+			return obj.SupportedPresets, nil
+		},
+		nil,
+		ec.marshalNString2ᚕstringᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementFeatures_supportedPresets(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementFeatures",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementFieldError_path(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementFieldError) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementFieldError_path,
+		func(ctx context.Context) (any, error) {
+			return obj.Path, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementFieldError_path(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementFieldError",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementFieldError_groupId(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementFieldError) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementFieldError_groupId,
+		func(ctx context.Context) (any, error) {
+			return obj.GroupID, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementFieldError_groupId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementFieldError",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementFieldError_message(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementFieldError) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementFieldError_message,
+		func(ctx context.Context) (any, error) {
+			return obj.Message, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementFieldError_message(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementFieldError",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementGroup_id(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementGroup) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementGroup_id,
+		func(ctx context.Context) (any, error) {
+			return obj.ID, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementGroup_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementGroup",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementGroup_match(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementGroup) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementGroup_match,
+		func(ctx context.Context) (any, error) {
+			return obj.Match, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementSelector2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementSelector,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementGroup_match(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementGroup",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "clusterIds":
+				return ec.fieldContext_MediaPlacementSelector_clusterIds(ctx, field)
+			case "ownerIds":
+				return ec.fieldContext_MediaPlacementSelector_ownerIds(ctx, field)
+			case "regions":
+				return ec.fieldContext_MediaPlacementSelector_regions(ctx, field)
+			case "classes":
+				return ec.fieldContext_MediaPlacementSelector_classes(ctx, field)
+			case "charging":
+				return ec.fieldContext_MediaPlacementSelector_charging(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type MediaPlacementSelector", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementGroup_order(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementGroup) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementGroup_order,
+		func(ctx context.Context) (any, error) {
+			return obj.Order, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementOrder2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementOrder,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementGroup_order(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementGroup",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type MediaPlacementOrder does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementGroup_spillover(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementGroup) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementGroup_spillover,
+		func(ctx context.Context) (any, error) {
+			return obj.Spillover, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementSpillover2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementSpillover,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementGroup_spillover(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementGroup",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type MediaPlacementSpillover does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementGroup_maxDistanceKm(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementGroup) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementGroup_maxDistanceKm,
+		func(ctx context.Context) (any, error) {
+			return obj.MaxDistanceKm, nil
+		},
+		nil,
+		ec.marshalNFloat2float64,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementGroup_maxDistanceKm(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementGroup",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementGroup_geoHoleDistanceKm(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementGroup) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementGroup_geoHoleDistanceKm,
+		func(ctx context.Context) (any, error) {
+			return obj.GeoHoleDistanceKm, nil
+		},
+		nil,
+		ec.marshalNFloat2float64,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementGroup_geoHoleDistanceKm(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementGroup",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementGroup_minImprovementKm(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementGroup) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementGroup_minImprovementKm,
+		func(ctx context.Context) (any, error) {
+			return obj.MinImprovementKm, nil
+		},
+		nil,
+		ec.marshalNFloat2float64,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementGroup_minImprovementKm(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementGroup",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Float does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementGroup_priceCurrency(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementGroup) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementGroup_priceCurrency,
+		func(ctx context.Context) (any, error) {
+			return obj.PriceCurrency, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementGroup_priceCurrency(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementGroup",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementGroup_priceUnit(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementGroup) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementGroup_priceUnit,
+		func(ctx context.Context) (any, error) {
+			return obj.PriceUnit, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementGroup_priceUnit(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementGroup",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementImpact_affectedStreams(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementImpact) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementImpact_affectedStreams,
+		func(ctx context.Context) (any, error) {
+			return obj.AffectedStreams, nil
+		},
+		nil,
+		ec.marshalNInt2int,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementImpact_affectedStreams(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementImpact",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementImpact_activePublishers(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementImpact) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementImpact_activePublishers,
+		func(ctx context.Context) (any, error) {
+			return obj.ActivePublishers, nil
+		},
+		nil,
+		ec.marshalNInt2int,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementImpact_activePublishers(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementImpact",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementImpact_complete(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementImpact) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementImpact_complete,
+		func(ctx context.Context) (any, error) {
+			return obj.Complete, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementImpact_complete(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementImpact",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementImpact_existingSessionsRetained(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementImpact) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementImpact_existingSessionsRetained,
+		func(ctx context.Context) (any, error) {
+			return obj.ExistingSessionsRetained, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementImpact_existingSessionsRetained(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementImpact",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementLegacyPins_streamId(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementLegacyPins) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementLegacyPins_streamId,
+		func(ctx context.Context) (any, error) {
+			return obj.StreamID, nil
+		},
+		nil,
+		ec.marshalNID2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementLegacyPins_streamId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementLegacyPins",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementLegacyPins_clusterIds(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementLegacyPins) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementLegacyPins_clusterIds,
+		func(ctx context.Context) (any, error) {
+			return obj.ClusterIds, nil
+		},
+		nil,
+		ec.marshalNID2ᚕstringᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementLegacyPins_clusterIds(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementLegacyPins",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementLegacyPins_currentlyEnforced(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementLegacyPins) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementLegacyPins_currentlyEnforced,
+		func(ctx context.Context) (any, error) {
+			return obj.CurrentlyEnforced, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementLegacyPins_currentlyEnforced(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementLegacyPins",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementOption_id(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementOption) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementOption_id,
+		func(ctx context.Context) (any, error) {
+			return obj.ID, nil
+		},
+		nil,
+		ec.marshalNID2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementOption_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementOption",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementOption_name(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementOption) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementOption_name,
+		func(ctx context.Context) (any, error) {
+			return obj.Name, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementOption_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementOption",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementOption_kind(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementOption) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementOption_kind,
+		func(ctx context.Context) (any, error) {
+			return obj.Kind, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementOptionKind2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementOptionKind,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementOption_kind(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementOption",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type MediaPlacementOptionKind does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementOption_clusterClass(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementOption) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementOption_clusterClass,
+		func(ctx context.Context) (any, error) {
+			return obj.ClusterClass, nil
+		},
+		nil,
+		ec.marshalOMediaPlacementClass2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementClass,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementOption_clusterClass(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementOption",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type MediaPlacementClass does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementOption_region(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementOption) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementOption_region,
+		func(ctx context.Context) (any, error) {
+			return obj.Region, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementOption_region(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementOption",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementOption_ownerId(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementOption) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementOption_ownerId,
+		func(ctx context.Context) (any, error) {
+			return obj.OwnerID, nil
+		},
+		nil,
+		ec.marshalOID2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementOption_ownerId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementOption",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementOption_eligible(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementOption) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementOption_eligible,
+		func(ctx context.Context) (any, error) {
+			return obj.Eligible, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementOption_eligible(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementOption",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementOption_reason(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementOption) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementOption_reason,
+		func(ctx context.Context) (any, error) {
+			return obj.Reason, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementOption_reason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementOption",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementOptionsConnection_nodes(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementOptionsConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementOptionsConnection_nodes,
+		func(ctx context.Context) (any, error) {
+			return obj.Nodes, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementOption2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementOptionᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementOptionsConnection_nodes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementOptionsConnection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_MediaPlacementOption_id(ctx, field)
+			case "name":
+				return ec.fieldContext_MediaPlacementOption_name(ctx, field)
+			case "kind":
+				return ec.fieldContext_MediaPlacementOption_kind(ctx, field)
+			case "clusterClass":
+				return ec.fieldContext_MediaPlacementOption_clusterClass(ctx, field)
+			case "region":
+				return ec.fieldContext_MediaPlacementOption_region(ctx, field)
+			case "ownerId":
+				return ec.fieldContext_MediaPlacementOption_ownerId(ctx, field)
+			case "eligible":
+				return ec.fieldContext_MediaPlacementOption_eligible(ctx, field)
+			case "reason":
+				return ec.fieldContext_MediaPlacementOption_reason(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type MediaPlacementOption", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementOptionsConnection_pageInfo(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementOptionsConnection) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementOptionsConnection_pageInfo,
+		func(ctx context.Context) (any, error) {
+			return obj.PageInfo, nil
+		},
+		nil,
+		ec.marshalNPageInfo2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐPageInfo,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementOptionsConnection_pageInfo(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementOptionsConnection",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "startCursor":
+				return ec.fieldContext_PageInfo_startCursor(ctx, field)
+			case "endCursor":
+				return ec.fieldContext_PageInfo_endCursor(ctx, field)
+			case "hasNextPage":
+				return ec.fieldContext_PageInfo_hasNextPage(ctx, field)
+			case "hasPreviousPage":
+				return ec.fieldContext_PageInfo_hasPreviousPage(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type PageInfo", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementPolicyState_scope(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementPolicyState) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementPolicyState_scope,
+		func(ctx context.Context) (any, error) {
+			return obj.Scope, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementScope2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementScope,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementPolicyState_scope(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementPolicyState",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "kind":
+				return ec.fieldContext_MediaPlacementScope_kind(ctx, field)
+			case "streamId":
+				return ec.fieldContext_MediaPlacementScope_streamId(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type MediaPlacementScope", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementPolicyState_revision(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementPolicyState) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementPolicyState_revision,
+		func(ctx context.Context) (any, error) {
+			return obj.Revision, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementPolicyState_revision(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementPolicyState",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementPolicyState_parentRevision(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementPolicyState) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementPolicyState_parentRevision,
+		func(ctx context.Context) (any, error) {
+			return obj.ParentRevision, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementPolicyState_parentRevision(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementPolicyState",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementPolicyState_activeRevision(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementPolicyState) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementPolicyState_activeRevision,
+		func(ctx context.Context) (any, error) {
+			return obj.ActiveRevision, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementPolicyState_activeRevision(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementPolicyState",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementPolicyState_activeParentRevision(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementPolicyState) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementPolicyState_activeParentRevision,
+		func(ctx context.Context) (any, error) {
+			return obj.ActiveParentRevision, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementPolicyState_activeParentRevision(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementPolicyState",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementPolicyState_verbs(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementPolicyState) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementPolicyState_verbs,
+		func(ctx context.Context) (any, error) {
+			return obj.Verbs, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementVerbPolicy2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementVerbPolicyᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementPolicyState_verbs(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementPolicyState",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "verb":
+				return ec.fieldContext_MediaPlacementVerbPolicy_verb(ctx, field)
+			case "ownRules":
+				return ec.fieldContext_MediaPlacementVerbPolicy_ownRules(ctx, field)
+			case "inheritedRules":
+				return ec.fieldContext_MediaPlacementVerbPolicy_inheritedRules(ctx, field)
+			case "requestedEffective":
+				return ec.fieldContext_MediaPlacementVerbPolicy_requestedEffective(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type MediaPlacementVerbPolicy", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementPolicyState_rollout(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementPolicyState) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementPolicyState_rollout,
+		func(ctx context.Context) (any, error) {
+			return obj.Rollout, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementRollout2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementRollout,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementPolicyState_rollout(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementPolicyState",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "status":
+				return ec.fieldContext_MediaPlacementRollout_status(ctx, field)
+			case "requiredRecipients":
+				return ec.fieldContext_MediaPlacementRollout_requiredRecipients(ctx, field)
+			case "appliedRecipients":
+				return ec.fieldContext_MediaPlacementRollout_appliedRecipients(ctx, field)
+			case "pendingRecipients":
+				return ec.fieldContext_MediaPlacementRollout_pendingRecipients(ctx, field)
+			case "existingSessionsRetained":
+				return ec.fieldContext_MediaPlacementRollout_existingSessionsRetained(ctx, field)
+			case "updatedAt":
+				return ec.fieldContext_MediaPlacementRollout_updatedAt(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type MediaPlacementRollout", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementPolicyState_actions(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementPolicyState) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementPolicyState_actions,
+		func(ctx context.Context) (any, error) {
+			return obj.Actions, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementActions2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementActions,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementPolicyState_actions(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementPolicyState",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "canRead":
+				return ec.fieldContext_MediaPlacementActions_canRead(ctx, field)
+			case "canPreview":
+				return ec.fieldContext_MediaPlacementActions_canPreview(ctx, field)
+			case "canManage":
+				return ec.fieldContext_MediaPlacementActions_canManage(ctx, field)
+			case "canInspectPrivateCandidates":
+				return ec.fieldContext_MediaPlacementActions_canInspectPrivateCandidates(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type MediaPlacementActions", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementPolicyState_features(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementPolicyState) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementPolicyState_features,
+		func(ctx context.Context) (any, error) {
+			return obj.Features, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementFeatures2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementFeatures,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementPolicyState_features(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementPolicyState",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "schemaVersion":
+				return ec.fieldContext_MediaPlacementFeatures_schemaVersion(ctx, field)
+			case "geographicSpillover":
+				return ec.fieldContext_MediaPlacementFeatures_geographicSpillover(ctx, field)
+			case "priceOrdering":
+				return ec.fieldContext_MediaPlacementFeatures_priceOrdering(ctx, field)
+			case "supportedPresets":
+				return ec.fieldContext_MediaPlacementFeatures_supportedPresets(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type MediaPlacementFeatures", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementPreferences_groups(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementPreferences) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementPreferences_groups,
+		func(ctx context.Context) (any, error) {
+			return obj.Groups, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementGroup2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementGroupᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementPreferences_groups(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementPreferences",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_MediaPlacementGroup_id(ctx, field)
+			case "match":
+				return ec.fieldContext_MediaPlacementGroup_match(ctx, field)
+			case "order":
+				return ec.fieldContext_MediaPlacementGroup_order(ctx, field)
+			case "spillover":
+				return ec.fieldContext_MediaPlacementGroup_spillover(ctx, field)
+			case "maxDistanceKm":
+				return ec.fieldContext_MediaPlacementGroup_maxDistanceKm(ctx, field)
+			case "geoHoleDistanceKm":
+				return ec.fieldContext_MediaPlacementGroup_geoHoleDistanceKm(ctx, field)
+			case "minImprovementKm":
+				return ec.fieldContext_MediaPlacementGroup_minImprovementKm(ctx, field)
+			case "priceCurrency":
+				return ec.fieldContext_MediaPlacementGroup_priceCurrency(ctx, field)
+			case "priceUnit":
+				return ec.fieldContext_MediaPlacementGroup_priceUnit(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type MediaPlacementGroup", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementPreview_scope(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementPreview) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementPreview_scope,
+		func(ctx context.Context) (any, error) {
+			return obj.Scope, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementScope2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementScope,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementPreview_scope(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementPreview",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "kind":
+				return ec.fieldContext_MediaPlacementScope_kind(ctx, field)
+			case "streamId":
+				return ec.fieldContext_MediaPlacementScope_streamId(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type MediaPlacementScope", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementPreview_verb(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementPreview) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementPreview_verb,
+		func(ctx context.Context) (any, error) {
+			return obj.Verb, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementVerb2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementVerb,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementPreview_verb(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementPreview",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type MediaPlacementVerb does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementPreview_revision(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementPreview) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementPreview_revision,
+		func(ctx context.Context) (any, error) {
+			return obj.Revision, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementPreview_revision(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementPreview",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementPreview_parentRevision(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementPreview) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementPreview_parentRevision,
+		func(ctx context.Context) (any, error) {
+			return obj.ParentRevision, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementPreview_parentRevision(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementPreview",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementPreview_digest(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementPreview) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementPreview_digest,
+		func(ctx context.Context) (any, error) {
+			return obj.Digest, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementPreview_digest(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementPreview",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementPreview_reason(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementPreview) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementPreview_reason,
+		func(ctx context.Context) (any, error) {
+			return obj.Reason, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementPreview_reason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementPreview",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementPreview_selected(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementPreview) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementPreview_selected,
+		func(ctx context.Context) (any, error) {
+			return obj.Selected, nil
+		},
+		nil,
+		ec.marshalOMediaPlacementCandidateExplanation2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementCandidateExplanation,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementPreview_selected(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementPreview",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "clusterId":
+				return ec.fieldContext_MediaPlacementCandidateExplanation_clusterId(ctx, field)
+			case "clusterName":
+				return ec.fieldContext_MediaPlacementCandidateExplanation_clusterName(ctx, field)
+			case "region":
+				return ec.fieldContext_MediaPlacementCandidateExplanation_region(ctx, field)
+			case "nodeId":
+				return ec.fieldContext_MediaPlacementCandidateExplanation_nodeId(ctx, field)
+			case "groupId":
+				return ec.fieldContext_MediaPlacementCandidateExplanation_groupId(ctx, field)
+			case "reason":
+				return ec.fieldContext_MediaPlacementCandidateExplanation_reason(ctx, field)
+			case "distanceKm":
+				return ec.fieldContext_MediaPlacementCandidateExplanation_distanceKm(ctx, field)
+			case "requiresSourcePull":
+				return ec.fieldContext_MediaPlacementCandidateExplanation_requiresSourcePull(ctx, field)
+			case "price":
+				return ec.fieldContext_MediaPlacementCandidateExplanation_price(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type MediaPlacementCandidateExplanation", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementPreview_candidates(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementPreview) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementPreview_candidates,
+		func(ctx context.Context) (any, error) {
+			return obj.Candidates, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementCandidateExplanation2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementCandidateExplanationᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementPreview_candidates(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementPreview",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "clusterId":
+				return ec.fieldContext_MediaPlacementCandidateExplanation_clusterId(ctx, field)
+			case "clusterName":
+				return ec.fieldContext_MediaPlacementCandidateExplanation_clusterName(ctx, field)
+			case "region":
+				return ec.fieldContext_MediaPlacementCandidateExplanation_region(ctx, field)
+			case "nodeId":
+				return ec.fieldContext_MediaPlacementCandidateExplanation_nodeId(ctx, field)
+			case "groupId":
+				return ec.fieldContext_MediaPlacementCandidateExplanation_groupId(ctx, field)
+			case "reason":
+				return ec.fieldContext_MediaPlacementCandidateExplanation_reason(ctx, field)
+			case "distanceKm":
+				return ec.fieldContext_MediaPlacementCandidateExplanation_distanceKm(ctx, field)
+			case "requiresSourcePull":
+				return ec.fieldContext_MediaPlacementCandidateExplanation_requiresSourcePull(ctx, field)
+			case "price":
+				return ec.fieldContext_MediaPlacementCandidateExplanation_price(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type MediaPlacementCandidateExplanation", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementPreview_transitions(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementPreview) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementPreview_transitions,
+		func(ctx context.Context) (any, error) {
+			return obj.Transitions, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementTransition2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementTransitionᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementPreview_transitions(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementPreview",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "fromGroup":
+				return ec.fieldContext_MediaPlacementTransition_fromGroup(ctx, field)
+			case "reason":
+				return ec.fieldContext_MediaPlacementTransition_reason(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type MediaPlacementTransition", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementPreview_observedAt(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementPreview) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementPreview_observedAt,
+		func(ctx context.Context) (any, error) {
+			return obj.ObservedAt, nil
+		},
+		nil,
+		ec.marshalNTime2timeᚐTime,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementPreview_observedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementPreview",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementPreview_expiresAt(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementPreview) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementPreview_expiresAt,
+		func(ctx context.Context) (any, error) {
+			return obj.ExpiresAt, nil
+		},
+		nil,
+		ec.marshalNTime2timeᚐTime,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementPreview_expiresAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementPreview",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementPreview_complete(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementPreview) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementPreview_complete,
+		func(ctx context.Context) (any, error) {
+			return obj.Complete, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementPreview_complete(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementPreview",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementPreview_sourceEvaluated(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementPreview) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementPreview_sourceEvaluated,
+		func(ctx context.Context) (any, error) {
+			return obj.SourceEvaluated, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementPreview_sourceEvaluated(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementPreview",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementPreview_activeIngestClusterId(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementPreview) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementPreview_activeIngestClusterId,
+		func(ctx context.Context) (any, error) {
+			return obj.ActiveIngestClusterID, nil
+		},
+		nil,
+		ec.marshalOID2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementPreview_activeIngestClusterId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementPreview",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementPrice_amountMicros(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementPrice) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementPrice_amountMicros,
+		func(ctx context.Context) (any, error) {
+			return obj.AmountMicros, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementPrice_amountMicros(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementPrice",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementPrice_currency(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementPrice) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementPrice_currency,
+		func(ctx context.Context) (any, error) {
+			return obj.Currency, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementPrice_currency(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementPrice",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementPrice_unit(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementPrice) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementPrice_unit,
+		func(ctx context.Context) (any, error) {
+			return obj.Unit, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementPrice_unit(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementPrice",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementPrice_revision(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementPrice) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementPrice_revision,
+		func(ctx context.Context) (any, error) {
+			return obj.Revision, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementPrice_revision(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementPrice",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementPrice_expiresAt(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementPrice) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementPrice_expiresAt,
+		func(ctx context.Context) (any, error) {
+			return obj.ExpiresAt, nil
+		},
+		nil,
+		ec.marshalNTime2timeᚐTime,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementPrice_expiresAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementPrice",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementRecipient_id(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementRecipient) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementRecipient_id,
+		func(ctx context.Context) (any, error) {
+			return obj.ID, nil
+		},
+		nil,
+		ec.marshalNID2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementRecipient_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementRecipient",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementRecipient_name(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementRecipient) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementRecipient_name,
+		func(ctx context.Context) (any, error) {
+			return obj.Name, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementRecipient_name(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementRecipient",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementRecipient_status(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementRecipient) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementRecipient_status,
+		func(ctx context.Context) (any, error) {
+			return obj.Status, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementRolloutStatus2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementRolloutStatus,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementRecipient_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementRecipient",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type MediaPlacementRolloutStatus does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementRecipient_reason(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementRecipient) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementRecipient_reason,
+		func(ctx context.Context) (any, error) {
+			return obj.Reason, nil
+		},
+		nil,
+		ec.marshalOString2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementRecipient_reason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementRecipient",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementRecipient_authorityExpiresAt(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementRecipient) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementRecipient_authorityExpiresAt,
+		func(ctx context.Context) (any, error) {
+			return obj.AuthorityExpiresAt, nil
+		},
+		nil,
+		ec.marshalOTime2ᚖtimeᚐTime,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementRecipient_authorityExpiresAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementRecipient",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementReview_reviewToken(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementReview) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementReview_reviewToken,
+		func(ctx context.Context) (any, error) {
+			return obj.ReviewToken, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementReview_reviewToken(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementReview",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementReview_digest(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementReview) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementReview_digest,
+		func(ctx context.Context) (any, error) {
+			return obj.Digest, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementReview_digest(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementReview",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementReview_expiresAt(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementReview) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementReview_expiresAt,
+		func(ctx context.Context) (any, error) {
+			return obj.ExpiresAt, nil
+		},
+		nil,
+		ec.marshalNTime2timeᚐTime,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementReview_expiresAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementReview",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementReview_differences(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementReview) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementReview_differences,
+		func(ctx context.Context) (any, error) {
+			return obj.Differences, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementDifference2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementDifferenceᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementReview_differences(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementReview",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "path":
+				return ec.fieldContext_MediaPlacementDifference_path(ctx, field)
+			case "label":
+				return ec.fieldContext_MediaPlacementDifference_label(ctx, field)
+			case "before":
+				return ec.fieldContext_MediaPlacementDifference_before(ctx, field)
+			case "after":
+				return ec.fieldContext_MediaPlacementDifference_after(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type MediaPlacementDifference", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementReview_warnings(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementReview) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementReview_warnings,
+		func(ctx context.Context) (any, error) {
+			return obj.Warnings, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementWarning2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementWarningᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementReview_warnings(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementReview",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_MediaPlacementWarning_id(ctx, field)
+			case "severity":
+				return ec.fieldContext_MediaPlacementWarning_severity(ctx, field)
+			case "message":
+				return ec.fieldContext_MediaPlacementWarning_message(ctx, field)
+			case "acknowledgementRequired":
+				return ec.fieldContext_MediaPlacementWarning_acknowledgementRequired(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type MediaPlacementWarning", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementReview_impact(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementReview) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementReview_impact,
+		func(ctx context.Context) (any, error) {
+			return obj.Impact, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementImpact2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementImpact,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementReview_impact(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementReview",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "affectedStreams":
+				return ec.fieldContext_MediaPlacementImpact_affectedStreams(ctx, field)
+			case "activePublishers":
+				return ec.fieldContext_MediaPlacementImpact_activePublishers(ctx, field)
+			case "complete":
+				return ec.fieldContext_MediaPlacementImpact_complete(ctx, field)
+			case "existingSessionsRetained":
+				return ec.fieldContext_MediaPlacementImpact_existingSessionsRetained(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type MediaPlacementImpact", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementRollout_status(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementRollout) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementRollout_status,
+		func(ctx context.Context) (any, error) {
+			return obj.Status, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementRolloutStatus2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementRolloutStatus,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementRollout_status(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementRollout",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type MediaPlacementRolloutStatus does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementRollout_requiredRecipients(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementRollout) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementRollout_requiredRecipients,
+		func(ctx context.Context) (any, error) {
+			return obj.RequiredRecipients, nil
+		},
+		nil,
+		ec.marshalNInt2int,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementRollout_requiredRecipients(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementRollout",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementRollout_appliedRecipients(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementRollout) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementRollout_appliedRecipients,
+		func(ctx context.Context) (any, error) {
+			return obj.AppliedRecipients, nil
+		},
+		nil,
+		ec.marshalNInt2int,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementRollout_appliedRecipients(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementRollout",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementRollout_pendingRecipients(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementRollout) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementRollout_pendingRecipients,
+		func(ctx context.Context) (any, error) {
+			return obj.PendingRecipients, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementRecipient2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementRecipientᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementRollout_pendingRecipients(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementRollout",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_MediaPlacementRecipient_id(ctx, field)
+			case "name":
+				return ec.fieldContext_MediaPlacementRecipient_name(ctx, field)
+			case "status":
+				return ec.fieldContext_MediaPlacementRecipient_status(ctx, field)
+			case "reason":
+				return ec.fieldContext_MediaPlacementRecipient_reason(ctx, field)
+			case "authorityExpiresAt":
+				return ec.fieldContext_MediaPlacementRecipient_authorityExpiresAt(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type MediaPlacementRecipient", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementRollout_existingSessionsRetained(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementRollout) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementRollout_existingSessionsRetained,
+		func(ctx context.Context) (any, error) {
+			return obj.ExistingSessionsRetained, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementRollout_existingSessionsRetained(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementRollout",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementRollout_updatedAt(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementRollout) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementRollout_updatedAt,
+		func(ctx context.Context) (any, error) {
+			return obj.UpdatedAt, nil
+		},
+		nil,
+		ec.marshalOTime2ᚖtimeᚐTime,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementRollout_updatedAt(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementRollout",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Time does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementRules_schemaVersion(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementRules) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementRules_schemaVersion,
+		func(ctx context.Context) (any, error) {
+			return obj.SchemaVersion, nil
+		},
+		nil,
+		ec.marshalNInt2int,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementRules_schemaVersion(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementRules",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementRules_constraints(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementRules) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementRules_constraints,
+		func(ctx context.Context) (any, error) {
+			return obj.Constraints, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementConstraints2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementConstraints,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementRules_constraints(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementRules",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "allow":
+				return ec.fieldContext_MediaPlacementConstraints_allow(ctx, field)
+			case "deny":
+				return ec.fieldContext_MediaPlacementConstraints_deny(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type MediaPlacementConstraints", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementRules_preferences(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementRules) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementRules_preferences,
+		func(ctx context.Context) (any, error) {
+			return obj.Preferences, nil
+		},
+		nil,
+		ec.marshalOMediaPlacementPreferences2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementPreferences,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementRules_preferences(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementRules",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "groups":
+				return ec.fieldContext_MediaPlacementPreferences_groups(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type MediaPlacementPreferences", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementScope_kind(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementScope) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementScope_kind,
+		func(ctx context.Context) (any, error) {
+			return obj.Kind, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementScopeKind2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementScopeKind,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementScope_kind(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementScope",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type MediaPlacementScopeKind does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementScope_streamId(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementScope) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementScope_streamId,
+		func(ctx context.Context) (any, error) {
+			return obj.StreamID, nil
+		},
+		nil,
+		ec.marshalOID2ᚖstring,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementScope_streamId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementScope",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementSelector_clusterIds(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementSelector) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementSelector_clusterIds,
+		func(ctx context.Context) (any, error) {
+			return obj.ClusterIds, nil
+		},
+		nil,
+		ec.marshalNID2ᚕstringᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementSelector_clusterIds(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementSelector",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementSelector_ownerIds(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementSelector) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementSelector_ownerIds,
+		func(ctx context.Context) (any, error) {
+			return obj.OwnerIds, nil
+		},
+		nil,
+		ec.marshalNID2ᚕstringᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementSelector_ownerIds(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementSelector",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type ID does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementSelector_regions(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementSelector) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementSelector_regions,
+		func(ctx context.Context) (any, error) {
+			return obj.Regions, nil
+		},
+		nil,
+		ec.marshalNString2ᚕstringᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementSelector_regions(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementSelector",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementSelector_classes(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementSelector) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementSelector_classes,
+		func(ctx context.Context) (any, error) {
+			return obj.Classes, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementClass2ᚕframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementClassᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementSelector_classes(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementSelector",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type MediaPlacementClass does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementSelector_charging(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementSelector) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementSelector_charging,
+		func(ctx context.Context) (any, error) {
+			return obj.Charging, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementCharging2ᚕframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementChargingᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementSelector_charging(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementSelector",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type MediaPlacementCharging does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementTransition_fromGroup(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementTransition) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementTransition_fromGroup,
+		func(ctx context.Context) (any, error) {
+			return obj.FromGroup, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementTransition_fromGroup(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementTransition",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementTransition_reason(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementTransition) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementTransition_reason,
+		func(ctx context.Context) (any, error) {
+			return obj.Reason, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementTransition_reason(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementTransition",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementVerbPolicy_verb(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementVerbPolicy) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementVerbPolicy_verb,
+		func(ctx context.Context) (any, error) {
+			return obj.Verb, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementVerb2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementVerb,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementVerbPolicy_verb(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementVerbPolicy",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type MediaPlacementVerb does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementVerbPolicy_ownRules(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementVerbPolicy) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementVerbPolicy_ownRules,
+		func(ctx context.Context) (any, error) {
+			return obj.OwnRules, nil
+		},
+		nil,
+		ec.marshalOMediaPlacementRules2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementRules,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementVerbPolicy_ownRules(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementVerbPolicy",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "schemaVersion":
+				return ec.fieldContext_MediaPlacementRules_schemaVersion(ctx, field)
+			case "constraints":
+				return ec.fieldContext_MediaPlacementRules_constraints(ctx, field)
+			case "preferences":
+				return ec.fieldContext_MediaPlacementRules_preferences(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type MediaPlacementRules", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementVerbPolicy_inheritedRules(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementVerbPolicy) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementVerbPolicy_inheritedRules,
+		func(ctx context.Context) (any, error) {
+			return obj.InheritedRules, nil
+		},
+		nil,
+		ec.marshalOMediaPlacementRules2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementRules,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementVerbPolicy_inheritedRules(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementVerbPolicy",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "schemaVersion":
+				return ec.fieldContext_MediaPlacementRules_schemaVersion(ctx, field)
+			case "constraints":
+				return ec.fieldContext_MediaPlacementRules_constraints(ctx, field)
+			case "preferences":
+				return ec.fieldContext_MediaPlacementRules_preferences(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type MediaPlacementRules", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementVerbPolicy_requestedEffective(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementVerbPolicy) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementVerbPolicy_requestedEffective,
+		func(ctx context.Context) (any, error) {
+			return obj.RequestedEffective, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementEffectivePolicy2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementEffectivePolicy,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementVerbPolicy_requestedEffective(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementVerbPolicy",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "schemaVersion":
+				return ec.fieldContext_MediaPlacementEffectivePolicy_schemaVersion(ctx, field)
+			case "digest":
+				return ec.fieldContext_MediaPlacementEffectivePolicy_digest(ctx, field)
+			case "layers":
+				return ec.fieldContext_MediaPlacementEffectivePolicy_layers(ctx, field)
+			case "groups":
+				return ec.fieldContext_MediaPlacementEffectivePolicy_groups(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type MediaPlacementEffectivePolicy", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementWarning_id(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementWarning) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementWarning_id,
+		func(ctx context.Context) (any, error) {
+			return obj.ID, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementWarning_id(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementWarning",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementWarning_severity(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementWarning) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementWarning_severity,
+		func(ctx context.Context) (any, error) {
+			return obj.Severity, nil
+		},
+		nil,
+		ec.marshalNMediaPlacementWarningSeverity2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementWarningSeverity,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementWarning_severity(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementWarning",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type MediaPlacementWarningSeverity does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementWarning_message(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementWarning) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementWarning_message,
+		func(ctx context.Context) (any, error) {
+			return obj.Message, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementWarning_message(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementWarning",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _MediaPlacementWarning_acknowledgementRequired(ctx context.Context, field graphql.CollectedField, obj *model.MediaPlacementWarning) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_MediaPlacementWarning_acknowledgementRequired,
+		func(ctx context.Context) (any, error) {
+			return obj.AcknowledgementRequired, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_MediaPlacementWarning_acknowledgementRequired(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "MediaPlacementWarning",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
 func (ec *executionContext) _MediaRetentionBounds_maxRecordingRetentionDays(ctx context.Context, field graphql.CollectedField, obj *commodorepb.MediaRetentionBounds) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
@@ -65974,6 +72664,88 @@ func (ec *executionContext) fieldContext_Mutation_setMediaRetentionPolicy(ctx co
 	}()
 	ctx = graphql.WithFieldContext(ctx, fc)
 	if fc.Args, err = ec.field_Mutation_setMediaRetentionPolicy_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_applyMediaPlacementChange(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Mutation_applyMediaPlacementChange,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().ApplyMediaPlacementChange(ctx, fc.Args["input"].(model.ApplyMediaPlacementChangeInput))
+		},
+		nil,
+		ec.marshalNMediaPlacementChangeResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementChangeResult,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Mutation_applyMediaPlacementChange(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type MediaPlacementChangeResult does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_applyMediaPlacementChange_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Mutation_applyClusterMediaConsentChange(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Mutation_applyClusterMediaConsentChange,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Mutation().ApplyClusterMediaConsentChange(ctx, fc.Args["input"].(model.ApplyMediaCapacityConsentInput))
+		},
+		nil,
+		ec.marshalNMediaCapacityConsentChangeResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaCapacityConsentChangeResult,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Mutation_applyClusterMediaConsentChange(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Mutation",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type MediaCapacityConsentChangeResult does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Mutation_applyClusterMediaConsentChange_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
 		ec.Error(ctx, err)
 		return fc, err
 	}
@@ -84360,7 +91132,7 @@ func (ec *executionContext) _Query_resolveViewerEndpoint(ctx context.Context, fi
 		ec.fieldContext_Query_resolveViewerEndpoint,
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().ResolveViewerEndpoint(ctx, fc.Args["contentId"].(string))
+			return ec.Resolvers.Query().ResolveViewerEndpoint(ctx, fc.Args["contentId"].(string), fc.Args["protocol"].(*model.MediaViewerProtocol))
 		},
 		nil,
 		ec.marshalOViewerEndpointResponse2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋsharedᚐViewerEndpointResponse,
@@ -84409,7 +91181,7 @@ func (ec *executionContext) _Query_resolveIngestEndpoint(ctx context.Context, fi
 		ec.fieldContext_Query_resolveIngestEndpoint,
 		func(ctx context.Context) (any, error) {
 			fc := graphql.GetFieldContext(ctx)
-			return ec.Resolvers.Query().ResolveIngestEndpoint(ctx, fc.Args["streamKey"].(string))
+			return ec.Resolvers.Query().ResolveIngestEndpoint(ctx, fc.Args["streamKey"].(string), fc.Args["protocol"].(*model.MediaIngestProtocol))
 		},
 		nil,
 		ec.marshalOIngestEndpointResponse2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋsharedᚐIngestEndpointResponse,
@@ -84891,6 +91663,375 @@ func (ec *executionContext) fieldContext_Query_mediaRetentionPolicy(_ context.Co
 			}
 			return nil, fmt.Errorf("no field named %q was found under type MediaRetentionPolicy", field.Name)
 		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_mediaPlacementPolicy(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Query_mediaPlacementPolicy,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().MediaPlacementPolicy(ctx, fc.Args["scope"].(model.MediaPlacementScopeInput))
+		},
+		nil,
+		ec.marshalNMediaPlacementPolicyResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementPolicyResult,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Query_mediaPlacementPolicy(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type MediaPlacementPolicyResult does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_mediaPlacementPolicy_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_mediaPlacementOptions(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Query_mediaPlacementOptions,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().MediaPlacementOptions(ctx, fc.Args["scope"].(model.MediaPlacementScopeInput), fc.Args["filter"].(*model.MediaPlacementOptionsFilter), fc.Args["after"].(*string), fc.Args["first"].(*int))
+		},
+		nil,
+		ec.marshalNMediaPlacementOptionsResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementOptionsResult,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Query_mediaPlacementOptions(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type MediaPlacementOptionsResult does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_mediaPlacementOptions_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_previewMediaPlacement(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Query_previewMediaPlacement,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().PreviewMediaPlacement(ctx, fc.Args["input"].(model.PreviewMediaPlacementInput))
+		},
+		nil,
+		ec.marshalNMediaPlacementPreviewResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementPreviewResult,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Query_previewMediaPlacement(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type MediaPlacementPreviewResult does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_previewMediaPlacement_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_reviewMediaPlacementChange(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Query_reviewMediaPlacementChange,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().ReviewMediaPlacementChange(ctx, fc.Args["input"].(model.ReviewMediaPlacementChangeInput))
+		},
+		nil,
+		ec.marshalNMediaPlacementReviewResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementReviewResult,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Query_reviewMediaPlacementChange(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type MediaPlacementReviewResult does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_reviewMediaPlacementChange_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_mediaPlacementChange(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Query_mediaPlacementChange,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().MediaPlacementChange(ctx, fc.Args["scope"].(model.MediaPlacementScopeInput), fc.Args["idempotencyKey"].(string))
+		},
+		nil,
+		ec.marshalNMediaPlacementChangeResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementChangeResult,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Query_mediaPlacementChange(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type MediaPlacementChangeResult does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_mediaPlacementChange_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_mediaPlacementLegacyPins(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Query_mediaPlacementLegacyPins,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().MediaPlacementLegacyPins(ctx, fc.Args["streamId"].(string))
+		},
+		nil,
+		ec.marshalNMediaPlacementLegacyPinsResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementLegacyPinsResult,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Query_mediaPlacementLegacyPins(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type MediaPlacementLegacyPinsResult does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_mediaPlacementLegacyPins_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_clusterMediaConsent(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Query_clusterMediaConsent,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().ClusterMediaConsent(ctx, fc.Args["clusterId"].(string))
+		},
+		nil,
+		ec.marshalNMediaCapacityConsentResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaCapacityConsentResult,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Query_clusterMediaConsent(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type MediaCapacityConsentResult does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_clusterMediaConsent_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_reviewClusterMediaConsentChange(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Query_reviewClusterMediaConsentChange,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().ReviewClusterMediaConsentChange(ctx, fc.Args["input"].(model.ReviewMediaCapacityConsentInput))
+		},
+		nil,
+		ec.marshalNMediaPlacementReviewResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementReviewResult,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Query_reviewClusterMediaConsentChange(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type MediaPlacementReviewResult does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_reviewClusterMediaConsentChange_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Query_clusterMediaConsentChange(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Query_clusterMediaConsentChange,
+		func(ctx context.Context) (any, error) {
+			fc := graphql.GetFieldContext(ctx)
+			return ec.Resolvers.Query().ClusterMediaConsentChange(ctx, fc.Args["clusterId"].(string), fc.Args["idempotencyKey"].(string))
+		},
+		nil,
+		ec.marshalNMediaCapacityConsentChangeResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaCapacityConsentChangeResult,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_Query_clusterMediaConsentChange(ctx context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Query",
+		Field:      field,
+		IsMethod:   true,
+		IsResolver: true,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type MediaCapacityConsentChangeResult does not have child fields")
+		},
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			err = ec.Recover(ctx, r)
+			ec.Error(ctx, err)
+		}
+	}()
+	ctx = graphql.WithFieldContext(ctx, fc)
+	if fc.Args, err = ec.field_Query_clusterMediaConsentChange_args(ctx, field.ArgumentMap(ec.Variables)); err != nil {
+		ec.Error(ctx, err)
+		return fc, err
 	}
 	return fc, nil
 }
@@ -120142,6 +127283,165 @@ func (ec *executionContext) fieldContext___Type_isOneOf(_ context.Context, field
 
 // region    **************************** input.gotpl *****************************
 
+func (ec *executionContext) unmarshalInputApplyMediaCapacityConsentInput(ctx context.Context, obj any) (model.ApplyMediaCapacityConsentInput, error) {
+	var it model.ApplyMediaCapacityConsentInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	if _, present := asMap["acknowledgedWarningIds"]; !present {
+		asMap["acknowledgedWarningIds"] = []any{}
+	}
+
+	fieldsInOrder := [...]string{"clusterId", "expectedRevision", "allowIngest", "allowServe", "allowExternalSource", "reviewToken", "idempotencyKey", "acknowledgedWarningIds"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "clusterId":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("clusterId"))
+			data, err := ec.unmarshalNID2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ClusterID = data
+		case "expectedRevision":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("expectedRevision"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ExpectedRevision = data
+		case "allowIngest":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("allowIngest"))
+			data, err := ec.unmarshalNBoolean2bool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AllowIngest = data
+		case "allowServe":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("allowServe"))
+			data, err := ec.unmarshalNBoolean2bool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AllowServe = data
+		case "allowExternalSource":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("allowExternalSource"))
+			data, err := ec.unmarshalNBoolean2bool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AllowExternalSource = data
+		case "reviewToken":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("reviewToken"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ReviewToken = data
+		case "idempotencyKey":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("idempotencyKey"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.IdempotencyKey = data
+		case "acknowledgedWarningIds":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("acknowledgedWarningIds"))
+			data, err := ec.unmarshalNString2ᚕstringᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AcknowledgedWarningIds = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputApplyMediaPlacementChangeInput(ctx context.Context, obj any) (model.ApplyMediaPlacementChangeInput, error) {
+	var it model.ApplyMediaPlacementChangeInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	if _, present := asMap["acknowledgedWarningIds"]; !present {
+		asMap["acknowledgedWarningIds"] = []any{}
+	}
+
+	fieldsInOrder := [...]string{"scope", "expectedRevision", "expectedParentRevision", "updates", "reviewToken", "idempotencyKey", "acknowledgedWarningIds"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "scope":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("scope"))
+			data, err := ec.unmarshalNMediaPlacementScopeInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementScopeInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Scope = data
+		case "expectedRevision":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("expectedRevision"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ExpectedRevision = data
+		case "expectedParentRevision":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("expectedParentRevision"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ExpectedParentRevision = data
+		case "updates":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("updates"))
+			data, err := ec.unmarshalNMediaPlacementVerbUpdateInput2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementVerbUpdateInputᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Updates = data
+		case "reviewToken":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("reviewToken"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ReviewToken = data
+		case "idempotencyKey":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("idempotencyKey"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.IdempotencyKey = data
+		case "acknowledgedWarningIds":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("acknowledgedWarningIds"))
+			data, err := ec.unmarshalNString2ᚕstringᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AcknowledgedWarningIds = data
+		}
+	}
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputBillingAddressInput(ctx context.Context, obj any) (model.BillingAddressInput, error) {
 	var it model.BillingAddressInput
 	if obj == nil {
@@ -121231,6 +128531,477 @@ func (ec *executionContext) unmarshalInputLinkEmailInput(ctx context.Context, ob
 	return it, nil
 }
 
+func (ec *executionContext) unmarshalInputMediaPlacementAllowInput(ctx context.Context, obj any) (model.MediaPlacementAllowInput, error) {
+	var it model.MediaPlacementAllowInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"any"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "any":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("any"))
+			data, err := ec.unmarshalNMediaPlacementSelectorInput2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementSelectorInputᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Any = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputMediaPlacementConstraintsInput(ctx context.Context, obj any) (model.MediaPlacementConstraintsInput, error) {
+	var it model.MediaPlacementConstraintsInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	if _, present := asMap["deny"]; !present {
+		asMap["deny"] = []any{}
+	}
+
+	fieldsInOrder := [...]string{"allow", "deny"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "allow":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("allow"))
+			data, err := ec.unmarshalOMediaPlacementAllowInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementAllowInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Allow = data
+		case "deny":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("deny"))
+			data, err := ec.unmarshalNMediaPlacementSelectorInput2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementSelectorInputᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Deny = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputMediaPlacementCoordinatesInput(ctx context.Context, obj any) (model.MediaPlacementCoordinatesInput, error) {
+	var it model.MediaPlacementCoordinatesInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"latitude", "longitude"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "latitude":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("latitude"))
+			data, err := ec.unmarshalNFloat2float64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Latitude = data
+		case "longitude":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("longitude"))
+			data, err := ec.unmarshalNFloat2float64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Longitude = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputMediaPlacementGroupInput(ctx context.Context, obj any) (model.MediaPlacementGroupInput, error) {
+	var it model.MediaPlacementGroupInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	if _, present := asMap["order"]; !present {
+		asMap["order"] = "DISTANCE"
+	}
+	if _, present := asMap["spillover"]; !present {
+		asMap["spillover"] = "NEVER"
+	}
+	if _, present := asMap["maxDistanceKm"]; !present {
+		asMap["maxDistanceKm"] = 0
+	}
+	if _, present := asMap["geoHoleDistanceKm"]; !present {
+		asMap["geoHoleDistanceKm"] = 0
+	}
+	if _, present := asMap["minImprovementKm"]; !present {
+		asMap["minImprovementKm"] = 0
+	}
+
+	fieldsInOrder := [...]string{"id", "match", "order", "spillover", "maxDistanceKm", "geoHoleDistanceKm", "minImprovementKm", "priceCurrency", "priceUnit"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "id":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("id"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ID = data
+		case "match":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("match"))
+			data, err := ec.unmarshalNMediaPlacementSelectorInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementSelectorInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Match = data
+		case "order":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("order"))
+			data, err := ec.unmarshalNMediaPlacementOrder2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementOrder(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Order = data
+		case "spillover":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("spillover"))
+			data, err := ec.unmarshalNMediaPlacementSpillover2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementSpillover(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Spillover = data
+		case "maxDistanceKm":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("maxDistanceKm"))
+			data, err := ec.unmarshalNFloat2float64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MaxDistanceKm = data
+		case "geoHoleDistanceKm":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("geoHoleDistanceKm"))
+			data, err := ec.unmarshalNFloat2float64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.GeoHoleDistanceKm = data
+		case "minImprovementKm":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("minImprovementKm"))
+			data, err := ec.unmarshalNFloat2float64(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.MinImprovementKm = data
+		case "priceCurrency":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("priceCurrency"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.PriceCurrency = data
+		case "priceUnit":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("priceUnit"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.PriceUnit = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputMediaPlacementOptionsFilter(ctx context.Context, obj any) (model.MediaPlacementOptionsFilter, error) {
+	var it model.MediaPlacementOptionsFilter
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"query", "kind", "classes"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "query":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("query"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Query = data
+		case "kind":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("kind"))
+			data, err := ec.unmarshalOMediaPlacementOptionKind2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementOptionKind(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Kind = data
+		case "classes":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("classes"))
+			data, err := ec.unmarshalOMediaPlacementClass2ᚕframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementClassᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Classes = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputMediaPlacementPreferencesInput(ctx context.Context, obj any) (model.MediaPlacementPreferencesInput, error) {
+	var it model.MediaPlacementPreferencesInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"groups"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "groups":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("groups"))
+			data, err := ec.unmarshalNMediaPlacementGroupInput2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementGroupInputᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Groups = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputMediaPlacementRulesInput(ctx context.Context, obj any) (model.MediaPlacementRulesInput, error) {
+	var it model.MediaPlacementRulesInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	if _, present := asMap["schemaVersion"]; !present {
+		asMap["schemaVersion"] = 1
+	}
+
+	fieldsInOrder := [...]string{"schemaVersion", "constraints", "preferences"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "schemaVersion":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("schemaVersion"))
+			data, err := ec.unmarshalNInt2int(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.SchemaVersion = data
+		case "constraints":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("constraints"))
+			data, err := ec.unmarshalNMediaPlacementConstraintsInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementConstraintsInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Constraints = data
+		case "preferences":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("preferences"))
+			data, err := ec.unmarshalOMediaPlacementPreferencesInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementPreferencesInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Preferences = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputMediaPlacementScopeInput(ctx context.Context, obj any) (model.MediaPlacementScopeInput, error) {
+	var it model.MediaPlacementScopeInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"kind", "streamId"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "kind":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("kind"))
+			data, err := ec.unmarshalNMediaPlacementScopeKind2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementScopeKind(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Kind = data
+		case "streamId":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("streamId"))
+			data, err := ec.unmarshalOID2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.StreamID = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputMediaPlacementSelectorInput(ctx context.Context, obj any) (model.MediaPlacementSelectorInput, error) {
+	var it model.MediaPlacementSelectorInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"clusterIds", "ownerIds", "regions", "classes", "charging"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "clusterIds":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("clusterIds"))
+			data, err := ec.unmarshalOID2ᚕstringᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ClusterIds = data
+		case "ownerIds":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("ownerIds"))
+			data, err := ec.unmarshalOID2ᚕstringᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.OwnerIds = data
+		case "regions":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("regions"))
+			data, err := ec.unmarshalOString2ᚕstringᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Regions = data
+		case "classes":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("classes"))
+			data, err := ec.unmarshalOMediaPlacementClass2ᚕframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementClassᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Classes = data
+		case "charging":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("charging"))
+			data, err := ec.unmarshalOMediaPlacementCharging2ᚕframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementChargingᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Charging = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputMediaPlacementVerbUpdateInput(ctx context.Context, obj any) (model.MediaPlacementVerbUpdateInput, error) {
+	var it model.MediaPlacementVerbUpdateInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"verb", "kind", "rules"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "verb":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("verb"))
+			data, err := ec.unmarshalNMediaPlacementVerb2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementVerb(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Verb = data
+		case "kind":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("kind"))
+			data, err := ec.unmarshalNMediaPlacementUpdateKind2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementUpdateKind(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Kind = data
+		case "rules":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("rules"))
+			data, err := ec.unmarshalOMediaPlacementRulesInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementRulesInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Rules = data
+		}
+	}
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputOpenMistAdminSessionInput(ctx context.Context, obj any) (model.OpenMistAdminSessionInput, error) {
 	var it model.OpenMistAdminSessionInput
 	if obj == nil {
@@ -121430,6 +129201,85 @@ func (ec *executionContext) unmarshalInputPlaybackWebhookPolicyInput(ctx context
 	return it, nil
 }
 
+func (ec *executionContext) unmarshalInputPreviewMediaPlacementInput(ctx context.Context, obj any) (model.PreviewMediaPlacementInput, error) {
+	var it model.PreviewMediaPlacementInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"scope", "verb", "streamId", "protocol", "coordinates", "draftUpdate", "expectedRevision", "expectedParentRevision"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "scope":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("scope"))
+			data, err := ec.unmarshalNMediaPlacementScopeInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementScopeInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Scope = data
+		case "verb":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("verb"))
+			data, err := ec.unmarshalNMediaPlacementVerb2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementVerb(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Verb = data
+		case "streamId":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("streamId"))
+			data, err := ec.unmarshalOID2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.StreamID = data
+		case "protocol":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("protocol"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Protocol = data
+		case "coordinates":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("coordinates"))
+			data, err := ec.unmarshalOMediaPlacementCoordinatesInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementCoordinatesInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Coordinates = data
+		case "draftUpdate":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("draftUpdate"))
+			data, err := ec.unmarshalOMediaPlacementVerbUpdateInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementVerbUpdateInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.DraftUpdate = data
+		case "expectedRevision":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("expectedRevision"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ExpectedRevision = data
+		case "expectedParentRevision":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("expectedParentRevision"))
+			data, err := ec.unmarshalOString2ᚖstring(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ExpectedParentRevision = data
+		}
+	}
+	return it, nil
+}
+
 func (ec *executionContext) unmarshalInputPricingRuleInput(ctx context.Context, obj any) (model.PricingRuleInput, error) {
 	var it model.PricingRuleInput
 	if obj == nil {
@@ -121605,6 +129455,115 @@ func (ec *executionContext) unmarshalInputResetMediaRetentionOverrideInput(ctx c
 				return it, err
 			}
 			it.TargetID = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputReviewMediaCapacityConsentInput(ctx context.Context, obj any) (model.ReviewMediaCapacityConsentInput, error) {
+	var it model.ReviewMediaCapacityConsentInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"clusterId", "expectedRevision", "allowIngest", "allowServe", "allowExternalSource"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "clusterId":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("clusterId"))
+			data, err := ec.unmarshalNID2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ClusterID = data
+		case "expectedRevision":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("expectedRevision"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ExpectedRevision = data
+		case "allowIngest":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("allowIngest"))
+			data, err := ec.unmarshalNBoolean2bool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AllowIngest = data
+		case "allowServe":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("allowServe"))
+			data, err := ec.unmarshalNBoolean2bool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AllowServe = data
+		case "allowExternalSource":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("allowExternalSource"))
+			data, err := ec.unmarshalNBoolean2bool(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.AllowExternalSource = data
+		}
+	}
+	return it, nil
+}
+
+func (ec *executionContext) unmarshalInputReviewMediaPlacementChangeInput(ctx context.Context, obj any) (model.ReviewMediaPlacementChangeInput, error) {
+	var it model.ReviewMediaPlacementChangeInput
+	if obj == nil {
+		return it, nil
+	}
+
+	asMap := map[string]any{}
+	for k, v := range obj.(map[string]any) {
+		asMap[k] = v
+	}
+
+	fieldsInOrder := [...]string{"scope", "expectedRevision", "expectedParentRevision", "updates"}
+	for _, k := range fieldsInOrder {
+		v, ok := asMap[k]
+		if !ok {
+			continue
+		}
+		switch k {
+		case "scope":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("scope"))
+			data, err := ec.unmarshalNMediaPlacementScopeInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementScopeInput(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Scope = data
+		case "expectedRevision":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("expectedRevision"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ExpectedRevision = data
+		case "expectedParentRevision":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("expectedParentRevision"))
+			data, err := ec.unmarshalNString2string(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.ExpectedParentRevision = data
+		case "updates":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("updates"))
+			data, err := ec.unmarshalNMediaPlacementVerbUpdateInput2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementVerbUpdateInputᚄ(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.Updates = data
 		}
 	}
 	return it, nil
@@ -123466,6 +131425,334 @@ func (ec *executionContext) _LinkWalletResult(ctx context.Context, sel ast.Selec
 			return typedObj
 		} else {
 			panic(fmt.Errorf("unexpected type %T; non-generated variants of LinkWalletResult must implement graphql.Marshaler", obj))
+		}
+	}
+}
+
+func (ec *executionContext) _MediaCapacityConsentChangeResult(ctx context.Context, sel ast.SelectionSet, obj model.MediaCapacityConsentChangeResult) graphql.Marshaler {
+	switch obj := (obj).(type) {
+	case nil:
+		return graphql.Null
+	case model.NotFoundError:
+		return ec._NotFoundError(ctx, sel, &obj)
+	case *model.NotFoundError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._NotFoundError(ctx, sel, obj)
+	case model.AuthError:
+		return ec._AuthError(ctx, sel, &obj)
+	case *model.AuthError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._AuthError(ctx, sel, obj)
+	case model.MediaPlacementError:
+		return ec._MediaPlacementError(ctx, sel, &obj)
+	case *model.MediaPlacementError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._MediaPlacementError(ctx, sel, obj)
+	case model.MediaCapacityConsentChange:
+		return ec._MediaCapacityConsentChange(ctx, sel, &obj)
+	case *model.MediaCapacityConsentChange:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._MediaCapacityConsentChange(ctx, sel, obj)
+	default:
+		if typedObj, ok := obj.(graphql.Marshaler); ok {
+			return typedObj
+		} else {
+			panic(fmt.Errorf("unexpected type %T; non-generated variants of MediaCapacityConsentChangeResult must implement graphql.Marshaler", obj))
+		}
+	}
+}
+
+func (ec *executionContext) _MediaCapacityConsentResult(ctx context.Context, sel ast.SelectionSet, obj model.MediaCapacityConsentResult) graphql.Marshaler {
+	switch obj := (obj).(type) {
+	case nil:
+		return graphql.Null
+	case model.NotFoundError:
+		return ec._NotFoundError(ctx, sel, &obj)
+	case *model.NotFoundError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._NotFoundError(ctx, sel, obj)
+	case model.AuthError:
+		return ec._AuthError(ctx, sel, &obj)
+	case *model.AuthError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._AuthError(ctx, sel, obj)
+	case model.MediaPlacementError:
+		return ec._MediaPlacementError(ctx, sel, &obj)
+	case *model.MediaPlacementError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._MediaPlacementError(ctx, sel, obj)
+	case model.MediaCapacityConsent:
+		return ec._MediaCapacityConsent(ctx, sel, &obj)
+	case *model.MediaCapacityConsent:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._MediaCapacityConsent(ctx, sel, obj)
+	default:
+		if typedObj, ok := obj.(graphql.Marshaler); ok {
+			return typedObj
+		} else {
+			panic(fmt.Errorf("unexpected type %T; non-generated variants of MediaCapacityConsentResult must implement graphql.Marshaler", obj))
+		}
+	}
+}
+
+func (ec *executionContext) _MediaPlacementChangeResult(ctx context.Context, sel ast.SelectionSet, obj model.MediaPlacementChangeResult) graphql.Marshaler {
+	switch obj := (obj).(type) {
+	case nil:
+		return graphql.Null
+	case model.NotFoundError:
+		return ec._NotFoundError(ctx, sel, &obj)
+	case *model.NotFoundError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._NotFoundError(ctx, sel, obj)
+	case model.AuthError:
+		return ec._AuthError(ctx, sel, &obj)
+	case *model.AuthError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._AuthError(ctx, sel, obj)
+	case model.MediaPlacementError:
+		return ec._MediaPlacementError(ctx, sel, &obj)
+	case *model.MediaPlacementError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._MediaPlacementError(ctx, sel, obj)
+	case model.MediaPlacementChange:
+		return ec._MediaPlacementChange(ctx, sel, &obj)
+	case *model.MediaPlacementChange:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._MediaPlacementChange(ctx, sel, obj)
+	default:
+		if typedObj, ok := obj.(graphql.Marshaler); ok {
+			return typedObj
+		} else {
+			panic(fmt.Errorf("unexpected type %T; non-generated variants of MediaPlacementChangeResult must implement graphql.Marshaler", obj))
+		}
+	}
+}
+
+func (ec *executionContext) _MediaPlacementLegacyPinsResult(ctx context.Context, sel ast.SelectionSet, obj model.MediaPlacementLegacyPinsResult) graphql.Marshaler {
+	switch obj := (obj).(type) {
+	case nil:
+		return graphql.Null
+	case model.NotFoundError:
+		return ec._NotFoundError(ctx, sel, &obj)
+	case *model.NotFoundError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._NotFoundError(ctx, sel, obj)
+	case model.AuthError:
+		return ec._AuthError(ctx, sel, &obj)
+	case *model.AuthError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._AuthError(ctx, sel, obj)
+	case model.MediaPlacementLegacyPins:
+		return ec._MediaPlacementLegacyPins(ctx, sel, &obj)
+	case *model.MediaPlacementLegacyPins:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._MediaPlacementLegacyPins(ctx, sel, obj)
+	case model.MediaPlacementError:
+		return ec._MediaPlacementError(ctx, sel, &obj)
+	case *model.MediaPlacementError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._MediaPlacementError(ctx, sel, obj)
+	default:
+		if typedObj, ok := obj.(graphql.Marshaler); ok {
+			return typedObj
+		} else {
+			panic(fmt.Errorf("unexpected type %T; non-generated variants of MediaPlacementLegacyPinsResult must implement graphql.Marshaler", obj))
+		}
+	}
+}
+
+func (ec *executionContext) _MediaPlacementOptionsResult(ctx context.Context, sel ast.SelectionSet, obj model.MediaPlacementOptionsResult) graphql.Marshaler {
+	switch obj := (obj).(type) {
+	case nil:
+		return graphql.Null
+	case model.NotFoundError:
+		return ec._NotFoundError(ctx, sel, &obj)
+	case *model.NotFoundError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._NotFoundError(ctx, sel, obj)
+	case model.AuthError:
+		return ec._AuthError(ctx, sel, &obj)
+	case *model.AuthError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._AuthError(ctx, sel, obj)
+	case model.MediaPlacementOptionsConnection:
+		return ec._MediaPlacementOptionsConnection(ctx, sel, &obj)
+	case *model.MediaPlacementOptionsConnection:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._MediaPlacementOptionsConnection(ctx, sel, obj)
+	case model.MediaPlacementError:
+		return ec._MediaPlacementError(ctx, sel, &obj)
+	case *model.MediaPlacementError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._MediaPlacementError(ctx, sel, obj)
+	default:
+		if typedObj, ok := obj.(graphql.Marshaler); ok {
+			return typedObj
+		} else {
+			panic(fmt.Errorf("unexpected type %T; non-generated variants of MediaPlacementOptionsResult must implement graphql.Marshaler", obj))
+		}
+	}
+}
+
+func (ec *executionContext) _MediaPlacementPolicyResult(ctx context.Context, sel ast.SelectionSet, obj model.MediaPlacementPolicyResult) graphql.Marshaler {
+	switch obj := (obj).(type) {
+	case nil:
+		return graphql.Null
+	case model.NotFoundError:
+		return ec._NotFoundError(ctx, sel, &obj)
+	case *model.NotFoundError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._NotFoundError(ctx, sel, obj)
+	case model.AuthError:
+		return ec._AuthError(ctx, sel, &obj)
+	case *model.AuthError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._AuthError(ctx, sel, obj)
+	case model.MediaPlacementPolicyState:
+		return ec._MediaPlacementPolicyState(ctx, sel, &obj)
+	case *model.MediaPlacementPolicyState:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._MediaPlacementPolicyState(ctx, sel, obj)
+	case model.MediaPlacementError:
+		return ec._MediaPlacementError(ctx, sel, &obj)
+	case *model.MediaPlacementError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._MediaPlacementError(ctx, sel, obj)
+	default:
+		if typedObj, ok := obj.(graphql.Marshaler); ok {
+			return typedObj
+		} else {
+			panic(fmt.Errorf("unexpected type %T; non-generated variants of MediaPlacementPolicyResult must implement graphql.Marshaler", obj))
+		}
+	}
+}
+
+func (ec *executionContext) _MediaPlacementPreviewResult(ctx context.Context, sel ast.SelectionSet, obj model.MediaPlacementPreviewResult) graphql.Marshaler {
+	switch obj := (obj).(type) {
+	case nil:
+		return graphql.Null
+	case model.NotFoundError:
+		return ec._NotFoundError(ctx, sel, &obj)
+	case *model.NotFoundError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._NotFoundError(ctx, sel, obj)
+	case model.AuthError:
+		return ec._AuthError(ctx, sel, &obj)
+	case *model.AuthError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._AuthError(ctx, sel, obj)
+	case model.MediaPlacementPreview:
+		return ec._MediaPlacementPreview(ctx, sel, &obj)
+	case *model.MediaPlacementPreview:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._MediaPlacementPreview(ctx, sel, obj)
+	case model.MediaPlacementError:
+		return ec._MediaPlacementError(ctx, sel, &obj)
+	case *model.MediaPlacementError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._MediaPlacementError(ctx, sel, obj)
+	default:
+		if typedObj, ok := obj.(graphql.Marshaler); ok {
+			return typedObj
+		} else {
+			panic(fmt.Errorf("unexpected type %T; non-generated variants of MediaPlacementPreviewResult must implement graphql.Marshaler", obj))
+		}
+	}
+}
+
+func (ec *executionContext) _MediaPlacementReviewResult(ctx context.Context, sel ast.SelectionSet, obj model.MediaPlacementReviewResult) graphql.Marshaler {
+	switch obj := (obj).(type) {
+	case nil:
+		return graphql.Null
+	case model.NotFoundError:
+		return ec._NotFoundError(ctx, sel, &obj)
+	case *model.NotFoundError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._NotFoundError(ctx, sel, obj)
+	case model.AuthError:
+		return ec._AuthError(ctx, sel, &obj)
+	case *model.AuthError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._AuthError(ctx, sel, obj)
+	case model.MediaPlacementReview:
+		return ec._MediaPlacementReview(ctx, sel, &obj)
+	case *model.MediaPlacementReview:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._MediaPlacementReview(ctx, sel, obj)
+	case model.MediaPlacementError:
+		return ec._MediaPlacementError(ctx, sel, &obj)
+	case *model.MediaPlacementError:
+		if obj == nil {
+			return graphql.Null
+		}
+		return ec._MediaPlacementError(ctx, sel, obj)
+	default:
+		if typedObj, ok := obj.(graphql.Marshaler); ok {
+			return typedObj
+		} else {
+			panic(fmt.Errorf("unexpected type %T; non-generated variants of MediaPlacementReviewResult must implement graphql.Marshaler", obj))
 		}
 	}
 }
@@ -128726,7 +137013,7 @@ func (ec *executionContext) _AssetNodeCopy(ctx context.Context, sel ast.Selectio
 	return out
 }
 
-var authErrorImplementors = []string{"AuthError", "Error", "CreateStreamResult", "UpdateStreamResult", "DeleteStreamResult", "CreateClipResult", "DeleteClipResult", "CreateStreamKeyResult", "DeleteStreamKeyResult", "StartDVRResult", "StopDVRResult", "DeleteDVRResult", "CreateVodUploadResult", "CompleteVodUploadResult", "AbortVodUploadResult", "DeleteVodAssetResult", "VodUploadStatusResult", "SetMediaRetentionPolicyResult", "UpdateMediaRetentionResult", "SetStreamRetentionOverridesResult", "SetNodeModeResult", "OpenMistAdminSessionResult", "TestPlaybackAccessResult", "CreatePaymentResult", "SubmitX402PaymentResult", "StripeCheckoutResult", "StripeBillingPortalResult", "MollieFirstPaymentResult", "MollieSubscriptionResult", "UpdateTenantResult", "CreateDeveloperTokenResult", "RevokeDeveloperTokenResult", "CreateSigningKeyResult", "RevokeSigningKeyResult", "SetPlaybackPolicyResult", "CreateBootstrapTokenResult", "RevokeBootstrapTokenResult", "CreateEdgeClusterResult", "CreateEnrollmentTokenResult", "BootstrapEdgeResult", "UpdateClusterResult", "CreateClusterInviteResult", "RevokeClusterInviteResult", "ClusterSubscriptionResult", "SetPreferredClusterResult", "LinkWalletResult", "UnlinkWalletResult", "LinkEmailResult", "PromoteToPaidResult", "ChangeBillingTierResult", "CreateConversationResult", "SendMessageResult"}
+var authErrorImplementors = []string{"AuthError", "Error", "CreateStreamResult", "UpdateStreamResult", "DeleteStreamResult", "CreateClipResult", "DeleteClipResult", "CreateStreamKeyResult", "DeleteStreamKeyResult", "StartDVRResult", "StopDVRResult", "DeleteDVRResult", "CreateVodUploadResult", "CompleteVodUploadResult", "AbortVodUploadResult", "DeleteVodAssetResult", "VodUploadStatusResult", "SetMediaRetentionPolicyResult", "UpdateMediaRetentionResult", "SetStreamRetentionOverridesResult", "SetNodeModeResult", "OpenMistAdminSessionResult", "TestPlaybackAccessResult", "CreatePaymentResult", "SubmitX402PaymentResult", "StripeCheckoutResult", "StripeBillingPortalResult", "MollieFirstPaymentResult", "MollieSubscriptionResult", "UpdateTenantResult", "CreateDeveloperTokenResult", "RevokeDeveloperTokenResult", "CreateSigningKeyResult", "RevokeSigningKeyResult", "SetPlaybackPolicyResult", "CreateBootstrapTokenResult", "RevokeBootstrapTokenResult", "CreateEdgeClusterResult", "CreateEnrollmentTokenResult", "BootstrapEdgeResult", "UpdateClusterResult", "CreateClusterInviteResult", "RevokeClusterInviteResult", "ClusterSubscriptionResult", "SetPreferredClusterResult", "LinkWalletResult", "UnlinkWalletResult", "LinkEmailResult", "PromoteToPaidResult", "ChangeBillingTierResult", "CreateConversationResult", "SendMessageResult", "MediaPlacementPolicyResult", "MediaPlacementOptionsResult", "MediaPlacementPreviewResult", "MediaPlacementReviewResult", "MediaPlacementChangeResult", "MediaPlacementLegacyPinsResult", "MediaCapacityConsentResult", "MediaCapacityConsentChangeResult"}
 
 func (ec *executionContext) _AuthError(ctx context.Context, sel ast.SelectionSet, obj *model.AuthError) graphql.Marshaler {
 	fields := graphql.CollectFields(ec.OperationContext, sel, authErrorImplementors)
@@ -140541,6 +148828,1690 @@ func (ec *executionContext) _MarketplaceClusterEdge(ctx context.Context, sel ast
 	return out
 }
 
+var mediaCapacityConsentImplementors = []string{"MediaCapacityConsent", "MediaCapacityConsentResult"}
+
+func (ec *executionContext) _MediaCapacityConsent(ctx context.Context, sel ast.SelectionSet, obj *model.MediaCapacityConsent) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, mediaCapacityConsentImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("MediaCapacityConsent")
+		case "clusterId":
+			out.Values[i] = ec._MediaCapacityConsent_clusterId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "revision":
+			out.Values[i] = ec._MediaCapacityConsent_revision(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "allowIngest":
+			out.Values[i] = ec._MediaCapacityConsent_allowIngest(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "allowServe":
+			out.Values[i] = ec._MediaCapacityConsent_allowServe(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "allowExternalSource":
+			out.Values[i] = ec._MediaCapacityConsent_allowExternalSource(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "canManage":
+			out.Values[i] = ec._MediaCapacityConsent_canManage(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "rollout":
+			out.Values[i] = ec._MediaCapacityConsent_rollout(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var mediaCapacityConsentChangeImplementors = []string{"MediaCapacityConsentChange", "MediaCapacityConsentChangeResult"}
+
+func (ec *executionContext) _MediaCapacityConsentChange(ctx context.Context, sel ast.SelectionSet, obj *model.MediaCapacityConsentChange) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, mediaCapacityConsentChangeImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("MediaCapacityConsentChange")
+		case "clusterId":
+			out.Values[i] = ec._MediaCapacityConsentChange_clusterId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "idempotencyKey":
+			out.Values[i] = ec._MediaCapacityConsentChange_idempotencyKey(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "revision":
+			out.Values[i] = ec._MediaCapacityConsentChange_revision(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "digest":
+			out.Values[i] = ec._MediaCapacityConsentChange_digest(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "rollout":
+			out.Values[i] = ec._MediaCapacityConsentChange_rollout(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "createdAt":
+			out.Values[i] = ec._MediaCapacityConsentChange_createdAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var mediaPlacementActionsImplementors = []string{"MediaPlacementActions"}
+
+func (ec *executionContext) _MediaPlacementActions(ctx context.Context, sel ast.SelectionSet, obj *model.MediaPlacementActions) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, mediaPlacementActionsImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("MediaPlacementActions")
+		case "canRead":
+			out.Values[i] = ec._MediaPlacementActions_canRead(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "canPreview":
+			out.Values[i] = ec._MediaPlacementActions_canPreview(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "canManage":
+			out.Values[i] = ec._MediaPlacementActions_canManage(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "canInspectPrivateCandidates":
+			out.Values[i] = ec._MediaPlacementActions_canInspectPrivateCandidates(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var mediaPlacementAllowImplementors = []string{"MediaPlacementAllow"}
+
+func (ec *executionContext) _MediaPlacementAllow(ctx context.Context, sel ast.SelectionSet, obj *model.MediaPlacementAllow) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, mediaPlacementAllowImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("MediaPlacementAllow")
+		case "any":
+			out.Values[i] = ec._MediaPlacementAllow_any(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var mediaPlacementCandidateExplanationImplementors = []string{"MediaPlacementCandidateExplanation"}
+
+func (ec *executionContext) _MediaPlacementCandidateExplanation(ctx context.Context, sel ast.SelectionSet, obj *model.MediaPlacementCandidateExplanation) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, mediaPlacementCandidateExplanationImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("MediaPlacementCandidateExplanation")
+		case "clusterId":
+			out.Values[i] = ec._MediaPlacementCandidateExplanation_clusterId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "clusterName":
+			out.Values[i] = ec._MediaPlacementCandidateExplanation_clusterName(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "region":
+			out.Values[i] = ec._MediaPlacementCandidateExplanation_region(ctx, field, obj)
+		case "nodeId":
+			out.Values[i] = ec._MediaPlacementCandidateExplanation_nodeId(ctx, field, obj)
+		case "groupId":
+			out.Values[i] = ec._MediaPlacementCandidateExplanation_groupId(ctx, field, obj)
+		case "reason":
+			out.Values[i] = ec._MediaPlacementCandidateExplanation_reason(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "distanceKm":
+			out.Values[i] = ec._MediaPlacementCandidateExplanation_distanceKm(ctx, field, obj)
+		case "requiresSourcePull":
+			out.Values[i] = ec._MediaPlacementCandidateExplanation_requiresSourcePull(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "price":
+			out.Values[i] = ec._MediaPlacementCandidateExplanation_price(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var mediaPlacementChangeImplementors = []string{"MediaPlacementChange", "MediaPlacementChangeResult"}
+
+func (ec *executionContext) _MediaPlacementChange(ctx context.Context, sel ast.SelectionSet, obj *model.MediaPlacementChange) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, mediaPlacementChangeImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("MediaPlacementChange")
+		case "scope":
+			out.Values[i] = ec._MediaPlacementChange_scope(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "idempotencyKey":
+			out.Values[i] = ec._MediaPlacementChange_idempotencyKey(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "revision":
+			out.Values[i] = ec._MediaPlacementChange_revision(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "parentRevision":
+			out.Values[i] = ec._MediaPlacementChange_parentRevision(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "digest":
+			out.Values[i] = ec._MediaPlacementChange_digest(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "rollout":
+			out.Values[i] = ec._MediaPlacementChange_rollout(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "createdAt":
+			out.Values[i] = ec._MediaPlacementChange_createdAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var mediaPlacementConstraintsImplementors = []string{"MediaPlacementConstraints"}
+
+func (ec *executionContext) _MediaPlacementConstraints(ctx context.Context, sel ast.SelectionSet, obj *model.MediaPlacementConstraints) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, mediaPlacementConstraintsImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("MediaPlacementConstraints")
+		case "allow":
+			out.Values[i] = ec._MediaPlacementConstraints_allow(ctx, field, obj)
+		case "deny":
+			out.Values[i] = ec._MediaPlacementConstraints_deny(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var mediaPlacementDifferenceImplementors = []string{"MediaPlacementDifference"}
+
+func (ec *executionContext) _MediaPlacementDifference(ctx context.Context, sel ast.SelectionSet, obj *model.MediaPlacementDifference) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, mediaPlacementDifferenceImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("MediaPlacementDifference")
+		case "path":
+			out.Values[i] = ec._MediaPlacementDifference_path(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "label":
+			out.Values[i] = ec._MediaPlacementDifference_label(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "before":
+			out.Values[i] = ec._MediaPlacementDifference_before(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "after":
+			out.Values[i] = ec._MediaPlacementDifference_after(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var mediaPlacementEffectivePolicyImplementors = []string{"MediaPlacementEffectivePolicy"}
+
+func (ec *executionContext) _MediaPlacementEffectivePolicy(ctx context.Context, sel ast.SelectionSet, obj *model.MediaPlacementEffectivePolicy) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, mediaPlacementEffectivePolicyImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("MediaPlacementEffectivePolicy")
+		case "schemaVersion":
+			out.Values[i] = ec._MediaPlacementEffectivePolicy_schemaVersion(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "digest":
+			out.Values[i] = ec._MediaPlacementEffectivePolicy_digest(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "layers":
+			out.Values[i] = ec._MediaPlacementEffectivePolicy_layers(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "groups":
+			out.Values[i] = ec._MediaPlacementEffectivePolicy_groups(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var mediaPlacementErrorImplementors = []string{"MediaPlacementError", "MediaPlacementPolicyResult", "MediaPlacementOptionsResult", "MediaPlacementPreviewResult", "MediaPlacementReviewResult", "MediaPlacementChangeResult", "MediaPlacementLegacyPinsResult", "MediaCapacityConsentResult", "MediaCapacityConsentChangeResult"}
+
+func (ec *executionContext) _MediaPlacementError(ctx context.Context, sel ast.SelectionSet, obj *model.MediaPlacementError) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, mediaPlacementErrorImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("MediaPlacementError")
+		case "code":
+			out.Values[i] = ec._MediaPlacementError_code(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "message":
+			out.Values[i] = ec._MediaPlacementError_message(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "fields":
+			out.Values[i] = ec._MediaPlacementError_fields(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "currentRevision":
+			out.Values[i] = ec._MediaPlacementError_currentRevision(ctx, field, obj)
+		case "parentRevision":
+			out.Values[i] = ec._MediaPlacementError_parentRevision(ctx, field, obj)
+		case "retryAfterSeconds":
+			out.Values[i] = ec._MediaPlacementError_retryAfterSeconds(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var mediaPlacementFeaturesImplementors = []string{"MediaPlacementFeatures"}
+
+func (ec *executionContext) _MediaPlacementFeatures(ctx context.Context, sel ast.SelectionSet, obj *model.MediaPlacementFeatures) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, mediaPlacementFeaturesImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("MediaPlacementFeatures")
+		case "schemaVersion":
+			out.Values[i] = ec._MediaPlacementFeatures_schemaVersion(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "geographicSpillover":
+			out.Values[i] = ec._MediaPlacementFeatures_geographicSpillover(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "priceOrdering":
+			out.Values[i] = ec._MediaPlacementFeatures_priceOrdering(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "supportedPresets":
+			out.Values[i] = ec._MediaPlacementFeatures_supportedPresets(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var mediaPlacementFieldErrorImplementors = []string{"MediaPlacementFieldError"}
+
+func (ec *executionContext) _MediaPlacementFieldError(ctx context.Context, sel ast.SelectionSet, obj *model.MediaPlacementFieldError) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, mediaPlacementFieldErrorImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("MediaPlacementFieldError")
+		case "path":
+			out.Values[i] = ec._MediaPlacementFieldError_path(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "groupId":
+			out.Values[i] = ec._MediaPlacementFieldError_groupId(ctx, field, obj)
+		case "message":
+			out.Values[i] = ec._MediaPlacementFieldError_message(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var mediaPlacementGroupImplementors = []string{"MediaPlacementGroup"}
+
+func (ec *executionContext) _MediaPlacementGroup(ctx context.Context, sel ast.SelectionSet, obj *model.MediaPlacementGroup) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, mediaPlacementGroupImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("MediaPlacementGroup")
+		case "id":
+			out.Values[i] = ec._MediaPlacementGroup_id(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "match":
+			out.Values[i] = ec._MediaPlacementGroup_match(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "order":
+			out.Values[i] = ec._MediaPlacementGroup_order(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "spillover":
+			out.Values[i] = ec._MediaPlacementGroup_spillover(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "maxDistanceKm":
+			out.Values[i] = ec._MediaPlacementGroup_maxDistanceKm(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "geoHoleDistanceKm":
+			out.Values[i] = ec._MediaPlacementGroup_geoHoleDistanceKm(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "minImprovementKm":
+			out.Values[i] = ec._MediaPlacementGroup_minImprovementKm(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "priceCurrency":
+			out.Values[i] = ec._MediaPlacementGroup_priceCurrency(ctx, field, obj)
+		case "priceUnit":
+			out.Values[i] = ec._MediaPlacementGroup_priceUnit(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var mediaPlacementImpactImplementors = []string{"MediaPlacementImpact"}
+
+func (ec *executionContext) _MediaPlacementImpact(ctx context.Context, sel ast.SelectionSet, obj *model.MediaPlacementImpact) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, mediaPlacementImpactImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("MediaPlacementImpact")
+		case "affectedStreams":
+			out.Values[i] = ec._MediaPlacementImpact_affectedStreams(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "activePublishers":
+			out.Values[i] = ec._MediaPlacementImpact_activePublishers(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "complete":
+			out.Values[i] = ec._MediaPlacementImpact_complete(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "existingSessionsRetained":
+			out.Values[i] = ec._MediaPlacementImpact_existingSessionsRetained(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var mediaPlacementLegacyPinsImplementors = []string{"MediaPlacementLegacyPins", "MediaPlacementLegacyPinsResult"}
+
+func (ec *executionContext) _MediaPlacementLegacyPins(ctx context.Context, sel ast.SelectionSet, obj *model.MediaPlacementLegacyPins) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, mediaPlacementLegacyPinsImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("MediaPlacementLegacyPins")
+		case "streamId":
+			out.Values[i] = ec._MediaPlacementLegacyPins_streamId(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "clusterIds":
+			out.Values[i] = ec._MediaPlacementLegacyPins_clusterIds(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "currentlyEnforced":
+			out.Values[i] = ec._MediaPlacementLegacyPins_currentlyEnforced(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var mediaPlacementOptionImplementors = []string{"MediaPlacementOption"}
+
+func (ec *executionContext) _MediaPlacementOption(ctx context.Context, sel ast.SelectionSet, obj *model.MediaPlacementOption) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, mediaPlacementOptionImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("MediaPlacementOption")
+		case "id":
+			out.Values[i] = ec._MediaPlacementOption_id(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "name":
+			out.Values[i] = ec._MediaPlacementOption_name(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "kind":
+			out.Values[i] = ec._MediaPlacementOption_kind(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "clusterClass":
+			out.Values[i] = ec._MediaPlacementOption_clusterClass(ctx, field, obj)
+		case "region":
+			out.Values[i] = ec._MediaPlacementOption_region(ctx, field, obj)
+		case "ownerId":
+			out.Values[i] = ec._MediaPlacementOption_ownerId(ctx, field, obj)
+		case "eligible":
+			out.Values[i] = ec._MediaPlacementOption_eligible(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "reason":
+			out.Values[i] = ec._MediaPlacementOption_reason(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var mediaPlacementOptionsConnectionImplementors = []string{"MediaPlacementOptionsConnection", "MediaPlacementOptionsResult"}
+
+func (ec *executionContext) _MediaPlacementOptionsConnection(ctx context.Context, sel ast.SelectionSet, obj *model.MediaPlacementOptionsConnection) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, mediaPlacementOptionsConnectionImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("MediaPlacementOptionsConnection")
+		case "nodes":
+			out.Values[i] = ec._MediaPlacementOptionsConnection_nodes(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "pageInfo":
+			out.Values[i] = ec._MediaPlacementOptionsConnection_pageInfo(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var mediaPlacementPolicyStateImplementors = []string{"MediaPlacementPolicyState", "MediaPlacementPolicyResult"}
+
+func (ec *executionContext) _MediaPlacementPolicyState(ctx context.Context, sel ast.SelectionSet, obj *model.MediaPlacementPolicyState) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, mediaPlacementPolicyStateImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("MediaPlacementPolicyState")
+		case "scope":
+			out.Values[i] = ec._MediaPlacementPolicyState_scope(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "revision":
+			out.Values[i] = ec._MediaPlacementPolicyState_revision(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "parentRevision":
+			out.Values[i] = ec._MediaPlacementPolicyState_parentRevision(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "activeRevision":
+			out.Values[i] = ec._MediaPlacementPolicyState_activeRevision(ctx, field, obj)
+		case "activeParentRevision":
+			out.Values[i] = ec._MediaPlacementPolicyState_activeParentRevision(ctx, field, obj)
+		case "verbs":
+			out.Values[i] = ec._MediaPlacementPolicyState_verbs(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "rollout":
+			out.Values[i] = ec._MediaPlacementPolicyState_rollout(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "actions":
+			out.Values[i] = ec._MediaPlacementPolicyState_actions(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "features":
+			out.Values[i] = ec._MediaPlacementPolicyState_features(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var mediaPlacementPreferencesImplementors = []string{"MediaPlacementPreferences"}
+
+func (ec *executionContext) _MediaPlacementPreferences(ctx context.Context, sel ast.SelectionSet, obj *model.MediaPlacementPreferences) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, mediaPlacementPreferencesImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("MediaPlacementPreferences")
+		case "groups":
+			out.Values[i] = ec._MediaPlacementPreferences_groups(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var mediaPlacementPreviewImplementors = []string{"MediaPlacementPreview", "MediaPlacementPreviewResult"}
+
+func (ec *executionContext) _MediaPlacementPreview(ctx context.Context, sel ast.SelectionSet, obj *model.MediaPlacementPreview) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, mediaPlacementPreviewImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("MediaPlacementPreview")
+		case "scope":
+			out.Values[i] = ec._MediaPlacementPreview_scope(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "verb":
+			out.Values[i] = ec._MediaPlacementPreview_verb(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "revision":
+			out.Values[i] = ec._MediaPlacementPreview_revision(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "parentRevision":
+			out.Values[i] = ec._MediaPlacementPreview_parentRevision(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "digest":
+			out.Values[i] = ec._MediaPlacementPreview_digest(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "reason":
+			out.Values[i] = ec._MediaPlacementPreview_reason(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "selected":
+			out.Values[i] = ec._MediaPlacementPreview_selected(ctx, field, obj)
+		case "candidates":
+			out.Values[i] = ec._MediaPlacementPreview_candidates(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "transitions":
+			out.Values[i] = ec._MediaPlacementPreview_transitions(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "observedAt":
+			out.Values[i] = ec._MediaPlacementPreview_observedAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "expiresAt":
+			out.Values[i] = ec._MediaPlacementPreview_expiresAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "complete":
+			out.Values[i] = ec._MediaPlacementPreview_complete(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "sourceEvaluated":
+			out.Values[i] = ec._MediaPlacementPreview_sourceEvaluated(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "activeIngestClusterId":
+			out.Values[i] = ec._MediaPlacementPreview_activeIngestClusterId(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var mediaPlacementPriceImplementors = []string{"MediaPlacementPrice"}
+
+func (ec *executionContext) _MediaPlacementPrice(ctx context.Context, sel ast.SelectionSet, obj *model.MediaPlacementPrice) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, mediaPlacementPriceImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("MediaPlacementPrice")
+		case "amountMicros":
+			out.Values[i] = ec._MediaPlacementPrice_amountMicros(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "currency":
+			out.Values[i] = ec._MediaPlacementPrice_currency(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "unit":
+			out.Values[i] = ec._MediaPlacementPrice_unit(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "revision":
+			out.Values[i] = ec._MediaPlacementPrice_revision(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "expiresAt":
+			out.Values[i] = ec._MediaPlacementPrice_expiresAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var mediaPlacementRecipientImplementors = []string{"MediaPlacementRecipient"}
+
+func (ec *executionContext) _MediaPlacementRecipient(ctx context.Context, sel ast.SelectionSet, obj *model.MediaPlacementRecipient) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, mediaPlacementRecipientImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("MediaPlacementRecipient")
+		case "id":
+			out.Values[i] = ec._MediaPlacementRecipient_id(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "name":
+			out.Values[i] = ec._MediaPlacementRecipient_name(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "status":
+			out.Values[i] = ec._MediaPlacementRecipient_status(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "reason":
+			out.Values[i] = ec._MediaPlacementRecipient_reason(ctx, field, obj)
+		case "authorityExpiresAt":
+			out.Values[i] = ec._MediaPlacementRecipient_authorityExpiresAt(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var mediaPlacementReviewImplementors = []string{"MediaPlacementReview", "MediaPlacementReviewResult"}
+
+func (ec *executionContext) _MediaPlacementReview(ctx context.Context, sel ast.SelectionSet, obj *model.MediaPlacementReview) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, mediaPlacementReviewImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("MediaPlacementReview")
+		case "reviewToken":
+			out.Values[i] = ec._MediaPlacementReview_reviewToken(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "digest":
+			out.Values[i] = ec._MediaPlacementReview_digest(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "expiresAt":
+			out.Values[i] = ec._MediaPlacementReview_expiresAt(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "differences":
+			out.Values[i] = ec._MediaPlacementReview_differences(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "warnings":
+			out.Values[i] = ec._MediaPlacementReview_warnings(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "impact":
+			out.Values[i] = ec._MediaPlacementReview_impact(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var mediaPlacementRolloutImplementors = []string{"MediaPlacementRollout"}
+
+func (ec *executionContext) _MediaPlacementRollout(ctx context.Context, sel ast.SelectionSet, obj *model.MediaPlacementRollout) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, mediaPlacementRolloutImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("MediaPlacementRollout")
+		case "status":
+			out.Values[i] = ec._MediaPlacementRollout_status(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "requiredRecipients":
+			out.Values[i] = ec._MediaPlacementRollout_requiredRecipients(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "appliedRecipients":
+			out.Values[i] = ec._MediaPlacementRollout_appliedRecipients(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "pendingRecipients":
+			out.Values[i] = ec._MediaPlacementRollout_pendingRecipients(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "existingSessionsRetained":
+			out.Values[i] = ec._MediaPlacementRollout_existingSessionsRetained(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "updatedAt":
+			out.Values[i] = ec._MediaPlacementRollout_updatedAt(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var mediaPlacementRulesImplementors = []string{"MediaPlacementRules"}
+
+func (ec *executionContext) _MediaPlacementRules(ctx context.Context, sel ast.SelectionSet, obj *model.MediaPlacementRules) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, mediaPlacementRulesImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("MediaPlacementRules")
+		case "schemaVersion":
+			out.Values[i] = ec._MediaPlacementRules_schemaVersion(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "constraints":
+			out.Values[i] = ec._MediaPlacementRules_constraints(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "preferences":
+			out.Values[i] = ec._MediaPlacementRules_preferences(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var mediaPlacementScopeImplementors = []string{"MediaPlacementScope"}
+
+func (ec *executionContext) _MediaPlacementScope(ctx context.Context, sel ast.SelectionSet, obj *model.MediaPlacementScope) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, mediaPlacementScopeImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("MediaPlacementScope")
+		case "kind":
+			out.Values[i] = ec._MediaPlacementScope_kind(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "streamId":
+			out.Values[i] = ec._MediaPlacementScope_streamId(ctx, field, obj)
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var mediaPlacementSelectorImplementors = []string{"MediaPlacementSelector"}
+
+func (ec *executionContext) _MediaPlacementSelector(ctx context.Context, sel ast.SelectionSet, obj *model.MediaPlacementSelector) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, mediaPlacementSelectorImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("MediaPlacementSelector")
+		case "clusterIds":
+			out.Values[i] = ec._MediaPlacementSelector_clusterIds(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "ownerIds":
+			out.Values[i] = ec._MediaPlacementSelector_ownerIds(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "regions":
+			out.Values[i] = ec._MediaPlacementSelector_regions(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "classes":
+			out.Values[i] = ec._MediaPlacementSelector_classes(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "charging":
+			out.Values[i] = ec._MediaPlacementSelector_charging(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var mediaPlacementTransitionImplementors = []string{"MediaPlacementTransition"}
+
+func (ec *executionContext) _MediaPlacementTransition(ctx context.Context, sel ast.SelectionSet, obj *model.MediaPlacementTransition) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, mediaPlacementTransitionImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("MediaPlacementTransition")
+		case "fromGroup":
+			out.Values[i] = ec._MediaPlacementTransition_fromGroup(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "reason":
+			out.Values[i] = ec._MediaPlacementTransition_reason(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var mediaPlacementVerbPolicyImplementors = []string{"MediaPlacementVerbPolicy"}
+
+func (ec *executionContext) _MediaPlacementVerbPolicy(ctx context.Context, sel ast.SelectionSet, obj *model.MediaPlacementVerbPolicy) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, mediaPlacementVerbPolicyImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("MediaPlacementVerbPolicy")
+		case "verb":
+			out.Values[i] = ec._MediaPlacementVerbPolicy_verb(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "ownRules":
+			out.Values[i] = ec._MediaPlacementVerbPolicy_ownRules(ctx, field, obj)
+		case "inheritedRules":
+			out.Values[i] = ec._MediaPlacementVerbPolicy_inheritedRules(ctx, field, obj)
+		case "requestedEffective":
+			out.Values[i] = ec._MediaPlacementVerbPolicy_requestedEffective(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
+var mediaPlacementWarningImplementors = []string{"MediaPlacementWarning"}
+
+func (ec *executionContext) _MediaPlacementWarning(ctx context.Context, sel ast.SelectionSet, obj *model.MediaPlacementWarning) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, mediaPlacementWarningImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("MediaPlacementWarning")
+		case "id":
+			out.Values[i] = ec._MediaPlacementWarning_id(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "severity":
+			out.Values[i] = ec._MediaPlacementWarning_severity(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "message":
+			out.Values[i] = ec._MediaPlacementWarning_message(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "acknowledgementRequired":
+			out.Values[i] = ec._MediaPlacementWarning_acknowledgementRequired(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var mediaRetentionBoundsImplementors = []string{"MediaRetentionBounds"}
 
 func (ec *executionContext) _MediaRetentionBounds(ctx context.Context, sel ast.SelectionSet, obj *commodorepb.MediaRetentionBounds) graphql.Marshaler {
@@ -141589,6 +151560,20 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 		case "setMediaRetentionPolicy":
 			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
 				return ec._Mutation_setMediaRetentionPolicy(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "applyMediaPlacementChange":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_applyMediaPlacementChange(ctx, field)
+			})
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "applyClusterMediaConsentChange":
+			out.Values[i] = ec.OperationContext.RootResolverMiddleware(innerCtx, func(ctx context.Context) (res graphql.Marshaler) {
+				return ec._Mutation_applyClusterMediaConsentChange(ctx, field)
 			})
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
@@ -144132,7 +154117,7 @@ func (ec *executionContext) _NodesConnection(ctx context.Context, sel ast.Select
 	return out
 }
 
-var notFoundErrorImplementors = []string{"NotFoundError", "Error", "UpdateStreamResult", "DeleteStreamResult", "CreateClipResult", "DeleteClipResult", "CreateStreamKeyResult", "DeleteStreamKeyResult", "StartDVRResult", "StopDVRResult", "DeleteDVRResult", "CompleteVodUploadResult", "AbortVodUploadResult", "DeleteVodAssetResult", "VodUploadStatusResult", "UpdateMediaRetentionResult", "SetStreamRetentionOverridesResult", "SetNodeModeResult", "OpenMistAdminSessionResult", "TestPlaybackAccessResult", "SubmitX402PaymentResult", "StripeCheckoutResult", "StripeBillingPortalResult", "MollieFirstPaymentResult", "MollieSubscriptionResult", "RevokeDeveloperTokenResult", "RevokeSigningKeyResult", "SetPlaybackPolicyResult", "RevokeBootstrapTokenResult", "UpdateClusterResult", "CreateClusterInviteResult", "RevokeClusterInviteResult", "ClusterSubscriptionResult", "SetPreferredClusterResult", "UnlinkWalletResult", "SendMessageResult"}
+var notFoundErrorImplementors = []string{"NotFoundError", "Error", "UpdateStreamResult", "DeleteStreamResult", "CreateClipResult", "DeleteClipResult", "CreateStreamKeyResult", "DeleteStreamKeyResult", "StartDVRResult", "StopDVRResult", "DeleteDVRResult", "CompleteVodUploadResult", "AbortVodUploadResult", "DeleteVodAssetResult", "VodUploadStatusResult", "UpdateMediaRetentionResult", "SetStreamRetentionOverridesResult", "SetNodeModeResult", "OpenMistAdminSessionResult", "TestPlaybackAccessResult", "SubmitX402PaymentResult", "StripeCheckoutResult", "StripeBillingPortalResult", "MollieFirstPaymentResult", "MollieSubscriptionResult", "RevokeDeveloperTokenResult", "RevokeSigningKeyResult", "SetPlaybackPolicyResult", "RevokeBootstrapTokenResult", "UpdateClusterResult", "CreateClusterInviteResult", "RevokeClusterInviteResult", "ClusterSubscriptionResult", "SetPreferredClusterResult", "UnlinkWalletResult", "SendMessageResult", "MediaPlacementPolicyResult", "MediaPlacementOptionsResult", "MediaPlacementPreviewResult", "MediaPlacementReviewResult", "MediaPlacementChangeResult", "MediaPlacementLegacyPinsResult", "MediaCapacityConsentResult", "MediaCapacityConsentChangeResult"}
 
 func (ec *executionContext) _NotFoundError(ctx context.Context, sel ast.SelectionSet, obj *model.NotFoundError) graphql.Marshaler {
 	fields := graphql.CollectFields(ec.OperationContext, sel, notFoundErrorImplementors)
@@ -151206,6 +161191,204 @@ func (ec *executionContext) _Query(ctx context.Context, sel ast.SelectionSet) gr
 					}
 				}()
 				res = ec._Query_mediaRetentionPolicy(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "mediaPlacementPolicy":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_mediaPlacementPolicy(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "mediaPlacementOptions":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_mediaPlacementOptions(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "previewMediaPlacement":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_previewMediaPlacement(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "reviewMediaPlacementChange":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_reviewMediaPlacementChange(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "mediaPlacementChange":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_mediaPlacementChange(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "mediaPlacementLegacyPins":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_mediaPlacementLegacyPins(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "clusterMediaConsent":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_clusterMediaConsent(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "reviewClusterMediaConsentChange":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_reviewClusterMediaConsentChange(ctx, field)
+				if res == graphql.Null {
+					atomic.AddUint32(&fs.Invalids, 1)
+				}
+				return res
+			}
+
+			rrm := func(ctx context.Context) graphql.Marshaler {
+				return ec.OperationContext.RootResolverMiddleware(ctx,
+					func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return rrm(innerCtx) })
+		case "clusterMediaConsentChange":
+			field := field
+
+			innerFunc := func(ctx context.Context, fs *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Query_clusterMediaConsentChange(ctx, field)
 				if res == graphql.Null {
 					atomic.AddUint32(&fs.Invalids, 1)
 				}
@@ -168246,6 +178429,16 @@ func (ec *executionContext) marshalNAnalyticsUsage2ᚖframeworksᚋapi_gateway�
 	return ec._AnalyticsUsage(ctx, sel, v)
 }
 
+func (ec *executionContext) unmarshalNApplyMediaCapacityConsentInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐApplyMediaCapacityConsentInput(ctx context.Context, v any) (model.ApplyMediaCapacityConsentInput, error) {
+	res, err := ec.unmarshalInputApplyMediaCapacityConsentInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalNApplyMediaPlacementChangeInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐApplyMediaPlacementChangeInput(ctx context.Context, v any) (model.ApplyMediaPlacementChangeInput, error) {
+	res, err := ec.unmarshalInputApplyMediaPlacementChangeInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
 func (ec *executionContext) marshalNArtifactEvent2ᚕᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋperiscopeᚐClipEventᚄ(ctx context.Context, sel ast.SelectionSet, v []*periscopepb.ClipEvent) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
@@ -170243,6 +180436,36 @@ func (ec *executionContext) marshalNID2string(ctx context.Context, sel ast.Selec
 	return res
 }
 
+func (ec *executionContext) unmarshalNID2ᚕstringᚄ(ctx context.Context, v any) ([]string, error) {
+	var vSlice []any
+	vSlice = graphql.CoerceList(v)
+	var err error
+	res := make([]string, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNID2string(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+func (ec *executionContext) marshalNID2ᚕstringᚄ(ctx context.Context, sel ast.SelectionSet, v []string) graphql.Marshaler {
+	ret := make(graphql.Array, len(v))
+	for i := range v {
+		ret[i] = ec.marshalNID2string(ctx, sel, v[i])
+	}
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
 func (ec *executionContext) marshalNInfrastructureNode2ᚕᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋquartermasterᚐInfrastructureNodeᚄ(ctx context.Context, sel ast.SelectionSet, v []*quartermasterpb.InfrastructureNode) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
@@ -170696,6 +180919,679 @@ func (ec *executionContext) marshalNMarketplaceClusterEdge2ᚖframeworksᚋapi_g
 		return graphql.Null
 	}
 	return ec._MarketplaceClusterEdge(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNMediaCapacityConsentChangeResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaCapacityConsentChangeResult(ctx context.Context, sel ast.SelectionSet, v model.MediaCapacityConsentChangeResult) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._MediaCapacityConsentChangeResult(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNMediaCapacityConsentResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaCapacityConsentResult(ctx context.Context, sel ast.SelectionSet, v model.MediaCapacityConsentResult) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._MediaCapacityConsentResult(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNMediaPlacementActions2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementActions(ctx context.Context, sel ast.SelectionSet, v *model.MediaPlacementActions) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._MediaPlacementActions(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNMediaPlacementCandidateExplanation2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementCandidateExplanationᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.MediaPlacementCandidateExplanation) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNMediaPlacementCandidateExplanation2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementCandidateExplanation(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNMediaPlacementCandidateExplanation2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementCandidateExplanation(ctx context.Context, sel ast.SelectionSet, v *model.MediaPlacementCandidateExplanation) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._MediaPlacementCandidateExplanation(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNMediaPlacementChangeResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementChangeResult(ctx context.Context, sel ast.SelectionSet, v model.MediaPlacementChangeResult) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._MediaPlacementChangeResult(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNMediaPlacementCharging2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementCharging(ctx context.Context, v any) (model.MediaPlacementCharging, error) {
+	var res model.MediaPlacementCharging
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNMediaPlacementCharging2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementCharging(ctx context.Context, sel ast.SelectionSet, v model.MediaPlacementCharging) graphql.Marshaler {
+	return v
+}
+
+func (ec *executionContext) unmarshalNMediaPlacementCharging2ᚕframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementChargingᚄ(ctx context.Context, v any) ([]model.MediaPlacementCharging, error) {
+	var vSlice []any
+	vSlice = graphql.CoerceList(v)
+	var err error
+	res := make([]model.MediaPlacementCharging, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNMediaPlacementCharging2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementCharging(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+func (ec *executionContext) marshalNMediaPlacementCharging2ᚕframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementChargingᚄ(ctx context.Context, sel ast.SelectionSet, v []model.MediaPlacementCharging) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNMediaPlacementCharging2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementCharging(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) unmarshalNMediaPlacementClass2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementClass(ctx context.Context, v any) (model.MediaPlacementClass, error) {
+	var res model.MediaPlacementClass
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNMediaPlacementClass2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementClass(ctx context.Context, sel ast.SelectionSet, v model.MediaPlacementClass) graphql.Marshaler {
+	return v
+}
+
+func (ec *executionContext) unmarshalNMediaPlacementClass2ᚕframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementClassᚄ(ctx context.Context, v any) ([]model.MediaPlacementClass, error) {
+	var vSlice []any
+	vSlice = graphql.CoerceList(v)
+	var err error
+	res := make([]model.MediaPlacementClass, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNMediaPlacementClass2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementClass(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+func (ec *executionContext) marshalNMediaPlacementClass2ᚕframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementClassᚄ(ctx context.Context, sel ast.SelectionSet, v []model.MediaPlacementClass) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNMediaPlacementClass2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementClass(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNMediaPlacementConstraints2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementConstraintsᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.MediaPlacementConstraints) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNMediaPlacementConstraints2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementConstraints(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNMediaPlacementConstraints2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementConstraints(ctx context.Context, sel ast.SelectionSet, v *model.MediaPlacementConstraints) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._MediaPlacementConstraints(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNMediaPlacementConstraintsInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementConstraintsInput(ctx context.Context, v any) (*model.MediaPlacementConstraintsInput, error) {
+	res, err := ec.unmarshalInputMediaPlacementConstraintsInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNMediaPlacementDifference2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementDifferenceᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.MediaPlacementDifference) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNMediaPlacementDifference2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementDifference(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNMediaPlacementDifference2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementDifference(ctx context.Context, sel ast.SelectionSet, v *model.MediaPlacementDifference) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._MediaPlacementDifference(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNMediaPlacementEffectivePolicy2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementEffectivePolicy(ctx context.Context, sel ast.SelectionSet, v *model.MediaPlacementEffectivePolicy) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._MediaPlacementEffectivePolicy(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNMediaPlacementErrorCode2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementErrorCode(ctx context.Context, v any) (model.MediaPlacementErrorCode, error) {
+	var res model.MediaPlacementErrorCode
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNMediaPlacementErrorCode2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementErrorCode(ctx context.Context, sel ast.SelectionSet, v model.MediaPlacementErrorCode) graphql.Marshaler {
+	return v
+}
+
+func (ec *executionContext) marshalNMediaPlacementFeatures2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementFeatures(ctx context.Context, sel ast.SelectionSet, v *model.MediaPlacementFeatures) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._MediaPlacementFeatures(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNMediaPlacementFieldError2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementFieldErrorᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.MediaPlacementFieldError) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNMediaPlacementFieldError2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementFieldError(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNMediaPlacementFieldError2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementFieldError(ctx context.Context, sel ast.SelectionSet, v *model.MediaPlacementFieldError) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._MediaPlacementFieldError(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNMediaPlacementGroup2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementGroupᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.MediaPlacementGroup) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNMediaPlacementGroup2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementGroup(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNMediaPlacementGroup2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementGroup(ctx context.Context, sel ast.SelectionSet, v *model.MediaPlacementGroup) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._MediaPlacementGroup(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNMediaPlacementGroupInput2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementGroupInputᚄ(ctx context.Context, v any) ([]*model.MediaPlacementGroupInput, error) {
+	var vSlice []any
+	vSlice = graphql.CoerceList(v)
+	var err error
+	res := make([]*model.MediaPlacementGroupInput, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNMediaPlacementGroupInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementGroupInput(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+func (ec *executionContext) unmarshalNMediaPlacementGroupInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementGroupInput(ctx context.Context, v any) (*model.MediaPlacementGroupInput, error) {
+	res, err := ec.unmarshalInputMediaPlacementGroupInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNMediaPlacementImpact2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementImpact(ctx context.Context, sel ast.SelectionSet, v *model.MediaPlacementImpact) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._MediaPlacementImpact(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNMediaPlacementLegacyPinsResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementLegacyPinsResult(ctx context.Context, sel ast.SelectionSet, v model.MediaPlacementLegacyPinsResult) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._MediaPlacementLegacyPinsResult(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNMediaPlacementOption2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementOptionᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.MediaPlacementOption) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNMediaPlacementOption2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementOption(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNMediaPlacementOption2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementOption(ctx context.Context, sel ast.SelectionSet, v *model.MediaPlacementOption) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._MediaPlacementOption(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNMediaPlacementOptionKind2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementOptionKind(ctx context.Context, v any) (model.MediaPlacementOptionKind, error) {
+	var res model.MediaPlacementOptionKind
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNMediaPlacementOptionKind2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementOptionKind(ctx context.Context, sel ast.SelectionSet, v model.MediaPlacementOptionKind) graphql.Marshaler {
+	return v
+}
+
+func (ec *executionContext) marshalNMediaPlacementOptionsResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementOptionsResult(ctx context.Context, sel ast.SelectionSet, v model.MediaPlacementOptionsResult) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._MediaPlacementOptionsResult(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNMediaPlacementOrder2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementOrder(ctx context.Context, v any) (model.MediaPlacementOrder, error) {
+	var res model.MediaPlacementOrder
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNMediaPlacementOrder2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementOrder(ctx context.Context, sel ast.SelectionSet, v model.MediaPlacementOrder) graphql.Marshaler {
+	return v
+}
+
+func (ec *executionContext) marshalNMediaPlacementPolicyResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementPolicyResult(ctx context.Context, sel ast.SelectionSet, v model.MediaPlacementPolicyResult) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._MediaPlacementPolicyResult(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNMediaPlacementPreviewResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementPreviewResult(ctx context.Context, sel ast.SelectionSet, v model.MediaPlacementPreviewResult) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._MediaPlacementPreviewResult(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNMediaPlacementRecipient2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementRecipientᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.MediaPlacementRecipient) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNMediaPlacementRecipient2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementRecipient(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNMediaPlacementRecipient2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementRecipient(ctx context.Context, sel ast.SelectionSet, v *model.MediaPlacementRecipient) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._MediaPlacementRecipient(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNMediaPlacementReviewResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementReviewResult(ctx context.Context, sel ast.SelectionSet, v model.MediaPlacementReviewResult) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._MediaPlacementReviewResult(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalNMediaPlacementRollout2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementRollout(ctx context.Context, sel ast.SelectionSet, v *model.MediaPlacementRollout) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._MediaPlacementRollout(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNMediaPlacementRolloutStatus2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementRolloutStatus(ctx context.Context, v any) (model.MediaPlacementRolloutStatus, error) {
+	var res model.MediaPlacementRolloutStatus
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNMediaPlacementRolloutStatus2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementRolloutStatus(ctx context.Context, sel ast.SelectionSet, v model.MediaPlacementRolloutStatus) graphql.Marshaler {
+	return v
+}
+
+func (ec *executionContext) marshalNMediaPlacementScope2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementScope(ctx context.Context, sel ast.SelectionSet, v *model.MediaPlacementScope) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._MediaPlacementScope(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNMediaPlacementScopeInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementScopeInput(ctx context.Context, v any) (model.MediaPlacementScopeInput, error) {
+	res, err := ec.unmarshalInputMediaPlacementScopeInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalNMediaPlacementScopeInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementScopeInput(ctx context.Context, v any) (*model.MediaPlacementScopeInput, error) {
+	res, err := ec.unmarshalInputMediaPlacementScopeInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalNMediaPlacementScopeKind2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementScopeKind(ctx context.Context, v any) (model.MediaPlacementScopeKind, error) {
+	var res model.MediaPlacementScopeKind
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNMediaPlacementScopeKind2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementScopeKind(ctx context.Context, sel ast.SelectionSet, v model.MediaPlacementScopeKind) graphql.Marshaler {
+	return v
+}
+
+func (ec *executionContext) marshalNMediaPlacementSelector2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementSelectorᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.MediaPlacementSelector) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNMediaPlacementSelector2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementSelector(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNMediaPlacementSelector2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementSelector(ctx context.Context, sel ast.SelectionSet, v *model.MediaPlacementSelector) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._MediaPlacementSelector(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNMediaPlacementSelectorInput2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementSelectorInputᚄ(ctx context.Context, v any) ([]*model.MediaPlacementSelectorInput, error) {
+	var vSlice []any
+	vSlice = graphql.CoerceList(v)
+	var err error
+	res := make([]*model.MediaPlacementSelectorInput, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNMediaPlacementSelectorInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementSelectorInput(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+func (ec *executionContext) unmarshalNMediaPlacementSelectorInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementSelectorInput(ctx context.Context, v any) (*model.MediaPlacementSelectorInput, error) {
+	res, err := ec.unmarshalInputMediaPlacementSelectorInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalNMediaPlacementSpillover2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementSpillover(ctx context.Context, v any) (model.MediaPlacementSpillover, error) {
+	var res model.MediaPlacementSpillover
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNMediaPlacementSpillover2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementSpillover(ctx context.Context, sel ast.SelectionSet, v model.MediaPlacementSpillover) graphql.Marshaler {
+	return v
+}
+
+func (ec *executionContext) marshalNMediaPlacementTransition2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementTransitionᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.MediaPlacementTransition) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNMediaPlacementTransition2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementTransition(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNMediaPlacementTransition2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementTransition(ctx context.Context, sel ast.SelectionSet, v *model.MediaPlacementTransition) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._MediaPlacementTransition(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNMediaPlacementUpdateKind2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementUpdateKind(ctx context.Context, v any) (model.MediaPlacementUpdateKind, error) {
+	var res model.MediaPlacementUpdateKind
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNMediaPlacementUpdateKind2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementUpdateKind(ctx context.Context, sel ast.SelectionSet, v model.MediaPlacementUpdateKind) graphql.Marshaler {
+	return v
+}
+
+func (ec *executionContext) unmarshalNMediaPlacementVerb2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementVerb(ctx context.Context, v any) (model.MediaPlacementVerb, error) {
+	var res model.MediaPlacementVerb
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNMediaPlacementVerb2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementVerb(ctx context.Context, sel ast.SelectionSet, v model.MediaPlacementVerb) graphql.Marshaler {
+	return v
+}
+
+func (ec *executionContext) marshalNMediaPlacementVerbPolicy2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementVerbPolicyᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.MediaPlacementVerbPolicy) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNMediaPlacementVerbPolicy2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementVerbPolicy(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNMediaPlacementVerbPolicy2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementVerbPolicy(ctx context.Context, sel ast.SelectionSet, v *model.MediaPlacementVerbPolicy) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._MediaPlacementVerbPolicy(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNMediaPlacementVerbUpdateInput2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementVerbUpdateInputᚄ(ctx context.Context, v any) ([]*model.MediaPlacementVerbUpdateInput, error) {
+	var vSlice []any
+	vSlice = graphql.CoerceList(v)
+	var err error
+	res := make([]*model.MediaPlacementVerbUpdateInput, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNMediaPlacementVerbUpdateInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementVerbUpdateInput(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+func (ec *executionContext) unmarshalNMediaPlacementVerbUpdateInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementVerbUpdateInput(ctx context.Context, v any) (*model.MediaPlacementVerbUpdateInput, error) {
+	res, err := ec.unmarshalInputMediaPlacementVerbUpdateInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNMediaPlacementWarning2ᚕᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementWarningᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.MediaPlacementWarning) graphql.Marshaler {
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNMediaPlacementWarning2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementWarning(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) marshalNMediaPlacementWarning2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementWarning(ctx context.Context, sel ast.SelectionSet, v *model.MediaPlacementWarning) graphql.Marshaler {
+	if v == nil {
+		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
+			graphql.AddErrorf(ctx, "the requested element is null which the schema does not allow")
+		}
+		return graphql.Null
+	}
+	return ec._MediaPlacementWarning(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalNMediaPlacementWarningSeverity2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementWarningSeverity(ctx context.Context, v any) (model.MediaPlacementWarningSeverity, error) {
+	var res model.MediaPlacementWarningSeverity
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalNMediaPlacementWarningSeverity2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementWarningSeverity(ctx context.Context, sel ast.SelectionSet, v model.MediaPlacementWarningSeverity) graphql.Marshaler {
+	return v
 }
 
 func (ec *executionContext) marshalNMediaRetentionBounds2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋcommodoreᚐMediaRetentionBounds(ctx context.Context, sel ast.SelectionSet, v *commodorepb.MediaRetentionBounds) graphql.Marshaler {
@@ -171676,6 +182572,11 @@ func (ec *executionContext) marshalNPlayerBootTimeSeriesBucket2ᚖgithubᚗcom�
 	return ec._PlayerBootTimeSeriesBucket(ctx, sel, v)
 }
 
+func (ec *executionContext) unmarshalNPreviewMediaPlacementInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐPreviewMediaPlacementInput(ctx context.Context, v any) (model.PreviewMediaPlacementInput, error) {
+	res, err := ec.unmarshalInputPreviewMediaPlacementInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
 func (ec *executionContext) marshalNPricingRule2ᚕᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋpurserᚐPricingRuleᚄ(ctx context.Context, sel ast.SelectionSet, v []*purserpb.PricingRule) graphql.Marshaler {
 	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
 		fc := graphql.GetFieldContext(ctx)
@@ -172022,6 +182923,16 @@ func (ec *executionContext) unmarshalNRetentionSource2frameworksᚋapi_gateway�
 
 func (ec *executionContext) marshalNRetentionSource2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐRetentionSource(ctx context.Context, sel ast.SelectionSet, v model.RetentionSource) graphql.Marshaler {
 	return v
+}
+
+func (ec *executionContext) unmarshalNReviewMediaCapacityConsentInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐReviewMediaCapacityConsentInput(ctx context.Context, v any) (model.ReviewMediaCapacityConsentInput, error) {
+	res, err := ec.unmarshalInputReviewMediaCapacityConsentInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalNReviewMediaPlacementChangeInput2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐReviewMediaPlacementChangeInput(ctx context.Context, v any) (model.ReviewMediaPlacementChangeInput, error) {
+	res, err := ec.unmarshalInputReviewMediaPlacementChangeInput(ctx, v)
+	return res, graphql.ErrorOnPath(ctx, err)
 }
 
 func (ec *executionContext) marshalNRevokeBootstrapTokenResult2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐRevokeBootstrapTokenResult(ctx context.Context, sel ast.SelectionSet, v model.RevokeBootstrapTokenResult) graphql.Marshaler {
@@ -175577,6 +186488,227 @@ func (ec *executionContext) marshalOMarketplaceCluster2ᚖgithubᚗcomᚋLivepee
 		return graphql.Null
 	}
 	return ec._MarketplaceCluster(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalOMediaIngestProtocol2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaIngestProtocol(ctx context.Context, v any) (*model.MediaIngestProtocol, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var res = new(model.MediaIngestProtocol)
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOMediaIngestProtocol2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaIngestProtocol(ctx context.Context, sel ast.SelectionSet, v *model.MediaIngestProtocol) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return v
+}
+
+func (ec *executionContext) marshalOMediaPlacementAllow2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementAllow(ctx context.Context, sel ast.SelectionSet, v *model.MediaPlacementAllow) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._MediaPlacementAllow(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalOMediaPlacementAllowInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementAllowInput(ctx context.Context, v any) (*model.MediaPlacementAllowInput, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputMediaPlacementAllowInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOMediaPlacementCandidateExplanation2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementCandidateExplanation(ctx context.Context, sel ast.SelectionSet, v *model.MediaPlacementCandidateExplanation) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._MediaPlacementCandidateExplanation(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalOMediaPlacementCharging2ᚕframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementChargingᚄ(ctx context.Context, v any) ([]model.MediaPlacementCharging, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var vSlice []any
+	vSlice = graphql.CoerceList(v)
+	var err error
+	res := make([]model.MediaPlacementCharging, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNMediaPlacementCharging2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementCharging(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+func (ec *executionContext) marshalOMediaPlacementCharging2ᚕframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementChargingᚄ(ctx context.Context, sel ast.SelectionSet, v []model.MediaPlacementCharging) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNMediaPlacementCharging2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementCharging(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) unmarshalOMediaPlacementClass2ᚕframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementClassᚄ(ctx context.Context, v any) ([]model.MediaPlacementClass, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var vSlice []any
+	vSlice = graphql.CoerceList(v)
+	var err error
+	res := make([]model.MediaPlacementClass, len(vSlice))
+	for i := range vSlice {
+		ctx := graphql.WithPathContext(ctx, graphql.NewPathWithIndex(i))
+		res[i], err = ec.unmarshalNMediaPlacementClass2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementClass(ctx, vSlice[i])
+		if err != nil {
+			return nil, err
+		}
+	}
+	return res, nil
+}
+
+func (ec *executionContext) marshalOMediaPlacementClass2ᚕframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementClassᚄ(ctx context.Context, sel ast.SelectionSet, v []model.MediaPlacementClass) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	ret := graphql.MarshalSliceConcurrently(ctx, len(v), 0, false, func(ctx context.Context, i int) graphql.Marshaler {
+		fc := graphql.GetFieldContext(ctx)
+		fc.Result = &v[i]
+		return ec.marshalNMediaPlacementClass2frameworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementClass(ctx, sel, v[i])
+	})
+
+	for _, e := range ret {
+		if e == graphql.Null {
+			return graphql.Null
+		}
+	}
+
+	return ret
+}
+
+func (ec *executionContext) unmarshalOMediaPlacementClass2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementClass(ctx context.Context, v any) (*model.MediaPlacementClass, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var res = new(model.MediaPlacementClass)
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOMediaPlacementClass2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementClass(ctx context.Context, sel ast.SelectionSet, v *model.MediaPlacementClass) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return v
+}
+
+func (ec *executionContext) unmarshalOMediaPlacementCoordinatesInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementCoordinatesInput(ctx context.Context, v any) (*model.MediaPlacementCoordinatesInput, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputMediaPlacementCoordinatesInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalOMediaPlacementOptionKind2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementOptionKind(ctx context.Context, v any) (*model.MediaPlacementOptionKind, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var res = new(model.MediaPlacementOptionKind)
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOMediaPlacementOptionKind2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementOptionKind(ctx context.Context, sel ast.SelectionSet, v *model.MediaPlacementOptionKind) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return v
+}
+
+func (ec *executionContext) unmarshalOMediaPlacementOptionsFilter2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementOptionsFilter(ctx context.Context, v any) (*model.MediaPlacementOptionsFilter, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputMediaPlacementOptionsFilter(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOMediaPlacementPreferences2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementPreferences(ctx context.Context, sel ast.SelectionSet, v *model.MediaPlacementPreferences) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._MediaPlacementPreferences(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalOMediaPlacementPreferencesInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementPreferencesInput(ctx context.Context, v any) (*model.MediaPlacementPreferencesInput, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputMediaPlacementPreferencesInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOMediaPlacementPrice2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementPrice(ctx context.Context, sel ast.SelectionSet, v *model.MediaPlacementPrice) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._MediaPlacementPrice(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalOMediaPlacementRules2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementRules(ctx context.Context, sel ast.SelectionSet, v *model.MediaPlacementRules) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._MediaPlacementRules(ctx, sel, v)
+}
+
+func (ec *executionContext) unmarshalOMediaPlacementRulesInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementRulesInput(ctx context.Context, v any) (*model.MediaPlacementRulesInput, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputMediaPlacementRulesInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalOMediaPlacementVerbUpdateInput2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaPlacementVerbUpdateInput(ctx context.Context, v any) (*model.MediaPlacementVerbUpdateInput, error) {
+	if v == nil {
+		return nil, nil
+	}
+	res, err := ec.unmarshalInputMediaPlacementVerbUpdateInput(ctx, v)
+	return &res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) unmarshalOMediaViewerProtocol2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaViewerProtocol(ctx context.Context, v any) (*model.MediaViewerProtocol, error) {
+	if v == nil {
+		return nil, nil
+	}
+	var res = new(model.MediaViewerProtocol)
+	err := res.UnmarshalGQL(v)
+	return res, graphql.ErrorOnPath(ctx, err)
+}
+
+func (ec *executionContext) marshalOMediaViewerProtocol2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMediaViewerProtocol(ctx context.Context, sel ast.SelectionSet, v *model.MediaViewerProtocol) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return v
 }
 
 func (ec *executionContext) marshalOMessage2ᚖframeworksᚋapi_gatewayᚋgraphᚋmodelᚐMessage(ctx context.Context, sel ast.SelectionSet, v *model.Message) graphql.Marshaler {

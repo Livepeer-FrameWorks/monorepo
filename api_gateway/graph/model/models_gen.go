@@ -120,6 +120,38 @@ type LinkWalletResult interface {
 	IsLinkWalletResult()
 }
 
+type MediaCapacityConsentChangeResult interface {
+	IsMediaCapacityConsentChangeResult()
+}
+
+type MediaCapacityConsentResult interface {
+	IsMediaCapacityConsentResult()
+}
+
+type MediaPlacementChangeResult interface {
+	IsMediaPlacementChangeResult()
+}
+
+type MediaPlacementLegacyPinsResult interface {
+	IsMediaPlacementLegacyPinsResult()
+}
+
+type MediaPlacementOptionsResult interface {
+	IsMediaPlacementOptionsResult()
+}
+
+type MediaPlacementPolicyResult interface {
+	IsMediaPlacementPolicyResult()
+}
+
+type MediaPlacementPreviewResult interface {
+	IsMediaPlacementPreviewResult()
+}
+
+type MediaPlacementReviewResult interface {
+	IsMediaPlacementReviewResult()
+}
+
 type MollieFirstPaymentResult interface {
 	IsMollieFirstPaymentResult()
 }
@@ -240,6 +272,27 @@ type APIUsageConnection struct {
 type APIUsageEdge struct {
 	Cursor string                      `json:"cursor"`
 	Node   *periscopepb.APIUsageRecord `json:"node"`
+}
+
+type ApplyMediaCapacityConsentInput struct {
+	ClusterID              string   `json:"clusterId"`
+	ExpectedRevision       string   `json:"expectedRevision"`
+	AllowIngest            bool     `json:"allowIngest"`
+	AllowServe             bool     `json:"allowServe"`
+	AllowExternalSource    bool     `json:"allowExternalSource"`
+	ReviewToken            string   `json:"reviewToken"`
+	IdempotencyKey         string   `json:"idempotencyKey"`
+	AcknowledgedWarningIds []string `json:"acknowledgedWarningIds"`
+}
+
+type ApplyMediaPlacementChangeInput struct {
+	Scope                  *MediaPlacementScopeInput        `json:"scope"`
+	ExpectedRevision       string                           `json:"expectedRevision"`
+	ExpectedParentRevision string                           `json:"expectedParentRevision"`
+	Updates                []*MediaPlacementVerbUpdateInput `json:"updates"`
+	ReviewToken            string                           `json:"reviewToken"`
+	IdempotencyKey         string                           `json:"idempotencyKey"`
+	AcknowledgedWarningIds []string                         `json:"acknowledgedWarningIds"`
 }
 
 type ArtifactEventEdge struct {
@@ -411,6 +464,22 @@ func (AuthError) IsChangeBillingTierResult() {}
 func (AuthError) IsCreateConversationResult() {}
 
 func (AuthError) IsSendMessageResult() {}
+
+func (AuthError) IsMediaPlacementPolicyResult() {}
+
+func (AuthError) IsMediaPlacementOptionsResult() {}
+
+func (AuthError) IsMediaPlacementPreviewResult() {}
+
+func (AuthError) IsMediaPlacementReviewResult() {}
+
+func (AuthError) IsMediaPlacementChangeResult() {}
+
+func (AuthError) IsMediaPlacementLegacyPinsResult() {}
+
+func (AuthError) IsMediaCapacityConsentResult() {}
+
+func (AuthError) IsMediaCapacityConsentChangeResult() {}
 
 type AvailableCluster struct {
 	ClusterID   string   `json:"clusterId"`
@@ -1215,6 +1284,345 @@ type MarketplaceClusterEdge struct {
 	Node   *quartermasterpb.MarketplaceClusterEntry `json:"node"`
 }
 
+type MediaCapacityConsent struct {
+	ClusterID           string                 `json:"clusterId"`
+	Revision            string                 `json:"revision"`
+	AllowIngest         bool                   `json:"allowIngest"`
+	AllowServe          bool                   `json:"allowServe"`
+	AllowExternalSource bool                   `json:"allowExternalSource"`
+	CanManage           bool                   `json:"canManage"`
+	Rollout             *MediaPlacementRollout `json:"rollout"`
+}
+
+func (MediaCapacityConsent) IsMediaCapacityConsentResult() {}
+
+type MediaCapacityConsentChange struct {
+	ClusterID      string                 `json:"clusterId"`
+	IdempotencyKey string                 `json:"idempotencyKey"`
+	Revision       string                 `json:"revision"`
+	Digest         string                 `json:"digest"`
+	Rollout        *MediaPlacementRollout `json:"rollout"`
+	CreatedAt      time.Time              `json:"createdAt"`
+}
+
+func (MediaCapacityConsentChange) IsMediaCapacityConsentChangeResult() {}
+
+type MediaPlacementActions struct {
+	CanRead                     bool `json:"canRead"`
+	CanPreview                  bool `json:"canPreview"`
+	CanManage                   bool `json:"canManage"`
+	CanInspectPrivateCandidates bool `json:"canInspectPrivateCandidates"`
+}
+
+type MediaPlacementAllow struct {
+	Any []*MediaPlacementSelector `json:"any"`
+}
+
+type MediaPlacementAllowInput struct {
+	Any []*MediaPlacementSelectorInput `json:"any"`
+}
+
+type MediaPlacementCandidateExplanation struct {
+	ClusterID   string  `json:"clusterId"`
+	ClusterName string  `json:"clusterName"`
+	Region      *string `json:"region,omitempty"`
+	// Only returned when private candidate inspection is authorized.
+	NodeID             *string              `json:"nodeId,omitempty"`
+	GroupID            *string              `json:"groupId,omitempty"`
+	Reason             string               `json:"reason"`
+	DistanceKm         *float64             `json:"distanceKm,omitempty"`
+	RequiresSourcePull bool                 `json:"requiresSourcePull"`
+	Price              *MediaPlacementPrice `json:"price,omitempty"`
+}
+
+type MediaPlacementChange struct {
+	Scope          *MediaPlacementScope   `json:"scope"`
+	IdempotencyKey string                 `json:"idempotencyKey"`
+	Revision       string                 `json:"revision"`
+	ParentRevision string                 `json:"parentRevision"`
+	Digest         string                 `json:"digest"`
+	Rollout        *MediaPlacementRollout `json:"rollout"`
+	CreatedAt      time.Time              `json:"createdAt"`
+}
+
+func (MediaPlacementChange) IsMediaPlacementChangeResult() {}
+
+type MediaPlacementConstraints struct {
+	Allow *MediaPlacementAllow      `json:"allow,omitempty"`
+	Deny  []*MediaPlacementSelector `json:"deny"`
+}
+
+type MediaPlacementConstraintsInput struct {
+	// Omitted means no additional restriction; an explicit empty any list allows nothing.
+	Allow *MediaPlacementAllowInput      `json:"allow,omitempty"`
+	Deny  []*MediaPlacementSelectorInput `json:"deny"`
+}
+
+type MediaPlacementCoordinatesInput struct {
+	Latitude  float64 `json:"latitude"`
+	Longitude float64 `json:"longitude"`
+}
+
+type MediaPlacementDifference struct {
+	Path   string `json:"path"`
+	Label  string `json:"label"`
+	Before string `json:"before"`
+	After  string `json:"after"`
+}
+
+type MediaPlacementEffectivePolicy struct {
+	SchemaVersion int                          `json:"schemaVersion"`
+	Digest        string                       `json:"digest"`
+	Layers        []*MediaPlacementConstraints `json:"layers"`
+	Groups        []*MediaPlacementGroup       `json:"groups"`
+}
+
+type MediaPlacementError struct {
+	Code              MediaPlacementErrorCode     `json:"code"`
+	Message           string                      `json:"message"`
+	Fields            []*MediaPlacementFieldError `json:"fields"`
+	CurrentRevision   *string                     `json:"currentRevision,omitempty"`
+	ParentRevision    *string                     `json:"parentRevision,omitempty"`
+	RetryAfterSeconds *int                        `json:"retryAfterSeconds,omitempty"`
+}
+
+func (MediaPlacementError) IsMediaPlacementPolicyResult() {}
+
+func (MediaPlacementError) IsMediaPlacementOptionsResult() {}
+
+func (MediaPlacementError) IsMediaPlacementPreviewResult() {}
+
+func (MediaPlacementError) IsMediaPlacementReviewResult() {}
+
+func (MediaPlacementError) IsMediaPlacementChangeResult() {}
+
+func (MediaPlacementError) IsMediaPlacementLegacyPinsResult() {}
+
+func (MediaPlacementError) IsMediaCapacityConsentResult() {}
+
+func (MediaPlacementError) IsMediaCapacityConsentChangeResult() {}
+
+type MediaPlacementFeatures struct {
+	SchemaVersion       int      `json:"schemaVersion"`
+	GeographicSpillover bool     `json:"geographicSpillover"`
+	PriceOrdering       bool     `json:"priceOrdering"`
+	SupportedPresets    []string `json:"supportedPresets"`
+}
+
+type MediaPlacementFieldError struct {
+	Path    string  `json:"path"`
+	GroupID *string `json:"groupId,omitempty"`
+	Message string  `json:"message"`
+}
+
+type MediaPlacementGroup struct {
+	ID                string                  `json:"id"`
+	Match             *MediaPlacementSelector `json:"match"`
+	Order             MediaPlacementOrder     `json:"order"`
+	Spillover         MediaPlacementSpillover `json:"spillover"`
+	MaxDistanceKm     float64                 `json:"maxDistanceKm"`
+	GeoHoleDistanceKm float64                 `json:"geoHoleDistanceKm"`
+	MinImprovementKm  float64                 `json:"minImprovementKm"`
+	PriceCurrency     *string                 `json:"priceCurrency,omitempty"`
+	PriceUnit         *string                 `json:"priceUnit,omitempty"`
+}
+
+type MediaPlacementGroupInput struct {
+	ID        string                       `json:"id"`
+	Match     *MediaPlacementSelectorInput `json:"match"`
+	Order     MediaPlacementOrder          `json:"order"`
+	Spillover MediaPlacementSpillover      `json:"spillover"`
+	// Hard maximum distance in km. Zero means unbounded.
+	MaxDistanceKm float64 `json:"maxDistanceKm"`
+	// Soft threshold for geographic spill; must be positive for GEO_HOLE modes.
+	GeoHoleDistanceKm float64 `json:"geoHoleDistanceKm"`
+	MinImprovementKm  float64 `json:"minImprovementKm"`
+	PriceCurrency     *string `json:"priceCurrency,omitempty"`
+	PriceUnit         *string `json:"priceUnit,omitempty"`
+}
+
+type MediaPlacementImpact struct {
+	AffectedStreams          int  `json:"affectedStreams"`
+	ActivePublishers         int  `json:"activePublishers"`
+	Complete                 bool `json:"complete"`
+	ExistingSessionsRetained bool `json:"existingSessionsRetained"`
+}
+
+type MediaPlacementLegacyPins struct {
+	StreamID          string   `json:"streamId"`
+	ClusterIds        []string `json:"clusterIds"`
+	CurrentlyEnforced bool     `json:"currentlyEnforced"`
+}
+
+func (MediaPlacementLegacyPins) IsMediaPlacementLegacyPinsResult() {}
+
+type MediaPlacementOption struct {
+	ID           string                   `json:"id"`
+	Name         string                   `json:"name"`
+	Kind         MediaPlacementOptionKind `json:"kind"`
+	ClusterClass *MediaPlacementClass     `json:"clusterClass,omitempty"`
+	Region       *string                  `json:"region,omitempty"`
+	OwnerID      *string                  `json:"ownerId,omitempty"`
+	Eligible     bool                     `json:"eligible"`
+	Reason       *string                  `json:"reason,omitempty"`
+}
+
+type MediaPlacementOptionsConnection struct {
+	Nodes    []*MediaPlacementOption `json:"nodes"`
+	PageInfo *PageInfo               `json:"pageInfo"`
+}
+
+func (MediaPlacementOptionsConnection) IsMediaPlacementOptionsResult() {}
+
+type MediaPlacementOptionsFilter struct {
+	Query   *string                   `json:"query,omitempty"`
+	Kind    *MediaPlacementOptionKind `json:"kind,omitempty"`
+	Classes []MediaPlacementClass     `json:"classes,omitempty"`
+}
+
+type MediaPlacementPolicyState struct {
+	Scope                *MediaPlacementScope        `json:"scope"`
+	Revision             string                      `json:"revision"`
+	ParentRevision       string                      `json:"parentRevision"`
+	ActiveRevision       *string                     `json:"activeRevision,omitempty"`
+	ActiveParentRevision *string                     `json:"activeParentRevision,omitempty"`
+	Verbs                []*MediaPlacementVerbPolicy `json:"verbs"`
+	Rollout              *MediaPlacementRollout      `json:"rollout"`
+	Actions              *MediaPlacementActions      `json:"actions"`
+	Features             *MediaPlacementFeatures     `json:"features"`
+}
+
+func (MediaPlacementPolicyState) IsMediaPlacementPolicyResult() {}
+
+type MediaPlacementPreferences struct {
+	Groups []*MediaPlacementGroup `json:"groups"`
+}
+
+type MediaPlacementPreferencesInput struct {
+	Groups []*MediaPlacementGroupInput `json:"groups"`
+}
+
+type MediaPlacementPreview struct {
+	Scope                 *MediaPlacementScope                  `json:"scope"`
+	Verb                  MediaPlacementVerb                    `json:"verb"`
+	Revision              string                                `json:"revision"`
+	ParentRevision        string                                `json:"parentRevision"`
+	Digest                string                                `json:"digest"`
+	Reason                string                                `json:"reason"`
+	Selected              *MediaPlacementCandidateExplanation   `json:"selected,omitempty"`
+	Candidates            []*MediaPlacementCandidateExplanation `json:"candidates"`
+	Transitions           []*MediaPlacementTransition           `json:"transitions"`
+	ObservedAt            time.Time                             `json:"observedAt"`
+	ExpiresAt             time.Time                             `json:"expiresAt"`
+	Complete              bool                                  `json:"complete"`
+	SourceEvaluated       bool                                  `json:"sourceEvaluated"`
+	ActiveIngestClusterID *string                               `json:"activeIngestClusterId,omitempty"`
+}
+
+func (MediaPlacementPreview) IsMediaPlacementPreviewResult() {}
+
+type MediaPlacementPrice struct {
+	AmountMicros string    `json:"amountMicros"`
+	Currency     string    `json:"currency"`
+	Unit         string    `json:"unit"`
+	Revision     string    `json:"revision"`
+	ExpiresAt    time.Time `json:"expiresAt"`
+}
+
+type MediaPlacementRecipient struct {
+	ID                 string                      `json:"id"`
+	Name               string                      `json:"name"`
+	Status             MediaPlacementRolloutStatus `json:"status"`
+	Reason             *string                     `json:"reason,omitempty"`
+	AuthorityExpiresAt *time.Time                  `json:"authorityExpiresAt,omitempty"`
+}
+
+type MediaPlacementReview struct {
+	ReviewToken string                      `json:"reviewToken"`
+	Digest      string                      `json:"digest"`
+	ExpiresAt   time.Time                   `json:"expiresAt"`
+	Differences []*MediaPlacementDifference `json:"differences"`
+	Warnings    []*MediaPlacementWarning    `json:"warnings"`
+	Impact      *MediaPlacementImpact       `json:"impact"`
+}
+
+func (MediaPlacementReview) IsMediaPlacementReviewResult() {}
+
+type MediaPlacementRollout struct {
+	Status                   MediaPlacementRolloutStatus `json:"status"`
+	RequiredRecipients       int                         `json:"requiredRecipients"`
+	AppliedRecipients        int                         `json:"appliedRecipients"`
+	PendingRecipients        []*MediaPlacementRecipient  `json:"pendingRecipients"`
+	ExistingSessionsRetained bool                        `json:"existingSessionsRetained"`
+	UpdatedAt                *time.Time                  `json:"updatedAt,omitempty"`
+}
+
+type MediaPlacementRules struct {
+	SchemaVersion int                        `json:"schemaVersion"`
+	Constraints   *MediaPlacementConstraints `json:"constraints"`
+	Preferences   *MediaPlacementPreferences `json:"preferences,omitempty"`
+}
+
+type MediaPlacementRulesInput struct {
+	SchemaVersion int                             `json:"schemaVersion"`
+	Constraints   *MediaPlacementConstraintsInput `json:"constraints"`
+	// Omitted inherits preference order; an explicit empty groups list denies all destinations.
+	Preferences *MediaPlacementPreferencesInput `json:"preferences,omitempty"`
+}
+
+type MediaPlacementScope struct {
+	Kind     MediaPlacementScopeKind `json:"kind"`
+	StreamID *string                 `json:"streamId,omitempty"`
+}
+
+type MediaPlacementScopeInput struct {
+	Kind     MediaPlacementScopeKind `json:"kind"`
+	StreamID *string                 `json:"streamId,omitempty"`
+}
+
+type MediaPlacementSelector struct {
+	ClusterIds []string                 `json:"clusterIds"`
+	OwnerIds   []string                 `json:"ownerIds"`
+	Regions    []string                 `json:"regions"`
+	Classes    []MediaPlacementClass    `json:"classes"`
+	Charging   []MediaPlacementCharging `json:"charging"`
+}
+
+// Fields combine with AND; values within a field combine with OR. Empty matches all entitled capacity.
+type MediaPlacementSelectorInput struct {
+	ClusterIds []string                 `json:"clusterIds,omitempty"`
+	OwnerIds   []string                 `json:"ownerIds,omitempty"`
+	Regions    []string                 `json:"regions,omitempty"`
+	Classes    []MediaPlacementClass    `json:"classes,omitempty"`
+	Charging   []MediaPlacementCharging `json:"charging,omitempty"`
+}
+
+type MediaPlacementTransition struct {
+	FromGroup string `json:"fromGroup"`
+	Reason    string `json:"reason"`
+}
+
+type MediaPlacementVerbPolicy struct {
+	Verb           MediaPlacementVerb   `json:"verb"`
+	OwnRules       *MediaPlacementRules `json:"ownRules,omitempty"`
+	InheritedRules *MediaPlacementRules `json:"inheritedRules,omitempty"`
+	// Compiled requested intent; enforcement progress is reported separately.
+	RequestedEffective *MediaPlacementEffectivePolicy `json:"requestedEffective"`
+}
+
+type MediaPlacementVerbUpdateInput struct {
+	Verb  MediaPlacementVerb        `json:"verb"`
+	Kind  MediaPlacementUpdateKind  `json:"kind"`
+	Rules *MediaPlacementRulesInput `json:"rules,omitempty"`
+}
+
+type MediaPlacementWarning struct {
+	ID                      string                        `json:"id"`
+	Severity                MediaPlacementWarningSeverity `json:"severity"`
+	Message                 string                        `json:"message"`
+	AcknowledgementRequired bool                          `json:"acknowledgementRequired"`
+}
+
 // Tenant-default retention policy: per-class overrides + the values the
 // cascade would resolve to today for a hypothetical new artifact of each
 // class (no per-stream context).
@@ -1526,6 +1934,22 @@ func (NotFoundError) IsUnlinkWalletResult() {}
 
 func (NotFoundError) IsSendMessageResult() {}
 
+func (NotFoundError) IsMediaPlacementPolicyResult() {}
+
+func (NotFoundError) IsMediaPlacementOptionsResult() {}
+
+func (NotFoundError) IsMediaPlacementPreviewResult() {}
+
+func (NotFoundError) IsMediaPlacementReviewResult() {}
+
+func (NotFoundError) IsMediaPlacementChangeResult() {}
+
+func (NotFoundError) IsMediaPlacementLegacyPinsResult() {}
+
+func (NotFoundError) IsMediaCapacityConsentResult() {}
+
+func (NotFoundError) IsMediaCapacityConsentChangeResult() {}
+
 type OpenMistAdminSessionInput struct {
 	// Node identifier — accepts the InfrastructureNode.id (Relay global) or nodeId (raw UUID).
 	NodeID string `json:"nodeId"`
@@ -1647,6 +2071,18 @@ type PlaybackWebhookPolicyInput struct {
 	TimeoutMs *int `json:"timeoutMs,omitempty"`
 }
 
+type PreviewMediaPlacementInput struct {
+	Scope       *MediaPlacementScopeInput       `json:"scope"`
+	Verb        MediaPlacementVerb              `json:"verb"`
+	StreamID    *string                         `json:"streamId,omitempty"`
+	Protocol    *string                         `json:"protocol,omitempty"`
+	Coordinates *MediaPlacementCoordinatesInput `json:"coordinates,omitempty"`
+	// Omitted evaluates saved rules; CLEAR previews inheritance for this verb.
+	DraftUpdate            *MediaPlacementVerbUpdateInput `json:"draftUpdate,omitempty"`
+	ExpectedRevision       *string                        `json:"expectedRevision,omitempty"`
+	ExpectedParentRevision *string                        `json:"expectedParentRevision,omitempty"`
+}
+
 // A pricing rule input — mirrors PricingRule output type.
 type PricingRuleInput struct {
 	Meter            string  `json:"meter"`
@@ -1735,6 +2171,21 @@ type RebufferingEventsConnection struct {
 type ResetMediaRetentionOverrideInput struct {
 	TargetType MediaRetentionTarget `json:"targetType"`
 	TargetID   string               `json:"targetId"`
+}
+
+type ReviewMediaCapacityConsentInput struct {
+	ClusterID           string `json:"clusterId"`
+	ExpectedRevision    string `json:"expectedRevision"`
+	AllowIngest         bool   `json:"allowIngest"`
+	AllowServe          bool   `json:"allowServe"`
+	AllowExternalSource bool   `json:"allowExternalSource"`
+}
+
+type ReviewMediaPlacementChangeInput struct {
+	Scope                  *MediaPlacementScopeInput        `json:"scope"`
+	ExpectedRevision       string                           `json:"expectedRevision"`
+	ExpectedParentRevision string                           `json:"expectedParentRevision"`
+	Updates                []*MediaPlacementVerbUpdateInput `json:"updates"`
 }
 
 type RoutingEventEdge struct {
@@ -3233,6 +3684,794 @@ func (e *InvoiceStatus) UnmarshalJSON(b []byte) error {
 }
 
 func (e InvoiceStatus) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type MediaIngestProtocol string
+
+const (
+	MediaIngestProtocolWhip MediaIngestProtocol = "WHIP"
+	MediaIngestProtocolRtmp MediaIngestProtocol = "RTMP"
+	MediaIngestProtocolSrt  MediaIngestProtocol = "SRT"
+)
+
+var AllMediaIngestProtocol = []MediaIngestProtocol{
+	MediaIngestProtocolWhip,
+	MediaIngestProtocolRtmp,
+	MediaIngestProtocolSrt,
+}
+
+func (e MediaIngestProtocol) IsValid() bool {
+	switch e {
+	case MediaIngestProtocolWhip, MediaIngestProtocolRtmp, MediaIngestProtocolSrt:
+		return true
+	}
+	return false
+}
+
+func (e MediaIngestProtocol) String() string {
+	return string(e)
+}
+
+func (e *MediaIngestProtocol) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = MediaIngestProtocol(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid MediaIngestProtocol", str)
+	}
+	return nil
+}
+
+func (e MediaIngestProtocol) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *MediaIngestProtocol) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e MediaIngestProtocol) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type MediaPlacementCharging string
+
+const (
+	MediaPlacementChargingRated           MediaPlacementCharging = "RATED"
+	MediaPlacementChargingPermanentlyFree MediaPlacementCharging = "PERMANENTLY_FREE"
+)
+
+var AllMediaPlacementCharging = []MediaPlacementCharging{
+	MediaPlacementChargingRated,
+	MediaPlacementChargingPermanentlyFree,
+}
+
+func (e MediaPlacementCharging) IsValid() bool {
+	switch e {
+	case MediaPlacementChargingRated, MediaPlacementChargingPermanentlyFree:
+		return true
+	}
+	return false
+}
+
+func (e MediaPlacementCharging) String() string {
+	return string(e)
+}
+
+func (e *MediaPlacementCharging) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = MediaPlacementCharging(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid MediaPlacementCharging", str)
+	}
+	return nil
+}
+
+func (e MediaPlacementCharging) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *MediaPlacementCharging) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e MediaPlacementCharging) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type MediaPlacementClass string
+
+const (
+	MediaPlacementClassPlatformOfficial      MediaPlacementClass = "PLATFORM_OFFICIAL"
+	MediaPlacementClassTenantPrivate         MediaPlacementClass = "TENANT_PRIVATE"
+	MediaPlacementClassThirdPartyMarketplace MediaPlacementClass = "THIRD_PARTY_MARKETPLACE"
+)
+
+var AllMediaPlacementClass = []MediaPlacementClass{
+	MediaPlacementClassPlatformOfficial,
+	MediaPlacementClassTenantPrivate,
+	MediaPlacementClassThirdPartyMarketplace,
+}
+
+func (e MediaPlacementClass) IsValid() bool {
+	switch e {
+	case MediaPlacementClassPlatformOfficial, MediaPlacementClassTenantPrivate, MediaPlacementClassThirdPartyMarketplace:
+		return true
+	}
+	return false
+}
+
+func (e MediaPlacementClass) String() string {
+	return string(e)
+}
+
+func (e *MediaPlacementClass) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = MediaPlacementClass(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid MediaPlacementClass", str)
+	}
+	return nil
+}
+
+func (e MediaPlacementClass) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *MediaPlacementClass) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e MediaPlacementClass) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type MediaPlacementErrorCode string
+
+const (
+	MediaPlacementErrorCodeInvalidInput        MediaPlacementErrorCode = "INVALID_INPUT"
+	MediaPlacementErrorCodeRevisionConflict    MediaPlacementErrorCode = "REVISION_CONFLICT"
+	MediaPlacementErrorCodeStaleReview         MediaPlacementErrorCode = "STALE_REVIEW"
+	MediaPlacementErrorCodeIdempotencyConflict MediaPlacementErrorCode = "IDEMPOTENCY_CONFLICT"
+	MediaPlacementErrorCodeUnsupported         MediaPlacementErrorCode = "UNSUPPORTED"
+	MediaPlacementErrorCodeUnavailable         MediaPlacementErrorCode = "UNAVAILABLE"
+	MediaPlacementErrorCodeRateLimited         MediaPlacementErrorCode = "RATE_LIMITED"
+)
+
+var AllMediaPlacementErrorCode = []MediaPlacementErrorCode{
+	MediaPlacementErrorCodeInvalidInput,
+	MediaPlacementErrorCodeRevisionConflict,
+	MediaPlacementErrorCodeStaleReview,
+	MediaPlacementErrorCodeIdempotencyConflict,
+	MediaPlacementErrorCodeUnsupported,
+	MediaPlacementErrorCodeUnavailable,
+	MediaPlacementErrorCodeRateLimited,
+}
+
+func (e MediaPlacementErrorCode) IsValid() bool {
+	switch e {
+	case MediaPlacementErrorCodeInvalidInput, MediaPlacementErrorCodeRevisionConflict, MediaPlacementErrorCodeStaleReview, MediaPlacementErrorCodeIdempotencyConflict, MediaPlacementErrorCodeUnsupported, MediaPlacementErrorCodeUnavailable, MediaPlacementErrorCodeRateLimited:
+		return true
+	}
+	return false
+}
+
+func (e MediaPlacementErrorCode) String() string {
+	return string(e)
+}
+
+func (e *MediaPlacementErrorCode) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = MediaPlacementErrorCode(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid MediaPlacementErrorCode", str)
+	}
+	return nil
+}
+
+func (e MediaPlacementErrorCode) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *MediaPlacementErrorCode) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e MediaPlacementErrorCode) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type MediaPlacementOptionKind string
+
+const (
+	MediaPlacementOptionKindCluster  MediaPlacementOptionKind = "CLUSTER"
+	MediaPlacementOptionKindOperator MediaPlacementOptionKind = "OPERATOR"
+	MediaPlacementOptionKindRegion   MediaPlacementOptionKind = "REGION"
+)
+
+var AllMediaPlacementOptionKind = []MediaPlacementOptionKind{
+	MediaPlacementOptionKindCluster,
+	MediaPlacementOptionKindOperator,
+	MediaPlacementOptionKindRegion,
+}
+
+func (e MediaPlacementOptionKind) IsValid() bool {
+	switch e {
+	case MediaPlacementOptionKindCluster, MediaPlacementOptionKindOperator, MediaPlacementOptionKindRegion:
+		return true
+	}
+	return false
+}
+
+func (e MediaPlacementOptionKind) String() string {
+	return string(e)
+}
+
+func (e *MediaPlacementOptionKind) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = MediaPlacementOptionKind(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid MediaPlacementOptionKind", str)
+	}
+	return nil
+}
+
+func (e MediaPlacementOptionKind) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *MediaPlacementOptionKind) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e MediaPlacementOptionKind) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type MediaPlacementOrder string
+
+const (
+	MediaPlacementOrderDistance MediaPlacementOrder = "DISTANCE"
+	MediaPlacementOrderPrice    MediaPlacementOrder = "PRICE"
+)
+
+var AllMediaPlacementOrder = []MediaPlacementOrder{
+	MediaPlacementOrderDistance,
+	MediaPlacementOrderPrice,
+}
+
+func (e MediaPlacementOrder) IsValid() bool {
+	switch e {
+	case MediaPlacementOrderDistance, MediaPlacementOrderPrice:
+		return true
+	}
+	return false
+}
+
+func (e MediaPlacementOrder) String() string {
+	return string(e)
+}
+
+func (e *MediaPlacementOrder) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = MediaPlacementOrder(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid MediaPlacementOrder", str)
+	}
+	return nil
+}
+
+func (e MediaPlacementOrder) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *MediaPlacementOrder) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e MediaPlacementOrder) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type MediaPlacementRolloutStatus string
+
+const (
+	MediaPlacementRolloutStatusNotConfigured MediaPlacementRolloutStatus = "NOT_CONFIGURED"
+	MediaPlacementRolloutStatusPending       MediaPlacementRolloutStatus = "PENDING"
+	MediaPlacementRolloutStatusEffective     MediaPlacementRolloutStatus = "EFFECTIVE"
+	MediaPlacementRolloutStatusBlocked       MediaPlacementRolloutStatus = "BLOCKED"
+	MediaPlacementRolloutStatusSuperseded    MediaPlacementRolloutStatus = "SUPERSEDED"
+)
+
+var AllMediaPlacementRolloutStatus = []MediaPlacementRolloutStatus{
+	MediaPlacementRolloutStatusNotConfigured,
+	MediaPlacementRolloutStatusPending,
+	MediaPlacementRolloutStatusEffective,
+	MediaPlacementRolloutStatusBlocked,
+	MediaPlacementRolloutStatusSuperseded,
+}
+
+func (e MediaPlacementRolloutStatus) IsValid() bool {
+	switch e {
+	case MediaPlacementRolloutStatusNotConfigured, MediaPlacementRolloutStatusPending, MediaPlacementRolloutStatusEffective, MediaPlacementRolloutStatusBlocked, MediaPlacementRolloutStatusSuperseded:
+		return true
+	}
+	return false
+}
+
+func (e MediaPlacementRolloutStatus) String() string {
+	return string(e)
+}
+
+func (e *MediaPlacementRolloutStatus) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = MediaPlacementRolloutStatus(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid MediaPlacementRolloutStatus", str)
+	}
+	return nil
+}
+
+func (e MediaPlacementRolloutStatus) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *MediaPlacementRolloutStatus) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e MediaPlacementRolloutStatus) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type MediaPlacementScopeKind string
+
+const (
+	MediaPlacementScopeKindTenant MediaPlacementScopeKind = "TENANT"
+	MediaPlacementScopeKindStream MediaPlacementScopeKind = "STREAM"
+)
+
+var AllMediaPlacementScopeKind = []MediaPlacementScopeKind{
+	MediaPlacementScopeKindTenant,
+	MediaPlacementScopeKindStream,
+}
+
+func (e MediaPlacementScopeKind) IsValid() bool {
+	switch e {
+	case MediaPlacementScopeKindTenant, MediaPlacementScopeKindStream:
+		return true
+	}
+	return false
+}
+
+func (e MediaPlacementScopeKind) String() string {
+	return string(e)
+}
+
+func (e *MediaPlacementScopeKind) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = MediaPlacementScopeKind(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid MediaPlacementScopeKind", str)
+	}
+	return nil
+}
+
+func (e MediaPlacementScopeKind) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *MediaPlacementScopeKind) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e MediaPlacementScopeKind) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type MediaPlacementSpillover string
+
+const (
+	MediaPlacementSpilloverNever             MediaPlacementSpillover = "NEVER"
+	MediaPlacementSpilloverCapacityOnly      MediaPlacementSpillover = "CAPACITY_ONLY"
+	MediaPlacementSpilloverGeoHole           MediaPlacementSpillover = "GEO_HOLE"
+	MediaPlacementSpilloverCapacityOrGeoHole MediaPlacementSpillover = "CAPACITY_OR_GEO_HOLE"
+)
+
+var AllMediaPlacementSpillover = []MediaPlacementSpillover{
+	MediaPlacementSpilloverNever,
+	MediaPlacementSpilloverCapacityOnly,
+	MediaPlacementSpilloverGeoHole,
+	MediaPlacementSpilloverCapacityOrGeoHole,
+}
+
+func (e MediaPlacementSpillover) IsValid() bool {
+	switch e {
+	case MediaPlacementSpilloverNever, MediaPlacementSpilloverCapacityOnly, MediaPlacementSpilloverGeoHole, MediaPlacementSpilloverCapacityOrGeoHole:
+		return true
+	}
+	return false
+}
+
+func (e MediaPlacementSpillover) String() string {
+	return string(e)
+}
+
+func (e *MediaPlacementSpillover) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = MediaPlacementSpillover(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid MediaPlacementSpillover", str)
+	}
+	return nil
+}
+
+func (e MediaPlacementSpillover) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *MediaPlacementSpillover) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e MediaPlacementSpillover) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type MediaPlacementUpdateKind string
+
+const (
+	MediaPlacementUpdateKindSet   MediaPlacementUpdateKind = "SET"
+	MediaPlacementUpdateKindClear MediaPlacementUpdateKind = "CLEAR"
+)
+
+var AllMediaPlacementUpdateKind = []MediaPlacementUpdateKind{
+	MediaPlacementUpdateKindSet,
+	MediaPlacementUpdateKindClear,
+}
+
+func (e MediaPlacementUpdateKind) IsValid() bool {
+	switch e {
+	case MediaPlacementUpdateKindSet, MediaPlacementUpdateKindClear:
+		return true
+	}
+	return false
+}
+
+func (e MediaPlacementUpdateKind) String() string {
+	return string(e)
+}
+
+func (e *MediaPlacementUpdateKind) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = MediaPlacementUpdateKind(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid MediaPlacementUpdateKind", str)
+	}
+	return nil
+}
+
+func (e MediaPlacementUpdateKind) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *MediaPlacementUpdateKind) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e MediaPlacementUpdateKind) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type MediaPlacementVerb string
+
+const (
+	MediaPlacementVerbIngest MediaPlacementVerb = "INGEST"
+	MediaPlacementVerbServe  MediaPlacementVerb = "SERVE"
+)
+
+var AllMediaPlacementVerb = []MediaPlacementVerb{
+	MediaPlacementVerbIngest,
+	MediaPlacementVerbServe,
+}
+
+func (e MediaPlacementVerb) IsValid() bool {
+	switch e {
+	case MediaPlacementVerbIngest, MediaPlacementVerbServe:
+		return true
+	}
+	return false
+}
+
+func (e MediaPlacementVerb) String() string {
+	return string(e)
+}
+
+func (e *MediaPlacementVerb) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = MediaPlacementVerb(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid MediaPlacementVerb", str)
+	}
+	return nil
+}
+
+func (e MediaPlacementVerb) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *MediaPlacementVerb) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e MediaPlacementVerb) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+type MediaPlacementWarningSeverity string
+
+const (
+	MediaPlacementWarningSeverityInfo    MediaPlacementWarningSeverity = "INFO"
+	MediaPlacementWarningSeverityWarning MediaPlacementWarningSeverity = "WARNING"
+)
+
+var AllMediaPlacementWarningSeverity = []MediaPlacementWarningSeverity{
+	MediaPlacementWarningSeverityInfo,
+	MediaPlacementWarningSeverityWarning,
+}
+
+func (e MediaPlacementWarningSeverity) IsValid() bool {
+	switch e {
+	case MediaPlacementWarningSeverityInfo, MediaPlacementWarningSeverityWarning:
+		return true
+	}
+	return false
+}
+
+func (e MediaPlacementWarningSeverity) String() string {
+	return string(e)
+}
+
+func (e *MediaPlacementWarningSeverity) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = MediaPlacementWarningSeverity(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid MediaPlacementWarningSeverity", str)
+	}
+	return nil
+}
+
+func (e MediaPlacementWarningSeverity) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *MediaPlacementWarningSeverity) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e MediaPlacementWarningSeverity) MarshalJSON() ([]byte, error) {
+	var buf bytes.Buffer
+	e.MarshalGQL(&buf)
+	return buf.Bytes(), nil
+}
+
+// Playback format required when selecting and preparing a viewer destination.
+type MediaViewerProtocol string
+
+const (
+	MediaViewerProtocolWebrtc          MediaViewerProtocol = "WEBRTC"
+	MediaViewerProtocolWhep            MediaViewerProtocol = "WHEP"
+	MediaViewerProtocolHls             MediaViewerProtocol = "HLS"
+	MediaViewerProtocolDash            MediaViewerProtocol = "DASH"
+	MediaViewerProtocolHlsCmaf         MediaViewerProtocol = "HLS_CMAF"
+	MediaViewerProtocolMews            MediaViewerProtocol = "MEWS"
+	MediaViewerProtocolMewsWebm        MediaViewerProtocol = "MEWS_WEBM"
+	MediaViewerProtocolMp4             MediaViewerProtocol = "MP4"
+	MediaViewerProtocolWebm            MediaViewerProtocol = "WEBM"
+	MediaViewerProtocolMkv             MediaViewerProtocol = "MKV"
+	MediaViewerProtocolTs              MediaViewerProtocol = "TS"
+	MediaViewerProtocolAac             MediaViewerProtocol = "AAC"
+	MediaViewerProtocolH264            MediaViewerProtocol = "H264"
+	MediaViewerProtocolH264Ws          MediaViewerProtocol = "H264_WS"
+	MediaViewerProtocolRawWs           MediaViewerProtocol = "RAW_WS"
+	MediaViewerProtocolJSONWs          MediaViewerProtocol = "JSON_WS"
+	MediaViewerProtocolFlv             MediaViewerProtocol = "FLV"
+	MediaViewerProtocolHds             MediaViewerProtocol = "HDS"
+	MediaViewerProtocolSmoothstreaming MediaViewerProtocol = "SMOOTHSTREAMING"
+	MediaViewerProtocolSdp             MediaViewerProtocol = "SDP"
+	MediaViewerProtocolMistHTML        MediaViewerProtocol = "MIST_HTML"
+	MediaViewerProtocolRtmp            MediaViewerProtocol = "RTMP"
+	MediaViewerProtocolRtsp            MediaViewerProtocol = "RTSP"
+	MediaViewerProtocolSrt             MediaViewerProtocol = "SRT"
+	MediaViewerProtocolDtsc            MediaViewerProtocol = "DTSC"
+)
+
+var AllMediaViewerProtocol = []MediaViewerProtocol{
+	MediaViewerProtocolWebrtc,
+	MediaViewerProtocolWhep,
+	MediaViewerProtocolHls,
+	MediaViewerProtocolDash,
+	MediaViewerProtocolHlsCmaf,
+	MediaViewerProtocolMews,
+	MediaViewerProtocolMewsWebm,
+	MediaViewerProtocolMp4,
+	MediaViewerProtocolWebm,
+	MediaViewerProtocolMkv,
+	MediaViewerProtocolTs,
+	MediaViewerProtocolAac,
+	MediaViewerProtocolH264,
+	MediaViewerProtocolH264Ws,
+	MediaViewerProtocolRawWs,
+	MediaViewerProtocolJSONWs,
+	MediaViewerProtocolFlv,
+	MediaViewerProtocolHds,
+	MediaViewerProtocolSmoothstreaming,
+	MediaViewerProtocolSdp,
+	MediaViewerProtocolMistHTML,
+	MediaViewerProtocolRtmp,
+	MediaViewerProtocolRtsp,
+	MediaViewerProtocolSrt,
+	MediaViewerProtocolDtsc,
+}
+
+func (e MediaViewerProtocol) IsValid() bool {
+	switch e {
+	case MediaViewerProtocolWebrtc, MediaViewerProtocolWhep, MediaViewerProtocolHls, MediaViewerProtocolDash, MediaViewerProtocolHlsCmaf, MediaViewerProtocolMews, MediaViewerProtocolMewsWebm, MediaViewerProtocolMp4, MediaViewerProtocolWebm, MediaViewerProtocolMkv, MediaViewerProtocolTs, MediaViewerProtocolAac, MediaViewerProtocolH264, MediaViewerProtocolH264Ws, MediaViewerProtocolRawWs, MediaViewerProtocolJSONWs, MediaViewerProtocolFlv, MediaViewerProtocolHds, MediaViewerProtocolSmoothstreaming, MediaViewerProtocolSdp, MediaViewerProtocolMistHTML, MediaViewerProtocolRtmp, MediaViewerProtocolRtsp, MediaViewerProtocolSrt, MediaViewerProtocolDtsc:
+		return true
+	}
+	return false
+}
+
+func (e MediaViewerProtocol) String() string {
+	return string(e)
+}
+
+func (e *MediaViewerProtocol) UnmarshalGQL(v any) error {
+	str, ok := v.(string)
+	if !ok {
+		return fmt.Errorf("enums must be strings")
+	}
+
+	*e = MediaViewerProtocol(str)
+	if !e.IsValid() {
+		return fmt.Errorf("%s is not a valid MediaViewerProtocol", str)
+	}
+	return nil
+}
+
+func (e MediaViewerProtocol) MarshalGQL(w io.Writer) {
+	fmt.Fprint(w, strconv.Quote(e.String()))
+}
+
+func (e *MediaViewerProtocol) UnmarshalJSON(b []byte) error {
+	s, err := strconv.Unquote(string(b))
+	if err != nil {
+		return err
+	}
+	return e.UnmarshalGQL(s)
+}
+
+func (e MediaViewerProtocol) MarshalJSON() ([]byte, error) {
 	var buf bytes.Buffer
 	e.MarshalGQL(&buf)
 	return buf.Bytes(), nil
