@@ -175,6 +175,174 @@ func (q *Queries) GetLocalMediaObjectSourceAuthorityByInternalName(ctx context.C
 	return i, err
 }
 
+const getLocalPlacementAuthorityPair = `-- name: GetLocalPlacementAuthorityPair :one
+SELECT object_authority.payload AS object_payload,
+       object_authority.payload_sha256 AS object_payload_sha256,
+       object_authority.refresh_after AS object_refresh_after,
+       object_authority.valid_until AS object_valid_until,
+       object_projection.authority_id AS object_authority_id,
+       object_projection.authority_version AS object_authority_version,
+       object_projection.local_read_ready AS object_read_ready,
+       object_projection.local_ingest_ready AS object_ingest_ready,
+       object_projection.local_source_ready AS object_source_ready,
+       tenant_authority.payload AS tenant_payload,
+       tenant_authority.payload_sha256 AS tenant_payload_sha256,
+       tenant_authority.refresh_after AS tenant_refresh_after,
+       tenant_authority.valid_until AS tenant_valid_until,
+       tenant_projection.authority_version AS tenant_authority_version,
+       tenant_projection.local_read_ready AS tenant_read_ready,
+       tenant_projection.local_ingest_ready AS tenant_ingest_ready,
+       tenant_projection.local_source_ready AS tenant_source_ready
+FROM foghorn.media_object_authority_projection AS object_projection
+JOIN foghorn.media_authorities AS object_authority
+  ON object_authority.authority_kind = 'media_object'
+ AND object_authority.authority_id = object_projection.authority_id
+ AND object_authority.authority_version = object_projection.authority_version
+JOIN foghorn.tenant_authority_projection AS tenant_projection
+  ON tenant_projection.tenant_id = object_projection.tenant_id
+JOIN foghorn.media_authorities AS tenant_authority
+  ON tenant_authority.authority_kind = 'tenant'
+ AND tenant_authority.authority_id = tenant_projection.tenant_id::text
+ AND tenant_authority.authority_version = tenant_projection.authority_version
+WHERE object_projection.tenant_id = $1::uuid
+  AND object_projection.authority_id = $2
+  AND object_projection.internal_name = $3
+`
+
+type GetLocalPlacementAuthorityPairParams struct {
+	TenantID     string `db:"tenant_id" json:"tenant_id"`
+	AuthorityID  string `db:"authority_id" json:"authority_id"`
+	InternalName string `db:"internal_name" json:"internal_name"`
+}
+
+type GetLocalPlacementAuthorityPairRow struct {
+	ObjectPayload          []byte    `db:"object_payload" json:"object_payload"`
+	ObjectPayloadSha256    []byte    `db:"object_payload_sha256" json:"object_payload_sha256"`
+	ObjectRefreshAfter     time.Time `db:"object_refresh_after" json:"object_refresh_after"`
+	ObjectValidUntil       time.Time `db:"object_valid_until" json:"object_valid_until"`
+	ObjectAuthorityID      string    `db:"object_authority_id" json:"object_authority_id"`
+	ObjectAuthorityVersion int64     `db:"object_authority_version" json:"object_authority_version"`
+	ObjectReadReady        bool      `db:"object_read_ready" json:"object_read_ready"`
+	ObjectIngestReady      bool      `db:"object_ingest_ready" json:"object_ingest_ready"`
+	ObjectSourceReady      bool      `db:"object_source_ready" json:"object_source_ready"`
+	TenantPayload          []byte    `db:"tenant_payload" json:"tenant_payload"`
+	TenantPayloadSha256    []byte    `db:"tenant_payload_sha256" json:"tenant_payload_sha256"`
+	TenantRefreshAfter     time.Time `db:"tenant_refresh_after" json:"tenant_refresh_after"`
+	TenantValidUntil       time.Time `db:"tenant_valid_until" json:"tenant_valid_until"`
+	TenantAuthorityVersion int64     `db:"tenant_authority_version" json:"tenant_authority_version"`
+	TenantReadReady        bool      `db:"tenant_read_ready" json:"tenant_read_ready"`
+	TenantIngestReady      bool      `db:"tenant_ingest_ready" json:"tenant_ingest_ready"`
+	TenantSourceReady      bool      `db:"tenant_source_ready" json:"tenant_source_ready"`
+}
+
+func (q *Queries) GetLocalPlacementAuthorityPair(ctx context.Context, arg GetLocalPlacementAuthorityPairParams) (GetLocalPlacementAuthorityPairRow, error) {
+	row := q.db.QueryRowContext(ctx, getLocalPlacementAuthorityPair, arg.TenantID, arg.AuthorityID, arg.InternalName)
+	var i GetLocalPlacementAuthorityPairRow
+	err := row.Scan(
+		&i.ObjectPayload,
+		&i.ObjectPayloadSha256,
+		&i.ObjectRefreshAfter,
+		&i.ObjectValidUntil,
+		&i.ObjectAuthorityID,
+		&i.ObjectAuthorityVersion,
+		&i.ObjectReadReady,
+		&i.ObjectIngestReady,
+		&i.ObjectSourceReady,
+		&i.TenantPayload,
+		&i.TenantPayloadSha256,
+		&i.TenantRefreshAfter,
+		&i.TenantValidUntil,
+		&i.TenantAuthorityVersion,
+		&i.TenantReadReady,
+		&i.TenantIngestReady,
+		&i.TenantSourceReady,
+	)
+	return i, err
+}
+
+const getLocalPlacementAuthorityPairByInternalName = `-- name: GetLocalPlacementAuthorityPairByInternalName :one
+SELECT object_authority.payload AS object_payload,
+       object_authority.payload_sha256 AS object_payload_sha256,
+       object_authority.refresh_after AS object_refresh_after,
+       object_authority.valid_until AS object_valid_until,
+       object_projection.authority_id AS object_authority_id,
+       object_projection.authority_version AS object_authority_version,
+       object_projection.local_read_ready AS object_read_ready,
+       object_projection.local_ingest_ready AS object_ingest_ready,
+       object_projection.local_source_ready AS object_source_ready,
+       tenant_authority.payload AS tenant_payload,
+       tenant_authority.payload_sha256 AS tenant_payload_sha256,
+       tenant_authority.refresh_after AS tenant_refresh_after,
+       tenant_authority.valid_until AS tenant_valid_until,
+       tenant_projection.authority_version AS tenant_authority_version,
+       tenant_projection.local_read_ready AS tenant_read_ready,
+       tenant_projection.local_ingest_ready AS tenant_ingest_ready,
+       tenant_projection.local_source_ready AS tenant_source_ready
+FROM foghorn.media_object_authority_projection AS object_projection
+JOIN foghorn.media_authorities AS object_authority
+  ON object_authority.authority_kind = 'media_object'
+ AND object_authority.authority_id = object_projection.authority_id
+ AND object_authority.authority_version = object_projection.authority_version
+JOIN foghorn.tenant_authority_projection AS tenant_projection
+  ON tenant_projection.tenant_id = object_projection.tenant_id
+JOIN foghorn.media_authorities AS tenant_authority
+  ON tenant_authority.authority_kind = 'tenant'
+ AND tenant_authority.authority_id = tenant_projection.tenant_id::text
+ AND tenant_authority.authority_version = tenant_projection.authority_version
+WHERE object_projection.tenant_id = $1::uuid
+  AND object_projection.internal_name = $2
+`
+
+type GetLocalPlacementAuthorityPairByInternalNameParams struct {
+	TenantID     string `db:"tenant_id" json:"tenant_id"`
+	InternalName string `db:"internal_name" json:"internal_name"`
+}
+
+type GetLocalPlacementAuthorityPairByInternalNameRow struct {
+	ObjectPayload          []byte    `db:"object_payload" json:"object_payload"`
+	ObjectPayloadSha256    []byte    `db:"object_payload_sha256" json:"object_payload_sha256"`
+	ObjectRefreshAfter     time.Time `db:"object_refresh_after" json:"object_refresh_after"`
+	ObjectValidUntil       time.Time `db:"object_valid_until" json:"object_valid_until"`
+	ObjectAuthorityID      string    `db:"object_authority_id" json:"object_authority_id"`
+	ObjectAuthorityVersion int64     `db:"object_authority_version" json:"object_authority_version"`
+	ObjectReadReady        bool      `db:"object_read_ready" json:"object_read_ready"`
+	ObjectIngestReady      bool      `db:"object_ingest_ready" json:"object_ingest_ready"`
+	ObjectSourceReady      bool      `db:"object_source_ready" json:"object_source_ready"`
+	TenantPayload          []byte    `db:"tenant_payload" json:"tenant_payload"`
+	TenantPayloadSha256    []byte    `db:"tenant_payload_sha256" json:"tenant_payload_sha256"`
+	TenantRefreshAfter     time.Time `db:"tenant_refresh_after" json:"tenant_refresh_after"`
+	TenantValidUntil       time.Time `db:"tenant_valid_until" json:"tenant_valid_until"`
+	TenantAuthorityVersion int64     `db:"tenant_authority_version" json:"tenant_authority_version"`
+	TenantReadReady        bool      `db:"tenant_read_ready" json:"tenant_read_ready"`
+	TenantIngestReady      bool      `db:"tenant_ingest_ready" json:"tenant_ingest_ready"`
+	TenantSourceReady      bool      `db:"tenant_source_ready" json:"tenant_source_ready"`
+}
+
+func (q *Queries) GetLocalPlacementAuthorityPairByInternalName(ctx context.Context, arg GetLocalPlacementAuthorityPairByInternalNameParams) (GetLocalPlacementAuthorityPairByInternalNameRow, error) {
+	row := q.db.QueryRowContext(ctx, getLocalPlacementAuthorityPairByInternalName, arg.TenantID, arg.InternalName)
+	var i GetLocalPlacementAuthorityPairByInternalNameRow
+	err := row.Scan(
+		&i.ObjectPayload,
+		&i.ObjectPayloadSha256,
+		&i.ObjectRefreshAfter,
+		&i.ObjectValidUntil,
+		&i.ObjectAuthorityID,
+		&i.ObjectAuthorityVersion,
+		&i.ObjectReadReady,
+		&i.ObjectIngestReady,
+		&i.ObjectSourceReady,
+		&i.TenantPayload,
+		&i.TenantPayloadSha256,
+		&i.TenantRefreshAfter,
+		&i.TenantValidUntil,
+		&i.TenantAuthorityVersion,
+		&i.TenantReadReady,
+		&i.TenantIngestReady,
+		&i.TenantSourceReady,
+	)
+	return i, err
+}
+
 const getLocalTenantAuthority = `-- name: GetLocalTenantAuthority :one
 SELECT authority.payload, authority.payload_sha256, authority.refresh_after, authority.valid_until,
        projection.authority_version, projection.local_read_ready,
@@ -602,17 +770,19 @@ func (q *Queries) LockMediaAuthority(ctx context.Context, arg LockMediaAuthority
 const markMediaObjectAuthorityLocalIngestReady = `-- name: MarkMediaObjectAuthorityLocalIngestReady :execrows
 UPDATE foghorn.media_object_authority_projection
 SET local_ingest_ready = TRUE, updated_at = NOW()
-WHERE authority_id = $1
-  AND authority_version = $2
+WHERE tenant_id = $1::uuid
+  AND authority_id = $2
+  AND authority_version = $3
 `
 
 type MarkMediaObjectAuthorityLocalIngestReadyParams struct {
+	TenantID         string `db:"tenant_id" json:"tenant_id"`
 	AuthorityID      string `db:"authority_id" json:"authority_id"`
 	AuthorityVersion int64  `db:"authority_version" json:"authority_version"`
 }
 
 func (q *Queries) MarkMediaObjectAuthorityLocalIngestReady(ctx context.Context, arg MarkMediaObjectAuthorityLocalIngestReadyParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, markMediaObjectAuthorityLocalIngestReady, arg.AuthorityID, arg.AuthorityVersion)
+	result, err := q.db.ExecContext(ctx, markMediaObjectAuthorityLocalIngestReady, arg.TenantID, arg.AuthorityID, arg.AuthorityVersion)
 	if err != nil {
 		return 0, err
 	}
@@ -622,17 +792,19 @@ func (q *Queries) MarkMediaObjectAuthorityLocalIngestReady(ctx context.Context, 
 const markMediaObjectAuthorityLocalReadReady = `-- name: MarkMediaObjectAuthorityLocalReadReady :execrows
 UPDATE foghorn.media_object_authority_projection
 SET local_read_ready = TRUE, updated_at = NOW()
-WHERE authority_id = $1
-  AND authority_version = $2
+WHERE tenant_id = $1::uuid
+  AND authority_id = $2
+  AND authority_version = $3
 `
 
 type MarkMediaObjectAuthorityLocalReadReadyParams struct {
+	TenantID         string `db:"tenant_id" json:"tenant_id"`
 	AuthorityID      string `db:"authority_id" json:"authority_id"`
 	AuthorityVersion int64  `db:"authority_version" json:"authority_version"`
 }
 
 func (q *Queries) MarkMediaObjectAuthorityLocalReadReady(ctx context.Context, arg MarkMediaObjectAuthorityLocalReadReadyParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, markMediaObjectAuthorityLocalReadReady, arg.AuthorityID, arg.AuthorityVersion)
+	result, err := q.db.ExecContext(ctx, markMediaObjectAuthorityLocalReadReady, arg.TenantID, arg.AuthorityID, arg.AuthorityVersion)
 	if err != nil {
 		return 0, err
 	}
@@ -642,17 +814,19 @@ func (q *Queries) MarkMediaObjectAuthorityLocalReadReady(ctx context.Context, ar
 const markMediaObjectAuthorityLocalSourceReady = `-- name: MarkMediaObjectAuthorityLocalSourceReady :execrows
 UPDATE foghorn.media_object_authority_projection
 SET local_source_ready = TRUE, updated_at = NOW()
-WHERE authority_id = $1
-  AND authority_version = $2
+WHERE tenant_id = $1::uuid
+  AND authority_id = $2
+  AND authority_version = $3
 `
 
 type MarkMediaObjectAuthorityLocalSourceReadyParams struct {
+	TenantID         string `db:"tenant_id" json:"tenant_id"`
 	AuthorityID      string `db:"authority_id" json:"authority_id"`
 	AuthorityVersion int64  `db:"authority_version" json:"authority_version"`
 }
 
 func (q *Queries) MarkMediaObjectAuthorityLocalSourceReady(ctx context.Context, arg MarkMediaObjectAuthorityLocalSourceReadyParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, markMediaObjectAuthorityLocalSourceReady, arg.AuthorityID, arg.AuthorityVersion)
+	result, err := q.db.ExecContext(ctx, markMediaObjectAuthorityLocalSourceReady, arg.TenantID, arg.AuthorityID, arg.AuthorityVersion)
 	if err != nil {
 		return 0, err
 	}

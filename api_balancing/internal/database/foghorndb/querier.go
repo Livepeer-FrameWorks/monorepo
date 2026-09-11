@@ -122,6 +122,7 @@ type Querier interface {
 	DeleteOpenDVRChapters(ctx context.Context, artifactHash string) error
 	DeletePurgedArtifact(ctx context.Context, arg DeletePurgedArtifactParams) error
 	DeleteStagingCleanupItem(ctx context.Context, arg DeleteStagingCleanupItemParams) (int64, error)
+	DeleteStaleControlReplicas(ctx context.Context, retentionSeconds int32) (int64, error)
 	DeleteStaleOrphanedArtifactNodes(ctx context.Context) (int64, error)
 	DeleteSupersededThumbnailAttempt(ctx context.Context, arg DeleteSupersededThumbnailAttemptParams) (int64, error)
 	DeleteTenantAuthorityGrants(ctx context.Context, tenantID string) error
@@ -252,6 +253,8 @@ type Querier interface {
 	GetLocalMediaObjectAuthorityByPlaybackID(ctx context.Context, playbackID string) (GetLocalMediaObjectAuthorityByPlaybackIDRow, error)
 	GetLocalMediaObjectAuthorityByPublishingCredential(ctx context.Context, publishingCredentialSha256 []byte) (GetLocalMediaObjectAuthorityByPublishingCredentialRow, error)
 	GetLocalMediaObjectSourceAuthorityByInternalName(ctx context.Context, internalName string) (GetLocalMediaObjectSourceAuthorityByInternalNameRow, error)
+	GetLocalPlacementAuthorityPair(ctx context.Context, arg GetLocalPlacementAuthorityPairParams) (GetLocalPlacementAuthorityPairRow, error)
+	GetLocalPlacementAuthorityPairByInternalName(ctx context.Context, arg GetLocalPlacementAuthorityPairByInternalNameParams) (GetLocalPlacementAuthorityPairByInternalNameRow, error)
 	GetLocalTenantAuthority(ctx context.Context, tenantID string) (GetLocalTenantAuthorityRow, error)
 	GetLocalTenantSourceAuthority(ctx context.Context, tenantID string) (GetLocalTenantSourceAuthorityRow, error)
 	GetMediaAuthorityForUpdate(ctx context.Context, arg GetMediaAuthorityForUpdateParams) (GetMediaAuthorityForUpdateRow, error)
@@ -492,6 +495,7 @@ type Querier interface {
 	QuarantineInvalidConfigSeedApplyAck(ctx context.Context, arg QuarantineInvalidConfigSeedApplyAckParams) (int64, error)
 	ReadAdmissionLegsLocked(ctx context.Context, arg ReadAdmissionLegsLockedParams) (ReadAdmissionLegsLockedRow, error)
 	ReadArtifactCreationCommandIdentity(ctx context.Context, arg ReadArtifactCreationCommandIdentityParams) (ReadArtifactCreationCommandIdentityRow, error)
+	ReadControlCellPlacementCapability(ctx context.Context, livenessSeconds int32) (ReadControlCellPlacementCapabilityRow, error)
 	ReadOfflineEffectLegsLocked(ctx context.Context, arg ReadOfflineEffectLegsLockedParams) (ReadOfflineEffectLegsLockedRow, error)
 	ReapExactMissingIngestSession(ctx context.Context, arg ReapExactMissingIngestSessionParams) (ReapExactMissingIngestSessionRow, error)
 	ReapStreamEndIngestSessions(ctx context.Context, arg ReapStreamEndIngestSessionsParams) ([]ReapStreamEndIngestSessionsRow, error)
@@ -591,6 +595,7 @@ type Querier interface {
 	UploadedArtifactFormat(ctx context.Context, artifactHash string) (string, error)
 	UpsertCachedArtifactNode(ctx context.Context, arg UpsertCachedArtifactNodeParams) (sql.NullInt64, error)
 	UpsertChapterVodMetadata(ctx context.Context, arg UpsertChapterVodMetadataParams) error
+	UpsertControlReplicaHeartbeat(ctx context.Context, arg UpsertControlReplicaHeartbeatParams) error
 	UpsertDVRRecordingOrigin(ctx context.Context, arg UpsertDVRRecordingOriginParams) (bool, error)
 	UpsertDiscoveredArtifactNode(ctx context.Context, arg UpsertDiscoveredArtifactNodeParams) error
 	UpsertLostDVRSegment(ctx context.Context, arg UpsertLostDVRSegmentParams) error
