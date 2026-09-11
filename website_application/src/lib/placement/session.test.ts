@@ -1,5 +1,29 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PlacementSession, type PlacementAPI } from "./session";
+
+// The session persists an unresolved apply to sessionStorage, and these tests
+// assert that behaviour. Vitest runs this suite in the node environment, which
+// has no Web Storage: newer Node exposes sessionStorage as a global, older Node
+// does not, so relying on the runtime makes the suite pass or fail on the
+// developer's Node version rather than on the code. Stubbing it follows the
+// convention the auth-store tests already use for localStorage.
+function installSessionStorage() {
+  const values = new Map<string, string>();
+  vi.stubGlobal("sessionStorage", {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      values.set(key, value);
+    },
+    removeItem: (key: string) => {
+      values.delete(key);
+    },
+    clear: () => {
+      values.clear();
+    },
+  });
+}
+
+beforeEach(installSessionStorage);
 import {
   copyRules,
   newGroup,
