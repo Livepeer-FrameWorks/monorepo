@@ -1288,6 +1288,61 @@ features:
       webapp: { required: true }
       docs: { required: true }
 
+  - slug: media-placement
+    name: Ingest and viewer placement policy
+    area: infrastructure
+    description: Ingest and viewer placement policy with cluster-owner permissions, authorized selectors, read-only previews, reviewed changes, and save recovery, enforced on live routing and at final admission.
+    status: partial
+    gap_reason: |
+      Management API and web controls are implemented, including exact-revision review/apply/recovery and owner
+      permissions. Routing runs through the placement path for every content kind: encoder push
+      sessions, configured pull and Mist-native inputs, in-progress recordings, and stored artifacts, which keep
+      storage affinity for ranking while policy decides eligibility. Final admission re-checks the connection that
+      actually arrives on all of them; publisher admission applies to encoder push sessions, since a configured
+      input has no publisher to admit and is governed on its serving path instead. The hostname-returning Mist
+      balancer route is removed; the remaining node-bound source lookup is an authorized source-only compatibility
+      surface and does not select viewer destinations. Policy-bearing rules become effective only once
+      every cell holding the content attests enforcement, so a saved policy is requested intent until then. Preview
+      remains capacity-only or source-aware for owned push streams, and a preview neither reserves capacity nor proves
+      playback. Open: authenticated browser-to-service proof and release-runtime verification. Storage and processing
+      placement are separate roadmap work.
+    related: [viewer-routing, federation-network, byoc-ownership, placement-policy]
+    required_surfaces:
+      graphql: { required: true }
+      mcp: { required: true }
+      webapp: { required: true }
+      docs: { required: true }
+    surfaces:
+      graphql:
+        queries:
+          - mediaPlacementPolicy
+          - mediaPlacementOptions
+          - mediaPlacementLegacyPins
+          - previewMediaPlacement
+          - reviewMediaPlacementChange
+          - mediaPlacementChange
+          - clusterMediaConsent
+          - reviewClusterMediaConsentChange
+          - clusterMediaConsentChange
+        mutations: [applyMediaPlacementChange, applyClusterMediaConsentChange]
+      mcp:
+        tools:
+          - get_media_placement_policy
+          - get_media_placement_options
+          - preview_media_placement
+          - review_media_placement_change
+          - apply_media_placement_change
+          - get_media_placement_change
+          - get_media_placement_legacy_pins
+          - get_cluster_media_consent
+          - review_cluster_media_consent_change
+          - apply_cluster_media_consent_change
+          - get_cluster_media_consent_change
+      webapp:
+        routes: ["/account/placement", "/streams/:id", "/infrastructure/:clusterId"]
+      docs:
+        pages: [builders/media-placement.mdx, operators/media-placement.mdx]
+
   - slug: placement-policy
     name: Placement policy and storage tiering
     area: infrastructure
@@ -1298,9 +1353,12 @@ features:
       fingerprinted backend ownership and fail-closed guards; see docs/architecture/durable-media-storage.md),
       giving each cluster a typed, durable storage backend rather than an untyped implicit copy. Still deferred by design
       (docs/rfcs/placement-policy-engine.md): the multi-backend storage registry (cluster_storage_backends /
-      artifact_locations), the cold-to-hot tier ladder, and the two-sided (cluster-owner + content-owner) policy engine.
-      The signed-bundle channel and per-stream placement intent (stream pins) exist as building blocks.
-    related: [byoc-ownership, standalone-storage-services, replication-orchestration]
+      artifact_locations), the cold-to-hot tier ladder, and storage/processing policy enforcement. Ingest/viewer
+      placement management is tracked separately under media-placement; its implemented controls do not choose
+      durable-copy locations or processing workers. Signed media authority is shared infrastructure, not proof
+      that these future placement domains are enforced.
+    related:
+      [media-placement, byoc-ownership, standalone-storage-services, replication-orchestration]
     required_surfaces:
       graphql: { required: true }
       mcp: { required: true }

@@ -259,7 +259,7 @@ cross-cluster reauth refusal, etc.). The same shape applies to the
 ### The accept tier (don't fake-test glue)
 
 Top-level routing **dispatchers** (e.g. `ResolveViewerEndpoint`, `handleStreamBalancing`,
-the `arrangeOriginPull`/`queryStreamFanOut` orchestrators) and **goroutine loops**
+the origin-pull arrangement orchestrator) and **goroutine loops**
 (`Start`/`Stop`/`run`/`tick`, peer read/write loops, reconciler/staleness tickers)
 are thin shells over already-tested cores. A unit test for them is all mock-wiring
 with little signal — the "Mocking everything" anti-pattern. Accept low _unit_

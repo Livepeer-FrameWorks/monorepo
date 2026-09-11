@@ -13,7 +13,7 @@ This document explains the **current** attribution model:
 - `tenant_id` = **infra owner tenant** (cluster operator; dataset ownership / visibility boundary)
 - `stream_tenant_id` = **subject tenant** (stream/customer owner; relevance filter)
 - `cluster_id` = **emitting cluster** (Quartermaster cluster identifier; slicing/debugging)
-- `remote_cluster_id` = **remote cluster** (set when viewer was routed cross-cluster via origin-pull or redirect; empty for local-only decisions)
+- `remote_cluster_id` = **remote cluster** (set only on cross-cluster DTSC source resolution — statuses `pull_federated` and `remote_source`; empty for viewer routing and local-only decisions)
 
 ## Data model
 

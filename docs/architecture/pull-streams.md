@@ -43,8 +43,9 @@ The upstream URI is a **first-class origin candidate**, not a fallback string. F
 2. Commodore → ResolveViewerEndpoint picks a Foghorn cluster.
 3. Foghorn → Commodore.ResolvePlaybackID (ingest_mode=pull).
 4. Foghorn resolver appends pull+ prefix → pull+<internal>.
-5. Foghorn ResolveLivePlayback: pull-aware cold-start path drops the
-   active-stream-presence filter; picks an eligible edge by capacity/geo.
+5. Foghorn viewer placement: a configured input needs no existing live copy,
+   so a cluster the signed source entitles to dial it is already a feasible
+   destination; policy and capacity then pick the edge.
 6. Viewer routed to chosen edge.
 7. Mist on that edge starts `pull+<internal>` from the base `pull` config's
    `balance:<foghorn-base>` source.
@@ -121,7 +122,7 @@ Validated and classified from the URI before being handed to Mist:
 - `api_balancing/internal/control/server.go` — `pull` template added to `composeConfigSeed`.
 - `api_balancing/internal/triggers/processor.go:resolvePullSource` — validates the local signed pull source and placement for trigger-started paths, with connected fallback only before cutover.
 - `api_balancing/internal/handlers/handlers.go:handleGetSource` — pull-aware `/source` (untrusted `?fallback=` ignored, upstream URI fetched server-side).
-- `api_balancing/internal/control/playback.go:ResolveLivePlayback` — cold-start retry without active-stream filter for `pull+`.
+- `api_balancing/internal/federation/placement_configured_paths.go` — viewer placement for `pull+`: signed consent to dial the configured input makes a cluster feasible with no live copy yet, and an existing origin copy is offered as a relay source.
 - `api_balancing/internal/control/resolver.go` — kind-aware prefix (`live+` vs `pull+`) on `ResolvePlaybackID`.
 - `cli/pkg/bootstrap/types.go` — `CommodoreSection`, `PullStream`, `PullStreamRendered`.
 - `pkg/pullsource` — shared pull-source URI classification, host guard, and redaction.

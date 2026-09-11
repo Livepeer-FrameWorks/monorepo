@@ -12,7 +12,7 @@ For operator-level documentation, see `website_docs/.../operators/architecture.m
 - gRPC server: `api_balancing/internal/grpc`
 - Playback resolution: `api_balancing/internal/control`
 - Geo bucketing: `api_balancing/internal/geo`
-- Weight config: `api_balancing/cmd/foghorn/main.go:168-172`
+- Weight config: `api_balancing/cmd/foghorn/main.go` (`CPU_WEIGHT`, `RAM_WEIGHT`, `BANDWIDTH_WEIGHT`, `GEO_WEIGHT`)
 
 ## Request Paths
 
@@ -35,6 +35,47 @@ or playback device. If an application backend calls `resolveViewerEndpoint`,
 Gateway forwards the backend/proxy IP and Foghorn scores against that location.
 Custom players that do not call Gateway from the viewer should use the
 tenant/global/cluster playback DNS name and `/play` URL directly.
+
+Commodore selects the resolving Foghorn from the content's owner/active-ingest
+routing identity for both anonymous and authenticated viewers. A viewer's own
+tenant is not the content owner and cannot choose that authority store. This is
+control-plane entry routing, not edge placement: the resolving EU Foghorn can
+return a prepared US edge. Viewer IP, playback token, explicit protocol and
+payment context remain attached to the request through the proxy.
+
+Gateway's viewer and ingest resolvers use the client identity stamped by trusted-proxy
+middleware. If no middleware identity exists, only the direct peer is used; the resolvers
+do not independently trust `X-Forwarded-For` or `X-Real-IP`. Foghorn's HTTP media handlers
+use the shared proxy parser with `TRUSTED_PROXY_CIDRS` and retain that identity for the
+request's geo lookup, payment settlement, and routing telemetry. IPv6 addresses are
+preserved. An absent identity means unknown geography, not an invented location.
+
+The shared [media placement path](media-placement-policy.md) resolves every live
+viewer and publisher request. Before listeners start, Foghorn installs the ingest
+and viewer placement preparers on both the HTTP and gRPC front doors and the
+final publisher and viewer admission adapters on the Mist triggers. No legacy fallback survives
+alongside them: live viewer resolution runs only through
+`control.ResolvePreparedLiveViewerEndpoint`, ingest resolution fails closed
+without a preparer, and `PUSH_REWRITE`, `PLAY_REWRITE` and `USER_NEW` deny a
+connection when no adapter is installed rather than admitting it unchecked. The
+weighted scoring and `QueryStream` federation described below now serve
+stored-media destination selection, node-bound source lookup, and the answers this
+cell returns to peers — not live viewer or publisher selection.
+
+The older hostname-returning Mist balancer route is gone, and the bare
+`/<stream>` viewer route with it. What remains of that surface is the node-bound
+source lookup (`/?source=` and the signed by-node path) and read-only
+diagnostics, served by `MistSourceHandler` and `AuthorizedMistSourceHandler`
+behind `RequireInternalSourceAccess`. Neither answers a viewer with a playback
+destination.
+
+On the prepared HTTP path, the manifest format is resolved before selection:
+`/play/{id}/cmaf/index.mpd` requests DASH, while `cmaf/index.m3u8` requests HLS-CMAF.
+WHEP remains distinct from WebSocket WebRTC. A conflicting protocol/manifest is a
+client error, not permission to return another format. Public query/header geo
+hints do not override the trusted client-location lookup. Tests exercise the full
+HTTP billing/resolve/redirect path and authenticated Commodore-to-Foghorn proxy;
+they do not establish actual-media or fleet-activation readiness.
 
 ### Authority before placement
 
@@ -63,6 +104,9 @@ authority projection prevents promotion and leaves the connected path active.
 ## Scoring Algorithm
 
 Foghorn ranks eligible nodes using a weighted scoring system. **Higher score = better node.**
+This scorer ranks stored-media and source candidates and produces the candidate list a peer
+receives from `QueryStream`. Live viewer and publisher destinations come from the placement
+evaluator instead, which uses its own ordering (`pkg/placement`).
 
 ### Score Components
 
@@ -100,13 +144,19 @@ Geographic coordinates use H3 bucketing (resolution 5, ~253 km² cells) for priv
 
 #### Coordinate Sources
 
-Foghorn resolves viewer coordinates using the following priority order:
+Public HTTP viewer coordinates come from a GeoIP MMDB lookup of the trusted client
+identity (`GEOIP_MMDB_PATH`). Public `lat`/`lon` query parameters and coordinate/country
+headers do not override that identity, including when a configured reverse proxy forwards
+the request. Proxy trust authenticates the forwarding chain; it does not authenticate a
+caller's chosen coordinates. Without a location, geo scoring is skipped.
 
-1. **Cloudflare headers** (when behind Cloudflare): `CF-IPLatitude` / `CF-IPLongitude` for coordinates, `CF-Connecting-IP` for the real client IP.
-2. **GeoIP MMDB lookup**: MaxMind database configured via `GEOIP_MMDB_PATH`. Resolves IP → lat/lon.
-3. **Disabled**: If neither source is available, geo scoring is skipped (all nodes get equal geo score).
+Authenticated node-to-node source requests retain explicit coordinate hints for source
+selection. Those values are bounded to finite latitude/longitude ranges. This is separate
+from a public viewer asserting where they are. The gRPC path receives the viewer identity
+through the authenticated Gateway/Commodore path rather than public HTTP headers.
 
-Related source: `pkg/geoip`, `api_balancing/internal/handlers` (Cloudflare header extraction).
+Related source: `pkg/geoip`, `pkg/middleware/clientip.go`, and
+`api_balancing/internal/handlers`.
 
 ### Stream Bonus
 
@@ -194,76 +244,73 @@ The player:
 
 ## Cross-Cluster Routing
 
-When a viewer's local cluster doesn't have the requested stream, Foghorn checks peer clusters before returning an error. This extends the single-cluster scoring with a two-phase remote lookup.
+When a local cluster doesn't have the requested content, Foghorn checks peer clusters before returning an error. This extends the single-cluster scoring with a two-phase remote lookup. It backs stored-media resolution, node-bound source lookup, and the candidates this cell returns to a querying peer. A live viewer's cross-cell destination comes from placement's own destination discovery, which observes peer cells directly rather than through this lookup.
 
-### Phase 1: EdgeSummary Candidate Scoring (Cheap)
+Stream-specific advertisements also provide a warm registry view. Every five seconds,
+the sender reports each node's own buffer state and original-versus-replicated input status;
+an aggregate full stream cannot make a dry replica full. Confirmed push publishers include
+their generation/revision, and each edge identifies its virtual media cluster independently
+of the sending Foghorn cell. Both receive directions preserve these fields and RAM metrics
+through a shared projection. Old peers without generation fields remain unbound. This warm
+view is not a reservation or a policy capability; source admission still rechecks the publisher.
 
-PeerChannel exchanges `ClusterEdgeSummary` messages every 15 seconds. These are cached in Redis (`RemoteEdgeCache`, 60s TTL). Foghorn uses this cache to score candidate remote edges without a per-request RPC. The summary is capacity/topology data, not a per-stream availability proof.
+### Phase 1: Federated Locations (Cheap)
+
+Peers push `StreamAdvertisement` every 5 seconds, and the StreamRegistry files each
+one as a federated `Location` keyed by the sending control cell. That directory says
+which cells hold a stream and on which edges, so Foghorn picks a candidate peer
+without a per-request RPC. Every federated edge is gated on advertisement freshness,
+so a cell that stops advertising disappears rather than going stale.
 
 ### Phase 2: QueryStream RPC (On Demand)
 
-If a remote candidate wins the summary-level comparison, Foghorn confirms it by sending `QueryStream` to that peer's FoghornFederation service. On cold start, when no EdgeSummary cache is available but peers exist, Foghorn fans out `QueryStream` directly. The peer scores its local nodes (using the same weight algorithm) and returns `EdgeCandidate` entries with DTSC URLs, capacity data, and `IsOrigin` flags.
+Foghorn confirms a candidate by sending `QueryStream` to that peer's
+FoghornFederation service. On cold start, when no advertisement has arrived yet but
+peers exist, Foghorn fans out `QueryStream` directly. The peer scores its local nodes
+(using the same weight algorithm) and returns `EdgeCandidate` entries with DTSC URLs,
+capacity data, and `IsOrigin` flags.
 
 ### Remote Edge Scoring
 
-Remote candidates are scored with `ScoreRemoteEdges` using the same weight components (CPU, RAM, BW, GEO) but with two differences:
+Remote candidate scoring applies CPU, RAM, bandwidth and viewer-distance weights. A
+candidate receives no penalty for belonging to another Foghorn or cluster, and a
+positive score is not discarded merely because it is below 200. With otherwise
+equivalent facts, a US edge is geographically local to a US viewer even when an EU
+Foghorn handles the request.
 
-| Difference                  | Detail                                                                                                                                                                                    |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **CrossClusterPenalty**     | 200 points subtracted from every remote score. Local edges win unless a remote edge is meaningfully better on GEO or BW. Equivalent to giving local edges a +200 `LocalPreference` bonus. |
-| **No StreamAffinity bonus** | Remote edges don't get the +50 stream bonus (they already have the stream — that's why they're candidates).                                                                               |
+There is no separate remote scorer. The peer answering `QueryStream` runs its own
+ordinary local scorer over its own nodes, against each node's native bandwidth
+limit, and returns the result. Symmetric discovery, comparable capacity scoring and
+exact-destination preparation are properties of the
+[media placement path](media-placement-policy.md), which live routing uses instead
+of this scorer.
 
-Remote edges with a final score ≤ 200 (the penalty) are discarded entirely.
+### Decision: Always Origin-Pull
 
-```go
-const crossClusterPenalty = uint64(200)
-
-// ScoreRemoteEdges scores remote edge candidates using the same weight system as local
-// edges but applies a CrossClusterPenalty. Remote edges only win when significantly
-// better on GEO or BW than local edges.
-func (lb *LoadBalancer) ScoreRemoteEdges(candidates []RemoteEdgeCandidate, viewerLat, viewerLon float64) []NodeWithScore
-```
-
-### RemoteEdgeCandidate
-
-```go
-type RemoteEdgeCandidate struct {
-    ClusterID   string
-    NodeID      string
-    BaseURL     string
-    GeoLat      float64
-    GeoLon      float64
-    BWAvailable uint64   // absolute bytes/s, normalized against 10 Gbps reference
-    CPUPercent  float64
-    RAMUsed     uint64
-    RAMMax      uint64
-}
-```
-
-### Decision: Origin-Pull vs Redirect
-
-After scoring, Foghorn merges remote and local `NodeWithScore` entries (remote entries have `ClusterID` set) and sorts by score descending. The top result determines the action:
-
-| Top result               | Action                                                                                                                                               |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Local edge with capacity | **Origin-pull**: Foghorn arranges a DTSC pull from the remote origin to a local edge via `arrangeOriginPull`. Subsequent viewers are served locally. |
-| Remote edge              | **Redirect**: Viewer is redirected (307) to the remote cluster's edge. No local replication.                                                         |
+A viewer is never redirected to another cluster. Where a peer holds the stream,
+Foghorn arranges a DTSC pull from the remote origin into a local edge via
+`federation.ArrangeOriginPull`, and the viewer is served from that edge — so they keep talking
+to the cluster they resolved, and subsequent viewers are served locally with no
+further cross-cluster work. A live viewer receives the single destination placement
+prepared for them, which the HTTP front door redirects to within the local cluster;
+when that destination needs the stream, placement arranges the pull itself.
 
 See `docs/architecture/stream-replication-topology.md` for the full origin-pull lifecycle and loop prevention.
 
 ### Related Source Files
 
-- Remote scoring: `api_balancing/internal/balancer` (`ScoreRemoteEdges`, `crossClusterPenalty`)
-- Remote edge cache: `api_balancing/internal/federation` (`RemoteEdgeCache`, `EdgeSummaryEntry`, `RemoteEdgeEntry`)
+- Placement destination discovery: `api_balancing/internal/federation` (`placement_*_paths.go`)
+- Federated stream directory: `api_balancing/internal/control` (`StreamRegistry`, `UpsertFederatedSource`)
 - Federation client: `api_balancing/internal/federation` (`QueryStream` RPC)
-- Origin-pull arrangement: `api_balancing/internal/handlers` (`arrangeOriginPull`)
+- Origin-pull arrangement: `api_balancing/internal/federation` (`ArrangeOriginPull`)
 
 ## Routing Events (Analytics)
 
 Every routing decision emits a `load_balancing` event to Kafka:
 
 ```go
-type LoadBalancingPayload struct {
+// api_balancing/internal/handlers.RoutingEvent, converted to ipcpb.LoadBalancingData
+type RoutingEvent struct {
     StreamName        string
     SelectedNode      string
     Score             uint64
@@ -271,15 +318,21 @@ type LoadBalancingPayload struct {
     ClientLongitude   float64  // H3 centroid
     NodeLatitude      float64
     NodeLongitude     float64
-    Status            string   // "success", "redirect", "error"
+    Status            string   // see below
     DurationMs        float32  // Decision latency
     ClusterID         string   // Emitting cluster context
     SelectedClusterID string   // Authenticated cluster of SelectedNode
     ControlCellID     string   // Foghorn/media-authority cell
-    OriginClusterID   string   // Stream origin when known
-    RemoteClusterID   string   // Set when viewer was routed cross-cluster
+    OriginClusterID   string   // Stream origin when known — a MEDIA cluster, never a cell
+    RemoteClusterID   string   // Set on cross-cluster DTSC source resolution, not on viewer routing
 }
 ```
+
+Emitted `Status` values: `success`, `redirect` (intra-cluster, to a local node),
+`failed`, `pull_federated`, `remote_source`, `pull_upstream`, `active_replication`.
+`RemoteClusterID` is set only on `pull_federated` and `remote_source` — both are
+Mist DTSC source resolution, not a viewer request, and neither is a redirect to
+another cluster.
 
 Stored in: `periscope.routing_decisions` (ClickHouse)
 
@@ -295,14 +348,14 @@ routing decisions are temporary diagnostic telemetry rather than durable deliver
 
 Publishers are routed by the same scorer, through a separate front door.
 
-|                   | Viewers                                    | Publishers                         |
-| ----------------- | ------------------------------------------ | ---------------------------------- |
-| Entry point       | `GET /play/{viewKey}`                      | `GET`/`POST` `/ingest/{streamKey}` |
-| Capability filter | `edge`                                     | `ingest`                           |
-| Redirect          | 307 per protocol                           | 307 to WHIP (`POST` only)          |
-| Fallback path     | cross-cluster origin-pull or peer redirect | geo-DNS `edge-ingest` name         |
+|                   | Viewers                                           | Publishers                         |
+| ----------------- | ------------------------------------------------- | ---------------------------------- |
+| Entry point       | `GET /play/{viewKey}`                             | `GET`/`POST` `/ingest/{streamKey}` |
+| Capability filter | `edge`                                            | `ingest`                           |
+| Redirect          | 307 per protocol                                  | 307 to WHIP (`POST` only)          |
+| Fallback path     | cross-cluster origin-pull (never a peer redirect) | geo-DNS `edge-ingest` name         |
 
-Both resolve in `api_balancing/internal/control` (`ResolveLivePlayback` and
+Both resolve in `api_balancing/internal/control` (`ResolvePreparedLiveViewerEndpoint` and
 `ResolveIngestEndpoints`) and filter candidates by capability. Ingest then
 keeps candidates inside the cluster-peer envelope Commodore returned with the
 resolve — the same envelope playback authorizes cross-cluster candidates
@@ -313,6 +366,22 @@ entitlement. `NodeState.TenantID` is ownership metadata, not routing authority.
 One physical Foghorn serves many virtual media clusters and accepts any valid
 stream key, so nothing about the listener, the hostname, or its own
 `CLUSTER_ID` bounds the candidate set. It names no cluster on the resolve.
+
+Resolved ingest URLs come from that node's current Mist listener report. RTMP/SRT
+keep the reported ports and public overrides; Foghorn's fleet-wide port settings
+do not manufacture node-specific endpoints. Missing protocols remain absent.
+WHIP POST filters for a usable WHIP endpoint before truncating candidates, so
+nearby RTMP-only nodes cannot hide an available WHIP node farther down the ranking.
+Listener reports expire after 30 seconds independently of heartbeats and capacity
+metrics. A successful empty report withdraws previously advertised listeners.
+
+Mist can advertise WebRTC with its UDP port in a `ws` URL. WHIP signalling uses
+the separately reported HTTP listener, including its public host, port and proxy
+prefix. Helmsman configures its single managed HTTP `pubaddr` as a scalar because
+Mist's metrics reporter serializes array-form public addresses into malformed URLs.
+Protocol reconciliation repairs this form while preserving unrelated listener settings.
+`MIST_CONTRACT_IMAGE=<immutable-image-id> make verify-mist-protocols` exercises this
+contract on an isolated Mist container with nonstandard ports and listener withdrawal.
 
 A live ingest claim is the one thing that narrows it: while a publisher holds
 the stream, `active_ingest_cluster_id` pins reconnects to the cluster already
@@ -339,6 +408,16 @@ replica or after a restart. Helmsman's authoritative ten-second client
 inventory renews live viewer leases. Exact close releases promptly; missed
 closes converge by lease expiry, and runtime reconciliation never deletes
 members from a process-local partial view.
+
+The `USER_NEW` hook checks policy before reserving viewer capacity, including cached public
+playback, and denies when no admission adapter is installed. Its deadline-aware reservation checks
+the coordination engine clock before mutating or renewing capacity; local reservations check under
+the capacity lock. A successful reservation consumes the placement decision at that boundary. The
+adapter derives object identity, source generation, protocol and geography server-side; it does not
+treat a client URL as policy or source authority. Dispatch to the push, configured-input or
+artifact source reader follows the signed object kind and ingest mode, so a runtime stream name
+cannot select a different path; see [media placement policy](media-placement-policy.md) for the
+per-kind checks and the attestation barrier that gates policy issuance.
 
 Two things differ:
 

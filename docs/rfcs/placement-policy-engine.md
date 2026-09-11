@@ -5,6 +5,13 @@
 Proposed — deferred; NOT part of the current storage-artifact-catalog release. This RFC specifies the
 next-release storage-tiering and placement design.
 
+The live-media `ingest`/`serve` slice is being implemented separately. Its current
+[pure evaluator and compiler](../architecture/media-placement-policy.md) are not yet wired
+into runtime routing or public policy configuration. This does not implement or activate
+the storage/processing/tiering proposals below. Live tenant/stream constraints accumulate;
+preference overrides replace ordered groups without widening hard permissions. Signed
+authority activation, capacity-owner consent, and final admission remain integration gates.
+
 ## TL;DR
 
 - Generalize today's single implicit durable copy (one S3 object per artifact) into a **backend-keyed

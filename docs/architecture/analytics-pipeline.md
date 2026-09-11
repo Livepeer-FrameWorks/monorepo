@@ -264,6 +264,19 @@ If you need to add a new event type, the switch lives in `api_analytics_ingest/i
 The exact schema is in `pkg/database/sql/clickhouse`, but conceptually:
 
 - `viewer_connection_events`: Viewer connect/disconnect session events retained for support diagnostics. Rows carry authenticated serving `cluster_id`, independent `origin_cluster_id`, and `control_cell_id`. Connect rows also retain a validated, attach-scoped browser `client_session_id` when the player opted into session telemetry. The stored `request_url` uses a fail-closed query allowlist: only that validated `fwsid` may remain; every other query parameter and the fragment are removed. The rated billing source is `viewer_sessions_final`, projected from durable `USER_END` triggers with the same attribution.
+
+Viewer credential redaction happens before retention, not only at the ClickHouse writer. The
+shared Decklog client sends a sanitized copy of `PLAY_REWRITE`, `USER_NEW` and connection-play
+payloads; admission retains its original token and request URL. Event identity is stamped before
+copying so a publish retry keeps the same ID. Decklog applies the same redaction again before
+Kafka serialization, including events from producers that do not use the shared client.
+`viewer_token` is removed, and request URLs retain only scheme/host/path plus a single validated
+`fwsid`. Userinfo, fragments, all other query fields and malformed/ambiguous correlation values
+are discarded. Unsupported or opaque URL forms are not retained. The Periscope writer uses the
+same URL rule as defense in depth; federation identity and session attribution are unchanged.
+Helmsman does not log raw viewer rewrite bodies, including parse failures. These changes govern
+new events and do not scrub records already retained by an older deployment.
+
 - `stream_event_log`: Stream lifecycle + notable stream events (start/end/errors, etc.).
 - `stream_health_samples`: QoE / buffer health samples (bitrate/fps/codec/buffer state, issues), including the raw `max_keepaway_ms` denominator and stream-wide jitter on both Mist-triggered and 10-second lifecycle samples.
 - `client_qoe_samples`: Client lifecycle samples; input for rollups like `client_qoe_5m`. Diagnostic-only — see "Client QoE sampling" below for cadence and the explicit non-authority over viewer counts / billing.

@@ -11,7 +11,7 @@ Cluster A (tenant's preferred)              Cluster B (origin)
 │  ├─ PeerManager ────────│── PeerChannel ─│── FederationServer      │
 │  ├─ FederationClient    │── QueryStream ─│── LoadBalancer (score)  │
 │  ├─ FederationServer    │── NotifyOrigin │── ActiveReplication     │
-│  └─ RemoteEdgeCache ◄───│── Telemetry ───│── PrepareArtifact       │
+│  └─ RemoteEdgeCache ◄───│── Advertisements│── PrepareArtifact       │
 │         │(Redis)         │                │         │(Redis)        │
 │  Foghorn A (replica)    │                │  Foghorn B (replica)    │
 │  └─ reads RemoteEdgeCache                │  └─ reads shared state  │
@@ -24,14 +24,14 @@ Cluster A (tenant's preferred)              Cluster B (origin)
 
 ## Service Responsibilities
 
-| Component        | Role                                                                                                                                                                                                                                                                                                           | Data                                                                                                                                                                                                                                                                                |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| FederationServer | Handles inbound gRPC RPCs (QueryStream, NotifyOriginPull, PrepareArtifact, PeerChannel, CreateRemoteClip, CreateRemoteDVR, ListTenantArtifacts, MigrateArtifactMetadata, ForwardArtifactCommand, MintStorageURLs, DeleteStorageObjects)                                                                        | Reads local LoadBalancer scores; records outbound pulls on StreamRegistry's Location[local].OutboundPullers (NotifyOriginPull); writes federation telemetry to RemoteEdgeCache                                                                                                      |
-| FederationClient | Pool wrapper for outbound unary RPCs to peer Foghorns                                                                                                                                                                                                                                                          | Uses FoghornPool lazy connections                                                                                                                                                                                                                                                   |
-| PeerManager      | Manages PeerChannel lifecycles, peer discovery, telemetry push/recv, leader election                                                                                                                                                                                                                           | Redis leader lease, peer address map                                                                                                                                                                                                                                                |
-| StreamRegistry   | Unified per-stream identity + replication + admission state (control package). Federated peer ads upsert here as `Locations[peer_cluster]`; local in-flight pulls land as `Locations[local].ReplicatingFrom + PullDTSCURL + DestNodeID`; source-side outbound pulls land as `Locations[local].OutboundPullers` | Redis backing (`{cluster_id}:registry:source:*`, `{cluster_id}:registry:artifact:*`) with cross-instance changelog replay (ordered Redis Stream; see foghorn-ha.md); SweepStaleLocations (30s tick / 5-min maxAge) ages stale federated entries + per-OutboundPull entries          |
-| RemoteEdgeCache  | Federation telemetry cache plus source-revision-fenced stream peer membership (Redis). Stream identity / playback index / active replication live in StreamRegistry.                                                                                                                                           | remote_edges (30s), remote_replications (5m), edge_summary (60s), remote_live_streams v3 per origin (30s live / 1h offline), remote_artifacts (90s), stream_peer_memberships (non-expiring active records; ended fences use DB-proven coordinated retention), peer_heartbeats (30s) |
-| Quartermaster    | Peer discovery via `ListPeers(cluster_id)`                                                                                                                                                                                                                                                                     | Returns peer cluster addresses and shared tenant lists                                                                                                                                                                                                                              |
+| Component        | Role                                                                                                                                                                                                                                                                                                                                                              | Data                                                                                                                                                                                                                                                                       |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| FederationServer | Handles inbound gRPC RPCs (QueryStream, NotifyOriginPull, PrepareArtifact, PeerChannel, QueryPlacementCandidates, PreparePlacement, CreateRemoteClip, CreateRemoteDVR, ListTenantArtifacts, MigrateArtifactMetadata, ForwardArtifactCommand, MintStorageURLs, DeleteStorageObjects)                                                                               | Reads local LoadBalancer scores; records outbound pulls on StreamRegistry Location[local].OutboundPullers (NotifyOriginPull); files peer advertisements into the StreamRegistry and replication events into RemoteEdgeCache                                                |
+| FederationClient | Pool wrapper for outbound unary RPCs to peer Foghorns                                                                                                                                                                                                                                                                                                             | Uses FoghornPool lazy connections                                                                                                                                                                                                                                          |
+| PeerManager      | Manages PeerChannel lifecycles, peer discovery, advertisement push, leader election                                                                                                                                                                                                                                                                               | Redis leader lease, peer address map                                                                                                                                                                                                                                       |
+| StreamRegistry   | Unified per-stream identity + replication + admission state (control package). Federated peer ads upsert here as `Locations[peer_control_cell]` (see the two-namespace note in foghorn-ha.md); local in-flight pulls land as `Locations[local].ReplicatingFrom + PullDTSCURL + DestNodeID`; source-side outbound pulls land as `Locations[local].OutboundPullers` | Redis backing (`{cluster_id}:registry:source:*`, `{cluster_id}:registry:artifact:*`) with cross-instance changelog replay (ordered Redis Stream; see foghorn-ha.md); SweepStaleLocations (30s tick / 5-min maxAge) ages stale federated entries + per-OutboundPull entries |
+| RemoteEdgeCache  | Cross-cluster replication, live-stream and artifact records, plus source-revision-fenced stream peer membership (Redis). Stream identity / playback index / active replication live in StreamRegistry.                                                                                                                                                            | remote_replications (5m), remote_live_streams v3 per origin (30s live / 1h offline), remote_artifacts (90s), stream_peer_memberships (non-expiring active records; ended fences use DB-proven coordinated retention)                                                       |
+| Quartermaster    | Peer discovery via `ListPeers(cluster_id)`                                                                                                                                                                                                                                                                                                                        | Returns peer cluster addresses and shared tenant lists                                                                                                                                                                                                                     |
 
 ## Data Flows
 
@@ -40,32 +40,85 @@ Cluster A (tenant's preferred)              Cluster B (origin)
 ```
 Viewer → Foghorn A (tenant's cluster)
 
-1. Resolve playback_id → stream_name + origin_cluster_id (Commodore, cached)
-2. Score local edges (sub-ms, in-memory)
-3. Score remote edges from EdgeSummary in Redis (sub-ms, from PeerChannel data)
-4. If remote wins and no in-flight replication on StreamRegistry:
-   a. QueryStream → Foghorn B: returns scored EdgeCandidates with DTSC URLs
-   b. Score remote candidates vs local (CrossClusterPenalty=200)
-   c. If origin-pull: NotifyOriginPull → StreamRegistry.MarkReplicating on A + RecordOutboundPull on B → tell Helmsman DTSC source
-   d. If redirect: 307 to remote cluster's play endpoint
-5. PeerChannel opens (if not already): B pushes EdgeTelemetry (5s), A writes to Redis
-6. Steady state: all edges (local + remote) scored on every viewer request from Redis
+Two distinct paths reach a peer, and they discover it differently.
+
+**Placement (live routing).** Peers push StreamAdvertisements every 5s, and the
+StreamRegistry files each as a federated `Location` keyed by the sending control
+cell. That directory is what the placement readers consult; each federated edge is
+gated on advertisement freshness, so a cell that stops advertising disappears
+rather than going stale. See [media placement](media-placement-policy.md).
+
+**Legacy `/source` (Mist source resolution).** This path does not read the
+federated directory at all. It resolves `origin_cluster_id` for the stream — from
+the trigger stream-context cache, signed local authority, or Commodore — then:
+
+1. Refuse if the origin is this cluster, or absent
+2. Reauthorize: the origin must be in the tenant's current `cluster_peers`,
+   resolved fresh so a revoked peer cannot ride stale cached origin state
+3. One directed `QueryStream` to that cluster, which returns scored
+   EdgeCandidates with DTSC URLs. There is no fan-out and no cross-cluster
+   scoring comparison
+4. `NotifyOriginPull` → `MarkReplicating` locally + `RecordOutboundPull` on the
+   peer → hand Helmsman the DTSC source
+
+Viewers are never redirected to another cluster's play endpoint. Cross-cluster
+serving is always an origin pull into a local edge, so the viewer keeps talking to
+the cluster it resolved.
 ```
 
-### PeerChannel Telemetry Exchange
+### PeerChannel Exchange
 
-PeerChannel is a bidirectional gRPC stream carrying 8 payload types via `oneof`:
+PeerChannel is declared bidirectional but used in one direction: the dialing side
+sends, the receiving side never does. Four payload types are live:
 
-| Message               | Interval                 | Direction | Purpose                                                                                                               |
-| --------------------- | ------------------------ | --------- | --------------------------------------------------------------------------------------------------------------------- |
-| EdgeTelemetry         | 5s                       | Both      | Per-edge BW/CPU/RAM/geo for scoring remote edges                                                                      |
-| ReplicationEvent      | On change                | Both      | Origin-pull started/stopped (prevents redirect loops)                                                                 |
-| ClusterEdgeSummary    | 15s                      | Both      | Smoothed 30s-avg per-edge data for cheap cluster comparison                                                           |
-| StreamLifecycleEvent  | On change + 5s heartbeat | Both      | Stream live/offline (cross-cluster ingest dedup)                                                                      |
-| StreamAdvertisement   | 5s                       | Both      | Push-based stream directory with per-edge scoring; builds Adj-RIB-In, eliminates Commodore dependency in steady state |
-| ArtifactAdvertisement | 30s                      | Both      | Hot artifact locations on peer edges (avoids S3 round-trips)                                                          |
-| PeerHeartbeat         | 10s                      | Both      | Cluster liveness, protocol version, capabilities                                                                      |
-| CapacitySummary       | —                        | Both      | Cluster-wide aggregate capacity (proto shell for dCDN bidding)                                                        |
+| Message               | Interval               | Purpose                                                                                                               |
+| --------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| StreamAdvertisement   | 5s                     | Push-based stream directory with per-edge scoring; builds Adj-RIB-In, eliminates Commodore dependency in steady state |
+| StreamLifecycleEvent  | On change + 5s refresh | Stream live/offline (cross-cluster ingest dedup)                                                                      |
+| ReplicationEvent      | On change              | Origin-pull started/stopped (prevents pull loops)                                                                     |
+| ArtifactAdvertisement | 30s                    | Hot artifact locations on peer edges (avoids S3 round-trips)                                                          |
+
+The remaining four arms — `EdgeTelemetry`, `ClusterEdgeSummary`, `PeerHeartbeat`
+and `CapacitySummary` — have no sender and no handler. They fed the retired
+remote-edge scoring path; the receiver consumes them without storing them so a
+peer on older code is not answered with an unknown-payload warning. Peer liveness
+is the gRPC keepalive on the connection, not a heartbeat frame.
+
+#### `control_cell_id` is required on advertisements
+
+`StreamAdvertisement.control_cell_id` names the sender's control cell, and it is
+the key the receiving registry files the resulting federated `Location` under. It
+is **required**: an advertisement without it is dropped, with a warning throttled
+to once per peer per minute. There is no fallback to the sender's `CLUSTER_ID`,
+because every consumer of that key compares it against a control cell — a location
+filed under a cluster id would match nothing and the cell would silently refuse to
+serve rather than degrade visibly.
+
+`ReplicationEvent` carries the same field, alongside `cluster_id`, which is the
+**media** cluster the replica lands in. Loop prevention compares a request's remote
+against all three recorded identities (control cell, media cluster, and the
+PeerChannel identity the frame arrived under) because callers name the remote in
+different namespaces: placement and DVR name a cell, the legacy `/source` path
+names the origin media cluster it got from Commodore.
+
+#### Peer identity is self-asserted
+
+The transport proves service authentication and nothing about which cluster is
+calling — `cluster_id` on the first frame is simply a claim. Each handler therefore
+binds what it stores to the channel rather than to the payload's claim:
+
+- a lifecycle event must name the channel's cluster, or it is refused;
+- a replication event is recorded under the channel's identity;
+- a stream advertisement may not name this Foghorn's own identity (checked in
+  both namespaces: `CLUSTER_ID` and `MEDIA_AUTHORITY_CELL_ID`), a cell the peer is
+  known not to belong to, or a second cell mid-channel — the first cell a channel
+  names is pinned for its lifetime.
+
+"Known not to belong to" means positive knowledge only, from Quartermaster and
+Commodore peer records rather than from the wire. A peer we have no membership for
+is not refused: discovery has to work before a membership exists, and self-hosted
+Foghorns are not a day-one deployment. The pinning and the own-identity refusal are
+the guards that always apply.
 
 Lifecycle frames carry the publisher source revision. A cell's global PostgreSQL source-revision
 allocator is a PostgreSQL sequence shared by old and new replicas. The v0.3 expand migration locks
@@ -93,10 +146,10 @@ service-token trust boundary, not cryptographic cluster identity.
 
 ### Peer Lifecycle Types
 
-| Type          | When                              | Example                                                                         |
-| ------------- | --------------------------------- | ------------------------------------------------------------------------------- |
-| Always-on     | Official ↔ preferred cluster pair | Coverage PeerChannel for ClusterEdgeSummary                                     |
-| Stream-scoped | Other subscribed clusters         | PeerChannel opens on first stream, closes when last stream ends (UntrackStream) |
+| Type          | When                              | Example                                                                                         |
+| ------------- | --------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Always-on     | Official ↔ preferred cluster pair | PeerChannel held open regardless of stream activity; carries stream and artifact advertisements |
+| Stream-scoped | Other subscribed clusters         | PeerChannel opens on first stream, closes when last stream ends (UntrackStream)                 |
 
 ### Cross-Cluster Artifact Access
 
@@ -447,7 +500,7 @@ In multi-replica Foghorn deployments:
 
 - **Unary RPCs** (QueryStream, NotifyOriginPull, PrepareArtifact): LB round-robin. Any instance handles them via shared Redis state.
 - **PeerChannel**: Leader-only. Redis-based leader election (SET NX, 15s TTL, renewed every 5s on telemetry tick). Leader opens and maintains all PeerChannel connections. If leader dies, lease expires, another instance acquires and reconnects.
-- **Non-leader replicas**: Read remote edge data from Redis (written by leader's PeerChannel). GetPeerAddr populated from Redis sync (syncPeerAddressesToRedis/loadPeerAddressesFromRedis).
+- **Non-leader replicas**: Read the federated state the leader's PeerChannel writes — remote replications, remote live streams and remote artifacts. Peer addresses come from the versioned peer-hint contributions in Redis.
 
 ```
 Peer B ──PeerChannel──→ [LB] ──→ Leader Instance ──writes──→ Redis
@@ -455,9 +508,9 @@ Peer B ──PeerChannel──→ [LB] ──→ Leader Instance ──writes─
                                   Replica Instance ──reads────┘
 ```
 
-## Federation Telemetry & Geo Enrichment
+## Federation Events & Geo Enrichment
 
-Federation events are emitted by Foghorn for every cross-cluster operation (peering, replication, artifact access, redirect) and ingested into ClickHouse (`periscope.federation_events`) via the standard analytics pipeline.
+Federation events are emitted by Foghorn for every cross-cluster operation (peering, replication, artifact access) and ingested into ClickHouse (`periscope.federation_events`) via the standard analytics pipeline.
 
 ### Self-Geo Resolution
 
@@ -470,17 +523,17 @@ Each Foghorn resolves its own geographic coordinates at bootstrap:
 
 If `NODE_ID` is unset or the node has no `external_ip`, self-geo stays zero (graceful degradation).
 
-### Geo Exchange via PeerHeartbeat
+### Remote Geo Is Not Exchanged
 
-PeerHeartbeat messages (10s interval) carry `foghorn_lat`, `foghorn_lon`, and `foghorn_location`. Each peer caches the remote foghorn's geo in `peerState`. This enables:
-
-- Geo-aware federation topology visualization in the UI
-- Per-flow distance calculation for cross-cluster routing analytics
-- `GetPeerGeo(clusterID)` for enriching outbound federation events
+No peer reports its coordinates over the PeerChannel. The `PeerHeartbeat` geo fields exist on the
+wire but have no sender and no consumer, so a remote foghorn's position is simply not known locally.
 
 ### Auto-Enrichment
 
-`emitFederationEvent()` in federation handlers automatically sets `local_lat`, `local_lon` from self-geo and `remote_lat`, `remote_lon` from peer geo cache before emitting. All call sites (peering, replication, artifact, redirect events) get geo enrichment without per-site changes.
+`emitFederationEvent()` in federation handlers sets `local_lat`, `local_lon` from self-geo. All call
+sites (peering, replication, artifact, redirect events) get that enrichment without per-site changes.
+`remote_lat` and `remote_lon` are left NULL: `(0, 0)` passes `IsValidLatLon`, so writing a placeholder
+would put every cross-cluster flow at Null Island rather than reading as unknown.
 
 ### ClickHouse Columns
 
@@ -488,7 +541,7 @@ Federation events carry `local_lat`, `local_lon`, `remote_lat`, `remote_lon` (al
 
 ## Key Files
 
-- `pkg/proto` - Service definition (11 RPCs, 8 PeerMessage payload types)
+- `pkg/proto` - Service definition (13 RPCs, 8 PeerMessage payload types, 4 of them retired-but-accepted)
 - `api_balancing/internal/federation` - FederationServer: all RPC handlers (incl. PrepareArtifact/MintStorageURLs/DeleteStorageObjects + canLocallyMintFor ownership gate)
 - `api_balancing/internal/control/cross_cluster_artifact.go` - shared resolve→authorize→adopt path (`ResolveAndAdoptRemoteArtifact`, `adoptRemoteArtifactRow`)
 - `api_balancing/internal/control/relay_resolve.go` - RelayResolve: byte-serve-time resolution for Helmsman's artifact relay
@@ -502,7 +555,7 @@ Federation events carry `local_lat`, `local_lon`, `remote_lat`, `remote_lon` (al
 
 - **Leader-only PeerChannel**: Only one Foghorn instance per cluster runs persistent PeerChannel connections. Loss of leadership triggers `disconnectAllPeers`; peers reconnect to the new leader via LB. Non-leaders still serve unary RPCs.
 - **Demand-driven discovery is the fast path**: Peers are usually discovered from stream validation responses (sub-second), not from 5-min polling. The complete peer hints are committed with the admission obligation; only the federation leader imports them and atomically CAS-replaces the generation's complete membership before broadcasting live state. Conflicting captured endpoints contribute no address authority; current leased Quartermaster discovery must resolve the conflict.
-- **StreamAdvertisement eliminates control plane in steady state**: Once PeerChannel is open, peers build a local stream directory (playback_id reverse-index) from StreamAdvertisement messages. Viewer routing can skip Commodore resolve entirely. The directory lives in `control.StreamRegistry` as per-peer `Locations[peer_cluster]` entries; `withdrawFederatedSource` (IsLive=false in the next ad) drops the peer's Location and, if no Locations remain, the whole entry plus its playback_id reverse-index. `SweepStaleLocations` provides a 5-min fallback expiry for peers that stop advertising without a clean withdrawal. Ads also keep the registry's stream identities warm during a Commodore outage (peer-fed entries refresh `cached`, so the stale-serve fallback in `docs/architecture/foghorn-ha.md` rarely engages for federated streams).
-- **Ad-fed edges pre-warm cold viewer resolution**: `PeerStreamEdge` carries per-edge scoring data including `ram_used`/`ram_max`; the receiver stores it as `Location.EdgeCandidates`, and both viewer-resolution surfaces — HTTP /play (`internal/handlers`) and the gRPC `ViewerControlService` (`internal/grpc`) — consume them via the shared `control.FederatedRemoteEdges` (20s freshness gate ≈ 4 missed 5s pushes) before paying the cold QueryStream fan-out. The fan-out itself is single-flighted + memoized (5s) per (tenant, stream) via `balancer.SharedFanOut`, and runs **detached from the triggering request's cancellation** (`context.WithoutCancel` + own timeout) — the result is shared and memoized for everyone, so an abandoned first viewer must not poison the window with an empty candidate set. Edges from peers predating the RAM fields are dropped (remote scoring rejects `ram_max==0`) and the request falls through to the fan-out. The warm `EdgeSummary` cache remains the primary source.
+- **StreamAdvertisement eliminates control plane in steady state**: Once PeerChannel is open, peers build a local stream directory (playback_id reverse-index) from StreamAdvertisement messages. Viewer routing can skip Commodore resolve entirely. The directory lives in `control.StreamRegistry` as `Locations[peer_control_cell]` entries; `withdrawFederatedSource` (IsLive=false in the next ad) drops the peer's Location and, if no Locations remain, the whole entry plus its playback_id reverse-index. Serving gates each federated edge on a 30s `AdTimestamp` window; `SweepStaleLocations` is a 5-min janitor for peers that stop advertising without a clean withdrawal, not the freshness gate. Ads also keep the registry's stream identities warm during a Commodore outage (peer-fed entries refresh `cached`, so the stale-serve fallback in `docs/architecture/foghorn-ha.md` rarely engages for federated streams).
+- **Ad-fed edges feed placement destination discovery**: `PeerStreamEdge` carries per-edge scoring data including `ram_used`/`ram_max`; the receiver stores it as `Location.EdgeCandidates`. Live viewer resolution no longer merges these into a legacy candidate set — the placement path reads them directly when deciding whether another cell holds a relayable copy (`placement_live_paths.go`, `placement_configured_paths.go`), gated on a 30s advertisement-freshness window and on the edge being an origin rather than a replica. `QueryStream` remains for the candidates this cell returns to a querying peer and for stored-media resolution; it is a single directed call, never a fan-out.
 - **Tenant filtering in shared-lb**: `QueryStream` filters EdgeCandidates by `tenant_id` so tenants on shared clusters only see their own edges.
 - **CapacitySummary is a proto shell**: Received but not stored yet. Reserved for dCDN marketplace capacity trading.

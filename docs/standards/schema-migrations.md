@@ -240,11 +240,16 @@ success never substitutes for Yugabyte proof. The tests remain behind
 `schema_verify` so a plain `make test` needs no Docker; CI splits them between
 `make verify-schema-migrations-core` and the scoped/exhaustive Yugabyte targets described
 above. The exhaustive lane uses separate suite-owned engines for schema convergence and
-service behavior so the single-node tablet safety ceiling cannot be exceeded; mutating
+service behavior to bound pressure on the single-node tablet safety ceiling; mutating
 service tests receive isolated databases, and each bounded service fixture discards all of
-them with its container. Foghorn's larger schema runs in two bounded batches so neither
-tablet accumulation nor repeated distributed teardown can destabilize the single-node test
-engine.
+them with its container. Foghorn and Commodore service contracts run in separate bounded
+batches to limit tablet accumulation without repeatedly dropping distributed databases or
+raising engine safety limits. Commodore's scoped database gate also separates convergence
+from its service batches; its placement-only gate separates control, object/delivery, and
+destination-authority contracts. Each batch has a distinct coverage artifact. Explicit
+selector checks compare the combined service batches against discovered tests so growth
+cannot silently omit a contract. When a retained-database suite outgrows a fixture, split
+the suite across fresh engines and preserve its complete selector and coverage union.
 
 PostgreSQL/Yugabyte relation comparison uses `format_type(atttypid, atttypmod)`,
 so length, precision, and other typmod drift is significant. Physical relation

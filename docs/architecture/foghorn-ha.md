@@ -14,10 +14,7 @@ Single-Foghorn cells have no Redis at all: the in-memory layer is the only layer
                      │  {cluster_id}:streams:*              │
                      │  {cluster_id}:nodes:*                │
                      │  {cluster_id}:artifacts:*            │
-                     │  {cluster_id}:remote_edges:*         │
                      │  {cluster_id}:remote_artifacts:*     │
-                     │  {cluster_id}:stream_ads:*           │
-                     │  {cluster_id}:active_replications:*  │
                      │  {cluster_id}:leader:peer_manager    │
                      │                                      │
                      │  changelogs (Redis Streams):         │
@@ -43,14 +40,14 @@ Single-Foghorn cells have no Redis at all: the in-memory layer is the only layer
 
 ## Service Responsibilities
 
-| Component                   | Role                                                                                                                              | Data                                                                                                                                                                                                              |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| StreamStateManager          | In-memory state + Redis write-through. Singleton accessed via `state.DefaultManager()`                                            | Stream states, node states, artifacts, viewer sessions                                                                                                                                                            |
-| RedisStateStore             | Redis CRUD operations, changelog appender/reader (`pkg/redis.Changelog`)                                                          | All `{cluster_id}:*` keys + `{cluster_id}:state_changelog`                                                                                                                                                        |
-| PeerManager leader election | Redis SET NX for `{cluster_id}:leader:peer_manager`                                                                               | Only leader runs PeerChannel connections                                                                                                                                                                          |
-| RemoteEdgeCache             | Federation telemetry cache (Redis). Scope narrowed: stream identity / playback index / active-replication moved to StreamRegistry | `remote_edges`, `remote_replications`, `edge_summary`, `remote_live_streams`, `remote_artifacts`, `stream_peers`, `peer_heartbeat`                                                                                |
-| StreamRegistry              | Unified per-stream identity + per-peer Locations + admission state. Redis-backed with cross-instance changelog replay             | `registry:source:{internal_name}`, `registry:artifact:{hash}` — federation-fed via UpsertFederatedSource; admission state via MarkSourceActive/Inactive; replication state via MarkReplicating/RecordOutboundPull |
-| identity.Resolver           | Single front door for stream/artifact → tenant/cluster attribution; layered state → registry → Commodore (see below)              | Instance-local negative cache only; positive caching lives in the layers it consults                                                                                                                              |
+| Component                   | Role                                                                                                                                    | Data                                                                                                                                                                                                              |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| StreamStateManager          | In-memory state + Redis write-through. Singleton accessed via `state.DefaultManager()`                                                  | Stream states, node states, artifacts, viewer sessions                                                                                                                                                            |
+| RedisStateStore             | Redis CRUD operations, changelog appender/reader (`pkg/redis.Changelog`)                                                                | All `{cluster_id}:*` keys + `{cluster_id}:state_changelog`                                                                                                                                                        |
+| PeerManager leader election | Redis SET NX for `{cluster_id}:leader:peer_manager`                                                                                     | Only leader runs PeerChannel connections                                                                                                                                                                          |
+| RemoteEdgeCache             | Cross-cluster federation records (Redis). Scope narrowed: stream identity / playback index / active-replication moved to StreamRegistry | `remote_replications`, `remote_live_streams`, `remote_artifacts`, `stream_peer_memberships`                                                                                                                       |
+| StreamRegistry              | Unified per-stream identity + per-peer Locations + admission state. Redis-backed with cross-instance changelog replay                   | `registry:source:{internal_name}`, `registry:artifact:{hash}` — federation-fed via UpsertFederatedSource; admission state via MarkSourceActive/Inactive; replication state via MarkReplicating/RecordOutboundPull |
+| identity.Resolver           | Single front door for stream/artifact → tenant/cluster attribution; layered state → registry → Commodore (see below)                    | Instance-local negative cache only; positive caching lives in the layers it consults                                                                                                                              |
 
 ## Data Flows
 
@@ -92,7 +89,7 @@ Viewer request → Foghorn instance (any)
   → Returns ranked node list
 ```
 
-The local viewer-routing hot path reads the in-memory cache. Redis is still read directly for startup rehydration, HA command relay ownership, and federation caches such as remote edge summaries and stream advertisements.
+The local viewer-routing hot path reads the in-memory cache. Redis is still read directly for startup rehydration, HA command relay ownership, and federation caches such as remote replications, remote live streams and remote artifacts.
 
 ### Command Relay (HA Forwarding)
 
@@ -392,20 +389,17 @@ Be precise about what does **not** exist yet — until v0.2.33 this model lived 
 | `{cluster_id}:node_mode:{node_id}`                      | JSON: nodeModeRecord (mode, set_by, set_at) — multi-writer-safe mode record   | None                 |
 | `{cluster_id}:conn_owner:{node_id}`                     | String: `instanceID\|grpcAddr\|fence` (fenced CAS ownership)                  | 60s                  |
 
-### Federation Telemetry (RemoteEdgeCache)
+### Federation Records (RemoteEdgeCache)
 
-| Key Pattern                                                                                | Value                                                                                          | TTL                               |
-| ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------- | --------------------------------- |
-| `{cluster_id}:remote_edges:{peer_cluster}:{node_id}`                                       | JSON: EdgeTelemetry (BW, CPU, RAM, geo)                                                        | 30s                               |
-| `{cluster_id}:remote_replications:{stream_name}:{peer_cluster}`                            | JSON: ReplicationEvent (available, DTSC URL)                                                   | 5m                                |
-| `{cluster_id}:edge_summary:{peer_cluster}`                                                 | JSON: EdgeSummaryRecord (smoothed per-edge data)                                               | 60s                               |
-| `{cluster_id}:remote_live_streams:v3:records:{tenant_id}:{internal_name}:{origin_cluster}` | Revision-fenced live/offline RemoteLiveStreamEntry for one origin                              | 30s live / 1h offline             |
-| `{cluster_id}:remote_live_streams:v3:origins:{tenant_id}:{internal_name}`                  | Origin-cluster index for lifecycle lookup                                                      | 1h, refreshed by lifecycle events |
-| `{cluster_id}:remote_artifacts:{peer}:{artifact_hash}:{node}`                              | JSON: RemoteArtifactEntry                                                                      | 90s                               |
-| `{cluster_id}:stream_peers:{peer_cluster}`                                                 | JSON: active stream names for a stream-scoped peer                                             | 60s                               |
-| `{cluster_id}:leader:{role}`                                                               | String: instance_id                                                                            | 15s                               |
-| `{cluster_id}:peer_hints:v2:{contributor_id}`                                              | JSON: one writer's replaceable peer-hint authority snapshot (address, lifecycle, tenant scope) | 30s                               |
-| `{cluster_id}:peer_heartbeat:{peer_cluster}`                                               | JSON: PeerHeartbeatRecord (version, streams, BW, edges)                                        | 30s                               |
+| Key Pattern                                                                                    | Value                                                                                          | TTL                                                                 |
+| ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `{cluster_id}:remote_replications:{stream_name}:{peer_cluster}`                                | JSON: ReplicationEvent (available, DTSC URL)                                                   | 5m                                                                  |
+| `{cluster_id}:remote_live_streams:v3:records:{tenant_id}:{internal_name}:{origin_cluster}`     | Revision-fenced live/offline RemoteLiveStreamEntry for one origin                              | 30s live / 1h offline                                               |
+| `{cluster_id}:remote_live_streams:v3:origins:{tenant_id}:{internal_name}`                      | Origin-cluster index for lifecycle lookup                                                      | 1h, refreshed by lifecycle events                                   |
+| `{cluster_id}:remote_artifacts:{peer}:{artifact_hash}:{node}`                                  | JSON: RemoteArtifactEntry                                                                      | 90s                                                                 |
+| `{cluster_id}:stream_peer_memberships:v2` (+ `_revisions:v2`, `_generations:v2`, `_states:v2`) | Redis hashes: per-stream peer membership, revision-fenced                                      | none while active; ended fences use DB-proven coordinated retention |
+| `{cluster_id}:leader:{role}`                                                                   | String: instance_id                                                                            | 15s                                                                 |
+| `{cluster_id}:peer_hints:v2:{contributor_id}`                                                  | JSON: one writer's replaceable peer-hint authority snapshot (address, lifecycle, tenant scope) | 30s                                                                 |
 
 Peer-hint contributors are leased independently: tenant-validation discoveries and the active
 leader's Quartermaster snapshot use separate keys. Imports aggregate only live v2 contributions,
@@ -418,13 +412,44 @@ Per-stream identity + per-peer Locations + admission state. Replaces the federat
 
 | Key Pattern                                    | Value                                                                                                              |
 | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `{cluster_id}:registry:source:{internal_name}` | JSON: StreamEntry (TenantID, PlaybackID, IngestMode, RuntimeName, OriginClusterID, Locations[cluster_id]→Location) |
+| `{cluster_id}:registry:source:{internal_name}` | JSON: StreamEntry (TenantID, PlaybackID, IngestMode, RuntimeName, OriginClusterID, Locations→Location)             |
 | `{cluster_id}:registry:artifact:{hash}`        | JSON: ArtifactEntry (Kind, InternalName, StreamID, TenantID, Status, RuntimeName, OriginClusterID, StorageCluster) |
 
-Location fields (per cluster, per stream):
+#### The Locations map holds two namespaces
 
-- **Federated (peer cluster)**: `IsOrigin`, `IsLiveNow`, `EdgeCandidates`, `AdTimestamp`
-- **Local (this cluster)**: `IsOrigin`, `IsLiveNow`, `SourceNodes`, `SourceActive`, `SourceInactiveAt`, `OwnerNodeID` (admission), `ReplicatingFrom` + `PullDTSCURL` + `DestNodeID` + `DestNodeBaseURL` + `PullSourceNodeID` (dest-side pull), `OutboundPullers[]` (source-side pulls)
+This is the single most misread structure in Foghorn. `Locations` is keyed by
+**two different kinds of identifier at once**:
+
+- The **local** slot is keyed by this Foghorn's `CLUSTER_ID` (`LocalLocationKey`).
+- Each **federated** slot is keyed by the advertising peer's **control cell id**,
+  never by that peer's `CLUSTER_ID`.
+
+Neither key is a media cluster. Code scanning for peers must skip the local key
+and must never compare a key against a cluster id — the placement readers do
+exactly this two-key skip. A third namespace appears one level down:
+`EdgeCandidate.ClusterID` is the edge's **virtual media cluster**, distinct from
+both keys, and `OriginClusterID` on the entry is a media cluster the sender
+reported, deliberately not defaulted to the location key because a guessed value
+reads as a real origin claim downstream.
+
+**No peer may write the local slot.** An advertisement naming it is refused twice
+over: the server refuses a cell equal to this Foghorn's `CLUSTER_ID` or its
+`MEDIA_AUTHORITY_CELL_ID`, and the registry independently refuses
+`LocalLocationKey`. The reason is that `UpsertFederatedSource` replaces a location
+wholesale rather than merging — a federated write there would drop the source
+activity, owning node and pull bookkeeping the local slot carries — and an offline
+advertisement withdraws it, which durably tombstones the entry for every replica
+in the cell when it is the last location.
+
+Location fields:
+
+- **Federated (keyed by peer control cell)**: `IsOrigin`, `IsLiveNow`, `EdgeCandidates`, `AdTimestamp`
+- **Local (keyed by this cluster's `CLUSTER_ID`)**: `IsOrigin`, `IsLiveNow`, `SourceNodes`, `SourceActive`, `SourceInactiveAt`, `OwnerNodeID` (admission), `ReplicatingFrom` + `PullDTSCURL` + `DestNodeID` + `DestNodeBaseURL` + `PullSourceNodeID` (dest-side pull), `OutboundPullers[]` (source-side pulls)
+
+`SweepStaleLocations` (5-min maxAge) is a janitor, not the freshness gate. Serving
+decisions gate federated edges on a **30s** `AdTimestamp` window, with two further
+independent 30s clocks on `SourceObservedAt` and `DTSCObservedAt`; re-advertising
+refreshes `AdTimestamp` but neither of the other two.
 
 ### Changelog Streams
 

@@ -4,6 +4,11 @@
 
 Draft
 
+Demand-driven destination preparation is part of the live
+[ingest/serve placement integration](../architecture/media-placement-policy.md). It must
+honor the selected destination and keep concurrent destinations' pull state independent.
+That prerequisite does not implement this RFC's proactive replication or hop topology.
+
 ## TL;DR
 
 - All stream replication today is on-demand: a viewer (or a MistServer source request) triggers a
@@ -46,8 +51,9 @@ The shipped mechanics are canonical in `docs/architecture/stream-replication-top
   (skip arranging a pull from a cluster already replicating from us), `ReplicationEvent`
   broadcast on completion, and the `StreamAdvertisement` directory.
 - **No policy surface.** The only per-stream replication controls are the `federated` flag
-  (cross-cluster visibility on/off) and `commodore.stream_cluster_pins` (enterprise pinning of a
-  stream to an allowed cluster set, applied at resolve time). There is no replica-count cap, no
+  (cross-cluster visibility on/off). `commodore.stream_cluster_pins` is a schema primitive with
+  no current runtime enforcement; placement integration requires explicit validated import,
+  not an assumption that existing pins were enforced. There is no replica-count cap, no
   region policy, no role assignment, and no way to express "have this stream in region X by
   time T".
 

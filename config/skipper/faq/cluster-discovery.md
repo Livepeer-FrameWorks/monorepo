@@ -68,15 +68,15 @@ Not all subscribed clusters behave the same way. Foghorn uses a three-tier peeri
 
 ### 1. Official ↔ Preferred (always-on)
 
-Your preferred cluster and your official (billing-tier) cluster maintain a persistent PeerChannel connection. They exchange `ClusterEdgeSummary` data every 30 seconds — smoothed per-edge metrics (BW, CPU, RAM, geo, viewers). This means Foghorn always has fresh edge data for both clusters and can score remote edges alongside local ones on every viewer request. No per-viewer cross-cluster RPC needed.
+Your preferred cluster and your official (billing-tier) cluster maintain a persistent PeerChannel connection. Every 5 seconds each side advertises the streams it is carrying, along with per-edge data (BW, CPU, RAM, geo, viewers). This means Foghorn always knows which clusters hold a given stream and on which edges, with no per-viewer cross-cluster RPC needed.
 
 ### 2. Other subscribed clusters (stream-scoped, demand-driven)
 
-Subscribing to a cluster does NOT automatically open a peering connection. The PeerChannel to these clusters opens **on demand** — when a stream triggers it (e.g., a viewer requests a stream that exists on that cluster, or a `QueryStream` fan-out discovers it). Once open, the PeerChannel stays alive as long as there are active streams involving that peer. When the last stream ends, the PeerChannel closes.
+Subscribing to a cluster does NOT automatically open a peering connection. The PeerChannel to these clusters opens **on demand** — when a stream triggers it, for example a viewer requesting a stream that exists on that cluster. Once open, the PeerChannel stays alive as long as there are active streams involving that peer. When the last stream ends, the PeerChannel closes.
 
-### 3. Once peered, always scored
+### 3. Once peered, always visible
 
-Regardless of how a PeerChannel was established (always-on or stream-scoped), once it's open, remote edge data from that peer flows into Redis. Foghorn's load balancer scores those remote edges alongside local edges on every viewer request. Remote edges get a `CrossClusterPenalty(200)` so local edges win unless the remote is meaningfully better on geo or bandwidth.
+Regardless of how a PeerChannel was established (always-on or stream-scoped), once it's open that peer's stream advertisements populate a local directory of which clusters hold which streams. Viewers are never redirected to another cluster: when a peer holds a stream your cluster doesn't, Foghorn arranges a DTSC pull into a local edge and serves the viewer from there.
 
 ### What this means in practice
 

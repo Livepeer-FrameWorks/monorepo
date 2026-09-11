@@ -165,8 +165,15 @@ secret are terminal local outcomes (hard expiry reports unavailable; the others
 deny). A transient local database/driver failure,
 corrupt row, or inconsistent projection is not an authoritative denial: while
 the connected evaluator is available, trigger, HTTP, and gRPC paths use it;
-otherwise they return unavailable. An unmarked projection may shadow-compare against
-connected behavior during rollout.
+otherwise they return unavailable. An unmarked schema-1 projection may shadow-compare against
+connected behavior during rollout. Legacy connected responses do not carry a placement decision:
+their equality cannot promote mixed-schema tenant/object pairs, and promotes a coherent schema-2
+pair only on a replica that has installed placement enforcement. Push ingest, playback, pull
+sources, managed inputs and artifact-source promotion all enforce this boundary. On an enforcing
+replica a schema-2 authority is promoted at apply time instead: Commodore issued it only after the
+cell attested enforcement in its `ApplyMediaAuthority` acknowledgements (see the activation
+barrier in `media-placement-policy.md`). Even an empty schema-2 placement policy is not a legacy
+default; a non-enforcing replica never promotes it.
 
 Shadow comparison uses a canonical authority projection, not whole transport
 messages. Connected responses expose health-filtered `cluster_peers` for
