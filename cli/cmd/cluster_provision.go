@@ -6970,6 +6970,10 @@ func buildServiceEnvVars(task *orchestrator.Task, manifest *inventory.Manifest, 
 // The shared SERVICE_TOKEN migration is tracked separately; these newer keys do
 // not need to inherit that ambient distribution model.
 func restrictClusterAccessSecrets(serviceID string, env map[string]string) {
+	if serviceID != "quartermaster" {
+		delete(env, "CAPACITY_CONSENT_REVIEW_KEY_ID")
+		delete(env, "CAPACITY_CONSENT_REVIEW_PRIVATE_KEY_PEM_B64")
+	}
 	if serviceID != "purser" {
 		delete(env, "X402_GAS_WALLET_PRIVKEY")
 	}

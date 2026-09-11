@@ -239,10 +239,30 @@ func GenerateSharedDeploymentMaterial() (map[string]string, error) {
 	if _, err := GenerateIfMissing(values); err != nil {
 		return nil, err
 	}
+	consent, err := GenerateCapacityConsentReviewMaterial()
+	if err != nil {
+		return nil, err
+	}
+	for key, value := range consent {
+		values[key] = value
+	}
 	if err := ValidateShared(values); err != nil {
 		return nil, fmt.Errorf("validate generated shared deployment material: %w", err)
 	}
 	return values, nil
+}
+
+// GenerateCapacityConsentReviewMaterial creates a dedicated Quartermaster signer,
+// separate from media admission authority and user authentication keys.
+func GenerateCapacityConsentReviewMaterial() (map[string]string, error) {
+	tuple, err := GenerateMediaAuthoritySigningTuple()
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{
+		"CAPACITY_CONSENT_REVIEW_KEY_ID":              strings.Replace(tuple["MEDIA_AUTHORITY_SIGNING_KEY_ID"], "media-authority-", "capacity-consent-", 1),
+		"CAPACITY_CONSENT_REVIEW_PRIVATE_KEY_PEM_B64": tuple["MEDIA_AUTHORITY_SIGNING_PRIVATE_KEY_PEM_B64"],
+	}, nil
 }
 
 // Keys returns the list of secret keys that GenerateIfMissing handles.

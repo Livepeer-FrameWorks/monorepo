@@ -17,6 +17,7 @@ func newClusterSecretsCmd() *cobra.Command {
 	}
 	cmd.AddCommand(newClusterSecretsGenerateSharedCmd())
 	cmd.AddCommand(newClusterSecretsGenerateMediaAuthorityCmd())
+	cmd.AddCommand(newClusterSecretsGenerateCapacityConsentCmd())
 	return cmd
 }
 
@@ -85,4 +86,28 @@ func writeSecretFragment(outputPath, description string, values map[string]strin
 		fmt.Fprintf(&payload, "%s=%s\n", key, values[key])
 	}
 	return writeExclusiveFile(outputPath, []byte(payload.String()), 0o600)
+}
+
+func newClusterSecretsGenerateCapacityConsentCmd() *cobra.Command {
+	var outputPath string
+	cmd := &cobra.Command{
+		Use: "generate-capacity-consent", Short: "Generate a dedicated Quartermaster capacity-consent review signer",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if strings.TrimSpace(outputPath) == "" {
+				return fmt.Errorf("--out is required")
+			}
+			values, err := credentials.GenerateCapacityConsentReviewMaterial()
+			if err != nil {
+				return err
+			}
+			if err := writeSecretFragment(outputPath, "Quartermaster capacity-consent review signer; import into the operator-owned secret store.", values); err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "Capacity consent review signer written to %s (mode 0600).\n", outputPath)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&outputPath, "out", "", "new dotenv fragment path (required; never overwritten)")
+	return cmd
 }
