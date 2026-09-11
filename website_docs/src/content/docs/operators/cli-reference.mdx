@@ -532,6 +532,30 @@ frameworks cluster init postgres --manifest production.yaml
 
 ---
 
+### Capacity-owner consent review keys
+
+Generate a dedicated Quartermaster review signer for an existing deployment:
+
+```bash
+frameworks cluster secrets generate-capacity-consent --out /secure/path/capacity-consent.env
+```
+
+The command writes a new mode-0600 fragment and refuses to overwrite an existing file. Import
+`CAPACITY_CONSENT_REVIEW_KEY_ID` and `CAPACITY_CONSENT_REVIEW_PRIVATE_KEY_PEM_B64` into your
+operator-owned secret store. Do not distribute this private key to other services. The production
+renderer passes the tuple only to Quartermaster; `generate-shared` includes a separate signer
+for fresh installations. Importing or generating keys does not deploy services.
+
+Without the tuple, consent reads and committed-change recovery remain available, but new reviews
+and writes are unavailable. Configure both values together; partial or malformed configuration
+prevents Quartermaster startup. Rotating the signer requires reviewing unapplied changes again;
+an already committed command remains recoverable by its currently authorized owner.
+
+Consent management is not yet activated end to end. Its gRPC API records requested owner
+permissions and reports changes as pending, not enforced. Public web/API integration and
+policy-bearing edge admission remain release gates. Configuring this signer does not activate
+viewer or ingest placement enforcement.
+
 ### Additional Cluster Provisioning Commands
 
 | Command                                                            | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |

@@ -294,6 +294,35 @@ graph LR
     H --> F[Foghorn]
 ```
 
+### Ingest Endpoint Resolution
+
+Node-specific ingest recommendations include only protocols currently advertised by that
+node. RTMP/SRT URLs retain its listener ports; changing a Foghorn-wide default port does not
+override them. A healthy node with no ingest protocol report is not a valid recommendation.
+WHIP redirects select a WHIP-capable node before limiting the candidate list.
+The ingest gRPC request can also require WHIP, RTMP or SRT. Unsupported enum values are
+rejected, and no available node for the requested protocol means unavailable—not a
+recommendation for a different protocol. Omitting the protocol lists any advertised ingest
+protocols.
+
+Listener reports expire after 30 seconds independently of heartbeats. Helmsman sends an empty
+snapshot when Mist stops advertising listeners, withdrawing their URLs. For WHIP, Foghorn
+uses the reported HTTP signalling endpoint, not WebRTC's UDP listener port, and retains the
+public proxy path. Helmsman reconciles the managed HTTP public address into the scalar form
+needed by Mist's listener report while preserving the node's port and other listener options.
+Repository hydration does not renew listener evidence, and changing a node's public address
+without a new report invalidates its old evidence.
+
+Generic DNS ingest names remain manual entry points, not proof of a policy-selected node.
+These endpoint checks do not by themselves activate the federation placement policy engine.
+
+The placement editor's authorized cluster, operator and region options are a management catalogue,
+not a live routing result. “Connected” does not guarantee available capacity or permission for both
+ingest and delivery, and selecting marketplace capacity never subscribes to it. A changed catalogue
+requires a fresh search; the editor retains draft selections. Saving requested rules and observing
+them enforced at media destinations remain separate steps: a rule becomes effective once every
+cell holding the content acknowledges it.
+
 ### Viewer Routing
 
 Foghorn selects optimal edge nodes for viewers based on geography, load, and stream availability.
@@ -317,14 +346,28 @@ graph LR
 
 **Foghorn HTTP Endpoints:**
 
-| Endpoint                             | Response                | Use Case                 |
-| ------------------------------------ | ----------------------- | ------------------------ |
-| `GET /play/{viewkey}`                | JSON with all endpoints | Direct integration       |
-| `GET /play/{viewkey}/hls/index.m3u8` | 307 redirect to edge    | Direct HLS playback      |
-| `GET /play/{viewkey}/webrtc`         | 307 redirect to edge    | Direct WebRTC (WHEP)     |
-| `GET /{viewkey}`                     | Best node host or 307   | MistServer compatibility |
+| Endpoint                             | Response                | Use Case             |
+| ------------------------------------ | ----------------------- | -------------------- |
+| `GET /play/{viewkey}`                | JSON with all endpoints | Direct integration   |
+| `GET /play/{viewkey}/hls/index.m3u8` | 307 redirect to edge    | Direct HLS playback  |
+| `GET /play/{viewkey}/webrtc`         | 307 redirect to edge    | Direct WebRTC (WHEP) |
+
+There is no hostname-only viewer route. The MistServer compatibility surface is a node-bound
+source lookup on a signed per-node path, which answers a media node asking where to pull a
+stream from; it never returns a viewer's playback destination. Any other path is a 404.
 
 For URI patterns and player integration, see [Playback & Embedding](/builders/playback).
+
+**Client location behind a proxy:** configure `TRUSTED_PROXY_CIDRS` on Bridge and
+Foghorn to name their immediate reverse proxies as narrowly as your topology permits.
+Forwarding headers from other peers are ignored. Keep `GEOIP_MMDB_PATH` configured on
+Foghorn for geographic lookup; public coordinate/country headers and `lat`/`lon` query
+parameters are not a substitute for GeoIP. Missing location means unknown geography.
+Authenticated node-to-node source routing has separate coordinate hints.
+
+Call viewer resolution from the viewer's browser/device where possible. A backend
+resolving on behalf of a viewer supplies its own network identity, not the viewer's;
+setting arbitrary forwarding headers does not change that trust boundary.
 
 ---
 

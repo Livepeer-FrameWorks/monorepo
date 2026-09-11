@@ -1,0 +1,271 @@
+---
+title: Media placement preview
+description: Inspect draft ingest and viewer placement against authorized capacity without changing live routing.
+---
+
+## Availability
+
+Placement ships in 0.3.0, and live routing and final admission resolve through it. Read-only
+capacity preview and source-aware preview for owned push streams are implemented; a managed pull
+or Mist-native input previews capacity only, though routing places it like any other stream.
+Saving placement intent must not be treated as proof that every media path enforces it: rules
+take effect once every cell holding the content acknowledges them.
+
+Placement separates ingest from serving viewers. A viewer's distance is measured from the
+viewer location, not from the coordinator receiving the request. An account rule can prefer
+self-hosted capacity, prohibit a cluster class, or compare explicitly priced capacity.
+Stream-level hard constraints remain in effect when previewing an account draft against that stream.
+
+## Request a playback format
+
+The viewer resolver accepts `protocol: MediaViewerProtocol`. For example:
+
+```graphql
+query ResolveViewerDestination($contentId: String!) {
+  resolveViewerEndpoint(contentId: $contentId, protocol: HLS) {
+    primary {
+      nodeId
+      protocol
+      url
+      outputs
+    }
+    metadata {
+      contentId
+      contentType
+      status
+    }
+  }
+}
+```
+
+This is a requirement before selection, not a preference to apply after choosing a node. `WHEP`
+and `WEBRTC` are distinct; `HLS_CMAF` requests an HLS manifest, while `DASH` requests MPD. Omit
+the argument for automatic negotiation. The low-level player `GatewayClient` also accepts
+`protocol: "HLS"` (typed as `ViewerProtocol`). It rejects a mismatched result and does not retry
+without the requirement when an older GraphQL endpoint rejects the argument.
+
+Standalone integrations use the same resolver contract:
+
+```ts
+import { useViewerEndpoints } from "@livepeer-frameworks/player-react";
+
+// React: rerendering with new request fields cancels the old resolution.
+const { endpoints, status, error } = useViewerEndpoints({
+  contentId: playbackId,
+  protocol: "HLS",
+  playbackAuth: { token: viewerJwt },
+});
+```
+
+```ts
+import { onDestroy } from "svelte";
+import { createEndpointResolver } from "@livepeer-frameworks/player-svelte";
+
+// Inside a Svelte component's script; subscribe with $resolver.
+const resolver = createEndpointResolver({ contentId: playbackId, protocol: "HLS" });
+onDestroy(() => resolver.destroy());
+```
+
+The Svelte store supports `resolver.update({ protocol: "DASH" })` to replace the request and
+`resolver.refetch()` to request a fresh destination. Both wrappers expose only the current result and clear the
+previous destination while loading a replacement. `authToken` authenticates the Gateway request;
+`playbackAuth` forwards the viewer JWT separately. Cancellation includes pending retries.
+
+For direct live HTTP resolution, an explicit `?jwt=...` viewer credential is preserved on returned
+playback URLs. Treat those URLs as credentials: do not publish or log them. Header/cookie credentials
+are not converted into query parameters; your client must attach them to requests to the selected
+edge. Do not assume a browser forwards authorization across an edge redirect. This live-URL behavior
+does not apply to object-storage signed URLs.
+
+The player keeps Gateway/provided playback URLs authoritative while using the selected Mist edge
+for tracks and status. Metadata hydration, polling and cold recovery cannot silently add a different
+edge or an unprepared format. Direct-Mist mode still discovers its playback sources from Mist.
+
+The player requests a new format-specific destination after exhausting compatible players on the
+selected URL, with at most three fresh resolutions per initialization. `viewerProtocol: "HLS"`
+pins the requirement and prevents automatic format changes; React/Svelte expose it through
+`options`, and the web component uses `viewer-protocol="HLS"`.
+
+Changing those player request fields replaces the active controller, including when its previous
+resolution is still pending. Update supplied destinations by replacing the `endpoints` object,
+not by mutating it in place. Equivalent request values do not trigger reconnection.
+
+React, Svelte and web-component players apply `debug`, `autoplay` and `muted` updates without
+reconnecting, even while resolution is pending. Removing these options restores their defaults:
+debug/muted false and autoplay true. An unrelated option change does not reset the viewer's mute
+control. Changing autoplay affects subsequent autoplay attempts; it does not immediately play or
+pause the current session.
+
+Explicit live routing requires the matching placement-enabled Foghorn path. A cell's control
+replicas attest placement enforcement to the control plane before any policy-bearing authority is
+issued to it; until every cell serving your account has attested, routing follows the legacy
+path and the placement status surface reports no confirmed enforcement. Actual media proof across
+cells remains under development; schema/player support alone does not establish end-to-end
+enforcement. The read-only API demo supports only formats in its synthetic fixture.
+
+## Preview saved rules
+
+The MCP tools expose the same typed inputs and resolver checks as GraphQL. Nested fields use
+the GraphQL camelCase names, and revisions remain decimal strings. For example,
+`preview_media_placement` accepts:
+
+```json
+{
+  "scope": { "kind": "TENANT" },
+  "verb": "SERVE",
+  "protocol": "hls",
+  "coordinates": { "latitude": 39, "longitude": -77 }
+}
+```
+
+MCP results contain `{ "type": "MediaPlacementPreview", "value": { ... } }` in both structured
+content and the JSON text fallback. Typed failures set `isError` and retain the error code and
+recovery fields in `value`. A no-destination preview is a decision, not a transport failure.
+
+For edits, call `review_media_placement_change`, inspect its warnings, then use
+`apply_media_placement_change` with the **same updates and revisions**, returned `reviewToken`,
+explicit `acknowledgedWarningIds`, and a stable `idempotencyKey`. If the apply response is uncertain,
+call `get_media_placement_change` with its original scope and key before retrying; do not invent a
+new key. Cluster consent has matching `review_cluster_media_consent_change`,
+`apply_cluster_media_consent_change`, and `get_cluster_media_consent_change` tools.
+
+Treat null `activeRevision` and `activeParentRevision` as unconfirmed enforcement, not active
+revision zero. A stream without its own rules can still inherit an account policy: compare
+`parentRevision` with `activeParentRevision` and inspect rollout status. An explicitly activated
+inherited-only policy may report active stream revision `"0"` together with a positive active
+account revision. `NOT_CONFIGURED` describes the absence of custom rules at the requested scope;
+it does not prove that inherited rules are absent or enforced.
+
+Reads and previews require `placement:read`. Review and apply require owner/admin authority and
+`placement:write`; API tokens also need `mcp:high-risk` for apply. Policy management and change
+recovery do not require a funded balance. They do not reserve or authorize billable media capacity.
+
+Use a tenant-authenticated GraphQL request. API tokens require `placement:read`.
+The coordinates below are hypothetical viewer coordinates; preview does not change the account's
+location or open a media connection.
+
+```graphql
+query PreviewViewerPlacement {
+  previewMediaPlacement(
+    input: {
+      scope: { kind: TENANT }
+      verb: SERVE
+      protocol: "hls"
+      coordinates: { latitude: 39, longitude: -77 }
+    }
+  ) {
+    __typename
+    ... on MediaPlacementPreview {
+      revision
+      parentRevision
+      digest
+      reason
+      complete
+      sourceEvaluated
+      observedAt
+      expiresAt
+      activeIngestClusterId
+      selected {
+        clusterId
+        clusterName
+        region
+        distanceKm
+        requiresSourcePull
+        price {
+          amountMicros
+          currency
+          unit
+          revision
+          expiresAt
+        }
+      }
+      transitions {
+        fromGroup
+        reason
+      }
+    }
+    ... on MediaPlacementError {
+      code
+      message
+    }
+    ... on AuthError {
+      message
+    }
+    ... on NotFoundError {
+      message
+    }
+  }
+}
+```
+
+For an owned stream, use `scope: { kind: STREAM, streamId: "<stream-id>" }`.
+Alternatively, keep tenant scope and provide `streamId` to test account rules against that stream's
+constraints. A stream from another account cannot be inspected.
+
+To preview an unsaved change, provide `draftUpdate` for the same verb plus `expectedRevision` and
+`expectedParentRevision` from the policy read. Revisions are decimal strings, not JavaScript
+numbers. `CLEAR` previews inheritance; it does not mean deny all. A revision conflict means reload
+the policy and preview again. The request does not save rules or require a write-recovery key.
+
+## Interpret the result
+
+A selected cluster is an observed, policy-ranked destination—not a reservation or a guarantee of
+playback. Streamless previews have `sourceEvaluated: false`: source availability was not evaluated.
+For an owned push stream, serving preview checks its current publisher and the permissions needed
+to pull into the destination cluster. `sourceEvaluated: true` means those source observations were
+available; `requiresSourcePull: true` means the destination still needs a pull. Preview never starts
+that pull or proves first-frame delivery. Managed non-push source preview is currently unsupported.
+
+If the publisher cannot be verified, an owned-stream serving preview returns an incomplete result
+with no selected destination. It does not substitute a capacity-only answer for a playback route.
+
+`complete: false` means relevant evidence is missing. An unreachable self-hosted cluster is not
+proof that it is full, so it cannot unlock a capacity-only fallback. Missing cost evidence is not
+treated as free. Price comparisons include their currency, unit and expiry; amounts are integer
+micro-units represented as strings.
+
+An active push publisher remains pinned to its existing ingest cluster. Previewing a nearer location
+does not migrate that publisher. Candidate node IDs are private infrastructure details and may be
+omitted even when a cluster is visible. Discard expired results and preview again after changing
+rules, stream, verb, protocol or coordinates.
+
+## Try the read-only demo
+
+In API Explorer, enable **Demo** and open **Media Placement**. The examples include a US viewer
+with an EU publisher, self-hosted-first preferences with geographic fallback, and a review of a
+"never official" restriction. Draft preview and review use the shared policy evaluator and diff
+logic against synthetic fixtures, without observing real capacity or preparing media.
+
+Demo results are explicitly marked simulated. Account and stream policies remain at revision `0`,
+there is no active-policy claim, and every Apply returns `UNSUPPORTED` rather than pretending to
+save. Change recovery returns no saved receipt. Review tokens beginning `demo-preview-only:` are
+not live apply credentials. Demo requests never use real service clients, even when sent with a
+signed-in account. This is API Demo Mode, not database seed data or proof of live routing.
+
+## Cluster-owner capacity permissions
+
+On an owned media cluster's detail page, **Capacity permissions** controls whether the cluster
+accepts publishers, serves viewers, and pulls media from other clusters. Same-cluster source pulls
+do not require the external-source permission. Consumer placement rules can narrow these
+permissions but cannot override them. Enabling capacity does not grant another account access,
+subscribe it to a marketplace offering, or change prices and credentials.
+
+Edit the switches, select **Review changes**, read the impact and required warnings, then select
+**Apply permissions**. Incomplete impact counts are not a complete inventory. A saved revision is
+not proof of active enforcement: check its rollout status separately. Already admitted sessions
+retain their admission; the changes govern new decisions once enforced.
+
+If someone else changes the revision, reload current permissions and review again. You can retain
+your draft when reloading. If a save times out, keep the page open and use **Check save status** or
+**Retry same change**. These retain the original reviewed request; do not submit a new change to
+resolve an uncertain save. Closing the page loses its in-memory recovery command.
+
+For integrations, the owner API fields are `clusterMediaConsent`,
+`reviewClusterMediaConsentChange`, `applyClusterMediaConsentChange`, and
+`clusterMediaConsentChange`. Read/recovery require `placement:read` for API tokens; review/apply
+require `placement:write` plus the owning tenant's authorized role. Platform-operator status does
+not bypass ownership. Preserve decimal revision strings, review tokens, warning IDs and the
+idempotency key exactly. Query recovery with the same cluster and key after an ambiguous write.
+
+Storage and processing placement are separate planned engines. This preview does not choose durable
+copy locations, schedule processing jobs, or proactively replicate a stream.

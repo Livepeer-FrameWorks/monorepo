@@ -1,0 +1,133 @@
+---
+title: Media placement controls
+description: Manage cluster capacity permissions and distinguish saved placement intent from confirmed enforcement.
+---
+
+## Availability
+
+Media placement ships in 0.3.0. Account/stream policy management, cluster-owner capacity
+permissions, and read-only previews are implemented. Live routing and final admission run
+through the placement path on every Foghorn replica that installs enforcement, and a tenant
+receives policy-bearing rules only once every cell holding its content attests that it enforces
+them. Saving a restriction records requested intent: read the reported rollout state rather than
+assuming a save proves every connection path enforces it.
+
+There are two independent sides to a placement decision:
+
+- The consuming account chooses which entitled capacity it may use and in what order.
+- The capacity owner chooses which media operations its cluster may accept.
+
+Both must permit the operation. Neither side creates a subscription or changes the other side's
+permissions. Being a platform operator does not bypass tenant ownership when editing consent.
+
+## Configure owned capacity
+
+Open an owned media cluster under **Infrastructure**. Its detail page contains **Capacity
+permissions**:
+
+| Control                        | Permission                                                                           |
+| ------------------------------ | ------------------------------------------------------------------------------------ |
+| Accept publishers              | New ingest placement on this cluster.                                                |
+| Serve viewers                  | New viewer placement on this cluster.                                                |
+| Pull media from other clusters | Receiving a source from a different cluster; same-cluster sources do not require it. |
+
+The switches are independent. For example, disabling new publisher placement does not express a
+viewer-delivery preference, and allowing an external source does not itself allow viewers.
+These controls do not modify publishing credentials, subscription access, or prices.
+
+1. Edit the switches and choose **Review changes**.
+2. Read the differences, impact coverage, and warnings. Incomplete counts are not a full inventory.
+3. Acknowledge every required warning before choosing **Apply permissions**.
+4. Inspect the requested revision and rollout status separately from the save confirmation.
+
+Already admitted sessions retain their admission. Once enforced, updated rules govern new
+placement decisions; saving is not an immediate drain operation.
+
+## Handle concurrent changes and uncertain saves
+
+A revision conflict means another writer changed the rules. Choose **Reload and keep draft** to
+rebase your choices on the current saved revision, or **Reload saved permissions** to discard your
+draft. Review again before applying. An expired review also requires a fresh review.
+
+If a save has no confirmed outcome, keep the page open. **Check save status** looks up the original
+request. **Retry same change** checks for its receipt before resubmitting that exact reviewed
+command and idempotency key. Controls stay locked while the outcome is uncertain. Do not resolve
+an ambiguous write by creating a new request with a different key.
+
+Recovery state is held in the open page, not persisted across a closed tab. Navigation warns before
+discarding it; logout or changing identity clears the local draft and pending command.
+
+## Interpret status and preview
+
+**Saved · waiting for enforcement** is not an effective-policy claim. A zero required-recipient
+count means coverage has not been confirmed, not that there is nothing left to enforce. A delivery
+acknowledgement by itself is not proof that routing and every final admission path enforce a rule.
+Likewise, matching legacy connected and local admission results is not placement-readiness proof:
+those responses do not describe a placement decision. Placement requires its own activation checks,
+including when its saved rules are empty or inherit defaults.
+
+**No custom rules at this scope** means there is no scope-specific policy, not that a stream is
+unrestricted. Streams can inherit requested account rules without having their own override.
+Check the active account revision separately; **not confirmed** is not active revision zero.
+The editor refreshes pending, blocked and inherited-unconfirmed status while idle and visible,
+without replacing an edited draft or an uncertain save.
+
+Use [media placement preview](/builders/media-placement/) to inspect authorized capacity and
+source observations without reserving a node or starting media. Missing observations are not
+proof that a preferred cluster is full. A successful source-aware preview does not prove first-frame
+delivery. Source-aware preview reads a registered push publisher, so a managed pull or Mist-native
+input previews capacity only. That is a limit of the preview surface, not of routing: those streams
+are placed through the same policy as an encoder push.
+
+DNS helps clients reach an entry point; it must not define which destination is considered local
+to a publisher or viewer. Placement's coordinator-independent path resolves live media, and the
+management and preview interfaces report on it rather than switching it on. Foghorn installs the
+ingest and viewer placement adapters on both the HTTP and gRPC front doors before it accepts
+traffic, so every live resolution is an exact-node preparation. They return only the prepared
+destination and protocol, not a catalog of unprepared alternatives. Explicit protocol
+requests cannot silently switch formats. This contract and its unit tests are not two-cell playback
+proof; release verification still needs actual playback, pull reuse, reconnect and failure behavior.
+Cold/warm first-frame timings are optional diagnostics, not an additional release gate.
+
+Signing in must not move playback resolution to the viewer's own tenant cluster. Commodore uses
+the content owner's routing identity for anonymous and authenticated viewers alike; the resolving
+Foghorn then chooses the media destination. On the prepared HTTP path, WHEP remains WHEP and a
+CMAF `index.mpd` request selects DASH. Conflicting manifest formats fail rather than returning HLS.
+The older hostname-returning Mist balancer route is gone. What remains of that surface is the
+node-bound source lookup and read-only diagnostics, reachable only by an authorized internal
+caller; neither answers a viewer with a playback destination.
+
+Federation discovery distinguishes a virtual media cluster from the Foghorn control cell that
+manages it. Quartermaster advertises the control-cell identity with its endpoint, and shared peer
+discovery makes that mapping available to each replica. Placement and prepared source pulls use
+this identity; a similarly named cluster is not a substitute. Older peer records without cell
+metadata remain unavailable to placement, so discovery compatibility is part of rollout readiness.
+This metadata does not require a Mist configuration step or a new per-viewer callback.
+
+The prepared-source integration binds authorization to the destination's current control
+connection. A node reconnect cannot reuse an earlier connection's receipt; fresh preparation
+can still reuse the existing media pull. Missing connection ownership rejects preparation rather
+than assuming the node is available. The source adapter supports fresh preparation after expiry
+using retained viewer geography and protocol, with current policy and capacity checks. That request
+context is not permission and is cleared with the pull. Missing context or failed checks cannot
+renew a source. Startup installs this check for placement-marked pulls using the destination's
+shared receipt store. The marker is durable before a new or adopted pull URL is returned; missing
+receipts or an unavailable adapter return an explicit offline source. Unmarked legacy pulls are
+not globally switched by this wiring. The same startup installs public routing and final admission,
+and each replica publishes its own enforcement state to the heartbeat ledger the cell's attestation
+is derived from. Verification against actual media, including reconnect behavior, is still
+outstanding. Do not treat the registry marker as permission or as evidence that an older replica
+can enforce placement.
+
+Stored artifacts are served under the same policy: it removes destinations the tenant's rules
+refuse, while storage affinity decides the order of what is left. Choosing which durable backend
+holds the bytes, and where processing runs, stays outside placement.
+
+## Keep credentials out of diagnostics
+
+Viewer JWTs authorize playback; they are not diagnostic identifiers. New viewer events are
+redacted before the telemetry RPC and again before Kafka publishing. Diagnostic request URLs
+retain only a validated browser-session `fwsid`; other query parameters, URL credentials and
+fragments are removed. Tenant, serving/origin cluster, control-cell and session attribution remain
+available for troubleshooting. Use those identifiers rather than sharing a token-bearing URL.
+This does not remove records already retained by older deployments.

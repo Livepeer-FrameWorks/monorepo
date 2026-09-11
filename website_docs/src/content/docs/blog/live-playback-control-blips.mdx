@@ -23,14 +23,14 @@ The FrameWorks Mist fork now accepts an explicit trigger action. `PLAY_REWRITE` 
 
 But "no answer" is still a bad viewer experience when the media cell already has a valid, durable answer.
 
-FrameWorks handles that in two places.
+FrameWorks keeps that durable answer in the media cell.
 
-First, Commodore distributes signed, versioned tenant and media-object authority to every eligible Foghorn cell. Foghorn verifies and commits it before acknowledging. A soft-expired decision keeps serving while Foghorn requests a refresh; hard expiry, a signed denial/tombstone, or a verification failure never becomes an allow. Because the projection is in the cell database, a Foghorn restart does not create a control-plane cold start.
+Commodore distributes signed, versioned tenant and media-object authority to every eligible Foghorn cell. Foghorn verifies and commits it before acknowledging. A soft-expired decision keeps serving while Foghorn requests a refresh; hard expiry, a signed denial/tombstone, or a verification failure never becomes an allow. Because the projection is in the cell database, a Foghorn restart does not create a control-plane cold start.
 
-Second, Helmsman keeps a tiny recovery cache for successful play rewrites. It records the last Foghorn-approved response for a requested stream and will replay it only when forwarding the trigger to Foghorn fails. The cache is small in both time and size: 30 seconds, capped at 4096 entries. Reachable Foghorn requests always go back to Foghorn. The cache is not an edge authority and it is not a billing bypass strategy. It is a bridge for restarts, dropped control streams, and short network stalls.
+Helmsman asks Foghorn for each new public play rewrite. It does not replay a previous viewer's successful stream-name mapping when Foghorn is unreachable: that mapping says nothing about the new viewer's location, the selected destination's current permission, or a changed tenant policy.
 
-The two mechanisms cover different failures. Signed Foghorn authority protects the media cell from a Commodore, Quartermaster, or Purser outage; Helmsman recovery protects one node from a short Foghorn/control-stream interruption. An authoritative rejection wins. If no valid local answer exists, Mist applies the trigger's explicit denial rather than interpreting an arbitrary fallback string.
+Signed Foghorn authority protects the media cell from upstream control-plane outages. Losing every reachable Foghorn is a different failure: new requests need reconnect or failover before they can obtain a decision. If no valid answer exists, Mist applies the trigger's explicit denial rather than interpreting an arbitrary fallback string.
 
-The trade-off is explicit. During a Helmsman recovery hit, the viewer path reuses a response that was approved moments earlier, so it can briefly miss fresh billing/account changes. That is why the recovery window is 30 seconds, not minutes. The goal is to survive a blip, not move policy enforcement to the edge.
+This changes admission for new requests, not a command to terminate established playback. The goal is to survive control-plane interruptions using verified authority, without turning a cached stream name into permission.
 
 The same authority now covers ingest ownership, pull/native sources, processing policy, multistream targets, and restart configuration. Owner-service changes create durable refresh outboxes; signed replacements and revocations converge independently to each cell. New management operations and new x402 settlement still require the control plane, but already-authorized media does not.

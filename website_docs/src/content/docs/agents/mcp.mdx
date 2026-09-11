@@ -69,7 +69,7 @@ Interactive JWT and wallet sessions use the signed-in user's platform role. API 
 each tool requires its exact published domain permission, such as `streams:read`, `streams:write`,
 `billing:read`, `billing:write`, `analytics:read`, or `infrastructure:write`. Account, support,
 developer, consultant, and wallet-management tools use the corresponding `account:*`,
-`support:read`, `developer:*`, `consultant:use`, and `security:*` scopes.
+`support:read`, `developer:*`, `consultant:use`, `security:*`, and `placement:read`/`placement:write` scopes.
 
 High-risk tools require API tokens to carry both their domain scope and `mcp:high-risk`. Grant this
 only to autonomous agents that are intentionally allowed to perform destructive,
@@ -194,6 +194,17 @@ Actions the agent can perform.
 
 | Tool                             | Description                                       | Requires                               |
 | -------------------------------- | ------------------------------------------------- | -------------------------------------- |
+| `get_media_placement_policy` | Read saved/effective policy and rollout | Auth + placement:read |
+| `get_media_placement_options` | Page through authorized placement selectors | Auth + placement:read |
+| `preview_media_placement` | Preview saved or draft routing; not a reservation | Auth + placement:read |
+| `review_media_placement_change` | Review exact policy updates without applying | Owner/Admin + placement:write |
+| `apply_media_placement_change` | Apply a reviewed, idempotent policy change | Owner/Admin + placement:write; API tokens also need mcp:high-risk |
+| `get_media_placement_change` | Recover a change with its original idempotency key | Auth + placement:read |
+| `get_media_placement_legacy_pins` | Read stream pin migration restrictions | Auth + placement:read |
+| `get_cluster_media_consent` | Read cluster-owner media consent | Auth + placement:read + cluster ownership |
+| `review_cluster_media_consent_change` | Review owner consent without applying | Owner/Admin + placement:write + cluster ownership |
+| `apply_cluster_media_consent_change` | Apply reviewed, idempotent owner consent | Owner/Admin + placement:write + cluster ownership; API tokens also need mcp:high-risk |
+| `get_cluster_media_consent_change` | Recover an owner-consent change | Auth + placement:read + cluster ownership |
 | `request_wallet_challenge`       | Request a single-use EIP-191 login/link challenge | None                                   |
 | `list_linked_wallets`            | List wallets linked to the authenticated user     | Auth                                   |
 | `link_wallet`                    | Link a wallet using a fresh signed challenge      | Auth                                   |

@@ -102,6 +102,26 @@ for encoder setup scripts:
 curl https://foghorn.{base}/ingest/{streamKey}
 ```
 
+Require your encoder's protocol with `?protocol=whip`, `?protocol=rtmp`, or `?protocol=srt`:
+
+```bash
+curl 'https://foghorn.{base}/ingest/{streamKey}?protocol=srt'
+```
+
+This filters candidates before ranking and limiting the response. If no eligible node advertises
+that protocol, the response is unavailable; it does not substitute a different protocol. Omit the
+parameter to discover any advertised ingest protocols. WHIP `POST` always requires WHIP, and an
+explicit conflicting protocol or duplicate protocol parameter returns `400`.
+
+The URLs below illustrate one node's listeners, not fixed platform-wide ports. A node that does
+not advertise a protocol omits its URL. Resolution is advisory, not a reservation or confirmation
+that publishing has started.
+
+Use the returned URL for the selected protocol unchanged. `baseUrl` identifies the node's public
+HTTP(S) endpoint; its scheme and port are not the RTMP or SRT listener's scheme and port. Do not
+reconstruct publishing URLs from it or assume every returned node supports every protocol.
+Resolve with an explicit protocol when your encoder requires one.
+
 ```json
 {
   "primary": {

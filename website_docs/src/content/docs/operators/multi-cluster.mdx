@@ -105,8 +105,7 @@ Foghorn instances discover peers via Quartermaster's `ListPeers` RPC. The peer m
 
 1. **PeerChannel**: Bidirectional gRPC streams between Foghorn peers exchange edge telemetry, stream advertisements, cluster summaries, heartbeats, and replication/artifact events on their own intervals
 2. **QueryStream**: When a viewer's cluster doesn't have the stream, Foghorn asks the origin cluster for edge candidates
-3. **Origin-Pull**: If a local edge has capacity, Foghorn arranges a DTSC pull from the remote origin. Subsequent viewers are served locally
-4. **Redirect**: If no local capacity, the viewer is redirected (307) to the remote cluster's edge
+3. **Origin-Pull**: Foghorn arranges a DTSC pull from the remote origin into a local edge, and the viewer is served from there. Subsequent viewers are served locally. Viewers are never redirected to another cluster
 
 ### Leader-Only Peering
 
@@ -298,8 +297,8 @@ Monitor peer connectivity and replication state:
 - **PeerChannel status**: Each Foghorn logs peer connections and heartbeat latency
 - **Stream advertisements**: Exchanged every 5 seconds via PeerChannel; stale advertisements indicate peer issues
 - **Active replications**: In-flight cross-cluster DTSC pulls tracked in Redis (5-min TTL)
-- **Federation events**: All cross-cluster operations (peering, replication, artifact access, redirects) emit geo-enriched events to ClickHouse (`federation_events` table). View them on the **Federation** dashboard page (`/infrastructure/federation`)
-- **PeerHeartbeat geo exchange**: Foghorn peers exchange their geographic coordinates (resolved from `infrastructure_nodes.external_ip` at bootstrap). This enables topology map visualization with real geographic positions
+- **Federation events**: All cross-cluster operations (peering, replication, artifact access) emit geo-enriched events to ClickHouse (`federation_events` table). View them on the **Federation** dashboard page (`/infrastructure/federation`)
+- **Self-geo**: each Foghorn resolves its own coordinates from `infrastructure_nodes.external_ip` at bootstrap and stamps them on the events it emits. Peers do not exchange coordinates over the PeerChannel, so a remote position is left unset rather than guessed; the topology map sources remote coordinates from infrastructure records instead
 
 ### Per-Cluster Metrics
 
