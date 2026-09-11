@@ -1024,6 +1024,7 @@ func main() {
 		}
 	}
 	var federationServer *federation.FederationServer
+	placementDestination := &federation.PlacementDestination{}
 	var peerManager *federation.PeerManager
 	var remoteEdgeCache *federation.RemoteEdgeCache
 	var fedClient *federation.FederationClient
@@ -1083,8 +1084,10 @@ func main() {
 			LB:                       lb,
 			ClusterID:                foghornCfg.ClusterID,
 			Cache:                    remoteEdgeCache,
+			ControlCellID:            controlCellID,
 			DB:                       db,
 			S3Client:                 s3ForFederation,
+			Placement:                placementDestination,
 			AllowFederationMutations: federationEnabled,
 			LocalS3Backing: federation.S3Backing{
 				Bucket:   localS3Backing.Bucket,
@@ -1501,6 +1504,14 @@ func main() {
 	foghornServer := foghorngrpc.NewFoghornGRPCServer(db, logger, lb, geoipReader, geoipCache, decklogClient, s3ForGRPC, purserClient)
 	foghornServer.SetSigningKeyUseRecorder(signingKeyUseRecorder)
 	foghornServer.SetClusterID(foghornCfg.ClusterID)
+	placementPreviewInventory := &balancer.PlacementCapacityObserver{
+		CellID: controlCellID, Owner: control.PlacementCapacityOwner,
+		Snapshot: func() *state.BalancerSnapshot {
+			return state.DefaultManager().GetBalancerSnapshotAtomicWithOptions(true)
+		},
+	}
+	foghornServer.SetPlacementCapacityObserver(placementPreviewInventory)
+	foghornServer.SetPlacementPushSourceObserver(&federation.PlacementPushSourceObserver{Inventory: placementPreviewInventory, Registry: streamRegistry, RegistryCellID: foghornCfg.ClusterID})
 	foghornServer.SetLocalIngestResolver(triggerProcessor)
 	foghornServer.SetLocalPlaybackPolicyEvaluator(triggerProcessor)
 	var authorityStore *localauthority.Store
@@ -1555,6 +1566,37 @@ func main() {
 	} else {
 		logger.Warn("MEDIA_AUTHORITY_TRUST_SET is not configured; signed media authority apply is disabled")
 	}
+	if authorityStore != nil {
+		placementSnapshot := placementPreviewInventory.Snapshot
+		// One reader per signed media kind: an encoder's push session, a
+		// configured pull/Mist-native input, and stored artifacts. Serving any
+		// kind requires its own reader, so a kind this cell cannot resolve is
+		// refused rather than served outside the policy.
+		placementDestination.Discovery = &federation.PlacementDiscovery{
+			CellID: controlCellID, Authority: authorityStore, Inventory: livePlacementInventory{}, Snapshot: placementSnapshot,
+			Paths: &federation.MediaPlacementPaths{
+				Push: &federation.LivePushPlacementPaths{
+					CellID: controlCellID, RegistryCellID: foghornCfg.ClusterID,
+					Registry: streamRegistry, Snapshot: placementSnapshot,
+				},
+				Configured: &federation.ConfiguredSourcePlacementPaths{
+					CellID: controlCellID, RegistryCellID: foghornCfg.ClusterID,
+					Authority: authorityStore, Secrets: authorityStore, Registry: streamRegistry, Snapshot: placementSnapshot,
+				},
+				Artifact: &federation.ArtifactPlacementPaths{
+					CellID: controlCellID, Authority: authorityStore, Secrets: authorityStore,
+					WarmNodes: func(artifactHash string) []state.ArtifactNodeInfo {
+						manager := state.DefaultManager()
+						if manager == nil {
+							return nil
+						}
+						return manager.FindNodesByArtifactHash(artifactHash)
+					},
+					Snapshot: placementSnapshot,
+				},
+			},
+		}
+	}
 	pushStatusMetrics := &pushstatusoutbox.Metrics{Outcomes: metricsCollector.NewCounter(
 		"push_target_status_outbox_outcomes_total",
 		"Durable push-target status delivery outcomes",
@@ -1564,10 +1606,12 @@ func main() {
 		pushStatusMetrics.Outcomes.WithLabelValues(outcome).Add(0)
 	}
 	var commodoreDependentWorkers sync.Once
+	var placementCommodore atomic.Pointer[commodore.GRPCClient]
 	onCommodoreConnected := func(client *commodore.GRPCClient) {
 		if client == nil {
 			return
 		}
+		placementCommodore.Store(client)
 		if authorityStore != nil {
 			authorityStore.SetRefreshRequester(func(ctx context.Context) error {
 				_, refreshErr := client.RequestMediaAuthorityReplay(ctx, mediaAuthorityCellID)
@@ -1639,20 +1683,81 @@ func main() {
 		foghornServer.SetPeerManager(peerManager)
 	}
 
-	// Wire the process-wide arrange-origin-pull deps so the trigger
-	// processor can federate cross-cluster DVR origin-pulls without
-	// constructing its own deps struct per call. Only set when all
-	// three federation primitives are available — without them
-	// federation.DefaultArrange returns ErrOriginPullDepsMissing and
-	// callers fall back to their non-federated path.
-	if remoteEdgeCache != nil && peerManager != nil && fedClient != nil {
-		federation.SetDefaultArrangeDeps(&federation.ArrangeOriginPullDeps{
-			Cache:        remoteEdgeCache,
-			PeerResolver: peerManager,
-			FedClient:    fedClient,
-			InstanceID:   instanceID,
-			Logger:       logger,
-		})
+	// Same-cell pulls share coordination without enabling inbound federation
+	// or making an RPC back into this process.
+	if redisClient != nil {
+		originPullCache := remoteEdgeCache
+		if originPullCache == nil {
+			originPullCache = federation.NewRemoteEdgeCache(redisClient, foghornCfg.ClusterID, logger)
+		}
+		localSource := federationServer
+		if localSource == nil {
+			localSource = federation.NewFederationServer(federation.FederationServerConfig{
+				Logger: logger, LB: lb, ClusterID: foghornCfg.ClusterID, ControlCellID: controlCellID,
+				Cache: originPullCache, DB: db, IsServedCluster: control.IsServedCluster,
+			})
+		}
+		arrangeDeps := &federation.ArrangeOriginPullDeps{
+			Cache: originPullCache, Registry: streamRegistry, LocalSource: localSource, InstanceID: instanceID, Logger: logger,
+		}
+		if peerManager != nil {
+			arrangeDeps.PeerResolver = peerManager
+			arrangeDeps.CellAddress = peerManager.GetControlCellAddr
+		}
+		if fedClient != nil {
+			arrangeDeps.FedClient = fedClient
+		}
+		federation.SetDefaultArrangeDeps(arrangeDeps)
+		if placementDestination.Discovery != nil {
+			deps := federation.LivePlacementDependencies{Redis: redisClient, Registry: streamRegistry, Arrange: arrangeDeps, Client: fedClient, Logger: logger,
+				IngestFence: &federation.ConnectedPlacementIngestFence{ClientSnapshot: func() federation.PlacementStreamContextClient {
+					if client := placementCommodore.Load(); client != nil {
+						return client
+					}
+					return nil
+				}},
+			}
+			if peerManager != nil {
+				deps.CellAddress = peerManager.GetControlCellAddr
+			}
+			if placementErr := federation.ConfigureLivePlacementDestination(placementDestination, deps); placementErr != nil {
+				logger.WithError(placementErr).Fatal("Invalid live placement destination configuration")
+			}
+			if placementErr := triggerProcessor.ConfigureLivePreparedSourceAdmission(placementDestination); placementErr != nil {
+				logger.WithError(placementErr).Fatal("Invalid prepared source admission configuration")
+			}
+			// Public routing and final viewer admission install unconditionally:
+			// the whole placement contract ships together, and Commodore only
+			// issues policy-bearing authority to a cell whose replicas attest
+			// enforcement through the heartbeat ledger started below.
+			publicPlacement, publicErr := federation.ConfigureLivePublicPlacement(placementDestination)
+			if publicErr != nil {
+				logger.WithError(publicErr).Fatal("Invalid public placement routing configuration")
+			}
+			foghornServer.SetIngestPlacementPreparer(publicPlacement.Ingest)
+			handlers.SetIngestPlacementPreparer(publicPlacement.Ingest)
+			foghornServer.SetViewerPlacementPreparer(publicPlacement.Viewer)
+			handlers.SetViewerPlacementPreparer(publicPlacement.Viewer)
+			// Stored media keeps storage affinity and takes the same policy
+			// answer, so an artifact is never offered from a destination the
+			// tenant's serving policy refuses.
+			foghornServer.SetStoredMediaPlacementPermitter(publicPlacement.Viewer)
+			handlers.SetStoredMediaPlacementPermitter(publicPlacement.Viewer)
+			if admissionErr := triggerProcessor.ConfigureLiveViewerPlacementAdmission(publicPlacement, geoipReader, geoipCache); admissionErr != nil {
+				logger.WithError(admissionErr).Fatal("Invalid viewer placement admission configuration")
+			}
+			if admissionErr := triggerProcessor.ConfigureLiveIngestPlacementAdmission(publicPlacement, geoipReader, geoipCache); admissionErr != nil {
+				logger.WithError(admissionErr).Fatal("Invalid ingest placement admission configuration")
+			}
+			localauthority.SetPlacementEnforced(true)
+			logger.Info("Signed-policy placement enforcement installed: public ingest/viewer routing, final viewer admission and prepared-source admission are active")
+		}
+	}
+	if authorityStore != nil {
+		// The heartbeat records this replica's enforcement state as it stands now;
+		// a replica without the placement destination reports itself as not
+		// enforcing and thereby withholds the cell's attestation.
+		go authorityStore.RunReplicaHeartbeat(context.Background(), instanceID, version.Version, logger)
 	}
 
 	// Wire the cross-cluster artifact resolver so RelayResolve can
@@ -2591,8 +2696,8 @@ func configureFoghornHTTPRouters(logger logging.Logger, healthChecker *monitorin
 	publicRouter.POST("/ingest/", handlers.HandleIngestFrontDoor)
 	publicRouter.POST("/webhooks/livepeer/auth", handlers.HandleLivepeerAuth)
 
-	publicRouter.NoRoute(handlers.AuthorizedMistServerCompatibilityHandler)
-	internalRouter.NoRoute(handlers.RequireInternalCompatibility(), handlers.MistServerCompatibilityHandler)
+	publicRouter.NoRoute(handlers.AuthorizedMistSourceHandler)
+	internalRouter.NoRoute(handlers.RequireInternalSourceAccess(), handlers.MistSourceHandler)
 	return publicRouter, internalRouter
 }
 

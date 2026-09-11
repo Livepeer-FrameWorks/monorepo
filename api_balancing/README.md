@@ -91,10 +91,11 @@ PUT /nodes/:node_id/mode         → Set node operational mode
 GET /nodes/:node_id/drain-status → Inspect drain progress
 ```
 
-MistServer compatibility endpoints (internal to MistServer nodes):
+MistServer source and diagnostic endpoints (internal to MistServer nodes). Viewers
+are routed through `/play`, which prepares an exact destination under the tenant's
+placement policy; there is no hostname-returning viewer route.
 
 ```
-GET /<stream>?proto=<protocol>   → Stream routing (MistServer replication)
 GET /?source=<stream>            → Origin lookup (DTSC)
 GET /?ingest=<cpu>               → Find ingest node
 GET /?lstserver=1                → List all servers
