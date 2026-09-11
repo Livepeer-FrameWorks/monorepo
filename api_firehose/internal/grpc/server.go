@@ -494,6 +494,7 @@ func (s *DecklogServer) SendEvent(ctx context.Context, trigger *ipcpb.MistTrigge
 		return nil, fmt.Errorf("mist trigger cannot be nil")
 	}
 	trigger = sanitizePushLifecycleEnvelope(trigger)
+	trigger = mist.SanitizeViewerTelemetry(trigger)
 
 	// Unwrap inner payload and determine event type + tenant
 	msg, eventType, tenantID := s.unwrapMistTrigger(trigger)

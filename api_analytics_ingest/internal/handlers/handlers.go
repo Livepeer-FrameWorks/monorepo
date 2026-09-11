@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -984,50 +983,8 @@ func (h *AnalyticsHandler) processViewerConnection(ctx context.Context, event ka
 	return batch.Send()
 }
 
-var clientSessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
-
 func clientSessionIDAndSanitizedRequestURL(raw string) (string, string) {
-	if raw == "" {
-		return "", ""
-	}
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return "", sanitizedMalformedRequestURL(raw)
-	}
-	query := parsed.Query()
-	clientSessionID := query.Get("fwsid")
-	if !clientSessionIDPattern.MatchString(clientSessionID) {
-		clientSessionID = ""
-	}
-	// Retention is allowlisted, not credential-name denylisted. Credential
-	// producers can add or rename query parameters without creating a new
-	// 90-day analytics secret-retention path.
-	retained := url.Values{}
-	if clientSessionID != "" {
-		retained.Set("fwsid", clientSessionID)
-	}
-	parsed.User = nil
-	parsed.RawQuery = retained.Encode()
-	parsed.Fragment = ""
-	return clientSessionID, parsed.String()
-}
-
-func sanitizedMalformedRequestURL(raw string) string {
-	// A malformed query can make url.Parse reject the entire request URL. Keep
-	// only a parseable scheme/host/path prefix; query, fragment, and userinfo are
-	// never retained on this best-effort diagnostic path.
-	prefix := raw
-	if index := strings.IndexAny(prefix, "?#"); index >= 0 {
-		prefix = prefix[:index]
-	}
-	parsed, err := url.Parse(prefix)
-	if err != nil {
-		return ""
-	}
-	parsed.User = nil
-	parsed.RawQuery = ""
-	parsed.Fragment = ""
-	return parsed.String()
+	return mist.ViewerTelemetryRequestURL(raw)
 }
 
 func max64(a, b int64) int64 {
