@@ -1,10 +1,13 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import { get } from "svelte/store";
   import { resolve } from "$app/paths";
   import { fragment, GetStreamsConnectionStore, StreamCoreFieldsStore } from "$houdini";
   import { StreamCrafter } from "@livepeer-frameworks/streamcrafter-svelte";
-  import { getIngestUrls, getDocsSiteUrl } from "$lib/config";
+  import { getDocsSiteUrl } from "$lib/config";
+  import { auth } from "$lib/stores/auth";
+  import { resolveIngestDestination } from "$lib/placement/ingest-api";
+  import { destinationHost, ingestProtocolUrl, type ResolvedIngest } from "$lib/placement/ingest";
   import { getIconComponent } from "$lib/iconUtils";
   import { Button } from "$lib/components/ui/button";
   import { Select, SelectTrigger, SelectContent, SelectItem } from "$lib/components/ui/select";
@@ -27,6 +30,13 @@
   // State
   let selectedStreamId = $state<string | null>(null);
   let isStreaming = $state(false);
+  let connectionBusy = $state(false);
+  let preparing = $state(false);
+  let initialWhipUrl = $state<string | null>(null);
+  let destination = $state<ResolvedIngest | null>(null);
+  let destinationTime = $state("");
+  let destinationError = $state("");
+  let destinationEpoch = 0;
   let error = $state<string | null>(null);
   let advancedSettings = $state({
     enableCompositor: true,
@@ -36,16 +46,29 @@
   // Derived state
   let loading = $derived($streamsStore.fetching);
   let streams = $derived(
-    $streamsStore.data?.streamsConnection?.edges?.map((e) => {
-      const node = get(fragment(e.node, streamFragmentStore));
-      return node;
-    }) ?? []
+    $streamsStore.data?.streamsConnection?.edges
+      ?.map((e) => {
+        const node = get(fragment(e.node, streamFragmentStore));
+        return node;
+      })
+      .filter((stream) => stream?.ingestMode !== "PULL") ?? []
   );
   let selectedStream = $derived(streams.find((s) => s?.id === selectedStreamId) ?? null);
-  let whipUrl = $derived.by(() => {
-    if (!selectedStream?.streamKey) return null;
-    const urls = getIngestUrls(selectedStream.streamKey);
-    return urls.whip ?? null;
+  const identity = $derived(
+    $auth.isAuthenticated && $auth.user?.tenant_id ? `${$auth.user.tenant_id}:${$auth.user.id}` : ""
+  );
+  $effect(() => {
+    const binding = `${identity}:${selectedStream?.streamId ?? ""}:${selectedStream?.streamKey ?? ""}`;
+    untrack(() => {
+      if (binding) destinationEpoch++;
+      initialWhipUrl = null;
+      destination = null;
+      destinationTime = "";
+      destinationError = "";
+      preparing = false;
+      isStreaming = false;
+      connectionBusy = false;
+    });
   });
 
   onMount(async () => {
@@ -66,11 +89,57 @@
   }
 
   function handleStreamSelect(value: string) {
+    if (connectionBusy) return;
     selectedStreamId = value;
   }
 
-  function handleStateChange(state: string, context?: unknown) {
-    console.debug("[StreamCrafter] State:", state, context);
+  async function resolveConnectionDestination(signal?: AbortSignal): Promise<string> {
+    const epoch = destinationEpoch;
+    if (!identity || !selectedStream?.streamId || !selectedStream.streamKey)
+      throw new Error("Select a stream first.");
+    try {
+      const result = await resolveIngestDestination(
+        selectedStream.streamId,
+        selectedStream.streamKey,
+        signal,
+        "WHIP"
+      );
+      if (epoch !== destinationEpoch || signal?.aborted)
+        throw new DOMException("Resolution cancelled", "AbortError");
+      const url = ingestProtocolUrl(result.primary, "whip");
+      if (!url)
+        throw new Error("The selected destination does not advertise a valid WHIP endpoint.");
+      destination = result;
+      destinationTime = new Date().toLocaleTimeString();
+      destinationError = "";
+      return url;
+    } catch (error) {
+      if (epoch === destinationEpoch && !signal?.aborted) {
+        destination = null;
+        destinationTime = "";
+        destinationError =
+          "No WHIP destination was confirmed. Check stream access and capacity, then retry. A generic address will not be substituted.";
+      }
+      throw error;
+    }
+  }
+
+  async function prepareConnection() {
+    if (preparing || connectionBusy) return;
+    const epoch = destinationEpoch;
+    preparing = true;
+    try {
+      const url = await resolveConnectionDestination();
+      if (epoch === destinationEpoch && !initialWhipUrl) initialWhipUrl = url;
+    } catch {
+      /* The scoped resolver displays the failure without credential-bearing details. */
+    } finally {
+      if (epoch === destinationEpoch) preparing = false;
+    }
+  }
+
+  function handleStateChange(state: string) {
+    connectionBusy = ["connecting", "streaming", "reconnecting"].includes(state);
     const wasStreaming = isStreaming;
     const nextStreaming = state === "streaming";
     isStreaming = nextStreaming;
@@ -82,10 +151,11 @@
     }
   }
 
-  function handleError(errorMsg: string) {
-    console.error("[StreamCrafter] Error:", errorMsg);
-    toast.error(errorMsg);
-    error = errorMsg;
+  function handleError(_errorMsg: string) {
+    const message =
+      "Broadcast connection failed. Check the destination and device settings, then retry.";
+    toast.error(message);
+    error = message;
   }
 
   // Icons
@@ -158,9 +228,14 @@
       <div class="page-transition min-h-full flex flex-col">
         <!-- Stream Selector & Settings -->
         <div class="px-4 sm:px-6 lg:px-8 py-4 border-b border-border/30 bg-muted/10">
-          <div class="flex items-center gap-4">
+          <div class="flex flex-wrap items-center gap-4">
             <span class="text-sm font-medium text-foreground">Broadcast to:</span>
-            <Select value={selectedStreamId ?? ""} onValueChange={handleStreamSelect} type="single">
+            <Select
+              value={selectedStreamId ?? ""}
+              onValueChange={handleStreamSelect}
+              type="single"
+              disabled={connectionBusy}
+            >
               <SelectTrigger class="min-w-[250px]">
                 {selectedStream?.name ?? "Select a stream..."}
               </SelectTrigger>
@@ -188,7 +263,7 @@
             <Dialog>
               <DialogTrigger>
                 {#snippet child({ props })}
-                  <Button variant="ghost" size="icon" {...props}>
+                  <Button variant="ghost" size="icon" disabled={connectionBusy} {...props}>
                     <SettingsIcon class="w-5 h-5" />
                   </Button>
                 {/snippet}
@@ -238,13 +313,45 @@
           </div>
         </div>
 
+        {#if selectedStream}
+          <section
+            class="px-4 sm:px-6 lg:px-8 py-4 border-b border-border space-y-2"
+            aria-label="Browser ingest destination"
+          >
+            <h2 class="text-sm font-semibold">Recommended destination</h2>
+            {#if destination}<p class="text-sm break-all">
+                {destinationHost(destination.primary)} · {destination.primary.region ??
+                  "Region unavailable"} · resolved {destinationTime}
+              </p>{/if}
+            <p class="text-xs text-muted-foreground">
+              Prepare a specific node before enabling capture. Placement is refreshed again for each
+              connection; preparation is advisory, not admission or a node reservation.
+            </p>
+            {#if destinationError}<p role="alert" class="text-sm text-destructive">
+                {destinationError}
+              </p>{/if}
+            <Button
+              class="min-h-11"
+              variant="outline"
+              disabled={preparing || connectionBusy || !identity}
+              onclick={prepareConnection}
+              >{preparing
+                ? "Resolving…"
+                : initialWhipUrl
+                  ? "Refresh next destination"
+                  : "Prepare connection"}</Button
+            >
+          </section>
+        {/if}
+
         <!-- StreamCrafter Component -->
         <div class="flex-1 bg-black relative flex flex-col">
-          {#if selectedStream && whipUrl}
-            {#key `${advancedSettings.enableCompositor}-${advancedSettings.compositorRenderer}`}
+          {#if selectedStream && initialWhipUrl && identity}
+            {#key `${identity}-${selectedStream.streamId}-${advancedSettings.enableCompositor}-${advancedSettings.compositorRenderer}`}
               <div class="w-full min-h-full flex flex-col">
                 <StreamCrafter
-                  {whipUrl}
+                  whipUrl={initialWhipUrl}
+                  resolveWhipUrl={resolveConnectionDestination}
                   initialProfile="broadcast"
                   autoStartCamera={false}
                   showSettings={false}
@@ -263,7 +370,11 @@
             <div class="flex items-center justify-center h-full text-muted-foreground">
               <div class="text-center">
                 <VideoIcon class="w-12 h-12 mx-auto mb-4 opacity-50" />
-                <p>Select a stream to start broadcasting</p>
+                <p>
+                  {selectedStream
+                    ? "Prepare a destination to enable the studio"
+                    : "Select a stream to start broadcasting"}
+                </p>
               </div>
             </div>
           {/if}

@@ -4,6 +4,7 @@ import {
   DEMO_PLAYBACK_ID,
   DEMO_SESSION_ID,
   DEMO_STREAM_GLOBAL_ID,
+  DEMO_STREAM_RAW_ID,
 } from "./demoDefaults";
 
 export type ExplorerExample = {
@@ -37,6 +38,116 @@ export type ResolvedExplorerSection = {
 };
 
 export const EXPLORER_CATALOG: ExplorerSection[] = [
+  {
+    id: "media-placement",
+    title: "Media Placement",
+    description:
+      "Read policies and try hypothetical routing. Enable Demo for simulated capacity; reviews never save changes.",
+    examples: [
+      {
+        id: "placement-policy",
+        title: "Account Placement Policy",
+        description:
+          "Inspect requested rules, permissions, and rollout separately from confirmed enforcement.",
+        operationType: "query",
+        templatePath: "operations/queries/GetMediaPlacementPolicy.gql",
+        variables: { scope: { kind: "TENANT" } },
+        tags: ["placement", "policy"],
+      },
+      {
+        id: "placement-options",
+        title: "Available Placement Options",
+        description:
+          "Search selector targets. Demo targets are synthetic and do not grant real access.",
+        operationType: "query",
+        templatePath: "operations/queries/GetMediaPlacementOptions.gql",
+        variables: { scope: { kind: "TENANT" }, first: 20 },
+        tags: ["placement", "infrastructure"],
+      },
+      {
+        id: "placement-us-viewer",
+        title: "US Viewer, EU Publisher",
+        description:
+          "Preview a viewer in San Francisco. Demo uses a simulated EU publisher and evaluates the source pull.",
+        operationType: "query",
+        templatePath: "operations/queries/PreviewMediaPlacement.gql",
+        variables: {
+          input: {
+            scope: { kind: "TENANT" },
+            verb: "SERVE",
+            streamId: DEMO_STREAM_RAW_ID,
+            protocol: "hls",
+            coordinates: { latitude: 37.77, longitude: -122.42 },
+          },
+        },
+        tags: ["placement", "playback", "geo"],
+      },
+      {
+        id: "placement-selfhosted-geographic-hole",
+        title: "My Clusters First, Except Geo Holes",
+        description:
+          "Try a draft preference without saving: prefer owned capacity unless another pool improves a geographic hole by at least 500 km.",
+        operationType: "query",
+        templatePath: "operations/queries/PreviewMediaPlacement.gql",
+        variables: {
+          input: {
+            scope: { kind: "TENANT" },
+            verb: "SERVE",
+            expectedRevision: "0",
+            expectedParentRevision: "0",
+            coordinates: { latitude: 37.77, longitude: -122.42 },
+            draftUpdate: {
+              verb: "SERVE",
+              kind: "SET",
+              rules: {
+                schemaVersion: 1,
+                constraints: {},
+                preferences: {
+                  groups: [
+                    {
+                      id: "my-clusters",
+                      match: { classes: ["TENANT_PRIVATE"] },
+                      spillover: "GEO_HOLE",
+                      geoHoleDistanceKm: 2500,
+                      minImprovementKm: 500,
+                    },
+                    { id: "fallback", match: {} },
+                  ],
+                },
+              },
+            },
+          },
+        },
+        tags: ["placement", "policy", "geo"],
+      },
+      {
+        id: "placement-review-no-official",
+        title: "Review Never Official",
+        description:
+          "Inspect the exact rule differences and warnings. Demo reviews are simulated and cannot be applied.",
+        operationType: "query",
+        templatePath: "operations/queries/ReviewMediaPlacementChange.gql",
+        variables: {
+          input: {
+            scope: { kind: "TENANT" },
+            expectedRevision: "0",
+            expectedParentRevision: "0",
+            updates: [
+              {
+                verb: "SERVE",
+                kind: "SET",
+                rules: {
+                  schemaVersion: 1,
+                  constraints: { deny: [{ classes: ["PLATFORM_OFFICIAL"] }] },
+                },
+              },
+            ],
+          },
+        },
+        tags: ["placement", "policy"],
+      },
+    ],
+  },
   {
     id: "streams-playback",
     title: "Streams & Playback",

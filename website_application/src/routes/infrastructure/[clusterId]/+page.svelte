@@ -1,4 +1,5 @@
 <script lang="ts">
+  import MediaCapacityConsentEditor from "$lib/components/placement/MediaCapacityConsentEditor.svelte";
   import { onMount, onDestroy, untrack } from "svelte";
   import { resolve } from "$app/paths";
   import { goto } from "$app/navigation";
@@ -611,6 +612,10 @@
             </div>
           </div>
         </div>
+
+        {#if isMediaCluster}
+          <MediaCapacityConsentEditor {clusterId} />
+        {/if}
 
         <!-- Nodes -->
         <div class="slab col-span-full">

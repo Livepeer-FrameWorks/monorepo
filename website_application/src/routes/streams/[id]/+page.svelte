@@ -51,6 +51,7 @@
   } from "$lib/components/stream-details";
   import { SectionDivider } from "$lib/components/layout";
   import { resolveOperationalStreamId } from "$lib/route-ids";
+  import PlacementSummary from "$lib/components/placement/PlacementSummary.svelte";
   import { shouldRefreshPushTargets } from "$lib/utils/push-target-events";
   import {
     DropdownMenu,
@@ -1000,6 +1001,10 @@
               </TabsContent>
 
               <TabsContent value="ingest" class="p-0 min-h-[20rem]">
+                {#if stream?.streamId}<PlacementSummary
+                    streamId={stream.streamId}
+                    verb="INGEST"
+                  />{/if}
                 <StreamSetupPanel
                   {stream}
                   {streamKeys}
@@ -1037,6 +1042,10 @@
               </TabsContent>
 
               <TabsContent value="playback" class="p-0 min-h-[20rem]">
+                {#if stream?.streamId}<PlacementSummary
+                    streamId={stream.streamId}
+                    verb="SERVE"
+                  />{/if}
                 <PlaybackTabPanel playbackId={stream?.playbackId} />
               </TabsContent>
 

@@ -31,6 +31,8 @@
     { value: "billing:write", label: "Billing and retention write" },
     { value: "infrastructure:read", label: "Infrastructure read" },
     { value: "infrastructure:write", label: "Infrastructure write" },
+    { value: "placement:read", label: "Media placement read and preview" },
+    { value: "placement:write", label: "Media placement policy changes" },
     { value: "security:read", label: "Security read" },
     { value: "security:write", label: "Security write" },
     { value: "settings:write", label: "Settings write" },

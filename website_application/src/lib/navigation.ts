@@ -40,6 +40,16 @@ const dynamicRoutes: Array<{
   breadcrumb: Breadcrumb[];
 }> = [
   {
+    pattern: /^\/streams\/[^/]+\/placement$/,
+    route: { name: "Stream Placement", parent: "Content" },
+    breadcrumb: [
+      { name: "Dashboard", href: "/" },
+      { name: "Content" },
+      { name: "Streams", href: "/streams" },
+      { name: "Stream Placement" },
+    ],
+  },
+  {
     pattern: /^\/admin\/tenants\/[^/]+$/,
     route: { name: "Tenant Detail", parent: "Platform Admin" },
     breadcrumb: [
@@ -327,6 +337,13 @@ export const navigationConfig: Record<string, NavigationItem> = {
         icon: "HardDrive",
         active: true,
         description: "Browse assets with cost projection and adjust retention",
+      },
+      placement: {
+        name: "Media Placement",
+        href: "/account/placement",
+        icon: "Globe",
+        active: true,
+        description: "Choose ingest and viewer capacity, fallback, and restrictions",
       },
     },
   },

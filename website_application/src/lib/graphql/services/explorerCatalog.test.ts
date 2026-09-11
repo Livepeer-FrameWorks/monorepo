@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   buildSchema,
   introspectionFromSchema,
+  getVariableValues,
   Kind,
   parse,
   print,
@@ -176,6 +177,31 @@ function expectNoPlaceholderValues(value: unknown, label: string): void {
 }
 
 describe("EXPLORER_CATALOG", () => {
+  it("offers valid read-only placement examples with explicit demo inputs", () => {
+    const section = EXPLORER_CATALOG.find((entry) => entry.id === "media-placement");
+    expect(section?.description).toContain("simulated");
+    expect(section?.examples.length).toBeGreaterThanOrEqual(5);
+    for (const example of section?.examples ?? []) {
+      expect(example.operationType).toBe("query");
+      const document = parse(readTemplate(example.templatePath!));
+      const operation = getOperation(document)!;
+      const result = getVariableValues(
+        schema,
+        operation.variableDefinitions ?? [],
+        example.variables ?? {}
+      );
+      expect(result.errors, `${example.id} has invalid example inputs`).toBeUndefined();
+    }
+    expect(
+      section?.examples.find((entry) => entry.id === "placement-us-viewer")?.variables
+    ).toMatchObject({
+      input: {
+        streamId: DEMO_STREAM_RAW_ID,
+        protocol: "hls",
+        coordinates: { latitude: 37.77, longitude: -122.42 },
+      },
+    });
+  });
   it("keeps demo stream defaults aligned with gateway demo fixtures", () => {
     expect(DEMO_STREAM_RAW_ID).toBe(readGatewayDemoConst("DemoStreamID"));
     expect(DEMO_PLAYBACK_ID).toBe(readGatewayDemoConst("DemoPlaybackID"));

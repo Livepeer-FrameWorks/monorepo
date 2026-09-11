@@ -8,6 +8,8 @@ import { getAllRoutes, getBreadcrumbs, getRouteInfo, navigationConfig } from "./
 describe("navigation route resolution", () => {
   it("resolves known static routes", () => {
     expect(getRouteInfo("/streams")?.name).toBe("Streams");
+    expect(getRouteInfo("/account/placement")?.name).toBe("Media Placement");
+    expect(getRouteInfo("/streams/stream-1/placement")?.name).toBe("Stream Placement");
   });
 
   it("resolves dynamic routes with route params", () => {

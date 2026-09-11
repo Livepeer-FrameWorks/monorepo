@@ -7,8 +7,10 @@
   import { formatDate } from "$lib/utils/stream-helpers";
   import { toast } from "$lib/stores/toast";
   import EmptyState from "$lib/components/EmptyState.svelte";
+  import RecommendedIngest from "$lib/components/placement/RecommendedIngest.svelte";
 
   interface Stream {
+    streamId?: string | null;
     streamKey?: string | null;
     ingestMode?: "PUSH" | "PULL" | string | null;
     pullSource?: {
@@ -68,7 +70,6 @@
       name: "RTMP / E-RTMP",
       icon: "Radio",
       description: "RTMP and Enhanced RTMP for OBS, Streamlabs, vMix",
-      recommended: true,
       setup: "Server URL: Copy this into your streaming software's server field",
     },
     {
@@ -185,14 +186,18 @@
       </div>
     </div>
   {:else}
+    {#if stream.streamId && stream.streamKey}
+      <RecommendedIngest streamId={stream.streamId} streamKey={stream.streamKey} />
+    {/if}
     <!-- Ingest Section -->
     <div class="slab">
       <div class="slab-header">
         <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">
-          Ingest URLs
+          Generic entry URLs
         </h3>
         <p class="text-xs text-muted-foreground/70 mt-1">
-          Configure your streaming software to broadcast to these endpoints
+          Advanced/manual entry points, not a confirmed closest node. Resolve a recommended
+          destination above before configuring your encoder.
         </p>
       </div>
       <div class="slab-body--flush">
@@ -204,11 +209,6 @@
               <div class="flex items-center gap-2">
                 <ProtocolIcon class="w-4 h-4 text-info" />
                 <span class="font-medium text-foreground">{protocol.name}</span>
-                {#if protocol.recommended}
-                  <span class="text-xs px-1.5 py-0.5 bg-success/20 text-success rounded-none"
-                    >Recommended</span
-                  >
-                {/if}
               </div>
             </div>
             <p class="text-xs text-muted-foreground mb-2">{protocol.description}</p>

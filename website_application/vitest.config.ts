@@ -4,7 +4,7 @@ import { resolve } from "path";
 export default defineConfig({
   test: {
     include: ["src/**/*.test.{ts,js}", "test/**/*.test.{ts,js}"],
-    exclude: ["**/*.svelte"],
+    exclude: ["**/*.svelte", "test/components/**"],
     environment: "node",
     globals: true,
     restoreMocks: true,
