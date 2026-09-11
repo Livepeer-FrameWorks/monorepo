@@ -52,7 +52,7 @@ func TestBootstrapEdgeNode_UsesDerivedNodeIDFromHostname(t *testing.T) {
 	mock.ExpectQuery(`SELECT cluster_id FROM quartermaster\.infrastructure_nodes WHERE node_id = \$1`).
 		WithArgs("edge-abcd1234").
 		WillReturnError(sql.ErrNoRows)
-	mock.ExpectExec(`INSERT INTO quartermaster\.infrastructure_nodes \(id, node_id, cluster_id, node_name, node_type, external_ip, latitude, longitude, tags, metadata, created_at, updated_at\)`).
+	mock.ExpectExec(`INSERT INTO quartermaster\.infrastructure_nodes \(id, node_id, cluster_id, node_name, node_type, external_ip, latitude, longitude, tags, metadata, status, enrollment_origin, created_at, updated_at\)\s+VALUES \(\$1, \$2, \$3, \$4, 'edge', \$5::inet, \$6, \$7, '\{\}', '\{\}', 'active', 'runtime_enrolled', NOW\(\), NOW\(\)\)`).
 		WithArgs(sqlmock.AnyArg(), "edge-abcd1234", "cluster-1", "edge-abcd1234.example.com", nil, nil, nil).
 		WillReturnResult(sqlmock.NewResult(1, 1))
 	mock.ExpectExec(`INSERT INTO quartermaster\.node_fingerprints`).

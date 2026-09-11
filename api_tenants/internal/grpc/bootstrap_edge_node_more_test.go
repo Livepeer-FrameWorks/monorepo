@@ -290,8 +290,8 @@ func TestBootstrapEdgeNode_UsesFallbackActiveCluster(t *testing.T) {
 		WithArgs("edge-fallback").
 		WillReturnError(sql.ErrNoRows)
 	mock.ExpectExec(regexp.QuoteMeta(`
-		INSERT INTO quartermaster.infrastructure_nodes (id, node_id, cluster_id, node_name, node_type, external_ip, latitude, longitude, tags, metadata, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, 'edge', $5::inet, $6, $7, '{}', '{}', NOW(), NOW())
+		INSERT INTO quartermaster.infrastructure_nodes (id, node_id, cluster_id, node_name, node_type, external_ip, latitude, longitude, tags, metadata, status, enrollment_origin, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, 'edge', $5::inet, $6, $7, '{}', '{}', 'active', 'runtime_enrolled', NOW(), NOW())
 	`)).
 		WithArgs(sqlmock.AnyArg(), "edge-fallback", "cluster-fallback", "edge-fallback.example.com", nil, nil, nil).
 		WillReturnResult(sqlmock.NewResult(1, 1))

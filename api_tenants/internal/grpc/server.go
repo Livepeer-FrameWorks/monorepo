@@ -46,6 +46,7 @@ import (
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 	dnspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/dns"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	placementpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	quartermasterpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/quartermaster"
 	tenantlimitspb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/tenant_limits"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/servicedefs"
@@ -57,6 +58,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
@@ -77,10 +79,13 @@ type QuartermasterServer struct {
 	quartermasterpb.UnimplementedIngressServiceServer
 	db                          *sql.DB
 	logger                      logging.Logger
+	peerWatch                   *peerWatchHub
 	navigatorClient             *navigator.Client
 	decklogClient               *decklogclient.BatchedClient
 	purserClient                *purserclient.GRPCClient // For billing status lookups (cross-service via gRPC, not DB)
 	mediaAuthorityRefreshClient mediaAuthorityRefreshClient
+	consentReviewKeyID          string
+	consentReviewPrivateKey     ed25519.PrivateKey
 	geoipReader                 *geoip.Reader
 	metrics                     *ServerMetrics
 
@@ -148,6 +153,7 @@ func NewQuartermasterServer(db *sql.DB, logger logging.Logger, navigatorClient *
 	return &QuartermasterServer{
 		db:                                 db,
 		logger:                             logger,
+		peerWatch:                          newPeerWatchHub(),
 		navigatorClient:                    navigatorClient,
 		decklogClient:                      decklogClient,
 		purserClient:                       purserClient,
@@ -4393,10 +4399,14 @@ func (s *QuartermasterServer) GetTenantEntitlement(ctx context.Context, req *qua
 	}
 	out := &quartermasterpb.GetTenantEntitlementResponse{}
 	for _, row := range accessRows {
+		if row.MediaConsentRevision < 0 {
+			return nil, status.Error(codes.Internal, "invalid capacity-owner consent revision")
+		}
 		peer := &clusterpeerpb.TenantClusterPeer{
 			ClusterId: row.ClusterID, ClusterSlug: dns.SanitizeLabel(row.ClusterID),
 			BaseUrl: row.BaseUrl, ClusterName: row.ClusterName, ClusterType: row.ClusterType,
 			ClusterClass: row.ClusterClass, HealthStatus: row.HealthStatus,
+			RegionId:               row.RegionID,
 			ControlCellId:          row.ControlCellID,
 			EligibleServingCellIds: append([]string(nil), row.EligibleServingCellIds...),
 			DeploymentModel:        row.DeploymentModel, OwnerTenantId: row.OwnerTenantID,
@@ -4404,6 +4414,10 @@ func (s *QuartermasterServer) GetTenantEntitlement(ctx context.Context, req *qua
 			SubscriptionStatus:      row.SubscriptionStatus.String,
 			AccessSource:            clusterAccessSourceProto(row.AccessSource),
 			AllowPrivatePullSources: row.AllowPrivatePullSources,
+			MediaConsent: &placementpb.CapacityConsent{
+				Revision: uint64(row.MediaConsentRevision), AllowIngest: row.MediaAllowIngest,
+				AllowServe: row.MediaAllowServe, AllowExternalSource: row.MediaAllowExternalSource,
+			},
 		}
 		if row.AccessExpiresAt.Valid {
 			peer.AccessExpiresAt = timestamppb.New(row.AccessExpiresAt.Time)
@@ -10456,6 +10470,7 @@ func (s *QuartermasterServer) ListPeers(ctx context.Context, req *quartermasterp
 		peers = append(peers, &quartermasterpb.PeerCluster{
 			ClusterId: row.ClusterID, SharedTenantIds: row.SharedTenantIds,
 			ClusterName: row.ClusterName, ClusterType: row.ClusterType, FoghornAddr: row.FoghornAddr,
+			ControlCellId: row.ControlCellID,
 		})
 	}
 
@@ -10567,6 +10582,8 @@ func clusterSubscriptionFromListRow(row quartermasterdb.ClusterSubscriptionListR
 }
 
 type GRPCServerConfig struct {
+	ConsentReviewKeyID          string
+	ConsentReviewPrivateKey     ed25519.PrivateKey
 	DB                          *sql.DB
 	Logger                      logging.Logger
 	ServiceToken                string
@@ -10672,6 +10689,15 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 	if tlsOpt != nil {
 		opts = append(opts, tlsOpt)
 	}
+	// A peer subscription is silent while the census is unchanged, so a
+	// connection dropped without a FIN would otherwise hold its hub slot for the
+	// life of the process. Pings bound how long that takes to notice, and the
+	// enforcement floor sits below the client's ping period so a well-behaved
+	// subscriber is never sent a GOAWAY for pinging.
+	opts = append(opts,
+		grpc.KeepaliveParams(keepalive.ServerParameters{Time: 30 * time.Second, Timeout: 10 * time.Second}),
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{MinTime: 15 * time.Second}),
+	)
 
 	server := grpc.NewServer(opts...)
 	qmServer := NewQuartermasterServer(cfg.DB, cfg.Logger, cfg.NavigatorClient, cfg.DecklogClient, cfg.PurserClient, cfg.GeoIPReader, cfg.Metrics)
@@ -10679,6 +10705,8 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 	qmServer.SetPlatformRootDomain(cfg.PlatformRootDomain)
 	qmServer.SetPhysicalEndpointStaleSeconds(cfg.PhysicalEndpointStaleSeconds)
 	qmServer.mediaAuthorityRefreshClient = cfg.MediaAuthorityRefreshClient
+	qmServer.consentReviewKeyID = cfg.ConsentReviewKeyID
+	qmServer.consentReviewPrivateKey = append(ed25519.PrivateKey(nil), cfg.ConsentReviewPrivateKey...)
 
 	// Drain worker for quartermaster.service_event_outbox. SKIP LOCKED +
 	// lease let this run safely on every Quartermaster replica.
@@ -10699,6 +10727,9 @@ func NewGRPCServer(cfg GRPCServerConfig) *grpc.Server {
 	// Backstop: periodically reconcile tenant intent against Navigator's
 	// applied alias state and enqueue any missing/drifted transitions.
 	go qmServer.runTenantAliasBackstop(context.Background())
+	// Wake peer subscribers when the census a peer set is derived from changes.
+	// It reads nothing while no cell is subscribed.
+	go qmServer.RunPeerCensusWatcher(context.Background(), cfg.Logger)
 
 	// Register all services
 	quartermasterpb.RegisterTenantServiceServer(server, qmServer)

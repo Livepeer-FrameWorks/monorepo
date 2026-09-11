@@ -112,6 +112,11 @@ func main() {
 	dbURL := config.RequireEnv("DATABASE_URL")
 	serviceToken := config.RequireEnv("SERVICE_TOKEN")
 	jwtSecret := config.RequireEnv("JWT_SECRET")
+	consentReviewKeyID := config.GetEnv("CAPACITY_CONSENT_REVIEW_KEY_ID", "")
+	consentReviewPrivateKey, consentKeyErr := consentReviewSigningConfig(consentReviewKeyID, config.GetEnv("CAPACITY_CONSENT_REVIEW_PRIVATE_KEY_PEM_B64", ""))
+	if consentKeyErr != nil {
+		logger.WithError(consentKeyErr).Fatal("Invalid capacity consent review configuration")
+	}
 	clusterAccessMaterializationSecret := config.RequireEnv("CLUSTER_ACCESS_MATERIALIZATION_SECRET")
 	quartermasterGRPCAddr := config.GetEnv("QUARTERMASTER_GRPC_ADDR", "quartermaster:19002")
 	navigatorGRPCAddr := config.GetEnv("NAVIGATOR_GRPC_ADDR", "") // Optional: enables DNS features.
@@ -336,6 +341,8 @@ func main() {
 		}
 
 		grpcServer := qmgrpc.NewGRPCServer(qmgrpc.GRPCServerConfig{
+			ConsentReviewKeyID:          consentReviewKeyID,
+			ConsentReviewPrivateKey:     consentReviewPrivateKey,
 			DB:                          db,
 			Logger:                      logger,
 			ServiceToken:                serviceToken,

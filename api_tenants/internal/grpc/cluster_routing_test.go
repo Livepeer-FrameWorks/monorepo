@@ -701,8 +701,8 @@ func TestListPeers_UsesFoghornClusterAssignments(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows := sqlmock.NewRows([]string{"cluster_id", "shared_tenant_ids", "cluster_name", "cluster_type", "foghorn_addr"}).
-		AddRow("peer-cluster", pq.Array([]string{"tenant-a"}), "Peer Cluster", "shared-lb", "10.88.158.228:18019")
+	rows := sqlmock.NewRows([]string{"cluster_id", "shared_tenant_ids", "cluster_name", "cluster_type", "foghorn_addr", "control_cell_id"}).
+		AddRow("peer-cluster", pq.Array([]string{"tenant-a"}), "Peer Cluster", "shared-lb", "10.88.158.228:18019", "peer-control-cell")
 
 	mock.ExpectQuery("(?s)WITH my_tenants AS.*service_cluster_assignments").
 		WithArgs("local-cluster").
@@ -718,6 +718,9 @@ func TestListPeers_UsesFoghornClusterAssignments(t *testing.T) {
 	}
 	if resp.Peers[0].GetFoghornAddr() != "10.88.158.228:18019" {
 		t.Fatalf("unexpected foghorn addr: %s", resp.Peers[0].GetFoghornAddr())
+	}
+	if resp.Peers[0].GetControlCellId() != "peer-control-cell" {
+		t.Fatal("peer discovery collapsed control-cell identity into virtual cluster")
 	}
 
 	if err := mock.ExpectationsWereMet(); err != nil {

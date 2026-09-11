@@ -52,6 +52,8 @@ var effectiveAccessColumns = []string{
 	"owner_tenant_id", "cluster_class", "health_status", "control_cell_id", "eligible_serving_cell_ids",
 	"access_level", "access_source", "access_active", "subscription_status", "access_expires_at",
 	"resource_limits", "allow_private_pull_sources",
+	"media_consent_revision", "media_allow_ingest", "media_allow_serve", "media_allow_external_source",
+	"region_id",
 }
 
 func TestGetTenantEntitlement_ReturnsEffectiveAccess(t *testing.T) {
@@ -68,8 +70,8 @@ func TestGetTenantEntitlement_ReturnsEffectiveAccess(t *testing.T) {
 	mock.ExpectQuery(`(?s)tenant_cluster_access.*tenant_id = \$1::uuid.*is_active = true.*subscription_status = 'active'.*access_source <> 'unknown'.*expires_at IS NULL OR tca\.expires_at > NOW\(\).*ic\.is_active = true`).
 		WithArgs(tenantID).
 		WillReturnRows(sqlmock.NewRows(effectiveAccessColumns).
-			AddRow("cluster-a", "A", "edge", "a.example", "platform_managed", "", "standard", "healthy", "cell-a", pq.StringArray{"cell-a"}, "shared", "platform_tier", true, "active", nil, `{}`, false).
-			AddRow("cluster-b", "B", "edge", "b.example", "tenant_hosted_edge", tenantID, "private", "healthy", "cell-b", pq.StringArray{"cell-b"}, "dedicated", "owner", true, "active", nil, `{"max_streams":3,"max_viewers":40}`, true))
+			AddRow("cluster-a", "A", "edge", "a.example", "platform_managed", "", "platform_official", "healthy", "cell-a", pq.StringArray{"cell-a"}, "shared", "platform_tier", true, "active", nil, `{}`, false, 0, true, true, true, "eu-west").
+			AddRow("cluster-b", "B", "edge", "b.example", "tenant_hosted_edge", tenantID, "tenant_private", "healthy", "cell-b", pq.StringArray{"cell-b"}, "dedicated", "owner", true, "active", nil, `{"max_streams":3,"max_viewers":40}`, true, 7, true, false, false, "us-east"))
 
 	resp, err := server.GetTenantEntitlement(serviceCtx(), &quartermasterpb.GetTenantEntitlementRequest{
 		TenantId: tenantID,
@@ -83,6 +85,9 @@ func TestGetTenantEntitlement_ReturnsEffectiveAccess(t *testing.T) {
 	if len(resp.GetEffectiveAccess()) != 2 {
 		t.Fatalf("unexpected effective access: %v", resp.GetEffectiveAccess())
 	}
+	if resp.GetEffectiveAccess()[0].GetRegionId() != "eu-west" || resp.GetEffectiveAccess()[1].GetRegionId() != "us-east" {
+		t.Fatal("entitlement omitted authorized cluster regions")
+	}
 	if got := resp.GetEffectiveAccess()[0].GetAccessSource(); got != clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_PLATFORM_TIER {
 		t.Fatalf("unexpected platform access source: %v", got)
 	}
@@ -94,6 +99,12 @@ func TestGetTenantEntitlement_ReturnsEffectiveAccess(t *testing.T) {
 	}
 	if !resp.GetEffectiveAccess()[1].GetAllowPrivatePullSources() || resp.GetEffectiveAccess()[0].GetAllowPrivatePullSources() {
 		t.Fatalf("unexpected private-pull capabilities: %+v", resp.GetEffectiveAccess())
+	}
+	if got := resp.GetEffectiveAccess()[0].GetMediaConsent(); got == nil || got.GetRevision() != 0 || !got.GetAllowIngest() || !got.GetAllowServe() || !got.GetAllowExternalSource() {
+		t.Fatalf("missing observed unconfigured consent: %+v", got)
+	}
+	if got := resp.GetEffectiveAccess()[1].GetMediaConsent(); got == nil || got.GetRevision() != 7 || !got.GetAllowIngest() || got.GetAllowServe() || got.GetAllowExternalSource() {
+		t.Fatalf("owner consent lost in entitlement projection: %+v", got)
 	}
 	if got := resp.GetEffectiveAccess()[1].GetResourceLimits(); got.GetMaxStreams() != 3 || got.GetMaxViewers() != 40 {
 		t.Fatalf("unexpected resource limits: %+v", got)
@@ -155,7 +166,7 @@ func TestGetTenantEntitlement_ScanError_FailsClosed(t *testing.T) {
 	server := NewQuartermasterServer(db, logging.NewLogger(), nil, nil, nil, nil, nil)
 
 	rows := sqlmock.NewRows(effectiveAccessColumns).
-		AddRow("cluster-a", "A", "edge", "a.example", "platform_managed", "", "standard", "healthy", "cell-a", pq.StringArray{"cell-a"}, "shared", "platform_tier", true, "active", nil, `{}`, false).
+		AddRow("cluster-a", "A", "edge", "a.example", "platform_managed", "", "platform_official", "healthy", "cell-a", pq.StringArray{"cell-a"}, "shared", "platform_tier", true, "active", nil, `{}`, false, 0, true, true, true, "eu-west").
 		RowError(0, errors.New("iter boom"))
 	mock.ExpectQuery("tenant_cluster_access").WillReturnRows(rows)
 
