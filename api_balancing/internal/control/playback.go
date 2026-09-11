@@ -19,12 +19,12 @@ import (
 	"frameworks/api_balancing/internal/state"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/pullsource"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -230,7 +230,7 @@ func ResolveContent(ctx context.Context, input string) (*ContentResolution, erro
 			}
 			// InternalName must carry the Mist namespace prefix so that
 			// downstream resolvers (resolveDVRViewerEndpoint,
-			// ResolveLivePlayback, USER_NEW policy lookups) see the same
+			// ResolvePreparedLiveViewerEndpoint, USER_NEW policy lookups) see the same
 			// stream identity Mist will see at PLAY_REWRITE time. DVR
 			// playback uses dvr+<dvr_internal_name>; clip/VOD share
 			// vod+<internal_name>. This mirrors what ResolveStream
@@ -358,137 +358,6 @@ type RemoteArtifactInfo struct {
 	GeoLon       float64
 }
 
-// PlaybackDependencies contains dependencies needed for playback resolution
-// filterPullCandidatesByEligibility constrains the candidate node set for a
-// pull+ cold-start to clusters that satisfy the URI's eligibility class.
-// This routing-side gate sends viewers to a cluster that is eligible to run
-// the pull instead of letting STREAM_SOURCE reject the selected cluster later.
-// Public URIs return the input unchanged; private
-// URIs filter to clusters whose Quartermaster row has
-// allow_private_pull_sources=true. Quartermaster lookup failures fail
-// closed (drop the node) — better to route nowhere than to the wrong
-// cluster.
-//
-// New local candidates carry their registered cluster directly; legacy test
-// candidates with an empty cluster share deps.LocalClusterID. Remote edges
-// carry their own ClusterID and set Remote. The shared cluster lookup
-// guarantees a single GetCluster call per cluster_id seen.
-func filterPullCandidatesByEligibility(ctx context.Context, nodes []balancer.NodeWithScore, internalName string, deps *PlaybackDependencies) ([]balancer.NodeWithScore, error) {
-	if len(nodes) == 0 {
-		return nodes, nil
-	}
-	if CommodoreClient == nil {
-		// No Commodore = can't classify. Defensive trigger-time check still
-		// catches the bad case; let it through here.
-		return nodes, nil
-	}
-	src, lookupErr := CommodoreClient.ResolvePullSourceByInternalName(ctx, internalName)
-	if lookupErr != nil || src == nil || !src.GetFound() {
-		// No pull-source row → this isn't a managed pull stream we can
-		// classify. Let downstream paths (artifact resolution, etc) handle.
-		return nodes, nil //nolint:nilerr // lookupErr is "not a pull stream", not a failure
-	}
-	class, _ := pullsource.Classify(src.GetSourceUri()) //nolint:errcheck // class encodes the rejection
-	allowed := src.GetAllowedClusterIds()
-	// Public source with no placement pin: any cluster is eligible.
-	if class == pullsource.ClassPublic && len(allowed) == 0 {
-		return nodes, nil
-	}
-	localCID := ""
-	if deps != nil {
-		localCID = deps.LocalClusterID
-	}
-	return filterPullCandidatesByClass(ctx, nodes, internalName, localCID, class, allowed, ClusterAllowsPrivatePulls)
-}
-
-func filterPullCandidatesByClass(
-	ctx context.Context,
-	nodes []balancer.NodeWithScore,
-	internalName, localClusterID string,
-	class pullsource.Class,
-	allowedClusterIDs []string,
-	allowsPrivatePulls func(context.Context, string) bool,
-) ([]balancer.NodeWithScore, error) {
-	if class == pullsource.ClassBlocked {
-		return nil, fmt.Errorf("pull source for stream %q is in the always-blocked set; refusing to route", internalName)
-	}
-	if class == pullsource.ClassPublic && len(allowedClusterIDs) == 0 {
-		return nodes, nil
-	}
-
-	// Collect the unique cluster set seen across candidate nodes, build a
-	// ClusterCapability slice with each cluster's flag, then run the shared
-	// pullsource.FilterPlacementClusters helper so this path uses the same
-	// rules as bootstrap render, Commodore reconcile, /source, and
-	// STREAM_SOURCE. Capability lookup is per cluster_id, not per node.
-	clusterIDFor := func(n balancer.NodeWithScore) string {
-		if n.ClusterID != "" {
-			return n.ClusterID
-		}
-		return localClusterID
-	}
-	seen := map[string]bool{}
-	candidates := make([]pullsource.ClusterCapability, 0)
-	for _, n := range nodes {
-		clusterID := clusterIDFor(n)
-		if clusterID == "" || seen[clusterID] {
-			continue
-		}
-		seen[clusterID] = true
-		allowPrivate := false
-		if class == pullsource.ClassPrivate && allowsPrivatePulls != nil {
-			allowPrivate = allowsPrivatePulls(ctx, clusterID)
-		}
-		candidates = append(candidates, pullsource.ClusterCapability{
-			ID:                      clusterID,
-			AllowPrivatePullSources: allowPrivate,
-		})
-	}
-	eligible, rejects := pullsource.FilterPlacementClusters(class, allowedClusterIDs, candidates)
-	if len(eligible) == 0 {
-		// Distinguish the two failure modes operators care about: "you forgot
-		// to configure placement" vs "the cluster set Commodore picked has
-		// nothing reachable". The first reject carries the canonical reason.
-		if len(rejects) > 0 {
-			return nil, fmt.Errorf("pull source for stream %q rejected: %s", internalName, summarizePlacementRejects(rejects))
-		}
-		return nil, fmt.Errorf("pull source for stream %q has no eligible media cluster reachable", internalName)
-	}
-	allow := make(map[string]bool, len(eligible))
-	for _, c := range eligible {
-		allow[c.ID] = true
-	}
-	out := make([]balancer.NodeWithScore, 0, len(nodes))
-	for _, n := range nodes {
-		if allow[clusterIDFor(n)] {
-			out = append(out, n)
-		}
-	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("pull source for stream %q has no eligible candidate node in the allowed cluster set", internalName)
-	}
-	return out, nil
-}
-
-// summarizePlacementRejects flattens FilterPlacementClusters rejections into
-// a single line for runtime errors. Mirrored in handlers and triggers.
-func summarizePlacementRejects(rejects []pullsource.PlacementReject) string {
-	parts := make([]string, 0, len(rejects))
-	for _, r := range rejects {
-		switch r.Reason {
-		case pullsource.PlacementRejectEmptyForPrivate:
-			parts = append(parts, "private/multicast source has no allowed_cluster_ids configured")
-		case pullsource.PlacementRejectUnknownCluster:
-			parts = append(parts, fmt.Sprintf("cluster %q is not an eligible media cluster", r.ClusterID))
-		case pullsource.PlacementRejectMissingPrivateCapability:
-			parts = append(parts, fmt.Sprintf("cluster %q does not allow private pull sources", r.ClusterID))
-		default:
-			parts = append(parts, fmt.Sprintf("cluster %q rejected: %s", r.ClusterID, r.Reason))
-		}
-	}
-	return strings.Join(parts, "; ")
-}
-
 // ClusterAllowsPrivatePulls returns Quartermaster's allow_private_pull_sources
 // flag for the cluster, fail-closed on lookup error or missing client.
 // Exported so the /source HTTP handler shares the same single source of truth.
@@ -510,15 +379,25 @@ type PlaybackDependencies struct {
 	LB                          *balancer.LoadBalancer
 	GeoLat                      float64
 	GeoLon                      float64
-	RemoteEdges                 []balancer.RemoteEdgeCandidate // optional: pre-collected remote edge candidates from federation
-	FedClient                   ArtifactFederationClient       // optional: for cross-cluster artifact resolution
-	PeerResolver                PeerAddressResolver            // optional: resolves peer cluster addresses
-	LocalClusterID              string                         // this cluster's ID
-	RemoteArtifacts             RemoteArtifactLookup           // optional: hot artifact locations from peering
+	FedClient                   ArtifactFederationClient // optional: for cross-cluster artifact resolution
+	PeerResolver                PeerAddressResolver      // optional: resolves peer cluster addresses
+	LocalClusterID              string                   // this cluster's ID
+	RemoteArtifacts             RemoteArtifactLookup     // optional: hot artifact locations from peering
 	OfficialClusterID           string
 	ClusterPeers                []*clusterpeerpb.TenantClusterPeer
 	AllowPlatformSharedPlayback bool
 	LocalAuthority              bool
+	// StoredMediaPlacement enforces the tenant's serving policy on stored media.
+	// Storage affinity still ranks the candidates; policy only removes the ones
+	// this tenant may not be served from, and final admission re-checks the
+	// connection that actually arrives.
+	StoredMediaPlacement ViewerPlacementPermitter
+	// StoredMediaPlacementRequired latches enforcement for this process. Once a
+	// replica has installed the policy path it must never fall back to serving
+	// stored media unfiltered, so a cleared permitter refuses instead of
+	// reverting. It mirrors the live viewer path, where installing admission
+	// likewise cannot be undone.
+	StoredMediaPlacementRequired bool
 }
 
 // MistSourceNameForIngestMode returns the concrete Mist stream surface used
@@ -768,6 +647,10 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 		}
 	}
 
+	artifactNodes, placementErr := enforceStoredMediaPlacement(ctx, deps, tenantID, internalName, resolvedPlaybackID, artifactResp.ArtifactHash, artifactNodes)
+	if placementErr != nil {
+		return nil, placementErr
+	}
 	rankedNodes := rankArtifactNodes(artifactNodes, deps.GeoLat, deps.GeoLon, 5)
 	if len(rankedNodes) == 0 {
 		return nil, fmt.Errorf("storage node outputs not available")
@@ -891,17 +774,58 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 // can hand off to the same endpoint-building code as warm playback.
 // Used when sync_status='synced' / location='s3' and no warm copies
 // exist — Helmsman's relay+blockcache pulls bytes from S3 on demand.
+// ErrStoredMediaPlacementUnavailable reports that the tenant's serving policy
+// permits none of the destinations holding or able to fetch this artifact. It is
+// a policy refusal, not a missing artifact, and callers surface it as such.
+var ErrStoredMediaPlacementUnavailable = errors.New("no permitted playback destination is available for stored media")
+
+// enforceStoredMediaPlacement keeps storage affinity as the ranking and lets the
+// signed serving policy decide eligibility. Placement is evaluated once for the
+// artifact, then intersected with the candidates storage produced, so a tenant
+// that excludes a cluster is never redirected there even when the bytes are
+// warm on it. Final admission re-checks the connection that actually arrives.
+func enforceStoredMediaPlacement(ctx context.Context, deps *PlaybackDependencies, tenantID, internalName, playbackID, artifactHash string, nodes []state.ArtifactNodeInfo) ([]state.ArtifactNodeInfo, error) {
+	if deps == nil {
+		return nodes, nil
+	}
+	if deps.StoredMediaPlacement == nil {
+		if deps.StoredMediaPlacementRequired {
+			return nil, ErrStoredMediaPlacementUnavailable
+		}
+		return nodes, nil
+	}
+	if len(nodes) == 0 {
+		return nodes, nil
+	}
+	// Artifacts are delivered over the HTTP output family, and every artifact
+	// output preference includes HLS, so it stands for the delivery capability
+	// this policy evaluation needs from a destination.
+	permission, err := deps.StoredMediaPlacement.PermitViewer(ctx, ViewerPlacementRequest{
+		TenantID: tenantID, ArtifactHash: artifactHash, InternalName: mist.ExtractInternalName(internalName),
+		PlaybackID: playbackID, Protocol: "hls", Location: ViewerPlacementLocation(deps.GeoLat, deps.GeoLon),
+	})
+	if err != nil {
+		return nil, ErrStoredMediaPlacementUnavailable
+	}
+	permitted := make([]state.ArtifactNodeInfo, 0, len(nodes))
+	for _, node := range nodes {
+		if permission.Permits(node.ClusterID, node.NodeID) {
+			permitted = append(permitted, node)
+		}
+	}
+	if len(permitted) == 0 {
+		return nil, ErrStoredMediaPlacementUnavailable
+	}
+	return permitted, nil
+}
+
 func rankNodeScoresForArtifact(nodes []balancer.NodeWithScore, viewerLat, viewerLon float64) []state.ArtifactNodeInfo {
 	out := make([]state.ArtifactNodeInfo, 0, len(nodes))
 	for _, n := range nodes {
-		// Skip remote-cluster candidates: cold-artifact relay reads run
-		// on the local cluster's edge against the artifact's S3 source.
-		if n.Remote {
-			continue
-		}
 		out = append(out, state.ArtifactNodeInfo{
 			NodeID:       n.NodeID,
 			Host:         n.Host,
+			ClusterID:    n.ClusterID,
 			Score:        int64(n.Score),
 			GeoLatitude:  n.GeoLatitude,
 			GeoLongitude: n.GeoLongitude,
@@ -982,162 +906,6 @@ func preferredArtifactOutputKeys(format string) []string {
 	default:
 		return []string{"HTTP", "HLS", "DASH", "CMAF"}
 	}
-}
-
-// ResolveLivePlayback resolves playback endpoints for a live stream using load balancing
-func ResolveLivePlayback(ctx context.Context, deps *PlaybackDependencies, viewKey string, internalName string, streamID string, tenantID string, activeIngestClusterID string) (*sharedpb.ViewerEndpointResponse, error) {
-	if deps.LB == nil {
-		return nil, fmt.Errorf("load balancer not available")
-	}
-
-	// Unified state tracks live streams by their bare internal_name (e.g.
-	// "demo_live_stream_001"), while MistServer uses wildcard names
-	// (e.g. "live+...", "pull+...", "dvr+..."). Normalize here so load
-	// balancing doesn't incorrectly filter out healthy nodes. Two cases
-	// need the active-stream-presence filter dropped:
-	//   - pull cold start: no node has the stream active yet because no
-	//     PUSH_REWRITE precedent fills the cache.
-	//   - active DVR: the dvr+<dvr_internal_name> Mist stream is only
-	//     materialized on a node when a viewer connects; no node
-	//     advertises it in the state manager up front. STREAM_SOURCE
-	//     on the chosen edge resolves to local manifest (recording
-	//     origin) or dtsc:// pull (any other edge).
-	trimmed := strings.TrimSpace(internalName)
-	isPull := strings.HasPrefix(trimmed, "pull+")
-	isDVR := strings.HasPrefix(trimmed, "dvr+")
-	trimmed = strings.TrimPrefix(trimmed, "live+")
-	trimmed = strings.TrimPrefix(trimmed, "pull+")
-	trimmed = strings.TrimPrefix(trimmed, "dvr+")
-	internalName = trimmed
-
-	// Use load balancer with internal name to find nodes that have the stream
-	lbctx := context.WithValue(ctx, ctxkeys.KeyCapability, "edge")
-	if tenantID != "" {
-		if deps.LocalAuthority {
-			lbctx = context.WithValue(lbctx, ctxkeys.KeyClusterServeScope, NewClusterServeScope(tenantID, deps.OfficialClusterID, deps.ClusterPeers, deps.AllowPlatformSharedPlayback))
-		} else {
-			lbctx = context.WithValue(lbctx, ctxkeys.KeyClusterServeScope, NewClusterServeScope(tenantID, deps.OfficialClusterID, deps.ClusterPeers))
-		}
-	}
-	nodes, err := deps.LB.GetTopNodesWithScores(lbctx, internalName, deps.GeoLat, deps.GeoLon, make(map[string]int), "", 5, false)
-	if (isPull || isDVR) && (err != nil || len(nodes) == 0) {
-		// Cold-start fallback: drop the active-stream-presence filter
-		// so we can pick an eligible edge by capacity/geo. The chosen
-		// edge materializes the stream via STREAM_SOURCE on first
-		// viewer.
-		var coldErr error
-		nodes, coldErr = deps.LB.GetTopNodesWithScores(lbctx, "", deps.GeoLat, deps.GeoLon, make(map[string]int), "", 5, false)
-		if coldErr == nil {
-			err = nil
-		}
-	}
-	if err != nil && len(deps.RemoteEdges) == 0 {
-		return nil, fmt.Errorf("no suitable edge nodes available: %w", err)
-	}
-
-	// Score remote edges and merge with local results
-	if len(deps.RemoteEdges) > 0 {
-		remoteNodes := deps.LB.ScoreRemoteEdges(deps.RemoteEdges, deps.GeoLat, deps.GeoLon)
-		nodes = append(nodes, remoteNodes...)
-		sort.Slice(nodes, func(i, j int) bool { return nodes[i].Score > nodes[j].Score })
-		if len(nodes) > 5 {
-			nodes = nodes[:5]
-		}
-	}
-	// Pull cold-start eligibility applies after local and remote candidates are
-	// merged. A private source URI may only run on a media cluster with
-	// allow_private_pull_sources=true, including redirected peer clusters.
-	if isPull && len(nodes) > 0 {
-		filtered, filterErr := filterPullCandidatesByEligibility(ctx, nodes, internalName, deps)
-		if filterErr != nil {
-			return nil, filterErr
-		}
-		nodes = filtered
-	}
-
-	var endpoints []*sharedpb.ViewerEndpoint
-
-	for _, node := range nodes {
-		// Remote edges: produce a redirect endpoint to the peer cluster's play domain
-		if node.Remote {
-			geoDistance := 0.0
-			if geo.IsValidLatLon(deps.GeoLat, deps.GeoLon) && geo.IsValidLatLon(node.GeoLatitude, node.GeoLongitude) {
-				geoDistance = CalculateGeoDistance(deps.GeoLat, deps.GeoLon, node.GeoLatitude, node.GeoLongitude)
-			}
-			endpoints = append(endpoints, &sharedpb.ViewerEndpoint{
-				NodeId:      node.NodeID,
-				BaseUrl:     node.Host,
-				Protocol:    "redirect",
-				Url:         PlaybackEdgeRedirectURL(node.Host, viewKey),
-				GeoDistance: geoDistance,
-				LoadScore:   float64(node.Score),
-				ClusterId:   node.ClusterID,
-			})
-			continue
-		}
-
-		nodeOutputs, exists := GetNodeOutputs(node.NodeID)
-		if !exists || nodeOutputs.Outputs == nil {
-			continue
-		}
-
-		endpoint := BuildViewerEndpointFromOutputs(node.NodeID, nodeOutputs, viewKey, true)
-		if endpoint == nil {
-			continue
-		}
-
-		// Calculate geo distance
-		geoDistance := 0.0
-		if geo.IsValidLatLon(deps.GeoLat, deps.GeoLon) && geo.IsValidLatLon(node.GeoLatitude, node.GeoLongitude) {
-			geoDistance = CalculateGeoDistance(deps.GeoLat, deps.GeoLon, node.GeoLatitude, node.GeoLongitude)
-		}
-		endpoint.GeoDistance = geoDistance
-		endpoint.LoadScore = float64(node.Score)
-		endpoints = append(endpoints, endpoint)
-	}
-
-	if len(endpoints) == 0 {
-		return nil, fmt.Errorf("no eligible edge nodes have HLS/WebRTC outputs configured for stream %q", internalName)
-	}
-
-	// Build metadata from stream state
-	metadata := &sharedpb.PlaybackMetadata{
-		Status:      "live",
-		IsLive:      true,
-		TenantId:    tenantID,
-		ContentId:   viewKey,
-		ContentType: "live",
-	}
-	if streamID != "" {
-		metadata.StreamId = &streamID
-		// Live streams: Helmsman uploads thumbnails to Chandler whenever
-		// Mist's process_thumbs runs. The asset may 404 for streams that
-		// have never been live; the player's fallback chain handles that.
-		chandlerBase := resolveThumbnailChandlerBase(activeIngestClusterID)
-		metadata.ThumbnailAssets = buildThumbnailAssets(chandlerBase, streamID)
-	}
-
-	// Enrich with stream state if available
-	st := state.DefaultManager().GetStreamState(internalName)
-	if st != nil {
-		metadata.IsLive = st.Status == "live"
-		metadata.Status = st.Status
-		metadata.Viewers = int32(st.Viewers)
-		metadata.BufferState = st.BufferState
-	}
-
-	// Add protocol hints
-	if len(endpoints) > 0 && endpoints[0].Outputs != nil {
-		for proto := range endpoints[0].Outputs {
-			metadata.ProtocolHints = append(metadata.ProtocolHints, proto)
-		}
-	}
-
-	return &sharedpb.ViewerEndpointResponse{
-		Primary:   endpoints[0],
-		Fallbacks: endpoints[1:],
-		Metadata:  metadata,
-	}, nil
 }
 
 // resolveThumbnailChandlerBase picks the Chandler base URL that serves a thumbnail whose serving cell is servingClusterID.

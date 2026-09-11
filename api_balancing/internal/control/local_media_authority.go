@@ -47,7 +47,15 @@ func ResolveLocalPullSource(ctx context.Context, store *localauthority.Store, in
 	if store == nil {
 		return LocalPullSourceResolution{}, nil
 	}
-	snapshot, found, err := store.PullSource(ctx, internalName)
+	return localPullSourceResolution(store.PullSource(ctx, internalName))
+}
+
+// localPullSourceResolution holds the whole decision. It is split from the read
+// so the marked/unmarked, ordering and expiry rules can be exercised against
+// snapshots directly — every one of them decides whether this cell serves a
+// stream without asking the control plane, and none is reachable from a store
+// read alone.
+func localPullSourceResolution(snapshot localauthority.SourceSnapshot, found bool, err error) (LocalPullSourceResolution, error) {
 	result := LocalPullSourceResolution{Snapshot: snapshot, Found: found}
 	if !found {
 		return result, nil
@@ -96,6 +104,9 @@ func PromoteLocalPullSourceIfMatching(ctx context.Context, store *localauthority
 	}
 	object := snapshot.Object.Authority
 	wantAllowed := append([]string(nil), snapshot.Secret.GetAllowedClusterIds()...)
+	if !localauthority.ShadowComparable(snapshot.Tenant.Authority, object) {
+		return PullSourcePromotionMismatch, nil
+	}
 	gotAllowed := append([]string(nil), connected.GetAllowedClusterIds()...)
 	slices.Sort(wantAllowed)
 	slices.Sort(gotAllowed)
@@ -110,7 +121,7 @@ func PromoteLocalPullSourceIfMatching(ctx context.Context, store *localauthority
 	var marked bool
 	var err error
 	if snapshot.Tenant.SourceReady {
-		marked, err = store.MarkMediaObjectLocalSourceReady(ctx, snapshot.Object.AuthorityID, snapshot.Object.Version)
+		marked, err = store.MarkMediaObjectLocalSourceReady(ctx, object.GetTenantId(), snapshot.Object.AuthorityID, snapshot.Object.Version)
 	} else {
 		marked, err = store.MarkSourcePairLocalReady(ctx, object.GetTenantId(), snapshot.Tenant.Version, snapshot.Object.AuthorityID, snapshot.Object.Version)
 	}

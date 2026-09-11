@@ -267,6 +267,14 @@ func mergeLocationRevisioned(cur, incoming Location) Location {
 	base.SourceTriggerUUID = src.SourceTriggerUUID
 	base.SourceGeneration = src.SourceGeneration
 	base.SourceRevision = src.SourceRevision
+	if cur.InboundPulls != nil || incoming.InboundPulls != nil {
+		base.InboundPulls = mergeInboundPulls(cur, incoming)
+		base = syncReplicationView(base)
+	}
+	if cur.OutboundRevision > 0 || incoming.OutboundRevision > 0 {
+		outbound := preserveOutbound(cur, incoming)
+		base.OutboundRevision, base.OutboundPullers = outbound.OutboundRevision, outbound.OutboundPullers
+	}
 	return base
 }
 

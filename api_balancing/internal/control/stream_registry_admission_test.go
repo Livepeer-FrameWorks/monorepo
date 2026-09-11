@@ -176,7 +176,7 @@ func TestRuntimeNameForStream(t *testing.T) {
 
 func TestLocalReplicationAcceptsSourceRuntimeName(t *testing.T) {
 	r := NewStreamRegistry(nil, "cluster-A", time.Minute)
-	r.MarkReplicating("stream-1", "cluster-B", "dtsc://origin/live+stream-1", "edge-a", "https://edge-a/view", "origin-node")
+	markReplicatingForTest(t, r, "stream-1", "cluster-B", "dtsc://origin/live+stream-1", "edge-a", "https://edge-a/view", "origin-node")
 
 	loc, ok := r.LocalReplication(context.Background(), "live+stream-1")
 	if !ok {
@@ -192,7 +192,7 @@ func TestLocalReplicationAcceptsSourceRuntimeName(t *testing.T) {
 
 func TestClearReplicatingForNodeOnlyClearsPinnedNode(t *testing.T) {
 	r := NewStreamRegistry(nil, "cluster-A", time.Minute)
-	r.MarkReplicating("stream-1", "cluster-B", "dtsc://origin/live+stream-1", "edge-a", "https://edge-a/view", "origin-node")
+	markReplicatingForTest(t, r, "stream-1", "cluster-B", "dtsc://origin/live+stream-1", "edge-a", "https://edge-a/view", "origin-node")
 
 	if cleared := r.ClearReplicatingForNode("stream-1", "edge-b"); cleared {
 		t.Fatal("expected wrong node not to clear replication")
@@ -212,5 +212,19 @@ func TestClearReplicatingForNodeOnlyClearsPinnedNode(t *testing.T) {
 	r.mu.RUnlock()
 	if loc.IsLiveNow {
 		t.Fatal("expected local liveness to clear with replication")
+	}
+}
+
+// markReplicatingForTest builds the pre-placement replication record several
+// fixtures still rely on: an inbound pull with no owner tenant and no
+// destination cluster. Prepared-source admission can never accept such a pull,
+// which is exactly why these fixtures exercise the refusal paths.
+func markReplicatingForTest(t *testing.T, r *StreamRegistry, internalName, peerClusterID, pullDTSCURL, destNodeID, destNodeBaseURL, pullSourceNodeID string) {
+	t.Helper()
+	if _, err := r.RecordInboundPull(context.Background(), internalName, InboundPull{
+		SourceClusterID: peerClusterID, SourceNodeID: pullSourceNodeID,
+		DestNodeID: destNodeID, DestNodeBaseURL: destNodeBaseURL, DTSCURL: pullDTSCURL,
+	}); err != nil {
+		t.Fatalf("record inbound pull for %s: %v", internalName, err)
 	}
 }

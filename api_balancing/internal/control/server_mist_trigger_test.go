@@ -75,7 +75,7 @@ func TestProcessMistTrigger_ReplaysBlockingResultByMistTriggerUUID(t *testing.T)
 
 	firstStream := &captureStream{}
 	processMistTrigger(&ipcpb.MistTrigger{
-		TriggerType: "PLAY_REWRITE",
+		TriggerType: "STREAM_PROCESS",
 		TriggerUuid: "mist-attempt-1",
 		Blocking:    true,
 		RequestId:   "request-1",
@@ -83,7 +83,7 @@ func TestProcessMistTrigger_ReplaysBlockingResultByMistTriggerUUID(t *testing.T)
 
 	secondStream := &captureStream{}
 	processMistTrigger(&ipcpb.MistTrigger{
-		TriggerType: "PLAY_REWRITE",
+		TriggerType: "STREAM_PROCESS",
 		TriggerUuid: "mist-attempt-1",
 		Blocking:    true,
 		RequestId:   "request-2",
@@ -172,7 +172,7 @@ func TestProcessMistTrigger_ReplayWaitStopsWithControlStream(t *testing.T) {
 	t.Cleanup(func() { mistTriggerProcessor = prevProcessor })
 	resetBlockingTriggerReplayForTest(t)
 
-	key := "node-1\x1fPLAY_REWRITE\x1fwedged-attempt"
+	key := "node-1\x1fSTREAM_PROCESS\x1fwedged-attempt"
 	if _, owner := acquireBlockingTriggerReplay(key); !owner {
 		t.Fatal("failed to install in-flight replay owner")
 	}
@@ -183,7 +183,7 @@ func TestProcessMistTrigger_ReplayWaitStopsWithControlStream(t *testing.T) {
 	stream := &captureStream{ctx: ctx}
 
 	processMistTrigger(&ipcpb.MistTrigger{
-		TriggerType: "PLAY_REWRITE",
+		TriggerType: "STREAM_PROCESS",
 		TriggerUuid: "wedged-attempt",
 		Blocking:    true,
 		RequestId:   "waiter-request",
@@ -667,7 +667,10 @@ func TestProcessMistTrigger_DropsNodeAssertedOriginFromRealtimePayload(t *testin
 		}},
 	}
 
-	processMistTrigger(trigger, NodeSession{CanonicalNodeID: "edge-us", ClusterID: "serving-us"}, nil, logging.Logger(logrus.New()))
+	stream := &captureStream{}
+	t.Cleanup(SetupTestRegistry("edge-us", stream))
+	registry.conns["edge-us"].canonicalID, registry.conns["edge-us"].clusterID = "edge-us", "serving-us"
+	processMistTrigger(trigger, NodeSession{CanonicalNodeID: "edge-us", ClusterID: "serving-us"}, stream, logging.Logger(logrus.New()))
 
 	payload := capture.last.GetViewerConnect()
 	if payload.GetClusterId() != "serving-us" || payload.GetOriginClusterId() != "" || payload.GetControlCellId() != "control-eu" {

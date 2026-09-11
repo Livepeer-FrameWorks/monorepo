@@ -9,11 +9,13 @@ import (
 	"time"
 
 	localauthority "frameworks/api_balancing/internal/mediaauthority"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"frameworks/api_balancing/internal/state"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	foghornrelaypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_relay"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -77,15 +79,17 @@ type managedStreamSnapshot struct {
 	ingestMode   string
 	internalName string
 	tenantID     string
+	admission    *ipcpb.ManagedStreamAdmission
+	retired      bool
 }
 
-// applyKey returns the subset of fields that defines whether Foghorn must
-// emit a fresh ApplyManagedStream. internalName and tenantID are intentionally
-// excluded: both are stable per stream_id and only carried for Retract, which
-// needs them after the commodore.streams row may already be gone.
+// applyKey compares media configuration independently of stable identity and
+// admission metadata. Reconciliation checks admission equality and expiry separately.
 func (s managedStreamSnapshot) applyKey() managedStreamSnapshot {
 	s.internalName = ""
 	s.tenantID = ""
+	s.admission = nil
+	s.retired = false
 	return s
 }
 
@@ -395,6 +399,7 @@ func reconcileClusterManagedStreamsWithContexts(ctx context.Context, log logging
 			snapshotStable := false
 			if prev, present := nodeLast[sid]; present && prev.applyKey() == snap.applyKey() {
 				snapshotStable = true
+				snap.admission = prev.admission
 			}
 			// Verified-applied check: sidecar's Heartbeat-borne applied
 			// snapshot is the ground truth. Match against the desired
@@ -402,10 +407,11 @@ func reconcileClusterManagedStreamsWithContexts(ctx context.Context, log logging
 			// failure on UPDATE (sidecar's old snapshot stays in its
 			// applied map) is detected as drift and triggers re-Apply.
 			verifiedApplied := managedStreamVerifiedAppliedMatches(nodeID, sid, snap)
-			needsReapply := snapshotStable && !verifiedApplied
+			needsReapply := snapshotStable && (!verifiedApplied || (snap.admission != nil && !time.Now().Before(snap.admission.GetExpiresAt().AsTime())))
 
 			if !snapshotStable || needsReapply {
-				if err := sendApplyManagedStream(log, electedClusterID, nodeID, row, streamCtx); err != nil {
+				admission, err := sendApplyManagedStreamWithAdmission(ctx, log, electedClusterID, nodeID, row, streamCtx, nodeLast[sid].admission != nil)
+				if err != nil {
 					log.WithError(err).WithFields(logging.Fields{
 						"cluster_id": electedClusterID,
 						"node_id":    nodeID,
@@ -417,6 +423,8 @@ func reconcileClusterManagedStreamsWithContexts(ctx context.Context, log logging
 				}
 				snap.internalName = streamCtx.GetInternalName()
 				snap.tenantID = streamCtx.GetTenantId()
+				snap.admission = admission
+				verifiedApplied = false
 				StreamRegistryInstance.ManagedSetLastSent(clusterID, nodeID, sid, snap)
 				// Keep the local snapshot consistent for the retract pass
 				// below (same tick).
@@ -453,7 +461,7 @@ func reconcileClusterManagedStreamsWithContexts(ctx context.Context, log logging
 			if !shouldRetractManagedStream(sid, nodeAdmitted, nodeTransient) {
 				continue
 			}
-			if err := sendRetractManagedStream(log, nodeID, sid, prevSnap.internalName); err != nil {
+			if err := sendRetractManagedStream(log, nodeID, sid, prevSnap); err != nil {
 				log.WithError(err).WithFields(logging.Fields{
 					"cluster_id": clusterID,
 					"node_id":    nodeID,
@@ -484,10 +492,8 @@ func reconcileClusterManagedStreamsWithContexts(ctx context.Context, log logging
 // after a managed stream has been verified-retracted from Mist. Delivery is
 // asynchronous and fenced by the outbox revision.
 func clearActiveClusterForManagedStream(ctx context.Context, log logging.Logger, clusterID, streamID, tenantID, internalName string) {
-	// A snapshot hydrated from a sidecar's applied set after a Foghorn restart
-	// carries no tenant: the wire snapshot deliberately does not, since tenant
-	// identity is not exposed on edge nodes. Resolve it from the registry
-	// instead, which is where Foghorn already keeps stream→tenant.
+	// Config-only hydration may lack tenant metadata. Resolve that identity
+	// from the source registry before persisting the scoped cleanup obligation.
 	if tenantID == "" && StreamRegistryInstance != nil && internalName != "" {
 		resolveCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		entry, err := StreamRegistryInstance.ResolveSourceByInternalName(resolveCtx, internalName)
@@ -553,6 +559,9 @@ func materializeManagedStreamWithLocal(ctx context.Context, log logging.Logger, 
 		if !streamCtx.GetAdmitted() {
 			return streamCtx, materializeDenied
 		}
+		if status := checkConfiguredManagedPlacement(ctx, clusterID, row, streamCtx); status != materializeOK {
+			return streamCtx, status
+		}
 		materializeManagedStreamEffects(ctx, streamCtx, nodeID)
 		return streamCtx, materializeOK
 	}
@@ -587,6 +596,9 @@ func materializeManagedStreamWithLocal(ctx context.Context, log logging.Logger, 
 			log.WithField("stream_id", row.GetStreamId()).Warn("Signed managed-stream shadow mismatched connected authority")
 		}
 	}
+	if status := checkConfiguredManagedPlacement(ctx, clusterID, row, streamCtx); status != materializeOK {
+		return streamCtx, status
+	}
 	materializeManagedStreamEffects(ctx, streamCtx, nodeID)
 	return streamCtx, materializeOK
 }
@@ -616,9 +628,14 @@ func shouldRetractManagedStream(streamID string, admitted, transient map[string]
 	return true
 }
 
-func sendApplyManagedStream(log logging.Logger, clusterID, nodeID string, row *commodorepb.ManagedStreamRow, streamCtx *commodorepb.ResolveStreamContextResponse) error {
+func sendApplyManagedStream(ctx context.Context, log logging.Logger, clusterID, nodeID string, row *commodorepb.ManagedStreamRow, streamCtx *commodorepb.ResolveStreamContextResponse) error {
+	_, err := sendApplyManagedStreamWithAdmission(ctx, log, clusterID, nodeID, row, streamCtx, false)
+	return err
+}
+
+func sendApplyManagedStreamWithAdmission(ctx context.Context, log logging.Logger, clusterID, nodeID string, row *commodorepb.ManagedStreamRow, streamCtx *commodorepb.ResolveStreamContextResponse, requirePlacement bool) (*ipcpb.ManagedStreamAdmission, error) {
 	if streamCtx.GetInternalName() == "" {
-		return errors.New("ResolveStreamContext returned empty internal_name")
+		return nil, errors.New("ResolveStreamContext returned empty internal_name")
 	}
 	req := &ipcpb.ApplyManagedStream{
 		Name:         streamCtx.GetInternalName(),
@@ -631,9 +648,31 @@ func sendApplyManagedStream(log logging.Logger, clusterID, nodeID string, row *c
 		StreamId:     row.GetStreamId(),
 		TenantId:     streamCtx.GetTenantId(),
 	}
+	if store := LocalMediaAuthorityStore(); store != nil {
+		if checkManagedPlacementAdmission(ctx, store, clusterID, row, streamCtx, &req.PlacementAdmission) != materializeOK {
+			return nil, errors.New("managed-stream placement does not permit apply")
+		}
+		if req.PlacementAdmission != nil {
+			req.PlacementAdmission.TargetNodeId = nodeID
+			digest, digestErr := placement.ManagedCommandDigest(req)
+			if digestErr != nil {
+				return nil, digestErr
+			}
+			req.PlacementAdmission.CommandSha256 = digest
+			if err := placement.ValidateManagedCommand(req, nodeID, time.Now()); err != nil {
+				return nil, err
+			}
+		}
+	}
 	_ = log
 	_ = clusterID
-	return SendApplyManagedStream(nodeID, req)
+	if requirePlacement && req.GetPlacementAdmission() == nil {
+		return nil, errors.New("managed Apply cannot downgrade recorded placement authority")
+	}
+	if err := SendApplyManagedStream(nodeID, req); err != nil {
+		return nil, err
+	}
+	return proto.CloneOf(req.GetPlacementAdmission()), nil
 }
 
 // recordActiveClusterForManagedStream persists the latest desired central
@@ -653,7 +692,8 @@ func recordActiveClusterForManagedStream(ctx context.Context, log logging.Logger
 	}
 }
 
-func sendRetractManagedStream(log logging.Logger, nodeID, streamID, internalName string) error {
+func sendRetractManagedStream(log logging.Logger, nodeID, streamID string, snapshot managedStreamSnapshot) error {
+	internalName := snapshot.internalName
 	if internalName == "" {
 		// Should not happen — lastSent only records after a successful Apply
 		// which captures the internalName. Belt-and-suspenders: log + drop.
@@ -663,10 +703,24 @@ func sendRetractManagedStream(log logging.Logger, nodeID, streamID, internalName
 		}).Warn("Retract skipped: lastSent entry missing internal_name (unexpected)")
 		return nil
 	}
-	return SendRetractManagedStream(nodeID, &ipcpb.RetractManagedStream{
+	req := &ipcpb.RetractManagedStream{
 		Name:     internalName,
 		StreamId: streamID,
-	})
+	}
+	if a := snapshot.admission; a != nil {
+		if a.GetTargetNodeId() != nodeID {
+			return errors.New("managed retraction node differs from admitted node")
+		}
+		now := time.Now()
+		req.PlacementRetraction = &ipcpb.ManagedStreamRetraction{TargetNodeId: nodeID, TargetClusterId: a.GetTargetClusterId(), TenantId: snapshot.tenantID,
+			ObjectAuthorityVersion: a.GetObjectAuthorityVersion(), TenantAuthorityVersion: a.GetTenantAuthorityVersion(), CommandSha256: append([]byte(nil), a.GetCommandSha256()...),
+			PolicyRevision: a.GetPolicyRevision(), ParentRevision: a.GetParentRevision(), PolicyDigest: a.GetPolicyDigest(),
+			IssuedAt: timestamppb.New(now), ExpiresAt: timestamppb.New(now.Add(placement.PreparationLifetime))}
+		if err := placement.ValidateManagedRetraction(req, nodeID, now); err != nil {
+			return err
+		}
+	}
+	return SendRetractManagedStream(nodeID, req)
 }
 
 // connectedNodesInCluster returns the node IDs of every Helmsman currently

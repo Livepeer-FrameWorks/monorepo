@@ -3,6 +3,9 @@ package control
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +14,10 @@ import (
 	"frameworks/api_balancing/internal/state"
 
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
@@ -153,18 +160,76 @@ func seedIngestNode(t *testing.T, sm *state.StreamStateManager, nodeID, baseURL 
 const defaultIngestCluster = "cluster-a"
 
 func ingestOutputs(host string) map[string]any {
-	return map[string]any{"HLS": "http://" + host + "/hls/$/index.m3u8"}
+	return map[string]any{
+		"HLS":    "http://" + host + "/hls/$/index.m3u8",
+		"WebRTC": "http://HOST:8080/webrtc/$",
+		"RTMP":   "rtmp://HOST:1935/play/$",
+		"TSSRT":  "srt://HOST:8889?streamid=$",
+	}
 }
 
-// newIngestDeps builds selector dependencies. The Foghorn's own cluster is not
-// among them: selection authorizes against the response envelope, never against
-// the process's identity.
-func newIngestDeps(lat, lon float64, _ string) *IngestDependencies {
-	return &IngestDependencies{
-		LB:     balancer.NewLoadBalancer(logging.NewLogger()),
-		GeoLat: lat,
-		GeoLon: lon,
+// prepareIngestFromNodeState stands in for the placement runtime: selection
+// lives behind the placement preparer, so these fixtures express "which node may
+// take this publish" as the same evidence the real preparation reads — the
+// node's ingest capability, liveness, a fresh advertised listener for the exact
+// protocol, and its authenticated virtual media cluster authorized against the
+// resolve response's envelope. The lowest node ID wins so a fixture with several
+// eligible nodes is deterministic.
+func prepareIngestFromNodeState(streamCtx *commodorepb.ResolveStreamContextResponse) ingestPlacementPreparerFunc {
+	return func(_ context.Context, request IngestPlacementRequest) (balancer.PlacementPreparationResult, error) {
+		snapshot := state.DefaultManager().GetBalancerSnapshotAtomic()
+		if snapshot == nil {
+			return balancer.PlacementPreparationResult{}, balancer.ErrPlacementUnavailable
+		}
+		nodes := append([]state.EnhancedBalancerNodeSnapshot(nil), snapshot.Nodes...)
+		sort.Slice(nodes, func(i, j int) bool { return nodes[i].NodeID < nodes[j].NodeID })
+		now := time.Now()
+		fresh := func(observed time.Time) bool {
+			return !observed.IsZero() && !now.Before(observed) && now.Before(observed.Add(30*time.Second))
+		}
+		for _, node := range nodes {
+			if !node.IsActive || !node.CapIngest || node.ClusterID == "" ||
+				!fresh(node.LastHeartbeat) || !fresh(node.OutputsObservedAt) {
+				continue
+			}
+			if !ingestClusterAllowed(streamCtx, node.ClusterID) {
+				continue
+			}
+			endpoint := mist.ResolveIngestEndpointTemplate(node.Outputs, node.Host, request.Protocol)
+			publicBase := mist.IngestPublicOrigin(node.Host)
+			if endpoint == "" || publicBase == "" {
+				continue
+			}
+			attempt, err := placement.NewPreparationAttemptID(now)
+			if err != nil {
+				return balancer.PlacementPreparationResult{}, err
+			}
+			return balancer.PlacementPreparationResult{
+				Outcome: balancer.PlacementAccepted, TenantID: request.TenantID,
+				ObjectID: sharedauthority.LiveStreamAuthorityID(request.StreamID),
+				NodeID:   node.NodeID, ClusterID: node.ClusterID, Protocol: request.Protocol,
+				PublicBaseURL: publicBase, Endpoint: endpoint, AttemptID: attempt,
+				ExpiresAt: now.Add(10 * time.Second),
+			}, nil
+		}
+		return balancer.PlacementPreparationResult{}, balancer.ErrPlacementUnavailable
 	}
+}
+
+// resolveIngestForTest resolves a publish through the placement seam the
+// production path requires. The preparer authorizes against the very response
+// the resolver is handed, and the Foghorn's own cluster is nowhere in the
+// dependencies: selection authorizes against that envelope, never against the
+// process's identity. An empty protocol is unqualified discovery.
+func resolveIngestForTest(ctx context.Context, lat, lon float64, protocol string, streamCtx *commodorepb.ResolveStreamContextResponse, streamKey string) (*sharedpb.IngestEndpointResponse, error) {
+	deps := &IngestDependencies{
+		LB:        balancer.NewLoadBalancer(logging.NewLogger()),
+		GeoLat:    lat,
+		GeoLon:    lon,
+		Protocol:  protocol,
+		Placement: prepareIngestFromNodeState(streamCtx),
+	}
+	return ResolveIngestEndpoints(ctx, deps, streamCtx, streamKey)
 }
 
 // healthyPeers builds the cluster-peer envelope Commodore returns: already
@@ -203,12 +268,12 @@ func TestIngestAddressForNodePreservesAdvertisedAuthority(t *testing.T) {
 	}
 }
 
-// Locks the URL rendering contract: WHIP keeps the advertised HTTP authority,
-// while RTMP and SRT use their fleet-wide ports.
+// WHIP resolves HOST through the public HTTP authority; RTMP/SRT retain the
+// ports supplied by the node's listener report.
 func TestBuildIngestEndpoint_ProtocolURLs(t *testing.T) {
 	ep := buildIngestEndpoint("node-1", ingestPublicAddress{
 		scheme: "https", authority: "edge-1.example.com", hostname: "edge-1.example.com",
-	}, "sk-abc", "eu-west", "cluster-1", 42)
+	}, ingestOutputs("edge-1.example.com"), "sk-abc", "eu-west", "cluster-1", 42)
 	if ep == nil {
 		t.Fatal("expected endpoint")
 	}
@@ -234,7 +299,7 @@ func TestBuildIngestEndpoint_ProtocolURLs(t *testing.T) {
 func TestBuildIngestEndpoint_IPv6Authority(t *testing.T) {
 	ep := buildIngestEndpoint("node-1", ingestPublicAddress{
 		scheme: "http", authority: "[::1]:18090", hostname: "::1",
-	}, "sk", "", "cluster-1", 1)
+	}, ingestOutputs("[::1]"), "sk", "", "cluster-1", 1)
 	if ep == nil {
 		t.Fatal("expected endpoint")
 	}
@@ -250,10 +315,10 @@ func TestBuildIngestEndpoint_IPv6Authority(t *testing.T) {
 }
 
 func TestBuildIngestEndpoint_RequiresHostAndKey(t *testing.T) {
-	if buildIngestEndpoint("n", ingestPublicAddress{}, "sk", "", "c", 1) != nil {
+	if buildIngestEndpoint("n", ingestPublicAddress{}, ingestOutputs("h"), "sk", "", "c", 1) != nil {
 		t.Error("empty host must yield no endpoint")
 	}
-	if buildIngestEndpoint("n", ingestPublicAddress{scheme: "https", authority: "h", hostname: "h"}, "", "", "c", 1) != nil {
+	if buildIngestEndpoint("n", ingestPublicAddress{scheme: "https", authority: "h", hostname: "h"}, ingestOutputs("h"), "", "", "c", 1) != nil {
 		t.Error("empty stream key must yield no endpoint")
 	}
 }
@@ -441,7 +506,7 @@ func TestResolveIngestEndpoints_MissingTenantFailsClosed(t *testing.T) {
 	sm := state.ResetDefaultManagerForTests()
 	seedIngestNode(t, sm, "ingest-shared", "http://n:18090", 52.0, 4.0, ingestOutputs("n.example.com:18090"))
 
-	if _, err := ResolveIngestEndpoints(context.Background(), newIngestDeps(52.0, 4.0, "cluster-1"), admittedCtx(""), "sk"); err == nil {
+	if _, err := resolveIngestForTest(context.Background(), 52.0, 4.0, "", admittedCtx(""), "sk"); err == nil {
 		t.Fatal("stream context without a tenant must not resolve")
 	}
 }
@@ -458,7 +523,7 @@ func TestResolveIngestEndpoints_LooksPastUnusableTopNodes(t *testing.T) {
 	}
 	seedIngestNode(t, sm, "good-1", "http://good-1:18090", 52.0, 4.0, ingestOutputs("good-1.example.com:18090"))
 
-	resp, err := ResolveIngestEndpoints(context.Background(), newIngestDeps(52.0, 4.0, "cluster-1"), admittedCtx("t1"), "sk")
+	resp, err := resolveIngestForTest(context.Background(), 52.0, 4.0, "", admittedCtx("t1"), "sk")
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -473,7 +538,7 @@ func TestResolveIngestEndpoints_PicksIngestCapableNode(t *testing.T) {
 	sm := state.ResetDefaultManagerForTests()
 	seedIngestNode(t, sm, "ingest-node-1", "http://ingest-node-1:18090", 52.0, 4.0, ingestOutputs("ingest-1.example.com:18090"))
 
-	resp, err := ResolveIngestEndpoints(context.Background(), newIngestDeps(52.0, 4.0, "cluster-1"), admittedCtx("t1"), "sk-abc")
+	resp, err := resolveIngestForTest(context.Background(), 52.0, 4.0, "", admittedCtx("t1"), "sk-abc")
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -489,16 +554,41 @@ func TestResolveIngestEndpoints_PicksIngestCapableNode(t *testing.T) {
 	}
 }
 
-func TestResolveIngestEndpoints_UsesPublicBaseURLWithoutOutputSnapshot(t *testing.T) {
+func TestResolveIngestEndpoints_RequiresProtocolReport(t *testing.T) {
 	sm := state.ResetDefaultManagerForTests()
 	seedIngestNode(t, sm, "ingest-node-1", "http://ingest.example.com:18090/view", 52.0, 4.0, nil)
 
-	resp, err := ResolveIngestEndpoints(context.Background(), newIngestDeps(52.0, 4.0, "cluster-1"), admittedCtx("t1"), "sk")
-	if err != nil {
-		t.Fatalf("resolve: %v", err)
+	if resp, err := resolveIngestForTest(context.Background(), 52.0, 4.0, "", admittedCtx("t1"), "sk"); err == nil || resp != nil {
+		t.Fatalf("unadvertised ingest protocols returned: %v %v", resp, err)
 	}
-	if got, want := resp.GetPrimary().GetWhipUrl(), "http://ingest.example.com:18090/webrtc/sk"; got != want {
-		t.Fatalf("whip: got %q want %q", got, want)
+}
+
+func TestResolveIngestEndpointsFiltersProtocolBeforeCandidateLimit(t *testing.T) {
+	sm := state.ResetDefaultManagerForTests()
+	for i := range 6 {
+		seedIngestNode(t, sm, fmt.Sprintf("rtmp-%d", i), "https://near.example", 52, 4, map[string]any{"RTMP": "rtmp://HOST:2935/play/$"})
+	}
+	seedIngestNode(t, sm, "whip", "https://far.example", 40, -74, map[string]any{"WebRTC": "https://far.example/webrtc/$"})
+	response, err := resolveIngestForTest(context.Background(), 52, 4, "whip", admittedCtx("tenant"), "key")
+	if err != nil || response.GetPrimary().GetNodeId() != "whip" || len(response.GetFallbacks()) != 0 || response.GetPrimary().RtmpUrl != nil || response.GetPrimary().SrtUrl != nil {
+		t.Fatalf("protocol filtering happened after truncation or invented alternatives: %v %v", response, err)
+	}
+	sm.SetNodeInfo("whip", "https://far.example", true, nil, nil, "", "{}", nil)
+	if result, resolveErr := resolveIngestForTest(context.Background(), 52, 4, "whip", admittedCtx("tenant"), "key"); resolveErr == nil || result != nil {
+		t.Fatalf("withdrawn WHIP listener still returned: %v %v", result, resolveErr)
+	}
+}
+
+func TestIngestOutputFreshnessCannotBeRenewedByHeartbeat(t *testing.T) {
+	now := time.Now()
+	for _, age := range []time.Duration{-time.Second, 30 * time.Second, time.Hour} {
+		node := &state.NodeState{Outputs: ingestOutputs("edge"), OutputsObservedAt: now.Add(-age), LastHeartbeat: now, MetricsObservedAt: now}
+		if len(freshIngestOutputs(node, now)) != 0 {
+			t.Fatalf("fresh heartbeat accepted protocol observation with age %v", age)
+		}
+	}
+	if len(freshIngestOutputs(&state.NodeState{Outputs: ingestOutputs("edge"), OutputsObservedAt: now.Add(-time.Second)}, now)) == 0 {
+		t.Fatal("fresh protocol snapshot rejected")
 	}
 }
 
@@ -508,7 +598,7 @@ func TestResolveIngestEndpoints_SkipsNonIngestNodes(t *testing.T) {
 	sm := state.ResetDefaultManagerForTests()
 	seedLiveEdgeNode(t, sm, "edge-only-1", "http://edge-only-1:18090", 52.0, 4.0, ingestOutputs("edge-only-1.example.com:18090"))
 
-	if _, err := ResolveIngestEndpoints(context.Background(), newIngestDeps(52.0, 4.0, "cluster-1"), admittedCtx("t1"), "sk"); err == nil {
+	if _, err := resolveIngestForTest(context.Background(), 52.0, 4.0, "", admittedCtx("t1"), "sk"); err == nil {
 		t.Fatal("edge-only node must not be offered for ingest")
 	}
 }
@@ -519,7 +609,7 @@ func TestResolveIngestEndpoints_SkipsNodesWithoutResolvableHost(t *testing.T) {
 	sm := state.ResetDefaultManagerForTests()
 	seedIngestNode(t, sm, "ingest-node-nohost", "", 52.0, 4.0, map[string]any{})
 
-	if _, err := ResolveIngestEndpoints(context.Background(), newIngestDeps(52.0, 4.0, "cluster-1"), admittedCtx("t1"), "sk"); err == nil {
+	if _, err := resolveIngestForTest(context.Background(), 52.0, 4.0, "", admittedCtx("t1"), "sk"); err == nil {
 		t.Fatal("node without resolvable host must not be offered")
 	}
 }
@@ -530,7 +620,7 @@ func TestResolveIngestEndpoints_ReturnsLocalClusterNode(t *testing.T) {
 	seedIngestNode(t, sm, "local-node", "http://n:18090", 52.0, 4.0, ingestOutputs("n.example.com:18090"))
 	sm.SetNodeConnectionInfo(context.Background(), "local-node", "n.example.com:18090", "", "cluster-a", nil)
 
-	resp, err := ResolveIngestEndpoints(context.Background(), newIngestDeps(52.0, 4.0, "cluster-a"), admittedCtx("t1"), "sk")
+	resp, err := resolveIngestForTest(context.Background(), 52.0, 4.0, "", admittedCtx("t1"), "sk")
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -548,7 +638,7 @@ func TestResolveIngestEndpoints_RejectsUnentitledPooledCluster(t *testing.T) {
 	seedIngestNode(t, sm, "foreign-node", "https://foreign.example.com", 52.0, 4.0, ingestOutputs("foreign.example.com"))
 	sm.SetNodeConnectionInfo(context.Background(), "foreign-node", "foreign.example.com", "", "foreign-cluster", nil)
 
-	if _, err := ResolveIngestEndpoints(context.Background(), newIngestDeps(52.0, 4.0, "cluster-a"), admittedCtx("tenant-a"), "sk"); err == nil {
+	if _, err := resolveIngestForTest(context.Background(), 52.0, 4.0, "", admittedCtx("tenant-a"), "sk"); err == nil {
 		t.Fatal("node from an unentitled pooled cluster must not be offered")
 	}
 }
@@ -568,7 +658,7 @@ func TestResolveIngestEndpoints_RejectsUnhealthyPeerInEnvelope(t *testing.T) {
 		HealthStatus: "degraded",
 	}}
 
-	if _, err := ResolveIngestEndpoints(context.Background(), newIngestDeps(52.0, 4.0, "cluster-a"), streamCtx, "sk"); err == nil {
+	if _, err := resolveIngestForTest(context.Background(), 52.0, 4.0, "", streamCtx, "sk"); err == nil {
 		t.Fatal("degraded entitled peer must not be offered")
 	}
 }
@@ -581,7 +671,7 @@ func TestResolveIngestEndpoints_RejectsControlPlaneClusterInEnvelope(t *testing.
 		ClusterId: "central-cluster", ClusterType: "central", HealthStatus: "healthy",
 	}}
 
-	if _, err := ResolveIngestEndpoints(context.Background(), newIngestDeps(52.0, 4.0, "central-cluster"), streamCtx, "sk"); err == nil {
+	if _, err := resolveIngestForTest(context.Background(), 52.0, 4.0, "", streamCtx, "sk"); err == nil {
 		t.Fatal("control-plane cluster from a malformed routing envelope was offered for live ingest")
 	}
 }
@@ -593,7 +683,7 @@ func TestResolveIngestEndpoints_RefusesClusterlessNode(t *testing.T) {
 	sm := state.ResetDefaultManagerForTests()
 	seedIngestNodeInCluster(t, sm, "clusterless-node", "http://n:18090", 52.0, 4.0, ingestOutputs("n.example.com:18090"), "")
 
-	if _, err := ResolveIngestEndpoints(context.Background(), newIngestDeps(52.0, 4.0, "cluster-a"), admittedCtx("t1"), "sk"); err == nil {
+	if _, err := resolveIngestForTest(context.Background(), 52.0, 4.0, "", admittedCtx("t1"), "sk"); err == nil {
 		t.Fatal("an unattributed node was offered for ingest")
 	}
 }
@@ -601,8 +691,10 @@ func TestResolveIngestEndpoints_RefusesClusterlessNode(t *testing.T) {
 // One physical Foghorn serves many virtual media clusters and accepts any
 // valid stream key. The candidate set is bounded by what Quartermaster grants
 // the stream's owner — the same predicate the serve path uses — not by the
-// Foghorn's process cluster and not by a single resolved origin. An owner
-// entitled to several clusters gets nodes from all of them ranked together.
+// Foghorn's process cluster and not by a single resolved origin. Every
+// destination in a response is independently prepared, one per protocol, so the
+// breadth of the candidate pool shows as each entitled cluster being selectable
+// on its own evidence while neither is this Foghorn's own cluster.
 func TestResolveIngestEndpoints_RanksAcrossEveryEntitledCluster(t *testing.T) {
 	sm := state.ResetDefaultManagerForTests()
 	seedIngestNode(t, sm, "edge-demo", "http://a:18090", 52.0, 4.0, ingestOutputs("a.example.com:18090"))
@@ -611,19 +703,19 @@ func TestResolveIngestEndpoints_RanksAcrossEveryEntitledCluster(t *testing.T) {
 	sm.SetNodeConnectionInfo(context.Background(), "edge-eu", "b.example.com:18090", "", "eu-media", nil)
 
 	// Foghorn's own cluster is a platform cluster, not either media cluster.
-	streamCtx := admittedCtx("t1")
-	streamCtx.ClusterPeers = healthyPeers("demo-media", "eu-media")
+	for _, entitled := range [][]string{{"demo-media"}, {"eu-media"}, {"demo-media", "eu-media"}} {
+		streamCtx := admittedCtx("t1")
+		streamCtx.ClusterPeers = healthyPeers(entitled...)
 
-	resp, err := ResolveIngestEndpoints(context.Background(), newIngestDeps(52.0, 4.0, "central-primary"), streamCtx, "sk")
-	if err != nil {
-		t.Fatalf("resolve: %v", err)
-	}
-	got := map[string]bool{resp.GetPrimary().GetClusterId(): true}
-	for _, fb := range resp.GetFallbacks() {
-		got[fb.GetClusterId()] = true
-	}
-	if !got["demo-media"] || !got["eu-media"] {
-		t.Fatalf("entitled clusters collapsed to %v", got)
+		resp, err := resolveIngestForTest(context.Background(), 52.0, 4.0, "", streamCtx, "sk")
+		if err != nil {
+			t.Fatalf("entitled %v: %v", entitled, err)
+		}
+		for _, endpoint := range append([]*sharedpb.IngestEndpoint{resp.GetPrimary()}, resp.GetFallbacks()...) {
+			if !slices.Contains(entitled, endpoint.GetClusterId()) {
+				t.Fatalf("entitled %v resolved to cluster %q", entitled, endpoint.GetClusterId())
+			}
+		}
 	}
 }
 
@@ -638,7 +730,7 @@ func TestResolveIngestEndpoints_ExcludesUnentitledClusters(t *testing.T) {
 	streamCtx := admittedCtx("t1")
 	streamCtx.ClusterPeers = healthyPeers("demo-media")
 
-	if _, err := ResolveIngestEndpoints(context.Background(), newIngestDeps(52.0, 4.0, "central-primary"), streamCtx, "sk"); err == nil {
+	if _, err := resolveIngestForTest(context.Background(), 52.0, 4.0, "", streamCtx, "sk"); err == nil {
 		t.Fatal("a node in an unentitled cluster was offered")
 	}
 }
@@ -658,7 +750,7 @@ func TestResolveIngestEndpoints_LiveClaimPinsToClaimingCluster(t *testing.T) {
 	claimed := "eu-media"
 	streamCtx.ActiveIngestClusterId = &claimed
 
-	resp, err := ResolveIngestEndpoints(context.Background(), newIngestDeps(52.0, 4.0, "central-primary"), streamCtx, "sk")
+	resp, err := resolveIngestForTest(context.Background(), 52.0, 4.0, "", streamCtx, "sk")
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
@@ -698,7 +790,7 @@ func TestResolveIngestEndpoints_OriginAloneDoesNotPin(t *testing.T) {
 	routed := "demo-media" // tenant route, nobody publishing
 	streamCtx.OriginClusterId = &routed
 
-	resp, err := ResolveIngestEndpoints(context.Background(), newIngestDeps(52.0, 4.0, "central-primary"), streamCtx, "sk")
+	resp, err := resolveIngestForTest(context.Background(), 52.0, 4.0, "", streamCtx, "sk")
 	if err != nil {
 		t.Fatalf("an unclaimed publish was pinned to its tenant route: %v", err)
 	}
@@ -722,7 +814,7 @@ func TestResolveIngestEndpoints_UsesHealthyClusterWhenDefaultIsDegraded(t *testi
 	routed := "degraded-media"
 	streamCtx.OriginClusterId = &routed
 
-	resp, err := ResolveIngestEndpoints(context.Background(), newIngestDeps(52.0, 4.0, "central-primary"), streamCtx, "sk")
+	resp, err := resolveIngestForTest(context.Background(), 52.0, 4.0, "", streamCtx, "sk")
 	if err != nil {
 		t.Fatalf("a healthy authorized cluster was not used: %v", err)
 	}
@@ -744,7 +836,48 @@ func TestResolveIngestEndpoints_ExcludesClusterMissingFromEnvelope(t *testing.T)
 	streamCtx := admittedCtx("t1")
 	streamCtx.ClusterPeers = healthyPeers("other-media")
 
-	if _, err := ResolveIngestEndpoints(context.Background(), newIngestDeps(52.0, 4.0, "central-primary"), streamCtx, "sk"); err == nil {
+	if _, err := resolveIngestForTest(context.Background(), 52.0, 4.0, "", streamCtx, "sk"); err == nil {
 		t.Fatal("a cluster absent from Commodore's envelope was offered")
 	}
+}
+
+// ingestClusterAllowed mirrors the envelope rule the federation ingest
+// resolver enforces through the active-lease fence: a live claim pins the
+// publish to the cluster already ingesting, and an unpinned publish must land
+// on a healthy media-plane cluster inside the tenant's peer envelope. It lives
+// here because these fixtures stand in for that resolver.
+func ingestClusterAllowed(streamCtx *commodorepb.ResolveStreamContextResponse, candidateClusterID string) bool {
+	if streamCtx == nil {
+		return false
+	}
+	candidateClusterID = strings.TrimSpace(candidateClusterID)
+	if candidateClusterID == "" {
+		return false
+	}
+	pinned := strings.TrimSpace(streamCtx.GetActiveIngestClusterId())
+	if pinned != "" {
+		// The active lease is the durable placement decision. Commodore only
+		// issues it to a live-ingest-capable cluster; transient health filtering
+		// may remove that cluster from this response, but cannot authorize a
+		// different owner or revoke the existing one.
+		return candidateClusterID == pinned
+	}
+	for _, peer := range streamCtx.GetClusterPeers() {
+		if strings.TrimSpace(peer.GetClusterId()) != candidateClusterID {
+			continue
+		}
+		clusterType := strings.ToLower(strings.TrimSpace(peer.GetClusterType()))
+		// Connected, unpinned routing must positively identify a media-plane
+		// cluster. The signed grant and its local projection both retain the
+		// normalized cluster type.
+		if clusterType == "" || !models.ClusterTypeCanOwnLiveIngest(clusterType) {
+			return false
+		}
+		// Commodore has already dropped unhealthy peers from this envelope, so
+		// this is defence in depth rather than the primary check — but an
+		// unhealthy cluster that did reach here would be a publisher sent
+		// somewhere PUSH_REWRITE refuses. Unknown health fails closed.
+		return strings.EqualFold(strings.TrimSpace(peer.GetHealthStatus()), "healthy")
+	}
+	return false
 }

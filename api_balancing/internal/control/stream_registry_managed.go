@@ -2,6 +2,7 @@ package control
 
 import (
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
+	"google.golang.org/protobuf/proto"
 	"maps"
 	"sync"
 )
@@ -170,6 +171,9 @@ func (r *StreamRegistry) ManagedSetVerifiedFromHeartbeat(nodeID string, applied 
 			alwaysOn:     a.GetAlwaysOn(),
 			ingestMode:   a.GetIngestMode(),
 			internalName: a.GetName(),
+			tenantID:     a.GetTenantId(),
+			admission:    proto.CloneOf(a.GetPlacementAdmission()),
+			retired:      a.GetPlacementRetired(),
 		}
 	}
 	r.managed.mu.Lock()
@@ -195,7 +199,7 @@ func (r *StreamRegistry) ManagedVerifiedMatches(nodeID, streamID string, desired
 	if !ok {
 		return false
 	}
-	return got.applyKey() == desired.applyKey()
+	return !got.retired && got.applyKey() == desired.applyKey() && (desired.admission == nil || proto.Equal(got.admission, desired.admission))
 }
 
 // ManagedVerifiedPresent reports presence-only: any record of the stream
@@ -240,6 +244,9 @@ func (r *StreamRegistry) ManagedHydrateForNode(nodeID string, applied []*ipcpb.A
 			alwaysOn:     a.GetAlwaysOn(),
 			ingestMode:   a.GetIngestMode(),
 			internalName: a.GetName(),
+			tenantID:     a.GetTenantId(),
+			admission:    proto.CloneOf(a.GetPlacementAdmission()),
+			retired:      a.GetPlacementRetired(),
 		}
 	}
 }

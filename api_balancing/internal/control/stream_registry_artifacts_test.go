@@ -209,34 +209,26 @@ func TestUpsertFederatedSource_AppearsInSourceCache(t *testing.T) {
 	if !ok {
 		t.Fatal("federated source not visible by internal_name")
 	}
-	if e.OriginClusterID != "cluster-B" {
-		t.Errorf("OriginClusterID = %q (origin defaults to peer cluster)", e.OriginClusterID)
+	// An advertisement that names no origin leaves it unknown. Substituting the
+	// location key would assert a media cluster the sender never claimed.
+	if e.OriginClusterID != "" {
+		t.Errorf("OriginClusterID = %q, want empty when the ad names none", e.OriginClusterID)
 	}
 	if !e.IsLiveAnywhere() {
 		t.Error("IsLiveAnywhere = false, want true (peer ad said live)")
 	}
-	if e.IsLocallyOwned("cluster-A") {
-		t.Error("IsLocallyOwned(cluster-A) = true; federated entries should not appear locally-owned")
-	}
-	peerLoc, ok := e.Locations["cluster-B"]
-	if !ok {
+	if _, ok := e.Locations["cluster-B"]; !ok {
 		t.Fatal("no Location for cluster-B")
-	}
-	if !peerLoc.IsOrigin {
-		t.Error("peer Location.IsOrigin = false, want true")
 	}
 }
 
-// TestUpsertFederatedSource_RelayLocationIsNotOrigin guards multi-hop
-// federation: when A originates and B re-advertises after replicating
-// from A, the receiver (C) must record B's Location as IsOrigin=false
-// so origin-pull cascades terminate at A, not at the nearest relay.
-// Previously every peer Location was hard-coded IsOrigin=true.
-func TestUpsertFederatedSource_RelayLocationIsNotOrigin(t *testing.T) {
+// The advertised origin cluster is preserved as sent. It is a media cluster and
+// the location key is the advertising cell, so the receiver must not substitute
+// one for the other; relay termination is decided per edge, not per location.
+func TestUpsertFederatedSource_PreservesAdvertisedOriginCluster(t *testing.T) {
 	r := NewStreamRegistry(nil, "cluster-C", time.Minute)
 
-	// Peer B advertises a stream whose actual origin is cluster A.
-	r.UpsertFederatedSource("cluster-B", StreamEntry{
+	r.UpsertFederatedSource("cell-B", StreamEntry{
 		InternalName:    "stream-relayed",
 		OriginClusterID: "cluster-A",
 	}, Location{IsLiveNow: true})
@@ -246,25 +238,10 @@ func TestUpsertFederatedSource_RelayLocationIsNotOrigin(t *testing.T) {
 		t.Fatal("entry missing")
 	}
 	if e.OriginClusterID != "cluster-A" {
-		t.Errorf("OriginClusterID = %q, want cluster-A (preserved from ad, not overwritten with peer)", e.OriginClusterID)
+		t.Errorf("OriginClusterID = %q, want cluster-A (preserved from ad, not overwritten with the location key)", e.OriginClusterID)
 	}
-	if loc := e.Locations["cluster-B"]; loc.IsOrigin {
-		t.Error("Location[cluster-B].IsOrigin = true; want false (cluster-B is a relay)")
-	}
-
-	// Now A itself advertises the stream as its own origin. A's Location
-	// should be marked IsOrigin=true alongside B's relay Location.
-	r.UpsertFederatedSource("cluster-A", StreamEntry{
-		InternalName:    "stream-relayed",
-		OriginClusterID: "cluster-A",
-	}, Location{IsLiveNow: true})
-
-	e, _ = r.lookup(r.byInt, "stream-relayed")
-	if loc := e.Locations["cluster-A"]; !loc.IsOrigin {
-		t.Error("Location[cluster-A].IsOrigin = false; want true (cluster-A is the origin per the ad)")
-	}
-	if loc := e.Locations["cluster-B"]; loc.IsOrigin {
-		t.Error("Location[cluster-B].IsOrigin flipped to true; should stay false")
+	if _, ok := e.Locations["cell-B"]; !ok {
+		t.Fatal("location not filed under the advertising cell")
 	}
 }
 

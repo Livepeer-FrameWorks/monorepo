@@ -46,6 +46,27 @@ func FoghornBalancerBaseForNode(clusterID, nodeID string) string {
 	return u.String()
 }
 
+// FoghornBalancerSourceForNode is the capability URL a STREAM_SOURCE trigger
+// hands back as balance:<url>. MistInBalancer appends only ?source=<stream>,
+// and the public compatibility route grants a capability exactly one
+// operation, source lookup for its own node, so the /source/by-node/<node>
+// path must already be part of the returned URL (Helmsman appends the same
+// suffix to the base it receives at registration).
+func FoghornBalancerSourceForNode(clusterID, nodeID string) string {
+	base := FoghornBalancerBaseForNode(clusterID, nodeID)
+	if base == "" {
+		return ""
+	}
+	u, err := url.Parse(base)
+	if err != nil {
+		return ""
+	}
+	nodeID = strings.TrimSpace(nodeID)
+	u.Path = strings.TrimRight(u.Path, "/") + "/source/by-node/" + nodeID
+	u.RawPath = strings.TrimRight(u.EscapedPath(), "/") + "/source/by-node/" + url.PathEscape(nodeID)
+	return u.String()
+}
+
 // VerifyBalancerCapabilityPath validates a public Mist compatibility request,
 // returns its authenticated node and cluster, and strips the capability prefix
 // back to the compatibility path. The cluster is signed into the URL so a

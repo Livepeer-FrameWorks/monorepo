@@ -537,6 +537,10 @@ func (r *artifactRepositoryDB) upsertArtifactsOnce(ctx context.Context, nodeID s
 		var priorOrphaned, priorComplete bool
 		priorExisted := true
 		writable, lockErr := lockPlacementWriteAgainstDeletion(ctx, qtx, a.ArtifactHash, nodeID, a.ReportedAtMs)
+		if errors.Is(lockErr, sql.ErrNoRows) {
+			// Inventory can include files whose authoritative artifact row is absent.
+			continue
+		}
 		if lockErr != nil {
 			return lockErr
 		}

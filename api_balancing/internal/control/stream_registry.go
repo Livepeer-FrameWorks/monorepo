@@ -88,6 +88,7 @@ func RuntimeNameFor(mode IngestMode, internalName string) string {
 // local so federation callers don't have to import federation types.
 type EdgeCandidate struct {
 	NodeID      string
+	ClusterID   string
 	BaseURL     string
 	DTSCURL     string
 	IsOrigin    bool
@@ -97,11 +98,15 @@ type EdgeCandidate struct {
 	GeoLat      float64
 	GeoLon      float64
 	BufferState string
-	// RAMUsed/RAMMax mirror the ad's ram fields. Zero RAMMax means the peer
-	// predates the fields; remote-edge scoring rejects such candidates, and
-	// the play path falls back to the QueryStream fan-out.
-	RAMUsed uint64
-	RAMMax  uint64
+	// RAMUsed/RAMMax mirror the ad's ram fields. They fed the legacy remote-edge
+	// scorer and currently have no consumer: cross-cell routing asks the peer's
+	// placement service rather than scoring cached peer telemetry locally.
+	RAMUsed          uint64
+	RAMMax           uint64
+	SourceGeneration string
+	SourceRevision   int64
+	SourceObservedAt int64
+	DTSCObservedAt   int64
 }
 
 // Location is a per-cluster view of a stream — local or federated. Each
@@ -110,10 +115,9 @@ type EdgeCandidate struct {
 // are serving or pulling a copy.
 type Location struct {
 	ClusterID string
-	// IsOrigin is true if this cluster is the source/ingest cluster for
-	// the stream. Exactly one Location across federation should carry
-	// IsOrigin=true.
-	IsOrigin bool
+	// InboundPulls is destination-keyed; cleared attempts retain revision tombstones so
+	// delayed HA snapshots cannot resurrect a pull or overwrite another destination.
+	InboundPulls map[string]InboundPull
 	// IsLiveNow reflects current liveness in this specific cluster.
 	// For the local cluster, populated by read-through from
 	// StreamStateManager. For peer clusters, populated from the most
@@ -151,6 +155,9 @@ type Location struct {
 	// FROM this Location. Only populated when this Location is the
 	// origin (ClusterID == origin cluster).
 	OutboundPullers []OutboundPull
+	// OutboundRevision orders the complete outbound set, including an empty set.
+	// It is independent of source ownership and Location.UpdatedAt.
+	OutboundRevision uint64
 	// UpdatedAt is the wall-clock time this Location was last refreshed.
 	UpdatedAt time.Time
 
@@ -212,11 +219,17 @@ type Location struct {
 // OutboundPull describes one peer cluster that is pulling the stream
 // from this Location.
 type OutboundPull struct {
-	DestClusterID string
-	DestNodeID    string
-	SourceNodeID  string
-	DTSCURL       string
-	CreatedAt     time.Time
+	TenantID             string
+	AttemptID            string
+	SourceMediaClusterID string
+	SourceGeneration     string
+	SourceRevision       int64
+	DestClusterID        string
+	DestNodeID           string
+	SourceNodeID         string
+	DTSCURL              string
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
 }
 
 // StreamEntry is the registry's canonical view of a source stream. One
@@ -273,13 +286,6 @@ func (e StreamEntry) FederatedLocations(localClusterID string) []Location {
 	return out
 }
 
-// IsLocallyOwned returns true if the local cluster is the stream's
-// origin/ingest cluster.
-func (e StreamEntry) IsLocallyOwned(localClusterID string) bool {
-	loc, ok := e.Locations[localClusterID]
-	return ok && loc.IsOrigin
-}
-
 // IsLiveAnywhere returns true if any cluster reports the stream live.
 func (e StreamEntry) IsLiveAnywhere() bool {
 	for _, loc := range e.Locations {
@@ -333,6 +339,19 @@ type LivePresence interface {
 // Foghorn. Every site that needs a Mist source stream name (clip, DVR,
 // federation DTSC construction, STREAM_SOURCE bare branch, thumbnail
 // keying) must go through this registry. Misses fail closed.
+// LocalLocationKey is the key this registry files its own location under. It is
+// this Foghorn's CLUSTER_ID, while a federated location from another cell is
+// filed under that cell's control cell id, so the Locations map holds two
+// namespaces by construction and neither is a media cluster. Callers scanning
+// for peers must skip this key, and must not compare any key against a cluster
+// id — see the two-key skip the placement readers use for the same map.
+func (r *StreamRegistry) LocalLocationKey() string {
+	if r == nil {
+		return ""
+	}
+	return r.clusterID
+}
+
 type StreamRegistry struct {
 	client    streamRegistryCommodore
 	clusterID string
@@ -489,142 +508,6 @@ func (r *StreamRegistry) SetLivePresence(p LivePresence) {
 	r.live = p
 }
 
-// MarkReplicating records that this cluster is currently pulling the
-// source stream from a peer cluster, with the peer-provided DTSC URL.
-// Updates the local Location's ReplicatingFrom + PullDTSCURL fields.
-// Called from origin-pull dispatch paths after the source cluster acks.
-// Idempotent.
-func (r *StreamRegistry) MarkReplicating(internalName, peerClusterID, pullDTSCURL, destNodeID, destNodeBaseURL, pullSourceNodeID string) {
-	internalName = sourceInternalKey(internalName)
-	if internalName == "" {
-		return
-	}
-	r.mu.Lock()
-	ce, ok := r.byInt[internalName]
-	if !ok {
-		// Replication can be marked before any resolver populates the
-		// stream's identity (the dest cluster pulls from a peer before
-		// the stream becomes locally visible). Create a minimal entry so
-		// /balance and /source can still find the DTSC URL while the
-		// resolver catches up.
-		ce = &cachedEntry{
-			entry: StreamEntry{
-				InternalName: internalName,
-				Locations:    make(map[string]Location),
-				HydratedAt:   time.Now(),
-			},
-			cached: time.Now(),
-		}
-		r.byInt[internalName] = ce
-	}
-	if ce.entry.Locations == nil {
-		ce.entry.Locations = make(map[string]Location)
-	}
-	loc := ce.entry.Locations[r.clusterID]
-	loc.ClusterID = r.clusterID
-	loc.ReplicatingFrom = peerClusterID
-	loc.PullDTSCURL = pullDTSCURL
-	loc.DestNodeID = destNodeID
-	loc.DestNodeBaseURL = destNodeBaseURL
-	loc.PullSourceNodeID = pullSourceNodeID
-	loc.IsLiveNow = true
-	if destNodeID != "" {
-		loc.SourceNodes = []string{destNodeID}
-	}
-	loc.UpdatedAt = time.Now()
-	ce.entry.Locations[r.clusterID] = loc
-	ce.cached = time.Now()
-	snapshot := ce.entry
-	r.mu.Unlock()
-	r.publishUpsertSource(snapshot)
-}
-
-// RecordOutboundPull records that a peer cluster is pulling this stream
-// from the local cluster (we are the source). Idempotent on
-// (DestClusterID, DestNodeID). Creates a minimal entry when none
-// exists so a NotifyOriginPull racing ahead of identity hydration
-// still lands durably — mirrors MarkReplicating's behavior on the
-// dest side. Without the create, source clusters could silently ack
-// a peer pull they have no record of.
-func (r *StreamRegistry) RecordOutboundPull(internalName string, pull OutboundPull) {
-	internalName = sourceInternalKey(internalName)
-	if internalName == "" || pull.DestClusterID == "" {
-		return
-	}
-	if pull.CreatedAt.IsZero() {
-		pull.CreatedAt = time.Now()
-	}
-	var snapshot StreamEntry
-	r.mu.Lock()
-	ce, ok := r.byInt[internalName]
-	if !ok {
-		ce = &cachedEntry{
-			entry: StreamEntry{
-				InternalName: internalName,
-				Locations:    make(map[string]Location),
-				HydratedAt:   time.Now(),
-			},
-			cached: time.Now(),
-		}
-		r.byInt[internalName] = ce
-	}
-	if ce.entry.Locations == nil {
-		ce.entry.Locations = make(map[string]Location)
-	}
-	loc := ce.entry.Locations[r.clusterID]
-	loc.ClusterID = r.clusterID
-	loc.IsOrigin = true
-	replaced := false
-	for i, existing := range loc.OutboundPullers {
-		if existing.DestClusterID == pull.DestClusterID && existing.DestNodeID == pull.DestNodeID {
-			loc.OutboundPullers[i] = pull
-			replaced = true
-			break
-		}
-	}
-	if !replaced {
-		loc.OutboundPullers = append(loc.OutboundPullers, pull)
-	}
-	loc.UpdatedAt = time.Now()
-	ce.entry.Locations[r.clusterID] = loc
-	ce.cached = time.Now()
-	snapshot = ce.entry
-	r.mu.Unlock()
-	r.publishUpsertSource(snapshot)
-}
-
-// ClearOutboundPull drops one outbound-pull record by (destCluster, destNode).
-func (r *StreamRegistry) ClearOutboundPull(internalName, destClusterID, destNodeID string) {
-	internalName = sourceInternalKey(internalName)
-	if internalName == "" {
-		return
-	}
-	var snapshot StreamEntry
-	var changed bool
-	r.mu.Lock()
-	if ce, ok := r.byInt[internalName]; ok {
-		if loc, present := ce.entry.Locations[r.clusterID]; present && len(loc.OutboundPullers) > 0 {
-			filtered := loc.OutboundPullers[:0]
-			for _, p := range loc.OutboundPullers {
-				if p.DestClusterID == destClusterID && p.DestNodeID == destNodeID {
-					continue
-				}
-				filtered = append(filtered, p)
-			}
-			loc.OutboundPullers = filtered
-			loc.UpdatedAt = time.Now()
-			ce.entry.Locations[r.clusterID] = loc
-			ce.cached = time.Now()
-			snapshot = ce.entry
-			changed = true
-		}
-	}
-	r.mu.Unlock()
-	if changed {
-		r.publishUpsertSource(snapshot)
-	}
-}
-
 // ClearReplicating unmarks an in-flight replication when the upstream
 // pull terminates or expires.
 func (r *StreamRegistry) ClearReplicating(internalName string) {
@@ -642,83 +525,29 @@ func (r *StreamRegistry) clearReplicating(internalName, nodeID string) bool {
 	if internalName == "" {
 		return false
 	}
-	var snapshot StreamEntry
-	var changed bool
-	r.mu.Lock()
-	ce, ok := r.byInt[internalName]
-	if ok {
-		if loc, present := ce.entry.Locations[r.clusterID]; present {
-			if nodeID != "" && loc.DestNodeID != "" && loc.DestNodeID != nodeID {
-				r.mu.Unlock()
-				return false
-			}
-			loc.ReplicatingFrom = ""
-			loc.PullDTSCURL = ""
-			loc.DestNodeID = ""
-			loc.DestNodeBaseURL = ""
-			loc.PullSourceNodeID = ""
-			loc.IsLiveNow = false
-			loc.SourceNodes = nil
-			loc.UpdatedAt = time.Now()
-			ce.entry.Locations[r.clusterID] = loc
-			ce.cached = time.Now()
-			snapshot = ce.entry
-			changed = true
-		}
+	r.mu.RLock()
+	ce := r.byInt[internalName]
+	var pulls []InboundPull
+	if ce != nil {
+		pulls = activeInboundPulls(ce.entry.Locations[r.clusterID])
 	}
-	r.mu.Unlock()
-	if changed {
-		r.publishUpsertSource(snapshot)
+	r.mu.RUnlock()
+	changed := false
+	for _, pull := range pulls {
+		if nodeID != "" && pull.DestNodeID != nodeID {
+			continue
+		}
+		cleared, err := r.ClearInboundPull(context.Background(), internalName, pull.DestNodeID, pull.AttemptID)
+		if err != nil && !errors.Is(err, ErrReplicationConflict) && r.redisLogger != nil {
+			r.redisLogger.WithError(err).WithField("internal_name", internalName).Warn("Failed to clear inbound pull")
+		}
+		changed = changed || cleared
 	}
 	return changed
 }
 
-// LocalReplication returns the local cluster's replication state for the
-// given stream, or zero+false if not currently replicating. Callers use
-// this for the "are we already pulling this stream from a peer" check.
-//
-// Same invariant as lookup(): all reads of *cachedEntry must happen
-// under the lock and the returned Location must be a copy. Reading
-// ce.entry.Locations after RUnlock would race with writers
-// (MarkReplicating, ClearReplicating, sweeper) mutating the map in
-// place.
-// FederatedEdgeCandidates returns the per-peer-cluster edge candidates the
-// federation mesh has advertised for a stream, keyed by cluster ID. Only
-// Locations that are live, non-local, and refreshed within maxAge are
-// included. maxAge doubles as the liveness gate (a healthy peer re-ads
-// every 5s, so a handful of missed pushes means the data is dead). Read-only
-// and memory-only: this is the play path's pre-warmed alternative to the
-// cold QueryStream fan-out. Returned slices are copies.
-func (r *StreamRegistry) FederatedEdgeCandidates(internalName string, maxAge time.Duration) map[string][]EdgeCandidate {
-	internalName = sourceInternalKey(internalName)
-	if internalName == "" || maxAge <= 0 {
-		return nil
-	}
-	cutoff := time.Now().Add(-maxAge)
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	ce, ok := r.byInt[internalName]
-	if !ok {
-		return nil
-	}
-	var out map[string][]EdgeCandidate
-	for clusterID, loc := range ce.entry.Locations {
-		if clusterID == r.clusterID || !loc.IsLiveNow || len(loc.EdgeCandidates) == 0 {
-			continue
-		}
-		if loc.UpdatedAt.Before(cutoff) {
-			continue
-		}
-		if out == nil {
-			out = make(map[string][]EdgeCandidate)
-		}
-		copied := make([]EdgeCandidate, len(loc.EdgeCandidates))
-		copy(copied, loc.EdgeCandidates)
-		out[clusterID] = copied
-	}
-	return out
-}
-
+// LocalReplication returns a representative active pull for existence checks.
+// Exact-destination routing uses LocalReplicationForNode. Returned state is detached.
 func (r *StreamRegistry) LocalReplication(_ context.Context, internalName string) (Location, bool) {
 	internalName = sourceInternalKey(internalName)
 	if internalName == "" {
@@ -730,20 +559,12 @@ func (r *StreamRegistry) LocalReplication(_ context.Context, internalName string
 	if !ok {
 		return Location{}, false
 	}
-	loc, ok := ce.entry.Locations[r.clusterID]
-	if !ok || loc.ReplicatingFrom == "" {
+	loc := ce.entry.Locations[r.clusterID]
+	pulls := activeInboundPulls(loc)
+	if len(pulls) == 0 {
 		return Location{}, false
 	}
-	// Copy OutboundPullers slice so the returned Location's mutation
-	// can't corrupt the cached entry. Other slices/maps inside Location
-	// are not currently mutated by callers; if that changes, deep-copy
-	// here.
-	if len(loc.OutboundPullers) > 0 {
-		copied := make([]OutboundPull, len(loc.OutboundPullers))
-		copy(copied, loc.OutboundPullers)
-		loc.OutboundPullers = copied
-	}
-	return loc, true
+	return replicationView(loc, pulls[0]), true
 }
 
 func sourceInternalKey(name string) string {
@@ -758,13 +579,14 @@ func sourceInternalKey(name string) string {
 
 // AllLocalReplications returns every stream this cluster is currently
 // pulling from a peer, keyed by source-stream internal_name.
-func (r *StreamRegistry) AllLocalReplications() map[string]Location {
+func (r *StreamRegistry) AllLocalReplications() map[string][]Location {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	out := make(map[string]Location)
+	out := make(map[string][]Location)
 	for internalName, ce := range r.byInt {
-		if loc, ok := ce.entry.Locations[r.clusterID]; ok && loc.ReplicatingFrom != "" {
-			out[internalName] = loc
+		loc := ce.entry.Locations[r.clusterID]
+		for _, pull := range activeInboundPulls(loc) {
+			out[internalName] = append(out[internalName], replicationView(loc, pull))
 		}
 	}
 	return out
@@ -788,6 +610,11 @@ func (r *StreamRegistry) SweepStaleLocations(maxAge time.Duration) (locationsRem
 		revision     int64
 	}
 	var publishDeletes []revisionedDelete
+	type expiredOutbound struct {
+		internalName string
+		pull         OutboundPull
+	}
+	var expiredPulls []expiredOutbound
 
 	r.mu.Lock()
 	for internalName, ce := range r.byInt {
@@ -812,23 +639,14 @@ func (r *StreamRegistry) SweepStaleLocations(maxAge time.Duration) (locationsRem
 		localRevision := ce.entry.Locations[r.clusterID].SourceRevision
 		anyChanged := false
 		for cid, loc := range ce.entry.Locations {
-			// Prune individual OutboundPull entries older than maxAge. The
-			// parent Location's UpdatedAt is refreshed by NotifyOriginPull
-			// so the Location itself stays "fresh" while peers keep
-			// pulling — but per-pull entries need their own expiry or
-			// stale records (peer crashed, never sent stream_lifecycle
-			// gone) accumulate forever in OutboundPullers.
-			if len(loc.OutboundPullers) > 0 {
-				kept := loc.OutboundPullers[:0]
-				for _, p := range loc.OutboundPullers {
-					if p.CreatedAt.IsZero() || p.CreatedAt.After(cutoff) {
-						kept = append(kept, p)
+			// Expiry is enacted outside the memory lock against the current
+			// durable attempt, so a concurrent peer renewal cannot be erased.
+			if cid == r.clusterID {
+				for _, pull := range loc.OutboundPullers {
+					seen := outboundSeenAt(pull)
+					if !seen.IsZero() && !seen.After(cutoff) && len(expiredPulls) < 128 {
+						expiredPulls = append(expiredPulls, expiredOutbound{internalName: internalName, pull: pull})
 					}
-				}
-				if len(kept) != len(loc.OutboundPullers) {
-					loc.OutboundPullers = kept
-					ce.entry.Locations[cid] = loc
-					anyChanged = true
 				}
 			}
 			// UpdatedAt is zero for entries that were hydrated but have
@@ -846,6 +664,8 @@ func (r *StreamRegistry) SweepStaleLocations(maxAge time.Duration) (locationsRem
 			if loc.SourceActive ||
 				strings.TrimSpace(loc.OwnerNodeID) != "" ||
 				strings.TrimSpace(loc.ReplicatingFrom) != "" ||
+				len(loc.InboundPulls) > 0 ||
+				loc.OutboundRevision > 0 ||
 				len(loc.OutboundPullers) > 0 {
 				continue
 			}
@@ -869,6 +689,18 @@ func (r *StreamRegistry) SweepStaleLocations(maxAge time.Duration) (locationsRem
 	}
 	r.mu.Unlock()
 
+	expiryCtx, cancelExpiry := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelExpiry()
+	for _, expired := range expiredPulls {
+		if expiryCtx.Err() != nil {
+			break
+		}
+		pull := expired.pull
+		err := r.ClearOutboundPull(expiryCtx, expired.internalName, pull.DestClusterID, pull.DestNodeID, pull.AttemptID, cutoff)
+		if err != nil && !errors.Is(err, ErrReplicationConflict) && r.redisLogger != nil {
+			r.redisLogger.WithError(err).Warn("Failed to expire outbound pull")
+		}
+	}
 	for _, e := range publishUpserts {
 		r.publishUpsertSource(e)
 	}
@@ -1032,13 +864,7 @@ func (r *StreamRegistry) lookupEntry(m map[string]*cachedEntry, key string) (Str
 		return StreamEntry{}, false, false
 	}
 	entry := ce.entry
-	if entry.Locations != nil {
-		locs := make(map[string]Location, len(entry.Locations))
-		for k, v := range entry.Locations {
-			locs[k] = v
-		}
-		entry.Locations = locs
-	}
+	entry.Locations = cloneLocations(entry.Locations)
 	live := r.live
 	r.mu.RUnlock()
 
@@ -1216,6 +1042,7 @@ func (r *StreamRegistry) store(e StreamEntry) {
 		r.byPlay[ce.entry.PlaybackID] = ce
 	}
 	snapshot = ce.entry
+	snapshot.Locations = cloneLocations(ce.entry.Locations)
 	r.mu.Unlock()
 	r.publishUpsertSource(snapshot)
 }
@@ -1243,13 +1070,7 @@ func (r *StreamRegistry) Snapshot() []StreamEntry {
 		}
 		seen[key] = struct{}{}
 		entry := ce.entry
-		if entry.Locations != nil {
-			locs := make(map[string]Location, len(entry.Locations))
-			for k, v := range entry.Locations {
-				locs[k] = v
-			}
-			entry.Locations = locs
-		}
+		entry.Locations = cloneLocations(entry.Locations)
 		out = append(out, entry)
 	}
 	for _, ce := range r.byID {

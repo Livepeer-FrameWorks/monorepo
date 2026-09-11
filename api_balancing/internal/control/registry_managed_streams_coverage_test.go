@@ -32,7 +32,6 @@ func TestApplyRedisChange_SourceUpsertCRDTMerge(t *testing.T) {
 			Locations: map[string]Location{
 				"cluster-local": {
 					ClusterID:    "cluster-local",
-					IsOrigin:     true,
 					SourceActive: true,
 					OwnerNodeID:  "node-local",
 					UpdatedAt:    now,

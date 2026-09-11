@@ -86,27 +86,27 @@ func TestRankArtifactNodes(t *testing.T) {
 }
 
 func TestRankNodeScoresForArtifact(t *testing.T) {
-	// Intent: cold-artifact relay reads run on the LOCAL cluster's edge, so
-	// remote-cluster candidates (Remote=true) must be dropped; the rest map
-	// 1:1 into ArtifactNodeInfo and are ranked (cap 5).
+	// Intent: candidates map 1:1 into ArtifactNodeInfo, keeping the balancer's
+	// best-first order and carrying every field the endpoint builder reads.
+	// The balancer only ever ranks this cluster's own nodes, so there is no
+	// remote candidate to filter out here.
 	in := []balancer.NodeWithScore{
-		{NodeID: "local-1", Host: "h1", Score: 3, ClusterID: "media-local"},
-		{NodeID: "remote", Host: "h2", Score: 1, ClusterID: "peer-cluster", Remote: true},
-		{NodeID: "local-2", Host: "h3", Score: 1, ClusterID: "media-local"},
+		{NodeID: "node-1", Host: "h1", Score: 3, ClusterID: "media-local", GeoLatitude: 52.4, GeoLongitude: 4.9},
+		{NodeID: "node-2", Host: "h3", Score: 1, ClusterID: "media-other"},
 	}
 	got := rankNodeScoresForArtifact(in, 0, 0)
 	if len(got) != 2 {
-		t.Fatalf("remote-cluster node must be skipped: got %d nodes, want 2", len(got))
+		t.Fatalf("got %d nodes, want 2", len(got))
 	}
-	for _, n := range got {
-		if n.NodeID == "remote" {
-			t.Fatal("remote-cluster node leaked into ranking")
-		}
+	// node-1 (score 3, higher = better) ranks before node-2 (score 1).
+	if got[0].NodeID != "node-1" || got[0].Score != 3 || got[0].Host != "h1" {
+		t.Errorf("first ranked = %+v, want node-1/score3/h1", got[0])
 	}
-	// local-1 (score 3, higher = better) ranks before local-2 (score 1) —
-	// preserving the balancer's best-first order; fields mapped through.
-	if got[0].NodeID != "local-1" || got[0].Score != 3 || got[0].Host != "h1" {
-		t.Errorf("first ranked = %+v, want local-1/score3/h1", got[0])
+	if got[0].ClusterID != "media-local" || got[0].GeoLatitude != 52.4 || got[0].GeoLongitude != 4.9 {
+		t.Errorf("fields not mapped through: %+v", got[0])
+	}
+	if got[1].NodeID != "node-2" || got[1].ClusterID != "media-other" {
+		t.Errorf("second ranked = %+v, want node-2/media-other", got[1])
 	}
 }
 

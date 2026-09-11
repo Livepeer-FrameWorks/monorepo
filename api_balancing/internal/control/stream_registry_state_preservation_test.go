@@ -121,12 +121,15 @@ func TestRecordOutboundPullCreatesMinimalEntry(t *testing.T) {
 	r := NewStreamRegistry(nil, "cluster-A", time.Minute)
 	const internal = "fresh-stream"
 
-	r.RecordOutboundPull(internal, OutboundPull{
+	if _, err := r.RecordOutboundPull(context.Background(), internal, OutboundPull{
+		TenantID:      "tenant-a",
 		DestClusterID: "peer-B",
 		DestNodeID:    "edge-b-1",
 		SourceNodeID:  "edge-a-1",
 		DTSCURL:       "dtsc://edge-a-1:4200/live+fresh-stream",
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	r.mu.RLock()
 	ce, ok := r.byInt[internal]

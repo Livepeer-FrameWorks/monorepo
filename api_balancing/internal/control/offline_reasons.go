@@ -29,9 +29,8 @@ const (
 	// validation (couldn't score, malformed). Persistent.
 	OfflineInvalidUpstream = "offline:invalid_upstream"
 
-	// OfflineNotPlaced: stream eligible elsewhere but not on this
-	// cluster, AND no peer cluster is currently serving it for federation.
-	// Transient if a peer comes online or placement changes.
+	// OfflineNotPlaced: this destination cannot use the source or has no
+	// current arrangement/resolver path. Transient if placement changes.
 	OfflineNotPlaced = "offline:not_placed"
 
 	// OfflineNotRecorded: DVR token resolved but no active recording

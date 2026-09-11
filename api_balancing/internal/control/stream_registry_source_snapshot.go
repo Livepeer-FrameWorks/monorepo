@@ -1,0 +1,60 @@
+package control
+
+import "context"
+
+// SourceSnapshot returns tenant-scoped current runtime evidence without hydration
+// or a control-plane lookup. A configured shared store is authoritative: missing
+// or unavailable state cannot fall back to this replica's cached publisher.
+func (r *StreamRegistry) SourceSnapshot(ctx context.Context, tenantID, internalName string) (StreamEntry, bool, error) {
+	if r == nil || tenantID == "" || internalName == "" {
+		return StreamEntry{}, false, ErrReplicationConflict
+	}
+	e, found, err := r.currentSourceEntry(ctx, internalName)
+	if err != nil || !found {
+		return StreamEntry{}, false, err
+	}
+	if e.TenantID != tenantID {
+		return StreamEntry{}, false, ErrReplicationConflict
+	}
+	return StreamEntry{StreamID: e.StreamID, TenantID: e.TenantID, PlaybackID: e.PlaybackID,
+		InternalName: e.InternalName, IngestMode: e.IngestMode, RuntimeName: e.RuntimeName,
+		OriginClusterID: e.OriginClusterID, Locations: e.Locations}, true, nil
+}
+
+func (r *StreamRegistry) currentSourceEntry(ctx context.Context, internalName string) (StreamEntry, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return StreamEntry{}, false, err
+	}
+	if r == nil || internalName == "" {
+		return StreamEntry{}, false, ErrReplicationConflict
+	}
+	r.mu.RLock()
+	store := r.redisStore
+	var entry StreamEntry
+	var found bool
+	if store == nil {
+		if cached := r.byInt[internalName]; cached != nil {
+			entry = cached.entry
+			entry.Locations = cloneLocations(entry.Locations)
+			found = true
+		}
+	}
+	r.mu.RUnlock()
+	if store != nil {
+		var err error
+		entry, found, err = store.GetSource(ctx, internalName)
+		if err != nil {
+			return StreamEntry{}, false, err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return StreamEntry{}, false, err
+	}
+	if !found {
+		return StreamEntry{}, false, nil
+	}
+	if entry.InternalName != internalName {
+		return StreamEntry{}, false, ErrReplicationConflict
+	}
+	return entry, true, nil
+}

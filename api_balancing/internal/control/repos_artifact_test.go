@@ -85,6 +85,49 @@ func TestUpsertArtifacts_InsertsWithFKGuard(t *testing.T) {
 	}
 }
 
+func TestUpsertArtifacts_UnknownFileDoesNotPoisonInventory(t *testing.T) {
+	repo, mock := setupRepoTest(t)
+
+	mock.ExpectBegin()
+	mock.ExpectExec("UPDATE foghorn.artifacts SET").
+		WithArgs("hash-0", "", int64(0), int64(0)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectQuery("SELECT artifact_hash FROM foghorn.artifacts WHERE artifact_hash = \\$1 FOR UPDATE").
+		WithArgs("hash-0").WillReturnError(sql.ErrNoRows)
+	// UPDATE lifecycle row
+	mock.ExpectExec("UPDATE foghorn.artifacts SET").
+		WithArgs("hash-1", "", int64(0), int64(0)).
+		WillReturnResult(sqlmock.NewResult(0, 0))
+	// Prior read locks the row and drives transition detection (not present yet).
+	expectPlacementParentLock(mock)
+	expectArtifactDeletionWatermarkLock(mock, "hash-1", 0)
+	mock.ExpectQuery("SELECT role, is_orphaned, is_complete FROM foghorn.artifact_nodes.*FOR UPDATE").
+		WithArgs("hash-1", "node-1").
+		WillReturnError(sql.ErrNoRows)
+	// INSERT with WHERE EXISTS FK guard, RETURNING the inserted flag + row role/completeness.
+	mock.ExpectQuery("INSERT INTO foghorn.artifact_nodes.*WHERE EXISTS.*SELECT 1 FROM foghorn.artifacts.*RETURNING").
+		WithArgs("hash-1", "node-1", "/data/clip.mp4", int64(1024), int64(0), int64(0), int64(0), int64(0), int64(0), "cache", false).
+		WillReturnRows(sqlmock.NewRows([]string{"role", "is_complete"}).AddRow("cache", false))
+	// Newly present → durable GAINED in the same transaction.
+	expectNodeCopyOutbox(mock, "hash-1")
+	// Mark stale (no rows orphaned → no LOST).
+	mock.ExpectQuery("UPDATE foghorn.artifact_nodes.*SET is_orphaned = true.*RETURNING artifact_hash, role").
+		WithArgs("node-1").
+		WillReturnRows(sqlmock.NewRows([]string{"artifact_hash", "role"}))
+	mock.ExpectCommit()
+
+	err := repo.UpsertArtifacts(context.Background(), "node-1", []state.ArtifactRecord{
+		{ArtifactHash: "hash-0", FilePath: "/data/unknown.mp4"},
+		{ArtifactHash: "hash-1", FilePath: "/data/clip.mp4", SizeBytes: 1024},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestUpsertArtifacts_RetriesDeadlock(t *testing.T) {
 	repo, mock := setupRepoTest(t)
 

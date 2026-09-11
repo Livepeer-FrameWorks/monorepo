@@ -4,19 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"net/url"
-	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/database/foghorndb"
 	"frameworks/api_balancing/internal/state"
 
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/config"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/models"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	sharedpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/shared"
 
@@ -127,22 +124,15 @@ func localSourceProjectionCount() int {
 	return count
 }
 
-// Ingest ports are platform-wide, not per-node: no registration message
-// advertises them, and MistServer pins TSSRT to 8889 across the fleet. Names
-// match the ones the gateway already resolves infrastructure config with.
-func ingestRTMPPort() int { return config.GetEnvInt("STREAMING_RTMP_PORT", 1935) }
-func ingestSRTPort() int  { return config.GetEnvInt("STREAMING_SRT_PORT", 8889) }
-
-// maxIngestEndpoints is how many usable endpoints a response carries
-// (primary + fallbacks).
-const maxIngestEndpoints = 5
-
 // IngestDependencies carries what ingest endpoint resolution needs, mirroring
 // PlaybackDependencies on the viewer side.
 type IngestDependencies struct {
-	LB     *balancer.LoadBalancer
-	GeoLat float64
-	GeoLon float64
+	LB                *balancer.LoadBalancer
+	GeoLat            float64
+	GeoLon            float64
+	Protocol          string
+	Placement         IngestPlacementPreparer
+	PlacementRequired bool
 }
 
 // IngestDenial is a refused ingest resolution, carrying the status vocabulary
@@ -221,29 +211,18 @@ func EvaluateIngestAdmission(resp *commodorepb.ResolveStreamContextResponse) *In
 	}
 }
 
-// nodeOutputsFromState reads a node's advertised outputs from the live
-// registry, never from the database.
-func nodeOutputsFromState(nodeID string) map[string]any {
-	ns := state.DefaultManager().GetNodeState(nodeID)
-	if ns == nil {
+func freshIngestOutputs(ns *state.NodeState, now time.Time) map[string]any {
+	if ns == nil || ns.OutputsObservedAt.IsZero() || now.Before(ns.OutputsObservedAt) || !now.Before(ns.OutputsObservedAt.Add(30*time.Second)) {
 		return nil
 	}
 	return ns.Outputs
-}
-
-// nodeClusterID returns the virtual media cluster a node is registered in, or
-// "" when it is unattributed.
-func nodeClusterID(nodeID string) string {
-	if ns := state.DefaultManager().GetNodeState(nodeID); ns != nil {
-		return strings.TrimSpace(ns.ClusterID)
-	}
-	return ""
 }
 
 type ingestPublicAddress struct {
 	scheme    string
 	authority string
 	hostname  string
+	path      string
 }
 
 func parseIngestPublicAddress(raw string) (ingestPublicAddress, bool) {
@@ -256,6 +235,7 @@ func parseIngestPublicAddress(raw string) (ingestPublicAddress, bool) {
 		scheme:    u.Scheme,
 		authority: u.Host,
 		hostname:  u.Hostname(),
+		path:      u.EscapedPath(),
 	}, true
 }
 
@@ -299,28 +279,32 @@ func ingestAddressForNode(nodeID string, outputs map[string]any) (ingestPublicAd
 	return ingestPublicAddress{}, false
 }
 
-// buildIngestEndpoint renders the per-protocol ingest URLs for one node. WHIP
-// keeps the advertised HTTP scheme/authority; RTMP and SRT use fleet-wide ports
-// because node lifecycle does not advertise protocol-specific ingest ports.
-func buildIngestEndpoint(nodeID string, address ingestPublicAddress, streamKey, region, clusterID string, loadScore float64) *sharedpb.IngestEndpoint {
+// buildIngestEndpoint exposes only protocols present in this node's listener
+// report. Missing protocols stay absent, including on otherwise healthy nodes.
+func buildIngestEndpoint(nodeID string, address ingestPublicAddress, outputs map[string]any, streamKey, region, clusterID string, loadScore float64) *sharedpb.IngestEndpoint {
 	if address.scheme == "" || address.authority == "" || address.hostname == "" || strings.TrimSpace(streamKey) == "" {
 		return nil
 	}
-	escapedKey := url.PathEscape(streamKey)
-
 	baseURL := address.scheme + "://" + address.authority
-	whip := baseURL + "/webrtc/" + escapedKey
-	rtmp := "rtmp://" + net.JoinHostPort(address.hostname, strconv.Itoa(ingestRTMPPort())) + "/live/" + escapedKey
-	srt := "srt://" + net.JoinHostPort(address.hostname, strconv.Itoa(ingestSRTPort())) + "?streamid=" + url.QueryEscape(streamKey)
+	urls := mist.ResolveIngestURLs(outputs, baseURL+address.path, streamKey)
+	if urls.WHIP == "" && urls.RTMP == "" && urls.SRT == "" {
+		return nil
+	}
 
 	endpoint := &sharedpb.IngestEndpoint{
 		NodeId:    nodeID,
 		BaseUrl:   baseURL,
-		WhipUrl:   &whip,
-		RtmpUrl:   &rtmp,
-		SrtUrl:    &srt,
 		Kind:      sharedpb.IngestEndpointKind_INGEST_ENDPOINT_KIND_NODE_SPECIFIC,
 		ClusterId: clusterID,
+	}
+	if urls.WHIP != "" {
+		endpoint.WhipUrl = &urls.WHIP
+	}
+	if urls.RTMP != "" {
+		endpoint.RtmpUrl = &urls.RTMP
+	}
+	if urls.SRT != "" {
+		endpoint.SrtUrl = &urls.SRT
 	}
 	if region = strings.TrimSpace(region); region != "" {
 		endpoint.Region = &region
@@ -346,8 +330,11 @@ func ResolveIngestEndpoints(
 	streamCtx *commodorepb.ResolveStreamContextResponse,
 	streamKey string,
 ) (*sharedpb.IngestEndpointResponse, error) {
-	if deps == nil || deps.LB == nil {
+	if deps == nil {
 		return nil, fmt.Errorf("load balancer not available")
+	}
+	if deps.Protocol != "" && deps.Protocol != "whip" && deps.Protocol != "rtmp" && deps.Protocol != "srt" {
+		return nil, fmt.Errorf("unsupported ingest protocol")
 	}
 	if streamCtx == nil {
 		return nil, fmt.Errorf("stream context required")
@@ -356,122 +343,7 @@ func ResolveIngestEndpoints(
 	if tenantID == "" {
 		return nil, fmt.Errorf("stream context has no tenant; refusing to resolve ingest across the shared node pool")
 	}
-
-	lbctx := context.WithValue(ctx, ctxkeys.KeyCapability, "ingest")
-
-	// Rank every eligible node (maxNodes<=0 disables the balancer's cutoff)
-	// and stop once enough usable ones are found. Usability — a resolvable
-	// public host — is not part of the balancer's ranking, so any fixed
-	// pre-filter cutoff would report "no ingest capacity" whenever that many
-	// top-ranked nodes lacked usable outputs while a lower-ranked node would
-	// have served.
-	nodes, err := deps.LB.GetTopNodesWithScores(lbctx, "", deps.GeoLat, deps.GeoLon, make(map[string]int), "", 0, false)
-	if err != nil {
-		return nil, fmt.Errorf("no suitable ingest nodes available: %w", err)
-	}
-
-	var endpoints []*sharedpb.IngestEndpoint
-	for _, node := range nodes {
-		if len(endpoints) >= maxIngestEndpoints {
-			break
-		}
-
-		// In-memory outputs only. GetNodeOutputs falls back to a per-node
-		// database read on a background context, which on this unauthenticated
-		// path would turn one request into an unbounded, uncancellable query
-		// fan-out. A node whose outputs are not in the live registry is not a
-		// node we should be handing a publisher to anyway.
-		// The node's own authenticated cluster: an unattributed node cannot be
-		// authorized, and the predicate below fails closed on an empty cluster.
-		candidateClusterID := nodeClusterID(node.NodeID)
-		if !ingestClusterAllowed(streamCtx, candidateClusterID) {
-			continue
-		}
-
-		outputs := nodeOutputsFromState(node.NodeID)
-		address, ok := ingestAddressForNode(node.NodeID, outputs)
-		if !ok {
-			continue
-		}
-
-		endpoint := buildIngestEndpoint(
-			node.NodeID, address, streamKey, node.LocationName,
-			// One Foghorn pools nodes from many virtual clusters, so the
-			// endpoint carries the cluster the node actually belongs to —
-			// SDKs pin on this field.
-			candidateClusterID,
-			float64(node.Score),
-		)
-		if endpoint == nil {
-			continue
-		}
-		endpoints = append(endpoints, endpoint)
-	}
-
-	if len(endpoints) == 0 {
-		return nil, fmt.Errorf("no ingest-capable nodes available")
-	}
-
-	return &sharedpb.IngestEndpointResponse{
-		Primary:   endpoints[0],
-		Fallbacks: endpoints[1:],
-		Metadata: &sharedpb.IngestMetadata{
-			StreamId:         streamCtx.GetStreamId(),
-			StreamKey:        streamKey,
-			TenantId:         streamCtx.GetTenantId(),
-			RecordingEnabled: streamCtx.GetIsRecordingEnabled(),
-		},
-	}, nil
-}
-
-// ingestClusterAllowed reports whether a candidate node's virtual media
-// cluster may receive this publish.
-//
-// The bound is the cluster-peer envelope on the resolve response — the same
-// envelope playback authorizes cross-cluster candidates against. It is
-// Quartermaster's cluster↔tenant grant already narrowed by the tenant's plan
-// classes and by cluster health, so entitlement is never re-derived here; the
-// generic ClusterAccessibleForTenant predicate reads raw grants and would admit
-// a cluster the plan excludes or that has degraded.
-//
-// A live claim narrows it to one cluster: a reconnect must return to the
-// cluster already ingesting, or PUSH_REWRITE refuses it as DUPLICATE_INGEST.
-// origin_cluster_id cannot serve as that fence — it falls back to the tenant's
-// route and is always populated.
-func ingestClusterAllowed(streamCtx *commodorepb.ResolveStreamContextResponse, candidateClusterID string) bool {
-	if streamCtx == nil {
-		return false
-	}
-	candidateClusterID = strings.TrimSpace(candidateClusterID)
-	if candidateClusterID == "" {
-		return false
-	}
-	pinned := strings.TrimSpace(streamCtx.GetActiveIngestClusterId())
-	if pinned != "" {
-		// The active lease is the durable placement decision. Commodore only
-		// issues it to a live-ingest-capable cluster; transient health filtering
-		// may remove that cluster from this response, but cannot authorize a
-		// different owner or revoke the existing one.
-		return candidateClusterID == pinned
-	}
-	for _, peer := range streamCtx.GetClusterPeers() {
-		if strings.TrimSpace(peer.GetClusterId()) != candidateClusterID {
-			continue
-		}
-		clusterType := strings.ToLower(strings.TrimSpace(peer.GetClusterType()))
-		// Connected, unpinned routing must positively identify a media-plane
-		// cluster. The signed grant and its local projection both retain the
-		// normalized cluster type.
-		if clusterType == "" || !models.ClusterTypeCanOwnLiveIngest(clusterType) {
-			return false
-		}
-		// Commodore has already dropped unhealthy peers from this envelope, so
-		// this is defence in depth rather than the primary check — but an
-		// unhealthy cluster that did reach here would be a publisher sent
-		// somewhere PUSH_REWRITE refuses. Unknown health fails closed.
-		return strings.EqualFold(strings.TrimSpace(peer.GetHealthStatus()), "healthy")
-	}
-	return false
+	return resolvePreparedIngestEndpoints(ctx, deps, streamCtx, streamKey)
 }
 
 // LocallyPublishedStream is a stream whose publisher is connected to a node

@@ -113,6 +113,10 @@ type AdmissionPeerHint struct {
 	ClusterID string `json:"cluster_id"`
 	Addr      string `json:"addr"`
 	AlwaysOn  bool   `json:"always_on,omitempty"`
+	// ControlCellID is the peer's control cell from Quartermaster's routing
+	// enrichment, so cross-cell placement can address a cell from the
+	// demand-driven hint without waiting for the leader's periodic refresh.
+	ControlCellID string `json:"control_cell_id,omitempty"`
 }
 
 // AdmissionEffect is one leased durable admission obligation. The per-leg done flags reflect the

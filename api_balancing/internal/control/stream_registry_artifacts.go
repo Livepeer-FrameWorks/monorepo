@@ -329,6 +329,9 @@ func (r *StreamRegistry) UpsertLocalSource(entry StreamEntry) {
 			r.byPlay[entry.PlaybackID] = ce
 		}
 		snapshot = ce.entry
+		// The publish marshals outside the lock; sharing the live Locations map
+		// with the next advertisement's write is a fatal map iteration/write race.
+		snapshot.Locations = cloneLocations(ce.entry.Locations)
 	} else {
 		// Merge identity. Caller's data wins when previous fields are
 		// empty so a fresh PUSH_REWRITE can fill PlaybackID a prior
@@ -353,6 +356,9 @@ func (r *StreamRegistry) UpsertLocalSource(entry StreamEntry) {
 		}
 		ce.cached = time.Now()
 		snapshot = ce.entry
+		// The publish marshals outside the lock; sharing the live Locations map
+		// with the next advertisement's write is a fatal map iteration/write race.
+		snapshot.Locations = cloneLocations(ce.entry.Locations)
 	}
 	r.mu.Unlock()
 	r.publishUpsertSource(snapshot)
@@ -379,18 +385,18 @@ func (r *StreamRegistry) UpsertFederatedSource(peerClusterID string, entry Strea
 		r.withdrawFederatedSource(peerClusterID, entry.InternalName)
 		return
 	}
-	// Default missing origin to the advertising peer. Federation handlers
-	// already apply this fallback before calling, but covering it here
-	// keeps direct callers and tests consistent.
-	if entry.OriginClusterID == "" {
-		entry.OriginClusterID = peerClusterID
-	}
+	// The caller's key is the advertising cell, not a media cluster. It is
+	// stored on the location so the record knows which cell it came from; the
+	// field name predates the split and the debug view still labels it
+	// cluster_id. A missing OriginClusterID is left missing: it names a media
+	// cluster, and substituting a cell would assert an origin the sender never
+	// claimed.
 	location.ClusterID = peerClusterID
-	// IsOrigin marks whether this peer IS the stream's origin cluster, not
-	// merely a relay. Multi-hop federation (A originates, B replicates and
-	// re-advertises, C receives B's ad) needs C to record B as a relay,
-	// not an origin, so origin-pull cascades terminate at A.
-	location.IsOrigin = entry.OriginClusterID == peerClusterID
+	// Relay termination is decided per edge, on EdgeCandidate.IsOrigin, which the
+	// advertising cell sets from the node that actually holds the input. A
+	// location-level origin flag cannot be derived here: OriginClusterID is a
+	// media cluster and peerClusterID is the advertising cell, so comparing them
+	// answers a different question than the one the name implies.
 	location.UpdatedAt = time.Now()
 
 	var snapshot StreamEntry
@@ -413,6 +419,9 @@ func (r *StreamRegistry) UpsertFederatedSource(peerClusterID string, entry Strea
 			r.byPlay[entry.PlaybackID] = ce
 		}
 		snapshot = ce.entry
+		// The publish marshals outside the lock; sharing the live Locations map
+		// with the next advertisement's write is a fatal map iteration/write race.
+		snapshot.Locations = cloneLocations(ce.entry.Locations)
 	} else {
 		if entry.PlaybackID != "" && ce.entry.PlaybackID == "" {
 			ce.entry.PlaybackID = entry.PlaybackID
@@ -430,6 +439,9 @@ func (r *StreamRegistry) UpsertFederatedSource(peerClusterID string, entry Strea
 		ce.entry.Locations[peerClusterID] = location
 		ce.cached = time.Now()
 		snapshot = ce.entry
+		// The publish marshals outside the lock; sharing the live Locations map
+		// with the next advertisement's write is a fatal map iteration/write race.
+		snapshot.Locations = cloneLocations(ce.entry.Locations)
 	}
 	r.mu.Unlock()
 	r.publishUpsertSource(snapshot)
@@ -456,6 +468,7 @@ func (r *StreamRegistry) withdrawFederatedSource(peerClusterID, internalName str
 		// publishDeleteSource resolves the durable watermark to carry the tombstone.
 		ce.pendingSourceDelete = true
 		snapshot := ce.entry
+		snapshot.Locations = cloneLocations(ce.entry.Locations)
 		r.mu.Unlock()
 		if !r.publishDeleteSource(snapshot, 0) {
 			return // retained + marked; SweepStaleLocations retries the durable delete
@@ -475,6 +488,7 @@ func (r *StreamRegistry) withdrawFederatedSource(peerClusterID, internalName str
 	}
 	ce.cached = time.Now()
 	snapshot := ce.entry
+	snapshot.Locations = cloneLocations(ce.entry.Locations)
 	r.mu.Unlock()
 	r.publishUpsertSource(snapshot)
 }

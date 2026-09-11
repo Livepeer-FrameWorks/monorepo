@@ -60,22 +60,32 @@ type RedisRegistryStore struct {
 // Source writes and deletes use one Redis-side revision CAS that also appends the changelog entry.
 // The watermark survives deletion, so a delayed stale upsert or delete cannot resurrect or remove a
 // newer source after a reader restart or changelog-retention gap.
-var setSourceRevisioned = goredis.NewScript(`
-local rev = tonumber(ARGV[2])
-if rev == nil or rev < 0 then return -1 end
-local cur = tonumber(redis.call('get', KEYS[2]) or '0')
-if cur > rev or (rev == 0 and cur > 0) then return 0 end
+const sourceRevisionLua = `
+local function revision(raw)
+  if raw == '0' then return string.rep('0', 19) end
+  if not string.match(raw, '^[1-9]%d*$') or #raw > 19 or (#raw == 19 and raw > '9223372036854775807') then return nil end
+  return string.rep('0', 19 - #raw) .. raw
+end
+`
+
+var setSourceRevisioned = goredis.NewScript(sourceRevisionLua + `
+local rev = revision(ARGV[2])
+local cur = revision(redis.call('get', KEYS[2]) or '0')
+if rev == nil or cur == nil or revision(ARGV[5]) ~= rev then return -1 end
+if cur > rev then return 0 end
+if (redis.call('get', KEYS[1]) or '') ~= ARGV[6] then return 2 end
 redis.call('set', KEYS[1], ARGV[1])
 if rev > cur then redis.call('set', KEYS[2], ARGV[5]) end
 redis.call('xadd', KEYS[3], 'MAXLEN', '~', ARGV[4], '*', 'data', ARGV[3])
 return 1
 `)
 
-var deleteSourceRevisioned = goredis.NewScript(`
-local rev = tonumber(ARGV[1])
-if rev == nil or rev < 0 then return -1 end
-local cur = tonumber(redis.call('get', KEYS[2]) or '0')
+var deleteSourceRevisioned = goredis.NewScript(sourceRevisionLua + `
+local rev = revision(ARGV[1])
+local cur = revision(redis.call('get', KEYS[2]) or '0')
+if rev == nil or cur == nil or revision(ARGV[4]) ~= rev then return -1 end
 if cur > rev then return 0 end
+if (redis.call('get', KEYS[1]) or '') ~= ARGV[5] then return 2 end
 redis.call('del', KEYS[1])
 if rev > cur then redis.call('set', KEYS[2], ARGV[4]) end
 redis.call('xadd', KEYS[3], 'MAXLEN', '~', ARGV[3], '*', 'data', ARGV[2])
@@ -129,25 +139,106 @@ func (r *RedisRegistryStore) SetSourceRevisioned(ctx context.Context, entry Stre
 	if entry.InternalName == "" {
 		return false, errors.New("registry redis: source entry has empty internal_name")
 	}
+	for attempt := 0; attempt < 16; attempt++ {
+		current, raw, err := r.readSourceSnapshot(ctx, entry.InternalName)
+		if err != nil {
+			return false, err
+		}
+		merged := entry
+		merged.Locations = cloneLocations(entry.Locations)
+		for cid, previous := range current.Locations {
+			if len(previous.InboundPulls) == 0 && previous.OutboundRevision == 0 {
+				continue
+			}
+			loc := merged.Locations[cid]
+			loc = preserveOutbound(previous, loc)
+			loc.ClusterID = cid
+			loc.InboundPulls = mergeInboundPulls(previous, loc)
+			merged.Locations[cid] = syncReplicationView(loc)
+		}
+		result, err := r.compareAndSetSource(ctx, merged, change, revision, raw)
+		if err != nil || result != 2 {
+			return result == 1, err
+		}
+	}
+	return false, errors.New("registry redis: concurrent source mutations exceeded retry limit")
+}
+
+func (r *RedisRegistryStore) compareAndSetSource(ctx context.Context, entry StreamEntry, change RegistryChange, revision int64, expected string) (int64, error) {
 	payload, err := json.Marshal(entry)
 	if err != nil {
-		return false, err
+		return 0, err
 	}
+	change.Payload = payload
 	changePayload, err := json.Marshal(change)
 	if err != nil {
-		return false, err
+		return 0, err
 	}
 	result, err := setSourceRevisioned.Run(ctx, r.client,
 		[]string{r.keySource(entry.InternalName), r.keySourceRevision(entry.InternalName), r.changelog.Key()},
-		payload, revision, changePayload, r.changelog.MaxLen(), strconv.FormatInt(revision, 10),
+		payload, revision, changePayload, r.changelog.MaxLen(), strconv.FormatInt(revision, 10), expected,
 	).Int64()
 	if err != nil {
-		return false, err
+		return 0, err
 	}
 	if result < 0 {
-		return false, fmt.Errorf("registry redis: invalid source revision %d", revision)
+		return 0, fmt.Errorf("registry redis: invalid source revision %d", revision)
 	}
-	return result == 1, nil
+	return result, nil
+}
+
+func (r *RedisRegistryStore) readSourceSnapshot(ctx context.Context, internalName string) (StreamEntry, string, error) {
+	raw, err := r.client.Get(ctx, r.keySource(internalName)).Result()
+	if errors.Is(err, goredis.Nil) {
+		return StreamEntry{InternalName: internalName}, "", nil
+	}
+	if err != nil {
+		return StreamEntry{}, "", err
+	}
+	var entry StreamEntry
+	if err := json.Unmarshal([]byte(raw), &entry); err != nil {
+		return StreamEntry{}, "", err
+	}
+	if entry.InternalName != internalName {
+		return StreamEntry{}, "", errors.New("registry redis: source snapshot identity mismatch")
+	}
+	return entry, raw, nil
+}
+
+// MutateInboundPull commits the destination record and changelog atomically. The
+// callback is rerun on the latest snapshot after contention so attempt fences
+// are checked against durable state, not a lagging replica's cache.
+func (r *RedisRegistryStore) MutateInboundPull(ctx context.Context, internalName, nodeID, instance string, update func(InboundPull, bool) (InboundPull, error)) (StreamEntry, InboundPull, error) {
+	for attempt := 0; attempt < 16; attempt++ {
+		entry, raw, err := r.readSourceSnapshot(ctx, internalName)
+		if err != nil {
+			return StreamEntry{}, InboundPull{}, err
+		}
+		var revision uint64
+		for _, pull := range inboundPulls(entry.Locations[r.clusterID]) {
+			revision = max(revision, pull.Revision)
+		}
+		if revision == ^uint64(0) {
+			return StreamEntry{}, InboundPull{}, errors.New("replication revision exhausted")
+		}
+		entry, pull, err := updateInboundEntry(entry, r.clusterID, nodeID, revision+1, update)
+		if err != nil {
+			return StreamEntry{}, InboundPull{}, err
+		}
+		sourceRevision := sourceRevisionForCluster(entry, r.clusterID)
+		change := RegistryChange{InstanceID: instance, Entity: RegistryEntitySource, Operation: RegistryOpUpsert, Key: internalName, SourceRevision: sourceRevision}
+		result, err := r.compareAndSetSource(ctx, entry, change, sourceRevision, raw)
+		if err != nil {
+			return StreamEntry{}, InboundPull{}, err
+		}
+		if result == 1 {
+			return entry, pull, nil
+		}
+		if result == 0 {
+			return StreamEntry{}, InboundPull{}, ErrReplicationConflict
+		}
+	}
+	return StreamEntry{}, InboundPull{}, errors.New("replication mutation contention")
 }
 
 // DeleteSourceRevisioned atomically deletes a source and publishes a revisioned tombstone. A delete
@@ -163,17 +254,33 @@ func (r *RedisRegistryStore) DeleteSourceRevisioned(ctx context.Context, interna
 	if err != nil {
 		return false, err
 	}
-	result, err := deleteSourceRevisioned.Run(ctx, r.client,
-		[]string{r.keySource(internalName), r.keySourceRevision(internalName), r.changelog.Key()},
-		revision, changePayload, r.changelog.MaxLen(), strconv.FormatInt(revision, 10),
-	).Int64()
-	if err != nil {
-		return false, err
+	for attempt := 0; attempt < 16; attempt++ {
+		current, raw, readErr := r.readSourceSnapshot(ctx, internalName)
+		if readErr != nil {
+			return false, readErr
+		}
+		// Destination revisions remain as anti-replay watermarks, including after
+		// completion. A source-cache eviction cannot discard their tombstones.
+		for _, loc := range current.Locations {
+			if len(loc.InboundPulls) > 0 || loc.OutboundRevision > 0 {
+				return false, nil
+			}
+		}
+		result, deleteErr := deleteSourceRevisioned.Run(ctx, r.client,
+			[]string{r.keySource(internalName), r.keySourceRevision(internalName), r.changelog.Key()},
+			revision, changePayload, r.changelog.MaxLen(), strconv.FormatInt(revision, 10), raw,
+		).Int64()
+		if deleteErr != nil {
+			return false, deleteErr
+		}
+		if result < 0 {
+			return false, fmt.Errorf("registry redis: invalid source delete revision %d", revision)
+		}
+		if result != 2 {
+			return result == 1, nil
+		}
 	}
-	if result < 0 {
-		return false, fmt.Errorf("registry redis: invalid source delete revision %d", revision)
-	}
-	return result == 1, nil
+	return false, errors.New("registry redis: source eviction contention")
 }
 
 // SetArtifact persists an artifact entry. artifactHash must be non-empty.

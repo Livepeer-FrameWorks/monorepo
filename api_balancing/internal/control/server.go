@@ -63,6 +63,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/reflection"
@@ -4144,6 +4145,15 @@ func registerHealthAndReflection(srv *grpc.Server, serviceNames ...string) {
 }
 
 func appendCommonInterceptors(opts []grpc.ServerOption, cfg GRPCServerConfig) []grpc.ServerOption {
+	// Long-lived streams here (PeerChannel above all) are idle most of the time,
+	// so both ends have to ping to notice a half-open path. MinTime must sit below
+	// the client's 30s interval or the server answers a healthy peer's pings with
+	// a GOAWAY for being too aggressive.
+	opts = append(opts,
+		grpc.KeepaliveParams(keepalive.ServerParameters{Time: 30 * time.Second, Timeout: 10 * time.Second}),
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{MinTime: 15 * time.Second}),
+	)
+
 	unaryInterceptors := []grpc.UnaryServerInterceptor{
 		grpcutil.SanitizeUnaryServerInterceptor(),
 	}
@@ -4838,8 +4848,11 @@ func processMistTrigger(trigger *ipcpb.MistTrigger, session NodeSession, stream 
 	requestID := trigger.GetRequestId()
 	blocking := trigger.GetBlocking()
 	needsDurableAck := mist.IsDurableTriggerType(triggerType)
+	currentAdmissionRead := triggerType == string(mist.TriggerConnPlay) || triggerType == string(mist.TriggerStreamSource) ||
+		triggerType == string(mist.TriggerPlayRewrite) || triggerType == string(mist.TriggerUserNew)
 
-	if !controlStreamIsCurrentOrUntracked(nodeID, stream) {
+	if !controlStreamIsCurrentOrUntracked(nodeID, stream) ||
+		(currentAdmissionRead && !sourceConnectionSessionCurrent(session, stream)) {
 		incMistTrigger(triggerType, blocking, "stale_connection")
 		logger.WithFields(logging.Fields{
 			"trigger_type": triggerType,
@@ -4861,7 +4874,9 @@ func processMistTrigger(trigger *ipcpb.MistTrigger, session NodeSession, stream 
 	}
 
 	var replayEntry *blockingTriggerReplayEntry
-	if blocking && trigger.GetTriggerUuid() != "" {
+	// Admission and source resolution are current reads. Transport retries must
+	// recheck revocation and pull state rather than replay an old allow or URL.
+	if blocking && trigger.GetTriggerUuid() != "" && !currentAdmissionRead {
 		key := nodeID + "\x1f" + triggerType + "\x1f" + trigger.GetTriggerUuid()
 		entry, owner := acquireBlockingTriggerReplay(key)
 		if !owner {
@@ -4912,6 +4927,9 @@ func processMistTrigger(trigger *ipcpb.MistTrigger, session NodeSession, stream 
 
 	// Process the typed trigger directly through the handlers package
 	responseText, shouldAbort, err := mistTriggerProcessor.ProcessTypedTrigger(trigger)
+	if currentAdmissionRead && !sourceConnectionSessionCurrent(session, stream) {
+		responseText, shouldAbort, err = "", true, errStreamNotCurrent
+	}
 	if err != nil {
 		incMistTrigger(triggerType, blocking, "processed_error")
 		logger.WithFields(logging.Fields{
@@ -4983,7 +5001,7 @@ func processMistTrigger(trigger *ipcpb.MistTrigger, session NodeSession, stream 
 			response.Action = ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_USE_CONFIGURED
 		case string(mist.TriggerPushOutStart):
 			response.Action = ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_KEEP
-		case string(mist.TriggerPlayRewrite), string(mist.TriggerPushRewrite), string(mist.TriggerUserNew):
+		case string(mist.TriggerPlayRewrite), string(mist.TriggerPushRewrite), string(mist.TriggerUserNew), string(mist.TriggerConnPlay):
 			response.Action = ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_DENY
 		}
 	}

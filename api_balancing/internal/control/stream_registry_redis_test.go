@@ -109,8 +109,12 @@ func TestRedisRegistryStore_RoundTripsSource(t *testing.T) {
 		Locations: map[string]Location{
 			"cluster-test": {
 				ClusterID: "cluster-test",
-				IsOrigin:  true,
 				IsLiveNow: true,
+			},
+			"peer-X": {
+				ClusterID: "peer-X", IsLiveNow: true,
+				EdgeCandidates: []EdgeCandidate{{NodeID: "peer-node", ClusterID: "virtual-X", IsOrigin: true,
+					SourceGeneration: "peer-generation", SourceRevision: 9007199254740993, SourceObservedAt: 1800000000, DTSCObservedAt: 1800000001}},
 			},
 		},
 	}
@@ -130,14 +134,18 @@ func TestRedisRegistryStore_RoundTripsSource(t *testing.T) {
 	if got.RuntimeName != entry.RuntimeName {
 		t.Errorf("RuntimeName = %q, want %q", got.RuntimeName, entry.RuntimeName)
 	}
-	if got.Locations["cluster-test"].IsOrigin != true {
-		t.Errorf("Location IsOrigin not round-tripped")
+	if !got.Locations["cluster-test"].IsLiveNow {
+		t.Errorf("Location liveness not round-tripped")
 	}
 	if !got.RequiresAuth || !got.RequiresAuthKnown {
 		t.Errorf("auth identity not round-tripped: %+v", got)
 	}
 	if len(got.ClusterPeers) != 1 || got.ClusterPeers[0].GetClusterId() != "peer-X" {
 		t.Errorf("cluster_peers not round-tripped: %+v", got.ClusterPeers)
+	}
+	edges := got.Locations["peer-X"].EdgeCandidates
+	if len(edges) != 1 || edges[0].ClusterID != "virtual-X" || edges[0].SourceGeneration != "peer-generation" || edges[0].SourceRevision != 9007199254740993 || edges[0].SourceObservedAt != 1800000000 || edges[0].DTSCObservedAt != 1800000001 {
+		t.Fatalf("persisted peer publisher binding lost precision or identity: %+v", edges)
 	}
 }
 
@@ -278,7 +286,7 @@ func TestStreamRegistry_EnableRedisSync_RehydratesOnStartup(t *testing.T) {
 		RuntimeName:     "60546679b497415db2338cd5cae54992",
 		OriginClusterID: "cluster-test",
 		Locations: map[string]Location{
-			"cluster-test": {ClusterID: "cluster-test", IsOrigin: true},
+			"cluster-test": {ClusterID: "cluster-test"},
 		},
 		HydratedAt: time.Now(),
 	}
