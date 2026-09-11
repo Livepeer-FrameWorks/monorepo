@@ -23,6 +23,7 @@ import (
 // overrides into a single rated configuration. Currency, base price, and
 // rules are everything the rating engine needs.
 type EffectiveTier struct {
+	SubscriptionID  string
 	TierID          string
 	TierName        string
 	Currency        string
@@ -47,6 +48,20 @@ func LoadEffectiveTier(ctx context.Context, db *sql.DB, tenantID string) (*Effec
 	if db == nil {
 		return nil, errors.New("LoadEffectiveTier: nil db")
 	}
+	return loadEffectiveTier(ctx, db, tenantID)
+}
+
+// LoadEffectiveTierTx keeps subscription, tier, override and entitlement reads
+// inside the caller's transaction. A repeatable-read snapshot is required when
+// these facts must be consistent with other pricing or usage reads.
+func LoadEffectiveTierTx(ctx context.Context, tx *sql.Tx, tenantID string) (*EffectiveTier, error) {
+	if tx == nil {
+		return nil, errors.New("LoadEffectiveTierTx: nil transaction")
+	}
+	return loadEffectiveTier(ctx, tx, tenantID)
+}
+
+func loadEffectiveTier(ctx context.Context, db purserdb.DBTX, tenantID string) (*EffectiveTier, error) {
 	if tenantID == "" {
 		return nil, errors.New("LoadEffectiveTier: empty tenant_id")
 	}
@@ -80,6 +95,7 @@ func LoadEffectiveTier(ctx context.Context, db *sql.DB, tenantID string) (*Effec
 	}
 
 	return &EffectiveTier{
+		SubscriptionID:  row.SubscriptionID.String(),
 		TierID:          row.TierID.String(),
 		TierName:        row.TierName,
 		Currency:        row.Currency,
@@ -90,7 +106,7 @@ func LoadEffectiveTier(ctx context.Context, db *sql.DB, tenantID string) (*Effec
 	}, nil
 }
 
-func loadTierRules(ctx context.Context, db *sql.DB, tierID string) ([]rating.Rule, error) {
+func loadTierRules(ctx context.Context, db purserdb.DBTX, tierID string) ([]rating.Rule, error) {
 	rows, err := purserdb.New(db).ListTierPricingRules(ctx, tierID)
 	if err != nil {
 		return nil, err
@@ -106,7 +122,7 @@ func loadTierRules(ctx context.Context, db *sql.DB, tierID string) ([]rating.Rul
 	return rules, nil
 }
 
-func applyPricingOverrides(ctx context.Context, db *sql.DB, subscriptionID string, base []rating.Rule) ([]rating.Rule, error) {
+func applyPricingOverrides(ctx context.Context, db purserdb.DBTX, subscriptionID string, base []rating.Rule) ([]rating.Rule, error) {
 	rows, err := purserdb.New(db).ListSubscriptionPricingOverrides(ctx, subscriptionID)
 	if err != nil {
 		return nil, err
@@ -180,7 +196,7 @@ func applyPricingOverrides(ctx context.Context, db *sql.DB, subscriptionID strin
 	return out, nil
 }
 
-func loadTierEntitlements(ctx context.Context, db *sql.DB, tierID string) (map[string]string, error) {
+func loadTierEntitlements(ctx context.Context, db purserdb.DBTX, tierID string) (map[string]string, error) {
 	rows, err := purserdb.New(db).ListTierEntitlements(ctx, tierID)
 	if err != nil {
 		return nil, err
@@ -192,7 +208,7 @@ func loadTierEntitlements(ctx context.Context, db *sql.DB, tierID string) (map[s
 	return out, nil
 }
 
-func applyEntitlementOverrides(ctx context.Context, db *sql.DB, subscriptionID string, base map[string]string) (map[string]string, error) {
+func applyEntitlementOverrides(ctx context.Context, db purserdb.DBTX, subscriptionID string, base map[string]string) (map[string]string, error) {
 	rows, err := purserdb.New(db).ListSubscriptionEntitlementOverrides(ctx, subscriptionID)
 	if err != nil {
 		return nil, err

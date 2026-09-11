@@ -68,20 +68,27 @@ func ResolveClusterPricing(ctx context.Context, in ResolveInputs) (*ClusterPrici
 	if err != nil {
 		return nil, fmt.Errorf("load ownership for %s: %w", in.ClusterID, err)
 	}
+	return resolveClusterPricing(ctx, in.DB, in, ownership)
+}
+
+func resolveClusterPricing(ctx context.Context, db purserdb.DBTX, in ResolveInputs, ownership ownership) (*ClusterPricing, error) {
 	kind, classifyErr := classify(ownership, in.ConsumingTenantID)
 	if classifyErr != nil {
 		return nil, fmt.Errorf("classify cluster %s: %w", in.ClusterID, classifyErr)
 	}
 
-	row, err := loadHistoryRow(ctx, in.DB, in.ClusterID, in.AsOf)
+	row, err := loadHistoryRow(ctx, db, in.ClusterID, in.AsOf)
 	if err != nil {
 		return nil, fmt.Errorf("load pricing history for %s: %w", in.ClusterID, err)
 	}
 
 	out := &ClusterPricing{
 		Kind:               kind,
-		OwnerTenantID:      ownership.OwnerTenantID,
 		IsPlatformOfficial: ownership.IsPlatformOfficial,
+	}
+	if ownership.OwnerTenantID != nil {
+		owner := *ownership.OwnerTenantID
+		out.OwnerTenantID = &owner
 	}
 
 	// A tenant consuming its own cluster is self-hosted/private usage,
@@ -194,14 +201,14 @@ func loadOwnership(ctx context.Context, qm QuartermasterClient, clusterID string
 		return ownership{}, err
 	}
 	c := resp.GetCluster()
-	if c == nil {
-		return ownership{}, fmt.Errorf("cluster %s not found", clusterID)
+	if c == nil || c.GetClusterId() != clusterID {
+		return ownership{}, fmt.Errorf("cluster ownership response does not match requested cluster")
 	}
 	out := ownership{IsPlatformOfficial: c.GetIsPlatformOfficial()}
 	if owner := c.GetOwnerTenantId(); owner != "" {
 		id, err := uuid.Parse(owner)
-		if err != nil {
-			return ownership{}, fmt.Errorf("parse owner_tenant_id %q: %w", owner, err)
+		if err != nil || id == uuid.Nil || id.String() != owner {
+			return ownership{}, fmt.Errorf("invalid cluster owner tenant identity")
 		}
 		out.OwnerTenantID = &id
 	}
@@ -237,7 +244,7 @@ type historyRow struct {
 
 // loadHistoryRow fetches the pricing config effective at asOf. Returns
 // (nil, nil) when no row exists for the cluster.
-func loadHistoryRow(ctx context.Context, db *sql.DB, clusterID string, asOf time.Time) (*historyRow, error) {
+func loadHistoryRow(ctx context.Context, db purserdb.DBTX, clusterID string, asOf time.Time) (*historyRow, error) {
 	row, err := purserdb.New(db).LoadClusterPricingHistory(ctx, purserdb.LoadClusterPricingHistoryParams{
 		ClusterID:     clusterID,
 		EffectiveFrom: asOf,

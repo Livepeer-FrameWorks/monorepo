@@ -292,6 +292,7 @@ type PurserServer struct {
 type invoiceCardCheckoutFunc func(ctx context.Context, paymentID, invoiceID, tenantID string, amount decimal.Decimal, currency, requestedReturnURL string) (paymentURL, providerID string, err error)
 
 type commercialQuartermasterClient interface {
+	GetTenantEntitlement(ctx context.Context, tenantID string) (*quartermasterpb.GetTenantEntitlementResponse, error)
 	GetCluster(ctx context.Context, clusterID string) (*quartermasterpb.ClusterResponse, error)
 	GetClusterAsService(ctx context.Context, clusterID string) (*quartermasterpb.ClusterResponse, error)
 	ListClustersByOwner(ctx context.Context, ownerTenantID string, pagination *commonpb.CursorPaginationRequest) (*quartermasterpb.ListClustersResponse, error)
@@ -4301,6 +4302,7 @@ type GRPCServerConfig struct {
 
 func purserServiceOnlyMethods() []string {
 	return []string{
+		purserpb.ClusterPricingService_GetMediaPlacementQuote_FullMethodName,
 		purserpb.WebhookService_ProcessWebhook_FullMethodName,
 		purserpb.X402Service_GetPaymentRequirements_FullMethodName,
 		purserpb.X402Service_VerifyX402Payment_FullMethodName,

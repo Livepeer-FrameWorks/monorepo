@@ -38,6 +38,24 @@ func dec(s string) decimal.Decimal {
 	return d
 }
 
+func TestPlacementPricingOwnershipRejectsMismatchedOrAmbiguousIdentity(t *testing.T) {
+	zeroOwner, noncanonicalOwner := "00000000-0000-0000-0000-000000000000", "{11111111-1111-4111-8111-111111111171}"
+	for name, cluster := range map[string]*quartermasterpb.InfrastructureCluster{
+		"missing cluster":    nil,
+		"missing identity":   {IsPlatformOfficial: true},
+		"another cluster":    {ClusterId: "other", IsPlatformOfficial: true},
+		"zero owner":         {ClusterId: "requested", OwnerTenantId: &zeroOwner},
+		"noncanonical owner": {ClusterId: "requested", OwnerTenantId: &noncanonicalOwner},
+	} {
+		t.Run(name, func(t *testing.T) {
+			qm := &fakeQM{clusters: map[string]*quartermasterpb.InfrastructureCluster{"requested": cluster}}
+			if _, err := loadOwnership(context.Background(), qm, "requested"); err == nil {
+				t.Fatal("unbound ownership accepted")
+			}
+		})
+	}
+}
+
 // tierRulesEUR returns a representative tier rule set for tests.
 func tierRulesEUR() []rating.Rule {
 	return []rating.Rule{

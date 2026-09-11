@@ -331,6 +331,9 @@ func TestUpdateInvoicePaymentStatusDoesNotMarkPartiallyPaidInvoicePaid(t *testin
 	mock.ExpectQuery(`SELECT payment\.id::text AS payment_id, payment\.invoice_id::text AS invoice_id`).
 		WithArgs("tr_partial", "card").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "invoice_id", "tenant_id", "amount", "currency", "status"}).AddRow("payment-1", "invoice-1", "tenant-1", "10.00", "EUR", "pending"))
+	// Settlement reads an aggregate over sibling payments, so it serializes on
+	// the invoice first -- the same lock the payment-creation path takes.
+	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs("invoice-1").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`UPDATE purser\.billing_payments`).
 		WithArgs("confirmed", sqlmock.AnyArg(), "tr_partial", "payment-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -372,6 +375,9 @@ func TestUpdateInvoicePaymentStatusMarksInvoicePaidWhenConfirmedPaymentsCoverAmo
 	mock.ExpectQuery(`SELECT payment\.id::text AS payment_id, payment\.invoice_id::text AS invoice_id`).
 		WithArgs("tr_full", "card").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "invoice_id", "tenant_id", "amount", "currency", "status"}).AddRow("payment-2", "invoice-2", "tenant-2", "25.00", "EUR", "pending"))
+	// Settlement reads an aggregate over sibling payments, so it serializes on
+	// the invoice first -- the same lock the payment-creation path takes.
+	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs("invoice-2").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec(`UPDATE purser\.billing_payments`).
 		WithArgs("confirmed", sqlmock.AnyArg(), "tr_full", "payment-2").
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -482,7 +488,13 @@ func TestUpdateInvoicePaymentStatusRejectsSettlementEvidenceMismatch(t *testing.
 	}
 }
 
-func TestUpdateInvoicePaymentStatusConfirmedReplayIsReadOnly(t *testing.T) {
+// A redelivered webhook for an already-confirmed payment no longer returns
+// early. It re-runs the settlement recompute, because that replay is the only
+// event that recurs for a settled invoice and so the only thing that can rescue
+// one whose settlement was lost. The recompute stays harmless on the ordinary
+// path: the UPDATE only matches an invoice still pending or overdue, and
+// operator credits are only written when it changes a row.
+func TestUpdateInvoicePaymentStatusConfirmedReplayRecomputesSettlement(t *testing.T) {
 	mockDB, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherRegexp))
 	if err != nil {
 		t.Fatalf("failed to create sqlmock: %v", err)
@@ -495,6 +507,10 @@ func TestUpdateInvoicePaymentStatusConfirmedReplayIsReadOnly(t *testing.T) {
 		WithArgs("pi_replay", "card").
 		WillReturnRows(sqlmock.NewRows([]string{"id", "invoice_id", "tenant_id", "amount", "currency", "status"}).
 			AddRow("payment-1", "invoice-1", "tenant-1", "12.50", "EUR", "confirmed"))
+	mock.ExpectExec(`pg_advisory_xact_lock`).WithArgs("invoice-1").WillReturnResult(sqlmock.NewResult(0, 0))
+	// Already covered by an earlier settlement: the recompute matches no row and
+	// writes nothing, so no operator-credit work follows.
+	mock.ExpectExec(`UPDATE purser\.billing_invoices`).WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectCommit()
 
 	updated, err := s.updateInvoicePaymentStatus("stripe", "pi_replay", "invoice-1", "confirmed", providerSettlementEvidence{

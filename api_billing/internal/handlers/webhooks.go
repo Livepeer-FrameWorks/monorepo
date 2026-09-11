@@ -2298,6 +2298,20 @@ func (s *Service) updateInvoicePaymentStatus(provider, txID, invoiceID, newStatu
 	if evidence.TenantID != "" && evidence.TenantID != paymentTenantID {
 		return false, fmt.Errorf("provider payment %s tenant mismatch", txID)
 	}
+	// Settlement below asks an aggregate question — do confirmed payments now
+	// cover the invoice? — over sibling rows that concurrent webhook handlers
+	// are confirming in their own transactions. At READ COMMITTED, and with no
+	// row lock (the UPDATE's subselect guard means a non-covering sum matches
+	// zero rows and locks nothing), two confirmations that overlap each see the
+	// other still pending, each concludes the invoice is not covered, and an
+	// invoice the customer paid in full is left unpaid with nothing scheduled to
+	// look again. This is the same lock the payment-creation path already takes
+	// for the same invoice, so creation and settlement serialize together.
+	if invoiceID != "" {
+		if lockErr := queries.LockInvoicePaymentCreation(ctx, invoiceID); lockErr != nil {
+			return false, fmt.Errorf("lock invoice %s for settlement: %w", invoiceID, lockErr)
+		}
+	}
 	if newStatus == "confirmed" {
 		if evidence.AmountCents <= 0 || strings.TrimSpace(evidence.Currency) == "" {
 			return false, fmt.Errorf("provider payment %s is missing settlement amount or currency", txID)
@@ -2315,6 +2329,16 @@ func (s *Service) updateInvoicePaymentStatus(provider, txID, invoiceID, newStatu
 		}
 	}
 	if paymentStatus == newStatus {
+		// A redelivered webhook for an already-confirmed payment is the one
+		// event that can rescue an invoice whose settlement was lost, so it
+		// re-runs the recompute rather than returning early. The recompute is
+		// idempotent: the UPDATE only matches an invoice still pending or
+		// overdue, and operator credits are only written when it changes a row.
+		if newStatus == "confirmed" && invoiceID != "" {
+			if settleErr := s.settleInvoiceIfCovered(ctx, tx, queries, invoiceID, time.Now()); settleErr != nil {
+				return false, settleErr
+			}
+		}
 		if err = tx.Commit(); err != nil {
 			return false, fmt.Errorf("commit idempotent invoice payment status transaction: %w", err)
 		}
@@ -2360,26 +2384,8 @@ func (s *Service) updateInvoicePaymentStatus(provider, txID, invoiceID, newStatu
 	}
 
 	if newStatus == "confirmed" {
-		// Settlement is partial-payment-aware and same-currency only. Sum
-		// confirmed payments in the invoice's currency minus reversed
-		// amounts; the invoice flips to paid only when net confirmed
-		// payments cover the invoice amount. paid_at is set to the first
-		// time the invoice reaches fully-paid and preserved if a later
-		// refund reopens the invoice.
-		rowsAffected, updateErr := queries.MarkFullySettledBillingInvoicePaid(ctx, purserdb.MarkFullySettledBillingInvoicePaidParams{
-			PaidAt: sql.NullTime{Time: now, Valid: true}, InvoiceID: invoiceID,
-		})
-		if updateErr != nil {
-			s.logger.WithFields(logging.Fields{
-				"error":      updateErr.Error(),
-				"invoice_id": invoiceID,
-			}).Error("Failed to update invoice status")
-			return false, fmt.Errorf("failed to update invoice status: %w", updateErr)
-		}
-		if rowsAffected > 0 {
-			if creditErr := operator.ComputeAndPersistCredits(ctx, tx, invoiceID, "paid"); creditErr != nil {
-				return false, fmt.Errorf("persist operator credits: %w", creditErr)
-			}
+		if settleErr := s.settleInvoiceIfCovered(ctx, tx, queries, invoiceID, now); settleErr != nil {
+			return false, settleErr
 		}
 	}
 
@@ -2455,4 +2461,33 @@ func (s *Service) getTenantInfo(tenantID string) (*models.Tenant, error) {
 	}
 
 	return tenant, nil
+}
+
+// settleInvoiceIfCovered flips an invoice to paid once net confirmed payments in
+// its own currency cover the amount, and accrues operator credits when it does.
+// Settlement is partial-payment-aware and same-currency only; paid_at records
+// the first time the invoice reached fully-paid and is preserved if a later
+// refund reopens it.
+//
+// The caller must already hold the invoice's advisory lock: this reads an
+// aggregate over sibling payment rows, and a concurrent confirmation that has
+// not committed would otherwise make it conclude the invoice is short.
+func (s *Service) settleInvoiceIfCovered(ctx context.Context, tx *sql.Tx, queries *purserdb.Queries, invoiceID string, now time.Time) error {
+	rowsAffected, err := queries.MarkFullySettledBillingInvoicePaid(ctx, purserdb.MarkFullySettledBillingInvoicePaidParams{
+		PaidAt: sql.NullTime{Time: now, Valid: true}, InvoiceID: invoiceID,
+	})
+	if err != nil {
+		s.logger.WithFields(logging.Fields{
+			"error":      err.Error(),
+			"invoice_id": invoiceID,
+		}).Error("Failed to update invoice status")
+		return fmt.Errorf("failed to update invoice status: %w", err)
+	}
+	if rowsAffected == 0 {
+		return nil
+	}
+	if creditErr := operator.ComputeAndPersistCredits(ctx, tx, invoiceID, "paid"); creditErr != nil {
+		return fmt.Errorf("persist operator credits: %w", creditErr)
+	}
+	return nil
 }

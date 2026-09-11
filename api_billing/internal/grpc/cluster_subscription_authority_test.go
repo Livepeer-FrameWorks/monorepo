@@ -29,6 +29,10 @@ type commercialQuartermasterStub struct {
 	bootstrapped bool
 }
 
+func (*commercialQuartermasterStub) GetTenantEntitlement(context.Context, string) (*quartermasterpb.GetTenantEntitlementResponse, error) {
+	return nil, nil
+}
+
 func (s *commercialQuartermasterStub) GetCluster(context.Context, string) (*quartermasterpb.ClusterResponse, error) {
 	return &quartermasterpb.ClusterResponse{Cluster: s.cluster}, nil
 }
