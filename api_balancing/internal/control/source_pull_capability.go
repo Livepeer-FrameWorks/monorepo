@@ -52,7 +52,7 @@ func RedactSourcePullCredential(raw string) string {
 	// second one ride along.
 	strip := false
 	for _, value := range query[SourcePullCredentialParameter] {
-		if strings.HasPrefix(value, sourcePullCredentialPrefix) {
+		if strings.HasPrefix(value, sourcePullCredentialPrefix) || strings.HasPrefix(value, processingSourceCredentialPrefix) {
 			strip = true
 			break
 		}

@@ -34,6 +34,35 @@ type ProcessingDispatcherConfig struct {
 	JobTTL     time.Duration // Max time before dispatched job is stale (default: 5m)
 }
 
+// processingSourceCredentialTTL bounds how long a dispatched job's node-local
+// source read stays admitted at Mist. Helmsman stages a clip source within
+// 2–15 minutes of dispatch (processingSourceStageTimeout); a job that has not
+// read its source by then has already failed, and a re-dispatch mints afresh.
+const processingSourceCredentialTTL = 20 * time.Minute
+
+// attachProcessingSourceCredential mints the credential for a job whose source
+// is node-local (live buffer, rolling DVR, chapter: source_stream_name set).
+// Helmsman reads such a source from Mist as an HTTP /view cut, which Mist raises
+// PLAY_REWRITE/USER_NEW for like any viewer; the credential is what lets the
+// admitting Foghorn recognise the read as the platform's own processing read
+// rather than a viewer, so serve placement cannot refuse the ingest node its
+// own source. It is bound to the node whose Mist serves the read: the source
+// node when the job reads across nodes (source_node_id), otherwise the node the
+// job is dispatched to. A job without a node-local source gets no credential.
+func attachProcessingSourceCredential(params map[string]string, tenantID, dispatchNode, artifactHash string, now time.Time) {
+	sourceStream := strings.TrimSpace(params["source_stream_name"])
+	if sourceStream == "" {
+		return
+	}
+	readNode := strings.TrimSpace(params["source_node_id"])
+	if readNode == "" {
+		readNode = dispatchNode
+	}
+	if credential := control.ProcessingSourceCredential(tenantID, sourceStream, readNode, artifactHash, now.Add(processingSourceCredentialTTL)); credential != "" {
+		params[control.ProcessingSourceCredentialParam] = credential
+	}
+}
+
 type ProcessingDispatcher struct {
 	db              *sql.DB
 	logger          logging.Logger
@@ -317,6 +346,8 @@ func (d *ProcessingDispatcher) dispatchJob(ctx context.Context, job *processingJ
 	if job.InternalName.Valid {
 		internalName = job.InternalName.String
 	}
+
+	attachProcessingSourceCredential(params, job.TenantID, nodeID, artifactHash, time.Now())
 
 	req := &ipcpb.ProcessingJobRequest{
 		JobId:           job.JobID,

@@ -1234,6 +1234,11 @@ resolve:
 		"source_stop_unix":   strconv.FormatInt(stopUnix, 10),
 		"output_stream_name": req.StreamInternalName,
 	}
+	if sourceNodeID != "" {
+		// The node whose Mist serves the source read; the dispatcher binds the
+		// processing-source credential to it.
+		sourceParams["source_node_id"] = sourceNodeID
+	}
 	if sourceBaseURL != "" {
 		sourceParams["source_base_url"] = sourceBaseURL
 	}
