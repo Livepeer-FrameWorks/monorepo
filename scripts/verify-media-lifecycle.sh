@@ -44,9 +44,10 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 PASS=0; FAIL=0
-log()  { printf '\n[lifecycle] %s\n' "$*"; }
-ok()   { PASS=$((PASS+1)); printf '  PASS  %s\n' "$*"; }
-bad()  { FAIL=$((FAIL+1)); printf '  FAIL  %s\n' "$*"; }
+ts()   { date -u +%H:%M:%S; }
+log()  { printf '\n[lifecycle %s] %s\n' "$(ts)" "$*"; }
+ok()   { PASS=$((PASS+1)); printf '  PASS  %s  (%s)\n' "$*" "$(ts)"; }
+bad()  { FAIL=$((FAIL+1)); printf '  FAIL  %s  (%s)\n' "$*" "$(ts)"; }
 compose() { docker compose --profile two-cell "$@"; }
 gql()  { curl -s -m 30 "$BRIDGE/graphql" -H "Authorization: Bearer $API_TOKEN" -H 'Content-Type: application/json' \
            --data "$(jq -cn --arg q "$1" --argjson v "${2:-{\}}" '{query:$q, variables:$v}')"; }
@@ -131,10 +132,19 @@ for cell in "A:$loc_a" "B:$loc_b"; do
 done
 
 log "2/6 clip from the live buffer (staged on the ingest node under the tenant's serve policy)"
-NOW=$(date +%s)
-R=$(gql 'mutation($i: CreateClipInput!){ createClip(input:$i){ __typename ... on Clip{ id clipHash playbackId status } ... on ValidationError{ message } ... on NotFoundError{ message } ... on AuthError{ message } } }' \
-     "$(jq -cn --arg s "$STREAM_GID" --argjson start $((NOW-20)) '{i:{streamId:$s,title:"lifecycle clip",mode:"DURATION",startUnix:$start,duration:10}}')")
-echo "  createClip: $(echo "$R" | jq -c '.data.createClip // .errors')"
+# Clip dispatch needs Foghorn to know the live buffer covers the requested range; right
+# after a (re)started publisher that coverage is reported a little behind real time, so a
+# "no source … coverage" refusal is retried for a while, never any other error.
+create_clip() {
+  local now; now=$(date +%s)
+  R=$(gql 'mutation($i: CreateClipInput!){ createClip(input:$i){ __typename ... on Clip{ id clipHash playbackId status } ... on ValidationError{ message } ... on NotFoundError{ message } ... on AuthError{ message } } }' \
+       "$(jq -cn --arg s "$STREAM_GID" --argjson start $((now-20)) '{i:{streamId:$s,title:"lifecycle clip",mode:"DURATION",startUnix:$start,duration:10}}')")
+  echo "  createClip: $(echo "$R" | jq -c '.data.createClip // .errors')"
+  echo "$R" | jq -e '.data.createClip.__typename=="Clip"' >/dev/null 2>&1 && return 0
+  echo "$R" | grep -q "no source with at least one whole second" && return 1
+  return 0
+}
+wait_until 90 "clip request accepted (live buffer coverage known)" create_clip
 CLIP_ID=$(echo "$R" | jq -r '.data.createClip.id // empty'); CLIP_PB=$(echo "$R" | jq -r '.data.createClip.playbackId // empty'); CLIP_HASH=$(echo "$R" | jq -r '.data.createClip.clipHash // empty')
 if [ -n "$CLIP_ID" ]; then
   clip_status() { gql 'query($id:ID!){ node(id:$id){ ... on Clip{ status } } }' "$(jq -cn --arg id "$CLIP_ID" '{id:$id}')" | jq -r '.data.node.status // "?"'; }
