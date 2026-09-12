@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -1247,6 +1248,30 @@ func TestBuildLocalProcessingSourceURL_DefaultsToMKV(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("source URL = %q, want %s query", got, want)
 		}
+	}
+	if strings.Contains(got, "token=") {
+		t.Fatalf("source URL = %q, must carry no credential when the job has none", got)
+	}
+}
+
+func TestBuildLocalProcessingSourceURL_CarriesProcessingSourceCredential(t *testing.T) {
+	h := &ProcessingJobHandler{mistServerURL: "http://mistserver:4242/api2"}
+	req := &ipcpb.ProcessingJobRequest{Params: map[string]string{
+		"source_kind":        "live",
+		"source_stream_name": "live+stream-1",
+		"source_start_unix":  "100",
+		"source_stop_unix":   "130",
+		"source_credential":  "fwproc.abc123.1800000000.c2ln",
+	}}
+
+	got := h.buildLocalProcessingSourceURL(req)
+
+	u, err := url.Parse(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Query().Get("token") != "fwproc.abc123.1800000000.c2ln" || len(u.Query()["token"]) != 1 {
+		t.Fatalf("source URL = %q, want the job's processing-source credential as its single token", got)
 	}
 }
 

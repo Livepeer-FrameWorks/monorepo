@@ -68,6 +68,12 @@ func (h *ProcessingJobHandler) buildLocalProcessingSourceURL(req *ipcpb.Processi
 	// from a live stream is delivered at 1x media speed, so staging takes
 	// about as long as the clip itself.
 	query.Set("rate", "0")
+	// Foghorn's processing-source credential: Mist raises PLAY_REWRITE for this
+	// read like for a viewer, and the credential is what admits it as the
+	// platform's own read instead of a viewer subject to serve placement.
+	if credential := strings.TrimSpace(params["source_credential"]); credential != "" {
+		query.Set("token", credential)
+	}
 	if params["source_kind"] == "live" {
 		query.Set("startunix", strconv.FormatInt(startUnix-time.Now().Unix(), 10))
 		query.Set("duration", strconv.FormatInt(stopUnix-startUnix, 10))
