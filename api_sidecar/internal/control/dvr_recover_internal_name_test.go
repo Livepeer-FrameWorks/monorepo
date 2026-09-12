@@ -74,7 +74,7 @@ func TestStartRecordingPersistsInternalNameThenRecoveryResolves(t *testing.T) {
 		mistClient: &fakeMistClient{pushListItems: []mist.PushInfo{{
 			ID:         7,
 			StreamName: "live+" + internalName,
-			TargetURI:  filepath.Join(segmentsDir, "$segmentCounter.ts") + "#m3u8=../" + dvrHash + ".m3u8",
+			TargetURI:  filepath.Join(segmentsDir, "$segmentCounter.ts") + "?m3u8=../" + dvrHash + ".m3u8",
 		}}},
 	}
 	withTestDVRManager(t, dm2)
@@ -255,7 +255,7 @@ func TestStartRecordingAdoptsExactRetryWithLivePush(t *testing.T) {
 	fake := &fakeMistClient{pushListItems: []mist.PushInfo{{
 		ID:         11,
 		StreamName: "live+" + internalName,
-		TargetURI:  filepath.Join(outputDir, "segments", "$segmentCounter.ts") + "#m3u8=../" + dvrHash + ".m3u8",
+		TargetURI:  filepath.Join(outputDir, "segments", "$segmentCounter.ts") + "?m3u8=../" + dvrHash + ".m3u8",
 	}}}
 	const sourceURL = "dtsc://remote-node/live+" + internalName
 	ClearDVRSourceOverride("live+" + internalName)
@@ -452,7 +452,7 @@ func TestRecoverActiveDVRJobsFromMist_MissingOrCorruptMetadataIsNotRecovered(t *
 		mistClient: &fakeMistClient{pushListItems: []mist.PushInfo{{
 			ID:         9,
 			StreamName: "live+" + realName,
-			TargetURI:  filepath.Join(segmentsDir, "$segmentCounter.ts") + "#m3u8=../" + dvrHash + ".m3u8",
+			TargetURI:  filepath.Join(segmentsDir, "$segmentCounter.ts") + "?m3u8=../" + dvrHash + ".m3u8",
 		}}},
 	}
 	withTestDVRManager(t, dm)
@@ -539,7 +539,7 @@ func TestDVRRestartRecoversDescriptorAndRePinsOverride(t *testing.T) {
 		mistClient: &fakeMistClient{pushListItems: []mist.PushInfo{{
 			ID:         7,
 			StreamName: runtimeName,
-			TargetURI:  filepath.Join(segmentsDir, "$segmentCounter.ts") + "#m3u8=../" + dvrHash + ".m3u8",
+			TargetURI:  filepath.Join(segmentsDir, "$segmentCounter.ts") + "?m3u8=../" + dvrHash + ".m3u8",
 		}}},
 	}
 	withTestDVRManager(t, dm2)
@@ -589,7 +589,7 @@ func (a *foreignPushFakeMist) PushList() ([]mist.PushInfo, error) {
 	return []mist.PushInfo{{
 		ID:         99,
 		StreamName: "live+SOMEONE-ELSE",
-		TargetURI:  "/storage/dvr/s/" + a.dvrHash + "/segments/$c.ts#m3u8=../" + a.dvrHash + ".m3u8",
+		TargetURI:  "/storage/dvr/s/" + a.dvrHash + "/segments/$c.ts?m3u8=../" + a.dvrHash + ".m3u8",
 	}}, nil
 }
 

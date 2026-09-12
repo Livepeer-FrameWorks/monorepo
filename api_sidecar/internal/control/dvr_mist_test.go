@@ -448,14 +448,14 @@ func TestCreateOrRecreatePush_MatchesMistExpandedDVRTarget(t *testing.T) {
 	const dvrHash = "20260526212719e6b54001bbf15619"
 	mc := &startAwareFakeMist{
 		pushIDToReturn: 77,
-		listTargetURI:  "/storage/dvr/stream-1/" + dvrHash + "/segments/27_$segmentCounter.ts#m3u8=../" + dvrHash + ".m3u8",
+		listTargetURI:  "/storage/dvr/stream-1/" + dvrHash + "/segments/27_$segmentCounter.ts?m3u8=../" + dvrHash + ".m3u8",
 	}
 	dm := newDVRManagerWithMist(t, mc)
 
 	job := &DVRJob{
 		DVRHash:    dvrHash,
 		StreamName: "dtsc://edge-eu-1.media-eu-1.frameworks.network/view/live+abc",
-		TargetURI:  "/storage/dvr/stream-1/" + dvrHash + "/segments/$minute_$segmentCounter.ts#m3u8=../" + dvrHash + ".m3u8",
+		TargetURI:  "/storage/dvr/stream-1/" + dvrHash + "/segments/$minute_$segmentCounter.ts?m3u8=../" + dvrHash + ".m3u8",
 		Logger:     logging.NewLogger(),
 	}
 
@@ -481,7 +481,7 @@ func TestCreateOrRecreatePush_AdoptsMistExpandedDVRTarget(t *testing.T) {
 			{
 				ID:         10,
 				StreamName: "live+test",
-				TargetURI:  "/storage/dvr/stream-1/" + dvrHash + "/segments/27_$segmentCounter.ts#m3u8=../" + dvrHash + ".m3u8",
+				TargetURI:  "/storage/dvr/stream-1/" + dvrHash + "/segments/27_$segmentCounter.ts?m3u8=../" + dvrHash + ".m3u8",
 			},
 		},
 		newPushID: 99,
@@ -491,7 +491,7 @@ func TestCreateOrRecreatePush_AdoptsMistExpandedDVRTarget(t *testing.T) {
 	job := &DVRJob{
 		DVRHash:    dvrHash,
 		StreamName: "live+test",
-		TargetURI:  "/storage/dvr/stream-1/" + dvrHash + "/segments/$minute_$segmentCounter.ts#m3u8=../" + dvrHash + ".m3u8",
+		TargetURI:  "/storage/dvr/stream-1/" + dvrHash + "/segments/$minute_$segmentCounter.ts?m3u8=../" + dvrHash + ".m3u8",
 		Logger:     logging.NewLogger(),
 	}
 
@@ -771,7 +771,7 @@ func (e *erroredPushFakeMist) PushStart(s, tURI string) error {
 func TestMaintainPushStatus_ErroredPushIsStoppedAndReplaced(t *testing.T) {
 	useFastInitialPushRetry(t)
 	const dvrHash = "hash-errored"
-	target := "/data/dvr/s/" + dvrHash + "/segments/$c.ts#m3u8=../" + dvrHash + ".m3u8"
+	target := "/data/dvr/s/" + dvrHash + "/segments/$c.ts?m3u8=../" + dvrHash + ".m3u8"
 	mc := &erroredPushFakeMist{pushes: []mist.PushInfo{
 		{ID: 7, StreamName: "live+x", TargetURI: target, Logs: []string{"error: DTSC connection reset"}},
 	}}
@@ -812,7 +812,7 @@ func (s *startOnceNeverVisibleFakeMist) PushStart(string, string) error     { s.
 func TestMaintainPushStatus_UnconfirmedRecreateDoesNotReissue(t *testing.T) {
 	useFastInitialPushRetry(t)
 	const dvrHash = "hash-unconfirmed"
-	target := "/data/dvr/s/" + dvrHash + "/segments/$c.ts#m3u8=../" + dvrHash + ".m3u8"
+	target := "/data/dvr/s/" + dvrHash + "/segments/$c.ts?m3u8=../" + dvrHash + ".m3u8"
 	mc := &startOnceNeverVisibleFakeMist{}
 	job := &DVRJob{
 		DVRHash: dvrHash, InternalName: "x", StreamName: "live+x", TargetURI: target, PushID: 7,

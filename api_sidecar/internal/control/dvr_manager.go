@@ -1878,7 +1878,9 @@ func dvrTargetURI(outputDir, dvrHash string, config *ipcpb.DVRConfig) string {
 	// nounlink=1 stops Mist deleting segment files when pruning the rolling
 	// playlist (segment removal is owned by the chapter reclaim sweep). Record
 	// only source A/V tracks — derived renditions make MistInHLS reject the playlist.
-	return fmt.Sprintf("%s/%s/$minute_$segmentCounter.ts#m3u8=../%s.m3u8&audio=source&video=source&subtitle=none&meta=none&split=%d&targetAge=%d&maxEntries=%d&append=1&noendlist=1&nounlink=1",
+	// Push options follow '?' (upstream Mist push-target syntax); Mist strips them
+	// from the segment filename it writes.
+	return fmt.Sprintf("%s/%s/$minute_$segmentCounter.ts?m3u8=../%s.m3u8&audio=source&video=source&subtitle=none&meta=none&split=%d&targetAge=%d&maxEntries=%d&append=1&noendlist=1&nounlink=1",
 		outputDir, "segments", dvrHash, segmentDuration, windowSeconds, maxEntries,
 	)
 }

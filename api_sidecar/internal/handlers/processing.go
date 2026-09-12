@@ -398,7 +398,10 @@ func processingPushSucceeded(evt ProcessingPushEndEvent) bool {
 
 func validateProcessingRecordingEnd(evt ProcessingRecordingEndEvent, outputPath string) error {
 	if strings.TrimSpace(evt.FilePath) != "" && strings.TrimSpace(outputPath) != "" {
-		reported := strings.Split(strings.TrimSpace(evt.FilePath), "#")[0]
+		reported := strings.TrimSpace(evt.FilePath)
+		if i := strings.IndexAny(reported, "?#"); i >= 0 {
+			reported = reported[:i]
+		}
 		if filepath.Clean(reported) != filepath.Clean(outputPath) {
 			return fmt.Errorf("recording target mismatch: got %s, want %s", evt.FilePath, outputPath)
 		}
@@ -1636,7 +1639,10 @@ func processingMuxTargetURIWithSelectors(outputPath, videoSelector, metaSelector
 	if metaSelector == "" {
 		metaSelector = "all"
 	}
-	return outputPath + "#audio=all&video=" + videoSelector + "&meta=" + metaSelector + "&subtitle=all"
+	// Mist push targets carry their options after '?' (upstream Util::startPush
+	// matches the push_urls pattern against the target up to its last '?', and
+	// the output strips the options from the filename it opens).
+	return outputPath + "?audio=all&video=" + videoSelector + "&meta=" + metaSelector + "&subtitle=all"
 }
 
 func expectedProcessingTracks(processesJSON string) processingTrackRequirements {
@@ -2072,7 +2078,13 @@ func authoritativeSourceSpanFromTracks(log *logrus.Entry, tracks []processingMet
 		}
 	}
 	if sourceTrackSpanMs < 0 {
-		log.Warn("RECORDING_END did not include a source-height video track; refusing to prove output completeness")
+		// Log what the summary did carry: without it this refusal cannot be
+		// distinguished from an empty summary or a wrong source height.
+		log.WithFields(logrus.Fields{
+			"source_height":       srcHeight,
+			"video_track_heights": videoTrackHeights(tracks),
+			"video_tracks":        len(tracks),
+		}).Warn("RECORDING_END did not include a source-height video track; refusing to prove output completeness")
 		return 0, false
 	}
 	if readinessSpanMs > sourceTrackSpanMs {

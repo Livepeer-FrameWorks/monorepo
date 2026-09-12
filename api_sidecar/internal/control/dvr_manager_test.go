@@ -210,7 +210,7 @@ segments/seg0.ts
 		pushListItems: []mist.PushInfo{{
 			ID:         42,
 			StreamName: "live+internal",
-			TargetURI:  filepath.Join(outputDir, "segments", "$segmentCounter.ts") + "#m3u8=../" + dvrHash + ".m3u8",
+			TargetURI:  filepath.Join(outputDir, "segments", "$segmentCounter.ts") + "?m3u8=../" + dvrHash + ".m3u8",
 		}},
 	}
 	dm := &DVRManager{

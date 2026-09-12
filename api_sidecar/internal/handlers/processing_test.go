@@ -950,7 +950,7 @@ func TestGenerateDTSHForPathRejectsEmptyTrackSidecar(t *testing.T) {
 
 func TestProcessingMuxTargetURISelectsAllTracks(t *testing.T) {
 	got := processingMuxTargetURI("/var/lib/mistserver/recordings/vod/hash.mkv")
-	want := "/var/lib/mistserver/recordings/vod/hash.mkv#audio=all&video=all&meta=all&subtitle=all"
+	want := "/var/lib/mistserver/recordings/vod/hash.mkv?audio=all&video=all&meta=all&subtitle=all"
 	if got != want {
 		t.Fatalf("target URI = %q, want %q", got, want)
 	}
@@ -958,7 +958,7 @@ func TestProcessingMuxTargetURISelectsAllTracks(t *testing.T) {
 
 func TestProcessingMuxTargetURIWithVideoSelector(t *testing.T) {
 	got := processingMuxTargetURIWithVideo("/var/lib/mistserver/recordings/vod/hash.mkv", "i7,i8")
-	want := "/var/lib/mistserver/recordings/vod/hash.mkv#audio=all&video=i7,i8&meta=all&subtitle=all"
+	want := "/var/lib/mistserver/recordings/vod/hash.mkv?audio=all&video=i7,i8&meta=all&subtitle=all"
 	if got != want {
 		t.Fatalf("target URI = %q, want %q", got, want)
 	}
@@ -966,7 +966,7 @@ func TestProcessingMuxTargetURIWithVideoSelector(t *testing.T) {
 
 func TestProcessingMuxTargetURIWithThumbnailSelectors(t *testing.T) {
 	got := processingMuxTargetURIWithSelectors("/var/lib/mistserver/recordings/clips/hash.mkv", "i7,JPEG", "all,thumbvtt")
-	want := "/var/lib/mistserver/recordings/clips/hash.mkv#audio=all&video=i7,JPEG&meta=all,thumbvtt&subtitle=all"
+	want := "/var/lib/mistserver/recordings/clips/hash.mkv?audio=all&video=i7,JPEG&meta=all,thumbvtt&subtitle=all"
 	if got != want {
 		t.Fatalf("target URI = %q, want %q", got, want)
 	}
@@ -1659,7 +1659,7 @@ func TestRestartProcessingStreamForLocalFallbackFallsBackToStreamLookupWhenPushI
 
 func TestFindProcessingPushIDMatchesStreamAndTarget(t *testing.T) {
 	const streamName = "processing+find"
-	const targetURI = "/tmp/out.mkv#audio=all&video=all&meta=all&subtitle=all"
+	const targetURI = "/tmp/out.mkv?audio=all&video=all&meta=all&subtitle=all"
 	client := &fakeProcessingRuntimeClient{
 		pushes: []mist.PushInfo{
 			{ID: 3, StreamName: streamName, TargetURI: "/tmp/other.mkv"},
