@@ -15,12 +15,16 @@ import (
 
 const defaultInternalServerName = "foghorn.internal"
 
-// FoghornPool manages a map of cluster_id -> *GRPCClient with lazy creation,
-// health checks, and idle eviction. Each connection gets its own auth and
-// failsafe interceptors via NewGRPCClient.
+// FoghornPool manages connections keyed by cluster_id and, within a cluster,
+// by Foghorn address, with lazy creation, health checks, and idle eviction.
+// A cell runs several Foghorns and callers round-robin across them, so a
+// cluster holds one connection per instance; a call to a different instance
+// must never replace (and thereby cancel every in-flight RPC on) the
+// connection to another. Each connection gets its own auth and failsafe
+// interceptors via NewGRPCClient.
 type FoghornPool struct {
 	mu      sync.RWMutex
-	clients map[string]*poolEntry
+	clients map[string]map[string]*poolEntry // cluster_id -> addr -> entry
 	config  PoolConfig
 	logger  logging.Logger
 	done    chan struct{}
@@ -62,7 +66,7 @@ func (c PoolConfig) withDefaults() PoolConfig {
 func NewPool(config PoolConfig) *FoghornPool {
 	config = config.withDefaults()
 	p := &FoghornPool{
-		clients: make(map[string]*poolEntry),
+		clients: make(map[string]map[string]*poolEntry),
 		config:  config,
 		logger:  config.Logger,
 		done:    make(chan struct{}),
@@ -71,13 +75,14 @@ func NewPool(config PoolConfig) *FoghornPool {
 	return p
 }
 
-// GetOrCreate returns the GRPCClient for clusterID, creating a new connection
-// to addr if one doesn't exist. If the entry exists but addr differs (Foghorn
-// moved), the old connection is replaced.
+// GetOrCreate returns the GRPCClient for the Foghorn at addr in clusterID,
+// dialing it if this pool has no connection to that instance yet. Other
+// instances' connections in the same cluster are left untouched: an instance
+// that went away is dropped by the sweep, never by a call to its sibling.
 func (p *FoghornPool) GetOrCreate(clusterID, addr string) (*GRPCClient, error) {
 	// Fast path: read lock
 	p.mu.RLock()
-	if entry, ok := p.clients[clusterID]; ok && entry.addr == addr {
+	if entry, ok := p.clients[clusterID][addr]; ok {
 		entry.lastUsed.Store(time.Now().UnixNano())
 		p.mu.RUnlock()
 		return entry.client, nil
@@ -88,14 +93,9 @@ func (p *FoghornPool) GetOrCreate(clusterID, addr string) (*GRPCClient, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	if entry, ok := p.clients[clusterID]; ok {
-		if entry.addr == addr {
-			entry.lastUsed.Store(time.Now().UnixNano())
-			return entry.client, nil
-		}
-		// Address changed — close old connection
-		_ = entry.client.Close()
-		delete(p.clients, clusterID)
+	if entry, ok := p.clients[clusterID][addr]; ok {
+		entry.lastUsed.Store(time.Now().UnixNano())
+		return entry.client, nil
 	}
 
 	client, err := NewGRPCClient(GRPCConfig{
@@ -118,7 +118,10 @@ func (p *FoghornPool) GetOrCreate(clusterID, addr string) (*GRPCClient, error) {
 		addr:   addr,
 	}
 	entry.lastUsed.Store(time.Now().UnixNano())
-	p.clients[clusterID] = entry
+	if p.clients[clusterID] == nil {
+		p.clients[clusterID] = make(map[string]*poolEntry)
+	}
+	p.clients[clusterID][addr] = entry
 
 	p.logger.WithFields(logging.Fields{
 		"cluster_id": clusterID,
@@ -166,37 +169,51 @@ func isInternalFoghornAddr(addr string) bool {
 	return host == defaultInternalServerName || strings.HasSuffix(host, ".internal") || host == "foghorn" || host == "localhost"
 }
 
-// Get returns the GRPCClient for clusterID if it exists.
+// Get returns a GRPCClient for clusterID if any of its instances is
+// connected, preferring a Ready connection and, among those, the most
+// recently used one.
 func (p *FoghornPool) Get(clusterID string) (*GRPCClient, bool) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	entry, ok := p.clients[clusterID]
-	if ok {
-		entry.lastUsed.Store(time.Now().UnixNano())
-		return entry.client, true
+	var best *poolEntry
+	bestReady := false
+	for _, entry := range p.clients[clusterID] {
+		ready := entry.client.conn.GetState() == connectivity.Ready
+		if best == nil || (ready && !bestReady) || (ready == bestReady && entry.lastUsed.Load() > best.lastUsed.Load()) {
+			best, bestReady = entry, ready
+		}
 	}
-	return nil, false
+	if best == nil {
+		return nil, false
+	}
+	best.lastUsed.Store(time.Now().UnixNano())
+	return best.client, true
 }
 
-// Touch updates the last-used timestamp for clusterID, preventing idle eviction
-// for connections with long-lived streams.
+// Touch updates the last-used timestamp of every connection for clusterID,
+// preventing idle eviction for connections with long-lived streams.
 func (p *FoghornPool) Touch(clusterID string) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	if entry, ok := p.clients[clusterID]; ok {
-		entry.lastUsed.Store(time.Now().UnixNano())
+	now := time.Now().UnixNano()
+	for _, entry := range p.clients[clusterID] {
+		entry.lastUsed.Store(now)
 	}
 }
 
-// Remove closes and removes the connection for clusterID.
+// Remove closes and removes every connection for clusterID.
 func (p *FoghornPool) Remove(clusterID string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if entry, ok := p.clients[clusterID]; ok {
-		_ = entry.client.Close()
-		delete(p.clients, clusterID)
-		p.logger.WithField("cluster_id", clusterID).Info("Foghorn pool: removed connection")
+	entries, ok := p.clients[clusterID]
+	if !ok {
+		return
 	}
+	for _, entry := range entries {
+		_ = entry.client.Close()
+	}
+	delete(p.clients, clusterID)
+	p.logger.WithFields(logging.Fields{"cluster_id": clusterID, "connections": len(entries)}).Info("Foghorn pool: removed connections")
 }
 
 // Close stops background maintenance and closes all connections.
@@ -204,8 +221,10 @@ func (p *FoghornPool) Close() error {
 	close(p.done)
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	for id, entry := range p.clients {
-		_ = entry.client.Close()
+	for id, entries := range p.clients {
+		for _, entry := range entries {
+			_ = entry.client.Close()
+		}
 		delete(p.clients, id)
 	}
 	return nil
@@ -232,32 +251,28 @@ func (p *FoghornPool) sweep() {
 	defer p.mu.Unlock()
 
 	now := time.Now()
-	for id, entry := range p.clients {
-		state := entry.client.conn.GetState()
-		lastUsed := time.Unix(0, entry.lastUsed.Load())
-		idle := now.Sub(lastUsed) > p.config.MaxIdleTime
-
-		if state == connectivity.Shutdown {
+	for id, entries := range p.clients {
+		for addr, entry := range entries {
+			state := entry.client.conn.GetState()
+			lastUsed := time.Unix(0, entry.lastUsed.Load())
+			idle := now.Sub(lastUsed) > p.config.MaxIdleTime
+			fields := logging.Fields{"cluster_id": id, "addr": addr}
+			switch {
+			case state == connectivity.Shutdown:
+				p.logger.WithFields(fields).Info("Foghorn pool: removed shutdown connection")
+			case idle && state == connectivity.TransientFailure:
+				p.logger.WithFields(fields).Info("Foghorn pool: evicted idle+failing connection")
+			case idle:
+				fields["idle_for"] = now.Sub(lastUsed).String()
+				p.logger.WithFields(fields).Info("Foghorn pool: evicted idle connection")
+			default:
+				continue
+			}
 			_ = entry.client.Close()
-			delete(p.clients, id)
-			p.logger.WithField("cluster_id", id).Info("Foghorn pool: removed shutdown connection")
-			continue
+			delete(entries, addr)
 		}
-
-		if idle && state == connectivity.TransientFailure {
-			_ = entry.client.Close()
+		if len(entries) == 0 {
 			delete(p.clients, id)
-			p.logger.WithField("cluster_id", id).Info("Foghorn pool: evicted idle+failing connection")
-			continue
-		}
-
-		if idle {
-			_ = entry.client.Close()
-			delete(p.clients, id)
-			p.logger.WithFields(logging.Fields{
-				"cluster_id": id,
-				"idle_for":   now.Sub(lastUsed).String(),
-			}).Info("Foghorn pool: evicted idle connection")
 		}
 	}
 }
