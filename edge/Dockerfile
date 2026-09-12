@@ -39,8 +39,17 @@ RUN set -eu; \
 # Native-parity accounts: frameworks (1001) runs helmsman + MistController,
 # caddy runs the proxy; frameworks joins the caddy group for the shared
 # cert/Caddyfile dirs (helmsman writes keys 0640 group caddy).
-RUN groupadd --gid 1001 frameworks \
- && useradd --uid 1001 --gid frameworks --home-dir /var/lib/frameworks --create-home --shell /usr/sbin/nologin frameworks \
+#
+# 1001 is fixed, not incidental: the persistent volumes (/opt/frameworks,
+# /data/*) carry that numeric owner across image variants, across upgrades and
+# across native installs, so the id may not drift per accelerator profile. A
+# vendor runtime base may already hold it — openvino/ubuntu24_runtime ships an
+# `openvino` account at 1001 because Ubuntu 24.04 already occupies 1000 — so
+# the id is claimed non-uniquely instead of failing the build or renumbering.
+# The vendor account is left alone; only the numeric owner matters to the
+# mounted state, and nothing in this image runs as it.
+RUN groupadd --gid 1001 --non-unique frameworks \
+ && useradd --uid 1001 --gid 1001 --non-unique --home-dir /var/lib/frameworks --create-home --shell /usr/sbin/nologin frameworks \
  && groupadd --system caddy \
  && useradd --system --gid caddy --home-dir /var/lib/caddy --shell /usr/sbin/nologin caddy \
  && usermod -aG caddy frameworks
