@@ -415,6 +415,16 @@ verify-mist-push-connector:
 verify-two-cell-media:
 	@bash $(CURDIR)/scripts/verify-two-cell-media.sh
 
+# Media lifecycle with real media on the two-cell stack: live viewers on both
+# cells, clip from live, DVR ledger + chapters, VOD upload -> processing ->
+# playback, analytics rows + GraphQL summary. Runs on the stack
+# verify-two-cell-media leaves behind; MEDIA_LIFECYCLE_BOOTSTRAP=1 runs that
+# proof first. MIST_IMAGE must be a full-feature build (Dockerfile.mistserver,
+# WITH_AV=true): the source-contract test image has no processing binaries and
+# is refused.
+verify-media-lifecycle:
+	@bash $(CURDIR)/scripts/verify-media-lifecycle.sh
+
 test-topology:
 	@echo "Running infrastructure topology contract tests..."
 	@(cd $(SERVICE_DIR_pkg) && go test $(GO_TAG_FLAGS) ./topology -race -count=1)
