@@ -100,6 +100,9 @@ start_pull_upstream() { # serves a small HLS rendition for the configured pull i
   local network; network="$(docker network ls --format '{{.Name}}' | grep -E '_frameworks$' | head -1)"
   [ -n "$network" ] || fail "compose network not found"
   local dir="$repo_root/.two-cell-pull-upstream"
+  # A previous run's upstream (left behind by a failed proof) still has this
+  # directory bind-mounted; remove it before recreating the playlist.
+  docker rm -f "$PULL_UPSTREAM" >/dev/null 2>&1 || true
   rm -rf "$dir" && mkdir -p "$dir"
   docker run --rm -v "$repo_root/infrastructure/demo-recordings:/srv:ro" -v "$dir:/out" \
     --entrypoint ffmpeg "$MIST_IMAGE" -hide_banner -loglevel error \
