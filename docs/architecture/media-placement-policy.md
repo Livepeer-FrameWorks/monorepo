@@ -104,6 +104,17 @@ The stored-media permitter latches on installation: before startup installs it a
 serve storage candidates unfiltered, and once installed a cleared permitter refuses rather than
 reverting to that. The guarantee therefore depends on installation preceding listeners, which the
 unconditional startup ordering provides.
+
+Viewer admission is for audiences. Two platform reads reach the same Mist triggers (PLAY_REWRITE,
+USER_NEW) and are recognised by credential instead: an accepted origin pull (DTSC, `fwsrc.` per-attempt
+credential) and a processing source read (`fwproc.`, minted by the dispatching Foghorn for one job,
+bound to the tenant, source stream, serving node, artifact and an expiry, signed with the cell's
+balancer capability secret). Helmsman stages a clip's source as a Mist `/view` cut of the live buffer,
+rolling DVR or chapter on the node that holds those bytes; that node is the ingest node, which a serve
+policy preferring another cluster does not permit as a viewer destination. The credential is what lets
+the read through: no placement admission, no viewer session, no capacity reservation, nothing
+reported to analytics, and the credential is redacted before the trigger leaves the process. Without a
+valid credential the read is a viewer and is judged as one.
 Managed and artifact source preview, and end-to-end verification of the web editor in an
 authenticated browser, still require integration. The coordinator-relative score penalty is removed
 from the legacy scorer, which no longer selects live destinations; it now serves only stored-media
