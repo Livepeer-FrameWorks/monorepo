@@ -40,6 +40,25 @@ func (p *Processor) acceptedSourcePull(ctx context.Context, internalName, nodeID
 	return ok
 }
 
+// acceptedProcessingSourceRead reports whether a Mist HTTP output at nodeID is
+// Helmsman staging a processing job's node-local source (a /view cut of the
+// live buffer, rolling DVR or chapter) with the credential Foghorn minted for
+// that job (ProcessingSourceCredential). Such a read is the platform producing
+// an artifact on the node that holds the source bytes, not a viewer: without
+// this, a serve policy that does not prefer the ingest cluster refuses the
+// ingest node its own buffer and every clip from live fails to stage. The DTSC
+// connector is the origin-pull path and never qualifies here.
+func (p *Processor) acceptedProcessingSourceRead(tenantID, internalName, nodeID, connector, requestURL string) (string, bool) {
+	if strings.EqualFold(strings.TrimSpace(connector), "DTSC") || strings.TrimSpace(connector) == "" {
+		return "", false
+	}
+	artifactHash, ok := control.AcceptedProcessingSourceRead(requestURL, tenantID, internalName, nodeID, time.Now())
+	if ok && p.logger != nil {
+		p.logger.WithFields(map[string]any{"internal_name": internalName, "node_id": nodeID, "connector": connector, "artifact_hash": artifactHash}).Info("Admitting Mist output as processing source read")
+	}
+	return artifactHash, ok
+}
+
 // ViewerPlacementConnection contains server-resolved identity and Mist connection
 // evidence. A resolver must derive canonical protocol, signed object identity and
 // owner generation itself; URL query parameters and prefilled geo are not inputs.

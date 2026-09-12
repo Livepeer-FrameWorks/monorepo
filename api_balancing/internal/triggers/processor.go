@@ -2504,6 +2504,15 @@ func (p *Processor) handlePlayRewrite(trigger *ipcpb.MistTrigger) (string, bool,
 	}
 	var placementValidUntil time.Time
 	acceptedPull := p.acceptedSourcePull(requestCtx, mist.ExtractInternalName(target.InternalName), trigger.GetNodeId(), playRewrite.GetOutputType(), playRewrite.GetRequestUrl())
+	// A processing source read is admitted like an accepted pull (no viewer
+	// placement), and additionally is neither counted as a viewer nor reported
+	// to analytics: it is the platform reading its own source, not an audience.
+	acceptedProcessingRead := false
+	if !acceptedPull {
+		if _, ok := p.acceptedProcessingSourceRead(target.TenantID, mist.ExtractInternalName(target.InternalName), trigger.GetNodeId(), playRewrite.GetOutputType(), playRewrite.GetRequestUrl()); ok {
+			acceptedPull, acceptedProcessingRead = true, true
+		}
+	}
 	if !acceptedPull {
 		// The emitting node is rebound to its authenticated control session. A
 		// public request URL cannot choose the protocol or destination identity.
@@ -2563,7 +2572,7 @@ func (p *Processor) handlePlayRewrite(trigger *ipcpb.MistTrigger) (string, bool,
 		playRewrite.StreamId = &target.StreamID
 	}
 	isLivePlayback := target.ContentType == "live" || strings.HasPrefix(target.InternalName, "live+")
-	if isLivePlayback && mist.IsPlaybackViewerRequest(playRewrite.GetOutputType(), playRewrite.GetRequestUrl()) {
+	if isLivePlayback && !acceptedProcessingRead && mist.IsPlaybackViewerRequest(playRewrite.GetOutputType(), playRewrite.GetRequestUrl()) {
 		correlationID := extractCorrelationID(playRewrite.GetRequestUrl())
 		if viewerID, started := state.DefaultManager().StartVirtualViewerByID(correlationID, trigger.GetNodeId(), resolvedName, playRewrite.GetViewerHost()); started {
 			state.DefaultManager().UpdateUserConnection(resolvedName, trigger.GetNodeId(), target.TenantID, 1)
@@ -2577,15 +2586,21 @@ func (p *Processor) handlePlayRewrite(trigger *ipcpb.MistTrigger) (string, bool,
 		}
 	}
 
-	go func(tr *ipcpb.MistTrigger, requested string) {
-		if err := p.sendTriggerToDecklog(tr); err != nil {
-			p.logger.WithFields(logging.Fields{
-				"requested_stream": requested,
-				"trigger_type":     tr.GetTriggerType(),
-				"error":            err,
-			}).Error("Failed to send play_rewrite trigger to Decklog")
-		}
-	}(trigger, playbackID)
+	// Decklog persists this payload into ClickHouse: a platform source credential
+	// in request_url must not be written there, and a processing read is not
+	// audience telemetry at all.
+	playRewrite.RequestUrl = control.RedactSourcePullCredential(playRewrite.GetRequestUrl())
+	if !acceptedProcessingRead {
+		go func(tr *ipcpb.MistTrigger, requested string) {
+			if err := p.sendTriggerToDecklog(tr); err != nil {
+				p.logger.WithFields(logging.Fields{
+					"requested_stream": requested,
+					"trigger_type":     tr.GetTriggerType(),
+					"error":            err,
+				}).Error("Failed to send play_rewrite trigger to Decklog")
+			}
+		}(trigger, playbackID)
+	}
 
 	// Return the resolved fully-qualified stream name (e.g. "live+uuid") to MistServer.
 	return target.InternalName, false, nil
@@ -4183,6 +4198,20 @@ func (p *Processor) handleUserNew(trigger *ipcpb.MistTrigger) (string, bool, err
 		viewerCluster = strings.TrimSpace(trigger.GetClusterId())
 	}
 	acceptedPull := p.acceptedSourcePull(requestCtx, internalName, trigger.GetNodeId(), userNew.GetConnector(), userNew.GetRequestUrl())
+	if !acceptedPull && info.TenantID != "" {
+		// The platform staging a processing job's source on this node: not a
+		// viewer, so no cluster/placement/capacity admission, no viewer session
+		// and nothing reported to analytics.
+		if artifactHash, ok := p.acceptedProcessingSourceRead(info.TenantID, internalName, trigger.GetNodeId(), userNew.GetConnector(), userNew.GetRequestUrl()); ok {
+			p.logger.WithFields(logging.Fields{
+				"session_id":    userNew.GetSessionId(),
+				"internal_name": internalName,
+				"node_id":       trigger.GetNodeId(),
+				"artifact_hash": artifactHash,
+			}).Info("Admitting processing source read on USER_NEW")
+			return "true", false, nil
+		}
+	}
 	if info.TenantID == "" || viewerCluster == "" || (!acceptedPull && (p.viewerClusterAccess == nil || !p.viewerClusterAccess(viewerCluster, info.TenantID, info.OfficialClusterID, info.ClusterPeers))) {
 		p.logger.WithFields(logging.Fields{
 			"session_id":    userNew.GetSessionId(),
