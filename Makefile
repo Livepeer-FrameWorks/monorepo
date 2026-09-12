@@ -112,6 +112,8 @@ seed-demo-postgres:
 		echo "Seeding PostgreSQL database $$db..."; \
 		docker compose exec -T postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$$1" -d "$$1"' sh "$$db" < "pkg/database/sql/seeds/demo/postgres/$$db.sql"; \
 	done
+	@# The S3 descriptor one-shot only fills cluster rows that exist; the seed creates the media cluster rows, so establish it again now.
+	@docker compose up -d --no-deps storage-init >/dev/null
 
 seed-demo-clickhouse:
 	@echo "Seeding ClickHouse database periscope..."

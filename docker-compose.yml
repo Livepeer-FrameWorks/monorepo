@@ -1122,13 +1122,19 @@ services:
           echo "storage-init: S3 disabled (no STORAGE_S3_BUCKET) — nothing to establish"
           exit 0
         fi
-        echo "storage-init: establishing S3 descriptor for cluster $$CLUSTER_ID (clean establishment only)"
+        echo "storage-init: establishing S3 descriptor for cell $$CLUSTER_ID and the platform-official clusters it controls (clean establishment only)"
         # CLEAN ESTABLISHMENT ONLY: fill the FULL descriptor tuple exactly once, when the row's descriptor is entirely
         # unset (s3_bucket IS NULL). It never touches an already-established row, so it cannot repoint an immutable
         # backend. This dev stack is SEEDED and DISPOSABLE — it does not migrate persisted state; if the volume predates
         # the current schema, recreate it (`docker compose down -v && docker compose up -d`), the standard dev reset. So
         # there is no legacy same-bucket/NULL-prefix row to handle here. (Env is operator-controlled, so the direct
         # interpolation is acceptable for dev tooling.)
+        #
+        # One cell owns one immutable backend, and every platform-official media cluster this cell controls is
+        # served from it (the demo tenant's official cluster is demo-media, which the dev Foghorn serves as cell
+        # central-primary). Establishing the same tuple on those rows is what lets Foghorn mint durable writes for
+        # them locally; a NULL descriptor there fails every VOD/DVR/clip durable write closed. Production shapes this
+        # the same way: the cell cluster (gitops cluster.yaml) carries the descriptor.
         psql "$$DATABASE_URL" -v ON_ERROR_STOP=1 -c \
           "UPDATE quartermaster.infrastructure_clusters \
              SET s3_bucket = NULLIF('$$STORAGE_S3_BUCKET', ''), \
@@ -1136,7 +1142,9 @@ services:
                  s3_region = NULLIF('$$STORAGE_S3_REGION', ''), \
                  s3_prefix = '$$STORAGE_S3_PREFIX', \
                  updated_at = NOW() \
-           WHERE cluster_id = '$$CLUSTER_ID' AND s3_bucket IS NULL;"
+           WHERE (cluster_id = '$$CLUSTER_ID' \
+                  OR (control_cell_id = '$$CLUSTER_ID' AND is_platform_official)) \
+             AND s3_bucket IS NULL;"
         echo "storage-init: done"
     networks:
       - frameworks
