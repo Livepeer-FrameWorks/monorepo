@@ -78,7 +78,9 @@ func (s *Store) RoutingClusterPeers(tenant *mediaauthoritypb.TenantAuthority, lo
 		peer := proto.CloneOf(raw)
 		clusterID := strings.TrimSpace(peer.GetClusterId())
 		switch {
-		case clusterID != "" && clusterID == localClusterID:
+		case clusterID != "" && (clusterID == localClusterID || (s != nil && s.servedCluster != nil && s.servedCluster(clusterID))):
+			// The cell's own physical cluster, or a virtual cluster this cell
+			// serves (a tenant's private edge): local, no peer address needed.
 			peer.HealthStatus = "healthy"
 		case s != nil && s.runtimePeers != nil && s.runtimePeers.IsPeerConnected(clusterID):
 			addr := strings.TrimSpace(s.runtimePeers.GetPeerAddr(clusterID))

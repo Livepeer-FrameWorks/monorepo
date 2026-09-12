@@ -58,6 +58,7 @@ type Store struct {
 	sealPrivateKey *ecdh.PrivateKey
 	refresh        *refreshCoordinator
 	runtimePeers   RuntimePeerResolver
+	servedCluster  func(clusterID string) bool
 	applyOutcomes  *prometheus.CounterVec
 	applyObserver  func(context.Context, ApplyResult) error
 }
@@ -82,6 +83,17 @@ type RuntimePeerResolver interface {
 func (s *Store) SetRuntimePeerResolver(resolver RuntimePeerResolver) {
 	if s != nil {
 		s.runtimePeers = resolver
+	}
+}
+
+// SetServedClusterResolver tells the routing overlay which clusters this cell
+// serves itself. A tenant's private virtual cluster is served by the cell's
+// own Foghorn and Mist nodes: it is neither the cell's physical cluster id nor
+// a federation peer with an address, so without this it would be filtered
+// out of routing peers and every viewer on it refused as "not authorized".
+func (s *Store) SetServedClusterResolver(served func(clusterID string) bool) {
+	if s != nil {
+		s.servedCluster = served
 	}
 }
 

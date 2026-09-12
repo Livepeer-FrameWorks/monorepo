@@ -1532,6 +1532,7 @@ func main() {
 		if peerManager != nil {
 			authorityStore.SetRuntimePeerResolver(peerManager)
 		}
+		authorityStore.SetServedClusterResolver(control.IsServedCluster)
 		mediaAuthorityApplyOutcomes := metricsCollector.NewCounter(
 			"media_authority_apply_total",
 			"Signed media-authority apply outcomes",
