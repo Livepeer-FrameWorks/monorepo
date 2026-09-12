@@ -29,7 +29,11 @@ func TestIngestProtocolReport_RealMist(t *testing.T) {
 			t.Errorf("remove owned Mist test container: %v %s", cleanupErr, output)
 		}
 	})
-	if output, runErr := dockerpg.Run("run", "-d", "--name", name, "-p", "127.0.0.1::4242", "-v", fixture+":/tmp/placement.json:ro", image, "-c", "/tmp/placement.json"); runErr != nil {
+	// The image under test has no ENTRYPOINT (CMD is /bin/sh), so the controller
+	// must be named explicitly; otherwise "-c" is exec'd as the program. The other
+	// real-Mist tests go through /bin/sh because they first render a source file
+	// with ffmpeg; this one needs only the controller against its fixture.
+	if output, runErr := dockerpg.Run("run", "-d", "--name", name, "-p", "127.0.0.1::4242", "-v", fixture+":/tmp/placement.json:ro", "--entrypoint", "MistController", image, "-c", "/tmp/placement.json"); runErr != nil {
 		t.Fatalf("start isolated Mist: %v %s", runErr, output)
 	}
 	port, err := dockerpg.DiscoverPublishedHostPort(name, "4242/tcp")
