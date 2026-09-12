@@ -129,15 +129,22 @@ ON CONFLICT (tier_id, meter) DO UPDATE SET
     config = EXCLUDED.config;
 
 -- Demo subscription in Purser
+-- The demo tenant is a paid-tier postpaid tenant that has completed collection
+-- setup: the gateway refuses paid mutations (clips, DVR, uploads) for a paid
+-- postpaid tier until Purser reports a confirmed Mollie/Stripe subscription, so
+-- the subscription carries the Mollie subscription that goes with the demo
+-- customer + mandate seeded below.
 INSERT INTO purser.tenant_subscriptions (
     tenant_id, tier_id, status, billing_email, started_at, next_billing_date,
-    billing_period_start, billing_period_end
+    billing_period_start, billing_period_end,
+    payment_method, mollie_subscription_id
 )
 SELECT
     '5eed517e-ba5e-da7a-517e-ba5eda7a0001', bt.id, 'active', 'demo@frameworks.network',
     NOW(), NOW() + INTERVAL '1 month',
     DATE_TRUNC('month', NOW()),
-    DATE_TRUNC('month', NOW()) + INTERVAL '1 month'
+    DATE_TRUNC('month', NOW()) + INTERVAL '1 month',
+    'mollie', 'sub_demo_123'
 FROM purser.billing_tiers bt
 WHERE bt.tier_name = 'developer'
   AND NOT EXISTS (SELECT 1 FROM purser.tenant_subscriptions WHERE tenant_id = '5eed517e-ba5e-da7a-517e-ba5eda7a0001');
