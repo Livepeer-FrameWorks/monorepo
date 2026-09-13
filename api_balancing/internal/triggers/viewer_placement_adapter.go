@@ -11,7 +11,6 @@ import (
 	localauthority "frameworks/api_balancing/internal/mediaauthority"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/cache"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/geoip"
-	"github.com/Livepeer-FrameWorks/monorepo/pkg/mist"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
 )
 
@@ -38,7 +37,7 @@ func (adapter *ViewerPlacementAdapter) AdmitViewer(ctx context.Context, connecti
 	if adapter == nil || adapter.Authority == nil || adapter.Source == nil || adapter.Gate == nil {
 		return federation.PlacementAdmissionDecision{}, errors.New("viewer placement runtime is unavailable")
 	}
-	protocol, err := mist.ViewerProtocol(connection.Connector)
+	protocol, err := connection.protocol()
 	if err != nil {
 		return federation.PlacementAdmissionDecision{}, err
 	}

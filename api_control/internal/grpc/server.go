@@ -3253,11 +3253,6 @@ func (s *CommodoreServer) StartDVR(ctx context.Context, req *sharedpb.StartDVRRe
 		return nil, err
 	}
 
-	foghornClient, dvrRoute, err := s.resolveFoghornForTenant(ctx, tenantID)
-	if err != nil {
-		return nil, err
-	}
-
 	// One Purser RPC for both suspension AND retention. Avoids a per-DVR-start
 	// GetSubscription + GetBillingTier roundtrip since GetTenantBillingStatus
 	// returns recording_retention_days alongside is_suspended.
@@ -3317,9 +3312,9 @@ func (s *CommodoreServer) StartDVR(ctx context.Context, req *sharedpb.StartDVRRe
 	// Foghorn back-fills commodore.dvr_recordings.retention_until after
 	// FinalizeDVR.
 
-	processClusterID := ""
-	if dvrRoute != nil {
-		processClusterID = dvrRoute.clusterID
+	foghornClient, processClusterID, err := s.resolveDVRStartOwner(ctx, tenantID, streamID)
+	if err != nil {
+		return nil, err
 	}
 	foghornReq := &sharedpb.StartDVRRequest{
 		TenantId:      tenantID,
@@ -9893,6 +9888,9 @@ func (s *CommodoreServer) CreateVodUpload(ctx context.Context, req *sharedpb.Cre
 	if resp != nil && resp.PlaybackId == "" {
 		resp.PlaybackId = playbackID
 	}
+	if resp != nil {
+		resp.UploadId = vodUploadSessionID(vodHash, resp.GetUploadId())
+	}
 	return resp, nil
 }
 
@@ -9904,7 +9902,7 @@ func (s *CommodoreServer) CompleteVodUpload(ctx context.Context, req *sharedpb.C
 		return nil, err
 	}
 
-	foghornClient, vodRoute, err := s.resolveFoghornForTenant(ctx, tenantID)
+	vodRoute, err := s.resolveVodUploadRoute(ctx, tenantID, req.GetUploadId())
 	if err != nil {
 		return nil, err
 	}
@@ -9921,16 +9919,26 @@ func (s *CommodoreServer) CompleteVodUpload(ctx context.Context, req *sharedpb.C
 	// Forward to Foghorn (it manages S3 multipart completion and lifecycle state)
 	foghornReq := &sharedpb.CompleteVodUploadRequest{
 		TenantId:      tenantID,
-		UploadId:      req.UploadId,
+		UploadId:      vodRoute.storageUploadID,
 		Parts:         req.Parts,
 		ProcessesJson: processesJSON,
 	}
 
-	resp, trailers, err := foghornClient.CompleteVodUpload(ctx, foghornReq)
+	resp, trailers, err := vodRoute.client.CompleteVodUpload(ctx, foghornReq)
 	if err != nil {
 		s.logger.WithError(err).WithField("upload_id", req.UploadId).Error("Failed to complete VOD upload via Foghorn")
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
 	}
+	if resp.GetAsset().GetArtifactHash() != vodRoute.artifactHash {
+		return nil, status.Error(codes.Internal, "upload owner returned inconsistent artifact identity")
+	}
+	playbackID, lookupErr := commodoredb.New(s.db).GetVODPlaybackID(ctx, commodoredb.GetVODPlaybackIDParams{
+		TenantID: tenantID, VodHash: vodRoute.artifactHash,
+	})
+	if lookupErr != nil {
+		return nil, status.Error(codes.Unavailable, "completed upload metadata unavailable")
+	}
+	resp.Asset.PlaybackId = &playbackID
 
 	s.logger.WithFields(logging.Fields{
 		"tenant_id":     tenantID,
@@ -9952,17 +9960,17 @@ func (s *CommodoreServer) GetVodUploadStatus(ctx context.Context, req *sharedpb.
 		return nil, status.Error(codes.InvalidArgument, "upload_id is required")
 	}
 
-	foghornClient, _, err := s.resolveFoghornForTenant(ctx, tenantID)
+	vodRoute, err := s.resolveVodUploadRoute(ctx, tenantID, req.GetUploadId())
 	if err != nil {
 		return nil, err
 	}
 
-	resp, trailers, err := foghornClient.GetVodUploadStatus(ctx, tenantID, req.UploadId)
+	resp, trailers, err := vodRoute.client.GetVodUploadStatus(ctx, tenantID, vodRoute.storageUploadID)
 	if err != nil {
 		s.logger.WithError(err).WithField("upload_id", req.UploadId).Warn("Failed to read VOD upload status via Foghorn")
 		return nil, grpcutil.PropagateError(ctx, err, trailers)
 	}
-	if resp == nil || resp.ArtifactHash == "" {
+	if resp == nil || resp.ArtifactHash != vodRoute.artifactHash {
 		return nil, status.Error(codes.NotFound, "upload not found")
 	}
 
@@ -9983,6 +9991,7 @@ func (s *CommodoreServer) GetVodUploadStatus(ctx context.Context, req *sharedpb.
 		return nil, status.Error(codes.Internal, "failed to enrich upload status")
 	}
 	resp.PlaybackId = playbackID
+	resp.UploadId = req.UploadId
 	return resp, nil
 }
 
@@ -9994,13 +10003,13 @@ func (s *CommodoreServer) AbortVodUpload(ctx context.Context, req *sharedpb.Abor
 		return nil, err
 	}
 
-	foghornClient, _, err := s.resolveFoghornForTenant(ctx, tenantID)
+	vodRoute, err := s.resolveVodUploadRoute(ctx, tenantID, req.GetUploadId())
 	if err != nil {
 		return nil, err
 	}
 
 	// Forward to Foghorn (it manages S3 multipart abort and lifecycle state)
-	resp, trailers, err := foghornClient.AbortVodUpload(ctx, tenantID, req.UploadId)
+	resp, trailers, err := vodRoute.client.AbortVodUpload(ctx, tenantID, vodRoute.storageUploadID)
 	if err != nil {
 		s.logger.WithError(err).WithField("upload_id", req.UploadId).Error("Failed to abort VOD upload via Foghorn")
 		return nil, grpcutil.PropagateError(ctx, err, trailers)

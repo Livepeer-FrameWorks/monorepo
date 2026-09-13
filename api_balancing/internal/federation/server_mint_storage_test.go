@@ -502,8 +502,8 @@ func TestPrepareArtifact_RedirectsWhenStorageOwnedElsewhere(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster", "recorded_object_key"}).
-		AddRow("clip-x", "stream-x", "clip", "mp4", "s3", "synced", 1024, "selfhost-foreign", "clips/tenant-a/stream-x/clip-x.mp4")
+	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster", "recorded_object_key", "dtsh_synced", "dtsh_key"}).
+		AddRow("clip-x", "stream-x", "clip", "mp4", "s3", "synced", 1024, "selfhost-foreign", "clips/tenant-a/stream-x/clip-x.mp4", false, "")
 	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
 
 	cfg := FederationServerConfig{

@@ -51,6 +51,29 @@ func (q *Queries) GetArtifactRouteByContent(ctx context.Context, dollar_1 string
 	return i, err
 }
 
+const getDVRSourceRoute = `-- name: GetDVRSourceRoute :one
+SELECT active_ingest_cluster_id, active_ingest_cluster_updated_at
+FROM commodore.streams
+WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL
+`
+
+type GetDVRSourceRouteParams struct {
+	ID       string `db:"id" json:"id"`
+	TenantID string `db:"tenant_id" json:"tenant_id"`
+}
+
+type GetDVRSourceRouteRow struct {
+	ActiveIngestClusterID        sql.NullString `db:"active_ingest_cluster_id" json:"active_ingest_cluster_id"`
+	ActiveIngestClusterUpdatedAt sql.NullTime   `db:"active_ingest_cluster_updated_at" json:"active_ingest_cluster_updated_at"`
+}
+
+func (q *Queries) GetDVRSourceRoute(ctx context.Context, arg GetDVRSourceRouteParams) (GetDVRSourceRouteRow, error) {
+	row := q.db.QueryRowContext(ctx, getDVRSourceRoute, arg.ID, arg.TenantID)
+	var i GetDVRSourceRouteRow
+	err := row.Scan(&i.ActiveIngestClusterID, &i.ActiveIngestClusterUpdatedAt)
+	return i, err
+}
+
 const getStreamProcessingOverrides = `-- name: GetStreamProcessingOverrides :one
 SELECT processes_live, processes_dvr, processes_clip, processes_dvr_finalize, processes_vod
 FROM commodore.stream_processing_config

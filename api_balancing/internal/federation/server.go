@@ -523,17 +523,10 @@ func (s *FederationServer) prepareOriginPull(ctx context.Context, req *foghornfe
 	}
 	sourceStreamName := req.StreamName
 	if strings.HasPrefix(req.StreamName, "dvr+") {
-		tenantID, recording := s.dvrRecordingTenant(ctx, strings.TrimPrefix(req.StreamName, "dvr+"))
-		if !recording {
+		if !control.DVRRecordingSource(ctx, s.db, req.TenantId, strings.TrimPrefix(req.StreamName, "dvr+"), sourceNodeID) {
 			return &foghornfederationpb.OriginPullAck{
 				Accepted: false,
 				Reason:   "dvr not recording locally",
-			}, nil
-		}
-		if tenantID != req.TenantId {
-			return &foghornfederationpb.OriginPullAck{
-				Accepted: false,
-				Reason:   "stream tenant mismatch",
 			}, nil
 		}
 		// For dvr+ the runtime name IS the source name; Mist's dvr+
@@ -630,25 +623,6 @@ func (s *FederationServer) prepareOriginPull(ctx context.Context, req *foghornfe
 	return ack, nil
 }
 
-// dvrRecordingTenant looks up an active DVR recording by its runtime
-// token (the part after the "dvr+" prefix, which equals internal_name on
-// the recording row). Returns (tenantID, true) when a row is recording
-// locally and can serve cross-cluster DTSC pulls; (_, false) otherwise.
-// Used by NotifyOriginPull to gate dvr+ pulls without requiring Mist
-// state, which is only present when a local viewer has dvr+ open.
-func (s *FederationServer) dvrRecordingTenant(ctx context.Context, token string) (string, bool) {
-	if s.db == nil || token == "" {
-		return "", false
-	}
-	tenantID, err := foghorndb.New(s.db).DVRRecordingTenant(ctx, sql.NullString{String: token, Valid: true})
-	if err != nil {
-		return "", false
-	}
-	return tenantID, true
-}
-
-// PrepareArtifact handles cross-cluster artifact preparation requests.
-// The origin cluster looks up the artifact in its local DB and returns
 // one of: (a) a presigned S3 GET URL when sync_status='synced'; (b) a
 // node-specific peer_relay_url + opaque peer_relay_grant_id when an
 // origin node holds the canonical full file but S3 sync is pending —
@@ -700,6 +674,26 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *foghornfede
 	internalName, streamInternalName, artifactType := descriptor.InternalName, descriptor.StreamInternalName, descriptor.ArtifactType
 	format, storageLocation, syncStatus := descriptor.Format, descriptor.StorageLocation, descriptor.SyncStatus
 	sizeBytes, authoritativeCluster, recordedObjectKey := descriptor.SizeBytes, descriptor.AuthoritativeCluster, descriptor.ObjectKey
+	if artifactType == "dvr" {
+		if req.GetArtifactType() != "dvr" {
+			return &foghornfederationpb.PrepareArtifactResponse{Error: "artifact type mismatch"}, nil
+		}
+		recording, err := foghorndb.New(s.db).DVRRecordingState(ctx, foghorndb.DVRRecordingStateParams{
+			TenantID: tenantID, ArtifactHash: hash,
+		})
+		if err != nil {
+			return nil, status.Error(codes.Unavailable, "recording state unavailable")
+		}
+		recordingStatus, recordingNode := recording.Status, recording.NodeID
+		active := control.IsActiveDVRStatus(recordingStatus)
+		if !active {
+			recordingNode = ""
+		}
+		return &foghornfederationpb.PrepareArtifactResponse{
+			Ready: active && recordingNode != "", DvrStatus: recordingStatus, DvrRecordingNodeId: recordingNode,
+			InternalName: internalName, StreamInternalName: streamInternalName,
+		}, nil
+	}
 
 	// Authoritative cluster = where the bytes actually live. NULL preserves
 	// the prior origin-as-storage semantic for rows written before delegation
@@ -786,26 +780,27 @@ func (s *FederationServer) PrepareArtifact(ctx context.Context, req *foghornfede
 			return &foghornfederationpb.PrepareArtifactResponse{Error: "failed to generate download URL"}, nil
 		}
 		var size uint64
+		var dtshURL string
+		if descriptor.DtshSynced && descriptor.DtshKey != "" {
+			dtshURL, err = s.s3Client.GeneratePresignedGET(descriptor.DtshKey, 15*time.Minute)
+			if err != nil {
+				log.WithError(err).Error("Failed to generate presigned GET for artifact index")
+				return &foghornfederationpb.PrepareArtifactResponse{Error: "failed to generate index download URL"}, nil
+			}
+		}
 		if sizeBytes.Valid && sizeBytes.Int64 > 0 {
 			size = uint64(sizeBytes.Int64)
 		}
 		log.WithField("artifact_type", artType).Info("PrepareArtifact: presigned URL generated")
 		return &foghornfederationpb.PrepareArtifactResponse{
 			Url:                presignedURL,
+			DtshUrl:            dtshURL,
 			SizeBytes:          size,
 			Ready:              true,
 			Format:             format,
 			InternalName:       internalName,
 			StreamInternalName: streamInternalName,
 		}, nil
-
-	case "dvr":
-		// Parent DVR artifacts have no single playable URL — their
-		// playback surface is split across chapter VOD artifacts
-		// (cross-cluster federation for those goes through the
-		// normal VOD/clip case above; chapter playback IDs resolve
-		// to artifact_hash via commodore.dvr_chapter_playback).
-		return &foghornfederationpb.PrepareArtifactResponse{Error: "DVR playback is per-chapter; query dvrChapters and PrepareArtifact each chapter's VOD artifact_hash"}, nil
 
 	default:
 		return &foghornfederationpb.PrepareArtifactResponse{Error: "unknown artifact type: " + artType}, nil

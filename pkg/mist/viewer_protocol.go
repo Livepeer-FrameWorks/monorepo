@@ -31,6 +31,16 @@ func ViewerProtocol(connector string) (string, error) {
 			protocol = "mkv"
 		case "raw/ws", "wsraw":
 			protocol = "raw_ws"
+		case "webrtc/ws":
+			protocol = "webrtc"
+		case "mp4/ws":
+			protocol = "wsmp4"
+		case "ebml/ws":
+			protocol = "mews_webm"
+		case "h264/ws":
+			protocol = "h264_ws"
+		case "json/ws":
+			protocol = "json_ws"
 		default:
 			return "", errors.New("unsupported viewer connector")
 		}
@@ -43,4 +53,19 @@ func ViewerProtocol(connector string) (string, error) {
 		return "", errors.New("viewer media protocol is unavailable")
 	}
 	return selected, nil
+}
+
+// PlayRewriteProtocol includes Mist's HTTP stream-info/page and preview connectors. These
+// requests need source admission before stream discovery, but are not media
+// sessions. The mist_html capability still requires an observed HTTP listener;
+// the eventual media connection must independently pass ViewerProtocol admission.
+func PlayRewriteProtocol(connector string) (string, error) {
+	switch strings.ToLower(connector) {
+	case "http", "https", "thumbvtt", "jpg":
+		// Preview helpers are HTTP dependents, not independent listeners in
+		// Mist's output inventory. Their emitting connector is still trusted
+		// evidence of the request kind; media never enters this branch.
+		return "mist_html", nil
+	}
+	return ViewerProtocol(connector)
 }

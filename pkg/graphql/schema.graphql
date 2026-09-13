@@ -2813,7 +2813,7 @@ complement to the realtime VodLifecycle subscription, used for reload-recovery a
 agent (MCP) workflows.
 """
 type VodUploadStatus {
-  "Upload session ID (S3 uploadId)."
+  "Opaque upload session ID returned by createVodUpload; preserve unchanged when resuming."
   uploadId: ID!
   "Current state of the upload session."
   state: VodAssetStatus!
@@ -2986,7 +2986,7 @@ type StorageArtifact {
   thumbnailUrl: String
   "Poster + hover-scrub sprite assets, when the artifact has thumbnails."
   thumbnailAssets: ThumbnailAssets
-  "Measured media duration in seconds (all kinds); null until the artifact finalizes."
+  "Media duration in seconds. Clips retain their requested duration until measured; DVR/VOD duration may be null until finalized."
   durationSeconds: Float
   "Finalized A/V track summary (per track), captured from the completion-validated processing result and projected onto the catalog. Empty until finalized."
   tracks: [ArtifactTrack!]!

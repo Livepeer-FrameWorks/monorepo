@@ -2084,15 +2084,7 @@ func resolveLiveViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpoint
 // reroute live viewers through the archive lane.
 func resolveDVRViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest, lat, lon float64, resolution *control.ContentResolution) (*sharedpb.ViewerEndpointResponse, error) {
 	dvrInternalName := mist.ExtractInternalName(resolution.InternalName)
-	var dispatch *control.DVRArtifactDispatch
-	var derr error
-	if resolution.LocalAuthority {
-		dispatch, derr = control.ResolveLocalDVRArtifactDispatch(
-			ctx, resolution.ArtifactInternalNameIdentity(), resolution.ContentId, resolution.AllowPlatformSharedPlayback,
-		)
-	} else {
-		dispatch, derr = control.ResolveDVRArtifactDispatch(ctx, dvrInternalName)
-	}
+	dispatch, derr := control.ResolveDVRViewerDispatch(ctx, resolution, federationClient, peerManager)
 	if derr != nil {
 		logger.WithError(derr).WithFields(logging.Fields{
 			"content_id":    req.GetContentId(),
@@ -2109,7 +2101,7 @@ func resolveDVRViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointR
 			}).Warn("Active DVR has no resolvable recording origin; refusing to fall back to archive routing")
 			return nil, fmt.Errorf("active DVR recording origin not yet registered; retry")
 		}
-		resp, err := resolveLiveViewerEndpoint(ctx, req, lat, lon, resolution.InternalName, resolution.TenantId, resolution.StreamId, resolution.OriginClusterID, resolution.ClusterPeers, resolution.ActiveIngestClusterID, resolution.OfficialClusterID, resolution.AllowPlatformSharedPlayback || !resolution.LocalAuthority)
+		resp, err := control.ResolvePreparedDVRViewerEndpoint(ctx, viewerPlacementPreparer, resolution, req.GetProtocol(), control.ViewerPlacementLocation(lat, lon))
 		if err != nil {
 			return nil, err
 		}
@@ -2148,6 +2140,8 @@ func resolveArtifactViewerEndpoint(req *sharedpb.ViewerEndpointRequest, lat, lon
 		OfficialClusterID:            resolution.OfficialClusterID,
 		AllowPlatformSharedPlayback:  resolution.AllowPlatformSharedPlayback,
 		StoredMediaPlacement:         storedMediaPlacementPermitter,
+		StoredMediaPreparer:          viewerPlacementPreparer,
+		Protocol:                     req.GetProtocol(),
 		StoredMediaPlacementRequired: storedMediaPlacementRequired,
 	}
 
@@ -2347,7 +2341,7 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 		ContentId: contentID,
 		ViewerIp:  proto.String(viewerIP),
 	}
-	if contentType == "live" {
+	if contentType == "live" || contentType == "dvr" {
 		req.Protocol, err = requestedViewerManifestProtocol(requestedProtocol, manifestPath)
 		if err != nil {
 			respondPlaybackError(c, http.StatusBadRequest, "INVALID_PLAYBACK_PROTOCOL", "Unsupported playback protocol", nil)
@@ -2427,7 +2421,7 @@ func HandleGenericViewerPlayback(c *gin.Context) {
 
 	// Query credentials are explicitly URL-carried. Header/cookie credentials must
 	// remain out of URLs; clients using them attach credentials to the selected edge.
-	if contentType == "live" {
+	if contentType == "live" || contentType == "dvr" {
 		if token := strings.TrimSpace(c.Request.URL.Query().Get("jwt")); token != "" {
 			response, err = withViewerQueryCredential(response, token)
 			if err != nil {

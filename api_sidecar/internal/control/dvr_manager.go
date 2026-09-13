@@ -635,10 +635,9 @@ func (dm *DVRManager) DropUnsyncedSegment(dvrHash, segmentName, reason string) e
 }
 
 // HandleNewSegment handles a RECORDING_SEGMENT trigger for immediate sync.
-// Mist's RecordingSegmentTrigger carries media-time bounds and duration; we
-// pass them to Foghorn so the per-segment ledger row records canonical
-// timing without re-deriving from filenames or wall-clock.
-func (dm *DVRManager) HandleNewSegment(streamName, filePath string, mediaStartMs, mediaEndMs, durationMs int64) {
+// The trigger's bounds are stream-relative; the ledger's Unix timing comes
+// from the local playlist, just as it does during reconciliation.
+func (dm *DVRManager) HandleNewSegment(streamName, filePath string) {
 	dm.mutex.RLock()
 	defer dm.mutex.RUnlock()
 
@@ -657,7 +656,8 @@ func (dm *DVRManager) HandleNewSegment(streamName, filePath string, mediaStartMs
 	}
 
 	// Verify file is within output directory to avoid path traversal
-	if !strings.HasPrefix(filePath, targetJob.OutputDir) {
+	relative, pathErr := filepath.Rel(targetJob.OutputDir, filePath)
+	if pathErr != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
 		dm.logger.WithFields(logging.Fields{
 			"stream":     streamName,
 			"file_path":  filePath,
@@ -667,7 +667,7 @@ func (dm *DVRManager) HandleNewSegment(streamName, filePath string, mediaStartMs
 	}
 
 	// Trigger sync for this specific segment
-	go dm.syncSpecificSegment(targetJob, filePath, mediaStartMs, mediaEndMs, durationMs)
+	go dm.syncSpecificSegment(targetJob, filePath)
 }
 
 // syncSpecificSegment uploads a recorded TS segment to S3 as a
@@ -687,7 +687,7 @@ func (dm *DVRManager) HandleNewSegment(streamName, filePath string, mediaStartMs
 // eviction decisions; the in-memory SyncedSegments map only tracks
 // which uploads this process has already initiated to avoid duplicate
 // RecordDVRSegment calls.
-func (dm *DVRManager) syncSpecificSegment(job *DVRJob, filePath string, mediaStartMs, mediaEndMs, durationMs int64) {
+func (dm *DVRManager) syncSpecificSegment(job *DVRJob, filePath string) {
 	if !IsConnected() {
 		return
 	}
@@ -701,6 +701,16 @@ func (dm *DVRManager) syncSpecificSegment(job *DVRJob, filePath string, mediaSta
 		return
 	}
 	job.syncMutex.Unlock()
+
+	manifest, manifestErr := os.ReadFile(job.ManifestPath)
+	if manifestErr != nil {
+		return
+	}
+	mediaStartMs, mediaEndMs, durationMs, anchored := dvrSegmentWallClock(string(manifest), segName)
+	if !anchored {
+		// A trigger can race a playlist rewrite; the periodic pass retries it.
+		return
+	}
 
 	// Get segment size
 	info, err := os.Stat(filePath)
@@ -2152,12 +2162,14 @@ func (dm *DVRManager) updateProgress(job *DVRJob) {
 	job.TotalSizeBytes = totalSize
 	status := job.Status
 	dvrHash := job.DVRHash
+	startedAt := job.StartTime.Unix()
 	sendFunc := job.SendFunc
 	dm.mutex.Unlock()
 
 	if sendFunc != nil {
 		progress := &ipcpb.DVRProgress{
 			DvrHash:      dvrHash,
+			StartedAt:    startedAt,
 			Status:       status,
 			SegmentCount: int32(segmentCount),
 			SizeBytes:    totalSize,
@@ -2578,6 +2590,8 @@ func (dm *DVRManager) sendCompletion(job *DVRJob, status string, errorMsg string
 
 	stopped := &ipcpb.DVRStopped{
 		DvrHash:         job.DVRHash,
+		StartedAt:       job.StartTime.Unix(),
+		EndedAt:         time.Now().Unix(),
 		Status:          status,
 		Error:           errorMsg,
 		ManifestPath:    job.ManifestPath,

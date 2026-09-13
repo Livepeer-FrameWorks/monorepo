@@ -84,6 +84,7 @@ func localContentResolution(contentID string, object *mediaauthoritypb.MediaObje
 	}
 	artifact := object.GetArtifact()
 	resolution.ArtifactHash = artifact.GetArtifactHash()
+	resolution.ArtifactID = artifact.GetArtifactId()
 	resolution.StreamId = artifact.GetParentStreamId()
 	resolution.ParentStreamInternalName = artifact.GetParentStreamInternalName()
 	switch artifact.GetArtifactKind() {

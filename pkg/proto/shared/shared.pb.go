@@ -3334,8 +3334,9 @@ func (x *CreateVodUploadRequest) GetRequestId() string {
 
 // CreateVodUploadResponse - multipart upload instructions
 type CreateVodUploadResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	UploadId      string                 `protobuf:"bytes,1,opt,name=upload_id,json=uploadId,proto3" json:"upload_id,omitempty"`             // S3 multipart upload ID
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Opaque session ID at Commodore; storage-native multipart ID within Foghorn.
+	UploadId      string                 `protobuf:"bytes,1,opt,name=upload_id,json=uploadId,proto3" json:"upload_id,omitempty"`
 	ArtifactId    string                 `protobuf:"bytes,2,opt,name=artifact_id,json=artifactId,proto3" json:"artifact_id,omitempty"`       // ID in live_artifacts table
 	ArtifactHash  string                 `protobuf:"bytes,3,opt,name=artifact_hash,json=artifactHash,proto3" json:"artifact_hash,omitempty"` // Hash for playback URL resolution
 	PartSize      int64                  `protobuf:"varint,4,opt,name=part_size,json=partSize,proto3" json:"part_size,omitempty"`            // Recommended part size (bytes)
@@ -3480,11 +3481,12 @@ func (x *VodUploadPart) GetPresignedUrl() string {
 
 // CompleteVodUploadRequest - finalize multipart upload
 type CompleteVodUploadRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	TenantId      string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
-	UploadId      string                 `protobuf:"bytes,2,opt,name=upload_id,json=uploadId,proto3" json:"upload_id,omitempty"`                // S3 multipart upload ID
-	Parts         []*VodCompletedPart    `protobuf:"bytes,3,rep,name=parts,proto3" json:"parts,omitempty"`                                      // ETags from uploaded parts
-	ProcessesJson string                 `protobuf:"bytes,4,opt,name=processes_json,json=processesJson,proto3" json:"processes_json,omitempty"` // Pre-computed MistServer process config for VOD processing
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	TenantId string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	// Pass the issuing service's CreateVodUploadResponse.upload_id unchanged.
+	UploadId      string              `protobuf:"bytes,2,opt,name=upload_id,json=uploadId,proto3" json:"upload_id,omitempty"`
+	Parts         []*VodCompletedPart `protobuf:"bytes,3,rep,name=parts,proto3" json:"parts,omitempty"`                                      // ETags from uploaded parts
+	ProcessesJson string              `protobuf:"bytes,4,opt,name=processes_json,json=processesJson,proto3" json:"processes_json,omitempty"` // Pre-computed MistServer process config for VOD processing
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

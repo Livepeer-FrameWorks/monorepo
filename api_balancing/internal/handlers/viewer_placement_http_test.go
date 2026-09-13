@@ -109,6 +109,18 @@ func TestPreparedViewerHTTPDeniesBeforePreparationAndFailsWithoutFallback(t *tes
 	}
 }
 
+func TestDVRHTTPRejectsConflictingManifestBeforeDispatch(t *testing.T) {
+	setupPreparedViewerHTTP(t, false)
+	startCommodoreFakeArms(t, &commodoreArmsFake{artifactPlaybackID: func(context.Context, *commodorepb.ResolveArtifactPlaybackIDRequest) (*commodorepb.ResolveArtifactPlaybackIDResponse, error) {
+		return &commodorepb.ResolveArtifactPlaybackIDResponse{Found: true, ContentType: "dvr", ArtifactHash: "recording-hash", InternalName: "recording", TenantId: "owner", StreamId: "parent"}, nil
+	}})
+	c, w := playbackCtxArms(t, "recording-public/hls/index.mpd")
+	HandleGenericViewerPlayback(c)
+	if w.Code != http.StatusBadRequest || w.Header().Get("Location") != "" {
+		t.Fatalf("DVR skipped manifest validation: status=%d body=%s", w.Code, w.Body.String())
+	}
+}
+
 func setupPreparedViewerHTTP(t *testing.T, denied bool, override ...*commodoreBalancingFake) {
 	t.Helper()
 	balancingTestEnv(t)

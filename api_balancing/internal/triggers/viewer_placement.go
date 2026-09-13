@@ -65,6 +65,14 @@ func (p *Processor) acceptedProcessingSourceRead(tenantID, internalName, nodeID,
 type ViewerPlacementConnection struct {
 	TenantID, InternalName, ClusterID, NodeID string
 	Connector, ClientAddress                  string
+	PreSource                                 bool
+}
+
+func (connection ViewerPlacementConnection) protocol() (string, error) {
+	if connection.PreSource {
+		return mist.PlayRewriteProtocol(connection.Connector)
+	}
+	return mist.ViewerProtocol(connection.Connector)
 }
 
 type ViewerPlacementAdmission func(context.Context, ViewerPlacementConnection) (federation.PlacementAdmissionDecision, error)
@@ -78,6 +86,12 @@ func (p *Processor) SetViewerPlacementAdmission(admission ViewerPlacementAdmissi
 }
 
 func (p *Processor) checkViewerPlacement(ctx context.Context, tenantID, internalName, clusterID, nodeID string, viewer *ipcpb.ViewerConnectTrigger) (*federation.PlacementAdmissionDecision, error) {
+	return p.checkPlacementConnection(ctx, ViewerPlacementConnection{TenantID: tenantID, InternalName: internalName, ClusterID: clusterID, NodeID: nodeID,
+		Connector: viewer.GetConnector(), ClientAddress: viewer.GetHost()})
+}
+
+func (p *Processor) checkPlacementConnection(ctx context.Context, connection ViewerPlacementConnection) (*federation.PlacementAdmissionDecision, error) {
+	tenantID, internalName, clusterID, nodeID := connection.TenantID, connection.InternalName, connection.ClusterID, connection.NodeID
 	if p.viewerPlacementAdmission == nil {
 		return nil, errors.New("viewer placement admission is unavailable")
 	}
@@ -86,15 +100,14 @@ func (p *Processor) checkViewerPlacement(ctx context.Context, tenantID, internal
 			return nil, errors.New("viewer placement identity is unavailable")
 		}
 	}
-	protocol, protocolErr := mist.ViewerProtocol(viewer.GetConnector())
+	protocol, protocolErr := connection.protocol()
 	if protocolErr != nil {
 		return nil, protocolErr
 	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	started := time.Now()
-	decision, err := p.viewerPlacementAdmission(ctx, ViewerPlacementConnection{TenantID: tenantID, InternalName: internalName, ClusterID: clusterID, NodeID: nodeID,
-		Connector: viewer.GetConnector(), ClientAddress: viewer.GetHost()})
+	decision, err := p.viewerPlacementAdmission(ctx, connection)
 	if err != nil {
 		return nil, err
 	}

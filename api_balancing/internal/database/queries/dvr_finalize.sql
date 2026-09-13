@@ -4,7 +4,8 @@ SET status = 'finalizing', updated_at = NOW(), ended_at = COALESCE(ended_at, NOW
 WHERE artifact_hash = sqlc.arg(artifact_hash) AND artifact_type = 'dvr'
   AND (status IN ('requested', 'starting', 'recording', 'stopping')
        OR (status = 'finalizing' AND updated_at < NOW() - (sqlc.arg(stale_seconds)::double precision * INTERVAL '1 second')))
-RETURNING status, tenant_id::text AS tenant_id;
+RETURNING status, tenant_id::text AS tenant_id,
+          COALESCE(FLOOR(EXTRACT(EPOCH FROM ended_at) * 1000), 0)::bigint AS ended_at_ms;
 
 -- name: CompleteDVRFinalization :execrows
 UPDATE foghorn.artifacts

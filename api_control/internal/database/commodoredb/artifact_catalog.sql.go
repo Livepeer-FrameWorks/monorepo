@@ -13,7 +13,7 @@ import (
 const applyClipCatalogSnapshot = `-- name: ApplyClipCatalogSnapshot :one
 UPDATE commodore.clips
 SET size_bytes = $1,
-    duration = $2,
+    duration = COALESCE($2, duration),
     tracks = CASE WHEN $3::boolean THEN $4::text::jsonb ELSE tracks END,
     sync_status = $5,
     is_synced = $6,

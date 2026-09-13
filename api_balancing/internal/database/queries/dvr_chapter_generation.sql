@@ -12,8 +12,8 @@ ON CONFLICT (chapter_id) DO NOTHING;
 -- name: GetDVRChapterPolicy :one
 SELECT COALESCE(dvr_chapter_mode, '')::text AS mode,
        COALESCE(dvr_chapter_interval, 0)::integer AS interval_seconds,
-       COALESCE(EXTRACT(EPOCH FROM started_at) * 1000, 0)::bigint AS started_at_ms,
-       COALESCE(EXTRACT(EPOCH FROM ended_at) * 1000, 0)::bigint AS ended_at_ms,
+       COALESCE(FLOOR(EXTRACT(EPOCH FROM started_at) * 1000), 0)::bigint AS started_at_ms,
+       COALESCE(FLOOR(EXTRACT(EPOCH FROM ended_at) * 1000), 0)::bigint AS ended_at_ms,
        COALESCE(dvr_window_seconds, 0)::integer AS window_seconds
 FROM foghorn.artifacts
 WHERE artifact_hash = $1 AND artifact_type = 'dvr';

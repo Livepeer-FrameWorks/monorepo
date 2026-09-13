@@ -22,7 +22,7 @@ func TestSanitizePresignedRequestErrorRedactsSignedURL(t *testing.T) {
 		Err: errors.New("transport failed"),
 	}
 
-	got := sanitizePresignedRequestError(err).Error()
+	got := SanitizeRequestError(err).Error()
 	if strings.Contains(got, "X-Amz-") || strings.Contains(got, "secret") || strings.Contains(got, "sig") {
 		t.Fatalf("sanitizePresignedRequestError leaked signed query: %q", got)
 	}
@@ -34,7 +34,7 @@ func TestSanitizePresignedRequestErrorRedactsSignedURL(t *testing.T) {
 func TestSanitizePresignedRequestErrorRedactsURLText(t *testing.T) {
 	err := errors.New(`Put "https://object.example/frameworks/dev/poster.jpg?X-Amz-Credential=secret&X-Amz-Signature=sig": retry failed`)
 
-	got := sanitizePresignedRequestError(err).Error()
+	got := SanitizeRequestError(err).Error()
 	if strings.Contains(got, "X-Amz-") || strings.Contains(got, "secret") || strings.Contains(got, "sig") {
 		t.Fatalf("sanitizePresignedRequestError leaked signed query: %q", got)
 	}

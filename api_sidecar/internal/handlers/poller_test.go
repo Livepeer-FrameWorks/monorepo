@@ -110,6 +110,7 @@ func TestAddPrometheusNode_BindsInlineRequestAndFallsBackEdgeURL(t *testing.T) {
 	})
 
 	prometheusMonitor = &PrometheusMonitor{}
+	t.Cleanup(prometheusMonitor.Stop)
 	monitorLogger = logging.NewLogger()
 
 	ctx, rec := newPollerContext(http.MethodPost, "/prometheus/nodes", `{
@@ -172,6 +173,7 @@ func TestAddPrometheusNode_UsesProvidedEdgePublicURL(t *testing.T) {
 	})
 
 	prometheusMonitor = &PrometheusMonitor{}
+	t.Cleanup(prometheusMonitor.Stop)
 	monitorLogger = logging.NewLogger()
 
 	ctx, rec := newPollerContext(http.MethodPost, "/prometheus/nodes", `{

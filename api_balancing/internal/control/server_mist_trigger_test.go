@@ -1,8 +1,10 @@
 package control
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -98,6 +100,33 @@ func TestProcessMistTrigger_ReplaysBlockingResultByMistTriggerUUID(t *testing.T)
 	}
 	if response.GetResponse() != "live+resolved" || response.GetAction() != ipcpb.MistTriggerAction_MIST_TRIGGER_ACTION_VALUE {
 		t.Fatalf("replayed result = (%q, %s), want value live+resolved", response.GetResponse(), response.GetAction())
+	}
+}
+
+func TestProcessMistTriggerDoesNotLogSourceCredentials(t *testing.T) {
+	previous := mistTriggerProcessor
+	t.Cleanup(func() { mistTriggerProcessor = previous })
+	resetBlockingTriggerReplayForTest(t)
+	const secret = "fwsrc.test-attempt.secret-capability"
+	const source = "dtsc://origin:4200/dvr+recording?token=" + secret
+	mistTriggerProcessor = &captureMistTriggerProcessor{response: source}
+	var output bytes.Buffer
+	l := logrus.New()
+	l.SetOutput(&output)
+	l.SetLevel(logrus.DebugLevel)
+	stream := &captureStream{}
+	t.Cleanup(SetupTestRegistry("edge", stream))
+	registry.conns["edge"].canonicalID, registry.conns["edge"].clusterID = "edge", "cluster"
+	processMistTrigger(&ipcpb.MistTrigger{TriggerType: "STREAM_SOURCE", Blocking: true, RequestId: "source-request"},
+		NodeSession{CanonicalNodeID: "edge", ClusterID: "cluster"}, stream, logging.Logger(l))
+	if got := stream.lastSent().GetMistTriggerResponse().GetResponse(); got != source {
+		t.Fatal("source credential was removed from the control response")
+	}
+	if strings.Contains(output.String(), secret) || strings.Contains(output.String(), "dtsc://") {
+		t.Fatal("source capability was copied into logs")
+	}
+	if !strings.Contains(output.String(), "response_bytes") {
+		t.Fatal("missing bounded response diagnostic")
 	}
 }
 

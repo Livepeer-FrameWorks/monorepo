@@ -148,6 +148,25 @@ func TestUpdateDVRProgressByHash_FirstRecordingEnqueuesLifecycle(t *testing.T) {
 	}
 }
 
+func TestUpdateDVRProgressByHash_StartupHeartbeatDoesNotPromote(t *testing.T) {
+	for _, reported := range []string{"starting", "", "failed"} {
+		t.Run(reported, func(t *testing.T) {
+			_, mock := setupRepoTest(t)
+			mock.ExpectBegin()
+			mock.ExpectQuery(progressSelectRe).WithArgs("dvr-1").
+				WillReturnRows(progressRows("starting", "node-1"))
+			mock.ExpectCommit()
+			applied, current, err := (&dvrRepositoryDB{}).UpdateDVRProgressByHash(t.Context(), "dvr-1", reported, 512, 0, "node-1")
+			if err != nil || applied || current != "starting" {
+				t.Fatalf("unconfirmed startup promoted: applied=%v current=%q err=%v", applied, current, err)
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 // A repeated progress report on an already-'recording' DVR must NOT re-emit STATUS_RECORDING; the
 // UPDATE still grows size but the enqueue is gated on the starting->recording edge.
 func TestUpdateDVRProgressByHash_AlreadyRecordingNoDuplicate(t *testing.T) {

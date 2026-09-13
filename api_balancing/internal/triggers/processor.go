@@ -2503,7 +2503,7 @@ func (p *Processor) handlePlayRewrite(trigger *ipcpb.MistTrigger) (string, bool,
 		return "", true, fmt.Errorf("stream unavailable: %s", billing.DeniedReason)
 	}
 	var placementValidUntil time.Time
-	acceptedPull := p.acceptedSourcePull(requestCtx, mist.ExtractInternalName(target.InternalName), trigger.GetNodeId(), playRewrite.GetOutputType(), playRewrite.GetRequestUrl())
+	acceptedPull := p.acceptedSourcePull(requestCtx, target.InternalName, trigger.GetNodeId(), playRewrite.GetOutputType(), playRewrite.GetRequestUrl())
 	// A processing source read is admitted like an accepted pull (no viewer
 	// placement), and additionally is neither counted as a viewer nor reported
 	// to analytics: it is the platform reading its own source, not an audience.
@@ -2520,10 +2520,11 @@ func (p *Processor) handlePlayRewrite(trigger *ipcpb.MistTrigger) (string, bool,
 		if viewerCluster == "" {
 			viewerCluster = strings.TrimSpace(trigger.GetClusterId())
 		}
-		placementDecision, placementErr := p.checkViewerPlacement(requestCtx, target.TenantID, mist.ExtractInternalName(target.InternalName), viewerCluster, trigger.GetNodeId(),
-			&ipcpb.ViewerConnectTrigger{Connector: playRewrite.GetOutputType(), Host: playRewrite.GetViewerHost()})
+		placementDecision, placementErr := p.checkPlacementConnection(requestCtx, ViewerPlacementConnection{
+			TenantID: target.TenantID, InternalName: mist.ExtractInternalName(target.InternalName), ClusterID: viewerCluster, NodeID: trigger.GetNodeId(),
+			Connector: playRewrite.GetOutputType(), ClientAddress: playRewrite.GetViewerHost(), PreSource: true})
 		if placementErr != nil {
-			return "", false, fmt.Errorf("playback placement admission failed: %w", placementErr)
+			return "", false, fmt.Errorf("playback placement admission failed for connector %q: %w", playRewrite.GetOutputType(), placementErr)
 		}
 		placementValidUntil = placementDecision.ExpiresAt
 	}
@@ -2878,12 +2879,8 @@ func (p *Processor) handleStreamSource(trigger *ipcpb.MistTrigger) (string, bool
 	// served via dvr+ — finalized chapter artifacts are addressed by
 	// their VOD playback ID and flow through the standard vod+ path.
 	if strings.HasPrefix(streamName, "dvr+") {
-		// Fast path: an existing cross-cluster origin-pull arrangement
-		// for this dvr+ stream is already recorded — reuse it without
-		// touching DB or federation.
-		if dtsc, handled := p.federationOriginPullDTSC(requestCtx, streamName, trigger.GetNodeId()); handled {
-			return dtsc, false, nil
-		}
+		// Recording state and grants must be resolved even for a warm pull.
+		// A live publisher's prepared-source receipt cannot authorize a DVR.
 		token := strings.TrimPrefix(streamName, "dvr+")
 		if token == "" {
 			return control.OfflineInvalidToken, false, nil
@@ -2969,7 +2966,7 @@ func (p *Processor) handleStreamSource(trigger *ipcpb.MistTrigger) (string, bool
 			}).Debug("STREAM_SOURCE: dvr+ rolling DVR served from local manifest on recording origin")
 			return localPath, false, nil
 		}
-		dtscURL := control.BuildDTSCURI(dispatch.RecordingNode, streamName, p.logger)
+		dtscURL := p.localDVRSourcePull(requestCtx, streamName, dispatch, trigger.GetNodeId())
 		if dtscURL == "" {
 			p.logger.WithFields(logging.Fields{
 				"stream_name":    streamName,
@@ -2982,7 +2979,7 @@ func (p *Processor) handleStreamSource(trigger *ipcpb.MistTrigger) (string, bool
 			"stream_name":    streamName,
 			"recording_node": dispatch.RecordingNode,
 			"viewer_node":    trigger.GetNodeId(),
-			"dtsc_url":       dtscURL,
+			"dtsc_url":       control.SourcePullBaseURL(dtscURL),
 		}).Debug("STREAM_SOURCE: dvr+ rolling DVR pulled via DTSC from recording origin")
 		return dtscURL, false, nil
 	}
@@ -3089,14 +3086,16 @@ func (p *Processor) handleStreamSource(trigger *ipcpb.MistTrigger) (string, bool
 	// Front-door reauthorization (mirrors /play): the authoritative byte cluster
 	// — the adopted row's COALESCE(storage_cluster_id, origin_cluster_id) when we
 	// already hold it, else Commodore's fresh origin_cluster_id — must be local
-	// or in the tenant's fresh cluster_peers envelope. Refuse before adopting or
+	// or in the tenant's current grants. Signed grants do not disappear during
+	// a peer-channel reconnect. Refuse before adopting or
 	// handing Mist a relay URL, so a revoked peer stops serving on the next
 	// STREAM_SOURCE open. Local bytes always pass.
 	authoritativeCluster := desc.AuthoritativeCluster
 	if authoritativeCluster == "" {
 		authoritativeCluster = originClusterID
 	}
-	if !control.AuthoritativeClusterServableWithPolicy(authoritativeCluster, tenantID, clusterPeers, allowPlatformShared) {
+	grantPeers := artifactSourceAuthorizationPeers(artifactResponse, localArtifactMarked)
+	if !control.AuthoritativeClusterServableWithPolicy(authoritativeCluster, tenantID, grantPeers, allowPlatformShared) {
 		p.logger.WithFields(logging.Fields{
 			"artifact_hash":         artifactHash,
 			"authoritative_cluster": authoritativeCluster,
@@ -4197,7 +4196,7 @@ func (p *Processor) handleUserNew(trigger *ipcpb.MistTrigger) (string, bool, err
 	if viewerCluster == "" {
 		viewerCluster = strings.TrimSpace(trigger.GetClusterId())
 	}
-	acceptedPull := p.acceptedSourcePull(requestCtx, internalName, trigger.GetNodeId(), userNew.GetConnector(), userNew.GetRequestUrl())
+	acceptedPull := p.acceptedSourcePull(requestCtx, userNew.GetStreamName(), trigger.GetNodeId(), userNew.GetConnector(), userNew.GetRequestUrl())
 	if !acceptedPull && info.TenantID != "" {
 		// The platform staging a processing job's source on this node: not a
 		// viewer, so no cluster/placement/capacity admission, no viewer session
@@ -5929,7 +5928,7 @@ func (p *Processor) tryArrangeDVRCrossCluster(ctx context.Context, runtimeName s
 		return "", false
 	}
 	entry, err := control.StreamRegistryInstance.ResolveSourceByInternalName(ctx, dispatch.StreamInternalName)
-	if err != nil {
+	if err != nil || entry.TenantID != dispatch.TenantID {
 		return "", false
 	}
 	callerClusterID := p.resolveNodeClusterIDWithContext(ctx, callerNodeID)
@@ -5969,7 +5968,8 @@ func (p *Processor) tryArrangeDVRCrossCluster(ctx context.Context, runtimeName s
 		return "", false
 	}
 	result, arrangeErr := federation.DefaultArrange(ctx, federation.ArrangeOriginPullRequest{
-		InternalName: runtimeName,
+		InternalName:      runtimeName,
+		RefreshAcceptance: true,
 		Remote: &foghornfederationpb.EdgeCandidate{
 			NodeId: recordingNode,
 		},

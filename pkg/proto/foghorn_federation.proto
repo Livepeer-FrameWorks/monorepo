@@ -156,10 +156,10 @@ message OriginPullAck {
 }
 
 message PrepareArtifactRequest {
-  string artifact_id = 1;       // Artifact hash (clip/vod/chapter VOD)
+  string artifact_id = 1;       // Artifact hash (clip/vod/chapter VOD/dvr)
   string clip_hash = 2;         // Clip hash fallback alias
   string requesting_cluster = 3;
-  string artifact_type = 4;     // "clip", "vod", or public "chapter" (canonical VOD bytes); parent DVR artifacts are rejected
+  string artifact_type = 4;     // "clip", "vod", "chapter" (VOD bytes), or "dvr" (recording state only)
   string tenant_id = 5;
   reserved 6, 7;                // retired dvr_start_ms / dvr_end_ms (chapter-range prototype; chapter playback now goes through the chapter VOD's playback_id)
   reserved "dvr_start_ms", "dvr_end_ms";
@@ -173,9 +173,8 @@ message PrepareArtifactResponse {
   reserved "est_ready_seconds";
   string error = 5;
   // Filename -> presigned GET URL for segmented non-DVR artifacts.
-  // Parent DVR artifacts are rejected by PrepareArtifact; finalized
-  // chapters are addressed as their own VOD artifacts and use the
-  // single-file url/segment_urls path like any other VOD.
+  // Finalized chapters are addressed as their own VOD artifacts. A parent
+  // DVR returns recording state, never a single-file or segment URL.
   map<string, string> segment_urls = 6;
   string format = 7;            // Container format (mp4, m3u8, etc.)
   string internal_name = 8;     // Artifact routing name (vod+{this})
@@ -210,6 +209,15 @@ message PrepareArtifactResponse {
   // only the origin cluster's Foghorn (via AuthorizeRelayPull) validates it.
   // Covers both peer_relay_url and peer_relay_dtsh_url.
   string peer_relay_grant_id = 16;
+  // Authoritative parent-DVR lifecycle. Ready means actively recording on
+  // dvr_recording_node_id; no bytes or source capability are returned here.
+  // A subsequent origin-pull request authorizes the exact recording read.
+  string dvr_status = 17;
+  string dvr_recording_node_id = 18;
+  // Read URL for the published index matching a synced clip/VOD. The owning
+  // cluster signs its recorded, version-addressed key; consumers never derive
+  // it by appending a suffix to the signed media URL.
+  string dtsh_url = 19;
   reserved 13, 15;  // retired self-signed peer_relay_token / peer_relay_dtsh_token
   reserved "peer_relay_token", "peer_relay_dtsh_token";
 }

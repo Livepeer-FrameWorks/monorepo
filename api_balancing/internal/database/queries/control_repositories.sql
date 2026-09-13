@@ -51,6 +51,16 @@ SET status = CASE WHEN status IN ('requested', 'starting') THEN 'recording' ELSE
     updated_at = NOW()
 WHERE artifact_hash = $1 AND artifact_type = 'dvr';
 
+-- name: RecordDVRStartTime :exec
+UPDATE foghorn.artifacts
+SET started_at = to_timestamp(sqlc.arg(started_at_unix)::bigint), updated_at = NOW()
+WHERE artifact_hash = sqlc.arg(artifact_hash)
+  AND tenant_id = sqlc.arg(tenant_id)::uuid
+  AND artifact_type = 'dvr'
+  AND dvr_start_dispatch->>'node_id' = sqlc.arg(node_id)::text
+  AND started_at IS NULL
+  AND status IN ('requested', 'starting', 'recording', 'stopping', 'finalizing', 'completed', 'completed_partial');
+
 -- name: RecordDVRCompletion :exec
 UPDATE foghorn.artifacts
 SET status = sqlc.arg(status)::text,
@@ -408,4 +418,17 @@ SELECT EXISTS (
       AND artifact_type = 'vod'
       AND sync_status = 'synced'
       AND COALESCE(dtsh_synced, false) = false
+);
+-- name: IsDVRRecordingSource :one
+SELECT EXISTS (
+    SELECT 1 FROM foghorn.artifacts a
+    JOIN foghorn.artifact_nodes n ON n.artifact_hash = a.artifact_hash
+    WHERE a.tenant_id = sqlc.arg(tenant_id) AND a.internal_name = sqlc.arg(internal_name)
+    AND a.artifact_type = 'dvr' AND a.status = 'recording'
+    AND n.node_id = sqlc.arg(node_id) AND NOT n.is_orphaned
+    AND NOT EXISTS (
+        SELECT 1 FROM foghorn.artifact_nodes other
+        WHERE other.artifact_hash = a.artifact_hash
+        AND other.node_id <> n.node_id AND NOT other.is_orphaned
+    )
 );

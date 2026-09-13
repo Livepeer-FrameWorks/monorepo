@@ -380,6 +380,35 @@ func TestServeColdMemoryOnlyDoesNotWriteDisk(t *testing.T) {
 	}
 }
 
+func TestColdRelayDoesNotCommitSuccessBeforeUpstreamBytes(t *testing.T) {
+	for _, decision := range []admission.CacheDecision{admission.CacheMemoryOnly, admission.CacheToDisk} {
+		for _, ranged := range []bool{false, true} {
+			up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusUnsupportedMediaType)
+			}))
+			res := &ResolveResult{State: ipcpb.AssetState_ASSET_STATE_PLAYABLE, MediaPresignedURL: up.URL, ExpectedSizeBytes: 1024, URLTTLSeconds: 60}
+			s := newTestServer(t, t.TempDir(), decision, &fakeResolver{out: map[string]*ResolveResult{"vod/failed": res}}, nil)
+			ts := mount(t, s)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/internal/artifact/vod/failed.mkv", nil)
+			req.RequestURI = ""
+			if ranged {
+				req.Header.Set("Range", "bytes=0-15")
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, readErr := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			ts.Close()
+			up.Close()
+			if resp.StatusCode != http.StatusBadGateway || readErr != nil || len(body) == 0 || resp.Header.Get("Content-Range") != "" {
+				t.Fatalf("decision=%v range=%v: status=%d bytes=%d read=%v", decision, ranged, resp.StatusCode, len(body), readErr)
+			}
+		}
+	}
+}
+
 func TestDtshPutLandsLocallyAndHandsOffFreeze(t *testing.T) {
 	dir := t.TempDir()
 	hash := "abc"

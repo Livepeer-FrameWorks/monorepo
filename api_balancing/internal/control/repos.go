@@ -170,6 +170,11 @@ func (r *dvrRepositoryDB) UpdateDVRProgressByHash(ctx context.Context, dvrHash s
 	}
 
 	firstEdge := prevStatus == "requested" || prevStatus == "starting"
+	// Startup heartbeats are not proof that Mist accepted the recording push.
+	// Promote only after owner confirmation or an observed media segment.
+	if firstEdge && status != "recording" && segmentCount == 0 {
+		return false, prevStatus, tx.Commit()
+	}
 	// Metrics update + canonical first-edge promotion. size_bytes grows monotonically (GREATEST); status
 	// only ever advances requested/starting -> recording, never to a node-supplied value.
 	if err = qtx.RecordDVRProgress(ctx, foghorndb.RecordDVRProgressParams{ArtifactHash: dvrHash, SizeBytes: sizeBytes}); err != nil {

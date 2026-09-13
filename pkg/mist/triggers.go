@@ -108,7 +108,8 @@ func IsPlaybackViewerConnector(connector string) bool {
 		switch part {
 		case "hls", "webrtc", "whep", "dash", "cmaf", "hss",
 			"mp4", "webm", "mkv", "flv", "rtmp", "rtsp", "srt", "dtsc", "dtscquic",
-			"ts", "httpts", "raw/ws", "wsraw", "h264", "aac", "mp3", "flac", "wav", "ogg", "opus":
+			"ts", "httpts", "raw/ws", "wsraw", "h264", "aac", "mp3", "flac", "wav", "ogg", "opus",
+			"webrtc/ws", "mp4/ws", "ebml/ws", "h264/ws", "json/ws":
 			return true
 		}
 	}

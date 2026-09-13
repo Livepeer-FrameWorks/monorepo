@@ -639,10 +639,10 @@ func (x *OriginPullAck) GetSourceClusterId() string {
 
 type PrepareArtifactRequest struct {
 	state             protoimpl.MessageState `protogen:"open.v1"`
-	ArtifactId        string                 `protobuf:"bytes,1,opt,name=artifact_id,json=artifactId,proto3" json:"artifact_id,omitempty"` // Artifact hash (clip/vod/chapter VOD)
+	ArtifactId        string                 `protobuf:"bytes,1,opt,name=artifact_id,json=artifactId,proto3" json:"artifact_id,omitempty"` // Artifact hash (clip/vod/chapter VOD/dvr)
 	ClipHash          string                 `protobuf:"bytes,2,opt,name=clip_hash,json=clipHash,proto3" json:"clip_hash,omitempty"`       // Clip hash fallback alias
 	RequestingCluster string                 `protobuf:"bytes,3,opt,name=requesting_cluster,json=requestingCluster,proto3" json:"requesting_cluster,omitempty"`
-	ArtifactType      string                 `protobuf:"bytes,4,opt,name=artifact_type,json=artifactType,proto3" json:"artifact_type,omitempty"` // "clip", "vod", or public "chapter" (canonical VOD bytes); parent DVR artifacts are rejected
+	ArtifactType      string                 `protobuf:"bytes,4,opt,name=artifact_type,json=artifactType,proto3" json:"artifact_type,omitempty"` // "clip", "vod", "chapter" (VOD bytes), or "dvr" (recording state only)
 	TenantId          string                 `protobuf:"bytes,5,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
@@ -720,9 +720,8 @@ type PrepareArtifactResponse struct {
 	Ready     bool                   `protobuf:"varint,3,opt,name=ready,proto3" json:"ready,omitempty"` // True if artifact is immediately available
 	Error     string                 `protobuf:"bytes,5,opt,name=error,proto3" json:"error,omitempty"`
 	// Filename -> presigned GET URL for segmented non-DVR artifacts.
-	// Parent DVR artifacts are rejected by PrepareArtifact; finalized
-	// chapters are addressed as their own VOD artifacts and use the
-	// single-file url/segment_urls path like any other VOD.
+	// Finalized chapters are addressed as their own VOD artifacts. A parent
+	// DVR returns recording state, never a single-file or segment URL.
 	SegmentUrls        map[string]string `protobuf:"bytes,6,rep,name=segment_urls,json=segmentUrls,proto3" json:"segment_urls,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	Format             string            `protobuf:"bytes,7,opt,name=format,proto3" json:"format,omitempty"`                                                     // Container format (mp4, m3u8, etc.)
 	InternalName       string            `protobuf:"bytes,8,opt,name=internal_name,json=internalName,proto3" json:"internal_name,omitempty"`                     // Artifact routing name (vod+{this})
@@ -750,8 +749,17 @@ type PrepareArtifactResponse struct {
 	// only the origin cluster's Foghorn (via AuthorizeRelayPull) validates it.
 	// Covers both peer_relay_url and peer_relay_dtsh_url.
 	PeerRelayGrantId string `protobuf:"bytes,16,opt,name=peer_relay_grant_id,json=peerRelayGrantId,proto3" json:"peer_relay_grant_id,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Authoritative parent-DVR lifecycle. Ready means actively recording on
+	// dvr_recording_node_id; no bytes or source capability are returned here.
+	// A subsequent origin-pull request authorizes the exact recording read.
+	DvrStatus          string `protobuf:"bytes,17,opt,name=dvr_status,json=dvrStatus,proto3" json:"dvr_status,omitempty"`
+	DvrRecordingNodeId string `protobuf:"bytes,18,opt,name=dvr_recording_node_id,json=dvrRecordingNodeId,proto3" json:"dvr_recording_node_id,omitempty"`
+	// Read URL for the published index matching a synced clip/VOD. The owning
+	// cluster signs its recorded, version-addressed key; consumers never derive
+	// it by appending a suffix to the signed media URL.
+	DtshUrl       string `protobuf:"bytes,19,opt,name=dtsh_url,json=dtshUrl,proto3" json:"dtsh_url,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PrepareArtifactResponse) Reset() {
@@ -864,6 +872,27 @@ func (x *PrepareArtifactResponse) GetPeerRelayDtshUrl() string {
 func (x *PrepareArtifactResponse) GetPeerRelayGrantId() string {
 	if x != nil {
 		return x.PeerRelayGrantId
+	}
+	return ""
+}
+
+func (x *PrepareArtifactResponse) GetDvrStatus() string {
+	if x != nil {
+		return x.DvrStatus
+	}
+	return ""
+}
+
+func (x *PrepareArtifactResponse) GetDvrRecordingNodeId() string {
+	if x != nil {
+		return x.DvrRecordingNodeId
+	}
+	return ""
+}
+
+func (x *PrepareArtifactResponse) GetDtshUrl() string {
+	if x != nil {
+		return x.DtshUrl
 	}
 	return ""
 }
@@ -3561,7 +3590,7 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	"\x12requesting_cluster\x18\x03 \x01(\tR\x11requestingCluster\x12#\n" +
 	"\rartifact_type\x18\x04 \x01(\tR\fartifactType\x12\x1b\n" +
 	"\ttenant_id\x18\x05 \x01(\tR\btenantIdJ\x04\b\x06\x10\aJ\x04\b\a\x10\bR\fdvr_start_msR\n" +
-	"dvr_end_ms\"\x9c\x05\n" +
+	"dvr_end_ms\"\x89\x06\n" +
 	"\x17PrepareArtifactResponse\x12\x10\n" +
 	"\x03url\x18\x01 \x01(\tR\x03url\x12\x1d\n" +
 	"\n" +
@@ -3576,7 +3605,11 @@ const file_foghorn_federation_proto_rawDesc = "" +
 	" \x01(\tR\x11redirectClusterId\x12$\n" +
 	"\x0epeer_relay_url\x18\f \x01(\tR\fpeerRelayUrl\x12-\n" +
 	"\x13peer_relay_dtsh_url\x18\x0e \x01(\tR\x10peerRelayDtshUrl\x12-\n" +
-	"\x13peer_relay_grant_id\x18\x10 \x01(\tR\x10peerRelayGrantId\x1a>\n" +
+	"\x13peer_relay_grant_id\x18\x10 \x01(\tR\x10peerRelayGrantId\x12\x1d\n" +
+	"\n" +
+	"dvr_status\x18\x11 \x01(\tR\tdvrStatus\x121\n" +
+	"\x15dvr_recording_node_id\x18\x12 \x01(\tR\x12dvrRecordingNodeId\x12\x19\n" +
+	"\bdtsh_url\x18\x13 \x01(\tR\adtshUrl\x1a>\n" +
 	"\x10SegmentUrlsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\x04\x10\x05J\x04\b\v\x10\fJ\x04\b\r\x10\x0eJ\x04\b\x0f\x10\x10R\x11est_ready_secondsR\fdvr_segmentsR\x10peer_relay_tokenR\x15peer_relay_dtsh_token\"\xb8\x03\n" +

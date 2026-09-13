@@ -74,12 +74,8 @@ func TestResolveLiveViewerEndpoint_EmptyInternalNameNotFound(t *testing.T) {
 	}
 }
 
-// resolveDVRViewerEndpoint, when the DVR is no longer active (dispatch
-// resolves to nil with no Commodore) and no playable chapter has been
-// dispatched yet, must return FailedPrecondition pointing the caller at
-// dvrChapters — NOT silently route through the archive/warm-cache lane,
-// which would land viewers on stale segments.
-func TestResolveDVRViewerEndpoint_StoppedNoChapterFailsPrecondition(t *testing.T) {
+// Missing authority/runtime is unavailable, not evidence of finalization.
+func TestResolveDVRViewerEndpoint_MissingAuthorityIsUnavailable(t *testing.T) {
 	prev := control.CommodoreClient
 	control.CommodoreClient = nil
 	t.Cleanup(func() { control.CommodoreClient = prev })
@@ -89,8 +85,8 @@ func TestResolveDVRViewerEndpoint_StoppedNoChapterFailsPrecondition(t *testing.T
 		&sharedpb.ViewerEndpointRequest{ContentId: "dvr-pid"},
 		0, 0,
 		&control.ContentResolution{ContentId: "dvr-pid", InternalName: "dvr+abc", TenantId: "tenant-1"})
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("stopped DVR with no chapter: want FailedPrecondition, got %v", err)
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("unknown DVR: want Unavailable, got %v", err)
 	}
 }
 

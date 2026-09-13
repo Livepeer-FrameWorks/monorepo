@@ -43,7 +43,7 @@ func localPayloadDigest(payload []byte) []byte {
 func admitViewerPlacementForTest(t *testing.T, p *Processor) {
 	t.Helper()
 	p.SetViewerPlacementAdmission(func(_ context.Context, connection ViewerPlacementConnection) (federation.PlacementAdmissionDecision, error) {
-		protocol, err := mist.ViewerProtocol(connection.Connector)
+		protocol, err := connection.protocol()
 		if err != nil {
 			return federation.PlacementAdmissionDecision{}, err
 		}

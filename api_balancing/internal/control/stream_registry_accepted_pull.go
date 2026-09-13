@@ -17,7 +17,8 @@ const acceptedPullAdmissionWindow = 5 * time.Minute
 // destination when a DTSC connection now arrives at sourceNodeID for the
 // stream. The connection is the prepared source path, not a viewer: it must
 // present the credential for its exact destination and attempt, match the current
-// active publisher generation, and be renewed within the admission window.
+// active publisher generation (or DVR recording owner), and be renewed within
+// the admission window. DVR runtime names retain their artifact namespace.
 func (r *StreamRegistry) AcceptedOutboundPull(ctx context.Context, internalName, sourceNodeID, credential string, now time.Time) (OutboundPull, bool) {
 	internalName = sourceInternalKey(internalName)
 	sourceNodeID = strings.TrimSpace(sourceNodeID)
@@ -29,14 +30,22 @@ func (r *StreamRegistry) AcceptedOutboundPull(ctx context.Context, internalName,
 		return OutboundPull{}, false
 	}
 	loc, ok := entry.LocalLocation(r.clusterID)
-	if !ok || !loc.SourceActive || loc.OwnerNodeID != sourceNodeID || loc.SourceGeneration == "" {
+	isDVR := strings.HasPrefix(internalName, "dvr+")
+	if !ok || (!isDVR && (!loc.SourceActive || loc.OwnerNodeID != sourceNodeID || loc.SourceGeneration == "")) {
 		return OutboundPull{}, false
 	}
 	for _, pull := range loc.OutboundPullers {
 		if !strings.HasPrefix(credential, sourcePullCredentialPrefix+pull.AttemptID+".") {
 			continue
 		}
-		if pull.SourceNodeID != sourceNodeID || pull.SourceGeneration != loc.SourceGeneration || pull.SourceRevision != loc.SourceRevision {
+		if pull.SourceNodeID != sourceNodeID || pull.TenantID != entry.TenantID {
+			continue
+		}
+		if isDVR {
+			if pull.SourceGeneration != "" || pull.SourceRevision != 0 {
+				continue
+			}
+		} else if pull.SourceGeneration != loc.SourceGeneration || pull.SourceRevision != loc.SourceRevision {
 			continue
 		}
 		// Only the abandonment bound is enforced, never "this renewal is newer
@@ -52,6 +61,9 @@ func (r *StreamRegistry) AcceptedOutboundPull(ctx context.Context, internalName,
 		}
 		want := sourcePullCredential(internalName, pull)
 		if want == "" || !hmac.Equal([]byte(want), []byte(credential)) {
+			continue
+		}
+		if isDVR && !DVRRecordingSource(ctx, db, pull.TenantID, strings.TrimPrefix(internalName, "dvr+"), sourceNodeID) {
 			continue
 		}
 		return pull, true

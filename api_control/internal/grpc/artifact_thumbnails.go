@@ -43,7 +43,8 @@ func artifactAssetTable(t commodorepb.ArtifactAssetType) (table, keyCol, kind st
 // Most fields are whole-state: an absent optional (size/duration/location/cluster) is written as
 // NULL so a corrected snapshot repairs stale values. The exceptions preserve-on-absent via
 // COALESCE — has_thumbnails and lifecycle_status — and tracks replace only when tracks_present is
-// true (the source may not have captured them yet).
+// true (the source may not have captured them yet). Clip duration preserves the requested
+// duration until a measured duration is supplied; unlike DVR/VOD duration, it is non-nullable.
 func (s *CommodoreServer) UpdateArtifactCatalogSnapshot(ctx context.Context, req *commodorepb.UpdateArtifactCatalogSnapshotRequest) (*commodorepb.UpdateArtifactCatalogSnapshotResponse, error) {
 	tenantID := req.GetTenantId()
 	assetKey := req.GetAssetKey()
@@ -221,6 +222,7 @@ func (s *CommodoreServer) UpdateArtifactCatalogSnapshot(ctx context.Context, req
 	// stale values, not merely adds. Exceptions COALESCE to the stored value when absent —
 	// has_thumbnails and lifecycle_status (matching the proto's documented "absent preserves"
 	// contract) — and tracks are replaced only when tracks_present.
+	// Clip duration also preserves its required requested/measured value when absent.
 	// storage_cluster_id keeps its nullable semantics: NULL means "same as origin cluster"
 	// (ListStorageArtifacts falls back via COALESCE), so an absent value writes SQL NULL, not
 	// '', which would defeat the fallback and erase attribution.

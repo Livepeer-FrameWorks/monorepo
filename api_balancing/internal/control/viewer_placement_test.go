@@ -126,10 +126,7 @@ func TestPreparedViewerRejectsMismatchedOrAmbiguousOutcomes(t *testing.T) {
 }
 
 func TestPreparedViewerAcceptsEveryLiveRuntimeName(t *testing.T) {
-	// A push session, a configured pull input and an in-progress recording all
-	// reach this lane under their own Mist runtime name; each names the same
-	// signed routing identity once the prefix is removed.
-	for _, runtimeName := range []string{"internal", "live+internal", "pull+internal", "dvr+internal"} {
+	for _, runtimeName := range []string{"internal", "live+internal", "pull+internal"} {
 		observed := ""
 		response, err := ResolvePreparedLiveViewerEndpoint(t.Context(), viewerPreparerFunc(func(_ context.Context, req ViewerPlacementRequest) (balancer.PlacementPreparationResult, error) {
 			observed = req.InternalName
@@ -141,8 +138,25 @@ func TestPreparedViewerAcceptsEveryLiveRuntimeName(t *testing.T) {
 	}
 }
 
+func TestPreparedDVRViewerUsesRecordingAuthority(t *testing.T) {
+	resolution := &ContentResolution{ContentType: "dvr", ContentId: "recording-public", InternalName: "dvr+recording-internal",
+		ArtifactID: "recording-id", ArtifactHash: "recording-hash", TenantId: "tenant", StreamId: "parent-stream"}
+	resp, err := ResolvePreparedDVRViewerEndpoint(t.Context(), viewerPreparerFunc(func(_ context.Context, req ViewerPlacementRequest) (balancer.PlacementPreparationResult, error) {
+		if req.StreamID != "" || req.ArtifactID != "recording-id" || req.ArtifactHash != "recording-hash" || req.InternalName != "recording-internal" || req.PlaybackID != "recording-public" {
+			t.Fatalf("recording identity replaced by parent: %+v", req)
+		}
+		result := preparedViewer(t, req)
+		result.ObjectID = sharedauthority.ArtifactAuthorityID("recording-id")
+		return result, nil
+	}), resolution, "hls", nil)
+	if err != nil || resp.GetMetadata().GetContentType() != "dvr" || resp.GetMetadata().GetStreamId() != "parent-stream" {
+		t.Fatalf("DVR response %v: %v", resp, err)
+	}
+}
+
 func TestPreparedViewerRefusesAmbiguousObjectIdentity(t *testing.T) {
 	for _, request := range []ViewerPlacementRequest{
+		{TenantID: "tenant", StreamID: "stream", InternalName: "dvr+recording", PlaybackID: "recording-public"},
 		{TenantID: "tenant", InternalName: "internal", PlaybackID: "public", Protocol: "hls"},
 		{TenantID: "tenant", StreamID: "stream", ArtifactHash: "hash", InternalName: "internal", PlaybackID: "public", Protocol: "hls"},
 		{TenantID: "tenant", ArtifactHash: "hash", InternalName: "internal", PlaybackID: "public", Protocol: "hls"},
@@ -185,6 +199,71 @@ func TestStoredMediaPlacementKeepsStorageOrderAndDropsRefusedDestinations(t *tes
 	// Policy decides eligibility; storage affinity still decides the order.
 	if len(permitted) != 2 || permitted[0].NodeID != "warm-a" || permitted[1].NodeID != "warm-b" {
 		t.Fatalf("policy reordered or dropped permitted storage candidates: %+v", permitted)
+	}
+}
+
+func enforceStoredMediaPlacement(ctx context.Context, deps *PlaybackDependencies, tenantID, internalName, playbackID, artifactHash string, nodes []state.ArtifactNodeInfo) ([]state.ArtifactNodeInfo, error) {
+	permitted, _, err := placeStoredMedia(ctx, deps, tenantID, internalName, playbackID, artifactHash, nodes)
+	return permitted, err
+}
+
+func TestStoredMediaPlacementPreparesPreferredCellWithoutLocalCopy(t *testing.T) {
+	for _, scenario := range []string{"cold remote", "no local nodes", "explicit mp4", "preparation refused", "wrong object", "expired permission"} {
+		t.Run(scenario, func(t *testing.T) {
+			calls := 0
+			deps := &PlaybackDependencies{
+				StoredMediaPlacement: storedMediaPermitterFunc(func(_ context.Context, request ViewerPlacementRequest) (ViewerPlacementPermission, error) {
+					if request.ArtifactHash != "hash" || request.StreamID != "" || request.InternalName != "internal" || request.PlaybackID != "public" {
+						t.Fatalf("incorrect artifact identity: %+v", request)
+					}
+					permission := ViewerPlacementPermission{ObjectID: "artifact:1", SourceGeneration: "generation", ExpiresAt: time.Now().Add(10 * time.Second),
+						Destinations: []ViewerPlacementDestination{{ClusterID: "us", NodeID: "us-edge"}}}
+					if scenario == "expired permission" {
+						permission.ExpiresAt = time.Now().Add(-time.Second)
+					}
+					return permission, nil
+				}),
+				StoredMediaPreparer: viewerPreparerFunc(func(_ context.Context, request ViewerPlacementRequest) (balancer.PlacementPreparationResult, error) {
+					calls++
+					wantProtocol := "hls"
+					if scenario == "explicit mp4" {
+						wantProtocol = "mp4"
+					}
+					if request.ArtifactHash != "hash" || request.StreamID != "" || request.Protocol != wantProtocol {
+						t.Fatalf("remote preparation lost artifact identity: %+v", request)
+					}
+					prepared := preparedViewer(t, request)
+					prepared.ObjectID = "artifact:1"
+					if scenario == "wrong object" {
+						prepared.ObjectID = "artifact:other"
+					}
+					if scenario == "preparation refused" {
+						return prepared, balancer.ErrPlacementUnavailable
+					}
+					return prepared, nil
+				}),
+			}
+			if scenario == "explicit mp4" {
+				deps.Protocol = "MP4"
+			}
+			nodes := []state.ArtifactNodeInfo{{NodeID: "eu-edge", ClusterID: "eu"}}
+			if scenario == "no local nodes" {
+				nodes = nil
+			}
+			local, endpoint, err := placeStoredMedia(t.Context(), deps, "tenant", "vod+internal", "public", "hash", nodes)
+			if scenario == "cold remote" || scenario == "no local nodes" || scenario == "explicit mp4" {
+				if err != nil || len(local) != 0 || endpoint.GetNodeId() != "us-edge" || endpoint.GetClusterId() != "us" || calls != 1 {
+					t.Fatalf("preferred remote serving failed: %+v %+v %v calls=%d", local, endpoint, err, calls)
+				}
+				for _, output := range endpoint.Outputs {
+					if !output.GetCapabilities().GetSupportsSeek() {
+						t.Fatal("stored media lost seeking capability")
+					}
+				}
+			} else if !errors.Is(err, ErrStoredMediaPlacementUnavailable) || endpoint != nil || len(local) != 0 {
+				t.Fatalf("failed preparation exposed an endpoint: %+v %+v %v", local, endpoint, err)
+			}
+		})
 	}
 }
 

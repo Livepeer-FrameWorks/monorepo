@@ -13,6 +13,11 @@ SELECT tenant_id, active_ingest_cluster_id
 FROM commodore.streams
 WHERE lower(playback_id::text) = lower($1::text) AND deleted_at IS NULL;
 
+-- name: GetDVRSourceRoute :one
+SELECT active_ingest_cluster_id, active_ingest_cluster_updated_at
+FROM commodore.streams
+WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL;
+
 -- name: GetStreamRouteByInternalName :one
 SELECT tenant_id, active_ingest_cluster_id
 FROM commodore.streams

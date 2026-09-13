@@ -2,6 +2,33 @@ package control
 
 import "context"
 
+// ResolveSourceIdentity fills a routing-only entry's public identity through
+// Commodore. Background telemetry uses this; media admission uses SourceSnapshot
+// and never waits for this identity lookup.
+func (r *StreamRegistry) ResolveSourceIdentity(ctx context.Context, tenantID, internalName string) (StreamEntry, error) {
+	entry, found, err := r.SourceSnapshot(ctx, tenantID, internalName)
+	if err != nil {
+		return StreamEntry{}, err
+	}
+	if !found {
+		return StreamEntry{}, ErrUnknownStream
+	}
+	if entry.StreamID != "" {
+		return entry, nil
+	}
+	entry, err = r.hydrate(ctx, "internal_name", "", "", internalName)
+	if err != nil {
+		return StreamEntry{}, err
+	}
+	if entry.TenantID != tenantID || entry.InternalName != internalName {
+		return StreamEntry{}, ErrReplicationConflict
+	}
+	if entry.StreamID == "" {
+		return StreamEntry{}, ErrRegistryUnavailable
+	}
+	return entry, nil
+}
+
 // SourceSnapshot returns tenant-scoped current runtime evidence without hydration
 // or a control-plane lookup. A configured shared store is authoritative: missing
 // or unavailable state cannot fall back to this replica's cached publisher.

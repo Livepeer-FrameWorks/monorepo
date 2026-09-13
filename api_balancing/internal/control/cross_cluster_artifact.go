@@ -94,6 +94,7 @@ var ErrCrossClusterArtifactUnavailable = errors.New("cross-cluster artifact unav
 // peer URL is present. No replication, no bulk copy.
 type CrossClusterArtifactURL struct {
 	URL              string
+	DtshURL          string
 	SegmentURLs      map[string]string // multi-file artifacts (mainly DVR); usually empty for vod+
 	OriginClusterID  string
 	StorageClusterID string // empty unless single-hop storage redirect happened
@@ -280,6 +281,7 @@ func (d *CrossClusterArtifactDeps) Resolve(ctx context.Context, artifactHash, co
 	}
 	return &CrossClusterArtifactURL{
 		URL:                resp.GetUrl(),
+		DtshURL:            resp.GetDtshUrl(),
 		SegmentURLs:        resp.GetSegmentUrls(),
 		OriginClusterID:    originClusterID,
 		StorageClusterID:   storageClusterID,

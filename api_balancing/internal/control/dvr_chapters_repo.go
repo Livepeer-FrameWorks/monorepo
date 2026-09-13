@@ -921,7 +921,11 @@ func ListVirtualChaptersForArtifact(
 		mode = policy.Mode
 	}
 	if intervalSeconds <= 0 {
-		intervalSeconds = EffectiveChapterInterval(mode, intervalSeconds, policy.WindowSeconds)
+		if mode == policy.Mode {
+			intervalSeconds = policy.EffectiveIntervalSeconds()
+		} else {
+			intervalSeconds = EffectiveChapterInterval(mode, intervalSeconds, policy.WindowSeconds)
+		}
 	}
 	if mode != policy.Mode && mode != ChapterModeFixedInterval {
 		return nil, "", nil
@@ -973,9 +977,6 @@ func ListVirtualChaptersForArtifact(
 			chapterEndMs := scheduledEndMs
 			if policy.EndedAtMs > 0 && chapterEndMs > policy.EndedAtMs {
 				chapterEndMs = policy.EndedAtMs
-			}
-			if startMs < startBound {
-				startMs = startBound
 			}
 			chapterID := BuildChapterID(artifactHash, mode, intervalSeconds, startMs, chapterEndMs)
 			row := DVRChapterRow{

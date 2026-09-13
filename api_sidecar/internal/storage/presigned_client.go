@@ -41,7 +41,9 @@ func (e *presignedStatusError) Error() string {
 	return fmt.Sprintf("upload failed with status %d: %s", e.status, e.body)
 }
 
-func sanitizePresignedRequestError(err error) error {
+// SanitizeRequestError removes credential-bearing URLs before an HTTP failure
+// crosses a logging, job-result, or persistence boundary.
+func SanitizeRequestError(err error) error {
 	if err == nil {
 		return nil
 	}
@@ -116,7 +118,7 @@ func (c *PresignedClient) uploadOnce(ctx context.Context, presignedURL string, b
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("upload request failed: %w", sanitizePresignedRequestError(err))
+		return fmt.Errorf("upload request failed: %w", SanitizeRequestError(err))
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -216,7 +218,7 @@ func (c *PresignedClient) DownloadFromPresignedURL(ctx context.Context, presigne
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return 0, fmt.Errorf("download request failed: %w", sanitizePresignedRequestError(err))
+		return 0, fmt.Errorf("download request failed: %w", SanitizeRequestError(err))
 	}
 	defer func() { _ = resp.Body.Close() }()
 

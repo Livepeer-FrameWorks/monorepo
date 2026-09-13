@@ -1,0 +1,20 @@
+{
+  "config": {
+    "device_discovery": false,
+    "debug": 5,
+    "protocols": [
+      { "connector": "HTTP", "port": 18080, "debug": 5 },
+      { "connector": "RTMP", "port": 1935 },
+      { "connector": "EBML" },
+      { "connector": "MP4" },
+      { "connector": "HLS" }
+    ],
+    "triggers": {
+      "PUSH_REWRITE": [{ "handler": "/tmp/push-connector-hook.sh", "sync": true, "onfail": "deny" }]
+    }
+  },
+  "streams": {
+    "vod": { "source": "/tmp/source.mp4", "debug": 5 },
+    "pushed": { "source": "push://", "DVR": 120000, "bufferTime": 120000 }
+  }
+}

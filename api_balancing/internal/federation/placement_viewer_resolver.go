@@ -9,6 +9,7 @@ import (
 	"frameworks/api_balancing/internal/balancer"
 	"frameworks/api_balancing/internal/control"
 	localauthority "frameworks/api_balancing/internal/mediaauthority"
+	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
 	mediaauthoritypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
 )
@@ -95,7 +96,8 @@ func (resolver *ViewerPlacementResolver) subject(ctx context.Context, request co
 		// Stored media is named by hash, so the resolved object must be an
 		// artifact carrying that exact hash before its policy may be used.
 		if stored && (pair.Object.Authority.GetObjectKind() != mediaauthoritypb.MediaObjectKind_MEDIA_OBJECT_KIND_ARTIFACT ||
-			pair.Object.Authority.GetArtifact().GetArtifactHash() != request.ArtifactHash) {
+			pair.Object.Authority.GetArtifact().GetArtifactHash() != request.ArtifactHash ||
+			(request.ArtifactID != "" && pair.Object.AuthorityID != sharedauthority.ArtifactAuthorityID(request.ArtifactID))) {
 			return balancer.PlacementAuthority{}, errors.New("stored media identity differs from signed object")
 		}
 		return balancer.CompilePlacementAuthority(pair, placement.Serve, time.Now())

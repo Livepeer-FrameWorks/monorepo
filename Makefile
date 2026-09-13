@@ -69,11 +69,12 @@ define run-go-tests
 	@echo "Running unit tests for $(1)..."
 	@(cd $(2) && \
 		go mod tidy && \
-		go test $(GO_TAG_FLAGS) $(GO_TEST_FLAGS) $(GO_TEST_PACKAGES) -race -count=1)
+		go test $(GO_TAG_FLAGS) $(GO_TEST_FLAGS) $(GO_TEST_PACKAGES) -race -count=$(GO_TEST_COUNT))
 endef
 
 GO_TEST_PACKAGES ?= ./...
 GO_TEST_FLAGS ?=
+GO_TEST_COUNT ?= 1
 
 proto:
 	cd pkg/proto && make proto
@@ -407,6 +408,16 @@ verify-mist-protocols:
 verify-mist-push-connector:
 	@$(MAKE) --no-print-directory test-pkg GO_TAG_FLAGS=-tags=media_verify GO_TEST_PACKAGES=./mist GO_TEST_FLAGS='-run TestPushRewriteConnector_RealMist -v -timeout 180s'
 
+verify-mist-finite-source:
+	@$(MAKE) --no-print-directory test-pkg GO_TAG_FLAGS=-tags=media_verify GO_TEST_PACKAGES=./mist GO_TEST_FLAGS='-run TestFiniteLiveSource_RealMist -v -timeout 180s'
+
+.PHONY: verify-mist-finite-source verify-mist-hls-realtime verify-mist-processing-recording
+verify-mist-processing-recording:
+	@$(MAKE) --no-print-directory test-pkg GO_TAG_FLAGS=-tags=media_verify GO_TEST_PACKAGES=./mist GO_TEST_FLAGS='-run TestProcessingRecording_RealMist -v -timeout 240s'
+
+verify-mist-hls-realtime:
+	@$(MAKE) --no-print-directory test-pkg GO_TAG_FLAGS=-tags=media_verify GO_TEST_PACKAGES=./mist GO_TEST_FLAGS='-run TestHLSChapterRealtime_RealMist -v -timeout 150s'
+
 # Two real cells on the dev compose stack (profile two-cell): publish into cell A,
 # resolve viewers through cell B, assert media at B, then private-only refusal,
 # capacity fallback, publisher reconnect and a control-plane outage. Needs Docker,
@@ -723,6 +734,7 @@ FOGHORN_CONTROL_REALPG_TESTS_BASE := TestSyncCompletePlacementRespectsDeletionWa
 COMMODORE_INGEST_CLAIM_REALPG_TESTS := TestValidateStreamKey_SameClusterCannotStealLiveClaim_RealPG|TestValidateStreamKey_OwnerRefreshIsNotAReservation_RealPG|TestValidateStreamKey_LapsedClaimIsReservable_RealPG|TestSyncActiveIngestPlacement_ReleaseRequiresOwnership_RealPG|TestSyncActiveIngestPlacement_RenewalRequiresOwnership_RealPG|TestSyncActiveIngestPlacement_RenewalEstablishesUnheldClaim_RealPG|TestClearStreamActiveCluster_CannotClearPushClaim_RealPG|TestClearStreamActiveCluster_ReleasesManagedClaimAfterSoftDelete_RealPG
 COMMODORE_QUERY_CATALOG_REALPG_TESTS := TestGeneratedQueryCatalogPrepares_RealPG|TestDVRRegistrationSnapshotsReadyWebhookAuthority_RealPG|TestResolveVODByHashIdentifiesChapterParent_RealPG|TestChapterPlaybackAuthorityDataMigration_RealPG|TestChapterPlaybackAuthorityBackfillDoesNotOverwriteConcurrentPolicyCascade_RealPG|TestUpsertChapterPlaybackIDRejectsCrossTenantCollision_RealPG|TestArtifactCreationCommandAckLease_RealPG|TestManualQueryAdapters_RealPG|TestAccountSessionRepository_RealPG|TestAccountRecoveryWalletRepository_RealPG|TestFieldEncryptionSuppressesEveryMediaAuthorityTrigger_RealPG|TestPushTargetOwnershipQueriesEnforceOwnerOrTenantManager_RealPG
 FOGHORN_CONTROL_REALPG_TESTS := $(FOGHORN_CONTROL_REALPG_TESTS_BASE)|TestDelayedSyncCannotMovePlacementClockBackward_RealPG|TestCapacityPendingRestreamRearmUsesBoundedStableRunCycle_RealPG|TestOfflineAckWaitHasIndependentBackoffAndDeadLetters_RealPG|TestAdmissionMistIDBindRequiresCurrentActivationAttempt_RealPG
+FOGHORN_CONTROL_REALPG_TESTS := $(FOGHORN_CONTROL_REALPG_TESTS)|TestDVRRecordingSource_RealPG|TestDVRStartTimeAnchorsChapters_RealPG
 FOGHORN_JOBS_REALPG_TESTS := TestStaleFreezeCleanup_RealPG|TestPurgeOwnershipFilter_RealPG|TestFederatedPointerPurgeDefersActiveRestoreUntilCleanupSettlement_RealPG|TestFederatedPointerRecoveryDoesNotSerializeBehindSlowDestination_RealPG|TestDailyFederatedPointerPurgeDoesNotSerializeBehindSlowDestination_RealPG|TestStreamCleanupDrainer_ConvergesFromDurableRow_RealPG|TestStreamCleanupDrainer_LocallyBackedAliasSweepsLocally_RealPG|TestThumbnailLifecycleIntegration_RealPG|TestStreamCleanupDrainer_RepointGuardFailsClosed_RealPG|TestStreamCleanupDrainer_DelayedResweep_RealPG|TestStreamCleanupDrainer_FinalizeAtomicOnControlCleanupFailure_RealPG
 FOGHORN_FEDERATION_REALPG_TESTS := TestMembershipTombstoneCleanup_PostgresProofToRedisPurge_RealPG
 FOGHORN_QUERY_CATALOG_REALPG_TESTS := TestFoghornGeneratedQueryCatalogPrepares_RealPG|TestConfigSeedApplyAckOutboxSameVersionReplacement_RealPG|TestSourceProjectionRevisionMigrationSeedsDurableHighWater_RealPG|TestSourceProjectionAllocatorKeyScoped_RealPG|TestKeyScopedOrderingAllocators_RealPG|TestLegacyOrderingSequencesRemainBelowCounters_RealPG|TestFederatedArtifactLifecycleDataMigration_RealPG|TestFederatedPointerPurgeEligibilityDataMigrationPreservesAge_RealPG|TestFederatedPointerPurgeEligibilityUsesSessionTimezone_RealPG|TestPurgeableArtifactsIncludeOwnedChaptersAndExcludeFederatedPointers_RealPG|TestFederatedPointerPurgeRetainsSignedTombstoneFence_RealPG|TestTombstoneDuringFederatedPointerPurgePreservesRecoveryClock_RealPG|TestFederatedPointerEligibilityIgnoresOrdinaryMetadataWriters_RealPG|TestFederatedPointerFenceSerializesWithAuthorityProjection_RealPG|TestFailedFederatedPointerCleanupRemainsFencedAndReclaimable_RealPG|TestActiveAuthorityRestoresOnlyInterruptedStalePointerFence_RealPG|TestFederatedPointersAreCacheOnlyForCapacityAndStalePurge_RealPG|TestFederatedPointersCannotEnterOwnerDeletionPaths_RealPG|TestMintArtifactShellRemainsRemoteParentPointer_RealPG|TestArtifactNodePlacementSerializesAbsentRows_RealPG|TestArtifactDeletionRejectsReplayOlderThanPlacement_RealPG|TestMediaAuthorityLookupIndexes_RealPG|TestPushTargetStatusRejectsOlderEvent_RealPG|TestPushTargetStatusUnknownEventTimeUsesArrivalOrder_RealPG
@@ -955,7 +967,7 @@ verify-schema-postgres: verify-foghorn-test-selection
 	@cd api_control && go test -tags schema_verify -run 'TestSigningKeyRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@cd api_control && go test -tags schema_verify -run 'TestPlaybackPolicyRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@cd api_control && go test -tags schema_verify -run 'TestArtifactCreationIntentRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
-	@cd api_control && go test -tags schema_verify -run 'TestUpdateArtifactCatalogSnapshot_ServingClusterEqualRevisionRepair_RealPG' -count=1 -timeout 600s ./internal/grpc/
+	@cd api_control && go test -tags schema_verify -run 'TestUpdateArtifactCatalogSnapshot_.*_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@cd api_control && go test -tags schema_verify -run 'TestMediaRetentionRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@cd api_control && go test -tags schema_verify -run 'TestPullSourceEventRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/
 	@cd api_control && go test -tags schema_verify -run 'TestAPITokenRepository_RealPG' -count=1 -timeout 600s ./internal/grpc/

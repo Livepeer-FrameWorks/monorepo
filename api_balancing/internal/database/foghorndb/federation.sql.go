@@ -12,6 +12,34 @@ import (
 	"github.com/lib/pq"
 )
 
+const dVRRecordingState = `-- name: DVRRecordingState :one
+SELECT COALESCE(a.status, '')::text AS status, COALESCE((
+    SELECT min(n.node_id) FROM foghorn.artifact_nodes n
+    WHERE n.artifact_hash = a.artifact_hash AND NOT n.is_orphaned
+    HAVING count(*) = 1
+), '')::text AS node_id
+FROM foghorn.artifacts a
+WHERE a.tenant_id = $1 AND a.artifact_hash = $2
+AND a.artifact_type = 'dvr'
+`
+
+type DVRRecordingStateParams struct {
+	TenantID     string `db:"tenant_id" json:"tenant_id"`
+	ArtifactHash string `db:"artifact_hash" json:"artifact_hash"`
+}
+
+type DVRRecordingStateRow struct {
+	Status string `db:"status" json:"status"`
+	NodeID string `db:"node_id" json:"node_id"`
+}
+
+func (q *Queries) DVRRecordingState(ctx context.Context, arg DVRRecordingStateParams) (DVRRecordingStateRow, error) {
+	row := q.db.QueryRowContext(ctx, dVRRecordingState, arg.TenantID, arg.ArtifactHash)
+	var i DVRRecordingStateRow
+	err := row.Scan(&i.Status, &i.NodeID)
+	return i, err
+}
+
 const dVRRecordingTenant = `-- name: DVRRecordingTenant :one
 SELECT COALESCE(tenant_id::text, '')::text AS tenant_id
 FROM foghorn.artifacts
@@ -116,7 +144,9 @@ SELECT COALESCE(a.internal_name, '')::text AS internal_name,
        COALESCE(a.sync_status, '')::text AS sync_status, a.size_bytes,
        COALESCE(a.storage_cluster_id, a.origin_cluster_id) AS authoritative_cluster,
        COALESCE(NULLIF(a.active_object_key, ''), NULLIF(v.s3_key, ''),
-                NULLIF(a.sync_object_key, ''), '')::text AS object_key
+                NULLIF(a.sync_object_key, ''), '')::text AS object_key,
+       COALESCE(a.dtsh_synced, false)::boolean AS dtsh_synced,
+       COALESCE(a.active_dtsh_key, '')::text AS dtsh_key
 FROM foghorn.artifacts a
 LEFT JOIN foghorn.vod_metadata v ON v.artifact_hash = a.artifact_hash
 WHERE a.artifact_hash = $1 AND a.tenant_id = $2 AND a.status != 'deleted'
@@ -137,6 +167,8 @@ type GetFederatedArtifactDescriptorRow struct {
 	SizeBytes            sql.NullInt64  `db:"size_bytes" json:"size_bytes"`
 	AuthoritativeCluster sql.NullString `db:"authoritative_cluster" json:"authoritative_cluster"`
 	ObjectKey            string         `db:"object_key" json:"object_key"`
+	DtshSynced           bool           `db:"dtsh_synced" json:"dtsh_synced"`
+	DtshKey              string         `db:"dtsh_key" json:"dtsh_key"`
 }
 
 func (q *Queries) GetFederatedArtifactDescriptor(ctx context.Context, arg GetFederatedArtifactDescriptorParams) (GetFederatedArtifactDescriptorRow, error) {
@@ -152,6 +184,8 @@ func (q *Queries) GetFederatedArtifactDescriptor(ctx context.Context, arg GetFed
 		&i.SizeBytes,
 		&i.AuthoritativeCluster,
 		&i.ObjectKey,
+		&i.DtshSynced,
+		&i.DtshKey,
 	)
 	return i, err
 }

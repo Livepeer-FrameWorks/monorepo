@@ -4032,6 +4032,7 @@ func (x *MediaTrack) GetSampleRate() int32 {
 // tracks list with tracks_present clears; tracks_present false keeps). source_revision is the
 // source-owned monotonic foghorn.artifacts.catalog_revision (guard). deleted=true removes the
 // row instead of upserting (revision + origin guarded).
+// Clip duration preserves the requested/measured duration when absent; DVR/VOD duration clears.
 type UpdateArtifactCatalogSnapshotRequest struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	TenantId         string                 `protobuf:"bytes,1,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
@@ -4039,7 +4040,7 @@ type UpdateArtifactCatalogSnapshotRequest struct {
 	AssetKey         string                 `protobuf:"bytes,3,opt,name=asset_key,json=assetKey,proto3" json:"asset_key,omitempty"`
 	SourceRevision   int64                  `protobuf:"varint,4,opt,name=source_revision,json=sourceRevision,proto3" json:"source_revision,omitempty"`
 	SizeBytes        *int64                 `protobuf:"varint,5,opt,name=size_bytes,json=sizeBytes,proto3,oneof" json:"size_bytes,omitempty"`
-	DurationMs       *int64                 `protobuf:"varint,6,opt,name=duration_ms,json=durationMs,proto3,oneof" json:"duration_ms,omitempty"`
+	DurationMs       *int64                 `protobuf:"varint,6,opt,name=duration_ms,json=durationMs,proto3,oneof" json:"duration_ms,omitempty"`    // Measured duration (ms); absent preserves clip duration, clears DVR/VOD duration
 	TracksPresent    bool                   `protobuf:"varint,7,opt,name=tracks_present,json=tracksPresent,proto3" json:"tracks_present,omitempty"` // true = replace tracks with `tracks` (empty clears); false = leave unset
 	Tracks           []*MediaTrack          `protobuf:"bytes,8,rep,name=tracks,proto3" json:"tracks,omitempty"`
 	SyncStatus       *string                `protobuf:"bytes,9,opt,name=sync_status,json=syncStatus,proto3,oneof" json:"sync_status,omitempty"`
@@ -5690,7 +5691,7 @@ type StorageArtifactInfo struct {
 	HasLocalCopy  *bool         `protobuf:"varint,23,opt,name=has_local_copy,json=hasLocalCopy,proto3,oneof" json:"has_local_copy,omitempty"`
 	IsSynced      *bool         `protobuf:"varint,24,opt,name=is_synced,json=isSynced,proto3,oneof" json:"is_synced,omitempty"`
 	IsFinalized   *bool         `protobuf:"varint,25,opt,name=is_finalized,json=isFinalized,proto3,oneof" json:"is_finalized,omitempty"`
-	DurationMs    *int64        `protobuf:"varint,26,opt,name=duration_ms,json=durationMs,proto3,oneof" json:"duration_ms,omitempty"`      // Measured media duration (ms), all kinds; null until finalized
+	DurationMs    *int64        `protobuf:"varint,26,opt,name=duration_ms,json=durationMs,proto3,oneof" json:"duration_ms,omitempty"`      // Duration (ms); clips retain requested duration until measured, DVR/VOD may be null
 	Tracks        []*MediaTrack `protobuf:"bytes,27,rep,name=tracks,proto3" json:"tracks,omitempty"`                                       // Finalized A/V track summary; empty until finalized
 	Description   *string       `protobuf:"bytes,28,opt,name=description,proto3,oneof" json:"description,omitempty"`                       // User-provided description (VOD uploads); from commodore business row
 	ErrorMessage  *string       `protobuf:"bytes,29,opt,name=error_message,json=errorMessage,proto3,oneof" json:"error_message,omitempty"` // Processing failure detail; projected from foghorn.artifacts.error_message

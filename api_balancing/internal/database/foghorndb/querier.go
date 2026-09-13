@@ -99,6 +99,7 @@ type Querier interface {
 	CountUnreclaimedDVRSegments(ctx context.Context, arg CountUnreclaimedDVRSegmentsParams) (int64, error)
 	CountUnverifiedThumbnailObjects(ctx context.Context, attemptID string) (int64, error)
 	DVRNeedsDtshSync(ctx context.Context, artifactHash string) (bool, error)
+	DVRRecordingState(ctx context.Context, arg DVRRecordingStateParams) (DVRRecordingStateRow, error)
 	DVRRecordingTenant(ctx context.Context, internalName sql.NullString) (string, error)
 	// Deterministic evidence gaps need operator/data repair rather than immediate
 	// retry churn. Retain token ownership and move only its retry timestamp.
@@ -314,6 +315,7 @@ type Querier interface {
 	InsertUploadingVodArtifact(ctx context.Context, arg InsertUploadingVodArtifactParams) error
 	InsertVodMultipartMetadata(ctx context.Context, arg InsertVodMultipartMetadataParams) error
 	IsArtifactSynced(ctx context.Context, artifactHash string) (bool, error)
+	IsDVRRecordingSource(ctx context.Context, arg IsDVRRecordingSourceParams) (bool, error)
 	LatestActiveProcessingConfig(ctx context.Context, artifactHash sql.NullString) (sql.NullString, error)
 	LatestActiveProcessingSourceURL(ctx context.Context, artifactHash sql.NullString) (sql.NullString, error)
 	LatestArtifactNodeID(ctx context.Context, artifactHash string) (string, error)
@@ -508,6 +510,7 @@ type Querier interface {
 	RecordArtifactEventFailure(ctx context.Context, arg RecordArtifactEventFailureParams) error
 	RecordDVRCompletion(ctx context.Context, arg RecordDVRCompletionParams) error
 	RecordDVRProgress(ctx context.Context, arg RecordDVRProgressParams) error
+	RecordDVRStartTime(ctx context.Context, arg RecordDVRStartTimeParams) error
 	RecordFreezePublicationLedger(ctx context.Context, arg RecordFreezePublicationLedgerParams) error
 	RecordPublicationPair(ctx context.Context, arg RecordPublicationPairParams) error
 	RefreshDVRArtifactNodeProgress(ctx context.Context, arg RefreshDVRArtifactNodeProgressParams) error

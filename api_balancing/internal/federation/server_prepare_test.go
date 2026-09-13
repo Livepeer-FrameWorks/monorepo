@@ -20,10 +20,12 @@ type fakeS3Client struct {
 	presignedGETResult string
 	presignedGETErr    error
 	lastPresignGETKey  string // the exact key the read path passed — pins the recorded-key consumer invariant
+	presignGETKeys     []string
 }
 
 func (f *fakeS3Client) GeneratePresignedGET(key string, _ time.Duration) (string, error) {
 	f.lastPresignGETKey = key
+	f.presignGETKeys = append(f.presignGETKeys, key)
 	return f.presignedGETResult, f.presignedGETErr
 }
 func (f *fakeS3Client) GeneratePresignedPUT(_ string, _ time.Duration) (string, error) {
@@ -52,8 +54,8 @@ func TestPrepareArtifact_LocalState_NotReady(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster", "recorded_object_key"}).
-		AddRow("clip-b", "stream-b", "clip", "mp4", "local", "", 4096, nil, "")
+	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster", "recorded_object_key", "dtsh_synced", "dtsh_key"}).
+		AddRow("clip-b", "stream-b", "clip", "mp4", "local", "", 4096, nil, "", false, "")
 	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
 
 	srv := NewFederationServer(FederationServerConfig{
@@ -165,8 +167,8 @@ func TestPrepareArtifact_ClipSynced_HappyPath(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster", "recorded_object_key"}).
-		AddRow("clip-c", "stream-c", "clip", "mp4", "s3", "synced", 8192, nil, "clips/tenant-a/stream-c/clip-c.mp4")
+	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster", "recorded_object_key", "dtsh_synced", "dtsh_key"}).
+		AddRow("clip-c", "stream-c", "clip", "mp4", "s3", "synced", 8192, nil, "clips/tenant-a/stream-c/clip-c.mp4", false, "")
 	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
 
 	fake := &fakeS3Client{presignedGETResult: "https://s3.example.com/clip-c.mp4?X-Amz-Signature=abc"}
@@ -216,8 +218,8 @@ func TestPrepareArtifact_SyncedWithoutRecordedKeyFailsClosed(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster", "recorded_object_key"}).
-		AddRow("clip-nokey", "stream-nokey", "clip", "mp4", "s3", "synced", 8192, nil, "") // no recorded key
+	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster", "recorded_object_key", "dtsh_synced", "dtsh_key"}).
+		AddRow("clip-nokey", "stream-nokey", "clip", "mp4", "s3", "synced", 8192, nil, "", false, "") // no recorded key
 	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
 
 	fake := &fakeS3Client{presignedGETResult: "https://s3.example.com/should-not-be-used"}
@@ -248,8 +250,8 @@ func TestPrepareArtifact_VodSynced_HappyPath(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster", "recorded_object_key"}).
-		AddRow("vod-x", "", "vod", "mp4", "s3", "synced", 65536, nil, "vod/tenant-a/vod-x/vod-x.mp4")
+	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster", "recorded_object_key", "dtsh_synced", "dtsh_key"}).
+		AddRow("vod-x", "", "vod", "mp4", "s3", "synced", 65536, nil, "vod/tenant-a/vod-x/vod-x.mp4", false, "")
 	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
 
 	fake := &fakeS3Client{presignedGETResult: "https://s3.example.com/vod/hash-vod.mp4?sig=xyz"}
@@ -295,8 +297,8 @@ func TestPrepareArtifact_ChapterRequestUsesStoredVODBytes(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster", "recorded_object_key"}).
-		AddRow("chapter-hash", "source-stream", "vod", "mkv", "s3", "synced", 32768, nil, "vod/tenant-a/chapter-hash/chapter.mkv")
+	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster", "recorded_object_key", "dtsh_synced", "dtsh_key"}).
+		AddRow("chapter-hash", "source-stream", "vod", "mkv", "s3", "synced", 32768, nil, "vod/tenant-a/chapter-hash/chapter.mkv", false, "")
 	mock.ExpectQuery("FROM foghorn.artifacts").WithArgs("chapter-hash", "tenant-a").WillReturnRows(rows)
 
 	fake := &fakeS3Client{presignedGETResult: "https://s3.example.com/chapter.mkv?sig=chapter"}
@@ -333,8 +335,8 @@ func TestPrepareArtifact_VodSynced_PresignError(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster", "recorded_object_key"}).
-		AddRow("vod-y", "", "vod", "mkv", "s3", "synced", 4096, nil, "vod/tenant-a/vod-y/vod-y.mkv")
+	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster", "recorded_object_key", "dtsh_synced", "dtsh_key"}).
+		AddRow("vod-y", "", "vod", "mkv", "s3", "synced", 4096, nil, "vod/tenant-a/vod-y/vod-y.mkv", false, "")
 	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
 
 	fake := &fakeS3Client{presignedGETErr: fmt.Errorf("S3 unavailable")}
@@ -358,15 +360,15 @@ func TestPrepareArtifact_VodSynced_PresignError(t *testing.T) {
 	}
 }
 
-func TestPrepareArtifact_DVRRejected(t *testing.T) {
+func TestPrepareArtifact_DVRRequiresExplicitStateRequest(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock.New: %v", err)
 	}
 	defer db.Close()
 
-	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster", "recorded_object_key"}).
-		AddRow("dvr-b", "stream-b", "dvr", "m3u8", "s3", "synced", 20480, nil, "")
+	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster", "recorded_object_key", "dtsh_synced", "dtsh_key"}).
+		AddRow("dvr-b", "stream-b", "dvr", "m3u8", "s3", "synced", 20480, nil, "", false, "")
 	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
 
 	srv := NewFederationServer(FederationServerConfig{
@@ -383,11 +385,42 @@ func TestPrepareArtifact_DVRRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareArtifact() err = %v", err)
 	}
-	if resp.GetError() != "DVR playback is per-chapter; query dvrChapters and PrepareArtifact each chapter's VOD artifact_hash" {
+	if resp.GetError() != "artifact type mismatch" {
 		t.Fatalf("expected DVR rejection, got %q", resp.GetError())
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatalf("sql expectations: %v", err)
+	}
+}
+
+func TestPrepareArtifact_DVRReturnsOwnerStateNotFileURLs(t *testing.T) {
+	for _, lifecycle := range []string{"recording", "completed"} {
+		t.Run(lifecycle, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = db.Close() })
+			mock.ExpectQuery("FROM foghorn.artifacts").WithArgs("dvr-hash", "tenant-a").
+				WillReturnRows(sqlmock.NewRows([]string{"internal", "parent", "type", "format", "location", "sync", "size", "cluster", "key", "dtsh_synced", "dtsh_key"}).
+					AddRow("recording-name", "parent-name", "dvr", "m3u8", "local", "", 0, nil, "", false, ""))
+			mock.ExpectQuery(`(?s)WHERE a.tenant_id = \$1 AND a.artifact_hash = \$2`).WithArgs("tenant-a", "dvr-hash").
+				WillReturnRows(sqlmock.NewRows([]string{"status", "node"}).AddRow(lifecycle, "recording-node"))
+			srv := NewFederationServer(FederationServerConfig{AllowFederationMutations: true, Logger: logging.NewLogger(), DB: db})
+			resp, err := srv.PrepareArtifact(serviceAuthContext(), &foghornfederationpb.PrepareArtifactRequest{ArtifactId: "dvr-hash", ArtifactType: "dvr", TenantId: "tenant-a"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp.GetDvrStatus() != lifecycle || resp.GetReady() != (lifecycle == "recording") || resp.GetUrl() != "" || resp.GetPeerRelayUrl() != "" {
+				t.Fatalf("DVR source state: %v", resp)
+			}
+			if lifecycle == "completed" && resp.GetDvrRecordingNodeId() != "" {
+				t.Fatal("completed DVR advertised an active source")
+			}
+			if err := mock.ExpectationsWereMet(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
@@ -398,8 +431,8 @@ func TestPrepareArtifact_FreezingState(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster", "recorded_object_key"}).
-		AddRow("clip-f", "stream-f", "clip", "mp4", "freezing", "", 4096, nil, "")
+	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster", "recorded_object_key", "dtsh_synced", "dtsh_key"}).
+		AddRow("clip-f", "stream-f", "clip", "mp4", "freezing", "", 4096, nil, "", false, "")
 	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
 
 	srv := NewFederationServer(FederationServerConfig{
@@ -428,8 +461,8 @@ func TestPrepareArtifact_ClipHashFallback(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster", "recorded_object_key"}).
-		AddRow("clip-fallback", "stream-l", "clip", "mp4", "s3", "synced", 2048, nil, "clips/tenant-a/stream-l/clip-fallback.mp4")
+	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster", "recorded_object_key", "dtsh_synced", "dtsh_key"}).
+		AddRow("clip-fallback", "stream-l", "clip", "mp4", "s3", "synced", 2048, nil, "clips/tenant-a/stream-l/clip-fallback.mp4", false, "")
 	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
 
 	fake := &fakeS3Client{presignedGETResult: "https://s3.example.com/fallback.mp4?sig=fallback"}
@@ -485,8 +518,8 @@ func TestPrepareArtifact_SyncingState(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster", "recorded_object_key"}).
-		AddRow("clip-s", "stream-s", "clip", "mp4", "local", "syncing", 4096, nil, "")
+	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster", "recorded_object_key", "dtsh_synced", "dtsh_key"}).
+		AddRow("clip-s", "stream-s", "clip", "mp4", "local", "syncing", 4096, nil, "", false, "")
 	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
 
 	srv := NewFederationServer(FederationServerConfig{
@@ -515,8 +548,8 @@ func TestPrepareArtifact_UnknownArtifactType(t *testing.T) {
 	}
 	defer db.Close()
 
-	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster", "recorded_object_key"}).
-		AddRow("unknown-a", "stream-u", "thumbnail", "png", "s3", "synced", 256, nil, "")
+	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster", "recorded_object_key", "dtsh_synced", "dtsh_key"}).
+		AddRow("unknown-a", "stream-u", "thumbnail", "png", "s3", "synced", 256, nil, "", false, "")
 	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
 
 	srv := NewFederationServer(FederationServerConfig{
@@ -546,8 +579,8 @@ func TestPrepareArtifact_MetadataDrift(t *testing.T) {
 	defer db.Close()
 
 	// storage_location=s3 but sync_status NOT "synced" — metadata drift
-	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster", "recorded_object_key"}).
-		AddRow("clip-d", "stream-d", "clip", "mp4", "s3", "pending", 1024, nil, "")
+	rows := sqlmock.NewRows([]string{"internal_name", "stream_internal_name", "artifact_type", "format", "storage_location", "sync_status", "size_bytes", "authoritative_cluster", "recorded_object_key", "dtsh_synced", "dtsh_key"}).
+		AddRow("clip-d", "stream-d", "clip", "mp4", "s3", "pending", 1024, nil, "", false, "")
 	mock.ExpectQuery("FROM foghorn.artifacts").WillReturnRows(rows)
 
 	srv := NewFederationServer(FederationServerConfig{

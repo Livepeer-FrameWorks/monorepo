@@ -214,6 +214,30 @@ func TestRetrieveDVRChapter_HappyPathReturnsRow(t *testing.T) {
 	}
 }
 
+func TestRetrieveDVRChapter_DefaultPolicyUsesConfiguredInterval(t *testing.T) {
+	srv, mock := withControlDBRpcMore(t)
+	const artifactID = "dvr-default-policy"
+	const tenantID = "tenant-owner"
+	const startMs = int64(3600000)
+	const endMs = int64(7200000)
+	mock.ExpectQuery(`FROM foghorn\.artifacts`).WithArgs(artifactID).
+		WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow(tenantID))
+	mock.ExpectQuery(`FROM foghorn\.artifacts`).WithArgs(artifactID).
+		WillReturnRows(sqlmock.NewRows([]string{"mode", "interval_seconds", "started_at_ms", "ended_at_ms", "window_seconds"}).
+			AddRow(control.ChapterModeFixedInterval, 3600, startMs, endMs, 0))
+	wantID := control.BuildChapterID(artifactID, control.ChapterModeFixedInterval, 3600, startMs, endMs)
+	mock.ExpectQuery(`FROM foghorn\.dvr_chapters`).WithArgs(wantID).WillReturnError(sql.ErrNoRows)
+	_, err := srv.RetrieveDVRChapter(context.Background(), &foghorncontrolpb.RetrieveDVRChapterRequest{
+		DvrArtifactId: artifactID, TenantId: tenantID, StartMs: startMs, EndMs: endMs,
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("expected canonical chapter lookup, got %v", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestRetrieveDVRChapter_NotFound pins the not-found arm of the chapter read:
 // when GetChapter finds no row, the RPC surfaces codes.NotFound (not Internal),
 // so the caller can distinguish "chapter not yet materialized" from a failure.

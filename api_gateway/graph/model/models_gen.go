@@ -2319,7 +2319,7 @@ type StorageArtifact struct {
 	ThumbnailURL       *string                `json:"thumbnailUrl,omitempty"`
 	// Poster + hover-scrub sprite assets, when the artifact has thumbnails.
 	ThumbnailAssets *sharedpb.ThumbnailAssets `json:"thumbnailAssets,omitempty"`
-	// Measured media duration in seconds (all kinds); null until the artifact finalizes.
+	// Media duration in seconds. Clips retain their requested duration until measured; DVR/VOD duration may be null until finalized.
 	DurationSeconds *float64 `json:"durationSeconds,omitempty"`
 	// Finalized A/V track summary (per track), captured from the completion-validated processing result and projected onto the catalog. Empty until finalized.
 	Tracks []*ArtifactTrack `json:"tracks"`
@@ -3054,7 +3054,7 @@ func (VodUploadSession) IsCreateVodUploadResult() {}
 // complement to the realtime VodLifecycle subscription, used for reload-recovery and
 // agent (MCP) workflows.
 type VodUploadStatus struct {
-	// Upload session ID (S3 uploadId).
+	// Opaque upload session ID returned by createVodUpload; preserve unchanged when resuming.
 	UploadID string `json:"uploadId"`
 	// Current state of the upload session.
 	State VodAssetStatus `json:"state"`

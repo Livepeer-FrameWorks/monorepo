@@ -511,7 +511,8 @@ message CreateVodUploadRequest {
 
 // CreateVodUploadResponse - multipart upload instructions
 message CreateVodUploadResponse {
-  string upload_id = 1;          // S3 multipart upload ID
+  // Opaque session ID at Commodore; storage-native multipart ID within Foghorn.
+  string upload_id = 1;
   string artifact_id = 2;        // ID in live_artifacts table
   string artifact_hash = 3;      // Hash for playback URL resolution
   int64 part_size = 4;           // Recommended part size (bytes)
@@ -529,7 +530,8 @@ message VodUploadPart {
 // CompleteVodUploadRequest - finalize multipart upload
 message CompleteVodUploadRequest {
   string tenant_id = 1;
-  string upload_id = 2;          // S3 multipart upload ID
+  // Pass the issuing service's CreateVodUploadResponse.upload_id unchanged.
+  string upload_id = 2;
   repeated VodCompletedPart parts = 3;  // ETags from uploaded parts
   string processes_json = 4;     // Pre-computed MistServer process config for VOD processing
 }

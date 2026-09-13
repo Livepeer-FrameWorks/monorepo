@@ -256,6 +256,34 @@ func (q *Queries) IsArtifactSynced(ctx context.Context, artifactHash string) (bo
 	return exists, err
 }
 
+const isDVRRecordingSource = `-- name: IsDVRRecordingSource :one
+SELECT EXISTS (
+    SELECT 1 FROM foghorn.artifacts a
+    JOIN foghorn.artifact_nodes n ON n.artifact_hash = a.artifact_hash
+    WHERE a.tenant_id = $1 AND a.internal_name = $2
+    AND a.artifact_type = 'dvr' AND a.status = 'recording'
+    AND n.node_id = $3 AND NOT n.is_orphaned
+    AND NOT EXISTS (
+        SELECT 1 FROM foghorn.artifact_nodes other
+        WHERE other.artifact_hash = a.artifact_hash
+        AND other.node_id <> n.node_id AND NOT other.is_orphaned
+    )
+)
+`
+
+type IsDVRRecordingSourceParams struct {
+	TenantID     string         `db:"tenant_id" json:"tenant_id"`
+	InternalName sql.NullString `db:"internal_name" json:"internal_name"`
+	NodeID       string         `db:"node_id" json:"node_id"`
+}
+
+func (q *Queries) IsDVRRecordingSource(ctx context.Context, arg IsDVRRecordingSourceParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, isDVRRecordingSource, arg.TenantID, arg.InternalName, arg.NodeID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const listActiveClips = `-- name: ListActiveClips :many
 SELECT a.artifact_hash, ''::text AS tenant_id, COALESCE(a.stream_internal_name, '')::text AS stream_internal_name,
        COALESCE(n.node_id, '')::text AS node_id, a.status, COALESCE(n.file_path, '')::text AS file_path,
@@ -938,6 +966,34 @@ type RecordDVRProgressParams struct {
 
 func (q *Queries) RecordDVRProgress(ctx context.Context, arg RecordDVRProgressParams) error {
 	_, err := q.db.ExecContext(ctx, recordDVRProgress, arg.ArtifactHash, arg.SizeBytes)
+	return err
+}
+
+const recordDVRStartTime = `-- name: RecordDVRStartTime :exec
+UPDATE foghorn.artifacts
+SET started_at = to_timestamp($1::bigint), updated_at = NOW()
+WHERE artifact_hash = $2
+  AND tenant_id = $3::uuid
+  AND artifact_type = 'dvr'
+  AND dvr_start_dispatch->>'node_id' = $4::text
+  AND started_at IS NULL
+  AND status IN ('requested', 'starting', 'recording', 'stopping', 'finalizing', 'completed', 'completed_partial')
+`
+
+type RecordDVRStartTimeParams struct {
+	StartedAtUnix int64  `db:"started_at_unix" json:"started_at_unix"`
+	ArtifactHash  string `db:"artifact_hash" json:"artifact_hash"`
+	TenantID      string `db:"tenant_id" json:"tenant_id"`
+	NodeID        string `db:"node_id" json:"node_id"`
+}
+
+func (q *Queries) RecordDVRStartTime(ctx context.Context, arg RecordDVRStartTimeParams) error {
+	_, err := q.db.ExecContext(ctx, recordDVRStartTime,
+		arg.StartedAtUnix,
+		arg.ArtifactHash,
+		arg.TenantID,
+		arg.NodeID,
+	)
 	return err
 }
 

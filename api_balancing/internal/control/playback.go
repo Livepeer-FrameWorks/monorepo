@@ -40,10 +40,11 @@ type ContentResolution struct {
 	StreamId                    string
 	InternalName                string                             // Original stream internal name (for clips/DVR: the source stream)
 	ArtifactHash                string                             // Stable artifact identity for clip/DVR/VOD
+	ArtifactID                  string                             // Signed artifact authority identifier (catalog row ID)
 	OriginClusterID             string                             // Cluster that created the object
 	IngestMode                  string                             // "push" or "pull" for live streams
 	ClusterPeers                []*clusterpeerpb.TenantClusterPeer // Tenant's cluster context from Commodore (free with every resolve)
-	AuthorityClusterPeers       []*clusterpeerpb.TenantClusterPeer // Static entitlement projection used only for local-authority comparison
+	AuthorityClusterPeers       []*clusterpeerpb.TenantClusterPeer // Stable grants for source access and local-authority comparison
 	ParentStreamInternalName    string                             // Parent live-stream routing identity for stream-derived artifacts
 	OfficialClusterID           string
 	AllowPlatformSharedPlayback bool
@@ -392,6 +393,8 @@ type PlaybackDependencies struct {
 	// this tenant may not be served from, and final admission re-checks the
 	// connection that actually arrives.
 	StoredMediaPlacement ViewerPlacementPermitter
+	StoredMediaPreparer  ViewerPlacementPreparer
+	Protocol             string
 	// StoredMediaPlacementRequired latches enforcement for this process. Once a
 	// replica has installed the policy path it must never fall back to serving
 	// stored media unfiltered, so a cleared permitter refuses instead of
@@ -538,10 +541,14 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 	// still require the operation-scoped platform-shared or tenant grant policy;
 	// the federation branch re-checks the origin/redirect downstream.
 	allowPlatformShared := true
+	grantPeers := allowedClusters
 	if !allowConnectedMetadata {
 		allowPlatformShared = deps.AllowPlatformSharedPlayback
+		// Reachability filters candidate discovery, not the signed entitlement
+		// to read a warm local copy whose origin is temporarily disconnected.
+		grantPeers = artifactResp.GetAuthorityClusterPeers()
 	}
-	if !authoritativeClusterServable(authoritativeCluster, tenantID, allowedClusters, allowPlatformShared) {
+	if !authoritativeClusterServable(authoritativeCluster, tenantID, grantPeers, allowPlatformShared) {
 		return nil, fmt.Errorf("%s authoritative cluster %q not authorized for tenant", contentType, strings.TrimSpace(authoritativeCluster))
 	}
 
@@ -577,7 +584,7 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 				lbctx = context.WithValue(lbctx, ctxkeys.KeyClusterServeScope, NewClusterServeScope(tenantID, deps.OfficialClusterID, allowedClusters, allowPlatformShared))
 			}
 			nodes, lbErr := deps.LB.GetTopNodesWithScores(lbctx, "", deps.GeoLat, deps.GeoLon, make(map[string]int), "", 5, false)
-			if lbErr != nil || len(nodes) == 0 {
+			if (lbErr != nil || len(nodes) == 0) && deps.StoredMediaPreparer == nil {
 				return nil, fmt.Errorf("no suitable edge for cold artifact playback: %w", lbErr)
 			}
 			coldRanked := rankNodeScoresForArtifact(nodes, deps.GeoLat, deps.GeoLon)
@@ -647,16 +654,19 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 		}
 	}
 
-	artifactNodes, placementErr := enforceStoredMediaPlacement(ctx, deps, tenantID, internalName, resolvedPlaybackID, artifactResp.ArtifactHash, artifactNodes)
+	artifactNodes, preparedEndpoint, placementErr := placeStoredMedia(ctx, deps, tenantID, internalName, resolvedPlaybackID, artifactResp.ArtifactHash, artifactNodes)
 	if placementErr != nil {
 		return nil, placementErr
 	}
 	rankedNodes := rankArtifactNodes(artifactNodes, deps.GeoLat, deps.GeoLon, 5)
-	if len(rankedNodes) == 0 {
+	if len(rankedNodes) == 0 && preparedEndpoint == nil {
 		return nil, fmt.Errorf("storage node outputs not available")
 	}
 
 	var endpoints []*sharedpb.ViewerEndpoint
+	if preparedEndpoint != nil {
+		endpoints = append(endpoints, preparedEndpoint)
+	}
 	for _, node := range rankedNodes {
 		nodeOutputs, exists := GetNodeOutputs(node.NodeID)
 		if !exists || nodeOutputs.Outputs == nil {
@@ -779,33 +789,39 @@ func resolveArtifactPlaybackWithResp(ctx context.Context, deps *PlaybackDependen
 // a policy refusal, not a missing artifact, and callers surface it as such.
 var ErrStoredMediaPlacementUnavailable = errors.New("no permitted playback destination is available for stored media")
 
-// enforceStoredMediaPlacement keeps storage affinity as the ranking and lets the
+// placeStoredMedia keeps storage affinity as the ranking and lets the
 // signed serving policy decide eligibility. Placement is evaluated once for the
 // artifact, then intersected with the candidates storage produced, so a tenant
 // that excludes a cluster is never redirected there even when the bytes are
-// warm on it. Final admission re-checks the connection that actually arrives.
-func enforceStoredMediaPlacement(ctx context.Context, deps *PlaybackDependencies, tenantID, internalName, playbackID, artifactHash string, nodes []state.ArtifactNodeInfo) ([]state.ArtifactNodeInfo, error) {
+// warm on it. A permitted destination absent from local inventory is prepared
+// globally. Final admission re-checks the connection that actually arrives.
+func placeStoredMedia(ctx context.Context, deps *PlaybackDependencies, tenantID, internalName, playbackID, artifactHash string, nodes []state.ArtifactNodeInfo) ([]state.ArtifactNodeInfo, *sharedpb.ViewerEndpoint, error) {
 	if deps == nil {
-		return nodes, nil
+		return nodes, nil, nil
 	}
 	if deps.StoredMediaPlacement == nil {
 		if deps.StoredMediaPlacementRequired {
-			return nil, ErrStoredMediaPlacementUnavailable
+			return nil, nil, ErrStoredMediaPlacementUnavailable
 		}
-		return nodes, nil
+		return nodes, nil, nil
 	}
-	if len(nodes) == 0 {
-		return nodes, nil
+	protocol := "hls"
+	if deps.Protocol != "" {
+		protocol = mist.PlaybackProtocol(deps.Protocol)
+		if protocol == "" {
+			return nil, nil, ErrInvalidViewerProtocol
+		}
 	}
-	// Artifacts are delivered over the HTTP output family, and every artifact
-	// output preference includes HLS, so it stands for the delivery capability
-	// this policy evaluation needs from a destination.
-	permission, err := deps.StoredMediaPlacement.PermitViewer(ctx, ViewerPlacementRequest{
+	request := ViewerPlacementRequest{
 		TenantID: tenantID, ArtifactHash: artifactHash, InternalName: mist.ExtractInternalName(internalName),
-		PlaybackID: playbackID, Protocol: "hls", Location: ViewerPlacementLocation(deps.GeoLat, deps.GeoLon),
-	})
+		PlaybackID: playbackID, Protocol: protocol, Location: ViewerPlacementLocation(deps.GeoLat, deps.GeoLon),
+	}
+	permission, err := deps.StoredMediaPlacement.PermitViewer(ctx, request)
 	if err != nil {
-		return nil, ErrStoredMediaPlacementUnavailable
+		return nil, nil, fmt.Errorf("%w: %w", ErrStoredMediaPlacementUnavailable, err)
+	}
+	if permission.ObjectID == "" || !time.Now().Before(permission.ExpiresAt) {
+		return nil, nil, ErrStoredMediaPlacementUnavailable
 	}
 	permitted := make([]state.ArtifactNodeInfo, 0, len(nodes))
 	for _, node := range nodes {
@@ -814,9 +830,22 @@ func enforceStoredMediaPlacement(ctx context.Context, deps *PlaybackDependencies
 		}
 	}
 	if len(permitted) == 0 {
-		return nil, ErrStoredMediaPlacementUnavailable
+		// A preferred cell may have no local warm copy at this coordinator.
+		// Prepare the policy-selected destination, whose existing artifact relay
+		// resolves the bytes. Never substitute a local node the policy refused.
+		if deps.StoredMediaPreparer == nil {
+			return nil, nil, fmt.Errorf("%w: storage candidates and policy destinations do not intersect", ErrStoredMediaPlacementUnavailable)
+		}
+		prepared, err := resolvePreparedViewerEndpoint(ctx, deps.StoredMediaPreparer, request, permission.ObjectID, "")
+		if err != nil {
+			return nil, nil, fmt.Errorf("%w: %w", ErrStoredMediaPlacementUnavailable, err)
+		}
+		for name, output := range prepared.Primary.Outputs {
+			output.Capabilities = BuildOutputCapabilities(name, false)
+		}
+		return nil, prepared.Primary, nil
 	}
-	return permitted, nil
+	return permitted, nil, nil
 }
 
 func rankNodeScoresForArtifact(nodes []balancer.NodeWithScore, viewerLat, viewerLon float64) []state.ArtifactNodeInfo {

@@ -8,6 +8,7 @@ import (
 	"frameworks/api_balancing/internal/state"
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
+	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 )
@@ -136,6 +137,54 @@ func TestResolveArtifactPlayback_WarmNodeHappyPath(t *testing.T) {
 	}
 	if resp.GetPrimary().GetUrl() == "" {
 		t.Fatal("primary endpoint url must be populated")
+	}
+}
+
+func TestArtifactPlaybackSignedGrantsSeparateOriginReachabilityFromRevocation(t *testing.T) {
+	previousLocalCluster := GetLocalClusterID()
+	t.Cleanup(func() { SetLocalClusterID(previousLocalCluster) })
+	SetLocalClusterID("warm-cell")
+	AddPlatformSharedCluster("warm-cell")
+	sm := state.ResetDefaultManagerForTests()
+	t.Cleanup(sm.Shutdown)
+	lat, lon := 52.0, 5.0
+	sm.SetNodeInfo("warm-node", "https://warm.example", true, &lat, &lon, "ams", "", map[string]any{"HLS": "x"})
+	sm.TouchNode("warm-node", true)
+	sm.SetNodeArtifacts("warm-node", []*ipcpb.StoredArtifact{{ClipHash: "warm-artifact"}}, state.ArtifactReportOrder{Fence: 1, Seq: 1})
+	for _, granted := range []bool{true, false} {
+		database, mock, err := sqlmock.New()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = database.Close() })
+		mock.ExpectQuery(`FROM foghorn.artifacts\s+WHERE artifact_hash = \$1`).
+			WithArgs("warm-artifact", "vod", "tenant").
+			WillReturnRows(sqlmock.NewRows([]string{
+				"internal_name", "status", "duration_seconds", "size_bytes", "created_at",
+				"format", "storage_location", "sync_status", "has_thumbnails", "authoritative_cluster", "thumbnail_serving_cluster",
+			}).AddRow("asset", "ready", int64(24), int64(9000), nil, "mkv", "s3", "synced", false, "disconnected-origin", ""))
+		identity := &commodorepb.ResolveArtifactPlaybackIDResponse{
+			Found: true, ArtifactHash: "warm-artifact", InternalName: "asset", TenantId: "tenant",
+			ContentType: "vod", OriginClusterId: "disconnected-origin",
+		}
+		peers := []*clusterpeerpb.TenantClusterPeer{{ClusterId: "disconnected-origin"}}
+		if granted {
+			identity.AuthorityClusterPeers = peers
+		} else {
+			identity.ClusterPeers = peers
+		}
+		response, resolveErr := ResolveArtifactPlaybackWithIdentity(t.Context(), &PlaybackDependencies{
+			DB: database, LocalClusterID: "warm-cell", AllowPlatformSharedPlayback: true,
+		}, "playback", identity)
+		if granted && (resolveErr != nil || response.GetPrimary().GetNodeId() != "warm-node") {
+			t.Fatalf("origin disconnect blocked an authorized warm copy: %v, %v", response, resolveErr)
+		}
+		if !granted && resolveErr == nil {
+			t.Fatal("runtime reachability resurrected a revoked source grant")
+		}
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

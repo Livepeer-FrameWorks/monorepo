@@ -660,6 +660,11 @@ func TestCheckReplicationCompletion_PreservesSourceWhenDestinationNodeLive(t *te
 	}
 
 	pm.checkReplicationCompletion()
+	if pending, found := registry.InboundPullForNode(internalName, destNodeID); !found || pending.DestinationObserved {
+		t.Fatal("completion must wait for the public stream identity")
+	}
+	registry.UpsertLocalSource(control.StreamEntry{InternalName: internalName, TenantID: "tenant1", StreamID: "stream-uuid"})
+	pm.checkReplicationCompletion()
 
 	pull, found, err := registry.CurrentInboundPull(context.Background(), internalName, destNodeID)
 	if err != nil || !found || !pull.DestinationObserved || pull.DTSCURL != "dtsc://src/"+internalName {
@@ -679,6 +684,7 @@ func TestReplicationCompletionDoesNotClearOtherDestinations(t *testing.T) {
 	registry := control.NewStreamRegistry(nil, "cluster-a", time.Minute)
 	control.SetStreamRegistry(registry)
 	t.Cleanup(func() { control.SetStreamRegistry(priorRegistry) })
+	registry.UpsertLocalSource(control.StreamEntry{InternalName: "stream", TenantID: "tenant", StreamID: "stream-uuid"})
 	markReplicatingForTest(t, registry, "stream", "cluster-b", "dtsc://src/stream", "ready", "https://ready", "source")
 	markReplicatingForTest(t, registry, "stream", "cluster-b", "dtsc://src/stream", "pending", "https://pending", "source")
 	sm := state.ResetDefaultManagerForTests()
@@ -702,10 +708,13 @@ func TestOriginPullCompletedEventAttributesContentOwner(t *testing.T) {
 		DestNodeID:       "dest-node",
 		PullSourceNodeID: "source-node",
 		PullDTSCURL:      "dtsc://source/tenant1+stream1",
-	}, "cluster-b", "tenant-content-owner")
+	}, "cluster-b", "tenant-content-owner", "stream-uuid")
 
 	if event.GetStreamTenantId() != "tenant-content-owner" {
 		t.Fatalf("stream tenant = %q, want tenant-content-owner", event.GetStreamTenantId())
+	}
+	if event.GetStreamId() != "stream-uuid" {
+		t.Fatalf("stream ID = %q, want stream-uuid", event.GetStreamId())
 	}
 	if event.GetRemoteCluster() != "cluster-b" || event.GetOriginClusterId() != "cluster-b" {
 		t.Fatalf("unexpected federation placement: remote=%q origin=%q", event.GetRemoteCluster(), event.GetOriginClusterId())

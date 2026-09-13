@@ -7,6 +7,7 @@ import (
 	"frameworks/api_balancing/internal/control"
 	localauthority "frameworks/api_balancing/internal/mediaauthority"
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
+	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	mediaauthoritypb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
 	"google.golang.org/protobuf/proto"
@@ -88,6 +89,15 @@ func (p *Processor) localArtifactSource(ctx context.Context, internalName string
 		ClusterPeers: p.mediaAuthorityStore.RoutingClusterPeers(tenant, p.clusterID), AuthorityClusterPeers: localClusterPeers(tenant), RequiresAuth: object.GetPlaybackPolicy().GetKind() != mediaauthoritypb.PlaybackPolicyKind_PLAYBACK_POLICY_KIND_PUBLIC,
 		ParentStreamInternalName: artifact.GetParentStreamInternalName(),
 	}, snapshot, true, true, nil
+}
+
+func artifactSourceAuthorizationPeers(response *commodorepb.ResolveArtifactInternalNameResponse, locallyAuthoritative bool) []*clusterpeerpb.TenantClusterPeer {
+	if locallyAuthoritative {
+		// A peer-channel reconnect changes reachability, not signed access. Warm
+		// local artifacts remain readable while their origin is disconnected.
+		return response.GetAuthorityClusterPeers()
+	}
+	return response.GetClusterPeers()
 }
 
 func (p *Processor) promoteLocalArtifactSourceIfMatching(ctx context.Context, connected *commodorepb.ResolveArtifactInternalNameResponse, snapshot localauthority.SourceSnapshot) {

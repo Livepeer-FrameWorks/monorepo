@@ -921,16 +921,12 @@ func TestHandleStreamSource_PullOriginPullReturnsDTSC(t *testing.T) {
 	}
 }
 
-// TestHandleStreamSource_DVRDefensiveOriginPullReturnsDTSC pins the
-// dvr+ branch's federation hook. Cross-cluster DVR federation is wired
-// via tryArrangeDVRCrossCluster (processor.go); this test sets the
-// registry directly to verify the STREAM_SOURCE hook returns the peer
-// DTSC URL once the registry has a Location for the dvr+ runtime name.
-// Uses the dvr+ runtime name as-is for the registry key
-// (sourceInternalKey doesn't strip dvr+).
-func TestHandleStreamSource_DVRDefensiveOriginPullReturnsDTSC(t *testing.T) {
+func TestHandleStreamSource_DVRWarmPullCannotBypassArtifactAuthority(t *testing.T) {
 	processor := newTestProcessor(t)
 	seedPreparedOriginPull(t, processor, "dvr+abc123", "edge-local-1", "dtsc://edge-origin:4200/dvr+abc123")
+	previousCommodore := control.CommodoreClient
+	control.CommodoreClient = nil
+	t.Cleanup(func() { control.CommodoreClient = previousCommodore })
 
 	resp, abort, err := processor.handleStreamSource(&ipcpb.MistTrigger{
 		NodeId: "edge-local-1",
@@ -944,7 +940,7 @@ func TestHandleStreamSource_DVRDefensiveOriginPullReturnsDTSC(t *testing.T) {
 	if abort {
 		t.Fatal("expected non-abort STREAM_SOURCE response")
 	}
-	if resp != "dtsc://edge-origin:4200/dvr+abc123" {
+	if resp != control.OfflineNotRecorded {
 		t.Fatalf("STREAM_SOURCE response = %q", resp)
 	}
 }

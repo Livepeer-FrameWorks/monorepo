@@ -49,6 +49,7 @@ const staleDVRFinalizingAfter = 10 * time.Minute
 // are advisory; Foghorn computes the canonical artifact status from the
 // dvr_segments ledger.
 type FinalizeOptions struct {
+	StartedAtUnix   int64
 	ReportedStatus  string
 	ReportedError   string
 	DurationSeconds int64
@@ -117,6 +118,9 @@ func FinalizeDVR(ctx context.Context, dvrHash string, opts FinalizeOptions) (Fin
 				Warn("FinalizeDVR: rejecting stop from a node that is not the dispatched recording owner")
 			return FinalizeResult{NoOp: true}, fmt.Errorf("dvr stop for %s rejected: reporting node %q is not the dispatched recording node", dvrHash, opts.ReportingNodeID)
 		}
+		if err := recordDVRStartTime(ctx, dvrHash, tenantID, opts.ReportingNodeID, opts.StartedAtUnix); err != nil {
+			return FinalizeResult{}, fmt.Errorf("record dvr start time: %w", err)
+		}
 	}
 
 	// Atomic claim of the active/stopping->finalizing transition. A stale
@@ -146,6 +150,17 @@ func FinalizeDVR(ctx context.Context, dvrHash string, opts FinalizeOptions) (Fin
 		}
 		if backfillErr := backfillExistingDVRRetention(ctx, dvrHash, logger); backfillErr != nil {
 			return FinalizeResult{ArtifactStatus: current, NoOp: true}, backfillErr
+		}
+		if opts.ReportingNodeID != "" && opts.StartedAtUnix > 0 && (current == "completed" || current == "completed_partial") {
+			policy, ok, policyErr := ReadDVRChapterPolicy(ctx, dvrHash)
+			if policyErr != nil {
+				return FinalizeResult{ArtifactStatus: current, NoOp: true}, policyErr
+			}
+			if ok && policy.EndedAtMs > 0 {
+				if closeErr := CloseTerminalChapter(ctx, dvrHash, policy.EndedAtMs, logger); closeErr != nil {
+					return FinalizeResult{ArtifactStatus: current, NoOp: true}, closeErr
+				}
+			}
 		}
 		return FinalizeResult{ArtifactStatus: current, NoOp: true}, nil
 	}
@@ -179,7 +194,9 @@ func FinalizeDVR(ctx context.Context, dvrHash string, opts FinalizeOptions) (Fin
 	// the tenant's plan may have changed during a months-long stream. Days = 0
 	// means "no auto-expire" (admin-managed only). This applies to every
 	// terminal outcome, including failed DVRs with no playable segments.
-	endedAt := time.Now().UTC()
+	// The claim persists the stop boundary before upload retries. Chapter IDs,
+	// retention and API listings must all use that same boundary.
+	endedAt := time.UnixMilli(claimed.EndedAtMs).UTC()
 	retentionDays := readPersistedRetentionDays(ctx, dvrHash)
 	var retentionUntilArg interface{}
 	if retentionDays > 0 {

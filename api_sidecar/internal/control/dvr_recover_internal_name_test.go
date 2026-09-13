@@ -837,6 +837,9 @@ func (a *ambiguousAcceptFakeMist) PushList() ([]mist.PushInfo, error) {
 func TestStartRecordingTreatsAmbiguousPushStartAsAccepted(t *testing.T) {
 	clearConn()
 	useFastInitialPushRetry(t)
+	// Three successful polls must fit even when the race detector is scheduled
+	// alongside other packages; this case tests identity, not deadline expiry.
+	initialPushRetryFor = time.Second
 	const (
 		dvrHash      = "hash-ambig-accept"
 		streamID     = "stream-ambig-accept"

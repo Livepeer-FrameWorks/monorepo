@@ -77,6 +77,7 @@ func (p *Processor) ResolveLocalContent(ctx context.Context, input string) (*con
 	}
 	if artifact := object.GetArtifact(); artifact != nil {
 		resolution.ArtifactHash = artifact.GetArtifactHash()
+		resolution.ArtifactID = artifact.GetArtifactId()
 		resolution.ParentStreamInternalName = artifact.GetParentStreamInternalName()
 		if host, _ := state.DefaultManager().FindNodeByArtifactHash(artifact.GetArtifactHash()); host != "" {
 			resolution.FixedNode = host

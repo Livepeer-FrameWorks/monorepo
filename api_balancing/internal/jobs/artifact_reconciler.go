@@ -55,14 +55,15 @@ type ReconcilerCommodoreClient interface {
 
 // ArtifactReconcilerConfig holds configuration for the reconciler job.
 type ArtifactReconcilerConfig struct {
-	DB              *sql.DB
-	S3Client        ReconcilerS3Client
-	CommodoreClient ReconcilerCommodoreClient
-	SendFreeze      FreezeRequestSender
-	Logger          logging.Logger
-	Interval        time.Duration // How often to run (default: 5 minutes)
-	BatchSize       int           // Max artifacts per pass (default: 50)
-	ClusterID       string        // This cluster's ID; only locally-authoritative (origin) rows are projected
+	DB               *sql.DB
+	S3Client         ReconcilerS3Client
+	CommodoreClient  ReconcilerCommodoreClient
+	SendFreeze       FreezeRequestSender
+	Logger           logging.Logger
+	Interval         time.Duration // How often to run (default: 5 minutes)
+	BatchSize        int           // Max artifacts per origin per pass (default: 50)
+	ClusterID        string        // Single-origin identity when no assignment provider is configured
+	ServedClusterIDs func() []string
 	// OnNodeIndexed emits a node-copy GAINED for a row this reconciler onboarded (which
 	// may restore an artifact_nodes row that was previously LOST). Nil = no emit.
 	OnNodeIndexed func(ctx context.Context, artifactHash, nodeID string)
@@ -85,6 +86,7 @@ type ArtifactReconciler struct {
 	interval             time.Duration
 	batchSize            int
 	clusterID            string
+	servedClusterIDs     func() []string
 	onNodeIndexed        func(ctx context.Context, artifactHash, nodeID string)
 	stopCh               chan struct{}
 	triggerCh            chan struct{}
@@ -112,6 +114,7 @@ func NewArtifactReconciler(cfg ArtifactReconcilerConfig) *ArtifactReconciler {
 		interval:             interval,
 		batchSize:            batchSize,
 		clusterID:            cfg.ClusterID,
+		servedClusterIDs:     cfg.ServedClusterIDs,
 		onNodeIndexed:        cfg.OnNodeIndexed,
 		stopCh:               make(chan struct{}),
 		triggerCh:            make(chan struct{}, 1),
@@ -502,11 +505,13 @@ func (r *ArtifactReconciler) reconcileFreezePublicationLedger(ctx context.Contex
 // rows get origin_cluster_id at creation). Assigning origin does NOT bump catalog_revision (it
 // isn't a projected field), so this doesn't re-dirty the queue.
 func (r *ArtifactReconciler) backfillOriginCluster(ctx context.Context) {
-	if r.clusterID == "" {
+	clusters := r.catalogOriginClusters()
+	// An unattributed row cannot be assigned from a multi-cluster control cell alone.
+	if len(clusters) != 1 {
 		return
 	}
 	const backfillBatch = 500
-	n, err := foghorndb.New(r.db).BackfillOriginCluster(ctx, foghorndb.BackfillOriginClusterParams{Limit: backfillBatch, OriginClusterID: sql.NullString{String: r.clusterID, Valid: true}})
+	n, err := foghorndb.New(r.db).BackfillOriginCluster(ctx, foghorndb.BackfillOriginClusterParams{Limit: backfillBatch, OriginClusterID: sql.NullString{String: clusters[0], Valid: true}})
 	if err != nil {
 		r.logger.WithError(err).Warn("Origin-cluster attribution backfill failed")
 		return
@@ -533,11 +538,19 @@ func (r *ArtifactReconciler) repairDeletedDVRChildren(ctx context.Context) int {
 }
 
 // backfillCatalogRevisions advances catalog_revision from its durable per-artifact watermark for up
-// to catalogBackfillBatch of this cluster's authoritative rows still at catalog_revision = 0,
+// to catalogBackfillBatch per served origin of authoritative rows still at catalog_revision = 0,
 // entering them into the projection queue (catalog_revision > catalog_synced_rev). Runs under the
 // reconciler advisory lock so replicas don't double-assign; converges to a no-op.
 func (r *ArtifactReconciler) backfillCatalogRevisions(ctx context.Context) int64 {
-	n, err := foghorndb.New(r.db).BackfillCatalogRevisions(ctx, foghorndb.BackfillCatalogRevisionsParams{Limit: catalogBackfillBatch, OriginClusterID: sql.NullString{String: r.clusterID, Valid: true}})
+	var total int64
+	for _, origin := range r.catalogOriginClusters() {
+		total += r.backfillCatalogRevisionsForCluster(ctx, origin)
+	}
+	return total
+}
+
+func (r *ArtifactReconciler) backfillCatalogRevisionsForCluster(ctx context.Context, origin string) int64 {
+	n, err := foghorndb.New(r.db).BackfillCatalogRevisions(ctx, foghorndb.BackfillCatalogRevisionsParams{Limit: catalogBackfillBatch, OriginClusterID: sql.NullString{String: origin, Valid: true}})
 	if err != nil {
 		r.logger.WithError(err).Warn("Catalog-revision rollout backfill failed")
 		return 0
@@ -559,24 +572,42 @@ func (r *ArtifactReconciler) backfillCatalogRevisions(ctx context.Context) int64
 // projected revision; a not-found row is retried, and a poison row (bad type / malformed
 // tracks) is quarantined so it can't head-of-line block the queue.
 // projectCommodoreArtifactState returns (advanced, scanned): advanced is the count of rows whose
-// watermark moved this pass; scanned is the number of eligible rows the batch pulled. scanned ==
-// batchSize signals the batch was full (more work pending) so reconcile() can self-trigger.
+// watermark moved this pass; scanned counts eligible rows across all served origins. At least
+// batchSize scanned rows triggers another pass so full origin batches are drained promptly.
 func (r *ArtifactReconciler) projectCommodoreArtifactState(ctx context.Context) (int, int) {
 	if r.commodore == nil {
 		return 0, 0
 	}
-	// Commodore now requires the projecting cluster's identity to assign/enforce catalog origin
-	// authority. Without a cluster id this reconciler cannot project — fail the pass loudly rather
-	// than emit a per-row rejection storm.
-	if r.clusterID == "" {
-		r.logger.Warn("Artifact reconciler has no cluster id; skipping catalog projection (source authority required)")
+	clusters := r.catalogOriginClusters()
+	if len(clusters) == 0 {
+		r.logger.Warn("Artifact reconciler has no served clusters; skipping catalog projection")
 		return 0, 0
 	}
+	var total, scanned int
+	for _, origin := range clusters {
+		advanced, examined := r.projectCommodoreArtifactStateForCluster(ctx, origin)
+		total += advanced
+		scanned += examined
+	}
+	return total, scanned
+}
+
+func (r *ArtifactReconciler) catalogOriginClusters() []string {
+	if r.servedClusterIDs != nil {
+		return r.servedClusterIDs()
+	}
+	if r.clusterID != "" {
+		return []string{r.clusterID}
+	}
+	return nil
+}
+
+func (r *ArtifactReconciler) projectCommodoreArtifactStateForCluster(ctx context.Context, origin string) (int, int) {
 	var rows []foghorndb.ListArtifactsForCatalogProjectionRow
 	queries := foghorndb.New(r.db)
 	err := database.RetryPostgres(ctx, database.DefaultRetryAttempts, 25*time.Millisecond, func() error {
 		var err error
-		rows, err = queries.ListArtifactsForCatalogProjection(ctx, foghorndb.ListArtifactsForCatalogProjectionParams{Limit: int32(r.batchSize), OriginClusterID: sql.NullString{String: r.clusterID, Valid: true}})
+		rows, err = queries.ListArtifactsForCatalogProjection(ctx, foghorndb.ListArtifactsForCatalogProjectionParams{Limit: int32(r.batchSize), OriginClusterID: sql.NullString{String: origin, Valid: true}})
 		return err
 	})
 	if err != nil {
@@ -619,7 +650,7 @@ func (r *ArtifactReconciler) projectCommodoreArtifactState(ctx context.Context) 
 				AssetKey:        hash,
 				SourceRevision:  revision,
 				Deleted:         true,
-				SourceClusterId: strPtrOrNil(r.clusterID),
+				SourceClusterId: strPtrOrNil(origin),
 			}
 			resp, delErr := r.commodore.UpdateArtifactCatalogSnapshot(ctx, delReq)
 			if delErr != nil {
@@ -668,7 +699,7 @@ func (r *ArtifactReconciler) projectCommodoreArtifactState(ctx context.Context) 
 			ErrorMessage:              nullStringPtr(errorMessage),
 			// Assert this cluster as the projection source so Commodore enforces origin authority:
 			// only the origin cluster may mutate the artifact's catalog state.
-			SourceClusterId: strPtrOrNil(r.clusterID),
+			SourceClusterId: strPtrOrNil(origin),
 			// Retention horizon → catalog, so /library shows accurate expiry for every kind
 			// (chapters included). Absent = keep-forever (NULL).
 			RetentionUntilUnix: nullInt64Ptr(retentionUnix),

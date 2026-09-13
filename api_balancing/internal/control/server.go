@@ -821,7 +821,7 @@ func GetStreamSource(internalName string) (nodeID string, baseURL string, ok boo
 
 	// Fallback: early-start flows can see STREAM_BUFFER before node stats populate Inputs.
 	// In that case, use the stream union state's NodeID.
-	if st := state.DefaultManager().GetStreamState(internalName); st != nil && st.NodeID != "" {
+	if st := state.DefaultManager().GetStreamState(internalName); st != nil && st.NodeID != "" && !instances[st.NodeID].Replicated && instances[st.NodeID].Status != "offline" {
 		if ns := state.DefaultManager().GetNodeState(st.NodeID); ns != nil {
 			return st.NodeID, ns.BaseURL, true
 		}
@@ -4414,6 +4414,10 @@ func processDVRProgress(progress *ipcpb.DVRProgress, session NodeSession, logger
 			}).Warn("Ignoring DVR progress: reporting node is not the dispatched recording owner (or lookup failed)")
 			return
 		}
+		if err := recordDVRStartTime(streamCtx(), dvrHash, tenantID, storageNodeID, progress.GetStartedAt()); err != nil {
+			logger.WithError(err).WithField("dvr_hash", dvrHash).Warn("Failed to persist DVR recording start time")
+			return
+		}
 	}
 
 	// The durable progress write classifies the report: applied=true only for an accepted active
@@ -4502,6 +4506,7 @@ func processDVRStopped(stopped *ipcpb.DVRStopped, session NodeSession, logger lo
 		defer cancel()
 		final, err := FinalizeDVR(ctx, dvrHash, FinalizeOptions{
 			ReportedStatus:  status,
+			StartedAtUnix:   stopped.GetStartedAt(),
 			ReportedError:   errorMsg,
 			DurationSeconds: int64(durationSeconds),
 			SizeBytes:       uint64(sizeBytes),
@@ -5021,18 +5026,12 @@ func processMistTrigger(trigger *ipcpb.MistTrigger, session NodeSession, stream 
 		sendMistTriggerAck(stream, requestID, nil, logger)
 	}
 
-	loggedResponse := responseText
-	if triggerType == string(mist.TriggerStreamProcess) && loggedResponse != "" {
-		// STREAM_PROCESS responses can contain the short-lived Livepeer job
-		// capability. The response belongs on the Mist control stream only; a
-		// raw copy in logs would turn the log backend into a credential store.
-		loggedResponse = "<redacted process configuration>"
-	}
+	// Trigger responses can contain source credentials or process capabilities.
 	logger.WithFields(logging.Fields{
-		"trigger_type": triggerType,
-		"request_id":   requestID,
-		"response":     loggedResponse,
-		"abort":        shouldAbort,
+		"trigger_type":   triggerType,
+		"request_id":     requestID,
+		"response_bytes": len(responseText),
+		"abort":          shouldAbort,
 	}).Info("Sent MistTrigger response")
 }
 

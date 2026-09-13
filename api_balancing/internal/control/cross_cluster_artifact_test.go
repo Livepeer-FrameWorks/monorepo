@@ -51,7 +51,7 @@ func makeCCDeps(fed *fakeCrossClusterFedClient, addrs map[string]string) *CrossC
 func TestResolve_HappyPath_ReturnsURL(t *testing.T) {
 	fed := &fakeCrossClusterFedClient{
 		responses: []*foghornfederationpb.PrepareArtifactResponse{
-			{Ready: true, Url: "https://peer/clip.mp4"},
+			{Ready: true, Url: "https://peer/clip.mp4", DtshUrl: "https://peer/index-version.dtsh"},
 		},
 	}
 	d := makeCCDeps(fed, map[string]string{"cluster-origin": "peer:443"})
@@ -62,6 +62,9 @@ func TestResolve_HappyPath_ReturnsURL(t *testing.T) {
 	}
 	if got.URL != "https://peer/clip.mp4" {
 		t.Fatalf("URL = %q", got.URL)
+	}
+	if got.DtshURL != "https://peer/index-version.dtsh" {
+		t.Fatalf("published index URL lost: %q", got.DtshURL)
 	}
 	if got.OriginClusterID != "cluster-origin" || got.StorageClusterID != "" {
 		t.Fatalf("origin=%q storage=%q", got.OriginClusterID, got.StorageClusterID)

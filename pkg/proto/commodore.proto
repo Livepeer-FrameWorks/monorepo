@@ -982,13 +982,14 @@ message MediaTrack {
 // tracks list with tracks_present clears; tracks_present false keeps). source_revision is the
 // source-owned monotonic foghorn.artifacts.catalog_revision (guard). deleted=true removes the
 // row instead of upserting (revision + origin guarded).
+// Clip duration preserves the requested/measured duration when absent; DVR/VOD duration clears.
 message UpdateArtifactCatalogSnapshotRequest {
   string tenant_id = 1;
   ArtifactAssetType asset_type = 2;
   string asset_key = 3;
   int64 source_revision = 4;
   optional int64 size_bytes = 5;
-  optional int64 duration_ms = 6;
+  optional int64 duration_ms = 6;   // Measured duration (ms); absent preserves clip duration, clears DVR/VOD duration
   bool tracks_present = 7;          // true = replace tracks with `tracks` (empty clears); false = leave unset
   repeated MediaTrack tracks = 8;
   optional string sync_status = 9;
@@ -1244,7 +1245,7 @@ message StorageArtifactInfo {
   optional bool has_local_copy = 23;
   optional bool is_synced = 24;
   optional bool is_finalized = 25;
-  optional int64 duration_ms = 26;    // Measured media duration (ms), all kinds; null until finalized
+  optional int64 duration_ms = 26;    // Duration (ms); clips retain requested duration until measured, DVR/VOD may be null
   repeated MediaTrack tracks = 27;    // Finalized A/V track summary; empty until finalized
   optional string description = 28;   // User-provided description (VOD uploads); from commodore business row
   optional string error_message = 29; // Processing failure detail; projected from foghorn.artifacts.error_message

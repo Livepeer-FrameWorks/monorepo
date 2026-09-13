@@ -58,7 +58,7 @@ WHERE tenant_id = sqlc.arg(tenant_id)::uuid
 -- name: ApplyClipCatalogSnapshot :one
 UPDATE commodore.clips
 SET size_bytes = sqlc.narg(size_bytes),
-    duration = sqlc.narg(duration_ms),
+    duration = COALESCE(sqlc.narg(duration_ms), duration),
     tracks = CASE WHEN sqlc.arg(tracks_present)::boolean THEN sqlc.narg(tracks)::text::jsonb ELSE tracks END,
     sync_status = sqlc.narg(sync_status),
     is_synced = sqlc.narg(is_synced),

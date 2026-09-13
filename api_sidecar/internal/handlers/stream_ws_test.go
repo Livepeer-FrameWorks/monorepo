@@ -411,7 +411,7 @@ func TestStreamWSBatchesRelevantChangesAndIgnoresViewerOnly(t *testing.T) {
 func TestStreamWSBootstrapExpiresUnderContinuousTraffic(t *testing.T) {
 	configureFastStreamWSTest(t)
 	fake := newFakeStreamWSServer(t)
-	fake.setStream("live+bootstrap", 4, 1, 2)
+	fake.setStream("live+bootstrap", 4, 1, 1)
 	pm := newStreamWSTestMonitor(t)
 	pm.AddNode("node-a", fake.server.URL, fake.server.URL)
 	conn := receiveConnection(t, fake.connections)
@@ -426,6 +426,17 @@ func TestStreamWSBootstrapExpiresUnderContinuousTraffic(t *testing.T) {
 	if got := receiveQuery(t, fake.queries); len(got) != 0 {
 		t.Fatalf("bootstrap query = %v, want full sweep", got)
 	}
+	pm.streamWSMu.Lock()
+	queue := pm.streamWSQueue
+	pm.streamWSMu.Unlock()
+	deadline = time.Now().Add(time.Second)
+	for !queue.bootstrapSynced.Load() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !queue.bootstrapSynced.Load() {
+		t.Fatal("bootstrap response was not applied")
+	}
+	fake.setStream("live+bootstrap", 4, 1, 2)
 	_ = conn.WriteJSON(streamFrame("live+bootstrap", 4, 99, 1, 2))
 	if got := receiveQuery(t, fake.queries); !reflect.DeepEqual(got, []string{"live+bootstrap"}) {
 		t.Fatalf("post-bootstrap query = %v", got)
@@ -443,6 +454,16 @@ func TestStreamWSTrailingRefreshKeepsFinalState(t *testing.T) {
 	time.Sleep(2 * streamWSWarmupWindow)
 	if got := receiveQuery(t, fake.queries); len(got) != 0 {
 		t.Fatalf("bootstrap query = %v, want full sweep", got)
+	}
+	pm.streamWSMu.Lock()
+	queue := pm.streamWSQueue
+	pm.streamWSMu.Unlock()
+	deadline := time.Now().Add(time.Second)
+	for !queue.bootstrapSynced.Load() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if !queue.bootstrapSynced.Load() {
+		t.Fatal("bootstrap response was not applied")
 	}
 
 	_ = conn.WriteJSON(streamFrame("live+alpha", 4, 1, 1, 2))

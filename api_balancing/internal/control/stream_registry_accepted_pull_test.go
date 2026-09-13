@@ -2,8 +2,11 @@ package control
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
+
+	"github.com/DATA-DOG/go-sqlmock"
 )
 
 // A DTSC connection at the origin is admitted as a prepared source only for the
@@ -59,5 +62,76 @@ func TestAcceptedOutboundPullBindsNodeGenerationAndWindow(t *testing.T) {
 	projectSourceForTest(t, r, stream, "edge-1", 101, "trigger-2", "gen-2", 2)
 	if _, ok := r.AcceptedOutboundPull(context.Background(), stream, "edge-1", credential, now); ok {
 		t.Fatal("a pull accepted for a superseded generation must not admit a connection")
+	}
+}
+
+func TestAcceptedOutboundDVRPullRequiresCurrentRecordingOwner(t *testing.T) {
+	t.Setenv("FOGHORN_BALANCER_CAPABILITY_SECRET", "source-pull-test-secret")
+	localDB, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousDB := db
+	db = localDB
+	t.Cleanup(func() {
+		db = previousDB
+		if expectationErr := mock.ExpectationsWereMet(); expectationErr != nil {
+			t.Error(expectationErr)
+		}
+		localDB.Close()
+	})
+	const runtime = "dvr+recording"
+	r := newPopulatedRegistry(t)
+	pull, err := r.RecordOutboundPull(t.Context(), runtime, OutboundPull{
+		TenantID: "tenant-1", SourceNodeID: "edge-1", DestNodeID: "edge-b", DestClusterID: "remote",
+		DTSCURL: "dtsc://edge-1:4200/" + runtime,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceURL, err := SourcePullURL(pull.DTSCURL, runtime, pull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential := SourcePullCredential(sourceURL)
+	now := time.Now()
+	for _, tc := range []struct {
+		name, stream, node, credential string
+		when                           time.Time
+	}{
+		{"bare artifact", "recording", "edge-1", credential, now},
+		{"live alias", "live+recording", "edge-1", credential, now},
+		{"wrong node", runtime, "edge-2", credential, now},
+		{"missing credential", runtime, "edge-1", "", now},
+		{"tampered credential", runtime, "edge-1", credential + "x", now},
+		{"expired", runtime, "edge-1", credential, now.Add(acceptedPullAdmissionWindow + time.Second)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, ok := r.AcceptedOutboundPull(t.Context(), tc.stream, tc.node, tc.credential, tc.when); ok {
+				t.Fatal("invalid DVR source connection accepted")
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name      string
+		recording bool
+		failure   error
+	}{
+		{"recording owner", true, nil},
+		{"stopped or moved recording", false, nil},
+		{"database unavailable", false, errors.New("unavailable")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			query := mock.ExpectQuery(`SELECT EXISTS`).WithArgs("tenant-1", "recording", "edge-1")
+			if tc.failure != nil {
+				query.WillReturnError(tc.failure)
+			} else {
+				query.WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(tc.recording))
+			}
+			_, ok := r.AcceptedOutboundPull(t.Context(), runtime, "edge-1", credential, now)
+			if ok != tc.recording {
+				t.Fatalf("accepted=%v want=%v", ok, tc.recording)
+			}
+		})
 	}
 }

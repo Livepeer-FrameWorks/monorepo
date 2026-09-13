@@ -15,6 +15,28 @@ import (
 
 var errTestListFail = errors.New("push list unavailable")
 
+func TestDVRReportsCarryRecordingClock(t *testing.T) {
+	start := time.Now().Add(-time.Minute).Truncate(time.Second)
+	var reports []*ipcpb.ControlMessage
+	job := &DVRJob{
+		DVRHash: "recording-clock", StartTime: start, Status: "recording", OutputDir: t.TempDir(),
+		SendFunc: func(msg *ipcpb.ControlMessage) { reports = append(reports, msg) },
+	}
+	dm := &DVRManager{jobs: map[string]*DVRJob{job.DVRHash: job}, logger: logging.NewLogger()}
+	dm.updateProgress(job)
+	dm.sendCompletion(job, "completed", "")
+	if len(reports) != 2 {
+		t.Fatalf("reports: %d", len(reports))
+	}
+	if got := reports[0].GetDvrProgress().GetStartedAt(); got != start.Unix() {
+		t.Fatalf("progress start: %d", got)
+	}
+	stopped := reports[1].GetDvrStopped()
+	if stopped.GetStartedAt() != start.Unix() || stopped.GetEndedAt() < stopped.GetStartedAt() {
+		t.Fatalf("terminal clock: %v", stopped)
+	}
+}
+
 func TestGetActiveDVRHashes_Empty(t *testing.T) {
 	prevDM := dvrManager
 	dm := &DVRManager{
@@ -69,7 +91,9 @@ func TestHandleNewSegment_PathTraversal(t *testing.T) {
 	}
 
 	// filePath outside OutputDir should be rejected before any sync attempt
-	dm.HandleNewSegment("live+test-stream", "/other/path/segment.ts", 0, 0, 0)
+	dm.HandleNewSegment("live+test-stream", "/other/path/segment.ts")
+	dm.HandleNewSegment("live+test-stream", "/data/dvr/stream-1/hash-1-other/segment.ts")
+	dm.HandleNewSegment("live+test-stream", "/data/dvr/stream-1/hash-1/../segment.ts")
 
 	if len(dm.jobs["hash-1"].SyncedSegments) != 0 {
 		t.Fatal("expected no segments synced after path traversal attempt")
@@ -90,7 +114,7 @@ func TestHandleNewSegment_UnknownStream(t *testing.T) {
 	}
 
 	// Non-matching stream name should be a no-op without panicking
-	dm.HandleNewSegment("live+unknown-stream", "/data/dvr/stream-1/hash-1/segments/chunk000.ts", 0, 0, 0)
+	dm.HandleNewSegment("live+unknown-stream", "/data/dvr/stream-1/hash-1/segments/chunk000.ts")
 
 	if len(dm.jobs["hash-1"].SyncedSegments) != 0 {
 		t.Fatal("expected no segments synced for unknown stream")
@@ -350,7 +374,7 @@ func TestSyncSpecificSegment_AlreadySynced(t *testing.T) {
 
 	// syncSpecificSegment should return early for already-synced segment
 	// without calling RecordDVRSegment (which would fail with no stream)
-	dm.syncSpecificSegment(job, filepath.Join(job.OutputDir, "segments", "chunk000.ts"), 0, 0, 0)
+	dm.syncSpecificSegment(job, filepath.Join(job.OutputDir, "segments", "chunk000.ts"))
 
 	if len(job.SyncedSegments) != 1 {
 		t.Fatalf("expected SyncedSegments to be unchanged, got %v", job.SyncedSegments)

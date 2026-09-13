@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"frameworks/api_sidecar/internal/admission"
+	"frameworks/api_sidecar/internal/storage"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
 
@@ -196,13 +197,15 @@ func (h *ProcessingJobHandler) stageSourceToProcessingDir(log *logrus.Entry, req
 
 	target := filepath.Join(procDir, req.GetArtifactHash()+ext)
 
-	// Admission gate. We don't know the source size ahead of time —
-	// HEAD-then-decide gives us a real number for the priority hierarchy
-	// instead of guessing zero. On HEAD failure (S3 quirk, network) fall
-	// back to admit-then-download with size=0; the engine handles unknowns.
+	// Stored sources can supply their size for admission. A failed probe leaves
+	// size=0; the admission engine handles unknown sizes.
 	var sizeBytes uint64
-	if size, ok := headContentLength(stageCtx, sourceURL); ok {
-		sizeBytes = size
+	// A bounded extraction from live media has no Content-Length until muxing
+	// finishes. Do not open a second live reader just to probe an unknown size.
+	if !isClipProcessingSource(req) {
+		if size, ok := headContentLength(stageCtx, sourceURL); ok {
+			sizeBytes = size
+		}
 	}
 	sm := GetStorageManager()
 	if sm != nil {
@@ -226,7 +229,7 @@ func (h *ProcessingJobHandler) stageSourceToProcessingDir(log *logrus.Entry, req
 	if err != nil {
 		_ = out.Close()
 		_ = os.Remove(tmp)
-		return "", fmt.Errorf("fetch source: %w", err)
+		return "", fmt.Errorf("fetch source: %w", storage.SanitizeRequestError(err))
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -236,9 +239,14 @@ func (h *ProcessingJobHandler) stageSourceToProcessingDir(log *logrus.Entry, req
 	}
 	written, copyErr := io.Copy(out, resp.Body)
 	if copyErr != nil {
+		log.WithFields(logging.Fields{
+			"bytes_received": written,
+			"content_length": resp.ContentLength,
+			"stage_type":     label,
+		}).WithError(storage.SanitizeRequestError(copyErr)).Warn("Processing source body incomplete")
 		_ = out.Close()
 		_ = os.Remove(tmp)
-		return "", fmt.Errorf("copy source: %w", copyErr)
+		return "", fmt.Errorf("copy source: %w", storage.SanitizeRequestError(copyErr))
 	}
 	if err := out.Sync(); err != nil {
 		_ = out.Close()
@@ -284,6 +292,8 @@ func processingSourceStageTimeout(req *ipcpb.ProcessingJobRequest) time.Duration
 // headContentLength issues a HEAD to learn the source size for admission.
 // Returns (size, true) on success.
 func headContentLength(ctx context.Context, sourceURL string) (uint64, bool) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, sourceURL, nil)
 	if err != nil {
 		return 0, false

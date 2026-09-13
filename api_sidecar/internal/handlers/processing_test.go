@@ -1310,6 +1310,64 @@ func TestStageProcessingSourceDownloadsSourceClip(t *testing.T) {
 	}
 }
 
+func TestStageLiveProcessingSourceDoesNotProbeHead(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			t.Error("live extraction must not open a HEAD reader")
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		_, _ = w.Write([]byte("finite-clip"))
+	}))
+	t.Cleanup(server.Close)
+	h := &ProcessingJobHandler{storagePath: t.TempDir()}
+	req := &ipcpb.ProcessingJobRequest{ArtifactHash: "clip", Params: map[string]string{
+		"source_kind": "live", "source_stream_name": "live+source", "source_start_unix": "100", "source_stop_unix": "110",
+	}}
+	path, err := h.stageProcessingSource(logrus.NewEntry(logrus.New()), req, server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil || string(got) != "finite-clip" {
+		t.Fatalf("staged bytes %q: %v", got, err)
+	}
+}
+
+func TestProcessingSourceFailureDoesNotLeakCredentials(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		_ = conn.Close()
+	}))
+	t.Cleanup(server.Close)
+	h := &ProcessingJobHandler{storagePath: t.TempDir()}
+	for _, credential := range []string{"token=fwproc.secret", "X-Amz-Signature=secret"} {
+		req := &ipcpb.ProcessingJobRequest{ArtifactHash: "failed", Params: map[string]string{
+			"source_kind": "live", "source_stream_name": "live+source",
+		}}
+		_, err := h.stageProcessingSource(logrus.NewEntry(logrus.New()), req, server.URL+"/?"+credential)
+		if err == nil || strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), server.URL) {
+			t.Fatalf("unsafe failure: %v", err)
+		}
+	}
+}
+
+func TestProcessingHeadProbeHasIndependentBudget(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	t.Cleanup(server.Close)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if _, ok := headContentLength(ctx, server.URL); ok || ctx.Err() != nil {
+		t.Fatalf("HEAD exhausted download budget: known=%v, context=%v", ok, ctx.Err())
+	}
+}
+
 func TestProcessingOutputPath_ClipUsesStreamScopedClipDir(t *testing.T) {
 	root := t.TempDir()
 	h := &ProcessingJobHandler{storagePath: root}

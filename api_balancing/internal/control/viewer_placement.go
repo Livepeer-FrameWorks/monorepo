@@ -23,6 +23,7 @@ import (
 // playback id together instead of trusting any one of them alone.
 type ViewerPlacementRequest struct {
 	TenantID, StreamID, ArtifactHash, InternalName, PlaybackID, Protocol string
+	ArtifactID                                                           string
 	Location                                                             *placement.Coordinates
 }
 
@@ -92,20 +93,39 @@ func ViewerPlacementStoredMedia(request ViewerPlacementRequest) (bool, error) {
 // accepted destination. It never emits unprepared alternatives or starts pulls
 // for protocols the viewer has not selected.
 func ResolvePreparedLiveViewerEndpoint(ctx context.Context, preparer ViewerPlacementPreparer, request ViewerPlacementRequest, activeIngestClusterID string) (*sharedpb.ViewerEndpointResponse, error) {
+	objectID, err := ViewerPlacementLiveObjectID(request)
+	if err != nil || request.ArtifactID != "" || strings.HasPrefix(request.InternalName, "dvr+") {
+		return nil, errors.New("live viewer requires its own signed stream identity")
+	}
+	return resolvePreparedViewerEndpoint(ctx, preparer, request, objectID, activeIngestClusterID)
+}
+
+// ResolvePreparedDVRViewerEndpoint keeps the recording's authority and playback
+// identity distinct from the parent stream used to locate its source.
+func ResolvePreparedDVRViewerEndpoint(ctx context.Context, preparer ViewerPlacementPreparer, resolution *ContentResolution, protocol string, location *placement.Coordinates) (*sharedpb.ViewerEndpointResponse, error) {
+	if resolution == nil || resolution.ContentType != "dvr" || resolution.ArtifactID == "" || resolution.ArtifactHash == "" {
+		return nil, errors.New("DVR viewer requires signed recording identity")
+	}
+	request := ViewerPlacementRequest{TenantID: resolution.TenantId, ArtifactID: resolution.ArtifactID, ArtifactHash: resolution.ArtifactHash,
+		InternalName: resolution.InternalName, PlaybackID: resolution.ContentId, Protocol: protocol, Location: location}
+	resp, err := resolvePreparedViewerEndpoint(ctx, preparer, request, sharedauthority.ArtifactAuthorityID(resolution.ArtifactID), resolution.OriginClusterID)
+	if err != nil {
+		return nil, err
+	}
+	resp.Metadata.ContentType, resp.Metadata.Status, resp.Metadata.DvrStatus = "dvr", "recording", "recording"
+	resp.Metadata.StreamId = &resolution.StreamId
+	resp.Metadata.ThumbnailAssets = buildThumbnailAssets(resolveThumbnailChandlerBase(resolution.OriginClusterID), resolution.StreamId)
+	return resp, nil
+}
+
+func resolvePreparedViewerEndpoint(ctx context.Context, preparer ViewerPlacementPreparer, request ViewerPlacementRequest, objectID, activeIngestClusterID string) (*sharedpb.ViewerEndpointResponse, error) {
 	if preparer == nil {
 		return nil, errors.New("viewer placement is required but unavailable")
 	}
-	// Every live ingest mode reaches this lane under its own Mist runtime name
-	// (live+, pull+, or the bare managed name), and an in-progress recording
-	// arrives as dvr+ over its parent stream. Reduce to the signed routing name
-	// rather than accepting one prefix and refusing the rest.
+	// Runtime prefixes are not part of the signed object's routing name.
 	request.InternalName = mist.ExtractInternalName(request.InternalName)
 	if request.InternalName == "" || strings.Contains(request.InternalName, "+") || request.PlaybackID == "" || request.TenantID == "" {
 		return nil, errors.New("viewer placement requires exact live stream identity")
-	}
-	objectID, err := ViewerPlacementLiveObjectID(request)
-	if err != nil {
-		return nil, err
 	}
 	if request.Protocol != "" {
 		protocol := mist.PlaybackProtocol(request.Protocol)

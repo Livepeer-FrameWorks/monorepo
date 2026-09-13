@@ -1,0 +1,16 @@
+{
+  "config": {
+    "device_discovery": false,
+    "debug": 5,
+    "protocols": [{ "connector": "HTTP", "port": 18080 }]
+  },
+  "streams": {
+    "direct": { "source": "/tmp/chapter.m3u8" },
+    "realtime": { "source": "/tmp/chapter.m3u8", "realtime": true },
+    "processing": {
+      "source": "/tmp/chapter.m3u8",
+      "realtime": true,
+      "process_controlled_realtime": true
+    }
+  }
+}

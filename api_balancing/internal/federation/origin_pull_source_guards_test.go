@@ -7,6 +7,7 @@ import (
 
 	"github.com/DATA-DOG/go-sqlmock"
 
+	"frameworks/api_balancing/internal/control"
 	"frameworks/api_balancing/internal/state"
 	foghornfederationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 )
@@ -117,7 +118,7 @@ func TestPrepareOriginPullRefusesTenantMismatchOnInstance(t *testing.T) {
 // check must survive that detour — it is the same boundary.
 func TestPrepareOriginPullRefusesDVRForForeignTenant(t *testing.T) {
 	server, _ := sourceGuardServer(t)
-	server.db = dvrRecordingDB(t, "abc123", "tenant-a", true)
+	server.db = dvrRecordingDB(t, "abc123", "tenant-b", false)
 
 	notification := sourceGuardNotification()
 	notification.StreamName = "dvr+abc123"
@@ -129,8 +130,22 @@ func TestPrepareOriginPullRefusesDVRForForeignTenant(t *testing.T) {
 	if ack.GetAccepted() {
 		t.Fatal("a foreign tenant was handed a DVR source")
 	}
-	if ack.GetReason() != "stream tenant mismatch" {
+	if ack.GetReason() != "dvr not recording locally" {
 		t.Fatalf("reason = %q, want the tenant refusal", ack.GetReason())
+	}
+}
+
+func TestPrepareOriginPullAcceptsDVRWithoutLivePublisher(t *testing.T) {
+	server, _ := sourceGuardServer(t)
+	server.db = dvrRecordingDB(t, "abc123", "tenant-a", true)
+	notification := sourceGuardNotification()
+	notification.StreamName = "dvr+abc123"
+	ack, err := server.NotifyOriginPull(svcAuthCtx(), notification)
+	if err != nil || !ack.GetAccepted() || control.SourcePullCredential(ack.GetDtscUrl()) == "" {
+		t.Fatalf("active DVR source not admitted: accepted=%v reason=%q error=%v", ack.GetAccepted(), ack.GetReason(), err)
+	}
+	if ack.GetSourceGeneration() != "" || ack.GetSourceRevision() != 0 {
+		t.Fatal("DVR source invented a live publisher generation")
 	}
 }
 
@@ -138,7 +153,7 @@ func TestPrepareOriginPullRefusesDVRForForeignTenant(t *testing.T) {
 // state says about the live stream behind it.
 func TestPrepareOriginPullRefusesDVRThatIsNotRecording(t *testing.T) {
 	server, _ := sourceGuardServer(t)
-	server.db = dvrRecordingDB(t, "abc123", "", false)
+	server.db = dvrRecordingDB(t, "abc123", "tenant-a", false)
 
 	notification := sourceGuardNotification()
 	notification.StreamName = "dvr+abc123"
@@ -154,21 +169,20 @@ func TestPrepareOriginPullRefusesDVRThatIsNotRecording(t *testing.T) {
 	}
 }
 
-// dvrRecordingDB answers the real DVRRecordingTenant query, so the dvr+ tests
-// exercise the production lookup rather than a seam that could hide its removal.
 func dvrRecordingDB(t *testing.T, token, tenantID string, recording bool) *sql.DB {
 	t.Helper()
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatalf("sqlmock: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
-	query := mock.ExpectQuery(regexp.QuoteMeta("FROM foghorn.artifacts")).WithArgs(token)
-	if recording {
-		query.WillReturnRows(sqlmock.NewRows([]string{"tenant_id"}).AddRow(tenantID))
-	} else {
-		query.WillReturnError(sql.ErrNoRows)
-	}
+	t.Cleanup(func() {
+		if err := mock.ExpectationsWereMet(); err != nil {
+			t.Error(err)
+		}
+		db.Close()
+	})
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT EXISTS (")).WithArgs(tenantID, token, "source-1").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(recording))
 	return db
 }
 

@@ -63,7 +63,7 @@ func TenantClusterPeers(tenant *mediaauthoritypb.TenantAuthority) []*clusterpeer
 
 // RoutingClusterPeers overlays local runtime reachability onto signed grants.
 // The returned slice is health-filtered routing input. TenantClusterPeers is
-// the separate stable authority projection used by promotion comparisons.
+// the separate stable authority projection used by access checks and promotion.
 func (s *Store) RoutingClusterPeers(tenant *mediaauthoritypb.TenantAuthority, localClusterID string) []*clusterpeerpb.TenantClusterPeer {
 	if tenant == nil {
 		return nil

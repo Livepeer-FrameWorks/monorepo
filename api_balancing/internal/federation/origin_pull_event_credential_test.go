@@ -30,7 +30,7 @@ func TestOriginPullCompletedEventCarriesNoSourceCredential(t *testing.T) {
 	event := originPullCompletedEvent("live+demo", control.Location{
 		DestNodeID: "edge-1", PullSourceNodeID: "origin-1", PullDTSCURL: credentialed,
 		ReplicatingFrom: "cell-a",
-	}, "cluster-a", "tenant-a")
+	}, "cluster-a", "tenant-a", "stream-uuid")
 
 	if got := event.GetDtscUrl(); got != base {
 		t.Fatalf("federation event dtsc_url = %q, want the credential-free %q", got, base)

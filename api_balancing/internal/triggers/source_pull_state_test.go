@@ -14,8 +14,8 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 )
 
-func TestStreamSourcePullResolutionUsesCurrentSharedState(t *testing.T) {
-	for _, prefix := range []string{"live+", "pull+", "dvr+", ""} {
+func TestLiveSourcePullResolutionUsesCurrentSharedState(t *testing.T) {
+	for _, prefix := range []string{"live+", "pull+", ""} {
 		t.Run(prefix, func(t *testing.T) {
 			server := miniredis.RunT(t)
 			client := goredis.NewClient(&goredis.Options{Addr: server.Addr(), MaxRetries: -1})
@@ -36,9 +36,6 @@ func TestStreamSourcePullResolutionUsesCurrentSharedState(t *testing.T) {
 			t.Cleanup(sm.Shutdown)
 			sm.SetNodeConnectionInfo(ctx, "edge", "", "owner", "dest-cluster", nil)
 			storageName := "stream"
-			if prefix == "dvr+" {
-				storageName = prefix + "stream"
-			}
 			original, err := registry.RecordInboundPull(ctx, storageName, control.InboundPull{
 				TenantID: "tenant", SourceClusterID: "source-cell", SourceNodeID: "publisher",
 				DestClusterID: "dest-cluster", DestNodeID: "edge", DTSCURL: "dtsc://source/" + prefix + "stream",

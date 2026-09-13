@@ -535,6 +535,7 @@ func fillCrossClusterArtifact(ctx context.Context, req *ipcpb.RelayResolveReques
 		resp.UrlTtlSeconds = int64(ttl.Seconds())
 	} else {
 		resp.MediaPresignedUrl = result.URL
+		resp.DtshPresignedGet = result.DtshURL
 		// Peer's S3 presigned URL has its own expiry we don't know
 		// precisely; use the local TTL so the relay re-resolves (peer mints
 		// a fresh presigned URL) before it expires.

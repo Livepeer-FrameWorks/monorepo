@@ -105,6 +105,7 @@ type Querier interface {
 	GetDVRDeletionRoute(ctx context.Context, arg GetDVRDeletionRouteParams) (GetDVRDeletionRouteRow, error)
 	GetDVRRetentionStreamID(ctx context.Context, arg GetDVRRetentionStreamIDParams) (string, error)
 	GetDVRRetentionUntil(ctx context.Context, arg GetDVRRetentionUntilParams) (sql.NullTime, error)
+	GetDVRSourceRoute(ctx context.Context, arg GetDVRSourceRouteParams) (GetDVRSourceRouteRow, error)
 	GetLiveClipCatalogStateForUpdate(ctx context.Context, arg GetLiveClipCatalogStateForUpdateParams) (GetLiveClipCatalogStateForUpdateRow, error)
 	GetLiveDVRCatalogStateForUpdate(ctx context.Context, arg GetLiveDVRCatalogStateForUpdateParams) (GetLiveDVRCatalogStateForUpdateRow, error)
 	GetLiveStreamIDByInternalName(ctx context.Context, arg GetLiveStreamIDByInternalNameParams) (string, error)

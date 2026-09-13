@@ -39,16 +39,6 @@ func (s *FoghornGRPCServer) RetrieveDVRChapter(ctx context.Context, req *foghorn
 	default:
 		return nil, status.Errorf(codes.InvalidArgument, "invalid mode: %q", mode)
 	}
-	if mode == "" {
-		policy, hasPolicy, err := control.ReadDVRChapterPolicy(ctx, req.GetDvrArtifactId())
-		if err != nil {
-			return nil, status.Error(codes.Internal, "failed to read chapter policy")
-		}
-		if !hasPolicy {
-			return nil, status.Error(codes.FailedPrecondition, "DVR has no chapter policy")
-		}
-		mode = policy.Mode
-	}
 	if mode == control.ChapterModeFixedInterval && req.GetIntervalSeconds() < minAutomaticChapterIntervalSeconds {
 		return nil, status.Errorf(codes.InvalidArgument, "interval_seconds must be at least %d for fixed_interval mode", minAutomaticChapterIntervalSeconds)
 	}
@@ -56,12 +46,18 @@ func (s *FoghornGRPCServer) RetrieveDVRChapter(ctx context.Context, req *foghorn
 		return nil, err
 	}
 	intervalSeconds := req.GetIntervalSeconds()
-	if mode == control.ChapterModeWindowSized {
+	if mode == "" || mode == control.ChapterModeWindowSized {
 		policy, hasPolicy, policyErr := control.ReadDVRChapterPolicy(ctx, req.GetDvrArtifactId())
 		if policyErr != nil {
 			return nil, status.Error(codes.Internal, "failed to read chapter policy")
 		}
+		if !hasPolicy && mode == "" {
+			return nil, status.Error(codes.FailedPrecondition, "DVR has no chapter policy")
+		}
 		if hasPolicy {
+			if mode == "" {
+				mode = policy.Mode
+			}
 			intervalSeconds = policy.EffectiveIntervalSeconds()
 		}
 	}

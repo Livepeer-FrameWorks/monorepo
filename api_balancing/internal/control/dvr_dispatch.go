@@ -6,10 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"frameworks/api_balancing/internal/database/foghorndb"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	federationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 )
 
 // DVRArtifactDispatch is the bundled state STREAM_SOURCE needs to route a
@@ -36,6 +38,57 @@ type DVRArtifactDispatch struct {
 	// against this so a revoked peer can't keep serving rolling DVR off stale
 	// registry state.
 	ClusterPeers []*clusterpeerpb.TenantClusterPeer
+}
+
+// DVRRecordingSource requires the exact tenant-owned recording and its
+// unique active storage owner; a warm playback replica is not a DVR origin.
+func DVRRecordingSource(ctx context.Context, database *sql.DB, tenantID, internalName, nodeID string) bool {
+	if database == nil || tenantID == "" || internalName == "" || nodeID == "" {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	recording, err := foghorndb.New(database).IsDVRRecordingSource(ctx, foghorndb.IsDVRRecordingSourceParams{
+		TenantID: tenantID, InternalName: sql.NullString{String: internalName, Valid: true}, NodeID: nodeID,
+	})
+	return err == nil && ctx.Err() == nil && recording
+}
+
+// ResolveDVRViewerDispatch reads recording lifecycle from its owning media cell.
+// A missing local artifact row cannot establish that a remote recording ended.
+func ResolveDVRViewerDispatch(ctx context.Context, resolution *ContentResolution, client ArtifactFederationClient, peers PeerAddressResolver) (*DVRArtifactDispatch, error) {
+	if resolution == nil || !resolution.LocalAuthority {
+		return nil, errors.New("DVR playback requires signed recording authority")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	dispatch, err := ResolveLocalDVRArtifactDispatch(ctx, resolution.ArtifactInternalNameIdentity(), resolution.ContentId, resolution.AllowPlatformSharedPlayback)
+	if err != nil || dispatch == nil || dispatch.Status != "" {
+		return dispatch, err
+	}
+	origin := resolution.OriginClusterID
+	if client == nil || peers == nil || origin == "" || !AuthoritativeClusterServableWithPolicy(origin, resolution.TenantId, resolution.ClusterPeers, resolution.AllowPlatformSharedPlayback) {
+		return nil, errors.New("DVR recording owner unavailable")
+	}
+	addr := peers.GetPeerAddr(origin)
+	if addr == "" {
+		return nil, errors.New("DVR recording owner address unavailable")
+	}
+	resp, err := client.PrepareArtifact(ctx, origin, addr, &federationpb.PrepareArtifactRequest{
+		ArtifactId: resolution.ArtifactHash, ArtifactType: "dvr", TenantId: resolution.TenantId,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("DVR recording state: %w", err)
+	}
+	if resp.GetError() != "" || resp.GetRedirectClusterId() != "" || resp.GetDvrStatus() == "" ||
+		resp.GetInternalName() != dispatch.InternalName || resp.GetStreamInternalName() != dispatch.StreamInternalName {
+		return nil, errors.New("DVR recording state differs from signed identity")
+	}
+	dispatch.Status, dispatch.RecordingNode = resp.GetDvrStatus(), resp.GetDvrRecordingNodeId()
+	if IsActiveDVRStatus(dispatch.Status) && (!resp.GetReady() || dispatch.RecordingNode == "") {
+		return nil, errors.New("DVR recording source unavailable")
+	}
+	return dispatch, nil
 }
 
 // ResolveDVRArtifactDispatch maps a DVR artifact internal_name (the token
@@ -107,6 +160,9 @@ func ResolveLocalDVRArtifactDispatch(ctx context.Context, artifact *commodorepb.
 				return nil, errors.New("durable DVR identity conflicts with signed authority")
 			}
 			if identity.StreamInternalName != "" {
+				if out.StreamInternalName != "" && identity.StreamInternalName != out.StreamInternalName {
+					return nil, errors.New("durable DVR parent conflicts with signed authority")
+				}
 				out.StreamInternalName = identity.StreamInternalName
 			}
 			if out.StreamID == "" {

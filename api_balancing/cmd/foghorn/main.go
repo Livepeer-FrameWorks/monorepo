@@ -2249,6 +2249,7 @@ func main() {
 				logger.WithError(err).WithField("artifact_hash", artifactHash).Warn("Failed to emit node-copy GAINED after reconciler index")
 			}
 		},
+		ServedClusterIDs: control.ServedClustersSnapshot,
 	})
 	artifactReconciler.Start()
 	defer artifactReconciler.Stop()

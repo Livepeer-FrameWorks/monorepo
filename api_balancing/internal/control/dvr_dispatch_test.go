@@ -6,11 +6,72 @@ import (
 	"path/filepath"
 	"regexp"
 	"testing"
+	"time"
 
 	"frameworks/api_balancing/internal/state"
 	"github.com/DATA-DOG/go-sqlmock"
+	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
+	federationpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn_federation"
 )
+
+type dvrStateClientFunc func(context.Context, string, string, *federationpb.PrepareArtifactRequest) (*federationpb.PrepareArtifactResponse, error)
+
+func (f dvrStateClientFunc) PrepareArtifact(ctx context.Context, cluster, addr string, req *federationpb.PrepareArtifactRequest) (*federationpb.PrepareArtifactResponse, error) {
+	return f(ctx, cluster, addr, req)
+}
+
+func TestDVRViewerDispatchResolvesOwnerStateWithExactIdentity(t *testing.T) {
+	previousDB := db
+	db = nil
+	t.Cleanup(func() { db = previousDB })
+	for _, tc := range []struct {
+		name               string
+		response           *federationpb.PrepareArtifactResponse
+		revoked, wantError bool
+	}{
+		{name: "recording", response: &federationpb.PrepareArtifactResponse{Ready: true, DvrStatus: "recording", DvrRecordingNodeId: "origin-edge"}},
+		{name: "completed", response: &federationpb.PrepareArtifactResponse{DvrStatus: "completed"}},
+		{name: "unready", response: &federationpb.PrepareArtifactResponse{DvrStatus: "recording"}, wantError: true},
+		{name: "wrong-parent", response: &federationpb.PrepareArtifactResponse{DvrStatus: "completed", StreamInternalName: "another-stream"}, wantError: true},
+		{name: "redirect", response: &federationpb.PrepareArtifactResponse{DvrStatus: "completed", RedirectClusterId: "elsewhere"}, wantError: true},
+		{name: "missing", response: &federationpb.PrepareArtifactResponse{}, wantError: true},
+		{name: "revoked", response: &federationpb.PrepareArtifactResponse{}, revoked: true, wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resolution := &ContentResolution{LocalAuthority: true, ContentType: "dvr", ContentId: "public",
+				InternalName: "dvr+recording", ArtifactHash: "hash", ArtifactID: "id", TenantId: "owner",
+				StreamId: "parent-id", ParentStreamInternalName: "parent", OriginClusterID: "recording-cell",
+				ClusterPeers: []*clusterpeerpb.TenantClusterPeer{{ClusterId: "recording-cell"}}}
+			if tc.revoked {
+				resolution.ClusterPeers = nil
+			}
+			tc.response.InternalName = "recording"
+			if tc.response.StreamInternalName == "" {
+				tc.response.StreamInternalName = "parent"
+			}
+			calls := 0
+			client := dvrStateClientFunc(func(ctx context.Context, cluster, addr string, req *federationpb.PrepareArtifactRequest) (*federationpb.PrepareArtifactResponse, error) {
+				calls++
+				deadline, bounded := ctx.Deadline()
+				if !bounded || time.Until(deadline) > 2*time.Second || cluster != "recording-cell" || addr != "owner:443" || req.GetTenantId() != "owner" || req.GetArtifactId() != "hash" || req.GetArtifactType() != "dvr" {
+					t.Fatalf("unbounded or incorrectly scoped state request: %v", req)
+				}
+				return tc.response, nil
+			})
+			dispatch, err := ResolveDVRViewerDispatch(t.Context(), resolution, client, &fakeCrossClusterPeerResolver{addrs: map[string]string{"recording-cell": "owner:443"}})
+			if (err != nil) != tc.wantError {
+				t.Fatalf("dispatch=%+v error=%v", dispatch, err)
+			}
+			if tc.revoked && calls != 0 {
+				t.Fatal("revoked owner contacted")
+			}
+			if !tc.wantError && (dispatch.Status != tc.response.DvrStatus || dispatch.InternalName != "recording" || dispatch.StreamInternalName != "parent") {
+				t.Fatalf("owner state lost: %+v", dispatch)
+			}
+		})
+	}
+}
 
 // TestIsActiveDVRStatus enforces the lifecycle status set that gates
 // active DVR routing: any of these → the rolling DVR surface fed by

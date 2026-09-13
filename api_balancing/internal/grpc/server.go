@@ -2822,15 +2822,7 @@ func (s *FoghornGRPCServer) resolveLiveViewerEndpoint(ctx context.Context, req *
 // the live segments and produce stale playback.
 func (s *FoghornGRPCServer) resolveDVRViewerEndpoint(ctx context.Context, req *sharedpb.ViewerEndpointRequest, lat, lon float64, resolution *control.ContentResolution) (*sharedpb.ViewerEndpointResponse, error) {
 	dvrInternalName := mist.ExtractInternalName(resolution.InternalName)
-	var dispatch *control.DVRArtifactDispatch
-	var derr error
-	if resolution.LocalAuthority {
-		dispatch, derr = control.ResolveLocalDVRArtifactDispatch(
-			ctx, resolution.ArtifactInternalNameIdentity(), resolution.ContentId, resolution.AllowPlatformSharedPlayback,
-		)
-	} else {
-		dispatch, derr = control.ResolveDVRArtifactDispatch(ctx, dvrInternalName)
-	}
+	dispatch, derr := control.ResolveDVRViewerDispatch(ctx, resolution, s.federationClient, s.peerManager)
 	if derr != nil {
 		s.logger.WithError(derr).WithFields(logging.Fields{
 			"content_id":    req.GetContentId(),
@@ -2850,7 +2842,7 @@ func (s *FoghornGRPCServer) resolveDVRViewerEndpoint(ctx context.Context, req *s
 			}).Warn("Active DVR has no resolvable recording origin; refusing to fall back to archive routing")
 			return nil, status.Error(codes.Unavailable, "active DVR recording origin not yet registered; retry")
 		}
-		resp, err := s.resolveLiveViewerEndpoint(ctx, req, lat, lon, resolution.InternalName, resolution.TenantId, resolution.StreamId, resolution.OriginClusterID, resolution.ClusterPeers, resolution.ActiveIngestClusterID, resolution.OfficialClusterID, resolution.AllowPlatformSharedPlayback || !resolution.LocalAuthority)
+		resp, err := control.ResolvePreparedDVRViewerEndpoint(ctx, s.viewerPlacementPreparer, resolution, req.GetProtocol(), control.ViewerPlacementLocation(lat, lon))
 		if err != nil {
 			return nil, err
 		}
@@ -2870,16 +2862,15 @@ func (s *FoghornGRPCServer) resolveDVRViewerEndpoint(ctx context.Context, req *s
 	if latest == "" {
 		return nil, status.Error(codes.FailedPrecondition, "DVR is no longer active and has no playable chapters yet; query dvrChapters when finalization completes")
 	}
-	chapterReq := &sharedpb.ViewerEndpointRequest{
-		ContentId: latest,
-	}
-	if vip := req.GetViewerIp(); vip != "" {
-		chapterReq.ViewerIp = &vip
-	}
-	if vt := req.GetViewerToken(); vt != "" {
-		chapterReq.ViewerToken = &vt
-	}
-	return s.ResolveViewerEndpoint(ctx, chapterReq)
+	return s.ResolveViewerEndpoint(ctx, chapterViewerRequest(req, latest))
+}
+
+func chapterViewerRequest(req *sharedpb.ViewerEndpointRequest, playbackID string) *sharedpb.ViewerEndpointRequest {
+	// Chapter indirection changes content identity, not the viewer's required
+	// protocol, location or playback credentials.
+	chapterReq := proto.CloneOf(req)
+	chapterReq.ContentId = playbackID
+	return chapterReq
 }
 
 // latestPlayableChapterForDVR returns the Commodore-minted public
@@ -2931,6 +2922,8 @@ func (s *FoghornGRPCServer) resolveArtifactViewerEndpoint(ctx context.Context, r
 		OfficialClusterID:            resolution.OfficialClusterID,
 		AllowPlatformSharedPlayback:  resolution.AllowPlatformSharedPlayback,
 		StoredMediaPlacement:         s.storedMediaPlacement,
+		StoredMediaPreparer:          s.viewerPlacementPreparer,
+		Protocol:                     req.GetProtocol(),
 		StoredMediaPlacementRequired: s.storedMediaPlacementRequired,
 	}
 

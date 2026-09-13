@@ -1021,7 +1021,6 @@ func HandleStreamSource(c *gin.Context) {
 		if sourceURL, ok := control.GetDVRSourceOverride(ss.GetStreamName()); ok {
 			logger.WithFields(logging.Fields{
 				"stream_name": ss.GetStreamName(),
-				"source_url":  sourceURL,
 			}).Info("STREAM_SOURCE resolved to DVR source override")
 			incMistWebhook("STREAM_SOURCE", "local_dvr_source")
 			c.String(http.StatusOK, sourceURL)
@@ -1030,7 +1029,6 @@ func HandleStreamSource(c *gin.Context) {
 		if sourceURL, ok := getProcessingSourceOverride(ss.GetStreamName()); ok {
 			logger.WithFields(logging.Fields{
 				"stream_name": ss.GetStreamName(),
-				"source_url":  sourceURL,
 			}).Info("STREAM_SOURCE resolved to local source override")
 			incMistWebhook("STREAM_SOURCE", "local_source_override")
 			c.String(http.StatusOK, sourceURL)
@@ -2010,9 +2008,6 @@ func HandleRecordingSegment(c *gin.Context) {
 			dvrMgr.HandleNewSegment(
 				seg.GetStreamName(),
 				seg.GetFilePath(),
-				seg.GetTimeStarted(),
-				seg.GetTimeEnded(),
-				seg.GetDurationMs(),
 			)
 		}
 	}
@@ -2161,8 +2156,10 @@ func enrichLiveTrackListTrigger(trigger *ipcpb.StreamTrackListTrigger) {
 	trigger.AudioTrackCount = &audioTrackCount
 
 	// Extract primary video track info
-	if len(videoTracks) > 0 {
-		primary := videoTracks[0]
+	for _, primary := range videoTracks {
+		if normalizeTrackCodec(primary.Codec) == "JPEG" {
+			continue
+		}
 		if primary.Width != nil {
 			trigger.PrimaryWidth = primary.Width
 		}
@@ -2179,6 +2176,7 @@ func enrichLiveTrackListTrigger(trigger *ipcpb.StreamTrackListTrigger) {
 		if primary.Codec != "" {
 			trigger.PrimaryVideoCodec = &primary.Codec
 		}
+		break
 	}
 
 	// Extract primary audio track info
@@ -2212,7 +2210,7 @@ func determineQualityTier(tracks []*ipcpb.StreamTrack) string {
 	var primaryVideo *ipcpb.StreamTrack
 	maxHeight := int32(0)
 	for _, track := range tracks {
-		if track.TrackType == "video" && track.Height != nil {
+		if track.TrackType == "video" && normalizeTrackCodec(track.Codec) != "JPEG" && track.Height != nil {
 			if *track.Height > maxHeight {
 				maxHeight = *track.Height
 				primaryVideo = track

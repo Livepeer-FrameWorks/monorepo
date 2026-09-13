@@ -14,6 +14,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	commodorecli "github.com/Livepeer-FrameWorks/monorepo/pkg/clients/commodore"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	"github.com/Livepeer-FrameWorks/monorepo/pkg/placement"
 	clusterpeerpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/cluster_peer"
 	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	ipcpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/ipc"
@@ -388,97 +389,50 @@ func TestResolveViewerEndpoint_ChapterDispatchesToVODStorageNode(t *testing.T) {
 	}
 }
 
-// Invariant: a content_id Commodore resolves to a DVR whose dispatch is ACTIVE
-// (status=recording with a recording-origin node) routes through the live-style
-// edge selector, then has its metadata RELABELED to the DVR identity
-// (ContentType=dvr, Status=recording, IsLive still true). This locks the DVR
-// active-dispatch arm + the overrideActiveDVRMetadata rewrite — both gated on a
-// successful ResolveContent + an active dispatch from control.db.
-func TestResolveViewerEndpoint_ActiveDVRRelabelsLiveWinner(t *testing.T) {
-	t.Cleanup(control.SetupTestRegistry("", nil))
-	sm, lb := newViewerHappyManager(t)
-	// The active DVR routes via dvr+<name>, and live resolution looks the stream
-	// up under its bare internal name, so seed a present edge under that name to
-	// give the dispatch a winner.
-	seedLiveEdgeViewerHappy(t, sm, "edge-dvr-1", "https://edgedvr.example.com", "dvrstream", "tenant-dvr")
-
+// A recording uses artifact placement; its parent identifies the recording
+// source and analytics stream, never the viewer's policy object.
+func TestResolveViewerEndpoint_ActiveDVRUsesArtifactPlacement(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { db.Close() })
-
-	// control.db owns ResolveDVRArtifactDispatch's status + recording-origin reads.
+	t.Cleanup(func() { _ = db.Close() })
 	prevDB := control.GetDB()
 	control.SetDB(db)
 	t.Cleanup(func() { control.SetDB(prevDB) })
-
-	mock.ExpectQuery(`SELECT status\s+FROM foghorn.artifacts`).
-		WithArgs("dvrhash1").
+	mock.ExpectQuery("SELECT COALESCE\\(artifact_type").
+		WithArgs("dvrhash1").WillReturnRows(sqlmock.NewRows([]string{"artifact_type", "stream_id", "stream_internal_name"}).
+		AddRow("dvr", "parent-stream", "parent-name"))
+	mock.ExpectQuery("SELECT status").WithArgs("dvrhash1").
 		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("recording"))
-	mock.ExpectQuery(`SELECT node_id, COALESCE\(is_orphaned`).
-		WithArgs("dvrhash1").
-		WillReturnRows(sqlmock.NewRows([]string{"node_id", "is_orphaned"}).AddRow("edge-dvr-1", false))
-
-	startViewerHappyCommodoreFake(t, &commodoreViewerHappyFake{
-		// ResolveContent: artifact playback resolves the public id to a DVR artifact.
-		artifactPlayback: func(_ context.Context, _ *commodorepb.ResolveArtifactPlaybackIDRequest) (*commodorepb.ResolveArtifactPlaybackIDResponse, error) {
-			return &commodorepb.ResolveArtifactPlaybackIDResponse{
-				Found:        true,
-				ArtifactHash: "dvrhash1",
-				InternalName: "dvrstream",
-				TenantId:     "tenant-dvr",
-				ContentType:  "dvr",
-				// A DVR artifact is signed under its parent live stream, which
-				// is the identity the live lane places the viewer on.
-				StreamId: "stream-dvr",
-			}, nil
-		},
-		// ResolveDVRArtifactDispatch: internal-name -> dvr artifact, then hash -> dvr.
-		artifactInternal: func(_ context.Context, req *commodorepb.ResolveArtifactInternalNameRequest) (*commodorepb.ResolveArtifactInternalNameResponse, error) {
-			if req.GetInternalName() != "dvrstream" {
-				t.Errorf("ResolveArtifactInternalName got %q, want dvrstream", req.GetInternalName())
-			}
-			return &commodorepb.ResolveArtifactInternalNameResponse{
-				Found:        true,
-				ArtifactHash: "dvrhash1",
-				InternalName: "dvrstream",
-				TenantId:     "tenant-dvr",
-				ContentType:  "dvr",
-			}, nil
-		},
-		dvrHash: func(_ context.Context, _ *commodorepb.ResolveDVRHashRequest) (*commodorepb.ResolveDVRHashResponse, error) {
-			return &commodorepb.ResolveDVRHashResponse{
-				Found:        true,
-				InternalName: "dvrstream",
-				TenantId:     "tenant-dvr",
-				StreamId:     "stream-dvr",
-			}, nil
-		},
-	})
-
-	s := &FoghornGRPCServer{logger: logrus.New(), lb: lb, db: db,
-		cacheInvalidator: &billingCacheViewerHappy{status: &triggers.BillingStatus{TenantID: "tenant-dvr", BillingModel: "postpaid"}}}
-	s.SetViewerPlacementPreparer(viewerPlacementFunc(prepareViewerFromNodeState))
-	resp, err := s.ResolveViewerEndpoint(context.Background(), &sharedpb.ViewerEndpointRequest{ContentId: "dvr-pid"})
+	mock.ExpectQuery("SELECT node_id, COALESCE").WithArgs("dvrhash1").
+		WillReturnRows(sqlmock.NewRows([]string{"node_id", "is_orphaned"}).AddRow("recording-edge", false))
+	s := &FoghornGRPCServer{logger: logrus.New(), db: db}
+	s.SetViewerPlacementPreparer(viewerPlacementFunc(func(_ context.Context, req control.ViewerPlacementRequest) (balancer.PlacementPreparationResult, error) {
+		if req.StreamID != "" || req.ArtifactID != "recording-id" || req.ArtifactHash != "dvrhash1" || req.InternalName != "recording-name" || req.PlaybackID != "dvr-pid" {
+			t.Fatalf("wrong placement identity: %+v", req)
+		}
+		now := time.Now()
+		attempt, attemptErr := placement.NewPreparationAttemptID(now)
+		if attemptErr != nil {
+			t.Fatal(attemptErr)
+		}
+		return balancer.PlacementPreparationResult{Outcome: balancer.PlacementAccepted, TenantID: req.TenantID,
+			ObjectID: "artifact:recording-id", SourceGeneration: "dvr:generation", NodeID: "viewer-edge", ClusterID: "private",
+			Protocol: "hls", Endpoint: "https://edge.example/hls/dvr-pid/index.m3u8", PublicBaseURL: "https://edge.example",
+			AttemptID: attempt, ExpiresAt: now.Add(10 * time.Second)}, nil
+	}))
+	resp, err := s.resolveDVRViewerEndpoint(t.Context(), &sharedpb.ViewerEndpointRequest{ContentId: "dvr-pid", Protocol: "hls"}, 0, 0,
+		&control.ContentResolution{ContentType: "dvr", ContentId: "dvr-pid", InternalName: "dvr+recording-name", ArtifactHash: "dvrhash1",
+			ArtifactID: "recording-id", TenantId: "tenant", StreamId: "parent-stream", ParentStreamInternalName: "parent-name", LocalAuthority: true})
 	if err != nil {
-		t.Fatalf("active DVR resolve failed: %v", err)
+		t.Fatal(err)
 	}
-	if resp.GetPrimary() == nil || resp.GetPrimary().GetNodeId() != "edge-dvr-1" {
-		t.Fatalf("active DVR should route through the live edge selector, got %+v", resp.GetPrimary())
-	}
-	md := resp.GetMetadata()
-	if md == nil || md.GetContentType() != "dvr" {
-		t.Fatalf("active DVR metadata must be relabeled to dvr, got %+v", md)
-	}
-	if md.GetStatus() != "recording" || md.GetDvrStatus() != "recording" {
-		t.Fatalf("relabel must carry recording status, got status=%q dvr_status=%q", md.GetStatus(), md.GetDvrStatus())
-	}
-	if !md.GetIsLive() {
-		t.Fatal("an active DVR surface must stay IsLive=true after relabel")
+	if resp.GetPrimary().GetNodeId() != "viewer-edge" || resp.GetMetadata().GetContentType() != "dvr" || resp.GetMetadata().GetStreamId() != "parent-stream" || !resp.GetMetadata().GetIsLive() {
+		t.Fatalf("recording response: %v", resp)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("unmet sqlmock expectations: %v", err)
+		t.Fatal(err)
 	}
 }
 

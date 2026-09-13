@@ -26,7 +26,9 @@ SELECT COALESCE(a.internal_name, '')::text AS internal_name,
        COALESCE(a.sync_status, '')::text AS sync_status, a.size_bytes,
        COALESCE(a.storage_cluster_id, a.origin_cluster_id) AS authoritative_cluster,
        COALESCE(NULLIF(a.active_object_key, ''), NULLIF(v.s3_key, ''),
-                NULLIF(a.sync_object_key, ''), '')::text AS object_key
+                NULLIF(a.sync_object_key, ''), '')::text AS object_key,
+       COALESCE(a.dtsh_synced, false)::boolean AS dtsh_synced,
+       COALESCE(a.active_dtsh_key, '')::text AS dtsh_key
 FROM foghorn.artifacts a
 LEFT JOIN foghorn.vod_metadata v ON v.artifact_hash = a.artifact_hash
 WHERE a.artifact_hash = $1 AND a.tenant_id = $2 AND a.status != 'deleted';
@@ -133,3 +135,12 @@ WHERE artifact_hash = $1
   AND tenant_id = $3
   AND status != 'deleted'
 LIMIT 1;
+-- name: DVRRecordingState :one
+SELECT COALESCE(a.status, '')::text AS status, COALESCE((
+    SELECT min(n.node_id) FROM foghorn.artifact_nodes n
+    WHERE n.artifact_hash = a.artifact_hash AND NOT n.is_orphaned
+    HAVING count(*) = 1
+), '')::text AS node_id
+FROM foghorn.artifacts a
+WHERE a.tenant_id = sqlc.arg(tenant_id) AND a.artifact_hash = sqlc.arg(artifact_hash)
+AND a.artifact_type = 'dvr';

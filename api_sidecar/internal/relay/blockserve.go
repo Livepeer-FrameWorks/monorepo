@@ -154,6 +154,13 @@ func (s *Server) serveViaBlockCache(c *gin.Context, kind, hash, ext, localPath s
 			if res.PeerRelayGrantID != "" && isUpstreamAuthError(err) {
 				s.cache.Delete(kind, hash)
 			}
+			// Gin defers the status until the first body write. A failed cold
+			// fetch must not commit an empty 200/206 with an advertised length.
+			if !c.Writer.Written() {
+				c.Writer.Header().Del("Content-Length")
+				c.Writer.Header().Del("Content-Range")
+				s.respondColdFetchError(c, err)
+			}
 			if s.logger != nil && !isClientGone(err) {
 				s.logger.WithError(err).WithField("block_idx", span.Idx).Debug("blockcache: span serve aborted")
 			}

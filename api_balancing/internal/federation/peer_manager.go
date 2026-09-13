@@ -2102,6 +2102,12 @@ func (pm *PeerManager) checkReplicationCompletion() {
 		if st == nil || st.Status != "live" {
 			continue
 		}
+		// StreamState is node telemetry; the tenant-scoped source registry owns
+		// the public UUID. Retry observation if identity has not arrived yet.
+		identity, identityErr := control.StreamRegistryInstance.ResolveSourceIdentity(context.Background(), st.TenantID, streamName)
+		if identityErr != nil {
+			continue
+		}
 
 		instances := sm.GetStreamInstances(streamName)
 		for _, loc := range locations {
@@ -2141,16 +2147,16 @@ func (pm *PeerManager) checkReplicationCompletion() {
 				},
 			})
 			pm.logger.WithField("stream", nameCopy).Info("Replication destination observed live")
-			originClusterID := loc.ReplicatingFrom
-			if registryOrigin, ok := control.StreamRegistryInstance.OriginCluster(nameCopy); ok {
+			originClusterID := pull.SourceMediaClusterID
+			if registryOrigin, ok := control.StreamRegistryInstance.OriginCluster(nameCopy); originClusterID == "" && ok {
 				originClusterID = registryOrigin
 			}
-			pm.emitFederationEvent(originPullCompletedEvent(nameCopy, loc, originClusterID, st.TenantID))
+			pm.emitFederationEvent(originPullCompletedEvent(nameCopy, loc, originClusterID, identity.TenantID, identity.StreamID))
 		}
 	}
 }
 
-func originPullCompletedEvent(streamName string, loc control.Location, originClusterID, streamTenantID string) *ipcpb.FederationEventData {
+func originPullCompletedEvent(streamName string, loc control.Location, originClusterID, streamTenantID, streamID string) *ipcpb.FederationEventData {
 	destNode := loc.DestNodeID
 	sourceNode := loc.PullSourceNodeID
 	// The stored pull URL carries this attempt's source credential. Federation
@@ -2168,6 +2174,9 @@ func originPullCompletedEvent(streamName string, loc control.Location, originClu
 	}
 	if tenantID := strings.TrimSpace(streamTenantID); tenantID != "" {
 		data.StreamTenantId = &tenantID
+	}
+	if streamID != "" {
+		data.StreamId = &streamID
 	}
 	return data
 }

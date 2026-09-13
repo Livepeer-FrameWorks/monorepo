@@ -3636,9 +3636,10 @@ func convertStreamAPIToMistTrigger(nodeID, streamName, internalName string, stre
 
 		for _, track := range trackDetails {
 			trackType, _ := track["type"].(string)
+			trackCodec, hasCodec := track["codec"].(string)
 
 			// Extract primary video track info
-			if trackType == "video" && !foundVideo {
+			if trackType == "video" && (!hasCodec || normalizeTrackCodec(trackCodec) != "JPEG") && !foundVideo {
 				foundVideo = true
 				if width, ok := track["width"].(int); ok {
 					primaryWidth = int32(width)
