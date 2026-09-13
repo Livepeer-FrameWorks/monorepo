@@ -194,10 +194,10 @@ check_name_status_stream() {
 }
 
 if [ -n "$diff_base" ]; then
-  git cat-file -e "$diff_base^{commit}" 2>/dev/null || {
-    echo "ERROR: release-state diff base is not available: $diff_base" >&2
-    exit 1
-  }
+  if ! git cat-file -e "$diff_base^{commit}" 2>/dev/null; then
+    echo "WARNING: release-state diff base is not available: $diff_base; comparing against latest shipped tag $latest_tag" >&2
+    diff_base=$latest_tag
+  fi
   check_name_status_stream < <(git diff --name-status -z "$diff_base"...HEAD -- "${path_args[@]}")
 elif [ "$worktree" = true ]; then
   check_name_status_stream < <(git diff --name-status -z HEAD -- "${path_args[@]}")

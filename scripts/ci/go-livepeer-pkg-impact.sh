@@ -4,10 +4,6 @@ set -euo pipefail
 base="${1:-}"
 head="${2:-HEAD}"
 
-if [[ -z "$base" || "$base" =~ ^0+$ ]]; then
-	base="$(git rev-parse "${head}^")"
-fi
-
 closure_file="$(mktemp)"
 changed_file="$(mktemp)"
 trap 'rm -f "$closure_file" "$changed_file"' EXIT
@@ -19,7 +15,7 @@ roots=(
 )
 
 {
-	printf '%s\n' pkg/go.mod pkg/go.sum
+	printf '%s\n' pkg/go.mod pkg/go.sum scripts/ci/go-livepeer-pkg-impact.sh
 	cd pkg
 	go list -deps "${roots[@]}" | while IFS= read -r import_path; do
 		case "$import_path" in
@@ -42,7 +38,12 @@ roots=(
 	done
 } | sort -u >"$closure_file"
 
-git diff --name-only "$base" "$head" -- pkg >"$changed_file"
+if [[ -z "$base" || "$base" =~ ^0+$ ]] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+	printf 'Base commit is unavailable; checking the complete pkg tree.\n' >&2
+	git ls-tree -r --name-only "$head" -- pkg scripts/ci/go-livepeer-pkg-impact.sh >"$changed_file"
+else
+	git diff --name-only "$base" "$head" -- pkg scripts/ci/go-livepeer-pkg-impact.sh >"$changed_file"
+fi
 
 affected=false
 matched=()

@@ -59,6 +59,11 @@ git add .
 git commit -qm 'prepare v0.2.96'
 pending_commit=$(git rev-parse HEAD)
 expect_pass 'committed pending release matches its catalog' --diff-base v0.2.95
+expect_pass 'a missing diff base falls back to the latest shipped tag' --diff-base deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
+if ! grep -q 'comparing against latest shipped tag v0.2.95' "$test_root/output"; then
+  echo 'FAIL: missing diff base should report its shipped-tag fallback' >&2
+  exit 1
+fi
 
 mkdir -p pkg/database/sql/migrations/commodore/v0.2.97/expand
 printf '%s\n' 'SELECT 3;' > pkg/database/sql/migrations/commodore/v0.2.97/expand/001_too_far.sql
@@ -87,6 +92,7 @@ printf '%s\n' 'SELECT 200;' > pkg/database/sql/migrations/commodore/v0.2.96/expa
 git add pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql
 git commit -qm 'badly mutate shipped migration'
 expect_fail 'diff-base mode catches a committed shipped-migration edit' --diff-base v0.2.96
+expect_fail 'missing-base fallback catches a committed shipped-migration edit' --diff-base deadbeefdeadbeefdeadbeefdeadbeefdeadbeef
 
 git show v0.2.96:pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql > pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql
 git add pkg/database/sql/migrations/commodore/v0.2.96/expand/001_pending.sql

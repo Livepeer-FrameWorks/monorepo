@@ -170,9 +170,27 @@ release-plan:
 test-release-plan:
 	$(call run-go-tests,release-plan,tools/release-plan)
 
-.PHONY: test-go-livepeer-dispatch
+.PHONY: test-go-livepeer-dispatch test-go-livepeer-pkg-impact
 test-go-livepeer-dispatch:
 	node --test scripts/ci/notify-go-livepeer-pkg-bump.test.mjs
+	@$(MAKE) --no-print-directory test-go-livepeer-pkg-impact
+
+test-go-livepeer-pkg-impact:
+	@impact_output="$$(mktemp)"; \
+	trap 'rm -f "$$impact_output"' EXIT; \
+	GITHUB_OUTPUT="$$impact_output" scripts/ci/go-livepeer-pkg-impact.sh deadbeefdeadbeefdeadbeefdeadbeefdeadbeef HEAD >/dev/null; \
+	grep -qx 'affected=true' "$$impact_output"; \
+	grep -qx 'pkg/go.mod' "$$impact_output"; \
+	grep -qx 'scripts/ci/go-livepeer-pkg-impact.sh' "$$impact_output"; \
+	: >"$$impact_output"; \
+	GITHUB_OUTPUT="$$impact_output" scripts/ci/go-livepeer-pkg-impact.sh HEAD HEAD >/dev/null; \
+	grep -qx 'affected=false' "$$impact_output"; \
+	if ! git diff --quiet HEAD^ HEAD -- scripts/ci/go-livepeer-pkg-impact.sh; then \
+		: >"$$impact_output"; \
+		GITHUB_OUTPUT="$$impact_output" scripts/ci/go-livepeer-pkg-impact.sh HEAD^ HEAD >/dev/null; \
+		grep -qx 'affected=true' "$$impact_output"; \
+		grep -qx 'scripts/ci/go-livepeer-pkg-impact.sh' "$$impact_output"; \
+	fi
 
 # Verify (tidy, fmt, vet, test, build) all Go modules and build images when present
 verify:
