@@ -170,6 +170,10 @@ release-plan:
 test-release-plan:
 	$(call run-go-tests,release-plan,tools/release-plan)
 
+.PHONY: test-go-livepeer-dispatch
+test-go-livepeer-dispatch:
+	node --test scripts/ci/notify-go-livepeer-pkg-bump.test.mjs
+
 # Verify (tidy, fmt, vet, test, build) all Go modules and build images when present
 verify:
 	@echo "Verifying all Go modules (fmt/vet/test/build + images)..."

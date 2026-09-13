@@ -11,6 +11,7 @@ on:
     paths:
       - "pkg/**"
       - "scripts/ci/go-livepeer-pkg-impact.sh"
+      - "scripts/ci/notify-go-livepeer-pkg-bump.test.mjs"
       - ".github/workflows/notify-go-livepeer-pkg-bump.yml"
 
 jobs:
@@ -24,6 +25,10 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: pkg/go.mod
+          cache-dependency-path: pkg/go.sum
+
+      - name: Check dispatch payload encoding
+        run: make test-go-livepeer-dispatch
 
       - name: Check go-livepeer pkg impact
         id: impact
@@ -50,5 +55,5 @@ jobs:
               "monorepo_sha": "${{ github.sha }}",
               "monorepo_short_sha": "${{ github.sha }}",
               "monorepo_ref": "${{ github.ref }}",
-              "triggered_by": "${{ github.event.head_commit.message }}"
+              "triggered_by": ${{ toJSON(github.event.head_commit.message) }}
             }
