@@ -89,6 +89,18 @@ requests cannot silently switch formats. This contract and its unit tests are no
 proof; release verification still needs actual playback, pull reuse, reconnect and failure behavior.
 Cold/warm first-frame timings are optional diagnostics, not an additional release gate.
 
+An active recording keeps its own playback identity and serving policy; it is not
+redirected to its parent live stream. The resolver checks lifecycle with the
+recording's owner even when the viewer enters another cell. Once finalized,
+playback uses the recording's chapter playback IDs. `/play/{recordingId}/hls`
+selects HLS before preparing the edge, just as a live playback request does.
+
+Starting a recording follows the stream's active ingest owner, even if the tenant's
+primary cluster is elsewhere. Without a fresh ingest owner the request is refused;
+an unrelated cluster is not used as a recording fallback. For cross-cluster clip
+and VOD reads, the owner supplies its published media index alongside the media
+object, so the destination does not have to reconstruct an already-published index.
+
 Signing in must not move playback resolution to the viewer's own tenant cluster. Commodore uses
 the content owner's routing identity for anonymous and authenticated viewers alike; the resolving
 Foghorn then chooses the media destination. On the prepared HTTP path, WHEP remains WHEP and a

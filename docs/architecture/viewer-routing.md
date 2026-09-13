@@ -69,6 +69,19 @@ diagnostics, served by `MistSourceHandler` and `AuthorizedMistSourceHandler`
 behind `RequireInternalSourceAccess`. Neither answers a viewer with a playback
 destination.
 
+The player scores only the sources returned by resolution; it never synthesizes
+a Mist embed URL from a media URL. After exhausting players for the selected
+format, a Gateway-backed player requests another authorized format and loads
+its matching player modules. Switching from WebRTC to HLS therefore performs
+placement again rather than deriving an HLS or `player.js` URL on the old node.
+
+Stored-media origin access is checked against current signed tenant grants, not
+the list of currently connected federation peers. A disconnected origin does
+not revoke access to an already warm local copy. Candidate selection and cold
+acquisition still use runtime availability, and removed or expired authority
+still denies new playback/source opens. HTTP, gRPC and Mist source admission
+enforce this separation.
+
 On the prepared HTTP path, the manifest format is resolved before selection:
 `/play/{id}/cmaf/index.mpd` requests DASH, while `cmaf/index.m3u8` requests HLS-CMAF.
 WHEP remains distinct from WebSocket WebRTC. A conflicting protocol/manifest is a
@@ -94,9 +107,44 @@ catalog metadata. Runtime node availability remains Foghorn state and may
 change independently of the signed business decision. See
 [Media-cluster authority and autonomy](media-authority.md).
 
+Stored-media routing filters warm/read-through candidates through signed serving
+policy. If the permitted serving cell has no candidate in the coordinator's local
+inventory, it prepares that destination through global placement instead of
+returning a refused local edge. The selected edge's existing artifact relay reads
+the bytes from their authorized storage location; serving placement does not move
+the durable copy or change storage placement.
+
+Mist's HTTP stream-info/page requests also run pre-source placement admission,
+using the reported HTTP listener (`mist_html`). They are not audience sessions.
+Actual media connections are admitted independently against their connector's
+protocol, including Mist's `/WS` WebSocket labels. Query parameters cannot supply
+listener capability evidence or turn a media connection into metadata.
+
+Active DVR uses the recording's signed artifact ID, hash, internal name and
+playback ID for viewer preparation, not the parent live-stream identity. HTTP
+and gRPC read recording lifecycle from its owning cell; missing local runtime
+state does not mean the recording has stopped. The bounded federation
+`PrepareArtifact` request with type `dvr` returns lifecycle and recording-node
+metadata only, bound to the tenant and artifact hash. It does not issue storage
+URLs. Source admission still authorizes the exact recording before a selected
+edge pulls it. Finalized chapters use their own VOD artifact playback IDs.
+
+DVR source pulls keep the `dvr+` registry/credential namespace and are bound to
+the active recording's unique storage owner, not a live publisher generation.
+Both same-cell and cross-cell edge pulls present an attempt- and
+destination-bound source credential. Origin admission rechecks tenant, recording
+status and owner; warm source resolution rechecks artifact authority and renews
+the accepted pull. An existing inbound pull cannot substitute for recording
+authority or borrow the parent live stream's placement receipt.
+
+HTTP DVR requests resolve the requested manifest before preparing a destination,
+as live requests do. Query-carried viewer credentials remain attached to the
+selected playback URL; header/cookie credentials are never converted into URLs.
+
 Connected responses keep those two projections separate. `cluster_peers` is
-health-filtered routing input; `authority_cluster_peers` contains the static
-tenant grants used only to shadow-compare signed authority. Promotion never
+health-filtered routing input; `authority_cluster_peers` contains the tenant
+grants used to compare signed authority and authorize locally served stored
+media. Promotion never
 compares cell-local health, addresses, or object-storage endpoints as though
 they were tenant policy. During a mixed-version rollout, absence of the
 authority projection prevents promotion and leaves the connected path active.
@@ -287,13 +335,12 @@ of this scorer.
 
 ### Decision: Always Origin-Pull
 
-A viewer is never redirected to another cluster. Where a peer holds the stream,
-Foghorn arranges a DTSC pull from the remote origin into a local edge via
-`federation.ArrangeOriginPull`, and the viewer is served from that edge — so they keep talking
-to the cluster they resolved, and subsequent viewers are served locally with no
-further cross-cluster work. A live viewer receives the single destination placement
-prepared for them, which the HTTP front door redirects to within the local cluster;
-when that destination needs the stream, placement arranges the pull itself.
+A viewer receives the destination selected by global serving policy, which may
+belong to a different cluster from the Foghorn resolving the request. The
+resolving cluster is not a geographic preference. For a live source on another
+edge, placement arranges the DTSC origin pull into the selected serving edge;
+the browser connects to that edge, not the ingest node. Stored media uses the
+selected destination's artifact relay instead of an arranged live-origin pull.
 
 See `docs/architecture/stream-replication-topology.md` for the full origin-pull lifecycle and loop prevention.
 

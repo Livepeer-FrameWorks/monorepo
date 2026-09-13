@@ -5,12 +5,12 @@
 Proposed — deferred; NOT part of the current storage-artifact-catalog release. This RFC specifies the
 next-release storage-tiering and placement design.
 
-The live-media `ingest`/`serve` slice is being implemented separately. Its current
-[pure evaluator and compiler](../architecture/media-placement-policy.md) are not yet wired
-into runtime routing or public policy configuration. This does not implement or activate
-the storage/processing/tiering proposals below. Live tenant/stream constraints accumulate;
-preference overrides replace ordered groups without widening hard permissions. Signed
-authority activation, capacity-owner consent, and final admission remain integration gates.
+The live-media `ingest`/`serve` slice is implemented separately in
+[media placement policy](../architecture/media-placement-policy.md), including runtime
+routing, account/stream controls, capacity-owner consent and signed admission authority.
+That implementation does not activate the storage/processing/tiering proposals below.
+Live tenant/stream constraints accumulate; preference overrides replace ordered groups
+without widening hard permissions. Release validation is separate from this deferred RFC.
 
 ## TL;DR
 

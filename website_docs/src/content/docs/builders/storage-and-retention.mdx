@@ -29,6 +29,15 @@ This page explains the underlying model so you can make informed retention decis
 
 DVR is the largest contributor for most accounts because a single 24/7 ingest can produce many hours of media per day.
 
+### Resuming a VOD upload
+
+Keep the opaque session ID returned by `createVodUpload` and pass it unchanged
+to upload status, completion and abort operations. The session stays with its
+original storage-owning cluster even if your cluster preference changes while
+the upload is running. Do not construct a session ID from an S3 multipart ID or
+a playback ID. If the owner is unavailable, retry with the same session when it
+recovers; the upload is not silently moved to another cluster.
+
 ## Live DVR window vs retention
 
 These are separate concepts and they're often conflated:

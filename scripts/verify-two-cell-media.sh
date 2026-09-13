@@ -38,9 +38,9 @@ BRIDGE=http://127.0.0.1:18000
 # Edges advertise in-network addresses: peers pull DTSC from the host in the public URL
 # (a host-mapped localhost is unreachable from the other cell's Mist), so viewer
 # redirects point into the compose network and media checks run there too.
-export EDGE_PUBLIC_URL=${EDGE_PUBLIC_URL:-http://mistserver:8080}
-EDGE_A_HOST=mistserver:8080
-EDGE_B_HOST=mistserver-b:8080
+export EDGE_PUBLIC_URL=${EDGE_PUBLIC_URL:-http://mistserver:8082}
+EDGE_A_HOST=mistserver:8082
+EDGE_B_HOST=mistserver-b:8082
 PUBLISHER=fw-two-cell-publisher
 # Cell A's Mist host ports move off the defaults so the proof coexists with a Mist
 # running natively on this host; nothing in the proof depends on those host ports.

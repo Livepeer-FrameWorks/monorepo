@@ -129,6 +129,13 @@ Frontend → Gateway → Commodore.CreateClip → Foghorn.CreateClip
 
 Note: the durable lifecycle fields (`syncStatus`/`isSynced`/`isFinalized`/`storageLocation`) come from the Commodore catalog row, written by the single-writer reconciler projection from `foghorn.artifacts` — so they survive a Periscope rebuild. `isExpired` is derived from `retention_until`. Only the ephemeral placement overlay — `hasLocalCopy` (present full local node copy on at least one node, origin or cache; nullable = unknown), plus live progress — is sourced from Periscope. There is no `isFrozen` field and no duplicate `isHot` field; `hasLocalCopy` is the single canonical placement field. S3-only / read-through-relay is derived as `isSynced && hasLocalCopy === false`.
 
+Clip duration retains the requested length until a measured duration arrives; an
+absent measurement must not block processing/failure projection into its non-nullable
+duration column. DVR/VOD durations remain nullable. The Library refreshes its loaded
+catalog window every ten seconds while visible and authenticated, without resetting
+pagination. A filter, identity, or navigation change discards an in-flight background
+result. Lifecycle events are not a substitute for the authoritative catalog snapshot.
+
 ### Data Flow During Processing
 
 ```

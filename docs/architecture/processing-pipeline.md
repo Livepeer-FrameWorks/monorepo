@@ -103,6 +103,15 @@ the last-good record for the next pass.
 
 ### VOD upload
 
+Commodore returns an opaque upload session ID containing the artifact locator
+and the owner's multipart ID. Completion, status/resume and abort resolve the
+tenant-owned VOD catalog row and contact that artifact's recorded origin, never
+the tenant's current primary cluster. Missing ownership or an unavailable origin
+fails closed. Foghorn independently validates the tenant-scoped multipart ID.
+Clients retain the returned session ID unchanged; raw storage upload IDs are not
+accepted by the public control API. No schema migration is needed for this route:
+the VOD catalog already records `origin_cluster_id` at creation.
+
 An S3 multipart lifecycle, both RPCs on Foghorn's gRPC server:
 
 1. `CreateVodUpload` in `api_balancing/internal/grpc/server.go` creates the S3 multipart,
@@ -202,7 +211,58 @@ emitting the returned value. Chapter-finalization progress has no persisted prog
 attempt-fenced liveness telemetry and may move backward if reports arrive out of order. Completion
 and failure remain attempt-fenced authoritative transitions.
 
+### Finite-source recording readiness
+
+Process-controlled realtime streams retain their buffered input after the finite
+feeder reaches EOF, until processing readers and recording outputs have drained.
+Internal processing readers can attach to an already-active buffer in `WAIT`;
+requiring viewer-style `READY` would deadlock a late-starting processor against
+the buffer that is waiting for it. Ordinary live viewers keep their normal
+startup and admission path.
+
+Before writing a recording header, Mist's input buffer publishes the number of
+existing push-visible derived tracks plus each eligible producer's missing
+outputs. Completed thumbnail tracks remain part of this total; they cannot
+satisfy the pending output count of another video rendition. Process inhibition
+uses the supervisor's track-ownership rules, and retired or inhibited producers
+no longer contribute missing outputs. Thumbnail processing contributes sprite
+JPEG, VTT, and preview JPEG tracks; the recording format still determines which
+of those tracks can be embedded.
+
+The EBML file recorder rejects packets from tracks absent from its header.
+Helmsman's terminal validation remains authoritative for whether the artifact
+is complete and publishable. Local regressions are available through
+`make verify-mist-processing-recording`, `make verify-mist-finite-source`, and
+`make verify-mist-hls-realtime`, with `MIST_CONTRACT_IMAGE` identifying the exact
+full-feature build being tested.
+
+Ordinary finite-file playback does not impose an implicit stop at the last video
+timestamp: each selected track drains its own final sample. Nonfragmented MP4
+durations include that final sample's duration so edit lists do not hide an audio
+tail. Explicit clip stop times remain authoritative; unequal audio/video tails
+are valid when the selected samples decode cleanly.
+
+The finite-source contract also checks HTTP delivery of MP4 and MKV: one-byte,
+suffix and open-ended ranges must match the corresponding full-file bytes, HEAD
+must leave no response body on a reused connection, and rejected ranges return
+416 with the total representation size. EBML enables a socket byte budget only
+after sending its headers; other connections remain unbounded by default. MP4
+uses its connector's remaining-byte counter. These bounds prevent bytes beyond
+the declared response from corrupting a subsequent HTTP response.
+
 ### Completion authority — this is where tracks/duration/readiness are captured
+
+Clip catalog rows retain their requested duration while processing or failed, until
+a measured duration is available. An absent measurement must not erase that required
+value or prevent lifecycle/failure projection. DVR and VOD durations remain nullable
+until measured; catalog lifecycle, not duration alone, determines playback readiness.
+
+The catalog reconciler projects artifacts for every media cluster currently
+assigned to its Foghorn cell. Its control-cell ID is not a substitute for an
+artifact's origin cluster: snapshot and deletion requests carry that media
+origin, and Commodore enforces it alongside the per-artifact revision. Assignment
+removal stops that origin's subsequent projection passes. A multi-cluster cell
+does not guess ownership for an unattributed artifact from its own cell ID.
 
 The validated result carries the accepted A/V track set:
 `ProcessingJobResult{status:"completed", tracks, media_duration_ms, output_size_bytes, output_path}`

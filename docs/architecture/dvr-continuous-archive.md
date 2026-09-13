@@ -18,9 +18,13 @@ This file is the canonical engineering reference. `docs/architecture/clips-dvr.m
 
 These never share a clock. A 24/7 stream lasting 90 days is **one** active artifact. Retention only ticks after the artifact reaches a terminal state — it never kills an active recording.
 
+Manual recording starts resolve the stream's fresh active ingest owner, not the tenant's primary cluster. A missing or stale owner is a failed precondition; recording is not dispatched into an unrelated cluster. Helmsman reports the recording start through `DVRProgress` and `DVRStopped`; Foghorn persists the first positive start time only from the authenticated dispatch owner, scoped to the artifact tenant. A terminal acknowledgement can supply an anchor missing because stop raced the first progress report.
+
+Finalization claims persist the stop time before upload retries. Chapter IDs, retention and terminal events use that persisted time; chapter queries truncate timestamps to milliseconds consistently with Go. List/retrieve requests with omitted chapter settings inherit the recording's policy. UTC-aligned fixed-interval boundaries stay unchanged even when recording begins midway through the first interval.
+
 ## Source of truth: `foghorn.dvr_segments`
 
-The per-segment ledger is the durable timeline. Every Mist `RECORDING_SEGMENT` becomes one row, written by Foghorn via the helmsman control stream:
+The per-segment ledger is the durable timeline. Every Mist `RECORDING_SEGMENT` becomes one row, written by Foghorn via the helmsman control stream. The trigger's start/end fields are stream-relative milliseconds, not Unix time. Helmsman reads the segment's absolute timing from the local playlist's `PROGRAM-DATE-TIME`, advancing subsequent entries by `EXTINF` exactly as reconciliation does. A missing playlist entry or clock anchor is retried by reconciliation; neither filenames nor receipt time establish chapter placement:
 
 ```
 artifact_hash    VARCHAR(32)   -- = dvr_hash
@@ -108,7 +112,7 @@ A chapter is **playable** at `finalized` or later — the canonical `.mkv` is th
 1. Reserve disk via `admission.Decide(IntentDVRChapterFinalization, estBytes)` — sum of source segment sizes is the floor.
 2. For each segment, prefer the local TS file at `storage/dvr/<stream>/<dvr_hash>/segments/<name>`; fall back to the presigned recovery URL when the local file is gone.
 3. Build a temp HLS VOD playlist at `storage/processing/<chapter_artifact_hash>.m3u8`. Each entry carries `#EXT-X-PROGRAM-DATE-TIME` rendered from `media_start_ms` directly (absolute Unix ms), so Mist's `input_hls → UTCOffset → output_ebml` chain preserves wall-clock end-to-end into the `.mkv`.
-4. Register a STREAM_SOURCE override mapping `processing+<chapter_artifact_hash>` → the local temp HLS path, and a STREAM_PROCESS override carrying the thumbs-only `processes_json`. Mist boots `processing+<hash>`; MistProcThumbs generates fresh poster/sprite tracks for the chapter timeline during this boot.
+4. The active pending job lets STREAM_SOURCE resolve `processing+<chapter_artifact_hash>` to its locally staged HLS path; a STREAM_PROCESS override carries the thumbs-only `processes_json`. Mist boots `processing+<hash>`; MistProcThumbs generates fresh poster/sprite tracks for the chapter timeline during this boot.
 5. Push to `storage/vod/<chapter_artifact_hash>.mkv`. Wait for `PUSH_END` (success) or `PROCESS_EXIT` on a critical process (terminal). Non-critical exits, retries, and clean exits don't break the wait loop.
 6. Validate the output via `waitForProcessingOutput`. Send `ProcessingJobResult{status='completed', output_path}`.
 7. Trigger DTSH generation: boot `vod+<chapter_artifact_hash>` so Mist's input writes the `.dtsh` sidecar that the freeze pipeline uploads alongside the `.mkv`. This boot is for DTSH only — it does NOT generate thumbnails (that's the processing pipeline's job above).
