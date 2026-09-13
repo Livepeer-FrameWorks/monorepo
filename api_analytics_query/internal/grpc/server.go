@@ -4208,6 +4208,9 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummary(ctx context.Context, req *pe
 	}
 	// Ensure non-null GraphQL contract for rangeQuality even if the query returns no rows.
 	summary.RangeQuality = &periscopepb.QualityTierSummary{}
+	// Rollups represent whole five-minute windows. Include the window that
+	// overlaps the requested start; exact session predicates retain startTime.
+	bucketStart := startTime.Truncate(5 * time.Minute)
 	var totalSessionsVal int64
 	var totalSessionSecondsVal int64
 	var totalBytesVal int64
@@ -4224,7 +4227,7 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummary(ctx context.Context, req *pe
 				WHERE tenant_id = ? AND stream_id = ? AND window_start >= ? AND window_start < ?
 				GROUP BY window_start
 			)
-		`, tenantID, streamID, startTime, endTime).Scan(&avgViewers, &peakViewers)
+		`, tenantID, streamID, bucketStart, endTime).Scan(&avgViewers, &peakViewers)
 		if err == nil {
 			if avgViewers.Valid {
 				summary.RangeAvgViewers = sanitizeFloat32(avgViewers.Float64)
@@ -4244,8 +4247,8 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummary(ctx context.Context, req *pe
 			SELECT avg(avg_buffer_health), avg(avg_bitrate), avg(avg_fps),
 			       sum(rebuffer_count), sum(issue_count), sum(buffer_dry_count)
 			FROM periscope.stream_health_5m
-			WHERE tenant_id = ? AND stream_id = ? AND timestamp_5m >= ? AND timestamp_5m <= ?
-		`, tenantID, streamID, startTime, endTime).Scan(&avgBufferHealth, &avgBitrate, &avgFps, &rebufferCount, &issueCount, &bufferDryCount)
+			WHERE tenant_id = ? AND stream_id = ? AND timestamp_5m >= ? AND timestamp_5m < ?
+		`, tenantID, streamID, bucketStart, endTime).Scan(&avgBufferHealth, &avgBitrate, &avgFps, &rebufferCount, &issueCount, &bufferDryCount)
 		if err == nil {
 			if avgBufferHealth.Valid {
 				summary.RangeAvgBufferHealth = sanitizeFloat32(avgBufferHealth.Float64)
@@ -4278,8 +4281,8 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummary(ctx context.Context, req *pe
 		err := periscopequerydb.QueryRow(ctx, s.clickhouse, `
 			SELECT avg(pkt_loss_rate), avg(avg_connection_time)
 			FROM periscope.client_qoe_5m
-			WHERE tenant_id = ? AND stream_id = ? AND timestamp_5m >= ? AND timestamp_5m <= ?
-		`, tenantID, streamID, startTime, endTime).Scan(&pktLossRate, &avgConnTime)
+			WHERE tenant_id = ? AND stream_id = ? AND timestamp_5m >= ? AND timestamp_5m < ?
+		`, tenantID, streamID, bucketStart, endTime).Scan(&pktLossRate, &avgConnTime)
 		if err == nil {
 			if pktLossRate.Valid {
 				summary.RangePacketLossRate = sanitizeFloat32(pktLossRate.Float64)
@@ -4325,7 +4328,7 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummary(ctx context.Context, req *pe
 				      WHERE tenant_id = ? AND stream_id = ? AND window_start >= ? AND window_start < ?
 				  )
 			)
-		`, tenantID, streamID, startTime, endTime, startTime, endTime, tenantID, streamID, endTime, startTime, tenantID, streamID, startTime, endTime).Scan(&totalSessionSeconds, &totalBytes, &egressBytes, &uniqueViewers, &totalSessions)
+		`, tenantID, streamID, bucketStart, endTime, startTime, endTime, tenantID, streamID, endTime, startTime, tenantID, streamID, bucketStart, endTime).Scan(&totalSessionSeconds, &totalBytes, &egressBytes, &uniqueViewers, &totalSessions)
 		if err == nil {
 			if totalSessionSeconds.Valid {
 				summary.RangeViewerHours = float32(totalSessionSeconds.Int64) / 3600.0
@@ -4351,7 +4354,7 @@ func (s *PeriscopeServer) GetStreamAnalyticsSummary(ctx context.Context, req *pe
 			SELECT toInt64(COALESCE(sum(down_bytes_observed), 0))
 			FROM periscope.delivery_usage_5m_v
 			WHERE tenant_id = ? AND stream_id = ? AND window_start >= ? AND window_start < ?
-		`, tenantID, streamID, startTime, endTime).Scan(&egressBytes)
+		`, tenantID, streamID, bucketStart, endTime).Scan(&egressBytes)
 		if err == nil && egressBytes.Valid {
 			summary.RangeEgressBytes = egressBytes.Int64
 			summary.RangeEgressGb = float32(float64(egressBytes.Int64) / (1024.0 * 1024.0 * 1024.0))

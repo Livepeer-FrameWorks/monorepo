@@ -327,6 +327,13 @@ Operational rollups:
 
 ### Client QoE sampling
 
+Stream analytics summaries include every five-minute rollup bucket overlapping
+the requested half-open interval: the lower boundary is rounded down to five
+minutes and bucket starts must precede the end. Peak concurrency, health, QoE,
+observed duration and delivery-byte rollups therefore include the whole boundary
+bucket, not a prorated fraction. Exact session predicates retain the requested
+timestamps. These dashboard aggregates are not exact-range billing ledgers.
+
 The client-side QoE pipeline is rate-shaped at two points:
 
 - **Helmsman polls MistServer's clients API every 60 seconds**, not every 10s. The 10s monitor tick still drives node and stream lifecycle, but `emitClientLifecycle` runs once per 6 ticks. Helmsman generates a UUID per sample so `client_qoe_samples.event_id` is a stable replay-dedup key.
@@ -502,6 +509,9 @@ Most list endpoints use cursor-based (keyset) pagination for time-series tables.
 These live in `api_analytics_query/internal/grpc`:
 
 - `GetStreamStatus` / `GetStreamsStatus`: reads `stream_state_current` for near-realtime stream state + quality fields.
+- Primary-video codec, dimensions and quality labels exclude JPEG thumbnail
+  tracks in both Helmsman polling and trigger enrichment. Thumbnails remain in
+  the full track inventory; they do not replace the stream's moving-video metrics.
 - `GetStreamAnalyticsSummary`: finalized viewer usage facts plus current session state for range viewer/session totals, with support rollups such as `stream_health_5m`, `client_qoe_5m`, and `quality_tier_daily` for QoE and quality breakdowns.
 - `GetStreamHealthMetrics`: reads `stream_health_samples` (detailed QoE samples) with cursor pagination.
 - `GetConnectionEvents`: reads `viewer_connection_events` (includes raw `connection_addr`; redact at API boundary).
