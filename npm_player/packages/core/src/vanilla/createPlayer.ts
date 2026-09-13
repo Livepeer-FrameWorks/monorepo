@@ -58,6 +58,7 @@ import type {
   ContentMetadata,
   ContentType,
   PlaybackQuality,
+  PlaybackAuth,
   ABRMode,
 } from "../types";
 import type { StreamInfo } from "../core/PlayerInterface";
@@ -86,7 +87,7 @@ export interface CreatePlayerConfig {
   /** Auth token for Gateway GraphQL resolution */
   authToken?: string;
   /** Viewer-side playback auth (customer-minted JWT). See PlaybackAuth in types.ts. */
-  playbackAuth?: import("../types").PlaybackAuth;
+  playbackAuth?: PlaybackAuth;
 
   /**
    * Diagnostic telemetry toggles (default off). `boot` opts into the lossy

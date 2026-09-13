@@ -39,6 +39,17 @@ cp env.example .env
 pnpm dev
 ```
 
+The app consumes built player/studio workspace packages. For release validation,
+build the app **with its dependencies** from the monorepo root:
+
+```bash
+pnpm --filter frameworks-frontend... run build
+```
+
+Set `VITE_APP_URL` to the URL/base path used by the preview. A plain build from
+`website_application` alone can reuse stale SDK bundles even when SDK source
+tests pass. Rebuild dependencies after player/studio changes before browser tests.
+
 App URLs:
 
 - Local dev server with `env.example`: http://localhost:3001
@@ -57,7 +68,7 @@ Copy `env.example` to `.env` for standalone frontend dev. Deployment/browser `VI
 
 Key variables:
 
-- `VITE_TURNSTILE_AUTH_SITE_KEY` – Cloudflare Turnstile site key used for registration and login forms. Use the Cloudflare test key (`1x0000000000000000000000000000000AA`) during local development.
+- `VITE_TURNSTILE_AUTH_SITE_KEY` – Cloudflare Turnstile site key used for registration and login forms. For local automated testing, use test site key `1x00000000000000000000AA` and configure Commodore's `TURNSTILE_AUTH_SECRET_KEY` with the matching test secret `1x0000000000000000000000000000000AA`. Both are required; real secrets reject test tokens. Never use test keys in production. See [Cloudflare's testing guide](https://developers.cloudflare.com/turnstile/troubleshooting/testing/).
 - `DEV_PROXY_GATEWAY_URL` / `VITE_GATEWAY_URL` – Bridge/nginx URL used by the frontend during local development.
 - `VITE_STREAMING_EDGE_URL` – public playback edge URL used by viewer routes.
 

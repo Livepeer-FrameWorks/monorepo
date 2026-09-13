@@ -307,33 +307,6 @@ export class PlayerManager {
     // Merge options
     const mergedOptions = { ...this.options, ...options };
 
-    // Special handling for Legacy player - bypass normal selection
-    if (mergedOptions.forcePlayer === "mist-legacy" || mergedOptions.forceType === "mist/legacy") {
-      const legacyPlayer = this.players.get("mist-legacy");
-      if (legacyPlayer && streamInfo.source.length > 0) {
-        const firstSource = streamInfo.source[0];
-        const legacySource: StreamSource = {
-          url: firstSource.url,
-          type: "mist/legacy",
-          streamName: firstSource.streamName,
-          mistPlayerUrl: firstSource.mistPlayerUrl,
-        };
-        const result: PlayerSelection = {
-          score: 0.1,
-          player: "mist-legacy",
-          source: legacySource,
-          source_index: 0,
-        };
-        if (excludeCombos.has(this.getComboKey(result.player, result.source))) return false;
-        this.emit("playerSelected", {
-          player: result.player,
-          source: result.source,
-          score: result.score,
-        });
-        return result;
-      }
-    }
-
     // Get combinations (will use cache if available)
     const combinations = this.getAllCombinations(streamInfo, mergedOptions.playbackMode);
 
@@ -576,35 +549,6 @@ export class PlayerManager {
     // Debug: log scorer summary
     if (this.options.debug) {
       this.logScorerSummary(combinations, requiredTracks, effectiveMode);
-    }
-
-    // Add Legacy player option
-    const legacyPlayer = this.players.get("mist-legacy");
-    if (legacyPlayer && streamInfo.source.length > 0) {
-      const firstSource = streamInfo.source[0];
-      const legacySource: StreamSource = {
-        url: firstSource.url,
-        type: "mist/legacy",
-        streamName: firstSource.streamName,
-        mistPlayerUrl: firstSource.mistPlayerUrl,
-      };
-
-      combinations.push({
-        player: legacyPlayer.capability.shortname,
-        playerName: legacyPlayer.capability.name,
-        source: legacySource,
-        sourceIndex: 0,
-        sourceType: "mist/legacy",
-        score: 0.1,
-        compatible: true,
-        scoreBreakdown: {
-          trackScore: 2.0,
-          trackTypes: ["video", "audio"],
-          priorityScore: 0,
-          sourceScore: 0,
-          weights: { tracks: 0.5, priority: 0.1, source: 0.05 },
-        },
-      });
     }
 
     // Populate notes from registry (avoids duplicating notes in each push above)
@@ -1080,8 +1024,8 @@ export class PlayerManager {
         });
 
         return true;
-      } catch {
-        this.log("Playback fallback failed");
+      } catch (error) {
+        console.warn("[PlayerManager] Playback fallback failed", error);
         return false;
       }
     });

@@ -4,6 +4,7 @@
 import type { FwThemePreset, FwThemeOverrides } from "./core/ThemeManager";
 import type { FwLocale, TranslationStrings } from "./core/I18n";
 import type { PlayerKeyMap } from "./core/InteractionController";
+import type { ViewerProtocol } from "./core/ViewerProtocol";
 
 /** High-level player state machine for UI */
 export type PlayerState =
@@ -45,7 +46,7 @@ export interface PlayerOptions {
   /** Gateway GraphQL endpoint override. Defaults to the official FrameWorks Gateway. */
   gatewayUrl?: string;
   /** Required Gateway playback format; cannot be changed by automatic fallback. */
-  viewerProtocol?: import("./core/ViewerProtocol").ViewerProtocol;
+  viewerProtocol?: ViewerProtocol;
   /** Direct MistServer base URL (e.g. "http://localhost:8080") - bypasses Gateway resolution */
   mistUrl?: string;
   authToken?: string;

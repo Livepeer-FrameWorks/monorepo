@@ -125,6 +125,32 @@ async function choosePreset(label = "no_official") {
 }
 
 describe("placement editor interactions", () => {
+  it.each([
+    "5eedfeed-11fe-ca57-feed-11feca570001",
+    "U3RyZWFtOjVlZWRmZWVkLTExZmUtY2E1Ny1mZWVkLTExZmVjYTU3MDAwMQ==",
+  ])("normalizes an entered stream ID for preview: %s", async (id) => {
+    render(MediaPlacementEditor, { scope: { kind: "TENANT" } });
+    await screen.findByRole("button", { name: "Preview this draft" });
+    await fireEvent.input(screen.getByLabelText("Owned stream ID (optional)"), {
+      target: { value: ` ${id} ` },
+    });
+    await fireEvent.click(screen.getByRole("button", { name: "Preview this draft" }));
+    expect(placementAPI.preview).toHaveBeenCalledWith(
+      expect.objectContaining({ streamId: "5eedfeed-11fe-ca57-feed-11feca570001" })
+    );
+  });
+
+  it("rejects an invalid stream ID instead of silently doing a capacity-only preview", async () => {
+    render(MediaPlacementEditor, { scope: { kind: "TENANT" } });
+    await screen.findByRole("button", { name: "Preview this draft" });
+    await fireEvent.input(screen.getByLabelText("Owned stream ID (optional)"), {
+      target: { value: "not-a-stream-id" },
+    });
+    await fireEvent.click(screen.getByRole("button", { name: "Preview this draft" }));
+    expect(screen.getByText(/Enter a stream UUID or its Stream ID/)).toBeTruthy();
+    expect(placementAPI.preview).not.toHaveBeenCalled();
+  });
+
   it("preserves both work tabs and gates one atomic apply on required acknowledgements", async () => {
     render(MediaPlacementEditor, { scope: { kind: "TENANT" } });
     await screen.findByRole("button", { name: "Use preset" });

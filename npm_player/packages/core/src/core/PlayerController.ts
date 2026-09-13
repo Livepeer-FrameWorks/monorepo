@@ -13,7 +13,12 @@ import { DEFAULT_GATEWAY_URL, GatewayClient } from "./GatewayClient";
 import { canonicalViewerProtocol, type ViewerProtocol } from "./ViewerProtocol";
 import { StreamStateClient } from "./StreamStateClient";
 import type { PlayerManager, PlayerManagerEvents } from "./PlayerManager";
-import { globalPlayerManager, ensurePlayersRegistered } from "./PlayerRegistry";
+import {
+  globalPlayerManager,
+  ensurePlayersRegistered,
+  getAvailablePlayerCapabilities,
+  loadMatchingPlayers,
+} from "./PlayerRegistry";
 import { ABRController } from "./ABRController";
 import { InteractionController } from "./InteractionController";
 import { MistReporter } from "./MistReporter";
@@ -48,12 +53,12 @@ import type {
   MistStreamSource,
   OutputEndpoint,
   OutputCapabilities,
+  PlaybackAuth,
   PlayerState,
   PlayerStateContext,
   StreamState,
   ThumbnailAssetUrls,
 } from "../types";
-import { ChandlerAssetSource } from "./ChandlerAssetSource";
 import { maxPlayableKeepAwayMs } from "./delivery/keep-away-rate-controller";
 import type {
   StreamInfo,
@@ -147,7 +152,7 @@ export interface PlayerControllerConfig {
   /** Viewer-side playback auth — customer-minted JWT attached to every
    *  playback URL so MistServer's USER_NEW handler can verify against the
    *  stream's playback policy. See PlaybackAuth in types.ts. */
-  playbackAuth?: import("../types").PlaybackAuth;
+  playbackAuth?: PlaybackAuth;
 
   /** Playback options */
   autoplay?: boolean;
@@ -1200,7 +1205,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
         continue;
       }
 
-      const bitrate = typeof t.bps === "number" ? Math.round(t.bps) : undefined;
+      const bitrate = typeof t.bps === "number" ? Math.round(t.bps * 8) : undefined;
       const fps = typeof t.fpks === "number" ? t.fpks / 1000 : undefined;
 
       tracks.push({
@@ -1541,6 +1546,9 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
    */
   shouldShowIdleScreen(): boolean {
     if (this._hasPlaybackStarted) return false;
+    // A terminal boot failure must expose the error overlay, not an endless
+    // cold-start spinner. Offline streams never enter this terminal state.
+    if (this.state === "error") return false;
 
     if (this.needsColdStart()) {
       // VOD content (clips, DVR recording or completed): DON'T wait for MistServer
@@ -3489,14 +3497,19 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       this.config.endpoints?.primary ||
       this.config.mistUrl ||
       this.config.viewerProtocol
-    )
+    ) {
+      this.log("[viewerFallback] Format re-resolution unavailable for this attachment");
       return null;
+    }
     const order: ViewerProtocol[] =
       this.config.playbackMode === "vod" || this.config.playbackMode === "quality"
         ? ["HLS", "DASH", "MP4", "WEBRTC", "MEWS", "WHEP"]
         : ["HLS", "DASH", "MEWS", "WHEP", "WEBRTC", "RAW_WS"];
     const supported = new Set(
-      this.playerManager.getRegisteredPlayers().flatMap((player) => player.capability.mimes)
+      [
+        ...getAvailablePlayerCapabilities(),
+        ...this.playerManager.getRegisteredPlayers().map((player) => player.capability),
+      ].flatMap((capability) => capability.mimes)
     );
     const next = order.find((protocol) => {
       const canonical = canonicalViewerProtocol(protocol)!;
@@ -3505,7 +3518,11 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
       if (!supported.has(mime)) return false;
       return !this.playbackAuthHeaders() || sourceCanCarryPlaybackHeaders({ type: mime, url: "" });
     });
-    if (!next) return null;
+    if (!next) {
+      this.log("[viewerFallback] No unattempted supported formats remain");
+      return null;
+    }
+    this.log(`[viewerFallback] Resolving authorized ${next} endpoint`);
     this.attemptedViewerProtocols.add(canonicalViewerProtocol(next)!);
     const epoch = this.endpointResolutionEpoch;
     await this.resolveFromGateway(
@@ -3516,8 +3533,17 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     );
     if (this.isDestroyed || this.endpointResolutionEpoch !== epoch || !this.endpoints) return null;
     this.streamInfo = this.streamInfo ?? this.buildStreamInfo(this.endpoints);
+    // Fallback bypasses the initial registry loader; load handlers for the newly
+    // authorized format before the manager scores its replacement sources.
+    const replacement = this.streamInfo;
+    if (!replacement) return null;
+    await loadMatchingPlayers(
+      this.playerManager,
+      replacement.source.map((source) => source.type)
+    );
+    if (this.isDestroyed || this.endpointResolutionEpoch !== epoch) return null;
     this.startStreamStatePolling();
-    return this.streamInfo;
+    return replacement;
   }
 
   private getMistStreamName(fallbackContentId: string = this.config.contentId): string {
@@ -4117,6 +4143,7 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
           width: t.width as number | undefined,
           height: t.height as number | undefined,
           fpks: t.fpks as number | undefined,
+          bps: t.bps as number | undefined,
           bframes: t.bframes as boolean | number | undefined,
           hasBFrames: t.hasBFrames as boolean | undefined,
           hasBframes: t.hasBframes as boolean | undefined,
@@ -4602,6 +4629,9 @@ export class PlayerController extends TypedEventEmitter<PlayerControllerEvents> 
     this.log(`[initializePlayer] Calling playerManager.initializePlayer...`);
     this.log(
       `[initializePlayer] Manager options: ${JSON.stringify(managerOptions)} (pending force: ${pendingForce ? "yes" : "no"})`
+    );
+    this.log(
+      `[initializePlayer] Gateway format fallback: ${Boolean(managerOptions.resolveFallback)}`
     );
     let initializePromise: Promise<HTMLVideoElement> | null = null;
     try {

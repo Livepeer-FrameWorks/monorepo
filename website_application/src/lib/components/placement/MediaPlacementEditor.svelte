@@ -4,6 +4,7 @@
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
   import { auth } from "$lib/stores/auth";
+  import { resolveOperationalStreamId } from "$lib/route-ids";
   import { placementAPI } from "$lib/placement/api";
   import { PlacementSession, type EditorState } from "$lib/placement/session";
   import {
@@ -146,10 +147,22 @@
         "Enter both coordinates: latitude −90 to 90, longitude −180 to 180, or leave both blank for unknown location.";
       return;
     }
+    const enteredStreamId = previewStreamId.trim();
+    const streamId =
+      scope.kind === "STREAM"
+        ? scope.streamId
+        : enteredStreamId
+          ? resolveOperationalStreamId({ routeParamId: enteredStreamId })
+          : null;
+    if (scope.kind === "TENANT" && enteredStreamId && !streamId) {
+      previewError =
+        "Enter a stream UUID or its Stream ID from the app, or leave it blank for a capacity-only preview.";
+      return;
+    }
     await session.preview({
       verb,
       protocol: protocol || null,
-      streamId: scope.kind === "STREAM" ? scope.streamId : previewStreamId.trim() || null,
+      streamId,
       coordinates: hasLocation ? { latitude: lat, longitude: lon } : null,
     });
   }

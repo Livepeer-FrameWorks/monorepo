@@ -34,6 +34,7 @@ import type {
   StreamState,
   ContentEndpoints,
   ContentType,
+  PlaybackAuth,
 } from "../types";
 
 // ============================================================================
@@ -55,7 +56,7 @@ export interface FrameWorksPlayerOptions {
   /** Auth token for Gateway GraphQL resolution */
   authToken?: string;
   /** Viewer-side playback auth (customer-minted JWT). See PlaybackAuth in types.ts. */
-  playbackAuth?: import("../types").PlaybackAuth;
+  playbackAuth?: PlaybackAuth;
 
   /** Playback options */
   autoplay?: boolean;

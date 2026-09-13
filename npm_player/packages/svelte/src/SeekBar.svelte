@@ -216,19 +216,14 @@
     hoverTime = getTimeFromPosition(e.clientX);
   }
 
-  // Track whether a drag-move occurred to prevent seek-twice on mouseup
-  let didDragMove = false;
-
   // Handle drag start
   function handleMouseDown(e: MouseEvent) {
     if (disabled) return;
     if (!isLive && !Number.isFinite(duration)) return;
     e.preventDefault();
     isDragging = true;
-    didDragMove = false;
 
     const handleDragMove = (moveEvent: MouseEvent) => {
-      didDragMove = true;
       const time = getTimeFromPosition(moveEvent.clientX);
       if (commitOnRelease) {
         dragTime = time;

@@ -3,7 +3,7 @@
 
   import { onMount, onDestroy } from "svelte";
   import { goto } from "$app/navigation";
-  import { resolve } from "$app/paths";
+  import { asset, resolve } from "$app/paths";
   import { auth } from "$lib/stores/auth";
   import { getIconComponent } from "$lib/iconUtils";
   import { RadioGroup, RadioGroupItem } from "$lib/components/ui/radio-group";
@@ -200,7 +200,11 @@
     <div class="flex flex-col items-center lg:items-start text-center lg:text-left">
       <!-- Logo + Title inline -->
       <div class="flex items-center gap-4 mb-6">
-        <img src="/frameworks-dark-logomark-transparent.svg" alt="FrameWorks" class="h-16 w-16" />
+        <img
+          src={asset("/frameworks-dark-logomark-transparent.svg")}
+          alt="FrameWorks"
+          class="h-16 w-16"
+        />
         <div class="text-left">
           <h1 class="text-3xl sm:text-4xl font-bold gradient-text">Join FrameWorks</h1>
           <p class="text-muted-foreground">Create your account to start streaming</p>
@@ -333,7 +337,7 @@
                 turnstileToken = "";
                 human_check = defaultHumanCheck;
               }}
-              on:expire={() => {
+              on:expired={() => {
                 turnstileToken = "";
                 human_check = defaultHumanCheck;
               }}

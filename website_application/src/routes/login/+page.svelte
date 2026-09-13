@@ -2,7 +2,7 @@
   import { preventDefault } from "svelte/legacy";
   import { onMount } from "svelte";
   import { goto } from "$app/navigation";
-  import { resolve } from "$app/paths";
+  import { asset, resolve } from "$app/paths";
   import { isEmailVerificationRequired } from "$lib/auth/errors";
   import { safeReturnTo } from "$lib/auth/returnTo";
   import { auth } from "$lib/stores/auth";
@@ -154,7 +154,11 @@
     <div class="flex flex-col items-center lg:items-start text-center lg:text-left">
       <!-- Logo + Title inline -->
       <div class="flex items-center gap-4 mb-8">
-        <img src="/frameworks-dark-logomark-transparent.svg" alt="FrameWorks" class="h-16 w-16" />
+        <img
+          src={asset("/frameworks-dark-logomark-transparent.svg")}
+          alt="FrameWorks"
+          class="h-16 w-16"
+        />
         <div class="text-left">
           <h1 class="text-3xl sm:text-4xl font-bold gradient-text">Welcome Back</h1>
           <p class="text-muted-foreground">Sign in to your FrameWorks account</p>
@@ -299,7 +303,7 @@
               on:error={() => {
                 turnstileToken = "";
               }}
-              on:expire={() => {
+              on:expired={() => {
                 turnstileToken = "";
               }}
             />

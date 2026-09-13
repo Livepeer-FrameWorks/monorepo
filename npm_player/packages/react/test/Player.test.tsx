@@ -92,6 +92,19 @@ describe("Player", () => {
     mocks.usePlayerController.mockReturnValue(makePlayerHook());
   });
 
+  it("does not cover a terminal placement error with endpoint waiting", () => {
+    const hook = makePlayerHook();
+    Object.assign(hook.state, {
+      state: "error",
+      error: "Playback is unavailable",
+      hasPlaybackStarted: false,
+    });
+    mocks.usePlayerController.mockReturnValue(hook);
+    render(<Player contentId="stopped-dvr" contentType="dvr" />);
+    expect(screen.getByRole("alert").textContent).toContain("Playback is unavailable");
+    expect(screen.queryByText("Waiting for stream...")).toBeNull();
+  });
+
   it("does not render wrapper controls when controls are disabled", () => {
     render(<Player contentId="stream-1" contentType="live" options={{ controls: false }} />);
 

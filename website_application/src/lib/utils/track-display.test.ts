@@ -51,6 +51,13 @@ describe("track-display helpers", () => {
     expect(trackFps({ fpks: 24000 })).toBe(24);
   });
 
+  it("converts Mist bytes per second without rescaling normalized bitrates", () => {
+    expect(formatTrackBitrate({ codec: "H264", bps: 25_000 })).toBe("200 kbps");
+    expect(formatTrackBitrate({ codec: "H264", bitrateBps: 200_000, bps: 25_000 })).toBe(
+      "200 kbps"
+    );
+  });
+
   it("hides misleading source video trickle bitrates", () => {
     expect(formatTrackBitrate({ trackType: "video", codec: "H264", bitrateKbps: 4 })).toBeNull();
   });

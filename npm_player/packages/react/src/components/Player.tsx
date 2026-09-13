@@ -218,7 +218,8 @@ const PlayerInner: React.FC<PlayerProps> = ({
   // ============================================================================
   // Waiting for Endpoint (shown as overlay, not early return)
   // ============================================================================
-  const showWaitingForEndpoint = !state.endpoints?.primary && state.state !== "booting";
+  const showWaitingForEndpoint =
+    !state.endpoints?.primary && state.state !== "booting" && !displayedError;
   const waitingMessage =
     state.state === "gateway_loading" ? t("resolvingEndpoint") : t("waitingForStream");
   const streamStateMessage = state.streamState?.message;

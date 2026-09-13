@@ -132,7 +132,6 @@ export function normalizeThumbnailCueTimeline(
   }
 
   const playerWindow = playerEnd - playerStart;
-  const cueWindow = cueRange.end - cueRange.start;
   const tolerance = Math.max(1, Math.min(10, playerWindow * 0.1));
   const maxGap = options.maxLiveEdgeGapSec ?? Math.max(30, Math.min(120, playerWindow * 0.25));
   const overlapsPlayerWindow =

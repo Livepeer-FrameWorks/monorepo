@@ -24,6 +24,41 @@ function player(name: string, priority = 1): IPlayer {
 }
 
 describe("placement-backed player fallback", () => {
+  it("never invents an embedded-player source, including when forced", async () => {
+    const manager = new PlayerManager();
+    const hls = player("hls");
+    const legacy = player("mist-legacy", 99);
+    legacy.capability.mimes = ["mist/legacy"];
+    legacy.isMimeSupported = vi.fn((type) => type === "mist/legacy");
+    manager.registerPlayer(hls);
+    manager.registerPlayer(legacy);
+    const selected = info();
+    expect(
+      manager.getAllCombinations(selected).every((combo) => selected.source.includes(combo.source))
+    ).toBe(true);
+    expect(manager.selectBestPlayer(selected, { forcePlayer: "mist-legacy" })).toMatchObject({
+      player: "hls",
+      source: selected.source[0],
+    });
+    const replacement = info("https://authorized.example/replacement.m3u8");
+    const resolveFallback = vi.fn().mockResolvedValue(replacement);
+    await manager.initializePlayer(
+      { innerHTML: "" } as HTMLElement,
+      selected,
+      {},
+      { resolveFallback }
+    );
+    expect(await manager.tryPlaybackFallback()).toBe(true);
+    expect(resolveFallback).toHaveBeenCalledOnce();
+    expect(legacy.initialize).not.toHaveBeenCalled();
+    expect(hls.initialize).toHaveBeenLastCalledWith(
+      expect.anything(),
+      replacement.source[0],
+      {},
+      replacement
+    );
+  });
+
   it("keeps transient media retry on the same prepared URL without calling placement", async () => {
     const manager = new PlayerManager();
     const hls = player("hls");

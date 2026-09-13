@@ -20,7 +20,6 @@ import type {
   SetSpeedMessage,
   TracksMessage,
   RawChunk,
-  TrackInfo,
 } from "./types";
 import { parseRawChunk, formatChunkForLog } from "./RawChunkParser";
 import { ServerDelayTracker } from "../../core/mist/server-delay";

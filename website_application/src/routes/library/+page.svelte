@@ -60,6 +60,9 @@
   import { getContentDeliveryUrls } from "$lib/config";
   import SpriteThumbnail from "$lib/components/shared/SpriteThumbnail.svelte";
   import { formatBytes, formatExpiry, formatTimestamp, isExpired } from "$lib/utils/formatters.js";
+  import { formatDuration } from "$lib/utils/stream-helpers";
+  import { createCatalogRefresh } from "$lib/library/catalog-refresh";
+  import { canPlayRollingDvr } from "$lib/library/dvr-playback";
   import { resolveTimeRange, TIME_RANGE_OPTIONS } from "$lib/utils/time-range";
   import PlaybackProtocols from "$lib/components/PlaybackProtocols.svelte";
   import EmptyState from "$lib/components/EmptyState.svelte";
@@ -115,6 +118,7 @@
   // Houdini stores
   const streamsStore = new GetStreamsConnectionStore();
   const artifactsStore = new GetStorageArtifactsConnectionStore();
+  const backgroundArtifactsStore = new GetStorageArtifactsConnectionStore();
   const artifactEventsStore = new GetArtifactEventsConnectionStore();
   const artifactStatesStore = new GetArtifactStatesConnectionStore();
   const storageEventsStore = new GetStorageEventsConnectionStore();
@@ -226,8 +230,8 @@
 
   // Fetch a single page at `offset`. Server-side `search` narrows the whole account
   // scope, not just the loaded window.
-  function fetchPage(offset: number, opts?: { policy?: "NetworkOnly" }) {
-    return artifactsStore.fetch({
+  function fetchPage(offset: number, opts?: { policy?: "NetworkOnly" }, store = artifactsStore) {
+    return store.fetch({
       variables: {
         input: {
           first: PAGE_SIZE,
@@ -378,7 +382,7 @@
         // Catalog-projected metadata: description (VOD uploads) + processing-failure detail.
         description: node.description ?? null,
         errorMessage: node.errorMessage ?? null,
-        // durationSeconds is the measured length in seconds for any kind; null until finalized.
+        // Clips retain requested duration until measured; DVR/VOD may still be unknown.
         duration: node.durationSeconds ?? null,
         // Catalog size is authoritative for a registered row; the feed only fills in a size for a
         // not-yet-catalogued in-progress artifact.
@@ -625,6 +629,63 @@
 
   const unsubscribeAuth = auth.subscribe((authState) => {
     isAuthenticated = authState.isAuthenticated;
+  });
+
+  const catalogRefresh = createCatalogRefresh({
+    scope: () => {
+      const session = get(auth);
+      if (
+        !filterInitialized ||
+        !session.isAuthenticated ||
+        !session.user?.tenant_id ||
+        document.visibilityState !== "visible" ||
+        loadingMore ||
+        loading
+      )
+        return null;
+      return JSON.stringify([
+        session.user.tenant_id,
+        session.user.id,
+        requestGeneration,
+        accumulatedNodes.length,
+        typeFilter,
+        searchQuery,
+        statusFilter,
+      ]);
+    },
+    count: () => accumulatedNodes.length,
+    pageSize: PAGE_SIZE,
+    key: (node: StorageArtifactNode) => node.id,
+    fetchPage: async (offset) => {
+      const result = await fetchPage(offset, { policy: "NetworkOnly" }, backgroundArtifactsStore);
+      const connection = result.data?.storageArtifactsConnection;
+      if (resultErrors(result) || !connection) throw new Error("Catalog refresh failed");
+      return connection;
+    },
+    apply: (nodes: StorageArtifactNode[], connection) => {
+      accumulatedNodes = nodes;
+      connectionMeta = {
+        hasNextPage: connection.hasNextPage,
+        totalCount: connection.totalCount,
+        kindCounts: connection.kindCounts,
+      };
+      catalogLoaded = true;
+      loadError = null;
+    },
+    onError: () => {
+      loadError =
+        "Library refresh failed. Showing the last successful results; retrying automatically.";
+    },
+  });
+
+  // Lifecycle delivery may precede catalog projection. Poll authoritative rows while
+  // visible so completion metadata converges even after a missed subscription event.
+  onMount(() => {
+    const timer = setInterval(() => void catalogRefresh.run(), 10_000);
+    return () => {
+      clearInterval(timer);
+      catalogRefresh.dispose();
+    };
   });
 
   onMount(async () => {
@@ -1215,13 +1276,6 @@
   }
 
   // Helpers
-  function formatDuration(seconds: number | null): string {
-    if (!seconds) return "N/A";
-    const minutes = Math.floor(seconds / 60);
-    const remainingSeconds = seconds % 60;
-    return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
-  }
-
   function formatDate(dateString: string | null): string {
     if (!dateString) return "N/A";
     return new Date(dateString).toLocaleDateString();
@@ -1369,7 +1423,7 @@
 
   function hasRollingDvrMedia(artifact: UnifiedArtifact): boolean {
     return (
-      artifact.segmentCount != null ||
+      (artifact.segmentCount != null && artifact.segmentCount > 0) ||
       (artifact.sizeBytes != null && artifact.sizeBytes > 0) ||
       hasPlayableStorage(artifact)
     );
@@ -1388,35 +1442,21 @@
 
     const status = artifact.status.toLowerCase();
     if (failedArtifactStages.has(status)) return false;
-    if (artifact.type === "dvr" && (status === "started" || status === "recording")) {
-      return hasRollingDvrMedia(artifact);
+    if (artifact.type === "dvr") {
+      return canPlayRollingDvr(status, hasRollingDvrMedia(artifact));
     }
     if (blockedArtifactStages.has(status) && !hasPlayableStorage(artifact)) return false;
     if (playableArtifactStages.has(status)) return true;
     return hasPlayableStorage(artifact);
   }
 
-  function dvrViewUrl(artifact: UnifiedArtifact) {
-    const id = artifact.playbackId || artifact.hash;
-    if (!id) return null;
-    const params = new URLSearchParams({ type: "dvr", id });
-    return `/view?${params.toString()}`;
-  }
-
   function playArtifact(artifact: UnifiedArtifact) {
     if (!canPlayArtifact(artifact)) return;
-    if (artifact.type === "dvr") {
-      const url = dvrViewUrl(artifact);
-      if (!url) return;
-      // eslint-disable-next-line svelte/no-navigation-without-resolve
-      goto(url);
-      return;
-    }
-    if (artifact.playbackId) {
-      const url = `/view?id=${artifact.playbackId}`;
-      // eslint-disable-next-line svelte/no-navigation-without-resolve
-      if (url) goto(url);
-    }
+    const id = artifact.playbackId || (artifact.type === "dvr" ? artifact.hash : null);
+    if (!id) return;
+    const type = artifact.type === "clips" ? "clip" : artifact.type;
+    const params = new URLSearchParams({ type, id });
+    goto(resolve(`/view?${params}`));
   }
 
   function handleTypeChange(type: ArtifactType) {
@@ -1427,7 +1467,7 @@
     } else {
       url.searchParams.set("type", type);
     }
-    goto(resolve(`${url.pathname}${url.search}` as "/"), { replaceState: true, noScroll: true });
+    goto(resolve(`/library?${url.searchParams}`), { replaceState: true, noScroll: true });
   }
 
   // Icons
@@ -1837,9 +1877,21 @@
                                   </Button>
                                 {/if}
                                 {#if !canPlayArtifact(artifact)}
-                                  <span class="text-[10px] text-warning animate-pulse px-2"
-                                    >Processing...</span
-                                  >
+                                  {#if artifact.type === "dvr" && playableArtifactStages.has(artifact.status.toLowerCase())}
+                                    <span
+                                      class="text-[10px] text-muted-foreground px-2"
+                                      title="This rolling window has closed. Archived chapters are listed separately as VOD."
+                                      >Rolling window closed</span
+                                    >
+                                  {:else if failedArtifactStages.has(artifact.status.toLowerCase())}
+                                    <span class="text-[10px] text-muted-foreground px-2"
+                                      >Unavailable</span
+                                    >
+                                  {:else}
+                                    <span class="text-[10px] text-warning animate-pulse px-2"
+                                      >Processing...</span
+                                    >
+                                  {/if}
                                 {/if}
                                 <Button
                                   variant="ghost"

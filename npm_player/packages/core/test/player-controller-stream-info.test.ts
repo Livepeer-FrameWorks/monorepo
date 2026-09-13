@@ -226,6 +226,26 @@ describe("PlayerController Mist edge hydration", () => {
 });
 
 describe("buildQualityLevelsFromMistTracks", () => {
+  it("preserves normalized bitrates without converting them twice", () => {
+    const [quality] = buildQualityLevelsFromMistTracks({
+      main: { type: "video", bitrate: 4_000_000, bps: 500_000 },
+    });
+    expect(quality.bitrate).toBe(4_000_000);
+    expect(quality.label).toBe("4.0 Mbps");
+  });
+
+  it("keeps Mist byte rates for selection and converts display metadata to bits", () => {
+    const controller = new PlayerController({
+      contentId: "live-bitrate",
+      playerManager: { on: vi.fn(() => () => {}) } as any,
+    });
+    const state = controller as any;
+    const tracks = { main: { type: "video", codec: "H264", idx: 1, bps: 25_000 } };
+    expect(state.parseMistTracks(tracks)[0].bps).toBe(25_000);
+    expect(state.buildMetadataTracks(tracks)[0].bitrate).toBe(200_000);
+    expect(buildQualityLevelsFromMistTracks(tracks)[0].bitrate).toBe(200_000);
+  });
+
   it("hides JPEG preview tracks when real video is available", () => {
     const qualities = buildQualityLevelsFromMistTracks({
       preview: { type: "video", codec: "JPEG", lang: "pre", width: 320, height: 180 },
@@ -236,7 +256,7 @@ describe("buildQualityLevelsFromMistTracks", () => {
         width: 1920,
         height: 1080,
         fpks: 30_000,
-        bps: 4_000_000,
+        bps: 500_000,
       },
       audio: { type: "audio", codec: "AAC" },
     });

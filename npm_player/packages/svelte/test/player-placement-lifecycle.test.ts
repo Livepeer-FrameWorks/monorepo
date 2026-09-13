@@ -38,6 +38,18 @@ afterEach(async () => {
 });
 
 describe("Svelte player placement lifecycle", () => {
+  it("shows a terminal placement error instead of waiting for an endpoint", async () => {
+    vi.spyOn(PlayerController.prototype, "attach").mockImplementation(async function () {
+      (this as any).setState("error", { error: "Playback is unavailable" });
+      (this as any).emit("error", { error: "Playback is unavailable" });
+    });
+    const view = render(Player, { contentId: "stopped-dvr", contentType: "dvr" });
+    await waitFor(() =>
+      expect(view.getByRole("alert").textContent).toContain("Playback is unavailable")
+    );
+    expect(view.queryByText("Waiting for stream...")).toBeNull();
+  });
+
   it("retains store runtime options set before attachment and across reattachment", async () => {
     vi.spyOn(PlayerController.prototype, "attach").mockResolvedValue(undefined);
     const store = createPlayerControllerStore({ contentId: "playback", viewerProtocol: "HLS" });

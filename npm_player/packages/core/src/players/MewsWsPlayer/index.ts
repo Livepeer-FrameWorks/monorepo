@@ -28,7 +28,6 @@ import { DeliveryPolicy } from "../../core/delivery/delivery-policy";
 import { DesiredBufferModel } from "../../core/delivery/desired-buffer";
 import { normalizeLiveCatchupConfig } from "../../core/delivery/live-catchup";
 import { decideDeadPointRecovery } from "../../core/mist/dead-point-recovery";
-import type { MistPlayRate } from "../../core/mist/protocol";
 import { ServerDelayTracker } from "../../core/mist/server-delay";
 import { CallbackMistTransport } from "../../core/mist/transports/callback-transport";
 import { MewsBufferedProbe } from "./BufferProbe.MewsBuffered";

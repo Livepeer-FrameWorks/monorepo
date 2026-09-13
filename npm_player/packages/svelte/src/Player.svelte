@@ -431,7 +431,7 @@
 
   // Waiting for endpoint (shown as overlay, not early return)
   let showWaitingForEndpoint = $derived(
-    !storeState.endpoints?.primary && storeState.state !== "booting"
+    !storeState.endpoints?.primary && storeState.state !== "booting" && !displayedError
   );
 
   let waitingMessage = $derived(

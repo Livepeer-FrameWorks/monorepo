@@ -1,4 +1,4 @@
-import type { MistCommand } from "../protocol";
+import type { MistCommand, MistEvent } from "../protocol";
 import type {
   MistControlTransport,
   MistOnceHandle,
@@ -63,9 +63,7 @@ export class MistSignalingTransport implements MistControlTransport<MistCommand>
     return this.base.addSendListener(l);
   }
 
-  once<T extends import("../protocol").MistEvent["type"]>(
-    type: T
-  ): MistOnceHandle<Extract<import("../protocol").MistEvent, { type: T }>> {
+  once<T extends MistEvent["type"]>(type: T): MistOnceHandle<Extract<MistEvent, { type: T }>> {
     return this.base.once(type);
   }
 }

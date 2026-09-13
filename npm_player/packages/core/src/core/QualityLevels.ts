@@ -60,7 +60,7 @@ function buildQualityLevel(id: string, track: MistQualityTrackInput): MistQualit
     label: formatMistQualityLabel(track),
     width: track.width,
     height: track.height,
-    bitrate: track.bitrate ?? track.bps,
+    bitrate: trackBitrate(track),
   };
 }
 
@@ -79,13 +79,18 @@ function formatMistQualityLabel(track: MistQualityTrackInput): string {
         : "";
   const fps = getTrackFps(track);
   const fpsLabel = fps ? `${formatFps(fps)}fps` : "";
-  const bitrate = track.bitrate ?? track.bps;
+  const bitrate = trackBitrate(track);
   const bitrateLabel = formatBitrate(bitrate);
   const resolutionAndFps =
     resolution && fpsLabel ? `${resolution}@${fpsLabel}` : resolution || fpsLabel;
   const parts = [resolutionAndFps, bitrateLabel].filter(Boolean);
   if (parts.length) return parts.join(" ");
   return track.codec ?? String(track.idx ?? "Unknown");
+}
+
+function trackBitrate(track: MistQualityTrackInput): number | undefined {
+  // Mist bps is bytes/second; normalized bitrate and ABR use bits/second.
+  return track.bitrate ?? (typeof track.bps === "number" ? track.bps * 8 : undefined);
 }
 
 function getTrackFps(track: MistQualityTrackInput): number | undefined {

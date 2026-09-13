@@ -1,4 +1,5 @@
 import { browser } from "$app/environment";
+import { asset } from "$app/paths";
 import {
   THEME_PALETTES,
   type ThemeId,
@@ -242,14 +243,14 @@ function createThemeStore() {
 
     get logoPath(): string {
       return mode === "dark"
-        ? "/frameworks-dark-horizontal-lockup-transparent.svg"
-        : "/frameworks-light-horizontal-lockup.svg";
+        ? asset("/frameworks-dark-horizontal-lockup-transparent.svg")
+        : asset("/frameworks-light-horizontal-lockup.svg");
     },
 
     get logoMarkPath(): string {
       return mode === "dark"
-        ? "/frameworks-dark-logomark-transparent.svg"
-        : "/frameworks-light-logomark.svg";
+        ? asset("/frameworks-dark-logomark-transparent.svg")
+        : asset("/frameworks-light-logomark.svg");
     },
   };
 }

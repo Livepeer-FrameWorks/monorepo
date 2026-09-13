@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { PlayerController } from "../src/core/PlayerController";
 import { GatewayClient } from "../src/core/GatewayClient";
 import { StreamStateClient } from "../src/core/StreamStateClient";
 import { PlayerManager } from "../src/core/PlayerManager";
+import { ensurePlayersRegistered } from "../src/core/PlayerRegistry";
 import type { IPlayer } from "../src/core/PlayerInterface";
 
 const selectedURL = "https://us.example/hls/live/index.m3u8?receipt=selected";
@@ -58,7 +59,54 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+afterAll(async () => {
+  await ensurePlayersRegistered();
+});
+
 describe("controller format re-resolution", () => {
+  it("loads an authorized HLS fallback when only WebRTC was initially registered", async () => {
+    const manager = new PlayerManager();
+    const controller = new PlayerController({
+      contentId: "playback-id",
+      contentType: "live",
+      playerManager: manager,
+    });
+    const state = controller as any;
+    state.container = document.createElement("div");
+    state.gatewayClient = {};
+    state.attemptedViewerProtocols.add("webrtc");
+    state.startStreamStatePolling = vi.fn();
+    state.resolveFromGateway = vi.fn(async () => {
+      state.endpoints = { primary: { protocol: "hls", url: selectedURL } };
+      state.streamInfo = {
+        type: "live",
+        source: [{ type: "html5/application/vnd.apple.mpegurl", url: selectedURL }],
+        meta: { tracks: [{ type: "video", codec: "H264" }] },
+      };
+    });
+    manager.registerPlayer({
+      capability: { name: "RTC", shortname: "test-rtc", priority: 1, mimes: ["webrtc"] },
+      destroy: vi.fn(),
+    } as unknown as IPlayer);
+
+    expect(manager.getRegisteredPlayers()).toHaveLength(1);
+    const replacement = await state.resolveNextViewerFormat();
+
+    expect(state.resolveFromGateway).toHaveBeenCalledWith(
+      expect.any(String),
+      "playback-id",
+      undefined,
+      "HLS"
+    );
+    expect(replacement.source).toEqual([
+      { type: "html5/application/vnd.apple.mpegurl", url: selectedURL },
+    ]);
+    expect(manager.getRegisteredPlayers().map((player) => player.capability.shortname)).toEqual(
+      expect.arrayContaining(["native", "hlsjs", "videojs"])
+    );
+    await manager.destroy();
+  });
+
   it("initially requests a header-capable transport when viewer authentication uses headers", async () => {
     const { state } = makeController();
     state.config.playbackAuth = { token: "viewer-jwt", transport: "header" };

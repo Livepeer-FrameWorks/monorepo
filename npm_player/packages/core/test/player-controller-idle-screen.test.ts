@@ -13,6 +13,16 @@ function makeController(): PlayerController {
 }
 
 describe("PlayerController idle screen", () => {
+  it.each(["live", "dvr", "vod", "clip"] as const)(
+    "does not hide a terminal %s resolution error behind the idle screen",
+    (contentType) => {
+      const controller = makeController();
+      (controller as any).config.contentType = contentType;
+      (controller as any).state = "error";
+      expect(controller.shouldShowIdleScreen()).toBe(false);
+    }
+  );
+
   it("keeps live idle visible while playback has not started and stream state is offline", () => {
     const controller = makeController();
     (controller as any).streamState = { isOnline: false, status: "OFFLINE" };

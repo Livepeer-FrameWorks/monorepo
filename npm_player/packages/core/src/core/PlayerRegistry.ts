@@ -178,7 +178,10 @@ function getLoadedSet(manager: PlayerManager): Set<string> {
  * Already-loaded players are skipped. Safe to call multiple times with
  * different MIME types — new players are added incrementally.
  */
-async function loadMatchingPlayers(manager: PlayerManager, sourceMimes: string[]): Promise<void> {
+export async function loadMatchingPlayers(
+  manager: PlayerManager,
+  sourceMimes: string[]
+): Promise<void> {
   const loaded = getLoadedSet(manager);
 
   const toLoad = PLAYER_ENTRIES.filter((entry) => {

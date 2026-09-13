@@ -74,8 +74,10 @@ export function trackFps(track: TrackLike | null | undefined): number | null {
 export function trackBitrateKbps(track: TrackLike | null | undefined): number | null {
   const kbps = firstNumber(track?.bitrateKbps, track?.bitrate_kbps, track?.kbits);
   if (kbps !== null) return Math.round(kbps);
-  const bps = firstNumber(track?.bitrateBps, track?.bitrate_bps, track?.bps);
-  return bps === null ? null : Math.round(bps / 1000);
+  const bitsPerSecond = firstNumber(track?.bitrateBps, track?.bitrate_bps);
+  if (bitsPerSecond !== null) return Math.round(bitsPerSecond / 1000);
+  const mistBytesPerSecond = firstNumber(track?.bps);
+  return mistBytesPerSecond === null ? null : Math.round((mistBytesPerSecond * 8) / 1000);
 }
 
 export function trackResolution(track: TrackLike | null | undefined): string | null {
