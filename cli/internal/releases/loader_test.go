@@ -16,6 +16,9 @@ func TestShippedCatalogHasDatabaseOwnershipAndReleaseFloor(t *testing.T) {
 	if got := MinCLIVersionFor("v0.3.1"); got != "v0.3.1" {
 		t.Errorf("MinCLIVersionFor(v0.3.1) = %q, want v0.3.1", got)
 	}
+	if got := MinCLIVersionFor("v0.3.2"); got != "v0.3.2" {
+		t.Errorf("MinCLIVersionFor(v0.3.2) = %q, want v0.3.2", got)
+	}
 	if got := SchemaMigrationFloor(); got != "v0.3.0" {
 		t.Errorf("SchemaMigrationFloor() = %q, want v0.3.0", got)
 	}
@@ -143,6 +146,9 @@ func TestReleasesBelow_ShippedCatalog(t *testing.T) {
 	}
 	if got := ReleasesBelow("v0.3.1"); len(got) != 1 || got[0].Version != "v0.3.0" {
 		t.Fatalf("v0.3.1 must include v0.3.0 as its prior release; got %+v", got)
+	}
+	if got := ReleasesBelow("v0.3.2"); len(got) != 2 || got[0].Version != "v0.3.0" || got[1].Version != "v0.3.1" {
+		t.Fatalf("v0.3.2 must include v0.3.0 and v0.3.1 as prior releases; got %+v", got)
 	}
 }
 
