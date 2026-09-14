@@ -425,7 +425,7 @@ func TestReadyLocalIngestAuthorityRejectsMismatchedProjectedCredential(t *testin
 	}
 }
 
-func TestReadyLocalIngestUsesPullModeRejectionContract(t *testing.T) {
+func TestReadyLocalIngestUsesNonPushModeRejectionContract(t *testing.T) {
 	p, mock, closeDB, _, objectBytes := localAuthorityFixture(t)
 	defer closeDB()
 	var object mediaauthoritypb.MediaObjectAuthority
@@ -444,10 +444,10 @@ func TestReadyLocalIngestUsesPullModeRejectionContract(t *testing.T) {
 
 	response, _, found, err := p.resolveReadyLocalIngest(context.Background(), "sk_local")
 	if err != nil || !found || response == nil || response.GetValid() {
-		t.Fatalf("pull-mode local response=%+v found=%v err=%v", response, found, err)
+		t.Fatalf("non-push local response=%+v found=%v err=%v", response, found, err)
 	}
 	if response.GetRejectionReason() != commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_NON_PUSH_MODE {
-		t.Fatalf("rejection reason = %v, want pull mode", response.GetRejectionReason())
+		t.Fatalf("rejection reason = %v, want non-push mode", response.GetRejectionReason())
 	}
 }
 

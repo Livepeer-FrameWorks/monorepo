@@ -679,6 +679,27 @@ func TestResolveFoghornForStreamKeyQueriesByStreamKey(t *testing.T) {
 	}
 }
 
+func TestResolveFoghornForStreamKeyOnlyRoutesPushStreams(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("failed to create sqlmock: %v", err)
+	}
+	defer db.Close()
+
+	server := &CommodoreServer{db: db, logger: logrus.New()}
+	mock.ExpectQuery(`WHERE stream_key = \$1 AND ingest_mode = 'push'`).
+		WithArgs("managed-key", int64(activeIngestLease.Seconds())).
+		WillReturnError(sql.ErrNoRows)
+
+	_, _, err = server.resolveFoghornForStreamKey(context.Background(), "managed-key")
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("non-push key route = %v, want NotFound", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet SQL expectations: %v", err)
+	}
+}
+
 func TestResolveFoghornForStreamKeyIgnoresExpiredIngestLease(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

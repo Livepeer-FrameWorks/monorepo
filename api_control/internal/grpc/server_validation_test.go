@@ -489,6 +489,24 @@ func TestResolveStreamContext(t *testing.T) {
 			},
 		},
 		{
+			name: "managed_stream_key_is_not_publish_intent",
+			req:  &commodorepb.ResolveStreamContextRequest{Identifier: &commodorepb.ResolveStreamContextRequest_StreamKey{StreamKey: "managed-key"}},
+			setupMock: func(mock sqlmock.Sqlmock) {
+				rows := sqlmock.NewRows(cols).
+					AddRow("stream-id", "user-id", "tenant-id", "managed", true, true, "pk_managed", "mist_native", false, nil, false)
+				mock.ExpectQuery(`ResolveStreamContextByIdentifier`).
+					WithArgs(int64(activeIngestLease.Seconds()), "stream_key", "managed-key").WillReturnRows(rows)
+			},
+			assert: func(t *testing.T, resp *commodorepb.ResolveStreamContextResponse) {
+				if resp.Admitted {
+					t.Fatal("expected managed source to reject key-based publishing")
+				}
+				if resp.RejectionReason != commodorepb.StreamKeyRejectionReason_STREAM_KEY_REJECTION_NON_PUSH_MODE {
+					t.Fatalf("unexpected rejection reason: %v", resp.RejectionReason)
+				}
+			},
+		},
+		{
 			name: "stream_key_not_found",
 			req:  &commodorepb.ResolveStreamContextRequest{Identifier: &commodorepb.ResolveStreamContextRequest_StreamKey{StreamKey: "sk_bogus"}},
 			setupMock: func(mock sqlmock.Sqlmock) {
