@@ -20,31 +20,17 @@
   check_mode: false
   changed_when: false
 
-- name: Recover from stale partial yb-master bootstrap
+- name: Refuse automatic recovery of partial yb-master state
+  ansible.builtin.fail:
+    msg: >-
+      yb-master has tablet metadata but no consensus metadata and the cluster
+      bootstrap marker is absent. Refusing to delete database state or generate
+      a replacement master identity automatically. Inspect the master logs and
+      Raft membership, then repair or replace this master explicitly.
   when:
     - not yugabyte_bootstrap_sentinel_stat.stat.exists
     - yugabyte_master_tablet_meta_stat.stat.exists
     - not yugabyte_master_consensus_meta_stat.stat.exists
-  block:
-    - name: Stop yb-tserver before scrubbing stale master state
-      ansible.builtin.systemd:
-        name: "{{ yugabyte_tserver_service }}"
-        state: stopped
-      failed_when: false
-
-    - name: Stop yb-master before scrubbing stale master state
-      ansible.builtin.systemd:
-        name: "{{ yugabyte_master_service }}"
-        state: stopped
-      failed_when: false
-
-    - name: Remove stale master metadata directories
-      ansible.builtin.file:
-        path: "{{ item }}"
-        state: absent
-      loop:
-        - "{{ yugabyte_master_root_dir }}"
-        - "{{ yugabyte_pg_data_dir }}"
 
 - name: Start and verify yb-master
   block:
