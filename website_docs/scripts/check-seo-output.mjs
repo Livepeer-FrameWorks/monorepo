@@ -52,6 +52,13 @@ if (!existsSync(serveConfigPath)) {
   }
 }
 
+const healthPath = join(outputDir, "health", "index.html");
+if (!existsSync(healthPath)) {
+  failures.push("missing dist/health/index.html");
+} else if (readFileSync(healthPath, "utf8").trim() !== "ok") {
+  failures.push("dist/health/index.html must contain only the health marker");
+}
+
 if (failures.length > 0) {
   console.error("Docs SEO output check failed:");
   for (const failure of failures) console.error(`- ${failure}`);

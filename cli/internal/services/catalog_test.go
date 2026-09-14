@@ -49,3 +49,22 @@ func TestPeriscopeMeteringIsFirstClassService(t *testing.T) {
 		t.Fatalf("GetProvisioner(periscope-metering): %v", err)
 	}
 }
+
+func TestLogbookHealthMatchesRuntimeRegistry(t *testing.T) {
+	catalog, err := LoadCatalog()
+	if err != nil {
+		t.Fatalf("failed to load catalog: %v", err)
+	}
+
+	spec, ok := catalog.Services["logbook"]
+	if !ok {
+		t.Fatal("logbook missing from service catalog")
+	}
+	definition, ok := servicedefs.Lookup("logbook")
+	if !ok {
+		t.Fatal("logbook missing from service registry")
+	}
+	if spec.Health.Protocol != definition.HealthProtocol || spec.Health.Path != definition.HealthPath || spec.Health.Port != definition.DefaultPort {
+		t.Fatalf("catalog health = %+v, registry = %s %s on %d", spec.Health, definition.HealthProtocol, definition.HealthPath, definition.DefaultPort)
+	}
+}

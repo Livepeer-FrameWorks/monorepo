@@ -58,6 +58,7 @@ jobs:
               - '**/*.js'
               - '**/*.json'
               - 'pnpm-lock.yaml'
+              - 'scripts/test-logbook-image-health.sh'
               - 'website_docs/**'
             registry:
               - 'docs/platform-features.yaml'
@@ -368,6 +369,8 @@ jobs:
         run: pnpm build
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+      - name: Verify Logbook image health contract
+        run: make test-logbook-image-health VERSION=ci
 
   feature-registry:
     name: Feature registry
