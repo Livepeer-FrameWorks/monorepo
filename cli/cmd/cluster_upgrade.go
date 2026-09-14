@@ -92,7 +92,8 @@ and required data migrations must follow the target release notes.`,
 			if all {
 				return runUpgradeAll(cmd, rc, version, dryRun, skipValidation, yes, noRollback, skipMigrationCheck, skipDataMigrationCheck)
 			}
-			return runUpgrade(cmd, rc, args[0], version, dryRun, skipValidation, yes, noRollback, skipMigrationCheck, skipDataMigrationCheck, false)
+			_, err = runUpgrade(cmd, rc, args[0], version, dryRun, skipValidation, yes, noRollback, skipMigrationCheck, skipDataMigrationCheck, false)
+			return err
 		},
 	}
 
@@ -322,7 +323,26 @@ func preflightReleaseTransitionBlockers(manifest *inventory.Manifest, platformVe
 }
 
 // runUpgrade executes the upgrade command against an already-resolved manifest.
-func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version string, dryRun, skipValidation, yes, noRollback, skipMigrationCheck, skipDataMigrationCheck, withinRelease bool) error {
+type upgradeResult struct {
+	changed   bool
+	installed bool
+}
+
+func classifyUpgradeFirstInstall(state *detect.ServiceState, withinRelease bool, serviceName, host string) (bool, error) {
+	if state == nil {
+		return false, fmt.Errorf("service %s detection returned no state for %s", serviceName, host)
+	}
+	if state.Exists {
+		return false, nil
+	}
+	if !withinRelease {
+		return false, fmt.Errorf("service %s does not exist on %s (cannot upgrade non-existent service; use `cluster release apply` to reconcile a release that introduces or relocates it)", serviceName, host)
+	}
+	return true, nil
+}
+
+func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version string, dryRun, skipValidation, yes, noRollback, skipMigrationCheck, skipDataMigrationCheck, withinRelease bool) (upgradeResult, error) {
+	var result upgradeResult
 	manifest := rc.Manifest
 	manifestPath := rc.ManifestPath
 	var err error
@@ -333,17 +353,17 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 	if svcCfg, ok := manifest.Services[serviceName]; ok {
 		deployName, err = resolveDeployName(serviceName, svcCfg)
 		if err != nil {
-			return err
+			return result, err
 		}
 	} else if ifaceCfg, ok := manifest.Interfaces[serviceName]; ok {
 		deployName, err = resolveDeployName(serviceName, ifaceCfg)
 		if err != nil {
-			return err
+			return result, err
 		}
 	} else if obsCfg, ok := manifest.Observability[serviceName]; ok {
 		deployName, err = resolveDeployName(serviceName, obsCfg)
 		if err != nil {
-			return err
+			return result, err
 		}
 	}
 
@@ -354,10 +374,10 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 	// every replica succeeds (below).
 	hosts, found := resolveUpgradeHosts(manifest, serviceName)
 	if !found || len(hosts) == 0 {
-		return fmt.Errorf("service %s not found or not enabled in manifest", serviceName)
+		return result, fmt.Errorf("service %s not found or not enabled in manifest", serviceName)
 	}
 
-	ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Upgrading %s (%d host(s)) to version: %s", serviceName, len(hosts), version))
+	ux.Heading(cmd.OutOrStdout(), fmt.Sprintf("Reconciling %s (%d host(s)) to version: %s", serviceName, len(hosts), version))
 
 	// Scale the deadline with replica count — each host runs the full
 	// provision+health cycle sequentially.
@@ -381,13 +401,13 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 
 	gitopsManifest, err := gitops.FetchFromRepositories(gitops.FetchOptions{}, rc.ReleaseRepos, channel, resolvedVersion)
 	if err != nil {
-		return fmt.Errorf("failed to fetch gitops manifest: %w", err)
+		return result, fmt.Errorf("failed to fetch gitops manifest: %w", err)
 	}
 
 	// Fail closed BEFORE the migration gate / deploy if the FETCHED metadata says this CLI is too old or is missing a
 	// required reconciliation transition — an outdated CLI must not proceed on stale embedded knowledge.
 	if compatErr := validateFetchedReleaseCompatibility(cmd.ErrOrStderr(), gitopsManifest, unsafeCLIFloor(cmd)); compatErr != nil {
-		return compatErr
+		return result, compatErr
 	}
 
 	// Required release transitions are executed and VERIFIED only by `release apply`, which interleaves them with the
@@ -399,18 +419,18 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 	if !withinRelease {
 		transitions, tErr := selectReleaseTransitions(gitopsManifest.PlatformVersion)
 		if tErr != nil {
-			return tErr
+			return result, tErr
 		}
 		for _, t := range transitions {
 			if stringInSlice(deployName, t.BeforeServices()) {
-				return fmt.Errorf("%s (deploy %q) is gated by required release transition %q (%s), which `cluster upgrade` does not run or verify — use `frameworks cluster release apply` so the transition runs before this service deploys", serviceName, deployName, t.ID(), t.Title())
+				return result, fmt.Errorf("%s (deploy %q) is gated by required release transition %q (%s), which `cluster upgrade` does not run or verify — use `frameworks cluster release apply` so the transition runs before this service deploys", serviceName, deployName, t.ID(), t.Title())
 			}
 		}
 	}
 
 	svcInfo, err := gitopsManifest.GetServiceInfo(deployName)
 	if err != nil {
-		return fmt.Errorf("service %s not found in GitOps manifest: %w", deployName, err)
+		return result, fmt.Errorf("service %s not found in GitOps manifest: %w", deployName, err)
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "  New version: %s\n", svcInfo.Version)
 
@@ -433,11 +453,11 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 	// cross-version contract is the runtime /ready sentinel, enforced at deploy by install ordering + the sentinel gate
 	// + rollback_disabled.
 	if gateErr := runUpgradePreDeployGate(ctx, cmd, rc, sshPool, manifest, gitopsManifest.PlatformVersion, serviceName, deployName, skipMigrationCheck, skipDataMigrationCheck); gateErr != nil {
-		return gateErr
+		return result, gateErr
 	}
 	systemTenantID, tenantErr := rc.ResolveSystemTenantID(ctx)
 	if tenantErr != nil {
-		return fmt.Errorf("resolve system tenant for service configuration: %w", tenantErr)
+		return result, fmt.Errorf("resolve system tenant for service configuration: %w", tenantErr)
 	}
 	upgradeRuntimeData := map[string]any{"system_tenant_id": systemTenantID}
 
@@ -447,12 +467,12 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 		reader := bufio.NewReader(os.Stdin)
 		response, errRead := reader.ReadString('\n')
 		if errRead != nil {
-			return fmt.Errorf("failed to read confirmation: %w", errRead)
+			return result, fmt.Errorf("failed to read confirmation: %w", errRead)
 		}
 		response = strings.TrimSpace(strings.ToLower(response))
 		if response != "y" && response != "yes" {
 			fmt.Fprintln(cmd.OutOrStdout(), "Cancelled")
-			return nil
+			return result, nil
 		}
 	}
 
@@ -465,18 +485,19 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 		if len(hosts) > 1 {
 			fmt.Fprintf(cmd.OutOrStdout(), "\n--- Replica %d/%d: %s ---\n", i+1, len(hosts), host.ExternalIP)
 		}
-		upgraded, hostErr := upgradeServiceOnHost(ctx, cmd, rc, sshPool, manifest, host, serviceName, deployName, svcInfo, upgradeRuntimeData, dryRun, skipValidation, noRollback)
+		hostResult, hostErr := upgradeServiceOnHost(ctx, cmd, rc, sshPool, manifest, host, serviceName, deployName, svcInfo, upgradeRuntimeData, dryRun, skipValidation, noRollback, withinRelease)
 		if hostErr != nil {
-			return hostErr
+			return result, hostErr
 		}
-		if upgraded {
+		if hostResult.changed {
 			anyUpgraded = true
 		}
+		result.installed = result.installed || hostResult.installed
 	}
 
 	if dryRun {
 		fmt.Fprintln(cmd.OutOrStdout(), "\nDry-run complete. Use without --dry-run to execute.")
-		return nil
+		return result, nil
 	}
 
 	// Record the deployed version on the in-memory manifest for this run's remaining steps only. It is deliberately NOT
@@ -489,9 +510,10 @@ func runUpgrade(cmd *cobra.Command, rc *resolvedCluster, serviceName, version st
 	if anyUpgraded {
 		saveUpgradedVersion(manifest, serviceName, svcInfo.Version, manifestPath, cmd)
 	}
-	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("%s upgraded to %s across %d host(s)", serviceName, svcInfo.Version, len(hosts)))
+	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("%s reconciled to %s across %d host(s)", serviceName, svcInfo.Version, len(hosts)))
 
-	return nil
+	result.changed = anyUpgraded
+	return result, nil
 }
 
 // resolveUpgradeHosts returns every host an upgrade must touch for serviceName.
@@ -578,27 +600,35 @@ func resolveUpgradeHosts(manifest *inventory.Manifest, serviceName string) ([]in
 // (false when already at target or in dry-run) so the caller can decide whether
 // to advance the manifest version. GitOps fetch, the pre-deploy gate, and the
 // operator confirmation are performed once by the caller, not per host.
-func upgradeServiceOnHost(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, sshPool *ssh.Pool, manifest *inventory.Manifest, host inventory.Host, serviceName, deployName string, svcInfo *gitops.ServiceInfo, runtimeData map[string]any, dryRun, skipValidation, noRollback bool) (bool, error) {
+func upgradeServiceOnHost(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, sshPool *ssh.Pool, manifest *inventory.Manifest, host inventory.Host, serviceName, deployName string, svcInfo *gitops.ServiceInfo, runtimeData map[string]any, dryRun, skipValidation, noRollback, withinRelease bool) (upgradeResult, error) {
+	var result upgradeResult
 	// Detect current state on this replica.
 	fmt.Fprintf(cmd.OutOrStdout(), "  [detect] %s...\n", host.ExternalIP)
 	detector := detect.NewDetector(sshPool, host)
 	state, err := detector.Detect(ctx, deployName)
 	if err != nil {
-		return false, fmt.Errorf("failed to detect service on %s: %w", host.ExternalIP, err)
+		return result, fmt.Errorf("failed to detect service on %s: %w", host.ExternalIP, err)
 	}
-	if !state.Exists {
-		return false, fmt.Errorf("service %s does not exist on %s (cannot upgrade non-existent service)", serviceName, host.ExternalIP)
+	firstInstall, err := classifyUpgradeFirstInstall(state, withinRelease, serviceName, host.ExternalIP)
+	if err != nil {
+		return result, err
 	}
 
 	previousVersion := state.Version
 	previousMode := state.Mode
-	canRollback := upgradeRollbackSupported(previousVersion, previousMode)
+	canRollback := !firstInstall && upgradeRollbackSupported(previousVersion, previousMode)
 	rollbackDisabledReason := ""
-	if !canRollback {
+	if firstInstall {
+		rollbackDisabledReason = "new installation has no previous deployment"
+	} else if !canRollback {
 		rollbackDisabledReason = fmt.Sprintf("current version/mode is incomplete (version=%q mode=%q)", previousVersion, previousMode)
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "    Current: %s (mode: %s, running: %v)\n", state.Version, state.Mode, state.Running)
-	if !canRollback {
+	if firstInstall {
+		fmt.Fprintln(cmd.OutOrStdout(), "    Current: not installed")
+	} else {
+		fmt.Fprintf(cmd.OutOrStdout(), "    Current: %s (mode: %s, running: %v)\n", state.Version, state.Mode, state.Running)
+	}
+	if !firstInstall && !canRollback {
 		fmt.Fprintf(cmd.OutOrStderr(), "    WARNING: automatic rollback disabled: %s\n", rollbackDisabledReason)
 	}
 	if state.Mode == "docker" {
@@ -609,7 +639,7 @@ func upgradeServiceOnHost(ctx context.Context, cmd *cobra.Command, rc *resolvedC
 	// runs the check-diff preview).
 	if state.Version == svcInfo.Version && !dryRun {
 		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("  %s already at version %s, nothing to do", host.ExternalIP, svcInfo.Version))
-		return false, nil
+		return result, nil
 	}
 
 	// Build the same ServiceConfig the real provision flow uses — role vars
@@ -644,23 +674,23 @@ func upgradeServiceOnHost(ctx context.Context, cmd *cobra.Command, rc *resolvedC
 	manifestDir := filepath.Dir(rc.ManifestPath)
 	sharedEnv, envErr := rc.PreparedSharedEnv()
 	if envErr != nil {
-		return false, fmt.Errorf("load manifest env_files: %w", envErr)
+		return result, fmt.Errorf("load manifest env_files: %w", envErr)
 	}
 	clusterEnvs, clusterEnvsErr := rc.ClusterEnvs()
 	if clusterEnvsErr != nil {
-		return false, fmt.Errorf("load cluster env_files: %w", clusterEnvsErr)
+		return result, fmt.Errorf("load cluster env_files: %w", clusterEnvsErr)
 	}
 	config, err := buildTaskConfig(task, manifest, runtimeData, true, manifestDir, sharedEnv, clusterEnvs, rc.ReleaseRepos)
 	if err != nil {
-		return false, fmt.Errorf("build upgrade config: %w", err)
+		return result, fmt.Errorf("build upgrade config: %w", err)
 	}
 	if validateErr := validateProductionServiceEnv(manifest, serviceName, config.EnvVars); validateErr != nil {
-		return false, fmt.Errorf("upgrade target %s: %w", deployName, validateErr)
+		return result, fmt.Errorf("upgrade target %s: %w", deployName, validateErr)
 	}
 	// Foghorn's S3 descriptor env must agree with the cluster row Quartermaster persists and Chandler serves from —
 	// catch a divergent/repointed backend before deploying, not at Foghorn's crash-on-boot immutability guard.
 	if agreeErr := validateStorageBackendAgreement(manifest, serviceName, deployName, clusterID, config.EnvVars); agreeErr != nil {
-		return false, fmt.Errorf("upgrade target %s: %w", deployName, agreeErr)
+		return result, fmt.Errorf("upgrade target %s: %w", deployName, agreeErr)
 	}
 	// Use the concrete artifact version from the selected GitOps release; selectors such as "stable" are not
 	// installable service versions. The image is resolved from this version by the provisioner
@@ -671,25 +701,32 @@ func upgradeServiceOnHost(ctx context.Context, cmd *cobra.Command, rc *resolvedC
 	// image for whichever version is being deployed (forward or rollback). Interfaces still pin by digest because
 	// their config.Version is now a real version (GetServiceInfo stamps service_version / platform version).
 	config.Version = svcInfo.Version
-	config.Mode = state.Mode
+	if !firstInstall {
+		config.Mode = state.Mode
+	}
 	rc.applyReleaseMetadata(config.Metadata)
 
 	if dryRun {
-		fmt.Fprintf(cmd.OutOrStdout(), "    [DRY-RUN] Would upgrade %s from %s to %s (mode: %s)\n", host.ExternalIP, state.Version, svcInfo.Version, state.Mode)
+		if firstInstall {
+			fmt.Fprintf(cmd.OutOrStdout(), "    [DRY-RUN] Would install %s at %s (mode: %s)\n", host.ExternalIP, svcInfo.Version, config.Mode)
+			result.installed = true
+		} else {
+			fmt.Fprintf(cmd.OutOrStdout(), "    [DRY-RUN] Would upgrade %s from %s to %s (mode: %s)\n", host.ExternalIP, state.Version, svcInfo.Version, state.Mode)
+		}
 		prov, provErr := provisioner.GetProvisioner(deployName, sshPool)
 		if provErr != nil {
-			return false, fmt.Errorf("failed to get provisioner: %w", provErr)
+			return result, fmt.Errorf("failed to get provisioner: %w", provErr)
 		}
 		checker, ok := prov.(provisioner.CheckDiffer)
 		if !ok {
 			fmt.Fprintln(cmd.OutOrStdout(), "    (provisioner does not support --check --diff; preview above is the summary)")
-			return false, nil
+			return result, nil
 		}
 		fmt.Fprintln(cmd.OutOrStdout(), "    Running ansible-playbook --check --diff against the target...")
 		if checkErr := checker.CheckDiff(ctx, host, config); checkErr != nil {
-			return false, fmt.Errorf("dry-run: %w", checkErr)
+			return result, fmt.Errorf("dry-run: %w", checkErr)
 		}
-		return false, nil
+		return result, nil
 	}
 
 	// Role-backed services handle stop/restart via handlers notified on
@@ -697,17 +734,17 @@ func upgradeServiceOnHost(ctx context.Context, cmd *cobra.Command, rc *resolvedC
 	// only duplicate work the role already does.
 	prov, err := provisioner.GetProvisioner(deployName, sshPool)
 	if err != nil {
-		return false, fmt.Errorf("failed to get provisioner: %w", err)
+		return result, fmt.Errorf("failed to get provisioner: %w", err)
 	}
 
 	// DEPLOY WITHOUT validating (pull image / download binary + start). Validation is a SEPARATE step below so a
 	// readiness failure lands in the health-check rollback block rather than returning here — Provision bundles the
 	// validate tag, which would abort before rollback. Deploy is part of the Provisioner contract.
 	if err := prov.Deploy(ctx, host, config); err != nil {
-		return false, fmt.Errorf("failed to provision new version on %s: %w", host.ExternalIP, err)
+		return result, fmt.Errorf("failed to provision new version on %s: %w", host.ExternalIP, err)
 	}
 	if err := prov.Initialize(ctx, host, config); err != nil {
-		return false, fmt.Errorf("failed to initialize %s on %s: %w", serviceName, host.ExternalIP, err)
+		return result, fmt.Errorf("failed to initialize %s on %s: %w", serviceName, host.ExternalIP, err)
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "    ✓ Deployed %s\n", svcInfo.Version)
 
@@ -739,40 +776,44 @@ func upgradeServiceOnHost(ctx context.Context, cmd *cobra.Command, rc *resolvedC
 					fmt.Fprintf(cmd.OutOrStderr(), "    ✗ Rollback failed: %v\n", rollbackErr)
 					fmt.Fprintln(cmd.OutOrStderr(), "\nCRITICAL: Service may be in broken state!")
 					fmt.Fprintln(cmd.OutOrStderr(), "Manual intervention required. Check logs with: frameworks cluster logs "+serviceName)
-					return false, fmt.Errorf("upgrade failed and rollback failed on %s: %w", host.ExternalIP, rollbackErr)
+					return result, fmt.Errorf("upgrade failed and rollback failed on %s: %w", host.ExternalIP, rollbackErr)
 				}
 
 				if err := prov.Initialize(ctx, host, rollbackConfig); err != nil {
 					fmt.Fprintf(cmd.OutOrStderr(), "    ✗ Rollback initialization failed: %v\n", err)
-					return false, fmt.Errorf("upgrade failed, rollback initialization failed on %s: %w", host.ExternalIP, err)
+					return result, fmt.Errorf("upgrade failed, rollback initialization failed on %s: %w", host.ExternalIP, err)
 				}
 
 				if err := waitForHealth(ctx, func() error {
 					return prov.Validate(ctx, host, rollbackConfig)
 				}, 5*time.Second, 90*time.Second); err != nil {
 					fmt.Fprintf(cmd.OutOrStderr(), "    ✗ Rollback health check failed: %v\n", err)
-					return false, fmt.Errorf("upgrade failed, rollback health check failed on %s: %w", host.ExternalIP, err)
+					return result, fmt.Errorf("upgrade failed, rollback health check failed on %s: %w", host.ExternalIP, err)
 				}
 
 				fmt.Fprintf(cmd.OutOrStdout(), "    ✓ Rolled back to %s\n", previousVersion)
-				return false, fmt.Errorf("upgrade failed on %s, rolled back to %s", host.ExternalIP, previousVersion)
+				return result, fmt.Errorf("upgrade failed on %s, rolled back to %s", host.ExternalIP, previousVersion)
 			}
 			if !noRollback && !canRollback {
 				fmt.Fprintln(cmd.OutOrStderr(), "\nWARNING: Service upgraded but health check failed and automatic rollback is unavailable.")
 				fmt.Fprintf(cmd.OutOrStderr(), "Reason: %s\n", rollbackDisabledReason)
 				fmt.Fprintln(cmd.OutOrStderr(), "Recover manually: redeploy the previous version or clean-redeploy this service, then check logs with: frameworks cluster logs "+serviceName)
-				return false, fmt.Errorf("health validation failed on %s; automatic rollback unavailable (%s)", host.ExternalIP, rollbackDisabledReason)
+				return result, fmt.Errorf("health validation failed on %s; automatic rollback unavailable (%s)", host.ExternalIP, rollbackDisabledReason)
 			}
 
 			fmt.Fprintln(cmd.OutOrStderr(), "\nWARNING: Service upgraded but health check failed!")
 			fmt.Fprintln(cmd.OutOrStderr(), "Check service logs with: frameworks cluster logs "+serviceName)
-			return false, fmt.Errorf("health validation failed on %s", host.ExternalIP)
+			return result, fmt.Errorf("health validation failed on %s", host.ExternalIP)
 		}
 		fmt.Fprintf(cmd.OutOrStdout(), "    ✓ Healthy\n")
 	}
 
-	ux.Success(cmd.OutOrStdout(), fmt.Sprintf("  %s upgraded from %s to %s", host.ExternalIP, previousVersion, svcInfo.Version))
-	return true, nil
+	if firstInstall {
+		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("  %s installed at %s", host.ExternalIP, svcInfo.Version))
+	} else {
+		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("  %s upgraded from %s to %s", host.ExternalIP, previousVersion, svcInfo.Version))
+	}
+	return upgradeResult{changed: true, installed: firstInstall}, nil
 }
 
 // saveUpgradedVersion records the deployed version on the IN-MEMORY manifest only, for the rest of this run's steps. It
@@ -879,7 +920,7 @@ func runUpgradeAll(cmd *cobra.Command, rc *resolvedCluster, version string, dryR
 	var succeeded, failed []string
 	for i, svc := range services {
 		fmt.Fprintf(cmd.OutOrStdout(), "\n[%d/%d] Upgrading %s...\n", i+1, len(services), svc)
-		if err := runUpgrade(cmd, rc, svc, version, dryRun, skipValidation, true, noRollback, skipMigrationCheck, skipDataMigrationCheck, false); err != nil {
+		if _, err := runUpgrade(cmd, rc, svc, version, dryRun, skipValidation, true, noRollback, skipMigrationCheck, skipDataMigrationCheck, false); err != nil {
 			fmt.Fprintf(cmd.OutOrStderr(), "  ✗ %s failed: %v\n", svc, err)
 			failed = append(failed, svc)
 			fmt.Fprintf(cmd.OutOrStderr(), "\nStopping upgrade sequence. Succeeded: %v, Failed: %v, Remaining: %v\n",

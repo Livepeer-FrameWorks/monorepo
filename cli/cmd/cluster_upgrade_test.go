@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/orchestrator"
 )
@@ -215,5 +216,22 @@ func TestUpgradeRollbackSupported(t *testing.T) {
 				t.Fatalf("upgradeRollbackSupported(%q,%q)=%v, want %v", tt.version, tt.mode, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestClassifyUpgradeFirstInstall(t *testing.T) {
+	t.Parallel()
+
+	if first, err := classifyUpgradeFirstInstall(&detect.ServiceState{Exists: true}, false, "svc", "host-a"); err != nil || first {
+		t.Fatalf("existing service classified as first install: first=%v err=%v", first, err)
+	}
+	if _, err := classifyUpgradeFirstInstall(&detect.ServiceState{Exists: false}, false, "svc", "host-a"); err == nil || !strings.Contains(err.Error(), "cluster release apply") {
+		t.Fatalf("direct upgrade must reject a missing service with release remediation: %v", err)
+	}
+	if first, err := classifyUpgradeFirstInstall(&detect.ServiceState{Exists: false}, true, "svc", "host-a"); err != nil || !first {
+		t.Fatalf("release must classify a missing desired service as first install: first=%v err=%v", first, err)
+	}
+	if _, err := classifyUpgradeFirstInstall(nil, true, "svc", "host-a"); err == nil {
+		t.Fatal("nil detector state must fail closed")
 	}
 }

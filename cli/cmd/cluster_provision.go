@@ -2461,33 +2461,37 @@ func reconcileRemovedServicePlacements(ctx context.Context, cmd *cobra.Command, 
 	defer client.Close()
 
 	cleanup := func(cleanupCtx context.Context, placement removedServicePlacement) error {
-		host, ok := manifest.GetHost(placement.nodeID)
-		if !ok {
-			return fmt.Errorf("%s stale instance %s is on unknown host %q", placement.serviceName, placement.instance.GetId(), placement.nodeID)
-		}
-		prov, provErr := provisioner.GetProvisioner(placement.deployName, sshPool)
-		if provErr != nil {
-			return provErr
-		}
-		for _, mode := range placement.cleanupModes {
-			mode = strings.TrimSpace(mode)
-			if mode == "" {
-				continue
-			}
-			config := provisioner.ServiceConfig{
-				Mode:       mode,
-				DeployName: placement.deployName,
-				Port:       placement.svc.Port,
-				Metadata:   map[string]any{"_cleanup_only": true},
-			}
-			if err := prov.Cleanup(cleanupCtx, host, config); err != nil {
-				return err
-			}
-		}
-		return nil
+		return cleanupRemovedServicePlacement(cleanupCtx, manifest, sshPool, placement)
 	}
 
 	return reconcileRemovedServicePlacementsWithClient(ctx, cmd.OutOrStdout(), manifest, phase, client, cleanup)
+}
+
+func cleanupRemovedServicePlacement(ctx context.Context, manifest *inventory.Manifest, sshPool *ssh.Pool, placement removedServicePlacement) error {
+	host, ok := manifest.GetHost(placement.nodeID)
+	if !ok {
+		return fmt.Errorf("%s stale instance %s is on unknown host %q", placement.serviceName, placement.instance.GetId(), placement.nodeID)
+	}
+	prov, err := provisioner.GetProvisioner(placement.deployName, sshPool)
+	if err != nil {
+		return err
+	}
+	for _, mode := range placement.cleanupModes {
+		mode = strings.TrimSpace(mode)
+		if mode == "" {
+			continue
+		}
+		config := provisioner.ServiceConfig{
+			Mode:       mode,
+			DeployName: placement.deployName,
+			Port:       placement.svc.Port,
+			Metadata:   map[string]any{"_cleanup_only": true},
+		}
+		if err := prov.Cleanup(ctx, host, config); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func printDryRunRemovedServicePlacementPlan(ctx context.Context, cmd *cobra.Command, manifest *inventory.Manifest, phase orchestrator.Phase, sharedEnv map[string]string) {

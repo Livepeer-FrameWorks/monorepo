@@ -290,16 +290,20 @@ func runReleaseApply(cmd *cobra.Command, rc *resolvedCluster, opts releaseApplyO
 
 	// [1] Expand migrations (concrete platformVersion; yes=true — confirmed at the release level).
 	ux.Subheading(out, "[1/3] Expand migrations")
-	if err := runMigrate(cmd, rc, opts.dryRun, "expand", true, platformVersion, false); err != nil {
-		return fmt.Errorf("expand migrations: %w", err)
+	if migrateErr := runMigrate(cmd, rc, opts.dryRun, "expand", true, platformVersion, false); migrateErr != nil {
+		return fmt.Errorf("expand migrations: %w", migrateErr)
 	}
 
 	// [2] Interleaved service upgrades + reconciliation transitions. Every service is pinned to the SAME concrete
 	// platformVersion resolved once above, so a channel that advances mid-release can never split the pool across
 	// two releases.
 	ux.Subheading(out, "[2/3] Service upgrades + reconciliations")
-	if err := runReleaseUpgradesInterleaved(cmd, rc, env, transitions, services, platformVersion, opts); err != nil {
+	installed, err := runReleaseUpgradesInterleaved(cmd, rc, env, transitions, services, platformVersion, opts)
+	if err != nil {
 		return err
+	}
+	if err := reconcileReleasePlacements(cmd.Context(), cmd, rc, installed, opts.dryRun); err != nil {
+		return fmt.Errorf("service placement reconciliation: %w", err)
 	}
 
 	// [3] Postdeploy SCHEMA migrations. Scope: this executor runs expand/postdeploy SCHEMA migrations and GATES on
@@ -623,26 +627,31 @@ func planReleaseSequence(services []string, deployOf func(string) string, transi
 }
 
 // runReleaseUpgradesInterleaved plans the interleaved sequence and executes it.
-func runReleaseUpgradesInterleaved(cmd *cobra.Command, rc *resolvedCluster, env *reconcileEnv, transitions []ReleaseTransition, services []string, version string, opts releaseApplyOptions) error {
+func runReleaseUpgradesInterleaved(cmd *cobra.Command, rc *resolvedCluster, env *reconcileEnv, transitions []ReleaseTransition, services []string, version string, opts releaseApplyOptions) (map[string]struct{}, error) {
+	installed := map[string]struct{}{}
 	steps, err := planReleaseSequence(services, func(svcID string) string { return releaseDeployName(rc.Manifest, svcID) }, transitions)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	upgradeIdx, total := 0, len(services)
 	for _, step := range steps {
 		if step.transition != nil {
 			if err := runReleaseTransition(cmd, env, step.transition, opts.dryRun); err != nil {
-				return err
+				return nil, err
 			}
 			continue
 		}
 		upgradeIdx++
 		fmt.Fprintf(cmd.OutOrStdout(), "\n[upgrade %d/%d] %s\n", upgradeIdx, total, step.upgradeService)
-		if err := runUpgrade(cmd, rc, step.upgradeService, version, opts.dryRun, opts.skipValidation, true, opts.noRollback, false, false, true); err != nil {
-			return fmt.Errorf("upgrade %s: %w", step.upgradeService, err)
+		result, err := runUpgrade(cmd, rc, step.upgradeService, version, opts.dryRun, opts.skipValidation, true, opts.noRollback, false, false, true)
+		if err != nil {
+			return nil, fmt.Errorf("upgrade %s: %w", step.upgradeService, err)
+		}
+		if result.installed {
+			installed[releaseDeployName(rc.Manifest, step.upgradeService)] = struct{}{}
 		}
 	}
-	return nil
+	return installed, nil
 }
 
 // runReleaseTransition runs one transition's Check across its scopes and, for Pending scopes, Apply + Verify (unless
