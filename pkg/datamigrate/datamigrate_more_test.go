@@ -9,7 +9,40 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/lib/pq"
 )
+
+func TestStatusTreatsAbsentLedgerAsPending(t *testing.T) {
+	resetForTest()
+	Register(Migration{
+		ID: "new-migration", Service: "service", IntroducedIn: "v0.3.0",
+		Run: func(_ context.Context, _ DB, _ RunOptions) (Progress, error) {
+			return Progress{Done: true}, nil
+		},
+	})
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	defer db.Close()
+
+	undefinedTable := &pq.Error{Code: "42P01", Message: `relation "_data_migrations" does not exist`}
+	mock.ExpectQuery("FROM _data_migrations").WithArgs("new-migration").WillReturnError(undefinedTable)
+	mock.ExpectQuery("FROM _data_migration_runs").WithArgs("new-migration").WillReturnError(undefinedTable)
+
+	var out bytes.Buffer
+	if err := HandleStatus(context.Background(), func() (*sql.DB, error) { return db, nil }, &out,
+		[]string{"new-migration", "--format", "json"}); err != nil {
+		t.Fatalf("HandleStatus: %v", err)
+	}
+	if !bytes.Contains(out.Bytes(), []byte(`"status": "pending"`)) {
+		t.Fatalf("status output does not report pending: %s", out.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatalf("unmet expectations: %v", err)
+	}
+}
 
 func TestRegistry_OrderingTieBreaks(t *testing.T) {
 	resetForTest()

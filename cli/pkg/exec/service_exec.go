@@ -38,8 +38,44 @@ type Spec struct {
 	BinaryName string
 
 	// InstallPath is the absolute path to the native binary on the host.
-	// When empty, defaults to /usr/local/bin/<BinaryName>.
+	// When empty, defaults to the go_service role's canonical install path.
 	InstallPath string
+
+	// EnvFile, WorkingDirectory, and User reproduce the native systemd
+	// service's execution context. They are optional for raw native commands.
+	EnvFile          string
+	WorkingDirectory string
+	User             string
+}
+
+// SpecFromDetection converts service-detector output into an invocation spec.
+// The detector's exact container and binary paths take precedence over the
+// deployment conventions used when older inventory lacks that metadata.
+func SpecFromDetection(mode string, metadata map[string]string, binaryName string) Spec {
+	spec := Spec{BinaryName: binaryName}
+	if Mode(mode) == ModeDocker {
+		spec.Mode = ModeDocker
+		spec.ContainerName = metadata["container_name"]
+		return spec
+	}
+	spec.Mode = ModeNative
+	spec.InstallPath = metadata["binary_path"]
+	if spec.InstallPath == "" {
+		spec.InstallPath = path.Join("/opt/frameworks", binaryName, binaryName)
+	}
+	spec.EnvFile = metadata["environment_file"]
+	if spec.EnvFile == "" {
+		spec.EnvFile = path.Join("/etc/frameworks", binaryName+".env")
+	}
+	spec.WorkingDirectory = metadata["working_directory"]
+	if spec.WorkingDirectory == "" {
+		spec.WorkingDirectory = path.Dir(spec.InstallPath)
+	}
+	spec.User = metadata["service_user"]
+	if spec.User == "" {
+		spec.User = "frameworks"
+	}
+	return spec
 }
 
 // Command returns the remote shell command that invokes the service binary
@@ -64,7 +100,26 @@ func Command(s Spec, args []string) (string, error) {
 	case ModeNative, "":
 		bin := s.InstallPath
 		if bin == "" {
-			bin = path.Join("/usr/local/bin", s.BinaryName)
+			bin = path.Join("/opt/frameworks", s.BinaryName, s.BinaryName)
+		}
+		if s.EnvFile != "" {
+			workingDirectory := s.WorkingDirectory
+			if workingDirectory == "" {
+				workingDirectory = path.Dir(bin)
+			}
+			parts := []string{}
+			if s.User != "" {
+				parts = append(parts, "sudo", "-u", quote(s.User), "--")
+			}
+			parts = append(parts,
+				"/bin/bash", "-eu", "-c",
+				quote(`set -a; . "$1"; set +a; cd "$2"; shift 2; exec "$@"`),
+				"--", quote(s.EnvFile), quote(workingDirectory), quote(bin),
+			)
+			for _, a := range args {
+				parts = append(parts, quote(a))
+			}
+			return strings.Join(parts, " "), nil
 		}
 		parts := []string{quote(bin)}
 		for _, a := range args {

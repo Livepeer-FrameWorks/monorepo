@@ -47,8 +47,8 @@ CREATE TABLE IF NOT EXISTS _data_migration_runs (
 `
 
 // EnsureSchema installs the data-migration tables in db. Idempotent — uses
-// CREATE TABLE IF NOT EXISTS. Adopting services call this once during
-// bootstrap; until they do, cluster data-migrate reports them as not adopted.
+// CREATE TABLE IF NOT EXISTS. Mutating data-migration commands call this
+// before recording state; status treats an absent ledger as pending.
 func EnsureSchema(ctx context.Context, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, SchemaSQL); err != nil {
 		return fmt.Errorf("datamigrate: ensure schema: %w", err)

@@ -86,12 +86,8 @@ func SSHStateSource(pool *ssh.Pool, hostFor HostResolver, runtimeFor RuntimeReso
 			live.FetchError = fmt.Errorf("detect %s: %w", runtime, err)
 			return live
 		}
-		mode := exec.Mode(state.Mode)
-		if mode != exec.ModeDocker {
-			mode = exec.ModeNative
-		}
-
-		cmd, err := exec.Command(exec.Spec{Mode: mode, ContainerName: state.Metadata["container_name"], BinaryName: runtime}, []string{"data-migrations", "status", id, "--format", "json"})
+		spec := exec.SpecFromDetection(state.Mode, state.Metadata, runtime)
+		cmd, err := exec.Command(spec, []string{"data-migrations", "status", id, "--format", "json"})
 		if err != nil {
 			live.FetchError = err
 			return live
@@ -109,7 +105,15 @@ func SSHStateSource(pool *ssh.Pool, hostFor HostResolver, runtimeFor RuntimeReso
 		}
 		result, err := pool.Run(runCtx, cfg, cmd)
 		if err != nil {
+			if dataMigrationLedgerAbsent(err.Error()) {
+				live.Status = datamigrate.StatusPending
+				return live
+			}
 			live.FetchError = fmt.Errorf("ssh run: %w", err)
+			return live
+		}
+		if dataMigrationLedgerAbsent(result.Stdout) || dataMigrationLedgerAbsent(result.Stderr) {
+			live.Status = datamigrate.StatusPending
 			return live
 		}
 		if result.ExitCode == 127 || strings.Contains(result.Stderr, "command not found") {
@@ -146,6 +150,10 @@ func SSHStateSource(pool *ssh.Pool, hostFor HostResolver, runtimeFor RuntimeReso
 		live.Status = payload.Status
 		return live
 	}
+}
+
+func dataMigrationLedgerAbsent(output string) bool {
+	return strings.Contains(output, "_data_migrations") && strings.Contains(output, "does not exist")
 }
 
 func dataMigrationAdoptionMarkerPresent(ctx context.Context, pool *ssh.Pool, host inventory.Host, runtime string) (bool, error) {

@@ -305,11 +305,8 @@ func runDataMigrateRemote(cmd *cobra.Command, rc *resolvedCluster, service strin
 	if err != nil {
 		return fmt.Errorf("detect %s: %w", runtime, err)
 	}
-	mode := exec.Mode(state.Mode)
-	if mode != exec.ModeDocker {
-		mode = exec.ModeNative
-	}
-	shellCmd, err := exec.Command(exec.Spec{Mode: mode, ContainerName: state.Metadata["container_name"], BinaryName: runtime}, args)
+	spec := exec.SpecFromDetection(state.Mode, state.Metadata, runtime)
+	shellCmd, err := exec.Command(spec, args)
 	if err != nil {
 		return err
 	}
@@ -322,8 +319,19 @@ func runDataMigrateRemote(cmd *cobra.Command, rc *resolvedCluster, service strin
 		Timeout:  30 * time.Second,
 	}
 	result, err := pool.Run(ctx, cfg, shellCmd)
+	writeDataMigrateResult(cmd, result)
 	if err != nil {
 		return fmt.Errorf("ssh run: %w", err)
+	}
+	if result.ExitCode != 0 {
+		return fmt.Errorf("%s data-migrations exit %d", service, result.ExitCode)
+	}
+	return nil
+}
+
+func writeDataMigrateResult(cmd *cobra.Command, result *ssh.CommandResult) {
+	if result == nil {
+		return
 	}
 	if strings.TrimSpace(result.Stdout) != "" {
 		fmt.Fprint(cmd.OutOrStdout(), result.Stdout)
@@ -332,12 +340,11 @@ func runDataMigrateRemote(cmd *cobra.Command, rc *resolvedCluster, service strin
 		}
 	}
 	if strings.TrimSpace(result.Stderr) != "" {
-		fmt.Fprint(cmd.OutOrStderr(), result.Stderr)
+		fmt.Fprint(cmd.ErrOrStderr(), result.Stderr)
+		if !strings.HasSuffix(result.Stderr, "\n") {
+			fmt.Fprintln(cmd.ErrOrStderr())
+		}
 	}
-	if result.ExitCode != 0 {
-		return fmt.Errorf("%s data-migrations exit %d", service, result.ExitCode)
-	}
-	return nil
 }
 
 func remoteDataMigrationsAdopted(ctx context.Context, pool *ssh.Pool, host inventory.Host, runtime string) (bool, error) {

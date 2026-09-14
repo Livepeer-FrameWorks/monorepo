@@ -10,9 +10,72 @@ func TestCommand_Native(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
-	want := "/usr/local/bin/purser data-migrations list --format json"
+	want := "/opt/frameworks/purser/purser data-migrations list --format json"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestSpecFromDetectionNativeUsesDetectedBinaryPath(t *testing.T) {
+	t.Parallel()
+
+	spec := SpecFromDetection("native", map[string]string{
+		"binary_path": "/srv/frameworks/quartermaster/current",
+	}, "quartermaster")
+	got, err := Command(spec, []string{"data-migrations", "list"})
+	if err != nil {
+		t.Fatalf("Command: %v", err)
+	}
+	for _, want := range []string{
+		"sudo -u frameworks -- /bin/bash -eu -c",
+		`set -a; . "$1"; set +a`,
+		"/etc/frameworks/quartermaster.env",
+		"/srv/frameworks/quartermaster",
+		"/srv/frameworks/quartermaster/current data-migrations list",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("command %q does not contain %q", got, want)
+		}
+	}
+}
+
+func TestSpecFromDetectionNativeUsesDetectedServiceContext(t *testing.T) {
+	t.Parallel()
+
+	spec := SpecFromDetection("native", map[string]string{
+		"binary_path":       "/srv/bin/commodore",
+		"environment_file":  "/srv/etc/commodore.env",
+		"working_directory": "/srv/state/commodore",
+		"service_user":      "media",
+	}, "commodore")
+	got, err := Command(spec, []string{"data-migrations", "status", "migration-id"})
+	if err != nil {
+		t.Fatalf("Command: %v", err)
+	}
+	for _, want := range []string{
+		"sudo -u media --",
+		"/srv/etc/commodore.env",
+		"/srv/state/commodore",
+		"/srv/bin/commodore data-migrations status migration-id",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("command %q does not contain %q", got, want)
+		}
+	}
+}
+
+func TestSpecFromDetectionDockerUsesDetectedContainer(t *testing.T) {
+	t.Parallel()
+
+	spec := SpecFromDetection("docker", map[string]string{
+		"container_name": "frameworks-quartermaster",
+	}, "quartermaster")
+	got, err := Command(spec, []string{"data-migrations", "list"})
+	if err != nil {
+		t.Fatalf("Command: %v", err)
+	}
+	if want := "docker exec frameworks-quartermaster quartermaster data-migrations list"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
 	}
 }
 

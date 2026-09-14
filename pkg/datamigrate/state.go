@@ -91,6 +91,10 @@ func LoadJob(ctx context.Context, db *sql.DB, id string) (JobState, error) {
 		}
 		// Registered but never started.
 		return JobState{ID: id, Status: StatusPending}, nil
+	case err != nil && fwdb.SQLState(err) == "42P01" && Lookup(id) != nil:
+		// A newly adopting service has no ledger until its first mutating
+		// migration command. Its compiled registry is still authoritative.
+		return JobState{ID: id, Status: StatusPending}, nil
 	case err != nil:
 		return JobState{}, fmt.Errorf("load job %q: %w", id, err)
 	}
@@ -113,6 +117,9 @@ func LoadRuns(ctx context.Context, db *sql.DB, id string) ([]RunState, error) {
 		WHERE id = $1
 		ORDER BY scope_kind, scope_value`, id)
 	if err != nil {
+		if fwdb.SQLState(err) == "42P01" {
+			return []RunState{}, nil
+		}
 		return nil, fmt.Errorf("load runs %q: %w", id, err)
 	}
 	defer rows.Close()
