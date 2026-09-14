@@ -260,7 +260,7 @@ services:
     ports: ["18033:18033"]
     health:
       protocol: http
-      path: /health/
+      path: /
       port: 18033
 
   prometheus:

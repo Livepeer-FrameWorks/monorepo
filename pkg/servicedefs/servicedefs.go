@@ -68,7 +68,7 @@ var Services = map[string]Service{
 	"chartroom": {ID: "chartroom", DefaultPort: 18030, HealthPath: "/health", HealthProtocol: "http", Role: "interface"},
 	"foredeck":  {ID: "foredeck", DefaultPort: 18031, HealthPath: "/health", HealthProtocol: "http", Role: "interface"},
 	"steward":   {ID: "steward", DefaultPort: 18032, HealthPath: "/health", HealthProtocol: "http", Role: "support", SupportsSIGHUPReload: true},
-	"logbook":   {ID: "logbook", DefaultPort: 18033, HealthPath: "/health/", HealthProtocol: "http", Role: "interface"},
+	"logbook":   {ID: "logbook", DefaultPort: 18033, HealthPath: "/", HealthProtocol: "http", Role: "interface"},
 
 	// Infra dependencies
 	"postgres":        {ID: "postgres", DefaultPort: 5432, HealthPath: "", HealthProtocol: "tcp", Role: "infra"},
