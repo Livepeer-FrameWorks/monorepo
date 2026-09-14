@@ -74,4 +74,32 @@ describe("Mist WebRTC track selection", () => {
 
     expect(changed).toHaveBeenCalledTimes(1);
   });
+
+  it("sends the requested startup state without inferring a hold from the empty video element", () => {
+    const player = new MistWebRTCPlayerImpl();
+    const play = vi.fn();
+    const pause = vi.fn();
+    (player as any).signaling = { isConnected: true, play, pause };
+    (player as any).playRequested = true;
+    (player as any).holdRequested = false;
+
+    (player as any).applyDesiredPlaybackState();
+
+    expect(play).toHaveBeenCalledOnce();
+    expect(pause).not.toHaveBeenCalled();
+  });
+
+  it("leaves startup neutral when autoplay is disabled so metadata can arrive", () => {
+    const player = new MistWebRTCPlayerImpl();
+    const play = vi.fn();
+    const pause = vi.fn();
+    (player as any).signaling = { isConnected: true, play, pause };
+    (player as any).playRequested = false;
+    (player as any).holdRequested = false;
+
+    (player as any).applyDesiredPlaybackState();
+
+    expect(play).not.toHaveBeenCalled();
+    expect(pause).not.toHaveBeenCalled();
+  });
 });

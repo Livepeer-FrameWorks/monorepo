@@ -48,7 +48,7 @@ describe("WebRTC scoring", () => {
     expect(combo.scoreBreakdown?.trackTypes).toEqual(["video", "audio"]);
   });
 
-  it("replays a play request made before Mist WebRTC signaling connects", async () => {
+  it("replays a play request after Mist WebRTC installs the answer", async () => {
     const player = new MistWebRTCPlayerImpl();
     const handlers = new Map<string, () => void>();
     const signaling = {
@@ -78,6 +78,9 @@ describe("WebRTC scoring", () => {
 
     signaling.isConnected = true;
     handlers.get("connected")?.();
+    expect(signaling.play).not.toHaveBeenCalled();
+
+    (player as any).applyDesiredPlaybackState();
 
     expect(signaling.play).toHaveBeenCalledTimes(1);
   });

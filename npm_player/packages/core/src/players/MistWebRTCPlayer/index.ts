@@ -97,28 +97,6 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
   }
 
   /**
-   * Load MistServer's WebRTC browser equalizer script for browser-specific fixes.
-   * This is non-fatal if it fails to load.
-   */
-  private async loadBrowserEqualizer(host: string): Promise<void> {
-    if ((window as any).WebRTCBrowserEqualizerLoaded) return;
-
-    return new Promise((resolve) => {
-      const script = document.createElement("script");
-      script.src = `${host}/webrtc.js`;
-      script.onload = () => {
-        console.debug("[MistWebRTC] Browser equalizer loaded");
-        resolve();
-      };
-      script.onerror = () => {
-        console.warn("[MistWebRTC] Failed to load browser equalizer");
-        resolve(); // Non-fatal
-      };
-      document.head.appendChild(script);
-    });
-  }
-
-  /**
    * Compare two arrays for equality (order-independent)
    */
   private arraysEqual(a: string[], b: string[]): boolean {
@@ -176,18 +154,9 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
     this.selectedAudioTrack = null;
     this.selectedSubtitleTrack = null;
     this.videoSelectionExplicit = false;
-    this.playRequested = false;
+    this.playRequested = options.autoplay === true;
     this.holdRequested = false;
     container.classList.add("fw-player-container");
-
-    // Load browser equalizer script (P0) - extract host from source URL
-    try {
-      const url = new URL(source.url, window.location.href);
-      const httpProtocol =
-        url.protocol === "wss:" ? "https:" : url.protocol === "ws:" ? "http:" : url.protocol;
-      const host = `${httpProtocol}//${url.host}`;
-      await this.loadBrowserEqualizer(host);
-    } catch {}
 
     // Check H264 availability with retry for Chrome Android bug (P0)
     await this.checkH264Available();
@@ -721,11 +690,9 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
       });
     });
 
-    // Create and send offer
-    await this.createAndSendOffer(pc);
-
-    // Wait for answer
-    await new Promise<void>((resolve, reject) => {
+    // Subscribe before sending: a local or low-latency Mist connection can answer
+    // within the same task that flushes the offer.
+    const answer = new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
         reject(new Error("SDP answer timeout"));
       }, 10000);
@@ -739,12 +706,16 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
 
         try {
           await pc.setRemoteDescription({ type: "answer", sdp: answer_sdp });
+          this.applyDesiredPlaybackState();
           resolve();
         } catch (err) {
           reject(err);
         }
       });
     });
+
+    await this.createAndSendOffer(pc);
+    await answer;
   }
 
   private setupSignalingHandlers(pc: RTCPeerConnection, video: HTMLVideoElement): void {
@@ -761,11 +732,6 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
     this.signaling.on("connected", () => {
       if (this.destroyed) return;
       this.replayDesiredTracks();
-      if (this.playRequested && !video.paused) {
-        this.signaling?.play();
-      } else if (this.holdRequested || video.paused) {
-        this.signaling?.pause();
-      }
       video.dispatchEvent(new Event("webrtc_connected"));
     });
 
@@ -886,6 +852,15 @@ export class MistWebRTCPlayerImpl extends BasePlayer {
 
     if (offer.sdp) {
       this.signaling.sendOfferSDP(offer.sdp);
+    }
+  }
+
+  private applyDesiredPlaybackState(): void {
+    if (!this.signaling?.isConnected) return;
+    if (this.playRequested) {
+      this.signaling.play();
+    } else if (this.holdRequested) {
+      this.signaling.pause();
     }
   }
 }
