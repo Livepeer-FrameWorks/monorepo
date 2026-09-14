@@ -732,6 +732,8 @@ func serviceRoleFingerprint(cfg ServiceRoleConfig) RoleFingerprinter {
 		env := stringMapFromAny(vars["go_service_env"])
 		args := stringSliceFromAny(vars["go_service_args"])
 		supportsReload := boolFromVars(vars, "go_service_supports_sighup_reload")
+		sandbox := boolFromVars(vars, "go_service_sandbox")
+		stateDirs := stringSliceFromAny(vars["go_service_state_dirs"])
 
 		files := map[detect.FileKind]detect.ExpectedFile{
 			detect.FileKindBinary: {
@@ -744,7 +746,7 @@ func serviceRoleFingerprint(cfg ServiceRoleConfig) RoleFingerprinter {
 			},
 			detect.FileKindUnit: {
 				Path:   "/etc/systemd/system/frameworks-" + serviceName + ".service",
-				SHA256: sha256Hex(renderGoServiceUnit(serviceName, args, supportsReload)),
+				SHA256: sha256Hex(renderGoServiceUnit(serviceName, args, supportsReload, sandbox, stateDirs)),
 			},
 		}
 
@@ -781,7 +783,7 @@ func renderGoServiceEnvFile(env map[string]string) string {
 	return b.String()
 }
 
-func renderGoServiceUnit(serviceName string, args []string, supportsReload bool) string {
+func renderGoServiceUnit(serviceName string, args []string, supportsReload, sandbox bool, stateDirs []string) string {
 	installDir := "/opt/frameworks/" + serviceName
 	argv := append([]string{installDir + "/" + serviceName}, args...)
 	quoted := make([]string, 0, len(argv))
@@ -805,7 +807,21 @@ func renderGoServiceUnit(serviceName string, args []string, supportsReload bool)
 	}
 	fmt.Fprintf(&b, "Restart=always\n")
 	fmt.Fprintf(&b, "RestartSec=5\n")
-	fmt.Fprintf(&b, "LimitNOFILE=1048576\n\n")
+	fmt.Fprintf(&b, "LimitNOFILE=1048576\n")
+	if sandbox {
+		fmt.Fprintf(&b, "NoNewPrivileges=yes\n")
+		fmt.Fprintf(&b, "ProtectSystem=strict\n")
+		fmt.Fprintf(&b, "ProtectHome=yes\n")
+		fmt.Fprintf(&b, "PrivateTmp=yes\n")
+		fmt.Fprintf(&b, "ProtectKernelTunables=yes\n")
+		fmt.Fprintf(&b, "ProtectControlGroups=yes\n")
+		fmt.Fprintf(&b, "RestrictSUIDSGID=yes\n")
+		fmt.Fprintf(&b, "UMask=0077\n")
+		if len(stateDirs) > 0 {
+			fmt.Fprintf(&b, "ReadWritePaths=%s\n", strings.Join(stateDirs, " "))
+		}
+	}
+	b.WriteByte('\n')
 	fmt.Fprintf(&b, "[Install]\n")
 	fmt.Fprintf(&b, "WantedBy=multi-user.target\n")
 	return b.String()

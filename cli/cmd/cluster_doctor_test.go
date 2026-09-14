@@ -111,3 +111,24 @@ func TestDoctorServiceProbeUsesTCPForGRPCAndNoHTTPHealthPath(t *testing.T) {
 		t.Fatalf("nginx Protocol = %q, want tcp", nginxProbe.Protocol)
 	}
 }
+
+func TestDoctorHTTPProbeCommandUsesHostLoopback(t *testing.T) {
+	t.Parallel()
+
+	got := doctorHTTPProbeCommand(8935, "/healthz")
+	if !strings.Contains(got, "http://127.0.0.1:8935/healthz") {
+		t.Fatalf("probe command = %q, want host-loopback health URL", got)
+	}
+	if strings.Contains(got, "0.0.0.0") {
+		t.Fatalf("probe command must not dial a wildcard listener: %q", got)
+	}
+}
+
+func TestDoctorTCPProbeCommandUsesHostLoopback(t *testing.T) {
+	t.Parallel()
+
+	got := doctorTCPProbeCommand(18006)
+	if !strings.Contains(got, "/dev/tcp/127.0.0.1/18006") {
+		t.Fatalf("probe command = %q, want host-loopback TCP address", got)
+	}
+}

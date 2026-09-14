@@ -3,12 +3,11 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"io"
 	"sort"
-	"strings"
 	"time"
 
 	"frameworks/cli/pkg/orchestrator"
-	"frameworks/cli/pkg/remoteaccess"
 	"frameworks/cli/pkg/ssh"
 
 	"github.com/spf13/cobra"
@@ -18,31 +17,20 @@ import (
 // overlap old and new service instances during deployment, then removes the stale managed placement only after the
 // replacement is serving. A dry-run reads the same authoritative registry and reports the cleanup without mutating it.
 func reconcileReleasePlacements(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, installed map[string]struct{}, dryRun bool) error {
-	sharedEnv, err := rc.PreparedSharedEnv()
-	if err != nil {
-		return fmt.Errorf("load manifest env_files: %w", err)
-	}
-	serviceToken := strings.TrimSpace(sharedEnv["SERVICE_TOKEN"])
-	if serviceToken == "" {
-		return fmt.Errorf("SERVICE_TOKEN missing from manifest env_files")
-	}
-
 	sshKey := stringFlag(cmd, "ssh-key").Value
-	sess, err := remoteaccess.OpenSession(remoteaccess.Options{
-		Manifest:      rc.Manifest,
-		SSHKeyPath:    sshKey,
-		AllowInsecure: isDevProfile(rc.Manifest),
+	return retryReleasePlacementReconciliation(ctx, cmd.OutOrStdout(), func() error {
+		return reconcileReleasePlacementsOnce(ctx, cmd, rc, installed, dryRun, sshKey)
 	})
-	if err != nil {
-		return fmt.Errorf("open remote-access session: %w", err)
-	}
-	defer sess.Close()
+}
 
-	runtimeData := map[string]any{"service_token": serviceToken}
-	client, err := newQuartermasterClient(ctx, rc.Manifest, runtimeData, sess)
+func reconcileReleasePlacementsOnce(ctx context.Context, cmd *cobra.Command, rc *resolvedCluster, installed map[string]struct{}, dryRun bool, sshKey string) error {
+	// Production service certificates chain to the internal CA, so this path must use the same resolved endpoint and
+	// trust bundle as the rest of the release executor.
+	client, _, cleanupSession, err := buildReconcileQM(ctx, rc)
 	if err != nil {
 		return fmt.Errorf("connect Quartermaster: %w", err)
 	}
+	defer cleanupSession()
 	defer client.Close()
 
 	placements, err := removedServicePlacements(ctx, rc.Manifest, orchestrator.PhaseAll, client)
@@ -73,8 +61,34 @@ func reconcileReleasePlacements(ctx context.Context, cmd *cobra.Command, rc *res
 
 	pool := ssh.NewPool(30*time.Second, sshKey)
 	defer pool.Close()
-	cleanup := func(cleanupCtx context.Context, placement removedServicePlacement) error {
+	cleanupPlacement := func(cleanupCtx context.Context, placement removedServicePlacement) error {
 		return cleanupRemovedServicePlacement(cleanupCtx, rc.Manifest, pool, placement)
 	}
-	return reconcileRemovedServicePlacementsWithClient(ctx, cmd.OutOrStdout(), rc.Manifest, orchestrator.PhaseAll, client, cleanup)
+	return reconcileRemovedServicePlacementsWithClient(ctx, cmd.OutOrStdout(), rc.Manifest, orchestrator.PhaseAll, client, cleanupPlacement)
+}
+
+func retryReleasePlacementReconciliation(ctx context.Context, out io.Writer, fn func() error) error {
+	return retryReleasePlacementReconciliationWithBackoff(ctx, out, 6, 5*time.Second, fn)
+}
+
+func retryReleasePlacementReconciliationWithBackoff(ctx context.Context, out io.Writer, attempts int, delay time.Duration, fn func() error) error {
+	var err error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		err = fn()
+		if err == nil || !isRetryableControlPlaneRPCError(err) || attempt == attempts {
+			return err
+		}
+		fmt.Fprintf(out, "  Retrying service placement reconciliation with a fresh control-plane connection (%d/%d): %v\n", attempt, attempts-1, err)
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return err
 }

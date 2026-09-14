@@ -22,6 +22,7 @@ import (
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/orchestrator"
 	"frameworks/cli/pkg/provisioner"
+	"frameworks/cli/pkg/remoteaccess"
 	fwssh "frameworks/cli/pkg/ssh"
 
 	"github.com/mattn/go-isatty"
@@ -806,8 +807,9 @@ func detectService(ctx context.Context, cmd *cobra.Command, sshPool *fwssh.Pool,
 	}
 }
 
-// runDoctor is an observed-state survey: direct port / HTTP / SQL probes
-// from the CLI host. For a role-level diff of what would change on apply,
+// runDoctor is an observed-state survey. Host-bound HTTP and SQL probes run
+// through SSH so private and loopback-only listeners are checked from the
+// same network namespace that serves them. For a role-level diff of what would change on apply,
 // use `cluster provision --dry-run` (ansible-playbook --check --diff).
 func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 	manifest := rc.Manifest
@@ -914,8 +916,7 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 		if !ok {
 			recordMiss("ClickHouse", fmt.Sprintf("host %q not found in manifest", manifest.Infrastructure.ClickHouse.CoordinatorHost()))
 		} else {
-			checker := clickHouseDoctorChecker(manifest.Infrastructure.ClickHouse, sharedEnv)
-			runInfraCheck("ClickHouse", checker.Check(host.ExternalIP, manifest.Infrastructure.ClickHouse.Port))
+			runInfraCheck("ClickHouse", checkClickHouseLocal(cmd.Context(), doctorSSHPool, host, manifest.Infrastructure.ClickHouse, sharedEnv, deep))
 		}
 	}
 
@@ -958,7 +959,7 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 					recordMiss(label, fmt.Sprintf("host %q not found in manifest", hostName))
 					continue
 				}
-				runInfraCheck(label, checkServiceEndpoint(name, svc, host.ExternalIP, port))
+				runInfraCheck(label, checkServiceEndpoint(cmd.Context(), doctorSSHPool, host, name, svc, port))
 			}
 			continue
 		}
@@ -983,7 +984,7 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 			recordMiss(name, fmt.Sprintf("resolve port: %v", err))
 			continue
 		}
-		runInfraCheck(name, checkServiceEndpoint(name, svc, host.ExternalIP, port))
+		runInfraCheck(name, checkServiceEndpoint(cmd.Context(), doctorSSHPool, host, name, svc, port))
 	}
 
 	fmt.Fprintln(cmd.OutOrStdout(), "")
@@ -1006,7 +1007,7 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 			continue
 		}
 
-		runInfraCheck(name, checkServiceEndpoint(name, svc, host.ExternalIP, port))
+		runInfraCheck(name, checkServiceEndpoint(cmd.Context(), doctorSSHPool, host, name, svc, port))
 	}
 
 	fmt.Fprintln(cmd.OutOrStdout(), "")
@@ -1028,7 +1029,7 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 				recordMiss(name, fmt.Sprintf("resolve port: %v", err))
 				continue
 			}
-			runInfraCheck(name, checkServiceEndpoint(name, svc, host.ExternalIP, port))
+			runInfraCheck(name, checkServiceEndpoint(cmd.Context(), doctorSSHPool, host, name, svc, port))
 		}
 		fmt.Fprintln(out, "")
 	}
@@ -1120,7 +1121,7 @@ func runDoctor(cmd *cobra.Command, rc *resolvedCluster, deep bool) error {
 		fmt.Fprintln(out, "")
 	}
 
-	cpReport, cpSteps := doctorControlPlane(cmd, manifest, serviceToken)
+	cpReport, cpSteps := doctorControlPlane(cmd, rc, serviceToken, sharedEnv, deep)
 
 	ux.Result(out, []ux.ResultField{
 		{Key: "infrastructure + services", OK: passedChecks == totalChecks, Detail: fmt.Sprintf("%d/%d healthy", passedChecks, totalChecks)},
@@ -1157,6 +1158,41 @@ func clickHouseDoctorChecker(ch *inventory.ClickHouseConfig, sharedEnv map[strin
 	}
 
 	return &health.ClickHouseChecker{User: user, Password: password, Database: database}
+}
+
+func checkClickHouseLocal(ctx context.Context, sshPool *fwssh.Pool, host inventory.Host, ch *inventory.ClickHouseConfig, sharedEnv map[string]string, authenticated bool) *health.CheckResult {
+	if !authenticated {
+		result := checkHostLocalTCP(ctx, sshPool, host, ch.Port)
+		result.Name = "clickhouse"
+		return result
+	}
+	result := &health.CheckResult{
+		Name:      "clickhouse",
+		CheckedAt: time.Now(),
+		Metadata:  map[string]string{"access": "ssh-local-clickhouse"},
+	}
+	runner, err := sshPool.Get(&fwssh.ConnectionConfig{
+		Address: host.ExternalIP, Port: 22, User: host.User, HostName: host.Name, Timeout: 30 * time.Second,
+	})
+	if err != nil {
+		result.Status, result.Error = "unhealthy", fmt.Sprintf("ssh connect: %v", err)
+		return result
+	}
+	checker := clickHouseDoctorChecker(ch, sharedEnv)
+	start := time.Now()
+	probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	err = (&provisioner.SSHCHExecutor{Runner: runner}).Exec(
+		probeCtx, "127.0.0.1", ch.Port, checker.User, checker.Password, checker.Database, "SELECT 1",
+	)
+	result.Latency = time.Since(start)
+	if err != nil {
+		result.Status, result.Error = "unhealthy", fmt.Sprintf("local query failed: %v", err)
+		return result
+	}
+	result.OK, result.Status = true, "healthy"
+	result.Message = fmt.Sprintf("Local ClickHouse query OK (latency: %v)", result.Latency)
+	return result
 }
 
 func checkYugabyteLocalYSQL(ctx context.Context, sshPool *fwssh.Pool, host inventory.Host, pg *inventory.PostgresConfig) *health.CheckResult {
@@ -1277,12 +1313,107 @@ func firstHealthyYugabyteHost(ctx context.Context, sshPool *fwssh.Pool, hosts []
 	return inventory.Host{}, false
 }
 
-func checkServiceEndpoint(name string, svc inventory.ServiceConfig, address string, port int) *health.CheckResult {
+func checkServiceEndpoint(ctx context.Context, sshPool *fwssh.Pool, host inventory.Host, name string, svc inventory.ServiceConfig, port int) *health.CheckResult {
 	probe := doctorServiceProbe(name, svc)
 	if probe.Protocol == "tcp" {
-		return (&health.TCPChecker{Timeout: 5 * time.Second}).Check(address, port)
+		return checkHostLocalTCP(ctx, sshPool, host, port)
 	}
-	return (&health.HTTPChecker{Path: probe.Path, Timeout: 5 * time.Second}).Check(address, port)
+	result := &health.CheckResult{
+		Name:      "http",
+		CheckedAt: time.Now(),
+		Metadata: map[string]string{
+			"access": "ssh-local-http",
+			"url":    fmt.Sprintf("http://127.0.0.1:%d%s", port, probe.Path),
+		},
+	}
+	if sshPool == nil {
+		result.Status, result.Error = "unhealthy", "ssh pool is nil"
+		return result
+	}
+	runner, err := sshPool.Get(&fwssh.ConnectionConfig{
+		Address: host.ExternalIP, Port: 22, User: host.User, HostName: host.Name, Timeout: 30 * time.Second,
+	})
+	if err != nil {
+		result.Status, result.Error = "unhealthy", fmt.Sprintf("ssh connect: %v", err)
+		return result
+	}
+	command := doctorHTTPProbeCommand(port, probe.Path)
+	start := time.Now()
+	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	commandResult, err := runner.Run(probeCtx, command)
+	result.Latency = time.Since(start)
+	if err != nil {
+		result.Status, result.Error = "unhealthy", fmt.Sprintf("ssh probe: %v", err)
+		return result
+	}
+	status := strings.TrimSpace(commandResult.Stdout)
+	result.Metadata["status_code"] = status
+	if commandResult.ExitCode != 0 {
+		result.Status = "unhealthy"
+		result.Error = fmt.Sprintf("local HTTP probe failed (exit %d): %s", commandResult.ExitCode, strings.TrimSpace(commandResult.Stderr))
+		return result
+	}
+	if strings.HasPrefix(status, "2") {
+		result.OK, result.Status = true, "healthy"
+		result.Message = fmt.Sprintf("HTTP %s via SSH (latency: %v)", status, result.Latency)
+		return result
+	}
+	result.Status = "degraded"
+	if strings.HasPrefix(status, "5") {
+		result.Status = "unhealthy"
+	}
+	result.Error = fmt.Sprintf("local HTTP endpoint returned %s", status)
+	return result
+}
+
+func checkHostLocalTCP(ctx context.Context, sshPool *fwssh.Pool, host inventory.Host, port int) *health.CheckResult {
+	result := &health.CheckResult{
+		Name:      "tcp",
+		CheckedAt: time.Now(),
+		Metadata: map[string]string{
+			"access":  "ssh-local-tcp",
+			"address": fmt.Sprintf("127.0.0.1:%d", port),
+		},
+	}
+	if sshPool == nil {
+		result.Status, result.Error = "unhealthy", "ssh pool is nil"
+		return result
+	}
+	runner, err := sshPool.Get(&fwssh.ConnectionConfig{
+		Address: host.ExternalIP, Port: 22, User: host.User, HostName: host.Name, Timeout: 30 * time.Second,
+	})
+	if err != nil {
+		result.Status, result.Error = "unhealthy", fmt.Sprintf("ssh connect: %v", err)
+		return result
+	}
+	command := doctorTCPProbeCommand(port)
+	start := time.Now()
+	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	commandResult, err := runner.Run(probeCtx, command)
+	result.Latency = time.Since(start)
+	if err != nil {
+		result.Status, result.Error = "unhealthy", fmt.Sprintf("ssh probe: %v", err)
+		return result
+	}
+	if commandResult.ExitCode != 0 {
+		result.Status = "unhealthy"
+		result.Error = fmt.Sprintf("local TCP connect failed (exit %d): %s", commandResult.ExitCode, strings.TrimSpace(commandResult.Stderr))
+		return result
+	}
+	result.OK, result.Status = true, "healthy"
+	result.Message = fmt.Sprintf("Local TCP connect OK (latency: %v)", result.Latency)
+	return result
+}
+
+func doctorTCPProbeCommand(port int) string {
+	return fmt.Sprintf("timeout 6 bash -c %s", fwssh.ShellQuote(fmt.Sprintf("exec 3<>/dev/tcp/127.0.0.1/%d", port)))
+}
+
+func doctorHTTPProbeCommand(port int, path string) string {
+	url := fmt.Sprintf("http://127.0.0.1:%d%s", port, path)
+	return "curl -sS -o /dev/null -w '%{http_code}' --max-time 5 " + fwssh.ShellQuote(url)
 }
 
 type doctorProbe struct {
@@ -1313,8 +1444,8 @@ func doctorServiceProbe(name string, svc inventory.ServiceConfig) doctorProbe {
 
 // doctorControlPlane runs ControlPlaneReadiness, prints its section, and
 // returns the report plus next-steps derived from any warnings.
-func doctorControlPlane(cmd *cobra.Command, manifest *inventory.Manifest, serviceToken string) (readiness.Report, []ux.NextStep) {
-	out := cmd.OutOrStdout()
+func doctorControlPlane(cmd *cobra.Command, rc *resolvedCluster, serviceToken string, sharedEnv map[string]string, deep bool) (readiness.Report, []ux.NextStep) {
+	manifest := rc.Manifest
 	cfg, err := fwcfg.Load()
 	if err != nil {
 		return readiness.Report{}, nil
@@ -1326,16 +1457,50 @@ func doctorControlPlane(cmd *cobra.Command, manifest *inventory.Manifest, servic
 
 	qmAddr, _ := resolveServiceGRPCAddr(manifest, "quartermaster", 19002) //nolint:errcheck // empty on miss is the intent
 
-	// Route through buildControlPlaneReport so endpoint-resolution failures
-	// surface as warnings instead of degrading silently to Checked=false.
-	report := buildControlPlaneReport(cmd.Context(), manifest, map[string]any{
+	runtimeData := map[string]any{
 		"system_tenant_id": active.SystemTenantID,
 		"service_token":    serviceToken,
-	}, nil)
+	}
+	var sess *remoteaccess.Session
+	if deep {
+		if internalPKIBootstrapRequired(manifest) {
+			pki, pkiErr := loadInternalPKIBootstrap(sharedEnv, filepath.Dir(rc.ManifestPath))
+			if pkiErr != nil {
+				report := readiness.Report{Checked: true, Warnings: []readiness.Warning{{
+					Subject: "control-plane.transport",
+					Detail:  fmt.Sprintf("Could not load internal PKI for control-plane checks: %v", pkiErr),
+				}}}
+				return renderDoctorControlPlane(cmd, active.SystemTenantID, qmAddr, report)
+			}
+			runtimeData["internal_pki_bootstrap"] = pki
+		}
+		sess, err = remoteaccess.OpenSession(remoteaccess.Options{
+			Manifest:      manifest,
+			SSHKeyPath:    stringFlag(cmd, "ssh-key").Value,
+			AllowInsecure: isDevProfile(manifest),
+		})
+		if err != nil {
+			report := readiness.Report{Checked: true, Warnings: []readiness.Warning{{
+				Subject: "control-plane.transport",
+				Detail:  fmt.Sprintf("Could not open tunneled control-plane session: %v", err),
+			}}}
+			return renderDoctorControlPlane(cmd, active.SystemTenantID, qmAddr, report)
+		}
+		defer sess.Close()
+	}
+
+	// Deep checks use the same SSH-forwarded service endpoints as provisioning.
+	// Default checks remain unauthenticated and therefore unchecked.
+	report := buildControlPlaneReport(cmd.Context(), manifest, runtimeData, sess)
+	return renderDoctorControlPlane(cmd, active.SystemTenantID, qmAddr, report)
+}
+
+func renderDoctorControlPlane(cmd *cobra.Command, systemTenantID, qmAddr string, report readiness.Report) (readiness.Report, []ux.NextStep) {
+	out := cmd.OutOrStdout()
 
 	fmt.Fprintln(out, "")
 	ux.Subheading(out, "Control Plane:")
-	fmt.Fprintf(out, "  system tenant:  %s\n", active.SystemTenantID)
+	fmt.Fprintf(out, "  system tenant:  %s\n", systemTenantID)
 	if qmAddr != "" {
 		fmt.Fprintf(out, "  quartermaster:  %s\n", qmAddr)
 	}

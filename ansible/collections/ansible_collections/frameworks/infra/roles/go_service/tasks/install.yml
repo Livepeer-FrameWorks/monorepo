@@ -194,16 +194,9 @@
     go_service_reinstall_required: >-
       {{
         not (go_service_bin_stat.stat.exists | default(false))
-        or (
-          not (go_service_install_sentinel_stat.stat.exists | default(false))
-          and (
-            (go_service_version | default('') | length == 0)
-            or (go_service_installed_version.stdout | default('')) != go_service_version
-          )
-        )
+        or not (go_service_install_sentinel_stat.stat.exists | default(false))
         or (
           (go_service_version | default('') | length > 0)
-          and (go_service_installed_version.stdout | default('') | length > 0)
           and (go_service_installed_version.stdout | default('')) != go_service_version
         )
       }}
@@ -316,6 +309,24 @@
   args:
     creates: "{{ go_service_install_sentinel }}"
   when: not ansible_check_mode
+
+- name: Find obsolete install sentinels
+  ansible.builtin.find:
+    paths: "{{ go_service_install_dir }}"
+    file_type: file
+    recurse: false
+    patterns: ".installed-*"
+    excludes: "{{ go_service_install_sentinel | basename }}"
+  register: go_service_obsolete_install_sentinels
+  changed_when: false
+
+- name: Remove obsolete install sentinels
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ go_service_obsolete_install_sentinels.files | default([]) }}"
+  loop_control:
+    label: "{{ item.path }}"
 
 - name: Check native binary shared libraries
   ansible.builtin.shell: |

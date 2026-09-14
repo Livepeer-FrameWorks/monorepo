@@ -3,14 +3,18 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"frameworks/cli/internal/releases"
 	"frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/inventory"
 	fwv "github.com/Livepeer-FrameWorks/monorepo/pkg/version"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // TestValidateFetchedReleaseCompatibility covers the fail-closed gate driven by FETCHED release metadata: an outdated
@@ -227,5 +231,57 @@ func TestAssertProvisionSatisfiesTransitions(t *testing.T) {
 	// will not run), so a mis-declared future transition cannot silently pass an install.
 	if err := assertProvisionSatisfiesTransitions("v1.0.0", map[string]bool{"foghorn": true}, []ReleaseTransition{fakeTransition{id: "bootstrap-unplanned", before: []string{"foghorn"}, after: []string{"quartermaster"}, disposition: ProvisionEstablishedByBootstrap}}); err == nil {
 		t.Fatal("a bootstrap-established transition whose establishing service is not planned must fail closed")
+	}
+}
+
+func TestRetryReleasePlacementReconciliationReopensAfterTransientFailure(t *testing.T) {
+	var out bytes.Buffer
+	attempts := 0
+	err := retryReleasePlacementReconciliationWithBackoff(context.Background(), &out, 3, time.Nanosecond, func() error {
+		attempts++
+		if attempts == 1 {
+			return status.Error(codes.DeadlineExceeded, "cold tunnel")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("retry release placement reconciliation: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+	if !strings.Contains(out.String(), "fresh control-plane connection (1/2)") {
+		t.Fatalf("retry output = %q", out.String())
+	}
+}
+
+func TestRetryReleasePlacementReconciliationStopsOnPermanentFailure(t *testing.T) {
+	attempts := 0
+	want := status.Error(codes.PermissionDenied, "service token rejected")
+	err := retryReleasePlacementReconciliationWithBackoff(context.Background(), io.Discard, 3, time.Nanosecond, func() error {
+		attempts++
+		return want
+	})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("error = %v, want PermissionDenied", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts)
+	}
+}
+
+func TestRetryReleasePlacementReconciliationHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	attempts := 0
+	err := retryReleasePlacementReconciliationWithBackoff(ctx, io.Discard, 3, time.Nanosecond, func() error {
+		attempts++
+		return nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context cancellation", err)
+	}
+	if attempts != 0 {
+		t.Fatalf("attempts = %d, want 0", attempts)
 	}
 }

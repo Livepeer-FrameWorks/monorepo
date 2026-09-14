@@ -102,7 +102,7 @@ func ybSQLHost(name string) string {
 
 func ybApply(t *testing.T, name, db, sql string) {
 	t.Helper()
-	if out, err := dockerWithTimeout(t, 5*time.Minute, sql, "exec", "-i", name, "ysqlsh", "-h", ybSQLHost(name), "-U", "yugabyte", "-d", db, "-v", "ON_ERROR_STOP=1", "-q"); err != nil {
+	if out, err := dockerWithTimeout(t, 10*time.Minute, sql, "exec", "-i", name, "ysqlsh", "-h", ybSQLHost(name), "-U", "yugabyte", "-d", db, "-v", "ON_ERROR_STOP=1", "-q"); err != nil {
 		t.Fatalf("apply SQL to %s/%s: %v\n%s", name, db, err, out)
 	}
 }

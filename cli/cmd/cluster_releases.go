@@ -441,7 +441,7 @@ func retryEdgeReleaseSyncRPCWithBackoff(ctx context.Context, attempts int, baseD
 			return ctxErr
 		}
 		err = fn()
-		if !isRetryableEdgeReleaseSyncError(err) || attempt == attempts-1 {
+		if !isRetryableControlPlaneRPCError(err) || attempt == attempts-1 {
 			return err
 		}
 		timer := time.NewTimer(baseDelay << attempt)
@@ -455,7 +455,7 @@ func retryEdgeReleaseSyncRPCWithBackoff(ctx context.Context, attempts int, baseD
 	return err
 }
 
-func isRetryableEdgeReleaseSyncError(err error) bool {
+func isRetryableControlPlaneRPCError(err error) bool {
 	if database.IsRetryablePostgresError(err) || errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}

@@ -138,7 +138,7 @@ func (d *Detector) detectFromInventory(ctx context.Context, serviceName string, 
 	// Still need to check if it's actually running
 	switch svc.Mode {
 	case "docker":
-		if err := d.checkDockerRunning(ctx, serviceName, state); err != nil {
+		if err := d.inspectDockerRuntime(ctx, fmt.Sprintf("frameworks-%s", serviceName), state); err != nil {
 			return nil, err
 		}
 	case "native":
@@ -187,7 +187,10 @@ func (d *Detector) detectFromDocker(ctx context.Context, serviceName string, sta
 		state.Metadata["image"] = parts[2]
 		state.Metadata["container_name"] = parts[0]
 
-		state.Version = dockerImageVersion(parts[2])
+		if err := d.inspectDockerRuntime(ctx, parts[0], state); err != nil {
+			return nil, err
+		}
+		state.Version = dockerImageVersion(state.Metadata["image"])
 
 		return &DetectionResult{Method: "docker", Success: true, State: state}, nil
 	}
@@ -321,12 +324,11 @@ func (d *Detector) detectFromPort(ctx context.Context, serviceName string, state
 	return &DetectionResult{Method: "port", Success: true, State: state}, nil
 }
 
-func (d *Detector) checkDockerRunning(ctx context.Context, serviceName string, state *ServiceState) error {
-	containerName := fmt.Sprintf("frameworks-%s", serviceName)
-	cmd := fmt.Sprintf("docker inspect -f '{{.State.Running}}|{{.Config.Image}}' %s", containerName)
+func (d *Detector) inspectDockerRuntime(ctx context.Context, containerName string, state *ServiceState) error {
+	cmd := fmt.Sprintf("docker inspect -f '{{.State.Running}}|{{.Config.Image}}' %s", shellQuote(containerName))
 	exitCode, stdout, _, err := d.runSSH(ctx, cmd)
 	if err != nil {
-		return fmt.Errorf("inspect %s Docker runtime on %s: %w", serviceName, d.host.Name, err)
+		return fmt.Errorf("inspect %s Docker runtime on %s: %w", containerName, d.host.Name, err)
 	}
 
 	if exitCode == 0 {

@@ -168,15 +168,33 @@ func ControlPlaneReadiness(ctx context.Context, in ControlPlaneInputs) Report {
 			defer p.Close()
 			for _, dp := range in.DeclaredPricings {
 				pricing, pricingErr := p.GetClusterPricing(ctx, dp.ClusterID)
-				if pricingErr != nil || pricing == nil || pricing.GetPricingModel() == "" {
-					report.Warnings = append(report.Warnings, Warning{
-						Subject: fmt.Sprintf("control-plane.pricing.%s", dp.ClusterID),
-						Detail:  fmt.Sprintf("No pricing config for cluster %s (manifest declares pricing but Purser has none).", dp.ClusterID),
-					})
+				pricingModel := ""
+				if pricing != nil {
+					pricingModel = pricing.GetPricingModel()
+				}
+				if warning := clusterPricingWarning(dp.ClusterID, pricingModel, pricingErr); warning != nil {
+					report.Warnings = append(report.Warnings, *warning)
 				}
 			}
 		}
 	}
 
 	return report
+}
+
+func clusterPricingWarning(clusterID, pricingModel string, err error) *Warning {
+	subject := fmt.Sprintf("control-plane.pricing.%s", clusterID)
+	if err != nil {
+		return &Warning{
+			Subject: subject,
+			Detail:  fmt.Sprintf("Could not check pricing for cluster %s: %v", clusterID, err),
+		}
+	}
+	if pricingModel == "" {
+		return &Warning{
+			Subject: subject,
+			Detail:  fmt.Sprintf("No pricing config for cluster %s (manifest declares pricing but Purser has none).", clusterID),
+		}
+	}
+	return nil
 }

@@ -3,6 +3,9 @@ package cmd
 import (
 	"testing"
 
+	"frameworks/cli/pkg/inventory"
+	"frameworks/cli/pkg/orchestrator"
+
 	"github.com/spf13/cobra"
 )
 
@@ -32,5 +35,22 @@ func TestStringSliceFlag(t *testing.T) {
 		if got[i] != want[i] {
 			t.Errorf("got[%d] = %q, want %q", i, got[i], want[i])
 		}
+	}
+}
+
+func TestNewClusterDiffTaskCarriesEffectiveServiceCluster(t *testing.T) {
+	t.Parallel()
+
+	manifest := &inventory.Manifest{
+		Hosts: map[string]inventory.Host{
+			"regional-eu-1": {Cluster: "regional-eu"},
+		},
+		Services: map[string]inventory.ServiceConfig{
+			"foghorn-eu": {Deploy: "foghorn", Cluster: "media-eu-1"},
+		},
+	}
+	task := newClusterDiffTask("foghorn", "foghorn-eu", "regional-eu-1", orchestrator.PhaseApplications, manifest)
+	if task.ClusterID != "media-eu-1" {
+		t.Fatalf("ClusterID = %q, want media-eu-1", task.ClusterID)
 	}
 }

@@ -794,16 +794,36 @@ func TestRenderGoServiceEnvFileMatchesRoleOrderingAndQuoting(t *testing.T) {
 }
 
 func TestRenderGoServiceUnitIncludesExecReloadOnlyWhenSupported(t *testing.T) {
-	withReload := renderGoServiceUnit("foghorn", []string{"--flag", "value with space"}, true)
+	withReload := renderGoServiceUnit("foghorn", []string{"--flag", "value with space"}, true, false, nil)
 	if !strings.Contains(withReload, "ExecReload=/bin/kill -HUP $MAINPID\n") {
 		t.Fatalf("reload-capable unit missing ExecReload:\n%s", withReload)
 	}
 	if !strings.Contains(withReload, "ExecStart=/opt/frameworks/foghorn/foghorn --flag 'value with space'\n") {
 		t.Fatalf("unit did not shell-quote ExecStart args:\n%s", withReload)
 	}
-	withoutReload := renderGoServiceUnit("foghorn", nil, false)
+	withoutReload := renderGoServiceUnit("foghorn", nil, false, false, nil)
 	if strings.Contains(withoutReload, "ExecReload=") {
 		t.Fatalf("restart-only unit should not contain ExecReload:\n%s", withoutReload)
+	}
+}
+
+func TestRenderGoServiceUnitMatchesSandboxDirectives(t *testing.T) {
+	unit := renderGoServiceUnit(
+		"livepeer-gateway",
+		[]string{"-network", "offchain"},
+		false,
+		true,
+		[]string{"/var/lib/frameworks/livepeer-gateway", "/var/lib/frameworks/livepeer-gateway/keystore"},
+	)
+	for _, want := range []string{
+		"NoNewPrivileges=yes\n",
+		"ProtectSystem=strict\n",
+		"UMask=0077\n",
+		"ReadWritePaths=/var/lib/frameworks/livepeer-gateway /var/lib/frameworks/livepeer-gateway/keystore\n",
+	} {
+		if !strings.Contains(unit, want) {
+			t.Fatalf("sandboxed unit missing %q:\n%s", want, unit)
+		}
 	}
 }
 

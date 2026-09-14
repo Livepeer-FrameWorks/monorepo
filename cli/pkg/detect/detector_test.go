@@ -129,9 +129,9 @@ func TestDetect_DockerVersionFromDigestPinnedImage(t *testing.T) {
 			{
 				matchPrefix: "docker ps -a --filter name=frameworks-nginx ",
 				exitCode:    0,
-				stdout:      "frameworks-nginx|running|nginx:1.29.3-alpine@sha256:abcdef",
+				stdout:      "frameworks-nginx|running|nginx:1.29.3-alpine",
 			},
-			{matchPrefix: "docker inspect", exitCode: 0, stdout: "true"},
+			{matchPrefix: "docker inspect", exitCode: 0, stdout: "true|nginx:1.29.3-alpine@sha256:abcdef"},
 		},
 	}
 	d := newDetectorWithRunner(inventory.Host{ExternalIP: "1.2.3.4", User: "root"}, r)
@@ -142,6 +142,38 @@ func TestDetect_DockerVersionFromDigestPinnedImage(t *testing.T) {
 	}
 	if state.Version != "1.29.3-alpine" {
 		t.Fatalf("version=%q, want 1.29.3-alpine", state.Version)
+	}
+	if state.Metadata["image"] != "nginx:1.29.3-alpine@sha256:abcdef" {
+		t.Fatalf("image=%q, want digest-pinned runtime reference", state.Metadata["image"])
+	}
+}
+
+func TestDetect_DockerInspectsExactFallbackContainerName(t *testing.T) {
+	t.Parallel()
+	r := &fakeRunner{
+		responses: []fakeResponse{
+			{matchPrefix: "cat /etc/frameworks/inventory.json", exitCode: 1},
+			{matchPrefix: "docker ps -a --filter name=frameworks-foredeck ", exitCode: 0},
+			{
+				matchPrefix: "docker ps -a --filter name=foredeck ",
+				exitCode:    0,
+				stdout:      "foredeck|running|example/foredeck:v0.3.2",
+			},
+			{
+				matchPrefix: "docker inspect -f '{{.State.Running}}|{{.Config.Image}}' 'foredeck'",
+				exitCode:    0,
+				stdout:      "true|example/foredeck:v0.3.2@sha256:abcdef",
+			},
+		},
+	}
+	d := newDetectorWithRunner(inventory.Host{ExternalIP: "1.2.3.4", User: "root"}, r)
+
+	state, err := d.Detect(context.Background(), "foredeck")
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if state.Metadata["container_name"] != "foredeck" || state.Metadata["image"] != "example/foredeck:v0.3.2@sha256:abcdef" {
+		t.Fatalf("fallback container runtime identity = %+v", state.Metadata)
 	}
 }
 

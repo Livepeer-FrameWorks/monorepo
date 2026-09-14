@@ -11,10 +11,12 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"frameworks/cli/pkg/bootstrap"
 	"frameworks/cli/pkg/detect"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/orchestrator"
 	"frameworks/cli/pkg/provisioner"
+	"frameworks/cli/pkg/remoteaccess"
 	fwssh "frameworks/cli/pkg/ssh"
 
 	"github.com/spf13/cobra"
@@ -29,11 +31,12 @@ files on each host) for every service that has registered a fingerprinter.
 
 Diff kinds: binary, env, unit, cert, infra, unknown.
 
-Services without a registered fingerprinter report 'unknown', which means
-` + "`cluster apply --confirm`" + ` falls through to the heavy ` + "`cluster provision`" + `
-path for them.
+Services without a complete, authoritative fingerprint report 'unknown'.
+Unknown is informational: it is not evidence of drift and does not prescribe
+any mutation.
 
-Exits non-zero when any kind diff is detected, so CI can gate on it.`,
+Exits non-zero only when a classifiable diff is detected, so CI can gate on
+proven drift without treating unmodeled state as changed.`,
 		Example: `  frameworks cluster diff
   frameworks cluster diff --only-services foghorn,bridge
   frameworks cluster diff --only-hosts regional-eu-1
@@ -103,7 +106,7 @@ func runClusterDiff(cmd *cobra.Command, rc *resolvedCluster) error {
 	if err != nil {
 		return fmt.Errorf("load cluster env_files: %w", err)
 	}
-	runtimeData, err := buildFastPathRuntimeData(manifest, sharedEnv, filepath.Dir(rc.ManifestPath))
+	runtimeData, err := buildFastPathRuntimeData(ctx, manifest, sharedEnv, filepath.Dir(rc.ManifestPath), sshKey)
 	if err != nil {
 		return err
 	}
@@ -136,13 +139,17 @@ func runClusterDiff(cmd *cobra.Command, rc *resolvedCluster) error {
 		renderClusterDiffText(cmd.OutOrStdout(), rep)
 	}
 
-	if rep.Summary.Changed > 0 || rep.Summary.Unknown > 0 {
-		return &ExitCodeError{
-			Code:    1,
-			Message: fmt.Sprintf("%d change(s), %d unknown across %d entries", rep.Summary.Changed, rep.Summary.Unknown, rep.Summary.Total),
-		}
+	return clusterDiffExitError(rep.Summary)
+}
+
+func clusterDiffExitError(summary clusterDiffSummary) error {
+	if summary.Changed == 0 {
+		return nil
 	}
-	return nil
+	return &ExitCodeError{
+		Code:    1,
+		Message: fmt.Sprintf("%d proven change(s), %d unknown across %d entries", summary.Changed, summary.Unknown, summary.Total),
+	}
 }
 
 type clusterDiffCollection struct {
@@ -174,7 +181,7 @@ type diffProvCacheEntry struct {
 	err  error
 }
 
-func buildFastPathRuntimeData(manifest *inventory.Manifest, sharedEnv map[string]string, manifestDir string) (map[string]any, error) {
+func buildFastPathRuntimeData(ctx context.Context, manifest *inventory.Manifest, sharedEnv map[string]string, manifestDir, sshKey string) (map[string]any, error) {
 	runtimeData := map[string]any{}
 	if token := strings.TrimSpace(sharedEnv["SERVICE_TOKEN"]); token != "" {
 		runtimeData["service_token"] = token
@@ -190,6 +197,35 @@ func buildFastPathRuntimeData(manifest *inventory.Manifest, sharedEnv map[string
 			return nil, fmt.Errorf("load internal PKI bootstrap material: %w", err)
 		}
 		runtimeData["internal_pki_bootstrap"] = pki
+	}
+	qm, hasQuartermaster := manifest.Services["quartermaster"]
+	if !hasQuartermaster || !qm.Enabled {
+		return runtimeData, nil
+	}
+	if strings.TrimSpace(sharedEnv["SERVICE_TOKEN"]) == "" {
+		return nil, fmt.Errorf("build authoritative desired state: SERVICE_TOKEN is required to resolve control-plane identities")
+	}
+	sess, err := remoteaccess.OpenSession(remoteaccess.Options{
+		Manifest:      manifest,
+		SSHKeyPath:    sshKey,
+		AllowInsecure: isDevProfile(manifest),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("build authoritative desired state: open control-plane session: %w", err)
+	}
+	defer sess.Close()
+	ownerTenantIDs, err := resolveClusterOwnerTenantIDs(ctx, manifest, runtimeData, sess)
+	if err != nil {
+		return nil, fmt.Errorf("build authoritative desired state: resolve cluster owners: %w", err)
+	}
+	systemTenantID := strings.TrimSpace(ownerTenantIDs[bootstrap.SystemTenantAlias])
+	if systemTenantID == "" {
+		return nil, fmt.Errorf("build authoritative desired state: Quartermaster returned no system tenant UUID")
+	}
+	runtimeData["system_tenant_id"] = systemTenantID
+	runtimeData["owner_tenant_ids_by_alias"] = ownerTenantIDs
+	if qmAddr, addrErr := resolveServiceGRPCAddr(manifest, "quartermaster", defaultGRPCPort("quartermaster")); addrErr == nil {
+		runtimeData["quartermaster_grpc_addr"] = qmAddr
 	}
 	return runtimeData, nil
 }
@@ -360,7 +396,7 @@ func collectServiceDiffTargets(
 				targets = append(targets, base)
 				continue
 			}
-			task := orchestrator.NewServiceTask(deploy, name, hostName, hostName, phase)
+			task := newClusterDiffTask(deploy, name, hostName, phase, manifest)
 			cfg, err := buildTaskConfig(task, manifest, opts.RuntimeData, false, opts.ManifestDir, opts.SharedEnv, opts.ClusterEnvs, opts.ReleaseRepos)
 			if err != nil {
 				base.unknown = err.Error()
@@ -390,6 +426,12 @@ func collectServiceDiffTargets(
 		}
 	}
 	return targets
+}
+
+func newClusterDiffTask(deploy, serviceID, hostName string, phase orchestrator.Phase, manifest *inventory.Manifest) *orchestrator.Task {
+	task := orchestrator.NewServiceTask(deploy, serviceID, hostName, hostName, phase)
+	task.ClusterID = effectiveApplyCluster(manifest, serviceID, hostName)
+	return task
 }
 
 func diffServiceHosts(name string, svc inventory.ServiceConfig, manifest *inventory.Manifest) []string {
@@ -461,7 +503,7 @@ func renderClusterDiffText(w io.Writer, rep clusterDiffReport) {
 	case rep.Summary.Changed > 0 && rep.Summary.Unknown == 0:
 		fmt.Fprintf(w, "%d changed across %d entries (all classifiable)\n", rep.Summary.Changed, rep.Summary.Total)
 	default:
-		fmt.Fprintf(w, "%d changed, %d unknown across %d entries — unknown requires `cluster provision`\n",
+		fmt.Fprintf(w, "%d changed, %d unknown across %d entries — unknown entries were not compared and do not imply drift\n",
 			rep.Summary.Changed, rep.Summary.Unknown, rep.Summary.Total)
 	}
 }

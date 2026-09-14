@@ -69,7 +69,9 @@ func doctorPostgresCapabilities(
 			continue
 		}
 		task := &orchestrator.Task{ServiceID: serviceName, Type: deploy, Host: svc.Host, ClusterID: svc.Cluster}
-		_, db, ok := declaredPostgresDatabaseForService(task, manifest, map[string]string{})
+		env := map[string]string{}
+		applyCatalogPostgresDatabaseDefaults(task, env)
+		_, db, ok := declaredPostgresDatabaseForService(task, manifest, env)
 		if !ok {
 			result.Status = "unhealthy"
 			result.Error = fmt.Sprintf("%s declares PostgreSQL capabilities but no physical database resolves from the manifest", serviceName)

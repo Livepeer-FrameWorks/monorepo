@@ -504,6 +504,26 @@ func TestRenderClusterDiffText(t *testing.T) {
 	}
 }
 
+func TestClusterDiffUnknownIsInformational(t *testing.T) {
+	t.Parallel()
+
+	if err := clusterDiffExitError(clusterDiffSummary{Total: 3, Unknown: 3}); err != nil {
+		t.Fatalf("unknown-only report must not fail: %v", err)
+	}
+	if err := clusterDiffExitError(clusterDiffSummary{Total: 3, Changed: 1, Unknown: 2}); err == nil {
+		t.Fatal("a proven change must fail")
+	}
+
+	var buf bytes.Buffer
+	renderClusterDiffText(&buf, clusterDiffReport{
+		Cluster: "production",
+		Summary: clusterDiffSummary{Total: 3, Unknown: 3},
+	})
+	if got := buf.String(); !strings.Contains(got, "do not imply drift") || strings.Contains(got, "requires `cluster provision`") {
+		t.Fatalf("unknown summary is misleading:\n%s", got)
+	}
+}
+
 func TestRenderExecuteResult(t *testing.T) {
 	t.Parallel()
 	var buf bytes.Buffer

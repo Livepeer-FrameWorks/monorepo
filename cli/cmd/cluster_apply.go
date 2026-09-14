@@ -130,7 +130,7 @@ func runClusterApply(cmd *cobra.Command, rc *resolvedCluster) error {
 		return fmt.Errorf("load cluster env_files: %w", err)
 	}
 	manifestDir := filepath.Dir(rc.ManifestPath)
-	runtimeData, err := buildFastPathRuntimeData(manifest, sharedEnv, manifestDir)
+	runtimeData, err := buildFastPathRuntimeData(ctx, manifest, sharedEnv, manifestDir, sshKey)
 	if err != nil {
 		return err
 	}
