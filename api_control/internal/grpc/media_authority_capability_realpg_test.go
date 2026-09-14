@@ -106,7 +106,7 @@ func TestMediaPlacementFirstIssuance_RealPG(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	peerA := &clusterpb.TenantClusterPeer{ClusterId: "official", ClusterClass: "platform_official", AccessActive: true, SubscriptionStatus: "active", AccessSource: clusterpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_PLATFORM_TIER, ControlCellId: "cell-a", RegionId: "us-east", MediaConsent: &pb.CapacityConsent{Revision: 7, AllowIngest: true, AllowServe: true, AllowExternalSource: true}}
+	peerA := &clusterpb.TenantClusterPeer{ClusterId: "official", ClusterType: "edge", ClusterClass: "platform_official", AccessActive: true, SubscriptionStatus: "active", AccessSource: clusterpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_PLATFORM_TIER, ControlCellId: "cell-a", RegionId: "us-east", MediaConsent: &pb.CapacityConsent{Revision: 7, AllowIngest: true, AllowServe: true, AllowExternalSource: true}}
 	owner := &tenantPlacementOwnerFixture{entitlement: &quartermasterpb.GetTenantEntitlementResponse{AllowedClusterIds: []string{"official"}, EffectiveAccess: []*clusterpb.TenantClusterPeer{peerA}}}
 	server := &CommodoreServer{db: db, logger: logrus.New(), authorityTenantSource: owner, authorityBillingSource: owner, mediaAuthorityKeyID: "first-issuance", mediaAuthorityPrivateKey: private}
 	store := placementpolicy.NewStore(db)

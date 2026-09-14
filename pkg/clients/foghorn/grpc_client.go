@@ -19,6 +19,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 const InternalServerName = "foghorn.internal"
@@ -200,6 +201,12 @@ func (c *GRPCClient) ApplyMediaAuthority(ctx context.Context, authority *mediaau
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	return c.authority.ApplyMediaAuthority(ctx, &foghornpb.ApplyMediaAuthorityRequest{Authority: authority})
+}
+
+func (c *GRPCClient) GetMediaCellPlacementCapability(ctx context.Context) (*foghornpb.MediaCellPlacementCapability, error) {
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	return c.authority.GetMediaCellPlacementCapability(ctx, &emptypb.Empty{})
 }
 
 func foghornClientTLSConfig(config GRPCConfig) grpcutil.ClientTLSConfig {

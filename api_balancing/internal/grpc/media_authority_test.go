@@ -82,3 +82,24 @@ func TestAttestCellPlacementCapabilityOnlyFromLedgerReads(t *testing.T) {
 		t.Fatalf("attestation = %v", got)
 	}
 }
+
+func TestGetMediaCellPlacementCapabilityUsesReplicaLedger(t *testing.T) {
+	server := NewFoghornGRPCServer(nil, nil, nil, nil, nil, nil, nil, nil)
+	if _, err := server.GetMediaCellPlacementCapability(context.Background(), nil); status.Code(err) != codes.Unavailable {
+		t.Fatalf("missing ledger code = %s, want Unavailable", status.Code(err))
+	}
+	server.cellPlacementCapability = func(context.Context) (localauthority.CellPlacementCapability, error) {
+		return localauthority.CellPlacementCapability{
+			SupportedSchemaVersions: []uint32{1, sharedauthority.PlacementSchemaVersion},
+			EnforcementReady:        true,
+			LiveReplicas:            3,
+		}, nil
+	}
+	got, err := server.GetMediaCellPlacementCapability(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.GetEnforcementReady() || got.GetLiveReplicas() != 3 {
+		t.Fatalf("capability = %+v", got)
+	}
+}

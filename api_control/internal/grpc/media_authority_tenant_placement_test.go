@@ -2,12 +2,76 @@ package grpc
 
 import (
 	"context"
+	"database/sql"
 	"testing"
+	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	mediapb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_authority"
 	pb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/media_placement"
 	"google.golang.org/protobuf/proto"
 )
+
+func TestTenantPlacementWithoutHistoryOrTargetsStaysLegacy(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	payload := &mediapb.TenantAuthority{
+		SchemaVersion:   1,
+		TenantId:        "tenant-unassigned",
+		Lifecycle:       mediapb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE,
+		BillingDecision: mediapb.TenantBillingDecision_TENANT_BILLING_DECISION_ALLOW,
+	}
+	mock.ExpectQuery("GetCurrentMediaAuthorityPayload").
+		WithArgs("tenant", payload.GetTenantId()).
+		WillReturnError(sql.ErrNoRows)
+	server := &CommodoreServer{db: db}
+	if err := server.compileTenantPlacement(context.Background(), payload, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if payload.GetSchemaVersion() != 1 || payload.GetMediaPlacement() != nil {
+		t.Fatalf("unassigned first authority entered placement schema: %+v", payload)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTenantPlacementRevocationInheritsBeforeCapabilityChecks(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	previous, _ := commercialAuthorityFixture()
+	encoded, err := proto.Marshal(previous)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mock.ExpectQuery("GetCurrentMediaAuthorityPayload").
+		WithArgs("tenant", previous.GetTenantId()).
+		WillReturnRows(sqlmock.NewRows([]string{"payload", "valid_until"}).AddRow(encoded, time.Now().Add(time.Hour)))
+	payload := &mediapb.TenantAuthority{
+		SchemaVersion:   1,
+		TenantId:        previous.GetTenantId(),
+		Lifecycle:       mediapb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_INACTIVE,
+		BillingDecision: mediapb.TenantBillingDecision_TENANT_BILLING_DECISION_INACTIVE,
+	}
+	server := &CommodoreServer{db: db}
+	if err := server.compileTenantPlacement(context.Background(), payload, nil, []string{"cell-a"}); err != nil {
+		t.Fatal(err)
+	}
+	if payload.GetSchemaVersion() != previous.GetSchemaVersion() || !proto.Equal(payload.GetMediaPlacement(), previous.GetMediaPlacement()) {
+		t.Fatalf("revocation lost established placement fence: %+v", payload)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestTenantPlacementRevocationIsIndependentAndDetached(t *testing.T) {
 	tenant, _ := commercialAuthorityFixture()

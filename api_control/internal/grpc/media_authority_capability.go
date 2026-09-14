@@ -13,6 +13,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/database"
 	sharedauthority "github.com/Livepeer-FrameWorks/monorepo/pkg/mediaauthority"
 	foghornpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/foghorn"
+	"golang.org/x/sync/errgroup"
 )
 
 const cellPlacementCapabilityRefreshReason = "cell_placement_capability_ready"
@@ -86,6 +87,33 @@ func (s *CommodoreServer) recordCellPlacementCapability(ctx context.Context, cel
 		}
 		return nil
 	})
+}
+
+// refreshPlacementCellCapabilities asks each target cell for an attestation
+// before publication. Authority acknowledgements keep the stored capability
+// fresh, while this path breaks the first-delivery dependency for a new cell.
+func (s *CommodoreServer) refreshPlacementCellCapabilities(ctx context.Context, cells []string) error {
+	targets := sortedUnique(cells)
+	var group errgroup.Group
+	group.SetLimit(mediaAuthorityDeliveryWorkers)
+	for _, cellID := range targets {
+		cellID := cellID
+		group.Go(func() error {
+			client, err := s.resolveFoghornForClusterDirect(ctx, cellID)
+			if err != nil {
+				return fmt.Errorf("resolve placement capability cell %q: %w", cellID, err)
+			}
+			capability, err := client.GetMediaCellPlacementCapability(ctx)
+			if err != nil {
+				return fmt.Errorf("read placement capability for cell %q: %w", cellID, err)
+			}
+			if err := s.recordCellPlacementCapability(ctx, cellID, capability); err != nil {
+				return fmt.Errorf("persist placement capability for cell %q: %w", cellID, err)
+			}
+			return nil
+		})
+	}
+	return group.Wait()
 }
 
 // placementCellsReady reports whether every listed cell has attested schema-2

@@ -178,10 +178,8 @@ func testMediaPlacementDeadlineDelivery(t *testing.T, db *sql.DB) {
 	case <-ctx.Done():
 		t.Fatal("ordinary delivery did not enter transport")
 	}
-	for range mediaAuthorityDeliveryWorkers {
-		workers.Add(1)
-		go func() { defer workers.Done(); server.processMediaAuthorityDeadlineDeliveryWorker(ctx) }()
-	}
+	workers.Add(1)
+	go func() { defer workers.Done(); server.processMediaAuthorityDeadlineDeliveryBatch(ctx) }()
 	select {
 	case <-fake.shortStarted:
 	case <-ctx.Done():

@@ -53,7 +53,7 @@ func TestMediaPlacementTenantRefresh_RealPG(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	peer := &clusterpb.TenantClusterPeer{ClusterId: "official", ClusterClass: "platform_official", AccessActive: true, SubscriptionStatus: "active", AccessSource: clusterpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_PLATFORM_TIER, ControlCellId: "cell-a", RegionId: "us-east", MediaConsent: &pb.CapacityConsent{Revision: 7, AllowIngest: true, AllowServe: true, AllowExternalSource: true}}
+	peer := &clusterpb.TenantClusterPeer{ClusterId: "official", ClusterType: "edge", ClusterClass: "platform_official", AccessActive: true, SubscriptionStatus: "active", AccessSource: clusterpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_PLATFORM_TIER, ControlCellId: "cell-a", RegionId: "us-east", MediaConsent: &pb.CapacityConsent{Revision: 7, AllowIngest: true, AllowServe: true, AllowExternalSource: true}}
 	owner := &tenantPlacementOwnerFixture{entitlement: &quartermasterpb.GetTenantEntitlementResponse{AllowedClusterIds: []string{"official"}, EffectiveAccess: []*clusterpb.TenantClusterPeer{peer}}}
 	server := &CommodoreServer{db: db, authorityTenantSource: owner, authorityBillingSource: owner, mediaAuthorityKeyID: "tenant-placement", mediaAuthorityPrivateKey: private}
 	store := placementpolicy.NewStore(db)

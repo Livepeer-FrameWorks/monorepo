@@ -865,7 +865,7 @@ func effectivePreferredClusterID(primaryClusterID, officialClusterID string, gra
 }
 
 func mediaAuthorityPeerAllowed(tierLevel int32, peer *clusterpeerpb.TenantClusterPeer) bool {
-	if peer == nil {
+	if peer == nil || strings.ToLower(strings.TrimSpace(peer.GetClusterType())) != "edge" {
 		return false
 	}
 	class := strings.ToLower(strings.TrimSpace(peer.GetClusterClass()))
@@ -1199,10 +1199,7 @@ func (s *CommodoreServer) persistMediaObjectAuthority(ctx context.Context, autho
 }
 
 func (s *CommodoreServer) runMediaAuthorityWorkers(ctx context.Context) {
-	processes := []func(context.Context){s.processMediaAuthorityRefreshBatch, s.processMediaAuthorityDeliveryBatch, s.processMediaAuthorityDeadlineRefreshBatch, s.processTenantMediaAuthorityDeadlineRefreshBatch, s.processPlacementActivationBacklog}
-	for range mediaAuthorityDeliveryWorkers {
-		processes = append(processes, s.processMediaAuthorityDeadlineDeliveryWorker)
-	}
+	processes := []func(context.Context){s.processMediaAuthorityRefreshBatch, s.processMediaAuthorityDeliveryBatch, s.processMediaAuthorityDeadlineDeliveryBatch, s.processMediaAuthorityDeadlineRefreshBatch, s.processTenantMediaAuthorityDeadlineRefreshBatch, s.processPlacementActivationBacklog}
 	runMediaAuthorityWorkerGroup(ctx, processes...)
 }
 

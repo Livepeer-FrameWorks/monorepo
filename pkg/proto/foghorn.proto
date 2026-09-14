@@ -9,6 +9,7 @@ import "shared.proto";
 import "foghorn_control.proto";
 import "media_authority.proto";
 import "media_placement.proto";
+import "google/protobuf/empty.proto";
 import "google/protobuf/timestamp.proto";
 
 // FOGHORN CONTROL PLANE SERVICES
@@ -153,6 +154,10 @@ service TenantControlService {
 // Foghorn's internal-CA listener; Mist and Helmsman never call it.
 service MediaAuthorityControlService {
   rpc ApplyMediaAuthority(ApplyMediaAuthorityRequest) returns (ApplyMediaAuthorityResponse);
+  // GetMediaCellPlacementCapability lets Commodore establish the schema
+  // capability of a new target cell before sending that cell its first
+  // authority. The attestation is derived from Foghorn's replica ledger.
+  rpc GetMediaCellPlacementCapability(google.protobuf.Empty) returns (MediaCellPlacementCapability);
 }
 
 message ApplyMediaAuthorityRequest {

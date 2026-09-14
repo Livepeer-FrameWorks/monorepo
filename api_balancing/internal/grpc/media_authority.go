@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 // ApplyMediaAuthority durably installs one signed cell-bound authority. A
@@ -44,6 +45,17 @@ func (s *FoghornGRPCServer) ApplyMediaAuthority(ctx context.Context, req *foghor
 	}
 	response.PlacementCapability = s.attestCellPlacementCapability(ctx)
 	return response, nil
+}
+
+// GetMediaCellPlacementCapability reports the same ledger-derived attestation
+// carried by successful authority acknowledgements. It allows a new cell to
+// prove readiness before it has received its first authority.
+func (s *FoghornGRPCServer) GetMediaCellPlacementCapability(ctx context.Context, _ *emptypb.Empty) (*foghornpb.MediaCellPlacementCapability, error) {
+	capability := s.attestCellPlacementCapability(ctx)
+	if capability == nil {
+		return nil, status.Error(codes.Unavailable, "media cell placement capability is unavailable")
+	}
+	return capability, nil
 }
 
 // attestCellPlacementCapability rides on the acknowledgement so Commodore learns

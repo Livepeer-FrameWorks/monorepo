@@ -43,7 +43,7 @@ func TestMediaPlacementTenantDeadline_RealPG(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	peer := &clusterpb.TenantClusterPeer{ClusterId: "official", ClusterClass: "platform_official", AccessActive: true, SubscriptionStatus: "active", AccessSource: clusterpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_PLATFORM_TIER, ControlCellId: "cell-a", MediaConsent: &pb.CapacityConsent{AllowIngest: true, AllowServe: true}, AccessExpiresAt: timestamppb.New(time.Now().Add(30 * time.Second))}
+	peer := &clusterpb.TenantClusterPeer{ClusterId: "official", ClusterType: "edge", ClusterClass: "platform_official", AccessActive: true, SubscriptionStatus: "active", AccessSource: clusterpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_PLATFORM_TIER, ControlCellId: "cell-a", MediaConsent: &pb.CapacityConsent{AllowIngest: true, AllowServe: true}, AccessExpiresAt: timestamppb.New(time.Now().Add(30 * time.Second))}
 	owner := &tenantPlacementOwnerFixture{entitlement: &quartermasterpb.GetTenantEntitlementResponse{AllowedClusterIds: []string{"official"}, EffectiveAccess: []*clusterpb.TenantClusterPeer{peer}}}
 	server := &CommodoreServer{db: db, logger: logging.NewLogger(), authorityTenantSource: owner, authorityBillingSource: owner, mediaAuthorityKeyID: "tenant-deadline", mediaAuthorityPrivateKey: private}
 	if err := server.recordCellPlacementCapability(ctx, "cell-a", readyCellAttestation()); err != nil {

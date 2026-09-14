@@ -70,17 +70,43 @@ func (s *CommodoreServer) compileTenantPlacement(ctx context.Context, payload *m
 			return err
 		}
 	}
-	if previous.GetSchemaVersion() == sharedauthority.PlacementSchemaVersion {
-		return s.inheritTenantPlacement(ctx, payload, entitlement, previous)
+	established := previous.GetSchemaVersion() == sharedauthority.PlacementSchemaVersion
+	active := payload.GetLifecycle() == mediapb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE && payload.GetBillingDecision() == mediapb.TenantBillingDecision_TENANT_BILLING_DECISION_ALLOW
+	if !active {
+		if established {
+			return s.inheritTenantPlacement(ctx, payload, entitlement, previous)
+		}
+		return nil
 	}
-	if payload.GetLifecycle() != mediapb.AuthorityLifecycle_AUTHORITY_LIFECYCLE_ACTIVE || payload.GetBillingDecision() != mediapb.TenantBillingDecision_TENANT_BILLING_DECISION_ALLOW {
-		// A denied tenant has nothing to place; its first schema-2 issuance waits
-		// for an active refresh so revocation semantics never depend on a barrier.
+	if len(targets) == 0 {
+		if established {
+			return s.inheritTenantPlacement(ctx, payload, entitlement, previous)
+		}
 		return nil
 	}
 	ready, err := placementCellsReady(ctx, queries, targets)
-	if err != nil || !ready {
+	if err != nil {
 		return err
+	}
+	var probeErr error
+	if !ready {
+		probeErr = s.refreshPlacementCellCapabilities(ctx, targets)
+		ready, err = placementCellsReady(ctx, queries, targets)
+		if err != nil {
+			return err
+		}
+	}
+	if !ready {
+		if established {
+			if probeErr != nil {
+				return fmt.Errorf("placement enforcement capability unavailable: %w", probeErr)
+			}
+			return errors.New("tenant authority targets a cell without placement enforcement capability")
+		}
+		return nil
+	}
+	if established {
+		return s.inheritTenantPlacement(ctx, payload, entitlement, previous)
 	}
 	// First issuance is opportunistic: a tenant whose owners have not yet
 	// consented, or whose saved intent is incomplete, keeps its legacy refresh

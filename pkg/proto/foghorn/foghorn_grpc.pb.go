@@ -14,6 +14,7 @@ import (
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
+	emptypb "google.golang.org/protobuf/types/known/emptypb"
 )
 
 // This is a compile-time assertion to ensure that this generated file
@@ -1606,7 +1607,8 @@ var TenantControlService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	MediaAuthorityControlService_ApplyMediaAuthority_FullMethodName = "/foghorn.MediaAuthorityControlService/ApplyMediaAuthority"
+	MediaAuthorityControlService_ApplyMediaAuthority_FullMethodName             = "/foghorn.MediaAuthorityControlService/ApplyMediaAuthority"
+	MediaAuthorityControlService_GetMediaCellPlacementCapability_FullMethodName = "/foghorn.MediaAuthorityControlService/GetMediaCellPlacementCapability"
 )
 
 // MediaAuthorityControlServiceClient is the client API for MediaAuthorityControlService service.
@@ -1618,6 +1620,10 @@ const (
 // Foghorn's internal-CA listener; Mist and Helmsman never call it.
 type MediaAuthorityControlServiceClient interface {
 	ApplyMediaAuthority(ctx context.Context, in *ApplyMediaAuthorityRequest, opts ...grpc.CallOption) (*ApplyMediaAuthorityResponse, error)
+	// GetMediaCellPlacementCapability lets Commodore establish the schema
+	// capability of a new target cell before sending that cell its first
+	// authority. The attestation is derived from Foghorn's replica ledger.
+	GetMediaCellPlacementCapability(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*MediaCellPlacementCapability, error)
 }
 
 type mediaAuthorityControlServiceClient struct {
@@ -1638,6 +1644,16 @@ func (c *mediaAuthorityControlServiceClient) ApplyMediaAuthority(ctx context.Con
 	return out, nil
 }
 
+func (c *mediaAuthorityControlServiceClient) GetMediaCellPlacementCapability(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*MediaCellPlacementCapability, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MediaCellPlacementCapability)
+	err := c.cc.Invoke(ctx, MediaAuthorityControlService_GetMediaCellPlacementCapability_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // MediaAuthorityControlServiceServer is the server API for MediaAuthorityControlService service.
 // All implementations must embed UnimplementedMediaAuthorityControlServiceServer
 // for forward compatibility.
@@ -1647,6 +1663,10 @@ func (c *mediaAuthorityControlServiceClient) ApplyMediaAuthority(ctx context.Con
 // Foghorn's internal-CA listener; Mist and Helmsman never call it.
 type MediaAuthorityControlServiceServer interface {
 	ApplyMediaAuthority(context.Context, *ApplyMediaAuthorityRequest) (*ApplyMediaAuthorityResponse, error)
+	// GetMediaCellPlacementCapability lets Commodore establish the schema
+	// capability of a new target cell before sending that cell its first
+	// authority. The attestation is derived from Foghorn's replica ledger.
+	GetMediaCellPlacementCapability(context.Context, *emptypb.Empty) (*MediaCellPlacementCapability, error)
 	mustEmbedUnimplementedMediaAuthorityControlServiceServer()
 }
 
@@ -1659,6 +1679,9 @@ type UnimplementedMediaAuthorityControlServiceServer struct{}
 
 func (UnimplementedMediaAuthorityControlServiceServer) ApplyMediaAuthority(context.Context, *ApplyMediaAuthorityRequest) (*ApplyMediaAuthorityResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ApplyMediaAuthority not implemented")
+}
+func (UnimplementedMediaAuthorityControlServiceServer) GetMediaCellPlacementCapability(context.Context, *emptypb.Empty) (*MediaCellPlacementCapability, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetMediaCellPlacementCapability not implemented")
 }
 func (UnimplementedMediaAuthorityControlServiceServer) mustEmbedUnimplementedMediaAuthorityControlServiceServer() {
 }
@@ -1700,6 +1723,24 @@ func _MediaAuthorityControlService_ApplyMediaAuthority_Handler(srv interface{}, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _MediaAuthorityControlService_GetMediaCellPlacementCapability_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(MediaAuthorityControlServiceServer).GetMediaCellPlacementCapability(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: MediaAuthorityControlService_GetMediaCellPlacementCapability_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(MediaAuthorityControlServiceServer).GetMediaCellPlacementCapability(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // MediaAuthorityControlService_ServiceDesc is the grpc.ServiceDesc for MediaAuthorityControlService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1710,6 +1751,10 @@ var MediaAuthorityControlService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ApplyMediaAuthority",
 			Handler:    _MediaAuthorityControlService_ApplyMediaAuthority_Handler,
+		},
+		{
+			MethodName: "GetMediaCellPlacementCapability",
+			Handler:    _MediaAuthorityControlService_GetMediaCellPlacementCapability_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

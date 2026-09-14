@@ -203,13 +203,13 @@ func TestBuildTenantAuthorityTargetsControlAndEligibleCells(t *testing.T) {
 	}
 	entitlement := &quartermasterpb.GetTenantEntitlementResponse{EffectiveAccess: []*clusterpeerpb.TenantClusterPeer{
 		{
-			ClusterId: "media-a", AccessActive: true, SubscriptionStatus: "active",
+			ClusterId: "media-a", ClusterType: "edge", AccessActive: true, SubscriptionStatus: "active",
 			AccessSource: clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_PLATFORM_TIER,
 			AccessLevel:  "shared", ClusterClass: "platform_official", ControlCellId: "cell-a", EligibleServingCellIds: []string{"cell-c", "cell-b", "cell-a"},
 			AccessExpiresAt: timestamppb.New(expiresAt),
 		},
 		{
-			ClusterId: "media-official", AccessActive: true, SubscriptionStatus: "active",
+			ClusterId: "media-official", ClusterType: "edge", AccessActive: true, SubscriptionStatus: "active",
 			AccessSource: clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_PLATFORM_TIER,
 			AccessLevel:  "shared", ClusterClass: "platform_official", ControlCellId: "cell-a", EligibleServingCellIds: []string{"cell-a"},
 			AccessExpiresAt: timestamppb.New(expiresAt),
@@ -240,6 +240,36 @@ func TestBuildTenantAuthorityTargetsControlAndEligibleCells(t *testing.T) {
 	}
 	if len(revisions) != 2 || revisions[0].GetService() != "purser" || revisions[1].GetService() != "quartermaster" {
 		t.Fatalf("source revisions are not stable: %+v", revisions)
+	}
+}
+
+func TestBuildTenantAuthorityExcludesNonMediaOwnerClusters(t *testing.T) {
+	issuedAt := time.Now().UTC()
+	entitlement := &quartermasterpb.GetTenantEntitlementResponse{EffectiveAccess: []*clusterpeerpb.TenantClusterPeer{
+		{
+			ClusterId: "core-control", ClusterType: "central", ControlCellId: "core-control",
+			AccessActive: true, SubscriptionStatus: "active",
+			AccessSource: clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_OWNER,
+		},
+		{
+			ClusterId: "media-eu", ClusterType: "edge", ClusterClass: "platform_official", ControlCellId: "media-eu",
+			AccessActive: true, SubscriptionStatus: "active",
+			AccessSource: clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_PLATFORM_TIER,
+		},
+	}}
+	payload, targets, _, _, err := buildTenantAuthority(
+		&quartermasterpb.Tenant{Id: "tenant-1", IsActive: true}, entitlement,
+		&purserpb.GetTenantBillingStatusResponse{BillingModel: "postpaid"},
+		&purserpb.GetTenantAdmissionStatusResponse{TierLevel: 1}, issuedAt,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := targets, []string{"media-eu"}; !equalStrings(got, want) {
+		t.Fatalf("targets = %v, want %v", got, want)
+	}
+	if len(payload.GetEffectiveClusterGrants()) != 1 || payload.GetEffectiveClusterGrants()[0].GetClusterId() != "media-eu" {
+		t.Fatalf("media grants = %+v", payload.GetEffectiveClusterGrants())
 	}
 }
 
@@ -441,7 +471,7 @@ func TestBuildTenantAuthorityDeniedCarriesNoPositiveGrants(t *testing.T) {
 	issuedAt := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
 	tenant := &quartermasterpb.Tenant{Id: "tenant-1", IsActive: true}
 	entitlement := &quartermasterpb.GetTenantEntitlementResponse{EffectiveAccess: []*clusterpeerpb.TenantClusterPeer{{
-		ClusterId: "media-a", AccessActive: true, SubscriptionStatus: "active",
+		ClusterId: "media-a", ClusterType: "edge", AccessActive: true, SubscriptionStatus: "active",
 		AccessSource: clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_OWNER,
 		ClusterClass: "tenant_private", ControlCellId: "cell-a",
 	}}}
@@ -463,7 +493,7 @@ func TestBuildTenantAuthorityRejectsUnscopedGrant(t *testing.T) {
 	issuedAt := time.Now().UTC()
 	tenant := &quartermasterpb.Tenant{Id: "tenant-1", IsActive: true}
 	entitlement := &quartermasterpb.GetTenantEntitlementResponse{EffectiveAccess: []*clusterpeerpb.TenantClusterPeer{{
-		ClusterId: "media-a", AccessActive: true, SubscriptionStatus: "active",
+		ClusterId: "media-a", ClusterType: "edge", AccessActive: true, SubscriptionStatus: "active",
 		AccessSource: clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_OWNER, ClusterClass: "tenant_private",
 	}}}
 	billing := &purserpb.GetTenantBillingStatusResponse{BillingModel: "postpaid"}
@@ -477,7 +507,7 @@ func TestBuildTenantAuthorityFiltersClusterClassesByPurserTier(t *testing.T) {
 	tenant := &quartermasterpb.Tenant{Id: "tenant-1", IsActive: true, OfficialClusterId: stringPointer("official")}
 	peer := func(id, class string) *clusterpeerpb.TenantClusterPeer {
 		return &clusterpeerpb.TenantClusterPeer{
-			ClusterId: id, ClusterClass: class, ControlCellId: "cell-" + id,
+			ClusterId: id, ClusterType: "edge", ClusterClass: class, ControlCellId: "cell-" + id,
 			AccessActive: true, SubscriptionStatus: "active",
 			AccessSource: clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_PLATFORM_TIER,
 		}
@@ -511,7 +541,7 @@ func TestMediaAuthorityClusterClassAllowedNormalizesCase(t *testing.T) {
 	}
 	if !mediaAuthorityPeerAllowed(1, &clusterpeerpb.TenantClusterPeer{
 		AccessSource: clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_PRIVATE_INVITE,
-		ClusterClass: " TENANT_PRIVATE ",
+		ClusterType:  " EDGE ", ClusterClass: " TENANT_PRIVATE ",
 	}) {
 		t.Fatal("private-invite class should use the same normalization")
 	}
@@ -521,7 +551,7 @@ func TestBuildTenantAuthorityDerivesPreferredFromFilteredGrants(t *testing.T) {
 	issuedAt := time.Now().UTC()
 	peer := func(id, class, role string) *clusterpeerpb.TenantClusterPeer {
 		return &clusterpeerpb.TenantClusterPeer{
-			ClusterId: id, ClusterClass: class, Role: role, ControlCellId: "cell-" + id,
+			ClusterId: id, ClusterType: "edge", ClusterClass: class, Role: role, ControlCellId: "cell-" + id,
 			AccessActive: true, SubscriptionStatus: "active",
 			AccessSource: clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_PLATFORM_TIER,
 		}
@@ -556,7 +586,7 @@ func TestBuildTenantAuthorityDoesNotInventOfficialCluster(t *testing.T) {
 	payload, _, _, _, err := buildTenantAuthority(
 		&quartermasterpb.Tenant{Id: "tenant-1", IsActive: true, PrimaryClusterId: stringPointer("primary")},
 		&quartermasterpb.GetTenantEntitlementResponse{EffectiveAccess: []*clusterpeerpb.TenantClusterPeer{{
-			ClusterId: "primary", ClusterClass: "platform_official", ControlCellId: "cell-primary",
+			ClusterId: "primary", ClusterType: "edge", ClusterClass: "platform_official", ControlCellId: "cell-primary",
 			AccessActive: true, SubscriptionStatus: "active", Role: "preferred",
 			AccessSource: clusterpeerpb.TenantClusterAccessSource_TENANT_CLUSTER_ACCESS_SOURCE_PLATFORM_TIER,
 		}}},
@@ -577,7 +607,7 @@ func TestBuildTenantAuthorityUsesGrantProvenanceBeforeTier(t *testing.T) {
 	tenant := &quartermasterpb.Tenant{Id: "tenant-1", IsActive: true, OfficialClusterId: stringPointer("official")}
 	peer := func(id, class string, source clusterpeerpb.TenantClusterAccessSource) *clusterpeerpb.TenantClusterPeer {
 		return &clusterpeerpb.TenantClusterPeer{
-			ClusterId: id, ClusterClass: class, ControlCellId: "cell-" + id,
+			ClusterId: id, ClusterType: "edge", ClusterClass: class, ControlCellId: "cell-" + id,
 			AccessActive: true, SubscriptionStatus: "active", AccessSource: source,
 		}
 	}
