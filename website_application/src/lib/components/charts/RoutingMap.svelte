@@ -9,6 +9,7 @@
     bindModifierScrollZoom,
     featureCollection,
     firstBasemapSymbolLayer,
+    loadMapLibre,
     readRuntimePublicConfig,
   } from "@frameworks/map-core";
   import { getIconComponent } from "$lib/iconUtils";
@@ -198,7 +199,7 @@
     }
     try {
       const [module] = await Promise.all([
-        import("maplibre-gl"),
+        loadMapLibre(),
         import("maplibre-gl/dist/maplibre-gl.css"),
       ]);
       if (!mapContainer) return;

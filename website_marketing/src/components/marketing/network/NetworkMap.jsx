@@ -6,6 +6,7 @@ import {
   bindModifierScrollZoom,
   featureCollection,
   firstBasemapSymbolLayer,
+  loadMapLibre,
   readRuntimePublicConfig,
 } from "@frameworks/map-core";
 import { useNetworkStatus } from "./useNetworkStatus";
@@ -696,7 +697,7 @@ function NetworkMapInner({ data }) {
       }
       try {
         const [maplibre] = await Promise.all([
-          import("maplibre-gl"),
+          loadMapLibre(),
           import("maplibre-gl/dist/maplibre-gl.css"),
         ]);
         if (cancelled || !containerRef.current) return;

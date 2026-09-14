@@ -9,6 +9,7 @@
     bindModifierScrollZoom,
     featureCollection,
     firstBasemapSymbolLayer,
+    loadMapLibre,
     readRuntimePublicConfig,
     setLayerVisibility,
   } from "@frameworks/map-core";
@@ -107,7 +108,7 @@
     }
     try {
       const [maplibreModule, geo] = await Promise.all([
-        import("maplibre-gl"),
+        loadMapLibre(),
         import("$lib/data/countries.geo.json"),
         import("maplibre-gl/dist/maplibre-gl.css"),
       ]);

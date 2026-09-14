@@ -22,6 +22,8 @@ export interface RuntimePublicConfig {
   basemap: RuntimeBasemapConfig;
 }
 
+export type MapLibreModule = typeof import("maplibre-gl");
+
 declare global {
   // This value is generated from an allowlisted subset of the container
   // environment. It is intentionally browser-visible and is not a server secret.
@@ -79,6 +81,15 @@ export function parseRuntimePublicConfig(value: unknown): RuntimePublicConfig {
 
 export function readRuntimePublicConfig(): RuntimePublicConfig {
   return parseRuntimePublicConfig(globalThis.__FRAMEWORKS_RUNTIME_CONFIG__);
+}
+
+export async function loadMapLibre(): Promise<MapLibreModule> {
+  const [module, workerAsset] = await Promise.all([
+    import("maplibre-gl"),
+    import("maplibre-gl/dist/maplibre-gl-worker.mjs?url"),
+  ]);
+  module.setWorkerUrl(workerAsset.default);
+  return module;
 }
 
 export function resolveBasemapStyle(config: RuntimeBasemapConfig): string {

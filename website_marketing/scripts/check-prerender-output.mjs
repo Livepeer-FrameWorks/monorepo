@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 const clientDir = join(process.cwd(), "build", "client");
@@ -112,6 +112,16 @@ for (const relativePath of staticFiles) {
   if (!existsSync(absolutePath)) {
     failures.push(`missing static output: build/client/${relativePath}`);
   }
+}
+
+const assetsDir = join(clientDir, "assets");
+const mapLibreWorker = existsSync(assetsDir)
+  ? readdirSync(assetsDir).find((name) => /^maplibre-gl-worker-[^/]+\.mjs$/.test(name))
+  : undefined;
+if (!mapLibreWorker) {
+  failures.push("missing bundled MapLibre worker asset");
+} else if (statSync(join(assetsDir, mapLibreWorker)).size < 10_000) {
+  failures.push(`bundled MapLibre worker asset is unexpectedly small: ${mapLibreWorker}`);
 }
 
 // Non-content artifacts need explicit noindex headers because they are copied

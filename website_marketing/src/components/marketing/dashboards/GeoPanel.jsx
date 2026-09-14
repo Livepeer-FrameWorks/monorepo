@@ -4,6 +4,7 @@ import {
   basemapMapOptions,
   bindModifierScrollZoom,
   featureCollection,
+  loadMapLibre,
   readRuntimePublicConfig,
   setLayerVisibility,
 } from "@frameworks/map-core";
@@ -62,7 +63,7 @@ export function GeoPanel({ height = 440 }) {
       }
       try {
         const [maplibregl, { latLngToCell, cellToBoundary }] = await Promise.all([
-          import("maplibre-gl"),
+          loadMapLibre(),
           import("h3-js"),
           import("maplibre-gl/dist/maplibre-gl.css"),
         ]);
