@@ -9,6 +9,7 @@
   ansible.builtin.command: which resolvectl
   register: privateer_resolvectl_path
   changed_when: false
+  check_mode: false
 
 - name: Privateer | ensure systemd-resolved drop-in directory
   ansible.builtin.file:
