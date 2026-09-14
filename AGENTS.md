@@ -29,6 +29,7 @@
 | Code comments policy            | `docs/standards/code-comments.md`          |
 | Schema migrations & baseline    | `docs/standards/schema-migrations.md`      |
 | Release catalog & upgrade gates | `cli/internal/releases/catalog.yaml`       |
+| Release notes & operator steps  | `docs/standards/release-notes.md`          |
 | Deployment & ops                | `website_docs/src/content/docs/operators/` |
 | Dev runtime                     | `docker-compose.yml`                       |
 | Release pipeline                | `.github/workflows/release.yml`            |

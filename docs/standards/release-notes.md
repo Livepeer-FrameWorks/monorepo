@@ -8,6 +8,8 @@ How we write release notes for FrameWorks. Established with v0.2.32.
 - **Read the actual diffs, not commit subjects.** Commit messages routinely mislabel "exposed in webapp" or "hardened" as if they were new features. Verify by looking at migrations, new files, new proto messages, and earliest appearance via `git log -S`.
 - **New vs Hardened vs Fixed are separate categories.** If something already existed and this release polished it, that's `Hardened`, not `New`. Be honest. "Exposed better in the API" is not a feature, it's an improvement to an existing one.
 - **Flag pre-upgrade gotchas in the Upgrade section, not in Fixes.** Fail-closed migrations, NOT VALID/VALIDATE CHECK constraints on existing rows, mandatory re-declarations, etc. all go above the command block so operators see them before they run.
+- **Name every manual operator input.** If a release adds or changes a GitOps value, SOPS secret, manifest field, provider credential, or generated key, say exactly what the operator must set, where it belongs, how to create or update it, and how to verify it before deployment. If there are no manual input changes, say so.
+- **Keep release notes operationally complete but short.** Release notes provide the release-specific inputs, deviations, and command sequence. Detailed SQL, repair procedures, and per-environment transcripts belong in the linked operator runbook.
 - **No em dashes.** Use commas, parens, or periods.
 - **Backtick literal identifiers** (`dvr+{chapter_id}`, `lost_local`, env var names, etc.) so they render as code instead of being mangled by markdown.
 
@@ -24,19 +26,58 @@ The release file is `docs/releases/vX.Y.Z.md` (or wherever your release pipeline
 
 **`### Cluster operators (anyone running their own FrameWorks cluster)`**
 
-Open with a one-line migrations summary (count, which databases, expand vs postdeploy vs contract). Then any pre-upgrade gotchas (fail-closed columns that need pre-declaration, plan-tier reclassifications, etc.). The normal command sequence is:
+Open with the supported source version and minimum CLI version when either is constrained. Describe schema work only when it changes the operator procedure. Do not publish migration counts or a per-service migration inventory just because migrations exist.
 
+#### Operator-managed inputs
+
+Before the CLI block, list every release-specific manual input. For each input, state:
+
+- the exact env key, manifest field, DNS/provider setting, or generated-key family;
+- whether it must be added, refreshed, rotated, preserved, removed, or merely verified;
+- the canonical GitOps location, distinguishing plaintext configuration from SOPS-encrypted secrets;
+- the exact repository helper or CLI generator to use when one exists;
+- a safe verification command or expected state that does not reveal secret values;
+- rotation and compatibility consequences when replacing an existing value.
+
+Only list inputs changed by this release. Do not dump the complete environment contract into every release. Never include real secret values, tell operators to edit encrypted files directly, or use vague instructions such as "update the env vars." For `gitops/secrets/*.env`, use the repository's supported SOPS helper. For generated secret families, name the narrow generator intended for upgrades so operators do not rotate unrelated credentials.
+
+If the release has no manual GitOps, SOPS, manifest, DNS, or provider changes, write: `No GitOps or secret changes are required for this release.`
+
+#### Normal CLI lifecycle
+
+Use one manifest source consistently throughout the examples. Public notes normally use `--manifest <path>`. An operator-specific note may instead use `--gitops-dir <dir> --cluster <name>` plus `--age-key <path>` when the source contains SOPS-encrypted files.
+
+The compact normal sequence is:
+
+    frameworks cluster migrate validate
     frameworks cluster release plan --manifest <path> --version vX.Y.Z
     frameworks cluster release apply --manifest <path> --version vX.Y.Z --dry-run
     frameworks cluster release apply --manifest <path> --version vX.Y.Z --yes
     frameworks cluster status --manifest <path>
+    frameworks cluster doctor --manifest <path> --deep
+    frameworks cluster diff --manifest <path>
 
 `release plan` is the credential-free, static preview. `release apply --dry-run` is the live preflight: it resolves access and authentication, then runs the same migration, transition, and service checks the real rollout will use. `release apply` owns the ordered expand migrations, service upgrades, declared release transitions, and postdeploy migrations. Do not duplicate those steps in the normal-path command block.
+
+`cluster diff` is verification, not a mandatory invitation to run `cluster provision`. If it reports intended infrastructure or rendered-config drift, name the specific reconciliation command separately.
+
+#### Required data migrations
+
+Data migrations are conditional, not boilerplate. When the release catalog declares them, explain whether upgraded binaries must be live before their handlers exist and whether the first `release apply` intentionally stops at the postdeploy gate. Name the required IDs and their ordering or dependency constraints, but link detailed repair and inspection procedures to the operator runbook.
+
+The compact pattern is:
+
+    frameworks cluster data-migrate list --manifest <path> --to-version vX.Y.Z
+    frameworks cluster data-migrate run <service>.<migration_id> --manifest <path>
+    frameworks cluster data-migrate verify <service>.<migration_id> --manifest <path>
+    frameworks cluster release apply --manifest <path> --version vX.Y.Z --yes
+
+Repeat the run and verify pair for every migration declared by that release. State explicitly whether a gate exit leaves already-upgraded services running so operators do not mistake an intentional two-pass rollout for an automatic rollback.
 
 Contract migrations are always outside `release apply`. When a release has contract migrations, name the rollback or observation window and append a separate, explicitly deferred block:
 
     frameworks cluster migrate --manifest <path> --phase contract --to-version vX.Y.Z --dry-run
-    frameworks cluster migrate --manifest <path> --phase contract --to-version vX.Y.Z
+    frameworks cluster migrate --manifest <path> --phase contract --to-version vX.Y.Z --yes
 
 Classify everything else explicitly instead of using `cluster provision` as a catch-all:
 
@@ -56,6 +97,8 @@ Usually "Nothing to do" plus a one-liner on which new features show up automatic
 **`### Edge-only self-hosters`**
 
 Usually "Nothing to do" because Foghorn's edge release reconciler pushes new Helmsman/Caddy versions over the existing Helmsman stream. Mention this mechanism explicitly so readers understand why.
+
+When a release raises the minimum edge protocol, changes persistent edge state, or cannot update old edges in-band, replace "Nothing to do" with the exact control-plane-first or edge-first ordering, the concrete edge command, expected interruption, state-volume requirements, and recovery restriction.
 
 **`### Tenant-private / marketplace cluster operators`**
 
@@ -95,35 +138,49 @@ Run these before writing a single bullet.
 
     git diff <prev-tag>..<this-tag> --stat | tail -50
 
-3.  **List every migration in this release.**
+3.  **Audit operator-managed inputs.** Read the configuration and deployment diff, then inspect the operator GitOps source used for the deployment (for the managed platform, `../gitops`). Trace every newly required or changed input back to its runtime validation and renderer:
+
+        git diff --name-only <prev-tag>..<this-tag> -- \
+          config .env.example docker-compose.yml cli/pkg/inventory \
+          cli/pkg/provisioner docs/standards/environment-configuration.md \
+          website_docs/src/content/docs/operators
+
+    Classify each delta as derived, defaulted, plaintext GitOps, SOPS secret, manifest topology, or external-provider state. Release notes include only operator-owned changes. Confirm the exact helper command and a non-secret verification path; do not infer either from an example comment.
+
+4.  **List every migration in this release.**
 
         git diff --name-only <prev-tag>..<this-tag> -- pkg/database/sql/migrations | sort
 
     Then read each one. Migrations are the strongest signal of net-new functionality. New tables and new columns almost always mean a new feature. CHECK constraints over existing rows are pre-upgrade gotchas when existing data may violate them. Postdeploy and contract migrations need separate operator instructions.
 
-4.  **Read every new file.** `git show --stat <commit>` and look for the lines without an existing path. New `.go` files in `internal/control/` or `internal/grpc/` usually mean a new subsystem. New top-level packages under `pkg/` are often shared primitives worth calling out.
+5.  **Read every new file.** `git show --stat <commit>` and look for the lines without an existing path. New `.go` files in `internal/control/` or `internal/grpc/` usually mean a new subsystem. New top-level packages under `pkg/` are often shared primitives worth calling out.
 
-5.  **Read proto additions.**
+6.  **Read proto additions.**
 
         git diff <prev-tag>..<this-tag> -- pkg/proto/*.proto | grep "^+" | grep -E "rpc |^\+message "
 
     New RPCs are user-facing surface changes.
 
-6.  **Read GraphQL additions.**
+7.  **Read GraphQL additions.**
 
     git diff <prev-tag>..<this-tag> -- pkg/graphql/schema.graphql | grep "^+"
 
-7.  **Verify "new" claims with `git log -S`.** If you think a feature is new, confirm:
+8.  **Verify "new" claims with `git log -S`.** If you think a feature is new, confirm:
 
         git log --all --oneline -S "<symbol>" | tail
 
     If it predates the previous tag, it's not new in this release.
 
-8.  **Map every commit to a category.** If a commit doesn't fit `New / Hardened / Fixes / Build / Docs`, push back on whether it belongs in the release notes at all.
+9.  **Trace the CLI path.** Confirm the release catalog, minimum CLI, required transitions, data-migration gates, rollback restrictions, edge protocol floor, and contract behavior from code and generated release metadata. Do not reconstruct deployment ordering from an older release note.
+
+10. **Map every commit to a category.** If a commit doesn't fit `New / Hardened / Fixes / Build / Docs`, push back on whether it belongs in the release notes at all.
 
 ## Anti-patterns
 
 - **Listing commit subjects as features.** "Wire up ClickHouse migrations" is plumbing, not a feature. Skip or move to `Build / infra`.
+- **Publishing migration arithmetic.** Counts by service or phase are not useful release prose. State only the migration stages and operator actions that affect this rollout.
+- **Vague GitOps instructions.** "Update the environment" is not actionable. Name the changed keys or fields, their canonical file class, the supported edit/generation command, and a safe verification.
+- **Dumping the runbook into the release.** Include the normal CLI path and release-specific deviations. Link lengthy SQL, repair branches, host-by-host transcripts, and incident recovery to canonical operator docs.
 - **Calling things new when they're not.** "Signing keys, stream pulls and edge clusters surfaced better in API and webapp" is `Hardened`, because the underlying capability already shipped.
 - **Mixing audience instructions.** Don't tell self-hosters to run `frameworks cluster migrate`. They run edge nodes; Foghorn reconciles them.
 - **Inventing categories.** If there's nothing to put in `Build / infra`, drop the heading. No empty sections.
