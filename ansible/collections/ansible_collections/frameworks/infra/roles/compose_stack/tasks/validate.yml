@@ -35,16 +35,35 @@
     fail_msg: "compose_stack[{{ compose_stack_name }}]: no running containers"
   when: not (compose_stack_render_only | default(false) | bool)
 
-- name: Wait for compose HTTP health endpoint
+- name: Probe compose HTTP health endpoint
   ansible.builtin.uri:
     url: "http://127.0.0.1:{{ compose_stack_service.port | default(0) }}{{ compose_stack_service.health_path | default('') }}"
     method: GET
-    status_code: 200
+    status_code: "{{ range(200, 600) | list }}"
   register: compose_stack_health
   changed_when: false
+  failed_when: false
   retries: "{{ ((compose_stack_validate_timeout | int) / 2) | round(0, 'ceil') | int }}"
   delay: 2
-  until: compose_stack_health.status == 200
+  until: >-
+    compose_stack_health.status | default(-1) | int == 200
+    or (
+      compose_stack_health.status | default(-1) | int >= 400
+      and compose_stack_health.status | default(-1) | int < 500
+    )
+  when:
+    - not (compose_stack_render_only | default(false) | bool)
+    - compose_stack_service | default({}) | length > 0
+    - compose_stack_service.port | default(0) | int > 0
+    - (compose_stack_service.health_path | default('')) | length > 0
+
+- name: Require compose HTTP health endpoint success
+  ansible.builtin.assert:
+    that: compose_stack_health.status | default(-1) | int == 200
+    fail_msg: >-
+      compose_stack[{{ compose_stack_name }}]: health endpoint returned HTTP
+      {{ compose_stack_health.status | default('unreachable') }} at
+      http://127.0.0.1:{{ compose_stack_service.port | default(0) }}{{ compose_stack_service.health_path | default('') }}
   when:
     - not (compose_stack_render_only | default(false) | bool)
     - compose_stack_service | default({}) | length > 0
