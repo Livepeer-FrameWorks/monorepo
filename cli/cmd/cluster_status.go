@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
+	"sync"
 	"text/tabwriter"
 	"time"
 
@@ -20,11 +22,23 @@ import (
 
 // serviceStatus holds the collected version info for a single service entry.
 type serviceStatus struct {
-	Name      string `json:"name"`
-	Deployed  string `json:"deployed"`
-	Available string `json:"available"`
-	Status    string `json:"status"`
-	Mode      string `json:"mode"`
+	Name            string                 `json:"name"`
+	Deployed        string                 `json:"deployed"`
+	Available       string                 `json:"available"`
+	Status          string                 `json:"status"`
+	Mode            string                 `json:"mode"`
+	RunningReplicas int                    `json:"running_replicas"`
+	TotalReplicas   int                    `json:"total_replicas"`
+	Replicas        []serviceReplicaStatus `json:"replicas"`
+}
+
+type serviceReplicaStatus struct {
+	Host           string `json:"host"`
+	Deployed       string `json:"deployed"`
+	Status         string `json:"status"`
+	Mode           string `json:"mode"`
+	ArtifactDigest string `json:"artifact_digest,omitempty"`
+	Error          string `json:"error,omitempty"`
 }
 
 func newClusterStatusCmd() *cobra.Command {
@@ -37,9 +51,9 @@ func newClusterStatusCmd() *cobra.Command {
 available versions from the GitOps manifest.
 
 Fetches the release manifest for the cluster's configured channel (default:
-stable) and detects each enabled service on its configured host. The table
+stable) and detects each enabled service on every configured host. The table
 shows whether each service is up to date, has an upgrade available, is not
-running, or is not installed.`,
+running, is not installed, or has diverged across replicas.`,
 		Example: `  frameworks cluster status
   frameworks cluster status --manifest /etc/frameworks/cluster.yaml
   frameworks cluster status --json`,
@@ -87,16 +101,8 @@ func runClusterStatus(cmd *cobra.Command, rc *resolvedCluster, jsonOutput bool) 
 			return
 		}
 
-		hostName := svc.Host
-		if hostName == "" && len(svc.Hosts) > 0 {
-			hostName = svc.Hosts[0]
-		}
-		if hostName == "" {
-			return
-		}
-
-		host, ok := manifest.GetHost(hostName)
-		if !ok {
+		hostNames := serviceHosts(svc)
+		if len(hostNames) == 0 {
 			return
 		}
 
@@ -105,41 +111,61 @@ func runClusterStatus(cmd *cobra.Command, rc *resolvedCluster, jsonOutput bool) 
 			return
 		}
 
-		detector := detect.NewDetector(sshPool, host)
-		state, detectErr := detector.Detect(ctx, deployName)
-
-		deployed := ""
-		statusStr := "not installed"
-		mode := svc.Mode
-
-		if detectErr == nil && state != nil {
-			if state.Exists {
-				deployed = state.Version
-				mode = state.Mode
-				if state.Running {
-					statusStr = "up to date"
-				} else {
-					statusStr = "not running"
-				}
-			}
-		}
-
 		available := ""
+		availableDigest := ""
 		if svcInfo, infoErr := gitopsManifest.GetServiceInfo(deployName); infoErr == nil {
 			available = svcInfo.Version
+			availableDigest = svcInfo.Digest
 		}
 
-		if statusStr == "up to date" && deployed != available && available != "" {
-			statusStr = "upgrade available"
-		}
+		replicas := make([]serviceReplicaStatus, len(hostNames))
+		var wg sync.WaitGroup
+		for i, hostName := range hostNames {
+			i, hostName := i, hostName
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				replica := serviceReplicaStatus{Host: hostName, Mode: svc.Mode, Status: "not installed"}
+				host, ok := manifest.GetHost(hostName)
+				if !ok {
+					replica.Status = "configuration error"
+					replica.Error = "host is not declared in the manifest"
+					replicas[i] = replica
+					return
+				}
 
-		results = append(results, serviceStatus{
-			Name:      name,
-			Deployed:  deployed,
-			Available: available,
-			Status:    statusStr,
-			Mode:      mode,
-		})
+				state, detectErr := detect.NewDetector(sshPool, host).Detect(ctx, deployName)
+				if detectErr != nil {
+					replica.Status = "inspection failed"
+					replica.Error = detectErr.Error()
+					replicas[i] = replica
+					return
+				}
+				if state == nil || !state.Exists {
+					replicas[i] = replica
+					return
+				}
+
+				replica.Deployed = state.Version
+				replica.Mode = state.Mode
+				replica.ArtifactDigest = dockerImageDigest(state.Metadata["image"])
+				switch {
+				case !state.Running:
+					replica.Status = "not running"
+				case available != "" && state.Version != available:
+					replica.Status = "upgrade available"
+				case state.Mode == "docker" && availableDigest != "" && replica.ArtifactDigest != availableDigest:
+					replica.Status = "artifact drift"
+					replica.Error = fmt.Sprintf("running digest %s, want %s", displayDigest(replica.ArtifactDigest), availableDigest)
+				default:
+					replica.Status = "up to date"
+				}
+				replicas[i] = replica
+			}()
+		}
+		wg.Wait()
+
+		results = append(results, summarizeServiceReplicas(name, svc.Mode, available, replicas))
 	}
 
 	// Collect from each service group in deterministic order.
@@ -177,7 +203,7 @@ func runClusterStatus(cmd *cobra.Command, rc *resolvedCluster, jsonOutput bool) 
 	}
 
 	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "SERVICE\tDEPLOYED\tAVAILABLE\tSTATUS")
+	fmt.Fprintln(w, "SERVICE\tRUNNING\tDEPLOYED\tAVAILABLE\tSTATUS")
 	for _, r := range results {
 		deployed := r.Deployed
 		if deployed == "" {
@@ -187,14 +213,125 @@ func runClusterStatus(cmd *cobra.Command, rc *resolvedCluster, jsonOutput bool) 
 		if available == "" {
 			available = "-"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.Name, deployed, available, r.Status)
+		fmt.Fprintf(w, "%s\t%d/%d\t%s\t%s\t%s\n", r.Name, r.RunningReplicas, r.TotalReplicas, deployed, available, r.Status)
 	}
 	if err := w.Flush(); err != nil {
 		return err
 	}
+	printReplicaDiscrepancies(cmd, results)
 
 	printStatusControlPlaneSection(cmd, manifest)
 	return nil
+}
+
+func summarizeServiceReplicas(name, configuredMode, available string, replicas []serviceReplicaStatus) serviceStatus {
+	result := serviceStatus{
+		Name:          name,
+		Available:     available,
+		Mode:          configuredMode,
+		TotalReplicas: len(replicas),
+		Replicas:      replicas,
+	}
+	versions := map[string]struct{}{}
+	modes := map[string]struct{}{}
+	statusCounts := map[string]int{}
+	for _, replica := range replicas {
+		statusCounts[replica.Status]++
+		if replica.Status == "up to date" || replica.Status == "upgrade available" || replica.Status == "artifact drift" {
+			result.RunningReplicas++
+		}
+		if replica.Deployed != "" {
+			versions[replica.Deployed] = struct{}{}
+		}
+		if replica.Mode != "" {
+			modes[replica.Mode] = struct{}{}
+		}
+	}
+
+	versionList := sortedStatusKeys(versions)
+	switch len(versionList) {
+	case 0:
+		result.Deployed = ""
+	case 1:
+		result.Deployed = versionList[0]
+	default:
+		result.Deployed = "mixed (" + strings.Join(versionList, ", ") + ")"
+	}
+	modeList := sortedStatusKeys(modes)
+	if len(modeList) == 1 {
+		result.Mode = modeList[0]
+	} else if len(modeList) > 1 {
+		result.Mode = "mixed"
+	}
+
+	switch {
+	case len(replicas) == 0:
+		result.Status = "not configured"
+	case statusCounts["configuration error"] > 0:
+		result.Status = fmt.Sprintf("configuration error (%d/%d)", statusCounts["configuration error"], len(replicas))
+	case statusCounts["inspection failed"] > 0:
+		result.Status = fmt.Sprintf("inspection failed (%d/%d)", statusCounts["inspection failed"], len(replicas))
+	case statusCounts["not installed"] == len(replicas):
+		result.Status = "not installed"
+	case statusCounts["not installed"] > 0:
+		result.Status = fmt.Sprintf("partially installed (%d/%d)", len(replicas)-statusCounts["not installed"], len(replicas))
+	case statusCounts["not running"] == len(replicas):
+		result.Status = "not running"
+	case statusCounts["not running"] > 0:
+		result.Status = fmt.Sprintf("partially running (%d/%d)", result.RunningReplicas, len(replicas))
+	case len(versionList) > 1:
+		result.Status = "mixed versions"
+	case statusCounts["artifact drift"] > 0:
+		result.Status = fmt.Sprintf("artifact drift (%d/%d)", statusCounts["artifact drift"], len(replicas))
+	case statusCounts["upgrade available"] > 0:
+		result.Status = "upgrade available"
+	default:
+		result.Status = "up to date"
+	}
+	return result
+}
+
+func displayDigest(digest string) string {
+	if digest == "" {
+		return "unknown"
+	}
+	return digest
+}
+
+func sortedStatusKeys(values map[string]struct{}) []string {
+	keys := make([]string, 0, len(values))
+	for value := range values {
+		keys = append(keys, value)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func printReplicaDiscrepancies(cmd *cobra.Command, results []serviceStatus) {
+	printedHeader := false
+	for _, result := range results {
+		if result.Status == "up to date" || result.TotalReplicas <= 1 {
+			continue
+		}
+		for _, replica := range result.Replicas {
+			if replica.Status == "up to date" {
+				continue
+			}
+			if !printedHeader {
+				fmt.Fprintln(cmd.OutOrStdout(), "\nReplica discrepancies:")
+				printedHeader = true
+			}
+			deployed := replica.Deployed
+			if deployed == "" {
+				deployed = "unknown"
+			}
+			detail := replica.Status
+			if replica.Error != "" {
+				detail += ": " + replica.Error
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "  %s@%s: %s (%s)\n", result.Name, replica.Host, deployed, detail)
+		}
+	}
 }
 
 // printStatusControlPlaneSection runs ControlPlaneReadiness without SOPS and

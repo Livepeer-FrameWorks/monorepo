@@ -583,8 +583,12 @@ func resolveUpgradeHosts(manifest *inventory.Manifest, serviceName string) ([]in
 	if !ok || !svc.Enabled {
 		return nil, false
 	}
+	hostNames := serviceHosts(svc)
+	if serviceName == "privateer" {
+		hostNames = orchestrator.EffectivePrivateerHostsForManifest(svc, manifest)
+	}
 	var hosts []inventory.Host
-	for _, name := range serviceHosts(svc) {
+	for _, name := range hostNames {
 		if host, hostOK := manifest.GetHost(name); hostOK {
 			hosts = append(hosts, host)
 		}
@@ -635,9 +639,9 @@ func upgradeServiceOnHost(ctx context.Context, cmd *cobra.Command, rc *resolvedC
 		fmt.Fprintf(cmd.OutOrStdout(), "    New image: %s\n", svcInfo.FullImage)
 	}
 
-	// Skip replicas already at the target version (not in dry-run, which always
-	// runs the check-diff preview).
-	if state.Version == svcInfo.Version && !dryRun {
+	// A Docker tag is not an artifact identity. Release manifests pin an OCI
+	// digest, so a corrected image under the same version must still reconcile.
+	if deployedArtifactMatches(state, svcInfo) && !dryRun {
 		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("  %s already at version %s, nothing to do", host.ExternalIP, svcInfo.Version))
 		return result, nil
 	}
@@ -814,6 +818,24 @@ func upgradeServiceOnHost(ctx context.Context, cmd *cobra.Command, rc *resolvedC
 		ux.Success(cmd.OutOrStdout(), fmt.Sprintf("  %s upgraded from %s to %s", host.ExternalIP, previousVersion, svcInfo.Version))
 	}
 	return upgradeResult{changed: true, installed: firstInstall}, nil
+}
+
+func deployedArtifactMatches(state *detect.ServiceState, target *gitops.ServiceInfo) bool {
+	if state == nil || target == nil || state.Version != target.Version {
+		return false
+	}
+	if state.Mode != "docker" || target.Digest == "" {
+		return true
+	}
+	return dockerImageDigest(state.Metadata["image"]) == target.Digest
+}
+
+func dockerImageDigest(image string) string {
+	_, digest, ok := strings.Cut(strings.TrimSpace(image), "@")
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(digest)
 }
 
 // saveUpgradedVersion records the deployed version on the IN-MEMORY manifest only, for the rest of this run's steps. It

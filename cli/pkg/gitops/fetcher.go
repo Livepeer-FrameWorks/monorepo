@@ -580,8 +580,13 @@ func (m *Manifest) GetServiceInfo(serviceName string) (*ServiceInfo, error) {
 	// Search in native_binaries for binary-only services (e.g., privateer)
 	for _, nb := range m.NativeBinaries {
 		if nb.Name == serviceName {
+			version := strings.TrimSpace(nb.CarriedFrom)
+			if version == "" {
+				version = strings.TrimSpace(m.PlatformVersion)
+			}
 			info := &ServiceInfo{
 				Name:     nb.Name,
+				Version:  version,
 				Binaries: make(map[string]Artifact),
 			}
 			m.populateBinaries(info)

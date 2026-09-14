@@ -335,6 +335,7 @@ func TestCachePathsAreRepositoryScoped(t *testing.T) {
 
 func TestGetServiceInfoBinaryOnlyService(t *testing.T) {
 	m := &Manifest{
+		PlatformVersion: "v1.2.3",
 		NativeBinaries: []NativeBinary{
 			{
 				Name: "privateer",
@@ -352,6 +353,9 @@ func TestGetServiceInfoBinaryOnlyService(t *testing.T) {
 	}
 	if info.Name != "privateer" {
 		t.Fatalf("expected name privateer, got %s", info.Name)
+	}
+	if info.Version != "v1.2.3" {
+		t.Fatalf("expected platform version v1.2.3, got %s", info.Version)
 	}
 
 	bin, err := info.GetBinary("linux", "amd64")
@@ -375,6 +379,25 @@ func TestGetServiceInfoBinaryOnlyService(t *testing.T) {
 	_, err = m.GetServiceInfo("nonexistent")
 	if err == nil {
 		t.Fatal("expected error for nonexistent service")
+	}
+}
+
+func TestGetServiceInfoBinaryOnlyCarryForwardPreservesVersion(t *testing.T) {
+	m := &Manifest{
+		PlatformVersion: "v1.3.0",
+		NativeBinaries: []NativeBinary{{
+			Name:        "privateer",
+			CarriedFrom: "v1.2.3",
+			Artifacts:   []Artifact{{Arch: "linux-amd64", URL: "https://example.com/v1.2.3/privateer.tar.gz"}},
+		}},
+	}
+
+	info, err := m.GetServiceInfo("privateer")
+	if err != nil {
+		t.Fatalf("GetServiceInfo: %v", err)
+	}
+	if info.Version != "v1.2.3" {
+		t.Fatalf("expected carried version v1.2.3, got %s", info.Version)
 	}
 }
 

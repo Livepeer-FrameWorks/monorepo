@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"frameworks/cli/pkg/detect"
+	"frameworks/cli/pkg/gitops"
 	"frameworks/cli/pkg/inventory"
 	"frameworks/cli/pkg/orchestrator"
 )
@@ -157,13 +158,26 @@ func TestResolveUpgradeHosts_MultiReplicaAppReturnsAllHosts(t *testing.T) {
 			"db-a":   {Name: "db-a", ExternalIP: "10.0.0.9", Cluster: "core"},
 		},
 		Services: map[string]inventory.ServiceConfig{
-			"foghorn":  {Enabled: true, Hosts: []string{"edge-a", "edge-b"}},
-			"chandler": {Enabled: true, Hosts: []string{"edge-a", "edge-b"}},
-			"disabled": {Enabled: false, Hosts: []string{"edge-a"}},
+			"foghorn":   {Enabled: true, Hosts: []string{"edge-a", "edge-b"}},
+			"chandler":  {Enabled: true, Hosts: []string{"edge-a", "edge-b"}},
+			"privateer": {Enabled: true},
+			"disabled":  {Enabled: false, Hosts: []string{"edge-a"}},
 		},
 		Infrastructure: inventory.InfrastructureConfig{
 			Postgres: &inventory.PostgresConfig{Enabled: true, Host: "db-a"},
 		},
+	}
+
+	privateerHosts, privateerFound := resolveUpgradeHosts(manifest, "privateer")
+	if !privateerFound {
+		t.Fatal("privateer: expected hostless service to resolve effective hosts")
+	}
+	privateerNames := make([]string, 0, len(privateerHosts))
+	for _, h := range privateerHosts {
+		privateerNames = append(privateerNames, h.Name)
+	}
+	if got, want := strings.Join(privateerNames, ","), "db-a,edge-a,edge-b"; got != want {
+		t.Fatalf("privateer: expected effective hosts %s, got %s", want, got)
 	}
 
 	for _, svc := range []string{"foghorn", "chandler"} {
@@ -214,6 +228,50 @@ func TestUpgradeRollbackSupported(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := upgradeRollbackSupported(tt.version, tt.mode); got != tt.want {
 				t.Fatalf("upgradeRollbackSupported(%q,%q)=%v, want %v", tt.version, tt.mode, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDeployedArtifactMatchesUsesDockerDigest(t *testing.T) {
+	t.Parallel()
+	target := &gitops.ServiceInfo{Version: "v0.3.0", Digest: "sha256:new"}
+	tests := []struct {
+		name  string
+		state *detect.ServiceState
+		want  bool
+	}{
+		{
+			name: "exact digest",
+			state: &detect.ServiceState{Version: "v0.3.0", Mode: "docker", Metadata: map[string]string{
+				"image": "registry.example/foredeck:v0.3.0@sha256:new",
+			}},
+			want: true,
+		},
+		{
+			name: "same tag stale digest",
+			state: &detect.ServiceState{Version: "v0.3.0", Mode: "docker", Metadata: map[string]string{
+				"image": "registry.example/foredeck:v0.3.0@sha256:old",
+			}},
+			want: false,
+		},
+		{
+			name:  "same tag unknown digest",
+			state: &detect.ServiceState{Version: "v0.3.0", Mode: "docker", Metadata: map[string]string{}},
+			want:  false,
+		},
+		{
+			name:  "native version identity",
+			state: &detect.ServiceState{Version: "v0.3.0", Mode: "native"},
+			want:  true,
+		},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := deployedArtifactMatches(tt.state, target); got != tt.want {
+				t.Fatalf("deployedArtifactMatches()=%v, want %v", got, tt.want)
 			}
 		})
 	}
