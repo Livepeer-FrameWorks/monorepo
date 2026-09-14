@@ -1,8 +1,11 @@
 package ansiblerun
 
 import (
+	"context"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -32,6 +35,58 @@ func TestWriteExtraVarsFileUsesPrivateAtFile(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), "not-on-command-line") {
 		t.Fatalf("extra vars content missing value: %s", raw)
+	}
+}
+
+func TestTailWriterRetainsBoundedSuffix(t *testing.T) {
+	w := newTailWriter(5)
+	if _, err := w.Write([]byte("abc")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if _, err := w.Write([]byte("defg")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if got := w.String(); got != "cdefg" {
+		t.Fatalf("tail = %q, want %q", got, "cdefg")
+	}
+}
+
+func TestTailWriterSupportsConcurrentStreams(t *testing.T) {
+	w := newTailWriter(1024)
+	var wg sync.WaitGroup
+	for _, line := range []string{"stdout\n", "stderr\n"} {
+		line := line
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = w.Write([]byte(line))
+		}()
+	}
+	wg.Wait()
+	got := w.String()
+	if !strings.Contains(got, "stdout\n") || !strings.Contains(got, "stderr\n") {
+		t.Fatalf("tail did not retain both streams: %q", got)
+	}
+}
+
+func TestExecutorIncludesOutputTailOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "ansible-playbook")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\necho stdout-detail\necho stderr-detail >&2\nexit 2\n"), 0o755); err != nil {
+		t.Fatalf("write fake ansible-playbook: %v", err)
+	}
+
+	err := (&Executor{Binary: binary}).Execute(context.Background(), ExecuteOptions{
+		Playbook:  filepath.Join(dir, "playbook.yml"),
+		Inventory: filepath.Join(dir, "inventory.yml"),
+	})
+	if err == nil {
+		t.Fatal("expected command failure")
+	}
+	for _, detail := range []string{"Ansible output tail:", "stdout-detail", "stderr-detail"} {
+		if !strings.Contains(err.Error(), detail) {
+			t.Fatalf("error missing %q: %v", detail, err)
+		}
 	}
 }
 

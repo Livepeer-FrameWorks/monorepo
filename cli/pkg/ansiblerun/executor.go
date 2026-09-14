@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 
 	goansible_execute "github.com/apenella/go-ansible/v2/pkg/execute"
 	goansible_result "github.com/apenella/go-ansible/v2/pkg/execute/result"
@@ -88,6 +90,39 @@ type Executor struct {
 	Binary string
 }
 
+const ansibleFailureTailBytes = 64 * 1024
+
+type tailWriter struct {
+	mu    sync.Mutex
+	limit int
+	data  []byte
+}
+
+func newTailWriter(limit int) *tailWriter {
+	return &tailWriter{limit: limit}
+}
+
+func (w *tailWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if w.limit <= 0 {
+		return len(p), nil
+	}
+	w.data = append(w.data, p...)
+	if overflow := len(w.data) - w.limit; overflow > 0 {
+		copy(w.data, w.data[overflow:])
+		w.data = w.data[:w.limit]
+	}
+	return len(p), nil
+}
+
+func (w *tailWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return string(append([]byte(nil), w.data...))
+}
+
 // NewExecutor returns an Executor that resolves ansible-playbook from PATH.
 // It errors out loudly if the binary is missing — this is the CLI's single
 // preflight point for the Ansible runtime dependency.
@@ -149,17 +184,25 @@ func (e *Executor) Execute(ctx context.Context, opts ExecuteOptions) error {
 	if len(opts.EnvVars) > 0 {
 		execOpts = append(execOpts, goansible_execute.WithEnvVars(opts.EnvVars))
 	}
+	var failureTail *tailWriter
 	if opts.Outputer != nil {
 		execOpts = append(execOpts, goansible_execute.WithOutput(opts.Outputer))
 	} else {
+		failureTail = newTailWriter(ansibleFailureTailBytes)
 		execOpts = append(execOpts,
-			goansible_execute.WithWrite(os.Stdout),
-			goansible_execute.WithWriteError(os.Stderr),
+			goansible_execute.WithWrite(io.MultiWriter(os.Stdout, failureTail)),
+			goansible_execute.WithWriteError(io.MultiWriter(os.Stderr, failureTail)),
 		)
 	}
 	runner := goansible_execute.NewDefaultExecute(execOpts...)
 
-	return runner.Execute(ctx)
+	if err := runner.Execute(ctx); err != nil {
+		if failureTail == nil || strings.TrimSpace(failureTail.String()) == "" {
+			return err
+		}
+		return fmt.Errorf("%w\n\nAnsible output tail:\n%s", err, strings.TrimSpace(failureTail.String()))
+	}
+	return nil
 }
 
 func applyVerbosity(opts *goansible_playbook.AnsiblePlaybookOptions, level int) {

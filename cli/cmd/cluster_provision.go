@@ -744,14 +744,22 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedClust
 			outcome     *taskProvisionOutcome
 			runtimeData map[string]any // per-task copy; new keys merged back after batch
 		}
+		type batchFailure struct {
+			task *orchestrator.Task
+			err  error
+		}
 
 		var (
 			mu             sync.Mutex
 			results        []batchResult
 			batchCompleted []provisionedTask
+			batchFailures  []batchFailure
 		)
 
-		g, gCtx := errgroup.WithContext(ctx)
+		// Tasks in one batch are independent. Let every task reach a definitive
+		// result so a fast sibling failure cannot cancel and masquerade as a
+		// different host's deployment failure.
+		var g errgroup.Group
 		for _, task := range batch {
 			task := task
 			host, ok := manifest.GetHost(task.Host)
@@ -770,7 +778,7 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedClust
 			g.Go(func() error {
 				fmt.Fprintf(cmd.OutOrStdout(), "  Provisioning %s on %s...\n", task.Name, task.Host)
 				stopProgress := startTaskProgressLogger(cmd, task, 15*time.Second)
-				outcome, err := provisionTask(gCtx, task, host, sshPool, manifest, force, ignoreValidation, taskRD, manifestDir, sharedEnv, clusterEnvs, releaseRepos)
+				outcome, err := provisionTask(ctx, task, host, sshPool, manifest, force, ignoreValidation, taskRD, manifestDir, sharedEnv, clusterEnvs, releaseRepos)
 				stopProgress()
 				if err != nil {
 					if task.Type == "privateer" {
@@ -778,7 +786,10 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedClust
 						capturePrivateerDiagnostics(diagCtx, cmd.OutOrStdout(), host, sshPool)
 						diagCancel()
 					}
-					return fmt.Errorf("failed to provision %s: %w", task.Name, err)
+					mu.Lock()
+					batchFailures = append(batchFailures, batchFailure{task: task, err: err})
+					mu.Unlock()
+					return nil
 				}
 
 				mu.Lock()
@@ -796,6 +807,17 @@ func executeProvision(ctx context.Context, cmd *cobra.Command, rc *resolvedClust
 		}
 
 		if err := g.Wait(); err != nil {
+			return fmt.Errorf("wait for provision batch: %w", err)
+		}
+		if len(batchFailures) > 0 {
+			sort.Slice(batchFailures, func(i, j int) bool {
+				return batchFailures[i].task.Name < batchFailures[j].task.Name
+			})
+			failures := make([]error, 0, len(batchFailures))
+			for _, failure := range batchFailures {
+				failures = append(failures, fmt.Errorf("failed to provision %s: %w", failure.task.Name, failure.err))
+			}
+			err := errors.Join(failures...)
 			ux.Fail(cmd.OutOrStdout(), fmt.Sprintf("Batch failed: %v", err))
 			fmt.Fprintln(cmd.OutOrStdout(), "  Checking current batch for rollback-safe cleanup candidates...")
 			rollbackProvisionedTasks(ctx, cmd, sshPool, batchCompleted)
