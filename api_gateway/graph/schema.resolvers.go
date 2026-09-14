@@ -4781,6 +4781,16 @@ func (r *streamResolver) Name(ctx context.Context, obj *commodorepb.Stream) (str
 	return obj.Title, nil
 }
 
+// StreamKey is the resolver for the streamKey field.
+func (r *streamResolver) StreamKey(ctx context.Context, obj *commodorepb.Stream) (*string, error) {
+	mode := strings.ToLower(strings.TrimSpace(obj.GetIngestMode()))
+	if mode != "" && mode != "push" {
+		return nil, nil
+	}
+	key := obj.GetStreamKey()
+	return &key, nil
+}
+
 // Record is the resolver for the record field.
 func (r *streamResolver) Record(ctx context.Context, obj *commodorepb.Stream) (bool, error) {
 	return obj.IsRecording, nil
@@ -4791,6 +4801,8 @@ func (r *streamResolver) IngestMode(ctx context.Context, obj *commodorepb.Stream
 	switch strings.ToUpper(strings.TrimSpace(obj.GetIngestMode())) {
 	case string(model.IngestModePull):
 		return model.IngestModePull, nil
+	case "MIST_NATIVE", string(model.IngestModeManaged):
+		return model.IngestModeManaged, nil
 	default:
 		return model.IngestModePush, nil
 	}

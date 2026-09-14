@@ -2389,6 +2389,8 @@ enum IngestMode {
   PUSH
   "FrameWorks pulls from a configured upstream URI."
   PULL
+  "An operator-managed file, playlist, or process supplies the stream source."
+  MANAGED
 }
 
 """
@@ -2433,6 +2435,21 @@ type PullSourceView {
   (only valid for public sources). Surfaced so operators and admin UIs can
   inspect placement without reading the database directly.
   """
+  allowedClusterIds: [String!]!
+}
+
+"""
+Safe summary of an operator-managed source. Literal paths, commands, and
+credentials are intentionally not exposed through the tenant API.
+"""
+type ManagedSourceView {
+  "Managed source form: file, playlist, or exec."
+  sourceKind: String!
+  "Whether the source is kept active without waiting for a viewer."
+  alwaysOn: Boolean!
+  "Number of source placements requested by the operator configuration."
+  placementCount: Int!
+  "Clusters on which the source is allowed to materialize."
   allowedClusterIds: [String!]!
 }
 
@@ -3843,8 +3860,8 @@ type Stream implements Node {
   name: String!
   "Optional description for the stream."
   description: String
-  "Secret key for RTMP/WHIP ingest authentication."
-  streamKey: String!
+  "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+  streamKey: String
   "Public identifier for playback URLs."
   playbackId: String!
   "Whether DVR recording is enabled for this stream."
@@ -3853,6 +3870,8 @@ type Stream implements Node {
   ingestMode: IngestMode!
   "Pull-source config for pull streams; null for push streams."
   pullSource: PullSourceView
+  "Safe source summary for managed streams; null for push and pull streams."
+  managedSource: ManagedSourceView
   "When this stream was created."
   createdAt: Time!
   "When this stream was last modified."

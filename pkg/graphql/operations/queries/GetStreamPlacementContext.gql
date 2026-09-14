@@ -1,0 +1,18 @@
+query GetStreamPlacementContext($id: ID!) {
+  stream(id: $id) {
+    id
+    streamId
+    ingestMode
+    pullSource {
+      enabled
+      class
+      allowedClusterIds
+    }
+    managedSource {
+      sourceKind
+      alwaysOn
+      placementCount
+      allowedClusterIds
+    }
+  }
+}

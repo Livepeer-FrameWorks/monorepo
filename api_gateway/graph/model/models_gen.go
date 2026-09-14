@@ -3496,16 +3496,19 @@ const (
 	IngestModePush IngestMode = "PUSH"
 	// FrameWorks pulls from a configured upstream URI.
 	IngestModePull IngestMode = "PULL"
+	// An operator-managed file, playlist, or process supplies the stream source.
+	IngestModeManaged IngestMode = "MANAGED"
 )
 
 var AllIngestMode = []IngestMode{
 	IngestModePush,
 	IngestModePull,
+	IngestModeManaged,
 }
 
 func (e IngestMode) IsValid() bool {
 	switch e {
-	case IngestModePush, IngestModePull:
+	case IngestModePush, IngestModePull, IngestModeManaged:
 		return true
 	}
 	return false

@@ -1370,6 +1370,13 @@ type ComplexityRoot struct {
 		VodDeleted            func(childComplexity int) int
 	}
 
+	ManagedSourceView struct {
+		AllowedClusterIds func(childComplexity int) int
+		AlwaysOn          func(childComplexity int) int
+		PlacementCount    func(childComplexity int) int
+		SourceKind        func(childComplexity int) int
+	}
+
 	MarketplaceCluster struct {
 		ClusterId            func(childComplexity int) int
 		ClusterName          func(childComplexity int) int
@@ -2906,6 +2913,7 @@ type ComplexityRoot struct {
 		DvrChapterMode            func(childComplexity int) int
 		ID                        func(childComplexity int) int
 		IngestMode                func(childComplexity int) int
+		ManagedSource             func(childComplexity int) int
 		Metrics                   func(childComplexity int) int
 		Monitoring                func(childComplexity int) int
 		Name                      func(childComplexity int) int
@@ -4747,6 +4755,8 @@ type StreamResolver interface {
 	ID(ctx context.Context, obj *commodorepb.Stream) (string, error)
 
 	Name(ctx context.Context, obj *commodorepb.Stream) (string, error)
+
+	StreamKey(ctx context.Context, obj *commodorepb.Stream) (*string, error)
 
 	Record(ctx context.Context, obj *commodorepb.Stream) (bool, error)
 	IngestMode(ctx context.Context, obj *commodorepb.Stream) (model.IngestMode, error)
@@ -10600,6 +10610,31 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.LiveUsageSummary.VodDeleted(childComplexity), true
+
+	case "ManagedSourceView.allowedClusterIds":
+		if e.ComplexityRoot.ManagedSourceView.AllowedClusterIds == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ManagedSourceView.AllowedClusterIds(childComplexity), true
+	case "ManagedSourceView.alwaysOn":
+		if e.ComplexityRoot.ManagedSourceView.AlwaysOn == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ManagedSourceView.AlwaysOn(childComplexity), true
+	case "ManagedSourceView.placementCount":
+		if e.ComplexityRoot.ManagedSourceView.PlacementCount == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ManagedSourceView.PlacementCount(childComplexity), true
+	case "ManagedSourceView.sourceKind":
+		if e.ComplexityRoot.ManagedSourceView.SourceKind == nil {
+			break
+		}
+
+		return e.ComplexityRoot.ManagedSourceView.SourceKind(childComplexity), true
 
 	case "MarketplaceCluster.clusterId":
 		if e.ComplexityRoot.MarketplaceCluster.ClusterId == nil {
@@ -18001,6 +18036,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.ComplexityRoot.Stream.IngestMode(childComplexity), true
+	case "Stream.managedSource":
+		if e.ComplexityRoot.Stream.ManagedSource == nil {
+			break
+		}
+
+		return e.ComplexityRoot.Stream.ManagedSource(childComplexity), true
 	case "Stream.metrics":
 		if e.ComplexityRoot.Stream.Metrics == nil {
 			break
@@ -25103,6 +25144,8 @@ enum IngestMode {
   PUSH
   "FrameWorks pulls from a configured upstream URI."
   PULL
+  "An operator-managed file, playlist, or process supplies the stream source."
+  MANAGED
 }
 
 """
@@ -25147,6 +25190,21 @@ type PullSourceView {
   (only valid for public sources). Surfaced so operators and admin UIs can
   inspect placement without reading the database directly.
   """
+  allowedClusterIds: [String!]!
+}
+
+"""
+Safe summary of an operator-managed source. Literal paths, commands, and
+credentials are intentionally not exposed through the tenant API.
+"""
+type ManagedSourceView {
+  "Managed source form: file, playlist, or exec."
+  sourceKind: String!
+  "Whether the source is kept active without waiting for a viewer."
+  alwaysOn: Boolean!
+  "Number of source placements requested by the operator configuration."
+  placementCount: Int!
+  "Clusters on which the source is allowed to materialize."
   allowedClusterIds: [String!]!
 }
 
@@ -26557,8 +26615,8 @@ type Stream implements Node {
   name: String!
   "Optional description for the stream."
   description: String
-  "Secret key for RTMP/WHIP ingest authentication."
-  streamKey: String!
+  "Secret key for publisher-authenticated ingest; null for pull and managed sources."
+  streamKey: String
   "Public identifier for playback URLs."
   playbackId: String!
   "Whether DVR recording is enabled for this stream."
@@ -26567,6 +26625,8 @@ type Stream implements Node {
   ingestMode: IngestMode!
   "Pull-source config for pull streams; null for push streams."
   pullSource: PullSourceView
+  "Safe source summary for managed streams; null for push and pull streams."
+  managedSource: ManagedSourceView
   "When this stream was created."
   createdAt: Time!
   "When this stream was last modified."
@@ -38244,6 +38304,8 @@ func (ec *executionContext) fieldContext_ArtifactEvent_stream(_ context.Context,
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
 				return ec.fieldContext_Stream_pullSource(ctx, field)
+			case "managedSource":
+				return ec.fieldContext_Stream_managedSource(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -38950,6 +39012,8 @@ func (ec *executionContext) fieldContext_ArtifactState_stream(_ context.Context,
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
 				return ec.fieldContext_Stream_pullSource(ctx, field)
+			case "managedSource":
+				return ec.fieldContext_Stream_managedSource(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -44816,6 +44880,8 @@ func (ec *executionContext) fieldContext_ClientMetrics5m_stream(_ context.Contex
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
 				return ec.fieldContext_Stream_pullSource(ctx, field)
+			case "managedSource":
+				return ec.fieldContext_Stream_managedSource(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -45614,6 +45680,8 @@ func (ec *executionContext) fieldContext_Clip_stream(_ context.Context, field gr
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
 				return ec.fieldContext_Stream_pullSource(ctx, field)
+			case "managedSource":
+				return ec.fieldContext_Stream_managedSource(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -46734,6 +46802,8 @@ func (ec *executionContext) fieldContext_ClipLifecycle_stream(_ context.Context,
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
 				return ec.fieldContext_Stream_pullSource(ctx, field)
+			case "managedSource":
+				return ec.fieldContext_Stream_managedSource(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -51264,6 +51334,8 @@ func (ec *executionContext) fieldContext_ConnectionEvent_stream(_ context.Contex
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
 				return ec.fieldContext_Stream_pullSource(ctx, field)
+			case "managedSource":
+				return ec.fieldContext_Stream_managedSource(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -55193,6 +55265,8 @@ func (ec *executionContext) fieldContext_DVREvent_stream(_ context.Context, fiel
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
 				return ec.fieldContext_Stream_pullSource(ctx, field)
+			case "managedSource":
+				return ec.fieldContext_Stream_managedSource(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -55409,6 +55483,8 @@ func (ec *executionContext) fieldContext_DVRRequest_stream(_ context.Context, fi
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
 				return ec.fieldContext_Stream_pullSource(ctx, field)
+			case "managedSource":
+				return ec.fieldContext_Stream_managedSource(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -58159,6 +58235,8 @@ func (ec *executionContext) fieldContext_GeographicDistribution_stream(_ context
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
 				return ec.fieldContext_Stream_pullSource(ctx, field)
+			case "managedSource":
+				return ec.fieldContext_Stream_managedSource(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -59705,6 +59783,8 @@ func (ec *executionContext) fieldContext_IngestMetadata_stream(_ context.Context
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
 				return ec.fieldContext_Stream_pullSource(ctx, field)
+			case "managedSource":
+				return ec.fieldContext_Stream_managedSource(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -63393,6 +63473,122 @@ func (ec *executionContext) fieldContext_LiveUsageSummary_syncedArtifactBytes(_ 
 		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ManagedSourceView_sourceKind(ctx context.Context, field graphql.CollectedField, obj *commodorepb.ManagedSourceView) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_ManagedSourceView_sourceKind,
+		func(ctx context.Context) (any, error) {
+			return obj.SourceKind, nil
+		},
+		nil,
+		ec.marshalNString2string,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_ManagedSourceView_sourceKind(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ManagedSourceView",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ManagedSourceView_alwaysOn(ctx context.Context, field graphql.CollectedField, obj *commodorepb.ManagedSourceView) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_ManagedSourceView_alwaysOn,
+		func(ctx context.Context) (any, error) {
+			return obj.AlwaysOn, nil
+		},
+		nil,
+		ec.marshalNBoolean2bool,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_ManagedSourceView_alwaysOn(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ManagedSourceView",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Boolean does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ManagedSourceView_placementCount(ctx context.Context, field graphql.CollectedField, obj *commodorepb.ManagedSourceView) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_ManagedSourceView_placementCount,
+		func(ctx context.Context) (any, error) {
+			return obj.PlacementCount, nil
+		},
+		nil,
+		ec.marshalNInt2int32,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_ManagedSourceView_placementCount(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ManagedSourceView",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type Int does not have child fields")
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _ManagedSourceView_allowedClusterIds(ctx context.Context, field graphql.CollectedField, obj *commodorepb.ManagedSourceView) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_ManagedSourceView_allowedClusterIds,
+		func(ctx context.Context) (any, error) {
+			return obj.AllowedClusterIds, nil
+		},
+		nil,
+		ec.marshalNString2ᚕstringᚄ,
+		true,
+		true,
+	)
+}
+
+func (ec *executionContext) fieldContext_ManagedSourceView_allowedClusterIds(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "ManagedSourceView",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			return nil, errors.New("field of type String does not have child fields")
 		},
 	}
 	return fc, nil
@@ -83938,6 +84134,8 @@ func (ec *executionContext) fieldContext_ProcessingUsageRecord_stream(_ context.
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
 				return ec.fieldContext_Stream_pullSource(ctx, field)
+			case "managedSource":
+				return ec.fieldContext_Stream_managedSource(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -86764,6 +86962,8 @@ func (ec *executionContext) fieldContext_QualityTierDaily_stream(_ context.Conte
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
 				return ec.fieldContext_Stream_pullSource(ctx, field)
+			case "managedSource":
+				return ec.fieldContext_Stream_managedSource(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -87894,6 +88094,8 @@ func (ec *executionContext) fieldContext_Query_stream(ctx context.Context, field
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
 				return ec.fieldContext_Stream_pullSource(ctx, field)
+			case "managedSource":
+				return ec.fieldContext_Stream_managedSource(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -92331,6 +92533,8 @@ func (ec *executionContext) fieldContext_RebufferingEvent_stream(_ context.Conte
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
 				return ec.fieldContext_Stream_pullSource(ctx, field)
+			case "managedSource":
+				return ec.fieldContext_Stream_managedSource(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -93069,6 +93273,8 @@ func (ec *executionContext) fieldContext_RoutingEvent_stream(_ context.Context, 
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
 				return ec.fieldContext_Stream_pullSource(ctx, field)
+			case "managedSource":
+				return ec.fieldContext_Stream_managedSource(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -99236,6 +99442,8 @@ func (ec *executionContext) fieldContext_StorageEvent_stream(_ context.Context, 
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
 				return ec.fieldContext_Stream_pullSource(ctx, field)
+			case "managedSource":
+				return ec.fieldContext_Stream_managedSource(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -100862,12 +101070,12 @@ func (ec *executionContext) _Stream_streamKey(ctx context.Context, field graphql
 		field,
 		ec.fieldContext_Stream_streamKey,
 		func(ctx context.Context) (any, error) {
-			return obj.StreamKey, nil
+			return ec.Resolvers.Stream().StreamKey(ctx, obj)
 		},
 		nil,
-		ec.marshalNString2string,
+		ec.marshalOString2ᚖstring,
 		true,
-		true,
+		false,
 	)
 }
 
@@ -100875,8 +101083,8 @@ func (ec *executionContext) fieldContext_Stream_streamKey(_ context.Context, fie
 	fc = &graphql.FieldContext{
 		Object:     "Stream",
 		Field:      field,
-		IsMethod:   false,
-		IsResolver: false,
+		IsMethod:   true,
+		IsResolver: true,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			return nil, errors.New("field of type String does not have child fields")
 		},
@@ -101005,6 +101213,45 @@ func (ec *executionContext) fieldContext_Stream_pullSource(_ context.Context, fi
 				return ec.fieldContext_PullSourceView_allowedClusterIds(ctx, field)
 			}
 			return nil, fmt.Errorf("no field named %q was found under type PullSourceView", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _Stream_managedSource(ctx context.Context, field graphql.CollectedField, obj *commodorepb.Stream) (ret graphql.Marshaler) {
+	return graphql.ResolveField(
+		ctx,
+		ec.OperationContext,
+		field,
+		ec.fieldContext_Stream_managedSource,
+		func(ctx context.Context) (any, error) {
+			return obj.ManagedSource, nil
+		},
+		nil,
+		ec.marshalOManagedSourceView2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋcommodoreᚐManagedSourceView,
+		true,
+		false,
+	)
+}
+
+func (ec *executionContext) fieldContext_Stream_managedSource(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "Stream",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "sourceKind":
+				return ec.fieldContext_ManagedSourceView_sourceKind(ctx, field)
+			case "alwaysOn":
+				return ec.fieldContext_ManagedSourceView_alwaysOn(ctx, field)
+			case "placementCount":
+				return ec.fieldContext_ManagedSourceView_placementCount(ctx, field)
+			case "allowedClusterIds":
+				return ec.fieldContext_ManagedSourceView_allowedClusterIds(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type ManagedSourceView", field.Name)
 		},
 	}
 	return fc, nil
@@ -101580,6 +101827,8 @@ func (ec *executionContext) fieldContext_StreamAnalyticsDaily_stream(_ context.C
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
 				return ec.fieldContext_Stream_pullSource(ctx, field)
+			case "managedSource":
+				return ec.fieldContext_Stream_managedSource(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -102055,6 +102304,8 @@ func (ec *executionContext) fieldContext_StreamAnalyticsSummary_stream(_ context
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
 				return ec.fieldContext_Stream_pullSource(ctx, field)
+			case "managedSource":
+				return ec.fieldContext_Stream_managedSource(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -103202,6 +103453,8 @@ func (ec *executionContext) fieldContext_StreamConnectionHourly_stream(_ context
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
 				return ec.fieldContext_Stream_pullSource(ctx, field)
+			case "managedSource":
+				return ec.fieldContext_Stream_managedSource(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -103611,6 +103864,8 @@ func (ec *executionContext) fieldContext_StreamEdge_node(_ context.Context, fiel
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
 				return ec.fieldContext_Stream_pullSource(ctx, field)
+			case "managedSource":
+				return ec.fieldContext_Stream_managedSource(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -103769,6 +104024,8 @@ func (ec *executionContext) fieldContext_StreamEvent_stream(_ context.Context, f
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
 				return ec.fieldContext_Stream_pullSource(ctx, field)
+			case "managedSource":
+				return ec.fieldContext_Stream_managedSource(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -105882,6 +106139,8 @@ func (ec *executionContext) fieldContext_StreamHealthMetric_stream(_ context.Con
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
 				return ec.fieldContext_Stream_pullSource(ctx, field)
+			case "managedSource":
+				return ec.fieldContext_Stream_managedSource(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -107311,6 +107570,8 @@ func (ec *executionContext) fieldContext_StreamKey_stream(_ context.Context, fie
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
 				return ec.fieldContext_Stream_pullSource(ctx, field)
+			case "managedSource":
+				return ec.fieldContext_Stream_managedSource(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -110286,6 +110547,8 @@ func (ec *executionContext) fieldContext_StreamsConnection_nodes(_ context.Conte
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
 				return ec.fieldContext_Stream_pullSource(ctx, field)
+			case "managedSource":
+				return ec.fieldContext_Stream_managedSource(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -116771,6 +117034,8 @@ func (ec *executionContext) fieldContext_TrackListEvent_stream(_ context.Context
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
 				return ec.fieldContext_Stream_pullSource(ctx, field)
+			case "managedSource":
+				return ec.fieldContext_Stream_managedSource(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -117272,6 +117537,8 @@ func (ec *executionContext) fieldContext_TrackListUpdate_stream(_ context.Contex
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
 				return ec.fieldContext_Stream_pullSource(ctx, field)
+			case "managedSource":
+				return ec.fieldContext_Stream_managedSource(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -118926,6 +119193,8 @@ func (ec *executionContext) fieldContext_ViewerCountBucket_stream(_ context.Cont
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
 				return ec.fieldContext_Stream_pullSource(ctx, field)
+			case "managedSource":
+				return ec.fieldContext_Stream_managedSource(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -119877,6 +120146,8 @@ func (ec *executionContext) fieldContext_ViewerGeographic_stream(_ context.Conte
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
 				return ec.fieldContext_Stream_pullSource(ctx, field)
+			case "managedSource":
+				return ec.fieldContext_Stream_managedSource(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -120637,6 +120908,8 @@ func (ec *executionContext) fieldContext_ViewerHoursHourly_stream(_ context.Cont
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
 				return ec.fieldContext_Stream_pullSource(ctx, field)
+			case "managedSource":
+				return ec.fieldContext_Stream_managedSource(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -121174,6 +121447,8 @@ func (ec *executionContext) fieldContext_ViewerMetrics_stream(_ context.Context,
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
 				return ec.fieldContext_Stream_pullSource(ctx, field)
+			case "managedSource":
+				return ec.fieldContext_Stream_managedSource(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -121854,6 +122129,8 @@ func (ec *executionContext) fieldContext_ViewerSession_stream(_ context.Context,
 				return ec.fieldContext_Stream_ingestMode(ctx, field)
 			case "pullSource":
 				return ec.fieldContext_Stream_pullSource(ctx, field)
+			case "managedSource":
+				return ec.fieldContext_Stream_managedSource(ctx, field)
 			case "createdAt":
 				return ec.fieldContext_Stream_createdAt(ctx, field)
 			case "updatedAt":
@@ -148639,6 +148916,60 @@ func (ec *executionContext) _LiveUsageSummary(ctx context.Context, sel ast.Selec
 	return out
 }
 
+var managedSourceViewImplementors = []string{"ManagedSourceView"}
+
+func (ec *executionContext) _ManagedSourceView(ctx context.Context, sel ast.SelectionSet, obj *commodorepb.ManagedSourceView) graphql.Marshaler {
+	fields := graphql.CollectFields(ec.OperationContext, sel, managedSourceViewImplementors)
+
+	out := graphql.NewFieldSet(fields)
+	deferred := make(map[string]*graphql.FieldSet)
+	for i, field := range fields {
+		switch field.Name {
+		case "__typename":
+			out.Values[i] = graphql.MarshalString("ManagedSourceView")
+		case "sourceKind":
+			out.Values[i] = ec._ManagedSourceView_sourceKind(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "alwaysOn":
+			out.Values[i] = ec._ManagedSourceView_alwaysOn(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "placementCount":
+			out.Values[i] = ec._ManagedSourceView_placementCount(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		case "allowedClusterIds":
+			out.Values[i] = ec._ManagedSourceView_allowedClusterIds(ctx, field, obj)
+			if out.Values[i] == graphql.Null {
+				out.Invalids++
+			}
+		default:
+			panic("unknown field " + strconv.Quote(field.Name))
+		}
+	}
+	out.Dispatch(ctx)
+	if out.Invalids > 0 {
+		return graphql.Null
+	}
+
+	atomic.AddInt32(&ec.Deferred, int32(len(deferred)))
+
+	for label, dfs := range deferred {
+		ec.ProcessDeferredGroup(graphql.DeferredGroup{
+			Label:    label,
+			Path:     graphql.GetPath(ctx),
+			FieldSet: dfs,
+			Context:  ctx,
+		})
+	}
+
+	return out
+}
+
 var marketplaceClusterImplementors = []string{"MarketplaceCluster"}
 
 func (ec *executionContext) _MarketplaceCluster(ctx context.Context, sel ast.SelectionSet, obj *quartermasterpb.MarketplaceClusterEntry) graphql.Marshaler {
@@ -165592,10 +165923,38 @@ func (ec *executionContext) _Stream(ctx context.Context, sel ast.SelectionSet, o
 		case "description":
 			out.Values[i] = ec._Stream_description(ctx, field, obj)
 		case "streamKey":
-			out.Values[i] = ec._Stream_streamKey(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&out.Invalids, 1)
+			field := field
+
+			innerFunc := func(ctx context.Context, _ *graphql.FieldSet) (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._Stream_streamKey(ctx, field, obj)
+				return res
 			}
+
+			if field.Deferrable != nil {
+				dfs, ok := deferred[field.Deferrable.Label]
+				di := 0
+				if ok {
+					dfs.AddField(field)
+					di = len(dfs.Values) - 1
+				} else {
+					dfs = graphql.NewFieldSet([]graphql.CollectedField{field})
+					deferred[field.Deferrable.Label] = dfs
+				}
+				dfs.Concurrently(di, func(ctx context.Context) graphql.Marshaler {
+					return innerFunc(ctx, dfs)
+				})
+
+				// don't run the out.Concurrently() call below
+				out.Values[i] = graphql.Null
+				continue
+			}
+
+			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "playbackId":
 			out.Values[i] = ec._Stream_playbackId(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
@@ -165675,6 +166034,8 @@ func (ec *executionContext) _Stream(ctx context.Context, sel ast.SelectionSet, o
 			out.Concurrently(i, func(ctx context.Context) graphql.Marshaler { return innerFunc(ctx, out) })
 		case "pullSource":
 			out.Values[i] = ec._Stream_pullSource(ctx, field, obj)
+		case "managedSource":
+			out.Values[i] = ec._Stream_managedSource(ctx, field, obj)
 		case "createdAt":
 			field := field
 
@@ -186481,6 +186842,13 @@ func (ec *executionContext) marshalOLiveNode2ᚖgithubᚗcomᚋLivepeerᚑFrameW
 		return graphql.Null
 	}
 	return ec._LiveNode(ctx, sel, v)
+}
+
+func (ec *executionContext) marshalOManagedSourceView2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋcommodoreᚐManagedSourceView(ctx context.Context, sel ast.SelectionSet, v *commodorepb.ManagedSourceView) graphql.Marshaler {
+	if v == nil {
+		return graphql.Null
+	}
+	return ec._ManagedSourceView(ctx, sel, v)
 }
 
 func (ec *executionContext) marshalOMarketplaceCluster2ᚖgithubᚗcomᚋLivepeerᚑFrameWorksᚋmonorepoᚋpkgᚋprotoᚋquartermasterᚐMarketplaceClusterEntry(ctx context.Context, sel ast.SelectionSet, v *quartermasterpb.MarketplaceClusterEntry) graphql.Marshaler {

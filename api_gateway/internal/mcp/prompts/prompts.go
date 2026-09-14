@@ -218,7 +218,7 @@ func handleCreateStreamPrompt(ctx context.Context, streamName string, clients *c
 	}
 
 	steps = append(steps, "\n## Step 2: Configure Your Encoder")
-	steps = append(steps, "After creating the stream, you'll receive a stream key. Configure your encoder:")
+	steps = append(steps, "After creating a push stream, you'll receive a stream key. Configure your encoder:")
 	steps = append(steps, "- **OBS/Streamlabs**: Settings → Stream → Custom → Enter RTMP URL and stream key")
 	steps = append(steps, "- **WHIP**: Use the WHIP endpoint for browser-based streaming")
 
@@ -267,9 +267,9 @@ func handleTroubleshootPrompt(ctx context.Context, streamID string, clients *cli
 
 	steps = append(steps, "\n### 3. Common Issues and Fixes")
 	steps = append(steps, "**Stream not starting**:")
-	steps = append(steps, "- Verify stream key in encoder matches")
-	steps = append(steps, "- Check encoder is sending to correct RTMP URL")
-	steps = append(steps, "- Try refreshing stream key with `refresh_stream_key`")
+	steps = append(steps, "- For push streams, verify the encoder key and ingest URL; rotate the key with `refresh_stream_key` if needed")
+	steps = append(steps, "- For pull streams, verify the redacted source summary, enabled state, and source-cluster pins")
+	steps = append(steps, "- For managed streams, verify the deployment-owned source and its configured source clusters")
 
 	steps = append(steps, "\n**Poor quality**:")
 	steps = append(steps, "- Check encoder bitrate (recommended: 4500-6000 kbps for 1080p)")

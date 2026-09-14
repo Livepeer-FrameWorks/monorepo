@@ -13,6 +13,12 @@ fragment StreamCoreFields on Stream {
     class
     allowedClusterIds
   }
+  managedSource {
+    sourceKind
+    alwaysOn
+    placementCount
+    allowedClusterIds
+  }
   thumbnailAssets {
     posterUrl
     spriteVttUrl

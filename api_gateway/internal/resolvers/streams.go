@@ -124,6 +124,9 @@ func (r *Resolver) DoCreateStream(ctx context.Context, input model.CreateStreamI
 	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
 		return nil, err
 	}
+	if input.IngestMode != nil && *input.IngestMode == model.IngestModeManaged {
+		return nil, fmt.Errorf("managed streams are created by deployment configuration")
+	}
 	if middleware.IsDemoMode(ctx) {
 		r.Logger.Debug("Returning demo stream creation")
 		now := time.Now()
@@ -163,7 +166,7 @@ func (r *Resolver) DoCreateStream(ctx context.Context, input model.CreateStreamI
 		req.IsRecording = *input.Record
 	}
 	if input.IngestMode != nil {
-		req.IngestMode = string(*input.IngestMode)
+		req.IngestMode = ingestModeToWire(*input.IngestMode)
 	}
 	if input.PullSource != nil {
 		req.PullSource = input.PullSource

@@ -11,6 +11,7 @@ import (
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/ctxkeys"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/globalid"
 	"github.com/Livepeer-FrameWorks/monorepo/pkg/logging"
+	commodorepb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore"
 	commonpb "github.com/Livepeer-FrameWorks/monorepo/pkg/proto/common"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -51,17 +52,34 @@ func RegisterStreamResources(server *mcp.Server, clients *clients.ServiceClients
 
 // StreamInfo represents a stream in the list.
 type StreamInfo struct {
-	ID             string `json:"id"`
-	StreamID       string `json:"stream_id"`
-	Title          string `json:"title"`
-	Description    string `json:"description,omitempty"`
-	Status         string `json:"status,omitempty"`
-	IsLive         bool   `json:"is_live"`
-	IsRecording    bool   `json:"is_recording"`
-	RecordEnabled  bool   `json:"record_enabled"`
-	PlaybackID     string `json:"playback_id"`
-	CurrentViewers int    `json:"current_viewers,omitempty"`
-	CreatedAt      string `json:"created_at,omitempty"`
+	ID             string                   `json:"id"`
+	StreamID       string                   `json:"stream_id"`
+	Title          string                   `json:"title"`
+	Description    string                   `json:"description,omitempty"`
+	Status         string                   `json:"status,omitempty"`
+	IsLive         bool                     `json:"is_live"`
+	IsRecording    bool                     `json:"is_recording"`
+	RecordEnabled  bool                     `json:"record_enabled"`
+	PlaybackID     string                   `json:"playback_id"`
+	IngestMode     string                   `json:"ingest_mode"`
+	PullSource     *StreamPullSourceInfo    `json:"pull_source,omitempty"`
+	ManagedSource  *StreamManagedSourceInfo `json:"managed_source,omitempty"`
+	CurrentViewers int                      `json:"current_viewers,omitempty"`
+	CreatedAt      string                   `json:"created_at,omitempty"`
+}
+
+type StreamPullSourceInfo struct {
+	SourceURIRedacted string   `json:"source_uri_redacted"`
+	Enabled           bool     `json:"enabled"`
+	Class             string   `json:"class"`
+	AllowedClusterIDs []string `json:"allowed_cluster_ids,omitempty"`
+}
+
+type StreamManagedSourceInfo struct {
+	SourceKind        string   `json:"source_kind"`
+	AlwaysOn          bool     `json:"always_on"`
+	PlacementCount    int32    `json:"placement_count"`
+	AllowedClusterIDs []string `json:"allowed_cluster_ids,omitempty"`
 }
 
 // StreamsListResponse represents the streams://list response.
@@ -99,6 +117,9 @@ func handleStreamsList(ctx context.Context, clients *clients.ServiceClients, log
 			IsRecording:    s.IsRecording,
 			RecordEnabled:  s.IsRecordingEnabled,
 			PlaybackID:     s.PlaybackId,
+			IngestMode:     s.IngestMode,
+			PullSource:     streamPullSourceInfo(s.PullSource),
+			ManagedSource:  streamManagedSourceInfo(s.ManagedSource),
 			CurrentViewers: int(s.CurrentViewers),
 		}
 		if s.CreatedAt != nil {
@@ -160,6 +181,9 @@ func HandleStreamByID(ctx context.Context, uri string, clients *clients.ServiceC
 		IsRecording:    stream.IsRecording,
 		RecordEnabled:  stream.IsRecordingEnabled,
 		PlaybackID:     stream.PlaybackId,
+		IngestMode:     stream.IngestMode,
+		PullSource:     streamPullSourceInfo(stream.PullSource),
+		ManagedSource:  streamManagedSourceInfo(stream.ManagedSource),
 		CurrentViewers: int(stream.CurrentViewers),
 	}
 	if stream.CreatedAt != nil {
@@ -167,6 +191,30 @@ func HandleStreamByID(ctx context.Context, uri string, clients *clients.ServiceC
 	}
 
 	return marshalResourceResult(uri, info)
+}
+
+func streamPullSourceInfo(source *commodorepb.PullSourceView) *StreamPullSourceInfo {
+	if source == nil {
+		return nil
+	}
+	return &StreamPullSourceInfo{
+		SourceURIRedacted: source.SourceUriRedacted,
+		Enabled:           source.Enabled,
+		Class:             source.Class,
+		AllowedClusterIDs: append([]string(nil), source.AllowedClusterIds...),
+	}
+}
+
+func streamManagedSourceInfo(source *commodorepb.ManagedSourceView) *StreamManagedSourceInfo {
+	if source == nil {
+		return nil
+	}
+	return &StreamManagedSourceInfo{
+		SourceKind:        source.SourceKind,
+		AlwaysOn:          source.AlwaysOn,
+		PlacementCount:    source.PlacementCount,
+		AllowedClusterIDs: append([]string(nil), source.AllowedClusterIds...),
+	}
 }
 
 // StreamHealthInfo represents stream health metrics.

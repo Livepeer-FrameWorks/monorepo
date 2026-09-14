@@ -742,6 +742,13 @@ func MonitoringToggleFromProto(toggle commodorepb.MonitoringToggle) model.Monito
 	}
 }
 
+func ingestModeToWire(mode model.IngestMode) string {
+	if mode == model.IngestModeManaged {
+		return "mist_native"
+	}
+	return strings.ToLower(string(mode))
+}
+
 // DoUpdateStream updates stream settings
 func (r *Resolver) DoUpdateStream(ctx context.Context, id string, input model.UpdateStreamInput) (*commodorepb.Stream, error) {
 	if err := middleware.RequirePermission(ctx, "streams:write"); err != nil {
@@ -793,7 +800,7 @@ func (r *Resolver) DoUpdateStream(ctx context.Context, id string, input model.Up
 		req.Record = input.Record
 	}
 	if input.IngestMode != nil {
-		req.IngestMode = strPtr(string(*input.IngestMode))
+		req.IngestMode = strPtr(ingestModeToWire(*input.IngestMode))
 	}
 	if input.PullSource != nil {
 		req.PullSource = input.PullSource

@@ -56,7 +56,7 @@ func RegisterStreamTools(server *mcp.Server, clients *clients.ServiceClients, re
 	addTool(server,
 		&mcp.Tool{
 			Name:        "refresh_stream_key",
-			Description: "Rotate the primary stream key. The old key stops working immediately. Requires confirm=\"ROTATE STREAM KEY\".",
+			Description: "Rotate a push stream's primary ingest key. The old key stops working immediately. Pull and managed streams reject this operation. Requires confirm=\"ROTATE STREAM KEY\".",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args RefreshStreamKeyInput) (*mcp.CallToolResult, any, error) {
 			return handleRefreshStreamKey(ctx, args, clients, logger)
@@ -66,7 +66,7 @@ func RegisterStreamTools(server *mcp.Server, clients *clients.ServiceClients, re
 	addTool(server,
 		&mcp.Tool{
 			Name:        "list_stream_keys",
-			Description: "List stream keys for a stream, including active state and last-used timestamps.",
+			Description: "List ingest keys for a push stream, including active state and last-used timestamps. Pull and managed streams reject this operation.",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args ListStreamKeysInput) (*mcp.CallToolResult, any, error) {
 			return handleListStreamKeys(ctx, args, clients, logger)
@@ -76,7 +76,7 @@ func RegisterStreamTools(server *mcp.Server, clients *clients.ServiceClients, re
 	addTool(server,
 		&mcp.Tool{
 			Name:        "create_stream_key",
-			Description: "Create an additional ingest key for a stream. The key value is returned in the response. Requires confirm=\"CREATE STREAM KEY\".",
+			Description: "Create an additional ingest key for a push stream. Pull and managed streams reject this operation. The key value is returned in the response. Requires confirm=\"CREATE STREAM KEY\".",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args CreateStreamKeyInput) (*mcp.CallToolResult, any, error) {
 			return handleCreateStreamKey(ctx, args, clients, logger)
@@ -86,7 +86,7 @@ func RegisterStreamTools(server *mcp.Server, clients *clients.ServiceClients, re
 	addTool(server,
 		&mcp.Tool{
 			Name:        "delete_stream_key",
-			Description: "Deactivate a stream key. Active encoders using it will fail ingest. Requires confirm=\"DELETE STREAM KEY\".",
+			Description: "Deactivate a push stream's ingest key. Active encoders using it will fail ingest. Pull and managed streams reject this operation. Requires confirm=\"DELETE STREAM KEY\".",
 		},
 		func(ctx context.Context, req *mcp.CallToolRequest, args DeleteStreamKeyInput) (*mcp.CallToolResult, any, error) {
 			return handleDeleteStreamKey(ctx, args, clients, logger)

@@ -513,6 +513,8 @@ models:
     fields:
       pushTargets:
         resolver: true
+      streamKey:
+        resolver: true
   PushTarget:
     model:
       - github.com/Livepeer-FrameWorks/monorepo/pkg/proto/commodore.PushTarget

@@ -635,6 +635,12 @@ enum GQL {
       class
       allowedClusterIds
     }
+    managedSource {
+      sourceKind
+      alwaysOn
+      placementCount
+      allowedClusterIds
+    }
     thumbnailAssets {
       posterUrl
       spriteVttUrl
@@ -4089,6 +4095,27 @@ enum GQL {
             totalCount
           }
         }
+      }
+    }
+  }
+  """
+
+  static let GetStreamPlacementContext = """
+  query GetStreamPlacementContext($id: ID!) {
+    stream(id: $id) {
+      id
+      streamId
+      ingestMode
+      pullSource {
+        enabled
+        class
+        allowedClusterIds
+      }
+      managedSource {
+        sourceKind
+        alwaysOn
+        placementCount
+        allowedClusterIds
       }
     }
   }
