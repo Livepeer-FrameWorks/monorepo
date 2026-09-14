@@ -1,11 +1,13 @@
 <script lang="ts">
   import { onMount, onDestroy, untrack } from "svelte";
+  import { get } from "svelte/store";
   import { page } from "$app/state";
   import { goto } from "$app/navigation";
   import { resolve } from "$app/paths";
   import {
     fragment,
     GetStreamStore,
+    GetClustersAccessStore,
     GetStreamKeysStore,
     GetStorageArtifactsConnectionStore,
     UpdateStreamStore,
@@ -39,6 +41,7 @@
     StreamCreateKeyModal,
     StreamStatusCard,
     StreamKeyCard,
+    StreamSourceCard,
     StreamPlaybackCard,
     OverviewTabPanel,
     ArtefactsTabPanel,
@@ -51,7 +54,6 @@
   } from "$lib/components/stream-details";
   import { SectionDivider } from "$lib/components/layout";
   import { resolveOperationalStreamId } from "$lib/route-ids";
-  import PlacementSummary from "$lib/components/placement/PlacementSummary.svelte";
   import { shouldRefreshPushTargets } from "$lib/utils/push-target-events";
   import {
     DropdownMenu,
@@ -65,6 +67,7 @@
 
   // Houdini stores
   const streamStore = new GetStreamStore();
+  const clustersAccessStore = new GetClustersAccessStore();
   const streamKeysStore = new GetStreamKeysStore();
   const storageArtifactsStore = new GetStorageArtifactsConnectionStore();
   const updateStreamMutation = new UpdateStreamStore();
@@ -157,6 +160,12 @@
       lastUsedAt: e.node.lastUsedAt ?? undefined,
     })) ?? []
   );
+  let clusterOptions = $derived(
+    ($clustersAccessStore.data?.clustersAccess ?? []).map((cluster) => ({
+      clusterId: cluster.clusterId,
+      clusterName: cluster.clusterName,
+    }))
+  );
   let pushTargets = $derived(
     $pushTargetsStore.data?.stream?.pushTargets?.map((t) => ({
       id: t.id,
@@ -242,7 +251,10 @@
   // on the dedicated /streams/[id]/analytics and /streams/[id]/health routes.
 
   let error = $state<string | null>(null);
-  let loading = $derived(!error && ($streamStore.fetching || $streamKeysStore.fetching));
+  let loading = $derived(
+    !error &&
+      ($streamStore.fetching || (stream?.ingestMode === "PUSH" && $streamKeysStore.fetching))
+  );
   let showEditModal = $state(false);
   let showDeleteModal = $state(false);
   let showCreateKeyModal = $state(false);
@@ -372,7 +384,7 @@
   });
 
   onMount(async () => {
-    await loadStreamData();
+    await Promise.allSettled([loadStreamData(), clustersAccessStore.fetch()]);
 
     // Set up auto-refresh every 60 seconds as fallback
     refreshInterval = setInterval(loadLiveData, 60000);
@@ -434,6 +446,7 @@
         error = "Stream not found";
         return;
       }
+      const fetchedCore = get(fragment(result.data.stream, streamCoreStore));
       const fetchedStreamId = (result.data.stream as { streamId?: string | null }).streamId;
       const resolvedStreamId = resolveOperationalStreamId({
         routeParamId: streamId,
@@ -446,7 +459,9 @@
       }
 
       await Promise.all([
-        streamKeysStore.fetch({ variables: { streamId: resolvedStreamId } }),
+        fetchedCore.ingestMode === "PUSH"
+          ? streamKeysStore.fetch({ variables: { streamId: resolvedStreamId } })
+          : Promise.resolve(),
         pushTargetsStore.fetch({ variables: { streamId } }),
         storageArtifactsStore.fetch({
           policy: "NetworkOnly",
@@ -800,6 +815,7 @@
   const VideoIcon = getIconComponent("Video");
   const PlayIcon = getIconComponent("Play");
   const ShieldCheckIcon = getIconComponent("ShieldCheck");
+  const MapPinIcon = getIconComponent("MapPin");
 </script>
 
 <svelte:head>
@@ -861,6 +877,15 @@
             <BarChart2Icon class="w-4 h-4" />
             Analytics
           </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            class="hidden sm:flex gap-2"
+            onclick={() => goto(resolve(`/streams/${streamId}/placement`))}
+          >
+            <MapPinIcon class="w-4 h-4" />
+            Placement
+          </Button>
 
           <!-- Actions Dropdown -->
           <DropdownMenu>
@@ -880,6 +905,10 @@
               <DropdownMenuItem onclick={() => goto(resolve(`/streams/${streamId}/health`))}>
                 <HeartIcon class="w-4 h-4 mr-2" />
                 Health
+              </DropdownMenuItem>
+              <DropdownMenuItem onclick={() => goto(resolve(`/streams/${streamId}/placement`))}>
+                <MapPinIcon class="w-4 h-4 mr-2" />
+                Placement
               </DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuLabel>Actions</DropdownMenuLabel>
@@ -927,12 +956,16 @@
             class="grid grid-cols-1 md:grid-cols-3 divide-y md:divide-y-0 md:divide-x divide-[hsl(var(--tn-fg-gutter)/0.3)] bg-background"
           >
             <StreamStatusCard {stream} />
-            <StreamKeyCard
-              {stream}
-              loading={actionLoading.refreshKey}
-              onRefresh={handleRefreshStreamKey}
-              onCopy={copyToClipboard}
-            />
+            {#if stream.ingestMode === "PUSH"}
+              <StreamKeyCard
+                {stream}
+                loading={actionLoading.refreshKey}
+                onRefresh={handleRefreshStreamKey}
+                onCopy={copyToClipboard}
+              />
+            {:else}
+              <StreamSourceCard {stream} />
+            {/if}
             <StreamPlaybackCard {stream} onCopy={copyToClipboard} />
           </div>
 
@@ -956,7 +989,7 @@
                   class="gap-2 px-4 py-3 text-sm font-medium text-muted-foreground border-b-2 border-transparent rounded-none data-[state=active]:text-info data-[state=active]:border-info cursor-pointer hover:bg-muted/20 transition-colors"
                 >
                   <SettingsIcon class="w-4 h-4" />
-                  Ingest
+                  {stream.ingestMode === "PUSH" ? "Publishing" : "Source"}
                 </TabsTrigger>
                 <TabsTrigger
                   value="artefacts"
@@ -1001,13 +1034,10 @@
               </TabsContent>
 
               <TabsContent value="ingest" class="p-0 min-h-[20rem]">
-                {#if stream?.streamId}<PlacementSummary
-                    streamId={stream.streamId}
-                    verb="INGEST"
-                  />{/if}
                 <StreamSetupPanel
                   {stream}
                   {streamKeys}
+                  {clusterOptions}
                   onRefreshKey={handleRefreshStreamKey}
                   refreshingKey={actionLoading.refreshKey}
                   onCreateKey={() => (showCreateKeyModal = true)}
@@ -1042,10 +1072,6 @@
               </TabsContent>
 
               <TabsContent value="playback" class="p-0 min-h-[20rem]">
-                {#if stream?.streamId}<PlacementSummary
-                    streamId={stream.streamId}
-                    verb="SERVE"
-                  />{/if}
                 <PlaybackTabPanel playbackId={stream?.playbackId} />
               </TabsContent>
 
@@ -1068,6 +1094,7 @@
   <StreamEditModal
     bind:open={showEditModal}
     {stream}
+    {clusterOptions}
     loading={actionLoading.editStream}
     onSave={handleEditStream}
   />

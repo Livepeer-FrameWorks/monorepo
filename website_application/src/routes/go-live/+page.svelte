@@ -51,7 +51,7 @@
         const node = get(fragment(e.node, streamFragmentStore));
         return node;
       })
-      .filter((stream) => stream?.ingestMode !== "PULL") ?? []
+      .filter((stream) => stream?.ingestMode === "PUSH") ?? []
   );
   let selectedStream = $derived(streams.find((s) => s?.id === selectedStreamId) ?? null);
   const identity = $derived(

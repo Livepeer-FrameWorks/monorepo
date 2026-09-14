@@ -9,7 +9,7 @@
 
   export type PrimaryStreamData = Pick<
     StreamCoreFields$data,
-    "id" | "streamId" | "name" | "streamKey"
+    "id" | "streamId" | "name" | "streamKey" | "ingestMode"
   > & {
     metrics: StreamMetricsListFields$data | null;
   };
@@ -73,31 +73,47 @@
       </div>
     </div>
 
-    <!-- Stream Key -->
-    <div>
-      <label for="primary-stream-key" class="block text-sm font-medium text-muted-foreground mb-2"
-        >Stream Key</label
-      >
-      <div class="flex items-center space-x-3">
-        <Input
-          id="primary-stream-key"
-          type="text"
-          value={stream.streamKey || "Loading..."}
-          readonly
-          class="flex-1 font-mono text-sm"
-        />
-        <Button
-          variant="outline"
-          onclick={() => onCopyStreamKey(stream.streamKey || "")}
-          disabled={!stream.streamKey}
+    {#if stream.ingestMode === "PUSH"}
+      <div>
+        <label for="primary-stream-key" class="block text-sm font-medium text-muted-foreground mb-2"
+          >Stream Key</label
         >
-          Copy
-        </Button>
+        <div class="flex items-center space-x-3">
+          <Input
+            id="primary-stream-key"
+            type="text"
+            value={stream.streamKey || "Loading..."}
+            readonly
+            class="flex-1 font-mono text-sm"
+          />
+          <Button
+            variant="outline"
+            onclick={() => onCopyStreamKey(stream.streamKey || "")}
+            disabled={!stream.streamKey}
+          >
+            Copy
+          </Button>
+        </div>
+        <p class="text-xs text-muted-foreground mt-2">
+          Keep your stream key private. Anyone with this key can broadcast to your channel.
+        </p>
       </div>
-      <p class="text-xs text-muted-foreground mt-2">
-        Keep your stream key private. Anyone with this key can broadcast to your channel.
-      </p>
-    </div>
+    {:else}
+      <div>
+        <p class="text-sm font-medium text-muted-foreground mb-2">Source</p>
+        <Input
+          value={stream.ingestMode === "PULL"
+            ? "Configured pull source"
+            : "Deployment-managed source"}
+          readonly
+          class="font-mono text-sm"
+        />
+        <p class="text-xs text-muted-foreground mt-2">
+          This stream does not accept publisher credentials. Open stream settings to inspect its
+          source and viewer routing.
+        </p>
+      </div>
+    {/if}
   </div>
 {:else}
   {@const VideoIcon = getIconComponent("Video")}

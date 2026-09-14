@@ -7,6 +7,7 @@
   import {
     fragment,
     GetStreamsConnectionStore,
+    GetClustersAccessStore,
     CreateStreamStore,
     DeleteStreamStore,
     StreamEventsStore,
@@ -24,6 +25,7 @@
   import { getIconComponent } from "$lib/iconUtils";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
+  import { Badge } from "$lib/components/ui/badge";
   import {
     Table,
     TableHeader,
@@ -40,6 +42,7 @@
 
   // Houdini stores
   const streamsConnectionStore = new GetStreamsConnectionStore();
+  const clustersAccessStore = new GetClustersAccessStore();
   const createStreamMutation = new CreateStreamStore();
   const deleteStreamMutation = new DeleteStreamStore();
   const streamEventsSub = new StreamEventsStore();
@@ -87,6 +90,12 @@
   // Local state for streams (can be updated by events)
   let streams = $state<typeof unmaskedStreams>([]);
   let loading = $derived($streamsConnectionStore.fetching);
+  let clusterOptions = $derived(
+    ($clustersAccessStore.data?.clustersAccess ?? []).map((cluster) => ({
+      clusterId: cluster.clusterId,
+      clusterName: cluster.clusterName,
+    }))
+  );
   // Unmask pageInfo to access hasNextPage
   let pageInfo = $derived.by(() => {
     const masked = $streamsConnectionStore.data?.streamsConnection?.pageInfo;
@@ -186,7 +195,7 @@
     if (!isAuthenticated) {
       await auth.checkAuth();
     }
-    await loadStreams();
+    await Promise.allSettled([loadStreams(), clustersAccessStore.fetch()]);
 
     // Start stream events subscription (for all streams, no filter)
     streamEventsSub.listen({});
@@ -412,7 +421,8 @@
     return (
       !!stream.playbackId &&
       (stream.metrics?.isLive ||
-        (stream.ingestMode === "PULL" && stream.pullSource?.enabled !== false))
+        (stream.ingestMode === "PULL" && stream.pullSource?.enabled !== false) ||
+        stream.ingestMode === "MANAGED")
     );
   }
 
@@ -757,6 +767,13 @@
                                 >
                                   {stream.name}
                                 </div>
+                                <Badge variant="outline" class="mt-1 w-fit text-[9px] uppercase">
+                                  {stream.ingestMode === "PUSH"
+                                    ? "Publisher"
+                                    : stream.ingestMode === "PULL"
+                                      ? "Pull source"
+                                      : "Managed source"}
+                                </Badge>
                                 <div class="text-[10px] text-muted-foreground font-mono">
                                   {stream.streamId.slice(0, 8)}...
                                 </div>
@@ -884,6 +901,7 @@
   bind:pullSourceUri={newStreamPullSourceUri}
   bind:pullSourceEnabled={newStreamPullSourceEnabled}
   bind:pullSourceAllowedClusterIds={newStreamPullSourceAllowedClusterIds}
+  {clusterOptions}
   creating={creatingStream}
   onSubmit={createStream}
   onCancel={() => {

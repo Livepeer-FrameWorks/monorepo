@@ -6,6 +6,8 @@
   import { Checkbox } from "$lib/components/ui/checkbox";
   import { Label } from "$lib/components/ui/label";
   import { getIconComponent } from "$lib/iconUtils";
+  import { pullSourcePlacementClass } from "$lib/utils/pull-source";
+  import PullSourceClusterPicker from "./PullSourceClusterPicker.svelte";
   import {
     Dialog,
     DialogContent,
@@ -24,6 +26,7 @@
     pullSourceUri: string;
     pullSourceEnabled: boolean;
     pullSourceAllowedClusterIds: string;
+    clusterOptions?: Array<{ clusterId: string; clusterName: string }>;
     creating: boolean;
     onSubmit: () => void;
     onCancel: () => void;
@@ -38,17 +41,13 @@
     pullSourceUri = $bindable(),
     pullSourceEnabled = $bindable(),
     pullSourceAllowedClusterIds = $bindable(),
+    clusterOptions = [],
     creating,
     onSubmit,
     onCancel,
   }: Props = $props();
 
-  // Private-URI patterns require explicit allowed cluster pinning. Mirrors
-  // pkg/pullsource Class detection: RFC1918 / multicast on tsudp / .internal /
-  // .local — backend rejects empty allowed_cluster_ids for these.
-  const PRIVATE_URI_PATTERN =
-    /^(tsudp:\/\/|rtsp:\/\/(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|\[fc|\[fd))/i;
-  const looksPrivate = $derived(PRIVATE_URI_PATTERN.test(pullSourceUri.trim()));
+  const looksPrivate = $derived(pullSourcePlacementClass(pullSourceUri) === "private");
   const allowedListEmpty = $derived(pullSourceAllowedClusterIds.trim() === "");
   const requiresAllowedClusters = $derived(
     ingestMode === "PULL" && looksPrivate && allowedListEmpty
@@ -65,7 +64,7 @@
   }}
 >
   <DialogContent
-    class="max-w-md rounded-none border-[hsl(var(--tn-fg-gutter)/0.3)] bg-background p-0 gap-0 overflow-hidden"
+    class="max-w-md max-h-[calc(100vh-2rem)] rounded-none border-[hsl(var(--tn-fg-gutter)/0.3)] bg-background p-0 gap-0 overflow-y-auto"
   >
     <DialogHeader class="slab-header text-left space-y-1">
       <DialogTitle class="uppercase tracking-wide text-sm font-semibold text-muted-foreground"
@@ -189,29 +188,18 @@
         </div>
 
         <div>
-          <label
-            for="pull-source-allowed-clusters"
-            class="block text-sm font-medium text-muted-foreground mb-2"
-          >
-            Allowed clusters
-            {#if looksPrivate}<span class="text-destructive">*</span>{/if}
-          </label>
-          <Input
-            id="pull-source-allowed-clusters"
-            type="text"
-            bind:value={pullSourceAllowedClusterIds}
-            placeholder="warehouse-edge, eu-west-edge"
-            class="w-full font-mono text-xs"
-            disabled={creating}
+          <PullSourceClusterPicker
+            bind:selectedIds={pullSourceAllowedClusterIds}
+            options={clusterOptions}
             required={looksPrivate}
+            disabled={creating}
           />
           <p class="text-xs text-muted-foreground mt-1">
             {#if looksPrivate}
-              Private / multicast sources must be pinned to a specific cluster set. Comma-separated
-              cluster IDs.
+              Private and multicast sources must be pinned to clusters that can reach them and
+              explicitly allow private pull sources.
             {:else}
-              Optional. Leave empty for public sources to run on any media cluster. Comma-separated
-              cluster IDs to pin placement.
+              Public sources can use automatic placement or a selected set of connected clusters.
             {/if}
           </p>
         </div>

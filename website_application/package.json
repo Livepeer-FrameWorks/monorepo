@@ -15,7 +15,7 @@
     "format": "prettier --plugin-search-dir . --write .",
     "gql:codegen": "houdini generate",
     "test": "vitest run",
-    "test:components": "vitest run --config vitest.components.config.ts",
+    "test:components": "vitest run --config vitest.components.config.ts --no-file-parallelism",
     "dev:placement-fixture": "vite --config vite.placement-fixture.config.ts",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"

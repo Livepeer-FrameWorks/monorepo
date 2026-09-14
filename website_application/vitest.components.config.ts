@@ -9,6 +9,7 @@ export default defineConfig({
     alias: {
       $lib: resolve(import.meta.dirname, "src/lib"),
       $houdini: resolve(import.meta.dirname, "$houdini"),
+      "$app/environment": resolve(import.meta.dirname, "test/components/environment.ts"),
       "$app/navigation": resolve(import.meta.dirname, "test/components/navigation.ts"),
     },
   },
@@ -16,7 +17,5 @@ export default defineConfig({
     include: ["test/components/**/*.test.ts"],
     environment: "jsdom",
     restoreMocks: true,
-    reporters: ["default", "junit"],
-    outputFile: { junit: "./test-results/components.xml" },
   },
 });

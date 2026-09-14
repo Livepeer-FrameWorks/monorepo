@@ -20,6 +20,7 @@
     description?: string | null;
     createdAt?: string | null;
     updatedAt?: string | null;
+    ingestMode?: "PUSH" | "PULL" | "MANAGED" | string | null;
     metrics?: {
       isLive?: boolean;
     } | null;
@@ -251,10 +252,19 @@
       </h3>
     </div>
     <div class="slab-body--padded space-y-3">
-      <div class="flex justify-between items-center">
-        <span class="text-muted-foreground">Total Stream Keys:</span>
-        <span class="font-mono text-info font-medium">{streamKeys.length}</span>
-      </div>
+      {#if stream.ingestMode === "PUSH"}
+        <div class="flex justify-between items-center">
+          <span class="text-muted-foreground">Total Stream Keys:</span>
+          <span class="font-mono text-info font-medium">{streamKeys.length}</span>
+        </div>
+      {:else}
+        <div class="flex justify-between items-center">
+          <span class="text-muted-foreground">Source Mode:</span>
+          <span class="font-mono text-info font-medium">
+            {stream.ingestMode === "PULL" ? "Pull" : "Managed"}
+          </span>
+        </div>
+      {/if}
       <div class="flex justify-between items-center">
         <span class="text-muted-foreground">Total Recordings:</span>
         <span class="font-mono text-info font-medium">{recordings.length}</span>

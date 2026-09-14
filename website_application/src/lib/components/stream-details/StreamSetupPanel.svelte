@@ -18,6 +18,12 @@
       enabled: boolean;
       class: string;
     } | null;
+    managedSource?: {
+      sourceKind: string;
+      alwaysOn: boolean;
+      placementCount: number;
+      allowedClusterIds: string[];
+    } | null;
     recentPullSourceEvents?: Array<{
       id: string;
       internalName: string;
@@ -36,9 +42,15 @@
     lastUsedAt?: string;
   }
 
+  interface ClusterOption {
+    clusterId: string;
+    clusterName: string;
+  }
+
   interface Props {
     stream: Stream;
     streamKeys?: StreamKey[];
+    clusterOptions?: ClusterOption[];
     onRefreshKey?: () => void;
     refreshingKey?: boolean;
     onCreateKey?: () => void;
@@ -50,6 +62,7 @@
   let {
     stream,
     streamKeys = [],
+    clusterOptions = [],
     onRefreshKey: _onRefreshKey,
     refreshingKey: _refreshingKey = false,
     onCreateKey,
@@ -59,6 +72,12 @@
   }: Props = $props();
 
   let copiedField = $state<string | null>(null);
+
+  function clusterName(clusterId: string) {
+    return (
+      clusterOptions.find((option) => option.clusterId === clusterId)?.clusterName || clusterId
+    );
+  }
 
   // Derive URLs from stream data using unified helper
   let ingestUrls = $derived(getIngestUrls(stream.streamKey || ""));
@@ -141,10 +160,11 @@
           <Button
             variant="ghost"
             size="sm"
+            aria-label="Copy redacted pull source"
             onclick={() =>
               copyToClipboard(stream.pullSource?.sourceUriRedacted ?? "", "pull-source")}
             disabled={!stream.pullSource?.sourceUriRedacted}
-            class="border border-border/30"
+            class="min-h-11 min-w-11 border border-border/30"
           >
             {#if copiedField === "pull-source"}
               <CheckCircleIcon class="w-4 h-4" />
@@ -183,6 +203,47 @@
             </p>
           {/if}
         </div>
+      </div>
+    </div>
+  {:else if stream.ingestMode === "MANAGED"}
+    <div class="slab col-span-full">
+      <div class="slab-header">
+        <h3 class="font-semibold text-xs uppercase tracking-wide text-muted-foreground">
+          Managed Source
+        </h3>
+        <p class="text-xs text-muted-foreground/70 mt-1">
+          This source is supplied by the platform deployment, not by an encoder or a
+          viewer-triggered pull.
+        </p>
+      </div>
+      <div class="slab-body--padded space-y-4">
+        <div class="flex flex-wrap gap-2">
+          <Badge variant="outline" class="text-xs uppercase">
+            {stream.managedSource?.sourceKind ?? "managed"}
+          </Badge>
+          <Badge variant={stream.managedSource?.alwaysOn ? "default" : "secondary"}>
+            {stream.managedSource?.alwaysOn ? "Always on" : "On demand"}
+          </Badge>
+        </div>
+        <div>
+          <p class="text-sm font-medium">Source location</p>
+          {#if stream.managedSource?.allowedClusterIds.length}
+            <div class="mt-2 flex flex-wrap gap-2">
+              {#each stream.managedSource.allowedClusterIds as clusterId (clusterId)}
+                <Badge variant="secondary" class="text-xs" title={clusterId}>
+                  {clusterName(clusterId)}
+                </Badge>
+              {/each}
+            </div>
+          {:else}
+            <p class="mt-1 text-sm text-muted-foreground">No source cluster is exposed.</p>
+          {/if}
+        </div>
+        <p class="text-sm text-muted-foreground">
+          Source paths and process commands are intentionally hidden. Change this source in the
+          deployment configuration; stream routing controls where viewers are served, not where this
+          local source is created.
+        </p>
       </div>
     </div>
   {:else}
@@ -242,7 +303,7 @@
     </div>
   {/if}
 
-  {#if stream.ingestMode !== "PULL"}
+  {#if stream.ingestMode === "PUSH"}
     <!-- Stream Keys Management Section -->
     <div class="slab">
       <div class="slab-header flex items-center justify-between">
